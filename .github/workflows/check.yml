@@ -1,0 +1,36 @@
+name: 检查
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run check
+      - name: 安装 TUI 验证依赖
+        run: sudo apt-get update -qq && sudo apt-get install -y tmux
+      - name: 真实 Pi 原会话与后台启动验证（本地模型夹具）
+        run: npm run test:pi
+      - name: 留存验收证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-proof
+          path: /tmp/atrium-proof-*/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -55,7 +55,7 @@ PI_MCP_TOOL_EXPOSURE=proxy-only pi --extension /绝对路径/atrium/pi/extension
 
 Agent 的工作目录必须与 Pi 一致。Atrium 使用 ACP SDK，经 WebSocket 与原进程桥接；`_atrium/status`、`_atrium/deliver` 是本项目的命名空间扩展，不声称任意 ACP Agent 都支持这些能力。
 
-接入不会新开 Pi 或恢复另一份历史。业务工具注册到固定 MCP 代理，使用说明追加到消息上下文；模型 system 与 tools 定义保持原样。未预加载扩展的任意运行进程不能无侵入接入，需要先准备扩展环境。
+接入不会新开 Pi 或恢复另一份历史。业务工具注册到固定 MCP 代理，使用说明追加到消息上下文；模型 system 与 tools 定义保持原样。用户执行 `/new` 后，连接在同一进程恢复并记录新的会话位置。未预加载扩展的任意运行进程不能无侵入接入，需要先准备扩展环境。
 
 ## 外部事件
 
@@ -105,6 +105,6 @@ npm run format:check
 npm run test:pi      # 需要 tmux；真实 Pi TUI/RPC + 本地确定性模型
 ```
 
-`test:pi` 在隔离目录验证原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 启动及断线不重复拉起。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出与哈希清单保留在命令输出的证据目录，不参与源码格式化。
+`test:pi` 在隔离目录验证原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 自动启动、用户主动切换会话后的连接恢复及断线不重复拉起。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出与哈希清单保留在命令输出的证据目录，不参与源码格式化。
 
 CI 执行上述检查并留存 Pi 验收材料。开发设计、实际界面截图、真实模型验收范围和剩余接入事项见 [设计与首版追踪 issue #1](https://github.com/liu-zhengdong/atrium/issues/1)。

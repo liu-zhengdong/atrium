@@ -192,6 +192,13 @@ try {
     command,
   ]);
   started = true;
+  execFileSync("tmux", [
+    "set-window-option",
+    "-t",
+    session,
+    "remain-on-exit",
+    "on",
+  ]);
   const input = (text) => {
     execFileSync("tmux", ["send-keys", "-t", session, "-l", text]);
     execFileSync("tmux", ["send-keys", "-t", session, "Enter"]);
@@ -311,12 +318,26 @@ try {
   }
   await wait(() => runtimes.connections.has(rpcAgent.id), "后台 Pi 启动并连接");
   assert.equal(runtimes.connections.get(rpcAgent.id).info.mode, "rpc");
-  runtimes.connections.get(agent.id).connection.close();
-  await wait(() => !runtimes.connections.has(agent.id), "模拟 TUI 仅连接断开");
-  assert.throws(() => runtimes.start(agent.id), /原 Pi 进程仍存在/);
+  await wait(() => pane().includes("已用 Chat 工具回复"), "原 TUI 回合完成");
   const capture = pane();
   writeFileSync(join(raw, "tui.txt"), capture, { mode: 0o400 });
   hashes.push({ name: "tui.txt", sha256: hash(capture) });
+  input("/new");
+  await wait(async () => {
+    await runtimes.pump(agent.id);
+    return (
+      !!runtimes.connections.get(agent.id) &&
+      runtimes.connections.get(agent.id).info.session_id !== before.session_id
+    );
+  }, "用户主动切换会话");
+  assert.equal(
+    store.agent(agent.id).session_file,
+    runtimes.connections.get(agent.id).info.session_file,
+    "恢复位置未跟随用户主动切换的会话",
+  );
+  runtimes.connections.get(agent.id).connection.close();
+  await wait(() => !runtimes.connections.has(agent.id), "模拟 TUI 仅连接断开");
+  assert.throws(() => runtimes.start(agent.id), /原 Pi 进程仍存在/);
   const report = {
     evidence: folder,
     test_kind: "real-pi-tui/local-deterministic-model",
@@ -340,6 +361,7 @@ try {
     ),
     checks: [
       "hosted-rpc-autostart",
+      "follow-user-session-switch",
       "disconnect-no-duplicate-process",
       "same-process",
       "same-session",
@@ -354,15 +376,20 @@ try {
   writeFileSync(join(folder, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {
-  if (started)
-    writeFileSync(
-      join(folder, "failed-tui.txt"),
-      execFileSync(
-        "tmux",
-        ["capture-pane", "-p", "-t", session, "-S", "-1000"],
-        { encoding: "utf8" },
-      ),
-    );
+  if (started) {
+    try {
+      writeFileSync(
+        join(folder, "failed-tui.txt"),
+        execFileSync(
+          "tmux",
+          ["capture-pane", "-p", "-t", session, "-S", "-1000"],
+          { encoding: "utf8" },
+        ),
+      );
+    } catch (captureError) {
+      console.error("无法取得失败现场：", String(captureError));
+    }
+  }
   console.error(`证据保留：${folder}`);
   throw error;
 } finally {

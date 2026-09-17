@@ -17,6 +17,9 @@ const guide = `Atrium 是你的聊天与事件入口。先调用 mcp({connect:"a
 工作内容可以通过 claim_status 声明。普通通知只提供未读摘要，按需读消息；工具读取会更新你自己的已读状态，不代表已处理。配置只能修改自己的运行偏好。`;
 
 type Registration = { dispose(): Promise<void>; toolExposure?: string };
+// Survive Pi session replacement/reload in this process, without inheriting the binding in child processes.
+const bindingKey = Symbol.for("atrium.link-path.v1");
+const bindings = globalThis as typeof globalThis & { [bindingKey]?: string };
 export default function atrium(pi: ExtensionAPI) {
   let ctx: ExtensionContext | undefined, link: Link | undefined;
   let socket: WebSocket | undefined, registration: Registration | undefined;
@@ -25,7 +28,7 @@ export default function atrium(pi: ExtensionAPI) {
     generation = 0;
   const received = new Set<string>();
   const status = () => {
-    if (!ctx) throw new Error("Pi 会话尚未就绪");
+    if (!ctx || closing) throw new Error("Pi 会话尚未就绪");
     return {
       pid: process.pid,
       session_id: ctx.sessionManager.getSessionId(),
@@ -46,15 +49,17 @@ export default function atrium(pi: ExtensionAPI) {
       maxPayload: 128000,
       handshakeTimeout: 5000,
     });
-    socket.on("error", () =>
-      ctx?.ui.setStatus("atrium", "Atrium · 连接失败，等待重试"),
-    );
-    socket.on("close", () => {
-      ctx?.ui.setStatus("atrium", "Atrium · 已断开");
+    socket.on("error", () => {
       if (!closing && ownGeneration === generation)
-        retry = setTimeout(connect, 5000).unref();
+        ctx?.ui.setStatus("atrium", "Atrium · 连接失败，等待重试");
+    });
+    socket.on("close", () => {
+      if (closing || ownGeneration !== generation) return;
+      ctx?.ui.setStatus("atrium", "Atrium · 已断开");
+      retry = setTimeout(connect, 5000).unref();
     });
     socket.on("open", () => {
+      if (closing || ownGeneration !== generation) return;
       const current = socket!;
       const app = agent({ name: "atrium-pi" })
         .onRequest("initialize", () => ({
@@ -97,9 +102,8 @@ export default function atrium(pi: ExtensionAPI) {
     });
   }
   async function attach(path: string, context: ExtensionContext) {
-    const next = linkFile.parse(
-      JSON.parse(readFileSync(resolve(context.cwd, path), "utf8")),
-    );
+    const absolutePath = resolve(context.cwd, path);
+    const next = linkFile.parse(JSON.parse(readFileSync(absolutePath, "utf8")));
     const url = new URL(next.url);
     if (
       url.username ||
@@ -114,6 +118,7 @@ export default function atrium(pi: ExtensionAPI) {
       !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
     )
       throw new Error("非本机连接必须使用 HTTPS");
+    delete bindings[bindingKey];
     closing = true;
     generation++;
     clearTimeout(retry);
@@ -153,6 +158,7 @@ export default function atrium(pi: ExtensionAPI) {
       );
     }
     link = next;
+    bindings[bindingKey] = absolutePath;
     closing = false;
     connect();
   }
@@ -176,7 +182,10 @@ export default function atrium(pi: ExtensionAPI) {
   });
   pi.on("session_start", async (_, context) => {
     ctx = context;
-    const path = pi.getFlag("atrium-link") || process.env.ATRIUM_LINK;
+    const path =
+      bindings[bindingKey] ||
+      pi.getFlag("atrium-link") ||
+      process.env.ATRIUM_LINK;
     if (typeof path === "string" && path) await attach(path, context);
   });
   pi.on("context", (event) => {

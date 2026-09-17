@@ -98,6 +98,11 @@ export type Message = {
   mentions: string[];
   created_at: number;
 };
+export type ChatReadState = {
+  agent_id: string;
+  through: number;
+  ranges: { first: number; last: number }[];
+};
 export type BoxMessage = {
   id: number;
   agent_id: string;

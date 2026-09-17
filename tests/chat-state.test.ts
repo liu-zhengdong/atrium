@@ -1,3 +1,4 @@
+import { mergeReadState } from "../web/chat/readState.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Message } from "../shared/schema.ts";
@@ -42,5 +43,36 @@ test("聊天历史反向验证：旧会话与混入页面的异会话消息均�
       [10, "message"],
       [11, "refreshed"],
     ],
+  );
+});
+
+test("历史页与实时回执交错时保留阅读证据，不回退或误合并缺口", () => {
+  const previous = [
+    {
+      agent_id: "a",
+      through: 5,
+      ranges: [
+        { first: 10, last: 12 },
+        { first: 20, last: 22 },
+      ],
+    },
+  ];
+  const result = mergeReadState(previous, [
+    { agent_id: "a", through: 3, ranges: [{ first: 21, last: 24 }] },
+  ]);
+  assert.deepEqual(result, [
+    {
+      agent_id: "a",
+      through: 5,
+      ranges: [
+        { first: 10, last: 12 },
+        { first: 20, last: 24 },
+      ],
+    },
+  ]);
+  assert.equal(previous[0].ranges[1].last, 22, "不修改原快照");
+  assert.deepEqual(
+    mergeReadState(result, [{ agent_id: "a", through: 24, ranges: [] }]),
+    [{ agent_id: "a", through: 24, ranges: [] }],
   );
 });

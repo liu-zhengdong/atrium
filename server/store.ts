@@ -8,6 +8,7 @@ import {
   type Chat,
   type Message,
   type Page,
+  type ChatReadState,
   type Subscription,
 } from "../shared/schema.ts";
 
@@ -87,6 +88,9 @@ export class Store {
         body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, UNIQUE(sender,client_id));
       CREATE INDEX IF NOT EXISTS messages_chat_id ON messages(chat_id,id);
       CREATE INDEX IF NOT EXISTS members_agent ON members(agent_id,chat_id);
+      CREATE TABLE IF NOT EXISTS chat_read_ranges (chat_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+        first_id INTEGER NOT NULL, last_id INTEGER NOT NULL,
+        PRIMARY KEY(chat_id,agent_id,first_id), FOREIGN KEY(chat_id,agent_id) REFERENCES members(chat_id,agent_id));
       CREATE TABLE IF NOT EXISTS inbox (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL REFERENCES agents(id), source TEXT NOT NULL,
         title TEXT NOT NULL, body TEXT NOT NULL, chat_id TEXT REFERENCES chats(id), url TEXT, created_at INTEGER NOT NULL, read_at INTEGER);
       CREATE INDEX IF NOT EXISTS inbox_agent_id ON inbox(agent_id,id);
@@ -352,35 +356,114 @@ export class Store {
       cursor,
       limit,
     );
-    // Do not skip an unread gap if the caller requested an arbitrary later page.
-    if (cursor <= last.last_read && page.items.length) {
-      this.run(
-        "UPDATE members SET last_read=MAX(last_read,?) WHERE agent_id=? AND chat_id=?",
-        page.next_after,
-        agentId,
-        chatId,
-      );
-      this.unreadCache.delete(agentId);
-      this.run(
-        "UPDATE inbox SET read_at=? WHERE agent_id=? AND source='chat' AND chat_id=? AND read_at IS NULL AND json_extract(body,'$.through_message')<=?",
-        Date.now(),
-        agentId,
-        chatId,
-        page.next_after,
-      );
-    }
+    if (page.items.length)
+      this.transaction(() => {
+        let first = page.items[0].id,
+          through = page.next_after;
+        if (through <= last.last_read) return;
+        // Adjacency is within this chat: IDs from other chats may lie between pages.
+        const neighbors = this.one<{ previous: number; next: number }>(
+          `SELECT COALESCE((SELECT MAX(id) FROM messages WHERE chat_id=? AND id<?),0) AS previous,
+         COALESCE((SELECT MIN(id) FROM messages WHERE chat_id=? AND id>?),?) AS next`,
+          chatId,
+          first,
+          chatId,
+          through,
+          through,
+        )!;
+        const joined = this.all<{ first_id: number; last_id: number }>(
+          "SELECT first_id,last_id FROM chat_read_ranges WHERE chat_id=? AND agent_id=? AND first_id<=? AND last_id>=?",
+          chatId,
+          agentId,
+          neighbors.next,
+          neighbors.previous,
+        );
+        for (const range of joined) {
+          first = Math.min(first, range.first_id);
+          through = Math.max(through, range.last_id);
+          this.run(
+            "DELETE FROM chat_read_ranges WHERE chat_id=? AND agent_id=? AND first_id=?",
+            chatId,
+            agentId,
+            range.first_id,
+          );
+        }
+        const gap = this.one(
+          "SELECT 1 FROM messages WHERE chat_id=? AND id>? AND id<? LIMIT 1",
+          chatId,
+          last.last_read,
+          first,
+        );
+        if (!gap) {
+          this.run(
+            "UPDATE members SET last_read=MAX(last_read,?) WHERE agent_id=? AND chat_id=?",
+            through,
+            agentId,
+            chatId,
+          );
+          this.run(
+            "UPDATE inbox SET read_at=? WHERE agent_id=? AND source='chat' AND chat_id=? AND read_at IS NULL AND json_extract(body,'$.through_message')<=?",
+            Date.now(),
+            agentId,
+            chatId,
+            through,
+          );
+        } else {
+          this.run(
+            "INSERT INTO chat_read_ranges VALUES(?,?,?,?)",
+            chatId,
+            agentId,
+            first,
+            through,
+          );
+        }
+        this.unreadCache.delete(agentId);
+      });
     return page;
   }
-  timeline(chatId: string, before = Number.MAX_SAFE_INTEGER) {
+  readState(chatId: string, from: number): ChatReadState[] {
+    const members = this.all<{ agent_id: string; through: number }>(
+      "SELECT agent_id,last_read AS through FROM members WHERE chat_id=?",
+      chatId,
+    );
+    const ranges = this.all<{
+      agent_id: string;
+      first_id: number;
+      last_id: number;
+    }>(
+      "SELECT agent_id,first_id,last_id FROM chat_read_ranges WHERE chat_id=? AND last_id>=? ORDER BY first_id",
+      chatId,
+      from,
+    );
+    return members.map((member) => ({
+      ...member,
+      ranges: ranges
+        .filter((range) => range.agent_id === member.agent_id)
+        .map((range) => ({ first: range.first_id, last: range.last_id })),
+    }));
+  }
+  timeline(
+    chatId: string,
+    before = Number.MAX_SAFE_INTEGER,
+    readFrom?: number,
+  ) {
     this.chat(chatId);
     const rows = this.all<MessageRow>(
       "SELECT * FROM messages WHERE chat_id=? AND id<? ORDER BY id DESC LIMIT 51",
       chatId,
       before,
     );
+    const items = rows.slice(0, 50).map(decodeMessage).reverse();
     return {
-      items: rows.slice(0, 50).map(decodeMessage).reverse(),
+      items,
       has_more: rows.length > 50,
+      read_state: this.readState(
+        chatId,
+        Math.min(
+          readFrom ?? Number.MAX_SAFE_INTEGER,
+          items[0]?.id ?? Number.MAX_SAFE_INTEGER,
+        ),
+      ),
     };
   }
   unread(agentId: string) {
@@ -396,6 +479,7 @@ export class Store {
       `SELECT c.id AS chat_id,c.name,COUNT(m.id) AS count,
       COALESCE(SUM(CASE WHEN m.id>r.last_notified THEN 1 ELSE 0 END),0) AS fresh,COALESCE(MAX(m.id),0) AS latest
       FROM members r JOIN chats c ON c.id=r.chat_id LEFT JOIN messages m ON m.chat_id=c.id AND m.id>r.last_read AND m.sender!=r.agent_id
+      AND m.id>COALESCE((SELECT seen.last_id FROM chat_read_ranges seen WHERE seen.chat_id=r.chat_id AND seen.agent_id=r.agent_id AND seen.first_id<=m.id ORDER BY seen.first_id DESC LIMIT 1),0)
       WHERE r.agent_id=? GROUP BY c.id HAVING count>0`,
       agentId,
     );

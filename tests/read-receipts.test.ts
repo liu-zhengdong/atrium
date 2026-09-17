@@ -1,0 +1,122 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { Store } from "../server/store.ts";
+import type { ChatReadState } from "../shared/schema.ts";
+
+function hasRead(state: ChatReadState, id: number) {
+  return (
+    id <= state.through ||
+    state.ranges.some((r) => id >= r.first && id <= r.last)
+  );
+}
+function fixture(t: { after: (fn: () => void) => void }) {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const a = store.createAgent("Atlas", "/tmp").agent;
+  const b = store.createAgent("Mira", "/tmp").agent;
+  const chat = store.createChat("回执", [a.id, b.id]);
+  const send = (body: string, chatId = chat.id) =>
+    store.send("user", { chat_id: chatId, body, mentions: [] });
+  const state = (agent = a.id) =>
+    store.readState(chat.id, 0).find((s) => s.agent_id === agent)!;
+  return { store, a, b, chat, send, state };
+}
+
+test("回执仅覆盖真实返回页；隔离 Agent、通知、投递与用户审阅", (t) => {
+  const { store, a, b, chat, send, state } = fixture(t);
+  const one = send("一"),
+    two = send("二");
+  store.timeline(chat.id);
+  store.configure(a.id, { message_threshold: 1 });
+  store.schedule(Date.now());
+  store.box(a.id, 0, true, true);
+  assert(!hasRead(state(), one.id));
+  assert(!hasRead(state(), two.id));
+  store.readChat(a.id, chat.id, undefined, 1);
+  assert(hasRead(state(), one.id));
+  assert(!hasRead(state(), two.id));
+  assert(!hasRead(state(b.id), one.id));
+  const other = store.createChat("私聊", [b.id], b.id);
+  assert.throws(() => store.readChat(a.id, other.id), /只能访问/);
+  assert(!hasRead(state(b.id), one.id));
+});
+
+test("跳读、跨群 ID 和重叠读取准确合并；不越过未读缺口", (t) => {
+  const { store, a, chat, send, state } = fixture(t);
+  const other = store.createChat("另一群", [a.id]);
+  const messages = [];
+  for (let i = 0; i < 8; i++) {
+    messages.push(send(`消息 ${i}`));
+    send("其他群", other.id);
+  }
+  store.readChat(a.id, chat.id, messages[1].id, 2);
+  assert.equal(state().through, 0);
+  assert.deepEqual(
+    messages.map((m) => hasRead(state(), m.id)),
+    [false, false, true, true, false, false, false, false],
+  );
+  store.readChat(a.id, chat.id, messages[3].id, 2);
+  assert.equal(state().ranges.length, 1, "跨群 ID 不阻碍相邻页压缩");
+  store.readChat(a.id, chat.id, messages[2].id, 2);
+  assert.equal(state().ranges.length, 1, "重叠读取不重复存储");
+  store.readChat(a.id, chat.id, undefined, 1);
+  assert.equal(state().through, messages[0].id);
+  assert(!hasRead(state(), messages[1].id));
+  store.readChat(a.id, chat.id, undefined, 1);
+  assert.equal(state().through, messages[5].id);
+  assert.equal(state().ranges.length, 0, "缺口补齐后回收例外范围");
+  assert.equal(store.unread(a.id).find((c) => c.chat_id === chat.id)?.count, 2);
+  store.readChat(a.id, chat.id, 0, 1);
+  assert.equal(state().through, messages[5].id, "重读历史不回退");
+});
+
+test("字节截断不误标下一条；历史页和实时快照覆盖已加载窗口", (t) => {
+  const { store, a, chat, send, state } = fixture(t);
+  const messages = Array.from({ length: 60 }, () => send("字".repeat(6000)));
+  const read = store.readChat(a.id, chat.id, undefined, 30);
+  assert.equal(read.items.length, 1);
+  assert(hasRead(state(), messages[0].id));
+  assert(!hasRead(state(), messages[1].id));
+  store.readChat(a.id, chat.id, messages[4].id, 1);
+  assert.equal(
+    store.timeline(chat.id).read_state.find((s) => s.agent_id === a.id)!.ranges
+      .length,
+    0,
+    "默认只传可见页的跳读范围",
+  );
+  const older = store.timeline(chat.id, messages[10].id);
+  assert(
+    hasRead(
+      older.read_state.find((s) => s.agent_id === a.id)!,
+      messages[5].id,
+    ),
+  );
+  const refresh = store.timeline(chat.id, undefined, messages[0].id);
+  assert(
+    hasRead(
+      refresh.read_state.find((s) => s.agent_id === a.id)!,
+      messages[5].id,
+    ),
+    "实时刷新保留已加载历史回执",
+  );
+});
+
+test("随机分页反向核对逐条真值；压缩回执不多标或漏标", (t) => {
+  const { store, a, chat, send, state } = fixture(t);
+  const messages = Array.from({ length: 200 }, (_, i) => send(`消息 ${i}`));
+  const seen = new Set<number>();
+  let seed = 19;
+  for (let i = 0; i < 100; i++) {
+    seed = (seed * 16807) % 2147483647;
+    const page = store.readChat(
+      a.id,
+      chat.id,
+      messages[seed % 200].id,
+      1 + (seed % 15),
+    );
+    for (const message of page.items) seen.add(message.id);
+    for (const message of messages)
+      assert.equal(hasRead(state(), message.id), seen.has(message.id));
+    assert.equal(store.unread(a.id)[0]?.count ?? 0, 200 - seen.size);
+  }
+});

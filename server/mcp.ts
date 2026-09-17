@@ -65,7 +65,7 @@ export function createMcp(store: Store, agentId: string, changed: () => void) {
   );
   tool(
     "read_chat",
-    "读取自己加入的聊天。默认从自己的已读位置开始，读取连续页后更新已读；任意跳页不会越过未读缺口。",
+    "读取自己加入的聊天。实际返回的消息更新自己的已读回执；默认从连续阅读位置开始，跳页只标记返回的消息，不越过未读缺口。",
     {
       chat_id: id,
       after: z.number().int().min(0).optional(),

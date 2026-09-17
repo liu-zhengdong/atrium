@@ -102,10 +102,14 @@ test("阅读分页不能跨过未读缺口；各 Agent 独立，自己的发言�
   send("三");
   assert.equal(store.unread(a.id)[0].count, 3);
   store.readChat(a.id, chat.id, first.id, 2);
-  assert.equal(store.unread(a.id)[0].count, 3);
+  assert.equal(
+    store.unread(a.id)[0].count,
+    1,
+    "跳读只消除返回消息，首条仍未读",
+  );
   const page = store.readChat(a.id, chat.id, undefined, 1);
   assert(page.has_more);
-  assert.equal(store.unread(a.id)[0].count, 2);
+  assert.equal(store.unread(a.id).length, 0, "补齐缺口后合并连续阅读位置");
   assert.equal(store.unread(b.id)[0].count, 3);
   store.readChat(a.id, chat.id);
   assert.equal(store.unread(a.id).length, 0);
@@ -189,9 +193,30 @@ test("十万条消息：冷／热未读与会话列表；写入、阅读使缓�
   assert.equal(store.unread(a.id)[0].count, 100001);
   store.readChat(a.id, chat.id, undefined, 20);
   assert.equal(store.unread(a.id)[0].count, 99981);
+  assert.equal(
+    store.readState(chat.id, 0)[0].ranges.length,
+    0,
+    "顺序阅读不增加逐消息回执",
+  );
+  store.transaction(() => {
+    for (let i = 100; i < 100000; i += 100)
+      store.run(
+        "INSERT INTO chat_read_ranges VALUES(?,?,?,?)",
+        chat.id,
+        a.id,
+        i,
+        i + 29,
+      );
+  });
+  store.readChat(a.id, chat.id, undefined, 1);
+  const fragmentedStart = performance.now();
+  assert.equal(store.unread(a.id)[0].count, 100001 - 21 - 999 * 30);
+  const fragmented = performance.now() - fragmentedStart;
   console.log(
     JSON.stringify({
       benchmark: "100k-messages",
+      read_ranges: 999,
+      fragmented_cold_ms: +fragmented.toFixed(2),
       cold_ms: +cold.toFixed(2),
       hot_1000_ms: +hot.toFixed(2),
       lists_100_ms: +lists.toFixed(2),
@@ -406,12 +431,32 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
     arguments: { chat_id: privateChat.id },
   });
   assert(read.isError);
+  const incoming = store.send("user", {
+    chat_id: chat.id,
+    body: "需要阅读回执",
+    mentions: [],
+  });
+  const receipt = async () =>
+    (await (
+      await fetch(`${origin}/api/chats/${chat.id}/messages`)
+    ).json()) as ReturnType<Store["timeline"]>;
+  assert.equal(
+    (await receipt()).read_state[0].through,
+    0,
+    "浏览器审阅不标记已读",
+  );
+  await client.callTool({ name: "read_chat", arguments: { chat_id: chat.id } });
+  assert.equal(
+    (await receipt()).read_state[0].through,
+    incoming.id,
+    "真实 MCP 调用后 HTTP 可见回执",
+  );
   const sent = await client.callTool({
     name: "send_message",
     arguments: { chat_id: chat.id, body: "真实 MCP 回复" },
   });
   assert(!sent.isError);
-  assert.equal(store.timeline(chat.id).items[0].sender, agentId);
+  assert.equal(store.timeline(chat.id).items.at(-1)?.sender, agentId);
   await client.callTool({ name: "view_message_box", arguments: {} });
   assert.equal(store.boxCount(agentId), 0);
 });

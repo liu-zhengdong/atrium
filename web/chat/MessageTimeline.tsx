@@ -2,12 +2,14 @@ import { Hash, LoaderCircle } from "lucide-react";
 import Markdown from "react-markdown";
 import type { Overview } from "../../shared/schema.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
+import { ReadReceipt } from "./ReadReceipt.tsx";
 import { time } from "../time.ts";
 import type { useConversation } from "./useConversation.ts";
 export function MessageTimeline({
   active,
   agents,
   messages,
+  readState,
   loading,
   older,
   loadOlder,
@@ -18,7 +20,13 @@ export function MessageTimeline({
   agents: Agent[];
 } & Pick<
   ReturnType<typeof useConversation>,
-  "messages" | "loading" | "older" | "loadOlder" | "scroll" | "onScroll"
+  | "messages"
+  | "readState"
+  | "loading"
+  | "older"
+  | "loadOlder"
+  | "scroll"
+  | "onScroll"
 >) {
   return (
     <div ref={scroll} className="timeline" onScroll={onScroll}>
@@ -86,6 +94,12 @@ export function MessageTimeline({
                       {message.body}
                     </Markdown>
                   </div>
+                  <ReadReceipt
+                    message={message}
+                    state={readState}
+                    agents={agents}
+                    direct={active.kind === "direct"}
+                  />
                 </div>
               </article>
             );

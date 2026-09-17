@@ -417,6 +417,48 @@ nav button:hover,
   padding: 0 4px;
   border-radius: 3px;
 }
+.read-receipt {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #716d63;
+  max-width: 420px;
+}
+.read-receipt summary {
+  cursor: pointer;
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.read-receipt summary:focus-visible {
+  outline: 2px solid #9e8a63;
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.receipt-details {
+  margin-top: 7px;
+  padding: 10px 12px;
+  background: #f7f6f2;
+  border-radius: 6px;
+}
+.receipt-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.receipt-list h3 {
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0 0 3px;
+}
+.receipt-list span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.receipt-details p {
+  margin: 8px 0 0;
+  font-size: 10px;
+}
 .message.continuation {
   padding-left: 47px;
   margin-top: -15px;

@@ -284,9 +284,12 @@ export async function createApp(options: {
   });
   app.get("/api/chats/:id/messages", (request) => {
     const q = z
-      .object({ before: z.coerce.number().int().positive().optional() })
+      .object({
+        before: z.coerce.number().int().positive().optional(),
+        read_from: z.coerce.number().int().positive().optional(),
+      })
       .parse(request.query);
-    return store.timeline(agentParams(request), q.before);
+    return store.timeline(agentParams(request), q.before, q.read_from);
   });
   app.post("/api/messages", (request) => {
     const result = store.send("user", sendInput.parse(request.body));

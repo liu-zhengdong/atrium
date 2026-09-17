@@ -11,7 +11,6 @@ import { createServer as createViteServer } from "vite";
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
 import { resolveMentions } from "../shared/mentions.ts";
-import { runtimeMode } from "../shared/runtime-mode.ts";
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const store = new Store(":memory:");
@@ -154,13 +153,6 @@ test("定时／累计触发、合并限频和已读提醒清理", (t) => {
   assert.deepEqual(store.schedule(now + 903000), []);
 });
 
-test("RPC 提供 UI 能力，但不能因此显示为 TUI", () => {
-  assert.equal(runtimeMode(["pi", "--mode", "rpc"], true), "rpc");
-  assert.equal(runtimeMode(["pi", "--mode=rpc"], true), "rpc");
-  assert.equal(runtimeMode(["pi"], true), "tui");
-  assert.equal(runtimeMode(["pi"], false), "print");
-});
-
 test("@ 名称含空格、点、前缀重叠；拒绝误匹配与非成员", () => {
   const agents = [
     { id: "a", name: "Atlas" },
@@ -237,12 +229,19 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
     cwd: tmpdir(),
   });
   assert.equal(response.status, 201);
-  const created = (await response.json()) as {
-    agent: { id: string };
-    link_path: string;
-  };
-  const link = JSON.parse(readFileSync(created.link_path, "utf8"));
-  assert.equal(statSync(created.link_path).mode & 0o777, 0o600);
+  const created = (await response.json()) as { agent: { id: string } };
+  assert(
+    !("link_path" in created),
+    "UI no longer receives private connection paths",
+  );
+  const credentialPath = join(data, "credentials", `${created.agent.id}.json`);
+  const link = JSON.parse(readFileSync(credentialPath, "utf8"));
+  assert.equal(statSync(credentialPath).mode & 0o777, 0o600);
+  assert.equal(
+    (await request(`/api/agents/${created.agent.id}/link`)).status,
+    404,
+  );
+  assert.equal((await request(`/bridge/${created.agent.id}`)).status, 404);
   return { ...result, origin, request, agentId: created.agent.id, link };
 }
 

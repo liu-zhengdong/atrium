@@ -1,5 +1,4 @@
 import Fastify, { type FastifyRequest } from "fastify";
-import websocket from "@fastify/websocket";
 import staticFiles from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -32,7 +31,10 @@ export async function createApp(options: {
   runtime?: boolean;
 }) {
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
-  mkdirSync(join(options.data, "links"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(options.data, "credentials"), {
+    recursive: true,
+    mode: 0o700,
+  });
   const store = new Store(join(options.data, "atrium.sqlite"));
   const app = Fastify({ logger: { level: "warn" }, bodyLimit: 1_048_576 });
   const streams = new Set<import("node:http").ServerResponse>();
@@ -43,7 +45,12 @@ export async function createApp(options: {
   const runtimes =
     options.runtime === false
       ? null
-      : new Runtimes(store, options.data, changed);
+      : new Runtimes(store, options.data, changed, () => {
+          const address = app.server.address();
+          if (!address || typeof address === "string")
+            throw new Problem(503, "Atrium HTTP 入口尚未就绪");
+          return `http://127.0.0.1:${address.port}`;
+        });
   const raw = new WeakMap<FastifyRequest, Buffer>();
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser(
@@ -105,7 +112,6 @@ export async function createApp(options: {
         throw new Problem(403, "不接受跨站请求");
     }
   });
-  await app.register(websocket, { options: { maxPayload: 128000 } });
   const agentParams = (request: FastifyRequest) =>
     z.object({ id }).parse(request.params).id;
   const requireAgent = (request: FastifyRequest) => {
@@ -160,23 +166,24 @@ export async function createApp(options: {
       throw new Problem(400, "工作目录不存在或不可访问");
     }
     const { agent, token } = store.createAgent(input.name, cwd);
-    const linkPath = join(options.data, "links", `${agent.id}.json`);
     writeFileSync(
-      linkPath,
-      JSON.stringify({
-        url: `http://${request.headers.host}`,
-        agent_id: agent.id,
-        token,
-      }),
+      join(options.data, "credentials", `${agent.id}.json`),
+      JSON.stringify({ token }),
       { mode: 0o600 },
     );
     changed();
     void reply.code(201);
-    return { agent, link_path: linkPath };
+    return { agent };
   });
-  app.get("/api/agents/:id/link", (request) => {
-    const agent = store.agent(agentParams(request));
-    return { link_path: join(options.data, "links", `${agent.id}.json`) };
+  app.get("/api/runtimes", async () => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    return { runtimes: await runtimes.available() };
+  });
+  app.post("/api/agents/:id/attach", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    const input = z.object({ runtime_id: id }).strict().parse(request.body);
+    await runtimes.attach(agentParams(request), input.runtime_id);
+    return { connected: true };
   });
   app.patch("/api/agents/:id/config", (request) => {
     const result = store.configure(
@@ -186,10 +193,10 @@ export async function createApp(options: {
     changed();
     return result;
   });
-  app.post("/api/agents/:id/start", (request) => {
+  app.post("/api/agents/:id/start", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
-    runtimes.start(agentParams(request));
-    return { starting: true };
+    await runtimes.start(agentParams(request));
+    return { connected: true };
   });
   app.get("/api/agents/:id/box", (request) => {
     const q = z
@@ -288,22 +295,6 @@ export async function createApp(options: {
     });
     await transport.handleRequest(request.raw, reply.raw, request.body);
   });
-  app.get(
-    "/bridge/:id",
-    {
-      websocket: true,
-      preValidation: async (request) => {
-        requireAgent(request);
-      },
-    },
-    (socket, request) => {
-      if (!runtimes) {
-        socket.close(1013, "运行时未启用");
-        return;
-      }
-      void runtimes.accept(agentParams(request), socket);
-    },
-  );
   app.post("/webhooks/github", (request) => {
     if (!options.githubSecret) throw new Problem(503, "GitHub 接入未配置");
     const signature = request.headers["x-hub-signature-256"];
@@ -365,15 +356,17 @@ export async function createApp(options: {
     app.setNotFoundHandler((request, reply) => {
       if (
         request.method === "GET" &&
-        !/^\/(api|mcp|bridge|webhooks)(\/|$)/.test(request.url)
+        !/^\/(api|mcp|webhooks)(\/|$)/.test(request.url)
       )
         return reply.sendFile("index.html");
       return reply.code(404).send({ error: "接口不存在" });
     });
   }
-  app.addHook("onClose", () => {
-    runtimes?.close();
+  app.addHook("preClose", async () => {
     for (const stream of streams) stream.end();
+    await runtimes?.close();
+  });
+  app.addHook("onClose", async () => {
     store.close();
   });
   return { app, store, runtimes };

@@ -46,22 +46,6 @@ export const subscriptionInput = z
     ]),
   })
   .strict();
-export const delivery = z
-  .object({
-    id,
-    session_id: z.string().min(1),
-    kind: z.enum(["direct", "summary"]),
-    text: z.string().min(1).max(30000),
-  })
-  .strict();
-export const linkFile = z
-  .object({
-    url: z.string().url(),
-    agent_id: id,
-    token: z.string().min(32).max(128),
-  })
-  .strict();
-export type Link = z.infer<typeof linkFile>;
 export type AgentInfo = {
   id: string;
   name: string;
@@ -70,15 +54,25 @@ export type AgentInfo = {
   cwd: string;
   session_file: string | null;
 };
-export type RuntimeInfo = {
-  pid: number;
-  session_id: string;
-  session_file: string | null;
-  cwd: string;
-  mode: string;
-  busy: boolean;
-  model: string;
-};
+export const runtimeSchema = z
+  .object({
+    runtimeId: id,
+    generation: id,
+    sessionId: id,
+    pid: z.number().int().positive(),
+    ownerPid: z.number().int().positive().nullable(),
+    sessionFile: z.string().nullable(),
+    cwd: z.string(),
+    mode: z.enum(["tui", "rpc"]),
+    busy: z.boolean(),
+    model: z.string(),
+  })
+  .strict();
+export type RuntimeInfo = z.infer<typeof runtimeSchema>;
+export type LiveRuntime = Pick<
+  RuntimeInfo,
+  "runtimeId" | "generation" | "sessionId" | "pid" | "mode" | "cwd"
+> & { bound_agent?: string | null };
 export type Chat = {
   id: string;
   name: string;

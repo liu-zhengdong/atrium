@@ -98,6 +98,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), kind TEXT NOT NULL, text TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending', slot TEXT, error TEXT, created_at INTEGER NOT NULL, UNIQUE(agent_id,slot));
       CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(agent_id,created_at) WHERE state='pending';`);
+    const columns = this.all<{ name: string }>("PRAGMA table_info(agents)").map(
+      (c) => c.name,
+    );
+    for (const column of ["runtime_id", "acp_session_id"]) {
+      if (!columns.includes(column))
+        this.db.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
+    }
+    this.db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS agent_runtime_binding ON agents(runtime_id) WHERE runtime_id IS NOT NULL",
+    );
   }
   all<T>(sql: string, ...args: SQLInputValue[]): T[] {
     return this.db.prepare(sql).all(...args) as unknown as T[];

@@ -4,7 +4,7 @@
 
 ## 快速开始
 
-需要 Node.js 24+。运行 Agent 时，需要已配置模型与认证的 Pi，以及已启用的 [`@liuser/pi-mcp-adapter`](https://github.com/liu-zhengdong/pi-mcp-adapter) 2.34.1 固定代理扩展。项目开发依赖包含 Pi 与该适配器，但安装 npm 依赖不等于在个人 Pi 配置中启用扩展。
+需要 Node.js 24+。运行 Agent 时，需要已配置模型与认证的 Pi，以及已启用的 [`@liuser/pi-mcp-adapter`](https://github.com/liu-zhengdong/pi-mcp-adapter) 2.34.1 固定代理扩展。项目开发依赖包含 Pi 与该适配器，但安装 npm 依赖不等于在个人 Pi 配置中启用扩展。当前分支固定使用已验证的 pi-acp 本地构建包，`npm ci` 可直接安装；新能力尚未发布到 npm，不应换成旧注册表版本。[构建来源与哈希](vendor/README.md)。
 
 ```bash
 npm ci
@@ -15,7 +15,7 @@ npm start
 打开 **http://127.0.0.1:4310**。
 
 1. 在左侧创建 Agent，填写名称和真实工作目录。
-2. 在运行设置中启动后台 Pi，或复制连接命令到已准备好的 Pi 会话。
+2. 在运行设置中启动后台 Pi，或从「接入运行中的 Pi」选择已准备好的本机实例。
 3. 新建群聊／私聊。群里输入 `@` 选择 Agent；候选项同时显示它声明的工作内容。
 4. 点击 Agent 查看收件箱、运行状态与配置；在「事件订阅」配置 GitHub 事件。
 
@@ -35,33 +35,30 @@ npm start
 
 ### 后台启动
 
-UI 的「启动 Pi」使用配置好的 Pi 环境，在 Agent 的工作目录启动 RPC 进程，并加载 Atrium 扩展。首次使用独立会话文件，之后恢复该 Agent 已记录的会话。
+UI 的「启动 Pi」通过 pi-acp 的标准 ACP 会话接口创建／恢复 RPC 进程，复用配置好的 Pi 环境。Atrium 不拼接 Pi 启动命令或加载业务扩展；会话文件与生命周期由 Pi／pi-acp 管理。
 
 开启「允许事件自动启动」后，离线 Agent 有待投递事件时可自动启动。原进程仍存活但连接断开时等待重连，不另开同一会话。启动失败有退避，连续失败后可在 UI 查看错误并手动重试。
 
 ### 现有 TUI 原地接入
 
-原地接入要求 **该 Pi 已加载 Atrium 扩展，并处于固定 MCP 代理模式**。准备一个可在后续工作中接入的 TUI：
+原地接入要求 **Pi 已加载 pi-acp 的通用扩展，并处于固定 MCP 代理模式**。首次在 Atrium 仓库启用已锁定的依赖：
 
 ```bash
-PI_MCP_TOOL_EXPOSURE=proxy-only pi --extension /绝对路径/atrium/pi/extension.ts
+pi install ./node_modules/@liuser/pi-acp
+PI_MCP_TOOL_EXPOSURE=proxy-only pi
 ```
 
-正常开展工作后，在原会话执行 UI 提供的命令：
+之后在 Atrium 的 Agent 运行设置中刷新并选择实例，无需输入连接命令或复制凭据。Agent 与 Pi 的真实工作目录必须相同；其他 Agent 已绑定的实例不能重复接入。
 
-```text
-/atrium-connect /绝对路径/atrium/.atrium/links/<Agent ID>.json
-```
+Atrium 使用 ACP SDK 调用 pi-acp 声明的 `runtime/v1` 能力；Pi 进程内控制、本机 IPC 和发现登记归 pi-acp，不再有 Atrium 专属扩展或 WebSocket 桥接。两端使用同一个 `PI_ACP_DIR`。
 
-Agent 的工作目录必须与 Pi 一致。Atrium 使用 ACP SDK，经 WebSocket 与原进程桥接；`_atrium/status`、`_atrium/deliver` 是本项目的命名空间扩展，不声称任意 ACP Agent 都支持这些能力。
-
-接入不会新开 Pi 或恢复另一份历史。业务工具注册到固定 MCP 代理，使用说明追加到消息上下文；模型 system 与 tools 定义保持原样。用户执行 `/new` 后，连接在同一进程恢复并记录新的会话位置。未预加载扩展的任意运行进程不能无侵入接入，需要先准备扩展环境。
+接入不会新开 Pi 或恢复另一份历史。业务工具注册到固定 MCP 代理，使用说明追加到消息上下文；模型 system 与 tools 定义保持原样。用户执行 `/new` 或 `/reload` 后，连接在同一实例的新代际恢复并记录会话位置。未预加载扩展的任意运行进程不能无侵入接入，需要先准备扩展环境。
 
 ## 外部事件
 
 启动前设置 `ATRIUM_GITHUB_SECRET`。GitHub Webhook 使用同一 secret、JSON 格式，接收路径为 `/webhooks/github`，选择 Pull requests 事件；随后在 Atrium 为 Agent 添加仓库与事件订阅。
 
-GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook 或配置公网入口；对外接入时只转发 Webhook 路径，管理 API、MCP 和桥接入口仍保留在本机。不要把整个本机应用直接公开。
+GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook 或配置公网入口；对外接入时只转发 Webhook 路径，管理 API、MCP 与 pi-acp 控制入口仍保留在本机。不要把整个本机应用直接公开。
 
 订阅只决定收到什么，不增加 GitHub 操作权限。事件正文是外部内容，分析、评论、合并、发布仍依据 Agent 已有工具和用户授权。
 
@@ -74,10 +71,9 @@ GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook �
 | `web/`               | React 聊天界面、Agent 收件箱与事件设置     |
 | `server/app.ts`      | HTTP、SSE、Webhook 与作用域 MCP 入口       |
 | `server/store.ts`    | SQLite、未读位置、订阅、投递记录与通知调度 |
-| `server/runtime.ts`  | Pi 启动、ACP 连接、重连与投递              |
+| `server/runtime.ts`  | pi-acp 客户端、业务绑定、重连与投递        |
 | `server/mcp.ts`      | Agent 身份绑定的业务工具                   |
-| `pi/extension.ts`    | 原 Pi 会话桥接与消息上下文追加             |
-| `shared/`            | 数据约束、协议流和共用逻辑                 |
+| `shared/`            | 数据约束与共用逻辑                         |
 | `tests/`、`scripts/` | API／存储测试与真实 Pi 协议验收            |
 
 MCP 提供 `list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`get_config`、`update_config`、`list_subscriptions`、`subscribe_events`、`unsubscribe_event`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。
@@ -89,10 +85,12 @@ MCP 提供 `list_chats`、`read_chat`、`send_message`、`claim_status`、`view_
 | `ATRIUM_PORT`          | HTTP 端口，默认 `4310`                             |
 | `ATRIUM_DATA`          | 数据目录，默认仓库下 `.atrium/`                    |
 | `ATRIUM_GITHUB_SECRET` | GitHub Webhook 验签 secret；不设置则关闭该接收入口 |
-| `ATRIUM_PI_BIN`        | Pi 可执行文件，默认从 PATH 查找 `pi`               |
+| `ATRIUM_PI_ACP_ENTRY`  | 开发时覆盖 pi-acp 的 dist/index.js；默认使用依赖包 |
+| `PI_ACP_PI_COMMAND`    | pi-acp 使用的 Pi 可执行文件，默认 `pi`             |
+| `PI_ACP_DIR`           | pi-acp 状态与实例登记目录；TUI 和后端须一致        |
 | `PI_CODING_AGENT_DIR`  | Pi 自身配置目录，后台进程继承该设置                |
 
-`.atrium/` 保存数据库、私有连接文件和平台启动的 Pi 会话／日志。连接文件含凭据，权限为 `0600`；不要提交、发到聊天或放入模型提示。
+`.atrium/` 保存业务数据库和 `credentials/` 中的 Agent MCP 凭据（`0600`）。旧版 `links/` 凭据按需迁移，既有会话通过 pi-acp 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
 
 首版面向受信任的单用户本机环境。MCP 的身份隔离不是操作系统沙箱：具有本机 shell／文件访问权限的 Pi 仍具有其宿主用户的权限。本版不提供多用户认证、容器隔离或高可用消息队列；投递采用确认重试，进程内去重不等于跨崩溃的恰好一次执行，重要外部动作仍需幂等保护。
 
@@ -103,8 +101,9 @@ npm run dev          # HTTP 后端与 Vite 热更新；使用终端输出的前�
 npm run check        # 测试、类型检查、构建
 npm run format:check
 npm run test:pi      # 需要 tmux；真实 Pi TUI/RPC + 本地确定性模型
+npm run test:pi -- --ui  # 隔离 UI 演示，最多保留 5 分钟
 ```
 
-`test:pi` 在隔离目录验证原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 自动启动、用户主动切换会话后的连接恢复及断线不重复拉起。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出与哈希清单保留在命令输出的证据目录，不参与源码格式化。
+`test:pi` 在隔离目录经「Atrium → ACP → pi-acp → 原 Pi」验证原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 自动启动、用户主动切换会话后的连接恢复及断线不重复拉起。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出、启动前的源码副本与哈希清单保留在命令输出的证据目录，结束后复核原件与工作源码，不参与格式化。
 
 CI 执行上述检查并留存 Pi 验收材料。开发设计、实际界面截图、真实模型验收范围和剩余接入事项见 [设计与首版追踪 issue #1](https://github.com/liu-zhengdong/atrium/issues/1)。

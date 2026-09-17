@@ -1,147 +1,344 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { openSync, closeSync, mkdirSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  renameSync,
+  realpathSync,
+} from "node:fs";
+import { join } from "node:path";
+import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
+import { Readable, Writable } from "node:stream";
 import {
   client,
+  ndJsonStream,
   PROTOCOL_VERSION,
   type ClientConnection,
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
-import type { WebSocket } from "ws";
-import { acpStream } from "../shared/stream.ts";
-import type { RuntimeInfo } from "../shared/schema.ts";
+import {
+  runtimeSchema,
+  type RuntimeInfo,
+  type LiveRuntime,
+} from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
+import { atriumGuide } from "./mcp.ts";
 
-const infoSchema = z
-  .object({
-    pid: z.number().int().positive(),
-    session_id: z.string().min(1),
-    session_file: z.string().nullable(),
-    cwd: z.string(),
-    mode: z.string(),
-    busy: z.boolean(),
-    model: z.string(),
-  })
-  .strict();
-const root = fileURLToPath(new URL("../", import.meta.url));
-async function rpc<T>(
-  connection: ClientConnection,
-  method: string,
-  params: unknown,
-): Promise<T> {
-  const deadline = setTimeout(
-    () => connection.close(new Error(`ACP ${method} 超时`)),
-    5000,
-  ).unref();
-  try {
-    return await connection.agent.request<T>(method, params);
-  } finally {
-    clearTimeout(deadline);
-  }
-}
+const require = createRequire(import.meta.url);
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 };
+type Binding = {
+  runtime_id: string | null;
+  runtime_pid: number | null;
+  acp_session_id: string | null;
+  session_file: string | null;
+};
+type Gateway = {
+  connection: ClientConnection;
+  child: ChildProcessWithoutNullStreams;
+  closed: Promise<void>;
+  stopping?: Promise<void>;
+};
+const target = (r: RuntimeInfo) => ({
+  runtimeId: r.runtimeId,
+  generation: r.generation,
+  sessionId: r.sessionId,
+});
+const guideId = (agent: string, session: string) => {
+  const h = createHash("sha256")
+    .update(`${agent}:${session}:guide:v1`)
+    .digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+};
+
+/** Business-side ACP client. Pi processes, IPC discovery and native context belong to pi-acp. */
 export class Runtimes {
   readonly connections = new Map<
     string,
     { connection: ClientConnection; info: RuntimeInfo }
   >();
   readonly errors = new Map<string, string>();
-  private children = new Map<string, ChildProcess>();
-  private pumping = new Set<string>();
-  private connecting = new Set<string>();
+  private gateway?: Gateway;
+  private gateways = new Set<Gateway>();
+  private opening?: Promise<Gateway>;
+  private connecting = new Map<string, Promise<void>>();
+  private bindingOwners = new Map<string, string>();
+  private pumping = new Map<string, Promise<void>>();
   private starts = new Map<string, { at: number; failures: number }>();
+  private stopped = false;
   private interval: NodeJS.Timeout;
   constructor(
     private store: Store,
     private data: string,
     private changed: () => void,
+    private baseUrl: () => string,
   ) {
+    mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
     this.interval = setInterval(() => {
       void this.tick();
     }, 3000).unref();
   }
-  async accept(id: string, socket: WebSocket) {
-    if (this.connections.has(id) || this.connecting.has(id)) {
-      socket.close(1008, "Agent 已连接");
-      return;
-    }
-    this.connecting.add(id);
-    const connection = client({ name: "atrium" })
-      .onRequest("session/request_permission", () => ({
-        outcome: { outcome: "cancelled" },
-      }))
-      .onNotification("session/update", () => undefined)
-      .connect(acpStream(socket));
-    try {
-      const result = await rpc<{ _meta?: Record<string, unknown> }>(
-        connection,
-        "initialize",
-        {
+  private binding(id: string) {
+    this.store.agent(id);
+    return this.store.one<Binding>(
+      "SELECT runtime_id,runtime_pid,acp_session_id,session_file FROM agents WHERE id=?",
+      id,
+    )!;
+  }
+  private assertOpen() {
+    if (this.stopped) throw new Error("Atrium 正在关闭");
+  }
+  private async open(): Promise<Gateway> {
+    this.assertOpen();
+    if (this.gateway) return this.gateway;
+    if (this.opening) return this.opening;
+    const opening = (async () => {
+      const entry =
+        process.env.ATRIUM_PI_ACP_ENTRY ||
+        require.resolve("@liuser/pi-acp/dist/index.js");
+      const child = spawn(process.execPath, [entry], {
+        env: {
+          ...process.env,
+          PI_MCP_TOOL_EXPOSURE: "proxy-only",
+          PI_ACP_PI_COMMAND:
+            process.env.PI_ACP_PI_COMMAND || process.env.ATRIUM_PI_BIN || "pi",
+        },
+        stdio: "pipe",
+      });
+      // Keep provider/adapter diagnostics local; never forward credentials or RPC payloads to the UI.
+      child.stderr.on("data", (data: Buffer) => process.stderr.write(data));
+      const connection = client({ name: "atrium" })
+        .onRequest("session/request_permission", () => ({
+          outcome: { outcome: "cancelled" },
+        }))
+        .onNotification("session/update", () => undefined)
+        .connect(
+          ndJsonStream(
+            Writable.toWeb(child.stdin),
+            // Node/DOM BYOB declarations differ; this is the native byte Web Stream.
+            Readable.toWeb(
+              child.stdout,
+            ) as unknown as ReadableStream<Uint8Array>,
+          ),
+        );
+      child.once("error", (error) => connection.close(error));
+      const closed = new Promise<void>((resolve) => {
+        child.once("close", () => resolve());
+      });
+      const gateway: Gateway = { connection, child, closed };
+      this.gateways.add(gateway);
+      void closed.then(() => this.gateways.delete(gateway));
+      void connection.closed
+        .catch(() => undefined)
+        .then(() => this.stopGateway(gateway));
+      const timeout = setTimeout(
+        () => connection.close(new Error("pi-acp 初始化超时")),
+        15000,
+      ).unref();
+      try {
+        const result = await connection.agent.request<{
+          _meta?: Record<string, unknown>;
+        }>("initialize", {
           protocolVersion: PROTOCOL_VERSION,
           clientCapabilities: {},
           clientInfo: { name: "atrium" },
-        },
-      );
-      if (!result._meta?.["atrium/v1"])
-        throw new Error("Pi 缺少 Atrium 原会话桥接能力");
-      const info = infoSchema.parse(
-        await rpc(connection, "_atrium/status", {}),
-      );
-      if (resolve(info.cwd) !== resolve(this.store.agent(id).cwd))
-        throw new Error("Pi 工作目录与 Agent 配置不一致");
-      await rpc(connection, "session/load", {
-        sessionId: info.session_id,
-        cwd: info.cwd,
-        mcpServers: [],
-      });
-      this.store.run(
-        "UPDATE agents SET session_file=?,runtime_pid=? WHERE id=?",
-        info.session_file,
-        info.pid,
-        id,
-      );
-      this.connections.set(id, { connection, info });
-      this.errors.delete(id);
-      this.starts.delete(id);
-      this.changed();
-      void connection.closed
-        .catch(() => undefined)
-        .then(() => {
-          if (this.connections.get(id)?.connection === connection) {
-            this.connections.delete(id);
-            this.changed();
-          }
         });
-      await this.pump(id);
-    } catch (error) {
-      this.errors.set(
-        id,
-        error instanceof Error ? error.message : String(error),
+        if (!result._meta?.["pi-acp/runtime/v1"])
+          throw new Error(
+            "pi-acp 缺少 runtime/v1 能力，请更新到本项目要求的版本",
+          );
+        this.assertOpen();
+        this.gateway = gateway;
+        void connection.closed
+          .catch(() => undefined)
+          .then(() => {
+            if (this.gateway !== gateway) return;
+            this.gateway = undefined;
+            for (const [id, entry] of this.connections)
+              if (entry.connection === connection) {
+                this.connections.delete(id);
+                if (!this.stopped)
+                  this.errors.set(id, "pi-acp 连接断开，正在等待重连");
+              }
+            this.changed();
+          });
+        return gateway;
+      } catch (error) {
+        await this.stopGateway(gateway);
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+    this.opening = opening;
+    try {
+      return await opening;
+    } finally {
+      if (this.opening === opening) this.opening = undefined;
+    }
+  }
+  private async rpc<T = Record<string, unknown>>(
+    method: string,
+    params: unknown,
+  ): Promise<T> {
+    const { connection } = await this.open();
+    return connection.agent.request<T>(method, params);
+  }
+  async available(): Promise<LiveRuntime[]> {
+    const { runtimes } = await this.rpc<{ runtimes: LiveRuntime[] }>(
+      "_pi/runtime/list",
+      {},
+    );
+    const rows = this.store.all<{ id: string; runtime_id: string | null }>(
+      "SELECT id,runtime_id FROM agents",
+    );
+    return runtimes
+      .filter((r) => r.mode === "tui")
+      .map((r) => ({
+        ...r,
+        bound_agent: rows.find((a) => a.runtime_id === r.runtimeId)?.id ?? null,
+      }));
+  }
+  private services(id: string) {
+    const path = join(this.data, "credentials", `${id}.json`);
+    if (!existsSync(path)) {
+      // Existing installation: keep the credential, move its old transport file out of the retired links directory.
+      const legacy = join(this.data, "links", `${id}.json`);
+      const value = z
+        .object({ agent_id: z.literal(id), token: z.string().min(32).max(128) })
+        .parse(JSON.parse(readFileSync(legacy, "utf8")));
+      if (!this.store.authenticate(id, value.token))
+        throw new Error("旧凭据与 Agent 不一致");
+      renameSync(legacy, path);
+    }
+    const { token } = z
+      .object({ token: z.string().min(32).max(128) })
+      .parse(JSON.parse(readFileSync(path, "utf8")));
+    if (!this.store.authenticate(id, token)) throw new Error("Agent 凭据无效");
+    return [
+      {
+        name: "atrium",
+        type: "http",
+        url: `${this.baseUrl()}/mcp/${id}`,
+        headers: [{ name: "Authorization", value: `Bearer ${token}` }],
+      },
+    ];
+  }
+  private remember(id: string, info: RuntimeInfo) {
+    const previous = this.binding(id);
+    if (
+      previous.runtime_id === info.runtimeId &&
+      previous.runtime_pid === info.pid &&
+      previous.acp_session_id === info.sessionId &&
+      previous.session_file === info.sessionFile
+    )
+      return;
+    this.store.run(
+      "UPDATE agents SET runtime_id=?,runtime_pid=?,acp_session_id=?,session_file=? WHERE id=?",
+      info.runtimeId,
+      info.pid,
+      info.sessionId,
+      info.sessionFile,
+      id,
+    );
+  }
+  private async bind(
+    id: string,
+    selector: { runtimeId: string } | { sessionId: string },
+  ) {
+    const selected = "runtimeId" in selector ? selector.runtimeId : undefined;
+    if (selected) {
+      if (
+        (this.bindingOwners.has(selected) &&
+          this.bindingOwners.get(selected) !== id) ||
+        this.store.one(
+          "SELECT id FROM agents WHERE runtime_id=? AND id<>?",
+          selected,
+          id,
+        )
+      )
+        throw new Problem(409, "这个 Pi 已绑定或正在接入另一个 Agent");
+      this.bindingOwners.set(selected, id);
+    }
+    let info: RuntimeInfo | undefined;
+    try {
+      info = runtimeSchema.parse(
+        await this.rpc("_pi/runtime/attach", selector),
       );
-      connection.close();
-      socket.close();
+      if (realpathSync(info.cwd) !== realpathSync(this.store.agent(id).cwd))
+        throw new Problem(409, "Pi 工作目录与 Agent 配置不一致");
+      if (
+        this.store.one(
+          "SELECT id FROM agents WHERE runtime_id=? AND id<>?",
+          info.runtimeId,
+          id,
+        )
+      )
+        throw new Problem(409, "这个 Pi 已绑定另一个 Agent");
+      await this.rpc("_pi/runtime/mcp", {
+        ...target(info),
+        mcpServers: this.services(id),
+      });
+      await this.rpc("_pi/runtime/deliver", {
+        ...target(info),
+        id: guideId(id, info.sessionId),
+        source: "Atrium 接入说明",
+        text: atriumGuide,
+        delivery: "steer",
+        triggerTurn: false,
+      });
+      this.assertOpen();
+      this.remember(id, info);
+      this.connections.set(id, { connection: this.gateway!.connection, info });
+      this.errors.delete(id);
       this.changed();
+    } catch (error) {
+      if (info)
+        await this.rpc("_pi/runtime/detach", target(info)).catch(
+          () => undefined,
+        );
+      throw error;
+    } finally {
+      if (selected && this.bindingOwners.get(selected) === id)
+        this.bindingOwners.delete(selected);
+    }
+  }
+  private async operation(id: string, run: () => Promise<void>) {
+    this.assertOpen();
+    if (this.connecting.has(id))
+      throw new Problem(409, "Agent 正在接入，请稍候");
+    const promise = run().catch((error) => {
+      if (!this.stopped) {
+        this.errors.set(id, String(error));
+        this.changed();
+      }
+      throw error;
+    });
+    this.connecting.set(id, promise);
+    try {
+      await promise;
     } finally {
       this.connecting.delete(id);
     }
   }
-  start(id: string, automatic = false) {
-    const agent = this.store.agent(id);
-    if (this.connections.has(id) || this.children.has(id))
-      throw new Problem(409, "Agent 已在运行或正在启动");
-    const pid = this.store.one<{ runtime_pid: number | null }>(
-      "SELECT runtime_pid FROM agents WHERE id=?",
-      id,
-    )?.runtime_pid;
-    if (pid && alive(pid))
+  async attach(id: string, runtimeId: string) {
+    this.store.agent(id);
+    if (this.connections.has(id)) throw new Problem(409, "Agent 已连接");
+    await this.operation(id, () => this.bind(id, { runtimeId }));
+    await this.pump(id);
+  }
+  async start(id: string, automatic = false) {
+    const agent = this.store.agent(id),
+      binding = this.binding(id);
+    if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
+    if (binding.runtime_pid && alive(binding.runtime_pid))
       throw new Problem(409, "原 Pi 进程仍存在，等待重连；不会另开同一会话");
     const last = this.starts.get(id);
     if (
@@ -150,113 +347,122 @@ export class Runtimes {
       (Date.now() - last.at < 60000 || last.failures >= 3)
     )
       return;
-    const folder = join(this.data, "agents", id);
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const link = join(this.data, "links", `${id}.json`);
-    if (!existsSync(link))
-      throw new Problem(409, "连接文件缺失，请重新创建 Agent");
-    const sessionFile = agent.session_file ?? join(folder, "session.jsonl");
-    const log = openSync(join(folder, "runtime.log"), "a", 0o600);
-    const child = spawn(
-      process.env.ATRIUM_PI_BIN || "pi",
-      [
-        "--mode",
-        "rpc",
-        "--session",
-        sessionFile,
-        "--extension",
-        join(root, "pi/extension.ts"),
-        "--atrium-link",
-        link,
-      ],
-      {
-        cwd: agent.cwd,
-        env: { ...process.env, PI_MCP_TOOL_EXPOSURE: "proxy-only" },
-        stdio: ["pipe", log, log],
-        detached: false,
-      },
-    );
-    closeSync(log);
-    this.children.set(id, child);
-    this.errors.delete(id);
     this.starts.set(id, {
       at: Date.now(),
       failures: automatic ? (last?.failures ?? 0) + 1 : 1,
     });
-    if (child.pid)
-      this.store.run(
-        "UPDATE agents SET runtime_pid=?,session_file=? WHERE id=?",
-        child.pid,
-        sessionFile,
-        id,
-      );
-    const ended = (message: string) => {
-      if (this.children.get(id) === child) this.children.delete(id);
-      this.errors.set(id, message);
-      this.changed();
-    };
-    child.once("error", (error) => ended(error.message));
-    child.once("exit", (code, signal) =>
-      ended(
-        `Pi 已退出（${signal ?? code}），日志：${join(folder, "runtime.log")}`,
-      ),
-    );
-    this.changed();
-  }
-  async pump(id: string) {
-    if (this.pumping.has(id)) return;
-    this.pumping.add(id);
-    try {
-      const runtime = this.connections.get(id);
-      if (!runtime) {
-        if (
-          this.store.pending(id).length &&
-          this.store.agent(id).config.auto_start
-        ) {
-          try {
-            this.start(id, true);
-          } catch (error) {
-            this.errors.set(
-              id,
-              error instanceof Error ? error.message : String(error),
-            );
-          }
-        }
-        return;
+    await this.operation(id, async () => {
+      let sessionId = binding.acp_session_id;
+      if (!sessionId && binding.session_file) {
+        ({ sessionId } = await this.rpc<{ sessionId: string }>(
+          "_pi/session/import",
+          { cwd: agent.cwd, sessionFile: binding.session_file },
+        ));
+        this.store.run(
+          "UPDATE agents SET acp_session_id=? WHERE id=?",
+          sessionId,
+          id,
+        );
       }
-      runtime.info = infoSchema.parse(
-        await rpc(runtime.connection, "_atrium/status", {}),
-      );
+      if (sessionId)
+        await this.rpc("session/load", {
+          sessionId,
+          cwd: agent.cwd,
+          mcpServers: this.services(id),
+        });
+      else
+        ({ sessionId } = await this.rpc<{ sessionId: string }>("session/new", {
+          cwd: agent.cwd,
+          mcpServers: this.services(id),
+        }));
+      try {
+        await this.bind(id, { sessionId });
+      } catch (error) {
+        await this.rpc("session/close", { sessionId }).catch(() => undefined);
+        throw error;
+      }
+    });
+    if (!this.pumping.has(id)) await this.pump(id);
+  }
+  pump(id: string): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    const existing = this.pumping.get(id);
+    if (existing) return existing;
+    const promise = this.doPump(id).finally(() => this.pumping.delete(id));
+    this.pumping.set(id, promise);
+    return promise;
+  }
+  private async doPump(id: string) {
+    try {
+      if (this.connecting.has(id)) return;
+      let runtime = this.connections.get(id);
+      if (!runtime) {
+        const binding = this.binding(id);
+        if (
+          binding.runtime_id &&
+          binding.runtime_pid &&
+          alive(binding.runtime_pid)
+        ) {
+          await this.operation(id, () =>
+            this.bind(id, { runtimeId: binding.runtime_id! }),
+          );
+          runtime = this.connections.get(id);
+        } else {
+          if (
+            this.store.pending(id).length &&
+            this.store.agent(id).config.auto_start
+          )
+            await this.start(id, true);
+          runtime = this.connections.get(id);
+        }
+      }
+      if (!runtime) return;
+      try {
+        runtime.info = runtimeSchema.parse(
+          await this.rpc("_pi/runtime/status", target(runtime.info)),
+        );
+        this.assertOpen();
+        this.remember(id, runtime.info);
+      } catch (error) {
+        await this.rpc("_pi/runtime/detach", target(runtime.info)).catch(
+          () => undefined,
+        );
+        this.connections.delete(id);
+        throw error;
+      }
       for (const pending of this.store.pending(id)) {
         if (pending.kind === "summary" && runtime.info.busy) continue;
         try {
-          const result = await rpc<{ accepted: boolean }>(
-            runtime.connection,
-            "_atrium/deliver",
+          const result = await this.rpc<{ accepted: boolean }>(
+            "_pi/runtime/deliver",
             {
+              ...target(runtime.info),
               id: pending.id,
-              session_id: runtime.info.session_id,
-              kind: pending.kind,
+              source: "Atrium",
               text: pending.text,
+              delivery: pending.kind === "direct" ? "steer" : "followUp",
             },
           );
+          this.assertOpen();
           if (!result.accepted) throw new Error("Pi 未确认接收");
           this.store.accepted(pending.id);
           this.changed();
         } catch (error) {
-          this.store.deliveryError(pending.id, String(error));
+          if (!this.stopped)
+            this.store.deliveryError(pending.id, String(error));
           break;
         }
       }
     } catch (error) {
-      this.errors.set(id, String(error));
-    } finally {
-      this.pumping.delete(id);
+      if (!this.stopped) {
+        this.errors.set(id, String(error));
+        this.changed();
+      }
     }
   }
   private async tick() {
-    const scheduled = this.store.schedule();
-    if (scheduled.length) this.changed();
+    if (this.stopped) return;
+    if (this.store.schedule().length) this.changed();
     await Promise.all(
       this.store.agents().map(async (agent) => {
         const before = JSON.stringify(this.connections.get(agent.id)?.info);
@@ -266,9 +472,36 @@ export class Runtimes {
       }),
     );
   }
-  close() {
+  private stopGateway(gateway: Gateway): Promise<void> {
+    if (gateway.stopping) return gateway.stopping;
+    gateway.stopping = (async () => {
+      gateway.connection.close();
+      gateway.child.stdin.end();
+      const terminate = setTimeout(
+        () => gateway.child.kill("SIGTERM"),
+        14000,
+      ).unref();
+      const force = setTimeout(
+        () => gateway.child.kill("SIGKILL"),
+        17000,
+      ).unref();
+      try {
+        await gateway.closed;
+      } finally {
+        clearTimeout(terminate);
+        clearTimeout(force);
+      }
+    })();
+    return gateway.stopping;
+  }
+  async close() {
+    this.stopped = true;
     clearInterval(this.interval);
-    for (const runtime of this.connections.values()) runtime.connection.close();
-    for (const child of this.children.values()) child.kill("SIGTERM");
+    await Promise.allSettled([
+      ...this.pumping.values(),
+      ...this.connecting.values(),
+      ...(this.opening ? [this.opening] : []),
+      ...[...this.gateways].map((gateway) => this.stopGateway(gateway)),
+    ]);
   }
 }

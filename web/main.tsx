@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Plus,
   Radio,
+  RefreshCw,
   Settings2,
   X,
 } from "lucide-react";
@@ -31,6 +32,7 @@ import type {
   Subscription,
   Preferences,
   Page,
+  LiveRuntime,
 } from "../shared/schema.ts";
 import { resolveMentions } from "../shared/mentions.ts";
 import "./style.css";
@@ -186,8 +188,10 @@ function AgentDrawer({
     [box, setBox] = useState<Page<BoxMessage> | null>(null);
   const [boxPages, setBoxPages] = useState([0]);
   const boxAfter = boxPages.at(-1)!;
-  const [config, setConfig] = useState<Preferences>(agent.config),
-    [link, setLink] = useState("");
+  const [config, setConfig] = useState<Preferences>(agent.config);
+  const [showRuntimes, setShowRuntimes] = useState(false);
+  const [liveRuntimes, setLiveRuntimes] = useState<LiveRuntime[] | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [saved, setSaved] = useState(false);
@@ -211,11 +215,35 @@ function AgentDrawer({
     agent.config.message_threshold,
     agent.config.wake_interval_seconds,
   ]);
-  useEffect(() => {
-    void api<{ link_path: string }>(`/agents/${agent.id}/link`)
-      .then((r) => setLink(r.link_path))
-      .catch((e) => setError(e.message));
-  }, [agent.id]);
+  async function scan() {
+    setShowRuntimes(true);
+    setScanning(true);
+    setError("");
+    try {
+      setLiveRuntimes(
+        (await api<{ runtimes: LiveRuntime[] }>("/runtimes")).runtimes,
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setScanning(false);
+    }
+  }
+  async function attach(runtimeId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/agents/${agent.id}/attach`, "POST", {
+        runtime_id: runtimeId,
+      });
+      setShowRuntimes(false);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function save(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -361,24 +389,101 @@ function AgentDrawer({
                 </div>
               )}
               {!agent.runtime && (
-                <button
-                  className="button"
-                  disabled={busy}
-                  onClick={() => void start()}
-                >
-                  {busy ? "启动中…" : "启动 Pi"}
-                </button>
+                <>
+                  <div className="runtime-actions">
+                    <button
+                      className="button"
+                      disabled={busy || scanning}
+                      onClick={() => void scan()}
+                    >
+                      接入已有 Pi
+                    </button>
+                    <button
+                      className="button secondary"
+                      disabled={busy}
+                      onClick={() => void start()}
+                    >
+                      启动后台 Pi
+                    </button>
+                    {busy && (
+                      <span className="loading small-text">
+                        <LoaderCircle size={14} />
+                        接入中…
+                      </span>
+                    )}
+                  </div>
+                  {showRuntimes && (
+                    <div className="runtime-picker">
+                      <div className="runtime-picker-title">
+                        <strong>本机运行中的 Pi</strong>
+                        <button
+                          className="icon-button"
+                          aria-label="刷新 Pi 列表"
+                          disabled={busy || scanning}
+                          onClick={() => void scan()}
+                        >
+                          <RefreshCw size={15} />
+                        </button>
+                      </div>
+                      {scanning ? (
+                        <p className="loading">
+                          <LoaderCircle size={16} />
+                          查找可接入的 Pi…
+                        </p>
+                      ) : (
+                        liveRuntimes &&
+                        (liveRuntimes.length ? (
+                          <>
+                            <p className="small-text muted">
+                              请选择与此 Agent 工作目录一致的 Pi。
+                            </p>
+                            {liveRuntimes.map((runtime) => (
+                              <div
+                                className="runtime-choice"
+                                key={runtime.runtimeId}
+                              >
+                                <div>
+                                  <strong>Pi · PID {runtime.pid}</strong>
+                                  <span title={runtime.cwd}>{runtime.cwd}</span>
+                                </div>
+                                <button
+                                  className="button secondary"
+                                  disabled={
+                                    busy ||
+                                    (!!runtime.bound_agent &&
+                                      runtime.bound_agent !== agent.id)
+                                  }
+                                  onClick={() => void attach(runtime.runtimeId)}
+                                >
+                                  {runtime.bound_agent &&
+                                  runtime.bound_agent !== agent.id
+                                    ? "已绑定"
+                                    : "接入"}
+                                </button>
+                              </div>
+                            ))}
+                          </>
+                        ) : (
+                          <p className="muted">
+                            尚未发现可接入的 Pi。请确认已启用 pi-acp 通用扩展。
+                          </p>
+                        ))
+                      )}
+                    </div>
+                  )}
+                  <p className="small-text muted connection-help">
+                    首次需准备 pi-acp 与固定模式 MCP 代理。
+                    <a
+                      href="https://github.com/liu-zhengdong/atrium#pi-接入"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      查看准备步骤
+                    </a>
+                    。接入保留原进程与原会话。
+                  </p>
+                </>
               )}
-              <details className="connection-help">
-                <summary>接入已运行的 Pi</summary>
-                <p className="muted">
-                  需安装 Atrium 扩展及固定模式 MCP 代理。在 Pi 中执行：
-                </p>
-                <CopyLine text={`/atrium-connect ${link}`} />
-                <p className="small-text muted">
-                  接入保留原进程与原会话。安装步骤见仓库 README。
-                </p>
-              </details>
             </section>
             <form onSubmit={save} className="settings-section">
               <h3>运行偏好</h3>

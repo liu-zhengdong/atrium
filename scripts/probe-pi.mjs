@@ -10,7 +10,8 @@ import {
   readdirSync,
   chmodSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -23,6 +24,17 @@ const profile = join(folder, "profile"),
   raw = join(folder, "raw");
 for (const dir of [profile, cwd, raw]) mkdirSync(dir, { mode: 0o700 });
 process.env.PI_MCP_CONFIG_MODE = "exclusive";
+process.env.PI_MCP_TOOL_EXPOSURE = "proxy-only";
+process.env.PI_CODING_AGENT_DIR = profile;
+process.env.PI_ACP_DIR = join(folder, "pi-acp");
+process.env.PI_OFFLINE = "1";
+const require = createRequire(import.meta.url);
+const piAcpEntry = resolve(
+  process.env.ATRIUM_PI_ACP_ENTRY ||
+    require.resolve("@liuser/pi-acp/dist/index.js"),
+);
+const piAcpExtension = join(dirname(piAcpEntry), "pi-extension.js");
+assert(existsSync(piAcpExtension), "需要构建后的新版 pi-acp 通用扩展");
 const ready = join(folder, "ready");
 const readyExtension = join(folder, "ready.ts");
 writeFileSync(
@@ -33,6 +45,26 @@ const requests = [],
   hashes = [],
   session = `atrium-${Date.now()}`;
 const hash = (text) => createHash("sha256").update(text).digest("hex");
+const sourceHashes = {};
+for (const path of [
+  piAcpEntry,
+  piAcpExtension,
+  "server/app.ts",
+  "server/runtime.ts",
+  "server/store.ts",
+  "server/mcp.ts",
+  "scripts/probe-pi.mjs",
+]) {
+  const content = readFileSync(path);
+  sourceHashes[path] = hash(content);
+  const name = path.startsWith("/")
+    ? `pi-acp/${path === piAcpEntry ? "index.js" : "pi-extension.js"}`
+    : path;
+  const target = join(folder, "source", name);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, content, { mode: 0o400 });
+  hashes.push({ name: `../source/${name}`, sha256: hash(content) });
+}
 const wait = async (predicate, label, ms = 20000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -53,7 +85,7 @@ const model = createServer(async (req, res) => {
     const name = `${String(index + 1).padStart(3, "0")}.json`;
     writeFileSync(join(raw, name), input, { mode: 0o400 });
     hashes.push({ name, sha256: hash(input) });
-    assert(requests.length <= 10, "超出模型夹具请求预算");
+    assert(requests.length <= 14, "超出模型夹具请求预算");
     const messages = body.messages,
       latestUser = [...messages].reverse().find((m) => m.role === "user");
     const all = JSON.stringify(messages),
@@ -134,6 +166,11 @@ const adapter = resolve(
   process.env.ATRIUM_TEST_ADAPTER ||
     "node_modules/@liuser/pi-mcp-adapter/index.ts",
 );
+process.env.PI_ACP_MCP_EXTENSION = adapter;
+writeFileSync(
+  join(profile, "SYSTEM.md"),
+  "CUSTOM_SYSTEM_FIXTURE：这是自定义基础身份；外部服务接入不应替换我。\n",
+);
 writeFileSync(
   join(profile, "settings.json"),
   JSON.stringify({
@@ -172,12 +209,13 @@ writeFileSync(
 );
 const { app, store, runtimes } = await createApp({
   data: join(folder, "data"),
+  webRoot: process.argv.includes("--ui") ? resolve("dist") : undefined,
 });
 await app.listen({ port: 0, host: "127.0.0.1" });
 const port = app.server.address().port;
 let started = false;
 try {
-  const command = `env PI_CODING_AGENT_DIR=${shell(profile)} PI_MCP_TOOL_EXPOSURE=proxy-only PI_MCP_CONFIG_MODE=exclusive pi --extension ${shell(resolve("pi/extension.ts"))} --extension ${shell(readyExtension)}`;
+  const command = `env PI_CODING_AGENT_DIR=${shell(profile)} PI_ACP_DIR=${shell(process.env.PI_ACP_DIR)} PI_MCP_TOOL_EXPOSURE=proxy-only PI_MCP_CONFIG_MODE=exclusive PI_OFFLINE=1 pi --extension ${shell(piAcpExtension)} --extension ${shell(readyExtension)}`;
   execFileSync("tmux", [
     "new-session",
     "-d",
@@ -222,159 +260,218 @@ try {
     body: JSON.stringify({ name: "验证 Agent", cwd }),
   });
   assert.equal(response.status, 201);
-  const { agent, link_path } = await response.json();
+  const { agent } = await response.json();
   const chat = store.createChat("原地接入验证", [agent.id]);
   chatId = chat.id;
-  input(`/atrium-connect ${link_path}`);
-  await wait(() => runtimes.connections.has(agent.id), "现有 TUI 原地连接");
-  const before = structuredClone(runtimes.connections.get(agent.id).info);
-  assert.equal(before.mode, "tui");
-  const fileBefore = readFileSync(before.session_file, "utf8");
-  assert(fileBefore.includes("ATR_BASELINE"));
-  input("ATR_BUSY");
-  await wait(
-    () => existsSync(join(cwd, "started")),
-    "原任务的真实 bash 工具正在执行",
-  );
-  store.send("user", {
-    chat_id: chatId,
-    body: "@验证 Agent ATR_INSERT：请通过 Chat 工具回复",
-    mentions: [agent.id],
-  });
-  await runtimes.pump(agent.id);
-  await wait(
-    () =>
-      store
-        .timeline(chatId)
-        .items.some(
-          (m) => m.sender === agent.id && m.body === "原地接入验证成功",
-        ),
-    "忙时插入后真实 MCP 发回 Chat",
-  );
-  const after = runtimes.connections.get(agent.id).info;
-  assert.equal(before.pid, after.pid);
-  assert.equal(before.session_id, after.session_id);
-  assert.equal(before.session_file, after.session_file);
-  const schemaHash = hash(JSON.stringify(requests[0].tools));
-  const systemHash = hash(
-    JSON.stringify(
-      requests[0].messages.filter(
-        (m) => m.role === "system" || m.role === "developer",
-      ),
-    ),
-  );
-  for (const request of requests) {
-    assert.equal(
-      hash(JSON.stringify(request.tools)),
-      schemaHash,
-      "模型 tools 发生变化",
+  if (process.argv.includes("--ui")) {
+    console.log(
+      JSON.stringify({
+        ui: `http://127.0.0.1:${port}`,
+        evidence: folder,
+        agent: agent.id,
+        chat: chatId,
+      }),
     );
-    assert.equal(
-      hash(
-        JSON.stringify(
-          request.messages.filter(
-            (m) => m.role === "system" || m.role === "developer",
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 300000);
+      for (const signal of ["SIGINT", "SIGTERM"])
+        process.once(signal, () => {
+          clearTimeout(timer);
+          resolve();
+        });
+    });
+  } else {
+    const available = await (
+      await fetch(`http://127.0.0.1:${port}/api/runtimes`)
+    ).json();
+    assert.equal(available.runtimes.length, 1);
+    assert(!JSON.stringify(available).includes("token"));
+    input("ATR_BUSY");
+    await wait(
+      () => existsSync(join(cwd, "started")),
+      "原任务的真实 bash 工具正在执行",
+    );
+    const attached = await fetch(
+      `http://127.0.0.1:${port}/api/agents/${agent.id}/attach`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runtime_id: available.runtimes[0].runtimeId }),
+      },
+    );
+    assert.equal(attached.status, 200, await attached.text());
+    const before = structuredClone(runtimes.connections.get(agent.id).info);
+    assert.equal(before.mode, "tui");
+    assert.equal(before.busy, true, "MCP 在原任务仍忙时接入");
+    assert(readFileSync(before.sessionFile, "utf8").includes("ATR_BASELINE"));
+    const collision = store.createAgent("冲突 Agent", cwd).agent;
+    await assert.rejects(
+      runtimes.attach(collision.id, before.runtimeId),
+      /另一个 Agent/,
+    );
+    assert(runtimes.connections.has(agent.id), "拒绝冲突接入不能断开原 Agent");
+    store.send("user", {
+      chat_id: chatId,
+      body: "@验证 Agent ATR_INSERT：请通过 Chat 工具回复",
+      mentions: [agent.id],
+    });
+    await runtimes.pump(agent.id);
+    await wait(
+      () =>
+        store
+          .timeline(chatId)
+          .items.some(
+            (m) => m.sender === agent.id && m.body === "原地接入验证成功",
+          ),
+      "忙时插入后真实 MCP 发回 Chat",
+    );
+    const after = runtimes.connections.get(agent.id).info;
+    assert.equal(before.pid, after.pid);
+    assert.equal(before.sessionId, after.sessionId);
+    assert.equal(before.sessionFile, after.sessionFile);
+    const schemaHash = hash(JSON.stringify(requests[0].tools));
+    const systemHash = hash(
+      JSON.stringify(
+        requests[0].messages.filter(
+          (m) => m.role === "system" || m.role === "developer",
+        ),
+      ),
+    );
+    for (const request of requests) {
+      assert.equal(
+        hash(JSON.stringify(request.tools)),
+        schemaHash,
+        "模型 tools 发生变化",
+      );
+      assert.equal(
+        hash(
+          JSON.stringify(
+            request.messages.filter(
+              (m) => m.role === "system" || m.role === "developer",
+            ),
           ),
         ),
+        systemHash,
+        "system/developer 前缀发生变化",
+      );
+    }
+    assert(
+      JSON.stringify(requests[0].messages).includes("CUSTOM_SYSTEM_FIXTURE"),
+    );
+    const attachedRequests = requests.slice(1);
+    assert(
+      attachedRequests.some((r) =>
+        JSON.stringify(r.messages).includes("Atrium 是你的聊天与事件入口"),
       ),
-      systemHash,
-      "system/developer 前缀发生变化",
+      "忙时使用说明必须进入实际模型请求，而非仅显示在 TUI",
     );
-  }
-  const attached = requests.slice(1);
-  assert(
-    attached.some((r) =>
-      JSON.stringify(r.messages).includes("Atrium 是你的聊天与事件入口"),
-    ),
-  );
-  assert(
-    !JSON.stringify(requests).includes(
-      JSON.parse(readFileSync(link_path, "utf8")).token,
-    ),
-    "连接密钥泄漏到模型上下文",
-  );
-  assert(!modelError, String(modelError));
-  const rpcResponse = await fetch(`http://127.0.0.1:${port}/api/agents`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "后台验证 Agent", cwd }),
-  });
-  assert.equal(rpcResponse.status, 201);
-  const rpcAgent = (await rpcResponse.json()).agent;
-  const originalProfile = process.env.PI_CODING_AGENT_DIR;
-  try {
-    process.env.PI_CODING_AGENT_DIR = profile;
-    store.configure(rpcAgent.id, { auto_start: true });
-    const wakeChat = store.createChat("自动唤醒验证", [rpcAgent.id]);
-    store.send("user", {
-      chat_id: wakeChat.id,
-      body: "自动启动验证",
-      mentions: [rpcAgent.id],
+    assert(
+      !JSON.stringify(requests).includes(
+        JSON.parse(
+          readFileSync(
+            join(folder, "data", "credentials", `${agent.id}.json`),
+            "utf8",
+          ),
+        ).token,
+      ),
+      "连接密钥泄漏到模型上下文",
+    );
+    assert(!modelError, String(modelError));
+    const rpcResponse = await fetch(`http://127.0.0.1:${port}/api/agents`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "后台验证 Agent", cwd }),
     });
-    await runtimes.pump(rpcAgent.id);
-  } finally {
-    if (originalProfile === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = originalProfile;
-  }
-  await wait(() => runtimes.connections.has(rpcAgent.id), "后台 Pi 启动并连接");
-  assert.equal(runtimes.connections.get(rpcAgent.id).info.mode, "rpc");
-  await wait(() => pane().includes("已用 Chat 工具回复"), "原 TUI 回合完成");
-  const capture = pane();
-  writeFileSync(join(raw, "tui.txt"), capture, { mode: 0o400 });
-  hashes.push({ name: "tui.txt", sha256: hash(capture) });
-  input("/new");
-  await wait(async () => {
-    await runtimes.pump(agent.id);
-    return (
-      !!runtimes.connections.get(agent.id) &&
-      runtimes.connections.get(agent.id).info.session_id !== before.session_id
+    assert.equal(rpcResponse.status, 201);
+    const rpcAgent = (await rpcResponse.json()).agent;
+    const originalProfile = process.env.PI_CODING_AGENT_DIR;
+    try {
+      process.env.PI_CODING_AGENT_DIR = profile;
+      store.configure(rpcAgent.id, { auto_start: true });
+      const wakeChat = store.createChat("自动唤醒验证", [rpcAgent.id]);
+      store.send("user", {
+        chat_id: wakeChat.id,
+        body: "自动启动验证",
+        mentions: [rpcAgent.id],
+      });
+      await runtimes.pump(rpcAgent.id);
+    } finally {
+      if (originalProfile === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalProfile;
+    }
+    await wait(
+      () => runtimes.connections.has(rpcAgent.id),
+      "后台 Pi 启动并连接",
     );
-  }, "用户主动切换会话");
-  assert.equal(
-    store.agent(agent.id).session_file,
-    runtimes.connections.get(agent.id).info.session_file,
-    "恢复位置未跟随用户主动切换的会话",
-  );
-  runtimes.connections.get(agent.id).connection.close();
-  await wait(() => !runtimes.connections.has(agent.id), "模拟 TUI 仅连接断开");
-  assert.throws(() => runtimes.start(agent.id), /原 Pi 进程仍存在/);
-  const report = {
-    evidence: folder,
-    test_kind: "real-pi-tui/local-deterministic-model",
-    requests: requests.length,
-    pid: before.pid,
-    session_id: before.session_id,
-    session_file: before.session_file,
-    tools_sha256: schemaHash,
-    system_sha256: systemHash,
-    chat_reply: store.timeline(chatId).items.at(-1),
-    pi_version: execFileSync("pi", ["--version"], { encoding: "utf8" }).trim(),
-    node_version: process.version,
-    source_sha256: Object.fromEntries(
-      [
-        "pi/extension.ts",
-        "server/app.ts",
-        "server/runtime.ts",
-        "server/store.ts",
-        "shared/runtime-mode.ts",
-      ].map((path) => [path, hash(readFileSync(resolve(path)))]),
-    ),
-    checks: [
-      "hosted-rpc-autostart",
-      "follow-user-session-switch",
-      "disconnect-no-duplicate-process",
-      "same-process",
-      "same-session",
-      "busy-tool-insertion",
-      "real-fixed-mcp-call",
-      "stable-tools",
-      "stable-system",
-      "appended-guide",
-      "no-secret-in-context",
-    ],
-  };
-  writeFileSync(join(folder, "report.json"), JSON.stringify(report, null, 2));
-  console.log(JSON.stringify(report, null, 2));
+    assert.equal(runtimes.connections.get(rpcAgent.id).info.mode, "rpc");
+    await wait(() => pane().includes("已用 Chat 工具回复"), "原 TUI 回合完成");
+    const capture = pane();
+    writeFileSync(join(raw, "tui.txt"), capture, { mode: 0o400 });
+    hashes.push({ name: "tui.txt", sha256: hash(capture) });
+    input("/new");
+    await wait(async () => {
+      await runtimes.pump(agent.id);
+      return (
+        !!runtimes.connections.get(agent.id) &&
+        runtimes.connections.get(agent.id).info.sessionId !== before.sessionId
+      );
+    }, "用户主动切换会话");
+    assert.equal(
+      store.agent(agent.id).session_file,
+      runtimes.connections.get(agent.id).info.sessionFile,
+      "恢复位置未跟随用户主动切换的会话",
+    );
+    runtimes.connections.get(agent.id).connection.close();
+    await wait(
+      () => !runtimes.connections.has(agent.id),
+      "模拟 TUI 仅连接断开",
+    );
+    await assert.rejects(runtimes.start(agent.id), /原 Pi 进程仍存在/);
+    process.kill(before.pid, 0);
+    const chatReply = store.timeline(chatId).items.at(-1);
+    const events = await fetch(`http://127.0.0.1:${port}/api/events`);
+    const reader = events.body.getReader();
+    await reader.read();
+    await app.close();
+    await wait(async () => (await reader.read()).done, "SSE 在关闭时结束");
+    process.kill(before.pid, 0);
+    const report = {
+      evidence: folder,
+      test_kind: "real-pi-tui/local-deterministic-model",
+      requests: requests.length,
+      pid: before.pid,
+      session_id: before.sessionId,
+      session_file: before.sessionFile,
+      tools_sha256: schemaHash,
+      system_sha256: systemHash,
+      chat_reply: chatReply,
+      pi_version: execFileSync("pi", ["--version"], {
+        encoding: "utf8",
+      }).trim(),
+      node_version: process.version,
+      source_sha256: sourceHashes,
+      checks: [
+        "Atrium-ACP-pi-acp-native-runtime",
+        "busy-MCP-attachment",
+        "reject-duplicate-agent-binding",
+        "custom-SYSTEM-preserved",
+        "close-drains-gateway-and-SSE-without-killing-TUI",
+        "hosted-rpc-autostart",
+        "follow-user-session-switch",
+        "disconnect-no-duplicate-process",
+        "same-process",
+        "same-session",
+        "busy-tool-insertion",
+        "real-fixed-mcp-call",
+        "stable-tools",
+        "stable-system",
+        "appended-guide",
+        "no-secret-in-context",
+      ],
+    };
+    writeFileSync(join(folder, "report.json"), JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(report, null, 2));
+  }
 } catch (error) {
   if (started) {
     try {
@@ -400,6 +497,12 @@ try {
   }
   await app.close();
   await new Promise((resolve) => model.close(resolve));
+  for (const [path, expected] of Object.entries(sourceHashes))
+    assert.equal(
+      hash(readFileSync(path)),
+      expected,
+      `源文件在验证中被改动：${path}`,
+    );
   for (const entry of hashes)
     assert.equal(hash(readFileSync(join(raw, entry.name))), entry.sha256);
   writeFileSync(join(folder, "manifest.json"), JSON.stringify(hashes, null, 2));

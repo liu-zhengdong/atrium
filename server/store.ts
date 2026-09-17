@@ -101,7 +101,11 @@ export class Store {
     const columns = this.all<{ name: string }>("PRAGMA table_info(agents)").map(
       (c) => c.name,
     );
-    for (const column of ["runtime_id", "acp_session_id"]) {
+    for (const column of [
+      "runtime_id",
+      "acp_session_id",
+      "observed_session_id",
+    ]) {
       if (!columns.includes(column))
         this.db.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     }

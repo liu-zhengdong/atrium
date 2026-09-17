@@ -19,11 +19,14 @@ import {
 import { z } from "zod";
 import {
   runtimeSchema,
+  liveRuntimeSchema,
   type RuntimeInfo,
   type LiveRuntime,
 } from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
+import { createAgent } from "./agents.ts";
+import { agentName } from "../shared/agent-name.ts";
 
 const require = createRequire(import.meta.url);
 const alive = (pid: number) => {
@@ -73,6 +76,11 @@ export class Runtimes {
   private pumping = new Map<string, Promise<void>>();
   private starts = new Map<string, { at: number; failures: number }>();
   private stopped = false;
+  private discovered: LiveRuntime[] = [];
+  private discoveryError: string | null = null;
+  private discoveredOnce = false;
+  private scanning?: Promise<void>;
+  private ticking = false;
   private interval: NodeJS.Timeout;
   constructor(
     private store: Store,
@@ -84,6 +92,7 @@ export class Runtimes {
     this.interval = setInterval(() => {
       void this.tick();
     }, 3000).unref();
+    void this.discover();
   }
   private binding(id: string) {
     this.store.agent(id);
@@ -191,20 +200,130 @@ export class Runtimes {
     const { connection } = await this.open();
     return connection.agent.request<T>(method, params);
   }
-  async available(): Promise<LiveRuntime[]> {
-    const { runtimes } = await this.rpc<{ runtimes: LiveRuntime[] }>(
-      "_pi/runtime/list",
-      {},
+  private withOwners(runtimes: LiveRuntime[]): LiveRuntime[] {
+    const rows = this.store.all<
+      Binding & { id: string; cwd: string; observed_session_id: string | null }
+    >(
+      "SELECT id,cwd,runtime_id,runtime_pid,acp_session_id,observed_session_id,session_file FROM agents",
     );
-    const rows = this.store.all<{ id: string; runtime_id: string | null }>(
-      "SELECT id,runtime_id FROM agents",
+    const byRuntime = new Map(
+      rows.filter((a) => a.runtime_id).map((a) => [a.runtime_id, a]),
     );
+    const sessionCounts = new Map<string, number>();
+    for (const runtime of runtimes)
+      sessionCounts.set(
+        runtime.sessionId,
+        (sessionCounts.get(runtime.sessionId) ?? 0) + 1,
+      );
+    const bySession = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const session = row.observed_session_id ?? row.acp_session_id;
+      if (session)
+        bySession.set(session, [...(bySession.get(session) ?? []), row]);
+    }
     return runtimes
       .filter((r) => r.mode === "tui")
-      .map((r) => ({
-        ...r,
-        bound_agent: rows.find((a) => a.runtime_id === r.runtimeId)?.id ?? null,
-      }));
+      .map((r) => {
+        // Directory equality alone never identifies an Agent. A resumed session may
+        // regain its identity only after the previous process has exited.
+        const candidates = (bySession.get(r.sessionId) ?? []).filter(
+          (a) => a.cwd === r.cwd && (!a.runtime_pid || !alive(a.runtime_pid)),
+        );
+        const owner =
+          byRuntime.get(r.runtimeId) ??
+          (sessionCounts.get(r.sessionId) === 1 && candidates.length === 1
+            ? candidates[0]
+            : undefined);
+        return { ...r, bound_agent: owner?.id ?? null };
+      });
+  }
+  async available(): Promise<LiveRuntime[]> {
+    const value = await this.rpc("_pi/runtime/list", {});
+    const { runtimes } = z
+      .object({ runtimes: z.array(liveRuntimeSchema).max(256) })
+      .parse(value);
+    // Canonicalize during discovery, never on the overview's hot read path.
+    return this.withOwners(
+      runtimes.map((r) => {
+        let cwd = r.cwd;
+        try {
+          cwd = realpathSync(cwd);
+        } catch {
+          /* Preserve display metadata for inaccessible directories. */
+        }
+        return { ...r, cwd };
+      }),
+    );
+  }
+  directory() {
+    return {
+      runtimes: this.withOwners(this.discovered),
+      scanning: !this.discoveredOnce,
+      error: this.discoveryError,
+    };
+  }
+  async discover(): Promise<void> {
+    if (this.stopped) return;
+    if (this.scanning) return this.scanning;
+    const before = JSON.stringify(this.directory());
+    this.scanning = (async () => {
+      try {
+        const found = await this.available();
+        if (this.stopped) return;
+        this.discovered = found;
+        this.discoveryError = null;
+        // Reconcile known identities only. Merely opening the directory neither
+        // creates accounts nor connects to or modifies unrelated Pi sessions.
+        for (const runtime of found) {
+          if (!runtime.bound_agent) continue;
+          this.store.run(
+            "UPDATE agents SET runtime_id=?,runtime_pid=?,observed_session_id=? WHERE id=? AND (runtime_id IS NOT ? OR runtime_pid IS NOT ? OR observed_session_id IS NOT ?)",
+            runtime.runtimeId,
+            runtime.pid,
+            runtime.sessionId,
+            runtime.bound_agent,
+            runtime.runtimeId,
+            runtime.pid,
+            runtime.sessionId,
+          );
+        }
+      } catch {
+        if (!this.stopped)
+          this.discoveryError = "暂时无法发现本机 Agent，请确认 pi-acp 可用。";
+      } finally {
+        this.discoveredOnce = true;
+        this.scanning = undefined;
+        if (!this.stopped && before !== JSON.stringify(this.directory()))
+          this.changed();
+      }
+    })();
+    return this.scanning;
+  }
+  async agentForRuntime(runtimeId: string) {
+    await this.discover();
+    this.assertOpen();
+    if (this.discoveryError) throw new Problem(503, this.discoveryError);
+    const runtime = this.directory().runtimes.find(
+      (r) => r.runtimeId === runtimeId,
+    );
+    if (!runtime) throw new Problem(404, "这个 Agent 已离线，请刷新名册");
+    if (runtime.bound_agent) return this.store.agent(runtime.bound_agent);
+    const name = agentName(
+      runtime.cwd,
+      this.store
+        .all<{ name: string }>("SELECT name FROM agents")
+        .map((a) => a.name),
+    );
+    const agent = createAgent(this.store, this.data, name, runtime.cwd);
+    this.store.run(
+      "UPDATE agents SET runtime_id=?,runtime_pid=?,observed_session_id=? WHERE id=?",
+      runtime.runtimeId,
+      runtime.pid,
+      runtime.sessionId,
+      agent.id,
+    );
+    this.changed();
+    return agent;
   }
   private services(id: string) {
     const path = join(this.data, "credentials", `${id}.json`);
@@ -241,11 +360,12 @@ export class Runtimes {
     )
       return;
     this.store.run(
-      "UPDATE agents SET runtime_id=?,runtime_pid=?,acp_session_id=?,session_file=? WHERE id=?",
+      "UPDATE agents SET runtime_id=?,runtime_pid=?,acp_session_id=?,session_file=?,observed_session_id=? WHERE id=?",
       info.runtimeId,
       info.pid,
       info.sessionId,
       info.sessionFile,
+      info.sessionId,
       id,
     );
   }
@@ -461,16 +581,23 @@ export class Runtimes {
     }
   }
   private async tick() {
-    if (this.stopped) return;
-    if (this.store.schedule().length) this.changed();
-    await Promise.all(
-      this.store.agents().map(async (agent) => {
-        const before = JSON.stringify(this.connections.get(agent.id)?.info);
-        await this.pump(agent.id);
-        if (before !== JSON.stringify(this.connections.get(agent.id)?.info))
-          this.changed();
-      }),
-    );
+    if (this.stopped || this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.discover();
+      if (this.stopped) return;
+      if (this.store.schedule().length) this.changed();
+      await Promise.all(
+        this.store.agents().map(async (agent) => {
+          const before = JSON.stringify(this.connections.get(agent.id)?.info);
+          await this.pump(agent.id);
+          if (before !== JSON.stringify(this.connections.get(agent.id)?.info))
+            this.changed();
+        }),
+      );
+    } finally {
+      this.ticking = false;
+    }
   }
   private stopGateway(gateway: Gateway): Promise<void> {
     if (gateway.stopping) return gateway.stopping;
@@ -501,6 +628,7 @@ export class Runtimes {
       ...this.pumping.values(),
       ...this.connecting.values(),
       ...(this.opening ? [this.opening] : []),
+      ...(this.scanning ? [this.scanning] : []),
       ...[...this.gateways].map((gateway) => this.stopGateway(gateway)),
     ]);
   }

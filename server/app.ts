@@ -1,13 +1,7 @@
 import Fastify, { type FastifyRequest } from "fastify";
 import staticFiles from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  mkdirSync,
-  writeFileSync,
-  realpathSync,
-  statSync,
-  existsSync,
-} from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
@@ -23,6 +17,7 @@ import {
 import { Store, Problem } from "./store.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
+import { createAgent } from "./agents.ts";
 
 export async function createApp(options: {
   data: string;
@@ -121,20 +116,26 @@ export async function createApp(options: {
       throw new Problem(401, "Agent 凭据无效");
     return agentId;
   };
-  app.get(
-    "/api/overview",
-    () =>
-      ({
-        agents: store.agents().map((a) => ({
-          ...a,
-          runtime: runtimes?.connections.get(a.id)?.info ?? null,
-          error: runtimes?.errors.get(a.id) ?? null,
-          unread: store.boxCount(a.id),
-        })),
-        chats: store.chats(),
-        github_enabled: !!options.githubSecret,
-      }) satisfies Overview,
-  );
+  app.get("/api/overview", () => {
+    const discovery = runtimes?.directory() ?? {
+      runtimes: [],
+      scanning: false,
+      error: null,
+    };
+    const available = new Set(discovery.runtimes.map((r) => r.bound_agent));
+    return {
+      agents: store.agents().map((a) => ({
+        ...a,
+        runtime: runtimes?.connections.get(a.id)?.info ?? null,
+        available: available.has(a.id) || !!runtimes?.connections.has(a.id),
+        error: runtimes?.errors.get(a.id) ?? null,
+        unread: store.boxCount(a.id),
+      })),
+      chats: store.chats(),
+      discovery,
+      github_enabled: !!options.githubSecret,
+    } satisfies Overview;
+  });
   app.get("/api/events", (request, reply) => {
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -153,27 +154,37 @@ export async function createApp(options: {
       streams.delete(reply.raw);
     });
   });
-  app.post("/api/agents", (request, reply) => {
+  app.post("/api/agents", async (request, reply) => {
     const input = z
-      .object({ name: displayName, cwd: z.string().min(1).max(4096) })
+      .object({
+        name: displayName,
+        cwd: z.string().min(1).max(4096),
+        start: z.boolean().default(false),
+      })
       .strict()
       .parse(request.body);
-    let cwd: string;
-    try {
-      cwd = realpathSync(resolve(input.cwd));
-      if (!statSync(cwd).isDirectory()) throw new Error();
-    } catch {
-      throw new Problem(400, "工作目录不存在或不可访问");
+    if (input.start && !runtimes) throw new Problem(503, "运行时未启用");
+    const agent = createAgent(store, options.data, input.name, input.cwd);
+    let start_error: string | undefined;
+    if (input.start) {
+      try {
+        await runtimes!.start(agent.id);
+      } catch {
+        start_error = "Agent 已创建，但启动失败。可在详情中重试。";
+      }
     }
-    const { agent, token } = store.createAgent(input.name, cwd);
-    writeFileSync(
-      join(options.data, "credentials", `${agent.id}.json`),
-      JSON.stringify({ token }),
-      { mode: 0o600 },
-    );
     changed();
     void reply.code(201);
-    return { agent };
+    return { agent, start_error };
+  });
+  app.post("/api/runtimes/:id/chat", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    const agent = await runtimes.agentForRuntime(agentParams(request));
+    const chat = store.createChat(agent.name, [agent.id], agent.id);
+    // A conversation is usable immediately; connecting does not hold the HTTP UI open.
+    void runtimes.pump(agent.id);
+    changed();
+    return chat;
   });
   app.get("/api/runtimes", async () => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
@@ -257,6 +268,7 @@ export async function createApp(options: {
     )
       throw new Problem(400, "私聊必须且只能包含目标 Agent");
     const result = store.createChat(a.name, a.members, a.direct_agent);
+    if (a.direct_agent) void runtimes?.pump(a.direct_agent);
     changed();
     return result;
   });

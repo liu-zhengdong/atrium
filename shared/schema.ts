@@ -69,10 +69,19 @@ export const runtimeSchema = z
   })
   .strict();
 export type RuntimeInfo = z.infer<typeof runtimeSchema>;
-export type LiveRuntime = Pick<
-  RuntimeInfo,
-  "runtimeId" | "generation" | "sessionId" | "pid" | "mode" | "cwd"
-> & { bound_agent?: string | null };
+export const liveRuntimeSchema = runtimeSchema
+  .pick({
+    runtimeId: true,
+    generation: true,
+    sessionId: true,
+    pid: true,
+    mode: true,
+    cwd: true,
+  })
+  .strip();
+export type LiveRuntime = z.infer<typeof liveRuntimeSchema> & {
+  bound_agent?: string | null;
+};
 export type Chat = {
   id: string;
   name: string;
@@ -110,9 +119,15 @@ export type Page<T> = { items: T[]; next_after: number; has_more: boolean };
 export type Overview = {
   agents: (AgentInfo & {
     runtime: RuntimeInfo | null;
+    available: boolean;
     error: string | null;
     unread: number;
   })[];
   chats: Chat[];
+  discovery: {
+    runtimes: LiveRuntime[];
+    scanning: boolean;
+    error: string | null;
+  };
   github_enabled: boolean;
 };

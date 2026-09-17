@@ -52,6 +52,9 @@ for (const path of [
   "server/app.ts",
   "server/runtime.ts",
   "server/store.ts",
+  "server/agents.ts",
+  "shared/schema.ts",
+  "shared/agent-name.ts",
   "server/mcp.ts",
   "scripts/probe-pi.mjs",
 ]) {
@@ -109,7 +112,7 @@ const model = createServer(async (req, res) => {
               server: "atrium",
               tool: "send_message",
               args: {
-                chat_id: chatId,
+                chat_id: chatId ?? store.chats()[0]?.id,
                 body: "原地接入验证成功",
                 client_id: randomUUID(),
               },
@@ -254,22 +257,21 @@ try {
     () => requests.length >= 1 && pane().includes("BASELINE_READY"),
     "接入前真实模型请求",
   );
-  const response = await fetch(`http://127.0.0.1:${port}/api/agents`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "验证 Agent", cwd }),
-  });
-  assert.equal(response.status, 201);
-  const { agent } = await response.json();
-  const chat = store.createChat("原地接入验证", [agent.id]);
-  chatId = chat.id;
+  await runtimes.discover();
+  const initial = await (
+    await fetch(`http://127.0.0.1:${port}/api/overview`)
+  ).json();
+  assert.equal(initial.agents.length, 0, "发现不应预先创建档案");
+  assert.equal(initial.discovery.runtimes.length, 1);
+  assert.equal(initial.discovery.runtimes[0].bound_agent, null);
+  assert.equal(runtimes.connections.size, 0, "浏览名册不接管原 Pi");
+  assert.equal(requests.length, 1, "发现不触发模型回合");
   if (process.argv.includes("--ui")) {
     console.log(
       JSON.stringify({
         ui: `http://127.0.0.1:${port}`,
         evidence: folder,
-        agent: agent.id,
-        chat: chatId,
+        runtime: initial.discovery.runtimes[0].runtimeId,
       }),
     );
     await new Promise((resolve) => {
@@ -291,15 +293,24 @@ try {
       () => existsSync(join(cwd, "started")),
       "原任务的真实 bash 工具正在执行",
     );
-    const attached = await fetch(
-      `http://127.0.0.1:${port}/api/agents/${agent.id}/attach`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ runtime_id: available.runtimes[0].runtimeId }),
-      },
+    const conversation = await fetch(
+      `http://127.0.0.1:${port}/api/runtimes/${available.runtimes[0].runtimeId}/chat`,
+      { method: "POST" },
     );
-    assert.equal(attached.status, 200, await attached.text());
+    assert.equal(conversation.status, 200, await conversation.clone().text());
+    const chat = await conversation.json();
+    chatId = chat.id;
+    const agent = store.agent(chat.direct_agent);
+    await wait(
+      () => runtimes.connections.has(agent.id),
+      "点击后自动建立原 Pi 连接",
+    );
+    const repeated = await fetch(
+      `http://127.0.0.1:${port}/api/runtimes/${available.runtimes[0].runtimeId}/chat`,
+      { method: "POST" },
+    );
+    assert.equal((await repeated.json()).id, chatId, "重复点击复用身份与私聊");
+    assert.equal(store.agents().length, 1);
     const before = structuredClone(runtimes.connections.get(agent.id).info);
     assert.equal(before.mode, "tui");
     assert.equal(before.busy, true, "MCP 在原任务仍忙时接入");
@@ -312,7 +323,7 @@ try {
     assert(runtimes.connections.has(agent.id), "拒绝冲突接入不能断开原 Agent");
     store.send("user", {
       chat_id: chatId,
-      body: "@验证 Agent ATR_INSERT：请通过 Chat 工具回复",
+      body: `@${agent.name} ATR_INSERT：请通过 Chat 工具回复`,
       mentions: [agent.id],
     });
     await runtimes.pump(agent.id);
@@ -377,6 +388,18 @@ try {
       "连接密钥泄漏到模型上下文",
     );
     assert(!modelError, String(modelError));
+    const created = await fetch(`http://127.0.0.1:${port}/api/agents`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "一键新建验证", cwd, start: true }),
+    });
+    assert.equal(created.status, 201);
+    const createdAgent = await created.json();
+    assert(!createdAgent.start_error, createdAgent.start_error);
+    assert.equal(
+      runtimes.connections.get(createdAgent.agent.id).info.mode,
+      "rpc",
+    );
     const rpcResponse = await fetch(`http://127.0.0.1:${port}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -452,6 +475,10 @@ try {
       source_sha256: sourceHashes,
       checks: [
         "Atrium-ACP-pi-acp-native-runtime",
+        "readonly-automatic-discovery",
+        "click-to-chat-without-manual-profile-or-attach",
+        "repeat-click-reuses-identity-and-chat",
+        "create-and-start-in-one-action",
         "busy-MCP-attachment",
         "reject-duplicate-agent-binding",
         "custom-SYSTEM-preserved",

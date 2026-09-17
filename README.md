@@ -14,15 +14,18 @@ npm start
 
 打开 **http://127.0.0.1:4310**。
 
-1. 在左侧创建 Agent，填写名称和真实工作目录。
-2. 在运行设置中启动后台 Pi，或从「接入运行中的 Pi」选择已准备好的本机实例。
-3. 新建群聊／私聊。群里输入 `@` 选择 Agent；候选项同时显示它声明的工作内容。
-4. 点击 Agent 查看收件箱、运行状态与配置；在「事件订阅」配置 GitHub 事件。
+1. 首页直接展示 Agent 名册，包括已有身份和可发现的本机 Pi。点击即可进入私聊，身份关联与连接在后台完成。
+2. 需要新的 Agent 时，选择「新建 Agent」，填写名称和工作目录，一次创建并启动。
+3. 可另建群聊；群里输入 `@` 选择 Agent，候选项同时显示它声明的工作内容。
+4. 通过 Agent 详情查看收件箱与运行设置；在「事件订阅」配置 GitHub 事件。
+
+首次准备 Pi 环境见下文「现有 TUI 自动发现」。没有已加载通用扩展的实例时，名册展示准备指引，不要求先创建空身份。
 
 默认仅监听本机，事件自动启动默认关闭。关闭 Atrium 会停止由它拉起的子进程，不终止外部接入的 Pi TUI。
 
 ## 核心能力
 
+- **Agent 名册**：自动发现在线 Pi，选择后建立持久身份与私聊；已有 Agent 离线后保留身份和聊天历史。支持搜索与在线筛选。
 - **聊天**：群聊、私聊、成员管理、消息历史、Markdown 回复、实时更新。明确 @ 和私聊走即时通道，Pi 忙时在工具处理边界插入，不强制取消当前工具。
 - **工作状态**：`claim_status` 声明当前工作，与系统观测的连接／执行状态分开。
 - **通知与收件箱**：定时、累计阈值触发合并提醒；具体内容按需读取。每个 Agent 有独立未读位置，用户审阅不改变 Agent 的阅读状态。
@@ -35,11 +38,11 @@ npm start
 
 ### 后台启动
 
-UI 的「启动 Pi」通过 pi-acp 的标准 ACP 会话接口创建／恢复 RPC 进程，复用配置好的 Pi 环境。Atrium 不拼接 Pi 启动命令或加载业务扩展；会话文件与生命周期由 Pi／pi-acp 管理。
+UI 的「新建 Agent」创建后直接启动；离线 Agent 可在运行设置中选择「启动 Agent」。后台启动通过 pi-acp 的标准 ACP 会话接口创建／恢复 RPC 进程，复用配置好的 Pi 环境。Atrium 不拼接 Pi 启动命令或加载业务扩展；会话文件与生命周期由 Pi／pi-acp 管理。
 
 开启「允许事件自动启动」后，离线 Agent 有待投递事件时可自动启动。原进程仍存活但连接断开时等待重连，不另开同一会话。启动失败有退避，连续失败后可在 UI 查看错误并手动重试。
 
-### 现有 TUI 原地接入
+### 现有 TUI 自动发现
 
 原地接入要求 **Pi 已加载 pi-acp 的通用扩展，并处于固定 MCP 代理模式**。首次在 Atrium 仓库启用已锁定的依赖：
 
@@ -48,7 +51,7 @@ pi install ./node_modules/@liuser/pi-acp
 PI_MCP_TOOL_EXPOSURE=proxy-only pi
 ```
 
-之后在 Atrium 的 Agent 运行设置中刷新并选择实例，无需输入连接命令或复制凭据。Agent 与 Pi 的真实工作目录必须相同；其他 Agent 已绑定的实例不能重复接入。
+之后打开 Atrium 首页即可看到实例，点击直接聊天，无需另行创建档案、手动刷新接入或复制凭据。首次选择时按工作目录生成身份名称；同目录的不同 Pi 会话不会被合并成一个 Agent。已有身份按运行实例或唯一的恢复会话关联，不以目录名猜测身份。
 
 Atrium 使用 ACP SDK 调用 pi-acp 声明的 `runtime/v1` 能力；Pi 进程内控制、本机 IPC 和发现登记归 pi-acp，不再有 Atrium 专属扩展或 WebSocket 桥接。两端使用同一个 `PI_ACP_DIR`。
 
@@ -66,15 +69,20 @@ GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook �
 
 ## 结构
 
-| 目录                 | 职责                                       |
-| -------------------- | ------------------------------------------ |
-| `web/`               | React 聊天界面、Agent 收件箱与事件设置     |
-| `server/app.ts`      | HTTP、SSE、Webhook 与作用域 MCP 入口       |
-| `server/store.ts`    | SQLite、未读位置、订阅、投递记录与通知调度 |
-| `server/runtime.ts`  | pi-acp 客户端、业务绑定、重连与投递        |
-| `server/mcp.ts`      | Agent 身份绑定的业务工具                   |
-| `shared/`            | 数据约束与共用逻辑                         |
-| `tests/`、`scripts/` | API／存储测试与真实 Pi 协议验收            |
+| 目录                               | 职责                                       |
+| ---------------------------------- | ------------------------------------------ |
+| `web/main.tsx`、`web/App.tsx`      | React 挂载入口、导航与跨页面协调           |
+| `web/agents/`                      | Agent 名册、详情、创建                     |
+| `web/chat/`                        | 聊天、消息时间线、输入与提及、会话状态     |
+| `web/events/`                      | GitHub 事件订阅                            |
+| `web/components/`、`web/layout/`   | 复用组件与导航布局                         |
+| `web/useOverview.ts`、`web/api.ts` | 总览与 SSE 订阅、HTTP 请求                 |
+| `server/app.ts`                    | HTTP、SSE、Webhook 与作用域 MCP 入口       |
+| `server/store.ts`                  | SQLite、未读位置、订阅、投递记录与通知调度 |
+| `server/runtime.ts`                | pi-acp 客户端、业务绑定、重连与投递        |
+| `server/mcp.ts`                    | Agent 身份绑定的业务工具                   |
+| `shared/`                          | 数据约束与共用逻辑                         |
+| `tests/`、`scripts/`               | API／存储测试与真实 Pi 协议验收            |
 
 MCP 提供 `list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`get_config`、`update_config`、`list_subscriptions`、`subscribe_events`、`unsubscribe_event`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。
 
@@ -104,6 +112,6 @@ npm run test:pi      # 需要 tmux；真实 Pi TUI/RPC + 本地确定性模型
 npm run test:pi -- --ui  # 隔离 UI 演示，最多保留 5 分钟
 ```
 
-`test:pi` 在隔离目录经「Atrium → ACP → pi-acp → 原 Pi」验证原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 自动启动、用户主动切换会话后的连接恢复及断线不重复拉起。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出、启动前的源码副本与哈希清单保留在命令输出的证据目录，结束后复核原件与工作源码，不参与格式化。
+`test:pi` 在隔离目录经「Atrium → ACP → pi-acp → 原 Pi」验证自动发现、直接聊天、原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 自动启动、用户主动切换会话后的连接恢复及断线不重复拉起。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出、启动前的源码副本与哈希清单保留在命令输出的证据目录，结束后复核原件与工作源码，不参与格式化。
 
 CI 执行上述检查并留存 Pi 验收材料。开发设计、实际界面截图、真实模型验收范围和剩余接入事项见 [设计与首版追踪 issue #1](https://github.com/liu-zhengdong/atrium/issues/1)。

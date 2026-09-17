@@ -66,10 +66,16 @@ export function MessageTimeline({
               message.created_at - messages[index - 1].created_at < 180000;
             return (
               <article
-                className={`message ${continuation ? "continuation" : ""}`}
+                className={`message ${message.sender === "user" ? "outgoing" : "incoming"} ${continuation ? "continuation" : ""}`}
                 key={message.id}
+                data-message-id={message.id}
               >
-                {!continuation && <Avatar name={name} />}
+                <span
+                  className="message-avatar"
+                  aria-hidden={continuation || undefined}
+                >
+                  <Avatar name={name} />
+                </span>
                 <div className="message-content">
                   {!continuation && (
                     <div className="message-heading">
@@ -80,7 +86,7 @@ export function MessageTimeline({
                       <time>{time(message.created_at)}</time>
                     </div>
                   )}
-                  <div className="markdown">
+                  <div className="message-bubble markdown">
                     <Markdown
                       components={{
                         a: (props) => (

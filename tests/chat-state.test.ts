@@ -46,6 +46,10 @@ test("聊天历史反向验证：旧会话与混入页面的异会话消息均�
   );
 });
 
+test("后端更新前缺少回执字段时不崩溃，也不推测任何 Agent 已读", () => {
+  assert.deepEqual(mergeReadState([], undefined), []);
+});
+
 test("历史页与实时回执交错时保留阅读证据，不回退或误合并缺口", () => {
   const previous = [
     {

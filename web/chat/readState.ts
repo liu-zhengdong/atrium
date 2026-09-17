@@ -4,7 +4,7 @@ import type { ChatReadState } from "../../shared/schema.ts";
 // receipts already loaded for older messages in the same conversation.
 export function mergeReadState(
   previous: ChatReadState[],
-  incoming: ChatReadState[],
+  incoming: ChatReadState[] = [],
 ): ChatReadState[] {
   return incoming.map((reader) => {
     const old = previous.find((item) => item.agent_id === reader.agent_id);

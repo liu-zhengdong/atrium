@@ -386,82 +386,222 @@ nav button:hover,
 }
 .message {
   display: flex;
-  gap: 13px;
-  margin: 0 0 23px;
+  align-items: flex-start;
+  gap: 11px;
+  margin: 0 0 24px;
   max-width: 100%;
 }
+.message.outgoing {
+  flex-direction: row-reverse;
+}
+.message-avatar {
+  flex: 0 0 34px;
+}
 .message-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
-  flex: 1;
+  max-width: min(78%, 760px);
+}
+.outgoing .message-content {
+  align-items: flex-end;
 }
 .message-heading {
   display: flex;
   align-items: center;
-  gap: 9px;
-  min-height: 23px;
-  margin-bottom: 4px;
+  gap: 8px;
+  min-height: 22px;
+  margin-bottom: 5px;
 }
 .message-heading strong {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 550;
 }
 .message-heading time {
   font-size: 10px;
-  color: #aaa397;
+  color: #949187;
 }
 .agent-tag {
   font-size: 9px;
-  color: #929081;
-  background: #f5f4ee;
-  border: 1px solid #eceae0;
+  color: #898779;
+  border: 1px solid #e7e6de;
   padding: 0 4px;
   border-radius: 3px;
 }
-.read-receipt {
-  margin: 5px 0 0;
-  font-size: 11px;
-  line-height: 1.7;
-  color: #716d63;
-  max-width: 420px;
+.message-bubble {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 14px;
+  background: #f5f5f2;
+  border: 1px solid #eeede8;
+  border-radius: 4px 13px 13px 13px;
 }
-.read-receipt summary {
-  cursor: pointer;
-  width: fit-content;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-.read-receipt summary:focus-visible {
-  outline: 2px solid #9e8a63;
-  outline-offset: 3px;
-  border-radius: 3px;
-}
-.receipt-details {
-  margin-top: 7px;
-  padding: 10px 12px;
-  background: #f7f6f2;
-  border-radius: 6px;
-}
-.receipt-list {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-.receipt-list h3 {
-  font-size: 11px;
-  font-weight: 600;
-  margin: 0 0 3px;
-}
-.receipt-list span {
-  display: block;
-  overflow-wrap: anywhere;
-}
-.receipt-details p {
-  margin: 8px 0 0;
-  font-size: 10px;
+.outgoing .message-bubble {
+  background: #eaf0fa;
+  border-color: #e0e8f4;
+  border-radius: 13px 4px 13px 13px;
 }
 .message.continuation {
-  padding-left: 47px;
-  margin-top: -15px;
+  margin-top: -12px;
+}
+.message.continuation .message-avatar {
+  visibility: hidden;
+}
+.read-receipt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  align-self: flex-end;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 26px;
+  margin-top: 3px;
+  padding: 3px 2px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #8a887f;
+  white-space: nowrap;
+}
+.read-receipt.has-read {
+  color: #687a99;
+}
+.read-receipt:hover,
+.read-receipt[data-state="open"] {
+  background: #f0f2f5;
+  color: #3e577e;
+}
+.receipt-separator {
+  color: #b8b8b1;
+}
+.receipt-avatars {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 2px;
+}
+.receipt-avatars .avatar {
+  flex: 0 0 20px;
+  height: 20px;
+  width: 20px;
+  font-size: 9px;
+  border-radius: 50%;
+  border: 2px solid white;
+  background: #e5e9ee;
+  color: #617087;
+}
+.receipt-avatars .avatar + .avatar {
+  margin-left: -6px;
+}
+.receipt-popover {
+  z-index: 60;
+  width: 304px;
+  max-width: calc(100vw - 24px);
+  max-height: var(--radix-popover-content-available-height);
+  overflow: auto;
+  background: white;
+  border: 1px solid #e6e7e9;
+  border-radius: 12px;
+  box-shadow:
+    0 8px 32px #20283816,
+    0 2px 8px #20283809;
+  padding: 16px;
+  color: #3b3e43;
+}
+.receipt-popover-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.receipt-popover-heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.receipt-popover-heading .icon-button {
+  width: 25px;
+  height: 25px;
+  color: #85888f;
+}
+.receipt-filters {
+  display: flex;
+  border-bottom: 1px solid #eeeff1;
+  gap: 20px;
+}
+.receipt-filters button {
+  padding: 0 2px 10px;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  color: #888b93;
+}
+.receipt-filters button[aria-pressed="true"] {
+  color: #3f5e8d;
+  border-bottom-color: #6f8caf;
+}
+.receipt-filters button span {
+  font-size: 11px;
+  margin-left: 3px;
+}
+.receipt-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 7px 9px;
+  border: 1px solid #e6e7e9;
+  border-radius: 6px;
+  color: #9b9da3;
+}
+.receipt-search input {
+  width: 100%;
+  border: 0;
+  min-width: 0;
+  outline: 0;
+  font-size: 12px;
+}
+.receipt-search:focus-within {
+  outline: 2px solid #9c8b6c;
+  outline-offset: 2px;
+}
+.receipt-members {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  max-height: 240px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.receipt-members li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 6px 2px;
+}
+.receipt-members li > span:not(.avatar) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.receipt-members li > svg {
+  color: #718cb0;
+  flex-shrink: 0;
+}
+.receipt-members .receipt-empty {
+  justify-content: center;
+  min-height: 94px;
+  color: #999ca3;
+  font-size: 12px;
+}
+.receipt-footnote {
+  border-top: 1px solid #eeeff1;
+  padding-top: 10px;
+  margin: 0;
+  color: #999ca3;
+  font-size: 10px;
+  line-height: 1.7;
 }
 .markdown {
   font-size: 14px;
@@ -1326,8 +1466,21 @@ input[type="checkbox"] {
     padding: 0 20px 12px;
   }
   .member-stack {
-    max-width: 95px;
-    overflow: hidden;
+    flex-shrink: 0;
+    gap: 4px;
+  }
+  .member-stack button {
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .member-stack .avatar {
+    flex-basis: 24px;
+    width: 24px;
+    height: 24px;
+    font-size: 10px;
+  }
+  .member-stack button:nth-child(n + 4):not(:last-child) {
+    display: none;
   }
 }
 @media (max-width: 560px) {
@@ -1382,8 +1535,14 @@ input[type="checkbox"] {
   .message {
     gap: 10px;
   }
-  .message.continuation {
-    padding-left: 44px;
+  .message-content {
+    max-width: calc(100% - 44px);
+  }
+  .message-bubble {
+    padding: 9px 12px;
+  }
+  .read-receipt {
+    min-height: 32px;
   }
   .composer-wrap {
     padding: 0 12px 10px;

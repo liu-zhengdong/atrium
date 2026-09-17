@@ -1,5 +1,8 @@
+import { useState } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { Check, CheckCheck, Search, X } from "lucide-react";
 import type { ChatReadState, Message } from "../../shared/schema.ts";
-import type { Agent } from "../components/AgentAvatar.tsx";
+import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 
 export function ReadReceipt({
   message,
@@ -12,6 +15,8 @@ export function ReadReceipt({
   agents: Agent[];
   direct: boolean;
 }) {
+  const [filter, setFilter] = useState<"read" | "unread">("read");
+  const [search, setSearch] = useState("");
   const readers = state
     .filter((reader) => reader.agent_id !== message.sender)
     .map((reader) => ({
@@ -26,47 +31,118 @@ export function ReadReceipt({
     }));
   if (!readers.length) return null;
   const seen = readers.filter((reader) => reader.read);
-  const explanation =
-    "已读表示 Agent 通过工具取回了正文，不代表已处理。通知、投递和用户查看不算已读。";
-  if (direct)
-    return (
-      <p className="read-receipt" title={explanation}>
-        {seen.length ? "已读" : "未读"}
-      </p>
-    );
-  const label = !seen.length
-    ? "未读"
-    : readers.length <= 2
-      ? `已读：${seen.map((reader) => reader.name).join("、")}`
-      : `已读 ${seen.length}/${readers.length}`;
+  const unseen = readers.length - seen.length;
+  const visible = readers.filter(
+    (reader) =>
+      reader.read === (filter === "read") &&
+      reader.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+  );
+  const label = `${seen.length} 人已读，${unseen} 人未读`;
   return (
-    <details className="read-receipt">
-      <summary aria-label={`查看消息 ${message.id} 的已读状态`}>
-        {label}
-      </summary>
-      <div className="receipt-details">
-        <div className="receipt-list">
-          <section>
-            <h3>已读 {seen.length}</h3>
-            {seen.length ? (
-              seen.map((reader) => <span key={reader.id}>{reader.name}</span>)
-            ) : (
-              <span className="muted">暂无</span>
+    <Popover.Root
+      onOpenChange={(open) => {
+        if (open) {
+          setFilter(seen.length ? "read" : "unread");
+          setSearch("");
+        }
+      }}
+    >
+      <Popover.Trigger
+        className={`read-receipt ${seen.length ? "has-read" : ""}`}
+        aria-label={`查看阅读详情：${label}`}
+      >
+        {direct ? (
+          <>
+            {seen.length ? <CheckCheck size={13} /> : <Check size={13} />}
+            <span>{seen.length ? "已读" : "未读"}</span>
+          </>
+        ) : (
+          <>
+            {seen.length > 0 && (
+              <span className="receipt-avatars" aria-hidden="true">
+                {seen.slice(0, 3).map((reader) => (
+                  <Avatar key={reader.id} name={reader.name} />
+                ))}
+              </span>
             )}
-          </section>
-          <section>
-            <h3>未读 {readers.length - seen.length}</h3>
-            {readers.some((reader) => !reader.read) ? (
-              readers
-                .filter((reader) => !reader.read)
-                .map((reader) => <span key={reader.id}>{reader.name}</span>)
-            ) : (
-              <span className="muted">暂无</span>
+            <span>{seen.length} 人已读</span>
+            <span className="receipt-separator" aria-hidden="true">
+              ·
+            </span>
+            <span>{unseen} 人未读</span>
+          </>
+        )}
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          className="receipt-popover"
+          side="bottom"
+          align="end"
+          sideOffset={8}
+          collisionPadding={12}
+          aria-label="阅读详情"
+        >
+          <div className="receipt-popover-heading">
+            <h2>阅读详情</h2>
+            <Popover.Close className="icon-button" aria-label="关闭阅读详情">
+              <X size={16} />
+            </Popover.Close>
+          </div>
+          <div
+            className="receipt-filters"
+            role="group"
+            aria-label="阅读状态筛选"
+          >
+            <button
+              aria-pressed={filter === "read"}
+              onClick={() => setFilter("read")}
+            >
+              已读 <span>{seen.length}</span>
+            </button>
+            <button
+              aria-pressed={filter === "unread"}
+              onClick={() => setFilter("unread")}
+            >
+              未读 <span>{unseen}</span>
+            </button>
+          </div>
+          {readers.length > 8 && (
+            <label className="receipt-search">
+              <Search size={15} />
+              <input
+                aria-label="搜索阅读名单"
+                placeholder="搜索 Agent"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+          )}
+          <ul
+            className="receipt-members"
+            aria-label={filter === "read" ? "已读 Agent" : "未读 Agent"}
+          >
+            {visible.map((reader) => (
+              <li key={reader.id}>
+                <Avatar name={reader.name} small />
+                <span>{reader.name}</span>
+                {reader.read && <CheckCheck size={15} aria-label="已读" />}
+              </li>
+            ))}
+            {!visible.length && (
+              <li className="receipt-empty">
+                {search
+                  ? "没有匹配的 Agent"
+                  : filter === "read"
+                    ? "暂无 Agent 已读"
+                    : "全部 Agent 已读"}
+              </li>
             )}
-          </section>
-        </div>
-        <p>{explanation}</p>
-      </div>
-    </details>
+          </ul>
+          <p className="receipt-footnote">
+            已读表示 Agent 已取回正文，不代表已处理。
+          </p>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

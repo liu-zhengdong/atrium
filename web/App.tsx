@@ -10,7 +10,6 @@ import { AgentDrawer } from "./agents/AgentDrawer.tsx";
 import { CreateAgentDialog } from "./agents/CreateAgentDialog.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { CreateChatDialog } from "./chat/ChatDialogs.tsx";
-import { Integrations } from "./events/Integrations.tsx";
 
 export function App() {
   const {
@@ -115,13 +114,6 @@ export function App() {
                 openAgent={(agent) => void openAgent(agent)}
                 details={setAgentId}
                 create={() => setModal("agent")}
-              />
-            )}
-            {section === "events" && (
-              <Integrations
-                overview={overview}
-                revision={revision}
-                refresh={refresh}
               />
             )}
             {section === "chat" && !active && (

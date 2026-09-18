@@ -186,7 +186,7 @@ export function MessageComposer({
       </form>
       <p className="composer-note">
         {active.kind === "group"
-          ? "普通消息按订阅节奏提醒；明确 @ 不等待。"
+          ? "普通消息按对方心跳节奏提醒；明确 @ 不等待。"
           : "消息会保留；离线时等待 Agent 上线，或按运行设置自动启动。"}
       </p>
     </div>

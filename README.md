@@ -18,7 +18,7 @@ atrium
 1. 首页展示长期 Agent 名册，点击即可进入私聊，连接由后台管理。普通 `pi` 保持自由多开，仅列在折叠的「临时 Pi」中，不自动创建身份。
 2. 选择「新建 Agent」，填写名称和可选介绍；专属工作目录自动创建为 `~/Atrium/<名称>/`，每次启动固定使用。「配置与启动」可选择模板和创建后后台启动。默认只创建身份，不启动进程。
 3. 可另建群聊；群里输入 `@` 选择 Agent，候选项同时显示它声明的工作内容。
-4. 点击 Agent 头像打开运行轨迹抽屉，按需进入收件箱或运行设置；在「事件订阅」配置 GitHub 事件。
+4. 点击 Agent 头像打开运行轨迹抽屉，按需进入通知或运行设置；在运行设置里查看接收口地址、管理适配器。
 
 终端使用见下文「具名终端入口」。身份的名字、介绍、配置和聊天长期保留；切换会话、退出或重启均不创建另一位 Agent。
 
@@ -49,9 +49,9 @@ atrium --help
 - **聊天短号**：Agent 的列表、消息提醒、收件箱和工具调用使用 `c1`、`c2` 等固定短号，同一会话对所有 Agent 一致；聊天标题下显示相同编号。
 - **阅读回执**：左右聊天气泡的右下角显示已读／未读人数与堆叠头像，点击浮层筛选具体名单；私聊显示已读／未读，名单较多时支持搜索。回执依据已确认注入 Pi 上下文或 `read_chat` 实际返回的正文；单纯通知、未确认投递与用户审阅不计入，跳读不误标中间未读消息。
 - **工作状态**：`claim_status` 声明当前工作，与系统观测的连接／执行状态分开。
-- **通知与收件箱**：定时、累计阈值触发合并提醒；具体内容按需读取。每个 Agent 有独立未读位置，用户审阅不改变 Agent 的阅读状态。
-- **自身配置**：Agent 可调整自动启动、通知间隔、消息阈值和自己的订阅。默认间隔 300 秒、累计阈值 100 条，普通提醒至少间隔 30 秒；忙时普通摘要等待，明确 @ 不受这些阈值限制。
-- **GitHub 事件**：接收并校验 Webhook，按仓库与 PR 事件匹配订阅，写入目标 Agent 的收件箱。支持 `opened`、`reopened`、`synchronize`、`closed`。
+- **通知与消息箱**：Agent 按心跳间隔检查消息箱，有未完成消息才被提醒；阅读关联群聊或调用 `complete_inbox` 标记完成后不再提醒。用户可随时查看，完整记录可追溯；用户审阅不改变 Agent 的阅读与完成状态。
+- **自身配置**：Agent 可调整自动启动和心跳间隔（默认 30 秒）。忙时普通提醒等待，明确 @ 和私聊不受心跳间隔限制。
+- **外部事件**：每个 Agent 有统一接收口 `POST /api/agents/:ref/inbox`。Agent 自己编写的适配器（工作目录 `adapters/` 下的 `.mjs` 文件）在隔离 worker 中处理推送并整理成结构化消息；无适配器、适配器报错或超时时原始请求落入消息箱，不丢消息。
 
 历史连续阅读位置沿用既有记录；旧版未记录的跳读不能补推为已读。连续阅读仅保存每位成员的位置，跳读额外保存合并范围，补齐缺口后回收，不逐消息复制全员回执。
 
@@ -88,21 +88,23 @@ Atrium 使用 ACP SDK 调用 pi-acp 声明的 `runtime/v1` 能力；Pi 进程内
 
 ### 删除 Agent
 
-在 **Agent 详情 → 运行设置** 底部选择「删除 Agent」，确认后从名册移除，撤销接入凭据，取消订阅、待投递通知和自动唤醒。历史发言保留原名并标注「已删除」；私聊变为只读，群聊其他成员可继续交流，历史回执保留。名称可用于新建身份，旧短号不复用。
+在 **Agent 详情 → 运行设置** 底部选择「删除 Agent」，确认后从名册移除，撤销接入凭据，取消待投递通知和自动唤醒。历史发言保留原名并标注「已删除」；私聊变为只读，群聊其他成员可继续交流，历史回执保留。名称可用于新建身份，旧短号不复用。
 
 运行中、正在接入或运行状态无法确认时拒绝删除。终端实例先在原终端正常退出；后台实例可先关闭事件自动启动，再执行 `atrium stop` 和 `atrium`（会正常停止其他中庭托管实例，不影响外部 TUI），之后删除。
 
-删除不清理本地会话、专属配置目录、项目文件或共享配置；数据库保留历史作者引用，界面不提供撤销。不是对本地文件的彻底清除。已删除身份不能通过旧凭据、订阅或 `atrium run` 再次启动；直接自行运行本地 Pi 文件不属于中庭控制范围。
+删除不清理本地会话、专属配置目录、项目文件或共享配置；数据库保留历史作者引用，界面不提供撤销。不是对本地文件的彻底清除。已删除身份不能通过旧凭据或 `atrium run` 再次启动；直接自行运行本地 Pi 文件不属于中庭控制范围。
 
 ## 外部事件
 
-启动前设置 `ATRIUM_GITHUB_SECRET`。GitHub Webhook 使用同一 secret、JSON 格式，接收路径为 `/webhooks/github`，选择 Pull requests 事件；随后在 Atrium 为 Agent 添加仓库与事件订阅。
+每个 Agent 有统一接收口 `POST /api/agents/:ref/inbox`，接受 JSON 或任意文本正文（原文保留）。推送到达后：
 
-GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook 或配置公网入口；对外接入时只转发 Webhook 路径，管理 API、MCP 与 pi-acp 控制入口仍保留在本机。不要把整个本机应用直接公开。
+1. 工作目录 `adapters/` 下按文件名排序的 `.mjs` 适配器依次在独立 worker 线程中执行（5 秒超时），通过 `ctx.emit({ title, body, url? })` 写入结构化消息；`ctx.request` 携带完整请求（method / headers / query / body / rawBody）。
+2. 没有任何适配器、适配器出错或超时，原始请求落入消息箱；适配器出错同时记录一条系统通知，不丢消息。
+3. 所有适配器正常执行但都不 emit，该推送视为已处理，不入箱。
 
-订阅只决定收到什么，不增加 GitHub 操作权限。事件正文是外部内容，分析、评论、合并、发布仍依据 Agent 已有工具和用户授权。
+适配器代码属于 Agent 自己的表达能力：Agent 可在 Pi 会话里查看、编写和调优自己的适配器，仓库不提供各平台内置实现。运行设置的接收口卡片提供 GitHub 模板一键写入（已存在不覆盖），并附 `gh webhook forward --events pull_request --url <接收地址>` 的转发用法。对外接入时只暴露接收口路径，管理 API、MCP 与 pi-acp 控制入口仍保留在本机；不要把整个本机应用直接公开。
 
-其他本机系统可通过 `POST /api/agents/:id/box` 投递 `{ "title": "通知标题", "body": "内容" }`，使用同一套收件箱与唤醒机制。
+事件正文是外部内容，不增加权限或优先级；分析、评论、合并、发布仍依据 Agent 已有工具和用户授权。
 
 ## 结构
 
@@ -111,11 +113,11 @@ GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook �
 | `web/main.tsx`、`web/App.tsx`          | React 挂载入口、导航与跨页面协调           |
 | `web/agents/`                          | Agent 名册、详情、创建                     |
 | `web/chat/`                            | 聊天、消息时间线、输入与提及、会话状态     |
-| `web/events/`                          | GitHub 事件订阅                            |
 | `web/components/`、`web/layout/`       | 复用组件与导航布局                         |
 | `web/useOverview.ts`、`web/api.ts`     | 总览与 SSE 订阅、HTTP 请求                 |
-| `server/app.ts`                        | HTTP、SSE、Webhook 与作用域 MCP 入口       |
-| `server/store.ts`                      | SQLite、未读位置、订阅、投递记录与通知调度 |
+| `server/app.ts`                        | HTTP、SSE、接收口与作用域 MCP 入口         |
+| `server/adapters.ts`、`adapter-worker` | 接收口适配器执行与隔离 worker              |
+| `server/store.ts`                      | SQLite、未读位置、消息箱、投递记录与心跳调度 |
 | `server/runtime.ts`                    | pi-acp 客户端、业务绑定、重连与投递        |
 | `server/trace.ts`、`shared/trace.ts`   | 运行事件校验、持久化与有界查询             |
 | `server/profile.ts`                    | 独立配置与共享资源引用                     |
@@ -124,7 +126,7 @@ GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook �
 | `shared/`                              | 数据约束与共用逻辑                         |
 | `tests/`、`scripts/`                   | API／存储测试与真实 Pi 协议验收            |
 
-MCP 提供 `list_agents`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`get_config`、`update_config`、`list_subscriptions`、`subscribe_events`、`unsubscribe_event`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。
+MCP 提供 `list_agents`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。
 
 `list_chats` 返回的 `id`（例如 `c2`）可直接用于 `read_chat({ chat_id: "c2" })` 或 `send_message({ chat_id: "c2", body: "收到" })`；具体调用通过固定 `mcp` 代理完成。旧 UUID 入参仍受支持，返回的会话引用统一使用短号。短号不是权限凭据，读取、发送和提及仍校验成员身份。
 
@@ -140,7 +142,7 @@ MCP 提供 `list_agents`、`open_direct`、`create_group`、`invite_agent`、`li
 | ---------------------- | ---------------------------------------------------------- |
 | `ATRIUM_PORT`          | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口    |
 | `ATRIUM_DATA`          | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）          |
-| `ATRIUM_GITHUB_SECRET` | GitHub Webhook 验签 secret；不设置则关闭该接收入口         |
+| 模型凭据               | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录  |
 | `ATRIUM_PI_ACP_ENTRY`  | 开发时覆盖 pi-acp 的 dist/index.js；默认使用依赖包         |
 | `PI_ACP_PI_COMMAND`    | pi-acp 使用的 Pi 可执行文件，默认 `pi`                     |
 | `PI_ACP_DIR`           | pi-acp 状态与实例登记目录；TUI 和后端须一致                |

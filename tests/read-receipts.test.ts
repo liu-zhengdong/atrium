@@ -27,8 +27,6 @@ test("回执仅覆盖真实返回页；隔离 Agent、通知、投递与用户�
   const one = send("一"),
     two = send("二");
   store.timeline(chat.id);
-  store.configure(a.id, { message_threshold: 1 });
-  store.schedule(Date.now());
   store.box(a.id, 0, true, true);
   assert(!hasRead(state(), one.id));
   assert(!hasRead(state(), two.id));
@@ -149,8 +147,7 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
     undefined,
   );
 
-  // 此时 schedule 不应产生多余的未读提醒
-  store.configure(a.id, { message_threshold: 1 });
+  // 此时 schedule 不应产生多余的提醒
   const woke = store.schedule(Date.now() + 301000);
   assert(!woke.includes(a.id), "已读后不会在后台产生骚扰未读提醒");
 

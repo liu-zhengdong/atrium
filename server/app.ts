@@ -3,7 +3,6 @@ import staticFiles from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { mkdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import {
   id,
@@ -11,7 +10,6 @@ import {
   displayName,
   preferences,
   sendInput,
-  subscriptionInput,
   type Overview,
 } from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
@@ -19,10 +17,14 @@ import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
 import { createAgent, defaultDesktops, displayDesktops } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
+import {
+  listAdapters,
+  receiveInbox,
+  writeGithubTemplate,
+} from "./adapters.ts";
 
 export async function createApp(options: {
   data: string;
-  githubSecret?: string;
   webRoot?: string;
   runtime?: boolean;
   desktops?: string;
@@ -50,20 +52,11 @@ export async function createApp(options: {
           return `http://127.0.0.1:${address.port}`;
         });
   const traces = runtimes?.traces ?? new TraceStore(store);
-  const raw = new WeakMap<FastifyRequest, Buffer>();
-  app.removeContentTypeParser("application/json");
+  // 统一接收口接受任意内容类型；JSON 走默认解析器，其余保留原始文本。
   app.addContentTypeParser(
-    "application/json",
+    "*",
     { parseAs: "buffer" },
-    (request, body, done) => {
-      const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
-      raw.set(request, buffer);
-      try {
-        done(null, JSON.parse(buffer.toString("utf8")));
-      } catch {
-        done(new Problem(400, "JSON 格式错误"));
-      }
-    },
+    (_request, body, done) => done(null, body),
   );
   app.setErrorHandler((error, _, reply) => {
     const status =
@@ -90,7 +83,6 @@ export async function createApp(options: {
     reply
       .header("X-Content-Type-Options", "nosniff")
       .header("Referrer-Policy", "no-referrer");
-    if (request.url.split("?")[0] === "/webhooks/github") return;
     let hostname: string;
     try {
       hostname = new URL(`http://${request.headers.host}`).hostname;
@@ -138,7 +130,6 @@ export async function createApp(options: {
       chats: store.chats(),
       discovery,
       desktops_root: displayDesktops(desktops),
-      github_enabled: !!options.githubSecret,
     } satisfies Overview;
   });
   app.get("/api/events", (request, reply) => {
@@ -286,13 +277,13 @@ export async function createApp(options: {
     const q = z
       .object({
         after: z.coerce.number().int().min(0).default(0),
-        unread_only: z.enum(["true", "false"]).default("false"),
+        pending_only: z.enum(["true", "false"]).default("false"),
       })
       .parse(request.query);
     return store.box(
       agentParams(request),
       q.after,
-      q.unread_only === "true",
+      q.pending_only === "true",
       false,
       30,
     );
@@ -311,20 +302,24 @@ export async function createApp(options: {
     changed();
     return { id: noticeId };
   });
-  app.get("/api/subscriptions", () => store.subscriptions());
-  app.post("/api/agents/:id/subscriptions", (request) => {
-    const a = subscriptionInput.parse(request.body);
-    const result = store.subscribe(agentParams(request), a.repository, a.event);
-    changed();
+  app.post("/api/agents/:ref/inbox", async (request) => {
+    const { ref } = request.params as { ref: string };
+    const agent = store.agent(store.resolveAgentId(ref));
+    const result = await receiveInbox(store, agent, {
+      headers: request.headers,
+      query: request.query,
+      body: request.body,
+    });
+    if (result.stored) changed();
     return result;
   });
-  app.delete("/api/agents/:id/subscriptions/:subscription", (request) => {
-    const a = z
-      .object({ id, subscription: z.coerce.number().int().positive() })
-      .parse(request.params);
-    store.unsubscribe(a.id, a.subscription);
-    changed();
-    return { removed: true };
+  app.get("/api/agents/:ref/adapters", (request) => {
+    const { ref } = request.params as { ref: string };
+    return listAdapters(store.agent(store.resolveAgentId(ref)));
+  });
+  app.post("/api/agents/:ref/adapters/github", (request) => {
+    const { ref } = request.params as { ref: string };
+    return writeGithubTemplate(store.agent(store.resolveAgentId(ref)));
   });
   app.post("/api/chats", (request) => {
     const a = z
@@ -391,68 +386,12 @@ export async function createApp(options: {
     });
     await transport.handleRequest(request.raw, reply.raw, request.body);
   });
-  app.post("/webhooks/github", (request) => {
-    if (!options.githubSecret) throw new Problem(503, "GitHub 接入未配置");
-    const signature = request.headers["x-hub-signature-256"];
-    if (
-      typeof signature !== "string" ||
-      !/^sha256=[a-f0-9]{64}$/.test(signature)
-    )
-      throw new Problem(401, "Webhook 签名无效");
-    const expected = createHmac("sha256", options.githubSecret)
-      .update(raw.get(request) ?? Buffer.alloc(0))
-      .digest();
-    if (!timingSafeEqual(expected, Buffer.from(signature.slice(7), "hex")))
-      throw new Problem(401, "Webhook 签名无效");
-    const deliveryId = id.parse(request.headers["x-github-delivery"]);
-    if (request.headers["x-github-event"] !== "pull_request")
-      return { accepted: true, ignored: true };
-    const payload = z
-      .object({
-        action: z.string().max(80),
-        number: z.number().int().positive(),
-        repository: z.object({ full_name: subscriptionInput.shape.repository }),
-        pull_request: z.object({
-          title: z.string().max(2048),
-          user: z.object({ login: z.string().max(100) }),
-        }),
-      })
-      .parse(request.body);
-    return store.transaction(() => {
-      if (store.one("SELECT 1 FROM webhooks WHERE delivery_id=?", deliveryId))
-        return { accepted: true, duplicate: true };
-      store.run("INSERT INTO webhooks VALUES(?,?)", deliveryId, Date.now());
-      const repository = payload.repository.full_name.toLowerCase(),
-        event = `pull_request.${payload.action}`;
-      const subscriptions = store
-        .subscriptions()
-        .filter((s) => s.repository === repository && s.event === event);
-      for (const subscription of subscriptions)
-        store.addNotice(
-          subscription.agent_id,
-          "github",
-          `${payload.repository.full_name} #${payload.number} · ${payload.pull_request.title}`,
-          JSON.stringify({
-            event,
-            repository,
-            number: payload.number,
-            author: payload.pull_request.user.login,
-            title: payload.pull_request.title,
-            external_content: true,
-          }),
-          null,
-          `https://github.com/${payload.repository.full_name}/pull/${payload.number}`,
-        );
-      changed();
-      return { accepted: true, matched: subscriptions.length };
-    });
-  });
   if (options.webRoot && existsSync(options.webRoot)) {
     await app.register(staticFiles, { root: options.webRoot });
     app.setNotFoundHandler((request, reply) => {
       if (
         request.method === "GET" &&
-        !/^\/(api|mcp|webhooks)(\/|$)/.test(request.url)
+        !/^\/(api|mcp)(\/|$)/.test(request.url)
       )
         return reply.sendFile("index.html");
       return reply.code(404).send({ error: "接口不存在" });

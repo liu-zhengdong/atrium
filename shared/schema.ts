@@ -19,16 +19,14 @@ export const displayName = z
   );
 export const preferences = z
   .object({
-    auto_start: z.boolean(),
-    wake_interval_seconds: z.number().int().min(30).max(86400),
-    message_threshold: z.number().int().min(1).max(10000),
+    auto_start: z.boolean().default(false),
+    heartbeat_seconds: z.number().int().min(5).max(3600).default(30),
   })
   .strict();
 export type Preferences = z.infer<typeof preferences>;
 export const defaultPreferences: Preferences = {
   auto_start: false,
-  wake_interval_seconds: 300,
-  message_threshold: 100,
+  heartbeat_seconds: 30,
 };
 export const sendInput = z
   .object({
@@ -36,20 +34,6 @@ export const sendInput = z
     body: text,
     mentions: z.array(id).max(30).default([]),
     client_id: id.optional(),
-  })
-  .strict();
-export const subscriptionInput = z
-  .object({
-    repository: z
-      .string()
-      .regex(/^[\w.-]+\/[\w.-]+$/)
-      .max(160),
-    event: z.enum([
-      "pull_request.opened",
-      "pull_request.reopened",
-      "pull_request.synchronize",
-      "pull_request.closed",
-    ]),
   })
   .strict();
 export type AgentInfo = {
@@ -62,6 +46,7 @@ export type AgentInfo = {
   config: Preferences;
   cwd: string;
   session_file: string | null;
+  last_wake: number;
 };
 export const runtimeSchema = z
   .object({
@@ -131,12 +116,7 @@ export type BoxMessage = {
   url: string | null;
   created_at: number;
   read_at: number | null;
-};
-export type Subscription = {
-  id: number;
-  agent_id: string;
-  repository: string;
-  event: string;
+  done_at: number | null;
 };
 export type Page<T> = { items: T[]; next_after: number; has_more: boolean };
 export type Overview = {
@@ -154,5 +134,4 @@ export type Overview = {
     scanning: boolean;
     error: string | null;
   };
-  github_enabled: boolean;
 };

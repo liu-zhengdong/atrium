@@ -77,8 +77,6 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     mentions: [],
   });
   store.readChat(agent.id, direct.id);
-  store.subscribe(agent.id, "owner/repo", "pull_request.opened");
-  store.subscribe(other.id, "owner/repo", "pull_request.opened");
   store.configure(agent.id, { auto_start: true });
   const before = store.timeline(direct.id);
   const remove = (payload: Record<string, string> = { confirm: agent.ref }) =>
@@ -103,8 +101,6 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     store.agents().map((a) => a.id),
     [other.id],
   );
-  assert.equal(store.subscriptions().length, 1);
-  assert.equal(store.subscriptions()[0].agent_id, other.id);
   assert.equal(store.pending(agent.id).length, 0);
   assert(!store.schedule(Date.now() + 1e7).includes(agent.id));
   assert.equal(store.chat(direct.id).read_only, true);

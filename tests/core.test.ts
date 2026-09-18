@@ -1,15 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID, createHmac } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createServer as createViteServer } from "vite";
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
+import { receiveInbox, writeGithubTemplate } from "../server/adapters.ts";
 import { displayDesktops, defaultDesktops } from "../server/agents.ts";
 import { resolveMentions } from "../shared/mentions.ts";
 
@@ -37,7 +46,7 @@ test("身份、凭据与配置隔离；拒绝自身配置之外的字段", (t) =
   assert(!JSON.stringify(store.agents()).includes(created.token));
   assert.throws(() => store.createAgent("Atlas", tmpdir()), /已经被使用/);
   assert.throws(() => store.configure(a.id, { cwd: "/tmp" }));
-  assert.throws(() => store.configure(a.id, { wake_interval_seconds: 0 }));
+  assert.throws(() => store.configure(a.id, { heartbeat_seconds: 0 }));
   store.configure(a.id, { auto_start: true });
   assert.equal(store.agent(b.id).config.auto_start, false);
 });
@@ -118,44 +127,50 @@ test("阅读分页不能跨过未读缺口；各 Agent 独立，自己的发言�
   assert.equal(store.unread(a.id).length, 0);
 });
 
-test("收件箱用户审阅不标已读；Agent 只标记实际返回页", (t) => {
+test("通知箱用户审阅不标已读；Agent 只标记实际返回页，完成才算出队", (t) => {
   const { store, a, b } = fixture(t);
   for (let i = 0; i < 4; i++)
     store.addNotice(a.id, "system", `事件 ${i}`, "字".repeat(6000));
   const review = store.box(a.id, 0, true, false, 30);
   assert(review.has_more);
-  assert.equal(store.boxCount(a.id), 4);
+  assert.equal(store.boxCount(a.id), 4, "用户审阅不改变完成状态");
   const page = store.box(a.id, 0, true, true, 30);
-  assert.equal(store.boxCount(a.id), 4 - page.items.length);
   assert(page.items.every((m) => m.read_at !== null));
+  assert.equal(store.boxCount(a.id), 4, "已读不等于完成");
   assert.equal(store.box(b.id).items.length, 0);
   assert(Buffer.byteLength(JSON.stringify(page)) < 33000);
+  assert.equal(
+    store.completeBox(a.id, page.items.map((m) => m.id)),
+    page.items.length,
+  );
+  assert.equal(store.boxCount(a.id), 4 - page.items.length, "完成后才出队");
 });
 
-test("定时／累计触发、合并限频和已读提醒清理", (t) => {
+test("心跳按间隔检查消息箱；阅读或完成后不再提醒", (t) => {
   const { store, a, chat, send } = fixture(t);
   const now = Date.now();
-  store.configure(a.id, { message_threshold: 2 });
   store.run("UPDATE agents SET last_wake=? WHERE id=?", now - 31000, a.id);
-  assert.deepEqual(store.schedule(now), []);
+  assert.deepEqual(store.schedule(now), [], "消息箱没有待完成消息不唤醒");
   send("一");
-  assert.deepEqual(store.schedule(now), []);
-  send("二");
+  assert.equal(store.boxCount(a.id), 1, "群发言即时合并进消息箱");
   assert.deepEqual(store.schedule(now), [a.id]);
-  assert.equal(store.unread(a.id)[0].count, 2);
-  assert.equal(store.boxCount(a.id), 1);
-  assert.equal(store.pending(a.id)[0].kind, "summary");
-  assert.deepEqual(store.schedule(now + 1000), []);
-  assert.deepEqual(store.schedule(now + 31000), []);
-  assert.deepEqual(store.schedule(now + 301000), [a.id]);
-  assert.equal(store.pending(a.id).length, 1);
-  assert.equal(store.boxCount(a.id), 1);
-  store.box(a.id, 0, true, true);
-  assert.equal(store.unread(a.id)[0].count, 2, "读提醒不等于读聊天");
-  store.schedule(now + 602000);
+  const summary = store.pending(a.id).find((d) => d.kind === "summary")!;
+  assert.match(summary.text, /消息箱中 1 条消息未完成/);
+  assert.deepEqual(store.schedule(now + 1000), [], "心跳间隔未到不重复提醒");
+  assert.deepEqual(store.schedule(now + 31000), [a.id], "未完成则继续提醒");
+  assert.equal(
+    store.pending(a.id).filter((d) => d.kind === "summary").length,
+    1,
+  );
   store.readChat(a.id, chat.id);
+  assert.equal(store.boxCount(a.id), 0, "读取群聊自动完成对应提醒");
+  assert.deepEqual(store.schedule(now + 62000), []);
+  send("二");
+  const item = store.box(a.id).items[0];
+  assert.equal(store.completeBox(a.id, [item.id]), 1);
+  assert.equal(store.completeBox(a.id, [item.id]), 0, "重复完成是幂等的");
   assert.equal(store.boxCount(a.id), 0);
-  assert.deepEqual(store.schedule(now + 903000), []);
+  assert.deepEqual(store.schedule(now + 100000), []);
 });
 
 test("@ 名称含空格、点、前缀重叠；拒绝误匹配与非成员", () => {
@@ -229,7 +244,6 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
   const data = mkdtempSync(join(tmpdir(), "atrium-test-"));
   const result = await createApp({
     data,
-    githubSecret: "test-only-secret",
     runtime: false,
     desktops: join(data, "desktops"),
   });
@@ -298,7 +312,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
   };
 }
 
-test("HTTP 输入、Host/Origin、伪造签名和重放事件实测拒绝", async (t) => {
+test("HTTP 输入、Host/Origin 与接收口处理实测", async (t) => {
   const { app, request, store, agentId } = await appFixture(t);
   assert.equal(
     (
@@ -353,55 +367,116 @@ test("HTTP 输入、Host/Origin、伪造签名和重放事件实测拒绝", asyn
     ).status,
     401,
   );
-  store.subscribe(agentId, "Owner/Repo", "pull_request.opened");
-  const body = {
+  // 无适配器：原文落入消息箱
+  const push = await request(`/api/agents/${agentId}/inbox`, {
+    action: "opened",
+    number: 12,
+  });
+  assert.equal(push.status, 200);
+  assert.deepEqual(await push.json(), {
+    stored: 1,
+    dropped: false,
+    errors: [],
+  });
+  assert.equal(store.boxCount(agentId), 1);
+  assert.equal(store.box(agentId).items[0].source, "external");
+  // 非 JSON 正文同样接收，原文保留
+  const plain = await app.inject({
+    method: "POST",
+    url: `/api/agents/${agentId}/inbox`,
+    headers: { "content-type": "text/plain" },
+    payload: "构建失败：步骤 3",
+  });
+  assert.equal(plain.statusCode, 200);
+  assert.equal(store.boxCount(agentId), 2);
+  // 写入 GitHub 适配器模板：匹配事件经整理入箱，不匹配则丢弃
+  const agent = store.agent(agentId);
+  assert.deepEqual(writeGithubTemplate(agent).file, "github.mjs");
+  assert.throws(() => writeGithubTemplate(agent), /已存在/);
+  const pr = {
     action: "opened",
     number: 12,
     repository: { full_name: "Owner/Repo" },
-    pull_request: { title: "验证 PR", user: { login: "contributor" } },
+    pull_request: {
+      number: 12,
+      title: "验证 PR",
+      user: { login: "contributor" },
+      html_url: "https://github.com/Owner/Repo/pull/12",
+    },
   };
-  const headers = {
-    "x-github-delivery": randomUUID(),
+  const forwarded = await request(`/api/agents/${agentId}/inbox`, pr, {
     "x-github-event": "pull_request",
-    "x-hub-signature-256":
-      "sha256=" +
-      createHmac("sha256", "test-only-secret")
-        .update(JSON.stringify(body))
-        .digest("hex"),
+  });
+  assert.deepEqual(await forwarded.json(), {
+    stored: 1,
+    dropped: false,
+    errors: [],
+  });
+  const adapted = store
+    .box(agentId)
+    .items.find((item) => item.source === "adapter:github.mjs")!;
+  assert.equal(adapted.title, "Owner/Repo #12 · 验证 PR");
+  assert.equal(adapted.url, "https://github.com/Owner/Repo/pull/12");
+  const ignored = await request(`/api/agents/${agentId}/inbox`, pr, {
+    "x-github-event": "push",
+  });
+  assert.deepEqual(await ignored.json(), {
+    stored: 0,
+    dropped: true,
+    errors: [],
+  });
+  // 适配器报错：原文落箱并记录系统通知，不丢消息
+  writeFileSync(
+    join(agent.cwd, "adapters", "broken.mjs"),
+    "export default async function () { throw new Error('损坏'); }\n",
+  );
+  const before = store.boxCount(agentId);
+  const broken = await request(`/api/agents/${agentId}/inbox`, { probe: 1 });
+  const brokenResult = (await broken.json()) as {
+    stored: number;
+    errors: string[];
   };
-  assert.equal(
-    (
-      await request("/webhooks/github", body, {
-        ...headers,
-        "x-hub-signature-256": "sha256=" + "0".repeat(64),
-      })
-    ).status,
-    401,
-  );
-  assert.equal(
-    (await request("/webhooks/github", { ...body, number: 13 }, headers))
-      .status,
-    401,
-  );
-  const valid = await request("/webhooks/github", body, headers);
-  assert.equal(valid.status, 200);
-  assert.equal((await valid.json()).matched, 1);
-  const repeat = await request("/webhooks/github", body, headers);
-  assert.equal((await repeat.json()).duplicate, true);
-  assert.equal(store.boxCount(agentId), 1);
-  assert.equal(
-    store.box(agentId).items[0].url,
-    "https://github.com/Owner/Repo/pull/12",
+  assert.equal(brokenResult.stored, 1);
+  assert.equal(brokenResult.errors.length, 1);
+  assert.equal(store.boxCount(agentId), before + 2);
+  assert(
+    store
+      .box(agentId)
+      .items.some(
+        (item) => item.source === "system" && item.title === "适配器执行失败",
+      ),
   );
   const review = await request("/api/agents/" + agentId + "/box");
   assert.equal(review.status, 200);
-  assert.equal(store.boxCount(agentId), 1);
   const overview = await (await request("/api/overview")).text();
   assert(!overview.includes("token_hash"));
-  assert(!overview.includes("test-only-secret"));
 });
 
-test("真实 Vite 代理保留 Host：正常写入、伪造 Origin 拒绝及 Webhook 路由", async (t) => {
+test("适配器超时被终止，原文落箱不丢失", async (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const root = mkdtempSync(join(tmpdir(), "atrium-adapter-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const agent = store.createAgent("Atlas", root).agent;
+  mkdirSync(join(root, "adapters"));
+  writeFileSync(
+    join(root, "adapters", "hang.mjs"),
+    "export default async function () { await new Promise(() => {}); }\n",
+  );
+  const result = await receiveInbox(
+    store,
+    store.agent(agent.id),
+    { headers: {}, query: {}, body: { probe: true } },
+    200,
+  );
+  assert.equal(result.stored, 1);
+  assert(result.errors.some((error) => error.includes("终止")));
+  const items = store.box(agent.id).items;
+  assert(items.some((item) => item.source === "external"));
+  assert(items.some((item) => item.source === "system"));
+});
+
+test("真实 Vite 代理保留 Host：正常写入与伪造 Origin 拒绝", async (t) => {
   const { origin, template } = await appFixture(t);
   const previousPort = process.env.ATRIUM_PORT;
   let vite;
@@ -428,7 +503,6 @@ test("真实 Vite 代理保留 Host：正常写入、伪造 Origin 拒绝及 Web
     });
   assert.equal((await post("/api/agents", front)).status, 201);
   assert.equal((await post("/api/agents", "https://evil.example")).status, 403);
-  assert.equal((await post("/webhooks/github", front)).status, 401);
 });
 
 test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", async (t) => {
@@ -445,7 +519,7 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   await client.connect(transport);
   t.after(() => client.close());
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 14);
+  assert.equal(tools.tools.length, 12);
   const claim = await client.callTool({
     name: "claim_status",
     arguments: { work: "正在检查通知" },
@@ -494,6 +568,17 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   });
   assert(!sent.isError);
   assert.equal(store.timeline(chat.id).items.at(-1)?.sender, agentId);
-  await client.callTool({ name: "view_message_box", arguments: {} });
+  const viewed = await client.callTool({
+    name: "view_message_box",
+    arguments: {},
+  });
+  assert(!viewed.isError);
+  const remaining = store.box(agentId).items.map((item) => item.id);
+  assert(remaining.length >= 1);
+  const completed = await client.callTool({
+    name: "complete_inbox",
+    arguments: { ids: remaining },
+  });
+  assert(!completed.isError);
   assert.equal(store.boxCount(agentId), 0);
 });

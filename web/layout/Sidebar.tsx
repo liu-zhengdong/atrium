@@ -1,4 +1,4 @@
-import { Hash, MessageSquare, Plus, Radio, Users } from "lucide-react";
+import { Hash, MessageSquare, Plus, Users } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import { Mark } from "../components/Mark.tsx";
 import {
@@ -6,7 +6,7 @@ import {
   runtimeLabel,
   type Agent,
 } from "../components/AgentAvatar.tsx";
-export type Section = "agents" | "chat" | "events";
+export type Section = "agents" | "chat";
 export function Sidebar({
   overview,
   section,
@@ -55,15 +55,6 @@ export function Sidebar({
         >
           <MessageSquare size={17} />
           聊天
-        </button>
-        <button
-          className={section === "events" ? "selected" : ""}
-          onClick={() => {
-            setSection("events");
-          }}
-        >
-          <Radio size={17} />
-          事件订阅
         </button>
       </nav>
       <div className="sidebar-section">

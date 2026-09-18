@@ -107,7 +107,7 @@ test("短号不复用，支持历史版本插入与万级编号；拒绝非规�
   assert.throws(() => store.resolveChatId("c999"), /会话不存在/);
 });
 
-test("私聊、明确提及、未读摘要和收件箱使用相同短号，正文保持原样", (t) => {
+test("私聊、明确提及和消息箱提醒使用相同短号，正文保持原样", (t) => {
   const store = new Store(":memory:");
   t.after(() => store.close());
   const a = store.createAgent("Atlas", tmpdir()).agent;
@@ -126,14 +126,18 @@ test("私聊、明确提及、未读摘要和收件箱使用相同短号，正�
     ["c1", "c2"],
   );
   assert.equal(payloads[0].body, `外部正文保留 ${group.id}`);
+  store.send("user", {
+    chat_id: group.id,
+    body: `群消息保留 ${group.id}`,
+    mentions: [],
+  });
   store.schedule(Date.now() + 301000);
   const summary = store.pending(a.id).find((d) => d.kind === "summary")!;
-  assert.match(summary.text, /会话 "开发" \(c1\)/);
-  assert.match(summary.text, /会话 "Atlas" \(c2\)/);
+  assert.match(summary.text, /消息箱中 1 条消息未完成/);
   assert(!summary.text.includes(group.id));
   for (const notice of store.box(a.id).items)
     assert.equal(
-      JSON.parse(notice.body).chat_id,
+      JSON.parse(notice.body).chat_ref,
       store.chatRef(notice.chat_id!),
     );
 });

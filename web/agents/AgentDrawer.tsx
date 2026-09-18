@@ -41,6 +41,10 @@ export function AgentDrawer({
     [saved, setSaved] = useState(false);
   const [name, setName] = useState(agent.name),
     [description, setDescription] = useState(agent.description);
+  const [adapters, setAdapters] = useState<{
+    dir: string;
+    files: string[];
+  } | null>(null);
   useEffect(() => {
     if (tab !== "box") return;
     let alive = true;
@@ -57,11 +61,7 @@ export function AgentDrawer({
   }, [agent.id, revision, boxAfter, tab]);
   useEffect(() => {
     setConfig(agent.config);
-  }, [
-    agent.config.auto_start,
-    agent.config.message_threshold,
-    agent.config.wake_interval_seconds,
-  ]);
+  }, [agent.config.auto_start, agent.config.heartbeat_seconds]);
   async function save(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -83,6 +83,34 @@ export function AgentDrawer({
     try {
       await api(`/agents/${agent.id}/profile`, "PATCH", { name, description });
       refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  useEffect(() => {
+    if (tab !== "settings") return;
+    let alive = true;
+    api<{ dir: string; files: string[] }>(`/agents/${agent.id}/adapters`)
+      .then((value) => {
+        if (alive) setAdapters(value);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [tab, agent.id]);
+  async function addGithubAdapter() {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/agents/${agent.id}/adapters/github`, "POST", {});
+      setAdapters(
+        await api<{ dir: string; files: string[] }>(
+          `/agents/${agent.id}/adapters`,
+        ),
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -138,7 +166,7 @@ export function AgentDrawer({
           onClick={() => setTab("box")}
         >
           <Inbox size={16} />
-          收件箱{" "}
+          通知{" "}
           {agent.unread > 0 && <span className="badge">{agent.unread}</span>}
         </button>
         <button
@@ -169,8 +197,8 @@ export function AgentDrawer({
                   加载收件箱…
                 </p>
               ) : !box.items.length ? (
-                <Empty icon={<Inbox size={26} />} title="收件箱暂时没有消息">
-                  <p>群聊提醒和订阅事件会送到这里。</p>
+                <Empty icon={<Inbox size={26} />} title="通知箱暂时没有消息">
+                  <p>群聊提醒和外部事件会送到这里；完整记录可追溯。</p>
                 </Empty>
               ) : (
                 <div className="notice-list">
@@ -178,31 +206,27 @@ export function AgentDrawer({
                     <article key={notice.id} className="notice">
                       <div className="notice-meta">
                         <span>
-                          {notice.source === "github"
-                            ? "GitHub"
-                            : notice.source === "chat"
-                              ? "群聊提醒"
-                              : "系统通知"}
+                          {notice.source === "chat"
+                            ? "群聊提醒"
+                            : notice.source === "system"
+                              ? "系统通知"
+                              : notice.source.startsWith("adapter:")
+                                ? `适配器 · ${notice.source.slice(8)}`
+                                : "外部原文"}
                         </span>
                         <time>{time(notice.created_at)}</time>
-                        <span className={notice.read_at ? "" : "unread-label"}>
-                          {notice.read_at ? "Agent 已读" : "未读"}
+                        <span className={notice.done_at ? "" : "unread-label"}>
+                          {notice.done_at ? "已完成" : "未完成"}
                         </span>
                       </div>
                       <h3>{notice.title}</h3>
-                      {notice.source === "system" ? (
-                        <p className="notice-body">{notice.body}</p>
-                      ) : (
-                        <details>
-                          <summary>查看事件内容</summary>
-                          <pre>
-                            {JSON.stringify(JSON.parse(notice.body), null, 2)}
-                          </pre>
-                        </details>
-                      )}
+                      <details>
+                        <summary>查看消息内容</summary>
+                        <NoticeBody body={notice.body} />
+                      </details>
                       {notice.url && (
                         <a href={notice.url} target="_blank" rel="noreferrer">
-                          查看 Pull Request <ChevronRight size={13} />
+                          查看来源 <ChevronRight size={13} />
                         </a>
                       )}
                     </article>
@@ -257,6 +281,33 @@ export function AgentDrawer({
                 </button>
               </form>
               <section className="settings-section">
+                <h3>外部事件接收口</h3>
+                <code className="path">
+                  POST /api/agents/{agent.ref}/inbox
+                </code>
+                <p className="muted small-text">
+                  把外部事件 POST 到这里；adapters/
+                  目录下的适配器把外部载荷整理成结构化通知。
+                </p>
+                {!adapters ? null : adapters.files.length === 0 ? (
+                  <button
+                    className="button secondary"
+                    disabled={busy}
+                    onClick={() => void addGithubAdapter()}
+                  >
+                    写入 GitHub 适配器模板
+                  </button>
+                ) : (
+                  <ul className="muted small-text">
+                    {adapters.files.map((file) => (
+                      <li key={file}>
+                        <code>{file}</code>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+              <section className="settings-section">
                 {agent.agent_directory ? (
                   <>
                     <h3>终端启动</h3>
@@ -295,6 +346,10 @@ export function AgentDrawer({
                     <span>{agent.runtime.model}</span>
                   </div>
                 )}
+                <p className="muted small-text">
+                  心跳间隔 {agent.config.heartbeat_seconds} 秒；最近心跳{" "}
+                  {agent.last_wake ? time(agent.last_wake) : "还没有"}
+                </p>
                 {!agent.available && (
                   <button
                     className="button secondary"
@@ -323,41 +378,24 @@ export function AgentDrawer({
                   />
                 </label>
                 <label>
-                  定时检查间隔（秒）
+                  心跳检查间隔（秒）
                   <input
                     type="number"
-                    min={30}
-                    max={86400}
+                    min={5}
+                    max={3600}
                     required
-                    value={config.wake_interval_seconds}
+                    value={config.heartbeat_seconds}
                     onChange={(e) => {
                       setSaved(false);
                       setConfig({
                         ...config,
-                        wake_interval_seconds: Number(e.target.value),
-                      });
-                    }}
-                  />
-                </label>
-                <label>
-                  累计消息阈值
-                  <input
-                    type="number"
-                    min={1}
-                    max={10000}
-                    required
-                    value={config.message_threshold}
-                    onChange={(e) => {
-                      setSaved(false);
-                      setConfig({
-                        ...config,
-                        message_threshold: Number(e.target.value),
+                        heartbeat_seconds: Number(e.target.value),
                       });
                     }}
                   />
                 </label>
                 <p className="muted small-text">
-                  普通通知合并限频；私聊和明确 @ 不等待这个阈值。
+                  每隔这么久检查一次消息箱；有未完成消息则唤醒，完成后不再提醒。
                 </p>
                 <button className="button" disabled={busy}>
                   {saved ? "已保存" : busy ? "保存中…" : "保存设置"}
@@ -381,4 +419,12 @@ export function AgentDrawer({
       )}
     </Modal>
   );
+}
+
+function NoticeBody({ body }: { body: string }) {
+  try {
+    return <pre>{JSON.stringify(JSON.parse(body), null, 2)}</pre>;
+  } catch {
+    return <pre>{body}</pre>;
+  }
 }

@@ -36,7 +36,7 @@ export function DeleteAgent({
   return (
     <section className="settings-section">
       <h3>删除 Agent</h3>
-      <p className="muted">移出名册并取消订阅与唤醒，历史聊天保留。</p>
+      <p className="muted">移出名册并取消待投递通知与唤醒，历史聊天保留。</p>
       {agent.available && (
         <p className="muted" role="status">
           Agent
@@ -62,7 +62,7 @@ export function DeleteAgent({
                 {agent.name} <span className="muted">· {agent.ref}</span>
               </p>
               <p>
-                删除后，该身份不能再启动或接收消息，订阅和待投递通知会取消。
+                删除后，该身份不能再启动或接收消息，待投递通知会取消。
               </p>
               <p className="muted">
                 历史聊天与本地会话文件保留，不删除项目文件和共享配置。此操作不能在界面中撤销。

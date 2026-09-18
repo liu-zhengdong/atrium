@@ -35,7 +35,6 @@ process.once("SIGTERM", () => {
 try {
   ({ app } = await createApp({
     data,
-    githubSecret: process.env.ATRIUM_GITHUB_SECRET,
     webRoot: join(packageRoot, "dist"),
   }));
   const authorize = (value: string | undefined) => {

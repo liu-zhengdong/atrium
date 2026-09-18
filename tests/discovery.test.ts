@@ -257,7 +257,7 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
   const failed = await app.inject({
     method: "POST",
     url: "/api/agents",
-    payload: { name: "启动失败样本", cwd: data, start: true },
+    payload: { name: "启动失败样本", cwd: data, template: data, start: true },
   });
   assert.equal(failed.statusCode, 201);
   assert.match(failed.json().start_error, /已创建.*启动失败/);

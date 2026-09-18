@@ -252,6 +252,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
   const response = await request("/api/agents", {
     name: "测试 Agent",
     cwd: tmpdir(),
+    template: data,
   });
   assert.equal(response.status, 201);
   const created = (await response.json()) as { agent: { id: string } };
@@ -267,7 +268,14 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
     404,
   );
   assert.equal((await request(`/bridge/${created.agent.id}`)).status, 404);
-  return { ...result, origin, request, agentId: created.agent.id, link };
+  return {
+    ...result,
+    origin,
+    request,
+    template: data,
+    agentId: created.agent.id,
+    link,
+  };
 }
 
 test("HTTP 输入、Host/Origin、伪造签名和重放事件实测拒绝", async (t) => {
@@ -365,7 +373,7 @@ test("HTTP 输入、Host/Origin、伪造签名和重放事件实测拒绝", asyn
 });
 
 test("真实 Vite 代理保留 Host：正常写入、伪造 Origin 拒绝及 Webhook 路由", async (t) => {
-  const { origin } = await appFixture(t);
+  const { origin, template } = await appFixture(t);
   const previousPort = process.env.ATRIUM_PORT;
   let vite;
   try {
@@ -387,7 +395,7 @@ test("真实 Vite 代理保留 Host：正常写入、伪造 Origin 拒绝及 Web
     fetch(front + path, {
       method: "POST",
       headers: { "content-type": "application/json", Origin: origin },
-      body: JSON.stringify({ name: "代理创建", cwd: tmpdir() }),
+      body: JSON.stringify({ name: "代理创建", cwd: tmpdir(), template }),
     });
   assert.equal((await post("/api/agents", front)).status, 201);
   assert.equal((await post("/api/agents", "https://evil.example")).status, 403);

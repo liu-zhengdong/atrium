@@ -36,7 +36,10 @@ export function prepareProfile(
 ) {
   template = realpathSync(template);
   const target = join(data, "agents", identityId);
-  if (existsSync(target)) throw new Problem(409, "身份配置目录已存在，未覆盖");
+  // A legacy record's directory may already hold its managed session and logs;
+  // identity.json marks a prepared profile, any other existing content is kept.
+  if (existsSync(join(target, "identity.json")))
+    throw new Problem(409, "身份配置目录已存在，未覆盖");
   const source = existsSync(join(template, "settings.json"))
     ? readJson(join(template, "settings.json"))
     : {};
@@ -94,11 +97,20 @@ export function prepareProfile(
   }
   // MCP/model/rule files remain explicit shared inputs. Credential files and session
   // history are never copied; writable settings belong to the named identity.
+  // Identity files are written exclusively (wx) alongside kept legacy content;
+  // on failure only what this call created is removed.
+  const created: string[] = [];
   mkdirSync(target, { recursive: true, mode: 0o700 });
   try {
-    mkdirSync(join(target, "sessions"), { mode: 0o700 });
+    const sessions = join(target, "sessions");
+    if (!existsSync(sessions)) {
+      mkdirSync(sessions, { mode: 0o700 });
+      created.push(sessions);
+    }
     write(join(target, "identity.json"), { version: 1, identityId });
+    created.push(join(target, "identity.json"));
     write(join(target, "settings.json"), settings);
+    created.push(join(target, "settings.json"));
     for (const name of [
       "AGENTS.md",
       "SYSTEM.md",
@@ -106,8 +118,11 @@ export function prepareProfile(
       "models.json",
       "mcp.json",
     ])
-      if (existsSync(join(template, name)))
-        symlinkSync(join(template, name), join(target, name));
+      if (existsSync(join(template, name))) {
+        const link = join(target, name);
+        symlinkSync(join(template, name), link);
+        created.push(link);
+      }
     if (existsSync(join(template, "notes.json"))) {
       const notes = readJson(join(template, "notes.json"));
       const directory =
@@ -120,10 +135,11 @@ export function prepareProfile(
           ? {}
           : { maxContextBytes: notes.maxContextBytes }),
       });
+      created.push(join(target, "notes.json"));
     }
     return target;
   } catch (error) {
-    rmSync(target, { recursive: true, force: true });
+    for (const path of created) rmSync(path, { recursive: true, force: true });
     throw error;
   }
 }

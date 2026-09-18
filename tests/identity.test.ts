@@ -86,14 +86,39 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   await assert.rejects(runtimes!.promote(legacy.id, template), /正常退出旧 Pi/);
   assert.equal(store.agent(legacy.id).agent_directory, null);
   store.run("UPDATE agents SET runtime_pid=NULL WHERE id=?", legacy.id);
+  // 旧设计的托管会话与身份配置同路径：升级保留会话与日志，身份文件并列写入
+  const legacyDir = join(root, "data", "agents", legacy.id);
+  mkdirSync(legacyDir, { recursive: true });
+  writeFileSync(join(legacyDir, "session.jsonl"), '{"type":"session"}\n');
+  writeFileSync(join(legacyDir, "runtime.log"), "legacy log\n");
   const migrated = await runtimes!.promote(legacy.id, template);
   assert.equal(migrated.id, legacy.id);
   assert.equal(migrated.ref, legacy.ref);
   assert.equal(store.timeline(oldChat.id).items[0]!.body, "历史保留");
+  assert.equal(
+    readFileSync(join(legacyDir, "session.jsonl"), "utf8"),
+    '{"type":"session"}\n',
+  );
+  assert.equal(readFileSync(join(legacyDir, "runtime.log"), "utf8"), "legacy log\n");
+  assert(existsSync(join(legacyDir, "identity.json")));
+  assert(existsSync(join(legacyDir, "settings.json")));
+  assert(existsSync(join(legacyDir, "sessions")));
   await assert.rejects(
     runtimes!.promote(legacy.id, template),
     /已经是长期身份/,
   );
+  // 已含 identity.json 的目录是真正的身份配置，仍拒绝覆盖
+  const occupied = store.createAgent("已占用", root).agent;
+  mkdirSync(join(root, "data", "agents", occupied.id), { recursive: true });
+  writeFileSync(
+    join(root, "data", "agents", occupied.id, "identity.json"),
+    "{}",
+  );
+  await assert.rejects(
+    runtimes!.promote(occupied.id, template),
+    /身份配置目录已存在/,
+  );
+  assert.equal(store.agent(occupied.id).agent_directory, null);
   for (const payload of [
     { name: "../逃逸", cwd: root, template },
     { name: "Atlas 改名", cwd: root, template },
@@ -106,7 +131,7 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
     });
     assert(result.statusCode >= 400, result.body);
   }
-  assert.equal(store.agents().length, 2);
+  assert.equal(store.agents().length, 3);
 });
 
 test("身份短号原地迁移、持久不复用；坏引用拒绝", (t) => {

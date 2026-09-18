@@ -6,12 +6,22 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { prepareProfile } from "./profile.ts";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { Store, Problem } from "./store.ts";
 
 /** Root of the fixed per-identity workspaces; each Agent gets ~/Atrium/<name>. */
 export const defaultDesktops = () =>
   process.env.ATRIUM_DESKTOPS ?? join(homedir(), "Atrium");
+
+/** Display form of the desktops root, collapsing the home directory to ~. */
+export const displayDesktops = (root: string) => {
+  const home = homedir();
+  return root === home
+    ? "~"
+    : root.startsWith(home + sep)
+      ? `~${root.slice(home.length)}`
+      : root;
+};
 
 /** The desktop is created at identity creation and reused as cwd on every start. */
 export function desktopDirectory(root: string, name: string) {

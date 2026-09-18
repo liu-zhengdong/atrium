@@ -157,6 +157,7 @@ export function App() {
       {modal === "agent" && (
         <CreateAgentDialog
           close={() => setModal(null)}
+          desktopsRoot={overview?.desktops_root}
           created={async (agent, startError) => {
             await openAgent(agent);
             if (startError) setError(startError);

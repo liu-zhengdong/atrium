@@ -10,6 +10,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { createServer as createViteServer } from "vite";
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
+import { displayDesktops, defaultDesktops } from "../server/agents.ts";
 import { resolveMentions } from "../shared/mentions.ts";
 
 function fixture(t: { after: (fn: () => void) => void }) {
@@ -264,6 +265,17 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
     "创建即分配固定桌面目录",
   );
   assert(statSync(created.agent.cwd).isDirectory());
+  const overviewResponse = await request("/api/overview");
+  assert.equal(
+    (await overviewResponse.json()).desktops_root,
+    join(data, "desktops"),
+    "overview 下发桌面根目录，供界面预览",
+  );
+  assert.equal(
+    displayDesktops(defaultDesktops()),
+    "~/Atrium",
+    "默认根目录折叠 home 显示",
+  );
   assert(
     !("link_path" in created),
     "UI no longer receives private connection paths",

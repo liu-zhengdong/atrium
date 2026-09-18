@@ -147,6 +147,8 @@ export type Overview = {
     unread: number;
   })[];
   chats: Chat[];
+  /** Display root of the per-identity desktop directories (home shown as ~). */
+  desktops_root: string;
   discovery: {
     runtimes: LiveRuntime[];
     scanning: boolean;

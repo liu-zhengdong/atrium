@@ -5,9 +5,11 @@ import type { Agent } from "../components/AgentAvatar.tsx";
 export function CreateAgentDialog({
   close,
   created,
+  desktopsRoot,
 }: {
   close: () => void;
   created: (agent: Agent, startError?: string) => Promise<void>;
+  desktopsRoot?: string;
 }) {
   const [name, setName] = useState("");
   async function submit(data: FormData) {
@@ -45,7 +47,7 @@ export function CreateAgentDialog({
         />
       </label>
       <p className="muted small-text">
-        专属工作目录自动创建为 ~/Atrium/{name.trim() || "〈名称〉"}
+        专属工作目录自动创建为 {desktopsRoot ?? "…"}/{name.trim() || "〈名称〉"}
         /，每次启动固定使用，无需手动指定。
       </p>
       <label>

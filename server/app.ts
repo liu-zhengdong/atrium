@@ -17,7 +17,7 @@ import {
 import { Store, Problem } from "./store.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
-import { createAgent, defaultDesktops } from "./agents.ts";
+import { createAgent, defaultDesktops, displayDesktops } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 
 export async function createApp(options: {
@@ -137,6 +137,7 @@ export async function createApp(options: {
       })),
       chats: store.chats(),
       discovery,
+      desktops_root: displayDesktops(desktops),
       github_enabled: !!options.githubSecret,
     } satisfies Overview;
   });

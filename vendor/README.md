@@ -4,6 +4,7 @@
 
 - 源码：[liu-zhengdong/pi-acp@7c4cd90](https://github.com/liu-zhengdong/pi-acp/commit/7c4cd905c3fcd9d709724519e7d71dfb582c8f93)
 - 生成：源码 `npm run validate` 通过后，`npm pack --ignore-scripts`。
+- 更新：替换同名包时同时核对 lockfile 的 SHA-512 与本文 SHA-256；使用空缓存运行 `npm ci --cache "$(mktemp -d)"`，再跑检查。不能仅以热缓存安装成功判断归档可用。
 - SHA-256：`534b6f99ac737494ff41e0562693e4fe6bb13ac1498d3aa3add6ce9a54388ed8`
 - 包内保留上游及 fork 的 LICENSE、README 与 npm 元数据；无需额外复制业务代码到 Atrium。
 

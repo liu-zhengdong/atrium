@@ -1,18 +1,73 @@
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { timingSafeEqual } from "node:crypto";
+import { join } from "node:path";
 import { createApp } from "./app.ts";
-const root = fileURLToPath(new URL("../", import.meta.url));
-const port = Number(process.env.ATRIUM_PORT ?? 4310);
-if (!Number.isInteger(port) || port < 1 || port > 65535)
-  throw new Error("ATRIUM_PORT 必须为有效端口");
-const { app } = await createApp({
-  data: resolve(process.env.ATRIUM_DATA ?? `${root}.atrium`),
-  githubSecret: process.env.ATRIUM_GITHUB_SECRET,
-  webRoot: `${root}dist`,
+import {
+  claimService,
+  dataDirectory,
+  packageRoot,
+  servicePort,
+  serviceUrl,
+} from "./service-state.ts";
+
+const data = dataDirectory();
+const lease = claimService(data, servicePort());
+let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;
+let stopping = false;
+const shutdown = async () => {
+  if (stopping) return;
+  stopping = true;
+  try {
+    await app?.close();
+    lease.release();
+    process.exit(0);
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
+  }
+};
+// Release only after application cleanup; crash records are reclaimed after PID exit.
+process.once("SIGINT", () => {
+  void shutdown();
 });
-await app.listen({ port, host: "127.0.0.1" });
-console.log(`Atrium → http://127.0.0.1:${port}`);
-for (const signal of ["SIGINT", "SIGTERM"] as const)
-  process.once(signal, () => {
-    void app.close().then(() => process.exit(0));
+process.once("SIGTERM", () => {
+  void shutdown();
+});
+try {
+  ({ app } = await createApp({
+    data,
+    githubSecret: process.env.ATRIUM_GITHUB_SECRET,
+    webRoot: join(packageRoot, "dist"),
+  }));
+  const authorize = (value: string | undefined) => {
+    const actual = Buffer.from(value ?? "");
+    const expected = Buffer.from(`Bearer ${lease.record.token}`);
+    return (
+      actual.length === expected.length && timingSafeEqual(actual, expected)
+    );
+  };
+  const status = () => ({
+    instance: lease.record.instance,
+    pid: process.pid,
+    stopping,
   });
+  app.get("/api/service", (request, reply) => {
+    if (!authorize(request.headers.authorization))
+      return reply.code(401).send({ error: "服务控制凭据无效" });
+    return status();
+  });
+  app.post("/api/service/stop", (request, reply) => {
+    if (!authorize(request.headers.authorization))
+      return reply.code(401).send({ error: "服务控制凭据无效" });
+    reply.raw.once("finish", () => {
+      void shutdown();
+    });
+    return status();
+  });
+  await app.listen({ port: lease.record.port, host: "127.0.0.1" });
+  console.log(`Atrium → ${serviceUrl(lease.record)}\n数据：${data}`);
+} catch (error) {
+  console.error(error);
+  await app?.close();
+  lease.release();
+  process.exitCode = 1;
+}

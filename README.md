@@ -9,10 +9,11 @@
 ```bash
 npm ci
 npm run build
-npm start
+npm link
+atrium
 ```
 
-打开 **http://127.0.0.1:4310**。
+已全局安装后，在任意目录执行 **`atrium`** 即可启动后台服务并打开 Web，默认地址 **http://127.0.0.1:4310**。重复执行直接打开已有服务，不新建另一份实例或数据。
 
 1. 首页展示长期 Agent 名册，点击即可进入私聊，连接由后台管理。普通 `pi` 保持自由多开，仅列在折叠的「临时 Pi」中，不自动创建身份。
 2. 选择「新建 Agent」，填写名称、工作目录和可选介绍；「配置与启动」可选择模板和创建后后台启动。默认只创建身份，不启动进程。
@@ -21,7 +22,21 @@ npm start
 
 终端使用见下文「具名终端入口」。身份的名字、介绍、配置和聊天长期保留；切换会话、退出或重启均不创建另一位 Agent。
 
-默认仅监听本机，事件自动启动默认关闭。关闭 Atrium 会停止由它拉起的子进程，不终止外部接入的 Pi TUI。
+默认仅监听本机，事件自动启动默认关闭。关闭浏览器或启动命令的终端不会停止后台服务。`atrium stop` 会停止服务及由它拉起的子进程，保留身份与聊天数据，不终止外部接入的 Pi TUI。
+
+### 应用入口
+
+```bash
+atrium             # 启动／复用后台服务并打开 Web
+atrium --no-open   # 无桌面环境：仅启动／复用并输出地址
+atrium status      # 查看运行状态、地址、数据和日志位置
+atrium stop        # 正常关闭服务与托管 Agent，保留数据
+atrium --help
+```
+
+浏览器打开失败时仍保留已就绪服务，终端显示可手动访问的地址。后台日志保存在数据目录的 `service.log`。启动失败会给出日志位置；端口被其他程序占用时不会杀进程或悄悄换端口。同一数据目录跨端口也只运行一份服务，重复启动以已运行实例的地址为准。
+
+`npm start` 保留为前台入口，便于开发与查看日志；它与全局命令使用同一套服务状态，可被 `atrium status/stop` 管理。旧版本已启动的服务没有管理登记，需在原启动入口正常停止后再使用新命令；新入口不冒认或强杀旧进程。
 
 ## 核心能力
 
@@ -50,14 +65,14 @@ npm start
 
 ### 具名终端入口
 
-在 Atrium 仓库运行；需要先在 UI 创建身份：
+需要先在 Web 创建身份：
 
 ```bash
-./bin/atrium.mjs list
-./bin/atrium.mjs run a1
+atrium list
+atrium run a1
 ```
 
-如需直接使用 `atrium run a1`，可自行执行 `npm link` 将命令加入 PATH。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；CLI 默认数据库位置固定在仓库 `.atrium/`，不会随终端工作目录变化。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
+未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置固定在安装目录（当前为仓库）的 `.atrium/`，不会随终端工作目录变化。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
 
 入口打开原生 Pi TUI，自动使用该身份的配置、固定 MCP 代理模式和最近会话。首次使用 Pi 内置认证时，在这个身份内执行 `/login`；配置模板的 `auth.json` 不会复制，环境变量及插件自身认证沿用原机制。同一身份已被占用时显示 PID／工作目录，不抢占、不重启已有实例。普通 `pi` 不受此限制；已加载通用扩展的普通实例仍可被发现，但不会自动成为长期身份。
 
@@ -81,21 +96,22 @@ GitHub 需要能访问这个接收地址。本版不自动创建远端 Webhook �
 
 ## 结构
 
-| 目录                                  | 职责                                       |
-| ------------------------------------- | ------------------------------------------ |
-| `web/main.tsx`、`web/App.tsx`         | React 挂载入口、导航与跨页面协调           |
-| `web/agents/`                         | Agent 名册、详情、创建                     |
-| `web/chat/`                           | 聊天、消息时间线、输入与提及、会话状态     |
-| `web/events/`                         | GitHub 事件订阅                            |
-| `web/components/`、`web/layout/`      | 复用组件与导航布局                         |
-| `web/useOverview.ts`、`web/api.ts`    | 总览与 SSE 订阅、HTTP 请求                 |
-| `server/app.ts`                       | HTTP、SSE、Webhook 与作用域 MCP 入口       |
-| `server/store.ts`                     | SQLite、未读位置、订阅、投递记录与通知调度 |
-| `server/runtime.ts`                   | pi-acp 客户端、业务绑定、重连与投递        |
-| `server/profile.ts`、`bin/atrium.mjs` | 独立配置与共享资源引用、具名终端入口       |
-| `server/mcp.ts`                       | Agent 身份绑定的业务工具                   |
-| `shared/`                             | 数据约束与共用逻辑                         |
-| `tests/`、`scripts/`                  | API／存储测试与真实 Pi 协议验收            |
+| 目录                                   | 职责                                       |
+| -------------------------------------- | ------------------------------------------ |
+| `web/main.tsx`、`web/App.tsx`          | React 挂载入口、导航与跨页面协调           |
+| `web/agents/`                          | Agent 名册、详情、创建                     |
+| `web/chat/`                            | 聊天、消息时间线、输入与提及、会话状态     |
+| `web/events/`                          | GitHub 事件订阅                            |
+| `web/components/`、`web/layout/`       | 复用组件与导航布局                         |
+| `web/useOverview.ts`、`web/api.ts`     | 总览与 SSE 订阅、HTTP 请求                 |
+| `server/app.ts`                        | HTTP、SSE、Webhook 与作用域 MCP 入口       |
+| `server/store.ts`                      | SQLite、未读位置、订阅、投递记录与通知调度 |
+| `server/runtime.ts`                    | pi-acp 客户端、业务绑定、重连与投递        |
+| `server/profile.ts`                    | 独立配置与共享资源引用                     |
+| `bin/atrium.mjs`、`server/service*.ts` | 统一命令入口、后台服务启停与单实例登记     |
+| `server/mcp.ts`                        | Agent 身份绑定的业务工具                   |
+| `shared/`                              | 数据约束与共用逻辑                         |
+| `tests/`、`scripts/`                   | API／存储测试与真实 Pi 协议验收            |
 
 MCP 提供 `list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`get_config`、`update_config`、`list_subscriptions`、`subscribe_events`、`unsubscribe_event`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。
 
@@ -107,8 +123,8 @@ MCP 提供 `list_chats`、`read_chat`、`send_message`、`claim_status`、`view_
 
 | 环境变量               | 用途                                                       |
 | ---------------------- | ---------------------------------------------------------- |
-| `ATRIUM_PORT`          | HTTP 端口，默认 `4310`                                     |
-| `ATRIUM_DATA`          | 数据目录，默认仓库下 `.atrium/`                            |
+| `ATRIUM_PORT`          | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口    |
+| `ATRIUM_DATA`          | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）          |
 | `ATRIUM_GITHUB_SECRET` | GitHub Webhook 验签 secret；不设置则关闭该接收入口         |
 | `ATRIUM_PI_ACP_ENTRY`  | 开发时覆盖 pi-acp 的 dist/index.js；默认使用依赖包         |
 | `PI_ACP_PI_COMMAND`    | pi-acp 使用的 Pi 可执行文件，默认 `pi`                     |
@@ -118,11 +134,14 @@ MCP 提供 `list_chats`、`read_chat`、`send_message`、`claim_status`、`view_
 
 `.atrium/` 保存业务数据库、`agents/<内部身份 ID>/` 独立配置和 `credentials/` 中的 Agent MCP 凭据（`0600`）。模板只读取必要设置；扩展／技能引用已安装资源，规则、模型和 MCP 配置使用符号链接，共享文件不是独立副本。模板中的 npm 包必须已安装；Git 包请先改为已安装的本地路径。旧版 `links/` 凭据按需迁移，既有会话通过 pi-acp 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
 
+服务管理另用同目录的 `service.sqlite` 保存单实例登记与随机控制凭据（`0600`），不更换业务数据库。启动与崩溃后重新占用通过 SQLite 事务串行化；进程仍存在但连接失败时拒绝另开或按 PID 强杀。状态与停止通过本机鉴权接口核对实例，不把端口连通当作身份依据。该文件包含凭据，请勿提交或分享。
+
 首版面向受信任的单用户本机环境。MCP 的身份隔离不是操作系统沙箱：具有本机 shell／文件访问权限的 Pi 仍具有其宿主用户的权限。本版不提供多用户认证、容器隔离或高可用消息队列；投递采用确认重试，进程内去重不等于跨崩溃的恰好一次执行，重要外部动作仍需幂等保护。
 
 ## 开发与验证
 
 ```bash
+npm start            # 前台 HTTP/Web 服务；Ctrl+C 正常停止
 npm run dev          # HTTP 后端与 Vite 热更新；使用终端输出的前端地址
 npm run check        # 测试、类型检查、构建
 npm run format:check

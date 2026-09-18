@@ -27,6 +27,7 @@ for (const dir of [profile, cwd, raw]) mkdirSync(dir, { mode: 0o700 });
 process.env.PI_MCP_CONFIG_MODE = "exclusive";
 process.env.PI_MCP_TOOL_EXPOSURE = "proxy-only";
 process.env.PI_CODING_AGENT_DIR = profile;
+process.env.ATRIUM_PI_TEMPLATE = profile;
 process.env.PI_ACP_DIR = join(folder, "pi-acp");
 process.env.PI_OFFLINE = "1";
 const require = createRequire(import.meta.url);

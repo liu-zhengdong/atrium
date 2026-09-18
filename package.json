@@ -14,7 +14,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/main.ts",
     "test": "tsx --test tests/*.test.ts",
-    "check": "npm test && npm run build",
+    "check": "npm run build && npm test",
     "test:pi": "node --import tsx scripts/probe-pi.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

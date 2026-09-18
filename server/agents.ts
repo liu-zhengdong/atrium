@@ -1,29 +1,41 @@
 import {
   mkdirSync,
   realpathSync,
-  statSync,
   writeFileSync,
   rmSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { prepareProfile } from "./profile.ts";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Store, Problem } from "./store.ts";
 
-/** Shared creation path for user-created and discovered identities. */
+/** Root of the fixed per-identity workspaces; each Agent gets ~/Atrium/<name>. */
+export const defaultDesktops = () =>
+  process.env.ATRIUM_DESKTOPS ?? join(homedir(), "Atrium");
+
+/** The desktop is created at identity creation and reused as cwd on every start. */
+export function desktopDirectory(root: string, name: string) {
+  const base = resolve(root);
+  const target = resolve(base, name);
+  if (name === "." || name === ".." || dirname(target) !== base)
+    throw new Problem(400, "名称不能作为工作目录");
+  try {
+    mkdirSync(target, { recursive: true });
+  } catch {
+    throw new Problem(409, "无法创建工作目录，目标路径可能被文件占用");
+  }
+  return realpathSync(target);
+}
+
+/** User-facing creation: assigns the identity's fixed desktop workspace. */
 export function createAgent(
   store: Store,
   data: string,
   name: string,
-  directory: string,
+  desktops: string,
   options: { template?: string; description?: string } = {},
 ) {
-  let cwd: string;
-  try {
-    cwd = realpathSync(resolve(directory));
-    if (!statSync(cwd).isDirectory()) throw new Error();
-  } catch {
-    throw new Problem(400, "工作目录不存在或不可访问");
-  }
+  const cwd = desktopDirectory(desktops, name);
   mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
   return store.transaction(() => {
     const { agent, token } = store.createAgent(name, cwd);

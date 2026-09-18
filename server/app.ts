@@ -17,7 +17,7 @@ import {
 import { Store, Problem } from "./store.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
-import { createAgent } from "./agents.ts";
+import { createAgent, defaultDesktops } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 
 export async function createApp(options: {
@@ -25,7 +25,9 @@ export async function createApp(options: {
   githubSecret?: string;
   webRoot?: string;
   runtime?: boolean;
+  desktops?: string;
 }) {
+  const desktops = options.desktops ?? defaultDesktops();
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   mkdirSync(join(options.data, "credentials"), {
     recursive: true,
@@ -160,7 +162,6 @@ export async function createApp(options: {
     const input = z
       .object({
         name: displayName,
-        cwd: z.string().min(1).max(4096),
         start: z.boolean().default(false),
         description: z.string().trim().max(1000).default(""),
         template: z.string().min(1).max(4096).optional(),
@@ -168,13 +169,7 @@ export async function createApp(options: {
       .strict()
       .parse(request.body);
     if (input.start && !runtimes) throw new Problem(503, "运行时未启用");
-    const agent = createAgent(
-      store,
-      options.data,
-      input.name,
-      input.cwd,
-      input,
-    );
+    const agent = createAgent(store, options.data, input.name, desktops, input);
     let start_error: string | undefined;
     if (input.start) {
       try {

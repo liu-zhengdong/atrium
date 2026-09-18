@@ -33,6 +33,7 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const { app, store, runtimes } = await createApp({
     data: join(root, "data"),
+    desktops: join(root, "desktops"),
   });
   t.after(async () => {
     await app.close();
@@ -41,11 +42,17 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   const created = await app.inject({
     method: "POST",
     url: "/api/agents",
-    payload: { name: "Atlas", cwd: root, template, description: "研究" },
+    payload: { name: "Atlas", template, description: "研究" },
   });
   assert.equal(created.statusCode, 201, created.body);
   const { agent } = created.json();
   assert.equal(agent.ref, "a1");
+  assert.equal(
+    agent.cwd,
+    realpathSync(join(root, "desktops", "Atlas")),
+    "创建即分配固定桌面目录",
+  );
+  assert(existsSync(agent.cwd));
   assert.equal(store.resolveAgentId("a1"), agent.id);
   assert(existsSync(join(agent.agent_directory, "sessions")));
   assert(!existsSync(join(agent.agent_directory, "auth.json")));
@@ -122,10 +129,13 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
     /身份配置目录已存在/,
   );
   assert.equal(store.agent(occupied.id).agent_directory, null);
+  mkdirSync(join(root, "desktops"), { recursive: true });
+  writeFileSync(join(root, "desktops", "坏目录"), "occupied");
   for (const payload of [
-    { name: "../逃逸", cwd: root, template },
-    { name: "Atlas 改名", cwd: root, template },
-    { name: "坏目录", cwd: "/nonexistent/fixture", template },
+    { name: "../逃逸", template },
+    { name: "Atlas 改名", template },
+    { name: "..", template },
+    { name: "坏目录", template },
   ]) {
     const result = await app.inject({
       method: "POST",

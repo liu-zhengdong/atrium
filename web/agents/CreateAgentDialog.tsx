@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { api } from "../api.ts";
 import { SubmitDialog } from "../components/SubmitDialog.tsx";
 import type { Agent } from "../components/AgentAvatar.tsx";
@@ -8,13 +9,13 @@ export function CreateAgentDialog({
   close: () => void;
   created: (agent: Agent, startError?: string) => Promise<void>;
 }) {
+  const [name, setName] = useState("");
   async function submit(data: FormData) {
     const result = await api<{ agent: Agent; start_error?: string }>(
       "/agents",
       "POST",
       {
         name: data.get("name"),
-        cwd: data.get("cwd"),
         description: data.get("description"),
         ...(data.get("template") ? { template: data.get("template") } : {}),
         start: data.get("start") === "on",
@@ -39,8 +40,14 @@ export function CreateAgentDialog({
           maxLength={40}
           placeholder="例如 Atlas"
           autoFocus
+          value={name}
+          onChange={(event) => setName(event.target.value)}
         />
       </label>
+      <p className="muted small-text">
+        专属工作目录自动创建为 ~/Atrium/{name.trim() || "〈名称〉"}
+        /，每次启动固定使用，无需手动指定。
+      </p>
       <label>
         <span>
           自我介绍 <span className="muted">（可选）</span>
@@ -51,10 +58,6 @@ export function CreateAgentDialog({
           placeholder="擅长什么，主要负责什么"
           rows={2}
         />
-      </label>
-      <label>
-        工作目录
-        <input name="cwd" required placeholder="/绝对路径/工作目录" />
       </label>
       <details>
         <summary>配置与启动</summary>

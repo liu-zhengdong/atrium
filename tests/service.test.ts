@@ -35,6 +35,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     ...process.env,
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
+    ATRIUM_DESKTOPS: join(root, "desktops"),
     PI_ACP_DIR: join(root, "acp"),
   };
   const cli = async (...args: string[]) => {
@@ -102,10 +103,16 @@ test(
     const response = await fetch(`${url}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "入口验收", cwd: f.root, template }),
+      body: JSON.stringify({ name: "入口验收", template }),
     });
     assert.equal(response.status, 201);
-    const { agent } = (await response.json()) as { agent: { id: string } };
+    const { agent } = (await response.json()) as {
+      agent: { id: string; cwd: string };
+    };
+    assert(
+      existsSync(join(f.root, "desktops", "入口验收")),
+      "创建即分配固定桌面目录",
+    );
     assert.match((await f.cli("list")).stdout, /a1\s+入口验收/);
     assert.equal((await f.cli("run", "a1", "--forbidden")).code, 1);
     assert.equal((await f.cli("stop")).code, 0);

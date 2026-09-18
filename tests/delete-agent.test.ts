@@ -45,7 +45,10 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     ...process.env,
     PI_ACP_DIR: join(root, "acp"),
   });
-  const { app, store, runtimes } = await createApp({ data });
+  const { app, store, runtimes } = await createApp({
+    data,
+    desktops: join(root, "desktops"),
+  });
   t.after(async () => {
     await app.close();
     rmSync(root, { recursive: true, force: true });
@@ -53,7 +56,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
   const created = await app.inject({
     method: "POST",
     url: "/api/agents",
-    payload: { name: "演示 Agent", cwd: root, template },
+    payload: { name: "演示 Agent", template },
   });
   assert.equal(created.statusCode, 201);
   const agent = created.json().agent;
@@ -110,6 +113,10 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
   assert(store.timeline(group.id).items[0].sender_deleted_at);
   assert.deepEqual(store.members(group.id), [other.id]);
   assert(existsSync(join(agent.agent_directory, "settings.json")));
+  assert(
+    existsSync(join(root, "desktops", "演示 Agent")),
+    "删除身份保留专属工作目录",
+  );
   assert.equal(
     readFileSync(join(template, "SYSTEM.md"), "utf8"),
     "shared rules",

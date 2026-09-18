@@ -206,7 +206,10 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
   t.mock.method(Runtimes.prototype, "start", async () => {
     throw new Error("fixture startup failure");
   });
-  const { app, store, runtimes } = await createApp({ data });
+  const { app, store, runtimes } = await createApp({
+    data,
+    desktops: join(data, "desktops"),
+  });
   t.after(async () => {
     await app.close();
     rmSync(data, { recursive: true, force: true });
@@ -249,7 +252,7 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
       await app.inject({
         method: "POST",
         url: "/api/agents",
-        payload: { name: "bad", cwd: data, start: "yes" },
+        payload: { name: "bad", start: "yes" },
       })
     ).statusCode,
     400,
@@ -257,7 +260,7 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
   const failed = await app.inject({
     method: "POST",
     url: "/api/agents",
-    payload: { name: "启动失败样本", cwd: data, template: data, start: true },
+    payload: { name: "启动失败样本", template: data, start: true },
   });
   assert.equal(failed.statusCode, 201);
   assert.match(failed.json().start_error, /已创建.*启动失败/);

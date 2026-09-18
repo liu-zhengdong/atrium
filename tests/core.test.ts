@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID, createHmac } from "node:crypto";
@@ -230,6 +230,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
     data,
     githubSecret: "test-only-secret",
     runtime: false,
+    desktops: join(data, "desktops"),
   });
   await result.app.listen({ host: "127.0.0.1", port: 0 });
   t.after(async () => {
@@ -251,11 +252,18 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
     });
   const response = await request("/api/agents", {
     name: "测试 Agent",
-    cwd: tmpdir(),
     template: data,
   });
   assert.equal(response.status, 201);
-  const created = (await response.json()) as { agent: { id: string } };
+  const created = (await response.json()) as {
+    agent: { id: string; cwd: string };
+  };
+  assert.equal(
+    created.agent.cwd,
+    realpathSync(join(data, "desktops", "测试 Agent")),
+    "创建即分配固定桌面目录",
+  );
+  assert(statSync(created.agent.cwd).isDirectory());
   assert(
     !("link_path" in created),
     "UI no longer receives private connection paths",
@@ -283,17 +291,26 @@ test("HTTP 输入、Host/Origin、伪造签名和重放事件实测拒绝", asyn
   assert.equal(
     (
       await request("/api/agents", {
-        name: "Bad",
-        cwd: "/does-not-exist-atrium",
+        name: "..",
       })
     ).status,
     400,
+    "逃逸名称不能作为桌面目录",
   );
   assert.equal(
     (
       await request("/api/agents", {
         name: "Bad",
         cwd: tmpdir(),
+      })
+    ).status,
+    400,
+    "工作目录不再由调用方指定",
+  );
+  assert.equal(
+    (
+      await request("/api/agents", {
+        name: "Bad",
         token: "injected",
       })
     ).status,
@@ -395,7 +412,7 @@ test("真实 Vite 代理保留 Host：正常写入、伪造 Origin 拒绝及 Web
     fetch(front + path, {
       method: "POST",
       headers: { "content-type": "application/json", Origin: origin },
-      body: JSON.stringify({ name: "代理创建", cwd: tmpdir(), template }),
+      body: JSON.stringify({ name: "代理创建", template }),
     });
   assert.equal((await post("/api/agents", front)).status, 201);
   assert.equal((await post("/api/agents", "https://evil.example")).status, 403);

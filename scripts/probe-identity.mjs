@@ -27,7 +27,6 @@ export async function verifyIdentity({
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       name: "长期身份验证",
-      cwd,
       template: profile,
       description: "终端与后台共用的身份",
     }),

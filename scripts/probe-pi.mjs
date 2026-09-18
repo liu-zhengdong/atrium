@@ -218,6 +218,7 @@ writeFileSync(
 );
 const { app, store, runtimes } = await createApp({
   data: join(folder, "data"),
+  desktops: join(folder, "desktops"),
   webRoot: process.argv.includes("--ui") ? resolve("dist") : undefined,
 });
 await app.listen({ port: 0, host: "127.0.0.1" });
@@ -415,7 +416,7 @@ try {
     const created = await fetch(`http://127.0.0.1:${port}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "一键新建验证", cwd, start: true }),
+      body: JSON.stringify({ name: "一键新建验证", start: true }),
     });
     assert.equal(created.status, 201);
     const createdAgent = await created.json();
@@ -427,7 +428,7 @@ try {
     const rpcResponse = await fetch(`http://127.0.0.1:${port}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "后台验证 Agent", cwd }),
+      body: JSON.stringify({ name: "后台验证 Agent" }),
     });
     assert.equal(rpcResponse.status, 201);
     const rpcAgent = (await rpcResponse.json()).agent;

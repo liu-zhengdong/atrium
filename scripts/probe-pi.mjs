@@ -10,13 +10,14 @@ import {
   readdirSync,
   chmodSync,
 } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, basename } from "node:path";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { createApp } from "../server/app.ts";
+import { verifyIdentity } from "./probe-identity.mjs";
 
 const folder = mkdtempSync(join(tmpdir(), "atrium-proof-"));
 const profile = join(folder, "profile"),
@@ -49,6 +50,7 @@ const sourceHashes = {};
 for (const path of [
   piAcpEntry,
   piAcpExtension,
+  join(dirname(piAcpEntry), "identity.js"),
   "server/app.ts",
   "server/runtime.ts",
   "server/store.ts",
@@ -57,12 +59,13 @@ for (const path of [
   "shared/agent-name.ts",
   "server/mcp.ts",
   "scripts/probe-pi.mjs",
+  "scripts/probe-identity.mjs",
+  "server/profile.ts",
+  "bin/atrium.mjs",
 ]) {
   const content = readFileSync(path);
   sourceHashes[path] = hash(content);
-  const name = path.startsWith("/")
-    ? `pi-acp/${path === piAcpEntry ? "index.js" : "pi-extension.js"}`
-    : path;
+  const name = path.startsWith("/") ? `pi-acp/${basename(path)}` : path;
   const target = join(folder, "source", name);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, content, { mode: 0o400 });
@@ -288,6 +291,23 @@ try {
     ).json();
     assert.equal(available.runtimes.length, 1);
     assert(!JSON.stringify(available).includes("token"));
+    const rejected = await fetch(
+      `http://127.0.0.1:${port}/api/runtimes/${available.runtimes[0].runtimeId}/chat`,
+      { method: "POST" },
+    );
+    assert.equal(rejected.status, 409, "临时 Pi 不隐式建号");
+    const legacy = store.createAgent("旧实例原地接入", cwd);
+    writeFileSync(
+      join(folder, "data", "credentials", `${legacy.agent.id}.json`),
+      JSON.stringify({ token: legacy.token }),
+      { mode: 0o600 },
+    );
+    store.run(
+      "UPDATE agents SET runtime_id=?,runtime_pid=? WHERE id=?",
+      available.runtimes[0].runtimeId,
+      available.runtimes[0].pid,
+      legacy.agent.id,
+    );
     input("ATR_BUSY");
     await wait(
       () => existsSync(join(cwd, "started")),
@@ -452,6 +472,18 @@ try {
     );
     await assert.rejects(runtimes.start(agent.id), /原 Pi 进程仍存在/);
     process.kill(before.pid, 0);
+    const namedIdentity = await verifyIdentity({
+      folder,
+      profile,
+      cwd,
+      runtimes,
+      store,
+      baseUrl: `http://127.0.0.1:${port}`,
+      wait,
+      raw,
+      hash,
+      hashes,
+    });
     const chatReply = store.timeline(chatId).items.at(-1);
     const events = await fetch(`http://127.0.0.1:${port}/api/events`);
     const reader = events.body.getReader();
@@ -469,6 +501,7 @@ try {
       tools_sha256: schemaHash,
       system_sha256: systemHash,
       chat_reply: chatReply,
+      named_identity: namedIdentity,
       pi_version: execFileSync("pi", ["--version"], {
         encoding: "utf8",
       }).trim(),
@@ -477,7 +510,8 @@ try {
       checks: [
         "Atrium-ACP-pi-acp-native-runtime",
         "readonly-automatic-discovery",
-        "click-to-chat-without-manual-profile-or-attach",
+        "temporary-runtime-does-not-create-identity",
+        "legacy-identity-click-to-chat",
         "repeat-click-reuses-identity-and-chat",
         "create-and-start-in-one-action",
         "busy-MCP-attachment",

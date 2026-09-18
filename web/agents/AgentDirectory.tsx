@@ -7,7 +7,7 @@ import {
   Search,
   Users,
 } from "lucide-react";
-import type { LiveRuntime, Overview } from "../../shared/schema.ts";
+import type { Overview } from "../../shared/schema.ts";
 import { agentName } from "../../shared/agent-name.ts";
 import {
   Avatar,
@@ -19,23 +19,23 @@ export function AgentDirectory({
   overview,
   opening,
   openAgent,
-  openRuntime,
   details,
   create,
 }: {
   overview: Overview;
   opening: string | null;
   openAgent: (a: Agent) => void;
-  openRuntime: (r: LiveRuntime) => void;
   details: (id: string) => void;
   create: () => void;
 }) {
   const [query, setQuery] = useState("");
   const discovered = overview.discovery.runtimes.filter((r) => !r.bound_agent);
-  const count = overview.agents.length + discovered.length;
+  const count = overview.agents.length;
   const matches = (name: string, cwd: string) =>
     `${name} ${cwd}`.toLowerCase().includes(query.trim().toLowerCase());
-  const agents = overview.agents.filter((a) => matches(a.name, a.cwd));
+  const agents = overview.agents.filter((a) =>
+    matches(`${a.ref} ${a.name}`, a.cwd),
+  );
   const fresh = discovered.filter((r) => matches(agentName(r.cwd), r.cwd));
   return (
     <section className="directory">
@@ -80,11 +80,14 @@ export function AgentDirectory({
               <span className="agent-card-copy">
                 <strong>{a.name}</strong>
                 <span className="agent-state">
-                  {runtimeLabel(a)}
+                  {a.ref} · {runtimeLabel(a)}
                   {a.unread > 0 && <> · {a.unread} 条未读</>}
                 </span>
-                <span className="agent-work" title={a.work || a.cwd}>
-                  {a.work || a.cwd}
+                <span
+                  className="agent-work"
+                  title={a.work || a.description || a.cwd}
+                >
+                  {a.work || a.description || a.cwd}
                 </span>
               </span>
               <span className="agent-card-action">
@@ -104,32 +107,6 @@ export function AgentDirectory({
             </button>
           </article>
         ))}
-        {fresh.map((r) => (
-          <article className="agent-card" key={r.runtimeId}>
-            <button
-              className="agent-open"
-              aria-label={`与 ${agentName(r.cwd)} 聊天，进程 ${r.pid}`}
-              disabled={opening !== null}
-              onClick={() => openRuntime(r)}
-            >
-              <Avatar name={agentName(r.cwd)} online />
-              <span className="agent-card-copy">
-                <strong>{agentName(r.cwd)}</strong>
-                <span className="agent-state">在线 · Pi · {r.pid}</span>
-                <span className="agent-work" title={r.cwd}>
-                  {r.cwd}
-                </span>
-              </span>
-              <span className="agent-card-action">
-                {opening === r.runtimeId ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <MessageSquare size={16} />
-                )}
-              </span>
-            </button>
-          </article>
-        ))}
       </div>
       {!count ? (
         <div className="directory-empty">
@@ -144,14 +121,13 @@ export function AgentDirectory({
               : "还没有 Agent"}
           </h2>
           <p>
-            已启用 pi-acp 的 Pi 会自动出现在这里。
+            创建一位长期 Agent，身份与聊天会一直保留。
             <br />
-            也可以新建一位 Agent。
+            普通 Pi 临时实例不会自动成为长期身份。
           </p>
         </div>
       ) : (
-        !agents.length &&
-        !fresh.length && (
+        !agents.length && (
           <div className="directory-empty">
             <Search size={24} />
             <h2>没有匹配的 Agent</h2>
@@ -160,6 +136,20 @@ export function AgentDirectory({
             </button>
           </div>
         )
+      )}
+      {fresh.length > 0 && (
+        <details className="settings-section temporary-runtimes">
+          <summary>临时 Pi · {fresh.length}</summary>
+          <p className="muted small-text">
+            这些实例不属于长期身份，不会自动创建账号。要使用长期身份，请新建
+            Agent，再通过具名入口启动。
+          </p>
+          {fresh.map((r) => (
+            <p className="muted small-text" key={r.runtimeId}>
+              {agentName(r.cwd)} · PID {r.pid}
+            </p>
+          ))}
+        </details>
       )}
     </section>
   );

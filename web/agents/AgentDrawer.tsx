@@ -31,6 +31,8 @@ export function AgentDrawer({
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [saved, setSaved] = useState(false);
+  const [name, setName] = useState(agent.name),
+    [description, setDescription] = useState(agent.description);
   useEffect(() => {
     let alive = true;
     void api<Page<BoxMessage>>(`/agents/${agent.id}/box?after=${boxAfter}`)
@@ -58,6 +60,31 @@ export function AgentDrawer({
     try {
       await api(`/agents/${agent.id}/config`, "PATCH", config);
       setSaved(true);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function profileSave(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/agents/${agent.id}/profile`, "PATCH", { name, description });
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function promote() {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/agents/${agent.id}/promote`, "POST", {});
       refresh();
     } catch (e) {
       setError(String(e));
@@ -183,6 +210,56 @@ export function AgentDrawer({
           </>
         ) : (
           <>
+            <form className="settings-section" onSubmit={profileSave}>
+              <h3>身份资料 · {agent.ref}</h3>
+              <label>
+                名称
+                <input
+                  required
+                  maxLength={40}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              <label>
+                自我介绍
+                <textarea
+                  maxLength={1000}
+                  rows={3}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </label>
+              <button className="button secondary" disabled={busy}>
+                保存资料
+              </button>
+            </form>
+            <section className="settings-section">
+              {agent.agent_directory ? (
+                <>
+                  <h3>终端启动</h3>
+                  <code className="path">atrium run {agent.ref}</code>
+                  <p className="muted small-text">
+                    打开原生 Pi；该身份已在运行时不会另开实例。
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h3>旧身份记录</h3>
+                  <p className="muted small-text">
+                    聊天与历史保留。正常退出旧 Pi
+                    后，可显式创建专属目录并启用单实例保护。
+                  </p>
+                  <button
+                    className="button secondary"
+                    disabled={busy || agent.available}
+                    onClick={() => void promote()}
+                  >
+                    升级为长期身份
+                  </button>
+                </>
+              )}
+            </section>
             <section className="settings-section">
               <h3>运行状态</h3>
               <p className="muted">在线时自动连接，离线消息会保留。</p>

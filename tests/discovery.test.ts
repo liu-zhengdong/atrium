@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Runtimes } from "../server/runtime.ts";
@@ -22,7 +29,7 @@ const live = (cwd: string): LiveRuntime => ({
   mode: "tui",
 });
 
-test("自动发现只读；首次直接聊天自动关联；并发点击、重启与同目录身份隔离", async (t) => {
+test("临时实例不建账号；旧记录兼容关联、并发点击与重启", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-discovery-"));
   let items: unknown[] = [live(data), live(data)];
   const first = items[0] as LiveRuntime;
@@ -53,6 +60,23 @@ test("自动发现只读；首次直接聊天自动关联；并发点击、重�
   await Promise.all(Array.from({ length: 20 }, () => overview()));
   assert.equal(lists, coldLists, "UI 热刷新不重扫全部运行时");
 
+  const denied = await app.inject({
+    method: "POST",
+    url: `/api/runtimes/${first.runtimeId}/chat`,
+  });
+  assert.equal(denied.statusCode, 409);
+  assert.equal(store.agents().length, 0);
+  const existing = store.createAgent("旧记录一", realpathSync(data));
+  store.run(
+    "UPDATE agents SET runtime_id=? WHERE id=?",
+    first.runtimeId,
+    existing.agent.id,
+  );
+  writeFileSync(
+    join(data, "credentials", `${existing.agent.id}.json`),
+    JSON.stringify({ token: existing.token }),
+    { mode: 0o600 },
+  );
   const requests = await Promise.all(
     Array.from({ length: 4 }, () =>
       app.inject({
@@ -91,6 +115,12 @@ test("自动发现只读；首次直接聊天自动关联；并发点击、重�
 
   // Two sessions in the same cwd must never collapse into one Agent.
   const second = items[1] as LiveRuntime;
+  const legacyTwo = store.createAgent("旧记录二", realpathSync(data)).agent;
+  store.run(
+    "UPDATE agents SET runtime_id=? WHERE id=?",
+    second.runtimeId,
+    legacyTwo.id,
+  );
   const secondChat = await app.inject({
     method: "POST",
     url: `/api/runtimes/${second.runtimeId}/chat`,

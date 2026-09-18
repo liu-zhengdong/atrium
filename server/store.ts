@@ -131,6 +131,24 @@ export class Store {
       if (!columns.includes(column))
         this.db.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     }
+    if (!columns.includes("agent_directory"))
+      this.db.exec("ALTER TABLE agents ADD COLUMN agent_directory TEXT");
+    if (!columns.includes("description"))
+      this.db.exec(
+        "ALTER TABLE agents ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+      );
+    this.transaction(() => {
+      if (
+        !this.one(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_refs'",
+        )
+      ) {
+        this.db
+          .exec(`CREATE TABLE agent_refs(number INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL UNIQUE REFERENCES agents(id) ON DELETE CASCADE);
+          INSERT INTO agent_refs(agent_id) SELECT id FROM agents ORDER BY rowid;
+          CREATE TRIGGER agents_assign_ref AFTER INSERT ON agents BEGIN INSERT INTO agent_refs(agent_id) VALUES(NEW.id); END;`);
+      }
+    });
     this.db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS agent_runtime_binding ON agents(runtime_id) WHERE runtime_id IS NOT NULL",
     );
@@ -156,11 +174,17 @@ export class Store {
     }
   }
   agent(id: string): AgentInfo {
-    const row = this.one<AgentRow>("SELECT * FROM agents WHERE id=?", id);
+    const row = this.one<AgentRow>(
+      "SELECT a.*, 'a'||r.number AS ref FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.id=?",
+      id,
+    );
     if (!row) throw new Problem(404, "Agent 不存在");
     return {
       id: row.id,
       name: row.name,
+      ref: row.ref,
+      description: row.description,
+      agent_directory: row.agent_directory,
       work: row.work,
       cwd: row.cwd,
       session_file: row.session_file,
@@ -171,6 +195,16 @@ export class Store {
     return this.all<{ id: string }>("SELECT id FROM agents ORDER BY rowid").map(
       (r) => this.agent(r.id),
     );
+  }
+  resolveAgentId(reference: string): string {
+    if (!/^a[1-9][0-9]{0,14}$/.test(reference))
+      throw new Problem(400, "身份短号应为 a1 这样的格式");
+    const row = this.one<{ agent_id: string }>(
+      "SELECT agent_id FROM agent_refs WHERE number=?",
+      Number(reference.slice(1)),
+    );
+    if (!row) throw new Problem(404, "Agent 不存在");
+    return row.agent_id;
   }
   authenticate(id: string, token: string): boolean {
     return !!this.one(

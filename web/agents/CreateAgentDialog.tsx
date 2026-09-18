@@ -12,7 +12,13 @@ export function CreateAgentDialog({
     const result = await api<{ agent: Agent; start_error?: string }>(
       "/agents",
       "POST",
-      { name: data.get("name"), cwd: data.get("cwd"), start: true },
+      {
+        name: data.get("name"),
+        cwd: data.get("cwd"),
+        description: data.get("description"),
+        ...(data.get("template") ? { template: data.get("template") } : {}),
+        start: data.get("start") === "on",
+      },
     );
     await created(result.agent, result.start_error);
   }
@@ -21,10 +27,10 @@ export function CreateAgentDialog({
       title="新建 Agent"
       close={close}
       submit={submit}
-      submitLabel="创建并启动"
-      pendingLabel="创建并启动中…"
+      submitLabel="创建 Agent"
+      pendingLabel="创建中…"
     >
-      <p className="muted">创建一位新的 Agent，并启动它的后台 Pi。</p>
+      <p className="muted">身份长期保留；启动和退出不会改变它的名字与聊天。</p>
       <label>
         名称
         <input
@@ -36,9 +42,35 @@ export function CreateAgentDialog({
         />
       </label>
       <label>
+        <span>
+          自我介绍 <span className="muted">（可选）</span>
+        </span>
+        <textarea
+          name="description"
+          maxLength={1000}
+          placeholder="擅长什么，主要负责什么"
+          rows={2}
+        />
+      </label>
+      <label>
         工作目录
         <input name="cwd" required placeholder="/绝对路径/工作目录" />
       </label>
+      <details>
+        <summary>配置与启动</summary>
+        <label>
+          配置模板目录
+          <input name="template" placeholder="默认使用当前 Pi 配置" />
+        </label>
+        <label className="switch-row">
+          <span>创建后在后台启动</span>
+          <input name="start" type="checkbox" role="switch" />
+        </label>
+        <p className="muted small-text">
+          设置与会话独立，扩展和技能复用已安装资源。不会复制登录凭据；内置 Pi
+          认证需在该身份中登录，环境变量和插件自身认证沿用原机制。
+        </p>
+      </details>
       <p className="muted small-text">
         Pi
         使用该目录和你现有的权限运行，不是隔离沙箱。退出后默认不被事件自动拉起。

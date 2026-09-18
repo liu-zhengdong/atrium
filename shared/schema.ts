@@ -51,7 +51,10 @@ export const subscriptionInput = z
   .strict();
 export type AgentInfo = {
   id: string;
+  ref: string;
   name: string;
+  description: string;
+  agent_directory: string | null;
   work: string;
   config: Preferences;
   cwd: string;
@@ -64,6 +67,7 @@ export const runtimeSchema = z
     sessionId: id,
     pid: z.number().int().positive(),
     ownerPid: z.number().int().positive().nullable(),
+    identityId: id.nullable().optional(),
     sessionFile: z.string().nullable(),
     cwd: z.string(),
     mode: z.enum(["tui", "rpc"]),
@@ -75,6 +79,7 @@ export type RuntimeInfo = z.infer<typeof runtimeSchema>;
 export const liveRuntimeSchema = runtimeSchema
   .pick({
     runtimeId: true,
+    identityId: true,
     generation: true,
     sessionId: true,
     pid: true,

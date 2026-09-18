@@ -1,4 +1,11 @@
-import { mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
+import { prepareProfile } from "./profile.ts";
 import { join, resolve } from "node:path";
 import { Store, Problem } from "./store.ts";
 
@@ -8,6 +15,7 @@ export function createAgent(
   data: string,
   name: string,
   directory: string,
+  options: { template?: string; description?: string } = {},
 ) {
   let cwd: string;
   try {
@@ -19,11 +27,23 @@ export function createAgent(
   mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
   return store.transaction(() => {
     const { agent, token } = store.createAgent(name, cwd);
-    writeFileSync(
-      join(data, "credentials", `${agent.id}.json`),
-      JSON.stringify({ token }),
-      { mode: 0o600, flag: "wx" },
-    );
-    return agent;
+    const directory = prepareProfile(data, agent.id, options.template);
+    try {
+      writeFileSync(
+        join(data, "credentials", `${agent.id}.json`),
+        JSON.stringify({ token }),
+        { mode: 0o600, flag: "wx" },
+      );
+      store.run(
+        "UPDATE agents SET agent_directory=?,description=? WHERE id=?",
+        directory,
+        options.description ?? "",
+        agent.id,
+      );
+      return store.agent(agent.id);
+    } catch (error) {
+      rmSync(directory, { recursive: true, force: true });
+      throw error;
+    }
   });
 }

@@ -929,6 +929,7 @@ label {
   margin: 0 0 18px;
 }
 input:not([type="checkbox"]),
+dialog textarea,
 select {
   width: 100%;
   border: 1px solid #ddd7ca;
@@ -939,8 +940,33 @@ select {
   min-height: 37px;
   font-size: 12px;
 }
-input::placeholder {
+input::placeholder,
+dialog textarea::placeholder {
   color: #b1a693;
+}
+dialog textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+.create-form details {
+  margin: 0 0 18px;
+}
+.create-form details > summary {
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: #6c6456;
+  cursor: pointer;
+}
+.temporary-runtimes {
+  margin-top: 24px;
+}
+.temporary-runtimes > summary {
+  color: #6c6456;
+  font-size: 12px;
+  cursor: pointer;
+}
+.temporary-runtimes[open] > summary {
+  margin-bottom: 12px;
 }
 fieldset {
   border: 1px solid #e8e2d6;

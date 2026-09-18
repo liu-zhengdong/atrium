@@ -25,8 +25,7 @@ import {
 } from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
-import { createAgent } from "./agents.ts";
-import { agentName } from "../shared/agent-name.ts";
+import { prepareProfile } from "./profile.ts";
 
 const require = createRequire(import.meta.url);
 const alive = (pid: number) => {
@@ -159,7 +158,10 @@ export class Runtimes {
           clientCapabilities: {},
           clientInfo: { name: "atrium" },
         });
-        if (!result._meta?.["pi-acp/runtime/v1"])
+        if (
+          !result._meta?.["pi-acp/runtime/v1"] ||
+          !result._meta?.["pi-acp/identity/v1"]
+        )
           throw new Error(
             "pi-acp 缺少 runtime/v1 能力，请更新到本项目要求的版本",
           );
@@ -198,16 +200,39 @@ export class Runtimes {
     params: unknown,
   ): Promise<T> {
     const { connection } = await this.open();
-    return connection.agent.request<T>(method, params);
+    try {
+      return await connection.agent.request<T>(method, params);
+    } catch (error) {
+      // SDK masks server errors as "Internal error"; identity conflicts must tell
+      // the operator which process is still occupying it, without exposing RPC payloads.
+      const details = (error as { data?: { details?: unknown } })?.data
+        ?.details;
+      if (method.startsWith("_pi/identity/") && typeof details === "string")
+        throw new Problem(
+          /already occupied|needs inspection/.test(details) ? 409 : 500,
+          details.slice(0, 512),
+        );
+      throw error;
+    }
   }
   private withOwners(runtimes: LiveRuntime[]): LiveRuntime[] {
     const rows = this.store.all<
-      Binding & { id: string; cwd: string; observed_session_id: string | null }
+      Binding & {
+        id: string;
+        cwd: string;
+        observed_session_id: string | null;
+        agent_directory: string | null;
+      }
     >(
-      "SELECT id,cwd,runtime_id,runtime_pid,acp_session_id,observed_session_id,session_file FROM agents",
+      "SELECT id,cwd,runtime_id,runtime_pid,acp_session_id,observed_session_id,session_file,agent_directory FROM agents",
+    );
+    const named = new Map(
+      rows.filter((a) => a.agent_directory).map((a) => [a.id, a]),
     );
     const byRuntime = new Map(
-      rows.filter((a) => a.runtime_id).map((a) => [a.runtime_id, a]),
+      rows
+        .filter((a) => !a.agent_directory && a.runtime_id)
+        .map((a) => [a.runtime_id, a]),
     );
     const sessionCounts = new Map<string, number>();
     for (const runtime of runtimes)
@@ -218,22 +243,23 @@ export class Runtimes {
     const bySession = new Map<string, typeof rows>();
     for (const row of rows) {
       const session = row.observed_session_id ?? row.acp_session_id;
-      if (session)
+      if (session && !row.agent_directory)
         bySession.set(session, [...(bySession.get(session) ?? []), row]);
     }
     return runtimes
-      .filter((r) => r.mode === "tui")
+      .filter((r) => r.mode === "tui" || r.identityId)
       .map((r) => {
         // Directory equality alone never identifies an Agent. A resumed session may
         // regain its identity only after the previous process has exited.
         const candidates = (bySession.get(r.sessionId) ?? []).filter(
           (a) => a.cwd === r.cwd && (!a.runtime_pid || !alive(a.runtime_pid)),
         );
-        const owner =
-          byRuntime.get(r.runtimeId) ??
-          (sessionCounts.get(r.sessionId) === 1 && candidates.length === 1
-            ? candidates[0]
-            : undefined);
+        const owner = r.identityId
+          ? named.get(r.identityId)
+          : (byRuntime.get(r.runtimeId) ??
+            (sessionCounts.get(r.sessionId) === 1 && candidates.length === 1
+              ? candidates[0]
+              : undefined));
         return { ...r, bound_agent: owner?.id ?? null };
       });
   }
@@ -308,22 +334,10 @@ export class Runtimes {
     );
     if (!runtime) throw new Problem(404, "这个 Agent 已离线，请刷新名册");
     if (runtime.bound_agent) return this.store.agent(runtime.bound_agent);
-    const name = agentName(
-      runtime.cwd,
-      this.store
-        .all<{ name: string }>("SELECT name FROM agents")
-        .map((a) => a.name),
+    throw new Problem(
+      409,
+      "这是临时 Pi；请新建长期身份后使用具名入口启动，不会自动创建账号",
     );
-    const agent = createAgent(this.store, this.data, name, runtime.cwd);
-    this.store.run(
-      "UPDATE agents SET runtime_id=?,runtime_pid=?,observed_session_id=? WHERE id=?",
-      runtime.runtimeId,
-      runtime.pid,
-      runtime.sessionId,
-      agent.id,
-    );
-    this.changed();
-    return agent;
   }
   private services(id: string) {
     const path = join(this.data, "credentials", `${id}.json`);
@@ -392,7 +406,10 @@ export class Runtimes {
       info = runtimeSchema.parse(
         await this.rpc("_pi/runtime/attach", selector),
       );
-      if (realpathSync(info.cwd) !== realpathSync(this.store.agent(id).cwd))
+      const profile = this.store.agent(id);
+      if (profile.agent_directory && info.identityId !== id)
+        throw new Problem(409, "运行实例不属于这个长期身份");
+      if (realpathSync(info.cwd) !== realpathSync(profile.cwd))
         throw new Problem(409, "Pi 工作目录与 Agent 配置不一致");
       if (
         this.store.one(
@@ -454,6 +471,32 @@ export class Runtimes {
     await this.operation(id, () => this.bind(id, { runtimeId }));
     await this.pump(id);
   }
+  async promote(id: string, template?: string) {
+    await this.discover();
+    if (this.discoveryError)
+      throw new Problem(503, "无法确认旧实例状态，暂不迁移");
+    await this.operation(id, async () => {
+      const agent = this.store.agent(id),
+        binding = this.binding(id);
+      if (agent.agent_directory) throw new Problem(409, "已经是长期身份");
+      if (
+        this.connections.has(id) ||
+        (binding.runtime_pid && alive(binding.runtime_pid))
+      )
+        throw new Problem(
+          409,
+          "请先正常退出旧 Pi；不会迁移或终止正在运行的实例",
+        );
+      const directory = prepareProfile(this.data, id, template);
+      this.store.run(
+        "UPDATE agents SET agent_directory=? WHERE id=?",
+        directory,
+        id,
+      );
+      this.changed();
+    });
+    return this.store.agent(id);
+  }
   async start(id: string, automatic = false) {
     const agent = this.store.agent(id),
       binding = this.binding(id);
@@ -472,6 +515,26 @@ export class Runtimes {
       failures: automatic ? (last?.failures ?? 0) + 1 : 1,
     });
     await this.operation(id, async () => {
+      if (agent.agent_directory) {
+        const { runtimeId } = await this.rpc<{ runtimeId: string }>(
+          "_pi/identity/start",
+          {
+            identityId: id,
+            agentDirectory: agent.agent_directory,
+            cwd: agent.cwd,
+            ...(agent.session_file ? { sessionFile: agent.session_file } : {}),
+          },
+        );
+        try {
+          await this.bind(id, { runtimeId });
+        } catch (error) {
+          await this.rpc("_pi/identity/stop", { identityId: id }).catch(
+            () => undefined,
+          );
+          throw error;
+        }
+        return;
+      }
       let sessionId = binding.acp_session_id;
       if (!sessionId && binding.session_file) {
         ({ sessionId } = await this.rpc<{ sessionId: string }>(

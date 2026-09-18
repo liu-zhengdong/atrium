@@ -160,11 +160,19 @@ export async function createApp(options: {
         name: displayName,
         cwd: z.string().min(1).max(4096),
         start: z.boolean().default(false),
+        description: z.string().trim().max(1000).default(""),
+        template: z.string().min(1).max(4096).optional(),
       })
       .strict()
       .parse(request.body);
     if (input.start && !runtimes) throw new Problem(503, "运行时未启用");
-    const agent = createAgent(store, options.data, input.name, input.cwd);
+    const agent = createAgent(
+      store,
+      options.data,
+      input.name,
+      input.cwd,
+      input,
+    );
     let start_error: string | undefined;
     if (input.start) {
       try {
@@ -189,6 +197,47 @@ export async function createApp(options: {
   app.get("/api/runtimes", async () => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
     return { runtimes: await runtimes.available() };
+  });
+  app.patch("/api/agents/:id/profile", (request) => {
+    const agentId = agentParams(request);
+    const previous = store.agent(agentId);
+    const value = z
+      .object({ name: displayName, description: z.string().trim().max(1000) })
+      .strict()
+      .parse(request.body);
+    if (
+      store.one(
+        "SELECT 1 FROM agents WHERE name=? AND id<>?",
+        value.name,
+        agentId,
+      )
+    )
+      throw new Problem(409, "这个名称已经被使用");
+    store.transaction(() => {
+      store.run(
+        "UPDATE agents SET name=?,description=? WHERE id=?",
+        value.name,
+        value.description,
+        agentId,
+      );
+      // Follow the identity name for default private-chat titles, not custom titles.
+      store.run(
+        "UPDATE chats SET name=? WHERE direct_agent=? AND name=?",
+        value.name,
+        agentId,
+        previous.name,
+      );
+    });
+    changed();
+    return store.agent(agentId);
+  });
+  app.post("/api/agents/:id/promote", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    const value = z
+      .object({ template: z.string().min(1).max(4096).optional() })
+      .strict()
+      .parse(request.body ?? {});
+    return runtimes.promote(agentParams(request), value.template);
   });
   app.post("/api/agents/:id/attach", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");

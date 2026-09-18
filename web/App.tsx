@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, LoaderCircle, MessageSquare } from "lucide-react";
-import type { LiveRuntime } from "../shared/schema.ts";
 import { api } from "./api.ts";
 import { useOverview } from "./useOverview.ts";
 import { Empty } from "./components/Empty.tsx";
@@ -64,8 +63,6 @@ export function App() {
       members: [agent.id],
       direct_agent: agent.id,
     });
-  const openRuntime = (runtime: LiveRuntime) =>
-    openChat(runtime.runtimeId, `/runtimes/${runtime.runtimeId}/chat`);
 
   return (
     <div className={`app ${mobileOpen ? "mobile-list" : ""}`}>
@@ -115,7 +112,6 @@ export function App() {
                 overview={overview}
                 opening={openingAgent}
                 openAgent={(agent) => void openAgent(agent)}
-                openRuntime={(runtime) => void openRuntime(runtime)}
                 details={setAgentId}
                 create={() => setModal("agent")}
               />

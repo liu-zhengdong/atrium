@@ -231,6 +231,15 @@ export async function createApp(options: {
     changed();
     return store.agent(agentId);
   });
+  app.delete("/api/agents/:id", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用，无法确认是否可删除");
+    const { confirm } = z
+      .object({ confirm: z.string() })
+      .strict()
+      .parse(request.body);
+    await runtimes.remove(agentParams(request), confirm);
+    return { removed: true };
+  });
   app.post("/api/agents/:id/promote", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
     const value = z

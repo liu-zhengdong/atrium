@@ -30,6 +30,7 @@ export function createMcp(store: Store, agentId: string, changed: () => void) {
       { description, inputSchema },
       async (args) => {
         try {
+          store.agent(agentId); // Also reject a request authenticated just before deletion.
           const result = action(z.object(shape).strict().parse(args));
           changed();
           return { content: [{ type: "text", text: JSON.stringify(result) }] };

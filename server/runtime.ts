@@ -215,6 +215,57 @@ export class Runtimes {
       throw error;
     }
   }
+  async remove(id: string, confirm: string) {
+    await this.operation(id, async () => {
+      await this.discover();
+      if (this.discoveryError)
+        throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
+      if (this.pumping.has(id))
+        throw new Problem(409, "Agent 正在处理连接，请稍后重试");
+      const { claimIdentity } = require("@liuser/pi-acp/dist/identity.js") as {
+        claimIdentity(
+          identity: { identityId: string; agentDirectory: string },
+          cwd: string,
+        ): { release(): void };
+      };
+      this.store.transaction(() => {
+        const agent = this.store.agent(id),
+          binding = this.binding(id);
+        if (confirm !== agent.ref)
+          throw new Problem(400, "删除确认与 Agent 不一致");
+        const connected = this.connections.get(id)?.info;
+        if (
+          (binding.runtime_pid && alive(binding.runtime_pid)) ||
+          (connected && alive(connected.pid)) ||
+          this.directory().runtimes.some((r) => r.bound_agent === id)
+        )
+          throw new Problem(409, "Agent 仍在运行，请先正常停止后再删除");
+        let lease: { release(): void } | undefined;
+        try {
+          if (agent.agent_directory) {
+            try {
+              lease = claimIdentity(
+                { identityId: id, agentDirectory: agent.agent_directory },
+                agent.cwd,
+              );
+            } catch {
+              throw new Problem(
+                409,
+                "身份仍被占用或状态不明，请先正常停止 Agent 后重试",
+              );
+            }
+          }
+          this.store.deleteAgent(id);
+        } finally {
+          lease?.release();
+        }
+      });
+      this.connections.delete(id);
+      this.errors.delete(id);
+      this.starts.delete(id);
+      this.changed();
+    });
+  }
   private withOwners(runtimes: LiveRuntime[]): LiveRuntime[] {
     const rows = this.store.all<
       Binding & {
@@ -224,7 +275,7 @@ export class Runtimes {
         agent_directory: string | null;
       }
     >(
-      "SELECT id,cwd,runtime_id,runtime_pid,acp_session_id,observed_session_id,session_file,agent_directory FROM agents",
+      "SELECT id,cwd,runtime_id,runtime_pid,acp_session_id,observed_session_id,session_file,agent_directory FROM agents WHERE deleted_at IS NULL",
     );
     const named = new Map(
       rows.filter((a) => a.agent_directory).map((a) => [a.id, a]),

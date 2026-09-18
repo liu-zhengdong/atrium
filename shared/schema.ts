@@ -96,6 +96,7 @@ export type Chat = {
   name: string;
   kind: "group" | "direct";
   direct_agent: string | null;
+  read_only?: boolean;
   preview: string | null;
   updated_at: number;
 };
@@ -103,6 +104,8 @@ export type Message = {
   id: number;
   chat_id: string;
   sender: string;
+  sender_name?: string | null;
+  sender_deleted_at?: number | null;
   body: string;
   mentions: string[];
   created_at: number;
@@ -110,6 +113,9 @@ export type Message = {
 export type ChatReadState = {
   agent_id: string;
   through: number;
+  name?: string;
+  deleted_at?: number | null;
+  deleted_after?: number | null;
   ranges: { first: number; last: number }[];
 };
 export type BoxMessage = {

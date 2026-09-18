@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 export function Modal({
   title,
@@ -12,16 +12,20 @@ export function Modal({
   drawer?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     ref.current?.showModal();
+    ref.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     return () => ref.current?.close();
   }, []);
   return (
     <dialog
       ref={ref}
+      aria-labelledby={titleId}
       className={drawer ? "drawer" : ""}
       onCancel={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         close();
       }}
       onClick={(e) => {
@@ -30,7 +34,7 @@ export function Modal({
     >
       <div className="dialog-inner">
         <header className="dialog-header">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="icon-button" aria-label="关闭" onClick={close}>
             <X size={18} />
           </button>

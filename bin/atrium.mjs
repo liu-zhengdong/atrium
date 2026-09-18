@@ -62,12 +62,24 @@ if (command === "--help" && !reference) {
       if (agent) {
         const { runNamedTui } = await import("@liuser/pi-acp/dist/identity.js");
         console.error(`中庭 · ${agent.name} (${agent.ref})\n${agent.cwd}`);
-        process.exitCode = await runNamedTui({
-          identityId: agent.id,
-          agentDirectory: agent.agent_directory,
-          cwd: agent.cwd,
-          ...(agent.session_file ? { sessionFile: agent.session_file } : {}),
-        });
+        const launchStore = new Store(join(data, "atrium.sqlite"));
+        let running;
+        try {
+          running = launchStore.transaction(() => {
+            const current = launchStore.agent(agent.id);
+            return runNamedTui({
+              identityId: current.id,
+              agentDirectory: current.agent_directory,
+              cwd: current.cwd,
+              ...(current.session_file
+                ? { sessionFile: current.session_file }
+                : {}),
+            });
+          });
+        } finally {
+          launchStore.close();
+        }
+        process.exitCode = await running;
       }
     }
   } catch (error) {

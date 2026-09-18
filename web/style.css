@@ -1100,6 +1100,27 @@ input[type="checkbox"] {
 .settings-section label {
   margin-top: 17px;
 }
+.button.danger {
+  color: #914331;
+  border-color: #caaea3;
+}
+.button.danger.solid {
+  background: #914331;
+  color: #fff;
+}
+.delete-confirmation {
+  padding: 22px 24px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.delete-confirmation > p + p {
+  margin-top: 14px;
+}
+.delete-target {
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .switch-row {
   flex-direction: row;
   align-items: center;

@@ -48,9 +48,11 @@ export function MessageTimeline({
               <h2>{active.name}</h2>
               <p>
                 这是对话的开始。
-                {active.kind === "group"
-                  ? "试着 @ 一位 Agent。"
-                  : "发一条消息，和它聊聊。"}
+                {active.read_only
+                  ? "这个 Agent 已删除，没有历史消息。"
+                  : active.kind === "group"
+                    ? "试着 @ 一位 Agent。"
+                    : "发一条消息，和它聊聊。"}
               </p>
             </div>
           )}
@@ -59,7 +61,7 @@ export function MessageTimeline({
               message.sender === "user"
                 ? "你"
                 : (agents.find((a) => a.id === message.sender)?.name ??
-                  "Agent");
+                  `${message.sender_name ?? "Agent"}${message.sender_deleted_at ? "（已删除）" : ""}`);
             const continuation =
               index > 0 &&
               messages[index - 1].sender === message.sender &&

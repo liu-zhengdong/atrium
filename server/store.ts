@@ -137,6 +137,13 @@ export class Store {
       this.db.exec(
         "ALTER TABLE agents ADD COLUMN description TEXT NOT NULL DEFAULT ''",
       );
+    for (const [column, type] of [
+      ["deleted_at", "INTEGER"],
+      ["deleted_name", "TEXT"],
+      ["deleted_after", "INTEGER"],
+    ])
+      if (!columns.includes(column))
+        this.db.exec(`ALTER TABLE agents ADD COLUMN ${column} ${type}`);
     this.transaction(() => {
       if (
         !this.one(
@@ -175,7 +182,7 @@ export class Store {
   }
   agent(id: string): AgentInfo {
     const row = this.one<AgentRow>(
-      "SELECT a.*, 'a'||r.number AS ref FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.id=?",
+      "SELECT a.*, 'a'||r.number AS ref FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.id=? AND a.deleted_at IS NULL",
       id,
     );
     if (!row) throw new Problem(404, "Agent 不存在");
@@ -192,9 +199,9 @@ export class Store {
     };
   }
   agents(): AgentInfo[] {
-    return this.all<{ id: string }>("SELECT id FROM agents ORDER BY rowid").map(
-      (r) => this.agent(r.id),
-    );
+    return this.all<{ id: string }>(
+      "SELECT id FROM agents WHERE deleted_at IS NULL ORDER BY rowid",
+    ).map((r) => this.agent(r.id));
   }
   resolveAgentId(reference: string): string {
     if (!/^a[1-9][0-9]{0,14}$/.test(reference))
@@ -208,7 +215,7 @@ export class Store {
   }
   authenticate(id: string, token: string): boolean {
     return !!this.one(
-      "SELECT id FROM agents WHERE id=? AND token_hash=?",
+      "SELECT id FROM agents WHERE id=? AND token_hash=? AND deleted_at IS NULL",
       id,
       hash(token),
     );
@@ -229,6 +236,28 @@ export class Store {
     );
     return { agent: this.agent(id), token };
   }
+  /** Retain the identity row only as a historical author/receipt reference. */
+  deleteAgent(id: string) {
+    const remove = () => {
+      const agent = this.agent(id);
+      this.run(
+        "UPDATE agents SET deleted_at=?,deleted_after=(SELECT COALESCE(MAX(id),0) FROM messages),deleted_name=name,name=?,token_hash='',config=?,work='',runtime_id=NULL,runtime_pid=NULL WHERE id=?",
+        Date.now(),
+        `deleted:${id}`,
+        JSON.stringify({ ...agent.config, auto_start: false }),
+        id,
+      );
+      this.run("DELETE FROM subscriptions WHERE agent_id=?", id);
+      this.run(
+        "UPDATE deliveries SET state='cancelled',slot=NULL,error=NULL WHERE agent_id=? AND state='pending'",
+        id,
+      );
+      this.unreadCache.delete(id);
+    };
+    // The runtime holds the cross-process launch transaction and pi-acp lease.
+    if (this.db.isTransaction) remove();
+    else this.transaction(remove);
+  }
   configure(id: string, patch: unknown) {
     const change = preferences.partial().parse(patch);
     const value = { ...this.agent(id).config, ...change };
@@ -245,19 +274,19 @@ export class Store {
   }
   chats(agentId?: string): Chat[] {
     return this.all<Chat>(
-      `SELECT c.*, 'c'||r.number AS ref, (SELECT substr(body,1,100) FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
+      `SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM agents a WHERE a.id=c.direct_agent AND a.deleted_at IS NOT NULL) AS read_only, (SELECT substr(body,1,100) FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
       COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at FROM chats c JOIN chat_refs r ON r.chat_id=c.id
       ${agentId ? "WHERE EXISTS(SELECT 1 FROM members WHERE chat_id=c.id AND agent_id=?)" : ""} ORDER BY updated_at DESC,c.rowid DESC`,
       ...(agentId ? [agentId] : []),
-    );
+    ).map((chat) => ({ ...chat, read_only: !!chat.read_only }));
   }
   chat(id: string): Chat {
     const chat = this.one<Chat>(
-      "SELECT c.*, 'c'||r.number AS ref FROM chats c JOIN chat_refs r ON r.chat_id=c.id WHERE c.id=?",
+      "SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM agents a WHERE a.id=c.direct_agent AND a.deleted_at IS NOT NULL) AS read_only FROM chats c JOIN chat_refs r ON r.chat_id=c.id WHERE c.id=?",
       id,
     );
     if (!chat) throw new Problem(404, "会话不存在");
-    return chat;
+    return { ...chat, read_only: !!chat.read_only };
   }
   resolveChatId(reference: string): string {
     chatReference.parse(reference);
@@ -278,6 +307,7 @@ export class Store {
     return row.ref;
   }
   assertMember(chat: string, agent: string) {
+    this.agent(agent);
     if (
       !this.one(
         "SELECT 1 FROM members WHERE chat_id=? AND agent_id=?",
@@ -335,7 +365,7 @@ export class Store {
   }
   members(chatId: string) {
     return this.all<{ agent_id: string }>(
-      "SELECT agent_id FROM members WHERE chat_id=?",
+      "SELECT m.agent_id FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=? AND a.deleted_at IS NULL",
       chatId,
     ).map((r) => r.agent_id);
   }
@@ -349,6 +379,8 @@ export class Store {
     },
   ) {
     const chat = this.chat(input.chat_id);
+    if (chat.read_only)
+      throw new Problem(409, "这个 Agent 已删除，私聊仅供查看历史");
     if (sender !== "user") this.assertMember(chat.id, sender);
     for (const mentioned of input.mentions)
       this.assertMember(chat.id, mentioned);
@@ -421,7 +453,7 @@ export class Store {
     const cursor = after ?? last.last_read;
     const page = bounded(
       this.all<MessageRow>(
-        "SELECT * FROM messages WHERE chat_id=? AND id>? ORDER BY id LIMIT ?",
+        "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>? ORDER BY m.id LIMIT ?",
         chatId,
         cursor,
         limit + 1,
@@ -495,8 +527,14 @@ export class Store {
     return page;
   }
   readState(chatId: string, from: number): ChatReadState[] {
-    const members = this.all<{ agent_id: string; through: number }>(
-      "SELECT agent_id,last_read AS through FROM members WHERE chat_id=?",
+    const members = this.all<{
+      agent_id: string;
+      through: number;
+      name: string;
+      deleted_at: number | null;
+      deleted_after: number | null;
+    }>(
+      "SELECT m.agent_id,m.last_read AS through,COALESCE(a.deleted_name,a.name) AS name,a.deleted_at,a.deleted_after FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=?",
       chatId,
     );
     const ranges = this.all<{
@@ -522,7 +560,7 @@ export class Store {
   ) {
     this.chat(chatId);
     const rows = this.all<MessageRow>(
-      "SELECT * FROM messages WHERE chat_id=? AND id<? ORDER BY id DESC LIMIT 51",
+      "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id<? ORDER BY m.id DESC LIMIT 51",
       chatId,
       before,
     );
@@ -644,6 +682,7 @@ export class Store {
     );
   }
   queue(agentId: string, kind: "direct" | "summary", text: string) {
+    this.agent(agentId);
     const id = randomUUID();
     this.run(
       `INSERT INTO deliveries(id,agent_id,kind,text,slot,created_at) VALUES(?,?,?,?,?,?)

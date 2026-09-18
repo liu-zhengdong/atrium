@@ -19,6 +19,17 @@ export function mergeReadState(
         last.last = Math.max(last.last, range.last);
       else ranges.push({ ...range });
     }
-    return { agent_id: reader.agent_id, through, ranges };
+    return {
+      ...reader,
+      ...(old?.deleted_at
+        ? {
+            name: old.name,
+            deleted_at: old.deleted_at,
+            deleted_after: old.deleted_after,
+          }
+        : {}),
+      through,
+      ranges,
+    };
   });
 }

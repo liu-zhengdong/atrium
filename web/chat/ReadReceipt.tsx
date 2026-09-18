@@ -18,11 +18,16 @@ export function ReadReceipt({
   const [filter, setFilter] = useState<"read" | "unread">("read");
   const [search, setSearch] = useState("");
   const readers = state
-    .filter((reader) => reader.agent_id !== message.sender)
+    .filter(
+      (reader) =>
+        reader.agent_id !== message.sender &&
+        (reader.deleted_after == null || message.id <= reader.deleted_after),
+    )
     .map((reader) => ({
       id: reader.agent_id,
       name:
-        agents.find((agent) => agent.id === reader.agent_id)?.name ?? "Agent",
+        agents.find((agent) => agent.id === reader.agent_id)?.name ??
+        `${reader.name ?? "Agent"}${reader.deleted_at ? "（已删除）" : ""}`,
       read:
         message.id <= reader.through ||
         reader.ranges.some(

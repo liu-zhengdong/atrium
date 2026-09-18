@@ -5,6 +5,7 @@ import { api } from "../api.ts";
 import { time } from "../time.ts";
 import { Modal } from "../components/Modal.tsx";
 import { Empty } from "../components/Empty.tsx";
+import { DeleteAgent } from "./DeleteAgent.tsx";
 import {
   Avatar,
   runtimeLabel,
@@ -344,6 +345,14 @@ export function AgentDrawer({
               <h3>工作目录</h3>
               <code className="path">{agent.cwd}</code>
             </div>
+            <DeleteAgent
+              agent={agent}
+              disabled={busy}
+              removed={() => {
+                close();
+                refresh();
+              }}
+            />
           </>
         )}
       </div>

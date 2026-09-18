@@ -55,10 +55,16 @@ export function ChatView({
                     <span title="会话短号">{active.ref}</span> ·{" "}
                   </>
                 )}
-                {members.length} 位 Agent ·{" "}
-                {active.kind === "group"
-                  ? "@ 提及可及时送达"
-                  : "私聊消息及时送达"}
+                {active.read_only ? (
+                  "Agent 已删除 · 历史记录"
+                ) : (
+                  <>
+                    {members.length} 位 Agent ·{" "}
+                    {active.kind === "group"
+                      ? "@ 提及可及时送达"
+                      : "私聊消息及时送达"}
+                  </>
+                )}
               </p>
             </div>
             <div className="member-stack">
@@ -97,14 +103,20 @@ export function ChatView({
           <MessageTimeline active={active} agents={agents} {...conversation} />
         </>
       )}
-      <MessageComposer
-        active={active}
-        agents={agents.filter((a) => members.includes(a.id))}
-        onSent={() => {
-          conversation.followLatest();
-          refresh();
-        }}
-      />
+      {active?.read_only ? (
+        <p className="conversation-alert" role="status">
+          这个 Agent 已删除，聊天记录仍可查看，不能继续发送消息。
+        </p>
+      ) : (
+        <MessageComposer
+          active={active}
+          agents={agents.filter((a) => members.includes(a.id))}
+          onSent={() => {
+            conversation.followLatest();
+            refresh();
+          }}
+        />
+      )}
       {addingMember && active && (
         <AddMemberDialog
           chatId={active.id}

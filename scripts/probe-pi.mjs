@@ -112,7 +112,7 @@ const model = createServer(async (req, res) => {
               server: "atrium",
               tool: "send_message",
               args: {
-                chat_id: chatId ?? store.chats()[0]?.id,
+                chat_id: chatId ? store.chatRef(chatId) : store.chats()[0]?.ref,
                 body: "原地接入验证成功",
                 client_id: randomUUID(),
               },
@@ -300,6 +300,7 @@ try {
     assert.equal(conversation.status, 200, await conversation.clone().text());
     const chat = await conversation.json();
     chatId = chat.id;
+    assert.match(chat.ref, /^c[1-9][0-9]*$/, "聊天提供固定短号");
     const agent = store.agent(chat.direct_agent);
     await wait(
       () => runtimes.connections.has(agent.id),
@@ -490,6 +491,7 @@ try {
         "same-session",
         "busy-tool-insertion",
         "real-fixed-mcp-call",
+        "stable-short-chat-ref-in-mcp-call",
         "stable-tools",
         "stable-system",
         "appended-guide",

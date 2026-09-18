@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 export const id = z.string().uuid();
+export const chatReference = z
+  .union([z.string().regex(/^c[1-9][0-9]{0,14}(?![\s\S])/), id])
+  .describe("聊天短号，如 c1；兼容旧 UUID");
 export const text = z.string().trim().min(1).max(6000);
 export const displayName = z
   .string()
@@ -84,6 +87,7 @@ export type LiveRuntime = z.infer<typeof liveRuntimeSchema> & {
 };
 export type Chat = {
   id: string;
+  ref: string;
   name: string;
   kind: "group" | "direct";
   direct_agent: string | null;

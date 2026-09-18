@@ -2,6 +2,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   defaultPreferences,
+  chatReference,
   preferences,
   type AgentInfo,
   type BoxMessage,
@@ -102,6 +103,23 @@ export class Store {
       CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), kind TEXT NOT NULL, text TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending', slot TEXT, error TEXT, created_at INTEGER NOT NULL, UNIQUE(agent_id,slot));
       CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(agent_id,created_at) WHERE state='pending';`);
+    // Allocate once, in legacy creation order. AUTOINCREMENT prevents reuse even
+    // if a chat is removed; a trigger also covers writes from an older binary.
+    this.transaction(() => {
+      if (
+        !this.one(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_refs'",
+        )
+      ) {
+        this.db.exec(`CREATE TABLE chat_refs (
+          number INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_id TEXT NOT NULL UNIQUE REFERENCES chats(id) ON DELETE CASCADE);
+          INSERT INTO chat_refs(chat_id) SELECT id FROM chats ORDER BY rowid;
+          CREATE TRIGGER chats_assign_ref AFTER INSERT ON chats BEGIN
+            INSERT INTO chat_refs(chat_id) VALUES(NEW.id);
+          END;`);
+      }
+    });
     const columns = this.all<{ name: string }>("PRAGMA table_info(agents)").map(
       (c) => c.name,
     );
@@ -193,16 +211,37 @@ export class Store {
   }
   chats(agentId?: string): Chat[] {
     return this.all<Chat>(
-      `SELECT c.*, (SELECT substr(body,1,100) FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
-      COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at FROM chats c
+      `SELECT c.*, 'c'||r.number AS ref, (SELECT substr(body,1,100) FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
+      COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at FROM chats c JOIN chat_refs r ON r.chat_id=c.id
       ${agentId ? "WHERE EXISTS(SELECT 1 FROM members WHERE chat_id=c.id AND agent_id=?)" : ""} ORDER BY updated_at DESC,c.rowid DESC`,
       ...(agentId ? [agentId] : []),
     );
   }
   chat(id: string): Chat {
-    const chat = this.one<Chat>("SELECT * FROM chats WHERE id=?", id);
+    const chat = this.one<Chat>(
+      "SELECT c.*, 'c'||r.number AS ref FROM chats c JOIN chat_refs r ON r.chat_id=c.id WHERE c.id=?",
+      id,
+    );
     if (!chat) throw new Problem(404, "会话不存在");
     return chat;
+  }
+  resolveChatId(reference: string): string {
+    chatReference.parse(reference);
+    if (reference.includes("-")) return reference;
+    const row = this.one<{ chat_id: string }>(
+      "SELECT chat_id FROM chat_refs WHERE number=?",
+      Number(reference.slice(1)),
+    );
+    if (!row) throw new Problem(404, "会话不存在");
+    return row.chat_id;
+  }
+  chatRef(chatId: string): string {
+    const row = this.one<{ ref: string }>(
+      "SELECT 'c'||number AS ref FROM chat_refs WHERE chat_id=?",
+      chatId,
+    );
+    if (!row) throw new Problem(404, "会话不存在");
+    return row.ref;
   }
   assertMember(chat: string, agent: string) {
     if (
@@ -320,7 +359,7 @@ export class Store {
         )) {
           const source = JSON.stringify({
             source: chat.kind === "group" ? "群聊" : "私聊",
-            chat_id: chat.id,
+            chat_id: chat.ref,
             chat_name: chat.name,
             sender: "用户",
             message_id: message.id,
@@ -633,7 +672,7 @@ export class Store {
       this.transaction(() => {
         const lines = chats.map(
           (c) =>
-            `群聊 ${JSON.stringify(c.name)} (${c.chat_id})：${c.count > 99 ? "99+" : c.count} 条`,
+            `会话 ${JSON.stringify(c.name)} (${this.chatRef(c.chat_id)})：${c.count > 99 ? "99+" : c.count} 条`,
         );
         if (box) lines.push(`message_box：${box} 条未读`);
         this.queue(
@@ -655,7 +694,7 @@ export class Store {
             agent.id,
             `${chat.name} · ${chat.count} 条未读`,
             JSON.stringify({
-              chat_id: chat.chat_id,
+              chat_id: this.chatRef(chat.chat_id),
               unread: chat.count,
               through_message: chat.latest,
             }),

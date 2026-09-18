@@ -50,6 +50,11 @@ export function ChatView({
                 {active.kind === "group" && <Hash size={21} />} {active.name}
               </h1>
               <p>
+                {active.ref && (
+                  <>
+                    <span title="会话短号">{active.ref}</span> ·{" "}
+                  </>
+                )}
                 {members.length} 位 Agent ·{" "}
                 {active.kind === "group"
                   ? "@ 提及可及时送达"

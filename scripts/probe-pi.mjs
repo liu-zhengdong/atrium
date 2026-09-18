@@ -55,6 +55,8 @@ for (const path of [
   "server/app.ts",
   "server/runtime.ts",
   "server/store.ts",
+  "server/trace.ts",
+  "shared/trace.ts",
   "server/agents.ts",
   "shared/schema.ts",
   "shared/agent-name.ts",
@@ -450,6 +452,31 @@ try {
     );
     assert.equal(runtimes.connections.get(rpcAgent.id).info.mode, "rpc");
     await wait(() => pane().includes("已用 Chat 工具回复"), "原 TUI 回合完成");
+    await wait(async () => {
+      await runtimes.pump(agent.id);
+      return runtimes.traces
+        .page(agent.id)
+        .items.some(
+          (i) =>
+            i.kind === "tool" && i.name === "mcp" && i.state === "complete",
+        );
+    }, "原 TUI 的真实工具轨迹");
+    const traceBefore = runtimes.traces.page(agent.id).items;
+    const bashTrace = traceBefore.find(
+      (i) => i.kind === "tool" && i.name === "bash",
+    );
+    assert.equal(bashTrace?.state, "complete");
+    assert.match(
+      runtimes.traces.detail(agent.id, bashTrace.id).output,
+      /BUSY_DONE/,
+    );
+    const capturedTrace = JSON.stringify(
+      traceBefore.map((i) => runtimes.traces.detail(agent.id, i.id)),
+      null,
+      2,
+    );
+    writeFileSync(join(raw, "trace.json"), capturedTrace, { mode: 0o400 });
+    hashes.push({ name: "trace.json", sha256: hash(capturedTrace) });
     const capture = pane();
     writeFileSync(join(raw, "tui.txt"), capture, { mode: 0o400 });
     hashes.push({ name: "tui.txt", sha256: hash(capture) });
@@ -465,6 +492,16 @@ try {
       store.agent(agent.id).session_file,
       runtimes.connections.get(agent.id).info.sessionFile,
       "恢复位置未跟随用户主动切换的会话",
+    );
+    await wait(async () => {
+      await runtimes.pump(agent.id);
+      return runtimes.traces
+        .page(agent.id)
+        .items.some((i) => i.session_id !== before.sessionId);
+    }, "新会话轨迹与既有记录衔接");
+    assert(
+      runtimes.traces.page(agent.id).items.some((i) => i.id === bashTrace.id),
+      "换会话保留真实历史",
     );
     runtimes.connections.get(agent.id).connection.close();
     await wait(
@@ -524,6 +561,8 @@ try {
         "disconnect-no-duplicate-process",
         "same-process",
         "same-session",
+        "real-native-tool-trace-with-input-and-output",
+        "trace-history-survives-real-session-replacement",
         "busy-tool-insertion",
         "real-fixed-mcp-call",
         "stable-short-chat-ref-in-mcp-call",

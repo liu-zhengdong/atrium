@@ -18,6 +18,7 @@ import { Store, Problem } from "./store.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
 import { createAgent } from "./agents.ts";
+import { TraceStore } from "./trace.ts";
 
 export async function createApp(options: {
   data: string;
@@ -46,6 +47,7 @@ export async function createApp(options: {
             throw new Problem(503, "Atrium HTTP 入口尚未就绪");
           return `http://127.0.0.1:${address.port}`;
         });
+  const traces = runtimes?.traces ?? new TraceStore(store);
   const raw = new WeakMap<FastifyRequest, Buffer>();
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser(
@@ -267,6 +269,23 @@ export async function createApp(options: {
     await runtimes.start(agentParams(request));
     return { connected: true };
   });
+  app.get("/api/agents/:id/trace", (request) => {
+    const agent = agentParams(request);
+    const { before } = z
+      .object({ before: z.coerce.number().int().positive().optional() })
+      .strict()
+      .parse(request.query);
+    return {
+      ...traces.page(agent, before),
+      error: runtimes?.traceErrors.get(agent) ?? null,
+    };
+  });
+  app.get("/api/agents/:id/trace/:action", (request) => {
+    const params = z
+      .object({ id, action: z.coerce.number().int().positive() })
+      .parse(request.params);
+    return traces.detail(params.id, params.action);
+  });
   app.get("/api/agents/:id/box", (request) => {
     const q = z
       .object({
@@ -356,7 +375,15 @@ export async function createApp(options: {
   });
   app.post("/mcp/:id", async (request, reply) => {
     const agentId = requireAgent(request),
-      server = createMcp(store, agentId, changed);
+      server = createMcp(store, agentId, changed, (id) => {
+        const info = runtimes?.connections.get(id)?.info;
+        return {
+          online:
+            !!info ||
+            !!runtimes?.directory().runtimes.some((r) => r.bound_agent === id),
+          busy: info?.busy ?? null,
+        };
+      });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });

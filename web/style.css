@@ -1634,3 +1634,225 @@ input[type="checkbox"] {
     transition: none !important;
   }
 }
+
+/* Agent avatar is a separate, keyboard-accessible inspection entry. */
+.avatar-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  padding: 0;
+}
+.avatar-button:hover .avatar {
+  box-shadow: 0 0 0 2px #c7bcaa;
+}
+.avatar-button:focus-visible {
+  outline: 2px solid #8a7756;
+  outline-offset: 3px;
+}
+.agent-chat-open {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.agent-row-open {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  text-align: left;
+}
+.agent-row-open > span:first-child {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.agent-row:has(.agent-row-open:hover) {
+  background: #eeece5;
+}
+.trace-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.trace-status {
+  margin: 19px 24px 12px;
+  padding: 13px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: #74684e;
+}
+.trace-status > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.trace-status span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.trace-status strong {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-status > svg {
+  flex-shrink: 0;
+}
+.trace-scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  flex: 1;
+  padding: 4px 24px 24px;
+}
+.trace-list {
+  list-style: none;
+  padding: 0 0 0 8px;
+  margin: 0;
+}
+.trace-item {
+  position: relative;
+  border-left: 1px solid var(--line);
+  padding: 0 0 20px 23px;
+}
+.trace-item:last-child {
+  border-color: transparent;
+  padding-bottom: 0;
+}
+.trace-node {
+  position: absolute;
+  left: -10px;
+  top: 0;
+  width: 19px;
+  height: 23px;
+  background: var(--paper, #faf9f6);
+  display: grid;
+  place-items: center;
+  color: #918875;
+}
+.trace-item.active .trace-node {
+  color: #8a6b37;
+}
+.trace-item.failed .trace-node {
+  color: #a35338;
+}
+.trace-item summary {
+  cursor: pointer;
+  list-style: none;
+  border-radius: 5px;
+}
+.trace-item summary::-webkit-details-marker {
+  display: none;
+}
+.trace-item summary:hover .trace-title {
+  color: #8a6b37;
+}
+.trace-item summary:focus-visible {
+  outline: 2px solid #8a7756;
+  outline-offset: 3px;
+}
+.trace-caption {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 23px;
+}
+.trace-caption > span {
+  color: #92724b;
+}
+.trace-title {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.trace-title > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  flex: 1;
+}
+.trace-title > svg {
+  flex-shrink: 0;
+  color: #aaa08f;
+  transition: transform 0.15s;
+}
+.trace-item details[open] .trace-title > svg {
+  transform: rotate(90deg);
+}
+.trace-detail {
+  border: 1px solid var(--line);
+  background: #f5f3ee;
+  border-radius: 7px;
+  padding: 11px 12px;
+  margin-top: 9px;
+  font-size: 11px;
+}
+.trace-detail h4 {
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 10px;
+  margin: 0 0 6px;
+}
+.trace-detail pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0 0 14px;
+  line-height: 1.65;
+  max-height: 260px;
+  overflow: auto;
+}
+.trace-detail pre:last-child {
+  margin-bottom: 0;
+}
+.trace-session {
+  color: var(--muted);
+  font-size: 10px;
+  padding: 12px 0 18px 23px;
+  list-style: none;
+}
+.trace-footnote {
+  flex-shrink: 0;
+  padding: 12px 24px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}
+.trace-latest {
+  position: absolute;
+  bottom: 51px;
+  right: 22px;
+  box-shadow: 0 3px 12px #44371a12;
+  font-size: 11px;
+}
+.trace-warning {
+  margin: 0 24px 12px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #8a7254;
+}
+.trace-scroll .empty {
+  min-height: 180px;
+  padding: 36px 8px;
+}
+.trace-scroll .empty h2 {
+  font-size: 15px;
+}
+.trace-scroll .empty p {
+  font-size: 12px;
+  line-height: 1.8;
+}

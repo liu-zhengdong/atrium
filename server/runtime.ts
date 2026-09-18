@@ -26,6 +26,8 @@ import {
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
 import { prepareProfile } from "./profile.ts";
+import { TraceStore } from "./trace.ts";
+import { runtimeEvents } from "../shared/trace.ts";
 
 const require = createRequire(import.meta.url);
 const alive = (pid: number) => {
@@ -55,7 +57,7 @@ const target = (r: RuntimeInfo) => ({
 });
 const guideId = (agent: string, session: string) => {
   const h = createHash("sha256")
-    .update(`${agent}:${session}:guide:v1`)
+    .update(`${agent}:${session}:guide:v2`)
     .digest("hex");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 };
@@ -67,6 +69,8 @@ export class Runtimes {
     { connection: ClientConnection; info: RuntimeInfo }
   >();
   readonly errors = new Map<string, string>();
+  readonly traceErrors = new Map<string, string>();
+  readonly traces: TraceStore;
   private gateway?: Gateway;
   private gateways = new Set<Gateway>();
   private opening?: Promise<Gateway>;
@@ -87,6 +91,7 @@ export class Runtimes {
     private changed: () => void,
     private baseUrl: () => string,
   ) {
+    this.traces = new TraceStore(store);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
     this.interval = setInterval(() => {
       void this.tick();
@@ -664,6 +669,7 @@ export class Runtimes {
         this.connections.delete(id);
         throw error;
       }
+      await this.capture(id, runtime.info);
       for (const pending of this.store.pending(id)) {
         if (pending.kind === "summary" && runtime.info.busy) continue;
         try {
@@ -693,6 +699,38 @@ export class Runtimes {
         this.changed();
       }
     }
+  }
+  private async capture(id: string, info: RuntimeInfo) {
+    const before = this.traceErrors.get(id);
+    try {
+      // Bounded catch-up per tick; long gaps are reported, never fabricated.
+      for (let page = 0; page < 2; page++) {
+        const events = runtimeEvents.parse(
+          await this.rpc("_pi/runtime/events", {
+            ...target(info),
+            after: this.traces.cursor(id, info.runtimeId, info.generation),
+            limit: 50,
+          }),
+        );
+        if (this.stopped || this.connections.get(id)?.info !== info) return;
+        if (
+          events.runtimeId !== info.runtimeId ||
+          events.generation !== info.generation ||
+          events.sessionId !== info.sessionId
+        )
+          throw new Error("轨迹来自其他运行代际");
+        if (this.traces.ingest(id, events)) this.changed();
+        if (!events.hasMore) break;
+      }
+      this.traceErrors.delete(id);
+    } catch {
+      if (!this.stopped)
+        this.traceErrors.set(
+          id,
+          "暂时无法读取实时轨迹；请确认此 Pi 已加载支持轨迹的 pi-acp 扩展。已有记录仍可查看。",
+        );
+    }
+    if (!this.stopped && before !== this.traceErrors.get(id)) this.changed();
   }
   private async tick() {
     if (this.stopped || this.ticking) return;

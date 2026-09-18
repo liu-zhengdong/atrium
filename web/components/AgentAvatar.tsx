@@ -14,11 +14,24 @@ export function Avatar({
   name,
   online,
   small = false,
+  onClick,
 }: {
   name: string;
   online?: boolean;
   small?: boolean;
+  onClick?: () => void;
 }) {
+  if (onClick)
+    return (
+      <button
+        className="avatar-button"
+        aria-label={`查看 ${name} 的运行轨迹`}
+        title={`查看 ${name} 的运行轨迹`}
+        onClick={onClick}
+      >
+        <Avatar name={name} small={small} online={online} />
+      </button>
+    );
   return (
     <span className={`avatar ${small ? "small" : ""}`}>
       {Array.from(name)[0]}

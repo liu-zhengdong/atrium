@@ -17,6 +17,7 @@ export function Sidebar({
   openAgent,
   openingAgent,
   connected,
+  details,
 }: {
   overview: Overview | null;
   section: Section;
@@ -27,6 +28,7 @@ export function Sidebar({
   openAgent: (agent: Agent) => void;
   openingAgent: string | null;
   connected: boolean;
+  details: (id: string) => void;
 }) {
   return (
     <aside className="sidebar">
@@ -116,19 +118,25 @@ export function Sidebar({
           </button>
         </div>
         {overview?.agents.map((a) => (
-          <button
-            className="agent-row"
-            key={a.id}
-            onClick={() => void openAgent(a)}
-            disabled={openingAgent !== null}
-          >
-            <Avatar name={a.name} online={a.available} small />
-            <span>
-              <strong>{a.name}</strong>
-              <small>{a.work || runtimeLabel(a)}</small>
-            </span>
-            {a.unread > 0 && <span className="badge">{a.unread}</span>}
-          </button>
+          <div className="agent-row" key={a.id}>
+            <Avatar
+              name={a.name}
+              online={a.available}
+              small
+              onClick={() => details(a.id)}
+            />
+            <button
+              className="agent-row-open"
+              onClick={() => void openAgent(a)}
+              disabled={openingAgent !== null}
+            >
+              <span>
+                <strong>{a.name}</strong>
+                <small>{a.work || runtimeLabel(a)}</small>
+              </span>
+              {a.unread > 0 && <span className="badge">{a.unread}</span>}
+            </button>
+          </div>
         ))}
         {overview && !overview.agents.length && (
           <p className="sidebar-hint">从名册选择一位 Agent</p>

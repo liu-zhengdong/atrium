@@ -76,6 +76,7 @@ export function App() {
         openAgent={(agent) => void openAgent(agent)}
         openingAgent={openingAgent}
         connected={connected}
+        details={setAgentId}
       />
       <main className="main">
         <button

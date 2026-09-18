@@ -1,12 +1,5 @@
 import { useState } from "react";
-import {
-  Inbox,
-  LoaderCircle,
-  MessageSquare,
-  Plus,
-  Search,
-  Users,
-} from "lucide-react";
+import { LoaderCircle, MessageSquare, Plus, Search, Users } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import { agentName } from "../../shared/agent-name.ts";
 import {
@@ -70,41 +63,40 @@ export function AgentDirectory({
       <div className="agent-grid">
         {agents.map((a) => (
           <article className="agent-card" key={a.id}>
-            <button
-              className="agent-open"
-              aria-label={`与 ${a.name} 聊天`}
-              disabled={opening !== null}
-              onClick={() => openAgent(a)}
-            >
-              <Avatar name={a.name} online={a.available} />
-              <span className="agent-card-copy">
-                <strong>{a.name}</strong>
-                <span className="agent-state">
-                  {a.ref} · {runtimeLabel(a)}
-                  {a.unread > 0 && <> · {a.unread} 条未读</>}
+            <div className="agent-open">
+              <Avatar
+                name={a.name}
+                online={a.available}
+                onClick={() => details(a.id)}
+              />
+              <button
+                className="agent-chat-open"
+                aria-label={`与 ${a.name} 聊天`}
+                disabled={opening !== null}
+                onClick={() => openAgent(a)}
+              >
+                <span className="agent-card-copy">
+                  <strong>{a.name}</strong>
+                  <span className="agent-state">
+                    {a.ref} · {runtimeLabel(a)}
+                    {a.unread > 0 && <> · {a.unread} 条未读</>}
+                  </span>
+                  <span
+                    className="agent-work"
+                    title={a.work || a.description || a.cwd}
+                  >
+                    {a.work || a.description || a.cwd}
+                  </span>
                 </span>
-                <span
-                  className="agent-work"
-                  title={a.work || a.description || a.cwd}
-                >
-                  {a.work || a.description || a.cwd}
+                <span className="agent-card-action">
+                  {opening === a.id ? (
+                    <LoaderCircle className="spin" size={16} />
+                  ) : (
+                    <MessageSquare size={16} />
+                  )}
                 </span>
-              </span>
-              <span className="agent-card-action">
-                {opening === a.id ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <MessageSquare size={16} />
-                )}
-              </span>
-            </button>
-            <button
-              className="icon-button agent-details"
-              aria-label={`查看 ${a.name} 的详情`}
-              onClick={() => details(a.id)}
-            >
-              <Inbox size={16} />
-            </button>
+              </button>
+            </div>
           </article>
         ))}
       </div>

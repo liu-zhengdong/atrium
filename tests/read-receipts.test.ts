@@ -144,7 +144,10 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
   store.accepted(pendingDirect[0].id);
   assert(hasRead(dmState(), dmMsg.id), "ACP accepted 确认注入后立即成为已读");
   assert.equal(dmState().through, dmMsg.id);
-  assert.equal(store.unread(a.id).find((c) => c.chat_id === dm.id), undefined);
+  assert.equal(
+    store.unread(a.id).find((c) => c.chat_id === dm.id),
+    undefined,
+  );
 
   // 此时 schedule 不应产生多余的未读提醒
   store.configure(a.id, { message_threshold: 1 });
@@ -186,19 +189,23 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
   store.readChat(a.id, chat.id, undefined, 2);
   assert.equal(state().through, m3.id, "补齐缺口后 through 推进到最新已读");
   assert.equal(state().ranges.length, 0, "例外跳读范围已清理");
-  assert.equal(store.unread(a.id).find((c) => c.chat_id === chat.id), undefined);
+  assert.equal(
+    store.unread(a.id).find((c) => c.chat_id === chat.id),
+    undefined,
+  );
 
   // 3. 反向破坏验证
   // 破坏 A：summary 类型的 delivery 被 accepted 时，绝不能误标任何聊天
   const otherMsg = send("另一条普通消息");
   store.schedule(Date.now() + 602000);
-  const summaryDelivery = store
-    .pending(a.id)
-    .find((d) => d.kind === "summary");
+  const summaryDelivery = store.pending(a.id).find((d) => d.kind === "summary");
   assert(summaryDelivery, "产生了 summary delivery");
   assert(!hasRead(state(), otherMsg.id));
   store.accepted(summaryDelivery.id);
-  assert(!hasRead(state(), otherMsg.id), "summary delivery accepted 不会把消息标为已读");
+  assert(
+    !hasRead(state(), otherMsg.id),
+    "summary delivery accepted 不会把消息标为已读",
+  );
 
   // 破坏 B：deliveryError 保持未读
   const mErr = store.send("user", {

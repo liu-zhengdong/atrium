@@ -15,9 +15,11 @@ export function MessageTimeline({
   loadOlder,
   scroll,
   onScroll,
+  details,
 }: {
   active: Overview["chats"][number];
   agents: Agent[];
+  details: (id: string) => void;
 } & Pick<
   ReturnType<typeof useConversation>,
   | "messages"
@@ -76,7 +78,15 @@ export function MessageTimeline({
                   className="message-avatar"
                   aria-hidden={continuation || undefined}
                 >
-                  <Avatar name={name} />
+                  <Avatar
+                    name={name}
+                    onClick={
+                      !continuation &&
+                      agents.some((a) => a.id === message.sender)
+                        ? () => details(message.sender)
+                        : undefined
+                    }
+                  />
                 </span>
                 <div className="message-content">
                   {!continuation && (
@@ -107,6 +117,7 @@ export function MessageTimeline({
                     state={readState}
                     agents={agents}
                     direct={active.kind === "direct"}
+                    details={details}
                   />
                 </div>
               </article>

@@ -73,7 +73,7 @@ export function ChatView({
                 .map((a) => (
                   <button
                     key={a.id}
-                    aria-label={`查看 ${a.name} 的收件箱`}
+                    aria-label={`查看 ${a.name} 的运行轨迹`}
                     title={`${a.name} · ${a.work || runtimeLabel(a)}`}
                     onClick={() => details(a.id)}
                   >
@@ -100,7 +100,12 @@ export function ChatView({
             </p>
           )}
 
-          <MessageTimeline active={active} agents={agents} {...conversation} />
+          <MessageTimeline
+            active={active}
+            agents={agents}
+            details={details}
+            {...conversation}
+          />
         </>
       )}
       {active?.read_only ? (

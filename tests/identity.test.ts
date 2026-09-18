@@ -99,7 +99,10 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
     readFileSync(join(legacyDir, "session.jsonl"), "utf8"),
     '{"type":"session"}\n',
   );
-  assert.equal(readFileSync(join(legacyDir, "runtime.log"), "utf8"), "legacy log\n");
+  assert.equal(
+    readFileSync(join(legacyDir, "runtime.log"), "utf8"),
+    "legacy log\n",
+  );
   assert(existsSync(join(legacyDir, "identity.json")));
   assert(existsSync(join(legacyDir, "settings.json")));
   assert(existsSync(join(legacyDir, "sessions")));

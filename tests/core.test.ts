@@ -416,7 +416,7 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   await client.connect(transport);
   t.after(() => client.close());
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 10);
+  assert.equal(tools.tools.length, 14);
   const claim = await client.callTool({
     name: "claim_status",
     arguments: { work: "正在检查通知" },

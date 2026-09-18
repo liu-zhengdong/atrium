@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Check, CheckCheck, Search, X } from "lucide-react";
 import type { ChatReadState, Message } from "../../shared/schema.ts";
@@ -9,12 +9,16 @@ export function ReadReceipt({
   state,
   agents,
   direct,
+  details,
 }: {
   message: Message;
   state: ChatReadState[];
   agents: Agent[];
   direct: boolean;
+  details: (id: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   const [filter, setFilter] = useState<"read" | "unread">("read");
   const [search, setSearch] = useState("");
   const readers = state
@@ -45,7 +49,9 @@ export function ReadReceipt({
   const label = `${seen.length} 人已读，${unseen} 人未读`;
   return (
     <Popover.Root
+      open={open}
       onOpenChange={(open) => {
+        setOpen(open);
         if (open) {
           setFilter(seen.length ? "read" : "unread");
           setSearch("");
@@ -53,6 +59,7 @@ export function ReadReceipt({
       }}
     >
       <Popover.Trigger
+        ref={trigger}
         className={`read-receipt ${seen.length ? "has-read" : ""}`}
         aria-label={`查看阅读详情：${label}`}
       >
@@ -128,7 +135,19 @@ export function ReadReceipt({
           >
             {visible.map((reader) => (
               <li key={reader.id}>
-                <Avatar name={reader.name} small />
+                <Avatar
+                  name={reader.name}
+                  small
+                  onClick={
+                    agents.some((a) => a.id === reader.id)
+                      ? () => {
+                          setOpen(false);
+                          trigger.current?.focus({ preventScroll: true });
+                          details(reader.id);
+                        }
+                      : undefined
+                  }
+                />
                 <span>{reader.name}</span>
                 {reader.read && <CheckCheck size={15} aria-label="已读" />}
               </li>

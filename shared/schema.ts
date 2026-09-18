@@ -85,6 +85,12 @@ export type Chat = {
   kind: "group" | "direct";
   direct_agent: string | null;
   read_only?: boolean;
+  /** 用户参与的会话（私聊或发过言的群）；否则为围观。 */
+  mine?: boolean;
+  /** 用户未读消息数；围观会话用于显示淡点。 */
+  unread?: number;
+  /** 前几位成员名字，用于合成会话头像。 */
+  member_names?: string[];
   preview: string | null;
   updated_at: number;
 };

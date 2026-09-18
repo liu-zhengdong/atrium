@@ -117,6 +117,9 @@ export function useConversation(chatId: string | null, revision: number) {
         nearBottom.current =
           el.scrollHeight - el.scrollTop - el.clientHeight < 90;
     },
+    atBottom() {
+      return nearBottom.current;
+    },
     followLatest() {
       nearBottom.current = true;
     },

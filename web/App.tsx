@@ -19,7 +19,7 @@ export function App() {
     connected,
     refresh,
   } = useOverview();
-  const [section, setSection] = useState<Section>("agents");
+  const [section, setSection] = useState<Section>("chat");
   const [chatId, setChatId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [modal, setModal] = useState<"agent" | "chat" | null>(null);

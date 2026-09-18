@@ -89,6 +89,7 @@ export class Store {
         chat_id TEXT UNIQUE NOT NULL REFERENCES chats(id), PRIMARY KEY(first_agent,second_agent));
       CREATE TABLE IF NOT EXISTS members (chat_id TEXT REFERENCES chats(id), agent_id TEXT REFERENCES agents(id), last_read INTEGER NOT NULL DEFAULT 0,
         last_notified INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(chat_id,agent_id));
+      CREATE TABLE IF NOT EXISTS user_reads (chat_id TEXT PRIMARY KEY, last_read INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL REFERENCES chats(id), sender TEXT NOT NULL,
         body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, UNIQUE(sender,client_id));
       CREATE INDEX IF NOT EXISTS messages_chat_id ON messages(chat_id,id);
@@ -340,10 +341,44 @@ export class Store {
   chats(agentId?: string): Chat[] {
     return this.all<Chat>(
       `SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only, (SELECT substr(body,1,100) FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
-      COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at FROM chats c JOIN chat_refs r ON r.chat_id=c.id
+      COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at,
+      (c.direct_agent IS NOT NULL OR EXISTS(SELECT 1 FROM messages WHERE chat_id=c.id AND sender='user')) AS mine,
+      (SELECT COUNT(*) FROM messages WHERE chat_id=c.id AND sender!='user' AND id>COALESCE((SELECT last_read FROM user_reads WHERE chat_id=c.id),0)) AS unread,
+      COALESCE((SELECT group_concat(name,char(31)) FROM (SELECT a.name AS name FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id ORDER BY m.rowid LIMIT 4)),'') AS member_names
+      FROM chats c JOIN chat_refs r ON r.chat_id=c.id
       ${agentId ? "WHERE EXISTS(SELECT 1 FROM members WHERE chat_id=c.id AND agent_id=?)" : ""} ORDER BY updated_at DESC,c.rowid DESC`,
       ...(agentId ? [agentId] : []),
-    ).map((chat) => ({ ...chat, read_only: !!chat.read_only }));
+    ).map((chat) => ({
+      ...chat,
+      read_only: !!chat.read_only,
+      mine: !!chat.mine,
+      member_names:
+        typeof chat.member_names === "string" && chat.member_names
+          ? (chat.member_names as unknown as string).split("\x1f")
+          : [],
+    }));
+  }
+  /** 用户在会话中的已读位置；只前进，through 超出最新消息时收敛到最新消息。 */
+  markUserRead(chatId: string, through: number) {
+    this.chat(chatId);
+    const latest =
+      this.one<{ m: number | null }>(
+        "SELECT MAX(id) AS m FROM messages WHERE chat_id=?",
+        chatId,
+      )?.m ?? 0;
+    const target = Math.min(through, latest);
+    const previous =
+      this.one<{ last_read: number }>(
+        "SELECT last_read FROM user_reads WHERE chat_id=?",
+        chatId,
+      )?.last_read ?? 0;
+    if (target <= previous) return { last_read: previous, changed: false };
+    this.run(
+      "INSERT INTO user_reads(chat_id,last_read) VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET last_read=excluded.last_read",
+      chatId,
+      target,
+    );
+    return { last_read: target, changed: true };
   }
   chat(id: string): Chat {
     const chat = this.one<Chat>(
@@ -707,6 +742,19 @@ export class Store {
       chatId,
       from,
     );
+    const userLastRead =
+      this.one<{ last_read: number }>(
+        "SELECT last_read FROM user_reads WHERE chat_id=?",
+        chatId,
+      )?.last_read ?? 0;
+    if (userLastRead > 0)
+      members.push({
+        agent_id: "user",
+        through: userLastRead,
+        name: "你",
+        deleted_at: null,
+        deleted_after: null,
+      });
     return members.map((member) => ({
       ...member,
       ranges: ranges

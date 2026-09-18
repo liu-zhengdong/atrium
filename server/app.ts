@@ -359,6 +359,18 @@ export async function createApp(options: {
       .parse(request.query);
     return store.timeline(agentParams(request), q.before, q.read_from);
   });
+  app.post("/api/chats/:id/read", (request) => {
+    const input = z
+      .object({ through: z.number().int().nonnegative() })
+      .strict()
+      .parse(request.body);
+    const result = store.markUserRead(
+      store.resolveChatId((request.params as { id: string }).id),
+      input.through,
+    );
+    if (result.changed) changed();
+    return { last_read: result.last_read };
+  });
   app.post("/api/messages", (request) => {
     const result = store.send("user", sendInput.parse(request.body));
     changed();

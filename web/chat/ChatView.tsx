@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Hash, Plus } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
+import { api } from "../api.ts";
 import {
   Avatar,
   runtimeLabel,
@@ -31,6 +32,23 @@ export function ChatView({
   const { members } = conversation;
   const [addingMember, setAddingMember] = useState(false);
   const directAgent = agents.find((a) => a.id === active?.direct_agent);
+  const observed =
+    active && !active.mine && !active.read_only ? active : null;
+  const latest = conversation.messages.at(-1)?.id ?? 0;
+  const markedRead = useRef(0);
+  useEffect(() => {
+    markedRead.current = 0;
+  }, [chatId]);
+  useEffect(() => {
+    if (!chatId || hidden || !latest || latest <= markedRead.current) return;
+    if (!conversation.atBottom()) return;
+    markedRead.current = latest;
+    void api(`/chats/${chatId}/read`, "POST", { through: latest }).catch(
+      () => {
+        markedRead.current = 0;
+      },
+    );
+  }, [chatId, latest, hidden]);
   return (
     <section
       className="chat-panel"
@@ -113,14 +131,23 @@ export function ChatView({
           这个 Agent 已删除，聊天记录仍可查看，不能继续发送消息。
         </p>
       ) : (
-        <MessageComposer
-          active={active}
-          agents={agents.filter((a) => members.includes(a.id))}
-          onSent={() => {
-            conversation.followLatest();
-            refresh();
-          }}
-        />
+        <>
+          {observed && (
+            <p className="observer-hint" role="note">
+              {observed.kind === "direct"
+                ? `这是 ${observed.name} 的私聊，你的发言对双方可见`
+                : "你不是这个群的成员，发言会对群内成员可见"}
+            </p>
+          )}
+          <MessageComposer
+            active={active}
+            agents={agents.filter((a) => members.includes(a.id))}
+            onSent={() => {
+              conversation.followLatest();
+              refresh();
+            }}
+          />
+        </>
       )}
       {addingMember && active && (
         <AddMemberDialog

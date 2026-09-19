@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   existsSync,
+  lstatSync,
   realpathSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -31,9 +32,11 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
     async () => ({ runtimes: [] }),
   );
   t.mock.method(Runtimes.prototype, "pump", async () => {});
+  const piHome = join(root, ".pi");
   const { app, store, runtimes } = await createApp({
     data: join(root, "data"),
     desktops: join(root, "desktops"),
+    piHome,
   });
   t.after(async () => {
     await app.close();
@@ -54,11 +57,24 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   );
   assert(existsSync(agent.cwd));
   assert.equal(store.resolveAgentId("a1"), agent.id);
+  assert.equal(store.resolveAgentId("Atlas"), agent.id);
+  assert.equal(
+    realpathSync(join(piHome, "agents", "Atlas")),
+    realpathSync(agent.agent_directory),
+  );
+  assert.equal(
+    agent.agent_directory,
+    join(piHome, "atrium", "agents", agent.id),
+  );
   assert(existsSync(join(agent.agent_directory, "sessions")));
   assert(!existsSync(join(agent.agent_directory, "auth.json")));
   assert.equal(
-    realpathSync(join(agent.agent_directory, "SYSTEM.md")),
-    join(template, "SYSTEM.md"),
+    readFileSync(join(agent.agent_directory, "SYSTEM.md"), "utf8"),
+    "shared rules",
+  );
+  assert.equal(
+    lstatSync(join(agent.agent_directory, "SYSTEM.md")).isSymbolicLink(),
+    false,
   );
   const settings = JSON.parse(
     readFileSync(join(agent.agent_directory, "settings.json"), "utf8"),
@@ -73,7 +89,13 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   });
   assert.equal(renamed.statusCode, 200);
   assert.equal(renamed.json().ref, "a1");
+  assert.equal(renamed.json().cwd, agent.cwd);
   assert.equal(store.chat(chat.id).name, "Atlas 改名");
+  assert.equal(
+    realpathSync(join(piHome, "agents", "Atlas 改名")),
+    realpathSync(agent.agent_directory),
+  );
+  assert(!existsSync(join(piHome, "agents", "Atlas")));
   store.run("UPDATE chats SET name=? WHERE id=?", "自定义标题", chat.id);
   await app.inject({
     method: "PATCH",
@@ -93,35 +115,30 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   await assert.rejects(runtimes!.promote(legacy.id, template), /正常退出旧 Pi/);
   assert.equal(store.agent(legacy.id).agent_directory, null);
   store.run("UPDATE agents SET runtime_pid=NULL WHERE id=?", legacy.id);
-  // 旧设计的托管会话与身份配置同路径：升级保留会话与日志，身份文件并列写入
-  const legacyDir = join(root, "data", "agents", legacy.id);
-  mkdirSync(legacyDir, { recursive: true });
-  writeFileSync(join(legacyDir, "session.jsonl"), '{"type":"session"}\n');
-  writeFileSync(join(legacyDir, "runtime.log"), "legacy log\n");
   const migrated = await runtimes!.promote(legacy.id, template);
   assert.equal(migrated.id, legacy.id);
   assert.equal(migrated.ref, legacy.ref);
   assert.equal(store.timeline(oldChat.id).items[0]!.body, "历史保留");
-  assert.equal(
-    readFileSync(join(legacyDir, "session.jsonl"), "utf8"),
-    '{"type":"session"}\n',
-  );
-  assert.equal(
-    readFileSync(join(legacyDir, "runtime.log"), "utf8"),
-    "legacy log\n",
-  );
+  const legacyDir = join(piHome, "atrium", "agents", legacy.id);
+  assert.equal(migrated.agent_directory, legacyDir);
   assert(existsSync(join(legacyDir, "identity.json")));
   assert(existsSync(join(legacyDir, "settings.json")));
   assert(existsSync(join(legacyDir, "sessions")));
+  assert.equal(
+    realpathSync(join(piHome, "agents", "旧记录")),
+    realpathSync(legacyDir),
+  );
   await assert.rejects(
     runtimes!.promote(legacy.id, template),
     /已经是长期身份/,
   );
   // 已含 identity.json 的目录是真正的身份配置，仍拒绝覆盖
   const occupied = store.createAgent("已占用", root).agent;
-  mkdirSync(join(root, "data", "agents", occupied.id), { recursive: true });
+  mkdirSync(join(piHome, "atrium", "agents", occupied.id), {
+    recursive: true,
+  });
   writeFileSync(
-    join(root, "data", "agents", occupied.id, "identity.json"),
+    join(piHome, "atrium", "agents", occupied.id, "identity.json"),
     "{}",
   );
   await assert.rejects(
@@ -131,11 +148,13 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   assert.equal(store.agent(occupied.id).agent_directory, null);
   mkdirSync(join(root, "desktops"), { recursive: true });
   writeFileSync(join(root, "desktops", "坏目录"), "occupied");
+  mkdirSync(join(root, "desktops", "残留桌面"));
   for (const payload of [
     { name: "../逃逸", template },
     { name: "Atlas 改名", template },
     { name: "..", template },
     { name: "坏目录", template },
+    { name: "残留桌面", template },
   ]) {
     const result = await app.inject({
       method: "POST",
@@ -158,14 +177,8 @@ test("身份短号原地迁移、持久不复用；坏引用拒绝", (t) => {
   assert.equal(store.agent(a.id).ref, "a1");
   store.run("DELETE FROM agents WHERE id=?", a.id);
   assert.equal(store.createAgent("第二位", root).agent.ref, "a2");
-  for (const ref of [
-    "a0",
-    "a01",
-    "A2",
-    "a2 OR 1=1",
-    "a2\n",
-    "a9999999999999999",
-  ])
+  assert.equal(store.resolveAgentId("a2\n"), store.resolveAgentId("a2"));
+  for (const ref of ["a0", "a01", "A2", "a2 OR 1=1", "a9999999999999999"])
     assert.throws(() => store.resolveAgentId(ref));
   store.close();
   store = new Store(path);

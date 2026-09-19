@@ -17,6 +17,11 @@ export const displayName = z
     /^[\p{L}\p{N}_. -]+$/u,
     "名称只使用文字、数字、空格、点、下划线和连字符",
   );
+export const forkSource = z.union([
+  z.literal("builtin"),
+  agentReference,
+  displayName,
+]);
 export const preferences = z
   .object({
     auto_start: z.boolean().default(false),

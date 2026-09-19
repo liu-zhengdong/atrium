@@ -5,6 +5,7 @@ import {
   existsSync,
   renameSync,
   realpathSync,
+  rmSync,
 } from "node:fs";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -26,6 +27,7 @@ import {
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
 import { prepareProfile } from "./profile.ts";
+import { linkProfile, resolvePiHome, unlinkProfile } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 
@@ -90,6 +92,7 @@ export class Runtimes {
     private data: string,
     private changed: () => void,
     private baseUrl: () => string,
+    private piHome?: string,
   ) {
     this.traces = new TraceStore(store);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
@@ -261,6 +264,8 @@ export class Runtimes {
             }
           }
           this.store.deleteAgent(id);
+          if (agent.agent_directory)
+            unlinkProfile(resolvePiHome(this.piHome), agent.name);
         } finally {
           lease?.release();
         }
@@ -543,7 +548,14 @@ export class Runtimes {
           409,
           "请先正常退出旧 Pi；不会迁移或终止正在运行的实例",
         );
-      const directory = prepareProfile(this.data, id, template);
+      const home = resolvePiHome(this.piHome);
+      const directory = prepareProfile(id, template, home);
+      try {
+        linkProfile(home, agent.name, directory);
+      } catch (error) {
+        rmSync(directory, { recursive: true, force: true });
+        throw error;
+      }
       this.store.run(
         "UPDATE agents SET agent_directory=? WHERE id=?",
         directory,

@@ -33,6 +33,15 @@ textarea.field {
   color: #6c6456;
   margin: 0 0 18px;
 }
+.form-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: #33342f;
+}
+dialog:has(.source-picker-open) {
+  overflow: visible;
+}
 .member-picker {
   border: 1px solid #e8e2d6;
   border-radius: 7px;

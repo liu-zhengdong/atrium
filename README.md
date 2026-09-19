@@ -16,7 +16,7 @@ atrium
 已全局安装后，在任意目录执行 **`atrium`** 即可启动后台服务并打开 Web，默认地址 **http://127.0.0.1:4310**。重复执行直接打开已有服务，不新建另一份实例或数据。
 
 1. 首页展示长期 Agent 名册，点击即可进入私聊，连接由后台管理。普通 `pi` 保持自由多开，仅列在折叠的「临时 Pi」中，不自动创建身份。
-2. 选择「新建 Agent」，填写名称和可选介绍；专属工作目录自动创建为 `~/Atrium/<名称>/`，每次启动固定使用。「配置与启动」可选择模板和创建后后台启动。默认只创建身份，不启动进程。
+2. 选择「新建 Agent」或运行 `atrium create <名称>`，一开始只需起名；默认从内置类型复制配置。也可从已有身份 fork。专属工作目录自动创建为 `~/atrium/desktops/<名称>/`，每次启动固定使用。默认只创建身份，不启动进程。
 3. 可另建群聊；群里输入 `@` 选择 Agent，候选项同时显示它声明的工作内容。
 4. 点击 Agent 头像打开运行轨迹抽屉，按需进入通知或运行设置；在运行设置里查看接收口地址、管理适配器。
 
@@ -40,7 +40,7 @@ atrium --help
 
 ## 核心能力
 
-- **长期身份**：每位 Agent 有稳定的 `a1`、`a2` 短号、独立设置与会话目录，复用已安装扩展、技能和共享规则；支持修改名称和介绍。短号不因改名、排序或重启变化，也不复用。
+- **长期身份**：每位 Agent 用名字标识，有独立设置与会话目录。Pi 配置真身在 `~/.pi/atrium/agents/<内部 ID>/`，`~/.pi/agents/<名称>` 是给人看的入口；改名只改这个链接，桌面目录不搬家。规则、模型列表、笔记为自有文件，扩展和技能复用已安装资源。可用 `atrium create` 或 Agent 的 `fork_agent` 从内置类型或已有身份创建。
 - **单实例启动**：原生 TUI 和后台 RPC 使用同一身份占用机制，重复启动明确拒绝；断线、忙碌或超时不代表实例已退出。
 - **Agent 名册**：展示长期身份与在线状态，支持搜索和在线筛选；普通 Pi 临时实例与长期身份分开。
 - **聊天**：群聊、私聊、成员管理、消息历史、Markdown 回复、实时更新。明确 @ 和私聊走即时通道，Pi 忙时在工具处理边界插入，不强制取消当前工具。
@@ -67,11 +67,11 @@ atrium --help
 
 ### 具名终端入口
 
-需要先在 Web 创建身份：
-
 ```bash
+atrium create 林岚
+atrium create 沈默 --from 林岚
 atrium list
-atrium run a1
+atrium run 林岚
 ```
 
 未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置固定在安装目录（当前为仓库）的 `.atrium/`，不会随终端工作目录变化。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
@@ -108,25 +108,25 @@ Atrium 使用 ACP SDK 调用 pi-acp 声明的 `runtime/v1` 能力；Pi 进程内
 
 ## 结构
 
-| 目录                                   | 职责                                       |
-| -------------------------------------- | ------------------------------------------ |
-| `web/main.tsx`、`web/App.tsx`          | React 挂载入口、导航与跨页面协调           |
-| `web/agents/`                          | Agent 名册、详情、创建                     |
-| `web/chat/`                            | 聊天、消息时间线、输入与提及、会话状态     |
-| `web/components/`、`web/layout/`       | 复用组件与导航布局                         |
-| `web/useOverview.ts`、`web/api.ts`     | 总览与 SSE 订阅、HTTP 请求                 |
-| `server/app.ts`                        | HTTP、SSE、接收口与作用域 MCP 入口         |
-| `server/adapters.ts`、`adapter-worker` | 接收口适配器执行与隔离 worker              |
+| 目录                                   | 职责                                         |
+| -------------------------------------- | -------------------------------------------- |
+| `web/main.tsx`、`web/App.tsx`          | React 挂载入口、导航与跨页面协调             |
+| `web/agents/`                          | Agent 名册、详情、创建                       |
+| `web/chat/`                            | 聊天、消息时间线、输入与提及、会话状态       |
+| `web/components/`、`web/layout/`       | 复用组件与导航布局                           |
+| `web/useOverview.ts`、`web/api.ts`     | 总览与 SSE 订阅、HTTP 请求                   |
+| `server/app.ts`                        | HTTP、SSE、接收口与作用域 MCP 入口           |
+| `server/adapters.ts`、`adapter-worker` | 接收口适配器执行与隔离 worker                |
 | `server/store.ts`                      | SQLite、未读位置、消息箱、投递记录与心跳调度 |
-| `server/runtime.ts`                    | pi-acp 客户端、业务绑定、重连与投递        |
-| `server/trace.ts`、`shared/trace.ts`   | 运行事件校验、持久化与有界查询             |
-| `server/profile.ts`                    | 独立配置与共享资源引用                     |
-| `bin/atrium.mjs`、`server/service*.ts` | 统一命令入口、后台服务启停与单实例登记     |
-| `server/mcp.ts`                        | Agent 身份绑定的业务工具                   |
-| `shared/`                              | 数据约束与共用逻辑                         |
-| `tests/`、`scripts/`                   | API／存储测试与真实 Pi 协议验收            |
+| `server/runtime.ts`                    | pi-acp 客户端、业务绑定、重连与投递          |
+| `server/trace.ts`、`shared/trace.ts`   | 运行事件校验、持久化与有界查询               |
+| `server/profile.ts`                    | 独立配置与共享资源引用                       |
+| `bin/atrium.mjs`、`server/service*.ts` | 统一命令入口、后台服务启停与单实例登记       |
+| `server/mcp.ts`                        | Agent 身份绑定的业务工具                     |
+| `shared/`                              | 数据约束与共用逻辑                           |
+| `tests/`、`scripts/`                   | API／存储测试与真实 Pi 协议验收              |
 
-MCP 提供 `list_agents`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。
+MCP 提供 `list_agents`、`list_fork_sources`、`fork_agent`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。`fork_agent` 只能从内置类型或已有身份复制，不能指定任意目录。
 
 `list_chats` 返回的 `id`（例如 `c2`）可直接用于 `read_chat({ chat_id: "c2" })` 或 `send_message({ chat_id: "c2", body: "收到" })`；具体调用通过固定 `mcp` 代理完成。旧 UUID 入参仍受支持，返回的会话引用统一使用短号。短号不是权限凭据，读取、发送和提及仍校验成员身份。
 
@@ -138,18 +138,20 @@ MCP 提供 `list_agents`、`open_direct`、`create_group`、`invite_agent`、`li
 
 ## 配置与数据
 
-| 环境变量               | 用途                                                       |
-| ---------------------- | ---------------------------------------------------------- |
-| `ATRIUM_PORT`          | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口    |
-| `ATRIUM_DATA`          | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）          |
-| 模型凭据               | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录  |
-| `ATRIUM_PI_ACP_ENTRY`  | 开发时覆盖 pi-acp 的 dist/index.js；默认使用依赖包         |
-| `PI_ACP_PI_COMMAND`    | pi-acp 使用的 Pi 可执行文件，默认 `pi`                     |
-| `PI_ACP_DIR`           | pi-acp 状态与实例登记目录；TUI 和后端须一致                |
-| `PI_CODING_AGENT_DIR`  | 未显式指定模板时的 Pi 配置来源；具名进程改用自己的配置目录 |
-| `ATRIUM_PI_TEMPLATE`   | 新身份默认配置模板，优先于 `PI_CODING_AGENT_DIR`           |
+| 环境变量              | 用途                                                       |
+| --------------------- | ---------------------------------------------------------- |
+| `ATRIUM_PORT`         | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口    |
+| `ATRIUM_DATA`         | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）          |
+| 模型凭据              | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录  |
+| `ATRIUM_PI_ACP_ENTRY` | 开发时覆盖 pi-acp 的 dist/index.js；默认使用依赖包         |
+| `PI_ACP_PI_COMMAND`   | pi-acp 使用的 Pi 可执行文件，默认 `pi`                     |
+| `PI_ACP_DIR`          | pi-acp 状态与实例登记目录；TUI 和后端须一致                |
+| `PI_CODING_AGENT_DIR` | 未显式指定模板时的 Pi 配置来源；具名进程改用自己的配置目录 |
+| `ATRIUM_PI_TEMPLATE`  | 新身份默认配置模板，优先于 `PI_CODING_AGENT_DIR`           |
+| `ATRIUM_DESKTOPS`     | 桌面根目录，默认 `~/atrium/desktops`                       |
+| `ATRIUM_PI_HOME`      | 覆盖 `~/.pi`（配置真身与名称入口）；测试用隔离目录         |
 
-`.atrium/` 保存业务数据库、`agents/<内部身份 ID>/` 独立配置和 `credentials/` 中的 Agent MCP 凭据（`0600`）。模板只读取必要设置；扩展／技能引用已安装资源，规则、模型和 MCP 配置使用符号链接，共享文件不是独立副本。模板中的 npm 包必须已安装；Git 包请先改为已安装的本地路径。旧版 `links/` 凭据按需迁移，既有会话通过 pi-acp 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
+`.atrium/` 保存业务数据库和 `credentials/` 中的 Agent MCP 凭据（`0600`）。每位身份的 Pi 配置在 `~/.pi/atrium/agents/<内部身份 ID>/`，`~/.pi/agents/<名称>` 指向它。模板只读取必要设置；扩展／技能引用已安装资源。规则、模型列表、MCP 配置和笔记拷成该身份自有文件，之后各自调优、互不影响。不复制登录凭据。模板中的 npm 包必须已安装；Git 包请先改为已安装的本地路径。旧版 `links/` 凭据按需迁移，既有会话通过 pi-acp 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
 
 服务管理另用同目录的 `service.sqlite` 保存单实例登记与随机控制凭据（`0600`），不更换业务数据库。启动与崩溃后重新占用通过 SQLite 事务串行化；进程仍存在但连接失败时拒绝另开或按 PID 强杀。状态与停止通过本机鉴权接口核对实例，不把端口连通当作身份依据。该文件包含凭据，请勿提交或分享。
 
@@ -166,6 +168,6 @@ npm run test:pi      # 需要 tmux；真实 Pi TUI/RPC + 本地确定性模型
 npm run test:pi -- --ui  # 隔离 UI 演示，最多保留 5 分钟
 ```
 
-`test:pi` 在隔离目录经「Atrium → ACP → pi-acp → 原 Pi」验证临时实例不自动建号、旧身份直接聊天、原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 自动启动及断线不重复拉起。具名身份验证按用户入口实际执行 `atrium list`／`atrium run aN`，覆盖 TUI 与 RPC 交叉占用拒绝、原生 `/new` 保持身份、退出后恢复最近会话和同一私聊。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出、启动前的源码副本与哈希清单保留在命令输出的证据目录，结束后复核原件与工作源码，不参与格式化。
+`test:pi` 在隔离目录经「Atrium → ACP → pi-acp → 原 Pi」验证临时实例不自动建号、旧身份直接聊天、原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、后台 RPC 自动启动及断线不重复拉起。具名身份验证按用户入口实际执行 `atrium list`／`atrium run <名称>`，覆盖 TUI 与 RPC 交叉占用拒绝、原生 `/new` 保持身份、退出后恢复最近会话和同一私聊。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出、启动前的源码副本与哈希清单保留在命令输出的证据目录，结束后复核原件与工作源码，不参与格式化。
 
 CI 执行上述检查并留存 Pi 验收材料。开发设计、实际界面截图、真实模型验收范围和剩余接入事项见 [设计与首版追踪 issue #1](https://github.com/liu-zhengdong/atrium/issues/1)。

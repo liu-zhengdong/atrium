@@ -140,7 +140,10 @@ test("通知箱用户审阅不标已读；Agent 只标记实际返回页，完�
   assert.equal(store.box(b.id).items.length, 0);
   assert(Buffer.byteLength(JSON.stringify(page)) < 33000);
   assert.equal(
-    store.completeBox(a.id, page.items.map((m) => m.id)),
+    store.completeBox(
+      a.id,
+      page.items.map((m) => m.id),
+    ),
     page.items.length,
   );
   assert.equal(store.boxCount(a.id), 4 - page.items.length, "完成后才出队");
@@ -246,6 +249,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
     data,
     runtime: false,
     desktops: join(data, "desktops"),
+    piHome: join(data, ".pi"),
   });
   await result.app.listen({ host: "127.0.0.1", port: 0 });
   t.after(async () => {
@@ -287,7 +291,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
   );
   assert.equal(
     displayDesktops(defaultDesktops()),
-    "~/Atrium",
+    "~/atrium/desktops",
     "默认根目录折叠 home 显示",
   );
   assert(
@@ -519,7 +523,11 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   await client.connect(transport);
   t.after(() => client.close());
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 12);
+  assert.equal(tools.tools.length, 14);
+  assert(
+    tools.tools.some((tool) => tool.name === "fork_agent"),
+    "招募 fork 对 Agent 可见",
+  );
   const claim = await client.callTool({
     name: "claim_status",
     arguments: { work: "正在检查通知" },

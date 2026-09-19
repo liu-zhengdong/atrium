@@ -8,6 +8,7 @@ import {
   id,
   text,
   displayName,
+  forkSource,
   preferences,
   sendInput,
   type Overview,
@@ -15,21 +16,25 @@ import {
 import { Store, Problem } from "./store.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
-import { createAgent, defaultDesktops, displayDesktops } from "./agents.ts";
-import { TraceStore } from "./trace.ts";
 import {
-  listAdapters,
-  receiveInbox,
-  writeGithubTemplate,
-} from "./adapters.ts";
+  createAgent,
+  defaultDesktops,
+  displayDesktops,
+  resolvePiHome,
+  retargetProfileLink,
+} from "./agents.ts";
+import { TraceStore } from "./trace.ts";
+import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 
 export async function createApp(options: {
   data: string;
   webRoot?: string;
   runtime?: boolean;
   desktops?: string;
+  piHome?: string;
 }) {
   const desktops = options.desktops ?? defaultDesktops();
+  const piHome = options.piHome;
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   mkdirSync(join(options.data, "credentials"), {
     recursive: true,
@@ -45,18 +50,22 @@ export async function createApp(options: {
   const runtimes =
     options.runtime === false
       ? null
-      : new Runtimes(store, options.data, changed, () => {
-          const address = app.server.address();
-          if (!address || typeof address === "string")
-            throw new Problem(503, "Atrium HTTP 入口尚未就绪");
-          return `http://127.0.0.1:${address.port}`;
-        });
+      : new Runtimes(
+          store,
+          options.data,
+          changed,
+          () => {
+            const address = app.server.address();
+            if (!address || typeof address === "string")
+              throw new Problem(503, "Atrium HTTP 入口尚未就绪");
+            return `http://127.0.0.1:${address.port}`;
+          },
+          piHome,
+        );
   const traces = runtimes?.traces ?? new TraceStore(store);
   // 统一接收口接受任意内容类型；JSON 走默认解析器，其余保留原始文本。
-  app.addContentTypeParser(
-    "*",
-    { parseAs: "buffer" },
-    (_request, body, done) => done(null, body),
+  app.addContentTypeParser("*", { parseAs: "buffer" }, (_request, body, done) =>
+    done(null, body),
   );
   app.setErrorHandler((error, _, reply) => {
     const status =
@@ -157,11 +166,15 @@ export async function createApp(options: {
         start: z.boolean().default(false),
         description: z.string().trim().max(1000).default(""),
         template: z.string().min(1).max(4096).optional(),
+        source: forkSource.optional(),
       })
       .strict()
       .parse(request.body);
     if (input.start && !runtimes) throw new Problem(503, "运行时未启用");
-    const agent = createAgent(store, options.data, input.name, desktops, input);
+    const agent = createAgent(store, options.data, input.name, desktops, {
+      ...input,
+      piHome,
+    });
     let start_error: string | undefined;
     if (input.start) {
       try {
@@ -216,6 +229,13 @@ export async function createApp(options: {
         agentId,
         previous.name,
       );
+      if (previous.agent_directory)
+        retargetProfileLink(
+          resolvePiHome(piHome),
+          previous.name,
+          value.name,
+          previous.agent_directory,
+        );
     });
     changed();
     return store.agent(agentId);
@@ -358,7 +378,12 @@ export async function createApp(options: {
         around: z.coerce.number().int().positive().optional(),
       })
       .parse(request.query);
-    return store.timeline(agentParams(request), q.before, q.read_from, q.around);
+    return store.timeline(
+      agentParams(request),
+      q.before,
+      q.read_from,
+      q.around,
+    );
   });
   app.patch("/api/chats/:id", (request) => {
     const input = z
@@ -398,15 +423,23 @@ export async function createApp(options: {
   });
   app.post("/mcp/:id", async (request, reply) => {
     const agentId = requireAgent(request),
-      server = createMcp(store, agentId, changed, (id) => {
-        const info = runtimes?.connections.get(id)?.info;
-        return {
-          online:
-            !!info ||
-            !!runtimes?.directory().runtimes.some((r) => r.bound_agent === id),
-          busy: info?.busy ?? null,
-        };
-      });
+      server = createMcp(
+        store,
+        agentId,
+        changed,
+        (id) => {
+          const info = runtimes?.connections.get(id)?.info;
+          return {
+            online:
+              !!info ||
+              !!runtimes
+                ?.directory()
+                .runtimes.some((r) => r.bound_agent === id),
+            busy: info?.busy ?? null,
+          };
+        },
+        { data: options.data, desktops, piHome },
+      );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
@@ -421,10 +454,7 @@ export async function createApp(options: {
   if (options.webRoot && existsSync(options.webRoot)) {
     await app.register(staticFiles, { root: options.webRoot });
     app.setNotFoundHandler((request, reply) => {
-      if (
-        request.method === "GET" &&
-        !/^\/(api|mcp)(\/|$)/.test(request.url)
-      )
+      if (request.method === "GET" && !/^\/(api|mcp)(\/|$)/.test(request.url))
         return reply.sendFile("index.html");
       return reply.code(404).send({ error: "接口不存在" });
     });

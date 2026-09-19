@@ -93,7 +93,10 @@ export function Sidebar({
     return () => clearTimeout(timer);
   }, [query]);
 
-  async function setState(id: string, body: { hidden?: boolean; pinned?: boolean }) {
+  async function setState(
+    id: string,
+    body: { hidden?: boolean; pinned?: boolean },
+  ) {
     setMenu(null);
     await patchChat(id, body).catch(() => {});
     refresh();
@@ -218,7 +221,9 @@ export function Sidebar({
                           </time>
                         </span>
                         <span className={rowTop}>
-                          <small className={rowPreview}>{chat.preview ?? ""}</small>
+                          <small className={rowPreview}>
+                            {chat.preview ?? ""}
+                          </small>
                         </span>
                       </span>
                     </button>
@@ -239,7 +244,9 @@ export function Sidebar({
                     >
                       <span className={rowMain}>
                         <span className={rowTop}>
-                          <strong className={rowName}>{message.chat_name}</strong>
+                          <strong className={rowName}>
+                            {message.chat_name}
+                          </strong>
                           <time className={rowTime}>
                             {convTime(message.created_at)}
                           </time>
@@ -257,9 +264,7 @@ export function Sidebar({
               {!results.agents.length &&
                 !results.chats.length &&
                 !results.messages.length && (
-                  <p className={hint}>
-                    没有匹配「{query.trim()}」的内容
-                  </p>
+                  <p className={hint}>没有匹配「{query.trim()}」的内容</p>
                 )}
             </>
           )}
@@ -286,10 +291,7 @@ export function Sidebar({
                   chat.id === chatId ? "bg-[#eeede7]" : ""
                 }`}
               >
-                <button
-                  className={chatRow}
-                  onClick={() => selectChat(chat.id)}
-                >
+                <button className={chatRow} onClick={() => selectChat(chat.id)}>
                   <ChatAvatar chat={chat} agents={agents} />
                   <span className={rowMain}>
                     <span className={rowTop}>
@@ -297,7 +299,9 @@ export function Sidebar({
                       {chat.pinned && (
                         <Pin size={11} className="flex-none text-[#a09b8d]" />
                       )}
-                      <time className={rowTime}>{convTime(chat.updated_at)}</time>
+                      <time className={rowTime}>
+                        {convTime(chat.updated_at)}
+                      </time>
                     </span>
                     <span className={rowTop}>
                       <small className={rowPreview}>

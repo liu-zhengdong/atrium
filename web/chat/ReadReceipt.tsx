@@ -73,7 +73,10 @@ export function ReadReceipt({
         ) : (
           <>
             {seen.length > 0 && (
-              <span className="inline-flex items-center pr-0.5" aria-hidden="true">
+              <span
+                className="inline-flex items-center pr-0.5"
+                aria-hidden="true"
+              >
                 {seen.slice(0, 3).map((reader, i) => (
                   <Avatar
                     key={reader.id}

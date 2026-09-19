@@ -96,9 +96,10 @@ export function Sidebar({
         <span>Atrium</span>
         <span className="brand-caption">中庭</span>
       </div>
-      <div className="search-box">
+      <div className="mx-[2px] mb-[10px] flex h-[31px] flex-none items-center gap-[7px] rounded-[7px] border border-line bg-white px-[9px] text-placeholder focus-within:border-line-strong">
         <Search size={14} />
         <input
+          className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink outline-none"
           value={query}
           placeholder="搜索会话、消息、Agent"
           onChange={(event) => setQuery(event.target.value)}
@@ -108,7 +109,7 @@ export function Sidebar({
         />
         {query && (
           <button
-            className="icon-button"
+            className="icon-button p-[2px]"
             aria-label="清空搜索"
             onClick={() => setQuery("")}
           >

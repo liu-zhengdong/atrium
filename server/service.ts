@@ -11,6 +11,7 @@ import {
   serviceUrl,
   type ServiceRecord,
 } from "./service-state.ts";
+import { ensureWebDist } from "./web-dist.ts";
 
 async function request(record: ServiceRecord, stop = false) {
   const response = await fetch(
@@ -85,6 +86,7 @@ export async function stopService(data: string) {
   );
 }
 export async function startService(data: string) {
+  await ensureWebDist(packageRoot);
   let record = readService(data);
   let child: ReturnType<typeof spawn> | undefined;
   let launchError: Error | undefined;
@@ -92,7 +94,7 @@ export async function startService(data: string) {
     servicePort();
     if (!existsSync(join(packageRoot, "dist/index.html")))
       throw new Error(
-        `Web 尚未构建；请在 ${packageRoot} 执行 npm run build 后重试。`,
+        `Web 构建后仍缺少 ${join(packageRoot, "dist/index.html")}`,
       );
     mkdirSync(data, { recursive: true, mode: 0o700 });
     const log = openSync(join(data, "service.log"), "a", 0o600);

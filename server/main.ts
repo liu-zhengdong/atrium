@@ -8,7 +8,9 @@ import {
   servicePort,
   serviceUrl,
 } from "./service-state.ts";
+import { ensureWebDist } from "./web-dist.ts";
 
+await ensureWebDist(packageRoot);
 const data = dataDirectory();
 const lease = claimService(data, servicePort());
 let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;

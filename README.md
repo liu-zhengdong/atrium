@@ -8,10 +8,11 @@
 
 ```bash
 npm ci
-npm run build
 npm link
 atrium
 ```
+
+`atrium` 和 `npm start` 发现 Web 源码或构建配置比 `dist` 新时会先构建再启动；产物已是最新则跳过。
 
 已全局安装后，在任意目录执行 **`atrium`** 即可启动后台服务并打开 Web，默认地址 **http://127.0.0.1:4310**。重复执行直接打开已有服务，不新建另一份实例或数据。
 

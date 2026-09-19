@@ -219,6 +219,7 @@ writeFileSync(
 const { app, store, runtimes } = await createApp({
   data: join(folder, "data"),
   desktops: join(folder, "desktops"),
+  piHome: join(folder, ".pi"),
   webRoot: process.argv.includes("--ui") ? resolve("dist") : undefined,
 });
 await app.listen({ port: 0, host: "127.0.0.1" });

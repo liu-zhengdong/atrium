@@ -45,9 +45,11 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     ...process.env,
     PI_ACP_DIR: join(root, "acp"),
   });
+  const piHome = join(root, ".pi");
   const { app, store, runtimes } = await createApp({
     data,
     desktops: join(root, "desktops"),
+    piHome,
   });
   t.after(async () => {
     await app.close();
@@ -112,6 +114,21 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
   assert(
     existsSync(join(root, "desktops", "演示 Agent")),
     "删除身份保留专属工作目录",
+  );
+  assert(
+    !existsSync(join(piHome, "agents", "演示 Agent")),
+    "删除时摘掉名称入口",
+  );
+  assert.equal(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/agents",
+        payload: { name: agent.name, template },
+      })
+    ).statusCode,
+    409,
+    "残留桌面不默默沿用",
   );
   assert.equal(
     readFileSync(join(template, "SYSTEM.md"), "utf8"),
@@ -205,6 +222,7 @@ test("运行、未发现的具名占用、未知状态与并发启动均拒绝�
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const { app, store, runtimes } = await createApp({
     data: join(root, "data"),
+    piHome: join(root, ".pi"),
   });
   t.after(async () => {
     await app.close();
@@ -288,7 +306,10 @@ test(
     });
     t.mock.method(transport, "rpc", async () => ({ runtimes: [] }));
     t.mock.method(Runtimes.prototype, "pump", async () => {});
-    const { app, store, runtimes } = await createApp({ data });
+    const { app, store, runtimes } = await createApp({
+      data,
+      piHome: join(root, ".pi"),
+    });
     t.after(async () => {
       await app.close();
       rmSync(root, { recursive: true, force: true });

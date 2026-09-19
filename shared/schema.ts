@@ -7,7 +7,6 @@ export const chatReference = z
 export const agentReference = z
   .union([z.string().regex(/^a[1-9][0-9]{0,14}(?![\s\S])/), id])
   .describe("Agent 短号，如 a1；兼容 UUID");
-export const forkSource = z.union([z.literal("builtin"), agentReference]);
 export const text = z.string().trim().min(1).max(6000);
 export const displayName = z
   .string()
@@ -18,6 +17,11 @@ export const displayName = z
     /^[\p{L}\p{N}_. -]+$/u,
     "名称只使用文字、数字、空格、点、下划线和连字符",
   );
+export const forkSource = z.union([
+  z.literal("builtin"),
+  agentReference,
+  displayName,
+]);
 export const preferences = z
   .object({
     auto_start: z.boolean().default(false),

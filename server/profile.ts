@@ -37,12 +37,12 @@ const inside = (root: string, path: string) => {
 
 /** Owned rules and notes; installed extensions/skills stay as path references. Never copy credentials. */
 export function prepareProfile(
-  data: string,
   identityId: string,
   template = defaultTemplate(),
+  piHome: string,
 ) {
   template = realpathSync(template);
-  const target = join(data, "agents", identityId);
+  const target = join(piHome, "atrium", "agents", identityId);
   // A legacy record's directory may already hold its managed session and logs;
   // identity.json marks a prepared profile, any other existing content is kept.
   if (existsSync(join(target, "identity.json")))

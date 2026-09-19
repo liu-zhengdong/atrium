@@ -246,6 +246,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
     data,
     runtime: false,
     desktops: join(data, "desktops"),
+    piHome: join(data, ".pi"),
   });
   await result.app.listen({ host: "127.0.0.1", port: 0 });
   t.after(async () => {
@@ -287,7 +288,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
   );
   assert.equal(
     displayDesktops(defaultDesktops()),
-    "~/Atrium",
+    "~/atrium/desktops",
     "默认根目录折叠 home 显示",
   );
   assert(

@@ -24,7 +24,7 @@ export function createMcp(
     online: false,
     busy: null,
   }),
-  host?: { data: string; desktops: string },
+  host?: { data: string; desktops: string; piHome?: string },
 ) {
   const server = new McpServer(
     { name: "atrium", version: "0.1.0" },
@@ -91,13 +91,13 @@ export function createMcp(
   );
   tool(
     "list_fork_sources",
-    "列出可 fork 的预置类型和已有身份。预置带内置标签，不能当聊天对象。query 按名称或短号筛选。",
+    "列出可 fork 的预置类型和已有身份。预置带内置标签，不能当聊天对象。query 按名称筛选。",
     { query: z.string().trim().max(80).default("") },
     ({ query }) => ({ items: listForkSources(store, query) }),
   );
   tool(
     "fork_agent",
-    "从预置类型或已有身份复制配置，创建新的长期身份。必须起名；默认不启动进程。source 为 builtin 或 a1 等短号。",
+    "从预置类型或已有身份复制配置，创建新的长期身份。必须起名；默认不启动进程。source 为 builtin 或同伴名称。",
     {
       name: displayName,
       source: forkSource.default("builtin"),
@@ -108,6 +108,7 @@ export function createMcp(
       const agent = createAgent(store, host.data, name, host.desktops, {
         source,
         description,
+        piHome: host.piHome,
       });
       return {
         id: agent.ref,

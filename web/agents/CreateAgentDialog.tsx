@@ -19,7 +19,7 @@ export function CreateAgentDialog({
   const sources = agents.filter((agent) => agent.agent_directory);
   const matches = query.trim().toLowerCase();
   const visible = sources.filter((agent) =>
-    `${agent.ref} ${agent.name} ${agent.description}`
+    `${agent.name} ${agent.description}`
       .toLowerCase()
       .includes(matches),
   );
@@ -27,7 +27,7 @@ export function CreateAgentDialog({
     !matches || "内置 builtin 默认配置类型".includes(matches);
   const available = [
     ...(builtinShown ? ["builtin"] : []),
-    ...visible.map((agent) => agent.ref),
+    ...visible.map((agent) => agent.name),
   ];
   const selected = available.includes(source)
     ? source
@@ -113,13 +113,12 @@ export function CreateAgentDialog({
             <input
               type="radio"
               name="source"
-              value={agent.ref}
-              checked={selected === agent.ref}
-              onChange={() => setSource(agent.ref)}
+              value={agent.name}
+              checked={selected === agent.name}
+              onChange={() => setSource(agent.name)}
             />
             <Avatar small name={agent.name} />
             {agent.name}
-            <span className="muted">{agent.ref}</span>
           </label>
         ))}
         {!builtinShown && !visible.length && (

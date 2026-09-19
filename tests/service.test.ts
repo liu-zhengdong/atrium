@@ -43,6 +43,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
     ATRIUM_DESKTOPS: join(root, "desktops"),
+    ATRIUM_PI_HOME: join(root, ".pi"),
     ATRIUM_PI_TEMPLATE: builtin,
     PI_ACP_DIR: join(root, "acp"),
   };
@@ -121,8 +122,8 @@ test(
       existsSync(join(f.root, "desktops", "入口验收")),
       "创建即分配固定桌面目录",
     );
-    assert.match((await f.cli("list")).stdout, /a1\s+入口验收/);
-    assert.equal((await f.cli("run", "a1", "--forbidden")).code, 1);
+    assert.match((await f.cli("list")).stdout, /入口验收\t长期身份/);
+    assert.equal((await f.cli("run", "入口验收", "--forbidden")).code, 1);
     assert.equal((await f.cli("stop")).code, 0);
     assert.match((await f.cli("stop")).stdout, /已停止/);
     assert.equal(readService(f.data), null);
@@ -301,18 +302,22 @@ test(
     const f = await fixture(t);
     const created = await f.cli("create", "林岚");
     assert.equal(created.code, 0, created.stderr);
-    assert.match(created.stdout, /a1\t林岚/);
+    assert.match(created.stdout, /林岚/);
     assert(
       existsSync(join(f.root, "desktops", "林岚")),
       "创建即分配固定桌面目录",
     );
+    assert(
+      existsSync(join(f.root, ".pi", "agents", "林岚")),
+      "名称入口指向身份配置",
+    );
     assert.equal((await f.cli("create", "林岚")).code, 1);
     assert.equal((await f.cli("create", "bad/name")).code, 1);
-    assert.match((await f.cli("list")).stdout, /a1\s+林岚/);
+    assert.match((await f.cli("list")).stdout, /林岚\t长期身份/);
     assert.equal((await f.cli("--no-open")).code, 0, "start after create");
-    const forked = await f.cli("create", "沈默", "--from", "a1");
+    const forked = await f.cli("create", "沈默", "--from", "林岚");
     assert.equal(forked.code, 0, forked.stderr);
-    assert.match(forked.stdout, /a2\t沈默/);
+    assert.match(forked.stdout, /沈默/);
     const overview = (await (
       await fetch(`${serviceUrl(readService(f.data)!)}/api/overview`)
     ).json()) as { agents: { ref: string; name: string }[] };

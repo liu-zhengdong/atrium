@@ -16,7 +16,13 @@ import {
 import { Store, Problem } from "./store.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
-import { createAgent, defaultDesktops, displayDesktops } from "./agents.ts";
+import {
+  createAgent,
+  defaultDesktops,
+  displayDesktops,
+  resolvePiHome,
+  retargetProfileLink,
+} from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 
@@ -25,8 +31,10 @@ export async function createApp(options: {
   webRoot?: string;
   runtime?: boolean;
   desktops?: string;
+  piHome?: string;
 }) {
   const desktops = options.desktops ?? defaultDesktops();
+  const piHome = options.piHome;
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   mkdirSync(join(options.data, "credentials"), {
     recursive: true,
@@ -42,12 +50,18 @@ export async function createApp(options: {
   const runtimes =
     options.runtime === false
       ? null
-      : new Runtimes(store, options.data, changed, () => {
-          const address = app.server.address();
-          if (!address || typeof address === "string")
-            throw new Problem(503, "Atrium HTTP 入口尚未就绪");
-          return `http://127.0.0.1:${address.port}`;
-        });
+      : new Runtimes(
+          store,
+          options.data,
+          changed,
+          () => {
+            const address = app.server.address();
+            if (!address || typeof address === "string")
+              throw new Problem(503, "Atrium HTTP 入口尚未就绪");
+            return `http://127.0.0.1:${address.port}`;
+          },
+          piHome,
+        );
   const traces = runtimes?.traces ?? new TraceStore(store);
   // 统一接收口接受任意内容类型；JSON 走默认解析器，其余保留原始文本。
   app.addContentTypeParser("*", { parseAs: "buffer" }, (_request, body, done) =>
@@ -157,7 +171,10 @@ export async function createApp(options: {
       .strict()
       .parse(request.body);
     if (input.start && !runtimes) throw new Problem(503, "运行时未启用");
-    const agent = createAgent(store, options.data, input.name, desktops, input);
+    const agent = createAgent(store, options.data, input.name, desktops, {
+      ...input,
+      piHome,
+    });
     let start_error: string | undefined;
     if (input.start) {
       try {
@@ -212,6 +229,13 @@ export async function createApp(options: {
         agentId,
         previous.name,
       );
+      if (previous.agent_directory)
+        retargetProfileLink(
+          resolvePiHome(piHome),
+          previous.name,
+          value.name,
+          previous.agent_directory,
+        );
     });
     changed();
     return store.agent(agentId);
@@ -414,7 +438,7 @@ export async function createApp(options: {
             busy: info?.busy ?? null,
           };
         },
-        { data: options.data, desktops },
+        { data: options.data, desktops, piHome },
       );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

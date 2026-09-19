@@ -36,10 +36,14 @@ export async function verifyIdentity({
   const command = resolve("bin/atrium.mjs");
   mkdirSync(join(folder, "bin"));
   symlinkSync(command, join(folder, "bin", "atrium"));
-  const env = { ...process.env, ATRIUM_DATA: join(folder, "data") };
+  const env = {
+    ...process.env,
+    ATRIUM_DATA: join(folder, "data"),
+    ATRIUM_PI_HOME: join(folder, ".pi"),
+  };
   assert(
     execFileSync(command, ["list"], { env, encoding: "utf8" }).includes(
-      `${agent.ref}\t长期身份验证`,
+      "长期身份验证",
     ),
   );
   const shell = (value) => `'${value.replaceAll("'", "'\\''")}'`;

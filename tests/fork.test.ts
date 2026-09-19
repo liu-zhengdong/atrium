@@ -51,9 +51,11 @@ test("活配置自有规则和笔记；fork 后互不影响；不拷凭据和金
     async () => ({ runtimes: [] }),
   );
   t.mock.method(Runtimes.prototype, "pump", async () => {});
+  const piHome = join(root, ".pi");
   const { app, store } = await createApp({
     data: join(root, "data"),
     desktops: join(root, "desktops"),
+    piHome,
   });
   t.after(async () => {
     await app.close();
@@ -66,6 +68,14 @@ test("活配置自有规则和笔记；fork 后互不影响；不拷凭据和金
   });
   assert.equal(created.statusCode, 201, created.body);
   const first = created.json().agent;
+  assert.equal(
+    realpathSync(join(piHome, "agents", "林岚")),
+    realpathSync(first.agent_directory),
+  );
+  assert.equal(
+    first.agent_directory,
+    join(piHome, "atrium", "agents", first.id),
+  );
   assert.equal(
     readFileSync(join(first.agent_directory, "SYSTEM.md"), "utf8"),
     "shared rules",
@@ -89,7 +99,7 @@ test("活配置自有规则和笔记；fork 后互不影响；不拷凭据和金
   const forked = await app.inject({
     method: "POST",
     url: "/api/agents",
-    payload: { name: "沈默", source: first.ref },
+    payload: { name: "沈默", source: first.name },
   });
   assert.equal(forked.statusCode, 201, forked.body);
   const second = forked.json().agent;
@@ -150,14 +160,18 @@ test("Agent 从名单 fork；预置不进聊天名册；不泄露目录", async 
     if (previous === undefined) delete process.env.ATRIUM_PI_TEMPLATE;
     else process.env.ATRIUM_PI_TEMPLATE = previous;
   });
-  const first = createAgent(store, data, "林岚", desktops, { template });
+  const piHome = join(root, ".pi");
+  const first = createAgent(store, data, "林岚", desktops, {
+    template,
+    piHome,
+  });
   const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
   const server = createMcp(
     store,
     first.id,
     () => {},
     () => ({ online: false, busy: null }),
-    { data, desktops },
+    { data, desktops, piHome },
   );
   await server.connect(serverSide);
   const client = new Client({ name: "fork-test", version: "1" });
@@ -186,13 +200,13 @@ test("Agent 从名单 fork；预置不进聊天名册；不泄露目录", async 
     ]),
     [
       ["builtin", "内置"],
-      [first.ref, "已有"],
+      [first.name, "已有"],
     ],
   );
   assert(!JSON.stringify(sources).includes(root), "招募名单不泄露目录");
   const created = await call("fork_agent", {
     name: "沈默",
-    source: first.ref,
+    source: first.name,
   });
   assert.equal(created.id, "a2");
   assert.equal(created.name, "沈默");
@@ -202,7 +216,7 @@ test("Agent 从名单 fork；预置不进聊天名册；不泄露目录", async 
   );
   const builtin = await call("fork_agent", { name: "内置来的" });
   assert.equal(builtin.id, "a3");
-  await reject("fork_agent", { name: "沈默", source: first.ref });
+  await reject("fork_agent", { name: "沈默", source: first.name });
   await reject("fork_agent", {
     name: "路径",
     source: template,

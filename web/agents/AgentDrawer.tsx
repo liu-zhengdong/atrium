@@ -267,7 +267,7 @@ export function AgentDrawer({
           ) : (
             <>
               <form className="settings-section" onSubmit={profileSave}>
-                <h3>身份资料 · {agent.ref}</h3>
+                <h3>身份资料</h3>
                 <label className="form-label">
                   名称
                   <input
@@ -295,7 +295,7 @@ export function AgentDrawer({
               <section className="settings-section">
                 <h3>外部事件接收口</h3>
                 <code className="path">
-                  POST /api/agents/{agent.ref}/inbox
+                  POST /api/agents/{agent.name}/inbox
                 </code>
                 <p className="muted small-text">
                   把外部事件 POST 到这里；adapters/
@@ -323,7 +323,7 @@ export function AgentDrawer({
                 {agent.agent_directory ? (
                   <>
                     <h3>终端启动</h3>
-                    <code className="path">atrium run {agent.ref}</code>
+                    <code className="path">atrium run {agent.name}</code>
                     <p className="muted small-text">
                       打开原生 Pi；该身份已在运行时不会另开实例。
                     </p>

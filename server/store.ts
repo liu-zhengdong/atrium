@@ -3,7 +3,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   defaultPreferences,
   chatReference,
-  agentReference,
+  displayName,
+  id as uuid,
   preferences,
   type AgentInfo,
   type BoxMessage,
@@ -271,16 +272,26 @@ export class Store {
     return `a${row.number}`;
   }
   resolveAgentId(reference: string): string {
-    agentReference.parse(reference);
-    if (reference.includes("-")) return this.agent(reference).id;
-    if (!/^a[1-9][0-9]{0,14}$/.test(reference))
-      throw new Problem(400, "身份短号应为 a1 这样的格式");
-    const row = this.one<{ agent_id: string }>(
-      "SELECT agent_id FROM agent_refs WHERE number=?",
-      Number(reference.slice(1)),
-    );
-    if (!row) throw new Problem(404, "Agent 不存在");
-    return row.agent_id;
+    const trimmed = reference.trim();
+    if (uuid.safeParse(trimmed).success) return this.agent(trimmed).id;
+    if (/^a[1-9][0-9]{0,14}$/.test(trimmed)) {
+      const row = this.one<{ agent_id: string }>(
+        "SELECT agent_id FROM agent_refs WHERE number=?",
+        Number(trimmed.slice(1)),
+      );
+      if (!row) throw new Problem(404, "Agent 不存在");
+      return row.agent_id;
+    }
+    const name = displayName.safeParse(trimmed);
+    if (name.success) {
+      const row = this.one<{ id: string }>(
+        "SELECT id FROM agents WHERE name=? AND deleted_at IS NULL",
+        name.data,
+      );
+      if (!row) throw new Problem(404, "Agent 不存在");
+      return row.id;
+    }
+    throw new Problem(400, "请使用名称、短号或身份 ID");
   }
   authenticate(id: string, token: string): boolean {
     return !!this.one(

@@ -209,6 +209,7 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
   const { app, store, runtimes } = await createApp({
     data,
     desktops: join(data, "desktops"),
+    piHome: join(data, ".pi"),
   });
   t.after(async () => {
     await app.close();

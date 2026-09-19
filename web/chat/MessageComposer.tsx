@@ -83,29 +83,40 @@ export function MessageComposer({
   // The component stays mounted even while a newly created chat is loading.
   if (!active) return null;
   return (
-    <div className="composer-wrap">
+    <div className="px-[35px] pb-[14px] min-[1450px]:px-[max(40px,calc((100vw-1160px)/2))] max-[720px]:px-5 max-[720px]:pb-3 max-[560px]:px-3 max-[560px]:pb-2.5">
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
-      <form className="composer" onSubmit={send}>
+      <form
+        className="relative rounded-[11px] border border-[#dfdcd3] bg-white shadow-[0_2px_4px_#312b1c04] transition-[border-color] focus-within:border-[#aea18b] focus-within:shadow-[0_0_0_2px_#a9967320]"
+        onSubmit={send}
+      >
         {candidates.length > 0 && (
-          <div className="mentions" role="listbox" aria-label="提及 Agent">
+          <div
+            className="absolute bottom-[calc(100%+7px)] left-0 z-[2] w-[min(400px,100%)] rounded-[9px] border border-line bg-white p-[5px] shadow-[0_7px_28px_#30220d12]"
+            role="listbox"
+            aria-label="提及 Agent"
+          >
             {candidates.map((a, index) => (
               <button
                 type="button"
                 role="option"
                 aria-selected={index === mentionIndex}
-                className={index === mentionIndex ? "highlighted" : ""}
+                className={`flex w-full items-center gap-[11px] rounded-[5px] p-2.5 text-left ${
+                  index === mentionIndex ? "bg-[#f3f1ea]" : ""
+                }`}
                 key={a.id}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => chooseMention(a)}
               >
                 <Avatar small name={a.name} online={a.available} />
-                <span>
-                  <strong>{a.name}</strong>
-                  <small>{a.work || runtimeLabel(a)}</small>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <strong className="text-xs font-[550]">{a.name}</strong>
+                  <small className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-[#8e8779]">
+                    {a.work || runtimeLabel(a)}
+                  </small>
                 </span>
                 <span className="muted small-text">{runtimeLabel(a)}</span>
               </button>
@@ -114,6 +125,7 @@ export function MessageComposer({
         )}
         <textarea
           ref={textarea}
+          className="block max-h-[200px] min-h-[70px] w-full resize-y rounded-[11px] border-0 bg-transparent px-[17px] pb-1.5 pt-[17px] text-[13px] leading-[1.7] text-[#434137] outline-none placeholder:text-[#aaa396] max-[560px]:min-h-[66px]"
           aria-label="消息"
           placeholder={
             active.kind === "group"
@@ -150,7 +162,7 @@ export function MessageComposer({
             }
           }}
         />
-        <div className="composer-bottom">
+        <div className="flex items-center gap-[9px] px-2.5 pb-2.5 pt-1">
           <button
             type="button"
             className="icon-button"
@@ -166,13 +178,13 @@ export function MessageComposer({
           >
             <AtSign size={18} />
           </button>
-          <span className="compose-hint">
+          <span className="text-[10px] text-[#aaa395] max-[560px]:text-[9px]">
             {mentionIds.length
               ? `将通知 ${mentionIds.length} 位 Agent`
               : "Enter 发送 · Shift + Enter 换行"}
           </span>
           <button
-            className="send-button"
+            className="ml-auto flex h-[29px] w-[30px] flex-none items-center justify-center rounded-[7px] bg-[#45463c] text-white disabled:bg-[#e9e7de] disabled:text-[#b1aa99]"
             aria-label="发送消息"
             disabled={!draft.trim() || sending}
           >
@@ -184,7 +196,7 @@ export function MessageComposer({
           </button>
         </div>
       </form>
-      <p className="composer-note">
+      <p className="mx-0.5 mt-2 text-[10px] text-[#aaa395]">
         {active.kind === "group"
           ? "普通消息按对方心跳节奏提醒；明确 @ 不等待。"
           : "消息会保留；离线时等待 Agent 上线，或按运行设置自动启动。"}

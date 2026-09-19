@@ -60,7 +60,9 @@ export function ReadReceipt({
     >
       <Popover.Trigger
         ref={trigger}
-        className={`read-receipt ${seen.length ? "has-read" : ""}`}
+        className={`mt-[3px] inline-flex min-h-[26px] max-w-full items-center justify-end gap-[5px] self-end whitespace-nowrap rounded px-[2px] py-[3px] text-[11px] leading-[1.6] hover:bg-[#f0f2f5] hover:text-[#3e577e] data-[state=open]:bg-[#f0f2f5] data-[state=open]:text-[#3e577e] max-[560px]:min-h-8 ${
+          seen.length ? "text-[#687a99]" : "text-[#8a887f]"
+        }`}
         aria-label={`查看阅读详情：${label}`}
       >
         {direct ? (
@@ -71,14 +73,19 @@ export function ReadReceipt({
         ) : (
           <>
             {seen.length > 0 && (
-              <span className="receipt-avatars" aria-hidden="true">
-                {seen.slice(0, 3).map((reader) => (
-                  <Avatar key={reader.id} name={reader.name} />
+              <span className="inline-flex items-center pr-0.5" aria-hidden="true">
+                {seen.slice(0, 3).map((reader, i) => (
+                  <Avatar
+                    key={reader.id}
+                    name={reader.name}
+                    tiny
+                    className={`ring-2 ring-white ${i ? "-ml-1.5" : ""}`}
+                  />
                 ))}
               </span>
             )}
             <span>{seen.length} 人已读</span>
-            <span className="receipt-separator" aria-hidden="true">
+            <span className="text-[#b8b8b1]" aria-hidden="true">
               ·
             </span>
             <span>{unseen} 人未读</span>
@@ -87,41 +94,47 @@ export function ReadReceipt({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          className="receipt-popover"
+          className="z-[60] max-h-[var(--radix-popover-content-available-height)] w-[304px] max-w-[calc(100vw-24px)] overflow-auto rounded-xl border border-[#e6e7e9] bg-white p-4 text-[#3b3e43] shadow-[0_8px_32px_#20283816,0_2px_8px_#20283809]"
           side="bottom"
           align="end"
           sideOffset={8}
           collisionPadding={12}
           aria-label="阅读详情"
         >
-          <div className="receipt-popover-heading">
-            <h2>阅读详情</h2>
-            <Popover.Close className="icon-button" aria-label="关闭阅读详情">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="m-0 text-sm font-semibold">阅读详情</h2>
+            <Popover.Close
+              className="icon-button h-[25px] w-[25px] text-[#85888f]"
+              aria-label="关闭阅读详情"
+            >
               <X size={16} />
             </Popover.Close>
           </div>
           <div
-            className="receipt-filters"
+            className="flex gap-5 border-b border-[#eeeff1]"
             role="group"
             aria-label="阅读状态筛选"
           >
             <button
+              className="border-b-2 border-transparent px-0.5 pb-2.5 text-xs text-[#888b93] aria-pressed:border-[#6f8caf] aria-pressed:text-[#3f5e8d]"
               aria-pressed={filter === "read"}
               onClick={() => setFilter("read")}
             >
-              已读 <span>{seen.length}</span>
+              已读 <span className="ml-[3px] text-[11px]">{seen.length}</span>
             </button>
             <button
+              className="border-b-2 border-transparent px-0.5 pb-2.5 text-xs text-[#888b93] aria-pressed:border-[#6f8caf] aria-pressed:text-[#3f5e8d]"
               aria-pressed={filter === "unread"}
               onClick={() => setFilter("unread")}
             >
-              未读 <span>{unseen}</span>
+              未读 <span className="ml-[3px] text-[11px]">{unseen}</span>
             </button>
           </div>
           {readers.length > 8 && (
-            <label className="receipt-search">
+            <label className="receipt-search mt-3 flex items-center gap-[7px] rounded-md border border-[#e6e7e9] px-[9px] py-[7px] text-[#9b9da3] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[#9c8b6c]">
               <Search size={15} />
               <input
+                className="w-full min-w-0 border-0 bg-transparent text-xs outline-none"
                 aria-label="搜索阅读名单"
                 placeholder="搜索 Agent"
                 value={search}
@@ -130,11 +143,14 @@ export function ReadReceipt({
             </label>
           )}
           <ul
-            className="receipt-members"
+            className="my-2 max-h-60 list-none overflow-auto p-0 [scrollbar-width:thin]"
             aria-label={filter === "read" ? "已读 Agent" : "未读 Agent"}
           >
             {visible.map((reader) => (
-              <li key={reader.id}>
+              <li
+                className="flex min-h-[46px] items-center gap-2.5 px-0.5 py-1.5"
+                key={reader.id}
+              >
                 <Avatar
                   name={reader.name}
                   small
@@ -148,12 +164,20 @@ export function ReadReceipt({
                       : undefined
                   }
                 />
-                <span>{reader.name}</span>
-                {reader.read && <CheckCheck size={15} aria-label="已读" />}
+                <span className="min-w-0 flex-1 text-[13px] [overflow-wrap:anywhere]">
+                  {reader.name}
+                </span>
+                {reader.read && (
+                  <CheckCheck
+                    size={15}
+                    className="flex-none text-[#718cb0]"
+                    aria-label="已读"
+                  />
+                )}
               </li>
             ))}
             {!visible.length && (
-              <li className="receipt-empty">
+              <li className="flex min-h-[94px] items-center justify-center text-xs text-[#999ca3]">
                 {search
                   ? "没有匹配的 Agent"
                   : filter === "read"
@@ -162,7 +186,7 @@ export function ReadReceipt({
               </li>
             )}
           </ul>
-          <p className="receipt-footnote">
+          <p className="m-0 border-t border-[#eeeff1] pt-2.5 text-[10px] leading-[1.7] text-[#999ca3]">
             已读表示 Agent 已取回正文，不代表已处理。
           </p>
         </Popover.Content>

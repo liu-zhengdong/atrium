@@ -14,11 +14,16 @@ export function Avatar({
   name,
   online,
   small = false,
+  tiny = false,
+  className = "",
   onClick,
 }: {
   name: string;
   online?: boolean;
   small?: boolean;
+  /** 20px 圆形头像，用于已读回执的头像组。 */
+  tiny?: boolean;
+  className?: string;
   onClick?: () => void;
 }) {
   if (onClick)
@@ -35,11 +40,13 @@ export function Avatar({
   // avatar 保留为标记类：回执头像、移动端成员堆叠等场景式覆盖仍指向它。
   return (
     <span
-      className={`avatar relative inline-flex flex-none select-none items-center justify-center bg-[#eeece5] font-[550] text-[#756c57] ${
-        small
-          ? "h-[29px] w-[29px] rounded-[9px] text-xs"
-          : "h-[34px] w-[34px] rounded-[10px] text-sm"
-      }`}
+      className={`avatar relative inline-flex flex-none select-none items-center justify-center font-[550] ${
+        tiny
+          ? "h-5 w-5 rounded-full bg-[#e5e9ee] text-[9px] text-[#617087]"
+          : small
+            ? "h-[29px] w-[29px] rounded-[9px] bg-[#eeece5] text-xs text-[#756c57]"
+            : "h-[34px] w-[34px] rounded-[10px] bg-[#eeece5] text-sm text-[#756c57]"
+      } ${className}`}
     >
       {Array.from(name)[0]}
       {online !== undefined && (

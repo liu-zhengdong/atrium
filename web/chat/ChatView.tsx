@@ -82,12 +82,15 @@ export function ChatView({
       )}
       {active && (
         <>
-          <header className="main-header">
+          <header className="main-header flex h-[83px] flex-none items-center justify-between border-b border-[#eeede8] px-[35px] max-[720px]:h-[72px] max-[720px]:px-[22px] max-[560px]:pl-[49px]">
             <div>
-              <h1>
-                {active.kind === "group" && <Hash size={21} />} {active.name}
+              <h1 className="flex items-center gap-[7px] text-[17px] font-semibold max-[560px]:text-[15px]">
+                {active.kind === "group" && (
+                  <Hash size={21} className="text-[#a39b8b]" />
+                )}{" "}
+                {active.name}
               </h1>
-              <p>
+              <p className="mt-1 text-[11px] text-[#959084] max-[560px]:text-[10px]">
                 {active.ref && (
                   <>
                     <span title="会话短号">{active.ref}</span> ·{" "}
@@ -132,16 +135,26 @@ export function ChatView({
             </div>
           </header>
           {directAgent?.error && (
-            <p className="conversation-alert" role="status">
+            <p className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]" role="status">
               暂时无法与 Agent 通信，已发送的消息会保留。
-              <button onClick={() => details(directAgent.id)}>查看详情</button>
+              <button
+                className="ml-2 underline"
+                onClick={() => details(directAgent.id)}
+              >
+                查看详情
+              </button>
             </p>
           )}
 
           {anchoredId && (
-            <p className="anchor-bar" role="note">
+            <p className="flex items-center justify-center gap-2.5 border-b border-[#eadfc8] bg-[#f6efe2] px-3 py-[7px] text-xs text-[#8a7150]" role="note">
               已定位到搜索到的消息
-              <button onClick={clearAnchor}>回到最新</button>
+              <button
+                className="text-xs text-[#72634a] underline underline-offset-[3px]"
+                onClick={clearAnchor}
+              >
+                回到最新
+              </button>
             </p>
           )}
           <MessageTimeline
@@ -153,13 +166,13 @@ export function ChatView({
         </>
       )}
       {active?.read_only ? (
-        <p className="conversation-alert" role="status">
+        <p className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]" role="status">
           这个 Agent 已删除，聊天记录仍可查看，不能继续发送消息。
         </p>
       ) : (
         <>
           {observed && (
-            <p className="observer-hint" role="note">
+            <p className="px-[35px] pt-1.5 text-[11px] text-[#a09b8d]" role="note">
               {observed.kind === "direct"
                 ? `这是 ${observed.name} 的私聊，你的发言对双方可见`
                 : "你不是这个群的成员，发言会对群内成员可见"}

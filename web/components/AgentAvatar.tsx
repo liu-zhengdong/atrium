@@ -32,10 +32,23 @@ export function Avatar({
         <Avatar name={name} small={small} online={online} />
       </button>
     );
+  // avatar 保留为标记类：回执头像、移动端成员堆叠等场景式覆盖仍指向它。
   return (
-    <span className={`avatar ${small ? "small" : ""}`}>
+    <span
+      className={`avatar relative inline-flex flex-none select-none items-center justify-center bg-[#eeece5] font-[550] text-[#756c57] ${
+        small
+          ? "h-[29px] w-[29px] rounded-[9px] text-xs"
+          : "h-[34px] w-[34px] rounded-[10px] text-sm"
+      }`}
+    >
       {Array.from(name)[0]}
-      {online !== undefined && <i className={online ? "online" : ""} />}
+      {online !== undefined && (
+        <i
+          className={`absolute -right-[2px] -bottom-[1px] h-[9px] w-[9px] rounded-full border-2 border-surface ${
+            online ? "bg-[#73876d]" : "bg-[#c8c5bc]"
+          }`}
+        />
+      )}
     </span>
   );
 }

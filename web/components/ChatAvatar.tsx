@@ -23,10 +23,26 @@ export function ChatAvatar({
     ? chat.member_names
     : [chat.name]
   ).slice(0, 4);
+  const fontSize =
+    names.length === 1
+      ? "text-sm"
+      : names.length === 2
+        ? "text-[11px]"
+        : "text-[10px]";
   return (
-    <span className={`chat-avatar pieces-${names.length}`} aria-hidden>
+    <span
+      className={`grid h-[34px] w-[34px] flex-none overflow-hidden rounded-[9px] bg-[#e9e6dd] not-italic text-[#6d6a5e] ${
+        names.length === 1 ? "grid-cols-1" : "grid-cols-2"
+      }`}
+      aria-hidden
+    >
       {names.map((name) => (
-        <i key={name}>{[...name][0]}</i>
+        <i
+          key={name}
+          className={`flex min-w-0 items-center justify-center not-italic ${fontSize}`}
+        >
+          {[...name][0]}
+        </i>
       ))}
     </span>
   );

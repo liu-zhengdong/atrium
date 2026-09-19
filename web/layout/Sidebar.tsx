@@ -21,6 +21,25 @@ import {
   type Agent,
 } from "../components/AgentAvatar.tsx";
 export type Section = "agents" | "chat";
+
+/** 侧栏列表行共享样式（会话列表与搜索结果行一致）。 */
+const rowMain = "flex min-w-0 flex-1 flex-col gap-px";
+const rowTop = "flex min-w-0 items-center justify-between gap-2";
+const rowName = "truncate text-[13px] font-medium";
+const rowTime = "flex-none text-[10px] text-[#a8a394]";
+const rowPreview =
+  "mt-0.5 min-w-0 flex-1 truncate text-[11px] leading-[1.6] text-[#858278]";
+const chatRow =
+  "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-[7px] p-2.5 text-left hover:bg-[#efeee9]";
+const agentRow =
+  "agent-row flex w-full items-center gap-2.5 rounded-[7px] px-2.5 py-[9px] text-left hover:bg-[#efeee9]";
+const sectionLabel =
+  "mb-1.5 flex items-center justify-between px-2.5 text-[11px] tracking-[0.025em] text-[#848176]";
+const hint = "px-[11px] py-[9px] text-xs text-[#969185]";
+const navButton = (active: boolean) =>
+  `flex items-center gap-[11px] rounded-[7px] px-3 py-[9px] text-left text-[13px] text-[#77766e] hover:bg-[#efeee9] ${
+    active ? "bg-[#eeede7] font-[550] text-ink" : ""
+  }`;
 export function Sidebar({
   overview,
   section,
@@ -90,11 +109,13 @@ export function Sidebar({
 
   const searching = query.trim().length > 0;
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        <Mark />
-        <span>Atrium</span>
-        <span className="brand-caption">中庭</span>
+    <aside className="sidebar flex w-[258px] flex-none flex-col border-r border-line bg-surface px-3.5 max-[720px]:w-[220px] max-[720px]:px-[9px]">
+      <div className="flex h-[83px] items-center gap-2.5 px-[11px] max-[720px]:h-[72px] max-[560px]:h-[74px]">
+        <Mark className="h-[29px] w-[29px] text-[#72634a]" />
+        <span className="text-[21px] font-[620] tracking-[-0.05em]">
+          Atrium
+        </span>
+        <span className="ml-[3px] mt-1 text-xs text-[#8e897d]">中庭</span>
       </div>
       <div className="mx-[2px] mb-[10px] flex h-[31px] flex-none items-center gap-[7px] rounded-[7px] border border-line bg-white px-[9px] text-placeholder focus-within:border-line-strong">
         <Search size={14} />
@@ -117,16 +138,16 @@ export function Sidebar({
           </button>
         )}
       </div>
-      <nav aria-label="主导航">
+      <nav aria-label="主导航" className="mb-[29px] grid gap-[3px]">
         <button
-          className={section === "chat" ? "selected" : ""}
+          className={navButton(section === "chat")}
           onClick={() => setSection("chat")}
         >
           <MessageSquare size={17} />
           会话
         </button>
         <button
-          className={section === "agents" ? "selected" : ""}
+          className={navButton(section === "agents")}
           onClick={() => setSection("agents")}
         >
           <Users size={17} />
@@ -134,18 +155,18 @@ export function Sidebar({
         </button>
       </nav>
       {searching ? (
-        <div className="search-results">
+        <div className="min-h-0 flex-1 overflow-auto">
           {!results ? (
-            <p className="sidebar-hint">搜索中…</p>
+            <p className={hint}>搜索中…</p>
           ) : (
             <>
               {results.agents.length > 0 && (
-                <div className="search-group">
-                  <div className="section-label">Agents</div>
+                <div className="mb-[18px]">
+                  <div className={sectionLabel}>Agents</div>
                   {results.agents.map((agent) => {
                     const full = agents.find((a) => a.id === agent.id);
                     return (
-                      <div className="agent-row" key={agent.id}>
+                      <div className={agentRow} key={agent.id}>
                         <Avatar
                           name={agent.name}
                           online={full?.available ?? false}
@@ -153,7 +174,7 @@ export function Sidebar({
                           onClick={() => details(agent.id)}
                         />
                         <button
-                          className="agent-row-open"
+                          className="agent-row-open flex min-w-0 flex-1 items-center gap-2 text-left"
                           onClick={() => {
                             setQuery("");
                             if (full) openAgent(full);
@@ -161,9 +182,9 @@ export function Sidebar({
                           }}
                           disabled={openingAgent !== null}
                         >
-                          <span>
-                            <strong>{agent.name}</strong>
-                            <small>
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <strong className={rowName}>{agent.name}</strong>
+                            <small className={rowPreview}>
                               {agent.description ||
                                 (full ? runtimeLabel(full) : "")}
                             </small>
@@ -175,23 +196,29 @@ export function Sidebar({
                 </div>
               )}
               {results.chats.length > 0 && (
-                <div className="search-group">
-                  <div className="section-label">会话</div>
+                <div className="mb-[18px]">
+                  <div className={sectionLabel}>会话</div>
                   {results.chats.map((chat) => (
                     <button
                       key={chat.id}
-                      className="chat-row"
+                      className={chatRow}
                       onClick={() => void openSearchedChat(chat)}
                     >
                       <ChatAvatar chat={chat} agents={agents} />
-                      <span className="chat-row-main">
-                        <span className="chat-row-top">
-                          <strong>{chat.name}</strong>
-                          {chat.hidden && <em className="hidden-tag">已隐藏</em>}
-                          <time>{convTime(chat.updated_at)}</time>
+                      <span className={rowMain}>
+                        <span className={rowTop}>
+                          <strong className={rowName}>{chat.name}</strong>
+                          {chat.hidden && (
+                            <em className="flex-none rounded bg-[#eae4d7] px-[5px] text-[10px] not-italic text-[#8a7150]">
+                              已隐藏
+                            </em>
+                          )}
+                          <time className={rowTime}>
+                            {convTime(chat.updated_at)}
+                          </time>
                         </span>
-                        <span className="chat-row-bottom">
-                          <small>{chat.preview ?? ""}</small>
+                        <span className={rowTop}>
+                          <small className={rowPreview}>{chat.preview ?? ""}</small>
                         </span>
                       </span>
                     </button>
@@ -199,24 +226,26 @@ export function Sidebar({
                 </div>
               )}
               {results.messages.length > 0 && (
-                <div className="search-group">
-                  <div className="section-label">消息</div>
+                <div className="mb-[18px]">
+                  <div className={sectionLabel}>消息</div>
                   {results.messages.map((message) => (
                     <button
                       key={`${message.chat_id}-${message.id}`}
-                      className="chat-row"
+                      className={chatRow}
                       onClick={() => {
                         setQuery("");
                         openMessage(message.chat_id, message.id);
                       }}
                     >
-                      <span className="chat-row-main">
-                        <span className="chat-row-top">
-                          <strong>{message.chat_name}</strong>
-                          <time>{convTime(message.created_at)}</time>
+                      <span className={rowMain}>
+                        <span className={rowTop}>
+                          <strong className={rowName}>{message.chat_name}</strong>
+                          <time className={rowTime}>
+                            {convTime(message.created_at)}
+                          </time>
                         </span>
-                        <span className="chat-row-bottom">
-                          <small>
+                        <span className={rowTop}>
+                          <small className={rowPreview}>
                             {message.sender_name}：{message.text}
                           </small>
                         </span>
@@ -228,7 +257,7 @@ export function Sidebar({
               {!results.agents.length &&
                 !results.chats.length &&
                 !results.messages.length && (
-                  <p className="sidebar-hint">
+                  <p className={hint}>
                     没有匹配「{query.trim()}」的内容
                   </p>
                 )}
@@ -236,8 +265,8 @@ export function Sidebar({
           )}
         </div>
       ) : section === "chat" ? (
-        <div className="sidebar-section chat-section">
-          <div className="section-label">
+        <div className="mb-6 flex min-h-0 flex-1 flex-col">
+          <div className={sectionLabel}>
             会话
             <button
               className="icon-button"
@@ -249,36 +278,45 @@ export function Sidebar({
               <Plus size={16} />
             </button>
           </div>
-          <div className="chat-list">
+          <div className="min-h-0 flex-1 overflow-auto">
             {overview?.chats.map((chat) => (
               <div
                 key={chat.id}
-                className={`chat-row-wrap ${chat.id === chatId ? "selected" : ""}`}
+                className={`group/row relative flex items-center rounded-lg ${
+                  chat.id === chatId ? "bg-[#eeede7]" : ""
+                }`}
               >
                 <button
-                  className="chat-row"
+                  className={chatRow}
                   onClick={() => selectChat(chat.id)}
                 >
                   <ChatAvatar chat={chat} agents={agents} />
-                  <span className="chat-row-main">
-                    <span className="chat-row-top">
-                      <strong>{chat.name}</strong>
-                      {chat.pinned && <Pin size={11} className="pin-mark" />}
-                      <time>{convTime(chat.updated_at)}</time>
+                  <span className={rowMain}>
+                    <span className={rowTop}>
+                      <strong className={rowName}>{chat.name}</strong>
+                      {chat.pinned && (
+                        <Pin size={11} className="flex-none text-[#a09b8d]" />
+                      )}
+                      <time className={rowTime}>{convTime(chat.updated_at)}</time>
                     </span>
-                    <span className="chat-row-bottom">
-                      <small>{chat.preview ?? "开始这段对话"}</small>
+                    <span className={rowTop}>
+                      <small className={rowPreview}>
+                        {chat.preview ?? "开始这段对话"}
+                      </small>
                       {(chat.unread ?? 0) > 0 &&
                         (chat.mine ? (
                           <span className="badge">{chat.unread}</span>
                         ) : (
-                          <span className="dot" title="有新动态" />
+                          <span
+                            className="h-[7px] w-[7px] flex-none rounded-full bg-[#b6ac99]"
+                            title="有新动态"
+                          />
                         ))}
                     </span>
                   </span>
                 </button>
                 <button
-                  className="row-menu-button icon-button"
+                  className="mr-1 hidden h-[29px] w-[29px] flex-none items-center justify-center rounded-md p-[3px] text-[#8e897d] hover:bg-[#eeede6] hover:text-[#3c3b34] group-hover/row:inline-flex"
                   aria-label="会话操作"
                   onClick={() => setMenu(menu === chat.id ? null : chat.id)}
                 >
@@ -287,11 +325,15 @@ export function Sidebar({
                 {menu === chat.id && (
                   <>
                     <div
-                      className="menu-overlay"
+                      className="fixed inset-0 z-10"
                       onClick={() => setMenu(null)}
                     />
-                    <div className="row-menu" role="menu">
+                    <div
+                      className="absolute right-1.5 top-[30px] z-[11] grid min-w-[108px] gap-px rounded-lg border border-line bg-white p-1 shadow-[0_6px_22px_rgba(60,52,38,0.12)]"
+                      role="menu"
+                    >
                       <button
+                        className="flex items-center gap-2 whitespace-nowrap rounded-[5px] px-[9px] py-[7px] text-xs text-ink hover:bg-[#efeee9]"
                         onClick={() =>
                           void setState(chat.id, { pinned: !chat.pinned })
                         }
@@ -300,6 +342,7 @@ export function Sidebar({
                         {chat.pinned ? "取消置顶" : "置顶"}
                       </button>
                       <button
+                        className="flex items-center gap-2 whitespace-nowrap rounded-[5px] px-[9px] py-[7px] text-xs text-ink hover:bg-[#efeee9]"
                         onClick={() => void setState(chat.id, { hidden: true })}
                       >
                         <EyeOff size={14} />
@@ -311,15 +354,13 @@ export function Sidebar({
               </div>
             ))}
             {overview && !overview.chats.length && (
-              <p className="sidebar-hint">
-                还没有会话，从 Agents 里选一位开始
-              </p>
+              <p className={hint}>还没有会话，从 Agents 里选一位开始</p>
             )}
           </div>
         </div>
       ) : (
-        <div className="sidebar-section agents-section">
-          <div className="section-label">
+        <div className="mb-6 min-h-0 flex-1 overflow-auto">
+          <div className={sectionLabel}>
             Agents
             <button
               className="icon-button"
@@ -332,7 +373,7 @@ export function Sidebar({
             </button>
           </div>
           {agents.map((a) => (
-            <div className="agent-row" key={a.id}>
+            <div className={agentRow} key={a.id}>
               <Avatar
                 name={a.name}
                 online={a.available}
@@ -340,27 +381,31 @@ export function Sidebar({
                 onClick={() => details(a.id)}
               />
               <button
-                className="agent-row-open"
+                className="agent-row-open flex min-w-0 flex-1 items-center gap-2 text-left"
                 onClick={() => void openAgent(a)}
                 disabled={openingAgent !== null}
               >
-                <span>
-                  <strong>{a.name}</strong>
-                  <small>{a.work || runtimeLabel(a)}</small>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <strong className={rowName}>{a.name}</strong>
+                  <small className={rowPreview}>
+                    {a.work || runtimeLabel(a)}
+                  </small>
                 </span>
                 {a.unread > 0 && <span className="badge">{a.unread}</span>}
               </button>
             </div>
           ))}
           {overview && !agents.length && (
-            <p className="sidebar-hint">创建你的第一位 Agent</p>
+            <p className={hint}>创建你的第一位 Agent</p>
           )}
         </div>
       )}
-      <footer className="workspace">
-        <span className={`connection-dot ${connected ? "ready" : ""}`} />
+      <footer className="workspace flex items-center gap-[7px] border-t border-line px-2.5 py-[18px] text-[11px] text-[#898579]">
+        <span
+          className={`h-[5px] w-[5px] rounded-full ${connected ? "bg-[#7b906f]" : "bg-[#c29758]"}`}
+        />
         {connected ? "本机工作区" : "正在重新连接…"}
-        <span>v0.1</span>
+        <span className="ml-auto text-[#a5a093]">v0.1</span>
       </footer>
     </aside>
   );

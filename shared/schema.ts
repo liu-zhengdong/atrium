@@ -91,8 +91,27 @@ export type Chat = {
   unread?: number;
   /** 前几位成员名字，用于合成会话头像。 */
   member_names?: string[];
+  /** 用户置顶，排在列表前面。 */
+  pinned?: boolean;
+  /** 用户已隐藏；只会在搜索结果里为 true。新消息会自动顶回。 */
+  hidden?: boolean;
   preview: string | null;
   updated_at: number;
+};
+/** 综合搜索：会话（含已隐藏）、消息、Agent。 */
+export type SearchResults = {
+  chats: Chat[];
+  messages: {
+    chat_id: string;
+    chat_ref: string;
+    chat_name: string;
+    id: number;
+    sender: string;
+    sender_name: string;
+    text: string;
+    created_at: number;
+  }[];
+  agents: { id: string; ref: string; name: string; description: string }[];
 };
 export type Message = {
   id: number;

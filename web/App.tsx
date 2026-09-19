@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, LoaderCircle, MessageSquare } from "lucide-react";
-import { api } from "./api.ts";
+import { api, patchChat } from "./api.ts";
 import { useOverview } from "./useOverview.ts";
 import { Empty } from "./components/Empty.tsx";
 import type { Agent } from "./components/AgentAvatar.tsx";
@@ -25,6 +25,10 @@ export function App() {
   const [modal, setModal] = useState<"agent" | "chat" | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openingAgent, setOpeningAgent] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<{
+    chatId: string;
+    messageId: number;
+  } | null>(null);
   const [error, setError] = useState("");
   const active = overview?.chats.find((chat) => chat.id === chatId);
   const selectedAgent = overview?.agents.find((agent) => agent.id === agentId);
@@ -39,8 +43,21 @@ export function App() {
     setMobileOpen(false);
   }
   function selectChat(id: string) {
+    setAnchor(null);
     setChatId(id);
     navigate("chat");
+  }
+  /** 搜索结果跳到某条消息：先解除隐藏，再进入会话并定位高亮。 */
+  async function openMessage(chat: string, messageId: number) {
+    try {
+      await patchChat(chat, { hidden: false });
+    } catch {
+      // 未能解除隐藏也照常打开。
+    }
+    setChatId(chat);
+    setAnchor({ chatId: chat, messageId });
+    navigate("chat");
+    refresh();
   }
   async function openChat(key: string, path: string, body?: unknown) {
     if (openingAgent) return;
@@ -76,6 +93,8 @@ export function App() {
         openingAgent={openingAgent}
         connected={connected}
         details={setAgentId}
+        refresh={refresh}
+        openMessage={(chat, message) => void openMessage(chat, message)}
       />
       <main className="main">
         <button
@@ -133,6 +152,8 @@ export function App() {
               hidden={section !== "chat"}
               details={setAgentId}
               refresh={refresh}
+              anchor={anchor}
+              clearAnchor={() => setAnchor(null)}
             />
           </>
         )}

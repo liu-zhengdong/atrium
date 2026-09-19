@@ -72,6 +72,7 @@ export function MessageTimeline({
               <article
                 className={`message ${message.sender === "user" ? "outgoing" : "incoming"} ${continuation ? "continuation" : ""}`}
                 key={message.id}
+                id={`msg-${message.id}`}
                 data-message-id={message.id}
               >
                 <span

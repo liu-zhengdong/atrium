@@ -1,3 +1,5 @@
+import type { Chat, SearchResults } from "../shared/schema.ts";
+
 export async function api<T>(
   path: string,
   method = "GET",
@@ -13,3 +15,11 @@ export async function api<T>(
     throw new Error(value.error ?? `请求失败（${response.status}）`);
   return value;
 }
+
+/** 综合搜索：会话、消息、Agent。 */
+export const searchAll = (q: string) =>
+  api<SearchResults>(`/search?q=${encodeURIComponent(q)}`);
+
+/** 会话的显示状态：隐藏（新消息自动顶回）、置顶。 */
+export const patchChat = (id: string, body: { hidden?: boolean; pinned?: boolean }) =>
+  api<Chat>(`/chats/${id}`, "PATCH", body);

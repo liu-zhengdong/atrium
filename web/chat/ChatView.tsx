@@ -19,6 +19,8 @@ export function ChatView({
   hidden,
   details,
   refresh,
+  anchor,
+  clearAnchor,
 }: {
   active: Overview["chats"][number] | undefined;
   chatId: string | null;
@@ -27,8 +29,12 @@ export function ChatView({
   hidden: boolean;
   details: (id: string) => void;
   refresh: () => void;
+  anchor: { chatId: string; messageId: number } | null;
+  clearAnchor: () => void;
 }) {
-  const conversation = useConversation(chatId, revision);
+  const anchoredId =
+    anchor && anchor.chatId === chatId ? anchor.messageId : undefined;
+  const conversation = useConversation(chatId, revision, anchoredId);
   const { members } = conversation;
   const [addingMember, setAddingMember] = useState(false);
   const directAgent = agents.find((a) => a.id === active?.direct_agent);
@@ -41,6 +47,7 @@ export function ChatView({
   }, [chatId]);
   useEffect(() => {
     if (!chatId || hidden || !latest || latest <= markedRead.current) return;
+    if (anchoredId) return; // 定位到历史消息不代表读到了最新
     if (!conversation.atBottom()) return;
     markedRead.current = latest;
     void api(`/chats/${chatId}/read`, "POST", { through: latest }).catch(
@@ -48,7 +55,20 @@ export function ChatView({
         markedRead.current = 0;
       },
     );
-  }, [chatId, latest, hidden]);
+  }, [chatId, latest, hidden, anchoredId]);
+  const scrolledTo = useRef("");
+  useEffect(() => {
+    if (!anchoredId || conversation.loading) return;
+    const key = `${chatId}:${anchoredId}`;
+    if (scrolledTo.current === key) return;
+    const el = document.getElementById(`msg-${anchoredId}`);
+    if (!el) return;
+    scrolledTo.current = key;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("flash");
+    const timer = setTimeout(() => el.classList.remove("flash"), 2400);
+    return () => clearTimeout(timer);
+  }, [anchoredId, conversation.loading, chatId]);
   return (
     <section
       className="chat-panel"
@@ -118,6 +138,12 @@ export function ChatView({
             </p>
           )}
 
+          {anchoredId && (
+            <p className="anchor-bar" role="note">
+              已定位到搜索到的消息
+              <button onClick={clearAnchor}>回到最新</button>
+            </p>
+          )}
           <MessageTimeline
             active={active}
             agents={agents}

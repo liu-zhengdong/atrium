@@ -10,7 +10,11 @@ type MessagePage = {
   read_state: ChatReadState[];
 };
 
-export function useConversation(chatId: string | null, revision: number) {
+export function useConversation(
+  chatId: string | null,
+  revision: number,
+  anchorId?: number,
+) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [readState, setReadState] = useState<ChatReadState[]>([]);
   const loadedFrom = useRef<number | undefined>(undefined);
@@ -21,13 +25,16 @@ export function useConversation(chatId: string | null, revision: number) {
   const scroll = useRef<HTMLDivElement>(null),
     nearBottom = useRef(true);
   const loadedChat = useRef<string | null>(null),
-    currentChat = useRef(chatId);
+    currentChat = useRef(chatId),
+    anchored = useRef<number | undefined>(undefined);
   currentChat.current = chatId;
 
   useEffect(() => {
     if (!chatId) return;
     let cancelled = false;
-    const first = loadedChat.current !== chatId;
+    const first =
+      loadedChat.current !== chatId || anchored.current !== anchorId;
+    anchored.current = anchorId;
     if (first) {
       setLoading(true);
       setMessages([]);
@@ -40,7 +47,9 @@ export function useConversation(chatId: string | null, revision: number) {
     }
     void Promise.all([
       api<MessagePage>(
-        `/chats/${chatId}/messages${loadedFrom.current ? `?read_from=${loadedFrom.current}` : ""}`,
+        anchorId
+          ? `/chats/${chatId}/messages?around=${anchorId}`
+          : `/chats/${chatId}/messages${loadedFrom.current ? `?read_from=${loadedFrom.current}` : ""}`,
       ),
       api<{ members: string[] }>(`/chats/${chatId}`),
     ])
@@ -51,7 +60,12 @@ export function useConversation(chatId: string | null, revision: number) {
           mergeReadState(first ? [] : old, page.read_state),
         );
         loadedFrom.current ??= page.items[0]?.id;
-        if (first) {
+        if (anchorId) {
+          nearBottom.current = false;
+          loadedFrom.current = page.items[0]?.id;
+          setMessages(mergeMessages([], page.items, chatId));
+          setOlder(false);
+        } else if (first) {
           setMessages(mergeMessages([], page.items, chatId));
           setOlder(page.has_more);
         } else {
@@ -70,7 +84,7 @@ export function useConversation(chatId: string | null, revision: number) {
     return () => {
       cancelled = true;
     };
-  }, [revision, chatId]);
+  }, [revision, chatId, anchorId]);
 
   useEffect(() => {
     if (nearBottom.current && scroll.current)
@@ -101,6 +115,7 @@ export function useConversation(chatId: string | null, revision: number) {
   }
 
   return {
+    anchored: anchorId !== undefined,
     // Before the effect runs, or if the new request fails, never show the
     // previous conversation's data beneath the newly selected heading.
     messages: messages.filter((message) => message.chat_id === chatId),

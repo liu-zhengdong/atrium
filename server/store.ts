@@ -11,6 +11,7 @@ import {
   type Message,
   type Page,
   type ChatReadState,
+  type SearchResults,
 } from "../shared/schema.ts";
 
 export class Problem extends Error {
@@ -90,6 +91,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS members (chat_id TEXT REFERENCES chats(id), agent_id TEXT REFERENCES agents(id), last_read INTEGER NOT NULL DEFAULT 0,
         last_notified INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(chat_id,agent_id));
       CREATE TABLE IF NOT EXISTS user_reads (chat_id TEXT PRIMARY KEY, last_read INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS user_chat_state (chat_id TEXT PRIMARY KEY, hidden_after INTEGER, pinned INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL REFERENCES chats(id), sender TEXT NOT NULL,
         body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, UNIQUE(sender,client_id));
       CREATE INDEX IF NOT EXISTS messages_chat_id ON messages(chat_id,id);
@@ -338,20 +340,38 @@ export class Store {
     this.agent(id);
     this.run("UPDATE agents SET work=? WHERE id=?", work, id);
   }
-  chats(agentId?: string): Chat[] {
+  chats(
+    agentId?: string,
+    { includeHidden = false }: { includeHidden?: boolean } = {},
+  ): Chat[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (agentId) {
+      where.push(
+        "EXISTS(SELECT 1 FROM members WHERE chat_id=c.id AND agent_id=?)",
+      );
+      params.push(agentId);
+    }
+    if (!includeHidden)
+      where.push(
+        "(us.hidden_after IS NULL OR COALESCE((SELECT MAX(id) FROM messages WHERE chat_id=c.id),0) > us.hidden_after)",
+      );
     return this.all<Chat>(
       `SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only, (SELECT substr(body,1,100) FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
       COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at,
       (c.direct_agent IS NOT NULL OR EXISTS(SELECT 1 FROM messages WHERE chat_id=c.id AND sender='user')) AS mine,
       (SELECT COUNT(*) FROM messages WHERE chat_id=c.id AND sender!='user' AND id>COALESCE((SELECT last_read FROM user_reads WHERE chat_id=c.id),0)) AS unread,
-      COALESCE((SELECT group_concat(name,char(31)) FROM (SELECT a.name AS name FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id ORDER BY m.rowid LIMIT 4)),'') AS member_names
-      FROM chats c JOIN chat_refs r ON r.chat_id=c.id
-      ${agentId ? "WHERE EXISTS(SELECT 1 FROM members WHERE chat_id=c.id AND agent_id=?)" : ""} ORDER BY updated_at DESC,c.rowid DESC`,
-      ...(agentId ? [agentId] : []),
+      COALESCE((SELECT group_concat(name,char(31)) FROM (SELECT a.name AS name FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id ORDER BY m.rowid LIMIT 4)),'') AS member_names,
+      COALESCE(us.pinned,0) AS pinned, (us.hidden_after IS NOT NULL) AS hidden
+      FROM chats c JOIN chat_refs r ON r.chat_id=c.id LEFT JOIN user_chat_state us ON us.chat_id=c.id
+      ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY pinned DESC, updated_at DESC,c.rowid DESC`,
+      ...params,
     ).map((chat) => ({
       ...chat,
       read_only: !!chat.read_only,
       mine: !!chat.mine,
+      pinned: !!chat.pinned,
+      hidden: !!chat.hidden,
       member_names:
         typeof chat.member_names === "string" && chat.member_names
           ? (chat.member_names as unknown as string).split("\x1f")
@@ -379,6 +399,59 @@ export class Store {
       target,
     );
     return { last_read: target, changed: true };
+  }
+  /** 隐藏只是从列表消失：新消息会自动顶回，搜索可以找回。 */
+  setChatHidden(chatId: string, hidden: boolean) {
+    this.chat(chatId);
+    if (hidden)
+      this.db
+        .prepare(
+          "INSERT INTO user_chat_state(chat_id,hidden_after) VALUES(?,(SELECT COALESCE(MAX(id),0) FROM messages WHERE chat_id=?)) ON CONFLICT(chat_id) DO UPDATE SET hidden_after=excluded.hidden_after",
+        )
+        .run(chatId, chatId);
+    else
+      this.db
+        .prepare("UPDATE user_chat_state SET hidden_after=NULL WHERE chat_id=?")
+        .run(chatId);
+  }
+  setChatPinned(chatId: string, pinned: boolean) {
+    this.chat(chatId);
+    this.db
+      .prepare(
+        "INSERT INTO user_chat_state(chat_id,pinned) VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET pinned=excluded.pinned",
+      )
+      .run(chatId, pinned ? 1 : 0);
+  }
+  /** 综合搜索：会话名字或成员名、消息正文、Agent 名字或简介。 */
+  search(raw: string): SearchResults {
+    const needle = raw.trim().toLowerCase();
+    const like = `%${needle.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+    const chats = this
+      .chats(undefined, { includeHidden: true })
+      .filter(
+        (chat) =>
+          chat.name.toLowerCase().includes(needle) ||
+          (chat.member_names ?? []).some((name) =>
+            name.toLowerCase().includes(needle),
+          ),
+      )
+      .slice(0, 10);
+    const messages = this.all<SearchResults["messages"][number]>(
+      `SELECT m.chat_id,'c'||r.number AS chat_ref,c.name AS chat_name,m.id,m.sender,
+       CASE WHEN m.sender='user' THEN '你' ELSE COALESCE(a.deleted_name,a.name,m.sender) END AS sender_name,
+       substr(m.body,1,160) AS text, m.created_at
+       FROM messages m JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
+       LEFT JOIN agents a ON a.id=m.sender
+       WHERE m.body LIKE ? ESCAPE '\\' ORDER BY m.created_at DESC, m.rowid DESC LIMIT 20`,
+      like,
+    );
+    const agents = this.all<SearchResults["agents"][number]>(
+      `SELECT a.id,'a'||r.number AS ref,a.name,a.description FROM agents a JOIN agent_refs r ON r.agent_id=a.id
+       WHERE a.deleted_at IS NULL AND (a.name LIKE ? ESCAPE '\\' OR a.description LIKE ? ESCAPE '\\') ORDER BY a.rowid LIMIT 10`,
+      like,
+      like,
+    );
+    return { chats, messages, agents };
   }
   chat(id: string): Chat {
     const chat = this.one<Chat>(
@@ -766,8 +839,23 @@ export class Store {
     chatId: string,
     before = Number.MAX_SAFE_INTEGER,
     readFrom?: number,
+    around?: number,
   ) {
     this.chat(chatId);
+    if (around) {
+      const from = Math.max(1, around - 25);
+      const rows = this.all<MessageRow>(
+        "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>=? AND m.id<=? ORDER BY m.id",
+        chatId,
+        from,
+        around + 24,
+      );
+      return {
+        items: rows.map(decodeMessage),
+        has_more: false,
+        read_state: this.readState(chatId, from),
+      };
+    }
     const rows = this.all<MessageRow>(
       "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id<? ORDER BY m.id DESC LIMIT 51",
       chatId,

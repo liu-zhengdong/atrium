@@ -355,9 +355,29 @@ export async function createApp(options: {
       .object({
         before: z.coerce.number().int().positive().optional(),
         read_from: z.coerce.number().int().positive().optional(),
+        around: z.coerce.number().int().positive().optional(),
       })
       .parse(request.query);
-    return store.timeline(agentParams(request), q.before, q.read_from);
+    return store.timeline(agentParams(request), q.before, q.read_from, q.around);
+  });
+  app.patch("/api/chats/:id", (request) => {
+    const input = z
+      .object({
+        hidden: z.boolean().optional(),
+        pinned: z.boolean().optional(),
+      })
+      .strict()
+      .parse(request.body);
+    const id = store.resolveChatId((request.params as { id: string }).id);
+    if (input.hidden !== undefined) store.setChatHidden(id, input.hidden);
+    if (input.pinned !== undefined) store.setChatPinned(id, input.pinned);
+    changed();
+    return store.chat(id);
+  });
+  app.get("/api/search", (request) => {
+    const q = String((request.query as { q?: string }).q ?? "").trim();
+    if (!q) throw new Problem(400, "缺少搜索词");
+    return store.search(q);
   });
   app.post("/api/chats/:id/read", (request) => {
     const input = z

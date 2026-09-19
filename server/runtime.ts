@@ -27,7 +27,12 @@ import {
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
 import { prepareProfile } from "./profile.ts";
-import { linkProfile, resolvePiHome, unlinkProfile } from "./agents.ts";
+import {
+  ensureDesktopCwd,
+  linkProfile,
+  resolvePiHome,
+  unlinkProfile,
+} from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 
@@ -92,7 +97,8 @@ export class Runtimes {
     private data: string,
     private changed: () => void,
     private baseUrl: () => string,
-    private piHome?: string,
+    private piHome: string | undefined,
+    private desktops: string,
   ) {
     this.traces = new TraceStore(store);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
@@ -566,8 +572,7 @@ export class Runtimes {
     return this.store.agent(id);
   }
   async start(id: string, automatic = false) {
-    const agent = this.store.agent(id),
-      binding = this.binding(id);
+    const binding = this.binding(id);
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (binding.runtime_pid && alive(binding.runtime_pid))
       throw new Problem(409, "原 Pi 进程仍存在，等待重连；不会另开同一会话");
@@ -583,14 +588,19 @@ export class Runtimes {
       failures: automatic ? (last?.failures ?? 0) + 1 : 1,
     });
     await this.operation(id, async () => {
-      if (agent.agent_directory) {
+      const current = this.store.agent(id);
+      const cwd = ensureDesktopCwd(this.store, this.desktops, current);
+      if (cwd !== current.cwd) this.changed();
+      if (current.agent_directory) {
         const { runtimeId } = await this.rpc<{ runtimeId: string }>(
           "_pi/identity/start",
           {
             identityId: id,
-            agentDirectory: agent.agent_directory,
-            cwd: agent.cwd,
-            ...(agent.session_file ? { sessionFile: agent.session_file } : {}),
+            agentDirectory: current.agent_directory,
+            cwd,
+            ...(current.session_file
+              ? { sessionFile: current.session_file }
+              : {}),
           },
         );
         try {
@@ -607,7 +617,7 @@ export class Runtimes {
       if (!sessionId && binding.session_file) {
         ({ sessionId } = await this.rpc<{ sessionId: string }>(
           "_pi/session/import",
-          { cwd: agent.cwd, sessionFile: binding.session_file },
+          { cwd, sessionFile: binding.session_file },
         ));
         this.store.run(
           "UPDATE agents SET acp_session_id=? WHERE id=?",
@@ -618,12 +628,12 @@ export class Runtimes {
       if (sessionId)
         await this.rpc("session/load", {
           sessionId,
-          cwd: agent.cwd,
+          cwd,
           mcpServers: this.services(id),
         });
       else
         ({ sessionId } = await this.rpc<{ sessionId: string }>("session/new", {
-          cwd: agent.cwd,
+          cwd,
           mcpServers: this.services(id),
         }));
       try {

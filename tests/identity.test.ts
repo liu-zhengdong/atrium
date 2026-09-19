@@ -13,7 +13,8 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp } from "../server/app.ts";
-import { Store } from "../server/store.ts";
+import { ensureDesktopCwd } from "../server/agents.ts";
+import { Problem, Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 
 test("长期身份配置独立、引用共享资源、不复制凭据；改名与迁移保留短号及聊天", async (t) => {
@@ -188,4 +189,101 @@ test("身份短号原地迁移、持久不复用；坏引用拒绝", (t) => {
   });
   assert.equal(store.one<{ n: number }>("SELECT total_changes() AS n")!.n, 0);
   assert.equal(store.agents()[0]!.ref, "a2");
+});
+
+test("工作目录丢失时回落到桌面目录；仍在则保持", (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-cwd-")));
+  const desktops = join(root, "desktops");
+  mkdirSync(desktops, { recursive: true });
+  const store = new Store(join(root, "atrium.sqlite"));
+  t.after(() => {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const gone = join(root, "missing-workspace");
+  const { agent } = store.createAgent("Atlas", gone);
+
+  const custom = mkdtempSync(join(root, "custom-"));
+  store.run("UPDATE agents SET cwd=? WHERE id=?", custom, agent.id);
+  assert.equal(
+    ensureDesktopCwd(store, desktops, store.agent(agent.id)),
+    custom,
+    "已有目录不迁回桌面",
+  );
+  assert.equal(store.agent(agent.id).cwd, custom);
+
+  store.run("UPDATE agents SET cwd=? WHERE id=?", gone, agent.id);
+  const desktop = ensureDesktopCwd(store, desktops, store.agent(agent.id));
+  assert.equal(desktop, realpathSync(join(desktops, "Atlas")));
+  assert.equal(store.agent(agent.id).cwd, desktop);
+  assert(existsSync(desktop));
+
+  store.run("UPDATE agents SET cwd=? WHERE id=?", gone, agent.id);
+  rmSync(desktop, { recursive: true, force: true });
+  writeFileSync(join(desktops, "Atlas"), "not a directory");
+  assert.throws(
+    () => ensureDesktopCwd(store, desktops, store.agent(agent.id)),
+    (error: unknown) =>
+      error instanceof Problem &&
+      error.statusCode === 409 &&
+      error.message.includes("无法创建工作目录"),
+  );
+  assert.equal(store.agent(agent.id).cwd, gone, "回落失败时不改记录");
+});
+
+test("启动时把丢失的工作目录写回桌面并交给 Pi", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-start-cwd-")));
+  const desktops = join(root, "desktops");
+  let started: { cwd?: string } = {};
+  t.mock.method(
+    Runtimes.prototype as unknown as {
+      rpc: (method: string, params: unknown) => Promise<unknown>;
+    },
+    "rpc",
+    async (method: string, params: unknown) => {
+      if (method === "_pi/identity/start") {
+        started = params as { cwd?: string };
+        return { runtimeId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
+      }
+      return { runtimes: [] };
+    },
+  );
+  t.mock.method(
+    Runtimes.prototype as unknown as { bind: () => Promise<void> },
+    "bind",
+    async () => {},
+  );
+  t.mock.method(Runtimes.prototype, "pump", async () => {});
+  const template = join(root, "template");
+  mkdirSync(template);
+  writeFileSync(
+    join(template, "settings.json"),
+    JSON.stringify({ defaultModel: "fixture", packages: [] }),
+  );
+  const { app, store } = await createApp({
+    data: join(root, "data"),
+    desktops,
+    piHome: join(root, ".pi"),
+  });
+  t.after(async () => {
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/agents",
+    payload: { name: "Atlas", template },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const { agent } = created.json();
+  const gone = join(root, "gone");
+  store.run("UPDATE agents SET cwd=? WHERE id=?", gone, agent.id);
+  const response = await app.inject({
+    method: "POST",
+    url: `/api/agents/${agent.id}/start`,
+  });
+  assert.equal(response.statusCode, 200, response.body);
+  const desktop = realpathSync(join(desktops, "Atlas"));
+  assert.equal(store.agent(agent.id).cwd, desktop);
+  assert.equal(started.cwd, desktop);
 });

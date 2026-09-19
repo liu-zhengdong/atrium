@@ -31,23 +31,24 @@ export function AgentDirectory({
   );
   const fresh = discovered.filter((r) => matches(agentName(r.cwd), r.cwd));
   return (
-    <section className="directory">
-      <header className="directory-header">
+    <section className="min-h-0 flex-1 overflow-auto px-9 py-[34px]">
+      <header className="mb-[26px] flex items-center justify-between gap-5">
         <div>
-          <h1>
-            Agents <span>{count}</span>
+          <h1 className="text-2xl tracking-[-0.04em]">
+            Agents <span className="ml-[7px] text-[13px] font-normal text-muted">{count}</span>
           </h1>
-          <p>选择一位 Agent，开始对话。</p>
+          <p className="mt-1.5 text-[13px] text-muted">选择一位 Agent，开始对话。</p>
         </div>
-        <button className="button secondary" onClick={create}>
+        <button className="button secondary flex-none" onClick={create}>
           <Plus size={16} />
           新建 Agent
         </button>
       </header>
       {count > 0 && (
-        <label className="directory-search">
+        <label className="mb-[26px] flex max-w-[400px] items-center gap-2.5 rounded-lg border border-line px-3 text-muted focus-within:border-[#aea18b]">
           <Search size={16} />
           <input
+            className="plain-field min-w-0 flex-1 border-0 bg-transparent py-2.5 outline-none"
             aria-label="搜索 Agent"
             placeholder="搜索名字或工作目录"
             value={query}
@@ -56,39 +57,42 @@ export function AgentDirectory({
         </label>
       )}
       {overview.discovery.error && (
-        <p role="alert" className="error directory-alert">
+        <p role="alert" className="error mb-5">
           {overview.discovery.error} 已有会话仍可查看，正在后台重试。
         </p>
       )}
-      <div className="agent-grid">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(280px,100%),1fr))] gap-4">
         {agents.map((a) => (
-          <article className="agent-card" key={a.id}>
-            <div className="agent-open">
+          <article
+            className="group relative min-w-0 rounded-xl border border-line transition-[border-color,background] duration-150 hover:border-[#c9c3b8] hover:bg-[#fcfbf9]"
+            key={a.id}
+          >
+            <div className="flex w-full items-start gap-3.5 rounded-xl px-5 pb-[19px] pt-[22px] text-left">
               <Avatar
                 name={a.name}
                 online={a.available}
                 onClick={() => details(a.id)}
               />
               <button
-                className="agent-chat-open"
+                className="flex min-w-0 flex-1 items-start text-left"
                 aria-label={`与 ${a.name} 聊天`}
                 disabled={opening !== null}
                 onClick={() => openAgent(a)}
               >
-                <span className="agent-card-copy">
-                  <strong>{a.name}</strong>
-                  <span className="agent-state">
+                <span className="grid min-w-0 flex-1 gap-[5px]">
+                  <strong className="truncate pr-[18px] text-[15px] font-[560]">{a.name}</strong>
+                  <span className="text-xs text-muted">
                     {a.ref} · {runtimeLabel(a)}
                     {a.unread > 0 && <> · {a.unread} 条未读</>}
                   </span>
                   <span
-                    className="agent-work"
+                    className="mt-3 truncate text-xs text-muted"
                     title={a.work || a.description || a.cwd}
                   >
                     {a.work || a.description || a.cwd}
                   </span>
                 </span>
-                <span className="agent-card-action">
+                <span className="self-end text-[#9a9283]">
                   {opening === a.id ? (
                     <LoaderCircle className="spin" size={16} />
                   ) : (
@@ -101,7 +105,7 @@ export function AgentDirectory({
         ))}
       </div>
       {!count ? (
-        <div className="directory-empty">
+        <div className="grid justify-items-center gap-3.5 px-5 py-20 text-center text-muted [&_h2]:text-lg [&_h2]:font-medium [&_h2]:text-ink [&_p]:text-[13px] [&_p]:leading-[1.8]">
           {overview.discovery.scanning ? (
             <LoaderCircle className="spin" size={28} />
           ) : (
@@ -120,7 +124,7 @@ export function AgentDirectory({
         </div>
       ) : (
         !agents.length && (
-          <div className="directory-empty">
+          <div className="grid justify-items-center gap-3.5 px-5 py-20 text-center text-muted [&_h2]:text-lg [&_h2]:font-medium [&_h2]:text-ink [&_p]:text-[13px] [&_p]:leading-[1.8]">
             <Search size={24} />
             <h2>没有匹配的 Agent</h2>
             <button className="button secondary" onClick={() => setQuery("")}>

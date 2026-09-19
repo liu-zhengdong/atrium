@@ -57,14 +57,14 @@ export function DeleteAgent({
       {confirming &&
         createPortal(
           <Modal title="删除 Agent？" close={close}>
-            <div className="delete-confirmation" aria-busy={busy}>
-              <p className="delete-target">
+            <div className="px-6 py-[22px] text-[13px] leading-[1.8]" aria-busy={busy}>
+              <p className="m-0 text-base font-semibold [overflow-wrap:anywhere]">
                 {agent.name} <span className="muted">· {agent.ref}</span>
               </p>
-              <p>
+              <p className="mb-0 mt-3.5">
                 删除后，该身份不能再启动或接收消息，待投递通知会取消。
               </p>
-              <p className="muted">
+              <p className="muted mt-3.5">
                 历史聊天与本地会话文件保留，不删除项目文件和共享配置。此操作不能在界面中撤销。
               </p>
               {error && (
@@ -72,7 +72,7 @@ export function DeleteAgent({
                   {error}
                 </p>
               )}
-              <div className="form-actions">
+              <div className="mt-[25px] flex justify-end gap-[9px]">
                 <button
                   className="button secondary"
                   data-autofocus

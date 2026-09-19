@@ -30,7 +30,7 @@ export function Modal({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      className={drawer ? "drawer" : ""}
+      className={`w-[460px] max-w-[calc(100%-32px)] ${drawer ? "drawer" : ""}`}
       onCancel={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -41,8 +41,10 @@ export function Modal({
       }}
     >
       <div className="dialog-inner">
-        <header className="dialog-header">
-          <h2 id={titleId}>{title}</h2>
+        <header className="flex items-center justify-between border-b border-line px-6 py-5">
+          <h2 id={titleId} className="text-base font-[580]">
+            {title}
+          </h2>
           <button className="icon-button" aria-label="关闭" onClick={close}>
             <X size={18} />
           </button>

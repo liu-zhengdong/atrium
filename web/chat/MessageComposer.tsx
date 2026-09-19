@@ -162,7 +162,7 @@ export function MessageComposer({
             }
           }}
         />
-        <div className="flex items-center gap-[9px] px-2.5 pb-2.5 pt-1">
+        <div className="flex items-center gap-[9px] px-2.5 pb-2.5 pt-1 text-[10px] text-[#a09b8d]">
           <button
             type="button"
             className="icon-button"

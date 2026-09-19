@@ -50,9 +50,18 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
     item.state === "unknown" || (item.state === "running" && !active);
   return (
     <li
-      className={`trace-item ${active ? "active" : ""} ${item.state === "error" ? "failed" : ""}`}
+      className={`relative border-l border-line pb-5 pl-[23px] last:border-transparent last:pb-0`}
     >
-      <span className="trace-node" aria-hidden="true">
+      <span
+        className={`absolute -left-[10px] top-0 grid h-[23px] w-[19px] place-items-center bg-[#faf9f6] ${
+          active
+            ? "text-[#8a6b37]"
+            : item.state === "error"
+              ? "text-[#a35338]"
+              : "text-[#918875]"
+        }`}
+        aria-hidden="true"
+      >
         {active ? (
           <LoaderCircle size={13} className="spin" />
         ) : item.state === "error" || unknown ? (
@@ -63,13 +72,17 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
           <Check size={12} />
         )}
       </span>
-      <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-        <summary>
-          <div className="trace-caption">
+      <details
+        open={open}
+        onToggle={(e) => setOpen(e.currentTarget.open)}
+        className="group/details"
+      >
+        <summary className="group cursor-pointer list-none rounded-[5px] focus-visible:outline-2 focus-visible:outline-[#8a7756] focus-visible:outline-offset-[3px] [&::-webkit-details-marker]:hidden">
+          <div className="flex justify-between text-[10px] leading-[23px] text-muted">
             <time dateTime={new Date(item.at).toISOString()}>
               {time(item.at)}
             </time>
-            <span>
+            <span className="text-[#92724b]">
               {active
                 ? "进行中"
                 : unknown
@@ -79,13 +92,16 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
                     : ""}
             </span>
           </div>
-          <div className="trace-title">
-            <span>{item.title}</span>
-            <ChevronRight size={14} />
+          <div className="flex items-baseline gap-2.5 text-xs leading-[1.65] group-hover:text-[#8a6b37]">
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{item.title}</span>
+            <ChevronRight
+              size={14}
+              className="flex-shrink-0 text-[#aaa08f] transition-transform group-open/details:rotate-90"
+            />
           </div>
         </summary>
         {open && (
-          <div className="trace-detail">
+          <div className="mt-[9px] rounded-[7px] border border-line bg-[#f5f3ee] px-3 py-[11px] text-[11px]">
             {error ? (
               <p role="alert" className="error">
                 {error}{" "}
@@ -97,14 +113,16 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
               <>
                 {detail.input && (
                   <>
-                    <h4>调用参数</h4>
-                    <pre>{detail.input}</pre>
+                    <h4 className="m-0 mb-1.5 text-[10px] font-medium text-muted">调用参数</h4>
+                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">{detail.input}</pre>
                   </>
                 )}
                 {detail.output && (
                   <>
-                    <h4>{item.kind === "tool" ? "执行结果" : "内容"}</h4>
-                    <pre>{detail.output}</pre>
+                    <h4 className="m-0 mb-1.5 text-[10px] font-medium text-muted">
+                      {item.kind === "tool" ? "执行结果" : "内容"}
+                    </h4>
+                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">{detail.output}</pre>
                   </>
                 )}
                 {!detail.input && !detail.output && (
@@ -210,16 +228,19 @@ export function AgentTrace({
       item.state === "running" && item.generation === agent.runtime?.generation,
   );
   return (
-    <section className="trace-panel" aria-label="运行轨迹">
-      <div className="trace-status" aria-live="polite">
+    <section className="relative flex min-h-0 flex-1 flex-col" aria-label="运行轨迹">
+      <div
+        className="mx-6 mb-3 mt-[19px] flex items-center gap-3 rounded-[9px] border border-line bg-soft px-3.5 py-[13px] text-[#74684e]"
+        aria-live="polite"
+      >
         {agent.runtime?.busy ? (
-          <LoaderCircle size={15} className="spin" />
+          <LoaderCircle size={15} className="spin flex-shrink-0" />
         ) : (
-          <Activity size={15} />
+          <Activity size={15} className="flex-shrink-0" />
         )}
-        <div>
-          <span>实际运行</span>
-          <strong>
+        <div className="grid min-w-0 gap-[5px]">
+          <span className="text-[10px] text-muted">实际运行</span>
+          <strong className="truncate text-xs font-medium">
             {runtimeError
               ? "轨迹暂不可用"
               : agent.runtime?.busy
@@ -231,17 +252,17 @@ export function AgentTrace({
         </div>
       </div>
       {runtimeError && (
-        <p className="trace-warning" role="status">
+        <p className="mx-6 mb-3 text-[11px] leading-[1.7] text-[#8a7254]" role="status">
           {runtimeError}
         </p>
       )}
       {error && (
-        <p className="error trace-warning" role="alert">
+        <p className="error mx-6! mb-3! mt-0!" role="alert">
           {error} <button onClick={() => setRetry((n) => n + 1)}>重试</button>
         </p>
       )}
       <div
-        className="trace-scroll"
+        className="min-h-0 flex-1 overflow-auto overscroll-contain px-6 pb-6 pt-1"
         ref={scroll}
         onScroll={() => {
           const el = scroll.current;
@@ -253,7 +274,7 @@ export function AgentTrace({
         }}
       >
         {loading ? (
-          <p className="loading">
+          <p className="flex items-center gap-2 px-6 py-4 text-xs text-muted">
             <LoaderCircle size={16} className="spin" />
             加载轨迹…
           </p>
@@ -265,14 +286,14 @@ export function AgentTrace({
           <>
             {older && (
               <button
-                className="older"
+                className="mx-auto mb-[30px] block rounded-md bg-[#f8f6f0] px-3 py-1.5 text-[11px] text-[#8e816b]"
                 disabled={paging}
                 onClick={() => void loadOlder()}
               >
                 {paging ? "正在加载…" : "查看更早轨迹"}
               </button>
             )}
-            <ol className="trace-list">
+            <ol className="m-0 list-none p-0 pl-2">
               {items.map((item, index) => (
                 <TraceGroup
                   key={item.id}
@@ -289,7 +310,7 @@ export function AgentTrace({
       </div>
       {!atLatest && (
         <button
-          className="trace-latest button secondary"
+          className="button secondary absolute bottom-[51px] right-[22px] text-[11px] shadow-[0_3px_12px_#44371a12]"
           onClick={() => {
             nearBottom.current = true;
             setAtLatest(true);
@@ -301,7 +322,7 @@ export function AgentTrace({
           回到最新
         </button>
       )}
-      <p className="trace-footnote">
+      <p className="flex-shrink-0 border-t border-line px-6 py-3 text-[10px] text-muted">
         真实运行记录 · 仅供你审阅，不自动共享给同伴
       </p>
     </section>
@@ -318,7 +339,11 @@ function TraceGroup({
 }) {
   return (
     <>
-      {newSession && <li className="trace-session">新的运行会话</li>}
+      {newSession && (
+        <li className="list-none py-3 pb-[18px] pl-[23px] text-[10px] text-muted">
+          新的运行会话
+        </li>
+      )}
       <TraceAction agent={agent} item={item} />
     </>
   );

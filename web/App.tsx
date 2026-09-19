@@ -81,7 +81,7 @@ export function App() {
     });
 
   return (
-    <div className={`app ${mobileOpen ? "mobile-list" : ""}`}>
+    <div className={`app flex h-dvh min-h-[380px] overflow-hidden ${mobileOpen ? "mobile-list" : ""}`}>
       <Sidebar
         overview={overview}
         section={section}
@@ -96,7 +96,7 @@ export function App() {
         refresh={refresh}
         openMessage={(chat, message) => void openMessage(chat, message)}
       />
-      <main className="main">
+      <main className="main relative flex min-w-0 flex-1 flex-col bg-white">
         <button
           className="mobile-back icon-button"
           aria-label="打开导航"
@@ -105,9 +105,10 @@ export function App() {
           <ArrowLeft size={20} />
         </button>
         {(error || loadError) && (
-          <div className="global-error" role="alert">
+          <div className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-[7px] border border-[#ecddc7] bg-[#faf1e6] px-[14px] py-2.5 text-xs text-[#8f673e]" role="alert">
             {error || loadError}
             <button
+              className="underline"
               onClick={() => {
                 setError("");
                 refresh();

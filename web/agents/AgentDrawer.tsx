@@ -143,26 +143,34 @@ export function AgentDrawer({
   }
   return (
     <Modal title={agent.name} close={close} drawer>
-      <div className="agent-summary">
+      <div className="flex items-center gap-[13px] px-[25px] py-[23px]">
         <Avatar name={agent.name} online={agent.available} />
-        <div>
-          <strong>{runtimeLabel(agent)}</strong>
-          <p>
+        <div className="min-w-0">
+          <strong className="text-xs font-[550]">{runtimeLabel(agent)}</strong>
+          <p className="mt-[3px] text-xs text-[#978c78] [overflow-wrap:anywhere]">
             <span className="muted">工作声明 · </span>
             {agent.work || "尚未声明"}
           </p>
         </div>
       </div>
-      <div className="tabs" aria-label="Agent 信息">
+      <div className="flex gap-[18px] border-b border-line px-[25px]" aria-label="Agent 信息">
         <button
-          className={tab === "trace" ? "active" : ""}
+          className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
+            tab === "trace"
+              ? "border-[#8a7756] text-[#574a36]"
+              : "border-transparent text-[#8c806d]"
+          }`}
           onClick={() => setTab("trace")}
         >
           <Activity size={16} />
           运行轨迹
         </button>
         <button
-          className={tab === "box" ? "active" : ""}
+          className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
+            tab === "box"
+              ? "border-[#8a7756] text-[#574a36]"
+              : "border-transparent text-[#8c806d]"
+          }`}
           onClick={() => setTab("box")}
         >
           <Inbox size={16} />
@@ -170,7 +178,11 @@ export function AgentDrawer({
           {agent.unread > 0 && <span className="badge">{agent.unread}</span>}
         </button>
         <button
-          className={tab === "settings" ? "active" : ""}
+          className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
+            tab === "settings"
+              ? "border-[#8a7756] text-[#574a36]"
+              : "border-transparent text-[#8c806d]"
+          }`}
           onClick={() => setTab("settings")}
         >
           <Settings2 size={16} />
@@ -180,7 +192,7 @@ export function AgentDrawer({
       {tab === "trace" ? (
         <AgentTrace agent={agent} revision={revision} />
       ) : (
-        <div className="drawer-content">
+        <div className="flex-1 overflow-auto px-[25px] pb-[30px] pt-5">
           {error && (
             <p role="alert" className="error">
               {error}
@@ -192,8 +204,8 @@ export function AgentDrawer({
                 审阅不会改变 Agent 的已读状态；已读不代表处理完成。
               </p>
               {!box ? (
-                <p className="loading">
-                  <LoaderCircle size={16} />
+                <p className="flex items-center gap-2 py-4 text-xs text-muted">
+                  <LoaderCircle size={16} className="spin" />
                   加载收件箱…
                 </p>
               ) : !box.items.length ? (
@@ -201,7 +213,7 @@ export function AgentDrawer({
                   <p>群聊提醒和外部事件会送到这里；完整记录可追溯。</p>
                 </Empty>
               ) : (
-                <div className="notice-list">
+                <div>
                   {box.items.map((notice) => (
                     <article key={notice.id} className="notice">
                       <div className="notice-meta">
@@ -215,9 +227,7 @@ export function AgentDrawer({
                                 : "外部原文"}
                         </span>
                         <time>{time(notice.created_at)}</time>
-                        <span className={notice.done_at ? "" : "unread-label"}>
-                          {notice.done_at ? "已完成" : "未完成"}
-                        </span>
+                        <span>{notice.done_at ? "已完成" : "未完成"}</span>
                       </div>
                       <h3>{notice.title}</h3>
                       <details>
@@ -234,7 +244,7 @@ export function AgentDrawer({
                 </div>
               )}
               {(boxPages.length > 1 || box?.has_more) && (
-                <div className="form-actions">
+                <div className="mt-[25px] flex justify-end gap-[9px]">
                   <button
                     className="button secondary"
                     disabled={boxPages.length === 1}

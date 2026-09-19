@@ -40,14 +40,14 @@ export function SubmitDialog({
         if (!busy) close();
       }}
     >
-      <form className="create-form" onSubmit={save}>
+      <form className="px-6 py-[22px] [&>p]:mb-5 [&>p]:text-xs [&>p]:leading-[1.8] [&_details]:mb-[18px] [&_details>summary]:mb-3.5 [&_details>summary]:cursor-pointer [&_details>summary]:text-xs [&_details>summary]:text-[#6c6456]" onSubmit={save}>
         {error && (
           <p className="error" role="alert">
             {error}
           </p>
         )}
         {children}
-        <div className="form-actions">
+        <div className="mt-[25px] flex justify-end gap-[9px]">
           <button
             className="button secondary"
             type="button"

@@ -7,6 +7,7 @@ export const chatReference = z
 export const agentReference = z
   .union([z.string().regex(/^a[1-9][0-9]{0,14}(?![\s\S])/), id])
   .describe("Agent 短号，如 a1；兼容 UUID");
+export const forkSource = z.union([z.literal("builtin"), agentReference]);
 export const text = z.string().trim().min(1).max(6000);
 export const displayName = z
   .string()

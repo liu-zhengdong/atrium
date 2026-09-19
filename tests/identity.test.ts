@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   existsSync,
+  lstatSync,
   realpathSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -57,8 +58,12 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   assert(existsSync(join(agent.agent_directory, "sessions")));
   assert(!existsSync(join(agent.agent_directory, "auth.json")));
   assert.equal(
-    realpathSync(join(agent.agent_directory, "SYSTEM.md")),
-    join(template, "SYSTEM.md"),
+    readFileSync(join(agent.agent_directory, "SYSTEM.md"), "utf8"),
+    "shared rules",
+  );
+  assert.equal(
+    lstatSync(join(agent.agent_directory, "SYSTEM.md")).isSymbolicLink(),
+    false,
   );
   const settings = JSON.parse(
     readFileSync(join(agent.agent_directory, "settings.json"), "utf8"),

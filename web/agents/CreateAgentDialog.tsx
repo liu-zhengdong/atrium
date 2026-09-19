@@ -1,17 +1,37 @@
 import { useState } from "react";
 import { api } from "../api.ts";
 import { SubmitDialog } from "../components/SubmitDialog.tsx";
-import type { Agent } from "../components/AgentAvatar.tsx";
+import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 export function CreateAgentDialog({
   close,
   created,
   desktopsRoot,
+  agents,
 }: {
   close: () => void;
   created: (agent: Agent, startError?: string) => Promise<void>;
   desktopsRoot?: string;
+  agents: Agent[];
 }) {
   const [name, setName] = useState("");
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState("builtin");
+  const sources = agents.filter((agent) => agent.agent_directory);
+  const matches = query.trim().toLowerCase();
+  const visible = sources.filter((agent) =>
+    `${agent.ref} ${agent.name} ${agent.description}`
+      .toLowerCase()
+      .includes(matches),
+  );
+  const builtinShown =
+    !matches || "内置 builtin 默认配置类型".includes(matches);
+  const available = [
+    ...(builtinShown ? ["builtin"] : []),
+    ...visible.map((agent) => agent.ref),
+  ];
+  const selected = available.includes(source)
+    ? source
+    : (available[0] ?? "builtin");
   async function submit(data: FormData) {
     const result = await api<{ agent: Agent; start_error?: string }>(
       "/agents",
@@ -19,7 +39,7 @@ export function CreateAgentDialog({
       {
         name: data.get("name"),
         description: data.get("description"),
-        ...(data.get("template") ? { template: data.get("template") } : {}),
+        source: selected,
         start: data.get("start") === "on",
       },
     );
@@ -63,19 +83,58 @@ export function CreateAgentDialog({
           rows={2}
         />
       </label>
+      <fieldset className="member-picker">
+        <legend className="member-picker-legend">从哪里复制配置</legend>
+        {sources.length > 8 && (
+          <input
+            className="field mb-2"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="筛选来源"
+            aria-label="筛选来源"
+          />
+        )}
+        {builtinShown && (
+          <label className="check-row">
+            <input
+              type="radio"
+              name="source"
+              value="builtin"
+              checked={selected === "builtin"}
+              onChange={() => setSource("builtin")}
+            />
+            内置
+            <span className="muted">预置类型</span>
+          </label>
+        )}
+        {visible.map((agent) => (
+          <label className="check-row" key={agent.id}>
+            <input
+              type="radio"
+              name="source"
+              value={agent.ref}
+              checked={selected === agent.ref}
+              onChange={() => setSource(agent.ref)}
+            />
+            <Avatar small name={agent.name} />
+            {agent.name}
+            <span className="muted">{agent.ref}</span>
+          </label>
+        ))}
+        {!builtinShown && !visible.length && (
+          <p className="muted">没有匹配的来源</p>
+        )}
+      </fieldset>
       <details>
-        <summary>配置与启动</summary>
-        <label className="form-label">
-          配置模板目录
-          <input className="field" name="template" placeholder="默认使用当前 Pi 配置" />
-        </label>
+        <summary>启动</summary>
         <label className="switch-row">
           <span>创建后在后台启动</span>
           <input name="start" type="checkbox" role="switch" />
         </label>
         <p className="muted small-text">
-          设置与会话独立，扩展和技能复用已安装资源。不会复制登录凭据；内置 Pi
-          认证需在该身份中登录，环境变量和插件自身认证沿用原机制。
+          设置、规则和笔记归这个身份自己所有；扩展和技能复用已安装资源。不会复制登录凭据；内置
+          Pi 认证需在该身份中登录，环境变量和插件自身认证沿用原机制。
         </p>
       </details>
       <p className="muted small-text">

@@ -8,6 +8,7 @@ import {
   id,
   text,
   displayName,
+  forkSource,
   preferences,
   sendInput,
   type Overview,
@@ -17,11 +18,7 @@ import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
 import { createAgent, defaultDesktops, displayDesktops } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
-import {
-  listAdapters,
-  receiveInbox,
-  writeGithubTemplate,
-} from "./adapters.ts";
+import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 
 export async function createApp(options: {
   data: string;
@@ -53,10 +50,8 @@ export async function createApp(options: {
         });
   const traces = runtimes?.traces ?? new TraceStore(store);
   // 统一接收口接受任意内容类型；JSON 走默认解析器，其余保留原始文本。
-  app.addContentTypeParser(
-    "*",
-    { parseAs: "buffer" },
-    (_request, body, done) => done(null, body),
+  app.addContentTypeParser("*", { parseAs: "buffer" }, (_request, body, done) =>
+    done(null, body),
   );
   app.setErrorHandler((error, _, reply) => {
     const status =
@@ -157,6 +152,7 @@ export async function createApp(options: {
         start: z.boolean().default(false),
         description: z.string().trim().max(1000).default(""),
         template: z.string().min(1).max(4096).optional(),
+        source: forkSource.optional(),
       })
       .strict()
       .parse(request.body);
@@ -358,7 +354,12 @@ export async function createApp(options: {
         around: z.coerce.number().int().positive().optional(),
       })
       .parse(request.query);
-    return store.timeline(agentParams(request), q.before, q.read_from, q.around);
+    return store.timeline(
+      agentParams(request),
+      q.before,
+      q.read_from,
+      q.around,
+    );
   });
   app.patch("/api/chats/:id", (request) => {
     const input = z
@@ -398,15 +399,23 @@ export async function createApp(options: {
   });
   app.post("/mcp/:id", async (request, reply) => {
     const agentId = requireAgent(request),
-      server = createMcp(store, agentId, changed, (id) => {
-        const info = runtimes?.connections.get(id)?.info;
-        return {
-          online:
-            !!info ||
-            !!runtimes?.directory().runtimes.some((r) => r.bound_agent === id),
-          busy: info?.busy ?? null,
-        };
-      });
+      server = createMcp(
+        store,
+        agentId,
+        changed,
+        (id) => {
+          const info = runtimes?.connections.get(id)?.info;
+          return {
+            online:
+              !!info ||
+              !!runtimes
+                ?.directory()
+                .runtimes.some((r) => r.bound_agent === id),
+            busy: info?.busy ?? null,
+          };
+        },
+        { data: options.data, desktops },
+      );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
@@ -421,10 +430,7 @@ export async function createApp(options: {
   if (options.webRoot && existsSync(options.webRoot)) {
     await app.register(staticFiles, { root: options.webRoot });
     app.setNotFoundHandler((request, reply) => {
-      if (
-        request.method === "GET" &&
-        !/^\/(api|mcp)(\/|$)/.test(request.url)
-      )
+      if (request.method === "GET" && !/^\/(api|mcp)(\/|$)/.test(request.url))
         return reply.sendFile("index.html");
       return reply.code(404).send({ error: "接口不存在" });
     });

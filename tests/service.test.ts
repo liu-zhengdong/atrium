@@ -31,11 +31,19 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
   const port = (socket.address() as { port: number }).port;
   await new Promise<void>((resolve) => socket.close(() => resolve()));
+  const builtin = join(root, "pi-template");
+  mkdirSync(builtin);
+  writeFileSync(
+    join(builtin, "settings.json"),
+    JSON.stringify({ packages: [] }),
+  );
+  writeFileSync(join(builtin, "SYSTEM.md"), "builtin rules");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
     ATRIUM_DESKTOPS: join(root, "desktops"),
+    ATRIUM_PI_TEMPLATE: builtin,
     PI_ACP_DIR: join(root, "acp"),
   };
   const cli = async (...args: string[]) => {
@@ -283,5 +291,37 @@ test(
     assert.equal((await f.cli("--no-open")).code, 0);
     assert.equal(readService(f.data)?.pid, child.pid);
     assert.equal((await f.cli("stop")).code, 0);
+  },
+);
+
+test(
+  "CLI create 无需先开 Web；服务运行时走 API 并可 fork",
+  { timeout: 45000 },
+  async (t) => {
+    const f = await fixture(t);
+    const created = await f.cli("create", "林岚");
+    assert.equal(created.code, 0, created.stderr);
+    assert.match(created.stdout, /a1\t林岚/);
+    assert(
+      existsSync(join(f.root, "desktops", "林岚")),
+      "创建即分配固定桌面目录",
+    );
+    assert.equal((await f.cli("create", "林岚")).code, 1);
+    assert.equal((await f.cli("create", "bad/name")).code, 1);
+    assert.match((await f.cli("list")).stdout, /a1\s+林岚/);
+    assert.equal((await f.cli("--no-open")).code, 0, "start after create");
+    const forked = await f.cli("create", "沈默", "--from", "a1");
+    assert.equal(forked.code, 0, forked.stderr);
+    assert.match(forked.stdout, /a2\t沈默/);
+    const overview = (await (
+      await fetch(`${serviceUrl(readService(f.data)!)}/api/overview`)
+    ).json()) as { agents: { ref: string; name: string }[] };
+    assert.deepEqual(
+      overview.agents.map((a) => [a.ref, a.name]),
+      [
+        ["a1", "林岚"],
+        ["a2", "沈默"],
+      ],
+    );
   },
 );

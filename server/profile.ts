@@ -1,14 +1,14 @@
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { Problem } from "./store.ts";
 const require = createRequire(import.meta.url);
@@ -27,8 +27,15 @@ const write = (path: string, value: unknown) =>
   });
 const local = (path: string, root: string) =>
   path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(root, path);
+const copyOwned = (from: string, to: string) =>
+  writeFileSync(to, readFileSync(realpathSync(from)));
+const inside = (root: string, path: string) => {
+  const base = realpathSync(root);
+  const target = realpathSync(path);
+  return target === base || target.startsWith(base + sep);
+};
 
-/** Small owned settings; installed code and shared rules are references, never credential copies. */
+/** Owned rules and notes; installed extensions/skills stay as path references. Never copy credentials. */
 export function prepareProfile(
   data: string,
   identityId: string,
@@ -95,8 +102,8 @@ export function prepareProfile(
     if (existsSync(join(template, kind)))
       (settings[kind] as string[]).push(join(template, kind));
   }
-  // MCP/model/rule files remain explicit shared inputs. Credential files and session
-  // history are never copied; writable settings belong to the named identity.
+  // Rule/model/MCP files and notes become this identity's own copies.
+  // Credential files and session history are never copied.
   // Identity files are written exclusively (wx) alongside kept legacy content;
   // on failure only what this call created is removed.
   const created: string[] = [];
@@ -119,16 +126,30 @@ export function prepareProfile(
       "mcp.json",
     ])
       if (existsSync(join(template, name))) {
-        const link = join(target, name);
-        symlinkSync(join(template, name), link);
-        created.push(link);
+        const dest = join(target, name);
+        copyOwned(join(template, name), dest);
+        created.push(dest);
       }
     if (existsSync(join(template, "notes.json"))) {
       const notes = readJson(join(template, "notes.json"));
-      const directory =
+      const sourceDir =
         typeof notes.directory === "string"
           ? local(notes.directory, template)
           : null;
+      const directory = join(target, "notes");
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      created.push(directory);
+      if (sourceDir && existsSync(sourceDir)) {
+        if (inside(template, sourceDir))
+          cpSync(sourceDir, directory, {
+            recursive: true,
+            dereference: true,
+          });
+        else
+          for (const name of ["USER.md", "USER-Evolution.md"])
+            if (existsSync(join(sourceDir, name)))
+              copyOwned(join(sourceDir, name), join(directory, name));
+      }
       write(join(target, "notes.json"), {
         directory,
         ...(notes.maxContextBytes === undefined

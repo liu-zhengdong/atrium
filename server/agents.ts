@@ -1,12 +1,8 @@
-import {
-  mkdirSync,
-  realpathSync,
-  writeFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { prepareProfile } from "./profile.ts";
+import { defaultTemplate, prepareProfile } from "./profile.ts";
 import { dirname, join, resolve, sep } from "node:path";
+import { displayName } from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
 
 /** Root of the fixed per-identity workspaces; each Agent gets ~/Atrium/<name>. */
@@ -37,19 +33,81 @@ export function desktopDirectory(root: string, name: string) {
   return realpathSync(target);
 }
 
+export type ForkSource = {
+  id: string;
+  kind: "preset" | "agent";
+  name: string;
+  tag: string;
+  description: string;
+};
+
+/** Recruit list: built-in type plus living identities. Presets are not chat peers. */
+export function listForkSources(store: Store, query = ""): ForkSource[] {
+  const items: ForkSource[] = [
+    {
+      id: "builtin",
+      kind: "preset",
+      name: "内置",
+      tag: "内置",
+      description: "默认配置类型",
+    },
+    ...store
+      .agents()
+      .filter((agent) => agent.agent_directory)
+      .map((agent) => ({
+        id: agent.ref,
+        kind: "agent" as const,
+        name: agent.name,
+        tag: "已有",
+        description: agent.description,
+      })),
+  ];
+  const q = query.trim().toLowerCase();
+  return q
+    ? items.filter((item) =>
+        `${item.id} ${item.name} ${item.description}`.toLowerCase().includes(q),
+      )
+    : items;
+}
+
+export function resolveProfileTemplate(
+  store: Store,
+  options: { template?: string; source?: string } = {},
+) {
+  const source = options.source?.trim();
+  if (options.template) {
+    if (source && source !== "builtin")
+      throw new Problem(400, "不要同时指定来源身份和模板路径");
+    return options.template;
+  }
+  if (!source || source === "builtin") return defaultTemplate();
+  const agent = store.agent(store.resolveAgentId(source));
+  if (!agent.agent_directory)
+    throw new Problem(400, "旧记录不能作为 fork 来源");
+  return agent.agent_directory;
+}
+
 /** User-facing creation: assigns the identity's fixed desktop workspace. */
 export function createAgent(
   store: Store,
   data: string,
   name: string,
   desktops: string,
-  options: { template?: string; description?: string } = {},
+  options: { template?: string; source?: string; description?: string } = {},
 ) {
+  const parsed = displayName.safeParse(name);
+  if (!parsed.success)
+    throw new Problem(400, parsed.error.issues[0]?.message ?? "名称无效");
+  name = parsed.data;
   const cwd = desktopDirectory(desktops, name);
   mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
   return store.transaction(() => {
     const { agent, token } = store.createAgent(name, cwd);
-    const directory = prepareProfile(data, agent.id, options.template);
+    const directory = prepareProfile(
+      data,
+      agent.id,
+      resolveProfileTemplate(store, options),
+    );
     try {
       writeFileSync(
         join(data, "credentials", `${agent.id}.json`),

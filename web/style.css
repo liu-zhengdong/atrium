@@ -282,6 +282,7 @@ dialog {
   width: 460px;
   max-width: calc(100% - 32px);
   max-height: 90dvh;
+  overflow: auto;
   box-shadow: 0 20px 80px #36291924;
   color: inherit;
 }
@@ -300,7 +301,8 @@ dialog::backdrop {
 .temporary-runtimes[open] > summary {
   margin-bottom: 12px;
 }
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   accent-color: #6a7259;
 }
 .check-row {

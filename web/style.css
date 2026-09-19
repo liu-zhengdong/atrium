@@ -1099,34 +1099,6 @@ dialog::backdrop {
   font-size: 12px;
   line-height: 1.8;
 }
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 12px;
-  color: #6c6456;
-  margin: 0 0 18px;
-}
-input:not([type="checkbox"]):not(.receipt-search input):not(.plain-field),
-dialog textarea,
-select {
-  width: 100%;
-  border: 1px solid #ddd7ca;
-  border-radius: 6px;
-  padding: 9px 11px;
-  background: #fff;
-  color: #514a3e;
-  min-height: 37px;
-  font-size: 12px;
-}
-input::placeholder,
-dialog textarea::placeholder {
-  color: #b1a693;
-}
-dialog textarea {
-  resize: vertical;
-  line-height: 1.6;
-}
 .create-form details {
   margin: 0 0 18px;
 }
@@ -1147,18 +1119,8 @@ dialog textarea {
 .temporary-runtimes[open] > summary {
   margin-bottom: 12px;
 }
-fieldset {
-  border: 1px solid #e8e2d6;
-  border-radius: 7px;
-  padding: 12px;
-  margin: 0 0 18px;
-  max-height: 220px;
-  overflow: auto;
-}
-legend {
-  font-size: 11px;
-  color: #968a75;
-  padding: 0 5px;
+input[type="checkbox"] {
+  accent-color: #6a7259;
 }
 .check-row {
   display: flex;
@@ -1167,13 +1129,12 @@ legend {
   gap: 9px;
   margin: 0;
   padding: 7px 0;
+  font-size: 12px;
+  color: #6c6456;
 }
 .check-row .muted {
   margin-left: auto;
   font-size: 10px;
-}
-input[type="checkbox"] {
-  accent-color: #6a7259;
 }
 .form-actions {
   display: flex;
@@ -1306,6 +1267,7 @@ input[type="checkbox"] {
   justify-content: space-between;
   gap: 15px;
   padding: 8px 0 12px;
+  margin: 0 0 18px;
 }
 .switch-row strong {
   font-weight: 500;

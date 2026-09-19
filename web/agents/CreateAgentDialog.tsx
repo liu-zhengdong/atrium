@@ -34,9 +34,10 @@ export function CreateAgentDialog({
       pendingLabel="创建中…"
     >
       <p className="muted">身份长期保留；启动和退出不会改变它的名字与聊天。</p>
-      <label>
+      <label className="form-label">
         名称
         <input
+          className="field"
           name="name"
           required
           maxLength={40}
@@ -50,11 +51,12 @@ export function CreateAgentDialog({
         专属工作目录自动创建为 {desktopsRoot ?? "…"}/{name.trim() || "〈名称〉"}
         /，每次启动固定使用，无需手动指定。
       </p>
-      <label>
+      <label className="form-label">
         <span>
           自我介绍 <span className="muted">（可选）</span>
         </span>
         <textarea
+          className="field"
           name="description"
           maxLength={1000}
           placeholder="擅长什么，主要负责什么"
@@ -63,9 +65,9 @@ export function CreateAgentDialog({
       </label>
       <details>
         <summary>配置与启动</summary>
-        <label>
+        <label className="form-label">
           配置模板目录
-          <input name="template" placeholder="默认使用当前 Pi 配置" />
+          <input className="field" name="template" placeholder="默认使用当前 Pi 配置" />
         </label>
         <label className="switch-row">
           <span>创建后在后台启动</span>

@@ -258,18 +258,20 @@ export function AgentDrawer({
             <>
               <form className="settings-section" onSubmit={profileSave}>
                 <h3>身份资料 · {agent.ref}</h3>
-                <label>
+                <label className="form-label">
                   名称
                   <input
+                    className="field"
                     required
                     maxLength={40}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                   />
                 </label>
-                <label>
+                <label className="form-label">
                   自我介绍
                   <textarea
+                    className="field"
                     maxLength={1000}
                     rows={3}
                     value={description}
@@ -377,9 +379,10 @@ export function AgentDrawer({
                     }}
                   />
                 </label>
-                <label>
+                <label className="form-label">
                   心跳检查间隔（秒）
                   <input
+                    className="field"
                     type="number"
                     min={5}
                     max={3600}

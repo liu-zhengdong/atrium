@@ -61,6 +61,7 @@ export async function createApp(options: {
             return `http://127.0.0.1:${address.port}`;
           },
           piHome,
+          desktops,
         );
   const traces = runtimes?.traces ?? new TraceStore(store);
   // 统一接收口接受任意内容类型；JSON 走默认解析器，其余保留原始文本。

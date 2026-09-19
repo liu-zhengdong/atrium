@@ -4,6 +4,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -71,6 +72,35 @@ export function desktopDirectory(root: string, name: string) {
     throw new Problem(409, "无法创建工作目录，目标路径可能被文件占用");
   }
   return realpathSync(target);
+}
+
+function isDirectory(path: string) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** If the recorded workspace is gone, reuse or recreate ~/Atrium/<name>. */
+export function ensureDesktopCwd(
+  store: Store,
+  desktops: string,
+  agent: { id: string; name: string; cwd: string },
+) {
+  if (isDirectory(agent.cwd)) return agent.cwd;
+  const target = childPath(desktops, agent.name, "工作目录");
+  if (hasEntry(target) && !isDirectory(target))
+    throw new Problem(409, "无法创建工作目录，目标路径可能被文件占用");
+  try {
+    mkdirSync(target, { recursive: true });
+  } catch {
+    throw new Problem(409, "无法创建工作目录，目标路径可能被文件占用");
+  }
+  const cwd = realpathSync(target);
+  if (cwd !== agent.cwd)
+    store.run("UPDATE agents SET cwd=? WHERE id=?", cwd, agent.id);
+  return cwd;
 }
 
 export function profileLinkPath(piHome: string, name: string) {

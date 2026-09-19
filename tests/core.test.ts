@@ -140,7 +140,10 @@ test("通知箱用户审阅不标已读；Agent 只标记实际返回页，完�
   assert.equal(store.box(b.id).items.length, 0);
   assert(Buffer.byteLength(JSON.stringify(page)) < 33000);
   assert.equal(
-    store.completeBox(a.id, page.items.map((m) => m.id)),
+    store.completeBox(
+      a.id,
+      page.items.map((m) => m.id),
+    ),
     page.items.length,
   );
   assert.equal(store.boxCount(a.id), 4 - page.items.length, "完成后才出队");

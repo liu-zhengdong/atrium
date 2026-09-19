@@ -35,9 +35,14 @@ export function AgentDirectory({
       <header className="mb-[26px] flex items-center justify-between gap-5">
         <div>
           <h1 className="text-2xl tracking-[-0.04em]">
-            Agents <span className="ml-[7px] text-[13px] font-normal text-muted">{count}</span>
+            Agents{" "}
+            <span className="ml-[7px] text-[13px] font-normal text-muted">
+              {count}
+            </span>
           </h1>
-          <p className="mt-1.5 text-[13px] text-muted">选择一位 Agent，开始对话。</p>
+          <p className="mt-1.5 text-[13px] text-muted">
+            选择一位 Agent，开始对话。
+          </p>
         </div>
         <button className="button secondary flex-none" onClick={create}>
           <Plus size={16} />
@@ -80,7 +85,9 @@ export function AgentDirectory({
                 onClick={() => openAgent(a)}
               >
                 <span className="grid min-w-0 flex-1 gap-[5px]">
-                  <strong className="truncate pr-[18px] text-[15px] font-[560]">{a.name}</strong>
+                  <strong className="truncate pr-[18px] text-[15px] font-[560]">
+                    {a.name}
+                  </strong>
                   <span className="text-xs text-muted">
                     {a.ref} · {runtimeLabel(a)}
                     {a.unread > 0 && <> · {a.unread} 条未读</>}

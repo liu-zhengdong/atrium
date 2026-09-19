@@ -57,7 +57,10 @@ export function DeleteAgent({
       {confirming &&
         createPortal(
           <Modal title="删除 Agent？" close={close}>
-            <div className="px-6 py-[22px] text-[13px] leading-[1.8]" aria-busy={busy}>
+            <div
+              className="px-6 py-[22px] text-[13px] leading-[1.8]"
+              aria-busy={busy}
+            >
               <p className="m-0 text-base font-semibold [overflow-wrap:anywhere]">
                 {agent.name} <span className="muted">· {agent.ref}</span>
               </p>

@@ -84,7 +84,9 @@ function SourcePicker({
         {selectedAgent ? (
           <>
             <Avatar small name={selectedAgent.name} />
-            <span className="min-w-0 flex-1 truncate">{selectedAgent.name}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {selectedAgent.name}
+            </span>
           </>
         ) : (
           <>
@@ -110,7 +112,10 @@ function SourcePicker({
               aria-label="搜索身份"
             />
           )}
-          <ul role="listbox" className="m-0 max-h-52 list-none overflow-auto p-0 py-1">
+          <ul
+            role="listbox"
+            className="m-0 max-h-52 list-none overflow-auto p-0 py-1"
+          >
             {builtinShown && (
               <li>
                 <button

@@ -153,7 +153,10 @@ export function AgentDrawer({
           </p>
         </div>
       </div>
-      <div className="flex gap-[18px] border-b border-line px-[25px]" aria-label="Agent 信息">
+      <div
+        className="flex gap-[18px] border-b border-line px-[25px]"
+        aria-label="Agent 信息"
+      >
         <button
           className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
             tab === "trace"

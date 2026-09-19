@@ -27,11 +27,7 @@ import {
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
 import { prepareProfile } from "./profile.ts";
-import {
-  linkProfile,
-  resolvePiHome,
-  unlinkProfile,
-} from "./agents.ts";
+import { linkProfile, resolvePiHome, unlinkProfile } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 

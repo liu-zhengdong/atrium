@@ -548,6 +548,10 @@ input[type="radio"] {
     display: none;
   }
 }
+/* 桌面侧栏常驻，返回按钮只在窄屏叠到标题左侧。 */
+.mobile-back {
+  display: none;
+}
 @media (max-width: 560px) {
   .sidebar {
     display: none;

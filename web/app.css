@@ -1,0 +1,61 @@
+/* Tailwind 入口：只引入 theme 与 utilities，暂不启用 preflight，
+   避免全局重置影响尚未迁移的组件；迁移完成后再评估。
+   注意：utilities 必须保持无层（不包 @layer），
+   混用期间 style.css 的全局规则（如 input{font:inherit}）均为无层，
+   无层样式在级联中优先于任何 @layer，会导致 utility 静默失效。 */
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+
+/* 表单原语：替代原全局 input/label/fieldset 元素规则，避免穿透未迁移组件。 */
+.field {
+  width: 100%;
+  min-height: 37px;
+  border: 1px solid #ddd7ca;
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  color: #514a3e;
+}
+.field::placeholder {
+  color: #b1a693;
+}
+textarea.field {
+  line-height: 1.6;
+  resize: vertical;
+}
+.form-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: #6c6456;
+  margin: 0 0 18px;
+}
+.member-picker {
+  border: 1px solid #e8e2d6;
+  border-radius: 7px;
+  padding: 12px;
+  margin: 0 0 18px;
+  max-height: 220px;
+  overflow: auto;
+}
+.member-picker-legend {
+  font-size: 11px;
+  color: #968a75;
+  padding: 0 5px;
+}
+
+@theme {
+  /* 与 style.css 既有暖灰调色板一致，迁移期间保持外观不变 */
+  --color-ink: #33342f;
+  --color-ink-deep: #292925;
+  --color-muted: #73736b;
+  --color-line: #e8e7e1;
+  --color-line-strong: #c9c2b2;
+  --color-soft: #f5f4f0;
+  --color-surface: #f8f7f4;
+  --color-accent: #76674c;
+  --color-placeholder: #a09b8d;
+}

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   EyeOff,
   MessageSquare,
-  MoreHorizontal,
   Pin,
   PinOff,
   Plus,
@@ -30,7 +29,10 @@ const rowTime = "flex-none text-[10px] text-[#a8a394]";
 const rowPreview =
   "mt-0.5 min-w-0 flex-1 truncate text-[11px] leading-[1.6] text-[#858278]";
 const chatRow =
-  "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-[7px] p-2.5 text-left hover:bg-[#efeee9]";
+  "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-[7px] p-2.5 text-left";
+const chatRowHover = `${chatRow} hover:bg-[#efeee9]`;
+const slotAction =
+  "relative flex h-[22px] w-[22px] items-center justify-center rounded-md text-[#6d6a5e] hover:bg-[#e4e2db] hover:text-[#3c3b34]";
 const agentRow =
   "agent-row flex w-full items-center gap-2.5 rounded-[7px] px-2.5 py-[9px] text-left hover:bg-[#efeee9]";
 const sectionLabel =
@@ -70,7 +72,6 @@ export function Sidebar({
   const agents = overview?.agents ?? [];
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | null>(null);
-  const [menu, setMenu] = useState<string | null>(null);
   const seq = useRef(0);
 
   useEffect(() => {
@@ -97,7 +98,6 @@ export function Sidebar({
     id: string,
     body: { hidden?: boolean; pinned?: boolean },
   ) {
-    setMenu(null);
     await patchChat(id, body).catch(() => {});
     refresh();
   }
@@ -204,7 +204,7 @@ export function Sidebar({
                   {results.chats.map((chat) => (
                     <button
                       key={chat.id}
-                      className={chatRow}
+                      className={chatRowHover}
                       onClick={() => void openSearchedChat(chat)}
                     >
                       <ChatAvatar chat={chat} agents={agents} />
@@ -236,7 +236,7 @@ export function Sidebar({
                   {results.messages.map((message) => (
                     <button
                       key={`${message.chat_id}-${message.id}`}
-                      className={chatRow}
+                      className={chatRowHover}
                       onClick={() => {
                         setQuery("");
                         openMessage(message.chat_id, message.id);
@@ -287,23 +287,56 @@ export function Sidebar({
             {overview?.chats.map((chat) => (
               <div
                 key={chat.id}
-                className={`group/row relative flex items-center rounded-lg ${
-                  chat.id === chatId ? "bg-[#eeede7]" : ""
+                className={`group/row relative rounded-[7px] ${
+                  chat.id === chatId ? "bg-[#eeede7]" : "hover:bg-[#efeee9]"
                 }`}
               >
-                <button className={chatRow} onClick={() => selectChat(chat.id)}>
+                <button
+                  className="absolute inset-0 rounded-[7px]"
+                  onClick={() => selectChat(chat.id)}
+                  aria-label={chat.name}
+                />
+                <div className="pointer-events-none relative flex items-center gap-2.5 p-2.5">
                   <ChatAvatar chat={chat} agents={agents} />
-                  <span className={rowMain}>
-                    <span className={rowTop}>
+                  <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2">
+                    <span className="flex min-w-0 items-center gap-2">
                       <strong className={rowName}>{chat.name}</strong>
                       {chat.pinned && (
                         <Pin size={11} className="flex-none text-[#a09b8d]" />
                       )}
-                      <time className={rowTime}>
+                    </span>
+                    <span className="col-start-2 row-start-1 grid justify-items-end">
+                      <time
+                        className={`${rowTime} col-start-1 row-start-1 group-hover/row:invisible group-focus-within/row:invisible`}
+                      >
                         {convTime(chat.updated_at)}
                       </time>
+                      <span className="pointer-events-auto col-start-1 row-start-1 flex invisible items-center group-hover/row:visible group-focus-within/row:visible">
+                        <button
+                          className={slotAction}
+                          aria-label={chat.pinned ? "取消置顶" : "置顶"}
+                          onClick={() =>
+                            void setState(chat.id, { pinned: !chat.pinned })
+                          }
+                        >
+                          {chat.pinned ? (
+                            <PinOff size={14} />
+                          ) : (
+                            <Pin size={14} />
+                          )}
+                        </button>
+                        <button
+                          className={slotAction}
+                          aria-label="隐藏"
+                          onClick={() =>
+                            void setState(chat.id, { hidden: true })
+                          }
+                        >
+                          <EyeOff size={14} />
+                        </button>
+                      </span>
                     </span>
-                    <span className={rowTop}>
+                    <span className="col-span-2 flex min-w-0 items-center gap-2">
                       <small className={rowPreview}>
                         {chat.preview ?? "开始这段对话"}
                       </small>
@@ -318,43 +351,7 @@ export function Sidebar({
                         ))}
                     </span>
                   </span>
-                </button>
-                <button
-                  className="mr-1 hidden h-[29px] w-[29px] flex-none items-center justify-center rounded-md p-[3px] text-[#8e897d] hover:bg-[#eeede6] hover:text-[#3c3b34] group-hover/row:inline-flex"
-                  aria-label="会话操作"
-                  onClick={() => setMenu(menu === chat.id ? null : chat.id)}
-                >
-                  <MoreHorizontal size={15} />
-                </button>
-                {menu === chat.id && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-10"
-                      onClick={() => setMenu(null)}
-                    />
-                    <div
-                      className="absolute right-1.5 top-[30px] z-[11] grid min-w-[108px] gap-px rounded-lg border border-line bg-white p-1 shadow-[0_6px_22px_rgba(60,52,38,0.12)]"
-                      role="menu"
-                    >
-                      <button
-                        className="flex items-center gap-2 whitespace-nowrap rounded-[5px] px-[9px] py-[7px] text-xs text-ink hover:bg-[#efeee9]"
-                        onClick={() =>
-                          void setState(chat.id, { pinned: !chat.pinned })
-                        }
-                      >
-                        {chat.pinned ? <PinOff size={14} /> : <Pin size={14} />}
-                        {chat.pinned ? "取消置顶" : "置顶"}
-                      </button>
-                      <button
-                        className="flex items-center gap-2 whitespace-nowrap rounded-[5px] px-[9px] py-[7px] text-xs text-ink hover:bg-[#efeee9]"
-                        onClick={() => void setState(chat.id, { hidden: true })}
-                      >
-                        <EyeOff size={14} />
-                        隐藏
-                      </button>
-                    </div>
-                  </>
-                )}
+                </div>
               </div>
             ))}
             {overview && !overview.chats.length && (

@@ -1,7 +1,160 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { api } from "../api.ts";
 import { SubmitDialog } from "../components/SubmitDialog.tsx";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
+
+function SourcePicker({
+  agents,
+  value,
+  onChange,
+}: {
+  agents: Agent[];
+  value: string;
+  onChange: (source: string) => void;
+}) {
+  const sources = agents.filter((agent) => agent.agent_directory);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const root = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const matches = query.trim().toLowerCase();
+  const visible = sources.filter((agent) =>
+    `${agent.name} ${agent.description}`.toLowerCase().includes(matches),
+  );
+  const builtinShown =
+    !matches || "内置 builtin 默认配置类型".includes(matches);
+  const selectedAgent = sources.find((agent) => agent.name === value);
+  const searchable = sources.length >= 8;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey, true);
+    if (searchable) searchRef.current?.focus();
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open, searchable]);
+
+  function choose(source: string) {
+    onChange(source);
+    setQuery("");
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  if (!sources.length) {
+    return (
+      <div className="field flex items-center gap-2 text-left">
+        <span className="min-w-0 flex-1">内置</span>
+        <span className="muted shrink-0 text-[10px]">预置类型</span>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={root} className={`relative ${open ? "source-picker-open" : ""}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="field flex items-center gap-2 text-left"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="基于"
+        onClick={() =>
+          setOpen((current) => {
+            if (current) setQuery("");
+            return !current;
+          })
+        }
+      >
+        {selectedAgent ? (
+          <>
+            <Avatar small name={selectedAgent.name} />
+            <span className="min-w-0 flex-1 truncate">{selectedAgent.name}</span>
+          </>
+        ) : (
+          <>
+            <span className="min-w-0 flex-1">内置</span>
+            <span className="muted shrink-0 text-[10px]">预置类型</span>
+          </>
+        )}
+        <ChevronDown
+          size={16}
+          className={`shrink-0 text-[#968a75] transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="absolute top-full z-20 mt-1.5 w-full overflow-hidden rounded-[6px] border border-[#ddd7ca] bg-white shadow-[0_8px_24px_#3629191a]">
+          {searchable && (
+            <input
+              ref={searchRef}
+              className="w-full border-0 border-b border-[#eee8dc] px-2.5 py-2 text-xs outline-none"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索身份"
+              aria-label="搜索身份"
+            />
+          )}
+          <ul role="listbox" className="m-0 max-h-52 list-none overflow-auto p-0 py-1">
+            {builtinShown && (
+              <li>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={value === "builtin"}
+                  className={`flex w-full items-center gap-2 px-2.5 py-[7px] text-left text-xs ${
+                    value === "builtin" ? "bg-[#f5f4f0]" : "hover:bg-[#f8f7f4]"
+                  }`}
+                  onClick={() => choose("builtin")}
+                >
+                  <span className="min-w-0 flex-1">内置</span>
+                  <span className="muted shrink-0 text-[10px]">预置类型</span>
+                </button>
+              </li>
+            )}
+            {visible.map((agent) => (
+              <li key={agent.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={value === agent.name}
+                  className={`flex w-full items-center gap-2 px-2.5 py-[7px] text-left text-xs ${
+                    value === agent.name ? "bg-[#f5f4f0]" : "hover:bg-[#f8f7f4]"
+                  }`}
+                  onClick={() => choose(agent.name)}
+                >
+                  <Avatar small name={agent.name} />
+                  <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+                </button>
+              </li>
+            ))}
+            {!builtinShown && !visible.length && (
+              <li className="px-2.5 py-2 text-xs text-[#968a75]">
+                没有匹配的来源
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CreateAgentDialog({
   close,
   created,
@@ -14,24 +167,7 @@ export function CreateAgentDialog({
   agents: Agent[];
 }) {
   const [name, setName] = useState("");
-  const [query, setQuery] = useState("");
   const [source, setSource] = useState("builtin");
-  const sources = agents.filter((agent) => agent.agent_directory);
-  const matches = query.trim().toLowerCase();
-  const visible = sources.filter((agent) =>
-    `${agent.name} ${agent.description}`
-      .toLowerCase()
-      .includes(matches),
-  );
-  const builtinShown =
-    !matches || "内置 builtin 默认配置类型".includes(matches);
-  const available = [
-    ...(builtinShown ? ["builtin"] : []),
-    ...visible.map((agent) => agent.name),
-  ];
-  const selected = available.includes(source)
-    ? source
-    : (available[0] ?? "builtin");
   async function submit(data: FormData) {
     const result = await api<{ agent: Agent; start_error?: string }>(
       "/agents",
@@ -39,7 +175,7 @@ export function CreateAgentDialog({
       {
         name: data.get("name"),
         description: data.get("description"),
-        source: selected,
+        source,
         start: data.get("start") === "on",
       },
     );
@@ -55,7 +191,7 @@ export function CreateAgentDialog({
     >
       <p className="muted">身份长期保留；启动和退出不会改变它的名字与聊天。</p>
       <label className="form-label">
-        名称
+        <span className="form-title">名称</span>
         <input
           className="field"
           name="name"
@@ -72,8 +208,8 @@ export function CreateAgentDialog({
         /，每次启动固定使用，无需手动指定。
       </p>
       <label className="form-label">
-        <span>
-          自我介绍 <span className="muted">（可选）</span>
+        <span className="form-title">
+          自我介绍 <span className="muted font-normal">（可选）</span>
         </span>
         <textarea
           className="field"
@@ -83,48 +219,10 @@ export function CreateAgentDialog({
           rows={2}
         />
       </label>
-      <fieldset className="member-picker">
-        <legend className="member-picker-legend">从哪里复制配置</legend>
-        {sources.length > 8 && (
-          <input
-            className="field mb-2"
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="筛选来源"
-            aria-label="筛选来源"
-          />
-        )}
-        {builtinShown && (
-          <label className="check-row">
-            <input
-              type="radio"
-              name="source"
-              value="builtin"
-              checked={selected === "builtin"}
-              onChange={() => setSource("builtin")}
-            />
-            内置
-            <span className="muted">预置类型</span>
-          </label>
-        )}
-        {visible.map((agent) => (
-          <label className="check-row" key={agent.id}>
-            <input
-              type="radio"
-              name="source"
-              value={agent.name}
-              checked={selected === agent.name}
-              onChange={() => setSource(agent.name)}
-            />
-            <Avatar small name={agent.name} />
-            {agent.name}
-          </label>
-        ))}
-        {!builtinShown && !visible.length && (
-          <p className="muted">没有匹配的来源</p>
-        )}
-      </fieldset>
+      <div className="form-label">
+        <span className="form-title">基于</span>
+        <SourcePicker agents={agents} value={source} onChange={setSource} />
+      </div>
       <details>
         <summary>启动</summary>
         <label className="switch-row">

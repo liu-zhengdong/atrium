@@ -67,7 +67,11 @@ export function CreateAgentDialog({
         <summary>配置与启动</summary>
         <label className="form-label">
           配置模板目录
-          <input className="field" name="template" placeholder="默认使用当前 Pi 配置" />
+          <input
+            className="field"
+            name="template"
+            placeholder="默认使用当前 Pi 配置"
+          />
         </label>
         <label className="switch-row">
           <span>创建后在后台启动</span>

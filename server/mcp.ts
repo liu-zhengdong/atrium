@@ -214,7 +214,7 @@ export function createMcp(
   );
   tool(
     "complete_inbox",
-    "把消息箱中已处理完的消息标记为完成；完成后不再计入心跳提醒。参数 ids 是 view_message_box 返回的消息 id 列表，例如 {\"ids\":[1,2]}。只标记确实处理完的消息。",
+    '把消息箱中已处理完的消息标记为完成；完成后不再计入心跳提醒。参数 ids 是 view_message_box 返回的消息 id 列表，例如 {"ids":[1,2]}。只标记确实处理完的消息。',
     { ids: z.array(z.number().int().positive()).min(1).max(100) },
     (a) => ({ completed: store.completeBox(agentId, a.ids) }),
   );

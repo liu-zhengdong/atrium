@@ -131,13 +131,15 @@ export class Store {
       );
     if (!deliveryCols.includes("through_message"))
       this.db.exec("ALTER TABLE deliveries ADD COLUMN through_message INTEGER");
-    const inboxCols = this.all<{ name: string }>("PRAGMA table_info(inbox)").map(
-      (c) => c.name,
-    );
+    const inboxCols = this.all<{ name: string }>(
+      "PRAGMA table_info(inbox)",
+    ).map((c) => c.name);
     if (!inboxCols.includes("done_at")) {
       this.db.exec("ALTER TABLE inbox ADD COLUMN done_at INTEGER");
       // 已读的既有消息箱条目视为已完成，只保留真正待处理的提醒。
-      this.db.exec("UPDATE inbox SET done_at=read_at WHERE read_at IS NOT NULL");
+      this.db.exec(
+        "UPDATE inbox SET done_at=read_at WHERE read_at IS NOT NULL",
+      );
     }
     // 依赖 done_at 的索引必须在列迁移之后创建（既有库的 CREATE TABLE 是 no-op）。
     this.db.exec(
@@ -426,8 +428,7 @@ export class Store {
   search(raw: string): SearchResults {
     const needle = raw.trim().toLowerCase();
     const like = `%${needle.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-    const chats = this
-      .chats(undefined, { includeHidden: true })
+    const chats = this.chats(undefined, { includeHidden: true })
       .filter(
         (chat) =>
           chat.name.toLowerCase().includes(needle) ||

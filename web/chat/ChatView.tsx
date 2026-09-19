@@ -38,8 +38,7 @@ export function ChatView({
   const { members } = conversation;
   const [addingMember, setAddingMember] = useState(false);
   const directAgent = agents.find((a) => a.id === active?.direct_agent);
-  const observed =
-    active && !active.mine && !active.read_only ? active : null;
+  const observed = active && !active.mine && !active.read_only ? active : null;
   const latest = conversation.messages.at(-1)?.id ?? 0;
   const markedRead = useRef(0);
   useEffect(() => {
@@ -50,11 +49,9 @@ export function ChatView({
     if (anchoredId) return; // 定位到历史消息不代表读到了最新
     if (!conversation.atBottom()) return;
     markedRead.current = latest;
-    void api(`/chats/${chatId}/read`, "POST", { through: latest }).catch(
-      () => {
-        markedRead.current = 0;
-      },
-    );
+    void api(`/chats/${chatId}/read`, "POST", { through: latest }).catch(() => {
+      markedRead.current = 0;
+    });
   }, [chatId, latest, hidden, anchoredId]);
   const scrolledTo = useRef("");
   useEffect(() => {
@@ -135,7 +132,10 @@ export function ChatView({
             </div>
           </header>
           {directAgent?.error && (
-            <p className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]" role="status">
+            <p
+              className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
+              role="status"
+            >
               暂时无法与 Agent 通信，已发送的消息会保留。
               <button
                 className="ml-2 underline"
@@ -147,7 +147,10 @@ export function ChatView({
           )}
 
           {anchoredId && (
-            <p className="flex items-center justify-center gap-2.5 border-b border-[#eadfc8] bg-[#f6efe2] px-3 py-[7px] text-xs text-[#8a7150]" role="note">
+            <p
+              className="flex items-center justify-center gap-2.5 border-b border-[#eadfc8] bg-[#f6efe2] px-3 py-[7px] text-xs text-[#8a7150]"
+              role="note"
+            >
               已定位到搜索到的消息
               <button
                 className="text-xs text-[#72634a] underline underline-offset-[3px]"
@@ -166,13 +169,19 @@ export function ChatView({
         </>
       )}
       {active?.read_only ? (
-        <p className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]" role="status">
+        <p
+          className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
+          role="status"
+        >
           这个 Agent 已删除，聊天记录仍可查看，不能继续发送消息。
         </p>
       ) : (
         <>
           {observed && (
-            <p className="px-[35px] pt-1.5 text-[11px] text-[#a09b8d]" role="note">
+            <p
+              className="px-[35px] pt-1.5 text-[11px] text-[#a09b8d]"
+              role="note"
+            >
               {observed.kind === "direct"
                 ? `这是 ${observed.name} 的私聊，你的发言对双方可见`
                 : "你不是这个群的成员，发言会对群内成员可见"}

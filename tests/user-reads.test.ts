@@ -72,8 +72,16 @@ test("已读接口：短号解析、单调推进、越过最新消息截断", as
   assert.equal((await read("c999", 1)).status, 404, "未知短号");
   assert.equal((await read(chat.ref, -1)).status, 400, "负序号非法");
   assert.equal((await read(chat.ref, "x")).status, 400);
-  const m1 = store.send(agent.id, { chat_id: chat.id, body: "一", mentions: [] });
-  const m2 = store.send(agent.id, { chat_id: chat.id, body: "二", mentions: [] });
+  const m1 = store.send(agent.id, {
+    chat_id: chat.id,
+    body: "一",
+    mentions: [],
+  });
+  const m2 = store.send(agent.id, {
+    chat_id: chat.id,
+    body: "二",
+    mentions: [],
+  });
   assert.equal((await read(chat.ref, m1.id)).status, 200);
   assert.equal(
     store.chats().find((c) => c.id === chat.id)!.unread,
@@ -87,7 +95,10 @@ test("已读接口：短号解析、单调推进、越过最新消息截断", as
   assert.equal((await read(chat.id, m2.id)).status, 200);
   // 推进后回执里出现「你」
   const state = store.readState(chat.id, 0);
-  assert(state.some((s) => s.agent_id === "user"), "回执含用户已读");
+  assert(
+    state.some((s) => s.agent_id === "user"),
+    "回执含用户已读",
+  );
 });
 
 test("围观会话：用户不是成员仍可发言，投递给成员", (t) => {

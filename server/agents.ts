@@ -1,9 +1,4 @@
-import {
-  mkdirSync,
-  realpathSync,
-  writeFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { prepareProfile } from "./profile.ts";
 import { dirname, join, resolve, sep } from "node:path";

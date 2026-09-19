@@ -17,11 +17,7 @@ import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
 import { createAgent, defaultDesktops, displayDesktops } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
-import {
-  listAdapters,
-  receiveInbox,
-  writeGithubTemplate,
-} from "./adapters.ts";
+import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 
 export async function createApp(options: {
   data: string;
@@ -53,10 +49,8 @@ export async function createApp(options: {
         });
   const traces = runtimes?.traces ?? new TraceStore(store);
   // 统一接收口接受任意内容类型；JSON 走默认解析器，其余保留原始文本。
-  app.addContentTypeParser(
-    "*",
-    { parseAs: "buffer" },
-    (_request, body, done) => done(null, body),
+  app.addContentTypeParser("*", { parseAs: "buffer" }, (_request, body, done) =>
+    done(null, body),
   );
   app.setErrorHandler((error, _, reply) => {
     const status =
@@ -358,7 +352,12 @@ export async function createApp(options: {
         around: z.coerce.number().int().positive().optional(),
       })
       .parse(request.query);
-    return store.timeline(agentParams(request), q.before, q.read_from, q.around);
+    return store.timeline(
+      agentParams(request),
+      q.before,
+      q.read_from,
+      q.around,
+    );
   });
   app.patch("/api/chats/:id", (request) => {
     const input = z
@@ -421,10 +420,7 @@ export async function createApp(options: {
   if (options.webRoot && existsSync(options.webRoot)) {
     await app.register(staticFiles, { root: options.webRoot });
     app.setNotFoundHandler((request, reply) => {
-      if (
-        request.method === "GET" &&
-        !/^\/(api|mcp)(\/|$)/.test(request.url)
-      )
+      if (request.method === "GET" && !/^\/(api|mcp)(\/|$)/.test(request.url))
         return reply.sendFile("index.html");
       return reply.code(404).send({ error: "接口不存在" });
     });

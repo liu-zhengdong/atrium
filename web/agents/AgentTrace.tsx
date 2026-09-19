@@ -93,7 +93,9 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
             </span>
           </div>
           <div className="flex items-baseline gap-2.5 text-xs leading-[1.65] group-hover:text-[#8a6b37]">
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{item.title}</span>
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              {item.title}
+            </span>
             <ChevronRight
               size={14}
               className="flex-shrink-0 text-[#aaa08f] transition-transform group-open/details:rotate-90"
@@ -113,8 +115,12 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
               <>
                 {detail.input && (
                   <>
-                    <h4 className="m-0 mb-1.5 text-[10px] font-medium text-muted">调用参数</h4>
-                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">{detail.input}</pre>
+                    <h4 className="m-0 mb-1.5 text-[10px] font-medium text-muted">
+                      调用参数
+                    </h4>
+                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">
+                      {detail.input}
+                    </pre>
                   </>
                 )}
                 {detail.output && (
@@ -122,7 +128,9 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
                     <h4 className="m-0 mb-1.5 text-[10px] font-medium text-muted">
                       {item.kind === "tool" ? "执行结果" : "内容"}
                     </h4>
-                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">{detail.output}</pre>
+                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">
+                      {detail.output}
+                    </pre>
                   </>
                 )}
                 {!detail.input && !detail.output && (
@@ -228,7 +236,10 @@ export function AgentTrace({
       item.state === "running" && item.generation === agent.runtime?.generation,
   );
   return (
-    <section className="relative flex min-h-0 flex-1 flex-col" aria-label="运行轨迹">
+    <section
+      className="relative flex min-h-0 flex-1 flex-col"
+      aria-label="运行轨迹"
+    >
       <div
         className="mx-6 mb-3 mt-[19px] flex items-center gap-3 rounded-[9px] border border-line bg-soft px-3.5 py-[13px] text-[#74684e]"
         aria-live="polite"
@@ -252,7 +263,10 @@ export function AgentTrace({
         </div>
       </div>
       {runtimeError && (
-        <p className="mx-6 mb-3 text-[11px] leading-[1.7] text-[#8a7254]" role="status">
+        <p
+          className="mx-6 mb-3 text-[11px] leading-[1.7] text-[#8a7254]"
+          role="status"
+        >
           {runtimeError}
         </p>
       )}

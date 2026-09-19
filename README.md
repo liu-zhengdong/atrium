@@ -108,23 +108,23 @@ Atrium 使用 ACP SDK 调用 pi-acp 声明的 `runtime/v1` 能力；Pi 进程内
 
 ## 结构
 
-| 目录                                   | 职责                                       |
-| -------------------------------------- | ------------------------------------------ |
-| `web/main.tsx`、`web/App.tsx`          | React 挂载入口、导航与跨页面协调           |
-| `web/agents/`                          | Agent 名册、详情、创建                     |
-| `web/chat/`                            | 聊天、消息时间线、输入与提及、会话状态     |
-| `web/components/`、`web/layout/`       | 复用组件与导航布局                         |
-| `web/useOverview.ts`、`web/api.ts`     | 总览与 SSE 订阅、HTTP 请求                 |
-| `server/app.ts`                        | HTTP、SSE、接收口与作用域 MCP 入口         |
-| `server/adapters.ts`、`adapter-worker` | 接收口适配器执行与隔离 worker              |
+| 目录                                   | 职责                                         |
+| -------------------------------------- | -------------------------------------------- |
+| `web/main.tsx`、`web/App.tsx`          | React 挂载入口、导航与跨页面协调             |
+| `web/agents/`                          | Agent 名册、详情、创建                       |
+| `web/chat/`                            | 聊天、消息时间线、输入与提及、会话状态       |
+| `web/components/`、`web/layout/`       | 复用组件与导航布局                           |
+| `web/useOverview.ts`、`web/api.ts`     | 总览与 SSE 订阅、HTTP 请求                   |
+| `server/app.ts`                        | HTTP、SSE、接收口与作用域 MCP 入口           |
+| `server/adapters.ts`、`adapter-worker` | 接收口适配器执行与隔离 worker                |
 | `server/store.ts`                      | SQLite、未读位置、消息箱、投递记录与心跳调度 |
-| `server/runtime.ts`                    | pi-acp 客户端、业务绑定、重连与投递        |
-| `server/trace.ts`、`shared/trace.ts`   | 运行事件校验、持久化与有界查询             |
-| `server/profile.ts`                    | 独立配置与共享资源引用                     |
-| `bin/atrium.mjs`、`server/service*.ts` | 统一命令入口、后台服务启停与单实例登记     |
-| `server/mcp.ts`                        | Agent 身份绑定的业务工具                   |
-| `shared/`                              | 数据约束与共用逻辑                         |
-| `tests/`、`scripts/`                   | API／存储测试与真实 Pi 协议验收            |
+| `server/runtime.ts`                    | pi-acp 客户端、业务绑定、重连与投递          |
+| `server/trace.ts`、`shared/trace.ts`   | 运行事件校验、持久化与有界查询               |
+| `server/profile.ts`                    | 独立配置与共享资源引用                       |
+| `bin/atrium.mjs`、`server/service*.ts` | 统一命令入口、后台服务启停与单实例登记       |
+| `server/mcp.ts`                        | Agent 身份绑定的业务工具                     |
+| `shared/`                              | 数据约束与共用逻辑                           |
+| `tests/`、`scripts/`                   | API／存储测试与真实 Pi 协议验收              |
 
 MCP 提供 `list_agents`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。
 
@@ -138,16 +138,16 @@ MCP 提供 `list_agents`、`open_direct`、`create_group`、`invite_agent`、`li
 
 ## 配置与数据
 
-| 环境变量               | 用途                                                       |
-| ---------------------- | ---------------------------------------------------------- |
-| `ATRIUM_PORT`          | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口    |
-| `ATRIUM_DATA`          | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）          |
-| 模型凭据               | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录  |
-| `ATRIUM_PI_ACP_ENTRY`  | 开发时覆盖 pi-acp 的 dist/index.js；默认使用依赖包         |
-| `PI_ACP_PI_COMMAND`    | pi-acp 使用的 Pi 可执行文件，默认 `pi`                     |
-| `PI_ACP_DIR`           | pi-acp 状态与实例登记目录；TUI 和后端须一致                |
-| `PI_CODING_AGENT_DIR`  | 未显式指定模板时的 Pi 配置来源；具名进程改用自己的配置目录 |
-| `ATRIUM_PI_TEMPLATE`   | 新身份默认配置模板，优先于 `PI_CODING_AGENT_DIR`           |
+| 环境变量              | 用途                                                       |
+| --------------------- | ---------------------------------------------------------- |
+| `ATRIUM_PORT`         | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口    |
+| `ATRIUM_DATA`         | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）          |
+| 模型凭据              | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录  |
+| `ATRIUM_PI_ACP_ENTRY` | 开发时覆盖 pi-acp 的 dist/index.js；默认使用依赖包         |
+| `PI_ACP_PI_COMMAND`   | pi-acp 使用的 Pi 可执行文件，默认 `pi`                     |
+| `PI_ACP_DIR`          | pi-acp 状态与实例登记目录；TUI 和后端须一致                |
+| `PI_CODING_AGENT_DIR` | 未显式指定模板时的 Pi 配置来源；具名进程改用自己的配置目录 |
+| `ATRIUM_PI_TEMPLATE`  | 新身份默认配置模板，优先于 `PI_CODING_AGENT_DIR`           |
 
 `.atrium/` 保存业务数据库、`agents/<内部身份 ID>/` 独立配置和 `credentials/` 中的 Agent MCP 凭据（`0600`）。模板只读取必要设置；扩展／技能引用已安装资源，规则、模型和 MCP 配置使用符号链接，共享文件不是独立副本。模板中的 npm 包必须已安装；Git 包请先改为已安装的本地路径。旧版 `links/` 凭据按需迁移，既有会话通过 pi-acp 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
 

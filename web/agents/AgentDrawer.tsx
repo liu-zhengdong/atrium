@@ -153,7 +153,10 @@ export function AgentDrawer({
           </p>
         </div>
       </div>
-      <div className="flex gap-[18px] border-b border-line px-[25px]" aria-label="Agent 信息">
+      <div
+        className="flex gap-[18px] border-b border-line px-[25px]"
+        aria-label="Agent 信息"
+      >
         <button
           className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
             tab === "trace"
@@ -294,9 +297,7 @@ export function AgentDrawer({
               </form>
               <section className="settings-section">
                 <h3>外部事件接收口</h3>
-                <code className="path">
-                  POST /api/agents/{agent.ref}/inbox
-                </code>
+                <code className="path">POST /api/agents/{agent.ref}/inbox</code>
                 <p className="muted small-text">
                   把外部事件 POST 到这里；adapters/
                   目录下的适配器把外部载荷整理成结构化通知。

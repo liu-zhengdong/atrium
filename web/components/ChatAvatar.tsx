@@ -2,13 +2,7 @@ import type { Chat } from "../../shared/schema.ts";
 import { Avatar, type Agent } from "./AgentAvatar.tsx";
 
 /** 会话列表头像：我的私聊用对方头像，Agent 间私聊与群用成员首字合成。 */
-export function ChatAvatar({
-  chat,
-  agents,
-}: {
-  chat: Chat;
-  agents: Agent[];
-}) {
+export function ChatAvatar({ chat, agents }: { chat: Chat; agents: Agent[] }) {
   if (chat.kind === "direct" && chat.direct_agent) {
     const agent = agents.find((a) => a.id === chat.direct_agent);
     return (
@@ -19,9 +13,8 @@ export function ChatAvatar({
       />
     );
   }
-  const names = (chat.member_names?.length
-    ? chat.member_names
-    : [chat.name]
+  const names = (
+    chat.member_names?.length ? chat.member_names : [chat.name]
   ).slice(0, 4);
   const fontSize =
     names.length === 1

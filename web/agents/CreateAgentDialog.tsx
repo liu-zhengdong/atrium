@@ -104,7 +104,7 @@ function SourcePicker({
           {searchable && (
             <input
               ref={searchRef}
-              className="w-full border-0 border-b border-[#eee8dc] px-2.5 py-2 text-xs outline-none"
+              className="plain-field w-full border-0 border-b border-[#eee8dc] px-2.5 py-2 text-xs"
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}

@@ -58,13 +58,29 @@ select:focus-visible,
 summary:focus-visible {
   outline: 2px solid #9c8b6c;
 }
-/* 组合控件自己承担焦点态，内部 input 不再套一层系统描边。 */
+/* 组合控件 / .field 自己承担焦点态，不再套一层系统描边。 */
 input.plain-field,
+textarea.plain-field,
+button.plain-field,
 input.plain-field:focus,
-input.plain-field:focus-visible {
+textarea.plain-field:focus,
+button.plain-field:focus,
+input.plain-field:focus-visible,
+textarea.plain-field:focus-visible,
+button.plain-field:focus-visible,
+input.field:focus,
+textarea.field:focus,
+input.field:focus-visible,
+textarea.field:focus-visible {
   outline: none;
   outline-offset: 0;
   box-shadow: none;
+}
+input.field:focus,
+textarea.field:focus,
+input.field:focus-visible,
+textarea.field:focus-visible {
+  border-color: #c4b9a4;
 }
 button {
   border: 0;

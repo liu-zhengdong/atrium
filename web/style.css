@@ -58,6 +58,14 @@ select:focus-visible,
 summary:focus-visible {
   outline: 2px solid #9c8b6c;
 }
+/* 组合控件自己承担焦点态，内部 input 不再套一层系统描边。 */
+input.plain-field,
+input.plain-field:focus,
+input.plain-field:focus-visible {
+  outline: none;
+  outline-offset: 0;
+  box-shadow: none;
+}
 button {
   border: 0;
   background: none;
@@ -577,7 +585,7 @@ input[type="radio"] {
     display: flex;
     position: absolute;
     left: 12px;
-    top: 20px;
+    top: 11px;
     z-index: 2;
   }
   .drawer {

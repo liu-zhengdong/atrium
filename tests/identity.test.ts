@@ -256,8 +256,8 @@ test("已有 cwd 大小写不符时写回磁盘真实拼写", (t) => {
           : part,
     )
     .join("/");
-  if (folded === actual) {
-    t.skip("当前文件系统区分大小写，跳过拼写纠正断言");
+  if (folded === actual || !existsSync(folded)) {
+    t.skip("当前文件系统区分大小写或不需纠正，跳过拼写纠正断言");
     return;
   }
   const { agent } = store.createAgent("CaseAgent", folded);

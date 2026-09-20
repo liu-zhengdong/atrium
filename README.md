@@ -17,7 +17,7 @@ atrium
 已全局安装后，在任意目录执行 **`atrium`** 即可启动后台服务并打开 Web，默认地址 **http://127.0.0.1:4310**。重复执行直接打开已有服务，不新建另一份实例或数据。
 
 1. 首页展示长期 Agent 名册，点击即可进入私聊，连接由后台管理。普通 `pi` 保持自由多开，仅列在折叠的「临时 Pi」中，不自动创建身份。
-2. 选择「新建 Agent」或运行 `atrium create <名称>`，一开始只需起名；默认从内置类型复制配置。也可从已有身份 fork。专属工作目录自动创建为 `~/atrium/desktops/<名称>/`，每次启动固定使用。默认只创建身份，不启动进程。
+2. 选择「新建 Agent」或运行 `atrium create <名称>`，一开始只需起名；默认从内置类型复制配置。也可从已有身份 fork。专属工作目录自动创建为 `~/Atrium/desktops/<名称>/`，每次启动固定使用。默认只创建身份，不启动进程。
 3. 可另建群聊；群里输入 `@` 选择 Agent，候选项同时显示它声明的工作内容。
 4. 点击 Agent 头像打开运行轨迹抽屉，按需进入通知或运行设置；在运行设置里查看接收口地址、管理适配器。
 
@@ -149,7 +149,7 @@ MCP 提供 `list_agents`、`list_fork_sources`、`fork_agent`、`open_direct`、
 | `PI_ACP_DIR`          | pi-atrium 状态与实例登记目录；TUI 和后端须一致             |
 | `PI_CODING_AGENT_DIR` | 未显式指定模板时的 Pi 配置来源；具名进程改用自己的配置目录 |
 | `ATRIUM_PI_TEMPLATE`  | 新身份默认配置模板，优先于 `PI_CODING_AGENT_DIR`           |
-| `ATRIUM_DESKTOPS`     | 桌面根目录，默认 `~/atrium/desktops`                       |
+| `ATRIUM_DESKTOPS`     | 桌面根目录，默认 `~/Atrium/desktops`                       |
 | `ATRIUM_PI_HOME`      | 覆盖 `~/.pi`（配置真身与名称入口）；测试用隔离目录         |
 
 Pi 接入依赖 [`@liuser/pi-atrium`](https://github.com/liu-zhengdong/pi-atrium)。个人 TUI 用 `pi install git:github.com/liu-zhengdong/pi-atrium`。

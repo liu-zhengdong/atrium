@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { createApp } from "../server/app.ts";
-import { ensureDesktopCwd } from "../server/agents.ts";
+import { ensureDesktopCwd, existingDirectoryPath } from "../server/agents.ts";
 import { Problem, Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 
@@ -208,17 +208,18 @@ test("工作目录丢失时回落到桌面目录；仍在则保持", (t) => {
   const { agent } = store.createAgent("Atlas", gone);
 
   const custom = mkdtempSync(join(root, "custom-"));
+  const customCwd = existingDirectoryPath(custom);
   store.run("UPDATE agents SET cwd=? WHERE id=?", custom, agent.id);
   assert.equal(
     ensureDesktopCwd(store, desktops, store.agent(agent.id)),
-    custom,
+    customCwd,
     "已有目录不迁回桌面",
   );
-  assert.equal(store.agent(agent.id).cwd, custom);
+  assert.equal(store.agent(agent.id).cwd, customCwd);
 
   store.run("UPDATE agents SET cwd=? WHERE id=?", gone, agent.id);
   const desktop = ensureDesktopCwd(store, desktops, store.agent(agent.id));
-  assert.equal(desktop, realpathSync(join(desktops, "Atlas")));
+  assert.equal(desktop, existingDirectoryPath(join(desktops, "Atlas")));
   assert.equal(store.agent(agent.id).cwd, desktop);
   assert(existsSync(desktop));
 
@@ -233,6 +234,39 @@ test("工作目录丢失时回落到桌面目录；仍在则保持", (t) => {
       error.message.includes("无法创建工作目录"),
   );
   assert.equal(store.agent(agent.id).cwd, gone, "回落失败时不改记录");
+});
+
+test("已有 cwd 大小写不符时写回磁盘真实拼写", (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-cwd-case-")));
+  const desktops = join(root, "desktops");
+  mkdirSync(join(desktops, "AtriumDesk", "Agent"), { recursive: true });
+  const store = new Store(join(root, "atrium.sqlite"));
+  t.after(() => {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const actual = existingDirectoryPath(join(desktops, "AtriumDesk", "Agent"));
+  const folded = actual
+    .split("/")
+    .map((part, index, parts) =>
+      index === parts.length - 2
+        ? part.toLowerCase()
+        : index === parts.length - 1
+          ? part.toLowerCase()
+          : part,
+    )
+    .join("/");
+  if (folded === actual || !existsSync(folded)) {
+    t.skip("当前文件系统区分大小写或不需纠正，跳过拼写纠正断言");
+    return;
+  }
+  const { agent } = store.createAgent("CaseAgent", folded);
+  assert.equal(
+    ensureDesktopCwd(store, desktops, store.agent(agent.id)),
+    actual,
+    "启动前把 cwd 纠正为磁盘真实大小写",
+  );
+  assert.equal(store.agent(agent.id).cwd, actual);
 });
 
 test("启动时把丢失的工作目录写回桌面并交给 Pi", async (t) => {
@@ -287,7 +321,7 @@ test("启动时把丢失的工作目录写回桌面并交给 Pi", async (t) => {
     url: `/api/agents/${agent.id}/start`,
   });
   assert.equal(response.statusCode, 200, response.body);
-  const desktop = realpathSync(join(desktops, "Atlas"));
+  const desktop = existingDirectoryPath(join(desktops, "Atlas"));
   assert.equal(store.agent(agent.id).cwd, desktop);
   assert.equal(started.cwd, desktop);
 });

@@ -1,6 +1,7 @@
 import {
   lstatSync,
   mkdirSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -27,9 +28,36 @@ export function resolvePiHome(explicit?: string) {
 /** Named alias directory: ~/.pi/agents/<name> → atrium/agents/<uuid>. */
 export const profileLinks = (piHome: string) => join(piHome, "agents");
 
-/** Root of the fixed per-identity workspaces; each Agent gets ~/atrium/desktops/<name>. */
+/** Root of the fixed per-identity workspaces; each Agent gets ~/Atrium/desktops/<name>. */
 export const defaultDesktops = () =>
-  process.env.ATRIUM_DESKTOPS ?? join(homedir(), "atrium", "desktops");
+  process.env.ATRIUM_DESKTOPS ?? join(homedir(), "Atrium", "desktops");
+
+/** Rewrite each existing path segment to the on-disk spelling (macOS realpath keeps input case). */
+function canonicalizeCase(absolute: string) {
+  const resolved = resolve(absolute);
+  if (resolved === sep) return sep;
+  let current: string = sep;
+  for (const part of resolved.split(sep)) {
+    if (!part) continue;
+    let entries: string[];
+    try {
+      entries = readdirSync(current);
+    } catch {
+      return join(current, part);
+    }
+    const needle = part.normalize("NFC").toLowerCase();
+    const hit = entries.find(
+      (entry) => entry.normalize("NFC").toLowerCase() === needle,
+    );
+    current = join(current, hit ?? part);
+  }
+  return current;
+}
+
+/** Resolve symlinks, then store the path with disk-true capitalization. */
+export function existingDirectoryPath(path: string) {
+  return canonicalizeCase(realpathSync(path));
+}
 
 /** Display form of the desktops root, collapsing the home directory to ~. */
 export const displayDesktops = (root: string) => {
@@ -71,7 +99,7 @@ export function desktopDirectory(root: string, name: string) {
   } catch {
     throw new Problem(409, "无法创建工作目录，目标路径可能被文件占用");
   }
-  return realpathSync(target);
+  return existingDirectoryPath(target);
 }
 
 function isDirectory(path: string) {
@@ -82,13 +110,18 @@ function isDirectory(path: string) {
   }
 }
 
-/** If the recorded workspace is gone, reuse or recreate ~/Atrium/<name>. */
+/** Keep recorded cwd when present; otherwise reuse or recreate ~/Atrium/desktops/<name>. */
 export function ensureDesktopCwd(
   store: Store,
   desktops: string,
   agent: { id: string; name: string; cwd: string },
 ) {
-  if (isDirectory(agent.cwd)) return agent.cwd;
+  if (isDirectory(agent.cwd)) {
+    const cwd = existingDirectoryPath(agent.cwd);
+    if (cwd !== agent.cwd)
+      store.run("UPDATE agents SET cwd=? WHERE id=?", cwd, agent.id);
+    return cwd;
+  }
   const target = childPath(desktops, agent.name, "工作目录");
   if (hasEntry(target) && !isDirectory(target))
     throw new Problem(409, "无法创建工作目录，目标路径可能被文件占用");
@@ -97,7 +130,7 @@ export function ensureDesktopCwd(
   } catch {
     throw new Problem(409, "无法创建工作目录，目标路径可能被文件占用");
   }
-  const cwd = realpathSync(target);
+  const cwd = existingDirectoryPath(target);
   if (cwd !== agent.cwd)
     store.run("UPDATE agents SET cwd=? WHERE id=?", cwd, agent.id);
   return cwd;

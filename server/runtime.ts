@@ -69,7 +69,7 @@ const guideId = (agent: string, session: string) => {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 };
 
-/** Business-side ACP client. Pi processes, IPC discovery and native context belong to pi-acp. */
+/** Business-side ACP client. Pi processes, IPC discovery and native context belong to pi-atrium. */
 export class Runtimes {
   readonly connections = new Map<
     string,
@@ -124,7 +124,7 @@ export class Runtimes {
     const opening = (async () => {
       const entry =
         process.env.ATRIUM_PI_ACP_ENTRY ||
-        require.resolve("@liuser/pi-acp/dist/index.js");
+        require.resolve("@liuser/pi-atrium/dist/index.js");
       const child = spawn(process.execPath, [entry], {
         env: {
           ...process.env,
@@ -177,7 +177,7 @@ export class Runtimes {
           !result._meta?.["pi-acp/identity/v1"]
         )
           throw new Error(
-            "pi-acp 缺少 runtime/v1 能力，请更新到本项目要求的版本",
+            "pi-atrium 缺少 runtime/v1 能力，请更新到本项目要求的版本",
           );
         this.assertOpen();
         this.gateway = gateway;
@@ -190,7 +190,7 @@ export class Runtimes {
               if (entry.connection === connection) {
                 this.connections.delete(id);
                 if (!this.stopped)
-                  this.errors.set(id, "pi-acp 连接断开，正在等待重连");
+                  this.errors.set(id, "pi-atrium 连接断开，正在等待重连");
               }
             this.changed();
           });
@@ -236,12 +236,13 @@ export class Runtimes {
         throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
       if (this.pumping.has(id))
         throw new Problem(409, "Agent 正在处理连接，请稍后重试");
-      const { claimIdentity } = require("@liuser/pi-acp/dist/identity.js") as {
-        claimIdentity(
-          identity: { identityId: string; agentDirectory: string },
-          cwd: string,
-        ): { release(): void };
-      };
+      const { claimIdentity } =
+        require("@liuser/pi-atrium/dist/identity.js") as {
+          claimIdentity(
+            identity: { identityId: string; agentDirectory: string },
+            cwd: string,
+          ): { release(): void };
+        };
       this.store.transaction(() => {
         const agent = this.store.agent(id),
           binding = this.binding(id);
@@ -382,7 +383,8 @@ export class Runtimes {
         }
       } catch {
         if (!this.stopped)
-          this.discoveryError = "暂时无法发现本机 Agent，请确认 pi-acp 可用。";
+          this.discoveryError =
+            "暂时无法发现本机 Agent，请确认 pi-atrium 可用。";
       } finally {
         this.discoveredOnce = true;
         this.scanning = undefined;
@@ -763,7 +765,7 @@ export class Runtimes {
       if (!this.stopped)
         this.traceErrors.set(
           id,
-          "暂时无法读取实时轨迹；请确认此 Pi 已加载支持轨迹的 pi-acp 扩展。已有记录仍可查看。",
+          "暂时无法读取实时轨迹；请确认此 Pi 已加载支持轨迹的 pi-atrium 扩展。已有记录仍可查看。",
         );
     }
     if (!this.stopped && before !== this.traceErrors.get(id)) this.changed();

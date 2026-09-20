@@ -21,7 +21,7 @@ import {
 } from "../server/profile.ts";
 
 const require = createRequire(import.meta.url);
-const bridge = dirname(require.resolve("@liuser/pi-acp/package.json"));
+const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
 
 test("parseGitPackage 覆盖 Pi 与 npm 常见写法", () => {
   assert.deepEqual(
@@ -70,16 +70,26 @@ test("templatePackagePath 指向 Pi 的 npm/git 安装布局", () => {
   );
 });
 
-test("创建身份解析已安装的 git 包，并注入本仓库 pi-acp", async (t) => {
+test("创建身份解析已安装的 git 包，并注入本应用的 pi-atrium", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-profile-pkg-"));
   const template = join(root, "template");
+  const other = join(template, "git/github.com/example/other-ext");
   const adapter = join(template, "git/github.com/liu-zhengdong/pi-mcp-adapter");
+  const notes = join(template, "git/github.com/liu-zhengdong/pi-notes");
   const foreignAcp = join(template, "git/github.com/liu-zhengdong/pi-acp");
-  mkdirSync(adapter, { recursive: true });
-  mkdirSync(foreignAcp, { recursive: true });
+  for (const dir of [other, adapter, notes, foreignAcp])
+    mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(other, "package.json"),
+    JSON.stringify({ name: "other-ext" }),
+  );
   writeFileSync(
     join(adapter, "package.json"),
     JSON.stringify({ name: "@liuser/pi-mcp-adapter" }),
+  );
+  writeFileSync(
+    join(notes, "package.json"),
+    JSON.stringify({ name: "@liuser/pi-notes" }),
   );
   writeFileSync(
     join(foreignAcp, "package.json"),
@@ -90,7 +100,9 @@ test("创建身份解析已安装的 git 包，并注入本仓库 pi-acp", async
     JSON.stringify({
       defaultModel: "fixture",
       packages: [
+        "git:github.com/example/other-ext",
         "git:github.com/liu-zhengdong/pi-mcp-adapter",
+        "git:github.com/liu-zhengdong/pi-notes",
         "git:github.com/liu-zhengdong/pi-acp",
       ],
     }),
@@ -123,8 +135,16 @@ test("创建身份解析已安装的 git 包，并注入本仓库 pi-acp", async
     ),
   ) as { packages: string[] };
   assert.deepEqual(
-    settings.packages.filter((p) => p.includes("pi-mcp-adapter")),
-    [realpathSync(adapter)],
+    settings.packages.filter((p) => p.includes("other-ext")),
+    [realpathSync(other)],
+  );
+  assert.equal(
+    settings.packages.some((p) => p.includes("pi-mcp-adapter")),
+    false,
+  );
+  assert.equal(
+    settings.packages.some((p) => p.includes("pi-notes")),
+    false,
   );
   assert.equal(settings.packages.includes(foreignAcp), false);
   assert.equal(settings.packages.includes(bridge), true);

@@ -97,7 +97,8 @@ if (command === "--help" && !reference) {
         store.db.close();
       }
       if (agent) {
-        const { runNamedTui } = await import("@liuser/pi-acp/dist/identity.js");
+        const { runNamedTui } =
+          await import("@liuser/pi-atrium/dist/identity.js");
         console.error(`中庭 · ${agent.name}\n${agent.cwd}`);
         const launchStore = new Store(join(data, "atrium.sqlite"));
         let running;

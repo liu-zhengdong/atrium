@@ -81,7 +81,7 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
     readFileSync(join(agent.agent_directory, "settings.json"), "utf8"),
   );
   assert.equal(settings.defaultModel, "fixture");
-  assert(settings.packages.some((p: string) => p.includes("pi-acp")));
+  assert(settings.packages.some((p: string) => p.includes("pi-atrium")));
   const chat = store.createChat(agent.name, [agent.id], agent.id);
   const renamed = await app.inject({
     method: "PATCH",

@@ -436,6 +436,14 @@ try {
     });
     assert.equal(rpcResponse.status, 201);
     const rpcAgent = (await rpcResponse.json()).agent;
+    const settingsFile = join(rpcAgent.agent_directory, "settings.json");
+    const staleAcp = join(folder, "missing-node_modules", "@liuser", "pi-acp");
+    const poisoned = JSON.parse(readFileSync(settingsFile, "utf8"));
+    poisoned.packages = [
+      staleAcp,
+      ...(Array.isArray(poisoned.packages) ? poisoned.packages : []),
+    ];
+    writeFileSync(settingsFile, JSON.stringify(poisoned, null, 2) + "\n");
     const originalProfile = process.env.PI_CODING_AGENT_DIR;
     try {
       process.env.PI_CODING_AGENT_DIR = profile;
@@ -456,6 +464,14 @@ try {
       "后台 Pi 启动并连接",
     );
     assert.equal(runtimes.connections.get(rpcAgent.id).info.mode, "rpc");
+    const repaired = JSON.parse(readFileSync(settingsFile, "utf8"));
+    assert.equal(repaired.packages.includes(staleAcp), false);
+    assert.equal(
+      repaired.packages.includes(
+        dirname(require.resolve("@liuser/pi-atrium/package.json")),
+      ),
+      true,
+    );
     await wait(() => pane().includes("已用 Chat 工具回复"), "原 TUI 回合完成");
     await wait(async () => {
       await runtimes.pump(agent.id);
@@ -562,6 +578,7 @@ try {
         "custom-SYSTEM-preserved",
         "close-drains-gateway-and-SSE-without-killing-TUI",
         "hosted-rpc-autostart",
+        "stale-bundled-packages-rewritten-on-start",
         "follow-user-session-switch",
         "disconnect-no-duplicate-process",
         "same-process",

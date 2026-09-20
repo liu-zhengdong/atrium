@@ -10,12 +10,16 @@ import {
   lstatSync,
   realpathSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { createApp } from "../server/app.ts";
 import { ensureDesktopCwd } from "../server/agents.ts";
 import { Problem, Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
+
+const require = createRequire(import.meta.url);
+const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
 
 test("长期身份配置独立、引用共享资源、不复制凭据；改名与迁移保留短号及聊天", async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-identity-")));
@@ -286,4 +290,74 @@ test("启动时把丢失的工作目录写回桌面并交给 Pi", async (t) => {
   const desktop = realpathSync(join(desktops, "Atlas"));
   assert.equal(store.agent(agent.id).cwd, desktop);
   assert.equal(started.cwd, desktop);
+});
+
+test("启动已有身份时改写缺失的合集包路径，再交给 Pi", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-start-pkg-")));
+  const stale = join(root, "node_modules/@liuser/pi-acp");
+  let agentDir = "";
+  let started = false;
+  t.mock.method(
+    Runtimes.prototype as unknown as {
+      rpc: (method: string, params: unknown) => Promise<unknown>;
+    },
+    "rpc",
+    async (method: string) => {
+      if (method === "_pi/identity/start") {
+        started = true;
+        const settings = JSON.parse(
+          readFileSync(join(agentDir, "settings.json"), "utf8"),
+        ) as { packages: string[] };
+        assert.equal(settings.packages.includes(stale), false);
+        assert.equal(settings.packages.includes(bridge), true);
+        return { runtimeId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
+      }
+      return { runtimes: [] };
+    },
+  );
+  t.mock.method(
+    Runtimes.prototype as unknown as { bind: () => Promise<void> },
+    "bind",
+    async () => {},
+  );
+  t.mock.method(Runtimes.prototype, "pump", async () => {});
+  const template = join(root, "template");
+  mkdirSync(template);
+  writeFileSync(
+    join(template, "settings.json"),
+    JSON.stringify({ defaultModel: "fixture", packages: [] }),
+  );
+  const { app } = await createApp({
+    data: join(root, "data"),
+    desktops: join(root, "desktops"),
+    piHome: join(root, ".pi"),
+  });
+  t.after(async () => {
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/agents",
+    payload: { name: "Atlas", template },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  agentDir = created.json().agent.agent_directory as string;
+  writeFileSync(
+    join(agentDir, "settings.json"),
+    JSON.stringify({
+      defaultModel: "fixture",
+      packages: [stale, join(root, "other-ext")],
+    }) + "\n",
+  );
+  const response = await app.inject({
+    method: "POST",
+    url: `/api/agents/${created.json().agent.id}/start`,
+  });
+  assert.equal(started, true);
+  assert.equal(response.statusCode, 200, response.body);
+  const settings = JSON.parse(
+    readFileSync(join(agentDir, "settings.json"), "utf8"),
+  ) as { packages: string[] };
+  assert.deepEqual(settings.packages, [join(root, "other-ext"), bridge]);
 });

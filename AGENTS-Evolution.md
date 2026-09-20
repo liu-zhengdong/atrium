@@ -1,5 +1,11 @@
 # AGENTS Evolution
 
+## 2026-09-20 · 启动已有身份时改写合集包
+
+- 发生：切到 pi-atrium 后，已有身份的 `settings.json` 仍指向创建时的 `@liuser/pi-acp`，Pi 加载扩展失败。
+- 分析：合集路径只在新建时注入；启动路径直接把旧目录交给 Pi。本地验收也只测了创建。
+- 改变：`start()` 先 `syncIdentityPackages`。用缺失的 pi-acp 路径做反证。
+
 ## 2026-09-20 · 改用独立仓 pi-atrium
 
 - 发生：刚把 pi-acp 收进本仓库（#31）后，用户确认个人 TUI 也要用同一份插件，`pi install git:` 只认仓根，不能装 atrium 子目录；于是 Pi 侧（ACP、MCP 代理、notes）收到独立仓 `pi-atrium`。

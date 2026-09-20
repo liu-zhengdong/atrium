@@ -3,6 +3,7 @@ import { LoaderCircle, MessageSquare, Plus, Search, Users } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import { agentName } from "../../shared/agent-name.ts";
 import {
+  agentPresence,
   Avatar,
   runtimeLabel,
   type Agent,
@@ -75,7 +76,7 @@ export function AgentDirectory({
             <div className="flex w-full items-start gap-3.5 rounded-xl px-5 pb-[19px] pt-[22px] text-left">
               <Avatar
                 name={a.name}
-                online={a.available}
+                presence={agentPresence(a)}
                 onClick={() => details(a.id)}
               />
               <button

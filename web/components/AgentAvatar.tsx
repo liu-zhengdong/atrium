@@ -1,5 +1,6 @@
 import type { Overview } from "../../shared/schema.ts";
 export type Agent = Overview["agents"][number];
+export type Presence = "busy" | "online" | "offline";
 export const runtimeLabel = (a: Agent) =>
   a.runtime
     ? a.runtime.busy
@@ -10,16 +11,29 @@ export const runtimeLabel = (a: Agent) =>
       : a.available
         ? "在线"
         : "离线";
+export function agentPresence(
+  a: { available: boolean; runtime?: { busy: boolean } | null } | undefined,
+): Presence {
+  if (!a) return "offline";
+  if (a.runtime?.busy) return "busy";
+  if (a.available) return "online";
+  return "offline";
+}
+const presenceDotClass: Record<Presence, string> = {
+  busy: "bg-[#e08a24]",
+  online: "bg-[#1a9d4a]",
+  offline: "bg-[#c8c5bc]",
+};
 export function Avatar({
   name,
-  online,
+  presence,
   small = false,
   tiny = false,
   className = "",
   onClick,
 }: {
   name: string;
-  online?: boolean;
+  presence?: Presence;
   small?: boolean;
   /** 20px 圆形头像，用于已读回执的头像组。 */
   tiny?: boolean;
@@ -34,7 +48,7 @@ export function Avatar({
         title={`查看 ${name} 的运行轨迹`}
         onClick={onClick}
       >
-        <Avatar name={name} small={small} online={online} />
+        <Avatar name={name} small={small} presence={presence} />
       </button>
     );
   // avatar 保留为标记类：回执头像、移动端成员堆叠等场景式覆盖仍指向它。
@@ -49,11 +63,10 @@ export function Avatar({
       } ${className}`}
     >
       {Array.from(name)[0]}
-      {online !== undefined && (
+      {presence !== undefined && (
         <i
-          className={`absolute -right-[2px] -bottom-[1px] h-[9px] w-[9px] rounded-full border-2 border-surface ${
-            online ? "bg-[#73876d]" : "bg-[#c8c5bc]"
-          }`}
+          data-presence={presence}
+          className={`absolute -right-[2px] -bottom-[1px] h-[9px] w-[9px] rounded-full border-2 border-surface ${presenceDotClass[presence]}`}
         />
       )}
     </span>

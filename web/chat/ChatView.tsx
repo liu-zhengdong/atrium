@@ -3,6 +3,7 @@ import { Hash, Plus } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import { api } from "../api.ts";
 import {
+  agentPresence,
   Avatar,
   runtimeLabel,
   type Agent,
@@ -115,7 +116,7 @@ export function ChatView({
                     title={`${a.name} · ${a.work || runtimeLabel(a)}`}
                     onClick={() => details(a.id)}
                   >
-                    <Avatar small name={a.name} online={a.available} />
+                    <Avatar small name={a.name} presence={agentPresence(a)} />
                   </button>
                 ))}
               {active.kind === "group" && (

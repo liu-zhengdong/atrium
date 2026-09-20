@@ -10,6 +10,7 @@ import type { Attachment, Overview } from "../../shared/schema.ts";
 import { resolveMentions } from "../../shared/mentions.ts";
 import { api } from "../api.ts";
 import {
+  agentPresence,
   Avatar,
   runtimeLabel,
   type Agent,
@@ -199,7 +200,7 @@ export function MessageComposer({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => chooseMention(a)}
               >
-                <Avatar small name={a.name} online={a.available} />
+                <Avatar small name={a.name} presence={agentPresence(a)} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <strong className="text-xs font-[550]">{a.name}</strong>
                   <small className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-[#8e8779]">

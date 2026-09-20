@@ -1,5 +1,5 @@
 import type { Chat } from "../../shared/schema.ts";
-import { Avatar, type Agent } from "./AgentAvatar.tsx";
+import { agentPresence, Avatar, type Agent } from "./AgentAvatar.tsx";
 
 /** 会话列表头像：我的私聊用对方头像，Agent 间私聊与群用成员首字合成。 */
 export function ChatAvatar({ chat, agents }: { chat: Chat; agents: Agent[] }) {
@@ -9,7 +9,7 @@ export function ChatAvatar({ chat, agents }: { chat: Chat; agents: Agent[] }) {
       <Avatar
         small
         name={agent?.name ?? chat.member_names?.[0] ?? chat.name}
-        online={agent?.available ?? false}
+        presence={agentPresence(agent)}
       />
     );
   }

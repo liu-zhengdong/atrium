@@ -4,6 +4,7 @@ import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
 import { convTime } from "../time.ts";
 import {
+  agentPresence,
   Avatar,
   runtimeLabel,
   type Agent,
@@ -185,7 +186,7 @@ export function Sidebar({
             <div className={agentRow} key={a.id}>
               <Avatar
                 name={a.name}
-                online={a.available}
+                presence={agentPresence(a)}
                 small
                 onClick={() => details(a.id)}
               />

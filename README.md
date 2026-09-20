@@ -152,6 +152,8 @@ MCP 提供 `list_agents`、`list_fork_sources`、`fork_agent`、`open_direct`、
 | `ATRIUM_DESKTOPS`     | 桌面根目录，默认 `~/atrium/desktops`                       |
 | `ATRIUM_PI_HOME`      | 覆盖 `~/.pi`（配置真身与名称入口）；测试用隔离目录         |
 
+pi-acp 通过 git 依赖安装（`github:liu-zhengdong/pi-acp`，跟踪 main 最新），不依赖 npm 发布认证；`package-lock.json` 记录每次实际取到的提交。
+
 `.atrium/` 保存业务数据库和 `credentials/` 中的 Agent MCP 凭据（`0600`）。每位身份的 Pi 配置在 `~/.pi/atrium/agents/<内部身份 ID>/`，`~/.pi/agents/<名称>` 指向它。模板只读取必要设置；扩展／技能引用已安装资源。规则、模型列表、MCP 配置和笔记拷成该身份自有文件，之后各自调优、互不影响。不复制登录凭据。模板中的 npm 包必须已安装；Git 包请先改为已安装的本地路径。旧版 `links/` 凭据按需迁移，既有会话通过 pi-acp 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
 
 服务管理另用同目录的 `service.sqlite` 保存单实例登记与随机控制凭据（`0600`），不更换业务数据库。启动与崩溃后重新占用通过 SQLite 事务串行化；进程仍存在但连接失败时拒绝另开或按 PID 强杀。状态与停止通过本机鉴权接口核对实例，不把端口连通当作身份依据。该文件包含凭据，请勿提交或分享。

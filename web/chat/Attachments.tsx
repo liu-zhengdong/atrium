@@ -34,7 +34,7 @@ export function MessageAttachments({
       {images.length === 1 && (
         <button
           type="button"
-          className="w-fit max-w-full overflow-hidden rounded-[10px] border border-[#e7e4da] bg-white p-[3px] shadow-[0_2px_8px_#312b1c14]"
+          className="w-fit max-w-full overflow-hidden rounded-[10px] bg-white p-[3px] shadow-lift"
           onClick={() => setOpen(0)}
         >
           <img
@@ -57,7 +57,7 @@ export function MessageAttachments({
               key={item.id}
               src={attachmentUrl(item.id)}
               alt=""
-              className="absolute top-0 h-[72px] w-[72px] rounded-[10px] border-2 border-white object-cover shadow-[0_1px_4px_#30220d18]"
+              className="absolute top-0 h-[72px] w-[72px] rounded-[10px] border-2 border-white object-cover shadow-lift"
               style={{ left: index * 14, zIndex: index }}
             />
           ))}
@@ -87,7 +87,7 @@ function FileCard({ item }: { item: Attachment }) {
     <a
       href={attachmentUrl(item.id)}
       download={item.name}
-      className="flex max-w-full items-center gap-2.5 rounded-[10px] border border-[#e7e4da] bg-white px-2.5 py-2 no-underline transition-colors hover:border-[#d8d2c2]"
+      className="flex max-w-full items-center gap-2.5 rounded-[10px] border border-line-ui bg-white px-2.5 py-2 no-underline transition-colors hover:border-line-strong"
     >
       <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-[#f4f1ea] text-[#8a8374]">
         <FileText size={15} />
@@ -223,12 +223,12 @@ export function StagedChip({
   onRemove: () => void;
 }) {
   return (
-    <span className="relative flex max-w-[170px] items-center gap-1.5 rounded-lg border border-[#e7e4da] bg-white py-1 pr-7 pl-1">
+    <span className="relative flex max-w-[170px] items-center gap-1.5 rounded-[10px] border border-line-ui bg-white py-1 pr-7 pl-1">
       {item.kind === "image" ? (
         <img
           src={attachmentUrl(item.id)}
           alt=""
-          className="h-8 w-8 flex-none rounded-md border border-[#eeeae0] object-cover"
+          className="h-8 w-8 flex-none rounded-md object-cover"
         />
       ) : (
         <span className="grid h-8 w-8 flex-none place-items-center rounded-md bg-[#f4f1ea] text-[#8a8374]">

@@ -134,10 +134,10 @@ export function ReadReceipt({
             </button>
           </div>
           {readers.length > 8 && (
-            <label className="receipt-search mt-3 flex items-center gap-[7px] rounded-md border border-[#e6e7e9] px-[9px] py-[7px] text-[#9b9da3] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[#9c8b6c]">
+            <label className="receipt-search mt-3 flex items-center gap-[7px] rounded-md border border-[#e6e7e9] px-[9px] py-[7px] text-[#9b9da3] transition-[border-color] duration-150 focus-within:border-[#c4b9a4] focus-within:bg-white">
               <Search size={15} />
               <input
-                className="w-full min-w-0 border-0 bg-transparent text-xs outline-none"
+                className="plain-field w-full min-w-0 border-0 bg-transparent text-xs"
                 aria-label="搜索阅读名单"
                 placeholder="搜索 Agent"
                 value={search}

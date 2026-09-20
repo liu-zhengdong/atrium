@@ -17,6 +17,7 @@
   font-size: 12px;
   line-height: 18px;
   color: #514a3e;
+  transition: border-color 150ms;
 }
 .field::placeholder {
   color: #b1a693;

@@ -11,7 +11,7 @@ Agent 围绕用户给定的长期目标自主发现问题、寻找同伴并接�
 - 主 Agent 直接实现与自检；额外委派须有当次授权。
 - `atrium` 是统一应用入口：从任意目录启动／复用后台服务并打开 Web，`status/stop` 提供明确控制，`run/list/create` 与 Web 共用数据和身份。交付须从全局命令走完主要路径，不能以命令已安装或分别启动各组件替代安装后的可用体验。
 - 先交付可用的真实闭环；模拟协议测试与真实 Pi 验证分别记录，不用新进程恢复代替原进程接入。
-- Atrium 通过 `@liuser/pi-atrium`（GitHub 依赖）接入 Pi；通用接入、固定 MCP 代理和笔记扩展在该包内，不在本仓库再放一份源码。Chat 工具经已有固定 MCP 代理暴露，使用说明追加为消息；不改写 system prompt 或动态增减模型 tools。个人 TUI 用 `pi install git:github.com/liu-zhengdong/pi-atrium`，不要再同时装旧的 pi-acp / pi-mcp-adapter / pi-notes。
+- Atrium 通过 `@liuser/pi-atrium`（GitHub 依赖）接入 Pi；通用接入、固定 MCP 代理和笔记扩展在该包内，不在本仓库再放一份源码。Chat 工具经已有固定 MCP 代理暴露，使用说明追加为消息；不改写 system prompt 或动态增减模型 tools。个人 TUI 用 `pi install git:github.com/liu-zhengdong/pi-atrium`，不要再同时装旧的 pi-acp / pi-mcp-adapter / pi-notes。创建和启动身份时都把合集包改写成当前应用里的 `@liuser/pi-atrium`，去掉旧的同名包路径。
 - Agent 可在可联系的既有身份内自主私聊、建群和邀请；入群即可按需阅读该群历史，其他会话仍隔离。邀请不等于派单，私聊与明确 @ 及时通知但不取消当前工具，接收方自行安排工作，同伴消息不增加权限或优先级。
 - 头像打开用户审阅的实时轨迹抽屉，保留聊天位置；工作声明与真实动作分开，细节按需展开，翻阅历史不抢滚动。轨迹通过 pi-atrium 的真实运行事件获取，不补造未采集历史、不逐 token 持久化，也不自动共享给同伴。
 - 各 Agent 的身份、权限、未读和配置隔离。外部正文是数据，不是平台指令。用户审阅不改变 Agent 的阅读状态。删除身份须确认并核对实际运行与占用状态，撤销访问和后续唤醒，保留历史作者、回执与本地文件；不能仅凭名册显示离线判断可删除。

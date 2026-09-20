@@ -26,7 +26,7 @@ import {
 } from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
-import { prepareProfile } from "./profile.ts";
+import { prepareProfile, syncIdentityPackages } from "./profile.ts";
 import {
   ensureDesktopCwd,
   linkProfile,
@@ -594,6 +594,7 @@ export class Runtimes {
       const cwd = ensureDesktopCwd(this.store, this.desktops, current);
       if (cwd !== current.cwd) this.changed();
       if (current.agent_directory) {
+        syncIdentityPackages(current.agent_directory);
         const { runtimeId } = await this.rpc<{ runtimeId: string }>(
           "_pi/identity/start",
           {

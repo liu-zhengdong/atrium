@@ -93,6 +93,76 @@ const resolveInstalled = (template: string, spec: string) => {
   }
 };
 
+const BUNDLED_PACKAGE_NAMES = new Set([
+  "@liuser/pi-atrium",
+  "@liuser/pi-acp",
+  "@liuser/pi-mcp-adapter",
+  "@liuser/pi-notes",
+]);
+
+const BUNDLED_PACKAGE_PATH =
+  /(?:^|\/)(?:@liuser\/)?(?:pi-atrium|pi-acp|pi-mcp-adapter|pi-notes)(?:\/|$)/;
+
+function packageNameAt(path: string): string | undefined {
+  try {
+    const name = readJson(join(path, "package.json")).name;
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function entryPath(entry: unknown): string | undefined {
+  if (typeof entry === "string") return entry;
+  if (entry && typeof entry === "object" && "source" in entry) {
+    const source = (entry as { source: unknown }).source;
+    return typeof source === "string" ? source : undefined;
+  }
+  return undefined;
+}
+
+/** Paths that are this app's Pi bundle, including stale pi-acp / adapter / notes. */
+export function isBundledPackagePath(path: string): boolean {
+  const name = packageNameAt(path);
+  if (name && BUNDLED_PACKAGE_NAMES.has(name)) return true;
+  return BUNDLED_PACKAGE_PATH.test(path.replaceAll("\\", "/"));
+}
+
+export function bundledPackagePath(): string {
+  return dirname(require.resolve("@liuser/pi-atrium/package.json"));
+}
+
+/** Keep user packages; replace any bundled copy with the current app install. */
+export function injectBundledPackages(packages: unknown[]): unknown[] {
+  const bridge = bundledPackagePath();
+  const kept: unknown[] = [];
+  for (const entry of packages) {
+    const path = entryPath(entry);
+    if (path === undefined) {
+      kept.push(entry);
+      continue;
+    }
+    if (isBundledPackagePath(path)) continue;
+    kept.push(entry);
+  }
+  kept.push(bridge);
+  return kept;
+}
+
+/** Rewrite an existing identity's settings before Pi loads packages. */
+export function syncIdentityPackages(directory: string) {
+  const file = join(directory, "settings.json");
+  if (!existsSync(file)) return;
+  const settings = readJson(file);
+  const packages = Array.isArray(settings.packages) ? settings.packages : [];
+  const next = injectBundledPackages(packages);
+  if (JSON.stringify(packages) === JSON.stringify(next)) return;
+  settings.packages = next;
+  writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", {
+    mode: 0o600,
+  });
+}
+
 /** Owned rules and notes; installed extensions/skills stay as path references. Never copy credentials. */
 export function prepareProfile(
   identityId: string,
@@ -134,21 +204,7 @@ export function prepareProfile(
       ? path
       : { ...(entry as object), source: path };
   });
-  // Inject this app's pi-atrium; drop template copies of the same bundle.
-  const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
-  const bundled = new Set([
-    "@liuser/pi-atrium",
-    "@liuser/pi-acp",
-    "@liuser/pi-mcp-adapter",
-    "@liuser/pi-notes",
-  ]);
-  settings.packages = references.filter((entry) => {
-    const path = typeof entry === "string" ? entry : entry.source;
-    if (!existsSync(join(path, "package.json"))) return true;
-    const name = readJson(join(path, "package.json")).name;
-    return typeof name !== "string" || !bundled.has(name);
-  });
-  (settings.packages as unknown[]).push(bridge);
+  settings.packages = injectBundledPackages(references);
   for (const kind of ["extensions", "skills", "prompts", "themes"] as const) {
     const extra = Array.isArray(source[kind]) ? (source[kind] as string[]) : [];
     settings[kind] = extra.map((path) => {

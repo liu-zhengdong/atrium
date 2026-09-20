@@ -15,8 +15,11 @@ import { createApp } from "../server/app.ts";
 import { Problem } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 import {
+  injectBundledPackages,
+  isBundledPackagePath,
   parseGitPackage,
   prepareProfile,
+  syncIdentityPackages,
   templatePackagePath,
 } from "../server/profile.ts";
 
@@ -148,6 +151,74 @@ test("创建身份解析已安装的 git 包，并注入本应用的 pi-atrium",
   );
   assert.equal(settings.packages.includes(foreignAcp), false);
   assert.equal(settings.packages.includes(bridge), true);
+});
+
+test("合集包路径识别：缺失的 pi-acp 也算，自定义 pi-acpx 不算", () => {
+  const missingAcp = "/tmp/atrium-node_modules/@liuser/pi-acp";
+  assert.equal(isBundledPackagePath(missingAcp), true);
+  assert.equal(
+    isBundledPackagePath(
+      "/Users/me/.pi/agent/git/github.com/liu-zhengdong/pi-notes",
+    ),
+    true,
+  );
+  assert.equal(
+    isBundledPackagePath("/Users/me/.pi/agent/extensions/pi-acpx"),
+    false,
+  );
+  const root = mkdtempSync(join(tmpdir(), "atrium-bundled-name-"));
+  try {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "@liuser/pi-mcp-adapter" }),
+    );
+    assert.equal(isBundledPackagePath(root), true);
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "other-ext" }),
+    );
+    assert.equal(isBundledPackagePath(root), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("injectBundledPackages 丢掉死路径，保留用户包", () => {
+  const other = "/opt/exts/other-ext";
+  const stale = "/Users/me/atrium/node_modules/@liuser/pi-acp";
+  const next = injectBundledPackages([
+    other,
+    stale,
+    { source: "/opt/git/pi-mcp-adapter", enabled: true },
+  ]);
+  assert.deepEqual(next, [other, bridge]);
+});
+
+test("syncIdentityPackages 覆盖已有 settings 里的死合集路径", () => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-sync-pkg-"));
+  const other = join(root, "other-ext");
+  mkdirSync(other);
+  writeFileSync(
+    join(other, "package.json"),
+    JSON.stringify({ name: "other-ext" }),
+  );
+  const settings = join(root, "settings.json");
+  writeFileSync(
+    settings,
+    JSON.stringify({
+      defaultModel: "fixture",
+      packages: [join(root, "node_modules/@liuser/pi-acp"), other],
+    }) + "\n",
+  );
+  try {
+    syncIdentityPackages(root);
+    const updated = JSON.parse(readFileSync(settings, "utf8")) as {
+      packages: string[];
+    };
+    assert.deepEqual(updated.packages, [other, bridge]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("未安装的 git 包拒绝创建", () => {

@@ -2,6 +2,9 @@
   "name": "atrium",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "type": "module",
   "bin": {
     "atrium": "bin/atrium.mjs"
@@ -14,7 +17,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/main.ts",
     "test": "tsx --test tests/*.test.ts",
-    "check": "npm run build && npm test",
+    "check": "npm run build && npm test && npm run test -w @liuser/pi-acp",
     "test:pi": "node --import tsx scripts/probe-pi.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -22,7 +25,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
     "@fastify/static": "^10.1.3",
-    "@liuser/pi-acp": "github:liu-zhengdong/pi-acp",
+    "@liuser/pi-acp": "*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@radix-ui/react-popover": "^1.1.23",
     "fastify": "^5.12.5",
@@ -36,7 +39,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",
-    "@liuser/pi-mcp-adapter": "2.34.1",
+    "@liuser/pi-mcp-adapter": "github:liu-zhengdong/pi-mcp-adapter",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.13.5",
     "@types/react": "^19.3.0",

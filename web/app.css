@@ -24,7 +24,7 @@
 }
 textarea.field {
   line-height: 1.6;
-  resize: vertical;
+  overflow-y: auto;
 }
 .form-label {
   display: flex;

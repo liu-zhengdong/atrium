@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { ArrowUp, AtSign, LoaderCircle } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import { resolveMentions } from "../../shared/mentions.ts";
@@ -39,6 +45,12 @@ export function MessageComposer({
     setMentionIndex(0);
     setError("");
   }, [chatId]);
+  useLayoutEffect(() => {
+    const el = textarea.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [draft]);
   function chooseMention(a: Agent) {
     if (!chatId) return;
     setDrafts((old) => ({
@@ -125,7 +137,7 @@ export function MessageComposer({
         )}
         <textarea
           ref={textarea}
-          className="plain-field block max-h-[200px] min-h-[70px] w-full resize-y rounded-[11px] border-0 bg-transparent px-[17px] pb-1.5 pt-[17px] text-[13px] leading-[1.7] text-[#434137] placeholder:text-[#aaa396] max-[560px]:min-h-[66px]"
+          className="plain-field block max-h-[200px] min-h-[70px] w-full resize-none overflow-y-auto rounded-[11px] border-0 bg-transparent px-[17px] pb-1.5 pt-[17px] text-[13px] leading-[1.7] text-[#434137] placeholder:text-[#aaa396] max-[560px]:min-h-[66px]"
           aria-label="消息"
           placeholder={
             active.kind === "group"

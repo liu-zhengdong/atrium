@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import type { Overview } from "../../shared/schema.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { ReadReceipt } from "./ReadReceipt.tsx";
+import { MessageAttachments } from "./Attachments.tsx";
 import { time } from "../time.ts";
 import type { useConversation } from "./useConversation.ts";
 export function MessageTimeline({
@@ -110,20 +111,23 @@ export function MessageTimeline({
                       </time>
                     </div>
                   )}
-                  <div className="markdown w-full min-w-0 rounded-[4px_13px_13px_13px] border border-[#eeede8] bg-[#f5f5f2] px-3.5 py-2.5 max-[560px]:px-3 max-[560px]:py-[9px] [.outgoing_&]:rounded-[13px_4px_13px_13px] [.outgoing_&]:border-[#e0e8f4] [.outgoing_&]:bg-[#eaf0fa]">
-                    <Markdown
-                      components={{
-                        a: (props) => (
-                          <a {...props} target="_blank" rel="noreferrer" />
-                        ),
-                        img: ({ alt }) => (
-                          <span>[图片：{alt || "未加载"}]</span>
-                        ),
-                      }}
-                    >
-                      {message.body}
-                    </Markdown>
-                  </div>
+                  {message.body.trim() ? (
+                    <div className="markdown w-full min-w-0 rounded-[4px_13px_13px_13px] border border-[#eeede8] bg-[#f5f5f2] px-3.5 py-2.5 max-[560px]:px-3 max-[560px]:py-[9px] [.outgoing_&]:rounded-[13px_4px_13px_13px] [.outgoing_&]:border-[#e0e8f4] [.outgoing_&]:bg-[#eaf0fa]">
+                      <Markdown
+                        components={{
+                          a: (props) => (
+                            <a {...props} target="_blank" rel="noreferrer" />
+                          ),
+                          img: ({ alt }) => (
+                            <span>[图片：{alt || "未加载"}]</span>
+                          ),
+                        }}
+                      >
+                        {message.body}
+                      </Markdown>
+                    </div>
+                  ) : null}
+                  <MessageAttachments attachments={message.attachments} />
                   <ReadReceipt
                     message={message}
                     state={readState}

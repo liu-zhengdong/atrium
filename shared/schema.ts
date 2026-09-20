@@ -36,11 +36,27 @@ export const defaultPreferences: Preferences = {
 export const sendInput = z
   .object({
     chat_id: id,
-    body: text,
+    body: z.string().trim().max(6000).default(""),
     mentions: z.array(id).max(30).default([]),
     client_id: id.optional(),
+    attachments: z.array(id).max(10).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.body && value.attachments.length === 0)
+      ctx.addIssue({
+        code: "custom",
+        message: "请输入内容或添加附件",
+        path: ["body"],
+      });
+  });
+export type Attachment = {
+  id: string;
+  kind: "image" | "file";
+  name: string;
+  mime: string;
+  size: number;
+};
 export type AgentInfo = {
   id: string;
   ref: string;
@@ -127,6 +143,7 @@ export type Message = {
   body: string;
   mentions: string[];
   created_at: number;
+  attachments: Attachment[];
 };
 export type ChatReadState = {
   agent_id: string;

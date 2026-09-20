@@ -7,6 +7,7 @@ import {
   id as uuid,
   preferences,
   type AgentInfo,
+  type Attachment,
   type BoxMessage,
   type Chat,
   type Message,
@@ -14,6 +15,17 @@ import {
   type ChatReadState,
   type SearchResults,
 } from "../shared/schema.ts";
+import {
+  AttachmentFiles,
+  attachmentsDir,
+  classify,
+  excerptOf,
+  MAX_ATTACHMENTS,
+  MAX_FILE_BYTES,
+  mimeFromName,
+  readFromCwd,
+  safeFileName,
+} from "./attachments.ts";
 
 export class Problem extends Error {
   constructor(
@@ -41,10 +53,13 @@ export type DeliveryRow = {
   chat_id: string | null;
   through_message: number | null;
 };
-type MessageRow = Omit<Message, "mentions"> & { mentions: string };
+type MessageRow = Omit<Message, "mentions" | "attachments"> & {
+  mentions: string;
+};
 const decodeMessage = (row: MessageRow): Message => ({
   ...row,
   mentions: JSON.parse(row.mentions),
+  attachments: [],
 });
 
 // The page budget applies before marking anything read, including multibyte text.
@@ -70,6 +85,7 @@ function bounded<T extends { id: number }>(
 
 export class Store {
   readonly db: DatabaseSync;
+  readonly files: AttachmentFiles;
   private unreadCache = new Map<
     string,
     {
@@ -82,6 +98,7 @@ export class Store {
   >();
   constructor(path: string) {
     this.db = new DatabaseSync(path);
+    this.files = new AttachmentFiles(attachmentsDir(path));
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;
       CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, token_hash TEXT NOT NULL,
@@ -96,6 +113,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL REFERENCES chats(id), sender TEXT NOT NULL,
         body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, UNIQUE(sender,client_id));
       CREATE INDEX IF NOT EXISTS messages_chat_id ON messages(chat_id,id);
+      CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, message_id INTEGER REFERENCES messages(id),
+        uploader TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id);
       CREATE INDEX IF NOT EXISTS members_agent ON members(agent_id,chat_id);
       CREATE TABLE IF NOT EXISTS chat_read_ranges (chat_id TEXT NOT NULL, agent_id TEXT NOT NULL,
         first_id INTEGER NOT NULL, last_id INTEGER NOT NULL,
@@ -370,7 +390,7 @@ export class Store {
         "(us.hidden_after IS NULL OR COALESCE((SELECT MAX(id) FROM messages WHERE chat_id=c.id),0) > us.hidden_after)",
       );
     return this.all<Chat>(
-      `SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only, (SELECT substr(body,1,100) FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
+      `SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only, (SELECT CASE WHEN length(trim(body))>0 THEN substr(body,1,100) WHEN EXISTS(SELECT 1 FROM attachments WHERE message_id=messages.id AND kind='image') THEN '[图片]' WHEN EXISTS(SELECT 1 FROM attachments WHERE message_id=messages.id) THEN '[文件]' ELSE substr(body,1,100) END FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
       COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at,
       (c.direct_agent IS NOT NULL OR EXISTS(SELECT 1 FROM messages WHERE chat_id=c.id AND sender='user')) AS mine,
       (SELECT COUNT(*) FROM messages WHERE chat_id=c.id AND sender!='user' AND id>COALESCE((SELECT last_read FROM user_reads WHERE chat_id=c.id),0)) AS unread,
@@ -618,14 +638,18 @@ export class Store {
       body: string;
       mentions: string[];
       client_id?: string;
+      attachments?: string[];
     },
   ) {
     const chat = this.chat(input.chat_id);
+    const attachments = input.attachments ?? [];
     if (chat.read_only)
       throw new Problem(409, "这个 Agent 已删除，私聊仅供查看历史");
     if (sender !== "user") this.assertMember(chat.id, sender);
     for (const mentioned of input.mentions)
       this.assertMember(chat.id, mentioned);
+    if (!input.body.trim() && attachments.length === 0)
+      throw new Problem(400, "请输入内容或添加附件");
     if (input.client_id) {
       const previous = this.one<MessageRow>(
         "SELECT * FROM messages WHERE sender=? AND client_id=?",
@@ -633,13 +657,19 @@ export class Store {
         input.client_id,
       );
       if (previous) {
+        const previousIds = this.all<{ id: string }>(
+          "SELECT id FROM attachments WHERE message_id=? ORDER BY rowid",
+          previous.id,
+        ).map((row) => row.id);
         if (
           previous.chat_id !== input.chat_id ||
           previous.body !== input.body ||
-          previous.mentions !== JSON.stringify(input.mentions)
+          previous.mentions !== JSON.stringify(input.mentions) ||
+          previousIds.length !== attachments.length ||
+          previousIds.some((id, i) => id !== attachments[i])
         )
           throw new Problem(409, "消息标识已用于不同内容");
-        return decodeMessage(previous);
+        return this.hydrate([decodeMessage(previous)])[0]!;
       }
     }
     return this.transaction(() => {
@@ -654,11 +684,17 @@ export class Store {
         created_at,
       );
       const message = {
-        ...input,
+        chat_id: input.chat_id,
+        body: input.body,
+        mentions: input.mentions,
+        client_id: input.client_id,
         id: Number(result.lastInsertRowid),
         sender,
         created_at,
+        attachments: [] as Attachment[],
       };
+      this.bindAttachments(sender, message.id, attachments);
+      const bound = this.attachmentsFor(message.id);
       // Explicit peer contact has the same delivery timing, not the user's authority.
       const recipients =
         chat.kind === "direct" ? this.members(chat.id) : input.mentions;
@@ -674,6 +710,7 @@ export class Store {
           sender_name: author?.name ?? "用户",
           message_id: message.id,
           body: input.body,
+          attachments: bound,
         });
         this.queue(
           agent,
@@ -697,7 +734,7 @@ export class Store {
                 from_name: authorName,
                 chat_ref: chat.ref,
                 chat_name: chat.name,
-                excerpt: input.body.slice(0, 100),
+                excerpt: excerptOf(input.body, bound),
                 through_message: message.id,
               }),
               chat.id,
@@ -706,8 +743,134 @@ export class Store {
       }
       for (const member of this.members(chat.id))
         this.unreadCache.delete(member);
-      return message;
+      return this.hydrate([message])[0]!;
     });
+  }
+  stage(
+    uploader: string,
+    name: string,
+    mime: string,
+    bytes: Buffer,
+  ): Attachment {
+    if (!bytes.length) throw new Problem(400, "空文件");
+    if (bytes.length > MAX_FILE_BYTES)
+      throw new Problem(400, "文件不能超过 10 MB");
+    const filename = safeFileName(name);
+    let classified: { kind: "image" | "file"; mime: string };
+    try {
+      classified = classify(mime || mimeFromName(filename), bytes);
+    } catch (error) {
+      throw new Problem(
+        400,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    const id = randomUUID();
+    this.files.put(id, bytes);
+    this.run(
+      "INSERT INTO attachments(id,message_id,uploader,kind,name,mime,size,created_at) VALUES(?,?,?,?,?,?,?,?)",
+      id,
+      null,
+      uploader,
+      classified.kind,
+      filename,
+      classified.mime,
+      bytes.length,
+      Date.now(),
+    );
+    return {
+      id,
+      kind: classified.kind,
+      name: filename,
+      mime: classified.mime,
+      size: bytes.length,
+    };
+  }
+  importFile(uploader: string, cwd: string, path: string): Attachment {
+    try {
+      const file = readFromCwd(cwd, path);
+      return this.stage(uploader, file.name, file.mime, file.bytes);
+    } catch (error) {
+      throw error instanceof Problem
+        ? error
+        : new Problem(
+            400,
+            error instanceof Error ? error.message : String(error),
+          );
+    }
+  }
+  discardAttachment(id: string, uploader: string) {
+    const row = this.one<{ message_id: number | null; uploader: string }>(
+      "SELECT message_id, uploader FROM attachments WHERE id=?",
+      id,
+    );
+    if (!row) throw new Problem(404, "附件不存在");
+    if (row.message_id) throw new Problem(409, "附件已发送，不能删除");
+    if (row.uploader !== uploader) throw new Problem(403, "不能删除他人的附件");
+    this.run("DELETE FROM attachments WHERE id=?", id);
+    this.files.remove(id);
+  }
+  attachmentsFor(messageId: number): Attachment[] {
+    return this.all<Attachment>(
+      "SELECT id, kind, name, mime, size FROM attachments WHERE message_id=? ORDER BY rowid",
+      messageId,
+    );
+  }
+  readBytes(id: string): {
+    attachment: Attachment & { uploader: string; message_id: number | null };
+    bytes: Buffer;
+  } {
+    const row = this.one<
+      Attachment & { uploader: string; message_id: number | null }
+    >(
+      "SELECT id, kind, name, mime, size, uploader, message_id FROM attachments WHERE id=?",
+      id,
+    );
+    if (!row) throw new Problem(404, "附件不存在");
+    try {
+      return { attachment: row, bytes: this.files.get(id) };
+    } catch {
+      throw new Problem(404, "附件不存在");
+    }
+  }
+  private bindAttachments(sender: string, messageId: number, ids: string[]) {
+    if (ids.length > MAX_ATTACHMENTS)
+      throw new Problem(400, "每条消息最多 10 个附件");
+    if (new Set(ids).size !== ids.length) throw new Problem(400, "附件重复");
+    for (const id of ids) {
+      const row = this.one<{ message_id: number | null; uploader: string }>(
+        "SELECT message_id, uploader FROM attachments WHERE id=?",
+        id,
+      );
+      if (!row) throw new Problem(400, "附件不存在");
+      if (row.message_id) throw new Problem(409, "附件已用于其他消息");
+      if (row.uploader !== sender) throw new Problem(403, "不能使用他人的附件");
+      this.run("UPDATE attachments SET message_id=? WHERE id=?", messageId, id);
+    }
+  }
+  private hydrate(messages: Message[]): Message[] {
+    if (!messages.length) return messages;
+    const ids = messages.map((message) => message.id);
+    const rows = this.all<Attachment & { message_id: number }>(
+      `SELECT id, message_id, kind, name, mime, size FROM attachments WHERE message_id IN (${ids.map(() => "?").join(",")}) ORDER BY rowid`,
+      ...ids,
+    );
+    const grouped = new Map<number, Attachment[]>();
+    for (const row of rows) {
+      const list = grouped.get(row.message_id) ?? [];
+      list.push({
+        id: row.id,
+        kind: row.kind,
+        name: row.name,
+        mime: row.mime,
+        size: row.size,
+      });
+      grouped.set(row.message_id, list);
+    }
+    return messages.map((message) => ({
+      ...message,
+      attachments: grouped.get(message.id) ?? [],
+    }));
   }
   private recordRead(
     agentId: string,
@@ -805,7 +968,7 @@ export class Store {
       this.transaction(() => {
         this.recordRead(agentId, chatId, page.items[0].id, page.next_after);
       });
-    return page;
+    return { ...page, items: this.hydrate(page.items) };
   }
   readState(chatId: string, from: number): ChatReadState[] {
     const members = this.all<{
@@ -863,7 +1026,7 @@ export class Store {
         around + 24,
       );
       return {
-        items: rows.map(decodeMessage),
+        items: this.hydrate(rows.map(decodeMessage)),
         has_more: false,
         read_state: this.readState(chatId, from),
       };
@@ -873,7 +1036,7 @@ export class Store {
       chatId,
       before,
     );
-    const items = rows.slice(0, 50).map(decodeMessage).reverse();
+    const items = this.hydrate(rows.slice(0, 50).map(decodeMessage).reverse());
     return {
       items,
       has_more: rows.length > 50,

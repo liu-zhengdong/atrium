@@ -695,6 +695,19 @@ export class Runtimes {
       for (const pending of this.store.pending(id)) {
         if (pending.kind === "summary" && runtime.info.busy) continue;
         try {
+          const images = pending.through_message
+            ? this.store
+                .attachmentsFor(pending.through_message)
+                .filter((item) => item.kind === "image")
+                .map((item) => {
+                  const { bytes } = this.store.readBytes(item.id);
+                  return {
+                    type: "image" as const,
+                    mimeType: item.mime,
+                    data: bytes.toString("base64"),
+                  };
+                })
+            : [];
           const result = await this.rpc<{ accepted: boolean }>(
             "_pi/runtime/deliver",
             {
@@ -703,6 +716,7 @@ export class Runtimes {
               source: "Atrium",
               text: pending.text,
               delivery: pending.kind === "direct" ? "steer" : "followUp",
+              ...(images.length ? { images } : {}),
             },
           );
           this.assertOpen();

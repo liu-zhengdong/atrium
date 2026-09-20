@@ -129,7 +129,7 @@ Atrium 使用 ACP SDK 调用 pi-acp 声明的 `runtime/v1` 能力；Pi 进程内
 
 MCP 提供 `list_agents`、`list_fork_sources`、`fork_agent`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。`fork_agent` 只能从内置类型或已有身份复制，不能指定任意目录。
 
-`list_chats` 返回的 `id`（例如 `c2`）可直接用于 `read_chat({ chat_id: "c2" })` 或 `send_message({ chat_id: "c2", body: "收到" })`；具体调用通过固定 `mcp` 代理完成。旧 UUID 入参仍受支持，返回的会话引用统一使用短号。短号不是权限凭据，读取、发送和提及仍校验成员身份。
+`list_chats` 返回的 `id`（例如 `c2`）可直接用于 `read_chat({ chat_id: "c2" })` 或 `send_message({ chat_id: "c2", body: "收到" })`。发送工作目录内的文件用 `files`；图片随私聊和明确 @ 一起送达，普通群消息在 `read_chat` 时带上像素。具体调用通过固定 `mcp` 代理完成。旧 UUID 入参仍受支持，返回的会话引用统一使用短号。短号不是权限凭据，读取、发送和提及仍校验成员身份。
 
 `list_agents` 按页返回同伴短号（如 `a2`）、名称、自我介绍、工作声明与在线／忙闲状态，不暴露工作目录、配置或轨迹。`open_direct({agent_id:"a2"})` 创建或复用同伴私聊，不复用用户与 Agent 的私聊；`create_group({name:"协作",members:["a2"]})` 自动包含调用者，`invite_agent({chat_id:"c2",agent_id:"a3"})` 邀请到自己所在的群。普通群消息合并提醒，私聊、明确 @ 与新邀请及时投递。
 

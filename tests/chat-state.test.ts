@@ -11,6 +11,7 @@ const message = (id: number, chat_id = "a", body = "message"): Message => ({
   sender: "user",
   mentions: [],
   created_at: id,
+  attachments: [],
 });
 
 test("聊天历史：实时刷新与旧页合并后有序、去重、保留已加载历史", () => {

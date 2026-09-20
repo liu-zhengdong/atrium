@@ -41,7 +41,10 @@ export async function createApp(options: {
     mode: 0o700,
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
-  const app = Fastify({ logger: { level: "warn" }, bodyLimit: 1_048_576 });
+  const app = Fastify({
+    logger: { level: "warn" },
+    bodyLimit: 11 * 1024 * 1024,
+  });
   const streams = new Set<import("node:http").ServerResponse>();
   const changed = () => {
     for (const stream of streams)
@@ -416,6 +419,41 @@ export async function createApp(options: {
     );
     if (result.changed) changed();
     return { last_read: result.last_read };
+  });
+  app.post("/api/attachments", (request) => {
+    if (!Buffer.isBuffer(request.body))
+      throw new Problem(400, "请以二进制上传");
+    const raw = String(request.headers["x-filename"] ?? "file");
+    let name = raw;
+    try {
+      name = decodeURIComponent(raw);
+    } catch {
+      /* keep raw */
+    }
+    const mime = String(
+      request.headers["x-mime"] ??
+        request.headers["content-type"] ??
+        "application/octet-stream",
+    );
+    return store.stage("user", name, mime.split(";")[0]!.trim(), request.body);
+  });
+  app.get("/api/attachments/:id", (request, reply) => {
+    const { attachment, bytes } = store.readBytes(
+      (request.params as { id: string }).id,
+    );
+    const filename = encodeURIComponent(attachment.name);
+    return reply
+      .type(attachment.mime)
+      .header(
+        "Content-Disposition",
+        `${attachment.kind === "image" ? "inline" : "attachment"}; filename*=UTF-8''${filename}`,
+      )
+      .header("Cache-Control", "private, max-age=3600")
+      .send(bytes);
+  });
+  app.delete("/api/attachments/:id", (request) => {
+    store.discardAttachment((request.params as { id: string }).id, "user");
+    return { ok: true };
   });
   app.post("/api/messages", (request) => {
     const result = store.send("user", sendInput.parse(request.body));

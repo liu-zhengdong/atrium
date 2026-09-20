@@ -5,8 +5,8 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { ArrowUp, AtSign, LoaderCircle } from "lucide-react";
-import type { Overview } from "../../shared/schema.ts";
+import { ArrowUp, AtSign, LoaderCircle, Paperclip } from "lucide-react";
+import type { Attachment, Overview } from "../../shared/schema.ts";
 import { resolveMentions } from "../../shared/mentions.ts";
 import { api } from "../api.ts";
 import {
@@ -14,6 +14,7 @@ import {
   runtimeLabel,
   type Agent,
 } from "../components/AgentAvatar.tsx";
+import { StagedChip, uploadAttachment } from "./Attachments.tsx";
 export function MessageComposer({
   active,
   agents,
@@ -29,9 +30,14 @@ export function MessageComposer({
     [error, setError] = useState("");
   const [mentionIndex, setMentionIndex] = useState(0),
     [mentionHidden, setMentionHidden] = useState(false);
+  const [staged, setStaged] = useState<Record<string, Attachment[]>>({});
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const submission = useRef<{ key: string; id: string } | null>(null);
   const draft = chatId ? (drafts[chatId] ?? "") : "";
+  const attached = chatId ? (staged[chatId] ?? []) : [];
   const query = draft.match(/(?:^|\s)@([^@\n]*)$/)?.[1];
   const candidates =
     !mentionHidden && query !== undefined
@@ -61,14 +67,51 @@ export function MessageComposer({
     setMentionIndex(0);
     textarea.current?.focus();
   }
+  async function addFiles(list: FileList | File[] | null) {
+    if (!chatId || !list?.length) return;
+    const files = [...list];
+    if (attached.length + files.length > 10) {
+      setError("每条最多 10 个附件");
+      return;
+    }
+    setUploading(true);
+    setError("");
+    try {
+      const uploaded: Attachment[] = [];
+      for (const file of files) uploaded.push(await uploadAttachment(file));
+      setStaged((old) => ({
+        ...old,
+        [chatId]: [...(old[chatId] ?? []), ...uploaded],
+      }));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setUploading(false);
+      textarea.current?.focus();
+    }
+  }
+  async function removeAttachment(id: string) {
+    if (!chatId) return;
+    try {
+      await api(`/attachments/${id}`, "DELETE");
+      setStaged((old) => ({
+        ...old,
+        [chatId]: (old[chatId] ?? []).filter((item) => item.id !== id),
+      }));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
   async function send(e?: FormEvent) {
     e?.preventDefault();
-    if (!chatId || !draft.trim() || sending) return;
+    if (!chatId || sending || uploading) return;
+    if (!draft.trim() && !attached.length) return;
     const target = chatId,
-      body = draft;
+      body = draft,
+      attachments = attached.map((item) => item.id);
     setSending(true);
     setError("");
-    const key = JSON.stringify([target, body, mentionIds]);
+    const key = JSON.stringify([target, body, mentionIds, attachments]);
     if (submission.current?.key !== key)
       submission.current = { key, id: crypto.randomUUID() };
     try {
@@ -77,12 +120,14 @@ export function MessageComposer({
         body,
         mentions: mentionIds,
         client_id: submission.current.id,
+        attachments,
       });
       submission.current = null;
       setDrafts((old) => ({
         ...old,
         [target]: old[target] === body ? "" : old[target],
       }));
+      setStaged((old) => ({ ...old, [target]: [] }));
       onSent();
     } catch (e) {
       setError(String(e));
@@ -102,9 +147,40 @@ export function MessageComposer({
         </p>
       )}
       <form
-        className="relative rounded-[11px] border border-[#dfdcd3] bg-white shadow-[0_2px_4px_#312b1c04] transition-[border-color] duration-150 focus-within:border-[#c4b9a4]"
+        className={`relative rounded-[11px] border bg-white shadow-[0_2px_4px_#312b1c04] transition-[border-color,background-color] duration-150 focus-within:border-[#c4b9a4] ${dragging ? "border-[#c4b9a4] bg-[#faf8f3]" : "border-[#dfdcd3]"}`}
         onSubmit={send}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          void addFiles(e.dataTransfer.files);
+        }}
       >
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        {attached.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-[17px] pt-3">
+            {attached.map((item) => (
+              <StagedChip
+                key={item.id}
+                item={item}
+                onRemove={() => void removeAttachment(item.id)}
+              />
+            ))}
+          </div>
+        )}
         {candidates.length > 0 && (
           <div
             className="absolute bottom-[calc(100%+7px)] left-0 z-[2] w-[min(400px,100%)] rounded-[9px] border border-line bg-white p-[5px] shadow-[0_7px_28px_#30220d12]"
@@ -140,9 +216,11 @@ export function MessageComposer({
           className="plain-field block max-h-[200px] min-h-[70px] w-full resize-none overflow-y-auto rounded-[11px] border-0 bg-transparent px-[17px] pb-1.5 pt-[17px] text-[13px] leading-[1.7] text-[#434137] placeholder:text-[#aaa396] max-[560px]:min-h-[66px]"
           aria-label="消息"
           placeholder={
-            active.kind === "group"
-              ? `发送到 ${active.name}，输入 @ 提及 Agent…`
-              : `发送给 ${active.name}…`
+            attached.length
+              ? "添加说明，或直接发送"
+              : active.kind === "group"
+                ? `发送到 ${active.name}，输入 @ 提及 Agent…`
+                : `发送给 ${active.name}…`
           }
           value={draft}
           rows={2}
@@ -151,6 +229,12 @@ export function MessageComposer({
             setDrafts((old) => ({ ...old, [chatId!]: e.target.value }));
             setMentionHidden(false);
             setMentionIndex(0);
+          }}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files];
+            if (!files.length) return;
+            e.preventDefault();
+            void addFiles(files);
           }}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
@@ -178,6 +262,15 @@ export function MessageComposer({
           <button
             type="button"
             className="icon-button"
+            aria-label="添加附件"
+            disabled={uploading || attached.length >= 10}
+            onClick={() => picker.current?.click()}
+          >
+            <Paperclip size={18} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
             aria-label="提及 Agent"
             onClick={() => {
               setDrafts((old) => ({
@@ -198,7 +291,9 @@ export function MessageComposer({
           <button
             className="ml-auto flex h-[29px] w-[30px] flex-none items-center justify-center rounded-[7px] bg-[#45463c] text-white disabled:bg-[#e9e7de] disabled:text-[#b1aa99]"
             aria-label="发送消息"
-            disabled={!draft.trim() || sending}
+            disabled={
+              (!draft.trim() && !attached.length) || sending || uploading
+            }
           >
             {sending ? (
               <LoaderCircle className="spin" size={18} />

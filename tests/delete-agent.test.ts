@@ -21,7 +21,7 @@ import { mergeReadState } from "../web/chat/readState.ts";
 import { packageRoot } from "../server/service-state.ts";
 
 const require = createRequire(import.meta.url);
-const { claimIdentity } = require("@liuser/pi-acp/dist/identity.js") as {
+const { claimIdentity } = require("@liuser/pi-atrium/dist/identity.js") as {
   claimIdentity(
     identity: { identityId: string; agentDirectory: string },
     cwd: string,

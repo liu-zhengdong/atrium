@@ -33,10 +33,10 @@ process.env.PI_OFFLINE = "1";
 const require = createRequire(import.meta.url);
 const piAcpEntry = resolve(
   process.env.ATRIUM_PI_ACP_ENTRY ||
-    require.resolve("@liuser/pi-acp/dist/index.js"),
+    require.resolve("@liuser/pi-atrium/dist/index.js"),
 );
 const piAcpExtension = join(dirname(piAcpEntry), "pi-extension.js");
-assert(existsSync(piAcpExtension), "需要构建后的新版 pi-acp 通用扩展");
+assert(existsSync(piAcpExtension), "需要构建后的 pi-atrium 通用扩展");
 const ready = join(folder, "ready");
 const readyExtension = join(folder, "ready.ts");
 writeFileSync(
@@ -173,7 +173,10 @@ model.listen(0, "127.0.0.1");
 await once(model, "listening");
 const adapter = resolve(
   process.env.ATRIUM_TEST_ADAPTER ||
-    "node_modules/@liuser/pi-mcp-adapter/index.ts",
+    join(
+      dirname(require.resolve("@liuser/pi-atrium/package.json")),
+      "adapter/index.ts",
+    ),
 );
 process.env.PI_ACP_MCP_EXTENSION = adapter;
 writeFileSync(

@@ -1,5 +1,11 @@
 # AGENTS Evolution
 
+## 2026-09-20 · 改用独立仓 pi-atrium
+
+- 发生：刚把 pi-acp 收进本仓库（#31）后，用户确认个人 TUI 也要用同一份插件，`pi install git:` 只认仓根，不能装 atrium 子目录；于是 Pi 侧（ACP、MCP 代理、notes）收到独立仓 `pi-atrium`。
+- 分析：in-tree 解决了「为 atrium 改 ACP 太勤」的发版成本，但挡了个人安装。独立合集仓同时服务 TUI 与产品；产品仓不再 vendoring 源码。
+- 改变：依赖 `@liuser/pi-atrium`（`github:liu-zhengdong/pi-atrium`），删除 `packages/pi-acp`；创建身份时注入该包，并去掉模板里会被合集重复加载的旧包。
+
 ## 2026-09-20 · pi-acp 合入本仓库
 
 - 发生：用户确认独立 pi-acp 仓库为 Atrium 改得太勤，决定把源码收进 Atrium；pi-mcp-adapter 仍独立，依赖改为 GitHub。原先「通用接入缺口在独立 pi-acp 补齐」导致每次修正都要跨仓发版、再锁版本。

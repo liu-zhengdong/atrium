@@ -134,14 +134,19 @@ export function prepareProfile(
       ? path
       : { ...(entry as object), source: path };
   });
-  // The identity launcher and loaded extension must be from the same supported package.
-  const bridge = dirname(require.resolve("@liuser/pi-acp/package.json"));
+  // Inject this app's pi-atrium; drop template copies of the same bundle.
+  const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
+  const bundled = new Set([
+    "@liuser/pi-atrium",
+    "@liuser/pi-acp",
+    "@liuser/pi-mcp-adapter",
+    "@liuser/pi-notes",
+  ]);
   settings.packages = references.filter((entry) => {
     const path = typeof entry === "string" ? entry : entry.source;
-    return (
-      !existsSync(join(path, "package.json")) ||
-      readJson(join(path, "package.json")).name !== "@liuser/pi-acp"
-    );
+    if (!existsSync(join(path, "package.json"))) return true;
+    const name = readJson(join(path, "package.json")).name;
+    return typeof name !== "string" || !bundled.has(name);
   });
   (settings.packages as unknown[]).push(bridge);
   for (const kind of ["extensions", "skills", "prompts", "themes"] as const) {

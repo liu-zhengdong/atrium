@@ -7,25 +7,6 @@ export function attachmentUrl(id: string) {
   return `/api/attachments/${id}`;
 }
 
-const FILE_COLORS: Record<string, string> = {
-  pdf: "#b56a4a",
-  doc: "#3d6bb3",
-  docx: "#3d6bb3",
-  xls: "#2f7d4a",
-  xlsx: "#2f7d4a",
-  ppt: "#b56a4a",
-  pptx: "#b56a4a",
-  zip: "#8a7150",
-  gz: "#8a7150",
-  png: "#5b7c99",
-  jpg: "#5b7c99",
-  jpeg: "#5b7c99",
-  gif: "#5b7c99",
-  webp: "#5b7c99",
-  md: "#76674c",
-  txt: "#76674c",
-};
-
 function extOf(name: string) {
   return name.includes(".")
     ? name.slice(name.lastIndexOf(".") + 1).toLowerCase()
@@ -53,13 +34,13 @@ export function MessageAttachments({
       {images.length === 1 && (
         <button
           type="button"
-          className="w-fit max-w-full overflow-hidden rounded-[10px] border border-[#eeede8] bg-[#f5f5f2] p-0 [.outgoing_&]:border-[#d9e3f0]"
+          className="w-fit max-w-full overflow-hidden rounded-[10px] border border-[#e7e4da] bg-white p-[3px] shadow-[0_2px_8px_#312b1c14]"
           onClick={() => setOpen(0)}
         >
           <img
             src={attachmentUrl(images[0]!.id)}
             alt={images[0]!.name}
-            className="block max-h-[200px] w-auto max-w-60 object-cover"
+            className="block max-h-[200px] w-auto max-w-60 rounded-[7px] object-cover"
           />
         </button>
       )}
@@ -80,7 +61,7 @@ export function MessageAttachments({
               style={{ left: index * 14, zIndex: index }}
             />
           ))}
-          <span className="absolute -right-1 -top-1 z-[5] min-w-[20px] rounded-full bg-[#45463c] px-1.5 py-0.5 text-center text-[10px] font-[550] leading-none text-white">
+          <span className="absolute right-0 bottom-1 z-[5] grid h-[18px] min-w-[18px] place-items-center rounded-full bg-black/55 px-1 text-[10px] leading-none font-semibold text-white backdrop-blur-[2px]">
             {images.length}
           </span>
         </button>
@@ -102,18 +83,14 @@ export function MessageAttachments({
 
 function FileCard({ item }: { item: Attachment }) {
   const ext = extOf(item.name);
-  const color = FILE_COLORS[ext] ?? "#8a7150";
   return (
     <a
       href={attachmentUrl(item.id)}
       download={item.name}
-      className="flex max-w-full items-center gap-2.5 rounded-[10px] border border-[#eeede8] bg-white px-2.5 py-2 no-underline [.outgoing_&]:border-[#d9e3f0] [.outgoing_&]:bg-[#f7f9fc]"
+      className="flex max-w-full items-center gap-2.5 rounded-[10px] border border-[#e7e4da] bg-white px-2.5 py-2 no-underline transition-colors hover:border-[#d8d2c2]"
     >
-      <span
-        className="flex h-9 w-9 flex-none items-center justify-center rounded-lg text-[10px] font-[650] uppercase tracking-wide text-white"
-        style={{ background: color }}
-      >
-        {ext.slice(0, 4) || <FileText size={16} />}
+      <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-[#f4f1ea] text-[#8a8374]">
+        <FileText size={15} />
       </span>
       <span className="min-w-0 flex-1">
         <strong className="block truncate text-[12px] font-[550] text-[#3f3e38]">
@@ -121,6 +98,7 @@ function FileCard({ item }: { item: Attachment }) {
         </strong>
         <span className="text-[10px] text-[#8e8779]">
           {formatSize(item.size)}
+          {ext ? ` · ${ext.toUpperCase()}` : ""}
         </span>
       </span>
     </a>
@@ -245,19 +223,16 @@ export function StagedChip({
   onRemove: () => void;
 }) {
   return (
-    <span className="relative flex max-w-[160px] items-center gap-1.5 rounded-lg border border-[#e8e4db] bg-[#f7f5ef] py-1 pl-1 pr-7">
+    <span className="relative flex max-w-[170px] items-center gap-1.5 rounded-lg border border-[#e7e4da] bg-white py-1 pr-7 pl-1">
       {item.kind === "image" ? (
         <img
           src={attachmentUrl(item.id)}
           alt=""
-          className="h-8 w-8 flex-none rounded-md object-cover"
+          className="h-8 w-8 flex-none rounded-md border border-[#eeeae0] object-cover"
         />
       ) : (
-        <span
-          className="flex h-8 w-8 flex-none items-center justify-center rounded-md text-[9px] font-[650] uppercase text-white"
-          style={{ background: FILE_COLORS[extOf(item.name)] ?? "#8a7150" }}
-        >
-          {extOf(item.name).slice(0, 4) || <FileText size={14} />}
+        <span className="grid h-8 w-8 flex-none place-items-center rounded-md bg-[#f4f1ea] text-[#8a8374]">
+          <FileText size={14} />
         </span>
       )}
       <span className="min-w-0 truncate text-[11px] text-[#4a473e]">
@@ -265,7 +240,7 @@ export function StagedChip({
       </span>
       <button
         type="button"
-        className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full text-[#8e8779] hover:bg-[#ece8df] hover:text-[#3c3b34]"
+        className="absolute top-1/2 right-1 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[#b8b2a2] hover:bg-[#f5f2ec] hover:text-[#57503f]"
         aria-label={`移除 ${item.name}`}
         onClick={onRemove}
       >

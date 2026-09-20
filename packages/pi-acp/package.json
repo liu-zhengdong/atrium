@@ -1,0 +1,75 @@
+{
+  "name": "@liuser/pi-acp",
+  "version": "0.2.1",
+  "description": "ACP adapter for pi coding agent",
+  "license": "MIT",
+  "author": "Sergii Kozak <svkozak@gmail.com>",
+  "contributors": [
+    "Filipe Regadas <oss@regadas.email>"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liu-zhengdong/atrium.git",
+    "directory": "packages/pi-acp"
+  },
+  "bugs": {
+    "url": "https://github.com/liu-zhengdong/atrium/issues"
+  },
+  "homepage": "https://github.com/liu-zhengdong/atrium/tree/main/packages/pi-acp",
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "pi-coding-agent",
+    "adapter"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "pi-acp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/pi-extension.js"
+    ]
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "compile": "tsup",
+    "start": "node dist/index.js",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node scripts/test.mjs",
+    "smoke": "node scripts/smoke-acp.mjs",
+    "smoke:mcp": "node scripts/smoke-mcp.mjs",
+    "smoke:runtime": "node scripts/smoke-runtime.mjs",
+    "eval:acp": "npm run compile && node scripts/eval-zed-acp.mjs",
+    "validate": "npm run format:check && npm run typecheck && npm run lint && npm test && npm run compile"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "prettier": "3.8.3",
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.18.0"
+  },
+  "overrides": {
+    "tsup": {
+      "esbuild": "^0.28.2"
+    }
+  }
+}

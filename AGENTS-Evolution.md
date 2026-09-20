@@ -1,5 +1,11 @@
 # AGENTS Evolution
 
+## 2026-09-20 · pi-acp 合入本仓库
+
+- 发生：用户确认独立 pi-acp 仓库为 Atrium 改得太勤，决定把源码收进 Atrium；pi-mcp-adapter 仍独立，依赖改为 GitHub。原先「通用接入缺口在独立 pi-acp 补齐」导致每次修正都要跨仓发版、再锁版本。
+- 分析：9 月 17 日纠正的是不要在 Atrium 另写一套 Pi 扩展，不是必须另开 GitHub 仓库。具名身份、占用、坏 session 恢复都是产品行为，独立仓的收益（给 Zed 用、npm 发布）这边没有在用。adapter 仍被日常 Pi TUI 使用，不能绑进产品仓。
+- 改变：`packages/pi-acp` 作为 workspace 包，接入缺口与产品同一 PR；adapter 以 `github:liu-zhengdong/pi-mcp-adapter` 依赖，身份模板按 Pi 的 `git:` 安装布局解析。独立 pi-acp 仓库保留作历史，不再作为本项目依赖。
+
 ## 2026-09-17 · Pi 会话替换的连接生命周期
 
 - 发生：真实 Pi 0.85.1 执行 `/new` 时，旧 WebSocket 的关闭回调读取失效 `ctx`，触发 `This extension ctx is stale after session replacement or reload.` 并导致 Pi 退出。

@@ -34,6 +34,64 @@ const inside = (root: string, path: string) => {
   const target = realpathSync(path);
   return target === base || target.startsWith(base + sep);
 };
+const dropGitSuffix = (path: string) =>
+  path
+    .replace(/\.git$/i, "")
+    .replace(/#.*$/, "")
+    .replace(/\/+$/, "");
+/** Map a Pi/npm git specifier to host + repo path (no ref). */
+export function parseGitPackage(
+  value: string,
+): { host: string; path: string } | null {
+  const github = /^github:([^#]+)/.exec(value);
+  if (github) {
+    const [owner, repo] = dropGitSuffix(github[1]!).split("/");
+    if (owner && repo)
+      return { host: "github.com", path: `${owner}/${repo.split("@")[0]}` };
+    return null;
+  }
+  const spec = value.startsWith("git:") ? value.slice(4) : value;
+  const ssh = /^git@([^:]+):(.+)$/.exec(spec);
+  if (ssh) {
+    return { host: ssh[1]!, path: dropGitSuffix(ssh[2]!).split("@")[0]! };
+  }
+  const proto = /^(?:https|http|ssh|git):\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/.exec(
+    spec,
+  );
+  if (proto) {
+    return { host: proto[1]!, path: dropGitSuffix(proto[2]!).split("@")[0]! };
+  }
+  if (value.startsWith("git:")) {
+    const short = /^([^/]+)\/(.+)$/.exec(spec);
+    if (short) {
+      return { host: short[1]!, path: dropGitSuffix(short[2]!).split("@")[0]! };
+    }
+  }
+  return null;
+}
+/** Where Pi would have installed this package under the template agent dir. */
+export function templatePackagePath(template: string, spec: string): string {
+  const value = spec.trim();
+  const npm = /^npm:((?:@[^/]+\/)?[^@/]+)(?:@.+)?$/.exec(value);
+  if (npm) return join(template, "npm", "node_modules", npm[1]!);
+  const git = parseGitPackage(value);
+  if (git) return join(template, "git", git.host, ...git.path.split("/"));
+  if (
+    value.startsWith("git:") ||
+    value.startsWith("github:") ||
+    /^(https?|ssh):\/\//.test(value)
+  )
+    throw new Problem(400, `无法解析 Git package：${value}`);
+  return local(value, template);
+}
+const resolveInstalled = (template: string, spec: string) => {
+  const path = templatePackagePath(template, spec);
+  try {
+    return realpathSync(path);
+  } catch {
+    throw new Problem(400, `模板 package 未安装：${spec}`);
+  }
+};
 
 /** Owned rules and notes; installed extensions/skills stay as path references. Never copy credentials. */
 export function prepareProfile(
@@ -71,14 +129,7 @@ export function prepareProfile(
       typeof entry === "string" ? entry : (entry as { source: string }).source;
     if (typeof value !== "string")
       throw new Problem(400, "配置模板含无效 package");
-    const npm = /^npm:((?:@[^/]+\/)?[^@/]+)(?:@.+)?$/.exec(value);
-    if (value.startsWith("git:") || /^https?:/.test(value))
-      throw new Problem(400, "模板中的 Git package 请改用已安装的本地路径");
-    const path = realpathSync(
-      npm
-        ? join(template, "npm", "node_modules", npm[1]!)
-        : local(value, template),
-    );
+    const path = resolveInstalled(template, value);
     return typeof entry === "string"
       ? path
       : { ...(entry as object), source: path };

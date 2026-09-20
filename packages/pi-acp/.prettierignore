@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+/dist/
+/.dist/
+/.dist-cache/
+
+# Coverage output
+coverage/
+
+# Logs
+*.log
+
+# OS / editor cruft
+.DS_Store
+
+# Agent harness artifacts
+.pi-subagents/
+.agent-shell/
+
+# Large generated artifacts
+*.map
+*.tsbuildinfo
+
+# Docs folder (excluded in .gitignore too)
+/agentDocs/
+
+# Lockfiles (optional: keep stable diffs)
+package-lock.json

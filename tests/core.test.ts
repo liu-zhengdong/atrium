@@ -291,7 +291,7 @@ async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
   );
   assert.equal(
     displayDesktops(defaultDesktops()),
-    "~/atrium/desktops",
+    "~/Atrium/desktops",
     "默认根目录折叠 home 显示",
   );
   assert(

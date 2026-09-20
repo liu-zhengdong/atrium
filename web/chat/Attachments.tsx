@@ -21,7 +21,8 @@ function formatSize(size: number) {
 }
 
 export function MessageAttachments({
-  attachments,
+  // 防御：版本错位时服务端可能不带 attachments 字段，宁可少显示也不能拖垮整个页面
+  attachments = [],
 }: {
   attachments: Attachment[];
 }) {

@@ -1,18 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  EyeOff,
-  MessageSquare,
-  Pin,
-  PinOff,
-  Plus,
-  Search,
-  Users,
-  X,
-} from "lucide-react";
-import type { Chat, Overview, SearchResults } from "../../shared/schema.ts";
-import { patchChat, searchAll } from "../api.ts";
+import { EyeOff, MessageSquare, Pin, PinOff, Plus, Users } from "lucide-react";
+import type { Overview } from "../../shared/schema.ts";
+import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
-import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
 import {
   Avatar,
@@ -21,16 +10,10 @@ import {
 } from "../components/AgentAvatar.tsx";
 export type Section = "agents" | "chat";
 
-/** 侧栏列表行共享样式（会话列表与搜索结果行一致）。 */
-const rowMain = "flex min-w-0 flex-1 flex-col gap-px";
-const rowTop = "flex min-w-0 items-center justify-between gap-2";
 const rowName = "truncate text-[13px] font-medium";
 const rowTime = "flex-none text-[10px] text-[#a8a394]";
 const rowPreview =
   "mt-0.5 min-w-0 flex-1 truncate text-[11px] leading-[1.6] text-[#858278]";
-const chatRow =
-  "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-[7px] p-2.5 text-left";
-const chatRowHover = `${chatRow} hover:bg-[#efeee9]`;
 const slotAction =
   "relative flex h-[22px] w-[22px] items-center justify-center rounded-md text-[#6d6a5e] hover:bg-[#e4e2db] hover:text-[#3c3b34]";
 const agentRow =
@@ -54,7 +37,6 @@ export function Sidebar({
   connected,
   details,
   refresh,
-  openMessage,
 }: {
   overview: Overview | null;
   section: Section;
@@ -67,32 +49,8 @@ export function Sidebar({
   connected: boolean;
   details: (id: string) => void;
   refresh: () => void;
-  openMessage: (chatId: string, messageId: number) => void;
 }) {
   const agents = overview?.agents ?? [];
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResults | null>(null);
-  const seq = useRef(0);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setResults(null);
-      return;
-    }
-    const id = ++seq.current;
-    const timer = setTimeout(() => {
-      searchAll(q)
-        .then((found) => {
-          if (seq.current === id) setResults(found);
-        })
-        .catch(() => {
-          if (seq.current === id)
-            setResults({ chats: [], messages: [], agents: [] });
-        });
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [query]);
 
   async function setState(
     id: string,
@@ -101,47 +59,9 @@ export function Sidebar({
     await patchChat(id, body).catch(() => {});
     refresh();
   }
-  async function openSearchedChat(chat: Chat) {
-    if (chat.hidden) {
-      await patchChat(chat.id, { hidden: false }).catch(() => {});
-      refresh();
-    }
-    setQuery("");
-    selectChat(chat.id);
-  }
-
-  const searching = query.trim().length > 0;
   return (
-    <aside className="sidebar flex w-[258px] flex-none flex-col border-r border-line bg-surface px-3.5 max-[720px]:w-[220px] max-[720px]:px-[9px]">
-      <div className="flex h-[83px] items-center gap-2.5 px-[11px] max-[720px]:h-[72px] max-[560px]:h-[74px]">
-        <Mark className="h-[29px] w-[29px] text-[#72634a]" />
-        <span className="text-[21px] font-[620] tracking-[-0.05em]">
-          Atrium
-        </span>
-        <span className="ml-[3px] mt-1 text-xs text-[#8e897d]">中庭</span>
-      </div>
-      <div className="mx-[2px] mb-[10px] flex h-[31px] flex-none items-center gap-[7px] rounded-[7px] border border-line bg-white px-[9px] text-placeholder focus-within:border-line-strong">
-        <Search size={14} />
-        <input
-          className="min-w-0 flex-1 border-0 bg-transparent text-xs text-ink outline-none"
-          value={query}
-          placeholder="搜索会话、消息、Agent"
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") setQuery("");
-          }}
-        />
-        {query && (
-          <button
-            className="icon-button p-[2px]"
-            aria-label="清空搜索"
-            onClick={() => setQuery("")}
-          >
-            <X size={13} />
-          </button>
-        )}
-      </div>
-      <nav aria-label="主导航" className="mb-[29px] grid gap-[3px]">
+    <aside className="sidebar flex w-[258px] flex-none flex-col border-r border-line bg-surface px-3.5 pt-2 max-[720px]:w-[220px] max-[720px]:px-[9px]">
+      <nav aria-label="主导航" className="mb-3 grid gap-[3px]">
         <button
           className={navButton(section === "chat")}
           onClick={() => setSection("chat")}
@@ -157,119 +77,7 @@ export function Sidebar({
           Agents
         </button>
       </nav>
-      {searching ? (
-        <div className="min-h-0 flex-1 overflow-auto">
-          {!results ? (
-            <p className={hint}>搜索中…</p>
-          ) : (
-            <>
-              {results.agents.length > 0 && (
-                <div className="mb-[18px]">
-                  <div className={sectionLabel}>Agents</div>
-                  {results.agents.map((agent) => {
-                    const full = agents.find((a) => a.id === agent.id);
-                    return (
-                      <div className={agentRow} key={agent.id}>
-                        <Avatar
-                          name={agent.name}
-                          online={full?.available ?? false}
-                          small
-                          onClick={() => details(agent.id)}
-                        />
-                        <button
-                          className="agent-row-open flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() => {
-                            setQuery("");
-                            if (full) openAgent(full);
-                            else details(agent.id);
-                          }}
-                          disabled={openingAgent !== null}
-                        >
-                          <span className="flex min-w-0 flex-1 flex-col">
-                            <strong className={rowName}>{agent.name}</strong>
-                            <small className={rowPreview}>
-                              {agent.description ||
-                                (full ? runtimeLabel(full) : "")}
-                            </small>
-                          </span>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              {results.chats.length > 0 && (
-                <div className="mb-[18px]">
-                  <div className={sectionLabel}>会话</div>
-                  {results.chats.map((chat) => (
-                    <button
-                      key={chat.id}
-                      className={chatRowHover}
-                      onClick={() => void openSearchedChat(chat)}
-                    >
-                      <ChatAvatar chat={chat} agents={agents} />
-                      <span className={rowMain}>
-                        <span className={rowTop}>
-                          <strong className={rowName}>{chat.name}</strong>
-                          {chat.hidden && (
-                            <em className="flex-none rounded bg-[#eae4d7] px-[5px] text-[10px] not-italic text-[#8a7150]">
-                              已隐藏
-                            </em>
-                          )}
-                          <time className={rowTime}>
-                            {convTime(chat.updated_at)}
-                          </time>
-                        </span>
-                        <span className={rowTop}>
-                          <small className={rowPreview}>
-                            {chat.preview ?? ""}
-                          </small>
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {results.messages.length > 0 && (
-                <div className="mb-[18px]">
-                  <div className={sectionLabel}>消息</div>
-                  {results.messages.map((message) => (
-                    <button
-                      key={`${message.chat_id}-${message.id}`}
-                      className={chatRowHover}
-                      onClick={() => {
-                        setQuery("");
-                        openMessage(message.chat_id, message.id);
-                      }}
-                    >
-                      <span className={rowMain}>
-                        <span className={rowTop}>
-                          <strong className={rowName}>
-                            {message.chat_name}
-                          </strong>
-                          <time className={rowTime}>
-                            {convTime(message.created_at)}
-                          </time>
-                        </span>
-                        <span className={rowTop}>
-                          <small className={rowPreview}>
-                            {message.sender_name}：{message.text}
-                          </small>
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {!results.agents.length &&
-                !results.chats.length &&
-                !results.messages.length && (
-                  <p className={hint}>没有匹配「{query.trim()}」的内容</p>
-                )}
-            </>
-          )}
-        </div>
-      ) : section === "chat" ? (
+      {section === "chat" ? (
         <div className="mb-6 flex min-h-0 flex-1 flex-col">
           <div className={sectionLabel}>
             会话

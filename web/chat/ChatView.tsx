@@ -79,15 +79,15 @@ export function ChatView({
       )}
       {active && (
         <>
-          <header className="main-header flex h-[83px] flex-none items-center justify-between border-b border-[#eeede8] px-[35px] max-[720px]:h-[72px] max-[720px]:px-[22px] max-[560px]:pl-[49px]">
-            <div>
-              <h1 className="flex items-center gap-[7px] text-[17px] font-semibold max-[560px]:text-[15px]">
+          <header className="main-header flex h-[52px] flex-none items-center justify-between border-b border-[#eeede8] px-[35px] max-[720px]:px-[22px] max-[560px]:pl-[49px]">
+            <div className="min-w-0">
+              <h1 className="flex items-center gap-[7px] truncate text-[15px] font-semibold max-[560px]:text-[15px]">
                 {active.kind === "group" && (
-                  <Hash size={21} className="text-[#a39b8b]" />
+                  <Hash size={16} className="flex-none text-[#a39b8b]" />
                 )}{" "}
                 {active.name}
               </h1>
-              <p className="mt-1 text-[11px] text-[#959084] max-[560px]:text-[10px]">
+              <p className="mt-px truncate text-[11px] text-[#959084] max-[560px]:text-[10px]">
                 {active.ref && (
                   <>
                     <span title="会话短号">{active.ref}</span> ·{" "}

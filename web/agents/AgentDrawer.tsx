@@ -14,6 +14,7 @@ import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
 import { DeleteAgent } from "./DeleteAgent.tsx";
 import {
+  agentPresence,
   Avatar,
   runtimeLabel,
   type Agent,
@@ -144,7 +145,7 @@ export function AgentDrawer({
   return (
     <Modal title={agent.name} close={close} drawer>
       <div className="flex items-center gap-[13px] px-[25px] py-[23px]">
-        <Avatar name={agent.name} online={agent.available} />
+        <Avatar name={agent.name} presence={agentPresence(agent)} />
         <div className="min-w-0">
           <strong className="text-xs font-[550]">{runtimeLabel(agent)}</strong>
           <p className="mt-[3px] text-xs text-[#978c78] [overflow-wrap:anywhere]">

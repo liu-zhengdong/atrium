@@ -10,6 +10,7 @@ import type { Chat, Overview, SearchResults } from "../../shared/schema.ts";
 import { patchChat, searchAll } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
 import {
+  agentPresence,
   Avatar,
   runtimeLabel,
   type Agent,
@@ -311,7 +312,7 @@ export function GlobalSearch({
                       <>
                         <Avatar
                           name={hit.agent.name}
-                          online={full?.available ?? false}
+                          presence={agentPresence(full)}
                           small
                         />
                         <span className="min-w-0 flex-1">

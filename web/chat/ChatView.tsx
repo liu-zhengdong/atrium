@@ -1,17 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import { Hash, Plus } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
-import { api } from "../api.ts";
-import {
-  agentPresence,
-  Avatar,
-  runtimeLabel,
-  type Agent,
-} from "../components/AgentAvatar.tsx";
+import type { Agent } from "../components/AgentAvatar.tsx";
 import { MessageComposer } from "./MessageComposer.tsx";
 import { MessageTimeline } from "./MessageTimeline.tsx";
-import { AddMemberDialog } from "./ChatDialogs.tsx";
+import { ChatHeader } from "./ChatHeader.tsx";
+import { ChatNotice } from "./ChatNotice.tsx";
 import { useConversation } from "./useConversation.ts";
+import { useAnchorScroll, useReadReporter } from "./useChatEffects.ts";
+
 export function ChatView({
   active,
   chatId,
@@ -22,6 +17,7 @@ export function ChatView({
   refresh,
   anchor,
   clearAnchor,
+  openGroup,
 }: {
   active: Overview["chats"][number] | undefined;
   chatId: string | null;
@@ -32,41 +28,22 @@ export function ChatView({
   refresh: () => void;
   anchor: { chatId: string; messageId: number } | null;
   clearAnchor: () => void;
+  openGroup: () => void;
 }) {
   const anchoredId =
     anchor && anchor.chatId === chatId ? anchor.messageId : undefined;
   const conversation = useConversation(chatId, revision, anchoredId);
   const { members } = conversation;
-  const [addingMember, setAddingMember] = useState(false);
   const directAgent = agents.find((a) => a.id === active?.direct_agent);
   const observed = active && !active.mine && !active.read_only ? active : null;
-  const latest = conversation.messages.at(-1)?.id ?? 0;
-  const markedRead = useRef(0);
-  useEffect(() => {
-    markedRead.current = 0;
-  }, [chatId]);
-  useEffect(() => {
-    if (!chatId || hidden || !latest || latest <= markedRead.current) return;
-    if (anchoredId) return; // 定位到历史消息不代表读到了最新
-    if (!conversation.atBottom()) return;
-    markedRead.current = latest;
-    void api(`/chats/${chatId}/read`, "POST", { through: latest }).catch(() => {
-      markedRead.current = 0;
-    });
-  }, [chatId, latest, hidden, anchoredId]);
-  const scrolledTo = useRef("");
-  useEffect(() => {
-    if (!anchoredId || conversation.loading) return;
-    const key = `${chatId}:${anchoredId}`;
-    if (scrolledTo.current === key) return;
-    const el = document.getElementById(`msg-${anchoredId}`);
-    if (!el) return;
-    scrolledTo.current = key;
-    el.scrollIntoView({ block: "center" });
-    el.classList.add("flash");
-    const timer = setTimeout(() => el.classList.remove("flash"), 2400);
-    return () => clearTimeout(timer);
-  }, [anchoredId, conversation.loading, chatId]);
+  useReadReporter({
+    chatId,
+    latest: conversation.messages.at(-1)?.id ?? 0,
+    hidden,
+    anchoredId,
+    atBottom: conversation.atBottom,
+  });
+  useAnchorScroll({ chatId, anchoredId, loading: conversation.loading });
   return (
     <section
       className="chat-panel"
@@ -80,58 +57,14 @@ export function ChatView({
       )}
       {active && (
         <>
-          <header className="main-header flex h-[52px] flex-none items-center justify-between border-b border-[#eeede8] px-[35px] max-[720px]:px-[22px] max-[560px]:pl-[49px]">
-            <div className="min-w-0">
-              <h1 className="flex items-center gap-[7px] truncate text-[15px] font-semibold max-[560px]:text-[15px]">
-                {active.kind === "group" && (
-                  <Hash size={16} className="flex-none text-[#a39b8b]" />
-                )}{" "}
-                {active.name}
-              </h1>
-              <p className="mt-px truncate text-[11px] text-[#959084] max-[560px]:text-[10px]">
-                {active.ref && (
-                  <>
-                    <span title="会话短号">{active.ref}</span> ·{" "}
-                  </>
-                )}
-                {active.read_only ? (
-                  "Agent 已删除 · 历史记录"
-                ) : (
-                  <>
-                    {members.length} 位 Agent ·{" "}
-                    {active.kind === "group"
-                      ? "@ 提及可及时送达"
-                      : "私聊消息及时送达"}
-                  </>
-                )}
-              </p>
-            </div>
-            <div className="member-stack">
-              {agents
-                .filter((a) => members.includes(a.id))
-                .map((a) => (
-                  <button
-                    key={a.id}
-                    aria-label={`查看 ${a.name} 的运行轨迹`}
-                    title={`${a.name} · ${a.work || runtimeLabel(a)}`}
-                    onClick={() => details(a.id)}
-                  >
-                    <Avatar small name={a.name} presence={agentPresence(a)} />
-                  </button>
-                ))}
-              {active.kind === "group" && (
-                <button
-                  className="icon-button"
-                  aria-label="添加群成员"
-                  onClick={() => {
-                    setAddingMember(true);
-                  }}
-                >
-                  <Plus size={16} />
-                </button>
-              )}
-            </div>
-          </header>
+          <ChatHeader
+            active={active}
+            members={members}
+            agents={agents}
+            openAgent={details}
+            openGroup={openGroup}
+          />
+          <ChatNotice notice={active.notice} />
           {directAgent?.error && (
             <p
               className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
@@ -146,7 +79,6 @@ export function ChatView({
               </button>
             </p>
           )}
-
           {anchoredId && (
             <p
               className="flex items-center justify-center gap-2.5 border-b border-[#eadfc8] bg-[#f6efe2] px-3 py-[7px] text-xs text-[#8a7150]"
@@ -197,15 +129,6 @@ export function ChatView({
             }}
           />
         </>
-      )}
-      {addingMember && active && (
-        <AddMemberDialog
-          chatId={active.id}
-          agents={agents}
-          members={members}
-          close={() => setAddingMember(false)}
-          added={refresh}
-        />
       )}
     </section>
   );

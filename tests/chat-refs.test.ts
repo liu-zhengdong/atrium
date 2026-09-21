@@ -80,7 +80,7 @@ test("短号不复用，支持历史版本插入与万级编号；拒绝非规�
   assert.equal(second.ref, "c2");
   const legacy = randomUUID();
   store.run(
-    "INSERT INTO chats VALUES(?,?,?,?)",
+    "INSERT INTO chats(id,name,kind,direct_agent) VALUES(?,?,?,?)",
     legacy,
     "旧版本新增",
     "group",

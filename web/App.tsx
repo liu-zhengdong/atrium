@@ -8,6 +8,7 @@ import { Sidebar, type Section } from "./layout/Sidebar.tsx";
 import { TopBar } from "./layout/TopBar.tsx";
 import { AgentDirectory } from "./agents/AgentDirectory.tsx";
 import { AgentDrawer } from "./agents/AgentDrawer.tsx";
+import { GroupDrawer } from "./groups/GroupDrawer.tsx";
 import { CreateAgentDialog } from "./agents/CreateAgentDialog.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { CreateChatDialog } from "./chat/ChatDialogs.tsx";
@@ -26,6 +27,8 @@ export function App() {
   const [agentId, setAgentId] = useState<string | null>(null);
   const [modal, setModal] = useState<"agent" | "chat" | "user" | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  // 轨迹抽屉和群信息抽屉共用右侧位置，互斥打开。
+  const [groupOpen, setGroupOpen] = useState(false);
   const [openingAgent, setOpeningAgent] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<{
     chatId: string;
@@ -175,6 +178,10 @@ export function App() {
                 refresh={refresh}
                 anchor={anchor}
                 clearAnchor={() => setAnchor(null)}
+                openGroup={() => {
+                  setAgentId(null);
+                  setGroupOpen(true);
+                }}
               />
             </>
           )}
@@ -187,6 +194,20 @@ export function App() {
           revision={revision}
           close={() => setAgentId(null)}
           refresh={refresh}
+        />
+      )}
+      {groupOpen && active?.kind === "group" && overview && (
+        <GroupDrawer
+          key={active.id}
+          chat={active}
+          agents={overview.agents}
+          close={() => setGroupOpen(false)}
+          changed={refresh}
+          openMessage={(chat, message) => void openMessage(chat, message)}
+          openAgent={(id) => {
+            setGroupOpen(false);
+            setAgentId(id);
+          }}
         />
       )}
       {modal === "agent" && (

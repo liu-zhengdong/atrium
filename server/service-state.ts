@@ -85,7 +85,7 @@ export function claimService(data: string, port: number) {
       throw new Error(
         `Atrium 已运行或正在启动（PID ${previous.pid}）；不会重复启动。`,
       );
-    db.prepare("INSERT OR REPLACE INTO service VALUES(1, ?)").run(
+    db.prepare("INSERT OR REPLACE INTO service(id,record) VALUES(1, ?)").run(
       JSON.stringify(record),
     );
     db.exec("COMMIT");

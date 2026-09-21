@@ -1,0 +1,389 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Store } from "../server/store.ts";
+import { createApp } from "../server/app.ts";
+import { deliveryPlan } from "../server/delivery.ts";
+import {
+  chatFiles,
+  removeMember,
+  searchChat,
+  updateGroup,
+} from "../server/groups.ts";
+import { LOCAL_USER } from "../shared/user.ts";
+import { mentionsAll } from "../shared/mentions.ts";
+
+test("投递计划：私聊、群聊点名、@ 全体的所有组合", () => {
+  const members = ["a", "b", "c"];
+  const plan = (
+    kind: "direct" | "group",
+    sender: string,
+    mentions: string[],
+    mentionAll: boolean,
+  ) => deliveryPlan({ kind, sender, members, mentions, mentionAll });
+
+  assert.deepEqual(plan("direct", "u1", [], false), {
+    immediate: ["a", "b", "c"],
+    inbox: [],
+  });
+  assert.deepEqual(plan("group", "u1", [], false), {
+    immediate: [],
+    inbox: ["a", "b", "c"],
+  });
+  assert.deepEqual(plan("group", "u1", ["b"], false), {
+    immediate: ["b"],
+    inbox: ["a", "c"],
+  });
+  assert.deepEqual(plan("group", "u1", ["a", "b", "c"], false), {
+    immediate: ["a", "b", "c"],
+    inbox: [],
+  });
+  assert.deepEqual(plan("group", "u1", [], true), {
+    immediate: ["a", "b", "c"],
+    inbox: [],
+  });
+  assert.deepEqual(
+    plan("group", "a", [], true),
+    { immediate: ["b", "c"], inbox: [] },
+    "发送者自己不收自己的消息",
+  );
+  assert.deepEqual(plan("group", "a", ["b"], false), {
+    immediate: ["b"],
+    inbox: ["c"],
+  });
+  assert.deepEqual(
+    deliveryPlan({
+      kind: "group",
+      sender: "a",
+      members: ["a", "b", "b"],
+      mentions: ["b", "b"],
+      mentionAll: false,
+    }),
+    { immediate: ["b"], inbox: [] },
+    "重复成员只投一次",
+  );
+  for (const mentionAll of [false, true])
+    for (const mentions of [[], ["a"], ["a", "b", "c"]]) {
+      const result = plan("group", "u1", mentions, mentionAll);
+      assert.deepEqual(
+        [...result.immediate, ...result.inbox].sort(),
+        members,
+        "每个成员恰好落在一边",
+      );
+    }
+});
+
+test("@ 全体：用户发整群立刻收到，Agent 与私聊都拒绝", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const atlas = store.createAgent("Atlas", tmpdir()).agent;
+  const mira = store.createAgent("Mira", tmpdir()).agent;
+  const group = store.createChat("协作群", [atlas.id, mira.id]);
+  const direct = store.createChat("Atlas", [atlas.id], atlas.id);
+
+  const sent = store.send(LOCAL_USER, {
+    chat_id: group.id,
+    body: "@全体 今天收口",
+    mentions: [],
+    mention_all: true,
+  });
+  assert.equal(sent.mention_all, true);
+  for (const agent of [atlas.id, mira.id]) {
+    const delivery = store.pending(agent).at(-1)!;
+    assert.match(delivery.text, /"mention_all":true/);
+    assert.match(delivery.text, /今天收口/);
+  }
+  assert.equal(store.boxCount(mira.id), 0, "@ 全体不再另发消息箱提醒");
+
+  assert.throws(
+    () =>
+      store.send(atlas.id, {
+        chat_id: group.id,
+        body: "@全体 都看一下",
+        mentions: [],
+        mention_all: true,
+      }),
+    /只有用户可以 @ 全体成员/,
+  );
+  assert.throws(
+    () =>
+      store.send(LOCAL_USER, {
+        chat_id: direct.id,
+        body: "在吗",
+        mentions: [],
+        mention_all: true,
+      }),
+    /只有群聊可以 @ 全体成员/,
+  );
+  assert(mentionsAll("@全体 看一下") && mentionsAll("@所有人，看一下"));
+  assert(
+    !mentionsAll("全体") && !mentionsAll("邮件@全体成员组"),
+    "只认独立的 @ 全体写法",
+  );
+});
+
+test("群资料：改名与公告；公告变更通知成员；坏输入一律拒绝", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const atlas = store.createAgent("Atlas", tmpdir()).agent;
+  const group = store.createChat("旧名", [atlas.id]);
+  const direct = store.createChat("Atlas", [atlas.id], atlas.id);
+
+  const updated = updateGroup(store, group.id, {
+    name: "新名",
+    notice: "本周收口 #44。",
+  });
+  assert.equal(updated.name, "新名");
+  assert.equal(updated.notice, "本周收口 #44。");
+  const notice = store.box(atlas.id).items.at(-1)!;
+  assert.match(notice.title, /群公告 · 新名/);
+  assert.equal(JSON.parse(notice.body).notice, "本周收口 #44。");
+
+  const before = store.box(atlas.id).items.length;
+  updateGroup(store, group.id, { name: "新名二", notice: "本周收口 #44。" });
+  assert.equal(
+    store.box(atlas.id).items.length,
+    before,
+    "公告没变就不打扰成员",
+  );
+  updateGroup(store, group.id, { name: "新名二", notice: "" });
+  assert.match(store.box(atlas.id).items.at(-1)!.title, /群公告已清空/);
+
+  for (const patch of [
+    { name: "x".repeat(41), notice: "" },
+    { name: "", notice: "" },
+    { name: "合法", notice: "x".repeat(501) },
+    { name: "合法" },
+    { notice: "只给公告" },
+    { name: "合法", notice: "", extra: 1 },
+  ])
+    assert.throws(
+      () => updateGroup(store, group.id, patch),
+      `应拒绝 ${JSON.stringify(patch)}`,
+    );
+  assert.throws(
+    () => updateGroup(store, direct.id, { name: "私聊改名", notice: "" }),
+    /这不是群聊/,
+  );
+  assert.equal(store.chat(group.id).name, "新名二", "被拒的请求不改动群资料");
+});
+
+test("移出成员：撤销读写、收回提醒、回执不再列出，坏输入拒绝", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const atlas = store.createAgent("Atlas", tmpdir()).agent;
+  const mira = store.createAgent("Mira", tmpdir()).agent;
+  const outsider = store.createAgent("Nova", tmpdir()).agent;
+  const group = store.createChat("协作群", [atlas.id, mira.id]);
+  const direct = store.createChat("Atlas", [atlas.id], atlas.id);
+
+  const message = store.send(LOCAL_USER, {
+    chat_id: group.id,
+    body: "先看这条",
+    mentions: [],
+  });
+  store.readChat(mira.id, group.id);
+  assert(
+    store.readState(group.id, 0).some((row) => row.agent_id === mira.id),
+    "移出前回执里有它",
+  );
+  assert(store.boxCount(atlas.id) > 0, "移出前有未处理的群提醒");
+
+  const left = removeMember(store, group.id, atlas.id);
+  assert.deepEqual(left, [mira.id]);
+  assert.equal(
+    store.box(atlas.id).items.filter((item) => item.chat_id === group.id)
+      .length,
+    0,
+    "本群未处理的提醒被收回",
+  );
+  assert.match(
+    store.box(atlas.id).items.at(-1)!.title,
+    /已退出群 · 协作群/,
+    "只剩一条说明自己被移出的通知",
+  );
+  assert.throws(
+    () =>
+      store.send(atlas.id, { chat_id: group.id, body: "还在吗", mentions: [] }),
+    /只能访问自己加入的会话/,
+  );
+  assert.throws(
+    () => store.readChat(atlas.id, group.id),
+    /只能访问自己加入的会话/,
+  );
+  assert.equal(
+    store.timeline(group.id).items.at(-1)!.id,
+    message.id,
+    "群里的历史消息保留",
+  );
+
+  const removedMira = removeMember(store, group.id, mira.id);
+  assert.deepEqual(removedMira, []);
+  assert(
+    !store.readState(group.id, 0).some((row) => row.agent_id === mira.id),
+    "回执名单反映当前成员",
+  );
+
+  assert.throws(
+    () => removeMember(store, group.id, outsider.id),
+    /这位 Agent 不在群里/,
+  );
+  assert.throws(() => removeMember(store, direct.id, atlas.id), /这不是群聊/);
+  assert.throws(
+    () => removeMember(store, group.id, "不存在的 id"),
+    /Agent 不存在/,
+  );
+});
+
+test("群文件聚合与群内搜索：只看本会话，坏输入拒绝", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const atlas = store.createAgent("Atlas", tmpdir()).agent;
+  const group = store.createChat("协作群", [atlas.id]);
+  const other = store.createChat("另一个群", [atlas.id]);
+
+  const staged = store.stage(
+    LOCAL_USER,
+    "说明.txt",
+    "text/plain",
+    Buffer.from("hello"),
+  );
+  store.send(LOCAL_USER, {
+    chat_id: group.id,
+    body: "带附件",
+    mentions: [],
+    attachments: [staged.id],
+  });
+  const elsewhere = store.stage(
+    LOCAL_USER,
+    "别处.txt",
+    "text/plain",
+    Buffer.from("nope"),
+  );
+  store.send(LOCAL_USER, {
+    chat_id: other.id,
+    body: "别处的附件",
+    mentions: [],
+    attachments: [elsewhere.id],
+  });
+  store.send(LOCAL_USER, { chat_id: group.id, body: "找得到我", mentions: [] });
+  store.send(LOCAL_USER, { chat_id: other.id, body: "找得到我", mentions: [] });
+
+  const files = chatFiles(store, group.id);
+  assert.deepEqual(
+    files.items.map((file) => file.name),
+    ["说明.txt"],
+    "只聚合本会话的附件",
+  );
+  assert.equal(files.items[0]!.uploader_name, "你");
+  assert.equal(files.has_more, false);
+
+  const hits = searchChat(store, group.id, "找得到我");
+  assert.equal(hits.items.length, 1, "搜索不跨会话");
+  assert.equal(hits.items[0]!.sender_name, "你");
+  assert.equal(searchChat(store, group.id, "不存在的词").items.length, 0);
+  assert.throws(() => searchChat(store, group.id, "   "), /缺少搜索词/);
+  assert.equal(
+    searchChat(store, group.id, "%").items.length,
+    0,
+    "通配符按字面搜索",
+  );
+});
+
+test("群接口与工具边界：HTTP 坏输入拒绝，@ 全体不出现在 Agent 工具里", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-group-"));
+  const { app, store } = await createApp({
+    data,
+    runtime: false,
+    desktops: join(data, "desktops"),
+    piHome: join(data, ".pi"),
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(async () => {
+    await app.close();
+    rmSync(data, { recursive: true, force: true });
+  });
+  const address = app.server.address();
+  assert(address && typeof address !== "string");
+  const origin = `http://127.0.0.1:${address.port}`;
+  const created = store.createAgent("Atlas", tmpdir());
+  const group = store.createChat("协作群", [created.agent.id]);
+
+  const request = (path: string, method = "GET", body?: unknown) =>
+    fetch(origin + path, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  assert.equal(
+    (
+      await request(`/api/chats/${group.id}/profile`, "PATCH", {
+        name: "新名",
+        notice: "公告",
+      })
+    ).status,
+    200,
+  );
+  for (const bad of [
+    { name: "", notice: "" },
+    { name: "合法" },
+    { name: "合法", notice: "x".repeat(501) },
+    { name: "合法", notice: "", pinned: true },
+  ])
+    assert.equal(
+      (await request(`/api/chats/${group.id}/profile`, "PATCH", bad)).status,
+      400,
+      `应拒绝 ${JSON.stringify(bad)}`,
+    );
+  assert.equal(
+    (await request(`/api/chats/${group.id}/search`)).status,
+    400,
+    "缺少搜索词",
+  );
+  assert.equal(
+    (
+      await request(
+        `/api/chats/${group.id}/members/${created.agent.id}`,
+        "DELETE",
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await request(
+        `/api/chats/${group.id}/members/${created.agent.id}`,
+        "DELETE",
+      )
+    ).status,
+    404,
+    "已经不在群里",
+  );
+
+  const client = new Client({ name: "group-test", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(
+      new URL(`${origin}/mcp/${created.agent.id}`),
+      {
+        requestInit: {
+          headers: { Authorization: `Bearer ${created.token}` },
+        },
+      },
+    ),
+  );
+  t.after(() => client.close());
+  const tools = await client.listTools();
+  const send = tools.tools.find((tool) => tool.name === "send_message")!;
+  assert(
+    !Object.keys(send.inputSchema.properties ?? {}).includes("mention_all"),
+    "@ 全体不暴露给 Agent",
+  );
+  assert(
+    !tools.tools.some((tool) => /notice|rename|remove_member/i.test(tool.name)),
+    "本版不给 Agent 改群名、写公告或移出成员的工具",
+  );
+});

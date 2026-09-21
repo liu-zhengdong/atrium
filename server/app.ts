@@ -26,6 +26,8 @@ import {
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 import { readUser, writeUser } from "./users.ts";
+import { chatFiles, removeMember, searchChat, updateGroup } from "./groups.ts";
+import { groupName } from "../shared/group.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
 export async function createApp(options: {
@@ -358,7 +360,7 @@ export async function createApp(options: {
   app.post("/api/chats", (request) => {
     const a = z
       .object({
-        name: displayName,
+        name: groupName,
         members: z.array(id).max(30),
         direct_agent: id.optional(),
       })
@@ -383,6 +385,28 @@ export async function createApp(options: {
     const members = store.addMember(agentParams(request), input.agent_id);
     changed();
     return { members };
+  });
+  app.delete("/api/chats/:id/members/:agentId", (request) => {
+    const params = request.params as { agentId: string };
+    const members = removeMember(store, agentParams(request), params.agentId);
+    changed();
+    return { members };
+  });
+  // 群名与公告一起给当前值；隐藏、置顶这类开关走 PATCH /api/chats/:id。
+  app.patch("/api/chats/:id/profile", (request) => {
+    const chat = updateGroup(store, agentParams(request), request.body);
+    changed();
+    return chat;
+  });
+  app.get("/api/chats/:id/files", (request) => {
+    const q = z
+      .object({ before: z.coerce.number().int().positive().optional() })
+      .parse(request.query);
+    return chatFiles(store, agentParams(request), q.before);
+  });
+  app.get("/api/chats/:id/search", (request) => {
+    const q = String((request.query as { q?: string }).q ?? "");
+    return searchChat(store, agentParams(request), q);
   });
   app.get("/api/chats/:id/messages", (request) => {
     const q = z

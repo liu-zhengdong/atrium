@@ -107,6 +107,14 @@ export function MessageTimeline({
                           Agent
                         </span>
                       )}
+                      {message.mention_all && (
+                        <span
+                          className="rounded-[3px] bg-[#f1ece0] px-1 text-[9px] text-[#8a7a58]"
+                          title="发给了群内每位成员"
+                        >
+                          @全体
+                        </span>
+                      )}
                       <time className="text-[10px] text-[#949187]">
                         {time(message.created_at)}
                       </time>

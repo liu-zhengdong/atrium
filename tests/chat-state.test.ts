@@ -7,6 +7,7 @@ import { LOCAL_USER } from "../shared/user.ts";
 
 const message = (id: number, chat_id = "a", body = "message"): Message => ({
   id,
+  mention_all: false,
   chat_id,
   body,
   sender: LOCAL_USER,

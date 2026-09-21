@@ -9,6 +9,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
 import { chatReference } from "../shared/schema.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 test("旧库原地补短号，保留消息、成员、阅读证据；重启零数据重写", (t) => {
   const folder = mkdtempSync(join(tmpdir(), "atrium-refs-"));
@@ -19,7 +20,7 @@ test("旧库原地补短号，保留消息、成员、阅读证据；重启零�
   const b = store.createAgent("Mira", folder).agent;
   const first = store.createChat("早先的群", [a.id, b.id]);
   const second = store.createChat("私聊", [a.id], a.id);
-  const message = store.send("user", {
+  const message = store.send(LOCAL_USER, {
     chat_id: first.id,
     body: "保留原文",
     mentions: [],
@@ -50,7 +51,11 @@ test("旧库原地补短号，保留消息、成员、阅读证据；重启零�
   );
   assert.equal(store.unread(b.id)[0].count, 1);
   store.run("UPDATE chats SET name=? WHERE id=?", "改名后的群", first.id);
-  store.send("user", { chat_id: second.id, body: "改变排序", mentions: [] });
+  store.send(LOCAL_USER, {
+    chat_id: second.id,
+    body: "改变排序",
+    mentions: [],
+  });
   store.close();
   store = new Store(path);
   t.after(() => store.close());
@@ -113,12 +118,12 @@ test("私聊、明确提及和消息箱提醒使用相同短号，正文保持�
   const a = store.createAgent("Atlas", tmpdir()).agent;
   const group = store.createChat("开发", [a.id]);
   const dm = store.createChat("Atlas", [a.id], a.id);
-  store.send("user", {
+  store.send(LOCAL_USER, {
     chat_id: group.id,
     body: `外部正文保留 ${group.id}`,
     mentions: [a.id],
   });
-  store.send("user", { chat_id: dm.id, body: "私聊", mentions: [] });
+  store.send(LOCAL_USER, { chat_id: dm.id, body: "私聊", mentions: [] });
   const direct = store.pending(a.id);
   const payloads = direct.map((d) => JSON.parse(d.text.split("\n")[2]));
   assert.deepEqual(
@@ -126,7 +131,7 @@ test("私聊、明确提及和消息箱提醒使用相同短号，正文保持�
     ["c1", "c2"],
   );
   assert.equal(payloads[0].body, `外部正文保留 ${group.id}`);
-  store.send("user", {
+  store.send(LOCAL_USER, {
     chat_id: group.id,
     body: `群消息保留 ${group.id}`,
     mentions: [],
@@ -194,7 +199,11 @@ test("真实 MCP HTTP：短号发现读写、UUID 兼容与幂等、跨 Agent �
     ),
   );
   const body = `不要改写正文里的 ${chat.id}`;
-  const incoming = store.send("user", { chat_id: chat.id, body, mentions: [] });
+  const incoming = store.send(LOCAL_USER, {
+    chat_id: chat.id,
+    body,
+    mentions: [],
+  });
   const read = await call(ca, "read_chat", { chat_id: "c1" });
   assert.equal(read.items[0].chat_id, "c1");
   assert.equal(read.items[0].body, body);

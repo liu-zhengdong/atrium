@@ -1,6 +1,7 @@
 import { Hash, LoaderCircle } from "lucide-react";
 import Markdown from "react-markdown";
 import type { Overview } from "../../shared/schema.ts";
+import { isUserRef, LOCAL_USER } from "../../shared/user.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { ReadReceipt } from "./ReadReceipt.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
@@ -68,7 +69,7 @@ export function MessageTimeline({
           )}
           {messages.map((message, index) => {
             const name =
-              message.sender === "user"
+              message.sender === LOCAL_USER
                 ? "你"
                 : (agents.find((a) => a.id === message.sender)?.name ??
                   `${message.sender_name ?? "Agent"}${message.sender_deleted_at ? "（已删除）" : ""}`);
@@ -78,7 +79,7 @@ export function MessageTimeline({
               message.created_at - messages[index - 1].created_at < 180000;
             return (
               <article
-                className={`message mb-6 flex items-start gap-[11px] max-[560px]:gap-2.5 ${message.sender === "user" ? "outgoing flex-row-reverse" : ""} ${continuation ? "continuation -mt-3" : ""}`}
+                className={`message mb-6 flex items-start gap-[11px] max-[560px]:gap-2.5 ${message.sender === LOCAL_USER ? "outgoing flex-row-reverse" : ""} ${continuation ? "continuation -mt-3" : ""}`}
                 key={message.id}
                 id={`msg-${message.id}`}
                 data-message-id={message.id}
@@ -101,7 +102,7 @@ export function MessageTimeline({
                   {!continuation && (
                     <div className="mb-[5px] flex min-h-[22px] items-center gap-2">
                       <strong className="text-xs font-[550]">{name}</strong>
-                      {message.sender !== "user" && (
+                      {!isUserRef(message.sender) && (
                         <span className="rounded-[3px] border border-[#e7e6de] px-1 text-[9px] text-[#898779]">
                           Agent
                         </span>

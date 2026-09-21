@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../server/store.ts";
 import { createMcp } from "../server/mcp.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 test("自主通信闭环：名册短号、独立私聊、建群邀请、历史和同伴 @；拒绝权限突破", async (t) => {
   const store = new Store(":memory:");
@@ -54,7 +55,11 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
   );
   assert(!JSON.stringify(directory).includes(tmpdir()), "名册不泄露目录或配置");
   const userChat = store.createChat("用户与 Borealis", [b.id], b.id);
-  store.send("user", { chat_id: userChat.id, body: "私人内容", mentions: [] });
+  store.send(LOCAL_USER, {
+    chat_id: userChat.id,
+    body: "私人内容",
+    mentions: [],
+  });
   const direct = await call("open_direct", { agent_id: b.ref });
   assert.match(direct.id, /^c\d+$/);
   assert.notEqual(direct.id, userChat.ref);

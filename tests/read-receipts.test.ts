@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../server/store.ts";
 import type { ChatReadState } from "../shared/schema.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 function hasRead(state: ChatReadState, id: number) {
   return (
@@ -16,7 +17,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const b = store.createAgent("Mira", "/tmp").agent;
   const chat = store.createChat("回执", [a.id, b.id]);
   const send = (body: string, chatId = chat.id) =>
-    store.send("user", { chat_id: chatId, body, mentions: [] });
+    store.send(LOCAL_USER, { chat_id: chatId, body, mentions: [] });
   const state = (agent = a.id) =>
     store.readState(chat.id, 0).find((s) => s.agent_id === agent)!;
   return { store, a, b, chat, send, state };
@@ -124,7 +125,7 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
   const dm = store.createChat("私聊", [a.id], a.id);
 
   // 1. 私聊直投：pending 时未读，ACP accepted 后即标记已读，消除重复未读提醒
-  const dmMsg = store.send("user", {
+  const dmMsg = store.send(LOCAL_USER, {
     chat_id: dm.id,
     body: "你好私聊",
     mentions: [],
@@ -154,7 +155,7 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
   // 2. 群聊明确提及（@）：保留前置未读缺口，ACP accepted 仅标当前消息
   const m1 = send("群聊普通消息 1");
   const m2 = send("群聊普通消息 2");
-  const m3 = store.send("user", {
+  const m3 = store.send(LOCAL_USER, {
     chat_id: chat.id,
     body: "@Atlas 来看这条",
     mentions: [a.id],
@@ -205,7 +206,7 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
   );
 
   // 破坏 B：deliveryError 保持未读
-  const mErr = store.send("user", {
+  const mErr = store.send(LOCAL_USER, {
     chat_id: dm.id,
     body: "投递失败消息",
     mentions: [],

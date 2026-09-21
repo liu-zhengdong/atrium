@@ -21,6 +21,7 @@ import { createApp } from "../server/app.ts";
 import { receiveInbox, writeGithubTemplate } from "../server/adapters.ts";
 import { displayDesktops, defaultDesktops } from "../server/agents.ts";
 import { resolveMentions } from "../shared/mentions.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const store = new Store(":memory:");
@@ -34,7 +35,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
     b,
     chat,
     send: (body: string) =>
-      store.send("user", { chat_id: chat.id, body, mentions: [] }),
+      store.send(LOCAL_USER, { chat_id: chat.id, body, mentions: [] }),
   };
 }
 
@@ -61,7 +62,7 @@ test("会话成员隔离、后续加入和私聊唯一性", (t) => {
   );
   assert.throws(
     () =>
-      store.send("user", {
+      store.send(LOCAL_USER, {
         chat_id: chat.id,
         body: "错误提及",
         mentions: [b.id],
@@ -85,12 +86,12 @@ test("用户明确 @ 和私聊走即时通道，普通消息不广播；发言�
     mentions: [a.id],
     client_id: randomUUID(),
   };
-  const m = store.send("user", input);
-  assert.equal(store.send("user", input).id, m.id);
+  const m = store.send(LOCAL_USER, input);
+  assert.equal(store.send(LOCAL_USER, input).id, m.id);
   assert.equal(store.pending(a.id).length, 1);
   assert.match(store.pending(a.id)[0].text, /群聊/);
   assert.throws(
-    () => store.send("user", { ...input, body: "同一 ID 换了内容" }),
+    () => store.send(LOCAL_USER, { ...input, body: "同一 ID 换了内容" }),
     /不同内容/,
   );
   store.send(a.id, {
@@ -100,7 +101,7 @@ test("用户明确 @ 和私聊走即时通道，普通消息不广播；发言�
   });
   assert.equal(store.pending(a.id).length, 1);
   const dm = store.createChat("Atlas", [a.id], a.id);
-  store.send("user", { chat_id: dm.id, body: "私聊", mentions: [] });
+  store.send(LOCAL_USER, { chat_id: dm.id, body: "私聊", mentions: [] });
   assert.equal(store.pending(a.id).length, 2);
 });
 
@@ -197,7 +198,7 @@ test("十万条消息：冷／热未读与会话列表；写入、阅读使缓�
   );
   store.transaction(() => {
     for (let i = 0; i < 100000; i++)
-      insert.run(chat.id, "user", "规模样本", "[]", Date.now());
+      insert.run(chat.id, LOCAL_USER, "规模样本", "[]", Date.now());
   });
   const start = performance.now();
   assert.equal(store.unread(a.id)[0].count, 100000);
@@ -523,7 +524,7 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   await client.connect(transport);
   t.after(() => client.close());
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 14);
+  assert.equal(tools.tools.length, 15);
   assert(
     tools.tools.some((tool) => tool.name === "fork_agent"),
     "招募 fork 对 Agent 可见",
@@ -550,7 +551,7 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
     arguments: { chat_id: privateChat.id },
   });
   assert(read.isError);
-  const incoming = store.send("user", {
+  const incoming = store.send(LOCAL_USER, {
     chat_id: chat.id,
     body: "需要阅读回执",
     mentions: [],

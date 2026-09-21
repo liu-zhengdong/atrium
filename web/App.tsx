@@ -11,6 +11,7 @@ import { AgentDrawer } from "./agents/AgentDrawer.tsx";
 import { CreateAgentDialog } from "./agents/CreateAgentDialog.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { CreateChatDialog } from "./chat/ChatDialogs.tsx";
+import { UserProfileDialog } from "./user/UserProfileDialog.tsx";
 
 export function App() {
   const {
@@ -23,7 +24,7 @@ export function App() {
   const [section, setSection] = useState<Section>("chat");
   const [chatId, setChatId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
-  const [modal, setModal] = useState<"agent" | "chat" | null>(null);
+  const [modal, setModal] = useState<"agent" | "chat" | "user" | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openingAgent, setOpeningAgent] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<{
@@ -93,6 +94,7 @@ export function App() {
         details={setAgentId}
         refresh={refresh}
         openMessage={(chat, message) => void openMessage(chat, message)}
+        openUser={() => setModal("user")}
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -196,6 +198,13 @@ export function App() {
             await openAgent(agent);
             if (startError) setError(startError);
           }}
+        />
+      )}
+      {modal === "user" && overview && (
+        <UserProfileDialog
+          user={overview.user}
+          close={() => setModal(null)}
+          saved={refresh}
         />
       )}
       {modal === "chat" && (

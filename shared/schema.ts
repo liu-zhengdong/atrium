@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { UserProfile } from "./user.ts";
 
 export const id = z.string().uuid();
 export const chatReference = z
@@ -174,6 +175,8 @@ export type Overview = {
     unread: number;
   })[];
   chats: Chat[];
+  /** 本机用户的资料；界面用它认出自己的消息，并提供编辑入口。 */
+  user: UserProfile;
   /** Display root of the per-identity desktop directories (home shown as ~). */
   desktops_root: string;
   discovery: {

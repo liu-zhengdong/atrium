@@ -125,3 +125,9 @@
 - 发生：写入「一 issue 一 worktree」时核对：全局 `atrium` 经 npm link 指向主仓，主仓服务占用 `.atrium` 与默认端口。
 - 分析：在 worktree 改代码后仍敲全局 `atrium`，测到的是主仓。交付仍须从安装后的全局命令走通，但开发验收必须用 worktree 自己的入口和数据。
 - 改变：验证规范补充：issue 开发在对应 worktree 验收，先停主仓服务，从该 worktree 入口启动，数据用其 `.atrium`；合入后再走主仓全局命令。
+
+## 2026-09-21 · 用户身份 u1 与资料
+
+- 发生：issue #35 要求真人开口时 Agent 能认出是谁。审阅发现字面量 `"user"` 同时承担消息发送者、附件上传者、回执成员 id、MCP 边界与 pi-atrium 轨迹角色五种含义，没有一处集中定义。
+- 分析：整树替换会顺手改掉轨迹里的 Pi 消息角色；只迁消息发送者又会漏掉附件上传者——`server/store.ts` 的 `bindAttachments` 比对 `uploader` 与 `sender`，半迁会让用户带附件发消息报「不能使用他人的附件」。迁移边界按概念划，不按文本搜索；`ReadReceipt` 靠 `reader.agent_id !== message.sender` 排除作者，回执成员 id 必须与发送者同批迁。
+- 改变：常量与判定落 `shared/user.ts`，用户表、资料读写与显示名解析落 `server/users.ts`（不进已超千行的 `store.ts`）。显示名此前分散在会话搜索、投递 `sender_name`、群消息箱 `from_name`、回执成员名四处，现由 `userNames` 一处给出「面向用户」和「面向 Agent」两个值。

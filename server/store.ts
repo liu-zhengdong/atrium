@@ -26,15 +26,11 @@ import {
   readFromCwd,
   safeFileName,
 } from "./attachments.ts";
+import { isUserRef, LOCAL_USER } from "../shared/user.ts";
+import { ensureUsers, readUser, userNames } from "./users.ts";
+import { Problem } from "./problem.ts";
 
-export class Problem extends Error {
-  constructor(
-    public statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+export { Problem };
 export const hash = (text: string) =>
   createHash("sha256").update(text).digest("hex");
 
@@ -211,6 +207,7 @@ export class Store {
     this.db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS agent_runtime_binding ON agents(runtime_id) WHERE runtime_id IS NOT NULL",
     );
+    ensureUsers(this);
   }
   all<T>(sql: string, ...args: SQLInputValue[]): T[] {
     return this.db.prepare(sql).all(...args) as unknown as T[];
@@ -392,12 +389,14 @@ export class Store {
     return this.all<Chat>(
       `SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only, (SELECT CASE WHEN length(trim(body))>0 THEN substr(body,1,100) WHEN EXISTS(SELECT 1 FROM attachments WHERE message_id=messages.id AND kind='image') THEN '[图片]' WHEN EXISTS(SELECT 1 FROM attachments WHERE message_id=messages.id) THEN '[文件]' ELSE substr(body,1,100) END FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
       COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at,
-      (c.direct_agent IS NOT NULL OR EXISTS(SELECT 1 FROM messages WHERE chat_id=c.id AND sender='user')) AS mine,
-      (SELECT COUNT(*) FROM messages WHERE chat_id=c.id AND sender!='user' AND id>COALESCE((SELECT last_read FROM user_reads WHERE chat_id=c.id),0)) AS unread,
+      (c.direct_agent IS NOT NULL OR EXISTS(SELECT 1 FROM messages WHERE chat_id=c.id AND sender=?)) AS mine,
+      (SELECT COUNT(*) FROM messages WHERE chat_id=c.id AND sender!=? AND id>COALESCE((SELECT last_read FROM user_reads WHERE chat_id=c.id),0)) AS unread,
       COALESCE((SELECT group_concat(name,char(31)) FROM (SELECT a.name AS name FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id ORDER BY m.rowid LIMIT 4)),'') AS member_names,
       COALESCE(us.pinned,0) AS pinned, (us.hidden_after IS NOT NULL) AS hidden
       FROM chats c JOIN chat_refs r ON r.chat_id=c.id LEFT JOIN user_chat_state us ON us.chat_id=c.id
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY pinned DESC, updated_at DESC,c.rowid DESC`,
+      LOCAL_USER,
+      LOCAL_USER,
       ...params,
     ).map((chat) => ({
       ...chat,
@@ -470,11 +469,13 @@ export class Store {
       .slice(0, 10);
     const messages = this.all<SearchResults["messages"][number]>(
       `SELECT m.chat_id,'c'||r.number AS chat_ref,c.name AS chat_name,m.id,m.sender,
-       CASE WHEN m.sender='user' THEN '你' ELSE COALESCE(a.deleted_name,a.name,m.sender) END AS sender_name,
+       CASE WHEN m.sender=? THEN ? ELSE COALESCE(a.deleted_name,a.name,m.sender) END AS sender_name,
        substr(m.body,1,160) AS text, m.created_at
        FROM messages m JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
        LEFT JOIN agents a ON a.id=m.sender
        WHERE m.body LIKE ? ESCAPE '\\' ORDER BY m.created_at DESC, m.rowid DESC LIMIT 20`,
+      LOCAL_USER,
+      userNames(this).own,
       like,
     );
     const agents = this.all<SearchResults["agents"][number]>(
@@ -645,7 +646,9 @@ export class Store {
     const attachments = input.attachments ?? [];
     if (chat.read_only)
       throw new Problem(409, "这个 Agent 已删除，私聊仅供查看历史");
-    if (sender !== "user") this.assertMember(chat.id, sender);
+    // 用户按短号发言，Agent 必须在群内；两种身份都要确实存在。
+    if (isUserRef(sender)) readUser(this, sender);
+    else this.assertMember(chat.id, sender);
     for (const mentioned of input.mentions)
       this.assertMember(chat.id, mentioned);
     if (!input.body.trim() && attachments.length === 0)
@@ -698,16 +701,19 @@ export class Store {
       // Explicit peer contact has the same delivery timing, not the user's authority.
       const recipients =
         chat.kind === "direct" ? this.members(chat.id) : input.mentions;
+      // 发送者对外的短号与名字：Agent 用身份名，用户用资料里的称呼。
+      const author = isUserRef(sender) ? null : this.agent(sender);
+      const senderRef = author?.ref ?? sender;
+      const senderName = author?.name ?? userNames(this, sender).peer;
       for (const agent of new Set(
         recipients.filter((member) => member !== sender),
       )) {
-        const author = sender === "user" ? null : this.agent(sender);
         const source = JSON.stringify({
           source: chat.kind === "group" ? "群聊" : "私聊",
           chat_id: chat.ref,
           chat_name: chat.name,
-          sender: author?.ref ?? "user",
-          sender_name: author?.name ?? "用户",
+          sender: senderRef,
+          sender_name: senderName,
           message_id: message.id,
           body: input.body,
           attachments: bound,
@@ -722,7 +728,6 @@ export class Store {
       // 普通群发言即时合并为每个未提及成员消息箱里的一条提醒；
       // 阅读群聊或 complete_inbox 将其标记完成。
       if (chat.kind === "group") {
-        const authorName = sender === "user" ? "用户" : this.agent(sender).name;
         for (const member of this.members(chat.id))
           if (member !== sender && !input.mentions.includes(member))
             this.run(
@@ -731,7 +736,7 @@ export class Store {
               member,
               `群消息 · ${chat.name}`,
               JSON.stringify({
-                from_name: authorName,
+                from_name: senderName,
                 chat_ref: chat.ref,
                 chat_name: chat.name,
                 excerpt: excerptOf(input.body, bound),
@@ -997,9 +1002,9 @@ export class Store {
       )?.last_read ?? 0;
     if (userLastRead > 0)
       members.push({
-        agent_id: "user",
+        agent_id: LOCAL_USER,
         through: userLastRead,
-        name: "你",
+        name: userNames(this).own,
         deleted_at: null,
         deleted_after: null,
       });

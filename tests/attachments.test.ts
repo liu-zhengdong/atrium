@@ -9,6 +9,7 @@ import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
 import { createMcp } from "../server/mcp.ts";
 import { MAX_FILE_BYTES } from "../server/attachments.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -35,16 +36,16 @@ function fixture(t: { after: (fn: () => void) => void }) {
 
 test("图片与文件可绑定发送；空正文只带附件合法", (t) => {
   const { store, a, chat } = fixture(t);
-  const image = store.stage("user", "dot.png", "image/png", PNG);
+  const image = store.stage(LOCAL_USER, "dot.png", "image/png", PNG);
   assert.equal(image.kind, "image");
   const file = store.stage(
-    "user",
+    LOCAL_USER,
     "notes.txt",
     "text/plain",
     Buffer.from("hi"),
   );
   assert.equal(file.kind, "file");
-  const message = store.send("user", {
+  const message = store.send(LOCAL_USER, {
     chat_id: chat.id,
     body: "",
     mentions: [],
@@ -56,7 +57,7 @@ test("图片与文件可绑定发送；空正文只带附件合法", (t) => {
     store.readChat(a.id, chat.id).items[0].attachments[0].name,
     "dot.png",
   );
-  assert.throws(() => store.discardAttachment(image.id, "user"), /已发送/);
+  assert.throws(() => store.discardAttachment(image.id, LOCAL_USER), /已发送/);
 });
 
 test("拒绝越权绑定、超限、空文件、超大文件和伪装图片", (t) => {
@@ -64,7 +65,7 @@ test("拒绝越权绑定、超限、空文件、超大文件和伪装图片", (t
   const foreign = store.stage(a.id, "secret.png", "image/png", PNG);
   assert.throws(
     () =>
-      store.send("user", {
+      store.send(LOCAL_USER, {
         chat_id: chat.id,
         body: "偷",
         mentions: [],
@@ -73,13 +74,13 @@ test("拒绝越权绑定、超限、空文件、超大文件和伪装图片", (t
     /他人的附件/,
   );
   assert.throws(
-    () => store.stage("user", "empty.txt", "text/plain", Buffer.alloc(0)),
+    () => store.stage(LOCAL_USER, "empty.txt", "text/plain", Buffer.alloc(0)),
     /空/,
   );
   assert.throws(
     () =>
       store.stage(
-        "user",
+        LOCAL_USER,
         "big.bin",
         "application/octet-stream",
         Buffer.alloc(MAX_FILE_BYTES + 1),
@@ -88,17 +89,22 @@ test("拒绝越权绑定、超限、空文件、超大文件和伪装图片", (t
   );
   assert.throws(
     () =>
-      store.stage("user", "fake.png", "image/png", Buffer.from("<html>nope")),
+      store.stage(
+        LOCAL_USER,
+        "fake.png",
+        "image/png",
+        Buffer.from("<html>nope"),
+      ),
     /不是有效图片/,
   );
   const ids = Array.from(
     { length: 11 },
     (_, i) =>
-      store.stage("user", `n${i}.txt`, "text/plain", Buffer.from("x")).id,
+      store.stage(LOCAL_USER, `n${i}.txt`, "text/plain", Buffer.from("x")).id,
   );
   assert.throws(
     () =>
-      store.send("user", {
+      store.send(LOCAL_USER, {
         chat_id: chat.id,
         body: "太多",
         mentions: [],
@@ -106,16 +112,25 @@ test("拒绝越权绑定、超限、空文件、超大文件和伪装图片", (t
       }),
     /最多 10/,
   );
-  store.stage("user", "page.html", "text/html", Buffer.from("<html>ok"));
+  store.stage(LOCAL_USER, "page.html", "text/html", Buffer.from("<html>ok"));
 });
 
 test("jpeg/gif/webp 识别为图片；image/jpg 别名可用", (t) => {
   const { store } = fixture(t);
-  assert.equal(store.stage("user", "a.jpg", "image/jpg", JPEG).kind, "image");
-  assert.equal(store.stage("user", "a.gif", "image/gif", GIF).kind, "image");
-  assert.equal(store.stage("user", "a.webp", "image/webp", WEBP).kind, "image");
   assert.equal(
-    store.stage("user", "a.jpg", "image/jpeg", JPEG).mime,
+    store.stage(LOCAL_USER, "a.jpg", "image/jpg", JPEG).kind,
+    "image",
+  );
+  assert.equal(
+    store.stage(LOCAL_USER, "a.gif", "image/gif", GIF).kind,
+    "image",
+  );
+  assert.equal(
+    store.stage(LOCAL_USER, "a.webp", "image/webp", WEBP).kind,
+    "image",
+  );
+  assert.equal(
+    store.stage(LOCAL_USER, "a.jpg", "image/jpeg", JPEG).mime,
     "image/jpeg",
   );
 });
@@ -232,8 +247,8 @@ test("MCP send_message files 与 read_chat 图片块；拒绝目录外路径", a
   const { store, a, b, chat, cwdA, cwdB } = fixture(t);
   store.addMember(chat.id, b.id);
   writeFileSync(join(cwdA, "brief.md"), "# hi");
-  const image = store.stage("user", "dot.png", "image/png", PNG);
-  store.send("user", {
+  const image = store.stage(LOCAL_USER, "dot.png", "image/png", PNG);
+  store.send(LOCAL_USER, {
     chat_id: chat.id,
     body: "见图",
     mentions: [],

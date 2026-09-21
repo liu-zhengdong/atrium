@@ -1,5 +1,5 @@
 import type { Overview } from "../../shared/schema.ts";
-import type { Agent } from "../components/AgentAvatar.tsx";
+import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { Mark } from "../components/Mark.tsx";
 import { GlobalSearch } from "./GlobalSearch.tsx";
 
@@ -11,6 +11,7 @@ export function TopBar({
   details,
   refresh,
   openMessage,
+  openUser,
 }: {
   overview: Overview | null;
   selectChat: (id: string) => void;
@@ -19,7 +20,9 @@ export function TopBar({
   details: (id: string) => void;
   refresh: () => void;
   openMessage: (chatId: string, messageId: number) => void;
+  openUser: () => void;
 }) {
+  const me = overview?.user.name.trim() ?? "";
   return (
     <header
       role="banner"
@@ -43,7 +46,23 @@ export function TopBar({
         refresh={refresh}
         openMessage={openMessage}
       />
-      <div />
+      <div className="flex min-w-0 items-center justify-end">
+        {overview && (
+          <button
+            className="flex min-w-0 items-center gap-2 rounded-[7px] px-2 py-1 hover:bg-[#efeee9]"
+            aria-label="我的资料"
+            title="我的资料"
+            onClick={openUser}
+          >
+            <Avatar name={me || "我"} small />
+            {me && (
+              <span className="truncate text-xs text-[#6c6456] max-[720px]:hidden">
+                {me}
+              </span>
+            )}
+          </button>
+        )}
+      </div>
     </header>
   );
 }

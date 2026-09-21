@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 function storeFixture(t: { after: (fn: () => void) => void }) {
   const store = new Store(":memory:");
@@ -34,7 +35,7 @@ test("会话归属与未读：我的私聊计数、围观会话只报动态、�
   store.send(a.id, { chat_id: direct.id, body: "在吗", mentions: [] });
   assert.equal(directRow().unread, 1);
   // 用户在围观会话里发言（可插话）：自己的发言不产生未读
-  const mine = store.send("user", {
+  const mine = store.send(LOCAL_USER, {
     chat_id: group.id,
     body: "插一句",
     mentions: [],
@@ -96,7 +97,7 @@ test("已读接口：短号解析、单调推进、越过最新消息截断", as
   // 推进后回执里出现「你」
   const state = store.readState(chat.id, 0);
   assert(
-    state.some((s) => s.agent_id === "user"),
+    state.some((s) => s.agent_id === LOCAL_USER),
     "回执含用户已读",
   );
 });
@@ -104,7 +105,7 @@ test("已读接口：短号解析、单调推进、越过最新消息截断", as
 test("围观会话：用户不是成员仍可发言，投递给成员", (t) => {
   const { store, a, b } = storeFixture(t);
   const group = store.createChat("同伴群", [a.id, b.id]);
-  const sent = store.send("user", {
+  const sent = store.send(LOCAL_USER, {
     chat_id: group.id,
     body: "我是围观者",
     mentions: [],

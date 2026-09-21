@@ -9,6 +9,7 @@ import { Store } from "../server/store.ts";
 import { TraceStore } from "../server/trace.ts";
 import { createApp } from "../server/app.ts";
 import type { RuntimeEventPage } from "../shared/trace.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 const generation = () => ({
   runtimeId: randomUUID(),
@@ -138,7 +139,7 @@ test("轨迹查询反向校验与持久化：用户审阅不改变回执", async
   const a = store.createAgent("Atlas", tmpdir()).agent,
     b = store.createAgent("Borealis", tmpdir()).agent;
   const chat = store.createChat("聊天", [a.id]);
-  store.send("user", { chat_id: chat.id, body: "未读", mentions: [] });
+  store.send(LOCAL_USER, { chat_id: chat.id, body: "未读", mentions: [] });
   const traces = new TraceStore(store),
     target = generation();
   traces.ingest(

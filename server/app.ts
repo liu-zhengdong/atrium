@@ -25,6 +25,8 @@ import {
 } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
+import { readUser, writeUser } from "./users.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 export async function createApp(options: {
   data: string;
@@ -141,9 +143,17 @@ export async function createApp(options: {
         unread: store.boxCount(a.id),
       })),
       chats: store.chats(),
+      user: readUser(store),
       discovery,
       desktops_root: displayDesktops(desktops),
     } satisfies Overview;
+  });
+  app.get("/api/user", () => readUser(store));
+  // 资料由用户本人维护，Agent 只能用 user_info 读。
+  app.patch("/api/user", (request) => {
+    const value = writeUser(store, LOCAL_USER, request.body);
+    changed();
+    return value;
   });
   app.get("/api/events", (request, reply) => {
     reply.hijack();
@@ -435,7 +445,12 @@ export async function createApp(options: {
         request.headers["content-type"] ??
         "application/octet-stream",
     );
-    return store.stage("user", name, mime.split(";")[0]!.trim(), request.body);
+    return store.stage(
+      LOCAL_USER,
+      name,
+      mime.split(";")[0]!.trim(),
+      request.body,
+    );
   });
   app.get("/api/attachments/:id", (request, reply) => {
     const { attachment, bytes } = store.readBytes(
@@ -452,11 +467,11 @@ export async function createApp(options: {
       .send(bytes);
   });
   app.delete("/api/attachments/:id", (request) => {
-    store.discardAttachment((request.params as { id: string }).id, "user");
+    store.discardAttachment((request.params as { id: string }).id, LOCAL_USER);
     return { ok: true };
   });
   app.post("/api/messages", (request) => {
-    const result = store.send("user", sendInput.parse(request.body));
+    const result = store.send(LOCAL_USER, sendInput.parse(request.body));
     changed();
     return result;
   });

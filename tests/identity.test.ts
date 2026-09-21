@@ -17,6 +17,7 @@ import { createApp } from "../server/app.ts";
 import { ensureDesktopCwd, existingDirectoryPath } from "../server/agents.ts";
 import { Problem, Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 const require = createRequire(import.meta.url);
 const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
@@ -111,7 +112,11 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
   assert.equal(store.createChat("重复创建", [agent.id], agent.id).id, chat.id);
   const legacy = store.createAgent("旧记录", root).agent;
   const oldChat = store.createChat("旧私聊", [legacy.id], legacy.id);
-  store.send("user", { chat_id: oldChat.id, body: "历史保留", mentions: [] });
+  store.send(LOCAL_USER, {
+    chat_id: oldChat.id,
+    body: "历史保留",
+    mentions: [],
+  });
   store.run(
     "UPDATE agents SET runtime_pid=? WHERE id=?",
     process.pid,

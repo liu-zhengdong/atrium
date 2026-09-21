@@ -3,12 +3,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Message } from "../shared/schema.ts";
 import { mergeMessages } from "../web/chat/messages.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 const message = (id: number, chat_id = "a", body = "message"): Message => ({
   id,
   chat_id,
   body,
-  sender: "user",
+  sender: LOCAL_USER,
   mentions: [],
   created_at: id,
   attachments: [],

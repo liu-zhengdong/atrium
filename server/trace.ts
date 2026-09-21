@@ -134,6 +134,8 @@ export class TraceStore {
         );
       }
       for (const e of page.items) {
+        // name 来自 pi-atrium 的运行事件：工具名，或 message 事件的消息角色（"user" 即
+        // Pi 侧的输入角色）。它不是 Atrium 的用户短号，不跟着 u1 走。
         const name = e.name ?? "",
           text = e.text ?? "";
         if (e.kind === "tool_end") {

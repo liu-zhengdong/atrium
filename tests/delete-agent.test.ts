@@ -19,6 +19,7 @@ import { Runtimes } from "../server/runtime.ts";
 import { Store } from "../server/store.ts";
 import { mergeReadState } from "../web/chat/readState.ts";
 import { packageRoot } from "../server/service-state.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 const require = createRequire(import.meta.url);
 const { claimIdentity } = require("@liuser/pi-atrium/dist/identity.js") as {
@@ -73,7 +74,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     body: "我的历史发言",
     mentions: [],
   });
-  const b = store.send("user", {
+  const b = store.send(LOCAL_USER, {
     chat_id: direct.id,
     body: "历史私聊",
     mentions: [],
@@ -136,7 +137,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
   );
   for (const run of [
     () =>
-      store.send("user", {
+      store.send(LOCAL_USER, {
         chat_id: direct.id,
         body: "不该送出",
         mentions: [],
@@ -144,7 +145,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     () =>
       store.send(agent.id, { chat_id: group.id, body: "复活", mentions: [] }),
     () =>
-      store.send("user", {
+      store.send(LOCAL_USER, {
         chat_id: group.id,
         body: "@已删除",
         mentions: [agent.id],
@@ -157,7 +158,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     assert.throws(run);
   const old = store.timeline(direct.id).read_state[0];
   assert.equal(old.through, b.id);
-  const next = store.send("user", {
+  const next = store.send(LOCAL_USER, {
     chat_id: group.id,
     body: "继续讨论",
     mentions: [other.id],

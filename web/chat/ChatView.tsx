@@ -43,7 +43,12 @@ export function ChatView({
     anchoredId,
     atBottom: conversation.atBottom,
   });
-  useAnchorScroll({ chatId, anchoredId, loading: conversation.loading });
+  const flash = useAnchorScroll({
+    chatId,
+    anchoredId,
+    loading: conversation.loading,
+    scrollToMessage: conversation.scrollToMessage,
+  });
   return (
     <section
       className="chat-panel"
@@ -97,6 +102,7 @@ export function ChatView({
             active={active}
             agents={agents}
             details={details}
+            flash={flash}
             {...conversation}
           />
         </>

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Message, ChatReadState } from "../../shared/schema.ts";
 import { api } from "../api.ts";
 import { mergeReadState } from "./readState.ts";
 import { mergeMessages } from "./messages.ts";
+import { useMessageWindow } from "./useMessageWindow.ts";
 
 type MessagePage = {
   items: Message[];
@@ -86,15 +87,27 @@ export function useConversation(
     };
   }, [revision, chatId, anchorId]);
 
+  // 换会话或请求失败时，不能把上一个会话的消息显示在新标题下面。
+  const visible = useMemo(
+    () => messages.filter((message) => message.chat_id === chatId),
+    [messages, chatId],
+  );
+  const { headerRef, virtualizer, scrollToMessage } = useMessageWindow(
+    visible,
+    scroll,
+  );
+
+  // 贴底时跟住最新消息。总高度变化也要重新贴底，因为行高先按估值算，
+  // 挂载后测出真实高度、图片加载完成都会改变总高度。
+  const totalSize = virtualizer.getTotalSize();
   useEffect(() => {
-    if (nearBottom.current && scroll.current)
-      scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [messages, loading]);
+    if (!nearBottom.current || !scroll.current) return;
+    scroll.current.scrollTop = scroll.current.scrollHeight;
+  }, [messages, loading, totalSize]);
 
   async function loadOlder() {
     if (!chatId) return;
-    const target = chatId,
-      height = scroll.current?.scrollHeight ?? 0;
+    const target = chatId;
     try {
       const page = await api<MessagePage>(
         `/chats/${chatId}/messages?before=${messages[0]?.id}`,
@@ -105,10 +118,6 @@ export function useConversation(
       setReadState((old) => mergeReadState(old, page.read_state));
       setMessages((old) => mergeMessages(old, page.items, target));
       setOlder(page.has_more);
-      requestAnimationFrame(() => {
-        if (currentChat.current === target && scroll.current)
-          scroll.current.scrollTop = scroll.current.scrollHeight - height;
-      });
     } catch (e) {
       if (currentChat.current === target) setError(String(e));
     }
@@ -116,9 +125,10 @@ export function useConversation(
 
   return {
     anchored: anchorId !== undefined,
-    // Before the effect runs, or if the new request fails, never show the
-    // previous conversation's data beneath the newly selected heading.
-    messages: messages.filter((message) => message.chat_id === chatId),
+    messages: visible,
+    headerRef,
+    virtualizer,
+    scrollToMessage,
     members: loadedChat.current === chatId ? members : [],
     readState: loadedChat.current === chatId ? readState : [],
     loading,

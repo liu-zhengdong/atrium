@@ -2,7 +2,7 @@ import { mergeReadState } from "../web/chat/readState.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Message } from "../shared/schema.ts";
-import { mergeMessages } from "../web/chat/messages.ts";
+import { continuationFlags, mergeMessages } from "../web/chat/messages.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
 const message = (id: number, chat_id = "a", body = "message"): Message => ({
@@ -47,6 +47,37 @@ test("聊天历史反向验证：旧会话与混入页面的异会话消息均�
       [11, "refreshed"],
     ],
   );
+});
+
+test("连续发言合并：同人三分钟内算后续，换人或超时重新起头", () => {
+  const at = (id: number, sender: string, created_at: number): Message => ({
+    ...message(id),
+    sender,
+    created_at,
+  });
+  assert.deepEqual(
+    continuationFlags([
+      at(1, "a", 0),
+      at(2, "a", 60000),
+      at(3, "b", 61000),
+      at(4, "b", 400000),
+      at(5, "b", 400001),
+    ]),
+    [false, true, false, false, true],
+  );
+  assert.deepEqual(continuationFlags([]), []);
+});
+
+test("连续发言反向验证：只看渲染窗口会把首条误判成起头", () => {
+  const all = [
+    { ...message(1), sender: "a", created_at: 0 },
+    { ...message(2), sender: "a", created_at: 1000 },
+    { ...message(3), sender: "a", created_at: 2000 },
+  ];
+  // 按完整数组算：第 2、3 条是后续发言
+  assert.deepEqual(continuationFlags(all), [false, true, true]);
+  // 只把窗口内的两条传进去，第 2 条会被当成新起头，多出头像和标题行
+  assert.deepEqual(continuationFlags(all.slice(1)), [false, true]);
 });
 
 test("后端更新前缺少回执字段时不崩溃，也不推测任何 Agent 已读", () => {

@@ -17,6 +17,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { createApp } from "../server/app.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 import { verifyIdentity } from "./probe-identity.mjs";
 
 const folder = mkdtempSync(join(tmpdir(), "atrium-proof-"));
@@ -350,7 +351,7 @@ try {
       /另一个 Agent/,
     );
     assert(runtimes.connections.has(agent.id), "拒绝冲突接入不能断开原 Agent");
-    store.send("user", {
+    store.send(LOCAL_USER, {
       chat_id: chatId,
       body: `@${agent.name} ATR_INSERT：请通过 Chat 工具回复`,
       mentions: [agent.id],
@@ -449,7 +450,7 @@ try {
       process.env.PI_CODING_AGENT_DIR = profile;
       store.configure(rpcAgent.id, { auto_start: true });
       const wakeChat = store.createChat("自动唤醒验证", [rpcAgent.id]);
-      store.send("user", {
+      store.send(LOCAL_USER, {
         chat_id: wakeChat.id,
         body: "自动启动验证",
         mentions: [rpcAgent.id],

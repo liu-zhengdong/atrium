@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -19,6 +21,7 @@ import {
   isBundledPackagePath,
   parseGitPackage,
   prepareProfile,
+  syncIdentityNotes,
   syncIdentityPackages,
   templatePackagePath,
 } from "../server/profile.ts";
@@ -216,6 +219,122 @@ test("syncIdentityPackages 覆盖已有 settings 里的死合集路径", () => {
       packages: string[];
     };
     assert.deepEqual(updated.packages, [other, bridge]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** A template whose notes live in a personal vault outside it, plus one identity. */
+function vaultTemplate(prefix: string) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const template = join(root, "template"),
+    vault = join(root, "vault"),
+    identity = join(root, "identity");
+  mkdirSync(template);
+  mkdirSync(join(vault, "self-evolution"), { recursive: true });
+  mkdirSync(join(identity, "notes"), { recursive: true });
+  writeFileSync(
+    join(template, "notes.json"),
+    JSON.stringify({ directory: vault }),
+  );
+  writeFileSync(join(vault, "USER.md"), "模板里的用户理解");
+  writeFileSync(join(vault, "self-evolution.md"), "协议正文");
+  writeFileSync(join(vault, "self-evolution-Evolution.md"), "协议历史");
+  writeFileSync(
+    join(vault, "self-evolution", "user-understanding.md"),
+    "子笔记",
+  );
+  writeFileSync(join(vault, "密钥管理.md"), "个人笔记");
+  return { root, template, vault, identity, notes: join(identity, "notes") };
+}
+
+test("syncIdentityNotes 补齐旧身份缺的协议笔记，不覆盖它自己的副本", () => {
+  const { root, template, identity, notes } =
+    vaultTemplate("atrium-sync-notes-");
+  writeFileSync(
+    join(identity, "notes.json"),
+    JSON.stringify({ directory: notes }),
+  );
+  writeFileSync(join(notes, "USER.md"), "身份自己改过的用户理解");
+  try {
+    syncIdentityNotes(identity, template);
+    assert.equal(
+      readFileSync(join(notes, "self-evolution.md"), "utf8"),
+      "协议正文",
+    );
+    assert.equal(
+      readFileSync(join(notes, "self-evolution-Evolution.md"), "utf8"),
+      "协议历史",
+    );
+    assert.equal(
+      readFileSync(
+        join(notes, "self-evolution", "user-understanding.md"),
+        "utf8",
+      ),
+      "子笔记",
+    );
+    assert.equal(
+      readFileSync(join(notes, "USER.md"), "utf8"),
+      "身份自己改过的用户理解",
+    );
+    assert(!existsSync(join(notes, "密钥管理.md")));
+    // Idempotent: a second start must not resurrect or rewrite anything.
+    writeFileSync(join(notes, "self-evolution.md"), "身份改过的协议");
+    syncIdentityNotes(identity, template);
+    assert.equal(
+      readFileSync(join(notes, "self-evolution.md"), "utf8"),
+      "身份改过的协议",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Every path under dir, so a write anywhere outside the target shows up. */
+function walk(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    found.push(path);
+    if (entry.isDirectory()) found.push(...walk(path));
+  }
+  return found.sort();
+}
+
+test("syncIdentityNotes 只写身份自己的 notes 目录", () => {
+  const { root, template, vault, identity, notes } = vaultTemplate(
+    "atrium-sync-notes-bad-",
+  );
+  writeFileSync(join(identity, "notes.json"), "{}");
+  const before = walk(root);
+  const rejected = [
+    vault,
+    "../vault",
+    "~/Obsidian笔记",
+    join(root, "elsewhere"),
+    join(notes, "deeper"),
+    42,
+    null,
+  ];
+  try {
+    for (const directory of rejected) {
+      writeFileSync(
+        join(identity, "notes.json"),
+        JSON.stringify({ directory }),
+      );
+      syncIdentityNotes(identity, template);
+      assert.deepEqual(walk(root), before, String(directory));
+    }
+    // No notes.json on either side is a no-op, not a crash.
+    rmSync(join(identity, "notes.json"));
+    syncIdentityNotes(identity, template);
+    writeFileSync(
+      join(identity, "notes.json"),
+      JSON.stringify({ directory: notes }),
+    );
+    rmSync(join(template, "notes.json"));
+    syncIdentityNotes(identity, template);
+    assert.deepEqual(readdirSync(notes), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api.ts";
 
 /** 滚到底且不是在翻历史时，把已读位置推到最新。 */
@@ -30,27 +30,35 @@ export function useReadReporter({
   }, [chatId, latest, hidden, anchoredId]);
 }
 
-/** 搜索或群文件跳转后，把目标消息滚到中间并闪一下。 */
+/**
+ * 搜索或群文件跳转后，把目标消息滚到中间并闪一下。
+ * 返回要高亮的消息 id：目标可能不在渲染窗口里，高亮交给列表按数据渲染，不查 DOM。
+ */
 export function useAnchorScroll({
   chatId,
   anchoredId,
   loading,
+  scrollToMessage,
 }: {
   chatId: string | null;
   anchoredId: number | undefined;
   loading: boolean;
+  scrollToMessage: (id: number) => boolean;
 }) {
   const scrolledTo = useRef("");
+  const [flash, setFlash] = useState<number | null>(null);
   useEffect(() => {
     if (!anchoredId || loading) return;
     const key = `${chatId}:${anchoredId}`;
     if (scrolledTo.current === key) return;
-    const target = document.getElementById(`msg-${anchoredId}`);
-    if (!target) return;
+    if (!scrollToMessage(anchoredId)) return;
     scrolledTo.current = key;
-    target.scrollIntoView({ block: "center" });
-    target.classList.add("flash");
-    const timer = setTimeout(() => target.classList.remove("flash"), 2400);
+    setFlash(anchoredId);
+  }, [anchoredId, loading, chatId, scrollToMessage]);
+  useEffect(() => {
+    if (flash === null) return;
+    const timer = setTimeout(() => setFlash(null), 2400);
     return () => clearTimeout(timer);
-  }, [anchoredId, loading, chatId]);
+  }, [flash]);
+  return flash;
 }

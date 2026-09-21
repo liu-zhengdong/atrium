@@ -25,6 +25,7 @@
     "@liuser/pi-atrium": "github:liu-zhengdong/pi-atrium",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@radix-ui/react-popover": "^1.1.23",
+    "@tanstack/react-virtual": "^3.14.13",
     "fastify": "^5.12.5",
     "lucide-react": "^1.46.0",
     "react": "^19.3.0",

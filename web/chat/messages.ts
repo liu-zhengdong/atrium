@@ -14,3 +14,15 @@ export function mergeMessages(
     ).values(),
   ].sort((a, b) => a.id - b.id);
 }
+
+/** 同一个人三分钟内的后续发言合并显示：不重复头像和标题行，间距收窄。 */
+export function continuationFlags(messages: Message[]): boolean[] {
+  return messages.map((message, index) => {
+    const previous = messages[index - 1];
+    return (
+      previous !== undefined &&
+      previous.sender === message.sender &&
+      message.created_at - previous.created_at < 180000
+    );
+  });
+}

@@ -111,7 +111,8 @@ export class Store {
         body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, UNIQUE(sender,client_id));
       CREATE INDEX IF NOT EXISTS messages_chat_id ON messages(chat_id,id);
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, message_id INTEGER REFERENCES messages(id),
-        uploader TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL);
+        uploader TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL,
+        chat_id TEXT REFERENCES chats(id));
       CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id);
       CREATE INDEX IF NOT EXISTS members_agent ON members(agent_id,chat_id);
       CREATE TABLE IF NOT EXISTS chat_read_ranges (chat_id TEXT NOT NULL, agent_id TEXT NOT NULL,
@@ -163,6 +164,23 @@ export class Store {
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS inbox_pending ON inbox(agent_id,id) WHERE done_at IS NULL",
     );
+    // 附件本来只指向消息，按会话找文件要 JOIN messages 扫遍整个会话的消息。
+    // 写一份冗余的 chat_id，这类查询变成一次索引扫描。
+    if (!this.columns("attachments").includes("chat_id")) {
+      this.db.exec(
+        "ALTER TABLE attachments ADD COLUMN chat_id TEXT REFERENCES chats(id)",
+      );
+      this.db.exec(
+        `UPDATE attachments SET chat_id=(SELECT chat_id FROM messages WHERE id=attachments.message_id)
+         WHERE message_id IS NOT NULL`,
+      );
+    }
+    // 索引条目末尾自带 rowid，所以前缀等值匹配后按 rowid 倒序不需要再排序；
+    // rowid 也不能写进索引列（messages.id 是它的别名，那个可以）。
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS attachments_chat ON attachments(chat_id,kind);
+      CREATE INDEX IF NOT EXISTS attachments_kind ON attachments(kind);
+      CREATE INDEX IF NOT EXISTS messages_sender ON messages(sender,id);`);
     this.db.exec("DROP INDEX IF EXISTS inbox_chat_pending");
     this.db.exec(
       "CREATE UNIQUE INDEX inbox_chat_pending ON inbox(agent_id,chat_id) WHERE source='chat' AND done_at IS NULL",
@@ -700,7 +718,7 @@ export class Store {
         created_at,
         attachments: [] as Attachment[],
       };
-      this.bindAttachments(sender, message.id, attachments);
+      this.bindAttachments(sender, chat.id, message.id, attachments);
       const bound = this.attachmentsFor(message.id);
       // 发送者对外的短号与名字：Agent 用身份名，用户用资料里的称呼。
       const author = isUserRef(sender) ? null : this.agent(sender);
@@ -844,7 +862,12 @@ export class Store {
       throw new Problem(404, "附件不存在");
     }
   }
-  private bindAttachments(sender: string, messageId: number, ids: string[]) {
+  private bindAttachments(
+    sender: string,
+    chatId: string,
+    messageId: number,
+    ids: string[],
+  ) {
     if (ids.length > MAX_ATTACHMENTS)
       throw new Problem(400, "每条消息最多 10 个附件");
     if (new Set(ids).size !== ids.length) throw new Problem(400, "附件重复");
@@ -856,7 +879,12 @@ export class Store {
       if (!row) throw new Problem(400, "附件不存在");
       if (row.message_id) throw new Problem(409, "附件已用于其他消息");
       if (row.uploader !== sender) throw new Problem(403, "不能使用他人的附件");
-      this.run("UPDATE attachments SET message_id=? WHERE id=?", messageId, id);
+      this.run(
+        "UPDATE attachments SET message_id=?, chat_id=? WHERE id=?",
+        messageId,
+        chatId,
+        id,
+      );
     }
   }
   private hydrate(messages: Message[]): Message[] {

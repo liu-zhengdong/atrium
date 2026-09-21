@@ -26,7 +26,8 @@ import {
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 import { readUser, writeUser } from "./users.ts";
-import { chatFiles, removeMember, searchChat, updateGroup } from "./groups.ts";
+import { removeMember, updateGroup } from "./groups.ts";
+import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { groupName } from "../shared/group.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
@@ -398,16 +399,13 @@ export async function createApp(options: {
     changed();
     return chat;
   });
-  app.get("/api/chats/:id/files", (request) => {
-    const q = z
-      .object({ before: z.coerce.number().int().positive().optional() })
-      .parse(request.query);
-    return chatFiles(store, agentParams(request), q.before);
-  });
-  app.get("/api/chats/:id/search", (request) => {
-    const q = String((request.query as { q?: string }).q ?? "");
-    return searchChat(store, agentParams(request), q);
-  });
+  // 聊天记录：会话、发送者、时间范围三个筛选两边共用，内容形状不同所以分两条。
+  app.get("/api/records/messages", (request) =>
+    messageRecords(store, recordQuery.parse(request.query)),
+  );
+  app.get("/api/records/files", (request) =>
+    fileRecords(store, recordQuery.parse(request.query)),
+  );
   app.get("/api/chats/:id/messages", (request) => {
     const q = z
       .object({

@@ -8,12 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
 import { deliveryPlan } from "../server/delivery.ts";
-import {
-  chatFiles,
-  removeMember,
-  searchChat,
-  updateGroup,
-} from "../server/groups.ts";
+import { removeMember, updateGroup } from "../server/groups.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import { mentionsAll } from "../shared/mentions.ts";
 
@@ -239,61 +234,6 @@ test("移出成员：撤销读写、收回提醒、回执不再列出，坏输�
   );
 });
 
-test("群文件聚合与群内搜索：只看本会话，坏输入拒绝", (t) => {
-  const store = new Store(":memory:");
-  t.after(() => store.close());
-  const atlas = store.createAgent("Atlas", tmpdir()).agent;
-  const group = store.createChat("协作群", [atlas.id]);
-  const other = store.createChat("另一个群", [atlas.id]);
-
-  const staged = store.stage(
-    LOCAL_USER,
-    "说明.txt",
-    "text/plain",
-    Buffer.from("hello"),
-  );
-  store.send(LOCAL_USER, {
-    chat_id: group.id,
-    body: "带附件",
-    mentions: [],
-    attachments: [staged.id],
-  });
-  const elsewhere = store.stage(
-    LOCAL_USER,
-    "别处.txt",
-    "text/plain",
-    Buffer.from("nope"),
-  );
-  store.send(LOCAL_USER, {
-    chat_id: other.id,
-    body: "别处的附件",
-    mentions: [],
-    attachments: [elsewhere.id],
-  });
-  store.send(LOCAL_USER, { chat_id: group.id, body: "找得到我", mentions: [] });
-  store.send(LOCAL_USER, { chat_id: other.id, body: "找得到我", mentions: [] });
-
-  const files = chatFiles(store, group.id);
-  assert.deepEqual(
-    files.items.map((file) => file.name),
-    ["说明.txt"],
-    "只聚合本会话的附件",
-  );
-  assert.equal(files.items[0]!.uploader_name, "你");
-  assert.equal(files.has_more, false);
-
-  const hits = searchChat(store, group.id, "找得到我");
-  assert.equal(hits.items.length, 1, "搜索不跨会话");
-  assert.equal(hits.items[0]!.sender_name, "你");
-  assert.equal(searchChat(store, group.id, "不存在的词").items.length, 0);
-  assert.throws(() => searchChat(store, group.id, "   "), /缺少搜索词/);
-  assert.equal(
-    searchChat(store, group.id, "%").items.length,
-    0,
-    "通配符按字面搜索",
-  );
-});
-
 test("群接口与工具边界：HTTP 坏输入拒绝，@ 全体不出现在 Agent 工具里", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-group-"));
   const { app, store } = await createApp({
@@ -339,11 +279,6 @@ test("群接口与工具边界：HTTP 坏输入拒绝，@ 全体不出现在 Age
       400,
       `应拒绝 ${JSON.stringify(bad)}`,
     );
-  assert.equal(
-    (await request(`/api/chats/${group.id}/search`)).status,
-    400,
-    "缺少搜索词",
-  );
   assert.equal(
     (
       await request(

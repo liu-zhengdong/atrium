@@ -132,21 +132,41 @@ export type Chat = {
   preview: string | null;
   updated_at: number;
 };
+/** 一条命中的消息：带上所属会话，因为结果可能跨会话。 */
+export type MessageHit = {
+  chat_id: string;
+  chat_ref: string;
+  chat_name: string;
+  id: number;
+  sender: string;
+  sender_name: string;
+  text: string;
+  created_at: number;
+};
 /** 综合搜索：会话（含已隐藏）、消息、Agent。 */
 export type SearchResults = {
   chats: Chat[];
-  messages: {
-    chat_id: string;
-    chat_ref: string;
-    chat_name: string;
-    id: number;
-    sender: string;
-    sender_name: string;
-    text: string;
-    created_at: number;
-  }[];
+  messages: MessageHit[];
   agents: { id: string; ref: string; name: string; description: string }[];
 };
+/** 聊天记录里的一个附件。cursor 是翻页游标，按它倒序。 */
+export type FileRecord = {
+  id: string;
+  chat_id: string;
+  chat_ref: string;
+  chat_name: string;
+  message_id: number;
+  kind: "image" | "file";
+  name: string;
+  mime: string;
+  size: number;
+  created_at: number;
+  uploader: string;
+  uploader_name: string;
+  cursor: number;
+};
+/** 倒序翻页的一页：游标在每条自己身上（消息用 id，附件用 cursor）。 */
+export type RecordPage<T> = { items: T[]; has_more: boolean };
 export type Message = {
   id: number;
   chat_id: string;

@@ -29,7 +29,7 @@ import {
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import { ensureUsers, userNames } from "./users.ts";
 import { ensureGroups } from "./groups.ts";
-import { UnreadCache, type UnreadChat } from "./unread.ts";
+import { cappedCount, type UnreadChat } from "./unread.ts";
 import {
   assertCanSend,
   deliveryPlan,
@@ -92,7 +92,6 @@ function bounded<T extends { id: number }>(
 export class Store {
   readonly db: DatabaseSync;
   readonly files: AttachmentFiles;
-  readonly unreadCache = new UnreadCache();
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.files = new AttachmentFiles(attachmentsDir(path));
@@ -104,9 +103,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS peer_chats (first_agent TEXT NOT NULL REFERENCES agents(id), second_agent TEXT NOT NULL REFERENCES agents(id),
         chat_id TEXT UNIQUE NOT NULL REFERENCES chats(id), PRIMARY KEY(first_agent,second_agent));
       CREATE TABLE IF NOT EXISTS members (chat_id TEXT REFERENCES chats(id), agent_id TEXT REFERENCES agents(id), last_read INTEGER NOT NULL DEFAULT 0,
-        last_notified INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(chat_id,agent_id));
+        PRIMARY KEY(chat_id,agent_id));
       CREATE TABLE IF NOT EXISTS user_reads (chat_id TEXT PRIMARY KEY, last_read INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS user_chat_state (chat_id TEXT PRIMARY KEY, hidden_after INTEGER, pinned INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS user_chat_state (chat_id TEXT PRIMARY KEY, hidden_after INTEGER, pinned INTEGER NOT NULL DEFAULT 0,
+        participated INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL REFERENCES chats(id), sender TEXT NOT NULL,
         body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, UNIQUE(sender,client_id));
       CREATE INDEX IF NOT EXISTS messages_chat_id ON messages(chat_id,id);
@@ -169,6 +169,9 @@ export class Store {
     );
     this.db.exec("DROP TABLE IF EXISTS subscriptions");
     this.db.exec("DROP TABLE IF EXISTS webhooks");
+    // last_notified 从未被写入，未读摘要里的 fresh 恒等于 count，两者一并去掉。
+    if (this.columns("members").includes("last_notified"))
+      this.db.exec("ALTER TABLE members DROP COLUMN last_notified");
     const columns = this.all<{ name: string }>("PRAGMA table_info(agents)").map(
       (c) => c.name,
     );
@@ -219,6 +222,15 @@ export class Store {
   }
   run(sql: string, ...args: SQLInputValue[]) {
     return this.db.prepare(sql).run(...args);
+  }
+  columns(table: string) {
+    return this.all<{ name: string }>(`PRAGMA table_info(${table})`).map(
+      (row) => row.name,
+    );
+  }
+  addColumn(table: string, column: string, type: string) {
+    if (!this.columns(table).includes(column))
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
   transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -352,7 +364,6 @@ export class Store {
         "UPDATE deliveries SET state='cancelled',slot=NULL,error=NULL WHERE agent_id=? AND state='pending'",
         id,
       );
-      this.unreadCache.forget(id);
     };
     // The runtime holds the cross-process launch transaction and pi-acp lease.
     if (this.db.isTransaction) remove();
@@ -391,13 +402,12 @@ export class Store {
     return this.all<Chat>(
       `SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only, (SELECT CASE WHEN length(trim(body))>0 THEN substr(body,1,100) WHEN EXISTS(SELECT 1 FROM attachments WHERE message_id=messages.id AND kind='image') THEN '[图片]' WHEN EXISTS(SELECT 1 FROM attachments WHERE message_id=messages.id) THEN '[文件]' ELSE substr(body,1,100) END FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1) AS preview,
       COALESCE((SELECT created_at FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1),0) AS updated_at,
-      (c.direct_agent IS NOT NULL OR EXISTS(SELECT 1 FROM messages WHERE chat_id=c.id AND sender=?)) AS mine,
-      (SELECT COUNT(*) FROM messages WHERE chat_id=c.id AND sender!=? AND id>COALESCE((SELECT last_read FROM user_reads WHERE chat_id=c.id),0)) AS unread,
+      (c.direct_agent IS NOT NULL OR COALESCE(us.participated,0)) AS mine,
+      ${cappedCount("SELECT 1 FROM messages WHERE chat_id=c.id AND sender!=? AND id>COALESCE((SELECT last_read FROM user_reads WHERE chat_id=c.id),0)", "id")} AS unread,
       COALESCE((SELECT group_concat(name,char(31)) FROM (SELECT a.name AS name FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id ORDER BY m.rowid LIMIT 4)),'') AS member_names,
       COALESCE(us.pinned,0) AS pinned, (us.hidden_after IS NOT NULL) AS hidden
       FROM chats c JOIN chat_refs r ON r.chat_id=c.id LEFT JOIN user_chat_state us ON us.chat_id=c.id
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY pinned DESC, updated_at DESC,c.rowid DESC`,
-      LOCAL_USER,
       LOCAL_USER,
       ...params,
     ).map((chat) => ({
@@ -550,14 +560,12 @@ export class Store {
         directAgent ? "direct" : "group",
         directAgent ?? null,
       );
-      for (const agent of new Set(members)) {
+      for (const agent of new Set(members))
         this.run(
           "INSERT INTO members(chat_id,agent_id) VALUES(?,?)",
           id,
           agent,
         );
-        this.unreadCache.forget(agent);
-      }
       if (invitedBy)
         for (const member of new Set(members))
           if (member !== invitedBy) this.inviteNotice(invitedBy, id, member);
@@ -630,7 +638,6 @@ export class Store {
       chatId,
       agentId,
     );
-    this.unreadCache.forget(agentId);
     return this.members(chatId);
   }
   members(chatId: string) {
@@ -697,6 +704,12 @@ export class Store {
       const bound = this.attachmentsFor(message.id);
       // 发送者对外的短号与名字：Agent 用身份名，用户用资料里的称呼。
       const author = isUserRef(sender) ? null : this.agent(sender);
+      // 用户发过言的会话就是「我的」：置一次标志，代替列表里每次全表找用户发言。
+      if (isUserRef(sender))
+        this.run(
+          "INSERT INTO user_chat_state(chat_id,participated) VALUES(?,1) ON CONFLICT(chat_id) DO UPDATE SET participated=1",
+          chat.id,
+        );
       const senderName = author?.name ?? userNames(this, sender).peer;
       const members = this.members(chat.id);
       const plan = deliveryPlan({
@@ -741,7 +754,6 @@ export class Store {
           chat.id,
           created_at,
         );
-      for (const member of members) this.unreadCache.forget(member);
       return this.hydrate([message])[0]!;
     });
   }
@@ -943,7 +955,6 @@ export class Store {
         through,
       );
     }
-    this.unreadCache.forget(agentId);
   }
   readChat(agentId: string, chatId: string, after?: number, limit = 20) {
     this.assertMember(chatId, agentId);
@@ -1048,19 +1059,18 @@ export class Store {
       ),
     };
   }
-  unread(agentId: string) {
-    const cached = this.unreadCache.get(agentId);
-    if (cached) return cached;
-    const result = this.all<UnreadChat>(
-      `SELECT c.id AS chat_id,c.name,COUNT(m.id) AS count,
-      COALESCE(SUM(CASE WHEN m.id>r.last_notified THEN 1 ELSE 0 END),0) AS fresh,COALESCE(MAX(m.id),0) AS latest
-      FROM members r JOIN chats c ON c.id=r.chat_id LEFT JOIN messages m ON m.chat_id=c.id AND m.id>r.last_read AND m.sender!=r.agent_id
-      AND m.id>COALESCE((SELECT seen.last_id FROM chat_read_ranges seen WHERE seen.chat_id=r.chat_id AND seen.agent_id=r.agent_id AND seen.first_id<=m.id ORDER BY seen.first_id DESC LIMIT 1),0)
-      WHERE r.agent_id=? GROUP BY c.id HAVING count>0`,
+  /** 自己在每个会话里的未读数，封顶 UNREAD_CAP+1；已读区间覆盖的消息不算。 */
+  unread(agentId: string): UnreadChat[] {
+    return this.all<UnreadChat>(
+      `SELECT * FROM (SELECT c.id AS chat_id,c.name,
+      ${cappedCount(
+        `SELECT 1 FROM messages m WHERE m.chat_id=r.chat_id AND m.id>r.last_read AND m.sender!=r.agent_id
+      AND m.id>COALESCE((SELECT seen.last_id FROM chat_read_ranges seen WHERE seen.chat_id=r.chat_id AND seen.agent_id=r.agent_id AND seen.first_id<=m.id ORDER BY seen.first_id DESC LIMIT 1),0)`,
+        "m.id",
+      )} AS count
+      FROM members r JOIN chats c ON c.id=r.chat_id WHERE r.agent_id=?) WHERE count>0`,
       agentId,
     );
-    this.unreadCache.set(agentId, result);
-    return result;
   }
   box(
     id: string,

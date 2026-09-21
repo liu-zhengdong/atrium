@@ -102,6 +102,14 @@ export const liveRuntimeSchema = runtimeSchema
 export type LiveRuntime = z.infer<typeof liveRuntimeSchema> & {
   bound_agent?: string | null;
 };
+/**
+ * 未读计数封顶。超过 99 之后精确数字不改变任何判断（用户只需要知道「很多」，
+ * Agent 照样一页页读到底），封顶换来计数代价与历史规模无关。
+ */
+export const UNREAD_CAP = 99;
+/** 徽标与提示文案；UNREAD_CAP+1 表示「及以上」。 */
+export const unreadLabel = (count: number) =>
+  count > UNREAD_CAP ? `${UNREAD_CAP}+` : String(count);
 export type Chat = {
   id: string;
   ref: string;
@@ -113,7 +121,7 @@ export type Chat = {
   read_only?: boolean;
   /** 用户参与的会话（私聊或发过言的群）；否则为围观。 */
   mine?: boolean;
-  /** 用户未读消息数；围观会话用于显示淡点。 */
+  /** 用户未读消息数，封顶 UNREAD_CAP+1；围观会话用于显示淡点。 */
   unread?: number;
   /** 前几位成员名字，用于合成会话头像。 */
   member_names?: string[];

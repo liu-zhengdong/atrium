@@ -21,6 +21,7 @@ import { createApp } from "../server/app.ts";
 import { receiveInbox, writeGithubTemplate } from "../server/adapters.ts";
 import { displayDesktops, defaultDesktops } from "../server/agents.ts";
 import { resolveMentions } from "../shared/mentions.ts";
+import { UNREAD_CAP, unreadLabel } from "../shared/schema.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
 function fixture(t: { after: (fn: () => void) => void }) {
@@ -191,7 +192,7 @@ test("@ 名称含空格、点、前缀重叠；拒绝误匹配与非成员", () 
   assert.deepEqual(resolveMentions("@Atlas @Atlas", agents), ["a"]);
 });
 
-test("十万条消息：冷／热未读与会话列表；写入、阅读使缓存失效", (t) => {
+test("十万条消息：未读封顶 99+，会话列表与未读摘要不随规模变慢", (t) => {
   const { store, a, chat, send } = fixture(t);
   const insert = store.db.prepare(
     "INSERT INTO messages(chat_id,sender,body,mentions,created_at) VALUES(?,?,?,?,?)",
@@ -199,25 +200,51 @@ test("十万条消息：冷／热未读与会话列表；写入、阅读使缓�
   store.transaction(() => {
     for (let i = 0; i < 100000; i++)
       insert.run(chat.id, LOCAL_USER, "规模样本", "[]", Date.now());
+    // 用户的未读数只数别人发的，单独造一批越过封顶的
+    for (let i = 0; i < 150; i++)
+      insert.run(chat.id, a.id, "Agent 发言", "[]", Date.now());
   });
-  const start = performance.now();
-  assert.equal(store.unread(a.id)[0].count, 100000);
-  const cold = performance.now() - start;
-  const hotStart = performance.now();
-  for (let i = 0; i < 1000; i++) store.unread(a.id);
-  const hot = performance.now() - hotStart;
-  const listStart = performance.now();
-  for (let i = 0; i < 100; i++) store.chats();
-  const lists = performance.now() - listStart;
+  // 封顶值的含义是「及以上」，不是精确数字
+  assert.equal(store.unread(a.id)[0].count, UNREAD_CAP + 1);
+  assert.equal(store.chats()[0].unread, UNREAD_CAP + 1);
+  assert.equal(unreadLabel(store.chats()[0].unread!), "99+");
+
+  // 同一个库里和封顶前的全量计数对照：换机器也成立，不依赖绝对耗时
+  const ms = (fn: () => unknown, runs = 5) => {
+    const times: number[] = [];
+    for (let i = 0; i < runs; i++) {
+      const start = performance.now();
+      fn();
+      times.push(performance.now() - start);
+    }
+    return times.sort((x, y) => x - y)[Math.floor(runs / 2)]!;
+  };
+  const fullCount = store.db.prepare(
+    "SELECT COUNT(*) AS c FROM messages WHERE chat_id=? AND sender!=? AND id>0",
+  );
+  const capped = ms(() => {
+    store.unread(a.id);
+    store.chats();
+  });
+  const linear = ms(() => fullCount.get(chat.id, a.id));
+  assert.ok(
+    capped * 10 < linear,
+    `封顶后的未读与列表 ${capped.toFixed(2)}ms 应远快于全量计数 ${linear.toFixed(2)}ms`,
+  );
+
   send("新增");
-  assert.equal(store.unread(a.id)[0].count, 100001);
   store.readChat(a.id, chat.id, undefined, 20);
-  assert.equal(store.unread(a.id)[0].count, 99981);
+  assert.equal(
+    store.unread(a.id)[0].count,
+    UNREAD_CAP + 1,
+    "读掉一页后仍在封顶之上",
+  );
   assert.equal(
     store.readState(chat.id, 0)[0].ranges.length,
     0,
     "顺序阅读不增加逐消息回执",
   );
+  // 碎片化已读区间：封顶查询仍然要排除区间覆盖的消息
   store.transaction(() => {
     for (let i = 100; i < 100000; i += 100)
       store.run(
@@ -229,17 +256,15 @@ test("十万条消息：冷／热未读与会话列表；写入、阅读使缓�
       );
   });
   store.readChat(a.id, chat.id, undefined, 1);
-  const fragmentedStart = performance.now();
-  assert.equal(store.unread(a.id)[0].count, 100001 - 21 - 999 * 30);
-  const fragmented = performance.now() - fragmentedStart;
+  const fragmented = ms(() => store.unread(a.id));
+  assert.equal(store.unread(a.id)[0].count, UNREAD_CAP + 1);
   console.log(
     JSON.stringify({
       benchmark: "100k-messages",
       read_ranges: 999,
-      fragmented_cold_ms: +fragmented.toFixed(2),
-      cold_ms: +cold.toFixed(2),
-      hot_1000_ms: +hot.toFixed(2),
-      lists_100_ms: +lists.toFixed(2),
+      capped_ms: +capped.toFixed(2),
+      linear_count_ms: +linear.toFixed(2),
+      fragmented_ms: +fragmented.toFixed(2),
     }),
   );
 });

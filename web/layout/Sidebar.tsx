@@ -1,5 +1,5 @@
 import { EyeOff, MessageSquare, Pin, PinOff, Plus, Users } from "lucide-react";
-import type { Overview } from "../../shared/schema.ts";
+import { unreadLabel, type Overview } from "../../shared/schema.ts";
 import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
 import { convTime } from "../time.ts";
@@ -151,7 +151,9 @@ export function Sidebar({
                       </small>
                       {(chat.unread ?? 0) > 0 &&
                         (chat.mine ? (
-                          <span className="badge">{chat.unread}</span>
+                          <span className="badge">
+                            {unreadLabel(chat.unread ?? 0)}
+                          </span>
                         ) : (
                           <span
                             className="h-[7px] w-[7px] flex-none rounded-full bg-[#b6ac99]"

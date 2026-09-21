@@ -189,7 +189,7 @@ export function createMcp(
   );
   tool(
     "list_chats",
-    "列出自己加入的会话与未读数；id 为 c1 等固定短号，可直接读写。通过 offset 翻页。",
+    "列出自己加入的会话与未读数；id 为 c1 等固定短号，可直接读写。未读数最多报到 100，表示 100 条及以上。通过 offset 翻页。",
     { offset: z.number().int().min(0).default(0) },
     ({ offset }) => {
       const chats = store.chats(agentId),

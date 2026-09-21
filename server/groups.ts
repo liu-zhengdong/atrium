@@ -6,16 +6,8 @@ import { groupProfileInput } from "../shared/group.ts";
 
 /** 群自己的两件事：可改的名字和一条公告。 */
 export function ensureGroups(store: Store) {
-  addColumn(store, "chats", "notice", "TEXT NOT NULL DEFAULT ''");
-  addColumn(store, "messages", "mention_all", "INTEGER NOT NULL DEFAULT 0");
-}
-
-function addColumn(store: Store, table: string, column: string, type: string) {
-  const existing = store
-    .all<{ name: string }>(`PRAGMA table_info(${table})`)
-    .map((row) => row.name);
-  if (!existing.includes(column))
-    store.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  store.addColumn("chats", "notice", "TEXT NOT NULL DEFAULT ''");
+  store.addColumn("messages", "mention_all", "INTEGER NOT NULL DEFAULT 0");
 }
 
 function group(store: Store, chatId: string) {
@@ -94,7 +86,6 @@ export function removeMember(store: Store, chatId: string, agentId: string) {
       `已退出群 · ${chat.name}`,
       `用户把你移出了群「${chat.name}」（${chat.ref}）。你不再能读取或发送这个群的消息，本群未处理的提醒已收回。`,
     );
-    store.unreadCache.forget(agentId);
     return store.members(chatId);
   });
 }

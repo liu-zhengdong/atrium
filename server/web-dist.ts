@@ -83,9 +83,16 @@ export async function ensureWebDist(
   await withBuildLock(root, async () => {
     if (!webDistStale(root)) return;
     console.log("Web 源码已更新，正在构建…");
-    await build(root);
-    if (!existsSync(join(root, "dist/index.html")))
-      throw new Error(`Web 构建后仍缺少 ${join(root, "dist/index.html")}`);
+    try {
+      await build(root);
+      if (!existsSync(join(root, "dist/index.html")))
+        throw new Error(`Web 构建后仍缺少 ${join(root, "dist/index.html")}`);
+    } catch (error) {
+      // 构建失败时 vite 可能已经写出 index.html。
+      // 留着它会让下次启动判定 dist 是最新的，把一份不完整的产物发给浏览器，整页白屏。
+      rmSync(join(root, "dist/index.html"), { force: true });
+      throw error;
+    }
     built = true;
   });
   return built;

@@ -41,6 +41,8 @@ export const sendInput = z
     mentions: z.array(id).max(30).default([]),
     client_id: id.optional(),
     attachments: z.array(id).max(10).default([]),
+    /** @ 全体：只有用户能用，投递给群内每位成员。 */
+    mention_all: z.boolean().default(false),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -105,6 +107,8 @@ export type Chat = {
   ref: string;
   name: string;
   kind: "group" | "direct";
+  /** 群公告，由用户维护；空串表示没有公告。 */
+  notice: string;
   direct_agent: string | null;
   read_only?: boolean;
   /** 用户参与的会话（私聊或发过言的群）；否则为围观。 */
@@ -143,6 +147,8 @@ export type Message = {
   sender_deleted_at?: number | null;
   body: string;
   mentions: string[];
+  /** 这条是 @ 全体，收件人是发送时的全体群成员。 */
+  mention_all: boolean;
   created_at: number;
   attachments: Attachment[];
 };

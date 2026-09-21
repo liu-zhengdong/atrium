@@ -13,7 +13,7 @@ function extOf(name: string) {
     : "";
 }
 
-function formatSize(size: number) {
+export function formatSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024)
     return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;

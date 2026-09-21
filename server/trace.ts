@@ -213,7 +213,7 @@ export class TraceStore {
         }
       }
       this.store.run(
-        "INSERT INTO trace_cursors VALUES(?,?,?,?) ON CONFLICT(agent_id,runtime_id,generation) DO UPDATE SET seq=excluded.seq",
+        "INSERT INTO trace_cursors(agent_id,runtime_id,generation,seq) VALUES(?,?,?,?) ON CONFLICT(agent_id,runtime_id,generation) DO UPDATE SET seq=excluded.seq",
         agent,
         runtime,
         generation,

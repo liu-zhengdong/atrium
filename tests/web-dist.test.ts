@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -81,6 +82,35 @@ test("ensureWebDist 只在过期时构建，产物缺失则失败", async (t) =>
   });
   assert.equal(skipped, false);
   assert.equal(calls, 2);
+});
+
+test("构建失败不留下会被当成最新的 dist", async (t) => {
+  const root = repo(t);
+  touch(join(root, "web/style.css"), recent);
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      ensureWebDist(root, async () => {
+        calls += 1;
+        // 模拟 vite：报错前已经写出了 index.html
+        touch(join(root, "dist/index.html"), newer, "<html>");
+        throw new Error("依赖没装好");
+      }),
+    /依赖没装好/,
+  );
+  assert.equal(calls, 1);
+  assert.equal(
+    existsSync(join(root, "dist/index.html")),
+    false,
+    "失败的产物已清掉",
+  );
+  assert.equal(webDistStale(root), true, "下次启动仍判定过期");
+  const built = await ensureWebDist(root, async () => {
+    calls += 1;
+    touch(join(root, "dist/index.html"), newer, "<html>");
+  });
+  assert.equal(calls, 2);
+  assert.equal(built, true);
 });
 
 test("并发 ensureWebDist 只构建一次", async (t) => {

@@ -1,4 +1,4 @@
-import { Hash, Users } from "lucide-react";
+import { Hash, History, Users } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import {
   agentPresence,
@@ -14,12 +14,14 @@ export function ChatHeader({
   agents,
   openAgent,
   openGroup,
+  openRecords,
 }: {
   active: Overview["chats"][number];
   members: string[];
   agents: Agent[];
   openAgent: (id: string) => void;
   openGroup: () => void;
+  openRecords: () => void;
 }) {
   const isGroup = active.kind === "group";
   const title = (
@@ -71,6 +73,14 @@ export function ChatHeader({
               <Avatar small name={a.name} presence={agentPresence(a)} />
             </button>
           ))}
+        <button
+          className="icon-button"
+          aria-label="查找聊天记录"
+          title="查找聊天记录"
+          onClick={openRecords}
+        >
+          <History size={16} />
+        </button>
         {isGroup && (
           <button
             className="icon-button"

@@ -18,6 +18,7 @@ export function ChatView({
   anchor,
   clearAnchor,
   openGroup,
+  openRecords,
 }: {
   active: Overview["chats"][number] | undefined;
   chatId: string | null;
@@ -29,6 +30,7 @@ export function ChatView({
   anchor: { chatId: string; messageId: number } | null;
   clearAnchor: () => void;
   openGroup: () => void;
+  openRecords: () => void;
 }) {
   const anchoredId =
     anchor && anchor.chatId === chatId ? anchor.messageId : undefined;
@@ -68,6 +70,7 @@ export function ChatView({
             agents={agents}
             openAgent={details}
             openGroup={openGroup}
+            openRecords={openRecords}
           />
           <ChatNotice notice={active.notice} />
           {directAgent?.error && (

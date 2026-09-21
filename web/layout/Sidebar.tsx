@@ -1,4 +1,12 @@
-import { EyeOff, MessageSquare, Pin, PinOff, Plus, Users } from "lucide-react";
+import {
+  EyeOff,
+  History,
+  MessageSquare,
+  Pin,
+  PinOff,
+  Plus,
+  Users,
+} from "lucide-react";
 import { unreadLabel, type Overview } from "../../shared/schema.ts";
 import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
@@ -9,7 +17,7 @@ import {
   runtimeLabel,
   type Agent,
 } from "../components/AgentAvatar.tsx";
-export type Section = "agents" | "chat";
+export type Section = "agents" | "chat" | "records";
 
 const rowName = "truncate text-[13px] font-medium";
 const rowTime = "flex-none text-[10px] text-[#a8a394]";
@@ -77,8 +85,15 @@ export function Sidebar({
           <Users size={17} />
           Agents
         </button>
+        <button
+          className={navButton(section === "records")}
+          onClick={() => setSection("records")}
+        >
+          <History size={17} />
+          聊天记录
+        </button>
       </nav>
-      {section === "chat" ? (
+      {section !== "agents" ? (
         <div className="mb-6 flex min-h-0 flex-1 flex-col">
           <div className={sectionLabel}>
             会话

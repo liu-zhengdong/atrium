@@ -13,6 +13,12 @@ import { CreateAgentDialog } from "./agents/CreateAgentDialog.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { CreateChatDialog } from "./chat/ChatDialogs.tsx";
 import { UserProfileDialog } from "./user/UserProfileDialog.tsx";
+import { RecordsView } from "./records/RecordsView.tsx";
+import {
+  emptyFilters,
+  type RecordFilters,
+  type RecordTab,
+} from "./records/query.ts";
 
 export function App() {
   const {
@@ -34,6 +40,10 @@ export function App() {
     chatId: string;
     messageId: number;
   } | null>(null);
+  // 聊天记录页的筛选放在这里，离开去看一眼会话再回来不用重新选一遍。
+  const [recordTab, setRecordTab] = useState<RecordTab>("messages");
+  const [recordFilters, setRecordFilters] =
+    useState<RecordFilters>(emptyFilters);
   const [error, setError] = useState("");
   const active = overview?.chats.find((chat) => chat.id === chatId);
   const selectedAgent = overview?.agents.find((agent) => agent.id === agentId);
@@ -51,6 +61,14 @@ export function App() {
     setAnchor(null);
     setChatId(id);
     navigate("chat");
+  }
+  /** 从会话进聊天记录：预先把会话筛选选上，其余筛选重置。 */
+  function openRecords(scope: string | null) {
+    setGroupOpen(false);
+    setAgentId(null);
+    setRecordFilters({ ...emptyFilters, chat: scope });
+    setRecordTab("messages");
+    navigate("records");
   }
   /** 搜索结果跳到某条消息：先解除隐藏，再进入会话并定位高亮。 */
   async function openMessage(chat: string, messageId: number) {
@@ -156,6 +174,18 @@ export function App() {
                   create={() => setModal("agent")}
                 />
               )}
+              {section === "records" && (
+                <RecordsView
+                  overview={overview}
+                  tab={recordTab}
+                  setTab={setRecordTab}
+                  filters={recordFilters}
+                  setFilters={setRecordFilters}
+                  openMessage={(chat, message) =>
+                    void openMessage(chat, message)
+                  }
+                />
+              )}
               {section === "chat" && !active && (
                 <Empty
                   icon={<MessageSquare size={26} />}
@@ -182,6 +212,7 @@ export function App() {
                   setAgentId(null);
                   setGroupOpen(true);
                 }}
+                openRecords={() => openRecords(chatId)}
               />
             </>
           )}
@@ -203,7 +234,7 @@ export function App() {
           agents={overview.agents}
           close={() => setGroupOpen(false)}
           changed={refresh}
-          openMessage={(chat, message) => void openMessage(chat, message)}
+          openRecords={() => openRecords(active.id)}
           openAgent={(id) => {
             setGroupOpen(false);
             setAgentId(id);

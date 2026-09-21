@@ -5,6 +5,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -34,6 +35,25 @@ const inside = (root: string, path: string) => {
   const target = realpathSync(path);
   return target === base || target.startsWith(base + sep);
 };
+/** Notes an identity keeps for itself; the rest of a personal vault stays put. */
+const OWNED_NOTES = ["USER", "self-evolution"];
+const notesDirectory = (notes: Record<string, unknown>, root: string) =>
+  typeof notes.directory === "string" ? local(notes.directory, root) : null;
+/**
+ * Copy the owned notes the identity lacks; copies it already has are kept.
+ * Each note brings its Evolution log and its same-named folder of sub-notes.
+ */
+function copyOwnedNotes(sourceDir: string, directory: string) {
+  for (const base of OWNED_NOTES)
+    for (const name of [`${base}.md`, `${base}-Evolution.md`, base]) {
+      const from = join(sourceDir, name),
+        dest = join(directory, name);
+      if (!existsSync(from) || existsSync(dest)) continue;
+      if (statSync(from).isDirectory())
+        cpSync(from, dest, { recursive: true, dereference: true });
+      else copyOwned(from, dest);
+    }
+}
 const dropGitSuffix = (path: string) =>
   path
     .replace(/\.git$/i, "")
@@ -163,6 +183,23 @@ export function syncIdentityPackages(directory: string) {
   });
 }
 
+/** Add owned notes an identity predates. Its own copies win; no overwrite. */
+export function syncIdentityNotes(
+  directory: string,
+  template = defaultTemplate(),
+) {
+  const own = join(directory, "notes.json");
+  const source = join(template, "notes.json");
+  if (!existsSync(own) || !existsSync(source)) return;
+  // Only ever write into the notes directory this app laid out for the identity.
+  const target = notesDirectory(readJson(own), directory);
+  if (target !== join(directory, "notes")) return;
+  const sourceDir = notesDirectory(readJson(source), template);
+  if (!sourceDir || !existsSync(sourceDir)) return;
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  copyOwnedNotes(sourceDir, target);
+}
+
 /** Owned rules and notes; installed extensions/skills stay as path references. Never copy credentials. */
 export function prepareProfile(
   identityId: string,
@@ -244,10 +281,7 @@ export function prepareProfile(
       }
     if (existsSync(join(template, "notes.json"))) {
       const notes = readJson(join(template, "notes.json"));
-      const sourceDir =
-        typeof notes.directory === "string"
-          ? local(notes.directory, template)
-          : null;
+      const sourceDir = notesDirectory(notes, template);
       const directory = join(target, "notes");
       mkdirSync(directory, { recursive: true, mode: 0o700 });
       created.push(directory);
@@ -257,10 +291,7 @@ export function prepareProfile(
             recursive: true,
             dereference: true,
           });
-        else
-          for (const name of ["USER.md", "USER-Evolution.md"])
-            if (existsSync(join(sourceDir, name)))
-              copyOwned(join(sourceDir, name), join(directory, name));
+        else copyOwnedNotes(sourceDir, directory);
       }
       write(join(target, "notes.json"), {
         directory,

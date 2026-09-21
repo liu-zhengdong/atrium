@@ -32,8 +32,16 @@ function templateWithVault(root: string) {
   writeFileSync(join(template, "auth.json"), "DO_NOT_COPY");
   writeFileSync(join(template, "SYSTEM.md"), "shared rules");
   writeFileSync(join(template, "AGENTS.md"), "tune me");
+  mkdirSync(join(vault, "self-evolution"));
   writeFileSync(join(vault, "USER.md"), "user model");
   writeFileSync(join(vault, "USER-Evolution.md"), "history");
+  writeFileSync(join(vault, "self-evolution.md"), "evolution protocol");
+  writeFileSync(join(vault, "self-evolution-Evolution.md"), "protocol history");
+  writeFileSync(
+    join(vault, "self-evolution", "user-understanding.md"),
+    "sub note",
+  );
+  writeFileSync(join(vault, "密钥管理.md"), "not copied");
   writeFileSync(join(vault, "Library", "noise.md"), "not copied");
   writeFileSync(
     join(template, "notes.json"),
@@ -94,6 +102,22 @@ test("活配置自有规则和笔记；fork 后互不影响；不拷凭据和金
     readFileSync(join(notes.directory, "USER.md"), "utf8"),
     "user model",
   );
+  assert.equal(
+    readFileSync(join(notes.directory, "self-evolution.md"), "utf8"),
+    "evolution protocol",
+  );
+  assert.equal(
+    readFileSync(join(notes.directory, "self-evolution-Evolution.md"), "utf8"),
+    "protocol history",
+  );
+  assert.equal(
+    readFileSync(
+      join(notes.directory, "self-evolution", "user-understanding.md"),
+      "utf8",
+    ),
+    "sub note",
+  );
+  assert(!existsSync(join(notes.directory, "密钥管理.md")));
   assert(!existsSync(join(notes.directory, "Library")));
   writeFileSync(join(first.agent_directory, "SYSTEM.md"), "tuned by 林岚");
   const forked = await app.inject({

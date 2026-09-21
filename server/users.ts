@@ -23,9 +23,10 @@ export function ensureUsers(store: Store) {
     now,
     now,
   );
-  const legacy =
+  const legacy = !!(
     store.one("SELECT 1 FROM messages WHERE sender='user' LIMIT 1") ??
-    store.one("SELECT 1 FROM attachments WHERE uploader='user' LIMIT 1");
+    store.one("SELECT 1 FROM attachments WHERE uploader='user' LIMIT 1")
+  );
   if (legacy)
     store.transaction(() => {
       store.run("UPDATE messages SET sender=? WHERE sender='user'", LOCAL_USER);
@@ -34,6 +35,19 @@ export function ensureUsers(store: Store) {
         LOCAL_USER,
       );
     });
+  // 用户参与标志：平时由发言维护（见 Store.send），这里只管两种绕过发言
+  // 写入的情况：新增这一列的旧库，以及刚把 'user' 改写成短号的更旧的库。
+  const added = !store.columns("user_chat_state").includes("participated");
+  store.addColumn(
+    "user_chat_state",
+    "participated",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  if (added || legacy)
+    store.run(
+      "INSERT INTO user_chat_state(chat_id,participated) SELECT DISTINCT chat_id,1 FROM messages WHERE sender=? ON CONFLICT(chat_id) DO UPDATE SET participated=1",
+      LOCAL_USER,
+    );
 }
 
 export function readUser(

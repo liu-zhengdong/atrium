@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../server/store.ts";
-import type { ChatReadState } from "../shared/schema.ts";
+import { UNREAD_CAP, type ChatReadState } from "../shared/schema.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
 function hasRead(state: ChatReadState, id: number) {
@@ -116,7 +116,10 @@ test("随机分页反向核对逐条真值；压缩回执不多标或漏标", (t
     for (const message of page.items) seen.add(message.id);
     for (const message of messages)
       assert.equal(hasRead(state(), message.id), seen.has(message.id));
-    assert.equal(store.unread(a.id)[0]?.count ?? 0, 200 - seen.size);
+    assert.equal(
+      store.unread(a.id)[0]?.count ?? 0,
+      Math.min(200 - seen.size, UNREAD_CAP + 1),
+    );
   }
 });
 

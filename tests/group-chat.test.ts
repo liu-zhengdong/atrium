@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
-import { deliveryPlan } from "../server/delivery.ts";
+import { deliveryPlan, wakesOffline } from "../server/delivery.ts";
 import { removeMember, updateGroup } from "../server/groups.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import { mentionsAll } from "../shared/mentions.ts";
@@ -70,6 +70,21 @@ test("投递计划：私聊、群聊点名、@ 全体的所有组合", () => {
         "每个成员恰好落在一边",
       );
     }
+});
+
+test("离线唤醒：直接找上门的才开进程", () => {
+  assert.equal(wakesOffline([]), false, "没东西就不用起来");
+  assert.equal(wakesOffline([{ kind: "direct" }]), true, "私聊、@、邀请");
+  assert.equal(
+    wakesOffline([{ kind: "summary" }]),
+    false,
+    "消息箱心跳提醒不值得开一个进程",
+  );
+  assert.equal(
+    wakesOffline([{ kind: "summary" }, { kind: "direct" }]),
+    true,
+    "混在一起时看有没有直接找它的",
+  );
 });
 
 test("@ 全体：用户发整群立刻收到，Agent 与私聊都拒绝", (t) => {

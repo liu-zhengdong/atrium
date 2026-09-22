@@ -361,7 +361,7 @@ export function createMcp(
   );
   tool(
     "update_config",
-    "修改自己的运行偏好。auto_start 只允许后续事件自动启动，不终止当前运行；heartbeat_seconds 是消息箱心跳间隔。",
+    "修改自己的运行偏好。heartbeat_seconds 是消息箱心跳间隔：每隔这么久，如果消息箱里还有没处理完的消息就提醒一次。",
     preferencePatch.shape,
     (a) => store.configure(agentId, a),
   );

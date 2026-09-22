@@ -49,8 +49,46 @@ test("身份、凭据与配置隔离；拒绝自身配置之外的字段", (t) =
   assert.throws(() => store.createAgent("Atlas", tmpdir()), /已经被使用/);
   assert.throws(() => store.configure(a.id, { cwd: "/tmp" }));
   assert.throws(() => store.configure(a.id, { heartbeat_seconds: 0 }));
-  store.configure(a.id, { auto_start: true });
-  assert.equal(store.agent(b.id).config.auto_start, false);
+  store.configure(a.id, { heartbeat_seconds: 90 });
+  assert.equal(store.agent(a.id).config.heartbeat_seconds, 90);
+  assert.equal(
+    store.agent(b.id).config.heartbeat_seconds,
+    30,
+    "偏好按身份隔离",
+  );
+  assert.throws(
+    () => store.configure(a.id, { auto_start: true }),
+    "唤醒不再是一项设置",
+  );
+});
+
+test("旧版本存下的配置键不阻止身份加载", (t) => {
+  const { store, a } = fixture(t);
+  store.run(
+    "UPDATE agents SET config=? WHERE id=?",
+    JSON.stringify({
+      auto_start: true,
+      heartbeat_seconds: 45,
+      wake_interval_seconds: 300,
+      message_threshold: 3,
+    }),
+    a.id,
+  );
+  assert.deepEqual(
+    store.agent(a.id).config,
+    { heartbeat_seconds: 45 },
+    "已删的键读时丢掉，保留的值不变",
+  );
+  assert.deepEqual(
+    JSON.parse(
+      store.one<{ config: string }>(
+        "SELECT config FROM agents WHERE id=?",
+        a.id,
+      )!.config,
+    ),
+    { heartbeat_seconds: 45 },
+    "并且写回去，不用每次读都重算",
+  );
 });
 
 test("会话成员隔离、后续加入和私聊唯一性", (t) => {
@@ -562,13 +600,13 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   assert.equal(store.agent(agentId).work, "正在检查通知");
   await client.callTool({
     name: "update_config",
-    arguments: { auto_start: true },
+    arguments: { heartbeat_seconds: 120 },
   });
-  assert.equal(store.agent(agentId).config.auto_start, true);
-  assert.equal(store.agent(other.id).config.auto_start, false);
+  assert.equal(store.agent(agentId).config.heartbeat_seconds, 120);
+  assert.equal(store.agent(other.id).config.heartbeat_seconds, 30);
   const forbidden = await client.callTool({
     name: "update_config",
-    arguments: { auto_start: true, agent_id: other.id },
+    arguments: { heartbeat_seconds: 120, agent_id: other.id },
   });
   assert(forbidden.isError);
   const read = await client.callTool({

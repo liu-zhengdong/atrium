@@ -31,6 +31,7 @@ import {
   type ModelState,
 } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
+import { wakesOffline } from "./delivery.ts";
 import { atriumGuide } from "./mcp.ts";
 import {
   prepareProfile,
@@ -688,7 +689,7 @@ export class Runtimes {
   private managed(id: string) {
     return this.canSetModel && this.owned(id);
   }
-  /** 停掉自己启动的托管实例。会话、身份与待投递消息都保留；开着事件自动启动的，有事还会再被拉起。 */
+  /** 停掉自己启动的托管实例。会话、身份与待投递消息都保留；被私聊或 @ 时会再起来。 */
   async stop(id: string) {
     if (!this.connections.has(id)) throw new Problem(409, "Agent 没在运行");
     if (!this.owned(id))
@@ -805,11 +806,7 @@ export class Runtimes {
           );
           runtime = this.connections.get(id);
         } else {
-          if (
-            this.store.pending(id).length &&
-            this.store.agent(id).config.auto_start
-          )
-            await this.start(id, true);
+          if (wakesOffline(this.store.pending(id))) await this.start(id, true);
           runtime = this.connections.get(id);
         }
       }

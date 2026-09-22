@@ -35,6 +35,7 @@ import {
   assertCanSend,
   deliveryPlan,
   deliveryText,
+  type DeliveryKind,
   type SendRequest,
 } from "./delivery.ts";
 import { Problem } from "./problem.ts";
@@ -51,7 +52,7 @@ type AgentRow = Omit<AgentInfo, "config"> & {
 export type DeliveryRow = {
   id: string;
   agent_id: string;
-  kind: "direct" | "summary";
+  kind: DeliveryKind;
   text: string;
   state: string;
   error: string | null;
@@ -271,10 +272,15 @@ export class Store {
     );
     if (!row) throw new Problem(404, "Agent 不存在");
     const raw = JSON.parse(row.config) as Record<string, unknown>;
-    if ("wake_interval_seconds" in raw || "message_threshold" in raw) {
-      // 旧定时/阈值配置由心跳间隔取代；保留 auto_start，其余按默认值。
+    if (
+      "wake_interval_seconds" in raw ||
+      "message_threshold" in raw ||
+      "auto_start" in raw
+    ) {
+      // 旧定时/阈值配置由心跳间隔取代；auto_start 已删，现在直接找上门的一律唤醒。
       delete raw.wake_interval_seconds;
       delete raw.message_threshold;
+      delete raw.auto_start;
       this.run(
         "UPDATE agents SET config=? WHERE id=?",
         JSON.stringify(raw),
@@ -373,12 +379,12 @@ export class Store {
   /** Retain the identity row only as a historical author/receipt reference. */
   deleteAgent(id: string) {
     const remove = () => {
-      const agent = this.agent(id);
+      this.agent(id); // 不存在或已删除就在这里 404。
+      // 已删除的身份不在 agents() 里，不会被 pump；待投递在下一句一并取消。
       this.run(
-        "UPDATE agents SET deleted_at=?,deleted_after=(SELECT COALESCE(MAX(id),0) FROM messages),deleted_name=name,name=?,token_hash='',config=?,work='',runtime_id=NULL,runtime_pid=NULL WHERE id=?",
+        "UPDATE agents SET deleted_at=?,deleted_after=(SELECT COALESCE(MAX(id),0) FROM messages),deleted_name=name,name=?,token_hash='',work='',runtime_id=NULL,runtime_pid=NULL WHERE id=?",
         Date.now(),
         `deleted:${id}`,
-        JSON.stringify({ ...agent.config, auto_start: false }),
         id,
       );
       this.run(
@@ -1184,7 +1190,7 @@ export class Store {
   }
   queue(
     agentId: string,
-    kind: "direct" | "summary",
+    kind: DeliveryKind,
     text: string,
     target?: { chatId?: string; throughMessage?: number },
   ) {

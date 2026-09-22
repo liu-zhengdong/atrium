@@ -87,7 +87,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     mentions: [],
   });
   store.readChat(agent.id, direct.id);
-  store.configure(agent.id, { auto_start: true });
+  store.configure(agent.id, { heartbeat_seconds: 60 });
   const before = store.timeline(direct.id);
   const remove = (payload: Record<string, string> = { confirm: agent.ref }) =>
     app.inject({ method: "DELETE", url: `/api/agents/${agent.id}`, payload });
@@ -164,7 +164,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
       }),
     () => store.addMember(group.id, agent.id),
     () => store.createChat("不该重建", [agent.id], agent.id),
-    () => store.configure(agent.id, { auto_start: true }),
+    () => store.configure(agent.id, { heartbeat_seconds: 60 }),
     () => store.queue(agent.id, "summary", "唤醒"),
   ])
     assert.throws(run);

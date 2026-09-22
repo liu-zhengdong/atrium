@@ -497,6 +497,132 @@ test("syncIdentityProfile 报告未能补齐的部分，仍让身份启动", () 
   }
 });
 
+/** A template holding the user's own skills, extensions and themes. */
+function resourceTemplate(prefix: string) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const template = join(root, "template");
+  mkdirSync(join(template, "skills", "写作"), { recursive: true });
+  mkdirSync(join(template, "extensions"), { recursive: true });
+  mkdirSync(join(template, "themes"), { recursive: true });
+  writeFileSync(join(template, "skills", "写作", "SKILL.md"), "用户的写作技能");
+  writeFileSync(join(template, "extensions", "hook.ts"), "用户的扩展");
+  writeFileSync(join(template, "themes", "dark.json"), "{}");
+  writeFileSync(
+    join(template, "settings.json"),
+    JSON.stringify({
+      defaultModel: "fixture",
+      packages: [],
+      skills: [join(template, "skills"), "/外部/技能库"],
+      extensions: [join(template, "extensions")],
+      themes: [join(template, "themes")],
+    }),
+  );
+  return { root, template };
+}
+
+test("新建身份拿到自有的技能、扩展和主题，不再引用模板目录", () => {
+  const { root, template } = resourceTemplate("atrium-own-res-");
+  try {
+    const target = prepareProfile("id1", template, join(root, ".pi"));
+    const settings = JSON.parse(
+      readFileSync(join(target, "settings.json"), "utf8"),
+    );
+    // Template paths go; the user's explicit outside path stays.
+    assert.deepEqual(settings.skills, ["/外部/技能库"]);
+    assert.deepEqual(settings.extensions, []);
+    assert.deepEqual(settings.themes, []);
+    assert.equal(
+      readFileSync(join(target, "skills", "写作", "SKILL.md"), "utf8"),
+      "用户的写作技能",
+    );
+    assert.equal(
+      readFileSync(join(target, "extensions", "hook.ts"), "utf8"),
+      "用户的扩展",
+    );
+    // Evolving a skill rewrites the identity's copy, not the user's.
+    writeFileSync(
+      join(target, "skills", "写作", "SKILL.md"),
+      "身份改过的写作技能",
+    );
+    assert.equal(
+      readFileSync(join(template, "skills", "写作", "SKILL.md"), "utf8"),
+      "用户的写作技能",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("旧身份的共享资源目录转成自有副本，不覆盖已有的", () => {
+  const { root, template } = resourceTemplate("atrium-adopt-res-");
+  const identity = join(root, "identity");
+  mkdirSync(join(identity, "skills", "写作"), { recursive: true });
+  writeFileSync(
+    join(identity, "skills", "写作", "SKILL.md"),
+    "身份早就改过的版本",
+  );
+  writeFileSync(
+    join(identity, "settings.json"),
+    JSON.stringify(
+      {
+        skills: [join(template, "skills")],
+        extensions: [join(template, "extensions")],
+      },
+      null,
+      2,
+    ),
+  );
+  const before = walk(template);
+  try {
+    adoptIdentityConfig(identity, template);
+    const settings = JSON.parse(
+      readFileSync(join(identity, "settings.json"), "utf8"),
+    );
+    assert.deepEqual(settings.skills, []);
+    assert.deepEqual(settings.extensions, []);
+    // The identity's own version survives; what it lacked was copied in.
+    assert.equal(
+      readFileSync(join(identity, "skills", "写作", "SKILL.md"), "utf8"),
+      "身份早就改过的版本",
+    );
+    assert.equal(
+      readFileSync(join(identity, "extensions", "hook.ts"), "utf8"),
+      "用户的扩展",
+    );
+    assert.deepEqual(walk(template), before);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("资源目录是符号链接时拒绝，不写进用户技能库，引用保留", () => {
+  const { root, template } = resourceTemplate("atrium-res-linked-");
+  const identity = join(root, "identity");
+  mkdirSync(identity, { recursive: true });
+  const shared = [join(template, "skills")];
+  writeFileSync(
+    join(identity, "settings.json"),
+    JSON.stringify({ skills: shared }, null, 2),
+  );
+  symlinkSync(join(template, "skills"), join(identity, "skills"));
+  const before = walk(template);
+  try {
+    assert.throws(
+      () => adoptIdentityConfig(identity, template),
+      (error: unknown) =>
+        error instanceof Problem && String(error.message).includes("skills"),
+    );
+    assert.deepEqual(walk(template), before);
+    // The reference stays, so the identity still finds its skills.
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(identity, "settings.json"), "utf8")).skills,
+      shared,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("未安装的 git 包拒绝创建", () => {
   const root = mkdtempSync(join(tmpdir(), "atrium-profile-missing-"));
   const template = join(root, "template");

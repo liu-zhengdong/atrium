@@ -9,34 +9,74 @@ import {
 
 const columns =
   "id,session_id,generation,at,ended_at,kind,name,title,state,truncated";
-function toolTitle(name: string, text = "") {
-  let detail = "";
+const labels: Record<string, string> = {
+  read: "读取",
+  edit: "修改",
+  write: "写入",
+  bash: "执行命令",
+  mcpScript: "执行 MCP 脚本",
+};
+
+/**
+ * 固定 mcp 代理的几种动作。查一下、搜一下和真干了一件事得分开说；参数里可能
+ * 同时带着 server，所以按这个顺序取第一个命中的，server 排最后。
+ */
+const mcpActions = [
+  ["tool", "调用 MCP"],
+  ["describe", "查看 MCP 工具"],
+  ["search", "搜索 MCP 工具"],
+  ["instructions", "读 MCP 说明"],
+  ["connect", "连接 MCP"],
+  ["action", "MCP 操作"],
+  ["server", "列出 MCP 工具"],
+] as const;
+
+/** 铺垫语句不说明这一步在干什么，摘要跳过它们去找第一条真正做事的命令。 */
+const prelude =
+  /^(set|cd|export|source|\.|umask|shopt|alias|echo|printf)\b|^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** 多行脚本取第一条真正做事的命令；全是铺垫时退回第一条。管道 | 不拆，它是一条命令。 */
+export function commandSummary(command: string) {
+  const statements = command
+    .split(/\r?\n|;|&&/)
+    .map((piece) => piece.trim())
+    .filter(Boolean);
+  return (
+    statements.find((piece) => !prelude.test(piece)) ?? statements[0] ?? ""
+  );
+}
+
+/** 标题是轨迹这一层的全部信息：一句话说清这一步在干什么，原文留在参数里。 */
+export function toolTitle(name: string, text = "") {
+  let args: Record<string, unknown> = {};
   try {
-    const args = JSON.parse(text);
-    detail =
-      args.path ??
-      args.file_path ??
-      args.command ??
-      args.tool ??
-      args.search ??
-      args.describe ??
-      args.connect ??
-      args.server ??
-      "";
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object")
+      args = parsed as Record<string, unknown>;
   } catch {
     /* Truncated/opaque input is still available in details. */
   }
-  const labels: Record<string, string> = {
-    read: "读取",
-    edit: "修改",
-    write: "写入",
-    bash: "执行命令",
-    mcp: "调用 MCP",
-    mcpScript: "执行 MCP 脚本",
-  };
-  return `${labels[name] ?? name}${typeof detail === "string" && detail ? ` · ${detail}` : ""}`
-    .replace(/\s+/g, " ")
-    .slice(0, 180);
+  const pick = (key: string) =>
+    typeof args[key] === "string" ? (args[key] as string) : "";
+  if (name === "mcp") {
+    const action = mcpActions.find(([key]) => pick(key));
+    return action ? line(action[1], pick(action[0])) : "查看 MCP 状态";
+  }
+  return line(
+    labels[name] ?? name,
+    name === "bash"
+      ? commandSummary(pick("command"))
+      : pick("path") || pick("file_path"),
+  );
+}
+
+/** 摘要按一行可读截，截了就明说截了。 */
+const TITLE_DETAIL = 80;
+function line(verb: string, detail: string) {
+  const flat = detail.replace(/\s+/g, " ").trim();
+  const cut =
+    flat.length > TITLE_DETAIL ? `${flat.slice(0, TITLE_DETAIL)}…` : flat;
+  return `${verb}${cut ? ` · ${cut}` : ""}`;
 }
 
 /** 每个身份保留多少条轨迹。轨迹是给用户翻最近干了什么的，不是永久账本。 */

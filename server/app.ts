@@ -9,6 +9,7 @@ import {
   text,
   displayName,
   forkSource,
+  inviteNote,
   preferencePatch,
   sendInput,
   type Overview,
@@ -399,6 +400,7 @@ export async function createApp(options: {
         members: z.array(id).max(30),
         direct_agent: id.optional(),
         as: actor.optional(),
+        note: inviteNote,
       })
       .strict()
       .parse(request.body);
@@ -414,13 +416,22 @@ export async function createApp(options: {
     )
       throw new Problem(400, "私聊必须且只能包含目标 Agent");
     // 以身份名义建群走 MCP create_group 同一条路：它自己入群，其他成员收到邀请通知。
+    // 来意只随邀请通知送出，用户建群不发邀请通知，所以不收下一个没人会看到的 note。
+    if (a.note && isUserRef(creator))
+      throw new Problem(
+        400,
+        "来意随邀请通知送出；用户建群不发邀请通知，请以身份名义建群，或建群后直接发一条消息",
+      );
     const result = isUserRef(creator)
       ? store.createChat(a.name, a.members, a.direct_agent)
       : store.createChat(
           a.name,
           [...new Set([creator, ...a.members])],
           undefined,
-          creator,
+          {
+            by: creator,
+            note: a.note,
+          },
         );
     if (a.direct_agent) void runtimes?.pump(a.direct_agent);
     changed();
@@ -432,15 +443,20 @@ export async function createApp(options: {
   });
   app.post("/api/chats/:id/members", (request) => {
     const input = z
-      .object({ agent_id: id, as: actor.optional() })
+      .object({ agent_id: id, as: actor.optional(), note: inviteNote })
       .strict()
       .parse(request.body);
     const chatId = agentParams(request);
     const inviter = resolveActor(store, input.as);
+    if (input.note && isUserRef(inviter))
+      throw new Problem(
+        400,
+        "来意随邀请通知送出；用户拉人不发邀请通知，请以群内某个身份的名义邀请",
+      );
     // 以身份名义邀请走 MCP invite_agent 同一条路：邀请人须在群内，新成员收到通知。
     const members = isUserRef(inviter)
       ? store.addMember(chatId, input.agent_id)
-      : store.invite(inviter, chatId, input.agent_id);
+      : store.invite(inviter, chatId, input.agent_id, input.note);
     changed();
     return { members };
   });

@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
-import { deliveryPlan, wakesOffline } from "../server/delivery.ts";
+import { deliveryPlan, inviteText, wakesOffline } from "../server/delivery.ts";
 import { removeMember, updateGroup } from "../server/groups.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import { mentionsAll } from "../shared/mentions.ts";
@@ -85,6 +85,37 @@ test("离线唤醒：直接找上门的才开进程", () => {
     true,
     "混在一起时看有没有直接找它的",
   );
+});
+
+test("邀请正文：来意与群内历史的四种组合", () => {
+  const notice = (note: string, hasHistory: boolean) =>
+    inviteText({
+      senderRef: "a1",
+      senderName: "Atlas",
+      chatRef: "c12",
+      chatName: "移植调研",
+      note,
+      hasHistory,
+    });
+  const source = (text: string) => JSON.parse(text.split("\n")[2]);
+  assert.deepEqual(source(notice("分头查一下", false)), {
+    sender: "a1",
+    sender_name: "Atlas",
+    chat_id: "c12",
+    chat_name: "移植调研",
+    note: "分头查一下",
+  });
+  assert(!("note" in source(notice("", false))), "没写就不多一个空字段");
+  assert.match(notice("分头查一下", false), /群里还没有消息，先按来意判断/);
+  assert.match(notice("", false), /邀请人也没写来意；说明通常随后就到/);
+  for (const note of ["分头查一下", ""])
+    assert.match(
+      notice(note, true),
+      /群里已有消息，用 read_chat 读/,
+      "有历史时先指向历史",
+    );
+  for (const text of [notice("分头查一下", true), notice("", false)])
+    assert.match(text, /邀请不等于派单/, "每条都声明不是派单");
 });
 
 test("@ 全体：用户发整群立刻收到，Agent 与私聊都拒绝", (t) => {
@@ -294,6 +325,31 @@ test("群接口与工具边界：HTTP 坏输入拒绝，@ 全体不出现在 Age
       400,
       `应拒绝 ${JSON.stringify(bad)}`,
     );
+  // 来意只随邀请通知送出；用户建群、用户拉人不发邀请通知，写了没人能看到，当场拒绝。
+  for (const [path, body] of [
+    ["/api/chats", { name: "用户建群", members: [], note: "来意" }],
+    [
+      `/api/chats/${group.id}/members`,
+      { agent_id: created.agent.id, note: "来意" },
+    ],
+  ] as const)
+    assert.equal(
+      (await request(path, "POST", body)).status,
+      400,
+      `用户名义不接受 note：${path}`,
+    );
+  assert.equal(
+    (
+      await request("/api/chats", "POST", {
+        name: "身份建群",
+        members: [],
+        as: created.agent.ref,
+        note: "x".repeat(501),
+      })
+    ).status,
+    400,
+    "来意超长一样拒绝",
+  );
   assert.equal(
     (
       await request(

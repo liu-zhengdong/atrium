@@ -216,6 +216,40 @@ test("心跳按间隔检查消息箱；阅读或完成后不再提醒", (t) => {
   assert.deepEqual(store.schedule(now + 100000), []);
 });
 
+test("同一副样子的消息箱只提醒几次，变了才重新计数", (t) => {
+  const { store, a, send } = fixture(t);
+  let now = Date.now();
+  const tick = () => store.schedule((now += 31000));
+  send("一");
+  assert.deepEqual(
+    [tick(), tick(), tick()],
+    [[a.id], [a.id], [a.id]],
+    "先提醒三次",
+  );
+  assert.deepEqual(tick(), [], "同一副样子就不再提了");
+  assert.deepEqual(tick(), [], "也不会过一阵自己又开始");
+
+  send("二");
+  assert.deepEqual(tick(), [a.id], "群消息更新算作变化，重新计数");
+  assert.deepEqual([tick(), tick()], [[a.id], [a.id]]);
+  assert.deepEqual(tick(), [], "同样只提三次");
+
+  const noteId = store.addNotice(a.id, "webhook", "CI 告警", "流水线失败");
+  assert.deepEqual(tick(), [a.id], "来了新通知又重新计数");
+  assert.equal(store.completeBox(a.id, [noteId]), 1);
+  assert.deepEqual(tick(), [a.id], "完成了一部分也算有变化");
+
+  assert.equal(
+    store.completeBox(
+      a.id,
+      store.box(a.id).items.map((i) => i.id),
+    ),
+    1,
+  );
+  assert.equal(store.boxCount(a.id), 0);
+  assert.deepEqual(tick(), [], "处理完就完全不提");
+});
+
 test("@ 名称含空格、点、前缀重叠；拒绝误匹配与非成员", () => {
   const agents = [
     { id: "a", name: "Atlas" },

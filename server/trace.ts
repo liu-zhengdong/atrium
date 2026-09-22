@@ -39,6 +39,9 @@ function toolTitle(name: string, text = "") {
     .slice(0, 180);
 }
 
+/** 每个身份保留多少条轨迹。轨迹是给用户翻最近干了什么的，不是永久账本。 */
+const TRACE_KEEP = 2000;
+
 /** Materialized actions: two writes per tool, never per token. Details are fetched separately. */
 export class TraceStore {
   constructor(private store: Store) {
@@ -219,8 +222,21 @@ export class TraceStore {
         generation,
         page.nextAfter,
       );
+      this.trim(agent);
     });
     return true;
+  }
+  /**
+   * 只留这个身份最近 TRACE_KEEP 条。子查询走 trace_agent_page(agent_id,id) 取第
+   * TRACE_KEEP+1 新的那条的 id，不够这么多时返回 NULL，比较不成立就一行不删。
+   */
+  private trim(agent: string) {
+    this.store.run(
+      `DELETE FROM trace_actions WHERE agent_id=?1 AND id <= (
+         SELECT id FROM trace_actions WHERE agent_id=?1 ORDER BY id DESC LIMIT 1 OFFSET ?2)`,
+      agent,
+      TRACE_KEEP,
+    );
   }
   page(agent: string, before = Number.MAX_SAFE_INTEGER) {
     this.store.agent(agent);

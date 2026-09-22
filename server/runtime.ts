@@ -24,9 +24,25 @@ import {
   type RuntimeInfo,
   type LiveRuntime,
 } from "../shared/schema.ts";
+import {
+  formatModelSpec,
+  type ModelChange,
+  type ModelSpec,
+  type ModelState,
+} from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
-import { prepareProfile, syncIdentityProfile } from "./profile.ts";
+import {
+  prepareProfile,
+  readIdentityModel,
+  syncIdentityProfile,
+} from "./profile.ts";
+import {
+  cachedModels,
+  configuredModel,
+  configureModel,
+  rememberModels,
+} from "./model.ts";
 import {
   ensureDesktopCwd,
   linkProfile,
@@ -90,6 +106,8 @@ export class Runtimes {
   private discovered: LiveRuntime[] = [];
   private discoveryError: string | null = null;
   private discoveredOnce = false;
+  /** 当前网关支不支持当场切模型；不支持也照常跑，只是改动要等重启。 */
+  private canSetModel = false;
   private scanning?: Promise<void>;
   private ticking = false;
   private interval: NodeJS.Timeout;
@@ -180,6 +198,7 @@ export class Runtimes {
           throw new Error(
             "pi-atrium 缺少 runtime/v1 能力，请更新到本项目要求的版本",
           );
+        this.canSetModel = !!result._meta["pi-acp/identity/model/v1"];
         this.assertOpen();
         this.gateway = gateway;
         void connection.closed
@@ -601,6 +620,7 @@ export class Runtimes {
         // A profile left on the old layout costs the Agent a rule, not its session.
         for (const notice of syncIdentityProfile(current.agent_directory))
           console.error(`${current.name} 的${notice}`);
+        const configured = readIdentityModel(current.agent_directory);
         const { runtimeId } = await this.rpc<{ runtimeId: string }>(
           "_pi/identity/start",
           {
@@ -610,6 +630,8 @@ export class Runtimes {
             ...(current.session_file
               ? { sessionFile: current.session_file }
               : {}),
+            // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
+            ...(configured ? { model: formatModelSpec(configured) } : {}),
           },
         );
         try {
@@ -653,6 +675,96 @@ export class Runtimes {
       }
     });
     if (!this.pumping.has(id)) await this.pump(id);
+  }
+  /** 只有本进程这条网关自己启动的 Pi 有改模型的通道；别处发现的实例没有。 */
+  private managed(id: string) {
+    const runtime = this.connections.get(id);
+    return (
+      this.canSetModel &&
+      runtime?.info.mode === "rpc" &&
+      runtime.info.ownerPid === this.gateway?.child.pid
+    );
+  }
+  /** 没能当场生效时，说清是哪一种情况。 */
+  private pendingReason(id: string) {
+    if (!this.connections.has(id)) return "身份没在运行，下次启动时生效";
+    if (!this.canSetModel)
+      return "当前安装的 @liuser/pi-atrium 不支持当场切模型，重启这个身份后生效";
+    return "这个实例不是 Atrium 启动的，重启它之后生效";
+  }
+  /** 这个身份可选的模型。只有它在跑才问得到，问到就存下来给离线时用。 */
+  private async listModels(id: string): Promise<string[]> {
+    if (!this.managed(id)) return cachedModels(this.store, id);
+    try {
+      const { models } = z
+        .object({
+          models: z
+            .array(z.object({ id: z.string().min(1).max(200) }))
+            .max(4000),
+        })
+        .parse(await this.rpc("_pi/identity/models", { identityId: id }));
+      const options = [...new Set(models.map((model) => model.id))].sort();
+      rememberModels(this.store, id, options);
+      return options;
+    } catch (error) {
+      // 清单取不到不该挡住查看或改动，上一次的缓存照样能用。
+      console.error(
+        `${this.store.agent(id).name} 的模型清单取回失败：${error}`,
+      );
+      return cachedModels(this.store, id);
+    }
+  }
+  /** 身份的模型现状：配置里写的、运行中实际在用的、可选清单，以及改动能否当场生效。 */
+  async model(id: string): Promise<ModelState> {
+    return {
+      configured: configuredModel(this.store, id),
+      running: this.connections.get(id)?.info.model || null,
+      options: await this.listModels(id),
+      live: this.managed(id),
+    };
+  }
+  /** 模型是身份的属性：写进身份目录的配置；在运行就顺带让当前实例立即生效。 */
+  async setModel(id: string, spec: ModelSpec): Promise<ModelChange> {
+    const live = this.managed(id);
+    const options = await this.listModels(id);
+    const { wanted, configured } = configureModel(
+      this.store,
+      id,
+      spec,
+      options,
+    );
+    let applied: string | null = null;
+    if (live)
+      try {
+        ({ model: applied } = await this.rpc<{ model: string }>(
+          "_pi/identity/model",
+          {
+            identityId: id,
+            model: wanted,
+            ...(spec.thinking ? { thinking: spec.thinking } : {}),
+          },
+        ));
+      } catch (error) {
+        throw new Problem(
+          409,
+          `已写入 ${configured}，但运行中的实例没能当场切换：${error}。重启这个身份即可生效。`,
+        );
+      }
+    this.changed();
+    return {
+      configured,
+      running: applied ?? this.connections.get(id)?.info.model ?? null,
+      options,
+      live,
+      notes: [
+        ...(options.length
+          ? []
+          : [
+              "没取到过这个身份的模型清单，只校验了写法，没核对模型是否真的存在",
+            ]),
+        ...(live ? [] : [this.pendingReason(id)]),
+      ],
+    };
   }
   pump(id: string): Promise<void> {
     if (this.stopped) return Promise.resolve();

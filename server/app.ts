@@ -13,6 +13,7 @@ import {
   sendInput,
   type Overview,
 } from "../shared/schema.ts";
+import { modelSpec } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
@@ -279,6 +280,16 @@ export async function createApp(options: {
     const input = z.object({ runtime_id: id }).strict().parse(request.body);
     await runtimes.attach(agentParams(request), input.runtime_id);
     return { connected: true };
+  });
+  app.get("/api/agents/:id/model", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    return runtimes.model(agentParams(request));
+  });
+  // 模型不走 preferences：那份 schema 与 MCP 的 update_config 共用，加进去等于对 Agent 开放。
+  app.put("/api/agents/:id/model", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    const input = z.object({ model: modelSpec }).strict().parse(request.body);
+    return runtimes.setModel(agentParams(request), input.model);
   });
   app.patch("/api/agents/:id/config", (request) => {
     const result = store.configure(

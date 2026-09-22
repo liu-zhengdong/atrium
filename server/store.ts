@@ -197,6 +197,8 @@ export class Store {
       "runtime_id",
       "acp_session_id",
       "observed_session_id",
+      // 这个身份可选的模型，上次取到的那份；离线时界面和命令照样能列出来。
+      "models",
     ]) {
       if (!columns.includes(column))
         this.db.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);

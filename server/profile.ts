@@ -1,4 +1,5 @@
 import {
+  constants,
   cpSync,
   existsSync,
   lstatSync,
@@ -60,6 +61,28 @@ const OWNED_FILES = [
   "models.json",
   "mcp.json",
 ];
+/**
+ * Resource directories an identity keeps as its own. These are what an Agent
+ * writes as it evolves — a skill it wrote must not appear in every identity.
+ * Pi reads <PI_CODING_AGENT_DIR>/<kind> on its own, and Atrium points that at
+ * the identity directory, so owning the directory is all it takes.
+ */
+const OWNED_DIRS = ["extensions", "skills", "prompts", "themes"] as const;
+/** Settings paths may carry an enable/disable prefix; strip it to get the path. */
+const bare = (path: string) => path.replace(/^[!+-]/, "");
+/**
+ * Copy a resource directory, keeping any copy the identity already made.
+ * FICLONE makes this near-free on APFS/Btrfs — a 19MB skill's node_modules is
+ * shared until someone writes — and falls back to a full copy elsewhere.
+ */
+const copyResourceDir = (from: string, to: string) =>
+  cpSync(from, to, {
+    recursive: true,
+    dereference: true,
+    force: false,
+    errorOnExist: false,
+    mode: constants.COPYFILE_FICLONE,
+  });
 const notesSettings = (directory: string, maxContextBytes: unknown) => ({
   directory,
   ...(maxContextBytes === undefined ? {} : { maxContextBytes }),
@@ -275,18 +298,70 @@ function adoptNotesDirectory(directory: string) {
 }
 
 /**
- * Turn an old profile's shared rules and vault into this identity's own copies.
- * Rules and notes are adopted independently, and every part that stayed shared
- * is reported — a silent one would leave the identity writing the user's files.
+ * Old profiles listed the user's global skills, extensions, prompts and themes,
+ * so five identities wrote into one shared set. Copy what each was reading into
+ * the identity, then drop the shared paths. The copy comes first: if it fails,
+ * the reference stays and the identity still finds its resources.
  */
-export function adoptIdentityConfig(directory: string) {
+function adoptResourceDirs(directory: string, template: string) {
+  const file = join(directory, "settings.json");
+  if (!existsSync(file)) return;
+  const settings = readJson(file);
+  const failed: string[] = [];
+  let changed = false;
+  for (const kind of OWNED_DIRS) {
+    const listed = Array.isArray(settings[kind])
+      ? (settings[kind] as unknown[]).filter(
+          (path): path is string => typeof path === "string",
+        )
+      : [];
+    const shared = listed.filter((path) => inside(template, bare(path)));
+    if (!shared.length) continue;
+    const dest = join(directory, kind);
+    // A linked resource dir would make the copy land in the user's own set.
+    if (linked(dest)) {
+      failed.push(kind);
+      continue;
+    }
+    try {
+      for (const path of shared)
+        if (existsSync(bare(path))) copyResourceDir(bare(path), dest);
+    } catch {
+      failed.push(kind);
+      continue;
+    }
+    settings[kind] = listed.filter((path) => !shared.includes(path));
+    changed = true;
+  }
+  if (changed)
+    writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", {
+      mode: 0o600,
+    });
+  if (failed.length)
+    throw new Problem(500, `未能转成自有目录：${failed.join("、")}`);
+}
+
+/**
+ * Turn an old profile's shared rules, vault and resource directories into this
+ * identity's own copies. Each part is adopted independently, and every part
+ * that stayed shared is reported — a silent one would leave the identity
+ * writing the user's files.
+ */
+export function adoptIdentityConfig(
+  directory: string,
+  template = defaultTemplate(),
+) {
   const failed = adoptLinkedFiles(directory);
   const left = failed.length ? [`规则文件未能复制：${failed.join("、")}`] : [];
-  try {
-    adoptNotesDirectory(directory);
-  } catch (error) {
-    left.push(error instanceof Problem ? error.message : String(error));
-  }
+  for (const step of [
+    () => adoptNotesDirectory(directory),
+    () => adoptResourceDirs(directory, template),
+  ])
+    try {
+      step();
+    } catch (error) {
+      left.push(error instanceof Problem ? error.message : String(error));
+    }
   if (left.length) throw new Problem(500, left.join("；"));
 }
 
@@ -311,7 +386,7 @@ export function syncIdentityProfile(directory: string) {
   return notices;
 }
 
-/** Owned rules and notes; installed extensions/skills stay as path references. Never copy credentials. */
+/** Owned rules, notes and resource dirs; packages stay path references. Never copy credentials. */
 export function prepareProfile(
   identityId: string,
   template = defaultTemplate(),
@@ -353,14 +428,17 @@ export function prepareProfile(
       : { ...(entry as object), source: path };
   });
   settings.packages = injectBundledPackages(references);
-  for (const kind of ["extensions", "skills", "prompts", "themes"] as const) {
+  for (const kind of OWNED_DIRS) {
     const extra = Array.isArray(source[kind]) ? (source[kind] as string[]) : [];
-    settings[kind] = extra.map((path) => {
-      const prefix = /^[!+-]/.test(path) ? path[0]! : "";
-      return prefix + local(prefix ? path.slice(1) : path, template);
-    });
-    if (existsSync(join(template, kind)))
-      (settings[kind] as string[]).push(join(template, kind));
+    // Paths into the template are dropped: the identity gets its own copy of
+    // that directory below, and Pi reads it without being told. Paths pointing
+    // elsewhere are the user's explicit choice and stay.
+    settings[kind] = extra
+      .map((path) => {
+        const prefix = /^[!+-]/.test(path) ? path[0]! : "";
+        return prefix + local(prefix ? path.slice(1) : path, template);
+      })
+      .filter((path) => !inside(template, bare(path)));
   }
   // Rule/model/MCP files and notes become this identity's own copies.
   // Credential files and session history are never copied.
@@ -382,6 +460,12 @@ export function prepareProfile(
       if (existsSync(join(template, name))) {
         const dest = join(target, name);
         copyOwned(join(template, name), dest);
+        created.push(dest);
+      }
+    for (const kind of OWNED_DIRS)
+      if (existsSync(join(template, kind))) {
+        const dest = join(target, kind);
+        copyResourceDir(join(template, kind), dest);
         created.push(dest);
       }
     if (existsSync(join(template, "notes.json"))) {

@@ -5,6 +5,7 @@ import {
   chatReference,
   displayName,
   id as uuid,
+  preferencePatch,
   preferences,
   type AgentInfo,
   type Attachment,
@@ -390,7 +391,7 @@ export class Store {
     else this.transaction(remove);
   }
   configure(id: string, patch: unknown) {
-    const change = preferences.partial().parse(patch);
+    const change = preferencePatch.parse(patch);
     const value = { ...this.agent(id).config, ...change };
     this.run(
       "UPDATE agents SET config=? WHERE id=?",

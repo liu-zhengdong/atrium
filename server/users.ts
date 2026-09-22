@@ -82,6 +82,13 @@ export function writeUser(
   return readUser(store, user.id);
 }
 
+/** 以谁的名义操作：不给就是本机用户；给了身份的短号、名称或 ID 就是那位 Agent。 */
+export function resolveActor(store: Store, reference?: string): string {
+  const trimmed = (reference ?? LOCAL_USER).trim();
+  if (isUserRef(trimmed)) return readUser(store, trimmed).id;
+  return store.resolveAgentId(trimmed);
+}
+
 /** 用户的两个显示名：界面上是「你」，送给 Agent 的用资料里的称呼。 */
 export function userNames(store: Store, reference: string = LOCAL_USER) {
   const row = store.one<{ name: string }>(

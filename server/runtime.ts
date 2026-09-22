@@ -676,14 +676,29 @@ export class Runtimes {
     });
     if (!this.pumping.has(id)) await this.pump(id);
   }
-  /** 只有本进程这条网关自己启动的 Pi 有改模型的通道；别处发现的实例没有。 */
-  private managed(id: string) {
+  /** 本进程这条网关自己启动的 Pi；别处发现、由 TUI 或旧网关拉起的实例不归它管。 */
+  private owned(id: string) {
     const runtime = this.connections.get(id);
     return (
-      this.canSetModel &&
       runtime?.info.mode === "rpc" &&
       runtime.info.ownerPid === this.gateway?.child.pid
     );
+  }
+  /** 只有自己启动的 Pi 有改模型的通道，还得网关支持这条协议。 */
+  private managed(id: string) {
+    return this.canSetModel && this.owned(id);
+  }
+  /** 停掉自己启动的托管实例。会话、身份与待投递消息都保留；开着事件自动启动的，有事还会再被拉起。 */
+  async stop(id: string) {
+    if (!this.connections.has(id)) throw new Problem(409, "Agent 没在运行");
+    if (!this.owned(id))
+      throw new Problem(409, "这个实例不是 Atrium 启动的，请在原终端退出");
+    await this.operation(id, async () => {
+      await this.rpc("_pi/identity/stop", { identityId: id });
+      this.connections.delete(id);
+      this.errors.delete(id);
+    });
+    this.changed();
   }
   /** 没能当场生效时，说清是哪一种情况。 */
   private pendingReason(id: string) {

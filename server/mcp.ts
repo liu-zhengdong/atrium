@@ -5,7 +5,7 @@ import {
   agentReference,
   displayName,
   forkSource,
-  preferences,
+  preferencePatch,
   sendInput,
 } from "../shared/schema.ts";
 import { isUserRef, userReference } from "../shared/user.ts";
@@ -362,7 +362,7 @@ export function createMcp(
   tool(
     "update_config",
     "修改自己的运行偏好。auto_start 只允许后续事件自动启动，不终止当前运行；heartbeat_seconds 是消息箱心跳间隔。",
-    preferences.partial().shape,
+    preferencePatch.shape,
     (a) => store.configure(agentId, a),
   );
   return server;

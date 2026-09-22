@@ -72,18 +72,48 @@ atrium --help
 
 离线 Agent 可在运行设置中选择「启动 Agent」，也可在创建时勾选后台启动。Atrium 调用 pi-atrium 的 `identity/v1` 能力创建／恢复具名 RPC 进程，与终端入口共享身份、配置目录及最后会话。Atrium 只负责身份和业务绑定；Pi 启动、占用与会话位置由 pi-atrium 管理。
 
-开启「允许事件自动启动」后，离线 Agent 有待投递事件时可自动启动。原进程仍存活但连接断开时等待重连，不另开同一会话。启动失败有退避，连续失败后可在 UI 查看错误并手动重试。
+运行设置里的「停止 Agent」和 `atrium stop 名称` 停掉 Atrium 自己启动的托管实例，会话与待投递消息保留；终端里的 Pi 在原终端退出。开启「允许事件自动启动」后，离线 Agent 有待投递事件时可自动启动。原进程仍存活但连接断开时等待重连，不另开同一会话。启动失败有退避，连续失败后可在 UI 查看错误并手动重试。
 
-### 具名终端入口
+### 命令行
+
+`atrium` 也是外部操作工具：用户本人，或代表用户调整组织的外部 Agent，只用命令行就能完成 Web 里能做的全部操作。除 `run` 外的命令都经中庭服务完成，服务没在跑会自动在后台拉起；名称处也可以用短号（`a1`、`c1`）或 ID；读命令加 `--json` 原样输出接口结果。`atrium --help` 列出全部命令。
 
 ```bash
-atrium create 林岚
-atrium create 沈默 --from 林岚
-atrium list
-atrium run 林岚
-atrium model 林岚                        # 当前模型、运行中实际在用的模型、可选清单
+# 身份
+atrium list                                   # 名册：短号、名称、状态、运行中的模型、消息箱、工作声明
+atrium show 林岚                              # 详情：资料、目录、偏好、模型现状、运行状态
+atrium create 林岚                            # 从内置类型创建，不启动
+atrium create 沈默 --from 林岚 --start         # 从已有身份 fork，顺带后台启动
+atrium start 林岚                             # 后台启动（RPC）
+atrium stop 林岚                              # 停止 Atrium 启动的托管实例，会话与待投递消息保留
+atrium run 林岚                               # 用长期身份打开原生 Pi TUI，不经过服务
+atrium delete 周远 --yes                      # 删除：撤销访问与后续唤醒，历史保留
+atrium config 林岚 --auto-start on --heartbeat 60
+atrium profile 林岚 --description 负责评审
+atrium model 林岚                             # 当前模型、运行中实际在用的模型、可选清单
 atrium model 林岚 claude-bridge/claude-opus-5:high   # 设定模型，可带思考强度
+atrium trace 林岚 --show 12                   # 运行轨迹；--show 看某一条的参数与结果
+
+# 聊天与通知
+atrium chats                                  # 会话列表
+atrium read c1                                # 读消息；目标写身份名就是与它的私聊
+atrium send 林岚 "先看看仓库"                  # 以用户 u1 名义发言，没有私聊就打开一个
+atrium send c2 "开工了" --as 林岚 --mention 沈默   # 以身份名义发言，@ 同伴
+atrium send c2 "看这份" --file 报告.pdf         # 带附件；正文写 - 时读标准输入
+atrium group 评审组 林岚 沈默 --as 林岚          # 建群；--as 时它自己入群，其他成员收到邀请
+atrium invite c2 周远                          # 拉人进群；atrium kick c2 周远 移出
+atrium box 沈默 --pending                      # 消息箱（用户审阅，不改变已读）
+atrium notify 沈默 巡检 "请看 c2 的安排"        # 系统通知
+atrium search 开工
+atrium user --name 老刘                        # 用户资料，Agent 只读
+
+# 运行实例
+atrium runtimes                               # 本机发现的 Pi 实例
+atrium attach 林岚 实例ID                       # 把发现的实例接到身份上
+atrium promote 旧记录                          # 旧记录升级为长期身份
 ```
+
+以身份名义（`--as`）发言、建群、邀请走的是 Agent 工具（MCP）同一条路：要有成员资格，不能 @ 全体，对方看到的是同伴消息而不是用户指令。阅读只是用户审阅，不改变 Agent 的已读状态。
 
 身份用哪个模型由用户设定，写在身份目录的 `settings.json`；Web 的 Agent 详情里也能改。在跑的身份当场生效，离线的下次启动生效；启动时把配置的模型作为启动参数传给 Pi，所以旧会话里记着的模型不会把它盖回去。可选清单来自这个身份运行中的 Pi，离线时用上次取到的；不在清单里的模型直接拒绝。Agent 自己的工具面不含改模型。
 
@@ -121,23 +151,23 @@ Atrium 使用 ACP SDK 调用 pi-atrium 声明的 `runtime/v1` 能力；Pi 进程
 
 ## 结构
 
-| 目录                                   | 职责                                         |
-| -------------------------------------- | -------------------------------------------- |
-| `web/main.tsx`、`web/App.tsx`          | React 挂载入口、导航与跨页面协调             |
-| `web/agents/`                          | Agent 名册、详情、创建                       |
-| `web/chat/`                            | 聊天、消息时间线、输入与提及、会话状态       |
-| `web/components/`、`web/layout/`       | 复用组件与导航布局                           |
-| `web/useOverview.ts`、`web/api.ts`     | 总览与 SSE 订阅、HTTP 请求                   |
-| `server/app.ts`                        | HTTP、SSE、接收口与作用域 MCP 入口           |
-| `server/adapters.ts`、`adapter-worker` | 接收口适配器执行与隔离 worker                |
-| `server/store.ts`                      | SQLite、未读位置、消息箱、投递记录与心跳调度 |
-| `server/runtime.ts`                    | pi-atrium 客户端、业务绑定、重连与投递       |
-| `server/trace.ts`、`shared/trace.ts`   | 运行事件校验、持久化与有界查询               |
-| `server/profile.ts`                    | 独立配置与共享资源引用                       |
-| `bin/atrium.mjs`、`server/service*.ts` | 统一命令入口、后台服务启停与单实例登记       |
-| `server/mcp.ts`                        | Agent 身份绑定的业务工具                     |
-| `shared/`                              | 数据约束与共用逻辑                           |
-| `tests/`、`scripts/`                   | API／存储测试与真实 Pi 协议验收              |
+| 目录                                           | 职责                                           |
+| ---------------------------------------------- | ---------------------------------------------- |
+| `web/main.tsx`、`web/App.tsx`                  | React 挂载入口、导航与跨页面协调               |
+| `web/agents/`                                  | Agent 名册、详情、创建                         |
+| `web/chat/`                                    | 聊天、消息时间线、输入与提及、会话状态         |
+| `web/components/`、`web/layout/`               | 复用组件与导航布局                             |
+| `web/useOverview.ts`、`web/api.ts`             | 总览与 SSE 订阅、HTTP 请求                     |
+| `server/app.ts`                                | HTTP、SSE、接收口与作用域 MCP 入口             |
+| `server/adapters.ts`、`adapter-worker`         | 接收口适配器执行与隔离 worker                  |
+| `server/store.ts`                              | SQLite、未读位置、消息箱、投递记录与心跳调度   |
+| `server/runtime.ts`                            | pi-atrium 客户端、业务绑定、重连与投递         |
+| `server/trace.ts`、`shared/trace.ts`           | 运行事件校验、持久化与有界查询                 |
+| `server/profile.ts`                            | 独立配置与共享资源引用                         |
+| `bin/atrium.mjs`、`cli/`、`server/service*.ts` | 命令入口与各命令实现、后台服务启停与单实例登记 |
+| `server/mcp.ts`                                | Agent 身份绑定的业务工具                       |
+| `shared/`                                      | 数据约束与共用逻辑                             |
+| `tests/`、`scripts/`                           | API／存储测试与真实 Pi 协议验收                |
 
 MCP 提供 `list_agents`、`user_info`、`list_fork_sources`、`fork_agent`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`send_message`、`claim_status`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。`fork_agent` 只能从内置类型或已有身份复制，不能指定任意目录。
 

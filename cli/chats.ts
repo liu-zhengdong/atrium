@@ -16,26 +16,46 @@ import { clip, printJson, table, when } from "./format.ts";
 import { str, strs, type Command } from "./main.ts";
 import { findAgent, roster } from "./agents.ts";
 
+const chatByRef = (view: Overview, reference: string) =>
+  view.chats.find((item) => item.ref === reference || item.id === reference);
+/** 群名不像身份名那样保证唯一，撞名时不猜，报出各自的短号让用户挑。 */
+function chatByName(view: Overview, name: string): Chat | undefined {
+  const matches = view.chats.filter((item) => item.name === name);
+  if (matches.length > 1)
+    throw new Error(
+      `有 ${matches.length} 个会话叫 ${name}，请改用短号：${matches.map((item) => item.ref).join("、")}`,
+    );
+  return matches[0];
+}
 function findChat(view: Overview, reference: string): Chat {
-  const chat = view.chats.find(
-    (item) => item.ref === reference || item.id === reference,
-  );
+  const chat = chatByRef(view, reference) ?? chatByName(view, reference);
   if (!chat) throw new Error(`会话不存在：${reference}`);
   return chat;
 }
-/** 目标写会话（c1）就用那个会话；写身份就打开或复用与它的私聊。 */
+/**
+ * 目标写会话（c1 或会话名）就用那个会话；写身份就打开或复用与它的私聊。
+ * 身份排在会话名前面：与某个身份的私聊就叫这个身份的名字，而 `--as` 时
+ * 要开的是那两位之间的私聊，不是用户与它的那个。
+ */
 async function targetChat(
   client: Client,
   view: Overview,
   reference: string,
   as?: string,
 ): Promise<Chat> {
-  const chat = view.chats.find(
-    (item) => item.ref === reference || item.id === reference,
+  const byRef = chatByRef(view, reference);
+  if (byRef) return byRef;
+  const agent = view.agents.find(
+    (item) =>
+      item.ref === reference ||
+      item.name === reference ||
+      item.id === reference,
   );
-  if (chat) return chat;
-  const agent = findAgent(view, reference);
-  return client.post<Chat>(`/agents/${agent.id}/direct`, as ? { as } : {});
+  if (agent)
+    return client.post<Chat>(`/agents/${agent.id}/direct`, as ? { as } : {});
+  const byName = chatByName(view, reference);
+  if (byName) return byName;
+  throw new Error(`没有叫 ${reference} 的会话或 Agent`);
 }
 /** 发送者怎么称呼：用户用资料里的称呼，Agent 用身份名，都带短号。 */
 function senderLabel(view: Overview, message: Message) {
@@ -73,7 +93,7 @@ const chats: Command = {
 };
 
 const read: Command = {
-  args: "会话|名称 [--before 序号]",
+  args: "会话|身份 [--before 序号]",
   about: "读一段消息（用户审阅，不改变 Agent 的已读状态）",
   options: { before: { type: "string" } },
   positionals: [1, 1],
@@ -118,7 +138,7 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 const send: Command = {
-  args: "会话|名称 正文 [--as 身份] [--mention 名称]… [--all] [--file 路径]…",
+  args: "会话|身份 正文 [--as 身份] [--mention 名称]… [--all] [--file 路径]…",
   about:
     "发言；默认以用户 u1 名义，--as 以某个身份的名义；正文为 - 时读标准输入",
   options: {

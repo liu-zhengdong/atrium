@@ -98,7 +98,7 @@ atrium trace 林岚 --show 12                   # 运行轨迹；--show 看某�
 
 # 聊天与通知
 atrium chats                                  # 会话列表
-atrium read c1                                # 读消息；目标写身份名就是与它的私聊
+atrium read c1                                # 读消息；目标写身份名就是与它的私聊，写群名就是那个群
 atrium send 林岚 "先看看仓库"                  # 以用户 u1 名义发言，没有私聊就打开一个
 atrium send c2 "开工了" --as 林岚 --mention 沈默   # 以身份名义发言，@ 同伴
 atrium send c2 "看这份" --file 报告.pdf         # 带附件；正文写 - 时读标准输入

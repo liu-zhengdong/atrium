@@ -164,11 +164,23 @@ test(
     );
     assert.match(await ok("read", "c2"), /林岚\(a1\)：开工了/);
     assert.match(await ok("chats"), /c2\s+评审组\s+群/);
+    // 会话目标也认名称，不只是短号
+    assert.match(
+      await ok("send", "评审组", "按名字发", "--as", "林岚"),
+      /已发送 #\d+ → 评审组（c2）/,
+    );
+    assert.match(await ok("read", "评审组"), /按名字发/);
+    // 身份排在会话名前面：同名时 --as 开的是两位同伴的私聊，不是用户与它的那个
+    assert.match(
+      await ok("send", "林岚", "单独聊一句", "--as", "沈默"),
+      /已发送 #\d+ → 沈默 · 林岚（c\d+）/,
+    );
+    assert.doesNotMatch(await ok("read", "c1"), /单独聊一句/);
 
     // 成员管理：私聊不能加人。
     await ok("create", "周远");
     assert.match(
-      await ok("invite", "c2", "周远"),
+      await ok("invite", "评审组", "周远"),
       /周远 已加入 评审组（c2）· 成员 3 位/,
     );
     assert.match(
@@ -199,7 +211,18 @@ test(
     assert.match(await ok("list"), /周远/);
     assert.match(await ok("delete", "周远", "--yes"), /已删除 周远（a3）/);
     assert.doesNotMatch(await ok("list"), /周远/);
-    assert.match(await refused("send", "周远", "还在吗"), /Agent 不存在/);
+    assert.match(
+      await refused("send", "周远", "还在吗"),
+      /没有叫 周远 的会话或 Agent/,
+    );
+
+    // 群名不保证唯一，撞名时报短号不猜
+    await ok("group", "评审组", "林岚");
+    const clash = /有 2 个会话叫 评审组，请改用短号：c2、c\d+/;
+    assert.match(await refused("send", "评审组", "哪个"), clash);
+    assert.match(await refused("read", "评审组"), clash);
+    assert.match(await refused("invite", "评审组", "沈默"), clash);
+    assert.match(await ok("read", "c2"), /按名字发/, "短号仍然直达");
 
     // 帮助列出全部命令
     const help = await ok("--help");

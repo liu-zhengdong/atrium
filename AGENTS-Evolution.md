@@ -12,17 +12,11 @@
 - 分析：合集路径只在新建时注入；启动路径直接把旧目录交给 Pi。本地验收也只测了创建。
 - 改变：`start()` 先 `syncIdentityPackages`。用缺失的 pi-acp 路径做反证。
 
-## 2026-09-20 · 改用独立仓 pi-atrium
+## 2026-09-20 · Pi 侧扩展从独立 pi-acp 收敛到合集仓 pi-atrium
 
-- 发生：刚把 pi-acp 收进本仓库（#31）后，用户确认个人 TUI 也要用同一份插件，`pi install git:` 只认仓根，不能装 atrium 子目录；于是 Pi 侧（ACP、MCP 代理、notes）收到独立仓 `pi-atrium`。
-- 分析：in-tree 解决了「为 atrium 改 ACP 太勤」的发版成本，但挡了个人安装。独立合集仓同时服务 TUI 与产品；产品仓不再 vendoring 源码。
-- 改变：依赖 `@liuser/pi-atrium`（`github:liu-zhengdong/pi-atrium`），删除 `packages/pi-acp`；创建身份时注入该包，并去掉模板里会被合集重复加载的旧包。
-
-## 2026-09-20 · pi-acp 合入本仓库
-
-- 发生：用户确认独立 pi-acp 仓库为 Atrium 改得太勤，决定把源码收进 Atrium；pi-mcp-adapter 仍独立，依赖改为 GitHub。原先「通用接入缺口在独立 pi-acp 补齐」导致每次修正都要跨仓发版、再锁版本。
-- 分析：9 月 17 日纠正的是不要在 Atrium 另写一套 Pi 扩展，不是必须另开 GitHub 仓库。具名身份、占用、坏 session 恢复都是产品行为，独立仓的收益（给 Zed 用、npm 发布）这边没有在用。adapter 仍被日常 Pi TUI 使用，不能绑进产品仓。
-- 改变：`packages/pi-acp` 作为 workspace 包，接入缺口与产品同一 PR；adapter 以 `github:liu-zhengdong/pi-mcp-adapter` 依赖，身份模板按 Pi 的 `git:` 安装布局解析。独立 pi-acp 仓库保留作历史，不再作为本项目依赖。
+- 发生：独立 pi-acp 仓库为 Atrium 改得太勤，跨仓发版再锁版本成本高，先把源码收进本仓库（#31）；随后用户确认个人 TUI 要装同一份插件，而 `pi install git:` 只认仓根、装不了 atrium 子目录，于是 Pi 侧（ACP、MCP 代理、notes）收敛到独立合集仓 pi-atrium。
+- 分析：9 月 17 日纠正的是不要在 Atrium 另写一套 Pi 扩展，不是必须另开仓库；具名身份、占用、坏 session 恢复都是产品行为。in-tree 解掉了发版成本却挡了个人安装，合集仓同时服务 TUI 与产品，产品仓不再 vendoring 源码。
+- 改变：依赖 `@liuser/pi-atrium`（`github:liu-zhengdong/pi-atrium`），删除 `packages/pi-acp`；创建与启动身份时注入该包，并去掉模板里会被重复加载的旧包。旧 pi-acp 仓库保留作历史，不再是本项目依赖。
 
 ## 2026-09-17 · Pi 会话替换的连接生命周期
 
@@ -143,3 +137,9 @@
 - 发生：#58 之后把 Atlas 的配置目录从仓库 `.atrium/agents/<id>` 搬到 `~/.pi/atrium/agents/<id>`。改了数据库的 `agent_directory` 与 `session_file`，启动仍报 `Identity session directory mismatch`——`~/.pi/pi-acp/identities/<id>.cursor.json` 的 `agentDirectory` 还是旧值（pi-atrium 的 `recordedIdentitySessionPath` 比对 `identityId` 与 `agentDirectory`，不一致直接抛）。修好后又报 `Stored session working directory does not exist: /Users/liuzhengdong/Atrium/Atlas`，因为顺手把 cwd 一并统一到 `desktops/` 下，而 Pi 恢复会话时校验会话文件里记的 cwd 存在。
 - 分析：这两处都不在 Atrium 的数据库里，也不在调用链上，只在下次启动时被校验，所以「改完数据库就算搬完」看起来是完整的。cwd 那半件是范围扩张：用户要搬的是配置文件，工作目录本可不动，撤回后 Atlas 接上原会话（同一文件、12093 条记录）。
 - 改变：验证与协作节补一句，写明 cursor 文件需同步、cwd 不随配置目录搬。全局 AGENTS.md 同步把迁移条款的边界从「调用与入口」扩到「持久化状态里记着旧路径的记录」。5 个身份已全部迁移并启动验证。
+
+## 2026-09-22 · 模型由用户定，Agent 的工具面不含改模型
+
+- 发生：设计 CLI 切模型时问用户「Agent 能不能自己换模型」，用户定为不能：模型差异很大，换到与当前提示词不匹配的模型会把活干坏；部分渠道额度低，随意切的效果与成本不可控；还可能把自己切到跑不通的 provider 上。自进化要发生在稳定的底座上。
+- 分析：`shared/schema.ts` 的 `preferences` 同时是 `PATCH /api/agents/:id/config` 与 MCP `update_config` 的入参，模型加进这个 schema 就等于同时对 Agent 开放；事实来源放在身份目录的 `settings.json`，边界就是结构性的，不需要另做权限层。CLI 按上一条决定走全权，身份进程能直接敲 `atrium model`，这条拦的是工具面的顺手误用。
+- 改变：「实现约束」的隔离条补一句：运行底座（模型、鉴权）由用户经 CLI／WebUI 设定，Agent 工具面不含改模型，自进化限于提示词、技能与笔记。

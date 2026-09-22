@@ -12,6 +12,7 @@ import { time } from "../time.ts";
 import { Modal } from "../components/Modal.tsx";
 import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
+import { AgentModel } from "./AgentModel.tsx";
 import { DeleteAgent } from "./DeleteAgent.tsx";
 import {
   agentPresence,
@@ -376,6 +377,7 @@ export function AgentDrawer({
                   </button>
                 )}
               </section>
+              {agent.agent_directory && <AgentModel agentId={agent.id} />}
               <form onSubmit={save} className="settings-section">
                 <h3>运行偏好</h3>
                 <label className="switch-row">

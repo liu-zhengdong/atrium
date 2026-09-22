@@ -77,7 +77,11 @@ atrium create 林岚
 atrium create 沈默 --from 林岚
 atrium list
 atrium run 林岚
+atrium model 林岚                        # 当前模型、运行中实际在用的模型、可选清单
+atrium model 林岚 claude-bridge/claude-opus-5:high   # 设定模型，可带思考强度
 ```
+
+身份用哪个模型由用户设定，写在身份目录的 `settings.json`；Web 的 Agent 详情里也能改。在跑的身份当场生效，离线的下次启动生效；启动时把配置的模型作为启动参数传给 Pi，所以旧会话里记着的模型不会把它盖回去。可选清单来自这个身份运行中的 Pi，离线时用上次取到的；不在清单里的模型直接拒绝。Agent 自己的工具面不含改模型。
 
 未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置固定在安装目录（当前为仓库）的 `.atrium/`，不会随终端工作目录变化。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
 

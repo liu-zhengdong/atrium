@@ -5,10 +5,10 @@ import { join } from "node:path";
 register();
 const [command, reference, ...extra] = process.argv.slice(2);
 const usage =
-  "用法：atrium [--no-open|status|stop|list|create 名称 [--from 名称]|run 名称]；详见 atrium --help";
+  "用法：atrium [--no-open|status|stop|list|create 名称 [--from 名称]|run 名称|model 名称 [模型]]；详见 atrium --help";
 if (command === "--help" && !reference) {
   console.log(
-    "atrium           — 启动或复用后台服务，打开 Web\natrium --no-open — 启动或复用服务，仅输出地址\natrium status    — 查看服务状态、地址和数据目录\natrium stop      — 停止服务及其托管的 Agent，保留数据\natrium create 名称 — 从内置类型创建长期身份，不启动进程\natrium create 名称 --from 名称 — 从已有身份 fork\natrium run 名称  — 用长期身份启动原生 Pi TUI\natrium list      — 查看身份\n\n关闭浏览器或终端不停止后台服务；stop 不终止外部 Pi TUI。\nATRIUM_DATA / PI_ACP_DIR 须与中庭服务一致。具名启动不接受任意 Pi 参数。",
+    "atrium           — 启动或复用后台服务，打开 Web\natrium --no-open — 启动或复用服务，仅输出地址\natrium status    — 查看服务状态、地址和数据目录\natrium stop      — 停止服务及其托管的 Agent，保留数据\natrium create 名称 — 从内置类型创建长期身份，不启动进程\natrium create 名称 --from 名称 — 从已有身份 fork\natrium run 名称  — 用长期身份启动原生 Pi TUI\natrium list      — 查看身份\natrium model 名称 — 查看这个身份的模型和可选项\natrium model 名称 provider/id[:思考强度] — 设定模型；在跑的身份当场生效\n\n关闭浏览器或终端不停止后台服务；stop 不终止外部 Pi TUI。\nATRIUM_DATA / PI_ACP_DIR 须与中庭服务一致。具名启动不接受任意 Pi 参数。",
   );
 } else {
   try {
@@ -30,6 +30,10 @@ if (command === "--help" && !reference) {
         );
         if (command !== "--no-open") await openWeb(record);
       }
+    } else if (command === "model") {
+      if (!reference || extra.length > 1) throw new Error(usage);
+      const { modelCommand } = await import("../server/model.ts");
+      await modelCommand(data, reference, extra[0]);
     } else if (command === "create") {
       if (!reference) throw new Error(usage);
       let source = "builtin";
@@ -99,7 +103,9 @@ if (command === "--help" && !reference) {
       if (agent) {
         const { runNamedTui } =
           await import("@liuser/pi-atrium/dist/identity.js");
-        const { syncIdentityProfile } = await import("../server/profile.ts");
+        const { readIdentityModel, syncIdentityProfile } =
+          await import("../server/profile.ts");
+        const { formatModelSpec } = await import("../shared/model.ts");
         // Same catch-up the service does on start, so both entries agree.
         for (const notice of syncIdentityProfile(agent.agent_directory))
           console.error(`${agent.name} 的${notice}`);
@@ -109,6 +115,8 @@ if (command === "--help" && !reference) {
         try {
           running = launchStore.transaction(() => {
             const current = launchStore.agent(agent.id);
+            // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
+            const model = readIdentityModel(current.agent_directory);
             return runNamedTui({
               identityId: current.id,
               agentDirectory: current.agent_directory,
@@ -116,6 +124,7 @@ if (command === "--help" && !reference) {
               ...(current.session_file
                 ? { sessionFile: current.session_file }
                 : {}),
+              ...(model ? { model: formatModelSpec(model) } : {}),
             });
           });
         } finally {

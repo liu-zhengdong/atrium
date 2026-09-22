@@ -15,8 +15,14 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 import { Problem } from "./store.ts";
 import { local, resolveInstalled } from "./package-spec.ts";
+import {
+  formatModelSpec,
+  splitModelSpec,
+  type ModelSpec,
+} from "../shared/model.ts";
 const require = createRequire(import.meta.url);
 export const defaultTemplate = () =>
   resolve(
@@ -31,6 +37,15 @@ const write = (path: string, value: unknown) =>
     mode: 0o600,
     flag: "wx",
   });
+/** 原地更新配置：先写同目录临时文件再改名，中断不会留下半截的 settings.json。 */
+const writeSettings = (file: string, settings: Record<string, unknown>) => {
+  const temp = `${file}.${randomUUID()}.tmp`;
+  writeFileSync(temp, JSON.stringify(settings, null, 2) + "\n", {
+    mode: 0o600,
+    flag: "wx",
+  });
+  renameSync(temp, file);
+};
 const copyOwned = (from: string, to: string) =>
   writeFileSync(to, readFileSync(realpathSync(from)));
 const linked = (path: string) => {
@@ -174,9 +189,41 @@ export function syncIdentityPackages(directory: string) {
   const next = injectBundledPackages(packages);
   if (JSON.stringify(packages) === JSON.stringify(next)) return;
   settings.packages = next;
-  writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", {
-    mode: 0o600,
-  });
+  writeSettings(file, settings);
+}
+
+const settingsFile = (directory: string) => join(directory, "settings.json");
+
+/**
+ * 身份用哪个模型，事实来源是身份目录的 settings.json，由用户经 CLI／WebUI 维护。
+ * 没设过返回 null（跟随 pi 自己的默认）；配置文件读不出来就照原样抛，
+ * 这是用户必须看见的故障，不能悄悄当成「没设过」再拿旧模型开跑。
+ */
+export function readIdentityModel(directory: string): ModelSpec | null {
+  const file = settingsFile(directory);
+  if (!existsSync(file)) return null;
+  const settings = readJson(file);
+  const provider = settings.defaultProvider;
+  const model = settings.defaultModel;
+  if (typeof provider !== "string" || typeof model !== "string") return null;
+  const thinking = settings.defaultThinkingLevel;
+  return splitModelSpec(
+    `${provider}/${model}${typeof thinking === "string" ? `:${thinking}` : ""}`,
+  );
+}
+
+/** 整体替换这三个键：输入的写法就是存下来的写法，不留上一次的思考强度。 */
+export function writeIdentityModel(directory: string, spec: ModelSpec) {
+  const file = settingsFile(directory);
+  if (!existsSync(file))
+    throw new Problem(409, "这个身份还没有自己的配置文件，请先启动一次");
+  const settings = readJson(file);
+  settings.defaultProvider = spec.provider;
+  settings.defaultModel = spec.model;
+  if (spec.thinking) settings.defaultThinkingLevel = spec.thinking;
+  else delete settings.defaultThinkingLevel;
+  writeSettings(file, settings);
+  return formatModelSpec(spec);
 }
 
 /** Add owned notes an identity predates. Its own copies win; no overwrite. */

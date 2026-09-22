@@ -63,7 +63,7 @@ export function AgentDrawer({
   }, [agent.id, revision, boxAfter, tab]);
   useEffect(() => {
     setConfig(agent.config);
-  }, [agent.config.auto_start, agent.config.heartbeat_seconds]);
+  }, [agent.config.heartbeat_seconds]);
   async function save(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -401,21 +401,10 @@ export function AgentDrawer({
               {agent.agent_directory && <AgentModel agentId={agent.id} />}
               <form onSubmit={save} className="settings-section">
                 <h3>运行偏好</h3>
-                <label className="switch-row">
-                  <span>
-                    <strong>允许事件自动启动</strong>
-                    <small>Pi 已退出时可被事件拉起；Agent 也能自行调整。</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    checked={config.auto_start}
-                    onChange={(e) => {
-                      setSaved(false);
-                      setConfig({ ...config, auto_start: e.target.checked });
-                    }}
-                  />
-                </label>
+                <p className="muted small-text">
+                  离线时被私聊、@
+                  或入群邀请叫醒；群里没点名它的消息和下面的消息箱提醒不开进程。
+                </p>
                 <label className="form-label">
                   心跳检查间隔（秒）
                   <input
@@ -435,7 +424,7 @@ export function AgentDrawer({
                   />
                 </label>
                 <p className="muted small-text">
-                  每隔这么久检查一次消息箱；有未完成消息则唤醒，完成后不再提醒。
+                  在跑的时候每隔这么久提醒一次消息箱里没处理完的消息，处理完就不再提醒。
                 </p>
                 <button className="button" disabled={busy}>
                   {saved ? "已保存" : busy ? "保存中…" : "保存设置"}

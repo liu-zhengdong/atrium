@@ -39,9 +39,8 @@ export function DeleteAgent({
       <p className="muted">移出名册并取消待投递通知与唤醒，历史聊天保留。</p>
       {agent.available && (
         <p className="muted" role="status">
-          Agent
-          正在运行，请先正常停止。终端实例在原终端退出；后台实例关闭自动启动后，运行
-          atrium stop，再运行 atrium。
+          Agent 正在运行，请先停止。后台实例用上面的「停止 Agent」或 atrium stop
+          名称；终端实例在原终端退出。
         </p>
       )}
       <button

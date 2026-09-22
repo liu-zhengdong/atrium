@@ -81,7 +81,7 @@ const show: Command = {
         `工作目录：${agent.cwd}`,
         `配置目录：${agent.agent_directory ?? "无（旧记录，待升级）"}`,
         agent.session_file && `会话文件：${agent.session_file}`,
-        `偏好：事件自动启动 ${agent.config.auto_start ? "开" : "关"} · 心跳 ${agent.config.heartbeat_seconds} 秒 · 最近心跳 ${agent.last_wake ? when(agent.last_wake) : "还没有"}`,
+        `心跳：每 ${agent.config.heartbeat_seconds} 秒 · 最近一次 ${agent.last_wake ? when(agent.last_wake) : "还没有"}`,
         agent.unread ? `消息箱：${agent.unread} 条待处理` : "",
         agent.error && `错误：${agent.error}`,
       ]
@@ -139,9 +139,7 @@ const stop: Command = {
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
     await client.post(`/agents/${agent.id}/stop`);
-    console.log(
-      `已停止 ${agent.name}${agent.config.auto_start ? "；它开着事件自动启动，有待投递事件时会再被拉起" : ""}`,
-    );
+    console.log(`已停止 ${agent.name}；被私聊或 @ 时会再起来`);
   },
 };
 
@@ -163,30 +161,22 @@ const remove: Command = {
 };
 
 const config: Command = {
-  args: "名称 [--auto-start on|off] [--heartbeat 秒]",
-  about: "查看或修改运行偏好：事件自动启动、心跳间隔",
-  options: { "auto-start": { type: "string" }, heartbeat: { type: "string" } },
+  args: "名称 [--heartbeat 秒]",
+  about: "查看或修改消息箱心跳间隔",
+  options: { heartbeat: { type: "string" } },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const client = await connect();
     let agent = findAgent(await roster(client), reference!);
-    const patch: Record<string, unknown> = {};
-    const auto = str(values, "auto-start");
-    if (auto !== undefined) {
-      if (auto !== "on" && auto !== "off")
-        throw new Error("--auto-start 只接受 on 或 off");
-      patch.auto_start = auto === "on";
-    }
     const heartbeat = str(values, "heartbeat");
-    if (heartbeat !== undefined) patch.heartbeat_seconds = Number(heartbeat);
-    if (Object.keys(patch).length) {
-      await client.patch(`/agents/${agent.id}/config`, patch);
+    if (heartbeat !== undefined) {
+      await client.patch(`/agents/${agent.id}/config`, {
+        heartbeat_seconds: Number(heartbeat),
+      });
       agent = findAgent(await roster(client), agent.id);
     }
     if (json) return printJson(agent.config);
-    console.log(
-      `${agent.name} · 事件自动启动 ${agent.config.auto_start ? "开" : "关"} · 心跳 ${agent.config.heartbeat_seconds} 秒`,
-    );
+    console.log(`${agent.name} · 心跳 ${agent.config.heartbeat_seconds} 秒`);
   },
 };
 

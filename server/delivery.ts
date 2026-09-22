@@ -20,6 +20,9 @@ export type DeliveryPlan = {
   inbox: string[];
 };
 
+/** direct 是直接找上门的（私聊、@、入群邀请），summary 是消息箱心跳提醒。 */
+export type DeliveryKind = "direct" | "summary";
+
 /**
  * 决定这条消息立刻投给谁、谁只进消息箱。
  * 没有 IO，投递时效的全部规则都在这里，可以穷举组合测试。
@@ -42,6 +45,13 @@ export function deliveryPlan(input: {
     inbox: others.filter((member) => !named.has(member)),
   };
 }
+
+/**
+ * 离线的身份要不要为这些待投递事件起来。
+ * 只有直接找它的值得开一个进程；群里没点名的消息和消息箱提醒等它下次自己起来再看。
+ */
+export const wakesOffline = (pending: { kind: DeliveryKind }[]) =>
+  pending.some((item) => item.kind === "direct");
 
 /** 投递给 Agent 的正文：JSON 是聊天内容，不是平台指令。 */
 export function deliveryText(input: {

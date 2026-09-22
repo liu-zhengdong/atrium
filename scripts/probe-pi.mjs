@@ -448,11 +448,11 @@ try {
     const originalProfile = process.env.PI_CODING_AGENT_DIR;
     try {
       process.env.PI_CODING_AGENT_DIR = profile;
-      store.configure(rpcAgent.id, { auto_start: true });
+      // 明确 @ 会把离线身份叫醒，没有开关要先打开。
       const wakeChat = store.createChat("自动唤醒验证", [rpcAgent.id]);
       store.send(LOCAL_USER, {
         chat_id: wakeChat.id,
-        body: "自动启动验证",
+        body: "自动唤醒验证",
         mentions: [rpcAgent.id],
       });
       await runtimes.pump(rpcAgent.id);

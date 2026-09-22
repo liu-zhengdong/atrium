@@ -127,19 +127,10 @@ test(
     assert.match(await refused("show", "不存在"), /Agent 不存在/);
 
     // 偏好与资料：非法值被拒，合法值落库。
-    assert.match(
-      await ok("config", "沈默", "--heartbeat", "45", "--auto-start", "on"),
-      /事件自动启动 开 · 心跳 45 秒/,
-    );
-    assert.match(
-      await ok("config", "沈默", "--auto-start", "off"),
-      /事件自动启动 关 · 心跳 45 秒/,
-    );
+    assert.match(await ok("config", "沈默", "--heartbeat", "45"), /心跳 45 秒/);
+    assert.match(await ok("config", "沈默"), /心跳 45 秒/);
     await refused("config", "沈默", "--heartbeat", "1");
-    assert.match(
-      await refused("config", "沈默", "--auto-start", "maybe"),
-      /只接受 on 或 off/,
-    );
+    await refused("config", "沈默", "--auto-start", "on");
     assert.match(
       await ok("profile", "沈默", "--description", "评审与测试"),
       /评审与测试/,

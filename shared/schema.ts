@@ -24,13 +24,11 @@ export const forkSource = z.union([
   displayName,
 ]);
 const preferenceFields = {
-  auto_start: z.boolean(),
   heartbeat_seconds: z.number().int().min(5).max(3600),
 };
 /** 读存储的配置：缺的键补默认值。 */
 export const preferences = z
   .object({
-    auto_start: preferenceFields.auto_start.default(false),
     heartbeat_seconds: preferenceFields.heartbeat_seconds.default(30),
   })
   .strict();
@@ -41,7 +39,6 @@ export const preferences = z
 export const preferencePatch = z.object(preferenceFields).partial().strict();
 export type Preferences = z.infer<typeof preferences>;
 export const defaultPreferences: Preferences = {
-  auto_start: false,
   heartbeat_seconds: 30,
 };
 export const sendInput = z

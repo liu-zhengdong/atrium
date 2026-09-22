@@ -9,7 +9,7 @@ import {
   text,
   displayName,
   forkSource,
-  preferences,
+  preferencePatch,
   sendInput,
   type Overview,
 } from "../shared/schema.ts";
@@ -26,11 +26,14 @@ import {
 } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
-import { readUser, writeUser } from "./users.ts";
+import { readUser, resolveActor, writeUser } from "./users.ts";
 import { removeMember, updateGroup } from "./groups.ts";
 import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { groupName } from "../shared/group.ts";
-import { LOCAL_USER } from "../shared/user.ts";
+import { isUserRef, LOCAL_USER } from "../shared/user.ts";
+
+/** 以谁的名义：用户短号，或身份的短号、名称、ID；不给就是本机用户。 */
+const actor = z.string().trim().min(1).max(60);
 
 export async function createApp(options: {
   data: string;
@@ -294,7 +297,7 @@ export async function createApp(options: {
   app.patch("/api/agents/:id/config", (request) => {
     const result = store.configure(
       agentParams(request),
-      preferences.partial().parse(request.body),
+      preferencePatch.parse(request.body),
     );
     changed();
     return result;
@@ -303,6 +306,26 @@ export async function createApp(options: {
     if (!runtimes) throw new Problem(503, "运行时未启用");
     await runtimes.start(agentParams(request));
     return { connected: true };
+  });
+  app.post("/api/agents/:id/stop", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    await runtimes.stop(agentParams(request));
+    return { stopped: true };
+  });
+  // 与某位 Agent 的私聊：用户名义是它与用户的私聊，身份名义是两位同伴之间的私聊。
+  app.post("/api/agents/:id/direct", (request) => {
+    const target = agentParams(request);
+    const { as } = z
+      .object({ as: actor.optional() })
+      .strict()
+      .parse(request.body ?? {});
+    const sender = resolveActor(store, as);
+    const chat = isUserRef(sender)
+      ? store.createChat(store.agent(target).name, [target], target)
+      : store.openDirect(sender, target);
+    if (isUserRef(sender)) void runtimes?.pump(target);
+    changed();
+    return chat;
   });
   app.get("/api/agents/:id/trace", (request) => {
     const agent = agentParams(request);
@@ -375,15 +398,30 @@ export async function createApp(options: {
         name: groupName,
         members: z.array(id).max(30),
         direct_agent: id.optional(),
+        as: actor.optional(),
       })
       .strict()
       .parse(request.body);
+    const creator = resolveActor(store, a.as);
+    if (a.direct_agent && !isUserRef(creator))
+      throw new Problem(
+        400,
+        "以身份名义只能建群；同伴私聊用 POST /api/agents/:id/direct",
+      );
     if (
       a.direct_agent &&
       (a.members.length !== 1 || a.members[0] !== a.direct_agent)
     )
       throw new Problem(400, "私聊必须且只能包含目标 Agent");
-    const result = store.createChat(a.name, a.members, a.direct_agent);
+    // 以身份名义建群走 MCP create_group 同一条路：它自己入群，其他成员收到邀请通知。
+    const result = isUserRef(creator)
+      ? store.createChat(a.name, a.members, a.direct_agent)
+      : store.createChat(
+          a.name,
+          [...new Set([creator, ...a.members])],
+          undefined,
+          creator,
+        );
     if (a.direct_agent) void runtimes?.pump(a.direct_agent);
     changed();
     return result;
@@ -393,8 +431,16 @@ export async function createApp(options: {
     return { ...store.chat(chatId), members: store.members(chatId) };
   });
   app.post("/api/chats/:id/members", (request) => {
-    const input = z.object({ agent_id: id }).strict().parse(request.body);
-    const members = store.addMember(agentParams(request), input.agent_id);
+    const input = z
+      .object({ agent_id: id, as: actor.optional() })
+      .strict()
+      .parse(request.body);
+    const chatId = agentParams(request);
+    const inviter = resolveActor(store, input.as);
+    // 以身份名义邀请走 MCP invite_agent 同一条路：邀请人须在群内，新成员收到通知。
+    const members = isUserRef(inviter)
+      ? store.addMember(chatId, input.agent_id)
+      : store.invite(inviter, chatId, input.agent_id);
     changed();
     return { members };
   });
@@ -504,7 +550,11 @@ export async function createApp(options: {
     return { ok: true };
   });
   app.post("/api/messages", (request) => {
-    const result = store.send(LOCAL_USER, sendInput.parse(request.body));
+    // 默认是用户发言；`as` 以某个身份的名义，成员资格、@ 全体等限制与 MCP send_message 一致。
+    const { as, ...input } = z
+      .looseObject({ as: actor.optional() })
+      .parse(request.body);
+    const result = store.send(resolveActor(store, as), sendInput.parse(input));
     changed();
     return result;
   });

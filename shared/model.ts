@@ -27,6 +27,19 @@ export const modelBase = (spec: string) => {
   const parsed = splitModelSpec(spec);
   return parsed ? `${parsed.provider}/${parsed.model}` : spec;
 };
+/** 清单按 provider 归组；provider 是第一段，模型 id 自己可以再带斜杠。 */
+export function groupModelsByProvider(options: string[]) {
+  const grouped = new Map<string, string[]>();
+  for (const option of options) {
+    const slash = option.indexOf("/");
+    const provider = option.slice(0, slash);
+    grouped.set(provider, [
+      ...(grouped.get(provider) ?? []),
+      option.slice(slash + 1),
+    ]);
+  }
+  return grouped;
+}
 
 /**
  * 写法沿用 pi 的 `--model`：`provider/id`，可选 `:思考强度`。

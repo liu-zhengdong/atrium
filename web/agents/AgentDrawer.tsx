@@ -143,6 +143,18 @@ export function AgentDrawer({
       setBusy(false);
     }
   }
+  async function stop() {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/agents/${agent.id}/stop`, "POST");
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <Modal title={agent.name} close={close} drawer>
       <div className="flex items-center gap-[13px] px-[25px] py-[23px]">
@@ -374,6 +386,15 @@ export function AgentDrawer({
                     onClick={() => void start()}
                   >
                     {busy ? "启动中…" : "启动 Agent"}
+                  </button>
+                )}
+                {agent.runtime && (
+                  <button
+                    className="button secondary"
+                    disabled={busy}
+                    onClick={() => void stop()}
+                  >
+                    {busy ? "停止中…" : "停止 Agent"}
                   </button>
                 )}
               </section>

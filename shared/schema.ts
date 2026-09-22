@@ -23,12 +23,22 @@ export const forkSource = z.union([
   agentReference,
   displayName,
 ]);
+const preferenceFields = {
+  auto_start: z.boolean(),
+  heartbeat_seconds: z.number().int().min(5).max(3600),
+};
+/** 读存储的配置：缺的键补默认值。 */
 export const preferences = z
   .object({
-    auto_start: z.boolean().default(false),
-    heartbeat_seconds: z.number().int().min(5).max(3600).default(30),
+    auto_start: preferenceFields.auto_start.default(false),
+    heartbeat_seconds: preferenceFields.heartbeat_seconds.default(30),
   })
   .strict();
+/**
+ * 改配置：只改给了的键。不能拿 `preferences.partial()` 代替：
+ * zod 4 对带默认值的字段做 partial 仍会填默认值，没传的键会被默认值盖掉。
+ */
+export const preferencePatch = z.object(preferenceFields).partial().strict();
 export type Preferences = z.infer<typeof preferences>;
 export const defaultPreferences: Preferences = {
   auto_start: false,

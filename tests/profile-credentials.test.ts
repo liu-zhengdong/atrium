@@ -161,13 +161,22 @@ test("身份自己的登录不被顶掉：有内容的 auth.json 原样保留", 
 test("指向别处的软链接是用户自己配的，保留", () => {
   const { root, template } = credentialTemplate("atrium-auth-elsewhere-");
   try {
-    const separate = join(root, "separate-auth.json");
-    writeFileSync(separate, JSON.stringify({ deepseek: { type: "api_key" } }));
-    const identity = join(root, "identity");
-    mkdirSync(identity, { recursive: true });
-    symlinkSync(separate, join(identity, "auth.json"));
-    assert.equal(linkSharedCredentials(identity, template), false);
-    assert.equal(readlinkSync(join(identity, "auth.json")), separate);
+    // The link itself is the intent, so it holds even before anything is
+    // stored at the other end — an empty or missing target still means
+    // 「this identity is separate」.
+    for (const [name, content] of [
+      ["logged-in", JSON.stringify({ deepseek: { type: "api_key" } })],
+      ["empty", "{}"],
+      ["missing", undefined],
+    ] as const) {
+      const separate = join(root, `${name}-auth.json`);
+      if (content !== undefined) writeFileSync(separate, content);
+      const identity = join(root, name);
+      mkdirSync(identity, { recursive: true });
+      symlinkSync(separate, join(identity, "auth.json"));
+      assert.equal(linkSharedCredentials(identity, template), false);
+      assert.equal(readlinkSync(join(identity, "auth.json")), separate);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -175,10 +184,13 @@ test("指向别处的软链接是用户自己配的，保留", () => {
 
 test("模板目录本身当身份目录时不自链", () => {
   const { root, template } = credentialTemplate("atrium-auth-self-");
+  // Empty is the dangerous case: without the guard the file would be removed
+  // and replaced by a link to itself, taking the user's credentials with it.
+  writeFileSync(join(template, "auth.json"), "{}");
   try {
     assert.equal(linkSharedCredentials(template, template), false);
     assert(!lstatSync(join(template, "auth.json")).isSymbolicLink());
-    assert.deepEqual(credentials(join(template, "auth.json")), TEMPLATE_LOGIN);
+    assert.equal(readFileSync(join(template, "auth.json"), "utf8"), "{}");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

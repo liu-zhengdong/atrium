@@ -6,10 +6,81 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../server/store.ts";
-import { TraceStore } from "../server/trace.ts";
+import { commandSummary, TraceStore, toolTitle } from "../server/trace.ts";
 import { createApp } from "../server/app.ts";
 import type { RuntimeEventPage } from "../shared/trace.ts";
 import { LOCAL_USER } from "../shared/user.ts";
+
+test("轨迹标题：一句话说清这一步在干什么", () => {
+  // 下面的输入全部取自一次真实协作里采到的轨迹。
+  const title = (name: string, args: unknown) =>
+    toolTitle(name, JSON.stringify(args));
+  // mcp 代理：查一下、搜一下和真干了一件事各说各的。
+  assert.equal(
+    title("mcp", {
+      server: "atrium",
+      tool: "atrium_create_group",
+      args: { name: "调研" },
+    }),
+    "调用 MCP · atrium_create_group",
+  );
+  assert.equal(
+    title("mcp", { server: "atrium", describe: "atrium_create_group" }),
+    "查看 MCP 工具 · atrium_create_group",
+  );
+  assert.equal(
+    title("mcp", { search: "message_box", limit: 20 }),
+    "搜索 MCP 工具 · message_box",
+  );
+  assert.equal(title("mcp", { connect: "atrium" }), "连接 MCP · atrium");
+  assert.equal(title("mcp", { server: "atrium" }), "列出 MCP 工具 · atrium");
+  assert.equal(
+    title("mcp", { action: "install", url: "https://example.com/mcp" }),
+    "MCP 操作 · install",
+  );
+  assert.equal(title("mcp", {}), "查看 MCP 状态");
+  assert.equal(toolTitle("mcp", "{被截断的"), "查看 MCP 状态");
+  // 脚本跳过铺垫，取第一条真正做事的命令；管道属于同一条命令，不拆。
+  assert.equal(
+    commandSummary(
+      'set -o pipefail\necho "=== PR 409 ==="\ncurl -sS https://api.github.com/repos/citrolabs/ego-lite/pulls/409 | python3 -c "import sys"',
+    ),
+    'curl -sS https://api.github.com/repos/citrolabs/ego-lite/pulls/409 | python3 -c "import sys"',
+  );
+  assert.equal(
+    commandSummary(
+      'cd /tmp && echo "go"; ego-browser --sdk-path 2>&1 | head -5',
+    ),
+    "ego-browser --sdk-path 2>&1 | head -5",
+  );
+  assert.equal(
+    commandSummary('F="/Applications/ego lite.app"\notool -L "$F"'),
+    'otool -L "$F"',
+  );
+  assert.equal(
+    commandSummary("~/.local/bin/ego-browser help nodejs 2>&1 | head -30"),
+    "~/.local/bin/ego-browser help nodejs 2>&1 | head -30",
+  );
+  assert.equal(
+    commandSummary('cd /tmp\necho "全是铺垫"'),
+    "cd /tmp",
+    "退回第一条",
+  );
+  assert.equal(commandSummary(""), "");
+  assert.equal(title("bash", {}), "执行命令", "没有命令就只给动词");
+  // 摘要按一行可读截，截了就明说截了；完整原文在参数里。
+  const long = title("bash", { command: `curl ${"x".repeat(200)}` });
+  assert.equal(long.length, "执行命令 · ".length + 81);
+  assert(long.endsWith("…"));
+  assert.equal(
+    title("read", { path: "/Users/liu/.agents/skills/ego-browser/SKILL.md" }),
+    "读取 · /Users/liu/.agents/skills/ego-browser/SKILL.md",
+  );
+  assert.equal(
+    title("lsp", { file_path: "server/app.ts" }),
+    "lsp · server/app.ts",
+  );
+});
 
 const generation = () => ({
   runtimeId: randomUUID(),

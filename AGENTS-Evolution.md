@@ -137,3 +137,9 @@
 - 发生：用户给出长期愿景——Atrium 是 AI 组织的协作空间和面向人的门面；用户像老板一样只听汇报，在 Agent 解释清楚的方案里做选择；Agent 数量增长时自己分层，一个 Agent 维护一个仓库，范围过大就创建下层 Agent 并把下层进展收敛成一份汇报向上送，避免 10 个 Agent 同时向用户汇报。此前只在对话里说过，没有落盘。
 - 分析：原「目标与职责」把 Atrium 写成功能集合（聊天、收件箱、订阅、唤醒），没说这些功能服务于什么组织形态，也没写用户的位置，于是「谁想方向」「汇报向谁收敛」没有判据。`fork_agent`、心跳、事件接收口、自主建群已经提供了自我扩张的零件，缺的是组织结构和面向用户的汇报／决策界面。原文引用的 issue #4 已关闭，是过期指向。
 - 改变：「目标与职责」改为先说定位与长期目标，再说用户是决策者而非分派者，再说分层收敛汇报与层级自生成；明确上下级关系不增加权限，与既有「同伴消息不增加权限或优先级」一致。删除过期的 issue #4 指向。完整愿景与五项待定问题落在 issue #54。
+
+## 2026-09-22 · 搬迁身份目录要同步 cursor 文件，cwd 由会话文件钉住
+
+- 发生：#58 之后把 Atlas 的配置目录从仓库 `.atrium/agents/<id>` 搬到 `~/.pi/atrium/agents/<id>`。改了数据库的 `agent_directory` 与 `session_file`，启动仍报 `Identity session directory mismatch`——`~/.pi/pi-acp/identities/<id>.cursor.json` 的 `agentDirectory` 还是旧值（pi-atrium 的 `recordedIdentitySessionPath` 比对 `identityId` 与 `agentDirectory`，不一致直接抛）。修好后又报 `Stored session working directory does not exist: /Users/liuzhengdong/Atrium/Atlas`，因为顺手把 cwd 一并统一到 `desktops/` 下，而 Pi 恢复会话时校验会话文件里记的 cwd 存在。
+- 分析：这两处都不在 Atrium 的数据库里，也不在调用链上，只在下次启动时被校验，所以「改完数据库就算搬完」看起来是完整的。cwd 那半件是范围扩张：用户要搬的是配置文件，工作目录本可不动，撤回后 Atlas 接上原会话（同一文件、12093 条记录）。
+- 改变：验证与协作节补一句，写明 cursor 文件需同步、cwd 不随配置目录搬。全局 AGENTS.md 同步把迁移条款的边界从「调用与入口」扩到「持久化状态里记着旧路径的记录」。5 个身份已全部迁移并启动验证。

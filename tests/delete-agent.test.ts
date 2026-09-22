@@ -66,6 +66,13 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
   const token = JSON.parse(
     readFileSync(join(data, "credentials", `${agent.id}.json`), "utf8"),
   ).token;
+  // An installation upgraded before this identity ever launched still holds the
+  // retired transport copy of the same token.
+  mkdirSync(join(data, "links"), { recursive: true });
+  writeFileSync(
+    join(data, "links", `${agent.id}.json`),
+    JSON.stringify({ agent_id: agent.id, token }),
+  );
   const other = store.createAgent("保留 Agent", root).agent;
   const direct = store.createChat(agent.name, [agent.id], agent.id);
   const group = store.createChat("讨论组", [agent.id, other.id]);
@@ -120,6 +127,11 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     !existsSync(join(piHome, "agents", "演示 Agent")),
     "删除时摘掉名称入口",
   );
+  for (const dir of ["credentials", "links"])
+    assert(
+      !existsSync(join(data, dir, `${agent.id}.json`)),
+      `删除时清掉 ${dir} 里的令牌文件`,
+    );
   assert.equal(
     (
       await app.inject({

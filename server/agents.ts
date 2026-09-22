@@ -293,3 +293,13 @@ export function createAgent(
     throw error;
   }
 }
+
+/**
+ * Drop the identity's token from disk once the database has revoked it, so a
+ * deleted identity leaves no usable credential behind. Covers the retired
+ * links/ copy that only a launch would have migrated.
+ */
+export function removeCredential(data: string, id: string) {
+  for (const dir of ["credentials", "links"])
+    rmSync(join(data, dir, `${id}.json`), { force: true });
+}

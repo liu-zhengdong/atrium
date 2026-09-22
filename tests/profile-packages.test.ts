@@ -22,13 +22,15 @@ import {
   adoptIdentityConfig,
   injectBundledPackages,
   isBundledPackagePath,
-  parseGitPackage,
   prepareProfile,
   syncIdentityNotes,
   syncIdentityPackages,
   syncIdentityProfile,
-  templatePackagePath,
 } from "../server/profile.ts";
+import {
+  parseGitPackage,
+  templatePackagePath,
+} from "../server/package-spec.ts";
 
 const require = createRequire(import.meta.url);
 const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
@@ -492,6 +494,52 @@ test("syncIdentityProfile 报告未能补齐的部分，仍让身份启动", () 
     assert(notices[0]!.includes("SYSTEM.md"));
     assert(!lstatSync(join(identity, "AGENTS.md")).isSymbolicLink());
     assert.deepEqual(syncIdentityProfile(identity).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("旧布局身份先搬笔记再补齐：模板才有的协议笔记也能拿到", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-notes-order-")));
+  const template = join(root, "template"),
+    templateVault = join(root, "template-vault"),
+    ownVault = join(root, "own-vault"),
+    identity = join(root, "identity");
+  mkdirSync(template, { recursive: true });
+  mkdirSync(templateVault, { recursive: true });
+  mkdirSync(ownVault, { recursive: true });
+  mkdirSync(identity, { recursive: true });
+  // The template's vault has both protocol notes; the identity's older vault
+  // predates self-evolution.md — only the top-up step can supply it.
+  writeFileSync(join(templateVault, "USER.md"), "模板的用户理解");
+  writeFileSync(join(templateVault, "self-evolution.md"), "模板的协议正文");
+  writeFileSync(join(ownVault, "USER.md"), "身份自己的用户理解");
+  writeFileSync(
+    join(template, "notes.json"),
+    JSON.stringify({ directory: templateVault }),
+  );
+  writeFileSync(
+    join(identity, "notes.json"),
+    JSON.stringify({ directory: ownVault }),
+  );
+  try {
+    adoptIdentityConfig(identity, template);
+    const notes = join(identity, "notes");
+    // Moved in from its own vault, then topped up from the template's.
+    assert.equal(
+      readFileSync(join(notes, "USER.md"), "utf8"),
+      "身份自己的用户理解",
+    );
+    assert.equal(
+      readFileSync(join(notes, "self-evolution.md"), "utf8"),
+      "模板的协议正文",
+    );
+    // Neither vault is written.
+    assert.deepEqual(readdirSync(ownVault), ["USER.md"]);
+    assert.deepEqual(readdirSync(templateVault).sort(), [
+      "USER.md",
+      "self-evolution.md",
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

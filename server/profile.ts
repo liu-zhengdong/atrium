@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { Problem } from "./store.ts";
+import { local, resolveInstalled } from "./package-spec.ts";
 const require = createRequire(import.meta.url);
 export const defaultTemplate = () =>
   resolve(
@@ -29,8 +30,6 @@ const write = (path: string, value: unknown) =>
     mode: 0o600,
     flag: "wx",
   });
-const local = (path: string, root: string) =>
-  path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(root, path);
 const copyOwned = (from: string, to: string) =>
   writeFileSync(to, readFileSync(realpathSync(from)));
 const linked = (path: string) => {
@@ -87,6 +86,11 @@ const notesSettings = (directory: string, maxContextBytes: unknown) => ({
   directory,
   ...(maxContextBytes === undefined ? {} : { maxContextBytes }),
 });
+/** Where an identity keeps its own notes. The layout is decided here only. */
+const ownedNotesDir = (directory: string) => join(directory, "notes");
+/** Directories holding identity-private content; the mode is decided here only. */
+const makeOwnedDir = (path: string) =>
+  mkdirSync(path, { recursive: true, mode: 0o700 });
 const notesDirectory = (notes: Record<string, unknown>, root: string) =>
   typeof notes.directory === "string" ? local(notes.directory, root) : null;
 /**
@@ -104,65 +108,6 @@ function copyOwnedNotes(sourceDir: string, directory: string) {
       else copyOwned(from, dest);
     }
 }
-const dropGitSuffix = (path: string) =>
-  path
-    .replace(/\.git$/i, "")
-    .replace(/#.*$/, "")
-    .replace(/\/+$/, "");
-/** Map a Pi/npm git specifier to host + repo path (no ref). */
-export function parseGitPackage(
-  value: string,
-): { host: string; path: string } | null {
-  const github = /^github:([^#]+)/.exec(value);
-  if (github) {
-    const [owner, repo] = dropGitSuffix(github[1]!).split("/");
-    if (owner && repo)
-      return { host: "github.com", path: `${owner}/${repo.split("@")[0]}` };
-    return null;
-  }
-  const spec = value.startsWith("git:") ? value.slice(4) : value;
-  const ssh = /^git@([^:]+):(.+)$/.exec(spec);
-  if (ssh) {
-    return { host: ssh[1]!, path: dropGitSuffix(ssh[2]!).split("@")[0]! };
-  }
-  const proto = /^(?:https|http|ssh|git):\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/.exec(
-    spec,
-  );
-  if (proto) {
-    return { host: proto[1]!, path: dropGitSuffix(proto[2]!).split("@")[0]! };
-  }
-  if (value.startsWith("git:")) {
-    const short = /^([^/]+)\/(.+)$/.exec(spec);
-    if (short) {
-      return { host: short[1]!, path: dropGitSuffix(short[2]!).split("@")[0]! };
-    }
-  }
-  return null;
-}
-/** Where Pi would have installed this package under the template agent dir. */
-export function templatePackagePath(template: string, spec: string): string {
-  const value = spec.trim();
-  const npm = /^npm:((?:@[^/]+\/)?[^@/]+)(?:@.+)?$/.exec(value);
-  if (npm) return join(template, "npm", "node_modules", npm[1]!);
-  const git = parseGitPackage(value);
-  if (git) return join(template, "git", git.host, ...git.path.split("/"));
-  if (
-    value.startsWith("git:") ||
-    value.startsWith("github:") ||
-    /^(https?|ssh):\/\//.test(value)
-  )
-    throw new Problem(400, `无法解析 Git package：${value}`);
-  return local(value, template);
-}
-const resolveInstalled = (template: string, spec: string) => {
-  const path = templatePackagePath(template, spec);
-  try {
-    return realpathSync(path);
-  } catch {
-    throw new Problem(400, `模板 package 未安装：${spec}`);
-  }
-};
-
 const BUNDLED_PACKAGE_NAMES = new Set([
   "@liuser/pi-atrium",
   "@liuser/pi-acp",
@@ -243,10 +188,10 @@ export function syncIdentityNotes(
   if (!existsSync(own) || !existsSync(source)) return;
   // Only ever write into the notes directory this app laid out for the identity.
   const target = notesDirectory(readJson(own), directory);
-  if (target !== join(directory, "notes")) return;
+  if (target !== ownedNotesDir(directory)) return;
   const sourceDir = notesDirectory(readJson(source), template);
   if (!sourceDir || !existsSync(sourceDir)) return;
-  mkdirSync(target, { recursive: true, mode: 0o700 });
+  makeOwnedDir(target);
   copyOwnedNotes(sourceDir, target);
 }
 
@@ -284,10 +229,10 @@ function adoptNotesDirectory(directory: string) {
   const notes = readJson(file);
   const current = notesDirectory(notes, directory);
   if (!current || inside(directory, current)) return;
-  const target = join(directory, "notes");
+  const target = ownedNotesDir(directory);
   // A linked notes dir would make the copy below land back in the vault.
   if (linked(target)) throw new Problem(409, "notes 目录是符号链接，未改动");
-  mkdirSync(target, { recursive: true, mode: 0o700 });
+  makeOwnedDir(target);
   if (existsSync(current)) copyOwnedNotes(current, target);
   writeFileSync(
     file,
@@ -295,6 +240,17 @@ function adoptNotesDirectory(directory: string) {
       "\n",
     { mode: 0o600 },
   );
+}
+
+/**
+ * Bring the identity's notes to the current layout. The order is why these two
+ * share a function: the top-up only ever writes into the identity's own notes
+ * directory, so a profile still pointing at the user's vault has to be moved in
+ * first — otherwise the protocol notes it predates are skipped in silence.
+ */
+function adoptNotes(directory: string, template: string) {
+  adoptNotesDirectory(directory);
+  syncIdentityNotes(directory, template);
 }
 
 /**
@@ -354,7 +310,7 @@ export function adoptIdentityConfig(
   const failed = adoptLinkedFiles(directory);
   const left = failed.length ? [`规则文件未能复制：${failed.join("、")}`] : [];
   for (const step of [
-    () => adoptNotesDirectory(directory),
+    () => adoptNotes(directory, template),
     () => adoptResourceDirs(directory, template),
   ])
     try {
@@ -372,18 +328,67 @@ export function adoptIdentityConfig(
  */
 export function syncIdentityProfile(directory: string) {
   syncIdentityPackages(directory);
-  const notices: string[] = [];
-  const steps: [string, () => void][] = [
-    ["配置未能转成自有副本", () => adoptIdentityConfig(directory)],
-    ["协议笔记未能补齐", () => syncIdentityNotes(directory)],
-  ];
-  for (const [label, run] of steps)
-    try {
-      run();
-    } catch (error) {
-      notices.push(`${label}：${error}`);
-    }
-  return notices;
+  try {
+    adoptIdentityConfig(directory);
+  } catch (error) {
+    // The message already names every part that stayed shared.
+    return [`配置未能转成自有副本：${error}`];
+  }
+  return [];
+}
+
+/** Settings keys a new identity carries over from the template as written. */
+const CARRIED_KEYS = [
+  "defaultProvider",
+  "defaultModel",
+  "defaultThinkingLevel",
+  "theme",
+  "hideThinkingBlock",
+  "compaction",
+  "retry",
+  "transport",
+  "enabledModels",
+  "thinkingBudgets",
+  "defaultTools",
+];
+
+/**
+ * The settings a new identity starts from: the template's own choices, with
+ * packages resolved to where they are installed and resource paths pointing at
+ * what the identity owns. Decides the content; writes nothing.
+ */
+function buildSettings(source: Record<string, unknown>, template: string) {
+  const settings: Record<string, unknown> = {};
+  for (const key of CARRIED_KEYS)
+    if (source[key] !== undefined) settings[key] = source[key];
+  const packages = Array.isArray(source.packages) ? source.packages : [];
+  settings.packages = injectBundledPackages(
+    packages.map((entry: unknown) => {
+      const value =
+        typeof entry === "string"
+          ? entry
+          : (entry as { source: string }).source;
+      if (typeof value !== "string")
+        throw new Problem(400, "配置模板含无效 package");
+      const path = resolveInstalled(template, value);
+      return typeof entry === "string"
+        ? path
+        : { ...(entry as object), source: path };
+    }),
+  );
+  for (const kind of OWNED_DIRS) {
+    const extra = Array.isArray(source[kind]) ? (source[kind] as string[]) : [];
+    // Paths into the template are dropped: the identity gets its own copy of
+    // that directory, and Pi reads it without being told. Paths pointing
+    // elsewhere are the user's explicit choice and stay.
+    settings[kind] = extra
+      .map((path) => {
+        const prefix = /^[!+-]/.test(path) ? path[0]! : "";
+        return prefix + local(prefix ? path.slice(1) : path, template);
+      })
+      .filter((path) => !inside(template, bare(path)));
+  }
+  return settings;
 }
 
 /** Owned rules, notes and resource dirs; packages stay path references. Never copy credentials. */
@@ -398,58 +403,22 @@ export function prepareProfile(
   // identity.json marks a prepared profile, any other existing content is kept.
   if (existsSync(join(target, "identity.json")))
     throw new Problem(409, "身份配置目录已存在，未覆盖");
-  const source = existsSync(join(template, "settings.json"))
-    ? readJson(join(template, "settings.json"))
-    : {};
-  const settings: Record<string, unknown> = {};
-  for (const key of [
-    "defaultProvider",
-    "defaultModel",
-    "defaultThinkingLevel",
-    "theme",
-    "hideThinkingBlock",
-    "compaction",
-    "retry",
-    "transport",
-    "enabledModels",
-    "thinkingBudgets",
-    "defaultTools",
-  ])
-    if (source[key] !== undefined) settings[key] = source[key];
-  const packages = Array.isArray(source.packages) ? source.packages : [];
-  const references = packages.map((entry: unknown) => {
-    const value =
-      typeof entry === "string" ? entry : (entry as { source: string }).source;
-    if (typeof value !== "string")
-      throw new Problem(400, "配置模板含无效 package");
-    const path = resolveInstalled(template, value);
-    return typeof entry === "string"
-      ? path
-      : { ...(entry as object), source: path };
-  });
-  settings.packages = injectBundledPackages(references);
-  for (const kind of OWNED_DIRS) {
-    const extra = Array.isArray(source[kind]) ? (source[kind] as string[]) : [];
-    // Paths into the template are dropped: the identity gets its own copy of
-    // that directory below, and Pi reads it without being told. Paths pointing
-    // elsewhere are the user's explicit choice and stay.
-    settings[kind] = extra
-      .map((path) => {
-        const prefix = /^[!+-]/.test(path) ? path[0]! : "";
-        return prefix + local(prefix ? path.slice(1) : path, template);
-      })
-      .filter((path) => !inside(template, bare(path)));
-  }
+  const settings = buildSettings(
+    existsSync(join(template, "settings.json"))
+      ? readJson(join(template, "settings.json"))
+      : {},
+    template,
+  );
   // Rule/model/MCP files and notes become this identity's own copies.
   // Credential files and session history are never copied.
   // Identity files are written exclusively (wx) alongside kept legacy content;
   // on failure only what this call created is removed.
   const created: string[] = [];
-  mkdirSync(target, { recursive: true, mode: 0o700 });
+  makeOwnedDir(target);
   try {
     const sessions = join(target, "sessions");
     if (!existsSync(sessions)) {
-      mkdirSync(sessions, { mode: 0o700 });
+      makeOwnedDir(sessions);
       created.push(sessions);
     }
     write(join(target, "identity.json"), { version: 1, identityId });
@@ -471,8 +440,8 @@ export function prepareProfile(
     if (existsSync(join(template, "notes.json"))) {
       const notes = readJson(join(template, "notes.json"));
       const sourceDir = notesDirectory(notes, template);
-      const directory = join(target, "notes");
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const directory = ownedNotesDir(target);
+      makeOwnedDir(directory);
       created.push(directory);
       if (sourceDir && existsSync(sourceDir)) {
         if (inside(template, sourceDir))

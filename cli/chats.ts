@@ -181,18 +181,20 @@ const send: Command = {
 };
 
 const group: Command = {
-  args: "群名 成员… [--as 身份]",
-  about: "建群；--as 以某个身份的名义建（它自动入群，其他成员收到邀请）",
-  options: { as: { type: "string" } },
+  args: "群名 成员… [--as 身份] [--note 来意]",
+  about: "建群；--as 以某个身份的名义建（它自动入群），--note 写给受邀者的来意",
+  options: { as: { type: "string" }, note: { type: "string" } },
   positionals: [2, 31],
   async run({ positionals: [name, ...members], values }) {
     const as = str(values, "as");
+    const note = str(values, "note");
     const client = await connect();
     const view = await roster(client);
     const chat = await client.post<Chat>("/chats", {
       name,
       members: members.map((member) => findAgent(view, member).id),
       ...(as ? { as } : {}),
+      ...(note ? { note } : {}),
     });
     const detail = await client.get<Chat & { members: string[] }>(
       `/chats/${chat.id}`,
@@ -204,19 +206,25 @@ const group: Command = {
 };
 
 const invite: Command = {
-  args: "会话 名称 [--as 身份]",
-  about: "拉一位身份进群；--as 以群内某个身份的名义邀请",
-  options: { as: { type: "string" } },
+  args: "会话 名称 [--as 身份] [--note 来意]",
+  about:
+    "拉一位身份进群；--as 以群内某个身份的名义邀请，--note 写给受邀者的来意",
+  options: { as: { type: "string" }, note: { type: "string" } },
   positionals: [2, 2],
   async run({ positionals: [reference, member], values }) {
     const as = str(values, "as");
+    const note = str(values, "note");
     const client = await connect();
     const view = await roster(client);
     const chat = findChat(view, reference!);
     const agent = findAgent(view, member!);
     const { members } = await client.post<{ members: string[] }>(
       `/chats/${chat.id}/members`,
-      { agent_id: agent.id, ...(as ? { as } : {}) },
+      {
+        agent_id: agent.id,
+        ...(as ? { as } : {}),
+        ...(note ? { note } : {}),
+      },
     );
     console.log(
       `${agent.name} 已加入 ${chat.name}（${chat.ref}）· 成员 ${members.length} 位`,

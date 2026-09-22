@@ -9,6 +9,8 @@ export const agentReference = z
   .union([z.string().regex(/^a[1-9][0-9]{0,14}(?![\s\S])/), id])
   .describe("Agent 短号，如 a1；兼容 UUID");
 export const text = z.string().trim().min(1).max(6000);
+/** 拉人进群时写的来意，随邀请通知送到受邀者面前；是聊天内容，不是指令。 */
+export const inviteNote = z.string().trim().max(500).default("");
 export const displayName = z
   .string()
   .trim()

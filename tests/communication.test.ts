@@ -91,8 +91,19 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
   const group = await call("create_group", {
     name: "协作讨论",
     members: [b.ref],
+    note: "拉你看一下交互",
   });
   assert.deepEqual(new Set(group.members), new Set([a.ref, b.ref]));
+  const invited = store
+    .pending(b.id)
+    .find((p) => p.text.startsWith("[Atrium 协作邀请]"))!;
+  assert.equal(invited.kind, "direct", "邀请直接找上门，会唤醒离线身份");
+  assert.equal(
+    JSON.parse(invited.text.split("\n")[2]).note,
+    "拉你看一下交互",
+    "建群的来意随邀请通知送到受邀者",
+  );
+  assert.match(invited.text, /群里还没有消息/, "新群里没历史要如实说");
   await call("send_message", { chat_id: group.id, body: "之前的讨论" });
   const before = store.pending(b.id).length;
   await call("send_message", { chat_id: group.id, body: "普通群消息" });
@@ -103,8 +114,18 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
     mentions: [b.ref],
   });
   assert.equal(store.pending(b.id).length, before + 1);
-  await call("invite_agent", { chat_id: group.id, agent_id: c.ref });
+  await call("invite_agent", {
+    chat_id: group.id,
+    agent_id: c.ref,
+    note: "讨论已经起头了，你接后半段",
+  });
   assert.equal(store.pending(c.id).length, 1);
+  const joined = store.pending(c.id)[0];
+  assert.equal(
+    JSON.parse(joined.text.split("\n")[2]).note,
+    "讨论已经起头了，你接后半段",
+  );
+  assert.match(joined.text, /群里已有消息/, "有历史就指它去读，不是等说明");
   await call("invite_agent", { chat_id: group.id, agent_id: c.ref });
   assert.equal(store.pending(c.id).length, 1, "重复邀请不重复叫醒");
   assert.equal(
@@ -116,6 +137,16 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
   await reject("invite_agent", { chat_id: foreign.ref, agent_id: c.ref });
   await reject("send_message", { chat_id: foreign.ref, body: "越权" });
   const total = store.chats().length;
+  await reject("create_group", {
+    name: "来意超长",
+    members: [b.ref],
+    note: "x".repeat(501),
+  });
+  await reject("invite_agent", {
+    chat_id: group.id,
+    agent_id: c.ref,
+    note: "x".repeat(501),
+  });
   await reject("create_group", { name: "无效成员", members: [b.ref, "a999"] });
   assert.equal(store.chats().length, total, "无效邀请不能留下半个群");
   store.run("UPDATE agents SET deleted_at=? WHERE id=?", Date.now(), b.id);

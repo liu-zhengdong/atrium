@@ -30,6 +30,7 @@ import { prepareProfile, syncIdentityProfile } from "./profile.ts";
 import {
   ensureDesktopCwd,
   linkProfile,
+  removeCredential,
   resolvePiHome,
   unlinkProfile,
 } from "./agents.ts";
@@ -277,6 +278,9 @@ export class Runtimes {
           lease?.release();
         }
       });
+      // After the commit: the revocation is recorded, so losing the file cannot
+      // strip a live identity of its token.
+      removeCredential(this.data, id);
       this.connections.delete(id);
       this.errors.delete(id);
       this.starts.delete(id);

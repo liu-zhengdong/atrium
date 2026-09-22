@@ -2,12 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,12 +19,14 @@ import { createApp } from "../server/app.ts";
 import { Problem } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 import {
+  adoptIdentityConfig,
   injectBundledPackages,
   isBundledPackagePath,
   parseGitPackage,
   prepareProfile,
   syncIdentityNotes,
   syncIdentityPackages,
+  syncIdentityProfile,
   templatePackagePath,
 } from "../server/profile.ts";
 
@@ -335,6 +339,159 @@ test("syncIdentityNotes 只写身份自己的 notes 目录", () => {
     rmSync(join(template, "notes.json"));
     syncIdentityNotes(identity, template);
     assert.deepEqual(readdirSync(notes), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const LINKED_FILES = ["AGENTS.md", "SYSTEM.md", "mcp.json", "models.json"];
+
+/** An identity laid out the old way: rules linked into shared config, notes in the user's vault. */
+function legacyProfile(prefix: string) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const shared = join(root, "shared"),
+    vault = join(root, "vault"),
+    identity = join(root, "identity");
+  mkdirSync(shared);
+  mkdirSync(join(vault, "self-evolution"), { recursive: true });
+  mkdirSync(identity);
+  for (const name of LINKED_FILES) {
+    writeFileSync(join(shared, name), `用户全局的 ${name}`);
+    symlinkSync(join(shared, name), join(identity, name));
+  }
+  writeFileSync(join(vault, "USER.md"), "对用户的理解");
+  writeFileSync(join(vault, "self-evolution.md"), "协议正文");
+  writeFileSync(join(vault, "self-evolution", "note.md"), "子笔记");
+  writeFileSync(join(vault, "密钥管理.md"), "个人笔记");
+  writeFileSync(
+    join(identity, "notes.json"),
+    JSON.stringify({ directory: vault, maxContextBytes: 262144 }),
+  );
+  return { root, shared, vault, identity };
+}
+
+test("旧身份的共享规则和笔记转成自有副本", () => {
+  const { root, shared, vault, identity } = legacyProfile("atrium-adopt-");
+  const notes = join(identity, "notes");
+  try {
+    adoptIdentityConfig(identity);
+    for (const name of LINKED_FILES) {
+      assert(!lstatSync(join(identity, name)).isSymbolicLink(), name);
+      assert.equal(
+        readFileSync(join(identity, name), "utf8"),
+        `用户全局的 ${name}`,
+      );
+    }
+    // Self-evolution now rewrites the identity's own rule, not the user's file.
+    writeFileSync(join(identity, "AGENTS.md"), "身份自己的规则");
+    assert.equal(
+      readFileSync(join(shared, "AGENTS.md"), "utf8"),
+      "用户全局的 AGENTS.md",
+    );
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(identity, "notes.json"), "utf8")),
+      { directory: notes, maxContextBytes: 262144 },
+    );
+    assert.equal(readFileSync(join(notes, "USER.md"), "utf8"), "对用户的理解");
+    assert.equal(
+      readFileSync(join(notes, "self-evolution", "note.md"), "utf8"),
+      "子笔记",
+    );
+    assert(!existsSync(join(notes, "密钥管理.md")));
+    // The vault is only ever read.
+    assert.deepEqual(readdirSync(vault).sort(), [
+      "USER.md",
+      "self-evolution",
+      "self-evolution.md",
+      "密钥管理.md",
+    ]);
+    // Idempotent: a second start keeps what the identity has since written.
+    writeFileSync(join(notes, "USER.md"), "身份改过的理解");
+    adoptIdentityConfig(identity);
+    assert.equal(
+      readFileSync(join(notes, "USER.md"), "utf8"),
+      "身份改过的理解",
+    );
+    assert.equal(
+      readFileSync(join(identity, "AGENTS.md"), "utf8"),
+      "身份自己的规则",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("notes 目录是符号链接时拒绝迁移，不写进用户笔记库", () => {
+  const { root, vault, identity } = legacyProfile("atrium-adopt-linked-");
+  symlinkSync(vault, join(identity, "notes"));
+  const before = walk(vault);
+  try {
+    assert.throws(
+      () => adoptIdentityConfig(identity),
+      (error: unknown) =>
+        error instanceof Problem &&
+        String(error.message).includes("notes 目录是符号链接"),
+    );
+    assert.deepEqual(walk(vault), before);
+    assert.equal(
+      JSON.parse(readFileSync(join(identity, "notes.json"), "utf8")).directory,
+      vault,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("断链的规则文件报错并保留原状，其余照常转换", () => {
+  const { root, shared, identity } = legacyProfile("atrium-adopt-dead-");
+  rmSync(join(shared, "SYSTEM.md"));
+  try {
+    assert.throws(
+      () => adoptIdentityConfig(identity),
+      (error: unknown) =>
+        error instanceof Problem &&
+        error.statusCode === 500 &&
+        String(error.message).includes("SYSTEM.md"),
+    );
+    assert(lstatSync(join(identity, "SYSTEM.md")).isSymbolicLink());
+    assert(!existsSync(join(identity, "SYSTEM.md.adopting")));
+    assert(!lstatSync(join(identity, "AGENTS.md")).isSymbolicLink());
+    assert.equal(
+      JSON.parse(readFileSync(join(identity, "notes.json"), "utf8")).directory,
+      join(identity, "notes"),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("规则和笔记同时卡住时，两边都报出来", () => {
+  const { root, shared, vault, identity } = legacyProfile("atrium-adopt-both-");
+  rmSync(join(shared, "SYSTEM.md"));
+  symlinkSync(vault, join(identity, "notes"));
+  try {
+    assert.throws(
+      () => adoptIdentityConfig(identity),
+      (error: unknown) =>
+        error instanceof Problem &&
+        String(error.message).includes("SYSTEM.md") &&
+        String(error.message).includes("notes 目录是符号链接"),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("syncIdentityProfile 报告未能补齐的部分，仍让身份启动", () => {
+  const { root, shared, identity } = legacyProfile("atrium-sync-profile-");
+  rmSync(join(shared, "SYSTEM.md"));
+  try {
+    const notices = syncIdentityProfile(identity);
+    assert.equal(notices.length, 1);
+    assert(notices[0]!.startsWith("配置未能转成自有副本："));
+    assert(notices[0]!.includes("SYSTEM.md"));
+    assert(!lstatSync(join(identity, "AGENTS.md")).isSymbolicLink());
+    assert.deepEqual(syncIdentityProfile(identity).length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

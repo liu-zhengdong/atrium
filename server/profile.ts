@@ -1,9 +1,11 @@
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -30,13 +32,38 @@ const local = (path: string, root: string) =>
   path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(root, path);
 const copyOwned = (from: string, to: string) =>
   writeFileSync(to, readFileSync(realpathSync(from)));
+const linked = (path: string) => {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+};
+/** Containment test; a path with nothing on disk is compared as written. */
 const inside = (root: string, path: string) => {
   const base = realpathSync(root);
-  const target = realpathSync(path);
+  let target = resolve(path);
+  try {
+    target = realpathSync(target);
+  } catch {
+    // Absent: the literal path already says where it would land.
+  }
   return target === base || target.startsWith(base + sep);
 };
 /** Notes an identity keeps for itself; the rest of a personal vault stays put. */
 const OWNED_NOTES = ["USER", "self-evolution"];
+/** Rule, model and MCP files an identity keeps as its own copies. */
+const OWNED_FILES = [
+  "AGENTS.md",
+  "SYSTEM.md",
+  "APPEND_SYSTEM.md",
+  "models.json",
+  "mcp.json",
+];
+const notesSettings = (directory: string, maxContextBytes: unknown) => ({
+  directory,
+  ...(maxContextBytes === undefined ? {} : { maxContextBytes }),
+});
 const notesDirectory = (notes: Record<string, unknown>, root: string) =>
   typeof notes.directory === "string" ? local(notes.directory, root) : null;
 /**
@@ -200,6 +227,90 @@ export function syncIdentityNotes(
   copyOwnedNotes(sourceDir, target);
 }
 
+/**
+ * Profiles made before this layout symlinked their rules into the user's global
+ * config: the Agent rewriting a rule rewrote the user's file, and the user's
+ * edits changed the Agent. Replace each link with its content; the rename keeps
+ * the link in place until the copy is whole.
+ */
+function adoptLinkedFiles(directory: string) {
+  const failed: string[] = [];
+  for (const name of OWNED_FILES) {
+    const path = join(directory, name);
+    if (!linked(path)) continue;
+    const staging = `${path}.adopting`;
+    try {
+      writeFileSync(staging, readFileSync(realpathSync(path)));
+      renameSync(staging, path);
+    } catch {
+      rmSync(staging, { force: true });
+      failed.push(name);
+    }
+  }
+  return failed;
+}
+
+/**
+ * Notes pointed outside the identity (an early profile aimed straight at the
+ * user's vault) move to its own directory. Only the notes it owns come along;
+ * the vault itself is read, never written.
+ */
+function adoptNotesDirectory(directory: string) {
+  const file = join(directory, "notes.json");
+  if (!existsSync(file)) return;
+  const notes = readJson(file);
+  const current = notesDirectory(notes, directory);
+  if (!current || inside(directory, current)) return;
+  const target = join(directory, "notes");
+  // A linked notes dir would make the copy below land back in the vault.
+  if (linked(target)) throw new Problem(409, "notes 目录是符号链接，未改动");
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  if (existsSync(current)) copyOwnedNotes(current, target);
+  writeFileSync(
+    file,
+    JSON.stringify(notesSettings(target, notes.maxContextBytes), null, 2) +
+      "\n",
+    { mode: 0o600 },
+  );
+}
+
+/**
+ * Turn an old profile's shared rules and vault into this identity's own copies.
+ * Rules and notes are adopted independently, and every part that stayed shared
+ * is reported — a silent one would leave the identity writing the user's files.
+ */
+export function adoptIdentityConfig(directory: string) {
+  const failed = adoptLinkedFiles(directory);
+  const left = failed.length ? [`规则文件未能复制：${failed.join("、")}`] : [];
+  try {
+    adoptNotesDirectory(directory);
+  } catch (error) {
+    left.push(error instanceof Problem ? error.message : String(error));
+  }
+  if (left.length) throw new Problem(500, left.join("；"));
+}
+
+/**
+ * Bring a profile up to the current layout before Pi reads it, from every start
+ * path. The bundled packages must land — without them the identity has no
+ * bridge; the rest is best effort and returns what the caller should report.
+ */
+export function syncIdentityProfile(directory: string) {
+  syncIdentityPackages(directory);
+  const notices: string[] = [];
+  const steps: [string, () => void][] = [
+    ["配置未能转成自有副本", () => adoptIdentityConfig(directory)],
+    ["协议笔记未能补齐", () => syncIdentityNotes(directory)],
+  ];
+  for (const [label, run] of steps)
+    try {
+      run();
+    } catch (error) {
+      notices.push(`${label}：${error}`);
+    }
+  return notices;
+}
+
 /** Owned rules and notes; installed extensions/skills stay as path references. Never copy credentials. */
 export function prepareProfile(
   identityId: string,
@@ -267,13 +378,7 @@ export function prepareProfile(
     created.push(join(target, "identity.json"));
     write(join(target, "settings.json"), settings);
     created.push(join(target, "settings.json"));
-    for (const name of [
-      "AGENTS.md",
-      "SYSTEM.md",
-      "APPEND_SYSTEM.md",
-      "models.json",
-      "mcp.json",
-    ])
+    for (const name of OWNED_FILES)
       if (existsSync(join(template, name))) {
         const dest = join(target, name);
         copyOwned(join(template, name), dest);
@@ -293,12 +398,10 @@ export function prepareProfile(
           });
         else copyOwnedNotes(sourceDir, directory);
       }
-      write(join(target, "notes.json"), {
-        directory,
-        ...(notes.maxContextBytes === undefined
-          ? {}
-          : { maxContextBytes: notes.maxContextBytes }),
-      });
+      write(
+        join(target, "notes.json"),
+        notesSettings(directory, notes.maxContextBytes),
+      );
       created.push(join(target, "notes.json"));
     }
     return target;

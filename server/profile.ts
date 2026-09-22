@@ -274,12 +274,20 @@ function adoptNotesDirectory(directory: string) {
   );
 }
 
-/** Turn an old profile's shared rules and vault into this identity's own copies. */
+/**
+ * Turn an old profile's shared rules and vault into this identity's own copies.
+ * Rules and notes are adopted independently, and every part that stayed shared
+ * is reported — a silent one would leave the identity writing the user's files.
+ */
 export function adoptIdentityConfig(directory: string) {
   const failed = adoptLinkedFiles(directory);
-  adoptNotesDirectory(directory);
-  if (failed.length)
-    throw new Problem(500, `规则文件未能复制：${failed.join("、")}`);
+  const left = failed.length ? [`规则文件未能复制：${failed.join("、")}`] : [];
+  try {
+    adoptNotesDirectory(directory);
+  } catch (error) {
+    left.push(error instanceof Problem ? error.message : String(error));
+  }
+  if (left.length) throw new Problem(500, left.join("；"));
 }
 
 /**

@@ -428,7 +428,9 @@ test("notes 目录是符号链接时拒绝迁移，不写进用户笔记库", ()
   try {
     assert.throws(
       () => adoptIdentityConfig(identity),
-      (error: unknown) => error instanceof Problem && error.statusCode === 409,
+      (error: unknown) =>
+        error instanceof Problem &&
+        String(error.message).includes("notes 目录是符号链接"),
     );
     assert.deepEqual(walk(vault), before);
     assert.equal(
@@ -457,6 +459,23 @@ test("断链的规则文件报错并保留原状，其余照常转换", () => {
     assert.equal(
       JSON.parse(readFileSync(join(identity, "notes.json"), "utf8")).directory,
       join(identity, "notes"),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("规则和笔记同时卡住时，两边都报出来", () => {
+  const { root, shared, vault, identity } = legacyProfile("atrium-adopt-both-");
+  rmSync(join(shared, "SYSTEM.md"));
+  symlinkSync(vault, join(identity, "notes"));
+  try {
+    assert.throws(
+      () => adoptIdentityConfig(identity),
+      (error: unknown) =>
+        error instanceof Problem &&
+        String(error.message).includes("SYSTEM.md") &&
+        String(error.message).includes("notes 目录是符号链接"),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -197,6 +197,58 @@ test("轨迹查询反向校验与持久化：用户审阅不改变回执", async
   }
 });
 
+test("轨迹按身份有界：插入时裁掉更早的，不动别人的", (t) => {
+  const store = new Store(":memory:"),
+    traces = new TraceStore(store);
+  t.after(() => store.close());
+  const a = store.createAgent("Atlas", tmpdir()).agent,
+    other = store.createAgent("Mira", tmpdir()).agent;
+  const rows = (agent: string) =>
+    store.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM trace_actions WHERE agent_id=?",
+      agent,
+    )!.n;
+  traces.ingest(other.id, page(generation(), [event(1, "session")]));
+
+  const target = generation();
+  traces.ingest(a.id, page(target, [event(1, "session")]));
+  const insert = store.db.prepare(
+    "INSERT INTO trace_actions(agent_id,runtime_id,generation,session_id,seq,at,kind,name,title,state,input,output) VALUES(?,?,?,?,?,0,'message','assistant','完成回复','complete','','')",
+  );
+  store.transaction(() => {
+    for (let seq = 2; seq <= 2600; seq++)
+      insert.run(
+        a.id,
+        target.runtimeId,
+        target.generation,
+        target.sessionId,
+        seq,
+      );
+  });
+  assert.equal(rows(a.id), 2600, "直接写入不裁剪");
+
+  const newest = generation();
+  traces.ingest(a.id, page(newest, [event(1, "run_start")]));
+  assert.equal(rows(a.id), 2000, "下一次 ingest 裁到上限");
+  assert.equal(rows(other.id), 1, "只裁本身份");
+  assert.equal(
+    traces.page(a.id).items.at(-1)!.title,
+    "开始处理",
+    "留下的是最新的那端",
+  );
+  assert.equal(
+    store.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM trace_actions WHERE agent_id=? AND kind='session'",
+      a.id,
+    )!.n,
+    0,
+    "最早那条已经被裁掉",
+  );
+
+  traces.ingest(a.id, page(newest, [event(2, "run_end")]));
+  assert.equal(rows(a.id), 2000, "继续写也不再涨");
+});
+
 test("十万条轨迹：索引分页不读取正文，冷热查询有界", (t) => {
   const store = new Store(":memory:"),
     traces = new TraceStore(store),

@@ -99,6 +99,10 @@ if (command === "--help" && !reference) {
       if (agent) {
         const { runNamedTui } =
           await import("@liuser/pi-atrium/dist/identity.js");
+        const { syncIdentityProfile } = await import("../server/profile.ts");
+        // Same catch-up the service does on start, so both entries agree.
+        for (const notice of syncIdentityProfile(agent.agent_directory))
+          console.error(`${agent.name} 的${notice}`);
         console.error(`中庭 · ${agent.name}\n${agent.cwd}`);
         const launchStore = new Store(join(data, "atrium.sqlite"));
         let running;

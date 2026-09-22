@@ -26,11 +26,7 @@ import {
 } from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
 import { atriumGuide } from "./mcp.ts";
-import {
-  prepareProfile,
-  syncIdentityNotes,
-  syncIdentityPackages,
-} from "./profile.ts";
+import { prepareProfile, syncIdentityProfile } from "./profile.ts";
 import {
   ensureDesktopCwd,
   linkProfile,
@@ -598,13 +594,9 @@ export class Runtimes {
       const cwd = ensureDesktopCwd(this.store, this.desktops, current);
       if (cwd !== current.cwd) this.changed();
       if (current.agent_directory) {
-        syncIdentityPackages(current.agent_directory);
-        // A missing protocol note costs the Agent a rule, not its session.
-        try {
-          syncIdentityNotes(current.agent_directory);
-        } catch (error) {
-          console.error(`${current.name} 的协议笔记未能补齐：${error}`);
-        }
+        // A profile left on the old layout costs the Agent a rule, not its session.
+        for (const notice of syncIdentityProfile(current.agent_directory))
+          console.error(`${current.name} 的${notice}`);
         const { runtimeId } = await this.rpc<{ runtimeId: string }>(
           "_pi/identity/start",
           {

@@ -22,7 +22,7 @@ import { LOCAL_USER } from "../shared/user.ts";
 const require = createRequire(import.meta.url);
 const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
 
-test("长期身份配置独立、引用共享资源、不复制凭据；改名与迁移保留短号及聊天", async (t) => {
+test("长期身份配置独立、引用共享资源、凭据共享不复制；改名与迁移保留短号及聊天", async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-identity-")));
   const template = join(root, "template");
   mkdirSync(template);
@@ -30,7 +30,7 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
     join(template, "settings.json"),
     JSON.stringify({ defaultModel: "fixture", packages: [] }),
   );
-  writeFileSync(join(template, "auth.json"), "DO_NOT_COPY");
+  writeFileSync(join(template, "auth.json"), "SHARED_NOT_COPIED");
   writeFileSync(join(template, "SYSTEM.md"), "shared rules");
   t.mock.method(
     Runtimes.prototype as unknown as { rpc: () => Promise<unknown> },
@@ -73,7 +73,11 @@ test("长期身份配置独立、引用共享资源、不复制凭据；改名�
     join(piHome, "atrium", "agents", agent.id),
   );
   assert(existsSync(join(agent.agent_directory, "sessions")));
-  assert(!existsSync(join(agent.agent_directory, "auth.json")));
+  // Credentials are the one thing shared by link: a copy would go stale the
+  // first time a provider rotated its refresh token.
+  const auth = join(agent.agent_directory, "auth.json");
+  assert(lstatSync(auth).isSymbolicLink());
+  assert.equal(realpathSync(auth), join(template, "auth.json"));
   assert.equal(
     readFileSync(join(agent.agent_directory, "SYSTEM.md"), "utf8"),
     "shared rules",

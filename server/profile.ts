@@ -9,6 +9,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -321,6 +322,59 @@ export function adoptIdentityConfig(
   if (left.length) throw new Problem(500, left.join("；"));
 }
 
+/** A credential file Pi created but never stored anything in. */
+const emptyCredentials = (path: string) => {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8").trim();
+  } catch {
+    return false;
+  }
+  if (!text) return true;
+  try {
+    const value: unknown = JSON.parse(text);
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      Object.keys(value).length === 0
+    );
+  } catch {
+    // Unreadable content is still content; replacing it would lose a login.
+    return false;
+  }
+};
+
+/**
+ * Point the identity at the shared credential file. Pi reads credentials from
+ * <agentDir>/auth.json and offers no way to aim that elsewhere — no setting, no
+ * environment variable, only the SDK's authPath — so sharing has to happen at
+ * the path. Logging in once in the template gives every identity, including
+ * ones created later, the same providers.
+ *
+ * A copy would go stale instead: Pi rewrites refreshed OAuth tokens in place,
+ * and once a provider rotates the refresh token only the copy that refreshed
+ * last still works.
+ *
+ * The identity's own file wins. Content of any kind is a separate login, and a
+ * symlink already aimed somewhere is the user's choice; both stay. Returns
+ * whether this call created the link.
+ */
+export function linkSharedCredentials(
+  directory: string,
+  template = defaultTemplate(),
+) {
+  const own = join(directory, "auth.json");
+  const shared = join(template, "auth.json");
+  if (resolve(own) === resolve(shared)) return false;
+  if (linked(own)) return false;
+  if (existsSync(own) && !emptyCredentials(own)) return false;
+  rmSync(own, { force: true });
+  // The shared file need not exist yet: Pi creates it on the first login
+  // through this link, and every identity reads that login.
+  symlinkSync(shared, own);
+  return true;
+}
+
 /**
  * Bring a profile up to the current layout before Pi reads it, from every start
  * path. The bundled packages must land — without them the identity has no
@@ -328,13 +382,19 @@ export function adoptIdentityConfig(
  */
 export function syncIdentityProfile(directory: string) {
   syncIdentityPackages(directory);
+  const left: string[] = [];
   try {
     adoptIdentityConfig(directory);
   } catch (error) {
     // The message already names every part that stayed shared.
-    return [`配置未能转成自有副本：${error}`];
+    left.push(`配置未能转成自有副本：${error}`);
   }
-  return [];
+  try {
+    linkSharedCredentials(directory);
+  } catch (error) {
+    left.push(`凭据未能接上共享文件：${error}`);
+  }
+  return left;
 }
 
 /** Settings keys a new identity carries over from the template as written. */
@@ -391,7 +451,7 @@ function buildSettings(source: Record<string, unknown>, template: string) {
   return settings;
 }
 
-/** Owned rules, notes and resource dirs; packages stay path references. Never copy credentials. */
+/** Owned rules, notes and resource dirs; packages stay path references. Credentials are shared by link. */
 export function prepareProfile(
   identityId: string,
   template = defaultTemplate(),
@@ -410,7 +470,7 @@ export function prepareProfile(
     template,
   );
   // Rule/model/MCP files and notes become this identity's own copies.
-  // Credential files and session history are never copied.
+  // Credentials are linked to the shared file; session history is not copied.
   // Identity files are written exclusively (wx) alongside kept legacy content;
   // on failure only what this call created is removed.
   const created: string[] = [];
@@ -425,6 +485,8 @@ export function prepareProfile(
     created.push(join(target, "identity.json"));
     write(join(target, "settings.json"), settings);
     created.push(join(target, "settings.json"));
+    if (linkSharedCredentials(target, template))
+      created.push(join(target, "auth.json"));
     for (const name of OWNED_FILES)
       if (existsSync(join(template, name))) {
         const dest = join(target, name);

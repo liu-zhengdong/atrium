@@ -46,6 +46,16 @@ import { Problem } from "./problem.ts";
 export { Problem };
 /** 同一副样子的消息箱提醒几次。没人处理就一直提，只会把对方的会话撑大。 */
 const INBOX_REMINDERS = 3;
+/** LIKE 的子串模式；% _ \ 按字面匹配，配合 ESCAPE '\\' 使用。 */
+const likePattern = (text: string) =>
+  `%${text.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+/** 命中词附近的一段正文：长消息里的命中常在开头 160 字之外。 */
+const excerptAround = (body: string, term: string) => {
+  const at = Math.max(0, body.toLowerCase().indexOf(term));
+  const start = Math.max(0, at - 60),
+    end = Math.min(body.length, at + term.length + 120);
+  return `${start > 0 ? "…" : ""}${body.slice(start, end).replace(/\s+/g, " ")}${end < body.length ? "…" : ""}`;
+};
 /**
  * 成员 r 还没读的消息 m：在连续已读位置之后、不是自己发的，也不在已读区间里
  * （@ 直接送达的、跳页读过的都记成区间）。未读数和提醒名单共用这一条，口径才一致。
@@ -511,14 +521,18 @@ export class Store {
   /** 综合搜索：会话名字或成员名、消息正文、Agent 名字或简介。 */
   search(raw: string): SearchResults {
     const needle = raw.trim().toLowerCase();
-    const like = `%${needle.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+    const like = likePattern(needle);
+    // member_names 只有前 4 人（给头像用），按成员名找会话要看全部成员。
+    const byMember = new Set(
+      this.all<{ chat_id: string }>(
+        "SELECT DISTINCT m.chat_id FROM members m JOIN agents a ON a.id=m.agent_id WHERE a.name LIKE ? ESCAPE '\\'",
+        like,
+      ).map((row) => row.chat_id),
+    );
     const chats = this.chats(undefined, { includeHidden: true })
       .filter(
         (chat) =>
-          chat.name.toLowerCase().includes(needle) ||
-          (chat.member_names ?? []).some((name) =>
-            name.toLowerCase().includes(needle),
-          ),
+          chat.name.toLowerCase().includes(needle) || byMember.has(chat.id),
       )
       .slice(0, 10);
     const messages = this.all<SearchResults["messages"][number]>(
@@ -539,6 +553,78 @@ export class Store {
       like,
     );
     return { chats, messages, agents };
+  }
+  /**
+   * Agent 在自己加入的会话里按关键词找消息：空格分开的词都要出现，新的在前，
+   * 按编号往前翻页。只给命中位置附近的片段，不改已读状态；读全文用 read_chat。
+   */
+  searchMessages(
+    agentId: string,
+    input: {
+      query: string;
+      chatId?: string;
+      sender?: string;
+      before?: number;
+      limit: number;
+    },
+  ) {
+    const terms = input.query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 5);
+    const where = [
+      "mb.agent_id=?",
+      ...terms.map(() => "m.body LIKE ? ESCAPE '\\'"),
+    ];
+    const params: SQLInputValue[] = [agentId, ...terms.map(likePattern)];
+    for (const [clause, value] of [
+      ["m.chat_id=?", input.chatId],
+      ["m.sender=?", input.sender],
+      ["m.id<?", input.before],
+    ] as const)
+      if (value !== undefined) {
+        where.push(clause);
+        params.push(value);
+      }
+    const rows = this.all<{
+      id: number;
+      chat_ref: string;
+      chat_name: string;
+      sender: string;
+      sender_ref: string | null;
+      sender_name: string | null;
+      body: string;
+      created_at: number;
+    }>(
+      `SELECT m.id,'c'||r.number AS chat_ref,c.name AS chat_name,m.sender,
+         'a'||ar.number AS sender_ref,COALESCE(a.deleted_name,a.name) AS sender_name,m.body,m.created_at
+       FROM messages m JOIN members mb ON mb.chat_id=m.chat_id
+       JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
+       LEFT JOIN agents a ON a.id=m.sender LEFT JOIN agent_refs ar ON ar.agent_id=m.sender
+       WHERE ${where.join(" AND ")} ORDER BY m.id DESC LIMIT ?`,
+      ...params,
+      input.limit + 1,
+    );
+    const items = rows.slice(0, input.limit).map((row) => ({
+      chat_id: row.chat_ref,
+      chat_name: row.chat_name,
+      message_id: row.id,
+      sender: isUserRef(row.sender)
+        ? row.sender
+        : (row.sender_ref ?? row.sender),
+      sender_name: isUserRef(row.sender)
+        ? userNames(this, row.sender).peer
+        : (row.sender_name ?? row.sender),
+      created_at: row.created_at,
+      excerpt: excerptAround(row.body, terms[0] ?? ""),
+    }));
+    const more = rows.length > input.limit;
+    return {
+      items,
+      has_more: more,
+      ...(more ? { next_before: items.at(-1)!.message_id } : {}),
+    };
   }
   chat(id: string): Chat {
     const chat = this.one<Chat>(

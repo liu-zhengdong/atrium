@@ -1,8 +1,18 @@
-import { existsSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AccountFiles,
   lockedAuth,
+  lstatExists,
   providerName,
   type Credential,
   type Mode,
@@ -21,6 +31,20 @@ export {
   type AuthFile,
   type Mode,
 } from "./account-files.ts";
+
+// A failed SQLite commit must also restore the exact on-disk credential state.
+function restoreFileOnFailure(file: string) {
+  const present = lstatExists(file);
+  const link =
+    present && lstatSync(file).isSymbolicLink() ? readlinkSync(file) : null;
+  const bytes = present && link === null ? readFileSync(file) : null;
+  return (preserved?: string | null) => {
+    rmSync(file, { force: true });
+    if (preserved) renameSync(preserved, file);
+    else if (link !== null) symlinkSync(link, file);
+    else if (bytes !== null) writeFileSync(file, bytes, { mode: 0o600 });
+  };
+}
 
 export class Accounts {
   readonly root: string;
@@ -95,6 +119,19 @@ export class Accounts {
   rename(ref: string, name: string) {
     return this.catalog.rename(ref, name);
   }
+  private assignedEntries(id: string) {
+    return Object.fromEntries(
+      this.store
+        .all<{ account_number: number }>(
+          "SELECT account_number FROM account_assignments WHERE agent_id=?",
+          id,
+        )
+        .map(({ account_number }) => {
+          const row = this.catalog.row(account_number);
+          return [row.provider, this.load(row)];
+        }),
+    );
+  }
   switchMode(id: string): {
     mode: Mode;
     assigned: { provider: string; account: string }[];
@@ -115,20 +152,14 @@ export class Accounts {
           )
           .map((r) => ({ provider: r.provider, account: `k${r.number}` })),
       };
-    const entries = Object.fromEntries(
-      this.store
-        .all<{ account_number: number }>(
-          "SELECT account_number FROM account_assignments WHERE agent_id=?",
-          id,
-        )
-        .map(({ account_number }) => {
-          const row = this.catalog.row(account_number);
-          return [row.provider, this.load(row)];
-        }),
+    return this.files.prepareMode(
+      id,
+      target,
+      this.assignedEntries(id),
+      this.catalog.mode(id),
     );
-    return this.files.prepareMode(id, target, entries, this.catalog.mode(id));
   }
-  assign(id: string, ref: string) {
+  assign(id: string, ref: string, replace = false) {
     const agent = this.store.agent(id),
       row = this.catalog.row(this.catalog.number(ref));
     if (
@@ -136,36 +167,69 @@ export class Accounts {
       !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
     )
       throw new Problem(409, "此 Antigravity 账号缺少附带状态，暂不支持分配");
-    if (
-      this.store.one(
-        "SELECT 1 FROM account_assignments WHERE agent_id=? AND provider=?",
-        id,
-        row.provider,
-      )
-    )
-      throw new Problem(409, "该身份已有此 provider 的账号，请先撤销");
-    if (!agent.agent_directory)
-      throw new Problem(409, "身份没有配置目录，请先启动身份");
-    let preserved: string | null = null;
-    if (this.catalog.mode(id) === "shared")
-      preserved = this.files.prepareMode(
-        id,
-        "assigned",
-        { [row.provider]: this.load(row) },
-        this.catalog.mode(id),
-      ).preserved;
-    else
-      lockedAuth(agent.agent_directory, (data) => ({
-        ...data,
-        [row.provider]: this.load(row),
-      }));
-    this.store.run(
-      "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+    const previous = this.store.one<{ account_number: number }>(
+      "SELECT account_number FROM account_assignments WHERE agent_id=? AND provider=?",
       id,
       row.provider,
-      row.number,
     );
-    this.files.sidecar(row, agent.agent_directory);
+    if (previous && !replace)
+      throw new Problem(409, "该身份已有此 provider 的账号，请先撤销");
+    if (replace && !previous) throw new Problem(409, "该身份没有可替换的账号");
+    if (previous?.account_number === row.number)
+      throw new Problem(409, "该身份已分配此账号");
+    if (!agent.agent_directory)
+      throw new Problem(409, "身份没有配置目录，请先启动身份");
+    // Read and validate before touching either the identity file or assignment row.
+    const value = this.load(row);
+    const sidecar =
+      row.provider === "antigravity"
+        ? join(agent.agent_directory, "antigravity-accounts.json")
+        : null;
+    const restoreAuth = restoreFileOnFailure(
+      join(agent.agent_directory, "auth.json"),
+    );
+    const restoreSidecar = sidecar ? restoreFileOnFailure(sidecar) : null;
+    let preserved: string | null = null;
+    try {
+      this.store.transaction(() => {
+        if (this.catalog.mode(id) === "shared")
+          preserved = this.files.prepareMode(
+            id,
+            "assigned",
+            { ...this.assignedEntries(id), [row.provider]: value },
+            "shared",
+          ).preserved;
+        else
+          lockedAuth(agent.agent_directory!, (data) => ({
+            ...data,
+            [row.provider]: value,
+          }));
+        this.files.sidecar(row, agent.agent_directory!);
+        if (previous)
+          this.store.run(
+            "UPDATE account_assignments SET account_number=? WHERE agent_id=? AND provider=?",
+            row.number,
+            id,
+            row.provider,
+          );
+        else
+          this.store.run(
+            "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+            id,
+            row.provider,
+            row.number,
+          );
+      });
+    } catch (error) {
+      restoreAuth(preserved);
+      restoreSidecar?.();
+      throw error;
+    }
+    if (
+      sidecar &&
+      !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
+    )
+      rmSync(sidecar, { force: true });
     return { mode: "assigned", account: ref, preserved };
   }
   unassign(id: string, provider: string) {
@@ -217,6 +281,13 @@ export class Accounts {
   }
   login(provider: string, name: string) {
     return this.loginService.login(provider, name);
+  }
+  relogin(ref: string) {
+    return this.loginService.relogin(this.catalog.number(ref), () =>
+      this.refreshService.distributeAccount(
+        this.catalog.row(this.catalog.number(ref)),
+      ),
+    );
   }
   loginEvents(ref: string, after: number) {
     return this.loginService.loginEvents(this.catalog.number(ref), after);

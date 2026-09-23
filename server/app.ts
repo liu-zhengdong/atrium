@@ -153,6 +153,11 @@ export async function createApp(options: {
     store.resolveAgentId(
       z.object({ agent: z.string() }).parse(request.params).agent,
     );
+  app.get("/api/settings/service", (request) => ({
+    address: `http://${request.headers.host}`,
+    data: resolve(options.data),
+    log: join(resolve(options.data), "service.log"),
+  }));
   app.get("/api/accounts", () => accounts.list());
   app.post("/api/accounts", (request) => {
     const { provider, name, key } = z
@@ -172,6 +177,9 @@ export async function createApp(options: {
       .parse(request.body);
     return accounts.login(provider, name);
   });
+  app.post("/api/accounts/:ref/login", (request) =>
+    accounts.relogin(accountRef(request)),
+  );
   app.get("/api/accounts/:ref/login", (request) => {
     const after = z.coerce
       .number()
@@ -211,11 +219,11 @@ export async function createApp(options: {
     return accounts.switchMode(identityRef(request), mode);
   });
   app.post("/api/assign/:agent", (request) => {
-    const { account } = z
-      .object({ account: z.string() })
+    const { account, replace } = z
+      .object({ account: z.string(), replace: z.boolean().optional() })
       .strict()
       .parse(request.body);
-    return accounts.assign(identityRef(request), account);
+    return accounts.assign(identityRef(request), account, replace);
   });
   app.delete("/api/assign/:agent/:provider", (request) => {
     const { provider } = z

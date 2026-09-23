@@ -29,6 +29,25 @@ export function repairAccountFiles(
   store.run(`DELETE FROM credential_modes WHERE agent_id NOT IN
     (SELECT id FROM agents WHERE deleted_at IS NULL)`);
   for (const row of store.all<Row>("SELECT * FROM accounts")) {
+    // OAuth login writes an empty placeholder before authorization. Cancellation or
+    // a service restart is not a corrupt credential and must not be quarantined.
+    if (
+      row.type === "oauth" &&
+      (row.status === "pending" || row.status === "error") &&
+      fileState(authFile(files.dir(row.number))) === "empty"
+    ) {
+      if (
+        row.status === "pending" ||
+        row.last_error === "未知错误" ||
+        row.last_error === "账号凭据损坏，原文件已隔离"
+      )
+        store.run(
+          "UPDATE accounts SET status='error',last_error=? WHERE number=?",
+          "登录未完成",
+          row.number,
+        );
+      continue;
+    }
     try {
       remember(files.load(row));
     } catch {

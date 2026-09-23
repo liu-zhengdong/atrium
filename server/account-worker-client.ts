@@ -19,9 +19,10 @@ export class AccountWorker {
     row: Row,
     operation: "refresh" | "login",
     onMessage?: (message: any) => void,
+    directoryOverride?: string,
   ) {
     return new Promise<void>((resolve, reject) => {
-      const directory = this.files.dir(row.number);
+      const directory = directoryOverride ?? this.files.dir(row.number);
       const child = fork(
         new URL("./account-worker.mjs", import.meta.url),
         [directory, row.provider, operation],

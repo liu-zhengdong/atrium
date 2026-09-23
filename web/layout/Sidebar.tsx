@@ -5,6 +5,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Settings2,
   Users,
 } from "lucide-react";
 import { unreadLabel, type Overview } from "../../shared/schema.ts";
@@ -49,6 +50,7 @@ export function Sidebar({
   connected,
   details,
   refresh,
+  openSettings,
 }: {
   overview: Overview | null;
   section: Section;
@@ -61,6 +63,7 @@ export function Sidebar({
   connected: boolean;
   details: (id: string) => void;
   refresh: () => void;
+  openSettings: () => void;
 }) {
   const agents = overview?.agents ?? [];
 
@@ -253,6 +256,13 @@ export function Sidebar({
           )}
         </div>
       )}
+      <button
+        className="mb-2 flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-muted hover:bg-[#edf3ef] hover:text-ink"
+        onClick={openSettings}
+      >
+        <Settings2 size={15} />
+        设置
+      </button>
       <footer className="workspace flex items-center gap-2 border-t border-black/[0.04] px-2 pt-2.5 text-[11px] text-muted">
         <span
           className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-accent" : "bg-amber-500"}`}

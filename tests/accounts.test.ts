@@ -24,6 +24,7 @@ import { createApp } from "../server/app.ts";
 import { classifyRefreshError } from "../server/account-error.mjs";
 import { AccountFiles } from "../server/account-files.ts";
 import { AccountRefresh } from "../server/account-refresh.ts";
+import { AccountLogin } from "../server/account-login.ts";
 
 const fixture = () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-accounts-"));
@@ -48,6 +49,239 @@ const fixture = () => {
     accounts: new Accounts(store, dir),
   };
 };
+
+test("unfinished OAuth login stays a login error across service restart and refresh", async () => {
+  const { dir, store } = fixture();
+  const number = Number(
+    store.run(
+      "INSERT INTO accounts(provider,name,type,status) VALUES('openai-codex','cancelled','oauth','pending')",
+    ).lastInsertRowid,
+  );
+  const directory = join(dir, "accounts", `k${number}`);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "auth.json"), "{}", { mode: 0o600 });
+  const restarted = new Accounts(store, dir);
+  const row = restarted.list().find((account) => account.id === `k${number}`);
+  assert.equal(row?.status, "error");
+  assert.equal(row?.last_error, "登录未完成");
+  await restarted.refresh();
+  assert.equal(
+    restarted.list().find((account) => account.id === `k${number}`)?.last_error,
+    "登录未完成",
+  );
+  assert.equal(readFileSync(join(directory, "auth.json"), "utf8"), "{}");
+  store.close();
+});
+
+test("same-provider assignment replacement is one call and failure preserves the old assignment", () => {
+  const { store, agent, agentDirectory, accounts } = fixture();
+  const old = accounts.add("deepseek", "old", "OLD_KEY").id;
+  const next = accounts.add("deepseek", "new", "NEW_KEY").id;
+  accounts.assign(agent.id, old);
+  const target = join(accounts.root, next, "auth.json");
+  writeFileSync(target, "{broken", { mode: 0o600 });
+  assert.throws(() => accounts.assign(agent.id, next, true));
+  assert.deepEqual(accounts.switchMode(agent.id).assigned, [
+    { provider: "deepseek", account: old },
+  ]);
+  assert.equal(
+    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")).deepseek
+      .key,
+    "OLD_KEY",
+  );
+  writeFileSync(
+    target,
+    JSON.stringify({ deepseek: { type: "api_key", key: "NEW_KEY" } }),
+    { mode: 0o600 },
+  );
+  store.run(`CREATE TRIGGER deny_swap BEFORE UPDATE ON account_assignments
+    BEGIN SELECT RAISE(ABORT, 'blocked'); END`);
+  assert.throws(() => accounts.assign(agent.id, next, true), /blocked/);
+  assert.deepEqual(accounts.switchMode(agent.id).assigned, [
+    { provider: "deepseek", account: old },
+  ]);
+  assert.equal(
+    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")).deepseek
+      .key,
+    "OLD_KEY",
+  );
+  store.run("DROP TRIGGER deny_swap");
+  assert.deepEqual(accounts.assign(agent.id, next, true), {
+    mode: "assigned",
+    account: next,
+    preserved: null,
+  });
+  assert.deepEqual(accounts.switchMode(agent.id).assigned, [
+    { provider: "deepseek", account: next },
+  ]);
+  assert.equal(
+    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")).deepseek
+      .key,
+    "NEW_KEY",
+  );
+  assert.deepEqual(accounts.list().find((a) => a.id === old)?.assigned, []);
+  store.close();
+});
+
+test("failed shared-mode replacement restores the original Pi login and shared mode", () => {
+  const { dir, store, agent, agentDirectory, accounts } = fixture();
+  const old = accounts.add("deepseek", "old", "OLD_KEY").id;
+  const next = accounts.add("deepseek", "next", "NEW_KEY").id;
+  accounts.assign(agent.id, old);
+  writeFileSync(
+    join(dir, "template", "auth.json"),
+    JSON.stringify({ deepseek: { type: "api_key", key: "PERSONAL" } }),
+  );
+  accounts.switchMode(agent.id, "shared");
+  const before = lstatSync(join(agentDirectory, "auth.json"));
+  assert.equal(before.isSymbolicLink(), true);
+  store.run(
+    `CREATE TRIGGER deny_shared_swap BEFORE UPDATE ON account_assignments BEGIN SELECT RAISE(ABORT, 'blocked'); END`,
+  );
+  assert.throws(() => accounts.assign(agent.id, next, true), /blocked/);
+  assert.equal(accounts.switchMode(agent.id).mode, "shared");
+  assert.deepEqual(accounts.switchMode(agent.id).assigned, [
+    { provider: "deepseek", account: old },
+  ]);
+  assert.equal(
+    lstatSync(join(agentDirectory, "auth.json")).isSymbolicLink(),
+    true,
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")).deepseek
+      .key,
+    "PERSONAL",
+  );
+  store.close();
+});
+
+test("cancelled relogin before worker starts cannot publish staged credentials", async () => {
+  const { store, accounts } = fixture();
+  const number = Number(
+    store.run(
+      "INSERT INTO accounts(provider,name,type,status) VALUES('openai-codex','cancel','oauth','error')",
+    ).lastInsertRowid,
+  );
+  const files = new AccountFiles(store, accounts.root);
+  files.save(
+    {
+      number,
+      provider: "openai-codex",
+      name: "cancel",
+      type: "oauth",
+      status: "error",
+      expires: null,
+      last_error: null,
+    },
+    {
+      type: "oauth",
+      access: "OLD",
+      refresh: "OLD",
+      expires: Date.now() - 1000,
+    },
+  );
+  let finish!: () => void;
+  const login = new AccountLogin(store, files, {
+    run: async () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  });
+  let published = false;
+  login.relogin(number, () => {
+    published = true;
+  });
+  login.cancel(number);
+  assert.equal(accounts.list()[0].last_error, "登录未完成");
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(published, false);
+  assert.equal(accounts.list()[0].status, "error");
+  store.close();
+});
+
+test("relogin keeps existing OAuth assignments on failure and distributes the successful credential", async () => {
+  const { store, agent, agentDirectory, accounts } = fixture();
+  const number = Number(
+    store.run(
+      "INSERT INTO accounts(provider,name,type,status) VALUES('openai-codex','oauth','oauth','error')",
+    ).lastInsertRowid,
+  );
+  const ref = `k${number}`;
+  const files = new AccountFiles(store, accounts.root);
+  files.save(
+    {
+      number,
+      provider: "openai-codex",
+      name: "oauth",
+      type: "oauth",
+      status: "error",
+      expires: null,
+      last_error: null,
+    },
+    {
+      type: "oauth",
+      access: "OLD",
+      refresh: "OLD",
+      expires: Date.now() - 1000,
+    },
+  );
+  accounts.assign(agent.id, ref);
+  const old = readFileSync(join(agentDirectory, "auth.json"), "utf8");
+  const fail = new AccountLogin(store, files, {
+    run: async () => {
+      throw new Error("cancelled");
+    },
+  });
+  fail.relogin(number, () => {});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(readFileSync(join(agentDirectory, "auth.json"), "utf8"), old);
+  assert.deepEqual(accounts.switchMode(agent.id).assigned, [
+    { provider: "openai-codex", account: ref },
+  ]);
+  const refresh = new AccountRefresh(store, files, {
+    run: async () => {},
+    close: () => {},
+  });
+  const login = new AccountLogin(store, files, {
+    run: async (_row, _operation, _callback, directory) => {
+      writeFileSync(
+        join(directory!, "auth.json"),
+        JSON.stringify({
+          "openai-codex": {
+            type: "oauth",
+            access: "NEW",
+            refresh: "NEW",
+            expires: Date.now() + 3600_000,
+          },
+        }),
+        { mode: 0o600 },
+      );
+    },
+  });
+  login.relogin(number, () =>
+    refresh.distributeAccount({
+      number,
+      provider: "openai-codex",
+      name: "oauth",
+      type: "oauth",
+      status: "ready",
+      expires: null,
+      last_error: null,
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8"))[
+      "openai-codex"
+    ].access,
+    "NEW",
+  );
+  assert.deepEqual(accounts.switchMode(agent.id).assigned, [
+    { provider: "openai-codex", account: ref },
+  ]);
+  store.close();
+});
 
 test("credential mode plan covers every file state and target combination", () => {
   const states: AuthFile[] = ["missing", "link", "empty", "content"];
@@ -138,6 +372,30 @@ test("assigned files are isolated; bad assignments and real-file mode switch pre
   );
   accounts.remove(first);
   assert.equal(accounts.list().length, 1);
+  store.close();
+});
+
+test("assigning after switching back to shared keeps earlier provider credentials", () => {
+  const { store, agent, agentDirectory, accounts } = fixture();
+  const deepseek = accounts.add("deepseek", "first", "DEEPSEEK_KEY").id;
+  const openrouter = accounts.add("openrouter", "second", "OPENROUTER_KEY").id;
+  accounts.assign(agent.id, deepseek);
+  accounts.switchMode(agent.id, "shared");
+  accounts.assign(agent.id, openrouter);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")),
+    {
+      deepseek: { type: "api_key", key: "DEEPSEEK_KEY" },
+      openrouter: { type: "api_key", key: "OPENROUTER_KEY" },
+    },
+  );
+  assert.deepEqual(accounts.switchMode(agent.id), {
+    mode: "assigned",
+    assigned: [
+      { provider: "deepseek", account: deepseek },
+      { provider: "openrouter", account: openrouter },
+    ],
+  });
   store.close();
 });
 
@@ -271,6 +529,72 @@ test("Antigravity sidecar is required, copied and recovered with a newer credent
     latest,
   );
   store.close();
+});
+
+test("assign HTTP replaces one provider in one request and rolls back failed replacements", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-account-swap-"));
+  const { app, store } = await createApp({
+    data: dir,
+    runtime: false,
+    piHome: dir,
+    desktops: dir,
+  });
+  const headers = { host: "127.0.0.1" };
+  try {
+    const agent = store.createAgent("替换试验", dir).agent;
+    const identity = join(dir, "identity");
+    mkdirSync(identity);
+    store.run(
+      "UPDATE agents SET agent_directory=? WHERE id=?",
+      identity,
+      agent.id,
+    );
+    const add = async (name: string) =>
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/accounts",
+          headers,
+          payload: { provider: "deepseek", name, key: name },
+        })
+      ).json().id as string;
+    const old = await add("old"),
+      next = await add("next");
+    const assign = (account: string, replace?: boolean) =>
+      app.inject({
+        method: "POST",
+        url: `/api/assign/${agent.ref}`,
+        headers,
+        payload: { account, ...(replace === undefined ? {} : { replace }) },
+      });
+    assert.equal((await assign(old)).statusCode, 200);
+    assert.equal((await assign(next)).statusCode, 409);
+    store.run(
+      `CREATE TRIGGER deny_swap BEFORE UPDATE ON account_assignments BEGIN SELECT RAISE(ABORT, 'blocked'); END`,
+    );
+    assert.equal((await assign(next, true)).statusCode, 500);
+    assert.equal(
+      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8")).deepseek
+        .key,
+      "old",
+    );
+    store.run("DROP TRIGGER deny_swap");
+    assert.equal((await assign(next, true)).statusCode, 200);
+    const list = (
+      await app.inject({ method: "GET", url: "/api/accounts", headers })
+    ).json() as { id: string; assigned: string[] }[];
+    assert.deepEqual(list.find((entry) => entry.id === old)?.assigned, []);
+    assert.deepEqual(list.find((entry) => entry.id === next)?.assigned, [
+      agent.ref,
+    ]);
+    assert.equal(
+      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8")).deepseek
+        .key,
+      "next",
+    );
+  } finally {
+    await app.close();
+  }
 });
 
 test("account HTTP responses omit credentials even on malformed stored JSON", async () => {

@@ -14,6 +14,7 @@ import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
 import { AgentModel } from "./AgentModel.tsx";
 import { DeleteAgent } from "./DeleteAgent.tsx";
+import { AgentCredentials } from "../settings/AgentCredentials.tsx";
 import {
   agentPresence,
   Avatar,
@@ -26,12 +27,14 @@ export function AgentDrawer({
   close,
   refresh,
   initialTab = "trace",
+  openAccounts,
 }: {
   agent: Agent;
   revision: number;
   close: () => void;
   refresh: () => void;
   initialTab?: "trace" | "box" | "settings";
+  openAccounts: (account: string | null) => void;
 }) {
   const [tab, setTab] = useState<"trace" | "box" | "settings">(initialTab),
     [box, setBox] = useState<Page<BoxMessage> | null>(null);
@@ -289,6 +292,7 @@ export function AgentDrawer({
             </>
           ) : (
             <>
+              <AgentCredentials agentId={agent.id} open={openAccounts} />
               <form className="settings-section" onSubmit={profileSave}>
                 <h3>身份资料</h3>
                 <label className="form-label">

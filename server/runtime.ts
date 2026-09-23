@@ -80,9 +80,11 @@ const target = (r: RuntimeInfo) => ({
   generation: r.generation,
   sessionId: r.sessionId,
 });
+// 接入说明按正文取 id：同一会话同一版说明只送一次，说明改了就自动换 id 重送。
+// pi-atrium 对同一 id 换了正文的投递会报错，所以不能靠手工改版本号。
 const guideId = (agent: string, session: string) => {
   const h = createHash("sha256")
-    .update(`${agent}:${session}:guide:v2`)
+    .update(`${agent}:${session}:guide:${atriumGuide}`)
     .digest("hex");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 };

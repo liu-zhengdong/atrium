@@ -28,6 +28,7 @@ import {
   safeFileName,
 } from "./attachments.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
+import { resolveMentions } from "../shared/mentions.ts";
 import { ensureUsers, userNames } from "./users.ts";
 import { ensureGroups } from "./groups.ts";
 import { cappedCount, type UnreadChat } from "./unread.ts";
@@ -692,6 +693,13 @@ export class Store {
       chatId,
     ).map((r) => r.agent_id);
   }
+  /** 群成员的名字与短号，给正文里的 @ 解析用。 */
+  private memberHandles(chatId: string) {
+    return this.all<{ id: string; name: string; ref: string }>(
+      "SELECT a.id,a.name,'a'||r.number AS ref FROM members m JOIN agents a ON a.id=m.agent_id JOIN agent_refs r ON r.agent_id=a.id WHERE m.chat_id=? AND a.deleted_at IS NULL",
+      chatId,
+    );
+  }
   /** 幂等重放：同一个 client_id 重发相同内容返回原消息，内容不同则报错。 */
   private replayOf(sender: string, input: SendRequest) {
     if (!input.client_id) return null;
@@ -716,8 +724,18 @@ export class Store {
     if (!same) throw new Problem(409, "消息标识已用于不同内容");
     return this.hydrate([decodeMessage(previous)])[0]!;
   }
-  send(sender: string, input: SendRequest) {
-    const chat = this.chat(input.chat_id);
+  send(sender: string, request: SendRequest) {
+    const chat = this.chat(request.chat_id);
+    // 正文里用 @名字、@短号 点到的本群成员与 mentions 参数同等对待；
+    // Web 输入框早就这样解析，Agent 按聊天习惯写的 @ 也要送得到。
+    const named = resolveMentions(
+      request.body,
+      this.memberHandles(chat.id).filter((member) => member.id !== sender),
+    );
+    const input = {
+      ...request,
+      mentions: [...new Set([...request.mentions, ...named])],
+    };
     assertCanSend(this, chat, sender, input);
     const replay = this.replayOf(sender, input);
     if (replay) return replay;

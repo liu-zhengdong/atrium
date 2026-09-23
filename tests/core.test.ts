@@ -20,7 +20,7 @@ import { Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
 import { receiveInbox, writeGithubTemplate } from "../server/adapters.ts";
 import { displayDesktops, defaultDesktops } from "../server/agents.ts";
-import { resolveMentions } from "../shared/mentions.ts";
+import { mentionsAll, resolveMentions } from "../shared/mentions.ts";
 import { UNREAD_CAP, unreadLabel } from "../shared/schema.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
@@ -262,6 +262,30 @@ test("@ 名称含空格、点、前缀重叠；拒绝误匹配与非成员", () 
   ]);
   assert.deepEqual(resolveMentions("@MiraXv2 @AtlasPlus @外人", agents), []);
   assert.deepEqual(resolveMentions("@Atlas @Atlas", agents), ["a"]);
+});
+
+test("@ 短号、中文紧挨、标点收尾都算点名；邮箱、包名、代码里的不算", () => {
+  const agents = [
+    { id: "a", name: "Atlas", ref: "a1" },
+    { id: "b", name: "a2", ref: "a9" },
+    { id: "c", name: "Kimi-K3", ref: "a2" },
+  ];
+  const cases: [string, string[]][] = [
+    ["@a1 交作业", ["a"]],
+    ["请@Atlas 看一下", ["a"]],
+    ["**@a1**：结论如下", ["a"]],
+    ["转给 @Kimi-K3。", ["c"]],
+    ["(@Atlas)、「@a1」", ["a"]],
+    ["@a2 是 Kimi-K3 的短号，不是名叫 a2 的那位", ["c"]],
+    ["@a9 和 @a1 按出现顺序", ["b", "a"]],
+    ["信箱 x@Atlas.com，包 @liuser/pi-atrium", []],
+    ["@a10 不是 @a1", ["a"]],
+    ["代码 `@a1` 和\n```\n@Atlas\n```\n都不算", []],
+  ];
+  for (const [body, expected] of cases)
+    assert.deepEqual(resolveMentions(body, agents), expected, body);
+  assert(!mentionsAll("`@全体` 是代码"), "代码里的 @ 全体不算");
+  assert(mentionsAll("请@全体。"), "中文紧挨也算");
 });
 
 test("十万条消息：未读封顶 99+，会话列表与未读摘要不随规模变慢", (t) => {

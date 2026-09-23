@@ -50,12 +50,27 @@ const INBOX_REMINDERS = 3;
 const likePattern = (text: string) =>
   `%${text.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
 /** 命中词附近的一段正文：长消息里的命中常在开头 160 字之外。 */
-const excerptAround = (body: string, term: string) => {
+const excerptAround = (body: string, term: string, lead = 60) => {
   const at = Math.max(0, body.toLowerCase().indexOf(term));
-  const start = Math.max(0, at - 60),
+  const start = Math.max(0, at - lead),
     end = Math.min(body.length, at + term.length + 120);
   return `${start > 0 ? "…" : ""}${body.slice(start, end).replace(/\s+/g, " ")}${end < body.length ? "…" : ""}`;
 };
+/**
+ * 只在详情里命中时，搜索结果给详情里命中附近的一段，并标明出自详情；命中在正文时返回 null。
+ * term 须已转小写。lead 是命中前保留的字数：用户界面只显示一行，要让命中词落在行内。
+ */
+export const detailsHit = (
+  body: string,
+  details: string,
+  term: string,
+  lead?: number,
+) =>
+  details && !body.toLowerCase().includes(term)
+    ? `详情：${excerptAround(details, term, lead)}`
+    : null;
+/** 用户界面搜索结果里命中词前保留的字数。 */
+export const USER_HIT_LEAD = 12;
 /**
  * 成员 r 还没读的消息 m：在连续已读位置之后、不是自己发的，也不在已读区间里
  * （@ 直接送达的、跳页读过的都记成区间）。未读数和提醒名单共用这一条，口径才一致。
@@ -93,15 +108,18 @@ const decodeMessage = (row: MessageRow): Message => ({
 });
 
 // The page budget applies before marking anything read, including multibyte text.
+// `returned` projects a row to what the caller actually hands back, so folded
+// fields don't use up the budget.
 function bounded<T extends { id: number }>(
   rows: T[],
   after: number,
   limit: number,
+  returned: (row: T) => unknown = (row) => row,
 ): Page<T> {
   const items: T[] = [];
   let bytes = 0;
   for (const row of rows.slice(0, limit)) {
-    const size = Buffer.byteLength(JSON.stringify(row));
+    const size = Buffer.byteLength(JSON.stringify(returned(row)));
     if (items.length && bytes + size > 32000) break;
     items.push(row);
     bytes += size;
@@ -260,6 +278,7 @@ export class Store {
     );
     ensureUsers(this);
     ensureGroups(this);
+    this.addColumn("messages", "details", "TEXT NOT NULL DEFAULT ''");
   }
   all<T>(sql: string, ...args: SQLInputValue[]): T[] {
     return this.db.prepare(sql).all(...args) as unknown as T[];
@@ -535,17 +554,27 @@ export class Store {
           chat.name.toLowerCase().includes(needle) || byMember.has(chat.id),
       )
       .slice(0, 10);
-    const messages = this.all<SearchResults["messages"][number]>(
+    const messages = this.all<
+      Omit<SearchResults["messages"][number], "text"> & {
+        body: string;
+        details: string;
+      }
+    >(
       `SELECT m.chat_id,'c'||r.number AS chat_ref,c.name AS chat_name,m.id,m.sender,
        CASE WHEN m.sender=? THEN ? ELSE COALESCE(a.deleted_name,a.name,m.sender) END AS sender_name,
-       substr(m.body,1,160) AS text, m.created_at
+       m.body, m.details, m.created_at
        FROM messages m JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
        LEFT JOIN agents a ON a.id=m.sender
-       WHERE m.body LIKE ? ESCAPE '\\' ORDER BY m.created_at DESC, m.rowid DESC LIMIT 20`,
+       WHERE (m.body LIKE ? ESCAPE '\\' OR m.details LIKE ? ESCAPE '\\') ORDER BY m.created_at DESC, m.rowid DESC LIMIT 20`,
       LOCAL_USER,
       userNames(this).own,
       like,
-    );
+      like,
+    ).map(({ body, details, ...hit }) => ({
+      ...hit,
+      text:
+        detailsHit(body, details, needle, USER_HIT_LEAD) ?? body.slice(0, 160),
+    }));
     const agents = this.all<SearchResults["agents"][number]>(
       `SELECT a.id,'a'||r.number AS ref,a.name,a.description FROM agents a JOIN agent_refs r ON r.agent_id=a.id
        WHERE a.deleted_at IS NULL AND (a.name LIKE ? ESCAPE '\\' OR a.description LIKE ? ESCAPE '\\') ORDER BY a.rowid LIMIT 10`,
@@ -575,9 +604,14 @@ export class Store {
       .slice(0, 5);
     const where = [
       "mb.agent_id=?",
-      ...terms.map(() => "m.body LIKE ? ESCAPE '\\'"),
+      ...terms.map(
+        () => "(m.body LIKE ? ESCAPE '\\' OR m.details LIKE ? ESCAPE '\\')",
+      ),
     ];
-    const params: SQLInputValue[] = [agentId, ...terms.map(likePattern)];
+    const params: SQLInputValue[] = [
+      agentId,
+      ...terms.flatMap((term) => [likePattern(term), likePattern(term)]),
+    ];
     for (const [clause, value] of [
       ["m.chat_id=?", input.chatId],
       ["m.sender=?", input.sender],
@@ -595,10 +629,11 @@ export class Store {
       sender_ref: string | null;
       sender_name: string | null;
       body: string;
+      details: string;
       created_at: number;
     }>(
       `SELECT m.id,'c'||r.number AS chat_ref,c.name AS chat_name,m.sender,
-         'a'||ar.number AS sender_ref,COALESCE(a.deleted_name,a.name) AS sender_name,m.body,m.created_at
+         'a'||ar.number AS sender_ref,COALESCE(a.deleted_name,a.name) AS sender_name,m.body,m.details,m.created_at
        FROM messages m JOIN members mb ON mb.chat_id=m.chat_id
        JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
        LEFT JOIN agents a ON a.id=m.sender LEFT JOIN agent_refs ar ON ar.agent_id=m.sender
@@ -617,7 +652,10 @@ export class Store {
         ? userNames(this, row.sender).peer
         : (row.sender_name ?? row.sender),
       created_at: row.created_at,
-      excerpt: excerptAround(row.body, terms[0] ?? ""),
+      excerpt:
+        detailsHit(row.body, row.details, terms[0] ?? "") ??
+        excerptAround(row.body, terms[0] ?? ""),
+      ...(row.details ? { details_chars: row.details.length } : {}),
     }));
     const more = rows.length > input.limit;
     return {
@@ -814,6 +852,7 @@ export class Store {
     const same =
       previous.chat_id === input.chat_id &&
       previous.body === input.body &&
+      previous.details === (input.details ?? "") &&
       previous.mentions === JSON.stringify(input.mentions) &&
       !!previous.mention_all === !!input.mention_all &&
       previousIds.length === attachments.length &&
@@ -823,14 +862,16 @@ export class Store {
   }
   send(sender: string, request: SendRequest) {
     const chat = this.chat(request.chat_id);
-    // 正文里用 @名字、@短号 点到的本群成员与 mentions 参数同等对待；
+    // 正文和详情里用 @名字、@短号 点到的本群成员与 mentions 参数同等对待；
     // Web 输入框早就这样解析，Agent 按聊天习惯写的 @ 也要送得到。
+    const details = request.details ?? "";
     const named = resolveMentions(
-      request.body,
+      details ? `${request.body}\n${details}` : request.body,
       this.memberHandles(chat.id).filter((member) => member.id !== sender),
     );
     const input = {
       ...request,
+      details,
       mentions: [...new Set([...request.mentions, ...named])],
     };
     assertCanSend(this, chat, sender, input);
@@ -841,10 +882,11 @@ export class Store {
     return this.transaction(() => {
       const created_at = Date.now();
       const result = this.run(
-        "INSERT INTO messages(chat_id,sender,body,mentions,client_id,created_at,mention_all) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO messages(chat_id,sender,body,details,mentions,client_id,created_at,mention_all) VALUES(?,?,?,?,?,?,?,?)",
         chat.id,
         sender,
         input.body,
+        input.details,
         JSON.stringify(input.mentions),
         input.client_id ?? null,
         created_at,
@@ -853,6 +895,7 @@ export class Store {
       const message = {
         chat_id: input.chat_id,
         body: input.body,
+        details: input.details,
         mentions: input.mentions,
         mention_all: mentionAll,
         client_id: input.client_id,
@@ -893,6 +936,7 @@ export class Store {
             mentionAll,
             messageId: message.id,
             body: input.body,
+            details: input.details,
             attachments: bound,
           }),
           { chatId: chat.id, throughMessage: message.id },
@@ -1127,7 +1171,13 @@ export class Store {
       );
     }
   }
-  readChat(agentId: string, chatId: string, after?: number, limit = 20) {
+  readChat(
+    agentId: string,
+    chatId: string,
+    after?: number,
+    limit = 20,
+    withDetails = false,
+  ) {
     this.assertMember(chatId, agentId);
     const last = this.one<{ last_read: number }>(
       "SELECT last_read FROM members WHERE agent_id=? AND chat_id=?",
@@ -1144,6 +1194,8 @@ export class Store {
       ).map(decodeMessage),
       cursor,
       limit,
+      // 不带详情时只返回字数，详情不占这一页的预算。
+      withDetails ? undefined : ({ details: _folded, ...shown }) => shown,
     );
     if (page.items.length)
       this.transaction(() => {

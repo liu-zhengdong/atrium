@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import { Hash, LoaderCircle } from "lucide-react";
-import Markdown from "react-markdown";
 import type { ChatReadState, Message, Overview } from "../../shared/schema.ts";
 import { isUserRef, LOCAL_USER } from "../../shared/user.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { ReadReceipt } from "./ReadReceipt.tsx";
+import { MessageBody } from "./MessageBody.tsx";
+import { useFolds, type Expanded } from "./useFolds.ts";
 import { MessageAttachments } from "./Attachments.tsx";
 import { continuationFlags } from "./messages.ts";
 import { time } from "../time.ts";
@@ -22,6 +23,7 @@ export function MessageTimeline({
   onScroll,
   headerRef,
   virtualizer,
+  holdPosition,
   flash,
   details,
 }: {
@@ -40,9 +42,11 @@ export function MessageTimeline({
   | "onScroll"
   | "headerRef"
   | "virtualizer"
+  | "holdPosition"
 >) {
   // 连续发言按完整消息数组判断，与当前渲染的窗口无关。
   const continuations = useMemo(() => continuationFlags(messages), [messages]);
+  const { expanded, toggle } = useFolds(scroll, holdPosition);
   const rows = virtualizer.getVirtualItems();
   return (
     <div
@@ -108,6 +112,8 @@ export function MessageTimeline({
                   readState={readState}
                   direct={active.kind === "direct"}
                   details={details}
+                  expanded={expanded[message.id] ?? {}}
+                  toggle={toggle(message.id)}
                 />
               </div>
             );
@@ -126,6 +132,8 @@ function MessageRow({
   readState,
   direct,
   details,
+  expanded,
+  toggle,
 }: {
   message: Message;
   continuation: boolean;
@@ -134,6 +142,8 @@ function MessageRow({
   readState: ChatReadState[];
   direct: boolean;
   details: (id: string) => void;
+  expanded: Expanded;
+  toggle: (part: keyof Expanded, anchor: HTMLElement) => void;
 }) {
   const name =
     message.sender === LOCAL_USER
@@ -182,16 +192,7 @@ function MessageRow({
           </div>
         )}
         {message.body.trim() ? (
-          <div className="markdown w-full min-w-0 rounded-[4px_13px_13px_13px] border border-[#eeede8] bg-[#f5f5f2] px-3.5 py-2.5 max-[560px]:px-3 max-[560px]:py-[9px] [.outgoing_&]:rounded-[13px_4px_13px_13px] [.outgoing_&]:border-[#e0e8f4] [.outgoing_&]:bg-[#eaf0fa]">
-            <Markdown
-              components={{
-                a: (props) => <a {...props} target="_blank" rel="noreferrer" />,
-                img: ({ alt }) => <span>[图片：{alt || "未加载"}]</span>,
-              }}
-            >
-              {message.body}
-            </Markdown>
-          </div>
+          <MessageBody message={message} expanded={expanded} toggle={toggle} />
         ) : null}
         <MessageAttachments attachments={message.attachments} />
         <ReadReceipt

@@ -1,4 +1,9 @@
-import type { Attachment, Chat } from "../shared/schema.ts";
+import {
+  AGENT_BODY_MAX,
+  DETAILS_NEED_BODY,
+  type Attachment,
+  type Chat,
+} from "../shared/schema.ts";
 import type { Store } from "./store.ts";
 import { Problem } from "./problem.ts";
 import { isUserRef } from "../shared/user.ts";
@@ -7,6 +12,7 @@ import { readUser } from "./users.ts";
 export type SendRequest = {
   chat_id: string;
   body: string;
+  details?: string;
   mentions: string[];
   client_id?: string;
   attachments?: string[];
@@ -72,6 +78,7 @@ export function deliveryText(input: {
   mentionAll: boolean;
   messageId: number;
   body: string;
+  details: string;
   attachments: Attachment[];
 }) {
   const source = JSON.stringify({
@@ -83,6 +90,7 @@ export function deliveryText(input: {
     ...(input.mentionAll ? { mention_all: true } : {}),
     message_id: input.messageId,
     body: input.body,
+    ...(input.details ? { details: input.details } : {}),
     attachments: input.attachments,
   });
   const peer = isUserRef(input.senderRef)
@@ -137,6 +145,14 @@ export function assertCanSend(
     throw new Problem(403, "只有用户可以 @ 全体成员");
   if (input.mention_all && chat.kind !== "group")
     throw new Problem(400, "只有群聊可以 @ 全体成员");
+  if (input.details && !input.body.trim())
+    throw new Problem(400, DETAILS_NEED_BODY);
   if (!input.body.trim() && !(input.attachments ?? []).length)
     throw new Problem(400, "请输入内容或添加附件");
+  // 长内容进 body 就不会折叠，所以超长直接拒绝，让 Agent 自己拆出结论。
+  if (!isUserRef(sender) && input.body.length > AGENT_BODY_MAX)
+    throw new Problem(
+      400,
+      `body 有 ${input.body.length} 字，超过 ${AGENT_BODY_MAX} 字。body 只写回复或结论，报告、证据、日志放进 details，再发一次。`,
+    );
 }

@@ -18,6 +18,7 @@ export function useMessageWindow(
 ) {
   const [header, setHeader] = useState<HTMLDivElement | null>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
+  const [holding, setHolding] = useState(false);
   useLayoutEffect(() => {
     if (!header) return;
     const measure = () => setHeaderHeight(header.offsetHeight);
@@ -39,8 +40,24 @@ export function useMessageWindow(
     // 贴底跟随不交给 followOnAppend：多条消息在同一批到达时它会停在离底 125px，
     // 改由 useConversation 按自己的贴底判定重新贴到底。
     anchorTo: "end",
-    scrollEndThreshold: BOTTOM_THRESHOLD,
+    // -1 让「在末尾」的判定永不成立，见 holdEnd。
+    scrollEndThreshold: holding ? -1 : BOTTOM_THRESHOLD,
   });
+
+  /**
+   * 用户展开、收起某条消息前调用。在底部附近时，虚拟列表把任何高度变化都当成
+   * 内容长到了末尾而贴底，刚点开的详情会被推出视口。展开在点击当帧提交，新高度在下一帧
+   * 的尺寸观察里量到，所以隔两帧恢复，恢复时调用 settled。
+   */
+  const holdEnd = useCallback((settled: () => void) => {
+    setHolding(true);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        setHolding(false);
+        settled();
+      }),
+    );
+  }, []);
 
   /** 把某条消息滚到视口中间；它不在当前消息集里时返回 false。 */
   const scrollToMessage = useCallback(
@@ -53,5 +70,5 @@ export function useMessageWindow(
     [messages, virtualizer],
   );
 
-  return { headerRef: setHeader, virtualizer, scrollToMessage };
+  return { headerRef: setHeader, virtualizer, scrollToMessage, holdEnd };
 }

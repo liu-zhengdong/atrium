@@ -92,10 +92,16 @@ export function useConversation(
     () => messages.filter((message) => message.chat_id === chatId),
     [messages, chatId],
   );
-  const { headerRef, virtualizer, scrollToMessage } = useMessageWindow(
+  const { headerRef, virtualizer, scrollToMessage, holdEnd } = useMessageWindow(
     visible,
     scroll,
   );
+  const measureBottom = () => {
+    const el = scroll.current;
+    if (el)
+      nearBottom.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+  };
 
   // 贴底时跟住最新消息。总高度变化也要重新贴底，因为行高先按估值算，
   // 挂载后测出真实高度、图片加载完成都会改变总高度。
@@ -136,11 +142,11 @@ export function useConversation(
     error,
     scroll,
     loadOlder,
-    onScroll() {
-      const el = scroll.current;
-      if (el)
-        nearBottom.current =
-          el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+    onScroll: measureBottom,
+    /** 用户在读某一条并展开、收起它：不跟随最新消息，量完新高度后按实际位置重新判断。 */
+    holdPosition() {
+      nearBottom.current = false;
+      holdEnd(measureBottom);
     },
     atBottom() {
       return nearBottom.current;

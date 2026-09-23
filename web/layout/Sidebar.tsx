@@ -14,8 +14,8 @@ import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
 import {
   agentPresence,
+  agentSummary,
   Avatar,
-  runtimeLabel,
   type Agent,
 } from "../components/AgentAvatar.tsx";
 export type Section = "agents" | "chat" | "records";
@@ -237,8 +237,11 @@ export function Sidebar({
               >
                 <span className="flex min-w-0 flex-1 flex-col">
                   <strong className={rowName}>{a.name}</strong>
-                  <small className={rowPreview}>
-                    {a.work || runtimeLabel(a)}
+                  <small
+                    className={rowPreview}
+                    title={[a.description, a.work].filter(Boolean).join("\n")}
+                  >
+                    {agentSummary(a)}
                   </small>
                 </span>
                 {a.unread > 0 && <span className="badge">{a.unread}</span>}

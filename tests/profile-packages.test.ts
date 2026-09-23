@@ -331,16 +331,19 @@ test("syncIdentityNotes 只写身份自己的 notes 目录", () => {
       syncIdentityNotes(identity, template);
       assert.deepEqual(walk(root), before, String(directory));
     }
-    // No notes.json on either side is a no-op, not a crash.
+    // Without its notes.json the identity's notes are <identity>/notes, so the
+    // bundled note lands there; without either notes.json nothing comes from
+    // the vault. Neither case crashes.
     rmSync(join(identity, "notes.json"));
     syncIdentityNotes(identity, template);
+    assert.deepEqual(readdirSync(notes), ["职责.md"]);
     writeFileSync(
       join(identity, "notes.json"),
       JSON.stringify({ directory: notes }),
     );
     rmSync(join(template, "notes.json"));
     syncIdentityNotes(identity, template);
-    assert.deepEqual(readdirSync(notes), []);
+    assert.deepEqual(readdirSync(notes), ["职责.md"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

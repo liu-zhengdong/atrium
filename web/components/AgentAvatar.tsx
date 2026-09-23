@@ -11,6 +11,15 @@ export const runtimeLabel = (a: Agent) =>
       : a.available
         ? "在线"
         : "离线";
+/** 头像上的状态点表达不了的状态：连不上但报过错。在线、执行中、离线看点，不再写字。 */
+export const statusNote = (a: Agent) =>
+  !a.runtime && a.error && a.available ? "暂不可用" : "";
+/**
+ * 名单里头像旁的一行：职位（自我介绍）常驻，没写就看工作声明，再没有就是短号。
+ * 状态点表达不了的「暂不可用」排在最前。
+ */
+export const agentSummary = (a: Agent) =>
+  statusNote(a) || a.description || a.work || a.ref;
 export function agentPresence(
   a: { available: boolean; runtime?: { busy: boolean } | null } | undefined,
 ): Presence {

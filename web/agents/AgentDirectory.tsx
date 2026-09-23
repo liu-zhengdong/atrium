@@ -1,11 +1,18 @@
 import { useState } from "react";
-import { LoaderCircle, MessageSquare, Plus, Search, Users } from "lucide-react";
+import {
+  Activity,
+  LoaderCircle,
+  MessageSquare,
+  Plus,
+  Search,
+  Users,
+} from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import { agentName } from "../../shared/agent-name.ts";
 import {
   agentPresence,
   Avatar,
-  runtimeLabel,
+  statusNote,
   type Agent,
 } from "../components/AgentAvatar.tsx";
 
@@ -83,9 +90,11 @@ export function AgentDirectory({
                   <strong className="truncate text-sm font-semibold text-ink group-hover:text-accent-strong">
                     {a.name}
                   </strong>
-                  <span className="flex-none rounded-full bg-[#edf5f1] px-2 py-0.5 text-[10px] font-medium text-[#316e50]">
-                    {runtimeLabel(a)}
-                  </span>
+                  {statusNote(a) && (
+                    <span className="flex-none rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                      {statusNote(a)}
+                    </span>
+                  )}
                 </div>
                 <span className="mt-0.5 font-mono text-[11px] text-muted">
                   {a.ref}
@@ -96,11 +105,22 @@ export function AgentDirectory({
                   )}
                 </span>
                 <p
-                  className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-ink/70"
-                  title={a.work || a.description || a.cwd}
+                  className={`mt-2.5 line-clamp-2 text-xs leading-relaxed ${
+                    a.description ? "text-ink/70" : "text-muted/60"
+                  }`}
+                  title={a.description || undefined}
                 >
-                  {a.work || a.description || a.cwd || "暂无工作描述"}
+                  {a.description || "还没有介绍"}
                 </p>
+                {a.work && (
+                  <p
+                    className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-accent-strong"
+                    title={a.work}
+                  >
+                    <Activity size={12} className="flex-none" />
+                    <span className="truncate">{a.work}</span>
+                  </p>
+                )}
               </button>
             </div>
             <div className="mt-4 flex items-center justify-between">

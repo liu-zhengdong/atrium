@@ -457,6 +457,11 @@ export class Store {
     this.agent(id);
     this.run("UPDATE agents SET work=? WHERE id=?", work, id);
   }
+  /** 名册上常驻的那行介绍；用户在资料里改的也是这一栏。 */
+  describe(id: string, description: string) {
+    this.agent(id);
+    this.run("UPDATE agents SET description=? WHERE id=?", description, id);
+  }
   chats(
     agentId?: string,
     { includeHidden = false }: { includeHidden?: boolean } = {},

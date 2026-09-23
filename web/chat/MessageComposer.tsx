@@ -10,8 +10,8 @@ import type { Overview } from "../../shared/schema.ts";
 import { api } from "../api.ts";
 import {
   agentPresence,
+  agentSummary,
   Avatar,
-  runtimeLabel,
   type Agent,
 } from "../components/AgentAvatar.tsx";
 import { StagedChip } from "./Attachments.tsx";
@@ -194,12 +194,9 @@ export function MessageComposer({
                   <small className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-muted">
                     {isAllOption(item)
                       ? "群内每位成员都会立刻收到"
-                      : item.work || runtimeLabel(item)}
+                      : agentSummary(item)}
                   </small>
                 </span>
-                {!isAllOption(item) && (
-                  <span className="muted small-text">{runtimeLabel(item)}</span>
-                )}
               </button>
             ))}
           </div>

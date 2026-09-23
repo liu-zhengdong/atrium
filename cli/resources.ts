@@ -16,6 +16,8 @@ type Skill = {
   name: string;
   description: string;
   enabled: boolean;
+  linkTarget?: string;
+  error?: string;
 };
 type Mcp = {
   text: string;
@@ -34,11 +36,12 @@ const skills: Command = {
     console.log(
       result.length
         ? table([
-            ["技能", "状态", "描述"],
+            ["技能", "状态", "描述", "来源"],
             ...result.map((item) => [
               item.name,
               item.enabled ? "启用" : "停用",
-              item.description,
+              item.error ?? item.description,
+              item.linkTarget ? `链接 · ${item.linkTarget}` : "身份目录",
             ]),
           ])
         : "没有技能",
@@ -47,7 +50,7 @@ const skills: Command = {
 };
 const skill = (action: "enable" | "disable" | "remove" | "copy"): Command => ({
   args: "名称 技能",
-  about: `${{ enable: "启用", disable: "停用", remove: "删除（服务端保留备份）", copy: "从个人 Pi 模板复制" }[action]}技能`,
+  about: `${{ enable: "启用", disable: "停用", remove: "删除（目录备份；链接仅删除链接本身）", copy: "从个人 Pi 模板复制" }[action]}技能`,
   positionals: [2, 2],
   async run({ positionals: [ref, name], json }) {
     const { client, path } = await target(ref!);

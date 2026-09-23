@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  lstatSync,
   symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -166,7 +167,81 @@ test("disabled skill disappears from Pi's resolved resources and returns after e
   );
 });
 
-test("symlinks, including dangling and out-of-directory links, are rejected", (t) => {
+test("linked skills list, toggle, and unlink without changing their target", (t) => {
+  const dir = fixture(t);
+  const outside = mkdtempSync(join(tmpdir(), "atrium-linked-skill-"));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  const content = "---\nname: Herdr\ndescription: linked skill\n---\n";
+  writeFileSync(join(outside, "SKILL.md"), content);
+  symlinkSync(outside, join(dir, "skills", "herdr"));
+  assert.deepEqual(
+    listSkills(dir).find((item) => item.key === "herdr"),
+    {
+      key: "herdr",
+      name: "Herdr",
+      description: "linked skill",
+      enabled: true,
+      linkTarget: outside,
+    },
+  );
+  assert.equal(
+    changeSkill(dir, "disable", "herdr").find((item) => item.key === "herdr")
+      ?.enabled,
+    false,
+  );
+  assert.equal(readFileSync(join(outside, "SKILL.md"), "utf8"), content);
+  assert(
+    JSON.parse(
+      readFileSync(join(dir, "settings.json"), "utf8"),
+    ).skills.includes("-skills/herdr/SKILL.md"),
+  );
+  assert.throws(() => changeSkill(dir, "copy", "herdr"), /技能已存在/);
+  assert.equal(
+    changeSkill(dir, "enable", "herdr").find((item) => item.key === "herdr")
+      ?.enabled,
+    true,
+  );
+  changeSkill(dir, "remove", "herdr");
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(dir, "settings.json"), "utf8"),
+    ).skills.includes("-skills/herdr/SKILL.md"),
+    false,
+  );
+  assert.equal(lstatSync(outside).isDirectory(), true);
+  assert.equal(readFileSync(join(outside, "SKILL.md"), "utf8"), content);
+  assert.equal(
+    listSkills(dir).some((item) => item.key === "herdr"),
+    false,
+  );
+});
+
+test("dangling skill links remain visible, toggleable and removable", (t) => {
+  const dir = fixture(t);
+  const missing = join(dir, "missing-skill");
+  symlinkSync(missing, join(dir, "skills", "broken"));
+  assert.deepEqual(
+    listSkills(dir).find((item) => item.key === "broken"),
+    {
+      key: "broken",
+      name: "broken",
+      description: "",
+      enabled: true,
+      linkTarget: missing,
+      error: "无法读取 SKILL.md",
+    },
+  );
+  assert.equal(
+    changeSkill(dir, "disable", "broken").find((item) => item.key === "broken")
+      ?.enabled,
+    false,
+  );
+  assert.throws(() => changeSkill(dir, "copy", "broken"), /技能已存在/);
+  changeSkill(dir, "remove", "broken");
+  assert.equal(listSkills(dir).length, 1);
+});
+
+test("symlinks in writable rule and MCP paths are rejected", (t) => {
   const dir = fixture(t);
   const outside = join(tmpdir(), "atrium-outside-" + process.pid);
   writeFileSync(outside, "outside");
@@ -181,5 +256,9 @@ test("symlinks, including dangling and out-of-directory links, are rejected", (t
   assert.throws(() => readMcp(dir), /符号链接/);
   rmSync(join(dir, "skills", "sample", "SKILL.md"));
   symlinkSync(outside, join(dir, "skills", "sample", "SKILL.md"));
-  assert.throws(() => listSkills(dir), /符号链接/);
+  assert.equal(listSkills(dir)[0]?.error, "无法读取 SKILL.md");
+  assert.throws(
+    () => changeSkill(dir, "remove", "sample"),
+    /符号链接|链接或特殊文件/,
+  );
 });

@@ -3,6 +3,8 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  readlinkSync,
+  unlinkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -110,7 +112,15 @@ function skillDir(dir: string) {
   return safePath(dir, "skills");
 }
 function skillPath(dir: string, name: string) {
-  return safePath(dir, "skills", checkedName(name));
+  return join(skillDir(dir), checkedName(name));
+}
+function entryStat(path: string) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 function validateSkillTree(root: string, entry = root, total = { bytes: 0 }) {
   const stat = lstatSync(entry);
@@ -133,15 +143,29 @@ export function listSkills(dir: string) {
   const skills = existsSync(root) ? readdirSync(root) : [];
   return skills.flatMap((key) => {
     if (!skillName.test(key)) return [];
-    const file = safePath(dir, "skills", key, "SKILL.md");
-    if (!existsSync(file)) return [];
-    const meta = frontmatter(readText(file));
+    const path = skillPath(dir, key);
+    const linked = lstatSync(path).isSymbolicLink();
+    const linkTarget = linked ? resolve(root, readlinkSync(path)) : undefined;
+    let meta = { name: "", description: "" };
+    let error: string | undefined;
+    try {
+      const file = linked
+        ? join(linkTarget!, "SKILL.md")
+        : safePath(dir, "skills", key, "SKILL.md");
+      if (!linked && !existsSync(file)) return [];
+      if (!existsSync(file)) error = "无法读取 SKILL.md";
+      else meta = frontmatter(readText(file));
+    } catch {
+      error = "无法读取 SKILL.md";
+    }
     return [
       {
         key,
         name: meta.name || key,
         description: meta.description,
         enabled: !ignored.has(`-skills/${key}/SKILL.md`),
+        ...(linked ? { linkTarget } : {}),
+        ...(error ? { error } : {}),
       },
     ];
   });
@@ -175,7 +199,7 @@ export function changeSkill(dir: string, action: SkillAction, name: string) {
     : [];
   const next = planSkill(current, action, name);
   if (action === "copy") {
-    if (existsSync(target)) throw new Problem(409, "技能已存在");
+    if (entryStat(target)) throw new Problem(409, "技能已存在");
     const template = safeRoot(defaultTemplate());
     const source = safePath(template, "skills", checkedName(name));
     if (!existsSync(join(source, "SKILL.md")))
@@ -193,17 +217,22 @@ export function changeSkill(dir: string, action: SkillAction, name: string) {
       rmSync(temporary, { recursive: true, force: true });
     }
   } else {
-    if (!existsSync(target)) throw new Problem(404, "技能不存在");
-    safePath(dir, "skills", name, "SKILL.md");
+    const stat = entryStat(target);
+    if (!stat) throw new Problem(404, "技能不存在");
+    if (!stat.isSymbolicLink()) safePath(dir, "skills", name, "SKILL.md");
     if (action === "remove") {
-      // Preserve original contents, including agent-authored files, before removing them from discovery.
-      validateSkillTree(target);
-      const backup = safePath(dir, `.atrium-skill-${name}-${randomUUID()}`);
-      cpSync(target, backup, {
-        recursive: true,
-        mode: constants.COPYFILE_FICLONE,
-      });
-      rmSync(target, { recursive: true });
+      if (stat.isSymbolicLink()) {
+        unlinkSync(target);
+      } else {
+        // Preserve original contents, including agent-authored files, before removing them from discovery.
+        validateSkillTree(target);
+        const backup = safePath(dir, `.atrium-skill-${name}-${randomUUID()}`);
+        cpSync(target, backup, {
+          recursive: true,
+          mode: constants.COPYFILE_FICLONE,
+        });
+        rmSync(target, { recursive: true });
+      }
     }
   }
   if (JSON.stringify(current) !== JSON.stringify(next))

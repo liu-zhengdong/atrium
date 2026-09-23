@@ -915,11 +915,13 @@ export class Runtimes {
           }
           this.changed();
         } catch (error) {
-          if (!this.stopped)
-            this.store.deliveryError(
-              pending.id,
-              this.redact(id, String(error)),
-            );
+          if (!this.stopped) {
+            const message = this.redact(id, String(error));
+            this.store.deliveryError(pending.id, message);
+            this.store.setFailure(id, message);
+            this.store.finishTurn(id, false);
+            this.changed();
+          }
           break;
         }
       }
@@ -927,8 +929,12 @@ export class Runtimes {
       if (!this.stopped) {
         const message = this.redact(id, String(error));
         this.errors.set(id, message);
-        if (!operationFailed) this.store.setFailure(id, message);
-        this.store.finishTurn(id, false);
+        // A TUI may replace its session while an idle status poll is in flight.
+        // Only a failed wake/delivery is a failed turn, not that transient poll.
+        if (!operationFailed && this.store.pending(id).length) {
+          this.store.setFailure(id, message);
+          this.store.finishTurn(id, false);
+        }
         this.changed();
       }
     }

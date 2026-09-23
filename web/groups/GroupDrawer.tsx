@@ -50,7 +50,7 @@ export function GroupDrawer({
       }
     >
       <nav
-        className="flex flex-none gap-2 border-b border-black/[0.04] px-4"
+        className="flex flex-none gap-5 border-b border-black/[0.04] px-5"
         role="tablist"
         aria-label="群信息"
       >
@@ -59,7 +59,7 @@ export function GroupDrawer({
             key={item.id}
             role="tab"
             aria-selected={tab === item.id}
-            className={`-mb-px border-b-2 px-3 py-2.5 text-xs transition-colors ${
+            className={`-mb-px border-b-2 pb-2.5 pt-2 text-xs transition-colors ${
               tab === item.id
                 ? "border-accent font-medium text-accent-strong"
                 : "border-transparent text-muted hover:text-ink"

@@ -49,7 +49,7 @@ export function MemberList({
         {inGroup.map((agent) => (
           <li
             key={agent.id}
-            className="group flex items-center gap-3 rounded-[8px] px-2.5 py-2 transition-colors hover:bg-[#edf5f1]"
+            className="group -mx-2.5 flex items-center gap-3 rounded-[8px] px-2.5 py-2 transition-colors hover:bg-[#edf5f1]"
           >
             <button
               className="flex-none"

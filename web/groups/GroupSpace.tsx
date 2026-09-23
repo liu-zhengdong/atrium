@@ -72,7 +72,7 @@ export function GroupSpace({
                 return (
                   <li key={file.path}>
                     <button
-                      className="flex w-full items-start gap-2.5 rounded-[8px] px-2 py-2 text-left transition-colors hover:bg-[#edf5f1]"
+                      className="flex w-[calc(100%+1.25rem)] -mx-2.5 items-start gap-2.5 rounded-[8px] px-2.5 py-2 text-left transition-colors hover:bg-[#edf5f1]"
                       onClick={() => setOpen(file.path)}
                     >
                       <Icon

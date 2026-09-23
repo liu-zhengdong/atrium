@@ -68,13 +68,20 @@ const inside = (root: string, path: string) => {
 };
 /** Notes an identity keeps for itself; the rest of a personal vault stays put. */
 const OWNED_NOTES = ["USER", "self-evolution"];
-/** Rule, model and MCP files an identity keeps as its own copies. */
+/**
+ * Rule, model, MCP and bridge files an identity keeps as its own copies; one the
+ * template lacks is skipped.
+ * claude-bridge.json names the Claude CLI to run: without it the bridge falls back
+ * to the SDK's bundled CLI, which lists no newer models. It is copied, not linked,
+ * because the bridge writes its startup-notice date into this file.
+ */
 const OWNED_FILES = [
   "AGENTS.md",
   "SYSTEM.md",
   "APPEND_SYSTEM.md",
   "models.json",
   "mcp.json",
+  "claude-bridge.json",
 ];
 /**
  * Resource directories an identity keeps as its own. These are what an Agent
@@ -516,7 +523,7 @@ export function prepareProfile(
       : {},
     template,
   );
-  // Rule/model/MCP files and notes become this identity's own copies.
+  // Owned files (OWNED_FILES) and notes become this identity's own copies.
   // Credentials are linked to the shared file; session history is not copied.
   // Identity files are written exclusively (wx) alongside kept legacy content;
   // on failure only what this call created is removed.

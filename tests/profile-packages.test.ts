@@ -601,6 +601,32 @@ test("新建身份拿到自有的技能、扩展和主题，不再引用模板�
   }
 });
 
+test("新建身份复制模板里的 claude-bridge.json，模板没有就跳过", () => {
+  const { root, template } = resourceTemplate("atrium-bridge-config-");
+  const source = join(template, "claude-bridge.json");
+  const config = JSON.stringify({
+    provider: { pathToClaudeCodeExecutable: "/用户/.local/bin/claude" },
+  });
+  try {
+    writeFileSync(source, config);
+    const own = join(
+      prepareProfile("id1", template, join(root, ".pi")),
+      "claude-bridge.json",
+    );
+    assert(!lstatSync(own).isSymbolicLink(), "是副本，不是链接");
+    assert.equal(readFileSync(own, "utf8"), config);
+    // The bridge writes its startup-notice date here; only the copy changes.
+    writeFileSync(own, "身份写过的配置");
+    assert.equal(readFileSync(source, "utf8"), config);
+    rmSync(source);
+    const bare = prepareProfile("id2", template, join(root, ".pi"));
+    assert(existsSync(join(bare, "settings.json")), "模板没有也照常建好");
+    assert(!existsSync(join(bare, "claude-bridge.json")), "模板没有就不复制");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("旧身份的共享资源目录转成自有副本，不覆盖已有的", () => {
   const { root, template } = resourceTemplate("atrium-adopt-res-");
   const identity = join(root, "identity");

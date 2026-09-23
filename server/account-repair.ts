@@ -38,6 +38,7 @@ export function repairAccountFiles(
     ) {
       if (
         row.status === "pending" ||
+        row.last_error === "未知错误" ||
         row.last_error === "账号凭据损坏，原文件已隔离"
       )
         store.run(

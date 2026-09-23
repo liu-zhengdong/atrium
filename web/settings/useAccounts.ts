@@ -92,13 +92,5 @@ export function useLogin(id: string | null, finished: () => void) {
       setError(String(e));
     }
   }
-  async function cancel() {
-    if (!id) return;
-    try {
-      await api(`/accounts/${id}/login/cancel`, "POST");
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-  return { events, status, error, answer, cancel };
+  return { events, status, error, answer };
 }

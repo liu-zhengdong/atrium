@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import type { Account, Credentials } from "./types.ts";
@@ -8,14 +9,12 @@ export function AssignmentPicker({
   accounts,
   agents,
   change,
-  reload,
   openAgent,
 }: {
   account: Account;
   accounts: Account[];
   agents: Agent[];
   change: <T>(task: () => Promise<T>) => Promise<T | undefined>;
-  reload: () => Promise<void>;
   openAgent: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -26,6 +25,17 @@ export function AssignmentPicker({
   } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!pending) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopImmediatePropagation();
+        setPending(null);
+      }
+    };
+    window.addEventListener("keydown", dismiss, true);
+    return () => window.removeEventListener("keydown", dismiss, true);
+  }, [pending]);
   const filtered = agents.filter((agent) =>
     `${agent.name} ${agent.ref}`.toLowerCase().includes(query.toLowerCase()),
   );
@@ -65,34 +75,23 @@ export function AssignmentPicker({
     if (!pending) return;
     setBusy(true);
     const { agent, previous } = pending;
-    // Replacement requires two server calls: restore the old account if the new assignment fails.
     try {
-      if (previous)
-        await api(`/assign/${agent.ref}/${account.provider}`, "DELETE");
-      await api(`/assign/${agent.ref}`, "POST", { account: account.id });
-      await reload();
-      setPending(null);
-    } catch (e) {
-      if (previous) {
-        try {
-          await api(`/assign/${agent.ref}`, "POST", { account: previous.id });
-        } catch {
-          setError("分配失败，原账号也未能恢复。请刷新后检查该 Agent。");
-          await reload();
-          setBusy(false);
-          return;
-        }
-      }
-      setError(String(e));
-      await reload();
+      const result = await change(() =>
+        api(`/assign/${agent.ref}`, "POST", {
+          account: account.id,
+          replace: !!previous,
+        }),
+      );
+      if (result) setPending(null);
+      else setError("分配失败，请检查账号状态。");
     } finally {
       setBusy(false);
     }
   }
   return (
-    <div className="space-y-3 rounded-xl bg-[#f6f8f6] p-3">
+    <div className="space-y-3">
       <input
-        className="field"
+        className="field !border-transparent !bg-[#f1f5f2] focus:!border-[#b9c9bd] focus:!bg-white focus:!shadow-none"
         aria-label="筛选 Agent"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
@@ -102,7 +101,7 @@ export function AssignmentPicker({
         {filtered.map((agent) => (
           <div
             key={agent.id}
-            className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-white"
+            className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-soft"
           >
             <button
               className="min-w-0 truncate text-left text-xs text-accent-strong hover:underline"
@@ -135,39 +134,44 @@ export function AssignmentPicker({
           {error}
         </p>
       )}
-      {pending && (
-        <div
-          role="dialog"
-          aria-label="确认分配"
-          className="rounded-lg bg-white p-3 text-xs shadow-lift"
-        >
-          <p className="m-0">
-            {pending.previous
-              ? `将替换 ${pending.agent.name} 的 ${account.provider} 账号「${pending.previous.name}」。`
-              : `将把 ${account.name} 分配给 ${pending.agent.name}。`}
-          </p>
-          {pending.shared && (
-            <p className="mb-0 mt-2 text-muted">
-              该 Agent 将不再使用你个人 Pi 的登录，只用分配给它的账号。
-            </p>
-          )}
-          <div className="mt-3 flex gap-2">
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() => void confirm()}
+      {pending &&
+        createPortal(
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#1e2b2280] p-4">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="确认分配"
+              className="w-full max-w-[400px] rounded-2xl bg-white p-5 text-xs shadow-xl"
             >
-              确认分配
-            </button>
-            <button
-              className="button secondary"
-              onClick={() => setPending(null)}
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      )}
+              <p className="m-0">
+                {pending.previous
+                  ? `将用「${account.name}」替换 ${pending.agent.name} 的账号「${pending.previous.name}」（${account.provider}）。`
+                  : `将把 ${account.name} 分配给 ${pending.agent.name}。`}
+              </p>
+              {pending.shared && (
+                <p className="mb-0 mt-2 text-muted">
+                  该 Agent 将不再使用你个人 Pi 的登录，只用分配给它的账号。
+                </p>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => void confirm()}
+                >
+                  确认分配
+                </button>
+                <button
+                  className="button secondary"
+                  onClick={() => setPending(null)}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

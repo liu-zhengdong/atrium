@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, UsersRound } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
 import { api } from "../api.ts";
-import type { Agent } from "../components/AgentAvatar.tsx";
+import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { AssignmentPicker } from "./AssignmentPicker.tsx";
 import type { Account } from "./types.ts";
 
@@ -21,32 +22,31 @@ export function AccountRow({
   accounts,
   agents,
   change,
-  reload,
   focused,
   openAgent,
+  relogin,
 }: {
   account: Account;
   accounts: Account[];
   agents: Agent[];
   change: <T>(task: () => Promise<T>) => Promise<T | undefined>;
-  reload: () => Promise<void>;
   focused: boolean;
   openAgent: (id: string) => void;
+  relogin: () => void;
 }) {
-  const [expanded, setExpanded] = useState(focused);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(account.name);
   const [deleting, setDeleting] = useState(false);
   const root = useRef<HTMLElement>(null);
   useEffect(() => {
     if (focused) {
-      setExpanded(true);
-      root.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      root.current?.scrollIntoView({ block: "center", behavior: "instant" });
     }
   }, [focused]);
-  const agentNames = account.assigned.map(
-    (id) => agents.find((agent) => agent.ref === id)?.name ?? id,
-  );
+  const assignedAgents = account.assigned
+    .map((id) => agents.find((agent) => agent.ref === id))
+    .filter((agent): agent is Agent => !!agent);
+  const agentNames = assignedAgents.map((agent) => agent.name);
   return (
     <section ref={root} className="rounded-2xl bg-white p-5 shadow-lift">
       <div className="flex items-start justify-between gap-3">
@@ -63,10 +63,21 @@ export function AccountRow({
           <p className="mb-0 mt-1.5 text-xs text-muted">
             {account.type === "oauth" ? "OAuth" : "API key"}
             {expiry(account.expires) && ` · ${expiry(account.expires)}`}
-            {account.last_error && ` · ${account.last_error}`}
+            {account.last_error &&
+              ` · ${account.last_error === "未知错误" && !account.expires ? "登录未完成" : account.last_error}`}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {account.type === "oauth" &&
+            (account.status === "error" ||
+              (account.expires !== null && account.expires < Date.now())) && (
+              <button className="button secondary !text-xs" onClick={relogin}>
+                {account.last_error === "登录未完成" ||
+                (!account.expires && account.last_error === "未知错误")
+                  ? "继续登录"
+                  : "重新登录"}
+              </button>
+            )}
           <button
             className="icon-button"
             aria-label={`重命名 ${account.name}`}
@@ -152,36 +163,57 @@ export function AccountRow({
           </div>
         </div>
       )}
-      <div className="mt-4 flex items-center justify-between gap-2">
-        <button
-          className="flex min-w-0 items-center gap-1 text-xs text-muted hover:text-ink"
-          onClick={() => setExpanded(!expanded)}
-          aria-expanded={expanded}
-        >
-          <ChevronDown
-            size={14}
-            className={`shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
-          />
-          <span className="truncate">
-            {agentNames.length
-              ? `已分配 · ${agentNames.join("、")}`
-              : "尚未分配"}
-          </span>
-        </button>
-        <span className="shrink-0 text-[11px] text-muted">{account.id}</span>
-      </div>
-      {expanded && (
-        <div className="mt-4">
-          <AssignmentPicker
-            account={account}
-            accounts={accounts}
-            agents={agents}
-            change={change}
-            reload={reload}
-            openAgent={openAgent}
-          />
+      <div className="mt-4 flex items-center gap-2 border-t border-[#edf1ed] pt-3">
+        <span className="shrink-0 text-xs text-muted">分配</span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          {assignedAgents.length ? (
+            assignedAgents.map((agent) => (
+              <button
+                key={agent.id}
+                className="flex min-w-0 items-center gap-1 rounded-lg px-1 py-0.5 text-xs hover:bg-soft"
+                title={`查看 ${agent.name}`}
+                onClick={() => openAgent(agent.id)}
+              >
+                <Avatar name={agent.name} tiny />
+                <span className="truncate">{agent.name}</span>
+              </button>
+            ))
+          ) : (
+            <span className="text-xs text-muted">尚未分配</span>
+          )}
         </div>
-      )}
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            <button
+              className="icon-button"
+              aria-label={`分配 ${account.name}`}
+              title="分配"
+            >
+              <UsersRound size={17} />
+            </button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              align="end"
+              sideOffset={6}
+              className="z-50 w-[min(340px,calc(100vw-32px))] rounded-xl bg-white p-4 shadow-xl"
+              aria-label={`分配 ${account.name}`}
+              onInteractOutside={(event) => {
+                if (document.querySelector('[aria-label="确认分配"]'))
+                  event.preventDefault();
+              }}
+            >
+              <AssignmentPicker
+                account={account}
+                accounts={accounts}
+                agents={agents}
+                change={change}
+                openAgent={openAgent}
+              />
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+      </div>
     </section>
   );
 }

@@ -67,7 +67,12 @@ export function SettingsCenter({
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (
+        event.key === "Escape" &&
+        !document.querySelector(
+          '[role="dialog"], [data-radix-popper-content-wrapper]',
+        )
+      ) {
         event.preventDefault();
         close();
       }
@@ -76,8 +81,8 @@ export function SettingsCenter({
         searchRef.current?.focus();
       }
     };
-    window.addEventListener("keydown", keydown);
-    return () => window.removeEventListener("keydown", keydown);
+    window.addEventListener("keydown", keydown, true);
+    return () => window.removeEventListener("keydown", keydown, true);
   }, [close]);
   return (
     <div className="flex h-dvh min-h-[380px] flex-col overflow-hidden bg-surface font-sans text-ink sm:flex-row">
@@ -97,7 +102,7 @@ export function SettingsCenter({
             />
             <input
               ref={searchRef}
-              className="field !pl-8 !pr-8"
+              className="field !border-transparent !bg-[#e9efeb] !pl-8 !pr-8 focus:!border-[#b9c9bd] focus:!bg-white focus:!shadow-none"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               aria-label="搜索设置"

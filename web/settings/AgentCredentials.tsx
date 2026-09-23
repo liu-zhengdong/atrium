@@ -52,23 +52,35 @@ export function AgentCredentials({
       )}
       {credentials && (
         <>
-          <button
-            className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-xs text-muted hover:bg-soft"
-            onClick={() => open(credentials.assigned[0]?.account ?? null)}
-          >
-            <span className="min-w-0 truncate">
-              {credentials.mode === "shared"
-                ? `共享你的 Pi 登录${credentials.assigned.length ? ` · 已保存 ${credentials.assigned.length} 个分配` : ""}`
-                : credentials.assigned.length
-                  ? `独立账号 · ${credentials.assigned.map(({ provider, account }) => accounts.find((item) => item.id === account)?.name ?? provider).join("、")}`
-                  : "独立账号 · 尚未分配"}
-            </span>
-            <ChevronRight size={15} />
-          </button>
+          <p className="mb-1 mt-2 text-xs text-muted">
+            {credentials.mode === "shared" ? "共享你的 Pi 登录" : "独立账号"}
+          </p>
+          {credentials.assigned.map(({ provider, account }) => (
+            <button
+              key={provider}
+              className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-xs hover:bg-soft"
+              onClick={() => open(account)}
+            >
+              <span className="min-w-0 truncate">
+                {provider} ·{" "}
+                {accounts.find((item) => item.id === account)?.name ??
+                  "账号不可用"}
+              </span>
+              <ChevronRight size={15} />
+            </button>
+          ))}
+          {!credentials.assigned.length && (
+            <button
+              className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-xs text-muted hover:bg-soft"
+              onClick={() => open(null)}
+            >
+              前往账号设置 <ChevronRight size={15} />
+            </button>
+          )}
           {(credentials.mode === "assigned" ||
             credentials.assigned.length > 0) && (
             <button
-              className="mt-2 text-xs text-accent-strong hover:underline"
+              className="button secondary mt-3 !text-xs"
               onClick={() =>
                 setConfirm(
                   credentials.mode === "assigned" ? "shared" : "assigned",
@@ -82,7 +94,7 @@ export function AgentCredentials({
           )}
           {confirm && (
             <div
-              className="mt-3 rounded-lg bg-soft p-3 text-xs"
+              className="mt-3 rounded-xl bg-soft p-4 text-xs"
               role="dialog"
               aria-label={
                 confirm === "shared" ? "确认切回共享登录" : "确认使用已分配账号"
@@ -98,7 +110,7 @@ export function AgentCredentials({
                   className="button"
                   onClick={() => void switchMode(confirm)}
                 >
-                  确认切回
+                  {confirm === "shared" ? "确认切回" : "确认使用"}
                 </button>
                 <button
                   className="button secondary"

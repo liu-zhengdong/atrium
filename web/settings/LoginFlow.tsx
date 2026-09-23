@@ -11,7 +11,7 @@ export function LoginFlow({
   finished: () => void;
   close: () => void;
 }) {
-  const { events, status, error, answer, cancel } = useLogin(id, finished);
+  const { events, status, error, answer } = useLogin(id, finished);
   const [value, setValue] = useState("");
   const [answered, setAnswered] = useState(-1);
   const promptIndex = events.findLastIndex((event) => !!event.prompt);
@@ -23,23 +23,7 @@ export function LoginFlow({
     setValue("");
   }
   return (
-    <section
-      className="space-y-4 rounded-xl bg-[#f5f8f5] p-4 shadow-lift"
-      aria-label="OAuth 登录"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="m-0 text-[13px] font-medium">登录 · {id}</h3>
-        <button
-          type="button"
-          className="button secondary"
-          onClick={() => {
-            void cancel();
-            close();
-          }}
-        >
-          取消登录
-        </button>
-      </div>
+    <section className="space-y-4" aria-label="OAuth 登录">
       {events.map((event, index) =>
         event.type === "auth_url" && event.url ? (
           <a
@@ -126,6 +110,14 @@ export function LoginFlow({
           {error || "登录未完成，可重新发起登录"}
         </p>
       )}
+      {status === "ready" && (
+        <p className="text-xs text-accent-strong">登录成功</p>
+      )}
+      <div className="flex justify-end gap-2">
+        <button type="button" className="button secondary" onClick={close}>
+          {status === "pending" ? "取消登录" : "关闭"}
+        </button>
+      </div>
     </section>
   );
 }

@@ -49,31 +49,28 @@ export function MemberList({
         {inGroup.map((agent) => (
           <li
             key={agent.id}
-            className="group flex items-start gap-3 rounded-[8px] px-2.5 py-2 transition-colors hover:bg-[#edf5f1]"
+            className="group flex items-center gap-3 rounded-[8px] px-2.5 py-2 transition-colors hover:bg-[#edf5f1]"
           >
             <button
-              className="mt-0.5 flex-none"
+              className="flex-none"
               aria-label={`查看 ${agent.name} 的运行轨迹`}
               onClick={() => openAgent(agent.id)}
             >
-              <Avatar name={agent.name} presence={agentPresence(agent)} small />
+              <Avatar name={agent.name} presence={agentPresence(agent)} />
             </button>
             <div className="min-w-0 flex-1">
-              <p className="m-0 flex items-baseline gap-2 text-[13px] font-[550] text-ink">
+              <p className="m-0 flex items-baseline gap-2 text-[13px] font-[550] leading-[18px] text-ink">
                 <span className="truncate">{agent.name}</span>
                 <span className="muted small-text flex-none">{agent.ref}</span>
               </p>
-              <p className="m-0 mt-0.5 truncate text-[11.5px] text-muted">
-                {agent.work || runtimeLabel(agent)}
-              </p>
-              {agent.description && (
-                <p className="m-0 mt-1 line-clamp-2 text-[11.5px] text-muted/80">
-                  {agent.description}
+              {(agent.work || agent.description) && (
+                <p className="m-0 mt-0.5 truncate text-xs leading-[16px] text-muted">
+                  {agent.work || agent.description}
                 </p>
               )}
             </div>
             <button
-              className="icon-button mt-0.5 flex-none text-muted opacity-0 hover:text-red-600 group-hover:opacity-100 focus:opacity-100"
+              className="icon-button flex-none text-muted opacity-0 hover:text-red-600 group-hover:opacity-100 focus:opacity-100"
               aria-label={`把 ${agent.name} 移出群`}
               title="移出群"
               onClick={() => setRemoving(agent)}

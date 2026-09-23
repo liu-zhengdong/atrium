@@ -288,7 +288,7 @@ export function createMcp(
   );
   tool(
     "search_messages",
-    "在自己加入的会话里按关键词找消息，新的在前。query 里空格分开的词都要出现，英文不分大小写；chat_id 只找某个会话，sender 只找某人发的（如 a6、u1，也可以是自己）。返回命中附近的片段和 message_id，不改变已读状态；要读全文，用 read_chat 并把 after 设为 message_id 减 1。更早的结果把 before 设为上次返回的 next_before。",
+    "在自己加入的会话里按关键词找消息，新的在前。query 里空格分开的词都要出现，英文不分大小写；chat_id 只找某个会话，sender 只找某人发的（如 a6、u1，也可以是自己）。返回命中附近的片段和 message_id，不改变已读状态；要读全文，用 read_chat 并把 after 设为 message_id 减 1。每页默认 10 条、最多 20 条，更早的结果把 before 设为上次返回的 next_before。",
     {
       query: z.string().trim().min(1).max(100),
       chat_id: chatReference.optional(),

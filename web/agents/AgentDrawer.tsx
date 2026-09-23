@@ -14,6 +14,7 @@ import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
 import { AgentModel } from "./AgentModel.tsx";
 import { AgentPlugins } from "./AgentPlugins.tsx";
+import { AgentSkills, AgentMcp, AgentRules } from "./AgentResources.tsx";
 import { DeleteAgent } from "./DeleteAgent.tsx";
 import { AgentCredentials } from "../settings/AgentCredentials.tsx";
 import {
@@ -37,6 +38,9 @@ export function AgentDrawer({
   initialTab?: "trace" | "box" | "settings";
   openAccounts: (account: string | null) => void;
 }) {
+  const [group, setGroup] = useState<
+    "common" | "abilities" | "identity" | "access"
+  >("common");
   const [tab, setTab] = useState<"trace" | "box" | "settings">(initialTab),
     [box, setBox] = useState<Page<BoxMessage> | null>(null);
   const [boxPages, setBoxPages] = useState([0]);
@@ -293,173 +297,218 @@ export function AgentDrawer({
             </>
           ) : (
             <>
-              <AgentCredentials agentId={agent.id} open={openAccounts} />
-              {agent.agent_directory && (
-                <AgentPlugins
-                  agentId={agent.id}
-                  available={agent.available}
-                  refresh={refresh}
-                />
-              )}
-              <form className="settings-section" onSubmit={profileSave}>
-                <h3>身份资料</h3>
-                <label className="form-label">
-                  名称
-                  <input
-                    className="field"
-                    required
-                    maxLength={40}
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </label>
-                <label className="form-label">
-                  自我介绍
-                  <textarea
-                    className="field"
-                    maxLength={1000}
-                    rows={3}
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
-                </label>
-                <button className="button secondary" disabled={busy}>
-                  保存资料
-                </button>
-              </form>
-              <section className="settings-section">
-                <h3>外部事件接收口</h3>
-                <code className="path">
-                  POST /api/agents/{agent.name}/inbox
-                </code>
-                <p className="muted small-text">
-                  把外部事件 POST 到这里；adapters/
-                  目录下的适配器把外部载荷整理成结构化通知。
-                </p>
-                {!adapters ? null : adapters.files.length === 0 ? (
+              <nav
+                aria-label="设置分组"
+                className="mb-5 grid grid-cols-4 gap-1 rounded-xl bg-soft p-1 text-xs"
+              >
+                {(
+                  [
+                    ["common", "常用"],
+                    ["abilities", "能力"],
+                    ["identity", "身份"],
+                    ["access", "接入"],
+                  ] as const
+                ).map(([key, label]) => (
                   <button
-                    className="button secondary"
-                    disabled={busy}
-                    onClick={() => void addGithubAdapter()}
+                    key={key}
+                    type="button"
+                    aria-current={group === key ? "page" : undefined}
+                    className={`rounded-lg px-1 py-2 transition-colors ${group === key ? "bg-white font-medium text-ink shadow-lift" : "text-muted hover:text-ink"}`}
+                    onClick={() => setGroup(key)}
                   >
-                    写入 GitHub 适配器模板
+                    {label}
                   </button>
-                ) : (
-                  <ul className="muted small-text">
-                    {adapters.files.map((file) => (
-                      <li key={file}>
-                        <code>{file}</code>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-              <section className="settings-section">
-                {agent.agent_directory ? (
-                  <>
-                    <h3>终端启动</h3>
-                    <code className="path">atrium run {agent.name}</code>
+                ))}
+              </nav>
+              {group === "common" && (
+                <>
+                  {agent.agent_directory && <AgentModel agentId={agent.id} />}
+                  <AgentCredentials agentId={agent.id} open={openAccounts} />
+                  <form onSubmit={save} className="settings-section">
+                    <h3>心跳</h3>
+                    <label className="form-label">
+                      检查间隔（秒）
+                      <input
+                        className="field"
+                        type="number"
+                        min={5}
+                        max={3600}
+                        required
+                        value={config.heartbeat_seconds}
+                        onChange={(e) => {
+                          setSaved(false);
+                          setConfig({
+                            ...config,
+                            heartbeat_seconds: Number(e.target.value),
+                          });
+                        }}
+                      />
+                    </label>
                     <p className="muted small-text">
-                      打开原生 Pi；该身份已在运行时不会另开实例。
+                      运行中定期提醒未处理的消息；处理完不再提醒。
                     </p>
-                  </>
-                ) : (
-                  <>
-                    <h3>旧身份记录</h3>
-                    <p className="muted small-text">
-                      聊天与历史保留。正常退出旧 Pi
-                      后，可显式创建专属目录并启用单实例保护。
-                    </p>
-                    <button
-                      className="button secondary"
-                      disabled={busy || agent.available}
-                      onClick={() => void promote()}
-                    >
-                      升级为长期身份
+                    <button className="button" disabled={busy}>
+                      {saved ? "已保存" : busy ? "保存中…" : "保存心跳"}
                     </button>
-                  </>
-                )}
-              </section>
-              <section className="settings-section">
-                <h3>运行状态</h3>
-                <p className="muted">在线时自动连接，离线消息会保留。</p>
-                {agent.error && <p className="error">{agent.error}</p>}
-                {agent.runtime && (
-                  <div className="runtime-info">
-                    <span>
-                      {agent.runtime.mode.toUpperCase()} · PID{" "}
-                      {agent.runtime.pid}
-                    </span>
-                    <span>{agent.runtime.model}</span>
+                  </form>
+                  <section className="settings-section">
+                    <h3>运行状态</h3>
+                    <p className="muted">在线时自动连接，离线消息会保留。</p>
+                    {agent.error && <p className="error">{agent.error}</p>}
+                    {agent.runtime && (
+                      <div className="runtime-info">
+                        <span>
+                          {agent.runtime.mode.toUpperCase()} · PID{" "}
+                          {agent.runtime.pid}
+                        </span>
+                        <span>{agent.runtime.model}</span>
+                      </div>
+                    )}
+                    <p className="muted small-text">
+                      最近心跳{" "}
+                      {agent.last_wake ? time(agent.last_wake) : "还没有"}
+                    </p>
+                    {!agent.available && (
+                      <button
+                        className="button secondary"
+                        disabled={busy}
+                        onClick={() => void start()}
+                      >
+                        {busy ? "启动中…" : "启动 Agent"}
+                      </button>
+                    )}
+                    {agent.runtime && (
+                      <button
+                        className="button secondary"
+                        disabled={busy}
+                        onClick={() => void stop()}
+                      >
+                        {busy ? "停止中…" : "停止 Agent"}
+                      </button>
+                    )}
+                  </section>
+                </>
+              )}
+              {group === "abilities" && (
+                <>
+                  {agent.agent_directory && (
+                    <>
+                      <AgentPlugins
+                        agentId={agent.id}
+                        available={agent.available}
+                        refresh={refresh}
+                      />
+                      <AgentSkills agentId={agent.id} />
+                      <AgentMcp agentId={agent.id} />
+                    </>
+                  )}
+                  {!agent.agent_directory && (
+                    <p className="text-xs text-muted">
+                      升级为长期身份后可管理能力。
+                    </p>
+                  )}
+                </>
+              )}
+              {group === "identity" && (
+                <>
+                  <form className="settings-section" onSubmit={profileSave}>
+                    <h3>身份资料</h3>
+                    <label className="form-label">
+                      名称
+                      <input
+                        className="field"
+                        required
+                        maxLength={40}
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                      />
+                    </label>
+                    <label className="form-label">
+                      自我介绍
+                      <textarea
+                        className="field"
+                        maxLength={1000}
+                        rows={3}
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                      />
+                    </label>
+                    <button className="button secondary" disabled={busy}>
+                      保存资料
+                    </button>
+                  </form>
+                  {agent.agent_directory && <AgentRules agentId={agent.id} />}
+                  <div className="settings-section">
+                    <h3>工作目录</h3>
+                    <code className="path">{agent.cwd}</code>
                   </div>
-                )}
-                <p className="muted small-text">
-                  心跳间隔 {agent.config.heartbeat_seconds} 秒；最近心跳{" "}
-                  {agent.last_wake ? time(agent.last_wake) : "还没有"}
-                </p>
-                {!agent.available && (
-                  <button
-                    className="button secondary"
+                  <DeleteAgent
+                    agent={agent}
                     disabled={busy}
-                    onClick={() => void start()}
-                  >
-                    {busy ? "启动中…" : "启动 Agent"}
-                  </button>
-                )}
-                {agent.runtime && (
-                  <button
-                    className="button secondary"
-                    disabled={busy}
-                    onClick={() => void stop()}
-                  >
-                    {busy ? "停止中…" : "停止 Agent"}
-                  </button>
-                )}
-              </section>
-              {agent.agent_directory && <AgentModel agentId={agent.id} />}
-              <form onSubmit={save} className="settings-section">
-                <h3>运行偏好</h3>
-                <p className="muted small-text">
-                  离线时被私聊、@
-                  或入群邀请叫醒；群里没点名它的消息和下面的消息箱提醒不开进程。
-                </p>
-                <label className="form-label">
-                  心跳检查间隔（秒）
-                  <input
-                    className="field"
-                    type="number"
-                    min={5}
-                    max={3600}
-                    required
-                    value={config.heartbeat_seconds}
-                    onChange={(e) => {
-                      setSaved(false);
-                      setConfig({
-                        ...config,
-                        heartbeat_seconds: Number(e.target.value),
-                      });
+                    removed={() => {
+                      close();
+                      refresh();
                     }}
                   />
-                </label>
-                <p className="muted small-text">
-                  在跑的时候每隔这么久提醒一次消息箱里没处理完的消息，处理完就不再提醒。
-                </p>
-                <button className="button" disabled={busy}>
-                  {saved ? "已保存" : busy ? "保存中…" : "保存设置"}
-                </button>
-              </form>
-              <div className="settings-section">
-                <h3>工作目录</h3>
-                <code className="path">{agent.cwd}</code>
-              </div>
-              <DeleteAgent
-                agent={agent}
-                disabled={busy}
-                removed={() => {
-                  close();
-                  refresh();
-                }}
-              />
+                </>
+              )}
+              {group === "access" && (
+                <>
+                  <section className="settings-section">
+                    <h3>外部事件接收口</h3>
+                    <code className="path">
+                      POST /api/agents/{agent.name}/inbox
+                    </code>
+                    <p className="muted small-text">
+                      把外部事件 POST 到这里；adapters/
+                      目录下的适配器把外部载荷整理成结构化通知。
+                    </p>
+                    {!adapters ? null : adapters.files.length === 0 ? (
+                      <button
+                        className="button secondary"
+                        disabled={busy}
+                        onClick={() => void addGithubAdapter()}
+                      >
+                        写入 GitHub 适配器模板
+                      </button>
+                    ) : (
+                      <ul className="muted small-text">
+                        {adapters.files.map((file) => (
+                          <li key={file}>
+                            <code>{file}</code>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                  <section className="settings-section">
+                    {agent.agent_directory ? (
+                      <>
+                        <h3>终端启动</h3>
+                        <code className="path">atrium run {agent.name}</code>
+                        <p className="muted small-text">
+                          打开原生 Pi；该身份已在运行时不会另开实例。
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <h3>旧身份记录</h3>
+                        <p className="muted small-text">
+                          聊天与历史保留。正常退出旧 Pi
+                          后，可显式创建专属目录并启用单实例保护。
+                        </p>
+                        <button
+                          className="button secondary"
+                          disabled={busy || agent.available}
+                          onClick={() => void promote()}
+                        >
+                          升级为长期身份
+                        </button>
+                      </>
+                    )}
+                  </section>
+                </>
+              )}
             </>
           )}
         </div>

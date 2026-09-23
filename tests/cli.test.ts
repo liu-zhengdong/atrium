@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
@@ -209,7 +210,19 @@ test(
     // 删除要显式确认
     assert.match(await refused("delete", "周远"), /--yes/);
     assert.match(await ok("list"), /周远/);
-    assert.match(await ok("delete", "周远", "--yes"), /已删除 周远（a3）/);
+    // 邀请后的异步投递可能仍在处理连接；只等待这一明确的临时状态。
+    let deleted = false;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const result = await f.cli("delete", "周远", "--yes");
+      if (result.code === 0) {
+        assert.match(result.stdout, /已删除 周远（a3）/);
+        deleted = true;
+        break;
+      }
+      assert.match(result.stderr, /Agent 正在处理连接，请稍后重试/);
+      await delay(100);
+    }
+    assert(deleted, "投递结束后仍无法删除周远");
     assert.doesNotMatch(await ok("list"), /周远/);
     assert.match(
       await refused("send", "周远", "还在吗"),

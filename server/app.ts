@@ -35,6 +35,15 @@ import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import {
+  changeSkill,
+  listRules,
+  listSkills,
+  listTemplateSkills,
+  readMcp,
+  writeMcp,
+  writeRule,
+} from "./identity-resources.ts";
+import {
   agentDefaults,
   templateDefaults,
   saveAgentDefaults,
@@ -428,6 +437,50 @@ export async function createApp(options: {
     if (!agent.agent_directory) throw new Problem(409, "旧身份尚无配置目录");
     return agent.agent_directory;
   };
+  app.get("/api/agents/:id/skills", (request) =>
+    listSkills(packageDirectory(request)),
+  );
+  app.get("/api/agents/:id/skills/available", (request) =>
+    listTemplateSkills(packageDirectory(request)),
+  );
+  app.post("/api/agents/:id/skills", (request) => {
+    const directory = packageDirectory(request);
+    const input = z
+      .object({
+        action: z.enum(["enable", "disable", "remove", "copy"]),
+        name: z.string().min(1).max(100),
+      })
+      .strict()
+      .parse(request.body);
+    return serialized(directory, async () =>
+      changeSkill(directory, input.action, input.name),
+    );
+  });
+  app.get("/api/agents/:id/mcp", (request) =>
+    readMcp(packageDirectory(request)),
+  );
+  app.put("/api/agents/:id/mcp", (request) => {
+    const directory = packageDirectory(request);
+    const { text } = z
+      .object({ text: z.string().max(1024 * 1024) })
+      .strict()
+      .parse(request.body);
+    return serialized(directory, async () => writeMcp(directory, text));
+  });
+  app.get("/api/agents/:id/rules", (request) =>
+    listRules(packageDirectory(request)),
+  );
+  app.put("/api/agents/:id/rules", (request) => {
+    const directory = packageDirectory(request);
+    const { name, text } = z
+      .object({
+        name: z.enum(["AGENTS.md", "SYSTEM.md", "APPEND_SYSTEM.md"]),
+        text: z.string().max(1024 * 1024),
+      })
+      .strict()
+      .parse(request.body);
+    return serialized(directory, async () => writeRule(directory, name, text));
+  });
   app.get("/api/agents/:id/plugins", (request) =>
     packageList(packageDirectory(request)),
   );

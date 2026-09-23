@@ -21,6 +21,9 @@ import {
 import { Store, Problem } from "../server/store.ts";
 import { TraceStore } from "../server/trace.ts";
 import { createApp } from "../server/app.ts";
+import { classifyRefreshError } from "../server/account-error.mjs";
+import { AccountFiles } from "../server/account-files.ts";
+import { AccountRefresh } from "../server/account-refresh.ts";
 
 const fixture = () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-accounts-"));
@@ -319,6 +322,155 @@ test("account HTTP responses omit credentials even on malformed stored JSON", as
   } finally {
     await app.close();
   }
+});
+
+test("refresh failure labels distinguish expired login, network, plugin and unknown without echoing secrets", () => {
+  const secret = "SECRET_REFRESH_TOKEN";
+  const cases = [
+    [{ message: `invalid_grant ${secret}` }, "登录已失效，需要重新登录"],
+    [
+      { message: `fetch failed ECONNRESET ${secret}` },
+      "网络或超时，稍后自动重试",
+    ],
+    [new Error(`extension plugin failed ${secret}`), "Provider 插件加载失败"],
+    [{ message: secret }, "未知错误"],
+  ] as const;
+  for (const [error, expected] of cases) {
+    const label = classifyRefreshError(error);
+    assert.equal(label, expected);
+    assert.equal(label.includes(secret), false);
+  }
+});
+
+test("startup quarantines one broken account and assigned identity, keeps other accounts usable", async () => {
+  const { dir, store, agent, agentDirectory, accounts } = fixture();
+  const bad = accounts.add("deepseek", "broken", "BAD_KEY").id;
+  store.run(
+    "UPDATE accounts SET type='oauth',expires=? WHERE number=?",
+    Date.now() - 1000,
+    Number(bad.slice(1)),
+  );
+  const good = accounts.add("openai", "healthy", "GOOD_KEY").id;
+  accounts.assign(agent.id, good);
+  const badFile = join(accounts.root, bad, "auth.json");
+  const identityFile = join(agentDirectory, "auth.json");
+  writeFileSync(badFile, "{damaged BAD_KEY", { mode: 0o600 });
+  writeFileSync(identityFile, "{damaged IDENTITY_KEY", { mode: 0o600 });
+  const restarted = new Accounts(store, dir);
+  assert.equal(restarted.list().find((a) => a.id === bad)?.status, "error");
+  assert.equal(restarted.list().find((a) => a.id === good)?.status, "error");
+  assert.equal(readFileSync(identityFile, "utf8").includes("GOOD_KEY"), true);
+  const files = (await import("node:fs")).readdirSync;
+  assert.equal(
+    files(join(accounts.root, bad)).some((f) =>
+      f.startsWith("auth.json.preserved-"),
+    ),
+    true,
+  );
+  assert.equal(
+    files(agentDirectory).some((f) => f.startsWith("auth.json.preserved-")),
+    true,
+  );
+  await restarted.refresh();
+  assert.equal(
+    restarted.list().find((a) => a.id === bad)?.last_error,
+    "账号凭据损坏，原文件已隔离",
+  );
+  const extra = restarted.add("deepseek", "available", "ANOTHER_KEY").id;
+  assert.equal(restarted.list().find((a) => a.id === extra)?.status, "ready");
+  store.close();
+});
+
+test("one quarantined OAuth account does not stop other due refreshes", async () => {
+  const { dir, store, accounts } = fixture();
+  const bad = accounts.add("deepseek", "bad", "BAD_KEY").id;
+  const good = accounts.add("openai", "good", "GOOD_KEY").id;
+  for (const ref of [bad, good])
+    store.run(
+      "UPDATE accounts SET type='oauth',expires=? WHERE number=?",
+      Date.now() - 1000,
+      Number(ref.slice(1)),
+    );
+  writeFileSync(join(accounts.root, bad, "auth.json"), "{broken SECRET", {
+    mode: 0o600,
+  });
+  const restarted = new Accounts(store, dir);
+  const files = new AccountFiles(store, accounts.root);
+  const attempts: number[] = [];
+  const refresh = new AccountRefresh(store, files, {
+    run: async (row) => {
+      attempts.push(row.number);
+      files.save(row, {
+        type: "oauth",
+        access: "FRESH_ACCESS",
+        refresh: "FRESH_REFRESH",
+        expires: Date.now() + 3600_000,
+      });
+    },
+    close: () => {},
+  });
+  await refresh.refresh();
+  assert.deepEqual(attempts, [Number(good.slice(1))]);
+  assert.equal(
+    restarted.list().find((a) => a.id === bad)?.last_error,
+    "账号凭据损坏，原文件已隔离",
+  );
+  assert.equal(restarted.list().find((a) => a.id === good)?.status, "ready");
+  store.close();
+});
+
+test("deleted identities lose only their assignments; deleting an account clears every remaining identity file", () => {
+  const { dir, store, agent, agentDirectory, accounts } = fixture();
+  const peer = store.createAgent("另一身份", dir).agent;
+  const peerDirectory = join(dir, "peer");
+  mkdirSync(peerDirectory);
+  store.run(
+    "UPDATE agents SET agent_directory=? WHERE id=?",
+    peerDirectory,
+    peer.id,
+  );
+  const third = store.createAgent("第三身份", dir).agent;
+  const thirdDirectory = join(dir, "third");
+  mkdirSync(thirdDirectory);
+  store.run(
+    "UPDATE agents SET agent_directory=? WHERE id=?",
+    thirdDirectory,
+    third.id,
+  );
+  const account = accounts.add("deepseek", "shared", "COMMON_KEY").id;
+  accounts.assign(agent.id, account);
+  accounts.assign(peer.id, account);
+  accounts.assign(third.id, account);
+  store.deleteAgent(agent.id);
+  assert.deepEqual(accounts.list()[0]?.assigned, [peer.ref, third.ref]);
+  store.run(
+    "INSERT INTO credential_modes(agent_id,mode) VALUES(?,'assigned')",
+    agent.id,
+  );
+  new Accounts(store, dir);
+  assert.equal(
+    store.one("SELECT 1 FROM credential_modes WHERE agent_id=?", agent.id),
+    undefined,
+  );
+  assert.equal(
+    readFileSync(join(peerDirectory, "auth.json"), "utf8").includes(
+      "COMMON_KEY",
+    ),
+    true,
+  );
+  accounts.remove(account);
+  for (const directory of [peerDirectory, thirdDirectory])
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(directory, "auth.json"), "utf8")),
+      {},
+    );
+  assert.equal(
+    readFileSync(join(agentDirectory, "auth.json"), "utf8").includes(
+      "COMMON_KEY",
+    ),
+    true,
+  );
+  store.close();
 });
 
 test("API and error output never echo supplied keys", async () => {

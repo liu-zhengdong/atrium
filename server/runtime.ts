@@ -557,7 +557,11 @@ export class Runtimes {
         this.bindingOwners.delete(selected);
     }
   }
-  private async operation(id: string, run: () => Promise<void>) {
+  private async operation(
+    id: string,
+    run: () => Promise<void>,
+    recordFailure = true,
+  ) {
     this.assertOpen();
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
@@ -565,7 +569,7 @@ export class Runtimes {
       const message = this.redact(id, String(error));
       if (!this.stopped) {
         this.errors.set(id, message);
-        this.store.setFailure(id, message);
+        if (recordFailure) this.store.setFailure(id, message);
         this.changed();
       }
       if (message !== String(error)) throw new Error(message);
@@ -824,6 +828,22 @@ export class Runtimes {
     try {
       if (this.connecting.has(id)) return;
       let runtime = this.connections.get(id);
+      // A TUI may exit and immediately restart under the same identity. Discovery
+      // knows the new runtime before a status poll of the old one necessarily fails.
+      const priorRuntimeId = runtime?.info.runtimeId;
+      const currentBinding = this.binding(id);
+      if (
+        priorRuntimeId &&
+        currentBinding.runtime_id !== priorRuntimeId &&
+        this.discovered.some(
+          (entry) =>
+            entry.bound_agent === id &&
+            entry.runtimeId === currentBinding.runtime_id,
+        )
+      ) {
+        this.connections.delete(id);
+        runtime = undefined;
+      }
       if (!runtime) {
         const binding = this.binding(id);
         if (
@@ -831,8 +851,10 @@ export class Runtimes {
           binding.runtime_pid &&
           alive(binding.runtime_pid)
         ) {
-          await this.operation(id, () =>
-            this.bind(id, { runtimeId: binding.runtime_id! }),
+          await this.operation(
+            id,
+            () => this.bind(id, { runtimeId: binding.runtime_id! }),
+            direct || this.store.pending(id).length > 0,
           ).catch((error) => {
             operationFailed = true;
             throw error;

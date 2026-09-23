@@ -230,16 +230,42 @@ test("心跳提醒逐项写明会话、未读条数和谁发的；清空后撤�
   const group = store.createChat("移植调研", [a.id, b.id, c.id]);
   const say = (sender: string, body: string) =>
     store.send(sender, { chat_id: group.id, body, mentions: [] });
-  say(b.id, "上篇结论");
+  const first = say(b.id, "上篇结论");
   say(c.id, "下篇结论");
   say(b.id, "补充");
+  // Cedar 点名 Atlas 的这条已经直接送到（Pi 确认接收记成已读区间），不再算未读。
+  const pinged = store.send(c.id, {
+    chat_id: group.id,
+    body: "@Atlas 这条单独给你",
+    mentions: [],
+  });
+  const direct = store
+    .pending(a.id)
+    .find((d) => d.through_message === pinged.id)!;
+  store.accepted(direct.id);
   store.addNotice(a.id, "webhook", "CI 告警", "流水线失败");
   const text = store.reminder(a.id)!;
   assert.match(text, /【消息箱中 2 项未完成】/);
   assert.match(
     text,
-    new RegExp(`- ${group.ref}「移植调研」：3 条未读，来自 Mira、Cedar`),
-    "群里没点名的三条合成一项，但写清条数和最近发言的人",
+    new RegExp(
+      `- ${group.ref}「移植调研」：3 条未读（最早 #${first.id}），来自 Mira、Cedar\n`,
+    ),
+    "没点名的三条合成一项，写清条数、从哪条开始、最近发言的人",
+  );
+  say(b.id, "再补一句");
+  const later = store.send(c.id, {
+    chat_id: group.id,
+    body: "@Atlas 又一条单独给你",
+    mentions: [],
+  });
+  store.accepted(
+    store.pending(a.id).find((d) => d.through_message === later.id)!.id,
+  );
+  assert.match(
+    store.reminder(a.id)!,
+    /：4 条未读（最早 #\d+），来自 Mira、Cedar\n/,
+    "已送达的点名消息不进名单，也不把送达者排到前面",
   );
   assert.match(text, /- CI 告警/);
   store.run("UPDATE agents SET last_wake=0 WHERE id=?", a.id);

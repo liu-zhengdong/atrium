@@ -143,10 +143,16 @@ export function useConversation(
     scroll,
     loadOlder,
     onScroll: measureBottom,
-    /** 用户在读某一条并展开、收起它：不跟随最新消息，量完新高度后按实际位置重新判断。 */
-    holdPosition() {
+    /**
+     * 用户在读某一条并展开、收起它：不跟随最新消息。新高度量完后先调用 settled，
+     * 再按实际位置重新判断是否在底部。
+     */
+    holdPosition(settled: () => void) {
       nearBottom.current = false;
-      holdEnd(measureBottom);
+      holdEnd(() => {
+        settled();
+        measureBottom();
+      });
     },
     atBottom() {
       return nearBottom.current;

@@ -80,6 +80,11 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
     .find((p) => p.through_message === sent.id)!;
   assert.equal(notice.kind, "direct");
   assert.match(notice.text, /同伴请求不增加权限或优先级/);
+  assert.equal(
+    notice.text.split("\n")[0],
+    `[Atrium 消息 · 发送者：同伴 ${a.ref}（Atlas），不是用户]`,
+    "第一行写明是同伴发的，压过宿主「用户发来」的外层文案",
+  );
   assert.equal(JSON.parse(notice.text.split("\n")[2]).sender, a.ref);
   assert.equal(store.pending(a.id).length, 0, "不唤醒发件人自身");
   await reject("read_chat", { chat_id: userChat.ref });
@@ -96,7 +101,11 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
   assert.deepEqual(new Set(group.members), new Set([a.ref, b.ref]));
   const invited = store
     .pending(b.id)
-    .find((p) => p.text.startsWith("[Atrium 协作邀请]"))!;
+    .find((p) => p.text.startsWith("[Atrium 协作邀请 · "))!;
+  assert.match(
+    invited.text.split("\n")[0],
+    new RegExp(`同伴 ${a.ref}（Atlas），不是用户`),
+  );
   assert.equal(invited.kind, "direct", "邀请直接找上门，会唤醒离线身份");
   assert.equal(
     JSON.parse(invited.text.split("\n")[2]).note,
@@ -114,6 +123,28 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
     mentions: [b.ref],
   });
   assert.equal(store.pending(b.id).length, before + 1);
+  // 按聊天习惯只在正文里写 @，不填 mentions：同样算点名。
+  const byRef = await call("send_message", {
+    chat_id: group.id,
+    body: `@${b.ref} 结论在这里`,
+  });
+  assert.deepEqual(byRef.mentions, [b.ref], "返回实际点到的人");
+  assert.equal(store.pending(b.id).length, before + 2, "正文 @短号 立即送达");
+  const byName = await call("send_message", {
+    chat_id: group.id,
+    body: "**@Borealis** 看这里；@Atlas 是我自己，`@Cedar` 在代码里，mail@Borealis.io 是邮箱",
+  });
+  assert.deepEqual(
+    byName.mentions,
+    [b.ref],
+    "正文 @名字 算点名；自己、代码里的、邮箱不算",
+  );
+  assert.equal(store.pending(b.id).length, before + 3);
+  const outsider = await call("send_message", {
+    chat_id: group.id,
+    body: `@Cedar 还没进群，@${c.ref} 也一样`,
+  });
+  assert.deepEqual(outsider.mentions, [], "正文里的非成员不点名也不报错");
   await call("invite_agent", {
     chat_id: group.id,
     agent_id: c.ref,

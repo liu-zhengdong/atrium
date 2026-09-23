@@ -232,6 +232,7 @@ export function App() {
           key={active.id}
           chat={active}
           agents={overview.agents}
+          revision={revision}
           close={() => setGroupOpen(false)}
           changed={refresh}
           openRecords={() => openRecords(active.id)}

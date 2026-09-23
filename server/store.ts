@@ -28,6 +28,7 @@ import {
   readFromCwd,
   safeFileName,
 } from "./attachments.ts";
+import { GroupSpaces, spacesDir } from "./spaces.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import { resolveMentions } from "../shared/mentions.ts";
 import { ensureUsers, userNames } from "./users.ts";
@@ -134,9 +135,11 @@ function bounded<T extends { id: number }>(
 export class Store {
   readonly db: DatabaseSync;
   readonly files: AttachmentFiles;
+  readonly spaces: GroupSpaces;
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.files = new AttachmentFiles(attachmentsDir(path));
+    this.spaces = new GroupSpaces(spacesDir(path));
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;
       CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, token_hash TEXT NOT NULL,
@@ -789,6 +792,7 @@ export class Store {
           "SELECT 1 FROM messages WHERE chat_id=? LIMIT 1",
           chatId,
         ),
+        space: this.spaces.path(chat),
       }),
     );
   }

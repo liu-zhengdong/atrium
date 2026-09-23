@@ -12,11 +12,13 @@ export function SidePanel({
   close,
   children,
   badge,
+  actions,
 }: {
   title: string;
   close: () => void;
   children: ReactNode;
   badge?: ReactNode;
+  actions?: ReactNode;
 }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -45,14 +47,17 @@ export function SidePanel({
             <h2 className="truncate text-sm font-semibold text-ink">{title}</h2>
             {badge}
           </div>
-          <button
-            className="icon-button"
-            aria-label="关闭面板"
-            title="关闭面板 (Esc)"
-            onClick={close}
-          >
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-1">
+            {actions}
+            <button
+              className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
+              aria-label="关闭面板"
+              title="关闭面板 (Esc)"
+              onClick={close}
+            >
+              <X size={15} />
+            </button>
+          </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
       </aside>

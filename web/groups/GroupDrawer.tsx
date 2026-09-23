@@ -38,6 +38,16 @@ export function GroupDrawer({
       title={chat.name}
       close={close}
       badge={<span className="badge">群聊</span>}
+      actions={
+        <button
+          className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
+          aria-label="查找本群聊天记录"
+          title="查找本群聊天记录"
+          onClick={openRecords}
+        >
+          <History size={15} />
+        </button>
+      }
     >
       <nav
         className="flex flex-none gap-2 border-b border-black/[0.04] px-4"
@@ -72,16 +82,6 @@ export function GroupDrawer({
         {tab === "space" && <GroupSpace chatId={chat.id} revision={revision} />}
         {tab === "profile" && <GroupProfile chat={chat} saved={changed} />}
       </div>
-      <footer className="flex-none border-t border-black/[0.04] px-5 py-3">
-        <button
-          className="flex w-full items-center gap-2 rounded-[6px] px-2.5 py-2 text-left text-xs text-muted hover:bg-[#edf3ef] hover:text-ink"
-          onClick={openRecords}
-        >
-          <History size={14} className="flex-none text-muted" />
-          查找聊天记录
-          <span className="muted small-text ml-auto">消息 · 图片 · 文件</span>
-        </button>
-      </footer>
     </SidePanel>
   );
 }

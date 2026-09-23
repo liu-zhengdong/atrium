@@ -72,23 +72,23 @@ export function GroupSpace({
                 return (
                   <li key={file.path}>
                     <button
-                      className="flex w-full items-start gap-2.5 rounded-[8px] px-2 py-2 text-left hover:bg-[#f6f5f0]"
+                      className="flex w-full items-start gap-2.5 rounded-[8px] px-2 py-2 text-left transition-colors hover:bg-[#edf5f1]"
                       onClick={() => setOpen(file.path)}
                     >
                       <Icon
-                        size={16}
-                        className="mt-px flex-none text-[#a39b8b]"
+                        size={15}
+                        className="mt-px flex-none text-muted"
                         aria-hidden
                       />
-                      <span className="min-w-0 flex-1 break-all text-[13px] leading-5 text-[#45463c]">
+                      <span className="min-w-0 flex-1 break-all text-[13px] leading-5 text-ink">
                         {slash >= 0 && (
-                          <span className="text-[#a39b8b]">
+                          <span className="text-muted">
                             {file.path.slice(0, slash + 1)}
                           </span>
                         )}
                         {file.path.slice(slash + 1)}
                       </span>
-                      <span className="flex-none text-[11.5px] leading-5 text-[#a39b8b]">
+                      <span className="flex-none text-[11.5px] leading-5 text-muted">
                         {convTime(file.mtime)} · {size(file.size)}
                       </span>
                     </button>
@@ -115,9 +115,9 @@ function SpacePath({ path }: { path: string }) {
     return () => clearTimeout(timer);
   }, [copied]);
   return (
-    <div className="flex items-start gap-2 rounded-[8px] bg-[#f6f5f0] px-3 py-2">
+    <div className="flex items-start gap-2 rounded-[8px] bg-[#edf5f1] px-3 py-2">
       {/* 只在 / 后面换行，路径不被拆在目录名中间。 */}
-      <code className="min-w-0 flex-1 text-[11.5px] leading-[18px] text-[#6f6a5e] [overflow-wrap:anywhere]">
+      <code className="min-w-0 flex-1 text-[11.5px] leading-[18px] text-ink [overflow-wrap:anywhere]">
         {path.split("/").map((part, index) => (
           <Fragment key={index}>
             {index > 0 && (

@@ -16,9 +16,17 @@ import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
 
 export type AgentEntry = Overview["agents"][number];
-/** 与 Web 头像状态点同一套判断：干活橙、在线绿、离线灰。 */
-export const presence = (agent: Pick<AgentEntry, "available" | "runtime">) =>
-  agent.runtime?.busy ? "干活" : agent.available ? "在线" : "离线";
+/** 与 Web 头像状态点同一套判断。 */
+export const presence = (
+  agent: Pick<AgentEntry, "available" | "runtime" | "failure">,
+) =>
+  agent.failure
+    ? "出错"
+    : agent.runtime?.busy
+      ? "干活"
+      : agent.available
+        ? "在线"
+        : "离线";
 export const roster = (client: Client) => client.get<Overview>("/overview");
 /** 名册里找一位：短号、名称或 ID。接口的路径参数只认 ID，所以先在这里换。 */
 export function findAgent(view: Overview, reference: string): AgentEntry {
@@ -43,7 +51,7 @@ const list: Command = {
       return console.log("还没有身份；atrium create 名称");
     console.log(
       table([
-        ["短号", "名称", "状态", "模型", "消息箱", "工作声明"],
+        ["短号", "名称", "状态", "模型", "消息箱", "工作声明", "错误"],
         ...view.agents.map((agent) => [
           agent.ref,
           agent.name,
@@ -51,6 +59,9 @@ const list: Command = {
           agent.runtime?.model ?? "",
           agent.unread ? String(agent.unread) : "",
           clip(agent.work, 40),
+          agent.failure
+            ? clip(agent.failure.text.replace(/\s+/g, " "), 55)
+            : "",
         ]),
       ]),
     );
@@ -83,7 +94,9 @@ const show: Command = {
         agent.session_file && `会话文件：${agent.session_file}`,
         `心跳：每 ${agent.config.heartbeat_seconds} 秒 · 最近一次 ${agent.last_wake ? when(agent.last_wake) : "还没有"}`,
         agent.unread ? `消息箱：${agent.unread} 条待处理` : "",
-        agent.error && `错误：${agent.error}`,
+        agent.failure
+          ? `错误（${when(agent.failure.at)}，连续 ${agent.failure.count} 次）：${agent.failure.text}`
+          : agent.error && `错误：${agent.error}`,
       ]
         .filter((line): line is string => !!line)
         .join("\n"),
@@ -128,6 +141,18 @@ const start: Command = {
     console.log(
       `已启动 ${started.name} · ${presence(started)}${started.runtime ? ` · PID ${started.runtime.pid} · ${started.runtime.model}` : ""}`,
     );
+  },
+};
+
+const retry: Command = {
+  args: "名称",
+  about: "重试上一轮出错的 Agent",
+  positionals: [1, 1],
+  async run({ positionals: [reference] }) {
+    const client = await connect();
+    const agent = findAgent(await roster(client), reference!);
+    await client.post(`/agents/${agent.id}/retry`);
+    console.log(`已重试 ${agent.name}`);
   },
 };
 
@@ -439,6 +464,7 @@ export const agentCommands: Record<string, Command> = {
   show,
   create,
   start,
+  retry,
   stop,
   delete: remove,
   config,

@@ -294,7 +294,8 @@ export async function createApp(options: {
         ...a,
         runtime: runtimes?.connections.get(a.id)?.info ?? null,
         available: available.has(a.id) || !!runtimes?.connections.has(a.id),
-        error: runtimes?.errors.get(a.id) ?? null,
+        error: store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
+        failure: store.failure(a.id),
         unread: store.boxCount(a.id),
       })),
       chats: store.chats(),
@@ -361,7 +362,7 @@ export async function createApp(options: {
     const agent = await runtimes.agentForRuntime(agentParams(request));
     const chat = store.createChat(agent.name, [agent.id], agent.id);
     // A conversation is usable immediately; connecting does not hold the HTTP UI open.
-    void runtimes.pump(agent.id);
+    void runtimes.pump(agent.id, true);
     changed();
     return chat;
   });
@@ -533,6 +534,11 @@ export async function createApp(options: {
     await runtimes.start(agentParams(request));
     return { connected: true };
   });
+  app.post("/api/agents/:id/retry", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    await runtimes.retry(agentParams(request));
+    return { retried: true };
+  });
   app.post("/api/agents/:id/stop", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
     await runtimes.stop(agentParams(request));
@@ -549,7 +555,7 @@ export async function createApp(options: {
     const chat = isUserRef(sender)
       ? store.createChat(store.agent(target).name, [target], target)
       : store.openDirect(sender, target);
-    if (isUserRef(sender)) void runtimes?.pump(target);
+    if (isUserRef(sender)) void runtimes?.pump(target, true);
     changed();
     return chat;
   });
@@ -658,7 +664,7 @@ export async function createApp(options: {
             note: a.note,
           },
         );
-    if (a.direct_agent) void runtimes?.pump(a.direct_agent);
+    if (a.direct_agent) void runtimes?.pump(a.direct_agent, true);
     changed();
     return result;
   });

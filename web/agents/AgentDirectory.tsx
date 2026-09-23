@@ -9,6 +9,8 @@ import {
   Users,
 } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
+import { api } from "../api.ts";
+import { AgentFailure } from "../components/AgentFailure.tsx";
 import { agentName } from "../../shared/agent-name.ts";
 import {
   agentPresence,
@@ -23,14 +25,17 @@ export function AgentDirectory({
   openAgent,
   details,
   create,
+  refresh,
 }: {
   overview: Overview;
   opening: string | null;
   openAgent: (a: Agent) => void;
   details: (id: string) => void;
   create: () => void;
+  refresh: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [retryError, setRetryError] = useState("");
   const discovered = overview.discovery.runtimes.filter((r) => !r.bound_agent);
   const count = overview.agents.length;
   const matches = (name: string, cwd: string) =>
@@ -41,6 +46,11 @@ export function AgentDirectory({
   const fresh = discovered.filter((r) => matches(agentName(r.cwd), r.cwd));
   return (
     <section className="min-h-0 flex-1 overflow-auto bg-white px-8 py-6 max-[560px]:px-4 max-[560px]:py-4">
+      {retryError && (
+        <p role="alert" className="error mb-3">
+          {retryError}
+        </p>
+      )}
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         {count > 0 ? (
           <label className="flex h-7 w-64 items-center gap-2 rounded-lg bg-white px-2.5 text-muted shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all hover:shadow-[0_2px_6px_rgba(0,0,0,0.06)] focus-within:shadow-[0_2px_8px_rgba(49,110,80,0.12)]">
@@ -124,6 +134,19 @@ export function AgentDirectory({
                 )}
               </button>
             </div>
+            {a.failure && (
+              <div className="mt-3">
+                <AgentFailure
+                  agent={a}
+                  retry={() => {
+                    setRetryError("");
+                    void api(`/agents/${a.id}/retry`, "POST")
+                      .then(refresh)
+                      .catch((e) => setRetryError(String(e)));
+                  }}
+                />
+              </div>
+            )}
             <div className="mt-4 flex items-center justify-between">
               <button
                 type="button"

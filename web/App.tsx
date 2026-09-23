@@ -193,6 +193,7 @@ export function App() {
                       openAgent={(agent) => void openAgent(agent)}
                       details={setAgentId}
                       create={() => setModal("agent")}
+                      refresh={refresh}
                     />
                   )}
                   {section === "records" && (

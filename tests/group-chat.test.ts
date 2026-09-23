@@ -134,6 +134,7 @@ test("投递正文第一行写明发送者：用户不带同伴声明，同伴�
       mentionAll: false,
       messageId: 7,
       body: "结论如下",
+      details: "",
       attachments: [],
     });
   const fromUser = text("u1", "政东"),

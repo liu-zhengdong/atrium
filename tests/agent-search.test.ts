@@ -47,11 +47,13 @@ test("search_messages 只搜自己所在的会话；按会话、发送者过滤�
   say(c.id, other.id, "pr 409 不能写成我们验证");
   say(b.id, outside.id, "PR #409 这条 Atlas 不该看到");
   say(LOCAL_USER, mine.id, "409 这个 PR 先放着");
-  say(
-    a.id,
-    mine.id,
-    `${"铺垫".repeat(1500)} 关键段落：PR #409 的结论 ${"收尾".repeat(200)}`,
-  );
+  // Agent 的长内容在详情里，正文只有一句。
+  store.send(a.id, {
+    chat_id: mine.id,
+    body: "复核结论见详情",
+    details: `${"铺垫".repeat(1500)} 关键段落：PR #409 的结论 ${"收尾".repeat(200)}`,
+    mentions: [],
+  });
   const unread = JSON.stringify(store.unread(a.id));
 
   const hits = await search({ query: "pr 409" });
@@ -63,8 +65,8 @@ test("search_messages 只搜自己所在的会话；按会话、发送者过滤�
   assert.equal(hits.has_more, false);
   const long = hits.items[0];
   assert.equal(long.chat_id, mine.ref);
-  assert.match(long.excerpt, /^…铺垫.*关键段落：PR #409 的结论.*…$/);
-  assert(long.excerpt.length < 200, "长消息只给命中附近的一段");
+  assert.match(long.excerpt, /^详情：…铺垫.*关键段落：PR #409 的结论.*…$/);
+  assert(long.excerpt.length < 205, "长消息只给命中附近的一段");
   assert.equal(hits.items[1].sender_name, "用户");
 
   assert.deepEqual(

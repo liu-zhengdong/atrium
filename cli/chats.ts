@@ -93,9 +93,13 @@ const chats: Command = {
 };
 
 const read: Command = {
-  args: "会话|身份 [--before 序号]",
-  about: "读一段消息（用户审阅，不改变 Agent 的已读状态）",
-  options: { before: { type: "string" } },
+  args: "会话|身份 [--before 序号] [--full]",
+  about:
+    "读一段消息（用户审阅，不改变 Agent 的已读状态）；详情默认只标字数，--full 显示全文",
+  options: {
+    before: { type: "string" },
+    full: { type: "boolean", default: false },
+  },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const client = await connect();
@@ -110,10 +114,17 @@ const read: Command = {
       `${chat.name} · ${chat.ref} · ${chat.kind === "group" ? "群" : "私聊"}${chat.notice ? `\n公告：${chat.notice}` : ""}`,
     );
     if (!page.items.length) return console.log("（还没有消息）");
-    for (const message of page.items)
+    for (const message of page.items) {
+      const folded =
+        message.details && !values.full
+          ? `（详情 ${message.details.length} 字）`
+          : "";
       console.log(
-        `#${message.id}  ${when(message.created_at)}  ${senderLabel(view, message)}：${message.body}${message.attachments.map(attachmentLabel).join("")}`,
+        `#${message.id}  ${when(message.created_at)}  ${senderLabel(view, message)}：${message.body}${folded}${message.attachments.map(attachmentLabel).join("")}`,
       );
+      if (message.details && values.full)
+        console.log(`  详情：\n${message.details.replace(/^/gm, "    ")}`);
+    }
     if (page.has_more)
       console.log(
         `更早的消息：atrium read ${chat.ref} --before ${page.items[0]!.id}`,
@@ -138,10 +149,11 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 const send: Command = {
-  args: "会话|身份 正文 [--as 身份] [--mention 名称]… [--all] [--file 路径]…",
+  args: "会话|身份 正文 [--details 详情] [--as 身份] [--mention 名称]… [--all] [--file 路径]…",
   about:
-    "发言；默认以用户 u1 名义，--as 以某个身份的名义；正文为 - 时读标准输入",
+    "发言；默认以用户 u1 名义，--as 以某个身份的名义（正文最长 300 字，长内容用 --details）；正文或详情为 - 时读标准输入",
   options: {
+    details: { type: "string" },
     as: { type: "string" },
     mention: { type: "string", multiple: true },
     all: { type: "boolean", default: false },
@@ -150,6 +162,9 @@ const send: Command = {
   positionals: [1, 2],
   async run({ positionals: [reference, text], values }) {
     const body = text === "-" ? (await readStdin()).trim() : (text ?? "");
+    const detailsArg = str(values, "details");
+    const details =
+      detailsArg === "-" ? (await readStdin()).trim() : (detailsArg ?? "");
     const as = str(values, "as");
     const client = await connect();
     const view = await roster(client);
@@ -171,6 +186,7 @@ const send: Command = {
     const message = await client.post<Message>("/messages", {
       chat_id: chat.id,
       body,
+      ...(details ? { details } : {}),
       mentions,
       attachments,
       mention_all: values.all === true,

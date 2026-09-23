@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Store } from "./store.ts";
+import { detailsHit, USER_HIT_LEAD, type Store } from "./store.ts";
 import {
   chatReference,
   agentReference,
@@ -114,21 +114,28 @@ export function messageRecords(store: Store, raw: RecordQuery) {
     sender: "m.sender",
     time: "m.created_at",
     cursor: "m.id",
-    keyword: "m.body",
+    keyword: "(m.body || char(10) || m.details)",
   });
   const own = userNames(store).own;
-  const rows = store.all<MessageHit>(
-    `SELECT m.chat_id, 'c'||r.number AS chat_ref, c.name AS chat_name, m.id, m.sender,
+  const needle = (query.q ?? "").toLowerCase();
+  const rows = store
+    .all<Omit<MessageHit, "text"> & { body: string; details: string }>(
+      `SELECT m.chat_id, 'c'||r.number AS chat_ref, c.name AS chat_name, m.id, m.sender,
      CASE WHEN m.sender=? THEN ? ELSE COALESCE(a.deleted_name, a.name, m.sender) END AS sender_name,
-     substr(m.body,1,160) AS text, m.created_at
+     m.body, m.details, m.created_at
      FROM messages m JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
      LEFT JOIN agents a ON a.id=m.sender
      WHERE ${where} ORDER BY m.id DESC LIMIT ?`,
-    LOCAL_USER,
-    own,
-    ...params,
-    PAGE + 1,
-  );
+      LOCAL_USER,
+      own,
+      ...params,
+      PAGE + 1,
+    )
+    .map(({ body, details, ...hit }) => ({
+      ...hit,
+      text:
+        detailsHit(body, details, needle, USER_HIT_LEAD) ?? body.slice(0, 160),
+    }));
   return paginate(rows);
 }
 

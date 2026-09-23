@@ -10,6 +10,7 @@ const message = (id: number, chat_id = "a", body = "message"): Message => ({
   mention_all: false,
   chat_id,
   body,
+  details: "",
   sender: LOCAL_USER,
   mentions: [],
   created_at: id,

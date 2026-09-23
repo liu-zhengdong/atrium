@@ -43,10 +43,17 @@ export type Preferences = z.infer<typeof preferences>;
 export const defaultPreferences: Preferences = {
   heartbeat_seconds: 30,
 };
+/** Agent 发言的 body 上限：只写回复或结论，长内容放 details。用户发言不受此限。 */
+export const AGENT_BODY_MAX = 300;
+export const DETAILS_MAX = 6000;
+export const DETAILS_NEED_BODY =
+  "有 details 时 body 不能为空：用一两句写明回复或结论。";
 export const sendInput = z
   .object({
     chat_id: id,
     body: z.string().trim().max(6000).default(""),
+    /** 报告、证据、日志等长内容；界面和 read_chat 默认折叠，投递给点名对象时带全文。 */
+    details: z.string().trim().max(DETAILS_MAX).default(""),
     mentions: z.array(id).max(30).default([]),
     client_id: id.optional(),
     attachments: z.array(id).max(10).default([]),
@@ -55,7 +62,13 @@ export const sendInput = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (!value.body && value.attachments.length === 0)
+    if (value.details && !value.body)
+      ctx.addIssue({
+        code: "custom",
+        message: DETAILS_NEED_BODY,
+        path: ["body"],
+      });
+    else if (!value.body && value.attachments.length === 0)
       ctx.addIssue({
         code: "custom",
         message: "请输入内容或添加附件",
@@ -183,6 +196,8 @@ export type Message = {
   sender_name?: string | null;
   sender_deleted_at?: number | null;
   body: string;
+  /** 折叠显示的详细内容；没有时为空字符串。 */
+  details: string;
   mentions: string[];
   /** 这条是 @ 全体，收件人是发送时的全体群成员。 */
   mention_all: boolean;

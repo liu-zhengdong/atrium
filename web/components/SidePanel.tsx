@@ -37,10 +37,10 @@ export function SidePanel({
         aria-hidden="true"
       />
       <aside
-        className="split-panel fixed inset-y-0 right-0 z-40 flex w-[min(460px,100vw)] flex-col border-l border-line bg-white shadow-xl transition-all duration-200 min-[1024px]:relative min-[1024px]:z-10 min-[1024px]:w-[420px] min-[1024px]:flex-none min-[1024px]:shadow-none"
+        className="split-panel fixed inset-y-0 right-0 z-40 flex w-[min(460px,100vw)] flex-col border-l border-line-subtle/40 bg-white shadow-xl transition-all duration-200 min-[1024px]:relative min-[1024px]:z-10 min-[1024px]:w-[400px] min-[1024px]:flex-none min-[1024px]:shadow-none"
         aria-label={title}
       >
-        <header className="flex h-12 flex-none items-center justify-between border-b border-line px-5">
+        <header className="flex h-11 flex-none items-center justify-between border-b border-line-subtle/40 px-5">
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-sm font-semibold text-ink">{title}</h2>
             {badge}

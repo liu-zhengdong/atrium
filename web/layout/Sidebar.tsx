@@ -72,7 +72,7 @@ export function Sidebar({
     refresh();
   }
   return (
-    <aside className="sidebar flex h-full w-[260px] flex-none flex-col border-r border-line bg-surface-subtle px-3 pb-3 pt-3.5 max-[720px]:w-[220px] max-[720px]:px-2">
+    <aside className="sidebar flex h-full w-[250px] flex-none flex-col bg-surface-subtle pl-3.5 pr-2 py-3 max-[720px]:w-[220px] max-[720px]:px-2">
       {/* 侧边栏顶部品牌：Qoder 桌面风格 */}
       <div className="mb-4 flex items-center justify-between px-2">
         <div className="flex items-center gap-2">

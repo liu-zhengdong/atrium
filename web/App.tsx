@@ -124,7 +124,7 @@ export function App() {
         details={setAgentId}
         refresh={refresh}
       />
-      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-surface">
+      <div className="relative my-2.5 mr-2.5 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-line-subtle bg-white shadow-[0_2px_12px_rgba(24,32,25,0.03)] max-[720px]:my-0 max-[720px]:mr-0 max-[720px]:rounded-none max-[720px]:border-0">
         <TopBar
           overview={overview}
           section={section}

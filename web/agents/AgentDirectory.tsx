@@ -32,36 +32,30 @@ export function AgentDirectory({
   );
   const fresh = discovered.filter((r) => matches(agentName(r.cwd), r.cwd));
   return (
-    <section className="min-h-0 flex-1 overflow-auto bg-surface-subtle/50 px-8 py-7 max-[560px]:px-4 max-[560px]:py-5">
-      <header className="mb-6 flex items-center justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight text-ink">
-            Agents{" "}
-            <span className="rounded-full bg-[#edf5f1] px-2 py-0.5 text-xs font-medium text-accent">
-              {count}
-            </span>
-          </h1>
-          <p className="mt-1 text-xs text-muted">
-            选择一位 Agent，查看工作状态并开始协同对话。
-          </p>
-        </div>
-        <button className="button primary flex-none gap-1.5" onClick={create}>
-          <Plus size={15} />
+    <section className="min-h-0 flex-1 overflow-auto bg-white px-8 py-6 max-[560px]:px-4 max-[560px]:py-4">
+      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        {count > 0 ? (
+          <label className="flex h-7 w-72 items-center gap-2 rounded-lg border border-line bg-white px-2.5 text-muted shadow-[0_1px_2px_rgba(24,32,25,0.02)] focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/20">
+            <Search size={13} className="text-muted" />
+            <input
+              className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink placeholder:text-muted/70 outline-none"
+              aria-label="搜索 Agent"
+              placeholder="搜索名字、短号或目录..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+        ) : (
+          <div />
+        )}
+        <button
+          className="button primary flex-none gap-1.5 h-7"
+          onClick={create}
+        >
+          <Plus size={14} />
           新建 Agent
         </button>
       </header>
-      {count > 0 && (
-        <label className="mb-6 flex max-w-sm items-center gap-2.5 rounded-lg border border-line bg-white px-3 py-1.5 text-muted shadow-[0_1px_2px_rgba(24,32,25,0.03)] focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/15">
-          <Search size={15} className="text-muted" />
-          <input
-            className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink placeholder:text-muted/70 outline-none"
-            aria-label="搜索 Agent"
-            placeholder="搜索名字、短号或工作目录"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </label>
-      )}
       {overview.discovery.error && (
         <p role="alert" className="error mb-5 text-xs">
           {overview.discovery.error} 已有会话仍可查看，正在后台重试。

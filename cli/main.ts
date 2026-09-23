@@ -5,6 +5,7 @@ import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
 import { accountCommands } from "./accounts.ts";
 import { pluginCommands } from "./plugins.ts";
+import { resourceCommands } from "./resources.ts";
 
 export type Values = Record<
   string,
@@ -38,6 +39,7 @@ const commands: Record<string, Command> = {
   ...chatCommands,
   ...accountCommands,
   ...pluginCommands,
+  ...resourceCommands,
 };
 const service: [usage: string, about: string][] = [
   ["atrium", "启动或复用后台服务，打开 Web"],
@@ -91,7 +93,7 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
     const subcommand =
-      name === "account" || name === "plugin"
+      name === "account" || name === "plugin" || name === "skill"
         ? `${name} ${rest.shift() ?? ""}`.trim()
         : name;
     const command = commands[subcommand];

@@ -34,9 +34,7 @@ export function RecordFilterBar({
   return (
     <div className="flex flex-wrap items-center gap-2">
       {/* 搜索框 */}
-      <div
-        className="flex h-7 min-w-[200px] flex-1 items-center gap-1.5 rounded-lg border border-transparent bg-[#f0f4f1] px-2.5 text-xs text-ink transition-all hover:bg-[#ebf0ec] focus-within:border-black/[0.06] focus-within:bg-white focus-within:shadow-[0_1px_4px_rgba(24,32,25,0.06)]"
-      >
+      <div className="flex h-7 min-w-[200px] flex-1 items-center gap-1.5 rounded-lg border border-transparent bg-[#f0f4f1] px-2.5 text-xs text-ink transition-all hover:bg-[#ebf0ec] focus-within:border-black/[0.06] focus-within:bg-white focus-within:shadow-[0_1px_4px_rgba(24,32,25,0.06)]">
         <Search size={14} className="flex-none text-[#6e7d72]" />
         <input
           id="record-q"

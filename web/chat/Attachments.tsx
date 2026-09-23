@@ -236,9 +236,7 @@ export function StagedChip({
           <FileText size={14} />
         </span>
       )}
-      <span className="min-w-0 truncate text-[11px] text-ink">
-        {item.name}
-      </span>
+      <span className="min-w-0 truncate text-[11px] text-ink">{item.name}</span>
       <button
         type="button"
         className="absolute top-1/2 right-1 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted hover:bg-[#edf3ef] hover:text-ink"

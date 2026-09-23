@@ -196,3 +196,56 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
   );
   await reject("open_direct", { agent_id: b.ref });
 });
+
+test("list_chats 给全部成员短号，不带用户的界面状态；complete_inbox 说清没完成的原因", async (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const agents = ["Atlas", "Borealis", "Cedar", "Dune", "Ember"].map(
+    (name) => store.createAgent(name, tmpdir()).agent,
+  );
+  const [a, b] = agents;
+  const group = store.createChat(
+    "五人群",
+    agents.map((agent) => agent.id),
+  );
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  const server = createMcp(store, a.id, () => {});
+  await server.connect(serverSide);
+  const client = new Client({ name: "list-test", version: "1" });
+  await client.connect(clientSide);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert(!result.isError, JSON.stringify(result));
+    return JSON.parse((result.content as { text: string }[])[0].text);
+  };
+  // 用户在自己的侧栏里置顶、隐藏这个群，不影响 Agent 看到它。
+  store.setChatPinned(group.id, true);
+  store.setChatHidden(group.id, true);
+  const [listed] = (await call("list_chats", {})).items;
+  assert.equal(listed.id, group.ref);
+  assert.deepEqual(
+    listed.members,
+    agents.map((agent) => agent.ref),
+    "五个成员一个不少，按入群顺序",
+  );
+  for (const field of [
+    "member_names",
+    "pinned",
+    "hidden",
+    "mine",
+    "direct_agent",
+  ])
+    assert(!(field in listed), `不给 Agent 用户侧字段 ${field}`);
+  store.send(b.id, { chat_id: group.id, body: "交作业", mentions: [] });
+  const [item] = store.box(a.id).items;
+  store.readChat(a.id, group.id);
+  assert.deepEqual(
+    await call("complete_inbox", { ids: [item.id, 424242] }),
+    { completed: 0, already_done: [item.id], not_found: [424242] },
+    "读群已自动完成，编号不对也要说出来",
+  );
+});

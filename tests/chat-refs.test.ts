@@ -138,7 +138,7 @@ test("私聊、明确提及和消息箱提醒使用相同短号，正文保持�
   });
   store.schedule(Date.now() + 301000);
   const summary = store.pending(a.id).find((d) => d.kind === "summary")!;
-  assert.match(summary.text, /消息箱中 1 条消息未完成/);
+  assert.match(summary.text, /消息箱中 1 项未完成/);
   assert(!summary.text.includes(group.id));
   for (const notice of store.box(a.id).items)
     assert.equal(

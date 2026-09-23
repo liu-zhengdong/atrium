@@ -183,7 +183,7 @@ test("通知箱用户审阅不标已读；Agent 只标记实际返回页，完�
     store.completeBox(
       a.id,
       page.items.map((m) => m.id),
-    ),
+    ).completed,
     page.items.length,
   );
   assert.equal(store.boxCount(a.id), 4 - page.items.length, "完成后才出队");
@@ -198,7 +198,7 @@ test("心跳按间隔检查消息箱；阅读或完成后不再提醒", (t) => {
   assert.equal(store.boxCount(a.id), 1, "群发言即时合并进消息箱");
   assert.deepEqual(store.schedule(now), [a.id]);
   const summary = store.pending(a.id).find((d) => d.kind === "summary")!;
-  assert.match(summary.text, /消息箱中 1 条消息未完成/);
+  assert.match(summary.text, /消息箱中 1 项未完成/);
   assert.deepEqual(store.schedule(now + 1000), [], "心跳间隔未到不重复提醒");
   assert.deepEqual(store.schedule(now + 31000), [a.id], "未完成则继续提醒");
   assert.equal(
@@ -210,10 +210,54 @@ test("心跳按间隔检查消息箱；阅读或完成后不再提醒", (t) => {
   assert.deepEqual(store.schedule(now + 62000), []);
   send("二");
   const item = store.box(a.id).items[0];
-  assert.equal(store.completeBox(a.id, [item.id]), 1);
-  assert.equal(store.completeBox(a.id, [item.id]), 0, "重复完成是幂等的");
+  assert.deepEqual(store.completeBox(a.id, [item.id]), {
+    completed: 1,
+    already_done: [],
+    not_found: [],
+  });
+  assert.deepEqual(
+    store.completeBox(a.id, [item.id, 999999]),
+    { completed: 0, already_done: [item.id], not_found: [999999] },
+    "重复完成是幂等的，并说清是早已完成还是编号不对",
+  );
   assert.equal(store.boxCount(a.id), 0);
   assert.deepEqual(store.schedule(now + 100000), []);
+});
+
+test("心跳提醒逐项写明会话、未读条数和谁发的；清空后撤回排队的提醒", (t) => {
+  const { store, a, b } = fixture(t);
+  const c = store.createAgent("Cedar", tmpdir()).agent;
+  const group = store.createChat("移植调研", [a.id, b.id, c.id]);
+  const say = (sender: string, body: string) =>
+    store.send(sender, { chat_id: group.id, body, mentions: [] });
+  say(b.id, "上篇结论");
+  say(c.id, "下篇结论");
+  say(b.id, "补充");
+  store.addNotice(a.id, "webhook", "CI 告警", "流水线失败");
+  const text = store.reminder(a.id)!;
+  assert.match(text, /【消息箱中 2 项未完成】/);
+  assert.match(
+    text,
+    new RegExp(`- ${group.ref}「移植调研」：3 条未读，来自 Mira、Cedar`),
+    "群里没点名的三条合成一项，但写清条数和最近发言的人",
+  );
+  assert.match(text, /- CI 告警/);
+  store.run("UPDATE agents SET last_wake=0 WHERE id=?", a.id);
+  assert.deepEqual(store.schedule(), [a.id]);
+  const queued = store.pending(a.id).find((d) => d.kind === "summary")!;
+  store.readChat(a.id, group.id);
+  assert.doesNotMatch(store.reminder(a.id)!, /移植调研/, "读完的会话不再列出");
+  store.completeBox(
+    a.id,
+    store.box(a.id).items.map((i) => i.id),
+  );
+  assert.equal(store.reminder(a.id), null, "消息箱清空就没有可送的提醒");
+  store.withdrawReminder(queued.id);
+  assert.equal(
+    store.pending(a.id).filter((d) => d.kind === "summary").length,
+    0,
+    "排队中的过期提醒撤回",
+  );
 });
 
 test("同一副样子的消息箱只提醒几次，变了才重新计数", (t) => {
@@ -236,14 +280,14 @@ test("同一副样子的消息箱只提醒几次，变了才重新计数", (t) =
 
   const noteId = store.addNotice(a.id, "webhook", "CI 告警", "流水线失败");
   assert.deepEqual(tick(), [a.id], "来了新通知又重新计数");
-  assert.equal(store.completeBox(a.id, [noteId]), 1);
+  assert.equal(store.completeBox(a.id, [noteId]).completed, 1);
   assert.deepEqual(tick(), [a.id], "完成了一部分也算有变化");
 
   assert.equal(
     store.completeBox(
       a.id,
       store.box(a.id).items.map((i) => i.id),
-    ),
+    ).completed,
     1,
   );
   assert.equal(store.boxCount(a.id), 0);

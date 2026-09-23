@@ -148,7 +148,15 @@ test("创建身份解析已安装的 git 包，并注入本应用的 pi-atrium",
   ) as { packages: string[] };
   assert.deepEqual(
     settings.packages.filter((p) => p.includes("other-ext")),
-    [realpathSync(other)],
+    ["git:github.com/example/other-ext"],
+  );
+  assert(
+    existsSync(
+      join(
+        created.json().agent.agent_directory,
+        "git/github.com/example/other-ext",
+      ),
+    ),
   );
   assert.equal(
     settings.packages.some((p) => p.includes("pi-mcp-adapter")),

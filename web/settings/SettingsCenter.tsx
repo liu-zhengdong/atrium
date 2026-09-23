@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Bot,
   KeyRound,
   Menu,
   Search,
@@ -12,6 +13,7 @@ import type { Agent } from "../components/AgentAvatar.tsx";
 import { ProfilePage } from "./ProfilePage.tsx";
 import { AccountsPage } from "./AccountsPage.tsx";
 import { ServicePage } from "./ServicePage.tsx";
+import { AgentDefaultsPage } from "./AgentDefaultsPage.tsx";
 import type { SettingsPage } from "./types.ts";
 
 const navigation = [
@@ -29,6 +31,17 @@ const navigation = [
         label: "账号",
         Icon: KeyRound,
         terms: "API key OAuth 模型 分配 Agent provider",
+      },
+    ],
+  },
+  {
+    section: "Agent",
+    entries: [
+      {
+        id: "agent-defaults" as const,
+        label: "新 Agent 默认配置",
+        Icon: Bot,
+        terms: "插件 技能 模型 packages skills",
       },
     ],
   },
@@ -184,6 +197,8 @@ export function SettingsCenter({
               focus={focus}
               openAgent={openAgent}
             />
+          ) : page === "agent-defaults" ? (
+            <AgentDefaultsPage query={query} />
           ) : (
             <ServicePage query={query} />
           )}

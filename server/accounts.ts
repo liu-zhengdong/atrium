@@ -95,6 +95,19 @@ export class Accounts {
   rename(ref: string, name: string) {
     return this.catalog.rename(ref, name);
   }
+  private assignedEntries(id: string) {
+    return Object.fromEntries(
+      this.store
+        .all<{ account_number: number }>(
+          "SELECT account_number FROM account_assignments WHERE agent_id=?",
+          id,
+        )
+        .map(({ account_number }) => {
+          const row = this.catalog.row(account_number);
+          return [row.provider, this.load(row)];
+        }),
+    );
+  }
   switchMode(id: string): {
     mode: Mode;
     assigned: { provider: string; account: string }[];
@@ -115,18 +128,12 @@ export class Accounts {
           )
           .map((r) => ({ provider: r.provider, account: `k${r.number}` })),
       };
-    const entries = Object.fromEntries(
-      this.store
-        .all<{ account_number: number }>(
-          "SELECT account_number FROM account_assignments WHERE agent_id=?",
-          id,
-        )
-        .map(({ account_number }) => {
-          const row = this.catalog.row(account_number);
-          return [row.provider, this.load(row)];
-        }),
+    return this.files.prepareMode(
+      id,
+      target,
+      this.assignedEntries(id),
+      this.catalog.mode(id),
     );
-    return this.files.prepareMode(id, target, entries, this.catalog.mode(id));
   }
   assign(id: string, ref: string) {
     const agent = this.store.agent(id),
@@ -151,7 +158,7 @@ export class Accounts {
       preserved = this.files.prepareMode(
         id,
         "assigned",
-        { [row.provider]: this.load(row) },
+        { ...this.assignedEntries(id), [row.provider]: this.load(row) },
         this.catalog.mode(id),
       ).preserved;
     else

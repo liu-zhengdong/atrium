@@ -107,7 +107,12 @@ export class AccountRefresh {
       for (const row of this.store.all<Row>(
         "SELECT * FROM accounts WHERE type='oauth' ORDER BY number",
       )) {
-        if (row.last_error === "账号凭据损坏，原文件已隔离") continue;
+        if (
+          row.last_error === "账号凭据损坏，原文件已隔离" ||
+          ((row.status === "pending" || row.status === "error") &&
+            fileState(authFile(this.files.dir(row.number))) === "empty")
+        )
+          continue;
         try {
           this.recover(row);
           const latest = this.store.one<Row>(

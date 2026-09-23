@@ -49,6 +49,29 @@ const fixture = () => {
   };
 };
 
+test("unfinished OAuth login stays a login error across service restart and refresh", async () => {
+  const { dir, store } = fixture();
+  const number = Number(
+    store.run(
+      "INSERT INTO accounts(provider,name,type,status) VALUES('openai-codex','cancelled','oauth','pending')",
+    ).lastInsertRowid,
+  );
+  const directory = join(dir, "accounts", `k${number}`);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "auth.json"), "{}", { mode: 0o600 });
+  const restarted = new Accounts(store, dir);
+  const row = restarted.list().find((account) => account.id === `k${number}`);
+  assert.equal(row?.status, "error");
+  assert.equal(row?.last_error, "登录未完成");
+  await restarted.refresh();
+  assert.equal(
+    restarted.list().find((account) => account.id === `k${number}`)?.last_error,
+    "登录未完成",
+  );
+  assert.equal(readFileSync(join(directory, "auth.json"), "utf8"), "{}");
+  store.close();
+});
+
 test("credential mode plan covers every file state and target combination", () => {
   const states: AuthFile[] = ["missing", "link", "empty", "content"];
   const modes: Mode[] = ["shared", "assigned"];
@@ -138,6 +161,30 @@ test("assigned files are isolated; bad assignments and real-file mode switch pre
   );
   accounts.remove(first);
   assert.equal(accounts.list().length, 1);
+  store.close();
+});
+
+test("assigning after switching back to shared keeps earlier provider credentials", () => {
+  const { store, agent, agentDirectory, accounts } = fixture();
+  const deepseek = accounts.add("deepseek", "first", "DEEPSEEK_KEY").id;
+  const openrouter = accounts.add("openrouter", "second", "OPENROUTER_KEY").id;
+  accounts.assign(agent.id, deepseek);
+  accounts.switchMode(agent.id, "shared");
+  accounts.assign(agent.id, openrouter);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")),
+    {
+      deepseek: { type: "api_key", key: "DEEPSEEK_KEY" },
+      openrouter: { type: "api_key", key: "OPENROUTER_KEY" },
+    },
+  );
+  assert.deepEqual(accounts.switchMode(agent.id), {
+    mode: "assigned",
+    assigned: [
+      { provider: "deepseek", account: deepseek },
+      { provider: "openrouter", account: openrouter },
+    ],
+  });
   store.close();
 });
 

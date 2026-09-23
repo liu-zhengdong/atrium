@@ -71,6 +71,7 @@ dialog:has(.source-picker-open) {
   --color-ink-deep: #111712;
   --color-muted: #5c685f;
   --color-line: #dce3de;
+  --color-line-subtle: #e8eee9;
   --color-line-strong: #b8c5bc;
   --color-soft: #f2f6f3;
   --color-surface: #ebf0ec;

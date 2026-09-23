@@ -49,7 +49,7 @@ export function TopBar({
   return (
     <header
       role="banner"
-      className="relative z-20 flex h-11 flex-none items-center justify-between border-b border-line-subtle/60 bg-white/90 px-4 backdrop-blur-md"
+      className="relative z-20 flex h-11 flex-none items-center justify-between border-b border-black/[0.04] bg-white/90 px-4 backdrop-blur-md"
     >
       {/* 左侧：移动端切换 + 上下文标题/短号 */}
       <div className="flex min-w-0 items-center gap-2.5">

@@ -7,6 +7,8 @@ type Skill = {
   name: string;
   description: string;
   enabled: boolean;
+  linkTarget?: string;
+  error?: string;
 };
 type Mcp = {
   text: string;
@@ -105,9 +107,19 @@ export function AgentSkills({ agentId }: { agentId: string }) {
                 <strong className="break-all text-xs font-medium">
                   {item.name}
                 </strong>
-                <p className="mt-1 break-words text-xs text-muted">
-                  {item.description}
-                </p>
+                {item.description && (
+                  <p className="mt-1 break-words text-xs text-muted">
+                    {item.description}
+                  </p>
+                )}
+                {item.linkTarget && (
+                  <p className="mt-1 break-all text-xs text-muted">
+                    链接 · {item.linkTarget}
+                  </p>
+                )}
+                {item.error && (
+                  <p className="mt-1 text-xs text-[#9c3f2d]">{item.error}</p>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <label
@@ -143,7 +155,11 @@ export function AgentSkills({ agentId }: { agentId: string }) {
                 aria-label={`确认删除技能 ${item.name}`}
                 className="mt-3 rounded-xl bg-soft p-3 text-xs"
               >
-                <p className="m-0">删除「{item.name}」？原文件会备份。</p>
+                <p className="m-0">
+                  {item.linkTarget
+                    ? `删除「${item.name}」？仅删除身份目录中的链接，不修改目标。`
+                    : `删除「${item.name}」？原文件会备份。`}
+                </p>
                 <div className="mt-3 flex gap-2">
                   <button
                     className="button"

@@ -168,7 +168,12 @@ export class Store {
       CREATE INDEX IF NOT EXISTS inbox_agent_id ON inbox(agent_id,id);
       CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), kind TEXT NOT NULL, text TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending', slot TEXT, error TEXT, created_at INTEGER NOT NULL, chat_id TEXT REFERENCES chats(id), through_message INTEGER, UNIQUE(agent_id,slot));
-      CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(agent_id,created_at) WHERE state='pending';`);
+      CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(agent_id,created_at) WHERE state='pending';
+      CREATE TABLE IF NOT EXISTS accounts (number INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, name TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('oauth','api_key')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT);
+      CREATE TABLE IF NOT EXISTS credential_modes (agent_id TEXT PRIMARY KEY REFERENCES agents(id), mode TEXT NOT NULL CHECK(mode IN ('shared','assigned')), shared_target TEXT);
+      CREATE TABLE IF NOT EXISTS account_assignments (agent_id TEXT NOT NULL REFERENCES agents(id), provider TEXT NOT NULL,
+        account_number INTEGER NOT NULL REFERENCES accounts(number), PRIMARY KEY(agent_id,provider));`);
     // Allocate once, in legacy creation order. AUTOINCREMENT prevents reuse even
     // if a chat is removed; a trigger also covers writes from an older binary.
     this.transaction(() => {
@@ -428,6 +433,8 @@ export class Store {
     const remove = () => {
       this.agent(id); // 不存在或已删除就在这里 404。
       // 已删除的身份不在 agents() 里，不会被 pump；待投递在下一句一并取消。
+      this.run("DELETE FROM account_assignments WHERE agent_id=?", id);
+      this.run("DELETE FROM credential_modes WHERE agent_id=?", id);
       this.run(
         "UPDATE agents SET deleted_at=?,deleted_after=(SELECT COALESCE(MAX(id),0) FROM messages),deleted_name=name,name=?,token_hash='',work='',runtime_id=NULL,runtime_pid=NULL WHERE id=?",
         Date.now(),

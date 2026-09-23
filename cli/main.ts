@@ -3,6 +3,7 @@ import { dataDirectory, serviceUrl } from "../server/service-state.ts";
 import { pad, width } from "./format.ts";
 import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
+import { accountCommands } from "./accounts.ts";
 
 export type Values = Record<
   string,
@@ -31,7 +32,11 @@ export const strs = (values: Values, key: string) => {
   return typeof value === "string" ? [value] : [];
 };
 
-const commands: Record<string, Command> = { ...agentCommands, ...chatCommands };
+const commands: Record<string, Command> = {
+  ...agentCommands,
+  ...chatCommands,
+  ...accountCommands,
+};
 const service: [usage: string, about: string][] = [
   ["atrium", "启动或复用后台服务，打开 Web"],
   ["atrium --no-open", "启动或复用服务，仅输出地址"],
@@ -83,8 +88,10 @@ export async function main(argv: string[]): Promise<number> {
       await (name === "status" ? serviceStatus : stopService)(dataDirectory());
       return 0;
     }
-    const command = commands[name];
-    if (!command) throw new Error(`不认识的命令：${name}\n${usage}`);
+    const subcommand =
+      name === "account" ? `${name} ${rest.shift() ?? ""}`.trim() : name;
+    const command = commands[subcommand];
+    if (!command) throw new Error(`不认识的命令：${subcommand}\n${usage}`);
     let parsed: ReturnType<typeof parseArgs>;
     try {
       parsed = parseArgs({
@@ -98,12 +105,12 @@ export async function main(argv: string[]): Promise<number> {
       });
     } catch (error) {
       throw new Error(
-        `用法：atrium ${name} ${command.args}\n${error instanceof Error ? error.message : String(error)}`,
+        `用法：atrium ${subcommand} ${command.args}\n${error instanceof Error ? error.message : String(error)}`,
       );
     }
     const [min, max] = command.positionals;
     if (parsed.positionals.length < min || parsed.positionals.length > max)
-      throw new Error(`用法：atrium ${name} ${command.args}`.trimEnd());
+      throw new Error(`用法：atrium ${subcommand} ${command.args}`.trimEnd());
     const code = await command.run({
       positionals: parsed.positionals,
       values: parsed.values as Values,

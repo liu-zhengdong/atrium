@@ -84,7 +84,10 @@ const TRACE_KEEP = 2000;
 
 /** Materialized actions: two writes per tool, never per token. Details are fetched separately. */
 export class TraceStore {
-  constructor(private store: Store) {
+  constructor(
+    private store: Store,
+    private redact: (agent: string, text: string) => string = (_, text) => text,
+  ) {
     store.db.exec(`CREATE TABLE IF NOT EXISTS trace_cursors (
       agent_id TEXT NOT NULL REFERENCES agents(id), runtime_id TEXT NOT NULL, generation TEXT NOT NULL,
       seq INTEGER NOT NULL, PRIMARY KEY(agent_id,runtime_id,generation));
@@ -180,7 +183,7 @@ export class TraceStore {
         // name 来自 pi-atrium 的运行事件：工具名，或 message 事件的消息角色（"user" 即
         // Pi 侧的输入角色）。它不是 Atrium 的用户短号，不跟着 u1 走。
         const name = e.name ?? "",
-          text = e.text ?? "";
+          text = this.redact(agent, e.text ?? "");
         if (e.kind === "tool_end") {
           const updated = this.store.run(
             "UPDATE trace_actions SET ended_at=?,state=?,output=?,truncated=MAX(truncated,?) WHERE agent_id=? AND runtime_id=? AND generation=? AND call_id=?",

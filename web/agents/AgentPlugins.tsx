@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { LoaderCircle, Plus, RotateCw } from "lucide-react";
+import { LoaderCircle, Plus, RotateCw, Trash2 } from "lucide-react";
 import { api } from "../api.ts";
 
 type Plugin = {
@@ -29,9 +29,14 @@ export function AgentPlugins({
   const [error, setError] = useState("");
   const [changed, setChanged] = useState(false);
   const [confirm, setConfirm] = useState<"own" | "shared" | null>(null);
+  const [removeSource, setRemoveSource] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
     setList(null);
+    setRemoveSource(null);
+    setConfirm(null);
+    setChanged(false);
+    setError("");
     api<List>(`/agents/${agentId}/plugins`)
       .then((value) => {
         if (active) setList(value);
@@ -54,6 +59,7 @@ export function AgentPlugins({
       setList(next);
       setChanged(true);
       if (action === "add") setSpec("");
+      if (action === "remove") setRemoveSource(null);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -201,43 +207,91 @@ export function AgentPlugins({
                       · {item.kind === "bundled" ? "随中庭更新" : item.source}
                     </div>
                   </div>
-                  <span className="text-[11px] text-muted">
-                    {item.enabled ? "已启用" : "已停用"}
-                  </span>
-                </div>
-                {list.mode === "own" && item.kind !== "bundled" && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="text-xs text-accent-strong disabled:opacity-50"
-                      disabled={!!busy}
-                      onClick={() =>
-                        void act(
-                          item.enabled ? "disable" : "enable",
-                          item.source,
-                        )
+                  <div className="flex shrink-0 items-center gap-1">
+                    <label
+                      className="switch-row !m-0 !p-0"
+                      title={
+                        item.kind === "bundled"
+                          ? "应用内置，不可修改"
+                          : list.mode === "shared"
+                            ? "转为独立安装后可修改"
+                            : `切换 ${item.name}`
                       }
                     >
-                      {item.enabled ? "停用" : "启用"}
-                    </button>
-                    {item.kind !== "local" && (
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        className="disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={`启用 ${item.name}`}
+                        checked={item.enabled}
+                        disabled={
+                          !!busy ||
+                          list.mode === "shared" ||
+                          item.kind === "bundled"
+                        }
+                        onChange={() =>
+                          void act(
+                            item.enabled ? "disable" : "enable",
+                            item.source,
+                          )
+                        }
+                      />
+                    </label>
+                    {list.mode === "own" && item.kind !== "bundled" && (
+                      <>
+                        {item.kind !== "local" && (
+                          <button
+                            type="button"
+                            className="icon-button disabled:opacity-50"
+                            aria-label={`更新 ${item.name}`}
+                            title={`更新 ${item.name}`}
+                            disabled={!!busy}
+                            onClick={() => void act("update", item.source)}
+                          >
+                            <RotateCw size={15} />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="icon-button disabled:opacity-50"
+                          aria-label={`移除 ${item.name}`}
+                          title={`移除 ${item.name}`}
+                          disabled={!!busy}
+                          onClick={() => setRemoveSource(item.source)}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {removeSource === item.source && (
+                  <div
+                    role="dialog"
+                    aria-label={`确认移除 ${item.name}`}
+                    className="mt-3 rounded-xl bg-soft p-3 text-xs"
+                  >
+                    <p className="m-0">
+                      移除「{item.name}」？运行中的 Agent 需重启后生效。
+                    </p>
+                    <div className="mt-3 flex gap-2">
                       <button
                         type="button"
-                        className="text-xs text-accent-strong disabled:opacity-50"
+                        className="button"
                         disabled={!!busy}
-                        onClick={() => void act("update", item.source)}
+                        onClick={() => void act("remove", item.source)}
                       >
-                        更新
+                        确认移除
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      className="text-xs text-muted disabled:opacity-50"
-                      disabled={!!busy}
-                      onClick={() => void act("remove", item.source)}
-                    >
-                      移除
-                    </button>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        disabled={!!busy}
+                        onClick={() => setRemoveSource(null)}
+                      >
+                        取消
+                      </button>
+                    </div>
                   </div>
                 )}
               </li>
@@ -246,36 +300,48 @@ export function AgentPlugins({
         ) : (
           <p className="text-xs text-muted">没有安装插件</p>
         ))}
-      {list?.mode === "own" &&
-        (confirm === "shared" ? (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-            <span>切回创建前的共享列表；独立安装文件保留。</span>
-            <button
-              type="button"
-              className="button secondary"
-              disabled={!!busy}
-              onClick={() => void mode("shared")}
-            >
-              确认切回
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => setConfirm(null)}
-            >
-              取消
-            </button>
-          </div>
-        ) : (
+      {list?.mode === "own" && (
+        <>
           <button
             type="button"
-            className="self-start text-xs text-muted underline"
+            className="button secondary mt-3 !text-xs"
             disabled={!!busy}
             onClick={() => setConfirm("shared")}
           >
-            切回共享
+            切回共享安装
           </button>
-        ))}
+          {confirm === "shared" && (
+            <div
+              role="dialog"
+              aria-label="确认切回共享安装"
+              className="mt-3 rounded-xl bg-soft p-4 text-xs"
+            >
+              <p className="m-0">
+                将重新使用个人 Pi
+                的插件；独立安装文件保留，再转独立时重新复制共享配置。
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!!busy}
+                  onClick={() => void mode("shared")}
+                >
+                  确认切回
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={!!busy}
+                  onClick={() => setConfirm(null)}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
       {busy && (
         <p role="status" className="flex items-center gap-2 text-xs text-muted">
           <LoaderCircle size={14} className="spin" />

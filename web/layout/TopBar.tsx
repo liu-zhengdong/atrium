@@ -43,9 +43,7 @@ export function TopBar({
   const me = overview?.user.name.trim() ?? "";
   const isGroup = activeChat?.kind === "group";
   const chatMembers = activeChat
-    ? agents.filter((a) =>
-        isGroup ? true : a.id === activeChat.direct_agent,
-      )
+    ? agents.filter((a) => (isGroup ? true : a.id === activeChat.direct_agent))
     : [];
 
   return (

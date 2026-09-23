@@ -35,6 +35,22 @@ async function sendCdp(ws, method, params = {}) {
   });
 }
 
+function killPort(port) {
+  try {
+    const out = execSync(`lsof -ti:${port}`, { encoding: "utf8" }).trim();
+    if (out) {
+      for (const line of out.split("\n")) {
+        const pid = parseInt(line.trim(), 10);
+        if (pid && !isNaN(pid)) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
+    }
+  } catch {}
+}
+
 async function main() {
   const tempDir = await fs.mkdtemp("/tmp/atrium-snap-");
   const dataDir = `${tempDir}/data`;
@@ -42,14 +58,18 @@ async function main() {
   await fs.mkdir(dataDir, { recursive: true });
   await fs.mkdir(`${piDir}/agents`, { recursive: true });
 
+  // 0. 清理旧进程
+  killPort(4399);
+
   const env = {
     ...process.env,
     ATRIUM_DATA: dataDir,
     ATRIUM_PI_HOME: piDir,
     ATRIUM_DESKTOPS: `${tempDir}/desktops`,
+    ATRIUM_PORT: "4399",
   };
 
-  // 1. 启动 Atrium
+  // 1. 启动 Atrium（使用非 4310 端口避免与用户本地正在运行的实例冲突）
   console.log(`Starting Atrium with ATRIUM_DATA=${dataDir}...`);
   const atriumProc = spawn("node", ["bin/atrium.mjs", "--no-open"], {
     cwd: WORKTREE,
@@ -237,6 +257,15 @@ async function main() {
   ws.close();
   chromeProc.kill();
   atriumProc.kill();
+  try {
+    execSync(`node bin/atrium.mjs stop`, {
+      cwd: WORKTREE,
+      env,
+      stdio: "ignore",
+    });
+  } catch {}
+  await new Promise((r) => setTimeout(r, 200));
+  killPort(4399);
   console.log("Done!");
 }
 

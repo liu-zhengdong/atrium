@@ -35,7 +35,7 @@ export function AgentDirectory({
     <section className="min-h-0 flex-1 overflow-auto bg-white px-8 py-6 max-[560px]:px-4 max-[560px]:py-4">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         {count > 0 ? (
-          <label className="flex h-7 w-72 items-center gap-2 rounded-lg border border-transparent bg-[#f0f4f1] px-2.5 text-muted transition-all hover:bg-[#ebf0ec] focus-within:border-black/[0.06] focus-within:bg-white focus-within:shadow-[0_1px_4px_rgba(24,32,25,0.06)]">
+          <label className="flex h-7 w-64 items-center gap-2 rounded-lg bg-white px-2.5 text-muted shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all hover:shadow-[0_2px_6px_rgba(0,0,0,0.06)] focus-within:shadow-[0_2px_8px_rgba(49,110,80,0.12)]">
             <Search size={13} className="text-[#6e7d72]" />
             <input
               className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink placeholder:text-muted/70 outline-none"
@@ -64,7 +64,7 @@ export function AgentDirectory({
       <div className="grid grid-cols-[repeat(auto-fill,minmax(min(290px,100%),1fr))] gap-4">
         {agents.map((a) => (
           <article
-            className="group relative flex flex-col justify-between rounded-xl border border-black/[0.05] bg-white p-4 shadow-[0_1px_3px_rgba(24,32,25,0.02)] transition-all duration-150 hover:-translate-y-0.5 hover:border-black/[0.09] hover:shadow-[0_4px_16px_rgba(24,32,25,0.06)]"
+            className="group relative flex flex-col justify-between rounded-xl bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_6px_16px_rgba(0,0,0,0.03)] transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(0,0,0,0.06),0_12px_28px_rgba(0,0,0,0.06)]"
             key={a.id}
           >
             <div className="flex items-start gap-3">
@@ -83,7 +83,7 @@ export function AgentDirectory({
                   <strong className="truncate text-sm font-semibold text-ink group-hover:text-accent-strong">
                     {a.name}
                   </strong>
-                  <span className="flex-none rounded-full bg-[#edf5f1] px-2 py-0.5 text-[10px] font-medium text-accent">
+                  <span className="flex-none rounded-full bg-[#edf5f1] px-2 py-0.5 text-[10px] font-medium text-[#316e50]">
                     {runtimeLabel(a)}
                   </span>
                 </div>
@@ -103,10 +103,10 @@ export function AgentDirectory({
                 </p>
               </button>
             </div>
-            <div className="mt-4 flex items-center justify-between border-t border-black/[0.04] pt-3">
+            <div className="mt-4 flex items-center justify-between">
               <button
                 type="button"
-                className="button secondary h-7 px-2.5 text-xs text-muted hover:text-ink"
+                className="button secondary h-7 px-2.5 text-xs text-muted hover:text-ink hover:bg-[#f0f4f1]"
                 onClick={() => details(a.id)}
               >
                 运行详情
@@ -161,17 +161,17 @@ export function AgentDirectory({
         )
       )}
       {fresh.length > 0 && (
-        <details className="settings-section temporary-runtimes mt-6 rounded-xl border border-black/[0.05] bg-white p-4">
-          <summary className="cursor-pointer font-medium text-xs text-muted hover:text-ink">
+        <details className="mt-6 rounded-xl bg-white p-4 text-xs shadow-[0_1px_3px_rgba(0,0,0,0.03),0_4px_12px_rgba(0,0,0,0.02)] transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]">
+          <summary className="cursor-pointer font-medium text-muted hover:text-ink">
             临时 Pi · {fresh.length}
           </summary>
-          <p className="muted small-text mt-2 text-xs">
+          <p className="mt-2 leading-relaxed text-muted">
             这些实例不属于长期身份，不会自动创建账号。要使用长期身份，请新建
             Agent，再通过具名入口启动。
           </p>
-          <div className="mt-2 space-y-1">
+          <div className="mt-3 space-y-1.5">
             {fresh.map((r) => (
-              <p className="font-mono text-xs text-muted" key={r.runtimeId}>
+              <p className="font-mono text-muted" key={r.runtimeId}>
                 {agentName(r.cwd)} · PID {r.pid}
               </p>
             ))}

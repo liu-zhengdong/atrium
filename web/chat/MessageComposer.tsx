@@ -118,10 +118,10 @@ export function MessageComposer({
         </p>
       )}
       <form
-        className={`relative rounded-xl border bg-white shadow-[0_2px_12px_rgba(24,32,25,0.04)] transition-all duration-150 ${
+        className={`relative rounded-xl border bg-white shadow-[0_2px_14px_rgba(24,32,25,0.04)] transition-all duration-150 ${
           dragging
             ? "border-accent bg-[#f2f6f4] shadow-[0_0_0_1px_#4b6f5a]"
-            : "border-line focus-within:border-accent focus-within:shadow-[0_0_0_1px_#4b6f5a,0_4px_16px_rgba(43,79,58,0.08)] hover:border-line-strong"
+            : "border-black/[0.06] hover:border-black/[0.1] focus-within:border-accent/40 focus-within:shadow-[0_4px_16px_rgba(43,79,58,0.06)]"
         }`}
         onSubmit={send}
         onDragOver={(e) => {
@@ -158,7 +158,7 @@ export function MessageComposer({
         )}
         {mention.candidates.length > 0 && (
           <div
-            className="absolute bottom-[calc(100%+8px)] left-0 z-[2] w-[min(400px,100%)] rounded-lg border border-line bg-white p-1.5 shadow-[0_8px_24px_rgba(24,32,25,0.08)]"
+            className="absolute bottom-[calc(100%+8px)] left-0 z-[2] w-[min(400px,100%)] rounded-xl border border-black/[0.05] bg-white p-1.5 shadow-[0_12px_32px_rgba(24,32,25,0.08),0_2px_8px_rgba(24,32,25,0.04)]"
             role="listbox"
             aria-label="提及 Agent"
           >
@@ -167,9 +167,9 @@ export function MessageComposer({
                 type="button"
                 role="option"
                 aria-selected={index === mention.index}
-                className={`flex w-full items-center gap-2.5 rounded-md p-2 text-left transition-colors ${
+                className={`flex w-full items-center gap-2.5 rounded-lg p-2 text-left transition-colors ${
                   index === mention.index
-                    ? "bg-[#eaf3ed] text-ink"
+                    ? "bg-[#edf5f1] text-ink"
                     : "text-muted hover:bg-[#f2f6f4] hover:text-ink"
                 }`}
                 key={isAllOption(item) ? "all" : item.id}
@@ -206,7 +206,7 @@ export function MessageComposer({
         )}
         <textarea
           ref={textarea}
-          className="plain-field block max-h-[200px] min-h-[58px] w-full resize-none overflow-y-auto rounded-t-xl border-0 bg-transparent px-4 pb-1 pt-3.5 text-[13px] leading-[1.65] text-ink placeholder:text-placeholder"
+          className="plain-field block max-h-[200px] min-h-[58px] w-full resize-none overflow-y-auto rounded-t-xl border-0 bg-transparent px-4 pb-1 pt-3.5 text-[13px] leading-[1.65] text-ink caret-accent placeholder:text-placeholder"
           aria-label="消息"
           placeholder={
             files.attached.length

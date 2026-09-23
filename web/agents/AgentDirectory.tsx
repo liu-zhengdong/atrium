@@ -35,8 +35,8 @@ export function AgentDirectory({
     <section className="min-h-0 flex-1 overflow-auto bg-white px-8 py-6 max-[560px]:px-4 max-[560px]:py-4">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         {count > 0 ? (
-          <label className="flex h-7 w-72 items-center gap-2 rounded-lg border border-line bg-white px-2.5 text-muted shadow-[0_1px_2px_rgba(24,32,25,0.02)] focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/20">
-            <Search size={13} className="text-muted" />
+          <label className="flex h-7 w-72 items-center gap-2 rounded-lg border border-transparent bg-[#f0f4f1] px-2.5 text-muted transition-all hover:bg-[#ebf0ec] focus-within:border-black/[0.06] focus-within:bg-white focus-within:shadow-[0_1px_4px_rgba(24,32,25,0.06)]">
+            <Search size={13} className="text-[#6e7d72]" />
             <input
               className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink placeholder:text-muted/70 outline-none"
               aria-label="搜索 Agent"
@@ -64,7 +64,7 @@ export function AgentDirectory({
       <div className="grid grid-cols-[repeat(auto-fill,minmax(min(290px,100%),1fr))] gap-4">
         {agents.map((a) => (
           <article
-            className="group relative flex flex-col justify-between rounded-xl border border-line bg-white p-4 shadow-[0_1px_3px_rgba(24,32,25,0.02)] transition-all duration-150 hover:-translate-y-0.5 hover:border-line-hover hover:shadow-[0_4px_12px_rgba(24,32,25,0.05)]"
+            className="group relative flex flex-col justify-between rounded-xl border border-black/[0.05] bg-white p-4 shadow-[0_1px_3px_rgba(24,32,25,0.02)] transition-all duration-150 hover:-translate-y-0.5 hover:border-black/[0.09] hover:shadow-[0_4px_16px_rgba(24,32,25,0.06)]"
             key={a.id}
           >
             <div className="flex items-start gap-3">
@@ -103,7 +103,7 @@ export function AgentDirectory({
                 </p>
               </button>
             </div>
-            <div className="mt-4 flex items-center justify-between border-t border-line/60 pt-3">
+            <div className="mt-4 flex items-center justify-between border-t border-black/[0.04] pt-3">
               <button
                 type="button"
                 className="button secondary h-7 px-2.5 text-xs text-muted hover:text-ink"
@@ -161,7 +161,7 @@ export function AgentDirectory({
         )
       )}
       {fresh.length > 0 && (
-        <details className="settings-section temporary-runtimes mt-6 rounded-xl border border-line bg-white p-4">
+        <details className="settings-section temporary-runtimes mt-6 rounded-xl border border-black/[0.05] bg-white p-4">
           <summary className="cursor-pointer font-medium text-xs text-muted hover:text-ink">
             临时 Pi · {fresh.length}
           </summary>

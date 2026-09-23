@@ -50,15 +50,15 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
     item.state === "unknown" || (item.state === "running" && !active);
   return (
     <li
-      className={`relative border-l border-line pb-5 pl-[23px] last:border-transparent last:pb-0`}
+      className={`relative border-l border-black/[0.06] pb-5 pl-[23px] last:border-transparent last:pb-0`}
     >
       <span
-        className={`absolute -left-[10px] top-0 grid h-[23px] w-[19px] place-items-center bg-[#faf9f6] ${
+        className={`absolute -left-[10px] top-0 grid h-[23px] w-[19px] place-items-center bg-white ${
           active
-            ? "text-[#8a6b37]"
+            ? "text-accent"
             : item.state === "error"
-              ? "text-[#a35338]"
-              : "text-[#918875]"
+              ? "text-red-600"
+              : "text-muted"
         }`}
         aria-hidden="true"
       >
@@ -82,7 +82,7 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
             <time dateTime={new Date(item.at).toISOString()}>
               {time(item.at)}
             </time>
-            <span className="text-[#92724b]">
+            <span className="text-accent font-medium">
               {active
                 ? "进行中"
                 : unknown
@@ -92,7 +92,7 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
                     : ""}
             </span>
           </div>
-          <div className="flex items-baseline gap-2.5 text-xs leading-[1.65] group-hover:text-[#8a6b37]">
+          <div className="flex items-baseline gap-2.5 text-xs leading-[1.65] group-hover:text-accent">
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
               {item.title}
             </span>
@@ -103,7 +103,7 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
           </div>
         </summary>
         {open && (
-          <div className="mt-[9px] rounded-[7px] border border-line bg-[#f5f3ee] px-3 py-[11px] text-[11px]">
+          <div className="mt-2 rounded-lg border border-black/[0.04] bg-[#f4f7f5] px-3 py-2.5 text-xs">
             {error ? (
               <p role="alert" className="error">
                 {error}{" "}
@@ -241,7 +241,7 @@ export function AgentTrace({
       aria-label="运行轨迹"
     >
       <div
-        className="mx-6 mb-3 mt-[19px] flex items-center gap-3 rounded-[9px] border border-line bg-soft px-3.5 py-[13px] text-[#74684e]"
+        className="mx-5 mb-3 mt-4 flex items-center gap-3 rounded-xl border border-black/[0.05] bg-[#f2f6f3] px-3.5 py-3 text-ink"
         aria-live="polite"
       >
         {agent.runtime?.busy ? (
@@ -336,7 +336,7 @@ export function AgentTrace({
           回到最新
         </button>
       )}
-      <p className="flex-shrink-0 border-t border-line px-6 py-3 text-[10px] text-muted">
+      <p className="flex-shrink-0 border-t border-black/[0.04] px-6 py-3 text-[10px] text-muted">
         真实运行记录 · 仅供你审阅，不自动共享给同伴
       </p>
     </section>

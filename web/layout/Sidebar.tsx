@@ -250,9 +250,9 @@ export function Sidebar({
           )}
         </div>
       )}
-      <footer className="workspace flex items-center gap-2 border-t border-line px-2 pt-2.5 text-[11px] text-muted">
+      <footer className="workspace flex items-center gap-2 border-t border-black/[0.04] px-2 pt-2.5 text-[11px] text-muted">
         <span
-          className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-accent" : "bg-[#c29758]"}`}
+          className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-accent" : "bg-amber-500"}`}
         />
         <span>{connected ? "本机工作区" : "正在连接…"}</span>
         <span className="ml-auto text-[10px] text-muted/60">v0.1</span>

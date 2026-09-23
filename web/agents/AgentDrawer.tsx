@@ -161,7 +161,7 @@ export function AgentDrawer({
       close={close}
       badge={<span className="badge">{runtimeLabel(agent)}</span>}
     >
-      <div className="flex items-center gap-[13px] border-b border-line/60 bg-[#f7faf8] px-5 py-4">
+      <div className="flex items-center gap-[13px] border-b border-black/[0.04] bg-[#f9faf9] px-5 py-4">
         <Avatar name={agent.name} presence={agentPresence(agent)} />
         <div className="min-w-0">
           <strong className="text-xs font-semibold text-ink">
@@ -174,7 +174,7 @@ export function AgentDrawer({
         </div>
       </div>
       <div
-        className="flex gap-4 border-b border-line px-5"
+        className="flex gap-4 border-b border-black/[0.04] px-5"
         aria-label="Agent 信息"
       >
         <button

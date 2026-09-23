@@ -22,7 +22,7 @@ export function MessageBody({
   const tall = useTallContent(content);
   const folded = tall && !expanded.body;
   return (
-    <div className="markdown w-full min-w-0 rounded-2xl border border-line bg-white px-4 py-3 shadow-[0_1px_3px_rgba(24,32,25,0.02)] max-[560px]:px-3.5 max-[560px]:py-2.5 [.outgoing_&]:border-[#d2e2d8] [.outgoing_&]:bg-[#edf5f1]">
+    <div className="markdown w-full min-w-0 rounded-2xl border border-black/[0.04] bg-[#f9faf9] px-4 py-3 shadow-[0_1px_3px_rgba(24,32,25,0.02)] max-[560px]:px-3.5 max-[560px]:py-2.5 [.outgoing_&]:border-transparent [.outgoing_&]:bg-[#edf5f1] [.outgoing_&]:shadow-none">
       <div
         ref={content}
         className={
@@ -56,7 +56,7 @@ export function MessageBody({
             }
           />
           {expanded.details && (
-            <div className="mt-2 rounded-lg border border-line/80 bg-surface-subtle p-3 text-xs">
+            <div className="mt-2 rounded-lg border border-black/[0.04] bg-[#f2f6f3] p-3 text-xs">
               <RichText>{message.details}</RichText>
             </div>
           )}

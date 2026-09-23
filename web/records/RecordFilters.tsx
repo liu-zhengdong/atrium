@@ -4,10 +4,10 @@ import { LOCAL_USER } from "../../shared/user.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { emptyFilters, type RecordFilters } from "./query.ts";
 
-// 控件高度统一到 28px（符合 Qoder 桌面紧凑标准），字号 12px。
+// 控件高度统一到 28px（符合 Qoder 桌面紧凑标准），字号 12px。去生硬边框，靠浅底色与微投影呈现。
 const control =
-  "h-7 rounded-lg border border-line bg-white shadow-[0_1px_2px_rgba(24,32,25,0.02)]";
-const select = `${control} px-2 text-xs text-ink outline-none focus:border-accent focus:ring-1 focus:ring-accent/20`;
+  "h-7 rounded-lg border border-black/[0.06] bg-[#f8faf8] px-2 text-xs text-ink shadow-[0_1px_2px_rgba(24,32,25,0.02)] transition-colors hover:border-black/[0.1] hover:bg-white focus:border-accent/40 focus:bg-white focus:outline-none";
+const select = control;
 
 /** 会话、发送者、时间范围、关键词。三块内容共用这一条工具栏。靠距离自然形成呼吸与分组。 */
 export function RecordFilterBar({
@@ -35,9 +35,9 @@ export function RecordFilterBar({
     <div className="flex flex-wrap items-center gap-2">
       {/* 搜索框 */}
       <div
-        className={`${control} flex min-w-[200px] flex-1 items-center gap-1.5 px-2.5 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/20`}
+        className="flex h-7 min-w-[200px] flex-1 items-center gap-1.5 rounded-lg border border-transparent bg-[#f0f4f1] px-2.5 text-xs text-ink transition-all hover:bg-[#ebf0ec] focus-within:border-black/[0.06] focus-within:bg-white focus-within:shadow-[0_1px_4px_rgba(24,32,25,0.06)]"
       >
-        <Search size={14} className="flex-none text-muted" />
+        <Search size={14} className="flex-none text-[#6e7d72]" />
         <input
           id="record-q"
           className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink placeholder:text-muted/70 outline-none"

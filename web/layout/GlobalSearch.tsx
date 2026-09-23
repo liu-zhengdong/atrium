@@ -209,13 +209,13 @@ export function GlobalSearch({
   return (
     <div ref={rootRef} className="relative min-w-0">
       <label
-        className={`flex h-9 items-center gap-2 rounded-[8px] border px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ${
+        className={`flex h-8 items-center gap-2 rounded-lg border px-2.5 transition-all duration-150 ${
           focused
-            ? "border-[#c4b9a4] bg-white shadow-[0_1px_2px_#2c26120d]"
-            : "border-line bg-[#f3f1eb]"
+            ? "border-black/[0.06] bg-white shadow-[0_1px_4px_rgba(24,32,25,0.06)]"
+            : "border-transparent bg-[#f0f4f1] hover:bg-[#ebf0ec]"
         }`}
       >
-        <Search size={15} className="flex-none text-[#a09b8d]" />
+        <Search size={14} className="flex-none text-[#6e7d72]" />
         <input
           ref={inputRef}
           className="plain-field min-w-0 flex-1 border-0 bg-transparent text-[13px] text-ink"
@@ -260,7 +260,7 @@ export function GlobalSearch({
           ) : (
             !focused && (
               <kbd
-                className="rounded border border-line px-[5px] py-px text-[10px] text-[#b0aa9c]"
+                className="rounded bg-[#e2eae4] px-1.5 py-0.5 text-[10px] font-medium text-muted"
                 aria-hidden
               >
                 {shortcut}
@@ -274,13 +274,13 @@ export function GlobalSearch({
           id="global-search-results"
           role="listbox"
           aria-label="搜索结果"
-          className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-[min(420px,calc(100dvh-72px))] overflow-auto rounded-[10px] border border-line bg-white p-1.5 shadow-[0_8px_30px_#2a241214,0_2px_8px_#2a24120c]"
+          className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-[min(420px,calc(100dvh-72px))] overflow-auto rounded-xl border border-black/[0.05] bg-white p-1.5 shadow-[0_12px_32px_rgba(24,32,25,0.08),0_2px_8px_rgba(24,32,25,0.04)]"
           onMouseDown={(event) => event.preventDefault()}
         >
           {!results ? (
-            <p className="px-2.5 py-2 text-xs text-[#969185]">搜索中…</p>
+            <p className="px-2.5 py-2 text-xs text-muted">搜索中…</p>
           ) : hits.length === 0 ? (
-            <p className="px-2.5 py-2 text-xs text-[#969185]">
+            <p className="px-2.5 py-2 text-xs text-muted">
               没有匹配「{trimmed}」的内容
             </p>
           ) : (
@@ -292,7 +292,7 @@ export function GlobalSearch({
               return (
                 <div key={hit.id}>
                   {(index === 0 || hits[index - 1].type !== hit.type) && (
-                    <div className="px-2.5 pb-1 pt-1.5 text-[11px] tracking-[0.025em] text-[#848176]">
+                    <div className="px-2.5 pb-1 pt-1.5 text-[11px] tracking-[0.025em] text-muted">
                       {sectionTitle[hit.type]}
                     </div>
                   )}
@@ -303,7 +303,7 @@ export function GlobalSearch({
                     aria-selected={index === active}
                     disabled={hit.type === "agent" && openingAgent !== null}
                     className={`${row} ${
-                      index === active ? "bg-[#f3f1ea]" : "hover:bg-[#f7f6f2]"
+                      index === active ? "bg-[#edf5f1]" : "hover:bg-[#f4f7f5]"
                     }`}
                     onMouseEnter={() => setActive(index)}
                     onClick={() => choose(hit)}
@@ -332,7 +332,7 @@ export function GlobalSearch({
                             <strong className={name}>{hit.chat.name}</strong>
                             <span className="flex flex-none items-center gap-1.5">
                               {hit.chat.hidden && (
-                                <em className="rounded bg-[#eae4d7] px-[5px] text-[10px] not-italic text-[#8a7150]">
+                                <em className="rounded bg-[#e8eee9] px-[5px] text-[10px] not-italic text-muted">
                                   已隐藏
                                 </em>
                               )}

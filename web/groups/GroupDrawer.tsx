@@ -40,7 +40,7 @@ export function GroupDrawer({
       badge={<span className="badge">群聊</span>}
     >
       <nav
-        className="flex flex-none gap-2 border-b border-line px-4"
+        className="flex flex-none gap-2 border-b border-black/[0.04] px-4"
         role="tablist"
         aria-label="群信息"
       >
@@ -72,7 +72,7 @@ export function GroupDrawer({
         {tab === "space" && <GroupSpace chatId={chat.id} revision={revision} />}
         {tab === "profile" && <GroupProfile chat={chat} saved={changed} />}
       </div>
-      <footer className="flex-none border-t border-line px-5 py-3">
+      <footer className="flex-none border-t border-black/[0.04] px-5 py-3">
         <button
           className="flex w-full items-center gap-2 rounded-[6px] px-2.5 py-2 text-left text-xs text-muted hover:bg-[#edf3ef] hover:text-ink"
           onClick={openRecords}

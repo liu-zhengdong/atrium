@@ -829,6 +829,13 @@ export class Runtimes {
       await this.capture(id, runtime.info);
       for (const pending of this.store.pending(id)) {
         if (pending.kind === "summary" && runtime.info.busy) continue;
+        // 提醒在忙时排队、空闲才送，期间可能已经读完：送出前按当时的消息箱重写，清空了就撤回。
+        const text =
+          pending.kind === "summary" ? this.store.reminder(id) : pending.text;
+        if (text === null) {
+          this.store.withdrawReminder(pending.id);
+          continue;
+        }
         try {
           const images = pending.through_message
             ? this.store
@@ -849,7 +856,7 @@ export class Runtimes {
               ...target(runtime.info),
               id: pending.id,
               source: "Atrium",
-              text: pending.text,
+              text,
               delivery: pending.kind === "direct" ? "steer" : "followUp",
               ...(images.length ? { images } : {}),
             },

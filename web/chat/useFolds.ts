@@ -9,26 +9,30 @@ export type Expanded = { body?: boolean; details?: boolean };
  */
 export function useFolds(
   scroll: RefObject<HTMLDivElement | null>,
-  holdPosition: () => void,
+  holdPosition: (settled: () => void) => void,
 ) {
   const [expanded, setExpanded] = useState<Record<number, Expanded>>({});
-  const held = useRef<{ element: HTMLElement; top: number } | null>(null);
-  useLayoutEffect(() => {
-    const hold = held.current,
-      scroller = scroll.current;
-    held.current = null;
-    if (!hold || !scroller) return;
-    // 收起长正文时按钮上方变短、按钮上移，滚回去让它停在原处；其余情况位移为 0。
-    scroller.scrollTop += hold.element.getBoundingClientRect().top - hold.top;
-  }, [expanded, scroll]);
+  const restoring = useRef<(() => void) | null>(null);
+  // 高度一变，虚拟列表会调整滚动，包括短列表加载时没用上、等列表变长才补上的那次。
+  // 调整发生在渲染里（setOptions）时，这一次提交的布局阶段挪回；发生在它的尺寸观察回调里时，
+  // 由下面晚创建的 ResizeObserver 在它之后回调挪回。两种都在绘制之前。
+  useLayoutEffect(() => restoring.current?.());
   /** anchor 是点击后要留在原位的元素。 */
   const toggle =
     (id: number) => (part: keyof Expanded, anchor: HTMLElement) => {
-      held.current = {
-        element: anchor,
-        top: anchor.getBoundingClientRect().top,
+      const top = anchor.getBoundingClientRect().top;
+      const restore = () => {
+        if (scroll.current)
+          scroll.current.scrollTop += anchor.getBoundingClientRect().top - top;
       };
-      holdPosition();
+      const observer = new ResizeObserver(restore);
+      observer.observe(anchor.closest("[data-index]") ?? anchor);
+      restoring.current = restore;
+      holdPosition(() => {
+        restore();
+        observer.disconnect();
+        restoring.current = null;
+      });
       setExpanded((all) => ({
         ...all,
         [id]: { ...all[id], [part]: !all[id]?.[part] },

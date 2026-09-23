@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { Problem } from "./store.ts";
 import { local, resolveInstalled } from "./package-spec.ts";
 import {
@@ -131,6 +132,36 @@ function copyOwnedNotes(sourceDir: string, directory: string) {
       else copyOwned(from, dest);
     }
 }
+/**
+ * Notes the app itself hands every identity, from server/notes/. They come
+ * from Atrium, not the user's vault: they hold this identity's post in the
+ * organization — duties, reporting line, decisions pending and made.
+ */
+const BUNDLED_NOTES = ["职责"];
+const bundledNotesDir = fileURLToPath(new URL("./notes/", import.meta.url));
+/**
+ * Add the bundled notes the identity lacks; its own copies are kept. `fresh` is
+ * for an identity forked from another: the copy it got describes the source's
+ * post, so it starts over from the blank note, without the Evolution log and
+ * sub-notes that came along.
+ */
+function seedBundledNotes(directory: string, fresh = false) {
+  for (const base of BUNDLED_NOTES) {
+    if (fresh)
+      for (const name of [`${base}.md`, `${base}-Evolution.md`, base])
+        rmSync(join(directory, name), { recursive: true, force: true });
+    try {
+      // wx: an existing note, or a link standing in its place, is left alone.
+      writeFileSync(
+        join(directory, `${base}.md`),
+        readFileSync(join(bundledNotesDir, `${base}.md`)),
+        { mode: 0o600, flag: "wx" },
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+}
 const BUNDLED_PACKAGE_NAMES = new Set([
   "@liuser/pi-atrium",
   "@liuser/pi-acp",
@@ -233,20 +264,24 @@ export function writeIdentityModel(directory: string, spec: ModelSpec) {
   return formatModelSpec(spec);
 }
 
-/** Add owned notes an identity predates. Its own copies win; no overwrite. */
+/** Add owned and bundled notes an identity predates. Its own copies win; no overwrite. */
 export function syncIdentityNotes(
   directory: string,
   template = defaultTemplate(),
 ) {
   const own = join(directory, "notes.json");
+  // Without notes.json, Pi's notes live in <identity>/notes — the same place.
+  const target = existsSync(own)
+    ? notesDirectory(readJson(own), directory)
+    : ownedNotesDir(directory);
+  // Only ever write into the notes directory this app laid out for the identity.
+  if (target !== ownedNotesDir(directory)) return;
+  makeOwnedDir(target);
+  seedBundledNotes(target);
   const source = join(template, "notes.json");
   if (!existsSync(own) || !existsSync(source)) return;
-  // Only ever write into the notes directory this app laid out for the identity.
-  const target = notesDirectory(readJson(own), directory);
-  if (target !== ownedNotesDir(directory)) return;
   const sourceDir = notesDirectory(readJson(source), template);
   if (!sourceDir || !existsSync(sourceDir)) return;
-  makeOwnedDir(target);
   copyOwnedNotes(sourceDir, target);
 }
 
@@ -553,26 +588,32 @@ export function prepareProfile(
         copyResourceDir(join(template, kind), dest);
         created.push(dest);
       }
+    // Without notes.json Pi reads <identity>/notes, so the bundled notes land
+    // there whether or not the template configures notes.
+    const notesDir = ownedNotesDir(target);
+    if (!existsSync(notesDir)) {
+      makeOwnedDir(notesDir);
+      created.push(notesDir);
+    }
     if (existsSync(join(template, "notes.json"))) {
       const notes = readJson(join(template, "notes.json"));
       const sourceDir = notesDirectory(notes, template);
-      const directory = ownedNotesDir(target);
-      makeOwnedDir(directory);
-      created.push(directory);
       if (sourceDir && existsSync(sourceDir)) {
         if (inside(template, sourceDir))
-          cpSync(sourceDir, directory, {
+          cpSync(sourceDir, notesDir, {
             recursive: true,
             dereference: true,
           });
-        else copyOwnedNotes(sourceDir, directory);
+        else copyOwnedNotes(sourceDir, notesDir);
       }
       write(
         join(target, "notes.json"),
-        notesSettings(directory, notes.maxContextBytes),
+        notesSettings(notesDir, notes.maxContextBytes),
       );
       created.push(join(target, "notes.json"));
     }
+    // A template with identity.json is another identity being forked.
+    seedBundledNotes(notesDir, existsSync(join(template, "identity.json")));
     return target;
   } catch (error) {
     for (const path of created) rmSync(path, { recursive: true, force: true });

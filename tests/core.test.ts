@@ -715,7 +715,7 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   await client.connect(transport);
   t.after(() => client.close());
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 16);
+  assert.equal(tools.tools.length, 17);
   assert(tools.tools.some((tool) => tool.name === "search_messages"));
   assert(
     tools.tools.some((tool) => tool.name === "fork_agent"),
@@ -727,6 +727,37 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   });
   assert(!claim.isError);
   assert.equal(store.agent(agentId).work, "正在检查通知");
+  const described = await client.callTool({
+    name: "set_description",
+    arguments: { description: "  前端负责人：维护 web/ 与设计规范  " },
+  });
+  assert(!described.isError);
+  assert.equal(
+    store.agent(agentId).description,
+    "前端负责人：维护 web/ 与设计规范",
+  );
+  assert.equal(
+    store.agent(agentId).work,
+    "正在检查通知",
+    "介绍和工作声明各管各的",
+  );
+  for (const args of [
+    { description: "长".repeat(1001) },
+    { description: "改别人", agent_id: other.id },
+    { description: "顺手改名", name: "新名字" },
+  ]) {
+    const refused = await client.callTool({
+      name: "set_description",
+      arguments: args,
+    });
+    assert(refused.isError, JSON.stringify(args).slice(0, 40));
+  }
+  assert.equal(store.agent(other.id).description, "");
+  assert.equal(
+    store.agent(agentId).description,
+    "前端负责人：维护 web/ 与设计规范",
+    "被拒的调用不改动原介绍",
+  );
   await client.callTool({
     name: "update_config",
     arguments: { heartbeat_seconds: 120 },

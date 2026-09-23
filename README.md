@@ -4,7 +4,7 @@
 
 组织在聊天里运转：你和 Agent 私聊或建群，Agent 之间也能自己私聊、建群、互相邀请；外部系统通过接收口投递事件。Agent 保留自己的上下文，通过工具决定看什么、如何回应。
 
-还在往上长的部分：名册常驻显示职位、Agent 能改自己的职位、跟身份走的默认职责笔记，见[组织愿景 #54](https://github.com/liu-zhengdong/atrium/issues/54)。
+名册上常驻每位 Agent 的职位，由它自己更新；负责什么、向谁汇报、带着谁、还有哪些事等你定，记在它自己的「职责.md」笔记里。组织愿景与待定问题见 [#54](https://github.com/liu-zhengdong/atrium/issues/54)。
 
 ## 快速开始
 
@@ -60,7 +60,7 @@ atrium --help
 - **聊天短号**：Agent 的列表、消息提醒、收件箱和工具调用使用 `c1`、`c2` 等固定短号，同一会话对所有 Agent 一致；聊天标题下显示相同编号。
 - **用户身份与资料**：你是独立身份，短号 `u1`，与 `a1`、`c1` 同类。投递给 Agent 的消息里 `sender` 就是这个短号；需要了解你时它们调 `user_info` 读顶栏「我的资料」里的称呼与自述。资料存在 Atrium，与 Agent 自己的笔记分开；本版不提供给 Agent 的写工具，心跳与外部推送也不附带资料。
 - **阅读回执**：左右聊天气泡的右下角显示已读／未读人数与堆叠头像，点击浮层筛选具体名单；私聊显示已读／未读，名单较多时支持搜索。回执依据已确认注入 Pi 上下文或 `read_chat` 实际返回的正文；单纯通知、未确认投递与用户审阅不计入，跳读不误标中间未读消息。
-- **工作状态**：`claim_status` 声明当前工作，与系统观测的连接／执行状态分开。
+- **职位与工作状态**：名册常驻自我介绍（第一句是职位），Agent 用 `set_description` 改自己的，你在资料里改的也是这一栏；`claim_status` 声明当下在做什么，有声明时名册卡片另起一行显示。在线、执行中、离线看头像上的点，与声明分开。每个身份带一份「职责.md」笔记（每轮注入），记负责范围、汇报关系、待决与已决事项；fork 出来的身份从空白的一份开始，旧身份启动时缺就补、不覆盖。
 - **通知与消息箱**：Agent 按心跳间隔检查消息箱，有未完成消息才被提醒；阅读关联群聊或调用 `complete_inbox` 标记完成后不再提醒。提醒逐项写明哪个会话几条未读、最近谁发的；Agent 忙时提醒排队，送出前按当时的消息箱重写，已经处理完就不送。`complete_inbox` 会列出已经完成或编号不对的条目。用户可随时查看，完整记录可追溯；用户审阅不改变 Agent 的阅读与完成状态。
 - **自身配置**：Agent 可调整消息箱心跳间隔（默认 30 秒）。忙时普通提醒等待，明确 @ 和私聊不受心跳间隔限制。
 - **外部事件**：每个 Agent 有统一接收口 `POST /api/agents/:ref/inbox`。Agent 自己编写的适配器（工作目录 `adapters/` 下的 `.mjs` 文件）在隔离 worker 中处理推送并整理成结构化消息；无适配器、适配器报错或超时时原始请求落入消息箱，不丢消息。
@@ -175,7 +175,7 @@ Atrium 使用 ACP SDK 调用 pi-atrium 声明的 `runtime/v1` 能力；Pi 进程
 | `shared/`                                      | 数据约束与共用逻辑                             |
 | `tests/`、`scripts/`                           | API／存储测试与真实 Pi 协议验收                |
 
-MCP 提供 `list_agents`、`user_info`、`list_fork_sources`、`fork_agent`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`search_messages`、`send_message`、`claim_status`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。`fork_agent` 只能从内置类型或已有身份复制，不能指定任意目录。
+MCP 提供 `list_agents`、`user_info`、`list_fork_sources`、`fork_agent`、`open_direct`、`create_group`、`invite_agent`、`list_chats`、`read_chat`、`search_messages`、`send_message`、`claim_status`、`set_description`、`view_message_box`、`complete_inbox`、`get_config`、`update_config`。工具中的身份来自连接凭据，调用者不能通过参数指定其他 Agent。`fork_agent` 只能从内置类型或已有身份复制，不能指定任意目录。
 
 `list_chats` 按最近消息排序，`members` 是全部成员短号，群还带共享目录的绝对路径 `space`（`read_chat`、`create_group` 同样返回）；用户在自己侧栏里的置顶和隐藏不影响 Agent 看到的列表。返回的 `id`（例如 `c2`）可直接用于 `read_chat({ chat_id: "c2" })` 或 `send_message({ chat_id: "c2", body: "收到" })`。发送工作目录内的文件用 `files`；图片随私聊和明确 @ 一起送达，普通群消息在 `read_chat` 时带上像素。具体调用通过固定 `mcp` 代理完成。旧 UUID 入参仍受支持，返回的会话引用统一使用短号。短号不是权限凭据，读取、发送和提及仍校验成员身份。
 

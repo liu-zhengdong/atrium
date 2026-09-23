@@ -243,6 +243,30 @@ h3 {
   border-left: 2px solid #c5bb9f;
   color: #7c7667;
 }
+/* 表格由 react-markdown 生成，写不了 className，只能按后代选择器写在这里。
+   太宽的表在自己这一块里横向滚动，不撑开气泡或抽屉。 */
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+/* 单元格不沿用 .markdown 的任意处断行：那样列宽会被压到一两个字，英文词从中间断开。 */
+.markdown th,
+.markdown td {
+  border: 1px solid #e4e1d8;
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: normal;
+}
+.markdown th {
+  background: #f6f5f0;
+  font-weight: 550;
+}
 .empty {
   display: flex;
   flex: 1;

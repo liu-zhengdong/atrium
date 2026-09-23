@@ -1,21 +1,12 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import Markdown from "react-markdown";
+import { RichText } from "../components/RichText.tsx";
 import type { Message } from "../../shared/schema.ts";
 import type { Expanded } from "./useFolds.ts";
 
 /** 正文渲染高度超过 FOLD_OVER 才折叠，折起后留 FOLDED 高；只多出两三行的不折。 */
 const FOLD_OVER = 420;
 const FOLDED = 260;
-
-const components = {
-  a: (props: React.ComponentProps<"a">) => (
-    <a {...props} target="_blank" rel="noreferrer" />
-  ),
-  img: ({ alt }: React.ComponentProps<"img">) => (
-    <span>[图片：{alt || "未加载"}]</span>
-  ),
-};
 
 export function MessageBody({
   message,
@@ -41,7 +32,7 @@ export function MessageBody({
         }
         style={folded ? { maxHeight: FOLDED } : undefined}
       >
-        <Markdown components={components}>{message.body}</Markdown>
+        <RichText>{message.body}</RichText>
       </div>
       {tall && (
         <Toggle
@@ -66,7 +57,7 @@ export function MessageBody({
           />
           {expanded.details && (
             <div className="mt-1.5 border-t border-black/[0.07] pt-2">
-              <Markdown components={components}>{message.details}</Markdown>
+              <RichText>{message.details}</RichText>
             </div>
           )}
         </>

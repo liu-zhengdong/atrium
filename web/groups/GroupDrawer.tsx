@@ -5,9 +5,11 @@ import type { Agent } from "../components/AgentAvatar.tsx";
 import { Modal } from "../components/Modal.tsx";
 import { MemberList } from "./MemberList.tsx";
 import { GroupProfile } from "./GroupProfile.tsx";
+import { GroupSpace } from "./GroupSpace.tsx";
 
 const TABS = [
   { id: "members", label: "成员" },
+  { id: "space", label: "共享目录" },
   { id: "profile", label: "资料" },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
@@ -16,6 +18,7 @@ type Tab = (typeof TABS)[number]["id"];
 export function GroupDrawer({
   chat,
   agents,
+  revision,
   close,
   changed,
   openRecords,
@@ -23,6 +26,7 @@ export function GroupDrawer({
 }: {
   chat: Overview["chats"][number];
   agents: Agent[];
+  revision: number;
   close: () => void;
   changed: () => void;
   openRecords: () => void;
@@ -61,6 +65,7 @@ export function GroupDrawer({
             openAgent={openAgent}
           />
         )}
+        {tab === "space" && <GroupSpace chatId={chat.id} revision={revision} />}
         {tab === "profile" && <GroupProfile chat={chat} saved={changed} />}
       </div>
       <footer className="flex-none border-t border-line px-5 py-3">

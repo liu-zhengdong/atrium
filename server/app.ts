@@ -1,8 +1,9 @@
 import Fastify, { type FastifyRequest } from "fastify";
 import staticFiles from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { mkdirSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, existsSync, createReadStream } from "node:fs";
+import { basename, join, resolve } from "node:path";
+import { spaceFileKind } from "../shared/space.ts";
 import { z } from "zod";
 import {
   id,
@@ -436,6 +437,28 @@ export async function createApp(options: {
     if (a.direct_agent) void runtimes?.pump(a.direct_agent);
     changed();
     return result;
+  });
+  // 群共享目录：列文件、读单个文件。路径校验只在 GroupSpaces.file 一处。
+  app.get("/api/chats/:id/space", (request) =>
+    store.spaces.list(store.chat(agentParams(request))),
+  );
+  app.get("/api/chats/:id/space/file", (request, reply) => {
+    const { path } = z
+      .object({ path: z.string().min(1).max(500) })
+      .parse(request.query);
+    const file = store.spaces.file(store.chat(agentParams(request)), path);
+    const { kind, mime } = spaceFileKind(path);
+    // 文件是 Agent 写的，内容不受信：只按扩展名给安全的类型，直接打开也不跑脚本、不嗅探类型。
+    return reply
+      .type(mime)
+      .header(
+        "Content-Disposition",
+        `${kind === "other" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(basename(path))}`,
+      )
+      .header("Content-Security-Policy", "sandbox")
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Cache-Control", "no-store")
+      .send(createReadStream(file));
   });
   app.get("/api/chats/:id", (request) => {
     const chatId = agentParams(request);

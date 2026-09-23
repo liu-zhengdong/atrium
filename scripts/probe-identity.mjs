@@ -209,5 +209,9 @@ export async function verifyIdentity({
         execFileSync("tmux", ["kill-session", "-t", tmux]);
       } catch {}
     }
+    // 按用户入口执行的 atrium list 会在后台拉起服务；验完停掉，别占着默认端口挡住用户自己的服务。
+    try {
+      execFileSync(command, ["stop"], { env, stdio: "ignore" });
+    } catch {}
   }
 }

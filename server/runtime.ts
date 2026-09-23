@@ -121,8 +121,9 @@ export class Runtimes {
     private baseUrl: () => string,
     private piHome: string | undefined,
     private desktops: string,
+    private redact: (agent: string, text: string) => string = (_, text) => text,
   ) {
-    this.traces = new TraceStore(store);
+    this.traces = new TraceStore(store, redact);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
     this.interval = setInterval(() => {
       void this.tick();
@@ -547,10 +548,12 @@ export class Runtimes {
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
+      const message = this.redact(id, String(error));
       if (!this.stopped) {
-        this.errors.set(id, String(error));
+        this.errors.set(id, message);
         this.changed();
       }
+      if (message !== String(error)) throw new Error(message);
       throw error;
     });
     this.connecting.set(id, promise);
@@ -621,7 +624,13 @@ export class Runtimes {
       if (cwd !== current.cwd) this.changed();
       if (current.agent_directory) {
         // A profile left on the old layout costs the Agent a rule, not its session.
-        for (const notice of syncIdentityProfile(current.agent_directory))
+        for (const notice of syncIdentityProfile(
+          current.agent_directory,
+          this.store.one<{ mode: string }>(
+            "SELECT mode FROM credential_modes WHERE agent_id=?",
+            current.id,
+          )?.mode !== "assigned",
+        ))
           console.error(`${current.name} 的${notice}`);
         const configured = readIdentityModel(current.agent_directory);
         const { runtimeId } = await this.rpc<{ runtimeId: string }>(
@@ -867,13 +876,16 @@ export class Runtimes {
           this.changed();
         } catch (error) {
           if (!this.stopped)
-            this.store.deliveryError(pending.id, String(error));
+            this.store.deliveryError(
+              pending.id,
+              this.redact(id, String(error)),
+            );
           break;
         }
       }
     } catch (error) {
       if (!this.stopped) {
-        this.errors.set(id, String(error));
+        this.errors.set(id, this.redact(id, String(error)));
         this.changed();
       }
     }

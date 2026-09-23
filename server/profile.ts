@@ -469,7 +469,7 @@ export function linkSharedCredentials(
  * path. The bundled packages must land — without them the identity has no
  * bridge; the rest is best effort and returns what the caller should report.
  */
-export function syncIdentityProfile(directory: string) {
+export function syncIdentityProfile(directory: string, shared = true) {
   syncIdentityPackages(directory);
   const left: string[] = [];
   try {
@@ -478,11 +478,12 @@ export function syncIdentityProfile(directory: string) {
     // The message already names every part that stayed shared.
     left.push(`配置未能转成自有副本：${error}`);
   }
-  try {
-    linkSharedCredentials(directory);
-  } catch (error) {
-    left.push(`凭据未能接上共享文件：${error}`);
-  }
+  if (shared)
+    try {
+      linkSharedCredentials(directory);
+    } catch (error) {
+      left.push(`凭据未能接上共享文件：${error}`);
+    }
   return left;
 }
 

@@ -17,6 +17,7 @@ import {
 } from "../shared/schema.ts";
 import { modelSpec } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
+import { Accounts } from "./accounts.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
 import {
@@ -52,6 +53,8 @@ export async function createApp(options: {
     mode: 0o700,
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
+  const accounts = new Accounts(store, options.data);
+  if (options.runtime !== false) accounts.start();
   const app = Fastify({
     logger: { level: "warn" },
     bodyLimit: 11 * 1024 * 1024,
@@ -76,13 +79,16 @@ export async function createApp(options: {
           },
           piHome,
           desktops,
+          (agent, text) => accounts.redact(agent, text),
         );
-  const traces = runtimes?.traces ?? new TraceStore(store);
+  const traces =
+    runtimes?.traces ??
+    new TraceStore(store, (agent, text) => accounts.redact(agent, text));
   // 统一接收口接受任意内容类型；JSON 走默认解析器，其余保留原始文本。
   app.addContentTypeParser("*", { parseAs: "buffer" }, (_request, body, done) =>
     done(null, body),
   );
-  app.setErrorHandler((error, _, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     const status =
       error instanceof z.ZodError
         ? 400
@@ -101,7 +107,12 @@ export async function createApp(options: {
               ? error.message
               : String(error),
     });
-    if (status >= 500) app.log.error(error);
+    // Credential JSON parse failures can include a slice of the token in their exception.
+    if (status >= 500) {
+      if (/^\/api\/(accounts|assign|credentials)(\/|$)/.test(request.url))
+        app.log.error("账号操作失败（详情已隐藏，避免凭据进入日志）");
+      else app.log.error(error);
+    }
   });
   app.addHook("onRequest", async (request, reply) => {
     reply
@@ -136,6 +147,82 @@ export async function createApp(options: {
       throw new Problem(401, "Agent 凭据无效");
     return agentId;
   };
+  const accountRef = (request: FastifyRequest) =>
+    z.object({ ref: z.string() }).parse(request.params).ref;
+  const identityRef = (request: FastifyRequest) =>
+    store.resolveAgentId(
+      z.object({ agent: z.string() }).parse(request.params).agent,
+    );
+  app.get("/api/accounts", () => accounts.list());
+  app.post("/api/accounts", (request) => {
+    const { provider, name, key } = z
+      .object({
+        provider: z.string(),
+        name: z.string().trim().min(1).max(80),
+        key: z.string().min(1),
+      })
+      .strict()
+      .parse(request.body);
+    return accounts.add(provider, name, key);
+  });
+  app.post("/api/accounts/login", (request) => {
+    const { provider, name } = z
+      .object({ provider: z.string(), name: z.string().trim().min(1).max(80) })
+      .strict()
+      .parse(request.body);
+    return accounts.login(provider, name);
+  });
+  app.get("/api/accounts/:ref/login", (request) => {
+    const after = z.coerce
+      .number()
+      .int()
+      .min(0)
+      .parse((request.query as { after?: unknown }).after ?? 0);
+    return accounts.loginEvents(accountRef(request), after);
+  });
+  app.post("/api/accounts/:ref/login/answer", (request) => {
+    const { value } = z
+      .object({ value: z.string().nullable() })
+      .strict()
+      .parse(request.body);
+    return accounts.answer(accountRef(request), value);
+  });
+  app.post("/api/accounts/:ref/login/cancel", (request) =>
+    accounts.cancel(accountRef(request)),
+  );
+  app.patch("/api/accounts/:ref", (request) => {
+    const { name } = z
+      .object({ name: z.string().trim().min(1).max(80) })
+      .strict()
+      .parse(request.body);
+    return accounts.rename(accountRef(request), name);
+  });
+  app.delete("/api/accounts/:ref", (request) =>
+    accounts.remove(accountRef(request)),
+  );
+  app.get("/api/credentials/:agent", (request) =>
+    accounts.switchMode(identityRef(request)),
+  );
+  app.put("/api/credentials/:agent", (request) => {
+    const { mode } = z
+      .object({ mode: z.enum(["shared", "assigned"]) })
+      .strict()
+      .parse(request.body);
+    return accounts.switchMode(identityRef(request), mode);
+  });
+  app.post("/api/assign/:agent", (request) => {
+    const { account } = z
+      .object({ account: z.string() })
+      .strict()
+      .parse(request.body);
+    return accounts.assign(identityRef(request), account);
+  });
+  app.delete("/api/assign/:agent/:provider", (request) => {
+    const { provider } = z
+      .object({ provider: z.string() })
+      .parse(request.params);
+    return accounts.unassign(identityRef(request), provider);
+  });
   app.get("/api/overview", () => {
     const discovery = runtimes?.directory() ?? {
       runtimes: [],
@@ -640,6 +727,7 @@ export async function createApp(options: {
     await runtimes?.close();
   });
   app.addHook("onClose", async () => {
+    await accounts.close();
     store.close();
   });
   return { app, store, runtimes };

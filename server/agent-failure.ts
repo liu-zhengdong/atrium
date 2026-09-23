@@ -10,7 +10,7 @@ export function agentTransition(state: AgentFailure, event: AgentEvent) {
     case "failure":
       return {
         failure: {
-          text: event.text.slice(0, 8192),
+          text: event.text,
           at: event.at,
           count: (state?.count ?? 0) + 1,
         },

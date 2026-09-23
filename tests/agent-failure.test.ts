@@ -42,7 +42,7 @@ test("Agent 状态事件矩阵：失败递增、成功清除、仅心跳被封�
   assert.equal(
     agentTransition(null, { kind: "failure", text: "x".repeat(9000), at: 1 })
       .failure?.text.length,
-    8192,
+    9000,
   );
 });
 

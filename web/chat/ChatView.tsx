@@ -2,7 +2,6 @@ import type { Overview } from "../../shared/schema.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { MessageComposer } from "./MessageComposer.tsx";
 import { MessageTimeline } from "./MessageTimeline.tsx";
-import { ChatHeader } from "./ChatHeader.tsx";
 import { ChatNotice } from "./ChatNotice.tsx";
 import { useConversation } from "./useConversation.ts";
 import { useAnchorScroll, useReadReporter } from "./useChatEffects.ts";
@@ -64,14 +63,6 @@ export function ChatView({
       )}
       {active && (
         <>
-          <ChatHeader
-            active={active}
-            members={members}
-            agents={agents}
-            openAgent={details}
-            openGroup={openGroup}
-            openRecords={openRecords}
-          />
           <ChatNotice notice={active.notice} />
           {directAgent?.error && (
             <p

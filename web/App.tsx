@@ -55,6 +55,10 @@ export function App() {
 
   function navigate(next: Section) {
     setSection(next);
+    if (next !== "chat") {
+      setGroupOpen(false);
+      setAgentId(null);
+    }
     setMobileOpen(false);
   }
   function selectChat(id: string) {
@@ -123,6 +127,9 @@ export function App() {
       <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-surface">
         <TopBar
           overview={overview}
+          section={section}
+          activeChat={active}
+          agents={overview?.agents ?? []}
           selectChat={selectChat}
           openAgent={(agent) => void openAgent(agent)}
           openingAgent={openingAgent}
@@ -130,6 +137,11 @@ export function App() {
           refresh={refresh}
           openMessage={(chat, message) => void openMessage(chat, message)}
           openUser={() => setModal("user")}
+          openGroup={() => {
+            setAgentId(null);
+            setGroupOpen(true);
+          }}
+          openRecords={() => openRecords(chatId)}
           toggleMobile={() => setMobileOpen(!mobileOpen)}
         />
         <div className="relative flex min-h-0 flex-1 overflow-hidden">

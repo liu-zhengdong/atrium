@@ -105,143 +105,149 @@ export function App() {
 
   return (
     <div
-      className={`app flex h-dvh min-h-[380px] flex-col overflow-hidden ${mobileOpen ? "mobile-list" : ""}`}
+      className={`app flex h-dvh min-h-[380px] overflow-hidden bg-surface-subtle font-sans text-ink ${mobileOpen ? "mobile-list" : ""}`}
     >
-      <TopBar
+      <Sidebar
         overview={overview}
+        section={section}
+        setSection={navigate}
+        chatId={chatId}
         selectChat={selectChat}
+        create={setModal}
         openAgent={(agent) => void openAgent(agent)}
         openingAgent={openingAgent}
+        connected={connected}
         details={setAgentId}
         refresh={refresh}
-        openMessage={(chat, message) => void openMessage(chat, message)}
-        openUser={() => setModal("user")}
       />
-      <div className="flex min-h-0 flex-1">
-        <Sidebar
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-surface">
+        <TopBar
           overview={overview}
-          section={section}
-          setSection={navigate}
-          chatId={chatId}
           selectChat={selectChat}
-          create={setModal}
           openAgent={(agent) => void openAgent(agent)}
           openingAgent={openingAgent}
-          connected={connected}
           details={setAgentId}
           refresh={refresh}
+          openMessage={(chat, message) => void openMessage(chat, message)}
+          openUser={() => setModal("user")}
+          toggleMobile={() => setMobileOpen(!mobileOpen)}
         />
-        <main className="main relative flex min-w-0 flex-1 flex-col bg-white">
-          <button
-            className="mobile-back icon-button"
-            aria-label="打开导航"
-            onClick={() => setMobileOpen(!mobileOpen)}
-          >
-            <ArrowLeft size={20} />
-          </button>
-          {(error || loadError) && (
-            <div
-              className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-[7px] border border-[#ecddc7] bg-[#faf1e6] px-[14px] py-2.5 text-xs text-[#8f673e]"
-              role="alert"
+        <div className="relative flex min-h-0 flex-1 overflow-hidden">
+          <main className="main relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
+            <button
+              className="mobile-back icon-button"
+              aria-label="打开导航"
+              onClick={() => setMobileOpen(!mobileOpen)}
             >
-              {error || loadError}
-              <button
-                className="underline"
-                onClick={() => {
-                  setError("");
-                  refresh();
-                }}
+              <ArrowLeft size={18} />
+            </button>
+            {(error || loadError) && (
+              <div
+                className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#e2d5c3] bg-[#fbf6ef] px-3.5 py-2.5 text-xs text-[#8f673e]"
+                role="alert"
               >
-                重试
-              </button>
-            </div>
-          )}
-          {!overview ? (
-            <Empty
-              icon={<LoaderCircle className="spin" size={26} />}
-              title="正在连接中庭"
-            >
-              <p>读取你的会话与 Agent。</p>
-            </Empty>
-          ) : (
-            <>
-              {section === "agents" && (
-                <AgentDirectory
-                  overview={overview}
-                  opening={openingAgent}
-                  openAgent={(agent) => void openAgent(agent)}
-                  details={setAgentId}
-                  create={() => setModal("agent")}
-                />
-              )}
-              {section === "records" && (
-                <RecordsView
-                  overview={overview}
-                  tab={recordTab}
-                  setTab={setRecordTab}
-                  filters={recordFilters}
-                  setFilters={setRecordFilters}
-                  openMessage={(chat, message) =>
-                    void openMessage(chat, message)
-                  }
-                />
-              )}
-              {section === "chat" && !active && (
-                <Empty
-                  icon={<MessageSquare size={26} />}
-                  title="从一段对话开始"
+                {error || loadError}
+                <button
+                  className="underline"
+                  onClick={() => {
+                    setError("");
+                    refresh();
+                  }}
                 >
-                  <p>选择一位 Agent，或从左侧打开已有会话。</p>
-                  <button className="button" onClick={() => navigate("agents")}>
-                    查看 Agent
-                  </button>
-                </Empty>
-              )}
-              {/* Keep the conversation mounted across navigation so per-chat drafts survive. */}
-              <ChatView
-                active={active}
-                chatId={chatId}
-                agents={overview.agents}
-                revision={revision}
-                hidden={section !== "chat"}
-                details={setAgentId}
-                refresh={refresh}
-                anchor={anchor}
-                clearAnchor={() => setAnchor(null)}
-                openGroup={() => {
-                  setAgentId(null);
-                  setGroupOpen(true);
-                }}
-                openRecords={() => openRecords(chatId)}
-              />
-            </>
+                  重试
+                </button>
+              </div>
+            )}
+            {!overview ? (
+              <Empty
+                icon={<LoaderCircle className="spin text-accent" size={24} />}
+                title="正在连接中庭"
+              >
+                <p>读取你的会话与 Agent。</p>
+              </Empty>
+            ) : (
+              <>
+                {section === "agents" && (
+                  <AgentDirectory
+                    overview={overview}
+                    opening={openingAgent}
+                    openAgent={(agent) => void openAgent(agent)}
+                    details={setAgentId}
+                    create={() => setModal("agent")}
+                  />
+                )}
+                {section === "records" && (
+                  <RecordsView
+                    overview={overview}
+                    tab={recordTab}
+                    setTab={setRecordTab}
+                    filters={recordFilters}
+                    setFilters={setRecordFilters}
+                    openMessage={(chat, message) =>
+                      void openMessage(chat, message)
+                    }
+                  />
+                )}
+                {section === "chat" && !active && (
+                  <Empty
+                    icon={<MessageSquare className="text-muted" size={26} />}
+                    title="从一段对话开始"
+                  >
+                    <p>选择一位 Agent，或从左侧打开已有会话。</p>
+                    <button
+                      className="button"
+                      onClick={() => navigate("agents")}
+                    >
+                      查看 Agent
+                    </button>
+                  </Empty>
+                )}
+                {/* Keep the conversation mounted across navigation so per-chat drafts survive. */}
+                <ChatView
+                  active={active}
+                  chatId={chatId}
+                  agents={overview.agents}
+                  revision={revision}
+                  hidden={section !== "chat"}
+                  details={setAgentId}
+                  refresh={refresh}
+                  anchor={anchor}
+                  clearAnchor={() => setAnchor(null)}
+                  openGroup={() => {
+                    setAgentId(null);
+                    setGroupOpen(true);
+                  }}
+                  openRecords={() => openRecords(chatId)}
+                />
+              </>
+            )}
+          </main>
+          {selectedAgent && (
+            <AgentDrawer
+              key={selectedAgent.id}
+              agent={selectedAgent}
+              revision={revision}
+              close={() => setAgentId(null)}
+              refresh={refresh}
+            />
           )}
-        </main>
+          {groupOpen && active?.kind === "group" && overview && (
+            <GroupDrawer
+              key={active.id}
+              chat={active}
+              agents={overview.agents}
+              revision={revision}
+              close={() => setGroupOpen(false)}
+              changed={refresh}
+              openRecords={() => openRecords(active.id)}
+              openAgent={(id) => {
+                setGroupOpen(false);
+                setAgentId(id);
+              }}
+            />
+          )}
+        </div>
       </div>
-      {selectedAgent && (
-        <AgentDrawer
-          key={selectedAgent.id}
-          agent={selectedAgent}
-          revision={revision}
-          close={() => setAgentId(null)}
-          refresh={refresh}
-        />
-      )}
-      {groupOpen && active?.kind === "group" && overview && (
-        <GroupDrawer
-          key={active.id}
-          chat={active}
-          agents={overview.agents}
-          revision={revision}
-          close={() => setGroupOpen(false)}
-          changed={refresh}
-          openRecords={() => openRecords(active.id)}
-          openAgent={(id) => {
-            setGroupOpen(false);
-            setAgentId(id);
-          }}
-        />
-      )}
       {modal === "agent" && (
         <CreateAgentDialog
           close={() => setModal(null)}

@@ -22,7 +22,7 @@ export function MessageBody({
   const tall = useTallContent(content);
   const folded = tall && !expanded.body;
   return (
-    <div className="markdown w-full min-w-0 rounded-[4px_13px_13px_13px] border border-[#eeede8] bg-[#f5f5f2] px-3.5 py-2.5 max-[560px]:px-3 max-[560px]:py-[9px] [.outgoing_&]:rounded-[13px_4px_13px_13px] [.outgoing_&]:border-[#e0e8f4] [.outgoing_&]:bg-[#eaf0fa]">
+    <div className="markdown w-full min-w-0 rounded-2xl border border-line bg-white px-4 py-3 shadow-[0_1px_3px_rgba(24,32,25,0.02)] max-[560px]:px-3.5 max-[560px]:py-2.5 [.outgoing_&]:border-[#d2e2d8] [.outgoing_&]:bg-[#edf5f1]">
       <div
         ref={content}
         className={
@@ -56,7 +56,7 @@ export function MessageBody({
             }
           />
           {expanded.details && (
-            <div className="mt-1.5 border-t border-black/[0.07] pt-2">
+            <div className="mt-2 rounded-lg border border-line/80 bg-surface-subtle p-3 text-xs">
               <RichText>{message.details}</RichText>
             </div>
           )}
@@ -80,10 +80,10 @@ function Toggle({
     <button
       type="button"
       aria-expanded={open}
-      className="mt-1 flex items-center gap-1 p-0 text-xs leading-6 text-[#8e816b] hover:text-[#5d5446]"
+      className="mt-1 flex items-center gap-1 p-0 text-xs font-medium leading-6 text-accent transition-colors hover:text-accent-strong"
       onClick={onClick}
     >
-      <Icon size={14} strokeWidth={2} aria-hidden />
+      <Icon size={13} strokeWidth={2} aria-hidden />
       {label}
     </button>
   );

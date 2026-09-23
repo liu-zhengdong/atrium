@@ -11,15 +11,17 @@
     sans-serif,
     "Apple Color Emoji",
     "Segoe UI Emoji";
-  color: #292925;
-  background: #fff;
+  color: #182019;
+  background: #f2f5f3;
   font-synthesis: none;
   line-height: 1.5;
-  --muted: #73736b;
-  --line: #e8e7e1;
-  --soft: #f5f4f0;
-  --accent: #76674c;
-  --ink: #33342f;
+  --muted: #5c685f;
+  --line: #dce3de;
+  --soft: #f2f6f3;
+  --accent: #4b6f5a;
+  --accent-hover: #3c5e4a;
+  --ink: #182019;
+  --surface: #ebf0ec;
 }
 * {
   box-sizing: border-box;
@@ -59,7 +61,7 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 summary:focus-visible {
-  outline: 2px solid #9c8b6c;
+  outline: 2px solid #7da68d;
 }
 /* 组合控件 / .field 自己承担焦点态，不再套一层系统描边。 */
 input.plain-field,
@@ -83,7 +85,7 @@ input.field:focus,
 textarea.field:focus,
 input.field:focus-visible,
 textarea.field:focus-visible {
-  border-color: #c4b9a4;
+  border-color: #4b6f5a;
 }
 button {
   border: 0;
@@ -95,7 +97,7 @@ a svg {
   flex-shrink: 0;
 }
 a {
-  color: #65533b;
+  color: #3c5e4a;
   text-underline-offset: 3px;
 }
 p,
@@ -139,30 +141,33 @@ h3 {
 @keyframes message-flash {
   0%,
   55% {
-    background: #f3e8cf;
+    background: #d7ebdf;
   }
   100% {
     background: transparent;
   }
 }
 .icon-button {
-  width: 29px;
-  height: 29px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
-  color: #7b796f;
+  color: #5f6c62;
   flex-shrink: 0;
+  transition:
+    background-color 150ms,
+    color 150ms;
 }
 .icon-button:hover {
-  background: #eeede6;
-  color: #3c3b34;
+  background: #e1e9e3;
+  color: #182019;
 }
 .badge {
   font-size: 10px;
-  color: #8a7150;
-  background: #eae4d7;
+  color: #204e35;
+  background: #d7e8dd;
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -196,7 +201,7 @@ h3 {
   line-height: 1.85;
   overflow-wrap: anywhere;
   max-width: 830px;
-  color: #42423c;
+  color: #28362b;
 }
 .markdown p {
   margin: 0 0 8px;
@@ -209,8 +214,9 @@ h3 {
 .notice pre {
   font-size: 12px;
   line-height: 1.7;
-  background: #f7f6f2;
-  padding: 13px;
+  background: #f2f6f4;
+  border: 1px solid #dfe6e1;
+  padding: 12px 14px;
   border-radius: 6px;
   overflow: auto;
   white-space: pre-wrap;
@@ -218,13 +224,16 @@ h3 {
 }
 .markdown code {
   font-size: 12px;
-  background: #f5f3ed;
+  background: #edf3ef;
+  color: #223f2f;
   border-radius: 4px;
   padding: 2px 4px;
 }
 .markdown pre code {
   background: none;
   padding: 0;
+  color: inherit;
+  border: none;
 }
 .markdown ul,
 .markdown ol {
@@ -240,8 +249,8 @@ h3 {
 .markdown blockquote {
   margin: 12px 0;
   padding-left: 14px;
-  border-left: 2px solid #c5bb9f;
-  color: #7c7667;
+  border-left: 2px solid #7da68d;
+  color: #5c685f;
 }
 /* 表格由 react-markdown 生成，写不了 className，只能按后代选择器写在这里。
    太宽的表在自己这一块里横向滚动，不撑开气泡或抽屉。 */
@@ -257,14 +266,14 @@ h3 {
 /* 单元格不沿用 .markdown 的任意处断行：那样列宽会被压到一两个字，英文词从中间断开。 */
 .markdown th,
 .markdown td {
-  border: 1px solid #e4e1d8;
+  border: 1px solid #dce3de;
   padding: 5px 9px;
   text-align: left;
   vertical-align: top;
   overflow-wrap: normal;
 }
 .markdown th {
-  background: #f6f5f0;
+  background: #edf3ef;
   font-weight: 550;
 }
 .empty {
@@ -277,75 +286,80 @@ h3 {
   padding: 45px 24px;
 }
 .empty h2 {
-  color: #4d493f;
+  color: #182019;
   margin-bottom: 10px;
 }
 .empty p {
   font-size: 13px;
-  color: #918879;
+  color: #606d64;
   line-height: 1.85;
-  max-width: 300px;
+  max-width: 320px;
   margin: 0 0 22px;
 }
 .empty .button {
   font-size: 12px;
-  padding: 9px 20px;
+  padding: 0 16px;
 }
 .button {
   display: inline-flex;
   justify-content: center;
   align-items: center;
   gap: 7px;
-  padding: 8px 15px;
-  border-radius: 7px;
-  border: 1px solid #3d4036;
-  background: #41443a;
+  padding: 0 13px;
+  border-radius: 6px;
+  border: 1px solid #3c5e4a;
+  background: #4b6f5a;
   color: #fff;
   font-size: 12px;
   font-weight: 500;
-  min-height: 35px;
+  min-height: 28px;
+  height: 28px;
+  transition:
+    background-color 150ms,
+    border-color 150ms;
 }
 .button:hover {
-  background: #515446;
+  background: #3c5e4a;
 }
 .button.secondary {
-  border-color: #e3dfd5;
-  color: #777164;
+  border-color: #d5ded7;
+  color: #354238;
   background: #fff;
 }
 .button.secondary:hover {
-  background: #f7f5ef;
+  background: #edf3ef;
+  border-color: #c0ccc3;
 }
 .error {
   padding: 10px 12px;
   margin: 10px 0;
-  color: #935b36;
-  background: #fbf1e6;
-  border: 1px solid #ebd9c0;
-  border-radius: 7px;
+  color: #9c3f2d;
+  background: #fcf2ef;
+  border: 1px solid #f2d2cb;
+  border-radius: 6px;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 dialog {
-  border: 1px solid #e2ded4;
-  border-radius: 12px;
+  border: 1px solid #d5ded7;
+  border-radius: 10px;
   padding: 0;
   width: 460px;
   max-width: calc(100% - 32px);
   max-height: 90dvh;
   overflow: auto;
-  box-shadow: 0 20px 80px #36291924;
+  box-shadow: 0 16px 48px rgba(18, 32, 22, 0.12);
   color: inherit;
 }
 dialog::backdrop {
-  background: #24251c35;
+  background: rgba(14, 25, 18, 0.35);
   backdrop-filter: blur(2px);
 }
 .temporary-runtimes {
   margin-top: 24px;
 }
 .temporary-runtimes > summary {
-  color: #6c6456;
+  color: #556258;
   font-size: 12px;
   cursor: pointer;
 }
@@ -354,7 +368,7 @@ dialog::backdrop {
 }
 input[type="checkbox"],
 input[type="radio"] {
-  accent-color: #6a7259;
+  accent-color: #4b6f5a;
 }
 .check-row {
   display: flex;
@@ -364,7 +378,7 @@ input[type="radio"] {
   margin: 0;
   padding: 7px 0;
   font-size: 12px;
-  color: #6c6456;
+  color: #556258;
 }
 .check-row .muted {
   margin-left: auto;
@@ -444,12 +458,12 @@ input[type="radio"] {
 .switch-row strong {
   font-weight: 500;
   font-size: 12px;
-  color: #5b5243;
+  color: #28362b;
 }
 .switch-row small {
   display: block;
   font-size: 11px;
-  color: #9b8f7b;
+  color: #6a776e;
   margin-top: 6px;
   max-width: 270px;
   line-height: 1.6;
@@ -459,14 +473,14 @@ input[type="radio"] {
   width: 32px;
   height: 19px;
   border-radius: 20px;
-  background: #dcd5c8;
+  background: #d0dad2;
   position: relative;
   flex-shrink: 0;
   transition: background 0.15s;
   cursor: pointer;
 }
 .switch-row input:checked {
-  background: #798068;
+  background: #4b6f5a;
 }
 .switch-row input:before {
   content: "";
@@ -487,8 +501,8 @@ input[type="radio"] {
   align-items: center;
   gap: 8px;
   padding: 8px 9px;
-  background: #f6f3ed;
-  border: 1px solid #eae3d7;
+  background: #f2f6f4;
+  border: 1px solid #dce3de;
   border-radius: 6px;
   margin: 10px 0;
 }
@@ -499,7 +513,7 @@ input[type="radio"] {
 }
 .path {
   font-size: 11px;
-  color: #9b8b70;
+  color: #5c685f;
   overflow-wrap: anywhere;
 }
 .connection-help {
@@ -507,14 +521,14 @@ input[type="radio"] {
 }
 .setup-help summary {
   font-size: 12px;
-  color: #857456;
+  color: #3c5e4a;
   cursor: pointer;
 }
 .runtime-info {
   display: grid;
   gap: 4px;
   font-size: 11px;
-  color: #978973;
+  color: #5c685f;
   margin: 12px 0;
   overflow-wrap: anywhere;
 }
@@ -530,7 +544,7 @@ input[type="radio"] {
   align-items: center;
   gap: 9px;
   font-size: 10px;
-  color: #9e9078;
+  color: #6d7b71;
   margin-bottom: 8px;
 }
 .notice-meta > span:last-child {
@@ -538,22 +552,23 @@ input[type="radio"] {
 }
 .notice h3 {
   font-size: 13px;
-  font-weight: 520;
+  font-weight: 550;
   line-height: 1.8;
   overflow-wrap: anywhere;
+  color: #182019;
 }
 .notice-body {
   white-space: pre-wrap;
   line-height: 1.85;
   font-size: 12px;
-  color: #8a7e69;
+  color: #435147;
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
 .notice details {
   margin-top: 9px;
   font-size: 11px;
-  color: #9c8a6c;
+  color: #5c685f;
 }
 .notice summary {
   cursor: pointer;
@@ -564,11 +579,11 @@ input[type="radio"] {
   gap: 3px;
   font-size: 11px;
   margin-top: 13px;
-  color: #8a724b;
+  color: #3c5e4a;
 }
 .setup-help {
-  border: 1px solid #ece7de;
-  background: #fcfbf8;
+  border: 1px solid #dce3de;
+  background: #f8faf8;
   border-radius: 8px;
   padding: 14px 16px;
   margin-bottom: 35px;
@@ -576,7 +591,7 @@ input[type="radio"] {
 .setup-help p {
   font-size: 11px;
   line-height: 1.9;
-  color: #9a8d75;
+  color: #5c685f;
   margin-top: 11px;
 }
 
@@ -661,13 +676,13 @@ input[type="radio"] {
   padding: 0;
 }
 .avatar-button:hover .avatar {
-  box-shadow: 0 0 0 2px #c7bcaa;
+  box-shadow: 0 0 0 2px #a8c4b2;
 }
 .avatar-button:focus-visible {
-  outline: 2px solid #8a7756;
+  outline: 2px solid #4b6f5a;
   outline-offset: 3px;
 }
 /* agent-row / agent-row-open 保留为标记类：行悬停加深是 :has 关系型规则。 */
 .agent-row:has(.agent-row-open:hover) {
-  background: #eeece5;
+  background: #e2eae4;
 }

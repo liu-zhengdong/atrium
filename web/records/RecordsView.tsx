@@ -31,15 +31,17 @@ export function RecordsView({
   const props = { filters, scoped, openMessage };
   return (
     <>
-      <header className="main-header flex h-[52px] flex-none items-center justify-between border-b border-[#eeede8] px-[35px] max-[720px]:px-[22px] max-[560px]:pl-[49px]">
+      <header className="main-header flex h-12 flex-none items-center justify-between border-b border-line bg-surface/80 px-6 backdrop-blur-sm max-[720px]:px-4 max-[560px]:pl-12">
         <div className="min-w-0">
-          <h1 className="truncate text-[15px] font-semibold">聊天记录</h1>
-          <p className="mt-px truncate text-[11px] text-[#959084]">
-            {scopeName ? `只看「${scopeName}」` : "全部会话"}
+          <h1 className="truncate text-sm font-semibold text-ink">聊天记录</h1>
+          <p className="mt-0.5 truncate text-[11px] text-muted">
+            {scopeName
+              ? `只看「${scopeName}」`
+              : "集中检索全部会话的历史与附件"}
           </p>
         </div>
         <nav
-          className="flex gap-1"
+          className="flex items-center gap-1 rounded-lg bg-[#e8ecea] p-1"
           role="tablist"
           aria-label="聊天记录内容类型"
         >
@@ -48,10 +50,10 @@ export function RecordsView({
               key={item.id}
               role="tab"
               aria-selected={tab === item.id}
-              className={`rounded-[7px] px-3 py-1.5 text-[12.5px] ${
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-all ${
                 tab === item.id
-                  ? "bg-[#eeede7] font-[550] text-ink"
-                  : "text-[#8e8779] hover:bg-[#f2f1ec]"
+                  ? "bg-white font-semibold text-ink shadow-[0_1px_2px_rgba(24,32,25,0.05)]"
+                  : "text-muted hover:text-ink"
               }`}
               onClick={() => setTab(item.id as RecordTab)}
             >

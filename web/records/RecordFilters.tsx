@@ -4,10 +4,11 @@ import { LOCAL_USER } from "../../shared/user.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { emptyFilters, type RecordFilters } from "./query.ts";
 
-// select 、input[type=date] 、关键词框的原生高度各不相同（实测 33 / 37 / 36px），统一钉到 36px。
-const control = "h-9 rounded-[7px] border border-line bg-white";
-const select = `${control} px-2.5 text-[12.5px] text-ink`;
-const label = "text-[11px] text-[#8b8577]";
+// 控件高度统一到 28px（符合 Qoder 桌面紧凑标准），字号 12px。
+const control =
+  "h-7 rounded-lg border border-line bg-white shadow-[0_1px_2px_rgba(24,32,25,0.02)]";
+const select = `${control} px-2 text-xs text-ink outline-none focus:border-accent focus:ring-1 focus:ring-accent/20`;
+const label = "text-[11px] font-medium text-muted";
 
 /** 会话、发送者、时间范围、关键词。三块内容共用这一条。 */
 export function RecordFilterBar({
@@ -32,21 +33,21 @@ export function RecordFilterBar({
     filters.to !== "" ||
     filters.q !== "";
   return (
-    <div className="flex flex-wrap items-end gap-x-3 gap-y-2.5 border-b border-[#eeede8] px-[35px] py-3 max-[720px]:px-[22px]">
-      <div className="flex min-w-[220px] flex-1 flex-col gap-1">
+    <div className="flex flex-wrap items-end gap-x-3 gap-y-2 border-b border-line bg-surface/50 px-6 py-2.5 max-[720px]:px-4">
+      <div className="flex min-w-[200px] flex-1 flex-col gap-1">
         <label className={label} htmlFor="record-q">
           关键词
         </label>
         {/* 图标与 input 并排，不用绝对定位——.field 的背景会盖掉它。 */}
         <div
-          className={`${control} flex items-center gap-2 px-3 focus-within:border-[#c4b9a4]`}
+          className={`${control} flex items-center gap-1.5 px-2.5 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/20`}
         >
-          <Search size={15} className="flex-none text-[#a09b8d]" />
+          <Search size={14} className="flex-none text-muted" />
           <input
             id="record-q"
-            className="plain-field min-w-0 flex-1 border-0 bg-transparent text-[13px] text-ink"
+            className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink placeholder:text-muted/70 outline-none"
             value={filters.q}
-            placeholder="消息正文或文件名"
+            placeholder="搜索消息正文或文件名..."
             autoComplete="off"
             onChange={(e) => patch({ q: e.target.value })}
           />
@@ -114,7 +115,7 @@ export function RecordFilterBar({
       </div>
       {dirty && (
         <button
-          className="flex items-center gap-1 rounded-[7px] px-2 py-[7px] text-[12px] text-[#8b8577] hover:bg-[#f2f1ec]"
+          className="flex h-7 items-center gap-1 rounded-lg px-2.5 text-xs text-muted transition-colors hover:bg-[#edf3ef] hover:text-ink"
           onClick={() => setFilters(emptyFilters)}
         >
           <X size={13} />

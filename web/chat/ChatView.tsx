@@ -2,7 +2,6 @@ import type { Overview } from "../../shared/schema.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { MessageComposer } from "./MessageComposer.tsx";
 import { MessageTimeline } from "./MessageTimeline.tsx";
-import { ChatHeader } from "./ChatHeader.tsx";
 import { ChatNotice } from "./ChatNotice.tsx";
 import { useConversation } from "./useConversation.ts";
 import { useAnchorScroll, useReadReporter } from "./useChatEffects.ts";
@@ -64,14 +63,6 @@ export function ChatView({
       )}
       {active && (
         <>
-          <ChatHeader
-            active={active}
-            members={members}
-            agents={agents}
-            openAgent={details}
-            openGroup={openGroup}
-            openRecords={openRecords}
-          />
           <ChatNotice notice={active.notice} />
           {directAgent?.error && (
             <p
@@ -89,12 +80,12 @@ export function ChatView({
           )}
           {anchoredId && (
             <p
-              className="flex items-center justify-center gap-2.5 border-b border-[#eadfc8] bg-[#f6efe2] px-3 py-[7px] text-xs text-[#8a7150]"
+              className="flex items-center justify-center gap-2.5 rounded-lg bg-[#edf5f1] px-3 py-1.5 text-xs text-[#316e50]"
               role="note"
             >
               已定位到搜索到的消息
               <button
-                className="text-xs text-[#72634a] underline underline-offset-[3px]"
+                className="text-xs text-[#316e50] underline underline-offset-[3px]"
                 onClick={clearAnchor}
               >
                 回到最新

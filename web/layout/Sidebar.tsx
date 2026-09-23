@@ -10,6 +10,7 @@ import {
 import { unreadLabel, type Overview } from "../../shared/schema.ts";
 import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
+import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
 import {
   agentPresence,
@@ -19,20 +20,22 @@ import {
 } from "../components/AgentAvatar.tsx";
 export type Section = "agents" | "chat" | "records";
 
-const rowName = "truncate text-[13px] font-medium";
-const rowTime = "flex-none text-[10px] text-[#a8a394]";
+const rowName = "truncate text-xs font-semibold text-ink";
+const rowTime = "flex-none text-[10px] text-muted/70";
 const rowPreview =
-  "mt-0.5 min-w-0 flex-1 truncate text-[11px] leading-[1.6] text-[#858278]";
+  "mt-0.5 min-w-0 flex-1 truncate text-[11px] leading-[1.6] text-muted";
 const slotAction =
-  "relative flex h-[22px] w-[22px] items-center justify-center rounded-md text-[#6d6a5e] hover:bg-[#e4e2db] hover:text-[#3c3b34]";
+  "relative flex h-[22px] w-[22px] items-center justify-center rounded-md text-muted hover:bg-[#dce6df] hover:text-ink";
 const agentRow =
-  "agent-row flex w-full items-center gap-2.5 rounded-[7px] px-2.5 py-[9px] text-left hover:bg-[#efeee9]";
+  "agent-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[#edf3ef]";
 const sectionLabel =
-  "mb-1.5 flex items-center justify-between px-2.5 text-[11px] tracking-[0.025em] text-[#848176]";
-const hint = "px-[11px] py-[9px] text-xs text-[#969185]";
+  "mb-1.5 flex items-center justify-between px-2 text-[11px] font-medium tracking-[0.02em] text-muted";
+const hint = "px-2.5 py-2 text-xs text-muted/80";
 const navButton = (active: boolean) =>
-  `flex items-center gap-[11px] rounded-[7px] px-3 py-[9px] text-left text-[13px] text-[#77766e] hover:bg-[#efeee9] ${
-    active ? "bg-[#eeede7] font-[550] text-ink" : ""
+  `flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors ${
+    active
+      ? "bg-[#e2ebe4] text-accent-strong shadow-[inset_0_0_0_1px_rgba(75,111,90,0.12)]"
+      : "text-muted hover:bg-[#edf3ef] hover:text-ink"
   }`;
 export function Sidebar({
   overview,
@@ -69,64 +72,84 @@ export function Sidebar({
     refresh();
   }
   return (
-    <aside className="sidebar flex w-[258px] flex-none flex-col border-r border-line bg-surface px-3.5 pt-2 max-[720px]:w-[220px] max-[720px]:px-[9px]">
-      <nav aria-label="主导航" className="mb-3 grid gap-[3px]">
+    <aside className="sidebar flex h-full w-[250px] flex-none flex-col bg-surface-subtle pl-3.5 pr-2 py-3 max-[720px]:w-[220px] max-[720px]:px-2">
+      {/* 侧边栏顶部品牌：Qoder 桌面风格 */}
+      <div className="mb-4 flex items-center justify-between px-2">
+        <div className="flex items-center gap-2">
+          <Mark className="h-5 w-5 flex-none text-accent" />
+          <span className="text-[13px] font-semibold tracking-tight text-ink">
+            Atrium
+          </span>
+          <span className="rounded bg-[#e4ede6] px-1.5 py-0.5 text-[10px] font-medium text-accent-strong">
+            中庭
+          </span>
+        </div>
+      </div>
+
+      <nav aria-label="主导航" className="mb-3.5 grid gap-1">
         <button
           className={navButton(section === "chat")}
           onClick={() => setSection("chat")}
         >
-          <MessageSquare size={17} />
+          <MessageSquare size={15} />
           会话
         </button>
         <button
           className={navButton(section === "agents")}
           onClick={() => setSection("agents")}
         >
-          <Users size={17} />
+          <Users size={15} />
           Agents
+          {agents.length > 0 && (
+            <span className="ml-auto text-[10px] text-muted">
+              {agents.length}
+            </span>
+          )}
         </button>
         <button
           className={navButton(section === "records")}
           onClick={() => setSection("records")}
         >
-          <History size={17} />
+          <History size={15} />
           聊天记录
         </button>
       </nav>
       {section !== "agents" ? (
-        <div className="mb-6 flex min-h-0 flex-1 flex-col">
+        <div className="mb-4 flex min-h-0 flex-1 flex-col">
           <div className={sectionLabel}>
             会话
             <button
-              className="icon-button"
+              className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
               aria-label="新建会话"
               onClick={() => {
                 create("chat");
               }}
             >
-              <Plus size={16} />
+              <Plus size={15} />
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             {overview?.chats.map((chat) => (
               <div
                 key={chat.id}
-                className={`group/row relative rounded-[7px] ${
-                  chat.id === chatId ? "bg-[#eeede7]" : "hover:bg-[#efeee9]"
+                className={`group/row relative rounded-lg transition-colors ${
+                  chat.id === chatId
+                    ? "bg-[#e2ebe4] shadow-[inset_0_0_0_1px_rgba(75,111,90,0.12)]"
+                    : "hover:bg-[#edf3ef]"
                 }`}
               >
                 <button
-                  className="absolute inset-0 rounded-[7px]"
+                  className="absolute inset-0 rounded-lg"
                   onClick={() => selectChat(chat.id)}
                   aria-label={chat.name}
                 />
-                <div className="pointer-events-none relative flex items-center gap-2.5 p-2.5">
+                <div className="pointer-events-none relative flex items-center gap-2.5 p-2">
                   <ChatAvatar chat={chat} agents={agents} />
-                  <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2">
-                    <span className="flex min-w-0 items-center gap-2">
+                  <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1.5">
+                    <span className="flex min-w-0 items-center gap-1.5">
                       <strong className={rowName}>{chat.name}</strong>
                       {chat.pinned && (
-                        <Pin size={11} className="flex-none text-[#a09b8d]" />
+                        <Pin size={11} className="flex-none text-accent" />
                       )}
                     </span>
                     <span className="col-start-2 row-start-1 grid justify-items-end">
@@ -144,9 +167,9 @@ export function Sidebar({
                           }
                         >
                           {chat.pinned ? (
-                            <PinOff size={14} />
+                            <PinOff size={13} />
                           ) : (
-                            <Pin size={14} />
+                            <Pin size={13} />
                           )}
                         </button>
                         <button
@@ -156,11 +179,11 @@ export function Sidebar({
                             void setState(chat.id, { hidden: true })
                           }
                         >
-                          <EyeOff size={14} />
+                          <EyeOff size={13} />
                         </button>
                       </span>
                     </span>
-                    <span className="col-span-2 flex min-w-0 items-center gap-2">
+                    <span className="col-span-2 flex min-w-0 items-center gap-1.5">
                       <small className={rowPreview}>
                         {chat.preview ?? "开始这段对话"}
                       </small>
@@ -171,7 +194,7 @@ export function Sidebar({
                           </span>
                         ) : (
                           <span
-                            className="h-[7px] w-[7px] flex-none rounded-full bg-[#b6ac99]"
+                            className="h-1.5 w-1.5 flex-none rounded-full bg-accent"
                             title="有新动态"
                           />
                         ))}
@@ -186,17 +209,17 @@ export function Sidebar({
           </div>
         </div>
       ) : (
-        <div className="mb-6 min-h-0 flex-1 overflow-auto">
+        <div className="mb-4 min-h-0 flex-1 overflow-auto">
           <div className={sectionLabel}>
             Agents
             <button
-              className="icon-button"
+              className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
               aria-label="新建 Agent"
               onClick={() => {
                 create("agent");
               }}
             >
-              <Plus size={16} />
+              <Plus size={15} />
             </button>
           </div>
           {agents.map((a) => (
@@ -227,12 +250,12 @@ export function Sidebar({
           )}
         </div>
       )}
-      <footer className="workspace flex items-center gap-[7px] border-t border-line px-2.5 py-[18px] text-[11px] text-[#898579]">
+      <footer className="workspace flex items-center gap-2 border-t border-black/[0.04] px-2 pt-2.5 text-[11px] text-muted">
         <span
-          className={`h-[5px] w-[5px] rounded-full ${connected ? "bg-[#7b906f]" : "bg-[#c29758]"}`}
+          className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-accent" : "bg-amber-500"}`}
         />
-        {connected ? "本机工作区" : "正在重新连接…"}
-        <span className="ml-auto text-[#a5a093]">v0.1</span>
+        <span>{connected ? "本机工作区" : "正在连接…"}</span>
+        <span className="ml-auto text-[10px] text-muted/60">v0.1</span>
       </footer>
     </aside>
   );

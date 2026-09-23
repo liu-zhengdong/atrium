@@ -78,8 +78,8 @@ export function MessageTimeline({
               </button>
             )}
             {!messages.length && (
-              <div className="pb-[45px] pt-[30px] text-[#968972] [&_h2]:mb-[7px] [&_h2]:mt-[13px] [&_h2]:text-[#484236] [&_p]:text-xs [&_p]:text-[#a09584]">
-                <Hash size={27} />
+              <div className="mx-auto max-w-[840px] px-6 pb-10 pt-8 text-muted [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-ink [&_p]:text-xs [&_p]:text-muted">
+                <Hash size={24} className="text-muted" />
                 <h2>{active.name}</h2>
                 <p>
                   这是对话的开始。
@@ -101,20 +101,22 @@ export function MessageTimeline({
                 data-index={row.index}
                 ref={virtualizer.measureElement}
                 // 下一条是同一个人的后续发言就收窄间距；间距计入本行高度，测量才准。
-                className={`absolute inset-x-0 top-0 ${continuations[row.index + 1] ? "pb-3" : "pb-6"}`}
+                className={`absolute inset-x-0 top-0 ${continuations[row.index + 1] ? "pb-3" : "pb-5"}`}
                 style={{ transform: `translateY(${row.start}px)` }}
               >
-                <MessageRow
-                  message={message}
-                  continuation={continuations[row.index] ?? false}
-                  flash={flash === message.id}
-                  agents={agents}
-                  readState={readState}
-                  direct={active.kind === "direct"}
-                  details={details}
-                  expanded={expanded[message.id] ?? {}}
-                  toggle={toggle(message.id)}
-                />
+                <div className="mx-auto w-full max-w-[840px] px-6 max-[560px]:px-3">
+                  <MessageRow
+                    message={message}
+                    continuation={continuations[row.index] ?? false}
+                    flash={flash === message.id}
+                    agents={agents}
+                    readState={readState}
+                    direct={active.kind === "direct"}
+                    details={details}
+                    expanded={expanded[message.id] ?? {}}
+                    toggle={toggle(message.id)}
+                  />
+                </div>
               </div>
             );
           })}
@@ -172,21 +174,21 @@ function MessageRow({
       <div className="flex min-w-0 max-w-[min(78%,760px)] flex-col items-start max-[560px]:max-w-[calc(100%-44px)] [.outgoing_&]:items-end">
         {!continuation && (
           <div className="mb-[5px] flex min-h-[22px] items-center gap-2">
-            <strong className="text-xs font-[550]">{name}</strong>
+            <strong className="text-xs font-semibold text-ink">{name}</strong>
             {!isUserRef(message.sender) && (
-              <span className="rounded-[3px] border border-[#e7e6de] px-1 text-[9px] text-[#898779]">
+              <span className="rounded bg-[#e8eee9] px-1.5 py-0.5 text-[10px] font-medium text-muted">
                 Agent
               </span>
             )}
             {message.mention_all && (
               <span
-                className="rounded-[3px] bg-[#f1ece0] px-1 text-[9px] text-[#8a7a58]"
+                className="rounded bg-[#e2ede5] px-1.5 py-0.5 text-[10px] font-medium text-[#255a41]"
                 title="发给了群内每位成员"
               >
                 @全体
               </span>
             )}
-            <time className="text-[10px] text-[#949187]">
+            <time className="text-[10px] text-muted/70">
               {time(message.created_at)}
             </time>
           </div>

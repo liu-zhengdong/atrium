@@ -88,16 +88,16 @@ function FileCard({ item }: { item: Attachment }) {
     <a
       href={attachmentUrl(item.id)}
       download={item.name}
-      className="flex max-w-full items-center gap-2.5 rounded-[10px] border border-line-ui bg-white px-2.5 py-2 no-underline transition-colors hover:border-line-strong"
+      className="flex max-w-full items-center gap-2.5 rounded-xl border border-black/[0.05] bg-white px-3 py-2 no-underline shadow-[0_1px_3px_rgba(24,32,25,0.02)] transition-colors hover:border-black/[0.1] hover:bg-[#f9faf9]"
     >
-      <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-[#f4f1ea] text-[#8a8374]">
+      <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-[#edf3ef] text-accent">
         <FileText size={15} />
       </span>
       <span className="min-w-0 flex-1">
-        <strong className="block truncate text-[12px] font-[550] text-[#3f3e38]">
+        <strong className="block truncate text-xs font-medium text-ink">
           {item.name}
         </strong>
-        <span className="text-[10px] text-[#8e8779]">
+        <span className="text-[10px] text-muted">
           {formatSize(item.size)}
           {ext ? ` · ${ext.toUpperCase()}` : ""}
         </span>
@@ -224,7 +224,7 @@ export function StagedChip({
   onRemove: () => void;
 }) {
   return (
-    <span className="relative flex max-w-[170px] items-center gap-1.5 rounded-[10px] border border-line-ui bg-white py-1 pr-7 pl-1">
+    <span className="relative flex max-w-[170px] items-center gap-1.5 rounded-lg border border-black/[0.06] bg-white py-1 pr-7 pl-1 text-xs">
       {item.kind === "image" ? (
         <img
           src={attachmentUrl(item.id)}
@@ -232,16 +232,14 @@ export function StagedChip({
           className="h-8 w-8 flex-none rounded-md object-cover"
         />
       ) : (
-        <span className="grid h-8 w-8 flex-none place-items-center rounded-md bg-[#f4f1ea] text-[#8a8374]">
+        <span className="grid h-8 w-8 flex-none place-items-center rounded-md bg-[#edf3ef] text-accent">
           <FileText size={14} />
         </span>
       )}
-      <span className="min-w-0 truncate text-[11px] text-[#4a473e]">
-        {item.name}
-      </span>
+      <span className="min-w-0 truncate text-[11px] text-ink">{item.name}</span>
       <button
         type="button"
-        className="absolute top-1/2 right-1 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[#b8b2a2] hover:bg-[#f5f2ec] hover:text-[#57503f]"
+        className="absolute top-1/2 right-1 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted hover:bg-[#edf3ef] hover:text-ink"
         aria-label={`移除 ${item.name}`}
         onClick={onRemove}
       >

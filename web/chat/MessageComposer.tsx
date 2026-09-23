@@ -111,14 +111,18 @@ export function MessageComposer({
       ? `将通知 ${mention.mentionIds.length} 位 Agent`
       : "Enter 发送 · Shift + Enter 换行";
   return (
-    <div className="px-[35px] pb-[14px] min-[1450px]:px-[max(40px,calc((100vw-1160px)/2))] max-[720px]:px-5 max-[720px]:pb-3 max-[560px]:px-3 max-[560px]:pb-2.5">
+    <div className="mx-auto w-full max-w-[820px] px-5 pb-5 max-[720px]:px-3.5 max-[720px]:pb-3.5 max-[560px]:px-2.5 max-[560px]:pb-2.5">
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
       <form
-        className={`relative rounded-[11px] border bg-white shadow-[0_2px_4px_#312b1c04] transition-[border-color,background-color] duration-150 focus-within:border-[#c4b9a4] ${dragging ? "border-[#c4b9a4] bg-[#faf8f3]" : "border-[#dfdcd3]"}`}
+        className={`relative rounded-xl border bg-white shadow-[0_2px_14px_rgba(24,32,25,0.04)] transition-all duration-150 ${
+          dragging
+            ? "border-accent bg-[#f2f6f4] shadow-[0_0_0_1px_#4b6f5a]"
+            : "border-black/[0.06] hover:border-black/[0.1] focus-within:border-accent/40 focus-within:shadow-[0_4px_16px_rgba(43,79,58,0.06)]"
+        }`}
         onSubmit={send}
         onDragOver={(e) => {
           e.preventDefault();
@@ -142,7 +146,7 @@ export function MessageComposer({
           }}
         />
         {files.attached.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-[17px] pt-3">
+          <div className="flex flex-wrap gap-1.5 px-4 pt-3">
             {files.attached.map((item) => (
               <StagedChip
                 key={item.id}
@@ -154,7 +158,7 @@ export function MessageComposer({
         )}
         {mention.candidates.length > 0 && (
           <div
-            className="absolute bottom-[calc(100%+7px)] left-0 z-[2] w-[min(400px,100%)] rounded-[9px] border border-line bg-white p-[5px] shadow-[0_7px_28px_#30220d12]"
+            className="absolute bottom-[calc(100%+8px)] left-0 z-[2] w-[min(400px,100%)] rounded-xl border border-black/[0.05] bg-white p-1.5 shadow-[0_12px_32px_rgba(24,32,25,0.08),0_2px_8px_rgba(24,32,25,0.04)]"
             role="listbox"
             aria-label="提及 Agent"
           >
@@ -163,16 +167,18 @@ export function MessageComposer({
                 type="button"
                 role="option"
                 aria-selected={index === mention.index}
-                className={`flex w-full items-center gap-[11px] rounded-[5px] p-2.5 text-left ${
-                  index === mention.index ? "bg-[#f3f1ea]" : ""
+                className={`flex w-full items-center gap-2.5 rounded-lg p-2 text-left transition-colors ${
+                  index === mention.index
+                    ? "bg-[#edf5f1] text-ink"
+                    : "text-muted hover:bg-[#f2f6f4] hover:text-ink"
                 }`}
                 key={isAllOption(item) ? "all" : item.id}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => mention.choose(item)}
               >
                 {isAllOption(item) ? (
-                  <span className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-full bg-[#ece9df] text-[#7d7668]">
-                    <Users size={14} />
+                  <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-[#d7e8dd] text-[#204e35]">
+                    <Users size={13} />
                   </span>
                 ) : (
                   <Avatar
@@ -182,10 +188,10 @@ export function MessageComposer({
                   />
                 )}
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <strong className="text-xs font-[550]">
+                  <strong className="text-xs font-semibold text-ink">
                     {isAllOption(item) ? "全体成员" : item.name}
                   </strong>
-                  <small className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-[#8e8779]">
+                  <small className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-muted">
                     {isAllOption(item)
                       ? "群内每位成员都会立刻收到"
                       : item.work || runtimeLabel(item)}
@@ -200,7 +206,7 @@ export function MessageComposer({
         )}
         <textarea
           ref={textarea}
-          className="plain-field block max-h-[200px] min-h-[70px] w-full resize-none overflow-y-auto rounded-[11px] border-0 bg-transparent px-[17px] pb-1.5 pt-[17px] text-[13px] leading-[1.7] text-[#434137] placeholder:text-[#aaa396] max-[560px]:min-h-[66px]"
+          className="plain-field block max-h-[200px] min-h-[58px] w-full resize-none overflow-y-auto rounded-t-xl border-0 bg-transparent px-4 pb-1 pt-3.5 text-[13px] leading-[1.65] text-ink caret-accent placeholder:text-placeholder"
           aria-label="消息"
           placeholder={
             files.attached.length
@@ -231,19 +237,19 @@ export function MessageComposer({
             }
           }}
         />
-        <div className="flex items-center gap-[9px] px-2.5 pb-2.5 pt-1 text-[10px] text-[#a09b8d]">
+        <div className="flex items-center gap-1.5 px-3 pb-2.5 pt-0.5 text-xs text-muted">
           <button
             type="button"
-            className="icon-button"
+            className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
             aria-label="添加附件"
             disabled={files.uploading || files.full}
             onClick={() => picker.current?.click()}
           >
-            <Paperclip size={18} />
+            <Paperclip size={16} />
           </button>
           <button
             type="button"
-            className="icon-button"
+            className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
             aria-label="提及 Agent"
             onClick={() => {
               setDraft(`${draft}${draft && !draft.endsWith(" ") ? " " : ""}@`);
@@ -251,13 +257,13 @@ export function MessageComposer({
               textarea.current?.focus();
             }}
           >
-            <AtSign size={18} />
+            <AtSign size={16} />
           </button>
-          <span className="text-[10px] text-[#aaa395] max-[560px]:text-[9px]">
+          <span className="text-[11px] text-muted/75 max-[560px]:hidden">
             {hint}
           </span>
           <button
-            className="ml-auto flex h-[29px] w-[30px] flex-none items-center justify-center rounded-[7px] bg-[#45463c] text-white disabled:bg-[#e9e7de] disabled:text-[#b1aa99]"
+            className="ml-auto flex h-7 w-7 flex-none items-center justify-center rounded-md bg-accent text-white transition-colors hover:bg-accent-strong disabled:bg-[#e4ece6] disabled:text-[#9fb0a4]"
             aria-label="发送消息"
             disabled={
               (!draft.trim() && !files.attached.length) ||
@@ -266,14 +272,14 @@ export function MessageComposer({
             }
           >
             {sending ? (
-              <LoaderCircle className="spin" size={18} />
+              <LoaderCircle className="spin" size={15} />
             ) : (
-              <ArrowUp size={19} />
+              <ArrowUp size={15} />
             )}
           </button>
         </div>
       </form>
-      <p className="mx-0.5 mt-2 text-[10px] text-[#aaa395]">
+      <p className="mx-1 mt-1.5 text-center text-[10.5px] text-muted/60">
         {active.kind === "group"
           ? "普通消息按对方心跳节奏提醒；明确 @ 不等待，对方离线也会叫醒。"
           : "私聊不等待；对方离线就把它叫醒。"}

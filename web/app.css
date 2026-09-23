@@ -9,18 +9,26 @@
 /* 表单原语：替代原全局 input/label/fieldset 元素规则，避免穿透未迁移组件。 */
 .field {
   width: 100%;
-  min-height: 37px;
-  border: 1px solid #ddd7ca;
+  min-height: 35px;
+  border: 1px solid #d5ded7;
   border-radius: 6px;
-  padding: 9px 11px;
+  padding: 8px 11px;
   background: #fff;
   font-size: 12px;
   line-height: 18px;
-  color: #514a3e;
-  transition: border-color 150ms;
+  color: #182019;
+  transition:
+    border-color 150ms,
+    box-shadow 150ms;
 }
 .field::placeholder {
-  color: #b1a693;
+  color: #8a968d;
+}
+.field:focus,
+.field:focus-visible {
+  border-color: #4b6f5a;
+  outline: none;
+  box-shadow: 0 0 0 1px #4b6f5a;
 }
 textarea.field {
   line-height: 1.6;
@@ -31,20 +39,20 @@ textarea.field {
   flex-direction: column;
   gap: 8px;
   font-size: 12px;
-  color: #6c6456;
+  color: #556258;
   margin: 0 0 18px;
 }
 .form-title {
   font-size: 13px;
   font-weight: 600;
   line-height: 18px;
-  color: #33342f;
+  color: #182019;
 }
 dialog:has(.source-picker-open) {
   overflow: visible;
 }
 .member-picker {
-  border: 1px solid #e8e2d6;
+  border: 1px solid #dce3de;
   border-radius: 7px;
   padding: 12px;
   margin: 0 0 18px;
@@ -53,22 +61,24 @@ dialog:has(.source-picker-open) {
 }
 .member-picker-legend {
   font-size: 11px;
-  color: #968a75;
+  color: #7d8b80;
   padding: 0 5px;
 }
 
 @theme {
-  /* 与 style.css 既有暖灰调色板一致，迁移期间保持外观不变 */
-  --color-ink: #33342f;
-  --color-ink-deep: #292925;
-  --color-muted: #73736b;
-  --color-line: #e8e7e1;
-  --color-line-strong: #c9c2b2;
-  --color-soft: #f5f4f0;
-  --color-surface: #f8f7f4;
-  --color-accent: #76674c;
-  --color-placeholder: #a09b8d;
+  /* Qoder 森林主题（Forest Light）色彩与层级系统 */
+  --color-ink: #182019;
+  --color-ink-deep: #111712;
+  --color-muted: #5c685f;
+  --color-line: #dce3de;
+  --color-line-subtle: #e8eee9;
+  --color-line-strong: #b8c5bc;
+  --color-soft: #f2f6f3;
+  --color-surface: #ebf0ec;
+  --color-accent: #4b6f5a;
+  --color-accent-strong: #3c5e4a;
+  --color-placeholder: #8a968d;
   /* 附件等 UI 表面的统一描边与浮起阴影 */
-  --color-line-ui: #e2ddd2;
-  --shadow-lift: 0 1px 3px #332b1a14;
+  --color-line-ui: #d5ded7;
+  --shadow-lift: 0 1px 3px rgba(24, 32, 25, 0.05);
 }

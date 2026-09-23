@@ -2,7 +2,7 @@ import { useState } from "react";
 import { History } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
-import { Modal } from "../components/Modal.tsx";
+import { SidePanel } from "../components/SidePanel.tsx";
 import { MemberList } from "./MemberList.tsx";
 import { GroupProfile } from "./GroupProfile.tsx";
 import { GroupSpace } from "./GroupSpace.tsx";
@@ -34,9 +34,23 @@ export function GroupDrawer({
 }) {
   const [tab, setTab] = useState<Tab>("members");
   return (
-    <Modal title={chat.name} close={close} drawer>
+    <SidePanel
+      title={chat.name}
+      close={close}
+      badge={<span className="badge">群聊</span>}
+      actions={
+        <button
+          className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
+          aria-label="查找本群聊天记录"
+          title="查找本群聊天记录"
+          onClick={openRecords}
+        >
+          <History size={15} />
+        </button>
+      }
+    >
       <nav
-        className="flex flex-none gap-1 border-b border-line px-4"
+        className="flex flex-none gap-5 border-b border-black/[0.04] px-5"
         role="tablist"
         aria-label="群信息"
       >
@@ -45,10 +59,10 @@ export function GroupDrawer({
             key={item.id}
             role="tab"
             aria-selected={tab === item.id}
-            className={`-mb-px border-b-2 px-3 py-2.5 text-[12.5px] ${
+            className={`-mb-px border-b-2 pb-2.5 pt-2 text-xs transition-colors ${
               tab === item.id
-                ? "border-[#8a8172] font-[550] text-[#45463c]"
-                : "border-transparent text-[#8e8779] hover:text-[#5f5a4e]"
+                ? "border-accent font-medium text-accent-strong"
+                : "border-transparent text-muted hover:text-ink"
             }`}
             onClick={() => setTab(item.id)}
           >
@@ -68,16 +82,6 @@ export function GroupDrawer({
         {tab === "space" && <GroupSpace chatId={chat.id} revision={revision} />}
         {tab === "profile" && <GroupProfile chat={chat} saved={changed} />}
       </div>
-      <footer className="flex-none border-t border-line px-5 py-3">
-        <button
-          className="flex w-full items-center gap-2 rounded-[7px] px-2 py-2 text-left text-[12.5px] text-[#6f6a5e] hover:bg-[#f6f5f0]"
-          onClick={openRecords}
-        >
-          <History size={15} className="flex-none text-[#a39b8b]" />
-          查找聊天记录
-          <span className="muted small-text ml-auto">消息 · 图片 · 文件</span>
-        </button>
-      </footer>
-    </Modal>
+    </SidePanel>
   );
 }

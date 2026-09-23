@@ -49,36 +49,33 @@ export function MemberList({
         {inGroup.map((agent) => (
           <li
             key={agent.id}
-            className="group flex items-start gap-3 rounded-[9px] px-2 py-2.5 hover:bg-[#f6f5f0]"
+            className="group -mx-2.5 flex items-center gap-3 rounded-[8px] px-2.5 py-2 transition-colors hover:bg-[#edf5f1]"
           >
             <button
-              className="mt-0.5 flex-none"
+              className="flex-none"
               aria-label={`查看 ${agent.name} 的运行轨迹`}
               onClick={() => openAgent(agent.id)}
             >
-              <Avatar name={agent.name} presence={agentPresence(agent)} small />
+              <Avatar name={agent.name} presence={agentPresence(agent)} />
             </button>
             <div className="min-w-0 flex-1">
-              <p className="m-0 flex items-baseline gap-2 text-[13px] font-[550]">
+              <p className="m-0 flex items-baseline gap-2 text-[13px] font-[550] leading-[18px] text-ink">
                 <span className="truncate">{agent.name}</span>
                 <span className="muted small-text flex-none">{agent.ref}</span>
               </p>
-              <p className="m-0 mt-0.5 truncate text-[11.5px] text-[#7d7668]">
-                {agent.work || runtimeLabel(agent)}
-              </p>
-              {agent.description && (
-                <p className="m-0 mt-1 line-clamp-2 text-[11.5px] text-[#a09b8d]">
-                  {agent.description}
+              {(agent.work || agent.description) && (
+                <p className="m-0 mt-0.5 truncate text-xs leading-[16px] text-muted">
+                  {agent.work || agent.description}
                 </p>
               )}
             </div>
             <button
-              className="icon-button mt-0.5 flex-none opacity-0 group-hover:opacity-100 focus:opacity-100"
+              className="icon-button flex-none text-muted opacity-0 hover:text-red-600 group-hover:opacity-100 focus:opacity-100"
               aria-label={`把 ${agent.name} 移出群`}
               title="移出群"
               onClick={() => setRemoving(agent)}
             >
-              <UserMinus size={15} />
+              <UserMinus size={14} />
             </button>
           </li>
         ))}
@@ -86,12 +83,14 @@ export function MemberList({
       {!loading && !inGroup.length && (
         <p className="muted">这个群还没有成员。</p>
       )}
-      <button
-        className="button secondary mt-3 flex items-center gap-1.5"
-        onClick={() => setAdding(true)}
-      >
-        <Plus size={15} /> 添加成员
-      </button>
+      <div className="mt-4 flex justify-center">
+        <button
+          className="flex h-7 items-center justify-center gap-1.5 rounded-[6px] px-3 text-xs text-muted transition-colors hover:bg-[#edf5f1] hover:text-ink focus:outline-none"
+          onClick={() => setAdding(true)}
+        >
+          <Plus size={14} /> 添加成员
+        </button>
+      </div>
       {adding && (
         <AddMemberDialog
           chatId={chatId}

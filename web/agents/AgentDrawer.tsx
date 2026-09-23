@@ -9,7 +9,7 @@ import {
 import type { BoxMessage, Page, Preferences } from "../../shared/schema.ts";
 import { api } from "../api.ts";
 import { time } from "../time.ts";
-import { Modal } from "../components/Modal.tsx";
+import { SidePanel } from "../components/SidePanel.tsx";
 import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
 import { AgentModel } from "./AgentModel.tsx";
@@ -156,53 +156,59 @@ export function AgentDrawer({
     }
   }
   return (
-    <Modal title={agent.name} close={close} drawer>
-      <div className="flex items-center gap-[13px] px-[25px] py-[23px]">
+    <SidePanel
+      title={agent.name}
+      close={close}
+      badge={<span className="badge">{runtimeLabel(agent)}</span>}
+    >
+      <div className="flex items-center gap-[13px] border-b border-black/[0.04] bg-[#f9faf9] px-5 py-4">
         <Avatar name={agent.name} presence={agentPresence(agent)} />
         <div className="min-w-0">
-          <strong className="text-xs font-[550]">{runtimeLabel(agent)}</strong>
-          <p className="mt-[3px] text-xs text-[#978c78] [overflow-wrap:anywhere]">
-            <span className="muted">工作声明 · </span>
+          <strong className="text-xs font-semibold text-ink">
+            {runtimeLabel(agent)}
+          </strong>
+          <p className="mt-[2px] text-xs text-muted [overflow-wrap:anywhere]">
+            <span className="text-ink/60">工作声明 · </span>
             {agent.work || "尚未声明"}
           </p>
         </div>
       </div>
       <div
-        className="flex gap-[18px] border-b border-line px-[25px]"
+        className="flex gap-4 border-b border-black/[0.04] px-5"
         aria-label="Agent 信息"
       >
         <button
-          className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
+          className={`flex items-center gap-[7px] border-b-2 py-2.5 text-xs transition-colors ${
             tab === "trace"
-              ? "border-[#8a7756] text-[#574a36]"
-              : "border-transparent text-[#8c806d]"
+              ? "border-accent font-medium text-accent-strong"
+              : "border-transparent text-muted hover:text-ink"
           }`}
           onClick={() => setTab("trace")}
         >
-          <Activity size={16} />
+          <Activity size={15} />
           运行轨迹
         </button>
         <button
-          className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
+          className={`flex items-center gap-[7px] border-b-2 py-2.5 text-xs transition-colors ${
             tab === "box"
-              ? "border-[#8a7756] text-[#574a36]"
-              : "border-transparent text-[#8c806d]"
+              ? "border-accent font-medium text-accent-strong"
+              : "border-transparent text-muted hover:text-ink"
           }`}
           onClick={() => setTab("box")}
         >
-          <Inbox size={16} />
+          <Inbox size={15} />
           通知{" "}
           {agent.unread > 0 && <span className="badge">{agent.unread}</span>}
         </button>
         <button
-          className={`flex items-center gap-[7px] border-b-2 py-[11px] text-xs ${
+          className={`flex items-center gap-[7px] border-b-2 py-2.5 text-xs transition-colors ${
             tab === "settings"
-              ? "border-[#8a7756] text-[#574a36]"
-              : "border-transparent text-[#8c806d]"
+              ? "border-accent font-medium text-accent-strong"
+              : "border-transparent text-muted hover:text-ink"
           }`}
           onClick={() => setTab("settings")}
         >
-          <Settings2 size={16} />
+          <Settings2 size={15} />
           运行设置
         </button>
       </div>
@@ -446,7 +452,7 @@ export function AgentDrawer({
           )}
         </div>
       )}
-    </Modal>
+    </SidePanel>
   );
 }
 

@@ -5,7 +5,7 @@ import {
   useState,
   type KeyboardEvent as InputKeyEvent,
 } from "react";
-import { Search, X } from "lucide-react";
+import { Search, X, MessageSquare, Hash, Bot } from "lucide-react";
 import type { Chat, Overview, SearchResults } from "../../shared/schema.ts";
 import { patchChat, searchAll } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
@@ -21,12 +21,6 @@ type Hit =
   | { type: "agent"; id: string; agent: SearchResults["agents"][number] }
   | { type: "chat"; id: string; chat: Chat }
   | { type: "message"; id: string; message: SearchResults["messages"][number] };
-
-const sectionTitle = {
-  agent: "Agents",
-  chat: "会话",
-  message: "消息",
-} as const;
 
 function flatten(results: SearchResults): Hit[] {
   return [
@@ -48,13 +42,6 @@ function flatten(results: SearchResults): Hit[] {
   ];
 }
 
-const row =
-  "flex w-full min-w-0 items-center gap-2.5 rounded-[7px] px-2.5 py-2 text-left";
-const name = "truncate text-[13px] font-medium text-ink";
-const preview =
-  "mt-0.5 min-w-0 truncate text-[11px] leading-[1.6] text-[#858278]";
-const timeCls = "flex-none text-[10px] text-[#a8a394]";
-
 export function GlobalSearch({
   overview,
   selectChat,
@@ -63,6 +50,8 @@ export function GlobalSearch({
   details,
   refresh,
   openMessage,
+  isOpen,
+  onClose,
 }: {
   overview: Overview | null;
   selectChat: (id: string) => void;
@@ -71,28 +60,36 @@ export function GlobalSearch({
   details: (id: string) => void;
   refresh: () => void;
   openMessage: (chatId: string, messageId: number) => void;
+  isOpen: boolean;
+  onClose: () => void;
 }) {
   const agents = overview?.agents ?? [];
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | null>(null);
-  const [open, setOpen] = useState(false);
-  const [focused, setFocused] = useState(false);
   const [active, setActive] = useState(0);
-  const [isMac, setIsMac] = useState(true);
   const seq = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const trimmed = query.trim();
   const hits = useMemo(() => (results ? flatten(results) : []), [results]);
 
+  // 打开时自动聚焦输入框
   useEffect(() => {
-    setIsMac(/Mac|iPhone|iPad/.test(navigator.platform));
-  }, []);
+    if (isOpen) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }, 30);
+    } else {
+      setQuery("");
+      setResults(null);
+      setActive(0);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (!trimmed) {
       setResults(null);
-      setOpen(false);
       return;
     }
     const id = ++seq.current;
@@ -110,33 +107,9 @@ export function GlobalSearch({
             setActive(0);
           }
         });
-    }, 250);
+    }, 200);
     return () => clearTimeout(timer);
   }, [trimmed]);
-
-  useEffect(() => {
-    if (trimmed && focused) setOpen(true);
-  }, [trimmed, focused]);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  useEffect(() => {
-    function onPointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, []);
 
   useEffect(() => {
     document
@@ -149,21 +122,14 @@ export function GlobalSearch({
       await patchChat(chat.id, { hidden: false }).catch(() => {});
       refresh();
     }
-    closeSearch();
+    onClose();
     selectChat(chat.id);
-  }
-
-  function closeSearch() {
-    setQuery("");
-    setResults(null);
-    setOpen(false);
-    inputRef.current?.blur();
   }
 
   function choose(hit: Hit) {
     if (hit.type === "agent") {
       const full = agents.find((agent) => agent.id === hit.agent.id);
-      closeSearch();
+      onClose();
       if (full) openAgent(full);
       else details(hit.agent.id);
       return;
@@ -172,30 +138,23 @@ export function GlobalSearch({
       void openChat(hit.chat);
       return;
     }
-    closeSearch();
+    onClose();
     openMessage(hit.message.chat_id, hit.message.id);
   }
 
   function onKeyDown(event: InputKeyEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
-      if (trimmed) {
-        setQuery("");
-        setResults(null);
-        setOpen(false);
-      } else inputRef.current?.blur();
+      onClose();
       return;
     }
-    if (!trimmed) return;
+    if (!hits.length) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setOpen(true);
-      if (hits.length) setActive((current) => (current + 1) % hits.length);
+      setActive((current) => (current + 1) % hits.length);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setOpen(true);
-      if (hits.length)
-        setActive((current) => (current - 1 + hits.length) % hits.length);
+      setActive((current) => (current - 1 + hits.length) % hits.length);
     } else if (event.key === "Enter") {
       event.preventDefault();
       const hit = hits[active] ?? hits[0];
@@ -203,172 +162,163 @@ export function GlobalSearch({
     }
   }
 
-  const showPanel = open && Boolean(trimmed);
-  const shortcut = isMac ? "⌘K" : "Ctrl+K";
+  if (!isOpen) return null;
 
   return (
-    <div ref={rootRef} className="relative min-w-0">
-      <label
-        className={`flex h-9 items-center gap-2 rounded-[8px] border px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ${
-          focused
-            ? "border-[#c4b9a4] bg-white shadow-[0_1px_2px_#2c26120d]"
-            : "border-line bg-[#f3f1eb]"
-        }`}
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 p-4 pt-[15vh] backdrop-blur-xs transition-opacity animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (!panelRef.current?.contains(e.target as Node)) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        ref={panelRef}
+        className="w-full max-w-[560px] overflow-hidden rounded-2xl bg-white shadow-[0_16px_48px_rgba(24,32,25,0.14),0_4px_16px_rgba(24,32,25,0.06)]"
       >
-        <Search size={15} className="flex-none text-[#a09b8d]" />
-        <input
-          ref={inputRef}
-          className="plain-field min-w-0 flex-1 border-0 bg-transparent text-[13px] text-ink"
-          value={query}
-          placeholder="搜索会话、消息、Agent"
-          autoComplete="off"
-          spellCheck={false}
-          role="combobox"
-          aria-label="全局搜索"
-          aria-expanded={showPanel}
-          aria-autocomplete="list"
-          aria-controls={showPanel ? "global-search-results" : undefined}
-          aria-activedescendant={
-            showPanel && hits[active]
-              ? `search-hit-${hits[active].id}`
-              : undefined
-          }
-          onChange={(event) => setQuery(event.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false);
-            setOpen(false);
-          }}
-          onKeyDown={onKeyDown}
-        />
-        <span className="flex w-7 flex-none items-center justify-end">
+        {/* 顶部搜索输入框 */}
+        <div className="flex h-12 items-center gap-3 border-b border-black/[0.05] px-4">
+          <Search size={16} className="text-[#6e7d72] flex-none" />
+          <input
+            ref={inputRef}
+            className="plain-field min-w-0 flex-1 border-0 bg-transparent text-sm text-ink placeholder:text-muted/60 outline-none"
+            value={query}
+            placeholder="搜索会话、消息正文、Agent 名册..."
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+          />
           {query ? (
             <button
               type="button"
-              className="icon-button h-[22px] w-[22px] p-0"
-              aria-label="清空搜索"
-              onMouseDown={(event) => event.preventDefault()}
+              className="icon-button h-6 w-6 text-muted hover:text-ink"
               onClick={() => {
                 setQuery("");
                 setResults(null);
-                setOpen(false);
                 inputRef.current?.focus();
               }}
             >
-              <X size={13} />
+              <X size={14} />
             </button>
           ) : (
-            !focused && (
-              <kbd
-                className="rounded border border-line px-[5px] py-px text-[10px] text-[#b0aa9c]"
-                aria-hidden
-              >
-                {shortcut}
-              </kbd>
-            )
+            <kbd className="rounded bg-[#f0f4f1] px-1.5 py-0.5 font-mono text-[10px] text-muted">
+              ESC
+            </kbd>
           )}
-        </span>
-      </label>
-      {showPanel && (
-        <div
-          id="global-search-results"
-          role="listbox"
-          aria-label="搜索结果"
-          className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-[min(420px,calc(100dvh-72px))] overflow-auto rounded-[10px] border border-line bg-white p-1.5 shadow-[0_8px_30px_#2a241214,0_2px_8px_#2a24120c]"
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          {!results ? (
-            <p className="px-2.5 py-2 text-xs text-[#969185]">搜索中…</p>
-          ) : hits.length === 0 ? (
-            <p className="px-2.5 py-2 text-xs text-[#969185]">
-              没有匹配「{trimmed}」的内容
-            </p>
+        </div>
+
+        {/* 搜索结果列表 */}
+        <div className="max-h-[380px] overflow-y-auto p-2">
+          {!trimmed ? (
+            <div className="p-6 text-center text-xs text-muted">
+              输入关键词，检索全部会话、历史消息正文与 Agent 成员
+            </div>
+          ) : results && hits.length === 0 ? (
+            <div className="p-6 text-center text-xs text-muted">
+              未找到与 “{trimmed}” 匹配的内容
+            </div>
           ) : (
-            hits.map((hit, index) => {
-              const full =
-                hit.type === "agent"
-                  ? agents.find((agent) => agent.id === hit.agent.id)
-                  : undefined;
-              return (
-                <div key={hit.id}>
-                  {(index === 0 || hits[index - 1].type !== hit.type) && (
-                    <div className="px-2.5 pb-1 pt-1.5 text-[11px] tracking-[0.025em] text-[#848176]">
-                      {sectionTitle[hit.type]}
-                    </div>
-                  )}
+            <div className="space-y-1">
+              {hits.map((hit, idx) => {
+                const isSelected = idx === active;
+                return (
                   <button
-                    type="button"
-                    role="option"
+                    key={hit.id}
                     id={`search-hit-${hit.id}`}
-                    aria-selected={index === active}
-                    disabled={hit.type === "agent" && openingAgent !== null}
-                    className={`${row} ${
-                      index === active ? "bg-[#f3f1ea]" : "hover:bg-[#f7f6f2]"
+                    type="button"
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors ${
+                      isSelected
+                        ? "bg-[#edf5f1] text-[#316e50]"
+                        : "hover:bg-[#f6f8f6] text-ink"
                     }`}
-                    onMouseEnter={() => setActive(index)}
                     onClick={() => choose(hit)}
                   >
                     {hit.type === "agent" && (
                       <>
-                        <Avatar
-                          name={hit.agent.name}
-                          presence={agentPresence(full)}
-                          small
-                        />
-                        <span className="min-w-0 flex-1">
-                          <strong className={name}>{hit.agent.name}</strong>
-                          <small className={`block ${preview}`}>
-                            {hit.agent.description ||
-                              (full ? runtimeLabel(full) : "")}
-                          </small>
-                        </span>
+                        <Avatar small name={hit.agent.name} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-xs font-semibold">
+                              {hit.agent.name}
+                            </span>
+                            <span className="rounded bg-black/[0.04] px-1.5 py-0.2 font-mono text-[10px] text-muted">
+                              {hit.agent.ref}
+                            </span>
+                          </div>
+                          {hit.agent.description && (
+                            <p className="truncate text-[11px] text-muted">
+                              {hit.agent.description}
+                            </p>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-muted">Agent</span>
                       </>
                     )}
+
                     {hit.type === "chat" && (
                       <>
                         <ChatAvatar chat={hit.chat} agents={agents} />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex min-w-0 items-center justify-between gap-2">
-                            <strong className={name}>{hit.chat.name}</strong>
-                            <span className="flex flex-none items-center gap-1.5">
-                              {hit.chat.hidden && (
-                                <em className="rounded bg-[#eae4d7] px-[5px] text-[10px] not-italic text-[#8a7150]">
-                                  已隐藏
-                                </em>
-                              )}
-                              <time className={timeCls}>
-                                {convTime(hit.chat.updated_at)}
-                              </time>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-xs font-semibold">
+                              {hit.chat.name}
                             </span>
-                          </span>
-                          <small className={`block ${preview}`}>
-                            {hit.chat.preview ?? ""}
-                          </small>
-                        </span>
+                            {hit.chat.ref && (
+                              <span className="rounded bg-black/[0.04] px-1.5 py-0.2 font-mono text-[10px] text-muted">
+                                {hit.chat.ref}
+                              </span>
+                            )}
+                          </div>
+                          {hit.chat.preview && (
+                            <p className="truncate text-[11px] text-muted">
+                              {hit.chat.preview}
+                            </p>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-muted">会话</span>
                       </>
                     )}
+
                     {hit.type === "message" && (
-                      <span className="min-w-0 flex-1">
-                        <span className="flex min-w-0 items-center justify-between gap-2">
-                          <strong className={name}>
-                            {hit.message.chat_name}
-                          </strong>
-                          <time className={timeCls}>
-                            {convTime(hit.message.created_at)}
-                          </time>
-                        </span>
-                        <small className={`block ${preview}`}>
-                          {hit.message.sender_name}：{hit.message.text}
-                        </small>
-                      </span>
+                      <>
+                        <div className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-[#f0f4f1] text-[#6e7d72]">
+                          <MessageSquare size={13} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium">
+                            {hit.message.text || "附件消息"}
+                          </p>
+                          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted">
+                            <span className="font-medium text-ink/80">
+                              {hit.message.chat_name}
+                            </span>
+                            <span>·</span>
+                            <span>{hit.message.sender_name}</span>
+                            <span>·</span>
+                            <span>{convTime(hit.message.created_at)}</span>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-muted">消息</span>
+                      </>
                     )}
                   </button>
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           )}
         </div>
-      )}
+
+        {/* 底部快捷键提示 */}
+        <div className="flex items-center justify-between border-t border-black/[0.04] bg-[#fafbfa] px-4 py-2 text-[11px] text-muted">
+          <div className="flex items-center gap-3">
+            <span>↑↓ 导航</span>
+            <span>↵ 选择</span>
+          </div>
+          <span>ESC 退出</span>
+        </div>
+      </div>
     </div>
   );
 }

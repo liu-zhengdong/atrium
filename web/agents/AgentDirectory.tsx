@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Activity,
+  ChevronRight,
   LoaderCircle,
   MessageSquare,
   Plus,
@@ -181,8 +182,13 @@ export function AgentDirectory({
         )
       )}
       {fresh.length > 0 && (
-        <details className="mt-6 rounded-xl bg-white p-4 text-xs shadow-[0_1px_3px_rgba(0,0,0,0.03),0_4px_12px_rgba(0,0,0,0.02)] transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]">
-          <summary className="cursor-pointer font-medium text-muted hover:text-ink">
+        <details className="group mt-6 rounded-xl bg-white p-4 text-xs shadow-[0_1px_3px_rgba(0,0,0,0.03),0_4px_12px_rgba(0,0,0,0.02)] transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+            <ChevronRight
+              size={14}
+              className="transition-transform group-open:rotate-90"
+              aria-hidden="true"
+            />
             临时 Pi · {fresh.length}
           </summary>
           <p className="mt-2 leading-relaxed text-muted">

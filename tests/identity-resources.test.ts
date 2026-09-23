@@ -19,6 +19,7 @@ import {
 import {
   changeSkill,
   listSkills,
+  listTemplateSkills,
   planSkill,
   listRules,
   writeRule,
@@ -90,7 +91,11 @@ test("skill toggles, rule writes and MCP writes back up originals; invalid input
   );
   assert.throws(() => writeRule(dir, "../outside" as "AGENTS.md", "bad"));
   const before = readFileSync(join(dir, "mcp.json"), "utf8");
-  assert.throws(() => writeMcp(dir, "{"), /JSON/);
+  assert.throws(() => writeMcp(dir, "{"), /JSON 格式无效（第 1 行，第 2 列）/);
+  assert.throws(
+    () => writeMcp(dir, '{\n"mcpServers": {,\n}}'),
+    /第 2 行，第 \d+ 列/,
+  );
   assert.throws(() => writeMcp(dir, " ".repeat(1024 * 1024 + 1)), /1 MiB/);
   assert.equal(readFileSync(join(dir, "mcp.json"), "utf8"), before);
   const shown = readMcp(dir);
@@ -105,6 +110,35 @@ test("skill toggles, rule writes and MCP writes back up originals; invalid input
   );
   assert.equal(readMcp(dir).servers.length, 2);
   assert(readdirSync(dir).some((name) => name.startsWith(".atrium-backup-")));
+});
+
+test("personal template lists only copyable skills not already installed", (t) => {
+  const dir = fixture(t);
+  const template = mkdtempSync(join(tmpdir(), "atrium-template-"));
+  const previous = process.env.ATRIUM_PI_TEMPLATE;
+  process.env.ATRIUM_PI_TEMPLATE = template;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ATRIUM_PI_TEMPLATE;
+    else process.env.ATRIUM_PI_TEMPLATE = previous;
+    rmSync(template, { recursive: true, force: true });
+  });
+  for (const key of ["sample", "available"]) {
+    mkdirSync(join(template, "skills", key), { recursive: true });
+    writeFileSync(
+      join(template, "skills", key, "SKILL.md"),
+      `---\nname: ${key}\ndescription: ${key} description\n---\n`,
+    );
+  }
+  assert.deepEqual(listTemplateSkills(dir), [
+    {
+      key: "available",
+      name: "available",
+      description: "available description",
+    },
+  ]);
+  changeSkill(dir, "copy", "available");
+  assert.deepEqual(listTemplateSkills(dir), []);
+  assert.equal(listSkills(dir).length, 2);
 });
 
 test("disabled skill disappears from Pi's resolved resources and returns after enable", async (t) => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2, X } from "lucide-react";
 import { api } from "../api.ts";
 
 type Skill = {
@@ -18,7 +19,11 @@ const message = (error: unknown) =>
 
 export function AgentSkills({ agentId }: { agentId: string }) {
   const [items, setItems] = useState<Skill[] | null>(null);
-  const [name, setName] = useState("");
+  const [available, setAvailable] = useState<Omit<Skill, "enabled">[] | null>(
+    null,
+  );
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const [confirm, setConfirm] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -49,13 +54,39 @@ export function AgentSkills({ agentId }: { agentId: string }) {
         }),
       );
       setConfirm(null);
-      setName("");
+      if (action === "copy") {
+        setChooserOpen(false);
+        setSearch("");
+      }
     } catch (e) {
       setError(message(e));
     } finally {
       setBusy(false);
     }
   }
+  async function openChooser() {
+    if (chooserOpen) {
+      setChooserOpen(false);
+      return;
+    }
+    setChooserOpen(true);
+    setAvailable(null);
+    setError("");
+    try {
+      setAvailable(
+        await api<Omit<Skill, "enabled">[]>(
+          `/agents/${agentId}/skills/available`,
+        ),
+      );
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  const matches = available?.filter((item) =>
+    `${item.name} ${item.description} ${item.key}`
+      .toLowerCase()
+      .includes(search.trim().toLowerCase()),
+  );
   return (
     <section className="settings-section" aria-label="技能">
       <h3>技能</h3>
@@ -78,26 +109,42 @@ export function AgentSkills({ agentId }: { agentId: string }) {
                   {item.description}
                 </p>
               </div>
-              <label
-                className="switch-row !m-0 !p-0"
-                title={item.enabled ? "停用" : "启用"}
-              >
-                <input
-                  type="checkbox"
-                  role="switch"
-                  aria-label={`启用 ${item.name}`}
-                  checked={item.enabled}
+              <div className="flex shrink-0 items-center gap-1">
+                <label
+                  className="switch-row !m-0 !p-0"
+                  title={item.enabled ? "停用" : "启用"}
+                >
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label={`启用 ${item.name}`}
+                    checked={item.enabled}
+                    disabled={busy}
+                    onChange={() =>
+                      void change(item.enabled ? "disable" : "enable", item.key)
+                    }
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="icon-button disabled:opacity-50"
+                  aria-label={`删除技能 ${item.name}`}
+                  title={`删除技能 ${item.name}`}
                   disabled={busy}
-                  onChange={() =>
-                    void change(item.enabled ? "disable" : "enable", item.key)
-                  }
-                />
-              </label>
+                  onClick={() => setConfirm(item.key)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             </div>
             {confirm === item.key ? (
-              <div className="mt-2 text-xs">
-                删除「{item.name}」？原文件会备份。
-                <div className="mt-2 flex gap-2">
+              <div
+                role="dialog"
+                aria-label={`确认删除技能 ${item.name}`}
+                className="mt-3 rounded-xl bg-soft p-3 text-xs"
+              >
+                <p className="m-0">删除「{item.name}」？原文件会备份。</p>
+                <div className="mt-3 flex gap-2">
                   <button
                     className="button"
                     disabled={busy}
@@ -113,37 +160,77 @@ export function AgentSkills({ agentId }: { agentId: string }) {
                   </button>
                 </div>
               </div>
-            ) : (
-              <button
-                className="mt-2 text-xs text-muted hover:text-ink"
-                disabled={busy}
-                onClick={() => setConfirm(item.key)}
-              >
-                删除
-              </button>
-            )}
+            ) : null}
           </li>
         ))}
       </ul>
-      <form
-        className="flex gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void change("copy", name.trim());
-        }}
-      >
-        <input
-          className="field min-w-0 flex-1"
-          aria-label="个人模板技能目录名"
-          placeholder="个人 Pi 技能目录名"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-        />
-        <button className="button secondary" disabled={busy}>
-          复制
+      <div className="relative w-fit max-w-full">
+        <button
+          type="button"
+          className="button secondary"
+          aria-expanded={chooserOpen}
+          disabled={busy}
+          onClick={() => void openChooser()}
+        >
+          从个人 Pi 添加
         </button>
-      </form>
+        {chooserOpen && (
+          <div
+            role="dialog"
+            aria-label="从个人 Pi 添加技能"
+            className="absolute bottom-full left-0 z-20 mb-2 flex max-h-[min(360px,65vh)] w-[min(360px,calc(100vw-64px))] flex-col gap-2 rounded-xl bg-white p-3 shadow-[0_8px_24px_#3629191a]"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setChooserOpen(false);
+            }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <strong className="text-xs font-medium">可添加技能</strong>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="关闭技能选择"
+                onClick={() => setChooserOpen(false)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <input
+              className="field w-full"
+              aria-label="搜索可添加技能"
+              placeholder="搜索技能"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            {available === null && !error && (
+              <p className="text-xs text-muted">读取中…</p>
+            )}
+            {matches?.length === 0 && (
+              <p className="text-xs text-muted">没有可添加的技能</p>
+            )}
+            <div className="min-h-0 overflow-y-auto">
+              {matches?.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className="block w-full rounded-lg px-2 py-2 text-left hover:bg-soft focus-visible:bg-soft"
+                  aria-label={`添加 ${item.name}`}
+                  disabled={busy}
+                  onClick={() => void change("copy", item.key)}
+                >
+                  <span className="block break-words text-xs font-medium">
+                    {item.name}
+                  </span>
+                  {item.description && (
+                    <span className="mt-1 block break-words text-xs text-muted">
+                      {item.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
       {error && (
         <p role="alert" className="error">
           {error}
@@ -223,7 +310,7 @@ export function AgentMcp({ agentId }: { agentId: string }) {
         </>
       )}
       {editing && (
-        <div className="space-y-2">
+        <div className="mt-4 space-y-2">
           <p className="text-xs text-muted">
             凭据显示为 ********，保存时保留原值；重启后生效。
           </p>

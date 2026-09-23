@@ -146,6 +146,27 @@ export function listSkills(dir: string) {
     ];
   });
 }
+export function listTemplateSkills(dir: string) {
+  const identitySkills = skillDir(dir);
+  const installed = new Set(
+    existsSync(identitySkills) ? readdirSync(identitySkills) : [],
+  );
+  const template = safeRoot(defaultTemplate());
+  const root = safePath(template, "skills");
+  if (!existsSync(root)) return [];
+  return readdirSync(root).flatMap((key) => {
+    if (!skillName.test(key) || installed.has(key)) return [];
+    try {
+      const file = safePath(template, "skills", key, "SKILL.md");
+      if (!existsSync(file)) return [];
+      const meta = frontmatter(readText(file));
+      return [{ key, name: meta.name || key, description: meta.description }];
+    } catch (error) {
+      if (error instanceof Problem) return [];
+      throw error;
+    }
+  });
+}
 export function changeSkill(dir: string, action: SkillAction, name: string) {
   const target = skillPath(dir, name);
   const config = settings(dir);
@@ -209,8 +230,18 @@ function mcpConfig(text: string) {
   let value: unknown;
   try {
     value = JSON.parse(text);
-  } catch {
-    throw new Problem(400, "MCP JSON 格式无效");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "";
+    const position = /position (\d+)/.exec(detail);
+    const location = /line (\d+) column (\d+)/.exec(detail);
+    const offset = Math.min(Number(position?.[1] ?? text.length), text.length);
+    const before = text.slice(0, offset).split(/\r\n|\r|\n/);
+    const line = location ? Number(location[1]) : before.length;
+    const column = location ? Number(location[2]) : before.at(-1)!.length + 1;
+    throw new Problem(
+      400,
+      `MCP JSON 格式无效（第 ${line} 行，第 ${column} 列）`,
+    );
   }
   if (!object(value) || !object(value.mcpServers))
     throw new Problem(400, "需要 mcpServers 对象");

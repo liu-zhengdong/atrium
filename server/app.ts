@@ -38,6 +38,7 @@ import {
   changeSkill,
   listRules,
   listSkills,
+  listTemplateSkills,
   readMcp,
   writeMcp,
   writeRule,
@@ -438,6 +439,9 @@ export async function createApp(options: {
   };
   app.get("/api/agents/:id/skills", (request) =>
     listSkills(packageDirectory(request)),
+  );
+  app.get("/api/agents/:id/skills/available", (request) =>
+    listTemplateSkills(packageDirectory(request)),
   );
   app.post("/api/agents/:id/skills", (request) => {
     const directory = packageDirectory(request);

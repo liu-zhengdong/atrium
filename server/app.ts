@@ -34,6 +34,16 @@ import { removeMember, updateGroup } from "./groups.ts";
 import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
+import {
+  agentDefaults,
+  templateDefaults,
+  saveAgentDefaults,
+  packageList,
+  changeMode,
+  changePackages,
+  serialized,
+  type AgentDefaults,
+} from "./identity-packages.ts";
 
 /** 以谁的名义：用户短号，或身份的短号、名称、ID；不给就是本机用户。 */
 const actor = z.string().trim().min(1).max(60);
@@ -158,6 +168,38 @@ export async function createApp(options: {
     data: resolve(options.data),
     log: join(resolve(options.data), "service.log"),
   }));
+  app.get("/api/settings/agent-defaults", () => agentDefaults(options.data));
+  app.get("/api/settings/agent-defaults/template", () => templateDefaults());
+  app.put("/api/settings/agent-defaults", (request) => {
+    const input = z
+      .object({
+        packages: z.array(
+          z.union([
+            z.string().trim().min(1).max(4096),
+            z
+              .object({
+                source: z.string().trim().min(1).max(4096),
+                extensions: z.array(z.string()).optional(),
+                skills: z.array(z.string()).optional(),
+                prompts: z.array(z.string()).optional(),
+                themes: z.array(z.string()).optional(),
+              })
+              .strict(),
+          ]),
+        ),
+        skills: z.array(z.string().min(1).max(255)),
+        model: z
+          .object({
+            provider: z.string().trim().min(1),
+            model: z.string().trim().min(1),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict()
+      .parse(request.body) satisfies AgentDefaults;
+    return saveAgentDefaults(options.data, input);
+  });
   app.get("/api/accounts", () => accounts.list());
   app.post("/api/accounts", (request) => {
     const { provider, name, key } = z
@@ -380,6 +422,40 @@ export async function createApp(options: {
     const input = z.object({ runtime_id: id }).strict().parse(request.body);
     await runtimes.attach(agentParams(request), input.runtime_id);
     return { connected: true };
+  });
+  const packageDirectory = (request: FastifyRequest) => {
+    const agent = store.agent(agentParams(request));
+    if (!agent.agent_directory) throw new Problem(409, "旧身份尚无配置目录");
+    return agent.agent_directory;
+  };
+  app.get("/api/agents/:id/plugins", (request) =>
+    packageList(packageDirectory(request)),
+  );
+  app.put("/api/agents/:id/plugins/mode", async (request) => {
+    const directory = packageDirectory(request);
+    const { mode } = z
+      .object({ mode: z.enum(["own", "shared"]) })
+      .strict()
+      .parse(request.body);
+    return serialized(directory, async () => changeMode(directory, mode));
+  });
+  app.post("/api/agents/:id/plugins", async (request) => {
+    const directory = packageDirectory(request);
+    const input = z
+      .object({
+        action: z.enum([
+          "add",
+          "remove",
+          "update",
+          "enable",
+          "disable",
+          "update-all",
+        ]),
+        spec: z.string().min(1).max(4096).optional(),
+      })
+      .strict()
+      .parse(request.body);
+    return serialized(directory, async () => changePackages(directory, input));
   });
   app.get("/api/agents/:id/model", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");

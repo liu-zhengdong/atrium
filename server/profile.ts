@@ -20,6 +20,12 @@ import { fileURLToPath } from "node:url";
 import { Problem } from "./store.ts";
 import { local, resolveInstalled } from "./package-spec.ts";
 import {
+  markOwn,
+  prepareOwnPackages,
+  type AgentDefaults,
+  type PackageEntry,
+} from "./identity-packages.ts";
+import {
   formatModelSpec,
   splitModelSpec,
   type ModelSpec,
@@ -504,22 +510,27 @@ const CARRIED_KEYS = [
 
 /**
  * The settings a new identity starts from: the template's own choices, with
- * packages resolved to where they are installed and resource paths pointing at
+ * legacy packages resolved to their shared install or selected package specs and resource paths pointing at
  * what the identity owns. Decides the content; writes nothing.
  */
-function buildSettings(source: Record<string, unknown>, template: string) {
+function buildSettings(
+  source: Record<string, unknown>,
+  template: string,
+  selected?: PackageEntry[],
+) {
   const settings: Record<string, unknown> = {};
   for (const key of CARRIED_KEYS)
     if (source[key] !== undefined) settings[key] = source[key];
   const packages = Array.isArray(source.packages) ? source.packages : [];
   settings.packages = injectBundledPackages(
-    packages.map((entry: unknown) => {
+    (selected ?? packages).map((entry: unknown) => {
       const value =
         typeof entry === "string"
           ? entry
           : (entry as { source: string }).source;
       if (typeof value !== "string")
         throw new Problem(400, "配置模板含无效 package");
+      if (selected) return entry;
       const path = resolveInstalled(template, value);
       return typeof entry === "string"
         ? path
@@ -541,11 +552,12 @@ function buildSettings(source: Record<string, unknown>, template: string) {
   return settings;
 }
 
-/** Owned rules, notes and resource dirs; packages stay path references. Credentials are shared by link. */
+/** Owned rules, notes, resources, and package installs; credentials follow the existing account-link behavior. */
 export function prepareProfile(
   identityId: string,
   template = defaultTemplate(),
   piHome: string,
+  defaults?: AgentDefaults,
 ) {
   template = realpathSync(template);
   const target = join(piHome, "atrium", "agents", identityId);
@@ -553,12 +565,26 @@ export function prepareProfile(
   // identity.json marks a prepared profile, any other existing content is kept.
   if (existsSync(join(target, "identity.json")))
     throw new Problem(409, "身份配置目录已存在，未覆盖");
-  const settings = buildSettings(
-    existsSync(join(template, "settings.json"))
-      ? readJson(join(template, "settings.json"))
-      : {},
-    template,
-  );
+  const sourceSettings = existsSync(join(template, "settings.json"))
+    ? readJson(join(template, "settings.json"))
+    : {};
+  const packages =
+    defaults?.packages ??
+    ((Array.isArray(sourceSettings.packages)
+      ? sourceSettings.packages
+      : []) as PackageEntry[]);
+  const settings = buildSettings(sourceSettings, template, packages);
+  if (defaults?.model) {
+    settings.defaultProvider = defaults.model.provider;
+    settings.defaultModel = defaults.model.model;
+  } else if (
+    defaults &&
+    !defaults.model &&
+    typeof sourceSettings.defaultProvider === "string"
+  ) {
+    delete settings.defaultProvider;
+    delete settings.defaultModel;
+  }
   // Owned files (OWNED_FILES) and notes become this identity's own copies.
   // Credentials are linked to the shared file; session history is not copied.
   // Identity files are written exclusively (wx) alongside kept legacy content;
@@ -575,6 +601,17 @@ export function prepareProfile(
     created.push(join(target, "identity.json"));
     write(join(target, "settings.json"), settings);
     created.push(join(target, "settings.json"));
+    for (const name of ["npm", "git"]) {
+      const dest = join(target, name);
+      if (existsSync(dest))
+        throw new Problem(409, `身份已有 ${name} 目录，未覆盖`);
+      created.push(dest);
+    }
+    const ownPackages = prepareOwnPackages(template, target, packages);
+    settings.packages = injectBundledPackages(ownPackages);
+    writeSettings(join(target, "settings.json"), settings);
+    markOwn(target);
+    created.push(join(target, ".atrium-packages.json"));
     if (linkSharedCredentials(target, template))
       created.push(join(target, "auth.json"));
     for (const name of OWNED_FILES)
@@ -586,7 +623,14 @@ export function prepareProfile(
     for (const kind of OWNED_DIRS)
       if (existsSync(join(template, kind))) {
         const dest = join(target, kind);
-        copyResourceDir(join(template, kind), dest);
+        if (kind === "skills" && defaults) {
+          makeOwnedDir(dest);
+          for (const skill of defaults.skills) {
+            const from = join(template, kind, skill);
+            if (existsSync(from)) copyResourceDir(from, join(dest, skill));
+            else throw new Problem(400, `模板技能不存在：${skill}`);
+          }
+        } else copyResourceDir(join(template, kind), dest);
         created.push(dest);
       }
     // Without notes.json Pi reads <identity>/notes, so the bundled notes land

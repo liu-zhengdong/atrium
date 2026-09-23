@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { defaultTemplate, prepareProfile } from "./profile.ts";
+import { agentDefaults } from "./identity-packages.ts";
 import { dirname, join, resolve, sep } from "node:path";
 import { displayName } from "../shared/schema.ts";
 import { Store, Problem } from "./store.ts";
@@ -259,10 +260,14 @@ export function createAgent(
   try {
     return store.transaction(() => {
       const { agent, token } = store.createAgent(name, cwd);
+      const template = resolveProfileTemplate(store, options);
       const directory = prepareProfile(
         agent.id,
-        resolveProfileTemplate(store, options),
+        template,
         piHome,
+        !options.source || options.source === "builtin"
+          ? agentDefaults(data, template)
+          : undefined,
       );
       try {
         linkProfile(piHome, name, directory);

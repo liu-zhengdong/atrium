@@ -13,6 +13,7 @@ import { SidePanel } from "../components/SidePanel.tsx";
 import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
 import { AgentModel } from "./AgentModel.tsx";
+import { AgentPlugins } from "./AgentPlugins.tsx";
 import { DeleteAgent } from "./DeleteAgent.tsx";
 import { AgentCredentials } from "../settings/AgentCredentials.tsx";
 import {
@@ -293,6 +294,13 @@ export function AgentDrawer({
           ) : (
             <>
               <AgentCredentials agentId={agent.id} open={openAccounts} />
+              {agent.agent_directory && (
+                <AgentPlugins
+                  agentId={agent.id}
+                  available={agent.available}
+                  refresh={refresh}
+                />
+              )}
               <form className="settings-section" onSubmit={profileSave}>
                 <h3>身份资料</h3>
                 <label className="form-label">

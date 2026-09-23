@@ -86,12 +86,14 @@ export function MemberList({
       {!loading && !inGroup.length && (
         <p className="muted">这个群还没有成员。</p>
       )}
-      <button
-        className="button secondary mt-3 flex h-7 items-center gap-1.5 px-3 text-xs"
-        onClick={() => setAdding(true)}
-      >
-        <Plus size={14} /> 添加成员
-      </button>
+      <div className="mt-4 flex justify-center">
+        <button
+          className="flex h-7 items-center justify-center gap-1.5 rounded-[6px] px-3 text-xs text-muted transition-colors hover:bg-[#edf5f1] hover:text-ink focus:outline-none"
+          onClick={() => setAdding(true)}
+        >
+          <Plus size={14} /> 添加成员
+        </button>
+      </div>
       {adding && (
         <AddMemberDialog
           chatId={chatId}

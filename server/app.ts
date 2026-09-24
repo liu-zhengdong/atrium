@@ -48,7 +48,7 @@ import {
   templateDefaults,
   saveAgentDefaults,
   packageList,
-  changeMode,
+  ensureOwnPackages,
   changePackages,
   serialized,
   type AgentDefaults,
@@ -72,6 +72,18 @@ export async function createApp(options: {
     mode: 0o700,
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
+  if (options.runtime !== false)
+    for (const agent of store.agents()) {
+      if (!agent.agent_directory) continue;
+      try {
+        if (ensureOwnPackages(agent.agent_directory))
+          console.log(`${agent.name} 的个人 Pi 插件已转为独立安装`);
+      } catch (error) {
+        console.error(
+          `${agent.name} 的插件迁移失败，保留原配置以便重试：${error}`,
+        );
+      }
+    }
   const accounts = new Accounts(store, options.data);
   if (options.runtime !== false) {
     accounts.start();
@@ -529,13 +541,19 @@ export async function createApp(options: {
   app.get("/api/agents/:id/plugins", (request) =>
     packageList(packageDirectory(request)),
   );
+  // Old clients still have a mode switch until #148's UI lands. Never allow
+  // switching back to the personal Pi installation.
   app.put("/api/agents/:id/plugins/mode", async (request) => {
-    const directory = packageDirectory(request);
     const { mode } = z
       .object({ mode: z.enum(["own", "shared"]) })
       .strict()
       .parse(request.body);
-    return serialized(directory, async () => changeMode(directory, mode));
+    if (mode === "shared") throw new Problem(410, "个人 Pi 插件共享模式已停用");
+    const directory = packageDirectory(request);
+    return serialized(directory, async () => {
+      ensureOwnPackages(directory);
+      return packageList(directory);
+    });
   });
   app.post("/api/agents/:id/plugins", async (request) => {
     const directory = packageDirectory(request);

@@ -15,11 +15,13 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { templateChoice } from "./identity-env.ts";
 import { clone } from "./clone.ts";
+import { rewriteIdentityConfigs } from "./identity-config.ts";
 import { fileURLToPath } from "node:url";
 import { Problem } from "./store.ts";
 import { local, resolveInstalled } from "./package-spec.ts";
 import {
   markOwn,
+  ownSource,
   prepareOwnPackages,
   type AgentDefaults,
   type PackageEntry,
@@ -528,8 +530,8 @@ const CARRIED_KEYS = [
 
 /**
  * The settings a new identity starts from: the template's own choices, with
- * legacy packages resolved to their shared install or selected package specs and resource paths pointing at
- * what the identity owns. Decides the content; writes nothing.
+ * package specs and resource paths pointing at what the identity owns.
+ * Decides the content; writes nothing.
  */
 function buildSettings(
   source: Record<string, unknown>,
@@ -549,10 +551,11 @@ function buildSettings(
       if (typeof value !== "string")
         throw new Problem(400, "配置模板含无效 package");
       if (selected) return entry;
-      const path = resolveInstalled(template, value);
+      resolveInstalled(template, value);
+      const spec = ownSource(value, template);
       return typeof entry === "string"
-        ? path
-        : { ...(entry as object), source: path };
+        ? spec
+        : { ...(entry as object), source: spec };
     }),
   );
   for (const kind of OWNED_DIRS) {
@@ -570,13 +573,14 @@ function buildSettings(
   return settings;
 }
 
-/** Owned rules, notes, resources, and package installs; credentials follow the existing account-link behavior. */
+/** New profiles own their rules, notes, resources and package installs. */
 export function prepareProfile(
   identityId: string,
   template = defaultTemplate(),
   piHome: string,
   defaults?: AgentDefaults,
 ) {
+  const alias = resolve(template);
   template = realpathSync(template);
   const target = join(piHome, "atrium", "agents", identityId);
   // A legacy record's directory may already hold its managed session and logs;
@@ -604,7 +608,7 @@ export function prepareProfile(
     delete settings.defaultModel;
   }
   // Owned files (OWNED_FILES) and notes become this identity's own copies.
-  // Credentials are linked to the shared file; session history is not copied.
+  // Credentials retain the shared-login contract; session history is not copied.
   // Identity files are written exclusively (wx) alongside kept legacy content;
   // on failure only what this call created is removed.
   const created: string[] = [];
@@ -668,6 +672,9 @@ export function prepareProfile(
             dereference: true,
           });
         else copyOwnedNotes(sourceDir, notesDir);
+        // Personal note backups are history of the template, not seed data
+        // for a new identity. Do not rewrite their raw evidence or inherit it.
+        rmSync(join(notesDir, "backups"), { recursive: true, force: true });
       }
       write(
         join(target, "notes.json"),
@@ -677,6 +684,7 @@ export function prepareProfile(
     }
     // A template with identity.json is another identity being forked.
     seedBundledNotes(notesDir, existsSync(join(template, "identity.json")));
+    rewriteIdentityConfigs(template, target, created, alias);
     return target;
   } catch (error) {
     for (const path of created) rmSync(path, { recursive: true, force: true });

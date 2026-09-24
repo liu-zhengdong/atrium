@@ -33,6 +33,7 @@ import {
   type ModelOption,
 } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
+import { ensureOwnPackages } from "./identity-packages.ts";
 import { wakesOffline } from "./delivery.ts";
 import { atriumGuide } from "./mcp.ts";
 import {
@@ -659,6 +660,8 @@ export class Runtimes {
       const cwd = ensureDesktopCwd(this.store, this.desktops, current);
       if (cwd !== current.cwd) this.changed();
       if (current.agent_directory) {
+        // Failed startup migration must not launch Pi with personal plugins.
+        ensureOwnPackages(current.agent_directory);
         // A profile left on the old layout costs the Agent a rule, not its session.
         for (const notice of syncIdentityProfile(
           current.agent_directory,

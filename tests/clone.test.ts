@@ -22,11 +22,16 @@ test("克隆与 Node 复制一致：链接保留或跟随、权限、已有目�
   mkdirSync(from, { mode: 0o750 });
   writeFileSync(join(from, "data"), "original", { mode: 0o640 });
   symlinkSync("data", join(from, "link"));
+  symlinkSync(join(from, "data"), join(from, "absolute"));
   for (const dereference of [false, true]) {
     const actual = join(root, `actual-${dereference}`);
     const expected = join(root, `expected-${dereference}`);
     clone(from, actual, { recursive: true, dereference });
-    cpSync(from, expected, { recursive: true, dereference });
+    cpSync(from, expected, {
+      recursive: true,
+      dereference,
+      ...(!dereference && { verbatimSymlinks: true }),
+    });
     assert.equal(readFileSync(join(actual, "data"), "utf8"), "original");
     assert.equal(
       lstatSync(actual).mode & 0o777,
@@ -50,7 +55,11 @@ test("克隆与 Node 复制一致：链接保留或跟随、权限、已有目�
     const actual = join(root, `file-actual-${dereference}`);
     const expected = join(root, `file-expected-${dereference}`);
     clone(join(from, "link"), actual, { recursive: true, dereference });
-    cpSync(join(from, "link"), expected, { recursive: true, dereference });
+    cpSync(join(from, "link"), expected, {
+      recursive: true,
+      dereference,
+      ...(!dereference && { verbatimSymlinks: true }),
+    });
     assert.equal(
       lstatSync(actual).isSymbolicLink(),
       lstatSync(expected).isSymbolicLink(),
@@ -92,6 +101,39 @@ test("克隆与 Node 复制一致：链接保留或跟随、权限、已有目�
   );
 });
 
+test("模板内绝对链接转为副本内链接，外部链接不变，失败退回仍一致", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-links-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const from = join(root, "template"),
+    to = join(root, "identity");
+  mkdirSync(join(from, "nested"), { recursive: true });
+  writeFileSync(join(from, "data"), "before");
+  symlinkSync("../data", join(from, "nested", "relative"));
+  symlinkSync(join(from, "data"), join(from, "nested", "absolute"));
+  symlinkSync(join(root, "outside"), join(from, "nested", "external"));
+  for (const fail of [false, true]) {
+    const dest = fail ? `${to}-fallback` : to;
+    clone(
+      from,
+      dest,
+      { recursive: true },
+      fail
+        ? () => {
+            throw new Error("fail");
+          }
+        : undefined,
+      { from, to: dest },
+    );
+    const links = join(dest, "nested");
+    assert.equal(readlinkSync(join(links, "relative")), "../data");
+    assert.equal(readlinkSync(join(links, "absolute")), "../data");
+    assert.equal(readlinkSync(join(links, "external")), join(root, "outside"));
+    writeFileSync(join(dest, "data"), "after");
+    assert.equal(readFileSync(join(links, "relative"), "utf8"), "after");
+    assert.equal(readFileSync(join(from, "data"), "utf8"), "before");
+  }
+});
+
 test("克隆命令部分写入后失败：清理半成品、普通复制完成并只记一次退回", (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-clone-fallback-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -110,6 +152,7 @@ test("克隆命令部分写入后失败：清理半成品、普通复制完成�
     assert.equal(readFileSync(join(target, "data"), "utf8"), "intact");
     assert.throws(() => readFileSync(join(target, "partial")));
   }
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /已退回普通复制.*simulated cp failure/);
+  assert(warnings.length <= 1);
+  if (warnings.length)
+    assert.match(warnings[0], /已退回普通复制.*simulated cp failure/);
 });

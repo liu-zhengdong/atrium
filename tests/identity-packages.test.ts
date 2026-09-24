@@ -6,13 +6,15 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
-  changeMode,
+  ensureOwnPackages,
   changePackages,
   cloneTemplatePackages,
   ownSource,
@@ -20,7 +22,7 @@ import {
   prepareOwnPackages,
   saveAgentDefaults,
 } from "../server/identity-packages.ts";
-import { Problem } from "../server/store.ts";
+import { Problem, Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
 import { Runtimes } from "../server/runtime.ts";
 
@@ -120,7 +122,7 @@ test("插件计划穷举动作：合法变更、重复、缺失、内置与破�
   );
 });
 
-test("现有共享身份复制包到独立目录，切回共享保留原引用；缺少包不修改 settings", () =>
+test("现有共享身份迁移到独立目录；重复启动不修改既有安装", () =>
   fixture((_root, template, identity) => {
     const from = join(template, "npm/node_modules/example"),
       to = join(identity, "npm/node_modules/example");
@@ -129,6 +131,11 @@ test("现有共享身份复制包到独立目录，切回共享保留原引用�
       join(from, "package.json"),
       JSON.stringify({ version: "1.0.0" }),
     );
+    const resource = join(template, "dev-ext", "main.js");
+    mkdirSync(join(template, "dev-ext"));
+    writeFileSync(resource, "owned code");
+    symlinkSync(resource, join(from, "entry.js"));
+    symlinkSync(relative(from, resource), join(from, "entry-relative.js"));
     writeFileSync(
       join(identity, "settings.json"),
       JSON.stringify({ packages: [from] }),
@@ -136,8 +143,17 @@ test("现有共享身份复制包到独立目录，切回共享保留原引用�
     const previous = process.env.ATRIUM_PI_TEMPLATE;
     process.env.ATRIUM_PI_TEMPLATE = template;
     try {
-      assert.equal(changeMode(identity, "own").mode, "own");
+      assert.equal(ensureOwnPackages(identity), true);
       assert(existsSync(to));
+      assert.equal(readFileSync(join(to, "entry.js"), "utf8"), "owned code");
+      assert.equal(
+        readFileSync(join(to, "entry-relative.js"), "utf8"),
+        "owned code",
+      );
+      assert.equal(
+        readlinkSync(join(to, "entry.js")).includes(template),
+        false,
+      );
       assert(
         (
           JSON.parse(readFileSync(join(identity, "settings.json"), "utf8")) as {
@@ -145,32 +161,93 @@ test("现有共享身份复制包到独立目录，切回共享保留原引用�
           }
         ).packages.includes("npm:example"),
       );
-      assert.equal(changeMode(identity, "shared").mode, "shared");
-      assert(
-        (
-          JSON.parse(readFileSync(join(identity, "settings.json"), "utf8")) as {
-            packages: string[];
-          }
-        ).packages.includes(from),
-      );
-      assert(existsSync(to), "switch back does not delete installations");
-      writeFileSync(
-        join(identity, "settings.json"),
-        JSON.stringify({
-          packages: [join(template, "npm/node_modules/missing")],
-        }),
-      );
-      const before = readFileSync(join(identity, "settings.json"), "utf8");
-      invalid(() => changeMode(identity, "own"), 400);
-      assert.equal(
-        readFileSync(join(identity, "settings.json"), "utf8"),
-        before,
-      );
+      assert.equal(ensureOwnPackages(identity), false);
+      assert(existsSync(to), "restarting does not remove installations");
     } finally {
       if (previous === undefined) delete process.env.ATRIUM_PI_TEMPLATE;
       else process.env.ATRIUM_PI_TEMPLATE = previous;
     }
   }));
+
+test("服务启动迁移共享插件，坏身份隔离；重复启动只迁移一次", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-plugins-boot-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const template = join(root, "template"),
+    data = join(root, "data");
+  const previous = process.env.ATRIUM_PI_TEMPLATE;
+  process.env.ATRIUM_PI_TEMPLATE = template;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ATRIUM_PI_TEMPLATE;
+    else process.env.ATRIUM_PI_TEMPLATE = previous;
+  });
+  mkdirSync(join(template, "dev-ext"), { recursive: true });
+  mkdirSync(data);
+  writeFileSync(join(template, "dev-ext", "main.js"), "private copy");
+  const store = new Store(join(data, "atrium.sqlite"));
+  const good = join(root, "good"),
+    broken = join(root, "broken");
+  for (const [name, dir, spec] of [
+    ["Good", good, join(template, "dev-ext")],
+    ["Broken", broken, "npm:missing"],
+  ]) {
+    mkdirSync(dir);
+    writeFileSync(
+      join(dir, "settings.json"),
+      JSON.stringify({
+        packages: [spec],
+        skills: [join(template, "dev-ext", "main.js")],
+      }),
+    );
+    const agent = store.createAgent(name, root).agent;
+    store.run("UPDATE agents SET agent_directory=? WHERE id=?", dir, agent.id);
+  }
+  store.close();
+  const errors: string[] = [],
+    logs: string[] = [];
+  const originalError = console.error;
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    if (String(args[0]).includes("插件迁移失败")) errors.push(String(args[0]));
+    else originalError(...args);
+  });
+  t.mock.method(console, "log", (text: string) => {
+    if (text.includes("个人 Pi 插件已转为")) logs.push(text);
+  });
+  for (const pass of [1, 2]) {
+    const { app } = await createApp({
+      data,
+      piHome: join(root, "pi"),
+      desktops: join(root, "desktops"),
+    });
+    try {
+      await app.ready();
+    } finally {
+      await app.close();
+    }
+    if (pass === 1) {
+      assert.equal(logs.length, 1);
+      assert.equal(errors.length, 1);
+      assert(existsSync(join(good, ".atrium-packages.json")));
+      assert.equal(existsSync(join(broken, ".atrium-packages.json")), false);
+      assert.equal(
+        readFileSync(
+          join(good, "local", readdirSync(join(good, "local"))[0], "main.js"),
+          "utf8",
+        ),
+        "private copy",
+      );
+      assert.equal(
+        readFileSync(join(good, "settings.json"), "utf8").includes(template),
+        false,
+      );
+      assert.equal(
+        readFileSync(join(broken, "settings.json"), "utf8").includes(
+          "npm:missing",
+        ),
+        true,
+      );
+    } else assert.equal(logs.length, 1, "already migrated stays untouched");
+  }
+});
 
 test("暂存失败回滚：原插件和配置不变，不留下暂存目录", () =>
   fixture((_root, template, identity) => {
@@ -184,7 +261,7 @@ test("暂存失败回滚：原插件和配置不变，不留下暂存目录", ()
     const previous = process.env.ATRIUM_PI_TEMPLATE;
     process.env.ATRIUM_PI_TEMPLATE = template;
     try {
-      invalid(() => changeMode(identity, "own"), 400);
+      invalid(() => ensureOwnPackages(identity), 400);
       assert.equal(
         readFileSync(join(install, "package.json"), "utf8"),
         '{"version":"1.0.0"}',
@@ -203,13 +280,19 @@ test("暂存失败回滚：原插件和配置不变，不留下暂存目录", ()
     }
   }));
 
-test("插件配置不复制本地路径包；缺失默认插件拒绝，失败不留半成品", () =>
+test("模板内本地路径包复制到身份，外部包路径不改；缺失默认插件拒绝", () =>
   fixture((_root, template, identity) => {
     const local = join(template, "dev-ext");
     mkdirSync(local);
     assert.equal(ownSource(local, template), local);
-    assert.deepEqual(cloneTemplatePackages(template, identity, [local]), [
-      local,
+    const [copy] = cloneTemplatePackages(template, identity, [local]);
+    assert.equal(typeof copy, "string");
+    assert((copy as string).startsWith(join(identity, "local")));
+    assert(existsSync(copy as string));
+    const outside = join(_root, "external-ext");
+    mkdirSync(outside);
+    assert.deepEqual(cloneTemplatePackages(template, identity, [outside]), [
+      outside,
     ]);
     writeFileSync(
       join(template, "settings.json"),
@@ -282,6 +365,16 @@ test("HTTP 默认配置与身份插件 API 只改目标身份；无效和内置�
   );
   const path = `/api/agents/${created.json().agent.id}/plugins`;
   assert.equal((await app.inject({ url: path })).json().mode, "own");
+  assert.equal(
+    (
+      await app.inject({
+        method: "PUT",
+        url: `${path}/mode`,
+        payload: { mode: "shared" },
+      })
+    ).statusCode,
+    410,
+  );
   for (const spec of [
     "npm:@liuser/pi-atrium",
     "npm:bad spec",

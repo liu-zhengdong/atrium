@@ -205,18 +205,18 @@ MCP 提供 `list_agents`、`user_info`、`list_fork_sources`、`fork_agent`、`o
 
 ## 配置与数据
 
-| 环境变量              | 用途                                                       |
-| --------------------- | ---------------------------------------------------------- |
-| `ATRIUM_PORT`         | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口    |
-| `ATRIUM_DATA`         | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）          |
-| 模型凭据              | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录  |
-| `ATRIUM_PI_ACP_ENTRY` | 开发时覆盖 pi-atrium 的 dist/index.js；默认使用依赖包      |
-| `PI_ACP_PI_COMMAND`   | pi-atrium 使用的 Pi 可执行文件，默认 `pi`                  |
-| `PI_ACP_DIR`          | pi-atrium 状态与实例登记目录；TUI 和后端须一致             |
-| `PI_CODING_AGENT_DIR` | 未显式指定模板时的 Pi 配置来源；具名进程改用自己的配置目录 |
-| `ATRIUM_PI_TEMPLATE`  | 新身份默认配置模板，优先于 `PI_CODING_AGENT_DIR`           |
-| `ATRIUM_DESKTOPS`     | 桌面根目录，默认 `~/Atrium/desktops`                       |
-| `ATRIUM_PI_HOME`      | 覆盖 `~/.pi`（配置真身与名称入口）；测试用隔离目录         |
+| 环境变量              | 用途                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `ATRIUM_PORT`         | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口                              |
+| `ATRIUM_DATA`         | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）                                    |
+| 模型凭据              | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录                            |
+| `ATRIUM_PI_ACP_ENTRY` | 开发时覆盖 pi-atrium 的 dist/index.js；默认使用依赖包                                |
+| `PI_ACP_PI_COMMAND`   | pi-atrium 使用的 Pi 可执行文件，默认 `pi`                                            |
+| `PI_ACP_DIR`          | pi-atrium 状态与实例登记目录；TUI 和后端须一致                                       |
+| `PI_CODING_AGENT_DIR` | 未指定模板时的 Pi 配置来源；从 Atrium 身份环境启动服务时忽略此变量及调用者的会话变量 |
+| `ATRIUM_PI_TEMPLATE`  | 新身份默认配置模板，优先于 `PI_CODING_AGENT_DIR`；从身份环境启动时仍生效             |
+| `ATRIUM_DESKTOPS`     | 桌面根目录，默认 `~/Atrium/desktops`                                                 |
+| `ATRIUM_PI_HOME`      | 覆盖 `~/.pi`（配置真身与名称入口）；测试用隔离目录                                   |
 
 Pi 接入依赖 [`@liuser/pi-atrium`](https://github.com/liu-zhengdong/pi-atrium)。个人 TUI 用 `pi install git:github.com/liu-zhengdong/pi-atrium`。
 

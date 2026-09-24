@@ -12,10 +12,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import { templateChoice } from "./identity-env.ts";
 import { fileURLToPath } from "node:url";
 import { Problem } from "./store.ts";
 import { local, resolveInstalled } from "./package-spec.ts";
@@ -31,12 +31,7 @@ import {
   type ModelSpec,
 } from "../shared/model.ts";
 const require = createRequire(import.meta.url);
-export const defaultTemplate = () =>
-  resolve(
-    process.env.ATRIUM_PI_TEMPLATE ??
-      process.env.PI_CODING_AGENT_DIR ??
-      join(homedir(), ".pi/agent"),
-  );
+export const defaultTemplate = () => templateChoice(process.env).path;
 const readJson = (path: string) =>
   JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 const write = (path: string, value: unknown) =>

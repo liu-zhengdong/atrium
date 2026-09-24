@@ -275,13 +275,13 @@ export function Sidebar({
         <Settings2 size={15} />
         设置
       </button>
-      <footer className="workspace flex items-center gap-2 border-t border-black/[0.04] px-2 pt-2.5 text-[11px] text-muted">
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-accent" : "bg-amber-500"}`}
-        />
-        <span>{connected ? "本机工作区" : "正在连接…"}</span>
-        <span className="ml-auto text-[10px] text-muted/60">v0.1</span>
-      </footer>
+      {/* 连上时不占位；只在服务断开、正在重连时提示 */}
+      {!connected && (
+        <footer className="workspace flex items-center gap-2 border-t border-black/[0.04] px-2 pt-2.5 text-[11px] text-muted">
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          <span>正在连接…</span>
+        </footer>
+      )}
     </aside>
   );
 }

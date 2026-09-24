@@ -14,6 +14,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
+import { Store } from "../server/store.ts";
+import { RequestError } from "@agentclientprotocol/sdk";
+import { errorWithDetails } from "../server/runtime-error.ts";
 
 const exec = promisify(execFile);
 /** 与 service.test.ts 同一种夹具：隔离数据目录、随机端口、假的 Pi 模板，Pi 命令指向不存在的路径。 */
@@ -132,6 +135,13 @@ test(
     assert.match(await ok("show", "沈默"), /介绍：评审代码/);
     assert.match(await ok("show", "a2"), /沈默 · a2 · 离线/);
     assert.match(await refused("show", "不存在"), /Agent 不存在/);
+    const diagnosis = new Store(join(f.data, "atrium.sqlite"));
+    diagnosis.setFailure(
+      diagnosis.resolveAgentId("a2"),
+      errorWithDetails(RequestError.internalError({ details: "缺少运行扩展" })),
+    );
+    diagnosis.close();
+    assert.match(await ok("show", "a2"), /data: \{"details":"缺少运行扩展"\}/);
 
     // 偏好与资料：非法值被拒，合法值落库。
     assert.match(await ok("config", "沈默", "--heartbeat", "45"), /心跳 45 秒/);

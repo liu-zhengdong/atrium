@@ -17,6 +17,7 @@ import {
   PROTOCOL_VERSION,
   type ClientConnection,
 } from "@agentclientprotocol/sdk";
+import { errorWithDetails } from "./runtime-error.ts";
 import { z } from "zod";
 import {
   runtimeSchema,
@@ -579,13 +580,13 @@ export class Runtimes {
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
-      const message = this.redact(id, String(error));
+      const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
         if (recordFailure) this.store.setFailure(id, message);
         this.changed();
       }
-      if (message !== String(error)) throw new Error(message);
+      if (message !== errorWithDetails(error)) throw new Error(message);
       throw error;
     });
     this.connecting.set(id, promise);
@@ -951,7 +952,7 @@ export class Runtimes {
           this.changed();
         } catch (error) {
           if (!this.stopped) {
-            const message = this.redact(id, String(error));
+            const message = this.redact(id, errorWithDetails(error));
             this.store.deliveryError(pending.id, message);
             this.store.setFailure(id, message);
             this.store.finishTurn(id, false);
@@ -962,7 +963,7 @@ export class Runtimes {
       }
     } catch (error) {
       if (!this.stopped) {
-        const message = this.redact(id, String(error));
+        const message = this.redact(id, errorWithDetails(error));
         this.errors.set(id, message);
         // A TUI may replace its session while an idle status poll is in flight.
         // Only a failed wake/delivery is a failed turn, not that transient poll.
@@ -1009,6 +1010,11 @@ export class Runtimes {
               failure: null,
               deliveryAt: null,
             });
+            if (this.store.failure(id)) {
+              this.store.clearFailure(id);
+              this.errors.delete(id);
+              this.changed();
+            }
           } else if (event.kind === "delivery") {
             const turn = this.turns.get(id);
             if (turn?.generation === info.generation)
@@ -1040,12 +1046,7 @@ export class Runtimes {
               this.store.finishTurn(id, false);
               this.changed();
             } else if (turn?.generation === info.generation) {
-              this.store.finishTurn(
-                id,
-                agentTransition(this.store.failure(id), { kind: "success" })
-                  .read,
-                event.at,
-              );
+              this.store.finishTurn(id, true);
               this.errors.delete(id);
               this.changed();
             }

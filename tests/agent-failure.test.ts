@@ -9,6 +9,8 @@ import {
   type AgentFailure,
 } from "../server/agent-failure.ts";
 import { Store } from "../server/store.ts";
+import { RequestError } from "@agentclientprotocol/sdk";
+import { errorWithDetails } from "../server/runtime-error.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
 const previous: AgentFailure[] = [null, { text: "old", at: 100, count: 2 }];
@@ -19,6 +21,21 @@ const events: AgentEvent[] = [
   { kind: "direct" },
   { kind: "retry" },
 ];
+test("JSON-RPC 错误详情持久化，恢复工作后清除", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const agent = store.createAgent("诊断测试", tmpdir()).agent;
+  const text = errorWithDetails(
+    RequestError.internalError({ details: "缺少运行扩展" }),
+  );
+  assert.match(text, /data: \{"details":"缺少运行扩展"\}/);
+  store.setFailure(agent.id, text, 100);
+  assert.match(store.failure(agent.id)!.text, /缺少运行扩展/);
+  store.clearFailure(agent.id);
+  assert.equal(store.failure(agent.id), null);
+  assert.equal(errorWithDetails(new Error("普通错误")), "Error: 普通错误");
+});
+
 test("Agent 状态事件矩阵：失败递增、成功清除、仅心跳被封锁", () => {
   for (const before of previous)
     for (const event of events) {
@@ -46,7 +63,61 @@ test("Agent 状态事件矩阵：失败递增、成功清除、仅心跳被封�
   );
 });
 
-test("失败轮保留未读并换投递 ID；心跳停，重启持久；下一成功轮恢复", (t) => {
+test("成功轮的 run_end 早于 deliver 回执：重启后失败只重投本轮", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "atrium-delivery-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, "atrium.db");
+  let store = new Store(path);
+  const agent = store.createAgent("游标测试", directory).agent;
+  const chat = store.createChat("群聊", [agent.id]);
+  const old = Array.from({ length: 24 }, (_, index) =>
+    store.send(LOCAL_USER, {
+      chat_id: chat.id,
+      body: `旧消息 ${index}`,
+      mentions: [agent.id],
+    }),
+  );
+  for (const delivery of store.pending(agent.id)) store.accepted(delivery.id);
+  // 运行事件的时间早于 deliver RPC 确认时间；这些消息已经成功处理。
+  store.finishTurn(agent.id, true);
+  assert.equal(
+    store.all(
+      "SELECT id FROM deliveries WHERE agent_id=? AND state='accepted'",
+      agent.id,
+    ).length,
+    0,
+  );
+  assert.equal(
+    store.readState(chat.id, 0).find((r) => r.agent_id === agent.id)?.through,
+    old.at(-1)!.id,
+  );
+  store.close();
+  store = new Store(path);
+  t.after(() => store.close());
+  const fresh = store.send(LOCAL_USER, {
+    chat_id: chat.id,
+    body: "新消息",
+    mentions: [agent.id],
+  });
+  const current = store
+    .pending(agent.id)
+    .find((d) => d.through_message === fresh.id)!;
+  store.accepted(current.id);
+  store.finishTurn(agent.id, false);
+  assert.deepEqual(
+    store
+      .pending(agent.id)
+      .filter((d) => d.kind === "direct")
+      .map((d) => d.through_message),
+    [fresh.id],
+  );
+  assert.equal(
+    store.readState(chat.id, 0).find((r) => r.agent_id === agent.id)?.through,
+    fresh.id,
+  );
+});
+
+test("失败轮保留已读并换投递 ID；心跳停，重启持久；下一成功轮恢复", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "atrium-failure-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "atrium.db");
@@ -64,7 +135,7 @@ test("失败轮保留未读并换投递 ID；心跳停，重启持久；下一�
   store.finishTurn(agent.id, false);
   assert.equal(
     store.readState(chat.id, 0).find((r) => r.agent_id === agent.id)?.through,
-    0,
+    message.id,
   );
   assert.equal(store.schedule(Date.now() + 31000).includes(agent.id), false);
   const second = store.pending(agent.id).find((d) => d.kind === "direct")!;
@@ -79,13 +150,21 @@ test("失败轮保留未读并换投递 ID；心跳停，重启持久；下一�
   t.after(() => store.close());
   assert.equal(store.failure(agent.id)?.count, 1);
   store.accepted(third.id);
-  store.finishTurn(agent.id, true, 1); // run_end may precede the deliver RPC acknowledgement
+  store.finishTurn(agent.id, true); // run_end may precede the deliver RPC acknowledgement
   assert.equal(
     store.readState(chat.id, 0).find((r) => r.agent_id === agent.id)?.through,
-    0,
+    message.id,
   );
   store.completeDelivery(third.id);
   assert.equal(store.failure(agent.id), null);
+  const group = store.createChat("待处理群聊", [agent.id]);
+  store.send(LOCAL_USER, { chat_id: group.id, body: "请查阅", mentions: [] });
+  const wake = Date.now() + 60000;
+  assert(
+    store.schedule(wake).includes(agent.id),
+    "恢复后心跳可再次提醒未完成消息",
+  );
+  assert.equal(store.agent(agent.id).last_wake, wake);
   assert.equal(
     store.readState(chat.id, 0).find((r) => r.agent_id === agent.id)?.through,
     message.id,

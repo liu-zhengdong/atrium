@@ -200,6 +200,16 @@ export function AgentDrawer({
           </p>
         </div>
       </div>
+      {agent.session_reset_at && (
+        <details className="mx-5 my-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <summary className="cursor-pointer">
+            已换新会话 · 旧会话保留 · {time(agent.session_reset_at)}
+          </summary>
+          <p className="mt-2 break-words text-amber-800">
+            {agent.session_reset_reason}
+          </p>
+        </details>
+      )}
       {agent.failure && (
         <div className="px-5 py-3">
           <AgentFailure

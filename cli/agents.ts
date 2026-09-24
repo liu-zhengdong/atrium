@@ -101,6 +101,8 @@ const show: Command = {
         `工作目录：${agent.cwd}`,
         `配置目录：${agent.agent_directory ?? "无（旧记录，待升级）"}`,
         agent.session_file && `会话文件：${agent.session_file}`,
+        agent.session_reset_at &&
+          `会话已于 ${when(agent.session_reset_at)} 重建：${agent.session_reset_reason}`,
         `心跳：每 ${agent.config.heartbeat_seconds} 秒 · 最近一次 ${agent.last_wake ? when(agent.last_wake) : "还没有"}`,
         agent.unread ? `消息箱：${agent.unread} 条待处理` : "",
         agent.failure

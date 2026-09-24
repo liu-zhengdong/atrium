@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
 import { Store } from "../server/store.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { errorWithDetails } from "../server/runtime-error.ts";
 
@@ -113,6 +114,39 @@ test(
     assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
     assert(record && alive(record.pid));
+    const startup = await f.cli("--no-open");
+    assert.equal(startup.code, 0, startup.stderr);
+    assert.equal((startup.stdout.match(/停止：atrium stop/g) ?? []).length, 1);
+    const invalidCustom = await f.cli(
+      "connect",
+      "--custom",
+      "假服务",
+      "--base-url",
+      "http://127.0.0.1:1/v1",
+      "--api-key",
+      "fake",
+      "--model",
+      "demo",
+    );
+    assert.equal(invalidCustom.code, 2);
+    assert.match(
+      invalidCustom.stderr,
+      /--custom 要填 provider id：小写字母开头/,
+    );
+    assert.doesNotMatch(invalidCustom.stderr, /Invalid string|pattern/);
+    const badOption = await f.cli("send", "乙", "你好", "--bogus");
+    assert.equal(badOption.code, 2);
+    assert.match(badOption.stderr, /示例：atrium send 甲 你好/);
+    assert.doesNotMatch(badOption.stderr, /修正：/);
+    const badOptionJson = await f.cli(
+      "send",
+      "乙",
+      "你好",
+      "--bogus",
+      "--json",
+    );
+    assert.equal(badOptionJson.code, 2);
+    assert.equal(JSON.parse(badOptionJson.stdout).next, null);
     const again = await f.cli(
       "create",
       "沈默",
@@ -157,6 +191,14 @@ test(
     assert.doesNotMatch(modelError.error.message, /model:/);
     assert.match(modelError.next, /^atrium model 林岚 deepseek\//);
     assert(modelError.error.candidates.length <= 3);
+    const invalidBuiltin = await f.cli(
+      "model",
+      "林岚",
+      "openai/does-not-exist",
+    );
+    assert.equal(invalidBuiltin.code, 3);
+    assert.match(invalidBuiltin.stderr, /最接近的：openai\/gpt-4、/);
+    assert.doesNotMatch(invalidBuiltin.stderr, /gpt-4（openai\/gpt-4）/);
     const malformedModel = await f.cli("model", "林岚", "foo", "--json");
     assert.equal(malformedModel.code, 2);
     assert.match(
@@ -421,6 +463,33 @@ test(
       assigned.stdout,
       "已分配：甲 → k1 Claude Code（本机登录）\n看分配：atrium accounts\n",
     );
+    const repeated = await f.cli("assign", "甲", "k1");
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.match(repeated.stdout, /^已分配过：甲 → k1/);
+    const missingProvider = await f.cli("unassign", "甲");
+    assert.equal(missingProvider.code, 2);
+    assert.equal(
+      missingProvider.stderr,
+      "用法：atrium unassign 身份 provider\n修正：atrium unassign 甲 claude-bridge\n",
+    );
+    const missingJson = await f.cli("unassign", "甲", "--json");
+    assert.equal(
+      JSON.parse(missingJson.stdout).next,
+      "atrium unassign 甲 claude-bridge",
+    );
+    assert.equal(commandAgent("张.三-甲_1", "a1"), "张.三-甲_1");
+    for (const unsafe of ["张 三", "张;三", "张$三", "-选项", "张|三", "张`三"])
+      assert.equal(commandAgent(unsafe, "a1"), "a1");
+    const renamed = new Store(join(f.data, "atrium.sqlite"));
+    renamed.run("UPDATE agents SET name=? WHERE id=?", "张 三", agent.id);
+    renamed.close();
+    const spacedName = await f.cli("unassign", "张 三");
+    assert.equal(spacedName.code, 2);
+    assert.match(spacedName.stderr, /修正：atrium unassign a1 claude-bridge/);
+    assert.doesNotMatch(spacedName.stderr, /atrium unassign 张 三/);
+    const restored = new Store(join(f.data, "atrium.sqlite"));
+    restored.run("UPDATE agents SET name=? WHERE id=?", "甲", agent.id);
+    restored.close();
     const removal = await f.cli("unassign", "a1", "claude-bridge");
     assert.equal(removal.code, 0, removal.stderr);
     assert.match(removal.stdout, /重新分配：atrium assign a1 k1\n$/);

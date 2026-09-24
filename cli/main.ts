@@ -1,5 +1,6 @@
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { dataDirectory, serviceUrl } from "../server/service-state.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import { pad, width } from "./format.ts";
 import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
@@ -99,7 +100,7 @@ export async function main(argv: string[]): Promise<number> {
         const data = dataDirectory();
         const record = await startService(data);
         console.log(
-          `Atrium → ${serviceUrl(record)}\n服务已就绪 · PID ${record.pid}\n数据：${data}\n停止：atrium stop`,
+          `Atrium → ${serviceUrl(record)}\n服务已就绪 · PID ${record.pid}\n数据：${data}`,
         );
         if (name === undefined) await openWeb(record);
         return 0;
@@ -162,19 +163,28 @@ export async function main(argv: string[]): Promise<number> {
           strict: true,
         });
       } catch (error) {
-        usageNext = example(subcommand, command);
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}\n${optionError(error)}\n示例：${usageNext}`,
+          `用法：atrium ${subcommand} ${command.args}\n${optionError(error)}\n示例：${example(subcommand, command)}`,
           "usage",
         );
       }
       const [min, max] = command.positionals;
       if (parsed.positionals.length < min || parsed.positionals.length > max) {
-        usageNext = example(subcommand, command);
+        if (subcommand === "unassign" && parsed.positionals.length === 1) {
+          const { connect } = await import("./service.ts");
+          const credentials = await (
+            await connect(true)
+          ).get<{
+            ref: string;
+            assigned: { provider: string }[];
+          }>(`/credentials/${encodeURIComponent(parsed.positionals[0]!)}`);
+          if (credentials.assigned.length === 1)
+            usageNext = `atrium unassign ${commandAgent(parsed.positionals[0]!, credentials.ref)} ${credentials.assigned[0]!.provider}`;
+        }
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}\n示例：${usageNext}`.trimEnd(),
+          `用法：atrium ${subcommand} ${command.args}${usageNext ? "" : `\n示例：${example(subcommand, command)}`}`,
           "usage",
         );
       }
@@ -218,7 +228,7 @@ export async function main(argv: string[]): Promise<number> {
         console.error(result.message);
         if (commands[subcommand] && result.candidates?.length)
           console.error(
-            `最接近的：${result.candidates.map(({ name, ref }) => `${name}（${ref}）`).join("、")}`,
+            `最接近的：${result.candidates.map(({ name, ref }) => `${name === ref.split("/").at(-1) ? ref : `${name}（${ref}）`}`).join("、")}`,
           );
         if (result.next) console.error(`修正：${result.next}`);
       }

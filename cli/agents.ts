@@ -14,6 +14,8 @@ import { dataDirectory } from "../server/service-state.ts";
 import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
+import { Problem, closest } from "../server/problem.ts";
+import { recordNext } from "./contract.ts";
 
 export type AgentEntry = Overview["agents"][number];
 /** 与 Web 头像状态点同一套判断。 */
@@ -36,7 +38,13 @@ export function findAgent(view: Overview, reference: string): AgentEntry {
       item.name === reference ||
       item.id === reference,
   );
-  if (!agent) throw new Error(`Agent 不存在：${reference}`);
+  if (!agent)
+    throw new Problem(
+      404,
+      `没有叫「${reference}」的 Agent`,
+      "agent_not_found",
+      closest(reference, view.agents),
+    );
   return agent;
 }
 
@@ -134,6 +142,11 @@ const create: Command = {
       start: values.start === true,
     });
     console.log(`${agent.name} · ${agent.ref}`);
+    recordNext(
+      values.start === true
+        ? `发私聊：atrium send ${agent.ref} 正文`
+        : `启动：atrium start ${agent.ref}`,
+    );
     if (start_error) throw new Error(start_error);
   },
 };
@@ -150,6 +163,7 @@ const start: Command = {
     console.log(
       `已启动 ${started.name} · ${presence(started)}${started.runtime ? ` · PID ${started.runtime.pid} · ${started.runtime.model}` : ""}`,
     );
+    recordNext(`发私聊：atrium send ${started.ref} 正文`);
   },
 };
 
@@ -186,8 +200,10 @@ const remove: Command = {
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
     if (values.yes !== true)
-      throw new Error(
+      throw new Problem(
+        400,
         `将删除 ${agent.name}（${agent.ref}，${presence(agent)}）：撤销访问与后续唤醒，历史聊天保留。确认请加 --yes`,
+        "usage",
       );
     await client.delete(`/agents/${agent.id}`, { confirm: agent.ref });
     console.log(`已删除 ${agent.name}（${agent.ref}）；历史保留`);
@@ -419,7 +435,8 @@ const run: Command = {
   args: "名称",
   about: "用长期身份打开原生 Pi TUI；不经过服务",
   positionals: [1, 1],
-  async run({ positionals: [reference] }) {
+  async run({ positionals: [reference], json }) {
+    if (json) throw new Problem(400, "交互式 run 不支持 --json", "usage");
     const data = dataDirectory();
     if (!existsSync(join(data, "atrium.sqlite")))
       throw new Error(

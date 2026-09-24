@@ -18,6 +18,7 @@ import { roster } from "./agents.ts";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
 import {
   accountLabel,
+  assignedAccountLabel,
   assignmentFailure,
   assignmentSummary,
   currentAssignment,
@@ -134,7 +135,7 @@ export const connectCommand: Command = {
     let providers: ProviderEntry[];
     try {
       providers = await client.get<ProviderEntry[]>("/providers");
-      reading.stop("供应商已就绪");
+      reading.stop();
     } catch (error) {
       reading.error("供应商目录读取失败");
       throw error;
@@ -242,7 +243,7 @@ export const connectCommand: Command = {
       const agents = (await roster(client)).agents;
       const options = agents.map((agent) => ({
         value: agent.id,
-        label: `${agent.name} (${agent.ref})${currentAssignment(agent.ref, provider.id, existing) ? ` · 当前 ${provider.name} ${currentAssignment(agent.ref, provider.id, existing)}` : ""}`,
+        label: `${agent.name} (${agent.ref})${assignedAccountLabel(agent.ref, provider.id, existing) ? ` · 当前 ${assignedAccountLabel(agent.ref, provider.id, existing)}` : ""}`,
       }));
       const selected = !agents.length
         ? []
@@ -276,7 +277,9 @@ export const connectCommand: Command = {
             ...(previous ? { replace: true } : {}),
           });
           if (previous)
-            replaced.push(`${agent.name}（${agent.ref}）：${previous} → ${id}`);
+            replaced.push(
+              `${agent.name}（${agent.ref}）：${assignedAccountLabel(agent.ref, provider.id, existing)} → ${name}（${id}）`,
+            );
           else added.push(`${agent.name}（${agent.ref}）`);
         } catch (error) {
           failures.push(assignmentFailure(agent, error, provider, existing));

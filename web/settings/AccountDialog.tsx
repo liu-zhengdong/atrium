@@ -11,6 +11,7 @@ import { api, messageOf } from "../api.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import {
   accountLabel,
+  assignedAccountLabel,
   assignmentFailure,
   assignmentSummary,
   currentAssignment,
@@ -191,7 +192,7 @@ export function AccountDialog({
             done.push(id);
             if (previous)
               newReplaced.push(
-                `${agent.name}（${agent.ref}）：${previous} → ${created}`,
+                `${agent.name}（${agent.ref}）：${assignedAccountLabel(agent.ref, provider.id, accounts)} → ${name}（${created}）`,
               );
             else newAdded.push(`${agent.name}（${agent.ref}）`);
           } catch (e) {

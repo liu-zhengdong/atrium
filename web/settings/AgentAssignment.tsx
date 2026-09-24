@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, Search } from "lucide-react";
 import type { Agent } from "../components/AgentAvatar.tsx";
-import { currentAssignment } from "../../shared/providers.ts";
+import { assignedAccountLabel } from "../../shared/providers.ts";
 
 export function AgentAssignment({
   agents,
@@ -16,7 +16,12 @@ export function AgentAssignment({
   completed: string[];
   setSelected: (next: string[]) => void;
   provider: { id: string; name: string };
-  accounts: { id: string; provider: string; assigned: string[] }[];
+  accounts: {
+    id: string;
+    name: string;
+    provider: string;
+    assigned: string[];
+  }[];
 }) {
   const [search, setSearch] = useState("");
   const visible = agents.filter((agent) =>
@@ -67,10 +72,10 @@ export function AgentAssignment({
             <span className="min-w-0 truncate">
               {agent.name}{" "}
               <span className="text-xs text-muted">({agent.ref})</span>
-              {currentAssignment(agent.ref, provider.id, accounts) && (
+              {assignedAccountLabel(agent.ref, provider.id, accounts) && (
                 <span className="ml-2 text-xs text-muted">
-                  · 当前 {provider.name}{" "}
-                  {currentAssignment(agent.ref, provider.id, accounts)}
+                  · 当前{" "}
+                  {assignedAccountLabel(agent.ref, provider.id, accounts)}
                 </span>
               )}
             </span>

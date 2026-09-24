@@ -31,7 +31,7 @@ export function AgentsPage({
           .map((agent) => (
             <button
               key={agent.id}
-              className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-soft"
+              className="-mx-2 flex w-[calc(100%+16px)] items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-soft"
               onClick={() => open(agent.id)}
             >
               <Avatar name={agent.name} presence={agentPresence(agent)} small />

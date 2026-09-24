@@ -31,7 +31,7 @@ export function ServicePage({ query }: { query: string }) {
     : [];
   return (
     <div className="space-y-6">
-      <h1 className="m-0 text-xl font-medium">服务</h1>
+      <h1 className="text-xl font-medium">服务</h1>
       {error && (
         <p role="alert" className="text-xs text-[#9a5b4b]">
           {error}
@@ -41,13 +41,13 @@ export function ServicePage({ query }: { query: string }) {
         <p className="text-xs text-muted">正在读取服务信息…</p>
       )}
       {service && (
-        <div className="rounded-2xl bg-white px-5 shadow-lift">
+        <div>
           {rows
             .filter(([label, value]) => matches(query, label, value))
             .map(([label, value]) => (
               <div
                 key={label}
-                className="flex flex-col gap-2 border-b border-line-subtle py-4 last:border-0 sm:flex-row sm:items-center sm:justify-between sm:gap-6"
+                className="flex flex-col gap-2 border-b border-line-subtle py-4 first:pt-0 last:border-0 sm:flex-row sm:items-center sm:justify-between sm:gap-6"
               >
                 <span className="shrink-0 text-xs text-ink">{label}</span>
                 <code className="break-all text-[11px] text-muted sm:text-right">

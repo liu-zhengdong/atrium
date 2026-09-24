@@ -55,7 +55,7 @@ export function ProfilePage({
   }
   return (
     <div className="space-y-6">
-      <h1 className="m-0 text-xl font-medium">个人资料</h1>
+      <h1 className="text-xl font-medium">个人资料</h1>
       {error && (
         <p role="alert" className="text-xs text-[#9a5b4b]">
           {error}
@@ -65,10 +65,7 @@ export function ProfilePage({
         <p className="text-xs text-muted">正在读取资料…</p>
       )}
       {profile && (
-        <form
-          onSubmit={(event) => void save(event)}
-          className="space-y-4 rounded-2xl bg-white p-5 shadow-lift"
-        >
+        <form onSubmit={(event) => void save(event)} className="space-y-4">
           {matches(query, "称呼", "名字", "Agent") && (
             <label className="block text-xs text-muted">
               称呼

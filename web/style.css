@@ -100,11 +100,14 @@ a {
   color: #3c5e4a;
   text-underline-offset: 3px;
 }
-p,
-h1,
-h2,
-h3 {
-  margin: 0;
+/* 让无层的 Tailwind 间距工具覆盖元素默认 margin 重置。 */
+@layer base {
+  p,
+  h1,
+  h2,
+  h3 {
+    margin: 0;
+  }
 }
 h1 {
   font-size: 17px;

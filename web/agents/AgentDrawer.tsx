@@ -6,7 +6,6 @@ import { time } from "../time.ts";
 import { SidePanel } from "../components/SidePanel.tsx";
 import { AgentFailure } from "../components/AgentFailure.tsx";
 import { Empty } from "../components/Empty.tsx";
-import { AgentTrace } from "./AgentTrace.tsx";
 import { AgentModel } from "./AgentModel.tsx";
 import { AgentCredentials } from "../settings/AgentCredentials.tsx";
 import {
@@ -20,20 +19,20 @@ export function AgentDrawer({
   revision,
   close,
   openConfig,
+  openTrace,
   visible,
 }: {
   agent: Agent;
   revision: number;
   close: () => void;
   openConfig: () => void;
+  openTrace: () => void;
   visible: boolean;
 }) {
-  const [tab, setTab] = useState<"trace" | "box">("trace");
   const [box, setBox] = useState<Page<BoxMessage> | null>(null);
   const [pages, setPages] = useState([0]);
   const [error, setError] = useState("");
   useEffect(() => {
-    if (tab !== "box") return;
     let active = true;
     void api<Page<BoxMessage>>(`/agents/${agent.id}/box?after=${pages.at(-1)}`)
       .then((value) => {
@@ -45,7 +44,7 @@ export function AgentDrawer({
     return () => {
       active = false;
     };
-  }, [agent.id, revision, pages, tab]);
+  }, [agent.id, revision, pages]);
   return (
     <SidePanel title={agent.name} close={close}>
       <div className="flex items-center gap-3 bg-[#f9faf9] px-5 py-4">
@@ -67,74 +66,68 @@ export function AgentDrawer({
           )}
         </div>
       </div>
-      <div className="flex gap-5 px-5 text-xs">
-        <button
-          className={`py-3 ${tab === "trace" ? "text-accent-strong" : "text-muted"}`}
-          onClick={() => setTab("trace")}
-        >
-          <Activity size={15} className="mr-1 inline" />
-          运行轨迹
-        </button>
-        <button
-          className={`py-3 ${tab === "box" ? "text-accent-strong" : "text-muted"}`}
-          onClick={() => setTab("box")}
-        >
+      <div className="flex items-center justify-between px-5 text-xs">
+        <h3 className="py-3 text-muted">
           <Inbox size={15} className="mr-1 inline" />
           通知{" "}
           {agent.unread > 0 && <span className="badge">{agent.unread}</span>}
+        </h3>
+        <button
+          className="flex items-center gap-1 py-3 text-accent-strong hover:underline"
+          onClick={openTrace}
+        >
+          <Activity size={15} />
+          运行轨迹
+          <ChevronRight size={13} />
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {tab === "trace" ? (
-          <AgentTrace agent={agent} revision={revision} />
-        ) : (
-          <div className="px-5 py-4">
-            {!box ? (
-              <LoaderCircle className="spin" size={16} />
-            ) : !box.items.length ? (
-              <Empty icon={<Inbox size={26} />} title="通知箱暂时没有消息" />
-            ) : (
-              box.items.map((notice) => (
-                <article key={notice.id} className="notice">
-                  <div className="notice-meta">
-                    <span>{notice.source}</span>
-                    <time>{time(notice.created_at)}</time>
-                  </div>
-                  <h3>{notice.title}</h3>
-                  <details>
-                    <summary>查看消息内容</summary>
-                    <pre className="whitespace-pre-wrap break-all">
-                      {notice.body}
-                    </pre>
-                  </details>
-                  {notice.url && (
-                    <a href={notice.url} target="_blank" rel="noreferrer">
-                      查看来源 <ChevronRight size={13} />
-                    </a>
-                  )}
-                </article>
-              ))
-            )}
-            {box && (pages.length > 1 || box.has_more) && (
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  className="button secondary"
-                  disabled={pages.length === 1}
-                  onClick={() => setPages((p) => p.slice(0, -1))}
-                >
-                  上一页
-                </button>
-                <button
-                  className="button secondary"
-                  disabled={!box.has_more}
-                  onClick={() => setPages((p) => [...p, box.next_after])}
-                >
-                  下一页
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <div className="px-5 py-4">
+          {!box ? (
+            <LoaderCircle className="spin" size={16} />
+          ) : !box.items.length ? (
+            <Empty icon={<Inbox size={26} />} title="通知箱暂时没有消息" />
+          ) : (
+            box.items.map((notice) => (
+              <article key={notice.id} className="notice">
+                <div className="notice-meta">
+                  <span>{notice.source}</span>
+                  <time>{time(notice.created_at)}</time>
+                </div>
+                <h3>{notice.title}</h3>
+                <details>
+                  <summary>查看消息内容</summary>
+                  <pre className="whitespace-pre-wrap break-all">
+                    {notice.body}
+                  </pre>
+                </details>
+                {notice.url && (
+                  <a href={notice.url} target="_blank" rel="noreferrer">
+                    查看来源 <ChevronRight size={13} />
+                  </a>
+                )}
+              </article>
+            ))
+          )}
+          {box && (pages.length > 1 || box.has_more) && (
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="button secondary"
+                disabled={pages.length === 1}
+                onClick={() => setPages((p) => p.slice(0, -1))}
+              >
+                上一页
+              </button>
+              <button
+                className="button secondary"
+                disabled={!box.has_more}
+                onClick={() => setPages((p) => [...p, box.next_after])}
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       <div className="space-y-2 px-5 py-4">
         <h3 className="text-xs font-medium">模型 · 账号</h3>

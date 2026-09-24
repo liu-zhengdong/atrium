@@ -167,8 +167,8 @@ export function TopBar({
               {!isGroup && activeChat.direct_agent && (
                 <button
                   className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
-                  aria-label="Agent 轨迹与详情"
-                  title="Agent 轨迹与详情"
+                  aria-label="查看运行轨迹"
+                  title="查看运行轨迹"
                   onClick={() => details(activeChat.direct_agent!)}
                 >
                   <Users size={14} />

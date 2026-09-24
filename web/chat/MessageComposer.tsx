@@ -276,11 +276,6 @@ export function MessageComposer({
           </button>
         </div>
       </form>
-      <p className="mx-1 mt-1.5 text-center text-[10.5px] text-muted/60">
-        {active.kind === "group"
-          ? "普通消息按对方心跳节奏提醒；明确 @ 不等待，对方离线也会叫醒。"
-          : "私聊不等待；对方离线就把它叫醒。"}
-      </p>
     </div>
   );
 }

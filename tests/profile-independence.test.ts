@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
-  realpathSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,7 +21,7 @@ function inspect(dir: string, template: string) {
   for (const item of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, item.name);
     if (item.isDirectory()) inspect(path, template);
-    else if (item.isSymbolicLink() && item.name !== "auth.json")
+    else if (item.isSymbolicLink())
       assert(!readlinkSync(path).includes(template), path);
     else if (item.name.endsWith(".json")) {
       const value = JSON.parse(readFileSync(path, "utf8"));
@@ -38,7 +37,7 @@ function inspect(dir: string, template: string) {
   }
 }
 
-test("身份独立于模板：相对/绝对链接、本地包与配置路径；凭据暂共享", (t) => {
+test("身份独立于模板：相对/绝对链接、本地包与配置路径；不继承个人凭据", (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-independent-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const template = join(root, "template");
@@ -128,14 +127,12 @@ test("身份独立于模板：相对/绝对链接、本地包与配置路径；�
     readlinkSync(join(target, "npm/node_modules/.bin/external")),
     external,
   );
-  assert.equal(
-    readlinkSync(join(target, "auth.json")),
-    realpathSync(join(template, "auth.json")),
-  );
+  assert.equal(readdirSync(target).includes("auth.json"), false);
   assert.equal(syncIdentityProfile(target).length, 0);
+  assert.equal(readdirSync(target).includes("auth.json"), false);
   assert.equal(
-    readlinkSync(join(target, "auth.json")),
-    realpathSync(join(template, "auth.json")),
+    readFileSync(join(template, "auth.json"), "utf8"),
+    '{"demo":"private"}',
   );
   for (const value of ["npm:demo", localCopy]) {
     changePackages(target, { action: "disable", spec: value });

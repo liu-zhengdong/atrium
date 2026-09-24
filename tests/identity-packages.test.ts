@@ -24,6 +24,7 @@ import {
 } from "../server/identity-packages.ts";
 import { Problem, Store } from "../server/store.ts";
 import { createApp } from "../server/app.ts";
+import { Accounts } from "../server/accounts.ts";
 import { Runtimes } from "../server/runtime.ts";
 
 const fixture = (
@@ -222,7 +223,7 @@ test("服务启动不迁移共享插件；仅身份启动时迁移，失败保�
   t.mock.method(console, "log", (text: string) => {
     if (text.includes("个人 Pi 插件已转为")) logs.push(text);
   });
-  const { app } = await createApp({
+  const { app, store: activeStore } = await createApp({
     data,
     piHome: join(root, "pi"),
     desktops: join(root, "desktops"),
@@ -233,6 +234,17 @@ test("服务启动不迁移共享插件；仅身份启动时迁移，失败保�
     assert.equal(errors.length, 0);
     assert.equal(existsSync(join(good, ".atrium-packages.json")), false);
     assert.equal(existsSync(join(broken, ".atrium-packages.json")), false);
+    const denied = await app.inject({
+      method: "POST",
+      url: `/api/agents/${ids.Good}/start`,
+    });
+    assert.equal(denied.statusCode, 409);
+    assert.equal(denied.json().code, "unassigned_account");
+    assert.equal(logs.length, 0, "unassigned start must not migrate packages");
+    assert.equal(existsSync(join(good, ".atrium-packages.json")), false);
+    const accounts = new Accounts(activeStore, data);
+    const account = accounts.add("deepseek", "fixture", "TEST_KEY").id;
+    for (const id of Object.values(ids)) accounts.assign(id, account);
     for (const name of ["Good", "Broken", "Good"]) {
       const response = await app.inject({
         method: "POST",

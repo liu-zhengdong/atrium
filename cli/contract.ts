@@ -12,6 +12,7 @@ export const exitCodes = {
   model_not_found: 3,
   not_found: 3,
   conflict: 4,
+  validation_failed: 4,
   already_assigned: 4,
   service_unavailable: 5,
   timeout: 124,
@@ -45,6 +46,7 @@ export function correction(code: ErrorCode, usage?: string) {
   if (code === "chat_not_found") return "atrium chats";
   if (code === "agent_not_found") return "atrium list";
   if (code === "account_not_found") return "atrium accounts";
+  if (code === "validation_failed") return "atrium connect --help";
   if (code === "service_unavailable") return "atrium status";
   return null;
 }

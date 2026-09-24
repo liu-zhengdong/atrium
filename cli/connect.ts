@@ -15,6 +15,7 @@ import {
 import type { Command } from "./main.ts";
 import { str, strs } from "./main.ts";
 import { connect } from "./service.ts";
+import { recordNext, recordResult } from "./contract.ts";
 import { roster } from "./agents.ts";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
 import {
@@ -181,12 +182,9 @@ export const connectCommand: Command = {
         checking?.error("校验失败");
         throw error;
       }
-      const next = `分配给身份：atrium assign <身份> ${saved.id}`;
-      if (json) console.log(JSON.stringify({ id: saved.id, provider, next }));
-      else {
-        log.success(`${provider}（${saved.id}）已保存`);
-        outro(next);
-      }
+      recordResult({ ...saved, provider });
+      recordNext(`分配给身份：atrium assign <身份> ${saved.id}`);
+      if (!json) log.success(`${provider}（${saved.id}）已保存`);
       return 0;
     }
     if (!process.stdin.isTTY || !process.stdout.isTTY)

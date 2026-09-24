@@ -660,8 +660,20 @@ export class Runtimes {
       const cwd = ensureDesktopCwd(this.store, this.desktops, current);
       if (cwd !== current.cwd) this.changed();
       if (current.agent_directory) {
-        // Failed startup migration must not launch Pi with personal plugins.
-        ensureOwnPackages(current.agent_directory);
+        // Migrate only when this identity is started, never on service boot.
+        // A failed migration must not launch Pi with personal plugins.
+        const migrationStarted = Date.now();
+        try {
+          if (ensureOwnPackages(current.agent_directory))
+            console.log(
+              `${current.name} 的个人 Pi 插件已转为独立安装（${Date.now() - migrationStarted}ms）`,
+            );
+        } catch (error) {
+          console.error(
+            `${current.name} 的插件迁移失败（${Date.now() - migrationStarted}ms），保留原配置以便重试：${error}`,
+          );
+          throw error;
+        }
         // A profile left on the old layout costs the Agent a rule, not its session.
         for (const notice of syncIdentityProfile(
           current.agent_directory,

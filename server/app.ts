@@ -72,18 +72,6 @@ export async function createApp(options: {
     mode: 0o700,
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
-  if (options.runtime !== false)
-    for (const agent of store.agents()) {
-      if (!agent.agent_directory) continue;
-      try {
-        if (ensureOwnPackages(agent.agent_directory))
-          console.log(`${agent.name} 的个人 Pi 插件已转为独立安装`);
-      } catch (error) {
-        console.error(
-          `${agent.name} 的插件迁移失败，保留原配置以便重试：${error}`,
-        );
-      }
-    }
   const accounts = new Accounts(store, options.data);
   if (options.runtime !== false) {
     accounts.start();

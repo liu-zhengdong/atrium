@@ -169,7 +169,7 @@ test("现有共享身份迁移到独立目录；重复启动不修改既有安�
     }
   }));
 
-test("服务启动迁移共享插件，坏身份隔离；重复启动只迁移一次", async (t) => {
+test("服务启动不迁移共享插件；仅身份启动时迁移，失败保留待重试", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-plugins-boot-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const template = join(root, "template"),
@@ -186,6 +186,7 @@ test("服务启动迁移共享插件，坏身份隔离；重复启动只迁移�
   const store = new Store(join(data, "atrium.sqlite"));
   const good = join(root, "good"),
     broken = join(root, "broken");
+  const ids: Record<string, string> = {};
   for (const [name, dir, spec] of [
     ["Good", good, join(template, "dev-ext")],
     ["Broken", broken, "npm:missing"],
@@ -199,9 +200,18 @@ test("服务启动迁移共享插件，坏身份隔离；重复启动只迁移�
       }),
     );
     const agent = store.createAgent(name, root).agent;
+    ids[name] = agent.id;
     store.run("UPDATE agents SET agent_directory=? WHERE id=?", dir, agent.id);
   }
   store.close();
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc: () => Promise<unknown> },
+    "rpc",
+    async () => {
+      throw new Error("gateway probe stopped");
+    },
+  );
+  t.mock.method(Runtimes.prototype, "pump", async () => {});
   const errors: string[] = [],
     logs: string[] = [];
   const originalError = console.error;
@@ -212,40 +222,53 @@ test("服务启动迁移共享插件，坏身份隔离；重复启动只迁移�
   t.mock.method(console, "log", (text: string) => {
     if (text.includes("个人 Pi 插件已转为")) logs.push(text);
   });
-  for (const pass of [1, 2]) {
-    const { app } = await createApp({
-      data,
-      piHome: join(root, "pi"),
-      desktops: join(root, "desktops"),
-    });
-    try {
-      await app.ready();
-    } finally {
-      await app.close();
+  const { app } = await createApp({
+    data,
+    piHome: join(root, "pi"),
+    desktops: join(root, "desktops"),
+  });
+  try {
+    await app.ready();
+    assert.equal(logs.length, 0);
+    assert.equal(errors.length, 0);
+    assert.equal(existsSync(join(good, ".atrium-packages.json")), false);
+    assert.equal(existsSync(join(broken, ".atrium-packages.json")), false);
+    for (const name of ["Good", "Broken", "Good"]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/agents/${ids[name]}/start`,
+      });
+      assert.equal(
+        response.statusCode,
+        name === "Broken" ? 400 : 500,
+        response.body,
+      );
     }
-    if (pass === 1) {
-      assert.equal(logs.length, 1);
-      assert.equal(errors.length, 1);
-      assert(existsSync(join(good, ".atrium-packages.json")));
-      assert.equal(existsSync(join(broken, ".atrium-packages.json")), false);
-      assert.equal(
-        readFileSync(
-          join(good, "local", readdirSync(join(good, "local"))[0], "main.js"),
-          "utf8",
-        ),
-        "private copy",
-      );
-      assert.equal(
-        readFileSync(join(good, "settings.json"), "utf8").includes(template),
-        false,
-      );
-      assert.equal(
-        readFileSync(join(broken, "settings.json"), "utf8").includes(
-          "npm:missing",
-        ),
-        true,
-      );
-    } else assert.equal(logs.length, 1, "already migrated stays untouched");
+    assert.equal(logs.length, 1, "already migrated stays untouched");
+    assert.match(logs[0], /Good.*已转为独立安装（\d+ms）/);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /Broken.*迁移失败（\d+ms）/);
+    assert(existsSync(join(good, ".atrium-packages.json")));
+    assert.equal(existsSync(join(broken, ".atrium-packages.json")), false);
+    assert.equal(
+      readFileSync(
+        join(good, "local", readdirSync(join(good, "local"))[0], "main.js"),
+        "utf8",
+      ),
+      "private copy",
+    );
+    assert.equal(
+      readFileSync(join(good, "settings.json"), "utf8").includes(template),
+      false,
+    );
+    assert.equal(
+      readFileSync(join(broken, "settings.json"), "utf8").includes(
+        "npm:missing",
+      ),
+      true,
+    );
+  } finally {
+    await app.close();
   }
 });
 

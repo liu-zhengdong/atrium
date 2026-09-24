@@ -176,7 +176,9 @@ export class Store {
         type TEXT NOT NULL CHECK(type IN ('oauth','api_key','local')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT);
       CREATE TABLE IF NOT EXISTS credential_modes (agent_id TEXT PRIMARY KEY REFERENCES agents(id), mode TEXT NOT NULL CHECK(mode IN ('shared','assigned')), shared_target TEXT);
       CREATE TABLE IF NOT EXISTS account_assignments (agent_id TEXT NOT NULL REFERENCES agents(id), provider TEXT NOT NULL,
-        account_number INTEGER NOT NULL REFERENCES accounts(number), PRIMARY KEY(agent_id,provider));`);
+        account_number INTEGER NOT NULL REFERENCES accounts(number), PRIMARY KEY(agent_id,provider));
+      CREATE TABLE IF NOT EXISTS identity_link_migrations (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+        directory TEXT NOT NULL, template TEXT NOT NULL);`);
     this.migrateLocalAccounts();
     // Allocate once, in legacy creation order. AUTOINCREMENT prevents reuse even
     // if a chat is removed; a trigger also covers writes from an older binary.

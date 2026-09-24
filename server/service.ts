@@ -12,6 +12,10 @@ import {
   type ServiceRecord,
 } from "./service-state.ts";
 import { ensureWebDist } from "./web-dist.ts";
+import {
+  cleanIdentityEnvironment,
+  identityEnvironmentContext,
+} from "./identity-env.ts";
 
 async function request(record: ServiceRecord, stop = false) {
   const response = await fetch(
@@ -99,12 +103,22 @@ export async function startService(data: string) {
     mkdirSync(data, { recursive: true, mode: 0o700 });
     const log = openSync(join(data, "service.log"), "a", 0o600);
     try {
+      const cleaned = cleanIdentityEnvironment(
+        process.env,
+        identityEnvironmentContext(process.env),
+      );
       child = spawn(
         process.execPath,
         ["--import", "tsx", join(packageRoot, "server/main.ts")],
         {
           cwd: packageRoot,
-          env: { ...process.env, ATRIUM_DATA: data },
+          env: {
+            ...cleaned.env,
+            ATRIUM_DATA: data,
+            ...(cleaned.ignored.length
+              ? { ATRIUM_IGNORED_IDENTITY_ENV: cleaned.ignored.join(",") }
+              : {}),
+          },
           detached: true,
           stdio: ["ignore", log, log],
           windowsHide: true,

@@ -82,7 +82,9 @@ export async function createApp(options: {
     bodyLimit: 11 * 1024 * 1024,
   });
   const streams = new Set<import("node:http").ServerResponse>();
+  const waiters = new Set<{ wake: () => void; cancel: () => void }>();
   const changed = () => {
+    for (const waiter of [...waiters]) waiter.wake();
     for (const stream of streams)
       if (!stream.write("event: change\ndata: {}\n\n")) stream.destroy();
   };
@@ -740,15 +742,118 @@ export async function createApp(options: {
     const q = z
       .object({
         before: z.coerce.number().int().positive().optional(),
+        after: z.coerce.number().int().nonnegative().optional(),
         read_from: z.coerce.number().int().positive().optional(),
         around: z.coerce.number().int().positive().optional(),
       })
       .parse(request.query);
-    return store.timeline(
-      agentParams(request),
-      q.before,
-      q.read_from,
-      q.around,
+    if (
+      q.after !== undefined &&
+      (q.before !== undefined ||
+        q.around !== undefined ||
+        q.read_from !== undefined)
+    )
+      throw new Problem(
+        400,
+        "--after 不能与 --before、around 或 read_from 同时使用",
+      );
+    const chatId = agentParams(request);
+    return q.after === undefined
+      ? store.timeline(chatId, q.before, q.read_from, q.around)
+      : store.timelineAfter(chatId, q.after);
+  });
+  // 等待注册与首次读取在同一同步调用栈中完成；不会漏掉检查与订阅之间的消息。
+  const waitQuery = z.object({
+    after: z.coerce.number().int().nonnegative().optional(),
+    timeout: z.coerce.number().int().min(1).max(3600).default(300),
+  });
+  function longWait<T>(
+    reply: import("fastify").FastifyReply,
+    timeout: number,
+    check: () => T | null,
+    onTimeout: () => T,
+  ) {
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+    });
+    reply.raw.flushHeaders();
+    let done = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (value?: T) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      waiters.delete(waiter);
+      reply.raw.off("close", disconnected);
+      if (value !== undefined && !reply.raw.destroyed)
+        reply.raw.end(JSON.stringify(value));
+    };
+    const disconnected = () => finish();
+    const wake = () => {
+      try {
+        const result = check();
+        if (result !== null) finish(result);
+      } catch (error) {
+        app.log.error(error, "wait check failed");
+        finish();
+        reply.raw.destroy();
+      }
+    };
+    const waiter = { wake, cancel: () => finish(onTimeout()) };
+    reply.raw.on("close", disconnected);
+    waiters.add(waiter);
+    timer = setTimeout(() => finish(onTimeout()), timeout * 1000);
+    wake();
+  }
+  app.get("/api/chats/:id/wait", (request, reply) => {
+    const q = waitQuery.parse(request.query);
+    const chatId = agentParams(request);
+    const after = q.after ?? store.latestMessageId(chatId);
+    // 即使指定 after，也在挂等待之前核对会话存在。
+    store.chat(chatId);
+    longWait(
+      reply,
+      q.timeout,
+      () => {
+        const page = store.timelineAfter(chatId, after);
+        return page.items.length ? { ...page, after, timed_out: false } : null;
+      },
+      () => ({ items: [], has_more: false, after, timed_out: true }),
+    );
+  });
+  app.get("/api/agents/:agent/wait", (request, reply) => {
+    const q = waitQuery.pick({ timeout: true }).parse(request.query);
+    const agentId = identityRef(request);
+    store.agent(agentId);
+    const state = () => {
+      const info = runtimes?.connections.get(agentId)?.info;
+      return info ? (info.busy ? "busy" : "idle") : "offline";
+    };
+    const initial = state();
+    const startedAt = Date.now();
+    const info = runtimes?.connections.get(agentId)?.info;
+    longWait(
+      reply,
+      q.timeout,
+      () => {
+        const status = state();
+        if (status === "busy") return null;
+        const ended =
+          initial === "busy"
+            ? (info &&
+                store.one<{ at: number }>(
+                  "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
+                  agentId,
+                  info.runtimeId,
+                  info.generation,
+                  startedAt,
+                )?.at) ||
+              Date.now()
+            : null;
+        return { status, finished_at: ended, timed_out: false };
+      },
+      () => ({ status: state(), finished_at: null, timed_out: true }),
     );
   });
   app.patch("/api/chats/:id", (request) => {
@@ -871,11 +976,12 @@ export async function createApp(options: {
   }
   app.addHook("preClose", async () => {
     for (const stream of streams) stream.end();
+    for (const waiter of [...waiters]) waiter.cancel();
     await runtimes?.close();
   });
   app.addHook("onClose", async () => {
     await accounts.close();
     store.close();
   });
-  return { app, store, runtimes };
+  return { app, store, runtimes, pendingWaits: () => waiters.size };
 }

@@ -108,7 +108,10 @@ atrium assign 林岚 k1                        # 把账号分配给身份
 
 # 聊天与通知
 atrium chats                                  # 会话列表
-atrium read c1                                # 读消息；目标写身份名就是与它的私聊，写群名就是那个群；详情只标字数，--full 显示全文
+atrium read c1                                # 读消息；目标可写身份名或群名；详情默认只标字数，--full 显示全文
+atrium read c1 --after 12                     # 从 #12 之后正序增量读；不能与 --before 同用；--json 输出接口结果
+atrium wait c1 --after 12                     # 等新消息；不写 --after 就从调用时起等；--timeout 默认 300 秒、最大 3600 秒
+atrium wait 林岚 --idle                        # 等当前一轮结束；已空闲或离线立即返回；超时退出码 124
 atrium send 林岚 "先看看仓库"                  # 以用户 u1 名义发言，没有私聊就打开一个
 atrium send c2 "开工了" --as 林岚 --mention 沈默   # 以身份名义发言，@ 同伴
 atrium send c2 "复核完了，没问题" --as 林岚 --details - < 报告.md   # 长内容放详情；身份名义的正文最长 300 字

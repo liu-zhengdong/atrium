@@ -1305,6 +1305,27 @@ export class Store {
       ),
     };
   }
+  latestMessageId(chatId: string): number {
+    this.chat(chatId);
+    return (
+      this.one<{ id: number }>(
+        "SELECT id FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 1",
+        chatId,
+      )?.id ?? 0
+    );
+  }
+  timelineAfter(chatId: string, after: number) {
+    this.chat(chatId);
+    const rows = this.all<MessageRow>(
+      "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>? ORDER BY m.id LIMIT 51",
+      chatId,
+      after,
+    );
+    return {
+      items: this.hydrate(rows.slice(0, 50).map(decodeMessage)),
+      has_more: rows.length > 50,
+    };
+  }
   /** 自己在每个会话里的未读数，封顶 UNREAD_CAP+1；已读区间覆盖的消息不算。 */
   unread(agentId: string): UnreadChat[] {
     return this.all<UnreadChat>(

@@ -15,6 +15,12 @@ import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, strs, type Command } from "./main.ts";
 import { findAgent, roster } from "./agents.ts";
+import {
+  nextMessage,
+  nextTrace,
+  readBounds,
+  waitOptions,
+} from "./wait-options.ts";
 
 const chatByRef = (view: Overview, reference: string) =>
   view.chats.find((item) => item.ref === reference || item.id === reference);
@@ -92,43 +98,118 @@ const chats: Command = {
   },
 };
 
+function printMessages(view: Overview, items: Message[], full: boolean) {
+  for (const message of items) {
+    const folded =
+      message.details && !full ? `（详情 ${message.details.length} 字）` : "";
+    console.log(
+      `#${message.id}  ${when(message.created_at)}  ${senderLabel(view, message)}：${message.body}${folded}${message.attachments.map(attachmentLabel).join("")}`,
+    );
+    if (message.details && full)
+      console.log(`  详情：\n${message.details.replace(/^/gm, "    ")}`);
+  }
+}
+
+type MessagePage = { items: Message[]; has_more: boolean };
 const read: Command = {
-  args: "会话|身份 [--before 序号] [--full]",
+  args: "会话|身份 [--after 序号 | --before 序号] [--full]",
   about:
     "读一段消息（用户审阅，不改变 Agent 的已读状态）；详情默认只标字数，--full 显示全文",
   options: {
     before: { type: "string" },
+    after: { type: "string" },
     full: { type: "boolean", default: false },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
+    const after = str(values, "after");
+    const query = readBounds(after, str(values, "before"));
     const client = await connect();
     const view = await roster(client);
     const chat = await targetChat(client, view, reference!);
-    const before = str(values, "before");
-    const page = await client.get<{ items: Message[]; has_more: boolean }>(
-      `/chats/${chat.id}/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`,
+    const page = await client.get<MessagePage>(
+      `/chats/${chat.id}/messages${query}`,
     );
     if (json) return printJson({ chat, ...page });
     console.log(
       `${chat.name} · ${chat.ref} · ${chat.kind === "group" ? "群" : "私聊"}${chat.notice ? `\n公告：${chat.notice}` : ""}`,
     );
-    if (!page.items.length) return console.log("（还没有消息）");
-    for (const message of page.items) {
-      const folded =
-        message.details && !values.full
-          ? `（详情 ${message.details.length} 字）`
-          : "";
+    if (!page.items.length)
+      console.log(after === undefined ? "（还没有消息）" : "没有新消息");
+    else printMessages(view, page.items, values.full === true);
+    if (after !== undefined) {
+      const cursor = page.items.at(-1)?.id ?? Number(after);
       console.log(
-        `#${message.id}  ${when(message.created_at)}  ${senderLabel(view, message)}：${message.body}${folded}${message.attachments.map(attachmentLabel).join("")}`,
+        page.has_more
+          ? `继续读：atrium read ${chat.ref} --after ${cursor}`
+          : nextMessage("等新消息", chat.ref, cursor),
       );
-      if (message.details && values.full)
-        console.log(`  详情：\n${message.details.replace(/^/gm, "    ")}`);
-    }
-    if (page.has_more)
+    } else if (page.has_more)
       console.log(
         `更早的消息：atrium read ${chat.ref} --before ${page.items[0]!.id}`,
       );
+  },
+};
+
+const wait: Command = {
+  args: "会话|身份 [--after 序号] [--timeout 秒] [--full] [--idle]",
+  about: "等新消息；--idle 等身份结束当前一轮；超时退出码 124，不改变已读状态",
+  options: {
+    after: { type: "string" },
+    timeout: { type: "string" },
+    full: { type: "boolean", default: false },
+    idle: { type: "boolean", default: false },
+  },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values, json }) {
+    const idle = values.idle === true;
+    const { cursor, seconds } = waitOptions(
+      str(values, "after"),
+      str(values, "timeout"),
+      idle,
+    );
+    if (idle && values.full === true) throw new Error("--idle 不支持 --full");
+    const client = await connect();
+    const view = await roster(client);
+    if (idle) {
+      const agent = findAgent(view, reference!);
+      const result = await client.get<{
+        status: "idle" | "offline" | "busy";
+        finished_at: number | null;
+        timed_out: boolean;
+      }>(`/agents/${agent.id}/wait?timeout=${seconds}`);
+      if (json) {
+        printJson(result);
+        return result.timed_out ? 124 : 0;
+      }
+      const next = nextTrace(agent.ref);
+      console.log(
+        result.timed_out
+          ? `${seconds} 秒内未结束；${next}`
+          : `${agent.name} ${result.status === "offline" ? "离线" : "空闲"}${result.finished_at ? ` · 本轮结束于 ${new Date(result.finished_at).toLocaleString()}` : "（当前没有运行中的一轮）"}\n${next}`,
+      );
+      return result.timed_out ? 124 : 0;
+    }
+    const chat = await targetChat(client, view, reference!);
+    const query = new URLSearchParams({ timeout: String(seconds) });
+    if (cursor !== undefined) query.set("after", String(cursor));
+    const result = await client.get<
+      MessagePage & { after: number; timed_out: boolean }
+    >(`/chats/${chat.id}/wait?${query}`);
+    if (json) {
+      printJson(result);
+      return result.timed_out ? 124 : 0;
+    }
+    const last = result.items.at(-1)?.id ?? result.after;
+    const next = result.has_more
+      ? `继续读：atrium read ${chat.ref} --after ${last}`
+      : nextMessage("继续等", chat.ref, last);
+    if (result.timed_out) console.log(`${seconds} 秒内没有新消息；${next}`);
+    else {
+      printMessages(view, result.items, values.full === true);
+      console.log(next);
+    }
+    return result.timed_out ? 124 : 0;
   },
 };
 
@@ -380,6 +461,7 @@ const user: Command = {
 export const chatCommands: Record<string, Command> = {
   chats,
   read,
+  wait,
   send,
   group,
   invite,

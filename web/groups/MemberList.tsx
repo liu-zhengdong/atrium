@@ -61,7 +61,6 @@ export function MemberList({
             <div className="min-w-0 flex-1">
               <p className="m-0 flex items-baseline gap-2 text-[13px] font-[550] leading-[18px] text-ink">
                 <span className="truncate">{agent.name}</span>
-                <span className="muted small-text flex-none">{agent.ref}</span>
               </p>
               {(agent.work || agent.description) && (
                 <p className="m-0 mt-0.5 truncate text-xs leading-[16px] text-muted">

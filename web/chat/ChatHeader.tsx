@@ -45,14 +45,6 @@ export function ChatHeader({
           title
         )}
         <p className="mt-0.5 truncate text-[11px] text-muted">
-          {active.ref && (
-            <>
-              <span className="font-mono text-ink/70" title="会话短号">
-                {active.ref}
-              </span>{" "}
-              ·{" "}
-            </>
-          )}
           {active.read_only ? (
             <span className="text-[#a46452]">Agent 已删除 · 只读历史</span>
           ) : (

@@ -28,7 +28,7 @@ const navigation = [
       },
       {
         id: "accounts" as const,
-        label: "账号",
+        label: "模型账号",
         Icon: KeyRound,
         terms: "API key OAuth 模型 分配 Agent provider",
       },
@@ -198,7 +198,7 @@ export function SettingsCenter({
               openAgent={openAgent}
             />
           ) : page === "agent-defaults" ? (
-            <AgentDefaultsPage query={query} />
+            <AgentDefaultsPage query={query} agents={agents} />
           ) : (
             <ServicePage query={query} />
           )}

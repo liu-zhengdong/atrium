@@ -69,9 +69,6 @@ export function ProfilePage({
           onSubmit={(event) => void save(event)}
           className="space-y-4 rounded-2xl bg-white p-5 shadow-lift"
         >
-          <p className="m-0 text-xs text-muted">
-            Agent 需要了解你时，会读取这里的资料。
-          </p>
           {matches(query, "称呼", "名字", "Agent") && (
             <label className="block text-xs text-muted">
               称呼
@@ -100,7 +97,9 @@ export function ProfilePage({
           {matches(query, "称呼", "名字", "资料", "正文", "Agent") ? (
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-muted">
-                {body.length} / {USER_PROFILE_MAX}
+                {body.length >= USER_PROFILE_MAX - 200
+                  ? `${body.length} / ${USER_PROFILE_MAX}`
+                  : ""}
               </span>
               <button className="button" type="submit" disabled={busy}>
                 {busy ? "保存中…" : "保存"}

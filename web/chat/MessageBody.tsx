@@ -49,11 +49,7 @@ export function MessageBody({
           <Toggle
             open={!!expanded.details}
             onClick={(event) => toggle("details", event.currentTarget)}
-            label={
-              expanded.details
-                ? "收起详情"
-                : `详情 · ${message.details.length} 字`
-            }
+            label={expanded.details ? "收起详情" : "详情"}
           />
           {expanded.details && (
             <div className="mt-2 rounded-lg border border-black/[0.04] bg-[#f2f6f3] p-3 text-xs">

@@ -48,6 +48,27 @@ export function MessageTimeline({
   const continuations = useMemo(() => continuationFlags(messages), [messages]);
   const { expanded, toggle } = useFolds(scroll, holdPosition);
   const rows = virtualizer.getVirtualItems();
+  // 私聊只标注当前窗口里最后一条被对方取回的自己的消息。
+  const lastDirectRead =
+    active.kind === "direct"
+      ? [...messages]
+          .reverse()
+          .find(
+            (message) =>
+              isUserRef(message.sender) &&
+              readState.some(
+                (reader) =>
+                  reader.agent_id !== message.sender &&
+                  (reader.deleted_after == null ||
+                    message.id <= reader.deleted_after) &&
+                  (message.id <= reader.through ||
+                    reader.ranges.some(
+                      (range) =>
+                        message.id >= range.first && message.id <= range.last,
+                    )),
+              ),
+          )?.id
+      : undefined;
   return (
     <div
       ref={scroll}
@@ -112,6 +133,9 @@ export function MessageTimeline({
                     agents={agents}
                     readState={readState}
                     direct={active.kind === "direct"}
+                    showReceipt={
+                      active.kind !== "direct" || message.id === lastDirectRead
+                    }
                     details={details}
                     expanded={expanded[message.id] ?? {}}
                     toggle={toggle(message.id)}
@@ -133,6 +157,7 @@ function MessageRow({
   agents,
   readState,
   direct,
+  showReceipt,
   details,
   expanded,
   toggle,
@@ -143,6 +168,7 @@ function MessageRow({
   agents: Agent[];
   readState: ChatReadState[];
   direct: boolean;
+  showReceipt: boolean;
   details: (id: string) => void;
   expanded: Expanded;
   toggle: (part: keyof Expanded, anchor: HTMLElement) => void;
@@ -174,11 +200,8 @@ function MessageRow({
       <div className="flex min-w-0 max-w-[min(78%,760px)] flex-col items-start max-[560px]:max-w-[calc(100%-44px)] [.outgoing_&]:items-end">
         {!continuation && (
           <div className="mb-[5px] flex min-h-[22px] items-center gap-2">
-            <strong className="text-xs font-semibold text-ink">{name}</strong>
             {!isUserRef(message.sender) && (
-              <span className="rounded bg-[#e8eee9] px-1.5 py-0.5 text-[10px] font-medium text-muted">
-                Agent
-              </span>
+              <strong className="text-xs font-semibold text-ink">{name}</strong>
             )}
             {message.mention_all && (
               <span
@@ -197,13 +220,15 @@ function MessageRow({
           <MessageBody message={message} expanded={expanded} toggle={toggle} />
         ) : null}
         <MessageAttachments attachments={message.attachments} />
-        <ReadReceipt
-          message={message}
-          state={readState}
-          agents={agents}
-          direct={direct}
-          details={details}
-        />
+        {showReceipt && (
+          <ReadReceipt
+            message={message}
+            state={readState}
+            agents={agents}
+            direct={direct}
+            details={details}
+          />
+        )}
       </div>
     </article>
   );

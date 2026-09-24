@@ -263,18 +263,13 @@ export function AgentDrawer({
           )}
           {tab === "box" ? (
             <>
-              <p className="muted small-text">
-                审阅不会改变 Agent 的已读状态；已读不代表处理完成。
-              </p>
               {!box ? (
                 <p className="flex items-center gap-2 py-4 text-xs text-muted">
                   <LoaderCircle size={16} className="spin" />
                   加载收件箱…
                 </p>
               ) : !box.items.length ? (
-                <Empty icon={<Inbox size={26} />} title="通知箱暂时没有消息">
-                  <p>群聊提醒和外部事件会送到这里；完整记录可追溯。</p>
-                </Empty>
+                <Empty icon={<Inbox size={26} />} title="通知箱暂时没有消息" />
               ) : (
                 <div>
                   {box.items.map((notice) => (
@@ -376,26 +371,13 @@ export function AgentDrawer({
                         }}
                       />
                     </label>
-                    <p className="muted small-text">
-                      运行中定期提醒未处理的消息；处理完不再提醒。
-                    </p>
                     <button className="button" disabled={busy}>
                       {saved ? "已保存" : busy ? "保存中…" : "保存心跳"}
                     </button>
                   </form>
                   <section className="settings-section">
                     <h3>运行状态</h3>
-                    <p className="muted">在线时自动连接，离线消息会保留。</p>
                     {agent.error && <p className="error">{agent.error}</p>}
-                    {agent.runtime && (
-                      <div className="runtime-info">
-                        <span>
-                          {agent.runtime.mode.toUpperCase()} · PID{" "}
-                          {agent.runtime.pid}
-                        </span>
-                        <span>{agent.runtime.model}</span>
-                      </div>
-                    )}
                     <p className="muted small-text">
                       最近心跳{" "}
                       {agent.last_wake ? time(agent.last_wake) : "还没有"}
@@ -477,6 +459,10 @@ export function AgentDrawer({
                   <DeleteAgent
                     agent={agent}
                     disabled={busy}
+                    stop={async () => {
+                      await api(`/agents/${agent.id}/stop`, "POST");
+                      refresh();
+                    }}
                     removed={() => {
                       close();
                       refresh();

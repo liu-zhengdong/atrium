@@ -92,9 +92,6 @@ export function AgentSkills({ agentId }: { agentId: string }) {
   return (
     <section className="settings-section" aria-label="技能">
       <h3>技能</h3>
-      <p className="text-xs text-muted">
-        修改后重启生效；Agent 也可以修改自己的技能。
-      </p>
       {items === null && !error && (
         <p className="text-xs text-muted">读取中…</p>
       )}

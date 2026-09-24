@@ -53,7 +53,7 @@ export function AgentDirectory({
       )}
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         {count > 0 ? (
-          <label className="flex h-7 w-64 items-center gap-2 rounded-lg bg-white px-2.5 text-muted shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all hover:shadow-[0_2px_6px_rgba(0,0,0,0.06)] focus-within:shadow-[0_2px_8px_rgba(49,110,80,0.12)]">
+          <label className="flex h-7 w-64 items-center gap-2 rounded-lg bg-white px-2.5 max-[560px]:ml-8 text-muted shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all hover:shadow-[0_2px_6px_rgba(0,0,0,0.06)] focus-within:shadow-[0_2px_8px_rgba(49,110,80,0.12)]">
             <Search size={13} className="text-[#6e7d72]" />
             <input
               className="plain-field min-w-0 flex-1 border-0 bg-transparent text-xs text-ink placeholder:text-muted/70 outline-none"

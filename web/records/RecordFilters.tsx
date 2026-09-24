@@ -9,6 +9,40 @@ const control =
   "h-7 rounded-lg border-0 bg-white px-2.5 text-xs text-ink shadow-[0_1px_3px_rgba(24,32,25,0.04)] transition-all hover:shadow-[0_2px_6px_rgba(24,32,25,0.06)] focus:shadow-[0_2px_8px_rgba(49,110,80,0.12)] focus:outline-none";
 const select = control;
 
+function DateControl({
+  label,
+  value,
+  change,
+}: {
+  label: string;
+  value: string;
+  change: (value: string) => void;
+}) {
+  const display = value
+    ? `${Number(value.slice(0, 4))}年${Number(value.slice(5, 7))}月${Number(value.slice(8, 10))}日`
+    : label;
+  return (
+    <label
+      className={`${control} relative flex min-w-[96px] items-center text-muted focus-within:shadow-[0_2px_8px_rgba(49,110,80,0.12)]`}
+    >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none whitespace-nowrap"
+      >
+        {display}
+      </span>
+      <input
+        type="date"
+        lang="zh-CN"
+        aria-label={label}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        value={value}
+        onChange={(event) => change(event.target.value)}
+      />
+    </label>
+  );
+}
+
 /** 会话、发送者、时间范围、关键词。三块内容共用这一条工具栏。靠距离自然形成呼吸与分组。 */
 export function RecordFilterBar({
   filters,
@@ -34,7 +68,7 @@ export function RecordFilterBar({
   return (
     <div className="flex flex-wrap items-center gap-2">
       {/* 搜索框 */}
-      <div className="flex h-7 min-w-[200px] flex-1 items-center gap-1.5 rounded-lg border-0 bg-white px-2.5 text-xs text-ink shadow-[0_1px_3px_rgba(24,32,25,0.04)] transition-all hover:shadow-[0_2px_6px_rgba(24,32,25,0.06)] focus-within:shadow-[0_2px_8px_rgba(49,110,80,0.12)]">
+      <div className="flex h-7 min-w-[200px] flex-1 items-center gap-1.5 rounded-lg border-0 bg-white px-2.5 max-[560px]:ml-8 text-xs text-ink shadow-[0_1px_3px_rgba(24,32,25,0.04)] transition-all hover:shadow-[0_2px_6px_rgba(24,32,25,0.06)] focus-within:shadow-[0_2px_8px_rgba(49,110,80,0.12)]">
         <Search size={14} className="flex-none text-[#6e7d72]" />
         <input
           id="record-q"
@@ -82,22 +116,16 @@ export function RecordFilterBar({
 
       {/* 时间范围 */}
       <div className="flex items-center gap-1.5">
-        <input
-          id="record-from"
-          type="date"
-          className={select}
+        <DateControl
+          label="开始日期"
           value={filters.from}
-          aria-label="开始日期"
-          onChange={(e) => patch({ from: e.target.value })}
+          change={(from) => patch({ from })}
         />
         <span className="text-[11px] text-muted">至</span>
-        <input
-          id="record-to"
-          type="date"
-          className={select}
+        <DateControl
+          label="结束日期"
           value={filters.to}
-          aria-label="结束日期"
-          onChange={(e) => patch({ to: e.target.value })}
+          change={(to) => patch({ to })}
         />
       </div>
 

@@ -1,40 +1,42 @@
+import { ChevronRight } from "lucide-react";
 import type { Agent } from "./AgentAvatar.tsx";
-import { time } from "../time.ts";
+import { pastTime } from "../time.ts";
+import { failureSummary } from "./failure-summary.ts";
 
 export function AgentFailure({
   agent,
   retry,
-  compact = false,
 }: {
   agent: Agent;
   retry?: () => void;
-  compact?: boolean;
 }) {
   if (!agent.failure) return null;
   const { text, at, count } = agent.failure;
-  const summary = text.replace(/\s+/g, " ").slice(0, 110);
   return (
     <div className="min-w-0 text-xs text-[#9c3f2d]">
-      <details className="min-w-0">
+      <details className="group min-w-0">
         <summary
-          className="cursor-pointer truncate leading-relaxed"
+          className="flex cursor-pointer list-none items-start gap-1.5 leading-relaxed [&::-webkit-details-marker]:hidden"
           title="展开错误原文"
         >
-          {summary}
-          {text.length > 110 ? "…" : ""}
+          <ChevronRight
+            size={14}
+            className="mt-0.5 flex-none transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+          <span className="min-w-0 truncate">{failureSummary(text)}</span>
         </summary>
         <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[#fcf2ee] p-2 text-[11px] leading-relaxed">
           {text}
         </pre>
       </details>
       <div className="mt-1 flex items-center justify-between gap-3 text-[11px] text-muted">
-        <span>
-          {new Date(at).toLocaleDateString("zh-CN")} {time(at)} · 连续 {count}{" "}
-          次
+        <span title={new Date(at).toLocaleString("zh-CN")}>
+          {pastTime(at)} · 连续 {count} 次
         </span>
-        {retry && !compact && (
+        {retry && (
           <button
-            className="text-accent-strong hover:underline"
+            className="button secondary h-6 min-h-6 px-2 text-[11px]"
             onClick={retry}
           >
             重试

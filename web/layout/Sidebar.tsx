@@ -11,7 +11,7 @@ import {
 import { unreadLabel, type Overview } from "../../shared/schema.ts";
 import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
-import { AgentFailure } from "../components/AgentFailure.tsx";
+import { failureSummary } from "../components/failure-summary.ts";
 import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
 import {
@@ -147,6 +147,13 @@ export function Sidebar({
                   className="absolute inset-0 rounded-lg"
                   onClick={() => selectChat(chat.id)}
                   aria-label={chat.name}
+                  title={
+                    agentById.get(chat.direct_agent ?? "")?.failure
+                      ? failureSummary(
+                          agentById.get(chat.direct_agent ?? "")!.failure!.text,
+                        )
+                      : undefined
+                  }
                 />
                 <div className="pointer-events-none relative flex items-center gap-2.5 p-2">
                   <ChatAvatar chat={chat} agents={agents} />
@@ -206,14 +213,6 @@ export function Sidebar({
                     </span>
                   </span>
                 </div>
-                {agentById.get(chat.direct_agent ?? "")?.failure && (
-                  <div className="pointer-events-auto relative ml-12 mr-2 pb-2">
-                    <AgentFailure
-                      agent={agentById.get(chat.direct_agent ?? "")!}
-                      compact
-                    />
-                  </div>
-                )}
               </div>
             ))}
             {overview && !overview.chats.length && (
@@ -248,6 +247,7 @@ export function Sidebar({
                   className="agent-row-open flex min-w-0 flex-1 items-center gap-2 text-left"
                   onClick={() => void openAgent(a)}
                   disabled={openingAgent !== null}
+                  title={a.failure ? failureSummary(a.failure.text) : undefined}
                 >
                   <span className="flex min-w-0 flex-1 flex-col">
                     <strong className={rowName}>{a.name}</strong>
@@ -261,11 +261,6 @@ export function Sidebar({
                   {a.unread > 0 && <span className="badge">{a.unread}</span>}
                 </button>
               </div>
-              {a.failure && (
-                <div className="mb-2 ml-12 mr-2">
-                  <AgentFailure agent={a} compact />
-                </div>
-              )}
             </div>
           ))}
           {overview && !agents.length && (

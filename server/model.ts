@@ -3,26 +3,39 @@ import {
   formatModelSpec,
   groupModelsByProvider,
   type ModelSpec,
+  type ModelOption,
 } from "../shared/model.ts";
 import { Problem } from "./problem.ts";
 import { Store } from "./store.ts";
 import { readIdentityModel, writeIdentityModel } from "./profile.ts";
 
 /** 上次取到的可选模型。身份离线时问不到 pi，界面和命令靠这份列出来。 */
-export function cachedModels(store: Store, id: string): string[] {
+export function cachedModels(store: Store, id: string): ModelOption[] {
   const row = store.one<{ models: string | null }>(
     "SELECT models FROM agents WHERE id=?",
     id,
   );
   if (!row?.models) return [];
   try {
-    const parsed = z.array(z.string()).safeParse(JSON.parse(row.models));
-    return parsed.success ? parsed.data : [];
+    const parsed = z
+      .array(
+        z.union([z.string(), z.object({ id: z.string(), name: z.string() })]),
+      )
+      .safeParse(JSON.parse(row.models));
+    return parsed.success
+      ? parsed.data.map((item) =>
+          typeof item === "string" ? { id: item, name: item } : item,
+        )
+      : [];
   } catch {
     return [];
   }
 }
-export function rememberModels(store: Store, id: string, options: string[]) {
+export function rememberModels(
+  store: Store,
+  id: string,
+  options: ModelOption[],
+) {
   store.run(
     "UPDATE agents SET models=? WHERE id=?",
     JSON.stringify(options),
@@ -38,15 +51,15 @@ export function configureModel(
   store: Store,
   id: string,
   spec: ModelSpec,
-  options: string[],
+  options: ModelOption[],
 ) {
   const agent = store.agent(id);
   if (!agent.agent_directory)
     throw new Problem(409, "旧记录还不是长期身份，没有自己的配置目录");
   const wanted = formatModelSpec({ ...spec, thinking: null });
-  if (options.length && !options.includes(wanted)) {
+  if (options.length && !options.some((item) => item.id === wanted)) {
     // 只提示够用的那一层：provider 对了列它的模型，不对就列有哪些 provider。
-    const grouped = groupModelsByProvider(options);
+    const grouped = groupModelsByProvider(options.map((item) => item.id));
     const own = grouped.get(spec.provider);
     throw new Problem(
       400,

@@ -229,7 +229,9 @@ export function AgentPlugins({
                               ? ""
                               : item.kind}
                         {item.kind === "npm" ? "" : " · "}
-                        {item.kind === "bundled" ? "随中庭更新" : item.source}
+                        {item.kind === "bundled"
+                          ? "随 Atrium 更新"
+                          : item.source}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">

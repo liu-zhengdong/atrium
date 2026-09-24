@@ -264,9 +264,9 @@ function modelReport(name: string, state: ModelState, notes: string[] = []) {
     ...(state.options.length
       ? [
           "可选（provider: 模型）：",
-          ...[...groupModelsByProvider(state.options)].map(
-            ([provider, models]) => `  ${provider}: ${models.join(" ")}`,
-          ),
+          ...[
+            ...groupModelsByProvider(state.options.map((option) => option.id)),
+          ].map(([provider, models]) => `  ${provider}: ${models.join(" ")}`),
         ]
       : ["还没取到过这个身份的可选模型，启动它之后再看这里就有了。"]),
   ].join("\n");
@@ -423,7 +423,7 @@ const run: Command = {
     const data = dataDirectory();
     if (!existsSync(join(data, "atrium.sqlite")))
       throw new Error(
-        "未找到中庭数据库；请先运行 atrium create 或打开 Web 创建身份，或设置 ATRIUM_DATA",
+        "未找到 Atrium 数据库；请先运行 atrium create 或打开 Web 创建身份，或设置 ATRIUM_DATA",
       );
     const { Store } = await import("../server/store.ts");
     const store = new Store(join(data, "atrium.sqlite"));
@@ -449,7 +449,7 @@ const run: Command = {
     // 与服务启动身份时做同一份补齐，两个入口看到的配置一致。
     for (const notice of syncIdentityProfile(agent.agent_directory))
       console.error(`${agent.name} 的${notice}`);
-    console.error(`中庭 · ${agent.name}\n${agent.cwd}`);
+    console.error(`Atrium · ${agent.name}\n${agent.cwd}`);
     const launchStore = new Store(join(data, "atrium.sqlite"));
     let running: Promise<number>;
     try {

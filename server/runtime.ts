@@ -29,6 +29,7 @@ import {
   type ModelChange,
   type ModelSpec,
   type ModelState,
+  type ModelOption,
 } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { wakesOffline } from "./delivery.ts";
@@ -754,17 +755,29 @@ export class Runtimes {
     return "这个实例不是 Atrium 启动的，重启它之后生效";
   }
   /** 这个身份可选的模型。只有它在跑才问得到，问到就存下来给离线时用。 */
-  private async listModels(id: string): Promise<string[]> {
+  private async listModels(id: string): Promise<ModelOption[]> {
     if (!this.managed(id)) return cachedModels(this.store, id);
     try {
       const { models } = z
         .object({
           models: z
-            .array(z.object({ id: z.string().min(1).max(200) }))
+            .array(
+              z.object({
+                id: z.string().min(1).max(200),
+                name: z.string().optional(),
+              }),
+            )
             .max(4000),
         })
         .parse(await this.rpc("_pi/identity/models", { identityId: id }));
-      const options = [...new Set(models.map((model) => model.id))].sort();
+      const options = [
+        ...new Map(
+          models.map((model) => [
+            model.id,
+            { id: model.id, name: model.name?.trim() || model.id },
+          ]),
+        ).values(),
+      ].sort((a, b) => a.id.localeCompare(b.id));
       rememberModels(this.store, id, options);
       return options;
     } catch (error) {
@@ -776,12 +789,18 @@ export class Runtimes {
     }
   }
   /** 默认配置复用身份模型来源：先合并已观察清单，空清单时从在线身份取一次。 */
-  async modelsForDefaults(): Promise<string[]> {
+  async modelsForDefaults(): Promise<ModelOption[]> {
     const agents = this.store.agents().filter((agent) => agent.agent_directory);
-    const observed = [
-      ...new Set(agents.flatMap((agent) => cachedModels(this.store, agent.id))),
-    ].sort();
-    if (observed.length) return observed;
+    const observed = new Map<string, ModelOption>();
+    for (const agent of agents)
+      for (const model of cachedModels(this.store, agent.id))
+        if (
+          !observed.has(model.id) ||
+          (observed.get(model.id)!.name === model.id && model.name !== model.id)
+        )
+          observed.set(model.id, model);
+    if (observed.size)
+      return [...observed.values()].sort((a, b) => a.id.localeCompare(b.id));
     const live = agents.find((agent) => this.managed(agent.id));
     return live ? this.listModels(live.id) : [];
   }

@@ -64,7 +64,7 @@ export function help(): string {
     ...lines.map(([line, about]) => `${pad(line, widest)}  ${about}`),
     "",
     "名称处也可以用短号（a1、c1）或 ID；读／等待命令加 --json 原样输出接口结果。",
-    "除 run 外的命令都经中庭服务完成，服务没在跑会自动在后台拉起。",
+    "除 run 外的命令都经 Atrium 服务完成，服务没在跑会自动在后台拉起。",
     "关闭浏览器或终端不停止后台服务；stop 不终止外部 Pi TUI。ATRIUM_DATA / PI_ACP_DIR 须与服务一致。",
   ].join("\n");
 }

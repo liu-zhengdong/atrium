@@ -100,7 +100,7 @@ test(
     const created = await f.cli("create", "林岚");
     assert.equal(created.code, 0, created.stderr);
     assert.match(created.stdout, /林岚 · a1/);
-    assert.match(created.stderr, /中庭服务已在后台启动/);
+    assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
     assert(record && alive(record.pid));
     const again = await f.cli(

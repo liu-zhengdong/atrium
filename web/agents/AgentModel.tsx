@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   modelBase,
+  modelLabel,
   splitModelSpec,
   THINKING_LEVELS,
   type ModelChange,
@@ -17,16 +18,6 @@ const levels: Record<string, string> = {
   xhigh: "很高",
   max: "最高",
 };
-export const modelLabel = (value: string) => {
-  const spec = splitModelSpec(value);
-  if (!spec) return value;
-  const readable = spec.model
-    .replace(/^claude-/, "Claude ")
-    .replace(/^gpt-/, "GPT ")
-    .replace(/-/g, " ");
-  return `${readable} · ${spec.provider}`;
-};
-
 export function AgentModel({
   agentId,
   compact = false,
@@ -84,8 +75,11 @@ export function AgentModel({
     }
   }
   const choices = state
-    ? state.configured && !state.options.includes(modelBase(state.configured))
-      ? [modelBase(state.configured), ...state.options]
+    ? state.configured &&
+      !state.options.some(
+        (option) => option.id === modelBase(state.configured!),
+      )
+      ? [{ id: modelBase(state.configured), name: "" }, ...state.options]
       : state.options
     : [];
   return (
@@ -95,7 +89,7 @@ export function AgentModel({
       ) : (
         <>
           <label className="form-label">
-            {compact ? "模型 · 账号" : "模型"}
+            模型
             {state.options.length ? (
               <select
                 className="field"
@@ -108,8 +102,8 @@ export function AgentModel({
                   选择模型
                 </option>
                 {choices.map((choice) => (
-                  <option value={choice} key={choice}>
-                    {modelLabel(choice)}
+                  <option value={choice.id} key={choice.id}>
+                    {modelLabel(choice.id, state.options)}
                   </option>
                 ))}
               </select>
@@ -154,7 +148,7 @@ export function AgentModel({
             state.running !== "unknown/unknown" &&
             state.running !== modelBase(state.configured ?? "") && (
               <p className="text-xs text-muted">
-                运行中：{modelLabel(state.running)}
+                运行中：{modelLabel(state.running, state.options)}
               </p>
             )}
         </>

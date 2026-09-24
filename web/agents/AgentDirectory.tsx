@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Search, Users } from "lucide-react";
 import type { Overview } from "../../shared/schema.ts";
 import {
@@ -7,7 +7,8 @@ import {
   type Agent,
 } from "../components/AgentAvatar.tsx";
 import { failureSummary } from "../components/failure-summary.ts";
-import { modelLabel } from "./AgentModel.tsx";
+import { modelLabel, type ModelOption } from "../../shared/model.ts";
+import { api } from "../api.ts";
 
 export function AgentDirectory({
   overview,
@@ -23,6 +24,20 @@ export function AgentDirectory({
   create: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [models, setModels] = useState<ModelOption[]>([]);
+  useEffect(() => {
+    let active = true;
+    void api<ModelOption[]>("/models")
+      .then((items) => {
+        if (active) setModels(items);
+      })
+      .catch(() => {
+        /* 无目录时显示原始 id。 */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   const [filter, setFilter] = useState<"all" | "busy" | "error" | "unread">(
     "all",
   );
@@ -93,16 +108,18 @@ export function AgentDirectory({
       )}
       {agents.length ? (
         <div className="space-y-0.5">
-          <div className="grid grid-cols-[minmax(130px,1fr)_minmax(120px,1.3fr)_minmax(90px,0.8fr)_auto] gap-3 px-3 pb-2 text-[11px] text-muted max-[700px]:hidden">
+          <div className="grid grid-cols-[30px_minmax(90px,1fr)_minmax(100px,1.3fr)_minmax(80px,0.8fr)_36px_48px] gap-3 px-2.5 pb-2 text-[11px] text-muted max-[700px]:hidden">
+            <span />
             <span>Agent</span>
             <span>在做什么</span>
             <span>模型</span>
-            <span className="w-20" />
+            <span />
+            <span />
           </div>
           {agents.map((a) => (
             <div
               key={a.id}
-              className="group flex min-h-[36px] items-center gap-3 rounded-lg px-2.5 hover:bg-soft max-[700px]:min-h-[52px]"
+              className="group grid min-h-[36px] grid-cols-[30px_minmax(90px,1fr)_minmax(100px,1.3fr)_minmax(80px,0.8fr)_36px_48px] items-center gap-3 rounded-lg px-2.5 hover:bg-soft max-[700px]:min-h-[52px] max-[700px]:grid-cols-[30px_minmax(0,1fr)_36px_48px]"
             >
               <button
                 aria-label={`查看 ${a.name} 详情`}
@@ -112,31 +129,33 @@ export function AgentDirectory({
                 <Avatar name={a.name} presence={agentPresence(a)} small />
               </button>
               <button
-                className="grid min-w-0 flex-1 grid-cols-[minmax(90px,1fr)_minmax(100px,1.3fr)_minmax(80px,0.8fr)] items-center gap-3 text-left text-xs max-[700px]:grid-cols-1 max-[700px]:gap-0.5"
+                className="col-span-3 grid min-w-0 grid-cols-subgrid items-center text-left text-xs max-[700px]:col-span-1 max-[700px]:flex max-[700px]:flex-col max-[700px]:items-start max-[700px]:gap-0.5"
                 disabled={!!opening}
                 onClick={() => openAgent(a)}
                 aria-label={`与 ${a.name} 聊天`}
               >
-                <strong className="truncate font-medium text-ink">
+                <strong className="min-w-0 max-w-full truncate font-medium text-ink">
                   {a.name}
                 </strong>
                 <span
-                  className={`truncate ${a.failure ? "text-[#9c3f2d]" : "text-muted"}`}
+                  className={`min-w-0 truncate max-w-full max-[700px]:empty:hidden ${a.failure ? "text-[#9c3f2d]" : "text-muted"}`}
                   title={a.failure ? failureSummary(a.failure.text) : a.work}
                 >
-                  {a.failure ? failureSummary(a.failure.text) : a.work || "—"}
+                  {a.failure ? failureSummary(a.failure.text) : a.work}
                 </span>
                 <span className="truncate text-muted max-[700px]:hidden">
                   {a.runtime?.model && a.runtime.model !== "unknown/unknown"
-                    ? modelLabel(a.runtime.model)
-                    : "—"}
+                    ? modelLabel(a.runtime.model, models)
+                    : ""}
                 </span>
               </button>
-              {a.unread > 0 && (
-                <span className="badge" aria-label={`${a.unread} 条未读`}>
-                  {a.unread}
-                </span>
-              )}
+              <span className="text-right">
+                {a.unread > 0 && (
+                  <span className="badge" aria-label={`${a.unread} 条未读`}>
+                    {a.unread}
+                  </span>
+                )}
+              </span>
               <button
                 className="w-12 text-xs text-muted hover:text-accent-strong"
                 onClick={() => details(a.id)}

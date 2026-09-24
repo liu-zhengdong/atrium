@@ -8,6 +8,7 @@ import { AgentFailure } from "../components/AgentFailure.tsx";
 import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
 import { AgentModel } from "./AgentModel.tsx";
+import { AgentCredentials } from "../settings/AgentCredentials.tsx";
 import {
   agentPresence,
   Avatar,
@@ -19,11 +20,13 @@ export function AgentDrawer({
   revision,
   close,
   openConfig,
+  visible,
 }: {
   agent: Agent;
   revision: number;
   close: () => void;
   openConfig: () => void;
+  visible: boolean;
 }) {
   const [tab, setTab] = useState<"trace" | "box">("trace");
   const [box, setBox] = useState<Page<BoxMessage> | null>(null);
@@ -134,7 +137,14 @@ export function AgentDrawer({
         )}
       </div>
       <div className="space-y-2 px-5 py-4">
+        <h3 className="text-xs font-medium">模型 · 账号</h3>
         <AgentModel agentId={agent.id} compact />
+        <AgentCredentials
+          agent={agent}
+          compact
+          visible={visible}
+          openAccounts={openConfig}
+        />
         <button
           className="w-full rounded-lg bg-soft px-3 py-2 text-left text-xs text-accent-strong hover:bg-[#e2ebe4]"
           onClick={openConfig}

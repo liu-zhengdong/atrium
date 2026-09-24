@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { api } from "../api.ts";
 import type { Preferences } from "../../shared/schema.ts";
 import {
@@ -18,15 +18,16 @@ import { DeleteAgent } from "../agents/DeleteAgent.tsx";
 import { trackUnsaved } from "./unsaved.ts";
 
 const sections = [
-  "模型与账号",
-  "插件",
-  "技能",
-  "MCP",
-  "规则文件",
-  "心跳",
-  "接入",
-  "删除",
-];
+  { id: "model", title: "模型与账号" },
+  { id: "plugins", title: "插件" },
+  { id: "skills", title: "技能" },
+  { id: "mcp", title: "MCP" },
+  { id: "rules", title: "规则文件" },
+  { id: "profile", title: "身份资料" },
+  { id: "heartbeat", title: "心跳" },
+  { id: "access", title: "接入" },
+  { id: "delete", title: "删除" },
+] as const;
 
 export function AgentConfigPage({
   agent,
@@ -34,12 +35,14 @@ export function AgentConfigPage({
   openAccounts,
   openChat,
   removed,
+  scrollRoot,
 }: {
   agent: Agent;
   changed: () => void;
   openAccounts: (account: string | null) => void;
   openChat: () => void;
   removed: () => void;
+  scrollRoot: RefObject<HTMLDivElement | null>;
 }) {
   const [config, setConfig] = useState<Preferences>(agent.config);
   const [name, setName] = useState(agent.name);
@@ -50,6 +53,7 @@ export function AgentConfigPage({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [activeSection, setActiveSection] = useState<string>("model");
   const [adapters, setAdapters] = useState<{ files: string[] } | null>(null);
   const dirty =
     name !== savedProfile.name || description !== savedProfile.description;
@@ -70,6 +74,25 @@ export function AgentConfigPage({
     };
   }, [agent.id]);
   useEffect(() => trackUnsaved(dirty), [dirty]);
+  useEffect(() => {
+    const root = scrollRoot.current;
+    if (!root) return;
+    const update = () => {
+      const top =
+        root.getBoundingClientRect().top +
+        Math.min(160, root.clientHeight * 0.22);
+      let current: string = sections[0].id;
+      for (const section of sections) {
+        const element = root.querySelector<HTMLElement>(`#${section.id}`);
+        if (element && element.getBoundingClientRect().top <= top)
+          current = section.id;
+      }
+      setActiveSection(current);
+    };
+    update();
+    root.addEventListener("scroll", update, { passive: true });
+    return () => root.removeEventListener("scroll", update);
+  }, [scrollRoot]);
   async function heartbeat(value: number) {
     const previous = agent.config;
     setConfig({ ...config, heartbeat_seconds: value });
@@ -131,7 +154,10 @@ export function AgentConfigPage({
           <section id="model" className="space-y-5">
             <h2 className="text-sm font-semibold">模型与账号</h2>
             <AgentModel agentId={agent.id} />
-            <AgentCredentials agentId={agent.id} open={openAccounts} />
+            <AgentCredentials
+              agent={agent}
+              openAccounts={() => openAccounts(null)}
+            />
           </section>
           <section id="plugins">
             {agent.agent_directory && (
@@ -148,37 +174,37 @@ export function AgentConfigPage({
           <section id="mcp">
             {agent.agent_directory && <AgentMcp agentId={agent.id} />}
           </section>
-          <section id="rules" className="space-y-6">
+          <section id="rules">
             {agent.agent_directory && <AgentRules agentId={agent.id} />}
-            <div className="space-y-3">
-              <h2 className="text-sm font-semibold">身份资料</h2>
-              <label className="form-label">
-                名称
-                <input
-                  className="field"
-                  maxLength={40}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </label>
-              <label className="form-label">
-                自我介绍
-                <textarea
-                  className="field resize-none"
-                  maxLength={1000}
-                  rows={3}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </label>
-              <button
-                className="button"
-                disabled={busy || !dirty || !name.trim()}
-                onClick={() => void saveProfile()}
-              >
-                保存资料
-              </button>
-            </div>
+          </section>
+          <section id="profile" className="space-y-3">
+            <h2 className="text-sm font-semibold">身份资料</h2>
+            <label className="form-label">
+              名称
+              <input
+                className="field"
+                maxLength={40}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+            <label className="form-label">
+              自我介绍
+              <textarea
+                className="field resize-none"
+                maxLength={1000}
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </label>
+            <button
+              className="button"
+              disabled={busy || !dirty || !name.trim()}
+              onClick={() => void saveProfile()}
+            >
+              保存资料
+            </button>
           </section>
           <section id="heartbeat" className="space-y-3">
             <h2 className="text-sm font-semibold">心跳</h2>
@@ -270,26 +296,17 @@ export function AgentConfigPage({
           aria-label="配置目录"
           className="sticky top-0 hidden w-32 shrink-0 space-y-2 text-xs text-muted lg:grid"
         >
-          {sections.map((title, index) => (
+          {sections.map(({ id, title }) => (
             <a
-              key={title}
-              className="rounded-md px-2 py-1 hover:bg-soft hover:text-ink"
-              href={`#${["model", "plugins", "skills", "mcp", "rules", "heartbeat", "access", "delete"][index]}`}
+              key={id}
+              aria-current={activeSection === id ? "location" : undefined}
+              className={`rounded-md px-2 py-1 hover:bg-soft hover:text-ink ${activeSection === id ? "bg-[#e2ebe4] text-accent-strong" : ""}`}
+              href={`#${id}`}
               onClick={(e) => {
                 e.preventDefault();
-                document
-                  .getElementById(
-                    [
-                      "model",
-                      "plugins",
-                      "skills",
-                      "mcp",
-                      "rules",
-                      "heartbeat",
-                      "access",
-                      "delete",
-                    ][index],
-                  )
+                setActiveSection(id);
+                scrollRoot.current
+                  ?.querySelector<HTMLElement>(`#${id}`)
                   ?.scrollIntoView({ behavior: "smooth" });
               }}
             >

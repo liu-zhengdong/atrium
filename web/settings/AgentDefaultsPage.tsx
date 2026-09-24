@@ -3,7 +3,7 @@ import { api } from "../api.ts";
 import { matches } from "./types.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { trackUnsaved } from "./unsaved.ts";
-import { modelLabel } from "../agents/AgentModel.tsx";
+import { modelLabel, type ModelOption } from "../../shared/model.ts";
 
 type Entry =
   | string
@@ -40,7 +40,7 @@ export function AgentDefaultsPage({
   const [dirty, setDirty] = useState(false);
   const [packageQuery, setPackageQuery] = useState("");
   const [skillQuery, setSkillQuery] = useState("");
-  const [modelChoices, setModelChoices] = useState<string[]>([]);
+  const [modelChoices, setModelChoices] = useState<ModelOption[]>([]);
   useEffect(() => trackUnsaved(dirty), [dirty]);
   useEffect(() => {
     let active = true;
@@ -66,7 +66,7 @@ export function AgentDefaultsPage({
   }, []);
   useEffect(() => {
     let active = true;
-    api<string[]>("/settings/agent-defaults/models")
+    api<ModelOption[]>("/models")
       .then((options) => {
         if (active) setModelChoices(options);
       })
@@ -123,7 +123,7 @@ export function AgentDefaultsPage({
     }
     if (
       model &&
-      !modelChoices.includes(model) &&
+      !modelChoices.some((option) => option.id === model) &&
       model !==
         (defaults.model
           ? `${defaults.model.provider}/${defaults.model.model}`
@@ -342,12 +342,15 @@ export function AgentDefaultsPage({
                 }
               >
                 <option value="">由 Pi 决定</option>
-                {model && !modelChoices.includes(model) && (
-                  <option value={model}>{modelLabel(model)}（已有配置）</option>
-                )}
+                {model &&
+                  !modelChoices.some((option) => option.id === model) && (
+                    <option value={model}>
+                      {modelLabel(model, modelChoices)}（已有配置）
+                    </option>
+                  )}
                 {modelChoices.map((choice) => (
-                  <option key={choice} value={choice}>
-                    {modelLabel(choice)}
+                  <option key={choice.id} value={choice.id}>
+                    {modelLabel(choice.id, modelChoices)}
                   </option>
                 ))}
               </select>

@@ -240,7 +240,7 @@ export function App() {
               {!overview ? (
                 <Empty
                   icon={<LoaderCircle className="spin text-accent" size={24} />}
-                  title="正在连接中庭"
+                  title="正在连接 Atrium"
                 >
                   <p>读取你的会话与 Agent。</p>
                 </Empty>
@@ -306,6 +306,7 @@ export function App() {
                 key={selectedAgent.id}
                 agent={selectedAgent}
                 revision={revision}
+                visible={!settings}
                 close={() => setAgentId(null)}
                 openConfig={() => openConfig(selectedAgent.id)}
               />

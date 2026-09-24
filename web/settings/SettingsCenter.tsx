@@ -92,6 +92,7 @@ export function SettingsCenter({
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (
@@ -201,7 +202,10 @@ export function SettingsCenter({
         </nav>
       </aside>
       <main className="min-h-0 min-w-0 flex-1 bg-[#fcfdfc] sm:m-2.5 sm:ml-0 sm:overflow-hidden sm:rounded-2xl sm:shadow-[0_1px_3px_rgba(0,0,0,0.02),0_8px_24px_rgba(0,0,0,0.03)]">
-        <div className="h-full scroll-smooth overflow-auto px-5 py-7 sm:px-8 sm:py-9">
+        <div
+          ref={scrollRef}
+          className="h-full scroll-smooth overflow-auto px-5 py-7 sm:px-8 sm:py-9"
+        >
           <div
             className={
               page === "agent"
@@ -225,6 +229,7 @@ export function SettingsCenter({
                 <AgentConfigPage
                   key={agentId}
                   agent={agents.find((a) => a.id === agentId)!}
+                  scrollRoot={scrollRef}
                   changed={changed}
                   openAccounts={() => setPage("accounts")}
                   openChat={() => openChat(agentId)}

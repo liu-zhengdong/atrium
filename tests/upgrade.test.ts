@@ -6,6 +6,7 @@ import {
   writeFileSync,
   rmSync,
   existsSync,
+  symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -15,8 +16,12 @@ import {
   writeRestartState,
   checkServiceHealth,
   sendRollbackNotification,
+  waitForRestart,
 } from "../server/supervisor.ts";
+import { initiatorAgent } from "../cli/restart.ts";
+import { createServer } from "node:http";
 import { Store } from "../server/store.ts";
+import { createApp } from "../server/app.ts";
 import { currentVersion, packageRoot } from "../server/service-state.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -51,6 +56,35 @@ test("supervisor 状态读写正确保持持久化", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("回滚告警在用户概览中可见，下一次成功后消失", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-rollback-ui-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { app } = await createApp({ data: dir, runtime: false });
+  t.after(() => app.close());
+  const state = {
+    id: "rst-ui",
+    status: "rolled_back" as const,
+    supervisorPid: process.pid,
+    startedAt: Date.now(),
+    fromVersion: "0.1.2",
+    failedVersion: "0.1.3",
+    error: "退出码 19",
+    data: dir,
+  };
+  writeRestartState(dir, state);
+  const rollback = (await app.inject({ url: "/api/overview" })).json();
+  assert.deepEqual(rollback.rollback, {
+    fromVersion: "0.1.2",
+    failedVersion: "0.1.3",
+    error: "退出码 19",
+  });
+  writeRestartState(dir, { ...state, status: "success" });
+  assert.equal(
+    (await app.inject({ url: "/api/overview" })).json().rollback,
+    null,
+  );
 });
 
 test("sendRollbackNotification 正确写入回滚通知至消息箱", () => {
@@ -88,6 +122,90 @@ test("checkServiceHealth 在端口不可达时抛出异常", async () => {
     await assert.rejects(async () => {
       await checkServiceHealth(mockRecord, dir);
     }, /fetch failed|ECONNREFUSED|connect/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("重启健康检查默认不依赖模型，显式探针失败仍被拒绝", async () => {
+  const server = createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api/service")
+      response.end(
+        JSON.stringify({ instance: "test", pid: process.pid, stopping: false }),
+      );
+    else if (request.url === "/api/service/health")
+      response.end(JSON.stringify({ ok: true, runtimes: { available: true } }));
+    else {
+      response.statusCode = 503;
+      response.end(JSON.stringify({ error: "模型不可用" }));
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const record = {
+      pid: process.pid,
+      instance: "test",
+      port: address.port,
+      token: "test",
+      version: 1,
+    };
+    await checkServiceHealth(record, "unused");
+    await assert.rejects(
+      checkServiceHealth(record, "unused", { probeAgent: "a1" }),
+      /模型不可用/,
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("Agent 从符号链接目录启动，或只有会话路径时仍能续跑", () => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-wake-"));
+  try {
+    const profile = join(dir, "profile");
+    mkdirSync(profile);
+    symlinkSync(profile, join(dir, "alias"));
+    const session = join(profile, "sessions", "a.jsonl");
+    mkdirSync(join(profile, "sessions"));
+    writeFileSync(session, "");
+    const store = new Store(join(dir, "atrium.sqlite"));
+    try {
+      const { agent } = store.createAgent("Self", profile);
+      store.run(
+        "UPDATE agents SET agent_directory=?, session_file=? WHERE id=?",
+        profile,
+        session,
+        agent.id,
+      );
+      assert.equal(initiatorAgent(store, join(dir, "alias")), agent.id);
+      assert.equal(initiatorAgent(store, undefined, session), agent.id);
+      assert.equal(initiatorAgent(store, join(dir, "another")), undefined);
+    } finally {
+      store.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("等待回滚超时说明后台状态，不声称已经失败", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-wait-"));
+  try {
+    writeRestartState(dir, {
+      id: "rst-test",
+      status: "rolling_back",
+      supervisorPid: 123,
+      startedAt: Date.now(),
+      fromVersion: "0.1.0",
+      data: dir,
+    });
+    await assert.rejects(
+      waitForRestart(dir, 1),
+      /rolling_back.*后台任务仍可能在继续/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

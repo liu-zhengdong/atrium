@@ -231,6 +231,11 @@ export type BoxMessage = {
 export type Page<T> = { items: T[]; next_after: number; has_more: boolean };
 export type Overview = {
   version: string;
+  rollback?: {
+    fromVersion: string;
+    failedVersion: string;
+    error: string;
+  } | null;
   agents: (AgentInfo & {
     runtime: RuntimeInfo | null;
     available: boolean;

@@ -5,13 +5,40 @@ import {
 } from "../server/supervisor.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import { Store } from "../server/store.ts";
+import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { recordNext, recordResult } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
 
+const canonical = (path: string) => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+};
+
+export function initiatorAgent(
+  store: Store,
+  directory?: string,
+  session?: string,
+): string | undefined {
+  return store
+    .agents()
+    .find(
+      (agent) =>
+        (directory &&
+          agent.agent_directory &&
+          canonical(agent.agent_directory) === canonical(directory)) ||
+        (session &&
+          agent.session_file &&
+          canonical(agent.session_file) === canonical(session)),
+    )?.id;
+}
+
 export async function restart({
   wait = false,
-  timeout = "30",
+  timeout = "300",
   data,
   "probe-agent": probeAgent,
   "agent-timeout": agentTimeout,
@@ -64,24 +91,25 @@ export async function restart({
     // The initiating Agent can finish its tool call before the supervisor
     // samples active turns. Remember it explicitly so it is resumed too.
     let wakeAgent: string | undefined;
-    if (process.env.PI_CODING_AGENT_DIR) {
+    let probeId: string | undefined;
+    if (
+      probeAgent ||
+      process.env.PI_CODING_AGENT_DIR ||
+      process.env.PI_SESSION_FILE
+    ) {
       const store = new Store(join(dir, "atrium.sqlite"));
       try {
-        wakeAgent = store
-          .agents()
-          .find(
-            (agent) =>
-              agent.agent_directory &&
-              resolve(agent.agent_directory) ===
-                resolve(process.env.PI_CODING_AGENT_DIR!),
-          )?.id;
+        if (probeAgent) probeId = store.resolveAgentId(probeAgent);
+        const directory = process.env.PI_CODING_AGENT_DIR;
+        const session = process.env.PI_SESSION_FILE;
+        wakeAgent = initiatorAgent(store, directory, session);
       } finally {
         store.close();
       }
     }
     await startSupervisor({
       data: dir,
-      probeAgent,
+      probeAgent: probeId,
       agentTimeout: agentTimeoutMs,
       wakeAgent,
     });
@@ -119,7 +147,7 @@ export async function restart({
     console.error(`原版本：v${finalState.fromVersion}`);
     console.error(`失败版本：v${finalState.failedVersion}`);
     console.error(`失败原因：${finalState.error}`);
-    console.error("回滚通知已发送至消息箱。");
+    console.error("回滚记录可在 Atrium 网页查看；Agent 消息箱也会收到通知。");
     recordResult({
       status: "rolled_back",
       from: finalState.fromVersion,

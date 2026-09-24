@@ -114,8 +114,8 @@ export async function checkServiceHealth(
   }
   if (!ready) throw new Error(`健康检查未通过：${healthError}`);
 
-  // A service restart also runs without an update; only skip the turn when no
-  // identity exists yet. A failed turn must never count as healthy.
+  // A real model turn is an optional, explicit acceptance check. The service
+  // and MCP gateway can be healthy when credentials or providers are offline.
   if (options?.probeAgent) {
     const probeRes = await fetch(`${serviceUrl(record)}/api/service/probe`, {
       method: "POST",
@@ -326,15 +326,6 @@ export async function runSupervisor(args: string[]): Promise<void> {
     state.status = "checking";
     writeRestartState(data, state);
 
-    if (!probeAgent && existsSync(join(data, "atrium.sqlite"))) {
-      const probeStore = new Store(join(data, "atrium.sqlite"));
-      try {
-        probeAgent = agentsToWake[0] ?? probeStore.agents()[0]?.id;
-      } finally {
-        probeStore.close();
-      }
-    }
-    if (!probeAgent) throw new Error("没有身份可完成健康检查回合");
     await checkServiceHealth(newRecord, data, { probeAgent });
     const reported = (await (
       await fetch(`${serviceUrl(newRecord)}/api/service`, {
@@ -417,17 +408,7 @@ export async function runSupervisor(args: string[]): Promise<void> {
     try {
       const rolledBack = await startService(data);
       state.newPid = rolledBack.pid;
-      const rollbackStore = new Store(join(data, "atrium.sqlite"));
-      let rollbackProbe: string | undefined;
-      try {
-        rollbackProbe = probeAgent ?? rollbackStore.agents()[0]?.id;
-      } finally {
-        rollbackStore.close();
-      }
-      if (!rollbackProbe) throw new Error("回滚后没有身份可完成健康检查回合");
-      await checkServiceHealth(rolledBack, data, {
-        probeAgent: rollbackProbe,
-      });
+      await checkServiceHealth(rolledBack, data);
       sendRollbackNotification(data, {
         fromVersion: state.fromVersion,
         failedVersion: state.failedVersion,
@@ -452,7 +433,7 @@ export async function runSupervisor(args: string[]): Promise<void> {
 
 export async function waitForRestart(
   data: string,
-  timeoutMs = 30000,
+  timeoutMs = 300000,
 ): Promise<RestartState> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -468,5 +449,10 @@ export async function waitForRestart(
     }
     await delay(100);
   }
-  throw new Problem(504, "等待平滑重启超时", "restart_timeout");
+  const state = readRestartState(data);
+  throw new Problem(
+    504,
+    `等待平滑重启超时（当前：${state?.status ?? "尚未启动"}）；后台任务仍可能在继续。运行 atrium restart --wait --timeout 300 查看最终结果`,
+    "restart_timeout",
+  );
 }

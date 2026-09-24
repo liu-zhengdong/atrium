@@ -132,7 +132,8 @@ atrium promote 旧记录                          # 旧记录升级为长期身�
 atrium update                                # 安装最新 GitHub 标签及其锁定的 pi-atrium；不重启
 atrium update --to 0.1.15                    # 指定版本，也可退回旧版本
 atrium restart                               # 异步平滑重启；忙碌的后台身份做完当前回合再退出
-atrium restart --wait --timeout 120          # 等待结果（秒），成功或回滚均有明确回执
+atrium restart --wait                        # 默认最多等 300 秒，超时不取消后台重启，可再运行本命令查询
+atrium restart --probe-agent a1              # 可选：再用指定身份做一轮真实模型验证；模型失败会触发回滚
 ```
 
 `connect` 需要交互终端；OAuth 登录在浏览器完成，取消时停止进行中的登录。Web 的「添加账号」使用同一供应商目录，按连接方式筛选并可搜索。目录来自 Pi 及模板已安装的插件，插件变更后重新加载；账号密钥留在服务端，不会出现在命令输出中。自动化使用 `account add --key -`，不再使用 `account login`。
@@ -141,7 +142,7 @@ atrium restart --wait --timeout 120          # 等待结果（秒），成功或
 
 身份用哪个模型由用户设定，写在身份目录的 `settings.json`；Web 的 Agent 详情里也能改。在跑的身份当场生效，离线的下次启动生效；启动时把配置的模型作为启动参数传给 Pi，所以旧会话里记着的模型不会把它盖回去。可选清单来自这个身份运行中的 Pi，离线时用上次取到的；不在清单里的模型直接拒绝。Agent 自己的工具面不含改模型。
 
-正式安装使用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`（将 `x` 换成已发布的补丁号），不使用 npm registry。每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。失败时自动安装原版本、重新启动并发消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。
+正式安装使用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`（将 `x` 换成已发布的补丁号），不使用 npm registry。每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。重启健康检查验证服务与 MCP 网关就绪，不以模型凭据、供应商可用性作为默认门槛；要验证真实身份回合时显式加 `--probe-agent <身份短号>`。失败时自动安装原版本并重新启动；回滚原因显示在用户网页的顶部告警中，Agent 也会收到消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。
 
 未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置为 `~/.pi/atrium/data/`，不放在会被 npm 更新替换的安装目录，也不会随终端工作目录变化。原本在开发仓库 `.atrium/` 的用户数据须在切换全局安装之前停服迁移，或给新服务显式设置 `ATRIUM_DATA` 指向原目录；不要一边运行一边复制 SQLite。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
 

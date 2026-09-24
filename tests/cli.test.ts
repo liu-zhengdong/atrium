@@ -106,7 +106,7 @@ test(
       created.stdout.trimEnd().split("\n").at(-1)!,
       /^启动：atrium start a1$/,
     );
-    assert.match(created.stderr, /中庭服务已在后台启动/);
+    assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
     assert(record && alive(record.pid));
     const again = await f.cli(

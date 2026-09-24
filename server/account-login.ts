@@ -1,7 +1,6 @@
 import { type ChildProcess } from "node:child_process";
-import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import { join } from "node:path";
 import {
   AccountFiles,
@@ -13,10 +12,9 @@ import {
   type Row,
 } from "./account-files.ts";
 import { AccountWorker } from "./account-worker-client.ts";
-import { defaultTemplate } from "./profile.ts";
+import { ProviderDirectory } from "./provider-directory.ts";
 import { Problem, type Store } from "./store.ts";
 
-const require = createRequire(import.meta.url);
 type Job = {
   child: ChildProcess | null;
   cancelled: boolean;
@@ -30,6 +28,7 @@ export class AccountLogin {
     private store: Store,
     private files: AccountFiles,
     private worker: Pick<AccountWorker, "run">,
+    private providers?: ProviderDirectory,
   ) {}
   private row(number: number) {
     return this.store.one<Row>(
@@ -37,10 +36,10 @@ export class AccountLogin {
       number,
     )!;
   }
-  login(provider: string, name: string) {
+  async login(provider: string, name: string) {
     provider = providerName.parse(provider);
-    if (!["openai-codex", "antigravity"].includes(provider))
-      throw new Problem(400, "此 provider 暂不支持账号库 OAuth 登录");
+    if (!this.providers) throw new Problem(500, "供应商目录不可用");
+    const entry = await this.providers.require(provider, "oauth");
     const number = Number(
       this.store.run(
         "INSERT INTO accounts(provider,name,type,status) VALUES(?,?,'oauth','pending')",
@@ -52,20 +51,10 @@ export class AccountLogin {
       directory = this.files.dir(number);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     privateWrite(authFile(directory), {});
-    if (provider === "antigravity") {
-      let path: string;
-      try {
-        path = require.resolve("pi-antigravity/package.json", {
-          paths: [join(defaultTemplate(), "npm")],
-        });
-      } catch {
-        this.store.run("DELETE FROM accounts WHERE number=?", number);
-        throw new Problem(400, "未安装 pi-antigravity，暂不支持分配");
-      }
+    if (entry.packagePath)
       privateWrite(join(directory, "settings.json"), {
-        packages: [path.replace(/\/package\.json$/, "")],
+        packages: [entry.packagePath],
       });
-    }
     this.start(row, directory, () => {
       const value = this.files.load(row);
       this.store.run(
@@ -84,7 +73,7 @@ export class AccountLogin {
     const directory = this.files.dir(number);
     const staged = join(directory, `login-${randomUUID()}`);
     mkdirSync(staged, { mode: 0o700 });
-    if (row.provider === "antigravity")
+    if (existsSync(join(directory, "settings.json")))
       copyFileSync(
         join(directory, "settings.json"),
         join(staged, "settings.json"),

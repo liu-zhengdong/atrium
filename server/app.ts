@@ -209,6 +209,7 @@ export async function createApp(options: {
       .parse(request.body) satisfies AgentDefaults;
     return saveAgentDefaults(options.data, input);
   });
+  app.get("/api/providers", () => accounts.providersList());
   app.get("/api/accounts", () => accounts.list());
   app.post("/api/accounts", (request) => {
     const { provider, name, key } = z

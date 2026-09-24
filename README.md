@@ -99,6 +99,13 @@ atrium model 林岚                             # 当前模型、运行中实际
 atrium model 林岚 claude-bridge/claude-opus-5:high   # 设定模型，可带思考强度
 atrium trace 林岚 --show 12                   # 运行轨迹；--show 看某一条的参数与结果
 
+# 模型账号
+atrium connect                              # 选择方式与供应商，登录或输入 API Key，可选分配 Agent
+atrium connect deepseek                     # 供应商已确定时跳过供应商选择
+atrium accounts                             # 查看账号与分配
+printf '%s' "$MODEL_KEY" | atrium account add deepseek --key -  # 无终端的脚本入口
+atrium assign 林岚 k1                        # 把账号分配给身份
+
 # 聊天与通知
 atrium chats                                  # 会话列表
 atrium read c1                                # 读消息；目标写身份名就是与它的私聊，写群名就是那个群；详情只标字数，--full 显示全文
@@ -118,6 +125,8 @@ atrium runtimes                               # 本机发现的 Pi 实例
 atrium attach 林岚 实例ID                       # 把发现的实例接到身份上
 atrium promote 旧记录                          # 旧记录升级为长期身份
 ```
+
+`connect` 需要交互终端；OAuth 登录在浏览器完成，取消时停止进行中的登录。Web 的「添加账号」使用同一供应商目录，按连接方式筛选并可搜索。目录来自 Pi 及模板已安装的插件，插件变更后重新加载；账号密钥留在服务端，不会出现在命令输出中。自动化使用 `account add --key -`，不再使用 `account login`。
 
 以身份名义（`--as`）发言、建群、邀请走的是 Agent 工具（MCP）同一条路：要有成员资格，不能 @ 全体，对方看到的是同伴消息而不是用户指令。阅读只是用户审阅，不改变 Agent 的已读状态。
 

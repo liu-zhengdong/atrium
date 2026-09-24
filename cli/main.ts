@@ -4,6 +4,7 @@ import { pad, width } from "./format.ts";
 import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
 import { accountCommands } from "./accounts.ts";
+import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 
@@ -38,6 +39,7 @@ const commands: Record<string, Command> = {
   ...agentCommands,
   ...chatCommands,
   ...accountCommands,
+  connect: connectCommand,
   ...pluginCommands,
   ...resourceCommands,
 };

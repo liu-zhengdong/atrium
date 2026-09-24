@@ -61,7 +61,7 @@ export function LoginFlow({
         <div className="flex flex-wrap gap-2">
           {prompt.options.map((option) => (
             <button
-              className="button secondary"
+              className="button !border-0 !bg-[#f1f5f2] !text-[#3c5344] hover:!bg-[#e7eee9]"
               type="button"
               key={option.id}
               onClick={() => respond(option.id)}
@@ -114,7 +114,11 @@ export function LoginFlow({
         <p className="text-xs text-accent-strong">登录成功</p>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" className="button secondary" onClick={close}>
+        <button
+          type="button"
+          className="button !border-0 !bg-transparent !text-[#3c5344] hover:!bg-[#f1f5f2]"
+          onClick={close}
+        >
           {status === "pending" ? "取消登录" : "关闭"}
         </button>
       </div>

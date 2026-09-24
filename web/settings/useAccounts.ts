@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.ts";
 import type { Account } from "./types.ts";
 
@@ -50,6 +50,8 @@ export function useLogin(id: string | null, finished: () => void) {
   const [events, setEvents] = useState<LoginEvent[]>([]);
   const [status, setStatus] = useState("pending");
   const [error, setError] = useState("");
+  const onFinished = useRef(finished);
+  onFinished.current = finished;
   useEffect(() => {
     if (!id) return;
     let active = true,
@@ -69,7 +71,7 @@ export function useLogin(id: string | null, finished: () => void) {
         setEvents((previous) => [...previous, ...result.events]);
         setStatus(result.status);
         if (result.done) {
-          finished();
+          if (result.status === "ready") onFinished.current();
           return;
         }
       } catch (e) {
@@ -82,7 +84,7 @@ export function useLogin(id: string | null, finished: () => void) {
       active = false;
       clearTimeout(timer);
     };
-  }, [id, finished]);
+  }, [id]);
   async function answer(value: string | null) {
     if (!id) return;
     try {

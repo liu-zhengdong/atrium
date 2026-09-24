@@ -32,10 +32,10 @@ export function AccountsPage({
     ),
   );
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="m-0 text-xl font-medium">模型账号</h1>
+          <h1 className="text-xl font-medium">模型账号</h1>
         </div>
         <button
           className="button flex items-center gap-1"
@@ -69,7 +69,7 @@ export function AccountsPage({
         <p className="py-8 text-center text-xs text-muted">正在读取账号…</p>
       )}
       {accounts && accounts.length === 0 && (
-        <div className="rounded-2xl bg-white px-5 py-12 text-center shadow-lift">
+        <div className="py-12 text-center">
           <KeyRound className="mx-auto text-accent" size={24} />
           <p className="mb-1 mt-4 text-sm">还没有账号</p>
           <p className="mb-0 text-xs text-muted">点击「添加账号」开始。</p>
@@ -82,7 +82,7 @@ export function AccountsPage({
               没有匹配的账号
             </p>
           ) : (
-            <div className="space-y-3">
+            <div className="divide-y divide-line-subtle">
               {visible?.map((account) => (
                 <AccountRow
                   key={account.id}

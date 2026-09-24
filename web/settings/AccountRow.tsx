@@ -48,20 +48,20 @@ export function AccountRow({
     .filter((agent): agent is Agent => !!agent);
   const agentNames = assignedAgents.map((agent) => agent.name);
   return (
-    <section ref={root} className="rounded-2xl bg-white p-5 shadow-lift">
+    <section ref={root} className="py-5 first:pt-0">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
+            <h2 className="m-0 truncate text-sm font-medium">{account.name}</h2>
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${account.status === "ready" ? "bg-[#63976c]" : account.status === "pending" ? "bg-[#d1a15b]" : "bg-[#ba7963]"}`}
               aria-label={`状态：${account.status}`}
               title={account.status}
             />
-            <h2 className="m-0 truncate text-sm font-medium">{account.name}</h2>
             <span className="badge">{account.provider}</span>
           </div>
           <p className="mb-0 mt-1.5 text-xs text-muted">
-            {account.type === "oauth" ? "OAuth" : "API key"}
+            {account.type === "oauth" ? "OAuth" : "API Key"}
             {expiry(account.expires) && ` · ${expiry(account.expires)}`}
             {account.last_error &&
               ` · ${account.last_error === "未知错误" && !account.expires ? "登录未完成" : account.last_error}`}
@@ -168,7 +168,7 @@ export function AccountRow({
           </div>
         </div>
       )}
-      <div className="mt-4 flex items-center gap-2 border-t border-[#edf1ed] pt-3">
+      <div className="mt-3 flex items-center gap-2">
         <span className="shrink-0 text-xs text-muted">分配</span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {assignedAgents.length ? (

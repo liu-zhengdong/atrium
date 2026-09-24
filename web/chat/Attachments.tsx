@@ -135,7 +135,7 @@ function Lightbox({
   }, [index, images.length, onClose, onIndex]);
   return createPortal(
     <div
-      className="fixed inset-0 z-[80] flex flex-col bg-[#1c1b18]/88"
+      className="fixed inset-0 z-[80] flex flex-col bg-[#1c1b18]/96"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -159,7 +159,7 @@ function Lightbox({
         {images.length > 1 && (
           <button
             type="button"
-            className="icon-button absolute top-1/2 left-4 -translate-y-1/2 text-[#f4f1ea] hover:bg-white/10"
+            className="icon-button absolute top-1/2 left-4 z-10 -translate-y-1/2 text-[#f4f1ea] hover:bg-white/10 max-[560px]:left-2 max-[560px]:!size-10 max-[560px]:!bg-black/60 max-[560px]:!text-white max-[560px]:hover:!bg-black/80"
             aria-label="上一张"
             onClick={(e) => {
               e.stopPropagation();
@@ -173,13 +173,13 @@ function Lightbox({
         <img
           src={attachmentUrl(current.id)}
           alt={current.name}
-          className="absolute inset-x-14 inset-y-0 m-auto max-h-full max-w-[calc(100%-7rem)] object-contain"
+          className="absolute inset-x-14 inset-y-0 m-auto max-h-full max-w-[calc(100%-7rem)] object-contain max-[560px]:inset-x-0 max-[560px]:max-w-full"
           onClick={(e) => e.stopPropagation()}
         />
         {images.length > 1 && (
           <button
             type="button"
-            className="icon-button absolute top-1/2 right-4 -translate-y-1/2 text-[#f4f1ea] hover:bg-white/10"
+            className="icon-button absolute top-1/2 right-4 z-10 -translate-y-1/2 text-[#f4f1ea] hover:bg-white/10 max-[560px]:right-2 max-[560px]:!size-10 max-[560px]:!bg-black/60 max-[560px]:!text-white max-[560px]:hover:!bg-black/80"
             aria-label="下一张"
             onClick={(e) => {
               e.stopPropagation();

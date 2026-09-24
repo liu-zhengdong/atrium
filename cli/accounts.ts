@@ -19,6 +19,26 @@ const name = (provider: string, values: Values) =>
   str(values, "name") ?? provider;
 const encode = encodeURIComponent;
 export const accountCommands: Record<string, Command> = {
+  "account check": {
+    args: "",
+    about: "升级前列出未分配账号的身份及分配命令",
+    positionals: [0, 0],
+    async run({ json }) {
+      const result = await (
+        await connect()
+      ).get<{
+        unassigned: { ref: string; name: string; command: string }[];
+      }>("/assignment-check");
+      if (json) return printJson(result);
+      console.log(
+        result.unassigned.length
+          ? result.unassigned
+              .map((a) => `${a.ref} ${a.name}：${a.command}`)
+              .join("\n")
+          : "所有身份均已分配账号",
+      );
+    },
+  },
   accounts: {
     args: "",
     about: "列出账号及分配（不显示密钥）",

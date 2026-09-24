@@ -50,7 +50,9 @@ export function AgentDrawer({
       <div className="flex items-center gap-3 bg-[#f9faf9] px-5 py-4">
         <Avatar name={agent.name} presence={agentPresence(agent)} />
         <div className="min-w-0 flex-1 text-xs text-muted">
-          {agent.failure ? (
+          {agent.unassigned ? (
+            <p className="text-[#9c3f2d]">未分配账号 · 请在下方分配</p>
+          ) : agent.failure ? (
             <AgentFailure
               agent={agent}
               retry={() => {

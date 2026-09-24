@@ -125,34 +125,18 @@ test("same-provider assignment replacement is one call and failure preserves the
   store.close();
 });
 
-test("failed shared-mode replacement restores the original Pi login and shared mode", () => {
-  const { dir, store, agent, agentDirectory, accounts } = fixture();
+test("shared mode is rejected without disturbing an assignment", () => {
+  const { store, agent, agentDirectory, accounts } = fixture();
   const old = accounts.add("deepseek", "old", "OLD_KEY").id;
-  const next = accounts.add("deepseek", "next", "NEW_KEY").id;
   accounts.assign(agent.id, old);
-  writeFileSync(
-    join(dir, "template", "auth.json"),
-    JSON.stringify({ deepseek: { type: "api_key", key: "PERSONAL" } }),
+  assert.throws(
+    () => accounts.switchMode(agent.id, "shared"),
+    /共享个人 Pi 登录已停用/,
   );
-  accounts.switchMode(agent.id, "shared");
-  const before = lstatSync(join(agentDirectory, "auth.json"));
-  assert.equal(before.isSymbolicLink(), true);
-  store.run(
-    `CREATE TRIGGER deny_shared_swap BEFORE UPDATE ON account_assignments BEGIN SELECT RAISE(ABORT, 'blocked'); END`,
-  );
-  assert.throws(() => accounts.assign(agent.id, next, true), /blocked/);
-  assert.equal(accounts.switchMode(agent.id).mode, "shared");
-  assert.deepEqual(accounts.switchMode(agent.id).assigned, [
-    { provider: "deepseek", account: old },
-  ]);
+  assert.equal(accounts.switchMode(agent.id).mode, "assigned");
   assert.equal(
     lstatSync(join(agentDirectory, "auth.json")).isSymbolicLink(),
-    true,
-  );
-  assert.equal(
-    JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")).deepseek
-      .key,
-    "PERSONAL",
+    false,
   );
   store.close();
 });
@@ -442,14 +426,11 @@ test("assigned files are isolated; bad assignments and real-file mode switch pre
       [second, []],
     ],
   );
-  const preserved = accounts.switchMode(agent.id, "shared");
-  assert.ok(preserved.preserved);
-  assert.equal(
-    JSON.parse(readFileSync(preserved.preserved!, "utf8")).deepseek.key,
-    "SENSITIVE_KEY_FIRST",
+  assert.throws(
+    () => accounts.switchMode(agent.id, "shared"),
+    /共享个人 Pi 登录已停用/,
   );
-  assert.equal(lstatSync(file).isSymbolicLink(), true);
-  assert.equal(readFileSync(file, "utf8"), "{}\n");
+  assert.equal(lstatSync(file).isSymbolicLink(), false);
   assert.equal(accounts.list()[0]?.name, "primary");
   assert.equal(
     JSON.stringify(accounts.list()).includes("SENSITIVE_KEY"),
@@ -460,12 +441,11 @@ test("assigned files are isolated; bad assignments and real-file mode switch pre
   store.close();
 });
 
-test("assigning after switching back to shared keeps earlier provider credentials", () => {
+test("assigning a second provider keeps the earlier assigned credential", () => {
   const { store, agent, agentDirectory, accounts } = fixture();
   const deepseek = accounts.add("deepseek", "first", "DEEPSEEK_KEY").id;
   const openrouter = accounts.add("openrouter", "second", "OPENROUTER_KEY").id;
   accounts.assign(agent.id, deepseek);
-  accounts.switchMode(agent.id, "shared");
   accounts.assign(agent.id, openrouter);
   assert.deepEqual(
     JSON.parse(readFileSync(join(agentDirectory, "auth.json"), "utf8")),

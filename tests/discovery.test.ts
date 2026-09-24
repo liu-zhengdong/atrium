@@ -263,13 +263,9 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
     url: "/api/agents",
     payload: { name: "启动失败样本", template: data, start: true },
   });
-  assert.equal(failed.statusCode, 201);
-  assert.match(failed.json().start_error, /已创建.*启动失败/);
-  assert.equal(
-    store.agents().length,
-    1,
-    "启动失败仍有可恢复的身份，不要求再次创建",
-  );
+  assert.equal(failed.statusCode, 409);
+  assert.equal(failed.json().code, "unassigned_account");
+  assert.equal(store.agents().length, 0, "未分配时拒绝创建并启动的组合操作");
 });
 
 test("自动名称可读、有界、符合名称约束，重名不复用 UUID", () => {

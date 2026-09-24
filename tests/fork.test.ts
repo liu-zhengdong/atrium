@@ -94,10 +94,8 @@ test("活配置自有规则和笔记；fork 后互不影响；凭据共享、金
     lstatSync(join(first.agent_directory, "SYSTEM.md")).isSymbolicLink(),
     false,
   );
-  // Credentials are shared by link; every other file here is the identity's own.
-  const auth = join(first.agent_directory, "auth.json");
-  assert(lstatSync(auth).isSymbolicLink());
-  assert.equal(realpathSync(auth), join(template, "auth.json"));
+  // Credentials are neither copied nor linked from the template.
+  assert.equal(existsSync(join(first.agent_directory, "auth.json")), false);
   const notes = JSON.parse(
     readFileSync(join(first.agent_directory, "notes.json"), "utf8"),
   );

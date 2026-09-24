@@ -107,7 +107,7 @@ test(
     assert.match(created.stdout, /林岚 · a1/);
     assert.match(
       created.stdout.trimEnd().split("\n").at(-1)!,
-      /^启动：atrium start a1$/,
+      /^查看可用账号：atrium accounts$/,
     );
     assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
@@ -125,8 +125,11 @@ test(
 
     // 名册与详情
     const list = await ok("list");
-    assert.match(list, /a1\s+林岚\s+离线/);
-    assert.match(list, /a2\s+沈默\s+离线/);
+    assert.match(list, /a1\s+林岚\s+未分配账号/);
+    assert.match(list, /a2\s+沈默\s+未分配账号/);
+    const blockedTui = await f.cli("run", "a1");
+    assert.equal(blockedTui.code, 4);
+    assert.match(blockedTui.stderr, /未分配账号；先执行 atrium assign a1/);
     // 离线身份显示配置里写着的模型
     const invalidModel = await f.cli(
       "model",
@@ -180,7 +183,7 @@ test(
     await ok("model", "林岚", "deepseek/deepseek-v4-pro:high");
     assert.match(
       await ok("list"),
-      /a1\s+林岚\s+离线\s+deepseek\/deepseek-v4-pro:high/,
+      /a1\s+林岚\s+未分配账号\s+deepseek\/deepseek-v4-pro:high/,
     );
     const listed = (
       JSON.parse(await ok("list", "--json")) as {
@@ -193,7 +196,7 @@ test(
       ["a1", "a2"],
     );
     assert.match(await ok("show", "沈默"), /介绍：评审代码/);
-    assert.match(await ok("show", "a2"), /沈默 · a2 · 离线/);
+    assert.match(await ok("show", "a2"), /沈默 · a2 · 未分配账号/);
     assert.match(await refused("show", "不存在"), /没有叫「不存在」的 Agent/);
     const diagnosis = new Store(join(f.data, "atrium.sqlite"));
     diagnosis.setFailure(

@@ -17,12 +17,13 @@ import { createApp } from "../server/app.ts";
 import { ensureDesktopCwd, existingDirectoryPath } from "../server/agents.ts";
 import { Problem, Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
+import { Accounts } from "../server/accounts.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
 const require = createRequire(import.meta.url);
 const bridge = dirname(require.resolve("@liuser/pi-atrium/package.json"));
 
-test("长期身份配置独立、引用共享资源、凭据共享不复制；改名与迁移保留短号及聊天", async (t) => {
+test("长期身份配置独立、引用共享资源、凭据不复制；改名与迁移保留短号及聊天", async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "atrium-identity-")));
   const template = join(root, "template");
   mkdirSync(template);
@@ -73,11 +74,8 @@ test("长期身份配置独立、引用共享资源、凭据共享不复制；�
     join(piHome, "atrium", "agents", agent.id),
   );
   assert(existsSync(join(agent.agent_directory, "sessions")));
-  // Credentials are the one thing shared by link: a copy would go stale the
-  // first time a provider rotated its refresh token.
-  const auth = join(agent.agent_directory, "auth.json");
-  assert(lstatSync(auth).isSymbolicLink());
-  assert.equal(realpathSync(auth), join(template, "auth.json"));
+  // The personal Pi login never flows into a new identity.
+  assert.equal(existsSync(join(agent.agent_directory, "auth.json")), false);
   assert.equal(
     readFileSync(join(agent.agent_directory, "SYSTEM.md"), "utf8"),
     "shared rules",
@@ -323,6 +321,8 @@ test("启动时把丢失的工作目录写回桌面并交给 Pi", async (t) => {
   });
   assert.equal(created.statusCode, 201, created.body);
   const { agent } = created.json();
+  const accounts = new Accounts(store, join(root, "data"));
+  accounts.assign(agent.id, accounts.add("deepseek", "test", "TEST_KEY").id);
   const gone = join(root, "gone");
   store.run("UPDATE agents SET cwd=? WHERE id=?", gone, agent.id);
   const response = await app.inject({
@@ -370,7 +370,7 @@ test("启动已有身份时改写缺失的合集包路径，再交给 Pi", async
     join(template, "settings.json"),
     JSON.stringify({ defaultModel: "fixture", packages: [] }),
   );
-  const { app } = await createApp({
+  const { app, store } = await createApp({
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     piHome: join(root, ".pi"),
@@ -386,6 +386,11 @@ test("启动已有身份时改写缺失的合集包路径，再交给 Pi", async
   });
   assert.equal(created.statusCode, 201, created.body);
   agentDir = created.json().agent.agent_directory as string;
+  const accounts = new Accounts(store, join(root, "data"));
+  accounts.assign(
+    created.json().agent.id,
+    accounts.add("deepseek", "test", "TEST_KEY").id,
+  );
   writeFileSync(
     join(agentDir, "settings.json"),
     JSON.stringify({

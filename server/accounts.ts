@@ -33,6 +33,7 @@ import {
 } from "./custom-providers.ts";
 import { setAccountModel } from "./account-models.ts";
 import { Problem, type Store } from "./store.ts";
+import { UNASSIGNED } from "./assignment.ts";
 export {
   modePlan,
   shouldRefresh,
@@ -376,6 +377,11 @@ export class Accounts {
           )
           .map((r) => ({ provider: r.provider, account: `k${r.number}` })),
       };
+    if (target === "shared")
+      throw new Problem(
+        409,
+        "共享个人 Pi 登录已停用；请用 atrium assign <身份> <账号短号> 分配账号",
+      );
     return this.files.prepareMode(
       id,
       target,
@@ -456,6 +462,8 @@ export class Accounts {
       restoreModels?.();
       throw error;
     }
+    if (this.store.failure(id)?.text === UNASSIGNED)
+      this.store.clearFailure(id);
     if (
       sidecar &&
       !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))

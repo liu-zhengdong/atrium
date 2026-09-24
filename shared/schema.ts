@@ -234,6 +234,7 @@ export type Overview = {
     error: string | null;
     failure: { text: string; at: number; count: number } | null;
     unread: number;
+    unassigned: boolean;
   })[];
   chats: Chat[];
   /** 本机用户的资料；界面用它认出自己的消息，并提供编辑入口。 */

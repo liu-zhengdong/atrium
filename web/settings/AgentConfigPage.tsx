@@ -158,6 +158,20 @@ export function AgentConfigPage({
               agent={agent}
               openAccounts={() => openAccounts(null)}
             />
+            {!agent.available && (
+              <button
+                className="button secondary"
+                disabled={agent.unassigned || busy}
+                title={agent.unassigned ? "未分配账号，请先分配" : undefined}
+                onClick={() =>
+                  void api(`/agents/${agent.id}/start`, "POST")
+                    .then(changed)
+                    .catch((e) => setError(String(e)))
+                }
+              >
+                启动
+              </button>
+            )}
           </section>
           <section id="plugins">
             {agent.agent_directory && (

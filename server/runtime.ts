@@ -59,6 +59,7 @@ import {
 import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
+import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
 
 const require = createRequire(import.meta.url);
 // 服务可能从某个 herdr pane 里启动；后台身份不在那个 pane 里，去掉表示「身处此 pane」的变量，
@@ -715,6 +716,7 @@ export class Runtimes {
     this.recordSessionReset(id, reason);
   }
   async start(id: string, automatic = false, fresh = false) {
+    requireAssignment(this.store, id);
     const binding = this.binding(id);
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (binding.runtime_pid && alive(binding.runtime_pid))
@@ -736,13 +738,7 @@ export class Runtimes {
       if (cwd !== current.cwd) this.changed();
       if (current.agent_directory) {
         // A profile left on the old layout costs the Agent a rule, not its session.
-        for (const notice of syncIdentityProfile(
-          current.agent_directory,
-          this.store.one<{ mode: string }>(
-            "SELECT mode FROM credential_modes WHERE agent_id=?",
-            current.id,
-          )?.mode !== "assigned",
-        ))
+        for (const notice of syncIdentityProfile(current.agent_directory))
           console.error(`${current.name} 的${notice}`);
         const configured = readIdentityModel(current.agent_directory);
         const restored = !fresh && !!current.session_file;
@@ -871,6 +867,13 @@ export class Runtimes {
     });
     this.changed();
   }
+  /** 撤销最后一个账号前终止活跃身份，不能留下仍在运行的无账号实例。 */
+  async stopForUnassignment(id: string) {
+    if (this.connections.has(id)) return this.stop(id);
+    const pid = this.binding(id).runtime_pid;
+    if (pid && alive(pid))
+      throw new Problem(409, "身份仍在运行，请先停止后取消分配");
+  }
   /** 没能当场生效时，说清是哪一种情况。 */
   private pendingReason(id: string) {
     if (!this.connections.has(id)) return "身份没在运行，下次启动时生效";
@@ -997,6 +1000,16 @@ export class Runtimes {
     return promise;
   }
   private async doPump(id: string, direct: boolean): Promise<void> {
+    if (!hasAssignment(this.store, id)) {
+      if (
+        this.store.pending(id).length &&
+        this.store.failure(id)?.text !== UNASSIGNED
+      ) {
+        this.store.setFailure(id, UNASSIGNED);
+        this.changed();
+      }
+      return;
+    }
     let operationFailed = false;
     try {
       if (this.connecting.has(id)) return;

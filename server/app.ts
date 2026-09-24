@@ -18,6 +18,7 @@ import {
 import { modelSpec, type ModelOption } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Accounts } from "./accounts.ts";
+import { hasAssignment, removeSharedLinks } from "./assignment.ts";
 import { customSchema } from "./custom-providers.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
@@ -74,6 +75,7 @@ export async function createApp(options: {
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
   const accounts = new Accounts(store, options.data);
+  removeSharedLinks(store);
   if (options.runtime !== false) {
     accounts.start();
     accounts.preloadProviders();
@@ -343,12 +345,35 @@ export async function createApp(options: {
       .parse(request.body);
     return accounts.rename(accountRef(request), name);
   });
-  app.delete("/api/accounts/:ref", (request) =>
-    accounts.remove(accountRef(request)),
-  );
+  app.delete("/api/accounts/:ref", async (request) => {
+    const ref = accountRef(request);
+    const account = accounts.list().find((entry) => entry.id === ref);
+    if (account)
+      for (const agentRef of account.assigned) {
+        const id = store.resolveAgentId(agentRef);
+        const remaining = store.one<{ count: number }>(
+          "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
+          id,
+        )?.count;
+        if (remaining === 1) await runtimes?.stopForUnassignment(id);
+      }
+    const result = accounts.remove(ref);
+    changed();
+    return result;
+  });
   app.get("/api/credentials/:agent", (request) =>
     accounts.switchMode(identityRef(request)),
   );
+  app.get("/api/assignment-check", () => ({
+    unassigned: store
+      .agents()
+      .filter((a) => !hasAssignment(store, a.id))
+      .map((a) => ({
+        ref: a.ref,
+        name: a.name,
+        command: `atrium assign ${a.ref} <账号短号>`,
+      })),
+  }));
   app.put("/api/credentials/:agent", (request) => {
     const { mode } = z
       .object({ mode: z.enum(["shared", "assigned"]) })
@@ -361,13 +386,31 @@ export async function createApp(options: {
       .object({ account: z.string(), replace: z.boolean().optional() })
       .strict()
       .parse(request.body);
-    return accounts.assign(identityRef(request), account, replace);
+    const result = accounts.assign(identityRef(request), account, replace);
+    changed();
+    return result;
   });
-  app.delete("/api/assign/:agent/:provider", (request) => {
+  app.delete("/api/assign/:agent/:provider", async (request) => {
     const { provider } = z
       .object({ provider: z.string() })
       .parse(request.params);
-    return accounts.unassign(identityRef(request), provider);
+    const id = identityRef(request);
+    const remaining = store.one<{ count: number }>(
+      "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
+      id,
+    )?.count;
+    if (
+      remaining === 1 &&
+      store.one(
+        "SELECT 1 FROM account_assignments WHERE agent_id=? AND provider=?",
+        id,
+        provider,
+      )
+    )
+      await runtimes?.stopForUnassignment(id);
+    const result = accounts.unassign(id, provider);
+    changed();
+    return result;
   });
   app.get("/api/overview", () => {
     const discovery = runtimes?.directory() ?? {
@@ -384,6 +427,7 @@ export async function createApp(options: {
         error: store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
         failure: store.failure(a.id),
         unread: store.boxCount(a.id),
+        unassigned: !hasAssignment(store, a.id),
       })),
       chats: store.chats(),
       user: readUser(store),
@@ -427,22 +471,19 @@ export async function createApp(options: {
       })
       .strict()
       .parse(request.body);
-    if (input.start && !runtimes) throw new Problem(503, "运行时未启用");
+    if (input.start)
+      throw new Problem(
+        409,
+        "先创建身份并分配账号，再执行 atrium start <身份短号>",
+        "unassigned_account",
+      );
     const agent = createAgent(store, options.data, input.name, desktops, {
       ...input,
       piHome,
     });
-    let start_error: string | undefined;
-    if (input.start) {
-      try {
-        await runtimes!.start(agent.id);
-      } catch {
-        start_error = "Agent 已创建，但启动失败。可在详情中重试。";
-      }
-    }
     changed();
     void reply.code(201);
-    return { agent, start_error };
+    return { agent };
   });
   app.post("/api/runtimes/:id/chat", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");

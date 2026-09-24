@@ -17,6 +17,7 @@ import { promisify } from "node:util";
 import { createApp } from "../server/app.ts";
 import { Runtimes } from "../server/runtime.ts";
 import { Store } from "../server/store.ts";
+import { Accounts } from "../server/accounts.ts";
 import { mergeReadState } from "../web/chat/readState.ts";
 import { packageRoot } from "../server/service-state.ts";
 import { LOCAL_USER } from "../shared/user.ts";
@@ -242,6 +243,13 @@ test("运行、未发现的具名占用、未知状态与并发启动均拒绝�
     rmSync(root, { recursive: true, force: true });
   });
   const agent = store.createAgent("占用样本", root).agent;
+  const account = new Accounts(store, join(root, "data"));
+  store.run(
+    "UPDATE agents SET agent_directory=? WHERE id=?",
+    directory,
+    agent.id,
+  );
+  account.assign(agent.id, account.add("deepseek", "test", "TEST_KEY").id);
   const remove = () => runtimes!.remove(agent.id, agent.ref);
   store.run(
     "UPDATE agents SET runtime_pid=? WHERE id=?",
@@ -332,6 +340,11 @@ test(
       "UPDATE agents SET agent_directory=? WHERE id=?",
       profile,
       agent.id,
+    );
+    const accounts = new Accounts(store, data);
+    accounts.assign(
+      agent.id,
+      accounts.add("deepseek", "fixture", "TEST_KEY").id,
     );
     const running = exec(
       process.execPath,

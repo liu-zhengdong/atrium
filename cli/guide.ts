@@ -34,7 +34,7 @@ export const groups: Record<string, string[]> = {
     "search",
     "user",
   ],
-  账号与凭据: ["connect", "accounts", "assign", "unassign"],
+  账号与凭据: ["connect", "accounts", "account check", "assign", "unassign"],
   插件技能与规则: [],
 };
 export function groupOf(name: string) {

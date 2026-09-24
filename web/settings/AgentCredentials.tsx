@@ -13,11 +13,13 @@ export function AgentCredentials({
   openAccounts,
   compact = false,
   visible = true,
+  onChange,
 }: {
   agent: Agent;
   openAccounts: () => void;
   compact?: boolean;
   visible?: boolean;
+  onChange?: () => void;
 }) {
   const {
     accounts,
@@ -59,7 +61,10 @@ export function AgentCredentials({
     accounts?.[0];
   async function assign<T>(task: () => Promise<T>): Promise<T | undefined> {
     const result = await change(task);
-    await reload();
+    if (result !== undefined) {
+      await reload();
+      onChange?.();
+    }
     return result;
   }
   return (
@@ -90,18 +95,29 @@ export function AgentCredentials({
                 </p>
               );
             })
-          ) : (
+          ) : compact ? (
             <p className="m-0 text-xs text-muted">未分配账号</p>
-          )}
+          ) : null}
           <Popover.Root open={open} onOpenChange={setOpen}>
-            <Popover.Trigger asChild>
-              <button
-                type="button"
-                className="text-xs text-accent-strong hover:underline"
-              >
-                {assigned.length ? "调整分配" : "分配账号"}
-              </button>
-            </Popover.Trigger>
+            {!compact && !assigned.length ? (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-muted">未分配账号</span>
+                <Popover.Trigger asChild>
+                  <button type="button" className="button">
+                    分配账号
+                  </button>
+                </Popover.Trigger>
+              </div>
+            ) : (
+              <Popover.Trigger asChild>
+                <button
+                  type="button"
+                  className="text-xs text-accent-strong hover:underline"
+                >
+                  {assigned.length ? "调整分配" : "分配账号"}
+                </button>
+              </Popover.Trigger>
+            )}
             <Popover.Portal>
               <Popover.Content
                 align="start"

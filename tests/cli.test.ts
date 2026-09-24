@@ -129,7 +129,20 @@ test(
     assert.match(list, /a2\s+沈默\s+未分配账号/);
     const blockedTui = await f.cli("run", "a1");
     assert.equal(blockedTui.code, 4);
-    assert.match(blockedTui.stderr, /未分配账号；先执行 atrium assign a1/);
+    assert.equal(blockedTui.stderr, "未分配账号\n修正：atrium account check\n");
+    const blockedStart = await f.cli("start", "a1");
+    assert.equal(blockedStart.code, 4);
+    assert.equal(
+      blockedStart.stderr,
+      "未分配账号\n修正：atrium account check\n",
+    );
+    const preflight = await f.cli("account", "check");
+    assert.equal(preflight.code, 4);
+    assert.match(preflight.stderr, /atrium assign a1 <账号短号>/);
+    assert.equal((preflight.stderr.match(/可用账号：/g) ?? []).length, 1);
+    assert.match(preflight.stderr, /添加账号：atrium connect/);
+    assert.doesNotMatch(await ok("help"), /atrium credentials /);
+    assert.equal((await f.cli("credentials", "a1")).code, 2);
     // 离线身份显示配置里写着的模型
     const invalidModel = await f.cli(
       "model",
@@ -181,6 +194,12 @@ test(
     );
     assert.equal(JSON.parse(absentAccount.stdout).next, "atrium accounts");
     await ok("model", "林岚", "deepseek/deepseek-v4-pro:high");
+    const preflightJson = await f.cli("account", "check", "--json");
+    assert.equal(preflightJson.code, 4);
+    assert.equal(
+      JSON.parse(preflightJson.stdout).error.code,
+      "validation_failed",
+    );
     assert.match(
       await ok("list"),
       /a1\s+林岚\s+未分配账号\s+deepseek\/deepseek-v4-pro:high/,

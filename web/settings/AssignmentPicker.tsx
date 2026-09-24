@@ -24,6 +24,7 @@ export function AssignmentPicker({
     previous?: Account;
   } | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!pending) return;
@@ -41,12 +42,21 @@ export function AssignmentPicker({
   );
   async function select(agent: Agent) {
     setError("");
+    setNotice("");
     setBusy(true);
     try {
       if (account.assigned.includes(agent.ref)) {
-        await change(() =>
-          api(`/assign/${agent.ref}/${account.provider}`, "DELETE"),
+        const result = await change(() =>
+          api<{ stopped: boolean; hasAssignment: boolean }>(
+            `/assign/${agent.ref}/${account.provider}`,
+            "DELETE",
+          ),
         );
+        if (!result) setError("撤销失败，请检查账号状态。");
+        else if (result.stopped)
+          setNotice(`${agent.name} 已停止；分配账号后才能重新启动。`);
+        else if (!result.hasAssignment)
+          setNotice(`${agent.name} 未分配账号，暂不能启动。`);
       } else {
         const previous = accounts.find(
           (item) =>
@@ -134,6 +144,11 @@ export function AssignmentPicker({
       {agents.some((agent) => !agent.agent_directory) && (
         <p className="m-0 text-[11px] text-muted">
           尚未启动、没有配置目录的 Agent 不能分配。
+        </p>
+      )}
+      {notice && (
+        <p role="status" className="text-xs text-muted">
+          {notice}
         </p>
       )}
       {error && (

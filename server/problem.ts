@@ -6,6 +6,7 @@ export class Problem extends Error {
     message: string,
     code?: string,
     public candidates?: { ref: string; name: string }[],
+    public nextCommand?: string,
   ) {
     super(message);
     this.code =

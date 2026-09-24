@@ -1,4 +1,5 @@
 import { stdin } from "node:process";
+import { recordNext } from "./contract.ts";
 import { connect } from "./service.ts";
 import { printJson, table } from "./format.ts";
 import { str, type Command, type Values } from "./main.ts";
@@ -21,22 +22,47 @@ const encode = encodeURIComponent;
 export const accountCommands: Record<string, Command> = {
   "account check": {
     args: "",
-    about: "升级前列出未分配账号的身份及分配命令",
+    about: "列出未分配账号的身份及分配命令；有未分配时退出码 4",
     positionals: [0, 0],
     async run({ json }) {
       const result = await (
         await connect()
       ).get<{
-        unassigned: { ref: string; name: string; command: string }[];
+        unassigned: {
+          ref: string;
+          name: string;
+          command: string;
+          matched: boolean;
+        }[];
+        accounts: {
+          id: string;
+          provider: string;
+          name: string;
+          status: string;
+        }[];
       }>("/assignment-check");
+      if (result.unassigned.length) {
+        const lines = [
+          `有 ${result.unassigned.length} 个身份未分配账号：`,
+          ...result.unassigned.map(
+            (agent) => `  ${agent.ref} ${agent.name}：${agent.command}`,
+          ),
+        ];
+        if (result.unassigned.some((agent) => !agent.matched))
+          lines.push(
+            "可用账号：",
+            ...(result.accounts.length
+              ? result.accounts.map(
+                  (account) =>
+                    `  ${account.id} ${account.name} (${account.provider}，${account.status})`,
+                )
+              : ["  暂无"]),
+            "添加账号：atrium connect",
+          );
+        throw new Problem(409, lines.join("\n"), "validation_failed");
+      }
       if (json) return printJson(result);
-      console.log(
-        result.unassigned.length
-          ? result.unassigned
-              .map((a) => `${a.ref} ${a.name}：${a.command}`)
-              .join("\n")
-          : "所有身份均已分配账号",
-      );
+      console.log("所有身份均已分配账号");
     },
   },
   accounts: {
@@ -129,31 +155,17 @@ export const accountCommands: Record<string, Command> = {
     args: "身份 provider",
     about: "撤销指定 provider 的分配",
     positionals: [2, 2],
-    async run({ positionals: [agent, provider] }) {
-      await (
+    async run({ positionals: [agent, provider], json }) {
+      const result = await (
         await connect()
-      ).delete(`/assign/${encode(agent!)}/${encode(provider!)}`);
-      console.log("已撤销分配");
-    },
-  },
-  credentials: {
-    args: "身份 [shared|assigned]",
-    about: "查看或切换身份凭据模式",
-    positionals: [1, 2],
-    async run({ positionals: [agent, mode], json }) {
-      const client = await connect();
-      const result = mode
-        ? await client.put<{ mode: string; preserved: string | null }>(
-            `/credentials/${encode(agent!)}`,
-            { mode },
-          )
-        : await client.get<{ mode: string; assigned: unknown[] }>(
-            `/credentials/${encode(agent!)}`,
-          );
-      if (json) return printJson(result);
-      console.log(
-        `模式：${result.mode}${"preserved" in result && result.preserved ? `；原文件已保留：${result.preserved}` : ""}`,
+      ).delete<{ name: string; stopped: boolean; hasAssignment: boolean }>(
+        `/assign/${encode(agent!)}/${encode(provider!)}`,
       );
+      if (json) return printJson(result);
+      console.log("已撤销分配");
+      if (result.stopped)
+        console.log(`${result.name} 已停止：没有分配账号就不能运行`);
+      if (!result.hasAssignment) recordNext("重新分配：atrium account check");
     },
   },
 };

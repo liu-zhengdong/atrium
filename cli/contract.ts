@@ -55,7 +55,10 @@ export function failure(error: unknown, usage?: string) {
   const code = errorCode(error);
   const message = error instanceof Error ? error.message : String(error);
   const candidates = error instanceof Problem ? error.candidates : undefined;
-  const next = correction(code, usage);
+  const next =
+    error instanceof Problem && error.nextCommand
+      ? error.nextCommand
+      : correction(code, usage);
   const log = join(dataDirectory(), "service.log");
   return {
     code,

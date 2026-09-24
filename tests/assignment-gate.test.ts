@@ -96,6 +96,8 @@ test("升级移除个人 Pi 链接；未分配启动受阻、通知只记一次�
   const denied = await start();
   assert.equal(denied.statusCode, 409);
   assert.equal(denied.json().code, "unassigned_account");
+  assert.equal(denied.json().error, "未分配账号");
+  assert.equal(denied.json().nextCommand, "atrium account check");
   for (const attempt of [
     () => runtimes!.attach(agent.id, "existing-runtime"),
     () => runtimes!.promote(agent.id),
@@ -114,10 +116,62 @@ test("升级移除个人 Pi 链接；未分配启动受阻、通知只记一次�
   assert.equal(store.failure(agent.id)?.at, at);
   const accounts = new Accounts(store, data);
   const account = accounts.add("deepseek", "test", "TEST_KEY").id;
+  const unmatched = (await app.inject({ url: "/api/assignment-check" })).json();
+  assert.equal(unmatched.unassigned[0].matched, false);
+  assert.deepEqual(
+    unmatched.accounts.map((entry: { id: string }) => entry.id),
+    [account],
+  );
+  assert.equal(JSON.stringify(unmatched).includes("TEST_KEY"), false);
+  writeFileSync(
+    join(directory, "settings.json"),
+    JSON.stringify({
+      defaultProvider: "deepseek",
+      defaultModel: "deepseek-chat",
+    }),
+  );
+  const matching = (await app.inject({ url: "/api/assignment-check" })).json();
+  assert.equal(matching.unassigned[0].command, `atrium assign a1 ${account}`);
+  assert.deepEqual(matching.accounts, []);
+  store.run(
+    "UPDATE accounts SET status='error' WHERE number=?",
+    Number(account.slice(1)),
+  );
+  const broken = (await app.inject({ url: "/api/assignment-check" })).json();
+  assert.equal(broken.unassigned[0].matched, false);
+  assert.equal(broken.unassigned[0].command, "atrium assign a1 <账号短号>");
+  assert.equal((await start()).json().nextCommand, "atrium account check");
+  store.run(
+    "UPDATE accounts SET status='unverified' WHERE number=?",
+    Number(account.slice(1)),
+  );
+  assert.equal(
+    (await start()).json().nextCommand,
+    `atrium assign a1 ${account}`,
+  );
   accounts.assign(agent.id, account);
   assert.equal(store.failure(agent.id), null);
   assert.equal((await start()).statusCode, 200);
   assert.equal(lstatSync(join(directory, "auth.json")).isSymbolicLink(), false);
-  accounts.unassign(agent.id, "deepseek");
+  let stopped = false;
+  t.mock.method(runtimes!, "stopForUnassignment", async () => {
+    stopped = true;
+    runtimes!.connections.delete(agent.id);
+  });
+  runtimes!.connections.set(agent.id, null as never);
+  const removal = await app.inject({
+    method: "DELETE",
+    url: `/api/assign/${agent.ref}/deepseek`,
+  });
+  assert.equal(removal.statusCode, 200);
+  assert.equal(removal.json().name, "Atlas");
+  assert.equal(stopped, true);
+  assert.deepEqual(
+    {
+      stopped: removal.json().stopped,
+      hasAssignment: removal.json().hasAssignment,
+    },
+    { stopped: true, hasAssignment: false },
+  );
   assert.equal((await start()).json().code, "unassigned_account");
 });

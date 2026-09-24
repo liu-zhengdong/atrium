@@ -18,7 +18,11 @@ import {
 import { modelSpec, type ModelOption } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Accounts } from "./accounts.ts";
-import { hasAssignment, removeSharedLinks } from "./assignment.ts";
+import {
+  assignmentCommand,
+  hasAssignment,
+  removeSharedLinks,
+} from "./assignment.ts";
 import { customSchema } from "./custom-providers.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
@@ -136,6 +140,9 @@ export async function createApp(options: {
                 : "internal",
       ...(error instanceof Problem && error.candidates?.length
         ? { candidates: error.candidates }
+        : {}),
+      ...(error instanceof Problem && error.nextCommand
+        ? { nextCommand: error.nextCommand }
         : {}),
       error:
         error instanceof z.ZodError
@@ -364,16 +371,32 @@ export async function createApp(options: {
   app.get("/api/credentials/:agent", (request) =>
     accounts.switchMode(identityRef(request)),
   );
-  app.get("/api/assignment-check", () => ({
-    unassigned: store
+  app.get("/api/assignment-check", () => {
+    const available = accounts.list();
+    const unassigned = store
       .agents()
-      .filter((a) => !hasAssignment(store, a.id))
-      .map((a) => ({
-        ref: a.ref,
-        name: a.name,
-        command: `atrium assign ${a.ref} <账号短号>`,
-      })),
-  }));
+      .filter((agent) => !hasAssignment(store, agent.id))
+      .map((agent) => {
+        const command = assignmentCommand(store, agent.id, available);
+        return {
+          ref: agent.ref,
+          name: agent.name,
+          command: command ?? `atrium assign ${agent.ref} <账号短号>`,
+          matched: !!command,
+        };
+      });
+    return {
+      unassigned,
+      accounts: unassigned.some((agent) => !agent.matched)
+        ? available.map(({ id, provider, name, status }) => ({
+            id,
+            provider,
+            name,
+            status,
+          }))
+        : [],
+    };
+  });
   app.put("/api/credentials/:agent", (request) => {
     const { mode } = z
       .object({ mode: z.enum(["shared", "assigned"]) })
@@ -399,18 +422,23 @@ export async function createApp(options: {
       "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
       id,
     )?.count;
-    if (
+    const last =
       remaining === 1 &&
-      store.one(
+      !!store.one(
         "SELECT 1 FROM account_assignments WHERE agent_id=? AND provider=?",
         id,
         provider,
-      )
-    )
-      await runtimes?.stopForUnassignment(id);
+      );
+    const stopped = !!(last && runtimes?.connections.has(id));
+    if (last) await runtimes?.stopForUnassignment(id);
     const result = accounts.unassign(id, provider);
     changed();
-    return result;
+    return {
+      ...result,
+      name: store.agent(id).name,
+      stopped,
+      hasAssignment: hasAssignment(store, id),
+    };
   });
   app.get("/api/overview", () => {
     const discovery = runtimes?.directory() ?? {

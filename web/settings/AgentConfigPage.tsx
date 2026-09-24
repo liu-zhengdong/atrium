@@ -157,12 +157,12 @@ export function AgentConfigPage({
             <AgentCredentials
               agent={agent}
               openAccounts={() => openAccounts(null)}
+              onChange={changed}
             />
-            {!agent.available && (
+            {!agent.available && !agent.unassigned && (
               <button
                 className="button secondary"
-                disabled={agent.unassigned || busy}
-                title={agent.unassigned ? "未分配账号，请先分配" : undefined}
+                disabled={busy}
                 onClick={() =>
                   void api(`/agents/${agent.id}/start`, "POST")
                     .then(changed)

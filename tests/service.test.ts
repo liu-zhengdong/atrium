@@ -86,7 +86,7 @@ test(
     const f = await fixture(t);
     assert.match((await f.cli("status")).stdout, /未运行/);
     assert(!existsSync(f.data));
-    assert.equal((await f.cli("typo")).code, 1);
+    assert.equal((await f.cli("typo")).code, 2);
     assert(!existsSync(f.data));
     const starts = await Promise.all([
       f.cli("--no-open"),
@@ -123,7 +123,7 @@ test(
       "创建即分配固定桌面目录",
     );
     assert.match((await f.cli("list")).stdout, /a1\s+入口验收\s+离线/);
-    assert.equal((await f.cli("run", "入口验收", "--forbidden")).code, 1);
+    assert.equal((await f.cli("run", "入口验收", "--forbidden")).code, 2);
     assert.equal((await f.cli("stop")).code, 0);
     assert.match((await f.cli("stop")).stdout, /已停止/);
     assert.equal(readService(f.data), null);
@@ -311,8 +311,8 @@ test(
       existsSync(join(f.root, ".pi", "agents", "林岚")),
       "名称入口指向身份配置",
     );
-    assert.equal((await f.cli("create", "林岚")).code, 1);
-    assert.equal((await f.cli("create", "bad/name")).code, 1);
+    assert.equal((await f.cli("create", "林岚")).code, 4);
+    assert.equal((await f.cli("create", "bad/name")).code, 2);
     assert.match((await f.cli("list")).stdout, /a1\s+林岚\s+离线/);
     assert.equal((await f.cli("--no-open")).code, 0, "start after create");
     const forked = await f.cli("create", "沈默", "--from", "林岚");

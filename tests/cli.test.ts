@@ -14,6 +14,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
+import { Store } from "../server/store.ts";
+import { RequestError } from "@agentclientprotocol/sdk";
+import { errorWithDetails } from "../server/runtime-error.ts";
 
 const exec = promisify(execFile);
 /** 与 service.test.ts 同一种夹具：隔离数据目录、随机端口、假的 Pi 模板，Pi 命令指向不存在的路径。 */
@@ -81,16 +84,18 @@ test(
     };
     const refused = async (...args: string[]) => {
       const result = await f.cli(...args);
-      assert.equal(
-        result.code,
-        1,
-        `${args.join(" ")} 应被拒：${result.stdout}`,
+      assert(
+        [2, 3, 4].includes(result.code),
+        `${args.join(" ")} 应被拒：${result.stdout}；退出码 ${result.code}`,
       );
       return result.stderr;
     };
 
     // 不认识的命令和多余参数在碰数据目录之前就退出。
-    assert.match(await refused("bogus"), /不认识的命令/);
+    const unknown = await refused("bogus");
+    assert.match(unknown, /不认识的命令/);
+    assert.equal((unknown.match(/最接近的/g) ?? []).length, 1);
+    assert.doesNotMatch(unknown, /修正：atrium --help/);
     assert(!existsSync(f.data));
     assert.match(await refused("list", "extra"), /用法：atrium list/);
     assert.match(await refused("show"), /用法：atrium show 名称/);
@@ -100,6 +105,10 @@ test(
     const created = await f.cli("create", "林岚");
     assert.equal(created.code, 0, created.stderr);
     assert.match(created.stdout, /林岚 · a1/);
+    assert.match(
+      created.stdout.trimEnd().split("\n").at(-1)!,
+      /^启动：atrium start a1$/,
+    );
     assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
     assert(record && alive(record.pid));
@@ -119,19 +128,80 @@ test(
     assert.match(list, /a1\s+林岚\s+离线/);
     assert.match(list, /a2\s+沈默\s+离线/);
     // 离线身份显示配置里写着的模型
-    await ok("model", "林岚", "deepseek/deepseek-chat:high");
+    const invalidModel = await f.cli(
+      "model",
+      "林岚",
+      "deepseek/deepseek-chat",
+      "--json",
+    );
+    assert.equal(invalidModel.code, 3);
+    const modelError = JSON.parse(invalidModel.stdout);
+    assert.equal(modelError.error.code, "model_not_found");
+    assert.doesNotMatch(modelError.error.message, /model:/);
+    assert.match(modelError.next, /^atrium model 林岚 deepseek\//);
+    assert(modelError.error.candidates.length <= 3);
+    const malformedModel = await f.cli("model", "林岚", "foo", "--json");
+    assert.equal(malformedModel.code, 2);
+    assert.match(
+      JSON.parse(malformedModel.stdout).error.message,
+      /模型写法是 provider\/id/,
+    );
+    assert.doesNotMatch(
+      JSON.parse(malformedModel.stdout).error.message,
+      /model:/,
+    );
+    const invalidHeartbeat = await f.cli(
+      "config",
+      "林岚",
+      "--heartbeat",
+      "garbage",
+      "--json",
+    );
+    assert.equal(invalidHeartbeat.code, 2);
+    assert.match(
+      JSON.parse(invalidHeartbeat.stdout).error.message,
+      /--heartbeat 要填秒数/,
+    );
+    assert.doesNotMatch(
+      JSON.parse(invalidHeartbeat.stdout).error.message,
+      /heartbeat_seconds|Invalid input/,
+    );
+    const noBody = await f.cli("send", "林岚", "", "--json");
+    assert.equal(noBody.code, 2);
+    assert.match(JSON.parse(noBody.stdout).error.message, /正文不能为空/);
+    assert.doesNotMatch(JSON.parse(noBody.stdout).error.message, /body:/);
+    const absentAccount = await f.cli("assign", "林岚", "k999", "--json");
+    assert.equal(absentAccount.code, 3);
+    assert.equal(
+      JSON.parse(absentAccount.stdout).error.code,
+      "account_not_found",
+    );
+    assert.equal(JSON.parse(absentAccount.stdout).next, "atrium accounts");
+    await ok("model", "林岚", "deepseek/deepseek-v4-pro:high");
     assert.match(
       await ok("list"),
-      /a1\s+林岚\s+离线\s+deepseek\/deepseek-chat:high/,
+      /a1\s+林岚\s+离线\s+deepseek\/deepseek-v4-pro:high/,
     );
-    const listed = JSON.parse(await ok("list", "--json")) as { ref: string }[];
+    const listed = (
+      JSON.parse(await ok("list", "--json")) as {
+        ok: boolean;
+        result: { ref: string }[];
+      }
+    ).result;
     assert.deepEqual(
       listed.map((agent) => agent.ref),
       ["a1", "a2"],
     );
     assert.match(await ok("show", "沈默"), /介绍：评审代码/);
     assert.match(await ok("show", "a2"), /沈默 · a2 · 离线/);
-    assert.match(await refused("show", "不存在"), /Agent 不存在/);
+    assert.match(await refused("show", "不存在"), /没有叫「不存在」的 Agent/);
+    const diagnosis = new Store(join(f.data, "atrium.sqlite"));
+    diagnosis.setFailure(
+      diagnosis.resolveAgentId("a2"),
+      errorWithDetails(RequestError.internalError({ details: "缺少运行扩展" })),
+    );
+    diagnosis.close();
+    assert.match(await ok("show", "a2"), /data: \{"details":"缺少运行扩展"\}/);
 
     // 偏好与资料：非法值被拒，合法值落库。
     assert.match(await ok("config", "沈默", "--heartbeat", "45"), /心跳 45 秒/);
@@ -177,6 +247,12 @@ test(
       /已发送 #\d+ → 评审组（c2）/,
     );
     assert.match(await ok("read", "评审组"), /按名字发/);
+    const sentJson = JSON.parse(await ok("send", "c2", "JSON check", "--json"));
+    assert.deepEqual(Object.keys(sentJson), ["ok", "result", "next"]);
+    assert.match(sentJson.next, /^atrium wait c2 --after \d+$/);
+    const readJson = JSON.parse(await ok("read", "c2", "--json"));
+    assert.equal(readJson.ok, true);
+    assert.match(readJson.next, /^atrium (read|wait) c2 /);
     // 身份排在会话名前面：同名时 --as 开的是两位同伴的私聊，不是用户与它的那个
     assert.match(
       await ok("send", "林岚", "单独聊一句", "--as", "沈默"),
@@ -232,13 +308,22 @@ test(
     assert.doesNotMatch(await ok("list"), /周远/);
     assert.match(
       await refused("send", "周远", "还在吗"),
-      /没有叫 周远 的会话或 Agent/,
+      /没有叫「周远」的会话或 Agent/,
     );
 
     // 群名不保证唯一，撞名时报短号不猜
     await ok("group", "评审组", "林岚");
     const clash = /有 2 个会话叫 评审组，请改用短号：c2、c\d+/;
     assert.match(await refused("send", "评审组", "哪个"), clash);
+    const clashJson = await f.cli("send", "评审组", "哪个", "--json");
+    assert.equal(clashJson.code, 4);
+    assert.deepEqual(
+      JSON.parse(clashJson.stdout)
+        .error.candidates.map((value: { ref: string }) => value.ref)
+        .slice(0, 1),
+      ["c2"],
+    );
+    assert.equal(clashJson.stderr, "");
     assert.match(await refused("read", "评审组"), clash);
     assert.match(await refused("invite", "评审组", "沈默"), clash);
     assert.match(await ok("read", "c2"), /按名字发/, "短号仍然直达");

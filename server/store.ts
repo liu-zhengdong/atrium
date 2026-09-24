@@ -38,11 +38,12 @@ import {
   assertCanSend,
   deliveryPlan,
   deliveryText,
+  USER_CONFIRMATION,
   inviteText,
   type DeliveryKind,
   type SendRequest,
 } from "./delivery.ts";
-import { Problem } from "./problem.ts";
+import { Problem, closest } from "./problem.ts";
 import { agentTransition, type AgentFailure } from "./agent-failure.ts";
 
 export { Problem };
@@ -329,7 +330,7 @@ export class Store {
       "SELECT a.*, 'a'||r.number AS ref FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.id=? AND a.deleted_at IS NULL",
       id,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     const raw = JSON.parse(row.config) as Record<string, unknown>;
     if (
       "wake_interval_seconds" in raw ||
@@ -387,7 +388,7 @@ export class Store {
       "SELECT number FROM agent_refs WHERE agent_id=?",
       agentId,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     return `a${row.number}`;
   }
   resolveAgentId(reference: string): string {
@@ -398,7 +399,7 @@ export class Store {
         "SELECT agent_id FROM agent_refs WHERE number=?",
         Number(trimmed.slice(1)),
       );
-      if (!row) throw new Problem(404, "Agent 不存在");
+      if (!row) throw this.missingAgent(trimmed);
       return row.agent_id;
     }
     const name = displayName.safeParse(trimmed);
@@ -407,10 +408,21 @@ export class Store {
         "SELECT id FROM agents WHERE name=? AND deleted_at IS NULL",
         name.data,
       );
-      if (!row) throw new Problem(404, "Agent 不存在");
+      if (!row) throw this.missingAgent(trimmed);
       return row.id;
     }
     throw new Problem(400, "请使用名称、短号或身份 ID");
+  }
+  private missingAgent(reference: string): Problem {
+    const entries = this.all<{ ref: string; name: string }>(
+      "SELECT 'a'||r.number AS ref, a.name FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.deleted_at IS NULL",
+    );
+    return new Problem(
+      404,
+      `没有叫「${reference}」的 Agent`,
+      "agent_not_found",
+      closest(reference, entries),
+    );
   }
   authenticate(id: string, token: string): boolean {
     return !!this.one(
@@ -691,7 +703,7 @@ export class Store {
       "SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only FROM chats c JOIN chat_refs r ON r.chat_id=c.id WHERE c.id=?",
       id,
     );
-    if (!chat) throw new Problem(404, "会话不存在");
+    if (!chat) throw new Problem(404, "会话不存在", "chat_not_found");
     return { ...chat, read_only: !!chat.read_only };
   }
   resolveChatId(reference: string): string {
@@ -701,7 +713,17 @@ export class Store {
       "SELECT chat_id FROM chat_refs WHERE number=?",
       Number(reference.slice(1)),
     );
-    if (!row) throw new Problem(404, "会话不存在");
+    if (!row) {
+      const entries = this.all<{ ref: string; name: string }>(
+        "SELECT 'c'||r.number AS ref, c.name FROM chats c JOIN chat_refs r ON r.chat_id=c.id",
+      );
+      throw new Problem(
+        404,
+        `没有叫「${reference}」的会话`,
+        "chat_not_found",
+        closest(reference, entries),
+      );
+    }
     return row.chat_id;
   }
   chatRef(chatId: string): string {
@@ -709,7 +731,7 @@ export class Store {
       "SELECT 'c'||number AS ref FROM chat_refs WHERE chat_id=?",
       chatId,
     );
-    if (!row) throw new Problem(404, "会话不存在");
+    if (!row) throw new Problem(404, "会话不存在", "chat_not_found");
     return row.ref;
   }
   assertMember(chat: string, agent: string) {
@@ -1521,12 +1543,13 @@ export class Store {
       "SELECT error_text AS text,error_at AS at,failure_count AS count FROM agents WHERE id=? AND deleted_at IS NULL",
       id,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     return row.text && row.at
       ? { text: row.text, at: row.at, count: row.count }
       : null;
   }
   setFailure(id: string, text: string, at = Date.now()) {
+    console.error(`[Atrium] Agent ${id} 运行出错：${text}`);
     const next = agentTransition(this.failure(id), {
       kind: "failure",
       text,
@@ -1540,57 +1563,31 @@ export class Store {
       id,
     );
   }
+  clearFailure(id: string) {
+    this.run(
+      "UPDATE agents SET error_text=NULL,error_at=NULL,failure_count=0 WHERE id=?",
+      id,
+    );
+  }
   /** A deliver RPC can return after its successful run_end was observed. Complete only that confirmed delivery. */
   completeDelivery(id: string) {
-    this.transaction(() => {
-      const row = this.one<{
-        agent_id: string;
-        chat_id: string | null;
-        through_message: number | null;
-      }>(
-        "SELECT agent_id,chat_id,through_message FROM deliveries WHERE id=? AND state='accepted' AND kind='direct'",
-        id,
-      );
-      if (!row) return;
-      if (row.chat_id && row.through_message)
-        this.recordRead(
-          row.agent_id,
-          row.chat_id,
-          row.through_message,
-          row.through_message,
-        );
-      this.run("UPDATE deliveries SET state='complete' WHERE id=?", id);
-    });
+    this.run(
+      "UPDATE deliveries SET state='complete' WHERE id=? AND state='accepted' AND kind='direct'",
+      id,
+    );
   }
-  /** A failed turn leaves direct messages unacknowledged; use fresh IDs to bypass Pi's delivery deduplication. */
-  finishTurn(id: string, successful: boolean, through = Date.now()) {
+  /** A failed turn retries only deliveries still accepted; completed deliveries stay complete. */
+  finishTurn(id: string, successful: boolean) {
     this.transaction(() => {
       if (successful) {
-        const rows = this.all<{
-          chat_id: string;
-          through_message: number;
-          agent_id: string;
-        }>(
-          "SELECT chat_id,through_message,agent_id FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted' AND chat_id IS NOT NULL AND through_message IS NOT NULL AND accepted_at<=?",
-          id,
-          through,
-        );
-        for (const row of rows)
-          this.recordRead(
-            row.agent_id,
-            row.chat_id,
-            row.through_message,
-            row.through_message,
-          );
+        // run_end uses Pi's event time, but accepted_at uses the service clock and
+        // deliver can acknowledge after the event. Capture processes a run_end
+        // before the next deliver, so close the accepted snapshot, not a clock range.
         this.run(
-          "UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted' AND accepted_at<=?",
-          id,
-          through,
-        );
-        this.run(
-          "UPDATE agents SET error_text=NULL,error_at=NULL,failure_count=0 WHERE id=?",
+          "UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted'",
           id,
         );
+        this.clearFailure(id);
       } else {
         const rows = this.all<{ id: string; text: string }>(
           "SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'",
@@ -1601,9 +1598,9 @@ export class Store {
           this.run(
             "UPDATE deliveries SET id=?,text=?,state='pending',accepted_at=NULL WHERE id=?",
             randomUUID(),
-            row.text.includes(replayNote)
+            row.text.endsWith(`\n${replayNote}`)
               ? row.text
-              : `${row.text}\n${replayNote}`,
+              : `${row.text.endsWith(`\n${USER_CONFIRMATION}`) ? row.text.slice(0, -USER_CONFIRMATION.length - 1) : row.text}\n${replayNote}`,
             row.id,
           );
         this.run(
@@ -1620,11 +1617,28 @@ export class Store {
     );
   }
   accepted(id: string) {
-    this.run(
-      "UPDATE deliveries SET state='accepted',slot=NULL,error=NULL,accepted_at=? WHERE id=? AND state='pending'",
-      Date.now(),
-      id,
-    );
+    this.transaction(() => {
+      const row = this.one<{
+        agent_id: string;
+        chat_id: string | null;
+        through_message: number | null;
+      }>(
+        "SELECT agent_id,chat_id,through_message FROM deliveries WHERE id=? AND kind='direct' AND state='pending'",
+        id,
+      );
+      const result = this.run(
+        "UPDATE deliveries SET state='accepted',slot=NULL,error=NULL,accepted_at=? WHERE id=? AND state='pending'",
+        Date.now(),
+        id,
+      );
+      if (result.changes && row?.chat_id && row.through_message)
+        this.recordRead(
+          row.agent_id,
+          row.chat_id,
+          row.through_message,
+          row.through_message,
+        );
+    });
   }
   deliveryError(id: string, error: string) {
     this.run(

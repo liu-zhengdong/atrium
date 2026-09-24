@@ -120,6 +120,19 @@ export async function createApp(options: {
           ? error.statusCode
           : ((error as { statusCode?: number }).statusCode ?? 500);
     void reply.code(status).send({
+      code:
+        error instanceof Problem
+          ? error.code
+          : status === 400
+            ? "usage"
+            : status === 403 || status === 409
+              ? "conflict"
+              : status === 404
+                ? "not_found"
+                : "internal",
+      ...(error instanceof Problem && error.candidates?.length
+        ? { candidates: error.candidates }
+        : {}),
       error:
         error instanceof z.ZodError
           ? error.issues

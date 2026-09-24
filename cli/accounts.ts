@@ -2,6 +2,7 @@ import { stdin } from "node:process";
 import { connect } from "./service.ts";
 import { printJson, table } from "./format.ts";
 import { str, type Command, type Values } from "./main.ts";
+import { Problem } from "../server/problem.ts";
 
 type Account = {
   id: string;
@@ -50,7 +51,7 @@ export const accountCommands: Record<string, Command> = {
     options: { ...nameOption, key: { type: "string" } },
     async run({ positionals: [provider], values }) {
       if (str(values, "key") !== "-")
-        throw new Error("只接受 --key - 从标准输入读取");
+        throw new Problem(400, "只接受 --key - 从标准输入读取");
       let key = "";
       for await (const chunk of stdin) key += chunk.toString();
       const result = await (

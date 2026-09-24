@@ -15,6 +15,8 @@ import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, strs, type Command } from "./main.ts";
 import { findAgent, roster } from "./agents.ts";
+import { Problem, closest } from "../server/problem.ts";
+import { recordNext } from "./contract.ts";
 import {
   nextMessage,
   nextTrace,
@@ -28,14 +30,23 @@ const chatByRef = (view: Overview, reference: string) =>
 function chatByName(view: Overview, name: string): Chat | undefined {
   const matches = view.chats.filter((item) => item.name === name);
   if (matches.length > 1)
-    throw new Error(
+    throw new Problem(
+      409,
       `有 ${matches.length} 个会话叫 ${name}，请改用短号：${matches.map((item) => item.ref).join("、")}`,
+      "conflict",
+      matches.slice(0, 3).map(({ ref, name }) => ({ ref, name })),
     );
   return matches[0];
 }
 function findChat(view: Overview, reference: string): Chat {
   const chat = chatByRef(view, reference) ?? chatByName(view, reference);
-  if (!chat) throw new Error(`会话不存在：${reference}`);
+  if (!chat)
+    throw new Problem(
+      404,
+      `没有叫「${reference}」的会话`,
+      "chat_not_found",
+      closest(reference, view.chats),
+    );
   return chat;
 }
 /**
@@ -61,7 +72,12 @@ async function targetChat(
     return client.post<Chat>(`/agents/${agent.id}/direct`, as ? { as } : {});
   const byName = chatByName(view, reference);
   if (byName) return byName;
-  throw new Error(`没有叫 ${reference} 的会话或 Agent`);
+  throw new Problem(
+    404,
+    `没有叫「${reference}」的会话或 Agent`,
+    "chat_not_found",
+    closest(reference, [...view.chats, ...view.agents]),
+  );
 }
 /** 发送者怎么称呼：用户用资料里的称呼，Agent 用身份名，都带短号。 */
 function senderLabel(view: Overview, message: Message) {
@@ -130,6 +146,14 @@ const read: Command = {
     const page = await client.get<MessagePage>(
       `/chats/${chat.id}/messages${query}`,
     );
+    const last = page.items.at(-1)?.id ?? Number(after ?? 0);
+    recordNext(
+      page.has_more
+        ? after !== undefined
+          ? `继续读：atrium read ${chat.ref} --after ${last}`
+          : `更早的消息：atrium read ${chat.ref} --before ${page.items[0]!.id}`
+        : `等回复：atrium wait ${chat.ref} --after ${last}`,
+    );
     if (json) return printJson({ chat, ...page });
     console.log(
       `${chat.name} · ${chat.ref} · ${chat.kind === "group" ? "群" : "私聊"}${chat.notice ? `\n公告：${chat.notice}` : ""}`,
@@ -137,17 +161,6 @@ const read: Command = {
     if (!page.items.length)
       console.log(after === undefined ? "（还没有消息）" : "没有新消息");
     else printMessages(view, page.items, values.full === true);
-    if (after !== undefined) {
-      const cursor = page.items.at(-1)?.id ?? Number(after);
-      console.log(
-        page.has_more
-          ? `继续读：atrium read ${chat.ref} --after ${cursor}`
-          : nextMessage("等新消息", chat.ref, cursor),
-      );
-    } else if (page.has_more)
-      console.log(
-        `更早的消息：atrium read ${chat.ref} --before ${page.items[0]!.id}`,
-      );
   },
 };
 
@@ -168,7 +181,8 @@ const wait: Command = {
       str(values, "timeout"),
       idle,
     );
-    if (idle && values.full === true) throw new Error("--idle 不支持 --full");
+    if (idle && values.full === true)
+      throw new Problem(400, "--idle 不支持 --full");
     const client = await connect();
     const view = await roster(client);
     if (idle) {
@@ -178,15 +192,16 @@ const wait: Command = {
         finished_at: number | null;
         timed_out: boolean;
       }>(`/agents/${agent.id}/wait?timeout=${seconds}`);
+      const next = nextTrace(agent.ref);
+      recordNext(next);
       if (json) {
         printJson(result);
         return result.timed_out ? 124 : 0;
       }
-      const next = nextTrace(agent.ref);
       console.log(
         result.timed_out
           ? `${seconds} 秒内未结束；${next}`
-          : `${agent.name} ${result.status === "offline" ? "离线" : "空闲"}${result.finished_at ? ` · 本轮结束于 ${new Date(result.finished_at).toLocaleString()}` : "（当前没有运行中的一轮）"}\n${next}`,
+          : `${agent.name} ${result.status === "offline" ? "离线" : "空闲"}${result.finished_at ? ` · 本轮结束于 ${when(result.finished_at)}` : "（当前没有运行中的一轮）"}`,
       );
       return result.timed_out ? 124 : 0;
     }
@@ -196,19 +211,21 @@ const wait: Command = {
     const result = await client.get<
       MessagePage & { after: number; timed_out: boolean }
     >(`/chats/${chat.id}/wait?${query}`);
+    const last = result.items.at(-1)?.id ?? result.after;
+    recordNext(
+      result.has_more
+        ? `继续读：atrium read ${chat.ref} --after ${last}`
+        : nextMessage("继续等", chat.ref, last),
+    );
     if (json) {
       printJson(result);
       return result.timed_out ? 124 : 0;
     }
-    const last = result.items.at(-1)?.id ?? result.after;
     const next = result.has_more
       ? `继续读：atrium read ${chat.ref} --after ${last}`
       : nextMessage("继续等", chat.ref, last);
     if (result.timed_out) console.log(`${seconds} 秒内没有新消息；${next}`);
-    else {
-      printMessages(view, result.items, values.full === true);
-      console.log(next);
-    }
+    else printMessages(view, result.items, values.full === true);
     return result.timed_out ? 124 : 0;
   },
 };
@@ -247,6 +264,14 @@ const send: Command = {
     const details =
       detailsArg === "-" ? (await readStdin()).trim() : (detailsArg ?? "");
     const as = str(values, "as");
+    if (!body.trim() && (details || !strs(values, "file").length))
+      throw new Problem(
+        400,
+        details
+          ? "--details 有内容时正文不能为空"
+          : "正文不能为空；也可用 --file 添加附件",
+        "usage",
+      );
     const client = await connect();
     const view = await roster(client);
     const chat = await targetChat(client, view, reference!, as);
@@ -274,6 +299,7 @@ const send: Command = {
       ...(as ? { as } : {}),
     });
     console.log(`已发送 #${message.id} → ${chat.name}（${chat.ref}）`);
+    recordNext(`等回复：atrium wait ${chat.ref} --after ${message.id}`);
   },
 };
 
@@ -299,6 +325,7 @@ const group: Command = {
     console.log(
       `已建群 ${chat.name}（${chat.ref}）· 成员 ${detail.members.length} 位`,
     );
+    recordNext(`在群里发言：atrium send ${chat.ref} 正文`);
   },
 };
 

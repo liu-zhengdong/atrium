@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  getBuiltinModels,
+  getBuiltinProviders,
+} from "@earendil-works/pi-ai/providers/all";
+import {
   formatModelSpec,
   groupModelsByProvider,
   type ModelSpec,
@@ -57,17 +61,25 @@ export function configureModel(
   if (!agent.agent_directory)
     throw new Problem(409, "旧记录还不是长期身份，没有自己的配置目录");
   const wanted = formatModelSpec({ ...spec, thinking: null });
-  if (options.length && !options.some((item) => item.id === wanted)) {
+  const provider = getBuiltinProviders().find((item) => item === spec.provider);
+  const known = options.length
+    ? options.map((item) => item.id)
+    : provider
+      ? getBuiltinModels(provider).map(
+          (model) => `${model.provider}/${model.id}`,
+        )
+      : [];
+  if (known.length && !known.includes(wanted)) {
     // 只提示够用的那一层：provider 对了列它的模型，不对就列有哪些 provider。
-    const grouped = groupModelsByProvider(options.map((item) => item.id));
+    const grouped = groupModelsByProvider(known);
     const own = grouped.get(spec.provider);
     throw new Problem(
       400,
-      `${agent.name} 没有 ${wanted} 这个模型。${
-        own
-          ? `${spec.provider} 下可选：${own.join("、")}`
-          : `可用的 provider：${[...grouped.keys()].join("、")}`
-      }`,
+      `${agent.name} 没有 ${wanted} 这个模型${own ? "" : `。可用的 provider：${[...grouped.keys()].join("、")}`}`,
+      "model_not_found",
+      own
+        ?.slice(0, 3)
+        .map((model) => ({ ref: `${spec.provider}/${model}`, name: model })),
     );
   }
   return {

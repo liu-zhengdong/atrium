@@ -123,11 +123,11 @@ test("随机分页反向核对逐条真值；压缩回执不多标或漏标", (t
   }
 });
 
-test("ACP 直投注入后待处理，成功轮才标记已读：私聊与群聊 @ 跳读", (t) => {
+test("ACP 直投 accepted 即已读：私聊与群聊 @ 跳读", (t) => {
   const { store, a, b, chat, send, state } = fixture(t);
   const dm = store.createChat("私聊", [a.id], a.id);
 
-  // 1. 私聊直投：accepted 时仍未读，成功轮结束后才标记。
+  // 1. 私聊直投：accepted 即记已读，处理成功与否独立。
   const dmMsg = store.send(LOCAL_USER, {
     chat_id: dm.id,
     body: "你好私聊",
@@ -144,12 +144,17 @@ test("ACP 直投注入后待处理，成功轮才标记已读：私聊与群聊 
 
   // 模拟 ACP runtime deliver 成功确认 accepted
   store.accepted(pendingDirect[0].id);
-  assert(
-    !hasRead(dmState(), dmMsg.id),
-    "ACP accepted 仅证明投递，不能证明处理成功",
-  );
+  assert(hasRead(dmState(), dmMsg.id), "ACP accepted 即记已读");
+  assert.match(pendingDirect[0].text, /用户在等你的回应/);
+  store.finishTurn(a.id, false);
+  assert(hasRead(dmState(), dmMsg.id), "失败重投仍保留已读");
+  const retry = store
+    .pending(a.id)
+    .find((d) => d.through_message === dmMsg.id)!;
+  assert.match(retry.text, /重新投递/);
+  assert.doesNotMatch(retry.text, /用户在等你的回应/);
+  store.accepted(retry.id);
   store.finishTurn(a.id, true);
-  assert(hasRead(dmState(), dmMsg.id), "成功轮才记已读");
   assert.equal(dmState().through, dmMsg.id);
   assert.equal(
     store.unread(a.id).find((c) => c.chat_id === dm.id),
@@ -178,11 +183,10 @@ test("ACP 直投注入后待处理，成功轮才标记已读：私聊与群聊 
   assert(!hasRead(state(), m2.id));
   assert(!hasRead(state(), m3.id));
 
-  // 模拟 ACP accepted 以及这一轮成功
+  // 模拟 ACP accepted，@ 消息只标自身，不越过普通群消息
   store.accepted(m3Delivery.id);
-  assert(!hasRead(state(), m3.id));
+  assert(hasRead(state(), m3.id), "@ 消息接受投递后成为已读");
   store.finishTurn(a.id, true);
-  assert(hasRead(state(), m3.id), "@ 消息经成功轮处理后成为已读");
   assert(!hasRead(state(), m1.id), "前序未直投普通消息依然未读");
   assert(!hasRead(state(), m2.id), "前序未直投普通消息依然未读");
   assert.equal(state().through, 0, "存在未读缺口时不越过 through");
@@ -227,7 +231,28 @@ test("ACP 直投注入后待处理，成功轮才标记已读：私聊与群聊 
   store.deliveryError(errDelivery.id, "Connection refused");
   assert(!hasRead(dmState(), mErr.id), "投递失败的消息绝不标为已读");
 
-  // 破坏 C：幂等性与重复 accepted 不破坏已读状态
+  // 破坏 C：同伴私聊也在 accepted 时已读，但不要求先确认。
+  const peer = store.openDirect(a.id, b.id);
+  const peerMsg = store.send(b.id, {
+    chat_id: peer.id,
+    body: "同伴消息",
+    mentions: [],
+  });
+  const peerDelivery = store
+    .pending(a.id)
+    .find((d) => d.through_message === peerMsg.id)!;
+  assert.doesNotMatch(peerDelivery.text, /用户在等你的回应/);
+  assert.equal(
+    store.readState(peer.id, 0).find((s) => s.agent_id === a.id)?.through,
+    0,
+  );
+  store.accepted(peerDelivery.id);
+  assert.equal(
+    store.readState(peer.id, 0).find((s) => s.agent_id === a.id)?.through,
+    peerMsg.id,
+  );
+
+  // 破坏 D：重复 accepted 不破坏已读状态
   store.accepted(pendingDirect[0].id);
   assert.equal(dmState().through, dmMsg.id);
 });

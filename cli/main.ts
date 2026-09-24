@@ -253,7 +253,7 @@ function defaultNext(name: string): string | null {
   if (name === "status") return "查看身份：atrium list";
   if (name === "list") return "查看会话：atrium chats";
   if (name === "chats") return "查看身份：atrium list";
-  return "查看说明：atrium guide";
+  return null;
 }
 function commandOnly(next: string | null): string | null {
   return next?.slice(next.indexOf("atrium ")) ?? null;

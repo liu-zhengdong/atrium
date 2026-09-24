@@ -4,13 +4,14 @@ import { parseArgs } from "node:util";
 import { commands, help } from "../cli/main.ts";
 import { example, guide } from "../cli/guide.ts";
 import { exitCodes } from "../cli/contract.ts";
+import { when } from "../cli/format.ts";
 import { Problem, closest } from "../server/problem.ts";
 
 test("说明书从命令表与退出码表生成；示例均通过参数解析", () => {
   const text = guide(commands);
   assert.match(help(), /atrium guide/);
   for (const [name, command] of Object.entries(commands)) {
-    assert(text.includes(`atrium ${name} ${command.args}`), name);
+    assert(text.includes(`atrium ${name} ${command.args}`.trimEnd()), name);
     const invocation = example(name, command);
     const tokens = invocation
       .slice(`atrium ${name}`.length)
@@ -52,4 +53,8 @@ test("错误码与候选最多三项，短号优先", () => {
   const agent = { ref: "a1", name: "test", secret: "must-not-leak" };
   const safe = closest("test", [agent]);
   assert.deepEqual(safe, [{ ref: "a1", name: "test" }]);
+});
+
+test("当日结束时间仅写时分", () => {
+  assert.match(when(Date.now()), /^\d{2}:\d{2}$/);
 });

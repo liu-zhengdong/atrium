@@ -436,23 +436,34 @@ export class Accounts {
   assign(id: string, ref: string, replace = false) {
     const agent = this.store.agent(id),
       row = this.catalog.row(this.catalog.number(ref));
-    if (
-      row.provider === "antigravity" &&
-      !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
-    )
-      throw new Problem(409, "此 Antigravity 账号缺少附带状态，暂不支持分配");
     const previous = this.store.one<{ account_number: number }>(
       "SELECT account_number FROM account_assignments WHERE agent_id=? AND provider=?",
       id,
       row.provider,
     );
-    if (previous && !replace)
-      throw new Problem(409, "该身份已有此 provider 的账号，请先撤销");
-    if (replace && !previous) throw new Problem(409, "该身份没有可替换的账号");
     if (previous?.account_number === row.number)
-      throw new Problem(409, "该身份已分配此账号");
+      return {
+        mode: "assigned",
+        account: ref,
+        preserved: null,
+        alreadyAssigned: true,
+      };
+    if (previous && !replace)
+      throw new Problem(
+        409,
+        `该身份已有此 provider 的其他账号，请先撤销`,
+        "already_assigned",
+        undefined,
+        `atrium unassign ${/^\S+$/.test(agent.name) ? agent.name : agent.ref} ${row.provider}`,
+      );
+    if (replace && !previous) throw new Problem(409, "该身份没有可替换的账号");
     if (!agent.agent_directory)
       throw new Problem(409, "身份没有配置目录，请先启动身份");
+    if (
+      row.provider === "antigravity" &&
+      !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
+    )
+      throw new Problem(409, "此 Antigravity 账号缺少附带状态，暂不支持分配");
     // Local login is a delegation to Claude CLI; no token or auth.json entry exists.
     if (row.type === "local") {
       const reason = checkLocalLogin(this.store, id);

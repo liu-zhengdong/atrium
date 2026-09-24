@@ -415,6 +415,18 @@ test("assigned files are isolated; bad assignments and real-file mode switch pre
     JSON.parse(readFileSync(file, "utf8")).deepseek.key,
     "SENSITIVE_KEY_FIRST",
   );
+  const authBeforeRetry = readFileSync(file, "utf8");
+  store.run(
+    "CREATE TRIGGER deny_retry BEFORE UPDATE ON account_assignments BEGIN SELECT RAISE(ABORT, 'retry wrote assignment'); END",
+  );
+  assert.deepEqual(accounts.assign(agent.id, first), {
+    mode: "assigned",
+    account: first,
+    preserved: null,
+    alreadyAssigned: true,
+  });
+  assert.equal(readFileSync(file, "utf8"), authBeforeRetry);
+  store.run("DROP TRIGGER deny_retry");
   assert.throws(
     () => accounts.assign(agent.id, second),
     (error) => error instanceof Problem && error.statusCode === 409,
@@ -637,7 +649,13 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
         payload: { account, ...(replace === undefined ? {} : { replace }) },
       });
     assert.equal((await assign(old)).statusCode, 200);
-    assert.equal((await assign(next)).statusCode, 409);
+    assert.deepEqual((await assign(old)).json().alreadyAssigned, true);
+    const conflict = await assign(next);
+    assert.equal(conflict.statusCode, 409);
+    assert.match(
+      conflict.json().nextCommand,
+      new RegExp(`atrium unassign ${agent.name} amazon-bedrock`),
+    );
     assert.equal((await assign("k999999", true)).statusCode, 404);
     assert.equal(
       JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[

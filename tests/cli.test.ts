@@ -113,6 +113,26 @@ test(
     assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
     assert(record && alive(record.pid));
+    const startup = await f.cli("--no-open");
+    assert.equal(startup.code, 0, startup.stderr);
+    assert.equal((startup.stdout.match(/停止：atrium stop/g) ?? []).length, 1);
+    const invalidCustom = await f.cli(
+      "connect",
+      "--custom",
+      "假服务",
+      "--base-url",
+      "http://127.0.0.1:1/v1",
+      "--api-key",
+      "fake",
+      "--model",
+      "demo",
+    );
+    assert.equal(invalidCustom.code, 2);
+    assert.match(
+      invalidCustom.stderr,
+      /--custom 要填 provider id：小写字母开头/,
+    );
+    assert.doesNotMatch(invalidCustom.stderr, /Invalid string|pattern/);
     const again = await f.cli(
       "create",
       "沈默",
@@ -157,6 +177,14 @@ test(
     assert.doesNotMatch(modelError.error.message, /model:/);
     assert.match(modelError.next, /^atrium model 林岚 deepseek\//);
     assert(modelError.error.candidates.length <= 3);
+    const invalidBuiltin = await f.cli(
+      "model",
+      "林岚",
+      "openai/does-not-exist",
+    );
+    assert.equal(invalidBuiltin.code, 3);
+    assert.match(invalidBuiltin.stderr, /最接近的：openai\/gpt-4、/);
+    assert.doesNotMatch(invalidBuiltin.stderr, /gpt-4（openai\/gpt-4）/);
     const malformedModel = await f.cli("model", "林岚", "foo", "--json");
     assert.equal(malformedModel.code, 2);
     assert.match(
@@ -420,6 +448,20 @@ test(
     assert.equal(
       assigned.stdout,
       "已分配：甲 → k1 Claude Code（本机登录）\n看分配：atrium accounts\n",
+    );
+    const repeated = await f.cli("assign", "甲", "k1");
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.match(repeated.stdout, /^已分配过：甲 → k1/);
+    const missingProvider = await f.cli("unassign", "甲");
+    assert.equal(missingProvider.code, 2);
+    assert.equal(
+      missingProvider.stderr,
+      "用法：atrium unassign 身份 provider\n修正：atrium unassign 甲 claude-bridge\n",
+    );
+    const missingJson = await f.cli("unassign", "甲", "--json");
+    assert.equal(
+      JSON.parse(missingJson.stdout).next,
+      "atrium unassign 甲 claude-bridge",
     );
     const removal = await f.cli("unassign", "a1", "claude-bridge");
     assert.equal(removal.code, 0, removal.stderr);

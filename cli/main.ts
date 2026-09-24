@@ -38,8 +38,8 @@ export const strs = (values: Values, key: string) => {
 const commands: Record<string, Command> = {
   ...agentCommands,
   ...chatCommands,
-  ...accountCommands,
   connect: connectCommand,
+  ...accountCommands,
   ...pluginCommands,
   ...resourceCommands,
 };
@@ -99,6 +99,8 @@ export async function main(argv: string[]): Promise<number> {
         ? `${name} ${rest.shift() ?? ""}`.trim()
         : name;
     const command = commands[subcommand];
+    if (subcommand === "account login")
+      throw new Error("已由 atrium connect 代替");
     if (!command) throw new Error(`不认识的命令：${subcommand}\n${usage}`);
     let parsed: ReturnType<typeof parseArgs>;
     try {

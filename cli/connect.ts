@@ -1,8 +1,12 @@
 import { spawn } from "node:child_process";
 import {
   autocomplete,
+  autocompleteMultiselect,
   multiselect,
   cancel,
+  log,
+  outro,
+  spinner,
   isCancel,
   password,
   select,
@@ -12,7 +16,16 @@ import type { Command } from "./main.ts";
 import { connect } from "./service.ts";
 import { roster } from "./agents.ts";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
-import { methodsFor, skipMethod, skipProvider } from "../shared/providers.ts";
+import {
+  accountLabel,
+  assignmentFailure,
+  assignmentSummary,
+  currentAssignment,
+  defaultAccountName,
+  methodsFor,
+  skipMethod,
+  skipProvider,
+} from "../shared/providers.ts";
 
 type LoginEvent = {
   type?: string;
@@ -57,7 +70,7 @@ async function awaitLogin(
       for (const event of result.events) {
         if (cancelled) break;
         if (event.type === "auth_url" && event.url) {
-          console.log(`登录链接：${event.url}`);
+          log.info(`登录链接：${event.url}`);
           if (process.platform === "darwin")
             spawn("open", [event.url], { stdio: "ignore" }).unref();
           else if (process.platform === "win32")
@@ -71,10 +84,10 @@ async function awaitLogin(
             );
         }
         if (event.type === "device_code")
-          console.log(
+          log.info(
             `设备码：${event.userCode}\n验证地址：${event.verificationUri}`,
           );
-        if (event.type === "info") console.log(event.message);
+        if (event.type === "info" && event.message) log.info(event.message);
         if (event.prompt) {
           const { options, message } = event.prompt;
           const value = options
@@ -116,13 +129,34 @@ export const connectCommand: Command = {
         "connect 需要交互终端；脚本请使用 atrium account add <provider> --key -",
       );
     const client = await connect();
-    const providers = await client.get<ProviderEntry[]>("/providers");
-    const existing =
-      await client.get<{ provider: string; status: string }[]>("/accounts");
+    const reading = spinner();
+    reading.start("正在读取供应商…");
+    let providers: ProviderEntry[];
+    try {
+      providers = await client.get<ProviderEntry[]>("/providers");
+      reading.stop("供应商已就绪");
+    } catch (error) {
+      reading.error("供应商目录读取失败");
+      throw error;
+    }
+    const existing = await client.get<
+      {
+        id: string;
+        name: string;
+        provider: string;
+        assigned: string[];
+        status: string;
+      }[]
+    >("/accounts");
     const fixed = reference
-      ? providers.find((item) => item.id === reference)
+      ? providers.find((item) =>
+          [item.id, item.name].some(
+            (value) => value.toLowerCase() === reference.toLowerCase(),
+          ),
+        )
       : undefined;
-    if (reference && !fixed) throw new Error(`供应商不存在：${reference}`);
+    if (reference && !fixed)
+      log.warn(`未找到「${reference}」，请从列表选择供应商`);
     let id: string | undefined;
     try {
       let method: ProviderMethod;
@@ -132,8 +166,16 @@ export const connectCommand: Command = {
           await select<ProviderMethod>({
             message: "连接方式",
             options: [
-              { value: "oauth", label: "账号登录" },
-              { value: "api_key", label: "API Key" },
+              {
+                value: "oauth",
+                label: "账号登录",
+                hint: "用已有订阅在浏览器登录，如 ChatGPT、Claude、Copilot",
+              },
+              {
+                value: "api_key",
+                label: "API Key",
+                hint: "粘贴供应商后台生成的密钥",
+              },
             ],
           }),
         );
@@ -147,10 +189,15 @@ export const connectCommand: Command = {
             await autocomplete({
               message: "供应商（输入筛选）",
               maxItems: 10,
+              initialUserInput: reference && !fixed ? reference : undefined,
+              filter: (query, option) =>
+                `${option.label} ${option.value}`
+                  .toLowerCase()
+                  .includes(query.toLowerCase()),
               options: candidates.map((entry) => ({
                 value: entry.id,
-                label: entry.name,
-                hint: `${entry.id}${existing.some((account) => account.provider === entry.id && account.status === "ready") ? " · 已连接" : ""}`,
+                label: `${entry.name}${existing.some((account) => account.provider === entry.id) ? " · 已有账号" : ""}`,
+                hint: entry.id,
               })),
             }),
           );
@@ -169,7 +216,7 @@ export const connectCommand: Command = {
       const name = input(
         await text({
           message: "账号名",
-          initialValue: provider.name,
+          initialValue: defaultAccountName(provider, existing),
           validate: (value) => (value?.trim() ? undefined : "不能为空"),
         }),
       ).trim();
@@ -190,25 +237,58 @@ export const connectCommand: Command = {
         ).id;
         await awaitLogin(client, id);
       }
-      console.log(`账号 ${id} 已连接`);
+      const saved = `${accountLabel(provider, name, id)}${method === "api_key" ? "已保存" : "已连接"}`;
+      log.success(saved);
       const agents = (await roster(client)).agents;
-      if (agents.length) {
-        const selected = input(
-          await multiselect({
-            message: "给哪些 Agent 用？（可留空跳过）",
-            required: false,
-            options: agents.map((agent) => ({
-              value: agent.id,
-              label: agent.name,
-              hint: agent.ref,
-            })),
-          }),
-        );
-        for (const agent of selected)
-          await client.post(`/assign/${encode(agent)}`, { account: id });
-        if (selected.length)
-          console.log(`已分配给 ${selected.length} 个 Agent`);
+      const options = agents.map((agent) => ({
+        value: agent.id,
+        label: `${agent.name} (${agent.ref})${currentAssignment(agent.ref, provider.id, existing) ? ` · 当前 ${provider.name} ${currentAssignment(agent.ref, provider.id, existing)}` : ""}`,
+      }));
+      const selected = !agents.length
+        ? []
+        : input(
+            await (agents.length > 8
+              ? autocompleteMultiselect({
+                  message: "给哪些 Agent 用？（可留空跳过）",
+                  required: false,
+                  maxItems: 8,
+                  filter: (query, option) =>
+                    `${option.label}`
+                      .toLowerCase()
+                      .includes(query.toLowerCase()),
+                  options,
+                })
+              : multiselect({
+                  message: "给哪些 Agent 用？（可留空跳过）",
+                  required: false,
+                  options,
+                })),
+          );
+      const added: string[] = [];
+      const replaced: string[] = [];
+      const failures: string[] = [];
+      for (const agentId of selected) {
+        const agent = agents.find((item) => item.id === agentId)!;
+        const previous = currentAssignment(agent.ref, provider.id, existing);
+        try {
+          await client.post(`/assign/${encode(agentId)}`, {
+            account: id,
+            ...(previous ? { replace: true } : {}),
+          });
+          if (previous)
+            replaced.push(`${agent.name}（${agent.ref}）：${previous} → ${id}`);
+          else added.push(`${agent.name}（${agent.ref}）`);
+        } catch (error) {
+          failures.push(assignmentFailure(agent, error, provider, existing));
+        }
       }
+      const summary = assignmentSummary(added, replaced, failures);
+      outro(
+        summary
+          ? `${saved}；${summary.replaceAll("\n", "；")}`
+          : `${saved}，未分配；稍后用 atrium assign <身份> ${id}`,
+      );
+      if (failures.length) return 1;
     } catch (error) {
       if (
         id &&

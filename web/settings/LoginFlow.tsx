@@ -58,21 +58,24 @@ export function LoginFlow({
         ) : null,
       )}
       {prompt?.options ? (
-        <div className="flex flex-wrap gap-2">
-          {prompt.options.map((option) => (
-            <button
-              className="button !border-0 !bg-[#f1f5f2] !text-[#3c5344] hover:!bg-[#e7eee9]"
-              type="button"
-              key={option.id}
-              onClick={() => respond(option.id)}
-            >
-              {option.id === "browser"
-                ? "浏览器登录"
-                : option.id === "device_code"
-                  ? "设备码登录"
-                  : option.label}
-            </button>
-          ))}
+        <div>
+          <p className="mb-2 text-xs text-muted">{prompt.message}</p>
+          <div className="flex flex-wrap gap-2">
+            {prompt.options.map((option) => (
+              <button
+                className="button !border-0 !bg-[#f1f5f2] !text-[#3c5344] hover:!bg-[#e7eee9]"
+                type="button"
+                key={option.id}
+                onClick={() => respond(option.id)}
+              >
+                {option.id === "browser"
+                  ? "浏览器登录"
+                  : option.id === "device_code"
+                    ? "设备码登录"
+                    : option.label}
+              </button>
+            ))}
+          </div>
         </div>
       ) : prompt ? (
         <form

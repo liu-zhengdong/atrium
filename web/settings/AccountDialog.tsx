@@ -5,13 +5,23 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Check, ChevronLeft, Search, X } from "lucide-react";
+import { ChevronLeft, X } from "lucide-react";
 import { createPortal } from "react-dom";
-import { api } from "../api.ts";
+import { api, messageOf } from "../api.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
-import type { ProviderEntry, ProviderMethod } from "../../shared/providers.ts";
+import {
+  accountLabel,
+  assignmentFailure,
+  assignmentSummary,
+  currentAssignment,
+  defaultAccountName,
+  type ProviderEntry,
+  type ProviderMethod,
+} from "../../shared/providers.ts";
 import type { Account } from "./types.ts";
 import { LoginFlow } from "./LoginFlow.tsx";
+import { ProviderPicker } from "./ProviderPicker.tsx";
+import { AgentAssignment } from "./AgentAssignment.tsx";
 
 const inputStyle =
   "field !border-transparent !bg-[#f1f5f2] focus:!border-[#b9c9bd] focus:!bg-white focus:!shadow-none";
@@ -41,17 +51,29 @@ export function AccountDialog({
   const [name, setName] = useState(account?.name ?? "");
   const [login, setLogin] = useState<string | null>(null);
   const activeLogin = useRef<string | null>(null);
+  const dismissed = useRef(false);
   const [created, setCreated] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [completed, setCompleted] = useState<string[]>([]);
+  const [result, setResult] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [added, setAdded] = useState<string[]>([]);
+  const [replaced, setReplaced] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const loadProviders = useCallback(async () => {
+    setError("");
+    try {
+      setProviders(await api<ProviderEntry[]>("/providers"));
+    } catch (e) {
+      setError(messageOf(e));
+    }
+  }, []);
   useEffect(() => {
-    if (account) return;
-    api<ProviderEntry[]>("/providers")
-      .then(setProviders)
-      .catch((e) => setError(String(e)));
-  }, [account]);
+    if (!account) void loadProviders();
+  }, [account, loadProviders]);
   const dismiss = useCallback(() => {
+    dismissed.current = true;
     const pending = activeLogin.current;
     activeLogin.current = null;
     if (pending)
@@ -85,12 +107,6 @@ export function AccountDialog({
     : step === "assign"
       ? "分配给 Agent"
       : "添加账号";
-  const available =
-    providers?.filter(
-      (item) =>
-        item.methods.includes(method) &&
-        `${item.id} ${item.name}`.toLowerCase().includes(search.toLowerCase()),
-    ) ?? [];
   const back = () => {
     setError("");
     setStep(
@@ -107,14 +123,19 @@ export function AccountDialog({
   };
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (step === "assign" && result && !failed) {
+      close();
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      if (step === "auth" && !account) {
-        if (!key.trim()) throw new Error("API Key 不能为空");
-        setStep("name");
-      } else if (step === "name" && provider) {
-        const accountName = name.trim() || provider.name;
+      if ((step === "auth" && !account) || (step === "name" && provider)) {
+        if (!provider) throw new Error("请先选择供应商");
+        if (method === "api_key" && !key.trim())
+          throw new Error("API Key 不能为空");
+        const accountName =
+          name.trim() || defaultAccountName(provider, accounts);
         const result =
           method === "oauth"
             ? await api<{ id: string }>("/accounts/login", "POST", {
@@ -127,6 +148,11 @@ export function AccountDialog({
                 key: key.trim(),
               });
         if (method === "oauth") {
+          if (dismissed.current) {
+            await api(`/accounts/${result.id}/login/cancel`, "POST");
+            await reload();
+            return;
+          }
           activeLogin.current = result.id;
           setLogin(result.id);
           setStep("login");
@@ -140,20 +166,50 @@ export function AccountDialog({
           `/accounts/${account.id}/login`,
           "POST",
         );
+        if (dismissed.current) {
+          await api(`/accounts/${result.id}/login/cancel`, "POST");
+          await reload();
+          return;
+        }
         activeLogin.current = result.id;
         setLogin(result.id);
         setStep("login");
         await reload();
-      } else if (step === "assign" && created) {
-        for (const id of selected)
-          await api(`/assign/${encodeURIComponent(id)}`, "POST", {
-            account: created,
-          });
+      } else if (step === "assign" && created && provider) {
+        const newAdded = [...added],
+          newReplaced = [...replaced];
+        const failures: string[] = [];
+        const done = [...completed];
+        for (const id of selected.filter((id) => !completed.includes(id))) {
+          const agent = agents.find((item) => item.id === id)!;
+          const previous = currentAssignment(agent.ref, provider.id, accounts);
+          try {
+            await api(`/assign/${encodeURIComponent(id)}`, "POST", {
+              account: created,
+              ...(previous ? { replace: true } : {}),
+            });
+            done.push(id);
+            if (previous)
+              newReplaced.push(
+                `${agent.name}（${agent.ref}）：${previous} → ${created}`,
+              );
+            else newAdded.push(`${agent.name}（${agent.ref}）`);
+          } catch (e) {
+            failures.push(assignmentFailure(agent, e, provider, accounts));
+          }
+        }
+        setCompleted(done);
+        setAdded(newAdded);
+        setReplaced(newReplaced);
+        setFailed(failures.length > 0);
+        setResult(
+          assignmentSummary(newAdded, newReplaced, failures) ||
+            "未分配；可以稍后分配",
+        );
         await reload();
-        close();
       }
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -195,6 +251,16 @@ export function AccountDialog({
             <X size={18} />
           </button>
         </div>
+        {provider && ["auth", "name", "login"].includes(step) && (
+          <p className="mb-0 mt-2 text-xs text-muted">
+            {provider.name} · {method === "oauth" ? "账号登录" : "API Key"}
+          </p>
+        )}
+        {account && step === "login" && (
+          <p className="mb-0 mt-2 text-xs text-muted">
+            {account.provider} · 账号登录
+          </p>
+        )}
         {step === "method" && (
           <div className="mt-5 space-y-2">
             <p className="m-0 pb-1 text-xs text-muted">选择连接方式</p>
@@ -202,74 +268,43 @@ export function AccountDialog({
               <button
                 key={item}
                 type="button"
-                className="flex w-full items-center justify-between rounded-xl bg-[#f3f6f3] px-4 py-3 text-left text-sm hover:bg-[#e9f0ea]"
+                className="w-full rounded-xl bg-[#f3f6f3] px-4 py-3 text-left hover:bg-[#e9f0ea]"
                 onClick={() => {
                   setMethod(item);
                   setStep("provider");
                 }}
               >
-                {item === "oauth" ? "账号登录" : "API Key"}
+                <span className="block text-sm">
+                  {item === "oauth" ? "账号登录" : "API Key"}
+                </span>
+                <span className="mt-1 block text-xs text-muted">
+                  {item === "oauth"
+                    ? "用已有订阅在浏览器登录，如 ChatGPT、Claude、Copilot"
+                    : "粘贴供应商后台生成的密钥"}
+                </span>
               </button>
             ))}
           </div>
         )}
         {step === "provider" && (
-          <div className="mt-5">
-            <div className="relative">
-              <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
-              />
-              <input
-                autoFocus
-                className={`${inputStyle} !pl-9`}
-                aria-label="筛选供应商"
-                placeholder="搜索供应商"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            <div
-              className="mt-2 max-h-[320px] space-y-1 overflow-y-auto"
-              role="listbox"
-              aria-label="供应商"
-            >
-              {!providers && !error && (
-                <p className="px-3 py-4 text-xs text-muted">正在加载…</p>
-              )}
-              {providers && !available.length && (
-                <p className="px-3 py-4 text-xs text-muted">没有匹配的供应商</p>
-              )}
-              {available.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="option"
-                  aria-selected={provider?.id === item.id}
-                  className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-left hover:bg-[#f1f5f2]"
-                  onClick={() => {
-                    setProvider(item);
-                    setName(item.name);
-                    setStep(
-                      item.methods.includes(method) && method === "oauth"
-                        ? "name"
-                        : "auth",
-                    );
-                  }}
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm">{item.name}</span>
-                    <span className="text-xs text-muted">{item.id}</span>
-                  </span>
-                  {accounts.some(
-                    (a) => a.provider === item.id && a.status === "ready",
-                  ) && (
-                    <span className="shrink-0 text-xs text-muted">已连接</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
+          <ProviderPicker
+            method={method}
+            providers={providers}
+            search={search}
+            setSearch={setSearch}
+            accounts={accounts}
+            error={error}
+            retry={() => void loadProviders()}
+            changeMethod={(next) => {
+              setMethod(next);
+              setError("");
+            }}
+            choose={(item) => {
+              setProvider(item);
+              setName(defaultAccountName(item, accounts));
+              setStep(method === "oauth" ? "name" : "auth");
+            }}
+          />
         )}
         {(step === "auth" || step === "name" || step === "assign") && (
           <form
@@ -290,11 +325,11 @@ export function AccountDialog({
                 />
               </label>
             )}
-            {step === "name" && (
+            {(step === "name" || (step === "auth" && !account)) && (
               <label className="block text-xs text-muted">
                 账号名
                 <input
-                  autoFocus
+                  autoFocus={step === "name"}
                   className={`${inputStyle} mt-1.5`}
                   maxLength={80}
                   required
@@ -304,39 +339,35 @@ export function AccountDialog({
               </label>
             )}
             {step === "assign" && (
-              <div
-                className="max-h-[320px] space-y-1 overflow-y-auto"
-                aria-label="分配给 Agent"
-              >
-                {agents.length === 0 && (
-                  <p className="text-xs text-muted">
-                    还没有 Agent，可以稍后分配。
-                  </p>
-                )}
-                {agents.map((agent) => (
-                  <button
-                    type="button"
-                    key={agent.id}
-                    aria-pressed={selected.includes(agent.id)}
-                    onClick={() =>
-                      setSelected((before) =>
-                        before.includes(agent.id)
-                          ? before.filter((id) => id !== agent.id)
-                          : [...before, agent.id],
-                      )
-                    }
-                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-[#f1f5f2]"
+              <AgentAssignment
+                agents={agents}
+                selected={selected}
+                completed={completed}
+                provider={provider!}
+                accounts={accounts}
+                setSelected={(next) => {
+                  setSelected(next);
+                  setResult("");
+                }}
+              />
+            )}
+            {step === "assign" && provider && created && (
+              <p className="text-xs text-muted">
+                {accountLabel(provider, name, created)}
+                {method === "api_key" ? "已保存" : "已连接"}
+              </p>
+            )}
+            {result && (
+              <p role="status" className="text-xs">
+                {result.split("\n").map((line) => (
+                  <span
+                    key={line}
+                    className={`block ${line.startsWith("失败：") ? "text-[#9a5b4b]" : "text-muted"}`}
                   >
-                    <span>
-                      {agent.name}{" "}
-                      <span className="text-xs text-muted">{agent.ref}</span>
-                    </span>
-                    {selected.includes(agent.id) && (
-                      <Check size={16} className="text-accent-strong" />
-                    )}
-                  </button>
+                    {line}
+                  </span>
                 ))}
-              </div>
+              </p>
             )}
             {error && (
               <p role="alert" className="text-xs text-[#9a5b4b]">
@@ -349,13 +380,15 @@ export function AccountDialog({
                 type="button"
                 onClick={step === "assign" ? close : dismiss}
               >
-                {step === "assign" ? "跳过" : "取消"}
+                {step === "assign" ? (result ? "关闭" : "跳过") : "取消"}
               </button>
               <button className="button" type="submit" disabled={busy}>
                 {busy
                   ? "处理中…"
                   : step === "assign"
-                    ? "完成"
+                    ? failed
+                      ? "重试失败项"
+                      : "完成"
                     : step === "auth" && account
                       ? "开始登录"
                       : "继续"}
@@ -379,7 +412,7 @@ export function AccountDialog({
             />
           </div>
         )}
-        {error && !["auth", "name", "assign"].includes(step) && (
+        {error && !["provider", "auth", "name", "assign"].includes(step) && (
           <p role="alert" className="mt-3 text-xs text-[#9a5b4b]">
             {error}
           </p>

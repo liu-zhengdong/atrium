@@ -78,6 +78,11 @@ export class Accounts {
   providersList() {
     return this.providers.list();
   }
+  preloadProviders() {
+    void this.providers.list().catch((error: unknown) => {
+      console.warn("供应商目录预加载失败：", error);
+    });
+  }
   credentialMode(id: string) {
     return this.catalog.credentialMode(id);
   }

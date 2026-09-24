@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api.ts";
+import { api, messageOf } from "../api.ts";
 import type { Account } from "./types.ts";
 
 export function useAccounts() {
@@ -11,7 +11,7 @@ export function useAccounts() {
       setAccounts(await api<Account[]>("/accounts"));
       setError("");
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     }
   }, []);
   useEffect(() => {
@@ -25,7 +25,7 @@ export function useAccounts() {
       await reload();
       return value;
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -75,7 +75,7 @@ export function useLogin(id: string | null, finished: () => void) {
           return;
         }
       } catch (e) {
-        if (active) setError(String(e));
+        if (active) setError(messageOf(e));
       }
       if (active) timer = window.setTimeout(() => void poll(), 900);
     }
@@ -91,7 +91,7 @@ export function useLogin(id: string | null, finished: () => void) {
       await api(`/accounts/${id}/login/answer`, "POST", { value });
       setError("");
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     }
   }
   return { events, status, error, answer };

@@ -21,6 +21,8 @@ type Job = {
   events: unknown[];
   prompt?: { id: string; type: string };
   done: boolean;
+  created: boolean;
+  previous?: Pick<Row, "status" | "expires" | "last_error">;
 };
 export class AccountLogin {
   private jobs = new Map<number, Job>();
@@ -55,14 +57,20 @@ export class AccountLogin {
       privateWrite(join(directory, "settings.json"), {
         packages: [entry.packagePath],
       });
-    this.start(row, directory, () => {
-      const value = this.files.load(row);
-      this.store.run(
-        "UPDATE accounts SET status='ready',expires=?,last_error=NULL WHERE number=?",
-        value.type === "oauth" ? value.expires : null,
-        number,
-      );
-    });
+    this.start(
+      row,
+      directory,
+      () => {
+        const value = this.files.load(row);
+        this.store.run(
+          "UPDATE accounts SET status='ready',expires=?,last_error=NULL WHERE number=?",
+          value.type === "oauth" ? value.expires : null,
+          number,
+        );
+      },
+      undefined,
+      true,
+    );
     return { id: `k${number}` };
   }
   relogin(number: number, distribute: () => void) {
@@ -99,6 +107,8 @@ export class AccountLogin {
         distribute();
       },
       () => rmSync(staged, { recursive: true, force: true }),
+      false,
+      { status: row.status, expires: row.expires, last_error: row.last_error },
     );
     return { id: `k${number}` };
   }
@@ -107,6 +117,8 @@ export class AccountLogin {
     directory: string,
     success: () => void,
     cleanup?: () => void,
+    created = false,
+    previous?: Job["previous"],
   ) {
     const number = row.number;
     const job: Job = {
@@ -114,6 +126,8 @@ export class AccountLogin {
       cancelled: false,
       events: [],
       done: false,
+      created,
+      previous,
     };
     this.jobs.set(number, job);
     void this.worker
@@ -137,14 +151,19 @@ export class AccountLogin {
         job.done = true;
       })
       .catch(() => {
-        this.store.run(
-          "UPDATE accounts SET status='error',last_error=? WHERE number=?",
-          "登录未完成",
-          number,
-        );
+        if (!job.cancelled)
+          this.store.run(
+            "UPDATE accounts SET status='error',last_error=? WHERE number=?",
+            "登录未完成",
+            number,
+          );
         job.done = true;
       })
-      .finally(cleanup);
+      .finally(() => {
+        cleanup?.();
+        if (job.cancelled && job.created)
+          rmSync(directory, { recursive: true, force: true });
+      });
   }
   loginEvents(number: number, after: number) {
     const job = this.jobs.get(number);
@@ -175,10 +194,18 @@ export class AccountLogin {
     if (job && !job.done) {
       job.cancelled = true;
       job.child?.kill();
-      this.store.run(
-        "UPDATE accounts SET status='error',last_error='登录未完成' WHERE number=?",
-        number,
-      );
+      if (job.created) {
+        this.store.run("DELETE FROM accounts WHERE number=?", number);
+        rmSync(this.files.dir(number), { recursive: true, force: true });
+      } else if (job.previous) {
+        this.store.run(
+          "UPDATE accounts SET status=?,expires=?,last_error=? WHERE number=?",
+          job.previous.status,
+          job.previous.expires,
+          job.previous.last_error,
+          number,
+        );
+      }
     }
     return { cancelled: true };
   }

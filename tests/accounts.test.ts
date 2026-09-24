@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdtempSync,
   mkdirSync,
+  existsSync,
   readFileSync,
   lstatSync,
   writeFileSync,
@@ -25,6 +26,7 @@ import { classifyRefreshError } from "../server/account-error.mjs";
 import { AccountFiles } from "../server/account-files.ts";
 import { AccountRefresh } from "../server/account-refresh.ts";
 import { AccountLogin } from "../server/account-login.ts";
+import { ProviderDirectory } from "../server/provider-directory.ts";
 
 const fixture = () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-accounts-"));
@@ -188,15 +190,98 @@ test("cancelled relogin before worker starts cannot publish staged credentials",
       }),
   });
   let published = false;
+  const before = accounts.list();
   login.relogin(number, () => {
     published = true;
   });
   login.cancel(number);
-  assert.equal(accounts.list()[0].last_error, "登录未完成");
+  assert.deepEqual(accounts.list(), before);
   finish();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(published, false);
-  assert.equal(accounts.list()[0].status, "error");
+  assert.deepEqual(accounts.list(), before);
+  store.close();
+});
+
+test("cancelling a first OAuth login removes its row and directory even when the worker settles later", async () => {
+  const { store, accounts } = fixture();
+  const files = new AccountFiles(store, accounts.root);
+  let finish!: () => void;
+  const worker = {
+    run: async () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  };
+  const login = new AccountLogin(
+    store,
+    files,
+    worker,
+    new ProviderDirectory({
+      list: async () => [
+        {
+          id: "openai-codex",
+          name: "OpenAI Codex",
+          methods: ["oauth"],
+          packagePath: null,
+        },
+      ],
+    }),
+  );
+  const before = accounts.list();
+  const { id } = await login.login("openai-codex", "临时账号");
+  assert.equal(accounts.list().length, before.length + 1);
+  login.cancel(Number(id.slice(1)));
+  assert.deepEqual(accounts.list(), before);
+  assert.equal(existsSync(join(accounts.root, id)), false);
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(accounts.list(), before);
+  store.close();
+});
+
+test("cancelling a relogin retains a ready account and credential", async () => {
+  const { store, accounts } = fixture();
+  const files = new AccountFiles(store, accounts.root);
+  const number = Number(
+    store.run(
+      "INSERT INTO accounts(provider,name,type,status,expires) VALUES('openai-codex','ready','oauth','ready',12345)",
+    ).lastInsertRowid,
+  );
+  const row = store.one<import("../server/account-files.ts").Row>(
+    "SELECT * FROM accounts WHERE number=?",
+    number,
+  )!;
+  files.save(row, {
+    type: "oauth",
+    access: "OLD",
+    refresh: "OLD",
+    expires: 12345,
+  });
+  const before = accounts.list();
+  const original = readFileSync(
+    join(accounts.root, `k${number}`, "auth.json"),
+    "utf8",
+  );
+  let finish!: () => void;
+  const login = new AccountLogin(store, files, {
+    run: async () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  });
+  login.relogin(number, () => {
+    throw new Error("不得分发");
+  });
+  login.cancel(number);
+  assert.deepEqual(accounts.list(), before);
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(accounts.list(), before);
+  assert.equal(
+    readFileSync(join(accounts.root, `k${number}`, "auth.json"), "utf8"),
+    original,
+  );
   store.close();
 });
 
@@ -569,6 +654,12 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
       });
     assert.equal((await assign(old)).statusCode, 200);
     assert.equal((await assign(next)).statusCode, 409);
+    assert.equal((await assign("k999999", true)).statusCode, 404);
+    assert.equal(
+      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8")).deepseek
+        .key,
+      "old",
+    );
     store.run(
       `CREATE TRIGGER deny_swap BEFORE UPDATE ON account_assignments BEGIN SELECT RAISE(ABORT, 'blocked'); END`,
     );

@@ -14,6 +14,12 @@ import {
   methodsFor,
   skipMethod,
   skipProvider,
+  defaultAccountName,
+  matchingProviders,
+  assignmentFailure,
+  assignmentSummary,
+  accountLabel,
+  currentAssignment,
 } from "../shared/providers.ts";
 import { ProviderDirectory } from "../server/provider-directory.ts";
 
@@ -44,6 +50,49 @@ test("仅支持的方式可选；给定供应商跳过选择，单方式再跳�
   assert.equal(skipMethod({ ...api, methods: ["oauth", "api_key"] }), false);
   assert.equal(skipProvider(oauth), true);
   assert.equal(skipProvider(undefined), false);
+});
+test("默认账号名、搜索优先级和分配失败文案", () => {
+  assert.equal(
+    defaultAccountName(api, [{ name: "DeepSeek" }, { name: "DeepSeek 3" }]),
+    "DeepSeek 2",
+  );
+  assert.deepEqual(
+    matchingProviders(
+      [
+        { ...api, id: "azure-openai", name: "Azure OpenAI" },
+        { ...api, id: "openai", name: "OpenAI" },
+        { ...api, id: "openrouter", name: "OpenRouter" },
+      ],
+      "api_key",
+      "open",
+    ).map((entry) => entry.id),
+    ["openai", "openrouter", "azure-openai"],
+  );
+  assert.equal(
+    currentAssignment("a3", "deepseek", [
+      { id: "k21", provider: "deepseek", assigned: ["a3"] },
+    ]),
+    "k21",
+  );
+  assert.equal(accountLabel(api, "DeepSeek 2", "k27"), "DeepSeek 2（k27）");
+  assert.equal(accountLabel(api, "Iris", "k24"), "DeepSeek Iris（k24）");
+  assert.equal(
+    assignmentSummary(
+      ["复测成功甲（a5）"],
+      ["连接验收（a3）：k21 → k27"],
+      ["复测成功乙（a6）：故障"],
+    ),
+    "新分配：复测成功甲（a5）\n替换：连接验收（a3）：k21 → k27\n失败：复测成功乙（a6）：故障",
+  );
+  assert.equal(
+    assignmentFailure(
+      { ref: "a3", name: "连接验收" },
+      new Error("该身份已有此 provider 的账号，请先撤销"),
+      api,
+      [{ id: "k21", provider: "deepseek", assigned: ["a3"] }],
+    ),
+    "连接验收（a3）已在用 DeepSeek k21",
+  );
 });
 test("目录缓存复用；插件入口文件变化使其重新加载", async () => {
   const template = mkdtempSync(join(tmpdir(), "atrium-provider-test-"));

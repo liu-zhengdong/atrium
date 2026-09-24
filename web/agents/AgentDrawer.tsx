@@ -66,6 +66,16 @@ export function AgentDrawer({
           )}
         </div>
       </div>
+      {agent.session_reset_at && (
+        <details className="mx-5 my-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <summary className="cursor-pointer">
+            已换新会话 · 旧会话保留 · {time(agent.session_reset_at)}
+          </summary>
+          <p className="mt-2 break-words text-amber-800">
+            {agent.session_reset_reason}
+          </p>
+        </details>
+      )}
       <div className="flex items-center justify-between px-5 text-xs">
         <h3 className="py-3 text-muted">
           <Inbox size={15} className="mr-1 inline" />

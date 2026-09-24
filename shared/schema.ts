@@ -92,6 +92,8 @@ export type AgentInfo = {
   config: Preferences;
   cwd: string;
   session_file: string | null;
+  session_reset_at: number | null;
+  session_reset_reason: string | null;
   last_wake: number;
 };
 export const runtimeSchema = z

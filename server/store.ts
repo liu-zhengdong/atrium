@@ -194,6 +194,8 @@ export class Store {
           END;`);
       }
     });
+    this.addColumn("agents", "session_reset_at", "INTEGER");
+    this.addColumn("agents", "session_reset_reason", "TEXT");
     this.addColumn("agents", "error_text", "TEXT");
     this.addColumn("agents", "error_at", "INTEGER");
     this.addColumn("agents", "failure_count", "INTEGER NOT NULL DEFAULT 0");
@@ -356,6 +358,8 @@ export class Store {
       work: row.work,
       cwd: row.cwd,
       session_file: row.session_file,
+      session_reset_at: row.session_reset_at,
+      session_reset_reason: row.session_reset_reason,
       last_wake: row.last_wake,
       config: preferences.parse(raw),
     };

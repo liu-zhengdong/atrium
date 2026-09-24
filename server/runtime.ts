@@ -7,9 +7,10 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { createRequire } from "node:module";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Readable, Writable } from "node:stream";
 import {
   client,
@@ -136,6 +137,9 @@ export class Runtimes {
     }
   >();
   private starts = new Map<string, { at: number; failures: number }>();
+  /** Only the first turn of a restored, locally owned session may be replaced. */
+  private restored = new Map<string, string>();
+  private recovery = new Map<string, string>();
   private stopped = false;
   private discovered: LiveRuntime[] = [];
   private discoveryError: string | null = null;
@@ -639,7 +643,78 @@ export class Runtimes {
     });
     return this.store.agent(id);
   }
-  async start(id: string, automatic = false) {
+  private recordSessionReset(id: string, reason: string) {
+    const safe = this.redact(id, reason).replace(/\s+/g, " ").slice(0, 240);
+    this.store.run(
+      "UPDATE agents SET session_reset_at=?,session_reset_reason=? WHERE id=?",
+      Date.now(),
+      safe,
+      id,
+    );
+    console.error(`[Atrium] ${this.store.agent(id).name} 会话已重建：${safe}`);
+    this.changed();
+  }
+  private sessionError(error: unknown) {
+    return /prompt-capture|session[^\n]{0,80}(?:not found|invalid|unavailable|corrupt|missing|closed)|(?:invalid|missing|closed|unknown|expired) session/i.test(
+      errorWithDetails(error),
+    );
+  }
+  private sameFile(left: string, right: string) {
+    const canonical = (path: string) => {
+      try {
+        return realpathSync(path);
+      } catch {
+        return resolve(path);
+      }
+    };
+    return canonical(left) === canonical(right);
+  }
+  /** pi-atrium prefers its identity cursor even when no sessionFile is supplied.
+   * Move that pointer aside only after the old writer has stopped; keep the old file.
+   */
+  private async freshIdentityStart(
+    id: string,
+    params: Record<string, unknown>,
+  ) {
+    const cursor = join(
+      process.env.PI_ACP_DIR ?? join(homedir(), ".pi", "pi-acp"),
+      "identities",
+      `${id}.cursor.json`,
+    );
+    const backup = `${cursor}.reset-${Date.now()}-${randomUUID()}`;
+    const moved = existsSync(cursor);
+    if (moved) renameSync(cursor, backup);
+    try {
+      return await this.rpc<{ runtimeId: string }>("_pi/identity/start", {
+        ...params,
+        sessionFile: undefined,
+      });
+    } catch (error) {
+      if (moved && !existsSync(cursor)) renameSync(backup, cursor);
+      throw error;
+    }
+  }
+  /** Stop the old owned runtime before starting a clean session; never delete its file. */
+  private async recover(id: string, reason: string) {
+    this.recovery.delete(id);
+    this.restored.delete(id);
+    const runtime = this.connections.get(id);
+    if (!runtime || !this.owned(id))
+      throw new Error("无法安全替换非本服务启动的会话");
+    // run_end may arrive before deliver acknowledges: requeue accepted deliveries now too.
+    this.store.finishTurn(id, false);
+    if (this.store.agent(id).agent_directory)
+      await this.rpc("_pi/identity/stop", { identityId: id });
+    else await this.rpc("session/close", { sessionId: runtime.info.sessionId });
+    this.connections.delete(id);
+    this.store.run(
+      "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL,observed_session_id=NULL WHERE id=?",
+      id,
+    );
+    await this.start(id, false, true);
+    this.recordSessionReset(id, reason);
+  }
+  async start(id: string, automatic = false, fresh = false) {
     const binding = this.binding(id);
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (binding.runtime_pid && alive(binding.runtime_pid))
@@ -670,21 +745,60 @@ export class Runtimes {
         ))
           console.error(`${current.name} 的${notice}`);
         const configured = readIdentityModel(current.agent_directory);
-        const { runtimeId } = await this.rpc<{ runtimeId: string }>(
-          "_pi/identity/start",
-          {
-            identityId: id,
-            agentDirectory: current.agent_directory,
-            cwd,
-            ...(current.session_file
-              ? { sessionFile: current.session_file }
-              : {}),
-            // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
-            ...(configured ? { model: formatModelSpec(configured) } : {}),
-          },
-        );
+        const restored = !fresh && !!current.session_file;
+        const params = {
+          identityId: id,
+          agentDirectory: current.agent_directory,
+          cwd,
+          ...(restored ? { sessionFile: current.session_file } : {}),
+          // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
+          ...(configured ? { model: formatModelSpec(configured) } : {}),
+        };
+        let runtimeId: string;
+        let restoreError: string | null = null;
+        try {
+          ({ runtimeId } = fresh
+            ? await this.freshIdentityStart(id, params)
+            : await this.rpc<{ runtimeId: string }>(
+                "_pi/identity/start",
+                params,
+              ));
+        } catch (error) {
+          if (
+            !restored ||
+            /already occupied|identity.*occupied/i.test(errorWithDetails(error))
+          )
+            throw error;
+          ({ runtimeId } = await this.freshIdentityStart(id, params));
+          fresh = true;
+          restoreError = `恢复旧会话失败：${errorWithDetails(error)}`;
+        }
         try {
           await this.bind(id, { runtimeId });
+          const info = this.connections.get(id)?.info;
+          // pi-atrium may accept the start request but silently replace an
+          // unreadable session. Treat that as a reset, not a successful restore.
+          if (
+            restored &&
+            !fresh &&
+            info &&
+            (!info.sessionFile ||
+              !this.sameFile(info.sessionFile, current.session_file!))
+          ) {
+            // The adapter silently skipped the unreadable file. Its cursor may
+            // have resumed a DIFFERENT old session: explicitly start fresh.
+            await this.rpc("_pi/identity/stop", { identityId: id });
+            this.connections.delete(id);
+            this.store.run(
+              "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL,observed_session_id=NULL WHERE id=?",
+              id,
+            );
+            const replacement = await this.freshIdentityStart(id, params);
+            await this.bind(id, replacement);
+            restoreError = "原会话无法读取，已新建会话";
+          } else if (restored && !fresh && !restoreError && info)
+            this.restored.set(id, info.generation);
+          if (restoreError) this.recordSessionReset(id, restoreError);
         } catch (error) {
           await this.rpc("_pi/identity/stop", { identityId: id }).catch(
             () => undefined,
@@ -693,31 +807,39 @@ export class Runtimes {
         }
         return;
       }
-      let sessionId = binding.acp_session_id;
-      if (!sessionId && binding.session_file) {
-        ({ sessionId } = await this.rpc<{ sessionId: string }>(
-          "_pi/session/import",
-          { cwd, sessionFile: binding.session_file },
-        ));
-        this.store.run(
-          "UPDATE agents SET acp_session_id=? WHERE id=?",
-          sessionId,
-          id,
-        );
+      let sessionId = fresh ? null : binding.acp_session_id;
+      let restoreError: string | null = null;
+      let restored = !!(sessionId || (!fresh && binding.session_file));
+      try {
+        if (!sessionId && binding.session_file && !fresh) {
+          ({ sessionId } = await this.rpc<{ sessionId: string }>(
+            "_pi/session/import",
+            { cwd, sessionFile: binding.session_file },
+          ));
+        }
+        if (sessionId)
+          await this.rpc("session/load", {
+            sessionId,
+            cwd,
+            mcpServers: this.services(id),
+          });
+      } catch (error) {
+        if (sessionId)
+          await this.rpc("session/close", { sessionId }).catch(() => undefined);
+        sessionId = null;
+        restored = false;
+        restoreError = `恢复旧会话失败：${errorWithDetails(error)}`;
       }
-      if (sessionId)
-        await this.rpc("session/load", {
-          sessionId,
-          cwd,
-          mcpServers: this.services(id),
-        });
-      else
+      if (!sessionId)
         ({ sessionId } = await this.rpc<{ sessionId: string }>("session/new", {
           cwd,
           mcpServers: this.services(id),
         }));
       try {
         await this.bind(id, { sessionId });
+        if (restored && !fresh)
+          this.restored.set(id, this.connections.get(id)!.info.generation);
+        if (restoreError) this.recordSessionReset(id, restoreError);
       } catch (error) {
         await this.rpc("session/close", { sessionId }).catch(() => undefined);
         throw error;
@@ -874,7 +996,7 @@ export class Runtimes {
     this.pumping.set(id, promise);
     return promise;
   }
-  private async doPump(id: string, direct: boolean) {
+  private async doPump(id: string, direct: boolean): Promise<void> {
     let operationFailed = false;
     try {
       if (this.connecting.has(id)) return;
@@ -935,6 +1057,11 @@ export class Runtimes {
         throw error;
       }
       await this.capture(id, runtime.info);
+      const recovery = this.recovery.get(id);
+      if (recovery) {
+        await this.recover(id, recovery);
+        return this.doPump(id, direct);
+      }
       for (const pending of this.store.pending(id)) {
         if (this.store.failure(id) && !direct) break;
         if (pending.kind === "summary" && runtime.info.busy) continue;
@@ -977,6 +1104,11 @@ export class Runtimes {
           // A turn may fail before deliver returns. Observe its end only after
           // accepting, so the failed delivery cannot be stranded as accepted.
           await this.capture(id, runtime.info);
+          const recovery = this.recovery.get(id);
+          if (recovery) {
+            await this.recover(id, recovery);
+            return this.doPump(id, direct);
+          }
           const turn = this.lastTurn.get(id);
           if (
             turn?.generation === runtime.info.generation &&
@@ -989,6 +1121,20 @@ export class Runtimes {
           }
           this.changed();
         } catch (error) {
+          if (
+            this.restored.get(id) === runtime.info.generation &&
+            this.sessionError(error)
+          ) {
+            try {
+              await this.recover(
+                id,
+                `恢复后首轮不可用：${errorWithDetails(error)}`,
+              );
+              return this.doPump(id, direct);
+            } catch (recoveryError) {
+              error = recoveryError;
+            }
+          }
           if (!this.stopped) {
             const message = this.redact(id, errorWithDetails(error));
             this.store.deliveryError(pending.id, message);
@@ -1080,17 +1226,27 @@ export class Runtimes {
                 deliveryAt: turn.deliveryAt,
                 successful: !turn.failure,
               });
+            if (this.restored.get(id) === info.generation) {
+              this.restored.delete(id);
+              if (
+                turn?.deliveryAt != null &&
+                turn.failure &&
+                this.sessionError(turn.failure)
+              )
+                this.recovery.set(id, `恢复后首轮不可用：${turn.failure}`);
+            }
             if (turn?.generation === info.generation && turn.failure) {
               this.authFailure(id, turn.failure);
-              this.store.setFailure(
-                id,
-                /\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
-                  turn.failure,
-                )
-                  ? "模型认证失败，请更换 API Key"
-                  : this.redact(id, turn.failure),
-                event.at,
-              );
+              if (!this.recovery.has(id))
+                this.store.setFailure(
+                  id,
+                  /\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
+                    turn.failure,
+                  )
+                    ? "模型认证失败，请更换 API Key"
+                    : this.redact(id, turn.failure),
+                  event.at,
+                );
               this.store.finishTurn(id, false);
               this.changed();
             } else if (turn?.generation === info.generation) {

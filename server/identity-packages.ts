@@ -1,6 +1,4 @@
 import {
-  constants,
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -20,6 +18,7 @@ import {
 } from "./profile.ts";
 import { templatePackagePath } from "./package-spec.ts";
 import { Problem } from "./store.ts";
+import { clone } from "./clone.ts";
 
 export type PackageEntry =
   | string
@@ -57,12 +56,6 @@ const atomicJson = (file: string, value: unknown) => {
     rmSync(temp, { force: true });
   }
 };
-const clone = (from: string, to: string) =>
-  cpSync(from, to, {
-    recursive: true,
-    dereference: false,
-    mode: constants.COPYFILE_FICLONE,
-  });
 const allowedSpec = (value: string) => {
   if (/^npm:(?:@[\w.-]+\/)?[\w.-]+(?:@[^\s/]+)?$/.test(value)) return true;
   if (value.startsWith("git:") && !/\s/.test(value)) {

@@ -1,6 +1,4 @@
 import {
-  constants,
-  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -16,6 +14,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { templateChoice } from "./identity-env.ts";
+import { clone } from "./clone.ts";
 import { fileURLToPath } from "node:url";
 import { Problem } from "./store.ts";
 import { local, resolveInstalled } from "./package-spec.ts";
@@ -96,16 +95,14 @@ const OWNED_DIRS = ["extensions", "skills", "prompts", "themes"] as const;
 const bare = (path: string) => path.replace(/^[!+-]/, "");
 /**
  * Copy a resource directory, keeping any copy the identity already made.
- * FICLONE makes this near-free on APFS/Btrfs — a 19MB skill's node_modules is
- * shared until someone writes — and falls back to a full copy elsewhere.
+ * On a fresh destination, copy-on-write shares blocks until either side writes.
  */
 const copyResourceDir = (from: string, to: string) =>
-  cpSync(from, to, {
+  clone(from, to, {
     recursive: true,
     dereference: true,
     force: false,
     errorOnExist: false,
-    mode: constants.COPYFILE_FICLONE,
   });
 const notesSettings = (directory: string, maxContextBytes: unknown) => ({
   directory,
@@ -129,7 +126,7 @@ function copyOwnedNotes(sourceDir: string, directory: string) {
         dest = join(directory, name);
       if (!existsSync(from) || existsSync(dest)) continue;
       if (statSync(from).isDirectory())
-        cpSync(from, dest, { recursive: true, dereference: true });
+        clone(from, dest, { recursive: true, dereference: true });
       else copyOwned(from, dest);
     }
 }
@@ -666,7 +663,7 @@ export function prepareProfile(
       const sourceDir = notesDirectory(notes, template);
       if (sourceDir && existsSync(sourceDir)) {
         if (inside(template, sourceDir))
-          cpSync(sourceDir, notesDir, {
+          clone(sourceDir, notesDir, {
             recursive: true,
             dereference: true,
           });

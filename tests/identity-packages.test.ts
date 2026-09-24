@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -164,6 +165,37 @@ test("现有共享身份复制包到独立目录，切回共享保留原引用�
       assert.equal(
         readFileSync(join(identity, "settings.json"), "utf8"),
         before,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ATRIUM_PI_TEMPLATE;
+      else process.env.ATRIUM_PI_TEMPLATE = previous;
+    }
+  }));
+
+test("暂存失败回滚：原插件和配置不变，不留下暂存目录", () =>
+  fixture((_root, template, identity) => {
+    const install = join(identity, "npm/node_modules/keep");
+    mkdirSync(install, { recursive: true });
+    writeFileSync(join(install, "package.json"), '{"version":"1.0.0"}');
+    writeFileSync(
+      join(identity, "settings.json"),
+      JSON.stringify({ packages: ["npm:missing"] }),
+    );
+    const previous = process.env.ATRIUM_PI_TEMPLATE;
+    process.env.ATRIUM_PI_TEMPLATE = template;
+    try {
+      invalid(() => changeMode(identity, "own"), 400);
+      assert.equal(
+        readFileSync(join(install, "package.json"), "utf8"),
+        '{"version":"1.0.0"}',
+      );
+      assert.equal(
+        readFileSync(join(identity, "settings.json"), "utf8"),
+        '{"packages":["npm:missing"]}',
+      );
+      assert.equal(
+        readdirSync(identity).some((name) => name.startsWith(".packages-")),
+        false,
       );
     } finally {
       if (previous === undefined) delete process.env.ATRIUM_PI_TEMPLATE;

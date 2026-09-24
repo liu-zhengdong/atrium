@@ -133,22 +133,36 @@ const create: Command = {
   positionals: [1, 1],
   async run({ positionals: [name], values }) {
     const client = await connect();
-    const { agent, start_error } = await client.post<{
-      agent: AgentEntry;
-      start_error?: string;
-    }>("/agents", {
-      name,
-      source: str(values, "from") ?? "builtin",
-      description: str(values, "description") ?? "",
-      start: values.start === true,
-    });
-    console.log(`${agent.name} · ${agent.ref}`);
+    const frames = ["◐", "◓", "◑", "◒"];
+    let frame = 0;
+    const progress = process.stderr.isTTY
+      ? setInterval(() => {
+          process.stderr.write(
+            `\r\x1b[2K${frames[frame++ % frames.length]} 正在复制插件…`,
+          );
+        }, 120)
+      : null;
+    let result: { agent: AgentEntry; start_error?: string };
+    try {
+      result = await client.post<typeof result>("/agents", {
+        name,
+        source: str(values, "from") ?? "builtin",
+        description: str(values, "description") ?? "",
+        start: values.start === true,
+      });
+    } finally {
+      if (progress) {
+        clearInterval(progress);
+        process.stderr.write("\r\x1b[2K");
+      }
+    }
+    console.log(`${result.agent.name} · ${result.agent.ref}`);
     recordNext(
       values.start === true
-        ? `发私聊：atrium send ${agent.ref} 正文`
-        : `启动：atrium start ${agent.ref}`,
+        ? `发私聊：atrium send ${result.agent.ref} 正文`
+        : `启动：atrium start ${result.agent.ref}`,
     );
-    if (start_error) throw new Error(start_error);
+    if (result.start_error) throw new Error(result.start_error);
   },
 };
 

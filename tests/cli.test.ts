@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -379,5 +380,72 @@ test(
       "run",
     ])
       assert.match(help, new RegExp(`atrium ${name}( |$)`, "m"));
+  },
+);
+
+test(
+  "分配回执包含身份和账号；撤销时优先给可执行的分配命令",
+  { timeout: 60000 },
+  async (t) => {
+    const f = await fixture(t);
+    const cli = join(f.root, "claude");
+    writeFileSync(
+      cli,
+      '#!/bin/sh\n[ "$1" = "--version" ] || exit 2\necho "1.0"\n',
+    );
+    chmodSync(cli, 0o700);
+    writeFileSync(
+      join(f.root, "pi-template", "claude-bridge.json"),
+      JSON.stringify({ provider: { pathToClaudeCodeExecutable: cli } }),
+    );
+    assert.equal((await f.cli("create", "甲")).code, 0);
+    const store = new Store(join(f.data, "atrium.sqlite"));
+    const agent = store.agent(store.resolveAgentId("a1"));
+    store.close();
+    const settings = join(agent.agent_directory!, "settings.json");
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        defaultProvider: "claude-bridge",
+        defaultModel: "claude-haiku-4-5",
+        packages: [],
+      }),
+    );
+    assert.equal(
+      (await f.cli("account", "add", "claude-bridge", "--local")).code,
+      0,
+    );
+    const assigned = await f.cli("assign", "甲", "k1");
+    assert.equal(assigned.code, 0, assigned.stderr);
+    assert.equal(
+      assigned.stdout,
+      "已分配：甲 → k1 Claude Code（本机登录）\n看分配：atrium accounts\n",
+    );
+    const removal = await f.cli("unassign", "a1", "claude-bridge");
+    assert.equal(removal.code, 0, removal.stderr);
+    assert.match(removal.stdout, /重新分配：atrium assign a1 k1\n$/);
+    assert.doesNotMatch(removal.stdout, /模式：|atrium account check/);
+    const asJson = await f.cli("assign", "a1", "k1", "--json");
+    assert.equal(asJson.code, 0, asJson.stderr);
+    assert.equal(
+      JSON.parse(asJson.stdout).result.accountName,
+      "Claude Code（本机登录）",
+    );
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        defaultProvider: "other",
+        defaultModel: "unknown",
+        packages: [],
+      }),
+    );
+    const unknown = await f.cli("unassign", "甲", "claude-bridge", "--json");
+    assert.equal(unknown.code, 0, unknown.stderr);
+    assert.equal(JSON.parse(unknown.stdout).next, "atrium account check");
+    assert.equal((await f.cli("assign", "a1", "k1", "--json")).code, 0);
+    writeFileSync(settings, JSON.stringify({ packages: [] }));
+    const noModel = await f.cli("unassign", "a1", "claude-bridge", "--json");
+    assert.equal(noModel.code, 0, noModel.stderr);
+    assert.equal(JSON.parse(noModel.stdout).next, "atrium assign a1 k1");
   },
 );

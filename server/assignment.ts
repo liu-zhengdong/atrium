@@ -27,6 +27,7 @@ export function assignmentCommand(
   store: Store,
   id: string,
   accounts: AvailableAccount[],
+  previouslyAssigned?: string,
 ): string | null {
   const agent = store.agent(id);
   let provider: string | undefined;
@@ -38,13 +39,18 @@ export function assignmentCommand(
     // A broken model file must not hide the rest of the preflight report.
     return null;
   }
-  const account = accounts.find(
+  const candidates = accounts.filter(
     (entry) =>
-      entry.provider === provider &&
+      (provider
+        ? entry.provider === provider
+        : entry.id === previouslyAssigned) &&
       (entry.status === "ready" ||
         entry.status === "unverified" ||
         entry.provider === LOCAL_PROVIDER),
   );
+  const account =
+    candidates.find((entry) => entry.id === previouslyAssigned) ??
+    candidates[0];
   return account
     ? `atrium assign ${agent.ref} ${account.id}`
     : provider === LOCAL_PROVIDER

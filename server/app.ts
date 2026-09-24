@@ -419,9 +419,14 @@ export async function createApp(options: {
       .object({ account: z.string(), replace: z.boolean().optional() })
       .strict()
       .parse(request.body);
-    const result = accounts.assign(identityRef(request), account, replace);
+    const id = identityRef(request);
+    const result = accounts.assign(id, account, replace);
     changed();
-    return result;
+    return {
+      ...result,
+      agentName: store.agent(id).name,
+      accountName: accounts.list().find((entry) => entry.id === account)?.name,
+    };
   });
   app.delete("/api/assign/:agent/:provider", async (request) => {
     const { provider } = z
@@ -432,22 +437,30 @@ export async function createApp(options: {
       "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
       id,
     )?.count;
-    const last =
-      remaining === 1 &&
-      !!store.one(
-        "SELECT 1 FROM account_assignments WHERE agent_id=? AND provider=?",
-        id,
-        provider,
-      );
+    const previous = store.one<{ account_number: number }>(
+      "SELECT account_number FROM account_assignments WHERE agent_id=? AND provider=?",
+      id,
+      provider,
+    );
+    const last = remaining === 1 && !!previous;
     const stopped = !!(last && runtimes?.connections.has(id));
     if (last) await runtimes?.stopForUnassignment(id);
     const result = accounts.unassign(id, provider);
     changed();
+    const assigned = hasAssignment(store, id);
     return {
       ...result,
       name: store.agent(id).name,
       stopped,
-      hasAssignment: hasAssignment(store, id),
+      hasAssignment: assigned,
+      nextCommand: assigned
+        ? null
+        : (assignmentCommand(
+            store,
+            id,
+            accounts.list(),
+            previous ? `k${previous.account_number}` : undefined,
+          ) ?? "atrium account check"),
     };
   });
   app.get("/api/overview", () => {

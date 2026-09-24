@@ -188,12 +188,14 @@ export const accountCommands: Record<string, Command> = {
     async run({ positionals: [agent, account] }) {
       const result = await (
         await connect()
-      ).post<{ mode: string; preserved: string | null }>(
-        `/assign/${encode(agent!)}`,
-        { account },
-      );
+      ).post<{
+        account: string;
+        agentName: string;
+        accountName?: string;
+        preserved: string | null;
+      }>(`/assign/${encode(agent!)}`, { account });
       console.log(
-        `已分配；模式：${result.mode}${result.preserved ? `；原文件已保留：${result.preserved}` : ""}`,
+        `已分配：${result.agentName} → ${result.account}${result.accountName ? ` ${result.accountName}` : ""}${result.preserved ? `；原文件已保留：${result.preserved}` : ""}`,
       );
     },
   },
@@ -204,14 +206,17 @@ export const accountCommands: Record<string, Command> = {
     async run({ positionals: [agent, provider], json }) {
       const result = await (
         await connect()
-      ).delete<{ name: string; stopped: boolean; hasAssignment: boolean }>(
-        `/assign/${encode(agent!)}/${encode(provider!)}`,
-      );
+      ).delete<{
+        name: string;
+        stopped: boolean;
+        hasAssignment: boolean;
+        nextCommand: string | null;
+      }>(`/assign/${encode(agent!)}/${encode(provider!)}`);
+      if (result.nextCommand) recordNext(`重新分配：${result.nextCommand}`);
       if (json) return printJson(result);
       console.log("已撤销分配");
       if (result.stopped)
         console.log(`${result.name} 已停止：没有分配账号就不能运行`);
-      if (!result.hasAssignment) recordNext("重新分配：atrium account check");
     },
   },
 };

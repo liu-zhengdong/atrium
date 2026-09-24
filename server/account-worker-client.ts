@@ -1,5 +1,6 @@
 import { fork, type ChildProcess } from "node:child_process";
 import type { AccountFiles, Row } from "./account-files.ts";
+import type { ProviderEntry } from "../shared/providers.ts";
 
 export type WorkerError =
   | "登录已失效，需要重新登录"
@@ -15,6 +16,45 @@ export const workerErrors: readonly WorkerError[] = [
 export class AccountWorker {
   private workers = new Set<ChildProcess>();
   constructor(private files: AccountFiles) {}
+  list(directory: string): Promise<ProviderEntry[]> {
+    return new Promise((resolve, reject) => {
+      const child = fork(
+        new URL("./account-worker.mjs", import.meta.url),
+        [directory, "", "list"],
+        {
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+          execArgv: [],
+          env: { ...process.env, PI_CODING_AGENT_DIR: directory },
+        },
+      );
+      this.workers.add(child);
+      let result: ProviderEntry[] | undefined;
+      const timer = setTimeout(() => child.kill(), 30_000);
+      child.on(
+        "message",
+        (message: {
+          kind: string;
+          providers?: ProviderEntry[];
+          count?: number;
+        }) => {
+          if (message.kind === "list") result = message.providers;
+          if (message.kind === "warning")
+            console.warn(`供应商目录跳过 ${message.count} 个加载失败的插件`);
+        },
+      );
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        this.workers.delete(child);
+        reject(error);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        this.workers.delete(child);
+        if (code === 0 && result) resolve(result);
+        else reject(new Error("供应商目录加载失败"));
+      });
+    });
+  }
   run(
     row: Row,
     operation: "refresh" | "login",

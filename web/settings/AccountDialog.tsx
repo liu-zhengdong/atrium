@@ -1,90 +1,215 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import { ChevronLeft, X } from "lucide-react";
 import { createPortal } from "react-dom";
-import { api } from "../api.ts";
+import { api, messageOf } from "../api.ts";
+import type { Agent } from "../components/AgentAvatar.tsx";
+import {
+  accountLabel,
+  assignmentFailure,
+  assignmentSummary,
+  currentAssignment,
+  defaultAccountName,
+  type ProviderEntry,
+  type ProviderMethod,
+} from "../../shared/providers.ts";
 import type { Account } from "./types.ts";
 import { LoginFlow } from "./LoginFlow.tsx";
+import { ProviderPicker } from "./ProviderPicker.tsx";
+import { AgentAssignment } from "./AgentAssignment.tsx";
 
 const inputStyle =
   "field !border-transparent !bg-[#f1f5f2] focus:!border-[#b9c9bd] focus:!bg-white focus:!shadow-none";
-const providers = [
-  "deepseek",
-  "openrouter",
-  "openai",
-  "anthropic",
-  "openai-codex",
-  "antigravity",
-];
+type Step = "method" | "provider" | "auth" | "name" | "login" | "assign";
 
 export function AccountDialog({
   account,
+  agents,
+  accounts,
   close,
   reload,
 }: {
   account?: Account;
+  agents: Agent[];
+  accounts: Account[];
   close: () => void;
   reload: () => Promise<void>;
 }) {
-  const [choice, setChoice] = useState(account?.provider ?? "deepseek");
-  const [custom, setCustom] = useState("");
-  const [name, setName] = useState(account?.name ?? "");
+  const [step, setStep] = useState<Step>(account ? "auth" : "method");
+  const [providers, setProviders] = useState<ProviderEntry[] | null>(null);
+  const [method, setMethod] = useState<ProviderMethod>(
+    account?.type === "oauth" ? "oauth" : "api_key",
+  );
+  const [provider, setProvider] = useState<ProviderEntry | null>(null);
+  const [search, setSearch] = useState("");
   const [key, setKey] = useState("");
+  const [name, setName] = useState(account?.name ?? "");
   const [login, setLogin] = useState<string | null>(null);
+  const activeLogin = useRef<string | null>(null);
+  const dismissed = useRef(false);
+  const [created, setCreated] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [completed, setCompleted] = useState<string[]>([]);
+  const [result, setResult] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [added, setAdded] = useState<string[]>([]);
+  const [replaced, setReplaced] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const provider = choice === "other" ? custom.trim() : choice;
-  const oauth =
-    account?.type === "oauth" ||
-    ["openai-codex", "antigravity"].includes(provider);
+  const loadProviders = useCallback(async () => {
+    setError("");
+    try {
+      setProviders(await api<ProviderEntry[]>("/providers"));
+    } catch (e) {
+      setError(messageOf(e));
+    }
+  }, []);
+  useEffect(() => {
+    if (!account) void loadProviders();
+  }, [account, loadProviders]);
   const dismiss = useCallback(() => {
-    if (login)
-      void api(`/accounts/${login}/login/cancel`, "POST")
+    dismissed.current = true;
+    const pending = activeLogin.current;
+    activeLogin.current = null;
+    if (pending)
+      void api(`/accounts/${pending}/login/cancel`, "POST")
         .then(reload)
         .catch(() => {});
     close();
-  }, [login, close, reload]);
+  }, [close, reload]);
   useEffect(() => {
-    const onEscape = (event: KeyboardEvent) => {
+    const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopImmediatePropagation();
         dismiss();
       }
     };
-    window.addEventListener("keydown", onEscape, true);
-    return () => window.removeEventListener("keydown", onEscape, true);
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
   }, [dismiss]);
   useEffect(
     () => () => {
-      if (login)
-        void api(`/accounts/${login}/login/cancel`, "POST").catch(() => {});
+      if (activeLogin.current)
+        void api(`/accounts/${activeLogin.current}/login/cancel`, "POST").catch(
+          () => {},
+        );
     },
-    [login],
+    [],
   );
+
+  const title = account
+    ? `重新登录 ${account.name}`
+    : step === "assign"
+      ? "分配给 Agent"
+      : "添加账号";
+  const back = () => {
+    setError("");
+    setStep(
+      step === "provider"
+        ? "method"
+        : step === "auth"
+          ? "provider"
+          : step === "name"
+            ? method === "oauth"
+              ? "provider"
+              : "auth"
+            : "method",
+    );
+  };
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (step === "assign" && result && !failed) {
+      close();
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      if (oauth) {
+      if ((step === "auth" && !account) || (step === "name" && provider)) {
+        if (!provider) throw new Error("请先选择供应商");
+        if (method === "api_key" && !key.trim())
+          throw new Error("API Key 不能为空");
+        const accountName =
+          name.trim() || defaultAccountName(provider, accounts);
+        const result =
+          method === "oauth"
+            ? await api<{ id: string }>("/accounts/login", "POST", {
+                provider: provider.id,
+                name: accountName,
+              })
+            : await api<{ id: string }>("/accounts", "POST", {
+                provider: provider.id,
+                name: accountName,
+                key: key.trim(),
+              });
+        if (method === "oauth") {
+          if (dismissed.current) {
+            await api(`/accounts/${result.id}/login/cancel`, "POST");
+            await reload();
+            return;
+          }
+          activeLogin.current = result.id;
+          setLogin(result.id);
+          setStep("login");
+        } else {
+          setCreated(result.id);
+          setStep("assign");
+          await reload();
+        }
+      } else if (step === "auth" && account) {
         const result = await api<{ id: string }>(
-          account ? `/accounts/${account.id}/login` : "/accounts/login",
+          `/accounts/${account.id}/login`,
           "POST",
-          account ? undefined : { provider, name: name.trim() },
         );
+        if (dismissed.current) {
+          await api(`/accounts/${result.id}/login/cancel`, "POST");
+          await reload();
+          return;
+        }
+        activeLogin.current = result.id;
         setLogin(result.id);
+        setStep("login");
         await reload();
-      } else {
-        if (!key.trim()) throw new Error("API key 不能为空");
-        await api("/accounts", "POST", {
-          provider,
-          name: name.trim(),
-          key: key.trim(),
-        });
+      } else if (step === "assign" && created && provider) {
+        const newAdded = [...added],
+          newReplaced = [...replaced];
+        const failures: string[] = [];
+        const done = [...completed];
+        for (const id of selected.filter((id) => !completed.includes(id))) {
+          const agent = agents.find((item) => item.id === id)!;
+          const previous = currentAssignment(agent.ref, provider.id, accounts);
+          try {
+            await api(`/assign/${encodeURIComponent(id)}`, "POST", {
+              account: created,
+              ...(previous ? { replace: true } : {}),
+            });
+            done.push(id);
+            if (previous)
+              newReplaced.push(
+                `${agent.name}（${agent.ref}）：${previous} → ${created}`,
+              );
+            else newAdded.push(`${agent.name}（${agent.ref}）`);
+          } catch (e) {
+            failures.push(assignmentFailure(agent, e, provider, accounts));
+          }
+        }
+        setCompleted(done);
+        setAdded(newAdded);
+        setReplaced(newReplaced);
+        setFailed(failures.length > 0);
+        setResult(
+          assignmentSummary(newAdded, newReplaced, failures) ||
+            "未分配；可以稍后分配",
+        );
         await reload();
-        close();
       }
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -100,18 +225,25 @@ export function AccountDialog({
       <section
         role="dialog"
         aria-modal="true"
-        aria-label={account ? `重新登录 ${account.name}` : "添加账号"}
+        aria-label={title}
         className="w-full max-w-[480px] rounded-2xl bg-white p-6 shadow-xl"
       >
         <div className="flex items-center justify-between gap-3">
-          <h2 className="m-0 text-base font-medium">
-            {account
-              ? account.name
-              : login
-                ? name.trim() || provider
-                : "添加账号"}
-          </h2>
+          <div className="flex items-center gap-2">
+            {!account && ["provider", "auth", "name"].includes(step) && (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="返回上一步"
+                onClick={back}
+              >
+                <ChevronLeft size={18} />
+              </button>
+            )}
+            <h2 className="m-0 text-base font-medium">{title}</h2>
+          </div>
           <button
+            type="button"
             className="icon-button"
             aria-label="关闭对话框"
             onClick={dismiss}
@@ -119,72 +251,123 @@ export function AccountDialog({
             <X size={18} />
           </button>
         </div>
-        {login ? (
-          <div className="mt-5">
-            <LoginFlow id={login} finished={reload} close={dismiss} />
+        {provider && ["auth", "name", "login"].includes(step) && (
+          <p className="mb-0 mt-2 text-xs text-muted">
+            {provider.name} · {method === "oauth" ? "账号登录" : "API Key"}
+          </p>
+        )}
+        {account && step === "login" && (
+          <p className="mb-0 mt-2 text-xs text-muted">
+            {account.provider} · 账号登录
+          </p>
+        )}
+        {step === "method" && (
+          <div className="mt-5 space-y-2">
+            <p className="m-0 pb-1 text-xs text-muted">选择连接方式</p>
+            {(["oauth", "api_key"] as const).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className="w-full rounded-xl bg-[#f3f6f3] px-4 py-3 text-left hover:bg-[#e9f0ea]"
+                onClick={() => {
+                  setMethod(item);
+                  setStep("provider");
+                }}
+              >
+                <span className="block text-sm">
+                  {item === "oauth" ? "账号登录" : "API Key"}
+                </span>
+                <span className="mt-1 block text-xs text-muted">
+                  {item === "oauth"
+                    ? "用已有订阅在浏览器登录，如 ChatGPT、Claude、Copilot"
+                    : "粘贴供应商后台生成的密钥"}
+                </span>
+              </button>
+            ))}
           </div>
-        ) : (
+        )}
+        {step === "provider" && (
+          <ProviderPicker
+            method={method}
+            providers={providers}
+            search={search}
+            setSearch={setSearch}
+            accounts={accounts}
+            error={error}
+            retry={() => void loadProviders()}
+            changeMethod={(next) => {
+              setMethod(next);
+              setError("");
+            }}
+            choose={(item) => {
+              setProvider(item);
+              setName(defaultAccountName(item, accounts));
+              setStep(method === "oauth" ? "name" : "auth");
+            }}
+          />
+        )}
+        {(step === "auth" || step === "name" || step === "assign") && (
           <form
             onSubmit={(event) => void submit(event)}
             className="mt-5 space-y-4"
           >
-            {account ? (
-              <p className="m-0 text-xs text-muted">
-                {account.provider} · 原有分配保留
-              </p>
-            ) : (
+            {step === "auth" && !account && (
               <label className="block text-xs text-muted">
-                Provider
-                <select
-                  className={`${inputStyle} mt-1.5`}
-                  value={choice}
-                  onChange={(event) => setChoice(event.target.value)}
-                >
-                  {providers.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                  <option value="other">其他 API key</option>
-                </select>
-              </label>
-            )}
-            {choice === "other" && !account && (
-              <input
-                className={inputStyle}
-                aria-label="Provider 名称"
-                required
-                value={custom}
-                onChange={(event) => setCustom(event.target.value)}
-                placeholder="Provider 名称"
-              />
-            )}
-            {!account && (
-              <label className="block text-xs text-muted">
-                名称
+                API Key
                 <input
-                  className={`${inputStyle} mt-1.5`}
-                  required
-                  maxLength={80}
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="例如：工作账号"
-                />
-              </label>
-            )}
-            {!oauth && (
-              <label className="block text-xs text-muted">
-                API key
-                <input
+                  autoFocus
                   className={`${inputStyle} mt-1.5`}
                   type="password"
                   autoComplete="off"
                   required
                   value={key}
                   onChange={(event) => setKey(event.target.value)}
-                  placeholder="粘贴后保存，不会回显"
                 />
               </label>
+            )}
+            {(step === "name" || (step === "auth" && !account)) && (
+              <label className="block text-xs text-muted">
+                账号名
+                <input
+                  autoFocus={step === "name"}
+                  className={`${inputStyle} mt-1.5`}
+                  maxLength={80}
+                  required
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+            )}
+            {step === "assign" && (
+              <AgentAssignment
+                agents={agents}
+                selected={selected}
+                completed={completed}
+                provider={provider!}
+                accounts={accounts}
+                setSelected={(next) => {
+                  setSelected(next);
+                  setResult("");
+                }}
+              />
+            )}
+            {step === "assign" && provider && created && (
+              <p className="text-xs text-muted">
+                {accountLabel(provider, name, created)}
+                {method === "api_key" ? "已保存" : "已连接"}
+              </p>
+            )}
+            {result && (
+              <p role="status" className="text-xs">
+                {result.split("\n").map((line) => (
+                  <span
+                    key={line}
+                    className={`block ${line.startsWith("失败：") ? "text-[#9a5b4b]" : "text-muted"}`}
+                  >
+                    {line}
+                  </span>
+                ))}
+              </p>
             )}
             {error && (
               <p role="alert" className="text-xs text-[#9a5b4b]">
@@ -193,17 +376,46 @@ export function AccountDialog({
             )}
             <div className="flex justify-end gap-2 pt-1">
               <button
-                className="button secondary"
+                className="button !border-0 !bg-transparent !text-[#3c5344] hover:!bg-[#f1f5f2]"
                 type="button"
-                onClick={dismiss}
+                onClick={step === "assign" ? close : dismiss}
               >
-                取消
+                {step === "assign" ? (result ? "关闭" : "跳过") : "取消"}
               </button>
               <button className="button" type="submit" disabled={busy}>
-                {busy ? "提交中…" : oauth ? "开始登录" : "保存账号"}
+                {busy
+                  ? "处理中…"
+                  : step === "assign"
+                    ? failed
+                      ? "重试失败项"
+                      : "完成"
+                    : step === "auth" && account
+                      ? "开始登录"
+                      : "继续"}
               </button>
             </div>
           </form>
+        )}
+        {step === "login" && login && (
+          <div className="mt-5">
+            <LoginFlow
+              id={login}
+              finished={() => {
+                activeLogin.current = null;
+                void reload();
+                if (!account) {
+                  setCreated(login);
+                  setStep("assign");
+                }
+              }}
+              close={dismiss}
+            />
+          </div>
+        )}
+        {error && !["provider", "auth", "name", "assign"].includes(step) && (
+          <p role="alert" className="mt-3 text-xs text-[#9a5b4b]">
+            {error}
+          </p>
         )}
       </section>
     </div>,

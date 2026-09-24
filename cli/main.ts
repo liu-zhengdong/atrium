@@ -4,6 +4,7 @@ import { pad, width } from "./format.ts";
 import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
 import { accountCommands } from "./accounts.ts";
+import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 
@@ -37,6 +38,7 @@ export const strs = (values: Values, key: string) => {
 const commands: Record<string, Command> = {
   ...agentCommands,
   ...chatCommands,
+  connect: connectCommand,
   ...accountCommands,
   ...pluginCommands,
   ...resourceCommands,
@@ -97,6 +99,8 @@ export async function main(argv: string[]): Promise<number> {
         ? `${name} ${rest.shift() ?? ""}`.trim()
         : name;
     const command = commands[subcommand];
+    if (subcommand === "account login")
+      throw new Error("已由 atrium connect 代替");
     if (!command) throw new Error(`不认识的命令：${subcommand}\n${usage}`);
     let parsed: ReturnType<typeof parseArgs>;
     try {

@@ -1,5 +1,11 @@
 import type { Chat, SearchResults } from "../shared/schema.ts";
 
+export function messageOf(error: unknown) {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/^Error:\s*/, "")
+    .replaceAll("provider", "供应商");
+}
+
 export async function api<T>(
   path: string,
   method = "GET",

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "../api.ts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, messageOf } from "../api.ts";
 import type { Account } from "./types.ts";
 
 export function useAccounts() {
@@ -11,7 +11,7 @@ export function useAccounts() {
       setAccounts(await api<Account[]>("/accounts"));
       setError("");
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     }
   }, []);
   useEffect(() => {
@@ -25,7 +25,7 @@ export function useAccounts() {
       await reload();
       return value;
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -50,6 +50,8 @@ export function useLogin(id: string | null, finished: () => void) {
   const [events, setEvents] = useState<LoginEvent[]>([]);
   const [status, setStatus] = useState("pending");
   const [error, setError] = useState("");
+  const onFinished = useRef(finished);
+  onFinished.current = finished;
   useEffect(() => {
     if (!id) return;
     let active = true,
@@ -69,11 +71,11 @@ export function useLogin(id: string | null, finished: () => void) {
         setEvents((previous) => [...previous, ...result.events]);
         setStatus(result.status);
         if (result.done) {
-          finished();
+          if (result.status === "ready") onFinished.current();
           return;
         }
       } catch (e) {
-        if (active) setError(String(e));
+        if (active) setError(messageOf(e));
       }
       if (active) timer = window.setTimeout(() => void poll(), 900);
     }
@@ -82,14 +84,14 @@ export function useLogin(id: string | null, finished: () => void) {
       active = false;
       clearTimeout(timer);
     };
-  }, [id, finished]);
+  }, [id]);
   async function answer(value: string | null) {
     if (!id) return;
     try {
       await api(`/accounts/${id}/login/answer`, "POST", { value });
       setError("");
     } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     }
   }
   return { events, status, error, answer };

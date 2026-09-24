@@ -23,6 +23,7 @@ import { AccountLogin } from "./account-login.ts";
 import { repairAccountFiles } from "./account-repair.ts";
 import { AccountRefresh } from "./account-refresh.ts";
 import { AccountWorker } from "./account-worker-client.ts";
+import { ProviderDirectory } from "./provider-directory.ts";
 import { Problem, type Store } from "./store.ts";
 export {
   modePlan,
@@ -52,6 +53,7 @@ export class Accounts {
   private catalog: AccountCatalog;
   private refreshService: AccountRefresh;
   private loginService: AccountLogin;
+  private providers: ProviderDirectory;
   private knownSecrets = new Set<string>();
   constructor(
     private store: Store,
@@ -62,10 +64,24 @@ export class Accounts {
     this.root = this.files.root;
     const worker = new AccountWorker(this.files);
     this.refreshService = new AccountRefresh(store, this.files, worker);
-    this.loginService = new AccountLogin(store, this.files, worker);
+    this.providers = new ProviderDirectory(worker);
+    this.loginService = new AccountLogin(
+      store,
+      this.files,
+      worker,
+      this.providers,
+    );
     repairAccountFiles(store, this.files, this.catalog, (value) =>
       this.remember(value),
     );
+  }
+  providersList() {
+    return this.providers.list();
+  }
+  preloadProviders() {
+    void this.providers.list().catch((error: unknown) => {
+      console.warn("供应商目录预加载失败：", error);
+    });
   }
   credentialMode(id: string) {
     return this.catalog.credentialMode(id);

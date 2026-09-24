@@ -1,4 +1,6 @@
 import { classifyRefreshError } from "./account-error.mjs";
+import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
+import { sep } from "node:path";
 import {
   createAgentSession,
   SessionManager,
@@ -11,18 +13,70 @@ const send = (message) => process.send?.(message);
 let session;
 let failure = "未知错误";
 try {
+  let resourceLoader;
+  let registrations = [];
+  if (operation === "list") {
+    resourceLoader = new DefaultResourceLoader({
+      agentDir: directory,
+      cwd: directory,
+    });
+    await resourceLoader.reload();
+    const runtime = resourceLoader.getExtensions().runtime;
+    registrations = [
+      ...runtime.pendingProviderRegistrations.map(
+        ({ name, extensionPath }) => ({ id: name, extensionPath }),
+      ),
+      ...runtime.pendingNativeProviderRegistrations.map(
+        ({ provider, extensionPath }) => ({ id: provider.id, extensionPath }),
+      ),
+    ];
+  }
   const created = await createAgentSession({
     agentDir: directory,
     cwd: directory,
     sessionManager: SessionManager.inMemory(),
     noTools: "all",
+    ...(resourceLoader ? { resourceLoader } : {}),
   });
   session = created.session;
   if (created.extensionsResult.errors.length) {
-    failure = "Provider 插件加载失败";
-    throw new Error(failure);
+    if (operation === "list")
+      send({ kind: "warning", count: created.extensionsResult.errors.length });
+    else {
+      failure = "Provider 插件加载失败";
+      throw new Error(failure);
+    }
   }
-  if (operation === "refresh") {
+  if (operation === "list") {
+    const roots = created.extensionsResult.extensions
+      .filter((extension) => extension.sourceInfo.origin === "package")
+      .map((extension) => ({
+        path: extension.resolvedPath,
+        baseDir: extension.sourceInfo.baseDir,
+      }));
+    const providers = session.modelRuntime.getProviders().map((item) => {
+      const registration = registrations.find((entry) => entry.id === item.id);
+      const root =
+        registration &&
+        roots.find(
+          (entry) =>
+            entry.path === registration.extensionPath ||
+            registration.extensionPath.startsWith(entry.baseDir + sep),
+        );
+      const packagePath = root?.baseDir ?? null;
+      return {
+        id: item.id,
+        name: item.name,
+        methods: [
+          item.auth.oauth && "oauth",
+          item.auth.apiKey && "api_key",
+        ].filter(Boolean),
+        packagePath,
+      };
+    });
+    send({ kind: "list", providers });
+    send({ kind: "done" });
+  } else if (operation === "refresh") {
     const result = await session.modelRuntime.getAuth(provider, {
       minOAuthValidityMs: 30 * 60 * 1000,
     });

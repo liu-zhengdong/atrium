@@ -61,6 +61,8 @@ export function AccountsPage({
       )}
       {dialog && (
         <AccountDialog
+          agents={agents}
+          accounts={accounts ?? []}
           account={dialog === "new" ? undefined : dialog}
           close={() => setDialog(null)}
           reload={reload}

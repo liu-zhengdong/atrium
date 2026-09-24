@@ -1,7 +1,6 @@
 import { type ChildProcess } from "node:child_process";
-import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import { join } from "node:path";
 import {
   AccountFiles,
@@ -13,16 +12,17 @@ import {
   type Row,
 } from "./account-files.ts";
 import { AccountWorker } from "./account-worker-client.ts";
-import { defaultTemplate } from "./profile.ts";
+import { ProviderDirectory } from "./provider-directory.ts";
 import { Problem, type Store } from "./store.ts";
 
-const require = createRequire(import.meta.url);
 type Job = {
   child: ChildProcess | null;
   cancelled: boolean;
   events: unknown[];
   prompt?: { id: string; type: string };
   done: boolean;
+  created: boolean;
+  previous?: Pick<Row, "status" | "expires" | "last_error">;
 };
 export class AccountLogin {
   private jobs = new Map<number, Job>();
@@ -30,6 +30,7 @@ export class AccountLogin {
     private store: Store,
     private files: AccountFiles,
     private worker: Pick<AccountWorker, "run">,
+    private providers?: ProviderDirectory,
   ) {}
   private row(number: number) {
     return this.store.one<Row>(
@@ -37,10 +38,10 @@ export class AccountLogin {
       number,
     )!;
   }
-  login(provider: string, name: string) {
+  async login(provider: string, name: string) {
     provider = providerName.parse(provider);
-    if (!["openai-codex", "antigravity"].includes(provider))
-      throw new Problem(400, "此 provider 暂不支持账号库 OAuth 登录");
+    if (!this.providers) throw new Problem(500, "供应商目录不可用");
+    const entry = await this.providers.require(provider, "oauth");
     const number = Number(
       this.store.run(
         "INSERT INTO accounts(provider,name,type,status) VALUES(?,?,'oauth','pending')",
@@ -52,28 +53,24 @@ export class AccountLogin {
       directory = this.files.dir(number);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     privateWrite(authFile(directory), {});
-    if (provider === "antigravity") {
-      let path: string;
-      try {
-        path = require.resolve("pi-antigravity/package.json", {
-          paths: [join(defaultTemplate(), "npm")],
-        });
-      } catch {
-        this.store.run("DELETE FROM accounts WHERE number=?", number);
-        throw new Problem(400, "未安装 pi-antigravity，暂不支持分配");
-      }
+    if (entry.packagePath)
       privateWrite(join(directory, "settings.json"), {
-        packages: [path.replace(/\/package\.json$/, "")],
+        packages: [entry.packagePath],
       });
-    }
-    this.start(row, directory, () => {
-      const value = this.files.load(row);
-      this.store.run(
-        "UPDATE accounts SET status='ready',expires=?,last_error=NULL WHERE number=?",
-        value.type === "oauth" ? value.expires : null,
-        number,
-      );
-    });
+    this.start(
+      row,
+      directory,
+      () => {
+        const value = this.files.load(row);
+        this.store.run(
+          "UPDATE accounts SET status='ready',expires=?,last_error=NULL WHERE number=?",
+          value.type === "oauth" ? value.expires : null,
+          number,
+        );
+      },
+      undefined,
+      true,
+    );
     return { id: `k${number}` };
   }
   relogin(number: number, distribute: () => void) {
@@ -84,7 +81,7 @@ export class AccountLogin {
     const directory = this.files.dir(number);
     const staged = join(directory, `login-${randomUUID()}`);
     mkdirSync(staged, { mode: 0o700 });
-    if (row.provider === "antigravity")
+    if (existsSync(join(directory, "settings.json")))
       copyFileSync(
         join(directory, "settings.json"),
         join(staged, "settings.json"),
@@ -110,6 +107,8 @@ export class AccountLogin {
         distribute();
       },
       () => rmSync(staged, { recursive: true, force: true }),
+      false,
+      { status: row.status, expires: row.expires, last_error: row.last_error },
     );
     return { id: `k${number}` };
   }
@@ -118,6 +117,8 @@ export class AccountLogin {
     directory: string,
     success: () => void,
     cleanup?: () => void,
+    created = false,
+    previous?: Job["previous"],
   ) {
     const number = row.number;
     const job: Job = {
@@ -125,6 +126,8 @@ export class AccountLogin {
       cancelled: false,
       events: [],
       done: false,
+      created,
+      previous,
     };
     this.jobs.set(number, job);
     void this.worker
@@ -148,14 +151,19 @@ export class AccountLogin {
         job.done = true;
       })
       .catch(() => {
-        this.store.run(
-          "UPDATE accounts SET status='error',last_error=? WHERE number=?",
-          "登录未完成",
-          number,
-        );
+        if (!job.cancelled)
+          this.store.run(
+            "UPDATE accounts SET status='error',last_error=? WHERE number=?",
+            "登录未完成",
+            number,
+          );
         job.done = true;
       })
-      .finally(cleanup);
+      .finally(() => {
+        cleanup?.();
+        if (job.cancelled && job.created)
+          rmSync(directory, { recursive: true, force: true });
+      });
   }
   loginEvents(number: number, after: number) {
     const job = this.jobs.get(number);
@@ -186,10 +194,18 @@ export class AccountLogin {
     if (job && !job.done) {
       job.cancelled = true;
       job.child?.kill();
-      this.store.run(
-        "UPDATE accounts SET status='error',last_error='登录未完成' WHERE number=?",
-        number,
-      );
+      if (job.created) {
+        this.store.run("DELETE FROM accounts WHERE number=?", number);
+        rmSync(this.files.dir(number), { recursive: true, force: true });
+      } else if (job.previous) {
+        this.store.run(
+          "UPDATE accounts SET status=?,expires=?,last_error=? WHERE number=?",
+          job.previous.status,
+          job.previous.expires,
+          job.previous.last_error,
+          number,
+        );
+      }
     }
     return { cancelled: true };
   }

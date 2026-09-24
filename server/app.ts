@@ -73,7 +73,10 @@ export async function createApp(options: {
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
   const accounts = new Accounts(store, options.data);
-  if (options.runtime !== false) accounts.start();
+  if (options.runtime !== false) {
+    accounts.start();
+    accounts.preloadProviders();
+  }
   const app = Fastify({
     logger: { level: "warn" },
     bodyLimit: 11 * 1024 * 1024,
@@ -209,6 +212,7 @@ export async function createApp(options: {
       .parse(request.body) satisfies AgentDefaults;
     return saveAgentDefaults(options.data, input);
   });
+  app.get("/api/providers", () => accounts.providersList());
   app.get("/api/accounts", () => accounts.list());
   app.post("/api/accounts", (request) => {
     const { provider, name, key } = z

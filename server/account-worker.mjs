@@ -76,6 +76,45 @@ try {
     });
     send({ kind: "list", providers });
     send({ kind: "done" });
+  } else if (operation === "validate") {
+    const model = session.modelRuntime.getModels(provider)[0];
+    if (!model) {
+      send({
+        kind: "validation",
+        status: "skipped",
+        reason: "此供应商没有可用模型，无法校验",
+      });
+    } else {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const response = await session.modelRuntime.completeSimple(
+          model,
+          {
+            messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+          },
+          { maxTokens: 1, signal: controller.signal },
+        );
+        if (controller.signal.aborted || response.stopReason === "aborted")
+          throw new Error("请求超时");
+        if (response.stopReason === "error")
+          throw new Error(response.errorMessage || "请求失败");
+        send({ kind: "validation", status: "verified" });
+      } catch (error) {
+        const text = String(error?.message ?? error);
+        const status =
+          /\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key|authentication/i.test(
+            text,
+          )
+            ? "rejected"
+            : "unverified";
+        // The response may echo the submitted key; the parent also redacts it.
+        send({ kind: "validation", status, reason: text.slice(0, 600) });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    send({ kind: "done" });
   } else if (operation === "refresh") {
     const result = await session.modelRuntime.getAuth(provider, {
       minOAuthValidityMs: 30 * 60 * 1000,

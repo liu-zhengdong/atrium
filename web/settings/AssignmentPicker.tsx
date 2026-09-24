@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { api } from "../api.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import type { Account, Credentials } from "./types.ts";
+import { assignedAccountLabel } from "../../shared/providers.ts";
 
 export function AssignmentPicker({
   account,
@@ -101,12 +102,20 @@ export function AssignmentPicker({
             key={agent.id}
             className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 hover:bg-soft"
           >
-            <button
-              className="min-w-0 truncate text-left text-xs text-accent-strong hover:underline"
-              onClick={() => openAgent(agent.id)}
-            >
-              {agent.name} <span className="text-muted">{agent.ref}</span>
-            </button>
+            <div className="min-w-0 truncate text-xs">
+              <button
+                className="text-accent-strong hover:underline"
+                onClick={() => openAgent(agent.id)}
+              >
+                {agent.name} <span className="text-muted">{agent.ref}</span>
+              </button>
+              {assignedAccountLabel(agent.ref, account.provider, accounts) && (
+                <span className="ml-1 text-muted">
+                  · 当前{" "}
+                  {assignedAccountLabel(agent.ref, account.provider, accounts)}
+                </span>
+              )}
+            </div>
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted">
               <input
                 type="checkbox"

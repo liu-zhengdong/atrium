@@ -11,6 +11,7 @@ import { api, messageOf } from "../api.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import {
   accountLabel,
+  assignedAccountLabel,
   assignmentFailure,
   assignmentSummary,
   currentAssignment,
@@ -22,10 +23,13 @@ import type { Account } from "./types.ts";
 import { LoginFlow } from "./LoginFlow.tsx";
 import { ProviderPicker } from "./ProviderPicker.tsx";
 import { AgentAssignment } from "./AgentAssignment.tsx";
+import { CustomAccountForm } from "./CustomAccountForm.tsx";
+import type { CustomConfig } from "../../server/custom-providers.ts";
 
 const inputStyle =
   "field !border-transparent !bg-[#f1f5f2] focus:!border-[#b9c9bd] focus:!bg-white focus:!shadow-none";
-type Step = "method" | "provider" | "auth" | "name" | "login" | "assign";
+type Step =
+  "method" | "provider" | "auth" | "name" | "login" | "assign" | "custom";
 
 export function AccountDialog({
   account,
@@ -60,6 +64,21 @@ export function AccountDialog({
   const [added, setAdded] = useState<string[]>([]);
   const [replaced, setReplaced] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [checkingFailed, setCheckingFailed] = useState("");
+  const [custom, setCustom] = useState<CustomConfig | null>(null);
+  useEffect(() => {
+    if (account?.type === "api_key")
+      void api<CustomConfig | null>(
+        `/custom/${encodeURIComponent(account.provider)}`,
+      )
+        .then((config) => {
+          if (config) {
+            setCustom(config);
+            setStep("custom");
+          }
+        })
+        .catch(() => {});
+  }, [account]);
   const [error, setError] = useState("");
   const loadProviders = useCallback(async () => {
     setError("");
@@ -110,7 +129,7 @@ export function AccountDialog({
   const back = () => {
     setError("");
     setStep(
-      step === "provider"
+      step === "provider" || step === "custom"
         ? "method"
         : step === "auth"
           ? "provider"
@@ -142,11 +161,23 @@ export function AccountDialog({
                 provider: provider.id,
                 name: accountName,
               })
-            : await api<{ id: string }>("/accounts", "POST", {
+            : await api<{
+                id: string | null;
+                validation: { status: string; reason?: string };
+              }>("/accounts", "POST", {
                 provider: provider.id,
                 name: accountName,
                 key: key.trim(),
+                ...(checkingFailed ? { allowUnverified: true } : {}),
               });
+        if (!result.id) {
+          setCheckingFailed(
+            "validation" in result
+              ? (result.validation.reason ?? "没能校验")
+              : "没能校验",
+          );
+          return;
+        }
         if (method === "oauth") {
           if (dismissed.current) {
             await api(`/accounts/${result.id}/login/cancel`, "POST");
@@ -161,6 +192,21 @@ export function AccountDialog({
           setStep("assign");
           await reload();
         }
+      } else if (step === "auth" && account && account.type === "api_key") {
+        if (!key.trim()) throw new Error("API Key 不能为空");
+        const result = await api<{
+          updated: boolean;
+          validation: { reason?: string };
+        }>(`/accounts/${account.id}/key`, "PUT", {
+          key: key.trim(),
+          ...(checkingFailed ? { allowUnverified: true } : {}),
+        });
+        if (!result.updated) {
+          setCheckingFailed(result.validation.reason ?? "没能校验");
+          return;
+        }
+        await reload();
+        close();
       } else if (step === "auth" && account) {
         const result = await api<{ id: string }>(
           `/accounts/${account.id}/login`,
@@ -191,7 +237,7 @@ export function AccountDialog({
             done.push(id);
             if (previous)
               newReplaced.push(
-                `${agent.name}（${agent.ref}）：${previous} → ${created}`,
+                `${agent.name}（${agent.ref}）：${assignedAccountLabel(agent.ref, provider.id, accounts)} → ${name}（${created}）`,
               );
             else newAdded.push(`${agent.name}（${agent.ref}）`);
           } catch (e) {
@@ -230,16 +276,17 @@ export function AccountDialog({
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            {!account && ["provider", "auth", "name"].includes(step) && (
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="返回上一步"
-                onClick={back}
-              >
-                <ChevronLeft size={18} />
-              </button>
-            )}
+            {!account &&
+              ["provider", "auth", "name", "custom"].includes(step) && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="返回上一步"
+                  onClick={back}
+                >
+                  <ChevronLeft size={18} />
+                </button>
+              )}
             <h2 className="m-0 text-base font-medium">{title}</h2>
           </div>
           <button
@@ -284,7 +331,37 @@ export function AccountDialog({
                 </span>
               </button>
             ))}
+            <button
+              type="button"
+              className="w-full rounded-xl bg-[#f3f6f3] px-4 py-3 text-left text-sm hover:bg-[#e9f0ea]"
+              onClick={() => setStep("custom")}
+            >
+              自定义（OpenAI 兼容）
+            </button>
           </div>
+        )}
+        {step === "custom" && (
+          <CustomAccountForm
+            key={account?.id ?? "new"}
+            account={account}
+            initial={custom ?? undefined}
+            onSaved={async () => {
+              await reload();
+              close();
+            }}
+            onCreated={async (id, label, ref) => {
+              setProvider({
+                id,
+                name: id,
+                methods: ["api_key"],
+                packagePath: null,
+              });
+              setName(label);
+              setCreated(ref);
+              setStep("assign");
+              await reload();
+            }}
+          />
         )}
         {step === "provider" && (
           <ProviderPicker
@@ -311,7 +388,7 @@ export function AccountDialog({
             onSubmit={(event) => void submit(event)}
             className="mt-5 space-y-4"
           >
-            {step === "auth" && !account && (
+            {step === "auth" && (!account || account.type === "api_key") && (
               <label className="block text-xs text-muted">
                 API Key
                 <input
@@ -321,7 +398,10 @@ export function AccountDialog({
                   autoComplete="off"
                   required
                   value={key}
-                  onChange={(event) => setKey(event.target.value)}
+                  onChange={(event) => {
+                    setKey(event.target.value);
+                    setCheckingFailed("");
+                  }}
                 />
               </label>
             )}
@@ -369,6 +449,11 @@ export function AccountDialog({
                 ))}
               </p>
             )}
+            {checkingFailed && (
+              <p role="alert" className="text-xs text-[#9a5b4b]">
+                {checkingFailed}。继续将保存为「未校验」。
+              </p>
+            )}
             {error && (
               <p role="alert" className="text-xs text-[#9a5b4b]">
                 {error}
@@ -384,14 +469,18 @@ export function AccountDialog({
               </button>
               <button className="button" type="submit" disabled={busy}>
                 {busy
-                  ? "处理中…"
+                  ? method === "api_key"
+                    ? "正在校验…"
+                    : "处理中…"
                   : step === "assign"
                     ? failed
                       ? "重试失败项"
                       : "完成"
-                    : step === "auth" && account
+                    : step === "auth" && account?.type === "oauth"
                       ? "开始登录"
-                      : "继续"}
+                      : checkingFailed
+                        ? "仍然保存"
+                        : "继续"}
               </button>
             </div>
           </form>

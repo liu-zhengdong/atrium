@@ -12,6 +12,7 @@ export const exitCodes = {
   model_not_found: 3,
   not_found: 3,
   conflict: 4,
+  validation_failed: 4,
   already_assigned: 4,
   service_unavailable: 5,
   timeout: 124,

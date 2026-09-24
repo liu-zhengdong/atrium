@@ -340,7 +340,7 @@ export class TraceStore {
     const actions = this.store.all<Action>(
       `SELECT id,runtime_id,generation,kind,name,title,input,output,at,ended_at,state,truncated FROM trace_actions
        WHERE agent_id=? AND (kind IN ('delivery','run_start','run_end')
-       OR (kind='tool' AND name='mcp' AND title='调用 MCP · send_message'))
+       OR (kind='tool' AND name='mcp'))
        ORDER BY id`,
       agent,
     );
@@ -375,7 +375,9 @@ export class TraceStore {
           !call ||
           typeof call !== "object" ||
           (call as Record<string, unknown>).server !== "atrium" ||
-          (call as Record<string, unknown>).tool !== "send_message"
+          !["send_message", "atrium_send_message"].includes(
+            (call as Record<string, unknown>).tool as string,
+          )
         )
           continue;
         // Proxy tool output is the JSON returned by Atrium send_message. Never

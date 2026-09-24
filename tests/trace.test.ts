@@ -350,14 +350,18 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   let seq = 0;
   const emit = (kind: RuntimeEventPage["items"][number]["kind"], extra = {}) =>
     traces.ingest(agent.id, page(target, [event(++seq, kind, extra)]));
-  const speak = (chatId: string, body: string) => {
+  const speak = (
+    chatId: string,
+    body: string,
+    tool: "send_message" | "atrium_send_message" = "atrium_send_message",
+  ) => {
     const callId = `t${seq}`;
     emit("tool_start", {
       name: "mcp",
       callId,
       text: JSON.stringify({
         server: "atrium",
-        tool: "send_message",
+        tool,
         args: { chat_id: store.chatRef(chatId), body },
       }),
     });
@@ -397,6 +401,8 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   const guideTrace = traces.page(agent.id).items.at(-1)!.id;
   emit("run_start");
   const guide = speak(direct.id, "我已接入");
+  // The title is presentation text, not a stable protocol field.
+  store.run("UPDATE trace_actions SET title='已换过标题' WHERE kind='tool'");
   emit("run_end");
   assert.deepEqual((await read(direct.id))[0]?.trigger, {
     label: "Atrium 投递：接入说明",
@@ -438,7 +444,7 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   emit("delivery", { name: "外部订阅", text: "事件" });
   const externalTrace = traces.page(agent.id).items.at(-1)!.id;
   emit("run_start");
-  const external = speak(direct.id, "外部事件触发");
+  const external = speak(direct.id, "外部事件触发", "send_message");
   speak(group.id, "群内发言");
   emit("run_end");
   assert.deepEqual(

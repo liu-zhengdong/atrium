@@ -13,6 +13,7 @@ import {
   text,
 } from "@clack/prompts";
 import type { Command } from "./main.ts";
+import { str, strs } from "./main.ts";
 import { connect } from "./service.ts";
 import { roster } from "./agents.ts";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
@@ -121,15 +122,78 @@ async function awaitLogin(
 }
 
 export const connectCommand: Command = {
-  args: "[provider]",
+  args: "[provider] [--custom 名称 --base-url URL --api-key KEY --model ID …]",
+  options: {
+    custom: { type: "string" },
+    "base-url": { type: "string" },
+    "api-key": { type: "string" },
+    model: { type: "string", multiple: true },
+  },
   about: "交互连接供应商账号并可分配给 Agent",
   positionals: [0, 1],
-  async run({ positionals: [reference] }) {
+  async run({ positionals: [reference], values, json }) {
+    if (str(values, "custom")) {
+      const client = await connect(true);
+      const provider = str(values, "custom")!;
+      const baseUrl =
+        str(values, "base-url") ??
+        (process.stdin.isTTY ? input(await text({ message: "Base URL" })) : "");
+      const key =
+        str(values, "api-key") ??
+        (process.stdin.isTTY
+          ? input(await password({ message: "API Key（本地可留空）" }))
+          : "");
+      let models = strs(values, "model");
+      if (!models.length && baseUrl) {
+        try {
+          const found = await client.post<{ models: string[] }>(
+            "/custom/models",
+            { config: { baseUrl, models: [{ id: "placeholder" }] }, key },
+          );
+          if (process.stdin.isTTY && found.models.length)
+            models = input(
+              await autocompleteMultiselect({
+                message: "模型（可多选）",
+                options: found.models.map((id) => ({ value: id, label: id })),
+              }),
+            );
+        } catch (error) {
+          if (!process.stdin.isTTY) throw error;
+          log.warn(`模型列表不可用：${String(error)}；请手填模型`);
+        }
+      }
+      if (!models.length && process.stdin.isTTY)
+        models = [input(await text({ message: "模型 ID" }))];
+      if (!baseUrl || !models.length)
+        throw new Error("需要 --base-url 和至少一个 --model");
+      const checking = json ? null : spinner();
+      checking?.start("正在校验供应商…");
+      let saved: { id: string };
+      try {
+        saved = await client.post("/accounts", {
+          provider,
+          name: provider,
+          key,
+          custom: { baseUrl, models: models.map((id) => ({ id })) },
+        });
+        checking?.stop();
+      } catch (error) {
+        checking?.error("校验失败");
+        throw error;
+      }
+      const next = `分配给身份：atrium assign <身份> ${saved.id}`;
+      if (json) console.log(JSON.stringify({ id: saved.id, provider, next }));
+      else {
+        log.success(`${provider}（${saved.id}）已保存`);
+        outro(next);
+      }
+      return 0;
+    }
     if (!process.stdin.isTTY || !process.stdout.isTTY)
       throw new Error(
         "connect 需要交互终端；脚本请使用 atrium account add <provider> --key -",
       );
-    const client = await connect();
+    const client = await connect(true);
     const reading = spinner();
     reading.start("正在读取供应商…");
     let providers: ProviderEntry[];
@@ -222,13 +286,39 @@ export const connectCommand: Command = {
         }),
       ).trim();
       if (method === "api_key") {
-        id = (
-          await client.post<{ id: string }>("/accounts", {
-            provider: provider.id,
-            name,
-            key: key!.trim(),
-          })
-        ).id;
+        const payload = { provider: provider.id, name, key: key!.trim() };
+        const checking = spinner();
+        checking.start("正在校验 API Key…");
+        let saved: {
+          id: string | null;
+          validation: { status: string; reason?: string };
+        };
+        try {
+          saved = await client.post("/accounts", payload);
+          checking.stop();
+        } catch (error) {
+          checking.error("校验失败");
+          throw error;
+        }
+        if (!saved.id) {
+          const proceed = input(
+            await select({
+              message: `${saved.validation.reason ?? "没能校验"}；仍然保存为未校验？`,
+              options: [
+                { value: true, label: "仍然保存" },
+                { value: false, label: "返回" },
+              ],
+            }),
+          );
+          if (!proceed) return 0;
+          saved = await client.post("/accounts", {
+            ...payload,
+            allowUnverified: true,
+          });
+        }
+        id = saved.id!;
+        if (saved.validation.status !== "verified")
+          log.warn(`账号未校验：${saved.validation.reason ?? "需要额外配置"}`);
       } else {
         id = (
           await client.post<{ id: string }>("/accounts/login", {

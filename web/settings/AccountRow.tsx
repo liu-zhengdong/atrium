@@ -68,6 +68,11 @@ export function AccountRow({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {account.type === "api_key" && account.status === "error" && (
+            <button className="button secondary !text-xs" onClick={relogin}>
+              更换 Key
+            </button>
+          )}
           {account.type === "oauth" &&
             (account.status === "error" ||
               (account.expires !== null && account.expires < Date.now())) && (

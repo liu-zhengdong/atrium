@@ -5,12 +5,15 @@ import {
   type Attachment,
   type BoxMessage,
   type Chat,
+  type ChatDeletion,
+  type ChatDeletionResult,
   type Message,
   type Overview,
   type Page,
   type SearchResults,
 } from "../shared/schema.ts";
 import { isUserRef, type UserProfile } from "../shared/user.ts";
+import { filesLabel } from "../shared/group.ts";
 import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, strs, type Command } from "./main.ts";
@@ -374,6 +377,49 @@ const kick: Command = {
   },
 };
 
+/** 删除群前的预览：不带 --yes 只报将删掉什么，并给出带上确认的下一步命令。 */
+const disband: Command = {
+  args: "群名 [--yes]",
+  about: "删除群及其全部历史；不带 --yes 只预览将删掉什么",
+  options: { yes: { type: "boolean", default: false } },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values, json }) {
+    const client = await connect();
+    const view = await roster(client);
+    const chat = findChat(view, reference!);
+    if (chat.kind !== "group")
+      throw new Problem(
+        400,
+        `${chat.name}（${chat.ref}）是私聊，只有群可以删除`,
+        "validation_failed",
+        closest(
+          reference!,
+          view.chats.filter((item) => item.kind === "group"),
+        ),
+      );
+    const target = await client.get<ChatDeletion>(`/chats/${chat.id}/deletion`);
+    if (values.yes !== true)
+      throw new Problem(
+        400,
+        `将删除 ${target.name}（${target.ref}）：成员 ${target.members} 位、消息 ${target.messages} 条、附件 ${target.attachments} 个、共享文件 ${filesLabel(target)} 个。删除后无法恢复；各身份在自己 Pi 会话里读到的内容删不掉。`,
+        "usage",
+        undefined,
+        `atrium disband ${target.ref} --yes`,
+      );
+    const result = await client.delete<ChatDeletionResult>(
+      `/chats/${chat.id}`,
+      { confirm: target.name },
+    );
+    recordNext("看剩下的会话：atrium chats");
+    if (json) return printJson(result);
+    console.log(
+      `已删除 ${result.name}（${result.ref}）· 消息 ${result.messages} 条 · 成员 ${result.members} 位 · 附件 ${result.attachments} 个 · 共享文件 ${filesLabel(result)} 个`,
+    );
+    if (result.failed.length)
+      console.log(`注意：${result.failed.join("、")} 未能删除，请手动清理`);
+  },
+};
+
 const box: Command = {
   args: "名称 [--pending] [--after 序号]",
   about: "看一位身份的消息箱（用户审阅，不改变已读）",
@@ -493,6 +539,7 @@ export const chatCommands: Record<string, Command> = {
   group,
   invite,
   kick,
+  disband,
   box,
   notify,
   search,

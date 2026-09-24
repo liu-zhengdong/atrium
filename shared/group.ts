@@ -20,3 +20,13 @@ export const groupProfileInput = z
     notice: z.string().trim().max(NOTICE_MAX),
   })
   .strict();
+
+/** 删除群前的共享目录文件数；目录太大时列表只数到上限，带 + 标出来。 */
+export function filesLabel(deletion: {
+  files: number;
+  files_truncated: boolean;
+}): string {
+  return deletion.files_truncated
+    ? `${deletion.files}+`
+    : String(deletion.files);
+}

@@ -404,6 +404,50 @@ test(
     assert.match(await refused("invite", "评审组", "沈默"), clash);
     assert.match(await ok("read", "c2"), /按名字发/, "短号仍然直达");
 
+    // 删除群：不带 --yes 只预览；确认后群、消息、成员关系与提醒一起消失
+    assert.match(await refused("disband", "评审组"), clash, "撞名时不猜");
+    assert.match(
+      await refused("disband", "c2"),
+      /将删除 评审组（c2）：成员 2 位、消息 \d+ 条、附件 0 个、共享文件 0 个[\s\S]*修正：atrium disband c2 --yes/,
+      "不带 --yes 只预览，并给出带上确认的下一步命令",
+    );
+    const preview = await f.cli("disband", "c2", "--json");
+    assert.equal(preview.code, 2, "预览不上屏时也算没执行");
+    assert.deepEqual(
+      (JSON.parse(preview.stdout) as { next: string }).next,
+      "atrium disband c2 --yes",
+    );
+    assert.match(await ok("read", "c2"), /按名字发/, "预览不删任何东西");
+    assert.match(await refused("disband", "c1"), /是私聊，只有群可以删除/);
+    assert.match(
+      await ok("disband", "c2", "--yes"),
+      /已删除 评审组（c2）· 消息 \d+ 条 · 成员 2 位/,
+    );
+    assert.match(await refused("read", "c2"), /没有叫「c2」的会话/);
+    assert.match(await refused("disband", "c2", "--yes"), /没有叫「c2」的会话/);
+    const remaining = await ok("chats");
+    assert.doesNotMatch(remaining, /^c2\s/m, "要删的群从列表里消失");
+    assert.match(remaining, /^c4\s+评审组\s+群/m, "另一个同名群不受影响");
+    assert.doesNotMatch(await ok("search", "开工"), /开工了/);
+    // 回执按新约定：上屏给下一步命令，--json 是 {ok, result, next}，next 是能直接跑的命令
+    assert.match(
+      await ok("disband", "c4", "--yes"),
+      /已删除 评审组（c4）[\s\S]*看剩下的会话：atrium chats/,
+    );
+    await ok("group", "临时组", "林岚");
+    const receipt = await f.cli("disband", "临时组", "--yes", "--json");
+    assert.equal(receipt.code, 0);
+    const json = JSON.parse(receipt.stdout) as {
+      ok: boolean;
+      result: { name: string };
+      next: string;
+    };
+    assert.deepEqual(
+      { ok: json.ok, name: json.result.name, next: json.next },
+      { ok: true, name: "临时组", next: "atrium chats" },
+      "删除回执给结果与下一步命令",
+    );
+
     // 帮助列出全部命令
     const help = await ok("--help");
     for (const name of [
@@ -423,6 +467,7 @@ test(
       "group",
       "invite",
       "kick",
+      "disband",
       "box",
       "notify",
       "search",

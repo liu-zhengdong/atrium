@@ -36,7 +36,12 @@ import {
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 import { readUser, resolveActor, writeUser } from "./users.ts";
-import { removeMember, updateGroup } from "./groups.ts";
+import {
+  deletionPreview,
+  disbandGroup,
+  removeMember,
+  updateGroup,
+} from "./groups.ts";
 import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
@@ -912,6 +917,19 @@ export async function createApp(options: {
     const chat = updateGroup(store, agentParams(request), request.body);
     changed();
     return chat;
+  });
+  // 删群是危险操作：先给预览，确认群名一致后才在同一个事务里删掉全部历史。
+  app.get("/api/chats/:id/deletion", (request) =>
+    deletionPreview(store, agentParams(request)),
+  );
+  app.delete("/api/chats/:id", (request) => {
+    const { confirm } = z
+      .object({ confirm: z.string() })
+      .strict()
+      .parse(request.body);
+    const result = disbandGroup(store, agentParams(request), confirm);
+    changed();
+    return result;
   });
   // 聊天记录：会话、发送者、时间范围三个筛选两边共用，内容形状不同所以分两条。
   app.get("/api/records/messages", (request) =>

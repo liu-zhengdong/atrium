@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readdirSync,
   realpathSync,
+  rmSync,
   statSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -20,8 +21,8 @@ export function spacesDir(sqlitePath: string): string | null {
   return join(dirname(sqlitePath), "groups");
 }
 
-/** full 解析软链接后仍在 root 里时返回真实路径，否则返回 null。 */
-function within(root: string, full: string): string | null {
+/** full 解析软链接后仍在 root 里时返回真实路径，否则返回 null。root 须是真实路径。 */
+export function insideRoot(root: string, full: string): string | null {
   const real = realpathSync(full);
   return real === root || real.startsWith(root + sep) ? real : null;
 }
@@ -64,7 +65,7 @@ export class GroupSpaces {
         const full = join(current, entry.name);
         let real: string | null;
         try {
-          real = within(root, full);
+          real = insideRoot(root, full);
         } catch {
           continue; // 断开的软链接
         }
@@ -106,9 +107,23 @@ export class GroupSpaces {
       throw new Problem(400, "只能读共享目录里的文件，用目录内的相对路径");
     const full = join(dir, path);
     if (!existsSync(full)) throw new Problem(404, "文件不存在");
-    const real = within(realpathSync(dir), full);
+    const real = insideRoot(realpathSync(dir), full);
     if (!real) throw new Problem(400, "这个文件在共享目录之外");
     if (!statSync(real).isFile()) throw new Problem(400, "这不是文件");
     return real;
+  }
+
+  /**
+   * 删除群的共享目录：整个目录树一起删。解析软链接后必须仍在数据目录里，
+   * 越界只报错不动手；目录不存在返回 false。
+   */
+  remove(chat: Pick<Chat, "kind" | "ref">): boolean {
+    if (!this.root || chat.kind !== "group") return false;
+    const dir = join(this.root, chat.ref);
+    if (!existsSync(dir)) return false;
+    const real = insideRoot(realpathSync(this.root), dir);
+    if (!real) throw new Problem(400, "共享目录不在数据目录内，已跳过删除");
+    rmSync(real, { recursive: true, force: true });
+    return true;
   }
 }

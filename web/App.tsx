@@ -346,6 +346,11 @@ export function App() {
                 revision={revision}
                 close={() => setGroupOpen(false)}
                 changed={refresh}
+                deleted={() => {
+                  setGroupOpen(false);
+                  setChatId(null);
+                  refresh();
+                }}
                 openRecords={() => openRecords(active.id)}
                 openAgent={(id) => {
                   showTrace(id);

@@ -15,6 +15,7 @@ import {
   join,
   relative,
 } from "node:path";
+import { insideRoot } from "./spaces.ts";
 
 export const MAX_ATTACHMENTS = 10;
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -185,10 +186,15 @@ export class AttachmentFiles {
     if (!bytes) throw new Error("附件不存在");
     return bytes;
   }
+  /** 删除附件文件：解析软链接后必须仍在附件目录里，越界不删。 */
   remove(id: string) {
     if (this.dir) {
       const path = join(this.dir, id);
-      if (existsSync(path)) unlinkSync(path);
+      if (existsSync(path)) {
+        const real = insideRoot(realpathSync(this.dir), path);
+        if (!real) throw new Error("附件路径不在附件目录内");
+        unlinkSync(real);
+      }
     }
     this.memory.delete(id);
   }

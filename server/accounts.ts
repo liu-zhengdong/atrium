@@ -189,11 +189,13 @@ export class Accounts {
       throw new Problem(
         400,
         `${provider} 校验失败：${validation.reason ?? "请求失败"}`,
+        "validation_failed",
       );
     if (validation.status === "rejected")
       throw new Problem(
         400,
         `${entry.name} 拒绝了 API Key：${validation.reason}`,
+        "validation_failed",
       );
     if (validation.status === "unverified" && !allowUnverified)
       return { validation, id: null };
@@ -257,11 +259,13 @@ export class Accounts {
       throw new Problem(
         400,
         `${row.provider} 校验失败：${validation.reason ?? "请求失败"}`,
+        "validation_failed",
       );
     if (validation.status === "rejected")
       throw new Problem(
         400,
         `${entry.name} 拒绝了 API Key：${validation.reason}`,
+        "validation_failed",
       );
     if (validation.status === "unverified" && !allowUnverified)
       return { validation, updated: false };

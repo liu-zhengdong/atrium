@@ -641,10 +641,9 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
           url: "/api/accounts",
           headers,
           payload: {
-            provider: "deepseek",
+            provider: "amazon-bedrock",
             name,
             key: name,
-            allowUnverified: true,
           },
         })
       ).json().id as string;
@@ -661,8 +660,9 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
     assert.equal((await assign(next)).statusCode, 409);
     assert.equal((await assign("k999999", true)).statusCode, 404);
     assert.equal(
-      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8")).deepseek
-        .key,
+      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[
+        "amazon-bedrock"
+      ].key,
       "old",
     );
     store.run(
@@ -670,8 +670,9 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
     );
     assert.equal((await assign(next, true)).statusCode, 500);
     assert.equal(
-      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8")).deepseek
-        .key,
+      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[
+        "amazon-bedrock"
+      ].key,
       "old",
     );
     store.run("DROP TRIGGER deny_swap");
@@ -684,8 +685,9 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
       agent.ref,
     ]);
     assert.equal(
-      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8")).deepseek
-        .key,
+      JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[
+        "amazon-bedrock"
+      ].key,
       "next",
     );
   } finally {
@@ -709,10 +711,9 @@ test("account HTTP responses omit credentials even on malformed stored JSON", as
       url: "/api/accounts",
       headers,
       payload: {
-        provider: "deepseek",
+        provider: "amazon-bedrock",
         name: "http",
         key,
-        allowUnverified: true,
       },
     });
     assert.equal(created.statusCode, 200);
@@ -726,7 +727,7 @@ test("account HTTP responses omit credentials even on malformed stored JSON", as
     const id = created.json().id as string;
     writeFileSync(
       join(dir, "accounts", id, "auth.json"),
-      `{ "deepseek": "${key}`,
+      `{ "amazon-bedrock": "${key}`,
     );
     const agent = store.createAgent("测试", dir).agent;
     const directory = join(dir, "identity");

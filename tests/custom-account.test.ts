@@ -83,6 +83,10 @@ test("自定义供应商拒绝时不保存；分配/编辑/撤销/删除仅触�
       f.accounts.addValidated("local", "local", "BAD_KEY", false, f.config),
       /DENIED_CODE_42/,
     );
+    await assert.rejects(
+      f.accounts.addValidated("local", "local", "BAD_KEY", true, f.config),
+      /DENIED_CODE_42/,
+    );
     assert.deepEqual(f.accounts.list(), []);
     const modelFile = join(f.identity, "models.json");
     const cursor = {

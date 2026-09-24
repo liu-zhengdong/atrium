@@ -21,7 +21,6 @@ export function AssignmentPicker({
   const [pending, setPending] = useState<{
     agent: Agent;
     previous?: Account;
-    shared: boolean;
   } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,7 +57,6 @@ export function AssignmentPicker({
           setPending({
             agent,
             previous,
-            shared: credentials.mode === "shared",
           });
         else
           await change(() =>
@@ -148,11 +146,6 @@ export function AssignmentPicker({
                   ? `将用「${account.name}」替换 ${pending.agent.name} 的账号「${pending.previous.name}」（${account.provider}）。`
                   : `将把 ${account.name} 分配给 ${pending.agent.name}。`}
               </p>
-              {pending.shared && (
-                <p className="mb-0 mt-2 text-muted">
-                  该 Agent 将不再使用你个人 Pi 的登录，只用分配给它的账号。
-                </p>
-              )}
               <div className="mt-3 flex gap-2">
                 <button
                   className="button"

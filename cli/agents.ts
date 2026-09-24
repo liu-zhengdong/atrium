@@ -292,9 +292,9 @@ function modelReport(name: string, state: ModelState, notes: string[] = []) {
     ...(state.options.length
       ? [
           "可选（provider: 模型）：",
-          ...[...groupModelsByProvider(state.options)].map(
-            ([provider, models]) => `  ${provider}: ${models.join(" ")}`,
-          ),
+          ...[
+            ...groupModelsByProvider(state.options.map((option) => option.id)),
+          ].map(([provider, models]) => `  ${provider}: ${models.join(" ")}`),
         ]
       : ["还没取到过这个身份的可选模型，启动它之后再看这里就有了。"]),
   ].join("\n");

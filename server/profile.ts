@@ -251,6 +251,32 @@ export function readIdentityModel(directory: string): ModelSpec | null {
   );
 }
 
+const modelKeys = [
+  "defaultProvider",
+  "defaultModel",
+  "defaultThinkingLevel",
+] as const;
+
+/** 切换运行中的模型失败时，只恢复模型字段，不覆盖同时修改的其他设置。 */
+export function snapshotIdentityModel(directory: string) {
+  const settings = readJson(settingsFile(directory));
+  return Object.fromEntries(
+    modelKeys
+      .filter((key) => Object.hasOwn(settings, key))
+      .map((key) => [key, settings[key]]),
+  );
+}
+export function restoreIdentityModel(
+  directory: string,
+  previous: Record<string, unknown>,
+) {
+  const file = settingsFile(directory);
+  const settings = readJson(file);
+  for (const key of modelKeys) delete settings[key];
+  Object.assign(settings, previous);
+  writeSettings(file, settings);
+}
+
 /** 整体替换这三个键：输入的写法就是存下来的写法，不留上一次的思考强度。 */
 export function writeIdentityModel(directory: string, spec: ModelSpec) {
   const file = settingsFile(directory);

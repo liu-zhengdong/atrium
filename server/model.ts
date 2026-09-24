@@ -7,26 +7,39 @@ import {
   formatModelSpec,
   groupModelsByProvider,
   type ModelSpec,
+  type ModelOption,
 } from "../shared/model.ts";
 import { Problem } from "./problem.ts";
 import { Store } from "./store.ts";
 import { readIdentityModel, writeIdentityModel } from "./profile.ts";
 
 /** 上次取到的可选模型。身份离线时问不到 pi，界面和命令靠这份列出来。 */
-export function cachedModels(store: Store, id: string): string[] {
+export function cachedModels(store: Store, id: string): ModelOption[] {
   const row = store.one<{ models: string | null }>(
     "SELECT models FROM agents WHERE id=?",
     id,
   );
   if (!row?.models) return [];
   try {
-    const parsed = z.array(z.string()).safeParse(JSON.parse(row.models));
-    return parsed.success ? parsed.data : [];
+    const parsed = z
+      .array(
+        z.union([z.string(), z.object({ id: z.string(), name: z.string() })]),
+      )
+      .safeParse(JSON.parse(row.models));
+    return parsed.success
+      ? parsed.data.map((item) =>
+          typeof item === "string" ? { id: item, name: item } : item,
+        )
+      : [];
   } catch {
     return [];
   }
 }
-export function rememberModels(store: Store, id: string, options: string[]) {
+export function rememberModels(
+  store: Store,
+  id: string,
+  options: ModelOption[],
+) {
   store.run(
     "UPDATE agents SET models=? WHERE id=?",
     JSON.stringify(options),
@@ -42,7 +55,7 @@ export function configureModel(
   store: Store,
   id: string,
   spec: ModelSpec,
-  options: string[],
+  options: ModelOption[],
 ) {
   const agent = store.agent(id);
   if (!agent.agent_directory)
@@ -50,7 +63,7 @@ export function configureModel(
   const wanted = formatModelSpec({ ...spec, thinking: null });
   const provider = getBuiltinProviders().find((item) => item === spec.provider);
   const known = options.length
-    ? options
+    ? options.map((item) => item.id)
     : provider
       ? getBuiltinModels(provider).map(
           (model) => `${model.provider}/${model.id}`,

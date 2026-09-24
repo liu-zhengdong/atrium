@@ -40,13 +40,7 @@ export function DeleteAgent({
     <section className="settings-section">
       <h3>删除 Agent</h3>
       <p className="muted">移出名册并取消待投递通知与唤醒，历史聊天保留。</p>
-      {agent.available && (
-        <p className="muted" role="status">
-          {agent.runtime
-            ? "先停止运行，再确认删除。"
-            : "终端实例请先在原终端退出。"}
-        </p>
-      )}
+
       {error && (
         <p className="error" role="alert">
           {error}

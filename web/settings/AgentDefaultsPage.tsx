@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api.ts";
 import { matches } from "./types.ts";
-import type { ModelState } from "../../shared/model.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
+import { trackUnsaved } from "./unsaved.ts";
+import { modelLabel, type ModelOption } from "../../shared/model.ts";
 
 type Entry =
   | string
@@ -36,9 +37,11 @@ export function AgentDefaultsPage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [packageQuery, setPackageQuery] = useState("");
   const [skillQuery, setSkillQuery] = useState("");
-  const [modelChoices, setModelChoices] = useState<string[]>([]);
+  const [modelChoices, setModelChoices] = useState<ModelOption[]>([]);
+  useEffect(() => trackUnsaved(dirty), [dirty]);
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -62,13 +65,10 @@ export function AgentDefaultsPage({
     };
   }, []);
   useEffect(() => {
-    // 与身份设置复用同一份 Pi 模型清单；没有身份时不允许填入未经校验的型号。
-    const source = agents.find((agent) => agent.agent_directory);
-    if (!source) return;
     let active = true;
-    api<ModelState>(`/agents/${source.id}/model`)
-      .then((state) => {
-        if (active) setModelChoices(state.options);
+    api<ModelOption[]>("/models")
+      .then((options) => {
+        if (active) setModelChoices(options);
       })
       .catch(() => {
         if (active) setModelChoices([]);
@@ -80,6 +80,38 @@ export function AgentDefaultsPage({
   function update(value: Defaults) {
     setDefaults(value);
     setSaved(false);
+    setDirty(true);
+  }
+  async function applyInstant(value: Defaults, selectedModel = model) {
+    const previous = defaults;
+    const oldModel = model;
+    const oldDirty = dirty;
+    setDefaults(value);
+    setModel(selectedModel);
+    setBusy(true);
+    setError("");
+    try {
+      const split = selectedModel.indexOf("/");
+      const saved = await api<Defaults>("/settings/agent-defaults", "PUT", {
+        ...value,
+        model: selectedModel
+          ? {
+              provider: selectedModel.slice(0, split),
+              model: selectedModel.slice(split + 1),
+            }
+          : null,
+      });
+      setDefaults(saved);
+      setDirty(false);
+      setSaved(true);
+    } catch (reason) {
+      setDirty(oldDirty);
+      setDefaults(previous);
+      setModel(oldModel);
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
   }
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -91,7 +123,7 @@ export function AgentDefaultsPage({
     }
     if (
       model &&
-      !modelChoices.includes(model) &&
+      !modelChoices.some((option) => option.id === model) &&
       model !==
         (defaults.model
           ? `${defaults.model.provider}/${defaults.model.model}`
@@ -110,6 +142,7 @@ export function AgentDefaultsPage({
           : null,
       });
       setDefaults(value);
+      setDirty(false);
       setSaved(true);
     } catch (reason) {
       setError(String(reason));
@@ -170,7 +203,7 @@ export function AgentDefaultsPage({
                 .map((entry) => (
                   <label
                     key={source(entry)}
-                    className="switch-row !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-2 text-xs hover:bg-soft"
+                    className="switch-row !m-0 !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-1 text-xs hover:bg-soft"
                   >
                     <span className="min-w-0 break-all">{source(entry)}</span>
                     <input
@@ -181,8 +214,9 @@ export function AgentDefaultsPage({
                       checked={defaults.packages.some(
                         (item) => source(item) === source(entry),
                       )}
+                      disabled={busy}
                       onChange={(event) =>
-                        update({
+                        void applyInstant({
                           ...defaults,
                           packages: event.target.checked
                             ? [...defaults.packages, entry]
@@ -246,7 +280,7 @@ export function AgentDefaultsPage({
                 .map((skill) => (
                   <label
                     key={skill}
-                    className="switch-row !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-2 text-xs hover:bg-soft"
+                    className="switch-row !m-0 !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-1 text-xs hover:bg-soft"
                   >
                     <span className="min-w-0 break-all">{skill}</span>
                     <input
@@ -255,8 +289,9 @@ export function AgentDefaultsPage({
                       aria-label={`启用技能 ${skill}`}
                       className="accent-accent"
                       checked={defaults.skills.includes(skill)}
+                      disabled={busy}
                       onChange={(event) =>
-                        update({
+                        void applyInstant({
                           ...defaults,
                           skills: event.target.checked
                             ? [...defaults.skills, skill]
@@ -301,27 +336,36 @@ export function AgentDefaultsPage({
               <select
                 className="field mt-2"
                 value={model}
-                onChange={(event) => {
-                  setModel(event.target.value);
-                  setSaved(false);
-                }}
+                disabled={busy}
+                onChange={(event) =>
+                  void applyInstant(defaults, event.target.value)
+                }
               >
                 <option value="">由 Pi 决定</option>
-                {model && !modelChoices.includes(model) && (
-                  <option value={model}>{model}（已有配置）</option>
-                )}
+                {model &&
+                  !modelChoices.some((option) => option.id === model) && (
+                    <option value={model}>
+                      {modelLabel(model, modelChoices)}（已有配置）
+                    </option>
+                  )}
                 {modelChoices.map((choice) => (
-                  <option key={choice} value={choice}>
-                    {choice}
+                  <option key={choice.id} value={choice.id}>
+                    {modelLabel(choice.id, modelChoices)}
                   </option>
                 ))}
               </select>
-              {!agents.some((agent) => agent.agent_directory) && (
-                <span className="text-xs text-muted">创建身份后可选择模型</span>
+              {!modelChoices.length && (
+                <span className="text-xs text-muted">
+                  {agents.some((agent) => agent.runtime)
+                    ? "运行中的 Pi 未返回模型清单，请检查模型配置"
+                    : agents.some((agent) => agent.agent_directory)
+                      ? "尚无可选模型；启动身份取得清单后再选择"
+                      : "创建并启动身份后可选择模型"}
+                </span>
               )}
             </label>
           </section>
-          <button className="button" disabled={busy}>
+          <button className="button" disabled={busy || !dirty}>
             {busy ? "保存中…" : saved ? "已保存" : "保存默认配置"}
           </button>
         </form>

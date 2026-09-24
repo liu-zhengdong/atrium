@@ -76,6 +76,18 @@ export const modelSpec = z
     return spec;
   });
 
+/** Pi 模型目录里的原始 id 和显示名；供应商名称来自账号供应商目录，缺失时不猜。 */
+export type ModelOption = { id: string; name: string; providerName?: string };
+
+/** 模型名称仅取目录原文，缺失时保留原始 id，不拆字或拼名称。 */
+export function modelLabel(value: string, options: ModelOption[]): string {
+  const option = options.find((item) => item.id === modelBase(value));
+  if (!option?.name || option.name === option.id) return value;
+  return option.providerName
+    ? `${option.name} · ${option.providerName}`
+    : option.name;
+}
+
 /** 一个身份的模型现状。`options` 空表示还没取到过这个身份的清单。 */
 export type ModelState = {
   /** 身份配置里写着的模型；null 表示没设过，跟随 pi 自己的默认。 */
@@ -83,7 +95,7 @@ export type ModelState = {
   /** 运行中的实例此刻在用的模型；离线为 null。 */
   running: string | null;
   /** 这个身份可选的模型，按 provider/id 排序。 */
-  options: string[];
+  options: ModelOption[];
   /** 现在改的话能否当场生效，否则要等下次启动。 */
   live: boolean;
 };

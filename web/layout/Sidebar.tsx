@@ -14,12 +14,7 @@ import { ChatAvatar } from "../components/ChatAvatar.tsx";
 import { failureSummary } from "../components/failure-summary.ts";
 import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
-import {
-  agentPresence,
-  agentSummary,
-  Avatar,
-  type Agent,
-} from "../components/AgentAvatar.tsx";
+import type { Agent } from "../components/AgentAvatar.tsx";
 export type Section = "agents" | "chat" | "records";
 
 const rowName = "truncate text-xs font-semibold text-ink";
@@ -28,10 +23,6 @@ const rowPreview =
   "mt-0.5 min-w-0 flex-1 truncate text-[11px] leading-[1.6] text-muted";
 const slotAction =
   "relative flex h-[22px] w-[22px] items-center justify-center rounded-md text-muted hover:bg-[#dce6df] hover:text-ink";
-const agentRow =
-  "agent-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[#edf3ef]";
-const sectionLabel =
-  "mb-1.5 flex items-center justify-between px-2 text-[11px] font-medium tracking-[0.02em] text-muted";
 const hint = "px-2.5 py-2 text-xs text-muted/80";
 const navButton = (active: boolean) =>
   `flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors ${
@@ -210,52 +201,7 @@ export function Sidebar({
           </div>
         </div>
       ) : (
-        <div className="mb-4 min-h-0 flex-1 overflow-auto">
-          <div className={sectionLabel}>
-            Agents
-            <button
-              className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
-              aria-label="新建 Agent"
-              onClick={() => {
-                create("agent");
-              }}
-            >
-              <Plus size={15} />
-            </button>
-          </div>
-          {agents.map((a) => (
-            <div key={a.id}>
-              <div className={agentRow}>
-                <Avatar
-                  name={a.name}
-                  presence={agentPresence(a)}
-                  small
-                  onClick={() => details(a.id)}
-                />
-                <button
-                  className="agent-row-open flex min-w-0 flex-1 items-center gap-2 text-left"
-                  onClick={() => void openAgent(a)}
-                  disabled={openingAgent !== null}
-                  title={a.failure ? failureSummary(a.failure.text) : undefined}
-                >
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <strong className={rowName}>{a.name}</strong>
-                    <small
-                      className={rowPreview}
-                      title={[a.description, a.work].filter(Boolean).join("\n")}
-                    >
-                      {agentSummary(a)}
-                    </small>
-                  </span>
-                  {a.unread > 0 && <span className="badge">{a.unread}</span>}
-                </button>
-              </div>
-            </div>
-          ))}
-          {overview && !agents.length && (
-            <p className={hint}>创建你的第一位 Agent</p>
-          )}
-        </div>
+        <div className="min-h-0 flex-1" />
       )}
       <button
         className="mb-2 flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-muted hover:bg-[#edf3ef] hover:text-ink"

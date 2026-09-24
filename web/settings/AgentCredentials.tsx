@@ -53,6 +53,8 @@ export function AgentCredentials({
   const assigned = credentials?.assigned ?? [];
   const providerName = (id: string) =>
     providers.find((provider) => provider.id === id)?.name || id;
+  const accountLabel = (provider: string, name: string, id: string) =>
+    `${providerName(provider) === name ? name : `${providerName(provider)} · ${name}`} · ${id}`;
   const selected =
     accounts?.find((account) => account.id === picker) ??
     accounts?.find((account) =>
@@ -87,11 +89,14 @@ export function AgentCredentials({
                 <p
                   key={provider}
                   className="m-0 truncate text-xs text-muted"
-                  title={`${providerName(provider)} · ${item?.name ?? "账号不可用"} · ${account}`}
+                  title={accountLabel(
+                    provider,
+                    item?.name ?? "账号不可用",
+                    account,
+                  )}
                 >
                   {compact && "账号 · "}
-                  {providerName(provider)} · {item?.name ?? "账号不可用"} ·{" "}
-                  {account}
+                  {accountLabel(provider, item?.name ?? "账号不可用", account)}
                 </p>
               );
             })
@@ -143,8 +148,11 @@ export function AgentCredentials({
                           className={`block w-full truncate rounded-lg px-2 py-1.5 text-left text-xs hover:bg-soft ${selected?.id === account.id ? "bg-soft text-accent-strong" : "text-ink"}`}
                           onClick={() => setPicker(account.id)}
                         >
-                          {providerName(account.provider)} · {account.name} ·{" "}
-                          {account.id}
+                          {accountLabel(
+                            account.provider,
+                            account.name,
+                            account.id,
+                          )}
                         </button>
                       ))}
                     </div>

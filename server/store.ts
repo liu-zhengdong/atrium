@@ -173,10 +173,11 @@ export class Store {
         state TEXT NOT NULL DEFAULT 'pending', slot TEXT, error TEXT, created_at INTEGER NOT NULL, chat_id TEXT REFERENCES chats(id), through_message INTEGER, UNIQUE(agent_id,slot));
       CREATE INDEX IF NOT EXISTS deliveries_pending ON deliveries(agent_id,created_at) WHERE state='pending';
       CREATE TABLE IF NOT EXISTS accounts (number INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, name TEXT NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('oauth','api_key')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT);
+        type TEXT NOT NULL CHECK(type IN ('oauth','api_key','local')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT);
       CREATE TABLE IF NOT EXISTS credential_modes (agent_id TEXT PRIMARY KEY REFERENCES agents(id), mode TEXT NOT NULL CHECK(mode IN ('shared','assigned')), shared_target TEXT);
       CREATE TABLE IF NOT EXISTS account_assignments (agent_id TEXT NOT NULL REFERENCES agents(id), provider TEXT NOT NULL,
         account_number INTEGER NOT NULL REFERENCES accounts(number), PRIMARY KEY(agent_id,provider));`);
+    this.migrateLocalAccounts();
     // Allocate once, in legacy creation order. AUTOINCREMENT prevents reuse even
     // if a chat is removed; a trigger also covers writes from an older binary.
     this.transaction(() => {
@@ -297,6 +298,35 @@ export class Store {
     ensureUsers(this);
     ensureGroups(this);
     this.addColumn("messages", "details", "TEXT NOT NULL DEFAULT ''");
+  }
+  /** SQLite cannot alter a CHECK constraint. Preserve short-number allocation on rebuild. */
+  private migrateLocalAccounts() {
+    const schema = this.one<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts'",
+    )?.sql;
+    if (schema?.includes("'local'")) return;
+    const sequence =
+      this.one<{ seq: number }>(
+        "SELECT seq FROM sqlite_sequence WHERE name='accounts'",
+      )?.seq ?? 0;
+    this.db.exec("PRAGMA foreign_keys=OFF");
+    try {
+      this.transaction(() => {
+        this.db.exec(`CREATE TABLE accounts_local (
+          number INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, name TEXT NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('oauth','api_key','local')),
+          expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT);
+          INSERT INTO accounts_local SELECT * FROM accounts;
+          DROP TABLE accounts;
+          ALTER TABLE accounts_local RENAME TO accounts;`);
+        this.run(
+          "UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name='accounts'",
+          sequence,
+        );
+      });
+    } finally {
+      this.db.exec("PRAGMA foreign_keys=ON");
+    }
   }
   all<T>(sql: string, ...args: SQLInputValue[]): T[] {
     return this.db.prepare(sql).all(...args) as unknown as T[];

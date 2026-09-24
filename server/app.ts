@@ -301,6 +301,16 @@ export async function createApp(options: {
       custom,
     );
   });
+  app.post("/api/accounts/local", (request) => {
+    const { provider } = z
+      .object({ provider: z.literal("claude-bridge") })
+      .strict()
+      .parse(request.body);
+    return accounts.addLocal(provider);
+  });
+  app.post("/api/accounts/:ref/check", (request) =>
+    accounts.checkLocal(accountRef(request)),
+  );
   app.put("/api/accounts/:ref/key", (request) => {
     const { key, allowUnverified, custom } = z
       .object({

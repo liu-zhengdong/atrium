@@ -145,14 +145,14 @@ test("ACP 直投 accepted 即已读：私聊与群聊 @ 跳读", (t) => {
   // 模拟 ACP runtime deliver 成功确认 accepted
   store.accepted(pendingDirect[0].id);
   assert(hasRead(dmState(), dmMsg.id), "ACP accepted 即记已读");
-  assert.match(pendingDirect[0].text, /先用 send_message 简短回复确认/);
+  assert.match(pendingDirect[0].text, /用户在等你的回应/);
   store.finishTurn(a.id, false);
   assert(hasRead(dmState(), dmMsg.id), "失败重投仍保留已读");
   const retry = store
     .pending(a.id)
     .find((d) => d.through_message === dmMsg.id)!;
   assert.match(retry.text, /重新投递/);
-  assert.doesNotMatch(retry.text, /简短回复确认/);
+  assert.doesNotMatch(retry.text, /用户在等你的回应/);
   store.accepted(retry.id);
   store.finishTurn(a.id, true);
   assert.equal(dmState().through, dmMsg.id);
@@ -241,7 +241,7 @@ test("ACP 直投 accepted 即已读：私聊与群聊 @ 跳读", (t) => {
   const peerDelivery = store
     .pending(a.id)
     .find((d) => d.through_message === peerMsg.id)!;
-  assert.doesNotMatch(peerDelivery.text, /简短回复确认/);
+  assert.doesNotMatch(peerDelivery.text, /用户在等你的回应/);
   assert.equal(
     store.readState(peer.id, 0).find((s) => s.agent_id === a.id)?.through,
     0,

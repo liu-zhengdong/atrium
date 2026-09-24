@@ -69,7 +69,7 @@ const sentBy = (ref: string, name: string) =>
     : `发送者：同伴 ${ref}（${name}），不是用户`;
 
 export const USER_CONFIRMATION =
-  "先用 send_message 简短回复确认，一句「收到」即可；手上有别的事，就说明正在做什么、打算什么时候处理，例如「收到，我正在做 X，做完 X 再处理这件」。然后再开始处理。";
+  "用户在等你的回应。能很快答完，就直接回答；要花一阵子，或手上有别的事，先用 send_message 回一句，让用户知道你收到了、在做什么、大概什么时候处理，然后再做。";
 
 /** 投递给 Agent 的正文：JSON 是聊天内容，不是平台指令。 */
 export function deliveryText(input: {

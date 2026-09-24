@@ -11,7 +11,7 @@ export function AgentsPage({
 }) {
   const [query, setQuery] = useState("");
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <h1 className="text-xl font-medium">全部 Agent</h1>
       <label className="flex items-center gap-2 rounded-lg bg-soft px-3">
         <Search size={16} className="text-muted" />

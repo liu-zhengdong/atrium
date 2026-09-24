@@ -32,7 +32,7 @@ export function AccountsPage({
     ),
   );
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-medium">模型账号</h1>

@@ -61,7 +61,7 @@ export function AccountRow({
             <span className="badge">{account.provider}</span>
           </div>
           <p className="mb-0 mt-1.5 text-xs text-muted">
-            {account.type === "oauth" ? "OAuth" : "API key"}
+            {account.type === "oauth" ? "OAuth" : "API Key"}
             {expiry(account.expires) && ` · ${expiry(account.expires)}`}
             {account.last_error &&
               ` · ${account.last_error === "未知错误" && !account.expires ? "登录未完成" : account.last_error}`}
@@ -168,7 +168,7 @@ export function AccountRow({
           </div>
         </div>
       )}
-      <div className="mt-4 flex items-center gap-2 border-t border-[#edf1ed] pt-3">
+      <div className="mt-3 flex items-center gap-2">
         <span className="shrink-0 text-xs text-muted">分配</span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {assignedAgents.length ? (

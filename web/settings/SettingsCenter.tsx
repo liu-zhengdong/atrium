@@ -37,7 +37,7 @@ const navigation = [
         id: "accounts" as const,
         label: "模型账号",
         Icon: KeyRound,
-        terms: "API key OAuth 模型 分配 Agent provider",
+        terms: "API Key OAuth 模型 分配 Agent provider",
       },
       {
         id: "agents" as const,

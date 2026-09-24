@@ -192,6 +192,8 @@ export type FileRecord = {
 /** 倒序翻页的一页：游标在每条自己身上（消息用 id，附件用 cursor）。 */
 export type RecordPage<T> = { items: T[]; has_more: boolean };
 export type Message = {
+  /** Present only on the user-facing private chat API, never on MCP messages. */
+  trigger?: { label: string; trace_id: number };
   id: number;
   chat_id: string;
   sender: string;

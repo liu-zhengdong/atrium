@@ -841,9 +841,20 @@ export async function createApp(options: {
         "--after 不能与 --before、around 或 read_from 同时使用",
       );
     const chatId = agentParams(request);
-    return q.after === undefined
-      ? store.timeline(chatId, q.before, q.read_from, q.around)
-      : store.timelineAfter(chatId, q.after);
+    const page =
+      q.after === undefined
+        ? store.timeline(chatId, q.before, q.read_from, q.around)
+        : store.timelineAfter(chatId, q.after);
+    const chat = store.chat(chatId);
+    if (chat.kind !== "direct" || !chat.direct_agent) return page;
+    const triggers = traces.triggers(chat.direct_agent, chatId, page.items);
+    return {
+      ...page,
+      items: page.items.map((message) => ({
+        ...message,
+        ...(triggers[message.id] ? { trigger: triggers[message.id] } : {}),
+      })),
+    };
   });
   // 等待注册与首次读取在同一同步调用栈中完成；不会漏掉检查与订阅之间的消息。
   const waitQuery = z.object({

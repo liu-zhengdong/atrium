@@ -68,7 +68,15 @@ function fileLabel(item: TraceItem, cwd: string, input?: string) {
   };
 }
 
-function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
+function TraceAction({
+  agent,
+  item,
+  highlight,
+}: {
+  agent: Agent;
+  item: TraceItem;
+  highlight: boolean;
+}) {
   const [open, setOpen] = useState(false),
     [detail, setDetail] = useState<TraceDetail | null>(null);
   const [error, setError] = useState(""),
@@ -171,12 +179,18 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
   }`;
   if (!hasDetails)
     return (
-      <li className="py-1">
+      <li
+        data-trace-id={item.id}
+        className={`rounded-lg py-1 ${highlight ? "trace-flash" : ""}`}
+      >
         <div className={rowClass}>{row}</div>
       </li>
     );
   return (
-    <li className={lifecycle ? "py-1" : ""}>
+    <li
+      data-trace-id={item.id}
+      className={`${lifecycle ? "py-1" : ""} rounded-lg ${highlight ? "trace-flash" : ""}`}
+    >
       <details
         open={open}
         onToggle={(e) => setOpen(e.currentTarget.open)}
@@ -242,9 +256,11 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
 export function AgentTrace({
   agent,
   revision,
+  target,
 }: {
   agent: Agent;
   revision: number;
+  target: { id: number; serial: number } | null;
 }) {
   const [items, setItems] = useState<TraceItem[]>([]),
     [loading, setLoading] = useState(true);
@@ -258,6 +274,31 @@ export function AgentTrace({
     nearBottom = useRef(true),
     alive = useRef(true);
   const scroll = useRef<HTMLDivElement>(null);
+  const [highlight, setHighlight] = useState<number | null>(null);
+  useEffect(() => {
+    if (target === null) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    // The target might predate the currently loaded page. Page backwards in
+    // one request instead of walking all intermediate pages.
+    void api<TracePage>(`/agents/${agent.id}/trace?before=${target.id + 1}`)
+      .then((page) => {
+        if (cancelled || !page.items.some((item) => item.id === target.id))
+          return;
+        nearBottom.current = false;
+        setAtLatest(false);
+        setItems((old) => mergeTrace(old, page.items));
+        setHighlight(target.id);
+        timer = window.setTimeout(() => setHighlight(null), 2400);
+      })
+      .catch(() => {
+        /* Trimmed between chat load and click: leave the drawer usable. */
+      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [agent.id, target]);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -291,7 +332,13 @@ export function AgentTrace({
   useEffect(() => {
     if (nearBottom.current && scroll.current)
       scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [items, loading]);
+    if (highlight && !loading)
+      requestAnimationFrame(() => {
+        scroll.current
+          ?.querySelector(`[data-trace-id="${highlight}"]`)
+          ?.scrollIntoView({ block: "center" });
+      });
+  }, [items, loading, highlight]);
   async function loadOlder() {
     if (paging || !items.length) return;
     setPaging(true);
@@ -397,6 +444,7 @@ export function AgentTrace({
               {items.map((item, index) => (
                 <TraceGroup
                   key={item.id}
+                  highlight={highlight === item.id}
                   newSession={
                     index > 0 && items[index - 1].generation !== item.generation
                   }
@@ -432,10 +480,12 @@ function TraceGroup({
   newSession,
   agent,
   item,
+  highlight,
 }: {
   newSession: boolean;
   agent: Agent;
   item: TraceItem;
+  highlight: boolean;
 }) {
   return (
     <>
@@ -446,7 +496,7 @@ function TraceGroup({
           <span className="h-px flex-1 bg-black/[0.07]" />
         </li>
       )}
-      <TraceAction agent={agent} item={item} />
+      <TraceAction agent={agent} item={item} highlight={highlight} />
     </>
   );
 }

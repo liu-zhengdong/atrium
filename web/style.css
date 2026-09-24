@@ -137,7 +137,8 @@ h3 {
     transform: rotate(360deg);
   }
 }
-.message.flash {
+.message.flash,
+.trace-flash {
   animation: message-flash 2.4s ease-out;
   border-radius: 10px;
 }

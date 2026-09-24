@@ -14,6 +14,7 @@ export function ChatView({
   hidden,
   details,
   inspectAgent,
+  openTrigger,
   refresh,
   anchor,
   clearAnchor,
@@ -27,6 +28,7 @@ export function ChatView({
   hidden: boolean;
   details: (id: string) => void;
   inspectAgent: (id: string) => void;
+  openTrigger: (id: string, traceId: number) => void;
   refresh: () => void;
   anchor: { chatId: string; messageId: number } | null;
   clearAnchor: () => void;
@@ -98,6 +100,7 @@ export function ChatView({
             active={active}
             agents={agents}
             details={details}
+            openTrigger={openTrigger}
             flash={flash}
             {...conversation}
           />

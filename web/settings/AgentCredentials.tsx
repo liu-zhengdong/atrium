@@ -13,11 +13,13 @@ export function AgentCredentials({
   openAccounts,
   compact = false,
   visible = true,
+  onChange,
 }: {
   agent: Agent;
   openAccounts: () => void;
   compact?: boolean;
   visible?: boolean;
+  onChange?: () => void;
 }) {
   const {
     accounts,
@@ -51,6 +53,8 @@ export function AgentCredentials({
   const assigned = credentials?.assigned ?? [];
   const providerName = (id: string) =>
     providers.find((provider) => provider.id === id)?.name || id;
+  const accountLabel = (provider: string, name: string, id: string) =>
+    `${providerName(provider) === name ? name : `${providerName(provider)} · ${name}`} · ${id}`;
   const selected =
     accounts?.find((account) => account.id === picker) ??
     accounts?.find((account) =>
@@ -59,7 +63,10 @@ export function AgentCredentials({
     accounts?.[0];
   async function assign<T>(task: () => Promise<T>): Promise<T | undefined> {
     const result = await change(task);
-    await reload();
+    if (result !== undefined) {
+      await reload();
+      onChange?.();
+    }
     return result;
   }
   return (
@@ -82,26 +89,40 @@ export function AgentCredentials({
                 <p
                   key={provider}
                   className="m-0 truncate text-xs text-muted"
-                  title={`${providerName(provider)} · ${item?.name ?? "账号不可用"} · ${account}`}
+                  title={accountLabel(
+                    provider,
+                    item?.name ?? "账号不可用",
+                    account,
+                  )}
                 >
                   {compact && "账号 · "}
-                  {providerName(provider)} · {item?.name ?? "账号不可用"} ·{" "}
-                  {account}
+                  {accountLabel(provider, item?.name ?? "账号不可用", account)}
                 </p>
               );
             })
-          ) : (
+          ) : compact ? (
             <p className="m-0 text-xs text-muted">未分配账号</p>
-          )}
+          ) : null}
           <Popover.Root open={open} onOpenChange={setOpen}>
-            <Popover.Trigger asChild>
-              <button
-                type="button"
-                className="text-xs text-accent-strong hover:underline"
-              >
-                {assigned.length ? "调整分配" : "分配账号"}
-              </button>
-            </Popover.Trigger>
+            {!compact && !assigned.length ? (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-muted">未分配账号</span>
+                <Popover.Trigger asChild>
+                  <button type="button" className="button">
+                    分配账号
+                  </button>
+                </Popover.Trigger>
+              </div>
+            ) : (
+              <Popover.Trigger asChild>
+                <button
+                  type="button"
+                  className="text-xs text-accent-strong hover:underline"
+                >
+                  {assigned.length ? "调整分配" : "分配账号"}
+                </button>
+              </Popover.Trigger>
+            )}
             <Popover.Portal>
               <Popover.Content
                 align="start"
@@ -127,8 +148,11 @@ export function AgentCredentials({
                           className={`block w-full truncate rounded-lg px-2 py-1.5 text-left text-xs hover:bg-soft ${selected?.id === account.id ? "bg-soft text-accent-strong" : "text-ink"}`}
                           onClick={() => setPicker(account.id)}
                         >
-                          {providerName(account.provider)} · {account.name} ·{" "}
-                          {account.id}
+                          {accountLabel(
+                            account.provider,
+                            account.name,
+                            account.id,
+                          )}
                         </button>
                       ))}
                     </div>

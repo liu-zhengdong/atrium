@@ -67,6 +67,10 @@ test("临时实例不建账号；旧记录兼容关联、并发点击与重启",
   assert.equal(denied.statusCode, 409);
   assert.equal(store.agents().length, 0);
   const existing = store.createAgent("旧记录一", realpathSync(data));
+  const account = store.run(
+    "INSERT INTO accounts(provider,name,type) VALUES('fixture','test','api_key')",
+  ).lastInsertRowid;
+  // Bind the fixture to expose the existing runtime through discovery.
   store.run(
     "UPDATE agents SET runtime_id=? WHERE id=?",
     first.runtimeId,
@@ -76,6 +80,18 @@ test("临时实例不建账号；旧记录兼容关联、并发点击与重启",
     join(data, "credentials", `${existing.agent.id}.json`),
     JSON.stringify({ token: existing.token }),
     { mode: 0o600 },
+  );
+  const deniedAccount = await app.inject({
+    method: "POST",
+    url: `/api/runtimes/${first.runtimeId}/chat`,
+  });
+  assert.equal(deniedAccount.statusCode, 409);
+  assert.equal(deniedAccount.json().code, "unassigned_account");
+  store.run(
+    "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+    existing.agent.id,
+    "fixture",
+    account,
   );
   const requests = await Promise.all(
     Array.from({ length: 4 }, () =>
@@ -120,6 +136,12 @@ test("临时实例不建账号；旧记录兼容关联、并发点击与重启",
     "UPDATE agents SET runtime_id=? WHERE id=?",
     second.runtimeId,
     legacyTwo.id,
+  );
+  store.run(
+    "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+    legacyTwo.id,
+    "fixture",
+    account,
   );
   const secondChat = await app.inject({
     method: "POST",
@@ -263,13 +285,9 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
     url: "/api/agents",
     payload: { name: "启动失败样本", template: data, start: true },
   });
-  assert.equal(failed.statusCode, 201);
-  assert.match(failed.json().start_error, /已创建.*启动失败/);
-  assert.equal(
-    store.agents().length,
-    1,
-    "启动失败仍有可恢复的身份，不要求再次创建",
-  );
+  assert.equal(failed.statusCode, 409);
+  assert.equal(failed.json().code, "unassigned_account");
+  assert.equal(store.agents().length, 0, "未分配时拒绝创建并启动的组合操作");
 });
 
 test("自动名称可读、有界、符合名称约束，重名不复用 UUID", () => {

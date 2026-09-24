@@ -157,7 +157,21 @@ export function AgentConfigPage({
             <AgentCredentials
               agent={agent}
               openAccounts={() => openAccounts(null)}
+              onChange={changed}
             />
+            {!agent.available && !agent.unassigned && (
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={() =>
+                  void api(`/agents/${agent.id}/start`, "POST")
+                    .then(changed)
+                    .catch((e) => setError(String(e)))
+                }
+              >
+                启动
+              </button>
+            )}
           </section>
           <section id="plugins">
             {agent.agent_directory && (

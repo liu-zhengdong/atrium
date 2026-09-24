@@ -63,6 +63,7 @@ function client(base: string) {
         error?: unknown;
         code?: string;
         candidates?: { ref: string; name: string }[];
+        nextCommand?: string;
       };
       throw new Problem(
         response.status,
@@ -71,6 +72,7 @@ function client(base: string) {
           : `请求失败（HTTP ${response.status}）`,
         body.code,
         body.candidates,
+        body.nextCommand,
       );
     }
     recordResult(value);

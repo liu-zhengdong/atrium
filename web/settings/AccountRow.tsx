@@ -61,13 +61,27 @@ export function AccountRow({
             <span className="badge">{account.provider}</span>
           </div>
           <p className="mb-0 mt-1.5 text-xs text-muted">
-            {account.type === "oauth" ? "OAuth" : "API Key"}
+            {account.type === "local"
+              ? "本机登录 · 不保存 Key"
+              : account.type === "oauth"
+                ? "OAuth"
+                : "API Key"}
             {expiry(account.expires) && ` · ${expiry(account.expires)}`}
             {account.last_error &&
               ` · ${account.last_error === "未知错误" && !account.expires ? "登录未完成" : account.last_error}`}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {account.type === "local" && (
+            <button
+              className="button secondary !text-xs"
+              onClick={() =>
+                void change(() => api(`/accounts/${account.id}/check`, "POST"))
+              }
+            >
+              检查 CLI
+            </button>
+          )}
           {account.type === "api_key" && account.status === "error" && (
             <button className="button secondary !text-xs" onClick={relogin}>
               更换 Key

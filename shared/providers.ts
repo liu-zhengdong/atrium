@@ -1,4 +1,4 @@
-export type ProviderMethod = "oauth" | "api_key";
+export type ProviderMethod = "oauth" | "api_key" | "local";
 export type ProviderEntry = {
   id: string;
   name: string;

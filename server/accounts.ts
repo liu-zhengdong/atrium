@@ -33,6 +33,12 @@ import {
 } from "./custom-providers.ts";
 import { setAccountModel } from "./account-models.ts";
 import { Problem, type Store } from "./store.ts";
+import { UNASSIGNED } from "./assignment.ts";
+import {
+  checkLocalLogin,
+  LOCAL_NAME,
+  LOCAL_PROVIDER,
+} from "./local-account.ts";
 export {
   modePlan,
   shouldRefresh,
@@ -90,7 +96,13 @@ export class Accounts {
   async providersList() {
     const builtIn = await this.providers.list();
     return [
-      ...builtIn,
+      ...builtIn.filter((entry) => entry.id !== LOCAL_PROVIDER),
+      {
+        id: LOCAL_PROVIDER,
+        name: LOCAL_NAME,
+        methods: ["local" as const],
+        packagePath: null,
+      },
       ...Object.keys(this.custom.all()).map((id) => ({
         id,
         name: id,
@@ -231,6 +243,39 @@ export class Accounts {
       );
     return { ...saved, validation };
   }
+  addLocal(provider: string) {
+    if (provider !== LOCAL_PROVIDER)
+      throw new Problem(400, "该供应商不支持本机登录");
+    const existing = this.store.one<{ number: number }>(
+      "SELECT number FROM accounts WHERE provider=? AND type='local'",
+      provider,
+    );
+    if (existing)
+      throw new Problem(
+        409,
+        `本机登录账号 k${existing.number} 已存在；请使用 atrium assign <身份> k${existing.number}`,
+      );
+    const reason = checkLocalLogin(this.store);
+    if (reason) throw new Problem(400, reason);
+    const number = this.store.run(
+      "INSERT INTO accounts(provider,name,type,status) VALUES(?,?,'local','ready')",
+      provider,
+      LOCAL_NAME,
+    ).lastInsertRowid;
+    return { id: `k${number}`, type: "local" as const };
+  }
+  checkLocal(ref: string) {
+    const row = this.catalog.row(this.catalog.number(ref));
+    if (row.type !== "local") throw new Problem(400, "此账号不是本机登录");
+    const reason = checkLocalLogin(this.store);
+    this.store.run(
+      "UPDATE accounts SET status=?,last_error=? WHERE number=?",
+      reason ? "error" : "ready",
+      reason,
+      row.number,
+    );
+    return { id: ref, status: reason ? "error" : "ready", reason };
+  }
   add(provider: string, name: string, key: string) {
     provider = providerName.parse(provider);
     if (!key) throw new Problem(400, "API key 不能为空");
@@ -350,9 +395,9 @@ export class Accounts {
           "SELECT account_number FROM account_assignments WHERE agent_id=?",
           id,
         )
-        .map(({ account_number }) => {
+        .flatMap(({ account_number }) => {
           const row = this.catalog.row(account_number);
-          return [row.provider, this.load(row)];
+          return row.type === "local" ? [] : [[row.provider, this.load(row)]];
         }),
     );
   }
@@ -376,6 +421,11 @@ export class Accounts {
           )
           .map((r) => ({ provider: r.provider, account: `k${r.number}` })),
       };
+    if (target === "shared")
+      throw new Problem(
+        409,
+        "共享个人 Pi 登录已停用；请用 atrium assign <身份> <账号短号> 分配账号",
+      );
     return this.files.prepareMode(
       id,
       target,
@@ -403,6 +453,28 @@ export class Accounts {
       throw new Problem(409, "该身份已分配此账号");
     if (!agent.agent_directory)
       throw new Problem(409, "身份没有配置目录，请先启动身份");
+    // Local login is a delegation to Claude CLI; no token or auth.json entry exists.
+    if (row.type === "local") {
+      const reason = checkLocalLogin(this.store, id);
+      if (reason) throw new Problem(409, reason);
+      this.store.transaction(() => {
+        this.store.run(
+          "INSERT INTO credential_modes(agent_id,mode) VALUES(?,'assigned') ON CONFLICT(agent_id) DO UPDATE SET mode='assigned'",
+          id,
+        );
+        this.store.run(
+          previous
+            ? "UPDATE account_assignments SET account_number=? WHERE agent_id=? AND provider=?"
+            : "INSERT INTO account_assignments(account_number,agent_id,provider) VALUES(?,?,?)",
+          row.number,
+          id,
+          row.provider,
+        );
+      });
+      if (this.store.failure(id)?.text === UNASSIGNED)
+        this.store.clearFailure(id);
+      return { mode: "assigned", account: ref, preserved: null };
+    }
     // Read and validate before touching either the identity file or assignment row.
     const value = this.load(row);
     const sidecar =
@@ -456,6 +528,8 @@ export class Accounts {
       restoreModels?.();
       throw error;
     }
+    if (this.store.failure(id)?.text === UNASSIGNED)
+      this.store.clearFailure(id);
     if (
       sidecar &&
       !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
@@ -475,7 +549,13 @@ export class Accounts {
     )
       throw new Problem(404, "分配不存在");
     if (!agent.agent_directory) throw new Problem(409, "身份没有配置目录");
-    if (this.catalog.mode(id) === "assigned") {
+    const row = this.store.one<Row>(
+      `SELECT a.* FROM accounts a JOIN account_assignments x ON x.account_number=a.number
+       WHERE x.agent_id=? AND x.provider=?`,
+      id,
+      provider,
+    );
+    if (row?.type !== "local" && this.catalog.mode(id) === "assigned") {
       lockedAuth(agent.agent_directory, (data) => {
         delete data[provider];
         return data;
@@ -501,7 +581,8 @@ export class Accounts {
       this.unassign(a.agent_id, row.provider);
     this.store.run("DELETE FROM accounts WHERE number=?", number);
     if (this.custom.get(row.provider)) this.custom.remove(row.provider);
-    rmSync(this.files.dir(number), { recursive: true, force: true });
+    if (row.type !== "local")
+      rmSync(this.files.dir(number), { recursive: true, force: true });
     return { removed: true };
   }
   refresh() {
@@ -517,6 +598,8 @@ export class Accounts {
     return this.loginService.login(provider, name);
   }
   relogin(ref: string) {
+    if (this.catalog.row(this.catalog.number(ref)).type === "local")
+      throw new Problem(400, "本机登录请运行 claude auth login");
     return this.loginService.relogin(this.catalog.number(ref), () =>
       this.refreshService.distributeAccount(
         this.catalog.row(this.catalog.number(ref)),

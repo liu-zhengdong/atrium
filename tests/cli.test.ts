@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -107,7 +108,7 @@ test(
     assert.match(created.stdout, /林岚 · a1/);
     assert.match(
       created.stdout.trimEnd().split("\n").at(-1)!,
-      /^启动：atrium start a1$/,
+      /^查看可用账号：atrium accounts$/,
     );
     assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
@@ -125,8 +126,24 @@ test(
 
     // 名册与详情
     const list = await ok("list");
-    assert.match(list, /a1\s+林岚\s+离线/);
-    assert.match(list, /a2\s+沈默\s+离线/);
+    assert.match(list, /a1\s+林岚\s+未分配账号/);
+    assert.match(list, /a2\s+沈默\s+未分配账号/);
+    const blockedTui = await f.cli("run", "a1");
+    assert.equal(blockedTui.code, 4);
+    assert.equal(blockedTui.stderr, "未分配账号\n修正：atrium account check\n");
+    const blockedStart = await f.cli("start", "a1");
+    assert.equal(blockedStart.code, 4);
+    assert.equal(
+      blockedStart.stderr,
+      "未分配账号\n修正：atrium account check\n",
+    );
+    const preflight = await f.cli("account", "check");
+    assert.equal(preflight.code, 4);
+    assert.match(preflight.stderr, /atrium assign a1 <账号短号>/);
+    assert.equal((preflight.stderr.match(/可用账号：/g) ?? []).length, 1);
+    assert.match(preflight.stderr, /添加账号：atrium connect/);
+    assert.doesNotMatch(await ok("help"), /atrium credentials /);
+    assert.equal((await f.cli("credentials", "a1")).code, 2);
     // 离线身份显示配置里写着的模型
     const invalidModel = await f.cli(
       "model",
@@ -178,9 +195,15 @@ test(
     );
     assert.equal(JSON.parse(absentAccount.stdout).next, "atrium accounts");
     await ok("model", "林岚", "deepseek/deepseek-v4-pro:high");
+    const preflightJson = await f.cli("account", "check", "--json");
+    assert.equal(preflightJson.code, 4);
+    assert.equal(
+      JSON.parse(preflightJson.stdout).error.code,
+      "validation_failed",
+    );
     assert.match(
       await ok("list"),
-      /a1\s+林岚\s+离线\s+deepseek\/deepseek-v4-pro:high/,
+      /a1\s+林岚\s+未分配账号\s+deepseek\/deepseek-v4-pro:high/,
     );
     const listed = (
       JSON.parse(await ok("list", "--json")) as {
@@ -193,7 +216,7 @@ test(
       ["a1", "a2"],
     );
     assert.match(await ok("show", "沈默"), /介绍：评审代码/);
-    assert.match(await ok("show", "a2"), /沈默 · a2 · 离线/);
+    assert.match(await ok("show", "a2"), /沈默 · a2 · 未分配账号/);
     assert.match(await refused("show", "不存在"), /没有叫「不存在」的 Agent/);
     const diagnosis = new Store(join(f.data, "atrium.sqlite"));
     diagnosis.setFailure(
@@ -357,5 +380,72 @@ test(
       "run",
     ])
       assert.match(help, new RegExp(`atrium ${name}( |$)`, "m"));
+  },
+);
+
+test(
+  "分配回执包含身份和账号；撤销时优先给可执行的分配命令",
+  { timeout: 60000 },
+  async (t) => {
+    const f = await fixture(t);
+    const cli = join(f.root, "claude");
+    writeFileSync(
+      cli,
+      '#!/bin/sh\n[ "$1" = "--version" ] || exit 2\necho "1.0"\n',
+    );
+    chmodSync(cli, 0o700);
+    writeFileSync(
+      join(f.root, "pi-template", "claude-bridge.json"),
+      JSON.stringify({ provider: { pathToClaudeCodeExecutable: cli } }),
+    );
+    assert.equal((await f.cli("create", "甲")).code, 0);
+    const store = new Store(join(f.data, "atrium.sqlite"));
+    const agent = store.agent(store.resolveAgentId("a1"));
+    store.close();
+    const settings = join(agent.agent_directory!, "settings.json");
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        defaultProvider: "claude-bridge",
+        defaultModel: "claude-haiku-4-5",
+        packages: [],
+      }),
+    );
+    assert.equal(
+      (await f.cli("account", "add", "claude-bridge", "--local")).code,
+      0,
+    );
+    const assigned = await f.cli("assign", "甲", "k1");
+    assert.equal(assigned.code, 0, assigned.stderr);
+    assert.equal(
+      assigned.stdout,
+      "已分配：甲 → k1 Claude Code（本机登录）\n看分配：atrium accounts\n",
+    );
+    const removal = await f.cli("unassign", "a1", "claude-bridge");
+    assert.equal(removal.code, 0, removal.stderr);
+    assert.match(removal.stdout, /重新分配：atrium assign a1 k1\n$/);
+    assert.doesNotMatch(removal.stdout, /模式：|atrium account check/);
+    const asJson = await f.cli("assign", "a1", "k1", "--json");
+    assert.equal(asJson.code, 0, asJson.stderr);
+    assert.equal(
+      JSON.parse(asJson.stdout).result.accountName,
+      "Claude Code（本机登录）",
+    );
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        defaultProvider: "other",
+        defaultModel: "unknown",
+        packages: [],
+      }),
+    );
+    const unknown = await f.cli("unassign", "甲", "claude-bridge", "--json");
+    assert.equal(unknown.code, 0, unknown.stderr);
+    assert.equal(JSON.parse(unknown.stdout).next, "atrium account check");
+    assert.equal((await f.cli("assign", "a1", "k1", "--json")).code, 0);
+    writeFileSync(settings, JSON.stringify({ packages: [] }));
+    const noModel = await f.cli("unassign", "a1", "claude-bridge", "--json");
+    assert.equal(noModel.code, 0, noModel.stderr);
+    assert.equal(JSON.parse(noModel.stdout).next, "atrium assign a1 k1");
   },
 );

@@ -11,7 +11,6 @@ import {
 import type { TraceDetail, TraceItem, TracePage } from "../../shared/trace.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { api } from "../api.ts";
-import { time } from "../time.ts";
 import { Empty } from "../components/Empty.tsx";
 
 export function mergeTrace(old: TraceItem[], incoming: TraceItem[]) {
@@ -19,6 +18,15 @@ export function mergeTrace(old: TraceItem[], incoming: TraceItem[]) {
   for (const item of incoming) rows.set(item.id, item);
   return [...rows.values()].sort((a, b) => a.id - b.id);
 }
+
+const traceTime = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+const lifecycleKinds = new Set(["session", "run_start", "run_end", "delivery"]);
 
 function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
   const [open, setOpen] = useState(false),
@@ -48,59 +56,71 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
     agent.runtime.generation === item.generation;
   const unknown =
     item.state === "unknown" || (item.state === "running" && !active);
+  const lifecycle = lifecycleKinds.has(item.kind);
+  const clock = traceTime.format(item.at);
   return (
-    <li
-      className={`relative border-l border-black/[0.06] pb-5 pl-[23px] last:border-transparent last:pb-0`}
-    >
-      <span
-        className={`absolute -left-[10px] top-0 grid h-[23px] w-[19px] place-items-center bg-white ${
-          active
-            ? "text-accent"
-            : item.state === "error"
-              ? "text-red-600"
-              : "text-muted"
-        }`}
-        aria-hidden="true"
-      >
-        {active ? (
-          <LoaderCircle size={13} className="spin" />
-        ) : item.state === "error" || unknown ? (
-          <CircleAlert size={13} />
-        ) : item.kind === "tool" ? (
-          <Terminal size={13} />
-        ) : (
-          <Check size={12} />
-        )}
-      </span>
+    <li className={lifecycle ? "py-1" : ""}>
       <details
         open={open}
         onToggle={(e) => setOpen(e.currentTarget.open)}
         className="group/details"
       >
-        <summary className="group cursor-pointer list-none rounded-[5px] focus-visible:outline-2 focus-visible:outline-[#8a7756] focus-visible:outline-offset-[3px] [&::-webkit-details-marker]:hidden">
-          <div className="flex justify-between text-[10px] leading-[23px] text-muted">
-            <time dateTime={new Date(item.at).toISOString()}>
-              {time(item.at)}
-            </time>
-            <span className="text-accent font-medium">
-              {active
-                ? "进行中"
-                : unknown
-                  ? "状态未知"
+        <summary
+          title={item.title}
+          className={`group flex h-7 min-w-0 cursor-pointer list-none items-center rounded-md focus-visible:outline-2 focus-visible:outline-[#8a7756] hover:bg-[#f4f7f5] [&::-webkit-details-marker]:hidden ${
+            lifecycle
+              ? "gap-2 text-[10px] text-muted"
+              : "gap-2 text-xs text-ink"
+          }`}
+        >
+          {lifecycle && (
+            <span className="h-px min-w-2 flex-1 bg-black/[0.07]" />
+          )}
+          {!lifecycle && (
+            <span
+              className={`grid w-4 flex-none place-items-center ${
+                active
+                  ? "text-accent"
                   : item.state === "error"
-                    ? "失败"
-                    : ""}
+                    ? "text-red-600"
+                    : "text-muted"
+              }`}
+              aria-hidden="true"
+            >
+              {active ? (
+                <LoaderCircle size={13} className="spin" />
+              ) : item.state === "error" || unknown ? (
+                <CircleAlert size={13} />
+              ) : item.kind === "tool" ? (
+                <Terminal size={13} />
+              ) : (
+                <Check size={12} />
+              )}
             </span>
-          </div>
-          <div className="flex items-baseline gap-2.5 text-xs leading-[1.65] group-hover:text-accent">
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {item.title}
-            </span>
-            <ChevronRight
-              size={14}
-              className="flex-shrink-0 text-[#aaa08f] transition-transform group-open/details:rotate-90"
-            />
-          </div>
+          )}
+          {!lifecycle && (
+            <time
+              dateTime={new Date(item.at).toISOString()}
+              className="w-[59px] flex-none font-mono text-[10px] tabular-nums text-muted"
+            >
+              {clock}
+            </time>
+          )}
+          <span
+            className={`${lifecycle ? "max-w-[55%]" : "min-w-0 flex-1"} truncate group-hover:text-accent ${item.state === "error" ? "text-red-600" : ""}`}
+          >
+            {item.title}
+            {lifecycle && ` · ${clock}`}
+            {unknown && " · 状态未知"}
+          </span>
+          {lifecycle && (
+            <span className="h-px min-w-2 flex-1 bg-black/[0.07]" />
+          )}
+          <ChevronRight
+            size={12}
+            className="flex-none text-[#aaa08f] transition-transform group-open/details:rotate-90"
+            aria-hidden="true"
+          />
         </summary>
         {open && (
           <div className="mt-2 rounded-lg border border-black/[0.04] bg-[#f4f7f5] px-3 py-2.5 text-xs">
@@ -354,8 +374,10 @@ function TraceGroup({
   return (
     <>
       {newSession && (
-        <li className="list-none py-3 pb-[18px] pl-[23px] text-[10px] text-muted">
+        <li className="flex items-center gap-2 py-2 text-[10px] text-muted">
+          <span className="h-px flex-1 bg-black/[0.07]" />
           新的运行会话
+          <span className="h-px flex-1 bg-black/[0.07]" />
         </li>
       )}
       <TraceAction agent={agent} item={item} />

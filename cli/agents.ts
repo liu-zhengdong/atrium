@@ -42,21 +42,30 @@ export function findAgent(view: Overview, reference: string): AgentEntry {
 
 const list: Command = {
   args: "",
-  about: "名册：短号、名称、状态、运行中的模型、消息箱待处理数、工作声明",
+  about: "名册：短号、名称、状态、模型、消息箱待处理数、工作声明",
   positionals: [0, 0],
   async run({ json }) {
-    const view = await roster(await connect());
+    const client = await connect();
+    const view = await roster(client);
     if (json) return printJson(view.agents);
     if (!view.agents.length)
       return console.log("还没有身份；atrium create 名称");
+    // 离线身份没有运行时，模型取配置里写着的；在跑且与配置不同的再注明实际在用。
+    const models = await Promise.all(
+      view.agents.map((agent) =>
+        client
+          .get<ModelState>(`/agents/${agent.id}/model`)
+          .then(modelCell, () => ""),
+      ),
+    );
     console.log(
       table([
         ["短号", "名称", "状态", "模型", "消息箱", "工作声明", "错误"],
-        ...view.agents.map((agent) => [
+        ...view.agents.map((agent, index) => [
           agent.ref,
           agent.name,
           presence(agent),
-          agent.runtime?.model ?? "",
+          models[index]!,
           agent.unread ? String(agent.unread) : "",
           clip(agent.work, 40),
           agent.failure
@@ -235,6 +244,13 @@ const profile: Command = {
     );
   },
 };
+
+function modelCell(state: ModelState) {
+  const configured = state.configured ?? "";
+  return state.running && state.running !== modelBase(configured)
+    ? `${state.running}（配置 ${configured || "未设定"}）`
+    : configured;
+}
 
 function modelReport(name: string, state: ModelState, notes: string[] = []) {
   return [

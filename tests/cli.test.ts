@@ -118,6 +118,12 @@ test(
     const list = await ok("list");
     assert.match(list, /a1\s+林岚\s+离线/);
     assert.match(list, /a2\s+沈默\s+离线/);
+    // 离线身份显示配置里写着的模型
+    await ok("model", "林岚", "deepseek/deepseek-chat:high");
+    assert.match(
+      await ok("list"),
+      /a1\s+林岚\s+离线\s+deepseek\/deepseek-chat:high/,
+    );
     const listed = JSON.parse(await ok("list", "--json")) as { ref: string }[];
     assert.deepEqual(
       listed.map((agent) => agent.ref),

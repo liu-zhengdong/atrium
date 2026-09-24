@@ -9,7 +9,7 @@ type Plugin = {
   version: string | null;
   enabled: boolean;
 };
-type List = { mode: "shared" | "own"; packages: Plugin[] };
+type List = { mode: "own"; packages: Plugin[] };
 type Action = "add" | "remove" | "update" | "enable" | "disable" | "update-all";
 const errorMessage = (reason: unknown) =>
   reason instanceof Error ? reason.message : String(reason);
@@ -28,14 +28,12 @@ export function AgentPlugins({
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [changed, setChanged] = useState(false);
-  const [confirm, setConfirm] = useState<"own" | "shared" | null>(null);
   const [removeSource, setRemoveSource] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   useEffect(() => {
     let active = true;
     setList(null);
     setRemoveSource(null);
-    setConfirm(null);
     setChanged(false);
     setError("");
     api<List>(`/agents/${agentId}/plugins`)
@@ -67,23 +65,6 @@ export function AgentPlugins({
       setBusy("");
     }
   }
-  async function mode(value: "own" | "shared") {
-    setConfirm(null);
-    setBusy("mode");
-    setError("");
-    try {
-      setList(
-        await api<List>(`/agents/${agentId}/plugins/mode`, "PUT", {
-          mode: value,
-        }),
-      );
-      setChanged(true);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setBusy("");
-    }
-  }
   async function restart() {
     setBusy("restart");
     setError("");
@@ -103,7 +84,7 @@ export function AgentPlugins({
     <section className="settings-section" aria-label="插件">
       <div className="flex items-center justify-between gap-2">
         <h3>插件</h3>
-        {list?.mode === "own" && (
+        {list && (
           <button
             type="button"
             className="button secondary"
@@ -120,44 +101,10 @@ export function AgentPlugins({
           加载插件…
         </p>
       )}
-      {list?.mode === "shared" && (
-        <div className="rounded-xl bg-[#f2f6f2] p-3 text-xs text-muted">
-          <p>当前使用个人 Pi 的安装，个人更新也会影响此 Agent。</p>
-          {confirm === "own" ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span>复制当前插件到此身份；运行中的 Agent 需要重启。</span>
-              <button
-                type="button"
-                className="button"
-                disabled={!!busy}
-                onClick={() => void mode("own")}
-              >
-                确认转换
-              </button>
-              <button
-                type="button"
-                className="button secondary"
-                onClick={() => setConfirm(null)}
-              >
-                取消
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="button secondary mt-2"
-              disabled={!!busy}
-              onClick={() => setConfirm("own")}
-            >
-              转为独立安装
-            </button>
-          )}
-        </div>
-      )}
-      {list?.mode === "own" && (
+      {list && (
         <>
           <p className="text-xs text-muted">
-            仅此身份使用；插件会运行代码，安装前请确认来源。
+            插件会运行代码，安装前请确认来源。
           </p>
           <form
             className="flex flex-wrap gap-2"
@@ -240,9 +187,7 @@ export function AgentPlugins({
                         title={
                           item.kind === "bundled"
                             ? "应用内置，不可修改"
-                            : list.mode === "shared"
-                              ? "转为独立安装后可修改"
-                              : `切换 ${item.name}`
+                            : `切换 ${item.name}`
                         }
                       >
                         <input
@@ -251,11 +196,7 @@ export function AgentPlugins({
                           className="disabled:cursor-not-allowed disabled:opacity-50"
                           aria-label={`启用 ${item.name}`}
                           checked={item.enabled}
-                          disabled={
-                            !!busy ||
-                            list.mode === "shared" ||
-                            item.kind === "bundled"
-                          }
+                          disabled={!!busy || item.kind === "bundled"}
                           onChange={() =>
                             void act(
                               item.enabled ? "disable" : "enable",
@@ -264,7 +205,7 @@ export function AgentPlugins({
                           }
                         />
                       </label>
-                      {list.mode === "own" && item.kind !== "bundled" && (
+                      {item.kind !== "bundled" && (
                         <>
                           {item.kind !== "local" && (
                             <button
@@ -327,48 +268,6 @@ export function AgentPlugins({
         ) : (
           <p className="text-xs text-muted">没有安装插件</p>
         ))}
-      {list?.mode === "own" && (
-        <>
-          <button
-            type="button"
-            className="button secondary mt-3 !text-xs"
-            disabled={!!busy}
-            onClick={() => setConfirm("shared")}
-          >
-            使用个人 Pi 插件（停用此身份的独立插件）
-          </button>
-          {confirm === "shared" && (
-            <div
-              role="dialog"
-              aria-label="确认切回共享安装"
-              className="mt-3 rounded-xl bg-soft p-4 text-xs"
-            >
-              <p className="m-0">
-                将重新使用个人 Pi
-                的插件；独立安装文件保留，再转独立时重新复制共享配置。
-              </p>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  className="button"
-                  disabled={!!busy}
-                  onClick={() => void mode("shared")}
-                >
-                  确认切回
-                </button>
-                <button
-                  type="button"
-                  className="button secondary"
-                  disabled={!!busy}
-                  onClick={() => setConfirm(null)}
-                >
-                  取消
-                </button>
-              </div>
-            </div>
-          )}
-        </>
-      )}
       {busy && (
         <p role="status" className="flex items-center gap-2 text-xs text-muted">
           <LoaderCircle size={14} className="spin" />

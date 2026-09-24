@@ -1,6 +1,4 @@
 import {
-  constants,
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -9,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { join, relative, resolve, sep } from "node:path";
 import {
@@ -20,6 +18,8 @@ import {
 } from "./profile.ts";
 import { templatePackagePath } from "./package-spec.ts";
 import { Problem } from "./store.ts";
+import { canonicalPath, clone } from "./clone.ts";
+import { rewriteIdentityConfigs } from "./identity-config.ts";
 
 export type PackageEntry =
   | string
@@ -57,12 +57,6 @@ const atomicJson = (file: string, value: unknown) => {
     rmSync(temp, { force: true });
   }
 };
-const clone = (from: string, to: string) =>
-  cpSync(from, to, {
-    recursive: true,
-    dereference: false,
-    mode: constants.COPYFILE_FICLONE,
-  });
 const allowedSpec = (value: string) => {
   if (/^npm:(?:@[\w.-]+\/)?[\w.-]+(?:@[^\s/]+)?$/.test(value)) return true;
   if (value.startsWith("git:") && !/\s/.test(value)) {
@@ -89,7 +83,8 @@ const shortName = (value: string) =>
 export function ownSource(value: string, template: string): string {
   if (/^(npm:|git:)/.test(value)) return value;
   const npmRoot = join(template, "npm", "node_modules");
-  const npmPath = relative(npmRoot, value);
+  const canonical = canonicalPath(resolve(template, value));
+  const npmPath = relative(canonicalPath(npmRoot), canonical);
   if (
     npmPath &&
     !npmPath.startsWith(".." + sep) &&
@@ -103,7 +98,7 @@ export function ownSource(value: string, template: string): string {
     return `npm:${name}`;
   }
   const gitRoot = join(template, "git");
-  const gitPath = relative(gitRoot, value);
+  const gitPath = relative(canonicalPath(gitRoot), canonical);
   if (
     gitPath &&
     !gitPath.startsWith(".." + sep) &&
@@ -125,6 +120,21 @@ export function ownSource(value: string, template: string): string {
   return /^(\/|~\/)/.test(value)
     ? templatePackagePath(template, value)
     : resolve(template, value);
+}
+
+/** Local packages under the template get an independent, collision-safe install path. */
+function ownedLocalPath(template: string, target: string, value: string) {
+  const absolute = ownSource(value, template);
+  const within = relative(canonicalPath(template), canonicalPath(absolute));
+  if (
+    within === ".." ||
+    within.startsWith(`..${sep}`) ||
+    resolve(absolute) === resolve(template)
+  )
+    return null;
+  if (within.startsWith("npm/") || within.startsWith("git/")) return null;
+  const key = createHash("sha256").update(within).digest("hex").slice(0, 12);
+  return join(target, "local", `${key}-${within.split(sep).at(-1)}`);
 }
 
 /** Pure decision boundary: validate the complete request before touching disk. */
@@ -183,13 +193,13 @@ export function planPackages(
 
 export function packageList(directory: string) {
   const settings = readSettings(directory);
-  const mode = existsSync(modePath(directory)) ? "own" : "shared";
+  if (!existsSync(modePath(directory)))
+    throw new Problem(409, "身份插件尚未完成独立安装");
   return {
-    mode,
+    mode: "own" as const,
     packages: entries(settings).map((entry) => {
       const spec = source(entry);
-      const classified =
-        mode === "shared" ? ownSource(spec, defaultTemplate()) : spec;
+      const classified = spec;
       const path = /^(npm:|git:)/.test(spec)
         ? templatePackagePath(directory, spec)
         : spec;
@@ -231,16 +241,22 @@ function staged(directory: string, work: (stage: string) => void) {
   mkdirSync(stage, { mode: 0o700 });
   try {
     clone(settingsPath(directory), settingsPath(stage));
-    for (const name of ["npm", "git"])
+    for (const name of ["npm", "git", "local"])
       if (existsSync(join(directory, name)))
-        clone(join(directory, name), join(stage, name));
+        clone(
+          join(directory, name),
+          join(stage, name),
+          { recursive: true },
+          undefined,
+          { from: directory, to: stage },
+        );
     work(stage);
     const backup = join(stage, "backup");
     mkdirSync(backup);
     const moved: string[] = [];
     let movedMarker = false;
     try {
-      for (const name of ["npm", "git"]) {
+      for (const name of ["npm", "git", "local"]) {
         if (existsSync(join(directory, name)))
           renameSync(join(directory, name), join(backup, name));
         if (existsSync(join(stage, name))) {
@@ -258,7 +274,7 @@ function staged(directory: string, work: (stage: string) => void) {
       if (movedMarker) rmSync(modePath(directory), { force: true });
       for (const name of moved)
         rmSync(join(directory, name), { recursive: true, force: true });
-      for (const name of ["npm", "git", "settings.json"])
+      for (const name of ["npm", "git", "local", "settings.json"])
         if (existsSync(join(backup, name)))
           renameSync(join(backup, name), join(directory, name));
       throw error;
@@ -273,6 +289,7 @@ export function cloneTemplatePackages(
   template: string,
   target: string,
   selected: PackageEntry[],
+  finalTarget = target,
 ) {
   const own = selected.map((entry) =>
     typeof entry === "string"
@@ -285,7 +302,13 @@ export function cloneTemplatePackages(
     existsSync(join(template, "npm")) &&
     !existsSync(join(target, "npm"))
   )
-    clone(join(template, "npm"), join(target, "npm"));
+    clone(
+      join(template, "npm"),
+      join(target, "npm"),
+      { recursive: true },
+      undefined,
+      { from: template, to: target },
+    );
   for (const entry of own) {
     const spec = source(entry);
     if (
@@ -297,7 +320,10 @@ export function cloneTemplatePackages(
       const from = templatePackagePath(template, spec),
         to = templatePackagePath(target, spec);
       mkdirSync(resolve(to, ".."), { recursive: true });
-      clone(from, to);
+      clone(from, to, { recursive: true }, undefined, {
+        from: template,
+        to: target,
+      });
     }
   }
   for (const entry of own) {
@@ -308,9 +334,27 @@ export function cloneTemplatePackages(
     if (!existsSync(from))
       throw new Problem(400, `模板 package 未安装：${spec}`);
     mkdirSync(resolve(to, ".."), { recursive: true });
-    if (!existsSync(to)) clone(from, to);
+    if (!existsSync(to))
+      clone(from, to, { recursive: true }, undefined, {
+        from: template,
+        to: target,
+      });
   }
-  return own;
+  return own.map((entry) => {
+    const value = source(entry);
+    const local = ownedLocalPath(template, target, value);
+    if (!local) return entry;
+    const from = ownSource(value, template);
+    if (!existsSync(local)) {
+      mkdirSync(resolve(local, ".."), { recursive: true });
+      clone(from, local, { recursive: true }, undefined, {
+        from: template,
+        to: target,
+      });
+    }
+    const final = ownedLocalPath(template, finalTarget, value)!;
+    return typeof entry === "string" ? final : { ...entry, source: final };
+  });
 }
 
 export function prepareOwnPackages(
@@ -341,34 +385,31 @@ export function prepareOwnPackages(
   return converted;
 }
 
-export function changeMode(directory: string, mode: "own" | "shared") {
-  const marker = modePath(directory);
-  if (mode === "own") {
-    if (existsSync(marker)) return packageList(directory);
-    const original = readSettings(directory),
-      selected = entries(original).filter((entry) => !isBundled(source(entry)));
-    staged(directory, (stage) => {
-      const converted = cloneTemplatePackages(
-        defaultTemplate(),
-        stage,
-        selected,
-      );
-      const next = readSettings(stage);
-      next.packages = injectBundledPackages(converted);
-      writeJson(settingsPath(stage), next);
-      writeJson(modePath(stage), { shared: original.packages });
-    });
-  } else if (existsSync(marker)) {
-    const original = JSON.parse(readFileSync(marker, "utf8")) as {
-      shared: PackageEntry[] | null;
-    };
-    const shared = original.shared ?? entries(readSettings(defaultTemplate()));
-    const next = readSettings(directory);
-    next.packages = injectBundledPackages(shared);
-    atomicJson(settingsPath(directory), next);
-    rmSync(marker);
-  }
-  return packageList(directory);
+// Missing marker is the legacy shared-plugin layout. Stage the conversion so a
+// failed copy leaves the original settings and installs untouched for retry.
+export function ensureOwnPackages(
+  directory: string,
+  template = defaultTemplate(),
+) {
+  if (existsSync(modePath(directory))) return false;
+  const original = readSettings(directory);
+  const selected = entries(original).filter(
+    (entry) => !isBundled(source(entry)),
+  );
+  staged(directory, (stage) => {
+    const converted = cloneTemplatePackages(
+      template,
+      stage,
+      selected,
+      directory,
+    );
+    const next = readSettings(stage);
+    next.packages = injectBundledPackages(converted);
+    writeJson(settingsPath(stage), next);
+    rewriteIdentityConfigs(template, stage, [], resolve(template), directory);
+    writeJson(modePath(stage), { owned: true });
+  });
+  return true;
 }
 
 export type AgentDefaults = {
@@ -421,7 +462,7 @@ export function saveAgentDefaults(data: string, defaults: AgentDefaults) {
   return defaults;
 }
 export function markOwn(directory: string) {
-  atomicJson(modePath(directory), { shared: null });
+  atomicJson(modePath(directory), { owned: true });
 }
 
 const queues = new Map<string, Promise<unknown>>();
@@ -453,16 +494,34 @@ export function changePackages(directory: string, action: PackageAction) {
     atomicJson(settingsPath(directory), current);
   } else {
     staged(directory, (stage) => {
-      if (action.action === "add" && action.spec)
-        runPi(stage, ["install", action.spec]);
-      else if (action.action === "remove")
+      if (action.action === "add" && action.spec) {
+        const spec = action.spec;
+        const local = ownedLocalPath(defaultTemplate(), stage, spec);
+        if (local) {
+          cloneTemplatePackages(defaultTemplate(), stage, [spec], directory);
+          runPi(stage, ["install", local]);
+        } else runPi(stage, ["install", spec]);
+      } else if (action.action === "remove")
         runPi(stage, ["remove", action.spec!]);
       else if (action.action === "update")
         runPi(stage, ["update", action.spec!]);
       else runPi(stage, ["update", "--extensions"]);
       const next = readSettings(stage);
       next.packages = injectBundledPackages(
-        action.action === "add" ? entries(next) : selected,
+        (action.action === "add" ? entries(next) : selected).map((entry) => {
+          const value = source(entry);
+          const path = relative(stage, value);
+          if (
+            path === ".." ||
+            path.startsWith(`..${sep}`) ||
+            resolve(value) === resolve(stage)
+          )
+            return entry;
+          const final = join(directory, path);
+          return typeof entry === "string"
+            ? final
+            : { ...entry, source: final };
+        }),
       );
       writeJson(settingsPath(stage), next);
     });

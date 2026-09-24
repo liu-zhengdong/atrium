@@ -1,0 +1,66 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { Problem } from "../server/problem.ts";
+import { dataDirectory } from "../server/service-state.ts";
+import { join } from "node:path";
+
+export const exitCodes = {
+  internal: 1,
+  usage: 2,
+  chat_not_found: 3,
+  agent_not_found: 3,
+  account_not_found: 3,
+  not_found: 3,
+  conflict: 4,
+  already_assigned: 4,
+  service_unavailable: 5,
+  timeout: 124,
+} as const;
+export type ErrorCode = keyof typeof exitCodes;
+export type Candidate = { ref: string; name: string };
+export type Context = {
+  result?: unknown;
+  next?: string | null;
+  lines: string[];
+};
+const context = new AsyncLocalStorage<Context>();
+export const withContext = <T>(value: Context, fn: () => Promise<T>) =>
+  context.run(value, fn);
+export const recordResult = (result: unknown) => {
+  const current = context.getStore();
+  if (current) current.result = result;
+};
+export const recordNext = (next: string) => {
+  const current = context.getStore();
+  if (current) current.next = next;
+};
+
+export function errorCode(error: unknown): ErrorCode {
+  if (error instanceof Problem && error.code in exitCodes)
+    return error.code as ErrorCode;
+  return "internal";
+}
+export function correction(error: unknown, code: ErrorCode, usage?: string) {
+  if (code === "usage") return usage ?? "atrium --help";
+  if (code === "chat_not_found") return "atrium chats";
+  if (code === "agent_not_found") return "atrium list";
+  if (code === "account_not_found") return "atrium accounts";
+  if (code === "service_unavailable") return "atrium status";
+  if (code === "timeout") return null;
+  return "atrium --help";
+}
+export function failure(error: unknown, usage?: string) {
+  const code = errorCode(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const candidates = error instanceof Problem ? error.candidates : undefined;
+  const next = correction(error, code, usage);
+  return {
+    code,
+    message:
+      code === "service_unavailable"
+        ? `${message}\n数据：${dataDirectory()}\n日志：${join(dataDirectory(), "service.log")}`
+        : message,
+    ...(candidates?.length ? { candidates } : {}),
+    next,
+    exit: exitCodes[code],
+  };
+}

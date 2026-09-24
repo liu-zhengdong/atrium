@@ -541,19 +541,9 @@ export async function createApp(options: {
   app.get("/api/agents/:id/plugins", (request) =>
     packageList(packageDirectory(request)),
   );
-  // Old clients still have a mode switch until #148's UI lands. Never allow
-  // switching back to the personal Pi installation.
-  app.put("/api/agents/:id/plugins/mode", async (request) => {
-    const { mode } = z
-      .object({ mode: z.enum(["own", "shared"]) })
-      .strict()
-      .parse(request.body);
-    if (mode === "shared") throw new Problem(410, "个人 Pi 插件共享模式已停用");
-    const directory = packageDirectory(request);
-    return serialized(directory, async () => {
-      ensureOwnPackages(directory);
-      return packageList(directory);
-    });
+  // Keep a clear error for older clients; no mode changes are supported.
+  app.put("/api/agents/:id/plugins/mode", () => {
+    throw new Problem(410, "插件模式不可切换；每个身份独立安装");
   });
   app.post("/api/agents/:id/plugins", async (request) => {
     const directory = packageDirectory(request);

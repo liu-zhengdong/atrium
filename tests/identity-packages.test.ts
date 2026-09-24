@@ -365,16 +365,18 @@ test("HTTP 默认配置与身份插件 API 只改目标身份；无效和内置�
   );
   const path = `/api/agents/${created.json().agent.id}/plugins`;
   assert.equal((await app.inject({ url: path })).json().mode, "own");
-  assert.equal(
-    (
-      await app.inject({
-        method: "PUT",
-        url: `${path}/mode`,
-        payload: { mode: "shared" },
-      })
-    ).statusCode,
-    410,
-  );
+  for (const mode of ["shared", "own"]) {
+    assert.equal(
+      (
+        await app.inject({
+          method: "PUT",
+          url: `${path}/mode`,
+          payload: { mode },
+        })
+      ).statusCode,
+      410,
+    );
+  }
   for (const spec of [
     "npm:@liuser/pi-atrium",
     "npm:bad spec",

@@ -24,7 +24,7 @@ type PrivateRuntime = {
 
 async function fixture(
   t: TestContext,
-  failure: "import" | "load" | "turn" | "twice" | "deliver" | "other",
+  failure: "import" | "load" | "turn" | "twice" | "deliver" | "other" | "multi",
 ) {
   const root = mkdtempSync(join(tmpdir(), "atrium-session-fallback-"));
   const data = join(root, "data");
@@ -48,6 +48,7 @@ async function fixture(
   const delivered: string[] = [];
   const sessions = new Map<string, RuntimeInfo>();
   const seen = new Set<string>();
+  const ends = new Map<string, number>();
   const broken = new Set<string>();
   const previous = store.one<{ acp_session_id: string }>(
     "SELECT acp_session_id FROM agents WHERE id=?",
@@ -86,7 +87,12 @@ async function fixture(
         delivered.push(input.sessionId);
         if (failure === "deliver" && input.sessionId === previous)
           throw new Error("prompt-capture: no capture");
-        if (failure === "turn" || failure === "twice" || failure === "other")
+        if (
+          failure === "turn" ||
+          failure === "twice" ||
+          failure === "other" ||
+          failure === "multi"
+        )
           broken.add(input.sessionId);
         return { accepted: true };
       }
@@ -105,15 +111,14 @@ async function fixture(
           return {
             ...target,
             items: [],
-            nextAfter: seen.has(input.sessionId) ? 4 : 0,
+            nextAfter: ends.get(input.sessionId) ?? 0,
             hasMore: false,
             gap: false,
           };
         seen.add(input.sessionId);
         const at = Date.now();
-        return {
-          ...target,
-          items: [
+        const items = (
+          [
             { seq: 1, at, kind: "run_start" },
             { seq: 2, at, kind: "delivery" },
             ...(isBroken
@@ -131,9 +136,29 @@ async function fixture(
                   },
                 ]
               : []),
-            { seq: 4, at, kind: "run_end" },
-          ],
-          nextAfter: 4,
+            // Pi can start several turns in one run; the last may carry no delivery.
+            ...(isBroken && failure === "multi"
+              ? [
+                  { seq: 4, at, kind: "run_start" },
+                  {
+                    seq: 5,
+                    at,
+                    kind: "message",
+                    name: "assistant",
+                    error: true,
+                    text: "prompt-capture: no capture",
+                  },
+                ]
+              : []),
+            { seq: 6, at, kind: "run_end" },
+          ] as Record<string, unknown>[]
+        ).map((item, index) => ({ ...item, seq: index + 1 }));
+        ends.set(input.sessionId, items.length);
+        return {
+          ...target,
+          // Trace sequence numbers are contiguous; number the events in order.
+          items,
+          nextAfter: items.length,
           hasMore: false,
           gap: false,
         };
@@ -215,6 +240,14 @@ test("恢复后首轮 prompt-capture：换会话重投，不标记出错", async
   assert.equal(delivered.length, 2);
   assert.notEqual(delivered[0], delivered[1]);
   assert.equal(calls.filter((method) => method === "session/new").length, 1);
+  assert.equal(store.failure(agent.id), null);
+  assert.match(store.agent(agent.id).session_reset_reason!, /prompt-capture/);
+});
+
+test("恢复后同一次运行连开多轮、末轮没有投递：仍换会话重投", async (t) => {
+  const { store, agent, delivered } = await fixture(t, "multi");
+  assert.equal(delivered.length, 2);
+  assert.notEqual(delivered[0], delivered[1]);
   assert.equal(store.failure(agent.id), null);
   assert.match(store.agent(agent.id).session_reset_reason!, /prompt-capture/);
 });

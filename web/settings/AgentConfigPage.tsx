@@ -14,11 +14,13 @@ import {
   AgentRules,
 } from "../agents/AgentResources.tsx";
 import { AgentCredentials } from "./AgentCredentials.tsx";
+import { AgentContainer } from "./AgentContainer.tsx";
 import { DeleteAgent } from "../agents/DeleteAgent.tsx";
 import { trackUnsaved } from "./unsaved.ts";
 
 const sections = [
   { id: "model", title: "模型与账号" },
+  { id: "container", title: "运行环境" },
   { id: "plugins", title: "插件" },
   { id: "skills", title: "技能" },
   { id: "mcp", title: "MCP" },
@@ -173,6 +175,7 @@ export function AgentConfigPage({
               </button>
             )}
           </section>
+          <AgentContainer agent={agent} changed={changed} />
           <section id="plugins">
             {agent.agent_directory && (
               <AgentPlugins

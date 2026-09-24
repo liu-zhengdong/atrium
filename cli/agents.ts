@@ -15,7 +15,7 @@ import { dataDirectory } from "../server/service-state.ts";
 import { requireAssignment } from "../server/assignment.ts";
 import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
-import { str, type Command } from "./main.ts";
+import { str, strs, type Command } from "./main.ts";
 import { Problem, closest } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
 
@@ -112,6 +112,7 @@ const show: Command = {
           `运行：${agent.runtime.mode.toUpperCase()} · PID ${agent.runtime.pid}${agent.runtime.busy ? " · 执行中" : ""}`,
         `工作目录：${agent.cwd}`,
         `配置目录：${agent.agent_directory ?? "无（旧记录，待升级）"}`,
+        `容器：${agent.container.enabled ? (agent.container.paused ? "已冻结" : "已启用") : "未启用"}`,
         agent.session_file && `会话文件：${agent.session_file}`,
         agent.session_reset_at &&
           `会话已于 ${when(agent.session_reset_at)} 重建：${agent.session_reset_reason}`,
@@ -190,6 +191,38 @@ const stop: Command = {
     const agent = findAgent(await roster(client), reference!);
     await client.post(`/agents/${agent.id}/stop`);
     console.log(`已停止 ${agent.name}；被私聊或 @ 时会再起来`);
+  },
+};
+
+const container: Command = {
+  args: "名称 [on|off|pause|resume] [--mount 目录]",
+  about: "切换容器运行或冻结；切换前须停止身份，--mount 可重复",
+  options: { mount: { type: "string", multiple: true } },
+  positionals: [1, 2],
+  async run({ positionals: [reference, action], values, json }) {
+    if (action && !["on", "off", "pause", "resume"].includes(action))
+      throw new Problem(400, "操作须为 on、off、pause 或 resume", "usage");
+    const client = await connect();
+    const agent = findAgent(await roster(client), reference!);
+    const url = `/agents/${agent.id}/container`;
+    const state =
+      action === "on" || action === "off"
+        ? await client.put<AgentInfo["container"]>(url, {
+            enabled: action === "on",
+            mounts:
+              values.mount === undefined
+                ? agent.container.mounts
+                : strs(values, "mount"),
+          })
+        : action === "pause" || action === "resume"
+          ? await client.post<AgentInfo["container"]>(
+              `${url}/${action === "resume" ? "unpause" : "pause"}`,
+            )
+          : agent.container;
+    if (json) return printJson(state);
+    console.log(
+      `${agent.name} · 容器${state.enabled ? (state.paused ? "已冻结" : "已启用") : "未启用"}${state.mounts.length ? ` · 授权目录 ${state.mounts.length} 个` : ""}`,
+    );
   },
 };
 
@@ -472,6 +505,11 @@ const run: Command = {
     }
     if (!agent.agent_directory)
       throw new Error("旧记录尚未升级；请先 atrium promote 名称，历史会保留");
+    if (agent.container.enabled)
+      throw new Problem(
+        409,
+        "容器身份请用 atrium start 启动；run 不会绕过隔离",
+      );
     const { runNamedTui } = require("@liuser/pi-atrium/dist/identity.js") as {
       runNamedTui(value: {
         identityId: string;
@@ -520,6 +558,7 @@ export const agentCommands: Record<string, Command> = {
   start,
   retry,
   stop,
+  container,
   delete: remove,
   config,
   profile,

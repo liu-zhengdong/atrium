@@ -1,4 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
+import type { Server } from "node:http";
+import { listenContainerMcp } from "./container-mcp.ts";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -22,11 +24,30 @@ await ensureWebDist(packageRoot);
 const data = dataDirectory();
 const lease = claimService(data, servicePort());
 let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;
+let containerMcp: Server | undefined;
+let containerMcpOpening: Promise<void> | undefined;
+const ensureContainerMcp = () => {
+  if (!containerMcpOpening)
+    containerMcpOpening = listenContainerMcp(lease.record.port)
+      .then((server) => {
+        containerMcp = server;
+      })
+      .catch((error) => {
+        containerMcpOpening = undefined;
+        throw error;
+      });
+  return containerMcpOpening;
+};
 let stopping = false;
 const shutdown = async () => {
   if (stopping) return;
   stopping = true;
   try {
+    await containerMcpOpening?.catch(() => {});
+    if (containerMcp)
+      await new Promise<void>((resolve) =>
+        containerMcp!.close(() => resolve()),
+      );
     await app?.close();
     lease.release();
     process.exit(0);
@@ -87,6 +108,7 @@ try {
   ({ app } = await createApp({
     data,
     webRoot: join(packageRoot, "dist"),
+    ensureContainerMcp,
   }));
   const authorize = (value: string | undefined) => {
     const actual = Buffer.from(value ?? "");
@@ -117,6 +139,9 @@ try {
   console.log(`Atrium → ${serviceUrl(lease.record)}\n数据：${data}`);
 } catch (error) {
   console.error(error);
+  await containerMcpOpening?.catch(() => {});
+  if (containerMcp)
+    await new Promise<void>((resolve) => containerMcp!.close(() => resolve()));
   await app?.close();
   lease.release();
   process.exitCode = 1;

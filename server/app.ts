@@ -67,6 +67,7 @@ export async function createApp(options: {
   data: string;
   webRoot?: string;
   runtime?: boolean;
+  ensureContainerMcp?: () => Promise<void>;
   desktops?: string;
   piHome?: string;
 }) {
@@ -112,6 +113,7 @@ export async function createApp(options: {
           desktops,
           (agent, text) => accounts.redact(agent, text),
           (agent, detail) => accounts.markModelAuthFailure(agent, detail),
+          options.ensureContainerMcp,
         );
   const traces =
     runtimes?.traces ??
@@ -709,6 +711,29 @@ export async function createApp(options: {
     );
     changed();
     return result;
+  });
+  app.put("/api/agents/:id/container", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    const input = z
+      .object({
+        enabled: z.boolean(),
+        mounts: z.array(z.string().max(4096)).max(12).default([]),
+      })
+      .strict()
+      .parse(request.body);
+    return runtimes.setContainer(
+      agentParams(request),
+      input.enabled,
+      input.mounts,
+    );
+  });
+  app.post("/api/agents/:id/container/pause", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    return runtimes.pause(agentParams(request));
+  });
+  app.post("/api/agents/:id/container/unpause", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    return runtimes.unpause(agentParams(request));
   });
   app.post("/api/agents/:id/start", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");

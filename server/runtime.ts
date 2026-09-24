@@ -1,5 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
+  containerName,
+  containerSettings,
+  containerState,
+  controlContainer,
+  requireImage,
+  spawnContainer,
+  validMounts,
+} from "./container.ts";
+import {
   mkdirSync,
   readFileSync,
   existsSync,
@@ -121,6 +130,8 @@ export class Runtimes {
   private gateway?: Gateway;
   private gateways = new Set<Gateway>();
   private opening?: Promise<Gateway>;
+  private containerGateways = new Map<string, Gateway>();
+  private containerOpenings = new Map<string, Promise<Gateway>>();
   private connecting = new Map<string, Promise<void>>();
   private bindingOwners = new Map<string, string>();
   private pumping = new Map<string, Promise<void>>();
@@ -159,6 +170,7 @@ export class Runtimes {
     private desktops: string,
     private redact: (agent: string, text: string) => string = (_, text) => text,
     private authFailure: (agent: string, detail: string) => void = () => {},
+    private ensureContainerMcp: () => Promise<void> = async () => {},
   ) {
     this.traces = new TraceStore(store, redact);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
@@ -177,23 +189,59 @@ export class Runtimes {
   private assertOpen() {
     if (this.stopped) throw new Error("Atrium 正在关闭");
   }
-  private async open(): Promise<Gateway> {
+  private async open(id?: string): Promise<Gateway> {
     this.assertOpen();
-    if (this.gateway) return this.gateway;
-    if (this.opening) return this.opening;
+    const isolated =
+      id && this.store.agent(id).container.enabled ? id : undefined;
+    if (isolated) {
+      const existing = this.containerGateways.get(isolated);
+      if (existing) return existing;
+      const opening = this.containerOpenings.get(isolated);
+      if (opening) return opening;
+    } else {
+      if (this.gateway) return this.gateway;
+      if (this.opening) return this.opening;
+    }
     const opening = (async () => {
       const entry =
         process.env.ATRIUM_PI_ACP_ENTRY ||
         require.resolve("@liuser/pi-atrium/dist/index.js");
-      const child = spawn(process.execPath, [entry], {
-        env: {
-          ...identityEnvironment(process.env),
-          PI_MCP_TOOL_EXPOSURE: "proxy-only",
-          PI_ACP_PI_COMMAND:
-            process.env.PI_ACP_PI_COMMAND || process.env.ATRIUM_PI_BIN || "pi",
-        },
-        stdio: "pipe",
-      });
+      let child: ChildProcessWithoutNullStreams;
+      if (isolated) {
+        const agent = this.store.agent(isolated);
+        const state = await containerState(isolated);
+        if (state !== "absent")
+          throw new Problem(
+            409,
+            `容器 ${containerName(isolated)} 已存在（${state}），请先检查，不能接管`,
+          );
+        await requireImage();
+        await this.ensureContainerMcp();
+        child = spawnContainer(
+          isolated,
+          agent.agent_directory!,
+          agent.cwd,
+          agent.container.mounts,
+          containerSettings(
+            agent.agent_directory!,
+            agent.cwd,
+            agent.container.mounts,
+            this.data,
+            isolated,
+          ),
+        );
+      } else
+        child = spawn(process.execPath, [entry], {
+          env: {
+            ...identityEnvironment(process.env),
+            PI_MCP_TOOL_EXPOSURE: "proxy-only",
+            PI_ACP_PI_COMMAND:
+              process.env.PI_ACP_PI_COMMAND ||
+              process.env.ATRIUM_PI_BIN ||
+              "pi",
+          },
+          stdio: "pipe",
+        });
       // Keep provider/adapter diagnostics local; never forward credentials or RPC payloads to the UI.
       child.stderr.on("data", (data: Buffer) => process.stderr.write(data));
       const connection = client({ name: "atrium" })
@@ -241,12 +289,18 @@ export class Runtimes {
           );
         this.canSetModel = !!result._meta["pi-acp/identity/model/v1"];
         this.assertOpen();
-        this.gateway = gateway;
+        if (isolated) this.containerGateways.set(isolated, gateway);
+        else this.gateway = gateway;
         void connection.closed
           .catch(() => undefined)
           .then(() => {
-            if (this.gateway !== gateway) return;
-            this.gateway = undefined;
+            if (isolated) {
+              if (this.containerGateways.get(isolated) !== gateway) return;
+              this.containerGateways.delete(isolated);
+            } else {
+              if (this.gateway !== gateway) return;
+              this.gateway = undefined;
+            }
             for (const [id, entry] of this.connections)
               if (entry.connection === connection) {
                 this.connections.delete(id);
@@ -263,18 +317,31 @@ export class Runtimes {
         clearTimeout(timeout);
       }
     })();
-    this.opening = opening;
+    if (isolated) this.containerOpenings.set(isolated, opening);
+    else this.opening = opening;
     try {
       return await opening;
     } finally {
-      if (this.opening === opening) this.opening = undefined;
+      if (isolated && this.containerOpenings.get(isolated) === opening)
+        this.containerOpenings.delete(isolated);
+      if (!isolated && this.opening === opening) this.opening = undefined;
     }
   }
   private async rpc<T = Record<string, unknown>>(
     method: string,
     params: unknown,
+    agentId?: string,
   ): Promise<T> {
-    const { connection } = await this.open();
+    const selector = params as { identityId?: string; runtimeId?: string };
+    const id =
+      agentId ||
+      selector?.identityId ||
+      (selector?.runtimeId &&
+        (this.bindingOwners.get(selector.runtimeId) ||
+          [...this.connections].find(
+            ([, entry]) => entry.info.runtimeId === selector.runtimeId,
+          )?.[0]));
+    const { connection } = await this.open(id);
     try {
       return await connection.agent.request<T>(method, params);
     } catch (error) {
@@ -396,10 +463,21 @@ export class Runtimes {
       });
   }
   async available(): Promise<LiveRuntime[]> {
-    const value = await this.rpc("_pi/runtime/list", {});
-    const { runtimes } = z
-      .object({ runtimes: z.array(liveRuntimeSchema).max(256) })
-      .parse(value);
+    const values = [
+      await this.rpc("_pi/runtime/list", {}),
+      ...(await Promise.all(
+        [...this.containerGateways]
+          .filter(([id]) => !this.store.agent(id).container.paused)
+          .map(([, { connection }]) =>
+            connection.agent.request("_pi/runtime/list", {}),
+          ),
+      )),
+    ];
+    const runtimes = values.flatMap(
+      (value) =>
+        z.object({ runtimes: z.array(liveRuntimeSchema).max(256) }).parse(value)
+          .runtimes,
+    );
     // Canonicalize during discovery, never on the overview's hot read path.
     return this.withOwners(
       runtimes.map((r) => {
@@ -495,7 +573,16 @@ export class Runtimes {
       {
         name: "atrium",
         type: "http",
-        url: `${this.baseUrl()}/mcp/${id}`,
+        url: `${
+          this.store.agent(id).container.enabled
+            ? (() => {
+                const url = new URL(this.baseUrl());
+                url.hostname = "host.docker.internal";
+                url.port = String(Number(url.port) + 1);
+                return url.toString().replace(/\/$/, "");
+              })()
+            : this.baseUrl()
+        }/mcp/${id}`,
         headers: [{ name: "Authorization", value: `Bearer ${token}` }],
       },
     ];
@@ -540,12 +627,16 @@ export class Runtimes {
     let info: RuntimeInfo | undefined;
     try {
       info = runtimeSchema.parse(
-        await this.rpc("_pi/runtime/attach", selector),
+        await this.rpc("_pi/runtime/attach", selector, id),
       );
       const profile = this.store.agent(id);
       if (profile.agent_directory && info.identityId !== id)
         throw new Problem(409, "运行实例不属于这个长期身份");
-      if (realpathSync(info.cwd) !== realpathSync(profile.cwd))
+      if (
+        profile.container.enabled
+          ? info.cwd !== "/workspace"
+          : realpathSync(info.cwd) !== realpathSync(profile.cwd)
+      )
         throw new Problem(409, "Pi 工作目录与 Agent 配置不一致");
       if (
         this.store.one(
@@ -569,7 +660,10 @@ export class Runtimes {
       });
       this.assertOpen();
       this.remember(id, info);
-      this.connections.set(id, { connection: this.gateway!.connection, info });
+      this.connections.set(id, {
+        connection: (await this.open(id)).connection,
+        info,
+      });
       this.errors.delete(id);
       this.changed();
     } catch (error) {
@@ -681,8 +775,11 @@ export class Runtimes {
     id: string,
     params: Record<string, unknown>,
   ) {
+    const agent = this.store?.agent(id);
     const cursor = join(
-      process.env.PI_ACP_DIR ?? join(homedir(), ".pi", "pi-acp"),
+      agent?.container.enabled
+        ? join(agent.agent_directory!, ".pi-acp")
+        : (process.env.PI_ACP_DIR ?? join(homedir(), ".pi", "pi-acp")),
       "identities",
       `${id}.cursor.json`,
     );
@@ -723,7 +820,11 @@ export class Runtimes {
     requireAssignment(this.store, id);
     const binding = this.binding(id);
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
-    if (binding.runtime_pid && alive(binding.runtime_pid))
+    if (
+      !this.store.agent(id).container.enabled &&
+      binding.runtime_pid &&
+      alive(binding.runtime_pid)
+    )
       throw new Problem(409, "原 Pi 进程仍存在，等待重连；不会另开同一会话");
     const last = this.starts.get(id);
     if (
@@ -738,8 +839,9 @@ export class Runtimes {
     });
     await this.operation(id, async () => {
       const current = this.store.agent(id);
-      const cwd = ensureDesktopCwd(this.store, this.desktops, current);
-      if (cwd !== current.cwd) this.changed();
+      const hostCwd = ensureDesktopCwd(this.store, this.desktops, current);
+      if (hostCwd !== current.cwd) this.changed();
+      const cwd = current.container.enabled ? "/workspace" : hostCwd;
       if (current.agent_directory) {
         // A profile left on the old layout costs the Agent a rule, not its session.
         for (const notice of syncIdentityProfile(current.agent_directory))
@@ -748,7 +850,9 @@ export class Runtimes {
         const restored = !fresh && !!current.session_file;
         const params = {
           identityId: id,
-          agentDirectory: current.agent_directory,
+          agentDirectory: current.container.enabled
+            ? "/agent"
+            : current.agent_directory,
           cwd,
           ...(restored ? { sessionFile: current.session_file } : {}),
           // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
@@ -850,10 +954,11 @@ export class Runtimes {
   /** 本进程这条网关自己启动的 Pi；别处发现、由 TUI 或旧网关拉起的实例不归它管。 */
   private owned(id: string) {
     const runtime = this.connections.get(id);
-    return (
-      runtime?.info.mode === "rpc" &&
-      runtime.info.ownerPid === this.gateway?.child.pid
-    );
+    if (runtime?.info.mode !== "rpc") return false;
+    const agent = this.store.agent(id);
+    if (agent.container.enabled)
+      return runtime.connection === this.containerGateways.get(id)?.connection;
+    return runtime.info.ownerPid === this.gateway?.child.pid;
   }
   /** 只有自己启动的 Pi 有改模型的通道，还得网关支持这条协议。 */
   private managed(id: string) {
@@ -865,11 +970,93 @@ export class Runtimes {
     if (!this.owned(id))
       throw new Problem(409, "这个实例不是 Atrium 启动的，请在原终端退出");
     await this.operation(id, async () => {
+      if (this.store.agent(id).container.paused) await this.unpause(id);
       await this.rpc("_pi/identity/stop", { identityId: id });
       this.connections.delete(id);
       this.errors.delete(id);
+      if (this.store.agent(id).container.enabled)
+        await this.stopContainerGateway(id);
     });
     this.changed();
+  }
+  private async stopContainerGateway(id: string) {
+    const gateway = this.containerGateways.get(id);
+    if (!gateway) return;
+    if ((await containerState(id)) !== "absent")
+      await controlContainer(id, "stop");
+    await this.stopGateway(gateway);
+    if (this.containerGateways.get(id) === gateway)
+      this.containerGateways.delete(id);
+  }
+  async setContainer(id: string, enabled: boolean, paths: string[] = []) {
+    const agent = this.store.agent(id);
+    if (!agent.agent_directory)
+      throw new Problem(409, "请先将 Agent 转为长期身份");
+    if (
+      this.connections.has(id) ||
+      this.pumping.has(id) ||
+      (!agent.container.enabled &&
+        this.binding(id).runtime_pid &&
+        alive(this.binding(id).runtime_pid!))
+    )
+      throw new Problem(409, "请先停止当前实例，再切换容器模式");
+    if (agent.container.paused) throw new Problem(409, "请先恢复容器");
+    if (
+      enabled &&
+      /claude-bridge/i.test(
+        JSON.stringify(
+          JSON.parse(
+            readFileSync(join(agent.agent_directory, "settings.json"), "utf8"),
+          ),
+        ),
+      )
+    )
+      throw new Problem(
+        409,
+        "claude-bridge 依赖钥匙串指纹授权读取 CLAUDE_CODE_OAUTH_TOKEN，本版不支持容器运行",
+      );
+    const mounts = enabled ? validMounts(paths) : [];
+    if (!enabled) await this.stopContainerGateway(id);
+    if (enabled !== agent.container.enabled) {
+      if (agent.session_file)
+        this.recordSessionReset(
+          id,
+          "切换容器模式，下一次启动新会话；原会话文件保留",
+        );
+      this.store.run(
+        "UPDATE agents SET container_enabled=?,container_mounts=?,container_paused=0,runtime_id=NULL,runtime_pid=NULL,acp_session_id=NULL,session_file=NULL,observed_session_id=NULL WHERE id=?",
+        Number(enabled),
+        JSON.stringify(mounts),
+        id,
+      );
+    } else
+      this.store.run(
+        "UPDATE agents SET container_mounts=? WHERE id=?",
+        JSON.stringify(mounts),
+        id,
+      );
+    this.changed();
+    return this.store.agent(id).container;
+  }
+  async pause(id: string) {
+    const agent = this.store.agent(id);
+    if (!agent.container.enabled || !this.owned(id))
+      throw new Problem(409, "身份没有运行在本服务管理的容器中");
+    if (agent.container.paused) throw new Problem(409, "容器已冻结");
+    await controlContainer(id, "pause");
+    this.store.run("UPDATE agents SET container_paused=1 WHERE id=?", id);
+    this.changed();
+    return this.store.agent(id).container;
+  }
+  async unpause(id: string) {
+    const agent = this.store.agent(id);
+    if (!agent.container.enabled || !agent.container.paused)
+      throw new Problem(409, "容器未冻结");
+    await controlContainer(id, "unpause");
+    this.store.run("UPDATE agents SET container_paused=0 WHERE id=?", id);
+    this.changed();
+    void this.pump(id);
+    return this.store.agent(id).container;
   }
   /** 撤销最后一个账号前终止活跃身份，不能留下仍在运行的无账号实例。 */
   async stopForUnassignment(id: string) {
@@ -887,7 +1074,8 @@ export class Runtimes {
   }
   /** 这个身份可选的模型。只有它在跑才问得到，问到就存下来给离线时用。 */
   private async listModels(id: string): Promise<ModelOption[]> {
-    if (!this.managed(id)) return cachedModels(this.store, id);
+    if (!this.managed(id) || this.store.agent(id).container.paused)
+      return cachedModels(this.store, id);
     try {
       const { models } = z
         .object({
@@ -946,6 +1134,8 @@ export class Runtimes {
   }
   /** 模型是身份的属性：写进身份目录的配置；在运行就顺带让当前实例立即生效。 */
   async setModel(id: string, spec: ModelSpec): Promise<ModelChange> {
+    if (this.store.agent(id).container.paused)
+      throw new Problem(409, "请先恢复容器再切换模型");
     const live = this.managed(id);
     const options = await this.listModels(id);
     const directory = this.store.agent(id).agent_directory;
@@ -993,7 +1183,11 @@ export class Runtimes {
     };
   }
   pump(id: string, direct = false): Promise<void> {
-    if (this.stopped || (this.store.failure(id) && !direct))
+    if (
+      this.stopped ||
+      this.store.agent(id).container.paused ||
+      (this.store.failure(id) && !direct)
+    )
       return Promise.resolve();
     const existing = this.pumping.get(id);
     if (existing) return existing;
@@ -1362,10 +1556,22 @@ export class Runtimes {
   async close() {
     this.stopped = true;
     clearInterval(this.interval);
+    for (const [id] of this.containerGateways) {
+      // A paused container cannot read EOF on its stdio transport. Resume before
+      // shutdown and remove only instances launched by this process.
+      if (this.store.agent(id).container.paused) {
+        await controlContainer(id, "unpause").catch(() => undefined);
+        this.store.run("UPDATE agents SET container_paused=0 WHERE id=?", id);
+      }
+      await this.stopContainerGateway(id).catch((error) =>
+        console.error(`[Atrium] 容器关闭失败：${errorWithDetails(error)}`),
+      );
+    }
     await Promise.allSettled([
       ...this.pumping.values(),
       ...this.connecting.values(),
       ...(this.opening ? [this.opening] : []),
+      ...this.containerOpenings.values(),
       ...(this.scanning ? [this.scanning] : []),
       ...[...this.gateways].map((gateway) => this.stopGateway(gateway)),
     ]);

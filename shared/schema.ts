@@ -95,6 +95,7 @@ export type AgentInfo = {
   session_reset_at: number | null;
   session_reset_reason: string | null;
   last_wake: number;
+  container: { enabled: boolean; mounts: string[]; paused: boolean };
 };
 export const runtimeSchema = z
   .object({

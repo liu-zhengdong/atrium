@@ -84,8 +84,11 @@ const UNREAD = `m.chat_id=r.chat_id AND m.id>r.last_read AND m.sender!=r.agent_i
 export const hash = (text: string) =>
   createHash("sha256").update(text).digest("hex");
 
-type AgentRow = Omit<AgentInfo, "config"> & {
+type AgentRow = Omit<AgentInfo, "config" | "container"> & {
   config: string;
+  container_enabled: number;
+  container_mounts: string;
+  container_paused: number;
   token_hash: string;
   last_wake: number;
 };
@@ -298,6 +301,9 @@ export class Store {
     ensureUsers(this);
     ensureGroups(this);
     this.addColumn("messages", "details", "TEXT NOT NULL DEFAULT ''");
+    this.addColumn("agents", "container_enabled", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumn("agents", "container_mounts", "TEXT NOT NULL DEFAULT '[]'");
+    this.addColumn("agents", "container_paused", "INTEGER NOT NULL DEFAULT 0");
   }
   /** SQLite cannot alter a CHECK constraint. Preserve short-number allocation on rebuild. */
   private migrateLocalAccounts() {
@@ -392,6 +398,11 @@ export class Store {
       session_reset_reason: row.session_reset_reason,
       last_wake: row.last_wake,
       config: preferences.parse(raw),
+      container: {
+        enabled: !!row.container_enabled,
+        mounts: JSON.parse(row.container_mounts) as string[],
+        paused: !!row.container_paused,
+      },
     };
   }
   agents(): AgentInfo[] {

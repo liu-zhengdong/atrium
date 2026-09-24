@@ -8,6 +8,7 @@ export const groups: Record<string, string[]> = {
     "show",
     "create",
     "start",
+    "container",
     "retry",
     "delete",
     "config",

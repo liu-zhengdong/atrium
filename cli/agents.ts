@@ -6,6 +6,7 @@ import {
   formatModelSpec,
   groupModelsByProvider,
   modelBase,
+  modelSpec,
   type ModelChange,
   type ModelState,
 } from "../shared/model.ts";
@@ -14,6 +15,8 @@ import { dataDirectory } from "../server/service-state.ts";
 import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
+import { Problem, closest } from "../server/problem.ts";
+import { recordNext } from "./contract.ts";
 
 export type AgentEntry = Overview["agents"][number];
 /** 与 Web 头像状态点同一套判断。 */
@@ -36,7 +39,13 @@ export function findAgent(view: Overview, reference: string): AgentEntry {
       item.name === reference ||
       item.id === reference,
   );
-  if (!agent) throw new Error(`Agent 不存在：${reference}`);
+  if (!agent)
+    throw new Problem(
+      404,
+      `没有叫「${reference}」的 Agent`,
+      "agent_not_found",
+      closest(reference, view.agents),
+    );
   return agent;
 }
 
@@ -134,6 +143,11 @@ const create: Command = {
       start: values.start === true,
     });
     console.log(`${agent.name} · ${agent.ref}`);
+    recordNext(
+      values.start === true
+        ? `发私聊：atrium send ${agent.ref} 正文`
+        : `启动：atrium start ${agent.ref}`,
+    );
     if (start_error) throw new Error(start_error);
   },
 };
@@ -150,6 +164,7 @@ const start: Command = {
     console.log(
       `已启动 ${started.name} · ${presence(started)}${started.runtime ? ` · PID ${started.runtime.pid} · ${started.runtime.model}` : ""}`,
     );
+    recordNext(`发私聊：atrium send ${started.ref} 正文`);
   },
 };
 
@@ -186,8 +201,10 @@ const remove: Command = {
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
     if (values.yes !== true)
-      throw new Error(
+      throw new Problem(
+        400,
         `将删除 ${agent.name}（${agent.ref}，${presence(agent)}）：撤销访问与后续唤醒，历史聊天保留。确认请加 --yes`,
+        "usage",
       );
     await client.delete(`/agents/${agent.id}`, { confirm: agent.ref });
     console.log(`已删除 ${agent.name}（${agent.ref}）；历史保留`);
@@ -200,9 +217,20 @@ const config: Command = {
   options: { heartbeat: { type: "string" } },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
+    const heartbeat = str(values, "heartbeat");
+    if (
+      heartbeat !== undefined &&
+      (!/^\d+$/.test(heartbeat.trim()) ||
+        Number(heartbeat) < 5 ||
+        Number(heartbeat) > 3600)
+    )
+      throw new Problem(
+        400,
+        "--heartbeat 要填秒数（5～3600 的整数）\n示例：atrium config 甲 --heartbeat 30",
+        "usage",
+      );
     const client = await connect();
     let agent = findAgent(await roster(client), reference!);
-    const heartbeat = str(values, "heartbeat");
     if (heartbeat !== undefined) {
       await client.patch(`/agents/${agent.id}/config`, {
         heartbeat_seconds: Number(heartbeat),
@@ -277,6 +305,12 @@ const model: Command = {
   about: "查看或设定模型；在跑的身份当场生效，离线的下次启动生效",
   positionals: [1, 2],
   async run({ positionals: [reference, value], json }) {
+    if (value !== undefined && !modelSpec.safeParse(value).success)
+      throw new Problem(
+        400,
+        "模型写法是 provider/id，可选 :思考强度\n示例：atrium model 甲 deepseek/deepseek-v4-pro",
+        "usage",
+      );
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
     const path = `/agents/${agent.id}/model`;
@@ -419,11 +453,12 @@ const run: Command = {
   args: "名称",
   about: "用长期身份打开原生 Pi TUI；不经过服务",
   positionals: [1, 1],
-  async run({ positionals: [reference] }) {
+  async run({ positionals: [reference], json }) {
+    if (json) throw new Problem(400, "交互式 run 不支持 --json", "usage");
     const data = dataDirectory();
     if (!existsSync(join(data, "atrium.sqlite")))
       throw new Error(
-        "未找到中庭数据库；请先运行 atrium create 或打开 Web 创建身份，或设置 ATRIUM_DATA",
+        "未找到 Atrium 数据库；请先运行 atrium create 或打开 Web 创建身份，或设置 ATRIUM_DATA",
       );
     const { Store } = await import("../server/store.ts");
     const store = new Store(join(data, "atrium.sqlite"));
@@ -449,7 +484,7 @@ const run: Command = {
     // 与服务启动身份时做同一份补齐，两个入口看到的配置一致。
     for (const notice of syncIdentityProfile(agent.agent_directory))
       console.error(`${agent.name} 的${notice}`);
-    console.error(`中庭 · ${agent.name}\n${agent.cwd}`);
+    console.error(`Atrium · ${agent.name}\n${agent.cwd}`);
     const launchStore = new Store(join(data, "atrium.sqlite"));
     let running: Promise<number>;
     try {

@@ -75,7 +75,7 @@ test("短号不复用，支持历史版本插入与万级编号；拒绝非规�
   const first = store.createChat("第一个", []);
   assert.equal(first.ref, "c1");
   store.run("DELETE FROM chats WHERE id=?", first.id);
-  assert.throws(() => store.resolveChatId("c1"), /会话不存在/);
+  assert.throws(() => store.resolveChatId("c1"), /没有叫「c1」的会话/);
   const second = store.createChat("第二个", []);
   assert.equal(second.ref, "c2");
   const legacy = randomUUID();
@@ -109,7 +109,7 @@ test("短号不复用，支持历史版本插入与万级编号；拒绝非规�
       !chatReference.safeParse(input).success,
       `应拒绝 ${JSON.stringify(input)}`,
     );
-  assert.throws(() => store.resolveChatId("c999"), /会话不存在/);
+  assert.throws(() => store.resolveChatId("c999"), /没有叫「c999」的会话/);
 });
 
 test("私聊、明确提及和消息箱提醒使用相同短号，正文保持原样", (t) => {

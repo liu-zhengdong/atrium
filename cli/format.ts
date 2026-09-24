@@ -1,3 +1,5 @@
+import { recordResult } from "./contract.ts";
+
 /** 终端输出的几个小工具：按显示宽度对齐的表格、时间、单行摘要。 */
 
 // 中日韩文字、全角标点占两格，其余按一格；够用就好，不引入宽字符库。
@@ -53,5 +55,7 @@ export function clip(text: string, max: number): string {
   return `${out}…`;
 }
 
-export const printJson = (value: unknown) =>
+export const printJson = (value: unknown) => {
+  recordResult(value);
   console.log(JSON.stringify(value, null, 2));
+};

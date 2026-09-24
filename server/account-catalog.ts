@@ -8,11 +8,12 @@ export class AccountCatalog {
       "SELECT * FROM accounts WHERE number=?",
       number,
     );
-    if (!row) throw new Problem(404, "账号不存在");
+    if (!row) throw new Problem(404, "账号不存在", "account_not_found");
     return row;
   }
   number(ref: string) {
-    if (!/^k[1-9]\d{0,14}$/.test(ref)) throw new Problem(404, "账号不存在");
+    if (!/^k[1-9]\d{0,14}$/.test(ref))
+      throw new Problem(404, "账号不存在", "account_not_found");
     return this.row(Number(ref.slice(1))).number;
   }
   assigned(number: number) {

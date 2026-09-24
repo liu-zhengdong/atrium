@@ -378,9 +378,10 @@ export async function createApp(options: {
     changed();
     return result;
   });
-  app.get("/api/credentials/:agent", (request) =>
-    accounts.switchMode(identityRef(request)),
-  );
+  app.get("/api/credentials/:agent", (request) => {
+    const id = identityRef(request);
+    return { ...accounts.switchMode(id), ref: store.agent(id).ref };
+  });
   app.get("/api/assignment-check", () => {
     const available = accounts.list();
     const unassigned = store

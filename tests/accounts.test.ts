@@ -656,6 +656,19 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
       conflict.json().nextCommand,
       new RegExp(`atrium unassign ${agent.name} amazon-bedrock`),
     );
+    store.run("UPDATE agents SET name=? WHERE id=?", "张 三", agent.id);
+    const spacedConflict = await assign(next);
+    assert.equal(spacedConflict.statusCode, 409);
+    assert.equal(
+      spacedConflict.json().nextCommand,
+      `atrium unassign ${agent.ref} amazon-bedrock`,
+    );
+    store.run("UPDATE agents SET name=? WHERE id=?", "张;三", agent.id);
+    assert.equal(
+      (await assign(next)).json().nextCommand,
+      `atrium unassign ${agent.ref} amazon-bedrock`,
+    );
+    store.run("UPDATE agents SET name=? WHERE id=?", agent.name, agent.id);
     assert.equal((await assign("k999999", true)).statusCode, 404);
     assert.equal(
       JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[

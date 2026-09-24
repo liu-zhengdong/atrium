@@ -33,6 +33,7 @@ import {
 } from "./custom-providers.ts";
 import { setAccountModel } from "./account-models.ts";
 import { Problem, type Store } from "./store.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import { UNASSIGNED } from "./assignment.ts";
 import {
   checkLocalLogin,
@@ -454,7 +455,7 @@ export class Accounts {
         `该身份已有此 provider 的其他账号，请先撤销`,
         "already_assigned",
         undefined,
-        `atrium unassign ${/^\S+$/.test(agent.name) ? agent.name : agent.ref} ${row.provider}`,
+        `atrium unassign ${commandAgent(agent.name, agent.ref)} ${row.provider}`,
       );
     if (replace && !previous) throw new Problem(409, "该身份没有可替换的账号");
     if (!agent.agent_directory)

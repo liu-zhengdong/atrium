@@ -1,5 +1,6 @@
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { dataDirectory, serviceUrl } from "../server/service-state.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import { pad, width } from "./format.ts";
 import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
@@ -162,10 +163,9 @@ export async function main(argv: string[]): Promise<number> {
           strict: true,
         });
       } catch (error) {
-        usageNext = example(subcommand, command);
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}\n${optionError(error)}\n示例：${usageNext}`,
+          `用法：atrium ${subcommand} ${command.args}\n${optionError(error)}\n示例：${example(subcommand, command)}`,
           "usage",
         );
       }
@@ -176,10 +176,11 @@ export async function main(argv: string[]): Promise<number> {
           const credentials = await (
             await connect(true)
           ).get<{
+            ref: string;
             assigned: { provider: string }[];
           }>(`/credentials/${encodeURIComponent(parsed.positionals[0]!)}`);
           if (credentials.assigned.length === 1)
-            usageNext = `atrium unassign ${parsed.positionals[0]} ${credentials.assigned[0]!.provider}`;
+            usageNext = `atrium unassign ${commandAgent(parsed.positionals[0]!, credentials.ref)} ${credentials.assigned[0]!.provider}`;
         }
         throw new Problem(
           400,

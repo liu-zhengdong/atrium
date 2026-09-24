@@ -106,6 +106,15 @@ test("自定义供应商拒绝时不保存；分配/编辑/撤销/删除仅触�
     );
     assert.equal(created.validation.status, "verified");
     assert.ok(created.id);
+    await assert.rejects(
+      f.accounts.probeKey("local", "BAD_KEY"),
+      /DENIED_CODE_42/,
+    );
+    assert.equal(
+      (await f.accounts.probeKey("local", "GOOD_KEY")).status,
+      "verified",
+    );
+    assert.equal(f.accounts.list().length, 1);
     const ref = created.id!;
     assert.equal(
       (await f.accounts.customModels(f.config, "GOOD_KEY")).models[0],

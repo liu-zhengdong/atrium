@@ -12,6 +12,24 @@ export type Validation = {
   reason?: string;
 };
 
+/** Preserve the service's useful message, not its JSON envelope or request metadata. */
+export function validationReason(reason?: string): string {
+  if (!reason) return "请求失败";
+  const match = reason.match(/\b(401|403)\s*:\s*(\{.*\})/s);
+  if (!match) return reason;
+  try {
+    const body = JSON.parse(match[2]!) as {
+      message?: string;
+      error?: { message?: string };
+    };
+    const message = body.message ?? body.error?.message;
+    if (!message) return reason;
+    return `${match[1]}：${message.replace(/\s*\(request_id:\s*[^)]*\)/gi, "").trim()}`;
+  } catch {
+    return reason;
+  }
+}
+
 // Credentials are written only to a short-lived private directory, never sent over IPC.
 export async function validateKey(
   worker: AccountWorker,

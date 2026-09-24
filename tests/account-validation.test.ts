@@ -5,7 +5,20 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AccountWorker } from "../server/account-worker-client.ts";
-import { validateKey } from "../server/account-validation.ts";
+import { validateKey, validationReason } from "../server/account-validation.ts";
+
+test("401 JSON 错误只保留 message，不展示 request_id 和元数据", () => {
+  assert.equal(
+    validationReason(
+      '401: {"message":"Authentication Fails, Your api key: ****-123 is invalid (request_id: req_1)","type":"invalid","param":null,"code":"bad"}',
+    ),
+    "401：Authentication Fails, Your api key: ****-123 is invalid",
+  );
+  assert.equal(
+    validationReason('401: {"message":"FAKE_DENIED_42"}'),
+    "401：FAKE_DENIED_42",
+  );
+});
 
 const config = (port: number) => ({
   baseUrl: `http://127.0.0.1:${port}/v1`,

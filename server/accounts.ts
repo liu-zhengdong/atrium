@@ -24,7 +24,7 @@ import { repairAccountFiles } from "./account-repair.ts";
 import { AccountRefresh } from "./account-refresh.ts";
 import { AccountWorker } from "./account-worker-client.ts";
 import { ProviderDirectory } from "./provider-directory.ts";
-import { validateKey } from "./account-validation.ts";
+import { validateKey, validationReason } from "./account-validation.ts";
 import { readIdentityModel } from "./profile.ts";
 import {
   checkedCustom,
@@ -158,6 +158,26 @@ export class Accounts {
     this.remember(value);
     this.files.save(row, value);
   }
+  async probeKey(provider: string, key: string) {
+    if (!key.trim()) throw new Problem(400, "API Key 不能为空");
+    const custom = this.custom.get(provider);
+    const entry = custom
+      ? {
+          id: provider,
+          name: provider,
+          packagePath: null,
+          methods: ["api_key" as const],
+        }
+      : await this.providers.require(providerName.parse(provider), "api_key");
+    const validation = await validateKey(this.worker, entry, key, custom);
+    if (validation.status === "rejected")
+      throw new Problem(
+        400,
+        `${entry.name} 拒绝了这个 API Key（${validationReason(validation.reason)}）`,
+        "validation_failed",
+      );
+    return { ...validation, reason: validationReason(validation.reason) };
+  }
   async addValidated(
     provider: string,
     name: string,
@@ -168,6 +188,7 @@ export class Accounts {
     provider = providerName.parse(provider);
     if (!key && !custom) throw new Problem(400, "API key 不能为空");
     if (custom && !key) key = "atrium-local";
+    const creatingCustom = !!custom;
     if (custom) {
       custom = checkedCustom(provider, custom);
       if (
@@ -176,6 +197,7 @@ export class Accounts {
       )
         throw new Problem(409, "供应商名称已存在");
     }
+    custom ??= this.custom.get(provider) ?? undefined;
     const entry = custom
       ? {
           id: provider,
@@ -185,22 +207,22 @@ export class Accounts {
         }
       : await this.providers.require(provider, "api_key");
     const validation = await validateKey(this.worker, entry, key, custom);
-    if (custom && validation.status !== "verified")
+    if (creatingCustom && validation.status !== "verified")
       throw new Problem(
         400,
-        `${provider} 校验失败：${validation.reason ?? "请求失败"}`,
+        `服务返回 ${validationReason(validation.reason)}`,
         "validation_failed",
       );
     if (validation.status === "rejected")
       throw new Problem(
         400,
-        `${entry.name} 拒绝了 API Key：${validation.reason}`,
+        `${entry.name} 拒绝了这个 API Key（${validationReason(validation.reason)}）`,
         "validation_failed",
       );
     if (validation.status === "unverified" && !allowUnverified)
       return { validation, id: null };
     const saved = this.add(provider, name, key);
-    if (custom) this.custom.save(provider, custom);
+    if (creatingCustom && custom) this.custom.save(provider, custom);
     if (validation.status !== "verified")
       this.store.run(
         "UPDATE accounts SET status='unverified',last_error=? WHERE number=?",
@@ -258,13 +280,13 @@ export class Accounts {
     if (custom && validation.status !== "verified")
       throw new Problem(
         400,
-        `${row.provider} 校验失败：${validation.reason ?? "请求失败"}`,
+        `服务返回 ${validationReason(validation.reason)}`,
         "validation_failed",
       );
     if (validation.status === "rejected")
       throw new Problem(
         400,
-        `${entry.name} 拒绝了 API Key：${validation.reason}`,
+        `${entry.name} 拒绝了这个 API Key（${validationReason(validation.reason)}）`,
         "validation_failed",
       );
     if (validation.status === "unverified" && !allowUnverified)

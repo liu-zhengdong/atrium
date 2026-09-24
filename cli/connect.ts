@@ -6,7 +6,6 @@ import {
   cancel,
   log,
   outro,
-  spinner,
   isCancel,
   password,
   select,
@@ -15,6 +14,7 @@ import {
 import type { Command } from "./main.ts";
 import { str, strs } from "./main.ts";
 import { connect } from "./service.ts";
+import { Problem } from "../server/problem.ts";
 import { recordNext, recordResult } from "./contract.ts";
 import { roster } from "./agents.ts";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
@@ -47,6 +47,24 @@ function input<T>(value: T): Exclude<T, symbol> {
 }
 class Cancelled extends Error {}
 const encode = encodeURIComponent;
+
+// Keep slow work visible without leaving Clack's empty completion row.
+async function withProgress<T>(
+  label: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (!process.stdout.isTTY) return work();
+  let ticks = 0;
+  const timer = setInterval(() => {
+    process.stdout.write(`\r${label}${".".repeat((ticks++ % 3) + 1)}   `);
+  }, 300);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+    if (ticks) process.stdout.write("\r\x1b[2K");
+  }
+}
 
 async function awaitLogin(
   client: Awaited<ReturnType<typeof connect>>,
@@ -145,72 +163,72 @@ export const connectCommand: Command = {
           ? input(await password({ message: "API Key（本地可留空）" }))
           : "");
       let models = strs(values, "model");
+      let offered: string[] = [];
       if (!models.length && baseUrl) {
         try {
-          const found = await client.post<{ models: string[] }>(
-            "/custom/models",
-            { config: { baseUrl, models: [{ id: "placeholder" }] }, key },
-          );
-          if (process.stdin.isTTY && found.models.length)
-            models = input(
-              await autocompleteMultiselect({
-                message: "模型（可多选）",
-                options: found.models.map((id) => ({ value: id, label: id })),
-              }),
-            );
+          offered = (
+            await client.post<{ models: string[] }>("/custom/models", {
+              config: { baseUrl, models: [{ id: "placeholder" }] },
+              key,
+            })
+          ).models;
         } catch (error) {
-          if (!process.stdin.isTTY) throw error;
-          log.warn(`模型列表不可用：${String(error)}；请手填模型`);
+          if (process.stdin.isTTY)
+            log.warn(`模型列表不可用：${String(error)}；请手填模型`);
         }
+        if (process.stdin.isTTY && offered.length)
+          models = input(
+            await autocompleteMultiselect({
+              message: "模型（可多选）",
+              options: offered.map((id) => ({ value: id, label: id })),
+            }),
+          );
       }
       if (!models.length && process.stdin.isTTY)
         models = [input(await text({ message: "模型 ID" }))];
       if (!baseUrl || !models.length)
-        throw new Error("需要 --base-url 和至少一个 --model");
-      const checking = json ? null : spinner();
-      checking?.start("正在校验供应商…");
-      let saved: { id: string };
-      try {
-        saved = await client.post("/accounts", {
-          provider,
-          name: provider,
-          key,
-          custom: { baseUrl, models: models.map((id) => ({ id })) },
-        });
-        checking?.stop();
-      } catch (error) {
-        checking?.error("校验失败");
-        throw error;
-      }
+        throw new Problem(
+          400,
+          offered.length && baseUrl
+            ? `这个服务提供：${offered.join("、")}；用 --model 选择`
+            : "需要 --base-url 和至少一个 --model",
+          "usage",
+        );
+      const saved = await client.post<{ id: string }>("/accounts", {
+        provider,
+        name: provider,
+        key,
+        custom: { baseUrl, models: models.map((id) => ({ id })) },
+      });
       recordResult({ ...saved, provider });
-      recordNext(`分配给身份：atrium assign <身份> ${saved.id}`);
-      if (!json) log.success(`${provider}（${saved.id}）已保存`);
+      recordNext(`分配：atrium assign 名称 ${saved.id}`);
+      if (!json)
+        if (process.stdout.isTTY)
+          log.success(`${provider}（${saved.id}）已保存`);
+        else console.log(`${provider}（${saved.id}）已保存`);
       return 0;
     }
     if (!process.stdin.isTTY || !process.stdout.isTTY)
       throw new Error(
         "connect 需要交互终端；脚本请使用 atrium account add <provider> --key -",
       );
-    const client = await connect(true);
-    const reading = spinner();
-    reading.start("正在读取供应商…");
-    let providers: ProviderEntry[];
-    try {
-      providers = await client.get<ProviderEntry[]>("/providers");
-      reading.stop();
-    } catch (error) {
-      reading.error("供应商目录读取失败");
-      throw error;
-    }
-    const existing = await client.get<
-      {
-        id: string;
-        name: string;
-        provider: string;
-        assigned: string[];
-        status: string;
-      }[]
-    >("/accounts");
+    const { client, providers, existing } = await withProgress(
+      "正在读取供应商",
+      async () => {
+        const client = await connect(true);
+        const providers = await client.get<ProviderEntry[]>("/providers");
+        const existing = await client.get<
+          {
+            id: string;
+            name: string;
+            provider: string;
+            assigned: string[];
+            status: string;
+          }[]
+        >("/accounts");
+        return { client, providers, existing };
+      },
+    );
     const fixed = reference
       ? providers.find((item) =>
           [item.id, item.name].some(
@@ -267,15 +285,34 @@ export const connectCommand: Command = {
       const provider = candidates.find((entry) => entry.id === chosen);
       if (!provider || !methodsFor(provider, method).length)
         throw new Error(`供应商不支持此方式：${chosen}`);
-      const key =
-        method === "api_key"
-          ? input(
-              await password({
-                message: "API Key",
-                validate: (value) => (value?.trim() ? undefined : "不能为空"),
+      let key: string | undefined;
+      let validation: { status: string; reason?: string } | undefined;
+      if (method === "api_key") {
+        for (;;) {
+          key = input(
+            await password({
+              message: "API Key",
+              validate: (value) => (value?.trim() ? undefined : "不能为空"),
+            }),
+          ).trim();
+          try {
+            validation = await withProgress("正在校验 API Key", () =>
+              client.post("/accounts/validate", {
+                provider: provider.id,
+                key,
               }),
+            );
+            break;
+          } catch (error) {
+            if (
+              !(error instanceof Problem) ||
+              error.code !== "validation_failed"
             )
-          : undefined;
+              throw error;
+            log.warn(error.message);
+          }
+        }
+      }
       const name = input(
         await text({
           message: "账号名",
@@ -284,20 +321,24 @@ export const connectCommand: Command = {
         }),
       ).trim();
       if (method === "api_key") {
-        const payload = { provider: provider.id, name, key: key!.trim() };
-        const checking = spinner();
-        checking.start("正在校验 API Key…");
-        let saved: {
+        const payload = { provider: provider.id, name, key };
+        let allowUnverified = false;
+        if (validation?.status === "unverified") {
+          allowUnverified = input(
+            await select({
+              message: `${validation.reason ?? "没能校验"}；仍然保存为未校验？`,
+              options: [
+                { value: true, label: "仍然保存" },
+                { value: false, label: "返回" },
+              ],
+            }),
+          );
+          if (!allowUnverified) return 0;
+        }
+        const saved = await client.post<{
           id: string | null;
           validation: { status: string; reason?: string };
-        };
-        try {
-          saved = await client.post("/accounts", payload);
-          checking.stop();
-        } catch (error) {
-          checking.error("校验失败");
-          throw error;
-        }
+        }>("/accounts", { ...payload, allowUnverified });
         if (!saved.id) {
           const proceed = input(
             await select({
@@ -309,12 +350,12 @@ export const connectCommand: Command = {
             }),
           );
           if (!proceed) return 0;
-          saved = await client.post("/accounts", {
+          const retried = await client.post<{ id: string }>("/accounts", {
             ...payload,
             allowUnverified: true,
           });
-        }
-        id = saved.id!;
+          id = retried.id;
+        } else id = saved.id;
         if (saved.validation.status !== "verified")
           log.warn(`账号未校验：${saved.validation.reason ?? "需要额外配置"}`);
       } else {
@@ -333,13 +374,24 @@ export const connectCommand: Command = {
         value: agent.id,
         label: `${agent.name} (${agent.ref})${assignedAccountLabel(agent.ref, provider.id, existing) ? ` · 当前 ${assignedAccountLabel(agent.ref, provider.id, existing)}` : ""}`,
       }));
-      const selected = !agents.length
+      const assignNow = agents.length
+        ? input(
+            await select({
+              message: "现在分配给 Agent 吗？",
+              options: [
+                { value: false, label: "不分配" },
+                { value: true, label: "选择 Agent" },
+              ],
+            }),
+          )
+        : false;
+      const selected = !assignNow
         ? []
         : input(
             await (agents.length > 8
               ? autocompleteMultiselect({
-                  message: "给哪些 Agent 用？（可留空跳过）",
-                  required: false,
+                  message: "给哪些 Agent 用？",
+                  required: true,
                   maxItems: 8,
                   filter: (query, option) =>
                     `${option.label}`
@@ -348,14 +400,15 @@ export const connectCommand: Command = {
                   options,
                 })
               : multiselect({
-                  message: "给哪些 Agent 用？（可留空跳过）",
-                  required: false,
+                  message: "给哪些 Agent 用？",
+                  required: true,
                   options,
                 })),
           );
       const added: string[] = [];
       const replaced: string[] = [];
       const failures: string[] = [];
+      let firstAssigned: string | undefined;
       for (const agentId of selected) {
         const agent = agents.find((item) => item.id === agentId)!;
         const previous = currentAssignment(agent.ref, provider.id, existing);
@@ -364,6 +417,7 @@ export const connectCommand: Command = {
             account: id,
             ...(previous ? { replace: true } : {}),
           });
+          firstAssigned ??= agent.ref;
           if (previous)
             replaced.push(
               `${agent.name}（${agent.ref}）：${assignedAccountLabel(agent.ref, provider.id, existing)} → ${name}（${id}）`,
@@ -374,10 +428,12 @@ export const connectCommand: Command = {
         }
       }
       const summary = assignmentSummary(added, replaced, failures);
+      if (firstAssigned) recordNext(`启动：atrium start ${firstAssigned}`);
+      else recordNext(`分配：atrium assign 名称 ${id}`);
       outro(
         summary
           ? `${saved}；${summary.replaceAll("\n", "；")}`
-          : `${saved}，未分配；稍后用 atrium assign <身份> ${id}`,
+          : `${saved}，未分配；稍后用 atrium assign 名称 ${id}`,
       );
       if (failures.length) return 1;
     } catch (error) {

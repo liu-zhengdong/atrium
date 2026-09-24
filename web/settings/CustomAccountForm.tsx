@@ -33,6 +33,7 @@ export function CustomAccountForm({
     initial?.supportsReasoningEffort ?? false,
   );
   const [models, setModels] = useState<string[]>([]);
+  const [modelMode, setModelMode] = useState<"manual" | "list">("manual");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const config = (): CustomConfig => ({
@@ -58,8 +59,10 @@ export function CustomAccountForm({
         { config: config(), key },
       );
       setModels(response.models);
+      setModelMode(response.models.length ? "list" : "manual");
       if (!response.models.length) setError("未发现模型，请手填模型 ID");
     } catch (e) {
+      setModelMode("manual");
       setError(`${messageOf(e)}；仍可手填模型 ID`);
     } finally {
       setBusy(false);
@@ -116,7 +119,11 @@ export function CustomAccountForm({
           type="url"
           placeholder="https://example.com/v1"
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setModels([]);
+            setModelMode("manual");
+          }}
         />
       </label>
       <label className="block">
@@ -126,7 +133,11 @@ export function CustomAccountForm({
           type="password"
           autoComplete="off"
           value={key}
-          onChange={(e) => setKey(e.target.value)}
+          onChange={(e) => {
+            setKey(e.target.value);
+            setModels([]);
+            setModelMode("manual");
+          }}
         />
       </label>
       <div className="flex gap-2">
@@ -139,46 +150,83 @@ export function CustomAccountForm({
           获取模型列表
         </button>
       </div>
-      {models.length > 0 && (
-        <div className="max-h-28 space-y-1 overflow-auto">
-          {models.map((id) => (
-            <label key={id} className="flex gap-2">
-              <input
-                type="checkbox"
-                checked={model
-                  .split(",")
-                  .map((s) => s.trim())
-                  .includes(id)}
-                onChange={(e) =>
-                  setModel((current) => {
-                    const selected = current
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean);
-                    return (
-                      e.target.checked
-                        ? [...new Set([...selected, id])]
-                        : selected.filter((s) => s !== id)
-                    ).join(", ");
-                  })
-                }
-              />
-              {id}
-            </label>
-          ))}
+      {models.length > 0 && modelMode === "list" ? (
+        <div>
+          <div className="flex items-center justify-between">
+            <span>选择模型</span>
+            <button
+              type="button"
+              className="text-accent-strong hover:underline"
+              onClick={() => setModelMode("manual")}
+            >
+              手动填写
+            </button>
+          </div>
+          <div className="mt-1 max-h-28 space-y-1 overflow-auto">
+            {models.map((id) => (
+              <label key={id} className="flex gap-2">
+                <input
+                  type="checkbox"
+                  checked={model
+                    .split(",")
+                    .map((s) => s.trim())
+                    .includes(id)}
+                  onChange={(e) =>
+                    setModel((current) => {
+                      const selected = current
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                      return (
+                        e.target.checked
+                          ? [...new Set([...selected, id])]
+                          : selected.filter((s) => s !== id)
+                      ).join(", ");
+                    })
+                  }
+                />
+                {id}
+              </label>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div className="flex items-center justify-between">
+            <label htmlFor="custom-model-id">模型 ID（多个用逗号分开）</label>
+            {models.length > 0 && (
+              <button
+                type="button"
+                className="text-accent-strong hover:underline"
+                onClick={() => setModelMode("list")}
+              >
+                从列表选择
+              </button>
+            )}
+          </div>
+          <input
+            id="custom-model-id"
+            className="field mt-1"
+            required
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+          />
         </div>
       )}
-      <label className="block">
-        模型 ID（多个用逗号分开）
-        <input
-          className="field mt-1"
-          required
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-        />
-      </label>
-      <details>
-        <summary className="cursor-pointer">高级选项</summary>
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center gap-1 [&::-webkit-details-marker]:hidden">
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 16 16"
+            className="size-3 transition-transform group-open:rotate-90"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
+            <path d="m6 3 5 5-5 5" />
+          </svg>
+          高级选项
+        </summary>
         <div className="mt-2 space-y-2">
           <label className="flex gap-2">
             <input

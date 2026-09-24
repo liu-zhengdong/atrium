@@ -266,6 +266,13 @@ export async function createApp(options: {
       .parse(request.body);
     return accounts.customModels(config, key);
   });
+  app.post("/api/accounts/validate", (request) => {
+    const { provider, key } = z
+      .object({ provider: z.string(), key: z.string() })
+      .strict()
+      .parse(request.body);
+    return accounts.probeKey(provider, key);
+  });
   app.post("/api/accounts", (request) => {
     const { provider, name, key, allowUnverified, custom } = z
       .object({

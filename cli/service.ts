@@ -13,7 +13,7 @@ export type Client = ReturnType<typeof client>;
  * 连上 Atrium 服务；没在跑就在后台拉起，不开浏览器。
  * 能力定义只在服务这一份，命令行不直接开数据库，改动才会经过投递与唤醒。
  */
-export async function connect(): Promise<Client> {
+export async function connect(quietStart = false): Promise<Client> {
   const data = dataDirectory();
   const before = readService(data);
   const record = await startService(data).catch((error: unknown) => {
@@ -23,7 +23,7 @@ export async function connect(): Promise<Client> {
       "service_unavailable",
     );
   });
-  if (!before || before.pid !== record.pid)
+  if (!quietStart && (!before || before.pid !== record.pid))
     console.error(
       `Atrium 服务已在后台启动 · PID ${record.pid} · ${serviceUrl(record)} · 停止：atrium stop`,
     );
@@ -63,6 +63,7 @@ function client(base: string) {
         error?: unknown;
         code?: string;
         candidates?: { ref: string; name: string }[];
+        nextCommand?: string;
       };
       throw new Problem(
         response.status,
@@ -71,6 +72,7 @@ function client(base: string) {
           : `请求失败（HTTP ${response.status}）`,
         body.code,
         body.candidates,
+        body.nextCommand,
       );
     }
     recordResult(value);

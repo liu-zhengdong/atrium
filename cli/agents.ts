@@ -12,6 +12,7 @@ import {
 } from "../shared/model.ts";
 import type { TraceDetail, TracePage } from "../shared/trace.ts";
 import { dataDirectory } from "../server/service-state.ts";
+import { requireAssignment } from "../server/assignment.ts";
 import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
@@ -21,15 +22,17 @@ import { recordNext } from "./contract.ts";
 export type AgentEntry = Overview["agents"][number];
 /** 与 Web 头像状态点同一套判断。 */
 export const presence = (
-  agent: Pick<AgentEntry, "available" | "runtime" | "failure">,
+  agent: Pick<AgentEntry, "available" | "runtime" | "failure" | "unassigned">,
 ) =>
-  agent.failure
-    ? "出错"
-    : agent.runtime?.busy
-      ? "干活"
-      : agent.available
-        ? "在线"
-        : "离线";
+  agent.unassigned
+    ? "未分配账号"
+    : agent.failure
+      ? "出错"
+      : agent.runtime?.busy
+        ? "干活"
+        : agent.available
+          ? "在线"
+          : "离线";
 export const roster = (client: Client) => client.get<Overview>("/overview");
 /** 名册里找一位：短号、名称或 ID。接口的路径参数只认 ID，所以先在这里换。 */
 export function findAgent(view: Overview, reference: string): AgentEntry {
@@ -110,6 +113,8 @@ const show: Command = {
         `工作目录：${agent.cwd}`,
         `配置目录：${agent.agent_directory ?? "无（旧记录，待升级）"}`,
         agent.session_file && `会话文件：${agent.session_file}`,
+        agent.session_reset_at &&
+          `会话已于 ${when(agent.session_reset_at)} 重建：${agent.session_reset_reason}`,
         `心跳：每 ${agent.config.heartbeat_seconds} 秒 · 最近一次 ${agent.last_wake ? when(agent.last_wake) : "还没有"}`,
         agent.unread ? `消息箱：${agent.unread} 条待处理` : "",
         agent.failure
@@ -124,7 +129,7 @@ const show: Command = {
 
 const create: Command = {
   args: "名称 [--from 名称] [--description 介绍] [--start]",
-  about: "从内置类型或已有身份创建长期身份，可顺带后台启动",
+  about: "从内置类型或已有身份创建长期身份；须分配账号后启动",
   options: {
     from: { type: "string" },
     description: { type: "string" },
@@ -157,11 +162,7 @@ const create: Command = {
       }
     }
     console.log(`${result.agent.name} · ${result.agent.ref}`);
-    recordNext(
-      values.start === true
-        ? `发私聊：atrium send ${result.agent.ref} 正文`
-        : `启动：atrium start ${result.agent.ref}`,
-    );
+    recordNext(`查看可用账号：atrium accounts`);
     if (result.start_error) throw new Error(result.start_error);
   },
 };
@@ -479,6 +480,7 @@ const run: Command = {
     let agent: AgentInfo;
     try {
       agent = store.agent(store.resolveAgentId(reference!));
+      requireAssignment(store, agent.id);
     } finally {
       store.close();
     }
@@ -505,6 +507,7 @@ const run: Command = {
       // 启动放在事务里，pi-atrium 的占用登记与数据库里的绑定一起落定。
       running = launchStore.transaction(() => {
         const current = launchStore.agent(agent.id);
+        requireAssignment(launchStore, current.id);
         // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
         const configured = readIdentityModel(current.agent_directory!);
         return runNamedTui({

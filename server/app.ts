@@ -18,6 +18,12 @@ import {
 import { modelSpec, type ModelOption } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Accounts } from "./accounts.ts";
+import {
+  assignmentCommand,
+  hasAssignment,
+  removeSharedLinks,
+} from "./assignment.ts";
+import { customSchema } from "./custom-providers.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
 import {
@@ -73,6 +79,7 @@ export async function createApp(options: {
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
   const accounts = new Accounts(store, options.data);
+  removeSharedLinks(store);
   if (options.runtime !== false) {
     accounts.start();
     accounts.preloadProviders();
@@ -104,6 +111,7 @@ export async function createApp(options: {
           piHome,
           desktops,
           (agent, text) => accounts.redact(agent, text),
+          (agent, detail) => accounts.markModelAuthFailure(agent, detail),
         );
   const traces =
     runtimes?.traces ??
@@ -132,6 +140,9 @@ export async function createApp(options: {
                 : "internal",
       ...(error instanceof Problem && error.candidates?.length
         ? { candidates: error.candidates }
+        : {}),
+      ...(error instanceof Problem && error.nextCommand
+        ? { nextCommand: error.nextCommand }
         : {}),
       error:
         error instanceof z.ZodError
@@ -254,16 +265,67 @@ export async function createApp(options: {
   });
   app.get("/api/providers", () => accounts.providersList());
   app.get("/api/accounts", () => accounts.list());
+  app.get("/api/custom/:provider", (request) =>
+    accounts.customConfig((request.params as { provider: string }).provider),
+  );
+  app.post("/api/custom/models", (request) => {
+    const { config, key } = z
+      .object({ config: customSchema, key: z.string() })
+      .strict()
+      .parse(request.body);
+    return accounts.customModels(config, key);
+  });
+  app.post("/api/accounts/validate", (request) => {
+    const { provider, key } = z
+      .object({ provider: z.string(), key: z.string() })
+      .strict()
+      .parse(request.body);
+    return accounts.probeKey(provider, key);
+  });
   app.post("/api/accounts", (request) => {
-    const { provider, name, key } = z
+    const { provider, name, key, allowUnverified, custom } = z
       .object({
         provider: z.string(),
         name: z.string().trim().min(1).max(80),
-        key: z.string().min(1),
+        key: z.string(),
+        allowUnverified: z.boolean().optional(),
+        custom: customSchema.optional(),
       })
       .strict()
       .parse(request.body);
-    return accounts.add(provider, name, key);
+    return accounts.addValidated(
+      provider,
+      name,
+      key || (custom ? "atrium-local" : ""),
+      allowUnverified,
+      custom,
+    );
+  });
+  app.post("/api/accounts/local", (request) => {
+    const { provider } = z
+      .object({ provider: z.literal("claude-bridge") })
+      .strict()
+      .parse(request.body);
+    return accounts.addLocal(provider);
+  });
+  app.post("/api/accounts/:ref/check", (request) =>
+    accounts.checkLocal(accountRef(request)),
+  );
+  app.put("/api/accounts/:ref/key", (request) => {
+    const { key, allowUnverified, custom } = z
+      .object({
+        key: z.string(),
+        allowUnverified: z.boolean().optional(),
+        custom: customSchema.optional(),
+      })
+      .strict()
+      .parse(request.body);
+    return accounts.replaceKey(
+      accountRef(request),
+      key,
+      allowUnverified,
+      custom,
+    );
   });
   app.post("/api/accounts/login", (request) => {
     const { provider, name } = z
@@ -300,12 +362,51 @@ export async function createApp(options: {
       .parse(request.body);
     return accounts.rename(accountRef(request), name);
   });
-  app.delete("/api/accounts/:ref", (request) =>
-    accounts.remove(accountRef(request)),
-  );
+  app.delete("/api/accounts/:ref", async (request) => {
+    const ref = accountRef(request);
+    const account = accounts.list().find((entry) => entry.id === ref);
+    if (account)
+      for (const agentRef of account.assigned) {
+        const id = store.resolveAgentId(agentRef);
+        const remaining = store.one<{ count: number }>(
+          "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
+          id,
+        )?.count;
+        if (remaining === 1) await runtimes?.stopForUnassignment(id);
+      }
+    const result = accounts.remove(ref);
+    changed();
+    return result;
+  });
   app.get("/api/credentials/:agent", (request) =>
     accounts.switchMode(identityRef(request)),
   );
+  app.get("/api/assignment-check", () => {
+    const available = accounts.list();
+    const unassigned = store
+      .agents()
+      .filter((agent) => !hasAssignment(store, agent.id))
+      .map((agent) => {
+        const command = assignmentCommand(store, agent.id, available);
+        return {
+          ref: agent.ref,
+          name: agent.name,
+          command: command ?? `atrium assign ${agent.ref} <账号短号>`,
+          matched: !!command,
+        };
+      });
+    return {
+      unassigned,
+      accounts: unassigned.some((agent) => !agent.matched)
+        ? available.map(({ id, provider, name, status }) => ({
+            id,
+            provider,
+            name,
+            status,
+          }))
+        : [],
+    };
+  });
   app.put("/api/credentials/:agent", (request) => {
     const { mode } = z
       .object({ mode: z.enum(["shared", "assigned"]) })
@@ -318,13 +419,49 @@ export async function createApp(options: {
       .object({ account: z.string(), replace: z.boolean().optional() })
       .strict()
       .parse(request.body);
-    return accounts.assign(identityRef(request), account, replace);
+    const id = identityRef(request);
+    const result = accounts.assign(id, account, replace);
+    changed();
+    return {
+      ...result,
+      agentName: store.agent(id).name,
+      accountName: accounts.list().find((entry) => entry.id === account)?.name,
+    };
   });
-  app.delete("/api/assign/:agent/:provider", (request) => {
+  app.delete("/api/assign/:agent/:provider", async (request) => {
     const { provider } = z
       .object({ provider: z.string() })
       .parse(request.params);
-    return accounts.unassign(identityRef(request), provider);
+    const id = identityRef(request);
+    const remaining = store.one<{ count: number }>(
+      "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
+      id,
+    )?.count;
+    const previous = store.one<{ account_number: number }>(
+      "SELECT account_number FROM account_assignments WHERE agent_id=? AND provider=?",
+      id,
+      provider,
+    );
+    const last = remaining === 1 && !!previous;
+    const stopped = !!(last && runtimes?.connections.has(id));
+    if (last) await runtimes?.stopForUnassignment(id);
+    const result = accounts.unassign(id, provider);
+    changed();
+    const assigned = hasAssignment(store, id);
+    return {
+      ...result,
+      name: store.agent(id).name,
+      stopped,
+      hasAssignment: assigned,
+      nextCommand: assigned
+        ? null
+        : (assignmentCommand(
+            store,
+            id,
+            accounts.list(),
+            previous ? `k${previous.account_number}` : undefined,
+          ) ?? "atrium account check"),
+    };
   });
   app.get("/api/overview", () => {
     const discovery = runtimes?.directory() ?? {
@@ -341,6 +478,7 @@ export async function createApp(options: {
         error: store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
         failure: store.failure(a.id),
         unread: store.boxCount(a.id),
+        unassigned: !hasAssignment(store, a.id),
       })),
       chats: store.chats(),
       user: readUser(store),
@@ -384,22 +522,19 @@ export async function createApp(options: {
       })
       .strict()
       .parse(request.body);
-    if (input.start && !runtimes) throw new Problem(503, "运行时未启用");
+    if (input.start)
+      throw new Problem(
+        409,
+        "先创建身份并分配账号，再执行 atrium start <身份短号>",
+        "unassigned_account",
+      );
     const agent = createAgent(store, options.data, input.name, desktops, {
       ...input,
       piHome,
     });
-    let start_error: string | undefined;
-    if (input.start) {
-      try {
-        await runtimes!.start(agent.id);
-      } catch {
-        start_error = "Agent 已创建，但启动失败。可在详情中重试。";
-      }
-    }
     changed();
     void reply.code(201);
-    return { agent, start_error };
+    return { agent };
   });
   app.post("/api/runtimes/:id/chat", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
@@ -794,9 +929,20 @@ export async function createApp(options: {
         "--after 不能与 --before、around 或 read_from 同时使用",
       );
     const chatId = agentParams(request);
-    return q.after === undefined
-      ? store.timeline(chatId, q.before, q.read_from, q.around)
-      : store.timelineAfter(chatId, q.after);
+    const page =
+      q.after === undefined
+        ? store.timeline(chatId, q.before, q.read_from, q.around)
+        : store.timelineAfter(chatId, q.after);
+    const chat = store.chat(chatId);
+    if (chat.kind !== "direct" || !chat.direct_agent) return page;
+    const triggers = traces.triggers(chat.direct_agent, chatId, page.items);
+    return {
+      ...page,
+      items: page.items.map((message) => ({
+        ...message,
+        ...(triggers[message.id] ? { trigger: triggers[message.id] } : {}),
+      })),
+    };
   });
   // 等待注册与首次读取在同一同步调用栈中完成；不会漏掉检查与订阅之间的消息。
   const waitQuery = z.object({

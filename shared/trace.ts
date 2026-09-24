@@ -46,6 +46,8 @@ export type TraceItem = {
   title: string;
   state: "running" | "complete" | "error" | "unknown";
   truncated: boolean;
+  /** The list reports body presence without returning its contents. */
+  has_detail: boolean;
 };
 export type TracePage = {
   items: TraceItem[];

@@ -123,7 +123,7 @@ test(
       existsSync(join(f.root, "desktops", "入口验收")),
       "创建即分配固定桌面目录",
     );
-    assert.match((await f.cli("list")).stdout, /a1\s+入口验收\s+离线/);
+    assert.match((await f.cli("list")).stdout, /a1\s+入口验收\s+未分配账号/);
     assert.equal((await f.cli("run", "入口验收", "--forbidden")).code, 2);
     assert.equal((await f.cli("stop")).code, 0);
     assert.match((await f.cli("stop")).stdout, /已停止/);
@@ -353,7 +353,7 @@ test(
     );
     assert.equal((await f.cli("create", "林岚")).code, 4);
     assert.equal((await f.cli("create", "bad/name")).code, 2);
-    assert.match((await f.cli("list")).stdout, /a1\s+林岚\s+离线/);
+    assert.match((await f.cli("list")).stdout, /a1\s+林岚\s+未分配账号/);
     assert.equal((await f.cli("--no-open")).code, 0, "start after create");
     const forked = await f.cli("create", "沈默", "--from", "林岚");
     assert.equal(forked.code, 0, forked.stderr);

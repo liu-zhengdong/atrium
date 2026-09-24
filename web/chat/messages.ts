@@ -21,6 +21,7 @@ export function continuationFlags(messages: Message[]): boolean[] {
     const previous = messages[index - 1];
     return (
       previous !== undefined &&
+      !message.trigger &&
       previous.sender === message.sender &&
       message.created_at - previous.created_at < 180000
     );

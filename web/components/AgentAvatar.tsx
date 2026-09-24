@@ -2,17 +2,19 @@ import type { Overview } from "../../shared/schema.ts";
 export type Agent = Overview["agents"][number];
 export type Presence = "busy" | "online" | "offline" | "error";
 export const runtimeLabel = (a: Agent) =>
-  a.failure
-    ? "出错"
-    : a.runtime
-      ? a.runtime.busy
-        ? "执行中"
-        : "在线"
-      : a.error && a.available
-        ? "暂不可用"
-        : a.available
-          ? "在线"
-          : "离线";
+  a.unassigned
+    ? "未分配账号"
+    : a.failure
+      ? "出错"
+      : a.runtime
+        ? a.runtime.busy
+          ? "执行中"
+          : "在线"
+        : a.error && a.available
+          ? "暂不可用"
+          : a.available
+            ? "在线"
+            : "离线";
 /** 头像上的状态点表达不了的状态：连不上但报过错。在线、执行中、离线看点，不再写字。 */
 export const statusNote = (a: Agent) =>
   !a.failure && !a.runtime && a.error && a.available ? "暂不可用" : "";
@@ -21,17 +23,21 @@ export const statusNote = (a: Agent) =>
  * 状态点表达不了的「暂不可用」排在最前。
  */
 export const agentSummary = (a: Agent) =>
-  statusNote(a) || a.description || a.work || a.ref;
+  a.unassigned
+    ? "未分配账号"
+    : statusNote(a) || a.description || a.work || a.ref;
 export function agentPresence(
   a:
     | {
         available: boolean;
         failure?: Agent["failure"];
         runtime?: { busy: boolean } | null;
+        unassigned?: boolean;
       }
     | undefined,
 ): Presence {
   if (!a) return "offline";
+  if ("unassigned" in a && a.unassigned) return "offline";
   if (a.failure) return "error";
   if (a.runtime?.busy) return "busy";
   if (a.available) return "online";

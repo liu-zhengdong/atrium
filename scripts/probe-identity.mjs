@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { Accounts } from "../server/accounts.ts";
 
 export async function verifyIdentity({
   folder,
@@ -21,6 +22,7 @@ export async function verifyIdentity({
   raw,
   hash,
   hashes,
+  fixtureAccount,
 }) {
   const response = await fetch(`${baseUrl}/api/agents`, {
     method: "POST",
@@ -33,6 +35,7 @@ export async function verifyIdentity({
   });
   assert.equal(response.status, 201);
   const agent = (await response.json()).agent;
+  new Accounts(store, join(folder, "data")).assign(agent.id, fixtureAccount);
   const command = resolve("bin/atrium.mjs");
   mkdirSync(join(folder, "bin"));
   symlinkSync(command, join(folder, "bin", "atrium"));

@@ -8,6 +8,7 @@ import { Sidebar, type Section } from "./layout/Sidebar.tsx";
 import { TopBar } from "./layout/TopBar.tsx";
 import { AgentDirectory } from "./agents/AgentDirectory.tsx";
 import { AgentDrawer } from "./agents/AgentDrawer.tsx";
+import { AgentTracePanel } from "./agents/AgentTracePanel.tsx";
 import { GroupDrawer } from "./groups/GroupDrawer.tsx";
 import { CreateAgentDialog } from "./agents/CreateAgentDialog.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
@@ -37,6 +38,15 @@ export function App() {
   const [section, setSection] = useState<Section>("chat");
   const [chatId, setChatId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceTarget, setTraceTarget] = useState<{
+    id: number;
+    serial: number;
+  } | null>(null);
+  const showAgent = (id: string) => {
+    setTraceOpen(false);
+    setAgentId(id);
+  };
   const [modal, setModal] = useState<"agent" | "chat" | null>(null);
   const route = () => {
     const hash = window.location.hash;
@@ -97,8 +107,18 @@ export function App() {
   }
   const [accountFocus, setAccountFocus] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
-  // 轨迹抽屉和群信息抽屉共用右侧位置，互斥打开。
+  // Agent 详情与群信息互斥；轨迹卡片单独占聊天列右侧空间。
   const [groupOpen, setGroupOpen] = useState(false);
+  const showTrace = (id: string, target: number | null = null) => {
+    setTraceTarget((previous) =>
+      target === null
+        ? null
+        : { id: target, serial: (previous?.serial ?? 0) + 1 },
+    );
+    setGroupOpen(false);
+    setAgentId(id);
+    setTraceOpen(true);
+  };
   const [openingAgent, setOpeningAgent] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<{
     chatId: string;
@@ -121,6 +141,7 @@ export function App() {
     setSection(next);
     if (next !== "chat") {
       setGroupOpen(false);
+      setTraceOpen(false);
       setAgentId(null);
     }
     setMobileOpen(false);
@@ -133,6 +154,7 @@ export function App() {
   /** 从会话进聊天记录：预先把会话筛选选上，其余筛选重置。 */
   function openRecords(scope: string | null) {
     setGroupOpen(false);
+    setTraceOpen(false);
     setAgentId(null);
     setRecordFilters({ ...emptyFilters, chat: scope });
     setRecordTab("messages");
@@ -187,7 +209,7 @@ export function App() {
           openAgent={(agent) => void openAgent(agent)}
           openingAgent={openingAgent}
           connected={connected}
-          details={setAgentId}
+          details={showAgent}
           refresh={refresh}
           openSettings={() => setSettings("profile")}
         />
@@ -200,11 +222,12 @@ export function App() {
             selectChat={selectChat}
             openAgent={(agent) => void openAgent(agent)}
             openingAgent={openingAgent}
-            details={setAgentId}
+            details={showTrace}
             refresh={refresh}
             openMessage={(chat, message) => void openMessage(chat, message)}
             openUser={() => setSettings("profile")}
             openGroup={() => {
+              setTraceOpen(false);
               setAgentId(null);
               setGroupOpen(true);
             }}
@@ -251,7 +274,7 @@ export function App() {
                       overview={overview}
                       opening={openingAgent}
                       openAgent={(agent) => void openAgent(agent)}
-                      details={setAgentId}
+                      details={showAgent}
                       create={() => setModal("agent")}
                     />
                   )}
@@ -288,11 +311,14 @@ export function App() {
                     agents={overview.agents}
                     revision={revision}
                     hidden={section !== "chat"}
-                    details={setAgentId}
+                    details={(id) => showTrace(id)}
+                    inspectAgent={showAgent}
+                    openTrigger={(id, traceId) => showTrace(id, traceId)}
                     refresh={refresh}
                     anchor={anchor}
                     clearAnchor={() => setAnchor(null)}
                     openGroup={() => {
+                      setTraceOpen(false);
                       setAgentId(null);
                       setGroupOpen(true);
                     }}
@@ -301,7 +327,7 @@ export function App() {
                 </>
               )}
             </main>
-            {selectedAgent && (
+            {selectedAgent && !traceOpen && (
               <AgentDrawer
                 key={selectedAgent.id}
                 agent={selectedAgent}
@@ -309,6 +335,7 @@ export function App() {
                 visible={!settings}
                 close={() => setAgentId(null)}
                 openConfig={() => openConfig(selectedAgent.id)}
+                openTrace={() => setTraceOpen(true)}
               />
             )}
             {groupOpen && active?.kind === "group" && overview && (
@@ -321,13 +348,24 @@ export function App() {
                 changed={refresh}
                 openRecords={() => openRecords(active.id)}
                 openAgent={(id) => {
-                  setGroupOpen(false);
-                  setAgentId(id);
+                  showTrace(id);
                 }}
               />
             )}
           </div>
         </div>
+        {selectedAgent && traceOpen && (
+          <AgentTracePanel
+            key={selectedAgent.id}
+            agent={selectedAgent}
+            revision={revision}
+            target={traceTarget}
+            close={() => {
+              setTraceOpen(false);
+              setAgentId(null);
+            }}
+          />
+        )}
         {modal === "agent" && (
           <CreateAgentDialog
             close={() => setModal(null)}

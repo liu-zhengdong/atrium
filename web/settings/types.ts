@@ -5,7 +5,7 @@ export type Account = {
   id: string;
   provider: string;
   name: string;
-  type: "api_key" | "oauth";
+  type: "api_key" | "oauth" | "local";
   status: string;
   expires: number | null;
   last_error: string | null;

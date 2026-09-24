@@ -167,7 +167,7 @@ export function AgentDefaultsPage({
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="m-0 text-xl font-medium">新 Agent 默认配置</h1>
+        <h1 className="text-xl font-medium">新 Agent 默认配置</h1>
         <p className="mt-2 text-xs text-muted">
           只影响之后新建的身份；从已有 Agent 复制时沿用来源配置。
         </p>
@@ -181,12 +181,12 @@ export function AgentDefaultsPage({
         </p>
       )}
       {defaults && (
-        <form className="space-y-5" onSubmit={(event) => void save(event)}>
-          <section className="rounded-2xl bg-white p-5 shadow-lift">
-            <h2 className="text-sm font-medium">插件</h2>
+        <form className="space-y-10" onSubmit={(event) => void save(event)}>
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold">插件</h2>
             {packageChoices.length > 8 && (
               <input
-                className="field mb-3"
+                className="field"
                 aria-label="筛选插件"
                 placeholder="筛选插件"
                 value={packageQuery}
@@ -203,7 +203,7 @@ export function AgentDefaultsPage({
                 .map((entry) => (
                   <label
                     key={source(entry)}
-                    className="switch-row !m-0 !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-1 text-xs hover:bg-soft"
+                    className="switch-row !m-0 !flex !items-center !justify-between !gap-2 rounded-lg !px-0 !py-1 text-xs hover:bg-soft"
                   >
                     <span className="min-w-0 break-all">{source(entry)}</span>
                     <input
@@ -232,7 +232,7 @@ export function AgentDefaultsPage({
                 <p className="text-xs text-muted">个人 Pi 没有可选插件</p>
               )}
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
               <input
                 className="field min-w-[160px] flex-1"
                 value={newPackage}
@@ -260,11 +260,11 @@ export function AgentDefaultsPage({
               </button>
             </div>
           </section>
-          <section className="rounded-2xl bg-white p-5 shadow-lift">
-            <h2 className="text-sm font-medium">技能</h2>
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold">技能</h2>
             {skillChoices.length > 8 && (
               <input
-                className="field mb-3"
+                className="field"
                 aria-label="筛选技能"
                 placeholder="筛选技能"
                 value={skillQuery}
@@ -280,7 +280,7 @@ export function AgentDefaultsPage({
                 .map((skill) => (
                   <label
                     key={skill}
-                    className="switch-row !m-0 !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-1 text-xs hover:bg-soft"
+                    className="switch-row !m-0 !flex !items-center !justify-between !gap-2 rounded-lg !px-0 !py-1 text-xs hover:bg-soft"
                   >
                     <span className="min-w-0 break-all">{skill}</span>
                     <input
@@ -305,7 +305,7 @@ export function AgentDefaultsPage({
                 <p className="text-xs text-muted">个人 Pi 没有可选技能</p>
               )}
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
               <input
                 className="field min-w-[160px] flex-1"
                 value={newSkill}
@@ -330,8 +330,8 @@ export function AgentDefaultsPage({
               </button>
             </div>
           </section>
-          <section className="rounded-2xl bg-white p-5 shadow-lift">
-            <label className="form-label">
+          <section>
+            <label className="form-label !m-0">
               默认模型
               <select
                 className="field mt-2"

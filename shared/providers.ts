@@ -1,4 +1,4 @@
-export type ProviderMethod = "oauth" | "api_key";
+export type ProviderMethod = "oauth" | "api_key" | "local";
 export type ProviderEntry = {
   id: string;
   name: string;
@@ -68,6 +68,22 @@ export function matchingProviders(
             : 2;
       return rank(a) - rank(b) || a.name.localeCompare(b.name);
     });
+}
+
+export function assignedAccountLabel(
+  ref: string,
+  provider: string,
+  accounts: {
+    id: string;
+    name: string;
+    provider: string;
+    assigned: string[];
+  }[],
+): string | undefined {
+  const account = accounts.find(
+    (item) => item.provider === provider && item.assigned.includes(ref),
+  );
+  return account && `${account.name}（${account.id}）`;
 }
 
 export function currentAssignment(

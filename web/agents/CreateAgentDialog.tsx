@@ -229,11 +229,16 @@ export function CreateAgentDialog({
         <summary>启动</summary>
         <label className="switch-row">
           <span>创建后在后台启动</span>
-          <input name="start" type="checkbox" role="switch" />
+          <input
+            name="start"
+            type="checkbox"
+            role="switch"
+            disabled
+            title="先创建身份并分配账号"
+          />
         </label>
         <p className="muted small-text">
-          设置、规则和笔记归这个身份自己所有；扩展和技能复用已安装资源。不会复制登录凭据；内置
-          Pi 认证需在该身份中登录，环境变量和插件自身认证沿用原机制。
+          创建后先分配账号，再启动。不会复制个人 Pi 登录凭据。
         </p>
       </details>
       <p className="muted small-text">

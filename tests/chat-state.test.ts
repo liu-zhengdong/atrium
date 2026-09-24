@@ -69,6 +69,20 @@ test("连续发言合并：同人三分钟内算后续，换人或超时重新�
   assert.deepEqual(continuationFlags([]), []);
 });
 
+test("投递说明隔开同一 Agent 的两次发言，后续消息仍能成组", () => {
+  const at = (id: number, trigger = false): Message => ({
+    ...message(id),
+    sender: "agent",
+    created_at: id * 1000,
+    ...(trigger ? { trigger: { label: "消息箱提醒", trace_id: 7 } } : {}),
+  });
+  assert.deepEqual(continuationFlags([at(1), at(2, true), at(3)]), [
+    false,
+    false,
+    true,
+  ]);
+});
+
 test("连续发言反向验证：只看渲染窗口会把首条误判成起头", () => {
   const all = [
     { ...message(1), sender: "a", created_at: 0 },

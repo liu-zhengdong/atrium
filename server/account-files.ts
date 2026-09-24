@@ -68,7 +68,7 @@ export type Row = {
   number: number;
   provider: string;
   name: string;
-  type: "oauth" | "api_key";
+  type: "oauth" | "api_key" | "local";
   expires: number | null;
   status: string;
   last_error: string | null;

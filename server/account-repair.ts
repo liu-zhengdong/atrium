@@ -29,6 +29,7 @@ export function repairAccountFiles(
   store.run(`DELETE FROM credential_modes WHERE agent_id NOT IN
     (SELECT id FROM agents WHERE deleted_at IS NULL)`);
   for (const row of store.all<Row>("SELECT * FROM accounts")) {
+    if (row.type === "local") continue; // Deliberately no credential file.
     // OAuth login writes an empty placeholder before authorization. Cancellation or
     // a service restart is not a corrupt credential and must not be quarantined.
     if (
@@ -82,7 +83,9 @@ export function repairAccountFiles(
         files.quarantine(file, `身份 ${identity.agent_id} 损坏`);
       const entries: Record<string, Credential> = {};
       for (const a of store.all<{ provider: string; account_number: number }>(
-        "SELECT provider,account_number FROM account_assignments WHERE agent_id=?",
+        `SELECT x.provider,x.account_number FROM account_assignments x
+         JOIN accounts a ON a.number=x.account_number
+         WHERE x.agent_id=? AND a.type!='local'`,
         identity.agent_id,
       )) {
         try {
@@ -94,7 +97,9 @@ export function repairAccountFiles(
       lockedAuth(identity.agent_directory, () => entries);
       store.run(
         `UPDATE accounts SET status='error',last_error=? WHERE number IN
-        (SELECT account_number FROM account_assignments WHERE agent_id=?)`,
+        (SELECT x.account_number FROM account_assignments x
+         JOIN accounts a ON a.number=x.account_number
+         WHERE x.agent_id=? AND a.type!='local')`,
         "身份凭据损坏，原文件已隔离",
         identity.agent_id,
       );

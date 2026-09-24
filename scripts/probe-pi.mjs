@@ -15,8 +15,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { createServer as createNetServer } from "node:net";
 import assert from "node:assert/strict";
 import { createApp } from "../server/app.ts";
+import { Accounts } from "../server/accounts.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import { verifyIdentity } from "./probe-identity.mjs";
 
@@ -228,6 +230,24 @@ const { app, store, runtimes } = await createApp({
 });
 await app.listen({ port: 0, host: "127.0.0.1" });
 const port = app.server.address().port;
+// The CLI's separate service must not collide with a live user's Atrium.
+const testPort = createNetServer();
+await new Promise((resolve) => testPort.listen(0, "127.0.0.1", resolve));
+process.env.ATRIUM_PORT = String(testPort.address().port);
+await new Promise((resolve) => testPort.close(resolve));
+const accounts = new Accounts(store, join(folder, "data"));
+const fixtureAccount = accounts.add(
+  "atrium-fixture",
+  "本地夹具",
+  "local-fixture-only",
+).id;
+const assignLegacy = (id) =>
+  store.run(
+    "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+    id,
+    "atrium-fixture",
+    Number(fixtureAccount.slice(1)),
+  );
 let started = false;
 try {
   const command = `env PI_CODING_AGENT_DIR=${shell(profile)} PI_ACP_DIR=${shell(process.env.PI_ACP_DIR)} PI_MCP_TOOL_EXPOSURE=proxy-only PI_MCP_CONFIG_MODE=exclusive PI_OFFLINE=1 pi --extension ${shell(piAcpExtension)} --extension ${shell(readyExtension)}`;
@@ -306,6 +326,9 @@ try {
     );
     assert.equal(rejected.status, 409, "临时 Pi 不隐式建号");
     const legacy = store.createAgent("旧实例原地接入", cwd);
+    // Existing TUI owns its isolated local-model config; grant the identity an
+    // explicit fixture assignment before accepting it into Atrium.
+    assignLegacy(legacy.agent.id);
     writeFileSync(
       join(folder, "data", "credentials", `${legacy.agent.id}.json`),
       JSON.stringify({ token: legacy.token }),
@@ -346,6 +369,7 @@ try {
     assert.equal(before.busy, true, "MCP 在原任务仍忙时接入");
     assert(readFileSync(before.sessionFile, "utf8").includes("ATR_BASELINE"));
     const collision = store.createAgent("冲突 Agent", cwd).agent;
+    assignLegacy(collision.id);
     await assert.rejects(
       runtimes.attach(collision.id, before.runtimeId),
       /另一个 Agent/,
@@ -421,11 +445,16 @@ try {
     const created = await fetch(`http://127.0.0.1:${port}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "一键新建验证", start: true }),
+      body: JSON.stringify({ name: "先分配再启动验证" }),
     });
     assert.equal(created.status, 201);
     const createdAgent = await created.json();
-    assert(!createdAgent.start_error, createdAgent.start_error);
+    accounts.assign(createdAgent.agent.id, fixtureAccount);
+    const startedAgent = await fetch(
+      `http://127.0.0.1:${port}/api/agents/${createdAgent.agent.id}/start`,
+      { method: "POST" },
+    );
+    assert.equal(startedAgent.status, 200, await startedAgent.clone().text());
     assert.equal(
       runtimes.connections.get(createdAgent.agent.id).info.mode,
       "rpc",
@@ -437,6 +466,7 @@ try {
     });
     assert.equal(rpcResponse.status, 201);
     const rpcAgent = (await rpcResponse.json()).agent;
+    accounts.assign(rpcAgent.id, fixtureAccount);
     const settingsFile = join(rpcAgent.agent_directory, "settings.json");
     const staleAcp = join(folder, "missing-node_modules", "@liuser", "pi-acp");
     const poisoned = JSON.parse(readFileSync(settingsFile, "utf8"));
@@ -543,6 +573,7 @@ try {
       raw,
       hash,
       hashes,
+      fixtureAccount,
     });
     const chatReply = store.timeline(chatId).items.at(-1);
     const events = await fetch(`http://127.0.0.1:${port}/api/events`);
@@ -573,7 +604,7 @@ try {
         "temporary-runtime-does-not-create-identity",
         "legacy-identity-click-to-chat",
         "repeat-click-reuses-identity-and-chat",
-        "create-and-start-in-one-action",
+        "create-assign-start-with-local-account",
         "busy-MCP-attachment",
         "reject-duplicate-agent-binding",
         "custom-SYSTEM-preserved",

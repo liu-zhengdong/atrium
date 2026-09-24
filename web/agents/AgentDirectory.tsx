@@ -138,10 +138,20 @@ export function AgentDirectory({
                   {a.name}
                 </strong>
                 <span
-                  className={`min-w-0 truncate max-w-full max-[700px]:empty:hidden ${a.failure ? "text-[#9c3f2d]" : "text-muted"}`}
-                  title={a.failure ? failureSummary(a.failure.text) : a.work}
+                  className={`min-w-0 truncate max-w-full max-[700px]:empty:hidden ${a.unassigned || a.failure ? "text-[#9c3f2d]" : "text-muted"}`}
+                  title={
+                    a.unassigned
+                      ? "未分配账号"
+                      : a.failure
+                        ? failureSummary(a.failure.text)
+                        : a.work
+                  }
                 >
-                  {a.failure ? failureSummary(a.failure.text) : a.work}
+                  {a.unassigned
+                    ? "未分配账号"
+                    : a.failure
+                      ? failureSummary(a.failure.text)
+                      : a.work}
                 </span>
                 <span className="truncate text-muted max-[700px]:hidden">
                   {a.runtime?.model && a.runtime.model !== "unknown/unknown"

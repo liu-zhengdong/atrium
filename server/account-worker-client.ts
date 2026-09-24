@@ -1,6 +1,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import type { AccountFiles, Row } from "./account-files.ts";
 import type { ProviderEntry } from "../shared/providers.ts";
+import type { Validation } from "./account-validation.ts";
 
 export type WorkerError =
   | "登录已失效，需要重新登录"
@@ -52,6 +53,52 @@ export class AccountWorker {
         this.workers.delete(child);
         if (code === 0 && result) resolve(result);
         else reject(new Error("供应商目录加载失败"));
+      });
+    });
+  }
+  validate(
+    directory: string,
+    provider: string,
+    key: string,
+  ): Promise<Validation> {
+    return new Promise((resolve) => {
+      const child = fork(
+        new URL("./account-worker.mjs", import.meta.url),
+        [directory, provider, "validate"],
+        {
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+          execArgv: [],
+          env: { ...process.env, PI_CODING_AGENT_DIR: directory },
+        },
+      );
+      this.workers.add(child);
+      let result: Validation | undefined;
+      const timer = setTimeout(() => child.kill(), 15_000);
+      child.on(
+        "message",
+        (message: {
+          kind: string;
+          status?: Validation["status"];
+          reason?: string;
+        }) => {
+          if (message.kind === "validation" && message.status)
+            result = {
+              status: message.status,
+              reason: message.reason?.replaceAll(key, "[凭据已隐藏]"),
+            };
+        },
+      );
+      child.once("error", () => {
+        clearTimeout(timer);
+        this.workers.delete(child);
+        resolve({ status: "unverified", reason: "校验进程失败" });
+      });
+      child.once("exit", () => {
+        clearTimeout(timer);
+        this.workers.delete(child);
+        resolve(
+          result ?? { status: "unverified", reason: "校验超时或网络不可用" },
+        );
       });
     });
   }

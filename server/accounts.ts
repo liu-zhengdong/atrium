@@ -24,7 +24,21 @@ import { repairAccountFiles } from "./account-repair.ts";
 import { AccountRefresh } from "./account-refresh.ts";
 import { AccountWorker } from "./account-worker-client.ts";
 import { ProviderDirectory } from "./provider-directory.ts";
+import { validateKey, validationReason } from "./account-validation.ts";
+import { readIdentityModel } from "./profile.ts";
+import {
+  checkedCustom,
+  CustomProviders,
+  type CustomConfig,
+} from "./custom-providers.ts";
+import { setAccountModel } from "./account-models.ts";
 import { Problem, type Store } from "./store.ts";
+import { UNASSIGNED } from "./assignment.ts";
+import {
+  checkLocalLogin,
+  LOCAL_NAME,
+  LOCAL_PROVIDER,
+} from "./local-account.ts";
 export {
   modePlan,
   shouldRefresh,
@@ -55,14 +69,18 @@ export class Accounts {
   private loginService: AccountLogin;
   private providers: ProviderDirectory;
   private knownSecrets = new Set<string>();
+  private worker: AccountWorker;
+  private custom: CustomProviders;
   constructor(
     private store: Store,
     data: string,
   ) {
     this.files = new AccountFiles(store, join(data, "accounts"));
+    this.custom = new CustomProviders(data);
     this.catalog = new AccountCatalog(store);
     this.root = this.files.root;
     const worker = new AccountWorker(this.files);
+    this.worker = worker;
     this.refreshService = new AccountRefresh(store, this.files, worker);
     this.providers = new ProviderDirectory(worker);
     this.loginService = new AccountLogin(
@@ -75,8 +93,48 @@ export class Accounts {
       this.remember(value),
     );
   }
-  providersList() {
-    return this.providers.list();
+  async providersList() {
+    const builtIn = await this.providers.list();
+    return [
+      ...builtIn.filter((entry) => entry.id !== LOCAL_PROVIDER),
+      {
+        id: LOCAL_PROVIDER,
+        name: LOCAL_NAME,
+        methods: ["local" as const],
+        packagePath: null,
+      },
+      ...Object.keys(this.custom.all()).map((id) => ({
+        id,
+        name: id,
+        methods: ["api_key" as const],
+        packagePath: null,
+      })),
+    ];
+  }
+  customConfig(id: string) {
+    return this.custom.get(id) ?? null;
+  }
+  async customModels(config: CustomConfig, key: string) {
+    const clean = checkedCustom("custom", {
+      ...config,
+      models: config.models.length ? config.models : [{ id: "placeholder" }],
+    });
+    const response = await fetch(`${clean.baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${key || "atrium-local"}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await response.text();
+    if (!response.ok)
+      throw new Problem(
+        400,
+        body.replaceAll(key || "atrium-local", "[凭据已隐藏]").slice(0, 600),
+      );
+    const json = JSON.parse(body) as { data?: { id: string }[] };
+    return {
+      models: (json.data ?? [])
+        .map((item) => item.id)
+        .filter((id) => typeof id === "string"),
+    };
   }
   preloadProviders() {
     void this.providers.list().catch((error: unknown) => {
@@ -112,6 +170,112 @@ export class Accounts {
     this.remember(value);
     this.files.save(row, value);
   }
+  async probeKey(provider: string, key: string) {
+    if (!key.trim()) throw new Problem(400, "API Key 不能为空");
+    const custom = this.custom.get(provider);
+    const entry = custom
+      ? {
+          id: provider,
+          name: provider,
+          packagePath: null,
+          methods: ["api_key" as const],
+        }
+      : await this.providers.require(providerName.parse(provider), "api_key");
+    const validation = await validateKey(this.worker, entry, key, custom);
+    if (validation.status === "rejected")
+      throw new Problem(
+        400,
+        `${entry.name} 拒绝了这个 API Key（${validationReason(validation.reason)}）`,
+        "validation_failed",
+      );
+    return { ...validation, reason: validationReason(validation.reason) };
+  }
+  async addValidated(
+    provider: string,
+    name: string,
+    key: string,
+    allowUnverified = false,
+    custom?: CustomConfig,
+  ) {
+    provider = providerName.parse(provider);
+    if (!key && !custom) throw new Problem(400, "API key 不能为空");
+    if (custom && !key) key = "atrium-local";
+    const creatingCustom = !!custom;
+    if (custom) {
+      custom = checkedCustom(provider, custom);
+      if (
+        (await this.providers.list()).some((entry) => entry.id === provider) ||
+        this.custom.get(provider)
+      )
+        throw new Problem(409, "供应商名称已存在");
+    }
+    custom ??= this.custom.get(provider) ?? undefined;
+    const entry = custom
+      ? {
+          id: provider,
+          name: provider,
+          methods: ["api_key" as const],
+          packagePath: null,
+        }
+      : await this.providers.require(provider, "api_key");
+    const validation = await validateKey(this.worker, entry, key, custom);
+    if (creatingCustom && validation.status !== "verified")
+      throw new Problem(
+        400,
+        `服务返回 ${validationReason(validation.reason)}`,
+        "validation_failed",
+      );
+    if (validation.status === "rejected")
+      throw new Problem(
+        400,
+        `${entry.name} 拒绝了这个 API Key（${validationReason(validation.reason)}）`,
+        "validation_failed",
+      );
+    if (validation.status === "unverified" && !allowUnverified)
+      return { validation, id: null };
+    const saved = this.add(provider, name, key);
+    if (creatingCustom && custom) this.custom.save(provider, custom);
+    if (validation.status !== "verified")
+      this.store.run(
+        "UPDATE accounts SET status='unverified',last_error=? WHERE number=?",
+        validation.reason ?? "未校验",
+        this.catalog.number(saved.id),
+      );
+    return { ...saved, validation };
+  }
+  addLocal(provider: string) {
+    if (provider !== LOCAL_PROVIDER)
+      throw new Problem(400, "该供应商不支持本机登录");
+    const existing = this.store.one<{ number: number }>(
+      "SELECT number FROM accounts WHERE provider=? AND type='local'",
+      provider,
+    );
+    if (existing)
+      throw new Problem(
+        409,
+        `本机登录账号 k${existing.number} 已存在；请使用 atrium assign <身份> k${existing.number}`,
+      );
+    const reason = checkLocalLogin(this.store);
+    if (reason) throw new Problem(400, reason);
+    const number = this.store.run(
+      "INSERT INTO accounts(provider,name,type,status) VALUES(?,?,'local','ready')",
+      provider,
+      LOCAL_NAME,
+    ).lastInsertRowid;
+    return { id: `k${number}`, type: "local" as const };
+  }
+  checkLocal(ref: string) {
+    const row = this.catalog.row(this.catalog.number(ref));
+    if (row.type !== "local") throw new Problem(400, "此账号不是本机登录");
+    const reason = checkLocalLogin(this.store);
+    this.store.run(
+      "UPDATE accounts SET status=?,last_error=? WHERE number=?",
+      reason ? "error" : "ready",
+      reason,
+      row.number,
+    );
+    return { id: ref, status: reason ? "error" : "ready", reason };
+  }
   add(provider: string, name: string, key: string) {
     provider = providerName.parse(provider);
     if (!key) throw new Problem(400, "API key 不能为空");
@@ -132,6 +296,95 @@ export class Accounts {
     }
     return { id: `k${number}` };
   }
+  async replaceKey(
+    ref: string,
+    key: string,
+    allowUnverified = false,
+    update?: CustomConfig,
+  ) {
+    const row = this.catalog.row(this.catalog.number(ref));
+    if (row.type !== "api_key") throw new Problem(400, "此账号不是 API Key");
+    if (!key && !this.custom.get(row.provider) && !update)
+      throw new Problem(400, "API Key 不能为空");
+    const custom = update
+      ? checkedCustom(row.provider, update)
+      : this.custom.get(row.provider);
+    if (update && !this.custom.get(row.provider))
+      throw new Problem(400, "不是自定义供应商");
+    if (!key && custom)
+      key = (this.load(row) as Extract<Credential, { type: "api_key" }>).key;
+    const entry = custom
+      ? {
+          id: row.provider,
+          name: row.provider,
+          methods: ["api_key" as const],
+          packagePath: null,
+        }
+      : await this.providers.require(row.provider, "api_key");
+    const validation = await validateKey(this.worker, entry, key, custom);
+    if (custom && validation.status !== "verified")
+      throw new Problem(
+        400,
+        `服务返回 ${validationReason(validation.reason)}`,
+        "validation_failed",
+      );
+    if (validation.status === "rejected")
+      throw new Problem(
+        400,
+        `${entry.name} 拒绝了这个 API Key（${validationReason(validation.reason)}）`,
+        "validation_failed",
+      );
+    if (validation.status === "unverified" && !allowUnverified)
+      return { validation, updated: false };
+    this.save(row, { type: "api_key", key });
+    if (update) this.custom.save(row.provider, custom!);
+    for (const assignment of this.catalog.assigned(row.number)) {
+      if (
+        assignment.agent_directory &&
+        this.catalog.mode(assignment.agent_id) === "assigned"
+      ) {
+        lockedAuth(assignment.agent_directory, (data) => ({
+          ...data,
+          [row.provider]: { type: "api_key", key },
+        }));
+        if (custom)
+          setAccountModel(assignment.agent_directory, row.provider, custom);
+      }
+    }
+    this.store.run(
+      "UPDATE accounts SET status=?, last_error=? WHERE number=?",
+      validation.status === "verified" ? "ready" : "unverified",
+      validation.status === "verified" ? null : (validation.reason ?? "未校验"),
+      row.number,
+    );
+    if (validation.status === "verified")
+      for (const assignment of this.catalog.assigned(row.number))
+        if (
+          this.store.failure(assignment.agent_id)?.text ===
+          "模型认证失败，请更换 API Key"
+        )
+          this.store.clearFailure(assignment.agent_id);
+    return { validation, updated: true };
+  }
+  markModelAuthFailure(agent: string, detail: string) {
+    if (
+      !/\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
+        detail,
+      )
+    )
+      return;
+    const provider = this.store.agent(agent).agent_directory;
+    const selected = provider
+      ? readIdentityModel(provider)?.provider
+      : undefined;
+    if (!selected) return;
+    this.store.run(
+      `UPDATE accounts SET status='error',last_error='模型认证失败，请更换 API Key'
+      WHERE number=(SELECT account_number FROM account_assignments WHERE agent_id=? AND provider=?)`,
+      agent,
+      selected,
+    );
+  }
   rename(ref: string, name: string) {
     return this.catalog.rename(ref, name);
   }
@@ -142,9 +395,9 @@ export class Accounts {
           "SELECT account_number FROM account_assignments WHERE agent_id=?",
           id,
         )
-        .map(({ account_number }) => {
+        .flatMap(({ account_number }) => {
           const row = this.catalog.row(account_number);
-          return [row.provider, this.load(row)];
+          return row.type === "local" ? [] : [[row.provider, this.load(row)]];
         }),
     );
   }
@@ -168,6 +421,11 @@ export class Accounts {
           )
           .map((r) => ({ provider: r.provider, account: `k${r.number}` })),
       };
+    if (target === "shared")
+      throw new Problem(
+        409,
+        "共享个人 Pi 登录已停用；请用 atrium assign <身份> <账号短号> 分配账号",
+      );
     return this.files.prepareMode(
       id,
       target,
@@ -195,6 +453,28 @@ export class Accounts {
       throw new Problem(409, "该身份已分配此账号");
     if (!agent.agent_directory)
       throw new Problem(409, "身份没有配置目录，请先启动身份");
+    // Local login is a delegation to Claude CLI; no token or auth.json entry exists.
+    if (row.type === "local") {
+      const reason = checkLocalLogin(this.store, id);
+      if (reason) throw new Problem(409, reason);
+      this.store.transaction(() => {
+        this.store.run(
+          "INSERT INTO credential_modes(agent_id,mode) VALUES(?,'assigned') ON CONFLICT(agent_id) DO UPDATE SET mode='assigned'",
+          id,
+        );
+        this.store.run(
+          previous
+            ? "UPDATE account_assignments SET account_number=? WHERE agent_id=? AND provider=?"
+            : "INSERT INTO account_assignments(account_number,agent_id,provider) VALUES(?,?,?)",
+          row.number,
+          id,
+          row.provider,
+        );
+      });
+      if (this.store.failure(id)?.text === UNASSIGNED)
+        this.store.clearFailure(id);
+      return { mode: "assigned", account: ref, preserved: null };
+    }
     // Read and validate before touching either the identity file or assignment row.
     const value = this.load(row);
     const sidecar =
@@ -204,6 +484,10 @@ export class Accounts {
     const restoreAuth = restoreFileOnFailure(
       join(agent.agent_directory, "auth.json"),
     );
+    const custom = this.custom.get(row.provider);
+    const restoreModels = custom
+      ? restoreFileOnFailure(join(agent.agent_directory, "models.json"))
+      : null;
     const restoreSidecar = sidecar ? restoreFileOnFailure(sidecar) : null;
     let preserved: string | null = null;
     try {
@@ -221,6 +505,8 @@ export class Accounts {
             [row.provider]: value,
           }));
         this.files.sidecar(row, agent.agent_directory!);
+        if (custom)
+          setAccountModel(agent.agent_directory!, row.provider, custom);
         if (previous)
           this.store.run(
             "UPDATE account_assignments SET account_number=? WHERE agent_id=? AND provider=?",
@@ -239,8 +525,11 @@ export class Accounts {
     } catch (error) {
       restoreAuth(preserved);
       restoreSidecar?.();
+      restoreModels?.();
       throw error;
     }
+    if (this.store.failure(id)?.text === UNASSIGNED)
+      this.store.clearFailure(id);
     if (
       sidecar &&
       !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
@@ -260,11 +549,19 @@ export class Accounts {
     )
       throw new Problem(404, "分配不存在");
     if (!agent.agent_directory) throw new Problem(409, "身份没有配置目录");
-    if (this.catalog.mode(id) === "assigned") {
+    const row = this.store.one<Row>(
+      `SELECT a.* FROM accounts a JOIN account_assignments x ON x.account_number=a.number
+       WHERE x.agent_id=? AND x.provider=?`,
+      id,
+      provider,
+    );
+    if (row?.type !== "local" && this.catalog.mode(id) === "assigned") {
       lockedAuth(agent.agent_directory, (data) => {
         delete data[provider];
         return data;
       });
+      if (this.custom.get(provider))
+        setAccountModel(agent.agent_directory, provider);
       if (provider === "antigravity")
         rmSync(join(agent.agent_directory, "antigravity-accounts.json"), {
           force: true,
@@ -283,7 +580,9 @@ export class Accounts {
     for (const a of this.catalog.assigned(number))
       this.unassign(a.agent_id, row.provider);
     this.store.run("DELETE FROM accounts WHERE number=?", number);
-    rmSync(this.files.dir(number), { recursive: true, force: true });
+    if (this.custom.get(row.provider)) this.custom.remove(row.provider);
+    if (row.type !== "local")
+      rmSync(this.files.dir(number), { recursive: true, force: true });
     return { removed: true };
   }
   refresh() {
@@ -299,6 +598,8 @@ export class Accounts {
     return this.loginService.login(provider, name);
   }
   relogin(ref: string) {
+    if (this.catalog.row(this.catalog.number(ref)).type === "local")
+      throw new Problem(400, "本机登录请运行 claude auth login");
     return this.loginService.relogin(this.catalog.number(ref), () =>
       this.refreshService.distributeAccount(
         this.catalog.row(this.catalog.number(ref)),

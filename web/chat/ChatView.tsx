@@ -13,6 +13,7 @@ export function ChatView({
   revision,
   hidden,
   details,
+  inspectAgent,
   refresh,
   anchor,
   clearAnchor,
@@ -25,6 +26,7 @@ export function ChatView({
   revision: number;
   hidden: boolean;
   details: (id: string) => void;
+  inspectAgent: (id: string) => void;
   refresh: () => void;
   anchor: { chatId: string; messageId: number } | null;
   clearAnchor: () => void;
@@ -72,7 +74,7 @@ export function ChatView({
               暂时无法与 Agent 通信，已发送的消息会保留。
               <button
                 className="ml-2 underline"
-                onClick={() => details(directAgent.id)}
+                onClick={() => inspectAgent(directAgent.id)}
               >
                 查看详情
               </button>

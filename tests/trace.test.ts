@@ -125,6 +125,12 @@ test("运行轨迹：真实事件物化、参数按需读取、分页隔离与�
   const tool = traces.page(a.id).items.at(-1)!;
   assert.equal(tool.state, "running");
   assert.match(tool.title, /读取.*example.md/);
+  assert.equal(
+    traces.page(a.id).items[0].has_detail,
+    false,
+    "无正文的会话不显示展开入口",
+  );
+  assert.equal(tool.has_detail, true, "工具有参数，可以展开");
   assert(!("input" in tool), "默认列表不拉取完整正文");
   traces.ingest(
     a.id,
@@ -139,12 +145,21 @@ test("运行轨迹：真实事件物化、参数按需读取、分页隔离与�
   );
   assert.equal(traces.detail(a.id, tool.id).output, "真实结果");
   assert.equal(traces.detail(a.id, tool.id).state, "complete");
+  traces.ingest(
+    a.id,
+    page(target, [event(4, "delivery", { text: "收到投递" })]),
+  );
+  assert.equal(
+    traces.page(a.id).items.at(-1)!.has_detail,
+    true,
+    "有正文的投递仍可展开",
+  );
   assert.throws(() => traces.detail(b.id, tool.id), /不存在/);
   const previous = traces.cursor(a.id, target.runtimeId, target.generation);
   for (const bad of [
-    page(target, [event(5, "run_end")]),
-    page(target, [event(4, "tool_end")]),
-    { ...page(target, [event(4, "run_end")]), nextAfter: 9 },
+    page(target, [event(6, "run_end")]),
+    page(target, [event(5, "tool_end")]),
+    { ...page(target, [event(5, "run_end")]), nextAfter: 9 },
   ])
     assert.throws(() => traces.ingest(a.id, bad));
   assert.equal(

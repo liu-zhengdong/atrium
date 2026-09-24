@@ -155,11 +155,11 @@ function Lightbox({
           <X size={18} />
         </button>
       </div>
-      <div className="relative flex min-h-0 flex-1 items-center justify-center px-14">
+      <div className="relative min-h-0 flex-1">
         {images.length > 1 && (
           <button
             type="button"
-            className="icon-button absolute left-4 text-[#f4f1ea] hover:bg-white/10"
+            className="icon-button absolute top-1/2 left-4 -translate-y-1/2 text-[#f4f1ea] hover:bg-white/10"
             aria-label="上一张"
             onClick={(e) => {
               e.stopPropagation();
@@ -169,16 +169,17 @@ function Lightbox({
             <ChevronLeft size={22} />
           </button>
         )}
+        {/* 绝对定位居中：百分比上限按容器解析，不依赖浏览器对 flex 子项高度的推算（Safari 下曾缩成缩略图大小） */}
         <img
           src={attachmentUrl(current.id)}
           alt={current.name}
-          className="max-h-full max-w-full object-contain"
+          className="absolute inset-x-14 inset-y-0 m-auto max-h-full max-w-[calc(100%-7rem)] object-contain"
           onClick={(e) => e.stopPropagation()}
         />
         {images.length > 1 && (
           <button
             type="button"
-            className="icon-button absolute right-4 text-[#f4f1ea] hover:bg-white/10"
+            className="icon-button absolute top-1/2 right-4 -translate-y-1/2 text-[#f4f1ea] hover:bg-white/10"
             aria-label="下一张"
             onClick={(e) => {
               e.stopPropagation();

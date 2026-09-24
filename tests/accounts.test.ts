@@ -640,7 +640,12 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
           method: "POST",
           url: "/api/accounts",
           headers,
-          payload: { provider: "deepseek", name, key: name },
+          payload: {
+            provider: "deepseek",
+            name,
+            key: name,
+            allowUnverified: true,
+          },
         })
       ).json().id as string;
     const old = await add("old"),
@@ -703,7 +708,12 @@ test("account HTTP responses omit credentials even on malformed stored JSON", as
       method: "POST",
       url: "/api/accounts",
       headers,
-      payload: { provider: "deepseek", name: "http", key },
+      payload: {
+        provider: "deepseek",
+        name: "http",
+        key,
+        allowUnverified: true,
+      },
     });
     assert.equal(created.statusCode, 200);
     assert.equal(created.body.includes(key), false);

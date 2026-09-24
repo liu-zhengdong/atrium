@@ -18,6 +18,7 @@ import {
 import { modelSpec, type ModelOption } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Accounts } from "./accounts.ts";
+import { customSchema } from "./custom-providers.ts";
 import { Runtimes } from "./runtime.ts";
 import { createMcp } from "./mcp.ts";
 import {
@@ -104,6 +105,7 @@ export async function createApp(options: {
           piHome,
           desktops,
           (agent, text) => accounts.redact(agent, text),
+          (agent, detail) => accounts.markModelAuthFailure(agent, detail),
         );
   const traces =
     runtimes?.traces ??
@@ -254,16 +256,50 @@ export async function createApp(options: {
   });
   app.get("/api/providers", () => accounts.providersList());
   app.get("/api/accounts", () => accounts.list());
+  app.get("/api/custom/:provider", (request) =>
+    accounts.customConfig((request.params as { provider: string }).provider),
+  );
+  app.post("/api/custom/models", (request) => {
+    const { config, key } = z
+      .object({ config: customSchema, key: z.string() })
+      .strict()
+      .parse(request.body);
+    return accounts.customModels(config, key);
+  });
   app.post("/api/accounts", (request) => {
-    const { provider, name, key } = z
+    const { provider, name, key, allowUnverified, custom } = z
       .object({
         provider: z.string(),
         name: z.string().trim().min(1).max(80),
-        key: z.string().min(1),
+        key: z.string(),
+        allowUnverified: z.boolean().optional(),
+        custom: customSchema.optional(),
       })
       .strict()
       .parse(request.body);
-    return accounts.add(provider, name, key);
+    return accounts.addValidated(
+      provider,
+      name,
+      key || (custom ? "atrium-local" : ""),
+      allowUnverified,
+      custom,
+    );
+  });
+  app.put("/api/accounts/:ref/key", (request) => {
+    const { key, allowUnverified, custom } = z
+      .object({
+        key: z.string(),
+        allowUnverified: z.boolean().optional(),
+        custom: customSchema.optional(),
+      })
+      .strict()
+      .parse(request.body);
+    return accounts.replaceKey(
+      accountRef(request),
+      key,
+      allowUnverified,
+      custom,
+    );
   });
   app.post("/api/accounts/login", (request) => {
     const { provider, name } = z

@@ -24,6 +24,14 @@ import { repairAccountFiles } from "./account-repair.ts";
 import { AccountRefresh } from "./account-refresh.ts";
 import { AccountWorker } from "./account-worker-client.ts";
 import { ProviderDirectory } from "./provider-directory.ts";
+import { validateKey } from "./account-validation.ts";
+import { readIdentityModel } from "./profile.ts";
+import {
+  checkedCustom,
+  CustomProviders,
+  type CustomConfig,
+} from "./custom-providers.ts";
+import { setAccountModel } from "./account-models.ts";
 import { Problem, type Store } from "./store.ts";
 export {
   modePlan,
@@ -55,14 +63,18 @@ export class Accounts {
   private loginService: AccountLogin;
   private providers: ProviderDirectory;
   private knownSecrets = new Set<string>();
+  private worker: AccountWorker;
+  private custom: CustomProviders;
   constructor(
     private store: Store,
     data: string,
   ) {
     this.files = new AccountFiles(store, join(data, "accounts"));
+    this.custom = new CustomProviders(data);
     this.catalog = new AccountCatalog(store);
     this.root = this.files.root;
     const worker = new AccountWorker(this.files);
+    this.worker = worker;
     this.refreshService = new AccountRefresh(store, this.files, worker);
     this.providers = new ProviderDirectory(worker);
     this.loginService = new AccountLogin(
@@ -75,8 +87,42 @@ export class Accounts {
       this.remember(value),
     );
   }
-  providersList() {
-    return this.providers.list();
+  async providersList() {
+    const builtIn = await this.providers.list();
+    return [
+      ...builtIn,
+      ...Object.keys(this.custom.all()).map((id) => ({
+        id,
+        name: id,
+        methods: ["api_key" as const],
+        packagePath: null,
+      })),
+    ];
+  }
+  customConfig(id: string) {
+    return this.custom.get(id) ?? null;
+  }
+  async customModels(config: CustomConfig, key: string) {
+    const clean = checkedCustom("custom", {
+      ...config,
+      models: config.models.length ? config.models : [{ id: "placeholder" }],
+    });
+    const response = await fetch(`${clean.baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${key || "atrium-local"}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await response.text();
+    if (!response.ok)
+      throw new Problem(
+        400,
+        body.replaceAll(key || "atrium-local", "[凭据已隐藏]").slice(0, 600),
+      );
+    const json = JSON.parse(body) as { data?: { id: string }[] };
+    return {
+      models: (json.data ?? [])
+        .map((item) => item.id)
+        .filter((id) => typeof id === "string"),
+    };
   }
   preloadProviders() {
     void this.providers.list().catch((error: unknown) => {
@@ -112,6 +158,55 @@ export class Accounts {
     this.remember(value);
     this.files.save(row, value);
   }
+  async addValidated(
+    provider: string,
+    name: string,
+    key: string,
+    allowUnverified = false,
+    custom?: CustomConfig,
+  ) {
+    provider = providerName.parse(provider);
+    if (!key && !custom) throw new Problem(400, "API key 不能为空");
+    if (custom && !key) key = "atrium-local";
+    if (custom) {
+      custom = checkedCustom(provider, custom);
+      if (
+        (await this.providers.list()).some((entry) => entry.id === provider) ||
+        this.custom.get(provider)
+      )
+        throw new Problem(409, "供应商名称已存在");
+    }
+    const entry = custom
+      ? {
+          id: provider,
+          name: provider,
+          methods: ["api_key" as const],
+          packagePath: null,
+        }
+      : await this.providers.require(provider, "api_key");
+    const validation = await validateKey(this.worker, entry, key, custom);
+    if (custom && validation.status !== "verified")
+      throw new Problem(
+        400,
+        `${provider} 校验失败：${validation.reason ?? "请求失败"}`,
+      );
+    if (validation.status === "rejected")
+      throw new Problem(
+        400,
+        `${entry.name} 拒绝了 API Key：${validation.reason}`,
+      );
+    if (validation.status === "unverified" && !allowUnverified)
+      return { validation, id: null };
+    const saved = this.add(provider, name, key);
+    if (custom) this.custom.save(provider, custom);
+    if (validation.status !== "verified")
+      this.store.run(
+        "UPDATE accounts SET status='unverified',last_error=? WHERE number=?",
+        validation.reason ?? "未校验",
+        this.catalog.number(saved.id),
+      );
+    return { ...saved, validation };
+  }
   add(provider: string, name: string, key: string) {
     provider = providerName.parse(provider);
     if (!key) throw new Problem(400, "API key 不能为空");
@@ -131,6 +226,93 @@ export class Accounts {
       throw new Problem(500, "账号保存失败");
     }
     return { id: `k${number}` };
+  }
+  async replaceKey(
+    ref: string,
+    key: string,
+    allowUnverified = false,
+    update?: CustomConfig,
+  ) {
+    const row = this.catalog.row(this.catalog.number(ref));
+    if (row.type !== "api_key") throw new Problem(400, "此账号不是 API Key");
+    if (!key && !this.custom.get(row.provider) && !update)
+      throw new Problem(400, "API Key 不能为空");
+    const custom = update
+      ? checkedCustom(row.provider, update)
+      : this.custom.get(row.provider);
+    if (update && !this.custom.get(row.provider))
+      throw new Problem(400, "不是自定义供应商");
+    if (!key && custom)
+      key = (this.load(row) as Extract<Credential, { type: "api_key" }>).key;
+    const entry = custom
+      ? {
+          id: row.provider,
+          name: row.provider,
+          methods: ["api_key" as const],
+          packagePath: null,
+        }
+      : await this.providers.require(row.provider, "api_key");
+    const validation = await validateKey(this.worker, entry, key, custom);
+    if (custom && validation.status !== "verified")
+      throw new Problem(
+        400,
+        `${row.provider} 校验失败：${validation.reason ?? "请求失败"}`,
+      );
+    if (validation.status === "rejected")
+      throw new Problem(
+        400,
+        `${entry.name} 拒绝了 API Key：${validation.reason}`,
+      );
+    if (validation.status === "unverified" && !allowUnverified)
+      return { validation, updated: false };
+    this.save(row, { type: "api_key", key });
+    if (update) this.custom.save(row.provider, custom!);
+    for (const assignment of this.catalog.assigned(row.number)) {
+      if (
+        assignment.agent_directory &&
+        this.catalog.mode(assignment.agent_id) === "assigned"
+      ) {
+        lockedAuth(assignment.agent_directory, (data) => ({
+          ...data,
+          [row.provider]: { type: "api_key", key },
+        }));
+        if (custom)
+          setAccountModel(assignment.agent_directory, row.provider, custom);
+      }
+    }
+    this.store.run(
+      "UPDATE accounts SET status=?, last_error=? WHERE number=?",
+      validation.status === "verified" ? "ready" : "unverified",
+      validation.status === "verified" ? null : (validation.reason ?? "未校验"),
+      row.number,
+    );
+    if (validation.status === "verified")
+      for (const assignment of this.catalog.assigned(row.number))
+        if (
+          this.store.failure(assignment.agent_id)?.text ===
+          "模型认证失败，请更换 API Key"
+        )
+          this.store.clearFailure(assignment.agent_id);
+    return { validation, updated: true };
+  }
+  markModelAuthFailure(agent: string, detail: string) {
+    if (
+      !/\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
+        detail,
+      )
+    )
+      return;
+    const provider = this.store.agent(agent).agent_directory;
+    const selected = provider
+      ? readIdentityModel(provider)?.provider
+      : undefined;
+    if (!selected) return;
+    this.store.run(
+      `UPDATE accounts SET status='error',last_error='模型认证失败，请更换 API Key'
+      WHERE number=(SELECT account_number FROM account_assignments WHERE agent_id=? AND provider=?)`,
+      agent,
+      selected,
+    );
   }
   rename(ref: string, name: string) {
     return this.catalog.rename(ref, name);
@@ -204,6 +386,10 @@ export class Accounts {
     const restoreAuth = restoreFileOnFailure(
       join(agent.agent_directory, "auth.json"),
     );
+    const custom = this.custom.get(row.provider);
+    const restoreModels = custom
+      ? restoreFileOnFailure(join(agent.agent_directory, "models.json"))
+      : null;
     const restoreSidecar = sidecar ? restoreFileOnFailure(sidecar) : null;
     let preserved: string | null = null;
     try {
@@ -221,6 +407,8 @@ export class Accounts {
             [row.provider]: value,
           }));
         this.files.sidecar(row, agent.agent_directory!);
+        if (custom)
+          setAccountModel(agent.agent_directory!, row.provider, custom);
         if (previous)
           this.store.run(
             "UPDATE account_assignments SET account_number=? WHERE agent_id=? AND provider=?",
@@ -239,6 +427,7 @@ export class Accounts {
     } catch (error) {
       restoreAuth(preserved);
       restoreSidecar?.();
+      restoreModels?.();
       throw error;
     }
     if (
@@ -265,6 +454,8 @@ export class Accounts {
         delete data[provider];
         return data;
       });
+      if (this.custom.get(provider))
+        setAccountModel(agent.agent_directory, provider);
       if (provider === "antigravity")
         rmSync(join(agent.agent_directory, "antigravity-accounts.json"), {
           force: true,
@@ -283,6 +474,7 @@ export class Accounts {
     for (const a of this.catalog.assigned(number))
       this.unassign(a.agent_id, row.provider);
     this.store.run("DELETE FROM accounts WHERE number=?", number);
+    if (this.custom.get(row.provider)) this.custom.remove(row.provider);
     rmSync(this.files.dir(number), { recursive: true, force: true });
     return { removed: true };
   }

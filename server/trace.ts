@@ -8,7 +8,7 @@ import {
 } from "../shared/trace.ts";
 
 const columns =
-  "id,session_id,generation,at,ended_at,kind,name,title,state,truncated";
+  "id,session_id,generation,at,ended_at,kind,name,title,state,truncated,CASE WHEN input<>'' OR output<>'' THEN 1 ELSE 0 END AS has_detail";
 const labels: Record<string, string> = {
   read: "读取",
   edit: "修改",
@@ -292,7 +292,11 @@ export class TraceStore {
       items: rows
         .slice(0, 50)
         .reverse()
-        .map((row) => ({ ...row, truncated: !!row.truncated })),
+        .map((row) => ({
+          ...row,
+          truncated: !!row.truncated,
+          has_detail: !!row.has_detail,
+        })),
       has_more: rows.length > 50,
     };
   }
@@ -304,6 +308,6 @@ export class TraceStore {
       id,
     );
     if (!row) throw new Problem(404, "轨迹不存在");
-    return { ...row, truncated: !!row.truncated };
+    return { ...row, truncated: !!row.truncated, has_detail: !!row.has_detail };
   }
 }

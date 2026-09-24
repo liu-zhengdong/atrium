@@ -56,6 +56,19 @@ import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 
 const require = createRequire(import.meta.url);
+// 服务可能从某个 herdr pane 里启动；后台身份不在那个 pane 里，去掉表示「身处此 pane」的变量，
+// 只留连接 herdr 所需的 socket 与可执行文件路径。
+const paneScoped = [
+  "HERDR_ENV",
+  "HERDR_PANE_ID",
+  "HERDR_TAB_ID",
+  "HERDR_WORKSPACE_ID",
+];
+export function identityEnvironment(env: NodeJS.ProcessEnv) {
+  const result = { ...env };
+  for (const key of paneScoped) delete result[key];
+  return result;
+}
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -164,7 +177,7 @@ export class Runtimes {
         require.resolve("@liuser/pi-atrium/dist/index.js");
       const child = spawn(process.execPath, [entry], {
         env: {
-          ...process.env,
+          ...identityEnvironment(process.env),
           PI_MCP_TOOL_EXPOSURE: "proxy-only",
           PI_ACP_PI_COMMAND:
             process.env.PI_ACP_PI_COMMAND || process.env.ATRIUM_PI_BIN || "pi",

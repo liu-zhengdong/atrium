@@ -127,6 +127,12 @@ atrium user --name 老刘                        # 用户资料，Agent 只读
 atrium runtimes                               # 本机发现的 Pi 实例
 atrium attach 林岚 实例ID                       # 把发现的实例接到身份上
 atrium promote 旧记录                          # 旧记录升级为长期身份
+
+# 版本升级
+atrium update                                # 安装最新 GitHub 标签及其锁定的 pi-atrium；不重启
+atrium update --to 0.1.15                    # 指定版本，也可退回旧版本
+atrium restart                               # 异步平滑重启；忙碌的后台身份做完当前回合再退出
+atrium restart --wait --timeout 120          # 等待结果（秒），成功或回滚均有明确回执
 ```
 
 `connect` 需要交互终端；OAuth 登录在浏览器完成，取消时停止进行中的登录。Web 的「添加账号」使用同一供应商目录，按连接方式筛选并可搜索。目录来自 Pi 及模板已安装的插件，插件变更后重新加载；账号密钥留在服务端，不会出现在命令输出中。自动化使用 `account add --key -`，不再使用 `account login`。
@@ -135,7 +141,9 @@ atrium promote 旧记录                          # 旧记录升级为长期身�
 
 身份用哪个模型由用户设定，写在身份目录的 `settings.json`；Web 的 Agent 详情里也能改。在跑的身份当场生效，离线的下次启动生效；启动时把配置的模型作为启动参数传给 Pi，所以旧会话里记着的模型不会把它盖回去。可选清单来自这个身份运行中的 Pi，离线时用上次取到的；不在清单里的模型直接拒绝。Agent 自己的工具面不含改模型。
 
-未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置固定在安装目录（当前为仓库）的 `.atrium/`，不会随终端工作目录变化。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
+正式安装使用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`（将 `x` 换成已发布的补丁号），不使用 npm registry。每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。失败时自动安装原版本、重新启动并发消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。
+
+未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置为 `~/.pi/atrium/data/`，不放在会被 npm 更新替换的安装目录，也不会随终端工作目录变化。原本在开发仓库 `.atrium/` 的用户数据须在切换全局安装之前停服迁移，或给新服务显式设置 `ATRIUM_DATA` 指向原目录；不要一边运行一边复制 SQLite。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
 
 入口打开原生 Pi TUI，自动使用该身份的配置、固定 MCP 代理模式和最近会话。首次使用 Pi 内置认证时，在这个身份内执行 `/login`；配置模板的 `auth.json` 不会复制，环境变量及插件自身认证沿用原机制。同一身份已被占用时显示 PID／工作目录，不抢占、不重启已有实例。普通 `pi` 不受此限制；已加载通用扩展的普通实例仍可被发现，但不会自动成为长期身份。
 
@@ -208,7 +216,7 @@ MCP 提供 `list_agents`、`user_info`、`list_fork_sources`、`fork_agent`、`o
 | 环境变量              | 用途                                                                                 |
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `ATRIUM_PORT`         | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口                              |
-| `ATRIUM_DATA`         | 数据目录，默认安装目录下 `.atrium/`（当前为仓库）                                    |
+| `ATRIUM_DATA`         | 数据目录，默认 `~/.pi/atrium/data/`                                                  |
 | 模型凭据              | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录                            |
 | `ATRIUM_PI_ACP_ENTRY` | 开发时覆盖 pi-atrium 的 dist/index.js；默认使用依赖包                                |
 | `PI_ACP_PI_COMMAND`   | pi-atrium 使用的 Pi 可执行文件，默认 `pi`                                            |
@@ -220,7 +228,7 @@ MCP 提供 `list_agents`、`user_info`、`list_fork_sources`、`fork_agent`、`o
 
 Pi 接入依赖 [`@liuser/pi-atrium`](https://github.com/liu-zhengdong/pi-atrium)。个人 TUI 用 `pi install git:github.com/liu-zhengdong/pi-atrium`。
 
-`.atrium/` 保存业务数据库和 `credentials/` 中的 Agent MCP 凭据（`0600`）。每位身份的 Pi 配置在 `~/.pi/atrium/agents/<内部身份 ID>/`，`~/.pi/agents/<名称>` 指向它。模板只读取必要设置；扩展／技能引用已安装资源。规则、模型列表、MCP 配置和笔记拷成该身份自有文件，之后各自调优、互不影响。不复制登录凭据。模板中的 npm / git 包须已在模板目录安装（`npm:` → `npm/node_modules/…`，`git:` / `github:` → `git/<host>/<path>`，与 Pi 相同）；创建身份时写入已安装的本地路径，并注入本应用的 pi-atrium（去掉模板里会被合集重复加载的旧包）。旧版 `links/` 凭据按需迁移，既有会话通过 pi-atrium 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
+数据目录保存业务数据库和 `credentials/` 中的 Agent MCP 凭据（`0600`）。每位身份的 Pi 配置在 `~/.pi/atrium/agents/<内部身份 ID>/`，`~/.pi/agents/<名称>` 指向它。模板只读取必要设置；扩展／技能引用已安装资源。规则、模型列表、MCP 配置和笔记拷成该身份自有文件，之后各自调优、互不影响。不复制登录凭据。模板中的 npm / git 包须已在模板目录安装（`npm:` → `npm/node_modules/…`，`git:` / `github:` → `git/<host>/<path>`，与 Pi 相同）；创建身份时写入已安装的本地路径，并注入本应用的 pi-atrium（去掉模板里会被合集重复加载的旧包）。旧版 `links/` 凭据按需迁移，既有会话通过 pi-atrium 的只读历史导入登记保留，不删除旧历史。原 `ATRIUM_PI_BIN` 暂兼容映射到 `PI_ACP_PI_COMMAND`，请更新启动配置。凭据不要提交、发到聊天或放入模型提示。
 
 服务管理另用同目录的 `service.sqlite` 保存单实例登记与随机控制凭据（`0600`），不更换业务数据库。启动与崩溃后重新占用通过 SQLite 事务串行化；进程仍存在但连接失败时拒绝另开或按 PID 强杀。状态与停止通过本机鉴权接口核对实例，不把端口连通当作身份依据。该文件包含凭据，请勿提交或分享。
 

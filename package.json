@@ -6,6 +6,14 @@
   "bin": {
     "atrium": "bin/atrium.mjs"
   },
+  "files": [
+    "bin",
+    "cli",
+    "server",
+    "shared",
+    "dist",
+    "releases.json"
+  ],
   "engines": {
     "node": ">=24"
   },

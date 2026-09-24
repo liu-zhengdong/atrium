@@ -2,7 +2,7 @@ import type { Command } from "./main.ts";
 import { exitCodes } from "./contract.ts";
 
 export const groups: Record<string, string[]> = {
-  服务: ["status", "stop"],
+  服务: ["status", "stop", "restart", "update"],
   身份: [
     "list",
     "show",
@@ -18,8 +18,6 @@ export const groups: Record<string, string[]> = {
     "attach",
     "promote",
     "run",
-    "update",
-    "restart",
   ],
   聊天: [
     "chats",

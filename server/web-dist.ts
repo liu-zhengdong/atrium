@@ -26,6 +26,8 @@ function filesIn(dir: string): string[] {
 export function webDistStale(root: string) {
   const distIndex = join(root, "dist/index.html");
   if (!existsSync(distIndex)) return true;
+  // Tagged installations ship prebuilt assets without Vite source or dev deps.
+  if (!existsSync(join(root, "web"))) return false;
   const distTime = statSync(distIndex).mtimeMs;
   for (const name of ROOT_FILES) {
     const path = join(root, name);

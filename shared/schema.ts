@@ -230,6 +230,7 @@ export type BoxMessage = {
 };
 export type Page<T> = { items: T[]; next_after: number; has_more: boolean };
 export type Overview = {
+  version: string;
   agents: (AgentInfo & {
     runtime: RuntimeInfo | null;
     available: boolean;
@@ -237,6 +238,7 @@ export type Overview = {
     failure: { text: string; at: number; count: number } | null;
     unread: number;
     unassigned: boolean;
+    needs_reload?: boolean;
   })[];
   chats: Chat[];
   /** 本机用户的资料；界面用它认出自己的消息，并提供编辑入口。 */

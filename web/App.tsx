@@ -34,6 +34,7 @@ export function App() {
     error: loadError,
     connected,
     refresh,
+    versionChanged,
   } = useOverview();
   const [section, setSection] = useState<Section>("chat");
   const [chatId, setChatId] = useState<string | null>(null);
@@ -243,6 +244,22 @@ export function App() {
               >
                 <ArrowLeft size={18} />
               </button>
+              {versionChanged && (
+                <div
+                  className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-900"
+                  role="alert"
+                >
+                  <span>
+                    Atrium 服务版本已更新，建议刷新网页以加载最新内容。
+                  </span>
+                  <button
+                    className="rounded bg-amber-200 px-2 py-1 font-medium hover:bg-amber-300"
+                    onClick={() => window.location.reload()}
+                  >
+                    刷新网页
+                  </button>
+                </div>
+              )}
               {(error || loadError) && (
                 <div
                   className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#e2d5c3] bg-[#fbf6ef] px-3.5 py-2.5 text-xs text-[#8f673e]"

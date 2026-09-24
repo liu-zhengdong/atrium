@@ -33,6 +33,7 @@ import {
   resolvePiHome,
   retargetProfileLink,
 } from "./agents.ts";
+import { currentVersion } from "./service-state.ts";
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 import { readUser, resolveActor, writeUser } from "./users.ts";
@@ -472,6 +473,7 @@ export async function createApp(options: {
     };
     const available = new Set(discovery.runtimes.map((r) => r.bound_agent));
     return {
+      version: currentVersion(),
       agents: store.agents().map((a) => ({
         ...a,
         runtime: runtimes?.connections.get(a.id)?.info ?? null,
@@ -480,6 +482,7 @@ export async function createApp(options: {
         failure: store.failure(a.id),
         unread: store.boxCount(a.id),
         unassigned: !hasAssignment(store, a.id),
+        needs_reload: runtimes?.needsReload.has(a.id) ?? false,
       })),
       chats: store.chats(),
       user: readUser(store),

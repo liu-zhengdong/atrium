@@ -26,11 +26,13 @@ export function MessageTimeline({
   holdPosition,
   flash,
   details,
+  openTrigger,
 }: {
   active: Overview["chats"][number];
   agents: Agent[];
   flash: number | null;
   details: (id: string) => void;
+  openTrigger: (id: string, traceId: number) => void;
 } & Pick<
   ReturnType<typeof useConversation>,
   | "messages"
@@ -126,6 +128,24 @@ export function MessageTimeline({
                 style={{ transform: `translateY(${row.start}px)` }}
               >
                 <div className="mx-auto w-full max-w-[840px] px-6 max-[560px]:px-3">
+                  {active.kind === "direct" &&
+                    message.trigger &&
+                    active.direct_agent && (
+                      <div className="mb-3 flex justify-center px-2 text-[11px] text-muted">
+                        <button
+                          className="min-w-0 max-w-full truncate rounded-sm hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                          title={message.trigger.label}
+                          onClick={() =>
+                            openTrigger(
+                              active.direct_agent!,
+                              message.trigger!.trace_id,
+                            )
+                          }
+                        >
+                          {message.trigger.label}
+                        </button>
+                      </div>
+                    )}
                   <MessageRow
                     message={message}
                     continuation={continuations[row.index] ?? false}

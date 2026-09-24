@@ -1,4 +1,5 @@
 import type { Store } from "./store.ts";
+import type { Message } from "../shared/schema.ts";
 import { Problem } from "./store.ts";
 import {
   runtimeEvents,
@@ -81,6 +82,13 @@ function line(verb: string, detail: string) {
 
 /** 每个身份保留多少条轨迹。轨迹是给用户翻最近干了什么的，不是永久账本。 */
 const TRACE_KEEP = 2000;
+
+function deliveryLabel(item: { name: string; output: string }) {
+  if (item.name === "Atrium 接入说明") return "Atrium 投递：接入说明";
+  if (item.name === "Atrium")
+    return item.output.startsWith("[Atrium 消息箱提醒]") ? "消息箱提醒" : null; // 普通聊天消息不是自主发言的系统触发。
+  return item.name ? `外部事件：${item.name}` : null;
+}
 
 /** Materialized actions: two writes per tool, never per token. Details are fetched separately. */
 export class TraceStore {
@@ -280,6 +288,125 @@ export class TraceStore {
       agent,
       TRACE_KEEP,
     );
+  }
+  /** Only a successful, captured send_message result can bind a chat row to a Pi run.
+   * CLI --as, opaque scripts and older/trimmed traces intentionally remain unlabelled.
+   */
+  triggers(agent: string, chatId: string, messages: Message[]) {
+    const chat = this.store.chat(chatId);
+    if (
+      chat.kind !== "direct" ||
+      chat.direct_agent !== agent ||
+      !messages.length
+    )
+      return {};
+    const ids = messages.filter((m) => m.sender === agent).map((m) => m.id);
+    if (!ids.length) return {};
+    const eligible = new Set(
+      this.store
+        .all<{ id: number }>(
+          `SELECT m.id FROM messages m WHERE m.chat_id=? AND m.sender=?
+         AND m.id IN (${ids.map(() => "?").join(",")})
+         AND NOT EXISTS (
+           SELECT 1 FROM messages other WHERE other.chat_id=m.chat_id
+           AND other.sender<>m.sender AND other.id<m.id AND other.id>COALESCE((
+             SELECT MAX(previous.id) FROM messages previous
+             WHERE previous.chat_id=m.chat_id AND previous.sender=m.sender AND previous.id<m.id
+           ),0)
+         )`,
+          chatId,
+          agent,
+          ...ids,
+        )
+        .map((row) => row.id),
+    );
+    type Action = {
+      id: number;
+      runtime_id: string;
+      generation: string;
+      kind: string;
+      name: string;
+      title: string;
+      output: string;
+      input: string;
+      at: number;
+      ended_at: number | null;
+      state: string;
+      truncated: number;
+    };
+    const candidates = new Map(
+      messages.map((message) => [message.id, message]),
+    );
+    const actions = this.store.all<Action>(
+      `SELECT id,runtime_id,generation,kind,name,title,input,output,at,ended_at,state,truncated FROM trace_actions
+       WHERE agent_id=? AND (kind IN ('delivery','run_start','run_end')
+       OR (kind='tool' AND name='mcp'))
+       ORDER BY id`,
+      agent,
+    );
+    const result: Record<number, { label: string; trace_id: number }> = {};
+    const runs = new Map<
+      string,
+      { active: boolean; delivery: Action | null }
+    >();
+    for (const action of actions) {
+      const key = `${action.runtime_id}:${action.generation}`;
+      const run = runs.get(key) ?? { active: false, delivery: null };
+      runs.set(key, run);
+      if (action.kind === "delivery") run.delivery = action;
+      else if (action.kind === "run_start") run.active = true;
+      else if (action.kind === "run_end") {
+        run.active = false;
+        run.delivery = null;
+      } else if (
+        run.active &&
+        run.delivery &&
+        action.state === "complete" &&
+        !action.truncated &&
+        action.output
+      ) {
+        let call: unknown;
+        try {
+          call = JSON.parse(action.input);
+        } catch {
+          continue;
+        }
+        if (
+          !call ||
+          typeof call !== "object" ||
+          (call as Record<string, unknown>).server !== "atrium" ||
+          !["send_message", "atrium_send_message"].includes(
+            (call as Record<string, unknown>).tool as string,
+          )
+        )
+          continue;
+        // Proxy tool output is the JSON returned by Atrium send_message. Never
+        // infer a message from its body or timestamp: another writer could send it.
+        let value: unknown;
+        try {
+          value = JSON.parse(action.output);
+        } catch {
+          continue;
+        }
+        if (!value || typeof value !== "object") continue;
+        const sent = value as Record<string, unknown>;
+        const id = sent.id;
+        const message = typeof id === "number" ? candidates.get(id) : undefined;
+        if (
+          typeof id !== "number" ||
+          !eligible.has(id) ||
+          !message ||
+          message.created_at < action.at ||
+          message.created_at > (action.ended_at ?? action.at) ||
+          sent.chat_id !== chat.ref ||
+          sent.sender !== this.store.agentRef(agent)
+        )
+          continue;
+        const label = deliveryLabel(run.delivery);
+        if (label) result[id] = { label, trace_id: run.delivery.id };
+      }
+    }
+    return result;
   }
   page(agent: string, before = Number.MAX_SAFE_INTEGER) {
     this.store.agent(agent);

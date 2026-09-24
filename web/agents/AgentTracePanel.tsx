@@ -7,10 +7,12 @@ import { AgentTrace } from "./AgentTrace.tsx";
 export function AgentTracePanel({
   agent,
   revision,
+  target,
   close,
 }: {
   agent: Agent;
   revision: number;
+  target: { id: number; serial: number } | null;
   close: () => void;
 }) {
   const back = useRef<HTMLButtonElement>(null);
@@ -56,7 +58,7 @@ export function AgentTracePanel({
           </button>
         </span>
       </header>
-      <AgentTrace agent={agent} revision={revision} />
+      <AgentTrace agent={agent} revision={revision} target={target} />
     </aside>
   );
 }

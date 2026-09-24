@@ -335,6 +335,146 @@ test("轨迹按身份有界：插入时裁掉更早的，不动别人的", (t) =
   assert.equal(rows(a.id), 2000, "继续写也不再涨");
 });
 
+test("私聊触发来源：实际投递与工具发言关联、回复排除、群聊和 MCP 隔离", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-trigger-"));
+  const { app, store } = await createApp({ data: root, runtime: false });
+  t.after(async () => {
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const agent = store.createAgent("Atlas", root).agent;
+  const direct = store.createChat("Atlas", [agent.id], agent.id);
+  const group = store.createChat("群", [agent.id]);
+  const traces = new TraceStore(store);
+  const target = generation();
+  let seq = 0;
+  const emit = (kind: RuntimeEventPage["items"][number]["kind"], extra = {}) =>
+    traces.ingest(agent.id, page(target, [event(++seq, kind, extra)]));
+  const speak = (
+    chatId: string,
+    body: string,
+    tool: "send_message" | "atrium_send_message" = "atrium_send_message",
+  ) => {
+    const callId = `t${seq}`;
+    emit("tool_start", {
+      name: "mcp",
+      callId,
+      text: JSON.stringify({
+        server: "atrium",
+        tool,
+        args: { chat_id: store.chatRef(chatId), body },
+      }),
+    });
+    const message = store.send(agent.id, {
+      chat_id: chatId,
+      body,
+      mentions: [],
+    });
+    emit("tool_end", {
+      name: "mcp",
+      callId,
+      text: JSON.stringify({
+        id: message.id,
+        chat_id: store.chatRef(chatId),
+        sender: agent.ref,
+      }),
+    });
+    return message;
+  };
+  const read = async (chatId: string) => {
+    const response = await app.inject({
+      url: `/api/chats/${chatId}/messages`,
+      headers: { host: "localhost" },
+    });
+    assert.equal(response.statusCode, 200);
+    return response.json().items as Array<{
+      id: number;
+      trigger?: { label: string; trace_id: number };
+    }>;
+  };
+  // A delivery without speech (including a heartbeat) must never add a chat row.
+  emit("delivery", { name: "Atrium", text: "[Atrium 消息箱提醒]旧提醒" });
+  emit("run_start");
+  emit("run_end");
+  assert.deepEqual(await read(direct.id), []);
+  emit("delivery", { name: "Atrium 接入说明", text: "接入说明" });
+  const guideTrace = traces.page(agent.id).items.at(-1)!.id;
+  emit("run_start");
+  const guide = speak(direct.id, "我已接入");
+  // The title is presentation text, not a stable protocol field.
+  store.run("UPDATE trace_actions SET title='已换过标题' WHERE kind='tool'");
+  emit("run_end");
+  assert.deepEqual((await read(direct.id))[0]?.trigger, {
+    label: "Atrium 投递：接入说明",
+    trace_id: guideTrace,
+  });
+  store.send(LOCAL_USER, { chat_id: direct.id, body: "你好", mentions: [] });
+  emit("delivery", { name: "Atrium", text: "用户消息" });
+  emit("run_start");
+  const reply = speak(direct.id, "你好");
+  emit("run_end");
+  assert.equal(
+    (await read(direct.id)).find((item) => item.id === reply.id)?.trigger,
+    undefined,
+  );
+  emit("delivery", { name: "Atrium", text: "[Atrium 消息箱提醒]有待办" });
+  const reminderTrace = traces.page(agent.id).items.at(-1)!.id;
+  emit("run_start");
+  const reminder = speak(direct.id, "我来处理待办");
+  emit("run_end");
+  assert.deepEqual(
+    (await read(direct.id)).find((item) => item.id === reminder.id)?.trigger,
+    { label: "消息箱提醒", trace_id: reminderTrace },
+  );
+  store.send(LOCAL_USER, {
+    chat_id: direct.id,
+    body: "用户刚刚发来新消息",
+    mentions: [],
+  });
+  emit("delivery", { name: "Atrium", text: "[Atrium 消息箱提醒]新待办" });
+  emit("run_start");
+  const notAutonomous = speak(direct.id, "这次先回复用户");
+  emit("run_end");
+  assert.equal(
+    (await read(direct.id)).find((item) => item.id === notAutonomous.id)
+      ?.trigger,
+    undefined,
+    "即使本轮有提醒，私聊里已有新用户消息也不能称为主动发言",
+  );
+  emit("delivery", { name: "外部订阅", text: "事件" });
+  const externalTrace = traces.page(agent.id).items.at(-1)!.id;
+  emit("run_start");
+  const external = speak(direct.id, "外部事件触发", "send_message");
+  speak(group.id, "群内发言");
+  emit("run_end");
+  assert.deepEqual(
+    (await read(direct.id)).find((item) => item.id === external.id)?.trigger,
+    { label: "外部事件：外部订阅", trace_id: externalTrace },
+  );
+  assert.equal((await read(group.id))[0]?.trigger, undefined);
+  const opaque = store.send(agent.id, {
+    chat_id: direct.id,
+    body: "未观察到 Pi 工具调用",
+    mentions: [],
+  });
+  assert.equal(
+    (await read(direct.id)).find((item) => item.id === opaque.id)?.trigger,
+    undefined,
+  );
+  assert(
+    !(
+      "trigger" in
+      store.timeline(direct.id).items.find((item) => item.id === guide.id)!
+    ),
+  );
+  // Remove the source: stale chat rows no longer suggest a clickable trace.
+  store.run("DELETE FROM trace_actions WHERE id=?", reminderTrace);
+  assert.equal(
+    (await read(direct.id)).find((item) => item.id === reminder.id)?.trigger,
+    undefined,
+  );
+});
+
 test("十万条轨迹：索引分页不读取正文，冷热查询有界", (t) => {
   const store = new Store(":memory:"),
     traces = new TraceStore(store),

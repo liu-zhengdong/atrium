@@ -39,6 +39,10 @@ export function App() {
   const [chatId, setChatId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [traceTarget, setTraceTarget] = useState<{
+    id: number;
+    serial: number;
+  } | null>(null);
   const showAgent = (id: string) => {
     setTraceOpen(false);
     setAgentId(id);
@@ -105,7 +109,12 @@ export function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
   // Agent 详情与群信息互斥；轨迹卡片单独占聊天列右侧空间。
   const [groupOpen, setGroupOpen] = useState(false);
-  const showTrace = (id: string) => {
+  const showTrace = (id: string, target: number | null = null) => {
+    setTraceTarget((previous) =>
+      target === null
+        ? null
+        : { id: target, serial: (previous?.serial ?? 0) + 1 },
+    );
     setGroupOpen(false);
     setAgentId(id);
     setTraceOpen(true);
@@ -302,8 +311,9 @@ export function App() {
                     agents={overview.agents}
                     revision={revision}
                     hidden={section !== "chat"}
-                    details={showTrace}
+                    details={(id) => showTrace(id)}
                     inspectAgent={showAgent}
+                    openTrigger={(id, traceId) => showTrace(id, traceId)}
                     refresh={refresh}
                     anchor={anchor}
                     clearAnchor={() => setAnchor(null)}
@@ -349,6 +359,7 @@ export function App() {
             key={selectedAgent.id}
             agent={selectedAgent}
             revision={revision}
+            target={traceTarget}
             close={() => {
               setTraceOpen(false);
               setAgentId(null);

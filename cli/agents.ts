@@ -6,6 +6,7 @@ import {
   formatModelSpec,
   groupModelsByProvider,
   modelBase,
+  modelSpec,
   type ModelChange,
   type ModelState,
 } from "../shared/model.ts";
@@ -216,9 +217,20 @@ const config: Command = {
   options: { heartbeat: { type: "string" } },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
+    const heartbeat = str(values, "heartbeat");
+    if (
+      heartbeat !== undefined &&
+      (!/^\d+$/.test(heartbeat.trim()) ||
+        Number(heartbeat) < 5 ||
+        Number(heartbeat) > 3600)
+    )
+      throw new Problem(
+        400,
+        "--heartbeat 要填秒数（5～3600 的整数）\n示例：atrium config 甲 --heartbeat 30",
+        "usage",
+      );
     const client = await connect();
     let agent = findAgent(await roster(client), reference!);
-    const heartbeat = str(values, "heartbeat");
     if (heartbeat !== undefined) {
       await client.patch(`/agents/${agent.id}/config`, {
         heartbeat_seconds: Number(heartbeat),
@@ -293,6 +305,12 @@ const model: Command = {
   about: "查看或设定模型；在跑的身份当场生效，离线的下次启动生效",
   positionals: [1, 2],
   async run({ positionals: [reference, value], json }) {
+    if (value !== undefined && !modelSpec.safeParse(value).success)
+      throw new Problem(
+        400,
+        "模型写法是 provider/id，可选 :思考强度\n示例：atrium model 甲 deepseek/deepseek-v4-pro",
+        "usage",
+      );
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
     const path = `/agents/${agent.id}/model`;

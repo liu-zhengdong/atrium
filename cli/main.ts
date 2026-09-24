@@ -10,6 +10,7 @@ import { resourceCommands } from "./resources.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
+import { cliErrorMessage, optionError } from "./error-message.ts";
 
 export type Values = Record<
   string,
@@ -60,7 +61,7 @@ export function help(): string {
     "你是 Agent 的话，先读 atrium guide。",
     "",
     "服务",
-    ...service.map(([line, about]) => `${pad(line, widest)}  ${about}`),
+    ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
     ...["身份", "聊天", "账号与凭据", "插件技能与规则"].flatMap((group) => [
       "",
       group,
@@ -89,6 +90,7 @@ export async function main(argv: string[]): Promise<number> {
     let code = 0;
     let failed = false;
     let subcommand = name ?? "";
+    let usageNext: string | undefined;
     try {
       if (name === undefined || name === "--no-open") {
         if (rest.filter((part) => part !== "--json").length)
@@ -136,7 +138,7 @@ export async function main(argv: string[]): Promise<number> {
         )[0];
         throw new Problem(
           400,
-          `不认识的命令：${subcommand}${candidate ? `；你是否要用 atrium ${candidate.ref}` : ""}`,
+          `不认识的命令：${subcommand}${candidate ? `。最接近的：${candidate.ref}` : ""}`,
           "usage",
           candidate ? [{ ref: candidate.ref, name: candidate.ref }] : undefined,
         );
@@ -160,19 +162,22 @@ export async function main(argv: string[]): Promise<number> {
           strict: true,
         });
       } catch (error) {
+        usageNext = example(subcommand, command);
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}\n${error instanceof Error ? error.message : String(error)}\n示例：${example(subcommand, command)}`,
+          `用法：atrium ${subcommand} ${command.args}\n${optionError(error)}\n示例：${usageNext}`,
           "usage",
         );
       }
       const [min, max] = command.positionals;
-      if (parsed.positionals.length < min || parsed.positionals.length > max)
+      if (parsed.positionals.length < min || parsed.positionals.length > max) {
+        usageNext = example(subcommand, command);
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}\n示例：${example(subcommand, command)}`.trimEnd(),
+          `用法：atrium ${subcommand} ${command.args}\n示例：${usageNext}`.trimEnd(),
           "usage",
         );
+      }
       code =
         (await command.run({
           positionals: parsed.positionals,
@@ -184,18 +189,14 @@ export async function main(argv: string[]): Promise<number> {
       return code;
     } catch (error) {
       failed = true;
-      const result = failure(
-        error,
-        commands[subcommand]
-          ? example(subcommand, commands[subcommand])
-          : undefined,
-      );
+      const result = failure(error, usageNext);
+      result.message = cliErrorMessage(result.message, commands[subcommand]);
       if (subcommand === "account login") result.next = "atrium connect --help";
       if (!commands[subcommand] && result.candidates?.[0])
         result.next = `atrium ${result.candidates[0].ref} --help`;
       if (
         subcommand === "model" &&
-        result.code === "usage" &&
+        result.code === "model_not_found" &&
         result.candidates?.[0] &&
         rest[0]
       )
@@ -215,7 +216,7 @@ export async function main(argv: string[]): Promise<number> {
         );
       } else {
         console.error(result.message);
-        if (result.candidates?.length)
+        if (commands[subcommand] && result.candidates?.length)
           console.error(
             `最接近的：${result.candidates.map(({ name, ref }) => `${name}（${ref}）`).join("、")}`,
           );

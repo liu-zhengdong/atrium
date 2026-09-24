@@ -330,7 +330,7 @@ export class Store {
       "SELECT a.*, 'a'||r.number AS ref FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.id=? AND a.deleted_at IS NULL",
       id,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     const raw = JSON.parse(row.config) as Record<string, unknown>;
     if (
       "wake_interval_seconds" in raw ||
@@ -388,7 +388,7 @@ export class Store {
       "SELECT number FROM agent_refs WHERE agent_id=?",
       agentId,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     return `a${row.number}`;
   }
   resolveAgentId(reference: string): string {
@@ -703,7 +703,7 @@ export class Store {
       "SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only FROM chats c JOIN chat_refs r ON r.chat_id=c.id WHERE c.id=?",
       id,
     );
-    if (!chat) throw new Problem(404, "会话不存在");
+    if (!chat) throw new Problem(404, "会话不存在", "chat_not_found");
     return { ...chat, read_only: !!chat.read_only };
   }
   resolveChatId(reference: string): string {
@@ -731,7 +731,7 @@ export class Store {
       "SELECT 'c'||number AS ref FROM chat_refs WHERE chat_id=?",
       chatId,
     );
-    if (!row) throw new Problem(404, "会话不存在");
+    if (!row) throw new Problem(404, "会话不存在", "chat_not_found");
     return row.ref;
   }
   assertMember(chat: string, agent: string) {
@@ -1543,7 +1543,7 @@ export class Store {
       "SELECT error_text AS text,error_at AS at,failure_count AS count FROM agents WHERE id=? AND deleted_at IS NULL",
       id,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     return row.text && row.at
       ? { text: row.text, at: row.at, count: row.count }
       : null;

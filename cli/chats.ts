@@ -264,6 +264,14 @@ const send: Command = {
     const details =
       detailsArg === "-" ? (await readStdin()).trim() : (detailsArg ?? "");
     const as = str(values, "as");
+    if (!body.trim() && (details || !strs(values, "file").length))
+      throw new Problem(
+        400,
+        details
+          ? "--details 有内容时正文不能为空"
+          : "正文不能为空；也可用 --file 添加附件",
+        "usage",
+      );
     const client = await connect();
     const view = await roster(client);
     const chat = await targetChat(client, view, reference!, as);

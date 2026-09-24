@@ -62,12 +62,8 @@ export function configureModel(
     const own = grouped.get(spec.provider);
     throw new Problem(
       400,
-      `${agent.name} 没有 ${wanted} 这个模型。${
-        own
-          ? `${spec.provider} 下可选：${own.join("、")}`
-          : `可用的 provider：${[...grouped.keys()].join("、")}`
-      }`,
-      "usage",
+      `${agent.name} 没有 ${wanted} 这个模型${own ? "" : `。可用的 provider：${[...grouped.keys()].join("、")}`}`,
+      "model_not_found",
       own
         ?.slice(0, 3)
         .map((model) => ({ ref: `${spec.provider}/${model}`, name: model })),

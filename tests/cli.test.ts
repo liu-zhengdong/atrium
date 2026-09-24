@@ -92,7 +92,10 @@ test(
     };
 
     // 不认识的命令和多余参数在碰数据目录之前就退出。
-    assert.match(await refused("bogus"), /不认识的命令/);
+    const unknown = await refused("bogus");
+    assert.match(unknown, /不认识的命令/);
+    assert.equal((unknown.match(/最接近的/g) ?? []).length, 1);
+    assert.doesNotMatch(unknown, /修正：atrium --help/);
     assert(!existsSync(f.data));
     assert.match(await refused("list", "extra"), /用法：atrium list/);
     assert.match(await refused("show"), /用法：atrium show 名称/);
@@ -131,11 +134,49 @@ test(
       "deepseek/deepseek-chat",
       "--json",
     );
-    assert.equal(invalidModel.code, 2);
+    assert.equal(invalidModel.code, 3);
     const modelError = JSON.parse(invalidModel.stdout);
-    assert.equal(modelError.error.code, "usage");
+    assert.equal(modelError.error.code, "model_not_found");
+    assert.doesNotMatch(modelError.error.message, /model:/);
     assert.match(modelError.next, /^atrium model 林岚 deepseek\//);
     assert(modelError.error.candidates.length <= 3);
+    const malformedModel = await f.cli("model", "林岚", "foo", "--json");
+    assert.equal(malformedModel.code, 2);
+    assert.match(
+      JSON.parse(malformedModel.stdout).error.message,
+      /模型写法是 provider\/id/,
+    );
+    assert.doesNotMatch(
+      JSON.parse(malformedModel.stdout).error.message,
+      /model:/,
+    );
+    const invalidHeartbeat = await f.cli(
+      "config",
+      "林岚",
+      "--heartbeat",
+      "garbage",
+      "--json",
+    );
+    assert.equal(invalidHeartbeat.code, 2);
+    assert.match(
+      JSON.parse(invalidHeartbeat.stdout).error.message,
+      /--heartbeat 要填秒数/,
+    );
+    assert.doesNotMatch(
+      JSON.parse(invalidHeartbeat.stdout).error.message,
+      /heartbeat_seconds|Invalid input/,
+    );
+    const noBody = await f.cli("send", "林岚", "", "--json");
+    assert.equal(noBody.code, 2);
+    assert.match(JSON.parse(noBody.stdout).error.message, /正文不能为空/);
+    assert.doesNotMatch(JSON.parse(noBody.stdout).error.message, /body:/);
+    const absentAccount = await f.cli("assign", "林岚", "k999", "--json");
+    assert.equal(absentAccount.code, 3);
+    assert.equal(
+      JSON.parse(absentAccount.stdout).error.code,
+      "account_not_found",
+    );
+    assert.equal(JSON.parse(absentAccount.stdout).next, "atrium accounts");
     await ok("model", "林岚", "deepseek/deepseek-v4-pro:high");
     assert.match(
       await ok("list"),

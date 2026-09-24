@@ -9,6 +9,7 @@ export const exitCodes = {
   chat_not_found: 3,
   agent_not_found: 3,
   account_not_found: 3,
+  model_not_found: 3,
   not_found: 3,
   conflict: 4,
   already_assigned: 4,
@@ -39,25 +40,25 @@ export function errorCode(error: unknown): ErrorCode {
     return error.code as ErrorCode;
   return "internal";
 }
-export function correction(error: unknown, code: ErrorCode, usage?: string) {
-  if (code === "usage") return usage ?? "atrium --help";
+export function correction(code: ErrorCode, usage?: string) {
+  if (code === "usage") return usage ?? null;
   if (code === "chat_not_found") return "atrium chats";
   if (code === "agent_not_found") return "atrium list";
   if (code === "account_not_found") return "atrium accounts";
   if (code === "service_unavailable") return "atrium status";
-  if (code === "timeout") return null;
-  return "atrium --help";
+  return null;
 }
 export function failure(error: unknown, usage?: string) {
   const code = errorCode(error);
   const message = error instanceof Error ? error.message : String(error);
   const candidates = error instanceof Problem ? error.candidates : undefined;
-  const next = correction(error, code, usage);
+  const next = correction(code, usage);
+  const log = join(dataDirectory(), "service.log");
   return {
     code,
     message:
       code === "service_unavailable"
-        ? `${message}\n数据：${dataDirectory()}\n日志：${join(dataDirectory(), "service.log")}`
+        ? `${message.replaceAll(`请检查 ${log}`, "请检查下方日志")}\n数据：${dataDirectory()}\n日志：${log}`
         : message,
     ...(candidates?.length ? { candidates } : {}),
     next,

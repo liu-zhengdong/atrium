@@ -16,6 +16,19 @@ import { Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 import type { RuntimeInfo } from "../shared/schema.ts";
 
+function assignFixture(store: Store, id: string) {
+  // Runtime RPC is stubbed; only the assignment gate needs a fixture account.
+  const account = store.run(
+    "INSERT INTO accounts(provider,name,type) VALUES('fixture','test','api_key')",
+  ).lastInsertRowid;
+  store.run(
+    "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+    id,
+    "fixture",
+    account,
+  );
+}
+
 type PrivateRuntime = {
   rpc(method: string, params: unknown): Promise<unknown>;
   bind(id: string, selector: { sessionId: string }): Promise<void>;
@@ -31,6 +44,7 @@ async function fixture(
   mkdirSync(join(data, "credentials"), { recursive: true });
   const store = new Store(join(data, "atrium.db"));
   const { agent, token } = store.createAgent("Atlas", root);
+  assignFixture(store, agent.id);
   const oldFile = join(root, "old-session.jsonl");
   writeFileSync(oldFile, "old conversation stays intact\n");
   writeFileSync(
@@ -313,6 +327,7 @@ test("具名身份恢复被游标悄悄替换：停止错会话、避开游标�
   mkdirSync(data);
   const store = new Store(join(data, "atrium.db"));
   const { agent } = store.createAgent("Atlas", root);
+  assignFixture(store, agent.id);
   const profile = join(root, "profile");
   mkdirSync(profile);
   const oldFile = join(root, "old.jsonl");

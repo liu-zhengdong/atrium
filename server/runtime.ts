@@ -157,6 +157,7 @@ export class Runtimes {
     private piHome: string | undefined,
     private desktops: string,
     private redact: (agent: string, text: string) => string = (_, text) => text,
+    private authFailure: (agent: string, detail: string) => void = () => {},
   ) {
     this.traces = new TraceStore(store, redact);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
@@ -1062,6 +1063,7 @@ export class Runtimes {
         return this.doPump(id, direct);
       }
       for (const pending of this.store.pending(id)) {
+        if (this.store.failure(id) && !direct) break;
         if (pending.kind === "summary" && runtime.info.busy) continue;
         // 提醒在忙时排队、空闲才送，期间可能已经读完：送出前按当时的消息箱重写，清空了就撤回。
         const text =
@@ -1192,7 +1194,12 @@ export class Runtimes {
               failure: null,
               deliveryAt: null,
             });
-            if (this.store.failure(id)) {
+            if (
+              this.store.failure(id) &&
+              !this.store
+                .failure(id)
+                ?.text.includes("模型认证失败，请更换 API Key")
+            ) {
               this.store.clearFailure(id);
               this.errors.delete(id);
               this.changed();
@@ -1229,10 +1236,15 @@ export class Runtimes {
                 this.recovery.set(id, `恢复后首轮不可用：${turn.failure}`);
             }
             if (turn?.generation === info.generation && turn.failure) {
+              this.authFailure(id, turn.failure);
               if (!this.recovery.has(id))
                 this.store.setFailure(
                   id,
-                  this.redact(id, turn.failure),
+                  /\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
+                    turn.failure,
+                  )
+                    ? "模型认证失败，请更换 API Key"
+                    : this.redact(id, turn.failure),
                   event.at,
                 );
               this.store.finishTurn(id, false);

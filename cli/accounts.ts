@@ -56,11 +56,18 @@ export const accountCommands: Record<string, Command> = {
       for await (const chunk of stdin) key += chunk.toString();
       const result = await (
         await connect()
-      ).post<{ id: string }>("/accounts", {
-        provider,
-        name: name(provider!, values),
-        key: key.trimEnd(),
-      });
+      ).post<{ id: string | null; validation: { reason?: string } }>(
+        "/accounts",
+        {
+          provider,
+          name: name(provider!, values),
+          key: key.trimEnd(),
+        },
+      );
+      if (!result.id)
+        throw new Error(
+          `未保存：${result.validation.reason ?? "未能校验"}；可在 atrium connect 中选择仍然保存`,
+        );
       console.log(`账号 ${result.id} 已添加`);
     },
   },

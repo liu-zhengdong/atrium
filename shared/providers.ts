@@ -70,6 +70,22 @@ export function matchingProviders(
     });
 }
 
+export function assignedAccountLabel(
+  ref: string,
+  provider: string,
+  accounts: {
+    id: string;
+    name: string;
+    provider: string;
+    assigned: string[];
+  }[],
+): string | undefined {
+  const account = accounts.find(
+    (item) => item.provider === provider && item.assigned.includes(ref),
+  );
+  return account && `${account.name}（${account.id}）`;
+}
+
 export function currentAssignment(
   ref: string,
   provider: string,

@@ -30,6 +30,13 @@ test("keeps non-JSON and malformed JSON readable, truncates only the summary", (
   assert.equal(failureSummary(long), "500 · " + "x".repeat(104) + "…");
 });
 
+test("summarizes a model service failure without hiding its original text in the drawer", () => {
+  assert.equal(
+    failureSummary("Model provider returned 503 unavailable"),
+    "模型服务报错",
+  );
+});
+
 test("relative failure time", () => {
   assert.equal(pastTime(820_000, 1_000_000), "3 分钟前");
   assert.equal(pastTime(999_000, 1_000_000), "刚刚");

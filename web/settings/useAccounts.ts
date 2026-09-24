@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, messageOf } from "../api.ts";
 import type { Account } from "./types.ts";
 
-export function useAccounts() {
+export function useAccounts(autoLoad = true) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -15,8 +15,8 @@ export function useAccounts() {
     }
   }, []);
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (autoLoad) void reload();
+  }, [reload, autoLoad]);
   async function change<T>(task: () => Promise<T>): Promise<T | undefined> {
     setBusy(true);
     setError("");

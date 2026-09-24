@@ -1,6 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import {
   modelBase,
+  modelLabel,
   splitModelSpec,
   THINKING_LEVELS,
   type ModelChange,
@@ -8,139 +9,160 @@ import {
 } from "../../shared/model.ts";
 import { api } from "../api.ts";
 
-/**
- * 身份用哪个模型。这是运行底座，由用户设定，Agent 的工具面没有这一项。
- * 自己取数、自己管加载与错误；只在打开和保存后各取一次，不随抽屉刷新反复问 Pi。
- */
-export function AgentModel({ agentId }: { agentId: string }) {
+const levels: Record<string, string> = {
+  off: "关闭",
+  minimal: "极低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "很高",
+  max: "最高",
+};
+export function AgentModel({
+  agentId,
+  compact = false,
+}: {
+  agentId: string;
+  compact?: boolean;
+}) {
   const [state, setState] = useState<ModelState | null>(null);
-  const [error, setError] = useState(""),
-    [notes, setNotes] = useState<string[]>([]),
-    [busy, setBusy] = useState(false);
-  const [model, setModel] = useState(""),
-    [thinking, setThinking] = useState("");
+  const [error, setError] = useState("");
+  const [notes, setNotes] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [model, setModel] = useState("");
+  const [thinking, setThinking] = useState("");
   function adopt(next: ModelState) {
     setState(next);
-    setError("");
     const spec = next.configured ? splitModelSpec(next.configured) : null;
     setModel(spec ? `${spec.provider}/${spec.model}` : "");
     setThinking(spec?.thinking ?? "");
   }
   useEffect(() => {
-    let alive = true;
+    let active = true;
     setState(null);
-    setNotes([]);
-    api<ModelState>(`/agents/${agentId}/model`)
+    void api<ModelState>(`/agents/${agentId}/model`)
       .then((next) => {
-        if (alive) adopt(next);
+        if (active) adopt(next);
       })
       .catch((e) => {
-        if (alive) setError(String(e));
+        if (active) setError(String(e));
       });
     return () => {
-      alive = false;
+      active = false;
     };
   }, [agentId]);
-  async function save(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
+  async function change(nextModel: string, nextThinking: string) {
+    const previous = state;
+    setModel(nextModel);
+    setThinking(nextThinking);
     setError("");
     setNotes([]);
+    if (!nextModel) return;
+    setBusy(true);
     try {
       const { notes: reported, ...next } = await api<ModelChange>(
         `/agents/${agentId}/model`,
         "PUT",
-        { model: `${model.trim()}${thinking ? `:${thinking}` : ""}` },
+        { model: `${nextModel}${nextThinking ? `:${nextThinking}` : ""}` },
       );
       adopt(next);
       setNotes(reported);
     } catch (e) {
+      if (previous) adopt(previous);
       setError(String(e));
     } finally {
       setBusy(false);
     }
   }
-  if (!state)
-    return (
-      <section className="settings-section">
-        <h3>模型</h3>
-        {error ? (
-          <p className="error">{error}</p>
-        ) : (
-          <p className="muted small-text">读取中…</p>
-        )}
-      </section>
-    );
-  // 配置里写的模型可能不在这份清单里（清单是上次取到的），把它补进去才选得中。
-  const choices =
-    state.configured && !state.options.includes(modelBase(state.configured))
-      ? [modelBase(state.configured), ...state.options]
-      : state.options;
+  const choices = state
+    ? state.configured &&
+      !state.options.some(
+        (option) => option.id === modelBase(state.configured!),
+      )
+      ? [{ id: modelBase(state.configured), name: "" }, ...state.options]
+      : state.options
+    : [];
   return (
-    <form onSubmit={save} className="settings-section">
-      <h3>模型</h3>
-      {state.running && state.running !== modelBase(state.configured ?? "") && (
-        <p className="muted small-text">
-          运行中实际在用：<code className="path">{state.running}</code>
+    <section className={compact ? "space-y-2" : "settings-section"}>
+      {!state ? (
+        <p className="text-xs text-muted">{error || "读取中…"}</p>
+      ) : (
+        <>
+          <label className="form-label">
+            模型
+            {state.options.length ? (
+              <select
+                className="field"
+                aria-label="选择模型"
+                disabled={busy}
+                value={model}
+                onChange={(e) => void change(e.target.value, thinking)}
+              >
+                <option value="" disabled>
+                  选择模型
+                </option>
+                {choices.map((choice) => (
+                  <option value={choice.id} key={choice.id}>
+                    {modelLabel(choice.id, state.options)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="field"
+                aria-label="模型"
+                placeholder="provider/id"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                onBlur={() => {
+                  if (model && model !== modelBase(state.configured ?? ""))
+                    void change(model, thinking);
+                }}
+              />
+            )}
+          </label>
+          {!compact && (
+            <label className="form-label">
+              思考强度
+              <select
+                className="field"
+                disabled={busy || !model}
+                value={thinking}
+                onChange={(e) => void change(model, e.target.value)}
+              >
+                <option value="">跟随模型默认</option>
+                {THINKING_LEVELS.map((level) => (
+                  <option value={level} key={level}>
+                    {levels[level]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!state.options.length && (
+            <p className="text-xs text-muted">
+              没取到可选模型清单；可以手动填写 provider/id，切换失败会恢复原值。
+            </p>
+          )}
+          {state.running &&
+            state.running !== "unknown/unknown" &&
+            state.running !== modelBase(state.configured ?? "") && (
+              <p className="text-xs text-muted">
+                运行中：{modelLabel(state.running, state.options)}
+              </p>
+            )}
+        </>
+      )}
+      {error && state && (
+        <p role="alert" className="error">
+          {error}
         </p>
       )}
-      <label className="form-label">
-        模型
-        {choices.length ? (
-          <select
-            className="field"
-            required
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          >
-            <option value="" disabled>
-              选择模型
-            </option>
-            {choices.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            className="field"
-            required
-            placeholder="provider/id"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          />
-        )}
-      </label>
-      <label className="form-label">
-        思考强度
-        <select
-          className="field"
-          value={thinking}
-          onChange={(e) => setThinking(e.target.value)}
-        >
-          <option value="">跟随模型默认</option>
-          {THINKING_LEVELS.map((level) => (
-            <option key={level} value={level}>
-              {level}
-            </option>
-          ))}
-        </select>
-      </label>
-      {!choices.length && (
-        <p className="muted small-text">
-          还没取到过这个身份的可选模型，启动它之后这里会变成下拉选择。
-        </p>
-      )}
-      {error && <p className="error">{error}</p>}
       {notes.map((note) => (
-        <p key={note} className="muted small-text">
+        <p key={note} className="text-xs text-muted">
           {note}
         </p>
       ))}
-      <button className="button" disabled={busy || !model.trim()}>
-        {busy ? "保存中…" : "保存模型"}
-      </button>
-    </form>
+    </section>
   );
 }

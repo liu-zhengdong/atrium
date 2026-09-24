@@ -15,7 +15,7 @@ import {
   sendInput,
   type Overview,
 } from "../shared/schema.ts";
-import { modelSpec } from "../shared/model.ts";
+import { modelSpec, type ModelOption } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Accounts } from "./accounts.ts";
 import { Runtimes } from "./runtime.ts";
@@ -120,6 +120,19 @@ export async function createApp(options: {
           ? error.statusCode
           : ((error as { statusCode?: number }).statusCode ?? 500);
     void reply.code(status).send({
+      code:
+        error instanceof Problem
+          ? error.code
+          : status === 400
+            ? "usage"
+            : status === 403 || status === 409
+              ? "conflict"
+              : status === 404
+                ? "not_found"
+                : "internal",
+      ...(error instanceof Problem && error.candidates?.length
+        ? { candidates: error.candidates }
+        : {}),
       error:
         error instanceof z.ZodError
           ? error.issues
@@ -184,6 +197,31 @@ export async function createApp(options: {
   }));
   app.get("/api/settings/agent-defaults", () => agentDefaults(options.data));
   app.get("/api/settings/agent-defaults/template", () => templateDefaults());
+  const displayModels = async (options: ModelOption[]) => {
+    if (!options.length) return options;
+    let providerNames = new Map<string, string>();
+    try {
+      providerNames = new Map(
+        (await accounts.providersList()).map((item) => [item.id, item.name]),
+      );
+    } catch {
+      // 模型目录仍可用，供应商显示名缺失时不猜测。
+    }
+    return options.map((option) => ({
+      ...option,
+      ...(providerNames.has(option.id.slice(0, option.id.indexOf("/")))
+        ? {
+            providerName: providerNames.get(
+              option.id.slice(0, option.id.indexOf("/")),
+            ),
+          }
+        : {}),
+    }));
+  };
+  const modelsForDisplay = async () =>
+    displayModels(runtimes ? await runtimes.modelsForDefaults() : []);
+  app.get("/api/models", modelsForDisplay);
+  app.get("/api/settings/agent-defaults/models", modelsForDisplay);
   app.put("/api/settings/agent-defaults", (request) => {
     const input = z
       .object({
@@ -519,13 +557,15 @@ export async function createApp(options: {
   });
   app.get("/api/agents/:id/model", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
-    return runtimes.model(agentParams(request));
+    const state = await runtimes.model(agentParams(request));
+    return { ...state, options: await displayModels(state.options) };
   });
   // 模型不走 preferences：那份 schema 与 MCP 的 update_config 共用，加进去等于对 Agent 开放。
   app.put("/api/agents/:id/model", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
     const input = z.object({ model: modelSpec }).strict().parse(request.body);
-    return runtimes.setModel(agentParams(request), input.model);
+    const state = await runtimes.setModel(agentParams(request), input.model);
+    return { ...state, options: await displayModels(state.options) };
   });
   app.patch("/api/agents/:id/config", (request) => {
     const result = store.configure(

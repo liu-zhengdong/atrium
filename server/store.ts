@@ -43,7 +43,7 @@ import {
   type DeliveryKind,
   type SendRequest,
 } from "./delivery.ts";
-import { Problem } from "./problem.ts";
+import { Problem, closest } from "./problem.ts";
 import { agentTransition, type AgentFailure } from "./agent-failure.ts";
 
 export { Problem };
@@ -332,7 +332,7 @@ export class Store {
       "SELECT a.*, 'a'||r.number AS ref FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.id=? AND a.deleted_at IS NULL",
       id,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     const raw = JSON.parse(row.config) as Record<string, unknown>;
     if (
       "wake_interval_seconds" in raw ||
@@ -392,7 +392,7 @@ export class Store {
       "SELECT number FROM agent_refs WHERE agent_id=?",
       agentId,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     return `a${row.number}`;
   }
   resolveAgentId(reference: string): string {
@@ -403,7 +403,7 @@ export class Store {
         "SELECT agent_id FROM agent_refs WHERE number=?",
         Number(trimmed.slice(1)),
       );
-      if (!row) throw new Problem(404, "Agent 不存在");
+      if (!row) throw this.missingAgent(trimmed);
       return row.agent_id;
     }
     const name = displayName.safeParse(trimmed);
@@ -412,10 +412,21 @@ export class Store {
         "SELECT id FROM agents WHERE name=? AND deleted_at IS NULL",
         name.data,
       );
-      if (!row) throw new Problem(404, "Agent 不存在");
+      if (!row) throw this.missingAgent(trimmed);
       return row.id;
     }
     throw new Problem(400, "请使用名称、短号或身份 ID");
+  }
+  private missingAgent(reference: string): Problem {
+    const entries = this.all<{ ref: string; name: string }>(
+      "SELECT 'a'||r.number AS ref, a.name FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.deleted_at IS NULL",
+    );
+    return new Problem(
+      404,
+      `没有叫「${reference}」的 Agent`,
+      "agent_not_found",
+      closest(reference, entries),
+    );
   }
   authenticate(id: string, token: string): boolean {
     return !!this.one(
@@ -696,7 +707,7 @@ export class Store {
       "SELECT c.*, 'c'||r.number AS ref, EXISTS(SELECT 1 FROM members m JOIN agents a ON a.id=m.agent_id WHERE m.chat_id=c.id AND c.kind='direct' AND a.deleted_at IS NOT NULL) AS read_only FROM chats c JOIN chat_refs r ON r.chat_id=c.id WHERE c.id=?",
       id,
     );
-    if (!chat) throw new Problem(404, "会话不存在");
+    if (!chat) throw new Problem(404, "会话不存在", "chat_not_found");
     return { ...chat, read_only: !!chat.read_only };
   }
   resolveChatId(reference: string): string {
@@ -706,7 +717,17 @@ export class Store {
       "SELECT chat_id FROM chat_refs WHERE number=?",
       Number(reference.slice(1)),
     );
-    if (!row) throw new Problem(404, "会话不存在");
+    if (!row) {
+      const entries = this.all<{ ref: string; name: string }>(
+        "SELECT 'c'||r.number AS ref, c.name FROM chats c JOIN chat_refs r ON r.chat_id=c.id",
+      );
+      throw new Problem(
+        404,
+        `没有叫「${reference}」的会话`,
+        "chat_not_found",
+        closest(reference, entries),
+      );
+    }
     return row.chat_id;
   }
   chatRef(chatId: string): string {
@@ -714,7 +735,7 @@ export class Store {
       "SELECT 'c'||number AS ref FROM chat_refs WHERE chat_id=?",
       chatId,
     );
-    if (!row) throw new Problem(404, "会话不存在");
+    if (!row) throw new Problem(404, "会话不存在", "chat_not_found");
     return row.ref;
   }
   assertMember(chat: string, agent: string) {
@@ -1526,7 +1547,7 @@ export class Store {
       "SELECT error_text AS text,error_at AS at,failure_count AS count FROM agents WHERE id=? AND deleted_at IS NULL",
       id,
     );
-    if (!row) throw new Problem(404, "Agent 不存在");
+    if (!row) throw new Problem(404, "Agent 不存在", "agent_not_found");
     return row.text && row.at
       ? { text: row.text, at: row.at, count: row.count }
       : null;

@@ -1,5 +1,5 @@
 export type SettingsPage =
-  "profile" | "accounts" | "agent-defaults" | "service";
+  "profile" | "accounts" | "agents" | "agent" | "agent-defaults" | "service";
 
 export type Account = {
   id: string;

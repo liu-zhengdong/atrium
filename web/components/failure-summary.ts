@@ -24,6 +24,11 @@ export function failureSummary(text: string): string {
     }
   }
   const normalized = readable.replace(/\s+/g, " ").trim();
+  if (
+    /\b(model|provider|模型|模型服务)\b/i.test(normalized) &&
+    /\b(5\d\d|error|unavailable|failed|报错|失败)\b/i.test(normalized)
+  )
+    return "模型服务报错";
   return normalized.length > MAX_SUMMARY
     ? `${normalized.slice(0, MAX_SUMMARY)}…`
     : normalized;

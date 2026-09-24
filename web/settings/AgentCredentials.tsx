@@ -1,50 +1,73 @@
-import { useCallback, useEffect, useState } from "react";
-import { ChevronRight } from "lucide-react";
-import { api } from "../api.ts";
-import type { Account, Credentials } from "./types.ts";
+import { useEffect, useState } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { api, messageOf } from "../api.ts";
+import type { Agent } from "../components/AgentAvatar.tsx";
+import type { ProviderEntry } from "../../shared/providers.ts";
+import { AssignmentPicker } from "./AssignmentPicker.tsx";
+import { useAccounts } from "./useAccounts.ts";
+import type { Credentials } from "./types.ts";
 
+/** 身份视角的账号摘要；分配动作仍复用模型账号页的 AssignmentPicker。 */
 export function AgentCredentials({
-  agentId,
-  open,
+  agent,
+  openAccounts,
+  compact = false,
+  visible = true,
 }: {
-  agentId: string;
-  open: (account: string | null) => void;
+  agent: Agent;
+  openAccounts: () => void;
+  compact?: boolean;
+  visible?: boolean;
 }) {
+  const {
+    accounts,
+    error: accountsError,
+    change,
+    reload: reloadAccounts,
+  } = useAccounts(false);
   const [credentials, setCredentials] = useState<Credentials | null>(null);
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [error, setError] = useState("");
-  const [confirm, setConfirm] = useState<"shared" | "assigned" | null>(null);
-  const load = useCallback(async () => {
+  const [picker, setPicker] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  async function reload() {
     try {
-      const [mode, list] = await Promise.all([
-        api<Credentials>(`/credentials/${agentId}`),
-        api<Account[]>("/accounts"),
-      ]);
-      setCredentials(mode);
-      setAccounts(list);
+      setCredentials(await api<Credentials>(`/credentials/${agent.ref}`));
       setError("");
     } catch (e) {
-      setError(String(e));
-    }
-  }, [agentId]);
-  useEffect(() => {
-    void load();
-  }, [load]);
-  async function switchMode(mode: "shared" | "assigned") {
-    try {
-      await api(`/credentials/${agentId}`, "PUT", { mode });
-      setConfirm(null);
-      await load();
-    } catch (e) {
-      setError(String(e));
+      setError(messageOf(e));
     }
   }
+  useEffect(() => {
+    if (!visible) return;
+    void reload();
+    void reloadAccounts();
+    void api<ProviderEntry[]>("/providers")
+      .then(setProviders)
+      .catch(() => {
+        /* 缺少供应商目录时保留供应商 id。 */
+      });
+  }, [agent.ref, visible, reloadAccounts]);
+  const assigned = credentials?.assigned ?? [];
+  const providerName = (id: string) =>
+    providers.find((provider) => provider.id === id)?.name || id;
+  const selected =
+    accounts?.find((account) => account.id === picker) ??
+    accounts?.find((account) =>
+      assigned.some(({ account: id }) => id === account.id),
+    ) ??
+    accounts?.[0];
+  async function assign<T>(task: () => Promise<T>): Promise<T | undefined> {
+    const result = await change(task);
+    await reload();
+    return result;
+  }
   return (
-    <section className="settings-section">
-      <h3>账号</h3>
-      {error && (
+    <section className={compact ? "space-y-1 text-xs" : "settings-section"}>
+      {!compact && <h3>账号</h3>}
+      {(error || accountsError) && (
         <p role="alert" className="text-xs text-[#9a5b4b]">
-          {error}
+          {error || accountsError}
         </p>
       )}
       {!credentials && !error && (
@@ -52,75 +75,86 @@ export function AgentCredentials({
       )}
       {credentials && (
         <>
-          <p className="mb-1 mt-2 text-xs text-muted">
-            {credentials.mode === "shared" ? "共享你的 Pi 登录" : "独立账号"}
-          </p>
-          {credentials.assigned.map(({ provider, account }) => (
-            <button
-              key={provider}
-              className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-xs hover:bg-soft"
-              onClick={() => open(account)}
-            >
-              <span className="min-w-0 truncate">
-                {provider} ·{" "}
-                {accounts.find((item) => item.id === account)?.name ??
-                  "账号不可用"}
-              </span>
-              <ChevronRight size={15} />
-            </button>
-          ))}
-          {!credentials.assigned.length && (
-            <button
-              className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-xs text-muted hover:bg-soft"
-              onClick={() => open(null)}
-            >
-              前往账号设置 <ChevronRight size={15} />
-            </button>
-          )}
-          {(credentials.mode === "assigned" ||
-            credentials.assigned.length > 0) && (
-            <button
-              className="button secondary mt-3 !text-xs"
-              onClick={() =>
-                setConfirm(
-                  credentials.mode === "assigned" ? "shared" : "assigned",
-                )
-              }
-            >
-              {credentials.mode === "assigned"
-                ? "切回共享登录"
-                : "使用已分配账号"}
-            </button>
-          )}
-          {confirm && (
-            <div
-              className="mt-3 rounded-xl bg-soft p-4 text-xs"
-              role="dialog"
-              aria-label={
-                confirm === "shared" ? "确认切回共享登录" : "确认使用已分配账号"
-              }
-            >
-              <p className="m-0">
-                {confirm === "shared"
-                  ? "将重新使用你个人 Pi 的登录；现有分配保留，可随时恢复。"
-                  : "将不再使用你个人 Pi 的登录，只用已分配账号。"}
-              </p>
-              <div className="mt-3 flex gap-2">
-                <button
-                  className="button"
-                  onClick={() => void switchMode(confirm)}
+          {assigned.length ? (
+            assigned.map(({ provider, account }) => {
+              const item = accounts?.find((entry) => entry.id === account);
+              return (
+                <p
+                  key={provider}
+                  className="m-0 truncate text-xs text-muted"
+                  title={`${providerName(provider)} · ${item?.name ?? "账号不可用"} · ${account}`}
                 >
-                  {confirm === "shared" ? "确认切回" : "确认使用"}
-                </button>
-                <button
-                  className="button secondary"
-                  onClick={() => setConfirm(null)}
-                >
-                  取消
-                </button>
-              </div>
-            </div>
+                  {compact && "账号 · "}
+                  {providerName(provider)} · {item?.name ?? "账号不可用"} ·{" "}
+                  {account}
+                </p>
+              );
+            })
+          ) : (
+            <p className="m-0 text-xs text-muted">未分配账号</p>
           )}
+          <Popover.Root open={open} onOpenChange={setOpen}>
+            <Popover.Trigger asChild>
+              <button
+                type="button"
+                className="text-xs text-accent-strong hover:underline"
+              >
+                {assigned.length ? "调整分配" : "分配账号"}
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="start"
+                sideOffset={6}
+                aria-label="管理账号分配"
+                onInteractOutside={(event) => {
+                  if (document.querySelector('[aria-label="确认分配"]'))
+                    event.preventDefault();
+                }}
+                className="z-50 w-[min(340px,calc(100vw-32px))] space-y-3 rounded-xl bg-white p-4 shadow-xl"
+              >
+                {accounts?.length ? (
+                  <>
+                    <div
+                      className="max-h-44 space-y-0.5 overflow-y-auto"
+                      aria-label="可分配的账号"
+                    >
+                      {accounts.map((account) => (
+                        <button
+                          key={account.id}
+                          type="button"
+                          aria-pressed={selected?.id === account.id}
+                          className={`block w-full truncate rounded-lg px-2 py-1.5 text-left text-xs hover:bg-soft ${selected?.id === account.id ? "bg-soft text-accent-strong" : "text-ink"}`}
+                          onClick={() => setPicker(account.id)}
+                        >
+                          {providerName(account.provider)} · {account.name} ·{" "}
+                          {account.id}
+                        </button>
+                      ))}
+                    </div>
+                    {selected && (
+                      <AssignmentPicker
+                        key={selected.id}
+                        account={selected}
+                        accounts={accounts}
+                        agents={[agent]}
+                        change={assign}
+                        openAgent={() => setOpen(false)}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-xs text-accent-strong hover:underline"
+                    onClick={openAccounts}
+                  >
+                    还没有账号，去添加
+                  </button>
+                )}
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
         </>
       )}
     </section>

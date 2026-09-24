@@ -8,12 +8,18 @@ import { Sidebar, type Section } from "./layout/Sidebar.tsx";
 import { TopBar } from "./layout/TopBar.tsx";
 import { AgentDirectory } from "./agents/AgentDirectory.tsx";
 import { AgentDrawer } from "./agents/AgentDrawer.tsx";
+import { AgentTracePanel } from "./agents/AgentTracePanel.tsx";
 import { GroupDrawer } from "./groups/GroupDrawer.tsx";
 import { CreateAgentDialog } from "./agents/CreateAgentDialog.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { CreateChatDialog } from "./chat/ChatDialogs.tsx";
 import { SettingsCenter } from "./settings/SettingsCenter.tsx";
 import type { SettingsPage } from "./settings/types.ts";
+import {
+  allowNextNavigation,
+  confirmLeave,
+  hasUnsaved,
+} from "./settings/unsaved.ts";
 import { RecordsView } from "./records/RecordsView.tsx";
 import {
   emptyFilters,
@@ -32,13 +38,78 @@ export function App() {
   const [section, setSection] = useState<Section>("chat");
   const [chatId, setChatId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const showAgent = (id: string) => {
+    setTraceOpen(false);
+    setAgentId(id);
+  };
   const [modal, setModal] = useState<"agent" | "chat" | null>(null);
-  const [settings, setSettings] = useState<SettingsPage | null>(null);
+  const route = () => {
+    const hash = window.location.hash;
+    if (hash.startsWith("#/settings/agents/"))
+      return {
+        page: "agent" as SettingsPage,
+        id: decodeURIComponent(hash.slice("#/settings/agents/".length)),
+      };
+    if (hash === "#/settings/agents")
+      return { page: "agents" as SettingsPage, id: null };
+    if (hash.startsWith("#/settings/"))
+      return {
+        page: hash.slice("#/settings/".length) as SettingsPage,
+        id: null,
+      };
+    return { page: null as SettingsPage | null, id: null as string | null };
+  };
+  const [location, setLocation] = useState(route);
+  const [settings, setSettings] = useState<SettingsPage | null>(route().page);
+  useEffect(() => {
+    let previous = window.location.hash;
+    let restoring = false;
+    const sync = () => {
+      if (!restoring && !confirmLeave()) {
+        restoring = true;
+        window.location.hash = previous;
+        return;
+      }
+      restoring = false;
+      previous = window.location.hash;
+      const next = route();
+      setLocation(next);
+      setSettings(next.page);
+    };
+    const warn = (event: BeforeUnloadEvent) => {
+      if (hasUnsaved()) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("hashchange", sync);
+    window.addEventListener("beforeunload", warn);
+    return () => {
+      window.removeEventListener("hashchange", sync);
+      window.removeEventListener("beforeunload", warn);
+    };
+  }, []);
+  function openConfig(id: string) {
+    window.location.hash = `#/settings/agents/${encodeURIComponent(id)}`;
+  }
+  function closeSettings() {
+    if (!confirmLeave()) return;
+    if (window.location.hash) {
+      allowNextNavigation();
+      window.location.hash = "";
+    }
+    setSettings(null);
+  }
   const [accountFocus, setAccountFocus] = useState<string | null>(null);
-  const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
-  // 轨迹抽屉和群信息抽屉共用右侧位置，互斥打开。
+  // Agent 详情与群信息互斥；轨迹卡片单独占聊天列右侧空间。
   const [groupOpen, setGroupOpen] = useState(false);
+  const showTrace = (id: string) => {
+    setGroupOpen(false);
+    setAgentId(id);
+    setTraceOpen(true);
+  };
   const [openingAgent, setOpeningAgent] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<{
     chatId: string;
@@ -61,6 +132,7 @@ export function App() {
     setSection(next);
     if (next !== "chat") {
       setGroupOpen(false);
+      setTraceOpen(false);
       setAgentId(null);
     }
     setMobileOpen(false);
@@ -73,6 +145,7 @@ export function App() {
   /** 从会话进聊天记录：预先把会话筛选选上，其余筛选重置。 */
   function openRecords(scope: string | null) {
     setGroupOpen(false);
+    setTraceOpen(false);
     setAgentId(null);
     setRecordFilters({ ...emptyFilters, chat: scope });
     setRecordTab("messages");
@@ -127,7 +200,7 @@ export function App() {
           openAgent={(agent) => void openAgent(agent)}
           openingAgent={openingAgent}
           connected={connected}
-          details={setAgentId}
+          details={showAgent}
           refresh={refresh}
           openSettings={() => setSettings("profile")}
         />
@@ -140,11 +213,12 @@ export function App() {
             selectChat={selectChat}
             openAgent={(agent) => void openAgent(agent)}
             openingAgent={openingAgent}
-            details={setAgentId}
+            details={showTrace}
             refresh={refresh}
             openMessage={(chat, message) => void openMessage(chat, message)}
             openUser={() => setSettings("profile")}
             openGroup={() => {
+              setTraceOpen(false);
               setAgentId(null);
               setGroupOpen(true);
             }}
@@ -180,7 +254,7 @@ export function App() {
               {!overview ? (
                 <Empty
                   icon={<LoaderCircle className="spin text-accent" size={24} />}
-                  title="正在连接中庭"
+                  title="正在连接 Atrium"
                 >
                   <p>读取你的会话与 Agent。</p>
                 </Empty>
@@ -191,9 +265,8 @@ export function App() {
                       overview={overview}
                       opening={openingAgent}
                       openAgent={(agent) => void openAgent(agent)}
-                      details={setAgentId}
+                      details={showAgent}
                       create={() => setModal("agent")}
-                      refresh={refresh}
                     />
                   )}
                   {section === "records" && (
@@ -229,11 +302,13 @@ export function App() {
                     agents={overview.agents}
                     revision={revision}
                     hidden={section !== "chat"}
-                    details={setAgentId}
+                    details={showTrace}
+                    inspectAgent={showAgent}
                     refresh={refresh}
                     anchor={anchor}
                     clearAnchor={() => setAnchor(null)}
                     openGroup={() => {
+                      setTraceOpen(false);
                       setAgentId(null);
                       setGroupOpen(true);
                     }}
@@ -242,25 +317,15 @@ export function App() {
                 </>
               )}
             </main>
-            {selectedAgent && (
+            {selectedAgent && !traceOpen && (
               <AgentDrawer
-                key={`${selectedAgent.id}-${settingsAgentId === selectedAgent.id}`}
+                key={selectedAgent.id}
                 agent={selectedAgent}
-                initialTab={
-                  settingsAgentId === selectedAgent.id ? "settings" : "trace"
-                }
                 revision={revision}
-                close={() => {
-                  setAgentId(null);
-                  setSettingsAgentId(null);
-                }}
-                refresh={refresh}
-                openAccounts={(account) => {
-                  setAgentId(null);
-                  setSettingsAgentId(null);
-                  setAccountFocus(account);
-                  setSettings("accounts");
-                }}
+                visible={!settings}
+                close={() => setAgentId(null)}
+                openConfig={() => openConfig(selectedAgent.id)}
+                openTrace={() => setTraceOpen(true)}
               />
             )}
             {groupOpen && active?.kind === "group" && overview && (
@@ -273,13 +338,23 @@ export function App() {
                 changed={refresh}
                 openRecords={() => openRecords(active.id)}
                 openAgent={(id) => {
-                  setGroupOpen(false);
-                  setAgentId(id);
+                  showTrace(id);
                 }}
               />
             )}
           </div>
         </div>
+        {selectedAgent && traceOpen && (
+          <AgentTracePanel
+            key={selectedAgent.id}
+            agent={selectedAgent}
+            revision={revision}
+            close={() => {
+              setTraceOpen(false);
+              setAgentId(null);
+            }}
+          />
+        )}
         {modal === "agent" && (
           <CreateAgentDialog
             close={() => setModal(null)}
@@ -305,16 +380,27 @@ export function App() {
       {settings && (
         <SettingsCenter
           page={settings}
-          setPage={setSettings}
+          setPage={(page) => {
+            window.location.hash = `#/settings/${page}`;
+          }}
           focus={accountFocus}
           agents={overview?.agents ?? []}
-          close={() => setSettings(null)}
+          close={closeSettings}
+          agentId={location.id}
+          openConfig={openConfig}
+          openChat={(id) => {
+            if (!confirmLeave()) return;
+            if (window.location.hash) {
+              allowNextNavigation();
+              window.location.hash = "";
+            }
+            setSettings(null);
+            const found = overview?.agents.find((a) => a.id === id);
+            if (found) void openAgent(found);
+          }}
           changed={refresh}
           openAgent={(id) => {
-            setSettings(null);
-            setSection("agents");
-            setAgentId(id);
-            setSettingsAgentId(id);
+            openConfig(id);
           }}
         />
       )}

@@ -11,7 +11,6 @@ import {
 import type { TraceDetail, TraceItem, TracePage } from "../../shared/trace.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { api } from "../api.ts";
-import { time } from "../time.ts";
 import { Empty } from "../components/Empty.tsx";
 
 export function mergeTrace(old: TraceItem[], incoming: TraceItem[]) {
@@ -20,13 +19,66 @@ export function mergeTrace(old: TraceItem[], incoming: TraceItem[]) {
   return [...rows.values()].sort((a, b) => a.id - b.id);
 }
 
+const traceTime = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+const lifecycleKinds = new Set(["session", "run_start", "run_end", "delivery"]);
+const fileActions = new Set(["read", "edit", "write"]);
+
+/** Keep the filename visible even when the parent path exceeds the row width. */
+function fileLabel(item: TraceItem, cwd: string, input?: string) {
+  if (item.kind !== "tool" || !fileActions.has(item.name)) return null;
+  const divider = item.title.indexOf(" · ");
+  if (divider < 0) return null;
+  let path = item.title.slice(divider + 3);
+  if (path.endsWith("…")) {
+    try {
+      const args: unknown = JSON.parse(input ?? "");
+      if (args && typeof args === "object") {
+        const fields = args as Record<string, unknown>;
+        path =
+          typeof fields.path === "string"
+            ? fields.path
+            : typeof fields.file_path === "string"
+              ? fields.file_path
+              : "…";
+      } else path = "…";
+    } catch {
+      path = "…";
+    }
+  }
+  const relative = cwd && path.startsWith(`${cwd.replace(/\/$/, "")}/`);
+  const parts = path.split("/");
+  const shown = relative
+    ? path.slice(cwd.replace(/\/$/, "").length + 1)
+    : path.startsWith("/") && parts.length > 3
+      ? `…/${parts.slice(-2).join("/")}`
+      : path;
+  const cut = shown.lastIndexOf("/");
+  const action = item.title.slice(0, divider);
+  return {
+    action,
+    parent: shown.slice(0, cut + 1),
+    filename: shown.slice(cut + 1),
+    full: `${action} · ${path}`,
+  };
+}
+
 function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
   const [open, setOpen] = useState(false),
     [detail, setDetail] = useState<TraceDetail | null>(null);
   const [error, setError] = useState(""),
     [retry, setRetry] = useState(0);
+  const needsPath =
+    item.kind === "tool" &&
+    fileActions.has(item.name) &&
+    item.title.endsWith("…");
   useEffect(() => {
-    if (!open) return;
+    if (!open && !needsPath) return;
     let alive = true;
     void api<TraceDetail>(`/agents/${agent.id}/trace/${item.id}`)
       .then((value) => {
@@ -41,66 +93,100 @@ function TraceAction({ agent, item }: { agent: Agent; item: TraceItem }) {
     return () => {
       alive = false;
     };
-  }, [open, agent.id, item.id, item.ended_at, item.state, retry]);
+  }, [open, needsPath, agent.id, item.id, item.ended_at, item.state, retry]);
+  const label = fileLabel(item, agent.cwd, detail?.input);
   const active =
     item.state === "running" &&
     agent.runtime?.busy &&
     agent.runtime.generation === item.generation;
   const unknown =
     item.state === "unknown" || (item.state === "running" && !active);
-  return (
-    <li
-      className={`relative border-l border-black/[0.06] pb-5 pl-[23px] last:border-transparent last:pb-0`}
-    >
+  const lifecycle = lifecycleKinds.has(item.kind);
+  const clock = traceTime.format(item.at);
+  const hasDetails = !lifecycle || item.has_detail;
+  const row = (
+    <>
+      {lifecycle && <span className="h-px min-w-2 flex-1 bg-black/[0.07]" />}
+      {!lifecycle && (
+        <span
+          className={`grid w-4 flex-none place-items-center ${
+            active
+              ? "text-accent"
+              : item.state === "error"
+                ? "text-red-600"
+                : "text-muted"
+          }`}
+          aria-hidden="true"
+        >
+          {active ? (
+            <LoaderCircle size={13} className="spin" />
+          ) : item.state === "error" || unknown ? (
+            <CircleAlert size={13} />
+          ) : item.kind === "tool" ? (
+            <Terminal size={13} />
+          ) : (
+            <Check size={12} />
+          )}
+        </span>
+      )}
+      {!lifecycle && (
+        <time
+          dateTime={new Date(item.at).toISOString()}
+          className="w-[59px] flex-none font-mono text-[10px] tabular-nums text-muted"
+        >
+          {clock}
+        </time>
+      )}
       <span
-        className={`absolute -left-[10px] top-0 grid h-[23px] w-[19px] place-items-center bg-white ${
-          active
-            ? "text-accent"
-            : item.state === "error"
-              ? "text-red-600"
-              : "text-muted"
-        }`}
-        aria-hidden="true"
+        className={`${lifecycle ? "max-w-[55%]" : "min-w-0 flex-1"} flex overflow-hidden group-hover:text-accent ${item.state === "error" ? "text-red-600" : ""}`}
       >
-        {active ? (
-          <LoaderCircle size={13} className="spin" />
-        ) : item.state === "error" || unknown ? (
-          <CircleAlert size={13} />
-        ) : item.kind === "tool" ? (
-          <Terminal size={13} />
+        {label ? (
+          <>
+            <span className="flex-none">{label.action} ·&nbsp;</span>
+            <span className="min-w-0 truncate">{label.parent}</span>
+            <span className="max-w-full flex-none truncate">
+              {label.filename}
+            </span>
+          </>
         ) : (
-          <Check size={12} />
+          <span className="truncate">
+            {item.title}
+            {lifecycle && ` · ${clock}`}
+            {unknown && " · 状态未知"}
+          </span>
         )}
       </span>
+      {lifecycle && <span className="h-px min-w-2 flex-1 bg-black/[0.07]" />}
+      {hasDetails && (
+        <ChevronRight
+          size={12}
+          className="flex-none text-[#aaa08f] transition-transform group-open/details:rotate-90"
+          aria-hidden="true"
+        />
+      )}
+    </>
+  );
+  const rowClass = `group flex h-7 min-w-0 items-center gap-2 rounded-md ${
+    lifecycle ? "text-[10px] text-muted" : "text-xs text-ink"
+  }`;
+  if (!hasDetails)
+    return (
+      <li className="py-1">
+        <div className={rowClass}>{row}</div>
+      </li>
+    );
+  return (
+    <li className={lifecycle ? "py-1" : ""}>
       <details
         open={open}
         onToggle={(e) => setOpen(e.currentTarget.open)}
         className="group/details"
       >
-        <summary className="group cursor-pointer list-none rounded-[5px] focus-visible:outline-2 focus-visible:outline-[#8a7756] focus-visible:outline-offset-[3px] [&::-webkit-details-marker]:hidden">
-          <div className="flex justify-between text-[10px] leading-[23px] text-muted">
-            <time dateTime={new Date(item.at).toISOString()}>
-              {time(item.at)}
-            </time>
-            <span className="text-accent font-medium">
-              {active
-                ? "进行中"
-                : unknown
-                  ? "状态未知"
-                  : item.state === "error"
-                    ? "失败"
-                    : ""}
-            </span>
-          </div>
-          <div className="flex items-baseline gap-2.5 text-xs leading-[1.65] group-hover:text-accent">
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {item.title}
-            </span>
-            <ChevronRight
-              size={14}
-              className="flex-shrink-0 text-[#aaa08f] transition-transform group-open/details:rotate-90"
-            />
-          </div>
+        <summary
+          title={label?.full ?? item.title}
+          className={`${rowClass} cursor-pointer list-none hover:bg-[#f4f7f5] focus-visible:outline-2 focus-visible:outline-[#8a7756] [&::-webkit-details-marker]:hidden`}
+        >
+          {row}
         </summary>
         {open && (
           <div className="mt-2 rounded-lg border border-black/[0.04] bg-[#f4f7f5] px-3 py-2.5 text-xs">
@@ -354,8 +440,10 @@ function TraceGroup({
   return (
     <>
       {newSession && (
-        <li className="list-none py-3 pb-[18px] pl-[23px] text-[10px] text-muted">
+        <li className="flex items-center gap-2 py-2 text-[10px] text-muted">
+          <span className="h-px flex-1 bg-black/[0.07]" />
           新的运行会话
+          <span className="h-px flex-1 bg-black/[0.07]" />
         </li>
       )}
       <TraceAction agent={agent} item={item} />

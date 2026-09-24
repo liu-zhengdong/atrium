@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { canonicalPath } from "./clone.ts";
 import { defaultTemplate } from "./profile.ts";
+import type { Store } from "./store.ts";
 
 type Link = { path: string; target: string };
 export type LinkPlan = {
@@ -85,6 +86,7 @@ export function repairTemplateLinks(
       `保留指向模板的链接 ${path}：身份内对应目标不存在或不在身份内（${target}）`,
     );
   let repaired = 0;
+  let failed = errors.length;
   for (const { path, target } of rewrites) {
     const temp = `${path}.atrium-${randomUUID()}.tmp`;
     try {
@@ -92,6 +94,7 @@ export function repairTemplateLinks(
       renameSync(temp, path);
       repaired++;
     } catch (error) {
+      failed++;
       warn(`修复链接失败 ${path}：${error}`);
     } finally {
       rmSync(temp, { force: true });
@@ -100,7 +103,41 @@ export function repairTemplateLinks(
   return {
     repaired,
     missing: missing.length,
-    failed: errors.length,
+    failed,
     elapsedMs: performance.now() - started,
   };
+}
+
+/** One-time migration per identity, directory and template. Failed scans retry on the next start. */
+export function migrateTemplateLinks(
+  store: Store,
+  agentId: string,
+  identity: string,
+  template = defaultTemplate(),
+  warn: (message: string) => void = console.warn,
+) {
+  const started = performance.now();
+  const mark = store.one<{ directory: string; template: string }>(
+    "SELECT directory,template FROM identity_link_migrations WHERE agent_id=?",
+    agentId,
+  );
+  if (mark?.directory === identity && mark.template === template)
+    return {
+      repaired: 0,
+      missing: 0,
+      failed: 0,
+      skipped: true,
+      elapsedMs: performance.now() - started,
+    };
+
+  const result = repairTemplateLinks(identity, template, warn);
+  if (result.failed === 0)
+    store.run(
+      `INSERT INTO identity_link_migrations(agent_id,directory,template) VALUES(?,?,?)
+       ON CONFLICT(agent_id) DO UPDATE SET directory=excluded.directory,template=excluded.template`,
+      agentId,
+      identity,
+      template,
+    );
+  return { ...result, skipped: false };
 }

@@ -35,7 +35,7 @@ import {
 } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { ensureOwnPackages } from "./identity-packages.ts";
-import { repairTemplateLinks } from "./identity-links.ts";
+import { migrateTemplateLinks } from "./identity-links.ts";
 import { wakesOffline } from "./delivery.ts";
 import { atriumGuide } from "./mcp.ts";
 import {
@@ -747,10 +747,16 @@ export class Runtimes {
         // A failed migration must not launch Pi with personal plugins.
         const migrationStarted = Date.now();
         try {
-          if (ensureOwnPackages(current.agent_directory))
+          if (ensureOwnPackages(current.agent_directory)) {
+            // Package migration may have created new links after an earlier clean scan.
+            this.store.run(
+              "DELETE FROM identity_link_migrations WHERE agent_id=?",
+              id,
+            );
             console.log(
               `${current.name} 的个人 Pi 插件已转为独立安装（${Date.now() - migrationStarted}ms）`,
             );
+          }
         } catch (error) {
           console.error(
             `${current.name} 的插件迁移失败（${Date.now() - migrationStarted}ms），保留原配置以便重试：${error}`,
@@ -758,8 +764,16 @@ export class Runtimes {
           throw error;
         }
         try {
-          const links = repairTemplateLinks(current.agent_directory);
-          if (links.repaired || links.missing || links.failed)
+          const links = migrateTemplateLinks(
+            this.store,
+            id,
+            current.agent_directory,
+          );
+          if (links.skipped)
+            console.log(
+              `${current.name} 的模板链接已检查，跳过全量扫描（${links.elapsedMs.toFixed(2)}ms）`,
+            );
+          else if (links.repaired || links.missing || links.failed)
             console.log(
               `${current.name} 的模板链接已修复 ${links.repaired} 条，保留 ${links.missing} 条，扫描失败 ${links.failed} 条（${links.elapsedMs.toFixed(0)}ms）`,
             );

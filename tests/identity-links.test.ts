@@ -6,6 +6,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,8 +15,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import {
   inspectTemplateLinks,
+  migrateTemplateLinks,
   repairTemplateLinks,
 } from "../server/identity-links.ts";
+import { Store } from "../server/store.ts";
 
 const file = (path: string, content: string) => {
   mkdirSync(dirname(path), { recursive: true });
@@ -141,6 +144,107 @@ test("accept an identity directory alias and repair directory and template-root 
       realpathSync(join(identity, "package/file")),
     );
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a clean identity is marked persistently, then starts without scanning", () => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-links-mark-"));
+  const database = join(root, "atrium.sqlite");
+  const template = join(root, "template"),
+    identity = join(root, "identity");
+  file(join(template, "command"), "template");
+  file(join(identity, "command"), "own");
+  const command = join(identity, "run");
+  link(command, join(template, "command"));
+  let store = new Store(database);
+  try {
+    const agent = store.createAgent("链接标记测试", root).agent;
+    const first = migrateTemplateLinks(store, agent.id, identity, template);
+    assert.equal(first.skipped, false);
+    assert.equal(first.repaired, 1);
+    assert.equal(first.failed, 0);
+    assert.equal(readlinkSync(command), "command");
+    store.close();
+    store = new Store(database);
+    // A scanner call would throw: the original directory no longer exists.
+    const moved = join(root, "moved");
+    renameSync(identity, moved);
+    try {
+      assert.equal(
+        migrateTemplateLinks(store, agent.id, identity, template).skipped,
+        true,
+      );
+    } finally {
+      renameSync(moved, identity);
+    }
+    assert.equal(
+      store.one<{ directory: string }>(
+        "SELECT directory FROM identity_link_migrations WHERE agent_id=?",
+        agent.id,
+      )?.directory,
+      identity,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("failed replacement leaves no mark and is retried on the next start", () => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-links-retry-"));
+  const template = join(root, "template"),
+    identity = join(root, "identity");
+  file(join(template, "command"), "template");
+  file(join(identity, "command"), "own");
+  const command = join(identity, "run");
+  link(command, join(template, "command"));
+  link(join(identity, "missing"), join(template, "absent"));
+  const store = new Store(join(root, "atrium.sqlite"));
+  try {
+    const agent = store.createAgent("重试链接测试", root).agent;
+    const warnings: string[] = [];
+    const first = migrateTemplateLinks(
+      store,
+      agent.id,
+      identity,
+      template,
+      (line) => {
+        warnings.push(line);
+        if (line.includes("保留指向模板的链接")) {
+          rmSync(command);
+          mkdirSync(command);
+        }
+      },
+    );
+    assert.equal(first.skipped, false);
+    assert.equal(first.failed, 1);
+    assert.match(warnings.join("\n"), /修复链接失败/);
+    assert.equal(
+      store.one(
+        "SELECT 1 FROM identity_link_migrations WHERE agent_id=?",
+        agent.id,
+      ),
+      undefined,
+    );
+    rmSync(command, { recursive: true });
+    link(command, join(template, "command"));
+    const retry = migrateTemplateLinks(
+      store,
+      agent.id,
+      identity,
+      template,
+      () => {},
+    );
+    assert.equal(retry.skipped, false);
+    assert.equal(retry.repaired, 1);
+    assert.equal(retry.failed, 0);
+    assert.equal(
+      migrateTemplateLinks(store, agent.id, identity, template).skipped,
+      true,
+    );
+  } finally {
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

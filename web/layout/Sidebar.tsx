@@ -85,31 +85,32 @@ export function Sidebar({
           <span className="text-[13px] font-semibold tracking-tight text-ink">
             Atrium
           </span>
-          <span className="rounded bg-[#e4ede6] px-1.5 py-0.5 text-[10px] font-medium text-accent-strong">
-            中庭
-          </span>
         </div>
       </div>
 
       <nav aria-label="主导航" className="mb-3.5 grid gap-1">
-        <button
-          className={navButton(section === "chat")}
-          onClick={() => setSection("chat")}
-        >
-          <MessageSquare size={15} />
-          会话
-        </button>
+        <div className="group/nav flex items-center">
+          <button
+            className={`${navButton(section === "chat")} min-w-0 flex-1`}
+            onClick={() => setSection("chat")}
+          >
+            <MessageSquare size={15} />
+            会话
+          </button>
+          <button
+            className="icon-button mr-2 opacity-0 group-hover/nav:opacity-100 group-focus-within/nav:opacity-100 max-[560px]:opacity-100"
+            aria-label="新建会话"
+            onClick={() => create("chat")}
+          >
+            <Plus size={15} />
+          </button>
+        </div>
         <button
           className={navButton(section === "agents")}
           onClick={() => setSection("agents")}
         >
           <Users size={15} />
           Agents
-          {agents.length > 0 && (
-            <span className="ml-auto text-[10px] text-muted">
-              {agents.length}
-            </span>
-          )}
         </button>
         <button
           className={navButton(section === "records")}
@@ -121,18 +122,6 @@ export function Sidebar({
       </nav>
       {section !== "agents" ? (
         <div className="mb-4 flex min-h-0 flex-1 flex-col">
-          <div className={sectionLabel}>
-            会话
-            <button
-              className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"
-              aria-label="新建会话"
-              onClick={() => {
-                create("chat");
-              }}
-            >
-              <Plus size={15} />
-            </button>
-          </div>
           <div className="min-h-0 flex-1 overflow-auto">
             {overview?.chats.map((chat) => (
               <div

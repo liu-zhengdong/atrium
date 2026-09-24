@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Check, CheckCheck, Search, X } from "lucide-react";
+import { CheckCheck, Search, X } from "lucide-react";
 import type { ChatReadState, Message } from "../../shared/schema.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 
@@ -41,6 +41,7 @@ export function ReadReceipt({
   if (!readers.length) return null;
   const seen = readers.filter((reader) => reader.read);
   const unseen = readers.length - seen.length;
+  if (direct && !seen.length) return null;
   const visible = readers.filter(
     (reader) =>
       reader.read === (filter === "read") &&
@@ -67,8 +68,8 @@ export function ReadReceipt({
       >
         {direct ? (
           <>
-            {seen.length ? <CheckCheck size={13} /> : <Check size={13} />}
-            <span>{seen.length ? "已读" : "未读"}</span>
+            <CheckCheck size={13} />
+            <span>已读</span>
           </>
         ) : (
           <>
@@ -87,11 +88,7 @@ export function ReadReceipt({
                 ))}
               </span>
             )}
-            <span>{seen.length} 人已读</span>
-            <span className="text-[#b8b8b1]" aria-hidden="true">
-              ·
-            </span>
-            <span>{unseen} 人未读</span>
+            {unseen > 0 && <span>{unseen} 人未读</span>}
           </>
         )}
       </Popover.Trigger>

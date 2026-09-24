@@ -202,20 +202,12 @@ export function GlobalSearch({
             >
               <X size={14} />
             </button>
-          ) : (
-            <kbd className="rounded bg-[#f0f4f1] px-1.5 py-0.5 font-mono text-[10px] text-muted">
-              ESC
-            </kbd>
-          )}
+          ) : null}
         </div>
 
         {/* 搜索结果列表 */}
         <div className="max-h-[380px] overflow-y-auto p-2">
-          {!trimmed ? (
-            <div className="p-6 text-center text-xs text-muted">
-              输入关键词，检索全部会话、历史消息正文与 Agent 成员
-            </div>
-          ) : results && hits.length === 0 ? (
+          {!trimmed ? null : results && hits.length === 0 ? (
             <div className="p-6 text-center text-xs text-muted">
               未找到与 “{trimmed}” 匹配的内容
             </div>
@@ -308,15 +300,6 @@ export function GlobalSearch({
               })}
             </div>
           )}
-        </div>
-
-        {/* 底部快捷键提示 */}
-        <div className="flex items-center justify-between border-t border-black/[0.04] bg-[#fafbfa] px-4 py-2 text-[11px] text-muted">
-          <div className="flex items-center gap-3">
-            <span>↑↓ 导航</span>
-            <span>↵ 选择</span>
-          </div>
-          <span>ESC 退出</span>
         </div>
       </div>
     </div>

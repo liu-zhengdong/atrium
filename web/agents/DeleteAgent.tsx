@@ -8,10 +8,12 @@ import { api } from "../api.ts";
 export function DeleteAgent({
   agent,
   disabled,
+  stop,
   removed,
 }: {
   agent: Agent;
   disabled: boolean;
+  stop: () => Promise<void>;
   removed: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -25,6 +27,7 @@ export function DeleteAgent({
     setBusy(true);
     setError("");
     try {
+      if (agent.available && agent.runtime) await stop();
       await api(`/agents/${agent.id}`, "DELETE", { confirm: agent.ref });
       removed();
     } catch (error) {
@@ -39,19 +42,26 @@ export function DeleteAgent({
       <p className="muted">移出名册并取消待投递通知与唤醒，历史聊天保留。</p>
       {agent.available && (
         <p className="muted" role="status">
-          Agent 正在运行，请先停止。后台实例用上面的「停止 Agent」或 atrium stop
-          名称；终端实例在原终端退出。
+          {agent.runtime
+            ? "先停止运行，再确认删除。"
+            : "终端实例请先在原终端退出。"}
+        </p>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
         </p>
       )}
       <button
         className="button secondary danger"
-        disabled={disabled || agent.available}
+        disabled={disabled || busy || (agent.available && !agent.runtime)}
         onClick={() => {
           setError("");
           setConfirming(true);
         }}
       >
-        <Trash2 size={15} /> 删除 Agent
+        <Trash2 size={15} />{" "}
+        {busy ? "停止中…" : agent.available ? "停止并删除" : "删除 Agent"}
       </button>
       {confirming &&
         createPortal(
@@ -64,6 +74,7 @@ export function DeleteAgent({
                 {agent.name} <span className="muted">· {agent.ref}</span>
               </p>
               <p className="mb-0 mt-3.5">
+                {agent.available && agent.runtime && "将先停止运行。"}
                 删除后，该身份不能再启动或接收消息，待投递通知会取消。
               </p>
               <p className="muted mt-3.5">
@@ -85,10 +96,14 @@ export function DeleteAgent({
                 </button>
                 <button
                   className="button danger solid"
-                  disabled={busy || agent.available}
+                  disabled={busy || (agent.available && !agent.runtime)}
                   onClick={() => void remove()}
                 >
-                  {busy ? "删除中…" : "确认删除"}
+                  {busy
+                    ? "处理中…"
+                    : agent.available && agent.runtime
+                      ? "停止并删除"
+                      : "确认删除"}
                 </button>
               </div>
             </div>

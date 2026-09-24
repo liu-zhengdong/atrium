@@ -109,7 +109,7 @@ export function MessageComposer({
     ? `将通知全体成员（${agents.length} 位）`
     : mention.mentionIds.length
       ? `将通知 ${mention.mentionIds.length} 位 Agent`
-      : "Enter 发送 · Shift + Enter 换行";
+      : "";
   return (
     <div className="mx-auto w-full max-w-[820px] px-5 pb-5 max-[720px]:px-3.5 max-[720px]:pb-3.5 max-[560px]:px-2.5 max-[560px]:pb-2.5">
       {error && (
@@ -209,7 +209,7 @@ export function MessageComposer({
             files.attached.length
               ? "添加说明，或直接发送"
               : active.kind === "group"
-                ? `发送到 ${active.name}，输入 @ 提及 Agent…`
+                ? `发送到 ${active.name}…`
                 : `发送给 ${active.name}…`
           }
           value={draft}
@@ -256,9 +256,11 @@ export function MessageComposer({
           >
             <AtSign size={16} />
           </button>
-          <span className="text-[11px] text-muted/75 max-[560px]:hidden">
-            {hint}
-          </span>
+          {hint && (
+            <span className="text-[11px] text-muted/75 max-[560px]:hidden">
+              {hint}
+            </span>
+          )}
           <button
             className="ml-auto flex h-7 w-7 flex-none items-center justify-center rounded-md bg-accent text-white transition-colors hover:bg-accent-strong disabled:bg-[#e4ece6] disabled:text-[#9fb0a4]"
             aria-label="发送消息"

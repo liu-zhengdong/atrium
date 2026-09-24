@@ -199,7 +199,8 @@ h3 {
 .markdown {
   font-size: 14px;
   line-height: 1.85;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: keep-all;
   max-width: 830px;
   color: #28362b;
 }
@@ -221,6 +222,12 @@ h3 {
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* 路径在自身内部可断行，不把相邻中文词从中间拆开。 */
+.markdown code,
+.markdown a {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .markdown code {
   font-size: 12px;

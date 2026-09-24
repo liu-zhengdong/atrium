@@ -63,7 +63,9 @@ export function RecordsView({
           ))}
         </nav>
       </div>
-      {tab === "messages" && <MessageRecords {...props} />}
+      {tab === "messages" && (
+        <MessageRecords {...props} chats={overview.chats} />
+      )}
       {tab === "images" && <ImageRecords {...props} />}
       {tab === "files" && <FileRecords {...props} />}
     </div>

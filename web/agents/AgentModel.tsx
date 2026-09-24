@@ -79,10 +79,6 @@ export function AgentModel({ agentId }: { agentId: string }) {
   return (
     <form onSubmit={save} className="settings-section">
       <h3>模型</h3>
-      <p className="muted">
-        用哪个模型由你定，Agent 自己改不了。
-        {state.live ? "它正在运行，保存后当场生效。" : "保存后下次启动时生效。"}
-      </p>
       {state.running && state.running !== modelBase(state.configured ?? "") && (
         <p className="muted small-text">
           运行中实际在用：<code className="path">{state.running}</code>

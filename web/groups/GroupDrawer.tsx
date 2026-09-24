@@ -37,7 +37,7 @@ export function GroupDrawer({
     <SidePanel
       title={chat.name}
       close={close}
-      badge={<span className="badge">群聊</span>}
+
       actions={
         <button
           className="icon-button text-muted hover:bg-[#edf3ef] hover:text-ink"

@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api.ts";
 import { matches } from "./types.ts";
+import type { ModelState } from "../../shared/model.ts";
+import type { Agent } from "../components/AgentAvatar.tsx";
 
 type Entry =
   | string
@@ -19,7 +21,13 @@ type Defaults = {
 const source = (entry: Entry) =>
   typeof entry === "string" ? entry : entry.source;
 
-export function AgentDefaultsPage({ query }: { query: string }) {
+export function AgentDefaultsPage({
+  query,
+  agents,
+}: {
+  query: string;
+  agents: Agent[];
+}) {
   const [defaults, setDefaults] = useState<Defaults | null>(null);
   const [template, setTemplate] = useState<Defaults | null>(null);
   const [newPackage, setNewPackage] = useState("");
@@ -28,6 +36,9 @@ export function AgentDefaultsPage({ query }: { query: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [packageQuery, setPackageQuery] = useState("");
+  const [skillQuery, setSkillQuery] = useState("");
+  const [modelChoices, setModelChoices] = useState<string[]>([]);
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -50,6 +61,22 @@ export function AgentDefaultsPage({ query }: { query: string }) {
       active = false;
     };
   }, []);
+  useEffect(() => {
+    // 与身份设置复用同一份 Pi 模型清单；没有身份时不允许填入未经校验的型号。
+    const source = agents.find((agent) => agent.agent_directory);
+    if (!source) return;
+    let active = true;
+    api<ModelState>(`/agents/${source.id}/model`)
+      .then((state) => {
+        if (active) setModelChoices(state.options);
+      })
+      .catch(() => {
+        if (active) setModelChoices([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [agents.map((agent) => agent.id).join(",")]);
   function update(value: Defaults) {
     setDefaults(value);
     setSaved(false);
@@ -59,7 +86,18 @@ export function AgentDefaultsPage({ query }: { query: string }) {
     if (!defaults) return;
     const split = model.indexOf("/");
     if (model && (split < 1 || split === model.length - 1)) {
-      setError("模型格式：provider/model");
+      setError("请选择可用模型");
+      return;
+    }
+    if (
+      model &&
+      !modelChoices.includes(model) &&
+      model !==
+        (defaults.model
+          ? `${defaults.model.provider}/${defaults.model.model}`
+          : "")
+    ) {
+      setError("请选择可用模型");
       return;
     }
     setBusy(true);
@@ -113,20 +151,33 @@ export function AgentDefaultsPage({ query }: { query: string }) {
         <form className="space-y-5" onSubmit={(event) => void save(event)}>
           <section className="rounded-2xl bg-white p-5 shadow-lift">
             <h2 className="text-sm font-medium">插件</h2>
-            <p className="mb-3 text-xs text-muted">
-              从个人 Pi 复制已安装包；额外添加的包会在创建时安装。
-            </p>
-            <div className="max-h-[270px] space-y-1 overflow-y-auto">
+            {packageChoices.length > 8 && (
+              <input
+                className="field mb-3"
+                aria-label="筛选插件"
+                placeholder="筛选插件"
+                value={packageQuery}
+                onChange={(event) => setPackageQuery(event.target.value)}
+              />
+            )}
+            <div className="space-y-1">
               {packageChoices
-                .filter((item) => matches(query, source(item)))
+                .filter(
+                  (item) =>
+                    matches(query, source(item)) &&
+                    matches(packageQuery, source(item)),
+                )
                 .map((entry) => (
                   <label
                     key={source(entry)}
-                    className="flex items-start gap-2 rounded-lg px-2 py-2 text-xs hover:bg-soft"
+                    className="switch-row !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-2 text-xs hover:bg-soft"
                   >
+                    <span className="min-w-0 break-all">{source(entry)}</span>
                     <input
                       type="checkbox"
-                      className="mt-0.5 accent-accent"
+                      role="switch"
+                      aria-label={`启用插件 ${source(entry)}`}
+                      className="accent-accent"
                       checked={defaults.packages.some(
                         (item) => source(item) === source(entry),
                       )}
@@ -141,7 +192,6 @@ export function AgentDefaultsPage({ query }: { query: string }) {
                         })
                       }
                     />
-                    <span className="min-w-0 break-all">{source(entry)}</span>
                   </label>
                 ))}
               {!packageChoices.length && (
@@ -178,19 +228,31 @@ export function AgentDefaultsPage({ query }: { query: string }) {
           </section>
           <section className="rounded-2xl bg-white p-5 shadow-lift">
             <h2 className="text-sm font-medium">技能</h2>
-            <p className="mb-3 text-xs text-muted">
-              选择要从个人 Pi 复制的技能目录。
-            </p>
-            <div className="max-h-[220px] space-y-1 overflow-y-auto">
+            {skillChoices.length > 8 && (
+              <input
+                className="field mb-3"
+                aria-label="筛选技能"
+                placeholder="筛选技能"
+                value={skillQuery}
+                onChange={(event) => setSkillQuery(event.target.value)}
+              />
+            )}
+            <div className="space-y-1">
               {skillChoices
-                .filter((skill) => matches(query, skill))
+                .filter(
+                  (skill) =>
+                    matches(query, skill) && matches(skillQuery, skill),
+                )
                 .map((skill) => (
                   <label
                     key={skill}
-                    className="flex items-center gap-2 rounded-lg px-2 py-2 text-xs hover:bg-soft"
+                    className="switch-row !flex !items-center !justify-between !gap-2 rounded-lg !px-2 !py-2 text-xs hover:bg-soft"
                   >
+                    <span className="min-w-0 break-all">{skill}</span>
                     <input
                       type="checkbox"
+                      role="switch"
+                      aria-label={`启用技能 ${skill}`}
                       className="accent-accent"
                       checked={defaults.skills.includes(skill)}
                       onChange={(event) =>
@@ -202,7 +264,6 @@ export function AgentDefaultsPage({ query }: { query: string }) {
                         })
                       }
                     />
-                    {skill}
                   </label>
                 ))}
               {!skillChoices.length && (
@@ -237,15 +298,27 @@ export function AgentDefaultsPage({ query }: { query: string }) {
           <section className="rounded-2xl bg-white p-5 shadow-lift">
             <label className="form-label">
               默认模型
-              <input
+              <select
                 className="field mt-2"
                 value={model}
                 onChange={(event) => {
                   setModel(event.target.value);
                   setSaved(false);
                 }}
-                placeholder="provider/model；留空由 Pi 决定"
-              />
+              >
+                <option value="">由 Pi 决定</option>
+                {model && !modelChoices.includes(model) && (
+                  <option value={model}>{model}（已有配置）</option>
+                )}
+                {modelChoices.map((choice) => (
+                  <option key={choice} value={choice}>
+                    {choice}
+                  </option>
+                ))}
+              </select>
+              {!agents.some((agent) => agent.agent_directory) && (
+                <span className="text-xs text-muted">创建身份后可选择模型</span>
+              )}
             </label>
           </section>
           <button className="button" disabled={busy}>

@@ -1,5 +1,5 @@
 import { Download, FileText } from "lucide-react";
-import type { FileRecord, MessageHit } from "../../shared/schema.ts";
+import type { FileRecord, MessageHit, Overview } from "../../shared/schema.ts";
 import { attachmentUrl, formatSize } from "../chat/Attachments.tsx";
 import { convTime } from "../time.ts";
 import { useRecordPages } from "./useRecordPages.ts";
@@ -67,7 +67,12 @@ function Origin({
   );
 }
 
-export function MessageRecords({ filters, scoped, openMessage }: Props) {
+export function MessageRecords({
+  filters,
+  scoped,
+  openMessage,
+  chats,
+}: Props & { chats: Overview["chats"] }) {
   const { items, more, loading, error, loadMore } = useRecordPages<MessageHit>(
     "messages",
     filters,
@@ -94,12 +99,17 @@ export function MessageRecords({ filters, scoped, openMessage }: Props) {
                   {hit.sender_name}
                 </strong>
                 <Origin
-                  scoped={scoped}
+                  scoped={
+                    scoped ||
+                    (chats.find((chat) => chat.id === hit.chat_id)?.kind ===
+                      "direct" &&
+                      hit.chat_name === hit.sender_name)
+                  }
                   chatName={hit.chat_name}
                   at={hit.created_at}
                 />
               </span>
-              <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-ink/75">
+              <span className="mt-1 line-clamp-2 overflow-hidden [overflow-wrap:anywhere] text-xs leading-relaxed text-ink/75">
                 {hit.text}
               </span>
             </button>

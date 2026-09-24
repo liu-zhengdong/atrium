@@ -35,10 +35,7 @@ export function AccountsPage({
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="m-0 text-xl font-medium">账号</h1>
-          <p className="mb-0 mt-1 text-xs text-muted">
-            为 Agent 分配独立的模型登录。
-          </p>
+          <h1 className="m-0 text-xl font-medium">模型账号</h1>
         </div>
         <button
           className="button flex items-center gap-1"

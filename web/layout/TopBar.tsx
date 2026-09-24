@@ -94,23 +94,10 @@ export function TopBar({
                   {activeChat.name}
                 </span>
               )}
-              {activeChat.ref && (
-                <span
-                  className="rounded bg-[#edf5f1] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[#316e50]"
-                  title="会话短号"
-                >
-                  {activeChat.ref}
-                </span>
-              )}
             </div>
           ) : section === "agents" ? (
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-ink">Agent 名册</span>
-              {overview && (
-                <span className="rounded bg-[#edf5f1] px-1.5 py-0.5 text-[10px] font-medium text-[#316e50]">
-                  {overview.agents.length} 位
-                </span>
-              )}
             </div>
           ) : section === "records" ? (
             <span className="text-xs font-semibold text-ink">聊天记录</span>

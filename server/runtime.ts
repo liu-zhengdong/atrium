@@ -466,7 +466,10 @@ export class Runtimes {
       (r) => r.runtimeId === runtimeId,
     );
     if (!runtime) throw new Problem(404, "这个 Agent 已离线，请刷新名册");
-    if (runtime.bound_agent) return this.store.agent(runtime.bound_agent);
+    if (runtime.bound_agent) {
+      requireAssignment(this.store, runtime.bound_agent);
+      return this.store.agent(runtime.bound_agent);
+    }
     throw new Problem(
       409,
       "这是临时 Pi；请新建长期身份后使用具名入口启动，不会自动创建账号",
@@ -606,12 +609,13 @@ export class Runtimes {
     }
   }
   async attach(id: string, runtimeId: string) {
-    this.store.agent(id);
+    requireAssignment(this.store, id);
     if (this.connections.has(id)) throw new Problem(409, "Agent 已连接");
     await this.operation(id, () => this.bind(id, { runtimeId }));
     await this.pump(id);
   }
   async promote(id: string, template?: string) {
+    requireAssignment(this.store, id);
     await this.discover();
     if (this.discoveryError)
       throw new Problem(503, "无法确认旧实例状态，暂不迁移");

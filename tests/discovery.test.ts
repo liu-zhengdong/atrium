@@ -67,6 +67,10 @@ test("临时实例不建账号；旧记录兼容关联、并发点击与重启",
   assert.equal(denied.statusCode, 409);
   assert.equal(store.agents().length, 0);
   const existing = store.createAgent("旧记录一", realpathSync(data));
+  const account = store.run(
+    "INSERT INTO accounts(provider,name,type) VALUES('fixture','test','api_key')",
+  ).lastInsertRowid;
+  // Bind the fixture to expose the existing runtime through discovery.
   store.run(
     "UPDATE agents SET runtime_id=? WHERE id=?",
     first.runtimeId,
@@ -76,6 +80,18 @@ test("临时实例不建账号；旧记录兼容关联、并发点击与重启",
     join(data, "credentials", `${existing.agent.id}.json`),
     JSON.stringify({ token: existing.token }),
     { mode: 0o600 },
+  );
+  const deniedAccount = await app.inject({
+    method: "POST",
+    url: `/api/runtimes/${first.runtimeId}/chat`,
+  });
+  assert.equal(deniedAccount.statusCode, 409);
+  assert.equal(deniedAccount.json().code, "unassigned_account");
+  store.run(
+    "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+    existing.agent.id,
+    "fixture",
+    account,
   );
   const requests = await Promise.all(
     Array.from({ length: 4 }, () =>
@@ -120,6 +136,12 @@ test("临时实例不建账号；旧记录兼容关联、并发点击与重启",
     "UPDATE agents SET runtime_id=? WHERE id=?",
     second.runtimeId,
     legacyTwo.id,
+  );
+  store.run(
+    "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+    legacyTwo.id,
+    "fixture",
+    account,
   );
   const secondChat = await app.inject({
     method: "POST",

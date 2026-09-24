@@ -113,6 +113,17 @@ test("长期身份配置独立、引用共享资源、凭据不复制；改名�
   assert.equal(store.chat(chat.id).name, "自定义标题");
   assert.equal(store.createChat("重复创建", [agent.id], agent.id).id, chat.id);
   const legacy = store.createAgent("旧记录", root).agent;
+  const account = store.run(
+    "INSERT INTO accounts(provider,name,type) VALUES('fixture','test','api_key')",
+  ).lastInsertRowid;
+  const assignFixture = (id: string) =>
+    store.run(
+      "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+      id,
+      "fixture",
+      account,
+    );
+  assignFixture(legacy.id);
   const oldChat = store.createChat("旧私聊", [legacy.id], legacy.id);
   store.send(LOCAL_USER, {
     chat_id: oldChat.id,
@@ -146,6 +157,7 @@ test("长期身份配置独立、引用共享资源、凭据不复制；改名�
   );
   // 已含 identity.json 的目录是真正的身份配置，仍拒绝覆盖
   const occupied = store.createAgent("已占用", root).agent;
+  assignFixture(occupied.id);
   mkdirSync(join(piHome, "atrium", "agents", occupied.id), {
     recursive: true,
   });

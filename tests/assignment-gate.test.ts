@@ -96,6 +96,15 @@ test("升级移除个人 Pi 链接；未分配启动受阻、通知只记一次�
   const denied = await start();
   assert.equal(denied.statusCode, 409);
   assert.equal(denied.json().code, "unassigned_account");
+  for (const attempt of [
+    () => runtimes!.attach(agent.id, "existing-runtime"),
+    () => runtimes!.promote(agent.id),
+  ]) {
+    await assert.rejects(attempt, (error: { code?: string }) => {
+      assert.equal(error.code, "unassigned_account");
+      return true;
+    });
+  }
   const chat = store.createChat("Atlas", [agent.id], agent.id);
   store.send(LOCAL_USER, { chat_id: chat.id, body: "早上好", mentions: [] });
   await runtimes!.pump(agent.id);

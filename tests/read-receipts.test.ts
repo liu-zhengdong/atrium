@@ -123,11 +123,11 @@ test("随机分页反向核对逐条真值；压缩回执不多标或漏标", (t
   }
 });
 
-test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳读保留缺口与反向破坏验证", (t) => {
+test("ACP 直投注入后待处理，成功轮才标记已读：私聊与群聊 @ 跳读", (t) => {
   const { store, a, b, chat, send, state } = fixture(t);
   const dm = store.createChat("私聊", [a.id], a.id);
 
-  // 1. 私聊直投：pending 时未读，ACP accepted 后即标记已读，消除重复未读提醒
+  // 1. 私聊直投：accepted 时仍未读，成功轮结束后才标记。
   const dmMsg = store.send(LOCAL_USER, {
     chat_id: dm.id,
     body: "你好私聊",
@@ -144,7 +144,12 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
 
   // 模拟 ACP runtime deliver 成功确认 accepted
   store.accepted(pendingDirect[0].id);
-  assert(hasRead(dmState(), dmMsg.id), "ACP accepted 确认注入后立即成为已读");
+  assert(
+    !hasRead(dmState(), dmMsg.id),
+    "ACP accepted 仅证明投递，不能证明处理成功",
+  );
+  store.finishTurn(a.id, true);
+  assert(hasRead(dmState(), dmMsg.id), "成功轮才记已读");
   assert.equal(dmState().through, dmMsg.id);
   assert.equal(
     store.unread(a.id).find((c) => c.chat_id === dm.id),
@@ -155,7 +160,7 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
   const woke = store.schedule(Date.now() + 301000);
   assert(!woke.includes(a.id), "已读后不会在后台产生骚扰未读提醒");
 
-  // 2. 群聊明确提及（@）：保留前置未读缺口，ACP accepted 仅标当前消息
+  // 2. 群聊明确提及（@）：保留前置未读缺口，成功轮仅标当前消息
   const m1 = send("群聊普通消息 1");
   const m2 = send("群聊普通消息 2");
   const m3 = store.send(LOCAL_USER, {
@@ -173,9 +178,11 @@ test("ACP 直投确认注入即标记已读：私聊连续推进、群聊 @ 跳�
   assert(!hasRead(state(), m2.id));
   assert(!hasRead(state(), m3.id));
 
-  // 模拟 ACP accepted
+  // 模拟 ACP accepted 以及这一轮成功
   store.accepted(m3Delivery.id);
-  assert(hasRead(state(), m3.id), "@ 消息经 ACP 确认注入后成为已读");
+  assert(!hasRead(state(), m3.id));
+  store.finishTurn(a.id, true);
+  assert(hasRead(state(), m3.id), "@ 消息经成功轮处理后成为已读");
   assert(!hasRead(state(), m1.id), "前序未直投普通消息依然未读");
   assert(!hasRead(state(), m2.id), "前序未直投普通消息依然未读");
   assert.equal(state().through, 0, "存在未读缺口时不越过 through");

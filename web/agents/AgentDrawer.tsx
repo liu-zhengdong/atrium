@@ -10,6 +10,7 @@ import type { BoxMessage, Page, Preferences } from "../../shared/schema.ts";
 import { api } from "../api.ts";
 import { time } from "../time.ts";
 import { SidePanel } from "../components/SidePanel.tsx";
+import { AgentFailure } from "../components/AgentFailure.tsx";
 import { Empty } from "../components/Empty.tsx";
 import { AgentTrace } from "./AgentTrace.tsx";
 import { AgentModel } from "./AgentModel.tsx";
@@ -163,24 +164,55 @@ export function AgentDrawer({
       setBusy(false);
     }
   }
+  async function retry() {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/agents/${agent.id}/retry`, "POST");
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <SidePanel
       title={agent.name}
       close={close}
-      badge={<span className="badge">{runtimeLabel(agent)}</span>}
+      badge={
+        agent.failure ? undefined : (
+          <span className="badge">{runtimeLabel(agent)}</span>
+        )
+      }
     >
       <div className="flex items-center gap-[13px] border-b border-black/[0.04] bg-[#f9faf9] px-5 py-4">
         <Avatar name={agent.name} presence={agentPresence(agent)} />
         <div className="min-w-0">
-          <strong className="text-xs font-semibold text-ink">
-            {runtimeLabel(agent)}
-          </strong>
+          {!agent.failure && (
+            <strong className="text-xs font-semibold text-ink">
+              {runtimeLabel(agent)}
+            </strong>
+          )}
           <p className="mt-[2px] text-xs text-muted [overflow-wrap:anywhere]">
             <span className="text-ink/60">工作声明 · </span>
             {agent.work || "尚未声明"}
           </p>
         </div>
       </div>
+      {agent.failure && (
+        <div className="px-5 py-3">
+          <AgentFailure
+            agent={agent}
+            retry={busy ? undefined : () => void retry()}
+          />
+          {error && (
+            <p role="alert" className="error mt-2">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
       <div
         className="flex gap-4 border-b border-black/[0.04] px-5"
         aria-label="Agent 信息"

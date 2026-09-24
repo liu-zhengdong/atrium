@@ -11,6 +11,7 @@ import {
 import { unreadLabel, type Overview } from "../../shared/schema.ts";
 import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
+import { failureSummary } from "../components/failure-summary.ts";
 import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
 import {
@@ -66,6 +67,7 @@ export function Sidebar({
   openSettings: () => void;
 }) {
   const agents = overview?.agents ?? [];
+  const agentById = new Map(agents.map((agent) => [agent.id, agent]));
 
   async function setState(
     id: string,
@@ -145,6 +147,13 @@ export function Sidebar({
                   className="absolute inset-0 rounded-lg"
                   onClick={() => selectChat(chat.id)}
                   aria-label={chat.name}
+                  title={
+                    agentById.get(chat.direct_agent ?? "")?.failure
+                      ? failureSummary(
+                          agentById.get(chat.direct_agent ?? "")!.failure!.text,
+                        )
+                      : undefined
+                  }
                 />
                 <div className="pointer-events-none relative flex items-center gap-2.5 p-2">
                   <ChatAvatar chat={chat} agents={agents} />
@@ -226,29 +235,32 @@ export function Sidebar({
             </button>
           </div>
           {agents.map((a) => (
-            <div className={agentRow} key={a.id}>
-              <Avatar
-                name={a.name}
-                presence={agentPresence(a)}
-                small
-                onClick={() => details(a.id)}
-              />
-              <button
-                className="agent-row-open flex min-w-0 flex-1 items-center gap-2 text-left"
-                onClick={() => void openAgent(a)}
-                disabled={openingAgent !== null}
-              >
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <strong className={rowName}>{a.name}</strong>
-                  <small
-                    className={rowPreview}
-                    title={[a.description, a.work].filter(Boolean).join("\n")}
-                  >
-                    {agentSummary(a)}
-                  </small>
-                </span>
-                {a.unread > 0 && <span className="badge">{a.unread}</span>}
-              </button>
+            <div key={a.id}>
+              <div className={agentRow}>
+                <Avatar
+                  name={a.name}
+                  presence={agentPresence(a)}
+                  small
+                  onClick={() => details(a.id)}
+                />
+                <button
+                  className="agent-row-open flex min-w-0 flex-1 items-center gap-2 text-left"
+                  onClick={() => void openAgent(a)}
+                  disabled={openingAgent !== null}
+                  title={a.failure ? failureSummary(a.failure.text) : undefined}
+                >
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <strong className={rowName}>{a.name}</strong>
+                    <small
+                      className={rowPreview}
+                      title={[a.description, a.work].filter(Boolean).join("\n")}
+                    >
+                      {agentSummary(a)}
+                    </small>
+                  </span>
+                  {a.unread > 0 && <span className="badge">{a.unread}</span>}
+                </button>
+              </div>
             </div>
           ))}
           {overview && !agents.length && (

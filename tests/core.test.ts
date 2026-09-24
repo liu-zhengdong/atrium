@@ -243,6 +243,7 @@ test("心跳提醒逐项写明会话、未读条数和谁发的；清空后撤�
     .pending(a.id)
     .find((d) => d.through_message === pinged.id)!;
   store.accepted(direct.id);
+  store.finishTurn(a.id, true);
   store.addNotice(a.id, "webhook", "CI 告警", "流水线失败");
   const text = store.reminder(a.id)!;
   assert.match(text, /【消息箱中 2 项未完成】/);
@@ -262,6 +263,7 @@ test("心跳提醒逐项写明会话、未读条数和谁发的；清空后撤�
   store.accepted(
     store.pending(a.id).find((d) => d.through_message === later.id)!.id,
   );
+  store.finishTurn(a.id, true);
   assert.match(
     store.reminder(a.id)!,
     /：4 条未读（最早 #\d+），来自 Mira、Cedar\n/,

@@ -1,3 +1,11 @@
+export const pastTime = (value: number, now = Date.now()) => {
+  const elapsed = Math.max(0, now - value);
+  if (elapsed < 60_000) return "刚刚";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`;
+  return `${Math.floor(elapsed / 86_400_000)} 天前`;
+};
+
 export const time = (value: number) =>
   new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",

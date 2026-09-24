@@ -230,6 +230,7 @@ export type Overview = {
     runtime: RuntimeInfo | null;
     available: boolean;
     error: string | null;
+    failure: { text: string; at: number; count: number } | null;
     unread: number;
   })[];
   chats: Chat[];

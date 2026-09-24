@@ -43,6 +43,7 @@ import {
   type SendRequest,
 } from "./delivery.ts";
 import { Problem } from "./problem.ts";
+import { agentTransition, type AgentFailure } from "./agent-failure.ts";
 
 export { Problem };
 /** 同一副样子的消息箱提醒几次。没人处理就一直提，只会把对方的会话撑大。 */
@@ -96,6 +97,7 @@ export type DeliveryRow = {
   error: string | null;
   chat_id: string | null;
   through_message: number | null;
+  created_at: number;
 };
 type MessageRow = Omit<Message, "mentions" | "attachments" | "mention_all"> & {
   mentions: string;
@@ -191,9 +193,14 @@ export class Store {
           END;`);
       }
     });
+    this.addColumn("agents", "error_text", "TEXT");
+    this.addColumn("agents", "error_at", "INTEGER");
+    this.addColumn("agents", "failure_count", "INTEGER NOT NULL DEFAULT 0");
     const deliveryCols = this.all<{ name: string }>(
       "PRAGMA table_info(deliveries)",
     ).map((c) => c.name);
+    if (!deliveryCols.includes("accepted_at"))
+      this.db.exec("ALTER TABLE deliveries ADD COLUMN accepted_at INTEGER");
     if (!deliveryCols.includes("chat_id"))
       this.db.exec(
         "ALTER TABLE deliveries ADD COLUMN chat_id TEXT REFERENCES chats(id)",
@@ -1484,6 +1491,107 @@ export class Store {
     );
     return id;
   }
+  failure(id: string): AgentFailure {
+    const row = this.one<{
+      text: string | null;
+      at: number | null;
+      count: number;
+    }>(
+      "SELECT error_text AS text,error_at AS at,failure_count AS count FROM agents WHERE id=? AND deleted_at IS NULL",
+      id,
+    );
+    if (!row) throw new Problem(404, "Agent 不存在");
+    return row.text && row.at
+      ? { text: row.text, at: row.at, count: row.count }
+      : null;
+  }
+  setFailure(id: string, text: string, at = Date.now()) {
+    const next = agentTransition(this.failure(id), {
+      kind: "failure",
+      text,
+      at,
+    }).failure!;
+    this.run(
+      "UPDATE agents SET error_text=?,error_at=?,failure_count=? WHERE id=?",
+      next.text,
+      next.at,
+      next.count,
+      id,
+    );
+  }
+  /** A deliver RPC can return after its successful run_end was observed. Complete only that confirmed delivery. */
+  completeDelivery(id: string) {
+    this.transaction(() => {
+      const row = this.one<{
+        agent_id: string;
+        chat_id: string | null;
+        through_message: number | null;
+      }>(
+        "SELECT agent_id,chat_id,through_message FROM deliveries WHERE id=? AND state='accepted' AND kind='direct'",
+        id,
+      );
+      if (!row) return;
+      if (row.chat_id && row.through_message)
+        this.recordRead(
+          row.agent_id,
+          row.chat_id,
+          row.through_message,
+          row.through_message,
+        );
+      this.run("UPDATE deliveries SET state='complete' WHERE id=?", id);
+    });
+  }
+  /** A failed turn leaves direct messages unacknowledged; use fresh IDs to bypass Pi's delivery deduplication. */
+  finishTurn(id: string, successful: boolean, through = Date.now()) {
+    this.transaction(() => {
+      if (successful) {
+        const rows = this.all<{
+          chat_id: string;
+          through_message: number;
+          agent_id: string;
+        }>(
+          "SELECT chat_id,through_message,agent_id FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted' AND chat_id IS NOT NULL AND through_message IS NOT NULL AND accepted_at<=?",
+          id,
+          through,
+        );
+        for (const row of rows)
+          this.recordRead(
+            row.agent_id,
+            row.chat_id,
+            row.through_message,
+            row.through_message,
+          );
+        this.run(
+          "UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted' AND accepted_at<=?",
+          id,
+          through,
+        );
+        this.run(
+          "UPDATE agents SET error_text=NULL,error_at=NULL,failure_count=0 WHERE id=?",
+          id,
+        );
+      } else {
+        const rows = this.all<{ id: string; text: string }>(
+          "SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'",
+          id,
+        );
+        const replayNote = "[上一轮运行出错，重新投递同一条消息；不是新消息。]";
+        for (const row of rows)
+          this.run(
+            "UPDATE deliveries SET id=?,text=?,state='pending',accepted_at=NULL WHERE id=?",
+            randomUUID(),
+            row.text.includes(replayNote)
+              ? row.text
+              : `${row.text}\n${replayNote}`,
+            row.id,
+          );
+        this.run(
+          "UPDATE deliveries SET state='pending',accepted_at=NULL WHERE agent_id=? AND kind='summary' AND state='accepted'",
+          id,
+        );
+      }
+    });
+  }
   pending(id: string) {
     return this.all<DeliveryRow>(
       "SELECT * FROM deliveries WHERE agent_id=? AND state='pending' ORDER BY created_at LIMIT 100",
@@ -1491,34 +1599,11 @@ export class Store {
     );
   }
   accepted(id: string) {
-    this.transaction(() => {
-      const delivery = this.one<{
-        agent_id: string;
-        kind: string;
-        chat_id: string | null;
-        through_message: number | null;
-      }>(
-        "SELECT agent_id,kind,chat_id,through_message FROM deliveries WHERE id=?",
-        id,
-      );
-      if (
-        delivery &&
-        delivery.kind === "direct" &&
-        delivery.chat_id &&
-        delivery.through_message
-      ) {
-        this.recordRead(
-          delivery.agent_id,
-          delivery.chat_id,
-          delivery.through_message,
-          delivery.through_message,
-        );
-      }
-      this.run(
-        "UPDATE deliveries SET state='accepted',slot=NULL,error=NULL WHERE id=?",
-        id,
-      );
-    });
+    this.run(
+      "UPDATE deliveries SET state='accepted',slot=NULL,error=NULL,accepted_at=? WHERE id=? AND state='pending'",
+      Date.now(),
+      id,
+    );
   }
   deliveryError(id: string, error: string) {
     this.run(
@@ -1530,6 +1615,8 @@ export class Store {
   schedule(now = Date.now()) {
     const woke: string[] = [];
     for (const agent of this.agents()) {
+      if (!agentTransition(this.failure(agent.id), { kind: "heartbeat" }).wake)
+        continue;
       const row = this.one<{
         last_wake: number;
         wake_mark: string;

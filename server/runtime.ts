@@ -53,6 +53,7 @@ import {
 } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
+import { agentTransition } from "./agent-failure.ts";
 
 const require = createRequire(import.meta.url);
 const alive = (pid: number) => {
@@ -104,6 +105,19 @@ export class Runtimes {
   private connecting = new Map<string, Promise<void>>();
   private bindingOwners = new Map<string, string>();
   private pumping = new Map<string, Promise<void>>();
+  private turns = new Map<
+    string,
+    { generation: string; failure: string | null; deliveryAt: number | null }
+  >();
+  private lastTurn = new Map<
+    string,
+    {
+      generation: string;
+      at: number;
+      deliveryAt: number | null;
+      successful: boolean;
+    }
+  >();
   private starts = new Map<string, { at: number; failures: number }>();
   private stopped = false;
   private discovered: LiveRuntime[] = [];
@@ -543,7 +557,11 @@ export class Runtimes {
         this.bindingOwners.delete(selected);
     }
   }
-  private async operation(id: string, run: () => Promise<void>) {
+  private async operation(
+    id: string,
+    run: () => Promise<void>,
+    recordFailure = true,
+  ) {
     this.assertOpen();
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
@@ -551,6 +569,7 @@ export class Runtimes {
       const message = this.redact(id, String(error));
       if (!this.stopped) {
         this.errors.set(id, message);
+        if (recordFailure) this.store.setFailure(id, message);
         this.changed();
       }
       if (message !== String(error)) throw new Error(message);
@@ -793,18 +812,38 @@ export class Runtimes {
       ],
     };
   }
-  pump(id: string): Promise<void> {
-    if (this.stopped) return Promise.resolve();
+  pump(id: string, direct = false): Promise<void> {
+    if (this.stopped || (this.store.failure(id) && !direct))
+      return Promise.resolve();
     const existing = this.pumping.get(id);
     if (existing) return existing;
-    const promise = this.doPump(id).finally(() => this.pumping.delete(id));
+    const promise = this.doPump(id, direct).finally(() =>
+      this.pumping.delete(id),
+    );
     this.pumping.set(id, promise);
     return promise;
   }
-  private async doPump(id: string) {
+  private async doPump(id: string, direct: boolean) {
+    let operationFailed = false;
     try {
       if (this.connecting.has(id)) return;
       let runtime = this.connections.get(id);
+      // A TUI may exit and immediately restart under the same identity. Discovery
+      // knows the new runtime before a status poll of the old one necessarily fails.
+      const priorRuntimeId = runtime?.info.runtimeId;
+      const currentBinding = this.binding(id);
+      if (
+        priorRuntimeId &&
+        currentBinding.runtime_id !== priorRuntimeId &&
+        this.discovered.some(
+          (entry) =>
+            entry.bound_agent === id &&
+            entry.runtimeId === currentBinding.runtime_id,
+        )
+      ) {
+        this.connections.delete(id);
+        runtime = undefined;
+      }
       if (!runtime) {
         const binding = this.binding(id);
         if (
@@ -812,12 +851,21 @@ export class Runtimes {
           binding.runtime_pid &&
           alive(binding.runtime_pid)
         ) {
-          await this.operation(id, () =>
-            this.bind(id, { runtimeId: binding.runtime_id! }),
-          );
+          await this.operation(
+            id,
+            () => this.bind(id, { runtimeId: binding.runtime_id! }),
+            direct || this.store.pending(id).length > 0,
+          ).catch((error) => {
+            operationFailed = true;
+            throw error;
+          });
           runtime = this.connections.get(id);
         } else {
-          if (wakesOffline(this.store.pending(id))) await this.start(id, true);
+          if (wakesOffline(this.store.pending(id)))
+            await this.start(id, !direct).catch((error) => {
+              operationFailed = true;
+              throw error;
+            });
           runtime = this.connections.get(id);
         }
       }
@@ -859,6 +907,7 @@ export class Runtimes {
                   };
                 })
             : [];
+          const deliveryStart = Date.now();
           const result = await this.rpc<{ accepted: boolean }>(
             "_pi/runtime/deliver",
             {
@@ -873,19 +922,41 @@ export class Runtimes {
           this.assertOpen();
           if (!result.accepted) throw new Error("Pi 未确认接收");
           this.store.accepted(pending.id);
+          // A turn may fail before deliver returns. Observe its end only after
+          // accepting, so the failed delivery cannot be stranded as accepted.
+          await this.capture(id, runtime.info);
+          const turn = this.lastTurn.get(id);
+          if (
+            turn?.generation === runtime.info.generation &&
+            turn.deliveryAt !== null &&
+            turn.deliveryAt >= deliveryStart &&
+            turn.at >= turn.deliveryAt
+          ) {
+            if (turn.successful) this.store.completeDelivery(pending.id);
+            else this.store.finishTurn(id, false);
+          }
           this.changed();
         } catch (error) {
-          if (!this.stopped)
-            this.store.deliveryError(
-              pending.id,
-              this.redact(id, String(error)),
-            );
+          if (!this.stopped) {
+            const message = this.redact(id, String(error));
+            this.store.deliveryError(pending.id, message);
+            this.store.setFailure(id, message);
+            this.store.finishTurn(id, false);
+            this.changed();
+          }
           break;
         }
       }
     } catch (error) {
       if (!this.stopped) {
-        this.errors.set(id, this.redact(id, String(error)));
+        const message = this.redact(id, String(error));
+        this.errors.set(id, message);
+        // A TUI may replace its session while an idle status poll is in flight.
+        // Only a failed wake/delivery is a failed turn, not that transient poll.
+        if (!operationFailed && this.store.pending(id).length) {
+          this.store.setFailure(id, message);
+          this.store.finishTurn(id, false);
+        }
         this.changed();
       }
     }
@@ -902,14 +973,72 @@ export class Runtimes {
             limit: 50,
           }),
         );
-        if (this.stopped || this.connections.get(id)?.info !== info) return;
+        const current = this.connections.get(id)?.info;
+        if (
+          this.stopped ||
+          current?.runtimeId !== info.runtimeId ||
+          current?.generation !== info.generation
+        )
+          return;
         if (
           events.runtimeId !== info.runtimeId ||
           events.generation !== info.generation ||
           events.sessionId !== info.sessionId
         )
           throw new Error("轨迹来自其他运行代际");
+        const cursor = this.traces.cursor(id, info.runtimeId, info.generation);
+        if (events.gap) this.turns.delete(id);
         if (this.traces.ingest(id, events)) this.changed();
+        for (const event of events.items.filter((item) => item.seq > cursor)) {
+          if (event.kind === "run_start") {
+            this.turns.set(id, {
+              generation: info.generation,
+              failure: null,
+              deliveryAt: null,
+            });
+          } else if (event.kind === "delivery") {
+            const turn = this.turns.get(id);
+            if (turn?.generation === info.generation)
+              turn.deliveryAt = event.at;
+          } else if (
+            event.kind === "message" &&
+            event.name === "assistant" &&
+            event.error
+          ) {
+            const turn = this.turns.get(id);
+            if (turn?.generation === info.generation)
+              turn.failure = event.text || "模型运行失败";
+          } else if (event.kind === "run_end") {
+            // A run_end without an observed start (gap or prior service lifetime) cannot prove success.
+            const turn = this.turns.get(id);
+            if (turn?.generation === info.generation)
+              this.lastTurn.set(id, {
+                generation: info.generation,
+                at: event.at,
+                deliveryAt: turn.deliveryAt,
+                successful: !turn.failure,
+              });
+            if (turn?.generation === info.generation && turn.failure) {
+              this.store.setFailure(
+                id,
+                this.redact(id, turn.failure),
+                event.at,
+              );
+              this.store.finishTurn(id, false);
+              this.changed();
+            } else if (turn?.generation === info.generation) {
+              this.store.finishTurn(
+                id,
+                agentTransition(this.store.failure(id), { kind: "success" })
+                  .read,
+                event.at,
+              );
+              this.errors.delete(id);
+              this.changed();
+            }
+            this.turns.delete(id);
+          }
+        }
         if (!events.hasMore) break;
       }
       this.traceErrors.delete(id);
@@ -922,6 +1051,20 @@ export class Runtimes {
     }
     if (!this.stopped && before !== this.traceErrors.get(id)) this.changed();
   }
+  async retry(id: string) {
+    this.store.agent(id);
+    const runtime = this.connections.get(id);
+    if (runtime) await this.capture(id, runtime.info);
+    if (!this.store.failure(id))
+      throw new Problem(409, "Agent 当前没有运行错误");
+    if (runtime?.info.busy)
+      throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
+    this.store.finishTurn(id, false);
+    await this.pump(
+      id,
+      agentTransition(this.store.failure(id), { kind: "retry" }).wake,
+    );
+  }
   private async tick() {
     if (this.stopped || this.ticking) return;
     this.ticking = true;
@@ -932,7 +1075,19 @@ export class Runtimes {
       await Promise.all(
         this.store.agents().map(async (agent) => {
           const before = JSON.stringify(this.connections.get(agent.id)?.info);
-          await this.pump(agent.id);
+          if (this.store.failure(agent.id) && this.connections.get(agent.id))
+            await this.capture(agent.id, this.connections.get(agent.id)!.info);
+          const failure = this.store.failure(agent.id);
+          const direct =
+            failure !== null &&
+            this.store
+              .pending(agent.id)
+              .some(
+                (delivery) =>
+                  delivery.kind === "direct" &&
+                  delivery.created_at > failure.at,
+              );
+          await this.pump(agent.id, direct);
           if (before !== JSON.stringify(this.connections.get(agent.id)?.info))
             this.changed();
         }),

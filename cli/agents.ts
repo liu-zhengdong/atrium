@@ -18,6 +18,7 @@ import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
 import { Problem, closest } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
+import { waitOptions } from "./wait-options.ts";
 
 export type AgentEntry = Overview["agents"][number];
 /** 与 Web 头像状态点同一套判断。 */
@@ -180,6 +181,38 @@ const start: Command = {
       `已启动 ${started.name} · ${presence(started)}${started.runtime ? ` · PID ${started.runtime.pid} · ${started.runtime.model}` : ""}`,
     );
     recordNext(`发私聊：atrium send ${started.ref} 正文`);
+  },
+};
+
+const newSession: Command = {
+  args: "名称 [--timeout 秒]",
+  about: "等当前回合结束后为身份开启新 Pi 会话；旧会话文件保留",
+  options: { timeout: { type: "string" } },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values }) {
+    const seconds = waitOptions(undefined, str(values, "timeout")).seconds;
+    const client = await connect();
+    const agent = findAgent(await roster(client), reference!);
+    const result = await client
+      .post<{
+        old_session_file: string | null;
+        new_session_file: string | null;
+      }>(`/agents/${agent.id}/new-session`, { timeout: seconds })
+      .catch((error: unknown) => {
+        if (error instanceof Problem && error.code === "timeout")
+          throw new Problem(
+            408,
+            error.message,
+            "timeout",
+            undefined,
+            `atrium new-session ${agent.ref} --timeout ${Math.min(3600, Math.max(300, seconds * 2))}`,
+          );
+        throw error;
+      });
+    console.log(
+      `已为 ${agent.name} 开启新会话：${result.new_session_file ?? "会话文件待生成"}\n旧会话文件保留：${result.old_session_file ?? "此前没有会话文件"}`,
+    );
+    recordNext(`查看轨迹：atrium trace ${agent.ref}`);
   },
 };
 
@@ -532,6 +565,7 @@ export const agentCommands: Record<string, Command> = {
   show,
   create,
   start,
+  "new-session": newSession,
   retry,
   stop,
   delete: remove,

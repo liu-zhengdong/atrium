@@ -14,6 +14,8 @@ import { ProfilePage } from "./ProfilePage.tsx";
 import { AccountsPage } from "./AccountsPage.tsx";
 import { ServicePage } from "./ServicePage.tsx";
 import { AgentDefaultsPage } from "./AgentDefaultsPage.tsx";
+import { AgentsPage } from "./AgentsPage.tsx";
+import { AgentConfigPage } from "./AgentConfigPage.tsx";
 import type { SettingsPage } from "./types.ts";
 
 const navigation = [
@@ -26,17 +28,23 @@ const navigation = [
         Icon: UserRound,
         terms: "称呼 资料 正文",
       },
+    ],
+  },
+  {
+    section: "Agent",
+    entries: [
       {
         id: "accounts" as const,
         label: "模型账号",
         Icon: KeyRound,
         terms: "API key OAuth 模型 分配 Agent provider",
       },
-    ],
-  },
-  {
-    section: "Agent",
-    entries: [
+      {
+        id: "agents" as const,
+        label: "全部 Agent",
+        Icon: Bot,
+        terms: "配置 身份",
+      },
       {
         id: "agent-defaults" as const,
         label: "新 Agent 默认配置",
@@ -66,6 +74,9 @@ export function SettingsCenter({
   close,
   openAgent,
   changed,
+  agentId,
+  openConfig,
+  openChat,
 }: {
   page: SettingsPage;
   setPage: (page: SettingsPage) => void;
@@ -74,6 +85,9 @@ export function SettingsCenter({
   close: () => void;
   openAgent: (id: string) => void;
   changed: () => void;
+  agentId: string | null;
+  openConfig: (id: string) => void;
+  openChat: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -186,22 +200,48 @@ export function SettingsCenter({
             ) && <p className="px-3 text-xs text-muted">无匹配导航</p>}
         </nav>
       </aside>
-      <main className="m-2 mt-0 min-w-0 flex-1 overflow-auto rounded-2xl bg-[#fcfdfc] px-5 py-7 shadow-[0_1px_3px_rgba(0,0,0,0.02),0_8px_24px_rgba(0,0,0,0.03)] sm:m-2.5 sm:ml-0 sm:px-8 sm:py-9">
-        <div className="mx-auto max-w-[720px]">
-          {page === "profile" ? (
-            <ProfilePage query={query} changed={changed} />
-          ) : page === "accounts" ? (
-            <AccountsPage
-              agents={agents}
-              query={query}
-              focus={focus}
-              openAgent={openAgent}
-            />
-          ) : page === "agent-defaults" ? (
-            <AgentDefaultsPage query={query} agents={agents} />
-          ) : (
-            <ServicePage query={query} />
-          )}
+      <main className="min-h-0 min-w-0 flex-1 bg-[#fcfdfc] sm:m-2.5 sm:ml-0 sm:overflow-hidden sm:rounded-2xl sm:shadow-[0_1px_3px_rgba(0,0,0,0.02),0_8px_24px_rgba(0,0,0,0.03)]">
+        <div className="h-full scroll-smooth overflow-auto px-5 py-7 sm:px-8 sm:py-9">
+          <div
+            className={
+              page === "agent"
+                ? "mx-auto max-w-[1100px]"
+                : "mx-auto max-w-[720px]"
+            }
+          >
+            {page === "profile" ? (
+              <ProfilePage query={query} changed={changed} />
+            ) : page === "accounts" ? (
+              <AccountsPage
+                agents={agents}
+                query={query}
+                focus={focus}
+                openAgent={openAgent}
+              />
+            ) : page === "agents" ? (
+              <AgentsPage agents={agents} open={openConfig} />
+            ) : page === "agent" ? (
+              agentId && agents.find((a) => a.id === agentId) ? (
+                <AgentConfigPage
+                  key={agentId}
+                  agent={agents.find((a) => a.id === agentId)!}
+                  changed={changed}
+                  openAccounts={() => setPage("accounts")}
+                  openChat={() => openChat(agentId)}
+                  removed={() => {
+                    setPage("agents");
+                    changed();
+                  }}
+                />
+              ) : (
+                <p role="alert">找不到这个 Agent</p>
+              )
+            ) : page === "agent-defaults" ? (
+              <AgentDefaultsPage query={query} agents={agents} />
+            ) : (
+              <ServicePage query={query} />
+            )}
+          </div>
         </div>
       </main>
     </div>

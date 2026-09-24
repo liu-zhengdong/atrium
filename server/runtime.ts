@@ -36,6 +36,8 @@ import { atriumGuide } from "./mcp.ts";
 import {
   prepareProfile,
   readIdentityModel,
+  restoreIdentityModel,
+  snapshotIdentityModel,
   syncIdentityProfile,
 } from "./profile.ts";
 import {
@@ -773,6 +775,16 @@ export class Runtimes {
       return cachedModels(this.store, id);
     }
   }
+  /** 默认配置复用身份模型来源：先合并已观察清单，空清单时从在线身份取一次。 */
+  async modelsForDefaults(): Promise<string[]> {
+    const agents = this.store.agents().filter((agent) => agent.agent_directory);
+    const observed = [
+      ...new Set(agents.flatMap((agent) => cachedModels(this.store, agent.id))),
+    ].sort();
+    if (observed.length) return observed;
+    const live = agents.find((agent) => this.managed(agent.id));
+    return live ? this.listModels(live.id) : [];
+  }
   /** 身份的模型现状：配置里写的、运行中实际在用的、可选清单，以及改动能否当场生效。 */
   async model(id: string): Promise<ModelState> {
     return {
@@ -786,6 +798,9 @@ export class Runtimes {
   async setModel(id: string, spec: ModelSpec): Promise<ModelChange> {
     const live = this.managed(id);
     const options = await this.listModels(id);
+    const directory = this.store.agent(id).agent_directory;
+    const previous =
+      live && directory ? snapshotIdentityModel(directory) : null;
     const { wanted, configured } = configureModel(
       this.store,
       id,
@@ -804,10 +819,12 @@ export class Runtimes {
           },
         ));
       } catch (error) {
-        throw new Problem(
-          409,
-          `已写入 ${configured}，但运行中的实例没能当场切换：${error}。重启这个身份即可生效。`,
-        );
+        if (directory && previous) restoreIdentityModel(directory, previous);
+        const detail = String(error);
+        const reason = detail.includes("Model not found:")
+          ? `运行中的 Pi 找不到 ${wanted}，请检查模型配置`
+          : `运行中的实例没能当场切换：${detail}`;
+        throw new Problem(409, `${reason}。模型配置已恢复原值。`);
       }
     this.changed();
     return {

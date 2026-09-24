@@ -60,7 +60,6 @@ function SourcePicker({
     return (
       <div className="field flex items-center gap-2 text-left">
         <span className="min-w-0 flex-1">内置</span>
-        <span className="muted shrink-0 text-[10px]">预置类型</span>
       </div>
     );
   }
@@ -91,7 +90,6 @@ function SourcePicker({
         ) : (
           <>
             <span className="min-w-0 flex-1">内置</span>
-            <span className="muted shrink-0 text-[10px]">预置类型</span>
           </>
         )}
         <ChevronDown
@@ -128,7 +126,6 @@ function SourcePicker({
                   onClick={() => choose("builtin")}
                 >
                   <span className="min-w-0 flex-1">内置</span>
-                  <span className="muted shrink-0 text-[10px]">预置类型</span>
                 </button>
               </li>
             )}
@@ -225,7 +222,7 @@ export function CreateAgentDialog({
         />
       </label>
       <div className="form-label">
-        <span className="form-title">基于</span>
+        <span className="form-title">配置来源</span>
         <SourcePicker agents={agents} value={source} onChange={setSource} />
       </div>
       <details>

@@ -30,6 +30,7 @@ export function AgentPlugins({
   const [changed, setChanged] = useState(false);
   const [confirm, setConfirm] = useState<"own" | "shared" | null>(null);
   const [removeSource, setRemoveSource] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   useEffect(() => {
     let active = true;
     setList(null);
@@ -180,122 +181,146 @@ export function AgentPlugins({
           </form>
         </>
       )}
+      {list && list.packages.length > 8 && (
+        <input
+          className="field mb-2"
+          placeholder="筛选插件"
+          aria-label="筛选插件"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      )}
       {list &&
         (list.packages.length ? (
           <ul className="list-none space-y-1 p-0">
-            {list.packages.map((item) => (
-              <li
-                key={item.source}
-                className="rounded-xl bg-white p-3 shadow-lift"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="break-all text-xs font-medium text-ink">
-                      {item.name}{" "}
-                      {item.version && (
-                        <span className="font-normal text-muted">
-                          {item.version}
-                        </span>
-                      )}
+            {list.packages
+              .filter((item) =>
+                `${item.name} ${item.source}`
+                  .toLowerCase()
+                  .includes(query.toLowerCase()),
+              )
+              .map((item) => (
+                <li
+                  key={item.source}
+                  className="rounded-xl bg-white p-3 shadow-lift"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className="truncate text-xs font-medium text-ink"
+                        title={item.name}
+                      >
+                        {item.name}{" "}
+                        {item.version && (
+                          <span className="font-normal text-muted">
+                            {item.version}
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        className="mt-1 truncate text-[11px] text-muted"
+                        title={item.source}
+                      >
+                        {item.kind === "local"
+                          ? "本地路径"
+                          : item.kind === "bundled"
+                            ? "应用内置"
+                            : item.kind === "npm"
+                              ? ""
+                              : item.kind}
+                        {item.kind === "npm" ? "" : " · "}
+                        {item.kind === "bundled" ? "随中庭更新" : item.source}
+                      </div>
                     </div>
-                    <div className="mt-1 break-all text-[11px] text-muted">
-                      {item.kind === "local"
-                        ? "本地路径"
-                        : item.kind === "bundled"
-                          ? "应用内置"
-                          : item.kind}{" "}
-                      · {item.kind === "bundled" ? "随中庭更新" : item.source}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <label
-                      className="switch-row !m-0 !p-0"
-                      title={
-                        item.kind === "bundled"
-                          ? "应用内置，不可修改"
-                          : list.mode === "shared"
-                            ? "转为独立安装后可修改"
-                            : `切换 ${item.name}`
-                      }
-                    >
-                      <input
-                        type="checkbox"
-                        role="switch"
-                        className="disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label={`启用 ${item.name}`}
-                        checked={item.enabled}
-                        disabled={
-                          !!busy ||
-                          list.mode === "shared" ||
+                    <div className="flex shrink-0 items-center gap-1">
+                      <label
+                        className="switch-row !m-0 !p-0"
+                        title={
                           item.kind === "bundled"
+                            ? "应用内置，不可修改"
+                            : list.mode === "shared"
+                              ? "转为独立安装后可修改"
+                              : `切换 ${item.name}`
                         }
-                        onChange={() =>
-                          void act(
-                            item.enabled ? "disable" : "enable",
-                            item.source,
-                          )
-                        }
-                      />
-                    </label>
-                    {list.mode === "own" && item.kind !== "bundled" && (
-                      <>
-                        {item.kind !== "local" && (
+                      >
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          className="disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={`启用 ${item.name}`}
+                          checked={item.enabled}
+                          disabled={
+                            !!busy ||
+                            list.mode === "shared" ||
+                            item.kind === "bundled"
+                          }
+                          onChange={() =>
+                            void act(
+                              item.enabled ? "disable" : "enable",
+                              item.source,
+                            )
+                          }
+                        />
+                      </label>
+                      {list.mode === "own" && item.kind !== "bundled" && (
+                        <>
+                          {item.kind !== "local" && (
+                            <button
+                              type="button"
+                              className="icon-button disabled:opacity-50"
+                              aria-label={`更新 ${item.name}`}
+                              title={`更新 ${item.name}`}
+                              disabled={!!busy}
+                              onClick={() => void act("update", item.source)}
+                            >
+                              <RotateCw size={15} />
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="icon-button disabled:opacity-50"
-                            aria-label={`更新 ${item.name}`}
-                            title={`更新 ${item.name}`}
+                            aria-label={`移除 ${item.name}`}
+                            title={`移除 ${item.name}`}
                             disabled={!!busy}
-                            onClick={() => void act("update", item.source)}
+                            onClick={() => setRemoveSource(item.source)}
                           >
-                            <RotateCw size={15} />
+                            <Trash2 size={15} />
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className="icon-button disabled:opacity-50"
-                          aria-label={`移除 ${item.name}`}
-                          title={`移除 ${item.name}`}
-                          disabled={!!busy}
-                          onClick={() => setRemoveSource(item.source)}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-                {removeSource === item.source && (
-                  <div
-                    role="dialog"
-                    aria-label={`确认移除 ${item.name}`}
-                    className="mt-3 rounded-xl bg-soft p-3 text-xs"
-                  >
-                    <p className="m-0">
-                      移除「{item.name}」？运行中的 Agent 需重启后生效。
-                    </p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        type="button"
-                        className="button"
-                        disabled={!!busy}
-                        onClick={() => void act("remove", item.source)}
-                      >
-                        确认移除
-                      </button>
-                      <button
-                        type="button"
-                        className="button secondary"
-                        disabled={!!busy}
-                        onClick={() => setRemoveSource(null)}
-                      >
-                        取消
-                      </button>
+                        </>
+                      )}
                     </div>
                   </div>
-                )}
-              </li>
-            ))}
+                  {removeSource === item.source && (
+                    <div
+                      role="dialog"
+                      aria-label={`确认移除 ${item.name}`}
+                      className="mt-3 rounded-xl bg-soft p-3 text-xs"
+                    >
+                      <p className="m-0">
+                        移除「{item.name}」？运行中的 Agent 需重启后生效。
+                      </p>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          className="button"
+                          disabled={!!busy}
+                          onClick={() => void act("remove", item.source)}
+                        >
+                          确认移除
+                        </button>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          disabled={!!busy}
+                          onClick={() => setRemoveSource(null)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              ))}
           </ul>
         ) : (
           <p className="text-xs text-muted">没有安装插件</p>
@@ -308,7 +333,7 @@ export function AgentPlugins({
             disabled={!!busy}
             onClick={() => setConfirm("shared")}
           >
-            切回共享安装
+            使用个人 Pi 插件（停用此身份的独立插件）
           </button>
           {confirm === "shared" && (
             <div

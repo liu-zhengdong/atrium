@@ -184,6 +184,9 @@ export async function createApp(options: {
   }));
   app.get("/api/settings/agent-defaults", () => agentDefaults(options.data));
   app.get("/api/settings/agent-defaults/template", () => templateDefaults());
+  app.get("/api/settings/agent-defaults/models", async () =>
+    runtimes ? runtimes.modelsForDefaults() : [],
+  );
   app.put("/api/settings/agent-defaults", (request) => {
     const input = z
       .object({

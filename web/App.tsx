@@ -14,6 +14,11 @@ import { ChatView } from "./chat/ChatView.tsx";
 import { CreateChatDialog } from "./chat/ChatDialogs.tsx";
 import { SettingsCenter } from "./settings/SettingsCenter.tsx";
 import type { SettingsPage } from "./settings/types.ts";
+import {
+  allowNextNavigation,
+  confirmLeave,
+  hasUnsaved,
+} from "./settings/unsaved.ts";
 import { RecordsView } from "./records/RecordsView.tsx";
 import {
   emptyFilters,
@@ -33,9 +38,64 @@ export function App() {
   const [chatId, setChatId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [modal, setModal] = useState<"agent" | "chat" | null>(null);
-  const [settings, setSettings] = useState<SettingsPage | null>(null);
+  const route = () => {
+    const hash = window.location.hash;
+    if (hash.startsWith("#/settings/agents/"))
+      return {
+        page: "agent" as SettingsPage,
+        id: decodeURIComponent(hash.slice("#/settings/agents/".length)),
+      };
+    if (hash === "#/settings/agents")
+      return { page: "agents" as SettingsPage, id: null };
+    if (hash.startsWith("#/settings/"))
+      return {
+        page: hash.slice("#/settings/".length) as SettingsPage,
+        id: null,
+      };
+    return { page: null as SettingsPage | null, id: null as string | null };
+  };
+  const [location, setLocation] = useState(route);
+  const [settings, setSettings] = useState<SettingsPage | null>(route().page);
+  useEffect(() => {
+    let previous = window.location.hash;
+    let restoring = false;
+    const sync = () => {
+      if (!restoring && !confirmLeave()) {
+        restoring = true;
+        window.location.hash = previous;
+        return;
+      }
+      restoring = false;
+      previous = window.location.hash;
+      const next = route();
+      setLocation(next);
+      setSettings(next.page);
+    };
+    const warn = (event: BeforeUnloadEvent) => {
+      if (hasUnsaved()) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("hashchange", sync);
+    window.addEventListener("beforeunload", warn);
+    return () => {
+      window.removeEventListener("hashchange", sync);
+      window.removeEventListener("beforeunload", warn);
+    };
+  }, []);
+  function openConfig(id: string) {
+    window.location.hash = `#/settings/agents/${encodeURIComponent(id)}`;
+  }
+  function closeSettings() {
+    if (!confirmLeave()) return;
+    if (window.location.hash) {
+      allowNextNavigation();
+      window.location.hash = "";
+    }
+    setSettings(null);
+  }
   const [accountFocus, setAccountFocus] = useState<string | null>(null);
-  const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   // 轨迹抽屉和群信息抽屉共用右侧位置，互斥打开。
   const [groupOpen, setGroupOpen] = useState(false);
@@ -193,7 +253,6 @@ export function App() {
                       openAgent={(agent) => void openAgent(agent)}
                       details={setAgentId}
                       create={() => setModal("agent")}
-                      refresh={refresh}
                     />
                   )}
                   {section === "records" && (
@@ -244,23 +303,11 @@ export function App() {
             </main>
             {selectedAgent && (
               <AgentDrawer
-                key={`${selectedAgent.id}-${settingsAgentId === selectedAgent.id}`}
+                key={selectedAgent.id}
                 agent={selectedAgent}
-                initialTab={
-                  settingsAgentId === selectedAgent.id ? "settings" : "trace"
-                }
                 revision={revision}
-                close={() => {
-                  setAgentId(null);
-                  setSettingsAgentId(null);
-                }}
-                refresh={refresh}
-                openAccounts={(account) => {
-                  setAgentId(null);
-                  setSettingsAgentId(null);
-                  setAccountFocus(account);
-                  setSettings("accounts");
-                }}
+                close={() => setAgentId(null)}
+                openConfig={() => openConfig(selectedAgent.id)}
               />
             )}
             {groupOpen && active?.kind === "group" && overview && (
@@ -305,16 +352,27 @@ export function App() {
       {settings && (
         <SettingsCenter
           page={settings}
-          setPage={setSettings}
+          setPage={(page) => {
+            window.location.hash = `#/settings/${page}`;
+          }}
           focus={accountFocus}
           agents={overview?.agents ?? []}
-          close={() => setSettings(null)}
+          close={closeSettings}
+          agentId={location.id}
+          openConfig={openConfig}
+          openChat={(id) => {
+            if (!confirmLeave()) return;
+            if (window.location.hash) {
+              allowNextNavigation();
+              window.location.hash = "";
+            }
+            setSettings(null);
+            const found = overview?.agents.find((a) => a.id === id);
+            if (found) void openAgent(found);
+          }}
           changed={refresh}
           openAgent={(id) => {
-            setSettings(null);
-            setSection("agents");
-            setAgentId(id);
-            setSettingsAgentId(id);
+            openConfig(id);
           }}
         />
       )}

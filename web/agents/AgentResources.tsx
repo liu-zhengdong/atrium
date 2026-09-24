@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import { api } from "../api.ts";
+import { confirmLeave, trackUnsaved } from "../settings/unsaved.ts";
 
 type Skill = {
   key: string;
@@ -105,9 +106,15 @@ export function AgentSkills({ agentId }: { agentId: string }) {
                   {item.name}
                 </strong>
                 {item.description && (
-                  <p className="mt-1 break-words text-xs text-muted">
-                    {item.description}
-                  </p>
+                  <details className="mt-1 text-xs text-muted">
+                    <summary
+                      className="cursor-pointer truncate"
+                      title={item.description}
+                    >
+                      {item.description}
+                    </summary>
+                    <p className="mt-1 break-words">{item.description}</p>
+                  </details>
                 )}
                 {item.linkTarget && (
                   <p className="mt-1 break-all text-xs text-muted">
@@ -276,6 +283,10 @@ export function AgentMcp({ agentId }: { agentId: string }) {
       active = false;
     };
   }, [agentId]);
+  useEffect(
+    () => trackUnsaved(editing && !!value && text !== value.text),
+    [editing, value, text],
+  );
   async function save() {
     setBusy(true);
     setError("");
@@ -337,7 +348,7 @@ export function AgentMcp({ agentId }: { agentId: string }) {
           <div className="flex gap-2">
             <button
               className="button"
-              disabled={busy}
+              disabled={busy || text === value?.text}
               onClick={() => void save()}
             >
               保存
@@ -393,6 +404,13 @@ export function AgentRules({ agentId }: { agentId: string }) {
       active = false;
     };
   }, [agentId]);
+  useEffect(
+    () =>
+      trackUnsaved(
+        !!items && text !== items.find((item) => item.name === selected)?.text,
+      ),
+    [items, selected, text],
+  );
   async function save() {
     setBusy(true);
     setError("");
@@ -423,6 +441,7 @@ export function AgentRules({ agentId }: { agentId: string }) {
                 key={item.name}
                 className={`rounded-md px-2 py-1 text-xs ${selected === item.name ? "bg-soft text-ink" : "text-muted hover:bg-soft"}`}
                 onClick={() => {
+                  if (!confirmLeave()) return;
                   setSelected(item.name);
                   setText(item.text);
                   setError("");

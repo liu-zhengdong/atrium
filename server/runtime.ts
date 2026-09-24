@@ -1189,10 +1189,16 @@ export class Runtimes {
         if (this.traces.ingest(id, events)) this.changed();
         for (const event of events.items.filter((item) => item.seq > cursor)) {
           if (event.kind === "run_start") {
+            // Pi can start several turns in one run; a later turn carries no
+            // delivery event but still belongs to the run that received it.
+            const previous = this.turns.get(id);
             this.turns.set(id, {
               generation: info.generation,
               failure: null,
-              deliveryAt: null,
+              deliveryAt:
+                previous?.generation === info.generation
+                  ? previous.deliveryAt
+                  : null,
             });
             if (
               this.store.failure(id) &&

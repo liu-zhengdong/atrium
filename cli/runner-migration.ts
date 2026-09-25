@@ -50,8 +50,10 @@ export async function migrateRunner(
       try {
         await client.post(`/agents/${agent.id}/runner/prepare-migration`);
       } catch (error) {
-        if (error instanceof Problem && error.statusCode === 409) continue;
-        failed.push(`${agent.ref}：${String(error)}`);
+        if (error instanceof Problem && error.statusCode === 409) {
+          if (!error.message.includes("终端身份不由服务管理")) continue;
+          failed.push(`${agent.ref}：终端身份不由服务管理，无法迁移`);
+        } else failed.push(`${agent.ref}：${String(error)}`);
         pending.delete(agent.id);
         continue;
       }

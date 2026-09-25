@@ -92,6 +92,44 @@ test("MCP proxy generates client_id, resends once with the same key after post-w
   assert.equal(messages.size, 1);
 });
 
+test("a client that abandoned an offline call cannot trigger a late send", async (t) => {
+  let connected = false;
+  let forwarded = 0;
+  const web = createServer((_req, res) => {
+    forwarded++;
+    res.writeHead(200).end("{}");
+  });
+  web.listen(0, "127.0.0.1");
+  await once(web, "listening");
+  t.after(() => web.close());
+  const address = web.address();
+  if (!address || typeof address === "string") throw new Error("address");
+  const proxy = new RunnerMcp(
+    `http://127.0.0.1:${address.port}`,
+    () => connected,
+    "runner-token",
+    2_000,
+  );
+  await proxy.start();
+  t.after(() => proxy.close());
+  const abort = new AbortController();
+  const pending = fetch(proxy.url("a1"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(
+      call("send_message", { chat_id: "c1", body: "不要迟到" }),
+    ),
+    signal: abort.signal,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  abort.abort();
+  await assert.rejects(pending, /abort/i);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  connected = true;
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(forwarded, 0);
+});
+
 test("offline returns Chinese non-delivery; unsafe write with unknown outcome requests inspection, never retries", async (t) => {
   const offline = new RunnerMcp(
     "http://127.0.0.1:1",
@@ -104,6 +142,8 @@ test("offline returns Chinese non-delivery; unsafe write with unknown outcome re
   const offlineResult = await request(offline.url("a1"), "send_message");
   assert.equal(offlineResult.result.structuredContent?.code, "atrium_offline");
   assert.match(offlineResult.result.content[0].text, /消息未发送/);
+  assert.match(offlineResult.result.content[0].text, /atrium_offline/);
+  assert.match(offlineResult.result.content[0].text, /client_id=[\da-f-]{36}/);
   assert.doesNotMatch(offlineResult.result.content[0].text, /ECONN/);
 
   let calls = 0;

@@ -1648,10 +1648,11 @@ export class Store {
           `UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted'${since}`,
           ...args,
         );
-        this.clearFailure(id);
+        // Another successful turn does not prove a pending unknown delivery arrived.
+        if (!this.uncertainDelivery(id)) this.clearFailure(id);
       } else {
         const rows = this.all<{ id: string; text: string }>(
-          `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'${since}`,
+          `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')${since}`,
           ...args,
         );
         for (const row of rows)
@@ -1662,7 +1663,7 @@ export class Store {
             row.id,
           );
         const summaries = this.all<{ id: string }>(
-          `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted'${since}`,
+          `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')${since}`,
           ...args,
         );
         for (const row of summaries) {
@@ -1709,7 +1710,7 @@ export class Store {
       id,
     );
   }
-  accepted(id: string) {
+  accepted(id: string, preserveUncertain = false) {
     this.transaction(() => {
       const row = this.one<{
         agent_id: string;
@@ -1720,7 +1721,7 @@ export class Store {
         id,
       );
       const result = this.run(
-        "UPDATE deliveries SET state='accepted',slot=NULL,error=NULL,accepted_at=? WHERE id=? AND state='pending'",
+        `UPDATE deliveries SET state='accepted',slot=NULL,error=${preserveUncertain ? "error" : "NULL"},accepted_at=? WHERE id=? AND state='pending'`,
         Date.now(),
         id,
       );
@@ -1739,6 +1740,40 @@ export class Store {
       error.slice(0, 500),
       id,
     );
+  }
+  uncertainDelivery(agentId: string) {
+    return (
+      this.one<DeliveryRow>(
+        "SELECT * FROM deliveries WHERE agent_id=? AND state IN ('pending','accepted') AND error LIKE '投递结果未知%' ORDER BY created_at LIMIT 1",
+        agentId,
+      ) ?? null
+    );
+  }
+  /** Explicit user retry: ask Pi about the ORIGINAL id. Never make a new id here. */
+  retryUncertain(id: string) {
+    const row = this.one<DeliveryRow>(
+      "SELECT * FROM deliveries WHERE id=? AND error LIKE '投递结果未知%'",
+      id,
+    );
+    if (!row) return;
+    this.transaction(() => {
+      if (
+        row.state === "accepted" &&
+        row.kind === "summary" &&
+        this.one(
+          "SELECT 1 FROM deliveries WHERE agent_id=? AND kind='summary' AND state='pending'",
+          row.agent_id,
+        )
+      ) {
+        this.run("DELETE FROM deliveries WHERE id=?", id);
+        return;
+      }
+      this.run(
+        "UPDATE deliveries SET state='pending',slot=?,accepted_at=NULL WHERE id=? AND state IN ('pending','accepted')",
+        row.kind === "summary" ? "summary" : null,
+        id,
+      );
+    });
   }
   schedule(now = Date.now()) {
     const woke: string[] = [];

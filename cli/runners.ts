@@ -143,11 +143,12 @@ export const runnerCommands: Record<string, Command> = {
       const { connect } = await import("./service.ts");
       const client = await connect();
       const agent = findAgent(await roster(client), reference!);
-      await client.post(`/agents/${agent.id}/runner/reclaim`, {
-        confirmStopped: values["confirm-stopped"] === true,
-      });
+      const result = await client.post<{ released?: boolean }>(
+        `/agents/${agent.id}/runner/reclaim`,
+        { confirmStopped: values["confirm-stopped"] === true },
+      );
       console.log(
-        `${agent.name} 的旧进程已核实退出，运行器归属恢复；可运行 atrium start ${agent.ref} 恢复会话`,
+        `${agent.name} 的旧进程已核实退出，运行器归属已${result.released ? "解除" : "恢复"}；可运行 atrium start ${agent.ref} 恢复会话`,
       );
     },
   },
@@ -192,7 +193,7 @@ export const runnerCommands: Record<string, Command> = {
         client.post(`/runners/${ref}/rotate`, { tokenHash }),
       );
       console.log(
-        `${ref} 新凭据待连接；凭据文件：${file}（0600）。旧连接在新连接认证后应关闭。`,
+        `${ref} 新凭据待连接；凭据文件：${file}（0600）。本机请先停旧的 runner start 守护进程，再运行 atrium runner start ${ref}；新连接认证后旧凭据失效。`,
       );
     },
   },

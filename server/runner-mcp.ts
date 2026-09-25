@@ -29,7 +29,9 @@ export class RunnerMcp {
     private webUrl: string,
     private connected: () => boolean,
     private machineToken: string,
-    private waitMs = 60_000,
+    // Pi's MCP client times out after 60 seconds; reserve time for a clear
+    // tool result rather than letting the client time out first.
+    private waitMs = 45_000,
   ) {}
   async start(port = 0) {
     this.server.listen(port, "127.0.0.1");
@@ -66,7 +68,14 @@ export class RunnerMcp {
         id: call.id ?? null,
         result: {
           isError: true,
-          content: [{ type: "text", text: problem.message }],
+          // Pi renders only content.text to the model; structuredContent is
+          // retained for MCP clients but cannot carry actionable details alone.
+          content: [
+            {
+              type: "text",
+              text: `${problem.message}\n${problem.code}${"client_id" in problem ? ` · client_id=${problem.client_id}` : ""}`,
+            },
+          ],
           structuredContent: problem,
         },
       }),
@@ -111,6 +120,7 @@ export class RunnerMcp {
     }
     const safe = !name || prepared.retryAfterSend;
     const target = new URL(`/mcp/${match[1]}`, this.webUrl);
+    const deadline = Date.now() + this.waitMs;
     const send = async () =>
       fetch(target, {
         method: "POST",
@@ -131,11 +141,18 @@ export class RunnerMcp {
             : {}),
         },
         body,
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(
+          Math.max(1, Math.min(5_000, deadline - Date.now())),
+        ),
       });
-    const deadline = Date.now() + this.waitMs;
     let outcomeUnknown = false;
     while (true) {
+      // A timed-out MCP client must not cause a late tool call when Web returns.
+      if (reply.destroyed) return;
+      if (Date.now() >= deadline) {
+        this.error(reply, call, mcpConnectionProblem(prepared, outcomeUnknown));
+        return;
+      }
       if (this.connected()) {
         try {
           const result = await send();
@@ -159,10 +176,6 @@ export class RunnerMcp {
             return;
           }
         }
-      }
-      if (Date.now() >= deadline) {
-        this.error(reply, call, mcpConnectionProblem(prepared, outcomeUnknown));
-        return;
       }
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(400, deadline - Date.now())),

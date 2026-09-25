@@ -7,7 +7,8 @@ import { test } from "node:test";
 import { Runtimes } from "../server/runtime.ts";
 import { Store } from "../server/store.ts";
 import { Problem } from "../server/problem.ts";
-import { claimRunner } from "../server/runner-ownership.ts";
+import { claimRunner, ownerOf } from "../server/runner-ownership.ts";
+import { RunnerAuth } from "../server/runner-auth.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import type { RuntimeInfo } from "../shared/schema.ts";
 
@@ -156,6 +157,123 @@ test("remote delivery response lost: hold original id and explicit unknown, neve
   assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
   await f.runtimes.pump(f.agent.id, true);
   assert.equal(calls, 1);
+});
+
+test("a finished unknown turn never auto-replays, explicit retry confirms the original id", async (t) => {
+  const f = fixture(t);
+  let calls = 0;
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string, params: { id?: string }) => {
+      if (method === "_pi/runtime/status") return f.info;
+      assert.equal(method, "_pi/runtime/deliver");
+      assert.equal(params.id, f.pending.id);
+      if (++calls === 1)
+        throw new Problem(503, "应答丢失", "runner_outcome_unknown");
+      return { accepted: true, duplicate: true };
+    },
+  );
+  await f.runtimes.pump(f.agent.id, true);
+  f.store.finishTurn(f.agent.id, true); // Earlier turn completed, not proof of this delivery.
+  assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
+  await f.runtimes.pump(f.agent.id, true); // Even a new direct wake is not a retry.
+  assert.equal(calls, 1);
+  await f.runtimes.retry(f.agent.id);
+  assert.equal(calls, 2);
+  assert.equal(f.store.uncertainDelivery(f.agent.id)?.state, "accepted");
+  await f.runtimes.pump(f.agent.id, true);
+  assert.equal(calls, 2);
+  // A late successful run_end settles the accepted row; no rekey follows.
+  f.store.finishTurn(f.agent.id, true);
+  assert.equal(f.store.uncertainDelivery(f.agent.id), null);
+  assert.equal(f.store.pending(f.agent.id).length, 0);
+});
+
+test("retry after observed run_end settles a duplicate without starting another turn", async (t) => {
+  const f = fixture(t);
+  let calls = 0;
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string, params: { id?: string }) => {
+      if (method === "_pi/runtime/status") return f.info;
+      assert.equal(params.id, f.pending.id);
+      if (++calls === 1)
+        throw new Problem(503, "应答丢失", "runner_outcome_unknown");
+      return { accepted: true, duplicate: true };
+    },
+  );
+  await f.runtimes.pump(f.agent.id, true);
+  const runtime = f.runtimes as unknown as {
+    lastTurn: Map<
+      string,
+      {
+        generation: string;
+        deliveryAt: number;
+        at: number;
+        successful: boolean;
+      }
+    >;
+  };
+  runtime.lastTurn.set(f.agent.id, {
+    generation: f.info.generation,
+    deliveryAt: f.pending.created_at + 1,
+    at: f.pending.created_at + 2,
+    successful: true,
+  });
+  f.store.finishTurn(f.agent.id, true);
+  await f.runtimes.retry(f.agent.id);
+  assert.equal(calls, 2);
+  assert.equal(f.store.uncertainDelivery(f.agent.id), null);
+  assert.equal(f.store.pending(f.agent.id).length, 0);
+});
+
+test("revoked runner's identity can be released only after explicit stop confirmation", async (t) => {
+  const f = fixture(t);
+  const auth = new RunnerAuth(f.store);
+  const { runnerId } = auth.issue("测试运行器", "a".repeat(64));
+  claimRunner(f.store, f.agent.id, runnerId, "generation-1");
+  f.store.run(
+    "UPDATE agents SET runtime_id=?,runtime_pid=? WHERE id=?",
+    f.info.runtimeId,
+    f.info.pid,
+    f.agent.id,
+  );
+  (f.runtimes as unknown as { bridge: unknown }).bridge = {
+    generation: () => null,
+    requestControl: () => {
+      throw new Error("Revoked runner must never be contacted");
+    },
+    close: () => {},
+  };
+  auth.revoke(runnerId);
+  // A cached connection must not hide the actionable revoked-runner hint.
+  await assert.rejects(
+    f.runtimes.start(f.agent.id),
+    /已撤销.*atrium runner reclaim.*--confirm-stopped/,
+  );
+  f.runtimes.connections.delete(f.agent.id); // Revoked daemon has exited.
+  await assert.rejects(
+    f.runtimes.start(f.agent.id),
+    /已撤销.*atrium runner reclaim.*--confirm-stopped/,
+  );
+  await assert.rejects(
+    f.runtimes.reclaimRunner(f.agent.id, false),
+    /确认旧 Pi 已停止/,
+  );
+  assert.equal(ownerOf(f.store, f.agent.id)?.runner_id, runnerId);
+  const result = await f.runtimes.reclaimRunner(f.agent.id, true);
+  assert.equal(result.released, true);
+  assert.equal(ownerOf(f.store, f.agent.id), null);
+  assert.equal(
+    f.store.one<{ runtime_id: string | null }>(
+      "SELECT runtime_id FROM agents WHERE id=?",
+      f.agent.id,
+    )?.runtime_id,
+    null,
+  );
+  assert.equal(f.runtimes.canBindRunner(f.agent.id), true);
 });
 
 test("runner offline before delivery keeps pending with no false identity failure", async (t) => {

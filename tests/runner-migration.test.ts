@@ -62,6 +62,35 @@ test("one-time migration waits visibly with a limit, hands off identities separa
   assert(!actions.some((path) => path.includes("/agents/a1/start")));
 });
 
+test("terminal identity reports the actual 409 once instead of waiting until the deadline", async () => {
+  const started = Date.now();
+  const result = await migrateRunner(
+    {
+      get: async () => ({
+        agents: [
+          {
+            id: "a1",
+            ref: "a1",
+            name: "终端",
+            runner: null,
+            running: false,
+            runtime: null,
+          },
+        ],
+      }),
+      post: async () => {
+        throw new Problem(409, "终端身份不由服务管理");
+      },
+    } as unknown as Client,
+    "r1",
+    3,
+    () => undefined,
+  );
+  assert.deepEqual(result.skipped, []);
+  assert.match(result.failed[0]!, /a1：终端身份不由服务管理/);
+  assert(Date.now() - started < 1000);
+});
+
 test("one identity's failed start does not restart the old writer or block a sleeping identity", async () => {
   const agents = [
     {

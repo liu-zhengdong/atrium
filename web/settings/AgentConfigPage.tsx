@@ -149,6 +149,15 @@ export function AgentConfigPage({
           {error}
         </p>
       )}
+      {agent.runner?.revoked && (
+        <p role="status" className="mb-6 rounded-lg bg-soft px-3 py-2 text-xs">
+          运行器 {agent.runner.id} 已撤销。确认旧 Pi 已停止后，运行{" "}
+          <code className="break-all">
+            atrium runner reclaim {agent.ref} --confirm-stopped
+          </code>
+          ，再重新绑定或启动。
+        </p>
+      )}
       <div className="flex items-start gap-10">
         <div className="min-w-0 flex-1 space-y-10 [&_.settings-section]:!m-0 [&_.settings-section]:!border-0 [&_.settings-section]:!p-0">
           <section id="model" className="space-y-5">

@@ -65,7 +65,8 @@ import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
 import { commandAgent } from "../shared/command-agent.ts";
-import { ownerOf, rebindStopped } from "./runner-ownership.ts";
+import { wakesOffline } from "./delivery.ts";
+import { ownerOf, rebindStopped, releaseRunner } from "./runner-ownership.ts";
 import type { RunnerBridge } from "./runner-bridge.ts";
 
 const require = createRequire(import.meta.url);
@@ -126,6 +127,7 @@ export class Runtimes {
   readonly traceErrors = new Map<string, string>();
   readonly traces: TraceStore;
   readonly turns: TurnLedger;
+  private manuallyRetrying = new Set<string>();
   private idleAccepted = new Map<
     string,
     { runtime: string; generation: string; since: number }
@@ -190,6 +192,12 @@ export class Runtimes {
   runnerGeneration(runnerId: string) {
     return this.bridge?.generation(runnerId) ?? null;
   }
+  private runnerRevoked(runnerId: string) {
+    return !!this.store.one(
+      "SELECT 1 FROM runners WHERE number=? AND revoked_at IS NOT NULL",
+      Number(runnerId.slice(1)),
+    );
+  }
   noteRunnerRecovery(
     rebound: string[],
     locked: Record<string, "alive" | "unknown">,
@@ -214,6 +222,41 @@ export class Runtimes {
   async reclaimRunner(agentId: string, confirmStopped: boolean) {
     const owner = ownerOf(this.store, agentId);
     if (!owner || !this.bridge) throw new Problem(404, "身份没有运行器归属");
+    if (this.runnerRevoked(owner.runner_id)) {
+      const command = `atrium runner reclaim ${this.store.agent(agentId).ref} --confirm-stopped`;
+      if (!confirmStopped)
+        throw new Problem(
+          409,
+          `归属运行器 ${owner.runner_id} 已撤销；确认旧 Pi 已停止后执行 ${command}`,
+          "runner_locked",
+          undefined,
+          command,
+        );
+      this.store.transaction(() => {
+        if (
+          !releaseRunner(
+            this.store,
+            agentId,
+            owner.runner_id,
+            owner.generation,
+            true,
+          )
+        )
+          throw new Problem(409, "身份运行器归属已变化，请重新查询");
+        this.store.run(
+          "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL WHERE id=?",
+          agentId,
+        );
+      });
+      this.connections.delete(agentId);
+      this.restored.delete(agentId);
+      this.errors.delete(agentId);
+      this.discovered = this.discovered.filter(
+        (item) => item.bound_agent !== agentId,
+      );
+      this.changed();
+      return { recovered: true, released: true };
+    }
     if (
       this.connections.has(agentId) &&
       this.bridge.generation(owner.runner_id) === owner.generation
@@ -914,8 +957,14 @@ export class Runtimes {
     const binding = this.binding(id);
     if (this.switching.has(id) && !fresh)
       throw new Problem(409, "正在切换会话，请稍候");
-    if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     const owner = ownerOf(this.store, id);
+    if (owner && this.runnerRevoked(owner.runner_id))
+      throw new Problem(
+        409,
+        `归属运行器 ${owner.runner_id} 已撤销；确认旧 Pi 已停止后运行 atrium runner reclaim ${this.store.agent(id).ref} --confirm-stopped`,
+        "runner_locked",
+      );
+    if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (
       owner
         ? this.running(id)
@@ -1277,6 +1326,19 @@ export class Runtimes {
       )
         throw new Problem(409, "回合或投递尚未结算，继续等待");
       await this.stop(id);
+      // identity/stop may acknowledge before the local Pi exits. Never hand
+      // the lease to a runner while the old writer is still alive.
+      const deadline = Date.now() + 10_000;
+      while (alive(info.pid) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      if (alive(info.pid))
+        throw new Problem(409, "旧 Pi 尚未退出，暂不交接；请稍后重试此身份");
+      // Discovery is refreshed every three seconds, so a just-stopped local
+      // runtime could otherwise appear to belong to the newly claimed runner.
+      await this.discover();
+      this.discovered = this.discovered.filter(
+        (item) => item.runtimeId !== info.runtimeId,
+      );
       this.migrationLocks.set(id, Date.now() + 15_000);
     } finally {
       this.switching.delete(id);
@@ -1448,9 +1510,9 @@ export class Runtimes {
   pump(id: string, direct = false): Promise<void> {
     if (this.stopped || this.draining || this.isMigrating(id))
       return Promise.resolve();
-    // A lost response after send is not an acknowledged delivery. Never
-    // automatically give it a new id, even when a new direct wake arrives.
-    if (this.store.failure(id)?.text.startsWith("投递结果未知"))
+    // A lost response is not an acknowledged delivery. A later successful
+    // turn or direct wake must not silently lift this gate.
+    if (this.store.uncertainDelivery(id) && !this.manuallyRetrying.has(id))
       return Promise.resolve();
     if (this.store.failure(id) && !direct) {
       if (this.discoveredOnce && !this.running(id, this.discovered))
@@ -1522,7 +1584,7 @@ export class Runtimes {
           });
           runtime = this.connections.get(id);
         } else {
-          if (this.store.pending(id).some((item) => item.kind === "direct"))
+          if (wakesOffline(this.store.pending(id)))
             await this.start(id, !direct).catch((error) => {
               operationFailed = true;
               throw error;
@@ -1557,6 +1619,13 @@ export class Runtimes {
       }
       let triggeredTurn = false;
       for (const pending of this.store.pending(id)) {
+        // A successful turn can clear the identity failure while its delivery
+        // remains uncertain. Only an explicit retry may ask Pi about this id.
+        if (
+          pending.error?.startsWith("投递结果未知") &&
+          !this.manuallyRetrying.has(id)
+        )
+          break;
         if (this.store.failure(id) && !direct) break;
         if (pending.kind === "summary" && (runtime.info.busy || triggeredTurn))
           continue;
@@ -1600,9 +1669,24 @@ export class Runtimes {
           this.assertOpen();
           if (!result.accepted) throw new Error("Pi 未确认接收");
           if (result.duplicate) {
-            // Pi has seen this id, but did not prove its turn finished. Never
-            // keep sending the same id: duplicate returns without a new event.
-            this.store.rekeyPending(pending.id);
+            if (pending.error?.startsWith("投递结果未知")) {
+              // Pi proves reception of the original id. Preserve uncertainty
+              // until its run_end is observed; never rekey an uncertain delivery.
+              this.store.accepted(pending.id, true);
+              await this.capture(id, runtime.info);
+              const turn = this.lastTurn.get(id);
+              if (
+                turn?.generation === runtime.info.generation &&
+                turn.successful &&
+                turn.deliveryAt !== null &&
+                turn.deliveryAt >= pending.created_at &&
+                turn.at >= turn.deliveryAt
+              )
+                this.store.completeDelivery(pending.id);
+            } else {
+              // An unrelated earlier id has no proof of completion.
+              this.store.rekeyPending(pending.id);
+            }
             this.changed();
             break;
           }
@@ -1688,7 +1772,7 @@ export class Runtimes {
   /** Unknown outcomes retry only after the old process is gone or a settled idle status. */
   private reconcileAccepted(id: string, info: RuntimeInfo | null) {
     const row = this.store.one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM deliveries WHERE agent_id=? AND state='accepted'",
+      "SELECT COUNT(*) AS n FROM deliveries WHERE agent_id=? AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')",
       id,
     );
     if (!row?.n) {
@@ -1850,10 +1934,23 @@ export class Runtimes {
     this.store.agent(id);
     const runtime = this.connections.get(id);
     if (runtime) await this.capture(id, runtime.info);
-    if (!this.store.failure(id))
+    const uncertain = this.store.uncertainDelivery(id);
+    if (!this.store.failure(id) && !uncertain)
       throw new Problem(409, "Agent 当前没有运行错误");
     if (runtime?.info.busy)
       throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
+    if (uncertain) {
+      if (this.pumping.has(id)) await this.pumping.get(id);
+      this.store.retryUncertain(uncertain.id);
+      this.store.clearFailure(id);
+      this.manuallyRetrying.add(id);
+      try {
+        await this.pump(id, true);
+      } finally {
+        this.manuallyRetrying.delete(id);
+      }
+      return;
+    }
     this.store.finishTurn(id, false);
     await this.pump(
       id,

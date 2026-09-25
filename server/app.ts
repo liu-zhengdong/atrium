@@ -707,6 +707,12 @@ export async function createApp(options: {
       error: null,
     };
     const available = new Set(discovery.runtimes.map((r) => r.bound_agent));
+    const revokedRunners = new Set(
+      runnerAuth
+        .list()
+        .filter((r) => r.state === "revoked")
+        .map((r) => r.runnerId),
+    );
     const restart = readRestartState(options.data);
     return {
       version: currentVersion(),
@@ -729,6 +735,7 @@ export async function createApp(options: {
             ? {
                 id: owner.runner_id,
                 generation: owner.generation,
+                revoked: revokedRunners.has(owner.runner_id),
                 connected:
                   runtimes?.runnerGeneration(owner.runner_id) ===
                   owner.generation,

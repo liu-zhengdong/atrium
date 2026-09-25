@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 import { notifyTerminal } from "../server/incident-notice.ts";
+import { messageRecords } from "../server/records.ts";
 import { classifyFailure, retryDecision } from "../server/incident.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
@@ -248,6 +249,13 @@ test("用户群里仍在等则写群系统消息，Agent 发起者消息箱同�
   assert.equal(system[0].sender_name, "系统");
   assert.equal(system[0].subject_agent_id, failed.id);
   assert.match(system[0].body, /atrium new-session/);
+  const record = messageRecords(store, { q: "米芙运行出错" }).items[0];
+  assert.equal(record.subject_agent_id, failed.id);
+  assert.equal(record.sender_name, "系统");
+  assert.equal(
+    store.search("米芙运行出错").messages[0].subject_agent_id,
+    failed.id,
+  );
   assert.equal(store.boxCount(peer.id), peerInboxBefore + 1);
   assert.equal(
     store.one<{ n: number }>(

@@ -218,11 +218,60 @@ export async function createApp(options: {
         throw new Problem(403, "不接受跨站请求");
     }
   });
+  const agentParams = (request: FastifyRequest) =>
+    z.object({ id }).parse(request.params).id;
+  const requireAgent = (request: FastifyRequest) => {
+    const agentId = agentParams(request),
+      token = request.headers.authorization?.replace(/^Bearer /i, "") ?? "";
+    if (!store.authenticate(agentId, token))
+      throw new Problem(401, "Agent 凭据无效");
+    return agentId;
+  };
+  const hookAgent = (request: FastifyRequest): string | null => {
+    const params = z
+      .object({ ref: z.string().regex(/^a[1-9][0-9]*$/), token: z.string() })
+      .parse(request.params);
+    let agentId: string;
+    try {
+      agentId = store.resolveAgentId(params.ref);
+    } catch {
+      return null;
+    }
+    return auth.validHook(agentId, params.token) ? agentId : null;
+  };
+  const requireRotation = (request: FastifyRequest) => {
+    const authorization = request.headers.authorization;
+    const control = options.controlToken;
+    if (
+      !auth.validUser(authorization) &&
+      !(control && authorization?.replace(/^Bearer /i, "") === control)
+    )
+      throw new Problem(
+        401,
+        "用户或实例控制凭据无效",
+        "auth_required",
+        undefined,
+        "atrium auth rotate",
+      );
+  };
   // onRequest has the matched route but runs before Fastify reads the body.
   // Raw /%61pi/overview matches /api/overview after decoding.
   app.addHook("onRequest", async (request, reply) => {
     if (options.auth === false) return;
     const route = request.routeOptions.url ?? "";
+    if (route === "/mcp/:id") {
+      requireAgent(request);
+      return;
+    }
+    if (route === "/hooks/:ref/:token") {
+      if (!hookAgent(request))
+        return reply.code(404).send({ error: "推送地址无效" });
+      return;
+    }
+    if (route === "/api/auth/rotate") {
+      requireRotation(request);
+      return;
+    }
     const policy = authPolicy(request.method, route);
     if (
       policy === "public" &&
@@ -299,33 +348,12 @@ export async function createApp(options: {
     reply.header("Set-Cookie", auth.clearCookie());
     return { ok: true };
   });
-  app.post("/api/auth/rotate", (request) => {
-    const authorization = request.headers.authorization;
-    const control = options.controlToken;
-    if (
-      !auth.validUser(authorization) &&
-      !(control && authorization?.replace(/^Bearer /i, "") === control)
-    )
-      throw new Problem(
-        401,
-        "用户或实例控制凭据无效",
-        "auth_required",
-        undefined,
-        "atrium auth rotate",
-      );
+  app.post("/api/auth/rotate", { bodyLimit: 16 * 1024 }, (request) => {
+    requireRotation(request);
     auth.rotate();
     revokeSubscriptions();
     return { rotated: true };
   });
-  const agentParams = (request: FastifyRequest) =>
-    z.object({ id }).parse(request.params).id;
-  const requireAgent = (request: FastifyRequest) => {
-    const agentId = agentParams(request),
-      token = request.headers.authorization?.replace(/^Bearer /i, "") ?? "";
-    if (!store.authenticate(agentId, token))
-      throw new Problem(401, "Agent 凭据无效");
-    return agentId;
-  };
   const accountRef = (request: FastifyRequest) =>
     z.object({ ref: z.string() }).parse(request.params).ref;
   const identityRef = (request: FastifyRequest) =>
@@ -947,26 +975,22 @@ export async function createApp(options: {
     if (result.stored) changed();
     return result;
   });
-  app.post("/hooks/:ref/:token", async (request, reply) => {
-    const params = z
-      .object({ ref: z.string().regex(/^a[1-9][0-9]*$/), token: z.string() })
-      .parse(request.params);
-    let agentId: string;
-    try {
-      agentId = store.resolveAgentId(params.ref);
-    } catch {
-      return reply.code(404).send({ error: "推送地址无效" });
-    }
-    if (!auth.validHook(agentId, params.token))
-      return reply.code(404).send({ error: "推送地址无效" });
-    const result = await receiveInbox(store, store.agent(agentId), {
-      headers: request.headers,
-      query: request.query,
-      body: request.body,
-    });
-    if (result.stored) changed();
-    return result;
-  });
+  app.post(
+    "/hooks/:ref/:token",
+    { bodyLimit: 256 * 1024 },
+    async (request, reply) => {
+      // Recheck after body parsing: a token may be revoked while a valid request streams.
+      const agentId = hookAgent(request);
+      if (!agentId) return reply.code(404).send({ error: "推送地址无效" });
+      const result = await receiveInbox(store, store.agent(agentId), {
+        headers: request.headers,
+        query: request.query,
+        body: request.body,
+      });
+      if (result.stored) changed();
+      return result;
+    },
+  );
   app.get("/api/agents/:ref/adapters/url", (request) => {
     const agentId = store.resolveAgentId(accountRef(request));
     return {

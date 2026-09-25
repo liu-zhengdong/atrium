@@ -331,6 +331,13 @@ test("a webhook token writes only its own inbox and cannot call /api or another 
       payload: { sample: true },
     });
     assert.equal(posted.statusCode, 200, posted.body);
+    const oversized = await f.app.inject({
+      method: "POST",
+      url: `/hooks/${aRef}/${hook}`,
+      headers: { "content-type": "text/plain" },
+      payload: "x".repeat(256 * 1024 + 1),
+    });
+    assert.equal(oversized.statusCode, 413);
     assert.equal(
       f.store.one<{ n: number }>(
         "SELECT COUNT(*) AS n FROM inbox WHERE agent_id=?",

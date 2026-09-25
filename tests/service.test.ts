@@ -19,6 +19,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { Store } from "../server/store.ts";
 import { userTokenPath } from "../server/user-auth.ts";
+import { declaredBodyWithoutBytes } from "./raw-http.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   alive,
@@ -402,9 +403,21 @@ test(
   { timeout: 60000 },
   async (t) => {
     const f = await fixture(t);
-    assert.equal((await f.cli("--no-open")).code, 0);
+    const started = await f.cli("--no-open");
+    assert.equal(started.code, 0, started.stderr || started.stdout);
     const record = readService(f.data)!;
     const url = serviceUrl(record);
+    for (const path of [
+      "/api/service/stop",
+      "/api/service/prepare-restart",
+      "/api/service/probe",
+      "/api/service/wake",
+    ])
+      assert.equal(
+        await declaredBodyWithoutBytes(record.port, path),
+        401,
+        path,
+      );
     const deniedHeaders: Record<string, string>[] = [
       {},
       { authorization: "Bearer wrong" },

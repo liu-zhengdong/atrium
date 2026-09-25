@@ -191,7 +191,7 @@ Atrium 使用 ACP SDK 调用 pi-atrium 声明的 `runtime/v1` 能力；Pi 进程
 
 ## 外部事件
 
-每个 Agent 有独立的 `POST /hooks/:ref/:push-token` 接收口，接受 JSON 或任意文本正文（原文保留）。先运行 `atrium adapters url 身份` 获取完整地址；不要在公开记录中留下地址。推送凭据只能写对应身份消息箱，不能读用户 API 或代理 Agent 工具。`atrium adapters url 身份 --rotate` 让旧地址立即失效，`--revoke` 关闭入口。推送到达后：
+每个 Agent 有独立的 `POST /hooks/:ref/:push-token` 接收口，接受不超过 256 KiB 的 JSON 或任意文本正文（超出返回 413；无适配器时最多保留正文前 2 万字）。先运行 `atrium adapters url 身份` 获取完整地址；不要在公开记录中留下地址。推送凭据只能写对应身份消息箱，不能读用户 API 或代理 Agent 工具。`atrium adapters url 身份 --rotate` 让旧地址立即失效，`--revoke` 关闭入口。推送到达后：
 
 1. 工作目录 `adapters/` 下按文件名排序的 `.mjs` 适配器依次在独立 worker 线程中执行（5 秒超时），通过 `ctx.emit({ title, body, url? })` 写入结构化消息；`ctx.request` 携带完整请求（method / headers / query / body / rawBody）。
 2. 没有任何适配器、适配器出错或超时，原始请求落入消息箱；适配器出错同时记录一条系统通知，不丢消息。

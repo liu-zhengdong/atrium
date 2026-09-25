@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { authPolicy, protectedNamespace } from "../server/auth-policy.ts";
+import { declaredBodyWithoutBytes } from "./raw-http.ts";
 
 function rawRequest(
   port: number,
@@ -29,35 +30,6 @@ function rawRequest(
         status,
         body: response.split("\r\n\r\n").slice(1).join("\r\n\r\n"),
       });
-    });
-  });
-}
-
-function declaredBodyWithoutBytes(port: number, path: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const socket = createConnection({ host: "127.0.0.1", port });
-    let response = "";
-    socket.setTimeout(1500, () => {
-      socket.destroy();
-      reject(new Error(`${path}: authentication waited for the request body`));
-    });
-    socket.on("connect", () =>
-      socket.write(
-        `POST ${path} HTTP/1.1\r\nHost: atrium.localhost:${port}\r\nContent-Type: application/json\r\nContent-Length: 10485760\r\nConnection: close\r\n\r\n`,
-      ),
-    );
-    socket.on("data", (chunk) => {
-      response += chunk.toString();
-      const status = /^HTTP\/1\.1 (\d+)/.exec(response)?.[1];
-      if (status) {
-        socket.destroy();
-        resolve(Number(status));
-      }
-    });
-    socket.on("error", reject);
-    socket.on("close", () => {
-      if (!response)
-        reject(new Error(`${path}: connection closed without response`));
     });
   });
 }
@@ -134,12 +106,43 @@ test("negative control: without the user-auth guard an encoded API path reaches 
 
 test("anonymous requests are rejected before their declared body is read", async () => {
   const data = mkdtempSync(join(tmpdir(), "atrium-body-before-auth-"));
-  const { app } = await createApp({ data, runtime: false });
+  const routes: { method: string; url: string }[] = [];
+  const { app } = await createApp({
+    data,
+    runtime: false,
+    onRoute: (method, url) => routes.push({ method, url }),
+  });
   try {
     const address = await app.listen({ port: 0, host: "127.0.0.1" });
     const port = Number(new URL(address).port);
-    for (const path of ["/api/runners", "/%61pi/runners"])
-      assert.equal(await declaredBodyWithoutBytes(port, path), 401, path);
+    assert.equal(await declaredBodyWithoutBytes(port, "/api/runners"), 401);
+    assert.equal(await declaredBodyWithoutBytes(port, "/%61pi/runners"), 401);
+    const exceptions = routes
+      .filter(
+        ({ method, url }) =>
+          method === "POST" && authPolicy(method, url) !== "user",
+      )
+      .map(({ url }) => url)
+      .sort();
+    assert.deepEqual(exceptions, [
+      "/api/auth/rotate",
+      "/hooks/:ref/:token",
+      "/mcp/:id",
+    ]);
+    for (const url of exceptions) {
+      const path = url.replace(/:[^/]+/g, (param) =>
+        param === ":id" ? "00000000-0000-4000-8000-000000000000" : "a1",
+      );
+      const status = url.startsWith("/hooks/") ? 404 : 401;
+      assert.equal(await declaredBodyWithoutBytes(port, path), status, path);
+    }
+    assert.equal(
+      await declaredBodyWithoutBytes(
+        port,
+        "/%6dcp/00000000-0000-4000-8000-000000000000",
+      ),
+      401,
+    );
   } finally {
     await app.close();
     rmSync(data, { recursive: true, force: true });

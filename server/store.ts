@@ -49,6 +49,11 @@ import { agentTransition, type AgentFailure } from "./agent-failure.ts";
 export { Problem };
 /** 同一副样子的消息箱提醒几次。没人处理就一直提，只会把对方的会话撑大。 */
 const INBOX_REMINDERS = 3;
+const replayNote = "[上一轮运行出错，重新投递同一条消息；不是新消息。]";
+const replayDirect = (text: string) =>
+  text.endsWith(`\n${replayNote}`)
+    ? text
+    : `${text.endsWith(`\n${USER_CONFIRMATION}`) ? text.slice(0, -USER_CONFIRMATION.length - 1) : text}\n${replayNote}`;
 /** LIKE 的子串模式；% _ \ 按字面匹配，配合 ESCAPE '\\' 使用。 */
 const likePattern = (text: string) =>
   `%${text.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
@@ -207,6 +212,9 @@ export class Store {
     ).map((c) => c.name);
     if (!deliveryCols.includes("accepted_at"))
       this.db.exec("ALTER TABLE deliveries ADD COLUMN accepted_at INTEGER");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS deliveries_accepted ON deliveries(agent_id,accepted_at) WHERE state='accepted'",
+    );
     if (!deliveryCols.includes("chat_id"))
       this.db.exec(
         "ALTER TABLE deliveries ADD COLUMN chat_id TEXT REFERENCES chats(id)",
@@ -497,7 +505,7 @@ export class Store {
         id,
       );
       this.run(
-        "UPDATE deliveries SET state='cancelled',slot=NULL,error=NULL WHERE agent_id=? AND state='pending'",
+        "DELETE FROM deliveries WHERE agent_id=? AND state IN ('pending','accepted')",
         id,
       );
     };
@@ -1615,39 +1623,76 @@ export class Store {
       id,
     );
   }
-  /** A failed turn retries only deliveries still accepted; completed deliveries stay complete. */
-  finishTurn(id: string, successful: boolean) {
-    this.transaction(() => {
+  /** Event-driven settlement only touches deliveries acknowledged after this turn's Atrium input. */
+  finishTurn(id: string, successful: boolean, deliveryAt?: number) {
+    // NULL means a pre-upgrade accepted row retained for a reconstructed turn.
+    const since =
+      deliveryAt === undefined
+        ? ""
+        : " AND (accepted_at IS NULL OR accepted_at>=?)";
+    const args = deliveryAt === undefined ? [id] : [id, deliveryAt];
+    const settle = () => {
       if (successful) {
-        // run_end uses Pi's event time, but accepted_at uses the service clock and
-        // deliver can acknowledge after the event. Capture processes a run_end
-        // before the next deliver, so close the accepted snapshot, not a clock range.
+        // Pi's delivery event precedes its RPC acknowledgement. An old accepted
+        // delivery from another run must not inherit this run's success.
         this.run(
-          "UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted'",
-          id,
+          `UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted'${since}`,
+          ...args,
         );
         this.clearFailure(id);
       } else {
         const rows = this.all<{ id: string; text: string }>(
-          "SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'",
-          id,
+          `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'${since}`,
+          ...args,
         );
-        const replayNote = "[上一轮运行出错，重新投递同一条消息；不是新消息。]";
         for (const row of rows)
           this.run(
             "UPDATE deliveries SET id=?,text=?,state='pending',accepted_at=NULL WHERE id=?",
             randomUUID(),
-            row.text.endsWith(`\n${replayNote}`)
-              ? row.text
-              : `${row.text.endsWith(`\n${USER_CONFIRMATION}`) ? row.text.slice(0, -USER_CONFIRMATION.length - 1) : row.text}\n${replayNote}`,
+            replayDirect(row.text),
             row.id,
           );
-        this.run(
-          "UPDATE deliveries SET state='pending',accepted_at=NULL WHERE agent_id=? AND kind='summary' AND state='accepted'",
-          id,
+        const summaries = this.all<{ id: string }>(
+          `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted'${since}`,
+          ...args,
         );
+        for (const row of summaries) {
+          // A newer reminder already covers the same inbox. Keep one pending
+          // summary in the unique slot instead of growing orphaned NULL slots.
+          if (
+            this.one(
+              "SELECT 1 FROM deliveries WHERE agent_id=? AND kind='summary' AND state='pending' LIMIT 1",
+              id,
+            )
+          ) {
+            this.run("DELETE FROM deliveries WHERE id=?", row.id);
+          } else {
+            this.run(
+              "UPDATE deliveries SET id=?,slot='summary',state='pending',accepted_at=NULL WHERE id=?",
+              randomUUID(),
+              row.id,
+            );
+          }
+        }
       }
-    });
+    };
+    // Trace ingestion checkpoints the turn and event cursor in this same transaction.
+    if (this.db.isTransaction) settle();
+    else this.transaction(settle);
+  }
+  /** Pi kept this id in its context, but did not prove the turn completed. Retry under a fresh id. */
+  rekeyPending(id: string) {
+    const row = this.one<{ kind: DeliveryKind; text: string }>(
+      "SELECT kind,text FROM deliveries WHERE id=? AND state='pending'",
+      id,
+    );
+    if (!row) return;
+    this.run(
+      "UPDATE deliveries SET id=?,text=? WHERE id=? AND state='pending'",
+      randomUUID(),
+      row.kind === "direct" ? replayDirect(row.text) : row.text,
+      id,
+    );
   }
   pending(id: string) {
     return this.all<DeliveryRow>(

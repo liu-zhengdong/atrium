@@ -61,6 +61,7 @@ import {
   unlinkProfile,
 } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
+import { TurnLedger } from "./turns.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
@@ -123,6 +124,12 @@ export class Runtimes {
   readonly errors = new Map<string, string>();
   readonly traceErrors = new Map<string, string>();
   readonly traces: TraceStore;
+  readonly turns: TurnLedger;
+  private idleAccepted = new Map<
+    string,
+    { runtime: string; generation: string; since: number }
+  >();
+  private traceLag = new Set<string>();
   private gateway?: Gateway;
   private gateways = new Set<Gateway>();
   private opening?: Promise<Gateway>;
@@ -130,10 +137,6 @@ export class Runtimes {
   private switching = new Set<string>();
   private bindingOwners = new Map<string, string>();
   private pumping = new Map<string, Promise<void>>();
-  private turns = new Map<
-    string,
-    { generation: string; failure: string | null; deliveryAt: number | null }
-  >();
   private lastTurn = new Map<
     string,
     {
@@ -170,6 +173,7 @@ export class Runtimes {
     private authFailure: (agent: string, detail: string) => void = () => {},
   ) {
     this.traces = new TraceStore(store, redact);
+    this.turns = new TurnLedger(store, redact);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
     this.interval = setInterval(() => {
       void this.tick();
@@ -1167,8 +1171,12 @@ export class Runtimes {
     };
   }
   pump(id: string, direct = false): Promise<void> {
-    if (this.stopped || this.draining || (this.store.failure(id) && !direct))
+    if (this.stopped || this.draining) return Promise.resolve();
+    if (this.store.failure(id) && !direct) {
+      if (this.discoveredOnce && !this.running(id, this.discovered))
+        this.reconcileAccepted(id, null);
       return Promise.resolve();
+    }
     const existing = this.pumping.get(id);
     if (existing) return existing;
     const promise = this.doPump(id, direct).finally(() =>
@@ -1179,6 +1187,8 @@ export class Runtimes {
   }
   private async doPump(id: string, direct: boolean): Promise<void> {
     if (!hasAssignment(this.store, id)) {
+      if (this.discoveredOnce && !this.running(id, this.discovered))
+        this.reconcileAccepted(id, null);
       if (
         this.store.pending(id).length &&
         this.store.failure(id)?.text !== UNASSIGNED
@@ -1233,7 +1243,11 @@ export class Runtimes {
           runtime = this.connections.get(id);
         }
       }
-      if (!runtime) return;
+      if (!runtime) {
+        if (this.discoveredOnce && !this.running(id, this.discovered))
+          this.reconcileAccepted(id, null);
+        return;
+      }
       try {
         runtime.info = runtimeSchema.parse(
           await this.rpc("_pi/runtime/status", target(runtime.info)),
@@ -1248,14 +1262,17 @@ export class Runtimes {
         throw error;
       }
       await this.capture(id, runtime.info);
+      this.reconcileAccepted(id, runtime.info);
       const recovery = this.recovery.get(id);
       if (recovery) {
         await this.recover(id, recovery);
         return this.doPump(id, direct);
       }
+      let triggeredTurn = false;
       for (const pending of this.store.pending(id)) {
         if (this.store.failure(id) && !direct) break;
-        if (pending.kind === "summary" && runtime.info.busy) continue;
+        if (pending.kind === "summary" && (runtime.info.busy || triggeredTurn))
+          continue;
         // 提醒在忙时排队、空闲才送，期间可能已经读完：送出前按当时的消息箱重写，清空了就撤回。
         const text =
           pending.kind === "summary" ? this.store.reminder(id) : pending.text;
@@ -1278,20 +1295,28 @@ export class Runtimes {
                 })
             : [];
           const deliveryStart = Date.now();
-          const result = await this.rpc<{ accepted: boolean }>(
-            "_pi/runtime/deliver",
-            {
-              ...target(runtime.info),
-              id: pending.id,
-              source: "Atrium",
-              text,
-              delivery: pending.kind === "direct" ? "steer" : "followUp",
-              ...(images.length ? { images } : {}),
-            },
-          );
+          const result = await this.rpc<{
+            accepted: boolean;
+            duplicate?: boolean;
+          }>("_pi/runtime/deliver", {
+            ...target(runtime.info),
+            id: pending.id,
+            source: "Atrium",
+            text,
+            delivery: pending.kind === "direct" ? "steer" : "followUp",
+            ...(images.length ? { images } : {}),
+          });
           this.assertOpen();
           if (!result.accepted) throw new Error("Pi 未确认接收");
+          if (result.duplicate) {
+            // Pi has seen this id, but did not prove its turn finished. Never
+            // keep sending the same id: duplicate returns without a new event.
+            this.store.rekeyPending(pending.id);
+            this.changed();
+            break;
+          }
           this.store.accepted(pending.id);
+          if (pending.kind === "direct") triggeredTurn = true;
           // A turn may fail before deliver returns. Observe its end only after
           // accepting, so the failed delivery cannot be stranded as accepted.
           await this.capture(id, runtime.info);
@@ -1350,6 +1375,50 @@ export class Runtimes {
       }
     }
   }
+  /** Unknown outcomes retry only after the old process is gone or a settled idle status. */
+  private reconcileAccepted(id: string, info: RuntimeInfo | null) {
+    const row = this.store.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM deliveries WHERE agent_id=? AND state='accepted'",
+      id,
+    );
+    if (!row?.n) {
+      this.idleAccepted.delete(id);
+      return;
+    }
+    const turn = this.turns.current(id);
+    const oldGeneration =
+      turn &&
+      info &&
+      (turn.runtime_id !== info.runtimeId ||
+        turn.generation !== info.generation);
+    // A different instance cannot finish an old turn. Otherwise an idle status
+    // may precede a delayed event: wait for a quiet interval after catch-up.
+    if (info && !oldGeneration) {
+      if (info.busy || this.traceErrors.has(id) || this.traceLag.has(id)) {
+        this.idleAccepted.delete(id);
+        return;
+      }
+      const idle = this.idleAccepted.get(id);
+      if (
+        !idle ||
+        idle.runtime !== info.runtimeId ||
+        idle.generation !== info.generation
+      ) {
+        this.idleAccepted.set(id, {
+          runtime: info.runtimeId,
+          generation: info.generation,
+          since: Date.now(),
+        });
+        return;
+      }
+      if (Date.now() - idle.since < 10_000) return;
+    }
+    this.idleAccepted.delete(id);
+    this.turns.clear(id);
+    this.lastTurn.delete(id);
+    this.store.finishTurn(id, false);
+    this.changed();
+  }
   private async capture(
     id: string,
     info: RuntimeInfo,
@@ -1382,91 +1451,77 @@ export class Runtimes {
           events.sessionId !== info.sessionId
         )
           throw new Error("轨迹来自其他运行代际");
-        const cursor = this.traces.cursor(id, info.runtimeId, info.generation);
-        if (events.gap) this.turns.delete(id);
-        if (this.traces.ingest(id, events)) this.changed();
-        for (const event of events.items.filter((item) => item.seq > cursor)) {
-          if (event.kind === "run_start") {
-            // Pi can start several turns in one run; a later turn carries no
-            // delivery event but still belongs to the run that received it.
-            const previous = this.turns.get(id);
-            this.turns.set(id, {
-              generation: info.generation,
-              failure: null,
-              deliveryAt:
-                previous?.generation === info.generation
-                  ? previous.deliveryAt
-                  : null,
-            });
-            if (
-              this.store.failure(id) &&
-              !this.store
-                .failure(id)
-                ?.text.includes("模型认证失败，请更换 API Key")
-            ) {
-              this.store.clearFailure(id);
-              this.errors.delete(id);
-              this.changed();
-            }
-          } else if (event.kind === "delivery") {
-            const turn = this.turns.get(id);
-            if (turn?.generation === info.generation)
-              turn.deliveryAt = event.at;
-          } else if (
-            event.kind === "message" &&
-            event.name === "assistant" &&
-            event.error
-          ) {
-            const turn = this.turns.get(id);
-            if (turn?.generation === info.generation)
-              turn.failure = event.text || "模型运行失败";
-          } else if (event.kind === "run_end") {
-            // A run_end without an observed start (gap or prior service lifetime) cannot prove success.
-            const turn = this.turns.get(id);
-            if (turn?.generation === info.generation)
-              this.lastTurn.set(id, {
-                generation: info.generation,
-                at: event.at,
-                deliveryAt: turn.deliveryAt,
-                successful: !turn.failure,
-              });
-            if (this.restored.get(id) === info.generation) {
-              this.restored.delete(id);
-              if (
-                turn?.deliveryAt != null &&
-                turn.failure &&
-                this.sessionError(turn.failure)
-              )
-                this.recovery.set(id, `恢复后首轮不可用：${turn.failure}`);
-            }
-            if (turn?.generation === info.generation && turn.failure) {
-              this.authFailure(id, turn.failure);
-              if (!this.recovery.has(id))
-                this.store.setFailure(
-                  id,
-                  /\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
-                    turn.failure,
+        if (
+          this.traces.ingest(
+            id,
+            events,
+            (event) => {
+              // This callback runs before the same transaction advances trace_cursors.
+              const turn = this.turns.ingest(
+                id,
+                info.runtimeId,
+                info.generation,
+                event,
+              );
+              if (event.kind === "run_start") {
+                if (
+                  this.store.failure(id) &&
+                  !this.store
+                    .failure(id)
+                    ?.text.includes("模型认证失败，请更换 API Key")
+                ) {
+                  this.store.clearFailure(id);
+                  this.errors.delete(id);
+                }
+              } else if (event.kind === "run_end") {
+                // An end without a persisted start cannot prove completion.
+                if (turn)
+                  this.lastTurn.set(id, {
+                    generation: info.generation,
+                    at: event.at,
+                    deliveryAt: turn.delivery_at,
+                    successful: !turn.failure,
+                  });
+                if (this.restored.get(id) === info.generation) {
+                  this.restored.delete(id);
+                  if (
+                    turn?.delivery_at != null &&
+                    turn.failure &&
+                    this.sessionError(turn.failure)
                   )
-                    ? "模型认证失败，请更换 API Key"
-                    : this.redact(id, turn.failure),
-                  event.at,
-                );
-              this.store.finishTurn(id, false);
-              this.changed();
-            } else if (turn?.generation === info.generation) {
-              this.store.finishTurn(id, true);
-              this.errors.delete(id);
-              this.changed();
-            }
-            this.turns.delete(id);
-          }
+                    this.recovery.set(id, `恢复后首轮不可用：${turn.failure}`);
+                }
+                if (turn?.failure) {
+                  this.authFailure(id, turn.failure);
+                  if (!this.recovery.has(id))
+                    this.store.setFailure(
+                      id,
+                      /\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
+                        turn.failure,
+                      )
+                        ? "模型认证失败，请更换 API Key"
+                        : turn.failure,
+                      event.at,
+                    );
+                }
+                if (turn && !turn.failure) this.errors.delete(id);
+              }
+            },
+            () => this.turns.clear(id),
+          )
+        )
+          this.changed();
+        if (!events.hasMore) {
+          this.traceLag.delete(id);
+          break;
         }
-        if (!events.hasMore) break;
+        if (page === maxPages - 1) this.traceLag.add(id);
         if (strict && page === maxPages - 1)
           throw new Error(`身份 ${id} 的轨迹未在 ${maxPages} 页内同步完毕`);
       }
       this.traceErrors.delete(id);
     } catch (error) {
+      this.traceLag.add(id);
       if (!this.stopped)
         this.traceErrors.set(
           id,
@@ -1536,8 +1591,8 @@ export class Runtimes {
               this.capture(id, entry.info, 100, true),
             ),
           );
-          busyIds = [...this.connections.keys()].filter((id) =>
-            this.turns.has(id),
+          busyIds = [...this.connections.keys()].filter(
+            (id) => this.turns.current(id) != null,
           );
           for (const id of busyIds) agents.add(id);
           if (busyIds.length === 0) return [...agents];

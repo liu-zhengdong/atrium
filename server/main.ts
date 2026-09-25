@@ -9,6 +9,9 @@ import {
   templateChoice,
 } from "./identity-env.ts";
 import { createApp } from "./app.ts";
+import { RunnerBridge } from "./runner-bridge.ts";
+import { ownerOf, rebindStopped } from "./runner-ownership.ts";
+import { z } from "zod";
 import {
   claimService,
   currentVersion,
@@ -89,11 +92,56 @@ try {
   console.log(`Pi 模板：${template.path}（来源：${template.source}）`);
   let runtimes: Awaited<ReturnType<typeof createApp>>["runtimes"];
   let store: Awaited<ReturnType<typeof createApp>>["store"];
-  ({ app, runtimes, store } = await createApp({
+  let runnerAuth: Awaited<ReturnType<typeof createApp>>["runnerAuth"];
+  ({ app, runtimes, store, runnerAuth } = await createApp({
     data,
     webRoot: join(packageRoot, "dist"),
     controlToken: lease.record.token,
   }));
+  const bridge = new RunnerBridge(
+    app.server,
+    (token) => runnerAuth.authenticateRunner(`Bearer ${token}`),
+    (principal) =>
+      runnerAuth.validRunnerCredential(
+        principal.runnerId,
+        principal.credentialId,
+      ),
+    (agentId) => ownerOf(store, agentId),
+    async (principal, method, payload) => {
+      if (method === "runner.heartbeat") return { ok: true };
+      if (method !== "runner.reconcile")
+        throw new Error("unsupported runner method");
+      const input = z
+        .object({
+          oldGeneration: z.string().nullable(),
+          defaultStatus: z.enum(["exited", "alive", "unknown"]),
+          statuses: z.record(
+            z.string(),
+            z.enum(["exited", "alive", "unknown"]),
+          ),
+        })
+        .strict()
+        .parse(payload);
+      const generation = bridge.generation(principal.runnerId);
+      if (!generation) throw new Error("运行器连接已断开");
+      const result = rebindStopped(
+        store,
+        principal.runnerId,
+        input.oldGeneration,
+        generation,
+        input.statuses,
+        input.defaultStatus,
+      );
+      runtimes?.noteRunnerRecovery(result.rebound, result.locked);
+      return result;
+    },
+    (agentId) => store.agent(agentId).ref,
+  );
+  runnerAuth.listenFencing((_runnerId, credentialIds) => {
+    for (const credentialId of credentialIds)
+      bridge.revokeCredential(credentialId);
+  });
+  runtimes?.setBridge(bridge);
   const authorize = (value: string | undefined) => {
     const actual = /^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "";
     return sameSecret(actual, lease.record.token);

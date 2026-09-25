@@ -6,18 +6,24 @@ export const runtimeLabel = (a: Agent) =>
     ? "未分配账号"
     : a.failure
       ? "出错"
-      : a.runtime
-        ? a.runtime.busy
-          ? "执行中"
-          : "在线"
-        : a.error && a.available
-          ? "暂不可用"
-          : a.available
-            ? "在线"
-            : "离线";
+      : a.runner && !a.runner.connected
+        ? "运行器离线，身份可能仍在工作"
+        : a.runtime
+          ? a.runtime.busy
+            ? "执行中"
+            : "在线"
+          : a.error && a.available
+            ? "暂不可用"
+            : a.available
+              ? "在线"
+              : "离线";
 /** 头像上的状态点表达不了的状态：连不上但报过错。在线、执行中、离线看点，不再写字。 */
 export const statusNote = (a: Agent) =>
-  !a.failure && !a.runtime && a.error && a.available ? "暂不可用" : "";
+  !a.failure && a.runner && !a.runner.connected
+    ? "运行器离线，身份可能仍在工作"
+    : !a.failure && !a.runtime && a.error && a.available
+      ? "暂不可用"
+      : "";
 /**
  * 名单里头像旁的一行：职位（自我介绍）常驻，没写就看工作声明，再没有就是短号。
  * 状态点表达不了的「暂不可用」排在最前。
@@ -32,6 +38,7 @@ export function agentPresence(
         available: boolean;
         failure?: Agent["failure"];
         runtime?: { busy: boolean } | null;
+        runner?: { connected: boolean } | null;
         unassigned?: boolean;
       }
     | undefined,
@@ -39,6 +46,7 @@ export function agentPresence(
   if (!a) return "offline";
   if ("unassigned" in a && a.unassigned) return "offline";
   if (a.failure) return "error";
+  if (a.runner && !a.runner.connected) return "offline";
   if (a.runtime?.busy) return "busy";
   if (a.available) return "online";
   return "offline";

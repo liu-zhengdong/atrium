@@ -32,7 +32,7 @@ import {
 import { GroupSpaces, spacesDir } from "./spaces.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import { resolveMentions } from "../shared/mentions.ts";
-import { ensureUsers, userNames } from "./users.ts";
+import { ensureUsers, readUser, userNames } from "./users.ts";
 import { ensureGroups } from "./groups.ts";
 import { cappedCount, type UnreadChat } from "./unread.ts";
 import {
@@ -181,6 +181,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS accounts (number INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, name TEXT NOT NULL,
         type TEXT NOT NULL CHECK(type IN ('oauth','api_key','local')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT);
       CREATE TABLE IF NOT EXISTS credential_modes (agent_id TEXT PRIMARY KEY REFERENCES agents(id), mode TEXT NOT NULL CHECK(mode IN ('shared','assigned')), shared_target TEXT);
+      CREATE TABLE IF NOT EXISTS runner_ownership (agent_id TEXT PRIMARY KEY REFERENCES agents(id), runner_id TEXT NOT NULL,
+        generation TEXT NOT NULL, claimed_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS account_assignments (agent_id TEXT NOT NULL REFERENCES agents(id), provider TEXT NOT NULL,
         account_number INTEGER NOT NULL REFERENCES accounts(number), PRIMARY KEY(agent_id,provider));
       CREATE TABLE IF NOT EXISTS identity_link_migrations (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -971,9 +973,15 @@ export class Store {
       details,
       mentions: [...new Set([...request.mentions, ...named])],
     };
-    assertCanSend(this, chat, sender, input);
+    // An acknowledged request remains acknowledged if the sender left the
+    // chat meanwhile. Only a first send needs today's membership check.
     const replay = this.replayOf(sender, input);
-    if (replay) return replay;
+    if (replay) {
+      if (isUserRef(sender)) readUser(this, sender);
+      else this.agent(sender);
+      return replay;
+    }
+    assertCanSend(this, chat, sender, input);
     const attachments = input.attachments ?? [];
     const mentionAll = !!input.mention_all;
     return this.transaction(() => {

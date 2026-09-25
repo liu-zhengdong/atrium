@@ -46,6 +46,7 @@
     "remark-gfm": "^4.0.1",
     "tsx": "^4.23.13",
     "vite": "^8.3.0",
+    "ws": "^8.21.3",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -54,6 +55,7 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
     "prettier": "3.9.7",

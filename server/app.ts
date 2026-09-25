@@ -49,6 +49,7 @@ import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { UserAuth } from "./user-auth.ts";
 import { RunnerAuth } from "./runner-auth.ts";
 import { authPolicy, protectedNamespace } from "./auth-policy.ts";
+import { claimRunner, releaseRunner, ownerOf } from "./runner-ownership.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import {
@@ -228,6 +229,24 @@ export async function createApp(options: {
       throw new Problem(401, "Agent 凭据无效");
     return agentId;
   };
+  const requireMcpAgent = (request: FastifyRequest) => {
+    const agentId = requireAgent(request);
+    const machine = request.headers["x-atrium-runner-credential"];
+    if (machine) {
+      const principal = runnerAuth.authenticateRunner(
+        z.string().parse(machine),
+      );
+      if (
+        ownerOf(store, agentId)?.runner_id !== principal.runnerId ||
+        !runnerAuth.validRunnerCredential(
+          principal.runnerId,
+          principal.credentialId,
+        )
+      )
+        throw new Problem(403, "运行器没有此身份的归属");
+    }
+    return agentId;
+  };
   const hookAgent = (request: FastifyRequest): string | null => {
     const params = z
       .object({ ref: z.string().regex(/^a[1-9][0-9]*$/), token: z.string() })
@@ -264,7 +283,7 @@ export async function createApp(options: {
     if (options.auth === false) return;
     const route = request.routeOptions.url ?? "";
     if (route === "/mcp/:id") {
-      requireAgent(request);
+      requireMcpAgent(request);
       return;
     }
     if (route === "/hooks/:ref/:token") {
@@ -319,6 +338,60 @@ export async function createApp(options: {
   app.post("/api/runners/:ref/revoke", (request) => {
     runnerAuth.revoke((request.params as { ref: string }).ref);
     return { revoked: true };
+  });
+  app.post("/api/agents/:id/runner/prepare-migration", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    await runtimes.prepareMigration(agentParams(request));
+    changed();
+    return { stopped: true };
+  });
+  app.put("/api/agents/:id/runner", (request) => {
+    const agentId = agentParams(request);
+    store.agent(agentId);
+    const { runnerId } = z
+      .object({ runnerId: z.string().regex(/^r[1-9][0-9]*$/) })
+      .strict()
+      .parse(request.body);
+    if (
+      !runnerAuth
+        .list()
+        .some((row) => row.runnerId === runnerId && row.state === "active")
+    )
+      throw new Problem(404, `运行器 ${runnerId} 不存在或已撤销`);
+    if (runtimes && !runtimes.canBindRunner(agentId))
+      throw new Problem(
+        409,
+        "身份正在接入、投递或运行；先停止并确认旧实例退出，再更换运行器归属",
+      );
+    const generation = runtimes?.runnerGeneration(runnerId);
+    if (!generation)
+      throw new Problem(503, `运行器 ${runnerId} 未连接；先启动运行器再绑定`);
+    claimRunner(store, agentId, runnerId, generation);
+    runtimes?.finishMigration(agentId);
+    changed();
+    return { runnerId, generation };
+  });
+  app.post("/api/agents/:id/runner/reclaim", async (request) => {
+    const agentId = agentParams(request);
+    const { confirmStopped } = z
+      .object({ confirmStopped: z.boolean() })
+      .strict()
+      .parse(request.body);
+    if (!runtimes) throw new Problem(503, "运行时未就绪");
+    const result = await runtimes.reclaimRunner(agentId, confirmStopped);
+    changed();
+    return result;
+  });
+  app.delete("/api/agents/:id/runner", async (request) => {
+    const agentId = agentParams(request);
+    store.agent(agentId);
+    const owner = ownerOf(store, agentId);
+    if (!owner) return { runnerId: null };
+    if (!runtimes || !(await runtimes.runnerStopped(agentId)))
+      throw new Problem(409, "旧运行器未确认身份停止，不能取消归属");
+    releaseRunner(store, agentId, owner.runner_id, owner.generation, true);
+    changed();
+    return { runnerId: null };
   });
   app.get("/api/auth/session", (request) => ({
     authenticated: auth.validSession(request.headers.cookie),
@@ -647,17 +720,30 @@ export async function createApp(options: {
               error: restart.error ?? "启动验证失败",
             }
           : null,
-      agents: store.agents().map((a) => ({
-        ...a,
-        runtime: runtimes?.connections.get(a.id)?.info ?? null,
-        available: available.has(a.id) || !!runtimes?.connections.has(a.id),
-        running: runtimes?.running(a.id, discovery.runtimes) ?? false,
-        error: store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
-        failure: store.failure(a.id),
-        unread: store.boxCount(a.id),
-        unassigned: !hasAssignment(store, a.id),
-        needs_reload: runtimes?.needsReload.has(a.id) ?? false,
-      })),
+      agents: store.agents().map((a) => {
+        const owner = ownerOf(store, a.id);
+        return {
+          ...a,
+          runtime: runtimes?.connections.get(a.id)?.info ?? null,
+          runner: owner
+            ? {
+                id: owner.runner_id,
+                generation: owner.generation,
+                connected:
+                  runtimes?.runnerGeneration(owner.runner_id) ===
+                  owner.generation,
+              }
+            : null,
+          available: available.has(a.id) || !!runtimes?.connections.has(a.id),
+          running: runtimes?.running(a.id, discovery.runtimes) ?? false,
+          error:
+            store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
+          failure: store.failure(a.id),
+          unread: store.boxCount(a.id),
+          unassigned: !hasAssignment(store, a.id),
+          needs_reload: runtimes?.needsReload.has(a.id) ?? false,
+        };
+      }),
       chats: store.chats(),
       user: readUser(store),
       discovery,
@@ -1359,24 +1445,22 @@ export async function createApp(options: {
     return result;
   });
   app.post("/mcp/:id", async (request, reply) => {
-    const agentId = requireAgent(request),
-      server = createMcp(
-        store,
-        agentId,
-        changed,
-        (id) => {
-          const info = runtimes?.connections.get(id)?.info;
-          return {
-            online:
-              !!info ||
-              !!runtimes
-                ?.directory()
-                .runtimes.some((r) => r.bound_agent === id),
-            busy: info?.busy ?? null,
-          };
-        },
-        { data: options.data, desktops, piHome },
-      );
+    const agentId = requireMcpAgent(request);
+    const server = createMcp(
+      store,
+      agentId,
+      changed,
+      (id) => {
+        const info = runtimes?.connections.get(id)?.info;
+        return {
+          online:
+            !!info ||
+            !!runtimes?.directory().runtimes.some((r) => r.bound_agent === id),
+          busy: info?.busy ?? null,
+        };
+      },
+      { data: options.data, desktops, piHome },
+    );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });

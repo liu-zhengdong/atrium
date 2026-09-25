@@ -4,15 +4,19 @@ import {
   existsSync,
   mkdirSync,
   renameSync,
+  readFileSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { dataDirectory } from "../server/service-state.ts";
+import { dataDirectory, servicePort } from "../server/service-state.ts";
+import { RunnerDaemon } from "../server/runner-daemon.ts";
 import { Problem } from "../server/problem.ts";
 import type { Command } from "./main.ts";
 import { recordResult } from "./contract.ts";
 import type { Client } from "./service.ts";
+import { findAgent, roster } from "./agents.ts";
+import { migrateRunner } from "./runner-migration.ts";
 
 const hash = (token: string) =>
   createHash("sha256").update(token).digest("hex");
@@ -46,6 +50,107 @@ async function provision(
 }
 
 export const runnerCommands: Record<string, Command> = {
+  "runner bind": {
+    args: "<身份> <r编号>",
+    about: "停止身份后交给指定本地运行器；下次启动由运行器持有会话",
+    positionals: [2, 2],
+    run: async ({ positionals: [reference, runnerId] }) => {
+      credentialFile(runnerId!);
+      const { connect } = await import("./service.ts");
+      const client = await connect();
+      const agent = findAgent(await roster(client), reference!);
+      await client.put(`/agents/${agent.id}/runner`, { runnerId });
+      console.log(
+        `${agent.name} 已归属 ${runnerId}；运行 atrium start ${agent.ref} 启动会话`,
+      );
+    },
+  },
+  "runner migrate": {
+    args: "<r编号> [--timeout 秒]",
+    about: "首次逐个交接旧身份；忙碌时列出等待项，到期跳过，不打断回合",
+    options: { timeout: { type: "string", default: "300" } },
+    positionals: [1, 1],
+    run: async ({ positionals: [runnerId], values }) => {
+      credentialFile(runnerId!);
+      const timeout = Number(values.timeout);
+      if (!Number.isInteger(timeout) || timeout < 1 || timeout > 600)
+        throw new Problem(400, "timeout 应为 1–600 秒", "usage");
+      const result = await migrateRunner(
+        await (await import("./service.ts")).connect(),
+        runnerId!,
+        timeout,
+      );
+      recordResult(result);
+      if (result.failed.length || result.skipped.length)
+        throw new Problem(
+          409,
+          "部分身份尚未迁移；上方已列出可继续操作的身份",
+          "conflict",
+        );
+    },
+  },
+  "runner unbind": {
+    args: "<身份>",
+    about: "停止身份后取消运行器归属；回到本地服务直接管理",
+    positionals: [1, 1],
+    run: async ({ positionals: [reference] }) => {
+      const { connect } = await import("./service.ts");
+      const client = await connect();
+      const agent = findAgent(await roster(client), reference!);
+      await client.delete(`/agents/${agent.id}/runner`);
+      console.log(`${agent.name} 已取消运行器归属`);
+    },
+  },
+  "runner start": {
+    args: "<r编号>",
+    about: "运行独立身份进程；服务重启时仍保留会话和回合",
+    positionals: [1, 1],
+    run: async ({ positionals }) => {
+      const runnerId = positionals[0]!;
+      const file = credentialFile(runnerId);
+      const token = readFileSync(file, "utf8").trim();
+      if (!/^[a-f0-9]{64}$/.test(token))
+        throw new Problem(400, "运行器凭据格式无效", "usage");
+      const url = `ws://127.0.0.1:${servicePort()}/runner/v1`;
+      const daemon = new RunnerDaemon(
+        url,
+        token,
+        process.env,
+        join(dataDirectory(), "runners", `${runnerId}.state.json`),
+      );
+      const stop = () => daemon.close();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      console.log(
+        `${runnerId} 本地运行器正在启动（当前进程 ${process.pid}）；停止请向本进程发 SIGTERM`,
+      );
+      try {
+        await daemon.run();
+      } finally {
+        daemon.close();
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
+      }
+    },
+  },
+  "runner reclaim": {
+    args: "<身份> [--confirm-stopped]",
+    about:
+      "核实并停止旧身份进程，然后恢复本机运行器归属；状态文件丢失时先人工核查再确认",
+    options: { "confirm-stopped": { type: "boolean", default: false } },
+    positionals: [1, 1],
+    run: async ({ positionals: [reference], values }) => {
+      const { connect } = await import("./service.ts");
+      const client = await connect();
+      const agent = findAgent(await roster(client), reference!);
+      await client.post(`/agents/${agent.id}/runner/reclaim`, {
+        confirmStopped: values["confirm-stopped"] === true,
+      });
+      console.log(
+        `${agent.name} 的旧进程已核实退出，运行器归属恢复；可运行 atrium start ${agent.ref} 恢复会话`,
+      );
+    },
+  },
   "runner list": {
     args: "",
     about: "查看本地运行器身份（不显示令牌）",
@@ -72,7 +177,7 @@ export const runnerCommands: Record<string, Command> = {
         client.post("/runners", { name: positionals[0], tokenHash }),
       );
       console.log(
-        `运行器 ${runnerId} 已颁发；凭据文件：${file}（0600）。请安全复制到目标机器。`,
+        `本机运行器 ${runnerId} 已颁发；凭据文件：${file}（0600）。运行 atrium runner start ${runnerId} 启动。`,
       );
     },
   },

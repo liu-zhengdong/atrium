@@ -38,6 +38,11 @@ export function AgentsPage({
               <span className="min-w-0 flex-1 truncate text-xs">
                 {agent.name}
               </span>
+              {agent.runner?.revoked && (
+                <span className="shrink-0 text-xs text-muted">
+                  运行器已撤销
+                </span>
+              )}
             </button>
           ))}
       </div>

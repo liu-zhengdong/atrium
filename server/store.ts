@@ -32,7 +32,7 @@ import {
 import { GroupSpaces, spacesDir } from "./spaces.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import { resolveMentions } from "../shared/mentions.ts";
-import { ensureUsers, userNames } from "./users.ts";
+import { ensureUsers, readUser, userNames } from "./users.ts";
 import { ensureGroups } from "./groups.ts";
 import { cappedCount, type UnreadChat } from "./unread.ts";
 import {
@@ -181,6 +181,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS accounts (number INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, name TEXT NOT NULL,
         type TEXT NOT NULL CHECK(type IN ('oauth','api_key','local')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT);
       CREATE TABLE IF NOT EXISTS credential_modes (agent_id TEXT PRIMARY KEY REFERENCES agents(id), mode TEXT NOT NULL CHECK(mode IN ('shared','assigned')), shared_target TEXT);
+      CREATE TABLE IF NOT EXISTS runner_ownership (agent_id TEXT PRIMARY KEY REFERENCES agents(id), runner_id TEXT NOT NULL,
+        generation TEXT NOT NULL, claimed_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS account_assignments (agent_id TEXT NOT NULL REFERENCES agents(id), provider TEXT NOT NULL,
         account_number INTEGER NOT NULL REFERENCES accounts(number), PRIMARY KEY(agent_id,provider));
       CREATE TABLE IF NOT EXISTS identity_link_migrations (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -971,9 +973,15 @@ export class Store {
       details,
       mentions: [...new Set([...request.mentions, ...named])],
     };
-    assertCanSend(this, chat, sender, input);
+    // An acknowledged request remains acknowledged if the sender left the
+    // chat meanwhile. Only a first send needs today's membership check.
     const replay = this.replayOf(sender, input);
-    if (replay) return replay;
+    if (replay) {
+      if (isUserRef(sender)) readUser(this, sender);
+      else this.agent(sender);
+      return replay;
+    }
+    assertCanSend(this, chat, sender, input);
     const attachments = input.attachments ?? [];
     const mentionAll = !!input.mention_all;
     return this.transaction(() => {
@@ -1617,10 +1625,10 @@ export class Store {
       id,
     );
   }
-  /** A deliver RPC can return after its successful run_end was observed. Complete only that confirmed delivery. */
+  /** Settle only this id after its run_end, or after duplicate plus confirmed Pi idle. */
   completeDelivery(id: string) {
     this.run(
-      "UPDATE deliveries SET state='complete' WHERE id=? AND state='accepted' AND kind='direct'",
+      "UPDATE deliveries SET state='complete' WHERE id=? AND state='accepted'",
       id,
     );
   }
@@ -1640,10 +1648,11 @@ export class Store {
           `UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted'${since}`,
           ...args,
         );
-        this.clearFailure(id);
+        // Another successful turn does not prove a pending unknown delivery arrived.
+        if (!this.uncertainDelivery(id)) this.clearFailure(id);
       } else {
         const rows = this.all<{ id: string; text: string }>(
-          `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'${since}`,
+          `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')${since}`,
           ...args,
         );
         for (const row of rows)
@@ -1654,7 +1663,7 @@ export class Store {
             row.id,
           );
         const summaries = this.all<{ id: string }>(
-          `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted'${since}`,
+          `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')${since}`,
           ...args,
         );
         for (const row of summaries) {
@@ -1689,7 +1698,7 @@ export class Store {
     );
     if (!row) return;
     this.run(
-      "UPDATE deliveries SET id=?,text=? WHERE id=? AND state='pending'",
+      "UPDATE deliveries SET id=?,text=?,error=NULL WHERE id=? AND state='pending'",
       randomUUID(),
       row.kind === "direct" ? replayDirect(row.text) : row.text,
       id,
@@ -1701,7 +1710,7 @@ export class Store {
       id,
     );
   }
-  accepted(id: string) {
+  accepted(id: string, preserveUncertain = false) {
     this.transaction(() => {
       const row = this.one<{
         agent_id: string;
@@ -1712,7 +1721,7 @@ export class Store {
         id,
       );
       const result = this.run(
-        "UPDATE deliveries SET state='accepted',slot=NULL,error=NULL,accepted_at=? WHERE id=? AND state='pending'",
+        `UPDATE deliveries SET state='accepted',slot=NULL,error=${preserveUncertain ? "error" : "NULL"},accepted_at=? WHERE id=? AND state='pending'`,
         Date.now(),
         id,
       );
@@ -1731,6 +1740,40 @@ export class Store {
       error.slice(0, 500),
       id,
     );
+  }
+  uncertainDelivery(agentId: string) {
+    return (
+      this.one<DeliveryRow>(
+        "SELECT * FROM deliveries WHERE agent_id=? AND state IN ('pending','accepted') AND error LIKE '投递结果未知%' ORDER BY created_at LIMIT 1",
+        agentId,
+      ) ?? null
+    );
+  }
+  /** Explicit user retry: ask Pi about the ORIGINAL id. Never make a new id here. */
+  retryUncertain(id: string) {
+    const row = this.one<DeliveryRow>(
+      "SELECT * FROM deliveries WHERE id=? AND error LIKE '投递结果未知%'",
+      id,
+    );
+    if (!row) return;
+    this.transaction(() => {
+      if (
+        row.state === "accepted" &&
+        row.kind === "summary" &&
+        this.one(
+          "SELECT 1 FROM deliveries WHERE agent_id=? AND kind='summary' AND state='pending'",
+          row.agent_id,
+        )
+      ) {
+        this.run("DELETE FROM deliveries WHERE id=?", id);
+        return;
+      }
+      this.run(
+        "UPDATE deliveries SET state='pending',slot=?,accepted_at=NULL WHERE id=? AND state IN ('pending','accepted')",
+        row.kind === "summary" ? "summary" : null,
+        id,
+      );
+    });
   }
   schedule(now = Date.now()) {
     const woke: string[] = [];

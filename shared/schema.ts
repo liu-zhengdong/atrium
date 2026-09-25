@@ -253,6 +253,12 @@ export type Overview = {
   } | null;
   agents: (AgentInfo & {
     runtime: RuntimeInfo | null;
+    runner: {
+      id: string;
+      connected: boolean;
+      revoked: boolean;
+      generation: string;
+    } | null;
     available: boolean;
     /** Live process check shared with the delete guard; presence may retain stale discovery. */
     running: boolean;

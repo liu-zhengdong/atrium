@@ -17,6 +17,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createServer as createViteServer } from "vite";
 import { Store } from "../server/store.ts";
+import { removeMember } from "../server/groups.ts";
 import { createApp } from "../server/app.ts";
 import { receiveInbox, writeGithubTemplate } from "../server/adapters.ts";
 import { displayDesktops, defaultDesktops } from "../server/agents.ts";
@@ -113,6 +114,35 @@ test("会话成员隔离、后续加入和私聊唯一性", (t) => {
   const dm = store.createChat("Atlas 私聊", [a.id], a.id);
   assert.equal(store.createChat("重复私聊", [a.id], a.id).id, dm.id);
   assert.throws(() => store.addMember(dm.id, b.id), /私聊不能/);
+});
+
+test("发言回执在退出群后仍可按 client_id 找回，但新发言拒绝", (t) => {
+  const { store, a, chat } = fixture(t);
+  const input = {
+    chat_id: chat.id,
+    body: "已完成",
+    mentions: [],
+    client_id: "sent-before-exit",
+  };
+  const sent = store.send(a.id, input);
+  removeMember(store, chat.id, a.id);
+  assert.equal(store.send(a.id, input).id, sent.id);
+  assert.equal(
+    store.one<{ count: number }>(
+      "SELECT count(*) AS count FROM messages WHERE sender=? AND client_id=?",
+      a.id,
+      input.client_id,
+    )?.count,
+    1,
+  );
+  assert.throws(
+    () => store.send(a.id, { ...input, client_id: "new-request" }),
+    /只能访问/,
+  );
+  assert.throws(
+    () => store.send(a.id, { ...input, body: "换内容" }),
+    /不同内容/,
+  );
 });
 
 test("用户明确 @ 和私聊走即时通道，普通消息不广播；发言幂等", (t) => {

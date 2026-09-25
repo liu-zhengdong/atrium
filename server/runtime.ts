@@ -37,7 +37,6 @@ import {
 import { Store, Problem } from "./store.ts";
 import { ensureOwnPackages } from "./identity-packages.ts";
 import { migrateTemplateLinks } from "./identity-links.ts";
-import { wakesOffline } from "./delivery.ts";
 import { atriumGuide } from "./mcp.ts";
 import {
   prepareProfile,
@@ -66,6 +65,9 @@ import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
 import { commandAgent } from "../shared/command-agent.ts";
+import { wakesOffline } from "./delivery.ts";
+import { ownerOf, rebindStopped, releaseRunner } from "./runner-ownership.ts";
+import type { RunnerBridge } from "./runner-bridge.ts";
 
 const require = createRequire(import.meta.url);
 // 服务可能从某个 herdr pane 里启动；后台身份不在那个 pane 里，去掉表示「身处此 pane」的变量，
@@ -119,22 +121,25 @@ const guideId = (agent: string, session: string) => {
 export class Runtimes {
   readonly connections = new Map<
     string,
-    { connection: ClientConnection; info: RuntimeInfo }
+    { connection: ClientConnection | null; info: RuntimeInfo }
   >();
   readonly errors = new Map<string, string>();
   readonly traceErrors = new Map<string, string>();
   readonly traces: TraceStore;
   readonly turns: TurnLedger;
+  private manuallyRetrying = new Set<string>();
   private idleAccepted = new Map<
     string,
     { runtime: string; generation: string; since: number }
   >();
   private traceLag = new Set<string>();
   private gateway?: Gateway;
+  private bridge?: RunnerBridge;
   private gateways = new Set<Gateway>();
   private opening?: Promise<Gateway>;
   private connecting = new Map<string, Promise<void>>();
   private switching = new Set<string>();
+  private migrationLocks = new Map<string, number>();
   private bindingOwners = new Map<string, string>();
   private pumping = new Map<string, Promise<void>>();
   private lastTurn = new Map<
@@ -179,6 +184,123 @@ export class Runtimes {
       void this.tick();
     }, 3000).unref();
     void this.discover();
+  }
+  setBridge(bridge: RunnerBridge) {
+    this.bridge = bridge;
+    void this.discover();
+  }
+  runnerGeneration(runnerId: string) {
+    return this.bridge?.generation(runnerId) ?? null;
+  }
+  private runnerRevoked(runnerId: string) {
+    return !!this.store.one(
+      "SELECT 1 FROM runners WHERE number=? AND revoked_at IS NOT NULL",
+      Number(runnerId.slice(1)),
+    );
+  }
+  noteRunnerRecovery(
+    rebound: string[],
+    locked: Record<string, "alive" | "unknown">,
+  ) {
+    this.bridge?.markRecovery(rebound, locked);
+    for (const id of rebound) {
+      this.connections.delete(id);
+      this.restored.delete(id);
+      this.errors.delete(id);
+    }
+    for (const [id, status] of Object.entries(locked)) {
+      const ref = this.store.agent(id).ref;
+      this.errors.set(
+        id,
+        status === "alive"
+          ? `旧进程仍在运行；确认后执行 atrium runner reclaim ${ref}`
+          : `无法确认旧进程已退出；核查后执行 atrium runner reclaim ${ref}`,
+      );
+    }
+    if (rebound.length || Object.keys(locked).length) this.changed();
+  }
+  async reclaimRunner(agentId: string, confirmStopped: boolean) {
+    const owner = ownerOf(this.store, agentId);
+    if (!owner || !this.bridge) throw new Problem(404, "身份没有运行器归属");
+    if (this.runnerRevoked(owner.runner_id)) {
+      const command = `atrium runner reclaim ${this.store.agent(agentId).ref} --confirm-stopped`;
+      if (!confirmStopped)
+        throw new Problem(
+          409,
+          `归属运行器 ${owner.runner_id} 已撤销；确认旧 Pi 已停止后执行 ${command}`,
+          "runner_locked",
+          undefined,
+          command,
+        );
+      this.store.transaction(() => {
+        if (
+          !releaseRunner(
+            this.store,
+            agentId,
+            owner.runner_id,
+            owner.generation,
+            true,
+          )
+        )
+          throw new Problem(409, "身份运行器归属已变化，请重新查询");
+        this.store.run(
+          "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL WHERE id=?",
+          agentId,
+        );
+      });
+      this.connections.delete(agentId);
+      this.restored.delete(agentId);
+      this.errors.delete(agentId);
+      this.discovered = this.discovered.filter(
+        (item) => item.bound_agent !== agentId,
+      );
+      this.changed();
+      return { recovered: true, released: true };
+    }
+    if (
+      this.connections.has(agentId) &&
+      this.bridge.generation(owner.runner_id) === owner.generation
+    )
+      throw new Problem(409, "当前会话仍在运行，请先停止");
+    const report = await this.bridge.requestControl<{
+      status: "exited" | "alive" | "unknown";
+    }>(owner.runner_id, "runner.reclaim", { agentId, confirmStopped });
+    if (report.status !== "exited")
+      throw new Problem(
+        409,
+        "旧进程未确认退出，身份仍被锁住；请先检查并停止旧进程",
+      );
+    const outcome = rebindStopped(
+      this.store,
+      owner.runner_id,
+      owner.generation,
+      this.bridge.generation(owner.runner_id)!,
+      { [agentId]: "exited" },
+      "unknown",
+    );
+    this.noteRunnerRecovery(outcome.rebound, outcome.locked);
+    return { recovered: outcome.rebound.includes(agentId) };
+  }
+  async runnerStopped(agentId: string) {
+    if (this.connections.has(agentId)) return false;
+    const owner = ownerOf(this.store, agentId);
+    if (!owner || this.bridge?.generation(owner.runner_id) !== owner.generation)
+      return false;
+    const { runtimes } = z
+      .object({
+        runtimes: z
+          .array(
+            liveRuntimeSchema.extend({
+              bound_agent: z.string().nullable().optional(),
+            }),
+          )
+          .max(256),
+      })
+      .parse(await this.rpc("_pi/runtime/list", {}, agentId));
+    return !runtimes.some(
+      (runtime) =>
+        runtime.identityId === agentId || runtime.bound_agent === agentId,
+    );
   }
   private binding(id: string) {
     this.store.agent(id);
@@ -289,7 +411,16 @@ export class Runtimes {
   private async rpc<T = Record<string, unknown>>(
     method: string,
     params: unknown,
+    agentId?: string,
   ): Promise<T> {
+    const owner = agentId ? ownerOf(this.store, agentId) : null;
+    if (owner) {
+      if (!this.bridge) throw new Problem(503, "身份运行器未就绪，未发出命令");
+      return this.bridge.requestFor<T>(agentId!, "acp.request", {
+        method,
+        params,
+      });
+    }
     const { connection } = await this.open();
     try {
       return await connection.agent.request<T>(method, params);
@@ -417,21 +548,35 @@ export class Runtimes {
   }
   async available(): Promise<LiveRuntime[]> {
     const value = await this.rpc("_pi/runtime/list", {});
-    const { runtimes } = z
+    const { runtimes: local } = z
       .object({ runtimes: z.array(liveRuntimeSchema).max(256) })
       .parse(value);
-    // Canonicalize during discovery, never on the overview's hot read path.
-    return this.withOwners(
-      runtimes.map((r) => {
-        let cwd = r.cwd;
-        try {
-          cwd = realpathSync(cwd);
-        } catch {
-          /* Preserve display metadata for inaccessible directories. */
-        }
-        return { ...r, cwd };
-      }),
-    );
+    // A remote runner's paths belong to its host; the Web host must not
+    // resolve them against its own filesystem when deciding ownership.
+    const runtimes = local.map((r) => {
+      let cwd = r.cwd;
+      try {
+        cwd = realpathSync(cwd);
+      } catch {
+        /* Preserve display metadata for inaccessible directories. */
+      }
+      return { ...r, cwd };
+    });
+    const claimed = this.store.all<{
+      agent_id: string;
+      runner_id: string;
+    }>("SELECT agent_id,runner_id FROM runner_ownership");
+    const seen = new Set<string>();
+    for (const { agent_id, runner_id } of claimed) {
+      if (seen.has(runner_id) || !this.bridge?.connected(runner_id)) continue;
+      seen.add(runner_id);
+      const remote = await this.rpc("_pi/runtime/list", {}, agent_id);
+      const parsed = z
+        .object({ runtimes: z.array(liveRuntimeSchema).max(256) })
+        .parse(remote);
+      runtimes.push(...parsed.runtimes);
+    }
+    return this.withOwners(runtimes);
   }
   directory() {
     return {
@@ -495,7 +640,7 @@ export class Runtimes {
       "这是临时 Pi；请新建长期身份后使用具名入口启动，不会自动创建账号",
     );
   }
-  private services(id: string) {
+  private async services(id: string) {
     const path = join(this.data, "credentials", `${id}.json`);
     if (!existsSync(path)) {
       // Existing installation: keep the credential, move its old transport file out of the retired links directory.
@@ -515,7 +660,9 @@ export class Runtimes {
       {
         name: "atrium",
         type: "http",
-        url: `${this.baseUrl()}/mcp/${id}`,
+        url: ownerOf(this.store, id)
+          ? await this.bridge!.mcpUrl(id)
+          : `${this.baseUrl()}/mcp/${id}`,
         headers: [{ name: "Authorization", value: `Bearer ${token}` }],
       },
     ];
@@ -558,14 +705,44 @@ export class Runtimes {
       this.bindingOwners.set(selected, id);
     }
     let info: RuntimeInfo | undefined;
+    let continuing = false;
     try {
-      info = runtimeSchema.parse(
-        await this.rpc("_pi/runtime/attach", selector),
+      const previous = this.binding(id);
+      const held =
+        selected && ownerOf(this.store, id) && previous.runtime_id === selected
+          ? this.discovered.find(
+              (runtime) =>
+                runtime.runtimeId === selected && runtime.identityId === id,
+            )
+          : undefined;
+      if (held) {
+        try {
+          // The runner's ACP peer survives Web restarts; a second attach on
+          // that peer is rejected. Its MCP service and guide also survive.
+          info = runtimeSchema.parse(
+            await this.rpc(
+              "_pi/runtime/status",
+              { runtimeId: held.runtimeId, generation: held.generation },
+              id,
+            ),
+          );
+          continuing =
+            previous.acp_session_id === info.sessionId &&
+            previous.session_file === info.sessionFile;
+        } catch {
+          // The runner may have lost its old ACP peer; attach normally.
+        }
+      }
+      info ??= runtimeSchema.parse(
+        await this.rpc("_pi/runtime/attach", selector, id),
       );
       const profile = this.store.agent(id);
       if (profile.agent_directory && info.identityId !== id)
         throw new Problem(409, "运行实例不属于这个长期身份");
-      if (realpathSync(info.cwd) !== realpathSync(profile.cwd))
+      if (
+        !ownerOf(this.store, id) &&
+        realpathSync(info.cwd) !== realpathSync(profile.cwd)
+      )
         throw new Problem(409, "Pi 工作目录与 Agent 配置不一致");
       if (
         this.store.one(
@@ -575,26 +752,39 @@ export class Runtimes {
         )
       )
         throw new Problem(409, "这个 Pi 已绑定另一个 Agent");
-      await this.rpc("_pi/runtime/mcp", {
-        ...target(info),
-        mcpServers: this.services(id),
-      });
-      await this.rpc("_pi/runtime/deliver", {
-        ...target(info),
-        id: guideId(id, info.sessionId),
-        source: "Atrium 接入说明",
-        text: atriumGuide,
-        delivery: "steer",
-        triggerTurn: false,
-      });
+      if (!continuing) {
+        await this.rpc(
+          "_pi/runtime/mcp",
+          {
+            ...target(info),
+            mcpServers: await this.services(id),
+          },
+          id,
+        );
+        await this.rpc(
+          "_pi/runtime/deliver",
+          {
+            ...target(info),
+            id: guideId(id, info.sessionId),
+            source: "Atrium 接入说明",
+            text: atriumGuide,
+            delivery: "steer",
+            triggerTurn: false,
+          },
+          id,
+        );
+      }
       this.assertOpen();
       this.remember(id, info);
-      this.connections.set(id, { connection: this.gateway!.connection, info });
+      this.connections.set(id, {
+        connection: ownerOf(this.store, id) ? null : this.gateway!.connection,
+        info,
+      });
       this.errors.delete(id);
       this.changed();
     } catch (error) {
       if (info)
-        await this.rpc("_pi/runtime/detach", target(info)).catch(
+        await this.rpc("_pi/runtime/detach", target(info), id).catch(
           () => undefined,
         );
       throw error;
@@ -615,7 +805,14 @@ export class Runtimes {
     const promise = run().catch((error) => {
       // Deletion rejections are not runtime failures. Other operations still
       // record Problems such as a failed identity start or plugin migration.
-      if (recordFailure === "ignore") throw error;
+      if (
+        recordFailure === "ignore" ||
+        (error instanceof Problem &&
+          (error.code === "runner_offline" ||
+            error.code === "runner_outcome_unknown" ||
+            error.code === "runner_locked"))
+      )
+        throw error;
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
@@ -714,10 +911,14 @@ export class Runtimes {
     const moved = existsSync(cursor);
     if (moved) renameSync(cursor, backup);
     try {
-      return await this.rpc<{ runtimeId: string }>("_pi/identity/start", {
-        ...params,
-        sessionFile: undefined,
-      });
+      return await this.rpc<{ runtimeId: string }>(
+        "_pi/identity/start",
+        {
+          ...params,
+          sessionFile: undefined,
+        },
+        id,
+      );
     } catch (error) {
       if (moved && !existsSync(cursor)) renameSync(backup, cursor);
       throw error;
@@ -733,8 +934,13 @@ export class Runtimes {
     // run_end may arrive before deliver acknowledges: requeue accepted deliveries now too.
     this.store.finishTurn(id, false);
     if (this.store.agent(id).agent_directory)
-      await this.rpc("_pi/identity/stop", { identityId: id });
-    else await this.rpc("session/close", { sessionId: runtime.info.sessionId });
+      await this.rpc("_pi/identity/stop", { identityId: id }, id);
+    else
+      await this.rpc(
+        "session/close",
+        { sessionId: runtime.info.sessionId },
+        id,
+      );
     this.connections.delete(id);
     this.store.run(
       "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL,observed_session_id=NULL WHERE id=?",
@@ -745,13 +951,29 @@ export class Runtimes {
   }
   async start(id: string, automatic = false, fresh = false) {
     if (this.draining) throw new Problem(409, "服务正在排空任务，暂不启动身份");
+    if (this.isMigrating(id))
+      throw new Problem(409, "身份正在交接运行器，稍后重试");
     requireAssignment(this.store, id);
     const binding = this.binding(id);
     if (this.switching.has(id) && !fresh)
       throw new Problem(409, "正在切换会话，请稍候");
+    const owner = ownerOf(this.store, id);
+    if (owner && this.runnerRevoked(owner.runner_id))
+      throw new Problem(
+        409,
+        `归属运行器 ${owner.runner_id} 已撤销；确认旧 Pi 已停止后运行 atrium runner reclaim ${this.store.agent(id).ref} --confirm-stopped`,
+        "runner_locked",
+      );
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
-    if (binding.runtime_pid && alive(binding.runtime_pid))
-      throw new Problem(409, "原 Pi 进程仍存在，等待重连；不会另开同一会话");
+    if (
+      owner
+        ? this.running(id)
+        : binding.runtime_pid && alive(binding.runtime_pid)
+    )
+      throw new Problem(
+        409,
+        "原 Pi 进程仍可能存在，等待重连；不会另开同一会话",
+      );
     const last = this.starts.get(id);
     if (
       automatic &&
@@ -828,6 +1050,7 @@ export class Runtimes {
             : await this.rpc<{ runtimeId: string }>(
                 "_pi/identity/start",
                 params,
+                id,
               ));
         } catch (error) {
           if (
@@ -853,7 +1076,7 @@ export class Runtimes {
           ) {
             // The adapter silently skipped the unreadable file. Its cursor may
             // have resumed a DIFFERENT old session: explicitly start fresh.
-            await this.rpc("_pi/identity/stop", { identityId: id });
+            await this.rpc("_pi/identity/stop", { identityId: id }, id);
             this.connections.delete(id);
             this.store.run(
               "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL,observed_session_id=NULL WHERE id=?",
@@ -866,7 +1089,7 @@ export class Runtimes {
             this.restored.set(id, info.generation);
           if (restoreError) this.recordSessionReset(id, restoreError);
         } catch (error) {
-          await this.rpc("_pi/identity/stop", { identityId: id }).catch(
+          await this.rpc("_pi/identity/stop", { identityId: id }, id).catch(
             () => undefined,
           );
           throw error;
@@ -881,33 +1104,46 @@ export class Runtimes {
           ({ sessionId } = await this.rpc<{ sessionId: string }>(
             "_pi/session/import",
             { cwd, sessionFile: binding.session_file },
+            id,
           ));
         }
         if (sessionId)
-          await this.rpc("session/load", {
-            sessionId,
-            cwd,
-            mcpServers: this.services(id),
-          });
+          await this.rpc(
+            "session/load",
+            {
+              sessionId,
+              cwd,
+              mcpServers: await this.services(id),
+            },
+            id,
+          );
       } catch (error) {
         if (sessionId)
-          await this.rpc("session/close", { sessionId }).catch(() => undefined);
+          await this.rpc("session/close", { sessionId }, id).catch(
+            () => undefined,
+          );
         sessionId = null;
         restored = false;
         restoreError = `恢复旧会话失败：${errorWithDetails(error)}`;
       }
       if (!sessionId)
-        ({ sessionId } = await this.rpc<{ sessionId: string }>("session/new", {
-          cwd,
-          mcpServers: this.services(id),
-        }));
+        ({ sessionId } = await this.rpc<{ sessionId: string }>(
+          "session/new",
+          {
+            cwd,
+            mcpServers: await this.services(id),
+          },
+          id,
+        ));
       try {
         await this.bind(id, { sessionId });
         if (restored && !fresh)
           this.restored.set(id, this.connections.get(id)!.info.generation);
         if (restoreError) this.recordSessionReset(id, restoreError);
       } catch (error) {
-        await this.rpc("session/close", { sessionId }).catch(() => undefined);
+        await this.rpc("session/close", { sessionId }, id).catch(
+          () => undefined,
+        );
         throw error;
       }
     });
@@ -934,7 +1170,7 @@ export class Runtimes {
         (runtime) =>
           runtime.bound_agent === id &&
           runtime.mode === "tui" &&
-          alive(runtime.pid),
+          (ownerOf(this.store, id) ? true : alive(runtime.pid)),
       );
       if (foreign)
         throw new Problem(
@@ -949,7 +1185,7 @@ export class Runtimes {
         );
       if (!connection) {
         const pid = this.binding(id).runtime_pid;
-        if (pid && alive(pid))
+        if (ownerOf(this.store, id) ? this.running(id) : pid && alive(pid))
           throw new Problem(
             409,
             "旧 Pi 进程仍在运行，请先在原终端退出；不会抢占会话",
@@ -959,7 +1195,7 @@ export class Runtimes {
       while (this.connections.has(id)) {
         const runtime = this.connections.get(id)!;
         runtime.info = runtimeSchema.parse(
-          await this.rpc("_pi/runtime/status", target(runtime.info)),
+          await this.rpc("_pi/runtime/status", target(runtime.info), id),
         );
         if (!runtime.info.busy) {
           await this.capture(id, runtime.info);
@@ -1009,12 +1245,21 @@ export class Runtimes {
       if (started || this.connections.has(id)) await this.pump(id);
     }
   }
-  /** 本进程这条网关自己启动的 Pi；别处发现、由 TUI 或旧网关拉起的实例不归它管。 */
+  /** Runner leases use machine identity + generation, never a PID on the Web
+   * host. Embedded Pi retains the original local gateway PID check. */
   private owned(id: string) {
     const runtime = this.connections.get(id);
+    const owner = ownerOf(this.store, id);
+    if (owner)
+      return (
+        this.bridge?.generation(owner.runner_id) === owner.generation &&
+        runtime?.info.mode === "rpc" &&
+        runtime.info.identityId === id
+      );
     return (
+      !!this.gateway?.child.pid &&
       runtime?.info.mode === "rpc" &&
-      runtime.info.ownerPid === this.gateway?.child.pid
+      runtime.info.ownerPid === this.gateway.child.pid
     );
   }
   /** 只有自己启动的 Pi 有改模型的通道，还得网关支持这条协议。 */
@@ -1027,14 +1272,100 @@ export class Runtimes {
     if (!this.owned(id))
       throw new Problem(409, "这个实例不是 Atrium 启动的，请在原终端退出");
     await this.operation(id, async () => {
-      await this.rpc("_pi/identity/stop", { identityId: id });
+      await this.rpc("_pi/identity/stop", { identityId: id }, id);
       this.connections.delete(id);
       this.errors.delete(id);
     });
     this.changed();
   }
+  private isMigrating(id: string) {
+    const deadline = this.migrationLocks.get(id) ?? 0;
+    if (deadline > Date.now()) return true;
+    this.migrationLocks.delete(id);
+    return false;
+  }
+  finishMigration(id: string) {
+    this.migrationLocks.delete(id);
+  }
+  /** First handoff only: prevent new deliveries, capture final events and
+   * stop one embedded identity after its accepted turn has settled. */
+  async prepareMigration(id: string): Promise<void> {
+    if (ownerOf(this.store, id))
+      throw new Problem(409, "身份已归属运行器，无需再次迁移");
+    if (
+      this.switching.has(id) ||
+      this.connecting.has(id) ||
+      this.pumping.has(id)
+    )
+      throw new Problem(409, "身份正在接入或投递，继续等待回合结束");
+    this.switching.add(id);
+    try {
+      const runtime = this.connections.get(id);
+      if (!runtime) {
+        if (this.running(id))
+          throw new Problem(409, "旧 Pi 仍可能运行；先在原终端退出");
+        this.migrationLocks.set(id, Date.now() + 15_000);
+        return;
+      }
+      if (!this.owned(id))
+        throw new Problem(409, "终端身份不由服务管理；先在原终端退出");
+      const info = runtimeSchema.parse(
+        await this.rpc("_pi/runtime/status", target(runtime.info), id),
+      );
+      await this.capture(id, info, 32, true);
+      this.reconcileAccepted(id, info);
+      if (
+        info.busy ||
+        this.pumping.has(id) ||
+        this.store.pending(id).length ||
+        this.turns.current(id) ||
+        this.store.one<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM deliveries WHERE agent_id=? AND state='accepted'",
+          id,
+        )!.n
+      )
+        throw new Problem(409, "回合或投递尚未结算，继续等待");
+      await this.stop(id);
+      // identity/stop may acknowledge before the local Pi exits. Never hand
+      // the lease to a runner while the old writer is still alive.
+      const deadline = Date.now() + 10_000;
+      while (alive(info.pid) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      if (alive(info.pid))
+        throw new Problem(409, "旧 Pi 尚未退出，暂不交接；请稍后重试此身份");
+      // Discovery is refreshed every three seconds, so a just-stopped local
+      // runtime could otherwise appear to belong to the newly claimed runner.
+      await this.discover();
+      this.discovered = this.discovered.filter(
+        (item) => item.runtimeId !== info.runtimeId,
+      );
+      this.migrationLocks.set(id, Date.now() + 15_000);
+    } finally {
+      this.switching.delete(id);
+    }
+  }
+  /** Claiming a runner is synchronous with respect to Web requests: do not
+   * race an in-flight local start before its Pi PID appears in discovery. */
+  canBindRunner(id: string): boolean {
+    return (
+      !this.connecting.has(id) &&
+      !this.switching.has(id) &&
+      !this.pumping.has(id) &&
+      !this.running(id)
+    );
+  }
   /** 删除预览与删除守卫共用实际存活判断；发现列表可能滞后，不能只看名册在线状态。 */
   running(id: string, discovered = this.directory().runtimes): boolean {
+    const owner = ownerOf(this.store, id);
+    if (owner) {
+      // An offline runner can still be executing its Pi turn. Never declare
+      // its identity stopped from this Web host's PID table.
+      if (this.bridge?.generation(owner.runner_id) !== owner.generation)
+        return true;
+      return discovered.some(
+        (runtime) => runtime.bound_agent === id && runtime.identityId === id,
+      );
+    }
     const binding = this.binding(id);
     const connected = this.connections.get(id)?.info;
     return !!(
@@ -1047,6 +1378,11 @@ export class Runtimes {
   }
   /** 撤销最后一个账号前终止活跃身份，不能留下仍在运行的无账号实例。 */
   async stopForUnassignment(id: string) {
+    if (ownerOf(this.store, id)) {
+      if (this.running(id))
+        throw new Problem(409, "运行器可能仍在运行身份；先确认停止");
+      return;
+    }
     if (this.connections.has(id)) return this.stop(id);
     const pid = this.binding(id).runtime_pid;
     if (pid && alive(pid))
@@ -1074,7 +1410,7 @@ export class Runtimes {
             )
             .max(4000),
         })
-        .parse(await this.rpc("_pi/identity/models", { identityId: id }));
+        .parse(await this.rpc("_pi/identity/models", { identityId: id }, id));
       const options = [
         ...new Map(
           models.map((model) => [
@@ -1142,6 +1478,7 @@ export class Runtimes {
             model: wanted,
             ...(spec.thinking ? { thinking: spec.thinking } : {}),
           },
+          id,
         ));
       } catch (error) {
         if (directory && previous) restoreIdentityModel(directory, previous);
@@ -1171,7 +1508,12 @@ export class Runtimes {
     };
   }
   pump(id: string, direct = false): Promise<void> {
-    if (this.stopped || this.draining) return Promise.resolve();
+    if (this.stopped || this.draining || this.isMigrating(id))
+      return Promise.resolve();
+    // A lost response is not an acknowledged delivery. A later successful
+    // turn or direct wake must not silently lift this gate.
+    if (this.store.uncertainDelivery(id) && !this.manuallyRetrying.has(id))
+      return Promise.resolve();
     if (this.store.failure(id) && !direct) {
       if (this.discoveredOnce && !this.running(id, this.discovered))
         this.reconcileAccepted(id, null);
@@ -1220,10 +1562,30 @@ export class Runtimes {
       }
       if (!runtime) {
         const binding = this.binding(id);
+        const owner = ownerOf(this.store, id);
+        // The Web may reconnect before its first runner discovery. A manual
+        // retry must ask the owner about the old runtime before deciding to
+        // boot a replacement (which would collide with the live Pi lock).
+        if (owner && binding.runtime_id) {
+          if (direct || !this.discoveredOnce) await this.discover();
+          if (this.discoveryError) return;
+        }
+        const discoveredOwner = this.discovered.some(
+          (item) =>
+            item.runtimeId === binding.runtime_id && item.bound_agent === id,
+        );
+        if (owner && binding.runtime_id && !discoveredOwner) {
+          // Absence from discovery is not proof that a remotely owned Pi has
+          // exited. Keep the unknown delivery and its retry entry intact.
+          this.reconcileAccepted(id, null);
+          return;
+        }
         if (
           binding.runtime_id &&
-          binding.runtime_pid &&
-          alive(binding.runtime_pid)
+          (owner
+            ? this.bridge?.generation(owner.runner_id) === owner.generation &&
+              discoveredOwner
+            : !!binding.runtime_pid && alive(binding.runtime_pid))
         ) {
           await this.operation(
             id,
@@ -1250,12 +1612,12 @@ export class Runtimes {
       }
       try {
         runtime.info = runtimeSchema.parse(
-          await this.rpc("_pi/runtime/status", target(runtime.info)),
+          await this.rpc("_pi/runtime/status", target(runtime.info), id),
         );
         this.assertOpen();
         this.remember(id, runtime.info);
       } catch (error) {
-        await this.rpc("_pi/runtime/detach", target(runtime.info)).catch(
+        await this.rpc("_pi/runtime/detach", target(runtime.info), id).catch(
           () => undefined,
         );
         this.connections.delete(id);
@@ -1270,6 +1632,13 @@ export class Runtimes {
       }
       let triggeredTurn = false;
       for (const pending of this.store.pending(id)) {
+        // A successful turn can clear the identity failure while its delivery
+        // remains uncertain. Only an explicit retry may ask Pi about this id.
+        if (
+          pending.error?.startsWith("投递结果未知") &&
+          !this.manuallyRetrying.has(id)
+        )
+          break;
         if (this.store.failure(id) && !direct) break;
         if (pending.kind === "summary" && (runtime.info.busy || triggeredTurn))
           continue;
@@ -1298,20 +1667,59 @@ export class Runtimes {
           const result = await this.rpc<{
             accepted: boolean;
             duplicate?: boolean;
-          }>("_pi/runtime/deliver", {
-            ...target(runtime.info),
-            id: pending.id,
-            source: "Atrium",
-            text,
-            delivery: pending.kind === "direct" ? "steer" : "followUp",
-            ...(images.length ? { images } : {}),
-          });
+          }>(
+            "_pi/runtime/deliver",
+            {
+              ...target(runtime.info),
+              id: pending.id,
+              source: "Atrium",
+              text,
+              delivery: pending.kind === "direct" ? "steer" : "followUp",
+              ...(images.length ? { images } : {}),
+            },
+            id,
+          );
           this.assertOpen();
           if (!result.accepted) throw new Error("Pi 未确认接收");
           if (result.duplicate) {
-            // Pi has seen this id, but did not prove its turn finished. Never
-            // keep sending the same id: duplicate returns without a new event.
-            this.store.rekeyPending(pending.id);
+            if (pending.error?.startsWith("投递结果未知")) {
+              // Duplicate proves Pi received the original id, not that its
+              // turn succeeded. Check persisted failure after trace catch-up:
+              // the Web may have restarted and lost its lastTurn cache.
+              runtime.info = runtimeSchema.parse(
+                await this.rpc("_pi/runtime/status", target(runtime.info), id),
+              );
+              this.assertOpen();
+              this.remember(id, runtime.info);
+              await this.capture(id, runtime.info);
+              const settled =
+                !runtime.info.busy &&
+                !this.traceErrors.has(id) &&
+                !this.traceLag.has(id);
+              const failure = this.store.failure(id);
+              if (
+                settled &&
+                failure &&
+                !failure.text.startsWith("投递结果未知")
+              ) {
+                // A failed original turn needs a fresh id and the replay note,
+                // just like an acknowledged failed turn. Only an explicit retry
+                // reaches this path; never duplicate an unknown automatically.
+                this.store.rekeyPending(pending.id);
+                this.changed();
+                return this.doPump(id, direct);
+              }
+              this.store.accepted(pending.id, !settled);
+              if (settled) {
+                this.store.completeDelivery(pending.id);
+                if (!this.store.uncertainDelivery(id))
+                  this.store.clearFailure(id);
+              }
+              // Busy or incomplete trace: retain the failure and retry entry.
+            } else {
+              // An unrelated earlier id has no proof of completion.
+              this.store.rekeyPending(pending.id);
+            }
             this.changed();
             break;
           }
@@ -1351,6 +1759,19 @@ export class Runtimes {
               error = recoveryError;
             }
           }
+          if (error instanceof Problem && error.code === "runner_offline")
+            break;
+          if (
+            error instanceof Problem &&
+            error.code === "runner_outcome_unknown"
+          ) {
+            const warning =
+              "投递结果未知：运行器连接中断；先核对轨迹和消息箱，再手动重试，系统不会自动重复投递";
+            this.store.deliveryError(pending.id, warning);
+            this.store.setFailure(id, warning);
+            this.changed();
+            break;
+          }
           if (!this.stopped) {
             const message = this.redact(id, errorWithDetails(error));
             this.store.deliveryError(pending.id, message);
@@ -1362,6 +1783,12 @@ export class Runtimes {
         }
       }
     } catch (error) {
+      if (
+        error instanceof Problem &&
+        (error.code === "runner_offline" ||
+          error.code === "runner_outcome_unknown")
+      )
+        return;
       if (!this.stopped) {
         const message = this.redact(id, errorWithDetails(error));
         this.errors.set(id, message);
@@ -1378,7 +1805,7 @@ export class Runtimes {
   /** Unknown outcomes retry only after the old process is gone or a settled idle status. */
   private reconcileAccepted(id: string, info: RuntimeInfo | null) {
     const row = this.store.one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM deliveries WHERE agent_id=? AND state='accepted'",
+      "SELECT COUNT(*) AS n FROM deliveries WHERE agent_id=? AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')",
       id,
     );
     if (!row?.n) {
@@ -1430,11 +1857,15 @@ export class Runtimes {
       // Regular ticks are bounded; shutdown must consume all remaining pages.
       for (let page = 0; page < maxPages; page++) {
         const events = runtimeEvents.parse(
-          await this.rpc("_pi/runtime/events", {
-            ...target(info),
-            after: this.traces.cursor(id, info.runtimeId, info.generation),
-            limit: 50,
-          }),
+          await this.rpc(
+            "_pi/runtime/events",
+            {
+              ...target(info),
+              after: this.traces.cursor(id, info.runtimeId, info.generation),
+              limit: 50,
+            },
+            id,
+          ),
         );
         const current = this.connections.get(id)?.info;
         if (
@@ -1466,6 +1897,7 @@ export class Runtimes {
               if (event.kind === "run_start") {
                 if (
                   this.store.failure(id) &&
+                  !this.store.failure(id)?.text.startsWith("投递结果未知") &&
                   !this.store
                     .failure(id)
                     ?.text.includes("模型认证失败，请更换 API Key")
@@ -1535,10 +1967,25 @@ export class Runtimes {
     this.store.agent(id);
     const runtime = this.connections.get(id);
     if (runtime) await this.capture(id, runtime.info);
-    if (!this.store.failure(id))
+    const uncertain = this.store.uncertainDelivery(id);
+    if (!this.store.failure(id) && !uncertain)
       throw new Problem(409, "Agent 当前没有运行错误");
-    if (runtime?.info.busy)
+    // An unknown delivery can outlive the Pi turn. Its cached busy flag may
+    // never refresh because pump is gated until manual retry; doPump queries
+    // current status before deciding whether the duplicate has settled.
+    if (runtime?.info.busy && !uncertain)
       throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
+    if (uncertain) {
+      if (this.pumping.has(id)) await this.pumping.get(id);
+      this.store.retryUncertain(uncertain.id);
+      this.manuallyRetrying.add(id);
+      try {
+        await this.pump(id, true);
+      } finally {
+        this.manuallyRetrying.delete(id);
+      }
+      return;
+    }
     this.store.finishTurn(id, false);
     await this.pump(
       id,
@@ -1547,7 +1994,9 @@ export class Runtimes {
   }
   activeAgentIds(): string[] {
     return [...this.connections.keys()].filter(
-      (id) => this.pumping.has(id) || this.connections.get(id)?.info.busy,
+      (id) =>
+        !ownerOf(this.store, id) &&
+        (this.pumping.has(id) || this.connections.get(id)?.info.busy),
     );
   }
   async prepareShutdown(timeoutMs: number): Promise<string[]> {
@@ -1557,17 +2006,19 @@ export class Runtimes {
     const deadline = Date.now() + timeoutMs;
     let busyIds: string[] = [];
     try {
-      // An already-running discovery tick may still be reading trace events.
-      // Let it finish before the final strict capture touches the same cursor.
+      // Remote rounds belong to the independent runner; Web restarts must not
+      // wait for or restart them. The next Web process reattaches and captures.
+      const local = () =>
+        [...this.connections].filter(([id]) => !ownerOf(this.store, id));
       while (this.ticking && Date.now() < deadline)
         await new Promise((r) => setTimeout(r, 100));
       while (Date.now() < deadline) {
         // The discovery tick is paused while draining. Refresh busy state from
         // each running Pi; a stale snapshot would make every busy restart time out.
         const statuses = await Promise.all(
-          [...this.connections].map(async ([id, entry]) => {
+          local().map(async ([id, entry]) => {
             const current = runtimeSchema.parse(
-              await this.rpc("_pi/runtime/status", target(entry.info)),
+              await this.rpc("_pi/runtime/status", target(entry.info), id),
             );
             entry.info = current;
             if (current.busy) agents.add(id);
@@ -1579,21 +2030,25 @@ export class Runtimes {
             ...statuses
               .filter((status) => status.busy)
               .map((status) => status.id),
-            ...this.pumping.keys(),
-            ...this.connecting.keys(),
+            ...[...this.pumping.keys()].filter(
+              (id) => !ownerOf(this.store, id),
+            ),
+            ...[...this.connecting.keys()].filter(
+              (id) => !ownerOf(this.store, id),
+            ),
           ]),
         ];
         if (busyIds.length === 0) {
           // Pi can report idle just before the final events become visible.
           // Flush first, then require the observed run_start to have run_end.
           await Promise.all(
-            [...this.connections].map(([id, entry]) =>
+            local().map(([id, entry]) =>
               this.capture(id, entry.info, 100, true),
             ),
           );
-          busyIds = [...this.connections.keys()].filter(
-            (id) => this.turns.current(id) != null,
-          );
+          busyIds = local()
+            .map(([id]) => id)
+            .filter((id) => this.turns.current(id) != null);
           for (const id of busyIds) agents.add(id);
           if (busyIds.length === 0) return [...agents];
         }
@@ -1687,6 +2142,7 @@ export class Runtimes {
   async close() {
     this.stopped = true;
     clearInterval(this.interval);
+    this.bridge?.close();
     await Promise.allSettled([
       ...this.pumping.values(),
       ...this.connecting.values(),

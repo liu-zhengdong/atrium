@@ -12,8 +12,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Problem } from "../server/problem.ts";
 import { Store } from "../server/store.ts";
+import { exitCodes } from "../cli/contract.ts";
 import {
   configureModel,
+  liveThinkingProblem,
   offlineModels,
   rememberModels,
   seedModelsStore,
@@ -253,6 +255,205 @@ test("离线清单合并运行缓存与身份目录，占位名升级成真名",
     );
     assert.equal(stored?.name, "DeepSeek V4 Flash");
     assert.ok(merged.some((item) => item.id === "fake158/deepseek-v4.1-flash"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("运行时清单是占位名也按模型 id 排序：离线与运行同一输入结果一致", () => {
+  const { store, agent, directory, cleanup } = withAgent("ocgo");
+  try {
+    writeFileSync(join(directory, "settings.json"), "{}\n");
+    writeFileSync(
+      join(directory, "models-store.json"),
+      JSON.stringify({
+        "ocgo-fake": {
+          models: [
+            { id: "minimax-m3", name: "MiniMax M3" },
+            { id: "qwen3.8-flash", name: "Qwen3.8 Flash" },
+            { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+            { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+          ],
+        },
+      }),
+    );
+    // 运行中清单：name 就是模型 id（占位名），与目录里的真名混着来。
+    const cached = [
+      { id: "ocgo-fake/deepseek-v4-flash", name: "deepseek-v4-flash" },
+      { id: "ocgo-fake/minimax-m3", name: "minimax-m3" },
+      { id: "ocgo-fake/qwen3.8-flash", name: "qwen3.8-flash" },
+    ];
+    const typo = {
+      provider: "ocgo-fake",
+      model: "deepseek-v4.1-flsh",
+      thinking: null,
+    } as const;
+    const offline = caught(() => configureModel(store, agent.id, typo, []));
+    const running = caught(() => configureModel(store, agent.id, typo, cached));
+    assert.equal(offline.candidates?.[0]?.ref, "ocgo-fake/deepseek-v4.1-flash");
+    assert.deepEqual(
+      running.candidates,
+      offline.candidates,
+      "离线与运行的候选顺序要一致",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("issue 原例：清单里没有 v4.1 时，离线与运行都把 v4-flash 排第一", () => {
+  const { store, agent, directory, cleanup } = withAgent("Tibo");
+  try {
+    writeFileSync(join(directory, "settings.json"), "{}\n");
+    writeFileSync(
+      join(directory, "models.json"),
+      JSON.stringify({
+        providers: {
+          fake158: {
+            baseUrl: "http://127.0.0.1:4534",
+            models: [
+              { id: "minimax-m3" },
+              { id: "qwen3.8-flash" },
+              { id: "deepseek-v4-flash" },
+            ],
+          },
+        },
+      }),
+    );
+    const cached = [
+      { id: "fake158/deepseek-v4-flash", name: "deepseek-v4-flash" },
+      { id: "fake158/minimax-m3", name: "minimax-m3" },
+      { id: "fake158/qwen3.8-flash", name: "qwen3.8-flash" },
+    ];
+    const input = {
+      provider: "fake158",
+      model: "deepseek-v4.1-flash",
+      thinking: null,
+    } as const;
+    const offline = caught(() => configureModel(store, agent.id, input, []));
+    const running = caught(() =>
+      configureModel(store, agent.id, input, cached),
+    );
+    assert.equal(offline.candidates?.[0]?.ref, "fake158/deepseek-v4-flash");
+    assert.deepEqual(running.candidates, offline.candidates);
+  } finally {
+    cleanup();
+  }
+});
+
+test("运行中被 pi 拒绝思考强度时，回中文档位和能直接执行的修正，退出码 3", () => {
+  const agent = { name: "ocgo", ref: "a1" };
+  const wanted = "ocgo-fake/deepseek-v4-flash";
+  const problem = liveThinkingProblem(
+    "RequestError: Invalid params: Thinking level not supported by the current model: max (supported: off)。模型配置已恢复原值。",
+    wanted,
+    agent,
+  );
+  assert.ok(problem);
+  assert.equal(problem.code, "thinking_not_supported");
+  assert.equal(exitCodes.thinking_not_supported, 3);
+  assert.match(
+    problem.message,
+    /运行中的实例不支持思考强度 max，支持：off。模型配置已恢复原值。/,
+  );
+  assert.equal(
+    problem.nextCommand,
+    `atrium model ocgo ${wanted}:off`,
+    "只支持 off 时修正给 :off（与离线同一条命令写法）",
+  );
+  // 多档时向强档优先：max 被拒、支持到 high 为止 → 修正 high。
+  const mixed = liveThinkingProblem(
+    "…Thinking level not supported by the current model: max (supported: off, low, high)…",
+    wanted,
+    agent,
+  );
+  assert.equal(mixed?.nextCommand, `atrium model ocgo ${wanted}:high`);
+  assert.equal(
+    liveThinkingProblem("运行中的实例没能当场切换：其它错误", wanted, agent),
+    null,
+    "不认识的报错不走兜底",
+  );
+});
+
+test("models.json 定义了供应商时思考强度按 models.json 判断，不看缓存", () => {
+  const { store, agent, directory, cleanup } = withAgent("ocgo");
+  try {
+    writeFileSync(join(directory, "settings.json"), "{}\n");
+    // 缓存说支持 max，models.json 的条目没写 reasoning（pi 视角只支持 off）。
+    writeFileSync(
+      join(directory, "models-store.json"),
+      JSON.stringify({
+        "ocgo-fake": {
+          models: [
+            {
+              id: "deepseek-v4-flash",
+              name: "DeepSeek V4 Flash",
+              reasoning: true,
+              thinkingLevelMap: { low: "low", high: "high", max: "max" },
+            },
+          ],
+        },
+      }),
+    );
+    writeFileSync(
+      join(directory, "models.json"),
+      JSON.stringify({
+        providers: {
+          "ocgo-fake": {
+            baseUrl: "http://127.0.0.1:4534",
+            models: [{ id: "deepseek-v4-flash" }],
+          },
+        },
+      }),
+    );
+    const error = caught(() =>
+      configureModel(
+        store,
+        agent.id,
+        { provider: "ocgo-fake", model: "deepseek-v4-flash", thinking: "max" },
+        [{ id: "ocgo-fake/deepseek-v4-flash", name: "DeepSeek V4 Flash" }],
+      ),
+    );
+    assert.equal(error.code, "thinking_not_supported");
+    assert.match(error.message, /支持：off/);
+    assert.equal(
+      error.nextCommand,
+      "atrium model ocgo ocgo-fake/deepseek-v4-flash:off",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("provider 写错且只有一个可选时，回执带换 provider 就能执行的修正", () => {
+  const { store, agent, directory, cleanup } = withAgent("梁文峰");
+  try {
+    writeFileSync(
+      join(directory, "models-store.json"),
+      JSON.stringify({
+        "ocgo-fake": {
+          models: [
+            { id: "minimax-m3", name: "MiniMax M3" },
+            { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+          ],
+        },
+      }),
+    );
+    const error = caught(() =>
+      configureModel(
+        store,
+        agent.id,
+        { provider: "nope", model: "deepseek", thinking: null },
+        [],
+      ),
+    );
+    assert.equal(error.code, "model_not_found");
+    assert.match(error.message, /可用的 provider：ocgo-fake/);
+    assert.match(
+      error.nextCommand ?? "",
+      /^atrium model 梁文峰 ocgo-fake\/deepseek/,
+      `修正要换到唯一可选的 provider：${error.nextCommand}`,
+    );
   } finally {
     cleanup();
   }

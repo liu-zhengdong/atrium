@@ -49,6 +49,7 @@ import {
 import {
   configuredModel,
   configureModel,
+  liveThinkingProblem,
   offlineModels,
   rememberModels,
 } from "./model.ts";
@@ -1109,7 +1110,8 @@ export class Runtimes {
   async setModel(id: string, spec: ModelSpec): Promise<ModelChange> {
     const live = this.managed(id);
     const options = await this.listModels(id);
-    const directory = this.store.agent(id).agent_directory;
+    const agent = this.store.agent(id);
+    const directory = agent.agent_directory;
     const previous =
       live && directory ? snapshotIdentityModel(directory) : null;
     const { wanted, configured } = configureModel(
@@ -1132,6 +1134,9 @@ export class Runtimes {
       } catch (error) {
         if (directory && previous) restoreIdentityModel(directory, previous);
         const detail = String(error);
+        // 两份目录对不上时 pi 会以原生报错拒绝思考强度：转成中文回执加修正。
+        const fallback = liveThinkingProblem(detail, wanted, agent);
+        if (fallback) throw fallback;
         const reason = detail.includes("Model not found:")
           ? `运行中的 Pi 找不到 ${wanted}，请检查模型配置`
           : `运行中的实例没能当场切换：${detail}`;

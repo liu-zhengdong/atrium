@@ -12,13 +12,14 @@ import {
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all";
 import {
+  THINKING_LEVELS,
   formatModelSpec,
   groupModelsByProvider,
   type ModelSpec,
   type ModelOption,
 } from "../shared/model.ts";
 import { commandAgent } from "../shared/command-agent.ts";
-import { closest, Problem } from "./problem.ts";
+import { editDistance, Problem } from "./problem.ts";
 import { Store } from "./store.ts";
 import { privateWrite } from "./account-files.ts";
 import { readIdentityModel, writeIdentityModel } from "./profile.ts";
@@ -130,6 +131,13 @@ export function seedModelsStore(
   }
 }
 
+/** id 去掉 provider 前缀：相似度比较、占位名判断都用模型这一段。 */
+const modelIdOf = (id: string) => id.slice(id.indexOf("/") + 1);
+
+/** 这条清单是不是占位名（name 只是 id，或 id 去掉 provider 的部分）。 */
+const isPlaceholder = (item: ModelOption) =>
+  item.name === item.id || item.name === modelIdOf(item.id);
+
 /** 合并几路清单：同 id 保留先到的；先到的只有占位名、后到的带真名时用真名升级。 */
 export function mergeModelOptions(...lists: ModelOption[][]): ModelOption[] {
   const merged = new Map<string, ModelOption>();
@@ -137,35 +145,82 @@ export function mergeModelOptions(...lists: ModelOption[][]): ModelOption[] {
     for (const item of list) {
       const held = merged.get(item.id);
       if (!held) merged.set(item.id, item);
-      else if (held.name === held.id && item.name !== item.id)
+      else if (isPlaceholder(held) && !isPlaceholder(item))
         merged.set(item.id, item);
     }
   return [...merged.values()];
 }
 
-/** 账号带进来的模型目录（models.json），读不了当没有，不影响启动。 */
+/**
+ * 模型候选按相似度排：输入和候选都取模型 id（去 provider）来比，
+ * 显示名只作辅助——运行中清单里 name 常常就是 id，只比名字会打平后退回字典序。
+ * 同一个输入，不管身份在不在运行，排出来一致。
+ */
+export function closestModel(
+  provider: string,
+  reference: string,
+  entries: { ref: string; name: string }[],
+) {
+  const input = modelIdOf(reference).toLowerCase();
+  return entries
+    .map((entry) => {
+      const model = modelIdOf(entry.ref).toLowerCase();
+      const name = entry.name.toLowerCase();
+      return {
+        entry,
+        score:
+          model === input
+            ? -2
+            : model.startsWith(input) || name.startsWith(input)
+              ? -1
+              : Math.min(
+                  editDistance(input, model),
+                  editDistance(input, name),
+                  editDistance(input, name.split(/\s+/)[0]!),
+                ),
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.score - b.score ||
+        a.entry.ref.localeCompare(b.entry.ref, undefined, { numeric: true }),
+    )
+    .slice(0, 3)
+    .map(({ entry }) => entry);
+}
+
+/**
+ * 身份的 models.json（pi 自己的配置文件，账号目录也写在这）。
+ * 读不了当没有，不影响启动。
+ */
+const thinkingOverrideSchema = z.object({
+  reasoning: z.boolean().optional(),
+  thinkingLevelMap: z
+    .record(z.string(), z.union([z.string(), z.null()]))
+    .optional(),
+});
+const customModelSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  reasoning: z.boolean().optional(),
+  thinkingLevelMap: z
+    .record(z.string(), z.union([z.string(), z.null()]))
+    .optional(),
+});
+const customProviderSchema = z.object({
+  models: z.array(customModelSchema).default([]),
+  modelOverrides: z.record(z.string(), thinkingOverrideSchema).optional(),
+});
+type CustomProviderConfig = z.infer<typeof customProviderSchema>;
+
 function readCustomModels(
   directory: string | null,
-): Record<
-  string,
-  { models: { id: string; name?: string; reasoning?: boolean }[] }
-> {
+): Record<string, CustomProviderConfig> {
   if (!directory) return {};
   try {
     const parsed = z
       .object({
-        providers: z.record(
-          z.string(),
-          z.object({
-            models: z.array(
-              z.object({
-                id: z.string(),
-                name: z.string().optional(),
-                reasoning: z.boolean().optional(),
-              }),
-            ),
-          }),
-        ),
+        providers: z.record(z.string(), customProviderSchema),
       })
       .safeParse(
         JSON.parse(readFileSync(join(directory, "models.json"), "utf8")),
@@ -234,28 +289,59 @@ function asModel(
   } as unknown as Model<Api>;
 }
 
-/** 判断思考强度支持哪几档用哪份目录：身份缓存的目录 → pi 内置目录 → 账号 models.json。 */
+/** 模型覆盖层：pi 的 modelOverrides 是最上层用户配置，reasoning 和档位表都能改。 */
+function withOverrides(
+  model: Model<Api>,
+  overrides: z.infer<typeof thinkingOverrideSchema>,
+): Model<Api> {
+  return {
+    ...model,
+    reasoning: overrides.reasoning ?? model.reasoning,
+    thinkingLevelMap: overrides.thinkingLevelMap
+      ? {
+          ...model.thinkingLevelMap,
+          ...(overrides.thinkingLevelMap as Model<Api>["thinkingLevelMap"]),
+        }
+      : model.thinkingLevelMap,
+  };
+}
+
+/**
+ * 判断思考强度支持哪几档用哪份定义，与 pi 对齐（pi-coding-agent
+ * provider-composer：models.json 的 applyModelsJson 替换同 id 模型定义、
+ * modelOverrides 最后叠在最上层，自定义供应商的目录就来自 models.json）。
+ * 顺序：models.json 列了这个模型就用它（叠上 modelOverrides）；否则供应商
+ * 若定义在 models.json 且不是内置供应商，pi 里就没有这个模型；其余才落
+ * 到身份目录缓存、内置目录，同样叠 modelOverrides。
+ */
 function thinkingModel(
   directory: string | null,
   spec: ModelSpec,
 ): Model<Api> | null {
-  const stored = directory
-    ? readStoredFile(join(directory, "models-store.json")).data[
-        spec.provider
-      ]?.models.find((model) => model.id === spec.model)
-    : undefined;
-  if (stored) return asModel(spec.provider, stored);
+  const config = readCustomModels(directory)[spec.provider];
+  const overrides = config?.modelOverrides?.[spec.model];
+  const listed = config?.models.find((model) => model.id === spec.model);
   const builtinProvider = getBuiltinProviders().find(
     (item) => item === spec.provider,
   );
-  const builtin = builtinProvider
-    ? getBuiltinModels(builtinProvider).find((model) => model.id === spec.model)
-    : undefined;
-  if (builtin) return builtin;
-  const custom = readCustomModels(directory)[spec.provider]?.models.find(
-    (model) => model.id === spec.model,
-  );
-  return custom ? asModel(spec.provider, custom) : null;
+  let model: Model<Api> | null;
+  if (listed) model = asModel(spec.provider, listed);
+  else if (config && !builtinProvider) model = null;
+  else {
+    const stored = directory
+      ? readStoredFile(join(directory, "models-store.json")).data[
+          spec.provider
+        ]?.models.find((entry) => entry.id === spec.model)
+      : undefined;
+    model = stored
+      ? asModel(spec.provider, stored)
+      : ((builtinProvider
+          ? getBuiltinModels(builtinProvider).find(
+              (entry) => entry.id === spec.model,
+            )
+          : undefined) ?? null);
+  }
+  return model && overrides ? withOverrides(model, overrides) : model;
 }
 
 /**
@@ -297,16 +383,29 @@ export function configureModel(
           name: model.name,
         }));
     const candidates = own
-      ? closest(
+      ? closestModel(
+          spec.provider,
           wanted,
           named.filter((item) => item.ref.startsWith(`${spec.provider}/`)),
         )
+      : undefined;
+    // provider 只有唯一可选时，顺手给一条换掉 provider 就能执行的修正。
+    const [only] = !own && grouped.size === 1 ? [...grouped.keys()] : [];
+    const pick = only
+      ? closestModel(
+          only,
+          spec.model,
+          named.filter((item) => item.ref.startsWith(`${only}/`)),
+        )[0]
       : undefined;
     throw new Problem(
       400,
       `${agent.name} 没有 ${wanted} 这个模型${own ? "" : `。可用的 provider：${[...grouped.keys()].join("、")}`}`,
       "model_not_found",
       candidates?.length ? candidates : undefined,
+      pick
+        ? `atrium model ${commandAgent(agent.name, agent.ref)} ${pick.ref}${spec.thinking ? `:${spec.thinking}` : ""}`
+        : undefined,
     );
   }
   const model = thinkingModel(agent.agent_directory, spec);
@@ -335,4 +434,51 @@ export function configuredModel(store: Store, id: string) {
   const { agent_directory } = store.agent(id);
   const spec = agent_directory ? readIdentityModel(agent_directory) : null;
   return spec && formatModelSpec(spec);
+}
+
+/** 挑修正档，与离线同一条规则（pi 的就近挑选）：先向更强的档找，找不到再向弱档。 */
+export function pickThinkingLevel(
+  supported: string[],
+  requested: string,
+): string | null {
+  const levels: readonly string[] = THINKING_LEVELS;
+  const ok = levels.filter((item) => supported.includes(item));
+  if (!ok.length) return null;
+  const at = levels.indexOf(requested);
+  if (at < 0) return ok[ok.length - 1] ?? null;
+  const stronger = ok.filter((item) => levels.indexOf(item) >= at);
+  const weaker = ok.filter((item) => levels.indexOf(item) < at);
+  return stronger[0] ?? weaker[weaker.length - 1] ?? null;
+}
+
+/**
+ * 运行中的实例被 pi 以思考强度不支持拒绝时，把原生报错转成中文回执：
+ * 列出 pi 报的支持档位，附一条能直接执行的修正命令；不认识的报错返回 null。
+ * 挑档按 pi 报出的档位就近选（与离线同一条规则），不看本地目录——
+ * 正是两份目录对不上才会走到这里，pi 报出的才是此刻能用的。
+ */
+export function liveThinkingProblem(
+  detail: string,
+  wanted: string,
+  agent: { name: string; ref: string },
+): Problem | null {
+  const matched = detail.match(
+    /Thinking level not supported by the current model: (\S+) \(supported: ([^)]+)\)/,
+  );
+  if (!matched) return null;
+  const level = matched[1]!;
+  const supported = matched[2]!
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const next = pickThinkingLevel(supported, level);
+  return new Problem(
+    400,
+    `运行中的实例不支持思考强度 ${level}，支持：${supported.join("、")}。模型配置已恢复原值。`,
+    "thinking_not_supported",
+    undefined,
+    next
+      ? `atrium model ${commandAgent(agent.name, agent.ref)} ${wanted}:${next}`
+      : undefined,
+  );
 }

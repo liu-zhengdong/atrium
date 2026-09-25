@@ -567,7 +567,7 @@ try {
       () => !runtimes.connections.has(agent.id),
       "模拟 TUI 仅连接断开",
     );
-    await assert.rejects(runtimes.start(agent.id), /原 Pi 进程仍存在/);
+    await assert.rejects(runtimes.start(agent.id), /原 Pi 进程仍(?:可能)?存在/);
     process.kill(before.pid, 0);
     const namedIdentity = await verifyIdentity({
       folder,

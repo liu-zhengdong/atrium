@@ -3,6 +3,9 @@ import { createInterface } from "node:readline";
 const identities = [
   "00000000-0000-4000-8000-000000000001",
   "00000000-0000-4000-8000-000000000002",
+  ...(process.env.ATRIUM_FAKE_RETRY_AGENT
+    ? [process.env.ATRIUM_FAKE_RETRY_AGENT]
+    : []),
 ];
 const generation = "00000000-0000-4000-8000-000000000003";
 const sessionId = "00000000-0000-4000-8000-000000000004";
@@ -49,11 +52,12 @@ for await (const line of createInterface({ input: process.stdin })) {
       hasMore: false,
       gap: false,
     };
+  else if (method === "_pi/runtime/delivery_count") result = { deliveries };
   else if (method === "_pi/runtime/deliver") {
     deliveries++;
     busy.add(params.runtimeId);
     setTimeout(() => busy.delete(params.runtimeId), 1000);
-    result = { deliveries };
+    result = { accepted: true, deliveries };
   } else result = {};
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
 }

@@ -547,6 +547,120 @@ test("drain control only targets the current owner generation and never certifie
   );
 });
 
+test("an overdue retry waits through drain without a new turn or budget, then delivers once", async (t) => {
+  const f = fixture(t);
+  new RunnerAuth(f.store);
+  claimRunner(f.store, f.agent.id, "r1", "generation-1");
+  let draining = true;
+  let inspections = 0;
+  (f.runtimes as unknown as { bridge: unknown }).bridge = {
+    generation: () => "generation-1",
+    requestControl: async (
+      _runner: string,
+      method: string,
+      payload: { action: string },
+    ) => {
+      assert.equal(method, "runner.drain");
+      assert.equal(payload.action, "inspect");
+      inspections++;
+      return { draining };
+    },
+    close: () => {},
+  };
+  f.store.setFailure(f.agent.id, "HTTP 503", Date.now(), "provider");
+  f.store.run(
+    "UPDATE failure_incidents SET started_at=? WHERE agent_id=?",
+    Date.now() - 120_001,
+    f.agent.id,
+  );
+  const calls: boolean[] = [];
+  t.mock.method(
+    f.runtimes as unknown as {
+      doPump(id: string, direct: boolean): Promise<void>;
+    },
+    "doPump",
+    async (id: string, direct: boolean) => {
+      calls.push(direct);
+      if (direct) {
+        f.store.accepted(f.pending.id);
+        f.store.completeDelivery(f.pending.id);
+        f.store.clearFailure(id);
+      }
+    },
+  );
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  await tick();
+  await tick();
+  assert.equal(inspections, 2);
+  assert.deepEqual(calls, []);
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry.state, "waiting");
+  assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
+  draining = false;
+  await tick();
+  await tick();
+  assert.deepEqual(calls.filter(Boolean), [true]);
+  assert.equal(
+    f.store.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM deliveries WHERE id=? AND state='complete'",
+      f.pending.id,
+    )?.n,
+    1,
+  );
+  assert.equal(f.store.failure(f.agent.id), null);
+});
+
+test("a drain beginning after inspect releases the unstarted retry without blocking later recovery", async (t) => {
+  const f = fixture(t);
+  new RunnerAuth(f.store);
+  claimRunner(f.store, f.agent.id, "r1", "generation-1");
+  (f.runtimes as unknown as { bridge: unknown }).bridge = {
+    generation: () => "generation-1",
+    requestControl: async () => ({ draining: false }),
+    close: () => {},
+  };
+  f.store.setFailure(f.agent.id, "HTTP 503", Date.now(), "provider");
+  f.store.run(
+    "UPDATE failure_incidents SET started_at=? WHERE agent_id=?",
+    Date.now() - 120_001,
+    f.agent.id,
+  );
+  let attempted = 0;
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string) => {
+      if (method === "_pi/runtime/status") return f.info;
+      if (method !== "_pi/runtime/deliver")
+        throw new Error(`unexpected RPC: ${method}`);
+      if (++attempted === 1)
+        throw new Problem(409, "身份正在排空", "runner_draining");
+      return { accepted: true };
+    },
+  );
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  await tick();
+  assert.equal(attempted, 1);
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
+  assert.equal(f.store.incident(f.agent.id)?.blocked, false);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry.state, "waiting");
+  assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
+  await tick();
+  assert.equal(attempted, 2);
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.pending.id,
+    )?.state,
+    "accepted",
+  );
+  f.store.finishTurn(f.agent.id, true);
+  await tick();
+  assert.equal(attempted, 2);
+});
+
 test("draining rejects manual and automatic start without failure or budget; resume delivers pending once", async (t) => {
   const f = fixture(t);
   f.runtimes.connections.delete(f.agent.id);

@@ -239,10 +239,11 @@ export class RunnerDaemon {
       const { agentId, action } = z
         .object({
           agentId: z.string().uuid(),
-          action: z.enum(["start", "status", "resume"]),
+          action: z.enum(["start", "status", "resume", "inspect"]),
         })
         .strict()
         .parse(payload);
+      if (action === "inspect") return { draining: this.draining.has(agentId) };
       if (action === "resume") {
         this.draining.delete(agentId);
         return { draining: false };

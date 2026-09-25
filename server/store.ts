@@ -1887,8 +1887,15 @@ export class Store {
       ).changes === 1
     );
   }
+  /** A drain refusal is not a retry attempt; it remains due after the identity resumes. */
+  releaseUnstartedRetry(id: string, owner: string) {
+    this.settleUnstartedRetry(id, owner, false);
+  }
   /** If no direct input was acknowledged after reserving a retry, do not leave it running forever. */
   blockUnstartedRetry(id: string, owner: string) {
+    this.settleUnstartedRetry(id, owner, true);
+  }
+  private settleUnstartedRetry(id: string, owner: string, blocked: boolean) {
     const incident = this.one<{
       id: number;
       attempt_claimed_at: number | null;
@@ -1907,7 +1914,8 @@ export class Store {
     )
       return;
     this.run(
-      "UPDATE failure_incidents SET attempt_running=0,attempt_owner=NULL,attempt_claimed_at=NULL,attempts_used=MAX(0,attempts_used-1),blocked=1 WHERE id=? AND attempt_running=1 AND attempt_owner=?",
+      "UPDATE failure_incidents SET attempt_running=0,attempt_owner=NULL,attempt_claimed_at=NULL,attempts_used=MAX(0,attempts_used-1),blocked=MAX(blocked,?) WHERE id=? AND attempt_running=1 AND attempt_owner=?",
+      blocked ? 1 : 0,
       incident.id,
       owner,
     );

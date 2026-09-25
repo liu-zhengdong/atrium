@@ -223,7 +223,10 @@ export class Runtimes {
     }
     if (rebound.length || Object.keys(locked).length) this.changed();
   }
-  async drainRunner(agentId: string, action: "start" | "status" | "resume") {
+  async drainRunner(
+    agentId: string,
+    action: "start" | "status" | "resume" | "inspect",
+  ) {
     const owner = ownerOf(this.store, agentId);
     if (!owner) throw new Problem(404, "身份没有运行器归属");
     if (
@@ -253,6 +256,16 @@ export class Runtimes {
         "runner_changed",
       );
     return result;
+  }
+  /** A due retry cannot claim its attempt while its remote identity is draining. */
+  private async retryRunnerReady(agentId: string) {
+    if (!ownerOf(this.store, agentId)) return true;
+    try {
+      return (await this.drainRunner(agentId, "inspect")).draining === false;
+    } catch {
+      // An offline or changed runner cannot safely accept a new turn either.
+      return false;
+    }
   }
   async reclaimRunner(agentId: string, confirmStopped: boolean) {
     const owner = ownerOf(this.store, agentId);
@@ -1834,8 +1847,10 @@ export class Runtimes {
             error instanceof Problem &&
             (error.code === "runner_offline" ||
               error.code === "runner_draining")
-          )
+          ) {
+            this.store.releaseUnstartedRetry(id, this.retryOwner);
             break;
+          }
           if (
             error instanceof Problem &&
             error.code === "runner_outcome_unknown"
@@ -1863,8 +1878,11 @@ export class Runtimes {
         (error.code === "runner_offline" ||
           error.code === "runner_draining" ||
           error.code === "runner_outcome_unknown")
-      )
+      ) {
+        if (error.code !== "runner_outcome_unknown")
+          this.store.releaseUnstartedRetry(id, this.retryOwner);
         return;
+      }
       if (!this.stopped) {
         const message = this.redact(id, errorWithDetails(error));
         this.errors.set(id, message);
@@ -2200,14 +2218,20 @@ export class Runtimes {
                   delivery.kind === "direct" &&
                   delivery.created_at > failure.at,
               );
+          const retry =
+            !userDue && !peerDue
+              ? this.store.retryStatus(agent.id)?.retry
+              : null;
           const autoDue =
-            !userDue &&
-            !peerDue &&
+            retry?.state === "waiting" &&
+            retry.next_at !== null &&
+            retry.next_at <= Date.now() &&
             !this.connecting.has(agent.id) &&
             !this.pumping.has(agent.id) &&
             !this.switching.has(agent.id) &&
             !this.isMigrating(agent.id) &&
             !this.connections.get(agent.id)?.info.busy &&
+            (await this.retryRunnerReady(agent.id)) &&
             this.store.claimRetry(agent.id, Date.now(), this.retryOwner);
           try {
             await this.pump(agent.id, userDue || peerDue || autoDue);

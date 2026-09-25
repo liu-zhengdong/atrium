@@ -12,6 +12,7 @@ import { unreadLabel, type Overview } from "../../shared/schema.ts";
 import { patchChat } from "../api.ts";
 import { ChatAvatar } from "../components/ChatAvatar.tsx";
 import { failureSummary } from "../components/failure-summary.ts";
+import { retryOf, retryStateText } from "../agents/retry-state.ts";
 import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
@@ -175,9 +176,12 @@ export function Sidebar({
                   aria-label={chat.name}
                   title={
                     agentById.get(chat.direct_agent ?? "")?.failure
-                      ? failureSummary(
+                      ? (retryStateText(
+                          retryOf(agentById.get(chat.direct_agent ?? "")!),
+                        ) ??
+                        failureSummary(
                           agentById.get(chat.direct_agent ?? "")!.failure!.text,
-                        )
+                        ))
                       : undefined
                   }
                 />

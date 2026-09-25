@@ -7,6 +7,7 @@ import {
   type Agent,
 } from "../components/AgentAvatar.tsx";
 import { failureSummary } from "../components/failure-summary.ts";
+import { retryOf, retryStateText } from "./retry-state.ts";
 import { modelLabel, type ModelOption } from "../../shared/model.ts";
 import { api } from "../api.ts";
 
@@ -116,64 +117,70 @@ export function AgentDirectory({
             <span />
             <span />
           </div>
-          {agents.map((a) => (
-            <div
-              key={a.id}
-              className="group grid min-h-[36px] grid-cols-[30px_minmax(90px,1fr)_minmax(100px,1.3fr)_minmax(80px,0.8fr)_36px_48px] items-center gap-3 rounded-lg px-2.5 hover:bg-soft max-[700px]:min-h-[52px] max-[700px]:grid-cols-[30px_minmax(0,1fr)_36px_48px]"
-            >
-              <button
-                aria-label={`查看 ${a.name} 详情`}
-                className="shrink-0"
-                onClick={() => details(a.id)}
+          {agents.map((a) => {
+            const retry = retryOf(a);
+            const state = retryStateText(retry);
+            const cell = a.unassigned
+              ? "未分配账号"
+              : a.failure
+                ? (state ?? failureSummary(a.failure.text))
+                : a.work;
+            // 重试中不算「出错待处理」，用琥珀色区分
+            const tone =
+              retry?.state === "running"
+                ? "text-[#8a6a12]"
+                : a.unassigned || a.failure
+                  ? "text-[#9c3f2d]"
+                  : "text-muted";
+            return (
+              <div
+                key={a.id}
+                className="group grid min-h-[36px] grid-cols-[30px_minmax(90px,1fr)_minmax(100px,1.3fr)_minmax(80px,0.8fr)_36px_48px] items-center gap-3 rounded-lg px-2.5 hover:bg-soft max-[700px]:min-h-[52px] max-[700px]:grid-cols-[30px_minmax(0,1fr)_36px_48px]"
               >
-                <Avatar name={a.name} presence={agentPresence(a)} small />
-              </button>
-              <button
-                className="col-span-3 grid min-w-0 grid-cols-subgrid items-center text-left text-xs max-[700px]:col-span-1 max-[700px]:flex max-[700px]:flex-col max-[700px]:items-start max-[700px]:gap-0.5"
-                disabled={!!opening}
-                onClick={() => openAgent(a)}
-                aria-label={`与 ${a.name} 聊天`}
-              >
-                <strong className="min-w-0 max-w-full truncate font-medium text-ink">
-                  {a.name}
-                </strong>
-                <span
-                  className={`min-w-0 truncate max-w-full max-[700px]:empty:hidden ${a.unassigned || a.failure ? "text-[#9c3f2d]" : "text-muted"}`}
-                  title={
-                    a.unassigned
-                      ? "未分配账号"
-                      : a.failure
-                        ? failureSummary(a.failure.text)
-                        : a.work
-                  }
+                <button
+                  aria-label={`查看 ${a.name} 详情`}
+                  className="shrink-0"
+                  onClick={() => details(a.id)}
                 >
-                  {a.unassigned
-                    ? "未分配账号"
-                    : a.failure
-                      ? failureSummary(a.failure.text)
-                      : a.work}
-                </span>
-                <span className="truncate text-muted max-[700px]:hidden">
-                  {a.runtime?.model && a.runtime.model !== "unknown/unknown"
-                    ? modelLabel(a.runtime.model, models)
-                    : ""}
-                </span>
-              </button>
-              <span className="text-right">
-                {a.unread > 0 && (
-                  <span className="badge" aria-label={`${a.unread} 条未读`}>
-                    {a.unread}
+                  <Avatar name={a.name} presence={agentPresence(a)} small />
+                </button>
+                <button
+                  className="col-span-3 grid min-w-0 grid-cols-subgrid items-center text-left text-xs max-[700px]:col-span-1 max-[700px]:flex max-[700px]:flex-col max-[700px]:items-start max-[700px]:gap-0.5"
+                  disabled={!!opening}
+                  onClick={() => openAgent(a)}
+                  aria-label={`与 ${a.name} 聊天`}
+                >
+                  <strong className="min-w-0 max-w-full truncate font-medium text-ink">
+                    {a.name}
+                  </strong>
+                  <span
+                    className={`min-w-0 truncate max-w-full max-[700px]:empty:hidden ${tone}`}
+                    title={cell}
+                  >
+                    {cell}
                   </span>
-                )}
-              </span>
-              <button
-                className="w-12 text-xs text-muted hover:text-accent-strong"
-                onClick={() => details(a.id)}
-              >
-                详情
-              </button>
-            </div>
-          ))}
+                  <span className="truncate text-muted max-[700px]:hidden">
+                    {a.runtime?.model && a.runtime.model !== "unknown/unknown"
+                      ? modelLabel(a.runtime.model, models)
+                      : ""}
+                  </span>
+                </button>
+                <span className="text-right">
+                  {a.unread > 0 && (
+                    <span className="badge" aria-label={`${a.unread} 条未读`}>
+                      {a.unread}
+                    </span>
+                  )}
+                </span>
+                <button
+                  className="w-12 text-xs text-muted hover:text-accent-strong"
+                  onClick={() => details(a.id)}
+                >
+                  详情
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="grid justify-items-center gap-3 py-16 text-center text-xs text-muted">

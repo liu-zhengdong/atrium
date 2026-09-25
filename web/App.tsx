@@ -296,6 +296,7 @@ export function App() {
             openAgent={(agent) => void openAgent(agent)}
             openingAgent={openingAgent}
             details={showTrace}
+            inspectAgent={showAgent}
             refresh={refresh}
             openMessage={(chat, message) => void openMessage(chat, message)}
             openUser={() => setSettings("profile")}
@@ -389,6 +390,7 @@ export function App() {
                       setTab={setRecordTab}
                       filters={recordFilters}
                       setFilters={setRecordFilters}
+                      openAgent={showAgent}
                       openMessage={(chat, message) =>
                         void openMessage(chat, message)
                       }

@@ -356,12 +356,16 @@ export class RunnerDaemon {
         },
       });
       this.socket = socket;
+      let link: RunnerLink | undefined;
       try {
-        await once(socket, "open");
-        if (this.stopped) break;
-        this.link = new RunnerLink(socket, (method, params) =>
+        // The service can send its first request in the upgrade callback,
+        // before the client's open event resumes this coroutine.
+        link = new RunnerLink(socket, (method, params) =>
           this.handle(method, params),
         );
+        await once(socket, "open");
+        if (this.stopped) break;
+        this.link = link;
         const statuses = Object.fromEntries(
           (this.journal?.priorAgents() ?? []).map((agentId) => [
             agentId,
@@ -386,8 +390,9 @@ export class RunnerDaemon {
           throw new Error("运行器认证失败：请检查凭据文件与撤销状态");
         // The service may be upgrading. Keep the ACP child alive and reconnect.
       } finally {
-        this.link?.close();
-        this.link = undefined;
+        // Also dispose the pre-open link when the handshake fails.
+        link?.close();
+        if (this.link === link) this.link = undefined;
         socket.terminate();
         if (this.socket === socket) this.socket = undefined;
       }

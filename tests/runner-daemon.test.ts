@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { RunnerBridge } from "../server/runner-bridge.ts";
 import { RunnerDaemon } from "../server/runner-daemon.ts";
 
@@ -36,6 +37,73 @@ async function until(predicate: () => boolean, timeout = 10_000) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+test("runner answers the first frame sent during WebSocket upgrade", async (t) => {
+  const server = createServer();
+  const sockets = new WebSocketServer({ server, path: "/runner/v1" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const daemon = new RunnerDaemon(
+    `ws://127.0.0.1:${address.port}/runner/v1`,
+    "fake-machine",
+    { ...process.env, ATRIUM_PI_ACP_ENTRY: entry },
+  );
+  const running = daemon.run();
+  t.after(async () => {
+    daemon.close();
+    await running;
+    await new Promise<void>((resolve) => sockets.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const firstReply = new Promise<{
+    result?: { generation?: string };
+    error?: string;
+  }>((resolve) => {
+    sockets.on("connection", (socket) => {
+      socket.on("message", (raw) => {
+        const packet = JSON.parse(raw.toString()) as {
+          kind: string;
+          id: number;
+          method?: string;
+          result?: { generation?: string };
+          error?: string;
+        };
+        if (packet.kind === "reply" && packet.id === 777) resolve(packet);
+        if (packet.kind === "request" && packet.method === "runner.reconcile")
+          socket.send(
+            JSON.stringify({
+              kind: "reply",
+              id: packet.id,
+              result: { allRecovered: true },
+            }),
+          );
+      });
+      socket.send(
+        JSON.stringify({
+          kind: "request",
+          id: 777,
+          method: "runner.heartbeat",
+          params: {},
+        }),
+      );
+    });
+  });
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const reply = await Promise.race([
+      firstReply,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("first frame lost")), 2000);
+      }),
+    ]);
+    assert.equal(reply.error, undefined);
+    assert.equal(typeof reply.result?.generation, "string");
+  } finally {
+    clearTimeout(timer);
+  }
+});
 
 test("service replacement keeps the independent ACP child and its session", async (t) => {
   let server = createServer();

@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { sameSecret } from "../shared/secret.ts";
 import {
   dataDirectory,
   readService,
@@ -240,7 +241,12 @@ export const authCommands: Record<string, Command> = {
         return;
       }
       let token = readHook(dataDirectory(), current.agent);
-      if (values.rotate || !token || hash(token) !== current.tokenHash) {
+      if (
+        values.rotate ||
+        !token ||
+        !current.tokenHash ||
+        !sameSecret(hash(token), current.tokenHash)
+      ) {
         token = randomBytes(32).toString("hex");
         // Persist locally before installing the hash; interrupted writes are recoverable by --rotate.
         writeHook(dataDirectory(), current.agent, token);

@@ -1,5 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { sameSecret } from "../shared/secret.ts";
 import {
   defaultPreferences,
   chatReference,
@@ -469,11 +470,11 @@ export class Store {
     );
   }
   authenticate(id: string, token: string): boolean {
-    return !!this.one(
-      "SELECT id FROM agents WHERE id=? AND token_hash=? AND deleted_at IS NULL",
+    const row = this.one<{ token_hash: string }>(
+      "SELECT token_hash FROM agents WHERE id=? AND deleted_at IS NULL",
       id,
-      hash(token),
     );
+    return !!row && sameSecret(hash(token), row.token_hash);
   }
   createAgent(name: string, cwd: string) {
     if (this.one("SELECT id FROM agents WHERE name=?", name))

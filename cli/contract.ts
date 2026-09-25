@@ -6,6 +6,7 @@ import { join } from "node:path";
 export const exitCodes = {
   internal: 1,
   usage: 2,
+  confirmation_required: 2,
   chat_not_found: 3,
   agent_not_found: 3,
   account_not_found: 3,
@@ -38,6 +39,13 @@ export const recordNext = (next: string) => {
   const current = context.getStore();
   if (current) current.next = next;
 };
+
+/** 多步文本回执的 JSON next 只给第一条可执行命令。 */
+export function commandOnly(next: string | null): string | null {
+  const first = next?.split("\n", 1)[0];
+  const start = first?.indexOf("atrium ") ?? -1;
+  return first && start >= 0 ? first.slice(start) : null;
+}
 
 export function errorCode(error: unknown): ErrorCode {
   if (error instanceof Problem && error.code in exitCodes)

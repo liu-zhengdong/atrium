@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { AgentInfo, LiveRuntime, Overview } from "../shared/schema.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import {
   formatModelSpec,
   groupModelsByProvider,
@@ -248,12 +249,23 @@ const remove: Command = {
   async run({ positionals: [reference], values }) {
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
-    if (values.yes !== true)
+    if (values.yes !== true) {
+      const target = commandAgent(agent.name, agent.ref);
+      const status = agent.running
+        ? presence(agent)
+        : agent.unassigned
+          ? "未分配账号"
+          : "离线";
+      const message = `将删除 ${agent.name}（${agent.ref}，${status}）：撤销访问与后续唤醒，历史聊天保留。`;
+      const stop = agent.running ? `atrium stop ${target}` : null;
       throw new Problem(
         400,
-        `将删除 ${agent.name}（${agent.ref}，${presence(agent)}）：撤销访问与后续唤醒，历史聊天保留。确认请加 --yes`,
-        "usage",
+        `${message}\n${stop ? `先停止：${stop}\n` : ""}确认删除：atrium delete ${target} --yes`,
+        "confirmation_required",
+        undefined,
+        stop ?? undefined,
       );
+    }
     await client.delete(`/agents/${agent.id}`, { confirm: agent.ref });
     console.log(`已删除 ${agent.name}（${agent.ref}）；历史保留`);
   },

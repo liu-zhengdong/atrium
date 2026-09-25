@@ -233,6 +233,8 @@ export type Overview = {
   agents: (AgentInfo & {
     runtime: RuntimeInfo | null;
     available: boolean;
+    /** Live process check shared with the delete guard; presence may retain stale discovery. */
+    running: boolean;
     error: string | null;
     failure: { text: string; at: number; count: number } | null;
     unread: number;

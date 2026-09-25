@@ -63,6 +63,7 @@ import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 
 const require = createRequire(import.meta.url);
 // 服务可能从某个 herdr pane 里启动；后台身份不在那个 pane 里，去掉表示「身处此 pane」的变量，
@@ -295,61 +296,65 @@ export class Runtimes {
     }
   }
   async remove(id: string, confirm: string) {
-    await this.operation(id, async () => {
-      await this.discover();
-      if (this.discoveryError)
-        throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
-      if (this.pumping.has(id))
-        throw new Problem(409, "Agent 正在处理连接，请稍后重试");
-      const { claimIdentity } =
-        require("@liuser/pi-atrium/dist/identity.js") as {
-          claimIdentity(
-            identity: { identityId: string; agentDirectory: string },
-            cwd: string,
-          ): { release(): void };
-        };
-      this.store.transaction(() => {
-        const agent = this.store.agent(id),
-          binding = this.binding(id);
-        if (confirm !== agent.ref)
-          throw new Problem(400, "删除确认与 Agent 不一致");
-        const connected = this.connections.get(id)?.info;
-        if (
-          (binding.runtime_pid && alive(binding.runtime_pid)) ||
-          (connected && alive(connected.pid)) ||
-          this.directory().runtimes.some((r) => r.bound_agent === id)
-        )
-          throw new Problem(409, "Agent 仍在运行，请先正常停止后再删除");
-        let lease: { release(): void } | undefined;
-        try {
-          if (agent.agent_directory) {
-            try {
-              lease = claimIdentity(
-                { identityId: id, agentDirectory: agent.agent_directory },
-                agent.cwd,
-              );
-            } catch {
-              throw new Problem(
-                409,
-                "身份仍被占用或状态不明，请先正常停止 Agent 后重试",
-              );
+    await this.operation(
+      id,
+      async () => {
+        await this.discover();
+        if (this.discoveryError)
+          throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
+        if (this.pumping.has(id))
+          throw new Problem(409, "Agent 正在处理连接，请稍后重试");
+        const { claimIdentity } =
+          require("@liuser/pi-atrium/dist/identity.js") as {
+            claimIdentity(
+              identity: { identityId: string; agentDirectory: string },
+              cwd: string,
+            ): { release(): void };
+          };
+        this.store.transaction(() => {
+          const agent = this.store.agent(id);
+          if (confirm !== agent.ref)
+            throw new Problem(400, "删除确认与 Agent 不一致");
+          if (this.running(id))
+            throw new Problem(
+              409,
+              "Agent 仍在运行，请先正常停止后再删除",
+              undefined,
+              undefined,
+              `atrium stop ${commandAgent(agent.name, agent.ref)}\n确认删除：atrium delete ${commandAgent(agent.name, agent.ref)} --yes`,
+            );
+          let lease: { release(): void } | undefined;
+          try {
+            if (agent.agent_directory) {
+              try {
+                lease = claimIdentity(
+                  { identityId: id, agentDirectory: agent.agent_directory },
+                  agent.cwd,
+                );
+              } catch {
+                throw new Problem(
+                  409,
+                  "身份仍被占用或状态不明，请先正常停止 Agent 后重试",
+                );
+              }
             }
+            this.store.deleteAgent(id);
+            if (agent.agent_directory)
+              unlinkProfile(resolvePiHome(this.piHome), agent.name);
+          } finally {
+            lease?.release();
           }
-          this.store.deleteAgent(id);
-          if (agent.agent_directory)
-            unlinkProfile(resolvePiHome(this.piHome), agent.name);
-        } finally {
-          lease?.release();
-        }
-      });
-      // After the commit: the revocation is recorded, so losing the file cannot
-      // strip a live identity of its token.
-      removeCredential(this.data, id);
-      this.connections.delete(id);
-      this.errors.delete(id);
-      this.starts.delete(id);
-      this.changed();
-    });
+        });
+        // After the commit: the revocation is recorded, so losing the file cannot
+        // strip a live identity of its token.
+        removeCredential(this.data, id);
+        this.connections.delete(id);
+        this.errors.delete(id);
+        this.starts.delete(id);
+        this.changed();
+      },
+      "ignore",
+    );
   }
   private withOwners(runtimes: LiveRuntime[]): LiveRuntime[] {
     const rows = this.store.all<
@@ -590,12 +595,15 @@ export class Runtimes {
   private async operation(
     id: string,
     run: () => Promise<void>,
-    recordFailure = true,
+    recordFailure: boolean | "ignore" = true,
   ) {
     this.assertOpen();
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
+      // Deletion rejections are not runtime failures. Other operations still
+      // record Problems such as a failed identity start or plugin migration.
+      if (recordFailure === "ignore") throw error;
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
@@ -1011,6 +1019,18 @@ export class Runtimes {
       this.errors.delete(id);
     });
     this.changed();
+  }
+  /** 删除预览与删除守卫共用实际存活判断；发现列表可能滞后，不能只看名册在线状态。 */
+  running(id: string, discovered = this.directory().runtimes): boolean {
+    const binding = this.binding(id);
+    const connected = this.connections.get(id)?.info;
+    return !!(
+      (binding.runtime_pid && alive(binding.runtime_pid)) ||
+      (connected && alive(connected.pid)) ||
+      discovered.some(
+        (runtime) => runtime.bound_agent === id && alive(runtime.pid),
+      )
+    );
   }
   /** 撤销最后一个账号前终止活跃身份，不能留下仍在运行的无账号实例。 */
   async stopForUnassignment(id: string) {

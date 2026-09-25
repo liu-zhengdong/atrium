@@ -840,6 +840,7 @@ export class Runtimes {
         recordFailure === "ignore" ||
         (error instanceof Problem &&
           (error.code === "runner_offline" ||
+            error.code === "runner_draining" ||
             error.code === "runner_outcome_unknown" ||
             error.code === "runner_locked"))
       )
@@ -1177,6 +1178,13 @@ export class Runtimes {
         );
         throw error;
       }
+    }).catch((error) => {
+      if (error instanceof Problem && error.code === "runner_draining") {
+        // The runner refused to start a turn; no attempt or cooldown occurred.
+        if (last) this.starts.set(id, last);
+        else this.starts.delete(id);
+      }
+      throw error;
     });
     if (!this.pumping.has(id)) await this.pump(id);
   }

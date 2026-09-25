@@ -165,7 +165,7 @@ export const runnerCommands: Record<string, Command> = {
           "runner_busy",
         );
       console.log(
-        `${agent.name} 已排空；Pi 仍在运行，可安全停止该身份进程；无需停止时运行 atrium runner resume ${agent.ref}`,
+        `${agent.name} 已排空；该身份进程若仍在运行，现可安全停止；无需停止时运行 atrium runner resume ${agent.ref}`,
       );
     },
   },

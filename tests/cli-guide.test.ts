@@ -42,6 +42,21 @@ test("说明书从命令表与退出码表生成；示例均通过参数解析",
     assert(text.includes(`${exit}  ${code}`));
 });
 
+test("runner drain timeout is a distinct retryable CLI result, not an internal error", () => {
+  const timedOut = failure(new Problem(409, "身份未排空", "runner_busy"));
+  assert.equal(timedOut.code, "runner_busy");
+  assert.equal(timedOut.exit, 124);
+  assert.match(guide(commands), /124  runner_busy/);
+  assert.equal(
+    failure(new Problem(409, "正在排空", "runner_draining")).code,
+    "runner_draining",
+  );
+  assert.equal(
+    failure(new Problem(503, "代际变化", "runner_changed")).code,
+    "runner_changed",
+  );
+});
+
 test("错误码与候选最多三项，短号优先", () => {
   assert.equal(new Problem(404, "不存在").code, "not_found");
   const candidates = closest("lris", [

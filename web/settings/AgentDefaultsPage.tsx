@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api.ts";
+import { blockImeSubmit } from "../keys.ts";
 import { matches } from "./types.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { trackUnsaved } from "./unsaved.ts";
@@ -181,7 +182,11 @@ export function AgentDefaultsPage({
         </p>
       )}
       {defaults && (
-        <form className="space-y-10" onSubmit={(event) => void save(event)}>
+        <form
+          className="space-y-10"
+          onSubmit={(event) => void save(event)}
+          onKeyDown={blockImeSubmit}
+        >
           <section className="space-y-3">
             <h2 className="text-sm font-semibold">插件</h2>
             {packageChoices.length > 8 && (

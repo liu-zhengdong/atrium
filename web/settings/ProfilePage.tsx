@@ -5,6 +5,7 @@ import {
   type UserProfile,
 } from "../../shared/user.ts";
 import { api } from "../api.ts";
+import { blockImeSubmit } from "../keys.ts";
 import { matches } from "./types.ts";
 
 export function ProfilePage({
@@ -65,7 +66,11 @@ export function ProfilePage({
         <p className="text-xs text-muted">正在读取资料…</p>
       )}
       {profile && (
-        <form onSubmit={(event) => void save(event)} className="space-y-4">
+        <form
+          onSubmit={(event) => void save(event)}
+          onKeyDown={blockImeSubmit}
+          className="space-y-4"
+        >
           {matches(query, "称呼", "名字", "Agent") && (
             <label className="block text-xs text-muted">
               称呼

@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import type { Agent } from "../components/AgentAvatar.tsx";
+import { isImeKey } from "../keys.ts";
 import { ProfilePage } from "./ProfilePage.tsx";
 import { AccountsPage } from "./AccountsPage.tsx";
 import { ServicePage } from "./ServicePage.tsx";
@@ -95,6 +96,7 @@ export function SettingsCenter({
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (isImeKey(event)) return;
       if (
         event.key === "Escape" &&
         !document.querySelector(

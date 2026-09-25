@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import type { Chat } from "../../shared/schema.ts";
 import { api } from "../api.ts";
 import { NOTICE_MAX } from "../../shared/group.ts";
+import { blockImeSubmit } from "../keys.ts";
 
 /** 群名与公告由用户维护，一次提交当前的完整值。 */
 export function GroupProfile({
@@ -33,7 +34,7 @@ export function GroupProfile({
     }
   }
   return (
-    <form onSubmit={submit} aria-busy={busy}>
+    <form onSubmit={submit} onKeyDown={blockImeSubmit} aria-busy={busy}>
       <label className="form-label">
         <span className="form-title">群名</span>
         <input

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ExternalLink, LoaderCircle } from "lucide-react";
+import { blockImeSubmit } from "../keys.ts";
 import { useLogin } from "./useAccounts.ts";
 
 export function LoginFlow({
@@ -83,6 +84,7 @@ export function LoginFlow({
             event.preventDefault();
             respond(value.trim());
           }}
+          onKeyDown={blockImeSubmit}
           className="flex flex-wrap items-end gap-2"
         >
           <label className="min-w-[180px] flex-1 text-xs text-muted">

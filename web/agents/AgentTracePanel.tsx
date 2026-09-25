@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft, X } from "lucide-react";
 import type { Agent } from "../components/AgentAvatar.tsx";
+import { isImeKey } from "../keys.ts";
 import { AgentTrace } from "./AgentTrace.tsx";
 
 /** Separate workspace card: the chat column yields space instead of being covered. */
@@ -21,6 +22,7 @@ export function AgentTracePanel({
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isImeKey(event)) return;
       if (event.key === "Escape") close();
     };
     window.addEventListener("keydown", onKeyDown);

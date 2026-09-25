@@ -20,6 +20,7 @@ import {
   type ProviderMethod,
 } from "../../shared/providers.ts";
 import type { Account } from "./types.ts";
+import { blockImeSubmit, isImeKey } from "../keys.ts";
 import { LoginFlow } from "./LoginFlow.tsx";
 import { ProviderPicker } from "./ProviderPicker.tsx";
 import { AgentAssignment } from "./AgentAssignment.tsx";
@@ -110,6 +111,7 @@ export function AccountDialog({
   }, [close, reload]);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
+      if (isImeKey(event)) return;
       if (event.key === "Escape") {
         event.stopImmediatePropagation();
         dismiss();
@@ -454,6 +456,7 @@ export function AccountDialog({
         {(step === "auth" || step === "name" || step === "assign") && (
           <form
             onSubmit={(event) => void submit(event)}
+            onKeyDown={blockImeSubmit}
             className="mt-5 space-y-4"
           >
             {step === "auth" && (!account || account.type === "api_key") && (

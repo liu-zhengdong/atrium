@@ -3,6 +3,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { CheckCheck, Search, X } from "lucide-react";
 import type { ChatReadState, Message } from "../../shared/schema.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
+import { isImeKey } from "../keys.ts";
 
 export function ReadReceipt({
   message,
@@ -100,6 +101,10 @@ export function ReadReceipt({
           sideOffset={8}
           collisionPadding={12}
           aria-label="阅读详情"
+          onEscapeKeyDown={(event) => {
+            // 搜索框里选字时按 Esc：Radix 自己监听 Esc，不走 isImeKey，要在这里挡住。
+            if (isImeKey(event)) event.preventDefault();
+          }}
         >
           <div className="mb-3 flex items-center justify-between">
             <h2 className="m-0 text-sm font-semibold">阅读详情</h2>

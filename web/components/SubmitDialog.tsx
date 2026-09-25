@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
+import { blockImeSubmit } from "../keys.ts";
 import { Modal } from "./Modal.tsx";
 
 export function SubmitDialog({
@@ -43,6 +44,7 @@ export function SubmitDialog({
       <form
         className="px-6 py-[22px] [&>p]:mb-5 [&>p]:text-xs [&>p]:leading-[1.8] [&_details]:mb-[18px] [&_details>summary]:mb-3.5 [&_details>summary]:cursor-pointer [&_details>summary]:text-xs [&_details>summary]:text-[#6c6456]"
         onSubmit={save}
+        onKeyDown={blockImeSubmit}
       >
         {error && (
           <p className="error" role="alert">

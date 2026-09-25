@@ -25,7 +25,8 @@ import { AccountRefresh } from "./account-refresh.ts";
 import { AccountWorker } from "./account-worker-client.ts";
 import { ProviderDirectory } from "./provider-directory.ts";
 import { validateKey, validationReason } from "./account-validation.ts";
-import { readIdentityModel } from "./profile.ts";
+import { defaultTemplate, readIdentityModel } from "./profile.ts";
+import { seedModelsStore } from "./model.ts";
 import {
   checkedCustom,
   CustomProviders,
@@ -460,6 +461,8 @@ export class Accounts {
     if (replace && !previous) throw new Problem(409, "该身份没有可替换的账号");
     if (!agent.agent_directory)
       throw new Problem(409, "身份没有配置目录，请先启动身份");
+    // 带上模板里这个供应商的模型目录缓存，没启动过的身份也能列/设模型。
+    seedModelsStore(agent.agent_directory, row.provider, defaultTemplate());
     if (
       row.provider === "antigravity" &&
       !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))

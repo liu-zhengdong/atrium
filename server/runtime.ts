@@ -47,9 +47,9 @@ import {
   syncIdentityProfile,
 } from "./profile.ts";
 import {
-  cachedModels,
   configuredModel,
   configureModel,
+  offlineModels,
   rememberModels,
 } from "./model.ts";
 import {
@@ -1048,7 +1048,7 @@ export class Runtimes {
   }
   /** 这个身份可选的模型。只有它在跑才问得到，问到就存下来给离线时用。 */
   private async listModels(id: string): Promise<ModelOption[]> {
-    if (!this.managed(id)) return cachedModels(this.store, id);
+    if (!this.managed(id)) return offlineModels(this.store, id);
     try {
       const { models } = z
         .object({
@@ -1077,7 +1077,7 @@ export class Runtimes {
       console.error(
         `${this.store.agent(id).name} 的模型清单取回失败：${error}`,
       );
-      return cachedModels(this.store, id);
+      return offlineModels(this.store, id);
     }
   }
   /** 默认配置复用身份模型来源：先合并已观察清单，空清单时从在线身份取一次。 */
@@ -1085,7 +1085,7 @@ export class Runtimes {
     const agents = this.store.agents().filter((agent) => agent.agent_directory);
     const observed = new Map<string, ModelOption>();
     for (const agent of agents)
-      for (const model of cachedModels(this.store, agent.id))
+      for (const model of offlineModels(this.store, agent.id))
         if (
           !observed.has(model.id) ||
           (observed.get(model.id)!.name === model.id && model.name !== model.id)

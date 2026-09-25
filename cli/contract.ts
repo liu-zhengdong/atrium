@@ -11,6 +11,7 @@ export const exitCodes = {
   agent_not_found: 3,
   account_not_found: 3,
   model_not_found: 3,
+  thinking_not_supported: 3,
   not_found: 3,
   conflict: 4,
   validation_failed: 4,

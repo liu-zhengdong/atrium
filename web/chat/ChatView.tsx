@@ -70,26 +70,14 @@ export function ChatView({
       {active && (
         <>
           <ChatNotice notice={active.notice} />
-          {directAgent?.error && (
+          {directAgent && (directAgent.error || directState) && (
             <p
               className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
               role="status"
             >
-              暂时无法与 Agent 通信，已发送的消息会保留。
-              <button
-                className="ml-2 underline"
-                onClick={() => inspectAgent(directAgent.id)}
-              >
-                查看详情
-              </button>
-            </p>
-          )}
-          {directAgent && directState && (
-            <p
-              className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
-              role="status"
-            >
-              {directState}
+              {directState
+                ? `${directState}。已发送的消息会保留。`
+                : "暂时无法与 Agent 通信，已发送的消息会保留。"}
               <button
                 className="ml-2 underline"
                 onClick={() => inspectAgent(directAgent.id)}

@@ -31,6 +31,7 @@ test("分类和截止时间可反向验证；三次重试跨进程持续", () =>
     category: "transient" as const,
     attempts_used: 0,
     attempt_running: false,
+    attempt_claimed_at: null,
     notified_at: null,
     blocked: false,
   };
@@ -49,6 +50,32 @@ test("分类和截止时间可反向验证；三次重试跨进程持续", () =>
     { state: "exhausted", attempt: 3, max: 3, next_at: null },
   );
   assert.equal(retryDecision(base, 121000, true, true).state, "needs_action");
+  assert.deepEqual(
+    retryDecision(
+      { ...base, attempts_used: 1, attempt_running: true },
+      121000,
+      false,
+      false,
+    ),
+    {
+      state: "running",
+      attempt: 1,
+      max: 3,
+      next_at: null,
+    },
+  );
+});
+
+test("瞬态故障没有待重试 direct 不谎称已经三次自动重试", (t) => {
+  const store = memory(t);
+  const agent = store.createAgent("空载", tmpdir()).agent;
+  store.setFailure(agent.id, "HTTP 503", Date.now(), "provider");
+  assert.equal(notifyTerminal(store, agent.id), true);
+  const message = store.one<{ body: string }>(
+    "SELECT body FROM messages WHERE sender='system' ORDER BY id DESC LIMIT 1",
+  );
+  assert.match(message!.body, /需要处理/);
+  assert.doesNotMatch(message!.body, /已自动重试 3 次/);
 });
 
 test("重试持久计数、同一 eventKey 不重复、旧 pending 保留，新用户消息只准一次", (t) => {
@@ -99,6 +126,44 @@ test("重试持久计数、同一 eventKey 不重复、旧 pending 保留，新�
   assert.equal(store.userAttemptDue(agent.id), null);
 });
 
+test("停服 40 分钟后只补一次；后续快速失败分别隔 8/20 分钟，第三次最终通知", (t) => {
+  const store = memory(t);
+  const agent = store.createAgent("逾期身份", tmpdir()).agent;
+  const chat = store.createChat("测试群", [agent.id]);
+  store.send(LOCAL_USER, {
+    chat_id: chat.id,
+    body: "开始",
+    mentions: [agent.id],
+  });
+  const firstAt = 1000;
+  store.setFailure(agent.id, "HTTP 503", firstAt, "provider", "first");
+  const restoredAt = firstAt + 40 * 60_000;
+  assert.equal(store.claimRetry(agent.id, restoredAt), true);
+  store.setFailure(agent.id, "HTTP 503", restoredAt + 1, "provider", "second");
+  const next = restoredAt + 8 * 60_000;
+  assert.equal(
+    store.retryStatus(agent.id, restoredAt + 1)?.retry.next_at,
+    next,
+  );
+  assert.equal(store.claimRetry(agent.id, next - 1), false);
+  assert.equal(store.claimRetry(agent.id, next), true);
+  store.setFailure(agent.id, "HTTP 503", next + 1, "provider", "third");
+  const last = next + 20 * 60_000;
+  assert.equal(store.retryStatus(agent.id, next + 1)?.retry.next_at, last);
+  assert.equal(store.claimRetry(agent.id, last - 1), false);
+  assert.equal(store.claimRetry(agent.id, last), true);
+  store.setFailure(agent.id, "HTTP 503", last + 1, "provider", "fourth");
+  assert.equal(store.retryStatus(agent.id)?.retry.state, "exhausted");
+  assert.equal(notifyTerminal(store, agent.id), true);
+  assert.match(
+    store.one<{ body: string }>(
+      "SELECT body FROM messages WHERE sender='system' ORDER BY id DESC LIMIT 1",
+    )!.body,
+    /已自动重试 3 次/,
+  );
+  assert.equal(notifyTerminal(store, agent.id), false);
+});
+
 test("重启时遗留旧进程 running 不重放，保留事件并转人工", (t) => {
   const path = join(mkdtempSync(join(tmpdir(), "atrium-orphan-")), "store.db");
   t.after(() => rmSync(dirname(path), { recursive: true, force: true }));
@@ -119,6 +184,35 @@ test("重启时遗留旧进程 running 不重放，保留事件并转人工", (t
   assert.equal(store.retryStatus(agent.id)?.retry.state, "needs_action");
   assert.equal(store.incident(agent.id)?.attempts_used, 1);
   assert.equal(store.failure(agent.id)?.text, "HTTP 503");
+});
+
+test("保留自动重试的运行预留仅在投递被确认时成立；未启动则阻断并留原消息", (t) => {
+  const store = memory(t);
+  const unsent = store.createAgent("未启动", tmpdir()).agent;
+  const accepted = store.createAgent("已接收", tmpdir()).agent;
+  const chat = store.createChat("测试群", [unsent.id, accepted.id]);
+  store.send(LOCAL_USER, {
+    chat_id: chat.id,
+    body: "开始",
+    mentions: [unsent.id, accepted.id],
+  });
+  const now = Date.now();
+  for (const id of [unsent.id, accepted.id]) {
+    store.setFailure(id, "HTTP 503", now - 120_000, "provider");
+    assert.equal(store.claimRetry(id, now, "worker-a"), true);
+  }
+  store.blockUnstartedRetry(unsent.id, "worker-a");
+  assert.equal(store.retryStatus(unsent.id)?.retry.state, "needs_action");
+  assert.equal(store.incident(unsent.id)?.attempts_used, 0);
+  assert.equal(store.pending(unsent.id).length, 1);
+  store.accepted(store.pending(accepted.id)[0]!.id);
+  store.blockUnstartedRetry(accepted.id, "worker-a");
+  assert.equal(store.incident(accepted.id)?.attempt_running, true);
+  assert.equal(store.incident(accepted.id)?.attempts_used, 1);
+  assert.equal(store.retryStatus(accepted.id)?.retry.state, "running");
+  store.finishTurn(accepted.id, false);
+  assert.equal(store.retryStatus(accepted.id)?.retry.state, "needs_action");
+  assert.equal(store.pending(accepted.id).length, 1);
 });
 
 test("用户群里仍在等则写群系统消息，Agent 发起者消息箱同轮一次，恢复同一批收件人", (t) => {
@@ -253,6 +347,7 @@ test("真实 tick：2 分钟前不唤醒，到点只 claim 一次；unknown 和�
   );
   t.after(async () => runtimes.close());
   const attempted: boolean[] = [];
+  const selected: Array<number | undefined> = [];
   t.mock.method(
     runtimes as unknown as {
       doPump(id: string, direct: boolean): Promise<void>;
@@ -260,6 +355,11 @@ test("真实 tick：2 分钟前不唤醒，到点只 claim 一次；unknown 和�
     "doPump",
     async (_id: string, direct: boolean) => {
       attempted.push(direct);
+      selected.push(
+        (
+          runtimes as unknown as { userAttempt: Map<string, number> }
+        ).userAttempt.get(_id),
+      );
     },
   );
   const tick = () => (runtimes as unknown as { tick(): Promise<void> }).tick();
@@ -273,7 +373,9 @@ test("真实 tick：2 分钟前不唤醒，到点只 claim 一次；unknown 和�
   await tick();
   await tick();
   assert.deepEqual(attempted, [true]);
-  assert.equal(store.incident(agent.id)?.attempts_used, 1);
+  // This fake pump did not acknowledge a delivery: release the reservation and block.
+  assert.equal(store.incident(agent.id)?.attempts_used, 0);
+  assert.equal(store.incident(agent.id)?.blocked, true);
   store.setFailure(agent.id, "HTTP 503", now + 1, "provider");
   store.deliveryError(store.pending(agent.id)[0]!.id, "投递结果未知：未确认");
   now = started + 1_000_000;
@@ -297,6 +399,7 @@ test("真实 tick：2 分钟前不唤醒，到点只 claim 一次；unknown 和�
   await tick();
   await tick();
   assert.deepEqual(attempted, [true, true]);
+  assert.deepEqual(selected, [undefined, newMessage.id]);
   assert.equal(store.userAttemptDue(agent.id), null);
   assert.ok(newMessage.id > 0);
 });

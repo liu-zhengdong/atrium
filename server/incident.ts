@@ -28,11 +28,12 @@ export type Incident = {
   category: FailureCategory;
   attempts_used: number;
   attempt_running: boolean;
+  attempt_claimed_at: number | null;
   notified_at: number | null;
   blocked: boolean;
 };
 
-/** Schedules are relative to the FIRST failure, never to the last retry/restart. */
+/** First retry is relative to failure; overdue catch-up runs at most once before preserving spacing. */
 export function retryDecision(
   incident: Incident,
   now: number,
@@ -41,12 +42,7 @@ export function retryDecision(
   delays: readonly number[] = RETRY_DELAYS,
 ): FailureRetry {
   const max = delays.length;
-  if (
-    incident.category === "needsHuman" ||
-    incident.blocked ||
-    uncertain ||
-    !hasRetryablePending
-  )
+  if (incident.category === "needsHuman" || incident.blocked || uncertain)
     return { state: "needs_action", attempt: null, max, next_at: null };
   if (incident.attempt_running)
     return {
@@ -55,12 +51,21 @@ export function retryDecision(
       max,
       next_at: null,
     };
+  if (!hasRetryablePending)
+    return { state: "needs_action", attempt: null, max, next_at: null };
   if (incident.attempts_used >= max)
     return { state: "exhausted", attempt: max, max, next_at: null };
   return {
     state: "waiting",
     attempt: incident.attempts_used + 1,
     max,
-    next_at: incident.started_at + delays[incident.attempts_used]!,
+    next_at: Math.max(
+      incident.started_at + delays[incident.attempts_used]!,
+      incident.attempts_used && incident.attempt_claimed_at !== null
+        ? incident.attempt_claimed_at +
+            delays[incident.attempts_used]! -
+            delays[incident.attempts_used - 1]!
+        : 0,
+    ),
   };
 }

@@ -261,14 +261,6 @@ test(
     assert.match(await ok("show", "沈默"), /介绍：评审代码/);
     assert.match(await ok("show", "a2"), /沈默 · a2 · 未分配账号/);
     assert.match(await refused("show", "不存在"), /没有叫「不存在」的 Agent/);
-    const diagnosis = new Store(join(f.data, "atrium.sqlite"));
-    diagnosis.setFailure(
-      diagnosis.resolveAgentId("a2"),
-      errorWithDetails(RequestError.internalError({ details: "缺少运行扩展" })),
-    );
-    diagnosis.close();
-    assert.match(await ok("show", "a2"), /data: \{"details":"缺少运行扩展"\}/);
-
     // 偏好与资料：非法值被拒，合法值落库。
     assert.match(await ok("config", "沈默", "--heartbeat", "45"), /心跳 45 秒/);
     assert.match(await ok("config", "沈默"), /心跳 45 秒/);
@@ -389,7 +381,9 @@ test(
     );
 
     // 群名不保证唯一，撞名时报短号不猜
-    await ok("group", "评审组", "林岚");
+    const secondGroup = await ok("group", "评审组", "林岚");
+    const secondGroupRef = secondGroup.match(/已建群 评审组（(c\d+)）/)?.[1];
+    assert(secondGroupRef, secondGroup);
     const clash = /有 2 个会话叫 评审组，请改用短号：c2、c\d+/;
     assert.match(await refused("send", "评审组", "哪个"), clash);
     const clashJson = await f.cli("send", "评审组", "哪个", "--json");
@@ -453,12 +447,18 @@ test(
     assert.match(await refused("disband", "c2", "--yes"), /没有叫「c2」的会话/);
     const remaining = await ok("chats");
     assert.doesNotMatch(remaining, /^c2\s/m, "要删的群从列表里消失");
-    assert.match(remaining, /^c4\s+评审组\s+群/m, "另一个同名群不受影响");
+    assert.match(
+      remaining,
+      new RegExp(`^${secondGroupRef}\\s+评审组\\s+群`, "m"),
+      "另一个同名群不受影响",
+    );
     assert.doesNotMatch(await ok("search", "开工"), /开工了/);
     // 回执按新约定：上屏给下一步命令，--json 是 {ok, result, next}，next 是能直接跑的命令
     assert.match(
-      await ok("disband", "c4", "--yes"),
-      /已删除 评审组（c4）[\s\S]*看剩下的会话：atrium chats/,
+      await ok("disband", secondGroupRef, "--yes"),
+      new RegExp(
+        `已删除 评审组（${secondGroupRef}）[\\s\\S]*看剩下的会话：atrium chats`,
+      ),
     );
     await ok("group", "临时组", "林岚");
     const receipt = await f.cli("disband", "临时组", "--yes", "--json");
@@ -504,6 +504,15 @@ test(
       "run",
     ])
       assert.match(help, new RegExp(`atrium ${name}( |$)`, "m"));
+
+    // 故障可能即时在用户私聊发系统提示；在固定会话编号的断言之后验证。
+    const diagnosis = new Store(join(f.data, "atrium.sqlite"));
+    diagnosis.setFailure(
+      diagnosis.resolveAgentId("a2"),
+      errorWithDetails(RequestError.internalError({ details: "缺少运行扩展" })),
+    );
+    diagnosis.close();
+    assert.match(await ok("show", "a2"), /data: \{"details":"缺少运行扩展"\}/);
   },
 );
 

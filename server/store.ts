@@ -223,7 +223,7 @@ export class Store {
     this.db.exec(`CREATE TABLE IF NOT EXISTS failure_incidents (
       id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL REFERENCES agents(id),
       started_at INTEGER NOT NULL, category TEXT NOT NULL, attempts_used INTEGER NOT NULL DEFAULT 0,
-      attempt_running INTEGER NOT NULL DEFAULT 0, attempt_owner TEXT, blocked INTEGER NOT NULL DEFAULT 0,
+      attempt_running INTEGER NOT NULL DEFAULT 0, attempt_owner TEXT, attempt_claimed_at INTEGER, blocked INTEGER NOT NULL DEFAULT 0,
       notified_at INTEGER, last_event_key TEXT, last_user_attempt_message INTEGER NOT NULL DEFAULT 0, closed_at INTEGER);
       CREATE UNIQUE INDEX IF NOT EXISTS incident_active ON failure_incidents(agent_id) WHERE closed_at IS NULL;
       CREATE TABLE IF NOT EXISTS incident_notices (
@@ -874,7 +874,7 @@ export class Store {
       );
       if (existing) return this.chat(existing.id);
     }
-    return this.transaction(() => {
+    const create = () => {
       const id = randomUUID();
       this.run(
         "INSERT INTO chats(id,name,kind,direct_agent) VALUES(?,?,?,?)",
@@ -894,7 +894,8 @@ export class Store {
           if (member !== invitedBy)
             this.inviteNotice(invitedBy, id, member, invite?.note);
       return this.chat(id);
-    });
+    };
+    return this.db.isTransaction ? create() : this.transaction(create);
   }
   openDirect(sender: string, recipient: string) {
     const a = this.agent(sender),
@@ -1685,6 +1686,7 @@ export class Store {
       attempts_used: number;
       attempt_running: number;
       attempt_owner: string | null;
+      attempt_claimed_at: number | null;
       blocked: number;
       notified_at: number | null;
     }>(
@@ -1867,27 +1869,47 @@ export class Store {
   /** Reserve in the database BEFORE attempting an automatic wake. */
   claimRetry(id: string, now = Date.now(), owner = "local"): boolean {
     const incident = this.incident(id);
-    if (
-      !incident ||
-      retryDecision(
-        incident,
-        now,
-        this.retryablePending(id),
-        !!this.uncertainDelivery(id),
-      ).state !== "waiting"
-    )
-      return false;
-    const nextAt =
-      incident.started_at +
-      [120_000, 600_000, 1_800_000][incident.attempts_used]!;
-    if (now < nextAt) return false;
+    if (!incident) return false;
+    const decision = retryDecision(
+      incident,
+      now,
+      this.retryablePending(id),
+      !!this.uncertainDelivery(id),
+    );
+    if (decision.state !== "waiting" || now < decision.next_at!) return false;
     return (
       this.run(
-        "UPDATE failure_incidents SET attempts_used=attempts_used+1,attempt_running=1,attempt_owner=? WHERE id=? AND attempts_used=? AND attempt_running=0",
+        "UPDATE failure_incidents SET attempts_used=attempts_used+1,attempt_running=1,attempt_owner=?,attempt_claimed_at=? WHERE id=? AND attempts_used=? AND attempt_running=0",
         owner,
+        now,
         incident.id,
         incident.attempts_used,
       ).changes === 1
+    );
+  }
+  /** If no direct input was acknowledged after reserving a retry, do not leave it running forever. */
+  blockUnstartedRetry(id: string, owner: string) {
+    const incident = this.one<{
+      id: number;
+      attempt_claimed_at: number | null;
+    }>(
+      "SELECT id,attempt_claimed_at FROM failure_incidents WHERE agent_id=? AND closed_at IS NULL AND attempt_running=1 AND attempt_owner=?",
+      id,
+      owner,
+    );
+    if (!incident) return;
+    if (
+      this.one(
+        "SELECT 1 FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted' AND accepted_at>=? LIMIT 1",
+        id,
+        incident.attempt_claimed_at ?? 0,
+      )
+    )
+      return;
+    this.run(
+      "UPDATE failure_incidents SET attempt_running=0,attempt_owner=NULL,attempt_claimed_at=NULL,attempts_used=MAX(0,attempts_used-1),blocked=1 WHERE id=? AND attempt_running=1 AND attempt_owner=?",
+      incident.id,
+      owner,
     );
   }
   /** Settle only this id after its run_end, or after duplicate plus confirmed Pi idle. */
@@ -1939,6 +1961,13 @@ export class Store {
           `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')${since}`,
           ...args,
         );
+        // A settled idle without a matching successful run_end cannot confirm
+        // this reserved retry succeeded. Keep the message and ask for review.
+        if (rows.length)
+          this.run(
+            "UPDATE failure_incidents SET attempt_running=0,blocked=1,attempt_owner=NULL,attempt_claimed_at=NULL WHERE agent_id=? AND closed_at IS NULL AND attempt_running=1",
+            id,
+          );
         for (const row of summaries) {
           // A newer reminder already covers the same inbox. Keep one pending
           // summary in the unique slot instead of growing orphaned NULL slots.

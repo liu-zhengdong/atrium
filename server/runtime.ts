@@ -130,6 +130,7 @@ export class Runtimes {
   readonly turns: TurnLedger;
   private manuallyRetrying = new Set<string>();
   private explicitlyRetrying = new Set<string>();
+  private readonly userAttempt = new Map<string, number>();
   private readonly retryOwner = randomUUID();
   private idleAccepted = new Map<
     string,
@@ -1572,11 +1573,13 @@ export class Runtimes {
       const userMessage = this.store.userAttemptDue(id);
       if (!userMessage || !this.store.claimUserAttempt(id, userMessage))
         return Promise.resolve();
+      this.userAttempt.set(id, userMessage);
       direct = true;
     }
-    const promise = this.doPump(id, direct).finally(() =>
-      this.pumping.delete(id),
-    );
+    const promise = this.doPump(id, direct).finally(() => {
+      this.userAttempt.delete(id);
+      this.pumping.delete(id);
+    });
     this.pumping.set(id, promise);
     return promise;
   }
@@ -1690,7 +1693,11 @@ export class Runtimes {
       }
       let triggeredTurn = false;
       for (const pending of this.store.pending(id)) {
-        if (singleAttempt && pending.kind !== "direct") continue;
+        if (
+          singleAttempt &&
+          pending.through_message !== this.userAttempt.get(id)
+        )
+          continue;
         // A successful turn can clear the identity failure while its delivery
         // remains uncertain. Only an explicit retry may ask Pi about this id.
         if (
@@ -2202,7 +2209,12 @@ export class Runtimes {
             !this.isMigrating(agent.id) &&
             !this.connections.get(agent.id)?.info.busy &&
             this.store.claimRetry(agent.id, Date.now(), this.retryOwner);
-          await this.pump(agent.id, userDue || peerDue || autoDue);
+          try {
+            await this.pump(agent.id, userDue || peerDue || autoDue);
+          } finally {
+            if (autoDue)
+              this.store.blockUnstartedRetry(agent.id, this.retryOwner);
+          }
           if (notifyTerminal(this.store, agent.id)) this.changed();
           if (before !== JSON.stringify(this.connections.get(agent.id)?.info))
             this.changed();

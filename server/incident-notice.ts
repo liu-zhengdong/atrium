@@ -123,9 +123,9 @@ export function notifyTerminal(
   const short = headline(failure.text);
   const ref = agent.ref;
   const reason =
-    incident.category === "needsHuman" || incident.blocked
-      ? `需要处理（${short}）`
-      : `${short}，已自动重试 3 次`;
+    decision.state === "exhausted"
+      ? `${short}，已自动重试 ${incident.attempts_used} 次`
+      : `需要处理（${short}）`;
   store.transaction(() => {
     if (store.incident(id)?.notified_at !== null) return;
     for (const item of recipients.values()) {

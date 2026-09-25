@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer, request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
+import { Store } from "../server/store.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   alive,
@@ -135,6 +136,45 @@ test(
       await fetch(`${serviceUrl(restarted)}/api/overview`)
     ).json()) as { agents: { id: string }[] };
     assert.equal(overview.agents[0]?.id, agent.id);
+  },
+);
+
+test(
+  "十个旧身份不阻塞服务监听；按需启动前仍保持旧目录以待迁移",
+  { timeout: 45000 },
+  async (t) => {
+    const f = await fixture(t);
+    mkdirSync(f.data);
+    const store = new Store(join(f.data, "atrium.sqlite"));
+    const directories: string[] = [];
+    for (let index = 0; index < 10; index++) {
+      const directory = join(f.root, `legacy-${index}`);
+      directories.push(directory);
+      mkdirSync(directory);
+      writeFileSync(
+        join(directory, "settings.json"),
+        JSON.stringify({ packages: [] }),
+      );
+      const { agent } = store.createAgent(`旧身份${index}`, f.root);
+      store.run(
+        "UPDATE agents SET agent_directory=? WHERE id=?",
+        directory,
+        agent.id,
+      );
+    }
+    store.close();
+    const started = Date.now();
+    const result = await f.cli("--no-open");
+    const elapsed = Date.now() - started;
+    assert.equal(result.code, 0, result.stderr);
+    assert(elapsed < 12000, `命令启动耗时 ${elapsed}ms，超出 12 秒上限`);
+    const record = readService(f.data)!;
+    assert.equal(
+      (await fetch(`${serviceUrl(record)}/api/overview`)).status,
+      200,
+    );
+    for (const directory of directories)
+      assert.equal(existsSync(join(directory, ".atrium-packages.json")), false);
   },
 );
 

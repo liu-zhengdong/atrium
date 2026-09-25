@@ -13,6 +13,7 @@ import {
 import { createApp } from "./app.ts";
 import {
   claimService,
+  currentVersion,
   dataDirectory,
   packageRoot,
   servicePort,
@@ -39,8 +40,10 @@ const ensureContainerMcp = () => {
   return containerMcpOpening;
 };
 let stopping = false;
+let shutdownStarted = false;
 const shutdown = async () => {
-  if (stopping) return;
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   stopping = true;
   try {
     await containerMcpOpening?.catch(() => {});
@@ -105,7 +108,9 @@ try {
   if (ignored.length) console.log(`已忽略身份环境变量：${ignored.join(", ")}`);
   const template = templateChoice(process.env);
   console.log(`Pi 模板：${template.path}（来源：${template.source}）`);
-  ({ app } = await createApp({
+  let runtimes: Awaited<ReturnType<typeof createApp>>["runtimes"];
+  let store: Awaited<ReturnType<typeof createApp>>["store"];
+  ({ app, runtimes, store } = await createApp({
     data,
     webRoot: join(packageRoot, "dist"),
     ensureContainerMcp,
@@ -121,11 +126,96 @@ try {
     instance: lease.record.instance,
     pid: process.pid,
     stopping,
+    version: currentVersion(),
   });
   app.get("/api/service", (request, reply) => {
     if (!authorize(request.headers.authorization))
       return reply.code(401).send({ error: "服务控制凭据无效" });
     return status();
+  });
+  app.post("/api/service/prepare-restart", async (request, reply) => {
+    if (!authorize(request.headers.authorization))
+      return reply.code(401).send({ error: "服务控制凭据无效" });
+    if (stopping) return reply.code(409).send({ error: "服务正在关闭" });
+    const body = (request.body as { timeout?: number } | undefined) ?? {};
+    const timeout = Number(body.timeout ?? 300000);
+    if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 7200000)
+      return reply
+        .code(400)
+        .send({ error: "timeout 必须为 1000–7200000 毫秒" });
+    let agentsToWake: string[];
+    try {
+      agentsToWake = (await runtimes?.prepareShutdown(timeout)) ?? [];
+    } catch (error) {
+      return reply.code(409).send({ error: String(error) });
+    }
+    stopping = true;
+    return { ready: true, agentsToWake };
+  });
+  app.get("/api/service/health", async (request, reply) => {
+    if (!authorize(request.headers.authorization))
+      return reply.code(401).send({ error: "服务控制凭据无效" });
+    const runtimesHealth = runtimes
+      ? runtimes.health()
+      : { available: false, error: "运行时未初始化" };
+    const health = {
+      ok: !stopping && runtimesHealth.available,
+      version: currentVersion(),
+      instance: lease.record.instance,
+      pid: process.pid,
+      stopping,
+      runtimes: runtimesHealth,
+    };
+    if (!health.ok) {
+      return reply.code(503).send(health);
+    }
+    return health;
+  });
+  app.post("/api/service/probe", async (request, reply) => {
+    if (!authorize(request.headers.authorization))
+      return reply.code(401).send({ error: "服务控制凭据无效" });
+    const id = (request.body as { id?: string } | undefined)?.id;
+    if (typeof id !== "string" || !store || !runtimes)
+      return reply.code(400).send({ error: "缺少身份 ID" });
+    try {
+      store.agent(id);
+      if (!runtimes.connections.has(id)) await runtimes.start(id);
+      const deliveryId = store.queue(
+        id,
+        "direct",
+        "[Atrium 健康检查] 回复一句即可，勿执行其他任务。",
+      );
+      void runtimes.pump(id, true);
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline) {
+        const delivery = store.one<{ state: string; error: string | null }>(
+          "SELECT state,error FROM deliveries WHERE id=?",
+          deliveryId,
+        );
+        if (delivery?.state === "complete") return { completed: true, id };
+        if (delivery?.error) throw new Error(delivery.error);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error("身份回合验证超时");
+    } catch (error) {
+      return reply.code(503).send({ error: String(error) });
+    }
+  });
+  app.post("/api/service/wake", async (request, reply) => {
+    if (!authorize(request.headers.authorization))
+      return reply.code(401).send({ error: "服务控制凭据无效" });
+    const id = (request.body as { id?: string } | undefined)?.id;
+    if (typeof id !== "string" || !store || !runtimes)
+      return reply.code(400).send({ error: "缺少身份 ID" });
+    store.agent(id);
+    if (!runtimes.connections.has(id)) await runtimes.start(id);
+    store.queue(
+      id,
+      "direct",
+      "[Atrium 重启完成] 请继续刚才的工作；先核对当前状态，避免重复执行已完成的操作。",
+    );
+    void runtimes.pump(id, true);
+    return { woken: true };
   });
   app.post("/api/service/stop", (request, reply) => {
     if (!authorize(request.headers.authorization))

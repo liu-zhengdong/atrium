@@ -612,6 +612,24 @@ test("新建身份拿到自有的技能、扩展和主题，不再引用模板�
   }
 });
 
+test("新建身份的技能目录跟随符号链接，克隆后可独立修改", () => {
+  const { root, template } = resourceTemplate("atrium-resource-links-");
+  try {
+    symlinkSync("SKILL.md", join(template, "skills", "写作", "alias.md"));
+    const target = prepareProfile("id1", template, join(root, ".pi"));
+    const copy = join(target, "skills", "写作", "alias.md");
+    assert.equal(lstatSync(copy).isSymbolicLink(), false);
+    assert.equal(readFileSync(copy, "utf8"), "用户的写作技能");
+    writeFileSync(copy, "身份独立修改");
+    assert.equal(
+      readFileSync(join(template, "skills", "写作", "SKILL.md"), "utf8"),
+      "用户的写作技能",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("新建身份复制模板里的 claude-bridge.json，模板没有就跳过", () => {
   const { root, template } = resourceTemplate("atrium-bridge-config-");
   const source = join(template, "claude-bridge.json");

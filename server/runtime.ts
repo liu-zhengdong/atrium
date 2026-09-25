@@ -11,6 +11,7 @@ import {
 import {
   mkdirSync,
   readFileSync,
+  writeFileSync,
   existsSync,
   renameSync,
   realpathSync,
@@ -43,6 +44,8 @@ import {
   type ModelOption,
 } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
+import { ensureOwnPackages } from "./identity-packages.ts";
+import { migrateTemplateLinks } from "./identity-links.ts";
 import { wakesOffline } from "./delivery.ts";
 import { atriumGuide } from "./mcp.ts";
 import {
@@ -53,9 +56,10 @@ import {
   syncIdentityProfile,
 } from "./profile.ts";
 import {
-  cachedModels,
   configuredModel,
   configureModel,
+  liveThinkingProblem,
+  offlineModels,
   rememberModels,
 } from "./model.ts";
 import {
@@ -69,6 +73,7 @@ import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 
 const require = createRequire(import.meta.url);
 // 服务可能从某个 herdr pane 里启动；后台身份不在那个 pane 里，去掉表示「身处此 pane」的变量，
@@ -133,6 +138,7 @@ export class Runtimes {
   private containerGateways = new Map<string, Gateway>();
   private containerOpenings = new Map<string, Promise<Gateway>>();
   private connecting = new Map<string, Promise<void>>();
+  private switching = new Set<string>();
   private bindingOwners = new Map<string, string>();
   private pumping = new Map<string, Promise<void>>();
   private turns = new Map<
@@ -160,6 +166,9 @@ export class Runtimes {
   private canSetModel = false;
   private scanning?: Promise<void>;
   private ticking = false;
+  private draining = false;
+  public gatewayVersion: string | null = null;
+  public needsReload = new Set<string>();
   private interval: NodeJS.Timeout;
   constructor(
     private store: Store,
@@ -274,6 +283,8 @@ export class Runtimes {
       ).unref();
       try {
         const result = await connection.agent.request<{
+          protocolVersion?: number;
+          agentInfo?: { name?: string; version?: string };
           _meta?: Record<string, unknown>;
         }>("initialize", {
           protocolVersion: PROTOCOL_VERSION,
@@ -287,6 +298,7 @@ export class Runtimes {
           throw new Error(
             "pi-atrium 缺少 runtime/v1 能力，请更新到本项目要求的版本",
           );
+        this.gatewayVersion = result.agentInfo?.version ?? null;
         this.canSetModel = !!result._meta["pi-acp/identity/model/v1"];
         this.assertOpen();
         if (isolated) this.containerGateways.set(isolated, gateway);
@@ -358,61 +370,71 @@ export class Runtimes {
     }
   }
   async remove(id: string, confirm: string) {
-    await this.operation(id, async () => {
-      await this.discover();
-      if (this.discoveryError)
-        throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
-      if (this.pumping.has(id))
-        throw new Problem(409, "Agent 正在处理连接，请稍后重试");
-      const { claimIdentity } =
-        require("@liuser/pi-atrium/dist/identity.js") as {
-          claimIdentity(
-            identity: { identityId: string; agentDirectory: string },
-            cwd: string,
-          ): { release(): void };
-        };
-      this.store.transaction(() => {
-        const agent = this.store.agent(id),
-          binding = this.binding(id);
-        if (confirm !== agent.ref)
-          throw new Problem(400, "删除确认与 Agent 不一致");
-        const connected = this.connections.get(id)?.info;
+    await this.operation(
+      id,
+      async () => {
+        await this.discover();
+        if (this.discoveryError)
+          throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
+        if (this.pumping.has(id))
+          throw new Problem(409, "Agent 正在处理连接，请稍后重试");
+        // 容器内的 PID 不能拿宿主进程表判断，孤立容器也不能删掉身份。
         if (
-          (binding.runtime_pid && alive(binding.runtime_pid)) ||
-          (connected && alive(connected.pid)) ||
-          this.directory().runtimes.some((r) => r.bound_agent === id)
+          this.store.agent(id).container.enabled &&
+          (await containerState(id)) !== "absent"
         )
-          throw new Problem(409, "Agent 仍在运行，请先正常停止后再删除");
-        let lease: { release(): void } | undefined;
-        try {
-          if (agent.agent_directory) {
-            try {
-              lease = claimIdentity(
-                { identityId: id, agentDirectory: agent.agent_directory },
-                agent.cwd,
-              );
-            } catch {
-              throw new Problem(
-                409,
-                "身份仍被占用或状态不明，请先正常停止 Agent 后重试",
-              );
+          throw new Problem(409, "身份容器仍存在，请先停止后再删除");
+        const { claimIdentity } =
+          require("@liuser/pi-atrium/dist/identity.js") as {
+            claimIdentity(
+              identity: { identityId: string; agentDirectory: string },
+              cwd: string,
+            ): { release(): void };
+          };
+        this.store.transaction(() => {
+          const agent = this.store.agent(id);
+          if (confirm !== agent.ref)
+            throw new Problem(400, "删除确认与 Agent 不一致");
+          if (this.running(id))
+            throw new Problem(
+              409,
+              "Agent 仍在运行，请先正常停止后再删除",
+              undefined,
+              undefined,
+              `atrium stop ${commandAgent(agent.name, agent.ref)}\n确认删除：atrium delete ${commandAgent(agent.name, agent.ref)} --yes`,
+            );
+          let lease: { release(): void } | undefined;
+          try {
+            if (agent.agent_directory) {
+              try {
+                lease = claimIdentity(
+                  { identityId: id, agentDirectory: agent.agent_directory },
+                  agent.cwd,
+                );
+              } catch {
+                throw new Problem(
+                  409,
+                  "身份仍被占用或状态不明，请先正常停止 Agent 后重试",
+                );
+              }
             }
+            this.store.deleteAgent(id);
+            if (agent.agent_directory)
+              unlinkProfile(resolvePiHome(this.piHome), agent.name);
+          } finally {
+            lease?.release();
           }
-          this.store.deleteAgent(id);
-          if (agent.agent_directory)
-            unlinkProfile(resolvePiHome(this.piHome), agent.name);
-        } finally {
-          lease?.release();
-        }
-      });
-      // After the commit: the revocation is recorded, so losing the file cannot
-      // strip a live identity of its token.
-      removeCredential(this.data, id);
-      this.connections.delete(id);
-      this.errors.delete(id);
-      this.starts.delete(id);
-      this.changed();
-    });
+        });
+        // After the commit: the revocation is recorded, so losing the file cannot
+        // strip a live identity of its token.
+        removeCredential(this.data, id);
+        this.connections.delete(id);
+        this.errors.delete(id);
+        this.starts.delete(id);
+        this.changed();
+      },
+      "ignore",
+    );
   }
   private withOwners(runtimes: LiveRuntime[]): LiveRuntime[] {
     const rows = this.store.all<
@@ -680,12 +702,16 @@ export class Runtimes {
   private async operation(
     id: string,
     run: () => Promise<void>,
-    recordFailure = true,
+    recordFailure: boolean | "ignore" = true,
   ) {
     this.assertOpen();
+    if (this.draining) throw new Problem(409, "服务正在排空任务，暂不接入身份");
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
+      // Deletion rejections are not runtime failures. Other operations still
+      // record Problems such as a failed identity start or plugin migration.
+      if (recordFailure === "ignore") throw error;
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
@@ -817,8 +843,11 @@ export class Runtimes {
     this.recordSessionReset(id, reason);
   }
   async start(id: string, automatic = false, fresh = false) {
+    if (this.draining) throw new Problem(409, "服务正在排空任务，暂不启动身份");
     requireAssignment(this.store, id);
     const binding = this.binding(id);
+    if (this.switching.has(id) && !fresh)
+      throw new Problem(409, "正在切换会话，请稍候");
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (
       !this.store.agent(id).container.enabled &&
@@ -843,6 +872,45 @@ export class Runtimes {
       if (hostCwd !== current.cwd) this.changed();
       const cwd = current.container.enabled ? "/workspace" : hostCwd;
       if (current.agent_directory) {
+        // Migrate only when this identity is started, never on service boot.
+        // A failed migration must not launch Pi with personal plugins.
+        const migrationStarted = Date.now();
+        try {
+          if (ensureOwnPackages(current.agent_directory)) {
+            // Package migration may have created new links after an earlier clean scan.
+            this.store.run(
+              "DELETE FROM identity_link_migrations WHERE agent_id=?",
+              id,
+            );
+            console.log(
+              `${current.name} 的个人 Pi 插件已转为独立安装（${Date.now() - migrationStarted}ms）`,
+            );
+          }
+        } catch (error) {
+          console.error(
+            `${current.name} 的插件迁移失败（${Date.now() - migrationStarted}ms），保留原配置以便重试：${error}`,
+          );
+          throw error;
+        }
+        try {
+          const links = migrateTemplateLinks(
+            this.store,
+            id,
+            current.agent_directory,
+          );
+          if (links.skipped)
+            console.log(
+              `${current.name} 的模板链接已检查，跳过全量扫描（${links.elapsedMs.toFixed(2)}ms）`,
+            );
+          else if (links.repaired || links.missing || links.failed)
+            console.log(
+              `${current.name} 的模板链接已修复 ${links.repaired} 条，保留 ${links.missing} 条，扫描失败 ${links.failed} 条（${links.elapsedMs.toFixed(0)}ms）`,
+            );
+        } catch (error) {
+          console.error(
+            `${current.name} 的模板链接修复失败，继续启动：${error}`,
+          );
+        }
         // A profile left on the old layout costs the Agent a rule, not its session.
         for (const notice of syncIdentityProfile(current.agent_directory))
           console.error(`${current.name} 的${notice}`);
@@ -951,6 +1019,102 @@ export class Runtimes {
     });
     if (!this.pumping.has(id)) await this.pump(id);
   }
+  /** 等真实运行状态空闲后才释放旧实例；切换期间不投递新的回合。 */
+  async newSession(id: string, timeoutSeconds = 300) {
+    requireAssignment(this.store, id);
+    if (this.switching.has(id) || this.connecting.has(id))
+      throw new Problem(409, "身份正在接入或切换会话，请稍候");
+    const oldFile = this.store.agent(id).session_file;
+    const cursor = join(
+      process.env.PI_ACP_DIR ?? join(homedir(), ".pi", "pi-acp"),
+      "identities",
+      `${id}.cursor.json`,
+    );
+    this.switching.add(id);
+    let started = false;
+    try {
+      await this.discover();
+      if (this.discoveryError)
+        throw new Problem(503, "无法确认身份是否在其他终端运行，请稍后重试");
+      const foreign = this.discovered.find(
+        (runtime) =>
+          runtime.bound_agent === id &&
+          runtime.mode === "tui" &&
+          alive(runtime.pid),
+      );
+      if (foreign)
+        throw new Problem(
+          409,
+          "这个身份正在其他终端运行（atrium run / TUI）；请先在原终端退出，不会抢占会话",
+        );
+      const connection = this.connections.get(id);
+      if (connection && !this.owned(id))
+        throw new Problem(
+          409,
+          "这个身份正在其他终端运行（如 atrium tui / atrium run）；请先在原终端退出，不会抢占会话",
+        );
+      if (!connection) {
+        const pid = this.binding(id).runtime_pid;
+        if (pid && alive(pid))
+          throw new Problem(
+            409,
+            "旧 Pi 进程仍在运行，请先在原终端退出；不会抢占会话",
+          );
+      }
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      while (this.connections.has(id)) {
+        const runtime = this.connections.get(id)!;
+        runtime.info = runtimeSchema.parse(
+          await this.rpc("_pi/runtime/status", target(runtime.info)),
+        );
+        if (!runtime.info.busy) {
+          await this.capture(id, runtime.info);
+          // A concurrent delivery may have begun during the status request.
+          if (!this.pumping.has(id)) break;
+        }
+        if (Date.now() >= deadline)
+          throw new Problem(
+            408,
+            `等待 ${timeoutSeconds} 秒后当前回合仍未结束；旧会话保持运行，稍后重试`,
+            "timeout",
+          );
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      // Preserve the pointer as well as the session file if the new start fails.
+      const previousCursor = existsSync(cursor) ? readFileSync(cursor) : null;
+      const previousBinding = this.binding(id);
+      if (this.connections.has(id)) await this.stop(id);
+      try {
+        await this.start(id, false, true);
+      } catch (error) {
+        if (previousCursor) {
+          const temp = `${cursor}.restore-${randomUUID()}`;
+          writeFileSync(temp, previousCursor, { mode: 0o600 });
+          renameSync(temp, cursor);
+        } else if (existsSync(cursor)) rmSync(cursor);
+        this.store.run(
+          "UPDATE agents SET session_file=?,acp_session_id=? WHERE id=?",
+          previousBinding.session_file,
+          previousBinding.acp_session_id,
+          id,
+        );
+        throw new Problem(
+          503,
+          `新会话启动失败，旧会话文件和指针已保留：${this.redact(id, errorWithDetails(error)).slice(0, 240)}`,
+          "new_session_failed",
+        );
+      }
+      this.recordSessionReset(id, "手动开启新会话");
+      started = true;
+      return {
+        old_session_file: oldFile,
+        new_session_file: this.store.agent(id).session_file,
+      };
+    } finally {
+      this.switching.delete(id);
+      if (started || this.connections.has(id)) await this.pump(id);
+    }
+  }
   /** 本进程这条网关自己启动的 Pi；别处发现、由 TUI 或旧网关拉起的实例不归它管。 */
   private owned(id: string) {
     const runtime = this.connections.get(id);
@@ -1043,6 +1207,12 @@ export class Runtimes {
     if (!agent.container.enabled || !this.owned(id))
       throw new Problem(409, "身份没有运行在本服务管理的容器中");
     if (agent.container.paused) throw new Problem(409, "容器已冻结");
+    if (
+      this.pumping.has(id) ||
+      this.turns.has(id) ||
+      this.connections.get(id)?.info.busy
+    )
+      throw new Problem(409, "身份正在处理回合，请等待结束后冻结");
     await controlContainer(id, "pause");
     this.store.run("UPDATE agents SET container_paused=1 WHERE id=?", id);
     this.changed();
@@ -1058,9 +1228,29 @@ export class Runtimes {
     void this.pump(id);
     return this.store.agent(id).container;
   }
+  /** 删除预览与删除守卫共用实际存活判断；发现列表可能滞后，不能只看名册在线状态。 */
+  running(id: string, discovered = this.directory().runtimes): boolean {
+    // 容器内 PID 不属于宿主 PID 空间；改看宿主 docker 网关与连接。
+    if (this.store.agent(id).container.enabled)
+      return this.containerGateways.has(id) || this.connections.has(id);
+    const binding = this.binding(id);
+    const connected = this.connections.get(id)?.info;
+    return !!(
+      (binding.runtime_pid && alive(binding.runtime_pid)) ||
+      (connected && alive(connected.pid)) ||
+      discovered.some(
+        (runtime) => runtime.bound_agent === id && alive(runtime.pid),
+      )
+    );
+  }
   /** 撤销最后一个账号前终止活跃身份，不能留下仍在运行的无账号实例。 */
   async stopForUnassignment(id: string) {
     if (this.connections.has(id)) return this.stop(id);
+    if (this.store.agent(id).container.enabled) {
+      if ((await containerState(id)) !== "absent")
+        throw new Problem(409, "身份容器仍存在，请先停止后取消分配");
+      return;
+    }
     const pid = this.binding(id).runtime_pid;
     if (pid && alive(pid))
       throw new Problem(409, "身份仍在运行，请先停止后取消分配");
@@ -1075,7 +1265,7 @@ export class Runtimes {
   /** 这个身份可选的模型。只有它在跑才问得到，问到就存下来给离线时用。 */
   private async listModels(id: string): Promise<ModelOption[]> {
     if (!this.managed(id) || this.store.agent(id).container.paused)
-      return cachedModels(this.store, id);
+      return offlineModels(this.store, id);
     try {
       const { models } = z
         .object({
@@ -1104,7 +1294,7 @@ export class Runtimes {
       console.error(
         `${this.store.agent(id).name} 的模型清单取回失败：${error}`,
       );
-      return cachedModels(this.store, id);
+      return offlineModels(this.store, id);
     }
   }
   /** 默认配置复用身份模型来源：先合并已观察清单，空清单时从在线身份取一次。 */
@@ -1112,7 +1302,7 @@ export class Runtimes {
     const agents = this.store.agents().filter((agent) => agent.agent_directory);
     const observed = new Map<string, ModelOption>();
     for (const agent of agents)
-      for (const model of cachedModels(this.store, agent.id))
+      for (const model of offlineModels(this.store, agent.id))
         if (
           !observed.has(model.id) ||
           (observed.get(model.id)!.name === model.id && model.name !== model.id)
@@ -1138,7 +1328,8 @@ export class Runtimes {
       throw new Problem(409, "请先恢复容器再切换模型");
     const live = this.managed(id);
     const options = await this.listModels(id);
-    const directory = this.store.agent(id).agent_directory;
+    const agent = this.store.agent(id);
+    const directory = agent.agent_directory;
     const previous =
       live && directory ? snapshotIdentityModel(directory) : null;
     const { wanted, configured } = configureModel(
@@ -1161,6 +1352,9 @@ export class Runtimes {
       } catch (error) {
         if (directory && previous) restoreIdentityModel(directory, previous);
         const detail = String(error);
+        // 两份目录对不上时 pi 会以原生报错拒绝思考强度：转成中文回执加修正。
+        const fallback = liveThinkingProblem(detail, wanted, agent);
+        if (fallback) throw fallback;
         const reason = detail.includes("Model not found:")
           ? `运行中的 Pi 找不到 ${wanted}，请检查模型配置`
           : `运行中的实例没能当场切换：${detail}`;
@@ -1185,6 +1379,7 @@ export class Runtimes {
   pump(id: string, direct = false): Promise<void> {
     if (
       this.stopped ||
+      this.draining ||
       this.store.agent(id).container.paused ||
       (this.store.failure(id) && !direct)
     )
@@ -1210,7 +1405,7 @@ export class Runtimes {
     }
     let operationFailed = false;
     try {
-      if (this.connecting.has(id)) return;
+      if (this.connecting.has(id) || this.switching.has(id)) return;
       let runtime = this.connections.get(id);
       // A TUI may exit and immediately restart under the same identity. Discovery
       // knows the new runtime before a status poll of the old one necessarily fails.
@@ -1370,11 +1565,16 @@ export class Runtimes {
       }
     }
   }
-  private async capture(id: string, info: RuntimeInfo) {
+  private async capture(
+    id: string,
+    info: RuntimeInfo,
+    maxPages = 2,
+    strict = false,
+  ) {
     const before = this.traceErrors.get(id);
     try {
-      // Bounded catch-up per tick; long gaps are reported, never fabricated.
-      for (let page = 0; page < 2; page++) {
+      // Regular ticks are bounded; shutdown must consume all remaining pages.
+      for (let page = 0; page < maxPages; page++) {
         const events = runtimeEvents.parse(
           await this.rpc("_pi/runtime/events", {
             ...target(info),
@@ -1387,8 +1587,10 @@ export class Runtimes {
           this.stopped ||
           current?.runtimeId !== info.runtimeId ||
           current?.generation !== info.generation
-        )
+        ) {
+          if (strict) throw new Error(`身份 ${id} 的运行实例在轨迹同步时变化`);
           return;
+        }
         if (
           events.runtimeId !== info.runtimeId ||
           events.generation !== info.generation ||
@@ -1475,14 +1677,17 @@ export class Runtimes {
           }
         }
         if (!events.hasMore) break;
+        if (strict && page === maxPages - 1)
+          throw new Error(`身份 ${id} 的轨迹未在 ${maxPages} 页内同步完毕`);
       }
       this.traceErrors.delete(id);
-    } catch {
+    } catch (error) {
       if (!this.stopped)
         this.traceErrors.set(
           id,
           "暂时无法读取实时轨迹；请确认此 Pi 已加载支持轨迹的 pi-atrium 扩展。已有记录仍可查看。",
         );
+      if (strict) throw error;
     }
     if (!this.stopped && before !== this.traceErrors.get(id)) this.changed();
   }
@@ -1500,12 +1705,102 @@ export class Runtimes {
       agentTransition(this.store.failure(id), { kind: "retry" }).wake,
     );
   }
+  activeAgentIds(): string[] {
+    return [...this.connections.keys()].filter(
+      (id) => this.pumping.has(id) || this.connections.get(id)?.info.busy,
+    );
+  }
+  async prepareShutdown(timeoutMs: number): Promise<string[]> {
+    if (this.draining) throw new Error("服务正在排空任务");
+    const agents = new Set(this.activeAgentIds());
+    this.draining = true;
+    const deadline = Date.now() + timeoutMs;
+    let busyIds: string[] = [];
+    try {
+      // An already-running discovery tick may still be reading trace events.
+      // Let it finish before the final strict capture touches the same cursor.
+      while (this.ticking && Date.now() < deadline)
+        await new Promise((r) => setTimeout(r, 100));
+      while (Date.now() < deadline) {
+        // The discovery tick is paused while draining. Refresh busy state from
+        // each running Pi; a stale snapshot would make every busy restart time out.
+        const statuses = await Promise.all(
+          [...this.connections].map(async ([id, entry]) => {
+            // Paused containers cannot answer RPC. Their last observed busy state
+            // still blocks shutdown; an idle paused container needs no capture.
+            if (this.store.agent(id).container.paused)
+              return { id, busy: entry.info.busy || this.turns.has(id) };
+            const current = runtimeSchema.parse(
+              await this.rpc("_pi/runtime/status", target(entry.info)),
+            );
+            entry.info = current;
+            if (current.busy) agents.add(id);
+            return { id, busy: current.busy };
+          }),
+        );
+        busyIds = [
+          ...new Set([
+            ...statuses
+              .filter((status) => status.busy)
+              .map((status) => status.id),
+            ...this.pumping.keys(),
+            ...this.connecting.keys(),
+          ]),
+        ];
+        if (busyIds.length === 0) {
+          // Pi can report idle just before the final events become visible.
+          // Flush first, then require the observed run_start to have run_end.
+          await Promise.all(
+            [...this.connections]
+              .filter(([id]) => !this.store.agent(id).container.paused)
+              .map(([id, entry]) => this.capture(id, entry.info, 100, true)),
+          );
+          busyIds = [...this.connections.keys()].filter((id) =>
+            this.turns.has(id),
+          );
+          for (const id of busyIds) agents.add(id);
+          if (busyIds.length === 0) return [...agents];
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const names = busyIds.map((id) => {
+        const agent = this.store.agent(id);
+        return `${agent.name}（${agent.ref}）`;
+      });
+      throw new Error(
+        `Agent 回合未在 ${timeoutMs / 1000} 秒内完成；仍在工作：${names.join("、") || "状态未确认"}。旧服务继续运行；待回合结束后重新运行 atrium restart，或使用 --agent-timeout <毫秒> 延长等待`,
+      );
+    } catch (error) {
+      this.draining = false;
+      throw error;
+    }
+  }
+  health(): { available: boolean; error: string | null } {
+    const available =
+      !this.stopped && !this.draining && this.gateway !== undefined;
+    return {
+      available,
+      error: this.discoveryError ?? (available ? null : "网关未就绪"),
+    };
+  }
   private async tick() {
-    if (this.stopped || this.ticking) return;
+    if (this.stopped || this.draining || this.ticking) return;
     this.ticking = true;
     try {
       await this.discover();
-      if (this.stopped) return;
+      if (this.stopped || this.draining) return;
+      for (const agentId of [...this.needsReload]) {
+        const entry = this.connections.get(agentId);
+        if (entry && !entry.info.busy && entry.info.mode === "rpc") {
+          this.needsReload.delete(agentId);
+          try {
+            await this.stop(agentId);
+            await this.start(agentId);
+          } catch (err) {
+            console.warn(`自动重载 Agent ${agentId} 失败：`, err);
+          }
+        }
+      }
       if (this.store.schedule().length) this.changed();
       await Promise.all(
         this.store.agents().map(async (agent) => {

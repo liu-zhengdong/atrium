@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
+import { markOwn } from "../server/identity-packages.ts";
 import type { RuntimeInfo } from "../shared/schema.ts";
 
 function assignFixture(store: Store, id: string) {
@@ -330,6 +331,8 @@ test("具名身份恢复被游标悄悄替换：停止错会话、避开游标�
   assignFixture(store, agent.id);
   const profile = join(root, "profile");
   mkdirSync(profile);
+  writeFileSync(join(profile, "settings.json"), '{"packages":[]}');
+  markOwn(profile); // This fixture tests session recovery, not legacy plugin migration.
   const oldFile = join(root, "old.jsonl");
   writeFileSync(oldFile, "original session\n");
   store.run(

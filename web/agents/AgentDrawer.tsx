@@ -7,6 +7,7 @@ import { SidePanel } from "../components/SidePanel.tsx";
 import { AgentFailure } from "../components/AgentFailure.tsx";
 import { Empty } from "../components/Empty.tsx";
 import { AgentModel } from "./AgentModel.tsx";
+import { AgentNewSession } from "./AgentNewSession.tsx";
 import { AgentCredentials } from "../settings/AgentCredentials.tsx";
 import {
   agentPresence,
@@ -142,7 +143,10 @@ export function AgentDrawer({
         </div>
       </div>
       <div className="space-y-2 px-5 py-4">
-        <h3 className="text-xs font-medium">模型 · 账号</h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-medium">模型 · 账号</h3>
+          <AgentNewSession agent={agent} />
+        </div>
         <AgentModel agentId={agent.id} compact />
         <AgentCredentials
           agent={agent}

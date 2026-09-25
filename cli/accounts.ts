@@ -193,9 +193,10 @@ export const accountCommands: Record<string, Command> = {
         agentName: string;
         accountName?: string;
         preserved: string | null;
+        alreadyAssigned?: boolean;
       }>(`/assign/${encode(agent!)}`, { account });
       console.log(
-        `已分配：${result.agentName} → ${result.account}${result.accountName ? ` ${result.accountName}` : ""}${result.preserved ? `；原文件已保留：${result.preserved}` : ""}`,
+        `${result.alreadyAssigned ? "已分配过" : "已分配"}：${result.agentName} → ${result.account}${result.accountName ? ` ${result.accountName}` : ""}${result.preserved ? `；原文件已保留：${result.preserved}` : ""}`,
       );
     },
   },

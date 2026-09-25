@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { AgentInfo, LiveRuntime, Overview } from "../shared/schema.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import {
   formatModelSpec,
   groupModelsByProvider,
@@ -18,6 +19,7 @@ import { clip, printJson, table, when } from "./format.ts";
 import { str, strs, type Command } from "./main.ts";
 import { Problem, closest } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
+import { waitOptions } from "./wait-options.ts";
 
 export type AgentEntry = Overview["agents"][number];
 /** 与 Web 头像状态点同一套判断。 */
@@ -139,18 +141,32 @@ const create: Command = {
   positionals: [1, 1],
   async run({ positionals: [name], values }) {
     const client = await connect();
-    const { agent, start_error } = await client.post<{
-      agent: AgentEntry;
-      start_error?: string;
-    }>("/agents", {
-      name,
-      source: str(values, "from") ?? "builtin",
-      description: str(values, "description") ?? "",
-      start: values.start === true,
-    });
-    console.log(`${agent.name} · ${agent.ref}`);
+    const frames = ["◐", "◓", "◑", "◒"];
+    let frame = 0;
+    const progress = process.stderr.isTTY
+      ? setInterval(() => {
+          process.stderr.write(
+            `\r\x1b[2K${frames[frame++ % frames.length]} 正在复制插件…`,
+          );
+        }, 120)
+      : null;
+    let result: { agent: AgentEntry; start_error?: string };
+    try {
+      result = await client.post<typeof result>("/agents", {
+        name,
+        source: str(values, "from") ?? "builtin",
+        description: str(values, "description") ?? "",
+        start: values.start === true,
+      });
+    } finally {
+      if (progress) {
+        clearInterval(progress);
+        process.stderr.write("\r\x1b[2K");
+      }
+    }
+    console.log(`${result.agent.name} · ${result.agent.ref}`);
     recordNext(`查看可用账号：atrium accounts`);
-    if (start_error) throw new Error(start_error);
+    if (result.start_error) throw new Error(result.start_error);
   },
 };
 
@@ -167,6 +183,38 @@ const start: Command = {
       `已启动 ${started.name} · ${presence(started)}${started.runtime ? ` · PID ${started.runtime.pid} · ${started.runtime.model}` : ""}`,
     );
     recordNext(`发私聊：atrium send ${started.ref} 正文`);
+  },
+};
+
+const newSession: Command = {
+  args: "名称 [--timeout 秒]",
+  about: "等当前回合结束后为身份开启新 Pi 会话；旧会话文件保留",
+  options: { timeout: { type: "string" } },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values }) {
+    const seconds = waitOptions(undefined, str(values, "timeout")).seconds;
+    const client = await connect();
+    const agent = findAgent(await roster(client), reference!);
+    const result = await client
+      .post<{
+        old_session_file: string | null;
+        new_session_file: string | null;
+      }>(`/agents/${agent.id}/new-session`, { timeout: seconds })
+      .catch((error: unknown) => {
+        if (error instanceof Problem && error.code === "timeout")
+          throw new Problem(
+            408,
+            error.message,
+            "timeout",
+            undefined,
+            `atrium new-session ${agent.ref} --timeout ${Math.min(3600, Math.max(300, seconds * 2))}`,
+          );
+        throw error;
+      });
+    console.log(
+      `已为 ${agent.name} 开启新会话：${result.new_session_file ?? "会话文件待生成"}\n旧会话文件保留：${result.old_session_file ?? "此前没有会话文件"}`,
+    );
+    recordNext(`查看轨迹：atrium trace ${agent.ref}`);
   },
 };
 
@@ -234,12 +282,23 @@ const remove: Command = {
   async run({ positionals: [reference], values }) {
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
-    if (values.yes !== true)
+    if (values.yes !== true) {
+      const target = commandAgent(agent.name, agent.ref);
+      const status = agent.running
+        ? presence(agent)
+        : agent.unassigned
+          ? "未分配账号"
+          : "离线";
+      const message = `将删除 ${agent.name}（${agent.ref}，${status}）：撤销访问与后续唤醒，历史聊天保留。`;
+      const stop = agent.running ? `atrium stop ${target}` : null;
       throw new Problem(
         400,
-        `将删除 ${agent.name}（${agent.ref}，${presence(agent)}）：撤销访问与后续唤醒，历史聊天保留。确认请加 --yes`,
-        "usage",
+        `${message}\n${stop ? `先停止：${stop}\n` : ""}确认删除：atrium delete ${target} --yes`,
+        "confirmation_required",
+        undefined,
+        stop ?? undefined,
       );
+    }
     await client.delete(`/agents/${agent.id}`, { confirm: agent.ref });
     console.log(`已删除 ${agent.name}（${agent.ref}）；历史保留`);
   },
@@ -556,6 +615,7 @@ export const agentCommands: Record<string, Command> = {
   show,
   create,
   start,
+  "new-session": newSession,
   retry,
   stop,
   container,

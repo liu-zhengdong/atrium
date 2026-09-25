@@ -17,6 +17,7 @@ import { join, resolve, sep } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { defaultTemplate } from "./profile.ts";
 import { Problem } from "./store.ts";
+import { clone } from "./clone.ts";
 
 const MAX_TEXT = 1024 * 1024;
 const skillName = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/;
@@ -208,10 +209,7 @@ export function changeSkill(dir: string, action: SkillAction, name: string) {
     mkdirSync(skillDir(dir), { recursive: true });
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
-      cpSync(source, temporary, {
-        recursive: true,
-        mode: constants.COPYFILE_FICLONE,
-      });
+      clone(source, temporary, { recursive: true });
       renameSync(temporary, target);
     } finally {
       rmSync(temporary, { recursive: true, force: true });
@@ -227,10 +225,7 @@ export function changeSkill(dir: string, action: SkillAction, name: string) {
         // Preserve original contents, including agent-authored files, before removing them from discovery.
         validateSkillTree(target);
         const backup = safePath(dir, `.atrium-skill-${name}-${randomUUID()}`);
-        cpSync(target, backup, {
-          recursive: true,
-          mode: constants.COPYFILE_FICLONE,
-        });
+        clone(target, backup, { recursive: true });
         rmSync(target, { recursive: true });
       }
     }

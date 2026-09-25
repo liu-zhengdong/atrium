@@ -157,6 +157,21 @@ export type Chat = {
   preview: string | null;
   updated_at: number;
 };
+/** 删除群前的预览与删除回执：这个群连带着多少东西。 */
+export type ChatDeletion = {
+  ref: string;
+  name: string;
+  members: number;
+  messages: number;
+  attachments: number;
+  files: number;
+  /** 共享目录太大，文件数只数到上限。 */
+  files_truncated: boolean;
+};
+export type ChatDeletionResult = ChatDeletion & {
+  /** 删不掉的文件，需要人工清理；数据行已删。 */
+  failed: string[];
+};
 /** 一条命中的消息：带上所属会话，因为结果可能跨会话。 */
 export type MessageHit = {
   chat_id: string;
@@ -231,13 +246,22 @@ export type BoxMessage = {
 };
 export type Page<T> = { items: T[]; next_after: number; has_more: boolean };
 export type Overview = {
+  version: string;
+  rollback?: {
+    fromVersion: string;
+    failedVersion: string;
+    error: string;
+  } | null;
   agents: (AgentInfo & {
     runtime: RuntimeInfo | null;
     available: boolean;
+    /** Live process check shared with the delete guard; presence may retain stale discovery. */
+    running: boolean;
     error: string | null;
     failure: { text: string; at: number; count: number } | null;
     unread: number;
     unassigned: boolean;
+    needs_reload?: boolean;
   })[];
   chats: Chat[];
   /** 本机用户的资料；界面用它认出自己的消息，并提供编辑入口。 */

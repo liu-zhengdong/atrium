@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
 import { Store } from "../server/store.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { errorWithDetails } from "../server/runtime-error.ts";
 
@@ -113,6 +114,39 @@ test(
     assert.match(created.stderr, /Atrium 服务已在后台启动/);
     const record = readService(f.data);
     assert(record && alive(record.pid));
+    const startup = await f.cli("--no-open");
+    assert.equal(startup.code, 0, startup.stderr);
+    assert.equal((startup.stdout.match(/停止：atrium stop/g) ?? []).length, 1);
+    const invalidCustom = await f.cli(
+      "connect",
+      "--custom",
+      "假服务",
+      "--base-url",
+      "http://127.0.0.1:1/v1",
+      "--api-key",
+      "fake",
+      "--model",
+      "demo",
+    );
+    assert.equal(invalidCustom.code, 2);
+    assert.match(
+      invalidCustom.stderr,
+      /--custom 要填 provider id：小写字母开头/,
+    );
+    assert.doesNotMatch(invalidCustom.stderr, /Invalid string|pattern/);
+    const badOption = await f.cli("send", "乙", "你好", "--bogus");
+    assert.equal(badOption.code, 2);
+    assert.match(badOption.stderr, /示例：atrium send 甲 你好/);
+    assert.doesNotMatch(badOption.stderr, /修正：/);
+    const badOptionJson = await f.cli(
+      "send",
+      "乙",
+      "你好",
+      "--bogus",
+      "--json",
+    );
+    assert.equal(badOptionJson.code, 2);
+    assert.equal(JSON.parse(badOptionJson.stdout).next, null);
     const again = await f.cli(
       "create",
       "沈默",
@@ -157,6 +191,15 @@ test(
     assert.doesNotMatch(modelError.error.message, /model:/);
     assert.match(modelError.next, /^atrium model 林岚 deepseek\//);
     assert(modelError.error.candidates.length <= 3);
+    const invalidBuiltin = await f.cli(
+      "model",
+      "林岚",
+      "openai/does-not-exist",
+    );
+    assert.equal(invalidBuiltin.code, 3);
+    assert.match(invalidBuiltin.stderr, /最接近的：/);
+    assert.match(invalidBuiltin.stderr, /openai\/gpt-/);
+    assert.doesNotMatch(invalidBuiltin.stderr, /gpt-4（openai\/gpt-4）/);
     const malformedModel = await f.cli("model", "林岚", "foo", "--json");
     assert.equal(malformedModel.code, 2);
     assert.match(
@@ -312,8 +355,19 @@ test(
     // 停止只对在跑的托管实例有效
     assert.match(await refused("stop", "林岚"), /没在运行/);
 
-    // 删除要显式确认
-    assert.match(await refused("delete", "周远"), /--yes/);
+    // 删除预览仍需人工确认：离线时 JSON 不能把危险命令作为 next。
+    const preview = await f.cli("delete", "周远");
+    assert.equal(preview.code, 2, preview.stderr);
+    assert.match(preview.stderr, /将删除 周远（a3，未分配账号）/);
+    assert.match(preview.stderr, /确认删除：atrium delete 周远 --yes/);
+    assert.doesNotMatch(preview.stderr, /先停止：|修正：/);
+    const previewJson = await f.cli("delete", "周远", "--json");
+    assert.equal(previewJson.code, 2, previewJson.stderr);
+    assert.equal(
+      JSON.parse(previewJson.stdout).error.code,
+      "confirmation_required",
+    );
+    assert.equal(JSON.parse(previewJson.stdout).next, null);
     assert.match(await ok("list"), /周远/);
     // 邀请后的异步投递可能仍在处理连接；只等待这一明确的临时状态。
     let deleted = false;
@@ -351,6 +405,75 @@ test(
     assert.match(await refused("invite", "评审组", "沈默"), clash);
     assert.match(await ok("read", "c2"), /按名字发/, "短号仍然直达");
 
+    // 删除群：不带 --yes 只预览；确认后群、消息、成员关系与提醒一起消失
+    assert.match(await refused("disband", "评审组"), clash, "撞名时不猜");
+    const disbandPreview = await refused("disband", "c2");
+    assert.match(
+      disbandPreview,
+      /将删除 评审组（c2）：成员 2 位、消息 \d+ 条、附件 0 个、共享文件 0 个[^\n]*\n确认删除：atrium disband c2 --yes/,
+      "不带 --yes 只预览：摘要一行、确认命令单独一行",
+    );
+    assert.doesNotMatch(
+      disbandPreview,
+      /修正/,
+      "预览不是修正，不能写成照做就好的命令",
+    );
+    const disbandPreviewJson = await f.cli("disband", "c2", "--json");
+    assert.equal(disbandPreviewJson.code, 2, "预览不上屏时也算没执行");
+    const refusedBody = JSON.parse(disbandPreviewJson.stdout) as {
+      ok: boolean;
+      error: { code: string; message: string };
+      next: unknown;
+    };
+    assert.deepEqual(
+      {
+        ok: refusedBody.ok,
+        code: refusedBody.error.code,
+        next: refusedBody.next,
+        // --json 只给第一行：确认命令既不进 next，也不进 JSON 正文（与 atrium delete 同一口径）
+        inMessage: /确认删除：atrium disband c2 --yes/.test(
+          refusedBody.error.message,
+        ),
+      },
+      {
+        ok: false,
+        code: "confirmation_required",
+        next: null,
+        inMessage: false,
+      },
+      "删数据的确认命令不进 next，也不进 JSON 正文",
+    );
+    assert.match(await ok("read", "c2"), /按名字发/, "预览不删任何东西");
+    assert.match(await refused("disband", "c1"), /是私聊，只有群可以删除/);
+    assert.match(
+      await ok("disband", "c2", "--yes"),
+      /已删除 评审组（c2）· 消息 \d+ 条 · 成员 2 位/,
+    );
+    assert.match(await refused("read", "c2"), /没有叫「c2」的会话/);
+    assert.match(await refused("disband", "c2", "--yes"), /没有叫「c2」的会话/);
+    const remaining = await ok("chats");
+    assert.doesNotMatch(remaining, /^c2\s/m, "要删的群从列表里消失");
+    assert.match(remaining, /^c4\s+评审组\s+群/m, "另一个同名群不受影响");
+    assert.doesNotMatch(await ok("search", "开工"), /开工了/);
+    // 回执按新约定：上屏给下一步命令，--json 是 {ok, result, next}，next 是能直接跑的命令
+    assert.match(
+      await ok("disband", "c4", "--yes"),
+      /已删除 评审组（c4）[\s\S]*看剩下的会话：atrium chats/,
+    );
+    await ok("group", "临时组", "林岚");
+    const receipt = await f.cli("disband", "临时组", "--yes", "--json");
+    assert.equal(receipt.code, 0);
+    const json = JSON.parse(receipt.stdout) as {
+      ok: boolean;
+      result: { name: string };
+      next: string;
+    };
+    assert.deepEqual(
+      { ok: json.ok, name: json.result.name, next: json.next },
+      { ok: true, name: "临时组", next: "atrium chats" },
+      "删除回执给结果与下一步命令",
+    );
+
     // 帮助列出全部命令
     const help = await ok("--help");
     for (const name of [
@@ -370,6 +493,7 @@ test(
       "group",
       "invite",
       "kick",
+      "disband",
       "box",
       "notify",
       "search",
@@ -421,6 +545,37 @@ test(
       assigned.stdout,
       "已分配：甲 → k1 Claude Code（本机登录）\n看分配：atrium accounts\n",
     );
+    const repeated = await f.cli("assign", "甲", "k1");
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.match(repeated.stdout, /^已分配过：甲 → k1/);
+    const missingProvider = await f.cli("unassign", "甲");
+    assert.equal(missingProvider.code, 2);
+    assert.equal(
+      missingProvider.stderr,
+      "用法：atrium unassign 身份 provider\n修正：atrium unassign 甲 claude-bridge\n",
+    );
+    const missingJson = await f.cli("unassign", "甲", "--json");
+    assert.equal(
+      JSON.parse(missingJson.stdout).next,
+      "atrium unassign 甲 claude-bridge",
+    );
+    assert.equal(commandAgent("张.三-甲_1", "a1"), "张.三-甲_1");
+    for (const unsafe of ["张 三", "张;三", "张$三", "-选项", "张|三", "张`三"])
+      assert.equal(commandAgent(unsafe, "a1"), "a1");
+    const renamed = new Store(join(f.data, "atrium.sqlite"));
+    renamed.run("UPDATE agents SET name=? WHERE id=?", "张 三", agent.id);
+    renamed.close();
+    const unsafePreview = await f.cli("delete", "张 三");
+    assert.equal(unsafePreview.code, 2, unsafePreview.stderr);
+    assert.match(unsafePreview.stderr, /确认删除：atrium delete a1 --yes/);
+    assert.doesNotMatch(unsafePreview.stderr, /atrium delete 张 三 --yes/);
+    const spacedName = await f.cli("unassign", "张 三");
+    assert.equal(spacedName.code, 2);
+    assert.match(spacedName.stderr, /修正：atrium unassign a1 claude-bridge/);
+    assert.doesNotMatch(spacedName.stderr, /atrium unassign 张 三/);
+    const restored = new Store(join(f.data, "atrium.sqlite"));
+    restored.run("UPDATE agents SET name=? WHERE id=?", "甲", agent.id);
+    restored.close();
     const removal = await f.cli("unassign", "a1", "claude-bridge");
     assert.equal(removal.code, 0, removal.stderr);
     assert.match(removal.stdout, /重新分配：atrium assign a1 k1\n$/);
@@ -447,5 +602,113 @@ test(
     const noModel = await f.cli("unassign", "a1", "claude-bridge", "--json");
     assert.equal(noModel.code, 0, noModel.stderr);
     assert.equal(JSON.parse(noModel.stdout).next, "atrium assign a1 k1");
+  },
+);
+
+test(
+  "删除运行中的身份给出先停止再删除的命令；带空格名称改用短号",
+  { timeout: 90000 },
+  async (t) => {
+    const f = await fixture(t);
+    // 新测试只传假服务和隔离目录，不把宿主机认证环境传给子进程。
+    const allowed = new Set([
+      "HOME",
+      "USER",
+      "LOGNAME",
+      "PATH",
+      "TERM",
+      "ATRIUM_DATA",
+      "ATRIUM_PORT",
+      "ATRIUM_DESKTOPS",
+      "ATRIUM_PI_HOME",
+      "ATRIUM_PI_TEMPLATE",
+      "PI_ACP_DIR",
+      "PI_ACP_PI_COMMAND",
+    ]);
+    for (const key of Object.keys(f.env))
+      if (!allowed.has(key)) delete f.env[key];
+    f.env.PI_ACP_PI_COMMAND = join(packageRoot, "node_modules/.bin/pi");
+    const provider = createServer((req, res) => {
+      if (req.url === "/v1/models")
+        res
+          .writeHead(200, { "content-type": "application/json" })
+          .end('{"data":[{"id":"demo"}]}');
+      else if (req.url === "/v1/chat/completions")
+        res
+          .writeHead(200, { "content-type": "text/event-stream" })
+          .end(
+            'data: {"id":"chat-1","object":"chat.completion.chunk","created":1,"model":"demo","choices":[{"index":0,"delta":{"role":"assistant","content":"好"},"finish_reason":null}]}\n\ndata: {"id":"chat-1","object":"chat.completion.chunk","created":1,"model":"demo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          );
+      else res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) =>
+      provider.listen(0, "127.0.0.1", resolve),
+    );
+    t.after(
+      () => new Promise<void>((resolve) => provider.close(() => resolve())),
+    );
+    const base = `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`;
+    for (const args of [
+      ["create", "张 三"],
+      [
+        "connect",
+        "--custom",
+        "fake-local",
+        "--base-url",
+        base,
+        "--api-key",
+        "DUMMY_KEY",
+        "--model",
+        "demo",
+      ],
+      ["assign", "a1", "k1"],
+      ["start", "a1"],
+    ]) {
+      const result = await f.cli(...args);
+      assert.equal(result.code, 0, `${args.join(" ")}: ${result.stderr}`);
+    }
+    const preview = await f.cli("delete", "张 三");
+    assert.equal(preview.code, 2, preview.stderr);
+    assert.match(
+      preview.stderr,
+      /先停止：atrium stop a1\n确认删除：atrium delete a1 --yes/,
+    );
+    assert.doesNotMatch(preview.stderr, /修正：|atrium stop 张 三/);
+    const previewJson = await f.cli("delete", "a1", "--json");
+    assert.equal(previewJson.code, 2, previewJson.stderr);
+    assert.deepEqual(JSON.parse(previewJson.stdout), {
+      ok: false,
+      error: {
+        code: "confirmation_required",
+        message: "将删除 张 三（a1，在线）：撤销访问与后续唤醒，历史聊天保留。",
+      },
+      next: "atrium stop a1",
+    });
+    const refused = await f.cli("delete", "张 三", "--yes");
+    assert.equal(refused.code, 4);
+    assert.match(
+      refused.stderr,
+      /Agent 仍在运行[^\n]*\n修正：atrium stop a1\n确认删除：atrium delete a1 --yes/,
+    );
+    const refusedJson = await f.cli("delete", "a1", "--yes", "--json");
+    assert.equal(refusedJson.code, 4);
+    assert.equal(JSON.parse(refusedJson.stdout).next, "atrium stop a1");
+    assert.equal((await f.cli("stop", "a1")).code, 0);
+    const stopped = await f.cli("delete", "a1");
+    assert.equal(stopped.code, 2, stopped.stderr);
+    assert.match(stopped.stderr, /将删除 张 三（a1，离线）/);
+    assert.doesNotMatch(stopped.stderr, /先停止：|修正：/);
+    assert.match(stopped.stderr, /确认删除：atrium delete a1 --yes/);
+    const stoppedJson = await f.cli("delete", "a1", "--json");
+    assert.equal(stoppedJson.code, 2);
+    assert.deepEqual(JSON.parse(stoppedJson.stdout), {
+      ok: false,
+      error: {
+        code: "confirmation_required",
+        message: "将删除 张 三（a1，离线）：撤销访问与后续唤醒，历史聊天保留。",
+      },
+      next: null,
+    });
+    assert.equal((await f.cli("delete", "a1", "--yes")).code, 0);
   },
 );

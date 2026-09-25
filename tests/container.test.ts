@@ -64,6 +64,24 @@ test("身份默认不容器化，切换时保留旧会话、授权目录必须�
     (await app.inject({ method: "POST", url: `${url}/pause` })).statusCode,
     409,
   );
+  const pumping = new Map([[agent.id, Promise.resolve()]]);
+  const turns = new Map<string, unknown>();
+  const connections = new Map<string, { info: { busy: boolean } }>();
+  const runtime = Object.assign(Object.create(Runtimes.prototype), {
+    store,
+    owned: () => true,
+    pumping,
+    turns,
+    connections,
+  }) as Runtimes;
+  await assert.rejects(runtime.pause(agent.id), /正在处理回合/);
+  pumping.clear();
+  turns.set(agent.id, {});
+  await assert.rejects(runtime.pause(agent.id), /正在处理回合/);
+  turns.clear();
+  connections.set(agent.id, { info: { busy: true } });
+  await assert.rejects(runtime.pause(agent.id), /正在处理回合/);
+  assert.equal(store.agent(agent.id).container.paused, false);
   writeFileSync(
     join(directory, "settings.json"),
     JSON.stringify({ packages: ["claude-bridge"] }),

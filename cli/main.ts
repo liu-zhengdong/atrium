@@ -1,5 +1,6 @@
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { dataDirectory, serviceUrl } from "../server/service-state.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 import { pad, width } from "./format.ts";
 import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
@@ -8,7 +9,7 @@ import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { closest, Problem } from "../server/problem.ts";
-import { failure, withContext, type Context } from "./contract.ts";
+import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
 import { cliErrorMessage, optionError } from "./error-message.ts";
 
@@ -39,6 +40,47 @@ export const strs = (values: Values, key: string) => {
   return typeof value === "string" ? [value] : [];
 };
 
+const updateCommand: Command = {
+  args: "[--to <版本>] [--repo <仓库>]",
+  about: "检查并更新 Atrium 版本，安装新版本并展示改动摘要",
+  options: {
+    to: { type: "string" },
+    repo: { type: "string" },
+  },
+  positionals: [0, 0],
+  run: async ({ values }) => {
+    const { update } = await import("./update.ts");
+    await update(values as { to?: string; repo?: string });
+    return 0;
+  },
+};
+
+const restartCommand: Command = {
+  args: "[--wait] [--timeout <秒>] [--agent-timeout <毫秒>]",
+  about: "平滑重启 Atrium 服务，等待当前回合结束并自动回滚失败",
+  options: {
+    wait: { type: "boolean", default: false },
+    timeout: { type: "string" },
+    data: { type: "string" },
+    "probe-agent": { type: "string" },
+    "agent-timeout": { type: "string" },
+  },
+  positionals: [0, 0],
+  run: async ({ values }) => {
+    const { restart } = await import("./restart.ts");
+    await restart(
+      values as {
+        wait?: boolean;
+        timeout?: string;
+        data?: string;
+        "probe-agent"?: string;
+        "agent-timeout"?: string;
+      },
+    );
+    return 0;
+  },
+};
+
 export const commands: Record<string, Command> = {
   ...agentCommands,
   ...chatCommands,
@@ -46,12 +88,16 @@ export const commands: Record<string, Command> = {
   ...accountCommands,
   ...pluginCommands,
   ...resourceCommands,
+  update: updateCommand,
+  restart: restartCommand,
 };
 const service: [usage: string, about: string][] = [
   ["atrium", "启动或复用后台服务，打开 Web"],
   ["atrium --no-open", "启动或复用服务，仅输出地址"],
   ["atrium status", "查看服务状态、地址和数据目录"],
   ["atrium stop", "停止服务及其托管的 Agent，保留数据"],
+  ["atrium restart", "平滑重启服务，保持运行状态并自动回滚失败"],
+  ["atrium update", "检查并更新 Atrium 版本；--to 指定目标版本"],
 ];
 const usage = "用法：atrium [命令] …；atrium --help 列出全部命令";
 
@@ -99,7 +145,7 @@ export async function main(argv: string[]): Promise<number> {
         const data = dataDirectory();
         const record = await startService(data);
         console.log(
-          `Atrium → ${serviceUrl(record)}\n服务已就绪 · PID ${record.pid}\n数据：${data}\n停止：atrium stop`,
+          `Atrium → ${serviceUrl(record)}\n服务已就绪 · PID ${record.pid}\n数据：${data}`,
         );
         if (name === undefined) await openWeb(record);
         return 0;
@@ -162,19 +208,28 @@ export async function main(argv: string[]): Promise<number> {
           strict: true,
         });
       } catch (error) {
-        usageNext = example(subcommand, command);
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}\n${optionError(error)}\n示例：${usageNext}`,
+          `用法：atrium ${subcommand} ${command.args}\n${optionError(error)}\n示例：${example(subcommand, command)}`,
           "usage",
         );
       }
       const [min, max] = command.positionals;
       if (parsed.positionals.length < min || parsed.positionals.length > max) {
-        usageNext = example(subcommand, command);
+        if (subcommand === "unassign" && parsed.positionals.length === 1) {
+          const { connect } = await import("./service.ts");
+          const credentials = await (
+            await connect(true)
+          ).get<{
+            ref: string;
+            assigned: { provider: string }[];
+          }>(`/credentials/${encodeURIComponent(parsed.positionals[0]!)}`);
+          if (credentials.assigned.length === 1)
+            usageNext = `atrium unassign ${commandAgent(parsed.positionals[0]!, credentials.ref)} ${credentials.assigned[0]!.provider}`;
+        }
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}\n示例：${usageNext}`.trimEnd(),
+          `用法：atrium ${subcommand} ${command.args}${usageNext ? "" : `\n示例：${example(subcommand, command)}`}`,
           "usage",
         );
       }
@@ -208,7 +263,10 @@ export async function main(argv: string[]): Promise<number> {
             ok: false,
             error: {
               code: result.code,
-              message: result.message,
+              message:
+                result.code === "confirmation_required"
+                  ? result.message.split("\n", 1)[0]
+                  : result.message,
               ...(result.candidates ? { candidates: result.candidates } : {}),
             },
             next: commandOnly(result.next),
@@ -218,9 +276,10 @@ export async function main(argv: string[]): Promise<number> {
         console.error(result.message);
         if (commands[subcommand] && result.candidates?.length)
           console.error(
-            `最接近的：${result.candidates.map(({ name, ref }) => `${name}（${ref}）`).join("、")}`,
+            `最接近的：${result.candidates.map(({ name, ref }) => `${name === ref.split("/").at(-1) ? ref : `${name}（${ref}）`}`).join("、")}`,
           );
-        if (result.next) console.error(`修正：${result.next}`);
+        if (result.next && result.code !== "confirmation_required")
+          console.error(`修正：${result.next}`);
       }
       return result.exit;
     } finally {
@@ -248,14 +307,22 @@ export async function main(argv: string[]): Promise<number> {
 }
 function defaultNext(name: string): string | null {
   if (name === "" || name === "--no-open") return "停止：atrium stop";
-  if (["stop", "delete", "account remove", "unassign", "kick"].includes(name))
+  if (
+    [
+      "stop",
+      "delete",
+      "disband",
+      "account remove",
+      "unassign",
+      "kick",
+    ].includes(name)
+  )
     return null;
+  if (name === "update") return "生效：atrium restart";
+  if (name === "restart") return "查看状态：atrium status";
   if (name === "assign") return "看分配：atrium accounts";
   if (name === "status") return "查看身份：atrium list";
   if (name === "list") return "查看会话：atrium chats";
   if (name === "chats") return "查看身份：atrium list";
   return null;
-}
-function commandOnly(next: string | null): string | null {
-  return next?.slice(next.indexOf("atrium ")) ?? null;
 }

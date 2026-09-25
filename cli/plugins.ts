@@ -4,7 +4,7 @@ import { printJson, table } from "./format.ts";
 import type { Command } from "./main.ts";
 
 type PluginList = {
-  mode: "own" | "shared";
+  mode: "own";
   packages: {
     source: string;
     name: string;
@@ -15,21 +15,14 @@ type PluginList = {
 };
 
 const list: Command = {
-  args: "名称 [--own]",
-  about: "列出插件；--own 将共享安装复制为此身份独立安装",
-  options: { own: { type: "boolean", default: false } },
+  args: "名称",
+  about: "列出此身份的插件",
   positionals: [1, 1],
-  async run({ positionals: [reference], values, json }) {
+  async run({ positionals: [reference], json }) {
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
-    const path = `/agents/${agent.id}/plugins`;
-    const result = values.own
-      ? await client.put<PluginList>(`${path}/mode`, { mode: "own" })
-      : await client.get<PluginList>(path);
+    const result = await client.get<PluginList>(`/agents/${agent.id}/plugins`);
     if (json) return printJson(result);
-    console.log(
-      `插件模式：${result.mode === "own" ? "独立安装" : "共享个人 Pi 安装"}`,
-    );
     if (result.packages.length)
       console.log(
         table([

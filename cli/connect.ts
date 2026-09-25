@@ -141,7 +141,7 @@ async function awaitLogin(
 }
 
 export const connectCommand: Command = {
-  args: "[provider] [--custom 名称 --base-url URL --api-key KEY --model ID …]",
+  args: "[provider] [--custom provider-id --base-url URL --api-key KEY --model ID …]",
   options: {
     custom: { type: "string" },
     "base-url": { type: "string" },
@@ -152,8 +152,14 @@ export const connectCommand: Command = {
   positionals: [0, 1],
   async run({ positionals: [reference], values, json }) {
     if (str(values, "custom")) {
-      const client = await connect(true);
       const provider = str(values, "custom")!;
+      if (!/^[a-z][a-z0-9-]{0,63}$/.test(provider))
+        throw new Problem(
+          400,
+          "--custom 要填 provider id：小写字母开头，只能用小写字母、数字和连字符，最多 64 字符",
+          "usage",
+        );
+      const client = await connect(true);
       const baseUrl =
         str(values, "base-url") ??
         (process.stdin.isTTY ? input(await text({ message: "Base URL" })) : "");

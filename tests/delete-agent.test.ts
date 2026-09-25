@@ -257,6 +257,23 @@ test("运行、未发现的具名占用、未知状态与并发启动均拒绝�
     agent.id,
   );
   await assert.rejects(remove(), /仍在运行/);
+  const running = await app.inject({
+    method: "DELETE",
+    url: `/api/agents/${agent.id}`,
+    payload: { confirm: agent.ref },
+  });
+  assert.equal(running.statusCode, 409);
+  assert.equal(
+    running.json().nextCommand,
+    `atrium stop 占用样本\n确认删除：atrium delete 占用样本 --yes`,
+  );
+  assert.equal(store.failure(agent.id), null);
+  assert.equal(
+    (await app.inject({ url: "/api/overview" }))
+      .json()
+      .agents.find((a: { id: string }) => a.id === agent.id).error,
+    null,
+  );
   store.run(
     "UPDATE agents SET runtime_pid=NULL,agent_directory=? WHERE id=?",
     directory,

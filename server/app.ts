@@ -477,6 +477,7 @@ export async function createApp(options: {
         ...a,
         runtime: runtimes?.connections.get(a.id)?.info ?? null,
         available: available.has(a.id) || !!runtimes?.connections.has(a.id),
+        running: runtimes?.running(a.id, discovery.runtimes) ?? false,
         error: store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
         failure: store.failure(a.id),
         unread: store.boxCount(a.id),

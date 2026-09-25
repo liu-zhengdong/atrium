@@ -63,6 +63,7 @@ import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 
 const require = createRequire(import.meta.url);
 // 服务可能从某个 herdr pane 里启动；后台身份不在那个 pane 里，去掉表示「身处此 pane」的变量，
@@ -309,17 +310,17 @@ export class Runtimes {
           ): { release(): void };
         };
       this.store.transaction(() => {
-        const agent = this.store.agent(id),
-          binding = this.binding(id);
+        const agent = this.store.agent(id);
         if (confirm !== agent.ref)
           throw new Problem(400, "删除确认与 Agent 不一致");
-        const connected = this.connections.get(id)?.info;
-        if (
-          (binding.runtime_pid && alive(binding.runtime_pid)) ||
-          (connected && alive(connected.pid)) ||
-          this.directory().runtimes.some((r) => r.bound_agent === id)
-        )
-          throw new Problem(409, "Agent 仍在运行，请先正常停止后再删除");
+        if (this.running(id))
+          throw new Problem(
+            409,
+            "Agent 仍在运行，请先正常停止后再删除",
+            undefined,
+            undefined,
+            `atrium stop ${commandAgent(agent.name, agent.ref)}\n确认删除：atrium delete ${commandAgent(agent.name, agent.ref)} --yes`,
+          );
         let lease: { release(): void } | undefined;
         try {
           if (agent.agent_directory) {
@@ -596,6 +597,9 @@ export class Runtimes {
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
+      // A rejected user operation (for example deleting a running identity) is
+      // not a runtime failure and must not mark the identity as broken.
+      if (error instanceof Problem) throw error;
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
@@ -1011,6 +1015,18 @@ export class Runtimes {
       this.errors.delete(id);
     });
     this.changed();
+  }
+  /** 删除预览与删除守卫共用实际存活判断；发现列表可能滞后，不能只看名册在线状态。 */
+  running(id: string, discovered = this.directory().runtimes): boolean {
+    const binding = this.binding(id);
+    const connected = this.connections.get(id)?.info;
+    return !!(
+      (binding.runtime_pid && alive(binding.runtime_pid)) ||
+      (connected && alive(connected.pid)) ||
+      discovered.some(
+        (runtime) => runtime.bound_agent === id && alive(runtime.pid),
+      )
+    );
   }
   /** 撤销最后一个账号前终止活跃身份，不能留下仍在运行的无账号实例。 */
   async stopForUnassignment(id: string) {

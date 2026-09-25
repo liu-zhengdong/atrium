@@ -9,7 +9,7 @@ import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { closest, Problem } from "../server/problem.ts";
-import { failure, withContext, type Context } from "./contract.ts";
+import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
 import { cliErrorMessage, optionError } from "./error-message.ts";
 
@@ -265,7 +265,4 @@ function defaultNext(name: string): string | null {
   if (name === "list") return "查看会话：atrium chats";
   if (name === "chats") return "查看身份：atrium list";
   return null;
-}
-function commandOnly(next: string | null): string | null {
-  return next?.slice(next.indexOf("atrium ")) ?? null;
 }

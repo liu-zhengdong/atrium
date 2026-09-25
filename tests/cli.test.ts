@@ -354,8 +354,18 @@ test(
     // 停止只对在跑的托管实例有效
     assert.match(await refused("stop", "林岚"), /没在运行/);
 
-    // 删除要显式确认
-    assert.match(await refused("delete", "周远"), /--yes/);
+    // 删除预览为成功回执：离线时只给可执行的删除命令。
+    const preview = await f.cli("delete", "周远");
+    assert.equal(preview.code, 0, preview.stderr);
+    assert.match(preview.stdout, /将删除 周远（a3，未分配账号）/);
+    assert.match(preview.stdout, /确认删除：atrium delete 周远 --yes/);
+    assert.doesNotMatch(preview.stdout, /先停止：|修正：/);
+    const previewJson = await f.cli("delete", "周远", "--json");
+    assert.equal(previewJson.code, 0, previewJson.stderr);
+    assert.equal(
+      JSON.parse(previewJson.stdout).next,
+      "atrium delete 周远 --yes",
+    );
     assert.match(await ok("list"), /周远/);
     // 邀请后的异步投递可能仍在处理连接；只等待这一明确的临时状态。
     let deleted = false;
@@ -483,6 +493,10 @@ test(
     const renamed = new Store(join(f.data, "atrium.sqlite"));
     renamed.run("UPDATE agents SET name=? WHERE id=?", "张 三", agent.id);
     renamed.close();
+    const unsafePreview = await f.cli("delete", "张 三");
+    assert.equal(unsafePreview.code, 0, unsafePreview.stderr);
+    assert.match(unsafePreview.stdout, /确认删除：atrium delete a1 --yes/);
+    assert.doesNotMatch(unsafePreview.stdout, /atrium delete 张 三 --yes/);
     const spacedName = await f.cli("unassign", "张 三");
     assert.equal(spacedName.code, 2);
     assert.match(spacedName.stderr, /修正：atrium unassign a1 claude-bridge/);
@@ -516,5 +530,96 @@ test(
     const noModel = await f.cli("unassign", "a1", "claude-bridge", "--json");
     assert.equal(noModel.code, 0, noModel.stderr);
     assert.equal(JSON.parse(noModel.stdout).next, "atrium assign a1 k1");
+  },
+);
+
+test(
+  "删除运行中的身份给出先停止再删除的命令；带空格名称改用短号",
+  { timeout: 90000 },
+  async (t) => {
+    const f = await fixture(t);
+    // 新测试只传假服务和隔离目录，不把宿主机认证环境传给子进程。
+    const allowed = new Set([
+      "HOME",
+      "USER",
+      "LOGNAME",
+      "PATH",
+      "TERM",
+      "ATRIUM_DATA",
+      "ATRIUM_PORT",
+      "ATRIUM_DESKTOPS",
+      "ATRIUM_PI_HOME",
+      "ATRIUM_PI_TEMPLATE",
+      "PI_ACP_DIR",
+      "PI_ACP_PI_COMMAND",
+    ]);
+    for (const key of Object.keys(f.env))
+      if (!allowed.has(key)) delete f.env[key];
+    f.env.PI_ACP_PI_COMMAND = join(packageRoot, "node_modules/.bin/pi");
+    const provider = createServer((req, res) => {
+      if (req.url === "/v1/models")
+        res
+          .writeHead(200, { "content-type": "application/json" })
+          .end('{"data":[{"id":"demo"}]}');
+      else if (req.url === "/v1/chat/completions")
+        res
+          .writeHead(200, { "content-type": "text/event-stream" })
+          .end(
+            'data: {"id":"chat-1","object":"chat.completion.chunk","created":1,"model":"demo","choices":[{"index":0,"delta":{"role":"assistant","content":"好"},"finish_reason":null}]}\n\ndata: {"id":"chat-1","object":"chat.completion.chunk","created":1,"model":"demo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          );
+      else res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) =>
+      provider.listen(0, "127.0.0.1", resolve),
+    );
+    t.after(
+      () => new Promise<void>((resolve) => provider.close(() => resolve())),
+    );
+    const base = `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`;
+    for (const args of [
+      ["create", "张 三"],
+      [
+        "connect",
+        "--custom",
+        "fake-local",
+        "--base-url",
+        base,
+        "--api-key",
+        "DUMMY_KEY",
+        "--model",
+        "demo",
+      ],
+      ["assign", "a1", "k1"],
+      ["start", "a1"],
+    ]) {
+      const result = await f.cli(...args);
+      assert.equal(result.code, 0, `${args.join(" ")}: ${result.stderr}`);
+    }
+    const preview = await f.cli("delete", "张 三");
+    assert.equal(preview.code, 0, preview.stderr);
+    assert.match(
+      preview.stdout,
+      /先停止：atrium stop a1\n确认删除：atrium delete a1 --yes/,
+    );
+    assert.doesNotMatch(preview.stdout, /修正：|atrium stop 张 三/);
+    const previewJson = await f.cli("delete", "a1", "--json");
+    assert.equal(previewJson.code, 0, previewJson.stderr);
+    assert.equal(JSON.parse(previewJson.stdout).next, "atrium stop a1");
+    const refused = await f.cli("delete", "张 三", "--yes");
+    assert.equal(refused.code, 4);
+    assert.match(
+      refused.stderr,
+      /Agent 仍在运行[^\n]*\n修正：atrium stop a1\n确认删除：atrium delete a1 --yes/,
+    );
+    const refusedJson = await f.cli("delete", "a1", "--yes", "--json");
+    assert.equal(refusedJson.code, 4);
+    assert.equal(JSON.parse(refusedJson.stdout).next, "atrium stop a1");
+    assert.equal((await f.cli("stop", "a1")).code, 0);
+    const stopped = await f.cli("delete", "a1");
+    assert.equal(stopped.code, 0, stopped.stderr);
+    assert.match(stopped.stdout, /将删除 张 三（a1，离线）/);
+    assert.doesNotMatch(stopped.stdout, /先停止：/);
+    assert.match(stopped.stdout, /确认删除：atrium delete a1 --yes/);
+    assert.equal((await f.cli("delete", "a1", "--yes")).code, 0);
   },
 );

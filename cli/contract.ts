@@ -39,6 +39,13 @@ export const recordNext = (next: string) => {
   if (current) current.next = next;
 };
 
+/** 多步文本回执的 JSON next 只给第一条可执行命令。 */
+export function commandOnly(next: string | null): string | null {
+  const first = next?.split("\n", 1)[0];
+  const start = first?.indexOf("atrium ") ?? -1;
+  return first && start >= 0 ? first.slice(start) : null;
+}
+
 export function errorCode(error: unknown): ErrorCode {
   if (error instanceof Problem && error.code in exitCodes)
     return error.code as ErrorCode;

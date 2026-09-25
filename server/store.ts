@@ -49,6 +49,11 @@ import { agentTransition, type AgentFailure } from "./agent-failure.ts";
 export { Problem };
 /** 同一副样子的消息箱提醒几次。没人处理就一直提，只会把对方的会话撑大。 */
 const INBOX_REMINDERS = 3;
+const replayNote = "[上一轮运行出错，重新投递同一条消息；不是新消息。]";
+const replayDirect = (text: string) =>
+  text.endsWith(`\n${replayNote}`)
+    ? text
+    : `${text.endsWith(`\n${USER_CONFIRMATION}`) ? text.slice(0, -USER_CONFIRMATION.length - 1) : text}\n${replayNote}`;
 /** LIKE 的子串模式；% _ \ 按字面匹配，配合 ESCAPE '\\' 使用。 */
 const likePattern = (text: string) =>
   `%${text.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
@@ -1636,25 +1641,42 @@ export class Store {
           `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'${since}`,
           ...args,
         );
-        const replayNote = "[上一轮运行出错，重新投递同一条消息；不是新消息。]";
         for (const row of rows)
           this.run(
             "UPDATE deliveries SET id=?,text=?,state='pending',accepted_at=NULL WHERE id=?",
             randomUUID(),
-            row.text.endsWith(`\n${replayNote}`)
-              ? row.text
-              : `${row.text.endsWith(`\n${USER_CONFIRMATION}`) ? row.text.slice(0, -USER_CONFIRMATION.length - 1) : row.text}\n${replayNote}`,
+            replayDirect(row.text),
             row.id,
           );
-        this.run(
-          `UPDATE deliveries SET state='pending',accepted_at=NULL WHERE agent_id=? AND kind='summary' AND state='accepted'${since}`,
+        const summaries = this.all<{ id: string }>(
+          `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted'${since}`,
           ...args,
         );
+        for (const row of summaries)
+          this.run(
+            "UPDATE deliveries SET id=?,state='pending',accepted_at=NULL WHERE id=?",
+            randomUUID(),
+            row.id,
+          );
       }
     };
     // Trace ingestion checkpoints the turn and event cursor in this same transaction.
     if (this.db.isTransaction) settle();
     else this.transaction(settle);
+  }
+  /** Pi kept this id in its context, but did not prove the turn completed. Retry under a fresh id. */
+  rekeyPending(id: string) {
+    const row = this.one<{ kind: DeliveryKind; text: string }>(
+      "SELECT kind,text FROM deliveries WHERE id=? AND state='pending'",
+      id,
+    );
+    if (!row) return;
+    this.run(
+      "UPDATE deliveries SET id=?,text=? WHERE id=? AND state='pending'",
+      randomUUID(),
+      row.kind === "direct" ? replayDirect(row.text) : row.text,
+      id,
+    );
   }
   pending(id: string) {
     return this.all<DeliveryRow>(

@@ -1268,9 +1268,11 @@ export class Runtimes {
         await this.recover(id, recovery);
         return this.doPump(id, direct);
       }
+      let triggeredTurn = false;
       for (const pending of this.store.pending(id)) {
         if (this.store.failure(id) && !direct) break;
-        if (pending.kind === "summary" && runtime.info.busy) continue;
+        if (pending.kind === "summary" && (runtime.info.busy || triggeredTurn))
+          continue;
         // 提醒在忙时排队、空闲才送，期间可能已经读完：送出前按当时的消息箱重写，清空了就撤回。
         const text =
           pending.kind === "summary" ? this.store.reminder(id) : pending.text;
@@ -1293,20 +1295,28 @@ export class Runtimes {
                 })
             : [];
           const deliveryStart = Date.now();
-          const result = await this.rpc<{ accepted: boolean }>(
-            "_pi/runtime/deliver",
-            {
-              ...target(runtime.info),
-              id: pending.id,
-              source: "Atrium",
-              text,
-              delivery: pending.kind === "direct" ? "steer" : "followUp",
-              ...(images.length ? { images } : {}),
-            },
-          );
+          const result = await this.rpc<{
+            accepted: boolean;
+            duplicate?: boolean;
+          }>("_pi/runtime/deliver", {
+            ...target(runtime.info),
+            id: pending.id,
+            source: "Atrium",
+            text,
+            delivery: pending.kind === "direct" ? "steer" : "followUp",
+            ...(images.length ? { images } : {}),
+          });
           this.assertOpen();
           if (!result.accepted) throw new Error("Pi 未确认接收");
+          if (result.duplicate) {
+            // Pi has seen this id, but did not prove its turn finished. Never
+            // keep sending the same id: duplicate returns without a new event.
+            this.store.rekeyPending(pending.id);
+            this.changed();
+            break;
+          }
           this.store.accepted(pending.id);
+          if (pending.kind === "direct") triggeredTurn = true;
           // A turn may fail before deliver returns. Observe its end only after
           // accepting, so the failed delivery cannot be stranded as accepted.
           await this.capture(id, runtime.info);

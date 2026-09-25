@@ -55,7 +55,7 @@ test("无 run_end 时 accepted 穿过服务重启仍不可投递，失败结算�
   store.finishTurn(agent.id, false); // 既有失败收尾可重排队，但重启本身没有调用它。
   const retried = store.pending(agent.id);
   assert.equal(retried.length, 2);
-  assert.equal(retried.find((row) => row.kind === "summary")?.id, summaryId);
+  assert.notEqual(retried.find((row) => row.kind === "summary")?.id, summaryId);
   assert.notEqual(retried.find((row) => row.kind === "direct")?.id, direct.id);
   assert.match(
     retried.find((row) => row.kind === "direct")!.text,

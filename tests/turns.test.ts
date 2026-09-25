@@ -94,7 +94,7 @@ test("失败轮保留失败并让 direct 换新 ID 重投，summary 不复制", 
     pending.find((row) => row.kind === "direct")?.id,
     f.delivery.id,
   );
-  assert.equal(pending.find((row) => row.kind === "summary")?.id, summary);
+  assert.notEqual(pending.find((row) => row.kind === "summary")?.id, summary);
   assert.equal(f.trace.cursor(f.agent.id, f.runtimeId, f.generation), 4);
 });
 
@@ -209,6 +209,109 @@ test("旧库迁移可重入；有 start 才能用迟到的 end 收尾，无 star
       f.delivery.id,
     )?.state,
     "accepted",
+  );
+});
+
+test("迁移选最新会话边界；没证据的旧 accepted 保留而非误判完成", (t) => {
+  const f = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  f.store.accepted(f.delivery.id);
+  f.store.run(
+    "UPDATE agents SET session_reset_at=?,runtime_id=?,acp_session_id=? WHERE id=?",
+    now - 100_000,
+    f.runtimeId,
+    f.sessionId,
+    f.agent.id,
+  );
+  now += 1_000;
+  f.event("session");
+  f.store.run(
+    "DELETE FROM migration_marks WHERE name='accepted-turn-checkpoint-v1'",
+  );
+  new TurnLedger(f.store);
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.delivery.id,
+    )?.state,
+    "complete",
+    "当前 Pi 会话比陈旧 reset marker 新，旧消息不得在新会话重播",
+  );
+
+  const second = f.store.queue(f.agent.id, "direct", "无边界的消息");
+  f.store.accepted(second);
+  f.store.run(
+    "UPDATE agents SET session_reset_at=NULL,runtime_id=NULL WHERE id=?",
+    f.agent.id,
+  );
+  f.store.run(
+    "DELETE FROM migration_marks WHERE name='accepted-turn-checkpoint-v1'",
+  );
+  new TurnLedger(f.store);
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      second,
+    )?.state,
+    "accepted",
+    "离线且无 reset / session 事件不能推断已经处理",
+  );
+});
+
+test("迁移恢复空文本助手错误，并按 Atrium delivery 而非外部指引判定", (t) => {
+  const f = fixture(t);
+  f.event("delivery", { name: "Atrium 接入说明" });
+  f.event("run_start");
+  f.event("message", { name: "assistant", error: true, text: "" });
+  f.store.accepted(f.delivery.id);
+  f.store.run(
+    "UPDATE agents SET runtime_id=?,acp_session_id=? WHERE id=?",
+    f.runtimeId,
+    f.sessionId,
+    f.agent.id,
+  );
+  f.store.run("DELETE FROM runtime_turns WHERE agent_id=?", f.agent.id);
+  f.store.run(
+    "DELETE FROM migration_marks WHERE name='accepted-turn-checkpoint-v1'",
+  );
+  new TurnLedger(f.store);
+  assert.equal(f.ledger.current(f.agent.id)?.failure, "模型运行失败");
+  assert.equal(f.ledger.current(f.agent.id)?.delivery_at, null);
+  f.event("run_end");
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.delivery.id,
+    )?.state,
+    "accepted",
+  );
+});
+
+test("迁移会找到 run_start 后才收到的 Atrium 投递", (t) => {
+  const f = fixture(t);
+  f.event("run_start");
+  f.event("delivery", { name: "Atrium" });
+  f.store.accepted(f.delivery.id);
+  f.store.run(
+    "UPDATE agents SET runtime_id=?,acp_session_id=? WHERE id=?",
+    f.runtimeId,
+    f.sessionId,
+    f.agent.id,
+  );
+  f.store.run("DELETE FROM runtime_turns WHERE agent_id=?", f.agent.id);
+  f.store.run(
+    "DELETE FROM migration_marks WHERE name='accepted-turn-checkpoint-v1'",
+  );
+  new TurnLedger(f.store);
+  assert.ok(f.ledger.current(f.agent.id)?.delivery_at);
+  f.event("run_end");
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.delivery.id,
+    )?.state,
+    "complete",
   );
 });
 

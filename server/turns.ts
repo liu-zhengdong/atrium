@@ -109,27 +109,35 @@ export class TurnLedger {
     )
       return;
     this.store.transaction(() => {
-      // Old deliveries belong to a previous Pi session. Pi confirmed receipt;
-      // do not inject yesterday's work into the new session a second time.
+      // A reset marker and the current Pi session start are independent: use
+      // the newer known boundary. Unknown boundaries remain 0, never "complete".
+      const boundary = (agentId: string) =>
+        `(SELECT MAX(COALESCE(a.session_reset_at,0),COALESCE((SELECT MIN(t.at)
+          FROM trace_actions t WHERE t.agent_id=a.id AND t.runtime_id=a.runtime_id
+          AND t.session_id=a.acp_session_id AND t.kind='session' AND t.seq=1),0))
+          FROM agents a WHERE a.id=${agentId})`;
       const obsolete = this.store.all<{ agent_id: string; n: number }>(
         `SELECT d.agent_id,COUNT(*) AS n FROM deliveries d JOIN agents a ON a.id=d.agent_id
          WHERE d.state='accepted' AND a.deleted_at IS NULL AND d.accepted_at IS NOT NULL
-         AND d.accepted_at < COALESCE(a.session_reset_at,
-           (SELECT MIN(t.at) FROM trace_actions t WHERE t.agent_id=a.id
-            AND t.runtime_id=a.runtime_id AND t.session_id=a.acp_session_id
-            AND t.kind='session' AND t.seq=1)) GROUP BY d.agent_id`,
+         AND d.accepted_at < ${boundary("d.agent_id")} GROUP BY d.agent_id`,
       );
       this.store.run(
         `UPDATE deliveries SET state='complete' WHERE state='accepted' AND accepted_at IS NOT NULL
          AND agent_id IN (SELECT id FROM agents WHERE deleted_at IS NULL)
-         AND accepted_at < COALESCE((SELECT session_reset_at FROM agents WHERE id=deliveries.agent_id),
-           (SELECT MIN(t.at) FROM trace_actions t JOIN agents a ON a.id=t.agent_id
-            WHERE t.agent_id=deliveries.agent_id AND t.runtime_id=a.runtime_id
-            AND t.session_id=a.acp_session_id AND t.kind='session' AND t.seq=1))`,
+         AND accepted_at < ${boundary("deliveries.agent_id")}`,
       );
       for (const row of obsolete)
         console.info(
           `[Atrium] 旧会话已接收的投递直接完成：${row.agent_id} ${row.n} 条`,
+        );
+      const uncertain = this.store.all<{ agent_id: string; n: number }>(
+        `SELECT d.agent_id,COUNT(*) AS n FROM deliveries d JOIN agents a ON a.id=d.agent_id
+         WHERE d.state='accepted' AND a.deleted_at IS NULL AND ${boundary("d.agent_id")}=0
+         GROUP BY d.agent_id`,
+      );
+      for (const row of uncertain)
+        console.info(
+          `[Atrium] 旧会话边界未知，保留待核对重投：${row.agent_id} ${row.n} 条`,
         );
 
       const deleted = this.store.all<{ agent_id: string; n: number }>(
@@ -175,16 +183,18 @@ export class TurnLedger {
           lastEnd,
         )?.seq;
         if (start == null) continue;
-        const failure =
-          this.store.one<{ output: string }>(
-            `SELECT output FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=?
+        const failedMessage = this.store.one<{ output: string }>(
+          `SELECT output FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=?
            AND kind='message' AND name='assistant' AND state='error' AND seq>=?
            ORDER BY seq DESC LIMIT 1`,
-            row.agent_id,
-            row.runtime_id,
-            row.generation,
-            start,
-          )?.output ?? null;
+          row.agent_id,
+          row.runtime_id,
+          row.generation,
+          start,
+        );
+        const failure = failedMessage
+          ? failedMessage.output || "模型运行失败"
+          : null;
         const deliveryAt =
           this.store.one<{ at: number }>(
             `SELECT MIN(at) AS at FROM trace_actions WHERE agent_id=? AND runtime_id=?

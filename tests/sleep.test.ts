@@ -51,6 +51,7 @@ async function fixture(t: TestContext) {
   const sessions = new Map<string, RuntimeInfo>();
   const calls: string[] = [];
   let failLoad = false;
+  let loadWait: ReturnType<typeof deferred> | null = null;
   let stopWait: ReturnType<typeof deferred> | null = null;
   t.mock.method(
     Runtimes.prototype as unknown as PrivateRuntime,
@@ -59,6 +60,7 @@ async function fixture(t: TestContext) {
       calls.push(method);
       if (method === "_pi/runtime/list") return { runtimes: [] };
       if (method === "session/load") {
+        if (loadWait) await loadWait.promise;
         if (failLoad) throw new Error("original session unreadable");
         return {};
       }
@@ -137,6 +139,9 @@ async function fixture(t: TestContext) {
     setFailLoad: (on: boolean) => {
       failLoad = on;
     },
+    setLoadWait: (wait: ReturnType<typeof deferred> | null) => {
+      loadWait = wait;
+    },
     setStopWait: (wait: ReturnType<typeof deferred> | null) => {
       stopWait = wait;
     },
@@ -181,13 +186,37 @@ test("自动唤醒失败保留旧会话与待投递，修复后显式重试", as
   assert(store.agent(id).sleeping_at);
   assert.equal(store.pending(id).length, 1);
   assert.equal(calls.filter((item) => item === "session/new").length, 0);
+  store.queue(id, "direct", "a second message during the cooldown");
+  await runtimes.pump(id, true);
+  assert.match(store.failure(id)?.text ?? "", /original session unreadable/);
+  assert.equal(store.pending(id).length, 2);
   fixtureState.setFailLoad(false);
   await runtimes.retry(id);
   assert.equal(store.agent(id).sleeping_at, null);
   assert.equal(
     calls.filter((item) => item === "_pi/runtime/deliver").length,
-    1,
+    2,
   );
+});
+
+test("并发接入 409 不累积自动唤醒失败，也不抹掉正在唤醒", async (t) => {
+  const state = await fixture(t);
+  const { store, runtimes, id, calls } = state;
+  await runtimes.start(id);
+  await runtimes.sleep(id);
+  const wait = deferred();
+  state.setLoadWait(wait);
+  const first = runtimes.start(id, true);
+  while (!calls.includes("session/load") || !runtimes.waking.has(id))
+    await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(runtimes.start(id, true), /Agent 正在接入/);
+  assert.equal(runtimes.waking.has(id), true);
+  wait.release();
+  await first;
+  assert.equal(store.failure(id), null);
+  await runtimes.sleep(id);
+  await runtimes.start(id, true);
+  assert.equal(store.agent(id).sleeping_at, null);
 });
 
 test("停止期间进来的直接消息只投一次", async (t) => {

@@ -757,17 +757,22 @@ export class Runtimes {
       last &&
       (Date.now() - last.at < 60000 || last.failures >= 3)
     ) {
-      const reason = "自动唤醒受限，请在聊天里重试";
-      this.store.setFailure(id, reason);
-      this.changed();
-      throw new Problem(503, reason);
+      // Keep the original failure visible in the roster and chat; repeated
+      // messages must not replace a useful error with a generic cooldown.
+      const cause = this.store.failure(id)?.text ?? this.errors.get(id);
+      throw new Problem(
+        503,
+        `自动唤醒已暂停：${cause ?? "启动失败"}。处理后在聊天里重试`,
+      );
     }
-    if (sleeping) {
-      this.waking.add(id);
-      this.changed();
-    }
+    let attempted = false;
     try {
       await this.operation(id, async () => {
+        attempted = true;
+        if (sleeping) {
+          this.waking.add(id);
+          this.changed();
+        }
         const current = this.store.agent(id);
         const cwd = ensureDesktopCwd(this.store, this.desktops, current);
         if (cwd !== current.cwd) this.changed();
@@ -942,14 +947,14 @@ export class Runtimes {
       this.starts.delete(id); // Only failed starts count against automatic wakeups.
       if (sleeping) this.store.setSleeping(id, false);
     } catch (error) {
-      if (automatic)
+      if (automatic && attempted)
         this.starts.set(id, {
           at: Date.now(),
           failures: (last?.failures ?? 0) + 1,
         });
       throw error;
     } finally {
-      if (sleeping) {
+      if (sleeping && attempted) {
         this.waking.delete(id);
         this.changed();
       }

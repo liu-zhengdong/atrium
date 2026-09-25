@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { isImeKey } from "../keys.ts";
 import { X } from "lucide-react";
 
 /**
@@ -22,6 +23,7 @@ export function SidePanel({
 }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (isImeKey(e)) return;
       if (e.key === "Escape") {
         close();
       }

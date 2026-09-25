@@ -15,6 +15,7 @@ import {
   runtimeLabel,
   type Agent,
 } from "../components/AgentAvatar.tsx";
+import { isImeKey } from "../keys.ts";
 import { convTime } from "../time.ts";
 
 type Hit =
@@ -143,6 +144,7 @@ export function GlobalSearch({
   }
 
   function onKeyDown(event: InputKeyEvent<HTMLInputElement>) {
+    if (isImeKey(event.nativeEvent)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();

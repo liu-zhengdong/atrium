@@ -5,6 +5,7 @@ import {
   type ProviderEntry,
   type ProviderMethod,
 } from "../../shared/providers.ts";
+import { isImeKey } from "../keys.ts";
 
 export function ProviderPicker({
   method,
@@ -34,6 +35,7 @@ export function ProviderPicker({
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => setActive(0), [method, search]);
   function keyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (isImeKey(event.nativeEvent)) return;
     if (!available.length) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();

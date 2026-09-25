@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { api } from "../api.ts";
 import { SubmitDialog } from "../components/SubmitDialog.tsx";
+import { isImeKey } from "../keys.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 
 function SourcePicker({
@@ -34,6 +35,7 @@ function SourcePicker({
       if (!root.current?.contains(event.target as Node)) setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
+      if (isImeKey(event)) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();

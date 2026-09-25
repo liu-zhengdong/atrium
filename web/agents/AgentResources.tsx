@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import { api } from "../api.ts";
+import { isImeKey } from "../keys.ts";
 import { confirmLeave, trackUnsaved } from "../settings/unsaved.ts";
 
 type Skill = {
@@ -200,6 +201,7 @@ export function AgentSkills({ agentId }: { agentId: string }) {
             aria-label="从个人 Pi 添加技能"
             className="absolute bottom-full left-0 z-20 mb-2 flex max-h-[min(360px,65vh)] w-[min(360px,calc(100vw-64px))] flex-col gap-2 rounded-xl bg-white p-3 shadow-[0_8px_24px_#3629191a]"
             onKeyDown={(event) => {
+              if (isImeKey(event.nativeEvent)) return;
               if (event.key === "Escape") setChooserOpen(false);
             }}
           >

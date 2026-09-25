@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { LoaderCircle, Plus, RotateCw, Trash2 } from "lucide-react";
 import { api } from "../api.ts";
+import { blockImeSubmit } from "../keys.ts";
 
 type Plugin = {
   source: string;
@@ -107,6 +108,7 @@ export function AgentPlugins({
             插件会运行代码，安装前请确认来源。
           </p>
           <form
+            onKeyDown={blockImeSubmit}
             className="flex flex-wrap gap-2"
             onSubmit={(event: FormEvent) => {
               event.preventDefault();

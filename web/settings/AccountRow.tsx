@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pencil, Trash2, UsersRound } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import { api } from "../api.ts";
+import { blockImeSubmit } from "../keys.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { AssignmentPicker } from "./AssignmentPicker.tsx";
 import type { Account } from "./types.ts";
@@ -118,6 +119,7 @@ export function AccountRow({
       </div>
       {editing && (
         <form
+          onKeyDown={blockImeSubmit}
           onSubmit={(event) => {
             event.preventDefault();
             void change(() =>

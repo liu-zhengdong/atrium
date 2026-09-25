@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, FileText, X } from "lucide-react";
 import type { Attachment } from "../../shared/schema.ts";
+import { isImeKey } from "../keys.ts";
 
 export function attachmentUrl(id: string) {
   return `/api/attachments/${id}`;
@@ -122,6 +123,7 @@ function Lightbox({
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     function onKey(e: KeyboardEvent) {
+      if (isImeKey(e)) return;
       if (e.key === "Escape") onClose();
       if (e.key === "ArrowLeft")
         onIndex((index - 1 + images.length) % images.length);

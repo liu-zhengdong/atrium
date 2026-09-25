@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api, messageOf } from "../api.ts";
+import { blockImeSubmit } from "../keys.ts";
 import type { Account } from "./types.ts";
 import type { CustomConfig } from "../../server/custom-providers.ts";
 
@@ -98,6 +99,7 @@ export function CustomAccountForm({
   return (
     <form
       onSubmit={(event) => void submit(event)}
+      onKeyDown={blockImeSubmit}
       className="mt-5 max-h-[75vh] space-y-3 overflow-y-auto text-xs text-muted"
     >
       <label className="block">

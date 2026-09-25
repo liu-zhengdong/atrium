@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.ts";
+import { isImeKey } from "../keys.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import type { Account, Credentials } from "./types.ts";
 import { assignedAccountLabel } from "../../shared/providers.ts";
@@ -29,6 +30,7 @@ export function AssignmentPicker({
   useEffect(() => {
     if (!pending) return;
     const dismiss = (event: KeyboardEvent) => {
+      if (isImeKey(event)) return;
       if (event.key === "Escape") {
         event.stopImmediatePropagation();
         setPending(null);

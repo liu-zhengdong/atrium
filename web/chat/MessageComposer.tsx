@@ -14,6 +14,7 @@ import {
   Avatar,
   type Agent,
 } from "../components/AgentAvatar.tsx";
+import { isImeKey } from "../keys.ts";
 import { StagedChip } from "./Attachments.tsx";
 import { isAllOption, useMentionPicker } from "./useMentionPicker.ts";
 import { useStagedAttachments } from "./useStagedAttachments.ts";
@@ -226,7 +227,7 @@ export function MessageComposer({
             void files.add(dropped);
           }}
           onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
+            if (isImeKey(e.nativeEvent)) return;
             if (mention.handleKey(e)) return;
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();

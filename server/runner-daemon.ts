@@ -15,8 +15,9 @@ import { RunnerLink } from "./runner-link.ts";
 import { RunnerEvents } from "./runner-events.ts";
 import { RunnerMcp } from "./runner-mcp.ts";
 import { RunnerJournal } from "./runner-process.ts";
+import { Problem } from "./problem.ts";
 import { runtimeEvents } from "../shared/trace.ts";
-import { liveRuntimeSchema } from "../shared/schema.ts";
+import { liveRuntimeSchema, runtimeSchema } from "../shared/schema.ts";
 import { z } from "zod";
 
 const require = createRequire(import.meta.url);
@@ -39,6 +40,8 @@ export class RunnerDaemon {
   private eventError: string | null = null;
   private mcp: RunnerMcp;
   private journal?: RunnerJournal;
+  private draining = new Set<string>();
+  private inFlight = new Map<string, number>();
   constructor(
     private url: string,
     private token: string,
@@ -180,6 +183,38 @@ export class RunnerDaemon {
       this.polling = false;
     }
   }
+  private async drainStatus(agentId: string) {
+    if (!this.draining.has(agentId)) throw new Error("身份尚未进入排空");
+    const pending = this.inFlight.get(agentId) ?? 0;
+    const gateway = await this.open();
+    const { runtimes } = z
+      .object({ runtimes: z.array(liveRuntimeSchema).max(256) })
+      .parse(await gateway.connection.agent.request("_pi/runtime/list", {}));
+    const owned = runtimes.filter((runtime) => runtime.identityId === agentId);
+    // An identity recorded as started but absent from discovery is uncertain,
+    // not proof that the old process is safe to stop.
+    const reasons: string[] = [];
+    if (pending) reasons.push(`${pending} 个启动或投递请求尚未返回`);
+    if (!owned.length && this.journal?.hasAgent(agentId))
+      reasons.push("已登记的身份进程未出现在运行时列表");
+    for (const runtime of owned) {
+      const status = runtimeSchema.parse(
+        await gateway.connection.agent.request("_pi/runtime/status", {
+          runtimeId: runtime.runtimeId,
+          generation: runtime.generation,
+          sessionId: runtime.sessionId,
+        }),
+      );
+      if (status.identityId !== agentId)
+        reasons.push(`PID ${runtime.pid} 的身份归属不一致`);
+      else if (status.busy)
+        reasons.push(`PID ${runtime.pid} 正在运行或有待处理消息`);
+      // Poll before declaring idle, so Web can observe the final run_end.
+      await this.pollOne(runtime);
+    }
+    if (!this.draining.has(agentId)) throw new Error("身份排空已取消");
+    return { drained: reasons.length === 0, busy: reasons };
+  }
   private async handle(method: string, payload: unknown) {
     if (method === "runner.heartbeat")
       return { generation: this.generation, eventError: this.eventError };
@@ -200,6 +235,21 @@ export class RunnerDaemon {
           "unknown",
       };
     }
+    if (method === "runner.drain") {
+      const { agentId, action } = z
+        .object({
+          agentId: z.string().uuid(),
+          action: z.enum(["start", "status", "resume"]),
+        })
+        .strict()
+        .parse(payload);
+      if (action === "resume") {
+        this.draining.delete(agentId);
+        return { draining: false };
+      }
+      if (action === "start") this.draining.add(agentId);
+      return this.drainStatus(agentId);
+    }
     if (method !== "acp.request") throw new Error("unsupported runner method");
     const input = payload as {
       agentId?: string;
@@ -212,9 +262,42 @@ export class RunnerDaemon {
       !/^(?:_pi\/|session\/(?:new|load|close)$)/.test(remoteMethod)
     )
       throw new Error("invalid acp request");
+    const tracksWork = [
+      "_pi/runtime/deliver",
+      "_pi/identity/start",
+      "session/new",
+      "session/load",
+    ].includes(remoteMethod);
+    if (tracksWork) {
+      if (this.draining.has(input.agentId))
+        throw new Problem(409, "身份正在排空，新回合未发送", "runner_draining");
+      this.inFlight.set(
+        input.agentId,
+        (this.inFlight.get(input.agentId) ?? 0) + 1,
+      );
+    }
+    try {
+      return await this.handleAcp(
+        input.agentId,
+        remoteMethod,
+        input.params?.params ?? {},
+      );
+    } finally {
+      if (tracksWork) {
+        const remaining = (this.inFlight.get(input.agentId) ?? 1) - 1;
+        if (remaining) this.inFlight.set(input.agentId, remaining);
+        else this.inFlight.delete(input.agentId);
+      }
+    }
+  }
+  private async handleAcp(
+    agentId: string,
+    remoteMethod: string,
+    params: unknown,
+  ) {
     const gateway = await this.open();
     if (remoteMethod === "_pi/runtime/events") {
-      const target = input.params?.params as {
+      const target = params as {
         runtimeId: string;
         generation: string;
         sessionId: string;
@@ -230,23 +313,22 @@ export class RunnerDaemon {
         target.limit,
       );
     }
-    const params = input.params?.params ?? {};
     if (
       ["_pi/identity/start", "session/new", "session/load"].includes(
         remoteMethod,
       )
     )
-      this.journal?.starting(input.agentId);
+      this.journal?.starting(agentId);
     const result = await gateway.connection.agent.request(remoteMethod, params);
     if (
       remoteMethod === "_pi/identity/stop" ||
       remoteMethod === "session/close"
     )
-      this.journal?.stopped(input.agentId);
+      this.journal?.stopped(agentId);
     if (["_pi/runtime/attach", "_pi/runtime/status"].includes(remoteMethod)) {
       const pid = (result as { pid?: unknown })?.pid;
       if (typeof pid === "number" && pid > 0)
-        this.journal?.running(input.agentId, pid);
+        this.journal?.running(agentId, pid);
     }
     return result;
   }

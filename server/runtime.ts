@@ -219,6 +219,37 @@ export class Runtimes {
     }
     if (rebound.length || Object.keys(locked).length) this.changed();
   }
+  async drainRunner(agentId: string, action: "start" | "status" | "resume") {
+    const owner = ownerOf(this.store, agentId);
+    if (!owner) throw new Problem(404, "身份没有运行器归属");
+    if (
+      this.runnerRevoked(owner.runner_id) ||
+      !this.bridge ||
+      this.bridge.generation(owner.runner_id) !== owner.generation
+    )
+      throw new Problem(
+        503,
+        "归属运行器未连接或代际已变化；不能确认排空",
+        "runner_offline",
+      );
+    const result = await this.bridge.requestControl<{
+      drained?: boolean;
+      draining?: boolean;
+      busy?: string[];
+    }>(owner.runner_id, "runner.drain", { agentId, action });
+    const current = ownerOf(this.store, agentId);
+    if (
+      current?.runner_id !== owner.runner_id ||
+      current.generation !== owner.generation ||
+      this.bridge.generation(owner.runner_id) !== owner.generation
+    )
+      throw new Problem(
+        409,
+        "身份运行器归属或代际已变化；不能确认排空",
+        "runner_changed",
+      );
+    return result;
+  }
   async reclaimRunner(agentId: string, confirmStopped: boolean) {
     const owner = ownerOf(this.store, agentId);
     if (!owner || !this.bridge) throw new Problem(404, "身份没有运行器归属");
@@ -1759,7 +1790,11 @@ export class Runtimes {
               error = recoveryError;
             }
           }
-          if (error instanceof Problem && error.code === "runner_offline")
+          if (
+            error instanceof Problem &&
+            (error.code === "runner_offline" ||
+              error.code === "runner_draining")
+          )
             break;
           if (
             error instanceof Problem &&
@@ -1786,6 +1821,7 @@ export class Runtimes {
       if (
         error instanceof Problem &&
         (error.code === "runner_offline" ||
+          error.code === "runner_draining" ||
           error.code === "runner_outcome_unknown")
       )
         return;

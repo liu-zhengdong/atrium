@@ -133,6 +133,56 @@ export const runnerCommands: Record<string, Command> = {
       }
     },
   },
+  "runner drain": {
+    args: "<身份> [--timeout 秒]",
+    about: "阻止该身份新回合，等待已接收回合结算；超时不停止 Pi",
+    options: { timeout: { type: "string", default: "120" } },
+    positionals: [1, 1],
+    run: async ({ positionals: [reference], values }) => {
+      const timeout = Number(values.timeout);
+      if (!Number.isInteger(timeout) || timeout < 1 || timeout > 600)
+        throw new Problem(400, "timeout 应为 1–600 秒", "usage");
+      const { connect } = await import("./service.ts");
+      const client = await connect();
+      const agent = findAgent(await roster(client), reference!);
+      const path = `/agents/${agent.id}/runner/drain`;
+      const deadline = Date.now() + timeout * 1000;
+      let result = await client.post<{ drained: boolean; busy: string[] }>(
+        path,
+        {
+          action: "start",
+        },
+      );
+      while (!result.drained && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        result = await client.post(path, { action: "status" });
+      }
+      recordResult({ agent: agent.ref, ...result });
+      if (!result.drained)
+        throw new Problem(
+          409,
+          `${agent.name} 未排空：${result.busy.join("；")}。Pi 未停止，新回合继续被拒；稍后重试，或运行 atrium runner resume ${agent.ref} 恢复接收`,
+          "runner_busy",
+        );
+      console.log(
+        `${agent.name} 已排空；Pi 仍在运行，可安全停止该身份进程；无需停止时运行 atrium runner resume ${agent.ref}`,
+      );
+    },
+  },
+  "runner resume": {
+    args: "<身份>",
+    about: "取消该身份排空，重新接收新回合",
+    positionals: [1, 1],
+    run: async ({ positionals: [reference] }) => {
+      const { connect } = await import("./service.ts");
+      const client = await connect();
+      const agent = findAgent(await roster(client), reference!);
+      await client.post(`/agents/${agent.id}/runner/drain`, {
+        action: "resume",
+      });
+      console.log(`${agent.name} 已恢复接收新回合；先前排空证明不再适用`);
+    },
+  },
   "runner reclaim": {
     args: "<身份> [--confirm-stopped]",
     about:

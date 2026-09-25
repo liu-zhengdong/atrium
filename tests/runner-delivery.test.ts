@@ -497,18 +497,79 @@ test("revoked runner's identity can be released only after explicit stop confirm
   assert.equal(f.runtimes.canBindRunner(f.agent.id), true);
 });
 
-test("runner offline before delivery keeps pending with no false identity failure", async (t) => {
+test("drain control only targets the current owner generation and never certifies a switched runner", async (t) => {
   const f = fixture(t);
-  t.mock.method(
-    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
-    "rpc",
-    async (method: string) => {
-      if (method === "_pi/runtime/status") return f.info;
-      assert.equal(method, "_pi/runtime/deliver");
-      throw new Problem(503, "命令未发送", "runner_offline");
-    },
+  new RunnerAuth(f.store);
+  await assert.rejects(
+    f.runtimes.drainRunner(f.agent.id, "start"),
+    (error: unknown) => error instanceof Problem && error.statusCode === 404,
   );
-  await f.runtimes.pump(f.agent.id, true);
-  assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
-  assert.equal(f.store.failure(f.agent.id), null);
+  claimRunner(f.store, f.agent.id, "r1", "generation-1");
+  let generation = "generation-1";
+  const calls: string[] = [];
+  (f.runtimes as unknown as { bridge: unknown }).bridge = {
+    generation: () => generation,
+    requestControl: async (
+      runnerId: string,
+      method: string,
+      payload: { action: string },
+    ) => {
+      calls.push(`${runnerId}:${method}:${payload.action}`);
+      return { drained: true, busy: [] };
+    },
+    close: () => {},
+  };
+  assert.deepEqual(await f.runtimes.drainRunner(f.agent.id, "start"), {
+    drained: true,
+    busy: [],
+  });
+  assert.deepEqual(calls, ["r1:runner.drain:start"]);
+  generation = "generation-2";
+  await assert.rejects(
+    f.runtimes.drainRunner(f.agent.id, "status"),
+    (error: unknown) =>
+      error instanceof Problem && error.code === "runner_offline",
+  );
+  assert.equal(calls.length, 1);
+  generation = "generation-1";
+  (
+    f.runtimes as unknown as {
+      bridge: { requestControl: () => Promise<unknown> };
+    }
+  ).bridge.requestControl = async () => {
+    generation = "generation-2";
+    return { drained: true, busy: [] };
+  };
+  await assert.rejects(
+    f.runtimes.drainRunner(f.agent.id, "status"),
+    (error: unknown) =>
+      error instanceof Problem && error.code === "runner_changed",
+  );
 });
+
+for (const [name, code, status] of [
+  ["runner offline", "runner_offline", 503],
+  ["identity draining", "runner_draining", 409],
+] as const) {
+  test(`${name} before delivery keeps pending with no false identity failure`, async (t) => {
+    const f = fixture(t);
+    const methods: string[] = [];
+    t.mock.method(
+      Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+      "rpc",
+      async (method: string) => {
+        methods.push(method);
+        if (method === "_pi/runtime/status") return f.info;
+        assert.equal(method, "_pi/runtime/deliver");
+        throw new Problem(status, "命令未发送", code);
+      },
+    );
+    await f.runtimes.pump(f.agent.id, true);
+    assert.ok(
+      methods.includes("_pi/runtime/deliver"),
+      "must exercise delivery rejection",
+    );
+    assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
+    assert.equal(f.store.failure(f.agent.id), null);
+  });
+}

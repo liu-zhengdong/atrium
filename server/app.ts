@@ -371,6 +371,16 @@ export async function createApp(options: {
     changed();
     return { runnerId, generation };
   });
+  app.post("/api/agents/:id/runner/drain", async (request) => {
+    const agentId = agentParams(request);
+    store.agent(agentId);
+    const { action } = z
+      .object({ action: z.enum(["start", "status", "resume"]) })
+      .strict()
+      .parse(request.body);
+    if (!runtimes) throw new Problem(503, "运行时未就绪");
+    return runtimes.drainRunner(agentId, action);
+  });
   app.post("/api/agents/:id/runner/reclaim", async (request) => {
     const agentId = agentParams(request);
     const { confirmStopped } = z

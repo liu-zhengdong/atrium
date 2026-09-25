@@ -44,6 +44,8 @@ export const groups: Record<string, string[]> = {
     "adapters url",
     "runner list",
     "runner start",
+    "runner drain",
+    "runner resume",
     "runner bind",
     "runner migrate",
     "runner unbind",

@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import { Problem } from "./problem.ts";
 
 export type RunnerRequest = {
   id: number;
@@ -9,10 +10,19 @@ type RunnerReply = {
   id: number;
   result?: unknown;
   error?: string;
+  statusCode?: number;
+  code?: string;
 };
 type Packet =
   | { kind: "request"; id: number; method: string; params: unknown }
-  | { kind: "reply"; id: number; result?: unknown; error?: string };
+  | {
+      kind: "reply";
+      id: number;
+      result?: unknown;
+      error?: string;
+      statusCode?: number;
+      code?: string;
+    };
 
 const MAX_PENDING = 128;
 const MAX_MESSAGE = 1_048_576;
@@ -71,7 +81,14 @@ export class RunnerLink {
         if (!pending) return;
         this.pending.delete(packet.id);
         clearTimeout(pending.timer);
-        if (packet.error) pending.reject(new Error(packet.error));
+        if (packet.error)
+          pending.reject(
+            Number.isInteger(packet.statusCode) &&
+              packet.statusCode! >= 400 &&
+              packet.statusCode! <= 599
+              ? new Problem(packet.statusCode!, packet.error, packet.code)
+              : new Error(packet.error),
+          );
         else pending.resolve(packet.result);
         return;
       }
@@ -88,11 +105,15 @@ export class RunnerLink {
       this.send({ kind: "reply", id: packet.id, result });
     } catch (error) {
       // Never serialize a caught stack, environment, token, or provider body.
-      const message =
-        error instanceof Error && "statusCode" in error
-          ? error.message.slice(0, 256)
-          : "运行器处理失败";
-      this.send({ kind: "reply", id: packet.id, error: message });
+      const problem = error instanceof Problem ? error : null;
+      this.send({
+        kind: "reply",
+        id: packet.id,
+        error: problem ? problem.message.slice(0, 256) : "运行器处理失败",
+        ...(problem
+          ? { statusCode: problem.statusCode, code: problem.code }
+          : {}),
+      });
     }
   }
   private send(packet: Packet) {

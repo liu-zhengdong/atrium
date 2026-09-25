@@ -198,6 +198,9 @@ export class RunnerJournal {
     delete this.current.agents[agentId];
     this.persist();
   }
+  hasAgent(agentId: string) {
+    return Object.hasOwn(this.current.agents, agentId);
+  }
   verdict(agentId: string): ProcessVerdict {
     if (!this.prior.length) return "unknown";
     const verdicts = this.prior.map((entry) => priorVerdict(entry, agentId));

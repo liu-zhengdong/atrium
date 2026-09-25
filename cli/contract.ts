@@ -17,6 +17,7 @@ export const exitCodes = {
   unassigned_account: 4,
   local_login_unavailable: 4,
   service_unavailable: 5,
+  new_session_failed: 5,
   timeout: 124,
 } as const;
 export type ErrorCode = keyof typeof exitCodes;

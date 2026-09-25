@@ -149,7 +149,8 @@ export async function createApp(options: {
           ? error.issues
               .map((i) => `${i.path.join(".")}: ${i.message}`)
               .join("；")
-          : status >= 500
+          : status >= 500 &&
+              !(error instanceof Problem && error.code === "new_session_failed")
             ? "服务处理失败，请检查本地日志"
             : error instanceof Error
               ? error.message
@@ -711,6 +712,14 @@ export async function createApp(options: {
     if (!runtimes) throw new Problem(503, "运行时未启用");
     await runtimes.start(agentParams(request));
     return { connected: true };
+  });
+  app.post("/api/agents/:id/new-session", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    const { timeout } = z
+      .object({ timeout: z.number().int().min(1).max(3600).default(300) })
+      .strict()
+      .parse(request.body);
+    return runtimes.newSession(agentParams(request), timeout);
   });
   app.post("/api/agents/:id/retry", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");

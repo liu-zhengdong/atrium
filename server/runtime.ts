@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   mkdirSync,
   readFileSync,
+  writeFileSync,
   existsSync,
   renameSync,
   realpathSync,
@@ -124,6 +125,7 @@ export class Runtimes {
   private gateways = new Set<Gateway>();
   private opening?: Promise<Gateway>;
   private connecting = new Map<string, Promise<void>>();
+  private switching = new Set<string>();
   private bindingOwners = new Map<string, string>();
   private pumping = new Map<string, Promise<void>>();
   private turns = new Map<
@@ -724,6 +726,8 @@ export class Runtimes {
   async start(id: string, automatic = false, fresh = false) {
     requireAssignment(this.store, id);
     const binding = this.binding(id);
+    if (this.switching.has(id) && !fresh)
+      throw new Problem(409, "正在切换会话，请稍候");
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (binding.runtime_pid && alive(binding.runtime_pid))
       throw new Problem(409, "原 Pi 进程仍存在，等待重连；不会另开同一会话");
@@ -887,6 +891,102 @@ export class Runtimes {
       }
     });
     if (!this.pumping.has(id)) await this.pump(id);
+  }
+  /** 等真实运行状态空闲后才释放旧实例；切换期间不投递新的回合。 */
+  async newSession(id: string, timeoutSeconds = 300) {
+    requireAssignment(this.store, id);
+    if (this.switching.has(id) || this.connecting.has(id))
+      throw new Problem(409, "身份正在接入或切换会话，请稍候");
+    const oldFile = this.store.agent(id).session_file;
+    const cursor = join(
+      process.env.PI_ACP_DIR ?? join(homedir(), ".pi", "pi-acp"),
+      "identities",
+      `${id}.cursor.json`,
+    );
+    this.switching.add(id);
+    let started = false;
+    try {
+      await this.discover();
+      if (this.discoveryError)
+        throw new Problem(503, "无法确认身份是否在其他终端运行，请稍后重试");
+      const foreign = this.discovered.find(
+        (runtime) =>
+          runtime.bound_agent === id &&
+          runtime.mode === "tui" &&
+          alive(runtime.pid),
+      );
+      if (foreign)
+        throw new Problem(
+          409,
+          "这个身份正在其他终端运行（atrium run / TUI）；请先在原终端退出，不会抢占会话",
+        );
+      const connection = this.connections.get(id);
+      if (connection && !this.owned(id))
+        throw new Problem(
+          409,
+          "这个身份正在其他终端运行（如 atrium tui / atrium run）；请先在原终端退出，不会抢占会话",
+        );
+      if (!connection) {
+        const pid = this.binding(id).runtime_pid;
+        if (pid && alive(pid))
+          throw new Problem(
+            409,
+            "旧 Pi 进程仍在运行，请先在原终端退出；不会抢占会话",
+          );
+      }
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      while (this.connections.has(id)) {
+        const runtime = this.connections.get(id)!;
+        runtime.info = runtimeSchema.parse(
+          await this.rpc("_pi/runtime/status", target(runtime.info)),
+        );
+        if (!runtime.info.busy) {
+          await this.capture(id, runtime.info);
+          // A concurrent delivery may have begun during the status request.
+          if (!this.pumping.has(id)) break;
+        }
+        if (Date.now() >= deadline)
+          throw new Problem(
+            408,
+            `等待 ${timeoutSeconds} 秒后当前回合仍未结束；旧会话保持运行，稍后重试`,
+            "timeout",
+          );
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      // Preserve the pointer as well as the session file if the new start fails.
+      const previousCursor = existsSync(cursor) ? readFileSync(cursor) : null;
+      const previousBinding = this.binding(id);
+      if (this.connections.has(id)) await this.stop(id);
+      try {
+        await this.start(id, false, true);
+      } catch (error) {
+        if (previousCursor) {
+          const temp = `${cursor}.restore-${randomUUID()}`;
+          writeFileSync(temp, previousCursor, { mode: 0o600 });
+          renameSync(temp, cursor);
+        } else if (existsSync(cursor)) rmSync(cursor);
+        this.store.run(
+          "UPDATE agents SET session_file=?,acp_session_id=? WHERE id=?",
+          previousBinding.session_file,
+          previousBinding.acp_session_id,
+          id,
+        );
+        throw new Problem(
+          503,
+          `新会话启动失败，旧会话文件和指针已保留：${this.redact(id, errorWithDetails(error)).slice(0, 240)}`,
+          "new_session_failed",
+        );
+      }
+      this.recordSessionReset(id, "手动开启新会话");
+      started = true;
+      return {
+        old_session_file: oldFile,
+        new_session_file: this.store.agent(id).session_file,
+      };
+    } finally {
+      this.switching.delete(id);
+      if (started || this.connections.has(id)) await this.pump(id);
+    }
   }
   /** 本进程这条网关自己启动的 Pi；别处发现、由 TUI 或旧网关拉起的实例不归它管。 */
   private owned(id: string) {
@@ -1057,7 +1157,7 @@ export class Runtimes {
     }
     let operationFailed = false;
     try {
-      if (this.connecting.has(id)) return;
+      if (this.connecting.has(id) || this.switching.has(id)) return;
       let runtime = this.connections.get(id);
       // A TUI may exit and immediately restart under the same identity. Discovery
       // knows the new runtime before a status poll of the old one necessarily fails.

@@ -28,7 +28,7 @@ export function checkedCustom(name: string, config: CustomConfig) {
   if (
     !["https:", "http:"].includes(url.protocol) ||
     (url.protocol === "http:" &&
-      !["localhost", "127.0.0.1", "::1"].includes(url.hostname))
+      !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
   )
     throw new Problem(400, "Base URL 须为 HTTPS；本地服务可用 HTTP");
   if (url.username || url.password || url.search || url.hash)

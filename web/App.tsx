@@ -40,7 +40,11 @@ const storedTab = (): ChatTab => {
 const storedObservedAt = () => {
   try {
     const value = Number(localStorage.getItem(OBSERVED_AT_KEY));
-    return Number.isSafeInteger(value) && value > 0 ? value : Date.now();
+    if (Number.isSafeInteger(value) && value > 0) return value;
+    // 第一次打开就固定基准；未点进「围观」前，刷新不能清掉新动态。
+    const now = Date.now();
+    localStorage.setItem(OBSERVED_AT_KEY, String(now));
+    return now;
   } catch {
     return Date.now();
   }

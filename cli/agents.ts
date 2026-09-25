@@ -36,6 +36,17 @@ export const presence = (
           ? "在线"
           : "离线";
 export const roster = (client: Client) => client.get<Overview>("/overview");
+export const retryLine = (failure: AgentEntry["failure"]): string => {
+  const retry = failure?.retry;
+  if (!retry) return "";
+  if (retry.state === "waiting")
+    return `出错 · ${when(retry.next_at)} 自动重试（第 ${retry.attempt}/${retry.max} 次）`;
+  if (retry.state === "running")
+    return `出错 · 正在自动重试（第 ${retry.attempt}/${retry.max} 次）`;
+  if (retry.state === "exhausted")
+    return `出错 · 已自动重试 ${retry.max} 次，需要处理`;
+  return "出错 · 需要处理";
+};
 /** 名册里找一位：短号、名称或 ID。接口的路径参数只认 ID，所以先在这里换。 */
 export function findAgent(view: Overview, reference: string): AgentEntry {
   const agent = view.agents.find(
@@ -83,7 +94,7 @@ const list: Command = {
           agent.unread ? String(agent.unread) : "",
           clip(agent.work, 40),
           agent.failure
-            ? clip(agent.failure.text.replace(/\s+/g, " "), 55)
+            ? clip(retryLine(agent.failure) || agent.failure.text, 55)
             : "",
         ]),
       ]),
@@ -122,6 +133,7 @@ const show: Command = {
         agent.failure
           ? `错误（${when(agent.failure.at)}，连续 ${agent.failure.count} 次）：${agent.failure.text}`
           : agent.error && `错误：${agent.error}`,
+        retryLine(agent.failure),
       ]
         .filter((line): line is string => !!line)
         .join("\n"),

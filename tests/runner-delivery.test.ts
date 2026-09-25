@@ -547,6 +547,59 @@ test("drain control only targets the current owner generation and never certifie
   );
 });
 
+test("a new user direct during a transient failure gets one turn, then the scheduled retry still runs", async (t) => {
+  const f = fixture(t);
+  f.store.setFailure(
+    f.agent.id,
+    "Connection error.",
+    Date.now() - 1000,
+    "provider",
+  );
+  f.store.send(LOCAL_USER, {
+    chat_id: f.chat.id,
+    body: "请再试一次",
+    mentions: [],
+  });
+  const nextAt = f.store.retryStatus(f.agent.id)?.retry?.next_at;
+  const calls: boolean[] = [];
+  t.mock.method(
+    f.runtimes as unknown as {
+      doPump(id: string, direct: boolean): Promise<void>;
+    },
+    "doPump",
+    async (id: string, direct: boolean) => {
+      calls.push(direct);
+      f.store.accepted(f.store.pending(id)[0]!.id);
+      f.store.setFailure(id, "Connection error.", Date.now(), "provider");
+      f.store.finishTurn(id, false);
+    },
+  );
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  await tick();
+  for (let i = 0; i < 5; i++) await tick();
+  assert.deepEqual(
+    calls,
+    [true],
+    "the same user message must not loop every tick",
+  );
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.next_at, nextAt);
+  f.store.run(
+    "UPDATE failure_incidents SET started_at=? WHERE agent_id=?",
+    Date.now() - 120_001,
+    f.agent.id,
+  );
+  await tick();
+  assert.deepEqual(
+    calls,
+    [true, true],
+    "the scheduled attempt must not be starved",
+  );
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 1);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.state, "waiting");
+});
+
 test("an overdue retry waits through drain without a new turn or budget, then delivers once", async (t) => {
   const f = fixture(t);
   new RunnerAuth(f.store);
@@ -595,7 +648,7 @@ test("an overdue retry waits through drain without a new turn or budget, then de
   assert.equal(inspections, 2);
   assert.deepEqual(calls, []);
   assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
-  assert.equal(f.store.retryStatus(f.agent.id)?.retry.state, "waiting");
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.state, "waiting");
   assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
   draining = false;
   await tick();
@@ -645,7 +698,7 @@ test("a drain beginning after inspect releases the unstarted retry without block
   assert.equal(attempted, 1);
   assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
   assert.equal(f.store.incident(f.agent.id)?.blocked, false);
-  assert.equal(f.store.retryStatus(f.agent.id)?.retry.state, "waiting");
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.state, "waiting");
   assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
   await tick();
   assert.equal(attempted, 2);

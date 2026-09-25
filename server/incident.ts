@@ -4,23 +4,23 @@ export type FailureCategory = "transient" | "needsHuman";
 export type FailureSource = "provider" | "delivery" | "startup";
 export const RETRY_DELAYS = [2, 10, 30].map((minutes) => minutes * 60_000);
 
-/** A local start/configuration error is not evidence of a provider timeout. */
+/** Only explicit auth, request, configuration, capability or spent-plan errors need a person.
+ * Unknown failures (even during startup) get at most three automatic retries;
+ * a new provider/bridge network message must not strand pending work forever.
+ */
 export function classifyFailure(
   error: string,
-  source: FailureSource,
+  _source: FailureSource,
+  code?: string,
 ): FailureCategory {
-  if (source === "startup") return "needsHuman";
+  if (code === "launch_secret_unsupported") return "needsHuman";
   if (
-    /\b(?:400|401|403)\b|not logged in|please run \/login|unauthoriz|forbidden|invalid.request|invalid.api.key|no account|未配置|未分配|投递结果未知/i.test(
+    /(?:^|\s|\[)(?:400|401|402|403)(?=\b|\])|not logged in|authentication required|please run \/login|unauthoriz|forbidden|invalid[ _.-]*(?:api[ _.-]*)?key|api[ _.-]*key[ _.-]*(?:missing|invalid|expired|not configured|not set)|invalid[ _.-]*request|authentication failed|credentials? (?:invalid|expired)|token expired|insufficient_quota|billing|payment required|(?:usage|monthly|daily) limit|no remaining credits|credit balance|no account|not assigned|model not found|not supported|unsupported|capability denied|permission denied|未配置|未分配|模型认证失败|认证失败|余额不足|套餐.*用尽|模型不支持|投递结果未知/i.test(
       error,
     )
   )
     return "needsHuman";
-  return /\b(?:connection error|network (?:error|timeout)|provider stream timeout|stream (?:timed out|timeout)|rate.limit|rate limit|overloaded)\b|\b429\b|\[(?:500|502|503|504)\]|\bHTTP 5\d\d\b/i.test(
-    error,
-  )
-    ? "transient"
-    : "needsHuman";
+  return "transient";
 }
 
 export type Incident = {
@@ -32,6 +32,16 @@ export type Incident = {
   notified_at: number | null;
   blocked: boolean;
 };
+
+/** Only a new user message (or explicit retry) may wake a terminal incident. */
+export function needsUserAttempt(incident: Incident | null): boolean {
+  return (
+    !!incident &&
+    (incident.category === "needsHuman" ||
+      incident.blocked ||
+      incident.attempts_used >= RETRY_DELAYS.length)
+  );
+}
 
 /** First retry is relative to failure; overdue catch-up runs at most once before preserving spacing. */
 export function retryDecision(

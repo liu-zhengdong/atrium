@@ -16,12 +16,25 @@ type Recipient = {
 
 const headline = (text: string) =>
   text.split(/\r?\n/, 1)[0]!.trim().slice(0, 60);
-const instruction = (text: string, ref: string) =>
-  /\[400\] Invalid request parameters/i.test(text)
-    ? `下一步：atrium new-session ${ref}；旧会话文件会保留。`
-    : /Not logged in|login|keychain|钥匙串|认证|401|403/i.test(text)
-      ? "下一步：在运行这台 Mac 上允许钥匙串访问；也可以按长期令牌方案重新登录。"
-      : "下一步：检查模型账号与运行配置，修好后点击重试。";
+export const instruction = (text: string, ref: string) => {
+  if (/\b400\b[^\n]{0,160}Invalid request parameters/i.test(text))
+    return `下一步：atrium new-session ${ref}；旧会话文件会保留。`;
+  if (
+    /(?:usage|quota|rate|monthly|daily|5.hour) limit|insufficient_quota|no remaining credits|credit balance|额度|用量|余额不足|套餐.*用尽/i.test(
+      text,
+    )
+  )
+    return "下一步：等额度恢复或改分配账号，修好后点击重试。";
+  if (/not logged in|keychain|钥匙串|please run \/login/i.test(text))
+    return "下一步：在运行这台 Mac 上允许钥匙串访问；也可以按长期令牌方案重新登录。";
+  if (
+    /api[ _-]*key|\b401\b|invalid[ _-]*key|模型认证失败|authentication failed/i.test(
+      text,
+    )
+  )
+    return "下一步：更换 API Key 或改分配账号，修好后点击重试。";
+  return "下一步：检查模型账号与运行配置，修好后点击重试。";
+};
 
 /** Freeze recipients and messages in the same transaction as the terminal incident. */
 export function notifyTerminal(
@@ -35,6 +48,10 @@ export function notifyTerminal(
   if (
     !incident ||
     !failure ||
+    // A direct delivery is still in flight; retryablePending alone is empty.
+    (incident.category === "transient" &&
+      store.acceptedDirect(id) &&
+      !store.uncertainDelivery(id)) ||
     incident.notified_at !== null ||
     store.one<{ deleted_at: number | null }>(
       "SELECT deleted_at FROM agents WHERE id=?",

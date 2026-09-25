@@ -64,6 +64,7 @@ import { TurnLedger } from "./turns.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { notifyTerminal } from "./incident-notice.ts";
+import { needsUserAttempt } from "./incident.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { wakesOffline } from "./delivery.ts";
@@ -865,7 +866,15 @@ export class Runtimes {
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
-        if (recordFailure) this.store.setFailure(id, message);
+        if (recordFailure)
+          this.store.setFailure(
+            id,
+            message,
+            Date.now(),
+            "startup",
+            undefined,
+            error instanceof Problem ? error.code : undefined,
+          );
         this.changed();
       }
       if (message !== errorWithDetails(error)) throw new Error(message);
@@ -1578,16 +1587,19 @@ export class Runtimes {
     const existing = this.pumping.get(id);
     if (existing) return existing;
     const incident = this.store.incident(id);
-    if (
-      (incident?.category === "needsHuman" || incident?.blocked) &&
-      !this.explicitlyRetrying.has(id) &&
-      !this.manuallyRetrying.has(id)
-    ) {
-      const userMessage = this.store.userAttemptDue(id);
-      if (!userMessage || !this.store.claimUserAttempt(id, userMessage))
-        return Promise.resolve();
-      this.userAttempt.set(id, userMessage);
-      direct = true;
+    if (!this.explicitlyRetrying.has(id) && !this.manuallyRetrying.has(id)) {
+      if (needsUserAttempt(incident)) {
+        const userMessage = this.store.userAttemptDue(id);
+        if (!userMessage || !this.store.claimUserAttempt(id, userMessage))
+          return Promise.resolve();
+        this.userAttempt.set(id, userMessage);
+        direct = true;
+      } else if (direct && incident?.category === "transient") {
+        // This new user message is being attempted via the normal pending path.
+        // Do not replay it after the scheduled attempts are exhausted.
+        const userMessage = this.store.userAttemptDue(id);
+        if (userMessage) this.store.claimUserAttempt(id, userMessage);
+      }
     }
     const promise = this.doPump(id, direct).finally(() => {
       this.userAttempt.delete(id);
@@ -1614,7 +1626,7 @@ export class Runtimes {
     const singleAttempt =
       !this.manuallyRetrying.has(id) &&
       !this.explicitlyRetrying.has(id) &&
-      (incident?.category === "needsHuman" || !!incident?.blocked);
+      needsUserAttempt(incident);
     try {
       if (this.connecting.has(id) || this.switching.has(id)) return;
       let runtime = this.connections.get(id);
@@ -1822,7 +1834,7 @@ export class Runtimes {
             turn.at >= turn.deliveryAt
           ) {
             if (turn.successful) this.store.completeDelivery(pending.id);
-            else this.store.finishTurn(id, false);
+            else this.store.finishTurn(id, false, turn.deliveryAt, true);
           }
           this.changed();
           // A broken old session may fail every queued message. A user message
@@ -1865,7 +1877,14 @@ export class Runtimes {
           if (!this.stopped) {
             const message = this.redact(id, errorWithDetails(error));
             this.store.deliveryError(pending.id, message);
-            this.store.setFailure(id, message);
+            this.store.setFailure(
+              id,
+              message,
+              Date.now(),
+              "delivery",
+              undefined,
+              error instanceof Problem ? error.code : undefined,
+            );
             this.store.finishTurn(id, false);
             this.changed();
           }
@@ -1889,7 +1908,14 @@ export class Runtimes {
         // A TUI may replace its session while an idle status poll is in flight.
         // Only a failed wake/delivery is a failed turn, not that transient poll.
         if (!operationFailed && this.store.pending(id).length) {
-          this.store.setFailure(id, message);
+          this.store.setFailure(
+            id,
+            message,
+            Date.now(),
+            "delivery",
+            undefined,
+            error instanceof Problem ? error.code : undefined,
+          );
           this.store.finishTurn(id, false);
         }
         this.changed();
@@ -2206,11 +2232,12 @@ export class Runtimes {
           this.store.guardOrphanRetry(agent.id, this.retryOwner);
           const failure = this.store.failure(agent.id);
           const incident = failure ? this.store.incident(agent.id) : null;
-          const userDue = !!this.store.userAttemptDue(agent.id);
+          const userDue =
+            needsUserAttempt(incident) && !!this.store.userAttemptDue(agent.id);
           const peerDue =
             failure !== null &&
             incident?.category === "transient" &&
-            !incident.blocked &&
+            !needsUserAttempt(incident) &&
             this.store
               .pending(agent.id)
               .some(

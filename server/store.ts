@@ -1701,10 +1701,25 @@ export class Store {
         }
       : null;
   }
+  acceptedDirect(id: string): boolean {
+    return !!this.one(
+      "SELECT 1 FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted' LIMIT 1",
+      id,
+    );
+  }
   retryStatus(id: string, now = Date.now()) {
     const failure = this.failure(id),
       incident = this.incident(id);
     if (!failure) return null;
+    // An accepted turn may still finish. Do not show terminal or schedule
+    // another retry while that delivery is being processed.
+    if (
+      incident?.category === "transient" &&
+      !incident.attempt_running &&
+      this.acceptedDirect(id) &&
+      !this.uncertainDelivery(id)
+    )
+      return { ...failure, retry: undefined };
     const pending = this.retryablePending(id);
     const retry = incident
       ? retryDecision(incident, now, pending, !!this.uncertainDelivery(id))
@@ -1722,6 +1737,7 @@ export class Store {
     at = Date.now(),
     source: FailureSource = "startup",
     eventKey?: string,
+    code?: string,
   ) {
     const apply = () => {
       const active = this.incident(id);
@@ -1740,7 +1756,7 @@ export class Store {
         text,
         at,
       }).failure!;
-      const category = classifyFailure(text, source);
+      const category = classifyFailure(text, source, code);
       if (active)
         this.run(
           "UPDATE failure_incidents SET attempt_running=0,blocked=CASE WHEN ?='needsHuman' THEN 1 ELSE blocked END,last_event_key=COALESCE(?,last_event_key) WHERE id=?",
@@ -1928,7 +1944,12 @@ export class Store {
     );
   }
   /** Event-driven settlement only touches deliveries acknowledged after this turn's Atrium input. */
-  finishTurn(id: string, successful: boolean, deliveryAt?: number) {
+  finishTurn(
+    id: string,
+    successful: boolean,
+    deliveryAt?: number,
+    observedFailure = false,
+  ) {
     // NULL means a pre-upgrade accepted row retained for a reconstructed turn.
     const since =
       deliveryAt === undefined
@@ -1969,9 +1990,9 @@ export class Store {
           `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')${since}`,
           ...args,
         );
-        // A settled idle without a matching successful run_end cannot confirm
-        // this reserved retry succeeded. Keep the message and ask for review.
-        if (rows.length)
+        // An inferred idle/reset cannot confirm this retry's outcome. A failed
+        // run_end is observed evidence instead: keep its budget and next retry.
+        if (rows.length && !observedFailure)
           this.run(
             "UPDATE failure_incidents SET attempt_running=0,blocked=1,attempt_owner=NULL,attempt_claimed_at=NULL WHERE agent_id=? AND closed_at IS NULL AND attempt_running=1",
             id,

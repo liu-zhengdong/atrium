@@ -97,7 +97,12 @@ export class TurnLedger {
       this.clear(id);
       // A run without an Atrium delivery proves nothing about old accepted work.
       if (turn.delivery_at !== null)
-        this.store.finishTurn(id, !turn.failure, turn.delivery_at);
+        this.store.finishTurn(
+          id,
+          !turn.failure,
+          turn.delivery_at,
+          !!turn.failure,
+        );
       return turn;
     }
     return null;

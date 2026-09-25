@@ -19,6 +19,7 @@ import { Store } from "../server/store.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { errorWithDetails } from "../server/runtime-error.ts";
+import { LOCAL_USER } from "../shared/user.ts";
 
 const exec = promisify(execFile);
 /** 与 service.test.ts 同一种夹具：隔离数据目录、随机端口、假的 Pi 模板，Pi 命令指向不存在的路径。 */
@@ -73,6 +74,28 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   });
   return { root, data, env, cli };
 }
+
+test(
+  "atrium list/show 展示 overview 的真实重试状态",
+  { timeout: 60000 },
+  async (t) => {
+    const f = await fixture(t);
+    assert.equal((await f.cli("create", "重试身份")).code, 0);
+    const db = new Store(join(f.data, "atrium.sqlite"));
+    const agent = db.agents().find((entry) => entry.ref === "a1")!;
+    const chat = db.createChat("私聊", [agent.id], agent.id);
+    db.send(LOCAL_USER, { chat_id: chat.id, body: "请处理", mentions: [] });
+    db.setFailure(agent.id, "Connection error.", Date.now() - 1000, "provider");
+    db.close();
+    const show = await f.cli("show", "a1");
+    const list = await f.cli("list");
+    assert.equal(show.code, 0, show.stderr);
+    assert.equal(list.code, 0, list.stderr);
+    assert.match(show.stdout, /出错 · .*自动重试（第 1\/3 次）/);
+    assert.match(list.stdout, /出错 · .*自动重试（第 1\/3 次）/);
+    assert.match(show.stdout, /Connection error\./);
+  },
+);
 
 test(
   "命令行覆盖名册、偏好、聊天与通知的主要路径，并拒绝越权与误操作",

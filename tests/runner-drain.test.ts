@@ -258,7 +258,7 @@ test("a due retry across a real runner drain waits, then sends one direct delive
     0,
     "drain must preserve retry budget",
   );
-  assert.equal(store.retryStatus(agent.id)?.retry.state, "waiting");
+  assert.equal(store.retryStatus(agent.id)?.retry?.state, "waiting");
   assert.equal(store.pending(agent.id)[0]?.id, pending.id);
   await runtimes.drainRunner(agent.id, "resume");
   await tick();

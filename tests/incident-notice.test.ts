@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
-import { notifyTerminal } from "../server/incident-notice.ts";
+import { instruction, notifyTerminal } from "../server/incident-notice.ts";
 import { messageRecords } from "../server/records.ts";
 import { classifyFailure, retryDecision } from "../server/incident.ts";
 import { LOCAL_USER } from "../shared/user.ts";
@@ -26,7 +26,7 @@ test("分类和截止时间可反向验证；三次重试跨进程持续", () =>
     "needsHuman",
   );
   assert.equal(classifyFailure("HTTP 429 timeout", "provider"), "transient");
-  assert.equal(classifyFailure("unknown error", "startup"), "needsHuman");
+  assert.equal(classifyFailure("unknown error", "startup"), "transient");
   const base = {
     started_at: 1000,
     category: "transient" as const,
@@ -65,6 +65,100 @@ test("分类和截止时间可反向验证；三次重试跨进程持续", () =>
       next_at: null,
     },
   );
+});
+
+test("真实 Pi/bridge 错误原文：未知有界重试，仅明确拒绝需人工", () => {
+  for (const error of [
+    "fetch failed",
+    "WebSocket closed 1012",
+    "terminated",
+    "read ECONNRESET",
+    "connect ETIMEDOUT 1.2.3.4:443",
+    "socket hang up",
+    "500 Internal Server Error",
+    "503 status code (no body)",
+    "502 Bad Gateway",
+    '503: {"message":"Service Unavailable"}',
+    "Connection error.",
+    "Provider stream timeout",
+    "429 rate limit",
+    "529 overloaded",
+    "[503] Server Error",
+    "some new bridge error",
+  ])
+    assert.equal(classifyFailure(error, "provider"), "transient", error);
+  for (const error of [
+    "[400] Invalid request parameters",
+    "Not logged in: keychain access denied",
+    "401 Unauthorized",
+    "403 5-hour usage limit",
+    "Codex usage limit",
+    "insufficient_quota",
+    "billing_hard_limit_reached",
+    "Model authentication failed",
+    "Model not found: demo",
+    "Thinking level not supported by the current model",
+    "未分配账号",
+    "投递结果未知：应答中断",
+  ])
+    assert.equal(classifyFailure(error, "provider"), "needsHuman", error);
+  assert.equal(classifyFailure("fetch failed", "startup"), "transient");
+  assert.equal(classifyFailure("429 rate limit", "delivery"), "transient");
+  assert.equal(
+    classifyFailure("Authentication required", "startup"),
+    "needsHuman",
+  );
+  assert.equal(
+    classifyFailure(
+      "arbitrary launch text",
+      "startup",
+      "launch_secret_unsupported",
+    ),
+    "needsHuman",
+  );
+  assert.equal(
+    classifyFailure("arbitrary launch text", "startup"),
+    "transient",
+  );
+});
+
+test("真实错误原文给正确的下一步，而非把 API Key/额度当钥匙串", () => {
+  for (const text of [
+    "[400] Invalid request parameters",
+    '400: {"message":"Invalid request parameters"}',
+  ])
+    assert.match(instruction(text, "a2"), /atrium new-session a2/);
+  assert.match(
+    instruction("401 Unauthorized: Invalid API Key", "a2"),
+    /更换 API Key/,
+  );
+  assert.match(
+    instruction("模型认证失败，请更换 API Key", "a2"),
+    /更换 API Key/,
+  );
+  assert.match(
+    instruction("403 You have reached your 5-hour usage limit", "a2"),
+    /等额度恢复/,
+  );
+  assert.match(
+    instruction("Not logged in: keychain access denied", "a2"),
+    /允许钥匙串访问/,
+  );
+});
+
+test("in-flight accepted direct is not a terminal incident or an auto retry", (t) => {
+  const store = memory(t);
+  const agent = store.createAgent("等待回应", tmpdir()).agent;
+  const chat = store.createChat("私聊", [agent.id], agent.id);
+  store.send(LOCAL_USER, { chat_id: chat.id, body: "还在吗", mentions: [] });
+  store.setFailure(agent.id, "Connection error.", Date.now(), "provider");
+  store.accepted(store.pending(agent.id)[0]!.id);
+  assert.equal(store.retryStatus(agent.id)?.retry, undefined);
+  assert.equal(notifyTerminal(store, agent.id), false);
+  assert.equal(store.incident(agent.id)?.notified_at, null);
+  store.finishTurn(agent.id, false);
+  assert.equal(store.retryStatus(agent.id)?.retry?.state, "waiting");
+  assert.equal(notifyTerminal(store, agent.id), false);
 });
 
 test("瞬态故障没有待重试 direct 不谎称已经三次自动重试", (t) => {
@@ -116,7 +210,7 @@ test("重试持久计数、同一 eventKey 不重复、旧 pending 保留，新�
   store.close();
   store = new Store(path);
   t.after(() => store.close());
-  assert.equal(store.retryStatus(agent.id, 200000)?.retry.attempt, 2);
+  assert.equal(store.retryStatus(agent.id, 200000)?.retry?.attempt, 2);
   const next = store.send(LOCAL_USER, {
     chat_id: chat.id,
     body: "新消息",
@@ -143,18 +237,18 @@ test("停服 40 分钟后只补一次；后续快速失败分别隔 8/20 分钟�
   store.setFailure(agent.id, "HTTP 503", restoredAt + 1, "provider", "second");
   const next = restoredAt + 8 * 60_000;
   assert.equal(
-    store.retryStatus(agent.id, restoredAt + 1)?.retry.next_at,
+    store.retryStatus(agent.id, restoredAt + 1)?.retry?.next_at,
     next,
   );
   assert.equal(store.claimRetry(agent.id, next - 1), false);
   assert.equal(store.claimRetry(agent.id, next), true);
   store.setFailure(agent.id, "HTTP 503", next + 1, "provider", "third");
   const last = next + 20 * 60_000;
-  assert.equal(store.retryStatus(agent.id, next + 1)?.retry.next_at, last);
+  assert.equal(store.retryStatus(agent.id, next + 1)?.retry?.next_at, last);
   assert.equal(store.claimRetry(agent.id, last - 1), false);
   assert.equal(store.claimRetry(agent.id, last), true);
   store.setFailure(agent.id, "HTTP 503", last + 1, "provider", "fourth");
-  assert.equal(store.retryStatus(agent.id)?.retry.state, "exhausted");
+  assert.equal(store.retryStatus(agent.id)?.retry?.state, "exhausted");
   assert.equal(notifyTerminal(store, agent.id), true);
   assert.match(
     store.one<{ body: string }>(
@@ -182,7 +276,7 @@ test("重启时遗留旧进程 running 不重放，保留事件并转人工", (t
   store = new Store(path);
   t.after(() => store.close());
   store.guardOrphanRetry(agent.id, "new-process");
-  assert.equal(store.retryStatus(agent.id)?.retry.state, "needs_action");
+  assert.equal(store.retryStatus(agent.id)?.retry?.state, "needs_action");
   assert.equal(store.incident(agent.id)?.attempts_used, 1);
   assert.equal(store.failure(agent.id)?.text, "HTTP 503");
 });
@@ -203,16 +297,16 @@ test("保留自动重试的运行预留仅在投递被确认时成立；未启�
     assert.equal(store.claimRetry(id, now, "worker-a"), true);
   }
   store.blockUnstartedRetry(unsent.id, "worker-a");
-  assert.equal(store.retryStatus(unsent.id)?.retry.state, "needs_action");
+  assert.equal(store.retryStatus(unsent.id)?.retry?.state, "needs_action");
   assert.equal(store.incident(unsent.id)?.attempts_used, 0);
   assert.equal(store.pending(unsent.id).length, 1);
   store.accepted(store.pending(accepted.id)[0]!.id);
   store.blockUnstartedRetry(accepted.id, "worker-a");
   assert.equal(store.incident(accepted.id)?.attempt_running, true);
   assert.equal(store.incident(accepted.id)?.attempts_used, 1);
-  assert.equal(store.retryStatus(accepted.id)?.retry.state, "running");
+  assert.equal(store.retryStatus(accepted.id)?.retry?.state, "running");
   store.finishTurn(accepted.id, false);
-  assert.equal(store.retryStatus(accepted.id)?.retry.state, "needs_action");
+  assert.equal(store.retryStatus(accepted.id)?.retry?.state, "needs_action");
   assert.equal(store.pending(accepted.id).length, 1);
 });
 

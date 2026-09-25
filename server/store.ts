@@ -1625,7 +1625,11 @@ export class Store {
   }
   /** Event-driven settlement only touches deliveries acknowledged after this turn's Atrium input. */
   finishTurn(id: string, successful: boolean, deliveryAt?: number) {
-    const since = deliveryAt === undefined ? "" : " AND accepted_at>=?";
+    // NULL means a pre-upgrade accepted row retained for a reconstructed turn.
+    const since =
+      deliveryAt === undefined
+        ? ""
+        : " AND (accepted_at IS NULL OR accepted_at>=?)";
     const args = deliveryAt === undefined ? [id] : [id, deliveryAt];
     const settle = () => {
       if (successful) {
@@ -1652,12 +1656,24 @@ export class Store {
           `SELECT id FROM deliveries WHERE agent_id=? AND kind='summary' AND state='accepted'${since}`,
           ...args,
         );
-        for (const row of summaries)
-          this.run(
-            "UPDATE deliveries SET id=?,state='pending',accepted_at=NULL WHERE id=?",
-            randomUUID(),
-            row.id,
-          );
+        for (const row of summaries) {
+          // A newer reminder already covers the same inbox. Keep one pending
+          // summary in the unique slot instead of growing orphaned NULL slots.
+          if (
+            this.one(
+              "SELECT 1 FROM deliveries WHERE agent_id=? AND kind='summary' AND state='pending' LIMIT 1",
+              id,
+            )
+          ) {
+            this.run("DELETE FROM deliveries WHERE id=?", row.id);
+          } else {
+            this.run(
+              "UPDATE deliveries SET id=?,slot='summary',state='pending',accepted_at=NULL WHERE id=?",
+              randomUUID(),
+              row.id,
+            );
+          }
+        }
       }
     };
     // Trace ingestion checkpoints the turn and event cursor in this same transaction.

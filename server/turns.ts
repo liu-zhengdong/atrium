@@ -13,7 +13,10 @@ type Event = RuntimeEventPage["items"][number];
 
 /** The trace cursor and the open turn are one checkpoint, not two independent clocks. */
 export class TurnLedger {
-  constructor(private store: Store) {
+  constructor(
+    private store: Store,
+    private redact: (agent: string, text: string) => string = (_, text) => text,
+  ) {
     store.db.exec(`CREATE TABLE IF NOT EXISTS runtime_turns (
       agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
       runtime_id TEXT NOT NULL, generation TEXT NOT NULL, started_seq INTEGER NOT NULL,
@@ -82,12 +85,12 @@ export class TurnLedger {
       );
     } else if (
       event.kind === "message" &&
-      event.name === "assistant" &&
+      event.name !== "user" &&
       event.error
     ) {
       this.store.run(
         "UPDATE runtime_turns SET failure=? WHERE agent_id=?",
-        event.text || "模型运行失败",
+        this.redact(id, event.text || "模型运行失败"),
         id,
       );
     } else if (event.kind === "run_end") {
@@ -116,30 +119,11 @@ export class TurnLedger {
           FROM trace_actions t WHERE t.agent_id=a.id AND t.runtime_id=a.runtime_id
           AND t.session_id=a.acp_session_id AND t.kind='session' AND t.seq=1),0))
           FROM agents a WHERE a.id=${agentId})`;
-      const obsolete = this.store.all<{ agent_id: string; n: number }>(
-        `SELECT d.agent_id,COUNT(*) AS n FROM deliveries d JOIN agents a ON a.id=d.agent_id
-         WHERE d.state='accepted' AND a.deleted_at IS NULL AND d.accepted_at IS NOT NULL
-         AND d.accepted_at < ${boundary("d.agent_id")} GROUP BY d.agent_id`,
-      );
-      this.store.run(
-        `UPDATE deliveries SET state='complete' WHERE state='accepted' AND accepted_at IS NOT NULL
-         AND agent_id IN (SELECT id FROM agents WHERE deleted_at IS NULL)
-         AND accepted_at < ${boundary("deliveries.agent_id")}`,
-      );
-      for (const row of obsolete)
-        console.info(
-          `[Atrium] 旧会话已接收的投递直接完成：${row.agent_id} ${row.n} 条`,
-        );
-      const uncertain = this.store.all<{ agent_id: string; n: number }>(
-        `SELECT d.agent_id,COUNT(*) AS n FROM deliveries d JOIN agents a ON a.id=d.agent_id
-         WHERE d.state='accepted' AND a.deleted_at IS NULL AND ${boundary("d.agent_id")}=0
-         GROUP BY d.agent_id`,
-      );
-      for (const row of uncertain)
-        console.info(
-          `[Atrium] 旧会话边界未知，保留待核对重投：${row.agent_id} ${row.n} 条`,
-        );
-
+      // Pre-accepted_at databases have NULL timestamps. With a known session
+      // boundary, complete those only if no current turn could own them.
+      const oldAccepted = (agentId: string, acceptedAt: string) =>
+        `(${acceptedAt}<${boundary(agentId)} OR (${acceptedAt} IS NULL AND ${boundary(agentId)}>0
+          AND NOT EXISTS (SELECT 1 FROM runtime_turns turn WHERE turn.agent_id=${agentId})))`;
       const deleted = this.store.all<{ agent_id: string; n: number }>(
         `SELECT d.agent_id,COUNT(*) AS n FROM deliveries d JOIN agents a ON a.id=d.agent_id
          WHERE a.deleted_at IS NOT NULL AND d.state IN ('pending','accepted') GROUP BY d.agent_id`,
@@ -185,7 +169,7 @@ export class TurnLedger {
         if (start == null) continue;
         const failedMessage = this.store.one<{ output: string }>(
           `SELECT output FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=?
-           AND kind='message' AND name='assistant' AND state='error' AND seq>=?
+           AND kind='message' AND name!='user' AND state='error' AND seq>=?
            ORDER BY seq DESC LIMIT 1`,
           row.agent_id,
           row.runtime_id,
@@ -215,6 +199,30 @@ export class TurnLedger {
           deliveryAt,
         );
       }
+      const obsolete = this.store.all<{ agent_id: string; n: number }>(
+        `SELECT d.agent_id,COUNT(*) AS n FROM deliveries d JOIN agents a ON a.id=d.agent_id
+         WHERE d.state='accepted' AND a.deleted_at IS NULL
+         AND ${oldAccepted("d.agent_id", "d.accepted_at")} GROUP BY d.agent_id`,
+      );
+      this.store.run(
+        `UPDATE deliveries SET state='complete' WHERE state='accepted'
+         AND agent_id IN (SELECT id FROM agents WHERE deleted_at IS NULL)
+         AND ${oldAccepted("deliveries.agent_id", "deliveries.accepted_at")}`,
+      );
+      for (const row of obsolete)
+        console.info(
+          `[Atrium] 旧会话已接收的投递直接完成：${row.agent_id} ${row.n} 条`,
+        );
+      const uncertain = this.store.all<{ agent_id: string; n: number }>(
+        `SELECT d.agent_id,COUNT(*) AS n FROM deliveries d JOIN agents a ON a.id=d.agent_id
+         WHERE d.state='accepted' AND a.deleted_at IS NULL AND ${boundary("d.agent_id")}=0
+         GROUP BY d.agent_id`,
+      );
+      for (const row of uncertain)
+        console.info(
+          `[Atrium] 旧会话边界未知，保留待核对重投：${row.agent_id} ${row.n} 条`,
+        );
+
       this.store.run(
         "INSERT INTO migration_marks(name) VALUES('accepted-turn-checkpoint-v1')",
       );

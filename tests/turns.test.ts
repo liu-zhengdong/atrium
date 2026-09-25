@@ -10,7 +10,10 @@ import { TurnLedger } from "../server/turns.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import type { RuntimeEventPage } from "../shared/trace.ts";
 
-function fixture(t: TestContext) {
+function fixture(
+  t: TestContext,
+  redact: (agent: string, text: string) => string = (_, text) => text,
+) {
   const dir = mkdtempSync(join(tmpdir(), "atrium-turn-ledger-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const store = new Store(join(dir, "atrium.db"));
@@ -21,8 +24,8 @@ function fixture(t: TestContext) {
   const delivery = store
     .pending(agent.id)
     .find((row) => row.kind === "direct")!;
-  const trace = new TraceStore(store);
-  const ledger = new TurnLedger(store);
+  const trace = new TraceStore(store, redact);
+  const ledger = new TurnLedger(store, redact);
   const runtimeId = randomUUID();
   const generation = randomUUID();
   const sessionId = randomUUID();
@@ -95,7 +98,58 @@ test("失败轮保留失败并让 direct 换新 ID 重投，summary 不复制", 
     f.delivery.id,
   );
   assert.notEqual(pending.find((row) => row.kind === "summary")?.id, summary);
+  assert.equal(
+    f.store.one<{ slot: string }>(
+      "SELECT slot FROM deliveries WHERE id=?",
+      pending.find((row) => row.kind === "summary")!.id,
+    )?.slot,
+    "summary",
+  );
+  f.store.queue(f.agent.id, "summary", "更新后的摘要");
+  assert.equal(
+    f.store.pending(f.agent.id).filter((row) => row.kind === "summary").length,
+    1,
+    "同一消息箱重试后再次提醒，仍然只有一条 pending summary",
+  );
   assert.equal(f.trace.cursor(f.agent.id, f.runtimeId, f.generation), 4);
+});
+
+test("失败轮已有更新的 summary 在排队时不再制造第二条", (t) => {
+  const f = fixture(t);
+  const summary = f.store.queue(f.agent.id, "summary", "旧摘要");
+  f.event("delivery", { name: "Atrium" });
+  f.event("run_start");
+  f.store.accepted(summary);
+  f.store.queue(f.agent.id, "summary", "新的消息箱状态");
+  f.event("message", { name: "assistant", error: true, text: "模型失败" });
+  f.event("run_end");
+  const summaries = f.store
+    .pending(f.agent.id)
+    .filter((row) => row.kind === "summary");
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0]?.text, "新的消息箱状态");
+  assert.equal(
+    f.store.one<{ slot: string }>(
+      "SELECT slot FROM deliveries WHERE id=?",
+      summaries[0]?.id,
+    )?.slot,
+    "summary",
+  );
+});
+
+test("消息事件没有 assistant 名称仍是失败，持久化错误文本已脱敏", (t) => {
+  const f = fixture(t, (_, text) => text.replace("secret-token", "[已隐藏]"));
+  f.event("delivery", { name: "Atrium" });
+  f.event("run_start");
+  f.store.accepted(f.delivery.id);
+  f.event("message", { error: true, text: "provider 503 secret-token" });
+  assert.equal(f.ledger.current(f.agent.id)?.failure, "provider 503 [已隐藏]");
+  f.event("run_end");
+  assert.equal(
+    f.store.pending(f.agent.id).filter((row) => row.kind === "direct").length,
+    1,
+  );
+  assert.equal(f.ledger.current(f.agent.id), null);
 });
 
 test("无本轮投递的 run_end 不会替旧 accepted 宣告成功；新一轮也只结清自己的投递", (t) => {
@@ -256,6 +310,71 @@ test("迁移选最新会话边界；没证据的旧 accepted 保留而非误判�
     )?.state,
     "accepted",
     "离线且无 reset / session 事件不能推断已经处理",
+  );
+});
+
+test("旧版本无 accepted_at 时，有会话边界的历史收件直接完成", (t) => {
+  const f = fixture(t);
+  f.store.accepted(f.delivery.id);
+  f.store.run(
+    "UPDATE deliveries SET accepted_at=NULL WHERE id=?",
+    f.delivery.id,
+  );
+  f.store.run(
+    "UPDATE agents SET session_reset_at=? WHERE id=?",
+    Date.now(),
+    f.agent.id,
+  );
+  f.store.run(
+    "DELETE FROM migration_marks WHERE name='accepted-turn-checkpoint-v1'",
+  );
+  new TurnLedger(f.store);
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.delivery.id,
+    )?.state,
+    "complete",
+    "旧版本 NULL accepted_at 不能被遗留到下一会话重投",
+  );
+});
+
+test("旧版本无 accepted_at 时，正在跑的回合先保留再由 run_end 结清", (t) => {
+  const f = fixture(t);
+  f.event("delivery", { name: "Atrium" });
+  f.event("run_start");
+  f.store.accepted(f.delivery.id);
+  f.store.run(
+    "UPDATE deliveries SET accepted_at=NULL WHERE id=?",
+    f.delivery.id,
+  );
+  f.store.run(
+    "UPDATE agents SET session_reset_at=?,runtime_id=?,acp_session_id=? WHERE id=?",
+    Date.now() - 1000,
+    f.runtimeId,
+    f.sessionId,
+    f.agent.id,
+  );
+  f.store.run("DELETE FROM runtime_turns WHERE agent_id=?", f.agent.id);
+  f.store.run(
+    "DELETE FROM migration_marks WHERE name='accepted-turn-checkpoint-v1'",
+  );
+  new TurnLedger(f.store);
+  assert.ok(f.ledger.current(f.agent.id));
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.delivery.id,
+    )?.state,
+    "accepted",
+  );
+  f.event("run_end");
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.delivery.id,
+    )?.state,
+    "complete",
   );
 });
 

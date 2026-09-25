@@ -173,7 +173,7 @@ export class Runtimes {
     private authFailure: (agent: string, detail: string) => void = () => {},
   ) {
     this.traces = new TraceStore(store, redact);
-    this.turns = new TurnLedger(store);
+    this.turns = new TurnLedger(store, redact);
     mkdirSync(join(data, "credentials"), { recursive: true, mode: 0o700 });
     this.interval = setInterval(() => {
       void this.tick();
@@ -1500,7 +1500,7 @@ export class Runtimes {
                         turn.failure,
                       )
                         ? "模型认证失败，请更换 API Key"
-                        : this.redact(id, turn.failure),
+                        : turn.failure,
                       event.at,
                     );
                 }

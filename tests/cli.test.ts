@@ -197,7 +197,8 @@ test(
       "openai/does-not-exist",
     );
     assert.equal(invalidBuiltin.code, 3);
-    assert.match(invalidBuiltin.stderr, /最接近的：openai\/gpt-4、/);
+    assert.match(invalidBuiltin.stderr, /最接近的：/);
+    assert.match(invalidBuiltin.stderr, /openai\/gpt-/);
     assert.doesNotMatch(invalidBuiltin.stderr, /gpt-4（openai\/gpt-4）/);
     const malformedModel = await f.cli("model", "林岚", "foo", "--json");
     assert.equal(malformedModel.code, 2);

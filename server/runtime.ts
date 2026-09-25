@@ -47,9 +47,10 @@ import {
   syncIdentityProfile,
 } from "./profile.ts";
 import {
-  cachedModels,
   configuredModel,
   configureModel,
+  liveThinkingProblem,
+  offlineModels,
   rememberModels,
 } from "./model.ts";
 import {
@@ -1048,7 +1049,7 @@ export class Runtimes {
   }
   /** 这个身份可选的模型。只有它在跑才问得到，问到就存下来给离线时用。 */
   private async listModels(id: string): Promise<ModelOption[]> {
-    if (!this.managed(id)) return cachedModels(this.store, id);
+    if (!this.managed(id)) return offlineModels(this.store, id);
     try {
       const { models } = z
         .object({
@@ -1077,7 +1078,7 @@ export class Runtimes {
       console.error(
         `${this.store.agent(id).name} 的模型清单取回失败：${error}`,
       );
-      return cachedModels(this.store, id);
+      return offlineModels(this.store, id);
     }
   }
   /** 默认配置复用身份模型来源：先合并已观察清单，空清单时从在线身份取一次。 */
@@ -1085,7 +1086,7 @@ export class Runtimes {
     const agents = this.store.agents().filter((agent) => agent.agent_directory);
     const observed = new Map<string, ModelOption>();
     for (const agent of agents)
-      for (const model of cachedModels(this.store, agent.id))
+      for (const model of offlineModels(this.store, agent.id))
         if (
           !observed.has(model.id) ||
           (observed.get(model.id)!.name === model.id && model.name !== model.id)
@@ -1109,7 +1110,8 @@ export class Runtimes {
   async setModel(id: string, spec: ModelSpec): Promise<ModelChange> {
     const live = this.managed(id);
     const options = await this.listModels(id);
-    const directory = this.store.agent(id).agent_directory;
+    const agent = this.store.agent(id);
+    const directory = agent.agent_directory;
     const previous =
       live && directory ? snapshotIdentityModel(directory) : null;
     const { wanted, configured } = configureModel(
@@ -1132,6 +1134,9 @@ export class Runtimes {
       } catch (error) {
         if (directory && previous) restoreIdentityModel(directory, previous);
         const detail = String(error);
+        // 两份目录对不上时 pi 会以原生报错拒绝思考强度：转成中文回执加修正。
+        const fallback = liveThinkingProblem(detail, wanted, agent);
+        if (fallback) throw fallback;
         const reason = detail.includes("Model not found:")
           ? `运行中的 Pi 找不到 ${wanted}，请检查模型配置`
           : `运行中的实例没能当场切换：${detail}`;

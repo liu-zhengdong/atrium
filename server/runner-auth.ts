@@ -1,14 +1,10 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
+import { sameSecret } from "../shared/secret.ts";
 import type { Store } from "./store.ts";
 import { Problem } from "./problem.ts";
 
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
-const same = (a: string, b: string) => {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-};
 type Credential = {
   runner_number: number;
   credential_number: number;
@@ -146,17 +142,18 @@ export class RunnerAuth {
   authenticateRunner(authorization: string | undefined) {
     const token = /^Bearer ([a-f0-9]{64})$/i.exec(authorization ?? "")?.[1];
     if (!token) throw new Problem(401, "运行器认证失败", "auth_required");
+    const tokenHash = digest(token);
     const row = this.store.one<Credential>(
       `SELECT c.number AS credential_number,c.runner_number,c.token_hash,c.state,r.revoked_at
        FROM runner_credentials c JOIN runners r ON r.number=c.runner_number
        WHERE c.token_hash=?`,
-      digest(token),
+      tokenHash,
     );
     if (
       !row ||
       row.revoked_at !== null ||
       row.state === "revoked" ||
-      !same(digest(token), row.token_hash)
+      !sameSecret(tokenHash, row.token_hash)
     )
       throw new Problem(401, "运行器认证失败", "auth_required");
     const runnerId = `r${row.runner_number}`;

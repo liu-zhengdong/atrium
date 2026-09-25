@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { mkdirSync, existsSync, createReadStream } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { spaceFileKind } from "../shared/space.ts";
+import { sameSecret } from "../shared/secret.ts";
 import { z } from "zod";
 import {
   id,
@@ -244,7 +245,10 @@ export async function createApp(options: {
     const control = options.controlToken;
     if (
       !auth.validUser(authorization) &&
-      !(control && authorization?.replace(/^Bearer /i, "") === control)
+      !(
+        control &&
+        sameSecret(authorization?.replace(/^Bearer /i, "") ?? "", control)
+      )
     )
       throw new Problem(
         401,

@@ -60,6 +60,7 @@ for (const path of [
   "server/store.ts",
   "server/trace.ts",
   "shared/trace.ts",
+  "shared/secret.ts",
   "server/agents.ts",
   "shared/schema.ts",
   "shared/agent-name.ts",

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { sameSecret } from "../shared/secret.ts";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -95,11 +95,8 @@ try {
     controlToken: lease.record.token,
   }));
   const authorize = (value: string | undefined) => {
-    const actual = Buffer.from(/^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "");
-    const expected = Buffer.from(lease.record.token);
-    return (
-      actual.length === expected.length && timingSafeEqual(actual, expected)
-    );
+    const actual = /^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "";
+    return sameSecret(actual, lease.record.token);
   };
   app.addHook("onRequest", async (request, reply) => {
     if (!request.routeOptions.url?.startsWith("/api/service")) return;

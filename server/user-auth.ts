@@ -1,4 +1,5 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { sameSecret } from "../shared/secret.ts";
 import {
   chmodSync,
   existsSync,
@@ -17,11 +18,6 @@ const CODE_MS = 60 * 1000;
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 const secret = () => randomBytes(32).toString("hex");
-const equal = (left: string, right: string) => {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
-};
 
 /** Write the CLI's only copy of the bearer without exposing it in an HTTP response. */
 function atomicSecret(path: string, value: string) {
@@ -86,7 +82,7 @@ export class UserAuth {
     const row = this.store.one<{ token_hash: string }>(
       "SELECT token_hash FROM user_auth WHERE id=1",
     );
-    return !!token && !!row && equal(digest(token), row.token_hash);
+    return !!token && !!row && sameSecret(digest(token), row.token_hash);
   }
 
   validSession(raw: string | undefined): boolean {
@@ -96,17 +92,20 @@ export class UserAuth {
       ?.slice(this.name.length + 1);
     if (!token || !/^[a-f0-9]{64}$/.test(token)) return false;
     const now = Date.now();
-    const row = this.store.one<{ expires_at: number }>(
-      "SELECT expires_at FROM web_sessions WHERE token_hash=?",
-      digest(token),
+    const tokenHash = digest(token);
+    const row = this.store.one<{ token_hash: string; expires_at: number }>(
+      "SELECT token_hash,expires_at FROM web_sessions WHERE token_hash=?",
+      tokenHash,
     );
-    if (!row || row.expires_at <= now) return false;
+    // The indexed lookup finds a session; verification uses the same comparison as other credentials.
+    if (!row || !sameSecret(tokenHash, row.token_hash) || row.expires_at <= now)
+      return false;
     // Extend persisted expiry at most once a day; the browser cookie is refreshed on every request.
     if (row.expires_at - now < SESSION_MS - 24 * 60 * 60 * 1000)
       this.store.run(
         "UPDATE web_sessions SET expires_at=? WHERE token_hash=?",
         now + SESSION_MS,
-        digest(token),
+        tokenHash,
       );
     return true;
   }
@@ -171,7 +170,7 @@ export class UserAuth {
       "SELECT token_hash FROM inbox_tokens WHERE agent_id=?",
       agentId,
     );
-    return !!row && equal(digest(token), row.token_hash);
+    return !!row && sameSecret(digest(token), row.token_hash);
   }
   setHook(agentId: string, tokenHash: string | null) {
     if (tokenHash && !/^[a-f0-9]{64}$/.test(tokenHash))

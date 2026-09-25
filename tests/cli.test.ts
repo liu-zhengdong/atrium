@@ -406,20 +406,20 @@ test(
 
     // 删除群：不带 --yes 只预览；确认后群、消息、成员关系与提醒一起消失
     assert.match(await refused("disband", "评审组"), clash, "撞名时不猜");
-    const preview = await refused("disband", "c2");
+    const disbandPreview = await refused("disband", "c2");
     assert.match(
-      preview,
-      /将删除 评审组（c2）：成员 2 位、消息 \d+ 条、附件 0 个、共享文件 0 个[\s\S]*确认请加 --yes/,
-      "不带 --yes 只预览，口径与删身份一致：确认请加 --yes",
+      disbandPreview,
+      /将删除 评审组（c2）：成员 2 位、消息 \d+ 条、附件 0 个、共享文件 0 个[^\n]*\n确认删除：atrium disband c2 --yes/,
+      "不带 --yes 只预览：摘要一行、确认命令单独一行",
     );
     assert.doesNotMatch(
-      preview,
+      disbandPreview,
       /修正/,
       "预览不是修正，不能写成照做就好的命令",
     );
-    const previewJson = await f.cli("disband", "c2", "--json");
-    assert.equal(previewJson.code, 2, "预览不上屏时也算没执行");
-    const refusedBody = JSON.parse(previewJson.stdout) as {
+    const disbandPreviewJson = await f.cli("disband", "c2", "--json");
+    assert.equal(disbandPreviewJson.code, 2, "预览不上屏时也算没执行");
+    const refusedBody = JSON.parse(disbandPreviewJson.stdout) as {
       ok: boolean;
       error: { code: string; message: string };
       next: unknown;
@@ -429,10 +429,18 @@ test(
         ok: refusedBody.ok,
         code: refusedBody.error.code,
         next: refusedBody.next,
-        inMessage: /确认请加 --yes/.test(refusedBody.error.message),
+        // --json 只给第一行：确认命令既不进 next，也不进 JSON 正文（与 atrium delete 同一口径）
+        inMessage: /确认删除：atrium disband c2 --yes/.test(
+          refusedBody.error.message,
+        ),
       },
-      { ok: false, code: "usage", next: null, inMessage: true },
-      "删数据的确认命令不进 next，只在正文里",
+      {
+        ok: false,
+        code: "confirmation_required",
+        next: null,
+        inMessage: false,
+      },
+      "删数据的确认命令不进 next，也不进 JSON 正文",
     );
     assert.match(await ok("read", "c2"), /按名字发/, "预览不删任何东西");
     assert.match(await refused("disband", "c1"), /是私聊，只有群可以删除/);

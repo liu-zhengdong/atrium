@@ -377,7 +377,7 @@ const kick: Command = {
   },
 };
 
-/** 删除群前的预览：不带 --yes 只报将删掉什么，并给出带上确认的下一步命令。 */
+/** 删除群前的预览：不带 --yes 只报将删掉什么，并给出确认删除的命令；确认命令不放进 next。 */
 const disband: Command = {
   args: "群名 [--yes]",
   about: "删除群及其全部历史；不带 --yes 只预览将删掉什么",
@@ -401,8 +401,8 @@ const disband: Command = {
     if (values.yes !== true)
       throw new Problem(
         400,
-        `将删除 ${target.name}（${target.ref}）：成员 ${target.members} 位、消息 ${target.messages} 条、附件 ${target.attachments} 个、共享文件 ${filesLabel(target)} 个。删除后无法恢复；各身份在自己 Pi 会话里读到的内容删不掉。确认请加 --yes`,
-        "usage",
+        `将删除 ${target.name}（${target.ref}）：成员 ${target.members} 位、消息 ${target.messages} 条、附件 ${target.attachments} 个、共享文件 ${filesLabel(target)} 个。删除后无法恢复；各身份在自己 Pi 会话里读到的内容删不掉。\n确认删除：atrium disband ${target.ref} --yes`,
+        "confirmation_required",
       );
     const result = await client.delete<ChatDeletionResult>(
       `/chats/${chat.id}`,

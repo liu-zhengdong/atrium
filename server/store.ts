@@ -563,6 +563,13 @@ export class Store {
           : [],
     }));
   }
+  /** 用户创建群或发言后，这段会话进入「我的」。 */
+  markUserParticipated(chatId: string) {
+    this.run(
+      "INSERT INTO user_chat_state(chat_id,participated) VALUES(?,1) ON CONFLICT(chat_id) DO UPDATE SET participated=1",
+      chatId,
+    );
+  }
   /** 用户在会话中的已读位置；只前进，through 超出最新消息时收敛到最新消息。 */
   markUserRead(chatId: string, through: number) {
     this.chat(chatId);
@@ -990,11 +997,7 @@ export class Store {
       // 发送者对外的短号与名字：Agent 用身份名，用户用资料里的称呼。
       const author = isUserRef(sender) ? null : this.agent(sender);
       // 用户发过言的会话就是「我的」：置一次标志，代替列表里每次全表找用户发言。
-      if (isUserRef(sender))
-        this.run(
-          "INSERT INTO user_chat_state(chat_id,participated) VALUES(?,1) ON CONFLICT(chat_id) DO UPDATE SET participated=1",
-          chat.id,
-        );
+      if (isUserRef(sender)) this.markUserParticipated(chat.id);
       const senderName = author?.name ?? userNames(this, sender).peer;
       const members = this.members(chat.id);
       const plan = deliveryPlan({

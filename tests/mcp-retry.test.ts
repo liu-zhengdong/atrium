@@ -16,7 +16,7 @@ test("every Atrium MCP tool has an explicit retry policy", () => {
   const actual = [...source.matchAll(/\btool\(\s*"([a-z_]+)"/g)].map(
     (match) => match[1],
   );
-  assert.equal(actual.length, 17);
+  assert.equal(actual.length, 18);
   assert.deepEqual([...new Set(mcpToolNames)].sort(), actual.sort());
 });
 
@@ -76,6 +76,7 @@ test("pure reads retry, receipt reads and writes require a status check", () => 
     "set_description",
     "complete_inbox",
     "update_config",
+    "set_reports_to",
     "new_unknown_write",
   ]) {
     const call = prepareMcpCall(name, {});

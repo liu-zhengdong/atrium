@@ -272,12 +272,22 @@ const remove: Command = {
 };
 
 const config: Command = {
-  args: "名称 [--heartbeat 秒]",
-  about: "查看或修改消息箱心跳间隔",
-  options: { heartbeat: { type: "string" } },
+  args: "名称 [--heartbeat 秒] [--reports-to 短号|u1|none]",
+  about: "查看或修改消息箱心跳间隔与故障通知的汇报对象",
+  options: { heartbeat: { type: "string" }, "reports-to": { type: "string" } },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const heartbeat = str(values, "heartbeat");
+    const reportsTo = str(values, "reports-to");
+    if (
+      reportsTo !== undefined &&
+      !/^(?:a[1-9][0-9]{0,14}|u1|none)$/.test(reportsTo)
+    )
+      throw new Problem(
+        400,
+        "--reports-to 请填身份短号、u1 或 none；示例：atrium config 甲 --reports-to a15",
+        "usage",
+      );
     if (
       heartbeat !== undefined &&
       (!/^\d+$/.test(heartbeat.trim()) ||
@@ -291,14 +301,21 @@ const config: Command = {
       );
     const client = await connect();
     let agent = findAgent(await roster(client), reference!);
-    if (heartbeat !== undefined) {
+    if (heartbeat !== undefined)
       await client.patch(`/agents/${agent.id}/config`, {
         heartbeat_seconds: Number(heartbeat),
       });
+    if (reportsTo !== undefined)
+      await client.patch(`/agents/${agent.id}/reports-to`, {
+        reports_to: reportsTo === "none" ? null : reportsTo,
+      });
+    if (heartbeat !== undefined || reportsTo !== undefined)
       agent = findAgent(await roster(client), agent.id);
-    }
-    if (json) return printJson(agent.config);
-    console.log(`${agent.name} · 心跳 ${agent.config.heartbeat_seconds} 秒`);
+    if (json)
+      return printJson({ ...agent.config, reports_to: agent.reports_to });
+    console.log(
+      `${agent.name} · 心跳 ${agent.config.heartbeat_seconds} 秒 · 汇报给 ${agent.reports_to ? `${agent.reports_to.name}（${agent.reports_to.ref}）` : "用户（默认）"}`,
+    );
   },
 };
 

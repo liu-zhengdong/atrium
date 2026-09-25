@@ -66,6 +66,7 @@ import { agentTransition } from "./agent-failure.ts";
 import { notifyTerminal } from "./incident-notice.ts";
 import { needsUserAttempt } from "./incident.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
+import { assignedSetupTokenRef } from "./launch-account.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { wakesOffline } from "./delivery.ts";
 import { ownerOf, rebindStopped, releaseRunner } from "./runner-ownership.ts";
@@ -1091,11 +1092,13 @@ export class Runtimes {
         for (const notice of syncIdentityProfile(current.agent_directory))
           console.error(`${current.name} 的${notice}`);
         const configured = readIdentityModel(current.agent_directory);
+        const launchAccount = assignedSetupTokenRef(this.store, id);
         const restored = !fresh && !!current.session_file;
         const params = {
           identityId: id,
           agentDirectory: current.agent_directory,
           cwd,
+          ...(launchAccount ? { launchSecretAccount: launchAccount } : {}),
           ...(restored ? { sessionFile: current.session_file } : {}),
           // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
           ...(configured ? { model: formatModelSpec(configured) } : {}),

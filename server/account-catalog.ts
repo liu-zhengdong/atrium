@@ -45,6 +45,7 @@ export class AccountCatalog {
         expires: r.expires,
         status: r.status,
         last_error: r.last_error,
+        credential_updated_at: r.credential_updated_at ?? null,
         assigned: this.assigned(r.number).map(
           (a) => this.store.agent(a.agent_id).ref,
         ),

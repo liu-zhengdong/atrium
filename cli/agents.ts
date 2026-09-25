@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { AgentInfo, LiveRuntime, Overview } from "../shared/schema.ts";
 import { commandAgent } from "../shared/command-agent.ts";
+import { IDENTITY_LAUNCH_SECRET_CAPABILITY } from "../shared/runtime-capability.ts";
 import {
   formatModelSpec,
   groupModelsByProvider,
@@ -14,6 +15,7 @@ import {
 import type { TraceDetail, TracePage } from "../shared/trace.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import { requireAssignment } from "../server/assignment.ts";
+import { assignedSetupTokenRef } from "../server/launch-account.ts";
 import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
@@ -560,13 +562,15 @@ const run: Command = {
     }
     if (!agent.agent_directory)
       throw new Error("旧记录尚未升级；请先 atrium promote 名称，历史会保留");
-    const { runNamedTui } = require("@liuser/pi-atrium/dist/identity.js") as {
+    const adapter = require("@liuser/pi-atrium/dist/identity.js") as {
+      IDENTITY_LAUNCH_SECRET_CAPABILITY?: unknown;
       runNamedTui(value: {
         identityId: string;
         agentDirectory: string;
         cwd: string;
         sessionFile?: string;
         model?: string;
+        launchSecretAccount?: string;
       }): Promise<number>;
     };
     const { readIdentityModel, syncIdentityProfile } =
@@ -576,28 +580,45 @@ const run: Command = {
       console.error(`${agent.name} 的${notice}`);
     console.error(`Atrium · ${agent.name}\n${agent.cwd}`);
     const launchStore = new Store(join(data, "atrium.sqlite"));
-    let running: Promise<number>;
+    const oldRoot = process.env.PI_ACP_LAUNCH_SECRET_ROOT;
+    process.env.PI_ACP_LAUNCH_SECRET_ROOT = join(data, "accounts");
     try {
-      // 启动放在事务里，pi-atrium 的占用登记与数据库里的绑定一起落定。
-      running = launchStore.transaction(() => {
-        const current = launchStore.agent(agent.id);
-        requireAssignment(launchStore, current.id);
-        // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
-        const configured = readIdentityModel(current.agent_directory!);
-        return runNamedTui({
-          identityId: current.id,
-          agentDirectory: current.agent_directory!,
-          cwd: current.cwd,
-          ...(current.session_file
-            ? { sessionFile: current.session_file }
-            : {}),
-          ...(configured ? { model: formatModelSpec(configured) } : {}),
+      let running: Promise<number>;
+      try {
+        // 启动放在事务里，pi-atrium 的占用登记与数据库里的绑定一起落定。
+        running = launchStore.transaction(() => {
+          const current = launchStore.agent(agent.id);
+          requireAssignment(launchStore, current.id);
+          // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
+          const configured = readIdentityModel(current.agent_directory!);
+          const launchAccount = assignedSetupTokenRef(launchStore, current.id);
+          if (
+            launchAccount &&
+            adapter.IDENTITY_LAUNCH_SECRET_CAPABILITY !==
+              IDENTITY_LAUNCH_SECRET_CAPABILITY
+          )
+            throw new Error(
+              "当前 pi-atrium 不支持独立令牌账号，已拒绝启动。请在 Atrium 仓库更新 pi-atrium 后重试：npm install '@liuser/pi-atrium@github:liu-zhengdong/pi-atrium#<新版提交>'",
+            );
+          return adapter.runNamedTui({
+            identityId: current.id,
+            agentDirectory: current.agent_directory!,
+            cwd: current.cwd,
+            ...(current.session_file
+              ? { sessionFile: current.session_file }
+              : {}),
+            ...(configured ? { model: formatModelSpec(configured) } : {}),
+            ...(launchAccount ? { launchSecretAccount: launchAccount } : {}),
+          });
         });
-      });
+      } finally {
+        launchStore.close();
+      }
+      return await running;
     } finally {
-      launchStore.close();
+      if (oldRoot === undefined) delete process.env.PI_ACP_LAUNCH_SECRET_ROOT;
+      else process.env.PI_ACP_LAUNCH_SECRET_ROOT = oldRoot;
     }
-    return running;
   },
 };
 

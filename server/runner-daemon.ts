@@ -11,6 +11,8 @@ import {
 } from "@agentclientprotocol/sdk";
 import WebSocket from "ws";
 import { identityEnvironment } from "./runtime.ts";
+import { dataDirectory } from "./service-state.ts";
+import { join, resolve } from "node:path";
 import { RunnerLink } from "./runner-link.ts";
 import { RunnerEvents } from "./runner-events.ts";
 import { RunnerMcp } from "./runner-mcp.ts";
@@ -18,12 +20,14 @@ import { RunnerJournal } from "./runner-process.ts";
 import { Problem } from "./problem.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { liveRuntimeSchema, runtimeSchema } from "../shared/schema.ts";
+import { IDENTITY_LAUNCH_SECRET_CAPABILITY } from "../shared/runtime-capability.ts";
 import { z } from "zod";
 
 const require = createRequire(import.meta.url);
 type Gateway = {
   connection: ClientConnection;
   child: ChildProcessWithoutNullStreams;
+  launchSecretCapable: boolean;
 };
 
 /** Long-lived Pi owner. The WebSocket is replaceable; the ACP child is not. */
@@ -72,6 +76,10 @@ export class RunnerDaemon {
       const child = spawn(process.execPath, [entry], {
         env: {
           ...identityEnvironment(this.environment),
+          PI_ACP_LAUNCH_SECRET_ROOT: join(
+            resolve(this.environment.ATRIUM_DATA ?? dataDirectory()),
+            "accounts",
+          ),
           PI_MCP_TOOL_EXPOSURE: "proxy-only",
           PI_ACP_PI_COMMAND:
             this.environment.PI_ACP_PI_COMMAND ||
@@ -95,7 +103,11 @@ export class RunnerDaemon {
           ),
         );
       child.once("error", (error) => connection.close(error));
-      const gateway = { connection, child };
+      const gateway: Gateway = {
+        connection,
+        child,
+        launchSecretCapable: false,
+      };
       const timeout = setTimeout(
         () => connection.close(new Error("pi-atrium 初始化超时")),
         15_000,
@@ -114,6 +126,14 @@ export class RunnerDaemon {
         )
           throw new Error("pi-atrium 缺少 runtime/v1 或 identity/v1");
         if (this.stopped) throw new Error("运行器正在关闭");
+        const capability = (
+          require("@liuser/pi-atrium/dist/identity.js") as {
+            IDENTITY_LAUNCH_SECRET_CAPABILITY?: unknown;
+          }
+        ).IDENTITY_LAUNCH_SECRET_CAPABILITY;
+        gateway.launchSecretCapable =
+          capability === IDENTITY_LAUNCH_SECRET_CAPABILITY &&
+          result._meta?.[capability] === true;
         this.gateway = gateway;
         this.journal?.acp(child.pid!);
         void connection.closed
@@ -313,6 +333,26 @@ export class RunnerDaemon {
         target.after,
         target.limit,
       );
+    }
+    if (remoteMethod === "_pi/identity/start") {
+      const start = z
+        .object({
+          identityId: z.string().uuid(),
+          launchSecretAccount: z
+            .string()
+            .regex(/^k[0-9]+$/)
+            .optional(),
+        })
+        .passthrough()
+        .parse(params);
+      if (start.identityId !== agentId)
+        throw new Error("identity start does not match runner owner");
+      if (start.launchSecretAccount && !gateway.launchSecretCapable)
+        throw new Problem(
+          409,
+          "当前 pi-atrium 未声明独立令牌注入能力，已拒绝启动。在 Atrium 仓库运行 npm install '@liuser/pi-atrium@github:liu-zhengdong/pi-atrium#<新版提交>'，然后重启 Atrium runner",
+          "launch_secret_unsupported",
+        );
     }
     if (
       ["_pi/identity/start", "session/new", "session/load"].includes(

@@ -1,18 +1,35 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { RunnerBridge } from "../server/runner-bridge.ts";
 import { RunnerDaemon } from "../server/runner-daemon.ts";
+import { Problem } from "../server/problem.ts";
+import { IDENTITY_LAUNCH_SECRET_CAPABILITY } from "../shared/runtime-capability.ts";
+
+const require = createRequire(import.meta.url);
+test("installed pi-atrium and Atrium agree on the launch-secret contract", () => {
+  const adapter = require("@liuser/pi-atrium/dist/identity.js") as {
+    IDENTITY_LAUNCH_SECRET_CAPABILITY?: string;
+  };
+  assert.equal(
+    adapter.IDENTITY_LAUNCH_SECRET_CAPABILITY,
+    IDENTITY_LAUNCH_SECRET_CAPABILITY,
+  );
+});
 
 const entry = fileURLToPath(
   new URL("./fixtures/fake-runner-acp.mjs", import.meta.url),
 );
 // The actual generation is random per daemon and must match the persisted
 // identity lease. This helper installs a matching read-only lookup for the test.
-function bridgeFor(server: Server, daemon: RunnerDaemon) {
+function bridgeFor(server: Server, daemon: RunnerDaemon, identityId = "a1") {
   return new RunnerBridge(
     server,
     (token) =>
@@ -21,7 +38,7 @@ function bridgeFor(server: Server, daemon: RunnerDaemon) {
         : null,
     () => true,
     (agentId) =>
-      agentId === "a1"
+      agentId === identityId
         ? { runner_id: "r1", generation: daemon.generation }
         : null,
     async (_principal, method) =>
@@ -105,6 +122,87 @@ test("runner answers the first frame sent during WebSocket upgrade", async (t) =
   }
 });
 
+test("new ACP capability accepts a matching identity and forwards its selected account number", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-runner-capable-"));
+  const daemon = new RunnerDaemon(
+    "ws://127.0.0.1:1/runner/v1",
+    "fake-machine",
+    {
+      ...process.env,
+      ATRIUM_DATA: join(dir, "data"),
+      PI_ACP_DIR: join(dir, "acp"),
+      ATRIUM_PI_ACP_ENTRY: entry,
+      TEST_LAUNCH_SECRET_CAPABLE: "1",
+    },
+  );
+  t.after(() => {
+    daemon.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const result = (await daemon["handle"]("acp.request", {
+    agentId: id,
+    params: {
+      method: "_pi/identity/start",
+      params: { identityId: id, cwd: dir, launchSecretAccount: "k1" },
+    },
+  })) as { received: { identityId: string; launchSecretAccount: string } };
+  assert.equal(result.received.identityId, id);
+  assert.equal(result.received.launchSecretAccount, "k1");
+});
+
+test("old ACP capability rejects secret start before forwarding, with an actionable error", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-runner-legacy-acp-"));
+  const identityId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const server = createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const daemon = new RunnerDaemon(
+    `ws://127.0.0.1:${address.port}/runner/v1`,
+    "fake-machine",
+    {
+      ...process.env,
+      ATRIUM_DATA: join(dir, "data"),
+      PI_ACP_DIR: join(dir, "acp"),
+      ATRIUM_PI_ACP_ENTRY: entry,
+      // Deliberately omit TEST_LAUNCH_SECRET_CAPABLE: the old ACP lacks it.
+      TEST_LAUNCH_SECRET_CAPABLE: undefined,
+    },
+  );
+  const bridge = bridgeFor(server, daemon, identityId);
+  const running = daemon.run();
+  t.after(async () => {
+    daemon.close();
+    bridge.close();
+    await running;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await until(() => bridge.connected("r1"));
+  await assert.rejects(
+    bridge.requestFor(identityId, "acp.request", {
+      method: "_pi/identity/start",
+      params: { identityId, launchSecretAccount: "k1" },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Problem);
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.code, "launch_secret_unsupported");
+      assert.match(error.message, /pi-atrium 未声明独立令牌注入能力/);
+      assert.match(error.message, /npm install/);
+      return true;
+    },
+  );
+  const list = await bridge.requestFor<{ startCalls: number }>(
+    identityId,
+    "acp.request",
+    { method: "_pi/runtime/list", params: {} },
+  );
+  assert.equal(list.startCalls, 0, "old ACP must never see _pi/identity/start");
+});
+
 test("service replacement keeps the independent ACP child and its session", async (t) => {
   let server = createServer();
   server.listen(0, "127.0.0.1");
@@ -135,6 +233,27 @@ test("service replacement keeps the independent ACP child and its session", asyn
   }>("a1", "acp.request", { method: "_pi/runtime/list", params: {} });
   assert.ok(before.pid > 0);
   assert.equal(before.runtimes.length, 1);
+  // The outer owner is a1. A forged inner identity must be rejected before
+  // the shared ACP can read any other identity's launch account.
+  await assert.rejects(
+    bridge.requestFor("a1", "acp.request", {
+      method: "_pi/identity/start",
+      params: {
+        identityId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        launchSecretAccount: "k1",
+      },
+    }),
+    /运行器处理失败/,
+  );
+  await assert.rejects(
+    bridge.requestFor("a1", "acp.request", {
+      method: "_pi/identity/start",
+      params: {
+        identityId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        launchSecretAccount: "../outside",
+      },
+    }),
+  );
   const mcp = await bridge.mcpUrl("a1");
   assert.match(mcp, /\/mcp\/a1\/[0-9a-f]{64}$/);
   assert.equal(

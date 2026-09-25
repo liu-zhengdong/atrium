@@ -559,6 +559,34 @@ export async function createApp(options: {
       .parse(request.body);
     return accounts.addLocal(provider);
   });
+  app.post("/api/accounts/setup-token", (request) => {
+    const { name, token } = z
+      .object({
+        name: z.string().trim().min(1).max(80),
+        token: z.string(),
+      })
+      .strict()
+      .parse(request.body);
+    return accounts.addSetupToken(name, token);
+  });
+  app.put("/api/accounts/:ref/setup-token", (request) => {
+    const ref = accountRef(request);
+    const requireIdle = () => {
+      for (const agentRef of accounts.list().find((entry) => entry.id === ref)
+        ?.assigned ?? [])
+        if (runtimes?.running(store.resolveAgentId(agentRef)))
+          throw new Problem(
+            409,
+            "令牌账号仍在运行身份中使用；先停止这些身份再更换",
+          );
+    };
+    requireIdle();
+    const { token } = z
+      .object({ token: z.string() })
+      .strict()
+      .parse(request.body);
+    return accounts.replaceSetupToken(ref, token, undefined, requireIdle);
+  });
   app.post("/api/accounts/:ref/check", (request) =>
     accounts.checkLocal(accountRef(request)),
   );
@@ -616,6 +644,13 @@ export async function createApp(options: {
   app.delete("/api/accounts/:ref", async (request) => {
     const ref = accountRef(request);
     const account = accounts.list().find((entry) => entry.id === ref);
+    if (account?.type === "setup_token")
+      for (const agentRef of account.assigned)
+        if (runtimes?.running(store.resolveAgentId(agentRef)))
+          throw new Problem(
+            409,
+            "令牌账号仍在运行身份中使用；先停止这些身份再删除",
+          );
     if (account)
       for (const agentRef of account.assigned) {
         const id = store.resolveAgentId(agentRef);
@@ -672,6 +707,17 @@ export async function createApp(options: {
       .strict()
       .parse(request.body);
     const id = identityRef(request);
+    const incoming = accounts.list().find((entry) => entry.id === account);
+    const current = store.one<{ type: string }>(
+      `SELECT a.type FROM accounts a JOIN account_assignments x ON x.account_number=a.number
+       WHERE x.agent_id=? AND x.provider='claude-bridge'`,
+      id,
+    );
+    if (
+      runtimes?.running(id) &&
+      (incoming?.type === "setup_token" || current?.type === "setup_token")
+    )
+      throw new Problem(409, "先停止身份再切换 setup-token 账号");
     const result = accounts.assign(id, account, replace);
     changed();
     return {
@@ -685,6 +731,14 @@ export async function createApp(options: {
       .object({ provider: z.string() })
       .parse(request.params);
     const id = identityRef(request);
+    const existing = store.one<{ type: string }>(
+      `SELECT a.type FROM accounts a JOIN account_assignments x ON x.account_number=a.number
+       WHERE x.agent_id=? AND x.provider=?`,
+      id,
+      provider,
+    );
+    if (existing?.type === "setup_token" && runtimes?.running(id))
+      throw new Problem(409, "先停止身份再撤销 setup-token 账号");
     const remaining = store.one<{ count: number }>(
       "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
       id,

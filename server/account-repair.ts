@@ -10,6 +10,7 @@ import {
 } from "./account-files.ts";
 import { AccountCatalog } from "./account-catalog.ts";
 import type { Store } from "./store.ts";
+import { readSetupToken } from "./setup-token-account.ts";
 
 // Isolate only the broken record, keeping original bytes beside the file and never logging contents.
 export function repairAccountFiles(
@@ -30,6 +31,31 @@ export function repairAccountFiles(
     (SELECT id FROM agents WHERE deleted_at IS NULL)`);
   for (const row of store.all<Row>("SELECT * FROM accounts")) {
     if (row.type === "local") continue; // Deliberately no credential file.
+    if (row.type === "setup_token") {
+      try {
+        readSetupToken(files.root, row.number);
+        // v0.1.9 treated this new account type as a corrupt auth.json while
+        // leaving its actual secret file intact. Restore only that false error.
+        if (
+          row.status === "error" &&
+          row.last_error === "账号凭据损坏，原文件已隔离"
+        )
+          store.run(
+            "UPDATE accounts SET status='ready',last_error=NULL WHERE number=?",
+            row.number,
+          );
+      } catch {
+        store.run(
+          "UPDATE accounts SET status='error',last_error=? WHERE number=?",
+          "setup-token 文件缺失或不可安全读取",
+          row.number,
+        );
+        console.error(
+          `账号 k${row.number} 的 setup-token 不可读取；其他账号继续运行`,
+        );
+      }
+      continue;
+    }
     // OAuth login writes an empty placeholder before authorization. Cancellation or
     // a service restart is not a corrupt credential and must not be quarantined.
     if (
@@ -85,7 +111,7 @@ export function repairAccountFiles(
       for (const a of store.all<{ provider: string; account_number: number }>(
         `SELECT x.provider,x.account_number FROM account_assignments x
          JOIN accounts a ON a.number=x.account_number
-         WHERE x.agent_id=? AND a.type!='local'`,
+         WHERE x.agent_id=? AND a.type NOT IN ('local','setup_token')`,
         identity.agent_id,
       )) {
         try {
@@ -99,7 +125,7 @@ export function repairAccountFiles(
         `UPDATE accounts SET status='error',last_error=? WHERE number IN
         (SELECT x.account_number FROM account_assignments x
          JOIN accounts a ON a.number=x.account_number
-         WHERE x.agent_id=? AND a.type!='local')`,
+         WHERE x.agent_id=? AND a.type NOT IN ('local','setup_token'))`,
         "身份凭据损坏，原文件已隔离",
         identity.agent_id,
       );

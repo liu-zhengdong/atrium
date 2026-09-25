@@ -37,6 +37,12 @@ import { Problem, type Store } from "./store.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { UNASSIGNED } from "./assignment.ts";
 import {
+  readSetupToken,
+  validateSetupToken,
+  writeSetupToken,
+  SETUP_PROVIDER,
+} from "./setup-token-account.ts";
+import {
   checkLocalLogin,
   LOCAL_NAME,
   LOCAL_PROVIDER,
@@ -102,7 +108,7 @@ export class Accounts {
       {
         id: LOCAL_PROVIDER,
         name: LOCAL_NAME,
-        methods: ["local" as const],
+        methods: ["local" as const, "setup_token" as const],
         packagePath: null,
       },
       ...Object.keys(this.custom.all()).map((id) => ({
@@ -266,6 +272,49 @@ export class Accounts {
     ).lastInsertRowid;
     return { id: `k${number}`, type: "local" as const };
   }
+  async addSetupToken(
+    name: string,
+    token: string,
+    validator: (value: string) => void | Promise<void> = validateSetupToken,
+  ) {
+    await validator(token);
+    const number = this.store.run(
+      "INSERT INTO accounts(provider,name,type,status,credential_updated_at) VALUES(?,?,'setup_token','ready',?)",
+      SETUP_PROVIDER,
+      name,
+      Date.now(),
+    ).lastInsertRowid;
+    try {
+      writeSetupToken(this.root, Number(number), token);
+    } catch (error) {
+      this.store.run("DELETE FROM accounts WHERE number=?", number);
+      rmSync(this.files.dir(Number(number)), { recursive: true, force: true });
+      throw error;
+    }
+    return { id: `k${number}`, type: "setup_token" as const };
+  }
+  async replaceSetupToken(
+    ref: string,
+    token: string,
+    validator: (value: string) => void | Promise<void> = validateSetupToken,
+    beforeSave: () => void = () => {},
+  ) {
+    const row = this.catalog.row(this.catalog.number(ref));
+    if (row.type !== "setup_token")
+      throw new Problem(400, "此账号不是 setup-token");
+    await validator(token);
+    // The account or its runtime may have changed while external validation ran.
+    if (this.catalog.row(row.number).type !== "setup_token")
+      throw new Problem(409, "账号已变更，请重新选择");
+    beforeSave();
+    writeSetupToken(this.root, row.number, token);
+    this.store.run(
+      "UPDATE accounts SET status='ready',last_error=NULL,credential_updated_at=? WHERE number=?",
+      Date.now(),
+      row.number,
+    );
+    return { replaced: true };
+  }
   checkLocal(ref: string) {
     const row = this.catalog.row(this.catalog.number(ref));
     if (row.type !== "local") throw new Problem(400, "此账号不是本机登录");
@@ -370,7 +419,7 @@ export class Accounts {
   }
   markModelAuthFailure(agent: string, detail: string) {
     if (
-      !/\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key/i.test(
+      !/\b(401|403)\b|unauthoriz|forbidden|invalid.api.key|invalid_key|not logged in|authentication required/i.test(
         detail,
       )
     )
@@ -380,11 +429,19 @@ export class Accounts {
       ? readIdentityModel(provider)?.provider
       : undefined;
     if (!selected) return;
-    this.store.run(
-      `UPDATE accounts SET status='error',last_error='模型认证失败，请更换 API Key'
-      WHERE number=(SELECT account_number FROM account_assignments WHERE agent_id=? AND provider=?)`,
+    const assigned = this.store.one<Row>(
+      `SELECT a.* FROM accounts a JOIN account_assignments x ON x.account_number=a.number
+       WHERE x.agent_id=? AND x.provider=?`,
       agent,
       selected,
+    );
+    if (!assigned) return;
+    this.store.run(
+      "UPDATE accounts SET status='error',last_error=? WHERE number=?",
+      assigned.type === "setup_token"
+        ? "Claude setup-token 失效；请更换账号令牌"
+        : "模型认证失败，请更换 API Key",
+      assigned.number,
     );
   }
   rename(ref: string, name: string) {
@@ -399,7 +456,9 @@ export class Accounts {
         )
         .flatMap(({ account_number }) => {
           const row = this.catalog.row(account_number);
-          return row.type === "local" ? [] : [[row.provider, this.load(row)]];
+          return row.type === "local" || row.type === "setup_token"
+            ? []
+            : [[row.provider, this.load(row)]];
         }),
     );
   }
@@ -468,10 +527,17 @@ export class Accounts {
       !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
     )
       throw new Problem(409, "此 Antigravity 账号缺少附带状态，暂不支持分配");
-    // Local login is a delegation to Claude CLI; no token or auth.json entry exists.
-    if (row.type === "local") {
-      const reason = checkLocalLogin(this.store, id);
-      if (reason) throw new Problem(409, reason);
+    // Local login and setup-token credentials never enter auth.json.
+    if (row.type === "local" || row.type === "setup_token") {
+      if (row.type === "setup_token") {
+        if (row.status !== "ready")
+          throw new Problem(409, `账号 ${ref} 不可用`);
+        readSetupToken(this.root, row.number);
+      }
+      if (row.type === "local") {
+        const reason = checkLocalLogin(this.store, id);
+        if (reason) throw new Problem(409, reason);
+      }
       this.store.transaction(() => {
         this.store.run(
           "INSERT INTO credential_modes(agent_id,mode) VALUES(?,'assigned') ON CONFLICT(agent_id) DO UPDATE SET mode='assigned'",
@@ -570,7 +636,11 @@ export class Accounts {
       id,
       provider,
     );
-    if (row?.type !== "local" && this.catalog.mode(id) === "assigned") {
+    if (
+      row?.type !== "local" &&
+      row?.type !== "setup_token" &&
+      this.catalog.mode(id) === "assigned"
+    ) {
       lockedAuth(agent.agent_directory, (data) => {
         delete data[provider];
         return data;
@@ -615,6 +685,11 @@ export class Accounts {
   relogin(ref: string) {
     if (this.catalog.row(this.catalog.number(ref)).type === "local")
       throw new Problem(400, "本机登录请运行 claude auth login");
+    if (this.catalog.row(this.catalog.number(ref)).type === "setup_token")
+      throw new Problem(
+        400,
+        "setup-token 账号请用 atrium account replace-token 更新",
+      );
     return this.loginService.relogin(this.catalog.number(ref), () =>
       this.refreshService.distributeAccount(
         this.catalog.row(this.catalog.number(ref)),

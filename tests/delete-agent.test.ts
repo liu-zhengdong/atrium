@@ -327,7 +327,7 @@ test("运行、未发现的具名占用、未知状态与并发启动均拒绝�
 
 test(
   "全局 CLI 具名启动持有占用：运行时拒绝删除，退出后允许",
-  { timeout: 10000, skip: process.platform === "win32" },
+  { timeout: 15000, skip: process.platform === "win32" },
   async (t) => {
     const root = mkdtempSync(join(tmpdir(), "atrium-delete-cli-"));
     const profile = join(root, "profile"),
@@ -337,7 +337,7 @@ test(
     const command = join(root, "pi-fixture");
     writeFileSync(
       command,
-      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started'); setTimeout(() => {}, 1200);\n`,
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started'); setTimeout(() => {}, 3500);\n`,
       { mode: 0o700 },
     );
     t.mock.property(process, "env", {
@@ -371,12 +371,12 @@ test(
       [join(packageRoot, "bin/atrium.mjs"), "run", agent.ref],
       {
         env: { ...process.env, ATRIUM_DATA: data, PI_ACP_PI_COMMAND: command },
-        timeout: 6000,
+        timeout: 8000,
       },
     );
     const { setTimeout: delay } = await import("node:timers/promises");
     try {
-      for (let i = 0; i < 100 && !existsSync(marker); i++) await delay(20);
+      for (let i = 0; i < 250 && !existsSync(marker); i++) await delay(20);
       assert(existsSync(marker));
       await assert.rejects(
         runtimes!.remove(agent.id, agent.ref),

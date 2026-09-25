@@ -11,6 +11,7 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  realpathSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   alive,
   packageRoot,
+  claimService,
   readService,
   serviceUrl,
 } from "../server/service-state.ts";
@@ -84,6 +86,82 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   });
   return { root, data, port, env, cli, userHeaders };
 }
+
+test("新 CLI 连接旧服务：提示 restart 和退出码 7，不进入 rotate 自指循环", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-upgrade-gap-"));
+  const data = join(root, "data");
+  const old = createServer((req, res) => {
+    if (req.url === "/api/service") {
+      if (req.headers.authorization !== `Bearer ${lease.record.token}`) {
+        res.writeHead(401).end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          instance: lease.record.instance,
+          pid: process.pid,
+          version: "0.1.4",
+          stopping: false,
+        }),
+      );
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      '{"agents":[{"secret":"old service must not receive new CLI token"}]}',
+    );
+  });
+  await new Promise<void>((resolve) => old.listen(0, "127.0.0.1", resolve));
+  const lease = claimService(data, (old.address() as { port: number }).port);
+  t.after(async () => {
+    await new Promise<void>((resolve) => old.close(() => resolve()));
+    lease.release();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const cli = async (...args: string[]) => {
+    try {
+      const result = await exec(
+        process.execPath,
+        [join(packageRoot, "bin/atrium.mjs"), ...args],
+        {
+          cwd: root,
+          env: { ...process.env, ATRIUM_DATA: data },
+          timeout: 15000,
+        },
+      );
+      return { ...result, code: 0 };
+    } catch (error) {
+      const failure = error as Error & {
+        stdout: string;
+        stderr: string;
+        code: number;
+      };
+      return {
+        stdout: failure.stdout,
+        stderr: failure.stderr,
+        code: failure.code,
+      };
+    }
+  };
+  for (const args of [
+    ["list", "--json"],
+    ["auth", "rotate", "--json"],
+    ["open", "--json"],
+  ]) {
+    const outcome = await cli(...args);
+    assert.equal(outcome.code, 7, `${args.join(" ")}: ${outcome.stderr}`);
+    assert.equal(
+      JSON.parse(outcome.stdout).error.code,
+      "upgrade_restart_required",
+    );
+    assert.equal(JSON.parse(outcome.stdout).next, "atrium restart");
+  }
+  assert.equal(existsSync(userTokenPath(data)), false);
+  const status = await cli("auth", "status", "--json");
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).result.upgradeRequired, true);
+});
 
 test(
   "CLI 从任意目录启动 Web、并发复用、保持数据并可重复停止",
@@ -220,10 +298,23 @@ test(
       0,
       "CLI automatically uses the rotated local token",
     );
+    const authStatus = await f.cli("auth", "status", "--json");
+    assert.equal(authStatus.code, 0, authStatus.stderr);
+    assert.deepEqual(JSON.parse(authStatus.stdout).result, {
+      user: "u1",
+      scope: "local",
+      service: serviceUrl(record),
+      data: realpathSync(f.data),
+      authenticated: true,
+    });
     unlinkSync(userTokenPath(f.data));
-    const missing = await f.cli("list");
-    assert.notEqual(missing.code, 0);
-    assert.match(missing.stderr, /atrium auth rotate/);
+    const missing = await f.cli("list", "--json");
+    assert.equal(missing.code, 6, missing.stderr);
+    assert.equal(JSON.parse(missing.stdout).error.code, "auth_required");
+    assert.match(
+      JSON.parse(missing.stdout).error.message,
+      /atrium auth rotate/,
+    );
     assert.equal(
       (await f.cli("auth", "rotate")).code,
       0,

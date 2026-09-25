@@ -144,7 +144,7 @@ export class RunnerAuth {
   }
   /** Pass the entire Authorization header; return machine identity, never an agent grant. */
   authenticateRunner(authorization: string | undefined) {
-    const token = /^Bearer ([a-f0-9]{64})$/.exec(authorization ?? "")?.[1];
+    const token = /^Bearer ([a-f0-9]{64})$/i.exec(authorization ?? "")?.[1];
     if (!token) throw new Problem(401, "运行器认证失败", "auth_required");
     const row = this.store.one<Credential>(
       `SELECT c.number AS credential_number,c.runner_number,c.token_hash,c.state,r.revoked_at

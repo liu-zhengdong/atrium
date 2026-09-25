@@ -26,6 +26,10 @@ test("runner rotation keeps old connection until new credential connects, then f
       runnerId,
       credentialId,
     });
+    assert.deepEqual(auth.authenticateRunner(`bearer ${old}`), {
+      runnerId,
+      credentialId,
+    });
     assert(auth.validRunnerCredential(runnerId, credentialId));
     const next = token();
     const candidate = auth.rotate(runnerId, hash(next));

@@ -4,7 +4,7 @@ import WebSocket from "ws";
 
 const CHROME_PATH =
   "/Users/liuzhengdong/Library/Caches/ms-playwright/chromium-1243/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-const WORKTREE = "/Users/liuzhengdong/MyCodeBase/repo/atrium-103-qoder-ui";
+const WORKTREE = process.cwd();
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,31 +35,12 @@ async function sendCdp(ws, method, params = {}) {
   });
 }
 
-function killPort(port) {
-  try {
-    const out = execSync(`lsof -ti:${port}`, { encoding: "utf8" }).trim();
-    if (out) {
-      for (const line of out.split("\n")) {
-        const pid = parseInt(line.trim(), 10);
-        if (pid && !isNaN(pid)) {
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {}
-        }
-      }
-    }
-  } catch {}
-}
-
 async function main() {
   const tempDir = await fs.mkdtemp("/tmp/atrium-snap-");
   const dataDir = `${tempDir}/data`;
   const piDir = `${tempDir}/pi`;
   await fs.mkdir(dataDir, { recursive: true });
   await fs.mkdir(`${piDir}/agents`, { recursive: true });
-
-  // 0. 清理旧进程
-  killPort(4399);
 
   const env = {
     ...process.env,
@@ -86,12 +67,18 @@ async function main() {
   });
   atriumProc.stderr.on("data", (d) => process.stderr.write(d));
 
-  // 等待 server 就绪
+  // 等待 server 就绪；访问用户 API 时使用隔离实例的本机令牌。
+  let ready = false;
+  let userBearer;
   for (let i = 0; i < 30; i++) {
     if (serviceUrl) {
       try {
-        const res = await fetch(`${serviceUrl}/api/overview`);
+        userBearer = `Bearer ${(await fs.readFile(`${dataDir}/user-token`, "utf8")).trim()}`;
+        const res = await fetch(`${serviceUrl}/api/overview`, {
+          headers: { authorization: userBearer },
+        });
         if (res.ok) {
+          ready = true;
           console.log(`Atrium ready at ${serviceUrl}!`);
           break;
         }
@@ -102,7 +89,10 @@ async function main() {
     await wait(400);
   }
 
-  if (!serviceUrl) throw new Error("Atrium service URL not found");
+  if (!ready)
+    throw new Error(
+      "Atrium service did not pass the authenticated readiness probe",
+    );
 
   // 2. 注入真实业务数据（Agent、群、对话），用于捕获真实视觉产物
   const runCli = (args) =>
@@ -190,7 +180,15 @@ async function main() {
   });
 
   await sendCdp(ws, "Page.enable");
-  await sendCdp(ws, "Page.navigate", { url: serviceUrl });
+  const link = await fetch(`${serviceUrl}/api/auth/link`, {
+    method: "POST",
+    headers: { authorization: userBearer },
+  });
+  if (!link.ok)
+    throw new Error(`Cannot issue Web login link: HTTP ${link.status}`);
+  const { code } = await link.json();
+  const loginUrl = `${serviceUrl.replace("127.0.0.1", "atrium.localhost")}/auth/claim/${code}`;
+  await sendCdp(ws, "Page.navigate", { url: loginUrl });
   await wait(2500);
 
   async function snap(name) {

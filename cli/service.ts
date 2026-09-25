@@ -6,7 +6,7 @@ import {
 import { startService } from "../server/service.ts";
 import { Problem } from "../server/problem.ts";
 import { recordResult } from "./contract.ts";
-import { userBearer } from "./auth.ts";
+import { requireUserAuthService, userBearer } from "./auth.ts";
 
 export type Client = ReturnType<typeof client>;
 
@@ -24,6 +24,7 @@ export async function connect(quietStart = false): Promise<Client> {
       "service_unavailable",
     );
   });
+  await requireUserAuthService(record);
   if (!quietStart && (!before || before.pid !== record.pid))
     console.error(
       `Atrium 服务已在后台启动 · PID ${record.pid} · ${serviceUrl(record)} · 停止：atrium stop`,

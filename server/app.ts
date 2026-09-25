@@ -47,6 +47,7 @@ import {
 import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { UserAuth } from "./user-auth.ts";
 import { RunnerAuth } from "./runner-auth.ts";
+import { authPolicy, protectedNamespace } from "./auth-policy.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import {
@@ -81,6 +82,8 @@ export async function createApp(options: {
   controlToken?: string;
   /** Existing domain tests disable user auth explicitly; production never sets this. */
   auth?: boolean;
+  /** Audit every registered route in security tests. */
+  onRoute?: (method: string, url: string) => void;
 }) {
   const desktops = options.desktops ?? defaultDesktops();
   const piHome = options.piHome;
@@ -101,6 +104,10 @@ export async function createApp(options: {
   const app = Fastify({
     logger: { level: "warn" },
     bodyLimit: 11 * 1024 * 1024,
+  });
+  app.addHook("onRoute", (route) => {
+    for (const method of [route.method].flat())
+      options.onRoute?.(method, route.url);
   });
   const streams = new Set<import("node:http").ServerResponse>();
   const waiters = new Set<{ wake: () => void; cancel: () => void }>();
@@ -210,19 +217,20 @@ export async function createApp(options: {
       if (host !== request.headers.host)
         throw new Problem(403, "不接受跨站请求");
     }
+  });
+  // Fastify has matched the route here. Raw URL prefixes are not an auth boundary:
+  // /%61pi/overview matches /api/overview after decoding.
+  app.addHook("preHandler", async (request, reply) => {
     if (options.auth === false) return;
-    const path = request.url.split("?", 1)[0]!;
-    // Service control and identity MCP have distinct existing credentials.
-    // Only the narrow public webhook and one-use login claim bypass user auth.
+    const route = request.routeOptions.url ?? "";
+    const policy = authPolicy(request.method, route);
     if (
-      !path.startsWith("/api/") ||
-      path.startsWith("/api/service/") ||
-      path === "/api/service" ||
-      path === "/api/auth/rotate" ||
-      path === "/api/auth/session" ||
-      path.startsWith("/hooks/")
+      policy === "public" &&
+      route === "/*" &&
+      protectedNamespace(request.url)
     )
-      return;
+      throw new Problem(404, "接口不存在");
+    if (policy !== "user") return;
     if (auth.validUser(request.headers.authorization)) return;
     if (auth.validSession(request.headers.cookie)) {
       reply.header("Set-Cookie", auth.refreshCookie(request.headers.cookie));
@@ -296,7 +304,7 @@ export async function createApp(options: {
     const control = options.controlToken;
     if (
       !auth.validUser(authorization) &&
-      !(control && authorization === `Bearer ${control}`)
+      !(control && authorization?.replace(/^Bearer /i, "") === control)
     )
       throw new Problem(
         401,
@@ -313,7 +321,7 @@ export async function createApp(options: {
     z.object({ id }).parse(request.params).id;
   const requireAgent = (request: FastifyRequest) => {
     const agentId = agentParams(request),
-      token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
+      token = request.headers.authorization?.replace(/^Bearer /i, "") ?? "";
     if (!store.authenticate(agentId, token))
       throw new Problem(401, "Agent 凭据无效");
     return agentId;
@@ -1355,7 +1363,7 @@ export async function createApp(options: {
   if (options.webRoot && existsSync(options.webRoot)) {
     await app.register(staticFiles, { root: options.webRoot });
     app.setNotFoundHandler((request, reply) => {
-      if (request.method === "GET" && !/^\/(api|mcp)(\/|$)/.test(request.url))
+      if (request.method === "GET" && !protectedNamespace(request.url))
         return reply.sendFile("index.html");
       return reply.code(404).send({ error: "接口不存在" });
     });

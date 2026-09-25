@@ -82,7 +82,7 @@ export class UserAuth {
   }
 
   validUser(value: string | undefined) {
-    const token = /^Bearer ([a-f0-9]{64})$/.exec(value ?? "")?.[1];
+    const token = /^Bearer ([a-f0-9]{64})$/i.exec(value ?? "")?.[1];
     const row = this.store.one<{ token_hash: string }>(
       "SELECT token_hash FROM user_auth WHERE id=1",
     );

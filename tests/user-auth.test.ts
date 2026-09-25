@@ -64,6 +64,15 @@ test("all user API requires bearer or session, identity MCP never accepts user b
       ).statusCode,
       200,
     );
+    assert.equal(
+      (
+        await f.app.inject({
+          url: "/api/overview",
+          headers: { authorization: `bearer ${f.token}` },
+        })
+      ).statusCode,
+      200,
+    );
     const { agent, token } = f.store.createAgent("测试", f.data);
     assert.equal(
       (
@@ -76,6 +85,16 @@ test("all user API requires bearer or session, identity MCP never accepts user b
       401,
     );
     assert(f.store.authenticate(agent.id, token));
+    assert.notEqual(
+      (
+        await f.app.inject({
+          method: "POST",
+          url: `/mcp/${agent.id}`,
+          headers: { authorization: `bearer ${token}` },
+        })
+      ).statusCode,
+      401,
+    );
     assert.equal(
       (
         await f.app.inject({

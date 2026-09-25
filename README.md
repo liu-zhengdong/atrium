@@ -87,6 +87,7 @@ atrium --help
 # Web 与用户认证
 atrium open                             # 一次性链接打开 Web（60 秒、用后即废）
 atrium open --print                     # 仅在安全终端输出登录链接；不要发到聊天或日志
+atrium auth status                      # 当前本机用户 u1、认证状态和连接的本机服务
 atrium auth rotate                      # 轮换用户令牌，立即撤销全部 Web 会话
 atrium adapters url 林岚                 # 获取该身份的接收口（含秘密）
 atrium adapters url 林岚 --rotate        # 旧接收口立即失效
@@ -257,7 +258,7 @@ Pi 接入依赖 [`@liuser/pi-atrium`](https://github.com/liu-zhengdong/pi-atrium
 
 服务管理另用同目录的 `service.sqlite` 保存单实例登记与随机控制凭据（`0600`），不更换业务数据库。启动与崩溃后重新占用通过 SQLite 事务串行化；进程仍存在但连接失败时拒绝另开或按 PID 强杀。状态与停止通过本机鉴权接口核对实例，不把端口连通当作身份依据。该文件包含凭据，请勿提交或分享。
 
-单用户本机环境：用户 API／SSE 需本机用户令牌或 Web Session，身份 MCP 仍需该身份凭据；两者不能互换。用户令牌位于数据目录 `user-token`（0600），Web 会话绑定数据目录实例、30 天滑动过期；`atrium auth rotate` 让旧令牌和全部会话失效。令牌丢失时在本机运行 `atrium auth rotate`，它用实例控制凭据恢复；确认 `ATRIUM_DATA` 指向正确目录。`atrium open --print` 和推送地址都是短期或长期秘密，只在受信终端使用。不同浏览器下 `.localhost` 的本机解析若不可用，可用 `atrium open --print` 取得链接并检查本机 DNS，勿直接将服务开放到网络。MCP 的身份隔离不是操作系统沙箱：具有本机 shell／文件访问权限的 Pi 仍具有其宿主用户的权限。本版不提供多用户认证、容器隔离或高可用消息队列；投递采用确认重试，进程内去重不等于跨崩溃的恰好一次执行，重要外部动作仍需幂等保护。
+单用户本机环境：用户 API／SSE 需本机用户令牌或 Web Session，身份 MCP 仍需该身份凭据；两者不能互换。`atrium update` 安装后要运行 `atrium restart` 才能让旧服务启用认证；在升级缺口中，新 CLI 报 `upgrade_restart_required`（退出码 7）并指向 restart，不向旧服务无认证回退。用户令牌位于数据目录 `user-token`（0600），Web 会话绑定数据目录实例、30 天滑动过期；`atrium auth rotate` 让旧令牌和全部会话失效。令牌丢失时在本机运行 `atrium auth rotate`，它用实例控制凭据恢复；确认 `ATRIUM_DATA` 指向正确目录。`atrium open --print` 和推送地址都是短期或长期秘密，只在受信终端使用；`atrium open` 调用系统打开浏览器时，一次性链接会短暂出现在本机进程参数（`ps`）中，有效期 60 秒且只能使用一次，勿在共享用户账号下打开。不同浏览器下 `.localhost` 的本机解析若不可用，可用 `atrium open --print` 取得链接并检查本机 DNS，勿直接将服务开放到网络。MCP 的身份隔离不是操作系统沙箱：具有本机 shell／文件访问权限的 Pi 仍具有其宿主用户的权限。本版不提供多用户认证、容器隔离或高可用消息队列；投递采用确认重试，进程内去重不等于跨崩溃的恰好一次执行，重要外部动作仍需幂等保护。
 
 ## 开发与验证
 

@@ -95,8 +95,8 @@ try {
     controlToken: lease.record.token,
   }));
   const authorize = (value: string | undefined) => {
-    const actual = Buffer.from(value ?? "");
-    const expected = Buffer.from(`Bearer ${lease.record.token}`);
+    const actual = Buffer.from(/^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "");
+    const expected = Buffer.from(lease.record.token);
     return (
       actual.length === expected.length && timingSafeEqual(actual, expected)
     );
@@ -106,6 +106,7 @@ try {
     pid: process.pid,
     stopping,
     version: currentVersion(),
+    userAuth: "user-v1",
   });
   app.get("/api/service", (request, reply) => {
     if (!authorize(request.headers.authorization))

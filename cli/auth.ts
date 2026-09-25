@@ -21,6 +21,34 @@ import { Problem } from "../server/problem.ts";
 import { recordResult } from "./contract.ts";
 import type { Command } from "./main.ts";
 
+async function supportsUserAuth(record: ServiceRecord) {
+  const response = await fetch(`${serviceUrl(record)}/api/service`, {
+    headers: { authorization: `Bearer ${record.token}` },
+    signal: AbortSignal.timeout(1500),
+  }).catch(() => {
+    throw new Problem(503, "服务不可用或身份校验失败", "service_unavailable");
+  });
+  if (!response.ok)
+    throw new Problem(503, "服务不可用或身份校验失败", "service_unavailable");
+  const status = (await response.json()) as {
+    instance?: string;
+    userAuth?: string;
+  };
+  if (status.instance !== record.instance)
+    throw new Problem(503, "服务身份不匹配", "service_unavailable");
+  return status.userAuth === "user-v1";
+}
+export async function requireUserAuthService(record: ServiceRecord) {
+  if (!(await supportsUserAuth(record)))
+    throw new Problem(
+      409,
+      "已安装新版本，但当前服务仍在运行旧版本；请运行 atrium restart 完成升级",
+      "upgrade_restart_required",
+      undefined,
+      "atrium restart",
+    );
+}
+
 function localToken(data: string) {
   try {
     const token = readFileSync(userTokenPath(data), "utf8").trim();
@@ -45,6 +73,7 @@ export function webAddress(port: number) {
   return `http://atrium.localhost:${port}`;
 }
 export async function loginLink(data: string, record: ServiceRecord) {
+  await requireUserAuthService(record);
   const response = await fetch(`${serviceUrl(record)}/api/auth/link`, {
     method: "POST",
     headers: { authorization: userBearer(data) },
@@ -86,6 +115,47 @@ const hash = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 
 export const authCommands: Record<string, Command> = {
+  "auth status": {
+    args: "",
+    about: "查看当前本机用户身份、认证状态和连接的服务（不启动服务）",
+    positionals: [0, 0],
+    run: async ({ json }) => {
+      const data = dataDirectory();
+      const record = readService(data);
+      const token = localToken(data);
+      let connected = false;
+      let authenticated = false;
+      let upgradeRequired = false;
+      if (record) {
+        try {
+          connected = true;
+          upgradeRequired = !(await supportsUserAuth(record));
+          if (!upgradeRequired && token) {
+            const check = await fetch(`${serviceUrl(record)}/api/overview`, {
+              headers: { authorization: `Bearer ${token}` },
+              signal: AbortSignal.timeout(1500),
+            });
+            authenticated = check.ok;
+          }
+        } catch {
+          connected = false;
+        }
+      }
+      const result = {
+        user: "u1",
+        scope: "local",
+        service: connected && record ? serviceUrl(record) : null,
+        data,
+        authenticated,
+        ...(upgradeRequired ? { upgradeRequired: true } : {}),
+      };
+      recordResult(result);
+      if (!json)
+        console.log(
+          `当前：本机用户 u1\n服务：${result.service ?? "未连接"}\n认证：${upgradeRequired ? "服务还在运行旧版本 · 请运行 atrium restart" : authenticated ? "有效" : "未认证 · 请运行 atrium auth rotate"}\n数据：${data}`,
+        );
+    },
+  },
   open: {
     args: "[--print]",
     about: "生成一次性链接并登录 Web；--print 只输出链接，不打开浏览器",
@@ -94,6 +164,7 @@ export const authCommands: Record<string, Command> = {
     run: async ({ values, json }) => {
       const data = dataDirectory();
       const record = await startService(data);
+      await requireUserAuthService(record);
       if (json) {
         recordResult({ ready: true, address: webAddress(record.port) });
         return;
@@ -114,6 +185,7 @@ export const authCommands: Record<string, Command> = {
     run: async () => {
       const data = dataDirectory();
       const record = await startService(data);
+      await requireUserAuthService(record);
       const url = `${serviceUrl(record)}/api/auth/rotate`;
       const rotate = (token: string) =>
         fetch(url, {
@@ -127,10 +199,10 @@ export const authCommands: Record<string, Command> = {
       if (!response.ok)
         throw new Problem(
           response.status,
-          `无法轮换用户令牌（数据：${data}）；确认 ATRIUM_DATA 与服务相同，并检查实例控制文件 service.sqlite`,
-          "auth_required",
+          `无法轮换用户令牌（数据：${data}）；确认 ATRIUM_DATA 与服务相同，并检查实例控制文件 service.sqlite；运行 atrium status 排查服务`,
+          "service_unavailable",
           undefined,
-          "atrium auth rotate",
+          "atrium status",
         );
       console.log(`用户令牌已轮换；全部 Web 会话已失效\n数据：${data}`);
       recordResult({ rotated: true, data });

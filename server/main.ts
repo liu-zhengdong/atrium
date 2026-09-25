@@ -92,28 +92,31 @@ try {
   ({ app, runtimes, store } = await createApp({
     data,
     webRoot: join(packageRoot, "dist"),
+    controlToken: lease.record.token,
   }));
   const authorize = (value: string | undefined) => {
-    const actual = Buffer.from(value ?? "");
-    const expected = Buffer.from(`Bearer ${lease.record.token}`);
+    const actual = Buffer.from(/^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "");
+    const expected = Buffer.from(lease.record.token);
     return (
       actual.length === expected.length && timingSafeEqual(actual, expected)
     );
   };
+  app.addHook("onRequest", async (request, reply) => {
+    if (!request.routeOptions.url?.startsWith("/api/service")) return;
+    if (!authorize(request.headers.authorization))
+      return reply.code(401).send({ error: "服务控制凭据无效" });
+  });
   const status = () => ({
     instance: lease.record.instance,
     pid: process.pid,
     stopping,
     version: currentVersion(),
+    userAuth: "user-v1",
   });
-  app.get("/api/service", (request, reply) => {
-    if (!authorize(request.headers.authorization))
-      return reply.code(401).send({ error: "服务控制凭据无效" });
+  app.get("/api/service", () => {
     return status();
   });
   app.post("/api/service/prepare-restart", async (request, reply) => {
-    if (!authorize(request.headers.authorization))
-      return reply.code(401).send({ error: "服务控制凭据无效" });
     if (stopping) return reply.code(409).send({ error: "服务正在关闭" });
     const body = (request.body as { timeout?: number } | undefined) ?? {};
     const timeout = Number(body.timeout ?? 300000);
@@ -130,9 +133,7 @@ try {
     stopping = true;
     return { ready: true, agentsToWake };
   });
-  app.get("/api/service/health", async (request, reply) => {
-    if (!authorize(request.headers.authorization))
-      return reply.code(401).send({ error: "服务控制凭据无效" });
+  app.get("/api/service/health", async (_request, reply) => {
     const runtimesHealth = runtimes
       ? runtimes.health()
       : { available: false, error: "运行时未初始化" };
@@ -150,8 +151,6 @@ try {
     return health;
   });
   app.post("/api/service/probe", async (request, reply) => {
-    if (!authorize(request.headers.authorization))
-      return reply.code(401).send({ error: "服务控制凭据无效" });
     const id = (request.body as { id?: string } | undefined)?.id;
     if (typeof id !== "string" || !store || !runtimes)
       return reply.code(400).send({ error: "缺少身份 ID" });
@@ -180,8 +179,6 @@ try {
     }
   });
   app.post("/api/service/wake", async (request, reply) => {
-    if (!authorize(request.headers.authorization))
-      return reply.code(401).send({ error: "服务控制凭据无效" });
     const id = (request.body as { id?: string } | undefined)?.id;
     if (typeof id !== "string" || !store || !runtimes)
       return reply.code(400).send({ error: "缺少身份 ID" });
@@ -195,9 +192,7 @@ try {
     void runtimes.pump(id, true);
     return { woken: true };
   });
-  app.post("/api/service/stop", (request, reply) => {
-    if (!authorize(request.headers.authorization))
-      return reply.code(401).send({ error: "服务控制凭据无效" });
+  app.post("/api/service/stop", (_request, reply) => {
     reply.raw.once("finish", () => {
       void shutdown();
     });

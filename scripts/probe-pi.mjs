@@ -230,6 +230,12 @@ const { app, store, runtimes } = await createApp({
 });
 await app.listen({ port: 0, host: "127.0.0.1" });
 const port = app.server.address().port;
+const userBearer = `Bearer ${readFileSync(join(folder, "data", "user-token"), "utf8").trim()}`;
+const apiFetch = (url, options = {}) =>
+  fetch(url, {
+    ...options,
+    headers: { authorization: userBearer, ...options.headers },
+  });
 // The CLI's separate service must not collide with a live user's Atrium.
 const testPort = createNetServer();
 await new Promise((resolve) => testPort.listen(0, "127.0.0.1", resolve));
@@ -291,7 +297,7 @@ try {
   );
   await runtimes.discover();
   const initial = await (
-    await fetch(`http://127.0.0.1:${port}/api/overview`)
+    await apiFetch(`http://127.0.0.1:${port}/api/overview`)
   ).json();
   assert.equal(initial.agents.length, 0, "发现不应预先创建档案");
   assert.equal(initial.discovery.runtimes.length, 1);
@@ -316,11 +322,11 @@ try {
     });
   } else {
     const available = await (
-      await fetch(`http://127.0.0.1:${port}/api/runtimes`)
+      await apiFetch(`http://127.0.0.1:${port}/api/runtimes`)
     ).json();
     assert.equal(available.runtimes.length, 1);
     assert(!JSON.stringify(available).includes("token"));
-    const rejected = await fetch(
+    const rejected = await apiFetch(
       `http://127.0.0.1:${port}/api/runtimes/${available.runtimes[0].runtimeId}/chat`,
       { method: "POST" },
     );
@@ -345,7 +351,7 @@ try {
       () => existsSync(join(cwd, "started")),
       "原任务的真实 bash 工具正在执行",
     );
-    const conversation = await fetch(
+    const conversation = await apiFetch(
       `http://127.0.0.1:${port}/api/runtimes/${available.runtimes[0].runtimeId}/chat`,
       { method: "POST" },
     );
@@ -358,7 +364,7 @@ try {
       () => runtimes.connections.has(agent.id),
       "点击后自动建立原 Pi 连接",
     );
-    const repeated = await fetch(
+    const repeated = await apiFetch(
       `http://127.0.0.1:${port}/api/runtimes/${available.runtimes[0].runtimeId}/chat`,
       { method: "POST" },
     );
@@ -442,7 +448,7 @@ try {
       "连接密钥泄漏到模型上下文",
     );
     assert(!modelError, String(modelError));
-    const created = await fetch(`http://127.0.0.1:${port}/api/agents`, {
+    const created = await apiFetch(`http://127.0.0.1:${port}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "先分配再启动验证" }),
@@ -450,7 +456,7 @@ try {
     assert.equal(created.status, 201);
     const createdAgent = await created.json();
     accounts.assign(createdAgent.agent.id, fixtureAccount);
-    const startedAgent = await fetch(
+    const startedAgent = await apiFetch(
       `http://127.0.0.1:${port}/api/agents/${createdAgent.agent.id}/start`,
       { method: "POST" },
     );
@@ -459,7 +465,7 @@ try {
       runtimes.connections.get(createdAgent.agent.id).info.mode,
       "rpc",
     );
-    const rpcResponse = await fetch(`http://127.0.0.1:${port}/api/agents`, {
+    const rpcResponse = await apiFetch(`http://127.0.0.1:${port}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "后台验证 Agent" }),
@@ -569,6 +575,7 @@ try {
       runtimes,
       store,
       baseUrl: `http://127.0.0.1:${port}`,
+      apiFetch,
       wait,
       raw,
       hash,
@@ -576,7 +583,7 @@ try {
       fixtureAccount,
     });
     const chatReply = store.timeline(chatId).items.at(-1);
-    const events = await fetch(`http://127.0.0.1:${port}/api/events`);
+    const events = await apiFetch(`http://127.0.0.1:${port}/api/events`);
     const reader = events.body.getReader();
     await reader.read();
     await app.close();

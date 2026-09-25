@@ -32,6 +32,7 @@ test("参数与最后一行是纯逻辑：非法输入被拒", () => {
 test("增量读取正序有界；等待通知、超时及客户端中断清理", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-wait-"));
   const { app, store, pendingWaits } = await createApp({
+    auth: false,
     data,
     runtime: false,
     desktops: join(data, "desktops"),
@@ -122,6 +123,7 @@ test("增量读取正序有界；等待通知、超时及客户端中断清理",
 test("busy 等当前轮结束；已空闲立即返回；断开的 idle 等待也移除", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-idle-"));
   const { app, store, runtimes, pendingWaits } = await createApp({
+    auth: false,
     data,
     desktops: join(data, "desktops"),
     piHome: join(data, "pi"),

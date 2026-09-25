@@ -220,7 +220,11 @@ test("运行轨迹：真实事件物化、参数按需读取、分页隔离与�
 test("轨迹查询反向校验与持久化：用户审阅不改变回执", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-trace-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const { app, store } = await createApp({ data: root, runtime: false });
+  const { app, store } = await createApp({
+    auth: false,
+    data: root,
+    runtime: false,
+  });
   t.after(() => app.close());
   const a = store.createAgent("Atlas", tmpdir()).agent,
     b = store.createAgent("Borealis", tmpdir()).agent;
@@ -337,7 +341,11 @@ test("轨迹按身份有界：插入时裁掉更早的，不动别人的", (t) =
 
 test("私聊触发来源：实际投递与工具发言关联、回复排除、群聊和 MCP 隔离", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-trigger-"));
-  const { app, store } = await createApp({ data: root, runtime: false });
+  const { app, store } = await createApp({
+    auth: false,
+    data: root,
+    runtime: false,
+  });
   t.after(async () => {
     await app.close();
     rmSync(root, { recursive: true, force: true });

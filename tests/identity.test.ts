@@ -41,6 +41,7 @@ test("长期身份配置独立、引用共享资源、凭据不复制；改名�
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const piHome = join(root, ".pi");
   const { app, store, runtimes } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     piHome,
@@ -318,6 +319,7 @@ test("启动时把丢失的工作目录写回桌面并交给 Pi", async (t) => {
     JSON.stringify({ defaultModel: "fixture", packages: [] }),
   );
   const { app, store } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops,
     piHome: join(root, ".pi"),
@@ -383,6 +385,7 @@ test("启动已有身份时改写缺失的合集包路径，再交给 Pi", async
     JSON.stringify({ defaultModel: "fixture", packages: [] }),
   );
   const { app, store } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     piHome: join(root, ".pi"),

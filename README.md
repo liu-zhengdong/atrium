@@ -18,7 +18,7 @@ atrium
 
 `atrium` 和 `npm start` 发现 Web 源码或构建配置比 `dist` 新时会先构建再启动；产物已是最新则跳过。
 
-已全局安装后，在任意目录执行 **`atrium`** 即可启动后台服务并打开 Web，默认地址 **<http://127.0.0.1:4310>**。重复执行直接打开已有服务，不新建另一份实例或数据。
+已全局安装后，在任意目录执行 **`atrium`** 即可启动后台服务并以一次性链接登录 Web，默认浏览器地址 **<http://atrium.localhost:4310>**。重复执行复用原服务。旧书签 `127.0.0.1:4310` 会显示登录说明；运行 `atrium open` 获取新链接，不能直接靠端口访问用户数据。
 
 1. 首页展示长期 Agent 名册，点击即可进入私聊，连接由后台管理。普通 `pi` 保持自由多开，仅列在折叠的「临时 Pi」中，不自动创建身份。
 2. 选择「新建 Agent」或运行 `atrium create <名称>`，一开始只需起名；默认从内置类型复制配置。也可从已有身份 fork。专属工作目录自动创建为 `~/Atrium/desktops/<名称>/`，每次启动固定使用。默认只创建身份，不启动进程。
@@ -63,7 +63,7 @@ atrium --help
 - **职位与工作状态**：名册常驻自我介绍（第一句是职位），Agent 用 `set_description` 改自己的，你在资料里改的也是这一栏；`claim_status` 声明当下在做什么，有声明时名册卡片另起一行显示。在线、执行中、离线看头像上的点，与声明分开。每个身份带一份「职责.md」笔记（每轮注入），记负责范围、汇报关系、待决与已决事项；fork 出来的身份从空白的一份开始，旧身份启动时缺就补、不覆盖。
 - **通知与消息箱**：Agent 按心跳间隔检查消息箱，有未完成消息才被提醒；阅读关联群聊或调用 `complete_inbox` 标记完成后不再提醒。提醒逐项写明哪个会话几条未读、最近谁发的；Agent 忙时提醒排队，送出前按当时的消息箱重写，已经处理完就不送。`complete_inbox` 会列出已经完成或编号不对的条目。用户可随时查看，完整记录可追溯；用户审阅不改变 Agent 的阅读与完成状态。
 - **自身配置**：Agent 可调整消息箱心跳间隔（默认 30 秒）。忙时普通提醒等待，明确 @ 和私聊不受心跳间隔限制。
-- **外部事件**：每个 Agent 有统一接收口 `POST /api/agents/:ref/inbox`。Agent 自己编写的适配器（工作目录 `adapters/` 下的 `.mjs` 文件）在隔离 worker 中处理推送并整理成结构化消息；无适配器、适配器报错或超时时原始请求落入消息箱，不丢消息。
+- **外部事件**：每个 Agent 有仅可写其消息箱的秘密接收口 `POST /hooks/:ref/:push-token`，用 `atrium adapters url 身份` 获取／轮换／撤销。Agent 自己编写的适配器（工作目录 `adapters/` 下的 `.mjs` 文件）在隔离 worker 中处理推送；无适配器、报错或超时时原始请求落入消息箱。
 
 历史连续阅读位置沿用既有记录；旧版未记录的跳读不能补推为已读。连续阅读仅保存每位成员的位置，跳读额外保存合并范围，补齐缺口后回收，不逐消息复制全员回执。
 
@@ -81,9 +81,22 @@ atrium --help
 
 ### 命令行
 
-`atrium` 也是外部操作工具：用户本人，或代表用户调整组织的外部 Agent，只用命令行就能完成 Web 里能做的全部操作。除 `run` 外的命令都经中庭服务完成，服务没在跑会自动在后台拉起；名称处也可以用短号（`a1`、`c1`）或 ID；读命令加 `--json` 原样输出接口结果。`atrium --help` 列出全部命令。
+`atrium` 也是外部操作工具：用户本人，或代表用户调整组织的外部 Agent，只用命令行就能完成 Web 里能做的全部操作。除 `run` 外的命令都经中庭服务完成，服务没在跑会自动在后台拉起；CLI 从所选 `ATRIUM_DATA` 的 `user-token` 读取用户凭据。名称处也可以用短号（`a1`、`c1`）或 ID；读命令加 `--json` 原样输出接口结果。`atrium --help` 列出全部命令。
 
 ```bash
+# Web 与用户认证
+atrium open                             # 一次性链接打开 Web（60 秒、用后即废）
+atrium open --print                     # 仅在安全终端输出登录链接；不要发到聊天或日志
+atrium auth status                      # 当前本机用户 u1、认证状态和连接的本机服务
+atrium auth rotate                      # 轮换用户令牌，立即撤销全部 Web 会话
+atrium adapters url 林岚                 # 获取该身份的接收口（含秘密）
+atrium adapters url 林岚 --rotate        # 旧接收口立即失效
+atrium adapters url 林岚 --revoke        # 停用接收口
+atrium runner issue '本机运行器'            # 颁发机器身份，只把令牌写入 0600 文件
+atrium runner list                       # 查看运行器（不显示秘密）
+atrium runner rotate r1                  # 新凭据首次连接时替换旧凭据
+atrium runner revoke r1                  # 撤销机器身份及所有凭据
+
 # 身份
 atrium list                                   # 名册：短号、名称、状态、运行中的模型、消息箱、工作声明
 atrium show 林岚                              # 详情：资料、目录、偏好、模型现状、运行状态
@@ -98,6 +111,8 @@ atrium profile 林岚 --description 负责评审
 atrium model 林岚                             # 当前模型、运行中实际在用的模型、可选清单
 atrium model 林岚 claude-bridge/claude-opus-5:high   # 设定模型，可带思考强度
 atrium trace 林岚 --show 12                   # 运行轨迹；--show 看某一条的参数与结果
+
+机器身份只证明运行器本身，不授予任何身份或聊天权限；实际连接还须通过运行器到身份的显式绑定。本阶段提供颁发、轮换与撤销，运行器连线由 #168 接入。轮换后安全地把新文件复制到对应机器，新机器凭据首次连接后旧凭据与旧连接必须立即失效。
 
 # 模型账号
 atrium connect                              # 选择方式与供应商，登录或输入 API Key，可选分配 Agent
@@ -176,7 +191,7 @@ Atrium 使用 ACP SDK 调用 pi-atrium 声明的 `runtime/v1` 能力；Pi 进程
 
 ## 外部事件
 
-每个 Agent 有统一接收口 `POST /api/agents/:ref/inbox`，接受 JSON 或任意文本正文（原文保留）。推送到达后：
+每个 Agent 有独立的 `POST /hooks/:ref/:push-token` 接收口，接受不超过 256 KiB 的 JSON 或任意文本正文（超出返回 413；无适配器时最多保留正文前 2 万字）。先运行 `atrium adapters url 身份` 获取完整地址；不要在公开记录中留下地址。推送凭据只能写对应身份消息箱，不能读用户 API 或代理 Agent 工具。`atrium adapters url 身份 --rotate` 让旧地址立即失效，`--revoke` 关闭入口。推送到达后：
 
 1. 工作目录 `adapters/` 下按文件名排序的 `.mjs` 适配器依次在独立 worker 线程中执行（5 秒超时），通过 `ctx.emit({ title, body, url? })` 写入结构化消息；`ctx.request` 携带完整请求（method / headers / query / body / rawBody）。
 2. 没有任何适配器、适配器出错或超时，原始请求落入消息箱；适配器出错同时记录一条系统通知，不丢消息。
@@ -243,7 +258,7 @@ Pi 接入依赖 [`@liuser/pi-atrium`](https://github.com/liu-zhengdong/pi-atrium
 
 服务管理另用同目录的 `service.sqlite` 保存单实例登记与随机控制凭据（`0600`），不更换业务数据库。启动与崩溃后重新占用通过 SQLite 事务串行化；进程仍存在但连接失败时拒绝另开或按 PID 强杀。状态与停止通过本机鉴权接口核对实例，不把端口连通当作身份依据。该文件包含凭据，请勿提交或分享。
 
-首版面向受信任的单用户本机环境。MCP 的身份隔离不是操作系统沙箱：具有本机 shell／文件访问权限的 Pi 仍具有其宿主用户的权限。本版不提供多用户认证、容器隔离或高可用消息队列；投递采用确认重试，进程内去重不等于跨崩溃的恰好一次执行，重要外部动作仍需幂等保护。
+单用户本机环境：用户 API／SSE 需本机用户令牌或 Web Session，身份 MCP 仍需该身份凭据；两者不能互换。`atrium update` 安装后要运行 `atrium restart` 才能让旧服务启用认证；在升级缺口中，新 CLI 报 `upgrade_restart_required`（退出码 7）并指向 restart，不向旧服务无认证回退。用户令牌位于数据目录 `user-token`（0600），Web 会话绑定数据目录实例、30 天滑动过期；`atrium auth rotate` 让旧令牌和全部会话失效。令牌丢失时在本机运行 `atrium auth rotate`，它用实例控制凭据恢复；确认 `ATRIUM_DATA` 指向正确目录。`atrium open --print` 和推送地址都是短期或长期秘密，只在受信终端使用；`atrium open` 调用系统打开浏览器时，一次性链接会短暂出现在本机进程参数（`ps`）中，有效期 60 秒且只能使用一次，勿在共享用户账号下打开。不同浏览器下 `.localhost` 的本机解析若不可用，可用 `atrium open --print` 取得链接并检查本机 DNS，勿直接将服务开放到网络。MCP 的身份隔离不是操作系统沙箱：具有本机 shell／文件访问权限的 Pi 仍具有其宿主用户的权限。本版不提供多用户认证、容器隔离或高可用消息队列；投递采用确认重试，进程内去重不等于跨崩溃的恰好一次执行，重要外部动作仍需幂等保护。
 
 ## 开发与验证
 

@@ -18,13 +18,14 @@ export async function verifyIdentity({
   runtimes,
   store,
   baseUrl,
+  apiFetch,
   wait,
   raw,
   hash,
   hashes,
   fixtureAccount,
 }) {
-  const response = await fetch(`${baseUrl}/api/agents`, {
+  const response = await apiFetch(`${baseUrl}/api/agents`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

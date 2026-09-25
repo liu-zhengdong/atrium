@@ -149,7 +149,7 @@ test("私聊、明确提及和消息箱提醒使用相同短号，正文保持�
 
 test("真实 MCP HTTP：短号发现读写、UUID 兼容与幂等、跨 Agent 一致和越权拒绝", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-ref-http-"));
-  const { app, store } = await createApp({ data, runtime: false });
+  const { app, store } = await createApp({ auth: false, data, runtime: false });
   const clients: Client[] = [];
   t.after(async () => {
     await Promise.all(clients.map((client) => client.close()));

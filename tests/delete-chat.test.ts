@@ -54,6 +54,7 @@ async function fixture(t: { after: (fn: () => void | Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-disband-"));
   const data = join(root, "data");
   const { app, store } = await createApp({
+    auth: false,
     data,
     desktops: join(root, "desktops"),
     piHome: join(root, ".pi"),

@@ -10,16 +10,21 @@ import {
   existsSync,
   rmSync,
   statSync,
+  unlinkSync,
+  realpathSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer, request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { Store } from "../server/store.ts";
+import { userTokenPath } from "../server/user-auth.ts";
+import { declaredBodyWithoutBytes } from "./raw-http.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   alive,
   packageRoot,
+  claimService,
   readService,
   serviceUrl,
 } from "../server/service-state.ts";
@@ -77,8 +82,87 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       process.kill(record.pid, "SIGKILL");
     rmSync(root, { recursive: true, force: true });
   });
-  return { root, data, port, env, cli };
+  const userHeaders = () => ({
+    authorization: `Bearer ${readFileSync(userTokenPath(data), "utf8").trim()}`,
+  });
+  return { root, data, port, env, cli, userHeaders };
 }
+
+test("新 CLI 连接旧服务：提示 restart 和退出码 7，不进入 rotate 自指循环", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-upgrade-gap-"));
+  const data = join(root, "data");
+  const old = createServer((req, res) => {
+    if (req.url === "/api/service") {
+      if (req.headers.authorization !== `Bearer ${lease.record.token}`) {
+        res.writeHead(401).end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          instance: lease.record.instance,
+          pid: process.pid,
+          version: "0.1.4",
+          stopping: false,
+        }),
+      );
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      '{"agents":[{"secret":"old service must not receive new CLI token"}]}',
+    );
+  });
+  await new Promise<void>((resolve) => old.listen(0, "127.0.0.1", resolve));
+  const lease = claimService(data, (old.address() as { port: number }).port);
+  t.after(async () => {
+    await new Promise<void>((resolve) => old.close(() => resolve()));
+    lease.release();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const cli = async (...args: string[]) => {
+    try {
+      const result = await exec(
+        process.execPath,
+        [join(packageRoot, "bin/atrium.mjs"), ...args],
+        {
+          cwd: root,
+          env: { ...process.env, ATRIUM_DATA: data },
+          timeout: 15000,
+        },
+      );
+      return { ...result, code: 0 };
+    } catch (error) {
+      const failure = error as Error & {
+        stdout: string;
+        stderr: string;
+        code: number;
+      };
+      return {
+        stdout: failure.stdout,
+        stderr: failure.stderr,
+        code: failure.code,
+      };
+    }
+  };
+  for (const args of [
+    ["list", "--json"],
+    ["auth", "rotate", "--json"],
+    ["open", "--json"],
+  ]) {
+    const outcome = await cli(...args);
+    assert.equal(outcome.code, 7, `${args.join(" ")}: ${outcome.stderr}`);
+    assert.equal(
+      JSON.parse(outcome.stdout).error.code,
+      "upgrade_restart_required",
+    );
+    assert.equal(JSON.parse(outcome.stdout).next, "atrium restart");
+  }
+  assert.equal(existsSync(userTokenPath(data)), false);
+  const status = await cli("auth", "status", "--json");
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).result.upgradeRequired, true);
+});
 
 test(
   "CLI 从任意目录启动 Web、并发复用、保持数据并可重复停止",
@@ -112,7 +196,7 @@ test(
     writeFileSync(join(template, "settings.json"), '{"packages":[]}');
     const response = await fetch(`${url}/api/agents`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...f.userHeaders() },
       body: JSON.stringify({ name: "入口验收", template }),
     });
     assert.equal(response.status, 201);
@@ -133,9 +217,111 @@ test(
     const restarted = readService(f.data)!;
     assert.notEqual(restarted.instance, record.instance);
     const overview = (await (
-      await fetch(`${serviceUrl(restarted)}/api/overview`)
+      await fetch(`${serviceUrl(restarted)}/api/overview`, {
+        headers: f.userHeaders(),
+      })
     ).json()) as { agents: { id: string }[] };
     assert.equal(overview.agents[0]?.id, agent.id);
+  },
+);
+
+test(
+  "CLI 登录、外部推送地址轮换与用户令牌恢复走真实后台服务",
+  { timeout: 45000 },
+  async (t) => {
+    const f = await fixture(t);
+    assert.equal((await f.cli("create", "通知测试")).code, 0);
+    const link = await f.cli("open", "--print");
+    assert.equal(link.code, 0, link.stderr);
+    assert.match(
+      link.stdout.trim(),
+      /^http:\/\/atrium\.localhost:\d+\/auth\/claim\/[a-f0-9]{64}$/,
+    );
+    const claimed = await fetch(link.stdout.trim(), { redirect: "manual" });
+    assert.equal(claimed.status, 302);
+    const cookie = claimed.headers.get("set-cookie")!;
+    const record = readService(f.data)!;
+    assert.equal(
+      (
+        await fetch(`${serviceUrl(record)}/api/overview`, {
+          headers: { cookie },
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await f.cli("stop")).code, 0);
+    assert.equal((await f.cli("--no-open")).code, 0);
+    const restarted = readService(f.data)!;
+    assert.equal(
+      (
+        await fetch(`${serviceUrl(restarted)}/api/overview`, {
+          headers: { cookie },
+        })
+      ).status,
+      200,
+      "a valid browser session survives the controlled service restart",
+    );
+    const first = await f.cli("adapters", "url", "通知测试");
+    assert.equal(first.code, 0, first.stderr);
+    assert.match(
+      first.stdout.trim(),
+      /^http:\/\/atrium\.localhost:\d+\/hooks\/[^/]+\/[a-f0-9]{64}$/,
+    );
+    const post = (address: string) =>
+      fetch(address, {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: "仅可写消息箱",
+      });
+    assert.equal((await post(first.stdout.trim())).status, 200);
+    const second = await f.cli("adapters", "url", "通知测试", "--rotate");
+    assert.equal(second.code, 0, second.stderr);
+    assert.notEqual(first.stdout, second.stdout);
+    assert.equal((await post(first.stdout.trim())).status, 404);
+    assert.equal((await post(second.stdout.trim())).status, 200);
+    assert.equal(
+      (await f.cli("adapters", "url", "通知测试", "--revoke")).code,
+      0,
+    );
+    assert.equal((await post(second.stdout.trim())).status, 404);
+    const rotated = await f.cli("auth", "rotate");
+    assert.equal(rotated.code, 0, rotated.stderr);
+    assert.equal(
+      (
+        await fetch(`${serviceUrl(record)}/api/overview`, {
+          headers: { cookie },
+        })
+      ).status,
+      401,
+    );
+    assert.equal(
+      (await f.cli("list")).code,
+      0,
+      "CLI automatically uses the rotated local token",
+    );
+    const authStatus = await f.cli("auth", "status", "--json");
+    assert.equal(authStatus.code, 0, authStatus.stderr);
+    assert.deepEqual(JSON.parse(authStatus.stdout).result, {
+      user: "u1",
+      scope: "local",
+      service: serviceUrl(record),
+      data: realpathSync(f.data),
+      authenticated: true,
+    });
+    unlinkSync(userTokenPath(f.data));
+    const missing = await f.cli("list", "--json");
+    assert.equal(missing.code, 6, missing.stderr);
+    assert.equal(JSON.parse(missing.stdout).error.code, "auth_required");
+    assert.match(
+      JSON.parse(missing.stdout).error.message,
+      /atrium auth rotate/,
+    );
+    assert.equal(
+      (await f.cli("auth", "rotate")).code,
+      0,
+      "service control restores a lost token",
+    );
+    assert.equal((await f.cli("list")).code, 0);
   },
 );
 
@@ -170,7 +356,11 @@ test(
     assert(elapsed < 12000, `命令启动耗时 ${elapsed}ms，超出 12 秒上限`);
     const record = readService(f.data)!;
     assert.equal(
-      (await fetch(`${serviceUrl(record)}/api/overview`)).status,
+      (
+        await fetch(`${serviceUrl(record)}/api/overview`, {
+          headers: f.userHeaders(),
+        })
+      ).status,
       200,
     );
     for (const directory of directories)
@@ -196,9 +386,9 @@ test(
     f.env.PATH = `${bin}:${process.env.PATH}`;
     const start = await f.cli();
     assert.equal(start.code, 0, start.stderr);
-    assert.equal(
+    assert.match(
       readFileSync(opened, "utf8"),
-      serviceUrl(readService(f.data)!),
+      /^http:\/\/atrium\.localhost:\d+\/auth\/claim\/[a-f0-9]{64}$/,
     );
     writeFileSync(opener, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
     const failedOpen = await f.cli();
@@ -213,9 +403,21 @@ test(
   { timeout: 60000 },
   async (t) => {
     const f = await fixture(t);
-    assert.equal((await f.cli("--no-open")).code, 0);
+    const started = await f.cli("--no-open");
+    assert.equal(started.code, 0, started.stderr || started.stdout);
     const record = readService(f.data)!;
     const url = serviceUrl(record);
+    for (const path of [
+      "/api/service/stop",
+      "/api/service/prepare-restart",
+      "/api/service/probe",
+      "/api/service/wake",
+    ])
+      assert.equal(
+        await declaredBodyWithoutBytes(record.port, path),
+        401,
+        path,
+      );
     const deniedHeaders: Record<string, string>[] = [
       {},
       { authorization: "Bearer wrong" },
@@ -359,7 +561,9 @@ test(
     assert.equal(forked.code, 0, forked.stderr);
     assert.match(forked.stdout, /沈默/);
     const overview = (await (
-      await fetch(`${serviceUrl(readService(f.data)!)}/api/overview`)
+      await fetch(`${serviceUrl(readService(f.data)!)}/api/overview`, {
+        headers: f.userHeaders(),
+      })
     ).json()) as { agents: { ref: string; name: string }[] };
     assert.deepEqual(
       overview.agents.map((a) => [a.ref, a.name]),

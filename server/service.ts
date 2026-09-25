@@ -193,8 +193,7 @@ export async function startService(data: string) {
   if (record && alive(record.pid)) throw unavailable(record, data);
   throw startupFailure(data, "Atrium 启动超时", logStart);
 }
-export async function openWeb(record: ServiceRecord) {
-  const url = serviceUrl(record);
+export async function openWeb(record: ServiceRecord, url = serviceUrl(record)) {
   const [command, args] =
     process.platform === "darwin"
       ? ["open", [url]]

@@ -63,6 +63,7 @@ test("活配置自有规则和笔记；fork 后互不影响；凭据共享、金
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const piHome = join(root, ".pi");
   const { app, store } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     piHome,
@@ -268,6 +269,7 @@ test("默认职责笔记：新身份带上，fork 换回空白，旧身份启动
   );
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const { app } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     piHome: join(root, ".pi"),

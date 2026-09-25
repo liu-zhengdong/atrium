@@ -76,6 +76,8 @@ test("错误修正按类型给具体命令；没有修正时绝不退回 --help"
     3,
   );
   assert.equal(correction("usage"), null);
+  assert.equal(failure(new Problem(401, "认证过期", "auth_required")).exit, 6);
+  assert.equal(correction("auth_required"), "atrium auth rotate");
   assert.equal(correction("usage", "atrium list"), "atrium list");
   const log = join(dataDirectory(), "service.log");
   const service = failure(

@@ -120,6 +120,7 @@ test("用户发言：短号进入投递与回执，名字取资料里的称呼",
 test("user_info 与 /api/user：真实 MCP 只读、坏输入一律拒绝", async (t) => {
   const data = tempDir(t);
   const { app, store } = await createApp({
+    auth: false,
     data,
     runtime: false,
     desktops: join(data, "desktops"),

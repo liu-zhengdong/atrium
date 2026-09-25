@@ -276,7 +276,11 @@ export function AgentConfigPage({
               </button>
             )}
             <p className="text-xs text-muted">外部事件接收口</p>
-            <code className="path">POST /api/agents/{agent.name}/inbox</code>
+            <p className="text-xs text-muted">
+              在本机终端获取仅可投递给此身份的秘密地址；更换时加
+              --rotate，关闭时加 --revoke。
+            </p>
+            <code className="path">atrium adapters url {agent.name}</code>
             {adapters &&
               (adapters.files.length ? (
                 <p className="text-xs text-muted">

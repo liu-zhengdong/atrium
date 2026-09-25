@@ -49,6 +49,7 @@ test("升级移除个人 Pi 链接；未分配启动受阻、通知只记一次�
     async () => {},
   );
   const first = await createApp({
+    auth: false,
     data,
     piHome: join(root, ".pi"),
     desktops: join(root, "desktops"),
@@ -73,6 +74,7 @@ test("升级移除个人 Pi 链接；未分配启动受阻、通知只记一次�
   writeFileSync(join(replacement, "settings.json"), '{"packages":[]}');
   process.env.ATRIUM_PI_TEMPLATE = replacement;
   const { app, store, runtimes } = await createApp({
+    auth: false,
     data,
     piHome: join(root, ".pi"),
     desktops: join(root, "desktops"),

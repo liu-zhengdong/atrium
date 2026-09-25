@@ -41,7 +41,7 @@ test("本机 Claude CLI 登录只登记引用：不能导入密钥，分配与�
     ATRIUM_PI_TEMPLATE: template,
     ATR_TEST_LOGIN: "true",
   });
-  const { app, store } = await createApp({ data, runtime: false });
+  const { app, store } = await createApp({ auth: false, data, runtime: false });
   t.after(async () => {
     await app.close();
     rmSync(root, { recursive: true, force: true });

@@ -21,6 +21,8 @@ export const exitCodes = {
   local_login_unavailable: 4,
   service_unavailable: 5,
   new_session_failed: 5,
+  auth_required: 6,
+  upgrade_restart_required: 7,
   restart_timeout: 124,
   timeout: 124,
 } as const;
@@ -62,6 +64,8 @@ export function correction(code: ErrorCode, usage?: string) {
   if (code === "account_not_found") return "atrium accounts";
   if (code === "unassigned_account") return "atrium account check";
   if (code === "service_unavailable") return "atrium status";
+  if (code === "auth_required") return "atrium auth rotate";
+  if (code === "upgrade_restart_required") return "atrium restart";
   if (code === "restart_rollback" || code === "restart_timeout")
     return "atrium status";
   return null;

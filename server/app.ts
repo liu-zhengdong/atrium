@@ -111,15 +111,19 @@ export async function createApp(options: {
       options.onRoute?.(method, route.url);
   });
   const streams = new Set<import("node:http").ServerResponse>();
-  const waiters = new Set<{ wake: () => void; cancel: () => void }>();
+  const waiters = new Set<{
+    wake: () => void;
+    cancel: (restarting?: boolean) => void;
+  }>();
   const changed = () => {
     for (const waiter of [...waiters]) waiter.wake();
     for (const stream of streams)
       if (!stream.write("event: change\ndata: {}\n\n")) stream.destroy();
   };
-  const revokeSubscriptions = () => {
+  // 吊销（登出/轮换）只结束等待；关闭（重启、更新）额外标 restarting，让新版命令行自动重连。
+  const revokeSubscriptions = (restarting = false) => {
     for (const stream of streams) stream.end();
-    for (const waiter of [...waiters]) waiter.cancel();
+    for (const waiter of [...waiters]) waiter.cancel(restarting);
   };
   const runtimes =
     options.runtime === false
@@ -1194,6 +1198,7 @@ export async function createApp(options: {
     timeout: number,
     check: () => T | null,
     onTimeout: () => T,
+    onClose?: () => T,
   ) {
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -1222,7 +1227,11 @@ export async function createApp(options: {
         reply.raw.destroy();
       }
     };
-    const waiter = { wake, cancel: () => finish(onTimeout()) };
+    const waiter = {
+      wake,
+      cancel: (restarting?: boolean) =>
+        finish(restarting && onClose ? onClose() : onTimeout()),
+    };
     reply.raw.on("close", disconnected);
     waiters.add(waiter);
     timer = setTimeout(() => finish(onTimeout()), timeout * 1000);
@@ -1242,6 +1251,14 @@ export async function createApp(options: {
         return page.items.length ? { ...page, after, timed_out: false } : null;
       },
       () => ({ items: [], has_more: false, after, timed_out: true }),
+      // 关闭：保留 after 与 timed_out（旧版命令行照走 124 加 --after 续等），另标 restarting。
+      () => ({
+        items: [],
+        has_more: false,
+        after,
+        timed_out: true,
+        restarting: true,
+      }),
     );
   });
   app.get("/api/agents/:agent/wait", (request, reply) => {
@@ -1276,6 +1293,13 @@ export async function createApp(options: {
         return { status, finished_at: ended, timed_out: false };
       },
       () => ({ status: state(), finished_at: null, timed_out: true }),
+      // 关闭：状态照报，另标 restarting；重连方会按新的连接状态重新判定。
+      () => ({
+        status: state(),
+        finished_at: null,
+        timed_out: true,
+        restarting: true,
+      }),
     );
   });
   app.patch("/api/chats/:id", (request) => {
@@ -1397,7 +1421,7 @@ export async function createApp(options: {
     });
   }
   app.addHook("preClose", async () => {
-    revokeSubscriptions();
+    revokeSubscriptions(true);
     await runtimes?.close();
   });
   app.addHook("onClose", async () => {

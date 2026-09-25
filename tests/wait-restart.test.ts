@@ -1,0 +1,374 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  alive,
+  packageRoot,
+  readService,
+  serviceUrl,
+} from "../server/service-state.ts";
+import { userTokenPath } from "../server/user-auth.ts";
+import { Problem } from "../server/problem.ts";
+import { reconnectingWait } from "../cli/wait-options.ts";
+
+const exec = promisify(execFile);
+
+async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
+  const root = mkdtempSync(join(tmpdir(), "atrium-wait198-"));
+  const data = join(root, "data");
+  const socket = createServer();
+  await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
+  const port = (socket.address() as { port: number }).port;
+  await new Promise<void>((resolve) => socket.close(() => resolve()));
+  const builtin = join(root, "pi-template");
+  mkdirSync(builtin);
+  writeFileSync(
+    join(builtin, "settings.json"),
+    JSON.stringify({ packages: [] }),
+  );
+  writeFileSync(join(builtin, "SYSTEM.md"), "builtin rules");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ATRIUM_DATA: data,
+    ATRIUM_PORT: String(port),
+    ATRIUM_DESKTOPS: join(root, "desktops"),
+    ATRIUM_PI_HOME: join(root, ".pi"),
+    ATRIUM_PI_TEMPLATE: builtin,
+    PI_ACP_DIR: join(root, "acp"),
+  };
+  const cli = async (...args: string[]) => {
+    try {
+      const output = await exec(
+        process.execPath,
+        [join(packageRoot, "bin/atrium.mjs"), ...args],
+        { env, cwd: root, timeout: 25000 },
+      );
+      return { ...output, code: 0 };
+    } catch (error) {
+      const failure = error as Error & {
+        stdout: string;
+        stderr: string;
+        code: number;
+      };
+      return {
+        stdout: failure.stdout,
+        stderr: failure.stderr,
+        code: failure.code,
+      };
+    }
+  };
+  t.after(async () => {
+    await cli("stop");
+    const record = readService(data);
+    if (record && record.pid !== process.pid && alive(record.pid))
+      process.kill(record.pid, "SIGKILL");
+    rmSync(root, { recursive: true, force: true });
+  });
+  const headers = () => ({
+    authorization: `Bearer ${readFileSync(userTokenPath(data), "utf8").trim()}`,
+    "content-type": "application/json",
+  });
+  const base = () => `${serviceUrl(readService(data)!)}/api`;
+  const send = async (chatId: string, body: string) => {
+    const response = await fetch(`${base()}/messages`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ chat_id: chatId, body }),
+    });
+    const value = (await response.json()) as { id: number };
+    assert.ok(value.id, `发送失败：${JSON.stringify(value)}`);
+    return value.id;
+  };
+  const ensureChat = async () => {
+    await cli("list"); // 拉起服务
+    const agent = await fetch(`${base()}/agents`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ name: "等待角色" }),
+    }).then((r) => r.json() as Promise<{ agent: { id: string } }>);
+    const chat = await fetch(`${base()}/chats`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ name: "等待群", members: [agent.agent.id] }),
+    }).then((r) => r.json() as Promise<{ id: string; ref: string }>);
+    return { chat, agent: agent.agent };
+  };
+  const spawnWait = (args: string[]) =>
+    spawn(
+      process.execPath,
+      [join(packageRoot, "bin/atrium.mjs"), "wait", ...args],
+      { env, cwd: root, stdio: ["ignore", "pipe", "pipe"] },
+    );
+  const untilReady = async () => {
+    for (let i = 0; i < 60; i++) {
+      try {
+        const r = await fetch(`${base()}/overview`, { headers: headers() });
+        if (r.ok) return;
+      } catch {
+        /* 服务还没起来 */
+      }
+      await delay(200);
+    }
+    throw new Error("服务没有恢复");
+  };
+  return {
+    root,
+    data,
+    env,
+    cli,
+    headers,
+    base,
+    send,
+    ensureChat,
+    spawnWait,
+    untilReady,
+  };
+}
+
+test("关闭时的等待结果与超时可区分，after 保留（旧版照走 124）", async (t) => {
+  const f = await fixture(t);
+  const { chat } = await f.ensureChat();
+  await send0(f, chat.id, "起点");
+  const cursor = 1;
+  const hanging = fetch(
+    `${f.base()}/chats/${chat.id}/wait?timeout=60&after=${cursor}`,
+    { headers: f.headers() },
+  );
+  await delay(500);
+  await f.cli("restart");
+  const body = (await hanging.then((r) => r.json())) as Record<string, unknown>;
+  assert.equal(body.restarting, true, "关闭要带 restarting");
+  assert.equal(body.timed_out, true, "保留 timed_out，旧版命令行照走 124");
+  assert.equal(body.after, cursor, "保留 after，旧版能带游标续等");
+  await f.untilReady();
+  // 真超时：没有 restarting
+  const timedOut = await fetch(
+    `${f.base()}/chats/${chat.id}/wait?timeout=1&after=${cursor}`,
+    { headers: f.headers() },
+  ).then((r) => r.json() as Promise<Record<string, unknown>>);
+  assert.equal(timedOut.timed_out, true);
+  assert.ok(!("restarting" in timedOut), "超时不带 restarting");
+});
+
+test("重启接续：两条消息都输出、退出码 0、单个 JSON、游标不漏不重", async (t) => {
+  const f = await fixture(t);
+  const { chat } = await f.ensureChat();
+  await send0(f, chat.id, "起点");
+  const child = f.spawnWait([chat.ref, "--timeout", "60", "--json"]);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += String(d)));
+  child.stderr.on("data", (d) => (stderr += String(d)));
+  const exited = new Promise<number>((resolve) =>
+    child.on("exit", (code) => resolve(code ?? -1)),
+  );
+  await delay(1500);
+  await f.cli("restart");
+  // 等到「被踢」提示，再冻结它，让两条消息都先落库
+  for (let i = 0; i < 100 && !stderr.includes("服务重启或断开"); i++)
+    await delay(200);
+  assert.match(stderr, /服务重启或断开/, "应提示重连（stderr 一行）");
+  child.kill("SIGSTOP");
+  const suffix = Date.now();
+  const sendRetry = async (body: string) => {
+    for (let i = 0; i < 80; i++) {
+      try {
+        return await f.send(chat.id, body);
+      } catch {
+        await delay(300);
+      }
+    }
+    throw new Error("消息没能送达服务");
+  };
+  const [a, b] = await Promise.all([
+    sendRetry(`重启期间A-${suffix}`),
+    sendRetry(`重启后B-${suffix}`),
+  ]);
+  child.kill("SIGCONT");
+  const code = await exited;
+  const elapsedNote = stderr.trim().split("\n");
+  assert.equal(code, 0, `stdout=${stdout} stderr=${stderr}`);
+  assert.equal(
+    elapsedNote.filter((l) => l.includes("服务重启或断开")).length,
+    1,
+  );
+  const trimmed = stdout.trim();
+  assert.ok(
+    trimmed.startsWith("{") && trimmed.endsWith("}"),
+    "stdout 只有一个 JSON",
+  );
+  const outer = JSON.parse(trimmed) as {
+    ok: boolean;
+    result: {
+      items: { id: number; body: string }[];
+      after: number;
+      timed_out: boolean;
+      restarting?: boolean;
+    };
+    next: string | null;
+  };
+  assert.equal(outer.ok, true);
+  const result = outer.result;
+  assert.equal(result.timed_out, false);
+  const bodies = result.items.map((i) => i.body);
+  assert.ok(
+    bodies.some((x) => x.includes(`重启期间A-${suffix}`)),
+    "重启期间的消息要输出",
+  );
+  assert.ok(
+    bodies.some((x) => x.includes(`重启后B-${suffix}`)),
+    "重启后的消息要输出",
+  );
+  const ids = result.items.map((i) => i.id);
+  assert.deepEqual(
+    [...ids].sort((x, y) => x - y),
+    ids,
+    "按 id 升序",
+  );
+  assert.equal(new Set(ids).size, ids.length, "不重复");
+  assert.equal(
+    ids[0],
+    Math.min(a, b),
+    `游标不漏：${JSON.stringify({ a, b, ids })}`,
+  );
+  assert.equal(
+    outer.next,
+    `atrium wait ${chat.ref} --after ${Math.max(a, b)}`,
+    "回执里的续等命令指向最后一条消息",
+  );
+});
+
+test("服务停着不回来：退出码 5，给出的续等命令照抄就能用", async (t) => {
+  const f = await fixture(t);
+  const { chat } = await f.ensureChat();
+  const last = await send0(f, chat.id, "起点");
+  const child = f.spawnWait([chat.ref, "--timeout", "6"]);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += String(d)));
+  child.stderr.on("data", (d) => (stderr += String(d)));
+  const exited = new Promise<number>((resolve) =>
+    child.on("exit", (code) => resolve(code ?? -1)),
+  );
+  await delay(1500);
+  await f.cli("stop");
+  const code = await exited;
+  assert.equal(code, 5, `stderr=${stderr}`);
+  assert.match(stderr, /服务在 6 秒内没有恢复/);
+  const resume = stderr.match(/修正：(atrium wait [^\n]+)/);
+  assert.ok(resume, `要给续等命令：${stderr}`);
+  assert.match(resume[1]!, new RegExp(`--after ${last}`));
+  // 照抄执行：服务会被自动拉起，随后消息到达即退出 0
+  const args = resume[1]!.replace(/^atrium wait /, "").split(" ");
+  const again = f.spawnWait(args);
+  let againOut = "";
+  again.stdout.on("data", (d) => (againOut += String(d)));
+  const againExited = new Promise<number>((resolve) =>
+    again.on("exit", (code) => resolve(code ?? -1)),
+  );
+  for (let i = 0; i < 80; i++) {
+    try {
+      await f.send(chat.id, "续等后到达");
+      break;
+    } catch {
+      await delay(300);
+    }
+  }
+  const againCode = await againExited;
+  assert.equal(againCode, 0, `续等命令失败：${againOut}`);
+  assert.match(againOut, /续等后到达/);
+});
+
+test("reconnectingWait：断连与 restarting 都重连，耗尽给 503 与续等命令", async () => {
+  // a) restarting → 带服务端游标重连后成功
+  const calls: number[] = [];
+  let first = true;
+  const ok = await reconnectingWait<{ after: number; restarting?: boolean }>({
+    seconds: 5,
+    cursor: 7,
+    request: async (timeout, cursor) => {
+      calls.push(timeout);
+      if (first) {
+        first = false;
+        assert.equal(cursor, 7);
+        return { after: 9, restarting: true, timed_out: true } as never;
+      }
+      assert.equal(cursor, 9, "重连要用服务端返回的游标");
+      assert.ok(timeout <= 5, "超时按剩余时间递减");
+      return { after: 12 } as never;
+    },
+    restarting: (r) => r.restarting === true,
+    nextCursor: (r) => r.after,
+    resume: (cursor) => `atrium wait c1 --after ${cursor}`,
+  });
+  assert.equal(ok.after, 12);
+  assert.equal(calls.length, 2);
+  // b) 断连（503）→ 重连成功
+  let attempt = 0;
+  const ok2 = await reconnectingWait<{ after: number }>({
+    seconds: 5,
+    request: async () => {
+      attempt += 1;
+      if (attempt === 1)
+        throw new Problem(503, "连接被拒绝", "service_unavailable");
+      return { after: 3 };
+    },
+    restarting: () => false,
+    resume: () => "atrium wait c1 --after 1",
+  });
+  assert.equal(ok2.after, 3);
+  assert.equal(attempt, 2);
+  // c) 一直不回来 → 503 + 可执行的续等命令
+  await assert.rejects(
+    () =>
+      reconnectingWait<{ after: number }>({
+        seconds: 1,
+        cursor: 5,
+        request: async () => {
+          throw new Problem(503, "连接被拒绝", "service_unavailable");
+        },
+        restarting: () => false,
+        resume: (cursor) => `atrium wait c1 --after ${cursor}`,
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof Problem);
+      assert.equal(error.code, "service_unavailable");
+      assert.equal(error.statusCode, 503);
+      assert.equal(error.nextCommand, "atrium wait c1 --after 5");
+      return true;
+    },
+  );
+  // d) 非断连错误原样抛出
+  await assert.rejects(
+    () =>
+      reconnectingWait<{ after: number }>({
+        seconds: 5,
+        request: async () => {
+          throw new Problem(400, "参数错了", "usage");
+        },
+        restarting: () => false,
+        resume: () => "atrium wait c1",
+      }),
+    (error: unknown) => error instanceof Problem && error.code === "usage",
+  );
+});
+
+async function send0(
+  f: Awaited<ReturnType<typeof fixture>>,
+  chatId: string,
+  body: string,
+) {
+  return f.send(chatId, body);
+}

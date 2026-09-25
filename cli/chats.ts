@@ -24,6 +24,7 @@ import {
   nextMessage,
   nextTrace,
   readBounds,
+  reconnectingWait,
   waitOptions,
 } from "./wait-options.ts";
 
@@ -190,11 +191,18 @@ const wait: Command = {
     const view = await roster(client);
     if (idle) {
       const agent = findAgent(view, reference!);
-      const result = await client.get<{
+      const result = await reconnectingWait<{
         status: "idle" | "offline" | "busy";
         finished_at: number | null;
         timed_out: boolean;
-      }>(`/agents/${agent.id}/wait?timeout=${seconds}`);
+        restarting?: boolean;
+      }>({
+        seconds,
+        request: (timeout) =>
+          client.get(`/agents/${agent.id}/wait?timeout=${timeout}`),
+        restarting: (result) => result.restarting === true,
+        resume: () => `atrium wait ${agent.ref} --idle`,
+      });
       const next = nextTrace(agent.ref);
       recordNext(next);
       if (json) {
@@ -209,11 +217,23 @@ const wait: Command = {
       return result.timed_out ? 124 : 0;
     }
     const chat = await targetChat(client, view, reference!);
-    const query = new URLSearchParams({ timeout: String(seconds) });
-    if (cursor !== undefined) query.set("after", String(cursor));
-    const result = await client.get<
-      MessagePage & { after: number; timed_out: boolean }
-    >(`/chats/${chat.id}/wait?${query}`);
+    const result = await reconnectingWait<
+      MessagePage & { after: number; timed_out: boolean; restarting?: boolean }
+    >({
+      seconds,
+      cursor,
+      request: (timeout, cursor) => {
+        const query = new URLSearchParams({ timeout: String(timeout) });
+        if (cursor !== undefined) query.set("after", String(cursor));
+        return client.get(`/chats/${chat.id}/wait?${query}`);
+      },
+      restarting: (result) => result.restarting === true,
+      nextCursor: (result) => result.after,
+      resume: (cursor) =>
+        cursor === undefined
+          ? `atrium wait ${chat.ref}`
+          : `atrium wait ${chat.ref} --after ${cursor}`,
+    });
     const last = result.items.at(-1)?.id ?? result.after;
     recordNext(
       result.has_more

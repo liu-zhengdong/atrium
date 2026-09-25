@@ -65,7 +65,7 @@ test("一次性过渡仅分配共享 Claude bridge；保留其他身份及人工
     assigned.id,
   );
   store.close();
-  const boot = async () => createApp({ data, runtime: false });
+  const boot = async () => createApp({ auth: false, data, runtime: false });
   const first = await boot();
   assert.equal(hasAssignment(first.store, local.id), true);
   assert.equal(hasAssignment(first.store, other.id), false);

@@ -65,7 +65,7 @@ test("supervisor 状态读写正确保持持久化", () => {
 test("回滚告警在用户概览中可见，下一次成功后消失", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-rollback-ui-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const { app } = await createApp({ data: dir, runtime: false });
+  const { app } = await createApp({ auth: false, data: dir, runtime: false });
   t.after(() => app.close());
   const state = {
     id: "rst-ui",

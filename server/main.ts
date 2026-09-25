@@ -92,6 +92,7 @@ try {
   ({ app, runtimes, store } = await createApp({
     data,
     webRoot: join(packageRoot, "dist"),
+    controlToken: lease.record.token,
   }));
   const authorize = (value: string | undefined) => {
     const actual = Buffer.from(value ?? "");

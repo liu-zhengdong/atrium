@@ -396,6 +396,7 @@ test("既有库升级：附件补上 chat_id，暂存未发送的留空", (t) =>
 test("聊天记录接口：短号解析、越权与坏输入拒绝", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-records-api-"));
   const { app, store } = await createApp({
+    auth: false,
     data,
     runtime: false,
     desktops: join(data, "desktops"),

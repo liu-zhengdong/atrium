@@ -44,7 +44,7 @@ test("临时实例不建账号；旧记录兼容关联、并发点击与重启",
     return { runtimes: items };
   });
   const pump = t.mock.method(Runtimes.prototype, "pump", async () => {});
-  const { app, store, runtimes } = await createApp({ data });
+  const { app, store, runtimes } = await createApp({ auth: false, data });
   t.after(async () => {
     await app.close();
     rmSync(data, { recursive: true, force: true });
@@ -229,6 +229,7 @@ test("发现边界：过滤 RPC 与凭据；坏登记、伪造 ID、无效新建
     throw new Error("fixture startup failure");
   });
   const { app, store, runtimes } = await createApp({
+    auth: false,
     data,
     desktops: join(data, "desktops"),
     piHome: join(data, ".pi"),

@@ -440,6 +440,7 @@ test("十万条消息：未读封顶 99+，会话列表与未读摘要不随规�
 async function appFixture(t: { after: (fn: () => Promise<void>) => void }) {
   const data = mkdtempSync(join(tmpdir(), "atrium-test-"));
   const result = await createApp({
+    auth: false,
     data,
     runtime: false,
     desktops: join(data, "desktops"),

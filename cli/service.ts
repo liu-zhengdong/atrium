@@ -6,6 +6,7 @@ import {
 import { startService } from "../server/service.ts";
 import { Problem } from "../server/problem.ts";
 import { recordResult } from "./contract.ts";
+import { userBearer } from "./auth.ts";
 
 export type Client = ReturnType<typeof client>;
 
@@ -27,10 +28,10 @@ export async function connect(quietStart = false): Promise<Client> {
     console.error(
       `Atrium 服务已在后台启动 · PID ${record.pid} · ${serviceUrl(record)} · 停止：atrium stop`,
     );
-  return client(serviceUrl(record));
+  return client(serviceUrl(record), data);
 }
 
-function client(base: string) {
+function client(base: string, data: string) {
   async function call<T>(
     method: string,
     path: string,
@@ -39,11 +40,14 @@ function client(base: string) {
   ): Promise<T> {
     const response = await fetch(`${base}/api${path}`, {
       method,
-      headers: raw
-        ? raw.headers
-        : body === undefined
-          ? {}
-          : { "content-type": "application/json" },
+      headers: {
+        ...(raw
+          ? raw.headers
+          : body === undefined
+            ? {}
+            : { "content-type": "application/json" }),
+        authorization: userBearer(data),
+      },
       // Node 的 fetch 接受 Uint8Array 做请求体，DOM 的类型声明没跟上。
       body: raw
         ? (raw.bytes as unknown as BodyInit)

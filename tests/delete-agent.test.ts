@@ -49,6 +49,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
   });
   const piHome = join(root, ".pi");
   const { app, store, runtimes } = await createApp({
+    auth: false,
     data,
     desktops: join(root, "desktops"),
     piHome,
@@ -235,6 +236,7 @@ test("运行、未发现的具名占用、未知状态与并发启动均拒绝�
   });
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const { app, store, runtimes } = await createApp({
+    auth: false,
     data: join(root, "data"),
     piHome: join(root, ".pi"),
   });
@@ -345,6 +347,7 @@ test(
     t.mock.method(transport, "rpc", async () => ({ runtimes: [] }));
     t.mock.method(Runtimes.prototype, "pump", async () => {});
     const { app, store, runtimes } = await createApp({
+      auth: false,
       data,
       piHome: join(root, ".pi"),
     });
@@ -426,6 +429,7 @@ test("身份启动占用仍记录故障并显示在名册", async (t) => {
     }),
   );
   const { app, store, runtimes } = await createApp({
+    auth: false,
     data,
     piHome: join(root, ".pi"),
     desktops: join(root, "desktops"),

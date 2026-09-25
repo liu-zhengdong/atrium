@@ -17,6 +17,8 @@ export async function api<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const value = await response.json();
+  if (response.status === 401)
+    window.dispatchEvent(new Event("atrium:auth-required"));
   if (!response.ok)
     throw new Error(value.error ?? `请求失败（${response.status}）`);
   return value;

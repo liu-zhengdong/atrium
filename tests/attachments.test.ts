@@ -163,6 +163,7 @@ test("HTTP 上传、下载、删除未发送附件；发送后可取回原字节
   const root = mkdtempSync(join(tmpdir(), "atrium-att-http-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const { app, store } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     runtime: false,

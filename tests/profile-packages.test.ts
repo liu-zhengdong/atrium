@@ -126,6 +126,7 @@ test("创建身份解析已安装的 git 包，并注入本应用的 pi-atrium",
   );
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const { app } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     piHome: join(root, ".pi"),

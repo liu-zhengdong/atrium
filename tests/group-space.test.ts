@@ -142,7 +142,7 @@ test("读文件只认目录内的相对路径：破坏输入逐个被拒", (t) =
 
 test("HTTP：列文件、按扩展名给安全类型，直接打开也不跑脚本", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-space-http-"));
-  const { app, store } = await createApp({ data, runtime: false });
+  const { app, store } = await createApp({ auth: false, data, runtime: false });
   t.after(async () => {
     await app.close();
     rmSync(data, { recursive: true, force: true });

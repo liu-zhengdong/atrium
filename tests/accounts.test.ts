@@ -611,6 +611,7 @@ test("Antigravity sidecar is required, copied and recovered with a newer credent
 test("assign HTTP replaces one provider in one request and rolls back failed replacements", async () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-account-swap-"));
   const { app, store } = await createApp({
+    auth: false,
     data: dir,
     runtime: false,
     piHome: dir,
@@ -709,6 +710,7 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
 test("account HTTP responses omit credentials even on malformed stored JSON", async () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-account-http-"));
   const { app, store } = await createApp({
+    auth: false,
     data: dir,
     runtime: false,
     piHome: dir,

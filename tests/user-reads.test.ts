@@ -50,6 +50,7 @@ test("会话归属与未读：我的私聊计数、围观会话只报动态、�
 test("用户建群立即进入我的；身份建群仍是围观", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-user-group-"));
   const { app, store } = await createApp({
+    auth: false,
     data,
     runtime: false,
     desktops: join(data, "desktops"),
@@ -83,6 +84,7 @@ test("用户建群立即进入我的；身份建群仍是围观", async (t) => {
 test("已读接口：短号解析、单调推进、越过最新消息截断", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-reads-"));
   const { app, store } = await createApp({
+    auth: false,
     data,
     runtime: false,
     desktops: join(data, "desktops"),

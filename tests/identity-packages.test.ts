@@ -224,6 +224,7 @@ test("服务启动不迁移共享插件；仅身份启动时迁移，失败保�
     if (text.includes("个人 Pi 插件已转为")) logs.push(text);
   });
   const { app, store: activeStore } = await createApp({
+    auth: false,
     data,
     piHome: join(root, "pi"),
     desktops: join(root, "desktops"),
@@ -354,6 +355,7 @@ test("HTTP 默认配置与身份插件 API 只改目标身份；无效和内置�
   );
   t.mock.method(Runtimes.prototype, "pump", async () => {});
   const { app } = await createApp({
+    auth: false,
     data: join(root, "data"),
     desktops: join(root, "desktops"),
     piHome: join(root, "pi"),

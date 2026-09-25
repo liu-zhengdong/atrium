@@ -45,6 +45,8 @@ import {
   updateGroup,
 } from "./groups.ts";
 import { fileRecords, messageRecords, recordQuery } from "./records.ts";
+import { UserAuth } from "./user-auth.ts";
+import { RunnerAuth } from "./runner-auth.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import {
@@ -76,6 +78,9 @@ export async function createApp(options: {
   runtime?: boolean;
   desktops?: string;
   piHome?: string;
+  controlToken?: string;
+  /** Existing domain tests disable user auth explicitly; production never sets this. */
+  auth?: boolean;
 }) {
   const desktops = options.desktops ?? defaultDesktops();
   const piHome = options.piHome;
@@ -85,6 +90,8 @@ export async function createApp(options: {
     mode: 0o700,
   });
   const store = new Store(join(options.data, "atrium.sqlite"));
+  const auth = new UserAuth(store, options.data);
+  const runnerAuth = new RunnerAuth(store);
   const accounts = new Accounts(store, options.data);
   removeSharedLinks(store);
   if (options.runtime !== false) {
@@ -101,6 +108,10 @@ export async function createApp(options: {
     for (const waiter of [...waiters]) waiter.wake();
     for (const stream of streams)
       if (!stream.write("event: change\ndata: {}\n\n")) stream.destroy();
+  };
+  const revokeSubscriptions = () => {
+    for (const stream of streams) stream.end();
+    for (const waiter of [...waiters]) waiter.cancel();
   };
   const runtimes =
     options.runtime === false
@@ -165,7 +176,9 @@ export async function createApp(options: {
     });
     // Credential JSON parse failures can include a slice of the token in their exception.
     if (status >= 500) {
-      if (/^\/api\/(accounts|assign|credentials)(\/|$)/.test(request.url))
+      if (/^\/(hooks|auth)(\/|$)/.test(request.url))
+        app.log.error("认证或推送处理失败（秘密 URL 已隐藏）");
+      else if (/^\/api\/(accounts|assign|credentials)(\/|$)/.test(request.url))
         app.log.error("账号操作失败（详情已隐藏，避免凭据进入日志）");
       else app.log.error(error);
     }
@@ -180,7 +193,11 @@ export async function createApp(options: {
     } catch {
       throw new Problem(403, "不接受此 Host");
     }
-    if (!["localhost", "127.0.0.1", "[::1]"].includes(hostname))
+    if (
+      !["localhost", "atrium.localhost", "127.0.0.1", "[::1]"].includes(
+        hostname,
+      )
+    )
       throw new Problem(403, "管理入口仅面向本机");
     const origin = request.headers.origin;
     if (origin) {
@@ -193,6 +210,104 @@ export async function createApp(options: {
       if (host !== request.headers.host)
         throw new Problem(403, "不接受跨站请求");
     }
+    if (options.auth === false) return;
+    const path = request.url.split("?", 1)[0]!;
+    // Service control and identity MCP have distinct existing credentials.
+    // Only the narrow public webhook and one-use login claim bypass user auth.
+    if (
+      !path.startsWith("/api/") ||
+      path.startsWith("/api/service/") ||
+      path === "/api/service" ||
+      path === "/api/auth/rotate" ||
+      path === "/api/auth/session" ||
+      path.startsWith("/hooks/")
+    )
+      return;
+    if (auth.validUser(request.headers.authorization)) return;
+    if (auth.validSession(request.headers.cookie)) {
+      reply.header("Set-Cookie", auth.refreshCookie(request.headers.cookie));
+      return;
+    }
+    throw new Problem(
+      401,
+      request.headers.authorization || request.headers.cookie
+        ? "用户认证失效；请运行 atrium auth rotate（确认 ATRIUM_DATA 指向当前数据目录）"
+        : "服务已升级，请重新运行命令；若仍失败，请运行 atrium auth rotate（确认 ATRIUM_DATA 指向当前数据目录）",
+      "auth_required",
+      undefined,
+      "atrium auth rotate",
+    );
+  });
+  app.get("/api/runners", () => runnerAuth.list());
+  app.post("/api/runners", (request) => {
+    const input = z
+      .object({
+        name: z.string().trim().min(1).max(100),
+        tokenHash: z.string().regex(/^[a-f0-9]{64}$/),
+      })
+      .parse(request.body);
+    return runnerAuth.issue(input.name, input.tokenHash);
+  });
+  app.post("/api/runners/:ref/rotate", (request) => {
+    const { ref } = request.params as { ref: string };
+    const { tokenHash } = z
+      .object({ tokenHash: z.string().regex(/^[a-f0-9]{64}$/) })
+      .parse(request.body);
+    return runnerAuth.rotate(ref, tokenHash);
+  });
+  app.post("/api/runners/:ref/revoke", (request) => {
+    runnerAuth.revoke((request.params as { ref: string }).ref);
+    return { revoked: true };
+  });
+  app.get("/api/auth/session", (request) => ({
+    authenticated: auth.validSession(request.headers.cookie),
+  }));
+  app.post("/api/auth/link", () => ({ code: auth.issueCode() }));
+  app.get("/auth/claim/:code", (request, reply) => {
+    if (
+      new URL(`http://${request.headers.host}`).hostname !== "atrium.localhost"
+    )
+      throw new Problem(403, "请用 atrium open 获取本机登录链接");
+    const code = z
+      .object({ code: z.string().regex(/^[a-f0-9]{64}$/) })
+      .parse(request.params).code;
+    try {
+      reply.header("Set-Cookie", auth.claimCode(code));
+      return reply.redirect("/");
+    } catch (error) {
+      if (!(error instanceof Problem) || error.statusCode !== 401) throw error;
+      return reply.code(401).type("text/html; charset=utf-8")
+        .send(`<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录链接已失效 · Atrium</title>
+<main style="max-width:28rem;margin:18vh auto;padding:2rem;font:16px/1.7 system-ui,sans-serif;color:#222">
+<h1>登录链接已失效</h1><p>请在终端重新运行 <code>atrium open</code> 获取新链接。</p>
+</main></html>`);
+    }
+  });
+  app.post("/api/auth/logout", (_request, reply) => {
+    auth.logout();
+    revokeSubscriptions();
+    reply.header("Set-Cookie", auth.clearCookie());
+    return { ok: true };
+  });
+  app.post("/api/auth/rotate", (request) => {
+    const authorization = request.headers.authorization;
+    const control = options.controlToken;
+    if (
+      !auth.validUser(authorization) &&
+      !(control && authorization === `Bearer ${control}`)
+    )
+      throw new Problem(
+        401,
+        "用户或实例控制凭据无效",
+        "auth_required",
+        undefined,
+        "atrium auth rotate",
+      );
+    auth.rotate();
+    revokeSubscriptions();
+    return { rotated: true };
   });
   const agentParams = (request: FastifyRequest) =>
     z.object({ id }).parse(request.params).id;
@@ -824,6 +939,49 @@ export async function createApp(options: {
     if (result.stored) changed();
     return result;
   });
+  app.post("/hooks/:ref/:token", async (request, reply) => {
+    const params = z
+      .object({ ref: z.string().regex(/^a[1-9][0-9]*$/), token: z.string() })
+      .parse(request.params);
+    let agentId: string;
+    try {
+      agentId = store.resolveAgentId(params.ref);
+    } catch {
+      return reply.code(404).send({ error: "推送地址无效" });
+    }
+    if (!auth.validHook(agentId, params.token))
+      return reply.code(404).send({ error: "推送地址无效" });
+    const result = await receiveInbox(store, store.agent(agentId), {
+      headers: request.headers,
+      query: request.query,
+      body: request.body,
+    });
+    if (result.stored) changed();
+    return result;
+  });
+  app.get("/api/agents/:ref/adapters/url", (request) => {
+    const agentId = store.resolveAgentId(accountRef(request));
+    return {
+      agent: store.agentRef(agentId),
+      tokenHash: auth.hookHash(agentId),
+    };
+  });
+  app.put("/api/agents/:ref/adapters/url", (request) => {
+    const agentId = store.resolveAgentId(accountRef(request));
+    const { tokenHash } = z
+      .object({
+        tokenHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .nullable(),
+      })
+      .parse(request.body);
+    auth.setHook(agentId, tokenHash);
+    return {
+      agent: store.agentRef(agentId),
+      tokenHash: auth.hookHash(agentId),
+    };
+  });
   app.get("/api/agents/:ref/adapters", (request) => {
     const { ref } = request.params as { ref: string };
     return listAdapters(store.agent(store.resolveAgentId(ref)));
@@ -1203,13 +1361,12 @@ export async function createApp(options: {
     });
   }
   app.addHook("preClose", async () => {
-    for (const stream of streams) stream.end();
-    for (const waiter of [...waiters]) waiter.cancel();
+    revokeSubscriptions();
     await runtimes?.close();
   });
   app.addHook("onClose", async () => {
     await accounts.close();
     store.close();
   });
-  return { app, store, runtimes, pendingWaits: () => waiters.size };
+  return { app, store, runnerAuth, runtimes, pendingWaits: () => waiters.size };
 }

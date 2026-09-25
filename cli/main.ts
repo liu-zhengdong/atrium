@@ -5,6 +5,8 @@ import { pad, width } from "./format.ts";
 import { agentCommands } from "./agents.ts";
 import { chatCommands } from "./chats.ts";
 import { accountCommands } from "./accounts.ts";
+import { authCommands } from "./auth.ts";
+import { runnerCommands } from "./runners.ts";
 import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
@@ -86,6 +88,8 @@ export const commands: Record<string, Command> = {
   ...chatCommands,
   connect: connectCommand,
   ...accountCommands,
+  ...authCommands,
+  ...runnerCommands,
   ...pluginCommands,
   ...resourceCommands,
   update: updateCommand,
@@ -94,6 +98,7 @@ export const commands: Record<string, Command> = {
 const service: [usage: string, about: string][] = [
   ["atrium", "启动或复用后台服务，打开 Web"],
   ["atrium --no-open", "启动或复用服务，仅输出地址"],
+  ["atrium open", "生成一次性登录链接并打开 Web；--print 仅打印链接"],
   ["atrium status", "查看服务状态、地址和数据目录"],
   ["atrium stop", "停止服务及其托管的 Agent，保留数据"],
   ["atrium restart", "平滑重启服务，保持运行状态并自动回滚失败"],
@@ -147,7 +152,10 @@ export async function main(argv: string[]): Promise<number> {
         console.log(
           `Atrium → ${serviceUrl(record)}\n服务已就绪 · PID ${record.pid}\n数据：${data}`,
         );
-        if (name === undefined) await openWeb(record);
+        if (name === undefined) {
+          const { loginLink } = await import("./auth.ts");
+          await openWeb(record, await loginLink(data, record));
+        }
         return 0;
       }
       if (["--help", "-h", "help"].includes(name)) {
@@ -171,7 +179,12 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       subcommand =
-        name === "account" || name === "plugin" || name === "skill"
+        name === "account" ||
+        name === "auth" ||
+        name === "runner" ||
+        name === "adapters" ||
+        name === "plugin" ||
+        name === "skill"
           ? `${name} ${rest.shift() ?? ""}`.trim()
           : name;
       const command = commands[subcommand];

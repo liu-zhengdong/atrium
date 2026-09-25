@@ -324,6 +324,7 @@ test("移出成员：撤销读写、收回提醒、回执不再列出，坏输�
 test("群接口与工具边界：HTTP 坏输入拒绝，@ 全体不出现在 Agent 工具里", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-group-"));
   const { app, store } = await createApp({
+    auth: false,
     data,
     runtime: false,
     desktops: join(data, "desktops"),

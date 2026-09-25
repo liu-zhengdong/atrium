@@ -143,7 +143,16 @@ atrium restart --probe-agent a1              # 可选：再用指定身份做一
 
 身份用哪个模型由用户设定，写在身份目录的 `settings.json`；Web 的 Agent 详情里也能改。在跑的身份当场生效，离线的下次启动生效；启动时把配置的模型作为启动参数传给 Pi，所以旧会话里记着的模型不会把它盖回去。可选清单来自这个身份运行中的 Pi，离线时用上次取到的；不在清单里的模型直接拒绝。Agent 自己的工具面不含改模型。
 
-正式安装使用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`（将 `x` 换成已发布的补丁号），不使用 npm registry。每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。旧服务等当前回合结束并同步最后的轨迹后才停；排空超时会列出仍在工作的身份，旧服务保持运行，可在回合结束后重试。排空期限与 `--wait --timeout` 的等待结果期限彼此独立，长回合需要相应调整两者。重启健康检查验证服务与 MCP 网关就绪，不以模型凭据、供应商可用性作为默认门槛；要验证真实身份回合时显式加 `--probe-agent <身份短号>`。失败时自动安装原版本并重新启动；回滚原因显示在用户网页的顶部告警中，Agent 也会收到消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。
+正式安装从 GitHub 标签打包后安装，与 `atrium update` 走同一条路径，不使用 npm registry（将 `x` 换成已发布的补丁号）：
+
+```bash
+git clone --depth 1 --branch v0.1.x https://github.com/liu-zhengdong/atrium.git /tmp/atrium-src
+cd /tmp/atrium-src && npm pack && npm install -g ./atrium-0.1.x.tgz
+```
+
+不要用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`：npm 11 会在依赖的安装脚本处报 `spawn sh ENOENT`。原来用 `npm link` 的，先执行 `npm rm -g atrium`，否则 npm 无法覆盖链接。之后升级用 `atrium update`。
+
+每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。旧服务等当前回合结束并同步最后的轨迹后才停；排空超时会列出仍在工作的身份，旧服务保持运行，可在回合结束后重试。排空期限与 `--wait --timeout` 的等待结果期限彼此独立，长回合需要相应调整两者。重启健康检查验证服务与 MCP 网关就绪，不以模型凭据、供应商可用性作为默认门槛；要验证真实身份回合时显式加 `--probe-agent <身份短号>`。失败时自动安装原版本并重新启动；回滚原因显示在用户网页的顶部告警中，Agent 也会收到消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。
 
 未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置为 `~/.pi/atrium/data/`，不放在会被 npm 更新替换的安装目录，也不会随终端工作目录变化。原本在开发仓库 `.atrium/` 的用户数据须在切换全局安装之前停服迁移，或给新服务显式设置 `ATRIUM_DATA` 指向原目录；不要一边运行一边复制 SQLite。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
 

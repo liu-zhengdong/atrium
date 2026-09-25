@@ -9,8 +9,9 @@ import {
   existsSync,
   readdirSync,
   chmodSync,
+  realpathSync,
 } from "node:fs";
-import { join, resolve, dirname, basename } from "node:path";
+import { join, resolve, dirname, basename, sep } from "node:path";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -25,14 +26,30 @@ import { verifyIdentity } from "./probe-identity.mjs";
 const folder = mkdtempSync(join(tmpdir(), "atrium-proof-"));
 const profile = join(folder, "profile"),
   cwd = join(folder, "workspace"),
-  raw = join(folder, "raw");
-for (const dir of [profile, cwd, raw]) mkdirSync(dir, { mode: 0o700 });
+  raw = join(folder, "raw"),
+  sessions = join(folder, "sessions"),
+  tmuxSocket = join(folder, "tmux.sock");
+for (const dir of [profile, cwd, raw, sessions])
+  mkdirSync(dir, { mode: 0o700 });
 process.env.PI_MCP_CONFIG_MODE = "exclusive";
 process.env.PI_MCP_TOOL_EXPOSURE = "proxy-only";
 process.env.PI_CODING_AGENT_DIR = profile;
+process.env.PI_CODING_AGENT_SESSION_DIR = sessions;
+delete process.env.PI_SESSION_FILE;
+delete process.env.PI_SESSION_ID;
 process.env.ATRIUM_PI_TEMPLATE = profile;
 process.env.PI_ACP_DIR = join(folder, "pi-acp");
 process.env.PI_OFFLINE = "1";
+const assertFixtureSession = (file) =>
+  assert(
+    (existsSync(file)
+      ? realpathSync(file)
+      : join(realpathSync(dirname(file)), basename(file))
+    ).startsWith(`${realpathSync(folder)}${sep}`),
+    `夹具会话写到了临时目录外：${file}`,
+  );
+const tmux = (args, options) =>
+  execFileSync("tmux", ["-S", tmuxSocket, ...args], options);
 const require = createRequire(import.meta.url);
 const piAcpEntry = resolve(
   process.env.ATRIUM_PI_ACP_ENTRY ||
@@ -257,8 +274,8 @@ const assignLegacy = (id) =>
   );
 let started = false;
 try {
-  const command = `env PI_CODING_AGENT_DIR=${shell(profile)} PI_ACP_DIR=${shell(process.env.PI_ACP_DIR)} PI_MCP_TOOL_EXPOSURE=proxy-only PI_MCP_CONFIG_MODE=exclusive PI_OFFLINE=1 pi --extension ${shell(piAcpExtension)} --extension ${shell(readyExtension)}`;
-  execFileSync("tmux", [
+  const command = `env -u PI_SESSION_FILE -u PI_SESSION_ID PI_CODING_AGENT_DIR=${shell(profile)} PI_CODING_AGENT_SESSION_DIR=${shell(sessions)} PI_ACP_DIR=${shell(process.env.PI_ACP_DIR)} PI_MCP_TOOL_EXPOSURE=proxy-only PI_MCP_CONFIG_MODE=exclusive PI_OFFLINE=1 pi --extension ${shell(piAcpExtension)} --extension ${shell(readyExtension)}`;
+  tmux([
     "new-session",
     "-d",
     "-s",
@@ -272,19 +289,13 @@ try {
     command,
   ]);
   started = true;
-  execFileSync("tmux", [
-    "set-window-option",
-    "-t",
-    session,
-    "remain-on-exit",
-    "on",
-  ]);
+  tmux(["set-window-option", "-t", session, "remain-on-exit", "on"]);
   const input = (text) => {
-    execFileSync("tmux", ["send-keys", "-t", session, "-l", text]);
-    execFileSync("tmux", ["send-keys", "-t", session, "Enter"]);
+    tmux(["send-keys", "-t", session, "-l", text]);
+    tmux(["send-keys", "-t", session, "Enter"]);
   };
   const pane = () =>
-    execFileSync("tmux", ["capture-pane", "-p", "-t", session, "-S", "-1000"], {
+    tmux(["capture-pane", "-p", "-t", session, "-S", "-1000"], {
       encoding: "utf8",
     });
   await wait(
@@ -374,6 +385,7 @@ try {
     const before = structuredClone(runtimes.connections.get(agent.id).info);
     assert.equal(before.mode, "tui");
     assert.equal(before.busy, true, "MCP 在原任务仍忙时接入");
+    assertFixtureSession(before.sessionFile);
     assert(readFileSync(before.sessionFile, "utf8").includes("ATR_BASELINE"));
     const collision = store.createAgent("冲突 Agent", cwd).agent;
     assignLegacy(collision.id);
@@ -587,6 +599,8 @@ try {
     const events = await apiFetch(`http://127.0.0.1:${port}/api/events`);
     const reader = events.body.getReader();
     await reader.read();
+    for (const agent of store.agents())
+      if (agent.session_file) assertFixtureSession(agent.session_file);
     await app.close();
     await wait(async () => (await reader.read()).done, "SSE 在关闭时结束");
     process.kill(before.pid, 0);
@@ -642,11 +656,9 @@ try {
     try {
       writeFileSync(
         join(folder, "failed-tui.txt"),
-        execFileSync(
-          "tmux",
-          ["capture-pane", "-p", "-t", session, "-S", "-1000"],
-          { encoding: "utf8" },
-        ),
+        tmux(["capture-pane", "-p", "-t", session, "-S", "-1000"], {
+          encoding: "utf8",
+        }),
       );
     } catch (captureError) {
       console.error("无法取得失败现场：", String(captureError));
@@ -655,11 +667,9 @@ try {
   console.error(`证据保留：${folder}`);
   throw error;
 } finally {
-  if (started) {
-    try {
-      execFileSync("tmux", ["kill-session", "-t", session]);
-    } catch {}
-  }
+  try {
+    tmux(["kill-server"], { stdio: "ignore" });
+  } catch {}
   await app.close();
   await new Promise((resolve) => model.close(resolve));
   for (const [path, expected] of Object.entries(sourceHashes))

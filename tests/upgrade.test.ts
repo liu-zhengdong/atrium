@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import {
   mkdtempSync,
   mkdirSync,
@@ -16,11 +17,14 @@ import {
   writeRestartState,
   checkServiceHealth,
   sendRollbackNotification,
+  requestDrain,
   waitForRestart,
 } from "../server/supervisor.ts";
 import { initiatorAgent } from "../cli/restart.ts";
 import { createServer } from "node:http";
 import { Store } from "../server/store.ts";
+import { Runtimes } from "../server/runtime.ts";
+import type { RuntimeInfo } from "../shared/schema.ts";
 import { createApp } from "../server/app.ts";
 import { currentVersion, packageRoot } from "../server/service-state.ts";
 import { execFile } from "node:child_process";
@@ -188,6 +192,139 @@ test("Agent 从符号链接目录启动，或只有会话路径时仍能续跑",
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("排空在回合结束后才同步末尾轨迹；到期列出忙碌身份且旧服务可继续", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-drain-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = new Store(join(dir, "atrium.sqlite"));
+  t.after(() => store.close());
+  const { agent } = store.createAgent("验收", dir);
+  const info: RuntimeInfo = {
+    runtimeId: randomUUID(),
+    generation: randomUUID(),
+    sessionId: randomUUID(),
+    pid: process.pid,
+    ownerPid: process.pid,
+    sessionFile: null,
+    cwd: dir,
+    mode: "rpc",
+    busy: true,
+    model: "fixture",
+  };
+  const events: string[] = [];
+  let statusCalls = 0;
+  let finishAfter = 4;
+  const runtime = Object.assign(Object.create(Runtimes.prototype), {
+    connections: new Map([[agent.id, { info }]]),
+    pumping: new Map(),
+    connecting: new Map(),
+    turns: new Map(),
+    store,
+    draining: false,
+    rpc: async () => {
+      statusCalls++;
+      events.push(statusCalls < finishAfter ? "busy" : "idle");
+      return { ...info, busy: statusCalls < finishAfter };
+    },
+    capture: async (
+      _id: string,
+      _info: RuntimeInfo,
+      pages: number,
+      strict: boolean,
+    ) => {
+      assert.equal(pages, 100);
+      assert.equal(strict, true);
+      events.push("trace_flushed");
+    },
+  }) as Runtimes;
+  const agents = await runtime.prepareShutdown(1000);
+  assert.deepEqual(agents, [agent.id]);
+  assert.deepEqual(events, ["busy", "busy", "busy", "idle", "trace_flushed"]);
+  assert.equal((runtime as unknown as { draining: boolean }).draining, true);
+  await assert.rejects(runtime.start(agent.id), /服务正在排空任务/);
+  await assert.rejects(
+    (
+      runtime as unknown as {
+        operation: (id: string, work: () => Promise<void>) => Promise<void>;
+      }
+    ).operation(agent.id, async () => {}),
+    /服务正在排空任务/,
+  );
+
+  (runtime as unknown as { draining: boolean }).draining = false;
+  finishAfter = Infinity;
+  statusCalls = 0;
+  events.length = 0;
+  await assert.rejects(runtime.prepareShutdown(210), (error: unknown) => {
+    assert.match(String(error), /验收（a1）/);
+    assert.match(
+      String(error),
+      /旧服务继续运行.*atrium restart.*--agent-timeout/,
+    );
+    return true;
+  });
+  assert.equal(events.includes("trace_flushed"), false);
+  assert.equal((runtime as unknown as { draining: boolean }).draining, false);
+
+  // The gateway can briefly report idle while Pi is still publishing the
+  // final tool/result events. A known open run must prevent a premature stop.
+  finishAfter = 1;
+  statusCalls = 0;
+  events.length = 0;
+  const turns = (runtime as unknown as { turns: Map<string, unknown> }).turns;
+  turns.set(agent.id, { generation: info.generation });
+  let flushes = 0;
+  (runtime as unknown as { capture: () => Promise<void> }).capture =
+    async () => {
+      flushes++;
+      if (flushes === 3) turns.delete(agent.id);
+    };
+  assert.deepEqual(await runtime.prepareShutdown(1000), [agent.id]);
+  assert.equal(flushes, 3);
+  assert.equal(statusCalls, 3);
+  assert.equal((runtime as unknown as { draining: boolean }).draining, true);
+
+  (runtime as unknown as { draining: boolean }).draining = false;
+  finishAfter = 1;
+  statusCalls = 0;
+  (runtime as unknown as { capture: () => Promise<void> }).capture =
+    async () => {
+      throw new Error("trace unavailable");
+    };
+  await assert.rejects(runtime.prepareShutdown(1000), /trace unavailable/);
+  assert.equal((runtime as unknown as { draining: boolean }).draining, false);
+});
+
+test("旧服务拒绝排空时透出正文而不只报 HTTP 409", async () => {
+  const server = createServer((_req, response) => {
+    response.statusCode = 409;
+    response.setHeader("content-type", "application/json");
+    response.end(
+      JSON.stringify({
+        error: "Agent 回合未完成；仍在工作：验收（a1）。旧服务继续运行",
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    await assert.rejects(
+      requestDrain(
+        {
+          pid: process.pid,
+          instance: "test",
+          port: address.port,
+          token: "test",
+        },
+        1000,
+      ),
+      /HTTP 409.*仍在工作：验收（a1）.*旧服务继续运行/,
+    );
+  } finally {
+    server.close();
   }
 });
 

@@ -116,9 +116,11 @@ try {
       return reply.code(401).send({ error: "服务控制凭据无效" });
     if (stopping) return reply.code(409).send({ error: "服务正在关闭" });
     const body = (request.body as { timeout?: number } | undefined) ?? {};
-    const timeout = Number(body.timeout ?? 30000);
-    if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 300000)
-      return reply.code(400).send({ error: "timeout 必须为 1000–300000 毫秒" });
+    const timeout = Number(body.timeout ?? 300000);
+    if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 7200000)
+      return reply
+        .code(400)
+        .send({ error: "timeout 必须为 1000–7200000 毫秒" });
     let agentsToWake: string[];
     try {
       agentsToWake = (await runtimes?.prepareShutdown(timeout)) ?? [];

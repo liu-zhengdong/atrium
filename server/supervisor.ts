@@ -242,6 +242,34 @@ export async function startSupervisor(
   return { pid: child.pid!, taskId };
 }
 
+export async function requestDrain(
+  record: ServiceRecord,
+  timeout: number,
+): Promise<string[]> {
+  const response = await fetch(
+    `${serviceUrl(record)}/api/service/prepare-restart`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${record.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ timeout }),
+      signal: AbortSignal.timeout(timeout + 10000),
+    },
+  );
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    throw new Error(
+      `旧服务拒绝平滑退出（HTTP ${response.status}）：${body.error ?? "请检查旧服务日志"}`,
+    );
+  }
+  const body = (await response.json()) as { agentsToWake?: string[] };
+  return body.agentsToWake ?? [];
+}
+
 export async function runSupervisor(args: string[]): Promise<void> {
   let data = "";
   let taskId = "";
@@ -249,7 +277,7 @@ export async function runSupervisor(args: string[]): Promise<void> {
   let targetVersion: string | undefined;
   let probeAgent: string | undefined;
   let wakeAgent: string | undefined;
-  let agentTimeout = 15000;
+  let agentTimeout = 300000;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--data" && args[i + 1]) data = args[++i];
@@ -285,23 +313,11 @@ export async function runSupervisor(args: string[]): Promise<void> {
     state.oldPid = oldRecord.pid;
     writeRestartState(data, state);
     try {
-      const prepRes = await fetch(
-        `${serviceUrl(oldRecord)}/api/service/prepare-restart`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${oldRecord.token}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ timeout: agentTimeout }),
-          signal: AbortSignal.timeout(agentTimeout + 3000),
-        },
-      );
-      if (!prepRes.ok)
-        throw new Error(`旧服务拒绝平滑退出（HTTP ${prepRes.status}）`);
-      const prep = (await prepRes.json()) as { agentsToWake?: string[] };
       agentsToWake = [
-        ...new Set([...agentsToWake, ...(prep.agentsToWake ?? [])]),
+        ...new Set([
+          ...agentsToWake,
+          ...(await requestDrain(oldRecord, agentTimeout)),
+        ]),
       ];
       state.agentsToWake = agentsToWake;
       writeRestartState(data, state);

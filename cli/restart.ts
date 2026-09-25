@@ -59,11 +59,11 @@ export async function restart({
     (agentTimeoutMs !== undefined &&
       (!Number.isInteger(agentTimeoutMs) ||
         agentTimeoutMs < 1000 ||
-        agentTimeoutMs > 300000))
+        agentTimeoutMs > 7200000))
   )
     throw new Problem(
       400,
-      "timeout 必须为 1–600 秒，agent-timeout 为 1000–300000 毫秒",
+      "timeout 必须为 1–600 秒，agent-timeout 为 1000–7200000 毫秒",
       "usage",
     );
 

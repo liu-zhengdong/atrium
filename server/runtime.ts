@@ -596,6 +596,7 @@ export class Runtimes {
     recordFailure = true,
   ) {
     this.assertOpen();
+    if (this.draining) throw new Problem(409, "服务正在排空任务，暂不接入身份");
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
@@ -727,6 +728,7 @@ export class Runtimes {
     this.recordSessionReset(id, reason);
   }
   async start(id: string, automatic = false, fresh = false) {
+    if (this.draining) throw new Problem(409, "服务正在排空任务，暂不启动身份");
     requireAssignment(this.store, id);
     const binding = this.binding(id);
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
@@ -1197,11 +1199,16 @@ export class Runtimes {
       }
     }
   }
-  private async capture(id: string, info: RuntimeInfo) {
+  private async capture(
+    id: string,
+    info: RuntimeInfo,
+    maxPages = 2,
+    strict = false,
+  ) {
     const before = this.traceErrors.get(id);
     try {
-      // Bounded catch-up per tick; long gaps are reported, never fabricated.
-      for (let page = 0; page < 2; page++) {
+      // Regular ticks are bounded; shutdown must consume all remaining pages.
+      for (let page = 0; page < maxPages; page++) {
         const events = runtimeEvents.parse(
           await this.rpc("_pi/runtime/events", {
             ...target(info),
@@ -1214,8 +1221,10 @@ export class Runtimes {
           this.stopped ||
           current?.runtimeId !== info.runtimeId ||
           current?.generation !== info.generation
-        )
+        ) {
+          if (strict) throw new Error(`身份 ${id} 的运行实例在轨迹同步时变化`);
           return;
+        }
         if (
           events.runtimeId !== info.runtimeId ||
           events.generation !== info.generation ||
@@ -1302,14 +1311,17 @@ export class Runtimes {
           }
         }
         if (!events.hasMore) break;
+        if (strict && page === maxPages - 1)
+          throw new Error(`身份 ${id} 的轨迹未在 ${maxPages} 页内同步完毕`);
       }
       this.traceErrors.delete(id);
-    } catch {
+    } catch (error) {
       if (!this.stopped)
         this.traceErrors.set(
           id,
           "暂时无法读取实时轨迹；请确认此 Pi 已加载支持轨迹的 pi-atrium 扩展。已有记录仍可查看。",
         );
+      if (strict) throw error;
     }
     if (!this.stopped && before !== this.traceErrors.get(id)) this.changed();
   }
@@ -1337,7 +1349,12 @@ export class Runtimes {
     const agents = new Set(this.activeAgentIds());
     this.draining = true;
     const deadline = Date.now() + timeoutMs;
+    let busyIds: string[] = [];
     try {
+      // An already-running discovery tick may still be reading trace events.
+      // Let it finish before the final strict capture touches the same cursor.
+      while (this.ticking && Date.now() < deadline)
+        await new Promise((r) => setTimeout(r, 100));
       while (Date.now() < deadline) {
         // The discovery tick is paused while draining. Refresh busy state from
         // each running Pi; a stale snapshot would make every busy restart time out.
@@ -1348,14 +1365,41 @@ export class Runtimes {
             );
             entry.info = current;
             if (current.busy) agents.add(id);
-            return current.busy;
+            return { id, busy: current.busy };
           }),
         );
-        if (!statuses.some(Boolean) && this.pumping.size === 0)
-          return [...agents];
+        busyIds = [
+          ...new Set([
+            ...statuses
+              .filter((status) => status.busy)
+              .map((status) => status.id),
+            ...this.pumping.keys(),
+            ...this.connecting.keys(),
+          ]),
+        ];
+        if (busyIds.length === 0) {
+          // Pi can report idle just before the final events become visible.
+          // Flush first, then require the observed run_start to have run_end.
+          await Promise.all(
+            [...this.connections].map(([id, entry]) =>
+              this.capture(id, entry.info, 100, true),
+            ),
+          );
+          busyIds = [...this.connections.keys()].filter((id) =>
+            this.turns.has(id),
+          );
+          for (const id of busyIds) agents.add(id);
+          if (busyIds.length === 0) return [...agents];
+        }
         await new Promise((r) => setTimeout(r, 100));
       }
-      throw new Error("Agent 回合未在期限内完成；未停止服务");
+      const names = busyIds.map((id) => {
+        const agent = this.store.agent(id);
+        return `${agent.name}（${agent.ref}）`;
+      });
+      throw new Error(
+        `Agent 回合未在 ${timeoutMs / 1000} 秒内完成；仍在工作：${names.join("、") || "状态未确认"}。旧服务继续运行；待回合结束后重新运行 atrium restart，或使用 --agent-timeout <毫秒> 延长等待`,
+      );
     } catch (error) {
       this.draining = false;
       throw error;

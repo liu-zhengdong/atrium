@@ -56,7 +56,7 @@ const updateCommand: Command = {
 };
 
 const restartCommand: Command = {
-  args: "[--wait] [--timeout <秒>]",
+  args: "[--wait] [--timeout <秒>] [--agent-timeout <毫秒>]",
   about: "平滑重启 Atrium 服务，等待当前回合结束并自动回滚失败",
   options: {
     wait: { type: "boolean", default: false },

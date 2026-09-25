@@ -47,6 +47,39 @@ test("会话归属与未读：我的私聊计数、围观会话只报动态、�
   assert.equal(directRow().unread, 1, "低于已读水位不改变计数");
 });
 
+test("用户建群立即进入我的；身份建群仍是围观", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-user-group-"));
+  const { app, store } = await createApp({
+    data,
+    runtime: false,
+    desktops: join(data, "desktops"),
+  });
+  t.after(async () => {
+    await app.close();
+    rmSync(data, { recursive: true, force: true });
+  });
+  const a = store.createAgent("Atlas", "/tmp").agent;
+  const b = store.createAgent("Mira", "/tmp").agent;
+  const create = (payload: object) =>
+    app.inject({ method: "POST", url: "/api/chats", payload });
+  const own = await create({ name: "我建的群", members: [a.id, b.id] });
+  assert.equal(own.statusCode, 200, own.body);
+  const other = await create({
+    name: "身份建的群",
+    members: [b.id],
+    as: a.ref,
+  });
+  assert.equal(other.statusCode, 200, other.body);
+  assert.equal(
+    store.chats().find((chat) => chat.id === own.json().id)?.mine,
+    true,
+  );
+  assert.equal(
+    store.chats().find((chat) => chat.id === other.json().id)?.mine,
+    false,
+  );
+});
+
 test("已读接口：短号解析、单调推进、越过最新消息截断", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-reads-"));
   const { app, store } = await createApp({

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, LoaderCircle, MessageSquare } from "lucide-react";
 import { api, patchChat } from "./api.ts";
 import { useOverview } from "./useOverview.ts";
 import { Empty } from "./components/Empty.tsx";
 import type { Agent } from "./components/AgentAvatar.tsx";
 import { Sidebar, type Section } from "./layout/Sidebar.tsx";
+import { chatTabOf, firstChatInTab, type ChatTab } from "./layout/chat-tabs.ts";
 import { TopBar } from "./layout/TopBar.tsx";
 import { AgentDirectory } from "./agents/AgentDirectory.tsx";
 import { AgentDrawer } from "./agents/AgentDrawer.tsx";
@@ -27,6 +28,35 @@ import {
   type RecordTab,
 } from "./records/query.ts";
 
+const TAB_KEY = "atrium.chatTab";
+const OBSERVED_AT_KEY = "atrium.observedLeftAt";
+const storedTab = (): ChatTab => {
+  try {
+    return localStorage.getItem(TAB_KEY) === "observe" ? "observe" : "mine";
+  } catch {
+    return "mine";
+  }
+};
+const storedObservedAt = () => {
+  try {
+    const value = Number(localStorage.getItem(OBSERVED_AT_KEY));
+    if (Number.isSafeInteger(value) && value > 0) return value;
+    // 第一次打开就固定基准；未点进「围观」前，刷新不能清掉新动态。
+    const now = Date.now();
+    localStorage.setItem(OBSERVED_AT_KEY, String(now));
+    return now;
+  } catch {
+    return Date.now();
+  }
+};
+const remember = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // 隐私模式禁止存储时，只维持当前页面的状态。
+  }
+};
+
 export function App() {
   const {
     overview,
@@ -36,6 +66,8 @@ export function App() {
     refresh,
   } = useOverview();
   const [section, setSection] = useState<Section>("chat");
+  const [chatTab, setChatTab] = useState<ChatTab>(storedTab);
+  const [lastObservedAt, setLastObservedAt] = useState(storedObservedAt);
   const [chatId, setChatId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
@@ -109,6 +141,7 @@ export function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
   // Agent 详情与群信息互斥；轨迹卡片单独占聊天列右侧空间。
   const [groupOpen, setGroupOpen] = useState(false);
+  const deletedChatId = useRef<string | null>(null);
   const showTrace = (id: string, target: number | null = null) => {
     setTraceTarget((previous) =>
       target === null
@@ -132,10 +165,30 @@ export function App() {
   const active = overview?.chats.find((chat) => chat.id === chatId);
   const selectedAgent = overview?.agents.find((agent) => agent.id === agentId);
 
+  function switchChatTab(next: ChatTab) {
+    if (next === chatTab) return;
+    if (chatTab === "observe") {
+      const leftAt = Date.now();
+      setLastObservedAt(leftAt);
+      remember(OBSERVED_AT_KEY, String(leftAt));
+    }
+    setChatTab(next);
+    remember(TAB_KEY, next);
+  }
+
   useEffect(() => {
-    if (overview)
-      setChatId((current) => current ?? overview.chats[0]?.id ?? null);
-  }, [overview]);
+    if (!overview) return;
+    if (!chatId) {
+      const available = overview.chats.filter(
+        (chat) => chat.id !== deletedChatId.current,
+      );
+      setChatId(firstChatInTab(available, chatTab)?.id ?? null);
+      return;
+    }
+    const selected = overview.chats.find((chat) => chat.id === chatId);
+    if (selected) switchChatTab(chatTabOf(selected));
+    // 新建或解除隐藏的会话在下一次 overview 刷新后才出现，期间保留选中 ID。
+  }, [overview, chatId]);
 
   function navigate(next: Section) {
     setSection(next);
@@ -149,7 +202,24 @@ export function App() {
   function selectChat(id: string) {
     setAnchor(null);
     setChatId(id);
+    const selected = overview?.chats.find((chat) => chat.id === id);
+    if (selected) switchChatTab(chatTabOf(selected));
     navigate("chat");
+  }
+  function selectChatTab(next: ChatTab) {
+    setGroupOpen(false);
+    setAnchor(null);
+    switchChatTab(next);
+    setChatId(
+      firstChatInTab(
+        (overview?.chats ?? []).filter(
+          (chat) => chat.id !== deletedChatId.current,
+        ),
+        next,
+      )?.id ?? null,
+    );
+    // 窄屏里切换标签不应关闭正在查看的侧栏；点具体会话时再进入聊天。
+    setSection("chat");
   }
   /** 从会话进聊天记录：预先把会话筛选选上，其余筛选重置。 */
   function openRecords(scope: string | null) {
@@ -167,9 +237,8 @@ export function App() {
     } catch {
       // 未能解除隐藏也照常打开。
     }
-    setChatId(chat);
+    selectChat(chat);
     setAnchor({ chatId: chat, messageId });
-    navigate("chat");
     refresh();
   }
   async function openChat(key: string, path: string, body?: unknown) {
@@ -204,6 +273,9 @@ export function App() {
           section={section}
           setSection={navigate}
           chatId={chatId}
+          chatTab={chatTab}
+          lastObservedAt={lastObservedAt}
+          selectChatTab={selectChatTab}
           selectChat={selectChat}
           create={setModal}
           openAgent={(agent) => void openAgent(agent)}
@@ -347,6 +419,7 @@ export function App() {
                 close={() => setGroupOpen(false)}
                 changed={refresh}
                 deleted={() => {
+                  deletedChatId.current = active.id;
                   setGroupOpen(false);
                   setChatId(null);
                   // 删掉当前会话后回到会话列表：窄屏下就是打开列表这一层。

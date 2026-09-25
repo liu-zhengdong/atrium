@@ -857,6 +857,8 @@ export async function createApp(options: {
             note: a.note,
           },
         );
+    if (isUserRef(creator) && !a.direct_agent)
+      store.markUserParticipated(result.id);
     if (a.direct_agent) void runtimes?.pump(a.direct_agent, true);
     changed();
     return result;

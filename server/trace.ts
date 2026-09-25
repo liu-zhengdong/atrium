@@ -119,7 +119,12 @@ export class TraceStore {
       )?.seq ?? 0
     );
   }
-  ingest(agent: string, value: RuntimeEventPage) {
+  ingest(
+    agent: string,
+    value: RuntimeEventPage,
+    onEvent?: (event: RuntimeEventPage["items"][number]) => void,
+    onGap?: () => void,
+  ) {
     this.store.agent(agent);
     const page = runtimeEvents.parse(value),
       previous = this.cursor(agent, page.runtimeId, page.generation);
@@ -172,6 +177,7 @@ export class TraceStore {
           Number(truncated),
         );
       if (page.gap) {
+        onGap?.();
         this.store.run(
           "UPDATE trace_actions SET state='unknown' WHERE agent_id=? AND state='running'",
           agent,
@@ -265,6 +271,7 @@ export class TraceStore {
             e.truncated,
           );
         }
+        onEvent?.(e);
       }
       this.store.run(
         "INSERT INTO trace_cursors(agent_id,runtime_id,generation,seq) VALUES(?,?,?,?) ON CONFLICT(agent_id,runtime_id,generation) DO UPDATE SET seq=excluded.seq",

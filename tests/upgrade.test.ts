@@ -216,11 +216,12 @@ test("排空在回合结束后才同步末尾轨迹；到期列出忙碌身份�
   const events: string[] = [];
   let statusCalls = 0;
   let finishAfter = 4;
+  const openTurns = new Map<string, { generation: string }>();
   const runtime = Object.assign(Object.create(Runtimes.prototype), {
     connections: new Map([[agent.id, { info }]]),
     pumping: new Map(),
     connecting: new Map(),
-    turns: new Map(),
+    turns: { current: (id: string) => openTurns.get(id) ?? null },
     store,
     draining: false,
     rpc: async () => {
@@ -273,13 +274,12 @@ test("排空在回合结束后才同步末尾轨迹；到期列出忙碌身份�
   finishAfter = 1;
   statusCalls = 0;
   events.length = 0;
-  const turns = (runtime as unknown as { turns: Map<string, unknown> }).turns;
-  turns.set(agent.id, { generation: info.generation });
+  openTurns.set(agent.id, { generation: info.generation });
   let flushes = 0;
   (runtime as unknown as { capture: () => Promise<void> }).capture =
     async () => {
       flushes++;
-      if (flushes === 3) turns.delete(agent.id);
+      if (flushes === 3) openTurns.delete(agent.id);
     };
   assert.deepEqual(await runtime.prepareShutdown(1000), [agent.id]);
   assert.equal(flushes, 3);

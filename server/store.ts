@@ -207,6 +207,9 @@ export class Store {
     ).map((c) => c.name);
     if (!deliveryCols.includes("accepted_at"))
       this.db.exec("ALTER TABLE deliveries ADD COLUMN accepted_at INTEGER");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS deliveries_accepted ON deliveries(agent_id,accepted_at) WHERE state='accepted'",
+    );
     if (!deliveryCols.includes("chat_id"))
       this.db.exec(
         "ALTER TABLE deliveries ADD COLUMN chat_id TEXT REFERENCES chats(id)",
@@ -497,7 +500,7 @@ export class Store {
         id,
       );
       this.run(
-        "UPDATE deliveries SET state='cancelled',slot=NULL,error=NULL WHERE agent_id=? AND state='pending'",
+        "DELETE FROM deliveries WHERE agent_id=? AND state IN ('pending','accepted')",
         id,
       );
     };
@@ -1615,22 +1618,23 @@ export class Store {
       id,
     );
   }
-  /** A failed turn retries only deliveries still accepted; completed deliveries stay complete. */
-  finishTurn(id: string, successful: boolean) {
-    this.transaction(() => {
+  /** Event-driven settlement only touches deliveries acknowledged after this turn's Atrium input. */
+  finishTurn(id: string, successful: boolean, deliveryAt?: number) {
+    const since = deliveryAt === undefined ? "" : " AND accepted_at>=?";
+    const args = deliveryAt === undefined ? [id] : [id, deliveryAt];
+    const settle = () => {
       if (successful) {
-        // run_end uses Pi's event time, but accepted_at uses the service clock and
-        // deliver can acknowledge after the event. Capture processes a run_end
-        // before the next deliver, so close the accepted snapshot, not a clock range.
+        // Pi's delivery event precedes its RPC acknowledgement. An old accepted
+        // delivery from another run must not inherit this run's success.
         this.run(
-          "UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted'",
-          id,
+          `UPDATE deliveries SET state='complete' WHERE agent_id=? AND state='accepted'${since}`,
+          ...args,
         );
         this.clearFailure(id);
       } else {
         const rows = this.all<{ id: string; text: string }>(
-          "SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'",
-          id,
+          `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted'${since}`,
+          ...args,
         );
         const replayNote = "[上一轮运行出错，重新投递同一条消息；不是新消息。]";
         for (const row of rows)
@@ -1643,11 +1647,14 @@ export class Store {
             row.id,
           );
         this.run(
-          "UPDATE deliveries SET state='pending',accepted_at=NULL WHERE agent_id=? AND kind='summary' AND state='accepted'",
-          id,
+          `UPDATE deliveries SET state='pending',accepted_at=NULL WHERE agent_id=? AND kind='summary' AND state='accepted'${since}`,
+          ...args,
         );
       }
-    });
+    };
+    // Trace ingestion checkpoints the turn and event cursor in this same transaction.
+    if (this.db.isTransaction) settle();
+    else this.transaction(settle);
   }
   pending(id: string) {
     return this.all<DeliveryRow>(

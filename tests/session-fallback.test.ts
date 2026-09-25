@@ -61,6 +61,7 @@ async function fixture(
     );
   const calls: string[] = [];
   const delivered: string[] = [];
+  const deliveredAt = new Map<string, number>();
   const sessions = new Map<string, RuntimeInfo>();
   const seen = new Set<string>();
   const ends = new Map<string, number>();
@@ -100,6 +101,7 @@ async function fixture(
       if (method === "_pi/runtime/deliver") {
         const input = params as { text: string; sessionId: string };
         delivered.push(input.sessionId);
+        deliveredAt.set(input.sessionId, Date.now());
         if (failure === "deliver" && input.sessionId === previous)
           throw new Error("prompt-capture: no capture");
         if (
@@ -131,11 +133,11 @@ async function fixture(
             gap: false,
           };
         seen.add(input.sessionId);
-        const at = Date.now();
+        const at = deliveredAt.get(input.sessionId)!;
         const items = (
           [
             { seq: 1, at, kind: "run_start" },
-            { seq: 2, at, kind: "delivery" },
+            { seq: 2, at, kind: "delivery", name: "Atrium" },
             ...(isBroken
               ? [
                   {

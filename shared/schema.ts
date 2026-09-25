@@ -92,6 +92,8 @@ export type AgentInfo = {
   config: Preferences;
   cwd: string;
   session_file: string | null;
+  /** Set only after an idle-managed stop; manual stop is ordinary offline. */
+  sleeping_at: number | null;
   session_reset_at: number | null;
   session_reset_reason: string | null;
   last_wake: number;
@@ -253,6 +255,8 @@ export type Overview = {
   } | null;
   agents: (AgentInfo & {
     runtime: RuntimeInfo | null;
+    /** A pending automatic restoration; reset on failure or successful bind. */
+    waking: boolean;
     available: boolean;
     /** Live process check shared with the delete guard; presence may retain stale discovery. */
     running: boolean;

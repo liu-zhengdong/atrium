@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { Overview } from "../../shared/schema.ts";
+import { api } from "../api.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { MessageComposer } from "./MessageComposer.tsx";
 import { MessageTimeline } from "./MessageTimeline.tsx";
@@ -40,6 +42,10 @@ export function ChatView({
   const conversation = useConversation(chatId, revision, anchoredId);
   const { members } = conversation;
   const directAgent = agents.find((a) => a.id === active?.direct_agent);
+  const [retryError, setRetryError] = useState<{
+    id: string;
+    text: string;
+  } | null>(null);
   const observed = active && !active.mine && !active.read_only ? active : null;
   useReadReporter({
     chatId,
@@ -68,7 +74,35 @@ export function ChatView({
       {active && (
         <>
           <ChatNotice notice={active.notice} />
-          {directAgent?.error && (
+          {directAgent?.sleeping_at && (
+            <p
+              className="flex items-center gap-2 bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
+              role="status"
+            >
+              {directAgent.waking
+                ? "正在唤醒"
+                : directAgent.failure
+                  ? "唤醒失败 · 可重试。已发送的消息会保留。"
+                  : "休息中 · 来消息会醒"}
+              {directAgent.failure && !directAgent.waking && (
+                <button
+                  className="underline"
+                  onClick={() => {
+                    setRetryError(null);
+                    void api(`/agents/${directAgent.id}/retry`, "POST")
+                      .catch((e) =>
+                        setRetryError({ id: directAgent.id, text: String(e) }),
+                      )
+                      .finally(refresh);
+                  }}
+                >
+                  重试
+                </button>
+              )}
+              {retryError?.id === directAgent.id && retryError.text}
+            </p>
+          )}
+          {directAgent?.error && !directAgent.sleeping_at && (
             <p
               className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
               role="status"

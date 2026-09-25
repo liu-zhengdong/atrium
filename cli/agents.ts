@@ -24,17 +24,24 @@ import { waitOptions } from "./wait-options.ts";
 export type AgentEntry = Overview["agents"][number];
 /** 与 Web 头像状态点同一套判断。 */
 export const presence = (
-  agent: Pick<AgentEntry, "available" | "runtime" | "failure" | "unassigned">,
+  agent: Pick<AgentEntry, "available" | "runtime" | "failure" | "unassigned"> &
+    Partial<Pick<AgentEntry, "sleeping_at" | "waking" | "running">>,
 ) =>
   agent.unassigned
     ? "未分配账号"
-    : agent.failure
-      ? "出错"
-      : agent.runtime?.busy
-        ? "干活"
-        : agent.available
-          ? "在线"
-          : "离线";
+    : agent.waking
+      ? "正在唤醒"
+      : agent.sleeping_at && agent.failure
+        ? "唤醒失败 · 可重试"
+        : agent.failure
+          ? "出错"
+          : agent.sleeping_at && !agent.running
+            ? "休息中 · 来消息会醒"
+            : agent.runtime?.busy
+              ? "干活"
+              : agent.available
+                ? "在线"
+                : "离线";
 export const roster = (client: Client) => client.get<Overview>("/overview");
 /** 名册里找一位：短号、名称或 ID。接口的路径参数只认 ID，所以先在这里换。 */
 export function findAgent(view: Overview, reference: string): AgentEntry {
@@ -112,6 +119,9 @@ const show: Command = {
         `模型：${model.configured ?? "未设定（跟随 pi 默认）"}${running}${model.options.length ? `，可选 ${model.options.length} 个` : ""}`,
         agent.runtime &&
           `运行：${agent.runtime.mode.toUpperCase()} · PID ${agent.runtime.pid}${agent.runtime.busy ? " · 执行中" : ""}`,
+        agent.sleeping_at &&
+          !agent.running &&
+          `休眠起点：${when(agent.sleeping_at)}`,
         `工作目录：${agent.cwd}`,
         `配置目录：${agent.agent_directory ?? "无（旧记录，待升级）"}`,
         agent.session_file && `会话文件：${agent.session_file}`,

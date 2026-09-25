@@ -495,6 +495,7 @@ export async function createApp(options: {
       agents: store.agents().map((a) => ({
         ...a,
         runtime: runtimes?.connections.get(a.id)?.info ?? null,
+        waking: runtimes?.waking.has(a.id) ?? false,
         available: available.has(a.id) || !!runtimes?.connections.has(a.id),
         running: runtimes?.running(a.id, discovery.runtimes) ?? false,
         error: store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,

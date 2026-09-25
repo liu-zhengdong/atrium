@@ -77,13 +77,13 @@ test("投递计划：私聊、群聊点名、@ 全体的所有组合", () => {
     }
 });
 
-test("离线唤醒：直接找上门的才开进程", () => {
+test("离线和休眠唤醒：直接找上门的才开进程", () => {
   assert.equal(wakesOffline([]), false, "没东西就不用起来");
   assert.equal(wakesOffline([{ kind: "direct" }]), true, "私聊、@、邀请");
   assert.equal(
     wakesOffline([{ kind: "summary" }]),
     false,
-    "消息箱心跳提醒不值得开一个进程",
+    "消息箱心跳、notify、事件订阅只进消息箱，不开进程",
   );
   assert.equal(
     wakesOffline([{ kind: "summary" }, { kind: "direct" }]),

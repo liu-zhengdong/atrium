@@ -4,6 +4,7 @@ import type { Overview } from "../../shared/schema.ts";
 import {
   Avatar,
   agentPresence,
+  statusNote,
   type Agent,
 } from "../components/AgentAvatar.tsx";
 import { failureSummary } from "../components/failure-summary.ts";
@@ -142,16 +143,14 @@ export function AgentDirectory({
                   title={
                     a.unassigned
                       ? "未分配账号"
-                      : a.failure
-                        ? failureSummary(a.failure.text)
-                        : a.work
+                      : statusNote(a) ||
+                        (a.failure ? failureSummary(a.failure.text) : a.work)
                   }
                 >
                   {a.unassigned
                     ? "未分配账号"
-                    : a.failure
-                      ? failureSummary(a.failure.text)
-                      : a.work}
+                    : statusNote(a) ||
+                      (a.failure ? failureSummary(a.failure.text) : a.work)}
                 </span>
                 <span className="truncate text-muted max-[700px]:hidden">
                   {a.runtime?.model && a.runtime.model !== "unknown/unknown"

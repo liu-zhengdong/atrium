@@ -53,8 +53,9 @@ export function deliveryPlan(input: {
 }
 
 /**
- * 离线的身份要不要为这些待投递事件起来。
- * 只有直接找它的值得开一个进程；群里没点名的消息和消息箱提醒等它下次自己起来再看。
+ * 离线或休眠身份的统一唤醒判定。
+ * 只有直接找它的值得开一个进程；未点名的群消息、notify、事件订阅和
+ * 定时心跳提醒都只进消息箱（summary），等它下次自己起来再看。
  */
 export const wakesOffline = (pending: { kind: DeliveryKind }[]) =>
   pending.some((item) => item.kind === "direct");

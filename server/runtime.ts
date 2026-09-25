@@ -144,6 +144,7 @@ export class Runtimes {
     }
   >();
   private starts = new Map<string, { at: number; failures: number }>();
+  readonly waking = new Set<string>();
   /** Only the first turn of a restored, locally owned session may be replaced. */
   private restored = new Map<string, string>();
   private recovery = new Map<string, string>();
@@ -632,6 +633,7 @@ export class Runtimes {
     requireAssignment(this.store, id);
     if (this.connections.has(id)) throw new Problem(409, "Agent 已连接");
     await this.operation(id, () => this.bind(id, { runtimeId }));
+    if (this.store.agent(id).sleeping_at) this.store.setSleeping(id, false);
     await this.pump(id);
   }
   async promote(id: string, template?: string) {
@@ -748,165 +750,210 @@ export class Runtimes {
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (binding.runtime_pid && alive(binding.runtime_pid))
       throw new Problem(409, "原 Pi 进程仍存在，等待重连；不会另开同一会话");
+    const sleeping = !!this.store.agent(id).sleeping_at;
     const last = this.starts.get(id);
     if (
       automatic &&
       last &&
       (Date.now() - last.at < 60000 || last.failures >= 3)
-    )
-      return;
-    this.starts.set(id, {
-      at: Date.now(),
-      failures: automatic ? (last?.failures ?? 0) + 1 : 1,
-    });
-    await this.operation(id, async () => {
-      const current = this.store.agent(id);
-      const cwd = ensureDesktopCwd(this.store, this.desktops, current);
-      if (cwd !== current.cwd) this.changed();
-      if (current.agent_directory) {
-        // Migrate only when this identity is started, never on service boot.
-        // A failed migration must not launch Pi with personal plugins.
-        const migrationStarted = Date.now();
-        try {
-          if (ensureOwnPackages(current.agent_directory)) {
-            // Package migration may have created new links after an earlier clean scan.
-            this.store.run(
-              "DELETE FROM identity_link_migrations WHERE agent_id=?",
-              id,
+    ) {
+      const reason = "自动唤醒受限，请在聊天里重试";
+      this.store.setFailure(id, reason);
+      this.changed();
+      throw new Problem(503, reason);
+    }
+    if (sleeping) {
+      this.waking.add(id);
+      this.changed();
+    }
+    try {
+      await this.operation(id, async () => {
+        const current = this.store.agent(id);
+        const cwd = ensureDesktopCwd(this.store, this.desktops, current);
+        if (cwd !== current.cwd) this.changed();
+        if (
+          sleeping &&
+          automatic &&
+          !current.session_file &&
+          !binding.acp_session_id
+        )
+          throw new Problem(
+            503,
+            "找不到原会话；已保留待投递消息，请检查后重试",
+          );
+        if (current.agent_directory) {
+          // Migrate only when this identity is started, never on service boot.
+          // A failed migration must not launch Pi with personal plugins.
+          const migrationStarted = Date.now();
+          try {
+            if (ensureOwnPackages(current.agent_directory)) {
+              // Package migration may have created new links after an earlier clean scan.
+              this.store.run(
+                "DELETE FROM identity_link_migrations WHERE agent_id=?",
+                id,
+              );
+              console.log(
+                `${current.name} 的个人 Pi 插件已转为独立安装（${Date.now() - migrationStarted}ms）`,
+              );
+            }
+          } catch (error) {
+            console.error(
+              `${current.name} 的插件迁移失败（${Date.now() - migrationStarted}ms），保留原配置以便重试：${error}`,
             );
-            console.log(
-              `${current.name} 的个人 Pi 插件已转为独立安装（${Date.now() - migrationStarted}ms）`,
+            throw error;
+          }
+          try {
+            const links = migrateTemplateLinks(
+              this.store,
+              id,
+              current.agent_directory,
+            );
+            if (links.skipped)
+              console.log(
+                `${current.name} 的模板链接已检查，跳过全量扫描（${links.elapsedMs.toFixed(2)}ms）`,
+              );
+            else if (links.repaired || links.missing || links.failed)
+              console.log(
+                `${current.name} 的模板链接已修复 ${links.repaired} 条，保留 ${links.missing} 条，扫描失败 ${links.failed} 条（${links.elapsedMs.toFixed(0)}ms）`,
+              );
+          } catch (error) {
+            console.error(
+              `${current.name} 的模板链接修复失败，继续启动：${error}`,
             );
           }
-        } catch (error) {
-          console.error(
-            `${current.name} 的插件迁移失败（${Date.now() - migrationStarted}ms），保留原配置以便重试：${error}`,
-          );
-          throw error;
-        }
-        try {
-          const links = migrateTemplateLinks(
-            this.store,
-            id,
-            current.agent_directory,
-          );
-          if (links.skipped)
-            console.log(
-              `${current.name} 的模板链接已检查，跳过全量扫描（${links.elapsedMs.toFixed(2)}ms）`,
+          // A profile left on the old layout costs the Agent a rule, not its session.
+          for (const notice of syncIdentityProfile(current.agent_directory))
+            console.error(`${current.name} 的${notice}`);
+          const configured = readIdentityModel(current.agent_directory);
+          const restored = !fresh && !!current.session_file;
+          const params = {
+            identityId: id,
+            agentDirectory: current.agent_directory,
+            cwd,
+            ...(restored ? { sessionFile: current.session_file } : {}),
+            // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
+            ...(configured ? { model: formatModelSpec(configured) } : {}),
+          };
+          let runtimeId: string;
+          let restoreError: string | null = null;
+          try {
+            ({ runtimeId } = fresh
+              ? await this.freshIdentityStart(id, params)
+              : await this.rpc<{ runtimeId: string }>(
+                  "_pi/identity/start",
+                  params,
+                ));
+          } catch (error) {
+            if (
+              (sleeping && automatic) ||
+              !restored ||
+              /already occupied|identity.*occupied/i.test(
+                errorWithDetails(error),
+              )
+            )
+              throw error;
+            ({ runtimeId } = await this.freshIdentityStart(id, params));
+            fresh = true;
+            restoreError = `恢复旧会话失败：${errorWithDetails(error)}`;
+          }
+          try {
+            await this.bind(id, { runtimeId });
+            const info = this.connections.get(id)?.info;
+            // pi-atrium may accept the start request but silently replace an
+            // unreadable session. Treat that as a reset, not a successful restore.
+            if (
+              restored &&
+              !fresh &&
+              info &&
+              (!info.sessionFile ||
+                !this.sameFile(info.sessionFile, current.session_file!))
+            ) {
+              // The adapter silently skipped the unreadable file. Its cursor may
+              // have resumed a DIFFERENT old session: explicitly start fresh.
+              await this.rpc("_pi/identity/stop", { identityId: id });
+              this.connections.delete(id);
+              this.store.run(
+                "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL,observed_session_id=NULL WHERE id=?",
+                id,
+              );
+              if (sleeping && automatic)
+                throw new Problem(
+                  503,
+                  "原会话无法恢复；已保留旧会话与待投递消息，请检查后重试",
+                );
+              const replacement = await this.freshIdentityStart(id, params);
+              await this.bind(id, replacement);
+              restoreError = "原会话无法读取，已新建会话";
+            } else if (restored && !fresh && !restoreError && info)
+              this.restored.set(id, info.generation);
+            if (restoreError) this.recordSessionReset(id, restoreError);
+          } catch (error) {
+            await this.rpc("_pi/identity/stop", { identityId: id }).catch(
+              () => undefined,
             );
-          else if (links.repaired || links.missing || links.failed)
-            console.log(
-              `${current.name} 的模板链接已修复 ${links.repaired} 条，保留 ${links.missing} 条，扫描失败 ${links.failed} 条（${links.elapsedMs.toFixed(0)}ms）`,
-            );
-        } catch (error) {
-          console.error(
-            `${current.name} 的模板链接修复失败，继续启动：${error}`,
-          );
-        }
-        // A profile left on the old layout costs the Agent a rule, not its session.
-        for (const notice of syncIdentityProfile(current.agent_directory))
-          console.error(`${current.name} 的${notice}`);
-        const configured = readIdentityModel(current.agent_directory);
-        const restored = !fresh && !!current.session_file;
-        const params = {
-          identityId: id,
-          agentDirectory: current.agent_directory,
-          cwd,
-          ...(restored ? { sessionFile: current.session_file } : {}),
-          // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
-          ...(configured ? { model: formatModelSpec(configured) } : {}),
-        };
-        let runtimeId: string;
-        let restoreError: string | null = null;
-        try {
-          ({ runtimeId } = fresh
-            ? await this.freshIdentityStart(id, params)
-            : await this.rpc<{ runtimeId: string }>(
-                "_pi/identity/start",
-                params,
-              ));
-        } catch (error) {
-          if (
-            !restored ||
-            /already occupied|identity.*occupied/i.test(errorWithDetails(error))
-          )
             throw error;
-          ({ runtimeId } = await this.freshIdentityStart(id, params));
-          fresh = true;
-          restoreError = `恢复旧会话失败：${errorWithDetails(error)}`;
+          }
+          return;
         }
+        let sessionId = fresh ? null : binding.acp_session_id;
+        let restoreError: string | null = null;
+        let restored = !!(sessionId || (!fresh && binding.session_file));
         try {
-          await this.bind(id, { runtimeId });
-          const info = this.connections.get(id)?.info;
-          // pi-atrium may accept the start request but silently replace an
-          // unreadable session. Treat that as a reset, not a successful restore.
-          if (
-            restored &&
-            !fresh &&
-            info &&
-            (!info.sessionFile ||
-              !this.sameFile(info.sessionFile, current.session_file!))
-          ) {
-            // The adapter silently skipped the unreadable file. Its cursor may
-            // have resumed a DIFFERENT old session: explicitly start fresh.
-            await this.rpc("_pi/identity/stop", { identityId: id });
-            this.connections.delete(id);
-            this.store.run(
-              "UPDATE agents SET runtime_id=NULL,runtime_pid=NULL,observed_session_id=NULL WHERE id=?",
-              id,
+          if (!sessionId && binding.session_file && !fresh) {
+            ({ sessionId } = await this.rpc<{ sessionId: string }>(
+              "_pi/session/import",
+              { cwd, sessionFile: binding.session_file },
+            ));
+          }
+          if (sessionId)
+            await this.rpc("session/load", {
+              sessionId,
+              cwd,
+              mcpServers: this.services(id),
+            });
+        } catch (error) {
+          if (sessionId)
+            await this.rpc("session/close", { sessionId }).catch(
+              () => undefined,
             );
-            const replacement = await this.freshIdentityStart(id, params);
-            await this.bind(id, replacement);
-            restoreError = "原会话无法读取，已新建会话";
-          } else if (restored && !fresh && !restoreError && info)
-            this.restored.set(id, info.generation);
+          sessionId = null;
+          restored = false;
+          restoreError = `恢复旧会话失败：${errorWithDetails(error)}`;
+          if (sleeping && automatic) throw new Problem(503, restoreError);
+        }
+        if (!sessionId)
+          ({ sessionId } = await this.rpc<{ sessionId: string }>(
+            "session/new",
+            {
+              cwd,
+              mcpServers: this.services(id),
+            },
+          ));
+        try {
+          await this.bind(id, { sessionId });
+          if (restored && !fresh)
+            this.restored.set(id, this.connections.get(id)!.info.generation);
           if (restoreError) this.recordSessionReset(id, restoreError);
         } catch (error) {
-          await this.rpc("_pi/identity/stop", { identityId: id }).catch(
-            () => undefined,
-          );
+          await this.rpc("session/close", { sessionId }).catch(() => undefined);
           throw error;
         }
-        return;
+      });
+      this.starts.delete(id); // Only failed starts count against automatic wakeups.
+      if (sleeping) this.store.setSleeping(id, false);
+    } catch (error) {
+      if (automatic)
+        this.starts.set(id, {
+          at: Date.now(),
+          failures: (last?.failures ?? 0) + 1,
+        });
+      throw error;
+    } finally {
+      if (sleeping) {
+        this.waking.delete(id);
+        this.changed();
       }
-      let sessionId = fresh ? null : binding.acp_session_id;
-      let restoreError: string | null = null;
-      let restored = !!(sessionId || (!fresh && binding.session_file));
-      try {
-        if (!sessionId && binding.session_file && !fresh) {
-          ({ sessionId } = await this.rpc<{ sessionId: string }>(
-            "_pi/session/import",
-            { cwd, sessionFile: binding.session_file },
-          ));
-        }
-        if (sessionId)
-          await this.rpc("session/load", {
-            sessionId,
-            cwd,
-            mcpServers: this.services(id),
-          });
-      } catch (error) {
-        if (sessionId)
-          await this.rpc("session/close", { sessionId }).catch(() => undefined);
-        sessionId = null;
-        restored = false;
-        restoreError = `恢复旧会话失败：${errorWithDetails(error)}`;
-      }
-      if (!sessionId)
-        ({ sessionId } = await this.rpc<{ sessionId: string }>("session/new", {
-          cwd,
-          mcpServers: this.services(id),
-        }));
-      try {
-        await this.bind(id, { sessionId });
-        if (restored && !fresh)
-          this.restored.set(id, this.connections.get(id)!.info.generation);
-        if (restoreError) this.recordSessionReset(id, restoreError);
-      } catch (error) {
-        await this.rpc("session/close", { sessionId }).catch(() => undefined);
-        throw error;
-      }
-    });
+    }
     if (!this.pumping.has(id)) await this.pump(id);
   }
   /** 等真实运行状态空闲后才释放旧实例；切换期间不投递新的回合。 */
@@ -1019,6 +1066,15 @@ export class Runtimes {
   }
   /** 停掉自己启动的托管实例。会话、身份与待投递消息都保留；被私聊或 @ 时会再起来。 */
   async stop(id: string) {
+    if (
+      !this.connections.has(id) &&
+      this.store.agent(id).sleeping_at &&
+      !this.running(id)
+    ) {
+      this.store.setSleeping(id, false);
+      this.changed();
+      return;
+    }
     if (!this.connections.has(id)) throw new Problem(409, "Agent 没在运行");
     if (!this.owned(id))
       throw new Problem(409, "这个实例不是 Atrium 启动的，请在原终端退出");
@@ -1027,7 +1083,53 @@ export class Runtimes {
       this.connections.delete(id);
       this.errors.delete(id);
     });
+    if (this.store.agent(id).sleeping_at) this.store.setSleeping(id, false);
     this.changed();
+  }
+  /** 管理型身份的空闲退出。与启动、手动停机共用 operation 守卫。 */
+  async sleep(id: string): Promise<boolean> {
+    const entry = this.connections.get(id);
+    if (
+      !entry ||
+      !this.owned(id) ||
+      this.connecting.has(id) ||
+      this.pumping.has(id)
+    )
+      return false;
+    if (entry.info.busy || this.store.pending(id).length) return false;
+    const { runtimeId } = entry.info;
+    await this.operation(
+      id,
+      async () => {
+        const latest = this.connections.get(id);
+        if (
+          latest?.info.runtimeId !== runtimeId ||
+          !this.owned(id) ||
+          this.pumping.has(id)
+        )
+          return;
+        const status = runtimeSchema.parse(
+          await this.rpc("_pi/runtime/status", target(latest.info)),
+        );
+        if (status.busy || this.store.pending(id).length) return;
+        // Persist intent before stopping; an ambiguous failure must never open a
+        // second writer of the original session on the next automatic wake.
+        this.store.setSleeping(id, true);
+        await this.rpc("_pi/identity/stop", { identityId: id });
+        this.connections.delete(id);
+        this.errors.delete(id);
+        this.needsReload.delete(id);
+        this.changed();
+      },
+      "ignore",
+    );
+    if (this.store.agent(id).sleeping_at) {
+      // A direct message can arrive after the final idle check but before the stop.
+      // operation releases its lock before this wake; the queued delivery is not lost.
+      if (wakesOffline(this.store.pending(id))) void this.pump(id, true);
+      return true;
+    }
+    return false;
   }
   /** 删除预览与删除守卫共用实际存活判断；发现列表可能滞后，不能只看名册在线状态。 */
   running(id: string, discovered = this.directory().runtimes): boolean {
@@ -1226,7 +1328,10 @@ export class Runtimes {
           runtime = this.connections.get(id);
         } else {
           if (wakesOffline(this.store.pending(id)))
-            await this.start(id, !direct).catch((error) => {
+            await this.start(
+              id,
+              !!this.store.agent(id).sleeping_at || !direct,
+            ).catch((error) => {
               operationFailed = true;
               throw error;
             });
@@ -1485,6 +1590,7 @@ export class Runtimes {
     if (runtime?.info.busy)
       throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
     this.store.finishTurn(id, false);
+    this.starts.delete(id); // Explicit retry bypasses the automatic cooldown.
     await this.pump(
       id,
       agentTransition(this.store.failure(id), { kind: "retry" }).wake,

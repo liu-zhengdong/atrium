@@ -11,6 +11,7 @@ import { AgentNewSession } from "./AgentNewSession.tsx";
 import { AgentCredentials } from "../settings/AgentCredentials.tsx";
 import {
   agentPresence,
+  runtimeLabel,
   Avatar,
   type Agent,
 } from "../components/AgentAvatar.tsx";
@@ -64,7 +65,9 @@ export function AgentDrawer({
             />
           ) : (
             <p className="truncate" title={agent.work}>
-              {agent.work || "尚未声明工作"}
+              {agent.sleeping_at
+                ? runtimeLabel(agent)
+                : agent.work || "尚未声明工作"}
             </p>
           )}
         </div>

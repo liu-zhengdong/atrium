@@ -202,6 +202,8 @@ export class Store {
     this.addColumn("agents", "error_text", "TEXT");
     this.addColumn("agents", "error_at", "INTEGER");
     this.addColumn("agents", "failure_count", "INTEGER NOT NULL DEFAULT 0");
+    // 空闲退出是可恢复的意图；进程退出后仍需区分「休眠」与手动停止。
+    this.addColumn("agents", "sleeping_at", "INTEGER");
     const deliveryCols = this.all<{ name: string }>(
       "PRAGMA table_info(deliveries)",
     ).map((c) => c.name);
@@ -390,11 +392,19 @@ export class Store {
       work: row.work,
       cwd: row.cwd,
       session_file: row.session_file,
+      sleeping_at: row.sleeping_at,
       session_reset_at: row.session_reset_at,
       session_reset_reason: row.session_reset_reason,
       last_wake: row.last_wake,
       config: preferences.parse(raw),
     };
+  }
+  setSleeping(id: string, sleeping: boolean) {
+    this.run(
+      "UPDATE agents SET sleeping_at=? WHERE id=?",
+      sleeping ? Date.now() : null,
+      id,
+    );
   }
   agents(): AgentInfo[] {
     return this.all<{ id: string }>(

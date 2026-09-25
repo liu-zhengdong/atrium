@@ -63,6 +63,7 @@ import { TraceStore } from "./trace.ts";
 import { TurnLedger } from "./turns.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
+import { notifyTerminal } from "./incident-notice.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { wakesOffline } from "./delivery.ts";
@@ -128,6 +129,8 @@ export class Runtimes {
   readonly traces: TraceStore;
   readonly turns: TurnLedger;
   private manuallyRetrying = new Set<string>();
+  private explicitlyRetrying = new Set<string>();
+  private readonly retryOwner = randomUUID();
   private idleAccepted = new Map<
     string,
     { runtime: string; generation: string; since: number }
@@ -1560,6 +1563,17 @@ export class Runtimes {
     }
     const existing = this.pumping.get(id);
     if (existing) return existing;
+    const incident = this.store.incident(id);
+    if (
+      (incident?.category === "needsHuman" || incident?.blocked) &&
+      !this.explicitlyRetrying.has(id) &&
+      !this.manuallyRetrying.has(id)
+    ) {
+      const userMessage = this.store.userAttemptDue(id);
+      if (!userMessage || !this.store.claimUserAttempt(id, userMessage))
+        return Promise.resolve();
+      direct = true;
+    }
     const promise = this.doPump(id, direct).finally(() =>
       this.pumping.delete(id),
     );
@@ -1580,6 +1594,11 @@ export class Runtimes {
       return;
     }
     let operationFailed = false;
+    const incident = this.store.incident(id);
+    const singleAttempt =
+      !this.manuallyRetrying.has(id) &&
+      !this.explicitlyRetrying.has(id) &&
+      (incident?.category === "needsHuman" || !!incident?.blocked);
     try {
       if (this.connecting.has(id) || this.switching.has(id)) return;
       let runtime = this.connections.get(id);
@@ -1671,6 +1690,7 @@ export class Runtimes {
       }
       let triggeredTurn = false;
       for (const pending of this.store.pending(id)) {
+        if (singleAttempt && pending.kind !== "direct") continue;
         // A successful turn can clear the identity failure while its delivery
         // remains uncertain. Only an explicit retry may ask Pi about this id.
         if (
@@ -1751,8 +1771,10 @@ export class Runtimes {
               this.store.accepted(pending.id, !settled);
               if (settled) {
                 this.store.completeDelivery(pending.id);
+                // Duplicate alone is not success; settled additionally proves the
+                // old run_end completed with no trace error, even after restart.
                 if (!this.store.uncertainDelivery(id))
-                  this.store.clearFailure(id);
+                  this.store.clearFailure(id, true);
               }
               // Busy or incomplete trace: retain the failure and retry entry.
             } else {
@@ -1783,6 +1805,9 @@ export class Runtimes {
             else this.store.finishTurn(id, false);
           }
           this.changed();
+          // A broken old session may fail every queued message. A user message
+          // permits one turn, not a replay of all older pending deliveries.
+          if (singleAttempt || (turn && !turn.successful)) break;
         } catch (error) {
           if (
             this.restored.get(id) === runtime.info.generation &&
@@ -1946,7 +1971,7 @@ export class Runtimes {
                     .failure(id)
                     ?.text.includes("模型认证失败，请更换 API Key")
                 ) {
-                  this.store.clearFailure(id);
+                  // Keep the incident and retry count until a verified run_end.
                   this.errors.delete(id);
                 }
               } else if (event.kind === "run_end") {
@@ -1976,11 +2001,17 @@ export class Runtimes {
                         turn.failure,
                       )
                         ? "模型认证失败，请更换 API Key"
-                        : turn.failure,
+                        : this.redact(id, turn.failure),
                       event.at,
+                      "provider",
+                      `${info.runtimeId}:${info.generation}:${event.seq}`,
                     );
                 }
-                if (turn && !turn.failure) this.errors.delete(id);
+                if (turn && !turn.failure) {
+                  if (turn.delivery_at !== null && !this.recovery.has(id))
+                    this.store.finishTurn(id, true, turn.delivery_at);
+                  this.errors.delete(id);
+                }
               }
             },
             () => this.turns.clear(id),
@@ -2031,10 +2062,15 @@ export class Runtimes {
       return;
     }
     this.store.finishTurn(id, false);
-    await this.pump(
-      id,
-      agentTransition(this.store.failure(id), { kind: "retry" }).wake,
-    );
+    this.explicitlyRetrying.add(id);
+    try {
+      await this.pump(
+        id,
+        agentTransition(this.store.failure(id), { kind: "retry" }).wake,
+      );
+    } finally {
+      this.explicitlyRetrying.delete(id);
+    }
   }
   activeAgentIds(): string[] {
     return [...this.connections.keys()].filter(
@@ -2142,9 +2178,14 @@ export class Runtimes {
           const before = JSON.stringify(this.connections.get(agent.id)?.info);
           if (this.store.failure(agent.id) && this.connections.get(agent.id))
             await this.capture(agent.id, this.connections.get(agent.id)!.info);
+          this.store.guardOrphanRetry(agent.id, this.retryOwner);
           const failure = this.store.failure(agent.id);
-          const direct =
+          const incident = failure ? this.store.incident(agent.id) : null;
+          const userDue = !!this.store.userAttemptDue(agent.id);
+          const peerDue =
             failure !== null &&
+            incident?.category === "transient" &&
+            !incident.blocked &&
             this.store
               .pending(agent.id)
               .some(
@@ -2152,7 +2193,17 @@ export class Runtimes {
                   delivery.kind === "direct" &&
                   delivery.created_at > failure.at,
               );
-          await this.pump(agent.id, direct);
+          const autoDue =
+            !userDue &&
+            !peerDue &&
+            !this.connecting.has(agent.id) &&
+            !this.pumping.has(agent.id) &&
+            !this.switching.has(agent.id) &&
+            !this.isMigrating(agent.id) &&
+            !this.connections.get(agent.id)?.info.busy &&
+            this.store.claimRetry(agent.id, Date.now(), this.retryOwner);
+          await this.pump(agent.id, userDue || peerDue || autoDue);
+          if (notifyTerminal(this.store, agent.id)) this.changed();
           if (before !== JSON.stringify(this.connections.get(agent.id)?.info))
             this.changed();
         }),

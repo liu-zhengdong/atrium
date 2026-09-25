@@ -84,6 +84,7 @@ async function targetChat(
 }
 /** 发送者怎么称呼：用户用资料里的称呼，Agent 用身份名，都带短号。 */
 function senderLabel(view: Overview, message: Message) {
+  if (message.sender === "system") return "系统";
   if (isUserRef(message.sender))
     return `${view.user.name || "用户"}(${message.sender})`;
   const ref = view.agents.find((agent) => agent.id === message.sender)?.ref;

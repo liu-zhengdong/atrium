@@ -303,7 +303,7 @@ test(
     );
     assert.match(
       await ok("send", "c2", "开工了", "--as", "林岚", "--mention", "沈默"),
-      /已发送 #2 → 评审组（c2）/,
+      /已发送 #\d+ → 评审组（c2）/,
     );
     assert.match(await ok("read", "c2"), /林岚\(a1\)：开工了/);
     assert.match(await ok("chats"), /c2\s+评审组\s+群/);

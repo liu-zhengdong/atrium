@@ -46,6 +46,13 @@ import {
 } from "./delivery.ts";
 import { Problem, closest } from "./problem.ts";
 import { agentTransition, type AgentFailure } from "./agent-failure.ts";
+import { notifyRecovered } from "./incident-notice.ts";
+import {
+  classifyFailure,
+  retryDecision,
+  type FailureSource,
+  type Incident,
+} from "./incident.ts";
 
 export { Problem };
 /** 同一副样子的消息箱提醒几次。没人处理就一直提，只会把对方的会话撑大。 */
@@ -212,6 +219,19 @@ export class Store {
     this.addColumn("agents", "error_at", "INTEGER");
     this.addColumn("agents", "failure_count", "INTEGER NOT NULL DEFAULT 0");
     this.addColumn("agents", "reports_to", "TEXT REFERENCES agents(id)");
+    this.addColumn("agents", "last_success_at", "INTEGER");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS failure_incidents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL REFERENCES agents(id),
+      started_at INTEGER NOT NULL, category TEXT NOT NULL, attempts_used INTEGER NOT NULL DEFAULT 0,
+      attempt_running INTEGER NOT NULL DEFAULT 0, attempt_owner TEXT, blocked INTEGER NOT NULL DEFAULT 0,
+      notified_at INTEGER, last_event_key TEXT, last_user_attempt_message INTEGER NOT NULL DEFAULT 0, closed_at INTEGER);
+      CREATE UNIQUE INDEX IF NOT EXISTS incident_active ON failure_incidents(agent_id) WHERE closed_at IS NULL;
+      CREATE TABLE IF NOT EXISTS incident_notices (
+        incident_id INTEGER NOT NULL REFERENCES failure_incidents(id), recipient TEXT NOT NULL,
+        chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL, recovered_at INTEGER,
+        PRIMARY KEY(incident_id,recipient));
+      CREATE TABLE IF NOT EXISTS incident_migration (name TEXT PRIMARY KEY, at INTEGER NOT NULL);
+      INSERT OR IGNORE INTO incident_migration(name,at) VALUES('notification-baseline',strftime('%s','now')*1000);`);
     const deliveryCols = this.all<{ name: string }>(
       "PRAGMA table_info(deliveries)",
     ).map((c) => c.name);
@@ -313,6 +333,7 @@ export class Store {
     ensureUsers(this);
     ensureGroups(this);
     this.addColumn("messages", "details", "TEXT NOT NULL DEFAULT ''");
+    this.addColumn("messages", "subject_agent_id", "TEXT");
   }
   /** SQLite cannot alter a CHECK constraint. Preserve short-number allocation on rebuild. */
   private migrateLocalAccounts() {
@@ -686,8 +707,8 @@ export class Store {
       }
     >(
       `SELECT m.chat_id,'c'||r.number AS chat_ref,c.name AS chat_name,m.id,m.sender,
-       CASE WHEN m.sender=? THEN ? ELSE COALESCE(a.deleted_name,a.name,m.sender) END AS sender_name,
-       m.body, m.details, m.created_at
+       CASE WHEN m.sender='system' THEN '系统' WHEN m.sender=? THEN ? ELSE COALESCE(a.deleted_name,a.name,m.sender) END AS sender_name,
+       m.subject_agent_id,m.body, m.details, m.created_at
        FROM messages m JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
        LEFT JOIN agents a ON a.id=m.sender
        WHERE (m.body LIKE ? ESCAPE '\\' OR m.details LIKE ? ESCAPE '\\') ORDER BY m.created_at DESC, m.rowid DESC LIMIT 20`,
@@ -758,7 +779,7 @@ export class Store {
       created_at: number;
     }>(
       `SELECT m.id,'c'||r.number AS chat_ref,c.name AS chat_name,m.sender,
-         'a'||ar.number AS sender_ref,COALESCE(a.deleted_name,a.name) AS sender_name,m.body,m.details,m.created_at
+         'a'||ar.number AS sender_ref,CASE WHEN m.sender='system' THEN '系统' ELSE COALESCE(a.deleted_name,a.name) END AS sender_name,m.body,m.details,m.created_at
        FROM messages m JOIN members mb ON mb.chat_id=m.chat_id
        JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
        LEFT JOIN agents a ON a.id=m.sender LEFT JOIN agent_refs ar ON ar.agent_id=m.sender
@@ -995,6 +1016,21 @@ export class Store {
       previousIds.every((id, index) => id === attachments[index]);
     if (!same) throw new Problem(409, "消息标识已用于不同内容");
     return this.hydrate([decodeMessage(previous)])[0]!;
+  }
+  /** A system notice is a user-visible message, not a user or Agent send. */
+  systemMessage(
+    chatId: string,
+    subject: string,
+    body: string,
+    at = Date.now(),
+  ) {
+    this.run(
+      "INSERT INTO messages(chat_id,sender,body,details,mentions,created_at,mention_all,subject_agent_id) VALUES(?,'system',?,'','[]',?,0,?)",
+      chatId,
+      body,
+      at,
+      subject,
+    );
   }
   send(sender: string, request: SendRequest) {
     const chat = this.chat(request.chat_id);
@@ -1325,7 +1361,7 @@ export class Store {
     const cursor = after ?? last.last_read;
     const page = bounded(
       this.all<MessageRow>(
-        "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>? ORDER BY m.id LIMIT ?",
+        "SELECT m.*,CASE WHEN m.sender='system' THEN '系统' ELSE COALESCE(a.deleted_name,a.name) END AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>? ORDER BY m.id LIMIT ?",
         chatId,
         cursor,
         limit + 1,
@@ -1391,7 +1427,7 @@ export class Store {
     if (around) {
       const from = Math.max(1, around - 25);
       const rows = this.all<MessageRow>(
-        "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>=? AND m.id<=? ORDER BY m.id",
+        "SELECT m.*,CASE WHEN m.sender='system' THEN '系统' ELSE COALESCE(a.deleted_name,a.name) END AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>=? AND m.id<=? ORDER BY m.id",
         chatId,
         from,
         around + 24,
@@ -1403,7 +1439,7 @@ export class Store {
       };
     }
     const rows = this.all<MessageRow>(
-      "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id<? ORDER BY m.id DESC LIMIT 51",
+      "SELECT m.*,CASE WHEN m.sender='system' THEN '系统' ELSE COALESCE(a.deleted_name,a.name) END AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id<? ORDER BY m.id DESC LIMIT 51",
       chatId,
       before,
     );
@@ -1432,7 +1468,7 @@ export class Store {
   timelineAfter(chatId: string, after: number) {
     this.chat(chatId);
     const rows = this.all<MessageRow>(
-      "SELECT m.*,COALESCE(a.deleted_name,a.name) AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>? ORDER BY m.id LIMIT 51",
+      "SELECT m.*,CASE WHEN m.sender='system' THEN '系统' ELSE COALESCE(a.deleted_name,a.name) END AS sender_name,a.deleted_at AS sender_deleted_at FROM messages m LEFT JOIN agents a ON a.id=m.sender WHERE m.chat_id=? AND m.id>? ORDER BY m.id LIMIT 51",
       chatId,
       after,
     );
@@ -1641,25 +1677,217 @@ export class Store {
       ? { text: row.text, at: row.at, count: row.count }
       : null;
   }
-  setFailure(id: string, text: string, at = Date.now()) {
-    console.error(`[Atrium] Agent ${id} 运行出错：${text}`);
-    const next = agentTransition(this.failure(id), {
-      kind: "failure",
-      text,
-      at,
-    }).failure!;
-    this.run(
-      "UPDATE agents SET error_text=?,error_at=?,failure_count=? WHERE id=?",
-      next.text,
-      next.at,
-      next.count,
+  incident(id: string): (Incident & { id: number }) | null {
+    const row = this.one<{
+      id: number;
+      started_at: number;
+      category: Incident["category"];
+      attempts_used: number;
+      attempt_running: number;
+      attempt_owner: string | null;
+      blocked: number;
+      notified_at: number | null;
+    }>(
+      "SELECT * FROM failure_incidents WHERE agent_id=? AND closed_at IS NULL",
+      id,
+    );
+    return row
+      ? {
+          ...row,
+          attempt_running: !!row.attempt_running,
+          blocked: !!row.blocked,
+        }
+      : null;
+  }
+  retryStatus(id: string, now = Date.now()) {
+    const failure = this.failure(id),
+      incident = this.incident(id);
+    if (!failure) return null;
+    const pending = this.retryablePending(id);
+    const retry = incident
+      ? retryDecision(incident, now, pending, !!this.uncertainDelivery(id))
+      : {
+          state: "needs_action" as const,
+          attempt: null,
+          max: 3,
+          next_at: null,
+        };
+    return { ...failure, retry };
+  }
+  setFailure(
+    id: string,
+    text: string,
+    at = Date.now(),
+    source: FailureSource = "startup",
+    eventKey?: string,
+  ) {
+    const apply = () => {
+      const active = this.incident(id);
+      if (
+        eventKey &&
+        active &&
+        this.one<{ last_event_key: string | null }>(
+          "SELECT last_event_key FROM failure_incidents WHERE id=?",
+          active.id,
+        )?.last_event_key === eventKey
+      )
+        return;
+      console.error(`[Atrium] Agent ${id} 运行出错：${text}`);
+      const next = agentTransition(this.failure(id), {
+        kind: "failure",
+        text,
+        at,
+      }).failure!;
+      const category = classifyFailure(text, source);
+      if (active)
+        this.run(
+          "UPDATE failure_incidents SET attempt_running=0,blocked=CASE WHEN ?='needsHuman' THEN 1 ELSE blocked END,last_event_key=COALESCE(?,last_event_key) WHERE id=?",
+          category,
+          eventKey ?? null,
+          active.id,
+        );
+      else {
+        // The message that failed is already pending. Only later user input
+        // may authorize another attempt, including within the same millisecond.
+        const lastUser = this.one<{ id: number }>(
+          `SELECT COALESCE(MAX(m.id),0) AS id FROM deliveries d JOIN messages m ON m.id=d.through_message
+           WHERE d.agent_id=? AND d.kind='direct' AND d.state IN ('pending','accepted') AND m.sender=?`,
+          id,
+          LOCAL_USER,
+        )!.id;
+        this.run(
+          "INSERT INTO failure_incidents(agent_id,started_at,category,last_event_key,last_user_attempt_message) VALUES(?,?,?,?,?)",
+          id,
+          at,
+          category,
+          eventKey ?? null,
+          lastUser,
+        );
+      }
+      this.run(
+        "UPDATE agents SET error_text=?,error_at=?,failure_count=? WHERE id=?",
+        next.text,
+        next.at,
+        next.count,
+        id,
+      );
+    };
+    if (this.db.isTransaction) apply();
+    else this.transaction(apply);
+  }
+  clearFailure(id: string, verified = false) {
+    const apply = () => {
+      if (verified) notifyRecovered(this, id);
+      this.run(
+        "UPDATE failure_incidents SET closed_at=? WHERE agent_id=? AND closed_at IS NULL",
+        Date.now(),
+        id,
+      );
+      this.run(
+        "UPDATE agents SET error_text=NULL,error_at=NULL,failure_count=0 WHERE id=?",
+        id,
+      );
+    };
+    if (this.db.isTransaction) apply();
+    else this.transaction(apply);
+  }
+  /** A new user direct is an explicit, one-turn attempt even on a permanent failure. */
+  userAttemptDue(id: string): number | null {
+    const incident = this.incident(id);
+    if (!incident) return null;
+    return (
+      this.one<{ id: number }>(
+        `SELECT MAX(m.id) AS id FROM deliveries d JOIN messages m ON m.id=d.through_message
+       JOIN failure_incidents i ON i.agent_id=d.agent_id AND i.closed_at IS NULL
+       WHERE d.agent_id=? AND d.kind='direct' AND d.state='pending' AND m.sender=?
+         AND m.created_at>=i.started_at AND m.id>i.last_user_attempt_message`,
+        id,
+        LOCAL_USER,
+      )?.id ?? null
+    );
+  }
+  claimUserAttempt(id: string, messageId: number) {
+    return (
+      this.run(
+        "UPDATE failure_incidents SET last_user_attempt_message=? WHERE agent_id=? AND closed_at IS NULL AND last_user_attempt_message<?",
+        messageId,
+        id,
+        messageId,
+      ).changes === 1
+    );
+  }
+  /** Per-message delivery status, recomputed even for a client_id duplicate. */
+  deliveryNotice(messageId: number): string | undefined {
+    const rows = this.all<{
+      agent_id: string;
+      state: string;
+      error: string | null;
+      category: string;
+      blocked: number;
+    }>(
+      `SELECT d.agent_id,d.state,d.error,i.category,i.blocked FROM deliveries d
+       JOIN failure_incidents i ON i.agent_id=d.agent_id AND i.closed_at IS NULL
+       WHERE d.through_message=? AND d.kind='direct' AND d.state IN ('pending','accepted')
+         AND (i.category='needsHuman' OR i.blocked=1) ORDER BY d.agent_id`,
+      messageId,
+    );
+    const queued: string[] = [],
+      uncertain: string[] = [];
+    for (const row of rows) {
+      const ref = this.agentRef(row.agent_id);
+      if (row.state === "pending" && !row.error?.startsWith("投递结果未知"))
+        queued.push(ref);
+      else uncertain.push(ref);
+    }
+    const messages: string[] = [];
+    if (queued.length)
+      messages.push(
+        `${queued.join("、")} 出错待人工处理，暂不会回复；消息已排队`,
+      );
+    if (uncertain.length)
+      messages.push(
+        `${uncertain.join("、")} 出错待人工处理，暂不会回复；消息是否送达尚待确认`,
+      );
+    return messages.length ? messages.join("；") : undefined;
+  }
+  retryablePending(id: string): boolean {
+    return !!this.one(
+      "SELECT 1 FROM deliveries WHERE agent_id=? AND kind='direct' AND state='pending' AND (error IS NULL OR error NOT LIKE '投递结果未知%') LIMIT 1",
       id,
     );
   }
-  clearFailure(id: string) {
+  /** A restarted Web cannot know if the old attempt reached Pi. Do not duplicate it. */
+  guardOrphanRetry(id: string, owner: string) {
     this.run(
-      "UPDATE agents SET error_text=NULL,error_at=NULL,failure_count=0 WHERE id=?",
+      "UPDATE failure_incidents SET attempt_running=0,blocked=1 WHERE agent_id=? AND closed_at IS NULL AND attempt_running=1 AND attempt_owner IS NOT NULL AND attempt_owner<>?",
       id,
+      owner,
+    );
+  }
+  /** Reserve in the database BEFORE attempting an automatic wake. */
+  claimRetry(id: string, now = Date.now(), owner = "local"): boolean {
+    const incident = this.incident(id);
+    if (
+      !incident ||
+      retryDecision(
+        incident,
+        now,
+        this.retryablePending(id),
+        !!this.uncertainDelivery(id),
+      ).state !== "waiting"
+    )
+      return false;
+    const nextAt =
+      incident.started_at +
+      [120_000, 600_000, 1_800_000][incident.attempts_used]!;
+    if (now < nextAt) return false;
+    return (
+      this.run(
+        "UPDATE failure_incidents SET attempts_used=attempts_used+1,attempt_running=1,attempt_owner=? WHERE id=? AND attempts_used=? AND attempt_running=0",
+        owner,
+        incident.id,
+        incident.attempts_used,
+      ).changes === 1
     );
   }
   /** Settle only this id after its run_end, or after duplicate plus confirmed Pi idle. */
@@ -1686,7 +1914,15 @@ export class Store {
           ...args,
         );
         // Another successful turn does not prove a pending unknown delivery arrived.
-        if (!this.uncertainDelivery(id)) this.clearFailure(id);
+        if (!this.uncertainDelivery(id)) {
+          if (deliveryAt !== undefined)
+            this.run(
+              "UPDATE agents SET last_success_at=? WHERE id=?",
+              Date.now(),
+              id,
+            );
+          this.clearFailure(id, true);
+        }
       } else {
         const rows = this.all<{ id: string; text: string }>(
           `SELECT id,text FROM deliveries WHERE agent_id=? AND kind='direct' AND state='accepted' AND (error IS NULL OR error NOT LIKE '投递结果未知%')${since}`,

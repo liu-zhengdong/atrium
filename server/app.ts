@@ -756,7 +756,7 @@ export async function createApp(options: {
           running: runtimes?.running(a.id, discovery.runtimes) ?? false,
           error:
             store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
-          failure: store.failure(a.id),
+          failure: store.retryStatus(a.id),
           unread: store.boxCount(a.id),
           unassigned: !hasAssignment(store, a.id),
           needs_reload: runtimes?.needsReload.has(a.id) ?? false,

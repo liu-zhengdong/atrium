@@ -17,6 +17,7 @@ import {
 } from "../components/AgentAvatar.tsx";
 import { isImeKey } from "../keys.ts";
 import { convTime } from "../time.ts";
+import { subjectAgentId } from "../chat/messages.ts";
 
 type Hit =
   | { type: "agent"; id: string; agent: SearchResults["agents"][number] }
@@ -49,6 +50,7 @@ export function GlobalSearch({
   openAgent,
   openingAgent,
   details,
+  inspectAgent,
   refresh,
   openMessage,
   isOpen,
@@ -59,6 +61,7 @@ export function GlobalSearch({
   openAgent: (agent: Agent) => void;
   openingAgent: string | null;
   details: (id: string) => void;
+  inspectAgent: (id: string) => void;
   refresh: () => void;
   openMessage: (chatId: string, messageId: number) => void;
   isOpen: boolean;
@@ -217,87 +220,110 @@ export function GlobalSearch({
             <div className="space-y-1">
               {hits.map((hit, idx) => {
                 const isSelected = idx === active;
+                const subject =
+                  hit.type === "message"
+                    ? subjectAgentId(hit.message)
+                    : undefined;
+                const target = subject
+                  ? agents.find((agent) => agent.id === subject)
+                  : undefined;
                 return (
-                  <button
+                  <div
                     key={hit.id}
                     id={`search-hit-${hit.id}`}
-                    type="button"
-                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors ${
+                    className={`flex w-full items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
                       isSelected
                         ? "bg-[#edf5f1] text-[#316e50]"
                         : "hover:bg-[#f6f8f6] text-ink"
                     }`}
-                    onClick={() => choose(hit)}
                   >
-                    {hit.type === "agent" && (
-                      <>
-                        <Avatar small name={hit.agent.name} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate text-xs font-semibold">
-                              {hit.agent.name}
-                            </span>
-                            <span className="rounded bg-black/[0.04] px-1.5 py-0.2 font-mono text-[10px] text-muted">
-                              {hit.agent.ref}
-                            </span>
-                          </div>
-                          {hit.agent.description && (
-                            <p className="truncate text-[11px] text-muted">
-                              {hit.agent.description}
-                            </p>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-muted">Agent</span>
-                      </>
-                    )}
-
-                    {hit.type === "chat" && (
-                      <>
-                        <ChatAvatar chat={hit.chat} agents={agents} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate text-xs font-semibold">
-                              {hit.chat.name}
-                            </span>
-                            {hit.chat.ref && (
-                              <span className="rounded bg-black/[0.04] px-1.5 py-0.2 font-mono text-[10px] text-muted">
-                                {hit.chat.ref}
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      onClick={() => choose(hit)}
+                    >
+                      {hit.type === "agent" && (
+                        <>
+                          <Avatar small name={hit.agent.name} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate text-xs font-semibold">
+                                {hit.agent.name}
                               </span>
+                              <span className="rounded bg-black/[0.04] px-1.5 py-0.2 font-mono text-[10px] text-muted">
+                                {hit.agent.ref}
+                              </span>
+                            </div>
+                            {hit.agent.description && (
+                              <p className="truncate text-[11px] text-muted">
+                                {hit.agent.description}
+                              </p>
                             )}
                           </div>
-                          {hit.chat.preview && (
-                            <p className="truncate text-[11px] text-muted">
-                              {hit.chat.preview}
-                            </p>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-muted">会话</span>
-                      </>
-                    )}
+                          <span className="text-[10px] text-muted">Agent</span>
+                        </>
+                      )}
 
-                    {hit.type === "message" && (
-                      <>
-                        <div className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-[#f0f4f1] text-[#6e7d72]">
-                          <MessageSquare size={13} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-medium">
-                            {hit.message.text || "附件消息"}
-                          </p>
-                          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted">
-                            <span className="font-medium text-ink/80">
-                              {hit.message.chat_name}
-                            </span>
-                            <span>·</span>
-                            <span>{hit.message.sender_name}</span>
-                            <span>·</span>
-                            <span>{convTime(hit.message.created_at)}</span>
+                      {hit.type === "chat" && (
+                        <>
+                          <ChatAvatar chat={hit.chat} agents={agents} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate text-xs font-semibold">
+                                {hit.chat.name}
+                              </span>
+                              {hit.chat.ref && (
+                                <span className="rounded bg-black/[0.04] px-1.5 py-0.2 font-mono text-[10px] text-muted">
+                                  {hit.chat.ref}
+                                </span>
+                              )}
+                            </div>
+                            {hit.chat.preview && (
+                              <p className="truncate text-[11px] text-muted">
+                                {hit.chat.preview}
+                              </p>
+                            )}
                           </div>
-                        </div>
-                        <span className="text-[10px] text-muted">消息</span>
-                      </>
+                          <span className="text-[10px] text-muted">会话</span>
+                        </>
+                      )}
+
+                      {hit.type === "message" && (
+                        <>
+                          <div className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-[#f0f4f1] text-[#6e7d72]">
+                            <MessageSquare size={13} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-medium">
+                              {hit.message.text || "附件消息"}
+                            </p>
+                            <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted">
+                              <span className="font-medium text-ink/80">
+                                {hit.message.chat_name}
+                              </span>
+                              <span>·</span>
+                              <span>{hit.message.sender_name}</span>
+                              <span>·</span>
+                              <span>{convTime(hit.message.created_at)}</span>
+                            </div>
+                          </div>
+                          <span className="text-[10px] text-muted">消息</span>
+                        </>
+                      )}
+                    </button>
+                    {target && (
+                      <button
+                        type="button"
+                        className="flex-none rounded px-1 text-[10px] text-[#316e50] underline underline-offset-[3px] hover:no-underline"
+                        onClick={() => {
+                          onClose();
+                          inspectAgent(target.id);
+                        }}
+                      >
+                        查看
+                      </button>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>

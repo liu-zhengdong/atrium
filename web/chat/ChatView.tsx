@@ -5,6 +5,7 @@ import { MessageTimeline } from "./MessageTimeline.tsx";
 import { ChatNotice } from "./ChatNotice.tsx";
 import { useConversation } from "./useConversation.ts";
 import { useAnchorScroll, useReadReporter } from "./useChatEffects.ts";
+import { retryOf, retryStateText } from "../agents/retry-state.ts";
 
 export function ChatView({
   active,
@@ -40,6 +41,7 @@ export function ChatView({
   const conversation = useConversation(chatId, revision, anchoredId);
   const { members } = conversation;
   const directAgent = agents.find((a) => a.id === active?.direct_agent);
+  const directState = directAgent ? retryStateText(retryOf(directAgent)) : null;
   const observed = active && !active.mine && !active.read_only ? active : null;
   useReadReporter({
     chatId,
@@ -82,6 +84,20 @@ export function ChatView({
               </button>
             </p>
           )}
+          {directAgent && directState && (
+            <p
+              className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
+              role="status"
+            >
+              {directState}
+              <button
+                className="ml-2 underline"
+                onClick={() => inspectAgent(directAgent.id)}
+              >
+                查看详情
+              </button>
+            </p>
+          )}
           {anchoredId && (
             <p
               className="flex items-center justify-center gap-2.5 rounded-lg bg-[#edf5f1] px-3 py-1.5 text-xs text-[#316e50]"
@@ -101,6 +117,7 @@ export function ChatView({
             agents={agents}
             details={details}
             openTrigger={openTrigger}
+            openAgent={inspectAgent}
             flash={flash}
             {...conversation}
           />

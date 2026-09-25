@@ -19,6 +19,7 @@ export function TopBar({
   openAgent,
   openingAgent,
   details,
+  inspectAgent,
   refresh,
   openMessage,
   openUser,
@@ -34,6 +35,7 @@ export function TopBar({
   openAgent: (agent: Agent) => void;
   openingAgent: string | null;
   details: (id: string) => void;
+  inspectAgent: (id: string) => void;
   refresh: () => void;
   openMessage: (chatId: string, messageId: number) => void;
   openUser: () => void;
@@ -204,6 +206,7 @@ export function TopBar({
         openAgent={openAgent}
         openingAgent={openingAgent}
         details={details}
+        inspectAgent={inspectAgent}
         refresh={refresh}
         openMessage={openMessage}
         isOpen={searchOpen}

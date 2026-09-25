@@ -1,6 +1,7 @@
 import { Download, FileText } from "lucide-react";
 import type { FileRecord, MessageHit, Overview } from "../../shared/schema.ts";
 import { attachmentUrl, formatSize } from "../chat/Attachments.tsx";
+import { subjectAgentId } from "../chat/messages.ts";
 import { convTime } from "../time.ts";
 import { useRecordPages } from "./useRecordPages.ts";
 import type { RecordFilters } from "./query.ts";
@@ -71,8 +72,14 @@ export function MessageRecords({
   filters,
   scoped,
   openMessage,
+  openAgent,
+  agents,
   chats,
-}: Props & { chats: Overview["chats"] }) {
+}: Props & {
+  openAgent: (id: string) => void;
+  agents: Overview["agents"];
+  chats: Overview["chats"];
+}) {
   const { items, more, loading, error, loadMore } = useRecordPages<MessageHit>(
     "messages",
     filters,
@@ -87,34 +94,50 @@ export function MessageRecords({
       loadMore={loadMore}
     >
       <ul className="m-0 list-none p-0">
-        {items.map((hit) => (
-          <li key={`${hit.chat_id}:${hit.id}`}>
-            <button
-              className="block w-full rounded-xl px-3.5 py-3 text-left transition-colors hover:bg-[#f2f6f3]"
-              title="回到这条消息"
-              onClick={() => openMessage(hit.chat_id, hit.id)}
-            >
-              <span className="flex items-baseline justify-between gap-3">
-                <strong className="truncate text-xs font-semibold text-ink">
-                  {hit.sender_name}
-                </strong>
-                <Origin
-                  scoped={
-                    scoped ||
-                    (chats.find((chat) => chat.id === hit.chat_id)?.kind ===
-                      "direct" &&
-                      hit.chat_name === hit.sender_name)
-                  }
-                  chatName={hit.chat_name}
-                  at={hit.created_at}
-                />
-              </span>
-              <span className="mt-1 line-clamp-2 overflow-hidden [overflow-wrap:anywhere] text-xs leading-relaxed text-ink/75">
-                {hit.text}
-              </span>
-            </button>
-          </li>
-        ))}
+        {items.map((hit) => {
+          const subject = subjectAgentId(hit);
+          const target = subject
+            ? agents.find((agent) => agent.id === subject)
+            : undefined;
+          return (
+            <li key={`${hit.chat_id}:${hit.id}`}>
+              <div className="flex w-full items-center gap-1 rounded-xl px-3.5 py-3 transition-colors hover:bg-[#f2f6f3]">
+                <button
+                  className="min-w-0 flex-1 text-left"
+                  title="回到这条消息"
+                  onClick={() => openMessage(hit.chat_id, hit.id)}
+                >
+                  <span className="flex items-baseline justify-between gap-3">
+                    <strong className="truncate text-xs font-semibold text-ink">
+                      {hit.sender_name}
+                    </strong>
+                    <Origin
+                      scoped={
+                        scoped ||
+                        (chats.find((chat) => chat.id === hit.chat_id)?.kind ===
+                          "direct" &&
+                          hit.chat_name === hit.sender_name)
+                      }
+                      chatName={hit.chat_name}
+                      at={hit.created_at}
+                    />
+                  </span>
+                  <span className="mt-1 line-clamp-2 overflow-hidden [overflow-wrap:anywhere] text-xs leading-relaxed text-ink/75">
+                    {hit.text}
+                  </span>
+                </button>
+                {target && (
+                  <button
+                    className="flex-none rounded px-1 text-[10px] text-[#316e50] underline underline-offset-[3px] hover:no-underline"
+                    onClick={() => openAgent(target.id)}
+                  >
+                    查看
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </Frame>
   );

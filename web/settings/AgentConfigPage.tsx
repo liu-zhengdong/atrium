@@ -15,6 +15,7 @@ import {
 } from "../agents/AgentResources.tsx";
 import { AgentCredentials } from "./AgentCredentials.tsx";
 import { DeleteAgent } from "../agents/DeleteAgent.tsx";
+import { ReportsToPicker } from "../agents/ReportsToPicker.tsx";
 import { trackUnsaved } from "./unsaved.ts";
 
 const sections = [
@@ -24,6 +25,7 @@ const sections = [
   { id: "mcp", title: "MCP" },
   { id: "rules", title: "规则文件" },
   { id: "profile", title: "身份资料" },
+  { id: "report", title: "向谁汇报" },
   { id: "heartbeat", title: "心跳" },
   { id: "access", title: "接入" },
   { id: "delete", title: "删除" },
@@ -31,6 +33,7 @@ const sections = [
 
 export function AgentConfigPage({
   agent,
+  agents,
   changed,
   openAccounts,
   openChat,
@@ -38,6 +41,7 @@ export function AgentConfigPage({
   scrollRoot,
 }: {
   agent: Agent;
+  agents: Agent[];
   changed: () => void;
   openAccounts: (account: string | null) => void;
   openChat: () => void;
@@ -228,6 +232,10 @@ export function AgentConfigPage({
             >
               保存资料
             </button>
+          </section>
+          <section id="report" className="space-y-3">
+            <h2 className="text-sm font-semibold">向谁汇报</h2>
+            <ReportsToPicker agent={agent} agents={agents} changed={changed} />
           </section>
           <section id="heartbeat" className="space-y-3">
             <h2 className="text-sm font-semibold">心跳</h2>

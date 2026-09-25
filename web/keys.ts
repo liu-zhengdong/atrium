@@ -16,11 +16,14 @@ export function isImeKey(event: {
 }
 
 /**
- * 表单里确认候选词的那次回车，不该让表单隐式提交：在输入框里按回车提交表单是
+ * 表单里由输入法处理的按键，不该让表单隐式提交：在输入框里按回车提交表单是
  * 浏览器的默认行为，不受 keydown 处理器里的业务判断影响，要显式挡掉。
  *
- * 只挡「选字已经结束、keyCode 还是 229」那一次。正在选字（isComposing）时
- * 浏览器本来就不提交，也不必去动输入法自己的按键。挂在 form 的 onKeyDown 上。
+ * 挡的是「不在选字、keyCode 还是 229」的每一个 keydown，不只看回车：每段拼音
+ * 的第一个字母也在这个范围里（它的 keydown 发生在 compositionstart 之前）。
+ * keyCode 229 表示这个键已经交给输入法，这时 preventDefault 不影响上屏；
+ * Chromium 实测打字、组字中退格、提交后退格与接着打英文都正常。挂在 form 的
+ * onKeyDown 上。
  */
 export function blockImeSubmit(event: {
   nativeEvent: { isComposing?: boolean; keyCode?: number };

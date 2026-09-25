@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pencil, Trash2, UsersRound } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import { api } from "../api.ts";
-import { blockImeSubmit } from "../keys.ts";
+import { blockImeSubmit, isImeKey } from "../keys.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { AssignmentPicker } from "./AssignmentPicker.tsx";
 import type { Account } from "./types.ts";
@@ -219,6 +219,10 @@ export function AccountRow({
               sideOffset={6}
               className="z-50 w-[min(340px,calc(100vw-32px))] rounded-xl bg-white p-4 shadow-xl"
               aria-label={`分配 ${account.name}`}
+              onEscapeKeyDown={(event) => {
+                // 浮层里的搜索框选字时按 Esc：Radix 自己监听 Esc，不走 isImeKey，要在这里挡住。
+                if (isImeKey(event)) event.preventDefault();
+              }}
               onInteractOutside={(event) => {
                 if (document.querySelector('[aria-label="确认分配"]'))
                   event.preventDefault();

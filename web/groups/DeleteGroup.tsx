@@ -125,7 +125,7 @@ export function DeleteGroup({
                     删除后无法恢复；群内身份已经读到的内容（各自的 Pi
                     会话与上下文）删不掉。各成员未处理的本群提醒会收回，随后收到一条系统通知。
                   </p>
-                  <label className="form-label mt-3.5">
+                  <label className="form-label !mt-3.5">
                     <span className="form-title">
                       输入群名确认：{target.name}
                     </span>

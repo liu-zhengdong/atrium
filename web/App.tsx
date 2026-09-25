@@ -349,6 +349,8 @@ export function App() {
                 deleted={() => {
                   setGroupOpen(false);
                   setChatId(null);
+                  // 删掉当前会话后回到会话列表：窄屏下就是打开列表这一层。
+                  setMobileOpen(true);
                   refresh();
                 }}
                 openRecords={() => openRecords(active.id)}

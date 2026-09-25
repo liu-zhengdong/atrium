@@ -401,10 +401,8 @@ const disband: Command = {
     if (values.yes !== true)
       throw new Problem(
         400,
-        `将删除 ${target.name}（${target.ref}）：成员 ${target.members} 位、消息 ${target.messages} 条、附件 ${target.attachments} 个、共享文件 ${filesLabel(target)} 个。删除后无法恢复；各身份在自己 Pi 会话里读到的内容删不掉。`,
+        `将删除 ${target.name}（${target.ref}）：成员 ${target.members} 位、消息 ${target.messages} 条、附件 ${target.attachments} 个、共享文件 ${filesLabel(target)} 个。删除后无法恢复；各身份在自己 Pi 会话里读到的内容删不掉。确认请加 --yes`,
         "usage",
-        undefined,
-        `atrium disband ${target.ref} --yes`,
       );
     const result = await client.delete<ChatDeletionResult>(
       `/chats/${chat.id}`,

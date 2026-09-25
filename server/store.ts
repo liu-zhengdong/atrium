@@ -1625,10 +1625,10 @@ export class Store {
       id,
     );
   }
-  /** A deliver RPC can return after its successful run_end was observed. Complete only that confirmed delivery. */
+  /** Settle only this id after its run_end, or after duplicate plus confirmed Pi idle. */
   completeDelivery(id: string) {
     this.run(
-      "UPDATE deliveries SET state='complete' WHERE id=? AND state='accepted' AND kind='direct'",
+      "UPDATE deliveries SET state='complete' WHERE id=? AND state='accepted'",
       id,
     );
   }

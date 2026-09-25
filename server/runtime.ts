@@ -1563,10 +1563,23 @@ export class Runtimes {
       if (!runtime) {
         const binding = this.binding(id);
         const owner = ownerOf(this.store, id);
+        // The Web may reconnect before its first runner discovery. A manual
+        // retry must ask the owner about the old runtime before deciding to
+        // boot a replacement (which would collide with the live Pi lock).
+        if (owner && binding.runtime_id) {
+          if (direct || !this.discoveredOnce) await this.discover();
+          if (this.discoveryError) return;
+        }
         const discoveredOwner = this.discovered.some(
           (item) =>
             item.runtimeId === binding.runtime_id && item.bound_agent === id,
         );
+        if (owner && binding.runtime_id && !discoveredOwner) {
+          // Absence from discovery is not proof that a remotely owned Pi has
+          // exited. Keep the unknown delivery and its retry entry intact.
+          this.reconcileAccepted(id, null);
+          return;
+        }
         if (
           binding.runtime_id &&
           (owner
@@ -1670,19 +1683,22 @@ export class Runtimes {
           if (!result.accepted) throw new Error("Pi 未确认接收");
           if (result.duplicate) {
             if (pending.error?.startsWith("投递结果未知")) {
-              // Pi proves reception of the original id. Preserve uncertainty
-              // until its run_end is observed; never rekey an uncertain delivery.
-              this.store.accepted(pending.id, true);
+              // Duplicate proves Pi received the original id. Its current idle
+              // status proves the turn ended even after Web lost its lastTurn
+              // cache; if still busy, keep the failure and retry entry visible
+              // until a run_end (or another explicit retry) settles the row.
+              runtime.info = runtimeSchema.parse(
+                await this.rpc("_pi/runtime/status", target(runtime.info), id),
+              );
+              this.assertOpen();
+              this.remember(id, runtime.info);
               await this.capture(id, runtime.info);
-              const turn = this.lastTurn.get(id);
-              if (
-                turn?.generation === runtime.info.generation &&
-                turn.successful &&
-                turn.deliveryAt !== null &&
-                turn.deliveryAt >= pending.created_at &&
-                turn.at >= turn.deliveryAt
-              )
+              this.store.accepted(pending.id, runtime.info.busy);
+              if (!runtime.info.busy) {
                 this.store.completeDelivery(pending.id);
+                if (!this.store.uncertainDelivery(id))
+                  this.store.clearFailure(id);
+              }
             } else {
               // An unrelated earlier id has no proof of completion.
               this.store.rekeyPending(pending.id);
@@ -1942,7 +1958,6 @@ export class Runtimes {
     if (uncertain) {
       if (this.pumping.has(id)) await this.pumping.get(id);
       this.store.retryUncertain(uncertain.id);
-      this.store.clearFailure(id);
       this.manuallyRetrying.add(id);
       try {
         await this.pump(id, true);

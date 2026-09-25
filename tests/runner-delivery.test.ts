@@ -70,7 +70,7 @@ function fixture(t: import("node:test").TestContext) {
     "capture",
     async () => {},
   );
-  return { store, agent, pending, runtimes, info };
+  return { store, agent, chat, pending, runtimes, info };
 }
 
 test("runner claim cannot race a local start before the new Pi is discoverable", (t) => {
@@ -159,14 +159,15 @@ test("remote delivery response lost: hold original id and explicit unknown, neve
   assert.equal(calls, 1);
 });
 
-test("a finished unknown turn never auto-replays, explicit retry confirms the original id", async (t) => {
+test("busy Pi keeps an unknown duplicate and its retry entry until run_end", async (t) => {
   const f = fixture(t);
   let calls = 0;
+  let busy = false;
   t.mock.method(
     Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
     "rpc",
     async (method: string, params: { id?: string }) => {
-      if (method === "_pi/runtime/status") return f.info;
+      if (method === "_pi/runtime/status") return { ...f.info, busy };
       assert.equal(method, "_pi/runtime/deliver");
       assert.equal(params.id, f.pending.id);
       if (++calls === 1)
@@ -179,54 +180,150 @@ test("a finished unknown turn never auto-replays, explicit retry confirms the or
   assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
   await f.runtimes.pump(f.agent.id, true); // Even a new direct wake is not a retry.
   assert.equal(calls, 1);
+  busy = true;
   await f.runtimes.retry(f.agent.id);
   assert.equal(calls, 2);
   assert.equal(f.store.uncertainDelivery(f.agent.id)?.state, "accepted");
+  assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
   await f.runtimes.pump(f.agent.id, true);
   assert.equal(calls, 2);
   // A late successful run_end settles the accepted row; no rekey follows.
   f.store.finishTurn(f.agent.id, true);
   assert.equal(f.store.uncertainDelivery(f.agent.id), null);
+  assert.equal(f.store.failure(f.agent.id), null);
   assert.equal(f.store.pending(f.agent.id).length, 0);
 });
 
-test("retry after observed run_end settles a duplicate without starting another turn", async (t) => {
+for (const restart of ["Web", "identity"] as const) {
+  test(`retry after ${restart} restart settles a duplicate from the old finished turn`, async (t) => {
+    const f = fixture(t);
+    const calls: string[] = [];
+    let activeInfo = f.info;
+    t.mock.method(
+      Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+      "rpc",
+      async (method: string, params: { id?: string }) => {
+        if (method === "_pi/runtime/status") return activeInfo;
+        assert.equal(method, "_pi/runtime/deliver");
+        calls.push(params.id!);
+        if (calls.length === 1)
+          throw new Problem(503, "应答丢失", "runner_outcome_unknown");
+        return params.id === f.pending.id
+          ? { accepted: true, duplicate: true }
+          : { accepted: true };
+      },
+    );
+    await f.runtimes.pump(f.agent.id, true);
+    f.store.finishTurn(f.agent.id, true);
+    assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
+    if (restart === "Web") {
+      // A new service has no lastTurn cache but shares the persisted delivery.
+      const next = new Runtimes(
+        f.store,
+        f.info.cwd,
+        () => {},
+        () => "",
+        undefined,
+        f.info.cwd,
+      );
+      t.after(async () => next.close());
+      next.connections.set(f.agent.id, {
+        connection: null as never,
+        info: activeInfo,
+      });
+      await next.retry(f.agent.id);
+      assert.equal(
+        (next as unknown as { lastTurn: Map<string, unknown> }).lastTurn.size,
+        0,
+      );
+      next.connections.delete(f.agent.id);
+      f.runtimes.connections.set(f.agent.id, {
+        connection: null as never,
+        info: activeInfo,
+      });
+    } else {
+      // A restarted Pi has a different generation; the old in-memory turn
+      // record must not be required to release the original confirmed id.
+      activeInfo = { ...f.info, generation: randomUUID() };
+      f.runtimes.connections.set(f.agent.id, {
+        connection: null as never,
+        info: activeInfo,
+      });
+      await f.runtimes.retry(f.agent.id);
+    }
+    assert.deepEqual(calls, [f.pending.id, f.pending.id]);
+    assert.equal(f.store.uncertainDelivery(f.agent.id), null);
+    assert.equal(f.store.failure(f.agent.id), null);
+    assert.equal(f.store.pending(f.agent.id).length, 0);
+    f.store.send(LOCAL_USER, { chat_id: f.chat.id, body: "W-2", mentions: [] });
+    await f.runtimes.pump(f.agent.id, true);
+    assert.equal(calls.length, 3);
+    assert.notEqual(calls[2], f.pending.id);
+  });
+}
+
+test("retry while runner disappears preserves unknown id and retry entry", async (t) => {
   const f = fixture(t);
   let calls = 0;
   t.mock.method(
     Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
     "rpc",
-    async (method: string, params: { id?: string }) => {
-      if (method === "_pi/runtime/status") return f.info;
-      assert.equal(params.id, f.pending.id);
-      if (++calls === 1)
+    async (method: string) => {
+      if (method === "_pi/runtime/status") {
+        if (calls) throw new Problem(503, "运行器断线", "runner_offline");
+        return f.info;
+      }
+      if (method === "_pi/runtime/deliver") {
+        calls++;
         throw new Problem(503, "应答丢失", "runner_outcome_unknown");
-      return { accepted: true, duplicate: true };
+      }
+      throw new Problem(503, "运行器断线", "runner_offline");
     },
   );
   await f.runtimes.pump(f.agent.id, true);
-  const runtime = f.runtimes as unknown as {
-    lastTurn: Map<
-      string,
-      {
-        generation: string;
-        deliveryAt: number;
-        at: number;
-        successful: boolean;
-      }
-    >;
-  };
-  runtime.lastTurn.set(f.agent.id, {
-    generation: f.info.generation,
-    deliveryAt: f.pending.created_at + 1,
-    at: f.pending.created_at + 2,
-    successful: true,
-  });
-  f.store.finishTurn(f.agent.id, true);
   await f.runtimes.retry(f.agent.id);
-  assert.equal(calls, 2);
-  assert.equal(f.store.uncertainDelivery(f.agent.id), null);
-  assert.equal(f.store.pending(f.agent.id).length, 0);
+  assert.equal(calls, 1);
+  assert.equal(f.store.uncertainDelivery(f.agent.id)?.id, f.pending.id);
+  assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
+});
+
+test("unknown retry after Web restart cannot boot a replacement before discovering the old Pi", async (t) => {
+  const f = fixture(t);
+  claimRunner(f.store, f.agent.id, "r1", "generation-1");
+  f.store.run(
+    "UPDATE agents SET runtime_id=?,runtime_pid=? WHERE id=?",
+    f.info.runtimeId,
+    f.info.pid,
+    f.agent.id,
+  );
+  f.runtimes.connections.clear();
+  const internal = f.runtimes as unknown as {
+    discovered: unknown[];
+    discoveredOnce: boolean;
+    bridge: unknown;
+  };
+  internal.discovered = []; // Web has just restarted and not yet received the runner list.
+  internal.discoveredOnce = false;
+  internal.bridge = { generation: () => "generation-1", close: () => {} };
+  // Runner replied to discovery but the old runtime is temporarily absent.
+  // This must test the no-replacement guard, not an unrelated discovery error.
+  t.mock.method(Runtimes.prototype, "discover", async () => {
+    internal.discoveredOnce = true;
+  });
+  f.store.deliveryError(f.pending.id, "投递结果未知：应答中断");
+  f.store.setFailure(f.agent.id, "投递结果未知：应答中断");
+  let starts = 0;
+  t.mock.method(
+    Runtimes.prototype as unknown as { start(): Promise<void> },
+    "start",
+    async () => {
+      starts++;
+    },
+  );
+  await f.runtimes.retry(f.agent.id);
+  assert.equal(starts, 0);
+  assert.equal(f.store.uncertainDelivery(f.agent.id)?.id, f.pending.id);
+  assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
 });
 
 test("revoked runner's identity can be released only after explicit stop confirmation", async (t) => {

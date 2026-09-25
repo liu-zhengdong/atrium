@@ -6,6 +6,7 @@ import { join } from "node:path";
 export const exitCodes = {
   internal: 1,
   usage: 2,
+  confirmation_required: 2,
   chat_not_found: 3,
   agent_not_found: 3,
   account_not_found: 3,

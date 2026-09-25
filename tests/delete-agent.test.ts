@@ -386,3 +386,73 @@ test(
     assert.throws(() => store.agent(agent.id));
   },
 );
+
+test("身份启动占用仍记录故障并显示在名册", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-start-occupied-"));
+  const data = join(root, "data"),
+    template = join(root, "template"),
+    profile = join(root, "profile");
+  mkdirSync(template);
+  mkdirSync(profile);
+  writeFileSync(join(template, "settings.json"), '{"packages":[]}');
+  writeFileSync(
+    join(profile, "settings.json"),
+    JSON.stringify({
+      packages: [],
+      defaultProvider: "deepseek",
+      defaultModel: "deepseek-chat",
+    }),
+  );
+  t.mock.property(process, "env", {
+    ...process.env,
+    ATRIUM_PI_TEMPLATE: template,
+    PI_ACP_DIR: join(root, "acp"),
+  });
+  t.mock.method(
+    Runtimes.prototype as unknown as { open: () => Promise<unknown> },
+    "open",
+    async () => ({
+      connection: {
+        agent: {
+          request: async (method: string) => {
+            if (method === "_pi/identity/start")
+              throw Object.assign(new Error("Internal error"), {
+                data: { details: "identity already occupied: PID 99999" },
+              });
+            return { runtimes: [] };
+          },
+        },
+      },
+    }),
+  );
+  const { app, store, runtimes } = await createApp({
+    data,
+    piHome: join(root, ".pi"),
+    desktops: join(root, "desktops"),
+  });
+  t.after(async () => {
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const agent = store.createAgent("占用身份", root).agent;
+  store.run(
+    "UPDATE agents SET agent_directory=? WHERE id=?",
+    profile,
+    agent.id,
+  );
+  const accounts = new Accounts(store, data);
+  accounts.assign(agent.id, accounts.add("deepseek", "fixture", "TEST_KEY").id);
+  const res = await app.inject({
+    method: "POST",
+    url: `/api/agents/${agent.id}/start`,
+  });
+  assert.equal(res.statusCode, 409);
+  const message = "Error: identity already occupied: PID 99999";
+  assert.equal(store.failure(agent.id)?.text, message);
+  assert.equal(runtimes!.errors.get(agent.id), message);
+  const overview = (await app.inject({ url: "/api/overview" })).json();
+  assert.equal(
+    overview.agents.find((a: { id: string }) => a.id === agent.id).error,
+    message,
+  );
+});

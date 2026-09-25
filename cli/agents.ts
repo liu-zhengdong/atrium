@@ -18,7 +18,7 @@ import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
 import { Problem, closest } from "../server/problem.ts";
-import { recordNext, recordResult } from "./contract.ts";
+import { recordNext } from "./contract.ts";
 import { waitOptions } from "./wait-options.ts";
 
 export type AgentEntry = Overview["agents"][number];
@@ -246,26 +246,25 @@ const remove: Command = {
   about: "删除身份：撤销访问与后续唤醒，历史与本地文件保留",
   options: { yes: { type: "boolean", default: false } },
   positionals: [1, 1],
-  async run({ positionals: [reference], values, json }) {
+  async run({ positionals: [reference], values }) {
     const client = await connect();
     const agent = findAgent(await roster(client), reference!);
     if (values.yes !== true) {
       const target = commandAgent(agent.name, agent.ref);
-      const stop = `先停止：atrium stop ${target}`;
-      const confirm = `确认删除：atrium delete ${target} --yes`;
-      recordNext(agent.running ? `${stop}\n${confirm}` : confirm);
-      recordResult({ agent: agent.ref, running: agent.running });
-      if (!json) {
-        const status = agent.running
-          ? presence(agent)
-          : agent.unassigned
-            ? "未分配账号"
-            : "离线";
-        console.log(
-          `将删除 ${agent.name}（${agent.ref}，${status}）：撤销访问与后续唤醒，历史聊天保留。`,
-        );
-      }
-      return;
+      const status = agent.running
+        ? presence(agent)
+        : agent.unassigned
+          ? "未分配账号"
+          : "离线";
+      const message = `将删除 ${agent.name}（${agent.ref}，${status}）：撤销访问与后续唤醒，历史聊天保留。`;
+      const stop = agent.running ? `atrium stop ${target}` : null;
+      throw new Problem(
+        400,
+        `${message}\n${stop ? `先停止：${stop}\n` : ""}确认删除：atrium delete ${target} --yes`,
+        "confirmation_required",
+        undefined,
+        stop ?? undefined,
+      );
     }
     await client.delete(`/agents/${agent.id}`, { confirm: agent.ref });
     console.log(`已删除 ${agent.name}（${agent.ref}）；历史保留`);

@@ -218,7 +218,10 @@ export async function main(argv: string[]): Promise<number> {
             ok: false,
             error: {
               code: result.code,
-              message: result.message,
+              message:
+                result.code === "confirmation_required"
+                  ? result.message.split("\n", 1)[0]
+                  : result.message,
               ...(result.candidates ? { candidates: result.candidates } : {}),
             },
             next: commandOnly(result.next),
@@ -230,7 +233,8 @@ export async function main(argv: string[]): Promise<number> {
           console.error(
             `最接近的：${result.candidates.map(({ name, ref }) => `${name === ref.split("/").at(-1) ? ref : `${name}（${ref}）`}`).join("、")}`,
           );
-        if (result.next) console.error(`修正：${result.next}`);
+        if (result.next && result.code !== "confirmation_required")
+          console.error(`修正：${result.next}`);
       }
       return result.exit;
     } finally {

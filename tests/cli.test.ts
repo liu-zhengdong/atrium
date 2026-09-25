@@ -354,18 +354,19 @@ test(
     // 停止只对在跑的托管实例有效
     assert.match(await refused("stop", "林岚"), /没在运行/);
 
-    // 删除预览为成功回执：离线时只给可执行的删除命令。
+    // 删除预览仍需人工确认：离线时 JSON 不能把危险命令作为 next。
     const preview = await f.cli("delete", "周远");
-    assert.equal(preview.code, 0, preview.stderr);
-    assert.match(preview.stdout, /将删除 周远（a3，未分配账号）/);
-    assert.match(preview.stdout, /确认删除：atrium delete 周远 --yes/);
-    assert.doesNotMatch(preview.stdout, /先停止：|修正：/);
+    assert.equal(preview.code, 2, preview.stderr);
+    assert.match(preview.stderr, /将删除 周远（a3，未分配账号）/);
+    assert.match(preview.stderr, /确认删除：atrium delete 周远 --yes/);
+    assert.doesNotMatch(preview.stderr, /先停止：|修正：/);
     const previewJson = await f.cli("delete", "周远", "--json");
-    assert.equal(previewJson.code, 0, previewJson.stderr);
+    assert.equal(previewJson.code, 2, previewJson.stderr);
     assert.equal(
-      JSON.parse(previewJson.stdout).next,
-      "atrium delete 周远 --yes",
+      JSON.parse(previewJson.stdout).error.code,
+      "confirmation_required",
     );
+    assert.equal(JSON.parse(previewJson.stdout).next, null);
     assert.match(await ok("list"), /周远/);
     // 邀请后的异步投递可能仍在处理连接；只等待这一明确的临时状态。
     let deleted = false;
@@ -494,9 +495,9 @@ test(
     renamed.run("UPDATE agents SET name=? WHERE id=?", "张 三", agent.id);
     renamed.close();
     const unsafePreview = await f.cli("delete", "张 三");
-    assert.equal(unsafePreview.code, 0, unsafePreview.stderr);
-    assert.match(unsafePreview.stdout, /确认删除：atrium delete a1 --yes/);
-    assert.doesNotMatch(unsafePreview.stdout, /atrium delete 张 三 --yes/);
+    assert.equal(unsafePreview.code, 2, unsafePreview.stderr);
+    assert.match(unsafePreview.stderr, /确认删除：atrium delete a1 --yes/);
+    assert.doesNotMatch(unsafePreview.stderr, /atrium delete 张 三 --yes/);
     const spacedName = await f.cli("unassign", "张 三");
     assert.equal(spacedName.code, 2);
     assert.match(spacedName.stderr, /修正：atrium unassign a1 claude-bridge/);
@@ -596,15 +597,22 @@ test(
       assert.equal(result.code, 0, `${args.join(" ")}: ${result.stderr}`);
     }
     const preview = await f.cli("delete", "张 三");
-    assert.equal(preview.code, 0, preview.stderr);
+    assert.equal(preview.code, 2, preview.stderr);
     assert.match(
-      preview.stdout,
+      preview.stderr,
       /先停止：atrium stop a1\n确认删除：atrium delete a1 --yes/,
     );
-    assert.doesNotMatch(preview.stdout, /修正：|atrium stop 张 三/);
+    assert.doesNotMatch(preview.stderr, /修正：|atrium stop 张 三/);
     const previewJson = await f.cli("delete", "a1", "--json");
-    assert.equal(previewJson.code, 0, previewJson.stderr);
-    assert.equal(JSON.parse(previewJson.stdout).next, "atrium stop a1");
+    assert.equal(previewJson.code, 2, previewJson.stderr);
+    assert.deepEqual(JSON.parse(previewJson.stdout), {
+      ok: false,
+      error: {
+        code: "confirmation_required",
+        message: "将删除 张 三（a1，在线）：撤销访问与后续唤醒，历史聊天保留。",
+      },
+      next: "atrium stop a1",
+    });
     const refused = await f.cli("delete", "张 三", "--yes");
     assert.equal(refused.code, 4);
     assert.match(
@@ -616,10 +624,20 @@ test(
     assert.equal(JSON.parse(refusedJson.stdout).next, "atrium stop a1");
     assert.equal((await f.cli("stop", "a1")).code, 0);
     const stopped = await f.cli("delete", "a1");
-    assert.equal(stopped.code, 0, stopped.stderr);
-    assert.match(stopped.stdout, /将删除 张 三（a1，离线）/);
-    assert.doesNotMatch(stopped.stdout, /先停止：/);
-    assert.match(stopped.stdout, /确认删除：atrium delete a1 --yes/);
+    assert.equal(stopped.code, 2, stopped.stderr);
+    assert.match(stopped.stderr, /将删除 张 三（a1，离线）/);
+    assert.doesNotMatch(stopped.stderr, /先停止：|修正：/);
+    assert.match(stopped.stderr, /确认删除：atrium delete a1 --yes/);
+    const stoppedJson = await f.cli("delete", "a1", "--json");
+    assert.equal(stoppedJson.code, 2);
+    assert.deepEqual(JSON.parse(stoppedJson.stdout), {
+      ok: false,
+      error: {
+        code: "confirmation_required",
+        message: "将删除 张 三（a1，离线）：撤销访问与后续唤醒，历史聊天保留。",
+      },
+      next: null,
+    });
     assert.equal((await f.cli("delete", "a1", "--yes")).code, 0);
   },
 );

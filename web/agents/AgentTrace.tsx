@@ -12,6 +12,7 @@ import type { TraceDetail, TraceItem, TracePage } from "../../shared/trace.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
 import { api } from "../api.ts";
 import { Empty } from "../components/Empty.tsx";
+import { TraceValue } from "../components/JsonTree.tsx";
 
 export function mergeTrace(old: TraceItem[], incoming: TraceItem[]) {
   const rows = new Map(old.map((item) => [item.id, item]));
@@ -214,24 +215,13 @@ function TraceAction({
             ) : (
               <>
                 {detail.input && (
-                  <>
-                    <h4 className="m-0 mb-1.5 text-[10px] font-medium text-muted">
-                      调用参数
-                    </h4>
-                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">
-                      {detail.input}
-                    </pre>
-                  </>
+                  <TraceValue label="调用参数" text={detail.input} />
                 )}
                 {detail.output && (
-                  <>
-                    <h4 className="m-0 mb-1.5 text-[10px] font-medium text-muted">
-                      {item.kind === "tool" ? "执行结果" : "内容"}
-                    </h4>
-                    <pre className="mb-3.5 max-h-[260px] overflow-auto whitespace-pre-wrap leading-[1.65] [overflow-wrap:anywhere] last:mb-0">
-                      {detail.output}
-                    </pre>
-                  </>
+                  <TraceValue
+                    label={item.kind === "tool" ? "执行结果" : "内容"}
+                    text={detail.output}
+                  />
                 )}
                 {!detail.input && !detail.output && (
                   <p className="muted">此事件没有附加内容。</p>

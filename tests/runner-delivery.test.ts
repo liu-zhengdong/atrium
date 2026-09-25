@@ -194,6 +194,55 @@ test("busy Pi keeps an unknown duplicate and its retry entry until run_end", asy
   assert.equal(f.store.pending(f.agent.id).length, 0);
 });
 
+test("busy unknown retry followed by failed turn can retry again without restarting Web", async (t) => {
+  const f = fixture(t);
+  let busy = false;
+  const calls: { id: string; text: string }[] = [];
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string, params: { id?: string; text?: string }) => {
+      if (method === "_pi/runtime/status") return { ...f.info, busy };
+      assert.equal(method, "_pi/runtime/deliver");
+      calls.push({ id: params.id!, text: params.text! });
+      if (calls.length === 1)
+        throw new Problem(503, "应答丢失", "runner_outcome_unknown");
+      return { accepted: true, duplicate: params.id === f.pending.id };
+    },
+  );
+  await f.runtimes.pump(f.agent.id, true);
+  busy = true;
+  await f.runtimes.retry(f.agent.id);
+  assert.deepEqual(
+    calls.map((call) => call.id),
+    [f.pending.id, f.pending.id],
+  );
+  assert.equal(f.store.uncertainDelivery(f.agent.id)?.state, "accepted");
+  assert.equal(f.runtimes.connections.get(f.agent.id)?.info.busy, true);
+
+  busy = false; // The Pi is idle, but the uncertain gate prevents refreshing cached status.
+  f.store.setFailure(f.agent.id, "500: isolated upstream 500");
+  f.store.finishTurn(f.agent.id, false);
+  assert.equal(f.store.uncertainDelivery(f.agent.id)?.state, "accepted");
+  assert.equal(f.runtimes.connections.get(f.agent.id)?.info.busy, true);
+  await f.runtimes.retry(f.agent.id);
+  assert.equal(calls.length, 4); // Original, duplicate, duplicate after failure, replay.
+  assert.deepEqual(
+    calls.slice(0, 3).map((call) => call.id),
+    [f.pending.id, f.pending.id, f.pending.id],
+  );
+  assert.notEqual(calls[3]!.id, f.pending.id);
+  assert.match(calls[3]!.text, /上一轮运行出错/);
+  assert.equal(f.store.uncertainDelivery(f.agent.id), null);
+  f.store.finishTurn(f.agent.id, true);
+  f.store.send(LOCAL_USER, { chat_id: f.chat.id, body: "BF-2", mentions: [] });
+  await f.runtimes.pump(f.agent.id, true);
+  f.store.finishTurn(f.agent.id, true);
+  assert.equal(calls.length, 5);
+  assert.match(calls[4]!.text, /BF-2/);
+  assert.equal(f.store.pending(f.agent.id).length, 0);
+});
+
 for (const restart of ["Web", "identity"] as const) {
   test(`retry after ${restart} restart settles a duplicate from the old finished turn`, async (t) => {
     const f = fixture(t);

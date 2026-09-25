@@ -1970,7 +1970,10 @@ export class Runtimes {
     const uncertain = this.store.uncertainDelivery(id);
     if (!this.store.failure(id) && !uncertain)
       throw new Problem(409, "Agent 当前没有运行错误");
-    if (runtime?.info.busy)
+    // An unknown delivery can outlive the Pi turn. Its cached busy flag may
+    // never refresh because pump is gated until manual retry; doPump queries
+    // current status before deciding whether the duplicate has settled.
+    if (runtime?.info.busy && !uncertain)
       throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
     if (uncertain) {
       if (this.pumping.has(id)) await this.pumping.get(id);

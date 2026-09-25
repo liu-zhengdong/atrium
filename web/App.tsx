@@ -203,6 +203,8 @@ export function App() {
     navigate("chat");
   }
   function selectChatTab(next: ChatTab) {
+    setGroupOpen(false);
+    setAnchor(null);
     switchChatTab(next);
     setChatId(
       firstChatInTab(

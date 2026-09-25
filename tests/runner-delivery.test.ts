@@ -547,6 +547,87 @@ test("drain control only targets the current owner generation and never certifie
   );
 });
 
+test("draining rejects manual and automatic start without failure or budget; resume delivers pending once", async (t) => {
+  const f = fixture(t);
+  f.runtimes.connections.delete(f.agent.id);
+  let draining = true;
+  const delivered: string[] = [];
+  t.mock.method(
+    Runtimes.prototype as unknown as { services(): Promise<unknown> },
+    "services",
+    async () => ({}),
+  );
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string, params: { id?: string }) => {
+      if (method === "session/new") {
+        if (draining) throw new Problem(409, "身份正在排空", "runner_draining");
+        return { sessionId: f.info.sessionId };
+      }
+      if (method === "_pi/runtime/status") return f.info;
+      if (method === "_pi/runtime/deliver") {
+        delivered.push(params.id!);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected RPC: ${method}`);
+    },
+  );
+  t.mock.method(
+    Runtimes.prototype as unknown as { bind(): Promise<void> },
+    "bind",
+    async () => {
+      f.runtimes.connections.set(f.agent.id, {
+        connection: null as never,
+        info: f.info,
+      });
+    },
+  );
+  await assert.rejects(
+    f.runtimes.start(f.agent.id),
+    (error: unknown) =>
+      error instanceof Problem && error.code === "runner_draining",
+  );
+  assert.equal(f.store.failure(f.agent.id), null);
+  await assert.rejects(
+    f.runtimes.start(f.agent.id, true),
+    (error: unknown) =>
+      error instanceof Problem && error.code === "runner_draining",
+  );
+  assert.equal(f.store.failure(f.agent.id), null);
+  assert.deepEqual(delivered, []);
+  assert.equal(
+    (f.runtimes as unknown as { starts: Map<string, unknown> }).starts.has(
+      f.agent.id,
+    ),
+    false,
+    "rejected automatic start must not consume cooldown or failure budget",
+  );
+  draining = false;
+  await f.runtimes.start(f.agent.id);
+  assert.deepEqual(delivered, [f.pending.id]);
+  assert.equal(f.store.failure(f.agent.id), null);
+});
+
+test("draining rejects attach without recording an identity failure", async (t) => {
+  const f = fixture(t);
+  f.runtimes.connections.delete(f.agent.id);
+  t.mock.method(
+    Runtimes.prototype as unknown as { bind(): Promise<void> },
+    "bind",
+    async () => {
+      throw new Problem(409, "身份正在排空", "runner_draining");
+    },
+  );
+  await assert.rejects(
+    f.runtimes.attach(f.agent.id, f.info.runtimeId),
+    (error: unknown) =>
+      error instanceof Problem && error.code === "runner_draining",
+  );
+  assert.equal(f.store.failure(f.agent.id), null);
+  assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
+});
+
 for (const [name, code, status] of [
   ["runner offline", "runner_offline", 503],
   ["identity draining", "runner_draining", 409],

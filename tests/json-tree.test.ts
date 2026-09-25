@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   branchPreview,
   isBranch,
   jsonString,
   parseBranch,
 } from "../web/components/json-tree.ts";
+import { TraceValue } from "../web/components/JsonTree.tsx";
 
 test("整段能解析成对象或数组才按 JSON 树显示", () => {
   assert.deepEqual(parseBranch('{"server":"atrium","tool":"send_message"}'), {
@@ -77,4 +80,53 @@ test("对象与数组之外的值不是分支", () => {
   assert.equal(isBranch(7), false);
   assert.equal(isBranch([1]), true);
   assert.equal(isBranch({}), true);
+});
+
+// 渲染层的三条：字符串返回值对，拼出来的文字不一定对（收起时的括号、空串、空容器）。
+function markupText(text: string): string {
+  return renderToStaticMarkup(
+    createElement(TraceValue, { label: "调用参数", text }),
+  )
+    .replace(/<[^>]*>/g, "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+test("收起节点不重复括号：预览自带括号", () => {
+  const text = markupText('{"a": {"b": [1, 2, 3]}}');
+  assert.match(text, /b: \[3 项\]/);
+  assert.ok(!text.includes("[[3 项]]"), text);
+});
+
+test("收起对象预览是 {前三个字段, …}", () => {
+  const text = markupText('{"a": {"b": {"c": 1, "d": 2, "e": 3, "f": 4}}}');
+  assert.match(text, /b: \{c: 1, d: 2, e: 3, …\}/);
+  assert.ok(!text.includes("{{"), text);
+});
+
+test("空字符串、全空白字符串带引号显示", () => {
+  const text = markupText('{"empty": "", "spaces": "  "}');
+  assert.match(text, /empty: ""/);
+  assert.match(text, /spaces: "  "/);
+});
+
+test("空数组与空对象显示成 [] 和 {}，没有三角", () => {
+  const text = markupText('{"a": [], "b": {}}');
+  assert.match(text, /a: \[\]/);
+  assert.match(text, /b: \{\}/);
+});
+
+test("null 用调色板里的 muted 色，不靠颜色区分字符串", () => {
+  const html = renderToStaticMarkup(
+    createElement(TraceValue, {
+      label: "执行结果",
+      text: '{"a": null, "b": "文字"}',
+    }),
+  );
+  assert.match(html, /text-\[#5c685f\] italic/);
+  assert.ok(!html.includes("#9a8f80"), html);
+  assert.match(markupText('{"a": null, "b": "文字"}'), /b: "文字"/);
 });

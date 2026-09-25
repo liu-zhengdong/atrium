@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   branchPreview,
@@ -56,8 +56,15 @@ function JsonNode({
   const branch = isBranch(value) ? value : inner;
   if (!branch) return <JsonLeaf name={name} value={value} />;
   const array = Array.isArray(branch);
-  const openMark = array ? "[" : "{";
   const closeMark = array ? "]" : "}";
+  // 空的容器当成叶子：展开只有两行括号，没有可看的东西。
+  const empty = array ? branch.length === 0 : Object.keys(branch).length === 0;
+  if (empty)
+    return (
+      <LeafRow name={name}>
+        <span className="text-[#8a968d]">{array ? "[]" : "{}"}</span>
+      </LeafRow>
+    );
   const fields = array
     ? branch.map((item, index) => (
         <JsonNode key={index} value={item} depth={depth + 1} />
@@ -90,12 +97,11 @@ function JsonNode({
               JSON 字符串
             </span>
           )}
-          <span className="text-[#8a968d]">{openMark}</span>
-          {!open && (
-            <>
-              <span className="text-[#5c685f]">{branchPreview(branch)}</span>
-              <span className="text-[#8a968d]">{closeMark}</span>
-            </>
+          {open ? (
+            <span className="text-[#8a968d]">{array ? "[" : "{"}</span>
+          ) : (
+            // 收起时只给预览：branchPreview 自带括号，再拼一层就成了 [[100 项]]。
+            <span className="text-[#5c685f]">{branchPreview(branch)}</span>
           )}
         </span>
       </button>
@@ -109,7 +115,7 @@ function JsonNode({
   );
 }
 
-function JsonLeaf({ name, value }: { name?: string; value: JsonValue }) {
+function LeafRow({ name, children }: { name?: string; children: ReactNode }) {
   return (
     <div className="flex items-start gap-1 pl-[15px]">
       <span className="min-w-0 flex-1">
@@ -119,19 +125,27 @@ function JsonLeaf({ name, value }: { name?: string; value: JsonValue }) {
             <span className="text-[#8a968d]">: </span>
           </>
         )}
-        {typeof value === "string" ? (
-          // 值里的换行按真实换行显示：消息正文多是中文段落。
-          <span className="whitespace-pre-wrap text-[#5c685f]">{value}</span>
-        ) : (
-          <span className={leafClass(value)}>{String(value)}</span>
-        )}
+        {children}
       </span>
     </div>
+  );
+}
+
+function JsonLeaf({ name, value }: { name?: string; value: JsonValue }) {
+  return (
+    <LeafRow name={name}>
+      {typeof value === "string" ? (
+        // 引号让空串、全空白串和数字、布尔区分得开，不靠颜色；值里的换行按真实换行显示。
+        <span className="whitespace-pre-wrap text-[#5c685f]">"{value}"</span>
+      ) : (
+        <span className={leafClass(value)}>{String(value)}</span>
+      )}
+    </LeafRow>
   );
 }
 
 function leafClass(value: JsonValue) {
   if (typeof value === "number") return "text-[#8a6b3a]";
   if (typeof value === "boolean") return "text-[#3f6b7a]";
-  return "text-[#9a8f80]";
+  return "text-[#5c685f] italic";
 }

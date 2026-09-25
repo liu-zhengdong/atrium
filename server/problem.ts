@@ -24,25 +24,28 @@ export class Problem extends Error {
   }
 }
 
+/** 编辑距离；候选排序在名字之外也会拿模型 id 来比，所以单独抽出来共用。 */
+export function editDistance(a: string, b: string): number {
+  let row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++)
+      next[j] = Math.min(
+        next[j - 1]! + 1,
+        row[j]! + 1,
+        row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    row = next;
+  }
+  return row[b.length]!;
+}
+
 /** Matches ref first, then name prefix, then edit distance; no SQL wildcard matching. */
 export function closest(
   reference: string,
   entries: { ref: string; name: string }[],
 ) {
-  const distance = (a: string, b: string) => {
-    let row = Array.from({ length: b.length + 1 }, (_, i) => i);
-    for (let i = 1; i <= a.length; i++) {
-      const next = [i];
-      for (let j = 1; j <= b.length; j++)
-        next[j] = Math.min(
-          next[j - 1]! + 1,
-          row[j]! + 1,
-          row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
-        );
-      row = next;
-    }
-    return row[b.length]!;
-  };
+  const distance = editDistance;
   const input = reference.toLowerCase();
   return entries
     .map((entry) => ({

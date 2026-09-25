@@ -9,7 +9,7 @@ import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { closest, Problem } from "../server/problem.ts";
-import { failure, withContext, type Context } from "./contract.ts";
+import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
 import { cliErrorMessage, optionError } from "./error-message.ts";
 
@@ -263,7 +263,10 @@ export async function main(argv: string[]): Promise<number> {
             ok: false,
             error: {
               code: result.code,
-              message: result.message,
+              message:
+                result.code === "confirmation_required"
+                  ? result.message.split("\n", 1)[0]
+                  : result.message,
               ...(result.candidates ? { candidates: result.candidates } : {}),
             },
             next: commandOnly(result.next),
@@ -275,7 +278,8 @@ export async function main(argv: string[]): Promise<number> {
           console.error(
             `最接近的：${result.candidates.map(({ name, ref }) => `${name === ref.split("/").at(-1) ? ref : `${name}（${ref}）`}`).join("、")}`,
           );
-        if (result.next) console.error(`修正：${result.next}`);
+        if (result.next && result.code !== "confirmation_required")
+          console.error(`修正：${result.next}`);
       }
       return result.exit;
     } finally {
@@ -303,7 +307,16 @@ export async function main(argv: string[]): Promise<number> {
 }
 function defaultNext(name: string): string | null {
   if (name === "" || name === "--no-open") return "停止：atrium stop";
-  if (["stop", "delete", "account remove", "unassign", "kick"].includes(name))
+  if (
+    [
+      "stop",
+      "delete",
+      "disband",
+      "account remove",
+      "unassign",
+      "kick",
+    ].includes(name)
+  )
     return null;
   if (name === "update") return "生效：atrium restart";
   if (name === "restart") return "查看状态：atrium status";
@@ -312,7 +325,4 @@ function defaultNext(name: string): string | null {
   if (name === "list") return "查看会话：atrium chats";
   if (name === "chats") return "查看身份：atrium list";
   return null;
-}
-function commandOnly(next: string | null): string | null {
-  return next?.slice(next.indexOf("atrium ")) ?? null;
 }

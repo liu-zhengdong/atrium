@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   mkdirSync,
   readFileSync,
+  writeFileSync,
   existsSync,
   renameSync,
   realpathSync,
@@ -35,6 +36,7 @@ import {
 } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { ensureOwnPackages } from "./identity-packages.ts";
+import { migrateTemplateLinks } from "./identity-links.ts";
 import { wakesOffline } from "./delivery.ts";
 import { atriumGuide } from "./mcp.ts";
 import {
@@ -45,9 +47,10 @@ import {
   syncIdentityProfile,
 } from "./profile.ts";
 import {
-  cachedModels,
   configuredModel,
   configureModel,
+  liveThinkingProblem,
+  offlineModels,
   rememberModels,
 } from "./model.ts";
 import {
@@ -61,6 +64,7 @@ import { TraceStore } from "./trace.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
+import { commandAgent } from "../shared/command-agent.ts";
 
 const require = createRequire(import.meta.url);
 // 服务可能从某个 herdr pane 里启动；后台身份不在那个 pane 里，去掉表示「身处此 pane」的变量，
@@ -123,6 +127,7 @@ export class Runtimes {
   private gateways = new Set<Gateway>();
   private opening?: Promise<Gateway>;
   private connecting = new Map<string, Promise<void>>();
+  private switching = new Set<string>();
   private bindingOwners = new Map<string, string>();
   private pumping = new Map<string, Promise<void>>();
   private turns = new Map<
@@ -298,61 +303,65 @@ export class Runtimes {
     }
   }
   async remove(id: string, confirm: string) {
-    await this.operation(id, async () => {
-      await this.discover();
-      if (this.discoveryError)
-        throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
-      if (this.pumping.has(id))
-        throw new Problem(409, "Agent 正在处理连接，请稍后重试");
-      const { claimIdentity } =
-        require("@liuser/pi-atrium/dist/identity.js") as {
-          claimIdentity(
-            identity: { identityId: string; agentDirectory: string },
-            cwd: string,
-          ): { release(): void };
-        };
-      this.store.transaction(() => {
-        const agent = this.store.agent(id),
-          binding = this.binding(id);
-        if (confirm !== agent.ref)
-          throw new Problem(400, "删除确认与 Agent 不一致");
-        const connected = this.connections.get(id)?.info;
-        if (
-          (binding.runtime_pid && alive(binding.runtime_pid)) ||
-          (connected && alive(connected.pid)) ||
-          this.directory().runtimes.some((r) => r.bound_agent === id)
-        )
-          throw new Problem(409, "Agent 仍在运行，请先正常停止后再删除");
-        let lease: { release(): void } | undefined;
-        try {
-          if (agent.agent_directory) {
-            try {
-              lease = claimIdentity(
-                { identityId: id, agentDirectory: agent.agent_directory },
-                agent.cwd,
-              );
-            } catch {
-              throw new Problem(
-                409,
-                "身份仍被占用或状态不明，请先正常停止 Agent 后重试",
-              );
+    await this.operation(
+      id,
+      async () => {
+        await this.discover();
+        if (this.discoveryError)
+          throw new Problem(503, "无法确认运行状态，暂不能删除；请稍后重试");
+        if (this.pumping.has(id))
+          throw new Problem(409, "Agent 正在处理连接，请稍后重试");
+        const { claimIdentity } =
+          require("@liuser/pi-atrium/dist/identity.js") as {
+            claimIdentity(
+              identity: { identityId: string; agentDirectory: string },
+              cwd: string,
+            ): { release(): void };
+          };
+        this.store.transaction(() => {
+          const agent = this.store.agent(id);
+          if (confirm !== agent.ref)
+            throw new Problem(400, "删除确认与 Agent 不一致");
+          if (this.running(id))
+            throw new Problem(
+              409,
+              "Agent 仍在运行，请先正常停止后再删除",
+              undefined,
+              undefined,
+              `atrium stop ${commandAgent(agent.name, agent.ref)}\n确认删除：atrium delete ${commandAgent(agent.name, agent.ref)} --yes`,
+            );
+          let lease: { release(): void } | undefined;
+          try {
+            if (agent.agent_directory) {
+              try {
+                lease = claimIdentity(
+                  { identityId: id, agentDirectory: agent.agent_directory },
+                  agent.cwd,
+                );
+              } catch {
+                throw new Problem(
+                  409,
+                  "身份仍被占用或状态不明，请先正常停止 Agent 后重试",
+                );
+              }
             }
+            this.store.deleteAgent(id);
+            if (agent.agent_directory)
+              unlinkProfile(resolvePiHome(this.piHome), agent.name);
+          } finally {
+            lease?.release();
           }
-          this.store.deleteAgent(id);
-          if (agent.agent_directory)
-            unlinkProfile(resolvePiHome(this.piHome), agent.name);
-        } finally {
-          lease?.release();
-        }
-      });
-      // After the commit: the revocation is recorded, so losing the file cannot
-      // strip a live identity of its token.
-      removeCredential(this.data, id);
-      this.connections.delete(id);
-      this.errors.delete(id);
-      this.starts.delete(id);
-      this.changed();
-    });
+        });
+        // After the commit: the revocation is recorded, so losing the file cannot
+        // strip a live identity of its token.
+        removeCredential(this.data, id);
+        this.connections.delete(id);
+        this.errors.delete(id);
+        this.starts.delete(id);
+        this.changed();
+      },
+      "ignore",
+    );
   }
   private withOwners(runtimes: LiveRuntime[]): LiveRuntime[] {
     const rows = this.store.all<
@@ -593,13 +602,16 @@ export class Runtimes {
   private async operation(
     id: string,
     run: () => Promise<void>,
-    recordFailure = true,
+    recordFailure: boolean | "ignore" = true,
   ) {
     this.assertOpen();
     if (this.draining) throw new Problem(409, "服务正在排空任务，暂不接入身份");
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
+      // Deletion rejections are not runtime failures. Other operations still
+      // record Problems such as a failed identity start or plugin migration.
+      if (recordFailure === "ignore") throw error;
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
@@ -731,6 +743,8 @@ export class Runtimes {
     if (this.draining) throw new Problem(409, "服务正在排空任务，暂不启动身份");
     requireAssignment(this.store, id);
     const binding = this.binding(id);
+    if (this.switching.has(id) && !fresh)
+      throw new Problem(409, "正在切换会话，请稍候");
     if (this.connections.has(id)) throw new Problem(409, "Agent 已在运行");
     if (binding.runtime_pid && alive(binding.runtime_pid))
       throw new Problem(409, "原 Pi 进程仍存在，等待重连；不会另开同一会话");
@@ -754,15 +768,40 @@ export class Runtimes {
         // A failed migration must not launch Pi with personal plugins.
         const migrationStarted = Date.now();
         try {
-          if (ensureOwnPackages(current.agent_directory))
+          if (ensureOwnPackages(current.agent_directory)) {
+            // Package migration may have created new links after an earlier clean scan.
+            this.store.run(
+              "DELETE FROM identity_link_migrations WHERE agent_id=?",
+              id,
+            );
             console.log(
               `${current.name} 的个人 Pi 插件已转为独立安装（${Date.now() - migrationStarted}ms）`,
             );
+          }
         } catch (error) {
           console.error(
             `${current.name} 的插件迁移失败（${Date.now() - migrationStarted}ms），保留原配置以便重试：${error}`,
           );
           throw error;
+        }
+        try {
+          const links = migrateTemplateLinks(
+            this.store,
+            id,
+            current.agent_directory,
+          );
+          if (links.skipped)
+            console.log(
+              `${current.name} 的模板链接已检查，跳过全量扫描（${links.elapsedMs.toFixed(2)}ms）`,
+            );
+          else if (links.repaired || links.missing || links.failed)
+            console.log(
+              `${current.name} 的模板链接已修复 ${links.repaired} 条，保留 ${links.missing} 条，扫描失败 ${links.failed} 条（${links.elapsedMs.toFixed(0)}ms）`,
+            );
+        } catch (error) {
+          console.error(
+            `${current.name} 的模板链接修复失败，继续启动：${error}`,
+          );
         }
         // A profile left on the old layout costs the Agent a rule, not its session.
         for (const notice of syncIdentityProfile(current.agent_directory))
@@ -870,6 +909,102 @@ export class Runtimes {
     });
     if (!this.pumping.has(id)) await this.pump(id);
   }
+  /** 等真实运行状态空闲后才释放旧实例；切换期间不投递新的回合。 */
+  async newSession(id: string, timeoutSeconds = 300) {
+    requireAssignment(this.store, id);
+    if (this.switching.has(id) || this.connecting.has(id))
+      throw new Problem(409, "身份正在接入或切换会话，请稍候");
+    const oldFile = this.store.agent(id).session_file;
+    const cursor = join(
+      process.env.PI_ACP_DIR ?? join(homedir(), ".pi", "pi-acp"),
+      "identities",
+      `${id}.cursor.json`,
+    );
+    this.switching.add(id);
+    let started = false;
+    try {
+      await this.discover();
+      if (this.discoveryError)
+        throw new Problem(503, "无法确认身份是否在其他终端运行，请稍后重试");
+      const foreign = this.discovered.find(
+        (runtime) =>
+          runtime.bound_agent === id &&
+          runtime.mode === "tui" &&
+          alive(runtime.pid),
+      );
+      if (foreign)
+        throw new Problem(
+          409,
+          "这个身份正在其他终端运行（atrium run / TUI）；请先在原终端退出，不会抢占会话",
+        );
+      const connection = this.connections.get(id);
+      if (connection && !this.owned(id))
+        throw new Problem(
+          409,
+          "这个身份正在其他终端运行（如 atrium tui / atrium run）；请先在原终端退出，不会抢占会话",
+        );
+      if (!connection) {
+        const pid = this.binding(id).runtime_pid;
+        if (pid && alive(pid))
+          throw new Problem(
+            409,
+            "旧 Pi 进程仍在运行，请先在原终端退出；不会抢占会话",
+          );
+      }
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      while (this.connections.has(id)) {
+        const runtime = this.connections.get(id)!;
+        runtime.info = runtimeSchema.parse(
+          await this.rpc("_pi/runtime/status", target(runtime.info)),
+        );
+        if (!runtime.info.busy) {
+          await this.capture(id, runtime.info);
+          // A concurrent delivery may have begun during the status request.
+          if (!this.pumping.has(id)) break;
+        }
+        if (Date.now() >= deadline)
+          throw new Problem(
+            408,
+            `等待 ${timeoutSeconds} 秒后当前回合仍未结束；旧会话保持运行，稍后重试`,
+            "timeout",
+          );
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      // Preserve the pointer as well as the session file if the new start fails.
+      const previousCursor = existsSync(cursor) ? readFileSync(cursor) : null;
+      const previousBinding = this.binding(id);
+      if (this.connections.has(id)) await this.stop(id);
+      try {
+        await this.start(id, false, true);
+      } catch (error) {
+        if (previousCursor) {
+          const temp = `${cursor}.restore-${randomUUID()}`;
+          writeFileSync(temp, previousCursor, { mode: 0o600 });
+          renameSync(temp, cursor);
+        } else if (existsSync(cursor)) rmSync(cursor);
+        this.store.run(
+          "UPDATE agents SET session_file=?,acp_session_id=? WHERE id=?",
+          previousBinding.session_file,
+          previousBinding.acp_session_id,
+          id,
+        );
+        throw new Problem(
+          503,
+          `新会话启动失败，旧会话文件和指针已保留：${this.redact(id, errorWithDetails(error)).slice(0, 240)}`,
+          "new_session_failed",
+        );
+      }
+      this.recordSessionReset(id, "手动开启新会话");
+      started = true;
+      return {
+        old_session_file: oldFile,
+        new_session_file: this.store.agent(id).session_file,
+      };
+    } finally {
+      this.switching.delete(id);
+      if (started || this.connections.has(id)) await this.pump(id);
+    }
+  }
   /** 本进程这条网关自己启动的 Pi；别处发现、由 TUI 或旧网关拉起的实例不归它管。 */
   private owned(id: string) {
     const runtime = this.connections.get(id);
@@ -894,6 +1029,18 @@ export class Runtimes {
     });
     this.changed();
   }
+  /** 删除预览与删除守卫共用实际存活判断；发现列表可能滞后，不能只看名册在线状态。 */
+  running(id: string, discovered = this.directory().runtimes): boolean {
+    const binding = this.binding(id);
+    const connected = this.connections.get(id)?.info;
+    return !!(
+      (binding.runtime_pid && alive(binding.runtime_pid)) ||
+      (connected && alive(connected.pid)) ||
+      discovered.some(
+        (runtime) => runtime.bound_agent === id && alive(runtime.pid),
+      )
+    );
+  }
   /** 撤销最后一个账号前终止活跃身份，不能留下仍在运行的无账号实例。 */
   async stopForUnassignment(id: string) {
     if (this.connections.has(id)) return this.stop(id);
@@ -910,7 +1057,7 @@ export class Runtimes {
   }
   /** 这个身份可选的模型。只有它在跑才问得到，问到就存下来给离线时用。 */
   private async listModels(id: string): Promise<ModelOption[]> {
-    if (!this.managed(id)) return cachedModels(this.store, id);
+    if (!this.managed(id)) return offlineModels(this.store, id);
     try {
       const { models } = z
         .object({
@@ -939,7 +1086,7 @@ export class Runtimes {
       console.error(
         `${this.store.agent(id).name} 的模型清单取回失败：${error}`,
       );
-      return cachedModels(this.store, id);
+      return offlineModels(this.store, id);
     }
   }
   /** 默认配置复用身份模型来源：先合并已观察清单，空清单时从在线身份取一次。 */
@@ -947,7 +1094,7 @@ export class Runtimes {
     const agents = this.store.agents().filter((agent) => agent.agent_directory);
     const observed = new Map<string, ModelOption>();
     for (const agent of agents)
-      for (const model of cachedModels(this.store, agent.id))
+      for (const model of offlineModels(this.store, agent.id))
         if (
           !observed.has(model.id) ||
           (observed.get(model.id)!.name === model.id && model.name !== model.id)
@@ -971,7 +1118,8 @@ export class Runtimes {
   async setModel(id: string, spec: ModelSpec): Promise<ModelChange> {
     const live = this.managed(id);
     const options = await this.listModels(id);
-    const directory = this.store.agent(id).agent_directory;
+    const agent = this.store.agent(id);
+    const directory = agent.agent_directory;
     const previous =
       live && directory ? snapshotIdentityModel(directory) : null;
     const { wanted, configured } = configureModel(
@@ -994,6 +1142,9 @@ export class Runtimes {
       } catch (error) {
         if (directory && previous) restoreIdentityModel(directory, previous);
         const detail = String(error);
+        // 两份目录对不上时 pi 会以原生报错拒绝思考强度：转成中文回执加修正。
+        const fallback = liveThinkingProblem(detail, wanted, agent);
+        if (fallback) throw fallback;
         const reason = detail.includes("Model not found:")
           ? `运行中的 Pi 找不到 ${wanted}，请检查模型配置`
           : `运行中的实例没能当场切换：${detail}`;
@@ -1039,7 +1190,7 @@ export class Runtimes {
     }
     let operationFailed = false;
     try {
-      if (this.connecting.has(id)) return;
+      if (this.connecting.has(id) || this.switching.has(id)) return;
       let runtime = this.connections.get(id);
       // A TUI may exit and immediately restart under the same identity. Discovery
       // knows the new runtime before a status poll of the old one necessarily fails.

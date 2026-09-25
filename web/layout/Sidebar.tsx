@@ -15,6 +15,7 @@ import { failureSummary } from "../components/failure-summary.ts";
 import { Mark } from "../components/Mark.tsx";
 import { convTime } from "../time.ts";
 import type { Agent } from "../components/AgentAvatar.tsx";
+import { chatTabOf, hasChatTabActivity, type ChatTab } from "./chat-tabs.ts";
 export type Section = "agents" | "chat" | "records";
 
 const rowName = "truncate text-xs font-semibold text-ink";
@@ -35,6 +36,9 @@ export function Sidebar({
   section,
   setSection,
   chatId,
+  chatTab,
+  lastObservedAt,
+  selectChatTab,
   selectChat,
   create,
   openAgent,
@@ -48,6 +52,9 @@ export function Sidebar({
   section: Section;
   setSection: (section: Section) => void;
   chatId: string | null;
+  chatTab: ChatTab;
+  lastObservedAt: number;
+  selectChatTab: (tab: ChatTab) => void;
   selectChat: (id: string) => void;
   create: (kind: "agent" | "chat") => void;
   openAgent: (agent: Agent) => void;
@@ -59,6 +66,8 @@ export function Sidebar({
 }) {
   const agents = overview?.agents ?? [];
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+  const chats = overview?.chats ?? [];
+  const visibleChats = chats.filter((chat) => chatTabOf(chat) === chatTab);
 
   async function setState(
     id: string,
@@ -113,8 +122,45 @@ export function Sidebar({
       </nav>
       {section !== "agents" ? (
         <div className="mb-4 flex min-h-0 flex-1 flex-col">
+          <div
+            role="tablist"
+            aria-label="会话范围"
+            className="mx-1.5 mb-2 grid grid-cols-2 rounded-lg bg-[#e7eee9] p-0.5"
+          >
+            {(["mine", "observe"] as const).map((tab) => {
+              const label = tab === "mine" ? "我的" : "围观";
+              const hasActivity = hasChatTabActivity(
+                chats,
+                tab,
+                lastObservedAt,
+              );
+              const showDot = tab !== chatTab && hasActivity;
+              return (
+                <button
+                  key={tab}
+                  role="tab"
+                  aria-selected={chatTab === tab}
+                  aria-label={showDot ? `${label}，有新动态` : label}
+                  onClick={() => selectChatTab(tab)}
+                  className={`flex min-w-0 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors max-[560px]:min-h-11 ${
+                    chatTab === tab
+                      ? "bg-white text-ink shadow-sm"
+                      : "text-muted hover:bg-white/60 hover:text-ink"
+                  }`}
+                >
+                  {label}
+                  {showDot && (
+                    <span
+                      aria-hidden="true"
+                      className="h-1.5 w-1.5 rounded-full bg-accent"
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
           <div className="min-h-0 flex-1 overflow-auto">
-            {overview?.chats.map((chat) => (
+            {visibleChats.map((chat) => (
               <div
                 key={chat.id}
                 className={`group/row relative rounded-lg transition-colors ${
@@ -195,8 +241,12 @@ export function Sidebar({
                 </div>
               </div>
             ))}
-            {overview && !overview.chats.length && (
-              <p className={hint}>还没有会话，从 Agents 里选一位开始</p>
+            {overview && !visibleChats.length && (
+              <p className={hint}>
+                {chatTab === "mine"
+                  ? "还没有会话，从 Agents 里选一位开始"
+                  : "Agent 之间的会话会出现在这里"}
+              </p>
             )}
           </div>
         </div>

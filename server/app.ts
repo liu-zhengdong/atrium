@@ -38,7 +38,12 @@ import { readRestartState } from "./supervisor.ts";
 import { TraceStore } from "./trace.ts";
 import { listAdapters, receiveInbox, writeGithubTemplate } from "./adapters.ts";
 import { readUser, resolveActor, writeUser } from "./users.ts";
-import { removeMember, updateGroup } from "./groups.ts";
+import {
+  deletionPreview,
+  disbandGroup,
+  removeMember,
+  updateGroup,
+} from "./groups.ts";
 import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
@@ -151,7 +156,8 @@ export async function createApp(options: {
           ? error.issues
               .map((i) => `${i.path.join(".")}: ${i.message}`)
               .join("；")
-          : status >= 500
+          : status >= 500 &&
+              !(error instanceof Problem && error.code === "new_session_failed")
             ? "服务处理失败，请检查本地日志"
             : error instanceof Error
               ? error.message
@@ -490,6 +496,7 @@ export async function createApp(options: {
         ...a,
         runtime: runtimes?.connections.get(a.id)?.info ?? null,
         available: available.has(a.id) || !!runtimes?.connections.has(a.id),
+        running: runtimes?.running(a.id, discovery.runtimes) ?? false,
         error: store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
         failure: store.failure(a.id),
         unread: store.boxCount(a.id),
@@ -727,6 +734,14 @@ export async function createApp(options: {
     await runtimes.start(agentParams(request));
     return { connected: true };
   });
+  app.post("/api/agents/:id/new-session", async (request) => {
+    if (!runtimes) throw new Problem(503, "运行时未启用");
+    const { timeout } = z
+      .object({ timeout: z.number().int().min(1).max(3600).default(300) })
+      .strict()
+      .parse(request.body);
+    return runtimes.newSession(agentParams(request), timeout);
+  });
   app.post("/api/agents/:id/retry", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用");
     await runtimes.retry(agentParams(request));
@@ -857,6 +872,8 @@ export async function createApp(options: {
             note: a.note,
           },
         );
+    if (isUserRef(creator) && !a.direct_agent)
+      store.markUserParticipated(result.id);
     if (a.direct_agent) void runtimes?.pump(a.direct_agent, true);
     changed();
     return result;
@@ -917,6 +934,19 @@ export async function createApp(options: {
     const chat = updateGroup(store, agentParams(request), request.body);
     changed();
     return chat;
+  });
+  // 删群是危险操作：先给预览，确认群名一致后才在同一个事务里删掉全部历史。
+  app.get("/api/chats/:id/deletion", (request) =>
+    deletionPreview(store, agentParams(request)),
+  );
+  app.delete("/api/chats/:id", (request) => {
+    const { confirm } = z
+      .object({ confirm: z.string() })
+      .strict()
+      .parse(request.body);
+    const result = disbandGroup(store, agentParams(request), confirm);
+    changed();
+    return result;
   });
   // 聊天记录：会话、发送者、时间范围三个筛选两边共用，内容形状不同所以分两条。
   app.get("/api/records/messages", (request) =>

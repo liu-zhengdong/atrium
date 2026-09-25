@@ -12,6 +12,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../server/store.ts";
 import { Accounts } from "../server/accounts.ts";
+import { checkedCustom } from "../server/custom-providers.ts";
+
+test("自定义模型支持本机 IPv6 回环地址，不放行远端明文 HTTP", () => {
+  const config = { baseUrl: "http://[::1]:4335/v1", models: [{ id: "demo" }] };
+  assert.equal(checkedCustom("local", config).baseUrl, config.baseUrl);
+  assert.throws(
+    () =>
+      checkedCustom("local", { ...config, baseUrl: "http://example.com/v1" }),
+    /须为 HTTPS/,
+  );
+});
 
 const fixture = async () => {
   const server = createServer((req, res) => {

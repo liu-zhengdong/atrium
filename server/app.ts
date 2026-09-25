@@ -218,9 +218,9 @@ export async function createApp(options: {
         throw new Problem(403, "不接受跨站请求");
     }
   });
-  // Fastify has matched the route here. Raw URL prefixes are not an auth boundary:
-  // /%61pi/overview matches /api/overview after decoding.
-  app.addHook("preHandler", async (request, reply) => {
+  // onRequest has the matched route but runs before Fastify reads the body.
+  // Raw /%61pi/overview matches /api/overview after decoding.
+  app.addHook("onRequest", async (request, reply) => {
     if (options.auth === false) return;
     const route = request.routeOptions.url ?? "";
     const policy = authPolicy(request.method, route);

@@ -33,6 +33,35 @@ function rawRequest(
   });
 }
 
+function declaredBodyWithoutBytes(port: number, path: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let response = "";
+    socket.setTimeout(1500, () => {
+      socket.destroy();
+      reject(new Error(`${path}: authentication waited for the request body`));
+    });
+    socket.on("connect", () =>
+      socket.write(
+        `POST ${path} HTTP/1.1\r\nHost: atrium.localhost:${port}\r\nContent-Type: application/json\r\nContent-Length: 10485760\r\nConnection: close\r\n\r\n`,
+      ),
+    );
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+      const status = /^HTTP\/1\.1 (\d+)/.exec(response)?.[1];
+      if (status) {
+        socket.destroy();
+        resolve(Number(status));
+      }
+    });
+    socket.on("error", reject);
+    socket.on("close", () => {
+      if (!response)
+        reject(new Error(`${path}: connection closed without response`));
+    });
+  });
+}
+
 test("onRoute audit: every registered route defaults to user auth; exceptions are explicit", async () => {
   const data = mkdtempSync(join(tmpdir(), "atrium-route-audit-"));
   const webRoot = join(data, "web");
@@ -97,6 +126,20 @@ test("negative control: without the user-auth guard an encoded API path reaches 
     const response = await app.inject({ url: "/%61pi/overview" });
     assert.equal(response.statusCode, 200);
     assert("agents" in response.json());
+  } finally {
+    await app.close();
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("anonymous requests are rejected before their declared body is read", async () => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-body-before-auth-"));
+  const { app } = await createApp({ data, runtime: false });
+  try {
+    const address = await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = Number(new URL(address).port);
+    for (const path of ["/api/runners", "/%61pi/runners"])
+      assert.equal(await declaredBodyWithoutBytes(port, path), 401, path);
   } finally {
     await app.close();
     rmSync(data, { recursive: true, force: true });

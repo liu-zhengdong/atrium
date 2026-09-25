@@ -155,6 +155,9 @@ export class Runtimes {
   private canSetModel = false;
   private scanning?: Promise<void>;
   private ticking = false;
+  private draining = false;
+  public gatewayVersion: string | null = null;
+  public needsReload = new Set<string>();
   private interval: NodeJS.Timeout;
   constructor(
     private store: Store,
@@ -232,6 +235,8 @@ export class Runtimes {
       ).unref();
       try {
         const result = await connection.agent.request<{
+          protocolVersion?: number;
+          agentInfo?: { name?: string; version?: string };
           _meta?: Record<string, unknown>;
         }>("initialize", {
           protocolVersion: PROTOCOL_VERSION,
@@ -245,6 +250,7 @@ export class Runtimes {
           throw new Error(
             "pi-atrium 缺少 runtime/v1 能力，请更新到本项目要求的版本",
           );
+        this.gatewayVersion = result.agentInfo?.version ?? null;
         this.canSetModel = !!result._meta["pi-acp/identity/model/v1"];
         this.assertOpen();
         this.gateway = gateway;
@@ -599,6 +605,7 @@ export class Runtimes {
     recordFailure: boolean | "ignore" = true,
   ) {
     this.assertOpen();
+    if (this.draining) throw new Problem(409, "服务正在排空任务，暂不接入身份");
     if (this.connecting.has(id))
       throw new Problem(409, "Agent 正在接入，请稍候");
     const promise = run().catch((error) => {
@@ -733,6 +740,7 @@ export class Runtimes {
     this.recordSessionReset(id, reason);
   }
   async start(id: string, automatic = false, fresh = false) {
+    if (this.draining) throw new Problem(409, "服务正在排空任务，暂不启动身份");
     requireAssignment(this.store, id);
     const binding = this.binding(id);
     if (this.switching.has(id) && !fresh)
@@ -1159,7 +1167,7 @@ export class Runtimes {
     };
   }
   pump(id: string, direct = false): Promise<void> {
-    if (this.stopped || (this.store.failure(id) && !direct))
+    if (this.stopped || this.draining || (this.store.failure(id) && !direct))
       return Promise.resolve();
     const existing = this.pumping.get(id);
     if (existing) return existing;
@@ -1342,11 +1350,16 @@ export class Runtimes {
       }
     }
   }
-  private async capture(id: string, info: RuntimeInfo) {
+  private async capture(
+    id: string,
+    info: RuntimeInfo,
+    maxPages = 2,
+    strict = false,
+  ) {
     const before = this.traceErrors.get(id);
     try {
-      // Bounded catch-up per tick; long gaps are reported, never fabricated.
-      for (let page = 0; page < 2; page++) {
+      // Regular ticks are bounded; shutdown must consume all remaining pages.
+      for (let page = 0; page < maxPages; page++) {
         const events = runtimeEvents.parse(
           await this.rpc("_pi/runtime/events", {
             ...target(info),
@@ -1359,8 +1372,10 @@ export class Runtimes {
           this.stopped ||
           current?.runtimeId !== info.runtimeId ||
           current?.generation !== info.generation
-        )
+        ) {
+          if (strict) throw new Error(`身份 ${id} 的运行实例在轨迹同步时变化`);
           return;
+        }
         if (
           events.runtimeId !== info.runtimeId ||
           events.generation !== info.generation ||
@@ -1447,14 +1462,17 @@ export class Runtimes {
           }
         }
         if (!events.hasMore) break;
+        if (strict && page === maxPages - 1)
+          throw new Error(`身份 ${id} 的轨迹未在 ${maxPages} 页内同步完毕`);
       }
       this.traceErrors.delete(id);
-    } catch {
+    } catch (error) {
       if (!this.stopped)
         this.traceErrors.set(
           id,
           "暂时无法读取实时轨迹；请确认此 Pi 已加载支持轨迹的 pi-atrium 扩展。已有记录仍可查看。",
         );
+      if (strict) throw error;
     }
     if (!this.stopped && before !== this.traceErrors.get(id)) this.changed();
   }
@@ -1472,12 +1490,98 @@ export class Runtimes {
       agentTransition(this.store.failure(id), { kind: "retry" }).wake,
     );
   }
+  activeAgentIds(): string[] {
+    return [...this.connections.keys()].filter(
+      (id) => this.pumping.has(id) || this.connections.get(id)?.info.busy,
+    );
+  }
+  async prepareShutdown(timeoutMs: number): Promise<string[]> {
+    if (this.draining) throw new Error("服务正在排空任务");
+    const agents = new Set(this.activeAgentIds());
+    this.draining = true;
+    const deadline = Date.now() + timeoutMs;
+    let busyIds: string[] = [];
+    try {
+      // An already-running discovery tick may still be reading trace events.
+      // Let it finish before the final strict capture touches the same cursor.
+      while (this.ticking && Date.now() < deadline)
+        await new Promise((r) => setTimeout(r, 100));
+      while (Date.now() < deadline) {
+        // The discovery tick is paused while draining. Refresh busy state from
+        // each running Pi; a stale snapshot would make every busy restart time out.
+        const statuses = await Promise.all(
+          [...this.connections].map(async ([id, entry]) => {
+            const current = runtimeSchema.parse(
+              await this.rpc("_pi/runtime/status", target(entry.info)),
+            );
+            entry.info = current;
+            if (current.busy) agents.add(id);
+            return { id, busy: current.busy };
+          }),
+        );
+        busyIds = [
+          ...new Set([
+            ...statuses
+              .filter((status) => status.busy)
+              .map((status) => status.id),
+            ...this.pumping.keys(),
+            ...this.connecting.keys(),
+          ]),
+        ];
+        if (busyIds.length === 0) {
+          // Pi can report idle just before the final events become visible.
+          // Flush first, then require the observed run_start to have run_end.
+          await Promise.all(
+            [...this.connections].map(([id, entry]) =>
+              this.capture(id, entry.info, 100, true),
+            ),
+          );
+          busyIds = [...this.connections.keys()].filter((id) =>
+            this.turns.has(id),
+          );
+          for (const id of busyIds) agents.add(id);
+          if (busyIds.length === 0) return [...agents];
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const names = busyIds.map((id) => {
+        const agent = this.store.agent(id);
+        return `${agent.name}（${agent.ref}）`;
+      });
+      throw new Error(
+        `Agent 回合未在 ${timeoutMs / 1000} 秒内完成；仍在工作：${names.join("、") || "状态未确认"}。旧服务继续运行；待回合结束后重新运行 atrium restart，或使用 --agent-timeout <毫秒> 延长等待`,
+      );
+    } catch (error) {
+      this.draining = false;
+      throw error;
+    }
+  }
+  health(): { available: boolean; error: string | null } {
+    const available =
+      !this.stopped && !this.draining && this.gateway !== undefined;
+    return {
+      available,
+      error: this.discoveryError ?? (available ? null : "网关未就绪"),
+    };
+  }
   private async tick() {
-    if (this.stopped || this.ticking) return;
+    if (this.stopped || this.draining || this.ticking) return;
     this.ticking = true;
     try {
       await this.discover();
-      if (this.stopped) return;
+      if (this.stopped || this.draining) return;
+      for (const agentId of [...this.needsReload]) {
+        const entry = this.connections.get(agentId);
+        if (entry && !entry.info.busy && entry.info.mode === "rpc") {
+          this.needsReload.delete(agentId);
+          try {
+            await this.stop(agentId);
+            await this.start(agentId);
+          } catch (err) {
+            console.warn(`自动重载 Agent ${agentId} 失败：`, err);
+          }
+        }
+      }
       if (this.store.schedule().length) this.changed();
       await Promise.all(
         this.store.agents().map(async (agent) => {

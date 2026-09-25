@@ -1,5 +1,12 @@
 import { spawn, execFile } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+} from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -43,6 +50,38 @@ async function ready(record: ServiceRecord) {
   } catch {
     return false;
   }
+}
+function startupFailure(data: string, reason: string, logStart: number): Error {
+  const path = join(data, "service.log");
+  let recent = "";
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const size = fstatSync(fd).size;
+      const buffer = Buffer.alloc(Math.min(Math.max(size - logStart, 0), 4096));
+      const bytes = readSync(
+        fd,
+        buffer,
+        0,
+        buffer.length,
+        size - buffer.length,
+      );
+      recent = buffer
+        .subarray(0, bytes)
+        .toString("utf8")
+        .trim()
+        .split("\n")
+        .slice(-10)
+        .join("\n");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    /* A missing or unreadable log must not hide the startup error. */
+  }
+  return new Error(
+    `${reason}；日志：${path}${recent ? `\n最近输出：\n${recent}` : ""}`,
+  );
 }
 function unavailable(record: ServiceRecord, data: string) {
   return new Error(
@@ -94,6 +133,7 @@ export async function startService(data: string) {
   let record = readService(data);
   let child: ReturnType<typeof spawn> | undefined;
   let launchError: Error | undefined;
+  let logStart = 0;
   if (!record || !alive(record.pid)) {
     servicePort();
     if (!existsSync(join(packageRoot, "dist/index.html")))
@@ -102,6 +142,7 @@ export async function startService(data: string) {
       );
     mkdirSync(data, { recursive: true, mode: 0o700 });
     const log = openSync(join(data, "service.log"), "a", 0o600);
+    logStart = fstatSync(log).size;
     try {
       const cleaned = cleanIdentityEnvironment(
         process.env,
@@ -138,14 +179,19 @@ export async function startService(data: string) {
     record = readService(data);
     if (record && alive(record.pid) && (await ready(record))) return record;
     // A concurrent starter can lose the claim while the winning child is still starting.
-    if (child?.exitCode != null && (!record || !alive(record.pid)))
-      throw new Error(
-        `Atrium 启动失败（退出码 ${child.exitCode}）；端口可能被占用。请检查 ${join(data, "service.log")}`,
+    if (
+      (child?.exitCode != null || child?.signalCode) &&
+      (!record || !alive(record.pid))
+    )
+      throw startupFailure(
+        data,
+        `Atrium 启动失败（${child.exitCode != null ? `退出码 ${child.exitCode}` : `信号 ${child.signalCode}`}）`,
+        logStart,
       );
     await delay(100);
   }
   if (record && alive(record.pid)) throw unavailable(record, data);
-  throw new Error(`Atrium 启动超时；请检查 ${join(data, "service.log")}`);
+  throw startupFailure(data, "Atrium 启动超时", logStart);
 }
 export async function openWeb(record: ServiceRecord) {
   const url = serviceUrl(record);

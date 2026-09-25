@@ -13,6 +13,7 @@ export const exitCodes = {
   model_not_found: 3,
   thinking_not_supported: 3,
   not_found: 3,
+  restart_rollback: 3,
   conflict: 4,
   validation_failed: 4,
   already_assigned: 4,
@@ -20,6 +21,7 @@ export const exitCodes = {
   local_login_unavailable: 4,
   service_unavailable: 5,
   new_session_failed: 5,
+  restart_timeout: 124,
   timeout: 124,
 } as const;
 export type ErrorCode = keyof typeof exitCodes;
@@ -60,6 +62,8 @@ export function correction(code: ErrorCode, usage?: string) {
   if (code === "account_not_found") return "atrium accounts";
   if (code === "unassigned_account") return "atrium account check";
   if (code === "service_unavailable") return "atrium status";
+  if (code === "restart_rollback" || code === "restart_timeout")
+    return "atrium status";
   return null;
 }
 export function failure(error: unknown, usage?: string) {

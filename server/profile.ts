@@ -200,6 +200,17 @@ export function bundledPackagePath(): string {
   return dirname(require.resolve("@liuser/pi-atrium/package.json"));
 }
 
+export function bundledPiAtriumVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(bundledPackagePath(), "package.json"), "utf8"),
+    ) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 /** Keep user packages; replace any bundled copy with the current app install. */
 export function injectBundledPackages(packages: unknown[]): unknown[] {
   const bridge = bundledPackagePath();

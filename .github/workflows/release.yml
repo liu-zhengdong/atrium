@@ -1,0 +1,49 @@
+name: Atrium 版本发布
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: read
+concurrency:
+  group: atrium-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: ${{ !startsWith(github.event.head_commit.message, '发布 v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci
+      - name: 从合入 PR 取摘要并计算补丁版本
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          summary=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '.[0].title // empty')
+          if [ -z "$summary" ]; then summary=$(git log -1 --format=%s); fi
+          version=$(node scripts/prepare-release.mjs "$summary")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+      - run: npm run check && npm run format:check
+      - name: 提交安装产物及版本标签
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SUMMARY: ${{ steps.version.outputs.summary }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json releases.json
+          git add -f dist
+          git commit -m "发布 v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin HEAD:main
+          git push origin "v${VERSION}"
+          gh release create "v${VERSION}" --title "v${VERSION}" --notes "$SUMMARY"

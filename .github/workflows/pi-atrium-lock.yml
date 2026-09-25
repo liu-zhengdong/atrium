@@ -1,0 +1,48 @@
+name: 同步 pi-atrium 依赖
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci
+      - name: 查询上游最新提交并更新 lock
+        id: lock
+        run: |
+          git ls-remote https://github.com/liu-zhengdong/pi-atrium.git refs/heads/main | cut -f1 > /tmp/pi-atrium-sha
+          test -s /tmp/pi-atrium-sha
+          upstream=$(cat /tmp/pi-atrium-sha)
+          PI_ATRIUM_SHA="$upstream" node -e 'const fs=require("fs"); const pkg=require("./package.json"); pkg.dependencies["@liuser/pi-atrium"]=`github:liu-zhengdong/pi-atrium#${process.env.PI_ATRIUM_SHA}`; fs.writeFileSync("package.json",JSON.stringify(pkg,null,2)+"\n")'
+          npm install --package-lock-only --ignore-scripts
+          locked=$(node -p 'require("./package-lock.json").packages["node_modules/@liuser/pi-atrium"].resolved.split("#").at(-1)')
+          test "$locked" = "$(cat /tmp/pi-atrium-sha)" || { echo 'npm 未锁定至最新上游提交'; exit 1; }
+          echo "sha=$locked" >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- package.json package-lock.json; then echo 'changed=false' >> "$GITHUB_OUTPUT"; else echo 'changed=true' >> "$GITHUB_OUTPUT"; fi
+      - name: 提交并发起升级 PR
+        if: steps.lock.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.lock.outputs.sha }}
+        run: |
+          branch="deps/pi-atrium-${SHA:0:12}"
+          if [ -n "$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')" ]; then
+            echo "已有同版本的待审 PR：$branch"; exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add package.json package-lock.json
+          git commit -m "更新 pi-atrium 依赖至 ${SHA:0:12}"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "更新 pi-atrium 依赖至 ${SHA:0:12}" --body "同步 pi-atrium main 的提交 \`$SHA\`。合入后由 Atrium 发布流程生成新版本；须通过现有检查与新旧版本联合验收。"
+          # GITHUB_TOKEN 发起的 push / PR 不会触发常规检查；workflow_dispatch 会。
+          gh workflow run check.yml --ref "$branch"

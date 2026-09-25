@@ -6,15 +6,35 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readFileSync,
   realpathSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 export const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+// An installed update can replace package.json while the old service is alive.
+// Keep the running process's version stable until its replacement starts.
+const bootVersion = (() => {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(packageRoot, "package.json"), "utf8"),
+    ) as { version?: string };
+    return pkg.version ?? "0.1.0";
+  } catch {
+    return "0.1.0";
+  }
+})();
+export function currentVersion(): string {
+  return bootVersion;
+}
 export function dataDirectory() {
-  const path = resolve(process.env.ATRIUM_DATA ?? join(packageRoot, ".atrium"));
+  // Never keep mutable user data under an npm installation: npm update replaces it.
+  const path = resolve(
+    process.env.ATRIUM_DATA ?? join(homedir(), ".pi", "atrium", "data"),
+  );
   return existsSync(path) ? realpathSync(path) : path;
 }
 export function servicePort() {

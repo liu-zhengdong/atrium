@@ -5,6 +5,8 @@ import { api } from "./api.ts";
 /** One overview subscription shared by navigation and domain views. */
 export function useOverview() {
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [initialVersion, setInitialVersion] = useState<string | null>(null);
+  const [versionChanged, setVersionChanged] = useState(false);
   const [revision, setRevision] = useState(0),
     [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
@@ -17,6 +19,13 @@ export function useOverview() {
         if (!cancelled) {
           setOverview(data);
           setError("");
+          if (data.version) {
+            setInitialVersion((prev) => {
+              if (prev === null) return data.version;
+              if (prev !== data.version) setVersionChanged(true);
+              return prev;
+            });
+          }
         }
       })
       .catch((e) => {
@@ -45,5 +54,12 @@ export function useOverview() {
     };
   }, [refresh]);
 
-  return { overview, revision, error, connected, refresh };
+  return {
+    overview,
+    revision,
+    error,
+    connected,
+    refresh,
+    versionChanged,
+  };
 }

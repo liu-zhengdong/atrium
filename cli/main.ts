@@ -40,6 +40,47 @@ export const strs = (values: Values, key: string) => {
   return typeof value === "string" ? [value] : [];
 };
 
+const updateCommand: Command = {
+  args: "[--to <版本>] [--repo <仓库>]",
+  about: "检查并更新 Atrium 版本，安装新版本并展示改动摘要",
+  options: {
+    to: { type: "string" },
+    repo: { type: "string" },
+  },
+  positionals: [0, 0],
+  run: async ({ values }) => {
+    const { update } = await import("./update.ts");
+    await update(values as { to?: string; repo?: string });
+    return 0;
+  },
+};
+
+const restartCommand: Command = {
+  args: "[--wait] [--timeout <秒>] [--agent-timeout <毫秒>]",
+  about: "平滑重启 Atrium 服务，等待当前回合结束并自动回滚失败",
+  options: {
+    wait: { type: "boolean", default: false },
+    timeout: { type: "string" },
+    data: { type: "string" },
+    "probe-agent": { type: "string" },
+    "agent-timeout": { type: "string" },
+  },
+  positionals: [0, 0],
+  run: async ({ values }) => {
+    const { restart } = await import("./restart.ts");
+    await restart(
+      values as {
+        wait?: boolean;
+        timeout?: string;
+        data?: string;
+        "probe-agent"?: string;
+        "agent-timeout"?: string;
+      },
+    );
+    return 0;
+  },
+};
+
 export const commands: Record<string, Command> = {
   ...agentCommands,
   ...chatCommands,
@@ -47,12 +88,16 @@ export const commands: Record<string, Command> = {
   ...accountCommands,
   ...pluginCommands,
   ...resourceCommands,
+  update: updateCommand,
+  restart: restartCommand,
 };
 const service: [usage: string, about: string][] = [
   ["atrium", "启动或复用后台服务，打开 Web"],
   ["atrium --no-open", "启动或复用服务，仅输出地址"],
   ["atrium status", "查看服务状态、地址和数据目录"],
   ["atrium stop", "停止服务及其托管的 Agent，保留数据"],
+  ["atrium restart", "平滑重启服务，保持运行状态并自动回滚失败"],
+  ["atrium update", "检查并更新 Atrium 版本；--to 指定目标版本"],
 ];
 const usage = "用法：atrium [命令] …；atrium --help 列出全部命令";
 
@@ -273,6 +318,8 @@ function defaultNext(name: string): string | null {
     ].includes(name)
   )
     return null;
+  if (name === "update") return "生效：atrium restart";
+  if (name === "restart") return "查看状态：atrium status";
   if (name === "assign") return "看分配：atrium accounts";
   if (name === "status") return "查看身份：atrium list";
   if (name === "list") return "查看会话：atrium chats";

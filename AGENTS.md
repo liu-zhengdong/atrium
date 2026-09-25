@@ -29,7 +29,9 @@ Atrium 是 AI 组织的协作空间，也是这个组织面向用户的门面。
 
 `npm run check` 执行测试、类型检查和前端构建。每次交付直接审阅代表性界面及消息产物；校验与权限至少实测一份破坏输入。截图附到 issue/PR 并检查远端可见。文档、issue、PR 使用中文。
 
-开发中的 issue 在对应 worktree 验收：先停主仓正在跑的服务，从该 worktree 的应用入口启动，不要使用 npm link 到主仓的全局 `atrium`；数据用 worktree 自己的 `.atrium`。合入后再从主仓的全局命令走安装后路径。
+开发中的 issue 在对应 worktree 验收：4310 上跑的是安装版服务，不要停它，也不要把全局 `atrium` npm link 到仓库；从该 worktree 的应用入口启动，用 `ATRIUM_PORT` 另开端口、`ATRIUM_DATA` 指向 worktree 自己的 `.atrium`。合入并发版后用 `atrium update` 走安装后路径。
+
+多个身份共用同一个仓库，`git stash` 在所有 worktree 间共用，会弹出别人的暂存；不要用 stash，未完成的改动提交到自己的分支。
 
 Pi 接入的联合验收走已安装的 `@liuser/pi-atrium`，并覆盖真实会话替换。通用桥接的旧代异步回调在访问 `ctx` 前检查生命周期；连接绑定保存在当前 Pi 进程内，不随其子进程继承。搬迁身份目录后同步 `~/.pi/pi-acp/identities/<身份 id>.cursor.json` 里的 `agentDirectory`，否则启动报 `Identity session directory mismatch`；cwd 由会话文件钉住，Pi 恢复会话时校验它存在，不随配置目录一起搬。
 

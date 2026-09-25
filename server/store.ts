@@ -90,8 +90,9 @@ const UNREAD = `m.chat_id=r.chat_id AND m.id>r.last_read AND m.sender!=r.agent_i
 export const hash = (text: string) =>
   createHash("sha256").update(text).digest("hex");
 
-type AgentRow = Omit<AgentInfo, "config"> & {
+type AgentRow = Omit<AgentInfo, "config" | "reports_to"> & {
   config: string;
+  reports_to: string | null;
   token_hash: string;
   last_wake: number;
 };
@@ -210,6 +211,7 @@ export class Store {
     this.addColumn("agents", "error_text", "TEXT");
     this.addColumn("agents", "error_at", "INTEGER");
     this.addColumn("agents", "failure_count", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumn("agents", "reports_to", "TEXT REFERENCES agents(id)");
     const deliveryCols = this.all<{ name: string }>(
       "PRAGMA table_info(deliveries)",
     ).map((c) => c.name);
@@ -392,11 +394,18 @@ export class Store {
         row.id,
       );
     }
+    const parent = row.reports_to
+      ? this.one<{ ref: string; name: string }>(
+          "SELECT 'a'||r.number AS ref, a.name FROM agents a JOIN agent_refs r ON r.agent_id=a.id WHERE a.id=? AND a.deleted_at IS NULL",
+          row.reports_to,
+        )
+      : null;
     return {
       id: row.id,
       name: row.name,
       ref: row.ref,
       description: row.description,
+      reports_to: parent ? { ref: parent.ref, name: parent.name } : null,
       agent_directory: row.agent_directory,
       work: row.work,
       cwd: row.cwd,
@@ -471,6 +480,33 @@ export class Store {
       closest(reference, entries),
     );
   }
+  /** 更新通知路由，不影响权限；事务内重验上级链，避免并发形成环。 */
+  setReportsTo(subject: string, target: string | null) {
+    const apply = () => {
+      this.agent(subject);
+      const targetId =
+        target === null || target === LOCAL_USER
+          ? null
+          : this.resolveAgentId(target);
+      let cursor = targetId;
+      const seen = new Set<string>();
+      while (cursor) {
+        if (cursor === subject || seen.has(cursor))
+          throw new Problem(409, "汇报关系不能形成环", "reports_to_cycle");
+        seen.add(cursor);
+        const row = this.one<{
+          reports_to: string | null;
+          deleted_at: number | null;
+        }>("SELECT reports_to,deleted_at FROM agents WHERE id=?", cursor);
+        if (!row || row.deleted_at !== null)
+          throw new Problem(404, "汇报对象不存在", "agent_not_found");
+        cursor = row.reports_to;
+      }
+      this.run("UPDATE agents SET reports_to=? WHERE id=?", targetId, subject);
+      return { reports_to: this.agent(subject).reports_to };
+    };
+    return this.db.isTransaction ? apply() : this.transaction(apply);
+  }
   authenticate(id: string, token: string): boolean {
     const row = this.one<{ token_hash: string }>(
       "SELECT token_hash FROM agents WHERE id=? AND deleted_at IS NULL",
@@ -499,6 +535,7 @@ export class Store {
     const remove = () => {
       this.agent(id); // 不存在或已删除就在这里 404。
       // 已删除的身份不在 agents() 里，不会被 pump；待投递在下一句一并取消。
+      this.run("UPDATE agents SET reports_to=NULL WHERE reports_to=?", id);
       this.run("DELETE FROM account_assignments WHERE agent_id=?", id);
       this.run("DELETE FROM credential_modes WHERE agent_id=?", id);
       this.run(

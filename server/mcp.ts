@@ -7,6 +7,7 @@ import {
   forkSource,
   inviteNote,
   preferencePatch,
+  reportsToTarget,
   sendInput,
   AGENT_BODY_MAX,
   type Chat,
@@ -177,6 +178,7 @@ export function createMcp(
       const agent = createAgent(store, host.data, name, host.desktops, {
         source,
         description,
+        reportsTo: agentId,
         piHome: host.piHome,
       });
       return {
@@ -454,17 +456,21 @@ export function createMcp(
       };
     },
   );
-  tool(
-    "get_config",
-    "查看自己的持久运行偏好。",
-    {},
-    () => store.agent(agentId).config,
-  );
+  tool("get_config", "查看自己的持久运行偏好及汇报对象。", {}, () => {
+    const agent = store.agent(agentId);
+    return { ...agent.config, reports_to: agent.reports_to };
+  });
   tool(
     "update_config",
     "修改自己的运行偏好。heartbeat_seconds 是消息箱心跳间隔：每隔这么久，如果消息箱里还有没处理完的消息就提醒一次。",
     preferencePatch.shape,
     (a) => store.configure(agentId, a),
+  );
+  tool(
+    "set_reports_to",
+    "设定自己的汇报对象；仅用于故障通知路由，不增加权限。传同伴短号/ID，或 u1/null 恢复默认用户。",
+    { reports_to: reportsToTarget },
+    ({ reports_to }) => store.setReportsTo(agentId, reports_to),
   );
   return server;
 }

@@ -748,7 +748,7 @@ test("真实 MCP HTTP：发现、调用、自身配置与身份越权拒绝", as
   await client.connect(transport);
   t.after(() => client.close());
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 17);
+  assert.equal(tools.tools.length, 18);
   assert(tools.tools.some((tool) => tool.name === "search_messages"));
   assert(
     tools.tools.some((tool) => tool.name === "fork_agent"),

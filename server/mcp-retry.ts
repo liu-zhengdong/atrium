@@ -22,6 +22,7 @@ const checkBeforeRetry: Record<string, string> = {
   set_description: "list_agents 查一下自己的介绍",
   complete_inbox: "view_message_box 查一下哪些条目仍待完成",
   update_config: "get_config 查一下运行偏好",
+  set_reports_to: "get_config 查一下自己的汇报对象",
 };
 export const mcpToolNames = [
   ...safeReads,

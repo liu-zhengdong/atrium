@@ -30,6 +30,7 @@ export const groups: Record<string, string[]> = {
     "group",
     "invite",
     "kick",
+    "disband",
     "box",
     "notify",
     "search",

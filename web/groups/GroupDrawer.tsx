@@ -6,6 +6,7 @@ import { SidePanel } from "../components/SidePanel.tsx";
 import { MemberList } from "./MemberList.tsx";
 import { GroupProfile } from "./GroupProfile.tsx";
 import { GroupSpace } from "./GroupSpace.tsx";
+import { DeleteGroup } from "./DeleteGroup.tsx";
 
 const TABS = [
   { id: "members", label: "成员" },
@@ -21,6 +22,7 @@ export function GroupDrawer({
   revision,
   close,
   changed,
+  deleted,
   openRecords,
   openAgent,
 }: {
@@ -29,6 +31,7 @@ export function GroupDrawer({
   revision: number;
   close: () => void;
   changed: () => void;
+  deleted: () => void;
   openRecords: () => void;
   openAgent: (id: string) => void;
 }) {
@@ -80,7 +83,12 @@ export function GroupDrawer({
           />
         )}
         {tab === "space" && <GroupSpace chatId={chat.id} revision={revision} />}
-        {tab === "profile" && <GroupProfile chat={chat} saved={changed} />}
+        {tab === "profile" && (
+          <>
+            <GroupProfile chat={chat} saved={changed} />
+            <DeleteGroup chat={chat} deleted={deleted} />
+          </>
+        )}
       </div>
     </SidePanel>
   );

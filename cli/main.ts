@@ -262,7 +262,16 @@ export async function main(argv: string[]): Promise<number> {
 }
 function defaultNext(name: string): string | null {
   if (name === "" || name === "--no-open") return "停止：atrium stop";
-  if (["stop", "delete", "account remove", "unassign", "kick"].includes(name))
+  if (
+    [
+      "stop",
+      "delete",
+      "disband",
+      "account remove",
+      "unassign",
+      "kick",
+    ].includes(name)
+  )
     return null;
   if (name === "assign") return "看分配：atrium accounts";
   if (name === "status") return "查看身份：atrium list";

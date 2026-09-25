@@ -1683,22 +1683,39 @@ export class Runtimes {
           if (!result.accepted) throw new Error("Pi 未确认接收");
           if (result.duplicate) {
             if (pending.error?.startsWith("投递结果未知")) {
-              // Duplicate proves Pi received the original id. Its current idle
-              // status proves the turn ended even after Web lost its lastTurn
-              // cache; if still busy, keep the failure and retry entry visible
-              // until a run_end (or another explicit retry) settles the row.
+              // Duplicate proves Pi received the original id, not that its
+              // turn succeeded. Check persisted failure after trace catch-up:
+              // the Web may have restarted and lost its lastTurn cache.
               runtime.info = runtimeSchema.parse(
                 await this.rpc("_pi/runtime/status", target(runtime.info), id),
               );
               this.assertOpen();
               this.remember(id, runtime.info);
               await this.capture(id, runtime.info);
-              this.store.accepted(pending.id, runtime.info.busy);
-              if (!runtime.info.busy) {
+              const settled =
+                !runtime.info.busy &&
+                !this.traceErrors.has(id) &&
+                !this.traceLag.has(id);
+              const failure = this.store.failure(id);
+              if (
+                settled &&
+                failure &&
+                !failure.text.startsWith("投递结果未知")
+              ) {
+                // A failed original turn needs a fresh id and the replay note,
+                // just like an acknowledged failed turn. Only an explicit retry
+                // reaches this path; never duplicate an unknown automatically.
+                this.store.rekeyPending(pending.id);
+                this.changed();
+                return this.doPump(id, direct);
+              }
+              this.store.accepted(pending.id, !settled);
+              if (settled) {
                 this.store.completeDelivery(pending.id);
                 if (!this.store.uncertainDelivery(id))
                   this.store.clearFailure(id);
               }
+              // Busy or incomplete trace: retain the failure and retry entry.
             } else {
               // An unrelated earlier id has no proof of completion.
               this.store.rekeyPending(pending.id);

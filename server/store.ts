@@ -1698,7 +1698,7 @@ export class Store {
     );
     if (!row) return;
     this.run(
-      "UPDATE deliveries SET id=?,text=? WHERE id=? AND state='pending'",
+      "UPDATE deliveries SET id=?,text=?,error=NULL WHERE id=? AND state='pending'",
       randomUUID(),
       row.kind === "direct" ? replayDirect(row.text) : row.text,
       id,

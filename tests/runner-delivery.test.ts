@@ -262,6 +262,81 @@ for (const restart of ["Web", "identity"] as const) {
   });
 }
 
+for (const restart of [false, true]) {
+  test(`failed unknown delivery replays with a new id${restart ? " after Web restart" : ""}`, async (t) => {
+    const f = fixture(t);
+    const calls: { id: string; text: string }[] = [];
+    t.mock.method(
+      Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+      "rpc",
+      async (method: string, params: { id?: string; text?: string }) => {
+        if (method === "_pi/runtime/status") return f.info;
+        assert.equal(method, "_pi/runtime/deliver");
+        calls.push({ id: params.id!, text: params.text! });
+        if (calls.length === 1)
+          throw new Problem(503, "应答丢失", "runner_outcome_unknown");
+        return { accepted: true, duplicate: calls.length === 2 };
+      },
+    );
+    await f.runtimes.pump(f.agent.id, true);
+    // The original Pi turn ended with a model error, while the uncertain
+    // delivery remained pending. This failure persists across Web restarts.
+    f.store.setFailure(f.agent.id, "500: isolated upstream 500");
+    let runtimes = f.runtimes;
+    if (restart) {
+      runtimes = new Runtimes(
+        f.store,
+        f.info.cwd,
+        () => {},
+        () => "",
+        undefined,
+        f.info.cwd,
+      );
+      t.after(async () => runtimes.close());
+      runtimes.connections.set(f.agent.id, {
+        connection: null as never,
+        info: f.info,
+      });
+    }
+    await runtimes.retry(f.agent.id);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(
+      calls.slice(0, 2).map((call) => call.id),
+      [f.pending.id, f.pending.id],
+    );
+    assert.notEqual(calls[2]!.id, f.pending.id);
+    assert.match(calls[2]!.text, /上一轮运行出错/);
+    assert.equal(f.store.uncertainDelivery(f.agent.id), null);
+    assert.match(f.store.failure(f.agent.id)?.text ?? "", /500/);
+    assert.equal(
+      f.store.one<{ state: string; error: string | null }>(
+        "SELECT state,error FROM deliveries WHERE id=?",
+        calls[2]!.id,
+      )?.state,
+      "accepted",
+    );
+  });
+}
+
+test("unknown duplicate with incomplete trace keeps its failure and retry entry", async (t) => {
+  const f = fixture(t);
+  f.store.deliveryError(f.pending.id, "投递结果未知：应答中断");
+  f.store.setFailure(f.agent.id, "投递结果未知：应答中断");
+  (f.runtimes as unknown as { traceLag: Set<string> }).traceLag.add(f.agent.id);
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string) => {
+      if (method === "_pi/runtime/status") return f.info;
+      assert.equal(method, "_pi/runtime/deliver");
+      return { accepted: true, duplicate: true };
+    },
+  );
+  await f.runtimes.retry(f.agent.id);
+  assert.equal(f.store.uncertainDelivery(f.agent.id)?.state, "accepted");
+  assert.match(f.store.failure(f.agent.id)?.text ?? "", /投递结果未知/);
+});
+
 test("retry while runner disappears preserves unknown id and retry entry", async (t) => {
   const f = fixture(t);
   let calls = 0;

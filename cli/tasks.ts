@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
 import { TASK_STATUSES, isTaskStatus } from "../server/tasks/state.ts";
 import type { Task, TaskEventRow, TaskNode } from "../server/tasks/ledger.ts";
+import { formatChildSummary } from "../server/tasks/ledger-summary.ts";
 import { recordNext } from "./contract.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
@@ -50,11 +51,12 @@ function existing(value: string, flag: string, kind: "file" | "directory") {
   return path;
 }
 
-const line = (task: Task) =>
+const line = (task: TaskNode) =>
   [
     task.ref,
     `[${task.status}]`,
     task.title,
+    task.child_summary ? `· ${formatChildSummary(task.child_summary)}` : "",
     task.worker ? `· ${task.worker}` : "",
     task.pr_url ? `· ${task.pr_url}` : "",
   ]
@@ -181,9 +183,13 @@ const show: Command = {
   async run({ positionals: [reference], json }) {
     const task = await (
       await client()
-    ).get<Task & { children: number; events: TaskEventRow[] }>(
-      `/tasks/${ref(reference, "任务")}`,
-    );
+    ).get<
+      Task & {
+        children: number;
+        child_summary: TaskNode["child_summary"];
+        events: TaskEventRow[];
+      }
+    >(`/tasks/${ref(reference, "任务")}`);
     if (json) printJson(task);
     else {
       const rows: [string, string | number | null][] = [
@@ -191,6 +197,10 @@ const show: Command = {
         ["状态", task.status],
         ["父任务", task.parent_ref],
         ["子任务", task.children || null],
+        [
+          "子任务汇总",
+          task.child_summary ? formatChildSummary(task.child_summary) : null,
+        ],
         ["岗位", task.role],
         ["仓库", task.repo],
         ["详述", task.brief_path],

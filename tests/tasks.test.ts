@@ -233,6 +233,62 @@ test("账本：建树、列表、详情、人工修正与执行者事件", () =>
   assert.equal(getTask(db, "t2").events.length, 5);
 });
 
+test("父任务汇总只计直接子任务，且不改变父任务状态", () => {
+  const db = memory();
+  const parent = createTask(db, { title: "目标" });
+  const statuses = TASK_STATUSES;
+  for (const childStatus of statuses) {
+    const child = createTask(db, { title: childStatus, parent: parent.ref });
+    if (childStatus === "running")
+      advanceTask(db, child.ref, { kind: "start" });
+    else if (childStatus !== "todo")
+      updateTask(db, child.ref, { status: childStatus });
+  }
+  createTask(db, { title: "孙任务", parent: "t2" });
+  const summary = {
+    total: 6,
+    todo: 1,
+    running: 1,
+    done: 1,
+    failed: 1,
+    blocked: 1,
+    cancelled: 1,
+  };
+  assert.equal(getTask(db, parent.ref).status, "todo");
+  assert.deepEqual(getTask(db, parent.ref).child_summary, summary);
+  assert.deepEqual(taskTree(db, parent.ref).tasks[0]!.child_summary, summary);
+  assert.equal(getTask(db, "t2").child_summary?.total, 1);
+  assert.equal(getTask(db, "t3").child_summary, null);
+  assert.match(
+    renderTree(taskTree(db, parent.ref).tasks)[0]!,
+    /待办 1\/6.*进行中 1\/6.*完成 1\/6.*失败 1\/6.*受阻 1\/6.*取消 1\/6/,
+  );
+  updateTask(db, parent.ref, { status: "done" });
+  assert.equal(getTask(db, parent.ref).status, "done");
+  assert.deepEqual(getTask(db, parent.ref).child_summary, summary);
+});
+
+test("树被截断时，父任务汇总仍包含未显示的子任务", () => {
+  const db = memory();
+  const parent = createTask(db, { title: "目标" });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const insert = db.prepare(
+      "INSERT INTO tasks(parent_id,title,status,created_at,updated_at) VALUES (?,?,?,0,0)",
+    );
+    for (let i = 0; i < 2001; i++) insert.run(parent.id, `子${i}`, "todo");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  const tree = taskTree(db, parent.ref);
+  assert.equal(tree.truncated, true);
+  assert.equal(tree.tasks[0]!.children.length, 1999);
+  assert.equal(tree.tasks[0]!.child_summary?.todo, 2001);
+  assert.equal(getTask(db, parent.ref).child_summary?.total, 2001);
+});
+
 test("账本：破坏输入在入口一处拒绝，数据不变", () => {
   const db = memory();
   createTask(db, { title: "目标" });
@@ -376,6 +432,7 @@ test("HTTP：五个接口走用户认证，校验报中文 400", async (t) => {
     );
     const tree = await app.inject({ url: "/api/tasks/tree?root=t1", headers });
     assert.equal(tree.json().tasks[0].children[0].ref, "t2");
+    assert.equal(tree.json().tasks[0].child_summary.todo, 1);
     const patched = await app.inject({
       method: "PATCH",
       url: "/api/tasks/2",
@@ -385,6 +442,9 @@ test("HTTP：五个接口走用户认证，校验报中文 400", async (t) => {
     assert.equal(patched.json().status, "done");
     const shown = await app.inject({ url: "/api/tasks/t2", headers });
     assert.equal(shown.json().events.at(-1).kind, "manual_set");
+    const parentShown = await app.inject({ url: "/api/tasks/t1", headers });
+    assert.equal(parentShown.json().child_summary.total, 1);
+    assert.equal(parentShown.json().child_summary.done, 1);
     const missing = await app.inject({ url: "/api/tasks/t99", headers });
     assert.equal(missing.statusCode, 404);
     assert.equal(missing.json().nextCommand, "atrium task ls");

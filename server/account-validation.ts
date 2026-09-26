@@ -1,9 +1,8 @@
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AccountWorker } from "./account-worker-client.ts";
 import { authFile, privateWrite } from "./account-files.ts";
-import { defaultTemplate } from "./profile.ts";
 import { modelEntry, type CustomConfig } from "./custom-providers.ts";
 import type { ProviderEntry } from "../shared/providers.ts";
 
@@ -47,12 +46,12 @@ export async function validateKey(
     };
   const directory = mkdtempSync(join(tmpdir(), "atrium-key-check-"));
   try {
-    const template = defaultTemplate();
-    if (!custom && existsSync(join(template, "settings.json")))
-      copyFileSync(
-        join(template, "settings.json"),
-        join(directory, "settings.json"),
-      );
+    // 校验不继承个人模板：内置供应商不装任何包；插件供应商只带注册它的那个包，
+    // 避免把模板里的全部包装进临时目录，超时被杀后误报网络不可用（#223）。
+    if (!custom && provider.packagePath)
+      privateWrite(join(directory, "settings.json"), {
+        packages: [provider.packagePath],
+      });
     privateWrite(authFile(directory), {
       [provider.id]: { type: "api_key", key },
     });

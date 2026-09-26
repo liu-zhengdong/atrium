@@ -14,8 +14,25 @@ export const workerErrors: readonly WorkerError[] = [
   "Provider 插件加载失败",
   "未知错误",
 ];
+/** 校验子进程退出时按事实分开报，不再一律「网络不可用」（#223）。 */
+export function validationExitReason(input: {
+  timedOut: boolean;
+  phase: string;
+  elapsedMs: number;
+  errorMessage?: string;
+  code: number | null;
+}): string {
+  if (input.timedOut)
+    return `校验超时：等了 ${Math.round(input.elapsedMs / 1000)} 秒未完成，卡在「${input.phase}」`;
+  if (input.errorMessage === "Provider 插件加载失败") return input.errorMessage;
+  if (input.errorMessage) return `校验进程报错：${input.errorMessage}`;
+  return `校验进程退出未返回结果（退出码 ${input.code ?? "?"}）`;
+}
+
 export class AccountWorker {
   private workers = new Set<ChildProcess>();
+  /** 校验子进程单独成组（detached），超时时能连同它派生的 npm 一起杀掉。 */
+  private grouped = new Set<ChildProcess>();
   constructor(private files: AccountFiles) {}
   list(directory: string): Promise<ProviderEntry[]> {
     return new Promise((resolve, reject) => {
@@ -68,39 +85,81 @@ export class AccountWorker {
         {
           stdio: ["ignore", "ignore", "ignore", "ipc"],
           execArgv: [],
+          detached: true,
           env: { ...process.env, PI_CODING_AGENT_DIR: directory },
         },
       );
       this.workers.add(child);
+      this.grouped.add(child);
       let result: Validation | undefined;
-      const timer = setTimeout(() => child.kill(), 15_000);
+      let phase = "加载插件";
+      let errorMessage: string | undefined;
+      let timedOut = false;
+      const startedAt = Date.now();
+      const timer = setTimeout(() => {
+        timedOut = true;
+        this.killWorker(child);
+      }, 15_000);
       child.on(
         "message",
         (message: {
           kind: string;
           status?: Validation["status"];
           reason?: string;
+          phase?: string;
+          category?: string;
         }) => {
           if (message.kind === "validation" && message.status)
             result = {
               status: message.status,
               reason: message.reason?.replaceAll(key, "[凭据已隐藏]"),
             };
+          else if (message.kind === "phase" && message.phase === "request")
+            phase = "请求供应商";
+          else if (
+            message.kind === "error" &&
+            message.category &&
+            workerErrors.includes(message.category as WorkerError)
+          )
+            errorMessage = message.category;
         },
       );
       child.once("error", () => {
         clearTimeout(timer);
         this.workers.delete(child);
+        this.grouped.delete(child);
         resolve({ status: "unverified", reason: "校验进程失败" });
       });
-      child.once("exit", () => {
+      child.once("exit", (code) => {
         clearTimeout(timer);
         this.workers.delete(child);
+        this.grouped.delete(child);
         resolve(
-          result ?? { status: "unverified", reason: "校验超时或网络不可用" },
+          result ?? {
+            status: "unverified",
+            reason: validationExitReason({
+              timedOut,
+              phase,
+              elapsedMs: Date.now() - startedAt,
+              errorMessage,
+              code,
+            }),
+          },
         );
       });
     });
+  }
+  /** 超时与关闭都走这里：校验子进程有组，整组杀，不给临时目录留 npm。 */
+  private killWorker(child: ChildProcess) {
+    if (child.pid !== undefined && this.grouped.has(child)) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+        return;
+      } catch {
+        /* 回退：只杀直接子进程 */
+      }
+    }
+    child.kill();
   }
   run(
     row: Row,
@@ -152,6 +211,6 @@ export class AccountWorker {
     });
   }
   close() {
-    for (const child of this.workers) child.kill();
+    for (const child of this.workers) this.killWorker(child);
   }
 }

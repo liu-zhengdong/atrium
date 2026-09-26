@@ -77,6 +77,8 @@ try {
     send({ kind: "list", providers });
     send({ kind: "done" });
   } else if (operation === "validate") {
+    // 上下文已加载完，接下来是请求供应商阶段；超时归因要用（#223）。
+    send({ kind: "phase", phase: "request" });
     const model = session.modelRuntime.getModels(provider)[0];
     if (!model) {
       send({

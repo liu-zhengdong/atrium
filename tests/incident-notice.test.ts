@@ -26,7 +26,7 @@ test("分类和截止时间可反向验证；三次重试跨进程持续", () =>
     "needsHuman",
   );
   assert.equal(classifyFailure("HTTP 429 timeout", "provider"), "transient");
-  assert.equal(classifyFailure("unknown error", "startup"), "transient");
+  assert.equal(classifyFailure("unknown error", "startup"), "needsHuman");
   const base = {
     started_at: 1000,
     category: "transient" as const,
@@ -67,11 +67,10 @@ test("分类和截止时间可反向验证；三次重试跨进程持续", () =>
   );
 });
 
-test("真实 Pi/bridge 错误原文：未知有界重试，仅明确拒绝需人工", () => {
+test("真实 Pi/bridge 错误原文：仅已识别的临时故障重试，其余需人工", () => {
   for (const error of [
     "fetch failed",
     "WebSocket closed 1012",
-    "terminated",
     "read ECONNRESET",
     "connect ETIMEDOUT 1.2.3.4:443",
     "socket hang up",
@@ -84,7 +83,6 @@ test("真实 Pi/bridge 错误原文：未知有界重试，仅明确拒绝需人
     "429 rate limit",
     "529 overloaded",
     "[503] Server Error",
-    "some new bridge error",
   ])
     assert.equal(classifyFailure(error, "provider"), "transient", error);
   for (const error of [
@@ -100,6 +98,21 @@ test("真实 Pi/bridge 错误原文：未知有界重试，仅明确拒绝需人
     "Thinking level not supported by the current model",
     "未分配账号",
     "投递结果未知：应答中断",
+    "some new bridge error",
+    "terminated",
+    "Operation aborted",
+    "Request was aborted",
+    "aborted",
+    "Identity launch secret root is missing",
+    "独立令牌就绪检查未获肯定回应，已拒绝启动。升级此身份的 claude-bridge",
+    "Unknown provider",
+    "No API key found",
+    "Incorrect API key provided",
+    "缺少运行扩展",
+    "spawn pi ENOENT",
+    "运行器处理失败",
+    "No user message found",
+    "好",
   ])
     assert.equal(classifyFailure(error, "provider"), "needsHuman", error);
   assert.equal(classifyFailure("fetch failed", "startup"), "transient");
@@ -118,7 +131,7 @@ test("真实 Pi/bridge 错误原文：未知有界重试，仅明确拒绝需人
   );
   assert.equal(
     classifyFailure("arbitrary launch text", "startup"),
-    "transient",
+    "needsHuman",
   );
 });
 

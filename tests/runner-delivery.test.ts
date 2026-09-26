@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Runtimes } from "../server/runtime.ts";
+import { notifyTerminal } from "../server/incident-notice.ts";
 import { Store } from "../server/store.ts";
 import { Problem } from "../server/problem.ts";
 import { claimRunner, ownerOf } from "../server/runner-ownership.ts";
@@ -544,6 +545,66 @@ test("drain control only targets the current owner generation and never certifie
     f.runtimes.drainRunner(f.agent.id, "status"),
     (error: unknown) =>
       error instanceof Problem && error.code === "runner_changed",
+  );
+});
+
+test("真实 tick 连跑三次到期：第三次投递后才耗尽，终态仅通知一次", async (t) => {
+  const f = fixture(t);
+  const id = f.agent.id;
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, "now", () => now);
+  f.store.run(
+    "UPDATE deliveries SET created_at=? WHERE agent_id=?",
+    1_700_000_000_000,
+    id,
+  );
+  f.store.setFailure(id, "HTTP 503", now - 120_000, "provider", "first");
+  const delivered: string[] = [];
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string, args: { id?: string }) => {
+      if (method === "_pi/runtime/status") return f.info;
+      if (method === "_pi/runtime/deliver") {
+        delivered.push(args.id!);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected RPC: ${method}`);
+    },
+  );
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const retry = f.store.retryStatus(id, now)?.retry;
+    assert.equal(retry?.state, "waiting");
+    assert.equal(retry.attempt, attempt);
+    now = retry.next_at!;
+    await tick(); // Real tick -> claimRetry -> pump -> doPump -> deliver RPC.
+    assert.equal(delivered.length, attempt);
+    assert.equal(f.store.incident(id)?.attempts_used, attempt);
+    assert.equal(f.store.incident(id)?.attempt_running, true);
+    assert.equal(f.store.retryStatus(id, now)?.retry?.state, "running");
+    // The fake Pi acknowledges input, then its observed run_end fails.
+    f.store.finishTurn(id, false, undefined, true);
+    now++;
+    f.store.setFailure(id, "HTTP 503", now, "provider", `failed-${attempt}`);
+    await tick();
+    assert.equal(
+      f.store.retryStatus(id, now)?.retry?.state,
+      attempt === 3 ? "exhausted" : "waiting",
+    );
+    const notices = f.store.one<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE sender='system' AND body LIKE '%运行出错%'",
+    )!.count;
+    assert.equal(notices, attempt === 3 ? 1 : 0);
+  }
+  assert.equal(new Set(delivered).size, 3);
+  assert.equal(notifyTerminal(f.store, id), false);
+  assert.match(
+    f.store.one<{ body: string }>(
+      "SELECT body FROM messages WHERE sender='system' AND body LIKE '%运行出错%'",
+    )!.body,
+    /已自动重试 3 次/,
   );
 });
 

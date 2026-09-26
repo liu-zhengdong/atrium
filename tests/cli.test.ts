@@ -84,8 +84,19 @@ test(
     const db = new Store(join(f.data, "atrium.sqlite"));
     const agent = db.agents().find((entry) => entry.ref === "a1")!;
     const chat = db.createChat("私聊", [agent.id], agent.id);
-    db.send(LOCAL_USER, { chat_id: chat.id, body: "请处理", mentions: [] });
-    db.setFailure(agent.id, "Connection error.", Date.now() - 1000, "provider");
+    const queued = db.send(LOCAL_USER, {
+      chat_id: chat.id,
+      body: "请处理",
+      mentions: [],
+    });
+    // Pin the queued message well before this incident; wall-clock timing must
+    // not turn it into a fresh user retry when the CLI runs slowly in CI.
+    db.run(
+      "UPDATE messages SET created_at=? WHERE id=?",
+      1_700_000_000_000,
+      queued.id,
+    );
+    db.setFailure(agent.id, "Connection error.", Date.now(), "provider");
     db.close();
     const show = await f.cli("show", "a1");
     const list = await f.cli("list");

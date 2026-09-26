@@ -4,9 +4,9 @@ export type FailureCategory = "transient" | "needsHuman";
 export type FailureSource = "provider" | "delivery" | "startup";
 export const RETRY_DELAYS = [2, 10, 30].map((minutes) => minutes * 60_000);
 
-/** Only explicit auth, request, configuration, capability or spent-plan errors need a person.
- * Unknown failures (even during startup) get at most three automatic retries;
- * a new provider/bridge network message must not strand pending work forever.
+/** Retry only recognizable temporary failures; unknown errors need a person.
+ * Otherwise an intentional cancellation or a new configuration error could
+ * replay a user's work without authorization.
  */
 export function classifyFailure(
   error: string,
@@ -20,7 +20,13 @@ export function classifyFailure(
     )
   )
     return "needsHuman";
-  return "transient";
+  if (
+    /(?:^|\D)(?:429|5\d{2})(?!\d)|fetch failed|network (?:error|request failed)|connection (?:error|reset|closed|refused|timed out|terminated)|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|socket hang up|websocket closed 1012|timeout|timed out|rate limit|overloaded|temporarily unavailable/i.test(
+      error,
+    )
+  )
+    return "transient";
+  return "needsHuman";
 }
 
 export type Incident = {
@@ -39,7 +45,8 @@ export function needsUserAttempt(incident: Incident | null): boolean {
     !!incident &&
     (incident.category === "needsHuman" ||
       incident.blocked ||
-      incident.attempts_used >= RETRY_DELAYS.length)
+      (incident.attempts_used >= RETRY_DELAYS.length &&
+        !incident.attempt_running))
   );
 }
 

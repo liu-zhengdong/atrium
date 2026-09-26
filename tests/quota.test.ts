@@ -12,11 +12,14 @@ import { Problem } from "../server/problem.ts";
 import {
   listQuota,
   parseQuotaAccounts,
-  resolveOpenquotaBin,
   sortBySpare,
-  OPENQUOTA_BIN,
   type QuotaAccount,
 } from "../server/tasks/quota.ts";
+import {
+  readOpenquotaPace,
+  resolveOpenquotaBin,
+  OPENQUOTA_BIN,
+} from "../server/tasks/openquota.ts";
 
 const SAMPLE = [
   {
@@ -127,6 +130,29 @@ test("resolveOpenquotaBin：显式路径优先于环境变量", () => {
     resolveOpenquotaBin("/explicit", { ATRIUM_OPENQUOTA_BIN: "/tmp/fake" }),
     "/explicit",
   );
+});
+
+test("共享 OpenQuota 读取：校验调用参数并区分缺失、解析和执行失败", async () => {
+  const { dir, done } = temp();
+  try {
+    const bin = fakeBin(
+      dir,
+      '#!/bin/sh\n[ "$1" = pace ] && [ "$2" = --json ] || exit 3\necho \'[{"providerId":"codex"}]\'\n',
+    );
+    assert.deepEqual(await readOpenquotaPace({ bin }), {
+      ok: true,
+      rows: [{ providerId: "codex" }],
+    });
+    assert.deepEqual(await readOpenquotaPace({ bin: join(dir, "missing") }), {
+      missing: true,
+    });
+    writeFileSync(bin, "#!/bin/sh\necho oops\n");
+    assert.deepEqual(await readOpenquotaPace({ bin }), { error: "parse" });
+    writeFileSync(bin, "#!/bin/sh\nexit 3\n");
+    assert.deepEqual(await readOpenquotaPace({ bin }), { error: "failed" });
+  } finally {
+    done();
+  }
 });
 
 test("listQuota：假 pace 按富余降序，runtime 为空", async () => {

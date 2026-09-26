@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
+import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
@@ -125,35 +125,21 @@ export type PaceEntry = {
   windowId?: string | null;
 };
 
-export const OPENQUOTA_BIN =
-  "/Applications/OpenQuota.app/Contents/MacOS/openquota";
-
 /** 调 `openquota pace --json`；没装、超时、输出不是预期 JSON 都返回 undefined。 */
-export function readPace(
-  bin = OPENQUOTA_BIN,
+export async function readPace(
+  bin?: string,
   timeoutMs = 10_000,
 ): Promise<PaceEntry[] | undefined> {
-  return new Promise((resolve) => {
-    execFile(
-      bin,
-      ["pace", "--json"],
-      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
-      (error, stdout) => {
-        if (error) return resolve(undefined);
-        resolve(parsePace(stdout));
-      },
-    );
-  });
+  const result = await readOpenquotaPace({ bin, timeoutMs });
+  return "ok" in result ? parsePaceRows(result.rows) : undefined;
 }
 
 export function parsePace(text: string): PaceEntry[] | undefined {
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(data)) return undefined;
+  const data = parseOpenquotaRows(text);
+  return data ? parsePaceRows(data) : undefined;
+}
+
+function parsePaceRows(data: unknown[]): PaceEntry[] {
   const entries: PaceEntry[] = [];
   for (const item of data) {
     if (!item || typeof item !== "object") continue;

@@ -224,6 +224,7 @@ export class Store {
       id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL REFERENCES agents(id),
       started_at INTEGER NOT NULL, category TEXT NOT NULL, attempts_used INTEGER NOT NULL DEFAULT 0,
       attempt_running INTEGER NOT NULL DEFAULT 0, attempt_owner TEXT, attempt_claimed_at INTEGER, blocked INTEGER NOT NULL DEFAULT 0,
+      status_failures INTEGER NOT NULL DEFAULT 0,
       notified_at INTEGER, last_event_key TEXT, last_user_attempt_message INTEGER NOT NULL DEFAULT 0, closed_at INTEGER);
       CREATE UNIQUE INDEX IF NOT EXISTS incident_active ON failure_incidents(agent_id) WHERE closed_at IS NULL;
       CREATE TABLE IF NOT EXISTS incident_notices (
@@ -232,6 +233,11 @@ export class Store {
         PRIMARY KEY(incident_id,recipient));
       CREATE TABLE IF NOT EXISTS incident_migration (name TEXT PRIMARY KEY, at INTEGER NOT NULL);
       INSERT OR IGNORE INTO incident_migration(name,at) VALUES('notification-baseline',strftime('%s','now')*1000);`);
+    this.addColumn(
+      "failure_incidents",
+      "status_failures",
+      "INTEGER NOT NULL DEFAULT 0",
+    );
     const deliveryCols = this.all<{ name: string }>(
       "PRAGMA table_info(deliveries)",
     ).map((c) => c.name);
@@ -1700,6 +1706,39 @@ export class Store {
           blocked: !!row.blocked,
         }
       : null;
+  }
+  /** Three consecutive failed Pi status checks need intervention, not an endless waiting badge. */
+  recordStatusCheck(id: string, succeeded: boolean) {
+    this.transaction(() => {
+      const incident = this.incident(id);
+      if (!incident || incident.category !== "transient" || incident.blocked)
+        return;
+      if (succeeded) {
+        this.run(
+          "UPDATE failure_incidents SET status_failures=0 WHERE id=?",
+          incident.id,
+        );
+        return;
+      }
+      this.run(
+        "UPDATE failure_incidents SET status_failures=status_failures+1 WHERE id=?",
+        incident.id,
+      );
+      const count = this.one<{ status_failures: number }>(
+        "SELECT status_failures FROM failure_incidents WHERE id=?",
+        incident.id,
+      )!.status_failures;
+      if (count < 3) return;
+      const original = this.failure(id)?.text ?? "原故障未知";
+      this.setFailure(
+        id,
+        `运行状态连续核对失败 3 次，需要人工检查。原故障：${original}`,
+      );
+      this.run(
+        "UPDATE failure_incidents SET blocked=1 WHERE id=?",
+        incident.id,
+      );
+    });
   }
   acceptedDirect(id: string): boolean {
     return !!this.one(

@@ -1966,6 +1966,32 @@ export class Runtimes {
     this.store.finishTurn(id, false);
     this.changed();
   }
+  private async refreshStatus(
+    id: string,
+    entry: { connection: ClientConnection | null; info: RuntimeInfo },
+  ): Promise<RuntimeInfo> {
+    const previous = entry.info;
+    try {
+      const current = runtimeSchema.parse(
+        await this.rpc("_pi/runtime/status", target(previous), id),
+      );
+      this.assertOpen();
+      if (
+        this.connections.get(id) !== entry ||
+        current.runtimeId !== previous.runtimeId ||
+        current.generation !== previous.generation
+      )
+        throw new Error(`身份 ${id} 的运行实例已更换`);
+      entry.info = current;
+      this.remember(id, current);
+      this.store.recordStatusCheck(id, true);
+      return current;
+    } catch (error) {
+      if (!this.stopped && this.connections.get(id) === entry)
+        this.store.recordStatusCheck(id, false);
+      throw error;
+    }
+  }
   private async capture(
     id: string,
     info: RuntimeInfo,
@@ -1976,6 +2002,7 @@ export class Runtimes {
     try {
       // Regular ticks are bounded; shutdown must consume all remaining pages.
       for (let page = 0; page < maxPages; page++) {
+        let settled = false;
         const events = runtimeEvents.parse(
           await this.rpc(
             "_pi/runtime/events",
@@ -2026,6 +2053,7 @@ export class Runtimes {
                   this.errors.delete(id);
                 }
               } else if (event.kind === "run_end") {
+                settled = true;
                 // An end without a persisted start cannot prove completion.
                 if (turn)
                   this.lastTurn.set(id, {
@@ -2069,6 +2097,24 @@ export class Runtimes {
           )
         )
           this.changed();
+        if (settled) {
+          // The trace closes the run, but cannot update Pi's live busy flag.
+          // A steer earlier in the turn may have cached busy=true; refresh it
+          // here so listing, idle checks and later deliveries see the settled state.
+          const entry = this.connections.get(id);
+          if (
+            entry &&
+            entry.info.runtimeId === info.runtimeId &&
+            entry.info.generation === info.generation
+          ) {
+            try {
+              await this.refreshStatus(id, entry);
+            } catch (error) {
+              if (strict) throw error;
+              console.warn(`无法在回合结束时核对 ${id} 的运行状态：`, error);
+            }
+          }
+        }
         if (!events.hasMore) {
           this.traceLag.delete(id);
           break;
@@ -2096,10 +2142,9 @@ export class Runtimes {
     const uncertain = this.store.uncertainDelivery(id);
     if (!this.store.failure(id) && !uncertain)
       throw new Problem(409, "Agent 当前没有运行错误");
-    // An unknown delivery can outlive the Pi turn. Its cached busy flag may
-    // never refresh because pump is gated until manual retry; doPump queries
-    // current status before deciding whether the duplicate has settled.
-    if (runtime?.info.busy && !uncertain)
+    // A steer during the failed turn may have cached busy=true. Read Pi's
+    // current state before rejecting a manual retry; pump is failure-gated.
+    if (runtime && !uncertain && (await this.refreshStatus(id, runtime)).busy)
       throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
     if (uncertain) {
       if (this.pumping.has(id)) await this.pumping.get(id);
@@ -2249,7 +2294,7 @@ export class Runtimes {
             !userDue && !peerDue
               ? this.store.retryStatus(agent.id)?.retry
               : null;
-          const autoDue =
+          const ready =
             retry?.state === "waiting" &&
             retry.next_at !== null &&
             retry.next_at <= Date.now() &&
@@ -2257,8 +2302,22 @@ export class Runtimes {
             !this.pumping.has(agent.id) &&
             !this.switching.has(agent.id) &&
             !this.isMigrating(agent.id) &&
-            !this.connections.get(agent.id)?.info.busy &&
-            (await this.retryRunnerReady(agent.id)) &&
+            (await this.retryRunnerReady(agent.id));
+          const entry = this.connections.get(agent.id);
+          let idle = !entry?.info.busy;
+          if (ready && entry) {
+            try {
+              idle = !(await this.refreshStatus(agent.id, entry)).busy;
+            } catch (error) {
+              // No fresh status, no retry claim. Three consecutive failures
+              // become a terminal incident rather than an endless waiting badge.
+              console.warn(`无法核对 ${agent.name} 的运行状态：`, error);
+              idle = false;
+            }
+          }
+          const autoDue =
+            ready &&
+            idle &&
             this.store.claimRetry(agent.id, Date.now(), this.retryOwner);
           try {
             await this.pump(agent.id, userDue || peerDue || autoDue);

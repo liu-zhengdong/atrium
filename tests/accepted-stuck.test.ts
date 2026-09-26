@@ -96,6 +96,7 @@ test("Runtimes 换新后仍以持久 turn 配对旧 run_start 和新 run_end", a
   };
   t.mock.method(prototype, "discover", async () => {});
   t.mock.method(prototype, "rpc", async (method: string) => {
+    if (method === "_pi/runtime/status") return { ...info, busy: false };
     assert.equal(method, "_pi/runtime/events");
     return {
       runtimeId: info.runtimeId,
@@ -141,6 +142,11 @@ test("Runtimes 换新后仍以持久 turn 配对旧 run_start 和新 run_end", a
     store.close();
   });
   await prototype.capture.call(second, agent.id, info);
+  assert.equal(
+    second.connections.get(agent.id)?.info.busy,
+    false,
+    "run_end must refresh the busy flag cached by an earlier steer",
+  );
   assert.deepEqual(
     store
       .all<{ kind: string }>(

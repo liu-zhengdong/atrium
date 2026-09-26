@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -198,5 +199,80 @@ test("同一校验层发起实际模型请求；成功、拒绝、超时不会�
     server.closeAllConnections();
     server.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("close 杀整组：挂死插件派生的孙进程随进程组一起死", async () => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-group-kill-"));
+  const pidFile = join(root, "grandchild.pid");
+  const plugin = join(root, "plugin");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(
+    join(plugin, "package.json"),
+    JSON.stringify({
+      name: "hang-kill-probe",
+      version: "1.0.0",
+      pi: { extensions: ["ext.mjs"] },
+    }),
+  );
+  writeFileSync(
+    join(plugin, "ext.mjs"),
+    `import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+export default function hang() {
+  const child = spawn("sleep", ["60"], { stdio: "ignore" });
+  writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+  return new Promise(() => {});
+}
+`,
+  );
+  const worker = new AccountWorker(
+    {} as ConstructorParameters<typeof AccountWorker>[0],
+  );
+  let grandchild = 0;
+  try {
+    const validating = validateKey(
+      worker,
+      {
+        id: "no-such-provider",
+        name: "no-such-provider",
+        packagePath: plugin,
+        methods: ["api_key"],
+      },
+      "FAKE_KEY",
+    );
+    // 夹具插件进入加载阶段、派生孙进程后写 pid；不等 15 秒超时，直接 close
+    for (let i = 0; i < 100 && !existsSync(pidFile); i++)
+      await new Promise((r) => setTimeout(r, 100));
+    assert.ok(existsSync(pidFile), "夹具插件应派生孙进程并写出 pid");
+    grandchild = Number(readFileSync(pidFile, "utf8"));
+    assert.ok(Number.isInteger(grandchild) && grandchild > 0);
+    // 超时与 close 走同一个 killWorker：detached 的校验进程自成进程组，孙进程同组
+    worker.close();
+    const result = await validating;
+    assert.equal(result.status, "unverified", JSON.stringify(result));
+    // SIGKILL 后孙进程由 init 收尸，给一点回收时间
+    let alive = true;
+    for (let i = 0; i < 30 && alive; i++)
+      try {
+        process.kill(grandchild, 0);
+        await new Promise((r) => setTimeout(r, 100));
+      } catch {
+        alive = false;
+      }
+    assert.ok(
+      !alive,
+      `孙进程 ${grandchild} 应随进程组被杀，反向（去掉 detached）时它会变孤儿`,
+    );
+  } finally {
+    // 反向跑红时兜底杀掉孙进程，不留孤儿
+    if (grandchild > 0)
+      try {
+        process.kill(grandchild, "SIGKILL");
+      } catch {
+        /* 已死 */
+      }
+    worker.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });

@@ -82,7 +82,7 @@ export function AccountRow({
               ` · ${account.last_error === "未知错误" && !account.expires ? "登录未完成" : account.last_error}`}
           </p>
           {retired && (
-            <p className="mb-0 mt-1.5 break-all text-xs text-muted">
+            <p className="mb-0 mt-1.5 break-words text-xs text-muted">
               {retired.reason}
               {retired.fix && (
                 <>

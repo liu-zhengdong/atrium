@@ -13,10 +13,12 @@ import { admit, placement, runRequest } from "./plan.ts";
 import type { PaceEntry } from "./prepare.ts";
 import { DEFAULT_WORKERS_DIR } from "./profiles.ts";
 import { dequeue, enqueue, ensureQueueTable, queued } from "./queue.ts";
+import { clock } from "./quota-holds.ts";
+import { QuotaGuard } from "./quota-runtime.ts";
 import { recoverRunning } from "./recovery.ts";
 import { signalGroup } from "./spawn.ts";
 import { TaskWaits } from "./waits.ts";
-import { chooseWorker } from "./worker-choice.ts";
+import { chooseWorker, type Choice } from "./worker-choice.ts";
 import { workerEnvironment } from "./worker-env.ts";
 import type { LaunchOptions } from "./workspace.ts";
 
@@ -39,12 +41,15 @@ export type RunnerOptions = {
   batchMs?: number;
   /** 停止信号发出后多久强杀。 */
   killGraceMs?: number;
+  /** 额度报文没给恢复时间时，账号标记保留多久（毫秒）；缺省 1 小时。 */
+  quotaUnknownMs?: number;
 };
 
 export class TaskRunner {
   readonly inbox: EventInbox;
   private readonly x: Executors;
   private readonly waits: TaskWaits;
+  private readonly quota: QuotaGuard;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly exec: Exec;
   private readonly launchOptions: LaunchOptions;
@@ -69,18 +74,25 @@ export class TaskRunner {
       (id) => this.settled(id),
       (id) => getTask(this.db, id),
     );
+    this.quota = new QuotaGuard({
+      db,
+      inbox: this.inbox,
+      launchOptions: this.launchOptions,
+      unknownMs: options.quotaUnknownMs,
+    });
     this.x = new Executors({
       db,
       inbox: this.inbox,
       exec: this.exec,
       launchOptions: this.launchOptions,
       waits: this.waits,
+      quota: this.quota,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
     });
   }
 
-  /** 启动看门狗与 CI 轮询，并在后台自愈上次遗留的运行中任务（不阻塞启动）。 */
+  /** 启动看门狗（顺带解除到期的额度标记）与 CI 轮询，并在后台自愈上次遗留的运行中任务（不阻塞启动）。 */
   start() {
     const every = (ms: number, fn: () => Promise<void>) => {
       const timer = setInterval(() => {
@@ -89,7 +101,10 @@ export class TaskRunner {
       timer.unref();
       this.timers.push(timer);
     };
-    every(this.options.tickMs ?? 5000, () => this.x.tick());
+    every(this.options.tickMs ?? 5000, async () => {
+      await this.x.tick();
+      if (!this.closed) await this.quota.releaseExpired(this.x);
+    });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
     void this.recover().catch((error) =>
       console.error("任务运行时自愈失败：", error),
@@ -124,19 +139,35 @@ export class TaskRunner {
         `atrium task show ${task.ref}`,
       );
     this.x.launching.set(id, null);
-    let chosen: Chosen;
+    let chosen: Choice;
     try {
-      chosen = await chooseWorker(request, this.launchOptions);
+      chosen = await chooseWorker(
+        request,
+        this.launchOptions,
+        this.quota.held(),
+      );
     } catch (error) {
       this.x.launching.delete(id);
       throw error;
     }
     const tool = chosen.worker.tool;
+    if (chosen.waitUntil !== undefined) {
+      this.x.launching.delete(id);
+      return this.enqueue(
+        task,
+        chosen,
+        `${ADAPTERS[tool].quotaProvider} 额度用尽，等到 ${clock(chosen.waitUntil)} 恢复后自动拉起`,
+      );
+    }
     if (
       placement(ADAPTERS[tool].exclusive, this.x.busy(tool, id)) === "queue"
     ) {
       this.x.launching.delete(id);
-      return this.enqueue(task, chosen);
+      return this.enqueue(
+        task,
+        chosen,
+        `${tool} 同一时刻只跑一个，前一个结束后自动拉起`,
+      );
     }
     this.x.launching.set(id, tool);
     try {
@@ -146,7 +177,7 @@ export class TaskRunner {
     }
   }
 
-  private enqueue(task: Task, chosen: Chosen) {
+  private enqueue(task: Task, chosen: Chosen, reason: string) {
     enqueue(this.db, {
       task_id: task.id,
       tool: chosen.worker.tool,
@@ -163,7 +194,7 @@ export class TaskRunner {
       );
     noteTask(this.db, task.id, "queued", {
       worker: chosen.worker.id,
-      reason: `${chosen.worker.tool} 同一时刻只跑一个，前一个结束后自动拉起`,
+      reason,
     });
     this.waits.changed(task.id);
     return { task: getTask(this.db, task.id), queued: true };

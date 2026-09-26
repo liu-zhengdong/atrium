@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { launched, type Active } from "./active.ts";
-import type { Tool } from "./adapters/index.ts";
+import { ADAPTERS, type Tool } from "./adapters/index.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
 import {
@@ -15,6 +15,7 @@ import { publishTask } from "./notice.ts";
 import { exitDetail, type Exit } from "./outcome.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import { dequeue, heads } from "./queue.ts";
+import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, settle } from "./settle.ts";
 import { alive, signalGroup, spawnWorker } from "./spawn.ts";
 import type { TaskEvent } from "./state.ts";
@@ -35,6 +36,7 @@ export type ExecutorContext = {
   exec: Exec;
   launchOptions: LaunchOptions;
   waits: TaskWaits;
+  quota: QuotaGuard;
   killGraceMs?: number;
   closed: () => boolean;
 };
@@ -128,7 +130,6 @@ export class Executors {
     const active = this.active.get(id);
     if (!active || active.exited) return;
     active.exited = true;
-    let relaunched = false;
     try {
       const outcome = await settle(active, exit, this.ctx.exec);
       if (getTask(this.ctx.db, id).status !== "running") return;
@@ -150,10 +151,10 @@ export class Executors {
           : {}),
         ...detail,
       });
-      if (decision.retry) {
-        relaunched = true;
-        await this.retry(active, decision.reason!);
-      } else
+      if (outcome.quota)
+        await this.ctx.quota.exhausted(this, active, outcome.quota);
+      else if (decision.retry) await this.retry(active, decision.reason!);
+      else
         this.publish(id, decision.publish, {
           ...(decision.reason ? { reason: decision.reason } : {}),
           ...(decision.publish === "done" && facts
@@ -164,7 +165,8 @@ export class Executors {
     } catch (error) {
       this.failAfterError(id, error);
     } finally {
-      if (!relaunched) this.active.delete(id);
+      // 重试或换执行者重派后，表里已是新的一轮，别删掉。
+      if (this.active.get(id) === active) this.active.delete(id);
       this.ctx.waits.changed(id);
       if (!this.ctx.closed()) void this.drain(active.tool);
     }
@@ -233,12 +235,17 @@ export class Executors {
     }, this.ctx.killGraceMs ?? 10_000).unref();
   }
 
-  /** 拉起排队中的任务：每个工具的队首，前提是该工具空闲。 */
+  /** 拉起排队中的任务：每个工具的队首，前提是独占工具空闲、账号额度标记已解除；返回出队几个。 */
   async drain(tool?: Tool) {
+    const held = this.ctx.quota.held();
+    let moved = 0;
     for (const entry of heads(this.ctx.db, tool)) {
       const entryTool = entry.tool as Tool;
-      if (this.ctx.closed() || this.busy(entryTool)) continue;
+      if (this.ctx.closed() || held.has(ADAPTERS[entryTool].quotaProvider))
+        continue;
+      if (ADAPTERS[entryTool].exclusive && this.busy(entryTool)) continue;
       dequeue(this.ctx.db, entry.task_id);
+      moved++;
       this.launching.set(entry.task_id, entryTool);
       try {
         const worker = await resolveWorker(
@@ -249,7 +256,10 @@ export class Executors {
       } catch (error) {
         const reason = `排队后拉起失败：${error instanceof Error ? error.message : String(error)}`;
         try {
-          this.advance(entry.task_id, { kind: "block" }, {}, { reason });
+          // 因额度排队的任务本来就受阻，转移会被拒；照样记下并投递。
+          if (getTask(this.ctx.db, entry.task_id).status === "blocked")
+            noteTask(this.ctx.db, entry.task_id, "launch_failed", { reason });
+          else this.advance(entry.task_id, { kind: "block" }, {}, { reason });
           this.publish(entry.task_id, "blocked", { reason });
         } catch {
           noteTask(this.ctx.db, entry.task_id, "launch_failed", { reason });
@@ -259,5 +269,6 @@ export class Executors {
         this.ctx.waits.changed(entry.task_id);
       }
     }
+    return moved;
   }
 }

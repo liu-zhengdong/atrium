@@ -3,7 +3,11 @@ import { printJson, table, when } from "./format.ts";
 import type { Command } from "./main.ts";
 import type { QuotaAccount, QuotaList } from "../server/tasks/quota.ts";
 
-/** 账号额度一览的命令行（#267）：只经 HTTP 调服务，不直接跑 OpenQuota。 */
+/**
+ * 账号额度一览的命令行（#267）：只经 HTTP 调服务，不直接跑 OpenQuota。
+ * 「运行时记录」列由服务给：账号被额度标记挡住时写明预计恢复时刻（或恢复时间未知），
+ * 没有标记留空；--json 里同一信息是结构化的 hold.until / hold.reason。
+ */
 
 const client = async () => (await import("./service.ts")).connect();
 
@@ -46,7 +50,7 @@ export function formatQuotaTable(accounts: QuotaAccount[]): string {
 
 const quota: Command = {
   args: "[--json]",
-  about: "按额度富余从多到少列出各账号，派活前查看",
+  about: "按额度富余从多到少列出各账号，标出额度用尽待恢复的账号",
   positionals: [0, 0],
   async run({ json }) {
     const result = await (await client()).get<QuotaList>("/quota");

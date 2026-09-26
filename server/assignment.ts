@@ -1,3 +1,4 @@
+import { retiredProvider } from "../shared/providers.ts";
 import { lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { Problem, type Store } from "./store.ts";
@@ -39,8 +40,10 @@ export function assignmentCommand(
     // A broken model file must not hide the rest of the preflight report.
     return null;
   }
+  // 已停用供应商的账号不能再分配（#242），不作为修正命令给出。
   const candidates = accounts.filter(
     (entry) =>
+      !retiredProvider(entry.provider) &&
       (provider
         ? entry.provider === provider
         : entry.id === previouslyAssigned) &&

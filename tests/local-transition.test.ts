@@ -104,6 +104,16 @@ test("一次性过渡仅分配共享 Claude bridge；保留其他身份及人工
     ]),
     `atrium assign ${local.ref} ${ref}`,
   );
+  // 已停用供应商的账号不能再分配（#242），撤销后不回指它。
+  assert.equal(
+    assignmentCommand(
+      second.store,
+      other.id,
+      [{ id: "k9", provider: "antigravity", status: "ready" }],
+      "k9",
+    ),
+    null,
+  );
   await second.app.close();
   rmSync(root, { recursive: true, force: true });
 });

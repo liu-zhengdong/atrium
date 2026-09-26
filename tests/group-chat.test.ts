@@ -17,6 +17,9 @@ import { removeMember, updateGroup } from "../server/groups.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import { mentionsAll } from "../shared/mentions.ts";
 
+// sent_at 按运行机器的时区渲染，具体值随机器变化，测试只核对格式。
+const READABLE_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}$/;
+
 test("投递计划：私聊、群聊点名、@ 全体的所有组合", () => {
   const members = ["a", "b", "c"];
   const plan = (
@@ -101,8 +104,13 @@ test("邀请正文：来意与群内历史的四种组合", () => {
       chatName: "移植调研",
       note,
       hasHistory,
+      sentAt: Date.UTC(2026, 8, 26, 3, 14, 32),
     });
-  const source = (text: string) => JSON.parse(text.split("\n")[2]);
+  const source = (text: string) => {
+    const { sent_at, ...rest } = JSON.parse(text.split("\n")[2]);
+    assert.match(sent_at, READABLE_TIME);
+    return rest;
+  };
   assert.deepEqual(source(notice("分头查一下", false)), {
     sender: "a1",
     sender_name: "Atlas",
@@ -136,6 +144,7 @@ test("投递正文第一行写明发送者：用户不带同伴声明，同伴�
       body: "结论如下",
       details: "",
       attachments: [],
+      sentAt: Date.UTC(2026, 8, 26, 3, 14, 32),
     });
   const fromUser = text("u1", "政东"),
     fromPeer = text("a6", "Claude-Opus5");

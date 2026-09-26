@@ -6,6 +6,7 @@ import {
 } from "../shared/schema.ts";
 import type { Store } from "./store.ts";
 import { Problem } from "./problem.ts";
+import { readableTime } from "./time.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
 import { readUser } from "./users.ts";
 
@@ -83,6 +84,8 @@ export function deliveryText(input: {
   body: string;
   details: string;
   attachments: Attachment[];
+  /** 发送时刻，毫秒；投递里附一份可读时间，Agent 读不出时间戳。 */
+  sentAt: number;
 }) {
   const source = JSON.stringify({
     source: input.kind === "group" ? "群聊" : "私聊",
@@ -92,6 +95,7 @@ export function deliveryText(input: {
     sender_name: input.senderName,
     ...(input.mentionAll ? { mention_all: true } : {}),
     message_id: input.messageId,
+    sent_at: readableTime(input.sentAt),
     body: input.body,
     ...(input.details ? { details: input.details } : {}),
     attachments: input.attachments,
@@ -115,6 +119,8 @@ export function inviteText(input: {
   hasHistory: boolean;
   /** 群共享目录的绝对路径；内存库没有。 */
   space?: string | null;
+  /** 发出邀请的时刻，毫秒；与投递一致附可读时间。 */
+  sentAt: number;
 }) {
   const source = JSON.stringify({
     sender: input.senderRef,
@@ -123,6 +129,7 @@ export function inviteText(input: {
     chat_name: input.chatName,
     ...(input.note ? { note: input.note } : {}),
     ...(input.space ? { space: input.space } : {}),
+    sent_at: readableTime(input.sentAt),
   });
   const space = input.space
     ? "报告、素材等要留存或会修订的内容放进 space 这个共享目录。"

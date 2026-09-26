@@ -28,6 +28,9 @@ export type Active = {
   worktree: string | null;
   branch: string | null;
   base: string | null;
+  deliver: Task["deliver"];
+  issue: number | null;
+  startedAt: number;
   probe: ProgressProbe;
   state: WatchState;
   limits: WatchLimits;
@@ -87,6 +90,9 @@ export function launched(input: {
     worktree: prepared.worktree,
     branch: prepared.branch,
     base: prepared.base,
+    deliver: input.task.deliver,
+    issue: input.task.issue,
+    startedAt: input.task.started_at ?? Date.now(),
     probe: probeFor(
       prepared.logFile,
       prepared.cwd,
@@ -124,6 +130,9 @@ export function adopted(input: {
     worktree: task.worktree,
     branch: task.branch,
     base: input.base,
+    deliver: task.deliver,
+    issue: task.issue,
+    startedAt: task.started_at ?? now,
     probe: probeFor(
       logFile,
       task.worktree ?? join(dir, "work"),

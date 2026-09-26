@@ -50,6 +50,7 @@ export function decideExit(input: {
   quota?: string;
   /** 从结构化日志识别出的异常结束（长度用尽、权限被拒、中途退出），写在失败与受阻原因前面。 */
   ending?: string;
+  abnormalFatal?: boolean;
   /** 从日志识别出的供应商或网络临时错误（transient.ts），同样写在原因前面；重试由调用方按 transient.ts 决定。 */
   transient?: string;
 }): ExitDecision {
@@ -97,6 +98,20 @@ export function decideExit(input: {
       retry: false,
     };
   }
+  if (input.abnormalFatal && exit === "unknown")
+    return {
+      event: "exit_fail",
+      publish: "failed",
+      reason: exitText(exit),
+      retry: false,
+    };
+  if (input.abnormalFatal && input.ending)
+    return {
+      event: "exit_fail",
+      publish: "failed",
+      reason: input.ending,
+      retry: false,
+    };
   const verdict = input.verdict;
   if (!verdict) throw new Error("正常退出须先给出关卡结论");
   if (verdict.passed)

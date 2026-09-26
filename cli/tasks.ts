@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
 import { TASK_STATUSES, isTaskStatus } from "../server/tasks/state.ts";
+import { DELIVERS, type Deliver } from "../server/tasks/deliver.ts";
 import type { Task, TaskEventRow, TaskNode } from "../server/tasks/ledger.ts";
 import { formatChildSummary } from "../server/tasks/ledger-summary.ts";
 import { recordNext } from "./contract.ts";
@@ -39,6 +40,21 @@ function status(value: string | undefined) {
     );
   return value;
 }
+function deliver(value: string | undefined): Deliver {
+  if (!DELIVERS.includes(value as Deliver))
+    throw new Problem(
+      400,
+      `--deliver 只能是 ${DELIVERS.join("、")}（收到：${value ?? "空"}）`,
+      "usage",
+    );
+  return value as Deliver;
+}
+function issue(value: string | undefined): number {
+  const number = Number(value);
+  if (!value || !/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(number))
+    throw new Problem(400, "--issue 应为正整数 issue 号", "usage");
+  return number;
+}
 function existing(value: string, flag: string, kind: "file" | "directory") {
   const path = resolve(value);
   const stat = existsSync(path) ? statSync(path) : null;
@@ -69,6 +85,7 @@ const line = (task: TaskNode) =>
     task.ref,
     `[${task.status}]`,
     task.title,
+    `· ${task.deliver}${task.issue ? ` #${task.issue}` : ""}`,
     task.child_summary ? `· ${formatChildSummary(task.child_summary)}` : "",
     task.worker ? `· ${task.worker}` : "",
     task.pr_url ? `· ${task.pr_url}` : "",
@@ -84,7 +101,7 @@ export function renderTree(nodes: TaskNode[], depth = 0): string[] {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--role R] [--repo 路径] [--brief 文件] [--owner 订阅者]",
+  args: "标题 [--parent tN] [--role R] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about: "建任务；--parent 挂到父任务下，--brief 附任务详述 md",
   options: {
     parent: { type: "string" },
@@ -92,12 +109,22 @@ const add: Command = {
     repo: { type: "string" },
     brief: { type: "string" },
     owner: { type: "string" },
+    deliver: { type: "string" },
+    issue: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
     const parent = str(values, "parent");
     const repo = str(values, "repo");
     const brief = str(values, "brief");
+    const kind = str(values, "deliver");
+    const issueText = str(values, "issue");
+    if (kind === "comment" && issueText === undefined)
+      throw new Problem(
+        400,
+        "--deliver comment 需同时给 --issue <号>",
+        "usage",
+      );
     if (!title?.trim())
       throw new Problem(
         400,
@@ -121,6 +148,8 @@ const add: Command = {
       ...(str(values, "owner") === undefined
         ? {}
         : { owner: str(values, "owner") }),
+      ...(kind === undefined ? {} : { deliver: deliver(kind) }),
+      ...(issueText === undefined ? {} : { issue: issue(issueText) }),
     };
     const task = await (await client()).post<Task>("/tasks", body);
     if (json) printJson(task);
@@ -216,6 +245,10 @@ const show: Command = {
         ],
         ["岗位", task.role],
         ["仓库", task.repo],
+        [
+          "交付物",
+          `${task.deliver}${task.issue ? `（issue #${task.issue}）` : ""}`,
+        ],
         ["详述", task.brief_path],
         ["负责人", task.owner],
         ["执行者", task.worker],
@@ -258,7 +291,8 @@ const show: Command = {
 
 const tree: Command = {
   args: "[tN]",
-  about: "缩进树：短号、状态、标题、执行者、PR；不写 tN 显示全部顶层任务",
+  about:
+    "缩进树：短号、状态、标题、交付物、执行者、PR；不写 tN 显示全部顶层任务",
   positionals: [0, 1],
   async run({ positionals: [root], json }) {
     const result = await (
@@ -282,12 +316,14 @@ const tree: Command = {
 
 const set: Command = {
   args: "tN --status S",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可改 --title --role --brief`,
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可改 --title --role --brief --deliver --issue`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
     role: { type: "string" },
     brief: { type: "string" },
+    deliver: { type: "string" },
+    issue: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
@@ -305,10 +341,14 @@ const set: Command = {
     const brief = str(values, "brief");
     if (brief !== undefined)
       body.brief_path = brief === "" ? "" : existing(brief, "--brief", "file");
+    const kind = str(values, "deliver");
+    if (kind !== undefined) body.deliver = deliver(kind);
+    const issueText = str(values, "issue");
+    if (issueText !== undefined) body.issue = String(issue(issueText));
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--title、--role 或 --brief",
+        "至少给一项：--status、--title、--role、--brief、--deliver 或 --issue",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,

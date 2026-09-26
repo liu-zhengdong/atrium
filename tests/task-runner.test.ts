@@ -111,3 +111,68 @@ test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关�
     400,
   );
 });
+
+test("comment 与 none 交付不用 PR，评论链接进入摘要", async (t) => {
+  let commentQueries = 0;
+  let commentAt = 0;
+  const link = "https://github.com/o/r/issues/262#issuecomment-123";
+  const { fx, call } = await startApp(t, (fixture) => {
+    const original = fixture.run;
+    fixture.run = (command, args, options) => {
+      if (
+        command === "gh" &&
+        args[0] === "api" &&
+        args[1]?.includes("/issues/262/comments")
+      ) {
+        commentQueries++;
+        return Promise.resolve({
+          ok: true,
+          stdout: JSON.stringify([
+            [
+              {
+                created_at: new Date(commentAt).toISOString(),
+                html_url: link,
+              },
+            ],
+          ]),
+          stderr: "",
+        });
+      }
+      return original(command, args, options);
+    };
+  });
+  const invalid = await call("POST", "/api/tasks", {
+    title: "设计",
+    repo: fx.repo,
+    deliver: "comment",
+  });
+  assert.equal(invalid.status, 400);
+  assert.match(invalid.body.error, /--issue/);
+  for (const [deliver, issue] of [
+    ["comment", 262],
+    ["none", undefined],
+  ] as const) {
+    const created = await call("POST", "/api/tasks", {
+      title: `设计 ${deliver}`,
+      repo: fx.repo,
+      deliver,
+      ...(issue ? { issue } : {}),
+    });
+    assert.equal(created.status, 201);
+    const started = await call("POST", `/api/tasks/${created.body.ref}/run`, {
+      worker: "kimi",
+    });
+    assert.equal(started.status, 200);
+    if (deliver === "comment") commentAt = started.body.task.started_at;
+    const waited = await call(
+      "GET",
+      `/api/tasks/${created.body.ref}/wait?timeout=20`,
+    );
+    assert.equal(waited.body.task.status, "done", JSON.stringify(waited.body));
+    assert.equal(waited.body.task.pr_url, null);
+    assert.equal(waited.body.task.ci, null);
+    if (deliver === "comment")
+      assert.match(waited.body.task.result, /issuecomment-123/);
+  }
+  assert.equal(commentQueries, 1);
+});

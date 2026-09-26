@@ -26,6 +26,18 @@ export const RUN_RULES: readonly string[] = [
   "不要启动、停止或更新 4310 端口上的 Atrium 服务，也不要执行没有隔离 ATRIUM_PORT / ATRIUM_DATA 的 atrium 命令。",
 ];
 
+export function deliveryRules(task: Task): readonly string[] {
+  if (task.deliver === "pr") return RUN_RULES;
+  const common = DEFAULT_RULES.filter((rule) => !rule.startsWith("做完后依次"));
+  return [
+    ...common,
+    task.deliver === "comment"
+      ? `交付物是在 issue #${task.issue} 发布一条评论；完成后附评论链接，不要求提交、推送或开 PR。`
+      : "交付物是最终摘要；完成后写明调查结果，不要求提交、推送或开 PR。",
+    RUN_RULES.at(-1)!,
+  ];
+}
+
 export type LaunchOptions = {
   data: string;
   workersDir: string;
@@ -114,7 +126,7 @@ export async function prepareRun(
     roleDoc: docs.roleDoc,
     rootDoc: docs.rootDoc,
     profileBody: worker.profile.body,
-    rules: [where, ...RUN_RULES],
+    rules: [where, ...deliveryRules(task)],
   });
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, prompt, { mode: 0o600 });

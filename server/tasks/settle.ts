@@ -3,7 +3,9 @@ import { open, stat } from "node:fs/promises";
 import type { Active } from "./active.ts";
 import { ADAPTERS } from "./adapters/index.ts";
 import { collectFacts } from "./facts.ts";
-import { evaluateGates, type Facts, type Verdict } from "./gates.ts";
+import { type Facts, type Verdict } from "./gates.ts";
+import { collectComments } from "./comment-facts.ts";
+import { evaluateDelivery } from "./delivery-gates.ts";
 import type { Exec } from "./git.ts";
 import type { RunFields } from "./ledger.ts";
 import {
@@ -126,6 +128,7 @@ export async function settle(
     // 日志目录被删不影响收尾。
   }
   const fields: RunFields = { result: summary };
+  const endedAt = Date.now();
   const quota = detectQuota(active, exit, log);
   if (quota) {
     // 额度用尽：不查事实、不过关卡，直接受阻。
@@ -139,7 +142,7 @@ export async function settle(
   }
   let facts: Facts | undefined;
   let verdict: Verdict | undefined;
-  if (needsFacts(active.stop)) {
+  if (active.deliver === "pr" && needsFacts(active.stop)) {
     facts = await collectFacts(
       {
         repo: active.repo,
@@ -153,9 +156,32 @@ export async function settle(
     fields.pr_url = facts.pr?.url ?? null;
     fields.ci = facts.ci;
   }
-  if (facts && needsGates(active.stop, exit)) {
+  if (needsGates(active.stop, exit)) {
     const rules = active.worker.profile.rules;
-    verdict = evaluateGates(rules.checks ?? [], rules.limits ?? {}, facts);
+    const comments =
+      active.deliver === "comment" && active.issue
+        ? await collectComments(
+            active.repo,
+            active.issue,
+            active.startedAt,
+            exec,
+          )
+        : undefined;
+    verdict = evaluateDelivery({
+      deliver: active.deliver,
+      issue: active.issue,
+      startedAt: active.startedAt,
+      endedAt,
+      comments,
+      checks: rules.checks ?? [],
+      limits: rules.limits ?? {},
+      facts,
+    });
+    const link = verdict.results
+      .find((result) => result.gate === "comment" && result.ok)
+      ?.evidence.match(/https:\/\/\S+/)?.[0];
+    if (link)
+      fields.result = [summary, `评论：${link}`].filter(Boolean).join("\n");
   }
   const ending =
     log !== undefined && jsonEvents(active)
@@ -177,6 +203,7 @@ export async function settle(
     retryAllowed: active.worker.profile.rules.retry_on_stall !== false,
     verdict,
     ending: ending?.reason,
+    abnormalFatal: active.deliver !== "pr",
     transient: transient?.reason,
   });
   return { summary, fields, decision, verdict, facts, transient };

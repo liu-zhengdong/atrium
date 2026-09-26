@@ -31,6 +31,9 @@ export function runnerEnvOptions(env: NodeJS.ProcessEnv = process.env) {
   if (env.ATRIUM_WORKERS_DIR) options.workersDir = env.ATRIUM_WORKERS_DIR;
   const batch = Number(env.ATRIUM_EVENT_BATCH_SECONDS);
   if (Number.isFinite(batch) && batch > 0) options.batchMs = batch * 1000;
+  const unknown = Number(env.ATRIUM_QUOTA_UNKNOWN_MINUTES);
+  if (Number.isFinite(unknown) && unknown > 0)
+    options.quotaUnknownMs = unknown * 60_000;
   return options;
 }
 

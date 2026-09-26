@@ -104,9 +104,13 @@ export async function until(check: () => boolean, ms = 10_000) {
   }
 }
 
-/** 用夹具起一个内存服务：看门狗 100 毫秒一巡，gh 桩成非 GitHub 仓库。 */
-export async function startApp(t: After) {
+/** 用夹具起一个内存服务：看门狗 100 毫秒一巡，gh 桩成非 GitHub 仓库；tweak 可在起服务前改夹具。 */
+export async function startApp(
+  t: After,
+  tweak?: (fx: ReturnType<typeof fixture>) => void,
+) {
   const fx = fixture(t);
+  tweak?.(fx);
   const data = join(fx.root, "data");
   const { app } = await createApp({
     data,

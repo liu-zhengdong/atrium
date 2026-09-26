@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
 import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
+import { clock } from "./quota-holds.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
@@ -192,6 +193,8 @@ export type PickInput = {
   risk: Risk;
   /** 各工具默认执行者的生效档案；缺档案视为不限制 risk。 */
   profiles: Partial<Record<Tool, EffectiveProfile>>;
+  /** 额度被标记用尽、还没到期的账号：provider → 到期时刻（#267）。 */
+  held?: ReadonlyMap<string, number>;
 };
 
 export type Skip = { tool: Tool; reason: string };
@@ -206,7 +209,7 @@ export type PickResult =
   | { ok: false; reason: string; skipped: Skip[] };
 
 /**
- * 挑执行者：跳过没装的、跳过档案 max_risk 低于任务 risk 的；pace 可用时按账号富余从多到少，
+ * 挑执行者：跳过没装的、跳过档案 max_risk 低于任务 risk 的、跳过额度标记未到期的；pace 可用时按账号富余从多到少，
  * 没有富余数据的工具排在有数据的之后并按固定顺序；pace 不可用时整体按固定顺序。
  */
 export function pickWorker({
@@ -214,6 +217,7 @@ export function pickWorker({
   pace,
   risk,
   profiles,
+  held,
 }: PickInput): PickResult {
   if (!(RISKS as readonly string[]).includes(risk))
     throw invalid(`risk 只能是 ${RISKS.join("、")}`);
@@ -239,12 +243,17 @@ export function pickWorker({
       });
       continue;
     }
+    const heldUntil = held?.get(ADAPTERS[tool].quotaProvider);
+    if (heldUntil !== undefined) {
+      skipped.push({ tool, reason: `额度用尽至 ${clock(heldUntil)}` });
+      continue;
+    }
     eligible.push(tool);
   }
   if (!eligible.length)
     return {
       ok: false,
-      reason: "没有可用的执行者：都没装或档案不允许该风险",
+      reason: "没有可用的执行者：都没装、档案不允许该风险或额度用尽",
       skipped,
     };
   if (!pace) return { ok: true, tool: eligible[0], basis: "fallback", skipped };

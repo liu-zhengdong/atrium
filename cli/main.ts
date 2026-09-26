@@ -10,6 +10,7 @@ import { runnerCommands } from "./runners.ts";
 import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
+import { taskCommands } from "./tasks.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
@@ -92,6 +93,7 @@ export const commands: Record<string, Command> = {
   ...runnerCommands,
   ...pluginCommands,
   ...resourceCommands,
+  ...taskCommands,
   update: updateCommand,
   restart: restartCommand,
 };
@@ -113,16 +115,18 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["身份", "聊天", "账号与凭据", "插件技能与规则"].flatMap((group) => [
-      "",
-      group,
-      ...Object.entries(commands)
-        .filter(([name]) => groupOf(name) === group)
-        .map(
-          ([name, command]) =>
-            `  atrium ${name} ${command.args}  ${command.about}`,
-        ),
-    ]),
+    ...["身份", "聊天", "任务", "账号与凭据", "插件技能与规则"].flatMap(
+      (group) => [
+        "",
+        group,
+        ...Object.entries(commands)
+          .filter(([name]) => groupOf(name) === group)
+          .map(
+            ([name, command]) =>
+              `  atrium ${name} ${command.args}  ${command.about}`,
+          ),
+      ],
+    ),
     "",
     "命令详情：atrium <命令> --help；调用约定：atrium guide",
   ].join("\n");
@@ -188,7 +192,8 @@ export async function main(argv: string[]): Promise<number> {
         name === "runner" ||
         name === "adapters" ||
         name === "plugin" ||
-        name === "skill"
+        name === "skill" ||
+        name === "task"
           ? `${name} ${rest.shift() ?? ""}`.trim()
           : name;
       const command = commands[subcommand];

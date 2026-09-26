@@ -10,6 +10,8 @@ const fieldNames: Record<string, string> = {
   chat_id: "会话",
   account: "账号",
   name: "名称",
+  title: "标题",
+  brief_path: "--brief",
 };
 
 export function cliErrorMessage(message: string, command?: Command): string {

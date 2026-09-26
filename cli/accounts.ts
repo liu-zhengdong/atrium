@@ -122,13 +122,14 @@ export const accountCommands: Record<string, Command> = {
     },
   },
   "account add": {
-    args: "provider [--local | --name 名称 --key -]",
-    about: "添加 API Key 或本机 Claude CLI 登录",
+    args: "provider [--local | --name 名称 --key - | --setup-token -]",
+    about: "添加 API Key、本机登录或独立 Claude setup-token 账号",
     positionals: [1, 1],
     options: {
       ...nameOption,
       key: { type: "string" },
       local: { type: "boolean" },
+      "setup-token": { type: "string" },
     },
     async run({ positionals: [provider], values }) {
       if (values.local) {
@@ -139,6 +140,26 @@ export const accountCommands: Record<string, Command> = {
         ).post<{ id: string }>("/accounts/local", { provider });
         console.log(
           `本机登录账号 ${result.id} 已添加；下一步：atrium assign <身份> ${result.id}`,
+        );
+        return;
+      }
+      const setup = str(values, "setup-token");
+      if (setup !== undefined) {
+        if (provider !== "claude-bridge" || setup !== "-" || str(values, "key"))
+          throw new Problem(
+            400,
+            "仅 claude-bridge 接受 --setup-token -，且不能同时传 --key",
+          );
+        let token = "";
+        for await (const chunk of stdin) token += chunk.toString();
+        const result = await (
+          await connect()
+        ).post<{ id: string }>("/accounts/setup-token", {
+          name: name(provider, values),
+          token: token.trimEnd(),
+        });
+        console.log(
+          `账号 ${result.id} 已添加；下一步：先停止身份，再 atrium assign <身份> ${result.id}`,
         );
         return;
       }
@@ -161,6 +182,24 @@ export const accountCommands: Record<string, Command> = {
           `未保存：${result.validation.reason ?? "未能校验"}；可在 atrium connect 中选择仍然保存`,
         );
       console.log(`账号 ${result.id} 已添加`);
+    },
+  },
+  "account replace-token": {
+    args: "账号 --setup-token -",
+    about: "从标准输入替换独立 Claude setup-token（使用中的身份须先停止）",
+    positionals: [1, 1],
+    options: { "setup-token": { type: "string" } },
+    async run({ positionals: [ref], values }) {
+      if (str(values, "setup-token") !== "-")
+        throw new Problem(400, "只接受 --setup-token - 从标准输入读取");
+      let token = "";
+      for await (const chunk of stdin) token += chunk.toString();
+      await (
+        await connect()
+      ).put(`/accounts/${encode(ref!)}/setup-token`, {
+        token: token.trimEnd(),
+      });
+      console.log(`账号 ${ref} 的 setup-token 已替换`);
     },
   },
   "account rename": {

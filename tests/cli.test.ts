@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   mkdtempSync,
   rmSync,
   writeFileSync,
@@ -105,6 +106,64 @@ test(
     assert.match(show.stdout, /出错 · .*自动重试（第 1\/3 次）/);
     assert.match(list.stdout, /出错 · .*自动重试（第 1\/3 次）/);
     assert.match(show.stdout, /Connection error\./);
+  },
+);
+
+test(
+  "CLI 从标准输入添加与更换假 setup-token，不把令牌写进命令或回显",
+  { timeout: 60000 },
+  async (t) => {
+    const f = await fixture(t);
+    const fake = join(f.root, "claude");
+    writeFileSync(
+      fake,
+      '#!/usr/bin/env node\nconsole.log(JSON.stringify({is_error:false,result:"OK"}));\n',
+      { mode: 0o700 },
+    );
+    f.env.PATH = `${f.root}:${process.env.PATH}`;
+    const run = (args: string[], token: string) =>
+      new Promise<{ code: number | null; out: string; err: string }>(
+        (resolve, reject) => {
+          const child = spawn(
+            process.execPath,
+            [join(packageRoot, "bin/atrium.mjs"), ...args],
+            { cwd: f.root, env: f.env },
+          );
+          let out = "",
+            err = "";
+          child.stdout.on("data", (part: Buffer) => (out += part));
+          child.stderr.on("data", (part: Buffer) => (err += part));
+          child.on("error", reject);
+          child.on("close", (code) => resolve({ code, out, err }));
+          child.stdin.end(token + "\n");
+        },
+      );
+    const created = await run(
+      [
+        "account",
+        "add",
+        "claude-bridge",
+        "--name",
+        "隔离账号",
+        "--setup-token",
+        "-",
+      ],
+      "FAKE_TOKEN_ONE",
+    );
+    assert.equal(created.code, 0, created.err);
+    const ref = created.out.match(/k[0-9]+/)?.[0];
+    assert.ok(ref);
+    assert.doesNotMatch(created.out + created.err, /FAKE_TOKEN_ONE/);
+    const replaced = await run(
+      ["account", "replace-token", ref, "--setup-token", "-"],
+      "FAKE_TOKEN_TWO",
+    );
+    assert.equal(replaced.code, 0, replaced.err);
+    assert.doesNotMatch(replaced.out + replaced.err, /FAKE_TOKEN_TWO/);
+    assert.equal(
+      readFileSync(join(f.data, "accounts", ref, "claude-setup-token"), "utf8"),
+      "FAKE_TOKEN_TWO\n",
+    );
   },
 );
 

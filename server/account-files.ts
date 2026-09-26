@@ -68,10 +68,11 @@ export type Row = {
   number: number;
   provider: string;
   name: string;
-  type: "oauth" | "api_key" | "local";
+  type: "oauth" | "api_key" | "local" | "setup_token";
   expires: number | null;
   status: string;
   last_error: string | null;
+  credential_updated_at?: number | null;
 };
 export type Assignment = {
   agent_id: string;

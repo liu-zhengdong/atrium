@@ -119,6 +119,8 @@ atrium connect                              # 选择方式与供应商，登录�
 atrium connect deepseek                     # 供应商已确定时跳过供应商选择
 atrium accounts                             # 查看账号与分配
 printf '%s' "$MODEL_KEY" | atrium account add deepseek --key -  # 无终端的脚本入口
+atrium account add claude-bridge --name 独立账号 --setup-token -  # 交互式输入 Claude setup-token，亦可从标准输入读入
+atrium account replace-token k2 --setup-token -                 # 更换令牌；先停止使用它的身份
 atrium assign 林岚 k1                        # 把账号分配给身份
 
 # 聊天与通知
@@ -152,7 +154,7 @@ atrium restart --wait                        # 默认最多等 300 秒，超时�
 atrium restart --probe-agent a1              # 可选：再用指定身份做一轮真实模型验证；模型失败会触发回滚
 ```
 
-`connect` 需要交互终端；OAuth 登录在浏览器完成，取消时停止进行中的登录。Web 的「添加账号」使用同一供应商目录，按连接方式筛选并可搜索。目录来自 Pi 及模板已安装的插件，插件变更后重新加载；账号密钥留在服务端，不会出现在命令输出中。自动化使用 `account add --key -`，不再使用 `account login`。
+`connect` 需要交互终端；OAuth 登录在浏览器完成，取消时停止进行中的登录。Web 的「添加账号」使用同一供应商目录，按连接方式筛选并可搜索。目录来自 Pi 及模板已安装的插件，插件变更后重新加载；账号密钥留在服务端，不会出现在命令输出中。自动化使用 `account add --key -`，不再使用 `account login`。独立 Claude setup-token 账号可用上面的 CLI 命令添加／更换：令牌只从标准输入或本机管理 API 正文输入，不写在命令参数；保存前在隔离 HOME 中用 Claude Haiku 实际请求验证一次（会计费），不会使用共用的 Claude Code 登录。为身份分配后，本机 ACP 或运行器只传账号编号；pi-atrium 在 Pi 首轮开始前，通过本次启动的一次性 Unix socket 把令牌交给已声明能力的 bridge，令牌不进入 Pi 环境变量。bridge 只在启动 Claude 子进程时传入令牌；未明确领取成功便拒绝启动，不回退共用登录。身份如已在运行，先停止再启动才生效。
 
 以身份名义（`--as`）发言、建群、邀请走的是 Agent 工具（MCP）同一条路：要有成员资格，不能 @ 全体，对方看到的是同伴消息而不是用户指令。阅读只是用户审阅，不改变 Agent 的已读状态。
 
@@ -167,11 +169,41 @@ cd /tmp/atrium-src && npm pack && npm install -g ./atrium-0.1.x.tgz
 
 不要用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`：npm 11 会在依赖的安装脚本处报 `spawn sh ENOENT`。原来用 `npm link` 的，先执行 `npm rm -g atrium`，否则 npm 无法覆盖链接。之后升级用 `atrium update`。
 
-每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。旧服务等当前回合结束并同步最后的轨迹后才停；排空超时会列出仍在工作的身份，旧服务保持运行，可在回合结束后重试。排空期限与 `--wait --timeout` 的等待结果期限彼此独立，长回合需要相应调整两者。重启健康检查验证服务与 MCP 网关就绪，不以模型凭据、供应商可用性作为默认门槛；要验证真实身份回合时显式加 `--probe-agent <身份短号>`。失败时自动安装原版本并重新启动；回滚原因显示在用户网页的顶部告警中，Agent 也会收到消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。
+`atrium update` 安装标签 tarball 时使用 `npm install -g`，**不读取源码仓库的 `package-lock.json`**；发布包在 `package.json` 中把 pi-atrium 固定到指定提交，并把 Pi 固定到验证过的版本。pi-atrium 的旧版与新版可能同为 `0.3.0`，版本号不能证明实际能力；更新后先从全局安装目录执行与启动门槛相同的能力检查，再重启：
+
+```bash
+node - "$(npm root -g)/atrium" <<'NODE'
+const { readFileSync } = require('node:fs');
+const { createRequire } = require('node:module');
+const { join } = require('node:path');
+const root = process.argv[2];
+const read = (...parts) => JSON.parse(readFileSync(join(root, ...parts, 'package.json'), 'utf8'));
+const atrium = read();
+const requireInstalled = createRequire(join(root, 'package.json'));
+let adapter;
+try { adapter = requireInstalled('@liuser/pi-atrium/dist/identity.js'); } catch { adapter = {}; }
+const ready = adapter.IDENTITY_LAUNCH_SECRET_CAPABILITY === 'pi-acp/identity/launch-secret-file/v1'
+  && typeof adapter.isInheritedModelCredential === 'function'
+  && adapter.isInheritedModelCredential('OPENAI_API_KEY') === true;
+const pi = read('node_modules', '@earendil-works/pi-coding-agent').version;
+console.log('pi-atrium 要求:', atrium.dependencies['@liuser/pi-atrium'], '启动能力:', ready ? '具备' : '缺失');
+console.log('Pi 要求:', atrium.dependencies['@earendil-works/pi-coding-agent'], '已安装:', pi);
+if (!ready || pi !== atrium.dependencies['@earendil-works/pi-coding-agent']) {
+  console.error('安装产物不满足启动要求：请用 atrium update 重新安装，重启前复查。');
+  process.exitCode = 1;
+}
+NODE
+```
+
+若从源码目录运行服务或沿用 `npm link`，必须先在源码目录执行 `npm ci`；否则新版 Atrium 会因 pi-atrium 缺少模型凭据隔离能力而**拒绝启动所有具名身份**，不仅是令牌身份。不要把这类拒绝误判成令牌账号故障。
+
+**独立令牌版安全修复：**旧版 pi-atrium 启动具名身份时重新合并父进程环境；若启动或重启 4310 的 shell 设置了 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`OPENAI_API_KEY`、`CLAUDE_CONFIG_DIR` 等变量，具名身份可能继承它们。新版 pi-atrium 在**每次新启动具名 Pi** 时清理父进程的模型供应商凭据环境变量，清理范围也包括 `GH_TOKEN`、`GITHUB_TOKEN`、`NPM_TOKEN` 等进程级密钥；只保留分配给身份的账号凭据（`auth.json` 或显式的启动环境）。独立 setup-token 身份使用自己的令牌与 Claude 配置目录：令牌只在 bridge 声明启动能力后由一次性本机套接字领取，不放入 Pi 的环境变量、ACP 参数或进程命令行。完整功能需 pi-atrium、Atrium 和各身份 bridge 都升级，未交给 runner 的本地身份也要具备这三项。重启 4310 前仍须确认启动 shell 没有不应继承的变量，且身份已分配账号。
+
+每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。旧服务等当前回合结束并同步最后的轨迹后才停；排空超时会列出仍在工作的身份，旧服务保持运行，可在回合结束后重试。排空期限与 `--wait --timeout` 的等待结果期限彼此独立，长回合需要相应调整两者。重启健康检查验证服务与 MCP 网关就绪，不以模型凭据、供应商可用性作为默认门槛；要验证真实身份回合时显式加 `--probe-agent <身份短号>`。失败时自动安装原版本并重新启动；回滚原因显示在用户网页的顶部告警中，Agent 也会收到消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。**新增独立 Claude setup-token 账号后，不可直接降级到本功能发布前的任何 Atrium 版本，包括 v0.1.10。**旧版不识别账号类型，会误标为损坏；已分配令牌账号的身份仍可被私聊或 @ 自动唤醒，却不会收到令牌，而会退回共用 Claude 登录或父进程密钥。若必须主动降级，先停止这些身份，安全备份令牌到受限位置，再用 `atrium account remove kN` 逐一解除分配并删除这些账号；该命令会删除账号令牌文件。**若更新失败自动回退，立即停止并解除这些身份的令牌账号分配，不要让旧版唤醒它们**；重新升级到支持 setup-token 的版本后，启动时会从仍完好的令牌文件纠正旧版留下的误报。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。
 
 未全局安装时可在仓库使用 `./bin/atrium.mjs`。CLI 与服务使用同一个 `ATRIUM_DATA` 和 `PI_ACP_DIR`；默认数据库位置为 `~/.pi/atrium/data/`，不放在会被 npm 更新替换的安装目录，也不会随终端工作目录变化。原本在开发仓库 `.atrium/` 的用户数据须在切换全局安装之前停服迁移，或给新服务显式设置 `ATRIUM_DATA` 指向原目录；不要一边运行一边复制 SQLite。运行目录来自身份设置；不接受任意 Pi 参数，避免绕开身份设置与会话目录。
 
-入口打开原生 Pi TUI，自动使用该身份的配置、固定 MCP 代理模式和最近会话。首次使用 Pi 内置认证时，在这个身份内执行 `/login`；配置模板的 `auth.json` 不会复制，环境变量及插件自身认证沿用原机制。同一身份已被占用时显示 PID／工作目录，不抢占、不重启已有实例。普通 `pi` 不受此限制；已加载通用扩展的普通实例仍可被发现，但不会自动成为长期身份。
+入口打开原生 Pi TUI，自动使用该身份的配置、固定 MCP 代理模式和最近会话。首次使用 Pi 内置认证时，在这个身份内执行 `/login`；配置模板的 `auth.json` 不会复制。具名身份的模型凭据只来自分配的账号或身份自己的 `auth.json`，不继承启动命令所在 shell 的供应商密钥；插件自身的其他认证仍按原机制。同一身份已被占用时显示 PID／工作目录，不抢占、不重启已有实例。普通 `pi` 不受此限制；已加载通用扩展的普通实例仍可被发现，但不会自动成为长期身份。
 
 Atrium 使用 ACP SDK 调用 pi-atrium 声明的 `runtime/v1` 能力；Pi 进程内控制、本机 IPC 和发现登记归 pi-atrium，不再有 Atrium 专属扩展或 WebSocket 桥接。两端使用同一个 `PI_ACP_DIR`。
 
@@ -243,7 +275,7 @@ MCP 提供 `list_agents`、`user_info`、`list_fork_sources`、`fork_agent`、`o
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `ATRIUM_PORT`         | 新启动服务的 HTTP 端口，默认 `4310`；已有服务沿用原端口                              |
 | `ATRIUM_DATA`         | 数据目录，默认 `~/.pi/atrium/data/`                                                  |
-| 模型凭据              | 由服务进程环境提供（如 `KIMI_API_KEY`），不复制进身份目录                            |
+| 模型凭据              | 由身份分配的账号或身份自己的 `auth.json` 提供，不继承服务进程的供应商密钥            |
 | `ATRIUM_PI_ACP_ENTRY` | 开发时覆盖 pi-atrium 的 dist/index.js；默认使用依赖包                                |
 | `PI_ACP_PI_COMMAND`   | pi-atrium 使用的 Pi 可执行文件，默认 `pi`                                            |
 | `PI_ACP_DIR`          | pi-atrium 状态与实例登记目录；TUI 和后端须一致                                       |

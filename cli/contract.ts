@@ -28,6 +28,7 @@ export const exitCodes = {
   new_session_failed: 5,
   auth_required: 6,
   upgrade_restart_required: 7,
+  launch_secret_unsupported: 7,
   restart_timeout: 124,
   runner_busy: 124,
   timeout: 124,

@@ -11,6 +11,10 @@ test("drops herdr pane scope but keeps the connection to herdr", () => {
     HERDR_WORKSPACE_ID: "wG",
     HERDR_SOCKET_PATH: "/tmp/herdr.sock",
     HERDR_BIN_PATH: "/usr/local/bin/herdr",
+    ANTHROPIC_API_KEY: "fake-anthropic",
+    OPENAI_API_KEY: "fake-openai",
+    GH_TOKEN: "fake-github",
+    CLAUDE_CONFIG_DIR: "/tmp/shared-login",
   });
   assert.deepEqual(env, {
     PATH: "/usr/bin",

@@ -66,11 +66,24 @@ export function AccountRow({
               ? "本机登录 · 不保存 Key"
               : account.type === "oauth"
                 ? "OAuth"
-                : "API Key"}
+                : account.type === "setup_token"
+                  ? "Claude 令牌"
+                  : "API Key"}
+            {account.type === "setup_token" &&
+              account.credential_updated_at &&
+              ` · ${new Date(account.credential_updated_at).toLocaleDateString("zh-CN")} 录入`}
             {expiry(account.expires) && ` · ${expiry(account.expires)}`}
             {account.last_error &&
               ` · ${account.last_error === "未知错误" && !account.expires ? "登录未完成" : account.last_error}`}
           </p>
+          {account.type === "setup_token" && account.status === "error" && (
+            <p className="mb-0 mt-1.5 break-all text-xs text-muted">
+              更换令牌：
+              <code>
+                atrium account replace-token {account.id} --setup-token -
+              </code>
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {account.type === "local" && (

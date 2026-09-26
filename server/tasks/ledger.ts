@@ -34,6 +34,19 @@ export function ensureTaskTables(db: DatabaseSync) {
     CREATE TABLE IF NOT EXISTS task_events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
       at INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
     CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id,id);`);
+  // 负责人（事件订阅者）是后加的列：老库补上，缺省交给秘书。
+  const columns = all<{ name: string }>(db, "PRAGMA table_info(tasks)");
+  if (!columns.some((column) => column.name === "owner"))
+    db.exec("ALTER TABLE tasks ADD COLUMN owner TEXT");
+}
+
+/** 任务没写负责人时，事件交给秘书。 */
+export const DEFAULT_OWNER = "secretary";
+const OWNER_RE = /^[\p{L}\p{N}_.-]{1,60}$/u;
+export function ownerOf(value: unknown, field = "owner") {
+  if (typeof value !== "string" || !OWNER_RE.test(value.trim()))
+    throw usage(`${field}: 订阅者名只能用字母、数字、_ . -，1～60 字`);
+  return value.trim();
 }
 
 type TaskRow = {
@@ -51,6 +64,7 @@ type TaskRow = {
   pr_url: string | null;
   ci: string | null;
   result: string | null;
+  owner: string | null;
   created_at: number;
   started_at: number | null;
   ended_at: number | null;
@@ -206,6 +220,7 @@ export type NewTask = {
   role?: string | null;
   repo?: string | null;
   brief_path?: string | null;
+  owner?: string | null;
 };
 
 export function createTask(
@@ -214,8 +229,12 @@ export function createTask(
   now = Date.now(),
 ): Task {
   const input = objectOf(body);
-  onlyKeys(input, ["title", "parent", "role", "repo", "brief_path"]);
+  onlyKeys(input, ["title", "parent", "role", "repo", "brief_path", "owner"]);
   const values = {
+    owner:
+      input.owner === undefined || input.owner === null || input.owner === ""
+        ? null
+        : ownerOf(input.owner),
     title: title(input.title),
     role: optionalText(input.role, "role", 200),
     repo: repoOf(input.repo),
@@ -225,7 +244,7 @@ export function createTask(
     const parent = parentOf(db, input.parent);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,status,created_at,updated_at) VALUES (?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,status,created_at,updated_at) VALUES (?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -233,6 +252,7 @@ export function createTask(
         values.brief_path,
         values.role,
         values.repo,
+        values.owner,
         now,
         now,
       );
@@ -469,6 +489,37 @@ export function advanceTask(
   const id = parseTaskRef(reference);
   return atomically(db, () => {
     applyTransition(db, requireRow(db, id), event, now, fields, detail);
+    return view(requireRow(db, id));
+  });
+}
+
+/** 只改运行字段、不改状态（如 CI 轮询写回 ci），并记一条事件。 */
+export function patchRunFields(
+  db: DatabaseSync,
+  reference: unknown,
+  fields: RunFields,
+  kind: string,
+  detail?: unknown,
+  now = Date.now(),
+): Task {
+  const id = parseTaskRef(reference);
+  return atomically(db, () => {
+    requireRow(db, id);
+    const keys = RUN_FIELDS.filter((key) => key in fields);
+    if (keys.length)
+      db.prepare(
+        `UPDATE tasks SET ${keys.map((key) => `${key}=?`).join(",")},updated_at=? WHERE id=?`,
+      ).run(
+        ...keys.map((key) => {
+          const value = fields[key] ?? null;
+          return key === "result" && typeof value === "string"
+            ? clipResult(value)
+            : value;
+        }),
+        now,
+        id,
+      );
+    addEvent(db, id, now, kind, detail);
     return view(requireRow(db, id));
   });
 }

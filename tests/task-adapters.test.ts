@@ -90,6 +90,9 @@ test("适配器：各工具的真实调用参数", () => {
       command: "claude",
       args: [
         "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
         "--permission-mode",
         "bypassPermissions",
         "--model",

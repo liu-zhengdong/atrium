@@ -58,6 +58,14 @@ const expected: Record<
     blocked: null,
     cancelled: null,
   },
+  accept: {
+    todo: null,
+    running: "done",
+    done: null,
+    failed: null,
+    blocked: "done",
+    cancelled: null,
+  },
   block: {
     todo: "blocked",
     running: "blocked",
@@ -115,7 +123,7 @@ test("状态转移穷举：6 个状态 × 全部事件（manual_set 再乘 6 个
     });
     assert.equal(bogus.ok, false);
   }
-  assert.equal(cases, 6 * 5 + 6 * 6);
+  assert.equal(cases, 6 * 6 + 6 * 6);
 });
 
 function memory() {
@@ -253,9 +261,14 @@ test("账本：破坏输入在入口一处拒绝，数据不变", () => {
     /绝对路径/,
   );
   rejects(
-    () => createTask(db, { title: "x", owner: "a1" }),
+    () => createTask(db, { title: "x", assignee: "a1" }),
     400,
     /不认识的字段/,
+  );
+  rejects(
+    () => createTask(db, { title: "x", owner: "有 空格" }),
+    400,
+    /owner: 订阅者名/,
   );
   rejects(() => createTask(db, null), 400, /JSON 对象/);
   rejects(

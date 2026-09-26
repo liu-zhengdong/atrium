@@ -30,6 +30,8 @@ export type TaskEvent =
   | { kind: "exit_ok" }
   /** 执行者退出码非 0、被杀或 pid 已消失。 */
   | { kind: "exit_fail" }
+  /** 验收关卡全部通过（退出后直接通过，或受阻等 CI 后补通过）。 */
+  | { kind: "accept" }
   /** 缺条件、等决策，暂不能推进。 */
   | { kind: "block" }
   /** 不再做。 */
@@ -41,6 +43,7 @@ export const TASK_EVENT_KINDS: readonly TaskEventKind[] = [
   "start",
   "exit_ok",
   "exit_fail",
+  "accept",
   "block",
   "cancel",
   "manual_set",
@@ -70,6 +73,9 @@ export function transition(from: TaskStatus, event: TaskEvent): Transition {
       if (from !== "running")
         return reject(`任务不在运行（当前 ${from}），忽略执行者退出`);
       return to(from, event.kind === "exit_ok" ? "done" : "failed");
+    case "accept":
+      if (from === "running" || from === "blocked") return to(from, "done");
+      return reject(`任务当前 ${from}，不能按验收通过收尾`);
     case "block":
       if (from === "todo" || from === "running") return to(from, "blocked");
       if (from === "blocked") return reject("任务已经受阻");

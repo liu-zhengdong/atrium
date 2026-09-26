@@ -11,6 +11,7 @@ import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { taskCommands } from "./tasks.ts";
+import { eventCommands } from "./events.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
@@ -94,6 +95,7 @@ export const commands: Record<string, Command> = {
   ...pluginCommands,
   ...resourceCommands,
   ...taskCommands,
+  ...eventCommands,
   update: updateCommand,
   restart: restartCommand,
 };
@@ -193,7 +195,8 @@ export async function main(argv: string[]): Promise<number> {
         name === "adapters" ||
         name === "plugin" ||
         name === "skill" ||
-        name === "task"
+        name === "task" ||
+        name === "events"
           ? `${name} ${rest.shift() ?? ""}`.trim()
           : name;
       const command = commands[subcommand];

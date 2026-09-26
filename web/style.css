@@ -625,10 +625,6 @@ input[type="radio"] {
     display: none;
   }
 }
-/* 桌面侧栏常驻，返回按钮只在窄屏叠到标题左侧。 */
-.mobile-back {
-  display: none;
-}
 @media (max-width: 560px) {
   .sidebar {
     display: none;
@@ -640,22 +636,6 @@ input[type="radio"] {
   }
   .app.mobile-list .main {
     display: none;
-  }
-  .main-header {
-    padding-left: 49px;
-  }
-  .main-header h1 {
-    font-size: 15px;
-  }
-  .main-header p {
-    font-size: 10px;
-  }
-  .mobile-back {
-    display: flex;
-    position: absolute;
-    left: 12px;
-    top: 11px;
-    z-index: 2;
   }
   .drawer {
     width: 100%;

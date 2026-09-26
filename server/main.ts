@@ -189,6 +189,7 @@ try {
       agentsToWake =
         (await runtimes?.prepareShutdown(timeout, drainAbort.signal)) ?? [];
     } catch (error) {
+      console.warn(`平滑重启排空未完成，服务继续运行：${String(error)}`);
       return reply.code(409).send({ error: String(error) });
     }
     stopping = true;

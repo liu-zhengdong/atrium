@@ -3,7 +3,7 @@ import {
   startSupervisor,
   waitForRestart,
 } from "../server/supervisor.ts";
-import { dataDirectory } from "../server/service-state.ts";
+import { alive, dataDirectory } from "../server/service-state.ts";
 import { Store } from "../server/store.ts";
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -68,8 +68,11 @@ export async function restart({
     );
 
   const state = readRestartState(dir);
+  // #231：supervisor 已退出（被杀或崩溃）时状态会停在进行中；不能因此永久拒绝新的 restart。
   const isRunning =
     state &&
+    state.supervisorPid > 0 &&
+    alive(state.supervisorPid) &&
     (state.status === "stopping" ||
       state.status === "starting" ||
       state.status === "checking" ||

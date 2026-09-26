@@ -57,7 +57,7 @@ export async function requireUserAuthService(record: ServiceRecord) {
   if (status.stopping)
     throw new Problem(
       409,
-      "服务正在平滑重启或关闭中；等待完成后再试，可运行 atrium restart --wait 查看重启进度",
+      "服务正在平滑重启或关闭中；有进行中的重启时运行 atrium restart --wait 等结果，没有时运行 atrium restart 接管升级",
       "service_stopping",
       undefined,
       "atrium restart --wait",

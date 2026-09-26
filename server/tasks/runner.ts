@@ -20,6 +20,7 @@ import { signalGroup } from "./spawn.ts";
 import { TaskWaits } from "./waits.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import { workerEnvironment } from "./worker-env.ts";
+import { readRestartState } from "../supervisor.ts";
 import type { LaunchOptions } from "./workspace.ts";
 
 /**
@@ -58,11 +59,14 @@ export class TaskRunner {
   private readonly launchOptions: LaunchOptions;
   private closed = false;
   private polling = false;
+  private restartPending: boolean;
 
   constructor(
     private readonly db: DatabaseSync,
     private readonly options: RunnerOptions,
   ) {
+    this.restartPending =
+      readRestartState(options.data)?.status === "waiting_idle";
     ensureQueueTable(db);
     this.inbox = new EventInbox(db, {
       batchMs: options.batchMs,
@@ -96,6 +100,7 @@ export class TaskRunner {
       quota: this.quota,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
+      paused: () => this.restartPending,
     });
   }
 
@@ -124,6 +129,41 @@ export class TaskRunner {
     for (const timer of this.timers) clearInterval(timer);
     this.inbox.close();
     this.waits.close();
+  }
+
+  setRestartPending(value: boolean) {
+    this.restartPending = value;
+  }
+
+  isRestartPending() {
+    return this.restartPending;
+  }
+
+  /** Count the ledger and in-flight launches, including work recovered after a service crash. */
+  runningTaskRefs(): string[] {
+    const query = this.db.prepare(
+      "SELECT id FROM tasks WHERE status='running' AND id>? ORDER BY id LIMIT 200",
+    );
+    const rows: { id: number }[] = [];
+    let after = 0;
+    for (;;) {
+      const page = query.all(after) as { id: number }[];
+      rows.push(...page);
+      if (page.length < 200) break;
+      after = page.at(-1)!.id;
+    }
+    return [
+      ...new Set([...rows.map(({ id }) => id), ...this.x.launching.keys()]),
+    ]
+      .sort((a, b) => a - b)
+      .map((id) => `t${id}`);
+  }
+
+  async resumeQueue() {
+    if (!this.closed && !this.restartPending)
+      while ((await this.x.drain()) > 0) {
+        /* each pass removes at least one entry */
+      }
   }
 
   // ---- 派活 ----
@@ -159,6 +199,10 @@ export class TaskRunner {
       throw error;
     }
     const tool = chosen.worker.tool;
+    if (this.restartPending) {
+      this.x.launching.delete(id);
+      return this.enqueue(task, chosen, "等待重启；重启完成后自动派发");
+    }
     if (chosen.waitUntil !== undefined) {
       this.x.launching.delete(id);
       return this.enqueue(

@@ -20,6 +20,7 @@ import {
 } from "./service-state.ts";
 import { ensureWebDist } from "./web-dist.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
+import { readRestartState } from "./supervisor.ts";
 
 async function request(record: ServiceRecord, stop = false) {
   const response = await fetch(
@@ -36,6 +37,11 @@ async function request(record: ServiceRecord, stop = false) {
     instance?: string;
     pid?: number;
     stopping?: boolean;
+    idle_restart?: {
+      pending: boolean;
+      running: string[];
+      deadline: number;
+    } | null;
   };
   if (result.instance !== record.instance || result.pid !== record.pid)
     throw new Error("服务身份不匹配");
@@ -106,9 +112,14 @@ export async function serviceStatus(data: string) {
     console.log(`Atrium 未运行\n数据：${data}`);
     return;
   }
-  if (!(await ready(record))) throw await unavailableReason(record, data);
+  const current = await request(record).catch(() => {
+    throw unavailable(record, data);
+  });
+  if (current.stopping) throw await unavailableReason(record, data);
+  const idle = current.idle_restart;
+  const timedOut = readRestartState(data);
   console.log(
-    `Atrium 正在运行 · PID ${record.pid}\n${serviceUrl(record)}\n数据：${data}\n日志：${join(data, "service.log")}（后台启动）`,
+    `Atrium 正在运行 · PID ${record.pid}\n${serviceUrl(record)}\n数据：${data}\n日志：${join(data, "service.log")}（后台启动）${idle?.pending ? `\n待重启：还有 ${idle.running.length} 个执行者在跑${idle.running.length ? `（${idle.running.join("、")}）` : ""}` : timedOut?.status === "idle_timeout" ? `\n待重启超时：超时时仍在运行 ${timedOut.remainingTasks?.join("、") || "未知"}；未强制停止` : ""}`,
   );
 }
 export async function stopService(data: string) {

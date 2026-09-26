@@ -157,6 +157,8 @@ atrium promote 旧记录                          # 旧记录升级为长期身�
 atrium update                                # 安装最新 GitHub 标签及其锁定的 pi-atrium；不重启
 atrium update --to 0.1.15                    # 指定版本，也可退回旧版本
 atrium restart                               # 异步平滑重启；默认最多等待当前 Agent 回合 5 分钟
+atrium restart --when-idle                   # 停止派发新执行者，现有执行者全结束后自动平滑重启；默认等 30 分钟
+atrium restart --when-idle --timeout 3600    # 最多等 3600 秒；超时仅报告仍在跑的任务，不强制停止
 atrium restart --agent-timeout 600000        # 回合可能更长时先设排空期限（毫秒，最长 2 小时）
 atrium restart --wait                        # 默认最多等 300 秒，超时不取消后台重启，可再运行本命令查询
 atrium restart --probe-agent a1              # 可选：再用指定身份做一轮真实模型验证；模型失败会触发回滚

@@ -62,10 +62,11 @@ const updateCommand: Command = {
 };
 
 const restartCommand: Command = {
-  args: "[--wait] [--timeout <秒>] [--agent-timeout <毫秒>]",
-  about: "平滑重启 Atrium 服务，等待当前回合结束并自动回滚失败",
+  args: "[--when-idle] [--wait] [--timeout <秒>] [--agent-timeout <毫秒>]",
+  about: "平滑重启 Atrium 服务；--when-idle 等执行者空闲后自动重启",
   options: {
     wait: { type: "boolean", default: false },
+    "when-idle": { type: "boolean", default: false },
     timeout: { type: "string" },
     data: { type: "string" },
     "probe-agent": { type: "string" },
@@ -77,6 +78,7 @@ const restartCommand: Command = {
     await restart(
       values as {
         wait?: boolean;
+        "when-idle"?: boolean;
         timeout?: string;
         data?: string;
         "probe-agent"?: string;
@@ -108,7 +110,7 @@ const service: [usage: string, about: string][] = [
   ["atrium open", "生成一次性登录链接并打开 Web；--print 仅打印链接"],
   ["atrium status", "查看服务状态、地址和数据目录"],
   ["atrium stop", "停止服务及其托管的 Agent，保留数据"],
-  ["atrium restart", "平滑重启服务，保持运行状态并自动回滚失败"],
+  ["atrium restart", "平滑重启服务；--when-idle 等执行者空闲后重启"],
   ["atrium update", "检查并更新 Atrium 版本；--to 指定目标版本"],
 ];
 const usage = "用法：atrium [命令] …；atrium --help 列出全部命令";

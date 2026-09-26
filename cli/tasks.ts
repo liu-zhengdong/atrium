@@ -51,6 +51,19 @@ function existing(value: string, flag: string, kind: "file" | "directory") {
   return path;
 }
 
+function queuedReason(events: TaskEventRow[]) {
+  const detail = events.findLast((event) => event.kind === "queued")?.detail;
+  if (detail) {
+    try {
+      const reason = (JSON.parse(detail) as { reason?: unknown }).reason;
+      if (typeof reason === "string") return reason;
+    } catch {
+      /* malformed historical event: use the generic receipt */
+    }
+  }
+  return "等待执行者可用后自动拉起";
+}
+
 const line = (task: TaskNode) =>
   [
     task.ref,
@@ -340,13 +353,14 @@ const run: Command = {
     }
     const result = await (
       await client()
-    ).post<{ task: Task; queued: boolean }>(`/tasks/${id}/run`, body);
+    ).post<{ task: Task & { events: TaskEventRow[] }; queued: boolean }>(
+      `/tasks/${id}/run`,
+      body,
+    );
     const { task } = result;
     if (json) printJson(result);
     else if (result.queued)
-      console.log(
-        `${task.ref} 排队中：同一执行者同一时刻只跑一个，前一个结束后自动拉起`,
-      );
+      console.log(`${task.ref} 排队中：${queuedReason(task.events)}`);
     else
       console.log(
         `已派 ${task.ref} 给 ${task.worker}（PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,

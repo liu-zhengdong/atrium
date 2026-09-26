@@ -98,7 +98,8 @@ export class QuotaGuard {
       const tool = choice.worker.tool;
       if (
         choice.waitUntil !== undefined ||
-        (ADAPTERS[tool].exclusive && x.busy(tool, active.id))
+        (ADAPTERS[tool].exclusive && x.busy(tool, active.id)) ||
+        x.isPaused()
       )
         return this.park(x, active, choice, base, fresh);
       await this.switchTo(x, active, choice, base, fresh);
@@ -148,8 +149,9 @@ export class QuotaGuard {
       risk: choice.risk,
       queued_at: Date.now(),
     });
-    const wait =
-      choice.waitUntil === undefined
+    const wait = x.isPaused()
+      ? "等待重启；重启完成后自动派发"
+      : choice.waitUntil === undefined
         ? `${choice.worker.tool} 正忙，空出来后派给 ${choice.worker.id}`
         : `等到 ${clock(choice.waitUntil)} 额度恢复后派给 ${choice.worker.id}`;
     noteTask(db, active.id, "queued", {

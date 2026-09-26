@@ -112,7 +112,7 @@ export async function startApp(
   const fx = fixture(t);
   tweak?.(fx);
   const data = join(fx.root, "data");
-  const { app } = await createApp({
+  const { app, taskRunner } = await createApp({
     data,
     runtime: false,
     auth: false,
@@ -139,5 +139,5 @@ export async function startApp(
     });
     return { status: response.statusCode, body: response.json() };
   };
-  return { fx, data, call };
+  return { fx, data, call, app, taskRunner };
 }

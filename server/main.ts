@@ -16,6 +16,7 @@ import {
 } from "./service-state.ts";
 import { ensureWebDist } from "./web-dist.ts";
 import { readRestartState, writeRestartState } from "./supervisor.ts";
+import { IdleRestart } from "./tasks/idle-restart.ts";
 
 await ensureWebDist(packageRoot);
 const data = dataDirectory();
@@ -24,6 +25,7 @@ let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;
 // #205：启动失败的收尾要拿到这两者来终止启动期子进程，声明提到 try 外。
 let runtimes: Awaited<ReturnType<typeof createApp>>["runtimes"] | undefined;
 let accounts: Awaited<ReturnType<typeof createApp>>["accounts"] | undefined;
+let idleRestart: IdleRestart | undefined;
 let stopping = false;
 let shutdownStarted = false;
 // #231：排空完成后上一个 supervisor 可能失联；保留唤醒名单，让接替的
@@ -47,6 +49,7 @@ const shutdown = async () => {
   shutdownStarted = true;
   stopping = true;
   clearDrainWatch();
+  idleRestart?.close();
   try {
     await app?.close();
     lease.release();
@@ -68,11 +71,16 @@ try {
   console.log(`Pi 模板：${template.path}（来源：${template.source}）`);
   let store: Awaited<ReturnType<typeof createApp>>["store"];
   let runnerAuth: Awaited<ReturnType<typeof createApp>>["runnerAuth"];
-  ({ app, runtimes, accounts, store, runnerAuth } = await createApp({
-    data,
-    webRoot: join(packageRoot, "dist"),
-    controlToken: lease.record.token,
-  }));
+  let taskRunner: Awaited<ReturnType<typeof createApp>>["taskRunner"];
+  ({ app, runtimes, accounts, store, runnerAuth, taskRunner } = await createApp(
+    {
+      data,
+      webRoot: join(packageRoot, "dist"),
+      controlToken: lease.record.token,
+    },
+  ));
+  if (taskRunner)
+    idleRestart = new IdleRestart(data, taskRunner, undefined, () => !stopping);
   const bridge = new RunnerBridge(
     app.server,
     (token) => runnerAuth.authenticateRunner(`Bearer ${token}`),
@@ -132,9 +140,23 @@ try {
     stopping,
     version: currentVersion(),
     userAuth: "user-v1",
+    idle_restart: idleRestart?.status() ?? null,
   });
   app.get("/api/service", () => {
     return status();
+  });
+  app.post("/api/service/restart-when-idle", (request, reply) => {
+    const timeout = (request.body as { timeout?: unknown } | undefined)
+      ?.timeout;
+    if (
+      !Number.isInteger(timeout) ||
+      (timeout as number) < 1000 ||
+      (timeout as number) > 7_200_000
+    )
+      return reply.code(400).send({ error: "--timeout 必须为 1–7200 秒" });
+    if (!idleRestart || stopping)
+      return reply.code(409).send({ error: "服务正在关闭或任务运行时不可用" });
+    return idleRestart.schedule(timeout as number);
   });
   // 发起排空的 supervisor：请求体带 PID；旧版 supervisor 不带时参考 restart-state。
   const drainOwner = (value: unknown): number | null => {
@@ -313,6 +335,7 @@ try {
     return status();
   });
   await app.listen({ port: lease.record.port, host: "127.0.0.1" });
+  idleRestart?.start();
   console.log(`Atrium → ${serviceUrl(lease.record)}\n数据：${data}`);
 } catch (error) {
   console.error(error);

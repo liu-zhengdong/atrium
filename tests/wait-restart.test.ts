@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -445,6 +446,109 @@ test("--idle 真断开：body 读不出来当断连重连，不误报空闲", as
   );
   assert.equal(result.timed_out, false);
   assert.equal(typeof result.finished_at, "number");
+});
+
+test("--idle 崩溃间隙：runtime_pid 活着但没接上时继续等，接上后按真实状态返回", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-unbound-"));
+  const { app, store, runtimes, pendingWaits } = await createApp({
+    auth: false,
+    data,
+    desktops: join(data, "desktops"),
+    piHome: join(data, "pi"),
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const pi = spawn("sleep", ["60"]);
+  t.after(async () => {
+    app.server.closeAllConnections();
+    await app.close();
+    pi.kill("SIGKILL");
+    rmSync(data, { recursive: true, force: true });
+  });
+  const origin = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
+  const agent = store.createAgent("未接上身份", data).agent;
+  const chat = store.createChat("唤醒", [agent.id], agent.id);
+  // 模拟崩溃后的新服务：存储里 runtime_pid 还活着（Pi 没死），连接还没接上。
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  db.prepare("UPDATE agents SET runtime_pid=? WHERE id=?").run(
+    pi.pid!,
+    agent.id,
+  );
+  db.close();
+  writeFileSync(userTokenPath(data), "a".repeat(64));
+  const wait = client(origin, data);
+  type RuntimeConnection =
+    NonNullable<typeof runtimes>["connections"] extends Map<string, infer T>
+      ? T
+      : never;
+  let settled = false;
+  const first = reconnectingWait<{
+    status: string;
+    finished_at: number | null;
+    timed_out: boolean;
+    restarting?: boolean;
+  }>({
+    seconds: 20,
+    request: (timeout) =>
+      wait.get(`/agents/${agent.id}/wait?timeout=${timeout}`),
+    restarting: (result) => result.restarting === true,
+    resume: () => `atrium wait ${agent.ref} --idle`,
+  }).then((result) => {
+    settled = true;
+    return result;
+  });
+  for (let i = 0; i < 50 && pendingWaits() !== 1; i++) await delay(100);
+  assert.equal(pendingWaits(), 1, "等待要先挂上");
+  await delay(500);
+  assert.equal(
+    settled,
+    false,
+    "进程还活着、没接上之前，--idle 既不能报空闲也不能报离线",
+  );
+  // 接上后按真实状态返回：这一轮并没在跑。
+  const entry: RuntimeConnection = {
+    connection: null as unknown as RuntimeConnection["connection"],
+    info: {
+      runtimeId: agent.id,
+      generation: agent.id,
+      sessionId: agent.id,
+      pid: pi.pid!,
+      ownerPid: null,
+      sessionFile: null,
+      cwd: data,
+      mode: "rpc" as const,
+      busy: false,
+      model: "test",
+    },
+  };
+  runtimes!.connections.set(agent.id, entry);
+  await fetch(`${origin}/api/chats/${chat.id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pinned: true }),
+  });
+  const result = await first;
+  assert.equal(result.status, "idle", "接上后按真实状态返回");
+  assert.equal(result.timed_out, false);
+  assert.equal(result.finished_at, null, "没观察到忙碌就不编造本轮结束");
+  // 进程没了才报离线。
+  runtimes!.connections.delete(agent.id);
+  pi.kill("SIGKILL");
+  for (let i = 0; i < 50 && alive(pi.pid!); i++) await delay(100);
+  assert.equal(alive(pi.pid!), false, "测试前提：进程要真的死掉");
+  const second = await reconnectingWait<{
+    status: string;
+    finished_at: number | null;
+    timed_out: boolean;
+    restarting?: boolean;
+  }>({
+    seconds: 10,
+    request: (timeout) =>
+      wait.get(`/agents/${agent.id}/wait?timeout=${timeout}`),
+    restarting: (result) => result.restarting === true,
+    resume: () => `atrium wait ${agent.ref} --idle`,
+  });
+  assert.equal(second.status, "offline", "进程没了才报离线");
+  assert.equal(second.timed_out, false);
 });
 
 test("reconnectingWait：断连与 restarting 都重连，耗尽给 503 与续等命令", async () => {

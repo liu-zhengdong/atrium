@@ -1270,37 +1270,52 @@ export async function createApp(options: {
     const q = waitQuery.pick({ timeout: true }).parse(request.query);
     const agentId = identityRef(request);
     store.agent(agentId);
-    const state = () => {
+    const state = (): "busy" | "idle" | "offline" | null => {
       const info = runtimes?.connections.get(agentId)?.info;
-      return info ? (info.busy ? "busy" : "idle") : "offline";
+      if (info) return info.busy ? "busy" : ("idle" as const);
+      // 进程还在、新服务还没接上：状态未定，继续等，不抢报离线。
+      if (runtimes?.running(agentId)) return null;
+      return "offline" as const;
     };
-    const initial = state();
+    let sawBusy = state() === "busy";
     const startedAt = Date.now();
-    const info = runtimes?.connections.get(agentId)?.info;
     longWait(
       reply,
       q.timeout,
       () => {
         const status = state();
-        if (status === "busy") return null;
-        const ended =
-          initial === "busy"
-            ? (info &&
-                store.one<{ at: number }>(
-                  "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
-                  agentId,
-                  info.runtimeId,
-                  info.generation,
-                  startedAt,
-                )?.at) ||
-              Date.now()
-            : null;
-        return { status, finished_at: ended, timed_out: false };
+        if (status === "busy") {
+          sawBusy = true;
+          return null;
+        }
+        // 没接上：既不能判空闲，也不能报离线，等下一次判定。
+        if (status === null) return null;
+        const info = runtimes?.connections.get(agentId)?.info;
+        const ended = sawBusy
+          ? (info &&
+              store.one<{ at: number }>(
+                "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
+                agentId,
+                info.runtimeId,
+                info.generation,
+                startedAt,
+              )?.at) ||
+            Date.now()
+          : null;
+        return {
+          status: status as "busy" | "idle" | "offline",
+          finished_at: ended,
+          timed_out: false,
+        };
       },
-      () => ({ status: state(), finished_at: null, timed_out: true }),
+      () => ({
+        status: state() ?? "offline",
+        finished_at: null,
+        timed_out: true,
+      }),
       // 关闭：状态照报，另标 restarting；重连方会按新的连接状态重新判定。
       () => ({
-        status: state(),
+        status: state() ?? "offline",
         finished_at: null,
         timed_out: true,
         restarting: true,

@@ -218,10 +218,12 @@ test("close 杀整组：挂死插件派生的孙进程随进程组一起死", as
   writeFileSync(
     join(plugin, "ext.mjs"),
     `import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 export default function hang() {
   const child = spawn("sleep", ["60"], { stdio: "ignore" });
-  writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+  const tmp = ${JSON.stringify(pidFile)} + ".tmp";
+  writeFileSync(tmp, String(child.pid));
+  renameSync(tmp, ${JSON.stringify(pidFile)});
   return new Promise(() => {});
 }
 `,

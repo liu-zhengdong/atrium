@@ -8,24 +8,32 @@ type InspectResult = {
   error?: Error;
 };
 type Inspect = (id: string) => InspectResult;
+export type ContainerOwner = {
+  containerId: string;
+  engineId: string;
+  imageId: string;
+  identityId: string;
+  generation: string;
+};
+export type DockerCommand = (args: string[]) => InspectResult;
 
-function dockerInspect(id: string): InspectResult {
-  const result = spawnSync(
-    "docker",
-    ["inspect", id, "--format", "{{json .State}}"],
-    {
-      encoding: "utf8",
-      timeout: 3000,
-      maxBuffer: 2048,
-      env: { PATH: process.env.PATH, HOME: process.env.HOME },
-    },
-  );
+function dockerCommand(args: string[]): InspectResult {
+  const result = spawnSync("docker", args, {
+    encoding: "utf8",
+    timeout: 3000,
+    maxBuffer: 8192,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
   return {
     status: result.status,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     error: result.error,
   };
+}
+
+function dockerInspect(id: string): InspectResult {
+  return dockerCommand(["inspect", id, "--format", "{{json .State}}"]);
 }
 
 /** A local PID is not proof about a detached Docker container. Missing Docker is unknown. */
@@ -66,4 +74,52 @@ export function mayReplaceContainerWriter(
   inspect: Inspect = dockerInspect,
 ) {
   return containerWriterVerdict(containerId, inspect) === "exited";
+}
+
+/** A missing ID proves exit only on the same Docker engine that created it.
+ * A found ID additionally needs the recorded identity, generation and image. */
+export function ownedContainerVerdict(
+  owner: ContainerOwner,
+  command: DockerCommand = dockerCommand,
+): ContainerVerdict {
+  const { containerId, engineId, imageId, identityId, generation } = owner;
+  if (
+    !/^[a-f0-9]{64}$/.test(containerId) ||
+    !engineId ||
+    !/^sha256:[a-f0-9]{64}$/.test(imageId) ||
+    !identityId ||
+    !generation
+  )
+    return "unknown";
+  const engine = command(["info", "--format", "{{.ID}}"]);
+  if (engine.error || engine.status !== 0 || engine.stdout.trim() !== engineId)
+    return "unknown";
+  const inspection = command([
+    "inspect",
+    containerId,
+    "--format",
+    '{"state":{{json .State}},"labels":{{json .Config.Labels}},"image":{{json .Image}}}',
+  ]);
+  if (inspection.error || inspection.status !== 0)
+    return containerWriterVerdict(containerId, () => inspection);
+  try {
+    const detail = JSON.parse(inspection.stdout) as {
+      state?: unknown;
+      labels?: Record<string, unknown>;
+      image?: unknown;
+    };
+    if (
+      detail.labels?.["atrium.identity"] !== identityId ||
+      detail.labels["atrium.runner-generation"] !== generation ||
+      detail.labels["atrium.image-id"] !== imageId ||
+      detail.image !== imageId
+    )
+      return "unknown";
+    return containerWriterVerdict(containerId, () => ({
+      ...inspection,
+      stdout: JSON.stringify(detail.state),
+    }));
+  } catch {
+    return "unknown";
+  }
 }

@@ -101,3 +101,102 @@ test("repeated restart retains newer-generation Pi evidence while an older orpha
   assert.equal(third.verdict("a1"), "alive");
   third.close();
 });
+
+test("容器 journal 在创建前记意图；未知、活跃或错代旧写者不能产生第二写者", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-runner-container-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "r1.state.json");
+  const containerId = "a".repeat(64);
+  const imageId = `sha256:${"b".repeat(64)}`;
+  const owners: string[] = [];
+  let verdict: "alive" | "unknown" | "exited" = "unknown";
+  const probe = (owner: {
+    containerId: string;
+    engineId: string;
+    imageId: string;
+    identityId: string;
+    generation: string;
+  }) => {
+    owners.push(`${owner.identityId}:${owner.generation}:${owner.containerId}`);
+    assert.equal(owner.engineId, "engine-1");
+    assert.equal(owner.imageId, imageId);
+    return verdict;
+  };
+  const first = new RunnerJournal(file, "gen-1", probe);
+  first.containerStarting("a1", "engine-1", imageId);
+  assert.match(readFileSync(file, "utf8"), /"containerId":null/);
+  first.close();
+  const uncertain = new RunnerJournal(file, "gen-2", probe);
+  assert.equal(uncertain.verdict("a1"), "unknown");
+  assert.equal(await uncertain.reclaim("a1", true), "unknown");
+  assert.throws(
+    () => uncertain.containerStarting("a1", "engine-1", imageId),
+    /旧身份写者/,
+  );
+  uncertain.clearPrevious();
+  assert.equal(uncertain.oldGeneration(), "gen-1");
+  uncertain.close();
+
+  // Crash after Docker create and before 'running': stored ID still protects it.
+  const createdFile = join(dir, "created.state.json");
+  const created = new RunnerJournal(createdFile, "generation-create", probe);
+  created.containerStarting("a1", "engine-1", imageId);
+  created.containerCreated("a1", containerId);
+  created.close();
+  verdict = "alive";
+  const afterCreate = new RunnerJournal(
+    createdFile,
+    "generation-after-create",
+    probe,
+  );
+  assert.equal(afterCreate.verdict("a1"), "alive");
+  assert.throws(
+    () => afterCreate.containerStarting("a1", "engine-1", imageId),
+    /旧身份写者/,
+  );
+  afterCreate.close();
+
+  // A separate journal records Docker create before start, then the live writer.
+  const recordedFile = join(dir, "r2.state.json");
+  const recorded = new RunnerJournal(recordedFile, "gen-1", probe);
+  recorded.containerStarting("a1", "engine-1", imageId);
+  recorded.containerCreated("a1", containerId);
+  verdict = "alive";
+  recorded.containerRunning("a1");
+  recorded.close();
+  const next = new RunnerJournal(recordedFile, "gen-3", probe);
+  assert.equal(next.verdict("a1"), "alive");
+  assert.equal(
+    await next.reclaim("a1", true),
+    "alive",
+    "operator assertion cannot replace Docker proof",
+  );
+  assert.throws(
+    () => next.containerStarting("a1", "engine-1", imageId),
+    /旧身份写者/,
+  );
+  verdict = "unknown";
+  assert.equal(next.verdict("a1"), "unknown");
+  assert.throws(
+    () => next.containerStarting("a1", "engine-1", imageId),
+    /旧身份写者/,
+  );
+  next.clearPrevious();
+  assert.equal(next.oldGeneration(), "gen-1");
+  verdict = "exited";
+  assert.equal(next.verdict("a1"), "exited");
+  next.containerStarting("a1", "engine-1", imageId);
+  assert.throws(() => next.containerCreated("a1", "bad-id"));
+  next.containerCreated("a1", containerId);
+  assert.throws(() => next.starting("a1"), /已有容器写者/);
+  assert.throws(() => next.running("a1", process.pid), /已有容器写者/);
+  assert.throws(() => next.containerRunning("a1"), /未证实/);
+  assert.throws(() => next.stopped("a1"), /容器需先确认/);
+  verdict = "alive";
+  next.containerRunning("a1");
+  assert.throws(() => next.containerStopped("a1"), /未证实退出/);
+  verdict = "exited";
+  next.containerStopped("a1");
+  assert.equal(owners.at(-1), `a1:gen-3:${containerId}`);
+  next.close();
+});

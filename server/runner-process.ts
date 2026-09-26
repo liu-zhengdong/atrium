@@ -9,6 +9,10 @@ import {
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import {
+  ownedContainerVerdict,
+  type ContainerOwner,
+} from "./container-writer-proof.ts";
 
 const processRef = z.object({
   pid: z.number().int().positive(),
@@ -16,10 +20,24 @@ const processRef = z.object({
 });
 export type ProcessRef = z.infer<typeof processRef>;
 export type ProcessVerdict = "exited" | "alive" | "unknown";
-const agentState = z.object({
+const hostState = z.object({
+  kind: z.literal("host").optional(), // absent in existing journals
   phase: z.enum(["starting", "running"]),
   pi: processRef.nullable(),
 });
+const containerState = z
+  .object({
+    kind: z.literal("container"),
+    phase: z.enum(["starting", "running"]),
+    containerId: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+    engineId: z.string().min(1).max(128),
+    imageId: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  })
+  .strict();
+const agentState = z.union([containerState, hostState]);
 const snapshot = z.object({
   generation: z.string(),
   daemon: processRef.nullable(),
@@ -76,15 +94,27 @@ export function priorVerdict(
   prior: Snapshot | null,
   agentId: string,
   probe = processStart,
+  containerProbe = ownedContainerVerdict,
 ): ProcessVerdict {
   if (!prior) return "unknown";
   const child = prior.agents[agentId];
-  // A known Pi process is the sole writer of this identity. Other identities
-  // may still run in the old gateway; they do not block this one's recovery.
-  if (child)
+  // Other identities may still run in the old gateway, but this writer must
+  // have exited. A PID never certifies the state of a Docker container.
+  if (child) {
+    if (child.kind === "container") {
+      if (!child.containerId) return "unknown";
+      return containerProbe({
+        containerId: child.containerId,
+        engineId: child.engineId,
+        imageId: child.imageId,
+        identityId: agentId,
+        generation: prior.generation,
+      });
+    }
     return child.phase === "running"
       ? processVerdict(child.pi, probe)
       : "unknown";
+  }
   // A claim made before its first start has no child. Check both old owners:
   // otherwise an old gateway could still start it after a disconnected socket.
   if (!prior.daemon || !prior.acp) return "unknown";
@@ -108,6 +138,9 @@ export class RunnerJournal {
   constructor(
     private file: string,
     generation: string,
+    private containerProbe: (
+      owner: ContainerOwner,
+    ) => ProcessVerdict = ownedContainerVerdict,
   ) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const lockFile = `${file}.lock.sqlite`;
@@ -187,14 +220,87 @@ export class RunnerJournal {
     this.persist();
   }
   starting(agentId: string) {
+    if (this.current.agents[agentId]?.kind === "container")
+      throw new Error("此身份已有容器写者记录");
     this.current.agents[agentId] = { phase: "starting", pi: null };
     this.persist();
   }
   running(agentId: string, pid: number) {
+    if (this.current.agents[agentId]?.kind === "container")
+      throw new Error("此身份已有容器写者记录");
     this.current.agents[agentId] = { phase: "running", pi: fingerprint(pid) };
     this.persist();
   }
+  /** Persist intent before Docker create. Until the ID is recorded, a crash
+   * leaves this identity locked rather than guessing whether a writer exists. */
+  containerStarting(agentId: string, engineId: string, imageId: string) {
+    if (this.current.agents[agentId])
+      throw new Error("此身份已有运行中的写者记录");
+    if (this.prior.length && this.verdict(agentId) !== "exited")
+      throw new Error("旧身份写者未证实退出，不能创建新容器");
+    this.current.agents[agentId] = containerState.parse({
+      kind: "container",
+      phase: "starting",
+      containerId: null,
+      engineId,
+      imageId,
+    });
+    this.persist();
+  }
+  /** Called immediately after create and before start; never infer ID from PID. */
+  containerCreated(agentId: string, containerId: string) {
+    const child = this.current.agents[agentId];
+    if (
+      child?.kind !== "container" ||
+      child.phase !== "starting" ||
+      child.containerId
+    )
+      throw new Error("容器启动顺序不合法");
+    child.containerId = z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .parse(containerId);
+    this.persist();
+  }
+  containerRunning(agentId: string) {
+    const child = this.current.agents[agentId];
+    if (
+      child?.kind !== "container" ||
+      !child.containerId ||
+      child.phase !== "starting"
+    )
+      throw new Error("容器启动顺序不合法");
+    if (this.containerVerdict(agentId, child) !== "alive")
+      throw new Error("容器未证实为本身份的运行中写者");
+    child.phase = "running";
+    this.persist();
+  }
+  containerStopped(agentId: string) {
+    const child = this.current.agents[agentId];
+    if (
+      child?.kind !== "container" ||
+      this.containerVerdict(agentId, child) !== "exited"
+    )
+      throw new Error("容器未证实退出，不能清除写者记录");
+    delete this.current.agents[agentId];
+    this.persist();
+  }
+  private containerVerdict(
+    agentId: string,
+    child: z.infer<typeof containerState>,
+  ) {
+    if (!child.containerId) return "unknown";
+    return this.containerProbe({
+      containerId: child.containerId,
+      engineId: child.engineId,
+      imageId: child.imageId,
+      identityId: agentId,
+      generation: this.current.generation,
+    });
+  }
   stopped(agentId: string) {
+    if (this.current.agents[agentId]?.kind === "container")
+      throw new Error("容器需先确认退出，不能清除写者记录");
     delete this.current.agents[agentId];
     this.persist();
   }
@@ -203,7 +309,9 @@ export class RunnerJournal {
   }
   verdict(agentId: string): ProcessVerdict {
     if (!this.prior.length) return "unknown";
-    const verdicts = this.prior.map((entry) => priorVerdict(entry, agentId));
+    const verdicts = this.prior.map((entry) =>
+      priorVerdict(entry, agentId, processStart, this.containerProbe),
+    );
     if (verdicts.includes("alive")) return "alive";
     return verdicts.includes("unknown") ? "unknown" : "exited";
   }
@@ -229,9 +337,14 @@ export class RunnerJournal {
   ): Promise<ProcessVerdict> {
     const verdict = this.verdict(agentId);
     if (verdict === "exited") return verdict;
+    // Only a same-engine, label-bound Docker inspection can clear a container
+    // writer. An operator assertion and SIGTERM to a host PID cannot do so.
+    if (this.prior.some((entry) => entry.agents[agentId]?.kind === "container"))
+      return verdict;
     const live = this.prior.flatMap((entry) => {
       const child = entry.agents[agentId];
-      return child?.phase === "running" &&
+      return child?.kind !== "container" &&
+        child?.phase === "running" &&
         child.pi &&
         processVerdict(child.pi) === "alive"
         ? [child.pi]

@@ -238,6 +238,12 @@ export async function prepareRun(
   };
 }
 
+/** 日志抬头里的参数：压成一行（抬头每行以 [atrium] 开头，摘要据此剔除），过长截断。 */
+export const shortArg = (arg: string) => {
+  const flat = arg.replace(/\s+/g, " ");
+  return flat.length > 80 ? `${flat.slice(0, 77)}…` : flat;
+};
+
 /**
  * 拉起执行者：独立进程组、白名单环境、stdout/stderr 直接写日志文件。
  * 上一次运行的日志改名留档，本次日志从抬头开始。
@@ -253,7 +259,7 @@ export async function spawnWorker(
     findExecutable(launch.command, env.PATH ?? "") ?? launch.command;
   writeFileSync(
     logFile,
-    `[atrium] ${taskRefText} · ${prepared.worker.id} · ${new Date().toISOString()}\n[atrium] cwd ${launch.cwd}\n[atrium] ${[command, ...launch.args.map((arg) => (arg.length > 80 ? `${arg.slice(0, 77)}…` : arg))].join(" ")}\n`,
+    `[atrium] ${taskRefText} · ${prepared.worker.id} · ${new Date().toISOString()}\n[atrium] cwd ${launch.cwd}\n[atrium] ${[command, ...launch.args.map(shortArg)].join(" ")}\n`,
     { mode: 0o600 },
   );
   const out = openSync(logFile, "a");

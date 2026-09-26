@@ -595,6 +595,8 @@ test("看门狗：假执行者零输出判卡死、按档案重试一次后失�
   );
   const waited = await call("GET", "/api/tasks/t1/wait?timeout=20");
   assert.equal(waited.body.task.status, "failed");
+  // 零输出的执行者没有摘要：日志抬头（含多行提示词参数）不能混进 result。
+  assert.equal(waited.body.task.result, "");
   const kinds = getTask(db, "t1").events.map((event) => event.kind);
   assert.deepEqual(
     kinds.filter((kind) => ["start", "stalled", "exit_fail"].includes(kind)),

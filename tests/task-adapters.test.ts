@@ -76,6 +76,7 @@ test("适配器：各工具的真实调用参数", () => {
         "run",
         "--format",
         "json",
+        "--auto",
         "-m",
         "opencode-go/mimo-v2.6-flash",
         "--",

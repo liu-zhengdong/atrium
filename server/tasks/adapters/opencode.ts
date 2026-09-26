@@ -2,7 +2,9 @@ import { DEFAULT_WATCHDOG, checkCommon, type Adapter } from "./types.ts";
 
 /**
  * opencode run（`opencode run --help` 核对）：message 为位置参数、-m provider/model、
- * --variant 为模型变体（厂商自定的思考强度）。不加 --auto：权限按用户的 opencode 配置放行。
+ * --variant 为模型变体（厂商自定的思考强度）。加 --auto：非交互时任何一次权限被拒 opencode 都会
+ * 直接结束运行（09-27 实测：读 ~/.gitconfig 被拒后零提交退出），与其他执行者的全放行一致；
+ * 敏感路径由用户 opencode 配置里的 deny 规则兜底（--auto 不覆盖明确拒绝）。
  * 非交互时访问工作目录外会被拒，所以进程 cwd 就是工作目录。
  * --format json 每步实时输出 step_start / tool_use / step_finish 事件，作为看门狗的进展信号。
  * 拉起时环境里不能带 HERDR_*：herdr 状态插件会用继承来的窗格号连 herdr，卡在 init、零步骤。
@@ -27,7 +29,7 @@ export const opencode: Adapter = {
   ],
   build(input) {
     checkCommon(opencode, input);
-    const args = ["run", "--format", "json"];
+    const args = ["run", "--format", "json", "--auto"];
     if (input.model) args.push("-m", input.model);
     if (input.effort) args.push("--variant", input.effort);
     // 以 -- 结束选项，防止以 - 开头的提示词被当成参数。

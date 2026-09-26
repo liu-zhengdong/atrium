@@ -8,6 +8,7 @@ import {
   rmSync,
   existsSync,
   symlinkSync,
+  readdirSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -58,6 +59,31 @@ test("supervisor 状态读写正确保持持久化", () => {
     });
     assert.equal(readRestartState(dir)?.status, "success");
     assert.equal(readRestartState(dir)?.newPid, 12345);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("损坏的待重启状态被挪开，后续请求可重新写入", () => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-bad-restart-"));
+  try {
+    writeFileSync(join(dir, "restart-state.json"), '{"status":"waiting_idle"}');
+    assert.equal(readRestartState(dir), null);
+    assert.ok(
+      readdirSync(dir).some((name) =>
+        name.startsWith("restart-state.json.invalid-"),
+      ),
+    );
+    const state = {
+      id: "rst-next",
+      status: "success" as const,
+      supervisorPid: 0,
+      startedAt: Date.now(),
+      fromVersion: "0.1.0",
+      data: dir,
+    };
+    writeRestartState(dir, state);
+    assert.deepEqual(readRestartState(dir), state);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

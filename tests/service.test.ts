@@ -31,6 +31,8 @@ import {
 import { openWeb } from "../server/service.ts";
 import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
+import { fixture as workerFixture, until } from "./task-fixture.ts";
+import { readRestartState } from "../server/supervisor.ts";
 
 const exec = promisify(execFile);
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
@@ -226,6 +228,74 @@ test(
       })
     ).json()) as { agents: { id: string }[] };
     assert.equal(overview.agents[0]?.id, agent.id);
+  },
+);
+
+test(
+  "全局命令安排空闲重启：运行时显示待重启，停止假执行者后自动重启并续派",
+  { timeout: 60_000 },
+  async (t) => {
+    const f = await fixture(t);
+    const worker = workerFixture(t);
+    writeFileSync(
+      join(worker.workers, "harness", "grok.md"),
+      "---\nlimits: {startup_minutes: 10}\n---\n",
+    );
+    f.env.ATRIUM_WORKERS_DIR = worker.workers;
+    f.env.PATH = worker.env.PATH;
+    f.env.HOME = worker.env.HOME;
+    assert.equal((await f.cli("--no-open")).code, 0);
+    const record = readService(f.data)!;
+    const create = async (title: string) => {
+      const response = await fetch(`${serviceUrl(record)}/api/tasks`, {
+        method: "POST",
+        headers: { ...f.userHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ title, repo: worker.repo }),
+      });
+      assert.equal(response.status, 201, await response.text());
+    };
+    await create("long");
+    await create("next");
+    const running = await f.cli("task", "run", "t1", "--worker", "grok");
+    assert.equal(running.code, 0, running.stderr);
+    const bad = await f.cli("restart", "--when-idle", "--timeout", "bad");
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.stderr, /--timeout/);
+    const scheduled = await f.cli("restart", "--when-idle", "--timeout", "20");
+    assert.equal(scheduled.code, 0, scheduled.stderr);
+    assert.match((await f.cli("status")).stdout, /待重启：还有 1 个执行者在跑/);
+    const queued = await f.cli("task", "run", "t2", "--worker", "opencode");
+    assert.equal(queued.code, 0, queued.stderr);
+    assert.match(queued.stdout, /等待重启/);
+    assert.equal((await f.cli("task", "stop", "t1")).code, 0);
+    await until(() => readRestartState(f.data)?.status === "success", 30_000);
+    const newer = readService(f.data)!;
+    assert.notEqual(newer.instance, record.instance);
+    await until(() => {
+      const db = new DatabaseSync(join(f.data, "atrium.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        return !!db
+          .prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind=?")
+          .get(2, "start");
+      } finally {
+        db.close();
+      }
+    }, 15_000);
+    await until(() => {
+      const db = new DatabaseSync(join(f.data, "atrium.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        return (
+          db.prepare("SELECT status FROM tasks WHERE id=?").get(2)?.status !==
+          "running"
+        );
+      } finally {
+        db.close();
+      }
+    }, 15_000);
   },
 );
 
@@ -434,6 +504,7 @@ test(
     for (const path of [
       "/api/service/stop",
       "/api/service/prepare-restart",
+      "/api/service/restart-when-idle",
       "/api/service/probe",
       "/api/service/wake",
     ])

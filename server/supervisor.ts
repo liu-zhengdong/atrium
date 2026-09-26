@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import {
   closeSync,
@@ -6,6 +7,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   writeFileSync,
   unlinkSync,
 } from "node:fs";
@@ -25,6 +27,8 @@ import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { Store, Problem } from "./store.ts";
 
 export type RestartStatus =
+  | "waiting_idle"
+  | "idle_timeout"
   | "stopping"
   | "starting"
   | "checking"
@@ -50,6 +54,8 @@ export type RestartState = {
   failedVersion?: string;
   rollbackVersion?: string;
   finishedAt?: number;
+  idleDeadline?: number;
+  remainingTasks?: string[];
 };
 
 export function restartStatePath(data: string): string {
@@ -60,8 +66,40 @@ export function readRestartState(data: string): RestartState | null {
   const path = restartStatePath(data);
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as RestartState;
-  } catch {
+    const state = JSON.parse(
+      readFileSync(path, "utf8"),
+    ) as Partial<RestartState>;
+    if (
+      !state ||
+      typeof state.id !== "string" ||
+      ![
+        "waiting_idle",
+        "idle_timeout",
+        "stopping",
+        "starting",
+        "checking",
+        "success",
+        "rolling_back",
+        "rolled_back",
+        "failed",
+      ].includes(state.status ?? "") ||
+      !Number.isSafeInteger(state.supervisorPid) ||
+      !Number.isSafeInteger(state.startedAt) ||
+      typeof state.fromVersion !== "string" ||
+      typeof state.data !== "string" ||
+      (state.status === "waiting_idle" &&
+        !Number.isSafeInteger(state.idleDeadline))
+    )
+      throw new Error("字段无效");
+    return state as RestartState;
+  } catch (error) {
+    try {
+      const preserved = `${path}.invalid-${Date.now()}-${process.pid}`;
+      renameSync(path, preserved);
+      console.warn(`重启状态记录损坏，已移至 ${preserved}：${String(error)}`);
+    } catch (moveError) {
+      console.warn(`重启状态记录损坏且无法挪开 ${path}：${String(moveError)}`);
+    }
     return null;
   }
 }
@@ -69,7 +107,17 @@ export function readRestartState(data: string): RestartState | null {
 export function writeRestartState(data: string, state: RestartState): void {
   mkdirSync(data, { recursive: true, mode: 0o700 });
   const path = restartStatePath(data);
-  writeFileSync(path, JSON.stringify(state, null, 2), "utf8");
+  const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temp, JSON.stringify(state, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    renameSync(temp, path);
+  } finally {
+    if (existsSync(temp)) unlinkSync(temp);
+  }
 }
 
 export async function checkServiceHealth(
@@ -488,7 +536,8 @@ export async function waitForRestart(
       if (
         state.status === "success" ||
         state.status === "rolled_back" ||
-        state.status === "failed"
+        state.status === "failed" ||
+        state.status === "idle_timeout"
       ) {
         return state;
       }

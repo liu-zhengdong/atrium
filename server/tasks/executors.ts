@@ -14,7 +14,7 @@ import {
 import { publishTask } from "./notice.ts";
 import { exitDetail, type Exit } from "./outcome.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
-import { dequeue, heads } from "./queue.ts";
+import { dequeue, enqueue, heads } from "./queue.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, settle } from "./settle.ts";
 import { alive, signalGroup, spawnWorker } from "./spawn.ts";
@@ -40,6 +40,7 @@ export type ExecutorContext = {
   quota: QuotaGuard;
   killGraceMs?: number;
   closed: () => boolean;
+  paused: () => boolean;
 };
 
 export class Executors {
@@ -49,6 +50,10 @@ export class Executors {
   private ticking = false;
 
   constructor(private readonly ctx: ExecutorContext) {}
+
+  isPaused() {
+    return this.ctx.paused();
+  }
 
   busy(tool: Tool, except?: number) {
     for (const active of this.active.values())
@@ -201,13 +206,24 @@ export class Executors {
       // 重试或换执行者重派后，表里已是新的一轮，别删掉。
       if (this.active.get(id) === active) this.active.delete(id);
       this.ctx.waits.changed(id);
-      if (!this.ctx.closed()) void this.drain(active.tool);
+      if (!this.ctx.closed() && !this.ctx.paused())
+        void this.drain(active.tool);
     }
   }
 
   private async retry(active: Active, reason: string) {
     this.publish(active.id, "stalled", { reason, retry: true });
     this.active.delete(active.id);
+    if (this.ctx.paused()) {
+      this.advance(
+        active.id,
+        { kind: "manual_set", to: "todo" },
+        {},
+        "等待重启后重派",
+      );
+      this.park(active.id, active.worker.id, active.tool, active.risk);
+      return;
+    }
     try {
       await this.launch(
         active.id,
@@ -270,11 +286,16 @@ export class Executors {
 
   /** 拉起排队中的任务：每个工具的队首，前提是独占工具空闲、账号额度标记已解除；返回出队几个。 */
   async drain(tool?: Tool) {
+    if (this.ctx.paused()) return 0;
     const held = this.ctx.quota.held();
     let moved = 0;
     for (const entry of heads(this.ctx.db, tool)) {
       const entryTool = entry.tool as Tool;
-      if (this.ctx.closed() || held.has(ADAPTERS[entryTool].quotaProvider))
+      if (
+        this.ctx.closed() ||
+        this.ctx.paused() ||
+        held.has(ADAPTERS[entryTool].quotaProvider)
+      )
         continue;
       if (ADAPTERS[entryTool].exclusive && this.busy(entryTool)) continue;
       dequeue(this.ctx.db, entry.task_id);
@@ -303,5 +324,20 @@ export class Executors {
       }
     }
     return moved;
+  }
+
+  private park(id: number, worker: string, tool: Tool, risk: Risk) {
+    enqueue(this.ctx.db, {
+      task_id: id,
+      worker,
+      tool,
+      risk,
+      queued_at: Date.now(),
+    });
+    noteTask(this.ctx.db, id, "queued", {
+      worker,
+      reason: "等待重启；重启完成后自动派发",
+    });
+    this.ctx.waits.changed(id);
   }
 }

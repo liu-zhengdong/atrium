@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { Accounts } from "../server/accounts.ts";
+import { probeTmux } from "./probe-tmux.mjs";
 
 export async function verifyIdentity({
   folder,
@@ -49,19 +50,21 @@ export async function verifyIdentity({
     ATRIUM_PI_HOME: join(folder, ".pi"),
   };
   const shell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+  // 探针专用 tmux server：会话与环境都来自探针，不碰用户默认 server。
+  const tmux = probeTmux(folder);
   // 每次 launch 换新名字：重 launch 只等 owner 文件释放，旧 tmux 会话可能还没退出，
   // 同名 new-session 会在同一个 tmux server 里撞出 duplicate session。
-  let tmux;
+  let session;
   const tmuxNames = new Set();
   let failed = false;
   const launch = () => {
-    tmux = `atrium-named-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    tmuxNames.add(tmux);
-    execFileSync("tmux", [
+    session = `atrium-named-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    tmuxNames.add(session);
+    tmux([
       "new-session",
       "-d",
       "-s",
-      tmux,
+      session,
       "-x",
       "100",
       "-y",
@@ -72,11 +75,11 @@ export async function verifyIdentity({
     ]);
   };
   const input = (text) => {
-    execFileSync("tmux", ["send-keys", "-t", tmux, "-l", text]);
-    execFileSync("tmux", ["send-keys", "-t", tmux, "Enter"]);
+    tmux(["send-keys", "-t", session, "-l", text]);
+    tmux(["send-keys", "-t", session, "Enter"]);
   };
   const pane = () =>
-    execFileSync("tmux", ["capture-pane", "-p", "-t", tmux, "-S", "-1000"], {
+    tmux(["capture-pane", "-p", "-t", session, "-S", "-1000"], {
       encoding: "utf8",
     });
   const owner = join(env.PI_ACP_DIR, "identities", `${agent.id}.json`);
@@ -249,7 +252,7 @@ export async function verifyIdentity({
     const capture = pane();
     writeFileSync(join(raw, "named-tui.txt"), capture, { mode: 0o400 });
     hashes.push({ name: "named-tui.txt", sha256: hash(capture) });
-    execFileSync("tmux", ["send-keys", "-t", tmux, "C-d"]);
+    tmux(["send-keys", "-t", session, "C-d"]);
     await wait(() => !existsSync(owner), "正常退出释放具名占用");
     await runtimes.pump(agent.id);
     launch();
@@ -270,7 +273,7 @@ export async function verifyIdentity({
       chat.id,
     );
     assert.notEqual(resumed.pid, first.pid);
-    execFileSync("tmux", ["send-keys", "-t", tmux, "C-d"]);
+    tmux(["send-keys", "-t", session, "C-d"]);
     await wait(() => !existsSync(owner), "第二次正常退出");
     await runtimes.pump(agent.id);
     await runtimes.start(agent.id);
@@ -322,11 +325,11 @@ export async function verifyIdentity({
     }
     throw error;
   } finally {
-    for (const name of tmuxNames) {
-      try {
-        execFileSync("tmux", ["kill-session", "-t", name]);
-      } catch {}
-    }
+    // 探针的 tmux server 是本次拉起的私有 server，kill-server 一并清掉全部会话，
+    // 不碰用户默认 server；tmuxNames 只用于失败时抓 pane。
+    try {
+      tmux(["kill-server"], { stdio: "ignore" });
+    } catch {}
     // 失败路径补清具名阶段产生的 socket：只删收集到的 endpoint，
     // 基线里的其他存活 runtime（以及真实身份正在用的）一律不碰。
     collectRuntimeIds();

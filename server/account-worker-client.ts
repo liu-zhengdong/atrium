@@ -1,4 +1,6 @@
 import { fork, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AccountFiles, Row } from "./account-files.ts";
 import type { ProviderEntry } from "../shared/providers.ts";
 import type { Validation } from "./account-validation.ts";
@@ -20,13 +22,32 @@ export function validationExitReason(input: {
   phase: string;
   elapsedMs: number;
   errorMessage?: string;
+  detail?: string;
   code: number | null;
 }): string {
   if (input.timedOut)
     return `校验超时：等了 ${Math.round(input.elapsedMs / 1000)} 秒未完成，卡在「${input.phase}」`;
-  if (input.errorMessage === "Provider 插件加载失败") return input.errorMessage;
+  if (input.errorMessage === "Provider 插件加载失败")
+    return input.detail
+      ? `${input.errorMessage}：${input.detail}`
+      : input.errorMessage;
   if (input.errorMessage) return `校验进程报错：${input.errorMessage}`;
   return `校验进程退出未返回结果（退出码 ${input.code ?? "?"}）`;
+}
+
+/** 超时归因到模板已装的插件清单（#230）。 */
+function templatePackageHint(directory: string): string {
+  try {
+    const settings = JSON.parse(
+      readFileSync(join(directory, "settings.json"), "utf8"),
+    ) as { packages?: (string | { source: string })[] };
+    const packages = (settings.packages ?? []).map((item) =>
+      typeof item === "string" ? item : item.source,
+    );
+    return packages.length ? `（模板插件：${packages.join("、")}）` : "";
+  } catch {
+    return "";
+  }
 }
 
 export class AccountWorker {
@@ -42,34 +63,64 @@ export class AccountWorker {
         {
           stdio: ["ignore", "ignore", "ignore", "ipc"],
           execArgv: [],
+          // 目录子进程也成组：超时和 stop 都整组杀，不给插件留孙进程（#230）。
+          detached: true,
           env: { ...process.env, PI_CODING_AGENT_DIR: directory },
         },
       );
       this.workers.add(child);
+      this.grouped.add(child);
       let result: ProviderEntry[] | undefined;
-      const timer = setTimeout(() => child.kill(), 30_000);
+      let detail: string | undefined;
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        this.killWorker(child);
+      }, 30_000);
       child.on(
         "message",
         (message: {
           kind: string;
           providers?: ProviderEntry[];
           count?: number;
+          details?: string[];
+          detail?: string;
+          category?: string;
         }) => {
           if (message.kind === "list") result = message.providers;
           if (message.kind === "warning")
-            console.warn(`供应商目录跳过 ${message.count} 个加载失败的插件`);
+            console.warn(
+              `供应商目录跳过 ${message.count} 个加载失败的插件${
+                message.details?.length ? `：${message.details.join("；")}` : ""
+              }`,
+            );
+          if (message.kind === "error")
+            detail = message.detail ?? message.category;
         },
       );
       child.once("error", (error) => {
         clearTimeout(timer);
         this.workers.delete(child);
+        this.grouped.delete(child);
         reject(error);
       });
       child.once("exit", (code) => {
         clearTimeout(timer);
         this.workers.delete(child);
+        this.grouped.delete(child);
         if (code === 0 && result) resolve(result);
-        else reject(new Error("供应商目录加载失败"));
+        else if (timedOut)
+          reject(
+            new Error(
+              `供应商目录加载失败：等待 30 秒未完成，卡在「加载插件」${templatePackageHint(directory)}`,
+            ),
+          );
+        else
+          reject(
+            new Error(
+              `供应商目录加载失败${detail ? `：${detail}` : `（退出码 ${code ?? "?"}）`}`,
+            ),
+          );
       });
     });
   }
@@ -94,6 +145,7 @@ export class AccountWorker {
       let result: Validation | undefined;
       let phase = "加载插件";
       let errorMessage: string | undefined;
+      let detail: string | undefined;
       let timedOut = false;
       const startedAt = Date.now();
       const timer = setTimeout(() => {
@@ -108,6 +160,7 @@ export class AccountWorker {
           reason?: string;
           phase?: string;
           category?: string;
+          detail?: string;
         }) => {
           if (message.kind === "validation" && message.status)
             result = {
@@ -120,8 +173,10 @@ export class AccountWorker {
             message.kind === "error" &&
             message.category &&
             workerErrors.includes(message.category as WorkerError)
-          )
+          ) {
             errorMessage = message.category;
+            detail = message.detail;
+          }
         },
       );
       child.once("error", () => {
@@ -142,6 +197,7 @@ export class AccountWorker {
               phase,
               elapsedMs: Date.now() - startedAt,
               errorMessage,
+              detail,
               code,
             }),
           },

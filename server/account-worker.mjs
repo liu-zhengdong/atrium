@@ -12,6 +12,7 @@ process.env.PI_CODING_AGENT_DIR = directory;
 const send = (message) => process.send?.(message);
 let session;
 let failure = "未知错误";
+let failureDetail;
 try {
   let resourceLoader;
   let registrations = [];
@@ -40,8 +41,17 @@ try {
   });
   session = created.session;
   if (created.extensionsResult.errors.length) {
+    failureDetail = created.extensionsResult.errors
+      .map(({ path, error }) => `${path}: ${error}`)
+      .join("；");
     if (operation === "list")
-      send({ kind: "warning", count: created.extensionsResult.errors.length });
+      send({
+        kind: "warning",
+        count: created.extensionsResult.errors.length,
+        details: created.extensionsResult.errors.map(
+          ({ path, error }) => `${path}: ${error}`,
+        ),
+      });
     else {
       failure = "Provider 插件加载失败";
       throw new Error(failure);
@@ -153,6 +163,8 @@ try {
       failure === "Provider 插件加载失败"
         ? failure
         : classifyRefreshError(error),
+    // 插件失败带上原始错误（#230）；请求阶段的报文不经过这里，不会带出凭据。
+    detail: (failureDetail ?? String(error?.message ?? error)).slice(0, 600),
   });
   process.exitCode = 1;
 } finally {

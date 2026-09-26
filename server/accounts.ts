@@ -33,6 +33,7 @@ import {
   type CustomConfig,
 } from "./custom-providers.ts";
 import { setAccountModel } from "./account-models.ts";
+import type { ProviderEntry } from "../shared/providers.ts";
 import { Problem, type Store } from "./store.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { UNASSIGNED } from "./assignment.ts";
@@ -102,7 +103,14 @@ export class Accounts {
     );
   }
   async providersList() {
-    const builtIn = await this.providers.list();
+    let builtIn: ProviderEntry[];
+    try {
+      builtIn = await this.providers.list();
+    } catch (error) {
+      // 目录失败时把原因交给调用方，不再落进隐去细节的 500（#230）。
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Problem(400, `供应商目录不可用：${reason}`);
+    }
     return [
       ...builtIn.filter((entry) => entry.id !== LOCAL_PROVIDER),
       {
@@ -196,7 +204,10 @@ export class Accounts {
         `${entry.name} 拒绝了这个 API Key（${validationReason(validation.reason)}）`,
         "validation_failed",
       );
-    return { ...validation, reason: validationReason(validation.reason) };
+    return {
+      ...validation,
+      reason: validationReason(validation.reason, validation.status),
+    };
   }
   async addValidated(
     provider: string,
@@ -678,6 +689,10 @@ export class Accounts {
   }
   close() {
     return this.refreshService.close();
+  }
+  /** stop 直接整组杀校验/目录子进程，不等它们自己超时（#230）。 */
+  stopWorkers() {
+    this.worker.close();
   }
   login(provider: string, name: string) {
     return this.loginService.login(provider, name);

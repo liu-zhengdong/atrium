@@ -1615,6 +1615,8 @@ export async function createApp(options: {
   }
   app.addHook("preClose", async () => {
     revokeSubscriptions(true);
+    // 校验/目录子进程整组杀：stop 不再干等校验自己的 15 秒超时（#230）。
+    accounts.stopWorkers();
     await runtimes?.close();
   });
   app.addHook("onClose", async () => {

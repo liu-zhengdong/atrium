@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
 import { mergeProviders, methodsFor } from "../shared/providers.ts";
 import { defaultTemplate } from "./profile.ts";
@@ -60,14 +61,47 @@ function fingerprint(template: string) {
   ].join("|");
 }
 
+/** 内置供应商的静态条目：不执行模板插件也能判定存在性与方式（#230）。 */
+function builtinProviderEntry(provider: string): ProviderEntry | null {
+  const item = builtinProviders().find((entry) => entry.id === provider);
+  if (!item) return null;
+  return {
+    id: item.id,
+    name: item.name,
+    methods: [item.auth.oauth && "oauth", item.auth.apiKey && "api_key"].filter(
+      Boolean,
+    ) as ProviderMethod[],
+    packagePath: null,
+  };
+}
+
+/** 目录失败的冷却时间：插件挂死时每个请求都等 30 秒太贵，冷却期内直接给同一结论（#230）。 */
+const FAILURE_COOLDOWN = 60_000;
+
+type DirectoryFailure = {
+  fingerprint: string;
+  reason: string;
+  at: number;
+};
+
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class ProviderDirectory {
   private cache?: { fingerprint: string; providers: ProviderEntry[] };
+  private failure?: DirectoryFailure;
   private pending?: Promise<ProviderEntry[]>;
   constructor(private worker: Pick<AccountWorker, "list">) {}
   async list(): Promise<ProviderEntry[]> {
     const template = defaultTemplate();
     const current = fingerprint(template);
     if (this.cache?.fingerprint === current) return this.cache.providers;
+    if (
+      this.failure?.fingerprint === current &&
+      Date.now() - this.failure.at < FAILURE_COOLDOWN
+    )
+      throw new Error(this.failure.reason);
     if (this.pending) return this.pending;
     this.pending = this.worker
       .list(template)
@@ -76,7 +110,16 @@ export class ProviderDirectory {
           entries.filter((entry) => entry.methods.length),
         );
         this.cache = { fingerprint: current, providers };
+        this.failure = undefined;
         return providers;
+      })
+      .catch((error: unknown) => {
+        this.failure = {
+          fingerprint: current,
+          reason: reasonOf(error),
+          at: Date.now(),
+        };
+        throw error;
       })
       .finally(() => {
         this.pending = undefined;
@@ -87,11 +130,25 @@ export class ProviderDirectory {
     provider: string,
     method: ProviderMethod,
   ): Promise<ProviderEntry> {
-    const entry = (await this.list()).find((item) => item.id === provider);
-    if (!entry || !methodsFor(entry, method).length)
-      throw new Problem(400, `供应商不存在或不支持此方式：${provider}`);
-    if (entry.packagePath && !existsSync(entry.packagePath))
-      throw new Problem(400, `供应商插件不可用：${provider}`);
-    return entry;
+    // 内置供应商先按静态清单判定：模板插件挂死时，内置账号照常能加（#230）。
+    const builtin = builtinProviderEntry(provider);
+    if (builtin && methodsFor(builtin, method).length) return builtin;
+    try {
+      const entries = await this.list();
+      const entry = entries.find((item) => item.id === provider);
+      if (!entry || !methodsFor(entry, method).length)
+        throw new Problem(400, `供应商不存在或不支持此方式：${provider}`);
+      if (entry.packagePath && !existsSync(entry.packagePath))
+        throw new Problem(400, `供应商插件不可用：${provider}`);
+      return entry;
+    } catch (error) {
+      // 目录不可用时再看一次静态清单；插件供应商给出带原因的 400，不再落到被隐去细节的 500（#230）。
+      if (builtin && methodsFor(builtin, method).length) return builtin;
+      if (error instanceof Problem) throw error;
+      throw new Problem(
+        400,
+        `供应商插件不可用：${provider}（${reasonOf(error)}）`,
+      );
+    }
   }
 }

@@ -12,8 +12,12 @@ export type Validation = {
 };
 
 /** Preserve the service's useful message, not its JSON envelope or request metadata. */
-export function validationReason(reason?: string): string {
-  if (!reason) return "请求失败";
+export function validationReason(
+  reason?: string,
+  status?: Validation["status"],
+): string {
+  // 探针通过时没有附加说明，不能把「没理由」写成「请求失败」（#230）。
+  if (!reason) return status === "verified" ? "验证通过" : "请求失败";
   const match = reason.match(/\b(401|403)\s*:\s*(\{.*\})/s);
   if (!match) return reason;
   try {

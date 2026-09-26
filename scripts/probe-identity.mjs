@@ -50,8 +50,9 @@ export async function verifyIdentity({
     ATRIUM_PI_HOME: join(folder, ".pi"),
   };
   const shell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  // 探针专用 tmux server：会话与环境都来自探针，不碰用户默认 server。
-  const tmux = probeTmux(folder);
+  // 具名阶段自己的 tmux server（与 probe-pi 同一探针目录、不同 socket）：会话与环境都来自探针，
+  // 不碰用户默认 server；收尾 kill-server 也不会关掉 probe-pi 失败时还要抓现场的会话。
+  const tmux = probeTmux(folder, "identity-tmux.sock");
   // 每次 launch 换新名字：重 launch 只等 owner 文件释放，旧 tmux 会话可能还没退出，
   // 同名 new-session 会在同一个 tmux server 里撞出 duplicate session。
   let session;

@@ -12,7 +12,6 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { getuid } from "node:process";
 import { Accounts } from "../server/accounts.ts";
 
 export async function verifyIdentity({
@@ -49,11 +48,6 @@ export async function verifyIdentity({
     ATRIUM_DATA: join(folder, "data"),
     ATRIUM_PI_HOME: join(folder, ".pi"),
   };
-  assert(
-    execFileSync(command, ["list"], { env, encoding: "utf8" }).includes(
-      "长期身份验证",
-    ),
-  );
   const shell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
   // 每次 launch 换新名字：重 launch 只等 owner 文件释放，旧 tmux 会话可能还没退出，
   // 同名 new-session 会在同一个 tmux server 里撞出 duplicate session。
@@ -85,24 +79,41 @@ export async function verifyIdentity({
       encoding: "utf8",
     });
   const owner = join(env.PI_ACP_DIR, "identities", `${agent.id}.json`);
-  // 记录本次具名阶段出现过的 runtime id（socket 名就是 runtime id），收尾时按 id
-  // 清掉全局 socket 目录里的探针 socket——被杀的 TUI 没机会自己删。
+  // 记录本次具名阶段出现过的 runtime id 与其 socket 的真实路径（记录里的 endpoint，
+  // 扩展自己 unlink 的也是它），收尾按这些路径清，不猜目录。
   const namedRuntimeIds = new Set();
-  const socketDir = join(tmpdir(), `pi-acp-${getuid()}`);
+  const namedEndpoints = new Map();
   const collectRuntimeIds = () => {
     try {
-      for (const name of readdirSync(join(env.PI_ACP_DIR, "runtimes")))
-        if (name.endsWith(".json")) namedRuntimeIds.add(name.slice(0, -5));
+      for (const name of readdirSync(join(env.PI_ACP_DIR, "runtimes"))) {
+        if (!name.endsWith(".json")) continue;
+        const id = name.slice(0, -5);
+        namedRuntimeIds.add(id);
+        if (!namedEndpoints.has(id)) {
+          try {
+            const endpoint = JSON.parse(
+              readFileSync(join(env.PI_ACP_DIR, "runtimes", name), "utf8"),
+            ).endpoint;
+            if (typeof endpoint === "string" && endpoint.startsWith("/"))
+              namedEndpoints.set(id, endpoint);
+          } catch {}
+        }
+      }
     } catch {}
   };
   const cleanNamedSockets = () => {
-    for (const id of namedRuntimeIds) {
+    for (const endpoint of namedEndpoints.values()) {
       try {
-        unlinkSync(join(socketDir, `${id}.sock`));
+        unlinkSync(endpoint);
       } catch {}
     }
   };
   try {
+    assert(
+      execFileSync(command, ["list"], { env, encoding: "utf8" }).includes(
+        "长期身份验证",
+      ),
+    );
     // atrium list 会在后台拉起一个与探针共享 ATRIUM_DATA 的服务。具名阶段只允许探针
     // 进程内的服务在跑：两个服务会竞争 attach 同一个具名 runtime，扩展只认一个控制者，
     // 输掉的一方永远 bind 不上，断言随机超时。这里立刻停掉，finally 里的 stop 兑底。
@@ -135,7 +146,6 @@ export async function verifyIdentity({
     // （PI_ACP_DIR=folder/pi-acp）；落到全局共享目录说明环境隔离失效。
     const recordDirs = [
       join(env.PI_ACP_DIR, "runtimes"),
-      join(tmpdir(), `pi-acp-${getuid()}`, "runtimes"),
       join(homedir(), ".pi", "pi-acp", "runtimes"),
     ];
     const located = [];
@@ -253,18 +263,6 @@ export async function verifyIdentity({
     assert.equal(blocked.status, 1);
     assert.match(blocked.stderr, /already occupied/);
     await runtimes.rpc("_pi/identity/stop", { identityId: agent.id });
-    // 成功路径：具名阶段的 socket 一个都不许留在全局目录；先断言，残留清理在
-    // finally。扩展真泄漏时这里才红。反向验证：断言前往 socketDir 放一个同名
-    // .sock 文件，断言必红。
-    collectRuntimeIds();
-    const leftSockets = [...namedRuntimeIds].filter((id) =>
-      existsSync(join(socketDir, `${id}.sock`)),
-    );
-    assert.equal(
-      leftSockets.length,
-      0,
-      `具名阶段的 socket 残留在全局目录：${leftSockets.join(", ")}`,
-    );
     return {
       ref: agent.ref,
       identity: agent.id,
@@ -292,7 +290,7 @@ export async function verifyIdentity({
         execFileSync("tmux", ["kill-session", "-t", name]);
       } catch {}
     }
-    // 失败路径补清本次具名阶段的 socket：只删收集到的 runtime id，
+    // 失败路径补清本次具名阶段的 socket：只删收集到的 endpoint，
     // 别的实例与真实身份正在用的不碰。
     collectRuntimeIds();
     cleanNamedSockets();

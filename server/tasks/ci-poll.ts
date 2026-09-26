@@ -5,7 +5,7 @@ import { exec as defaultExec, type Exec } from "./git.ts";
 import { advanceTask, patchRunFields, taskRef, type Task } from "./ledger.ts";
 
 /**
- * CI 轮询（#262 外部事件源第一版）：只查账本里 ci=pending 且有 PR 的任务，每轮有上限。
+ * CI 轮询（#262 外部事件源第一版）：只查账本里 ci=pending、有 PR 且未完成或取消的任务，每轮有上限。
  * 出结果就写回 ci 并记事件；任务因「只差 CI」受阻时，CI 通过即补判验收通过（blocked → done）。
  */
 
@@ -42,7 +42,7 @@ export async function pollCiOnce(
 ): Promise<CiOutcome[]> {
   const rows = db
     .prepare(
-      "SELECT id,pr_url,status FROM tasks WHERE ci='pending' AND pr_url IS NOT NULL ORDER BY updated_at,id LIMIT ?",
+      "SELECT id,pr_url,status FROM tasks WHERE ci='pending' AND pr_url IS NOT NULL AND status NOT IN ('done','cancelled') ORDER BY updated_at,id LIMIT ?",
     )
     .all(batch) as Row[];
   const outcomes: CiOutcome[] = [];

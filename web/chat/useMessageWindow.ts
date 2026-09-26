@@ -42,6 +42,12 @@ export function useMessageWindow(
     anchorTo: "end",
     // -1 让「在末尾」的判定永不成立，见 holdEnd。
     scrollEndThreshold: holding ? -1 : BOTTOM_THRESHOLD,
+    // 行位置和总高度由虚拟列表直接写 DOM，尺寸观察回调里当场生效、在绘制之前（#232）。
+    // 这样回调里不必同步重渲染：可见范围变了才排一次普通渲染，新进入范围的行在回调之后挂载。
+    // 同步重渲染会在尺寸观察回调里挂载新行并观察它们，与正在派发的行同一深度，
+    // WebKit 因此报 ResizeObserver loop；把回调延到下一帧又会让位置晚一帧，出现错位闪动。
+    directDomUpdates: true,
+    useFlushSync: false,
   });
 
   /**

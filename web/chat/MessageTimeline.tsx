@@ -89,10 +89,8 @@ export function MessageTimeline({
           加载消息…
         </p>
       ) : (
-        <div
-          className="relative w-full"
-          style={{ height: virtualizer.getTotalSize() }}
-        >
+        // 总高度和各行的 translateY 由虚拟列表直接写入（directDomUpdates，见 useMessageWindow）。
+        <div ref={virtualizer.containerRef} className="relative w-full">
           {/* 顶部留白、翻页按钮和空态不进虚拟列表，实测高度就是列表起点 */}
           <div
             ref={headerRef}
@@ -131,7 +129,6 @@ export function MessageTimeline({
                 ref={virtualizer.measureElement}
                 // 下一条是同一个人的后续发言就收窄间距；间距计入本行高度，测量才准。
                 className={`absolute inset-x-0 top-0 ${continuations[row.index + 1] ? "pb-3" : "pb-5"}`}
-                style={{ transform: `translateY(${row.start}px)` }}
               >
                 <div className="mx-auto w-full max-w-[840px] px-6 max-[560px]:px-3">
                   {isSystemMessage(message) ? (

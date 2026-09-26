@@ -178,9 +178,11 @@ try {
         .send({ error: "timeout 必须为 1000–7200000 毫秒" });
     // #231：supervisor 在排空中途断开时中止排空、恢复运行，不再永久卡在
     // stopping；响应已发出后触发的 close 不影响结果。
+    // 必须监听响应而非请求：Node 16+ 的 IncomingMessage 在请求体读完时就发
+    // close，那样每次排空一开始就被中止，忙碌身份的 restart 立即 409。
     const drainAbort = new AbortController();
-    request.raw.once("close", () => {
-      if (!reply.sent) drainAbort.abort();
+    reply.raw.once("close", () => {
+      if (!reply.raw.writableEnded) drainAbort.abort();
     });
     let agentsToWake: string[];
     try {

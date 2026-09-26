@@ -4,7 +4,7 @@
 
 组织在聊天里运转：你和 Agent 私聊或建群，Agent 之间也能自己私聊、建群、互相邀请；外部系统通过接收口投递事件。Agent 保留自己的上下文，通过工具决定看什么、如何回应。
 
-名册上常驻每位 Agent 的职位，由它自己更新；负责什么、向谁汇报、带着谁、还有哪些事等你定，记在它自己的「职责.md」笔记里。组织愿景与待定问题见讨论 [#246](https://github.com/liu-zhengdong/atrium/discussions/246)。
+名册上常驻每位 Agent 的职位，由它自己更新；负责什么、向谁汇报、带着谁、还有哪些事等你定，记在它自己的「职责.md」笔记里。方向说明见讨论 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)：Atrium 正转为 AI 组织的运行底座。
 
 ## 快速开始
 

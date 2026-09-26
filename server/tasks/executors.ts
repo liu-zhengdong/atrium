@@ -19,6 +19,7 @@ import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, settle } from "./settle.ts";
 import { alive, signalGroup, spawnWorker } from "./spawn.ts";
 import type { TaskEvent } from "./state.ts";
+import { retryAfterTransient } from "./transient-runtime.ts";
 import type { TaskWaits } from "./waits.ts";
 import { judge } from "./watchdog.ts";
 import { prepareRun, type LaunchOptions } from "./workspace.ts";
@@ -56,6 +57,16 @@ export class Executors {
     for (const [id, launching] of this.launching)
       if (launching === tool && id !== except) return true;
     return false;
+  }
+
+  /** 已有任务在跑（或正在启动）的工具，except 除外；自动挑人时据此避开正忙的独占执行者。 */
+  busyTools(except?: number) {
+    const tools = new Set<Tool>();
+    for (const active of this.active.values())
+      if (active.id !== except && !active.exited) tools.add(active.tool);
+    for (const [id, launching] of this.launching)
+      if (launching && id !== except) tools.add(launching);
+    return tools;
   }
 
   publish(
@@ -159,6 +170,18 @@ export class Executors {
       if (outcome.quota)
         await this.ctx.quota.exhausted(this, active, outcome.quota);
       else if (decision.retry) await this.retry(active, decision.reason!);
+      else if (outcome.transient)
+        await retryAfterTransient(
+          this,
+          {
+            db: this.ctx.db,
+            launchOptions: this.ctx.launchOptions,
+            held: () => this.ctx.quota.held(),
+          },
+          active,
+          outcome.transient,
+          decision.reason ?? outcome.transient.reason,
+        );
       else
         this.publish(
           id,

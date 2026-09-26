@@ -25,6 +25,8 @@ export function settleFailure(
   if (!normalModelOutput(event)) return;
   if (!store.failure(id)) return;
   if (!afterFailure(traceId, store.failureTraceId(id))) return;
+  // 与回合结束的兜底清除一致：正常输出不能证明一条结果未知的投递已经送达。
+  if (store.uncertainDelivery(id)) return;
   store.clearFailure(id, true);
 }
 

@@ -1719,6 +1719,8 @@ export class Store {
   turnAfterFailure(id: string): boolean {
     const watermark = this.failureTraceId(id);
     if (watermark === null) return false;
+    // 投递结果未知要人工核对，新回合清不掉它，也不把它藏成「干活」。
+    if (this.uncertainDelivery(id)) return false;
     const started = this.one<{ id: number }>(
       `SELECT t.id AS id FROM runtime_turns r JOIN trace_actions t
          ON t.agent_id=r.agent_id AND t.runtime_id=r.runtime_id

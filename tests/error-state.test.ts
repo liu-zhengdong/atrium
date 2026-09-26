@@ -215,3 +215,52 @@ test("失败与恢复来回交替：计数、通知与重试间隔照实记下",
   assert.equal(notices(), 0, "没有待重试投递时不写通知");
   assert.equal(store.retryStatus(agent.id), null);
 });
+
+test("投递结果未知时，正常输出不清失败，重试回合也不藏起故障", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-error-uncertain-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = new Store(join(dir, "atrium.db"));
+  t.after(() => store.close());
+  const agent = store.createAgent("投递未知", dir).agent;
+  const chat = store.createChat("私聊", [agent.id], agent.id);
+  store.send(LOCAL_USER, { chat_id: chat.id, body: "请处理", mentions: [] });
+  const trace = new TraceStore(store);
+  const ledger = new TurnLedger(store);
+  const runtimeId = randomUUID(),
+    generation = randomUUID(),
+    sessionId = randomUUID();
+  let seq = 0;
+  const ingest = (
+    kind: RuntimeEventPage["items"][number]["kind"],
+    extra: object = {},
+  ) => {
+    const item = { seq: ++seq, at: Date.now(), kind, ...extra };
+    trace.ingest(
+      agent.id,
+      {
+        runtimeId,
+        generation,
+        sessionId,
+        items: [item],
+        nextAfter: seq,
+        hasMore: false,
+        gap: false,
+      },
+      (event, traceId) => {
+        ledger.ingest(agent.id, runtimeId, generation, event);
+        settleFailure(store, agent.id, event, traceId);
+      },
+    );
+  };
+  ingest("session");
+  const warning =
+    "投递结果未知：运行器连接中断；先核对轨迹和消息箱，再手动重试";
+  store.deliveryError(store.pending(agent.id)[0].id, warning);
+  store.setFailure(agent.id, warning);
+  assert.ok(store.uncertainDelivery(agent.id));
+  // 另一轮（如心跳或新消息）开始并正常输出：不能证明那条未知投递已送达。
+  ingest("run_start");
+  assert.equal(store.turnAfterFailure(agent.id), false, "不藏起投递未知");
+  ingest("message", { name: "assistant", text: "别的事情的正常输出" });
+  assert.equal(store.failure(agent.id)?.text, warning, "正常输出不清投递未知");
+});

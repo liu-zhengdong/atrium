@@ -2,6 +2,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import type { TaskStatus } from "./state.ts";
 import type { ChildSummary } from "./ledger-summary.ts";
+import type { Deliver } from "./deliver.ts";
 
 export type TaskRow = {
   id: number;
@@ -10,6 +11,8 @@ export type TaskRow = {
   brief_path: string | null;
   role: string | null;
   repo: string | null;
+  deliver: Deliver;
+  issue: number | null;
   status: TaskStatus;
   worker: string | null;
   pid: number | null;

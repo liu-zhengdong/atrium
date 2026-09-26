@@ -140,6 +140,8 @@ test("账本：建树、列表、详情、人工修正与执行者事件", () =>
   assert.equal(root.ref, "t1");
   assert.equal(root.title, "上线 任务账本");
   assert.equal(root.status, "todo");
+  assert.equal(root.deliver, "pr");
+  assert.equal(root.issue, null);
   const child = createTask(
     db,
     {
@@ -191,6 +193,10 @@ test("账本：建树、列表、详情、人工修正与执行者事件", () =>
   );
   assert.equal(running.status, "running");
   assert.equal(running.started_at, 2000);
+  assert.throws(
+    () => updateTask(db, "t2", { deliver: "none" }),
+    /执行中不能修改交付物类型/,
+  );
   assert.equal(listTasks(db, { status: "running" }).tasks.length, 1);
   assert.throws(
     () => advanceTask(db, "t2", { kind: "start" }),
@@ -328,6 +334,21 @@ test("账本：破坏输入在入口一处拒绝，数据不变", () => {
   );
   rejects(() => createTask(db, null), 400, /JSON 对象/);
   rejects(
+    () => createTask(db, { title: "设计", deliver: "comment" }),
+    400,
+    /--issue/,
+  );
+  rejects(
+    () => createTask(db, { title: "设计", deliver: "other" }),
+    400,
+    /deliver/,
+  );
+  rejects(
+    () => createTask(db, { title: "设计", deliver: "comment", issue: "0" }),
+    400,
+    /issue/,
+  );
+  rejects(
     () => updateTask(db, "t1", { status: "archived" }),
     400,
     /status: 只能是/,
@@ -353,6 +374,20 @@ test("账本：破坏输入在入口一处拒绝，数据不变", () => {
   // 表上的 CHECK 兜住绕过领域函数的写入。
   assert.throws(() =>
     db.prepare("UPDATE tasks SET status='archived' WHERE id=1").run(),
+  );
+  const design = createTask(db, {
+    title: "设计",
+    deliver: "comment",
+    issue: 262,
+  });
+  assert.equal(design.deliver, "comment");
+  assert.equal(design.issue, 262);
+  assert.match(renderTree(taskTree(db, design.ref).tasks)[0]!, /comment #262/);
+  assert.match(JSON.stringify(getTask(db, design.ref)), /"deliver":"comment"/);
+  rejects(() => updateTask(db, design.ref, { issue: null }), 400, /--issue/);
+  assert.equal(
+    updateTask(db, design.ref, { deliver: "none", issue: null }).deliver,
+    "none",
   );
 });
 
@@ -462,7 +497,17 @@ test("命令行缩进树：短号、状态、标题、执行者、PR", () => {
     title: string,
     extra: Record<string, unknown> = {},
     children: unknown[] = [],
-  ) => ({ ref, status, title, worker: null, pr_url: null, ...extra, children });
+  ) => ({
+    ref,
+    status,
+    title,
+    deliver: "pr",
+    issue: null,
+    worker: null,
+    pr_url: null,
+    ...extra,
+    children,
+  });
   const lines = renderTree([
     node("t1", "running", "目标", {}, [
       node(
@@ -479,9 +524,25 @@ test("命令行缩进树：短号、状态、标题、执行者、PR", () => {
     ]),
   ] as never);
   assert.deepEqual(lines, [
-    "t1 [running] 目标",
-    "  t2 [done] 子一 · codex · https://github.com/o/r/pull/7",
-    "    t4 [todo] 孙",
-    "  t3 [failed] 子二",
+    "t1 [running] 目标 · pr",
+    "  t2 [done] 子一 · pr · codex · https://github.com/o/r/pull/7",
+    "    t4 [todo] 孙 · pr",
+    "  t3 [failed] 子二 · pr",
   ]);
+});
+
+test("旧任务迁移后默认 PR 交付", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE tasks (id INTEGER PRIMARY KEY, parent_id INTEGER, title TEXT NOT NULL,
+    brief_path TEXT, role TEXT, repo TEXT, status TEXT NOT NULL, worker TEXT, pid INTEGER,
+    worktree TEXT, branch TEXT, pr_url TEXT, ci TEXT, result TEXT,
+    created_at INTEGER NOT NULL, started_at INTEGER, ended_at INTEGER, updated_at INTEGER NOT NULL)`);
+  db.exec(
+    "INSERT INTO tasks(id,title,status,created_at,updated_at) VALUES (1,'旧任务','todo',0,0)",
+  );
+  ensureTaskTables(db);
+  assert.equal(getTask(db, "t1").deliver, "pr");
+  assert.equal(getTask(db, "t1").issue, null);
+  ensureTaskTables(db);
+  db.close();
 });

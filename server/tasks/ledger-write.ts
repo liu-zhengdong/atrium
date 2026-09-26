@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { Problem } from "../problem.ts";
 import {
   addEvent,
   atomically,
@@ -21,6 +22,12 @@ import {
   title,
 } from "./ledger-validate.ts";
 import { applyTransition } from "./ledger-transition.ts";
+import {
+  deliverOf,
+  issueOf,
+  validateDeliver,
+  type Deliver,
+} from "./deliver.ts";
 
 export type NewTask = {
   title: string;
@@ -29,6 +36,8 @@ export type NewTask = {
   repo?: string | null;
   brief_path?: string | null;
   owner?: string | null;
+  deliver?: Deliver;
+  issue?: number;
 };
 
 export function createTask(
@@ -37,7 +46,19 @@ export function createTask(
   now = Date.now(),
 ): Task {
   const input = objectOf(body);
-  onlyKeys(input, ["title", "parent", "role", "repo", "brief_path", "owner"]);
+  onlyKeys(input, [
+    "title",
+    "parent",
+    "role",
+    "repo",
+    "brief_path",
+    "owner",
+    "deliver",
+    "issue",
+  ]);
+  const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
+  const issue = issueOf(input.issue);
+  validateDeliver(deliver, issue);
   const values = {
     owner:
       input.owner === undefined || input.owner === null || input.owner === ""
@@ -52,7 +73,7 @@ export function createTask(
     const parent = parentOf(db, input.parent);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,status,created_at,updated_at) VALUES (?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -61,6 +82,8 @@ export function createTask(
         values.role,
         values.repo,
         values.owner,
+        deliver,
+        issue,
         now,
         now,
       );
@@ -82,17 +105,39 @@ export function updateTask(
 ): Task {
   const id = parseTaskRef(reference);
   const input = objectOf(body);
-  onlyKeys(input, ["title", "brief_path", "role", "status"]);
+  onlyKeys(input, [
+    "title",
+    "brief_path",
+    "role",
+    "status",
+    "deliver",
+    "issue",
+  ]);
   if (!Object.keys(input).length)
-    throw usage("至少修改一项：title、brief_path、role、status");
-  const fields: Record<string, string | null> = {};
+    throw usage(
+      "至少修改一项：title、brief_path、role、status、deliver、issue",
+    );
+  const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
   if ("brief_path" in input)
     fields.brief_path = optionalText(input.brief_path, "brief_path");
   if ("role" in input) fields.role = optionalText(input.role, "role", 200);
+  if ("deliver" in input) fields.deliver = deliverOf(input.deliver);
+  if ("issue" in input) fields.issue = issueOf(input.issue);
   const target = "status" in input ? statusOf(input.status) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
+    if (
+      current.status === "running" &&
+      ((fields.deliver !== undefined && fields.deliver !== current.deliver) ||
+        (fields.issue !== undefined && fields.issue !== current.issue))
+    )
+      throw new Problem(409, "执行中不能修改交付物类型或 issue 号", "conflict");
+    validateDeliver(
+      (fields.deliver ?? current.deliver) as Deliver,
+      (fields.issue === undefined ? current.issue : fields.issue) as
+        number | null,
+    );
     const changed = Object.fromEntries(
       Object.entries(fields).filter(
         ([key, value]) => current[key as keyof TaskRow] !== value,

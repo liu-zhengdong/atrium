@@ -127,7 +127,7 @@ export class Executors {
       throw error;
     }
     const active = launched({
-      task,
+      task: started,
       pid,
       child,
       prepared,
@@ -156,13 +156,13 @@ export class Executors {
       if (getTask(this.ctx.db, id).status !== "running") return;
       const { decision, verdict, facts } = outcome;
       const detail = exitDetail(exit);
-      if (verdict && facts)
+      if (verdict)
         noteTask(this.ctx.db, id, "gates", {
           worker: active.worker.id,
           passed: verdict.passed,
           awaiting_ci: verdict.awaitingCi,
           results: verdict.results,
-          diff: diffSize(facts),
+          ...(facts ? { diff: diffSize(facts) } : {}),
           ...detail,
         });
       this.advance(id, { kind: decision.event }, outcome.fields, {

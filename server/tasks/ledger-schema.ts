@@ -9,6 +9,8 @@ export function ensureTaskTables(db: DatabaseSync) {
       brief_path TEXT,
       role TEXT,
       repo TEXT,
+      deliver TEXT NOT NULL DEFAULT 'pr' CHECK(deliver IN ('pr','comment','none')),
+      issue INTEGER,
       status TEXT NOT NULL CHECK(status IN ('todo','running','done','failed','blocked','cancelled')),
       worker TEXT,
       pid INTEGER, worktree TEXT, branch TEXT,
@@ -24,4 +26,10 @@ export function ensureTaskTables(db: DatabaseSync) {
   const columns = all<{ name: string }>(db, "PRAGMA table_info(tasks)");
   if (!columns.some((column) => column.name === "owner"))
     db.exec("ALTER TABLE tasks ADD COLUMN owner TEXT");
+  if (!columns.some((column) => column.name === "deliver"))
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN deliver TEXT NOT NULL DEFAULT 'pr' CHECK(deliver IN ('pr','comment','none'))",
+    );
+  if (!columns.some((column) => column.name === "issue"))
+    db.exec("ALTER TABLE tasks ADD COLUMN issue INTEGER");
 }

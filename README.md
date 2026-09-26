@@ -169,17 +169,28 @@ cd /tmp/atrium-src && npm pack && npm install -g ./atrium-0.1.x.tgz
 
 不要用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`：npm 11 会在依赖的安装脚本处报 `spawn sh ENOENT`。原来用 `npm link` 的，先执行 `npm rm -g atrium`，否则 npm 无法覆盖链接。之后升级用 `atrium update`。
 
-`atrium update` 安装标签 tarball 时使用 `npm install -g`，**不读取源码仓库的 `package-lock.json`**；发布包在 `package.json` 中把 pi-atrium 固定到指定提交，并把 Pi 固定到验证过的版本。更新后先从全局安装目录读取 Atrium 声明的依赖及实际安装版本，再重启：
+`atrium update` 安装标签 tarball 时使用 `npm install -g`，**不读取源码仓库的 `package-lock.json`**；发布包在 `package.json` 中把 pi-atrium 固定到指定提交，并把 Pi 固定到验证过的版本。pi-atrium 的旧版与新版可能同为 `0.3.0`，版本号不能证明实际能力；更新后先从全局安装目录执行与启动门槛相同的能力检查，再重启：
 
 ```bash
 node - "$(npm root -g)/atrium" <<'NODE'
 const { readFileSync } = require('node:fs');
+const { createRequire } = require('node:module');
 const { join } = require('node:path');
 const root = process.argv[2];
 const read = (...parts) => JSON.parse(readFileSync(join(root, ...parts, 'package.json'), 'utf8'));
 const atrium = read();
-for (const name of ['@liuser/pi-atrium', '@earendil-works/pi-coding-agent']) {
-  console.log(name, '要求:', atrium.dependencies[name], '已安装:', read('node_modules', name).version);
+const requireInstalled = createRequire(join(root, 'package.json'));
+let adapter;
+try { adapter = requireInstalled('@liuser/pi-atrium/dist/identity.js'); } catch { adapter = {}; }
+const ready = adapter.IDENTITY_LAUNCH_SECRET_CAPABILITY === 'pi-acp/identity/launch-secret-file/v1'
+  && typeof adapter.isInheritedModelCredential === 'function'
+  && adapter.isInheritedModelCredential('OPENAI_API_KEY') === true;
+const pi = read('node_modules', '@earendil-works/pi-coding-agent').version;
+console.log('pi-atrium 要求:', atrium.dependencies['@liuser/pi-atrium'], '启动能力:', ready ? '具备' : '缺失');
+console.log('Pi 要求:', atrium.dependencies['@earendil-works/pi-coding-agent'], '已安装:', pi);
+if (!ready || pi !== atrium.dependencies['@earendil-works/pi-coding-agent']) {
+  console.error('安装产物不满足启动要求：请用 atrium update 重新安装，重启前复查。');
+  process.exitCode = 1;
 }
 NODE
 ```

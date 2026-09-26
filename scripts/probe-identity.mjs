@@ -54,29 +54,14 @@ export async function verifyIdentity({
       "长期身份验证",
     ),
   );
-  // atrium list 会在后台拉起一个与探针共享 ATRIUM_DATA 的服务。具名阶段只允许探针
-  // 进程内的服务在跑：两个服务会竞争 attach 同一个具名 runtime，扩展只认一个控制者，
-  // 输掉的一方永远 bind 不上，断言随机超时。这里立刻停掉，finally 里的 stop 兑底。
-  assert(env.ATRIUM_PORT, "probe-pi 必须先分配 ATRIUM_PORT");
-  execFileSync(command, ["stop"], { env, stdio: "ignore" });
-  // 确定性断言：被拉起的服务必须真的停了——它的端口要拒绝连接。
-  // 反向验证：注释掉上面的 stop，这里必红（服务还活着，端口可达）。
-  await wait(async () => {
-    try {
-      await fetch(`http://127.0.0.1:${env.ATRIUM_PORT}/api/agents`, {
-        signal: AbortSignal.timeout(500),
-      });
-      return false;
-    } catch {
-      return true;
-    }
-  }, "CLI 自动拉起的服务停止");
   const shell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
   // 每次 launch 换新名字：重 launch 只等 owner 文件释放，旧 tmux 会话可能还没退出，
   // 同名 new-session 会在同一个 tmux server 里撞出 duplicate session。
   let tmux;
+  const tmuxNames = new Set();
   const launch = () => {
     tmux = `atrium-named-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    tmuxNames.add(tmux);
     execFileSync("tmux", [
       "new-session",
       "-d",
@@ -100,7 +85,6 @@ export async function verifyIdentity({
       encoding: "utf8",
     });
   const owner = join(env.PI_ACP_DIR, "identities", `${agent.id}.json`);
-  let started = false;
   // 记录本次具名阶段出现过的 runtime id（socket 名就是 runtime id），收尾时按 id
   // 清掉全局 socket 目录里的探针 socket——被杀的 TUI 没机会自己删。
   const namedRuntimeIds = new Set();
@@ -119,8 +103,24 @@ export async function verifyIdentity({
     }
   };
   try {
+    // atrium list 会在后台拉起一个与探针共享 ATRIUM_DATA 的服务。具名阶段只允许探针
+    // 进程内的服务在跑：两个服务会竞争 attach 同一个具名 runtime，扩展只认一个控制者，
+    // 输掉的一方永远 bind 不上，断言随机超时。这里立刻停掉，finally 里的 stop 兑底。
+    assert(env.ATRIUM_PORT, "probe-pi 必须先分配 ATRIUM_PORT");
+    execFileSync(command, ["stop"], { env, stdio: "ignore" });
+    // 确定性断言：被拉起的服务必须真的停了——它的端口要拒绝连接。
+    // 反向验证：注释掉上面的 stop，这里必红（服务还活着，端口可达）。
+    await wait(async () => {
+      try {
+        await fetch(`http://127.0.0.1:${env.ATRIUM_PORT}/api/agents`, {
+          signal: AbortSignal.timeout(500),
+        });
+        return false;
+      } catch {
+        return true;
+      }
+    }, "CLI 自动拉起的服务停止");
     launch();
-    started = true;
     await wait(async () => {
       await runtimes.discover();
       return runtimes
@@ -219,10 +219,8 @@ export async function verifyIdentity({
     hashes.push({ name: "named-tui.txt", sha256: hash(capture) });
     execFileSync("tmux", ["send-keys", "-t", tmux, "C-d"]);
     await wait(() => !existsSync(owner), "正常退出释放具名占用");
-    started = false;
     await runtimes.pump(agent.id);
     launch();
-    started = true;
     await wait(async () => {
       await runtimes.discover();
       const r = runtimes
@@ -241,7 +239,6 @@ export async function verifyIdentity({
     assert.notEqual(resumed.pid, first.pid);
     execFileSync("tmux", ["send-keys", "-t", tmux, "C-d"]);
     await wait(() => !existsSync(owner), "第二次正常退出");
-    started = false;
     await runtimes.pump(agent.id);
     await runtimes.start(agent.id);
     const backend = runtimes.connections.get(agent.id).info;
@@ -256,10 +253,10 @@ export async function verifyIdentity({
     assert.equal(blocked.status, 1);
     assert.match(blocked.stderr, /already occupied/);
     await runtimes.rpc("_pi/identity/stop", { identityId: agent.id });
-    // 成功路径：具名阶段的 socket 一个都不许留在全局目录（干净退出扩展会自己删，
-    // 删不干净的这里先补清再断言；反向验证：去掉 cleanNamedSockets() 断言必红）。
+    // 成功路径：具名阶段的 socket 一个都不许留在全局目录；先断言，残留清理在
+    // finally。扩展真泄漏时这里才红。反向验证：断言前往 socketDir 放一个同名
+    // .sock 文件，断言必红。
     collectRuntimeIds();
-    cleanNamedSockets();
     const leftSockets = [...namedRuntimeIds].filter((id) =>
       existsSync(join(socketDir, `${id}.sock`)),
     );
@@ -283,16 +280,16 @@ export async function verifyIdentity({
       ],
     };
   } catch (error) {
-    if (started) {
+    if (tmuxNames.size) {
       try {
         writeFileSync(join(folder, "failed-named-tui.txt"), pane());
       } catch {}
     }
     throw error;
   } finally {
-    if (started) {
+    for (const name of tmuxNames) {
       try {
-        execFileSync("tmux", ["kill-session", "-t", tmux]);
+        execFileSync("tmux", ["kill-session", "-t", name]);
       } catch {}
     }
     // 失败路径补清本次具名阶段的 socket：只删收集到的 runtime id，

@@ -377,7 +377,7 @@ export function AgentTrace({
           <strong className="truncate text-xs font-medium">
             {runtimeError
               ? "轨迹暂不可用"
-              : agent.runtime?.busy
+              : agent.working || agent.runtime?.busy
                 ? (current?.title ?? "正在处理")
                 : agent.available
                   ? "等待新任务"

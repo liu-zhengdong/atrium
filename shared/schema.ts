@@ -284,6 +284,11 @@ export type Overview = {
     available: boolean;
     /** Live process check shared with the delete guard; presence may retain stale discovery. */
     running: boolean;
+    /**
+     * 回合正在进行：进程忙，或重试后已开始新回合、旧故障还没被第一条正常输出清掉。
+     * 这个窗口里 error / failure 为 null，界面按「干活」呈现。
+     */
+    working: boolean;
     error: string | null;
     /** retry is populated by the phase-two incident scheduler; absent only in intermediate builds. */
     failure: {

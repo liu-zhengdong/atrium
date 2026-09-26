@@ -10,15 +10,15 @@ export const runtimeLabel = (a: Agent) =>
         ? "出错"
         : a.runner && !a.runner.connected
           ? "运行器离线，身份可能仍在工作"
-          : a.runtime
-            ? a.runtime.busy
-              ? "执行中"
-              : "在线"
-            : a.error && a.available
-              ? "暂不可用"
-              : a.available
-                ? "在线"
-                : "离线";
+          : a.working || a.runtime?.busy
+            ? "执行中"
+            : a.runtime
+              ? "在线"
+              : a.error && a.available
+                ? "暂不可用"
+                : a.available
+                  ? "在线"
+                  : "离线";
 /** 头像上的状态点表达不了的状态：连不上但报过错。在线、执行中、离线看点，不再写字。 */
 export const statusNote = (a: Agent) =>
   a.runner?.revoked
@@ -41,6 +41,8 @@ export function agentPresence(
     | {
         available: boolean;
         failure?: Agent["failure"];
+        /** 回合进行中：进程忙，或重试后已开始新回合、旧故障还没被正常输出清掉。 */
+        working?: boolean;
         runtime?: { busy: boolean } | null;
         runner?: { connected: boolean; revoked?: boolean } | null;
         unassigned?: boolean;
@@ -52,7 +54,7 @@ export function agentPresence(
   if (a.runner?.revoked) return "offline";
   if (a.failure) return "error";
   if (a.runner && !a.runner.connected) return "offline";
-  if (a.runtime?.busy) return "busy";
+  if (a.working || a.runtime?.busy) return "busy";
   if (a.available) return "online";
   return "offline";
 }

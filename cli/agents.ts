@@ -26,13 +26,16 @@ import { waitOptions } from "./wait-options.ts";
 export type AgentEntry = Overview["agents"][number];
 /** 与 Web 头像状态点同一套判断。 */
 export const presence = (
-  agent: Pick<AgentEntry, "available" | "runtime" | "failure" | "unassigned">,
+  agent: Pick<
+    AgentEntry,
+    "available" | "runtime" | "failure" | "unassigned" | "working"
+  >,
 ) =>
   agent.unassigned
     ? "未分配账号"
     : agent.failure
       ? "出错"
-      : agent.runtime?.busy
+      : agent.working || agent.runtime?.busy
         ? "干活"
         : agent.available
           ? "在线"

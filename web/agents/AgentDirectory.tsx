@@ -53,14 +53,15 @@ export function AgentDirectory({
         .filter(
           (a) =>
             filter === "all" ||
-            (filter === "busy" && !!a.runtime?.busy) ||
+            (filter === "busy" && (!!a.working || !!a.runtime?.busy)) ||
             (filter === "error" && !!a.failure) ||
             (filter === "unread" && a.unread > 0),
         )
         .sort(
           (a, b) =>
             Number(!!b.failure) - Number(!!a.failure) ||
-            Number(!!b.runtime?.busy) - Number(!!a.runtime?.busy) ||
+            Number(!!b.working || !!b.runtime?.busy) -
+              Number(!!a.working || !!a.runtime?.busy) ||
             a.name.localeCompare(b.name, "zh-CN"),
         ),
     [overview.agents, query, filter],

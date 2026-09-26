@@ -122,7 +122,10 @@ export class TraceStore {
   ingest(
     agent: string,
     value: RuntimeEventPage,
-    onEvent?: (event: RuntimeEventPage["items"][number]) => void,
+    onEvent?: (
+      event: RuntimeEventPage["items"][number],
+      traceId: number | null,
+    ) => void,
     onGap?: () => void,
   ) {
     this.store.agent(agent);
@@ -198,6 +201,8 @@ export class TraceStore {
         // Pi 侧的输入角色）。它不是 Atrium 的用户短号，不跟着 u1 走。
         const name = e.name ?? "",
           text = this.redact(agent, e.text ?? "");
+        // 事件入库后的行号（trace_actions.id）：调用方用它判断事件排在故障之后。
+        let traceId: number | null = null;
         if (e.kind === "tool_end") {
           const updated = this.store.run(
             "UPDATE trace_actions SET ended_at=?,state=?,output=?,truncated=MAX(truncated,?) WHERE agent_id=? AND runtime_id=? AND generation=? AND call_id=?",
@@ -224,17 +229,19 @@ export class TraceStore {
               e.truncated,
             );
         } else if (e.kind === "tool_start") {
-          insert(
-            e.seq,
-            e.at,
-            "tool",
-            name,
-            toolTitle(name, text),
-            "running",
-            text,
-            "",
-            e.callId!,
-            e.truncated,
+          traceId = Number(
+            insert(
+              e.seq,
+              e.at,
+              "tool",
+              name,
+              toolTitle(name, text),
+              "running",
+              text,
+              "",
+              e.callId!,
+              e.truncated,
+            ).lastInsertRowid,
           );
         } else {
           const title =
@@ -258,20 +265,22 @@ export class TraceStore {
               runtime,
               generation,
             );
-          insert(
-            e.seq,
-            e.at,
-            e.kind,
-            name,
-            title,
-            e.error ? "error" : "complete",
-            "",
-            text,
-            null,
-            e.truncated,
+          traceId = Number(
+            insert(
+              e.seq,
+              e.at,
+              e.kind,
+              name,
+              title,
+              e.error ? "error" : "complete",
+              "",
+              text,
+              null,
+              e.truncated,
+            ).lastInsertRowid,
           );
         }
-        onEvent?.(e);
+        onEvent?.(e, traceId);
       }
       this.store.run(
         "INSERT INTO trace_cursors(agent_id,runtime_id,generation,seq) VALUES(?,?,?,?) ON CONFLICT(agent_id,runtime_id,generation) DO UPDATE SET seq=excluded.seq",

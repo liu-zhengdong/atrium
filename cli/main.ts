@@ -146,7 +146,8 @@ export async function main(argv: string[]): Promise<number> {
       if (name === undefined || name === "--no-open") {
         if (rest.filter((part) => part !== "--json").length)
           throw new Problem(400, usage, "usage");
-        const { startService, openWeb } = await import("../server/service.ts");
+        const { startService, openWeb, canOpenBrowser, noBrowserHint } =
+          await import("../server/service.ts");
         const data = dataDirectory();
         const record = await startService(data);
         console.log(
@@ -154,7 +155,10 @@ export async function main(argv: string[]): Promise<number> {
         );
         if (name === undefined) {
           const { loginLink } = await import("./auth.ts");
-          await openWeb(record, await loginLink(data, record));
+          const url = await loginLink(data, record);
+          if (canOpenBrowser(process.stdin, process.stdout))
+            await openWeb(record, url);
+          else console.log(noBrowserHint(url));
         }
         return 0;
       }

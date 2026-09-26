@@ -17,7 +17,12 @@ import {
   type ServiceRecord,
 } from "../server/service-state.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { startService, openWeb } from "../server/service.ts";
+import {
+  canOpenBrowser,
+  noBrowserHint,
+  openWeb,
+  startService,
+} from "../server/service.ts";
 import { Problem } from "../server/problem.ts";
 import { recordResult } from "./contract.ts";
 import type { Command } from "./main.ts";
@@ -172,10 +177,10 @@ export const authCommands: Record<string, Command> = {
       }
       const url = await loginLink(data, record);
       if (values.print) console.log(url);
-      else {
+      else if (canOpenBrowser(process.stdin, process.stdout)) {
         await openWeb(record, url);
         console.log("已打开 Web；链接仅可使用一次，有效期 60 秒");
-      }
+      } else console.log(noBrowserHint(url));
     },
   },
   "auth rotate": {

@@ -34,19 +34,19 @@ test("看门狗判定：启动无进展判卡死，运行中空闲判受阻；�
   );
 });
 
-test("摘要：opencode JSON 取文本、claude 取 result、普通日志取末尾", () => {
+test("摘要：结构化日志 opencode 取文本、claude 取 result，普通日志取末尾", () => {
   const opencode = [
     '{"type":"step_start","part":{}}',
     '{"type":"text","part":{"text":"改好了，PR #3"}}',
     '{"type":"step_finish","part":{}}',
   ].join("\n");
-  assert.equal(summarize(opencode), "改好了，PR #3");
+  assert.equal(summarize(opencode, true), "改好了，PR #3");
   assert.equal(countSteps(opencode), 2);
   const claude = [
     '{"type":"assistant","message":{"content":[{"type":"text","text":"中间"}]}}',
     '{"type":"result","result":"最终汇报"}',
   ].join("\n");
-  assert.equal(summarize(claude), "最终汇报");
+  assert.equal(summarize(claude, true), "最终汇报");
   assert.equal(summarize("a\nb\n"), "a\nb");
   assert.equal(Buffer.byteLength(summarize("汉".repeat(5000))) <= 4096, true);
 });

@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import type { Active } from "./active.ts";
+import { ADAPTERS } from "./adapters/index.ts";
 import { collectFacts } from "./facts.ts";
 import { evaluateGates, type Facts, type Verdict } from "./gates.ts";
 import type { Exec } from "./git.ts";
@@ -13,6 +14,7 @@ import {
   type Exit,
   type ExitDecision,
 } from "./outcome.ts";
+import { abnormalEnding, parseEvents } from "./json-log.ts";
 import { quotaReason } from "./quota-holds.ts";
 import { detectQuotaExhausted } from "./quota-signal.ts";
 import { summarize } from "./summary.ts";
@@ -37,22 +39,29 @@ async function tail(file: string) {
   }
 }
 
-/** 摘要：codex 的最后消息文件优先，否则取日志末尾（去掉 [atrium] 抬头与收尾行）。 */
-export async function readSummary(active: Active) {
+/** 日志末尾（去掉 [atrium] 抬头与收尾行）；读不到时为 undefined。 */
+async function readLog(active: Active) {
+  try {
+    return (await tail(active.logFile))
+      .split("\n")
+      .filter((line) => !line.startsWith("[atrium] "))
+      .join("\n");
+  } catch {
+    return undefined;
+  }
+}
+
+const jsonEvents = (active: Active) =>
+  ADAPTERS[active.tool].progressSignals.includes("json_events");
+
+/** 摘要：codex 的最后消息文件优先；结构化日志取最后一条助手文本；否则取日志末尾。 */
+function readSummary(active: Active, log: string | undefined) {
   const resultFile = active.prepared?.launch.resultFile;
   if (resultFile && existsSync(resultFile)) {
     const text = readFileSync(resultFile, "utf8").trim();
     if (text) return summarize(text);
   }
-  try {
-    const text = (await tail(active.logFile))
-      .split("\n")
-      .filter((line) => !line.startsWith("[atrium] "))
-      .join("\n");
-    return summarize(text);
-  } catch {
-    return "";
-  }
+  return log === undefined ? "" : summarize(log, jsonEvents(active));
 }
 
 /** 额度判定只看日志最后这么多字符：更早的部分可能是执行者回显的提示词，里面也会有「额度」字样。 */
@@ -68,24 +77,15 @@ export type QuotaHit = {
 };
 
 /** 执行者退出后按日志末尾判额度用尽（#267）；被停下的（人工、卡死、空闲）不判。 */
-async function detectQuota(
+function detectQuota(
   active: Active,
   exit: Exit,
-): Promise<QuotaHit | undefined> {
-  if (active.stop) return undefined;
-  let text: string;
-  try {
-    text = (await tail(active.logFile))
-      .split("\n")
-      .filter((line) => !line.startsWith("[atrium] "))
-      .join("\n")
-      .slice(-QUOTA_TAIL_CHARS);
-  } catch {
-    return undefined;
-  }
+  log: string | undefined,
+): QuotaHit | undefined {
+  if (active.stop || log === undefined) return undefined;
   const verdict = detectQuotaExhausted({
     exitCode: exit === "unknown" ? null : exit.code,
-    logTail: text,
+    logTail: log.slice(-QUOTA_TAIL_CHARS),
     now: new Date(),
     tool: active.tool,
   });
@@ -112,7 +112,8 @@ export async function settle(
   exit: Exit,
   exec: Exec,
 ): Promise<Settlement> {
-  const summary = await readSummary(active);
+  const log = await readLog(active);
+  const summary = readSummary(active, log);
   try {
     appendFileSync(
       active.logFile,
@@ -122,7 +123,7 @@ export async function settle(
     // 日志目录被删不影响收尾。
   }
   const fields: RunFields = { result: summary };
-  const quota = await detectQuota(active, exit);
+  const quota = detectQuota(active, exit, log);
   if (quota) {
     // 额度用尽：不查事实、不过关卡，直接受阻。
     const decision = decideExit({
@@ -159,6 +160,10 @@ export async function settle(
     retried: active.retried,
     retryAllowed: active.worker.profile.rules.retry_on_stall !== false,
     verdict,
+    ending:
+      log !== undefined && jsonEvents(active)
+        ? abnormalEnding(parseEvents(log))?.reason
+        : undefined,
   });
   return { summary, fields, decision, verdict, facts };
 }

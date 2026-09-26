@@ -48,8 +48,12 @@ export function decideExit(input: {
   verdict?: Verdict;
   /** 日志判出额度用尽时的受阻原因（#267）：不再过关卡，直接受阻。 */
   quota?: string;
+  /** 从结构化日志识别出的异常结束（长度用尽、权限被拒、中途退出），写在失败与受阻原因前面。 */
+  ending?: string;
 }): ExitDecision {
   const { stop, exit } = input;
+  const lead = (reason: string) =>
+    input.ending ? `${input.ending}；${reason}` : reason;
   if (!stop && input.quota)
     return {
       event: "block",
@@ -83,9 +87,11 @@ export function decideExit(input: {
     return {
       event: "exit_fail",
       publish: "failed",
-      reason: ended.signal
-        ? `执行者被信号 ${ended.signal} 结束`
-        : `执行者退出码 ${ended.code}`,
+      reason: lead(
+        ended.signal
+          ? `执行者被信号 ${ended.signal} 结束`
+          : `执行者退出码 ${ended.code}`,
+      ),
       retry: false,
     };
   }
@@ -100,18 +106,20 @@ export function decideExit(input: {
   return {
     event: "block",
     publish: unavailable ? "ci_unavailable" : "blocked",
-    reason: unavailable
-      ? `${unavailable.evidence}${
-          verdict.failed.length > 1
-            ? `；其余关卡不过：${verdict.failed
-                .filter((result) => result !== unavailable)
-                .map((result) => `${result.gate}：${result.evidence}`)
-                .join("；")}`
-            : ""
-        }`
-      : verdict.awaitingCi
-        ? `等 CI：${failed}`
-        : `关卡不过：${failed}`,
+    reason: lead(
+      unavailable
+        ? `${unavailable.evidence}${
+            verdict.failed.length > 1
+              ? `；其余关卡不过：${verdict.failed
+                  .filter((result) => result !== unavailable)
+                  .map((result) => `${result.gate}：${result.evidence}`)
+                  .join("；")}`
+              : ""
+          }`
+        : verdict.awaitingCi
+          ? `等 CI：${failed}`
+          : `关卡不过：${failed}`,
+    ),
     retry: false,
   };
 }

@@ -36,11 +36,18 @@ test("MCP 帧只在身份、容器、代际仍归属时转发；换代后的旧�
   };
   let current = { ...bound };
   let hostCalls = 0;
+  let redirectMode = false;
+  let leaked = false;
   const web = createServer(async (request, response) => {
     for await (const _ of request) {
       /* consume JSON-RPC */
     }
     hostCalls++;
+    if (request.url === "/leak") leaked = true;
+    if (redirectMode && request.url !== "/leak") {
+      response.writeHead(302, { location: "/leak" }).end();
+      return;
+    }
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"jsonrpc":"2.0","id":1,"result":{"ok":true}}');
   });
@@ -78,6 +85,17 @@ test("MCP 帧只在身份、容器、代际仍归属时转发；换代后的旧�
     const stale = JSON.parse((await staleReply)[0].toString());
     assert.equal(stale.status, 403);
     assert.equal(hostCalls, 1);
+    current = { ...bound };
+    redirectMode = true;
+    const redirectReply = nextFrame(fake.stdin);
+    fake.stdout.write(request(3));
+    assert.equal(JSON.parse((await redirectReply)[0].toString()).status, 502);
+    assert.equal(hostCalls, 2);
+    assert.equal(
+      leaked,
+      false,
+      "MCP capability must not follow host redirects",
+    );
     assert.equal(await bridge.drain(), true);
   } finally {
     bridge.close();

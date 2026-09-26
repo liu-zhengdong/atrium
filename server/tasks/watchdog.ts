@@ -113,10 +113,21 @@ export class ProgressProbe {
 
   private async fingerprint() {
     if (!this.git) return walkFingerprint(this.cwd);
+    // 执行者同时在这个工作树里 git add / commit；status 默认会顺手刷新索引、占 index.lock，
+    // 让执行者的提交撞锁失败，所以只读探测一律不拿可选锁。
     const [status, head] = await Promise.all([
-      this.run("git", ["-C", this.cwd, "status", "--porcelain", "-uall"], {
-        timeoutMs: 15_000,
-      }),
+      this.run(
+        "git",
+        [
+          "--no-optional-locks",
+          "-C",
+          this.cwd,
+          "status",
+          "--porcelain",
+          "-uall",
+        ],
+        { timeoutMs: 15_000 },
+      ),
       this.run("git", ["-C", this.cwd, "rev-parse", "HEAD"], {
         timeoutMs: 5_000,
       }),

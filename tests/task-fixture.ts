@@ -57,10 +57,10 @@ export function fixture(t: After) {
     writeFileSync(file, `#!/bin/sh\n${body}\n`);
     chmodSync(file, 0o755);
   };
-  // 假 kimi：记下环境、改一个文件并提交，汇报提交号；不开 PR。
+  // 假 kimi：记下环境、改一个文件并提交，汇报提交号；不开 PR。提交失败即非零退出，不冒充完成。
   script(
     "kimi",
-    'env > "$PWD/../env-seen.txt"\necho working\necho hi > done.txt\ngit add done.txt\ngit commit -qm done\necho "完成，提交 $(git rev-parse --short HEAD)"',
+    'set -e\nenv > "$PWD/../env-seen.txt"\necho working\necho hi > done.txt\ngit add done.txt\ngit commit -qm done\necho "完成，提交 $(git rev-parse --short HEAD)"',
   );
   // 假 grok：故意什么都不输出，也不改文件。
   script("grok", "sleep 30");

@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { probeTmux } from "./probe-tmux.mjs";
 import { createServer as createNetServer } from "node:net";
 import assert from "node:assert/strict";
 import { createApp } from "../server/app.ts";
@@ -27,8 +28,7 @@ const folder = mkdtempSync(join(tmpdir(), "atrium-proof-"));
 const profile = join(folder, "profile"),
   cwd = join(folder, "workspace"),
   raw = join(folder, "raw"),
-  sessions = join(folder, "sessions"),
-  tmuxSocket = join(folder, "tmux.sock");
+  sessions = join(folder, "sessions");
 for (const dir of [profile, cwd, raw, sessions])
   mkdirSync(dir, { mode: 0o700 });
 process.env.PI_MCP_CONFIG_MODE = "exclusive";
@@ -48,8 +48,7 @@ const assertFixtureSession = (file) =>
     ).startsWith(`${realpathSync(folder)}${sep}`),
     `夹具会话写到了临时目录外：${file}`,
   );
-const tmux = (args, options) =>
-  execFileSync("tmux", ["-S", tmuxSocket, ...args], options);
+const tmux = probeTmux(folder);
 const require = createRequire(import.meta.url);
 const piAcpEntry = resolve(
   process.env.ATRIUM_PI_ACP_ENTRY ||

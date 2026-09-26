@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
 import { descendantsOf } from "./fixture-signal.ts";
+import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
 const victimScript = join(packageRoot, "tests", "fixtures", "signal-victim.ts");
@@ -30,7 +31,7 @@ type VictimInfo = { root: string; pid: number; descendants: number[] };
 
 function startVictim(cleanup: boolean) {
   const child = spawn(process.execPath, ["--import", "tsx", victimScript], {
-    env: { ...process.env, VICTIM_NO_CLEANUP: cleanup ? "0" : "1" },
+    env: childEnv({ VICTIM_NO_CLEANUP: cleanup ? "0" : "1" }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
@@ -71,15 +72,14 @@ async function startOutsider(t: { after: (fn: () => Promise<void>) => void }) {
   mkdirSync(template);
   writeFileSync(join(template, "settings.json"), '{"packages":[]}');
   writeFileSync(join(template, "SYSTEM.md"), "outsider rules");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = childEnv({
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
     ATRIUM_DESKTOPS: join(root, "desktops"),
     ATRIUM_PI_HOME: join(root, ".pi"),
     ATRIUM_PI_TEMPLATE: template,
     PI_ACP_DIR: join(root, "acp"),
-  };
+  });
   await exec(process.execPath, [join(packageRoot, "bin/atrium.mjs"), "list"], {
     env,
     cwd: root,

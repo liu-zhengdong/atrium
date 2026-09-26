@@ -13,6 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { alive, packageRoot, readService } from "../../server/service-state.ts";
 import { descendantsOf, trackFixture } from "../fixture-signal.ts";
+import { childEnv } from "../child-env.ts";
 
 const exec = promisify(execFile);
 const root = mkdtempSync(join(tmpdir(), "atrium-sigvictim-"));
@@ -26,15 +27,14 @@ const template = join(root, "pi-template");
 mkdirSync(template);
 writeFileSync(join(template, "settings.json"), '{"packages":[]}');
 writeFileSync(join(template, "SYSTEM.md"), "victim rules");
-const env: NodeJS.ProcessEnv = {
-  ...process.env,
+const env: NodeJS.ProcessEnv = childEnv({
   ATRIUM_DATA: data,
   ATRIUM_PORT: String(port),
   ATRIUM_DESKTOPS: join(root, "desktops"),
   ATRIUM_PI_HOME: join(root, ".pi"),
   ATRIUM_PI_TEMPLATE: template,
   PI_ACP_DIR: join(root, "acp"),
-};
+});
 const cli = (...args: string[]) =>
   exec(process.execPath, [join(packageRoot, "bin/atrium.mjs"), ...args], {
     env,

@@ -595,6 +595,27 @@ test("worktreePlan：路径、分支与 slug", () => {
     worktreePlan("/repo/atrium/", 3, "修复 登录").path,
     "/repo/atrium-t3-task",
   );
+  // 中文标题滤不出内容：依次用 role、再用 task，分支不再全是 task-tN-task。
+  assert.equal(
+    worktreePlan("/repo/atrium/", 2, "修复 登录", "modules/cli").branch,
+    "task-t2-modules-cli",
+  );
+  assert.equal(
+    worktreePlan("/repo/atrium/", 4, "修复 登录", "安全").slug,
+    "task",
+    "role 也滤不出内容时才退回 task",
+  );
+  assert.equal(
+    worktreePlan("/repo/atrium/", 6, "修复 登录", "concerns/安全").slug,
+    "concerns",
+    "role 整体转 slug：滤掉的部分不留残渣",
+  );
+  assert.equal(
+    worktreePlan("/repo/atrium/", 5, "Add 登录", "modules/cli").branch,
+    "task-t5-add",
+    "标题有内容时不用 role",
+  );
+  assert.equal(slugify("修复 登录"), "task");
   assert.equal(slugify("Café  --  API v2 / 中文"), "cafe-api-v2");
   const long = slugify("a".repeat(30) + " " + "b".repeat(30));
   assert.equal(

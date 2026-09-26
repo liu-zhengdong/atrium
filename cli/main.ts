@@ -113,6 +113,29 @@ const service: [usage: string, about: string][] = [
 ];
 const usage = "用法：atrium [命令] …；atrium --help 列出全部命令";
 
+/** 一条命令的条目：atrium --help 与命令组的 --help 共用同一份。 */
+function entry(name: string, command: Command): string {
+  return `  atrium ${name} ${command.args}  ${command.about}`;
+}
+
+/** 命令组（task、events 这类带子命令的名字）：命令名以 `<组> ` 开头。 */
+function membersOf(group: string): [string, Command][] {
+  return Object.entries(commands).filter(([name]) =>
+    name.startsWith(`${group} `),
+  );
+}
+
+/** 命令组的帮助：列出该组全部子命令与一句话说明。 */
+export function groupHelp(group: string): string {
+  return [
+    `用法：atrium ${group} <子命令> …`,
+    "",
+    ...membersOf(group).map(([name, command]) => entry(name, command)),
+    "",
+    `命令详情：atrium ${group} <子命令> --help；全部命令：atrium --help；调用约定：atrium guide`,
+  ].join("\n");
+}
+
 export function help(): string {
   const widest = Math.max(...service.map(([line]) => width(line)));
   return [
@@ -126,10 +149,7 @@ export function help(): string {
         group,
         ...Object.entries(commands)
           .filter(([name]) => groupOf(name) === group)
-          .map(
-            ([name, command]) =>
-              `  atrium ${name} ${command.args}  ${command.about}`,
-          ),
+          .map(([name, command]) => entry(name, command)),
       ],
     ),
     "",
@@ -197,17 +217,23 @@ export async function main(argv: string[]): Promise<number> {
         console.log(guide(commands));
         return 0;
       }
-      subcommand =
-        name === "account" ||
-        name === "auth" ||
-        name === "runner" ||
-        name === "adapters" ||
-        name === "plugin" ||
-        name === "skill" ||
-        name === "task" ||
-        name === "events"
-          ? `${name} ${rest.shift() ?? ""}`.trim()
-          : name;
+      // 命令组（task、events …）：没有子命令时给组帮助，有子命令时拼出完整命令名。
+      if (name !== undefined && membersOf(name).length) {
+        const words = rest.filter((arg) => !arg.startsWith("-"));
+        const plain = rest.every(
+          (arg) => arg === "--json" || arg === "--help" || arg === "-h",
+        );
+        if (!words.length && plain) {
+          console.log(groupHelp(name));
+          subcommand = "--help";
+          return 0;
+        }
+        const word = words[0];
+        subcommand =
+          word === undefined
+            ? name
+            : `${name} ${rest.splice(rest.indexOf(word), 1)[0]}`;
+      } else subcommand = name ?? "";
       const command = commands[subcommand];
       if (subcommand === "account login")
         throw new Problem(400, "已由 atrium connect 代替", "usage");

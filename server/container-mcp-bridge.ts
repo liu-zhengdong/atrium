@@ -157,6 +157,7 @@ export class ContainerMcpBridge {
             : {}),
         },
         body: payload,
+        redirect: "error",
         signal: AbortSignal.timeout(45_000),
       });
       const reader = result.body?.getReader();

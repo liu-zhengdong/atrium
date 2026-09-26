@@ -42,6 +42,7 @@ import {
   deliveryText,
   USER_CONFIRMATION,
   inviteText,
+  noticeLine,
   type DeliveryKind,
   type SendRequest,
 } from "./delivery.ts";
@@ -115,16 +116,24 @@ export type DeliveryRow = {
   through_message: number | null;
   created_at: number;
 };
-type MessageRow = Omit<Message, "mentions" | "attachments" | "mention_all"> & {
+type MessageRow = Omit<
+  Message,
+  "mentions" | "attachments" | "mention_all" | "quiet"
+> & {
   mentions: string;
   mention_all: number;
+  quiet: number;
 };
-const decodeMessage = (row: MessageRow): Message => ({
-  ...row,
-  mentions: JSON.parse(row.mentions),
-  mention_all: !!row.mention_all,
-  attachments: [],
-});
+const decodeMessage = (row: MessageRow): Message => {
+  const { quiet, ...rest } = row;
+  return {
+    ...rest,
+    mentions: JSON.parse(row.mentions),
+    mention_all: !!row.mention_all,
+    ...(quiet ? { quiet: true } : {}),
+    attachments: [],
+  };
+};
 
 // The page budget applies before marking anything read, including multibyte text.
 // `returned` projects a row to what the caller actually hands back, so folded
@@ -171,7 +180,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS user_chat_state (chat_id TEXT PRIMARY KEY, hidden_after INTEGER, pinned INTEGER NOT NULL DEFAULT 0,
         participated INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL REFERENCES chats(id), sender TEXT NOT NULL,
-        body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, UNIQUE(sender,client_id));
+        body TEXT NOT NULL, mentions TEXT NOT NULL, client_id TEXT, created_at INTEGER NOT NULL, quiet INTEGER NOT NULL DEFAULT 0, UNIQUE(sender,client_id));
       CREATE INDEX IF NOT EXISTS messages_chat_id ON messages(chat_id,id);
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, message_id INTEGER REFERENCES messages(id),
         uploader TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL,
@@ -254,6 +263,7 @@ export class Store {
       );
     if (!deliveryCols.includes("through_message"))
       this.db.exec("ALTER TABLE deliveries ADD COLUMN through_message INTEGER");
+    this.addColumn("messages", "quiet", "INTEGER NOT NULL DEFAULT 0");
     const inboxCols = this.all<{ name: string }>(
       "PRAGMA table_info(inbox)",
     ).map((c) => c.name);
@@ -1070,8 +1080,9 @@ export class Store {
     const mentionAll = !!input.mention_all;
     return this.transaction(() => {
       const created_at = Date.now();
+      const quiet = !!input.quiet;
       const result = this.run(
-        "INSERT INTO messages(chat_id,sender,body,details,mentions,client_id,created_at,mention_all) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO messages(chat_id,sender,body,details,mentions,client_id,created_at,mention_all,quiet) VALUES(?,?,?,?,?,?,?,?,?)",
         chat.id,
         sender,
         input.body,
@@ -1080,6 +1091,7 @@ export class Store {
         input.client_id ?? null,
         created_at,
         mentionAll ? 1 : 0,
+        quiet ? 1 : 0,
       );
       const message = {
         chat_id: input.chat_id,
@@ -1091,6 +1103,7 @@ export class Store {
         id: Number(result.lastInsertRowid),
         sender,
         created_at,
+        ...(quiet ? { quiet: true } : {}),
         attachments: [] as Attachment[],
       };
       this.bindAttachments(sender, chat.id, message.id, attachments);
@@ -1107,7 +1120,23 @@ export class Store {
         members,
         mentions: input.mentions,
         mentionAll,
+        quiet,
       });
+      // 纯告知只排队：不叫醒、不提醒，等对方下一次真正的投递搭车。
+      for (const agent of plan.notice)
+        this.queue(
+          agent,
+          "notice",
+          noticeLine({
+            chatRef: chat.ref,
+            chatName: chat.name,
+            senderRef: author?.ref ?? sender,
+            senderName,
+            messageId: message.id,
+            body: input.body,
+          }),
+          { chatId: chat.id, throughMessage: message.id },
+        );
       for (const agent of plan.immediate)
         this.queue(
           agent,
@@ -1910,6 +1939,15 @@ export class Store {
       messages.push(
         `${uncertain.join("、")} 出错待人工处理，暂不会回复；消息是否送达尚待确认`,
       );
+    // 单独告诉发送者：已排队，本次不叫醒，下一次普通投递时一并交给对方。
+    const quiet = this.all<{ agent_id: string }>(
+      "SELECT DISTINCT agent_id FROM deliveries WHERE through_message=? AND kind='notice' AND state='pending' ORDER BY agent_id",
+      messageId,
+    ).map((row) => this.agentRef(row.agent_id));
+    if (quiet.length)
+      messages.push(
+        `${quiet.join("、")}：已排队，对方下次醒来时一起看到，不叫醒`,
+      );
     return messages.length ? messages.join("；") : undefined;
   }
   retryablePending(id: string): boolean {
@@ -2085,7 +2123,17 @@ export class Store {
       id,
     );
   }
-  accepted(id: string, preserveUncertain = false) {
+  /**
+   * 排队的纯告知：只在有别的投递真的要走时取出来搭车，不单独成行。
+   * 它是持久待交付记录，不参与唤醒、心跳提醒与 #187 的空闲判定。
+   */
+  notices(id: string) {
+    return this.all<{ id: string; text: string }>(
+      "SELECT id,text FROM deliveries WHERE agent_id=? AND kind='notice' AND state='pending' ORDER BY created_at LIMIT 20",
+      id,
+    );
+  }
+  accepted(id: string, preserveUncertain = false, noticeIds: string[] = []) {
     this.transaction(() => {
       const row = this.one<{
         agent_id: string;
@@ -2100,6 +2148,13 @@ export class Store {
         Date.now(),
         id,
       );
+      // 搭车同行的告知随这一条一起算送达，下一轮不再重复附带；
+      // 投递结果未知时先留着，重试那一趟再带上。
+      if (noticeIds.length && !preserveUncertain)
+        this.run(
+          `DELETE FROM deliveries WHERE kind='notice' AND id IN (${noticeIds.map(() => "?").join(",")})`,
+          ...noticeIds,
+        );
       if (result.changes && row?.chat_id && row.through_message)
         this.recordRead(
           row.agent_id,

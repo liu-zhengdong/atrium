@@ -13,6 +13,8 @@ import {
   type Exit,
   type ExitDecision,
 } from "./outcome.ts";
+import { quotaReason } from "./quota-holds.ts";
+import { detectQuotaExhausted } from "./quota-signal.ts";
 import { summarize } from "./summary.ts";
 
 /**
@@ -53,12 +55,56 @@ export async function readSummary(active: Active) {
   }
 }
 
+/** 额度判定只看日志最后这么多字符：更早的部分可能是执行者回显的提示词，里面也会有「额度」字样。 */
+const QUOTA_TAIL_CHARS = 4096;
+
+export type QuotaHit = {
+  provider: string;
+  resetAt: Date | null;
+  /** 任务受阻原因：「额度用尽：<provider>，预计 <时刻> 恢复」。 */
+  reason: string;
+  /** 报文证据（quota-signal 给出的原因与原文行）。 */
+  evidence: string;
+};
+
+/** 执行者退出后按日志末尾判额度用尽（#267）；被停下的（人工、卡死、空闲）不判。 */
+async function detectQuota(
+  active: Active,
+  exit: Exit,
+): Promise<QuotaHit | undefined> {
+  if (active.stop) return undefined;
+  let text: string;
+  try {
+    text = (await tail(active.logFile))
+      .split("\n")
+      .filter((line) => !line.startsWith("[atrium] "))
+      .join("\n")
+      .slice(-QUOTA_TAIL_CHARS);
+  } catch {
+    return undefined;
+  }
+  const verdict = detectQuotaExhausted({
+    exitCode: exit === "unknown" ? null : exit.code,
+    logTail: text,
+    now: new Date(),
+    tool: active.tool,
+  });
+  if (!verdict.exhausted) return undefined;
+  return {
+    provider: verdict.provider,
+    resetAt: verdict.resetAt,
+    reason: quotaReason(verdict.provider, verdict.resetAt),
+    evidence: verdict.reason,
+  };
+}
+
 export type Settlement = {
   summary: string;
   fields: RunFields;
   decision: ExitDecision;
   verdict?: Verdict;
   facts?: Facts;
+  quota?: QuotaHit;
 };
 
 export async function settle(
@@ -76,6 +122,17 @@ export async function settle(
     // 日志目录被删不影响收尾。
   }
   const fields: RunFields = { result: summary };
+  const quota = await detectQuota(active, exit);
+  if (quota) {
+    // 额度用尽：不查事实、不过关卡，直接受阻。
+    const decision = decideExit({
+      exit,
+      retried: active.retried,
+      retryAllowed: false,
+      quota: quota.reason,
+    });
+    return { summary, fields, decision, quota };
+  }
   let facts: Facts | undefined;
   let verdict: Verdict | undefined;
   if (needsFacts(active.stop)) {

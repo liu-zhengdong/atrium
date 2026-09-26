@@ -117,7 +117,7 @@ function one<T>(db: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
 function all<T>(db: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
   return db.prepare(sql).all(...params) as T[];
 }
-function atomically<T>(db: DatabaseSync, fn: () => T): T {
+export function atomically<T>(db: DatabaseSync, fn: () => T): T {
   if (db.isTransaction) return fn();
   db.exec("BEGIN IMMEDIATE");
   try {

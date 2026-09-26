@@ -46,8 +46,17 @@ export function decideExit(input: {
   retried: boolean;
   retryAllowed: boolean;
   verdict?: Verdict;
+  /** 日志判出额度用尽时的受阻原因（#267）：不再过关卡，直接受阻。 */
+  quota?: string;
 }): ExitDecision {
   const { stop, exit } = input;
+  if (!stop && input.quota)
+    return {
+      event: "block",
+      publish: "blocked",
+      reason: input.quota,
+      retry: false,
+    };
   if (stop?.kind === "user")
     return {
       event: "exit_fail",

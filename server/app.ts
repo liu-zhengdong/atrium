@@ -113,15 +113,19 @@ export async function createApp(options: {
       options.onRoute?.(method, route.url);
   });
   const streams = new Set<import("node:http").ServerResponse>();
-  const waiters = new Set<{ wake: () => void; cancel: () => void }>();
+  const waiters = new Set<{
+    wake: () => void;
+    cancel: (restarting?: boolean) => void;
+  }>();
   const changed = () => {
     for (const waiter of [...waiters]) waiter.wake();
     for (const stream of streams)
       if (!stream.write("event: change\ndata: {}\n\n")) stream.destroy();
   };
-  const revokeSubscriptions = () => {
+  // 吊销（登出/轮换）只结束等待；关闭（重启、更新）额外标 restarting，让新版命令行自动重连。
+  const revokeSubscriptions = (restarting = false) => {
     for (const stream of streams) stream.end();
-    for (const waiter of [...waiters]) waiter.cancel();
+    for (const waiter of [...waiters]) waiter.cancel(restarting);
   };
   const runtimes =
     options.runtime === false
@@ -1307,10 +1311,13 @@ export async function createApp(options: {
     timeout: number,
     check: () => T | null,
     onTimeout: () => T,
+    onClose?: () => T,
+    headers?: Record<string, string>,
   ) {
     reply.hijack();
     reply.raw.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
+      ...headers,
     });
     reply.raw.flushHeaders();
     let done = false;
@@ -1335,7 +1342,11 @@ export async function createApp(options: {
         reply.raw.destroy();
       }
     };
-    const waiter = { wake, cancel: () => finish(onTimeout()) };
+    const waiter = {
+      wake,
+      cancel: (restarting?: boolean) =>
+        finish(restarting && onClose ? onClose() : onTimeout()),
+    };
     reply.raw.on("close", disconnected);
     waiters.add(waiter);
     timer = setTimeout(() => finish(onTimeout()), timeout * 1000);
@@ -1355,40 +1366,73 @@ export async function createApp(options: {
         return page.items.length ? { ...page, after, timed_out: false } : null;
       },
       () => ({ items: [], has_more: false, after, timed_out: true }),
+      // 关闭：保留 after 与 timed_out（旧版命令行照走 124 加 --after 续等），另标 restarting。
+      () => ({
+        items: [],
+        has_more: false,
+        after,
+        timed_out: true,
+        restarting: true,
+      }),
+      // 游标随头立刻带回：进程中途死掉、body 读不出来时，命令行也拿得到
+      // 服务端解析出的 after，重连与续等命令都不漏消息。
+      { "X-Atrium-After": String(after) },
     );
   });
   app.get("/api/agents/:agent/wait", (request, reply) => {
     const q = waitQuery.pick({ timeout: true }).parse(request.query);
     const agentId = identityRef(request);
     store.agent(agentId);
-    const state = () => {
+    const state = (): "busy" | "idle" | "offline" | null => {
       const info = runtimes?.connections.get(agentId)?.info;
-      return info ? (info.busy ? "busy" : "idle") : "offline";
+      if (info) return info.busy ? "busy" : ("idle" as const);
+      // 进程还在、新服务还没接上：状态未定，继续等，不抢报离线。
+      if (runtimes?.running(agentId)) return null;
+      return "offline" as const;
     };
-    const initial = state();
+    let sawBusy = state() === "busy";
     const startedAt = Date.now();
-    const info = runtimes?.connections.get(agentId)?.info;
     longWait(
       reply,
       q.timeout,
       () => {
         const status = state();
-        if (status === "busy") return null;
-        const ended =
-          initial === "busy"
-            ? (info &&
-                store.one<{ at: number }>(
-                  "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
-                  agentId,
-                  info.runtimeId,
-                  info.generation,
-                  startedAt,
-                )?.at) ||
-              Date.now()
-            : null;
-        return { status, finished_at: ended, timed_out: false };
+        if (status === "busy") {
+          sawBusy = true;
+          return null;
+        }
+        // 没接上：既不能判空闲，也不能报离线，等下一次判定。
+        if (status === null) return null;
+        const info = runtimes?.connections.get(agentId)?.info;
+        const ended = sawBusy
+          ? (info &&
+              store.one<{ at: number }>(
+                "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
+                agentId,
+                info.runtimeId,
+                info.generation,
+                startedAt,
+              )?.at) ||
+            Date.now()
+          : null;
+        return {
+          status: status as "busy" | "idle" | "offline",
+          finished_at: ended,
+          timed_out: false,
+        };
       },
-      () => ({ status: state(), finished_at: null, timed_out: true }),
+      () => ({
+        status: state() ?? "offline",
+        finished_at: null,
+        timed_out: true,
+      }),
+      // 关闭：状态照报，另标 restarting；重连方会按新的连接状态重新判定。
+      () => ({
+        status: state() ?? "offline",
+        finished_at: null,
+        timed_out: true,
+        restarting: true,
+      }),
     );
   });
   app.patch("/api/chats/:id", (request) => {
@@ -1508,7 +1552,7 @@ export async function createApp(options: {
     });
   }
   app.addHook("preClose", async () => {
-    revokeSubscriptions();
+    revokeSubscriptions(true);
     await runtimes?.close();
   });
   app.addHook("onClose", async () => {

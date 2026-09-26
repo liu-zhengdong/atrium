@@ -16,6 +16,7 @@ import {
   type Mode,
 } from "./account-files.ts";
 import { AccountWorker } from "./account-worker-client.ts";
+import { retiredProvider } from "../shared/providers.ts";
 
 export class AccountRefresh {
   private timer?: NodeJS.Timeout;
@@ -107,6 +108,8 @@ export class AccountRefresh {
       for (const row of this.store.all<Row>(
         "SELECT * FROM accounts WHERE type='oauth' ORDER BY number",
       )) {
+        // 已停用的供应商 Pi 没有实现，刷新只会失败；保留账号原样（#242）。
+        if (retiredProvider(row.provider)) continue;
         if (
           row.last_error === "账号凭据损坏，原文件已隔离" ||
           ((row.status === "pending" || row.status === "error") &&

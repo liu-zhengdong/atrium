@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -10,6 +10,7 @@ import {
 import {
   getBuiltinModels,
   getBuiltinProviders,
+  type BuiltinProvider,
 } from "@earendil-works/pi-ai/providers/all";
 import {
   THINKING_LEVELS,
@@ -21,7 +22,6 @@ import {
 import { commandAgent } from "../shared/command-agent.ts";
 import { editDistance, Problem } from "./problem.ts";
 import { Store } from "./store.ts";
-import { privateWrite } from "./account-files.ts";
 import { readIdentityModel, writeIdentityModel } from "./profile.ts";
 
 /** 上次取到的可选模型。身份离线时问不到 pi，界面和命令靠这份列出来。 */
@@ -97,37 +97,6 @@ function readStoredFile(file: string): {
     return { raw, data: parsed.success ? parsed.data : {} };
   } catch {
     return { raw, data: {} };
-  }
-}
-
-/**
- * 把模板里这个供应商的模型目录缓存带进身份目录，让没启动过的身份也能列出、校验模型。
- * 这是可再生的缓存、不含凭据：模板里没有就跳过，身份自己刷新过的不覆盖，
- * 读不了的旧文件挪开留原文再写新的。
- */
-export function seedModelsStore(
-  directory: string,
-  provider: string,
-  template: string,
-): boolean {
-  try {
-    const source = readStoredFile(join(template, "models-store.json"));
-    if (source.raw !== null && !Object.keys(source.data).length)
-      console.error("模板的模型目录缓存读不了，跳过带上");
-    const entry = source.data[provider];
-    if (!entry) return false;
-    const file = join(directory, "models-store.json");
-    const current = readStoredFile(file);
-    if (current.data[provider]) return false;
-    if (current.raw !== null && !Object.keys(current.data).length) {
-      renameSync(file, `${file}.unreadable`);
-      console.error(`身份的模型目录缓存读不了，原文留在 ${file}.unreadable`);
-    }
-    privateWrite(file, { ...current.data, [provider]: entry });
-    return true;
-  } catch (error) {
-    console.error(`带上 ${provider} 的模型目录缓存失败：${String(error)}`);
-    return false;
   }
 }
 
@@ -253,12 +222,30 @@ export function directoryModelOptions(directory: string | null): ModelOption[] {
   return mergeModelOptions(stored, custom);
 }
 
-/** 身份不在线时能给出的可选模型：运行中观察到的缓存，加身份目录里的模型清单。 */
+/** 分到的账号是 Pi 自带供应商时，Pi 自带的模型表；没启动过的身份也能列出、设定。 */
+function assignedBuiltinModels(store: Store, id: string): ModelOption[] {
+  const builtin = new Set<string>(getBuiltinProviders());
+  return store
+    .all<{ provider: string }>(
+      "SELECT provider FROM account_assignments WHERE agent_id=? ORDER BY provider",
+      id,
+    )
+    .filter(({ provider }) => builtin.has(provider))
+    .flatMap(({ provider }) =>
+      getBuiltinModels(provider as BuiltinProvider).map((model) => ({
+        id: `${provider}/${model.id}`,
+        name: model.name,
+      })),
+    );
+}
+
+/** 身份不在线时能给出的可选模型：运行中观察到的缓存，加身份目录里的模型清单与所分供应商的 Pi 自带模型。 */
 export function offlineModels(store: Store, id: string): ModelOption[] {
   const { agent_directory } = store.agent(id);
   return mergeModelOptions(
     cachedModels(store, id),
     directoryModelOptions(agent_directory),
+    assignedBuiltinModels(store, id),
   );
 }
 

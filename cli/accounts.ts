@@ -4,6 +4,7 @@ import { connect } from "./service.ts";
 import { printJson, table } from "./format.ts";
 import { str, type Command, type Values } from "./main.ts";
 import { Problem } from "../server/problem.ts";
+import { CLAUDE_CLOSED, retiredProvider } from "../shared/providers.ts";
 
 type Account = {
   id: string;
@@ -103,6 +104,7 @@ export const accountCommands: Record<string, Command> = {
     async run({ json }) {
       const list = await (await connect()).get<Account[]>("/accounts");
       if (json) return printJson(list);
+      const retired = list.filter((a) => retiredProvider(a.provider));
       console.log(
         list.length
           ? table([
@@ -112,18 +114,22 @@ export const accountCommands: Record<string, Command> = {
                 a.provider,
                 a.name,
                 a.type === "local" ? "本机登录 · 不保存 Key" : a.type,
-                a.status,
+                retiredProvider(a.provider) ? "不再支持" : a.status,
                 a.expires ? new Date(a.expires).toLocaleString() : "",
                 a.assigned.join(","),
               ]),
             ])
           : "暂无账号",
       );
+      for (const a of retired) {
+        const { reason, fix } = retiredProvider(a.provider)!;
+        console.log(`${a.id}：${reason}${fix ? `\n  ${fix}` : ""}`);
+      }
     },
   },
   "account add": {
-    args: "provider [--local | --name 名称 --key - | --setup-token -]",
-    about: "添加 API Key、本机登录或独立 Claude setup-token 账号",
+    args: "provider [--name 名称] --key -",
+    about: "添加 API Key 账号（不再新建 Claude 账号）",
     positionals: [1, 1],
     options: {
       ...nameOption,
@@ -132,37 +138,13 @@ export const accountCommands: Record<string, Command> = {
       "setup-token": { type: "string" },
     },
     async run({ positionals: [provider], values }) {
-      if (values.local) {
-        if (str(values, "key") || str(values, "name"))
-          throw new Problem(400, "本机登录不需要 --key 或 --name");
-        const result = await (
-          await connect()
-        ).post<{ id: string }>("/accounts/local", { provider });
-        console.log(
-          `本机登录账号 ${result.id} 已添加；下一步：atrium assign <身份> ${result.id}`,
-        );
-        return;
-      }
-      const setup = str(values, "setup-token");
-      if (setup !== undefined) {
-        if (provider !== "claude-bridge" || setup !== "-" || str(values, "key"))
-          throw new Problem(
-            400,
-            "仅 claude-bridge 接受 --setup-token -，且不能同时传 --key",
-          );
-        let token = "";
-        for await (const chunk of stdin) token += chunk.toString();
-        const result = await (
-          await connect()
-        ).post<{ id: string }>("/accounts/setup-token", {
-          name: name(provider, values),
-          token: token.trimEnd(),
-        });
-        console.log(
-          `账号 ${result.id} 已添加；下一步：先停止身份，再 atrium assign <身份> ${result.id}`,
-        );
-        return;
-      }
+      // 新建 Claude 账号已封（#242）；在读标准输入之前拒绝，令牌不会被读走。
+      if (
+        values.local ||
+        str(values, "setup-token") !== undefined ||
+        provider === "claude-bridge"
+      )
+        throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
       if (str(values, "key") !== "-")
         throw new Problem(400, "只接受 --key - 从标准输入读取");
       let key = "";

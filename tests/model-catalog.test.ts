@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,7 +17,6 @@ import {
   liveThinkingProblem,
   offlineModels,
   rememberModels,
-  seedModelsStore,
 } from "../server/model.ts";
 
 const withAgent = (name: string) => {
@@ -181,43 +179,24 @@ test("思考强度不支持时回支持的档位，并给能直接执行的修�
   }
 });
 
-test("分配时从模板带上供应商的模型目录缓存，不覆盖、坏文件挪开", () => {
-  const template = mkdtempSync(join(tmpdir(), "atrium-158-template-"));
-  const identity = mkdtempSync(join(tmpdir(), "atrium-158-identity-"));
-  const file = join(identity, "models-store.json");
+test("没启动过的身份按所分账号列出 Pi 自带模型，不读个人模板（#242）", () => {
+  const { store, agent, cleanup } = withAgent("新身份");
   try {
-    writeFileSync(
-      join(template, "models-store.json"),
-      JSON.stringify({
-        "ocgo-fake": { models: [{ id: "deepseek-v4.1-flash" }] },
-      }),
+    assert.deepEqual(offlineModels(store, agent.id), []);
+    const account = store.run(
+      "INSERT INTO accounts(provider,name,type) VALUES('xai','xAI','oauth')",
+    ).lastInsertRowid;
+    store.run(
+      "INSERT INTO account_assignments(agent_id,provider,account_number) VALUES(?,?,?)",
+      agent.id,
+      "xai",
+      account,
     );
-    // 模板里没有的供应商：跳过，不建文件。
-    assert.equal(seedModelsStore(identity, "fake158", template), false);
-    assert.equal(existsSync(file), false);
-    // 模板里有：写进身份目录。
-    assert.equal(seedModelsStore(identity, "ocgo-fake", template), true);
-    assert.ok(
-      JSON.parse(readFileSync(file, "utf8"))["ocgo-fake"]?.models?.length,
-    );
-    // 身份自己已经有的：不覆盖。
-    writeFileSync(
-      file,
-      JSON.stringify({ "ocgo-fake": { models: [{ id: "local-model" }] } }),
-    );
-    assert.equal(seedModelsStore(identity, "ocgo-fake", template), false);
-    assert.equal(
-      JSON.parse(readFileSync(file, "utf8"))["ocgo-fake"].models[0].id,
-      "local-model",
-    );
-    // 文件坏了：原文挪开留档，再带上模板的缓存。
-    writeFileSync(file, "{broken");
-    assert.equal(seedModelsStore(identity, "ocgo-fake", template), true);
-    assert.equal(readFileSync(`${file}.unreadable`, "utf8"), "{broken");
-    assert.ok(JSON.parse(readFileSync(file, "utf8"))["ocgo-fake"]);
+    const ids = offlineModels(store, agent.id).map((item) => item.id);
+    assert.ok(ids.includes("xai/grok-4.3"), ids.join(" "));
+    assert.ok(ids.every((id) => id.startsWith("xai/")));
   } finally {
-    rmSync(template, { recursive: true, force: true });
-    rmSync(identity, { recursive: true, force: true });
+    cleanup();
   }
 });
 

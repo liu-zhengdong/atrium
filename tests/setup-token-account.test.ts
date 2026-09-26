@@ -292,7 +292,7 @@ test("local old ACP refuses token identity before any start RPC or Pi process", 
   assert.match(store.failure(agent.id)?.text ?? "", /新版 pi-atrium/);
 });
 
-test("HTTP rejects an invalid token without persisting it; replacement is atomic and never echoes token", async (t) => {
+test("HTTP refuses new setup-token accounts; replacement of an existing one is atomic and never echoes token", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-setup-api-"));
   const template = join(dir, "template");
   mkdirSync(template);
@@ -320,23 +320,24 @@ test("HTTP rejects an invalid token without persisting it; replacement is atomic
     await app.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  const invalid = await app.inject({
-    method: "POST",
-    url: "/api/accounts/setup-token",
-    payload: { name: "bad", token: "FAKE_REJECTED_TOKEN" },
-  });
-  assert.equal(invalid.statusCode, 400);
-  assert.doesNotMatch(invalid.body, /FAKE_REJECTED_TOKEN/);
-  assert.deepEqual(new Accounts(store, join(dir, "data")).list(), []);
-  const created = await app.inject({
+  // 新建 Claude 账号的入口已封（#242）：HTTP 一律拒绝，不回显令牌、不留账号。
+  const refused = await app.inject({
     method: "POST",
     url: "/api/accounts/setup-token",
     payload: { name: "Claude 独立账号", token: "FAKE_VALID_TOKEN" },
   });
-  assert.equal(created.statusCode, 200);
-  const ref = created.json().id as string;
+  assert.equal(refused.statusCode, 400);
+  assert.match(refused.json().error, /不再接入 Claude 模型/);
+  assert.doesNotMatch(refused.body, /FAKE_VALID_TOKEN/);
+  assert.deepEqual(new Accounts(store, join(dir, "data")).list(), []);
+  // 升级前建好的 setup-token 账号仍可经 HTTP 更换令牌。
+  const ref = (
+    await new Accounts(store, join(dir, "data")).addSetupToken(
+      "Claude 独立账号",
+      "FAKE_VALID_TOKEN",
+    )
+  ).id;
   assert.match(ref, /^k[0-9]+$/);
-  assert.doesNotMatch(created.body, /FAKE_VALID_TOKEN/);
   const replaced = await app.inject({
     method: "PUT",
     url: `/api/accounts/${ref}/setup-token`,

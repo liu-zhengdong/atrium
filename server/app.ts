@@ -20,6 +20,8 @@ import {
 import { modelSpec, type ModelOption } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Accounts } from "./accounts.ts";
+import { LOCAL_NAME, LOCAL_PROVIDER } from "./local-account.ts";
+import { CLAUDE_CLOSED } from "../shared/providers.ts";
 import {
   assignmentCommand,
   hasAssignment,
@@ -100,10 +102,7 @@ export async function createApp(options: {
   const runnerAuth = new RunnerAuth(store);
   const accounts = new Accounts(store, options.data);
   removeSharedLinks(store);
-  if (options.runtime !== false) {
-    accounts.start();
-    accounts.preloadProviders();
-  }
+  if (options.runtime !== false) accounts.start();
   const app = Fastify({
     logger: { level: "warn" },
     bodyLimit: 11 * 1024 * 1024,
@@ -459,16 +458,12 @@ export async function createApp(options: {
   }));
   app.get("/api/settings/agent-defaults", () => agentDefaults(options.data));
   app.get("/api/settings/agent-defaults/template", () => templateDefaults());
-  const displayModels = async (options: ModelOption[]) => {
-    if (!options.length) return options;
-    let providerNames = new Map<string, string>();
-    try {
-      providerNames = new Map(
-        (await accounts.providersList()).map((item) => [item.id, item.name]),
-      );
-    } catch {
-      // 模型目录仍可用，供应商显示名缺失时不猜测。
-    }
+  const displayModels = (options: ModelOption[]) => {
+    // 已有的 Claude 账号照常可用，显示名仍要给出（#242）。
+    const providerNames = new Map([
+      [LOCAL_PROVIDER, LOCAL_NAME],
+      ...accounts.providersList().map((item) => [item.id, item.name] as const),
+    ]);
     return options.map((option) => ({
       ...option,
       ...(providerNames.has(option.id.slice(0, option.id.indexOf("/")))
@@ -483,7 +478,13 @@ export async function createApp(options: {
   const modelsForDisplay = async () =>
     displayModels(runtimes ? await runtimes.modelsForDefaults() : []);
   app.get("/api/models", modelsForDisplay);
-  app.get("/api/settings/agent-defaults/models", modelsForDisplay);
+  // 新身份的默认模型只从能新建账号的供应商里选；已停用的和 Claude 不列（#242）。
+  app.get("/api/settings/agent-defaults/models", async () => {
+    const providers = new Set(accounts.providersList().map((item) => item.id));
+    return (await modelsForDisplay()).filter((option) =>
+      providers.has(option.id.slice(0, option.id.indexOf("/"))),
+    );
+  });
   app.put("/api/settings/agent-defaults", (request) => {
     const input = z
       .object({
@@ -552,22 +553,12 @@ export async function createApp(options: {
       custom,
     );
   });
-  app.post("/api/accounts/local", (request) => {
-    const { provider } = z
-      .object({ provider: z.literal("claude-bridge") })
-      .strict()
-      .parse(request.body);
-    return accounts.addLocal(provider);
+  // 新建 Claude 账号一律拒绝（#242）；既有账号的更换令牌等操作不受影响。
+  app.post("/api/accounts/local", () => {
+    throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
   });
-  app.post("/api/accounts/setup-token", (request) => {
-    const { name, token } = z
-      .object({
-        name: z.string().trim().min(1).max(80),
-        token: z.string(),
-      })
-      .strict()
-      .parse(request.body);
-    return accounts.addSetupToken(name, token);
+  app.post("/api/accounts/setup-token", () => {
+    throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
   });
   app.put("/api/accounts/:ref/setup-token", async (request) => {
     const ref = accountRef(request);

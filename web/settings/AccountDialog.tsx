@@ -30,14 +30,7 @@ import type { CustomConfig } from "../../server/custom-providers.ts";
 const inputStyle =
   "field !border-transparent !bg-[#f1f5f2] focus:!border-[#b9c9bd] focus:!bg-white focus:!shadow-none";
 type Step =
-  | "method"
-  | "provider"
-  | "auth"
-  | "name"
-  | "login"
-  | "assign"
-  | "custom"
-  | "local";
+  "method" | "provider" | "auth" | "name" | "login" | "assign" | "custom";
 
 export function AccountDialog({
   account,
@@ -138,7 +131,7 @@ export function AccountDialog({
   const back = () => {
     setError("");
     setStep(
-      step === "provider" || step === "custom" || step === "local"
+      step === "provider" || step === "custom"
         ? "method"
         : step === "auth"
           ? "provider"
@@ -158,17 +151,7 @@ export function AccountDialog({
     setBusy(true);
     setError("");
     try {
-      if (step === "local") {
-        const result = await api<{ id: string }>("/accounts/local", "POST", {
-          provider: "claude-bridge",
-        });
-        setCreated(result.id);
-        setStep("assign");
-        await reload();
-      } else if (
-        (step === "auth" && !account) ||
-        (step === "name" && provider)
-      ) {
+      if ((step === "auth" && !account) || (step === "name" && provider)) {
         if (!provider) throw new Error("请先选择供应商");
         if (method === "api_key" && !key.trim())
           throw new Error("API Key 不能为空");
@@ -296,9 +279,7 @@ export function AccountDialog({
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             {!account &&
-              ["provider", "auth", "name", "custom", "local"].includes(
-                step,
-              ) && (
+              ["provider", "auth", "name", "custom"].includes(step) && (
                 <button
                   type="button"
                   className="icon-button"
@@ -347,31 +328,11 @@ export function AccountDialog({
                 </span>
                 <span className="mt-1 block text-xs text-muted">
                   {item === "oauth"
-                    ? "用已有订阅在浏览器登录，如 ChatGPT、Claude、Copilot"
+                    ? "用已有订阅在浏览器登录，如 ChatGPT、SuperGrok"
                     : "粘贴供应商后台生成的密钥"}
                 </span>
               </button>
             ))}
-            <button
-              type="button"
-              className="w-full rounded-xl bg-[#f3f6f3] px-4 py-3 text-left hover:bg-[#e9f0ea]"
-              onClick={() => {
-                setMethod("local");
-                setProvider({
-                  id: "claude-bridge",
-                  name: "Claude Code（本机登录）",
-                  methods: ["local"],
-                  packagePath: null,
-                });
-                setName("Claude Code（本机登录）");
-                setStep("local");
-              }}
-            >
-              <span className="block text-sm">Claude Code（本机登录）</span>
-              <span className="mt-1 block text-xs text-muted">
-                使用这台电脑已登录的 Claude CLI，不保存密钥
-              </span>
-            </button>
             <button
               type="button"
               className="w-full rounded-xl bg-[#f3f6f3] px-4 py-3 text-left text-sm hover:bg-[#e9f0ea]"
@@ -379,35 +340,6 @@ export function AccountDialog({
             >
               自定义（OpenAI 兼容）
             </button>
-          </div>
-        )}
-        {step === "local" && (
-          <div className="mt-5 space-y-4">
-            <p className="m-0 text-sm">
-              将使用这台电脑的 Claude CLI 登录。登录由 Claude CLI 管理，Atrium
-              不保存凭据。
-            </p>
-            <p className="m-0 text-xs text-muted">
-              添加时仅检查 Claude CLI
-              版本，不读取登录信息；运行模型前需自行登录。
-            </p>
-            {error && (
-              <p role="alert" className="text-xs text-[#9a5b4b]">
-                {error}
-              </p>
-            )}
-            <div className="flex justify-end gap-2">
-              <button className="button secondary" onClick={back}>
-                返回
-              </button>
-              <button
-                className="button"
-                disabled={busy}
-                onClick={() => void submit()}
-              >
-                {busy ? "正在检查…" : "添加本机登录"}
-              </button>
-            </div>
           </div>
         )}
         {step === "custom" && (
@@ -420,12 +352,7 @@ export function AccountDialog({
               close();
             }}
             onCreated={async (id, label, ref) => {
-              setProvider({
-                id,
-                name: id,
-                methods: ["api_key"],
-                packagePath: null,
-              });
+              setProvider({ id, name: id, methods: ["api_key"] });
               setName(label);
               setCreated(ref);
               setStep("assign");
@@ -505,11 +432,7 @@ export function AccountDialog({
             {step === "assign" && provider && created && (
               <p className="text-xs text-muted">
                 {accountLabel(provider, name, created)}
-                {method === "api_key"
-                  ? "已保存"
-                  : method === "local"
-                    ? "已登记"
-                    : "已连接"}
+                {method === "api_key" ? "已保存" : "已连接"}
               </p>
             )}
             {result && (
@@ -576,12 +499,11 @@ export function AccountDialog({
             />
           </div>
         )}
-        {error &&
-          !["provider", "auth", "name", "assign", "local"].includes(step) && (
-            <p role="alert" className="mt-3 text-xs text-[#9a5b4b]">
-              {error}
-            </p>
-          )}
+        {error && !["provider", "auth", "name", "assign"].includes(step) && (
+          <p role="alert" className="mt-3 text-xs text-[#9a5b4b]">
+            {error}
+          </p>
+        )}
       </section>
     </div>,
     document.body,

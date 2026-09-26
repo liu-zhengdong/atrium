@@ -3,26 +3,37 @@ export type ProviderEntry = {
   id: string;
   name: string;
   methods: ProviderMethod[];
-  packagePath: string | null;
 };
 
-/** One provider can offer both authentication methods; never duplicate it in the selector. */
-export function mergeProviders(entries: ProviderEntry[]): ProviderEntry[] {
-  const merged = new Map<string, ProviderEntry>();
-  for (const entry of entries) {
-    const previous = merged.get(entry.id);
-    merged.set(
-      entry.id,
-      previous
-        ? {
-            ...entry,
-            methods: [...new Set([...previous.methods, ...entry.methods])],
-            packagePath: entry.packagePath ?? previous.packagePath,
-          }
-        : { ...entry, methods: [...new Set(entry.methods)] },
-    );
-  }
-  return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+/**
+ * 不再列出的旧供应商（#242）：账号数据保留，但不再刷新、登录或分配。
+ * fix 是能直接执行的修正；没有就只说明。
+ */
+export const RETIRED_PROVIDERS: Record<
+  string,
+  { reason: string; fix?: string }
+> = {
+  "xai-auth": {
+    reason:
+      "xAI 已改用 Pi 自带的 xai 供应商，旧 xai-auth 账号不再刷新或分配；请重新登录 xai，把身份分到新账号后删除旧账号",
+    fix: "atrium connect xai",
+  },
+  antigravity: {
+    reason: "Antigravity 不再支持，账号数据保留但不再刷新或分配",
+  },
+};
+
+/**
+ * 新建 Claude 账号的入口已封（#242）：Claude 以后走 Claude Code 后端（#193）。
+ * 既有 claude-bridge 账号与分配照常可用，更换令牌等对既有账号的操作不受影响。
+ */
+export const CLAUDE_CLOSED =
+  "Atrium 不再接入 Claude 模型，Claude 以后走 Claude Code 后端（#193）；已有的 Claude 账号与分配照常可用";
+
+export function retiredProvider(id: string) {
+  return Object.hasOwn(RETIRED_PROVIDERS, id)
+    ? RETIRED_PROVIDERS[id]
+    : undefined;
 }
 
 export function methodsFor(

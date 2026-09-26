@@ -1,5 +1,5 @@
 import { type ChildProcess } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./account-files.ts";
 import { AccountWorker } from "./account-worker-client.ts";
 import { ProviderDirectory } from "./provider-directory.ts";
+import { retiredProvider } from "../shared/providers.ts";
 import { Problem, type Store } from "./store.ts";
 
 type Job = {
@@ -30,7 +31,7 @@ export class AccountLogin {
     private store: Store,
     private files: AccountFiles,
     private worker: Pick<AccountWorker, "run">,
-    private providers?: ProviderDirectory,
+    private providers = new ProviderDirectory(),
   ) {}
   private row(number: number) {
     return this.store.one<Row>(
@@ -40,8 +41,7 @@ export class AccountLogin {
   }
   async login(provider: string, name: string) {
     provider = providerName.parse(provider);
-    if (!this.providers) throw new Problem(500, "供应商目录不可用");
-    const entry = await this.providers.require(provider, "oauth");
+    this.providers.require(provider, "oauth");
     const number = Number(
       this.store.run(
         "INSERT INTO accounts(provider,name,type,status) VALUES(?,?,'oauth','pending')",
@@ -53,10 +53,6 @@ export class AccountLogin {
       directory = this.files.dir(number);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     privateWrite(authFile(directory), {});
-    if (entry.packagePath)
-      privateWrite(join(directory, "settings.json"), {
-        packages: [entry.packagePath],
-      });
     this.start(
       row,
       directory,
@@ -76,16 +72,20 @@ export class AccountLogin {
   relogin(number: number, distribute: () => void) {
     const row = this.row(number);
     if (row.type !== "oauth") throw new Problem(400, "此账号不是 OAuth 登录");
+    const retired = retiredProvider(row.provider);
+    if (retired)
+      throw new Problem(
+        400,
+        retired.reason,
+        "provider_retired",
+        undefined,
+        retired.fix,
+      );
     if (this.jobs.get(number)?.done === false)
       throw new Problem(409, "此账号正在登录");
     const directory = this.files.dir(number);
     const staged = join(directory, `login-${randomUUID()}`);
     mkdirSync(staged, { mode: 0o700 });
-    if (existsSync(join(directory, "settings.json")))
-      copyFileSync(
-        join(directory, "settings.json"),
-        join(staged, "settings.json"),
-      );
     privateWrite(authFile(staged), {});
     this.store.run(
       "UPDATE accounts SET status='pending',last_error=NULL WHERE number=?",

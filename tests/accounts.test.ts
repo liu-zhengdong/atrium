@@ -197,21 +197,7 @@ test("cancelling a first OAuth login removes its row and directory even when the
         finish = resolve;
       }),
   };
-  const login = new AccountLogin(
-    store,
-    files,
-    worker,
-    new ProviderDirectory({
-      list: async () => [
-        {
-          id: "openai-codex",
-          name: "OpenAI Codex",
-          methods: ["oauth"],
-          packagePath: null,
-        },
-      ],
-    }),
-  );
+  const login = new AccountLogin(store, files, worker, new ProviderDirectory());
   const before = accounts.list();
   const { id } = await login.login("openai-codex", "临时账号");
   assert.equal(accounts.list().length, before.length + 1);
@@ -534,77 +520,46 @@ test("offline OAuth refresh is adopted from the newest assigned identity before 
   store.close();
 });
 
-test("Antigravity sidecar is required, copied and recovered with a newer credential", async () => {
-  const { dir, store, agent, agentDirectory, accounts } = fixture();
+test("不再支持的 Antigravity 与旧 xai-auth：不分配、不刷新、不重新登录，账号数据原样保留（#242）", async () => {
+  const { store, agent, agentDirectory, accounts } = fixture();
   const old = {
     type: "oauth",
     access: "old",
     refresh: "old",
     expires: Date.now() - 1000,
   };
-  const number = Number(
-    store.run(
-      "INSERT INTO accounts(provider,name,type,expires) VALUES(? ,? ,'oauth',?)",
-      "antigravity",
-      "Plugin",
-      old.expires,
-    ).lastInsertRowid,
-  );
-  const ref = `k${number}`,
-    source = join(accounts.root, ref);
-  mkdirSync(source);
-  writeFileSync(
-    join(source, "auth.json"),
-    JSON.stringify({ antigravity: old }),
-    { mode: 0o600 },
-  );
-  assert.throws(
-    () => accounts.assign(agent.id, ref),
-    (error) => error instanceof Problem && error.statusCode === 409,
-  );
-  const sidecar = {
-    version: 1,
-    accounts: { test: { ...old, accountId: "test" } },
-    activeAccountId: "test",
-  };
-  writeFileSync(
-    join(source, "antigravity-accounts.json"),
-    JSON.stringify(sidecar),
-    { mode: 0o600 },
-  );
-  accounts.assign(agent.id, ref);
-  assert.deepEqual(
-    JSON.parse(
-      readFileSync(join(agentDirectory, "antigravity-accounts.json"), "utf8"),
-    ),
-    sidecar,
-  );
-  const latest = {
-    ...old,
-    access: "new",
-    refresh: "new",
-    expires: Date.now() + 60 * 60_000,
-  };
-  writeFileSync(
-    join(agentDirectory, "auth.json"),
-    JSON.stringify({ antigravity: latest }),
-    { mode: 0o600 },
-  );
-  sidecar.accounts.test = { ...latest, accountId: "test" };
-  writeFileSync(
-    join(agentDirectory, "antigravity-accounts.json"),
-    JSON.stringify(sidecar),
-    { mode: 0o600 },
-  );
-  await accounts.refresh();
-  assert.deepEqual(
-    JSON.parse(readFileSync(join(source, "antigravity-accounts.json"), "utf8")),
-    sidecar,
-  );
-  assert.deepEqual(
-    JSON.parse(readFileSync(join(source, "auth.json"), "utf8")).antigravity,
-    latest,
-  );
+  for (const provider of ["antigravity", "xai-auth"]) {
+    const number = Number(
+      store.run(
+        "INSERT INTO accounts(provider,name,type,status,expires) VALUES(?,?,'oauth','ready',?)",
+        provider,
+        "Plugin",
+        old.expires,
+      ).lastInsertRowid,
+    );
+    const ref = `k${number}`,
+      source = join(accounts.root, ref);
+    mkdirSync(source);
+    const saved = JSON.stringify({ [provider]: old });
+    writeFileSync(join(source, "auth.json"), saved, { mode: 0o600 });
+    assert.throws(
+      () => accounts.assign(agent.id, ref),
+      (error) =>
+        error instanceof Problem &&
+        error.statusCode === 409 &&
+        error.code === "provider_retired",
+    );
+    assert.throws(
+      () => accounts.relogin(ref),
+      (error) => error instanceof Problem && error.code === "provider_retired",
+    );
+    await accounts.refresh();
+    assert.equal(readFileSync(join(source, "auth.json"), "utf8"), saved);
+    const row = accounts.list().find((entry) => entry.id === ref);
+    assert.equal(row?.status, "ready");
+    assert.equal(row?.last_error, null);
+  }
+  assert.equal(existsSync(join(agentDirectory, "auth.json")), false);
   store.close();
 });
 
@@ -627,21 +582,11 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
       identity,
       agent.id,
     );
-    const add = async (name: string) =>
-      (
-        await app.inject({
-          method: "POST",
-          url: "/api/accounts",
-          headers,
-          payload: {
-            provider: "amazon-bedrock",
-            name,
-            key: name,
-          },
-        })
-      ).json().id as string;
-    const old = await add("old"),
-      next = await add("next");
+    // 建账号走真实校验会联网；这里只测分配，直接落库。
+    const setup = new Accounts(store, dir);
+    const add = (name: string) => setup.add("opencode-go", name, name).id;
+    const old = add("old"),
+      next = add("next");
     const assign = (account: string, replace?: boolean) =>
       app.inject({
         method: "POST",
@@ -655,25 +600,25 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
     assert.equal(conflict.statusCode, 409);
     assert.match(
       conflict.json().nextCommand,
-      new RegExp(`atrium unassign ${agent.name} amazon-bedrock`),
+      new RegExp(`atrium unassign ${agent.name} opencode-go`),
     );
     store.run("UPDATE agents SET name=? WHERE id=?", "张 三", agent.id);
     const spacedConflict = await assign(next);
     assert.equal(spacedConflict.statusCode, 409);
     assert.equal(
       spacedConflict.json().nextCommand,
-      `atrium unassign ${agent.ref} amazon-bedrock`,
+      `atrium unassign ${agent.ref} opencode-go`,
     );
     store.run("UPDATE agents SET name=? WHERE id=?", "张;三", agent.id);
     assert.equal(
       (await assign(next)).json().nextCommand,
-      `atrium unassign ${agent.ref} amazon-bedrock`,
+      `atrium unassign ${agent.ref} opencode-go`,
     );
     store.run("UPDATE agents SET name=? WHERE id=?", agent.name, agent.id);
     assert.equal((await assign("k999999", true)).statusCode, 404);
     assert.equal(
       JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[
-        "amazon-bedrock"
+        "opencode-go"
       ].key,
       "old",
     );
@@ -683,7 +628,7 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
     assert.equal((await assign(next, true)).statusCode, 500);
     assert.equal(
       JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[
-        "amazon-bedrock"
+        "opencode-go"
       ].key,
       "old",
     );
@@ -698,7 +643,7 @@ test("assign HTTP replaces one provider in one request and rolls back failed rep
     ]);
     assert.equal(
       JSON.parse(readFileSync(join(identity, "auth.json"), "utf8"))[
-        "amazon-bedrock"
+        "opencode-go"
       ].key,
       "next",
     );
@@ -719,28 +664,17 @@ test("account HTTP responses omit credentials even on malformed stored JSON", as
   const key = "SECRET_HTTP_ERROR_VALUE";
   const headers = { host: "127.0.0.1" };
   try {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/accounts",
-      headers,
-      payload: {
-        provider: "amazon-bedrock",
-        name: "http",
-        key,
-      },
-    });
-    assert.equal(created.statusCode, 200);
-    assert.equal(created.body.includes(key), false);
+    // 建账号走真实校验会联网；这里只测读和分配的响应，直接落库。
+    const id = new Accounts(store, dir).add("opencode-go", "http", key).id;
     const list = await app.inject({
       method: "GET",
       url: "/api/accounts",
       headers,
     });
     assert.equal(list.body.includes(key), false);
-    const id = created.json().id as string;
     writeFileSync(
       join(dir, "accounts", id, "auth.json"),
-      `{ "amazon-bedrock": "${key}`,
+      `{ "opencode-go": "${key}`,
     );
     const agent = store.createAgent("测试", dir).agent;
     const directory = join(dir, "identity");

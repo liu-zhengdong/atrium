@@ -1,97 +1,163 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  builtinProviders,
+  getBuiltinModels,
+  type BuiltinProvider,
+} from "@earendil-works/pi-ai/providers/all";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
-import { mergeProviders, methodsFor } from "../shared/providers.ts";
-import { defaultTemplate } from "./profile.ts";
-import { templatePackagePath } from "./package-spec.ts";
+import {
+  CLAUDE_CLOSED,
+  methodsFor,
+  retiredProvider,
+} from "../shared/providers.ts";
+import { LOCAL_PROVIDER } from "./local-account.ts";
 import { Problem } from "./store.ts";
-import type { AccountWorker } from "./account-worker-client.ts";
 
-function stamp(path: string) {
-  try {
-    const stat = statSync(path);
-    return `${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return "missing";
-  }
+/**
+ * Atrium 自己维护的供应商列表（#242）：登录、刷新和请求协议都用 Pi 自带实现，
+ * 不看个人模板里装了哪些插件。Claude 走运行器（#193），不在这里。
+ */
+export const SUPPORTED_PROVIDERS = [
+  "openai-codex",
+  "xai",
+  "kimi-coding",
+  "opencode-go",
+] as const satisfies readonly BuiltinProvider[];
+
+/**
+ * Pi 自带模型表里还没有的模型，分配账号时写进身份的 models.json。
+ * 定义取自原插件给出的目录：gpt-6-sol 来自 pi-better-openai 拉取的 openai-codex
+ * 目录，grok-4.7 来自 pi-xai-oauth 缓存的账号目录；Pi 自带了同名模型就不再补。
+ * 不写 baseUrl：跟随供应商（及身份配置的代理地址），与 Pi 自带模型走同一个端点。
+ */
+const SUPPLEMENT_MODELS: Partial<
+  Record<(typeof SUPPORTED_PROVIDERS)[number], Record<string, unknown>[]>
+> = {
+  "openai-codex": [
+    {
+      id: "gpt-6-sol",
+      name: "GPT-6 Sol",
+      api: "openai-codex-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 2,
+        output: 10,
+        cacheRead: 0.2,
+        cacheWrite: 2.5,
+        tiers: [
+          {
+            inputTokensAbove: 272000,
+            input: 4,
+            output: 15,
+            cacheRead: 0.4,
+            cacheWrite: 5,
+          },
+        ],
+      },
+      contextWindow: 272000,
+      maxTokens: 128000,
+      thinkingLevelMap: {
+        off: "none",
+        minimal: "low",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: "max",
+      },
+      compat: {
+        supportsOpenAIGrammarTools: true,
+        supportsAdditionalTools: true,
+        supportsToolSearch: true,
+        supportsMidConvoSystemMessages: true,
+      },
+    },
+  ],
+  xai: [
+    {
+      id: "grok-4.7",
+      name: "Grok 4.7",
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 500000,
+      maxTokens: 16384,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: null,
+      },
+      compat: { supportsLongCacheRetention: false },
+    },
+  ],
+};
+
+const supported = (id: string): id is (typeof SUPPORTED_PROVIDERS)[number] =>
+  (SUPPORTED_PROVIDERS as readonly string[]).includes(id);
+
+/** 这个供应商要补进身份 models.json 的条目；不需要补时为 null。 */
+export function supplementEntry(provider: string) {
+  if (!supported(provider)) return null;
+  const builtin = new Set(getBuiltinModels(provider).map((model) => model.id));
+  const models = (SUPPLEMENT_MODELS[provider] ?? []).filter(
+    (model) => !builtin.has(model.id as string),
+  );
+  return models.length ? { models } : null;
 }
-/** Settings and installed package changes invalidate the shared worker result. */
-function fingerprint(template: string) {
-  const file = join(template, "settings.json");
-  let packages: string[] = [];
-  try {
-    const settings = JSON.parse(readFileSync(file, "utf8"));
-    packages = (settings.packages ?? []).map(
-      (item: string | { source: string }) =>
-        typeof item === "string" ? item : item.source,
-    );
-  } catch {
-    /* The worker reports an invalid template instead. */
-  }
-  return [
-    template,
-    stamp(file),
-    ...packages.flatMap((spec) => {
-      let path: string;
-      try {
-        path = templatePackagePath(template, spec);
-      } catch {
-        return [spec, "invalid"];
-      }
-      let entrypoints: string[] = [];
-      try {
-        const manifest = JSON.parse(
-          readFileSync(join(path, "package.json"), "utf8"),
-        );
-        entrypoints = (manifest.pi?.extensions ?? []).map((entry: string) =>
-          resolve(path, entry),
-        );
-      } catch {
-        /* Local extensions may not have a manifest. */
-      }
-      return [
-        spec,
-        stamp(path),
-        stamp(join(path, "package.json")),
-        stamp(join(path, "extensions")),
-        ...entrypoints.flatMap((entry) => [entry, stamp(entry)]),
-      ];
-    }),
-  ].join("|");
-}
+
+/** 列表里的供应商 id 与合法写法；报错时给调用方看。 */
+const listed = () => SUPPORTED_PROVIDERS.join("、");
 
 export class ProviderDirectory {
-  private cache?: { fingerprint: string; providers: ProviderEntry[] };
-  private pending?: Promise<ProviderEntry[]>;
-  constructor(private worker: Pick<AccountWorker, "list">) {}
-  async list(): Promise<ProviderEntry[]> {
-    const template = defaultTemplate();
-    const current = fingerprint(template);
-    if (this.cache?.fingerprint === current) return this.cache.providers;
-    if (this.pending) return this.pending;
-    this.pending = this.worker
-      .list(template)
-      .then((entries) => {
-        const providers = mergeProviders(
-          entries.filter((entry) => entry.methods.length),
-        );
-        this.cache = { fingerprint: current, providers };
-        return providers;
-      })
-      .finally(() => {
-        this.pending = undefined;
-      });
-    return this.pending;
+  private entries?: ProviderEntry[];
+  list(): ProviderEntry[] {
+    this.entries ??= builtinProviders()
+      .filter((item) => supported(item.id))
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        methods: [
+          ...(item.auth.oauth ? (["oauth"] as const) : []),
+          ...(item.auth.apiKey ? (["api_key"] as const) : []),
+        ],
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return this.entries;
   }
-  async require(
-    provider: string,
-    method: ProviderMethod,
-  ): Promise<ProviderEntry> {
-    const entry = (await this.list()).find((item) => item.id === provider);
-    if (!entry || !methodsFor(entry, method).length)
-      throw new Problem(400, `供应商不存在或不支持此方式：${provider}`);
-    if (entry.packagePath && !existsSync(entry.packagePath))
-      throw new Problem(400, `供应商插件不可用：${provider}`);
+  require(provider: string, method: ProviderMethod): ProviderEntry {
+    const retired = retiredProvider(provider);
+    if (retired)
+      throw new Problem(
+        400,
+        retired.reason,
+        "provider_retired",
+        undefined,
+        retired.fix,
+      );
+    if (provider === LOCAL_PROVIDER)
+      throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
+    const entry = this.list().find((item) => item.id === provider);
+    if (!entry)
+      throw new Problem(
+        400,
+        `供应商不存在：${provider}。可用：${listed()}，或自定义兼容供应商`,
+        "provider_not_found",
+        undefined,
+        "atrium connect",
+      );
+    if (!methodsFor(entry, method).length)
+      throw new Problem(
+        400,
+        `${entry.name} 不支持${method === "oauth" ? "账号登录" : "API Key"}，只支持${entry.methods.map((item) => (item === "oauth" ? "账号登录" : "API Key")).join("、")}`,
+        "usage",
+        undefined,
+        `atrium connect ${entry.id}`,
+      );
     return entry;
   }
 }

@@ -64,30 +64,23 @@ test("本机 Claude CLI 登录只登记引用：不能导入密钥，分配与�
     join(directory, "claude-bridge.json"),
     JSON.stringify({ provider: { pathToClaudeCodeExecutable: cli } }),
   );
-  const invalid = await app.inject({
-    method: "POST",
-    url: "/api/accounts/local",
-    payload: { provider: "deepseek" },
-  });
-  assert.equal(invalid.statusCode, 400);
+  // 新建 Claude 账号的入口已封（#242）：HTTP 一律拒绝，不留账号。
+  for (const provider of ["claude-bridge", "deepseek"]) {
+    const refused = await app.inject({
+      method: "POST",
+      url: "/api/accounts/local",
+      payload: { provider },
+    });
+    assert.equal(refused.statusCode, 400);
+    assert.match(refused.json().error, /不再接入 Claude 模型/);
+  }
   assert.deepEqual(new Accounts(store, data).list(), []);
-  const added = await app.inject({
-    method: "POST",
-    url: "/api/accounts/local",
-    payload: { provider: "claude-bridge" },
-  });
-  assert.equal(added.statusCode, 200);
-  const ref = added.json().id as string;
+  // 既有的本机登录账号（升级前建好的）照常分配与复查。
+  const ref = new Accounts(store, data).addLocal("claude-bridge").id;
   assert.match(ref, /^k\d+$/);
-  assert.equal(
-    (
-      await app.inject({
-        method: "POST",
-        url: "/api/accounts/local",
-        payload: { provider: "claude-bridge" },
-      })
-    ).statusCode,
-    409,
+  assert.throws(
+    () => new Accounts(store, data).addLocal("claude-bridge"),
+    /已存在/,
   );
   const accounts = new Accounts(store, data);
   assert.deepEqual(

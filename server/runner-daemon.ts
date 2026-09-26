@@ -68,6 +68,8 @@ export class RunnerDaemon {
       url.replace(/^ws:/, "http:"),
       () => !!this.link?.connected,
       token,
+      45_000,
+      (id) => !this.journal?.hasContainerRecord(id),
     );
   }
   private async open(): Promise<Gateway> {
@@ -205,6 +207,11 @@ export class RunnerDaemon {
   private async drainStatus(agentId: string) {
     if (!this.draining.has(agentId)) throw new Error("身份尚未进入排空");
     const pending = this.inFlight.get(agentId) ?? 0;
+    if (this.journal?.hasContainerRecord(agentId))
+      return {
+        drained: false,
+        busy: ["容器写者未接入排空，不能按宿主空闲判断"],
+      };
     const gateway = await this.open();
     const { runtimes } = z
       .object({ runtimes: z.array(liveRuntimeSchema).max(256) })
@@ -241,6 +248,12 @@ export class RunnerDaemon {
       const input = z
         .object({ agentId: z.string().regex(/^[a-zA-Z0-9-]+$/) })
         .parse(payload);
+      if (this.journal?.hasContainerRecord(input.agentId))
+        throw new Problem(
+          409,
+          "容器身份不能使用宿主 MCP 通路",
+          "container_mcp_unavailable",
+        );
       return { url: this.mcp.url(input.agentId) };
     }
     if (method === "runner.reclaim") {

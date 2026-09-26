@@ -176,6 +176,24 @@ test("容器 journal 在创建前记意图；未知、活跃或错代旧写者�
         ).handleAcp("a1", "_pi/identity/start", { identityId: "a1" }),
       /容器身份不能使用宿主 Pi 通路/,
     );
+    await assert.rejects(
+      () =>
+        (
+          daemon as unknown as {
+            handle(method: string, params: unknown): Promise<unknown>;
+          }
+        ).handle("mcp.url", { agentId: "a1" }),
+      /容器身份不能使用宿主 MCP 通路/,
+    );
+    const drain = daemon as unknown as {
+      draining: Set<string>;
+      drainStatus(id: string): Promise<{ drained: boolean; busy: string[] }>;
+    };
+    drain.draining.add("a1");
+    assert.deepEqual(await drain.drainStatus("a1"), {
+      drained: false,
+      busy: ["容器写者未接入排空，不能按宿主空闲判断"],
+    });
   } finally {
     daemon.close();
   }

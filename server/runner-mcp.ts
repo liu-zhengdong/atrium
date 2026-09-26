@@ -32,6 +32,7 @@ export class RunnerMcp {
     // Pi's MCP client times out after 60 seconds; reserve time for a clear
     // tool result rather than letting the client time out first.
     private waitMs = 45_000,
+    private allowed: (id: string) => boolean = () => true,
   ) {}
   async start(port = 0) {
     this.server.listen(port, "127.0.0.1");
@@ -44,6 +45,7 @@ export class RunnerMcp {
   url(id: string) {
     if (!this.port) throw new Error("MCP 代理尚未启动");
     if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error("无效身份编号");
+    if (!this.allowed(id)) throw new Error("容器身份不能使用宿主 MCP 通路");
     let capability = this.capabilities.get(id);
     if (!capability) {
       capability = randomBytes(32);
@@ -92,6 +94,7 @@ export class RunnerMcp {
     const capability = this.capabilities.get(match[1]);
     if (
       !capability ||
+      !this.allowed(match[1]) ||
       !timingSafeEqual(capability, Buffer.from(match[2], "hex"))
     ) {
       reply.writeHead(403).end();

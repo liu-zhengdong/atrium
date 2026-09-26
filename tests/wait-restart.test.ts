@@ -25,11 +25,13 @@ import { Problem } from "../server/problem.ts";
 import { createApp } from "../server/app.ts";
 import { client } from "../cli/service.ts";
 import { reconnectingWait } from "../cli/wait-options.ts";
+import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
 
 const exec = promisify(execFile);
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-wait198-"));
+  const signal = trackFixture(join(root, "data"), root);
   const data = join(root, "data");
   const socket = createServer();
   await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
@@ -78,6 +80,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     if (record && record.pid !== process.pid && alive(record.pid))
       process.kill(record.pid, "SIGKILL");
     rmSync(root, { recursive: true, force: true });
+    untrackFixture(signal);
   });
   const headers = () => ({
     authorization: `Bearer ${readFileSync(userTokenPath(data), "utf8").trim()}`,
@@ -108,12 +111,15 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     }).then((r) => r.json() as Promise<{ id: string; ref: string }>);
     return { chat, agent: agent.agent };
   };
-  const spawnWait = (args: string[]) =>
-    spawn(
+  const spawnWait = (args: string[]) => {
+    const child = spawn(
       process.execPath,
       [join(packageRoot, "bin/atrium.mjs"), "wait", ...args],
       { env, cwd: root, stdio: ["ignore", "pipe", "pipe"] },
     );
+    trackChild(signal, child);
+    return child;
+  };
   const untilReady = async () => {
     for (let i = 0; i < 60; i++) {
       try {

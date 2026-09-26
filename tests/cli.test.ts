@@ -21,11 +21,13 @@ import { commandAgent } from "../shared/command-agent.ts";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { errorWithDetails } from "../server/runtime-error.ts";
 import { LOCAL_USER } from "../shared/user.ts";
+import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
 
 const exec = promisify(execFile);
 /** 与 service.test.ts 同一种夹具：隔离数据目录、随机端口、假的 Pi 模板，Pi 命令指向不存在的路径。 */
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-cli-"));
+  const signal = trackFixture(join(root, "data"), root);
   const data = join(root, "data");
   const socket = createServer();
   await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
@@ -74,8 +76,9 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     if (record && record.pid !== process.pid && alive(record.pid))
       process.kill(record.pid, "SIGKILL");
     rmSync(root, { recursive: true, force: true });
+    untrackFixture(signal);
   });
-  return { root, data, env, cli };
+  return { root, data, env, cli, signal };
 }
 
 test(
@@ -131,6 +134,7 @@ test(
             [join(packageRoot, "bin/atrium.mjs"), ...args],
             { cwd: f.root, env: f.env },
           );
+          trackChild(f.signal, child);
           let out = "",
             err = "";
           child.stdout.on("data", (part: Buffer) => (out += part));

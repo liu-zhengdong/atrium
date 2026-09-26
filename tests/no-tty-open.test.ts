@@ -15,12 +15,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { packageRoot } from "../server/service-state.ts";
 import { canOpenBrowser, noBrowserHint } from "../server/service.ts";
+import { trackFixture, untrackFixture } from "./fixture-signal.ts";
 
 const exec = promisify(execFile);
 
 /** 隔离夹具：随机端口、临时数据与模板；PATH 前置桩 open/xdg-open，被调用就写标记文件。 */
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-notty-"));
+  const signal = trackFixture(join(root, "data"), root);
   const data = join(root, "data");
   const socket = createServer();
   await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
@@ -73,6 +75,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   t.after(async () => {
     await cli("stop");
     rmSync(root, { recursive: true, force: true });
+    untrackFixture(signal);
   });
   return { cli, marker };
 }

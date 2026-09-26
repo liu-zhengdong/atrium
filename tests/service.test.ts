@@ -29,10 +29,12 @@ import {
   serviceUrl,
 } from "../server/service-state.ts";
 import { openWeb } from "../server/service.ts";
+import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
 
 const exec = promisify(execFile);
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-service-"));
+  const signal = trackFixture(join(root, "data"), root);
   const data = join(root, "data");
   const socket = createServer();
   await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
@@ -82,11 +84,12 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     if (record && record.pid !== process.pid && alive(record.pid))
       process.kill(record.pid, "SIGKILL");
     rmSync(root, { recursive: true, force: true });
+    untrackFixture(signal);
   });
   const userHeaders = () => ({
     authorization: `Bearer ${readFileSync(userTokenPath(data), "utf8").trim()}`,
   });
-  return { root, data, port, env, cli, userHeaders };
+  return { root, data, port, env, cli, userHeaders, signal };
 }
 
 test("新 CLI 连接旧服务：提示 restart 和退出码 7，不进入 rotate 自指循环", async (t) => {
@@ -539,6 +542,7 @@ test(
         stdio: "ignore",
       },
     );
+    trackChild(f.signal, child);
     t.after(async () => {
       if (child.exitCode === null) child.kill();
     });

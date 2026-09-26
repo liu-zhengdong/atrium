@@ -139,6 +139,14 @@ atrium notify 沈默 巡检 "请看 c2 的安排"        # 系统通知
 atrium search 开工
 atrium user --name 老刘                        # 用户资料，Agent 只读
 
+# 任务账本（#262：拆任务 → 派执行者 → 等结果 → 验收 → 汇报）
+atrium task add "上线任务账本" --repo ~/code/atrium   # 建顶层任务，短号 t1；--repo 为工作仓库
+atrium task add "表与状态机" --parent t1 --role web --brief docs/t2.md   # 挂到 t1 下；--brief 为任务详述 md
+atrium task ls --status running               # 列任务；--parent t1 只看直接子任务，--after tN 翻页
+atrium task show t2                           # 详情：字段、执行者、PR、最近事件
+atrium task tree t1                           # 缩进树：短号、状态、标题、执行者、PR；不写 tN 看全部
+atrium task set t2 --status done              # 人工收尾；running 只能由执行者启动进入
+
 # 运行实例
 atrium runtimes                               # 本机发现的 Pi 实例
 atrium attach 林岚 实例ID                       # 把发现的实例接到身份上

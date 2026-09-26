@@ -52,6 +52,7 @@ import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { UserAuth } from "./user-auth.ts";
 import { RunnerAuth } from "./runner-auth.ts";
 import { authPolicy, protectedNamespace } from "./auth-policy.ts";
+import { registerTaskRoutes } from "./tasks/routes.ts";
 import { claimRunner, releaseRunner, ownerOf } from "./runner-ownership.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
@@ -322,6 +323,8 @@ export async function createApp(options: {
       "atrium auth rotate",
     );
   });
+  // 任务账本（#262）是独立模块：共用同一个 SQLite 连接，表与路由在 server/tasks/。
+  registerTaskRoutes(app, store.db);
   app.get("/api/runners", () => runnerAuth.list());
   app.post("/api/runners", (request) => {
     const input = z

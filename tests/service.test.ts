@@ -595,3 +595,43 @@ test(
     );
   },
 );
+
+test(
+  "排空完成后再次 prepare-restart 返回唤醒名单；stopping 中 CLI 给出明确下一步（#231）",
+  { timeout: 60000 },
+  async (t) => {
+    const f = await fixture(t);
+    const started = await f.cli("--no-open");
+    assert.equal(started.code, 0, started.stderr || started.stdout);
+    const record = readService(f.data)!;
+    const url = serviceUrl(record);
+    const headers = {
+      authorization: `Bearer ${record.token}`,
+      "content-type": "application/json",
+    };
+    const drain = await fetch(`${url}/api/service/prepare-restart`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ timeout: 5000 }),
+    });
+    assert.equal(drain.status, 200);
+    const drained = (await drain.json()) as {
+      ready: boolean;
+      agentsToWake: string[];
+    };
+    assert.equal(drained.ready, true);
+    // 接替的 supervisor 续做升级：拿到 200 与同一份名单，而不是 409（场景 2）
+    const again = await fetch(`${url}/api/service/prepare-restart`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ timeout: 5000 }),
+    });
+    assert.equal(again.status, 200);
+    assert.deepEqual(await again.json(), drained);
+    // 新版 CLI 遇到 stopping 的旧服务：给出明确的下一步（场景 3）
+    const listed = await f.cli("list");
+    assert.notEqual(listed.code, 0);
+    assert.match(`${listed.stdout}\n${listed.stderr}`, /平滑重启或关闭中/);
+    assert.match(`${listed.stdout}\n${listed.stderr}`, /restart --wait/);
+  },
+);

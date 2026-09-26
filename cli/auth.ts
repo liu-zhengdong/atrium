@@ -27,7 +27,7 @@ import { Problem } from "../server/problem.ts";
 import { recordResult } from "./contract.ts";
 import type { Command } from "./main.ts";
 
-async function supportsUserAuth(record: ServiceRecord) {
+async function serviceStatus(record: ServiceRecord) {
   const response = await fetch(`${serviceUrl(record)}/api/service`, {
     headers: { authorization: `Bearer ${record.token}` },
     signal: AbortSignal.timeout(1500),
@@ -39,19 +39,33 @@ async function supportsUserAuth(record: ServiceRecord) {
   const status = (await response.json()) as {
     instance?: string;
     userAuth?: string;
+    stopping?: boolean;
   };
   if (status.instance !== record.instance)
     throw new Problem(503, "服务身份不匹配", "service_unavailable");
-  return status.userAuth === "user-v1";
+  return status;
+}
+async function supportsUserAuth(record: ServiceRecord) {
+  return (await serviceStatus(record)).userAuth === "user-v1";
 }
 export async function requireUserAuthService(record: ServiceRecord) {
-  if (!(await supportsUserAuth(record)))
+  const status = await serviceStatus(record);
+  if (status.userAuth !== "user-v1")
     throw new Problem(
       409,
       "已安装新版本，但当前服务仍在运行旧版本；请运行 atrium restart 完成升级",
       "upgrade_restart_required",
       undefined,
       "atrium restart",
+    );
+  // #231：服务卡在 stopping 时给出明确的下一步，不再只报连不上。
+  if (status.stopping)
+    throw new Problem(
+      409,
+      "服务正在平滑重启或关闭中；有进行中的重启时运行 atrium restart --wait 等结果，没有时运行 atrium restart 接管升级",
+      "service_stopping",
+      undefined,
+      "atrium restart --wait",
     );
 }
 

@@ -2233,7 +2233,10 @@ export class Runtimes {
         (this.pumping.has(id) || this.connections.get(id)?.info.busy),
     );
   }
-  async prepareShutdown(timeoutMs: number): Promise<string[]> {
+  async prepareShutdown(
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<string[]> {
     if (this.draining) throw new Error("服务正在排空任务");
     const agents = new Set(this.activeAgentIds());
     this.draining = true;
@@ -2244,9 +2247,14 @@ export class Runtimes {
       // wait for or restart them. The next Web process reattaches and captures.
       const local = () =>
         [...this.connections].filter(([id]) => !ownerOf(this.store, id));
-      while (this.ticking && Date.now() < deadline)
+      while (this.ticking && Date.now() < deadline) {
+        if (signal?.aborted)
+          throw new Error("排空中止：发起方已断开，服务恢复运行");
         await new Promise((r) => setTimeout(r, 100));
+      }
       while (Date.now() < deadline) {
+        if (signal?.aborted)
+          throw new Error("排空中止：发起方已断开，服务恢复运行");
         // The discovery tick is paused while draining. Refresh busy state from
         // each running Pi; a stale snapshot would make every busy restart time out.
         const statuses = await Promise.all(

@@ -21,6 +21,9 @@ const lease = claimService(data, servicePort());
 let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;
 let stopping = false;
 let shutdownStarted = false;
+// #231：排空完成后上一个 supervisor 可能失联；保留唤醒名单，让接替的
+// supervisor 再次 prepare-restart 时拿到 200 与名单，接着把升级做完。
+let drainedAgentsToWake: string[] | null = null;
 const shutdown = async () => {
   if (shutdownStarted) return;
   shutdownStarted = true;
@@ -116,20 +119,35 @@ try {
     return status();
   });
   app.post("/api/service/prepare-restart", async (request, reply) => {
-    if (stopping) return reply.code(409).send({ error: "服务正在关闭" });
+    if (stopping) {
+      if (drainedAgentsToWake)
+        return { ready: true, agentsToWake: drainedAgentsToWake };
+      return reply.code(409).send({ error: "服务正在关闭" });
+    }
     const body = (request.body as { timeout?: number } | undefined) ?? {};
     const timeout = Number(body.timeout ?? 300000);
     if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 7200000)
       return reply
         .code(400)
         .send({ error: "timeout 必须为 1000–7200000 毫秒" });
+    // #231：supervisor 在排空中途断开时中止排空、恢复运行，不再永久卡在
+    // stopping；响应已发出后触发的 close 不影响结果。
+    // 必须监听响应而非请求：Node 16+ 的 IncomingMessage 在请求体读完时就发
+    // close，那样每次排空一开始就被中止，忙碌身份的 restart 立即 409。
+    const drainAbort = new AbortController();
+    reply.raw.once("close", () => {
+      if (!reply.raw.writableEnded) drainAbort.abort();
+    });
     let agentsToWake: string[];
     try {
-      agentsToWake = (await runtimes?.prepareShutdown(timeout)) ?? [];
+      agentsToWake =
+        (await runtimes?.prepareShutdown(timeout, drainAbort.signal)) ?? [];
     } catch (error) {
+      console.warn(`平滑重启排空未完成，服务继续运行：${String(error)}`);
       return reply.code(409).send({ error: String(error) });
     }
     stopping = true;
+    drainedAgentsToWake = agentsToWake;
     return { ready: true, agentsToWake };
   });
   app.get("/api/service/health", async (_request, reply) => {

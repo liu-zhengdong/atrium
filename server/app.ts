@@ -312,7 +312,7 @@ export async function createApp(options: {
       route === "/*" &&
       protectedNamespace(request.url)
     )
-      throw new Problem(404, "接口不存在");
+      throw new Problem(404, "接口不存在", "unknown_route");
     if (policy !== "user") return;
     if (auth.validUser(request.headers.authorization)) return;
     if (auth.validSession(request.headers.cookie)) {
@@ -1655,7 +1655,9 @@ export async function createApp(options: {
     app.setNotFoundHandler((request, reply) => {
       if (request.method === "GET" && !protectedNamespace(request.url))
         return reply.sendFile("index.html");
-      return reply.code(404).send({ error: "接口不存在" });
+      return reply
+        .code(404)
+        .send({ error: "接口不存在", code: "unknown_route" });
     });
   }
   app.addHook("preClose", async () => {

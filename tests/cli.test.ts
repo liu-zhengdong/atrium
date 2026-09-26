@@ -35,8 +35,8 @@ const commandBudget = 60000;
 /** 跑十来条命令的用例的墙钟预算，理由同 commandBudget。 */
 const manyCommands = 300000;
 /**
- * 等夹具自己的服务真的能应答。命令行按需拉起服务，但只肯等 12 秒（server/service.ts），
- * 机器负载高时一次冷启动（tsx 加载整个服务、再开 SQLite）会超过这个窗口，服务其实随后就好了。
+ * 等夹具自己的服务真的能应答。命令行按需拉起服务时最多等 60 秒（server/service.ts），
+ * 但命令本身有 commandBudget；机器负载高时冷启动（tsx 加载整个服务、再开 SQLite）仍可能挤爆它。
  * 按服务自己登记的进程与实例号轮询，不用命令行那条命令的成败当判据。
  */
 async function waitService(data: string) {

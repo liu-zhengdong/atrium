@@ -635,3 +635,103 @@ test(
     assert.match(`${listed.stdout}\n${listed.stderr}`, /restart --wait/);
   },
 );
+
+test(
+  "排空完成后 supervisor 失联且超过上限：旧服务自动恢复；supervisor 仍在时不抢先恢复（#244）",
+  { timeout: 60000 },
+  async (t) => {
+    const f = await fixture(t);
+    f.env.ATRIUM_DRAIN_RECOVER_MS = "1500";
+    const started = await f.cli("--no-open");
+    assert.equal(started.code, 0, started.stderr || started.stdout);
+    const record = readService(f.data)!;
+    const url = serviceUrl(record);
+    const headers = {
+      authorization: `Bearer ${record.token}`,
+      "content-type": "application/json",
+    };
+    const stopping = async () =>
+      (
+        (await (await fetch(`${url}/api/service`, { headers })).json()) as {
+          stopping: boolean;
+        }
+      ).stopping;
+    // 充当 supervisor 的独立进程，模拟 restart 拉起后被 kill -9。
+    const supervisor = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    t.after(() => {
+      if (supervisor.exitCode == null) supervisor.kill("SIGKILL");
+    });
+    const supervisorPid = supervisor.pid!;
+    writeFileSync(
+      join(f.data, "restart-state.json"),
+      JSON.stringify({
+        id: "rst-244",
+        status: "stopping",
+        supervisorPid,
+        startedAt: Date.now(),
+        fromVersion: "0.0.0",
+        data: f.data,
+        oldPid: record.pid,
+      }),
+    );
+    const drain = await fetch(`${url}/api/service/prepare-restart`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ timeout: 5000, supervisorPid }),
+    });
+    assert.equal(drain.status, 200);
+    assert.equal(await stopping(), true);
+    // 超过上限但 supervisor 还在：继续等它发 stop，不能自己恢复成第二个写者。
+    await delay(3500);
+    assert.equal(await stopping(), true);
+    assert.equal(
+      (await fetch(`${url}/api/service/health`, { headers })).status,
+      503,
+    );
+    supervisor.kill("SIGKILL");
+    await new Promise((resolve) => supervisor.once("exit", resolve));
+    let recovered = false;
+    for (let n = 0; n < 100 && !recovered; n++) {
+      await delay(100);
+      recovered = !(await stopping());
+    }
+    assert.equal(recovered, true, "supervisor 失联后旧服务应恢复运行");
+    const health = await fetch(`${url}/api/service/health`, { headers });
+    assert.equal(health.status, 200);
+    assert.equal(readService(f.data)!.pid, record.pid);
+    const log = readFileSync(join(f.data, "service.log"), "utf8");
+    assert.match(log, /平滑重启未完成：排空完成后 1\.5 秒内没有收到停止请求/);
+    assert.match(log, new RegExp(`supervisor（PID ${supervisorPid}）已不在`));
+    const state = JSON.parse(
+      readFileSync(join(f.data, "restart-state.json"), "utf8"),
+    ) as { status: string; error: string };
+    assert.equal(state.status, "failed");
+    assert.match(state.error, /已自动恢复运行.*atrium restart/);
+    const listed = await f.cli("list");
+    assert.equal(listed.code, 0, listed.stderr || listed.stdout);
+
+    // 恢复后可以再次平滑重启；收到 stop 后不再恢复，正常退出。
+    const again = await fetch(`${url}/api/service/prepare-restart`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ timeout: 5000, supervisorPid: process.pid }),
+    });
+    assert.equal(again.status, 200);
+    const stopped = await fetch(`${url}/api/service/stop`, {
+      method: "POST",
+      headers: { authorization: headers.authorization },
+    });
+    assert.equal(stopped.status, 200);
+    for (let n = 0; n < 100 && alive(record.pid); n++) await delay(100);
+    assert(!alive(record.pid));
+    assert.equal(
+      readFileSync(join(f.data, "service.log"), "utf8").match(/平滑重启未完成/g)
+        ?.length,
+      1,
+    );
+  },
+);

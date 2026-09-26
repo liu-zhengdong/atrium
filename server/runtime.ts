@@ -1763,7 +1763,7 @@ export class Runtimes {
         return this.doPump(id, direct);
       }
       let triggeredTurn = false;
-      // 纯告知不单独成行，等下面真正要走的投递搭车。
+      // 纯告知不单独成行，等下面真正要走的投递搭车；pending() 里已经不含它。
       for (const pending of executable(this.store.pending(id))) {
         if (
           singleAttempt &&
@@ -1854,7 +1854,9 @@ export class Runtimes {
                 this.changed();
                 return this.doPump(id, direct);
               }
-              this.store.accepted(pending.id, !settled, noticeIds);
+              // Pi 收到的仍是原来那一次的正文，这一趟合并进来的告知并没有交出去：
+              // 不删任何告知，宁可下一趟重复附带，也不丢。
+              this.store.accepted(pending.id, !settled, []);
               if (settled) {
                 this.store.completeDelivery(pending.id);
                 // Duplicate alone is not success; settled additionally proves the

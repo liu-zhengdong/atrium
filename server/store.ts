@@ -2119,7 +2119,10 @@ export class Store {
   }
   pending(id: string) {
     return this.all<DeliveryRow>(
-      "SELECT * FROM deliveries WHERE agent_id=? AND state='pending' ORDER BY created_at LIMIT 100",
+      // 纯告知（notice）不从这里取：它不单独成行、不参与唤醒与待办判定，
+      // 只在有真正要走的投递时由 notices() 取出来搭车。在 SQL 里排除，
+      // 免得积压的告知占满 LIMIT 100，后面的直接投递取不出来。
+      "SELECT * FROM deliveries WHERE agent_id=? AND state='pending' AND kind!='notice' ORDER BY created_at LIMIT 100",
       id,
     );
   }

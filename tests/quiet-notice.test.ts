@@ -24,8 +24,8 @@ test("纯告知：不叫醒、不提醒，搭下一次投递一起交", (t) => {
   assert.equal(store.boxCount(mira.id), 0, "纯告知不进消息箱");
   assert.deepEqual(
     store.pending(mira.id).map((item) => item.kind),
-    ["notice"],
-    "没有立即投递，只有排队等搭车的告知",
+    [],
+    "不单独成行，也不占投递窗口",
   );
   assert.deepEqual(
     store.notices(mira.id).map((item) => item.text),
@@ -95,6 +95,48 @@ test("纯告知：不叫醒、不提醒，搭下一次投递一起交", (t) => {
     true,
     "消息本身照常可读",
   );
+});
+
+test("纯告知积压再多也不挡后面的直接投递", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const atlas = store.createAgent("Atlas", tmpdir()).agent;
+  const mira = store.createAgent("Mira", tmpdir()).agent;
+  const group = store.createChat("协作群", [atlas.id, mira.id]);
+
+  // 告知一直排队等搭车，没有车就一直攒着。
+  for (let i = 0; i < 120; i++)
+    store.send(atlas.id, {
+      chat_id: group.id,
+      body: `进展 ${i}`,
+      mentions: [],
+      quiet: true,
+    });
+  assert.equal(store.notices(mira.id).length, 20, "搭车一次最多带 20 条");
+  assert.equal(
+    store.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM deliveries WHERE agent_id=? AND kind='notice' AND state='pending'",
+      mira.id,
+    )!.n,
+    120,
+    "告知都还在排队，不会被丢",
+  );
+
+  // 用户点名 Mira：这条直接投递必须取得到，离线时也叫得醒。
+  const direct = store.send(LOCAL_USER, {
+    chat_id: group.id,
+    body: "轮到你了",
+    mentions: [mira.id],
+  });
+  const pending = store.pending(mira.id);
+  assert.deepEqual(
+    pending.map((item) => item.kind),
+    ["direct"],
+    "积压的告知不占投递窗口",
+  );
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].through_message, direct.id, "就是用户这条点名");
+  assert.equal(wakesOffline(pending), true, "点名要叫醒离线身份");
 });
 
 test("纯告知：用户不发、离线不唤醒", (t) => {

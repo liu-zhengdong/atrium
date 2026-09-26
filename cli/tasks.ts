@@ -4,6 +4,7 @@ import { Problem } from "../server/problem.ts";
 import { TASK_STATUSES, isTaskStatus } from "../server/tasks/state.ts";
 import type { Task, TaskEventRow, TaskNode } from "../server/tasks/ledger.ts";
 import { recordNext } from "./contract.ts";
+import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 
@@ -68,13 +69,14 @@ export function renderTree(nodes: TaskNode[], depth = 0): string[] {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--role R] [--repo 路径] [--brief 文件]",
+  args: "标题 [--parent tN] [--role R] [--repo 路径] [--brief 文件] [--owner 订阅者]",
   about: "建任务；--parent 挂到父任务下，--brief 附任务详述 md",
   options: {
     parent: { type: "string" },
     role: { type: "string" },
     repo: { type: "string" },
     brief: { type: "string" },
+    owner: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
@@ -101,6 +103,9 @@ const add: Command = {
       ...(brief === undefined
         ? {}
         : { brief_path: existing(brief, "--brief", "file") }),
+      ...(str(values, "owner") === undefined
+        ? {}
+        : { owner: str(values, "owner") }),
     };
     const task = await (await client()).post<Task>("/tasks", body);
     if (json) printJson(task);
@@ -185,6 +190,7 @@ const show: Command = {
         ["岗位", task.role],
         ["仓库", task.repo],
         ["详述", task.brief_path],
+        ["负责人", task.owner],
         ["执行者", task.worker],
         ["进程", task.pid],
         ["工作树", task.worktree],
@@ -287,10 +293,176 @@ const set: Command = {
   },
 };
 
+const run: Command = {
+  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high]",
+  about: "派给执行者（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low",
+  options: {
+    worker: { type: "string" },
+    risk: { type: "string" },
+  },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values, json }) {
+    const id = ref(reference, "任务");
+    const body: Record<string, string> = {};
+    const worker = str(values, "worker");
+    if (worker !== undefined) {
+      if (!worker.trim())
+        throw new Problem(
+          400,
+          "--worker 不能为空，如 codex+gpt-6-sol",
+          "usage",
+        );
+      body.worker = worker;
+    }
+    const risk = str(values, "risk");
+    if (risk !== undefined) {
+      if (!["low", "medium", "high"].includes(risk))
+        throw new Problem(
+          400,
+          `--risk 只能是 low、medium、high（收到：${risk}）`,
+          "usage",
+        );
+      body.risk = risk;
+    }
+    const result = await (
+      await client()
+    ).post<{ task: Task; queued: boolean }>(`/tasks/${id}/run`, body);
+    const { task } = result;
+    if (json) printJson(result);
+    else if (result.queued)
+      console.log(
+        `${task.ref} 排队中：同一执行者同一时刻只跑一个，前一个结束后自动拉起`,
+      );
+    else
+      console.log(
+        `已派 ${task.ref} 给 ${task.worker}（PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
+      );
+    recordNext(`等结果：atrium task wait ${task.ref}`);
+  },
+};
+
+const stop: Command = {
+  args: "tN",
+  about: "停掉执行者（排队中的移出队列）",
+  positionals: [1, 1],
+  async run({ positionals: [reference], json }) {
+    const id = ref(reference, "任务");
+    const result = await (
+      await client()
+    ).post<{ task: Task; stopping: boolean }>(`/tasks/${id}/stop`);
+    if (json) printJson(result);
+    else
+      console.log(
+        result.stopping
+          ? `已向 ${id} 的执行者发停止信号`
+          : `${id} 已停 · [${result.task.status}]`,
+      );
+    recordNext(
+      result.stopping
+        ? `等它退出：atrium task wait ${id}`
+        : `看详情：atrium task show ${id}`,
+    );
+  },
+};
+
+type LogChunk = {
+  text: string;
+  next: number;
+  size: number;
+  running: boolean;
+  status: string;
+};
+
+const log: Command = {
+  args: "tN [--follow] [--after 字节]",
+  about: "看执行者日志；--follow 跟到任务结束，--after 从上次的字节偏移续读",
+  options: {
+    follow: { type: "boolean", default: false },
+    after: { type: "string" },
+  },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values, json }) {
+    const id = ref(reference, "任务");
+    const afterText = str(values, "after");
+    if (afterText !== undefined && !/^(0|[1-9]\d*)$/.test(afterText))
+      throw new Problem(400, "--after 应为非负整数字节偏移", "usage");
+    const follow = values.follow === true;
+    if (follow && json)
+      throw new Problem(400, "--follow 不能与 --json 同时使用", "usage");
+    const api = await client();
+    let after = afterText === undefined ? 0 : Number(afterText);
+    for (;;) {
+      const chunk = await api.get<LogChunk>(`/tasks/${id}/log?after=${after}`);
+      if (json) {
+        printJson(chunk);
+        after = chunk.next;
+        break;
+      }
+      if (chunk.text) process.stdout.write(chunk.text);
+      const more = chunk.next < chunk.size;
+      after = chunk.next;
+      if (!follow) {
+        if (!more && !chunk.text && !chunk.running)
+          console.log(chunk.size ? "（没有新日志）" : "还没有日志");
+        break;
+      }
+      if (!more && !chunk.running) break;
+      if (!more) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    recordNext(`续读：atrium task log ${id} --after ${after}`);
+  },
+};
+
+const wait: Command = {
+  args: "tN [--timeout 秒]",
+  about: "等任务离开 running（完成、失败、受阻）或超时；缺省 300 秒",
+  options: { timeout: { type: "string" } },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values, json }) {
+    const id = ref(reference, "任务");
+    const seconds = waitSeconds(str(values, "timeout"));
+    const api = await client();
+    const result = await longWait<{ task: Task; timed_out: boolean }>(
+      seconds,
+      (timeout) => api.get(`/tasks/${id}/wait?timeout=${timeout}`),
+      () => `atrium task wait ${id}`,
+    );
+    if (json) printJson(result);
+    else if (result.timed_out)
+      console.log(`${seconds} 秒内 ${id} 还没结束；atrium task wait ${id}`);
+    else {
+      const task = result.task;
+      console.log(
+        [
+          `${task.ref} [${task.status}] ${task.title}`,
+          task.pr_url
+            ? `  PR：${task.pr_url}${task.ci ? `（CI ${task.ci}）` : ""}`
+            : "",
+          task.result
+            ? `  摘要：${clip(task.result.replace(/\s+/g, " "), 200)}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
+    recordNext(
+      result.timed_out
+        ? `继续等：atrium task wait ${id}`
+        : `看详情与关卡：atrium task show ${id}`,
+    );
+    return result.timed_out ? 124 : 0;
+  },
+};
+
 export const taskCommands: Record<string, Command> = {
   "task add": add,
   "task ls": ls,
   "task show": show,
   "task tree": tree,
   "task set": set,
+  "task run": run,
+  "task stop": stop,
+  "task log": log,
+  "task wait": wait,
 };

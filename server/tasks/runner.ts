@@ -1,0 +1,279 @@
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { Problem } from "../problem.ts";
+import { taskDir } from "./active.ts";
+import { ADAPTERS } from "./adapters/index.ts";
+import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
+import { EventInbox } from "./events.ts";
+import { Executors, type Chosen } from "./executors.ts";
+import { exec as defaultExec, type Exec } from "./git.ts";
+import { getTask, noteTask, parseTaskRef, type Task } from "./ledger.ts";
+import { readLogChunk } from "./log-view.ts";
+import { admit, placement, runRequest } from "./plan.ts";
+import type { PaceEntry } from "./prepare.ts";
+import { DEFAULT_WORKERS_DIR } from "./profiles.ts";
+import { dequeue, enqueue, ensureQueueTable, queued } from "./queue.ts";
+import { recoverRunning } from "./recovery.ts";
+import { signalGroup } from "./spawn.ts";
+import { TaskWaits } from "./waits.ts";
+import { chooseWorker } from "./worker-choice.ts";
+import { workerEnvironment } from "./worker-env.ts";
+import type { LaunchOptions } from "./workspace.ts";
+
+/**
+ * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
+ * 工作区、拉起、事实收集、重启勘察、CI 轮询各在自己的模块。
+ */
+
+export type RunnerOptions = {
+  data: string;
+  workersDir?: string;
+  /** 执行者环境的来源（再经白名单过滤）；缺省 process.env。 */
+  env?: NodeJS.ProcessEnv;
+  exec?: Exec;
+  pace?: () => Promise<PaceEntry[] | undefined>;
+  tickMs?: number;
+  ciPollMs?: number;
+  ciBatch?: number;
+  /** 事件攒批窗口（毫秒），缺省 0。 */
+  batchMs?: number;
+  /** 停止信号发出后多久强杀。 */
+  killGraceMs?: number;
+};
+
+export class TaskRunner {
+  readonly inbox: EventInbox;
+  private readonly x: Executors;
+  private readonly waits: TaskWaits;
+  private readonly timers: NodeJS.Timeout[] = [];
+  private readonly exec: Exec;
+  private readonly launchOptions: LaunchOptions;
+  private closed = false;
+  private polling = false;
+
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly options: RunnerOptions,
+  ) {
+    ensureQueueTable(db);
+    this.inbox = new EventInbox(db, options.batchMs ?? 0);
+    this.exec = options.exec ?? defaultExec;
+    this.launchOptions = {
+      data: options.data,
+      workersDir: options.workersDir ?? DEFAULT_WORKERS_DIR,
+      env: workerEnvironment(options.env ?? process.env),
+      run: this.exec,
+      pace: options.pace,
+    };
+    this.waits = new TaskWaits(
+      (id) => this.settled(id),
+      (id) => getTask(this.db, id),
+    );
+    this.x = new Executors({
+      db,
+      inbox: this.inbox,
+      exec: this.exec,
+      launchOptions: this.launchOptions,
+      waits: this.waits,
+      killGraceMs: options.killGraceMs,
+      closed: () => this.closed,
+    });
+  }
+
+  /** 启动看门狗与 CI 轮询，并在后台自愈上次遗留的运行中任务（不阻塞启动）。 */
+  start() {
+    const every = (ms: number, fn: () => Promise<void>) => {
+      const timer = setInterval(() => {
+        void fn().catch((error) => console.error("任务运行时：", error));
+      }, ms);
+      timer.unref();
+      this.timers.push(timer);
+    };
+    every(this.options.tickMs ?? 5000, () => this.x.tick());
+    every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
+    void this.recover().catch((error) =>
+      console.error("任务运行时自愈失败：", error),
+    );
+  }
+
+  /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
+  close() {
+    this.closed = true;
+    for (const timer of this.timers) clearInterval(timer);
+    this.inbox.close();
+    this.waits.close();
+  }
+
+  // ---- 派活 ----
+
+  async run(reference: unknown, body: unknown) {
+    const request = runRequest(body);
+    const id = parseTaskRef(reference);
+    const task = getTask(this.db, id);
+    const admission = admit({
+      status: task.status,
+      running: this.x.active.has(id) || this.x.launching.has(id),
+      queued: !!queued(this.db, id),
+    });
+    if (!admission.ok)
+      throw new Problem(
+        409,
+        `${task.ref}：${admission.reason}`,
+        "conflict",
+        undefined,
+        `atrium task show ${task.ref}`,
+      );
+    this.x.launching.set(id, null);
+    let chosen: Chosen;
+    try {
+      chosen = await chooseWorker(request, this.launchOptions);
+    } catch (error) {
+      this.x.launching.delete(id);
+      throw error;
+    }
+    const tool = chosen.worker.tool;
+    if (
+      placement(ADAPTERS[tool].exclusive, this.x.busy(tool, id)) === "queue"
+    ) {
+      this.x.launching.delete(id);
+      return this.enqueue(task, chosen);
+    }
+    this.x.launching.set(id, tool);
+    try {
+      return { task: await this.x.launch(id, chosen), queued: false };
+    } finally {
+      this.x.launching.delete(id);
+    }
+  }
+
+  private enqueue(task: Task, chosen: Chosen) {
+    enqueue(this.db, {
+      task_id: task.id,
+      tool: chosen.worker.tool,
+      worker: chosen.worker.id,
+      risk: chosen.risk,
+      queued_at: Date.now(),
+    });
+    if (task.status !== "todo")
+      this.x.advance(
+        task.id,
+        { kind: "manual_set", to: "todo" },
+        {},
+        "排队重派",
+      );
+    noteTask(this.db, task.id, "queued", {
+      worker: chosen.worker.id,
+      reason: `${chosen.worker.tool} 同一时刻只跑一个，前一个结束后自动拉起`,
+    });
+    this.waits.changed(task.id);
+    return { task: getTask(this.db, task.id), queued: true };
+  }
+
+  /** 服务重启自愈：进程已不在的置 failed；还在的按 pid 接管；再把排队的拉起来。 */
+  recover() {
+    return recoverRunning(this.x, this.db, this.launchOptions.workersDir, {
+      data: this.options.data,
+      exec: this.exec,
+      changed: (id) => this.waits.changed(id),
+    });
+  }
+
+  async pollCi() {
+    if (this.polling || this.closed) return;
+    this.polling = true;
+    try {
+      for (const outcome of await pollCiOnce(
+        this.db,
+        this.options.ciBatch ?? CI_BATCH,
+        this.exec,
+      )) {
+        this.x.publish(outcome.task.id, `ci_${outcome.ci ?? "none"}`, {
+          source: "ci",
+          ...(outcome.detail ? { reason: outcome.detail } : {}),
+          ...(outcome.accepted ? { accepted: true } : {}),
+        });
+        this.waits.changed(outcome.task.id);
+      }
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  // ---- 停止、日志、等待 ----
+
+  stop(reference: unknown) {
+    const id = parseTaskRef(reference);
+    const task = getTask(this.db, id);
+    if (dequeue(this.db, id)) {
+      noteTask(this.db, id, "unqueued", { reason: "人工停止，移出队列" });
+      this.waits.changed(id);
+      return { task: getTask(this.db, id), stopping: false };
+    }
+    const active = this.x.active.get(id);
+    if (active && !active.exited) {
+      active.stop = { kind: "user" };
+      noteTask(this.db, id, "stop_requested", { pid: active.pid });
+      this.x.kill(active);
+      return { task: getTask(this.db, id), stopping: true };
+    }
+    if (this.x.launching.has(id))
+      throw new Problem(409, `${task.ref} 正在启动，稍后再停`, "conflict");
+    if (task.status !== "running")
+      throw new Problem(
+        409,
+        `${task.ref} 不在运行（当前 ${task.status}）`,
+        "conflict",
+        undefined,
+        `atrium task show ${task.ref}`,
+      );
+    // 账本说在跑、服务却没有掌握这个进程：直接收尾，免得一直挂着。
+    if (task.pid) signalGroup(task.pid, "SIGTERM");
+    const stopped = this.x.advance(
+      id,
+      { kind: "exit_fail" },
+      {},
+      { reason: "人工停止（服务未掌握该进程）" },
+    );
+    this.x.publish(id, "failed", { reason: "人工停止" });
+    this.waits.changed(id);
+    return { task: stopped, stopping: false };
+  }
+
+  private pending(id: number, task: Task) {
+    return (
+      task.status === "running" ||
+      !!queued(this.db, id) ||
+      this.x.launching.has(id)
+    );
+  }
+
+  async log(reference: unknown, after: unknown) {
+    const id = parseTaskRef(reference);
+    const task = getTask(this.db, id);
+    const offset = after === undefined || after === "" ? 0 : Number(after);
+    if (!Number.isSafeInteger(offset) || offset < 0)
+      throw new Problem(400, "after: 应为非负整数字节偏移", "usage");
+    const chunk = await readLogChunk(
+      join(taskDir(this.options.data, id), "log"),
+      offset,
+    );
+    return { ...chunk, running: this.pending(id, task), status: task.status };
+  }
+
+  private settled(id: number) {
+    const task = getTask(this.db, id);
+    return this.pending(id, task) ? null : task;
+  }
+
+  /** 任务离开 running（且不在排队、不在启动）或超时返回。 */
+  wait(reference: unknown, seconds: number, signal?: AbortSignal) {
+    const id = parseTaskRef(reference);
+    const now = this.settled(id);
+    if (now || seconds <= 0 || this.closed)
+      return Promise.resolve({
+        task: now ?? getTask(this.db, id),
+        timed_out: !now,
+      });
+    return this.waits.wait(id, seconds, signal);
+  }
+}

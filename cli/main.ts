@@ -11,6 +11,8 @@ import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { taskCommands } from "./tasks.ts";
+import { workerGuard } from "./worker-guard.ts";
+import { eventCommands } from "./events.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
@@ -94,6 +96,7 @@ export const commands: Record<string, Command> = {
   ...pluginCommands,
   ...resourceCommands,
   ...taskCommands,
+  ...eventCommands,
   update: updateCommand,
   restart: restartCommand,
 };
@@ -147,6 +150,12 @@ export async function main(argv: string[]): Promise<number> {
     let subcommand = name ?? "";
     let usageNext: string | undefined;
     try {
+      // 执行者环境：除帮助外一律先过防护，拒绝时不会拉起服务、不碰默认数据目录。
+      if (
+        !["--help", "-h", "help", "guide"].includes(name ?? "") &&
+        !rest.includes("--help")
+      )
+        workerGuard();
       if (name === undefined || name === "--no-open") {
         if (rest.filter((part) => part !== "--json").length)
           throw new Problem(400, usage, "usage");
@@ -193,7 +202,8 @@ export async function main(argv: string[]): Promise<number> {
         name === "adapters" ||
         name === "plugin" ||
         name === "skill" ||
-        name === "task"
+        name === "task" ||
+        name === "events"
           ? `${name} ${rest.shift() ?? ""}`.trim()
           : name;
       const command = commands[subcommand];

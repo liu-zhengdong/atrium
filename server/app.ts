@@ -52,7 +52,8 @@ import { fileRecords, messageRecords, recordQuery } from "./records.ts";
 import { UserAuth } from "./user-auth.ts";
 import { RunnerAuth } from "./runner-auth.ts";
 import { authPolicy, protectedNamespace } from "./auth-policy.ts";
-import { registerTaskRoutes } from "./tasks/routes.ts";
+import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
+import type { RunnerOptions } from "./tasks/runner.ts";
 import { claimRunner, releaseRunner, ownerOf } from "./runner-ownership.ts";
 import { groupName } from "../shared/group.ts";
 import { isUserRef, LOCAL_USER } from "../shared/user.ts";
@@ -90,6 +91,8 @@ export async function createApp(options: {
   auth?: boolean;
   /** Audit every registered route in security tests. */
   onRoute?: (method: string, url: string) => void;
+  /** 任务运行时（#262）的注入项：测试用来缩短看门狗间隔、替换 git/gh 调用。 */
+  tasks?: Partial<RunnerOptions>;
 }) {
   const desktops = options.desktops ?? defaultDesktops();
   const piHome = options.piHome;
@@ -324,7 +327,12 @@ export async function createApp(options: {
     );
   });
   // 任务账本（#262）是独立模块：共用同一个 SQLite 连接，表与路由在 server/tasks/。
-  registerTaskRoutes(app, store.db);
+  // 执行者进程由服务持有，日志在 <ATRIUM_DATA>/tasks/<id>/。
+  const taskRunner = registerTaskRoutes(app, store.db, {
+    data: resolve(options.data),
+    ...runnerEnvOptions(),
+    ...options.tasks,
+  });
   app.get("/api/runners", () => runnerAuth.list());
   app.post("/api/runners", (request) => {
     const input = z
@@ -1661,5 +1669,6 @@ export async function createApp(options: {
     runtimes,
     accounts,
     pendingWaits: () => waiters.size,
+    taskRunner,
   };
 }

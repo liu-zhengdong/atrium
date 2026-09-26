@@ -34,6 +34,7 @@ export type RunnerOptions = {
   env?: NodeJS.ProcessEnv;
   exec?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
+  charterPath?: string;
   tickMs?: number;
   ciPollMs?: number;
   ciBatch?: number;
@@ -74,6 +75,7 @@ export class TaskRunner {
       env: workerEnvironment(options.env ?? process.env),
       run: this.exec,
       pace: options.pace,
+      charterPath: options.charterPath,
     };
     this.waits = new TaskWaits(
       (id) => this.settled(id),

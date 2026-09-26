@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -11,6 +11,7 @@ import {
   workerGuard,
 } from "../cli/worker-guard.ts";
 import { workerEnvironment } from "../server/tasks/worker-env.ts";
+import { dataDirectory } from "../server/service-state.ts";
 import { childEnv } from "./child-env.ts";
 
 const run = promisify(execFile);
@@ -34,7 +35,7 @@ test("执行者防护：带 ATRIUM_WORKER 标记时必须显式给隔离的 ATRI
     { ATRIUM_WORKER: "1", ATRIUM_DATA: "/tmp/x", ATRIUM_PORT: "4310" },
     {
       ATRIUM_WORKER: "1",
-      ATRIUM_DATA: join(homedir(), ".pi", "atrium", "data"),
+      ATRIUM_DATA: dataDirectory({}),
       ATRIUM_PORT: "4555",
     },
   ])

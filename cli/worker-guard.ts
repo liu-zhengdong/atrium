@@ -1,7 +1,5 @@
-import { resolve } from "node:path";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { Problem } from "../server/problem.ts";
+import { dataDirectory } from "../server/service-state.ts";
 
 /**
  * 执行者环境的防护（#262）：Atrium 拉起的执行者带 ATRIUM_WORKER=1。
@@ -13,7 +11,6 @@ export const WORKER_FLAG = "ATRIUM_WORKER";
 export const WORKER_REFUSAL =
   "执行者环境里不能操作用户的 Atrium 服务，如需隔离实例请显式设置 ATRIUM_DATA 与 ATRIUM_PORT";
 
-const USER_DATA = join(homedir(), ".pi", "atrium", "data");
 const USER_PORT = "4310";
 
 export function workerGuard(env: NodeJS.ProcessEnv = process.env) {
@@ -24,7 +21,7 @@ export function workerGuard(env: NodeJS.ProcessEnv = process.env) {
     !data ||
     !port ||
     port === USER_PORT ||
-    resolve(data) === resolve(USER_DATA)
+    dataDirectory({ ATRIUM_DATA: data }) === dataDirectory({})
   )
     throw new Problem(403, WORKER_REFUSAL, "worker_environment");
 }

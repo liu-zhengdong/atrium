@@ -32,6 +32,7 @@ export type LaunchOptions = {
   env: NodeJS.ProcessEnv;
   run?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
+  charterPath?: string;
 };
 
 export type Prepared = {

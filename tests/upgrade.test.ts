@@ -297,6 +297,47 @@ test("排空在回合结束后才同步末尾轨迹；到期列出忙碌身份�
   assert.equal((runtime as unknown as { draining: boolean }).draining, false);
 });
 
+test("排空中途发起方断开：中止排空并恢复运行（#231）", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-drain-abort-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = new Store(join(dir, "atrium.sqlite"));
+  t.after(() => store.close());
+  const { agent } = store.createAgent("验收", dir);
+  const info: RuntimeInfo = {
+    runtimeId: randomUUID(),
+    generation: randomUUID(),
+    sessionId: randomUUID(),
+    pid: process.pid,
+    ownerPid: process.pid,
+    sessionFile: null,
+    cwd: dir,
+    mode: "rpc",
+    busy: true,
+    model: "fixture",
+  };
+  const runtime = Object.assign(Object.create(Runtimes.prototype), {
+    connections: new Map([[agent.id, { info }]]),
+    pumping: new Map(),
+    connecting: new Map(),
+    turns: { current: () => null },
+    store,
+    draining: false,
+    rpc: async () => ({ ...info, busy: true }),
+    capture: async () => {},
+  }) as Runtimes;
+  const abort = new AbortController();
+  const drain = runtime.prepareShutdown(30_000, abort.signal);
+  const timer = setTimeout(() => abort.abort(), 250);
+  await assert.rejects(drain, /排空中止：发起方已断开/);
+  clearTimeout(timer);
+  assert.equal(
+    (runtime as unknown as { draining: boolean }).draining,
+    false,
+  );
+  // 已恢复运行：再次排空能进入等待（报忙碌超时），而不是被「正在排空」拒绝。
+  await assert.rejects(runtime.prepareShutdown(120), /旧服务继续运行/);
+});
+
 test("旧服务拒绝排空时透出正文而不只报 HTTP 409", async () => {
   const server = createServer((_req, response) => {
     response.statusCode = 409;

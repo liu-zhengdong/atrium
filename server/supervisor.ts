@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import {
   closeSync,
   existsSync,
@@ -246,28 +247,52 @@ export async function requestDrain(
   record: ServiceRecord,
   timeout: number,
 ): Promise<string[]> {
-  const response = await fetch(
-    `${serviceUrl(record)}/api/service/prepare-restart`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${record.token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ timeout }),
-      signal: AbortSignal.timeout(timeout + 10000),
+  // 长排空会超过 undici 默认 headersTimeout（约 300 秒，#231），全局 fetch
+  // 会在响应头之前断开；改用 node:http，整体超时时只由 AbortSignal 控制。
+  const bodyText = JSON.stringify({ timeout });
+  const response = await new Promise<{ status: number; body: string }>(
+    (resolvePromise, reject) => {
+      const req = httpRequest(
+        `${serviceUrl(record)}/api/service/prepare-restart`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${record.token}`,
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(bodyText),
+          },
+          signal: AbortSignal.timeout(timeout + 10000),
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () =>
+            resolvePromise({
+              status: res.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
+          );
+        },
+      );
+      req.on("error", reject);
+      req.end(bodyText);
     },
   );
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    };
+  const parsed = (() => {
+    try {
+      return JSON.parse(response.body) as {
+        error?: string;
+        agentsToWake?: string[];
+      };
+    } catch {
+      return {};
+    }
+  })();
+  if (response.status !== 200)
     throw new Error(
-      `旧服务拒绝平滑退出（HTTP ${response.status}）：${body.error ?? "请检查旧服务日志"}`,
+      `旧服务拒绝平滑退出（HTTP ${response.status}）：${parsed.error ?? "请检查旧服务日志"}`,
     );
-  }
-  const body = (await response.json()) as { agentsToWake?: string[] };
-  return body.agentsToWake ?? [];
+  return parsed.agentsToWake ?? [];
 }
 
 export async function runSupervisor(args: string[]): Promise<void> {

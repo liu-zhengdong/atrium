@@ -88,13 +88,28 @@ function unavailable(record: ServiceRecord, data: string) {
     `PID ${record.pid} 仍存在，但服务未就绪或身份不匹配；不会重复启动或按 PID 强杀。请检查 ${join(data, "service.log")}`,
   );
 }
+// #231：能应答但 stopping=true 时给出明确的下一步，不再只报「未就绪」。
+async function unavailableReason(
+  record: ServiceRecord,
+  data: string,
+): Promise<Error> {
+  try {
+    if ((await request(record)).stopping === true)
+      return new Error(
+        "服务正在平滑重启或关闭中；等待完成后再试，可运行 atrium restart --wait 查看重启进度",
+      );
+  } catch {
+    /* 真正不可用的服务按原样处理 */
+  }
+  return unavailable(record, data);
+}
 export async function serviceStatus(data: string) {
   const record = readService(data);
   if (!record || !alive(record.pid)) {
     console.log(`Atrium 未运行\n数据：${data}`);
     return;
   }
-  if (!(await ready(record))) throw unavailable(record, data);
+  if (!(await ready(record))) throw await unavailableReason(record, data);
   console.log(
     `Atrium 正在运行 · PID ${record.pid}\n${serviceUrl(record)}\n数据：${data}\n日志：${join(data, "service.log")}（后台启动）`,
   );
@@ -190,7 +205,8 @@ export async function startService(data: string) {
       );
     await delay(100);
   }
-  if (record && alive(record.pid)) throw unavailable(record, data);
+  if (record && alive(record.pid))
+    throw await unavailableReason(record, data);
   throw startupFailure(data, "Atrium 启动超时", logStart);
 }
 export async function openWeb(record: ServiceRecord, url = serviceUrl(record)) {

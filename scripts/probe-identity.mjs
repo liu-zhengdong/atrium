@@ -53,6 +53,7 @@ export async function verifyIdentity({
   // 同名 new-session 会在同一个 tmux server 里撞出 duplicate session。
   let tmux;
   const tmuxNames = new Set();
+  let failed = false;
   const launch = () => {
     tmux = `atrium-named-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     tmuxNames.add(tmux);
@@ -81,18 +82,21 @@ export async function verifyIdentity({
   const owner = join(env.PI_ACP_DIR, "identities", `${agent.id}.json`);
   // 基线：具名阶段开始前已有的 runtime（比如 probe-pi 前面阶段还活着的匿名 TUI）。
   // 断言只针对具名阶段新产生的，清理也只清具名阶段自己产生的，基线一律不碰。
-  const baseline = new Map(); // runtimeId -> endpoint
+  const baseline = new Map(); // runtimeId -> { endpoint, pid }
   try {
     for (const name of readdirSync(join(env.PI_ACP_DIR, "runtimes"))) {
       if (!name.endsWith(".json")) continue;
       const id = name.slice(0, -5);
       try {
-        const endpoint = JSON.parse(
+        const rec = JSON.parse(
           readFileSync(join(env.PI_ACP_DIR, "runtimes", name), "utf8"),
-        ).endpoint;
-        baseline.set(id, typeof endpoint === "string" ? endpoint : null);
+        );
+        baseline.set(id, {
+          endpoint: typeof rec.endpoint === "string" ? rec.endpoint : null,
+          pid: typeof rec.pid === "number" ? rec.pid : null,
+        });
       } catch {
-        baseline.set(id, null);
+        baseline.set(id, { endpoint: null, pid: null });
       }
     }
   } catch {}
@@ -256,6 +260,7 @@ export async function verifyIdentity({
         .runtimes.find((r) => r.identityId === agent.id);
       return r && r.pid !== first.pid;
     }, "退出后同名重启");
+    collectRuntimeIds();
     await runtimes.pump(agent.id);
     const resumed = runtimes.connections.get(agent.id).info;
     assert.equal(resumed.sessionId, switched.sessionId);
@@ -269,6 +274,7 @@ export async function verifyIdentity({
     await wait(() => !existsSync(owner), "第二次正常退出");
     await runtimes.pump(agent.id);
     await runtimes.start(agent.id);
+    collectRuntimeIds();
     const backend = runtimes.connections.get(agent.id).info;
     assert.equal(backend.identityId, agent.id);
     assert.equal(backend.mode, "rpc");
@@ -308,6 +314,7 @@ export async function verifyIdentity({
       ],
     };
   } catch (error) {
+    failed = true;
     if (tmuxNames.size) {
       try {
         writeFileSync(join(folder, "failed-named-tui.txt"), pane());
@@ -324,15 +331,28 @@ export async function verifyIdentity({
     // 基线里的其他存活 runtime（以及真实身份正在用的）一律不碰。
     collectRuntimeIds();
     cleanNamedSockets();
-    // 反向：清理跑完后，基线里的 runtime socket 必须还在。
-    for (const [id, endpoint] of baseline)
-      if (endpoint && !existsSync(endpoint))
-        throw new Error(
-          `基线 runtime ${id.slice(0, 8)} 的 socket 被误删：${endpoint}`,
-        );
+    // 兜底 stop 必须在任何可能抛错的检查之前执行（第一次退回的要求）。
     // 按用户入口执行的 atrium list 会在后台拉起服务；验完停掉，别占着默认端口挡住用户自己的服务。
     try {
       execFileSync(command, ["stop"], { env, stdio: "ignore" });
     } catch {}
+    // 反向：清理跑完后，基线里的存活 runtime socket 必须还在。
+    // pid 活着但 socket 没了才算误删（基线 TUI 自己退出的不算）；
+    // 已在失败路径时只记录，不盖掉原来的错误。
+    for (const [id, info] of baseline) {
+      if (!info.endpoint || existsSync(info.endpoint)) continue;
+      let alive = true;
+      if (info.pid) {
+        try {
+          process.kill(info.pid, 0);
+        } catch {
+          alive = false;
+        }
+      }
+      if (!alive) continue;
+      const msg = `基线 runtime ${id.slice(0, 8)} 的 socket 被误删：${info.endpoint}`;
+      if (failed) console.error(msg);
+      else throw new Error(msg);
+    }
   }
 }

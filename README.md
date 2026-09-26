@@ -169,6 +169,23 @@ cd /tmp/atrium-src && npm pack && npm install -g ./atrium-0.1.x.tgz
 
 不要用 `npm install -g github:liu-zhengdong/atrium#v0.1.x`：npm 11 会在依赖的安装脚本处报 `spawn sh ENOENT`。原来用 `npm link` 的，先执行 `npm rm -g atrium`，否则 npm 无法覆盖链接。之后升级用 `atrium update`。
 
+`atrium update` 安装标签 tarball 时使用 `npm install -g`，**不读取源码仓库的 `package-lock.json`**；发布包在 `package.json` 中把 pi-atrium 固定到指定提交，并把 Pi 固定到验证过的版本。更新后先从全局安装目录读取 Atrium 声明的依赖及实际安装版本，再重启：
+
+```bash
+node - "$(npm root -g)/atrium" <<'NODE'
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+const root = process.argv[2];
+const read = (...parts) => JSON.parse(readFileSync(join(root, ...parts, 'package.json'), 'utf8'));
+const atrium = read();
+for (const name of ['@liuser/pi-atrium', '@earendil-works/pi-coding-agent']) {
+  console.log(name, '要求:', atrium.dependencies[name], '已安装:', read('node_modules', name).version);
+}
+NODE
+```
+
+若从源码目录运行服务或沿用 `npm link`，必须先在源码目录执行 `npm ci`；否则新版 Atrium 会因 pi-atrium 缺少模型凭据隔离能力而**拒绝启动所有具名身份**，不仅是令牌身份。不要把这类拒绝误判成令牌账号故障。
+
 **独立令牌版安全修复：**旧版 pi-atrium 启动具名身份时重新合并父进程环境；若启动或重启 4310 的 shell 设置了 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`OPENAI_API_KEY`、`CLAUDE_CONFIG_DIR` 等变量，具名身份可能继承它们。新版 pi-atrium 在**每次新启动具名 Pi** 时清理父进程的模型供应商凭据环境变量，清理范围也包括 `GH_TOKEN`、`GITHUB_TOKEN`、`NPM_TOKEN` 等进程级密钥；只保留分配给身份的账号凭据（`auth.json` 或显式的启动环境）。独立 setup-token 身份使用自己的令牌与 Claude 配置目录：令牌只在 bridge 声明启动能力后由一次性本机套接字领取，不放入 Pi 的环境变量、ACP 参数或进程命令行。完整功能需 pi-atrium、Atrium 和各身份 bridge 都升级，未交给 runner 的本地身份也要具备这三项。重启 4310 前仍须确认启动 shell 没有不应继承的变量，且身份已分配账号。
 
 每次 main 的合并由 CI 加补丁号、发布标签和 PR 标题摘要；定时任务每小时检查 pi-atrium main，有新提交时向 Atrium 开锁文件更新 PR，合入后随下一次 Atrium 发布生效。`atrium update` 从 GitHub 标签打包安装，与开发仓库分离；随后执行 `atrium restart`，需要等待结果的调用方再执行 `atrium restart --wait`。旧服务等当前回合结束并同步最后的轨迹后才停；排空超时会列出仍在工作的身份，旧服务保持运行，可在回合结束后重试。排空期限与 `--wait --timeout` 的等待结果期限彼此独立，长回合需要相应调整两者。重启健康检查验证服务与 MCP 网关就绪，不以模型凭据、供应商可用性作为默认门槛；要验证真实身份回合时显式加 `--probe-agent <身份短号>`。失败时自动安装原版本并重新启动；回滚原因显示在用户网页的顶部告警中，Agent 也会收到消息箱通知。版本降级须确保数据库迁移与上一个版本兼容；不可兼容的迁移要在 PR 中明确说明。**新增独立 Claude setup-token 账号后，不可直接降级到本功能发布前的任何 Atrium 版本，包括 v0.1.10。**旧版不识别账号类型，会误标为损坏；已分配令牌账号的身份仍可被私聊或 @ 自动唤醒，却不会收到令牌，而会退回共用 Claude 登录或父进程密钥。若必须主动降级，先停止这些身份，安全备份令牌到受限位置，再用 `atrium account remove kN` 逐一解除分配并删除这些账号；该命令会删除账号令牌文件。**若更新失败自动回退，立即停止并解除这些身份的令牌账号分配，不要让旧版唤醒它们**；重新升级到支持 setup-token 的版本后，启动时会从仍完好的令牌文件纠正旧版留下的误报。网页版本变化时提示刷新，后台身份的旧 pi-atrium 在空闲时重载，TUI 会话不强制关闭。

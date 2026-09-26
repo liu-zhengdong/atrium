@@ -27,7 +27,7 @@ export function assertIdentityLaunchSecretCapability(capable: boolean): void {
   if (capable) return;
   throw new Problem(
     409,
-    "独立令牌启动需要新版 pi-atrium；请在 Atrium 安装目录执行 npm ci（按锁文件更新 pi-atrium），再运行 atrium restart；或为身份分配非共用登录的其他账号",
+    "独立令牌启动需要新版 pi-atrium；全局安装请运行 atrium update，源码安装请在仓库执行 npm ci，随后运行 atrium restart；或为身份分配非共用登录的其他账号",
     "launch_secret_unsupported",
   );
 }

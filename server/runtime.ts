@@ -98,7 +98,7 @@ export function identityEnvironment(env: NodeJS.ProcessEnv) {
   if (typeof predicate !== "function")
     throw new Problem(
       409,
-      "pi-atrium 未提供模型凭据隔离规则；请在 Atrium 安装目录执行 npm ci",
+      "pi-atrium 未提供模型凭据隔离规则；全局安装请运行 atrium update，源码安装请在仓库执行 npm ci，随后运行 atrium restart",
       "launch_secret_unsupported",
     );
   const result = { ...env };

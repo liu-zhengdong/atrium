@@ -183,8 +183,11 @@ export async function collectFacts(
   };
   const { repo, worktree, branch, base } = input;
   if (!repo || !worktree || !branch || !base) return empty;
+  // 只读查询不拿可选锁，不和工作树里其他 git 进程抢 index.lock（见 watchdog 的探测）。
   const git = (...args: string[]) =>
-    run("git", ["-C", worktree, ...args], { timeoutMs: 30_000 });
+    run("git", ["--no-optional-locks", "-C", worktree, ...args], {
+      timeoutMs: 30_000,
+    });
   const range = `origin/${base}...${branch}`;
   const [numstat, diff, status, ahead, head, remote, found] = await Promise.all(
     [

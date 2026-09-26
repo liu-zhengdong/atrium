@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { readCi } from "./facts.ts";
+import { ciUnavailableReason } from "./ci-classify.ts";
 import { exec as defaultExec, type Exec } from "./git.ts";
 import { advanceTask, patchRunFields, taskRef, type Task } from "./ledger.ts";
 
@@ -46,8 +47,10 @@ export async function pollCiOnce(
     .all(batch) as Row[];
   const outcomes: CiOutcome[] = [];
   for (const row of rows) {
-    const { ci, detail } = await readCi(row.pr_url, run);
+    const { ci, detail: ciDetail } = await readCi(row.pr_url, run);
     if (ci === "pending") continue;
+    const detail =
+      ci === "unavailable" ? ciUnavailableReason(ciDetail) : ciDetail;
     let task = patchRunFields(db, row.id, { ci }, "ci", {
       ci,
       pr_url: row.pr_url,

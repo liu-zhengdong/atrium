@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -101,15 +101,37 @@ test("服务重启自愈：running 且 pid 已不在的任务置 failed 并投�
   assert.equal(existsSync(join(root, "tasks")), false);
 });
 
-test("CI 轮询：只查 pending 且有 PR 的任务；只差 CI 的受阻任务在 CI 通过后补判完成", async (t) => {
+test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立事件", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-ci-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const calls: string[][] = [];
+  const unavailable = JSON.parse(
+    readFileSync(
+      new URL("./fixtures/ci-unavailable.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { checks: unknown[]; jobs: unknown; annotations: unknown[] };
   const run: Exec = async (command, args) => {
     calls.push([command, ...args]);
+    if (args[0] === "api")
+      return {
+        ok: true,
+        stdout: JSON.stringify(
+          args[1]?.includes("/jobs?")
+            ? unavailable.jobs
+            : unavailable.annotations,
+        ),
+        stderr: "",
+      };
     const url = args[2]!;
+    if (url.endsWith("/4"))
+      return {
+        ok: false,
+        stdout: JSON.stringify(unavailable.checks),
+        stderr: "",
+      };
     const bucket = url.endsWith("/1")
       ? "pass"
       : url.endsWith("/2")
@@ -121,7 +143,7 @@ test("CI 轮询：只查 pending 且有 PR 的任务；只差 CI 的受阻任务
       stderr: "",
     };
   };
-  for (const n of [1, 2, 3]) {
+  for (const n of [1, 2, 3, 4]) {
     createTask(db, { title: `t${n}` });
     advanceTask(db, `t${n}`, { kind: "start" }, { worker: "kimi" });
     advanceTask(
@@ -141,21 +163,36 @@ test("CI 轮询：只查 pending 且有 PR 的任务；只差 CI 的受阻任务
     env: { PATH: "/bin" },
   });
   await runner.pollCi();
-  assert.equal(calls.length, 3, "没有 PR 的任务不查");
+  assert.equal(
+    calls.filter((call) => call[1] === "pr").length,
+    4,
+    "没有 PR 的任务不查",
+  );
   assert.equal(getTask(db, "t1").status, "done");
   assert.equal(getTask(db, "t1").ci, "success");
   assert.equal(getTask(db, "t2").status, "blocked");
   assert.equal(getTask(db, "t2").ci, "failure");
   assert.equal(getTask(db, "t3").ci, "pending");
+  assert.equal(getTask(db, "t4").status, "blocked");
+  assert.equal(getTask(db, "t4").ci, "unavailable");
   const events = (await runner.inbox.wait("secretary", 0)).events;
   assert.deepEqual(
     events.map((event) => [event.task, event.kind]),
     [
       ["t1", "ci_success"],
       ["t2", "ci_failure"],
+      ["t4", "ci_unavailable"],
     ],
   );
+  assert.match(
+    JSON.stringify(events[2]!.detail),
+    /CI 未运行：The job was not started.*需人工处理或本地验证/,
+  );
   await runner.pollCi();
-  assert.equal(calls.length, 4, "出结果的不再查，只剩 t3");
+  assert.equal(
+    calls.filter((call) => call[1] === "pr").length,
+    5,
+    "出结果的不再查，只剩 t3",
+  );
   runner.close();
 });

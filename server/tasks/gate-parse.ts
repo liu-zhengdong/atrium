@@ -2,7 +2,7 @@
  * 验收关卡用到的解析（#262）：git numstat、gh pr checks、diff 里新增的函数、摘要里的声明。纯函数。
  */
 
-export type Ci = "pending" | "success" | "failure";
+export type Ci = "pending" | "success" | "failure" | "unavailable";
 export type Pr = { number: number; url: string; state: string };
 export type FileStat = { file: string; added: number; removed: number };
 export type FunctionSpan = { file: string; name: string; lines: number };

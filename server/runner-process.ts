@@ -307,6 +307,12 @@ export class RunnerJournal {
   hasAgent(agentId: string) {
     return Object.hasOwn(this.current.agents, agentId);
   }
+  hasContainerRecord(agentId: string): boolean {
+    return (
+      this.current.agents[agentId]?.kind === "container" ||
+      this.prior.some((entry) => entry.agents[agentId]?.kind === "container")
+    );
+  }
   verdict(agentId: string): ProcessVerdict {
     if (!this.prior.length) return "unknown";
     const verdicts = this.prior.map((entry) =>

@@ -315,6 +315,14 @@ export class RunnerDaemon {
     remoteMethod: string,
     params: unknown,
   ) {
+    // Never route a recorded container identity through the host Pi gateway.
+    // Its container ACP path is not enabled until the isolation gates pass.
+    if (this.journal?.hasContainerRecord(agentId))
+      throw new Problem(
+        409,
+        "容器身份不能使用宿主 Pi 通路",
+        "container_route_unavailable",
+      );
     const gateway = await this.open();
     if (remoteMethod === "_pi/runtime/events") {
       const target = params as {

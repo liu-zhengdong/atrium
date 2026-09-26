@@ -9,6 +9,7 @@ import {
   processStart,
   processVerdict,
 } from "../server/runner-process.ts";
+import { RunnerDaemon } from "../server/runner-daemon.ts";
 
 const ref = (pid: number, started: string) => ({ pid, started });
 const prior = (pi: ReturnType<typeof ref> | null) => ({
@@ -155,6 +156,29 @@ test("容器 journal 在创建前记意图；未知、活跃或错代旧写者�
     /旧身份写者/,
   );
   afterCreate.close();
+  const daemon = new RunnerDaemon(
+    "ws://127.0.0.1:19998/runner/v1",
+    "fake",
+    { ATRIUM_PI_ACP_ENTRY: "/nonexistent" },
+    createdFile,
+  );
+  try {
+    await assert.rejects(
+      () =>
+        (
+          daemon as unknown as {
+            handleAcp(
+              id: string,
+              method: string,
+              params: unknown,
+            ): Promise<unknown>;
+          }
+        ).handleAcp("a1", "_pi/identity/start", { identityId: "a1" }),
+      /容器身份不能使用宿主 Pi 通路/,
+    );
+  } finally {
+    daemon.close();
+  }
 
   // A separate journal records Docker create before start, then the live writer.
   const recordedFile = join(dir, "r2.state.json");

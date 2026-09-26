@@ -30,10 +30,10 @@ const bootVersion = (() => {
 export function currentVersion(): string {
   return bootVersion;
 }
-export function dataDirectory() {
+export function dataDirectory(env: NodeJS.ProcessEnv = process.env) {
   // Never keep mutable user data under an npm installation: npm update replaces it.
   const path = resolve(
-    process.env.ATRIUM_DATA ?? join(homedir(), ".pi", "atrium", "data"),
+    env.ATRIUM_DATA ?? join(homedir(), ".pi", "atrium", "data"),
   );
   return existsSync(path) ? realpathSync(path) : path;
 }

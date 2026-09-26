@@ -521,6 +521,38 @@ test("pickWorker：按富余选，跳过没装与风险不允许的", () => {
   assert.ok(partial.ok && partial.tool === "grok");
 });
 
+test("pickWorker：已用额度触及保留线时跳过，边界与多窗口都生效", () => {
+  const chosen = pickWorker({
+    installed: ["grok", "codex", "kimi"],
+    pace: [
+      { providerId: "grok", usedPercent: 79.9, sparePercent: 1 },
+      { providerId: "codex", usedPercent: 79, sparePercent: 60 },
+      { providerId: "codex", usedPercent: 80, sparePercent: 80 },
+      { providerId: "kimi", usedPercent: null, sparePercent: 70 },
+    ],
+    risk: "low",
+    profiles: {},
+  });
+  assert.ok(chosen.ok);
+  assert.equal(chosen.tool, "kimi");
+  assert.deepEqual(chosen.available, ["kimi", "grok"]);
+  assert.match(
+    chosen.skipped.find((skip) => skip.tool === "codex")!.reason,
+    /80%.*留 20%/,
+  );
+  const stricter = pickWorker({
+    installed: ["grok", "codex"],
+    pace: [
+      { providerId: "grok", usedPercent: 79.9, sparePercent: 1 },
+      { providerId: "codex", usedPercent: 79, sparePercent: 60 },
+    ],
+    risk: "low",
+    profiles: {},
+    reservePercent: 25,
+  });
+  assert.equal(stricter.ok, false);
+});
+
 test("pickWorker：pace 缺失按固定顺序，全部没装报不可用", () => {
   const fallback = pickWorker({
     installed: { codex: "/bin/codex", kimi: "/bin/kimi" },
@@ -568,12 +600,22 @@ test("readPace / parsePace：失败返回 undefined", async () => {
     const bin = join(dir, "openquota");
     writeFileSync(
       bin,
-      `#!/bin/sh\necho '[{"providerId":"codex","sparePercent":12.5,"windowId":"weekly"},{"providerId":"copilot","sparePercent":null}]'\n`,
+      `#!/bin/sh\necho '[{"providerId":"codex","sparePercent":12.5,"usedPercent":89,"windowId":"weekly"},{"providerId":"copilot","sparePercent":null}]'\n`,
     );
     chmodSync(bin, 0o755);
     assert.deepEqual(await readPace(bin), [
-      { providerId: "codex", sparePercent: 12.5, windowId: "weekly" },
-      { providerId: "copilot", sparePercent: null, windowId: null },
+      {
+        providerId: "codex",
+        sparePercent: 12.5,
+        usedPercent: 89,
+        windowId: "weekly",
+      },
+      {
+        providerId: "copilot",
+        sparePercent: null,
+        usedPercent: null,
+        windowId: null,
+      },
     ]);
     writeFileSync(bin, "#!/bin/sh\necho oops\n");
     assert.equal(await readPace(bin), undefined);

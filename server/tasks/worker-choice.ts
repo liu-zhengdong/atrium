@@ -9,6 +9,7 @@ import { riskRefusal, type RunRequest } from "./plan.ts";
 import { pickWorker, readPace } from "./prepare.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import type { LaunchOptions } from "./workspace.ts";
+import { readQuotaReservePercent, overReserve } from "./budget.ts";
 
 /**
  * 解析执行者（#262）：读档案、查是否已装、按额度挑；判定本身在 plan.ts / prepare.ts 的纯函数里。
@@ -34,6 +35,8 @@ export async function chooseWorker(
   const path = options.env.PATH ?? "";
   let worker: ResolvedWorker;
   let waitUntil: number | undefined;
+  const reservePercent = await readQuotaReservePercent(options.charterPath);
+  const pace = await (options.pace ?? (() => readPace()))();
   if (request.worker) {
     worker = await resolveWorker(request.worker, options.workersDir);
     if (!findExecutable(ADAPTERS[worker.tool].executable, path))
@@ -42,6 +45,40 @@ export async function chooseWorker(
         `执行者 ${worker.tool} 没装：PATH 上找不到 ${ADAPTERS[worker.tool].executable}`,
         "usage",
       );
+    const account = ADAPTERS[worker.tool].quotaProvider;
+    const used = pace?.find(
+      (entry) =>
+        entry.providerId === account &&
+        overReserve(entry.usedPercent, reservePercent),
+    );
+    if (used) {
+      const installed = detectInstalled(path);
+      const tools = Object.keys(installed) as Tool[];
+      const profiles = Object.fromEntries(
+        await Promise.all(
+          tools.map(async (tool) => [
+            tool,
+            (await resolveWorker(tool, options.workersDir)).profile,
+          ]),
+        ),
+      );
+      const picked = pickWorker({
+        installed,
+        pace,
+        risk,
+        profiles,
+        held,
+        reservePercent,
+      });
+      const available = picked.ok
+        ? picked.available.filter((tool) => tool !== worker.tool)
+        : [];
+      throw new Problem(
+        409,
+        `执行者 ${worker.tool} 的账号 ${account} 已用额度 ${used.usedPercent}%，达到章程上限 ${100 - reservePercent}%（须留 ${reservePercent}% 给用户）；${available.length ? `可选的其他执行者：${available.join("、")}` : "目前没有可选的其他执行者"}`,
+        "conflict",
+      );
+    }
     waitUntil = held.get(ADAPTERS[worker.tool].quotaProvider);
   } else {
     const installed = detectInstalled(path);
@@ -54,11 +91,23 @@ export async function chooseWorker(
         ]),
       ),
     );
-    const pace = await (options.pace ?? (() => readPace()))();
-    let picked = pickWorker({ installed, pace, risk, profiles, held });
+    let picked = pickWorker({
+      installed,
+      pace,
+      risk,
+      profiles,
+      held,
+      reservePercent,
+    });
     if (!picked.ok && held.size) {
       // 能用的都被额度标记：照常挑一个，排队等它的账号恢复。
-      const waiting = pickWorker({ installed, pace, risk, profiles });
+      const waiting = pickWorker({
+        installed,
+        pace,
+        risk,
+        profiles,
+        reservePercent,
+      });
       if (waiting.ok) {
         picked = waiting;
         waitUntil = held.get(ADAPTERS[waiting.tool].quotaProvider);

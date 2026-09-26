@@ -4,6 +4,7 @@ import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
 import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
 import { clock } from "./quota-holds.ts";
+import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
@@ -123,6 +124,7 @@ export async function loadRoleDocs(
 export type PaceEntry = {
   providerId: string;
   sparePercent: number | null;
+  usedPercent?: number | null;
   windowId?: string | null;
 };
 
@@ -144,7 +146,7 @@ function parsePaceRows(data: unknown[]): PaceEntry[] {
   const entries: PaceEntry[] = [];
   for (const item of data) {
     if (!item || typeof item !== "object") continue;
-    const { providerId, sparePercent, windowId } = item as Record<
+    const { providerId, sparePercent, usedPercent, windowId } = item as Record<
       string,
       unknown
     >;
@@ -154,6 +156,10 @@ function parsePaceRows(data: unknown[]): PaceEntry[] {
       sparePercent:
         typeof sparePercent === "number" && Number.isFinite(sparePercent)
           ? sparePercent
+          : null,
+      usedPercent:
+        typeof usedPercent === "number" && Number.isFinite(usedPercent)
+          ? usedPercent
           : null,
       windowId: typeof windowId === "string" ? windowId : null,
     });
@@ -195,6 +201,7 @@ export type PickInput = {
   profiles: Partial<Record<Tool, EffectiveProfile>>;
   /** 额度被标记用尽、还没到期的账号：provider → 到期时刻（#267）。 */
   held?: ReadonlyMap<string, number>;
+  reservePercent?: number;
 };
 
 export type Skip = { tool: Tool; reason: string };
@@ -205,11 +212,12 @@ export type PickResult =
       spare?: number;
       basis: "pace" | "fallback";
       skipped: Skip[];
+      available: Tool[];
     }
   | { ok: false; reason: string; skipped: Skip[] };
 
 /**
- * 挑执行者：跳过没装的、跳过档案 max_risk 低于任务 risk 的、跳过额度标记未到期的；pace 可用时按账号富余从多到少，
+ * 挑执行者：跳过没装的、档案风险不允许的、额度标记未到期的、触及章程保留额的；pace 可用时按账号富余从多到少，
  * 没有富余数据的工具排在有数据的之后并按固定顺序；pace 不可用时整体按固定顺序。
  */
 export function pickWorker({
@@ -218,6 +226,7 @@ export function pickWorker({
   risk,
   profiles,
   held,
+  reservePercent = DEFAULT_QUOTA_RESERVE_PERCENT,
 }: PickInput): PickResult {
   if (!(RISKS as readonly string[]).includes(risk))
     throw invalid(`risk 只能是 ${RISKS.join("、")}`);
@@ -248,15 +257,33 @@ export function pickWorker({
       skipped.push({ tool, reason: `额度用尽至 ${clock(heldUntil)}` });
       continue;
     }
+    const used = pace
+      ?.filter((entry) => entry.providerId === ADAPTERS[tool].quotaProvider)
+      .find((entry) => overReserve(entry.usedPercent, reservePercent));
+    if (used) {
+      skipped.push({
+        tool,
+        reason: `已用额度 ${used.usedPercent}% 达到章程上限 ${100 - reservePercent}%（须留 ${reservePercent}% 给用户）`,
+      });
+      continue;
+    }
     eligible.push(tool);
   }
   if (!eligible.length)
     return {
       ok: false,
-      reason: "没有可用的执行者：都没装、档案不允许该风险或额度用尽",
+      reason:
+        "没有可用的执行者：都没装、档案不允许该风险、额度用尽或触及章程保留额",
       skipped,
     };
-  if (!pace) return { ok: true, tool: eligible[0], basis: "fallback", skipped };
+  if (!pace)
+    return {
+      ok: true,
+      tool: eligible[0],
+      basis: "fallback",
+      skipped,
+      available: eligible,
+    };
   const spare = spareByProvider(pace);
   const ranked = eligible
     .map((tool, order) => ({
@@ -280,6 +307,7 @@ export function pickWorker({
     spare: best.spare,
     basis: best.spare === undefined ? "fallback" : "pace",
     skipped,
+    available: ranked.map((entry) => entry.tool),
   };
 }
 

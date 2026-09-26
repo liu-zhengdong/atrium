@@ -146,6 +146,7 @@ atrium task ls --status running               # 列任务；--parent t1 只看�
 atrium task show t2                           # 详情：字段、执行者、PR、最近事件
 atrium task tree t1                           # 缩进树：短号、状态、标题、执行者、PR；不写 tN 看全部
 atrium task set t2 --status done              # 人工收尾；running 只能由执行者启动进入
+atrium quota                                  # 按额度富余从多到少列出各账号（读 OpenQuota）；--json 输出结构化数据
 
 # 运行实例
 atrium runtimes                               # 本机发现的 Pi 实例

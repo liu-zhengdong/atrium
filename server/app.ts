@@ -53,6 +53,7 @@ import { UserAuth } from "./user-auth.ts";
 import { RunnerAuth } from "./runner-auth.ts";
 import { authPolicy, protectedNamespace } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
+import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 import { claimRunner, releaseRunner, ownerOf } from "./runner-ownership.ts";
 import { groupName } from "../shared/group.ts";
@@ -93,6 +94,8 @@ export async function createApp(options: {
   onRoute?: (method: string, url: string) => void;
   /** 任务运行时（#262）的注入项：测试用来缩短看门狗间隔、替换 git/gh 调用。 */
   tasks?: Partial<RunnerOptions>;
+  /** OpenQuota 可执行文件路径，测试注入假二进制。 */
+  quotaBin?: string;
 }) {
   const desktops = options.desktops ?? defaultDesktops();
   const piHome = options.piHome;
@@ -333,6 +336,7 @@ export async function createApp(options: {
     ...runnerEnvOptions(),
     ...options.tasks,
   });
+  registerQuotaRoute(app, { bin: options.quotaBin });
   app.get("/api/runners", () => runnerAuth.list());
   app.post("/api/runners", (request) => {
     const input = z

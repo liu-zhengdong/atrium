@@ -11,6 +11,7 @@ import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { taskCommands } from "./tasks.ts";
+import { quotaCommands } from "./quota.ts";
 import { workerGuard } from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
 import { closest, Problem } from "../server/problem.ts";
@@ -96,6 +97,7 @@ export const commands: Record<string, Command> = {
   ...pluginCommands,
   ...resourceCommands,
   ...taskCommands,
+  ...quotaCommands,
   ...eventCommands,
   update: updateCommand,
   restart: restartCommand,

@@ -79,7 +79,24 @@ export async function verifyIdentity({
       encoding: "utf8",
     });
   const owner = join(env.PI_ACP_DIR, "identities", `${agent.id}.json`);
-  // 记录本次具名阶段出现过的 runtime id 与其 socket 的真实路径（记录里的 endpoint，
+  // 基线：具名阶段开始前已有的 runtime（比如 probe-pi 前面阶段还活着的匿名 TUI）。
+  // 断言只针对具名阶段新产生的，清理也只清具名阶段自己产生的，基线一律不碰。
+  const baseline = new Map(); // runtimeId -> endpoint
+  try {
+    for (const name of readdirSync(join(env.PI_ACP_DIR, "runtimes"))) {
+      if (!name.endsWith(".json")) continue;
+      const id = name.slice(0, -5);
+      try {
+        const endpoint = JSON.parse(
+          readFileSync(join(env.PI_ACP_DIR, "runtimes", name), "utf8"),
+        ).endpoint;
+        baseline.set(id, typeof endpoint === "string" ? endpoint : null);
+      } catch {
+        baseline.set(id, null);
+      }
+    }
+  } catch {}
+  // 记录具名阶段新出现的 runtime id 与其 socket 的真实路径（记录里的 endpoint，
   // 扩展自己 unlink 的也是它），收尾按这些路径清，不猜目录。
   const namedRuntimeIds = new Set();
   const namedEndpoints = new Map();
@@ -88,6 +105,7 @@ export async function verifyIdentity({
       for (const name of readdirSync(join(env.PI_ACP_DIR, "runtimes"))) {
         if (!name.endsWith(".json")) continue;
         const id = name.slice(0, -5);
+        if (baseline.has(id)) continue;
         namedRuntimeIds.add(id);
         if (!namedEndpoints.has(id)) {
           try {
@@ -263,6 +281,18 @@ export async function verifyIdentity({
     assert.equal(blocked.status, 1);
     assert.match(blocked.stderr, /already occupied/);
     await runtimes.rpc("_pi/identity/stop", { identityId: agent.id });
+    // 成功路径：具名阶段产生的 socket 一个都不许留下；先断言，残留清理在 finally，
+    // 扩展真泄漏时这里才红。反向验证：断言前往具名 runtime 的 endpoint 放一个
+    // 同名 socket 文件，断言必红。
+    collectRuntimeIds();
+    const leftSockets = [...namedEndpoints.values()].filter((endpoint) =>
+      existsSync(endpoint),
+    );
+    assert.equal(
+      leftSockets.length,
+      0,
+      `具名阶段的 socket 残留：${leftSockets.join(", ")}`,
+    );
     return {
       ref: agent.ref,
       identity: agent.id,
@@ -290,10 +320,16 @@ export async function verifyIdentity({
         execFileSync("tmux", ["kill-session", "-t", name]);
       } catch {}
     }
-    // 失败路径补清本次具名阶段的 socket：只删收集到的 endpoint，
-    // 别的实例与真实身份正在用的不碰。
+    // 失败路径补清具名阶段产生的 socket：只删收集到的 endpoint，
+    // 基线里的其他存活 runtime（以及真实身份正在用的）一律不碰。
     collectRuntimeIds();
     cleanNamedSockets();
+    // 反向：清理跑完后，基线里的 runtime socket 必须还在。
+    for (const [id, endpoint] of baseline)
+      if (endpoint && !existsSync(endpoint))
+        throw new Error(
+          `基线 runtime ${id.slice(0, 8)} 的 socket 被误删：${endpoint}`,
+        );
     // 按用户入口执行的 atrium list 会在后台拉起服务；验完停掉，别占着默认端口挡住用户自己的服务。
     try {
       execFileSync(command, ["stop"], { env, stdio: "ignore" });

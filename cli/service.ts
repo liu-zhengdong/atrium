@@ -6,6 +6,7 @@ import {
 import { startService } from "../server/service.ts";
 import { Problem } from "../server/problem.ts";
 import { recordResult } from "./contract.ts";
+import { workerGuard } from "./worker-guard.ts";
 import { requireUserAuthService, userBearer } from "./auth.ts";
 
 export type Client = ReturnType<typeof client>;
@@ -15,6 +16,7 @@ export type Client = ReturnType<typeof client>;
  * 能力定义只在服务这一份，命令行不直接开数据库，改动才会经过投递与唤醒。
  */
 export async function connect(quietStart = false): Promise<Client> {
+  workerGuard();
   const data = dataDirectory();
   const before = readService(data);
   const record = await startService(data).catch((error: unknown) => {

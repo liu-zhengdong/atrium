@@ -21,6 +21,7 @@ export const exitCodes = {
   already_assigned: 4,
   unassigned_account: 4,
   local_login_unavailable: 4,
+  worker_environment: 4,
   service_unavailable: 5,
   runner_offline: 5,
   runner_changed: 5,

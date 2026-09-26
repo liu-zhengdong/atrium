@@ -205,8 +205,7 @@ export async function startService(data: string) {
       );
     await delay(100);
   }
-  if (record && alive(record.pid))
-    throw await unavailableReason(record, data);
+  if (record && alive(record.pid)) throw await unavailableReason(record, data);
   throw startupFailure(data, "Atrium 启动超时", logStart);
 }
 export async function openWeb(record: ServiceRecord, url = serviceUrl(record)) {

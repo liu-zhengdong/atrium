@@ -330,10 +330,7 @@ test("排空中途发起方断开：中止排空并恢复运行（#231）", asyn
   const timer = setTimeout(() => abort.abort(), 250);
   await assert.rejects(drain, /排空中止：发起方已断开/);
   clearTimeout(timer);
-  assert.equal(
-    (runtime as unknown as { draining: boolean }).draining,
-    false,
-  );
+  assert.equal((runtime as unknown as { draining: boolean }).draining, false);
   // 已恢复运行：再次排空能进入等待（报忙碌超时），而不是被「正在排空」拒绝。
   await assert.rejects(runtime.prepareShutdown(120), /旧服务继续运行/);
 });

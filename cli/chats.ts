@@ -21,9 +21,11 @@ import { findAgent, roster } from "./agents.ts";
 import { Problem, closest } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
 import {
+  agentWaitQuery,
   nextMessage,
   nextTrace,
   readBounds,
+  readBusySince,
   reconnectingWait,
   waitOptions,
 } from "./wait-options.ts";
@@ -192,6 +194,8 @@ const wait: Command = {
     const view = await roster(client);
     if (idle) {
       const agent = findAgent(view, reference!);
+      // 头一到就记下。body 被掐断时这里已经有起点，重连请求才带得上 busy_since。
+      let busySince: number | undefined;
       const result = await reconnectingWait<{
         status: "idle" | "offline" | "busy";
         finished_at: number | null;
@@ -200,7 +204,13 @@ const wait: Command = {
       }>({
         seconds,
         request: (timeout) =>
-          client.get(`/agents/${agent.id}/wait?timeout=${timeout}`),
+          client.get(
+            `/agents/${agent.id}/wait?${agentWaitQuery(timeout, busySince)}`,
+            (headers) => {
+              const seen = readBusySince(headers);
+              if (seen !== undefined) busySince = seen;
+            },
+          ),
         restarting: (result) => result.restarting === true,
         resume: () => `atrium wait ${agent.ref} --idle`,
       });

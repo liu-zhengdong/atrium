@@ -6,8 +6,10 @@ import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import {
+  agentWaitQuery,
   nextMessage,
   readBounds,
+  readBusySince,
   sequence,
   waitOptions,
 } from "../cli/wait-options.ts";
@@ -27,6 +29,17 @@ test("参数与最后一行是纯逻辑：非法输入被拒", () => {
     nextMessage("继续等", "c15", 42),
     "继续等：atrium wait c15 --after 42",
   );
+  assert.equal(readBusySince(new Headers()), undefined);
+  assert.equal(readBusySince(new Headers({ "x-atrium-busy-since": "12" })), 12);
+  assert.equal(readBusySince(new Headers({ "x-atrium-busy-since": "0" })), 0);
+  for (const value of ["", "01", "-1", "1.2", "9007199254740993"])
+    assert.equal(
+      readBusySince(new Headers({ "x-atrium-busy-since": value })),
+      undefined,
+      value,
+    );
+  assert.equal(agentWaitQuery(5), "timeout=5");
+  assert.equal(agentWaitQuery(5, 12), "timeout=5&busy_since=12");
 });
 
 test("增量读取正序有界；等待通知、超时及客户端中断清理", async (t) => {

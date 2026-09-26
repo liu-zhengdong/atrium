@@ -29,6 +29,7 @@ import { createApp } from "../server/app.ts";
 import { currentVersion, packageRoot } from "../server/service-state.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
 
@@ -395,12 +396,16 @@ test("currentVersion 正确获取当前 Atrium 版本", () => {
 test("CLI update 与 restart 命令参数解析与帮助信息", async () => {
   const bin = join(packageRoot, "bin/atrium.mjs");
 
-  const helpRestart = await exec(process.execPath, [bin, "restart", "--help"]);
+  const helpRestart = await exec(process.execPath, [bin, "restart", "--help"], {
+    env: childEnv(),
+  });
   assert.equal(helpRestart.stderr, "");
   assert.match(helpRestart.stdout, /--wait/);
   assert.match(helpRestart.stdout, /--timeout/);
 
-  const helpUpdate = await exec(process.execPath, [bin, "update", "--help"]);
+  const helpUpdate = await exec(process.execPath, [bin, "update", "--help"], {
+    env: childEnv(),
+  });
   assert.equal(helpUpdate.stderr, "");
   assert.match(helpUpdate.stdout, /--to/);
   assert.match(helpUpdate.stdout, /--repo/);

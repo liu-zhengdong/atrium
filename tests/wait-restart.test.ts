@@ -32,6 +32,7 @@ import {
   reconnectingWait,
 } from "../cli/wait-options.ts";
 import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
+import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
 
@@ -50,15 +51,14 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     JSON.stringify({ packages: [] }),
   );
   writeFileSync(join(builtin, "SYSTEM.md"), "builtin rules");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = childEnv({
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
     ATRIUM_DESKTOPS: join(root, "desktops"),
     ATRIUM_PI_HOME: join(root, ".pi"),
     ATRIUM_PI_TEMPLATE: builtin,
     PI_ACP_DIR: join(root, "acp"),
-  };
+  });
   const cli = async (...args: string[]) => {
     try {
       const output = await exec(
@@ -1072,8 +1072,7 @@ function spawnHarness(
   let stderr = "";
   const child = spawn(process.execPath, ["--import", "tsx", harnessPath], {
     cwd: packageRoot,
-    env: {
-      ...process.env,
+    env: childEnv({
       ATRIUM_DATA: data,
       ATRIUM_PORT: String(port),
       ATRIUM_PI_HOME: join(data, "pi"),
@@ -1084,7 +1083,7 @@ function spawnHarness(
       HARNESS_MODE: mode,
       HARNESS_STATUS: status,
       ...(oldEnd ? { HARNESS_OLD_END: "1" } : {}),
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stderr.on("data", (chunk) => {
@@ -1168,14 +1167,13 @@ test(
       ],
       {
         cwd: packageRoot,
-        env: {
-          ...process.env,
+        env: childEnv({
           ATRIUM_DATA: data,
           ATRIUM_PORT: String(port),
           ATRIUM_PI_HOME: join(data, "pi"),
           ATRIUM_DESKTOPS: join(data, "desktops"),
           PI_ACP_DIR: join(data, "acp"),
-        },
+        }),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -1278,11 +1276,10 @@ test(
       ],
       {
         cwd: packageRoot,
-        env: {
-          ...process.env,
+        env: childEnv({
           ATRIUM_DATA: data,
           ATRIUM_PORT: String(port),
-        },
+        }),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -1322,11 +1319,10 @@ test(
       ],
       {
         cwd: packageRoot,
-        env: {
-          ...process.env,
+        env: childEnv({
           ATRIUM_DATA: data,
           ATRIUM_PORT: String(port),
-        },
+        }),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );

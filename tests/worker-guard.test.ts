@@ -5,8 +5,13 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKER_REFUSAL, workerGuard } from "../cli/worker-guard.ts";
+import {
+  WORKER_FLAG,
+  WORKER_REFUSAL,
+  workerGuard,
+} from "../cli/worker-guard.ts";
 import { workerEnvironment } from "../server/tasks/worker-env.ts";
+import { childEnv } from "./child-env.ts";
 
 const run = promisify(execFile);
 const bin = join(import.meta.dirname, "..", "bin", "atrium.mjs");
@@ -41,6 +46,23 @@ test("执行者防护：带 ATRIUM_WORKER 标记时必须显式给隔离的 ATRI
         return true;
       },
     );
+});
+
+test("测试夹具起的子进程环境摘掉 ATRIUM_WORKER，不受执行者防护影响", () => {
+  const previous = process.env[WORKER_FLAG];
+  process.env[WORKER_FLAG] = "1";
+  try {
+    assert.equal(childEnv()[WORKER_FLAG], undefined);
+    const isolated = childEnv({ ATRIUM_DATA: "/tmp/x", ATRIUM_PORT: "4599" });
+    assert.equal(isolated[WORKER_FLAG], undefined);
+    assert.equal(isolated.ATRIUM_DATA, "/tmp/x");
+    assert.equal(isolated.ATRIUM_PORT, "4599");
+    // 摘掉标记后照常放行：夹具本来就用隔离的数据目录与端口。
+    workerGuard(isolated);
+  } finally {
+    if (previous === undefined) delete process.env[WORKER_FLAG];
+    else process.env[WORKER_FLAG] = previous;
+  }
 });
 
 test(

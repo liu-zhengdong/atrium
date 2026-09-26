@@ -30,6 +30,7 @@ import {
 } from "../server/service-state.ts";
 import { openWeb } from "../server/service.ts";
 import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
+import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
@@ -47,15 +48,14 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     JSON.stringify({ packages: [] }),
   );
   writeFileSync(join(builtin, "SYSTEM.md"), "builtin rules");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = childEnv({
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
     ATRIUM_DESKTOPS: join(root, "desktops"),
     ATRIUM_PI_HOME: join(root, ".pi"),
     ATRIUM_PI_TEMPLATE: builtin,
     PI_ACP_DIR: join(root, "acp"),
-  };
+  });
   const cli = async (...args: string[]) => {
     try {
       const output = await exec(
@@ -131,7 +131,7 @@ test("新 CLI 连接旧服务：提示 restart 和退出码 7，不进入 rotate
         [join(packageRoot, "bin/atrium.mjs"), ...args],
         {
           cwd: root,
-          env: { ...process.env, ATRIUM_DATA: data },
+          env: childEnv({ ATRIUM_DATA: data }),
           timeout: 15000,
         },
       );

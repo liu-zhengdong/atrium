@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { packageRoot } from "../server/service-state.ts";
 import { canOpenBrowser, noBrowserHint } from "../server/service.ts";
 import { trackFixture, untrackFixture } from "./fixture-signal.ts";
+import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
 
@@ -40,8 +41,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     writeFileSync(join(bin, name), stub);
     chmodSync(join(bin, name), 0o755);
   }
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = childEnv({
     PATH: `${bin}:${process.env.PATH ?? ""}`,
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
@@ -50,7 +50,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     ATRIUM_PI_TEMPLATE: builtin,
     PI_ACP_DIR: join(root, "acp"),
     PI_ACP_PI_COMMAND: join(root, "no-such-pi"),
-  };
+  });
   const cli = async (...args: string[]) => {
     try {
       const output = await exec(

@@ -113,7 +113,11 @@ const add: Command = {
       console.log(
         `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}`,
       );
-    recordNext(`拆子任务：atrium task add 标题 --parent ${task.ref}`);
+    recordNext(
+      task.parent_ref
+        ? `派活：atrium task run ${task.ref}`
+        : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
+    );
   },
 };
 

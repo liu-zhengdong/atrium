@@ -285,32 +285,40 @@ export function pickWorker({
 
 export const SLUG_MAX = 40;
 
-/** 标题转 slug：只留小写字母、数字和连字符，截断到 40；全被滤掉时用 task。 */
-export function slugify(title: string): string {
-  const slug = title
+/** 规范化成 slug，可能为空串（如纯中文标题）；只留小写字母、数字和连字符，截断到 40。 */
+function slugBase(text: string): string {
+  return text
     .normalize("NFKD")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, SLUG_MAX)
     .replace(/-+$/, "");
-  return slug || "task";
+}
+
+/** 标题转 slug：全被滤掉时用 task。 */
+export function slugify(title: string): string {
+  return slugBase(title) || "task";
 }
 
 export type WorktreePlan = { path: string; branch: string; slug: string };
 
-/** worktree 规划：路径 `<repo>-t<id>-<slug>`，分支 `task-t<id>-<slug>`。只算，不建。 */
+/**
+ * worktree 规划：路径 `<repo>-t<id>-<slug>`，分支 `task-t<id>-<slug>`。只算，不建。
+ * slug 依次取标题、role：中文标题滤不出内容时用 role，都没有才退回 task。
+ */
 export function worktreePlan(
   repo: string,
   taskId: number,
   title: string,
+  role?: string,
 ): WorktreePlan {
   if (!isAbsolute(repo)) throw invalid("仓库须为绝对路径");
   if (!Number.isSafeInteger(taskId) || taskId <= 0)
     throw invalid("任务编号不合法");
   const base =
     repo.length > 1 ? repo.replace(new RegExp(`\\${sep}+$`), "") : repo;
-  const slug = slugify(title);
+  const slug = slugBase(title) || slugBase(role ?? "") || "task";
   return {
     path: `${base}-t${taskId}-${slug}`,
     branch: `task-t${taskId}-${slug}`,

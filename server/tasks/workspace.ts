@@ -87,7 +87,12 @@ export async function prepareRun(
   if (task.repo) {
     if (!existsSync(task.repo))
       throw new Problem(400, `任务仓库不存在：${task.repo}`, "usage");
-    const plan = worktreePlan(task.repo, task.id, task.title);
+    const plan = worktreePlan(
+      task.repo,
+      task.id,
+      task.title,
+      task.role ?? undefined,
+    );
     base = await defaultBranch(task.repo, run);
     await ensureWorktree(task.repo, plan, base, run);
     cwd = worktree = plan.path;

@@ -23,6 +23,7 @@ import { RequestError } from "@agentclientprotocol/sdk";
 import { errorWithDetails } from "../server/runtime-error.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
+import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
 /** 与 service.test.ts 同一种夹具：隔离数据目录、随机端口、假的 Pi 模板，Pi 命令指向不存在的路径。 */
@@ -38,8 +39,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   mkdirSync(builtin);
   writeFileSync(join(builtin, "settings.json"), '{"packages":[]}');
   writeFileSync(join(builtin, "SYSTEM.md"), "builtin rules");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = childEnv({
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
     ATRIUM_DESKTOPS: join(root, "desktops"),
@@ -49,7 +49,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     PI_ACP_PI_COMMAND: join(root, "no-such-pi"),
     // 服务白名单会丢掉 PI_*；ATRIUM_PI_BIN 是服务侧的保留开关（#213）。
     ATRIUM_PI_BIN: join(root, "no-such-pi"),
-  };
+  });
   const cli = async (...args: string[]) => {
     try {
       const output = await exec(
@@ -846,5 +846,35 @@ test(
       next: null,
     });
     assert.equal((await f.cli("delete", "a1", "--yes")).code, 0);
+  },
+);
+
+test(
+  "task add 的下一步：带 --parent 建出的子任务提示派活，顶层任务仍提示拆子任务",
+  { timeout: 90000 },
+  async (t) => {
+    const f = await fixture(t);
+    const top = await f.cli("task", "add", "登录模块");
+    assert.equal(top.code, 0, top.stderr);
+    assert.match(
+      top.stdout.trimEnd().split("\n").at(-1)!,
+      /^拆子任务：atrium task add 标题 --parent t1$/,
+    );
+    const child = await f.cli("task", "add", "拆出登录表单", "--parent", "t1");
+    assert.equal(child.code, 0, child.stderr);
+    assert.match(
+      child.stdout.trimEnd().split("\n").at(-1)!,
+      /^派活：atrium task run t2$/,
+    );
+    const json = await f.cli(
+      "task",
+      "add",
+      "再拆一个",
+      "--parent",
+      "t1",
+      "--json",
+    );
+    assert.equal(json.code, 0, json.stderr);
+    assert.equal(JSON.parse(json.stdout).next, "atrium task run t3");
   },
 );

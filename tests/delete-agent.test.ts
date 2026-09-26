@@ -21,6 +21,7 @@ import { Accounts } from "../server/accounts.ts";
 import { mergeReadState } from "../web/chat/readState.ts";
 import { packageRoot } from "../server/service-state.ts";
 import { LOCAL_USER } from "../shared/user.ts";
+import { childEnv } from "./child-env.ts";
 
 const require = createRequire(import.meta.url);
 const { claimIdentity } = require("@liuser/pi-atrium/dist/identity.js") as {
@@ -206,7 +207,7 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
     exec(
       process.execPath,
       [join(packageRoot, "bin/atrium.mjs"), "run", agent.ref],
-      { env: { ...process.env, ATRIUM_DATA: data }, timeout: 5000 },
+      { env: childEnv({ ATRIUM_DATA: data }), timeout: 5000 },
     ),
     /Agent 不存在/,
   );
@@ -370,13 +371,12 @@ test(
       process.execPath,
       [join(packageRoot, "bin/atrium.mjs"), "run", agent.ref],
       {
-        env: {
-          ...process.env,
+        env: childEnv({
           ATRIUM_DATA: data,
           PI_ACP_PI_COMMAND: command,
           // 服务白名单只保留 ATRIUM_PI_BIN（#213）。
           ATRIUM_PI_BIN: command,
-        },
+        }),
         timeout: 8000,
       },
     );

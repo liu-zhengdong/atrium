@@ -346,14 +346,20 @@ const run: Command = {
 };
 
 const stop: Command = {
-  args: "tN",
-  about: "停掉执行者（排队中的移出队列）",
+  args: "tN [--as 订阅者]",
+  about:
+    "停掉执行者（排队中的移出队列）；由此产生的事件不投给发起者本人（缺省 secretary）",
+  options: { as: { type: "string" } },
   positionals: [1, 1],
-  async run({ positionals: [reference], json }) {
+  async run({ positionals: [reference], values, json }) {
     const id = ref(reference, "任务");
+    const who = str(values, "as") ?? "secretary";
+    if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
     const result = await (
       await client()
-    ).post<{ task: Task; stopping: boolean }>(`/tasks/${id}/stop`);
+    ).post<{ task: Task; stopping: boolean }>(
+      `/tasks/${id}/stop?${new URLSearchParams({ as: who })}`,
+    );
     if (json) printJson(result);
     else
       console.log(

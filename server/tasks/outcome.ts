@@ -6,7 +6,7 @@ import type { Verdict } from "./gates.ts";
  */
 
 export type Stop =
-  | { kind: "user" }
+  | { kind: "user"; by?: string }
   | { kind: "stalled"; reason: string }
   | { kind: "idle"; reason: string };
 

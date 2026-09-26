@@ -58,8 +58,13 @@ export class Executors {
     return false;
   }
 
-  publish(id: number, kind: string, detail: Record<string, unknown>) {
-    publishTask(this.ctx.inbox, this.ctx.db, id, kind, detail);
+  publish(
+    id: number,
+    kind: string,
+    detail: Record<string, unknown>,
+    actor?: string,
+  ) {
+    publishTask(this.ctx.inbox, this.ctx.db, id, kind, detail, actor);
   }
 
   advance(
@@ -155,13 +160,18 @@ export class Executors {
         await this.ctx.quota.exhausted(this, active, outcome.quota);
       else if (decision.retry) await this.retry(active, decision.reason!);
       else
-        this.publish(id, decision.publish, {
-          ...(decision.reason ? { reason: decision.reason } : {}),
-          ...(decision.publish === "done" && facts
-            ? { diff: diffSize(facts) }
-            : {}),
-          ...(verdict && !verdict.passed ? { gates: verdict.failed } : {}),
-        });
+        this.publish(
+          id,
+          decision.publish,
+          {
+            ...(decision.reason ? { reason: decision.reason } : {}),
+            ...(decision.publish === "done" && facts
+              ? { diff: diffSize(facts) }
+              : {}),
+            ...(verdict && !verdict.passed ? { gates: verdict.failed } : {}),
+          },
+          active.stop?.kind === "user" ? active.stop.by : undefined,
+        );
     } catch (error) {
       this.failAfterError(id, error);
     } finally {

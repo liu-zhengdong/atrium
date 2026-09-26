@@ -39,6 +39,8 @@ export type RunnerOptions = {
   ciBatch?: number;
   /** 事件攒批窗口（毫秒），缺省 0。 */
   batchMs?: number;
+  /** 事件交出后的处理中租约（毫秒），缺省 15 分钟；超时仍未 ack 才重投。 */
+  leaseMs?: number;
   /** 停止信号发出后多久强杀。 */
   killGraceMs?: number;
   /** 额度报文没给恢复时间时，账号标记保留多久（毫秒）；缺省 1 小时。 */
@@ -61,7 +63,10 @@ export class TaskRunner {
     private readonly options: RunnerOptions,
   ) {
     ensureQueueTable(db);
-    this.inbox = new EventInbox(db, options.batchMs ?? 0);
+    this.inbox = new EventInbox(db, {
+      batchMs: options.batchMs,
+      leaseMs: options.leaseMs,
+    });
     this.exec = options.exec ?? defaultExec;
     this.launchOptions = {
       data: options.data,
@@ -232,7 +237,8 @@ export class TaskRunner {
 
   // ---- 停止、日志、等待 ----
 
-  stop(reference: unknown) {
+  /** by：发起停止的订阅者，由此产生的事件不投给他本人。 */
+  stop(reference: unknown, by?: string) {
     const id = parseTaskRef(reference);
     const task = getTask(this.db, id);
     if (dequeue(this.db, id)) {
@@ -242,8 +248,11 @@ export class TaskRunner {
     }
     const active = this.x.active.get(id);
     if (active && !active.exited) {
-      active.stop = { kind: "user" };
-      noteTask(this.db, id, "stop_requested", { pid: active.pid });
+      active.stop = { kind: "user", ...(by ? { by } : {}) };
+      noteTask(this.db, id, "stop_requested", {
+        pid: active.pid,
+        ...(by ? { by } : {}),
+      });
       this.x.kill(active);
       return { task: getTask(this.db, id), stopping: true };
     }
@@ -265,7 +274,7 @@ export class TaskRunner {
       {},
       { reason: "人工停止（服务未掌握该进程）" },
     );
-    this.x.publish(id, "failed", { reason: "人工停止" });
+    this.x.publish(id, "failed", { reason: "人工停止" }, by);
     this.waits.changed(id);
     return { task: stopped, stopping: false };
   }

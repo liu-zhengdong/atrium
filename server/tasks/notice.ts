@@ -11,6 +11,7 @@ export function publishTask(
   id: number,
   kind: string,
   detail: Record<string, unknown>,
+  actor?: string,
 ) {
   const task = getTask(db, id);
   inbox.publish({
@@ -19,6 +20,7 @@ export function publishTask(
     source: detail.source === undefined ? "runner" : String(detail.source),
     kind,
     key: `${task.ref}:${kind.startsWith("ci") ? "ci" : "outcome"}`,
+    actor,
     detail: {
       title: task.title,
       status: task.status,

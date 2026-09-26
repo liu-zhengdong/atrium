@@ -6,6 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventInbox, ackIds } from "../server/tasks/events.ts";
 import {
+  LEASE_MS,
+  deliverable,
+  selfInitiated,
+  type DeliveryState,
+} from "../server/tasks/event-lease.ts";
+import {
   advanceTask,
   createTask,
   ensureTaskTables,
@@ -56,7 +62,7 @@ test("事件队列：落库、同键合并、攒批窗口、wait 唤醒、ack �
   assert.throws(() => ackIds({ ids: [] }), /至少/);
   await assert.rejects(inbox.wait("有 空格", 0), /订阅者名/);
 
-  const batched = new EventInbox(db, 150);
+  const batched = new EventInbox(db, { batchMs: 150 });
   batched.publish({
     subscriber: "batch",
     source: "runner",
@@ -72,6 +78,146 @@ test("事件队列：落库、同键合并、攒批窗口、wait 唤醒、ack �
   assert.equal(later.events.length, 1, "窗口结束后唤醒");
   batched.close();
   inbox.close();
+});
+
+test("投递判定：租约内不重投、超时重投、ack 后永不再投、自己发起的不投给自己", () => {
+  const now = 10 * LEASE_MS;
+  const base: DeliveryState = {
+    subscriber: "secretary",
+    actor: null,
+    ready_at: 0,
+    delivered_at: null,
+    acked_at: null,
+  };
+  const at = (patch: Partial<DeliveryState>) =>
+    deliverable({ ...base, ...patch }, now, LEASE_MS);
+  assert.equal(at({}), true, "没交出过");
+  assert.equal(at({ delivered_at: now - 1 }), false, "刚交出");
+  assert.equal(at({ delivered_at: now - LEASE_MS + 1 }), false, "租约最后一刻");
+  assert.equal(at({ delivered_at: now - LEASE_MS }), true, "租约到期");
+  assert.equal(at({ ready_at: now + 1 }), false, "攒批窗口内");
+  assert.equal(at({ actor: "lead" }), true, "别人发起的照投");
+  assert.equal(at({ actor: "secretary" }), false, "自己发起的不投");
+  assert.equal(selfInitiated("secretary", null), false);
+  for (const delivered_at of [null, 0, now - 1])
+    for (const actor of [null, "secretary", "lead"])
+      assert.equal(
+        at({ acked_at: now - 5, delivered_at, actor }),
+        false,
+        "ack 后永不再投",
+      );
+});
+
+test("事件队列按判定投递：逐格与纯函数一致，租约到期唤醒 wait", async () => {
+  let clock = 1_000_000;
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const inbox = new EventInbox(db, { leaseMs: 1000, now: () => clock });
+  const first = await inbox.wait("secretary", 0);
+  assert.equal(first.events.length, 0);
+  inbox.publish({
+    subscriber: "secretary",
+    source: "runner",
+    kind: "done",
+    key: "t1:outcome",
+  });
+  const self = inbox.publish({
+    subscriber: "secretary",
+    source: "runner",
+    kind: "failed",
+    key: "t2:outcome",
+    actor: "secretary",
+  });
+  assert.equal(self.actor, "secretary");
+  inbox.publish({
+    subscriber: "secretary",
+    source: "runner",
+    kind: "failed",
+    key: "t3:outcome",
+    actor: "lead",
+  });
+  const got = await inbox.wait("secretary", 0);
+  assert.deepEqual(
+    got.events.map((e) => e.key),
+    ["t1:outcome", "t3:outcome"],
+    "自己发起的只记账",
+  );
+  assert.equal(
+    (
+      db
+        .prepare("SELECT count(*) AS n FROM task_inbox WHERE id=?")
+        .get(self.id) as { n: number }
+    ).n,
+    1,
+    "记账仍记",
+  );
+  assert.equal(
+    (await inbox.wait("secretary", 0)).events.length,
+    0,
+    "租约内不重投",
+  );
+  inbox.publish({
+    subscriber: "secretary",
+    source: "runner",
+    kind: "blocked",
+    key: "t4:outcome",
+  });
+  assert.deepEqual(
+    (await inbox.wait("secretary", 0)).events.map((e) => e.key),
+    ["t4:outcome"],
+    "处理中也能等到新事件",
+  );
+  inbox.publish({
+    subscriber: "secretary",
+    source: "ci",
+    kind: "ci_failure",
+    key: "t1:outcome",
+  });
+  const merged = (await inbox.wait("secretary", 0)).events;
+  assert.deepEqual(
+    merged.map((e) => [e.key, e.count]),
+    [["t1:outcome", 2]],
+    "合并了新内容的重新投递",
+  );
+  inbox.ack([merged[0]!.id]);
+  clock += 1000;
+  assert.deepEqual(
+    (await inbox.wait("secretary", 0)).events.map((e) => e.key),
+    ["t3:outcome", "t4:outcome"],
+    "超时未 ack 的重投，已 ack 的不投",
+  );
+  // 逐行对照纯函数：SQL 条件与 deliverable 一致。
+  const rows = db
+    .prepare("SELECT * FROM task_inbox")
+    .all() as unknown as (DeliveryState & { id: number })[];
+  const base = clock;
+  for (const offset of [0, 999, 1000, 5000]) {
+    clock = base + offset;
+    const expected = rows
+      .filter((row) => deliverable(row, clock, 1000))
+      .map((row) => row.id);
+    assert.deepEqual(
+      inbox.pending("secretary").map((e) => e.id),
+      expected,
+      `偏移 ${offset}`,
+    );
+  }
+  inbox.close();
+
+  // 租约到期时挂着的 wait 被唤醒（真实时钟）。
+  const live = new EventInbox(db, { leaseMs: 150 });
+  live.publish({
+    subscriber: "lead",
+    source: "ci",
+    kind: "ci_success",
+    key: "t9:ci",
+  });
+  const [taken] = (await live.wait("lead", 0)).events;
+  const started = Date.now();
+  const again = await live.wait("lead", 3);
+  assert.equal(again.events[0]?.id, taken!.id);
+  assert.ok(Date.now() - started < 2000, "到点就醒，不等满超时");
+  live.close();
 });
 
 test("服务重启自愈：running 且 pid 已不在的任务置 failed 并投递事件", async (t) => {

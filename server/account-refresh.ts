@@ -22,6 +22,8 @@ export class AccountRefresh {
   private timer?: NodeJS.Timeout;
   private refreshing = false;
   private running?: Promise<void>;
+  /** 关闭后不再派新的刷新子进程：#205 的失败收尾要让子进程立刻消失。 */
+  private stopped = false;
   constructor(
     private store: Store,
     private files: AccountFiles,
@@ -102,12 +104,13 @@ export class AccountRefresh {
     }
   }
   async refresh() {
-    if (this.refreshing) return;
+    if (this.refreshing || this.stopped) return;
     this.refreshing = true;
     try {
       for (const row of this.store.all<Row>(
         "SELECT * FROM accounts WHERE type='oauth' ORDER BY number",
       )) {
+        if (this.stopped) return;
         // 已停用的供应商 Pi 没有实现，刷新只会失败；保留账号原样（#242）。
         if (retiredProvider(row.provider)) continue;
         if (
@@ -162,6 +165,7 @@ export class AccountRefresh {
     this.timer.unref();
   }
   async close() {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.worker.close();
     await this.running;

@@ -2457,4 +2457,25 @@ export class Runtimes {
       ...[...this.gateways].map((gateway) => this.stopGateway(gateway)),
     ]);
   }
+  /**
+   * #205：启动失败（端口被占等）时服务从未就绪，没有需要排空的状态。
+   * `close()` 会等启动中的 ACP 握手（最长 15 秒），把失败关闭拖过命令行的
+   * 启动等待；这里直接终止自己拉起的网关子进程，让进程与租约立刻能收尾。
+   */
+  abort() {
+    this.stopped = true;
+    clearInterval(this.interval);
+    try {
+      this.bridge?.close();
+    } catch {
+      /* 失败收尾不能因为桥接关闭中断。 */
+    }
+    for (const gateway of this.gateways) {
+      try {
+        gateway.child.kill("SIGKILL");
+      } catch {
+        /* 已退出的子进程不再处理。 */
+      }
+    }
+  }
 }

@@ -21,6 +21,9 @@ await ensureWebDist(packageRoot);
 const data = dataDirectory();
 const lease = claimService(data, servicePort());
 let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;
+// #205：启动失败的收尾要拿到这两者来终止启动期子进程，声明提到 try 外。
+let runtimes: Awaited<ReturnType<typeof createApp>>["runtimes"] | undefined;
+let accounts: Awaited<ReturnType<typeof createApp>>["accounts"] | undefined;
 let stopping = false;
 let shutdownStarted = false;
 // #231：排空完成后上一个 supervisor 可能失联；保留唤醒名单，让接替的
@@ -63,10 +66,9 @@ process.once("SIGTERM", () => {
 try {
   const template = templateChoice(process.env);
   console.log(`Pi 模板：${template.path}（来源：${template.source}）`);
-  let runtimes: Awaited<ReturnType<typeof createApp>>["runtimes"];
   let store: Awaited<ReturnType<typeof createApp>>["store"];
   let runnerAuth: Awaited<ReturnType<typeof createApp>>["runnerAuth"];
-  ({ app, runtimes, store, runnerAuth } = await createApp({
+  ({ app, runtimes, accounts, store, runnerAuth } = await createApp({
     data,
     webRoot: join(packageRoot, "dist"),
     controlToken: lease.record.token,
@@ -314,7 +316,15 @@ try {
   console.log(`Atrium → ${serviceUrl(lease.record)}\n数据：${data}`);
 } catch (error) {
   console.error(error);
-  await app?.close();
+  // #205：启动失败的服务从未就绪，没有可排空的状态。`app.close()` 要等启动
+  // 中的 ACP 握手与账号刷新，既会拖过命令行 12 秒的启动等待（把「端口占用」
+  // 报成「启动超时」），也会撞上 Fastify 的插件超时抛出未捕获错误、跳过租约
+  // 释放。这里反过来收尾：先还租约，终止启动期子进程，再退出，让失败原因、
+  // 租约和子进程在命令行的等待窗口内一起消失。
   lease.release();
+  runtimes?.abort();
+  void accounts?.close().catch(() => undefined);
   process.exitCode = 1;
+  // 通常随子进程退出自然结束；句柄残留时兜底强制退出，不等命令行超时。
+  setTimeout(() => process.exit(1), 2000).unref();
 }

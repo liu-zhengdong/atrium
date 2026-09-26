@@ -1651,5 +1651,12 @@ export async function createApp(options: {
     await accounts.close();
     store.close();
   });
-  return { app, store, runnerAuth, runtimes, pendingWaits: () => waiters.size };
+  return {
+    app,
+    store,
+    runnerAuth,
+    runtimes,
+    accounts,
+    pendingWaits: () => waiters.size,
+  };
 }

@@ -18,6 +18,7 @@ import { abnormalEnding, parseEvents } from "./json-log.ts";
 import { quotaReason } from "./quota-holds.ts";
 import { detectQuotaExhausted } from "./quota-signal.ts";
 import { summarize } from "./summary.ts";
+import { detectTransient, type TransientHit } from "./transient.ts";
 
 /**
  * 退出后的事实收集与关卡（#262）：读摘要、在日志末尾记退出情况、查事实、过关卡，
@@ -105,6 +106,8 @@ export type Settlement = {
   verdict?: Verdict;
   facts?: Facts;
   quota?: QuotaHit;
+  /** 供应商或网络临时错误：收尾后按 transient.ts 重试或换执行者。 */
+  transient?: TransientHit;
 };
 
 export async function settle(
@@ -154,18 +157,29 @@ export async function settle(
     const rules = active.worker.profile.rules;
     verdict = evaluateGates(rules.checks ?? [], rules.limits ?? {}, facts);
   }
+  const ending =
+    log !== undefined && jsonEvents(active)
+      ? abnormalEnding(parseEvents(log))
+      : undefined;
+  // 长度用尽、权限被拒是执行者自己的结局，重试也一样；被停下的也不判。
+  const transient =
+    active.stop || log === undefined || (ending && ending.kind !== "midway")
+      ? undefined
+      : detectTransient({
+          exitCode: exit === "unknown" ? null : exit.code,
+          logTail: log,
+          json: jsonEvents(active),
+        });
   const decision = decideExit({
     stop: active.stop,
     exit,
     retried: active.retried,
     retryAllowed: active.worker.profile.rules.retry_on_stall !== false,
     verdict,
-    ending:
-      log !== undefined && jsonEvents(active)
-        ? abnormalEnding(parseEvents(log))?.reason
-        : undefined,
+    ending: ending?.reason,
+    transient: transient?.reason,
   });
-  return { summary, fields, decision, verdict, facts };
+  return { summary, fields, decision, verdict, facts, transient };
 }
 
 /** 记进 gates 事件与完成事件的改动规模。 */

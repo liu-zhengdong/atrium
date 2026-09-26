@@ -22,14 +22,18 @@ export type Choice = {
   waitUntil?: number;
 };
 
+/** 自动挑人时的避让：busy 是已有任务在跑的工具（独占的排到空闲候选之后），exclude 这次不挑。 */
+export type Avoid = { busy?: ReadonlySet<Tool>; exclude?: ReadonlySet<Tool> };
+
 /**
- * 解析执行者：写了就按写的（须已装），没写按额度富余挑、避开额度标记未到期的账号；
+ * 解析执行者：写了就按写的（须已装），没写按额度富余挑、避开额度标记未到期的账号与正忙的独占执行者；
  * 再按档案校验 max_risk。写死的执行者或全部可用执行者都被标记时，带上 waitUntil 交给调用方排队。
  */
 export async function chooseWorker(
   request: RunRequest,
   options: LaunchOptions,
   held: ReadonlyMap<string, number> = new Map(),
+  avoid: Avoid = {},
 ): Promise<Choice> {
   const risk: Risk = request.risk ?? "low";
   const path = options.env.PATH ?? "";
@@ -98,6 +102,7 @@ export async function chooseWorker(
       profiles,
       held,
       reservePercent,
+      ...avoid,
     });
     if (!picked.ok && held.size) {
       // 能用的都被额度标记：照常挑一个，排队等它的账号恢复。
@@ -107,6 +112,7 @@ export async function chooseWorker(
         risk,
         profiles,
         reservePercent,
+        ...avoid,
       });
       if (waiting.ok) {
         picked = waiting;

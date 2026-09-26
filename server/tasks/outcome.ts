@@ -50,10 +50,12 @@ export function decideExit(input: {
   quota?: string;
   /** 从结构化日志识别出的异常结束（长度用尽、权限被拒、中途退出），写在失败与受阻原因前面。 */
   ending?: string;
+  /** 从日志识别出的供应商或网络临时错误（transient.ts），同样写在原因前面；重试由调用方按 transient.ts 决定。 */
+  transient?: string;
 }): ExitDecision {
   const { stop, exit } = input;
   const lead = (reason: string) =>
-    input.ending ? `${input.ending}；${reason}` : reason;
+    [input.ending, input.transient, reason].filter(Boolean).join("；");
   if (!stop && input.quota)
     return {
       event: "block",

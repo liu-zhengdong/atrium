@@ -5,6 +5,7 @@ import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
 import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
 import { clock } from "./quota-holds.ts";
 import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
+import { idleFirst } from "./idle-first.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
@@ -202,6 +203,10 @@ export type PickInput = {
   /** 额度被标记用尽、还没到期的账号：provider → 到期时刻（#267）。 */
   held?: ReadonlyMap<string, number>;
   reservePercent?: number;
+  /** 已有任务在跑的工具：其中独占的排到空闲候选之后。 */
+  busy?: ReadonlySet<Tool>;
+  /** 这次不挑的工具（临时错误后换执行者时排除刚失败的那个）。 */
+  exclude?: ReadonlySet<Tool>;
 };
 
 export type Skip = { tool: Tool; reason: string };
@@ -219,6 +224,7 @@ export type PickResult =
 /**
  * 挑执行者：跳过没装的、档案风险不允许的、额度标记未到期的、触及章程保留额的；pace 可用时按账号富余从多到少，
  * 没有富余数据的工具排在有数据的之后并按固定顺序；pace 不可用时整体按固定顺序。
+ * 最后把正忙的独占工具挪到空闲候选之后（idle-first.ts）。
  */
 export function pickWorker({
   installed,
@@ -227,6 +233,8 @@ export function pickWorker({
   profiles,
   held,
   reservePercent = DEFAULT_QUOTA_RESERVE_PERCENT,
+  busy,
+  exclude,
 }: PickInput): PickResult {
   if (!(RISKS as readonly string[]).includes(risk))
     throw invalid(`risk 只能是 ${RISKS.join("、")}`);
@@ -242,6 +250,10 @@ export function pickWorker({
   for (const tool of FALLBACK_ORDER) {
     if (!have.has(tool)) {
       skipped.push({ tool, reason: "没装" });
+      continue;
+    }
+    if (exclude?.has(tool)) {
+      skipped.push({ tool, reason: "刚因临时错误失败，这次换别的" });
       continue;
     }
     const max = profiles[tool]?.rules.max_risk;
@@ -276,14 +288,16 @@ export function pickWorker({
         "没有可用的执行者：都没装、档案不允许该风险、额度用尽或触及章程保留额",
       skipped,
     };
-  if (!pace)
+  if (!pace) {
+    const order = idleFirst(eligible, busy);
     return {
       ok: true,
-      tool: eligible[0],
+      tool: order[0],
       basis: "fallback",
       skipped,
-      available: eligible,
+      available: order,
     };
+  }
   const spare = spareByProvider(pace);
   const ranked = eligible
     .map((tool, order) => ({
@@ -300,14 +314,18 @@ export function pickWorker({
             : -1
         : b.spare - a.spare || a.order - b.order,
     );
-  const best = ranked[0];
+  const order = idleFirst(
+    ranked.map((entry) => entry.tool),
+    busy,
+  );
+  const spareOf = spare.get(ADAPTERS[order[0]].quotaProvider);
   return {
     ok: true,
-    tool: best.tool,
-    spare: best.spare,
-    basis: best.spare === undefined ? "fallback" : "pace",
+    tool: order[0],
+    spare: spareOf,
+    basis: spareOf === undefined ? "fallback" : "pace",
     skipped,
-    available: ranked.map((entry) => entry.tool),
+    available: order,
   };
 }
 

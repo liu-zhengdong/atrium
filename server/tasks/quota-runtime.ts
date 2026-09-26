@@ -87,6 +87,7 @@ export class QuotaGuard {
           { risk: active.risk },
           this.ctx.launchOptions,
           this.held(),
+          { busy: x.busyTools(active.id) },
         );
       } catch (error) {
         return x.publish(active.id, "blocked", {

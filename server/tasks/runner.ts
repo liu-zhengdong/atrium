@@ -152,6 +152,7 @@ export class TaskRunner {
         request,
         this.launchOptions,
         this.quota.held(),
+        { busy: this.x.busyTools(id) },
       );
     } catch (error) {
       this.x.launching.delete(id);

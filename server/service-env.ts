@@ -1,5 +1,5 @@
 /**
- * 起服务进程（startService、startSupervisor）唯一传入的环境白名单（#213）。
+ * 起服务进程（startService、startSupervisor）与独立运行器（runner start）唯一传入的环境白名单（#213）。
  *
  * 只保留三类必需变量：
  * - 系统基本：PATH/HOME 等，node、git、日志与文件操作依赖；

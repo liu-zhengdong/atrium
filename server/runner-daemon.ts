@@ -11,19 +11,27 @@ import {
 } from "@agentclientprotocol/sdk";
 import WebSocket from "ws";
 import { identityEnvironment } from "./runtime.ts";
+import { dataDirectory } from "./service-state.ts";
+import { join, resolve } from "node:path";
 import { RunnerLink } from "./runner-link.ts";
 import { RunnerEvents } from "./runner-events.ts";
 import { RunnerMcp } from "./runner-mcp.ts";
 import { RunnerJournal } from "./runner-process.ts";
 import { Problem } from "./problem.ts";
+import { bridgeReadinessProblem } from "./runtime-error.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { liveRuntimeSchema, runtimeSchema } from "../shared/schema.ts";
+import {
+  assertIdentityLaunchSecretCapability,
+  supportsIdentityLaunchSecret,
+} from "./launch-capability.ts";
 import { z } from "zod";
 
 const require = createRequire(import.meta.url);
 type Gateway = {
   connection: ClientConnection;
   child: ChildProcessWithoutNullStreams;
+  launchSecretCapable: boolean;
 };
 
 /** Long-lived Pi owner. The WebSocket is replaceable; the ACP child is not. */
@@ -72,6 +80,10 @@ export class RunnerDaemon {
       const child = spawn(process.execPath, [entry], {
         env: {
           ...identityEnvironment(this.environment),
+          PI_ACP_LAUNCH_SECRET_ROOT: join(
+            resolve(this.environment.ATRIUM_DATA ?? dataDirectory()),
+            "accounts",
+          ),
           PI_MCP_TOOL_EXPOSURE: "proxy-only",
           PI_ACP_PI_COMMAND:
             this.environment.PI_ACP_PI_COMMAND ||
@@ -95,7 +107,11 @@ export class RunnerDaemon {
           ),
         );
       child.once("error", (error) => connection.close(error));
-      const gateway = { connection, child };
+      const gateway: Gateway = {
+        connection,
+        child,
+        launchSecretCapable: false,
+      };
       const timeout = setTimeout(
         () => connection.close(new Error("pi-atrium 初始化超时")),
         15_000,
@@ -114,6 +130,9 @@ export class RunnerDaemon {
         )
           throw new Error("pi-atrium 缺少 runtime/v1 或 identity/v1");
         if (this.stopped) throw new Error("运行器正在关闭");
+        gateway.launchSecretCapable = supportsIdentityLaunchSecret(
+          result._meta,
+        );
         this.gateway = gateway;
         this.journal?.acp(child.pid!);
         void connection.closed
@@ -239,10 +258,11 @@ export class RunnerDaemon {
       const { agentId, action } = z
         .object({
           agentId: z.string().uuid(),
-          action: z.enum(["start", "status", "resume"]),
+          action: z.enum(["start", "status", "resume", "inspect"]),
         })
         .strict()
         .parse(payload);
+      if (action === "inspect") return { draining: this.draining.has(agentId) };
       if (action === "resume") {
         this.draining.delete(agentId);
         return { draining: false };
@@ -313,13 +333,48 @@ export class RunnerDaemon {
         target.limit,
       );
     }
+    let setupTokenStart = false;
+    if (remoteMethod === "_pi/identity/start") {
+      const start = z
+        .object({
+          identityId: z.string().uuid(),
+          launchSecretAccount: z
+            .string()
+            .regex(/^k[0-9]+$/)
+            .optional(),
+        })
+        .passthrough()
+        .parse(params);
+      if (start.identityId !== agentId)
+        throw new Error("identity start does not match runner owner");
+      setupTokenStart = !!start.launchSecretAccount;
+      if (setupTokenStart)
+        assertIdentityLaunchSecretCapability(gateway.launchSecretCapable);
+    }
     if (
       ["_pi/identity/start", "session/new", "session/load"].includes(
         remoteMethod,
       )
     )
       this.journal?.starting(agentId);
-    const result = await gateway.connection.agent.request(remoteMethod, params);
+    let result: unknown;
+    try {
+      result = await gateway.connection.agent.request(remoteMethod, params);
+    } catch (error) {
+      // The ACP failure may include provider output. Only expose this fixed,
+      // known readiness refusal; never relay an arbitrary exception or token.
+      const refusal = setupTokenStart && bridgeReadinessProblem(error);
+      if (refusal) {
+        console.error("[runner] identity start refused: bridge readiness");
+        throw refusal;
+      }
+      console.error(
+        "[runner] ACP request failed:",
+        remoteMethod,
+        error instanceof Error ? error.name : "unknown",
+      );
+      throw error;
+    }
     if (
       remoteMethod === "_pi/identity/stop" ||
       remoteMethod === "session/close"

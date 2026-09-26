@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, LoaderCircle, MessageSquare } from "lucide-react";
+import { LoaderCircle, MessageSquare } from "lucide-react";
 import { api, patchChat } from "./api.ts";
 import { useOverview } from "./useOverview.ts";
 import { Empty } from "./components/Empty.tsx";
@@ -296,6 +296,7 @@ export function App() {
             openAgent={(agent) => void openAgent(agent)}
             openingAgent={openingAgent}
             details={showTrace}
+            inspectAgent={showAgent}
             refresh={refresh}
             openMessage={(chat, message) => void openMessage(chat, message)}
             openUser={() => setSettings("profile")}
@@ -309,13 +310,6 @@ export function App() {
           />
           <div className="relative flex min-h-0 flex-1 overflow-hidden">
             <main className="main relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
-              <button
-                className="mobile-back icon-button"
-                aria-label="打开导航"
-                onClick={() => setMobileOpen(!mobileOpen)}
-              >
-                <ArrowLeft size={18} />
-              </button>
               {overview?.rollback && (
                 <div
                   className="mx-6 mt-3 break-words rounded-lg border border-[#e2d5c3] bg-[#fbf6ef] px-3.5 py-2.5 text-xs text-[#8f673e]"
@@ -389,6 +383,7 @@ export function App() {
                       setTab={setRecordTab}
                       filters={recordFilters}
                       setFilters={setRecordFilters}
+                      openAgent={showAgent}
                       openMessage={(chat, message) =>
                         void openMessage(chat, message)
                       }

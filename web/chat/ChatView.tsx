@@ -5,6 +5,7 @@ import { MessageTimeline } from "./MessageTimeline.tsx";
 import { ChatNotice } from "./ChatNotice.tsx";
 import { useConversation } from "./useConversation.ts";
 import { useAnchorScroll, useReadReporter } from "./useChatEffects.ts";
+import { retryOf, retryStateText } from "../agents/retry-state.ts";
 
 export function ChatView({
   active,
@@ -40,6 +41,7 @@ export function ChatView({
   const conversation = useConversation(chatId, revision, anchoredId);
   const { members } = conversation;
   const directAgent = agents.find((a) => a.id === active?.direct_agent);
+  const directState = directAgent ? retryStateText(retryOf(directAgent)) : null;
   const observed = active && !active.mine && !active.read_only ? active : null;
   useReadReporter({
     chatId,
@@ -68,12 +70,14 @@ export function ChatView({
       {active && (
         <>
           <ChatNotice notice={active.notice} />
-          {directAgent?.error && (
+          {directAgent && (directAgent.error || directState) && (
             <p
               className="bg-soft px-[35px] py-2.5 text-xs text-muted max-[560px]:px-[18px]"
               role="status"
             >
-              暂时无法与 Agent 通信，已发送的消息会保留。
+              {directState
+                ? `${directState}。已发送的消息会保留。`
+                : "暂时无法与 Agent 通信，已发送的消息会保留。"}
               <button
                 className="ml-2 underline"
                 onClick={() => inspectAgent(directAgent.id)}
@@ -101,6 +105,7 @@ export function ChatView({
             agents={agents}
             details={details}
             openTrigger={openTrigger}
+            openAgent={inspectAgent}
             flash={flash}
             {...conversation}
           />

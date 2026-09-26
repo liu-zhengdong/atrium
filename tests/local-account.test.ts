@@ -146,7 +146,7 @@ test("旧库迁移保留账号、分配及已用短号，重复打开幂等", (t
   first.close();
   const legacy = new DatabaseSync(file);
   legacy.exec(
-    "PRAGMA foreign_keys=OFF; CREATE TABLE accounts_old (number INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL CHECK(type IN ('oauth','api_key')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT); INSERT INTO accounts_old SELECT * FROM accounts; DROP TABLE accounts; ALTER TABLE accounts_old RENAME TO accounts; UPDATE sqlite_sequence SET seq=19 WHERE name='accounts'; PRAGMA foreign_keys=ON;",
+    "PRAGMA foreign_keys=OFF; CREATE TABLE accounts_old (number INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL CHECK(type IN ('oauth','api_key')), expires INTEGER, status TEXT NOT NULL DEFAULT 'ready', last_error TEXT); INSERT INTO accounts_old(number,provider,name,type,expires,status,last_error) SELECT number,provider,name,type,expires,status,last_error FROM accounts; DROP TABLE accounts; ALTER TABLE accounts_old RENAME TO accounts; UPDATE sqlite_sequence SET seq=19 WHERE name='accounts'; PRAGMA foreign_keys=ON;",
   );
   legacy.close();
   const upgraded = new Store(file);

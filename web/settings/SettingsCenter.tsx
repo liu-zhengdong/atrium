@@ -231,6 +231,7 @@ export function SettingsCenter({
                 <AgentConfigPage
                   key={agentId}
                   agent={agents.find((a) => a.id === agentId)!}
+                  agents={agents}
                   scrollRoot={scrollRef}
                   changed={changed}
                   openAccounts={() => setPage("accounts")}

@@ -7,7 +7,11 @@ import { ReadReceipt } from "./ReadReceipt.tsx";
 import { MessageBody } from "./MessageBody.tsx";
 import { useFolds, type Expanded } from "./useFolds.ts";
 import { MessageAttachments } from "./Attachments.tsx";
-import { continuationFlags } from "./messages.ts";
+import {
+  continuationFlags,
+  isSystemMessage,
+  subjectAgentId,
+} from "./messages.ts";
 import { time } from "../time.ts";
 import type { useConversation } from "./useConversation.ts";
 
@@ -27,12 +31,14 @@ export function MessageTimeline({
   flash,
   details,
   openTrigger,
+  openAgent,
 }: {
   active: Overview["chats"][number];
   agents: Agent[];
   flash: number | null;
   details: (id: string) => void;
   openTrigger: (id: string, traceId: number) => void;
+  openAgent: (id: string) => void;
 } & Pick<
   ReturnType<typeof useConversation>,
   | "messages"
@@ -128,38 +134,45 @@ export function MessageTimeline({
                 style={{ transform: `translateY(${row.start}px)` }}
               >
                 <div className="mx-auto w-full max-w-[840px] px-6 max-[560px]:px-3">
-                  {active.kind === "direct" &&
-                    message.trigger &&
-                    active.direct_agent && (
-                      <div className="mb-3 flex justify-center px-2 text-[11px] text-muted">
-                        <button
-                          className="min-w-0 max-w-full truncate rounded-sm hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
-                          title={message.trigger.label}
-                          onClick={() =>
-                            openTrigger(
-                              active.direct_agent!,
-                              message.trigger!.trace_id,
-                            )
-                          }
-                        >
-                          {message.trigger.label}
-                        </button>
-                      </div>
-                    )}
-                  <MessageRow
-                    message={message}
-                    continuation={continuations[row.index] ?? false}
-                    flash={flash === message.id}
-                    agents={agents}
-                    readState={readState}
-                    direct={active.kind === "direct"}
-                    showReceipt={
-                      active.kind !== "direct" || message.id === lastDirectRead
-                    }
-                    details={details}
-                    expanded={expanded[message.id] ?? {}}
-                    toggle={toggle(message.id)}
-                  />
+                  {isSystemMessage(message) ? (
+                    <SystemRow message={message} openAgent={openAgent} />
+                  ) : (
+                    <>
+                      {active.kind === "direct" &&
+                        message.trigger &&
+                        active.direct_agent && (
+                          <div className="mb-3 flex justify-center px-2 text-[11px] text-muted">
+                            <button
+                              className="min-w-0 max-w-full truncate rounded-sm hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                              title={message.trigger.label}
+                              onClick={() =>
+                                openTrigger(
+                                  active.direct_agent!,
+                                  message.trigger!.trace_id,
+                                )
+                              }
+                            >
+                              {message.trigger.label}
+                            </button>
+                          </div>
+                        )}
+                      <MessageRow
+                        message={message}
+                        continuation={continuations[row.index] ?? false}
+                        flash={flash === message.id}
+                        agents={agents}
+                        readState={readState}
+                        direct={active.kind === "direct"}
+                        showReceipt={
+                          active.kind !== "direct" ||
+                          message.id === lastDirectRead
+                        }
+                        details={details}
+                        expanded={expanded[message.id] ?? {}}
+                        toggle={toggle(message.id)}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             );
@@ -167,6 +180,30 @@ export function MessageTimeline({
         </div>
       )}
     </div>
+  );
+}
+
+/** 用户系统消息（#181）：居中灰字一行，不带头像与气泡；「查看」打开身份详情抽屉。 */
+function SystemRow({
+  message,
+  openAgent,
+}: {
+  message: Message;
+  openAgent: (id: string) => void;
+}) {
+  const subject = subjectAgentId(message);
+  return (
+    <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 px-2 py-0.5 text-center text-[11px] leading-relaxed text-muted">
+      <span className="min-w-0">{message.body}</span>
+      {subject && (
+        <button
+          className="underline underline-offset-[3px] hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+          onClick={() => openAgent(subject)}
+        >
+          查看
+        </button>
+      )}
+    </p>
   );
 }
 

@@ -13,6 +13,7 @@ import {
   forkSource,
   inviteNote,
   preferencePatch,
+  reportsToTarget,
   sendInput,
   type Overview,
 } from "../shared/schema.ts";
@@ -112,15 +113,19 @@ export async function createApp(options: {
       options.onRoute?.(method, route.url);
   });
   const streams = new Set<import("node:http").ServerResponse>();
-  const waiters = new Set<{ wake: () => void; cancel: () => void }>();
+  const waiters = new Set<{
+    wake: () => void;
+    cancel: (restarting?: boolean) => void;
+  }>();
   const changed = () => {
     for (const waiter of [...waiters]) waiter.wake();
     for (const stream of streams)
       if (!stream.write("event: change\ndata: {}\n\n")) stream.destroy();
   };
-  const revokeSubscriptions = () => {
+  // 吊销（登出/轮换）只结束等待；关闭（重启、更新）额外标 restarting，让新版命令行自动重连。
+  const revokeSubscriptions = (restarting = false) => {
     for (const stream of streams) stream.end();
-    for (const waiter of [...waiters]) waiter.cancel();
+    for (const waiter of [...waiters]) waiter.cancel(restarting);
   };
   const runtimes =
     options.runtime === false
@@ -554,6 +559,42 @@ export async function createApp(options: {
       .parse(request.body);
     return accounts.addLocal(provider);
   });
+  app.post("/api/accounts/setup-token", (request) => {
+    const { name, token } = z
+      .object({
+        name: z.string().trim().min(1).max(80),
+        token: z.string(),
+      })
+      .strict()
+      .parse(request.body);
+    return accounts.addSetupToken(name, token);
+  });
+  app.put("/api/accounts/:ref/setup-token", async (request) => {
+    const ref = accountRef(request);
+    const requireIdle = async () => {
+      if (!runtimes) throw new Problem(503, "运行状态尚未就绪，不能更换令牌");
+      await runtimes.discover();
+      if (runtimes.directory().error)
+        throw new Problem(503, "运行状态无法核实，不能更换令牌");
+      for (const agentRef of accounts.list().find((entry) => entry.id === ref)
+        ?.assigned ?? []) {
+        const id = store.resolveAgentId(agentRef);
+        if (runtimes.starting(id) || runtimes.running(id))
+          throw new Problem(
+            409,
+            "令牌账号仍在启动或运行的身份中使用；先停止这些身份再更换",
+          );
+      }
+    };
+    const { token } = z
+      .object({ token: z.string() })
+      .strict()
+      .parse(request.body);
+    // The production service can reject busy identities before validating;
+    // the final check after validation is mandatory even without a runtime.
+    if (runtimes) await requireIdle();
+    return accounts.replaceSetupToken(ref, token, undefined, requireIdle);
+  });
   app.post("/api/accounts/:ref/check", (request) =>
     accounts.checkLocal(accountRef(request)),
   );
@@ -611,6 +652,13 @@ export async function createApp(options: {
   app.delete("/api/accounts/:ref", async (request) => {
     const ref = accountRef(request);
     const account = accounts.list().find((entry) => entry.id === ref);
+    if (account?.type === "setup_token")
+      for (const agentRef of account.assigned)
+        if (runtimes?.running(store.resolveAgentId(agentRef)))
+          throw new Problem(
+            409,
+            "令牌账号仍在运行身份中使用；先停止这些身份再删除",
+          );
     if (account)
       for (const agentRef of account.assigned) {
         const id = store.resolveAgentId(agentRef);
@@ -667,6 +715,17 @@ export async function createApp(options: {
       .strict()
       .parse(request.body);
     const id = identityRef(request);
+    const incoming = accounts.list().find((entry) => entry.id === account);
+    const current = store.one<{ type: string }>(
+      `SELECT a.type FROM accounts a JOIN account_assignments x ON x.account_number=a.number
+       WHERE x.agent_id=? AND x.provider='claude-bridge'`,
+      id,
+    );
+    if (
+      runtimes?.running(id) &&
+      (incoming?.type === "setup_token" || current?.type === "setup_token")
+    )
+      throw new Problem(409, "先停止身份再切换 setup-token 账号");
     const result = accounts.assign(id, account, replace);
     changed();
     return {
@@ -680,6 +739,14 @@ export async function createApp(options: {
       .object({ provider: z.string() })
       .parse(request.params);
     const id = identityRef(request);
+    const existing = store.one<{ type: string }>(
+      `SELECT a.type FROM accounts a JOIN account_assignments x ON x.account_number=a.number
+       WHERE x.agent_id=? AND x.provider=?`,
+      id,
+      provider,
+    );
+    if (existing?.type === "setup_token" && runtimes?.running(id))
+      throw new Problem(409, "先停止身份再撤销 setup-token 账号");
     const remaining = store.one<{ count: number }>(
       "SELECT count(*) AS count FROM account_assignments WHERE agent_id=?",
       id,
@@ -755,7 +822,7 @@ export async function createApp(options: {
           running: runtimes?.running(a.id, discovery.runtimes) ?? false,
           error:
             store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
-          failure: store.failure(a.id),
+          failure: store.retryStatus(a.id),
           unread: store.boxCount(a.id),
           unassigned: !hasAssignment(store, a.id),
           needs_reload: runtimes?.needsReload.has(a.id) ?? false,
@@ -869,6 +936,15 @@ export async function createApp(options: {
     });
     changed();
     return store.agent(agentId);
+  });
+  app.patch("/api/agents/:id/reports-to", (request) => {
+    const input = z
+      .object({ reports_to: reportsToTarget })
+      .strict()
+      .parse(request.body);
+    const result = store.setReportsTo(agentParams(request), input.reports_to);
+    changed();
+    return result;
   });
   app.delete("/api/agents/:id", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用，无法确认是否可删除");
@@ -1297,10 +1373,13 @@ export async function createApp(options: {
     timeout: number,
     check: () => T | null,
     onTimeout: () => T,
+    onClose?: () => T,
+    headers?: Record<string, string>,
   ) {
     reply.hijack();
     reply.raw.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
+      ...headers,
     });
     reply.raw.flushHeaders();
     let done = false;
@@ -1325,7 +1404,11 @@ export async function createApp(options: {
         reply.raw.destroy();
       }
     };
-    const waiter = { wake, cancel: () => finish(onTimeout()) };
+    const waiter = {
+      wake,
+      cancel: (restarting?: boolean) =>
+        finish(restarting && onClose ? onClose() : onTimeout()),
+    };
     reply.raw.on("close", disconnected);
     waiters.add(waiter);
     timer = setTimeout(() => finish(onTimeout()), timeout * 1000);
@@ -1345,40 +1428,73 @@ export async function createApp(options: {
         return page.items.length ? { ...page, after, timed_out: false } : null;
       },
       () => ({ items: [], has_more: false, after, timed_out: true }),
+      // 关闭：保留 after 与 timed_out（旧版命令行照走 124 加 --after 续等），另标 restarting。
+      () => ({
+        items: [],
+        has_more: false,
+        after,
+        timed_out: true,
+        restarting: true,
+      }),
+      // 游标随头立刻带回：进程中途死掉、body 读不出来时，命令行也拿得到
+      // 服务端解析出的 after，重连与续等命令都不漏消息。
+      { "X-Atrium-After": String(after) },
     );
   });
   app.get("/api/agents/:agent/wait", (request, reply) => {
     const q = waitQuery.pick({ timeout: true }).parse(request.query);
     const agentId = identityRef(request);
     store.agent(agentId);
-    const state = () => {
+    const state = (): "busy" | "idle" | "offline" | null => {
       const info = runtimes?.connections.get(agentId)?.info;
-      return info ? (info.busy ? "busy" : "idle") : "offline";
+      if (info) return info.busy ? "busy" : ("idle" as const);
+      // 进程还在、新服务还没接上：状态未定，继续等，不抢报离线。
+      if (runtimes?.running(agentId)) return null;
+      return "offline" as const;
     };
-    const initial = state();
+    let sawBusy = state() === "busy";
     const startedAt = Date.now();
-    const info = runtimes?.connections.get(agentId)?.info;
     longWait(
       reply,
       q.timeout,
       () => {
         const status = state();
-        if (status === "busy") return null;
-        const ended =
-          initial === "busy"
-            ? (info &&
-                store.one<{ at: number }>(
-                  "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
-                  agentId,
-                  info.runtimeId,
-                  info.generation,
-                  startedAt,
-                )?.at) ||
-              Date.now()
-            : null;
-        return { status, finished_at: ended, timed_out: false };
+        if (status === "busy") {
+          sawBusy = true;
+          return null;
+        }
+        // 没接上：既不能判空闲，也不能报离线，等下一次判定。
+        if (status === null) return null;
+        const info = runtimes?.connections.get(agentId)?.info;
+        const ended = sawBusy
+          ? (info &&
+              store.one<{ at: number }>(
+                "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
+                agentId,
+                info.runtimeId,
+                info.generation,
+                startedAt,
+              )?.at) ||
+            Date.now()
+          : null;
+        return {
+          status: status as "busy" | "idle" | "offline",
+          finished_at: ended,
+          timed_out: false,
+        };
       },
-      () => ({ status: state(), finished_at: null, timed_out: true }),
+      () => ({
+        status: state() ?? "offline",
+        finished_at: null,
+        timed_out: true,
+      }),
+      // 关闭：状态照报，另标 restarting；重连方会按新的连接状态重新判定。
+      () => ({
+        status: state() ?? "offline",
+        finished_at: null,
+        timed_out: true,
+        restarting: true,
+      }),
     );
   });
   app.patch("/api/chats/:id", (request) => {
@@ -1498,7 +1614,7 @@ export async function createApp(options: {
     });
   }
   app.addHook("preClose", async () => {
-    revokeSubscriptions();
+    revokeSubscriptions(true);
     await runtimes?.close();
   });
   app.addHook("onClose", async () => {

@@ -2,6 +2,7 @@ import { ChevronRight } from "lucide-react";
 import type { Agent } from "./AgentAvatar.tsx";
 import { pastTime } from "../time.ts";
 import { failureSummary } from "./failure-summary.ts";
+import { retryOf, retryStateText } from "../agents/retry-state.ts";
 
 export function AgentFailure({
   agent,
@@ -12,6 +13,9 @@ export function AgentFailure({
 }) {
   if (!agent.failure) return null;
   const { text, at, count } = agent.failure;
+  const snapshot = retryOf(agent);
+  const state = retryStateText(snapshot);
+  const running = snapshot?.state === "running";
   return (
     <div className="min-w-0 text-xs text-[#9c3f2d]">
       <details className="group min-w-0">
@@ -30,6 +34,13 @@ export function AgentFailure({
           {text}
         </pre>
       </details>
+      {state && (
+        <p
+          className={`mt-1 leading-relaxed ${running ? "text-[#8a6a12]" : ""}`}
+        >
+          {state}
+        </p>
+      )}
       <div className="mt-1 flex items-center justify-between gap-3 text-[11px] text-muted">
         <span title={new Date(at).toLocaleString("zh-CN")}>
           {pastTime(at)} · 连续 {count} 次

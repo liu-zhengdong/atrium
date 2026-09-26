@@ -104,7 +104,7 @@ const wait = async (predicate, label, ms = 20000) => {
   throw new Error(`等待超时：${label}`);
 };
 const shell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-let chatId, modelError;
+let chatId, modelError, insertCallId;
 const model = createServer(async (req, res) => {
   try {
     let input = "";
@@ -123,15 +123,14 @@ const model = createServer(async (req, res) => {
     let calls,
       content = "BASELINE_READY";
     const finishedReply = messages.some(
-      (m) =>
-        m.role === "tool" &&
-        JSON.stringify(m.content).includes("原地接入验证成功"),
+      (m) => m.role === "tool" && m.tool_call_id === insertCallId,
     );
     if (all.includes("ATR_INSERT") && !finishedReply) {
+      insertCallId = `tool_${index}`;
       calls = [
         {
           index: 0,
-          id: `tool_${index}`,
+          id: insertCallId,
           type: "function",
           function: {
             name: "mcp",

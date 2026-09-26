@@ -28,6 +28,7 @@ import {
   readService,
   serviceUrl,
 } from "../server/service-state.ts";
+import { openWeb } from "../server/service.ts";
 
 const exec = promisify(execFile);
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
@@ -369,7 +370,7 @@ test(
 );
 
 test(
-  "默认命令调用浏览器；浏览器失败不丢失已启动服务",
+  "默认命令在非交互环境只打印登录链接；浏览器失败不丢失已启动服务",
   { timeout: 45000, skip: process.platform === "win32" },
   async (t) => {
     const f = await fixture(t);
@@ -386,14 +387,34 @@ test(
     f.env.PATH = `${bin}:${process.env.PATH}`;
     const start = await f.cli();
     assert.equal(start.code, 0, start.stderr);
+    // 非交互（管道 stdio）不调用浏览器，改为打印一次性登录链接。
+    assert.match(start.stdout, /非交互环境，没有打开浏览器/);
     assert.match(
-      readFileSync(opened, "utf8"),
-      /^http:\/\/atrium\.localhost:\d+\/auth\/claim\/[a-f0-9]{64}$/,
+      start.stdout,
+      /登录链接：http:\/\/atrium\.localhost:\d+\/auth\/claim\/[a-f0-9]{64}/,
     );
+    assert.ok(!existsSync(opened), "非 TTY 不应调用 openWeb");
+    // 浏览器打开失败只打提示，已启动的服务不受影响。
     writeFileSync(opener, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-    const failedOpen = await f.cli();
-    assert.equal(failedOpen.code, 0);
-    assert.match(failedOpen.stderr, /无法自动打开浏览器；服务已就绪/);
+    const record = readService(f.data)!;
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+    try {
+      await openWeb(record);
+    } finally {
+      console.error = originalError;
+      process.env.PATH = previousPath;
+    }
+    assert.match(
+      errors.join("\n"),
+      /无法自动打开浏览器；服务已就绪，请手动打开/,
+    );
+    const afterFailure = await f.cli();
+    assert.equal(afterFailure.code, 0);
+    assert.match(afterFailure.stdout, /非交互环境，没有打开浏览器/);
     assert.match((await f.cli("status")).stdout, /PID/);
   },
 );

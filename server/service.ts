@@ -185,6 +185,19 @@ export async function startService(data: string) {
   if (record && alive(record.pid)) throw unavailable(record, data);
   throw startupFailure(data, "Atrium 启动超时", logStart);
 }
+/** 交互判定：stdin 与 stdout 都是终端时才自动打开浏览器；脚本、CI 和重定向里改为打印链接。 */
+export function canOpenBrowser(
+  stdin: { isTTY?: boolean },
+  stdout: { isTTY?: boolean },
+): boolean {
+  return stdin.isTTY === true && stdout.isTTY === true;
+}
+
+/** 不打开浏览器时的回执：链接与有效期一并给出。 */
+export function noBrowserHint(url: string): string {
+  return `非交互环境，没有打开浏览器；登录链接：${url}（60 秒内有效，只能用一次）`;
+}
+
 export async function openWeb(record: ServiceRecord, url = serviceUrl(record)) {
   const [command, args] =
     process.platform === "darwin"

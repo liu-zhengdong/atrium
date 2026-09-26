@@ -389,6 +389,8 @@ export class TraceStore {
           continue;
         // Proxy tool output is the JSON returned by Atrium send_message. Never
         // infer a message from its body or timestamp: another writer could send it.
+        // 身份不从回执读：eligible 的 SQL 已限定 m.sender=该身份，回执只需证明
+        // 「同一工具调用窗口内发出的那条消息就是它」，不随回执字段增删而失效。
         let value: unknown;
         try {
           value = JSON.parse(action.output);
@@ -405,8 +407,7 @@ export class TraceStore {
           !message ||
           message.created_at < action.at ||
           message.created_at > (action.ended_at ?? action.at) ||
-          sent.chat_id !== chat.ref ||
-          sent.sender !== this.store.agentRef(agent)
+          sent.chat_id !== chat.ref
         )
           continue;
         const label = deliveryLabel(run.delivery);

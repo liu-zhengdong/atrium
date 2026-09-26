@@ -74,7 +74,13 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
     chat_id: direct.id,
     body: "请帮忙检查",
   });
-  assert.equal(sent.sender, a.ref);
+  // 回执不回显正文与发送者：只确认消息 id、会话与可读时间；正文发送者自己刚写过。
+  assert.deepEqual(Object.keys(sent).sort(), ["chat_id", "id", "sent_at"]);
+  assert.equal(sent.chat_id, direct.id);
+  assert.match(
+    sent.sent_at,
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}$/,
+  );
   const notice = store
     .pending(b.id)
     .find((p) => p.through_message === sent.id)!;
@@ -144,7 +150,10 @@ test("自主通信闭环：名册短号、独立私聊、建群邀请、历史�
     chat_id: group.id,
     body: `@Cedar 还没进群，@${c.ref} 也一样`,
   });
-  assert.deepEqual(outsider.mentions, [], "正文里的非成员不点名也不报错");
+  assert(
+    !("mentions" in outsider),
+    "正文里的非成员不点名，回执里也不出现 mentions",
+  );
   await call("invite_agent", {
     chat_id: group.id,
     agent_id: c.ref,

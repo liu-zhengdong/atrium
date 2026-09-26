@@ -19,7 +19,11 @@ import {
   PROTOCOL_VERSION,
   type ClientConnection,
 } from "@agentclientprotocol/sdk";
-import { errorWithDetails } from "./runtime-error.ts";
+import {
+  bridgeReadinessProblem,
+  errorWithDetails,
+  isAuthOrCapabilityFailure,
+} from "./runtime-error.ts";
 import { z } from "zod";
 import {
   runtimeSchema,
@@ -63,9 +67,16 @@ import { TraceStore } from "./trace.ts";
 import { TurnLedger } from "./turns.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
+import { notifyTerminal } from "./incident-notice.ts";
+import { needsUserAttempt } from "./incident.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
+import { assignedSetupTokenRef } from "./launch-account.ts";
+import {
+  assertIdentityLaunchSecretCapability,
+  supportsIdentityLaunchSecret,
+} from "./launch-capability.ts";
 import { commandAgent } from "../shared/command-agent.ts";
-import { wakesOffline } from "./delivery.ts";
+import { executable, mergeNotices, wakesOffline } from "./delivery.ts";
 import { ownerOf, rebindStopped, releaseRunner } from "./runner-ownership.ts";
 import type { RunnerBridge } from "./runner-bridge.ts";
 
@@ -79,8 +90,21 @@ const paneScoped = [
   "HERDR_WORKSPACE_ID",
 ];
 export function identityEnvironment(env: NodeJS.ProcessEnv) {
+  const predicate = (
+    require("@liuser/pi-atrium/dist/identity.js") as {
+      isInheritedModelCredential?: (name: string) => boolean;
+    }
+  ).isInheritedModelCredential;
+  if (typeof predicate !== "function")
+    throw new Problem(
+      409,
+      "pi-atrium 未提供模型凭据隔离规则；全局安装请运行 atrium update，源码安装请在仓库执行 npm ci，随后运行 atrium restart",
+      "launch_secret_unsupported",
+    );
   const result = { ...env };
-  for (const key of paneScoped) delete result[key];
+  for (const key of Object.keys(result)) {
+    if (paneScoped.includes(key) || predicate(key)) delete result[key];
+  }
   return result;
 }
 const alive = (pid: number) => {
@@ -101,6 +125,7 @@ type Gateway = {
   connection: ClientConnection;
   child: ChildProcessWithoutNullStreams;
   closed: Promise<void>;
+  launchSecretCapable: boolean;
   stopping?: Promise<void>;
 };
 const target = (r: RuntimeInfo) => ({
@@ -128,6 +153,9 @@ export class Runtimes {
   readonly traces: TraceStore;
   readonly turns: TurnLedger;
   private manuallyRetrying = new Set<string>();
+  private explicitlyRetrying = new Set<string>();
+  private readonly userAttempt = new Map<string, number>();
+  private readonly retryOwner = randomUUID();
   private idleAccepted = new Map<
     string,
     { runtime: string; generation: string; since: number }
@@ -219,7 +247,10 @@ export class Runtimes {
     }
     if (rebound.length || Object.keys(locked).length) this.changed();
   }
-  async drainRunner(agentId: string, action: "start" | "status" | "resume") {
+  async drainRunner(
+    agentId: string,
+    action: "start" | "status" | "resume" | "inspect",
+  ) {
     const owner = ownerOf(this.store, agentId);
     if (!owner) throw new Problem(404, "身份没有运行器归属");
     if (
@@ -249,6 +280,16 @@ export class Runtimes {
         "runner_changed",
       );
     return result;
+  }
+  /** A due retry cannot claim its attempt while its remote identity is draining. */
+  private async retryRunnerReady(agentId: string) {
+    if (!ownerOf(this.store, agentId)) return true;
+    try {
+      return (await this.drainRunner(agentId, "inspect")).draining === false;
+    } catch {
+      // An offline or changed runner cannot safely accept a new turn either.
+      return false;
+    }
   }
   async reclaimRunner(agentId: string, confirmStopped: boolean) {
     const owner = ownerOf(this.store, agentId);
@@ -354,6 +395,7 @@ export class Runtimes {
       const child = spawn(process.execPath, [entry], {
         env: {
           ...identityEnvironment(process.env),
+          PI_ACP_LAUNCH_SECRET_ROOT: join(resolve(this.data), "accounts"),
           PI_MCP_TOOL_EXPOSURE: "proxy-only",
           PI_ACP_PI_COMMAND:
             process.env.PI_ACP_PI_COMMAND || process.env.ATRIUM_PI_BIN || "pi",
@@ -380,7 +422,12 @@ export class Runtimes {
       const closed = new Promise<void>((resolve) => {
         child.once("close", () => resolve());
       });
-      const gateway: Gateway = { connection, child, closed };
+      const gateway: Gateway = {
+        connection,
+        child,
+        closed,
+        launchSecretCapable: false,
+      };
       this.gateways.add(gateway);
       void closed.then(() => this.gateways.delete(gateway));
       void connection.closed
@@ -409,6 +456,9 @@ export class Runtimes {
           );
         this.gatewayVersion = result.agentInfo?.version ?? null;
         this.canSetModel = !!result._meta["pi-acp/identity/model/v1"];
+        gateway.launchSecretCapable = supportsIdentityLaunchSecret(
+          result._meta,
+        );
         this.assertOpen();
         this.gateway = gateway;
         void connection.closed
@@ -848,7 +898,15 @@ export class Runtimes {
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
-        if (recordFailure) this.store.setFailure(id, message);
+        if (recordFailure)
+          this.store.setFailure(
+            id,
+            message,
+            Date.now(),
+            "startup",
+            undefined,
+            error instanceof Problem ? error.code : undefined,
+          );
         this.changed();
       }
       if (message !== errorWithDetails(error)) throw new Error(message);
@@ -1065,11 +1123,17 @@ export class Runtimes {
         for (const notice of syncIdentityProfile(current.agent_directory))
           console.error(`${current.name} 的${notice}`);
         const configured = readIdentityModel(current.agent_directory);
+        const launchAccount = assignedSetupTokenRef(this.store, id);
+        if (launchAccount && !ownerOf(this.store, id)) {
+          const gateway = await this.open();
+          assertIdentityLaunchSecretCapability(gateway.launchSecretCapable);
+        }
         const restored = !fresh && !!current.session_file;
         const params = {
           identityId: id,
           agentDirectory: current.agent_directory,
           cwd,
+          ...(launchAccount ? { launchSecretAccount: launchAccount } : {}),
           ...(restored ? { sessionFile: current.session_file } : {}),
           // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
           ...(configured ? { model: formatModelSpec(configured) } : {}),
@@ -1085,8 +1149,13 @@ export class Runtimes {
                 id,
               ));
         } catch (error) {
+          if (launchAccount) {
+            const refusal = bridgeReadinessProblem(error);
+            if (refusal) throw refusal;
+          }
           if (
             !restored ||
+            isAuthOrCapabilityFailure(error) ||
             /already occupied|identity.*occupied/i.test(errorWithDetails(error))
           )
             throw error;
@@ -1393,6 +1462,9 @@ export class Runtimes {
       !this.running(id)
     );
   }
+  starting(id: string): boolean {
+    return this.connecting.has(id);
+  }
   /** 删除预览与删除守卫共用实际存活判断；发现列表可能滞后，不能只看名册在线状态。 */
   running(id: string, discovered = this.directory().runtimes): boolean {
     const owner = ownerOf(this.store, id);
@@ -1560,9 +1632,25 @@ export class Runtimes {
     }
     const existing = this.pumping.get(id);
     if (existing) return existing;
-    const promise = this.doPump(id, direct).finally(() =>
-      this.pumping.delete(id),
-    );
+    const incident = this.store.incident(id);
+    if (!this.explicitlyRetrying.has(id) && !this.manuallyRetrying.has(id)) {
+      if (needsUserAttempt(incident)) {
+        const userMessage = this.store.userAttemptDue(id);
+        if (!userMessage || !this.store.claimUserAttempt(id, userMessage))
+          return Promise.resolve();
+        this.userAttempt.set(id, userMessage);
+        direct = true;
+      } else if (direct && incident?.category === "transient") {
+        // This new user message is being attempted via the normal pending path.
+        // Do not replay it after the scheduled attempts are exhausted.
+        const userMessage = this.store.userAttemptDue(id);
+        if (userMessage) this.store.claimUserAttempt(id, userMessage);
+      }
+    }
+    const promise = this.doPump(id, direct).finally(() => {
+      this.userAttempt.delete(id);
+      this.pumping.delete(id);
+    });
     this.pumping.set(id, promise);
     return promise;
   }
@@ -1580,6 +1668,11 @@ export class Runtimes {
       return;
     }
     let operationFailed = false;
+    const incident = this.store.incident(id);
+    const singleAttempt =
+      !this.manuallyRetrying.has(id) &&
+      !this.explicitlyRetrying.has(id) &&
+      needsUserAttempt(incident);
     try {
       if (this.connecting.has(id) || this.switching.has(id)) return;
       let runtime = this.connections.get(id);
@@ -1670,7 +1763,13 @@ export class Runtimes {
         return this.doPump(id, direct);
       }
       let triggeredTurn = false;
-      for (const pending of this.store.pending(id)) {
+      // 纯告知不单独成行，等下面真正要走的投递搭车；pending() 里已经不含它。
+      for (const pending of executable(this.store.pending(id))) {
+        if (
+          singleAttempt &&
+          pending.through_message !== this.userAttempt.get(id)
+        )
+          continue;
         // A successful turn can clear the identity failure while its delivery
         // remains uncertain. Only an explicit retry may ask Pi about this id.
         if (
@@ -1682,12 +1781,19 @@ export class Runtimes {
         if (pending.kind === "summary" && (runtime.info.busy || triggeredTurn))
           continue;
         // 提醒在忙时排队、空闲才送，期间可能已经读完：送出前按当时的消息箱重写，清空了就撤回。
-        const text =
+        const reminder =
           pending.kind === "summary" ? this.store.reminder(id) : pending.text;
-        if (text === null) {
+        if (reminder === null) {
           this.store.withdrawReminder(pending.id);
           continue;
         }
+        // 排队的纯告知搭这一趟车：合并进同一条正文，对方不必逐条开回合。
+        const notices = this.store.notices(id);
+        const noticeIds = notices.map((item) => item.id);
+        const text = mergeNotices(
+          reminder,
+          notices.map((item) => item.text),
+        );
         try {
           const images = pending.through_message
             ? this.store
@@ -1748,11 +1854,15 @@ export class Runtimes {
                 this.changed();
                 return this.doPump(id, direct);
               }
-              this.store.accepted(pending.id, !settled);
+              // Pi 收到的仍是原来那一次的正文，这一趟合并进来的告知并没有交出去：
+              // 不删任何告知，宁可下一趟重复附带，也不丢。
+              this.store.accepted(pending.id, !settled, []);
               if (settled) {
                 this.store.completeDelivery(pending.id);
+                // Duplicate alone is not success; settled additionally proves the
+                // old run_end completed with no trace error, even after restart.
                 if (!this.store.uncertainDelivery(id))
-                  this.store.clearFailure(id);
+                  this.store.clearFailure(id, true);
               }
               // Busy or incomplete trace: retain the failure and retry entry.
             } else {
@@ -1762,7 +1872,7 @@ export class Runtimes {
             this.changed();
             break;
           }
-          this.store.accepted(pending.id);
+          this.store.accepted(pending.id, false, noticeIds);
           if (pending.kind === "direct") triggeredTurn = true;
           // A turn may fail before deliver returns. Observe its end only after
           // accepting, so the failed delivery cannot be stranded as accepted.
@@ -1780,9 +1890,12 @@ export class Runtimes {
             turn.at >= turn.deliveryAt
           ) {
             if (turn.successful) this.store.completeDelivery(pending.id);
-            else this.store.finishTurn(id, false);
+            else this.store.finishTurn(id, false, turn.deliveryAt, true);
           }
           this.changed();
+          // A broken old session may fail every queued message. A user message
+          // permits one turn, not a replay of all older pending deliveries.
+          if (singleAttempt || (turn && !turn.successful)) break;
         } catch (error) {
           if (
             this.restored.get(id) === runtime.info.generation &&
@@ -1802,8 +1915,10 @@ export class Runtimes {
             error instanceof Problem &&
             (error.code === "runner_offline" ||
               error.code === "runner_draining")
-          )
+          ) {
+            this.store.releaseUnstartedRetry(id, this.retryOwner);
             break;
+          }
           if (
             error instanceof Problem &&
             error.code === "runner_outcome_unknown"
@@ -1818,7 +1933,14 @@ export class Runtimes {
           if (!this.stopped) {
             const message = this.redact(id, errorWithDetails(error));
             this.store.deliveryError(pending.id, message);
-            this.store.setFailure(id, message);
+            this.store.setFailure(
+              id,
+              message,
+              Date.now(),
+              "delivery",
+              undefined,
+              error instanceof Problem ? error.code : undefined,
+            );
             this.store.finishTurn(id, false);
             this.changed();
           }
@@ -1831,15 +1953,25 @@ export class Runtimes {
         (error.code === "runner_offline" ||
           error.code === "runner_draining" ||
           error.code === "runner_outcome_unknown")
-      )
+      ) {
+        if (error.code !== "runner_outcome_unknown")
+          this.store.releaseUnstartedRetry(id, this.retryOwner);
         return;
+      }
       if (!this.stopped) {
         const message = this.redact(id, errorWithDetails(error));
         this.errors.set(id, message);
         // A TUI may replace its session while an idle status poll is in flight.
         // Only a failed wake/delivery is a failed turn, not that transient poll.
         if (!operationFailed && this.store.pending(id).length) {
-          this.store.setFailure(id, message);
+          this.store.setFailure(
+            id,
+            message,
+            Date.now(),
+            "delivery",
+            undefined,
+            error instanceof Problem ? error.code : undefined,
+          );
           this.store.finishTurn(id, false);
         }
         this.changed();
@@ -1890,6 +2022,32 @@ export class Runtimes {
     this.store.finishTurn(id, false);
     this.changed();
   }
+  private async refreshStatus(
+    id: string,
+    entry: { connection: ClientConnection | null; info: RuntimeInfo },
+  ): Promise<RuntimeInfo> {
+    const previous = entry.info;
+    try {
+      const current = runtimeSchema.parse(
+        await this.rpc("_pi/runtime/status", target(previous), id),
+      );
+      this.assertOpen();
+      if (
+        this.connections.get(id) !== entry ||
+        current.runtimeId !== previous.runtimeId ||
+        current.generation !== previous.generation
+      )
+        throw new Error(`身份 ${id} 的运行实例已更换`);
+      entry.info = current;
+      this.remember(id, current);
+      this.store.recordStatusCheck(id, true);
+      return current;
+    } catch (error) {
+      if (!this.stopped && this.connections.get(id) === entry)
+        this.store.recordStatusCheck(id, false);
+      throw error;
+    }
+  }
   private async capture(
     id: string,
     info: RuntimeInfo,
@@ -1900,6 +2058,7 @@ export class Runtimes {
     try {
       // Regular ticks are bounded; shutdown must consume all remaining pages.
       for (let page = 0; page < maxPages; page++) {
+        let settled = false;
         const events = runtimeEvents.parse(
           await this.rpc(
             "_pi/runtime/events",
@@ -1946,10 +2105,11 @@ export class Runtimes {
                     .failure(id)
                     ?.text.includes("模型认证失败，请更换 API Key")
                 ) {
-                  this.store.clearFailure(id);
+                  // Keep the incident and retry count until a verified run_end.
                   this.errors.delete(id);
                 }
               } else if (event.kind === "run_end") {
+                settled = true;
                 // An end without a persisted start cannot prove completion.
                 if (turn)
                   this.lastTurn.set(id, {
@@ -1976,17 +2136,41 @@ export class Runtimes {
                         turn.failure,
                       )
                         ? "模型认证失败，请更换 API Key"
-                        : turn.failure,
+                        : this.redact(id, turn.failure),
                       event.at,
+                      "provider",
+                      `${info.runtimeId}:${info.generation}:${event.seq}`,
                     );
                 }
-                if (turn && !turn.failure) this.errors.delete(id);
+                if (turn && !turn.failure) {
+                  if (turn.delivery_at !== null && !this.recovery.has(id))
+                    this.store.finishTurn(id, true, turn.delivery_at);
+                  this.errors.delete(id);
+                }
               }
             },
             () => this.turns.clear(id),
           )
         )
           this.changed();
+        if (settled) {
+          // The trace closes the run, but cannot update Pi's live busy flag.
+          // A steer earlier in the turn may have cached busy=true; refresh it
+          // here so listing, idle checks and later deliveries see the settled state.
+          const entry = this.connections.get(id);
+          if (
+            entry &&
+            entry.info.runtimeId === info.runtimeId &&
+            entry.info.generation === info.generation
+          ) {
+            try {
+              await this.refreshStatus(id, entry);
+            } catch (error) {
+              if (strict) throw error;
+              console.warn(`无法在回合结束时核对 ${id} 的运行状态：`, error);
+            }
+          }
+        }
         if (!events.hasMore) {
           this.traceLag.delete(id);
           break;
@@ -2014,10 +2198,9 @@ export class Runtimes {
     const uncertain = this.store.uncertainDelivery(id);
     if (!this.store.failure(id) && !uncertain)
       throw new Problem(409, "Agent 当前没有运行错误");
-    // An unknown delivery can outlive the Pi turn. Its cached busy flag may
-    // never refresh because pump is gated until manual retry; doPump queries
-    // current status before deciding whether the duplicate has settled.
-    if (runtime?.info.busy && !uncertain)
+    // A steer during the failed turn may have cached busy=true. Read Pi's
+    // current state before rejecting a manual retry; pump is failure-gated.
+    if (runtime && !uncertain && (await this.refreshStatus(id, runtime)).busy)
       throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
     if (uncertain) {
       if (this.pumping.has(id)) await this.pumping.get(id);
@@ -2031,10 +2214,15 @@ export class Runtimes {
       return;
     }
     this.store.finishTurn(id, false);
-    await this.pump(
-      id,
-      agentTransition(this.store.failure(id), { kind: "retry" }).wake,
-    );
+    this.explicitlyRetrying.add(id);
+    try {
+      await this.pump(
+        id,
+        agentTransition(this.store.failure(id), { kind: "retry" }).wake,
+      );
+    } finally {
+      this.explicitlyRetrying.delete(id);
+    }
   }
   activeAgentIds(): string[] {
     return [...this.connections.keys()].filter(
@@ -2142,9 +2330,15 @@ export class Runtimes {
           const before = JSON.stringify(this.connections.get(agent.id)?.info);
           if (this.store.failure(agent.id) && this.connections.get(agent.id))
             await this.capture(agent.id, this.connections.get(agent.id)!.info);
+          this.store.guardOrphanRetry(agent.id, this.retryOwner);
           const failure = this.store.failure(agent.id);
-          const direct =
+          const incident = failure ? this.store.incident(agent.id) : null;
+          const userDue =
+            needsUserAttempt(incident) && !!this.store.userAttemptDue(agent.id);
+          const peerDue =
             failure !== null &&
+            incident?.category === "transient" &&
+            !needsUserAttempt(incident) &&
             this.store
               .pending(agent.id)
               .some(
@@ -2152,7 +2346,42 @@ export class Runtimes {
                   delivery.kind === "direct" &&
                   delivery.created_at > failure.at,
               );
-          await this.pump(agent.id, direct);
+          const retry =
+            !userDue && !peerDue
+              ? this.store.retryStatus(agent.id)?.retry
+              : null;
+          const ready =
+            retry?.state === "waiting" &&
+            retry.next_at !== null &&
+            retry.next_at <= Date.now() &&
+            !this.connecting.has(agent.id) &&
+            !this.pumping.has(agent.id) &&
+            !this.switching.has(agent.id) &&
+            !this.isMigrating(agent.id) &&
+            (await this.retryRunnerReady(agent.id));
+          const entry = this.connections.get(agent.id);
+          let idle = !entry?.info.busy;
+          if (ready && entry) {
+            try {
+              idle = !(await this.refreshStatus(agent.id, entry)).busy;
+            } catch (error) {
+              // No fresh status, no retry claim. Three consecutive failures
+              // become a terminal incident rather than an endless waiting badge.
+              console.warn(`无法核对 ${agent.name} 的运行状态：`, error);
+              idle = false;
+            }
+          }
+          const autoDue =
+            ready &&
+            idle &&
+            this.store.claimRetry(agent.id, Date.now(), this.retryOwner);
+          try {
+            await this.pump(agent.id, userDue || peerDue || autoDue);
+          } finally {
+            if (autoDue)
+              this.store.blockUnstartedRetry(agent.id, this.retryOwner);
+          }
+          if (notifyTerminal(this.store, agent.id)) this.changed();
           if (before !== JSON.stringify(this.connections.get(agent.id)?.info))
             this.changed();
         }),

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { AgentInfo, LiveRuntime, Overview } from "../shared/schema.ts";
 import { commandAgent } from "../shared/command-agent.ts";
+import { IDENTITY_LAUNCH_SECRET_CAPABILITY } from "../shared/runtime-capability.ts";
 import {
   formatModelSpec,
   groupModelsByProvider,
@@ -14,6 +15,7 @@ import {
 import type { TraceDetail, TracePage } from "../shared/trace.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import { requireAssignment } from "../server/assignment.ts";
+import { assignedSetupTokenRef } from "../server/launch-account.ts";
 import { connect, type Client } from "./service.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import { str, type Command } from "./main.ts";
@@ -36,6 +38,17 @@ export const presence = (
           ? "在线"
           : "离线";
 export const roster = (client: Client) => client.get<Overview>("/overview");
+export const retryLine = (failure: AgentEntry["failure"]): string => {
+  const retry = failure?.retry;
+  if (!retry) return "";
+  if (retry.state === "waiting")
+    return `出错 · ${when(retry.next_at)} 自动重试（第 ${retry.attempt}/${retry.max} 次）`;
+  if (retry.state === "running")
+    return `出错 · 正在自动重试（第 ${retry.attempt}/${retry.max} 次）`;
+  if (retry.state === "exhausted")
+    return `出错 · 已自动重试 ${retry.max} 次，需要处理`;
+  return "出错 · 需要处理";
+};
 /** 名册里找一位：短号、名称或 ID。接口的路径参数只认 ID，所以先在这里换。 */
 export function findAgent(view: Overview, reference: string): AgentEntry {
   const agent = view.agents.find(
@@ -83,7 +96,7 @@ const list: Command = {
           agent.unread ? String(agent.unread) : "",
           clip(agent.work, 40),
           agent.failure
-            ? clip(agent.failure.text.replace(/\s+/g, " "), 55)
+            ? clip(retryLine(agent.failure) || agent.failure.text, 55)
             : "",
         ]),
       ]),
@@ -122,6 +135,7 @@ const show: Command = {
         agent.failure
           ? `错误（${when(agent.failure.at)}，连续 ${agent.failure.count} 次）：${agent.failure.text}`
           : agent.error && `错误：${agent.error}`,
+        retryLine(agent.failure),
       ]
         .filter((line): line is string => !!line)
         .join("\n"),
@@ -272,12 +286,22 @@ const remove: Command = {
 };
 
 const config: Command = {
-  args: "名称 [--heartbeat 秒]",
-  about: "查看或修改消息箱心跳间隔",
-  options: { heartbeat: { type: "string" } },
+  args: "名称 [--heartbeat 秒] [--reports-to 短号|u1|none]",
+  about: "查看或修改消息箱心跳间隔与故障通知的汇报对象",
+  options: { heartbeat: { type: "string" }, "reports-to": { type: "string" } },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const heartbeat = str(values, "heartbeat");
+    const reportsTo = str(values, "reports-to");
+    if (
+      reportsTo !== undefined &&
+      !/^(?:a[1-9][0-9]{0,14}|u1|none)$/.test(reportsTo)
+    )
+      throw new Problem(
+        400,
+        "--reports-to 请填身份短号、u1 或 none；示例：atrium config 甲 --reports-to a15",
+        "usage",
+      );
     if (
       heartbeat !== undefined &&
       (!/^\d+$/.test(heartbeat.trim()) ||
@@ -291,14 +315,21 @@ const config: Command = {
       );
     const client = await connect();
     let agent = findAgent(await roster(client), reference!);
-    if (heartbeat !== undefined) {
+    if (heartbeat !== undefined)
       await client.patch(`/agents/${agent.id}/config`, {
         heartbeat_seconds: Number(heartbeat),
       });
+    if (reportsTo !== undefined)
+      await client.patch(`/agents/${agent.id}/reports-to`, {
+        reports_to: reportsTo === "none" ? null : reportsTo,
+      });
+    if (heartbeat !== undefined || reportsTo !== undefined)
       agent = findAgent(await roster(client), agent.id);
-    }
-    if (json) return printJson(agent.config);
-    console.log(`${agent.name} · 心跳 ${agent.config.heartbeat_seconds} 秒`);
+    if (json)
+      return printJson({ ...agent.config, reports_to: agent.reports_to });
+    console.log(
+      `${agent.name} · 心跳 ${agent.config.heartbeat_seconds} 秒 · 汇报给 ${agent.reports_to ? `${agent.reports_to.name}（${agent.reports_to.ref}）` : "用户（默认）"}`,
+    );
   },
 };
 
@@ -531,13 +562,15 @@ const run: Command = {
     }
     if (!agent.agent_directory)
       throw new Error("旧记录尚未升级；请先 atrium promote 名称，历史会保留");
-    const { runNamedTui } = require("@liuser/pi-atrium/dist/identity.js") as {
+    const adapter = require("@liuser/pi-atrium/dist/identity.js") as {
+      IDENTITY_LAUNCH_SECRET_CAPABILITY?: unknown;
       runNamedTui(value: {
         identityId: string;
         agentDirectory: string;
         cwd: string;
         sessionFile?: string;
         model?: string;
+        launchSecretAccount?: string;
       }): Promise<number>;
     };
     const { readIdentityModel, syncIdentityProfile } =
@@ -547,28 +580,45 @@ const run: Command = {
       console.error(`${agent.name} 的${notice}`);
     console.error(`Atrium · ${agent.name}\n${agent.cwd}`);
     const launchStore = new Store(join(data, "atrium.sqlite"));
-    let running: Promise<number>;
+    const oldRoot = process.env.PI_ACP_LAUNCH_SECRET_ROOT;
+    process.env.PI_ACP_LAUNCH_SECRET_ROOT = join(data, "accounts");
     try {
-      // 启动放在事务里，pi-atrium 的占用登记与数据库里的绑定一起落定。
-      running = launchStore.transaction(() => {
-        const current = launchStore.agent(agent.id);
-        requireAssignment(launchStore, current.id);
-        // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
-        const configured = readIdentityModel(current.agent_directory!);
-        return runNamedTui({
-          identityId: current.id,
-          agentDirectory: current.agent_directory!,
-          cwd: current.cwd,
-          ...(current.session_file
-            ? { sessionFile: current.session_file }
-            : {}),
-          ...(configured ? { model: formatModelSpec(configured) } : {}),
+      let running: Promise<number>;
+      try {
+        // 启动放在事务里，pi-atrium 的占用登记与数据库里的绑定一起落定。
+        running = launchStore.transaction(() => {
+          const current = launchStore.agent(agent.id);
+          requireAssignment(launchStore, current.id);
+          // 恢复的会话自带模型记录，会盖过配置默认值；只有启动参数压得住它。
+          const configured = readIdentityModel(current.agent_directory!);
+          const launchAccount = assignedSetupTokenRef(launchStore, current.id);
+          if (
+            launchAccount &&
+            adapter.IDENTITY_LAUNCH_SECRET_CAPABILITY !==
+              IDENTITY_LAUNCH_SECRET_CAPABILITY
+          )
+            throw new Error(
+              "当前 pi-atrium 不支持独立令牌账号，已拒绝启动。请在 Atrium 仓库更新 pi-atrium 后重试：npm install '@liuser/pi-atrium@github:liu-zhengdong/pi-atrium#<新版提交>'",
+            );
+          return adapter.runNamedTui({
+            identityId: current.id,
+            agentDirectory: current.agent_directory!,
+            cwd: current.cwd,
+            ...(current.session_file
+              ? { sessionFile: current.session_file }
+              : {}),
+            ...(configured ? { model: formatModelSpec(configured) } : {}),
+            ...(launchAccount ? { launchSecretAccount: launchAccount } : {}),
+          });
         });
-      });
+      } finally {
+        launchStore.close();
+      }
+      return await running;
     } finally {
-      launchStore.close();
+      if (oldRoot === undefined) delete process.env.PI_ACP_LAUNCH_SECRET_ROOT;
+      else process.env.PI_ACP_LAUNCH_SECRET_ROOT = oldRoot;
     }
-    return running;
   },
 };
 

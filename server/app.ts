@@ -336,7 +336,7 @@ export async function createApp(options: {
     ...runnerEnvOptions(),
     ...options.tasks,
   });
-  registerQuotaRoute(app, { bin: options.quotaBin });
+  registerQuotaRoute(app, { bin: options.quotaBin, db: store.db });
   app.get("/api/runners", () => runnerAuth.list());
   app.post("/api/runners", (request) => {
     const input = z

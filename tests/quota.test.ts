@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { formatQuotaTable } from "../cli/quota.ts";
 import { commands, help } from "../cli/main.ts";
 import { guide } from "../cli/guide.ts";
@@ -10,11 +11,22 @@ import { failure } from "../cli/contract.ts";
 import { createApp } from "../server/app.ts";
 import { Problem } from "../server/problem.ts";
 import {
+  holdRuntime,
+  holdRuntimes,
   listQuota,
   parseQuotaAccounts,
   sortBySpare,
   type QuotaAccount,
 } from "../server/tasks/quota.ts";
+import {
+  clock,
+  DEFAULT_UNKNOWN_HOLD_MS,
+  ensureQuotaHoldTable,
+  placeHold,
+  quotaReason,
+  releaseHold,
+  type QuotaHold,
+} from "../server/tasks/quota-holds.ts";
 import {
   readOpenquotaPace,
   resolveOpenquotaBin,
@@ -79,6 +91,9 @@ function paceScript(payload: unknown) {
   return `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify(payload))});\n`;
 }
 
+const NOW = Date.now();
+const HOUR = 3_600_000;
+
 function account(partial: Partial<QuotaAccount> & { providerId: string }) {
   return {
     usedPercent: null,
@@ -88,8 +103,16 @@ function account(partial: Partial<QuotaAccount> & { providerId: string }) {
     shortWindowUsedPercent: null,
     refreshedAt: null,
     runtime: null,
+    hold: null,
     ...partial,
   };
+}
+
+/** 内存库：额度标记表 + 现在时刻，方便按账号放标记。 */
+function holdDb() {
+  const db = new DatabaseSync(":memory:");
+  ensureQuotaHoldTable(db);
+  return db;
 }
 
 test("命令表、帮助与说明书收录 atrium quota", () => {
@@ -108,7 +131,7 @@ test("parseQuotaAccounts / sortBySpare：沿用字段、富余降序、无数据
     ["codex", "opencode", "copilot", "claude"],
   );
   assert.equal(
-    parsed.every((row) => row.runtime === null),
+    parsed.every((row) => row.runtime === null && row.hold === null),
     true,
   );
   assert.deepEqual(
@@ -118,6 +141,81 @@ test("parseQuotaAccounts / sortBySpare：沿用字段、富余降序、无数据
   assert.equal(parseQuotaAccounts("[]").length, 0);
   assert.throws(() => parseQuotaAccounts("oops"), /OpenQuota 输出无法解析/);
   assert.throws(() => parseQuotaAccounts("{}"), /OpenQuota 输出无法解析/);
+});
+
+test("运行时记录：有未到期标记写预计恢复时刻，--json 字段同源", () => {
+  const until = NOW + 2 * HOUR;
+  const hold: QuotaHold = {
+    provider: "codex",
+    until,
+    reason: quotaReason("codex", new Date(until)),
+    since: NOW - 60_000,
+  };
+  const runtime = holdRuntime(hold, NOW)!;
+  assert.equal(runtime.note, `额度用尽，预计 ${clock(until)} 恢复`);
+  assert.match(runtime.note, /\d{4}-\d{2}-\d{2} \d{2}:\d{2} 恢复$/);
+  assert.deepEqual(runtime.hold, { until, reason: hold.reason });
+  assert.deepEqual(holdRuntime(undefined, NOW), null);
+});
+
+test("运行时记录：标记已到期或没有标记都留空", () => {
+  assert.equal(
+    holdRuntime(
+      { provider: "codex", until: NOW, reason: null, since: NOW - HOUR },
+      NOW,
+    ),
+    null,
+    "已到期不再挡住派活",
+  );
+  assert.equal(holdRuntime(undefined, NOW), null, "没有标记");
+  assert.deepEqual(
+    [
+      ...holdRuntimes(
+        [
+          {
+            provider: "codex",
+            until: NOW - 1,
+            reason: null,
+            since: NOW - 2 * HOUR,
+          },
+        ],
+        NOW,
+      ),
+    ],
+    [],
+  );
+});
+
+test("运行时记录：恢复时间未知时不编时刻，只说未知", () => {
+  // 判定依据写着恢复时间未知（报文没给时间），即使兜底到期时刻还在明天。
+  const until = NOW + 30 * 60_000;
+  const reason = quotaReason("claude", null);
+  const runtime = holdRuntime(
+    { provider: "claude", until, reason, since: NOW - 30 * 60_000 },
+    NOW,
+  )!;
+  assert.equal(runtime.note, "额度用尽，恢复时间未知");
+  assert.deepEqual(runtime.hold, { until, reason });
+  // until 为空（手工写入）同样按未知处理，到期时刻按 since + 兜底算。
+  const manual = holdRuntime(
+    { provider: "kimi", until: null, reason: "手工标记", since: NOW - 60_000 },
+    NOW,
+  )!;
+  assert.equal(manual.note, "额度用尽，恢复时间未知");
+  assert.equal(manual.hold.until, NOW - 60_000 + DEFAULT_UNKNOWN_HOLD_MS);
+  assert.equal(
+    holdRuntime(
+      {
+        provider: "kimi",
+        until: null,
+        reason: "手工标记",
+        since: NOW - 2 * HOUR,
+      },
+      NOW,
+    ),
+    null,
+    "按 since + 兜底已过期",
+  );
 });
 
 test("resolveOpenquotaBin：显式路径优先于环境变量", () => {
@@ -155,7 +253,7 @@ test("共享 OpenQuota 读取：校验调用参数并区分缺失、解析和执
   }
 });
 
-test("listQuota：假 pace 按富余降序，runtime 为空", async () => {
+test("listQuota：假 pace 按富余降序，没有额度标记时 runtime 为空", async () => {
   const { dir, done } = temp();
   try {
     const bin = fakeBin(dir, paceScript(SAMPLE));
@@ -177,6 +275,70 @@ test("listQuota：假 pace 按富余降序，runtime 为空", async () => {
     assert.equal(result.accounts[0]!.shortWindowUsedPercent, 0);
     assert.equal(result.accounts[0]!.refreshedAt, "2026-09-26T17:07:59Z");
   } finally {
+    done();
+  }
+});
+
+test("listQuota：未到期标记落到对应账号，标记已过期和未标记的账号留空", async () => {
+  const { dir, done } = temp();
+  const db = holdDb();
+  try {
+    const bin = fakeBin(dir, paceScript(SAMPLE));
+    // codex 未到期（2 小时后恢复）；claude 的标记 1 分钟前就到期了。
+    const until = NOW + 2 * HOUR;
+    const reason = quotaReason("codex", new Date(until));
+    placeHold(db, { provider: "codex", until, reason }, NOW);
+    placeHold(
+      db,
+      { provider: "claude", until: NOW - 60_000, reason: "额度用尽：claude" },
+      NOW - 2 * HOUR,
+    );
+    const result = await listQuota({ bin, db, now: NOW });
+    const byProvider = new Map(
+      result.accounts.map((row) => [row.providerId, row]),
+    );
+    assert.equal(
+      byProvider.get("codex")!.runtime,
+      `额度用尽，预计 ${clock(until)} 恢复`,
+    );
+    assert.deepEqual(byProvider.get("codex")!.hold, { until, reason });
+    assert.equal(byProvider.get("claude")!.runtime, null, "已过期的标记不显示");
+    assert.equal(byProvider.get("claude")!.hold, null);
+    assert.equal(byProvider.get("opencode")!.runtime, null, "没有标记");
+    assert.equal(byProvider.get("opencode")!.hold, null);
+    assert.equal(byProvider.get("copilot")!.hold, null);
+  } finally {
+    db.close();
+    done();
+  }
+});
+
+test("listQuota：按兜底时长配置决定 until 为空的手工标记是否还挡着", async () => {
+  const { dir, done } = temp();
+  const db = holdDb();
+  try {
+    const bin = fakeBin(dir, paceScript(SAMPLE));
+    // until 只可能来自手工写入：到期时刻按 since + 兜底时长算。
+    db.prepare(
+      "INSERT INTO quota_holds(provider,until,reason,since) VALUES (?,?,?,?)",
+    ).run("codex", null, "手工标记", NOW - 10 * 60_000);
+    const short = await listQuota({ bin, db, now: NOW, unknownMs: 5 * 60_000 });
+    assert.equal(
+      short.accounts.find((row) => row.providerId === "codex")!.runtime,
+      null,
+      "5 分钟兜底下已过期",
+    );
+    const long = await listQuota({ bin, db, now: NOW });
+    assert.equal(
+      long.accounts.find((row) => row.providerId === "codex")!.runtime,
+      "额度用尽，恢复时间未知",
+    );
+    assert.equal(
+      long.accounts.find((row) => row.providerId === "codex")!.hold!.until,
+      NOW - 10 * 60_000 + DEFAULT_UNKNOWN_HOLD_MS,
+    );
+  } finally {
+    db.close();
     done();
   }
 });
@@ -233,9 +395,15 @@ test("listQuota：子进程环境不传凭据", async () => {
   }
 });
 
-test("文本表：中文表头、按传入顺序、运行时记录为空", () => {
+test("文本表：中文表头、按传入顺序、运行时记录列照服务端文案", () => {
+  const note = `额度用尽，预计 ${clock(NOW + HOUR)} 恢复`;
   const text = formatQuotaTable([
     account({ providerId: "opencode", sparePercent: 59.7, usedPercent: 22 }),
+    account({
+      providerId: "codex",
+      runtime: note,
+      hold: { until: NOW + HOUR, reason: null },
+    }),
     account({ providerId: "copilot" }),
   ]);
   assert.match(
@@ -244,7 +412,11 @@ test("文本表：中文表头、按传入顺序、运行时记录为空", () =>
   );
   const lines = text.split("\n");
   assert.match(lines[1]!, /^opencode\s+22\s+59\.7\s*$/);
-  assert.match(lines[2]!, /^copilot\s*$/);
+  assert.match(
+    lines[2]!,
+    /^codex\s+额度用尽，预计 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 恢复$/,
+  );
+  assert.match(lines[3]!, /^copilot\s*$/);
   assert.equal(formatQuotaTable([]), "没有账号额度数据");
 });
 
@@ -268,7 +440,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
   const { dir, done } = temp();
   t.after(done);
   const bin = fakeBin(dir, paceScript(SAMPLE));
-  const { app } = await createApp({
+  const { app, store } = await createApp({
     data,
     runtime: false,
     auth: false,
@@ -286,6 +458,58 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
       ["opencode", "claude", "codex", "copilot"],
     );
     assert.equal(body.accounts[0]!.runtime, null);
+    assert.equal(body.accounts[0]!.hold, null);
+    // 记下未到期标记后，同一个接口把记录挂到对应账号上。
+    const until = Date.now() + HOUR;
+    const reason = quotaReason("codex", new Date(until));
+    placeHold(store.db, { provider: "codex", until, reason }, Date.now());
+    const held = (
+      await app.inject({ url: "/api/quota", headers: { host: "127.0.0.1" } })
+    ).json() as { accounts: QuotaAccount[] };
+    const codex = held.accounts.find((row) => row.providerId === "codex")!;
+    assert.equal(codex.runtime, `额度用尽，预计 ${clock(until)} 恢复`);
+    assert.deepEqual(codex.hold, { until, reason });
+    assert.equal(
+      held.accounts.find((row) => row.providerId === "opencode")!.hold,
+      null,
+    );
+    releaseHold(store.db, "codex", Date.now());
+    const released = (
+      await app.inject({ url: "/api/quota", headers: { host: "127.0.0.1" } })
+    ).json() as { accounts: QuotaAccount[] };
+    assert.equal(
+      released.accounts.find((row) => row.providerId === "codex")!.runtime,
+      `额度用尽，预计 ${clock(until)} 恢复`,
+      "标记未到期，运行时也还没解除",
+    );
+    // 到点的标记不显示；运行时解除后同样不留记录。
+    const past = Date.now() - 1000;
+    placeHold(
+      store.db,
+      {
+        provider: "claude",
+        until: past,
+        reason: quotaReason("claude", new Date(past)),
+      },
+      Date.now() - HOUR,
+    );
+    const expired = (
+      await app.inject({ url: "/api/quota", headers: { host: "127.0.0.1" } })
+    ).json() as { accounts: QuotaAccount[] };
+    assert.equal(
+      expired.accounts.find((row) => row.providerId === "claude")!.runtime,
+      null,
+      "已到期的标记不显示",
+    );
+    assert.equal(releaseHold(store.db, "claude", Date.now()), true);
+    const gone = (
+      await app.inject({ url: "/api/quota", headers: { host: "127.0.0.1" } })
+    ).json() as { accounts: QuotaAccount[] };
+    assert.equal(
+      gone.accounts.find((row) => row.providerId === "claude")!.hold,
+      null,
+      "标记解除后不留记录",
+    );
   } finally {
     await app.close();
   }

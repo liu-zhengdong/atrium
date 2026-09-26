@@ -245,6 +245,7 @@ export function createAgent(
     template?: string;
     source?: string;
     description?: string;
+    reportsTo?: string;
     piHome?: string;
   } = {},
 ) {
@@ -260,6 +261,7 @@ export function createAgent(
   try {
     return store.transaction(() => {
       const { agent, token } = store.createAgent(name, cwd);
+      if (options.reportsTo) store.setReportsTo(agent.id, options.reportsTo);
       const template = resolveProfileTemplate(store, options);
       const directory = prepareProfile(
         agent.id,

@@ -17,6 +17,7 @@ export function RecordsView({
   setTab,
   filters,
   setFilters,
+  openAgent,
   openMessage,
 }: {
   overview: Overview;
@@ -24,6 +25,7 @@ export function RecordsView({
   setTab: (tab: RecordTab) => void;
   filters: RecordFilters;
   setFilters: (filters: RecordFilters) => void;
+  openAgent: (id: string) => void;
   openMessage: (chatId: string, messageId: number) => void;
 }) {
   const scoped = filters.chat !== null;
@@ -64,7 +66,12 @@ export function RecordsView({
         </nav>
       </div>
       {tab === "messages" && (
-        <MessageRecords {...props} chats={overview.chats} />
+        <MessageRecords
+          {...props}
+          agents={overview.agents}
+          openAgent={openAgent}
+          chats={overview.chats}
+        />
       )}
       {tab === "images" && <ImageRecords {...props} />}
       {tab === "files" && <FileRecords {...props} />}

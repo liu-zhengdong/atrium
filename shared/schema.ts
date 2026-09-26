@@ -8,6 +8,12 @@ export const chatReference = z
 export const agentReference = z
   .union([z.string().regex(/^a[1-9][0-9]{0,14}(?![\s\S])/), id])
   .describe("Agent 短号，如 a1；兼容 UUID");
+/** 只表示汇报对象，不是权限主体；u1 与 null 都表示默认用户。 */
+export const reportsToTarget = z.union([
+  agentReference,
+  z.literal("u1"),
+  z.null(),
+]);
 export const text = z.string().trim().min(1).max(6000);
 /** 拉人进群时写的来意，随邀请通知送到受邀者面前；是聊天内容，不是指令。 */
 export const inviteNote = z.string().trim().max(500).default("");
@@ -87,6 +93,8 @@ export type AgentInfo = {
   ref: string;
   name: string;
   description: string;
+  /** 汇报对象；null 表示用户 u1，不授予额外权限。 */
+  reports_to: { ref: string; name: string } | null;
   agent_directory: string | null;
   work: string;
   config: Preferences;
@@ -179,6 +187,8 @@ export type MessageHit = {
   id: number;
   sender: string;
   sender_name: string;
+  /** 系统故障或恢复通知所指身份；只用于界面导航。 */
+  subject_agent_id?: string;
   text: string;
   created_at: number;
 };
@@ -214,6 +224,8 @@ export type Message = {
   sender: string;
   sender_name?: string | null;
   sender_deleted_at?: number | null;
+  /** 系统通知所指身份；不改变消息的作者与权限。 */
+  subject_agent_id?: string;
   body: string;
   /** 折叠显示的详细内容；没有时为空字符串。 */
   details: string;
@@ -244,6 +256,16 @@ export type BoxMessage = {
   done_at: number | null;
 };
 export type Page<T> = { items: T[]; next_after: number; has_more: boolean };
+export type FailureRetry =
+  | { state: "waiting"; attempt: number; max: number; next_at: number }
+  | {
+      state: "running" | "exhausted";
+      attempt: number;
+      max: number;
+      next_at: null;
+    }
+  | { state: "needs_action"; attempt: null; max: number; next_at: null };
+
 export type Overview = {
   version: string;
   rollback?: {
@@ -263,7 +285,13 @@ export type Overview = {
     /** Live process check shared with the delete guard; presence may retain stale discovery. */
     running: boolean;
     error: string | null;
-    failure: { text: string; at: number; count: number } | null;
+    /** retry is populated by the phase-two incident scheduler; absent only in intermediate builds. */
+    failure: {
+      text: string;
+      at: number;
+      count: number;
+      retry?: FailureRetry;
+    } | null;
     unread: number;
     unassigned: boolean;
     needs_reload?: boolean;

@@ -7,6 +7,7 @@ import {
   forkSource,
   inviteNote,
   preferencePatch,
+  reportsToTarget,
   sendInput,
   AGENT_BODY_MAX,
   type Chat,
@@ -117,7 +118,10 @@ export function createMcp(
     return {
       ...rest,
       chat_id: ref,
-      sender: isUserRef(m.sender) ? m.sender : store.agentRef(m.sender),
+      sender:
+        m.sender === "system" || isUserRef(m.sender)
+          ? m.sender
+          : store.agentRef(m.sender),
       mentions: m.mentions.map((id) => store.agentRef(id)),
       ...(details
         ? withDetails
@@ -177,6 +181,7 @@ export function createMcp(
       const agent = createAgent(store, host.data, name, host.desktops, {
         source,
         description,
+        reportsTo: agentId,
         piHome: host.piHome,
       });
       return {
@@ -353,7 +358,7 @@ export function createMcp(
   );
   tool(
     "send_message",
-    "向自己加入的聊天发言。body 写回复或结论，最长 300 字；报告、证据、日志等长内容放 details，最长 6000 字，更长的分几条发。私聊对方和被点名的群成员立即收到 body 和 details 全文；界面和 read_chat 默认只显示 body，details 折叠。点名：mentions 参数与 body、details 里的 @名字、@短号（如 @a1）合并计算，代码里的不算；只想提到某人而不通知，写名字或短号，不加 @。群里没点名的成员只在消息箱里收到一条合并提醒。返回的 mentions 是实际点到的人。终端最终回答不会自动发送到 Chat。工作目录内的文件用 files 发送。",
+    "向自己加入的聊天发言。body 写回复或结论，最长 300 字；报告、证据、日志等长内容放 details，最长 6000 字，更长的分几条发。私聊对方和被点名的群成员立即收到 body 和 details 全文；界面和 read_chat 默认只显示 body，details 折叠。点名：mentions 参数与 body、details 里的 @名字、@短号（如 @a1）合并计算，代码里的不算；只想提到某人而不通知，写名字或短号，不加 @。群里没点名的成员只在消息箱里收到一条合并提醒。返回的 mentions 是实际点到的人。终端最终回答不会自动发送到 Chat。工作目录内的文件用 files 发送。回执可选 delivery_notice：仅表示需人工处理的故障收件身份及本条消息当前 pending 排队或 accepted/未知状态，普通忙碌不提示；据此判断是否等待回复。",
     {
       ...agentSendShape,
       chat_id: chatReference,
@@ -375,7 +380,11 @@ export function createMcp(
           client_id: a.client_id,
           attachments: [...a.attachments, ...imported],
         });
-        return publicMessage(message, store.chatRef(chatId));
+        const delivery_notice = store.deliveryNotice(message.id);
+        return {
+          ...publicMessage(message, store.chatRef(chatId)),
+          ...(delivery_notice ? { delivery_notice } : {}),
+        };
       } catch (error) {
         for (const id of imported) {
           try {
@@ -454,17 +463,21 @@ export function createMcp(
       };
     },
   );
-  tool(
-    "get_config",
-    "查看自己的持久运行偏好。",
-    {},
-    () => store.agent(agentId).config,
-  );
+  tool("get_config", "查看自己的持久运行偏好及汇报对象。", {}, () => {
+    const agent = store.agent(agentId);
+    return { ...agent.config, reports_to: agent.reports_to };
+  });
   tool(
     "update_config",
     "修改自己的运行偏好。heartbeat_seconds 是消息箱心跳间隔：每隔这么久，如果消息箱里还有没处理完的消息就提醒一次。",
     preferencePatch.shape,
     (a) => store.configure(agentId, a),
+  );
+  tool(
+    "set_reports_to",
+    "设定自己的汇报对象；仅用于故障通知路由，不增加权限。传同伴短号/ID，或 u1/null 恢复默认用户。",
+    { reports_to: reportsToTarget },
+    ({ reports_to }) => store.setReportsTo(agentId, reports_to),
   );
   return server;
 }

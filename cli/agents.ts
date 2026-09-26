@@ -36,6 +36,17 @@ export const presence = (
           ? "在线"
           : "离线";
 export const roster = (client: Client) => client.get<Overview>("/overview");
+export const retryLine = (failure: AgentEntry["failure"]): string => {
+  const retry = failure?.retry;
+  if (!retry) return "";
+  if (retry.state === "waiting")
+    return `出错 · ${when(retry.next_at)} 自动重试（第 ${retry.attempt}/${retry.max} 次）`;
+  if (retry.state === "running")
+    return `出错 · 正在自动重试（第 ${retry.attempt}/${retry.max} 次）`;
+  if (retry.state === "exhausted")
+    return `出错 · 已自动重试 ${retry.max} 次，需要处理`;
+  return "出错 · 需要处理";
+};
 /** 名册里找一位：短号、名称或 ID。接口的路径参数只认 ID，所以先在这里换。 */
 export function findAgent(view: Overview, reference: string): AgentEntry {
   const agent = view.agents.find(
@@ -83,7 +94,7 @@ const list: Command = {
           agent.unread ? String(agent.unread) : "",
           clip(agent.work, 40),
           agent.failure
-            ? clip(agent.failure.text.replace(/\s+/g, " "), 55)
+            ? clip(retryLine(agent.failure) || agent.failure.text, 55)
             : "",
         ]),
       ]),
@@ -122,6 +133,7 @@ const show: Command = {
         agent.failure
           ? `错误（${when(agent.failure.at)}，连续 ${agent.failure.count} 次）：${agent.failure.text}`
           : agent.error && `错误：${agent.error}`,
+        retryLine(agent.failure),
       ]
         .filter((line): line is string => !!line)
         .join("\n"),
@@ -272,12 +284,22 @@ const remove: Command = {
 };
 
 const config: Command = {
-  args: "名称 [--heartbeat 秒]",
-  about: "查看或修改消息箱心跳间隔",
-  options: { heartbeat: { type: "string" } },
+  args: "名称 [--heartbeat 秒] [--reports-to 短号|u1|none]",
+  about: "查看或修改消息箱心跳间隔与故障通知的汇报对象",
+  options: { heartbeat: { type: "string" }, "reports-to": { type: "string" } },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const heartbeat = str(values, "heartbeat");
+    const reportsTo = str(values, "reports-to");
+    if (
+      reportsTo !== undefined &&
+      !/^(?:a[1-9][0-9]{0,14}|u1|none)$/.test(reportsTo)
+    )
+      throw new Problem(
+        400,
+        "--reports-to 请填身份短号、u1 或 none；示例：atrium config 甲 --reports-to a15",
+        "usage",
+      );
     if (
       heartbeat !== undefined &&
       (!/^\d+$/.test(heartbeat.trim()) ||
@@ -291,14 +313,21 @@ const config: Command = {
       );
     const client = await connect();
     let agent = findAgent(await roster(client), reference!);
-    if (heartbeat !== undefined) {
+    if (heartbeat !== undefined)
       await client.patch(`/agents/${agent.id}/config`, {
         heartbeat_seconds: Number(heartbeat),
       });
+    if (reportsTo !== undefined)
+      await client.patch(`/agents/${agent.id}/reports-to`, {
+        reports_to: reportsTo === "none" ? null : reportsTo,
+      });
+    if (heartbeat !== undefined || reportsTo !== undefined)
       agent = findAgent(await roster(client), agent.id);
-    }
-    if (json) return printJson(agent.config);
-    console.log(`${agent.name} · 心跳 ${agent.config.heartbeat_seconds} 秒`);
+    if (json)
+      return printJson({ ...agent.config, reports_to: agent.reports_to });
+    console.log(
+      `${agent.name} · 心跳 ${agent.config.heartbeat_seconds} 秒 · 汇报给 ${agent.reports_to ? `${agent.reports_to.name}（${agent.reports_to.ref}）` : "用户（默认）"}`,
+    );
   },
 };
 

@@ -238,6 +238,19 @@ test("Agent 从名单 fork；预置不进聊天名册；不泄露目录", async 
   });
   assert.equal(created.id, "a2");
   assert.equal(created.name, "沈默");
+  assert.deepEqual(store.agent(store.resolveAgentId("a2")).reports_to, {
+    ref: first.ref,
+    name: first.name,
+  });
+  await reject("set_reports_to", { reports_to: "a2" }); // creator → child would form a cycle
+  store.setReportsTo(store.resolveAgentId("a2"), null);
+  assert.deepEqual(await call("set_reports_to", { reports_to: "a2" }), {
+    reports_to: { ref: "a2", name: "沈默" },
+  });
+  await reject("set_reports_to", { reports_to: first.ref });
+  assert.deepEqual(await call("set_reports_to", { reports_to: null }), {
+    reports_to: null,
+  });
   assert.equal(
     store.agent(store.resolveAgentId("a2")).agent_directory !== null,
     true,

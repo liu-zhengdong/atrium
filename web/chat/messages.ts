@@ -27,3 +27,13 @@ export function continuationFlags(messages: Message[]): boolean[] {
     );
   });
 }
+
+/** 系统消息（#181）：既不是用户也不是身份，渲染成居中灰字一行。 */
+export const isSystemMessage = (message: Message) =>
+  message.sender === "system";
+
+/** 消息指向的身份（#181）：只认字段，不从名称或正文里解析。 */
+export function subjectAgentId(value: object): string | undefined {
+  const field = (value as { subject_agent_id?: unknown }).subject_agent_id;
+  return typeof field === "string" ? field : undefined;
+}

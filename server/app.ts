@@ -13,6 +13,7 @@ import {
   forkSource,
   inviteNote,
   preferencePatch,
+  reportsToTarget,
   sendInput,
   type Overview,
 } from "../shared/schema.ts";
@@ -755,7 +756,7 @@ export async function createApp(options: {
           running: runtimes?.running(a.id, discovery.runtimes) ?? false,
           error:
             store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
-          failure: store.failure(a.id),
+          failure: store.retryStatus(a.id),
           unread: store.boxCount(a.id),
           unassigned: !hasAssignment(store, a.id),
           needs_reload: runtimes?.needsReload.has(a.id) ?? false,
@@ -869,6 +870,15 @@ export async function createApp(options: {
     });
     changed();
     return store.agent(agentId);
+  });
+  app.patch("/api/agents/:id/reports-to", (request) => {
+    const input = z
+      .object({ reports_to: reportsToTarget })
+      .strict()
+      .parse(request.body);
+    const result = store.setReportsTo(agentParams(request), input.reports_to);
+    changed();
+    return result;
   });
   app.delete("/api/agents/:id", async (request) => {
     if (!runtimes) throw new Problem(503, "运行时未启用，无法确认是否可删除");

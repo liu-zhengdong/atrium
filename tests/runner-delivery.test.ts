@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Runtimes } from "../server/runtime.ts";
+import { notifyTerminal } from "../server/incident-notice.ts";
 import { Store } from "../server/store.ts";
 import { Problem } from "../server/problem.ts";
 import { claimRunner, ownerOf } from "../server/runner-ownership.ts";
@@ -545,6 +546,359 @@ test("drain control only targets the current owner generation and never certifie
     (error: unknown) =>
       error instanceof Problem && error.code === "runner_changed",
   );
+});
+
+test("真实 tick 连跑三次到期：第三次投递后才耗尽，终态仅通知一次", async (t) => {
+  const f = fixture(t);
+  const id = f.agent.id;
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, "now", () => now);
+  f.store.run(
+    "UPDATE deliveries SET created_at=? WHERE agent_id=?",
+    1_700_000_000_000,
+    id,
+  );
+  f.store.setFailure(id, "HTTP 503", now - 120_000, "provider", "first");
+  const delivered: string[] = [];
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string, args: { id?: string }) => {
+      if (method === "_pi/runtime/status") return f.info;
+      if (method === "_pi/runtime/deliver") {
+        delivered.push(args.id!);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected RPC: ${method}`);
+    },
+  );
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const retry = f.store.retryStatus(id, now)?.retry;
+    assert.equal(retry?.state, "waiting");
+    assert.equal(retry.attempt, attempt);
+    now = retry.next_at!;
+    await tick(); // Real tick -> claimRetry -> pump -> doPump -> deliver RPC.
+    assert.equal(delivered.length, attempt);
+    assert.equal(f.store.incident(id)?.attempts_used, attempt);
+    assert.equal(f.store.incident(id)?.attempt_running, true);
+    assert.equal(f.store.retryStatus(id, now)?.retry?.state, "running");
+    // The fake Pi acknowledges input, then its observed run_end fails.
+    f.store.finishTurn(id, false, undefined, true);
+    now++;
+    f.store.setFailure(id, "HTTP 503", now, "provider", `failed-${attempt}`);
+    await tick();
+    assert.equal(
+      f.store.retryStatus(id, now)?.retry?.state,
+      attempt === 3 ? "exhausted" : "waiting",
+    );
+    const notices = f.store.one<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE sender='system' AND body LIKE '%运行出错%'",
+    )!.count;
+    assert.equal(notices, attempt === 3 ? 1 : 0);
+  }
+  assert.equal(new Set(delivered).size, 3);
+  assert.equal(notifyTerminal(f.store, id), false);
+  assert.match(
+    f.store.one<{ body: string }>(
+      "SELECT body FROM messages WHERE sender='system' AND body LIKE '%运行出错%'",
+    )!.body,
+    /已自动重试 3 次/,
+  );
+});
+
+test("a new user direct during a transient failure gets one turn, then the scheduled retry still runs", async (t) => {
+  const f = fixture(t);
+  f.store.setFailure(
+    f.agent.id,
+    "Connection error.",
+    Date.now() - 1000,
+    "provider",
+  );
+  f.store.send(LOCAL_USER, {
+    chat_id: f.chat.id,
+    body: "请再试一次",
+    mentions: [],
+  });
+  const nextAt = f.store.retryStatus(f.agent.id)?.retry?.next_at;
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string) => {
+      assert.equal(method, "_pi/runtime/status");
+      return f.info;
+    },
+  );
+  const calls: boolean[] = [];
+  t.mock.method(
+    f.runtimes as unknown as {
+      doPump(id: string, direct: boolean): Promise<void>;
+    },
+    "doPump",
+    async (id: string, direct: boolean) => {
+      calls.push(direct);
+      f.store.accepted(f.store.pending(id)[0]!.id);
+      f.store.setFailure(id, "Connection error.", Date.now(), "provider");
+      f.store.finishTurn(id, false);
+    },
+  );
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  await tick();
+  for (let i = 0; i < 5; i++) await tick();
+  assert.deepEqual(
+    calls,
+    [true],
+    "the same user message must not loop every tick",
+  );
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.next_at, nextAt);
+  f.store.run(
+    "UPDATE failure_incidents SET started_at=? WHERE agent_id=?",
+    Date.now() - 120_001,
+    f.agent.id,
+  );
+  await tick();
+  assert.deepEqual(
+    calls,
+    [true, true],
+    "the scheduled attempt must not be starved",
+  );
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 1);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.state, "waiting");
+});
+
+for (const next of ["scheduled", "manual", "new user"] as const) {
+  test(`a steer during a failed retry cannot strand ${next} delivery behind cached busy`, async (t) => {
+    const f = fixture(t);
+    const id = f.agent.id;
+    let now = 1_800_000_000_000;
+    t.mock.method(Date, "now", () => now);
+    f.store.run(
+      "UPDATE deliveries SET created_at=? WHERE agent_id=?",
+      now - 200_000,
+      id,
+    );
+    f.store.setFailure(id, "Connection error.", now - 120_000, "provider");
+    let busy = false;
+    const delivered: string[] = [];
+    t.mock.method(
+      Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+      "rpc",
+      async (method: string, args: { id?: string }) => {
+        if (method === "_pi/runtime/status") return { ...f.info, busy };
+        if (method === "_pi/runtime/deliver") {
+          delivered.push(args.id!);
+          return { accepted: true };
+        }
+        throw new Error(`unexpected RPC: ${method}`);
+      },
+    );
+    const tick = () =>
+      (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+    await tick(); // The first scheduled attempt starts a Pi turn.
+    assert.equal(f.store.incident(id)?.attempts_used, 1);
+    assert.equal(delivered.length, 1);
+    busy = true;
+    now += 100;
+    f.store.send(LOCAL_USER, {
+      chat_id: f.chat.id,
+      body: "这一轮中途补一条私聊",
+      mentions: [],
+    });
+    await tick(); // A steer refreshes the cached info to busy=true.
+    assert.equal(f.runtimes.connections.get(id)?.info.busy, true);
+    assert.equal(delivered.length, 2);
+    busy = false; // Pi's turn ended; no new pump will refresh the cached info.
+    f.store.finishTurn(id, false, undefined, true);
+    now += 100;
+    f.store.setFailure(id, "Connection error.", now, "provider", "steer-fail");
+    const due = f.store.retryStatus(id, now)?.retry;
+    assert.equal(due?.state, "waiting");
+    const before = delivered.length;
+    if (next === "manual") await f.runtimes.retry(id);
+    else if (next === "scheduled") {
+      now = due.next_at!;
+      await tick();
+      assert.equal(f.store.incident(id)?.attempts_used, 2);
+    } else {
+      now += 100;
+      f.store.send(LOCAL_USER, {
+        chat_id: f.chat.id,
+        body: "上一轮失败后再来一条私聊",
+        mentions: [],
+      });
+      await tick();
+      assert.equal(f.store.incident(id)?.attempts_used, 1);
+    }
+    assert(
+      delivered.length > before,
+      "the idle Pi must receive the next attempt",
+    );
+    assert.equal(f.runtimes.connections.get(id)?.info.busy, false);
+  });
+}
+
+test("three consecutive failed status checks end the scheduled retry without consuming attempts", async (t) => {
+  const f = fixture(t);
+  const id = f.agent.id;
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, "now", () => now);
+  f.store.run(
+    "UPDATE deliveries SET created_at=? WHERE agent_id=?",
+    now - 200_000,
+    id,
+  );
+  f.store.setFailure(id, "Connection error.", now - 120_000, "provider");
+  let unavailable = true;
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string) => {
+      assert.equal(method, "_pi/runtime/status");
+      if (unavailable) throw new Error("status endpoint offline");
+      return { ...f.info, busy: true };
+    },
+  );
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  await tick();
+  assert.equal(f.store.incident(id)?.attempts_used, 0);
+  assert.equal(f.store.retryStatus(id)?.retry?.state, "waiting");
+  unavailable = false;
+  await tick(); // A healthy check resets the consecutive failure counter.
+  unavailable = true;
+  await tick();
+  await tick();
+  assert.equal(f.store.retryStatus(id)?.retry?.state, "waiting");
+  await tick();
+  assert.equal(f.store.retryStatus(id)?.retry?.state, "needs_action");
+  assert.equal(f.store.incident(id)?.attempts_used, 0);
+  assert.match(f.store.failure(id)?.text ?? "", /连续核对失败 3 次/);
+  assert.equal(f.store.incident(id)?.blocked, true);
+});
+
+test("an overdue retry waits through drain without a new turn or budget, then delivers once", async (t) => {
+  const f = fixture(t);
+  new RunnerAuth(f.store);
+  claimRunner(f.store, f.agent.id, "r1", "generation-1");
+  let draining = true;
+  let inspections = 0;
+  (f.runtimes as unknown as { bridge: unknown }).bridge = {
+    generation: () => "generation-1",
+    requestControl: async (
+      _runner: string,
+      method: string,
+      payload: { action: string },
+    ) => {
+      assert.equal(method, "runner.drain");
+      assert.equal(payload.action, "inspect");
+      inspections++;
+      return { draining };
+    },
+    close: () => {},
+  };
+  f.store.setFailure(f.agent.id, "HTTP 503", Date.now(), "provider");
+  f.store.run(
+    "UPDATE failure_incidents SET started_at=? WHERE agent_id=?",
+    Date.now() - 120_001,
+    f.agent.id,
+  );
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string) => {
+      assert.equal(method, "_pi/runtime/status");
+      return f.info;
+    },
+  );
+  const calls: boolean[] = [];
+  t.mock.method(
+    f.runtimes as unknown as {
+      doPump(id: string, direct: boolean): Promise<void>;
+    },
+    "doPump",
+    async (id: string, direct: boolean) => {
+      calls.push(direct);
+      if (direct) {
+        f.store.accepted(f.pending.id);
+        f.store.completeDelivery(f.pending.id);
+        f.store.clearFailure(id);
+      }
+    },
+  );
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  await tick();
+  await tick();
+  assert.equal(inspections, 2);
+  assert.deepEqual(calls, []);
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.state, "waiting");
+  assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
+  draining = false;
+  await tick();
+  await tick();
+  assert.deepEqual(calls.filter(Boolean), [true]);
+  assert.equal(
+    f.store.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM deliveries WHERE id=? AND state='complete'",
+      f.pending.id,
+    )?.n,
+    1,
+  );
+  assert.equal(f.store.failure(f.agent.id), null);
+});
+
+test("a drain beginning after inspect releases the unstarted retry without blocking later recovery", async (t) => {
+  const f = fixture(t);
+  new RunnerAuth(f.store);
+  claimRunner(f.store, f.agent.id, "r1", "generation-1");
+  (f.runtimes as unknown as { bridge: unknown }).bridge = {
+    generation: () => "generation-1",
+    requestControl: async () => ({ draining: false }),
+    close: () => {},
+  };
+  f.store.setFailure(f.agent.id, "HTTP 503", Date.now(), "provider");
+  f.store.run(
+    "UPDATE failure_incidents SET started_at=? WHERE agent_id=?",
+    Date.now() - 120_001,
+    f.agent.id,
+  );
+  let attempted = 0;
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string) => {
+      if (method === "_pi/runtime/status") return f.info;
+      if (method !== "_pi/runtime/deliver")
+        throw new Error(`unexpected RPC: ${method}`);
+      if (++attempted === 1)
+        throw new Problem(409, "身份正在排空", "runner_draining");
+      return { accepted: true };
+    },
+  );
+  const tick = () =>
+    (f.runtimes as unknown as { tick(): Promise<void> }).tick();
+  await tick();
+  assert.equal(attempted, 1);
+  assert.equal(f.store.incident(f.agent.id)?.attempts_used, 0);
+  assert.equal(f.store.incident(f.agent.id)?.blocked, false);
+  assert.equal(f.store.retryStatus(f.agent.id)?.retry?.state, "waiting");
+  assert.equal(f.store.pending(f.agent.id)[0]?.id, f.pending.id);
+  await tick();
+  assert.equal(attempted, 2);
+  assert.equal(
+    f.store.one<{ state: string }>(
+      "SELECT state FROM deliveries WHERE id=?",
+      f.pending.id,
+    )?.state,
+    "accepted",
+  );
+  f.store.finishTurn(f.agent.id, true);
+  await tick();
+  assert.equal(attempted, 2);
 });
 
 test("draining rejects manual and automatic start without failure or budget; resume delivers pending once", async (t) => {

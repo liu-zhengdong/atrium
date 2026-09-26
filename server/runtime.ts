@@ -63,6 +63,8 @@ import { TraceStore } from "./trace.ts";
 import { TurnLedger } from "./turns.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
+import { notifyTerminal } from "./incident-notice.ts";
+import { needsUserAttempt } from "./incident.ts";
 import { hasAssignment, requireAssignment, UNASSIGNED } from "./assignment.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { wakesOffline } from "./delivery.ts";
@@ -128,6 +130,9 @@ export class Runtimes {
   readonly traces: TraceStore;
   readonly turns: TurnLedger;
   private manuallyRetrying = new Set<string>();
+  private explicitlyRetrying = new Set<string>();
+  private readonly userAttempt = new Map<string, number>();
+  private readonly retryOwner = randomUUID();
   private idleAccepted = new Map<
     string,
     { runtime: string; generation: string; since: number }
@@ -219,7 +224,10 @@ export class Runtimes {
     }
     if (rebound.length || Object.keys(locked).length) this.changed();
   }
-  async drainRunner(agentId: string, action: "start" | "status" | "resume") {
+  async drainRunner(
+    agentId: string,
+    action: "start" | "status" | "resume" | "inspect",
+  ) {
     const owner = ownerOf(this.store, agentId);
     if (!owner) throw new Problem(404, "身份没有运行器归属");
     if (
@@ -249,6 +257,16 @@ export class Runtimes {
         "runner_changed",
       );
     return result;
+  }
+  /** A due retry cannot claim its attempt while its remote identity is draining. */
+  private async retryRunnerReady(agentId: string) {
+    if (!ownerOf(this.store, agentId)) return true;
+    try {
+      return (await this.drainRunner(agentId, "inspect")).draining === false;
+    } catch {
+      // An offline or changed runner cannot safely accept a new turn either.
+      return false;
+    }
   }
   async reclaimRunner(agentId: string, confirmStopped: boolean) {
     const owner = ownerOf(this.store, agentId);
@@ -848,7 +866,15 @@ export class Runtimes {
       const message = this.redact(id, errorWithDetails(error));
       if (!this.stopped) {
         this.errors.set(id, message);
-        if (recordFailure) this.store.setFailure(id, message);
+        if (recordFailure)
+          this.store.setFailure(
+            id,
+            message,
+            Date.now(),
+            "startup",
+            undefined,
+            error instanceof Problem ? error.code : undefined,
+          );
         this.changed();
       }
       if (message !== errorWithDetails(error)) throw new Error(message);
@@ -1560,9 +1586,25 @@ export class Runtimes {
     }
     const existing = this.pumping.get(id);
     if (existing) return existing;
-    const promise = this.doPump(id, direct).finally(() =>
-      this.pumping.delete(id),
-    );
+    const incident = this.store.incident(id);
+    if (!this.explicitlyRetrying.has(id) && !this.manuallyRetrying.has(id)) {
+      if (needsUserAttempt(incident)) {
+        const userMessage = this.store.userAttemptDue(id);
+        if (!userMessage || !this.store.claimUserAttempt(id, userMessage))
+          return Promise.resolve();
+        this.userAttempt.set(id, userMessage);
+        direct = true;
+      } else if (direct && incident?.category === "transient") {
+        // This new user message is being attempted via the normal pending path.
+        // Do not replay it after the scheduled attempts are exhausted.
+        const userMessage = this.store.userAttemptDue(id);
+        if (userMessage) this.store.claimUserAttempt(id, userMessage);
+      }
+    }
+    const promise = this.doPump(id, direct).finally(() => {
+      this.userAttempt.delete(id);
+      this.pumping.delete(id);
+    });
     this.pumping.set(id, promise);
     return promise;
   }
@@ -1580,6 +1622,11 @@ export class Runtimes {
       return;
     }
     let operationFailed = false;
+    const incident = this.store.incident(id);
+    const singleAttempt =
+      !this.manuallyRetrying.has(id) &&
+      !this.explicitlyRetrying.has(id) &&
+      needsUserAttempt(incident);
     try {
       if (this.connecting.has(id) || this.switching.has(id)) return;
       let runtime = this.connections.get(id);
@@ -1671,6 +1718,11 @@ export class Runtimes {
       }
       let triggeredTurn = false;
       for (const pending of this.store.pending(id)) {
+        if (
+          singleAttempt &&
+          pending.through_message !== this.userAttempt.get(id)
+        )
+          continue;
         // A successful turn can clear the identity failure while its delivery
         // remains uncertain. Only an explicit retry may ask Pi about this id.
         if (
@@ -1751,8 +1803,10 @@ export class Runtimes {
               this.store.accepted(pending.id, !settled);
               if (settled) {
                 this.store.completeDelivery(pending.id);
+                // Duplicate alone is not success; settled additionally proves the
+                // old run_end completed with no trace error, even after restart.
                 if (!this.store.uncertainDelivery(id))
-                  this.store.clearFailure(id);
+                  this.store.clearFailure(id, true);
               }
               // Busy or incomplete trace: retain the failure and retry entry.
             } else {
@@ -1780,9 +1834,12 @@ export class Runtimes {
             turn.at >= turn.deliveryAt
           ) {
             if (turn.successful) this.store.completeDelivery(pending.id);
-            else this.store.finishTurn(id, false);
+            else this.store.finishTurn(id, false, turn.deliveryAt, true);
           }
           this.changed();
+          // A broken old session may fail every queued message. A user message
+          // permits one turn, not a replay of all older pending deliveries.
+          if (singleAttempt || (turn && !turn.successful)) break;
         } catch (error) {
           if (
             this.restored.get(id) === runtime.info.generation &&
@@ -1802,8 +1859,10 @@ export class Runtimes {
             error instanceof Problem &&
             (error.code === "runner_offline" ||
               error.code === "runner_draining")
-          )
+          ) {
+            this.store.releaseUnstartedRetry(id, this.retryOwner);
             break;
+          }
           if (
             error instanceof Problem &&
             error.code === "runner_outcome_unknown"
@@ -1818,7 +1877,14 @@ export class Runtimes {
           if (!this.stopped) {
             const message = this.redact(id, errorWithDetails(error));
             this.store.deliveryError(pending.id, message);
-            this.store.setFailure(id, message);
+            this.store.setFailure(
+              id,
+              message,
+              Date.now(),
+              "delivery",
+              undefined,
+              error instanceof Problem ? error.code : undefined,
+            );
             this.store.finishTurn(id, false);
             this.changed();
           }
@@ -1831,15 +1897,25 @@ export class Runtimes {
         (error.code === "runner_offline" ||
           error.code === "runner_draining" ||
           error.code === "runner_outcome_unknown")
-      )
+      ) {
+        if (error.code !== "runner_outcome_unknown")
+          this.store.releaseUnstartedRetry(id, this.retryOwner);
         return;
+      }
       if (!this.stopped) {
         const message = this.redact(id, errorWithDetails(error));
         this.errors.set(id, message);
         // A TUI may replace its session while an idle status poll is in flight.
         // Only a failed wake/delivery is a failed turn, not that transient poll.
         if (!operationFailed && this.store.pending(id).length) {
-          this.store.setFailure(id, message);
+          this.store.setFailure(
+            id,
+            message,
+            Date.now(),
+            "delivery",
+            undefined,
+            error instanceof Problem ? error.code : undefined,
+          );
           this.store.finishTurn(id, false);
         }
         this.changed();
@@ -1890,6 +1966,32 @@ export class Runtimes {
     this.store.finishTurn(id, false);
     this.changed();
   }
+  private async refreshStatus(
+    id: string,
+    entry: { connection: ClientConnection | null; info: RuntimeInfo },
+  ): Promise<RuntimeInfo> {
+    const previous = entry.info;
+    try {
+      const current = runtimeSchema.parse(
+        await this.rpc("_pi/runtime/status", target(previous), id),
+      );
+      this.assertOpen();
+      if (
+        this.connections.get(id) !== entry ||
+        current.runtimeId !== previous.runtimeId ||
+        current.generation !== previous.generation
+      )
+        throw new Error(`身份 ${id} 的运行实例已更换`);
+      entry.info = current;
+      this.remember(id, current);
+      this.store.recordStatusCheck(id, true);
+      return current;
+    } catch (error) {
+      if (!this.stopped && this.connections.get(id) === entry)
+        this.store.recordStatusCheck(id, false);
+      throw error;
+    }
+  }
   private async capture(
     id: string,
     info: RuntimeInfo,
@@ -1900,6 +2002,7 @@ export class Runtimes {
     try {
       // Regular ticks are bounded; shutdown must consume all remaining pages.
       for (let page = 0; page < maxPages; page++) {
+        let settled = false;
         const events = runtimeEvents.parse(
           await this.rpc(
             "_pi/runtime/events",
@@ -1946,10 +2049,11 @@ export class Runtimes {
                     .failure(id)
                     ?.text.includes("模型认证失败，请更换 API Key")
                 ) {
-                  this.store.clearFailure(id);
+                  // Keep the incident and retry count until a verified run_end.
                   this.errors.delete(id);
                 }
               } else if (event.kind === "run_end") {
+                settled = true;
                 // An end without a persisted start cannot prove completion.
                 if (turn)
                   this.lastTurn.set(id, {
@@ -1976,17 +2080,41 @@ export class Runtimes {
                         turn.failure,
                       )
                         ? "模型认证失败，请更换 API Key"
-                        : turn.failure,
+                        : this.redact(id, turn.failure),
                       event.at,
+                      "provider",
+                      `${info.runtimeId}:${info.generation}:${event.seq}`,
                     );
                 }
-                if (turn && !turn.failure) this.errors.delete(id);
+                if (turn && !turn.failure) {
+                  if (turn.delivery_at !== null && !this.recovery.has(id))
+                    this.store.finishTurn(id, true, turn.delivery_at);
+                  this.errors.delete(id);
+                }
               }
             },
             () => this.turns.clear(id),
           )
         )
           this.changed();
+        if (settled) {
+          // The trace closes the run, but cannot update Pi's live busy flag.
+          // A steer earlier in the turn may have cached busy=true; refresh it
+          // here so listing, idle checks and later deliveries see the settled state.
+          const entry = this.connections.get(id);
+          if (
+            entry &&
+            entry.info.runtimeId === info.runtimeId &&
+            entry.info.generation === info.generation
+          ) {
+            try {
+              await this.refreshStatus(id, entry);
+            } catch (error) {
+              if (strict) throw error;
+              console.warn(`无法在回合结束时核对 ${id} 的运行状态：`, error);
+            }
+          }
+        }
         if (!events.hasMore) {
           this.traceLag.delete(id);
           break;
@@ -2014,10 +2142,9 @@ export class Runtimes {
     const uncertain = this.store.uncertainDelivery(id);
     if (!this.store.failure(id) && !uncertain)
       throw new Problem(409, "Agent 当前没有运行错误");
-    // An unknown delivery can outlive the Pi turn. Its cached busy flag may
-    // never refresh because pump is gated until manual retry; doPump queries
-    // current status before deciding whether the duplicate has settled.
-    if (runtime?.info.busy && !uncertain)
+    // A steer during the failed turn may have cached busy=true. Read Pi's
+    // current state before rejecting a manual retry; pump is failure-gated.
+    if (runtime && !uncertain && (await this.refreshStatus(id, runtime)).busy)
       throw new Problem(409, "Agent 当前正在处理，请等待这一轮结束");
     if (uncertain) {
       if (this.pumping.has(id)) await this.pumping.get(id);
@@ -2031,10 +2158,15 @@ export class Runtimes {
       return;
     }
     this.store.finishTurn(id, false);
-    await this.pump(
-      id,
-      agentTransition(this.store.failure(id), { kind: "retry" }).wake,
-    );
+    this.explicitlyRetrying.add(id);
+    try {
+      await this.pump(
+        id,
+        agentTransition(this.store.failure(id), { kind: "retry" }).wake,
+      );
+    } finally {
+      this.explicitlyRetrying.delete(id);
+    }
   }
   activeAgentIds(): string[] {
     return [...this.connections.keys()].filter(
@@ -2142,9 +2274,15 @@ export class Runtimes {
           const before = JSON.stringify(this.connections.get(agent.id)?.info);
           if (this.store.failure(agent.id) && this.connections.get(agent.id))
             await this.capture(agent.id, this.connections.get(agent.id)!.info);
+          this.store.guardOrphanRetry(agent.id, this.retryOwner);
           const failure = this.store.failure(agent.id);
-          const direct =
+          const incident = failure ? this.store.incident(agent.id) : null;
+          const userDue =
+            needsUserAttempt(incident) && !!this.store.userAttemptDue(agent.id);
+          const peerDue =
             failure !== null &&
+            incident?.category === "transient" &&
+            !needsUserAttempt(incident) &&
             this.store
               .pending(agent.id)
               .some(
@@ -2152,7 +2290,42 @@ export class Runtimes {
                   delivery.kind === "direct" &&
                   delivery.created_at > failure.at,
               );
-          await this.pump(agent.id, direct);
+          const retry =
+            !userDue && !peerDue
+              ? this.store.retryStatus(agent.id)?.retry
+              : null;
+          const ready =
+            retry?.state === "waiting" &&
+            retry.next_at !== null &&
+            retry.next_at <= Date.now() &&
+            !this.connecting.has(agent.id) &&
+            !this.pumping.has(agent.id) &&
+            !this.switching.has(agent.id) &&
+            !this.isMigrating(agent.id) &&
+            (await this.retryRunnerReady(agent.id));
+          const entry = this.connections.get(agent.id);
+          let idle = !entry?.info.busy;
+          if (ready && entry) {
+            try {
+              idle = !(await this.refreshStatus(agent.id, entry)).busy;
+            } catch (error) {
+              // No fresh status, no retry claim. Three consecutive failures
+              // become a terminal incident rather than an endless waiting badge.
+              console.warn(`无法核对 ${agent.name} 的运行状态：`, error);
+              idle = false;
+            }
+          }
+          const autoDue =
+            ready &&
+            idle &&
+            this.store.claimRetry(agent.id, Date.now(), this.retryOwner);
+          try {
+            await this.pump(agent.id, userDue || peerDue || autoDue);
+          } finally {
+            if (autoDue)
+              this.store.blockUnstartedRetry(agent.id, this.retryOwner);
+          }
+          if (notifyTerminal(this.store, agent.id)) this.changed();
           if (before !== JSON.stringify(this.connections.get(agent.id)?.info))
             this.changed();
         }),

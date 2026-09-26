@@ -121,8 +121,8 @@ export function messageRecords(store: Store, raw: RecordQuery) {
   const rows = store
     .all<Omit<MessageHit, "text"> & { body: string; details: string }>(
       `SELECT m.chat_id, 'c'||r.number AS chat_ref, c.name AS chat_name, m.id, m.sender,
-     CASE WHEN m.sender=? THEN ? ELSE COALESCE(a.deleted_name, a.name, m.sender) END AS sender_name,
-     m.body, m.details, m.created_at
+     CASE WHEN m.sender='system' THEN '系统' WHEN m.sender=? THEN ? ELSE COALESCE(a.deleted_name, a.name, m.sender) END AS sender_name,
+     m.subject_agent_id, m.body, m.details, m.created_at
      FROM messages m JOIN chats c ON c.id=m.chat_id JOIN chat_refs r ON r.chat_id=c.id
      LEFT JOIN agents a ON a.id=m.sender
      WHERE ${where} ORDER BY m.id DESC LIMIT ?`,

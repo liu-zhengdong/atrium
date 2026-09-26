@@ -265,6 +265,7 @@ export async function requestDrain(
         },
         (res) => {
           const chunks: Buffer[] = [];
+          res.on("error", reject);
           res.on("data", (chunk) => chunks.push(chunk));
           res.on("end", () =>
             resolvePromise({

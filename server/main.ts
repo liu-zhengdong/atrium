@@ -1,13 +1,6 @@
 import { sameSecret } from "../shared/secret.ts";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
-import {
-  cleanIdentityEnvironment,
-  identityEnvironmentContext,
-  identityScopedVariables,
-  templateChoice,
-} from "./identity-env.ts";
+import { templateChoice } from "./identity-env.ts";
 import { createApp } from "./app.ts";
 import { RunnerBridge } from "./runner-bridge.ts";
 import { ownerOf, rebindStopped } from "./runner-ownership.ts";
@@ -49,45 +42,6 @@ process.once("SIGTERM", () => {
   void shutdown();
 });
 try {
-  // The CLI can check the Pi-home layout; the service also checks recorded paths
-  // for identities whose directories have been moved outside that layout.
-  const dbPath = join(data, "atrium.sqlite");
-  let identityDirectories: string[] = [];
-  if (process.env.PI_CODING_AGENT_DIR && existsSync(dbPath)) {
-    try {
-      const db = new DatabaseSync(dbPath, { readOnly: true });
-      try {
-        if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='agents'").get())
-          identityDirectories = db
-            .prepare(
-              "SELECT agent_directory FROM agents WHERE agent_directory IS NOT NULL",
-            )
-            .all()
-            .map((row) => String(row.agent_directory));
-      } finally {
-        db.close();
-      }
-    } catch (error) {
-      console.warn("读取身份目录失败，继续按 Pi 目录判断：", error);
-    }
-  }
-  const cleaned = cleanIdentityEnvironment(
-    process.env,
-    identityEnvironmentContext(
-      process.env,
-      process.env.ATRIUM_PI_HOME,
-      identityDirectories,
-    ),
-  );
-  const fromCli = (process.env.ATRIUM_IGNORED_IDENTITY_ENV ?? "")
-    .split(",")
-    .filter((key) =>
-      identityScopedVariables.some((allowed) => allowed === key),
-    );
-  delete process.env.ATRIUM_IGNORED_IDENTITY_ENV;
-  for (const key of cleaned.ignored) delete process.env[key];
-  const ignored = [...new Set([...fromCli, ...cleaned.ignored])];
-  if (ignored.length) console.log(`已忽略身份环境变量：${ignored.join(", ")}`);
   const template = templateChoice(process.env);
   console.log(`Pi 模板：${template.path}（来源：${template.source}）`);
   let runtimes: Awaited<ReturnType<typeof createApp>>["runtimes"];

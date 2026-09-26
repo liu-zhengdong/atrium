@@ -19,10 +19,7 @@ import {
   type ServiceRecord,
 } from "./service-state.ts";
 import { ensureWebDist } from "./web-dist.ts";
-import {
-  cleanIdentityEnvironment,
-  identityEnvironmentContext,
-} from "./identity-env.ts";
+import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 
 async function request(record: ServiceRecord, stop = false) {
   const response = await fetch(
@@ -144,21 +141,16 @@ export async function startService(data: string) {
     const log = openSync(join(data, "service.log"), "a", 0o600);
     logStart = fstatSync(log).size;
     try {
-      const cleaned = cleanIdentityEnvironment(
-        process.env,
-        identityEnvironmentContext(process.env),
-      );
+      const { env, droppedSensitive } = serviceEnvironment(process.env);
+      reportDroppedIdentity(droppedSensitive);
       child = spawn(
         process.execPath,
         ["--import", "tsx", join(packageRoot, "server/main.ts")],
         {
           cwd: packageRoot,
           env: {
-            ...cleaned.env,
+            ...env,
             ATRIUM_DATA: data,
-            ...(cleaned.ignored.length
-              ? { ATRIUM_IGNORED_IDENTITY_ENV: cleaned.ignored.join(",") }
-              : {}),
           },
           detached: true,
           stdio: ["ignore", log, log],

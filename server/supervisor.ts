@@ -20,6 +20,7 @@ import {
 } from "./service-state.ts";
 import { startService, stopService } from "./service.ts";
 import { installVersion } from "./install-version.ts";
+import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { Store, Problem } from "./store.ts";
 
 export type RestartStatus =
@@ -201,6 +202,8 @@ export async function startSupervisor(
   writeRestartState(data, initialState);
 
   const supervisorScript = join(packageRoot, "bin/restart-supervisor.mjs");
+  const { env, droppedSensitive } = serviceEnvironment(process.env);
+  reportDroppedIdentity(droppedSensitive);
   const logPath = join(data, "supervisor.log");
   mkdirSync(data, { recursive: true, mode: 0o700 });
   const log = openSync(logPath, "a", 0o600);
@@ -229,7 +232,7 @@ export async function startSupervisor(
     stdio: ["ignore", log, log],
     windowsHide: true,
     env: {
-      ...process.env,
+      ...env,
       ATRIUM_DATA: data,
     },
   });

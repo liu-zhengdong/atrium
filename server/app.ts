@@ -569,22 +569,30 @@ export async function createApp(options: {
       .parse(request.body);
     return accounts.addSetupToken(name, token);
   });
-  app.put("/api/accounts/:ref/setup-token", (request) => {
+  app.put("/api/accounts/:ref/setup-token", async (request) => {
     const ref = accountRef(request);
-    const requireIdle = () => {
+    const requireIdle = async () => {
+      if (!runtimes) throw new Problem(503, "运行状态尚未就绪，不能更换令牌");
+      await runtimes.discover();
+      if (runtimes.directory().error)
+        throw new Problem(503, "运行状态无法核实，不能更换令牌");
       for (const agentRef of accounts.list().find((entry) => entry.id === ref)
-        ?.assigned ?? [])
-        if (runtimes?.running(store.resolveAgentId(agentRef)))
+        ?.assigned ?? []) {
+        const id = store.resolveAgentId(agentRef);
+        if (runtimes.starting(id) || runtimes.running(id))
           throw new Problem(
             409,
-            "令牌账号仍在运行身份中使用；先停止这些身份再更换",
+            "令牌账号仍在启动或运行的身份中使用；先停止这些身份再更换",
           );
+      }
     };
-    requireIdle();
     const { token } = z
       .object({ token: z.string() })
       .strict()
       .parse(request.body);
+    // The production service can reject busy identities before validating;
+    // the final check after validation is mandatory even without a runtime.
+    if (runtimes) await requireIdle();
     return accounts.replaceSetupToken(ref, token, undefined, requireIdle);
   });
   app.post("/api/accounts/:ref/check", (request) =>

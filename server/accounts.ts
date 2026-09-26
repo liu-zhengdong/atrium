@@ -297,7 +297,7 @@ export class Accounts {
     ref: string,
     token: string,
     validator: (value: string) => void | Promise<void> = validateSetupToken,
-    beforeSave: () => void = () => {},
+    beforeSave: () => void | Promise<void> = () => {},
   ) {
     const row = this.catalog.row(this.catalog.number(ref));
     if (row.type !== "setup_token")
@@ -306,7 +306,7 @@ export class Accounts {
     // The account or its runtime may have changed while external validation ran.
     if (this.catalog.row(row.number).type !== "setup_token")
       throw new Problem(409, "账号已变更，请重新选择");
-    beforeSave();
+    await beforeSave();
     writeSetupToken(this.root, row.number, token);
     this.store.run(
       "UPDATE accounts SET status='ready',last_error=NULL,credential_updated_at=? WHERE number=?",

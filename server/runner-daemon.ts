@@ -18,9 +18,13 @@ import { RunnerEvents } from "./runner-events.ts";
 import { RunnerMcp } from "./runner-mcp.ts";
 import { RunnerJournal } from "./runner-process.ts";
 import { Problem } from "./problem.ts";
+import { bridgeReadinessProblem } from "./runtime-error.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { liveRuntimeSchema, runtimeSchema } from "../shared/schema.ts";
-import { IDENTITY_LAUNCH_SECRET_CAPABILITY } from "../shared/runtime-capability.ts";
+import {
+  assertIdentityLaunchSecretCapability,
+  supportsIdentityLaunchSecret,
+} from "./launch-capability.ts";
 import { z } from "zod";
 
 const require = createRequire(import.meta.url);
@@ -126,14 +130,9 @@ export class RunnerDaemon {
         )
           throw new Error("pi-atrium 缺少 runtime/v1 或 identity/v1");
         if (this.stopped) throw new Error("运行器正在关闭");
-        const capability = (
-          require("@liuser/pi-atrium/dist/identity.js") as {
-            IDENTITY_LAUNCH_SECRET_CAPABILITY?: unknown;
-          }
-        ).IDENTITY_LAUNCH_SECRET_CAPABILITY;
-        gateway.launchSecretCapable =
-          capability === IDENTITY_LAUNCH_SECRET_CAPABILITY &&
-          result._meta?.[capability] === true;
+        gateway.launchSecretCapable = supportsIdentityLaunchSecret(
+          result._meta,
+        );
         this.gateway = gateway;
         this.journal?.acp(child.pid!);
         void connection.closed
@@ -334,6 +333,7 @@ export class RunnerDaemon {
         target.limit,
       );
     }
+    let setupTokenStart = false;
     if (remoteMethod === "_pi/identity/start") {
       const start = z
         .object({
@@ -347,12 +347,9 @@ export class RunnerDaemon {
         .parse(params);
       if (start.identityId !== agentId)
         throw new Error("identity start does not match runner owner");
-      if (start.launchSecretAccount && !gateway.launchSecretCapable)
-        throw new Problem(
-          409,
-          "当前 pi-atrium 未声明独立令牌注入能力，已拒绝启动。在 Atrium 仓库运行 npm install '@liuser/pi-atrium@github:liu-zhengdong/pi-atrium#<新版提交>'，然后重启 Atrium runner",
-          "launch_secret_unsupported",
-        );
+      setupTokenStart = !!start.launchSecretAccount;
+      if (setupTokenStart)
+        assertIdentityLaunchSecretCapability(gateway.launchSecretCapable);
     }
     if (
       ["_pi/identity/start", "session/new", "session/load"].includes(
@@ -360,7 +357,24 @@ export class RunnerDaemon {
       )
     )
       this.journal?.starting(agentId);
-    const result = await gateway.connection.agent.request(remoteMethod, params);
+    let result: unknown;
+    try {
+      result = await gateway.connection.agent.request(remoteMethod, params);
+    } catch (error) {
+      // The ACP failure may include provider output. Only expose this fixed,
+      // known readiness refusal; never relay an arbitrary exception or token.
+      const refusal = setupTokenStart && bridgeReadinessProblem(error);
+      if (refusal) {
+        console.error("[runner] identity start refused: bridge readiness");
+        throw refusal;
+      }
+      console.error(
+        "[runner] ACP request failed:",
+        remoteMethod,
+        error instanceof Error ? error.name : "unknown",
+      );
+      throw error;
+    }
     if (
       remoteMethod === "_pi/identity/stop" ||
       remoteMethod === "session/close"

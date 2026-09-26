@@ -23,6 +23,8 @@ import {
   validateSetupToken,
 } from "../server/setup-token-account.ts";
 import { Store } from "../server/store.ts";
+import { Runtimes } from "../server/runtime.ts";
+import { markOwn } from "../server/identity-packages.ts";
 
 function fixture(t: import("node:test").TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "atrium-setup-test-"));
@@ -205,9 +207,89 @@ test("real previous pi-atrium release cannot start a token identity or call the 
         params: { identityId: id, cwd: dir, launchSecretAccount: "k1" },
       },
     }),
-    /pi-atrium#<新版提交>/,
+    /新版 pi-atrium；.*npm ci/,
   );
   assert.equal(existsSync(called), false);
+});
+
+test("local old ACP refuses token identity before any start RPC or Pi process", async (t) => {
+  const oldAdapter = process.env.PI_ATRIUM_PREVIOUS_ENTRY;
+  if (!oldAdapter)
+    return t.skip(
+      "provide the previous release's dist/index.js for this release gate",
+    );
+  const dir = mkdtempSync(join(tmpdir(), "atrium-local-old-acp-"));
+  const data = join(dir, "data");
+  const template = join(dir, "template");
+  const identity = join(dir, "identity");
+  mkdirSync(data);
+  mkdirSync(template);
+  mkdirSync(identity);
+  writeFileSync(join(template, "settings.json"), '{"packages":[]}');
+  writeFileSync(join(identity, "settings.json"), '{"packages":[]}');
+  markOwn(identity);
+  const session = join(dir, "existing-session.jsonl");
+  writeFileSync(session, "old session stays intact\n");
+  const called = join(dir, "security-called");
+  const security = join(dir, "security");
+  writeFileSync(security, `#!/bin/sh\nprintf called >> '${called}'\nexit 1\n`, {
+    mode: 0o700,
+  });
+  t.mock.property(process, "env", {
+    ...process.env,
+    ATRIUM_DATA: data,
+    ATRIUM_PI_TEMPLATE: template,
+    ATRIUM_PI_ACP_ENTRY: oldAdapter,
+    ATRIUM_PI_BIN: security,
+    PI_ACP_DIR: join(dir, "acp"),
+    ANTHROPIC_API_KEY: "FAKE_PARENT_ANTHROPIC_KEY",
+  });
+  const store = new Store(join(data, "atrium.db"));
+  const agent = store.createAgent("本地令牌", dir).agent;
+  store.run(
+    "UPDATE agents SET agent_directory=?,session_file=? WHERE id=?",
+    identity,
+    session,
+    agent.id,
+  );
+  const accounts = new Accounts(store, data);
+  const account = await accounts.addSetupToken(
+    "independent",
+    "FAKE_SETUP_TOKEN",
+    () => undefined,
+  );
+  accounts.assign(agent.id, account.id);
+  t.mock.method(Runtimes.prototype, "discover", async () => {});
+  const runtimes = new Runtimes(
+    store,
+    data,
+    () => {},
+    () => "http://127.0.0.1:4381",
+    undefined,
+    dir,
+  );
+  t.after(async () => {
+    await runtimes.close();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const gateway = await runtimes["open"]();
+  assert.equal(gateway.launchSecretCapable, false);
+  let startCalls = 0;
+  t.mock.method(
+    runtimes as unknown as { rpc: () => Promise<never> },
+    "rpc",
+    async () => {
+      startCalls++;
+      throw new Error("identity RPC must not be reached");
+    },
+  );
+  await assert.rejects(runtimes.start(agent.id), /新版 pi-atrium；.*npm ci/);
+  assert.equal(startCalls, 0);
+  assert.equal(existsSync(called), false);
+  assert.equal(store.agent(agent.id).session_file, session);
+  assert.equal(readFileSync(session, "utf8"), "old session stays intact\n");
+  assert.match(store.failure(agent.id)?.text ?? "", /新版 pi-atrium/);
 });
 
 test("HTTP rejects an invalid token without persisting it; replacement is atomic and never echoes token", async (t) => {
@@ -265,6 +347,71 @@ test("HTTP rejects an invalid token without persisting it; replacement is atomic
   assert.equal(
     readSetupToken(join(dir, "data", "accounts"), Number(ref.slice(1))),
     "FAKE_VALID_TOKEN",
+  );
+});
+
+test("replacement refuses an identity starting or just started on a runner", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-token-race-"));
+  const fake = join(dir, "claude");
+  writeFileSync(
+    fake,
+    '#!/bin/sh\nprintf \'{"is_error":false,"result":"OK"}\'\n',
+    {
+      mode: 0o700,
+    },
+  );
+  t.mock.property(process, "env", {
+    ...process.env,
+    PATH: `${dir}:${process.env.PATH}`,
+  });
+  const { app, store, runtimes } = await createApp({
+    auth: false,
+    data: join(dir, "data"),
+  });
+  t.after(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.ok(runtimes);
+  const accounts = new Accounts(store, join(dir, "data"));
+  const agent = store.createAgent("启动中", dir).agent;
+  const identity = join(dir, "identity");
+  mkdirSync(identity);
+  store.run(
+    "UPDATE agents SET agent_directory=? WHERE id=?",
+    identity,
+    agent.id,
+  );
+  const account = await accounts.addSetupToken(
+    "independent",
+    "FAKE_OLD_TOKEN",
+    () => {},
+  );
+  accounts.assign(agent.id, account.id);
+  // Both the in-flight start and a just completed start hidden from the
+  // previously cached directory must block replacement before saving.
+  let starting = true;
+  let discovered = 0;
+  t.mock.method(runtimes, "discover", async () => {
+    discovered++;
+  });
+  t.mock.method(runtimes, "starting", () => starting);
+  t.mock.method(runtimes, "running", () => !starting);
+  const replace = () =>
+    app.inject({
+      method: "PUT",
+      url: `/api/accounts/${account.id}/setup-token`,
+      payload: { token: "FAKE_NEW_TOKEN" },
+    });
+  const during = await replace();
+  assert.equal(during.statusCode, 409);
+  starting = false;
+  const justAfter = await replace();
+  assert.equal(justAfter.statusCode, 409);
+  assert.equal(discovered, 2);
+  assert.equal(
+    readSetupToken(join(dir, "data", "accounts"), Number(account.id.slice(1))),
+    "FAKE_OLD_TOKEN",
   );
 });
 

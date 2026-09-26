@@ -190,8 +190,8 @@ test("old ACP capability rejects secret start before forwarding, with an actiona
       assert.ok(error instanceof Problem);
       assert.equal(error.statusCode, 409);
       assert.equal(error.code, "launch_secret_unsupported");
-      assert.match(error.message, /pi-atrium 未声明独立令牌注入能力/);
-      assert.match(error.message, /npm install/);
+      assert.match(error.message, /需要新版 pi-atrium/);
+      assert.match(error.message, /npm ci/);
       return true;
     },
   );
@@ -201,6 +201,51 @@ test("old ACP capability rejects secret start before forwarding, with an actiona
     { method: "_pi/runtime/list", params: {} },
   );
   assert.equal(list.startCalls, 0, "old ACP must never see _pi/identity/start");
+});
+
+test("old bridge refusal stays actionable through runner without exposing arbitrary ACP errors", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-runner-old-bridge-"));
+  const identityId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const server = createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const daemon = new RunnerDaemon(
+    `ws://127.0.0.1:${address.port}/runner/v1`,
+    "fake-machine",
+    {
+      ...process.env,
+      ATRIUM_DATA: join(dir, "data"),
+      PI_ACP_DIR: join(dir, "acp"),
+      ATRIUM_PI_ACP_ENTRY: entry,
+      TEST_LAUNCH_SECRET_CAPABLE: "1",
+      TEST_BRIDGE_READINESS_REJECT: "1",
+    },
+  );
+  const bridge = bridgeFor(server, daemon, identityId);
+  const running = daemon.run();
+  t.after(async () => {
+    daemon.close();
+    bridge.close();
+    await running;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await until(() => bridge.connected("r1"));
+  await assert.rejects(
+    bridge.requestFor(identityId, "acp.request", {
+      method: "_pi/identity/start",
+      params: { identityId, launchSecretAccount: "k1" },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Problem);
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.code, "launch_secret_unsupported");
+      assert.match(error.message, /claude-bridge.*pi update/);
+      return true;
+    },
+  );
 });
 
 test("service replacement keeps the independent ACP child and its session", async (t) => {

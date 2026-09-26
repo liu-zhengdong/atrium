@@ -18,6 +18,24 @@ const runtime = {
 for await (const line of createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
   if (request.id === undefined || request.id === null) continue;
+  if (
+    request.method === "_pi/identity/start" &&
+    process.env.TEST_BRIDGE_READINESS_REJECT === "1"
+  ) {
+    startCalls++;
+    process.stdout.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: request.id,
+        error: {
+          code: -32000,
+          message: "ACP identity start rejected",
+          data: "独立令牌就绪检查未获肯定回应：请升级 claude-bridge",
+        },
+      }) + "\n",
+    );
+    continue;
+  }
   const result =
     request.method === "initialize"
       ? {

@@ -6,6 +6,7 @@ import { RunnerBridge } from "./runner-bridge.ts";
 import { ownerOf, rebindStopped } from "./runner-ownership.ts";
 import { z } from "zod";
 import {
+  alive,
   claimService,
   currentVersion,
   dataDirectory,
@@ -14,6 +15,7 @@ import {
   serviceUrl,
 } from "./service-state.ts";
 import { ensureWebDist } from "./web-dist.ts";
+import { readRestartState, writeRestartState } from "./supervisor.ts";
 
 await ensureWebDist(packageRoot);
 const data = dataDirectory();
@@ -24,10 +26,24 @@ let shutdownStarted = false;
 // #231：排空完成后上一个 supervisor 可能失联；保留唤醒名单，让接替的
 // supervisor 再次 prepare-restart 时拿到 200 与名单，接着把升级做完。
 let drainedAgentsToWake: string[] | null = null;
+// #244：排空完成后等停的上限。超过上限且发起排空的 supervisor 已不在、也没收到
+// stop，才恢复运行；supervisor 还活着就一直等它，避免它发 stop 前抢先恢复、与
+// 它随后拉起的新服务同时写数据。测试用 ATRIUM_DRAIN_RECOVER_MS 缩短。
+const drainRecoverMs = (() => {
+  const value = Number(process.env.ATRIUM_DRAIN_RECOVER_MS ?? 60000);
+  return Number.isInteger(value) && value >= 100 ? value : 60000;
+})();
+let stopRequested = false;
+let drainWatch: ReturnType<typeof setInterval> | undefined;
+const clearDrainWatch = () => {
+  if (drainWatch) clearInterval(drainWatch);
+  drainWatch = undefined;
+};
 const shutdown = async () => {
   if (shutdownStarted) return;
   shutdownStarted = true;
   stopping = true;
+  clearDrainWatch();
   try {
     await app?.close();
     lease.release();
@@ -118,13 +134,88 @@ try {
   app.get("/api/service", () => {
     return status();
   });
+  // 发起排空的 supervisor：请求体带 PID；旧版 supervisor 不带时参考 restart-state。
+  const drainOwner = (value: unknown): number | null => {
+    if (Number.isInteger(value) && (value as number) > 0)
+      return value as number;
+    const state = readRestartState(data);
+    return state?.status === "stopping" && state.supervisorPid > 0
+      ? state.supervisorPid
+      : null;
+  };
+  const recoverFromDrain = async (supervisorPid: number | null) => {
+    clearDrainWatch();
+    const agents = drainedAgentsToWake ?? [];
+    stopping = false;
+    drainedAgentsToWake = null;
+    const reason = `排空完成后 ${drainRecoverMs / 1000} 秒内没有收到停止请求，发起重启的 supervisor${supervisorPid ? `（PID ${supervisorPid}）` : ""}已不在`;
+    const names = agents.map((id) => {
+      try {
+        const agent = store.agent(id);
+        return `${agent.name}（${agent.ref}）`;
+      } catch {
+        return id;
+      }
+    });
+    console.warn(
+      `[${new Date().toISOString()}] 平滑重启未完成：${reason}；旧服务恢复接收新回合，唤醒 ${names.join("、") || "（无）"}`,
+    );
+    try {
+      const state = readRestartState(data);
+      if (
+        state &&
+        state.oldPid === process.pid &&
+        !["success", "rolled_back", "failed"].includes(state.status) &&
+        !(state.supervisorPid > 0 && alive(state.supervisorPid))
+      )
+        writeRestartState(data, {
+          ...state,
+          status: "failed",
+          error: `${reason}；旧服务（PID ${process.pid}）已自动恢复运行。要完成升级请重新运行 atrium restart`,
+          finishedAt: Date.now(),
+        });
+    } catch (error) {
+      console.warn(`更新 restart-state 失败：${String(error)}`);
+    }
+    await runtimes?.resumeAfterDrain(agents);
+  };
+  const armDrainWatch = (supervisorPid: number | null) => {
+    clearDrainWatch();
+    const deadline = Date.now() + drainRecoverMs;
+    let waitingLogged = false;
+    drainWatch = setInterval(
+      () => {
+        if (shutdownStarted || stopRequested || !stopping) {
+          clearDrainWatch();
+          return;
+        }
+        if (Date.now() < deadline) return;
+        if (supervisorPid && alive(supervisorPid)) {
+          if (!waitingLogged)
+            console.log(
+              `平滑重启排空已完成 ${drainRecoverMs / 1000} 秒，supervisor（PID ${supervisorPid}）仍在，继续等待它停止旧服务`,
+            );
+          waitingLogged = true;
+          return;
+        }
+        void recoverFromDrain(supervisorPid);
+      },
+      Math.min(1000, drainRecoverMs),
+    );
+    drainWatch.unref();
+  };
   app.post("/api/service/prepare-restart", async (request, reply) => {
+    const body =
+      (request.body as
+        { timeout?: number; supervisorPid?: number } | undefined) ?? {};
     if (stopping) {
-      if (drainedAgentsToWake)
+      if (drainedAgentsToWake && !stopRequested) {
+        // 接替的 supervisor 接手：之后以它为准重新计时。
+        armDrainWatch(drainOwner(body.supervisorPid));
         return { ready: true, agentsToWake: drainedAgentsToWake };
+      }
       return reply.code(409).send({ error: "服务正在关闭" });
     }
-    const body = (request.body as { timeout?: number } | undefined) ?? {};
     const timeout = Number(body.timeout ?? 300000);
     if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 7200000)
       return reply
@@ -148,6 +239,7 @@ try {
     }
     stopping = true;
     drainedAgentsToWake = agentsToWake;
+    armDrainWatch(drainOwner(body.supervisorPid));
     return { ready: true, agentsToWake };
   });
   app.get("/api/service/health", async (_request, reply) => {
@@ -210,6 +302,9 @@ try {
     return { woken: true };
   });
   app.post("/api/service/stop", (_request, reply) => {
+    // 收到 stop 后不再恢复：supervisor 接下来会拉起新服务。
+    stopRequested = true;
+    clearDrainWatch();
     reply.raw.once("finish", () => {
       void shutdown();
     });

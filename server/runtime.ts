@@ -2308,6 +2308,29 @@ export class Runtimes {
       throw error;
     }
   }
+  /**
+   * #244：排空完成后迟迟等不到 stop（supervisor 失联）时退出排空，恢复接收新回合，
+   * 并按平滑重启的唤醒名单续跑；只在调用方确认不会再有人来停这个进程时使用。
+   */
+  async resumeAfterDrain(agentIds: string[]): Promise<void> {
+    if (this.stopped || !this.draining) return;
+    this.draining = false;
+    this.changed();
+    for (const id of agentIds) {
+      try {
+        this.store.agent(id);
+        if (!this.connections.has(id)) await this.start(id);
+        this.store.queue(
+          id,
+          "direct",
+          "[Atrium 重启未完成] 平滑重启中断，服务已恢复运行；请继续刚才的工作，先核对当前状态，避免重复执行已完成的操作。",
+        );
+        void this.pump(id, true);
+      } catch (error) {
+        console.warn(`排空恢复后唤醒 ${id} 失败：${String(error)}`);
+      }
+    }
+  }
   health(): { available: boolean; error: string | null } {
     const available =
       !this.stopped && !this.draining && this.gateway !== undefined;

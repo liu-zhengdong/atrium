@@ -252,7 +252,8 @@ export async function requestDrain(
 ): Promise<string[]> {
   // 长排空会超过 undici 默认 headersTimeout（约 300 秒，#231），全局 fetch
   // 会在响应头之前断开；改用 node:http，整体超时时只由 AbortSignal 控制。
-  const bodyText = JSON.stringify({ timeout });
+  // 带上自己的 PID：旧服务排空完成后据此判断接手的 supervisor 是否还在（#244）。
+  const bodyText = JSON.stringify({ timeout, supervisorPid: process.pid });
   const response = await new Promise<{ status: number; body: string }>(
     (resolvePromise, reject) => {
       const req = httpRequest(

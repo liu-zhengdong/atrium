@@ -37,7 +37,9 @@ export type Launch = {
 };
 
 /** 进展信号来源：看门狗据此判断执行者是否卡死（#262「执行者卡死检测」，下一部分实现）。 */
-export type ProgressSignal = "log_growth" | "worktree_change" | "steps";
+/** json_events：工具在标准输出里逐步打出结构化事件（如 opencode --format json）。 */
+export type ProgressSignal =
+  "log_growth" | "worktree_change" | "steps" | "json_events";
 
 export type Adapter = {
   tool: Tool;

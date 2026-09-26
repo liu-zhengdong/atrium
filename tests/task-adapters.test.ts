@@ -72,7 +72,15 @@ test("适配器：各工具的真实调用参数", () => {
     ADAPTERS.opencode.build({ ...base, model: "opencode-go/mimo-v2.6-flash" }),
     {
       command: "opencode",
-      args: ["run", "-m", "opencode-go/mimo-v2.6-flash", "--", "修一个 bug"],
+      args: [
+        "run",
+        "--format",
+        "json",
+        "-m",
+        "opencode-go/mimo-v2.6-flash",
+        "--",
+        "修一个 bug",
+      ],
       cwd: "/w/repo-t1-x",
     },
   );

@@ -6,8 +6,9 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  statSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -47,11 +48,18 @@ async function request(record: ServiceRecord, stop = false) {
     throw new Error("服务身份不匹配");
   return result;
 }
-async function ready(record: ServiceRecord) {
+async function probe(record: ServiceRecord) {
   try {
-    return !(await request(record)).stopping;
+    return (await request(record)).stopping ? "stopping" : "ready";
   } catch {
-    return false;
+    return "down";
+  }
+}
+function logSize(data: string) {
+  try {
+    return statSync(join(data, "service.log")).size;
+  } catch {
+    return 0;
   }
 }
 function startupFailure(data: string, reason: string, logStart: number): Error {
@@ -151,7 +159,29 @@ export async function stopService(data: string) {
     "Atrium 仍在关闭；未强制终止进程。请稍后运行 atrium status。",
   );
 }
-export async function startService(data: string) {
+/**
+ * 冷启动等待（#262）：机器忙时 tsx 加载加开库要十几秒，不能按固定窗口判死。
+ * 自己拉起的进程还活着就一直等；别人拉起或已在跑但未就绪的，
+ * 登记文件或日志在 stallMs 内有推进才继续等。总上限 totalMs；进程退出立即失败。
+ */
+export type StartWaitOptions = {
+  totalMs?: number;
+  stallMs?: number;
+  noticeMs?: number;
+  notice?: (message: string) => void;
+  /** 测试用：替换服务入口脚本（相对 packageRoot 或绝对路径）。 */
+  entry?: string;
+};
+export async function startService(
+  data: string,
+  {
+    totalMs = 60000,
+    stallMs = 12000,
+    noticeMs = 5000,
+    notice = (message: string) => console.error(message),
+    entry = "server/main.ts",
+  }: StartWaitOptions = {},
+) {
   await ensureWebDist(packageRoot);
   let record = readService(data);
   let child: ReturnType<typeof spawn> | undefined;
@@ -171,7 +201,7 @@ export async function startService(data: string) {
       reportDroppedIdentity(droppedSensitive);
       child = spawn(
         process.execPath,
-        ["--import", "tsx", join(packageRoot, "server/main.ts")],
+        ["--import", "tsx", resolve(packageRoot, entry)],
         {
           cwd: packageRoot,
           env: {
@@ -191,25 +221,51 @@ export async function startService(data: string) {
       closeSync(log);
     }
   }
-  const deadline = Date.now() + 12000;
-  while (Date.now() < deadline) {
+  const started = Date.now();
+  let lastProgress = started;
+  let lastInstance = record?.instance;
+  let lastLog = logSize(data);
+  let noticed = false;
+  for (;;) {
     if (launchError) throw launchError;
     record = readService(data);
-    if (record && alive(record.pid) && (await ready(record))) return record;
+    const state =
+      record && alive(record.pid) ? await probe(record) : ("down" as const);
+    if (state === "ready") return record!;
     // A concurrent starter can lose the claim while the winning child is still starting.
-    if (
-      (child?.exitCode != null || child?.signalCode) &&
-      (!record || !alive(record.pid))
-    )
+    const childExited = child?.exitCode != null || child?.signalCode != null;
+    if (childExited && (!record || !alive(record.pid)))
       throw startupFailure(
         data,
-        `Atrium 启动失败（${child.exitCode != null ? `退出码 ${child.exitCode}` : `信号 ${child.signalCode}`}）`,
+        `Atrium 启动失败（${child!.exitCode != null ? `退出码 ${child!.exitCode}` : `信号 ${child!.signalCode}`}）`,
         logStart,
       );
+    const now = Date.now();
+    // 已应答但在关闭中的服务不算「启动中」，日志增长不延长等待。
+    if (state === "down") {
+      const size = logSize(data);
+      if (record?.instance !== lastInstance || size !== lastLog)
+        lastProgress = now;
+      lastInstance = record?.instance;
+      lastLog = size;
+    }
+    const ours = child !== undefined && !childExited;
+    if (now - started >= totalMs || (!ours && now - lastProgress >= stallMs))
+      break;
+    if (!noticed && now - started >= noticeMs) {
+      noticed = true;
+      notice(
+        `Atrium 服务启动中…（最长等 ${Math.round(totalMs / 1000)} 秒；日志：${join(data, "service.log")}）`,
+      );
+    }
     await delay(100);
   }
   if (record && alive(record.pid)) throw await unavailableReason(record, data);
-  throw startupFailure(data, "Atrium 启动超时", logStart);
+  throw startupFailure(
+    data,
+    `Atrium 启动超时（已等 ${Math.round((Date.now() - started) / 1000)} 秒）`,
+    logStart,
+  );
 }
 /** 交互判定：stdin 与 stdout 都是终端时才自动打开浏览器；脚本、CI 和重定向里改为打印链接。 */
 export function canOpenBrowser(

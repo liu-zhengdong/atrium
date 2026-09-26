@@ -8,6 +8,7 @@ import { Problem } from "../server/problem.ts";
 import { recordResult } from "./contract.ts";
 import { workerGuard } from "./worker-guard.ts";
 import { requireUserAuthService, userBearer } from "./auth.ts";
+import { missingRoute, outdatedServiceAt } from "./version-check.ts";
 
 export type Client = ReturnType<typeof client>;
 
@@ -89,6 +90,10 @@ export function client(base: string, data: string) {
         );
     }
     if (!response.ok) {
+      if (missingRoute(response.status, value as { error?: unknown })) {
+        const outdated = await outdatedServiceAt(data);
+        if (outdated) throw outdated;
+      }
       const body = value as {
         error?: unknown;
         code?: string;

@@ -11,6 +11,7 @@ import { recordNext, recordResult } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
 import { startService } from "../server/service.ts";
 import { serviceUrl } from "../server/service-state.ts";
+import { missingRoute, outdatedService } from "./version-check.ts";
 
 const canonical = (path: string) => {
   try {
@@ -90,11 +91,17 @@ export async function restart({
         body: JSON.stringify({ timeout: timeoutSec * 1000 }),
       },
     );
-    const result = (await response.json()) as {
+    const result = (await response.json().catch(() => ({}))) as {
       task_id?: string;
       running?: string[];
       error?: string;
+      code?: string;
     };
+    // 旧服务没有这个接口：路由未登记会落到用户认证回 401，不能当认证问题报。
+    if (!response.ok && missingRoute(response.status, result, true)) {
+      const outdated = await outdatedService(record);
+      if (outdated) throw outdated;
+    }
     if (!response.ok)
       throw new Problem(
         response.status,

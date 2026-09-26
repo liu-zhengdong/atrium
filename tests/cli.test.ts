@@ -26,7 +26,52 @@ import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
-/** 与 service.test.ts 同一种夹具：隔离数据目录、随机端口、假的 Pi 模板，Pi 命令指向不存在的路径。 */
+/**
+ * 单条命令的等待上限。每条命令都是一个独立 node 进程：自身冷启动，再请求服务；
+ * 机器越忙越慢——本机实测同时有 20 份本文件在跑、后台再跑一次完整 npm test 时，
+ * 单条要 5～25 秒，25 秒会把还在正常跑的命令判死。
+ */
+const commandBudget = 60000;
+/** 跑十来条命令的用例的墙钟预算，理由同 commandBudget。 */
+const manyCommands = 300000;
+/**
+ * 等夹具自己的服务真的能应答。命令行按需拉起服务，但只肯等 12 秒（server/service.ts），
+ * 机器负载高时一次冷启动（tsx 加载整个服务、再开 SQLite）会超过这个窗口，服务其实随后就好了。
+ * 按服务自己登记的进程与实例号轮询，不用命令行那条命令的成败当判据。
+ */
+async function waitService(data: string) {
+  const deadline = Date.now() + 45000;
+  let last = "服务没有登记";
+  while (Date.now() < deadline) {
+    const record = readService(data);
+    if (record && alive(record.pid)) {
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:${record.port}/api/service`,
+          {
+            headers: { authorization: `Bearer ${record.token}` },
+            signal: AbortSignal.timeout(2000),
+          },
+        );
+        const body = (await response.json()) as { pid?: number };
+        if (response.ok && body.pid === record.pid) return;
+        last = `HTTP ${response.status}`;
+      } catch (error) {
+        last = error instanceof Error ? error.message : String(error);
+      }
+    }
+    await delay(200);
+  }
+  throw new Error(
+    `等夹具服务就绪超时（45 秒）：${last}；日志：${join(data, "service.log")}`,
+  );
+}
+/**
+ * 与 service.test.ts 同一种夹具：隔离数据目录、随机端口、假的 Pi 模板，Pi 命令指向不存在的路径。
+ * 返回的 `warm` 把这个数据目录的服务起热并等它就绪：命令按需拉起的服务只肯等 12 秒，
+ * 负载高时一次冷启动会超过它，服务其实随后就好了。要断言「第一条命令把服务拉起来」
+ * 或「被拒的命令不碰数据目录」的用例别调它，它改的就是这两件事的初始状态。
+ */
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-cli-"));
   const signal = trackFixture(join(root, "data"), root);
@@ -55,7 +100,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       const output = await exec(
         process.execPath,
         [join(packageRoot, "bin/atrium.mjs"), ...args],
-        { env, cwd: root, timeout: 25000 },
+        { env, cwd: root, timeout: commandBudget },
       );
       return { ...output, code: 0 };
     } catch (error) {
@@ -71,6 +116,13 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       };
     }
   };
+  // 冷启动慢过命令行 12 秒窗口时那条命令会以 503 收场，但它已经把服务拉起来了：
+  // 回执不等，只等服务真的能应答，之后每条命令都打在热服务上，命令的成败只反映命令本身。
+  const warm = async () => {
+    const started = cli("list");
+    await waitService(data);
+    await started;
+  };
   t.after(async () => {
     await cli("stop");
     const record = readService(data);
@@ -79,14 +131,15 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     rmSync(root, { recursive: true, force: true });
     untrackFixture(signal);
   });
-  return { root, data, env, cli, signal };
+  return { root, data, env, cli, signal, warm };
 }
 
 test(
   "atrium list/show 展示 overview 的真实重试状态",
-  { timeout: 60000 },
+  { timeout: manyCommands },
   async (t) => {
     const f = await fixture(t);
+    await f.warm();
     assert.equal((await f.cli("create", "重试身份")).code, 0);
     const db = new Store(join(f.data, "atrium.sqlite"));
     const agent = db.agents().find((entry) => entry.ref === "a1")!;
@@ -117,7 +170,7 @@ test(
 
 test(
   "CLI 从标准输入添加与更换假 setup-token，不把令牌写进命令或回显",
-  { timeout: 60000 },
+  { timeout: manyCommands },
   async (t) => {
     const f = await fixture(t);
     const fake = join(f.root, "claude");
@@ -165,8 +218,8 @@ test(
     assert.notEqual(local.code, 0);
     assert.match(local.err, /不再接入 Claude 模型/);
     // 升级前建好的 setup-token 账号照常更换令牌；先拉起服务建好数据库。
-    const listed = await f.cli("accounts");
-    assert.equal(listed.code, 0, listed.stderr);
+    // 冷启动慢过命令行的启动窗口时，按就绪往下走，不按这一条命令的成败。
+    await f.warm();
     const store = new Store(join(f.data, "atrium.sqlite"));
     const ref = (
       await new Accounts(store, f.data).addSetupToken(
@@ -633,7 +686,7 @@ test(
 
 test(
   "分配回执包含身份和账号；撤销时优先给可执行的分配命令",
-  { timeout: 60000 },
+  { timeout: manyCommands },
   async (t) => {
     const f = await fixture(t);
     const cli = join(f.root, "claude");
@@ -646,6 +699,8 @@ test(
       join(f.root, "pi-template", "claude-bridge.json"),
       JSON.stringify({ provider: { pathToClaudeCodeExecutable: cli } }),
     );
+    // 模板定好了再起热：服务记住的是拉起它那条命令的环境。
+    await f.warm();
     assert.equal((await f.cli("create", "甲")).code, 0);
     const store = new Store(join(f.data, "atrium.sqlite"));
     const agent = store.agent(store.resolveAgentId("a1"));
@@ -741,8 +796,9 @@ test(
 
 test(
   "删除运行中的身份给出先停止再删除的命令；带空格名称改用短号",
-  { timeout: 90000 },
+  { timeout: manyCommands },
   async (t) => {
+    // 本用例要真起一个 Pi、连着跑十来条命令，机器负载高时最经不起第一条命令输在服务冷启动上。
     const f = await fixture(t);
     // 新测试只传假服务和隔离目录，不把宿主机认证环境传给子进程。
     const allowed = new Set([
@@ -784,6 +840,8 @@ test(
       () => new Promise<void>((resolve) => provider.close(() => resolve())),
     );
     const base = `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`;
+    // 环境与假供应商都定好了再起热：服务记住的是拉起它那条命令的环境。
+    await f.warm();
     for (const args of [
       ["create", "张 三"],
       [
@@ -851,9 +909,10 @@ test(
 
 test(
   "task add 的下一步：带 --parent 建出的子任务提示派活，顶层任务仍提示拆子任务",
-  { timeout: 90000 },
+  { timeout: manyCommands },
   async (t) => {
     const f = await fixture(t);
+    await f.warm();
     const top = await f.cli("task", "add", "登录模块");
     assert.equal(top.code, 0, top.stderr);
     assert.match(

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Message, ChatReadState } from "../../shared/schema.ts";
 import { api } from "../api.ts";
 import { mergeReadState } from "./readState.ts";
@@ -110,6 +110,17 @@ export function useConversation(
     if (!nearBottom.current || !scroll.current) return;
     scroll.current.scrollTop = scroll.current.scrollHeight;
   }, [messages, loading, totalSize]);
+  // 视口变矮（顶部出现故障提示等）时总高度不变，上面的贴底不会触发；贴底状态下在尺寸观察
+  // 回调里当场补回，与虚拟列表同一帧生效，不等下一次渲染（#232）。只改滚动位置，不改尺寸。
+  useLayoutEffect(() => {
+    const el = scroll.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (nearBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [chatId, loading]);
 
   async function loadOlder() {
     if (!chatId) return;

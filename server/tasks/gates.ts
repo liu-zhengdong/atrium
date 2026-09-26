@@ -4,6 +4,7 @@
  */
 
 import type { Ci, Claim, FileStat, FunctionSpan, Pr } from "./gate-parse.ts";
+import { ciUnavailableReason } from "./ci-classify.ts";
 
 export * from "./gate-parse.ts";
 
@@ -44,6 +45,8 @@ export type GateResult = {
   ok: boolean;
   /** 只有 ci 关卡会处于「还没出结果」。 */
   pending?: boolean;
+  /** CI 基础设施没运行，需人工处理。 */
+  unavailable?: boolean;
   evidence: string;
 };
 
@@ -91,6 +94,13 @@ function ci(facts: Facts): GateResult {
       ok: false,
       pending: true,
       evidence: `CI 还没出结果（${facts.pr.url}），由 CI 轮询补判`,
+    };
+  if (facts.ci === "unavailable")
+    return {
+      gate: "ci",
+      ok: false,
+      unavailable: true,
+      evidence: ciUnavailableReason(facts.ciDetail),
     };
   if (facts.ci === "failure")
     return {

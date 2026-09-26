@@ -1,7 +1,6 @@
 import { exec as defaultExec, firstLine, type Exec } from "./git.ts";
 import {
   addedFunctions,
-  ciFromChecks,
   extractClaims,
   parseNumstat,
   type CheckedClaim,
@@ -9,6 +8,14 @@ import {
   type Facts,
   type Pr,
 } from "./gates.ts";
+import {
+  actionJob,
+  classifyCi,
+  type Annotation,
+  type Check,
+  type Job,
+  type Observation,
+} from "./ci-classify.ts";
 
 /**
  * 执行者退出后运行时自己查事实（#262）：PR、CI、改动规模、是否收尾、摘要里的声明是否存在。
@@ -63,25 +70,65 @@ export async function readCi(
     "checks",
     prUrl,
     "--json",
-    "name,bucket",
+    "name,bucket,link",
   ]);
-  let list: { name?: string; bucket?: string }[] | undefined;
+  let list: Check[] | undefined;
   try {
-    list = JSON.parse(checks.stdout) as { name?: string; bucket?: string }[];
+    const parsed: unknown = JSON.parse(checks.stdout);
+    if (Array.isArray(parsed)) list = parsed as Check[];
   } catch {
     list = undefined;
   }
   if (!list)
     return { ci: null, detail: firstLine(checks.stderr) || "查不到检查" };
-  const ci = ciFromChecks(list);
-  const failing = list
-    .filter((check) => check.bucket === "fail" || check.bucket === "cancel")
-    .map((check) => check.name)
-    .filter(Boolean);
-  return {
-    ci,
-    detail: failing.length ? `失败的检查：${failing.join("、")}` : undefined,
-  };
+  const failing = list.filter(
+    (check) => check.bucket === "fail" || check.bucket === "cancel",
+  );
+  const jobs = new Map<string, Job[]>();
+  const observations: Observation[] = [];
+  for (const check of failing) {
+    const target = actionJob(check.link);
+    if (!target) continue;
+    const runKey = `${target.repo}/${target.run}`;
+    if (!jobs.has(runKey)) {
+      const response = await run("gh", [
+        "api",
+        `repos/${target.repo}/actions/runs/${target.run}/jobs?per_page=100`,
+      ]);
+      let listed: Job[] = [];
+      if (response.ok) {
+        try {
+          const parsed: unknown = JSON.parse(response.stdout);
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            "jobs" in parsed &&
+            Array.isArray(parsed.jobs)
+          )
+            listed = parsed.jobs as Job[];
+        } catch {
+          // 查不到 job 时沿用普通失败，不能把未知状态判成未运行。
+        }
+      }
+      jobs.set(runKey, listed);
+    }
+    const job = jobs.get(runKey)?.find((entry) => entry.id === target.job);
+    const annotations = await run("gh", [
+      "api",
+      `repos/${target.repo}/check-runs/${target.job}/annotations?per_page=100`,
+    ]);
+    let parsedAnnotations: Annotation[] = [];
+    if (annotations.ok) {
+      try {
+        const parsed: unknown = JSON.parse(annotations.stdout);
+        if (Array.isArray(parsed)) parsedAnnotations = parsed as Annotation[];
+      } catch {
+        // 注解不可读时仅按 job 步骤判定。
+      }
+    }
+    observations.push({ check, job, annotations: parsedAnnotations });
+  }
+  return classifyCi(list, observations);
 }
 
 async function verifyClaims(

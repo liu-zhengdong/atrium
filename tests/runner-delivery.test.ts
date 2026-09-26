@@ -1008,3 +1008,94 @@ for (const [name, code, status] of [
     assert.equal(f.store.failure(f.agent.id), null);
   });
 }
+
+test("只剩纯告知时 prepareMigration 不再被待办挡住", async (t) => {
+  const f = fixture(t);
+  f.store.run("DELETE FROM deliveries WHERE id=?", f.pending.id);
+  const mate = f.store.createAgent("同伴", f.info.cwd).agent;
+  const group = f.store.createChat("协作群", [f.agent.id, mate.id]);
+  f.store.send(mate.id, {
+    chat_id: group.id,
+    body: "我这边做完了",
+    mentions: [],
+    quiet: true,
+  });
+  assert.equal(f.store.pending(f.agent.id).length, 0);
+  assert.equal(f.store.notices(f.agent.id).length, 1, "告知还在排队");
+  t.mock.method(
+    Runtimes.prototype as unknown as { owned(): boolean },
+    "owned",
+    () => true,
+  );
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string) => {
+      if (method === "_pi/runtime/status") return { ...f.info, busy: false };
+      return {};
+    },
+  );
+  await f.runtimes.prepareMigration(f.agent.id);
+  assert.equal(f.store.notices(f.agent.id).length, 1, "迁移不碰排队的告知");
+});
+
+test("只剩纯告知不把身份标成未分配", async (t) => {
+  const f = fixture(t);
+  f.store.run("DELETE FROM deliveries WHERE id=?", f.pending.id);
+  f.store.run("DELETE FROM account_assignments WHERE agent_id=?", f.agent.id);
+  const mate = f.store.createAgent("同伴", f.info.cwd).agent;
+  const group = f.store.createChat("协作群", [f.agent.id, mate.id]);
+  f.store.send(mate.id, {
+    chat_id: group.id,
+    body: "我这边做完了",
+    mentions: [],
+    quiet: true,
+  });
+  await f.runtimes.pump(f.agent.id, false);
+  assert.equal(f.store.failure(f.agent.id), null, "没有要送的投递，不算没分配");
+});
+
+test("duplicate 不删搭车的告知：下一趟再带上", async (t) => {
+  const f = fixture(t);
+  const mate = f.store.createAgent("同伴", f.info.cwd).agent;
+  const group = f.store.createChat("协作群", [f.agent.id, mate.id]);
+  f.store.send(mate.id, {
+    chat_id: group.id,
+    body: "我这边做完了",
+    mentions: [],
+    quiet: true,
+  });
+  const texts: string[] = [];
+  let activeInfo = f.info;
+  t.mock.method(
+    Runtimes.prototype as unknown as { rpc(): Promise<unknown> },
+    "rpc",
+    async (method: string, params: { id?: string; text?: string }) => {
+      if (method === "_pi/runtime/status") return activeInfo;
+      assert.equal(method, "_pi/runtime/deliver");
+      texts.push(params.text!);
+      if (texts.length === 1)
+        throw new Problem(503, "应答丢失", "runner_outcome_unknown");
+      return { accepted: true, duplicate: true };
+    },
+  );
+  await f.runtimes.pump(f.agent.id, true);
+  assert.match(texts[0]!, /我这边做完了/, "第一趟把告知搭上");
+  f.store.finishTurn(f.agent.id, true);
+  activeInfo = { ...f.info, generation: randomUUID() };
+  f.runtimes.connections.set(f.agent.id, {
+    connection: null as never,
+    info: activeInfo,
+  });
+  await f.runtimes.retry(f.agent.id);
+  assert.equal(f.store.uncertainDelivery(f.agent.id), null);
+  assert.equal(
+    f.store.notices(f.agent.id).length,
+    1,
+    "duplicate 那一趟的告知没交出去，不能删",
+  );
+  f.store.send(LOCAL_USER, { chat_id: f.chat.id, body: "W-2", mentions: [] });
+  await f.runtimes.pump(f.agent.id, true);
+  assert.equal(texts.length, 3);
+  assert.match(texts[2]!, /我这边做完了/, "下一趟重新搭上，宁可重复不丢");
+});

@@ -76,7 +76,7 @@ import {
   supportsIdentityLaunchSecret,
 } from "./launch-capability.ts";
 import { commandAgent } from "../shared/command-agent.ts";
-import { wakesOffline } from "./delivery.ts";
+import { executable, mergeNotices, wakesOffline } from "./delivery.ts";
 import { ownerOf, rebindStopped, releaseRunner } from "./runner-ownership.ts";
 import type { RunnerBridge } from "./runner-bridge.ts";
 
@@ -1763,7 +1763,8 @@ export class Runtimes {
         return this.doPump(id, direct);
       }
       let triggeredTurn = false;
-      for (const pending of this.store.pending(id)) {
+      // 纯告知不单独成行，等下面真正要走的投递搭车；pending() 里已经不含它。
+      for (const pending of executable(this.store.pending(id))) {
         if (
           singleAttempt &&
           pending.through_message !== this.userAttempt.get(id)
@@ -1780,12 +1781,19 @@ export class Runtimes {
         if (pending.kind === "summary" && (runtime.info.busy || triggeredTurn))
           continue;
         // 提醒在忙时排队、空闲才送，期间可能已经读完：送出前按当时的消息箱重写，清空了就撤回。
-        const text =
+        const reminder =
           pending.kind === "summary" ? this.store.reminder(id) : pending.text;
-        if (text === null) {
+        if (reminder === null) {
           this.store.withdrawReminder(pending.id);
           continue;
         }
+        // 排队的纯告知搭这一趟车：合并进同一条正文，对方不必逐条开回合。
+        const notices = this.store.notices(id);
+        const noticeIds = notices.map((item) => item.id);
+        const text = mergeNotices(
+          reminder,
+          notices.map((item) => item.text),
+        );
         try {
           const images = pending.through_message
             ? this.store
@@ -1846,7 +1854,9 @@ export class Runtimes {
                 this.changed();
                 return this.doPump(id, direct);
               }
-              this.store.accepted(pending.id, !settled);
+              // Pi 收到的仍是原来那一次的正文，这一趟合并进来的告知并没有交出去：
+              // 不删任何告知，宁可下一趟重复附带，也不丢。
+              this.store.accepted(pending.id, !settled, []);
               if (settled) {
                 this.store.completeDelivery(pending.id);
                 // Duplicate alone is not success; settled additionally proves the
@@ -1862,7 +1872,7 @@ export class Runtimes {
             this.changed();
             break;
           }
-          this.store.accepted(pending.id);
+          this.store.accepted(pending.id, false, noticeIds);
           if (pending.kind === "direct") triggeredTurn = true;
           // A turn may fail before deliver returns. Observe its end only after
           // accepting, so the failed delivery cannot be stranded as accepted.

@@ -232,6 +232,8 @@ export type Message = {
   mentions: string[];
   /** 这条是 @ 全体，收件人是发送时的全体群成员。 */
   mention_all: boolean;
+  /** 纯告知：不叫醒收件人，随对方下一次真正的投递一起交给它。 */
+  quiet?: boolean;
   created_at: number;
   attachments: Attachment[];
 };

@@ -5,8 +5,11 @@ import { performance } from "node:perf_hooks";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../server/store.ts";
 import { commandSummary, TraceStore, toolTitle } from "../server/trace.ts";
+import { createMcp } from "../server/mcp.ts";
 import { createApp } from "../server/app.ts";
 import type { RuntimeEventPage } from "../shared/trace.ts";
 import { LOCAL_USER } from "../shared/user.ts";
@@ -353,12 +356,26 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   const agent = store.createAgent("Atlas", root).agent;
   const direct = store.createChat("Atlas", [agent.id], agent.id);
   const group = store.createChat("群", [agent.id]);
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  const mcp = createMcp(
+    store,
+    agent.id,
+    () => {},
+    () => ({ online: true, busy: false }),
+  );
+  await mcp.connect(serverSide);
+  const client = new Client({ name: "trace-test", version: "1" });
+  await client.connect(clientSide);
+  t.after(async () => {
+    await client.close();
+    await mcp.close();
+  });
   const traces = new TraceStore(store);
   const target = generation();
   let seq = 0;
   const emit = (kind: RuntimeEventPage["items"][number]["kind"], extra = {}) =>
     traces.ingest(agent.id, page(target, [event(++seq, kind, extra)]));
-  const speak = (
+  const speak = async (
     chatId: string,
     body: string,
     tool: "send_message" | "atrium_send_message" = "atrium_send_message",
@@ -373,21 +390,16 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
         args: { chat_id: store.chatRef(chatId), body },
       }),
     });
-    const message = store.send(agent.id, {
-      chat_id: chatId,
-      body,
-      mentions: [],
+    // 工具输出用真实回执（直接调 MCP 工具拿到的结构化输出），
+    // 回执字段增删时这个测试跟着红，不靠手写的旧形状。
+    const result = await client.callTool({
+      name: "send_message",
+      arguments: { chat_id: store.chatRef(chatId), body },
     });
-    emit("tool_end", {
-      name: "mcp",
-      callId,
-      text: JSON.stringify({
-        id: message.id,
-        chat_id: store.chatRef(chatId),
-        sender: agent.ref,
-      }),
-    });
-    return message;
+    assert(!result.isError, JSON.stringify(result));
+    const receipt = JSON.parse((result.content as { text: string }[])[0].text);
+    emit("tool_end", { name: "mcp", callId, text: JSON.stringify(receipt) });
+    return receipt as { id: number };
   };
   const read = async (chatId: string) => {
     const response = await app.inject({
@@ -408,7 +420,7 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   emit("delivery", { name: "Atrium 接入说明", text: "接入说明" });
   const guideTrace = traces.page(agent.id).items.at(-1)!.id;
   emit("run_start");
-  const guide = speak(direct.id, "我已接入");
+  const guide = await speak(direct.id, "我已接入");
   // The title is presentation text, not a stable protocol field.
   store.run("UPDATE trace_actions SET title='已换过标题' WHERE kind='tool'");
   emit("run_end");
@@ -419,7 +431,7 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   store.send(LOCAL_USER, { chat_id: direct.id, body: "你好", mentions: [] });
   emit("delivery", { name: "Atrium", text: "用户消息" });
   emit("run_start");
-  const reply = speak(direct.id, "你好");
+  const reply = await speak(direct.id, "你好");
   emit("run_end");
   assert.equal(
     (await read(direct.id)).find((item) => item.id === reply.id)?.trigger,
@@ -428,7 +440,7 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   emit("delivery", { name: "Atrium", text: "[Atrium 消息箱提醒]有待办" });
   const reminderTrace = traces.page(agent.id).items.at(-1)!.id;
   emit("run_start");
-  const reminder = speak(direct.id, "我来处理待办");
+  const reminder = await speak(direct.id, "我来处理待办");
   emit("run_end");
   assert.deepEqual(
     (await read(direct.id)).find((item) => item.id === reminder.id)?.trigger,
@@ -441,7 +453,7 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   });
   emit("delivery", { name: "Atrium", text: "[Atrium 消息箱提醒]新待办" });
   emit("run_start");
-  const notAutonomous = speak(direct.id, "这次先回复用户");
+  const notAutonomous = await speak(direct.id, "这次先回复用户");
   emit("run_end");
   assert.equal(
     (await read(direct.id)).find((item) => item.id === notAutonomous.id)
@@ -452,8 +464,8 @@ test("私聊触发来源：实际投递与工具发言关联、回复排除、�
   emit("delivery", { name: "外部订阅", text: "事件" });
   const externalTrace = traces.page(agent.id).items.at(-1)!.id;
   emit("run_start");
-  const external = speak(direct.id, "外部事件触发", "send_message");
-  speak(group.id, "群内发言");
+  const external = await speak(direct.id, "外部事件触发", "send_message");
+  await speak(group.id, "群内发言");
   emit("run_end");
   assert.deepEqual(
     (await read(direct.id)).find((item) => item.id === external.id)?.trigger,

@@ -34,7 +34,7 @@ function line(event: InboxEvent) {
 const wait: Command = {
   args: "[--as 订阅者] [--timeout 秒]",
   about:
-    "取未确认的事件（任务完成、失败、受阻、卡死、CI）；没有就等，有就打印一批退出；缺省订阅者 secretary",
+    "取未确认的事件（任务完成、失败、受阻、卡死、CI）；没有就等，有就打印一批退出；取走的 15 分钟内不重投；缺省订阅者 secretary",
   options: { as: { type: "string" }, timeout: { type: "string" } },
   positionals: [0, 0],
   async run({ values, json }) {
@@ -71,7 +71,8 @@ const wait: Command = {
 
 const ack: Command = {
   args: "编号…",
-  about: "确认事件已处理（编号见 events wait）；确认后不再投递",
+  about:
+    "确认事件已处理（编号见 events wait）；确认后不再投递，未确认的处理中租约到期后重投",
   positionals: [1, 500],
   async run({ positionals, json }) {
     const ids = positionals.map((value) => {

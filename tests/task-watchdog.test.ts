@@ -70,4 +70,27 @@ test("看门狗：假执行者零输出判卡死、按档案重试一次后失�
     }
   });
   assert.equal((await call("POST", "/api/tasks/t4/stop")).status, 409);
+  const stopped = getTask(db, "t4").events.find(
+    (event) => event.kind === "stop_requested",
+  );
+  assert.match(stopped!.detail!, /"by":"secretary"/);
+  const after = (await call("GET", "/api/events/wait?as=secretary&timeout=0"))
+    .body.events as { task: string; actor: string | null }[];
+  assert.deepEqual(
+    after.map((event) => event.task),
+    ["t2", "t3"],
+    "t1 在处理中租约内不重投；secretary 自己停的 t4 不投给自己",
+  );
+  const own = db
+    .prepare("SELECT actor, kind FROM task_inbox WHERE task_id=4")
+    .all();
+  assert.deepEqual(
+    own.map((row) => [row.actor, row.kind]),
+    [["secretary", "failed"]],
+    "记账仍记",
+  );
+  assert.equal(
+    (await call("POST", "/api/tasks/t4/stop?as=有 空格")).status,
+    400,
+  );
 });

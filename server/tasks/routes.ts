@@ -17,6 +17,9 @@ import { TaskRunner, type RunnerOptions } from "./runner.ts";
 type Query = Record<string, string | undefined>;
 const params = (value: unknown) => (value ?? {}) as { id?: string };
 const query = (value: unknown) => (value ?? {}) as Query;
+/** 调用方以谁的名义（?as=），缺省 secretary。 */
+const actorOf = (q: Query) =>
+  q.as === undefined || q.as === "" ? DEFAULT_OWNER : ownerOf(q.as, "as");
 
 /** 客户端断开时中止长轮询。 */
 function disconnect(request: FastifyRequest) {
@@ -25,12 +28,14 @@ function disconnect(request: FastifyRequest) {
   return controller.signal;
 }
 
-/** 数值配置从环境读：ATRIUM_WORKERS_DIR、ATRIUM_EVENT_BATCH_SECONDS。 */
+/** 数值配置从环境读：ATRIUM_WORKERS_DIR、ATRIUM_EVENT_BATCH_SECONDS、ATRIUM_EVENT_LEASE_MINUTES。 */
 export function runnerEnvOptions(env: NodeJS.ProcessEnv = process.env) {
   const options: Partial<RunnerOptions> = {};
   if (env.ATRIUM_WORKERS_DIR) options.workersDir = env.ATRIUM_WORKERS_DIR;
   const batch = Number(env.ATRIUM_EVENT_BATCH_SECONDS);
   if (Number.isFinite(batch) && batch > 0) options.batchMs = batch * 1000;
+  const lease = Number(env.ATRIUM_EVENT_LEASE_MINUTES);
+  if (Number.isFinite(lease) && lease > 0) options.leaseMs = lease * 60_000;
   const unknown = Number(env.ATRIUM_QUOTA_UNKNOWN_MINUTES);
   if (Number.isFinite(unknown) && unknown > 0)
     options.quotaUnknownMs = unknown * 60_000;
@@ -77,7 +82,10 @@ export function registerTaskRoutes(
     requireRunner().run(params(request.params).id, request.body),
   );
   app.post("/api/tasks/:id/stop", (request) =>
-    requireRunner().stop(params(request.params).id),
+    requireRunner().stop(
+      params(request.params).id,
+      actorOf(query(request.query)),
+    ),
   );
   app.get("/api/tasks/:id/log", (request) =>
     requireRunner().log(params(request.params).id, query(request.query).after),
@@ -91,10 +99,8 @@ export function registerTaskRoutes(
   );
   app.get("/api/events/wait", (request) => {
     const q = query(request.query);
-    const who =
-      q.as === undefined || q.as === "" ? DEFAULT_OWNER : ownerOf(q.as, "as");
     return requireRunner().inbox.wait(
-      who,
+      actorOf(q),
       waitSeconds(q.timeout),
       disconnect(request),
     );

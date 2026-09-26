@@ -792,6 +792,41 @@ test("one quarantined OAuth account does not stop other due refreshes", async ()
   store.close();
 });
 
+test("close 后不再派新的刷新子进程：启动失败的收尾不留账号子进程（#205）", async () => {
+  const { store, accounts } = fixture();
+  const first = accounts.add("openai", "one", "GOOD_KEY").id;
+  const second = accounts.add("deepseek", "two", "ANOTHER_KEY").id;
+  for (const ref of [first, second])
+    store.run(
+      "UPDATE accounts SET type='oauth',expires=? WHERE number=?",
+      Date.now() - 1000,
+      Number(ref.slice(1)),
+    );
+  const files = new AccountFiles(store, accounts.root);
+  const attempts: number[] = [];
+  const refresh = new AccountRefresh(store, files, {
+    run: async (row) => {
+      attempts.push(row.number);
+      files.save(row, {
+        type: "oauth",
+        access: "FRESH_ACCESS",
+        refresh: "FRESH_REFRESH",
+        expires: Date.now() + 3600_000,
+      });
+      // 模拟启动失败时的收尾：第一个账号刷新中途关闭。
+      if (attempts.length === 1) await refresh.close();
+    },
+    close: () => {},
+  });
+  await refresh.refresh();
+  assert.deepEqual(
+    attempts,
+    [Number(first.slice(1))],
+    "关闭后不再为剩下的账号派刷新",
+  );
+  store.close();
+});
+
 test("deleted identities lose only their assignments; deleting an account clears every remaining identity file", () => {
   const { dir, store, agent, agentDirectory, accounts } = fixture();
   const peer = store.createAgent("另一身份", dir).agent;

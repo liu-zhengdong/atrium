@@ -563,6 +563,59 @@ test(
 );
 
 test(
+  "启动期子进程迟迟不初始化时，端口占用仍及时报启动失败并释放租约（#205）",
+  { timeout: 45000 },
+  async (t) => {
+    const f = await fixture(t);
+    // 永不回应 initialize 的假 ACP：只保持 stdin，用来复现 #205 的启动期延迟。
+    const fakeAcp = join(f.root, "slow-acp.mjs");
+    const fakeAcpPid = join(f.root, "slow-acp.pid");
+    writeFileSync(
+      fakeAcp,
+      `import { writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+writeFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "slow-acp.pid"),
+  String(process.pid),
+);
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`,
+    );
+    f.env.ATRIUM_PI_ACP_ENTRY = fakeAcp;
+    const other = createServer((_, reply) => reply.end("not-atrium"));
+    await new Promise<void>((resolve) =>
+      other.listen(f.port, "127.0.0.1", resolve),
+    );
+    try {
+      const result = await f.cli("--no-open");
+      assert.equal(result.code, 1, result.stdout);
+      assert.match(result.stderr, /启动失败/);
+      assert.match(
+        result.stderr,
+        /EADDRINUSE/,
+        "要报出真正的端口占用原因，而不是等到启动超时",
+      );
+      assert.equal(readService(f.data), null, "失败必须释放租约");
+      assert.equal(
+        await (await fetch(`http://127.0.0.1:${f.port}`)).text(),
+        "not-atrium",
+        "既有占用端口的服务不受影响",
+      );
+      // 假 ACP 可能还没写出 pid 就被终止；写出来了就绝不允许残留。
+      if (existsSync(fakeAcpPid)) {
+        const pid = Number(readFileSync(fakeAcpPid, "utf8"));
+        for (let n = 0; n < 100 && alive(pid); n++) await delay(30);
+        assert(!alive(pid), "启动期子进程不能残留");
+      }
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
+  },
+);
+
+test(
   "CLI create 无需先开 Web；服务运行时走 API 并可 fork",
   { timeout: 45000 },
   async (t) => {

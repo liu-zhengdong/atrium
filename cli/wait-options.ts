@@ -34,6 +34,24 @@ export function waitOptions(after?: string, timeout?: string, idle = false) {
   return { cursor, seconds };
 }
 
+/** 服务端在响应头里交代的忙碌起点。非法值当没看到，重连不带 busy_since。 */
+export function readBusySince(headers: Headers): number | undefined {
+  const value = headers.get("x-atrium-busy-since");
+  if (
+    value !== null &&
+    /^(0|[1-9]\d*)$/.test(value) &&
+    Number.isSafeInteger(Number(value))
+  )
+    return Number(value);
+  return undefined;
+}
+
+export function agentWaitQuery(timeout: number, busySince?: number): string {
+  const query = new URLSearchParams({ timeout: String(timeout) });
+  if (busySince !== undefined) query.set("busy_since", String(busySince));
+  return query.toString();
+}
+
 export const nextMessage = (
   verb: "等新消息" | "继续等",
   ref: string,

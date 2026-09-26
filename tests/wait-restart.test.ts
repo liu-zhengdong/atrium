@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
@@ -24,7 +25,12 @@ import { userTokenPath } from "../server/user-auth.ts";
 import { Problem } from "../server/problem.ts";
 import { createApp } from "../server/app.ts";
 import { client } from "../cli/service.ts";
-import { reconnectingWait } from "../cli/wait-options.ts";
+import { when } from "../cli/format.ts";
+import {
+  agentWaitQuery,
+  readBusySince,
+  reconnectingWait,
+} from "../cli/wait-options.ts";
 import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
 
 const exec = promisify(execFile);
@@ -630,6 +636,719 @@ test("reconnectingWait：断连与 restarting 都重连，耗尽给 503 与续�
     (error: unknown) => error instanceof Problem && error.code === "usage",
   );
 });
+
+const fakeAcp = fileURLToPath(
+  new URL("./fixtures/fake-acp-exit.mjs", import.meta.url),
+);
+const harnessPath = fileURLToPath(
+  new URL("./fixtures/idle-wait-harness.ts", import.meta.url),
+);
+
+type AppHandle = Awaited<ReturnType<typeof createApp>>;
+type Runtimes = NonNullable<AppHandle["runtimes"]>;
+type RuntimeConnection =
+  Runtimes["connections"] extends Map<string, infer T> ? T : never;
+
+async function bootIdle(data: string) {
+  const previous = process.env.ATRIUM_PI_ACP_ENTRY;
+  process.env.ATRIUM_PI_ACP_ENTRY = fakeAcp;
+  try {
+    const created = await createApp({
+      auth: false,
+      data,
+      desktops: join(data, "desktops"),
+      piHome: join(data, "pi"),
+    });
+    const timer = (
+      created.runtimes as unknown as {
+        interval?: ReturnType<typeof setInterval>;
+      } | null
+    )?.interval;
+    if (timer) clearInterval(timer);
+    return created;
+  } finally {
+    if (previous === undefined) delete process.env.ATRIUM_PI_ACP_ENTRY;
+    else process.env.ATRIUM_PI_ACP_ENTRY = previous;
+  }
+}
+
+function attachRuntime(
+  runtimes: Runtimes,
+  agentId: string,
+  cwd: string,
+  busy: boolean,
+) {
+  const entry: RuntimeConnection = {
+    connection: null as unknown as RuntimeConnection["connection"],
+    info: {
+      runtimeId: agentId,
+      generation: agentId,
+      sessionId: agentId,
+      pid: process.pid,
+      ownerPid: null,
+      sessionFile: null,
+      cwd,
+      mode: "rpc",
+      busy,
+      model: "test",
+    },
+  };
+  runtimes.connections.set(agentId, entry);
+  return entry;
+}
+
+function insertRunEnd(
+  data: string,
+  agentId: string,
+  at: number,
+  runtimeId: string,
+  generation = "gap-generation",
+) {
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  try {
+    db.exec("PRAGMA busy_timeout=3000");
+    db.prepare(
+      `INSERT INTO trace_actions(agent_id,runtime_id,generation,session_id,seq,at,kind,name,title,state,input,output,truncated)
+       VALUES(?,?,?,?,1,?,'run_end','','本轮运行结束','complete','','',0)`,
+    ).run(agentId, runtimeId, generation, `session-${runtimeId}`, at);
+  } finally {
+    db.close();
+  }
+}
+
+function countRunEnds(data: string, agentId: string) {
+  const db = new DatabaseSync(join(data, "atrium.sqlite"), { readOnly: true });
+  try {
+    db.exec("PRAGMA busy_timeout=3000");
+    const row = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM trace_actions WHERE agent_id=? AND kind='run_end'",
+      )
+      .get(agentId) as { n: number };
+    return Number(row.n);
+  } finally {
+    db.close();
+  }
+}
+
+async function listenOn(app: AppHandle["app"], port = 0) {
+  await app.listen({ host: "127.0.0.1", port });
+  const actual = (app.server.address() as { port: number }).port;
+  return {
+    port: actual,
+    origin: `http://127.0.0.1:${actual}`,
+  };
+}
+
+async function stopApp(created: AppHandle) {
+  created.app.server.closeAllConnections();
+  await created.app.close();
+}
+
+function trackIdle(
+  origin: string,
+  data: string,
+  agentId: string,
+  seconds = 20,
+) {
+  writeFileSync(userTokenPath(data), "a".repeat(64));
+  const api = client(origin, data);
+  let busySince: number | undefined;
+  const urls: string[] = [];
+  const headersSeen: Array<number | undefined> = [];
+  const pending = reconnectingWait<{
+    status: string;
+    finished_at: number | null;
+    timed_out: boolean;
+    restarting?: boolean;
+  }>({
+    seconds,
+    request: (timeout) => {
+      const path = `/agents/${agentId}/wait?${agentWaitQuery(timeout, busySince)}`;
+      urls.push(path);
+      return api.get(path, (headers) => {
+        const seen = readBusySince(headers);
+        headersSeen.push(seen);
+        if (seen !== undefined) busySince = seen;
+      });
+    },
+    restarting: (result) => result.restarting === true,
+    resume: () => "atrium wait a1 --idle",
+  });
+  return { pending, urls, headersSeen, busySince: () => busySince };
+}
+
+async function until(predicate: () => boolean, label: string) {
+  for (let i = 0; i < 100; i++) {
+    if (predicate()) return;
+    await delay(50);
+  }
+  assert.fail(label);
+}
+
+async function wake(origin: string, chatId: string) {
+  const response = await fetch(`${origin}/api/chats/${chatId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pinned: true }),
+  });
+  assert.equal(response.status, 200, "唤醒等待失败");
+}
+
+test("开始就空闲：不报旧的结束时刻，响应头也没有忙碌起点", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-already-"));
+  const created = await bootIdle(data);
+  t.after(async () => {
+    await stopApp(created).catch(() => undefined);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const agent = created.store.createAgent("空闲验收", data).agent;
+  attachRuntime(created.runtimes!, agent.id, data, false);
+  const oldAt = Date.now() - 60_000;
+  insertRunEnd(data, agent.id, oldAt, "old-runtime");
+  const { origin } = await listenOn(created.app);
+  const started = Date.now();
+  const response = await fetch(
+    `${origin}/api/agents/${agent.id}/wait?timeout=5`,
+  );
+  const body = (await response.json()) as {
+    status: string;
+    finished_at: number | null;
+  };
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-atrium-busy-since"), null);
+  assert.equal(body.status, "idle");
+  assert.equal(body.finished_at, null, "以前的 run_end 不是这一轮");
+  assert.ok(Date.now() - started < 3000, "空闲时应马上返回");
+  const bad = await fetch(
+    `${origin}/api/agents/${agent.id}/wait?timeout=5&busy_since=1.2`,
+  );
+  assert.equal(bad.status, 400);
+  assert.match(((await bad.json()) as { error: string }).error, /busy_since/);
+});
+
+test("不带 busy_since：仍只认当前连接的 run_end，别的代际再新也不算", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-legacy-"));
+  const created = await bootIdle(data);
+  t.after(async () => {
+    await stopApp(created).catch(() => undefined);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const agent = created.store.createAgent("空闲验收", data).agent;
+  const chat = created.store.createChat("唤醒", [agent.id], agent.id);
+  const entry = attachRuntime(created.runtimes!, agent.id, data, true);
+  insertRunEnd(data, agent.id, 1000, agent.id, agent.id);
+  const future = Date.now() + 120_000;
+  insertRunEnd(data, agent.id, future, "other-runtime");
+  const { origin } = await listenOn(created.app);
+  const pending = fetch(
+    `${origin}/api/agents/${agent.id}/wait?timeout=10`,
+  ).then((response) => response.json()) as Promise<{
+    finished_at: number | null;
+    status: string;
+  }>;
+  await until(() => created.pendingWaits() === 1, "等待没有挂上");
+  const header = await fetch(
+    `${origin}/api/agents/${agent.id}/wait?timeout=10`,
+  );
+  assert.match(header.headers.get("x-atrium-busy-since") ?? "", /^\d+$/);
+  await header.body?.cancel();
+  entry.info.busy = false;
+  await wake(origin, chat.id);
+  const body = await pending;
+  assert.equal(body.status, "idle");
+  assert.notEqual(body.finished_at, 1000, "起点之前的 run_end 不能当这一轮");
+  assert.notEqual(body.finished_at, future, "没带 busy_since 不能拿别的代际");
+  assert.ok(
+    typeof body.finished_at === "number" && body.finished_at < future - 60_000,
+  );
+});
+
+test("busy_since 只取起点之后的最新 run_end，对不上就用判定空闲的当前时间", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-since-"));
+  const created = await bootIdle(data);
+  t.after(async () => {
+    await stopApp(created).catch(() => undefined);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const agent = created.store.createAgent("空闲验收", data).agent;
+  attachRuntime(created.runtimes!, agent.id, data, false);
+  const oldAt = Date.now() - 60_000;
+  insertRunEnd(data, agent.id, oldAt, "old-runtime");
+  const { origin } = await listenOn(created.app);
+  const since = Date.now();
+  const missed = (await fetch(
+    `${origin}/api/agents/${agent.id}/wait?timeout=5&busy_since=${since}`,
+  ).then((response) => response.json())) as { finished_at: number | null };
+  assert.notEqual(missed.finished_at, oldAt);
+  assert.ok(
+    typeof missed.finished_at === "number" && missed.finished_at >= since,
+    "库里没有起点之后的 run_end 时，用判定空闲的当前时间",
+  );
+  const runAt = Date.now() + 120_000;
+  insertRunEnd(data, agent.id, runAt, "other-runtime");
+  const found = (await fetch(
+    `${origin}/api/agents/${agent.id}/wait?timeout=5&busy_since=${since}`,
+  ).then((response) => response.json())) as {
+    status: string;
+    finished_at: number | null;
+  };
+  assert.equal(found.status, "idle");
+  assert.equal(found.finished_at, runAt, "不限 runtime_id，取起点之后最新一条");
+});
+
+test("崩溃换进程：开始时在忙，间隙结束后 finished_at 等于补上的 run_end", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-crash-proc-"));
+  const apps: AppHandle[] = [];
+  t.after(async () => {
+    for (const created of apps) await stopApp(created).catch(() => undefined);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const first = await bootIdle(data);
+  apps.push(first);
+  const agent = first.store.createAgent("空闲验收", data).agent;
+  attachRuntime(first.runtimes!, agent.id, data, true);
+  const { origin, port } = await listenOn(first.app);
+  const started = Date.now();
+  const tracked = trackIdle(origin, data, agent.id);
+  await until(
+    () => tracked.busySince() !== undefined,
+    "忙碌起点没有写进响应头",
+  );
+  const busySince = tracked.busySince()!;
+  assert.ok(busySince >= started);
+  await stopApp(first);
+  assert.equal(
+    countRunEnds(data, agent.id),
+    0,
+    "进程死掉后、新服务起来前，间隙里的 run_end 没有被补记",
+  );
+  const runAt = busySince + 120_000;
+  insertRunEnd(data, agent.id, runAt, "gap-runtime");
+  const second = await bootIdle(data);
+  apps.push(second);
+  attachRuntime(second.runtimes!, agent.id, data, false);
+  await listenOn(second.app, port);
+  const result = await tracked.pending;
+  assert.equal(result.status, "idle");
+  assert.equal(result.timed_out, false);
+  assert.equal(result.finished_at, runAt);
+  assert.ok(result.finished_at >= started);
+  assert.doesNotMatch(tracked.urls[0]!, /busy_since/);
+  assert.match(tracked.urls.at(-1)!, new RegExp(`busy_since=${busySince}`));
+});
+
+test("崩溃换进程：间隙里没有 run_end 时，用新服务判定空闲的当前时间", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-crash-fallback-"));
+  const apps: AppHandle[] = [];
+  t.after(async () => {
+    for (const created of apps) await stopApp(created).catch(() => undefined);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const first = await bootIdle(data);
+  apps.push(first);
+  const agent = first.store.createAgent("空闲验收", data).agent;
+  attachRuntime(first.runtimes!, agent.id, data, true);
+  const { origin, port } = await listenOn(first.app);
+  const tracked = trackIdle(origin, data, agent.id);
+  await until(() => tracked.busySince() !== undefined, "没有忙碌起点");
+  const busySince = tracked.busySince()!;
+  await stopApp(first);
+  assert.equal(countRunEnds(data, agent.id), 0);
+  const second = await bootIdle(data);
+  apps.push(second);
+  attachRuntime(second.runtimes!, agent.id, data, false);
+  const marked = Date.now();
+  await listenOn(second.app, port);
+  const result = await tracked.pending;
+  assert.equal(countRunEnds(data, agent.id), 0, "新进程自己不补 run_end");
+  assert.equal(result.status, "idle");
+  assert.equal(result.timed_out, false);
+  assert.equal(typeof result.finished_at, "number");
+  assert.ok(result.finished_at! >= busySince);
+  assert.ok(result.finished_at! >= marked - 1000);
+  assert.ok(result.finished_at! <= Date.now());
+});
+
+test("崩溃重连时这一轮还在忙：继续等，结束后报的是这一轮的 run_end", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-still-busy-"));
+  const apps: AppHandle[] = [];
+  t.after(async () => {
+    for (const created of apps) await stopApp(created).catch(() => undefined);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const first = await bootIdle(data);
+  apps.push(first);
+  const agent = first.store.createAgent("空闲验收", data).agent;
+  const chat = first.store.createChat("唤醒", [agent.id], agent.id);
+  attachRuntime(first.runtimes!, agent.id, data, true);
+  const { origin, port } = await listenOn(first.app);
+  let settled = false;
+  const tracked = trackIdle(origin, data, agent.id);
+  const done = tracked.pending.then((result) => {
+    settled = true;
+    return result;
+  });
+  await until(() => tracked.busySince() !== undefined, "没有忙碌起点");
+  await stopApp(first);
+  const second = await bootIdle(data);
+  apps.push(second);
+  const entry = attachRuntime(second.runtimes!, agent.id, data, true);
+  await listenOn(second.app, port);
+  await until(
+    () => tracked.headersSeen.length >= 2 && second.pendingWaits() === 1,
+    "重连后没有继续挂着等",
+  );
+  await delay(200);
+  assert.equal(settled, false, "重连时还在忙，不能提前返回");
+  assert.equal(tracked.headersSeen[1], tracked.headersSeen[0]);
+  const runAt = tracked.busySince()! + 120_000;
+  insertRunEnd(data, agent.id, runAt, "gap-runtime");
+  entry.info.busy = false;
+  await wake(`http://127.0.0.1:${port}`, chat.id);
+  const result = await done;
+  assert.equal(result.status, "idle");
+  assert.equal(result.timed_out, false);
+  assert.equal(result.finished_at, runAt);
+});
+
+test("没接上且中途没忙过：重连不带 busy_since，接上后也不编造结束时刻", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-unbound-header-"));
+  const created = await bootIdle(data);
+  const pi = spawn("sleep", ["60"]);
+  t.after(async () => {
+    pi.kill("SIGKILL");
+    await stopApp(created).catch(() => undefined);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const agent = created.store.createAgent("未接上身份", data).agent;
+  const chat = created.store.createChat("唤醒", [agent.id], agent.id);
+  created.store.run(
+    "UPDATE agents SET runtime_pid=? WHERE id=?",
+    pi.pid!,
+    agent.id,
+  );
+  const { origin } = await listenOn(created.app);
+  let settled = false;
+  const tracked = trackIdle(origin, data, agent.id);
+  const done = tracked.pending.then((result) => {
+    settled = true;
+    return result;
+  });
+  await until(() => created.pendingWaits() === 1, "等待没有挂上");
+  await delay(200);
+  assert.equal(settled, false, "没接上之前不能报空闲");
+  assert.deepEqual(tracked.headersSeen, [undefined]);
+  created.app.server.closeAllConnections();
+  await until(() => tracked.urls.length >= 2, "断开后没有重连");
+  assert.ok(
+    tracked.urls.every((url) => !url.includes("busy_since")),
+    `重连不该带 busy_since：${tracked.urls.join(" ")}`,
+  );
+  assert.ok(tracked.headersSeen.every((value) => value === undefined));
+  attachRuntime(created.runtimes!, agent.id, data, false);
+  await wake(origin, chat.id);
+  const result = await done;
+  assert.equal(result.status, "idle");
+  assert.equal(result.timed_out, false);
+  assert.equal(result.finished_at, null);
+});
+
+async function freePort() {
+  const socket = createServer();
+  await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
+  const port = (socket.address() as { port: number }).port;
+  await new Promise<void>((resolve) => socket.close(() => resolve()));
+  return port;
+}
+
+function spawnHarness(
+  data: string,
+  port: number,
+  mode: string,
+  status: string,
+  oldEnd = false,
+) {
+  let stderr = "";
+  const child = spawn(process.execPath, ["--import", "tsx", harnessPath], {
+    cwd: packageRoot,
+    env: {
+      ...process.env,
+      ATRIUM_DATA: data,
+      ATRIUM_PORT: String(port),
+      ATRIUM_PI_HOME: join(data, "pi"),
+      ATRIUM_DESKTOPS: join(data, "desktops"),
+      PI_ACP_DIR: join(data, "acp"),
+      ATRIUM_PI_ACP_ENTRY: fakeAcp,
+      HARNESS_PORT: String(port),
+      HARNESS_MODE: mode,
+      HARNESS_STATUS: status,
+      ...(oldEnd ? { HARNESS_OLD_END: "1" } : {}),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  return { child, stderr: () => stderr };
+}
+
+async function harnessRows(status: string, label: string, seen?: Set<number>) {
+  let last = "";
+  for (let i = 0; i < 200; i++) {
+    try {
+      last = readFileSync(status, "utf8");
+    } catch {
+      last = "";
+    }
+    const rows: Array<Record<string, unknown>> = [];
+    for (const line of last.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        rows.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {
+        /* 读到半行就等下一次 */
+      }
+    }
+    const failed = rows.find((row) => typeof row.error === "string");
+    if (failed) throw new Error(`${String(failed.error)}\n${label}`);
+    const ready = rows.find(
+      (row) => row.ready === true && !seen?.has(Number(row.pid)),
+    );
+    if (ready) {
+      seen?.add(Number(ready.pid));
+      return rows;
+    }
+    await delay(50);
+  }
+  throw new Error(`${label}：${last}`);
+}
+
+test(
+  "命令行：忙碌时崩溃，间隙结束后输出本轮结束于，而不是没有运行中的一轮",
+  { timeout: 90_000 },
+  async (t) => {
+    const data = mkdtempSync(join(tmpdir(), "atrium-idle-cli-"));
+    const tracked = trackFixture(data, data);
+    const status = join(data, "harness-status.json");
+    const port = await freePort();
+    const children: ReturnType<typeof spawn>[] = [];
+    t.after(() => {
+      for (const child of children)
+        if (child.pid && alive(child.pid)) process.kill(child.pid, "SIGKILL");
+      const record = readService(data);
+      if (record && record.pid !== process.pid && alive(record.pid))
+        process.kill(record.pid, "SIGKILL");
+      rmSync(data, { recursive: true, force: true });
+      untrackFixture(tracked);
+    });
+    const seen = new Set<number>();
+    const first = spawnHarness(data, port, "busy", status);
+    children.push(first.child);
+    trackChild(tracked, first.child);
+    const ready = await harnessRows(
+      status,
+      first.stderr() || "第一段服务没起来",
+      seen,
+    );
+    const agent = ready.find((row) => row.ready === true) as {
+      id: string;
+      ref: string;
+      name: string;
+    };
+    const cli = spawn(
+      process.execPath,
+      [
+        join(packageRoot, "bin/atrium.mjs"),
+        "wait",
+        agent.ref,
+        "--idle",
+        "--timeout",
+        "40",
+      ],
+      {
+        cwd: packageRoot,
+        env: {
+          ...process.env,
+          ATRIUM_DATA: data,
+          ATRIUM_PORT: String(port),
+          ATRIUM_PI_HOME: join(data, "pi"),
+          ATRIUM_DESKTOPS: join(data, "desktops"),
+          PI_ACP_DIR: join(data, "acp"),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    children.push(cli);
+    trackChild(tracked, cli);
+    let stdout = "";
+    let stderr = "";
+    cli.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    cli.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const exited = new Promise<number>((resolve) =>
+      cli.on("exit", (code) => resolve(code ?? -1)),
+    );
+    let statusText = "";
+    for (let i = 0; i < 200 && !statusText.includes("waiting"); i++) {
+      try {
+        statusText = readFileSync(status, "utf8");
+      } catch {
+        statusText = "";
+      }
+      await delay(50);
+    }
+    assert.match(
+      statusText,
+      /waiting/,
+      `等待没有挂上 stderr=${stderr} harness=${first.stderr()}`,
+    );
+    const waitStarted = Date.now();
+    assert.ok(first.child.pid);
+    process.kill(first.child.pid, "SIGKILL");
+    await new Promise((resolve) => first.child.once("exit", resolve));
+    assert.equal(
+      countRunEnds(data, agent.id),
+      0,
+      "SIGKILL 之后新进程起来前，trace_actions 里没有这一轮的 run_end",
+    );
+    const runAt = Date.now() + 120_000;
+    insertRunEnd(data, agent.id, runAt, "gap-runtime");
+    const second = spawnHarness(data, port, "resume-idle", status);
+    children.push(second.child);
+    trackChild(tracked, second.child);
+    await harnessRows(status, second.stderr() || "第二段服务没起来", seen);
+    const code = await exited;
+    assert.equal(
+      code,
+      0,
+      `stdout=${stdout} stderr=${stderr} harness=${second.stderr()}`,
+    );
+    assert.match(stderr, /服务重启或断开/);
+    assert.doesNotMatch(stdout, /没有运行中的一轮/);
+    assert.match(
+      stdout,
+      new RegExp(
+        `${agent.name} 空闲 · 本轮结束于 ${when(runAt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+      ),
+    );
+    assert.ok(runAt >= waitStarted);
+    const requests = readFileSync(status, "utf8")
+      .split("\n")
+      .filter((line) => line.includes("busy_since"));
+    assert.ok(requests.length > 0, "重连请求要带上 busy_since");
+  },
+);
+
+test(
+  "命令行：开始就空闲时立刻说明没有运行中的一轮，--json 的 finished_at 为 null",
+  { timeout: 60_000 },
+  async (t) => {
+    const data = mkdtempSync(join(tmpdir(), "atrium-idle-cli-idle-"));
+    const tracked = trackFixture(data, data);
+    const status = join(data, "harness-status.json");
+    const port = await freePort();
+    const children: ReturnType<typeof spawn>[] = [];
+    t.after(() => {
+      for (const child of children)
+        if (child.pid && alive(child.pid)) process.kill(child.pid, "SIGKILL");
+      rmSync(data, { recursive: true, force: true });
+      untrackFixture(tracked);
+    });
+    const service = spawnHarness(data, port, "idle", status, true);
+    children.push(service.child);
+    trackChild(tracked, service.child);
+    const ready = await harnessRows(status, service.stderr() || "服务没起来");
+    const agent = ready.find((row) => row.ready === true) as {
+      ref: string;
+      name: string;
+    };
+    const text = spawn(
+      process.execPath,
+      [
+        join(packageRoot, "bin/atrium.mjs"),
+        "wait",
+        agent.ref,
+        "--idle",
+        "--timeout",
+        "10",
+      ],
+      {
+        cwd: packageRoot,
+        env: {
+          ...process.env,
+          ATRIUM_DATA: data,
+          ATRIUM_PORT: String(port),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    children.push(text);
+    trackChild(tracked, text);
+    let stdout = "";
+    let stderr = "";
+    text.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    text.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const textCode = await new Promise<number>((resolve) =>
+      text.on("exit", (code) => resolve(code ?? -1)),
+    );
+    assert.equal(
+      textCode,
+      0,
+      `stdout=${stdout} stderr=${stderr} harness=${service.stderr()}`,
+    );
+    assert.match(
+      stdout,
+      new RegExp(`${agent.name} 空闲（当前没有运行中的一轮）`),
+    );
+    assert.doesNotMatch(stdout, /本轮结束于/);
+    const json = spawn(
+      process.execPath,
+      [
+        join(packageRoot, "bin/atrium.mjs"),
+        "wait",
+        agent.ref,
+        "--idle",
+        "--json",
+        "--timeout",
+        "10",
+      ],
+      {
+        cwd: packageRoot,
+        env: {
+          ...process.env,
+          ATRIUM_DATA: data,
+          ATRIUM_PORT: String(port),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    children.push(json);
+    trackChild(tracked, json);
+    let jsonOut = "";
+    json.stdout.on("data", (chunk) => {
+      jsonOut += String(chunk);
+    });
+    const jsonCode = await new Promise<number>((resolve) =>
+      json.on("exit", (code) => resolve(code ?? -1)),
+    );
+    assert.equal(jsonCode, 0, jsonOut);
+    const outer = JSON.parse(jsonOut) as {
+      ok: boolean;
+      result: { finished_at: number | null; status: string };
+    };
+    assert.equal(outer.ok, true);
+    assert.equal(outer.result.status, "idle");
+    assert.equal(outer.result.finished_at, null);
+  },
+);
 
 async function send0(
   f: Awaited<ReturnType<typeof fixture>>,

@@ -1364,6 +1364,17 @@ export async function createApp(options: {
     after: z.coerce.number().int().nonnegative().optional(),
     timeout: z.coerce.number().int().min(1).max(3600).default(300),
   });
+  // 崩溃重连带回来的观察起点：上一进程看见忙碌时的服务端时钟。缺省表示这次请求自己观察。
+  function observedBusySince(value: unknown): number | undefined {
+    if (value === undefined) return undefined;
+    if (
+      typeof value !== "string" ||
+      !/^(0|[1-9]\d*)$/.test(value) ||
+      !Number.isSafeInteger(Number(value))
+    )
+      throw new Problem(400, "busy_since 必须是非负整数毫秒");
+    return Number(value);
+  }
   function longWait<T>(
     reply: import("fastify").FastifyReply,
     timeout: number,
@@ -1439,6 +1450,9 @@ export async function createApp(options: {
   });
   app.get("/api/agents/:agent/wait", (request, reply) => {
     const q = waitQuery.pick({ timeout: true }).parse(request.query);
+    const carried = observedBusySince(
+      (request.query as { busy_since?: unknown }).busy_since,
+    );
     const agentId = identityRef(request);
     store.agent(agentId);
     const state = (): "busy" | "idle" | "offline" | null => {
@@ -1448,8 +1462,35 @@ export async function createApp(options: {
       if (runtimes?.running(agentId)) return null;
       return "offline" as const;
     };
-    let sawBusy = state() === "busy";
-    const startedAt = Date.now();
+    const initial = state();
+    // 新进程没有「开始时在忙」的记忆。重连把上一进程的起点带回来，才算见过忙碌。
+    let sawBusy = carried !== undefined || initial === "busy";
+    const startedAt = carried ?? Date.now();
+    // 不带 busy_since 时仍只认当前连接的 runtime_id / generation；连接已不在就用当前时间。
+    // 带了起点的重连不再限定代际：旧进程的连接信息新进程拿不到，只按身份取最新一条。
+    const finishAt = () => {
+      if (carried === undefined) {
+        const info = runtimes?.connections.get(agentId)?.info;
+        return (
+          (info &&
+            store.one<{ at: number }>(
+              "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
+              agentId,
+              info.runtimeId,
+              info.generation,
+              startedAt,
+            )?.at) ||
+          Date.now()
+        );
+      }
+      return (
+        store.one<{ at: number }>(
+          "SELECT at FROM trace_actions WHERE agent_id=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
+          agentId,
+          startedAt,
+        )?.at || Date.now()
+      );
+    };
     longWait(
       reply,
       q.timeout,
@@ -1461,18 +1502,7 @@ export async function createApp(options: {
         }
         // 没接上：既不能判空闲，也不能报离线，等下一次判定。
         if (status === null) return null;
-        const info = runtimes?.connections.get(agentId)?.info;
-        const ended = sawBusy
-          ? (info &&
-              store.one<{ at: number }>(
-                "SELECT at FROM trace_actions WHERE agent_id=? AND runtime_id=? AND generation=? AND kind='run_end' AND at>=? ORDER BY id DESC LIMIT 1",
-                agentId,
-                info.runtimeId,
-                info.generation,
-                startedAt,
-              )?.at) ||
-            Date.now()
-          : null;
+        const ended = sawBusy ? finishAt() : null;
         return {
           status: status as "busy" | "idle" | "offline",
           finished_at: ended,
@@ -1491,6 +1521,10 @@ export async function createApp(options: {
         timed_out: true,
         restarting: true,
       }),
+      // 挂上时正在忙才交代起点。命令行重连把它放进 busy_since；当时不忙就没有这个头。
+      initial === "busy"
+        ? { "X-Atrium-Busy-Since": String(startedAt) }
+        : undefined,
     );
   });
   app.patch("/api/chats/:id", (request) => {

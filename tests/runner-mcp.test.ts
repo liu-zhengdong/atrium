@@ -92,22 +92,43 @@ test("MCP proxy generates client_id, resends once with the same key after post-w
   assert.equal(messages.size, 1);
 });
 
-test("已记录容器写者时旧宿主 MCP capability 拒绝请求", async (t) => {
-  let permitted = true;
-  const proxy = new RunnerMcp(
-    "http://127.0.0.1:1",
-    () => false,
-    "fake-runner-token",
-    100,
-    () => permitted,
-  );
-  await proxy.start();
-  t.after(() => proxy.close());
-  const oldUrl = proxy.url("a1");
-  permitted = false;
-  assert.throws(() => proxy.url("a1"), /容器身份不能使用宿主 MCP 通路/);
-  assert.equal((await fetch(oldUrl, { method: "POST" })).status, 403);
-});
+test(
+  "已记录容器写者时旧宿主 MCP capability 拒绝请求",
+  { timeout: 3_000 },
+  async (t) => {
+    let permitted = true;
+    let checks = 0;
+    let observed!: () => void;
+    const requestObserved = new Promise<void>((resolve) => {
+      observed = resolve;
+    });
+    const proxy = new RunnerMcp(
+      "http://127.0.0.1:1",
+      () => false,
+      "fake-runner-token",
+      1_500,
+      () => {
+        if (++checks === 2) observed();
+        return permitted;
+      },
+    );
+    await proxy.start();
+    t.after(() => proxy.close());
+    const oldUrl = proxy.url("a1");
+    const pending = fetch(oldUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        call("atrium_send_message", { chat_id: "c1", body: "不可迟到" }),
+      ),
+    });
+    await requestObserved; // The old capability was accepted and is waiting offline.
+    permitted = false;
+    assert.equal((await pending).status, 403, "等待重连的旧调用不得晚到");
+    assert.throws(() => proxy.url("a1"), /容器身份不能使用宿主 MCP 通路/);
+    assert.equal((await fetch(oldUrl, { method: "POST" })).status, 403);
+  },
+);
 
 test("a client that abandoned an offline call cannot trigger a late send", async (t) => {
   let connected = false;

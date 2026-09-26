@@ -156,6 +156,10 @@ export class RunnerMcp {
         this.error(reply, call, mcpConnectionProblem(prepared, outcomeUnknown));
         return;
       }
+      if (!this.allowed(match[1])) {
+        reply.writeHead(403).end();
+        return;
+      }
       if (this.connected()) {
         try {
           const result = await send();

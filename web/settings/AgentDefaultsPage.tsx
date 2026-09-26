@@ -67,7 +67,7 @@ export function AgentDefaultsPage({
   }, []);
   useEffect(() => {
     let active = true;
-    api<ModelOption[]>("/models")
+    api<ModelOption[]>("/settings/agent-defaults/models")
       .then((options) => {
         if (active) setModelChoices(options);
       })

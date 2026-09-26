@@ -6,6 +6,7 @@ import { blockImeSubmit, isImeKey } from "../keys.ts";
 import { Avatar, type Agent } from "../components/AgentAvatar.tsx";
 import { AssignmentPicker } from "./AssignmentPicker.tsx";
 import type { Account } from "./types.ts";
+import { retiredProvider } from "../../shared/providers.ts";
 
 function expiry(timestamp: number | null) {
   if (!timestamp) return "";
@@ -48,6 +49,7 @@ export function AccountRow({
     .map((id) => agents.find((agent) => agent.ref === id))
     .filter((agent): agent is Agent => !!agent);
   const agentNames = assignedAgents.map((agent) => agent.name);
+  const retired = retiredProvider(account.provider);
   return (
     <section ref={root} className="py-5 first:pt-0">
       <div className="flex items-start justify-between gap-3">
@@ -55,11 +57,12 @@ export function AccountRow({
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="m-0 truncate text-sm font-medium">{account.name}</h2>
             <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${account.status === "ready" ? "bg-[#63976c]" : account.status === "pending" ? "bg-[#d1a15b]" : "bg-[#ba7963]"}`}
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${retired ? "bg-[#c8c5bc]" : account.status === "ready" ? "bg-[#63976c]" : account.status === "pending" ? "bg-[#d1a15b]" : "bg-[#ba7963]"}`}
               aria-label={`状态：${account.status}`}
               title={account.status}
             />
             <span className="badge">{account.provider}</span>
+            {retired && <span className="badge">不再支持</span>}
           </div>
           <p className="mb-0 mt-1.5 text-xs text-muted">
             {account.type === "local"
@@ -72,10 +75,22 @@ export function AccountRow({
             {account.type === "setup_token" &&
               account.credential_updated_at &&
               ` · ${new Date(account.credential_updated_at).toLocaleDateString("zh-CN")} 录入`}
-            {expiry(account.expires) && ` · ${expiry(account.expires)}`}
+            {!retired &&
+              expiry(account.expires) &&
+              ` · ${expiry(account.expires)}`}
             {account.last_error &&
               ` · ${account.last_error === "未知错误" && !account.expires ? "登录未完成" : account.last_error}`}
           </p>
+          {retired && (
+            <p className="mb-0 mt-1.5 break-all text-xs text-muted">
+              {retired.reason}
+              {retired.fix && (
+                <>
+                  ：<code>{retired.fix}</code>
+                </>
+              )}
+            </p>
+          )}
           {account.type === "setup_token" && account.status === "error" && (
             <p className="mb-0 mt-1.5 break-all text-xs text-muted">
               更换令牌：
@@ -102,6 +117,7 @@ export function AccountRow({
             </button>
           )}
           {account.type === "oauth" &&
+            !retired &&
             (account.status === "error" ||
               (account.expires !== null && account.expires < Date.now())) && (
               <button className="button secondary !text-xs" onClick={relogin}>

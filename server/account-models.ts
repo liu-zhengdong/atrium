@@ -8,9 +8,11 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { privateWrite } from "./account-files.ts";
 import { modelEntry, type CustomConfig } from "./custom-providers.ts";
 import { Problem } from "./store.ts";
+import { supplementEntry } from "./provider-directory.ts";
 
 type Member = {
   key: string;
@@ -79,23 +81,23 @@ function members(
 function updateProvider(
   text: string,
   provider: string,
-  config?: CustomConfig,
+  entry?: unknown,
 ): string {
   const root = members(text, space(text, 0));
   const providers = root.entries.find((item) => item.key === "providers");
   if (!providers) {
-    if (!config) return text;
-    const insert = `${root.entries.length ? "," : ""}\n  "providers": ${JSON.stringify({ [provider]: modelEntry(config) })}\n`;
+    if (!entry) return text;
+    const insert = `${root.entries.length ? "," : ""}\n  "providers": ${JSON.stringify({ [provider]: entry })}\n`;
     return text.slice(0, root.close) + insert + text.slice(root.close);
   }
   const list = members(text, providers.valueStart);
   const index = list.entries.findIndex((item) => item.key === provider);
   if (index >= 0) {
     const item = list.entries[index]!;
-    if (config)
+    if (entry)
       return (
         text.slice(0, item.valueStart) +
-        JSON.stringify(modelEntry(config)) +
+        JSON.stringify(entry) +
         text.slice(item.valueEnd)
       );
     const next = list.entries[index + 1];
@@ -105,28 +107,21 @@ function updateProvider(
       text.slice(0, prev ? prev.valueEnd : item.start) + text.slice(list.close)
     );
   }
-  if (!config) return text;
-  const insert = `${list.entries.length ? "," : ""}\n    ${JSON.stringify(provider)}: ${JSON.stringify(modelEntry(config))}\n`;
+  if (!entry) return text;
+  const insert = `${list.entries.length ? "," : ""}\n    ${JSON.stringify(provider)}: ${JSON.stringify(entry)}\n`;
   return text.slice(0, list.close) + insert + text.slice(list.close);
 }
-export function setAccountModel(
-  directory: string,
-  provider: string,
-  config?: CustomConfig,
-) {
-  const file = join(directory, "models.json");
-  if (!existsSync(file)) {
-    if (config)
-      privateWrite(file, { providers: { [provider]: modelEntry(config) } });
-    return;
-  }
+/** 读身份 models.json 原文；读不了不覆盖。 */
+function readModels(file: string): { text: string; json: any } | null {
+  if (!existsSync(file)) return null;
   const text = readFileSync(file, "utf8");
   try {
-    JSON.parse(text);
+    return { text, json: JSON.parse(text) };
   } catch {
     throw new Problem(409, "身份 models.json 无法读取，未覆盖");
   }
-  const updated = updateProvider(text, provider, config);
+}
+function writeModels(file: string, text: string, updated: string) {
   JSON.parse(updated);
   if (updated === text) return;
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -137,4 +132,55 @@ export function setAccountModel(
   } finally {
     rmSync(temp, { force: true });
   }
+}
+export function setAccountModel(
+  directory: string,
+  provider: string,
+  config?: CustomConfig,
+) {
+  const file = join(directory, "models.json");
+  const current = readModels(file);
+  if (!current) {
+    if (config)
+      privateWrite(file, { providers: { [provider]: modelEntry(config) } });
+    return;
+  }
+  writeModels(
+    file,
+    current.text,
+    updateProvider(current.text, provider, config && modelEntry(config)),
+  );
+}
+/**
+ * Pi 自带供应商的补充模型（#242）：身份没给这个供应商写过配置时才写入，
+ * 撤销时只删与 Atrium 写入内容一致的条目，身份自己的配置不动。
+ */
+export function setSupplementModels(
+  directory: string,
+  provider: string,
+  assigned: boolean,
+) {
+  const entry = supplementEntry(provider);
+  if (!entry) return;
+  const file = join(directory, "models.json");
+  // 补充模型只是锦上添花：身份的 models.json 读不了时照常分配，只少几个新模型。
+  let current: ReturnType<typeof readModels>;
+  try {
+    current = readModels(file);
+  } catch {
+    console.warn(`身份 models.json 无法读取，跳过 ${provider} 的补充模型`);
+    return;
+  }
+  if (!current) {
+    if (assigned) privateWrite(file, { providers: { [provider]: entry } });
+    return;
+  }
+  const existing = current.json?.providers?.[provider];
+  if (assigned ? existing !== undefined : !isDeepStrictEqual(existing, entry))
+    return;
+  writeModels(
+    file,
+    current.text,
+    updateProvider(current.text, provider, assigned ? entry : undefined),
+  );
 }

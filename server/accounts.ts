@@ -23,16 +23,16 @@ import { AccountLogin } from "./account-login.ts";
 import { repairAccountFiles } from "./account-repair.ts";
 import { AccountRefresh } from "./account-refresh.ts";
 import { AccountWorker } from "./account-worker-client.ts";
-import { ProviderDirectory } from "./provider-directory.ts";
+import { ProviderDirectory, supplementEntry } from "./provider-directory.ts";
+import { retiredProvider, type ProviderEntry } from "../shared/providers.ts";
 import { validateKey, validationReason } from "./account-validation.ts";
-import { defaultTemplate, readIdentityModel } from "./profile.ts";
-import { seedModelsStore } from "./model.ts";
+import { readIdentityModel } from "./profile.ts";
 import {
   checkedCustom,
   CustomProviders,
   type CustomConfig,
 } from "./custom-providers.ts";
-import { setAccountModel } from "./account-models.ts";
+import { setAccountModel, setSupplementModels } from "./account-models.ts";
 import { Problem, type Store } from "./store.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { UNASSIGNED } from "./assignment.ts";
@@ -90,7 +90,7 @@ export class Accounts {
     const worker = new AccountWorker(this.files);
     this.worker = worker;
     this.refreshService = new AccountRefresh(store, this.files, worker);
-    this.providers = new ProviderDirectory(worker);
+    this.providers = new ProviderDirectory();
     this.loginService = new AccountLogin(
       store,
       this.files,
@@ -101,21 +101,14 @@ export class Accounts {
       this.remember(value),
     );
   }
-  async providersList() {
-    const builtIn = await this.providers.list();
+  /** 可新建账号的供应商：Atrium 维护的列表加自定义兼容供应商；不含 Claude（#193）。 */
+  providersList(): ProviderEntry[] {
     return [
-      ...builtIn.filter((entry) => entry.id !== LOCAL_PROVIDER),
-      {
-        id: LOCAL_PROVIDER,
-        name: LOCAL_NAME,
-        methods: ["local" as const, "setup_token" as const],
-        packagePath: null,
-      },
+      ...this.providers.list(),
       ...Object.keys(this.custom.all()).map((id) => ({
         id,
         name: id,
         methods: ["api_key" as const],
-        packagePath: null,
       })),
     ];
   }
@@ -143,11 +136,6 @@ export class Accounts {
         .map((item) => item.id)
         .filter((id) => typeof id === "string"),
     };
-  }
-  preloadProviders() {
-    void this.providers.list().catch((error: unknown) => {
-      console.warn("供应商目录预加载失败：", error);
-    });
   }
   credentialMode(id: string) {
     return this.catalog.credentialMode(id);
@@ -182,13 +170,8 @@ export class Accounts {
     if (!key.trim()) throw new Problem(400, "API Key 不能为空");
     const custom = this.custom.get(provider);
     const entry = custom
-      ? {
-          id: provider,
-          name: provider,
-          packagePath: null,
-          methods: ["api_key" as const],
-        }
-      : await this.providers.require(providerName.parse(provider), "api_key");
+      ? { id: provider, name: provider, methods: ["api_key" as const] }
+      : this.providers.require(providerName.parse(provider), "api_key");
     const validation = await validateKey(this.worker, entry, key, custom);
     if (validation.status === "rejected")
       throw new Problem(
@@ -212,20 +195,16 @@ export class Accounts {
     if (custom) {
       custom = checkedCustom(provider, custom);
       if (
-        (await this.providers.list()).some((entry) => entry.id === provider) ||
+        this.providers.list().some((entry) => entry.id === provider) ||
+        retiredProvider(provider) ||
         this.custom.get(provider)
       )
         throw new Problem(409, "供应商名称已存在");
     }
     custom ??= this.custom.get(provider) ?? undefined;
     const entry = custom
-      ? {
-          id: provider,
-          name: provider,
-          methods: ["api_key" as const],
-          packagePath: null,
-        }
-      : await this.providers.require(provider, "api_key");
+      ? { id: provider, name: provider, methods: ["api_key" as const] }
+      : this.providers.require(provider, "api_key");
     const validation = await validateKey(this.worker, entry, key, custom);
     if (creatingCustom && validation.status !== "verified")
       throw new Problem(
@@ -365,13 +344,8 @@ export class Accounts {
     if (!key && custom)
       key = (this.load(row) as Extract<Credential, { type: "api_key" }>).key;
     const entry = custom
-      ? {
-          id: row.provider,
-          name: row.provider,
-          methods: ["api_key" as const],
-          packagePath: null,
-        }
-      : await this.providers.require(row.provider, "api_key");
+      ? { id: row.provider, name: row.provider, methods: ["api_key" as const] }
+      : this.providers.require(row.provider, "api_key");
     const validation = await validateKey(this.worker, entry, key, custom);
     if (custom && validation.status !== "verified")
       throw new Problem(
@@ -520,8 +494,15 @@ export class Accounts {
     if (replace && !previous) throw new Problem(409, "该身份没有可替换的账号");
     if (!agent.agent_directory)
       throw new Problem(409, "身份没有配置目录，请先启动身份");
-    // 带上模板里这个供应商的模型目录缓存，没启动过的身份也能列/设模型。
-    seedModelsStore(agent.agent_directory, row.provider, defaultTemplate());
+    const retired = retiredProvider(row.provider);
+    if (retired)
+      throw new Problem(
+        409,
+        `${ref}：${retired.reason}`,
+        "provider_retired",
+        undefined,
+        retired.fix,
+      );
     if (
       row.provider === "antigravity" &&
       !existsSync(join(this.files.dir(row.number), "antigravity-accounts.json"))
@@ -566,9 +547,10 @@ export class Accounts {
       join(agent.agent_directory, "auth.json"),
     );
     const custom = this.custom.get(row.provider);
-    const restoreModels = custom
-      ? restoreFileOnFailure(join(agent.agent_directory, "models.json"))
-      : null;
+    const restoreModels =
+      custom || supplementEntry(row.provider)
+        ? restoreFileOnFailure(join(agent.agent_directory, "models.json"))
+        : null;
     const restoreSidecar = sidecar ? restoreFileOnFailure(sidecar) : null;
     let preserved: string | null = null;
     try {
@@ -588,6 +570,7 @@ export class Accounts {
         this.files.sidecar(row, agent.agent_directory!);
         if (custom)
           setAccountModel(agent.agent_directory!, row.provider, custom);
+        else setSupplementModels(agent.agent_directory!, row.provider, true);
         if (previous)
           this.store.run(
             "UPDATE account_assignments SET account_number=? WHERE agent_id=? AND provider=?",
@@ -647,6 +630,7 @@ export class Accounts {
       });
       if (this.custom.get(provider))
         setAccountModel(agent.agent_directory, provider);
+      else setSupplementModels(agent.agent_directory, provider, false);
       if (provider === "antigravity")
         rmSync(join(agent.agent_directory, "antigravity-accounts.json"), {
           force: true,

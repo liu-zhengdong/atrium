@@ -4,6 +4,7 @@ import { connect } from "./service.ts";
 import { printJson, table } from "./format.ts";
 import { str, type Command, type Values } from "./main.ts";
 import { Problem } from "../server/problem.ts";
+import { retiredProvider } from "../shared/providers.ts";
 
 type Account = {
   id: string;
@@ -103,6 +104,7 @@ export const accountCommands: Record<string, Command> = {
     async run({ json }) {
       const list = await (await connect()).get<Account[]>("/accounts");
       if (json) return printJson(list);
+      const retired = list.filter((a) => retiredProvider(a.provider));
       console.log(
         list.length
           ? table([
@@ -112,13 +114,17 @@ export const accountCommands: Record<string, Command> = {
                 a.provider,
                 a.name,
                 a.type === "local" ? "本机登录 · 不保存 Key" : a.type,
-                a.status,
+                retiredProvider(a.provider) ? "不再支持" : a.status,
                 a.expires ? new Date(a.expires).toLocaleString() : "",
                 a.assigned.join(","),
               ]),
             ])
           : "暂无账号",
       );
+      for (const a of retired) {
+        const { reason, fix } = retiredProvider(a.provider)!;
+        console.log(`${a.id}：${reason}${fix ? `\n  ${fix}` : ""}`);
+      }
     },
   },
   "account add": {

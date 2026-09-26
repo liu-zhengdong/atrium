@@ -1,82 +1,36 @@
 import { classifyRefreshError } from "./account-error.mjs";
-import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
-import { sep } from "node:path";
 import {
   createAgentSession,
+  DefaultResourceLoader,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
-// This process owns the SDK and the provider plugin. Never send credentials over IPC.
+// This process owns the SDK. Never send credentials over IPC.
+// 供应商协议只用 Pi 自带实现：不加载账号目录或个人模板里的任何插件（#242）。
 const [directory, provider, operation] = process.argv.slice(2);
 process.env.PI_CODING_AGENT_DIR = directory;
 const send = (message) => process.send?.(message);
 let session;
-let failure = "未知错误";
 try {
-  let resourceLoader;
-  let registrations = [];
-  if (operation === "list") {
-    resourceLoader = new DefaultResourceLoader({
-      agentDir: directory,
-      cwd: directory,
-    });
-    await resourceLoader.reload();
-    const runtime = resourceLoader.getExtensions().runtime;
-    registrations = [
-      ...runtime.pendingProviderRegistrations.map(
-        ({ name, extensionPath }) => ({ id: name, extensionPath }),
-      ),
-      ...runtime.pendingNativeProviderRegistrations.map(
-        ({ provider, extensionPath }) => ({ id: provider.id, extensionPath }),
-      ),
-    ];
-  }
+  const resourceLoader = new DefaultResourceLoader({
+    agentDir: directory,
+    cwd: directory,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await resourceLoader.reload();
   const created = await createAgentSession({
     agentDir: directory,
     cwd: directory,
     sessionManager: SessionManager.inMemory(),
     noTools: "all",
-    ...(resourceLoader ? { resourceLoader } : {}),
+    resourceLoader,
   });
   session = created.session;
-  if (created.extensionsResult.errors.length) {
-    if (operation === "list")
-      send({ kind: "warning", count: created.extensionsResult.errors.length });
-    else {
-      failure = "Provider 插件加载失败";
-      throw new Error(failure);
-    }
-  }
-  if (operation === "list") {
-    const roots = created.extensionsResult.extensions
-      .filter((extension) => extension.sourceInfo.origin === "package")
-      .map((extension) => ({
-        path: extension.resolvedPath,
-        baseDir: extension.sourceInfo.baseDir,
-      }));
-    const providers = session.modelRuntime.getProviders().map((item) => {
-      const registration = registrations.find((entry) => entry.id === item.id);
-      const root =
-        registration &&
-        roots.find(
-          (entry) =>
-            entry.path === registration.extensionPath ||
-            registration.extensionPath.startsWith(entry.baseDir + sep),
-        );
-      const packagePath = root?.baseDir ?? null;
-      return {
-        id: item.id,
-        name: item.name,
-        methods: [
-          item.auth.oauth && "oauth",
-          item.auth.apiKey && "api_key",
-        ].filter(Boolean),
-        packagePath,
-      };
-    });
-    send({ kind: "list", providers });
-    send({ kind: "done" });
-  } else if (operation === "validate") {
+  if (operation === "validate") {
     // 上下文已加载完，接下来是请求供应商阶段；超时归因要用（#223）。
     send({ kind: "phase", phase: "request" });
     const model = session.modelRuntime.getModels(provider)[0];
@@ -147,13 +101,7 @@ try {
     send({ kind: "done" });
   }
 } catch (error) {
-  send({
-    kind: "error",
-    category:
-      failure === "Provider 插件加载失败"
-        ? failure
-        : classifyRefreshError(error),
-  });
+  send({ kind: "error", category: classifyRefreshError(error) });
   process.exitCode = 1;
 } finally {
   session?.dispose();

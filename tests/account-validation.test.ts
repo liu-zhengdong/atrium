@@ -79,19 +79,26 @@ function fixturePackage(directory: string, marker: string) {
   );
 }
 
-test("内置与插件校验只带需要的包：不复制模板、插件包仍加载、秒级完成", async () => {
+test("校验与刷新只用 Pi 自带实现：模板和账号目录里的插件包都不加载（#242）", async () => {
   const root = mkdtempSync(join(tmpdir(), "atrium-key-scope-test-"));
   const markerA = join(root, "marker-template-loaded");
-  const markerB = join(root, "marker-plugin-loaded");
+  const markerB = join(root, "marker-account-loaded");
   const template = join(root, "template");
-  const plugin = join(root, "plugin");
+  const account = join(root, "account");
   mkdirSync(template, { recursive: true });
   fixturePackage(join(template, "probe-a"), markerA);
   writeFileSync(
     join(template, "settings.json"),
     JSON.stringify({ packages: [join(template, "probe-a")] }),
   );
-  fixturePackage(plugin, markerB);
+  // 旧账号目录里留着指向插件的 settings.json，刷新时也不能再加载它。
+  fixturePackage(join(root, "probe-b"), markerB);
+  mkdirSync(account);
+  writeFileSync(
+    join(account, "settings.json"),
+    JSON.stringify({ packages: [join(root, "probe-b")] }),
+  );
+  writeFileSync(join(account, "auth.json"), "{}");
   const old = process.env.ATRIUM_PI_TEMPLATE;
   process.env.ATRIUM_PI_TEMPLATE = template;
   const worker = new AccountWorker(
@@ -104,24 +111,30 @@ test("内置与插件校验只带需要的包：不复制模板、插件包仍�
       {
         id: "no-such-provider",
         name: "no-such-provider",
-        packagePath: plugin,
         methods: ["api_key"],
       },
       "FAKE_KEY",
     );
     const elapsedMs = Date.now() - startedAt;
-    // 此供应商没有模型可请求，整个过程不联网；老路径复制模板会在 15 秒被杀并误报
+    // 此供应商没有模型可请求，整个过程不联网
     assert.equal(
       validation.status,
       "skipped",
       `意外结果：${JSON.stringify(validation)}`,
     );
-    assert.ok(
-      elapsedMs < 10_000,
-      `应在秒级完成（不装模板的包），实际 ${elapsedMs}ms`,
+    assert.ok(elapsedMs < 10_000, `应在秒级完成，实际 ${elapsedMs}ms`);
+    await assert.rejects(
+      worker.run(
+        { number: 1, provider: "no-such-provider" } as Parameters<
+          typeof worker.run
+        >[0],
+        "refresh",
+        undefined,
+        account,
+      ),
     );
-    assert.ok(!existsSync(markerA), "模板里的包不应被复制加载");
-    assert.ok(existsSync(markerB), "只带注册它的插件包时插件仍要加载");
+    assert.ok(!existsSync(markerA), "模板里的包不应加载");
+    assert.ok(!existsSync(markerB), "账号目录 settings.json 里的包不应加载");
   } finally {
     worker.close();
     if (old === undefined) delete process.env.ATRIUM_PI_TEMPLATE;
@@ -150,7 +163,6 @@ const config = (port: number) => ({
 const provider = {
   id: "local-test",
   name: "local-test",
-  packagePath: null,
   methods: ["api_key" as const],
 };
 test("同一校验层发起实际模型请求；成功、拒绝、超时不会保存或泄漏 key", async () => {
@@ -199,82 +211,5 @@ test("同一校验层发起实际模型请求；成功、拒绝、超时不会�
     server.closeAllConnections();
     server.close();
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("close 杀整组：挂死插件派生的孙进程随进程组一起死", async () => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-group-kill-"));
-  const pidFile = join(root, "grandchild.pid");
-  const plugin = join(root, "plugin");
-  mkdirSync(plugin, { recursive: true });
-  writeFileSync(
-    join(plugin, "package.json"),
-    JSON.stringify({
-      name: "hang-kill-probe",
-      version: "1.0.0",
-      pi: { extensions: ["ext.mjs"] },
-    }),
-  );
-  writeFileSync(
-    join(plugin, "ext.mjs"),
-    `import { spawn } from "node:child_process";
-import { renameSync, writeFileSync } from "node:fs";
-export default function hang() {
-  const child = spawn("sleep", ["60"], { stdio: "ignore" });
-  const tmp = ${JSON.stringify(pidFile)} + ".tmp";
-  writeFileSync(tmp, String(child.pid));
-  renameSync(tmp, ${JSON.stringify(pidFile)});
-  return new Promise(() => {});
-}
-`,
-  );
-  const worker = new AccountWorker(
-    {} as ConstructorParameters<typeof AccountWorker>[0],
-  );
-  let grandchild = 0;
-  try {
-    const validating = validateKey(
-      worker,
-      {
-        id: "no-such-provider",
-        name: "no-such-provider",
-        packagePath: plugin,
-        methods: ["api_key"],
-      },
-      "FAKE_KEY",
-    );
-    // 夹具插件进入加载阶段、派生孙进程后写 pid；不等 15 秒超时，直接 close
-    for (let i = 0; i < 100 && !existsSync(pidFile); i++)
-      await new Promise((r) => setTimeout(r, 100));
-    assert.ok(existsSync(pidFile), "夹具插件应派生孙进程并写出 pid");
-    grandchild = Number(readFileSync(pidFile, "utf8"));
-    assert.ok(Number.isInteger(grandchild) && grandchild > 0);
-    // 超时与 close 走同一个 killWorker：detached 的校验进程自成进程组，孙进程同组
-    worker.close();
-    const result = await validating;
-    assert.equal(result.status, "unverified", JSON.stringify(result));
-    // SIGKILL 后孙进程由 init 收尸，给一点回收时间
-    let alive = true;
-    for (let i = 0; i < 30 && alive; i++)
-      try {
-        process.kill(grandchild, 0);
-        await new Promise((r) => setTimeout(r, 100));
-      } catch {
-        alive = false;
-      }
-    assert.ok(
-      !alive,
-      `孙进程 ${grandchild} 应随进程组被杀，反向（去掉 detached）时它会变孤儿`,
-    );
-  } finally {
-    // 反向跑红时兜底杀掉孙进程，不留孤儿
-    if (grandchild > 0)
-      try {
-        process.kill(grandchild, "SIGKILL");
-      } catch {
-        /* 已死 */
-      }
-    worker.close();
-    rmSync(root, { recursive: true, force: true });
   }
 });

@@ -26,6 +26,7 @@ import {
   currentAssignment,
   defaultAccountName,
   methodsFor,
+  retiredProvider,
   skipMethod,
   skipProvider,
 } from "../shared/providers.ts";
@@ -214,6 +215,15 @@ export const connectCommand: Command = {
         else console.log(`${provider}（${saved.id}）已保存`);
       return 0;
     }
+    const retired = reference ? retiredProvider(reference) : undefined;
+    if (retired)
+      throw new Problem(
+        400,
+        retired.reason,
+        "provider_retired",
+        undefined,
+        retired.fix,
+      );
     if (!process.stdin.isTTY || !process.stdout.isTTY)
       throw new Error(
         "connect 需要交互终端；脚本请使用 atrium account add <provider> --key -",
@@ -256,7 +266,7 @@ export const connectCommand: Command = {
               {
                 value: "oauth",
                 label: "账号登录",
-                hint: "用已有订阅在浏览器登录，如 ChatGPT、Claude、Copilot",
+                hint: "用已有订阅在浏览器登录，如 ChatGPT、SuperGrok",
               },
               {
                 value: "api_key",

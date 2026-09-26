@@ -154,7 +154,7 @@ atrium restart --wait                        # 默认最多等 300 秒，超时�
 atrium restart --probe-agent a1              # 可选：再用指定身份做一轮真实模型验证；模型失败会触发回滚
 ```
 
-`connect` 需要交互终端；OAuth 登录在浏览器完成，取消时停止进行中的登录。Web 的「添加账号」使用同一供应商目录，按连接方式筛选并可搜索。目录来自 Pi 及模板已安装的插件，插件变更后重新加载；账号密钥留在服务端，不会出现在命令输出中。自动化使用 `account add --key -`，不再使用 `account login`。独立 Claude setup-token 账号可用上面的 CLI 命令添加／更换：令牌只从标准输入或本机管理 API 正文输入，不写在命令参数；保存前在隔离 HOME 中用 Claude Haiku 实际请求验证一次（会计费），不会使用共用的 Claude Code 登录。为身份分配后，本机 ACP 或运行器只传账号编号；pi-atrium 在 Pi 首轮开始前，通过本次启动的一次性 Unix socket 把令牌交给已声明能力的 bridge，令牌不进入 Pi 环境变量。bridge 只在启动 Claude 子进程时传入令牌；未明确领取成功便拒绝启动，不回退共用登录。身份如已在运行，先停止再启动才生效。
+`connect` 需要交互终端；OAuth 登录在浏览器完成，取消时停止进行中的登录。Web 的「添加账号」使用同一供应商目录，按连接方式筛选并可搜索。目录由 Atrium 维护，只含 OpenAI Codex、xAI、Kimi For Coding、OpenCode Go 与自定义兼容供应商，登录、刷新和请求都用 Pi 自带实现，不看个人模板装了哪些插件；Pi 自带模型表还没有的新模型（如 gpt-6-sol、grok-4.7）在分配账号时补进身份的 `models.json`。旧的 `xai-auth` 账号改用 `atrium connect xai` 重新登录，Antigravity 账号标为不再支持但保留数据；新账号不再提供 Claude 选项，已有 Claude 账号与分配照常可用。账号密钥留在服务端，不会出现在命令输出中。自动化使用 `account add --key -`，不再使用 `account login`。独立 Claude setup-token 账号可用上面的 CLI 命令添加／更换：令牌只从标准输入或本机管理 API 正文输入，不写在命令参数；保存前在隔离 HOME 中用 Claude Haiku 实际请求验证一次（会计费），不会使用共用的 Claude Code 登录。为身份分配后，本机 ACP 或运行器只传账号编号；pi-atrium 在 Pi 首轮开始前，通过本次启动的一次性 Unix socket 把令牌交给已声明能力的 bridge，令牌不进入 Pi 环境变量。bridge 只在启动 Claude 子进程时传入令牌；未明确领取成功便拒绝启动，不回退共用登录。身份如已在运行，先停止再启动才生效。
 
 以身份名义（`--as`）发言、建群、邀请走的是 Agent 工具（MCP）同一条路：要有成员资格，不能 @ 全体，对方看到的是同伴消息而不是用户指令。阅读只是用户审阅，不改变 Agent 的已读状态。
 

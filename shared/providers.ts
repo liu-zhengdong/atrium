@@ -23,6 +23,13 @@ export const RETIRED_PROVIDERS: Record<
   },
 };
 
+/**
+ * 新建 Claude 账号的入口已封（#242）：Claude 以后走 Claude Code 后端（#193）。
+ * 既有 claude-bridge 账号与分配照常可用，更换令牌等对既有账号的操作不受影响。
+ */
+export const CLAUDE_CLOSED =
+  "Atrium 不再接入 Claude 模型，Claude 以后走 Claude Code 后端（#193）；已有的 Claude 账号与分配照常可用";
+
 export function retiredProvider(id: string) {
   return Object.hasOwn(RETIRED_PROVIDERS, id)
     ? RETIRED_PROVIDERS[id]

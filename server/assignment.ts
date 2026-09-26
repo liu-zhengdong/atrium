@@ -51,11 +51,8 @@ export function assignmentCommand(
   const account =
     candidates.find((entry) => entry.id === previouslyAssigned) ??
     candidates[0];
-  return account
-    ? `atrium assign ${agent.ref} ${account.id}`
-    : provider === LOCAL_PROVIDER
-      ? `atrium account add ${LOCAL_PROVIDER} --local`
-      : null;
+  // 不再新建 Claude 账号（#242），没有可分配的 Claude 账号时不给修正命令。
+  return account ? `atrium assign ${agent.ref} ${account.id}` : null;
 }
 
 export function requireAssignment(store: Store, id: string) {

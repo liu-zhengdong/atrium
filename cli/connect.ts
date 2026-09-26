@@ -23,6 +23,7 @@ import {
   assignedAccountLabel,
   assignmentFailure,
   assignmentSummary,
+  CLAUDE_CLOSED,
   currentAssignment,
   defaultAccountName,
   methodsFor,
@@ -215,6 +216,8 @@ export const connectCommand: Command = {
         else console.log(`${provider}（${saved.id}）已保存`);
       return 0;
     }
+    if (reference === "claude-bridge")
+      throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
     const retired = reference ? retiredProvider(reference) : undefined;
     if (retired)
       throw new Problem(

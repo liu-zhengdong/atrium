@@ -4,7 +4,12 @@ import {
   type BuiltinProvider,
 } from "@earendil-works/pi-ai/providers/all";
 import type { ProviderEntry, ProviderMethod } from "../shared/providers.ts";
-import { methodsFor, retiredProvider } from "../shared/providers.ts";
+import {
+  CLAUDE_CLOSED,
+  methodsFor,
+  retiredProvider,
+} from "../shared/providers.ts";
+import { LOCAL_PROVIDER } from "./local-account.ts";
 import { Problem } from "./store.ts";
 
 /**
@@ -134,6 +139,8 @@ export class ProviderDirectory {
         undefined,
         retired.fix,
       );
+    if (provider === LOCAL_PROVIDER)
+      throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
     const entry = this.list().find((item) => item.id === provider);
     if (!entry)
       throw new Problem(

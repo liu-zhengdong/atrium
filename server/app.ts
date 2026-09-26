@@ -21,6 +21,7 @@ import { modelSpec, type ModelOption } from "../shared/model.ts";
 import { Store, Problem } from "./store.ts";
 import { Accounts } from "./accounts.ts";
 import { LOCAL_NAME, LOCAL_PROVIDER } from "./local-account.ts";
+import { CLAUDE_CLOSED } from "../shared/providers.ts";
 import {
   assignmentCommand,
   hasAssignment,
@@ -552,22 +553,12 @@ export async function createApp(options: {
       custom,
     );
   });
-  app.post("/api/accounts/local", (request) => {
-    const { provider } = z
-      .object({ provider: z.literal("claude-bridge") })
-      .strict()
-      .parse(request.body);
-    return accounts.addLocal(provider);
+  // 新建 Claude 账号一律拒绝（#242）；既有账号的更换令牌等操作不受影响。
+  app.post("/api/accounts/local", () => {
+    throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
   });
-  app.post("/api/accounts/setup-token", (request) => {
-    const { name, token } = z
-      .object({
-        name: z.string().trim().min(1).max(80),
-        token: z.string(),
-      })
-      .strict()
-      .parse(request.body);
-    return accounts.addSetupToken(name, token);
+  app.post("/api/accounts/setup-token", () => {
+    throw new Problem(400, CLAUDE_CLOSED, "provider_retired");
   });
   app.put("/api/accounts/:ref/setup-token", async (request) => {
     const ref = accountRef(request);

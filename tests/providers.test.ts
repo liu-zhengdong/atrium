@@ -146,6 +146,11 @@ test("未知、旧 xai-auth 与不支持的方式各给可执行的修正", () =
   assert.match(legacy.message, /Pi 自带的 xai/);
   assert.equal(legacy.nextCommand, "atrium connect xai");
   assert.match(problem("antigravity", "oauth").message, /不再支持/);
+  for (const method of ["oauth", "api_key"] as const)
+    assert.match(
+      problem("claude-bridge", method).message,
+      /不再接入 Claude 模型.*#193/,
+    );
   const method = problem("opencode-go", "oauth");
   assert.match(method.message, /不支持账号登录/);
   assert.equal(method.nextCommand, "atrium connect opencode-go");

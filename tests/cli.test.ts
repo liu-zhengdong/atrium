@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
 import { Store } from "../server/store.ts";
+import { Accounts } from "../server/accounts.ts";
 import { commandAgent } from "../shared/command-agent.ts";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { errorWithDetails } from "../server/runtime-error.ts";
@@ -138,7 +139,8 @@ test(
           child.stdin.end(token + "\n");
         },
       );
-    const created = await run(
+    // 新建 Claude 账号已封（#242）：拒绝且不读走令牌，也不留账号。
+    const refused = await run(
       [
         "account",
         "add",
@@ -150,10 +152,24 @@ test(
       ],
       "FAKE_TOKEN_ONE",
     );
-    assert.equal(created.code, 0, created.err);
-    const ref = created.out.match(/k[0-9]+/)?.[0];
-    assert.ok(ref);
-    assert.doesNotMatch(created.out + created.err, /FAKE_TOKEN_ONE/);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.err, /不再接入 Claude 模型/);
+    assert.doesNotMatch(refused.out + refused.err, /FAKE_TOKEN_ONE/);
+    const local = await run(["account", "add", "claude-bridge", "--local"], "");
+    assert.notEqual(local.code, 0);
+    assert.match(local.err, /不再接入 Claude 模型/);
+    // 升级前建好的 setup-token 账号照常更换令牌；先拉起服务建好数据库。
+    const listed = await f.cli("accounts");
+    assert.equal(listed.code, 0, listed.stderr);
+    const store = new Store(join(f.data, "atrium.sqlite"));
+    const ref = (
+      await new Accounts(store, f.data).addSetupToken(
+        "隔离账号",
+        "FAKE_TOKEN_ONE",
+        () => undefined,
+      )
+    ).id;
+    store.close();
     const replaced = await run(
       ["account", "replace-token", ref, "--setup-token", "-"],
       "FAKE_TOKEN_TWO",
@@ -637,10 +653,20 @@ test(
         packages: [],
       }),
     );
-    assert.equal(
-      (await f.cli("account", "add", "claude-bridge", "--local")).code,
-      0,
+    // 新建 Claude 账号已封（#242）；这里模拟升级前已建好的本机登录账号。
+    const refusedLocal = await f.cli(
+      "account",
+      "add",
+      "claude-bridge",
+      "--local",
     );
+    assert.notEqual(refusedLocal.code, 0);
+    assert.match(refusedLocal.stderr, /不再接入 Claude 模型/);
+    const seed = new Store(join(f.data, "atrium.sqlite"));
+    seed.run(
+      "INSERT INTO accounts(provider,name,type,status) VALUES('claude-bridge','Claude Code（本机登录）','local','ready')",
+    );
+    seed.close();
     const assigned = await f.cli("assign", "甲", "k1");
     assert.equal(assigned.code, 0, assigned.stderr);
     assert.equal(

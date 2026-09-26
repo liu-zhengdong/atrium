@@ -32,12 +32,14 @@ export async function connect(quietStart = false): Promise<Client> {
   return client(serviceUrl(record), data);
 }
 
-function client(base: string, data: string) {
+// 导出供测试直连内存服务（connect 会拉起独立服务进程）。
+export function client(base: string, data: string) {
   async function call<T>(
     method: string,
     path: string,
     body?: unknown,
     raw?: { bytes: Uint8Array; headers: Record<string, string> },
+    observe?: (headers: Headers) => void,
   ): Promise<T> {
     const response = await fetch(`${base}/api${path}`, {
       method,
@@ -62,7 +64,28 @@ function client(base: string, data: string) {
         "service_unavailable",
       );
     });
-    const value: unknown = await response.json().catch(() => ({}));
+    // 头一到就回调：等待接口把游标放在头里，body 中途断开也拿得到。
+    observe?.(response.headers);
+    // 200 头已发出后进程死掉、body 读不出来或不是 JSON：当服务不可用，
+    // 否则会被吞成 {} 当成正常结果（--idle 误报空闲、会话等待直接 TypeError）。
+    const text = await response.text().catch((error: unknown) => {
+      throw new Problem(
+        503,
+        `读取服务响应失败：${error instanceof Error ? error.message : String(error)}`,
+        "service_unavailable",
+      );
+    });
+    let value: unknown = {};
+    try {
+      value = JSON.parse(text);
+    } catch {
+      if (response.ok && text.length > 0)
+        throw new Problem(
+          503,
+          `服务返回了无法解析的响应（HTTP ${response.status}）`,
+          "service_unavailable",
+        );
+    }
     if (!response.ok) {
       const body = value as {
         error?: unknown;
@@ -84,7 +107,8 @@ function client(base: string, data: string) {
     return value as T;
   }
   return {
-    get: <T>(path: string) => call<T>("GET", path),
+    get: <T>(path: string, observe?: (headers: Headers) => void) =>
+      call<T>("GET", path, undefined, undefined, observe),
     post: <T>(path: string, body: unknown = {}) => call<T>("POST", path, body),
     put: <T>(path: string, body: unknown) => call<T>("PUT", path, body),
     patch: <T>(path: string, body: unknown) => call<T>("PATCH", path, body),

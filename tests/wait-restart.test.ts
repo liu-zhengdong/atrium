@@ -21,6 +21,8 @@ import {
 } from "../server/service-state.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { Problem } from "../server/problem.ts";
+import { createApp } from "../server/app.ts";
+import { client } from "../cli/service.ts";
 import { reconnectingWait } from "../cli/wait-options.ts";
 
 const exec = promisify(execFile);
@@ -123,6 +125,12 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     }
     throw new Error("服务没有恢复");
   };
+  // 模拟服务崩溃：不走关闭流程，直接断开连接（issue 要求的真断开）。
+  const killService = () => {
+    const record = readService(data);
+    assert.ok(record && alive(record.pid), "服务进程不存在，无法模拟崩溃");
+    process.kill(record.pid, "SIGKILL");
+  };
   return {
     root,
     data,
@@ -134,6 +142,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     ensureChat,
     spawnWait,
     untilReady,
+    killService,
   };
 }
 
@@ -289,6 +298,153 @@ test("服务停着不回来：退出码 5，给出的续等命令照抄就能用
   const againCode = await againExited;
   assert.equal(againCode, 0, `续等命令失败：${againOut}`);
   assert.match(againOut, /续等后到达/);
+});
+
+test("真断开（kill -9）：不带 --after 也不漏消息，退出 0、回执指向新消息", async (t) => {
+  const f = await fixture(t);
+  const { chat } = await f.ensureChat();
+  await send0(f, chat.id, "起点");
+  const child = f.spawnWait([chat.ref, "--timeout", "30", "--json"]);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += String(d)));
+  child.stderr.on("data", (d) => (stderr += String(d)));
+  const exited = new Promise<number>((resolve) =>
+    child.on("exit", (code) => resolve(code ?? -1)),
+  );
+  await delay(1500);
+  f.killService();
+  for (let i = 0; i < 100 && !stderr.includes("服务重启或断开"); i++)
+    await delay(200);
+  assert.match(stderr, /服务重启或断开/, "断开要提示重连");
+  // 冻住等待进程：先起服务、先把消息落库，再放开，确保消息在重连前到达
+  child.kill("SIGSTOP");
+  await f.cli("list"); // 拉起服务
+  const mid = await f.send(chat.id, "崩溃后到达");
+  child.kill("SIGCONT");
+  const code = await exited;
+  assert.equal(code, 0, `stdout=${stdout} stderr=${stderr}`);
+  const outer = JSON.parse(stdout.trim()) as {
+    ok: boolean;
+    result: {
+      items: { id: number; body: string }[];
+      after: number;
+      timed_out: boolean;
+    };
+    next: string | null;
+  };
+  assert.equal(outer.ok, true);
+  assert.equal(outer.result.timed_out, false);
+  assert.deepEqual(
+    outer.result.items.map((i) => i.id),
+    [mid],
+    "游标要来自断开前服务端解析的 after：只出这一条，起点不重复",
+  );
+  assert.equal(outer.next, `atrium wait ${chat.ref} --after ${mid}`);
+});
+
+test("真断开（kill -9）不回来：退出 5，修正命令带断开前的游标", async (t) => {
+  const f = await fixture(t);
+  const { chat } = await f.ensureChat();
+  const start = await send0(f, chat.id, "起点");
+  const child = f.spawnWait([chat.ref, "--timeout", "6"]);
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += String(d)));
+  const exited = new Promise<number>((resolve) =>
+    child.on("exit", (code) => resolve(code ?? -1)),
+  );
+  await delay(1500);
+  f.killService();
+  const code = await exited;
+  assert.equal(code, 5, `stderr=${stderr}`);
+  assert.match(stderr, /服务在 6 秒内没有恢复/);
+  const resume = stderr.match(/修正：(atrium wait [^\n]+)/);
+  assert.ok(resume, `要给续等命令：${stderr}`);
+  assert.match(
+    resume[1]!,
+    new RegExp(`--after ${start}`),
+    "没给 --after 时，修正命令也要带服务端解析的游标",
+  );
+});
+
+test("--idle 真断开：body 读不出来当断连重连，不误报空闲", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-idle-crash-"));
+  const { app, store, runtimes, pendingWaits } = await createApp({
+    auth: false,
+    data,
+    desktops: join(data, "desktops"),
+    piHome: join(data, "pi"),
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(async () => {
+    app.server.closeAllConnections();
+    await app.close();
+    rmSync(data, { recursive: true, force: true });
+  });
+  const origin = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
+  const agent = store.createAgent("忙碌身份", data).agent;
+  const chat = store.createChat("测试", [agent.id], agent.id);
+  type RuntimeConnection =
+    NonNullable<typeof runtimes>["connections"] extends Map<string, infer T>
+      ? T
+      : never;
+  const entry: RuntimeConnection = {
+    connection: null as unknown as RuntimeConnection["connection"],
+    info: {
+      runtimeId: agent.id,
+      generation: agent.id,
+      sessionId: agent.id,
+      pid: process.pid,
+      ownerPid: null,
+      sessionFile: null,
+      cwd: data,
+      mode: "rpc" as const,
+      busy: true,
+      model: "test",
+    },
+  };
+  runtimes!.connections.set(agent.id, entry);
+  // client 只要求本地令牌形状合法；auth:false 不校验内容
+  writeFileSync(userTokenPath(data), "a".repeat(64));
+  const wait = client(origin, data);
+  const pending = reconnectingWait<{
+    status: string;
+    finished_at: number | null;
+    timed_out: boolean;
+    restarting?: boolean;
+  }>({
+    seconds: 20,
+    request: (timeout) =>
+      wait.get(`/agents/${agent.id}/wait?timeout=${timeout}`),
+    restarting: (result) => result.restarting === true,
+    resume: () => `atrium wait ${agent.ref} --idle`,
+  });
+  for (let i = 0; i < 50 && pendingWaits() !== 1; i++) await delay(100);
+  assert.equal(pendingWaits(), 1, "等待要先挂上（头已发出）");
+  // 真断开：200 头已发，body 中途被掐断
+  app.server.closeAllConnections();
+  // 断开后要自动重连并重新挂上（此刻还忙着）；若被当成正常结果返回，这里永远等不到
+  for (let i = 0; i < 50 && pendingWaits() !== 0; i++) await delay(100);
+  assert.equal(pendingWaits(), 0, "断开的等待要被服务端清理");
+  for (let i = 0; i < 50 && pendingWaits() !== 1; i++) await delay(100);
+  assert.equal(pendingWaits(), 1, "断开后要重连并重新挂上等待");
+  await delay(300);
+  entry.info.busy = false;
+  // 唤醒已重新注册的等待者（与 wait.test.ts 同一路径）
+  // 唤醒可能已重新注册的等待者（与 wait.test.ts 同一路径）
+  await fetch(`${origin}/api/chats/${chat.id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pinned: true }),
+  });
+  const result = await pending;
+  assert.equal(
+    result.status,
+    "idle",
+    "重连后按真实状态返回，既不是 {} 也不是误报空闲",
+  );
+  assert.equal(result.timed_out, false);
+  assert.equal(typeof result.finished_at, "number");
 });
 
 test("reconnectingWait：断连与 restarting 都重连，耗尽给 503 与续等命令", async () => {

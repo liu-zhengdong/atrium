@@ -222,10 +222,14 @@ const wait: Command = {
     >({
       seconds,
       cursor,
-      request: (timeout, cursor) => {
+      request: (timeout, cursor, observe) => {
         const query = new URLSearchParams({ timeout: String(timeout) });
         if (cursor !== undefined) query.set("after", String(cursor));
-        return client.get(`/chats/${chat.id}/wait?${query}`);
+        return client.get(`/chats/${chat.id}/wait?${query}`, (headers) => {
+          const after = headers.get("x-atrium-after");
+          if (after !== null && /^(0|[1-9]\d*)$/.test(after))
+            observe(Number(after));
+        });
       },
       restarting: (result) => result.restarting === true,
       nextCursor: (result) => result.after,

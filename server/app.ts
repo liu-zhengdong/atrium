@@ -1199,10 +1199,12 @@ export async function createApp(options: {
     check: () => T | null,
     onTimeout: () => T,
     onClose?: () => T,
+    headers?: Record<string, string>,
   ) {
     reply.hijack();
     reply.raw.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
+      ...headers,
     });
     reply.raw.flushHeaders();
     let done = false;
@@ -1259,6 +1261,9 @@ export async function createApp(options: {
         timed_out: true,
         restarting: true,
       }),
+      // 游标随头立刻带回：进程中途死掉、body 读不出来时，命令行也拿得到
+      // 服务端解析出的 after，重连与续等命令都不漏消息。
+      { "X-Atrium-After": String(after) },
     );
   });
   app.get("/api/agents/:agent/wait", (request, reply) => {

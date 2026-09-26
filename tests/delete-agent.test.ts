@@ -370,7 +370,13 @@ test(
       process.execPath,
       [join(packageRoot, "bin/atrium.mjs"), "run", agent.ref],
       {
-        env: { ...process.env, ATRIUM_DATA: data, PI_ACP_PI_COMMAND: command },
+        env: {
+          ...process.env,
+          ATRIUM_DATA: data,
+          PI_ACP_PI_COMMAND: command,
+          // 服务白名单只保留 ATRIUM_PI_BIN（#213）。
+          ATRIUM_PI_BIN: command,
+        },
         timeout: 8000,
       },
     );

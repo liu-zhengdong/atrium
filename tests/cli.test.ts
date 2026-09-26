@@ -44,6 +44,8 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     ATRIUM_PI_TEMPLATE: builtin,
     PI_ACP_DIR: join(root, "acp"),
     PI_ACP_PI_COMMAND: join(root, "no-such-pi"),
+    // 服务白名单会丢掉 PI_*；ATRIUM_PI_BIN 是服务侧的保留开关（#213）。
+    ATRIUM_PI_BIN: join(root, "no-such-pi"),
   };
   const cli = async (...args: string[]) => {
     try {
@@ -726,10 +728,12 @@ test(
       "ATRIUM_PI_TEMPLATE",
       "PI_ACP_DIR",
       "PI_ACP_PI_COMMAND",
+      "ATRIUM_PI_BIN",
     ]);
     for (const key of Object.keys(f.env))
       if (!allowed.has(key)) delete f.env[key];
     f.env.PI_ACP_PI_COMMAND = join(packageRoot, "node_modules/.bin/pi");
+    f.env.ATRIUM_PI_BIN = join(packageRoot, "node_modules/.bin/pi");
     const provider = createServer((req, res) => {
       if (req.url === "/v1/models")
         res

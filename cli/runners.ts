@@ -11,6 +11,10 @@ import {
 import { join } from "node:path";
 import { dataDirectory, servicePort } from "../server/service-state.ts";
 import { RunnerDaemon } from "../server/runner-daemon.ts";
+import {
+  reportDroppedIdentity,
+  serviceEnvironment,
+} from "../server/service-env.ts";
 import { Problem } from "../server/problem.ts";
 import type { Command } from "./main.ts";
 import { recordResult } from "./contract.ts";
@@ -112,10 +116,13 @@ export const runnerCommands: Record<string, Command> = {
       if (!/^[a-f0-9]{64}$/.test(token))
         throw new Problem(400, "运行器凭据格式无效", "usage");
       const url = `ws://127.0.0.1:${servicePort()}/runner/v1`;
+      // 运行器替身份起 Pi，与服务进程同一份白名单：发起者的凭据与身份变量不往下传（#213）。
+      const { env, droppedSensitive } = serviceEnvironment(process.env);
+      reportDroppedIdentity(droppedSensitive);
       const daemon = new RunnerDaemon(
         url,
         token,
-        process.env,
+        env,
         join(dataDirectory(), "runners", `${runnerId}.state.json`),
       );
       const stop = () => daemon.close();

@@ -229,6 +229,7 @@ export class Store {
     this.addColumn("agents", "error_text", "TEXT");
     this.addColumn("agents", "error_at", "INTEGER");
     this.addColumn("agents", "failure_count", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumn("agents", "error_trace_id", "INTEGER");
     this.addColumn("agents", "reports_to", "TEXT REFERENCES agents(id)");
     this.addColumn("agents", "last_success_at", "INTEGER");
     this.db.exec(`CREATE TABLE IF NOT EXISTS failure_incidents (
@@ -1718,6 +1719,46 @@ export class Store {
       ? { text: row.text, at: row.at, count: row.count }
       : null;
   }
+  /** 记下故障时的轨迹入库位置：只有排在它之后的事件才能证明故障已经过去。 */
+  failureTraceId(id: string): number | null {
+    return (
+      this.one<{ id: number | null }>(
+        "SELECT error_trace_id AS id FROM agents WHERE id=? AND deleted_at IS NULL",
+        id,
+      )?.id ?? null
+    );
+  }
+  /** 故障水位：当时已入库的最后一条轨迹行号；还没有轨迹库（如部分测试）时为 null。 */
+  private traceWatermark(id: string): number | null {
+    if (
+      !this.one(
+        "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='trace_actions'",
+      )
+    )
+      return null;
+    return this.one<{ id: number }>(
+      "SELECT COALESCE(MAX(id),0) AS id FROM trace_actions WHERE agent_id=?",
+      id,
+    )!.id;
+  }
+  /**
+   * 故障之后是否已经开始新回合：比较轨迹入库顺序（trace_actions.id），不比较时钟。
+   * 新回合已经开始、还没有第一条正常输出时，界面按「干活」呈现，不挂旧故障。
+   */
+  turnAfterFailure(id: string): boolean {
+    const watermark = this.failureTraceId(id);
+    if (watermark === null) return false;
+    // 投递结果未知要人工核对，新回合清不掉它，也不把它藏成「干活」。
+    if (this.uncertainDelivery(id)) return false;
+    const started = this.one<{ id: number }>(
+      `SELECT t.id AS id FROM runtime_turns r JOIN trace_actions t
+         ON t.agent_id=r.agent_id AND t.runtime_id=r.runtime_id
+        AND t.generation=r.generation AND t.seq=r.started_seq
+       WHERE r.agent_id=?`,
+      id,
+    )?.id;
+    return started !== undefined && started > watermark;
+  }
   incident(id: string): (Incident & { id: number }) | null {
     const row = this.one<{
       id: number;
@@ -1855,11 +1896,13 @@ export class Store {
           lastUser,
         );
       }
+      const watermark = this.traceWatermark(id);
       this.run(
-        "UPDATE agents SET error_text=?,error_at=?,failure_count=? WHERE id=?",
+        "UPDATE agents SET error_text=?,error_at=?,failure_count=?,error_trace_id=? WHERE id=?",
         next.text,
         next.at,
         next.count,
+        watermark,
         id,
       );
     };
@@ -1875,7 +1918,7 @@ export class Store {
         id,
       );
       this.run(
-        "UPDATE agents SET error_text=NULL,error_at=NULL,failure_count=0 WHERE id=?",
+        "UPDATE agents SET error_text=NULL,error_at=NULL,failure_count=0,error_trace_id=NULL WHERE id=?",
         id,
       );
     };

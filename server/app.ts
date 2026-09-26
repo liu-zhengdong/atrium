@@ -805,9 +805,11 @@ export async function createApp(options: {
           : null,
       agents: store.agents().map((a) => {
         const owner = ownerOf(store, a.id);
+        const stale = store.turnAfterFailure(a.id),
+          runtime = runtimes?.connections.get(a.id)?.info ?? null;
         return {
           ...a,
-          runtime: runtimes?.connections.get(a.id)?.info ?? null,
+          runtime,
           runner: owner
             ? {
                 id: owner.runner_id,
@@ -820,9 +822,12 @@ export async function createApp(options: {
             : null,
           available: available.has(a.id) || !!runtimes?.connections.has(a.id),
           running: runtimes?.running(a.id, discovery.runtimes) ?? false,
-          error:
-            store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null,
-          failure: store.retryStatus(a.id),
+          // 重试之后已经开始新回合：旧故障不代表现状，界面按「干活」呈现。
+          working: stale || !!runtime?.busy,
+          error: stale
+            ? null
+            : (store.failure(a.id)?.text ?? runtimes?.errors.get(a.id) ?? null),
+          failure: stale ? null : store.retryStatus(a.id),
           unread: store.boxCount(a.id),
           unassigned: !hasAssignment(store, a.id),
           needs_reload: runtimes?.needsReload.has(a.id) ?? false,

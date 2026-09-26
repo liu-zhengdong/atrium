@@ -1,4 +1,5 @@
 import type { RuntimeEventPage } from "../shared/trace.ts";
+import { afterFailure, normalModelOutput } from "./runtime-error.ts";
 import type { Store } from "./store.ts";
 
 export type ActiveTurn = {
@@ -10,6 +11,24 @@ export type ActiveTurn = {
 };
 
 type Event = RuntimeEventPage["items"][number];
+
+/**
+ * 轨迹事件对失败态的影响：第一条正常模型输出证明这次故障已经过去，清掉旧故障
+ * （含恢复通知）。只认排在失败之后的事件（轨迹入库行号，不比较时钟）。
+ */
+export function settleFailure(
+  store: Store,
+  id: string,
+  event: Event,
+  traceId: number | null,
+) {
+  if (!normalModelOutput(event)) return;
+  if (!store.failure(id)) return;
+  if (!afterFailure(traceId, store.failureTraceId(id))) return;
+  // 与回合结束的兜底清除一致：正常输出不能证明一条结果未知的投递已经送达。
+  if (store.uncertainDelivery(id)) return;
+  store.clearFailure(id, true);
+}
 
 /** The trace cursor and the open turn are one checkpoint, not two independent clocks. */
 export class TurnLedger {

@@ -64,7 +64,7 @@ import {
   unlinkProfile,
 } from "./agents.ts";
 import { TraceStore } from "./trace.ts";
-import { TurnLedger } from "./turns.ts";
+import { TurnLedger, settleFailure } from "./turns.ts";
 import { runtimeEvents } from "../shared/trace.ts";
 import { agentTransition } from "./agent-failure.ts";
 import { notifyTerminal } from "./incident-notice.ts";
@@ -2089,7 +2089,7 @@ export class Runtimes {
           this.traces.ingest(
             id,
             events,
-            (event) => {
+            (event, traceId) => {
               // This callback runs before the same transaction advances trace_cursors.
               const turn = this.turns.ingest(
                 id,
@@ -2148,6 +2148,8 @@ export class Runtimes {
                   this.errors.delete(id);
                 }
               }
+              // 第一条正常模型输出清掉旧故障，与失败判定共用一处规则。
+              settleFailure(this.store, id, event, traceId);
             },
             () => this.turns.clear(id),
           )

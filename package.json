@@ -33,7 +33,7 @@
     "@earendil-works/pi-ai": "^0.85.1",
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@fastify/static": "^10.1.3",
-    "@liuser/pi-atrium": "github:liu-zhengdong/pi-atrium#13ec0fa05a072c2690dfb4ab4d98895bf88bf491",
+    "@liuser/pi-atrium": "github:liu-zhengdong/pi-atrium#7f9521283c9157ababcc40bea2a8b063d9ac811a",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@radix-ui/react-popover": "^1.1.23",
     "@tanstack/react-virtual": "^3.14.13",

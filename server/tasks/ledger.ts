@@ -12,7 +12,7 @@ export {
 export type { Task, TaskEventRow, TaskNode } from "./ledger-model.ts";
 export { DEFAULT_OWNER, ownerOf, statusOf } from "./ledger-validate.ts";
 export { getTask, listTasks } from "./ledger-read.ts";
-export { taskTree } from "./ledger-tree.ts";
+export { taskTree, type TaskTree } from "./ledger-tree.ts";
 export { createTask, updateTask } from "./ledger-write.ts";
 export {
   advanceTask,

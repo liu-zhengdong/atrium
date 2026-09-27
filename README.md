@@ -38,6 +38,7 @@ atrium task add "表与状态机" --parent t1 --deliver none         # 挂到 t1
 atrium task add "验收" --parent t1 --after t2 --deliver none    # t2 完成后才就绪；加 --auto 就绪即自动派活
 atrium task add "改登录页" --brief 详述.md                      # 详述建任务时读入存库；--brief - 从标准输入读
 atrium task tree t1                                             # 缩进树：状态、交付物、执行者、PR
+atrium task tree                                                # 不写根：未完成的顶层任务（每页 30 个，--after 翻页）与最近 10 个已结束的；--all 按短号翻全部顶层
 atrium task plan                                                # 在跑、就绪、等待中、卡住；上游交付 PR 的，PR 合入才算满足，合入 Atrium 自身的要等上线
 atrium task show t2                                             # 详情与最近事件
 atrium task note t2 "端到端已验证" --verdict ok                 # 秘书对上线结果作一句话标注                                 # 处理备注，最新一条显示为当前说明

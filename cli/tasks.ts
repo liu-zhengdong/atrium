@@ -4,7 +4,17 @@ import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
 import { TASK_STATUSES, isTaskStatus } from "../server/tasks/state.ts";
 import { DELIVERS, type Deliver } from "../server/tasks/deliver.ts";
-import type { Task, TaskEventRow, TaskNode } from "../server/tasks/ledger.ts";
+import type {
+  Task,
+  TaskEventRow,
+  TaskNode,
+  TaskTree,
+} from "../server/tasks/ledger.ts";
+import {
+  TREE_MAX,
+  TREE_RECENT,
+  TREE_ROOTS,
+} from "../server/tasks/ledger-model.ts";
 import { formatChildSummary } from "../server/tasks/ledger-summary.ts";
 import { recordNext } from "./contract.ts";
 import { defaultSubscriber, leaderSession } from "./worker-guard.ts";
@@ -36,7 +46,11 @@ const str = (values: Values, key: string) => {
   return typeof value === "string" ? value : undefined;
 };
 const client = async () => (await import("./service.ts")).connect();
-const displayStatus = (task: Task) =>
+const displayStatus = (
+  task: Pick<Task, "status" | "delivery_stage" | "processing"> & {
+    queued_reason?: string | null;
+  },
+) =>
   task.queued_reason
     ? "排队"
     : task.processing
@@ -514,27 +528,86 @@ const show: Command = {
   },
 };
 
+/** 树下面的说明（t155）：哪些顶层任务没列出、怎么看；next 是下一步命令。 */
+export function treeMore(
+  result: Omit<TaskTree, "tasks">,
+  page: { all: boolean; limit?: string },
+): { lines: string[]; next: string | null } {
+  const lines: string[] = [];
+  if (result.truncated)
+    lines.push(
+      `（任务过多，只显示前 ${TREE_MAX} 个；看某一棵：atrium task tree tN）`,
+    );
+  let next: string | null = null;
+  if (result.next_after) {
+    next = `下一页：atrium task tree${page.all ? " --all" : ""} --after ${result.next_after}${page.limit ? ` --limit ${page.limit}` : ""}`;
+    lines.push(
+      `还有 ${result.remaining} 个${page.all ? "" : "未完成的"}顶层任务没列出`,
+    );
+  }
+  if (result.closed_hidden) {
+    lines.push(
+      `另有 ${result.closed_hidden} 个已结束的顶层任务没列出：atrium task tree --all`,
+    );
+  }
+  return { lines, next };
+}
+
 const tree: Command = {
-  args: "[tN]",
-  about:
-    "缩进树：短号、状态、标题、交付物、执行者、PR；不写 tN 显示全部顶层任务",
+  args: "[tN] [--all] [--after tN] [--limit N]",
+  about: `缩进树：短号、状态、标题、交付物、执行者、PR；不写 tN 列未完成的顶层任务（每页 ${TREE_ROOTS} 个）与最近 ${TREE_RECENT} 个已结束的，--all 按短号翻全部顶层`,
+  options: {
+    all: { type: "boolean" },
+    after: { type: "string" },
+    limit: { type: "string" },
+  },
   positionals: [0, 1],
-  async run({ positionals: [root], json }) {
+  async run({ positionals: [root], values, json }) {
+    const search = new URLSearchParams();
+    const all = values.all === true;
+    if (
+      root !== undefined &&
+      (all ||
+        str(values, "after") !== undefined ||
+        str(values, "limit") !== undefined)
+    )
+      throw new Problem(
+        400,
+        "--all、--after、--limit 只用于不写 tN 时翻顶层任务",
+        "usage",
+        undefined,
+        `atrium task tree ${root}`,
+      );
+    if (root !== undefined) search.set("root", ref(root, "任务"));
+    if (all) search.set("all", "1");
+    const after = str(values, "after");
+    if (after !== undefined) search.set("after", ref(after, "--after"));
+    const limit = str(values, "limit");
+    if (limit !== undefined) search.set("limit", limit);
     const result = await (
       await client()
-    ).get<{ tasks: TaskNode[]; truncated: boolean }>(
-      `/tasks/tree${root === undefined ? "" : `?root=${ref(root, "任务")}`}`,
-    );
+    ).get<TaskTree>(`/tasks/tree${search.size ? `?${search}` : ""}`);
+    const more = treeMore(result, { all, limit });
     if (json) printJson(result);
-    else if (!result.tasks.length) console.log("还没有任务");
     else {
-      console.log(renderTree(result.tasks).join("\n"));
-      if (result.truncated) console.log("（任务过多，只显示前 2000 个）");
+      console.log(
+        [
+          ...(result.tasks.length
+            ? renderTree(result.tasks)
+            : [
+                root !== undefined || all || after !== undefined
+                  ? "没有符合条件的任务"
+                  : "还没有任务",
+              ]),
+          ...more.lines,
+        ].join("\n"),
+      );
     }
     recordNext(
-      result.tasks.length
-        ? `看详情：atrium task show ${root ?? result.tasks[0]!.ref}`
-        : "建任务：atrium task add 标题",
+      more.next ??
+        (result.tasks.length
+          ? `看详情：atrium task show ${root ?? result.tasks[0]!.ref}`
+          : "建任务：atrium task add 标题"),
     );
   },
 };

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   addEvent,
+  all,
   atomically,
   one,
   parseTaskRef,
@@ -31,23 +32,120 @@ export const isProcessing = (
   blockedId !== null &&
   noteId > blockedId;
 
-function leaderName(db: DatabaseSync, by: string): string | null {
-  const match = /^a([1-9][0-9]{0,8})$/.exec(by);
+/** 事件详情里的备注正文与作者；坏的历史事件当没有备注，不让读任务出错。 */
+function parseNote(detail: string | null) {
+  if (!detail) return null;
+  try {
+    const parsed: unknown = JSON.parse(detail);
+    if (parsed && typeof parsed === "object") {
+      const note = parsed as Record<string, unknown>;
+      if (typeof note.text === "string" && typeof note.by === "string")
+        return { text: note.text, by: note.by };
+    }
+  } catch {
+    /* A damaged historical event must not break task reads. */
+  }
+  return null;
+}
+
+/** 按 id 集合分批一条 SQL，不在循环里逐个查库（k23）。 */
+const BATCH = 400;
+function batched<T>(
+  ids: number[],
+  query: (ids: number[], marks: string) => T[],
+): T[] {
+  const rows: T[] = [];
+  for (let offset = 0; offset < ids.length; offset += BATCH) {
+    const chunk = ids.slice(offset, offset + BATCH);
+    rows.push(...query(chunk, chunk.map(() => "?").join(",")));
+  }
+  return rows;
+}
+
+function leaderNames(db: DatabaseSync, authors: Iterable<string>) {
+  const ids = new Set<number>();
+  for (const by of authors) {
+    const match = /^a([1-9][0-9]{0,8})$/.exec(by);
+    if (match) ids.add(Number(match[1]));
+  }
+  const names = new Map<string, string>();
   if (
-    !match ||
+    !ids.size ||
     !one(
       db,
       "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='org_leaders'",
     )
   )
-    return null;
-  return (
-    one<{ name: string }>(
+    return names;
+  for (const { id, name } of batched([...ids], (chunk, marks) =>
+    all<{ id: number; name: string }>(
       db,
-      "SELECT name FROM org_leaders WHERE id=?",
-      Number(match[1]),
-    )?.name ?? null
+      `SELECT id, name FROM org_leaders WHERE id IN (${marks})`,
+      ...chunk,
+    ),
+  ))
+    names.set(`a${id}`, name);
+  return names;
+}
+
+/** 一批任务的最新备注：语句数只随批数增长，不随任务数逐条增长。 */
+export function noteViews(
+  db: DatabaseSync,
+  tasks: { id: number; status: TaskStatus }[],
+): Map<number, NoteView> {
+  const latest = new Map<
+    number,
+    { id: number; at: number; text: string; by: string }
+  >();
+  for (const event of batched(
+    tasks.map((task) => task.id),
+    (chunk, marks) =>
+      all<Pick<TaskEventRow, "id" | "task_id" | "at" | "detail">>(
+        db,
+        `SELECT id, task_id, at, detail FROM task_events WHERE id IN (
+           SELECT MAX(id) FROM task_events
+           WHERE task_id IN (${marks}) AND kind='note' GROUP BY task_id)`,
+        ...chunk,
+      ),
+  )) {
+    const note = parseNote(event.detail);
+    if (note)
+      latest.set(event.task_id, { id: event.id, at: event.at, ...note });
+  }
+  const blocked = new Map<number, number>();
+  for (const { task_id, id } of batched(
+    tasks
+      .filter((task) => task.status === "blocked" && latest.has(task.id))
+      .map((task) => task.id),
+    (chunk, marks) =>
+      all<{ task_id: number; id: number }>(
+        db,
+        `SELECT task_id, MAX(id) AS id FROM task_events
+         WHERE task_id IN (${marks}) AND kind IN ('block','manual_set') GROUP BY task_id`,
+        ...chunk,
+      ),
+  ))
+    blocked.set(task_id, id);
+  const names = leaderNames(
+    db,
+    [...latest.values()].map((note) => note.by),
   );
+  const views = new Map<number, NoteView>();
+  for (const task of tasks) {
+    const note = latest.get(task.id);
+    views.set(task.id, {
+      note: note?.text ?? null,
+      note_by: note?.by ?? null,
+      note_by_name: note ? (names.get(note.by) ?? null) : null,
+      note_at: note?.at ?? null,
+      processing: isProcessing(
+        task.status,
+        note?.id ?? null,
+        blocked.get(task.id) ?? null,
+      ),
+    });
+  }
+  return views;
 }
 
 export function noteView(
@@ -55,46 +153,7 @@ export function noteView(
   id: number,
   status: TaskStatus,
 ): NoteView {
-  const note = one<TaskEventRow>(
-    db,
-    "SELECT * FROM task_events WHERE task_id=? AND kind='note' ORDER BY id DESC LIMIT 1",
-    id,
-  );
-  let text: string | null = null;
-  let by: string | null = null;
-  if (note?.detail) {
-    try {
-      const parsed: unknown = JSON.parse(note.detail);
-      if (parsed && typeof parsed === "object") {
-        const detail = parsed as Record<string, unknown>;
-        if (typeof detail.text === "string" && typeof detail.by === "string") {
-          text = detail.text;
-          by = detail.by;
-        }
-      }
-    } catch {
-      /* A damaged historical event must not break task reads. */
-    }
-  }
-  const blocked =
-    status === "blocked" && text !== null
-      ? one<{ id: number }>(
-          db,
-          "SELECT id FROM task_events WHERE task_id=? AND kind IN ('block','manual_set') ORDER BY id DESC LIMIT 1",
-          id,
-        )
-      : undefined;
-  return {
-    note: text,
-    note_by: by,
-    note_by_name: by === null ? null : leaderName(db, by),
-    note_at: text === null ? null : note!.at,
-    processing: isProcessing(
-      status,
-      text === null ? null : note!.id,
-      blocked?.id ?? null,
-    ),
-  };
+  return noteViews(db, [{ id, status }]).get(id)!;
 }
 
 export function addTaskNote(

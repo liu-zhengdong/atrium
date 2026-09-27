@@ -154,6 +154,14 @@ export function all<T>(
 ) {
   return db.prepare(sql).all(...params) as T[];
 }
+/** 任务有没有过某类事件：按 (task_id,kind) 索引直查，不受事件多少影响。 */
+export const hasEvent = (db: DatabaseSync, id: number, kind: string) =>
+  !!one(
+    db,
+    "SELECT 1 FROM task_events WHERE task_id=? AND kind=? LIMIT 1",
+    id,
+    kind,
+  );
 export function atomically<T>(db: DatabaseSync, fn: () => T): T {
   if (db.isTransaction) return fn();
   db.exec("BEGIN IMMEDIATE");

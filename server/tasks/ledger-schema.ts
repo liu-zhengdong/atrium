@@ -35,7 +35,8 @@ export function ensureTaskTables(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,id);
     CREATE TABLE IF NOT EXISTS task_events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
       at INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
-    CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id,id);`);
+    CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id,id);
+    CREATE INDEX IF NOT EXISTS task_events_kind ON task_events(task_id,kind,id);`);
   // 负责人（事件订阅者）是后加的列：老库补上，缺省交给秘书。
   const columns = all<{ name: string }>(db, "PRAGMA table_info(tasks)");
   // 任务详述进库（#355）：brief 存内容，brief_path 只记来源；旧任务启动时按路径回填（server/imports/）。

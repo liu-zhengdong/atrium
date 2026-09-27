@@ -245,3 +245,41 @@ test("高风险任务额度换人时，低 max_risk 或低 trust 的候选都不
     ),
   );
 });
+
+test("早先换过执行者、事件已超过 50 条的任务再报额度用尽：不再换人，留在受阻", async (t) => {
+  const { data, call } = await startApp(t, (fx) => {
+    quotaFixture(fx);
+  });
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  t.after(() => db.close());
+  await call("POST", "/api/tasks", { title: "事件很多" });
+  // 早先换过一次人，之后又攒了 60 条别的事件，把那条挤出最近 50 条。
+  const insert = db.prepare(
+    "INSERT INTO task_events(task_id,at,kind,detail) VALUES (1,?,?,?)",
+  );
+  insert.run(Date.now(), "quota_switch", '{"from":"grok","to":"codex"}');
+  for (let i = 0; i < 60; i++) insert.run(Date.now(), "note", `{"i":${i}}`);
+  assert.equal(
+    getTask(db, "t1").events.some((e) => e.kind === "quota_switch"),
+    false,
+    "换人记录已不在最近事件里",
+  );
+  await call("POST", "/api/tasks/t1/run", { worker: "codex" });
+  await until(() => getTask(db, "t1").status === "blocked");
+  const switches = db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM task_events WHERE task_id=1 AND kind='quota_switch'",
+    )
+    .get() as { n: number };
+  assert.equal(switches.n, 1, "没有再换一次人");
+  const events = (await call("GET", "/api/events/wait?as=secretary&timeout=5"))
+    .body.events;
+  assert.ok(
+    events.some(
+      (e: { task: string; kind: string }) =>
+        e.task === "t1" && e.kind === "blocked",
+    ),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(getTask(db, "t1").status, "blocked", "没有被换人重派");
+});

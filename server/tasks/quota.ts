@@ -45,6 +45,10 @@ export type QuotaAccount = {
   runtime: string | null;
   /** 同一标记的结构化形式，--json 消费；没有标记为 null。 */
   hold: QuotaAccountHold | null;
+  /** 自带读数来自哪台主机（#358 第 2 步）；OpenQuota 或读不到为 null。没有主机信息时不给。 */
+  from?: string | null;
+  /** 这个账号对应的编码 CLI 能在哪几台主机用（在线、没暂停、装了且没判为未登录）；没有主机信息时不给。 */
+  hosts?: string[];
 };
 
 export type QuotaList = {
@@ -128,6 +132,14 @@ function row(
     refreshedAt: typeof item.refreshedAt === "string" ? item.refreshedAt : null,
     runtime: runtime?.note ?? null,
     hold: runtime?.hold ?? null,
+    ...(Array.isArray(item.hosts)
+      ? {
+          from: typeof item.from === "string" ? item.from : null,
+          hosts: item.hosts.filter(
+            (host): host is string => typeof host === "string",
+          ),
+        }
+      : {}),
   };
 }
 

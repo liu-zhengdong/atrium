@@ -52,6 +52,8 @@ export type TopRow = NoteView & {
   concerns?: ConcernState[] | null;
   /** 现在球在谁手里（holder.ts）；已结束的为 null。 */
   holder?: Holder | null;
+  /** 本地检查正在跑（交付后或合入重跑，#358 第 2 步）：在哪台；没在跑为 null。 */
+  checking?: { host: string | null } | null;
 };
 
 const FINISHED_STATUSES = [...FINISHED] as TaskStatus[];
@@ -221,11 +223,15 @@ export function topRows(
           : reasonOf(history, "block")),
       tells: tells.get(row.id) ?? null,
       concerns: concerns.get(row.id) ?? null,
-      holder: holderOf(
-        holderFacts(db, row, waiting ? { reason: queuedReason } : null, {
-          inbox,
-        }),
-      ),
+      ...(() => {
+        const facts = holderFacts(
+          db,
+          row,
+          waiting ? { reason: queuedReason } : null,
+          { inbox },
+        );
+        return { holder: holderOf(facts), checking: facts.checking ?? null };
+      })(),
       ...noteView(db, row.id, row.status),
     };
   });

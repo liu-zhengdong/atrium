@@ -21,6 +21,11 @@ export type ReadOk = {
   windows: QuotaWindow[];
   /** 读到的时刻（毫秒）。 */
   refreshedAt: number;
+  /**
+   * 账号指纹（#358 第 2 步）：账号 id 的 sha256 前 16 位（credentials.ts accountKey），不可逆、不含令牌；
+   * 多台主机读到同一指纹算同一个账号。认不出账号为 null。
+   */
+  account?: string | null;
 };
 
 /** 读不到：reason 是给人看的中文原因，不含凭据、响应正文或路径以外的细节。 */

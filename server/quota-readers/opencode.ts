@@ -1,4 +1,4 @@
-import { firstCredential } from "./credentials.ts";
+import { accountKey, firstCredential } from "./credentials.ts";
 import {
   getJson,
   isFailure,
@@ -114,7 +114,14 @@ export async function readOpencode(deps: ReaderDeps): Promise<ReadResult> {
   const windows = mapOpencodeUsage(reply.body);
   if (!windows)
     return { ok: false, reason: "OpenCode Go 用量接口返回的结构认不出" };
-  return { ok: true, plan: "Go", windows, refreshedAt: deps.now() };
+  // OpenCode Go 的 key 就是账号：同一个 key 拷到几台算一份（只传指纹）。
+  return {
+    ok: true,
+    plan: "Go",
+    windows,
+    refreshedAt: deps.now(),
+    account: accountKey("opencode", found.value),
+  };
 }
 
 export const opencodeReader: Reader = {

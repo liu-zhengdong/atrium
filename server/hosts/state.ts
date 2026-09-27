@@ -46,6 +46,8 @@ export type HostInfo = {
   clis: Partial<Record<Tool, CliState>>;
   /** 代理按自己的核数与环境算出的执行者上限；null 不限。 */
   max_workers: number | null;
+  /** 代理这台同时最多跑几个本地检查（#358 第 2 步）；旧版代理不报，也不认按提交检查，不派给它。 */
+  max_checks?: number;
 };
 
 /** 代理每轮长轮询带上的负载。 */
@@ -66,12 +68,15 @@ export function connection(input: {
   /** 此刻有长轮询挂着。 */
   polling: boolean;
   now: number;
+  /** 多久没来算离线；缺省 ONLINE_MS。 */
+  onlineMs?: number;
 }): Connection {
   if (input.kind === "local") return "local";
   if (!input.joined)
     return (input.joinExpiresAt ?? 0) > input.now ? "pending" : "expired";
   if (input.polling) return "online";
-  return input.lastSeenAt !== null && input.now - input.lastSeenAt <= ONLINE_MS
+  return input.lastSeenAt !== null &&
+    input.now - input.lastSeenAt <= (input.onlineMs ?? ONLINE_MS)
     ? "online"
     : "offline";
 }
@@ -292,9 +297,17 @@ export function remoteLayout(
   const dir = path.join(host.data_dir, "tasks", String(task.id));
   if (!repoUrl || !task.slug)
     return { dir, cwd: path.join(dir, "work"), clone: null, worktree: null };
-  const clone = path.join(host.data_dir, "repos", cloneName(repoUrl));
+  const clone = remoteClone(host, repoUrl);
   const worktree = `${clone}-t${task.id}-${task.slug}`;
   return { dir, cwd: worktree, clone, worktree };
+}
+
+/** 代理数据目录下这个仓库的克隆（派活与按提交检查共用一份）。 */
+export function remoteClone(
+  host: { os: string; data_dir: string },
+  url: string,
+) {
+  return flavor(host.os).join(host.data_dir, "repos", cloneName(url));
 }
 
 /** 服务派来的路径必须落在代理数据目录里（代理这一侧再查一遍，不信任何绝对路径）。 */

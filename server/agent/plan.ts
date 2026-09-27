@@ -1,4 +1,9 @@
-import type { AgentCommand, Assignment } from "../hosts/protocol.ts";
+import {
+  MAX_BUNDLE_BYTES,
+  type AgentCommand,
+  type Assignment,
+  type CheckSource,
+} from "../hosts/protocol.ts";
 import { insideData, isKnownTool } from "../hosts/state.ts";
 
 /**
@@ -99,6 +104,47 @@ export function assignmentRefusal(
   return null;
 }
 
+const REF_NAME = /^[A-Za-z0-9._/-]+$/;
+
+/** 按提交检查的来源：克隆在代理数据目录里、地址像个地址、提交是完整哈希、bundle 不超限。 */
+export function sourceRefusal(
+  source: CheckSource,
+  os: string,
+  dataDir: string,
+): string | null {
+  if (typeof source !== "object" || source === null) return "检查来源不合法";
+  if (
+    typeof source.clone !== "string" ||
+    !insideData(os, dataDir, source.clone)
+  )
+    return "检查的克隆不在代理数据目录里";
+  if (
+    typeof source.url !== "string" ||
+    !source.url ||
+    /^-/.test(source.url) ||
+    /\s/.test(source.url)
+  )
+    return "仓库地址不合法";
+  if (
+    typeof source.commit !== "string" ||
+    !/^[0-9a-f]{40,64}$/.test(source.commit)
+  )
+    return "提交号不合法";
+  if (
+    typeof source.base !== "string" ||
+    !REF_NAME.test(source.base) ||
+    source.base.startsWith("-")
+  )
+    return "基础分支名不合法";
+  if (
+    source.bundle !== undefined &&
+    (typeof source.bundle !== "string" ||
+      source.bundle.length > Math.ceil(MAX_BUNDLE_BYTES / 3) * 4)
+  )
+    return "提交包太大或不合法";
+  return null;
+}
+
 /** 这条指令代理照不照做；不照做时回执里写原因。 */
 export function commandRefusal(
   command: AgentCommand,
@@ -111,7 +157,11 @@ export function commandRefusal(
     case "exec":
       return gitRefusal(command.args, os, dataDir);
     case "check":
-      return insideData(os, dataDir, command.worktree)
+      if ((command.worktree === undefined) === (command.source === undefined))
+        return "检查要么给工作树、要么给提交";
+      if (command.source) return sourceRefusal(command.source, os, dataDir);
+      return typeof command.worktree === "string" &&
+        insideData(os, dataDir, command.worktree)
         ? null
         : "检查的工作树不在代理数据目录里";
     case "stop":

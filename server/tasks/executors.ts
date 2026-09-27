@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { launched, type Active } from "./active.ts";
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
@@ -19,7 +19,7 @@ import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import { dequeue, heads, queuedNormals } from "./queue.ts";
 import { idleAhead } from "./priority.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
-import { diffSize, logTail, settle } from "./settle.ts";
+import { diffSize, logTail, settle, type CheckFn } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
 import { alive, spawnWorker } from "./spawn.ts";
 import { finishPatrol, patrolRun } from "./patrol.ts";
@@ -62,6 +62,7 @@ import { isCouncilTask, isOpinionTask } from "./councils.ts";
 import { taskRoute } from "../leaders/subscriber.ts";
 import type { HostGate } from "./host-load.ts";
 import type { RemoteHosts } from "../hosts/remote.ts";
+import type { CheckDispatch } from "../hosts/check-runtime.ts";
 import { nextRun } from "../hosts/model.ts";
 import {
   hostRef,
@@ -70,7 +71,7 @@ import {
   type HostNeed,
 } from "../hosts/state.ts";
 import type { Assignment } from "../hosts/protocol.ts";
-import { runLocalCheck } from "./local-check.ts";
+import { checkDetail, runLocalCheck } from "./local-check.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -114,6 +115,8 @@ export type ExecutorContext = {
   hostGate?: (urgent: boolean) => HostGate;
   /** 远程主机的代理连接（#358 第 1 步）；没有时只在本机跑。 */
   remote?: RemoteHosts;
+  /** 本地检查派到哪台跑（#358 第 2 步）；没有时只在本机跑。 */
+  checks?: CheckDispatch;
   /** 排队拉起时挑主机；没有时只看本机闸门。 */
   placement?: Placement;
 };
@@ -570,6 +573,44 @@ export class Executors {
     this.ctx.waits.changed(id);
   }
 
+  /**
+   * 交付后的本地检查在哪跑：远程任务的工作树在那台，交给那台的代理；
+   * 本机任务按提交派到空闲主机（本机也是候选，那台没跑成就换一台或回本机）。
+   */
+  private checkFor(id: number, active: Active): CheckFn {
+    const remote = this.ctx.remote;
+    const host = active.host;
+    if (host !== undefined && remote)
+      return async (input) => {
+        const ref = hostRef(host);
+        const log = join(input.taskDir, "local-check.log");
+        input.onStatus?.("started", log, ref);
+        const { infra: _infra, ...result } = await remote.check(host, {
+          task: id,
+          worktree: input.worktree,
+          urgent: input.urgent ?? false,
+          logFile: log,
+        });
+        return result;
+      };
+    const checks = this.ctx.checks;
+    if (!checks) return runLocalCheck;
+    return (input) =>
+      checks.run({
+        task: id,
+        worktree: input.worktree,
+        taskDir: input.taskDir,
+        base: active.base,
+        env: input.env,
+        urgent: input.urgent,
+        onStatus: input.onStatus,
+        onMoved: (from, reason) => {
+          noteTask(this.ctx.db, id, "local_check_moved", { from, reason });
+          this.ctx.waits.changed(id);
+        },
+      });
+  }
+
   // ---- 退出收尾 ----
 
   async finish(id: number, exit: Exit) {
@@ -603,27 +644,20 @@ export class Executors {
           ]),
         ];
       }
-      const remote = this.ctx.remote;
-      const host = active.host;
       const outcome = await settle(
         active,
         exit,
         this.execFor(active),
-        (status, log) => {
-          noteTask(this.ctx.db, id, `local_check_${status}`, { log });
+        (status, log, host) => {
+          noteTask(this.ctx.db, id, `local_check_${status}`, {
+            ...(host ? { host } : {}),
+            log,
+          });
           this.ctx.waits.changed(id);
         },
         this.ctx.launchOptions.env,
         getTask(this.ctx.db, id).urgent === 1,
-        // 远程任务的工作树在那台机器上：本地检查交给那台的代理跑。
-        host !== undefined && remote
-          ? (input) =>
-              remote.check(host, {
-                task: id,
-                worktree: input.worktree,
-                urgent: input.urgent ?? false,
-              })
-          : runLocalCheck,
+        this.checkFor(id, active),
       );
       if (this.ctx.closed()) return;
       this.collectSkills(active);
@@ -631,7 +665,12 @@ export class Executors {
       const { verdict, facts } = outcome;
       let { decision } = outcome;
       if (outcome.localCheck)
-        noteTask(this.ctx.db, id, "local_check", outcome.localCheck);
+        noteTask(
+          this.ctx.db,
+          id,
+          "local_check",
+          checkDetail(outcome.localCheck),
+        );
       if (outcome.workerGuardRefused)
         noteTask(this.ctx.db, id, "worker_guard_refused", {
           reason: "执行日志出现 Atrium 执行者防护的固定拒绝语句",

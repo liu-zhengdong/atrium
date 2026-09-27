@@ -50,6 +50,7 @@ export type TopRow = {
   concerns?: ConcernState[] | null;
   /** 现在球在谁手里（服务端判定）；旧版服务没有这个字段。 */
   holder?: Holder | null;
+  checking?: { host: string | null } | null;
   /** 日志最后写入时刻；没有日志为 0。 */
   log_at: number;
   action: { text: string; kind: string } | null;
@@ -206,6 +207,11 @@ function state(row: TopRow, now: number) {
 function action(row: TopRow, now: number) {
   const kind = phase(row);
   if (kind === "queued" || kind === "blocked") return "";
+  // 检查进行中（#358 第 2 步）：说在哪台跑，执行者日志已经不动了。
+  if (row.checking)
+    return row.checking.host && row.checking.host !== "h1"
+      ? `在 ${row.checking.host} 上跑检查`
+      : "本地检查中";
   if (row.action?.text)
     return `${row.action.text} · ${ago(row.log_at, now)} 前`;
   if (row.log_at) return `日志 ${ago(row.log_at, now)} 前有输出`;

@@ -20,7 +20,22 @@ export type LocalCheck = {
   log: string;
   detail: string;
   failedTests: string[];
+  /** 在哪台主机上跑的（#358 第 2 步，hN）；旧记录没有。 */
+  host?: string;
+  /** 检查的是哪个提交（按提交派到远程时有）。 */
+  commit?: string;
 };
+
+/** 记进事件的检查结果：结论、在哪台、哪个提交排在前面（`task show` 一行里先看到）。 */
+export function checkDetail(check: LocalCheck) {
+  const { status, host, commit, ...rest } = check;
+  return {
+    status,
+    ...(host ? { host } : {}),
+    ...(commit ? { commit } : {}),
+    ...rest,
+  };
+}
 
 /**
  * 本地检查排队：同时最多 limit 个（缺省 1，即串行），其余按到达顺序等空位（#358）。
@@ -166,6 +181,8 @@ export async function runLocalCheck(input: {
   onStatus?: (status: "queued" | "started", log: string) => void;
   /** 紧急任务（t113）：立刻跑，不占并发名额。 */
   urgent?: boolean;
+  /** 接着日志已有内容写（代理先把取提交、装依赖的输出写在前面）。 */
+  append?: boolean;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
   return (input.queue ?? sharedLocalChecks).run(
@@ -178,7 +195,10 @@ export async function runLocalCheck(input: {
           throw new Error("任务没有 worktree，不能运行本地检查");
         command = await checkCommand(input.worktree);
       } catch (error) {
-        writeFileSync(log, `${String(error)}\n`, { mode: 0o600 });
+        writeFileSync(log, `${String(error)}\n`, {
+          mode: 0o600,
+          flag: input.append ? "a" : "w",
+        });
         return {
           status: "error",
           command,
@@ -192,7 +212,7 @@ export async function runLocalCheck(input: {
       } catch {
         // 检查结果仍由关卡落库；进度事件失败不能中断检查。
       }
-      const fd = openSync(log, "w", 0o600);
+      const fd = openSync(log, input.append ? "a" : "w", 0o600);
       let child;
       try {
         child = spawnShell(command, {

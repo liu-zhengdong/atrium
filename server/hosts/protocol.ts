@@ -1,9 +1,10 @@
 import type { Tool } from "../tasks/adapters/types.ts";
 import type { LocalCheck } from "../tasks/local-check.ts";
+import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { AgentRun, HostInfo, HostLoadReport } from "./state.ts";
 
 /**
- * 服务与代理（`atrium agent`）之间的往来（#358 第 1 步）。代理主动连服务：长轮询领指令、另发请求上报日志与退出；
+ * 服务与代理（`atrium agent`）之间的往来（#358 第 1、2 步）。代理主动连服务：长轮询领指令、另发请求上报日志、退出与额度；
  * 服务只下发四种指令：拉起执行者、停下、在代理机器上跑只读 git、跑本地检查。
  */
 
@@ -46,9 +47,27 @@ export type AgentCommand =
       id: string;
       kind: "check";
       task: number;
-      worktree: string;
       urgent: boolean;
+      /** 远程任务：就在它那台的工作树里跑。 */
+      worktree?: string;
+      /** 按提交检查（#358 第 2 步）：代理取到这个提交、在自己的检查工作树里跑。与 worktree 二选一。 */
+      source?: CheckSource;
     };
+
+/**
+ * 要检查的提交从哪来：代理先克隆或 fetch 远端地址的基础分支，服务那边有、远端还没有的提交
+ * （没推送的交付、合入队列 rebase 后的提交）装在 bundle 里带过去。凭据留在代理那台，不经服务传。
+ */
+export type CheckSource = {
+  url: string;
+  /** 代理数据目录下的克隆路径。 */
+  clone: string;
+  commit: string;
+  /** 先 fetch 的基础分支：bundle 的前置提交在它上面。 */
+  base: string;
+  /** base64 的 git bundle；提交已在远端时不带。 */
+  bundle?: string;
+};
 
 /** 拉起的回执：pid、本轮日志从远程日志文件的哪个字节开始、代理实际的进程调用（写进日志抬头的那份）。 */
 export type LaunchAck =
@@ -66,12 +85,22 @@ export type LaunchAck =
   | { ok: false; error: string };
 
 export type ExecReply = { ok: boolean; stdout: string; stderr: string };
-export type CheckReply = LocalCheck;
+/**
+ * 检查回执：infra 表示这台没跑成（取不到提交、装不上依赖、拒绝），服务换一台或回本机重跑；
+ * size 是代理这边检查日志的总字节数，服务还没收全时让代理先补传。
+ */
+export type CheckReply = LocalCheck & {
+  commit?: string;
+  infra?: string;
+  size?: number;
+};
 
 /** 接入：接入码放在 Authorization 头（`Bearer h<N>-…`），认证在读请求体之前。 */
 export type JoinBody = { info: HostInfo };
 export type HelloBody = { info: HostInfo; runs: AgentRun[] };
 export type PollBody = { load: HostLoadReport; busy: string[] };
+/** 长轮询的回答：cancel 是代理手上、服务已不再等的指令（检查退回本机后，代理那边停下）。 */
+export type PollReply = { commands: AgentCommand[]; cancel?: string[] };
 export type LogBody = {
   task: number;
   run: number;
@@ -89,7 +118,17 @@ export type ExitBody = {
   last_message?: string;
 };
 
+/** 检查日志按指令 id 续传，偏移是代理这边检查日志的字节位置。 */
+export type CheckLogBody = { id: string; offset: number; data: string };
+
+/** 代理读到的额度（自带读取器，#352）：只有额度数字与账号指纹，不含令牌。 */
+export type QuotaBody = {
+  readings: { provider: string; outcome: ReaderOutcome }[];
+};
+
 /** 一段日志最多传多少字节（base64 前）。 */
 export const LOG_CHUNK = 256 * 1024;
 /** 长轮询每轮最多挂多久。 */
 export const POLL_WAIT_MS = 25_000;
+/** bundle 超过这么大就不派到远程（在本机跑）。 */
+export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;

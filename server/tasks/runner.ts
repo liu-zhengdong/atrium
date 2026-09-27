@@ -120,6 +120,9 @@ import {
   type HostLoadReport,
   type HostNeed,
 } from "../hosts/state.ts";
+import type { CheckCandidate } from "../hosts/check-plan.ts";
+import { CheckDispatch } from "../hosts/check-runtime.ts";
+import { setHostQuotaSource, type HostQuotaSnapshot } from "../hosts/quota.ts";
 import { machineInfo } from "../hosts/info.ts";
 import { originRepo } from "./gh-repo.ts";
 import { patrolRun } from "./patrol.ts";
@@ -172,6 +175,10 @@ export type RunnerOptions = {
   agentPollMs?: number;
   /** 派给代理要等结果的指令没人来领多久就报错（毫秒）；测试缩短。 */
   agentPickupMs?: number;
+  /** 代理多久没来算离线（测试缩短）；缺省 1 分钟。 */
+  agentOnlineMs?: number;
+  /** 远程检查进行中多久看一次那台在不在线（测试缩短）。 */
+  agentCheckWatchMs?: number;
 };
 
 export class TaskRunner {
@@ -189,6 +196,10 @@ export class TaskRunner {
   private readonly host: HostLoad;
   /** 远程主机的代理连接（#358 第 1 步）。 */
   readonly remote: RemoteHosts;
+  /** 本地检查派到哪台跑（#358 第 2 步）。 */
+  private readonly checks: CheckDispatch;
+  /** 额度多主机合并的来源（quota-source 经 hosts/quota.ts 取）。 */
+  private readonly quotaSource = () => this.hostQuota();
   /** 任务仓库路径 → owner/name（挑远程主机时对仓库白名单）；解析不出为 null。 */
   private readonly repoKeys = new Map<string, string | null>();
   private readonly timers: NodeJS.Timeout[] = [];
@@ -226,7 +237,15 @@ export class TaskRunner {
     this.remote = new RemoteHosts(db, options.data, {
       pollMs: options.agentPollMs,
       pickupMs: options.agentPickupMs,
+      onlineMs: options.agentOnlineMs,
+      checkWatchMs: options.agentCheckWatchMs,
     });
+    this.checks = new CheckDispatch({
+      remote: this.remote,
+      candidates: () => this.checkCandidates(),
+      run: options.exec ?? defaultExec,
+    });
+    setHostQuotaSource(this.quotaSource);
     this.inbox = new EventInbox(db, {
       batchMs: options.batchMs,
       leaseMs: options.leaseMs,
@@ -290,6 +309,7 @@ export class TaskRunner {
       onAccepted: (id) => this.review.admit(id),
       hostGate: (urgent) => this.host.gate(this.x.inFlight(), urgent),
       remote: this.remote,
+      checks: this.checks,
       placement: {
         need: (id, tool, urgent) => this.hostNeed(id, tool, urgent),
         choose: (need, pinned) => this.chooseHostFor(need, pinned),
@@ -314,6 +334,7 @@ export class TaskRunner {
       env: this.launchOptions.env,
       run: this.exec,
       prHeadWaitMs: options.mergeHeadWaitMs,
+      checks: this.checks,
       changed: (id) => this.waits.changed(id),
       cleaned: async (id) => {
         await this.cleanup.cleanup(id);
@@ -466,6 +487,7 @@ export class TaskRunner {
     this.inbox.close();
     this.waits.close();
     this.remote.close();
+    setHostQuotaSource(null, this.quotaSource);
     const mergeClosing = this.merge.close();
     this.review.close();
     this.online.close();
@@ -851,6 +873,7 @@ export class TaskRunner {
           lastSeenAt: row.last_seen_at,
           polling: this.remote.polling(row.id),
           now,
+          onlineMs: this.remote.onlineMs,
         }),
         paused: row.paused === 1,
         clis: info?.clis ?? {},
@@ -860,6 +883,89 @@ export class TaskRunner {
         busy: load?.busy ?? null,
       };
     });
+  }
+
+  /** 各主机此刻能不能接检查（本机按共享检查队列与负载，远程按代理上报与服务派过去还没回来的）。 */
+  private checkCandidates(): CheckCandidate[] {
+    const now = Date.now();
+    return hostRows(this.db).map((row): CheckCandidate => {
+      if (row.kind === "local") {
+        const size = sharedLocalChecks.size;
+        const gate = this.host.gate(0, false);
+        return {
+          id: row.id,
+          kind: "local",
+          connection: "local",
+          paused: row.paused === 1,
+          repos: ["*"],
+          cpus: this.host.limits.cores,
+          load: this.host.load(),
+          running: size.running + size.waiting,
+          max: sharedLocalChecks.limit,
+          busy: gate.ok ? null : gate.reason,
+        };
+      }
+      const info = parseJson<HostInfo>(row.info);
+      const load = parseJson<HostLoadReport>(row.load);
+      return {
+        id: row.id,
+        kind: "remote",
+        connection: connection({
+          kind: "remote",
+          joined: row.token_hash !== null,
+          joinExpiresAt: row.join_expires_at,
+          lastSeenAt: row.last_seen_at,
+          polling: this.remote.polling(row.id),
+          now,
+          onlineMs: this.remote.onlineMs,
+        }),
+        paused: row.paused === 1,
+        repos: parseJson<string[]>(row.repos) ?? [],
+        cpus: info?.cpus ?? 1,
+        load: load?.load ?? 0,
+        running: this.remote.checksOn(row.id),
+        // 旧版代理不报 max_checks，也不认按提交检查：不派给它。
+        max: info?.max_checks ?? 0,
+        busy: load?.busy ?? null,
+      };
+    });
+  }
+
+  /** 各主机的额度读数与各 CLI 能在哪几台用（额度多主机合并，#358 第 2 步）。 */
+  private hostQuota(): HostQuotaSnapshot {
+    const now = Date.now();
+    const usable: { host: string; tools: Tool[] }[] = [];
+    let local = hostRef(LOCAL_HOST);
+    for (const row of hostRows(this.db)) {
+      if (row.kind === "local") local = hostRef(row.id);
+      const online =
+        row.kind === "local" ||
+        connection({
+          kind: "remote",
+          joined: row.token_hash !== null,
+          joinExpiresAt: row.join_expires_at,
+          lastSeenAt: row.last_seen_at,
+          polling: this.remote.polling(row.id),
+          now,
+          onlineMs: this.remote.onlineMs,
+        }) === "online";
+      if (!online || row.paused === 1) continue;
+      const clis = parseJson<HostInfo>(row.info)?.clis ?? {};
+      usable.push({
+        host: hostRef(row.id),
+        tools: TOOLS.filter(
+          (tool) => clis[tool]?.installed && clis[tool]?.logged_in !== false,
+        ),
+      });
+    }
+    return {
+      local,
+      usable,
+      reports: this.remote.quotaReports().map((report) => ({
+        host: hostRef(report.host),
+        readings: report.readings,
+      })),
+    };
   }
 
   private chooseHostFor(
@@ -874,6 +980,7 @@ export class TaskRunner {
     const running = this.x.inFlight(undefined, row.id);
     const view = hostRowView(row, {
       polling: this.remote.polling(row.id),
+      onlineMs: this.remote.onlineMs,
       running,
       localMax: this.host.limits.maxWorkers,
     });

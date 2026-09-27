@@ -61,6 +61,7 @@ export function machineInfo(input: {
   env: NodeJS.ProcessEnv;
 }): HostInfo {
   const cores = availableParallelism();
+  const limits = hostLimits(input.env, cores).limits;
   return {
     hostname: hostname(),
     os: process.platform,
@@ -71,6 +72,7 @@ export function machineInfo(input: {
     version: input.version,
     data_dir: input.dataDir,
     clis: detectClis(input.env),
-    max_workers: hostLimits(input.env, cores).limits.maxWorkers,
+    max_workers: limits.maxWorkers,
+    max_checks: limits.maxChecks,
   };
 }

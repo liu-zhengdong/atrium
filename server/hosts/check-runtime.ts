@@ -1,0 +1,203 @@
+import { readFileSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { firstLine, type Exec } from "../tasks/git.ts";
+import { parseRemote } from "../tasks/gh-repo.ts";
+import {
+  runLocalCheck,
+  type LocalCheck,
+  type LocalCheckQueue,
+} from "../tasks/local-check.ts";
+import {
+  checkRefusal,
+  chooseCheckHost,
+  type CheckCandidate,
+} from "./check-plan.ts";
+import { MAX_BUNDLE_BYTES, type CheckSource } from "./protocol.ts";
+import type { RemoteHosts } from "./remote.ts";
+import { hostRef, remoteClone } from "./state.ts";
+
+/**
+ * 本地检查派到哪台跑（#358 第 2 步）：交付后的 local_check 与合入队列的重跑检查共用。
+ * 挑主机是 check-plan.ts 的纯函数；这里取候选、在本机工作树里取提交与 bundle、派给代理，
+ * 那台没跑成（离线、超时、取不到提交）就换一台或回本机重跑。关卡怎么判不变，只是换地方跑命令。
+ */
+
+export type CheckRequest = {
+  task: number;
+  /** 本机的任务工作树（合入队列是 rebase 后的那份）。 */
+  worktree: string;
+  /** 服务这边的任务目录：检查日志写在这里（远程的续传回来也写这里）。 */
+  taskDir: string;
+  /** 基础分支：bundle 只带 origin/<base> 之后的提交；不知道时只在本机跑。 */
+  base: string | null;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  urgent?: boolean;
+  onStatus?: (status: "queued" | "started", log: string, host: string) => void;
+  /** 某台没跑成、换地方重跑时。 */
+  onMoved?: (from: string, reason: string) => void;
+};
+
+type Prepared =
+  | { ok: true; source: Omit<CheckSource, "clone">; repo: string }
+  | { ok: false; reason: string };
+
+/** 一次检查最多换几台远程（之后回本机）。 */
+const MAX_REMOTE_TRIES = 3;
+
+export class CheckDispatch {
+  constructor(
+    private readonly deps: {
+      remote: RemoteHosts;
+      /** 各主机此刻的检查候选（本机在里面）。 */
+      candidates: () => CheckCandidate[];
+      run: Exec;
+      queue?: LocalCheckQueue;
+      /** 测试注入：本机怎么跑检查。 */
+      runLocal?: typeof runLocalCheck;
+    },
+  ) {}
+
+  async run(request: CheckRequest): Promise<LocalCheck> {
+    const tried = new Set<number>();
+    let prepared: Prepared | undefined;
+    for (let attempt = 0; attempt < MAX_REMOTE_TRIES; attempt++) {
+      const candidates = this.deps.candidates();
+      // 没有能接的远程主机时不碰 git：只有本机的服务照旧直接跑。
+      if (
+        !candidates.some(
+          (c) =>
+            c.kind === "remote" &&
+            !tried.has(c.id) &&
+            !checkRefusal(c, { repo: "*", urgent: false }),
+        )
+      )
+        break;
+      prepared ??= await this.prepare(request);
+      if (!prepared.ok) break;
+      const choice = chooseCheckHost(
+        candidates,
+        { repo: prepared.repo, urgent: request.urgent ?? false },
+        tried,
+      );
+      if (choice.kind === "local") break;
+      const host = choice.host;
+      tried.add(host);
+      const site = (() => {
+        try {
+          return this.deps.remote.site(host);
+        } catch {
+          return null;
+        }
+      })();
+      if (!site) continue;
+      const ref = hostRef(host);
+      const log = join(request.taskDir, "local-check.log");
+      try {
+        request.onStatus?.("started", log, ref);
+      } catch {
+        // 进度事件记不上不影响检查。
+      }
+      const result = await this.deps.remote.check(host, {
+        task: request.task,
+        urgent: request.urgent ?? false,
+        logFile: log,
+        source: {
+          ...prepared.source,
+          clone: remoteClone(site, prepared.source.url),
+        },
+        signal: request.signal,
+      });
+      if (request.signal?.aborted) return withoutInfra(result);
+      if (!result.infra) return withoutInfra(result);
+      try {
+        request.onMoved?.(ref, result.infra);
+      } catch {
+        // 同上。
+      }
+    }
+    const localRef = hostRef(
+      this.deps.candidates().find((c) => c.kind === "local")?.id ?? 1,
+    );
+    const result = await (this.deps.runLocal ?? runLocalCheck)({
+      worktree: request.worktree,
+      taskDir: request.taskDir,
+      env: request.env,
+      signal: request.signal,
+      urgent: request.urgent,
+      ...(this.deps.queue ? { queue: this.deps.queue } : {}),
+      onStatus: (status, log) => request.onStatus?.(status, log, localRef),
+    });
+    return { ...result, host: localRef };
+  }
+
+  /** 在本机工作树里取要检查的提交：有没提交的改动只能在本机跑；没推送的提交打成 bundle 带过去。 */
+  private async prepare(request: CheckRequest): Promise<Prepared> {
+    const run = this.deps.run;
+    const git = (args: string[], timeoutMs = 30_000) =>
+      run("git", ["-C", request.worktree, ...args], { timeoutMs });
+    if (!request.base) return { ok: false, reason: "不知道基础分支" };
+    const dirty = await git(["--no-optional-locks", "status", "--porcelain"]);
+    if (!dirty.ok) return { ok: false, reason: firstLine(dirty.stderr) };
+    if (dirty.stdout.trim())
+      return { ok: false, reason: "工作树有没提交的改动，只能在本机检查" };
+    const head = await git(["rev-parse", "HEAD"]);
+    const url = await git(["remote", "get-url", "origin"]);
+    const base = await git([
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `refs/remotes/origin/${request.base}^{commit}`,
+    ]);
+    if (!head.ok || !url.ok || !base.ok)
+      return { ok: false, reason: "取不到提交、远端地址或基础分支" };
+    const commit = head.stdout.trim();
+    const baseCommit = base.stdout.trim();
+    const parsed = parseRemote(url.stdout.trim());
+    const repo = parsed ? `${parsed.owner}/${parsed.name}` : "?";
+    const source: Omit<CheckSource, "clone"> = {
+      url: url.stdout.trim(),
+      commit,
+      base: request.base,
+    };
+    const pushed = await git([
+      "merge-base",
+      "--is-ancestor",
+      commit,
+      baseCommit,
+    ]);
+    if (pushed.ok) return { ok: true, source, repo };
+    const file = join(request.taskDir, `check-${process.pid}.bundle`);
+    try {
+      const bundled = await git(
+        ["bundle", "create", file, "HEAD", `^${baseCommit}`],
+        120_000,
+      );
+      if (!bundled.ok)
+        return {
+          ok: false,
+          reason: `打包提交失败：${firstLine(bundled.stderr)}`,
+        };
+      if (statSync(file).size > MAX_BUNDLE_BYTES)
+        return { ok: false, reason: "要带过去的提交太大，在本机检查" };
+      return {
+        ok: true,
+        source: { ...source, bundle: readFileSync(file).toString("base64") },
+        repo,
+      };
+    } catch (error) {
+      return { ok: false, reason: String(error) };
+    } finally {
+      rmSync(file, { force: true });
+    }
+  }
+}
+
+/** 调用方只看关卡要的字段；infra 是这里换主机用的，不往外带。 */
+function withoutInfra(result: LocalCheck & { infra?: string }): LocalCheck {
+  const { infra: _infra, ...rest } = result as LocalCheck & {
+    infra?: string;
+    size?: number;
+  };
+  return rest;
+}

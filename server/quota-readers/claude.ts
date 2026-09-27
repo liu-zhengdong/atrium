@@ -1,4 +1,5 @@
 import {
+  accountKey,
   describeSource,
   firstCredential,
   parseJsonDocument,
@@ -12,7 +13,7 @@ import {
   timeOf,
   transportReason,
 } from "./http.ts";
-import { claudeSources } from "./paths.ts";
+import { claudeAccountFile, claudeSources } from "./paths.ts";
 import type { QuotaWindow, ReadResult, Reader, ReaderDeps } from "./types.ts";
 
 /**
@@ -153,6 +154,44 @@ export function mapClaudeUsage(body: unknown): QuotaWindow[] | undefined {
   return windows.length ? windows : undefined;
 }
 
+/** `.claude.json` 太大（项目历史）时不读：账号指纹认不出也不影响额度。 */
+const MAX_ACCOUNT_FILE = 32 * 1024 * 1024;
+
+/** 配置文件里的登录账号 → 指纹（账号 + 组织）；认不出为 null。 */
+export function claudeAccount(text: string | undefined): string | null {
+  if (!text || text.length > MAX_ACCOUNT_FILE) return null;
+  let document: unknown;
+  try {
+    document = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const account =
+    isObject(document) && isObject(document.oauthAccount)
+      ? document.oauthAccount
+      : {};
+  const id =
+    typeof account.accountUuid === "string" ? account.accountUuid.trim() : "";
+  if (!id) return null;
+  const org =
+    typeof account.organizationUuid === "string"
+      ? account.organizationUuid.trim()
+      : "";
+  return accountKey("claude", `${id}:${org}`);
+}
+
+async function readClaudeAccount(deps: ReaderDeps) {
+  try {
+    return claudeAccount(
+      await deps.readFile(
+        claudeAccountFile(deps.platform, deps.home, deps.env),
+      ),
+    );
+  } catch {
+    return null;
+  }
+}
+
 export async function readClaude(deps: ReaderDeps): Promise<ReadResult> {
   const found = await firstCredential(
     claudeSources(deps.platform, deps.home, deps.env),
@@ -207,6 +246,7 @@ export async function readClaude(deps: ReaderDeps): Promise<ReadResult> {
     plan: claudePlan(login.subscriptionType, login.rateLimitTier),
     windows,
     refreshedAt: now,
+    account: await readClaudeAccount(deps),
   };
 }
 

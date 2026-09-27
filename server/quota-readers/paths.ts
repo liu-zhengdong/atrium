@@ -85,6 +85,22 @@ export function claudeSources(
   return [...keychain, ...files];
 }
 
+/**
+ * Claude Code 记登录账号（oauthAccount）的配置文件：设了 CLAUDE_CONFIG_DIR 就在它下面，
+ * 否则在主目录（三个平台一样）。只用来算账号指纹，不含凭据。
+ */
+export function claudeAccountFile(
+  platform: Platform,
+  home: string,
+  env: Env,
+): string {
+  const path = pathFor(platform);
+  const configDir = nonEmpty(env.CLAUDE_CONFIG_DIR);
+  return configDir
+    ? path.join(expandHome(configDir, home, platform), ".claude.json")
+    : path.join(home, ".claude.json");
+}
+
 export function codexSources(
   platform: Platform,
   home: string,

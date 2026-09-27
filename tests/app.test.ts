@@ -84,11 +84,13 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "GET /map/format.js",
     "GET /map/login",
     "GET /map/style.css",
+    "POST /api/agent/check-log",
     "POST /api/agent/exit",
     "POST /api/agent/hello",
     "POST /api/agent/join",
     "POST /api/agent/log",
     "POST /api/agent/poll",
+    "POST /api/agent/quota",
     "POST /api/agent/reply",
     "POST /api/auth/rotate",
   ]);

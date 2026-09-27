@@ -24,6 +24,10 @@ const KINDS = [
   "merge_returned",
   "escalated",
   "note",
+  "local_check_started",
+  "local_check",
+  "merge_check_started",
+  "merge_check",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -97,6 +101,18 @@ export function holderFacts(
         : { by: null, via: "rerun" };
     }
   }
+  // 正在跑的检查（#358 第 2 步）：开始了、还没出结果；在哪台跑记在开始事件里。
+  const checkingOf = (started: string, done: string, after = 0) => {
+    const begin = last(started, after);
+    if (!begin || last(done, begin.id)) return null;
+    return { host: text(parse(begin.detail).host) };
+  };
+  const checking =
+    row.delivery_stage === "merging"
+      ? checkingOf("merge_check_started", "merge_check")
+      : row.status === "running"
+        ? checkingOf("local_check_started", "local_check", last("start")?.id)
+        : null;
   const escalation = block ? last("escalated", block.id) : undefined;
   const escalated = escalation
     ? (() => {
@@ -146,6 +162,7 @@ export function holderFacts(
       : null,
     route: taskRoute(db, row).subscriber,
     council_escalated: council?.stage === "escalated",
+    checking,
   };
 }
 

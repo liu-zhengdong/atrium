@@ -35,6 +35,7 @@ const info = z.object({
   data_dir: z.string().min(1).max(1000),
   clis: z.partialRecord(z.enum(TOOLS), cli),
   max_workers: z.number().int().min(1).max(4096).nullable(),
+  max_checks: z.number().int().min(1).max(64).optional(),
 });
 const load = z.object({
   load: z.number().min(0).max(1e6),
@@ -46,6 +47,37 @@ const run = z.object({
   task: id,
   run: id,
   state: z.enum(["running", "exited"]),
+});
+
+const text = (max: number) => z.string().max(max);
+const quotaWindow = z.object({
+  id: text(80),
+  label: text(80),
+  usedPercent: z.number().min(-1e6).max(1e6),
+  resetsAt: z.number().nullable(),
+  periodSeconds: z.number().min(0).max(1e9),
+});
+/** 代理上报的额度读数：只有数字、套餐名与账号指纹（不含令牌），各字段有界。 */
+const reading = z.object({
+  provider: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
+  outcome: z.union([
+    z.object({
+      ok: z.literal(true),
+      result: z.object({
+        ok: z.literal(true),
+        plan: text(80).nullable(),
+        windows: z.array(quotaWindow).max(20),
+        refreshedAt: z.number(),
+        account: z
+          .string()
+          .regex(/^[a-f0-9]{8,64}$/)
+          .nullable()
+          .optional(),
+      }),
+      note: text(300).nullable(),
+    }),
+    z.object({ ok: z.literal(false), reason: text(300) }),
+  ]),
 });
 
 const params = (request: FastifyRequest) =>
@@ -156,6 +188,26 @@ export function registerHostRoutes(
       .strict()
       .parse(request.body ?? {});
     return remote.log(host, body);
+  });
+  app.post("/api/agent/check-log", (request) => {
+    const host = hostOf(request);
+    const body = z
+      .object({
+        id: z.string().max(64),
+        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        data: z.string().max(1024 * 1024),
+      })
+      .strict()
+      .parse(request.body ?? {});
+    return remote.checkLog(host, body);
+  });
+  app.post("/api/agent/quota", { bodyLimit: 256 * 1024 }, (request) => {
+    const host = hostOf(request);
+    const body = z
+      .object({ readings: z.array(reading).max(20) })
+      .strict()
+      .parse(request.body ?? {});
+    return remote.quota(host, body);
   });
   app.post("/api/agent/exit", { bodyLimit: 1024 * 1024 }, (request) => {
     const host = hostOf(request);

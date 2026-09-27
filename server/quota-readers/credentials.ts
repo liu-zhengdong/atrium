@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CredentialSource, ReaderDeps } from "./types.ts";
 
 /** 凭据文件上限：超过的不是登录文件，不读进内存。 */
@@ -70,6 +71,33 @@ export function parseJsonDocument(text: string): unknown {
     } catch {
       return undefined;
     }
+  }
+}
+
+/**
+ * 账号指纹：`<provider>:<账号 id>` 的 sha256 前 16 位十六进制。多台主机合并额度时按它去重，
+ * 只把指纹传给服务，账号 id 与令牌都不出这台机器。
+ */
+export function accountKey(provider: string, id: string): string {
+  return createHash("sha256")
+    .update(`${provider}:${id}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** JWT 载荷（只解码，不校验签名）；不是 JWT 为 undefined。 */
+export function jwtPayload(token: string): Record<string, unknown> | undefined {
+  const payload = token.split(".")[1];
+  if (!payload) return undefined;
+  try {
+    const data: unknown = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8"),
+    );
+    return data && typeof data === "object" && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 

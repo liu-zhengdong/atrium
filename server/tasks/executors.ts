@@ -666,7 +666,7 @@ export class Executors {
       try {
         const worker = await resolveWorker(
           entry.worker,
-          this.ctx.launchOptions.workersDir,
+          this.ctx.launchOptions.db,
         );
         if (this.ctx.closed()) return moved;
         const task = getTask(this.ctx.db, entry.task_id);

@@ -55,7 +55,6 @@ export function deliveryRules(task: Task): readonly string[] {
 export type LaunchOptions = {
   db?: DatabaseSync;
   data: string;
-  workersDir: string;
   env: NodeJS.ProcessEnv;
   /** 隔离服务显式指定的数据与端口，巡检进程据此连回该服务。 */
   patrolServiceEnv?: NodeJS.ProcessEnv;

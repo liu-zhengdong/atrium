@@ -5,7 +5,6 @@ import { all, nodes, one } from "../org/model.ts";
 import { getJobRole, listJobRoles } from "../tasks/job-roles.ts";
 import type { Delivery, WorkerStat } from "../tasks/delivery-records.ts";
 import {
-  DEFAULT_WORKERS_DIR,
   parseWorker,
   resolveWorker,
   type ProfileLayer,
@@ -129,7 +128,6 @@ export async function mapRole(
   db: DatabaseSync,
   address: string,
   live: readonly LiveRow[] = [],
-  dir = DEFAULT_WORKERS_DIR,
 ) {
   if (!hasTable(db, "job_roles"))
     throw new Problem(404, `角色 ${address} 不存在`, "not_found");
@@ -150,7 +148,7 @@ export async function mapRole(
   const tasks = rows.map((r) =>
     taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id)),
   );
-  const report = await workersReport(db, role.ref, dir);
+  const report = await workersReport(db, role.ref);
   const skills = mapSkills(db).skills.filter((s) =>
     role.skills.includes(s.slug),
   );
@@ -182,14 +180,10 @@ const adviceView = ({ stat, advice }: Advice) => ({
 });
 
 /** 执行者页签：一行 = 组合 × 角色；按角色筛选时只留该角色。另给待秘书确认的升降建议。 */
-export async function mapWorkers(
-  db: DatabaseSync,
-  role?: string,
-  dir = DEFAULT_WORKERS_DIR,
-) {
+export async function mapWorkers(db: DatabaseSync, role?: string) {
   if (!hasTable(db, "task_deliveries"))
     return { role: null, rows: [], suggestions: [] };
-  const report = await workersReport(db, role || undefined, dir);
+  const report = await workersReport(db, role || undefined);
   return {
     role: report.role ? { ref: report.role.ref, name: report.role.name } : null,
     rows: combinations(report.stats),
@@ -319,15 +313,11 @@ export function profileNotes(layers: readonly Pick<ProfileLayer, "body">[]) {
 }
 
 /** 执行者页：档案（信任、观察）与交付记录。既没交付过也没有模型或组合档案的，当不存在。 */
-export async function mapWorker(
-  db: DatabaseSync,
-  id: string,
-  dir = DEFAULT_WORKERS_DIR,
-) {
+export async function mapWorker(db: DatabaseSync, id: string) {
   parseWorker(id);
-  const resolved = await resolveWorker(id, dir);
+  const resolved = await resolveWorker(id, db);
   const report = hasTable(db, "task_deliveries")
-    ? await workerReport(db, id, dir)
+    ? await workerReport(db, id)
     : null;
   const profile = resolved.profile;
   const records = report?.deliveries ?? [];

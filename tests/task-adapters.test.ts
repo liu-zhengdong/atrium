@@ -21,6 +21,7 @@ import {
   type Tool,
 } from "../server/tasks/adapters/index.ts";
 import { parseFrontmatter } from "../server/tasks/frontmatter.ts";
+import { profileDb } from "./profile-fixture.ts";
 import {
   mergeLayers,
   parseWorker,
@@ -268,9 +269,11 @@ const layer = (
   body = "",
 ): ProfileLayer => ({
   layer: l,
-  file: `${l}.md`,
+  file: `${l}/x`,
+  rev: 1,
   rules,
   body,
+  notes: "",
   warnings: [],
 });
 
@@ -358,7 +361,8 @@ test("resolveWorker：三层读取、默认模型与档案 model", async () => {
       "---\nmax_risk: low\nmodel: grok-4.6\nlimits: {max_file_added_lines: 300}\ntrust: bogus\n---\n别堆上帝组件",
     );
 
-    const oc = await resolveWorker("opencode", dir);
+    const db = profileDb(dir);
+    const oc = await resolveWorker("opencode", db);
     assert.equal(oc.model, "opencode-go/mimo-v2.6-flash");
     assert.equal(oc.cliModel, "opencode-go/mimo-v2.6-flash");
     assert.equal(oc.id, "opencode+opencode-go/mimo-v2.6-flash");
@@ -371,7 +375,7 @@ test("resolveWorker：三层读取、默认模型与档案 model", async () => {
     assert.equal(oc.profile.rules.max_risk, "medium");
     assert.equal(oc.profile.body, "工具的坑\n\n记得提交");
 
-    const gk = await resolveWorker("grok:high", dir);
+    const gk = await resolveWorker("grok:high", db);
     assert.equal(gk.model, "grok-4.6");
     assert.equal(gk.effort, "high");
     assert.equal(gk.profile.rules.max_risk, "low");
@@ -379,11 +383,11 @@ test("resolveWorker：三层读取、默认模型与档案 model", async () => {
     assert.equal(gk.profile.warnings.length, 1);
     assert.match(gk.profile.warnings[0], /trust/);
 
-    // 目录里没有档案：退回适配器默认模型，规则为空。
-    const cx = await resolveWorker("codex+gpt-6-astra", dir);
+    // 库里没有档案：退回适配器默认模型，规则为空。
+    const cx = await resolveWorker("codex+gpt-6-astra", db);
     assert.equal(cx.cliModel, "gpt-6-astra");
     assert.deepEqual(cx.profile.layers, []);
-    const km = await resolveWorker("kimi", join(dir, "missing"));
+    const km = await resolveWorker("kimi", profileDb(join(dir, "missing")));
     assert.equal(km.model, undefined);
     assert.equal(km.id, "kimi");
   } finally {

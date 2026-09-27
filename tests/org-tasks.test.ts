@@ -328,7 +328,7 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
         },
         risk: "low",
       },
-      { db, data, workersDir: data, env: {} },
+      { db, data, env: {} },
     );
     const prompt = readFileSync(prepared.promptFile, "utf8");
     const at = (text: string) => {

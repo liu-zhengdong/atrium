@@ -300,9 +300,11 @@ test("档案合并：skills、avoid_nodes 取并集，skills_for 按节点合并
     rules: Record<string, unknown>,
   ) => ({
     layer: l,
-    file: `${l}.md`,
+    file: `${l}/x`,
+    rev: 1,
     rules: rules as never,
     body: "",
+    notes: "",
     warnings: [],
   });
   const merged = mergeLayers([
@@ -570,7 +572,6 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
         {
           db,
           data,
-          workersDir: data,
           env: { HOME: home },
         },
       );
@@ -717,7 +718,6 @@ test("回收：改了副本生成提议，采纳写成作者为任务号的新�
         {
           db,
           data,
-          workersDir: data,
           env: { HOME: data },
         },
       );

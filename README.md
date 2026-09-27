@@ -74,7 +74,15 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 
 **派活候选**（`task pick tN [--risk …]`，只读）：一行一位候选执行者——能不能接（没装、档案 `max_risk` 低于任务风险、`avoid_jobs` / `avoid_nodes` 避开、额度用尽标记、触及根章程保留份额、`billing=metered`；trust 低于 medium 的注明合入前另派审阅）、账号额度（已用、富余、距重置、扣掉保留份额后还剩多少）、是否正忙（独占工具，派了会排队）、此组合在干活的专员下的交付记录（次数、一次通过率）。最上面是推荐与一句理由（如「推荐 claude+opus：前端专员优先、claude 富余 +54%；codex 富余 −13%」），最后一行是 `atrium task run tN --worker <推荐>`；`--json` 给全部字段。候选顺序：干活的专员的优先执行者（按交付记录调整后的顺序）里能接、不正忙的在前，其余能接的按账号富余从多到少，正忙的独占工具最后。`task run` 不写 `--worker` 时按同一份顺序挑，回执写「按额度挑了 X，因为…」；写死 `--worker` 时若另有能接的候选富余多出 30 个百分点以上，回执加一行提醒（不拦）。`task add --parent` 建出的子任务回执下一步是 `atrium task pick tN`（顶层任务仍提示拆子任务）。
 
-**执行者档案**在 `~/Atrium/workers/`（`ATRIUM_WORKERS_DIR` 可改），三层叠加：`harness/<工具>.md` ← `models/<模型>.md` ← `combos/<工具>+<模型>.md`。frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时取更严；正文原样附进提示词。
+**执行者档案**存在数据目录的数据库里，每次改动留修订。三层叠加：`harness/<工具>` ← `models/<模型>` ← `combos/<工具>+<模型>`。每份档案是 frontmatter + 正文：frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时取更严；正文原样附进提示词，其中 `## 交付记录` 一段作备注保留、不附进提示词（交付事实以交付记录表为准）。库里没有档案时用内置缺省（适配器的默认模型）。首次启动若 `ATRIUM_WORKERS_DIR`（缺省 `~/Atrium/workers/`）存在，把其中的 `*.md` 导入一次；读不了、名字不合法或超过 64 KB 的单个文件跳过并记日志，其余照常；导入后不再读这个目录。
+
+```bash
+atrium workers ls
+atrium workers show harness/codex
+atrium workers edit combos/codex+gpt-6-sol --trust medium --checks pr_exists,finished --reason 连续五次一次通过
+atrium workers edit models/grok-4.6 --file grok.md
+cat grok.md | atrium workers edit models/grok-4.6 --file -
+```
 
 **验收关卡**：执行者退出后，运行时自己查事实（PR、提交、改动规模、CI、issue 评论），按档案 `checks`（`finished`、`pr_exists`、`local_check`、`ci`、`file_growth`、`claims_verified`、`screenshots`）判定 `done` 或 `blocked`，原因写进任务事件，不采信执行者自述。`screenshots` 要求 PR 正文附 Markdown 图片或 GitHub 图片附件链接，所有截图的 HEAD 请求均返回 200。
 
@@ -102,7 +110,7 @@ atrium workers show claude+opus:high
 atrium workers confirm claude+opus:high --role 前端 --action tighten
 ```
 
-`workers` 展示组合 × 角色，并上卷到模型与工具；少于五次标「数据少」。建议只读，确认后才写组合档案。交付明细保留事实、缺失值与旧任务回填标记；`task note --verdict ok|fixed|rejected` 记录秘书的上线验证或用户纠正。
+`workers` 展示组合 × 角色，并上卷到模型与工具；少于五次标「数据少」。建议只读，确认后才写组合档案（库里，留修订）。交付明细保留事实、缺失值与旧任务回填标记；`task note --verdict ok|fixed|rejected` 记录秘书的上线验证或用户纠正。
 
 ## 额度
 
@@ -339,19 +347,19 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 
 ## 配置与数据
 
-| 环境变量                        | 用途                                                       |
-| ------------------------------- | ---------------------------------------------------------- |
-| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口          |
-| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                |
-| `ATRIUM_WORKERS_DIR`            | 执行者档案目录，默认 `~/Atrium/workers`                    |
-| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…` |
-| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                |
-| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                        |
-| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                             |
-| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60          |
-| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                           |
-| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20             |
-| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium` |
+| 环境变量                        | 用途                                                          |
+| ------------------------------- | ------------------------------------------------------------- |
+| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口             |
+| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                   |
+| `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers` |
+| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`    |
+| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                   |
+| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                           |
+| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                                |
+| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60             |
+| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                              |
+| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                |
+| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`    |
 
 数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
 

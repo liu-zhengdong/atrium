@@ -32,6 +32,12 @@ import {
   listJobRoles,
 } from "./job-roles.ts";
 import { TaskRunner, type RunnerOptions } from "./runner.ts";
+import {
+  editProfile,
+  listProfileViews,
+  profileView,
+} from "./worker-profile-edit.ts";
+import { resolveActor } from "../actor.ts";
 import { taskPlan } from "./schedule.ts";
 import { parseTaskRef } from "./ledger.ts";
 
@@ -90,13 +96,35 @@ export function registerTaskRoutes(
   );
   app.addHook("preClose", async () => runner.close());
   app.get("/api/workers", (request) =>
-    workersReport(db, query(request.query).role, runnerOptions.workersDir),
+    workersReport(db, query(request.query).role),
   );
   app.get("/api/workers/:id", (request) =>
-    workerReport(db, params(request.params).id!, runnerOptions.workersDir),
+    workerReport(db, params(request.params).id!),
+  );
+  // 执行者档案（#355）：库里的三层档案，改动留修订；`层/名` 拆成两段路径参数。
+  const profileRef = (request: FastifyRequest) => {
+    const p = (request.params ?? {}) as { layer?: string; name?: string };
+    return `${p.layer ?? ""}/${p.name ?? ""}`;
+  };
+  app.get("/api/workers/profiles", () => ({
+    profiles: listProfileViews(db),
+  }));
+  app.get("/api/workers/profiles/:layer/:name", (request) =>
+    profileView(db, profileRef(request)),
+  );
+  app.put(
+    "/api/workers/profiles/:layer/:name",
+    { bodyLimit: 256 * 1024 },
+    (request) =>
+      editProfile(
+        db,
+        profileRef(request),
+        request.body,
+        resolveActor(db, query(request.query).as),
+      ),
   );
   app.post("/api/workers/advice/confirm", { bodyLimit: 4096 }, (request) =>
-    confirmWorkerAdvice(db, request.body, runnerOptions.workersDir),
+    confirmWorkerAdvice(db, request.body),
   );
   app.get("/api/roles", () => listJobRoles(db));
   app.post("/api/roles", { bodyLimit: 32 * 1024 }, (request, reply) =>
@@ -120,7 +148,7 @@ export function registerTaskRoutes(
         delivery_stage: string | null;
       }[]
     ).map((task) => ({ ...task, ref: `t${task.id}` }));
-    const workers = await workersReport(db, role.ref, runnerOptions.workersDir);
+    const workers = await workersReport(db, role.ref);
     const skillDetails = role.skills
       .map((slug) =>
         db

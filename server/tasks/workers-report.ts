@@ -1,11 +1,3 @@
-import {
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  lstatSync,
-} from "node:fs";
-import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { atomically, one } from "./ledger-model.ts";
@@ -17,14 +9,9 @@ import {
   type Delivery,
   type WorkerStat,
 } from "./delivery-records.ts";
-import {
-  DEFAULT_WORKERS_DIR,
-  modelKey,
-  parseWorker,
-  resolveWorker,
-  TRUSTS,
-} from "./profiles.ts";
+import { modelKey, parseWorker, resolveWorker, TRUSTS } from "./profiles.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { patchFront, readProfile, writeProfile } from "./worker-profiles.ts";
 import type { EventInbox } from "./events.ts";
 
 function pendingSuggestions(
@@ -60,11 +47,7 @@ function pendingSuggestions(
   });
 }
 
-export async function workersReport(
-  db: DatabaseSync,
-  role?: string,
-  dir = DEFAULT_WORKERS_DIR,
-) {
+export async function workersReport(db: DatabaseSync, role?: string) {
   const job = role ? getJobRole(db, role) : undefined;
   const records = listDeliveries(db, { job: job?.id });
   const ids = [
@@ -82,7 +65,7 @@ export async function workersReport(
         async (id) =>
           [
             id,
-            await resolveWorker(id, dir)
+            await resolveWorker(id, db)
               .then((x) => x.profile.rules.trust ?? "unknown")
               .catch(() => "unknown"),
           ] as const,
@@ -96,13 +79,9 @@ export async function workersReport(
     suggestions: pendingSuggestions(db, records, stats),
   };
 }
-export async function workerReport(
-  db: DatabaseSync,
-  worker: string,
-  dir = DEFAULT_WORKERS_DIR,
-) {
+export async function workerReport(db: DatabaseSync, worker: string) {
   parseWorker(worker);
-  const resolved = await resolveWorker(worker, dir);
+  const resolved = await resolveWorker(worker, db);
   const records = listDeliveries(db, {
     worker: resolved.id,
   }).filter((r) => r.worker === resolved.id);
@@ -170,23 +149,7 @@ export function publishWorkerAdvice(
     });
   }
 }
-const patchFront = (source: string, key: string, value: string) => {
-  if (!source.startsWith("---\n"))
-    return `---\n${key}: ${value}\n---\n\n${source}`;
-  const end = source.indexOf("\n---", 4);
-  if (end < 0)
-    throw new Problem(409, "执行者档案 frontmatter 不完整", "conflict");
-  const head = source.slice(4, end).split("\n");
-  const at = head.findIndex((line) => new RegExp(`^${key}\\s*:`).test(line));
-  if (at >= 0) head[at] = `${key}: ${value}`;
-  else head.push(`${key}: ${value}`);
-  return `---\n${head.join("\n")}\n---${source.slice(end + 4)}`;
-};
-export async function confirmWorkerAdvice(
-  db: DatabaseSync,
-  body: unknown,
-  dir = DEFAULT_WORKERS_DIR,
-) {
+export async function confirmWorkerAdvice(db: DatabaseSync, body: unknown) {
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw new Problem(400, "请求体应为 JSON 对象", "usage");
   const b = body as Record<string, unknown>;
@@ -199,7 +162,7 @@ export async function confirmWorkerAdvice(
   const role = getJobRole(db, b.role);
   const spec = parseWorker(b.worker);
   if (!spec.model) throw new Problem(400, "worker 须包含模型", "usage");
-  const report = await workersReport(db, role.ref, dir);
+  const report = await workersReport(db, role.ref);
   const suggestion = report.suggestions.find(
     (x) =>
       x.stat.worker === b.worker &&
@@ -212,25 +175,14 @@ export async function confirmWorkerAdvice(
       "当前统计没有这条建议，请重新运行 atrium workers 查看",
       "conflict",
     );
-  const profile = await resolveWorker(b.worker, dir);
-  const comboDir = join(dir, "combos");
-  const file = join(comboDir, `${spec.tool}+${modelKey(spec.model)}.md`);
-  mkdirSync(comboDir, { recursive: true, mode: 0o700 });
-  if (lstatSync(comboDir).isSymbolicLink())
-    throw new Problem(409, "执行者档案目录是符号链接，拒绝写入", "conflict");
-  let source = "";
-  try {
-    const stat = lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink())
-      throw new Problem(409, "档案不是普通文件", "conflict");
-    source = readFileSync(file, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-  }
+  const profile = await resolveWorker(b.worker, db);
+  const name = `${spec.tool}+${modelKey(spec.model)}`;
+  const file = `combos/${name}`;
+  const source = readProfile(db, "combos", name)?.source ?? "";
   if (parseFrontmatter(source).warnings.length)
     throw new Problem(
       409,
-      "档案有无法解析的 frontmatter，先修正后确认",
+      `档案 ${file} 有无法解析的 frontmatter，先用 atrium workers edit ${file} --file 修正后确认`,
       "conflict",
     );
   let key: string, value: string;
@@ -265,33 +217,34 @@ export async function confirmWorkerAdvice(
         "conflict",
       );
   }
-  const next = patchFront(source, key, value);
-  const temp = `${file}.${process.pid}.tmp`;
-  writeFileSync(temp, next, { mode: 0o600 });
-  renameSync(temp, file);
-  atomically(db, () =>
-    db
-      .prepare(
-        "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
-      )
-      .run(
-        suggestion.stat.deliveries
-          ? listDeliveries(db, {
-              worker: String(b.worker),
-              job: role.id,
-              limit: 1,
-            })[0]!.task_id
-          : 0,
-        Date.now(),
-        "worker_advice_confirmed",
-        JSON.stringify({
-          worker: b.worker,
-          role: role.ref,
-          action: b.action,
-          file,
-        }),
-      ),
-  );
+  atomically(db, () => {
+    writeProfile(db, {
+      layer: "combos",
+      name,
+      source: patchFront(source, key, value),
+      author: "secretary",
+      reason: `确认交付记录建议：${role.ref} ${b.action}`,
+    });
+    db.prepare(
+      "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
+    ).run(
+      suggestion.stat.deliveries
+        ? listDeliveries(db, {
+            worker: String(b.worker),
+            job: role.id,
+            limit: 1,
+          })[0]!.task_id
+        : 0,
+      Date.now(),
+      "worker_advice_confirmed",
+      JSON.stringify({
+        worker: b.worker,
+        role: role.ref,
+        action: b.action,
+        file,
+      }),
+    );
+  });
   return {
     worker: b.worker,
     role: role.ref,

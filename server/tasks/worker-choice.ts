@@ -62,7 +62,7 @@ export async function chooseWorker(
       )
     : new Map();
   if (request.worker) {
-    worker = await resolveWorker(request.worker, options.workersDir);
+    worker = await resolveWorker(request.worker, options.db);
     if (!findExecutable(ADAPTERS[worker.tool].executable, path))
       throw new Problem(
         400,
@@ -91,7 +91,7 @@ export async function chooseWorker(
         await Promise.all(
           tools.map(async (tool) => [
             tool,
-            (await resolveWorker(tool, options.workersDir)).profile,
+            (await resolveWorker(tool, options.db)).profile,
           ]),
         ),
       );
@@ -121,7 +121,7 @@ export async function chooseWorker(
       await Promise.all(
         tools.map(async (tool) => [
           tool,
-          (await resolveWorker(tool, options.workersDir)).profile,
+          (await resolveWorker(tool, options.db)).profile,
         ]),
       ),
     );
@@ -162,7 +162,7 @@ export async function chooseWorker(
         throw new BudgetProblem(`${message}；等窗口重置或请上层调整份额`);
       throw new Problem(409, message, "conflict");
     }
-    worker = await resolveWorker(picked.tool, options.workersDir);
+    worker = await resolveWorker(picked.tool, options.db);
   }
   const refusal = riskRefusal(worker.id, worker.profile.rules.max_risk, risk);
   if (refusal) throw new Problem(400, refusal, "usage");

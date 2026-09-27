@@ -1,3 +1,4 @@
+import { profileDb } from "./profile-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -45,9 +46,7 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
   const dir = mkdtempSync(join(tmpdir(), "atrium-budget-choice-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = join(dir, "bin");
-  const workersDir = join(dir, "workers");
   mkdirSync(bin);
-  mkdirSync(workersDir);
   for (const name of ["grok", "kimi", "codex"]) {
     const file = join(bin, name);
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
@@ -60,7 +59,6 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
   );
   const options = {
     data: dir,
-    workersDir,
     env: { PATH: bin },
     charterPath,
     pace: async () => [
@@ -87,7 +85,7 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
 test("组织章程导入后按任务节点的最严保留额挑人", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-budget-org-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const db = new DatabaseSync(":memory:");
+  const db = profileDb(undefined, new DatabaseSync(":memory:"));
   t.after(() => db.close());
   ensureOrgTables(db);
   const root = addNode(
@@ -133,9 +131,7 @@ test("组织章程导入后按任务节点的最严保留额挑人", async (t) =
     "u1",
   );
   const bin = join(dir, "bin");
-  const workersDir = join(dir, "workers");
   mkdirSync(bin);
-  mkdirSync(workersDir);
   for (const name of ["grok", "kimi"]) {
     const file = join(bin, name);
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
@@ -146,7 +142,6 @@ test("组织章程导入后按任务节点的最严保留额挑人", async (t) =
   const options = {
     db,
     data: dir,
-    workersDir,
     env: { PATH: bin },
     charterPath,
     pace: async () => [

@@ -30,7 +30,6 @@ export type Survivor =
 export async function surveyRunning(
   db: DatabaseSync,
   skip: (id: number) => boolean,
-  workersDir: string,
   exec: Exec,
 ): Promise<Survivor[]> {
   const rows = db
@@ -42,9 +41,7 @@ export async function surveyRunning(
     const task = getTask(db, id);
     let worker: ResolvedWorker | undefined;
     try {
-      worker = task.worker
-        ? await resolveWorker(task.worker, workersDir)
-        : undefined;
+      worker = task.worker ? await resolveWorker(task.worker, db) : undefined;
     } catch {
       worker = undefined;
     }
@@ -62,11 +59,10 @@ export async function surveyRunning(
 export async function recoverRunning(
   x: Executors,
   db: DatabaseSync,
-  workersDir: string,
   ctx: { data: string; exec: Exec; changed: (id: number) => void },
 ) {
   const skip = (id: number) => x.active.has(id) || x.launching.has(id);
-  for (const found of await surveyRunning(db, skip, workersDir, ctx.exec)) {
+  for (const found of await surveyRunning(db, skip, ctx.exec)) {
     const { task } = found;
     if (found.worker) {
       const active = adopted({

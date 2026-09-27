@@ -79,7 +79,6 @@ export class ReviewGate {
     private readonly db: DatabaseSync,
     private readonly options: {
       data: string;
-      workersDir: string;
       run: Exec;
       /** 挑一个与原执行者不同模型的审阅者，返回执行者标识；挑不到抛出原因。 */
       pickReviewer: (original: ResolvedWorker | undefined) => Promise<string>;
@@ -106,7 +105,7 @@ export class ReviewGate {
   private async worker(task: Task) {
     if (!task.worker) return undefined;
     try {
-      return await resolveWorker(task.worker, this.options.workersDir);
+      return await resolveWorker(task.worker, this.db);
     } catch {
       return undefined;
     }

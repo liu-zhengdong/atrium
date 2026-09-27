@@ -70,6 +70,8 @@ export const CHAT_TOOLS: Record<string, ChatMode> = {
 };
 
 const SUBSCRIBER = "secretary";
+/** 新会话没有上次的上下文：提醒秘书先读自己在 Atrium 里的备忘与决定记录。 */
+const NEW_SESSION_HINT = "；新会话先让秘书读备忘与决定记录：atrium memo show";
 
 const str = (values: Values, key: string) => {
   const value = values[key];
@@ -307,7 +309,7 @@ async function runNative(options: {
       : (await client.createSession("Atrium 秘书")).id;
     store.save(session);
     console.error(
-      `秘书会话（opencode 原生界面 · ${resumed ? "接着上次" : "新会话"} ${session}）；待处理事件在秘书空闲时以「【Atrium 事件】」消息送入，不动输入框；退出界面即结束`,
+      `秘书会话（opencode 原生界面 · ${resumed ? "接着上次" : "新会话"} ${session}）；待处理事件在秘书空闲时以「【Atrium 事件】」消息送入，不动输入框；退出界面即结束${resumed ? "" : NEW_SESSION_HINT}`,
     );
     waker = new ServeWaker({
       source: eventSource(api),
@@ -456,7 +458,7 @@ export const chatCommand: Command = {
         });
         if (values.new === true) saveWakeCount(data, 0);
         console.error(
-          `秘书会话（${tool} · ACP 对话界面 · ${resumed ? "接着上次" : "新会话"} ${chat.session}）；待处理事件在秘书空闲时自动送入。Ctrl-C 取消本轮，空闲时 Ctrl-C 或 /exit 退出`,
+          `秘书会话（${tool} · ACP 对话界面 · ${resumed ? "接着上次" : "新会话"} ${chat.session}）；待处理事件在秘书空闲时自动送入。Ctrl-C 取消本轮，空闲时 Ctrl-C 或 /exit 退出${resumed ? "" : NEW_SESSION_HINT}`,
         );
       } catch (error) {
         connection.close();

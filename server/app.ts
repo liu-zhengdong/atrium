@@ -21,6 +21,7 @@ import type { EventInbox } from "./tasks/events.ts";
 import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
+import { registerMemoRoutes } from "./memos/routes.ts";
 import {
   LeaderWaker,
   leaderEnvOptions,
@@ -229,6 +230,7 @@ export async function createApp(options: {
   inbox = () => taskRunner.inbox;
   registerOrgRoutes(app, db);
   registerLeaderRoutes(app, db, taskRunner.inbox);
+  registerMemoRoutes(app, db);
   const leaderWaker = new LeaderWaker(db, taskRunner.inbox, leaderTokens, {
     data: resolve(options.data),
     env: options.tasks?.env,

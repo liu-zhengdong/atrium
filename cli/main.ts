@@ -17,6 +17,7 @@ import { mapCommands } from "./map.ts";
 import { reviewCommands } from "./reviews.ts";
 import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
+import { memoCommands } from "./memos.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
@@ -100,6 +101,7 @@ export const commands: Record<string, Command> = {
   ...orgCommands,
   ...leaderCommands,
   ...patrolCommands,
+  ...memoCommands,
   ...goalCommands,
   ...skillCommands,
   ...quotaCommands,

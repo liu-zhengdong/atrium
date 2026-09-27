@@ -9,10 +9,12 @@ import {
 import { eventWord } from "../leaders/wake.ts";
 import { eventLevel } from "../tasks/event-level.ts";
 import { peopleNames, personOf, type Person } from "./who.ts";
+import { listDecisions, PAGE_MAX, type Decision } from "../memos/decisions.ts";
+import { readMemo, MEMO_MAX } from "../memos/store.ts";
 
 /**
- * 全景里的负责人（leader）：组织根的「负责人」页签与负责人页（#a1）。
- * 只读：负责哪些部分、用什么执行者、现在在处理什么、备忘、最近处理过的事与上交记录。
+ * 全景里的负责人（leader）：组织根的「负责人」页签与负责人页（#a1），另有秘书页（#secretary）。
+ * 只读：负责哪些部分、用什么执行者、现在在处理什么、备忘、决定记录、最近处理过的事与上交记录。
  * 事件来自事件队列（task_inbox）：投给它的「要处理」事件，与它上交出去的事件。
  */
 
@@ -50,11 +52,23 @@ export type MapLeaderRow = {
   /** 投给它、还没处理的事（不含过程通知）。 */
   pending: number;
 };
-export type MapLeader = MapLeaderRow & {
+/** 备忘与决定记录：秘书页与负责人页共用；决定含已推翻的（网页自己筛有效／全部）。 */
+type MemoPart = {
   memo: string;
   memo_max: number;
-  events: MapLeaderEvent[];
-  escalations: MapEscalation[];
+  memo_updated_at: number | null;
+  decisions: Decision[];
+};
+export type MapLeader = MapLeaderRow &
+  MemoPart & {
+    kind: "leader";
+    events: MapLeaderEvent[];
+    escalations: MapEscalation[];
+  };
+export type MapSecretary = MemoPart & {
+  kind: "secretary";
+  ref: "secretary";
+  name: string;
 };
 
 type InboxRow = {
@@ -255,15 +269,36 @@ function escalations(
   });
 }
 
-/** 负责人页：aN 没登记时 404（与 leader show 同一个报错）。 */
-export function mapLeader(db: DatabaseSync, reference: string): MapLeader {
+function memoPart(db: DatabaseSync, owner: string): MemoPart {
+  const memo = readMemo(db, owner);
+  return {
+    memo: memo.body,
+    memo_max: MEMO_MAX,
+    memo_updated_at: memo.updated_at,
+    decisions: listDecisions(db, owner, { all: true, limit: PAGE_MAX })
+      .decisions,
+  };
+}
+
+/** 秘书页与负责人页：secretary 是秘书；aN 没登记时 404（与 leader show 同一个报错）。 */
+export function mapLeader(
+  db: DatabaseSync,
+  reference: string,
+): MapLeader | MapSecretary {
+  if (reference === "secretary")
+    return {
+      kind: "secretary",
+      ref: "secretary",
+      name: "秘书",
+      ...memoPart(db, "secretary"),
+    };
   const view = showLeader(db, reference);
   const names = peopleNames(db);
   const inbox = hasInbox(db);
   return {
+    kind: "leader",
     ...rowOf(view, db, aliases(db)),
-    memo: view.memo,
-    memo_max: view.memo_max,
+    ...memoPart(db, view.ref),
     events: inbox ? events(db, view.ref, names) : [],
     escalations: inbox ? escalations(db, view.ref, names) : [],
   };

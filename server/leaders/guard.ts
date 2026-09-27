@@ -147,7 +147,7 @@ export function registerLeaderGuard(
     const leader = leaders.get(request);
     if (!leader) return;
     const rule = leaderRule(request.method, request.routeOptions.url ?? "");
-    if (rule === "read" || rule === "deny") return;
+    if (rule === "read" || rule === "deny" || rule === "self") return;
     const { led, scope } = scopeOf(nodes(db), leader);
     const body = bodyOf(request);
     let verdict: string | null = null;

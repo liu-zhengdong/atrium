@@ -4,7 +4,8 @@
 // - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／角色／技能／执行者／原则，执行者可按角色筛（#o1/workers/r1）；
 // - 角色：#r1/workers，页签是任务／谁做得好／技能；
 // - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察；
-// - 负责人（leader）：#a1/events，页签是备忘／处理过的事／上交。
+// - 负责人（leader）：#a1/events，页签是备忘／决定记录／处理过的事／上交，决定记录可看全部（#a1/decisions/all）；
+// - 秘书：#secretary，页签是备忘／决定记录。
 // 当前页、页签与筛选都写在 hash 里，刷新与前进后退都回到原处。
 
 const $ = (id) => document.getElementById(id);
@@ -67,12 +68,12 @@ const PAGE_TABS = {
   ],
   role: ["tasks", "workers", "skills"],
   worker: ["deliveries", "notes"],
-  leader: ["memo", "events", "escalations"],
+  leader: ["memo", "decisions", "events", "escalations"],
 };
 const REF = {
   node: /^o[1-9]\d{0,8}$/,
   role: /^r[1-9]\d{0,8}$/,
-  leader: /^a[1-9]\d{0,8}$/,
+  leader: /^(secretary|a[1-9]\d{0,8})$/,
 };
 
 function parseRoute() {
@@ -101,7 +102,7 @@ function parseRoute() {
     ref,
     tab: ok ? tab : "",
     extra:
-      ok && tab === "tasks" && extra === "all"
+      ok && (tab === "tasks" || tab === "decisions") && extra === "all"
         ? "all"
         : ok && tab === "workers" && REF.role.test(extra)
           ? extra
@@ -121,7 +122,7 @@ function href(page, ref, tab = "", extra = "") {
 const nodeHref = (ref, tab, extra) => href("node", ref, tab, extra);
 const roleHref = (ref, tab, extra) => href("role", ref, tab, extra);
 const workerHref = (id, tab) => href("worker", id, tab);
-const leaderHref = (ref, tab) => href("leader", ref, tab);
+const leaderHref = (ref, tab, extra) => href("leader", ref, tab, extra);
 const pageKey = (route, rootRef) =>
   route.page === "worker"
     ? `w/${route.ref}`
@@ -152,7 +153,8 @@ const clock = (at) => {
     : `${day(at)} ${hm}`;
 };
 const title = (n) => n.alias || n.name;
-const who = (by) => String(by ?? "").replace(/^u1\b/, "你");
+const who = (by) =>
+  by === "secretary" ? "秘书" : String(by ?? "").replace(/^u1\b/, "你");
 const isPathRule = (rule) => /[/*?]|^\./.test(rule);
 const percent = (rate) => `${Math.round(rate * 100)}%`;
 
@@ -665,11 +667,53 @@ function drawLeaders({ org }) {
   );
 }
 
+// 秘书页与负责人页共用备忘与决定记录（秘书的 kind 是 secretary，没有负责的部分与事件）。
+const isSecretary = (l) => l.kind === "secretary";
 function drawMemo({ leader: l }) {
+  const at = l.memo_updated_at ? `${day(l.memo_updated_at)} 更新 · ` : "";
+  if (isSecretary(l))
+    return l.memo
+      ? `<div class="memo">${esc(l.memo)}</div>
+    <p class="foot">${esc(at)}秘书开新会话、换人接手先读这份备忘，写的是当前状态（在等什么、下次先看什么），每次覆盖。</p>`
+      : `<p class="empty">秘书还没写备忘。在终端用 atrium memo edit 写当前在等什么、下次先看什么。</p>`;
   if (!l.memo)
     return `<p class="empty">备忘是空的。它每次被叫醒先读这里，处理完把在等什么、下次先看什么写进来。</p>`;
   return `<div class="memo">${esc(l.memo)}</div>
-    <p class="foot">它每次被叫醒先读这份备忘，处理完再改写。</p>`;
+    <p class="foot">${esc(at)}它每次被叫醒先读这份备忘，处理完再改写。</p>`;
+}
+
+const liveDecisions = (l) => l.decisions.filter((d) => !d.superseded_by);
+function decisionLinks(d) {
+  const links = [
+    d.issue === null ? "" : chip(`#${d.issue}`, "soft"),
+    d.node ? chipLink(d.node_name ?? d.node, "soft", nodeHref(d.node)) : "",
+    d.task ? chip(d.task, "soft") : "",
+  ].filter(Boolean);
+  return links.length ? `<span class="chips">${links.join("")}</span>` : "";
+}
+function drawDecisions({ leader: l }) {
+  const list = state.route.extra === "all" ? l.decisions : liveDecisions(l);
+  return table(
+    "decisions",
+    ["日期", "决定与原因", "谁定的", "关联"],
+    list.map((d) => {
+      const links = decisionLinks(d);
+      const fate = d.superseded_by
+        ? chip(`已被 ${d.superseded_by} 推翻`, "gray")
+        : d.supersedes.length
+          ? chip(`推翻 ${d.supersedes.join("、")}`, "amber")
+          : "";
+      return `<div class="row${d.superseded_by ? " gone" : ""}" role="row">
+        ${cell("日期", `${esc(d.date.slice(5))}<span class="task-ref">${esc(d.ref)}</span>`, " muted date")}
+        ${cell("决定与原因", `<span class="decision">${esc(d.text)}${fate ? ` ${fate}` : ""}</span><span class="why">${esc(d.why)}</span>`, " body")}
+        ${cell("谁定的", chip(who(d.by), "amber"))}
+        ${cell("关联", links || none, links ? "" : " none")}
+      </div>`;
+    }),
+    state.route.extra !== "all" && l.decisions.length
+      ? "有效的决定都没了（都被推翻了），切到「全部」看历史。"
+      : "还没有决定记录。在终端用 atrium decision add 记下取舍与原因。",
+  );
 }
 
 const EVENT_STATE = {
@@ -782,6 +826,11 @@ const TABS = {
     draw: drawLeaders,
   },
   memo: { label: "备忘", count: () => null, draw: drawMemo },
+  decisions: {
+    label: "决定记录",
+    count: (d) => liveDecisions(d.leader).length,
+    draw: drawDecisions,
+  },
   events: {
     label: "处理过的事",
     count: (d) => d.leader.events.length,
@@ -797,7 +846,10 @@ const TABS = {
 function tabsOf(d) {
   if (d.page === "role") return ["tasks", "workers", "skills"];
   if (d.page === "worker") return ["deliveries", "notes"];
-  if (d.page === "leader") return ["memo", "events", "escalations"];
+  if (d.page === "leader")
+    return isSecretary(d.leader)
+      ? ["memo", "decisions"]
+      : ["memo", "decisions", "events", "escalations"];
   return d.org
     ? ["parts", "leaders", "roles", "skills", "workers", "points", "findings"]
     : ["parts", "concerns", "tasks", "points", "findings"];
@@ -821,6 +873,15 @@ const chips = (list, empty) =>
     : `<span class="muted">${esc(empty)}</span>`;
 
 function heading(d) {
+  if (d.page === "leader" && isSecretary(d.leader))
+    return {
+      kind: "秘书",
+      name: "秘书",
+      props: "",
+      intro: [
+        "替你把目标补成简报、拆活、派给负责人和执行者，只把要你拍板的事递上来。这里是它留给自己的备忘和做过的取舍，换机器、换秘书都接得上。",
+      ],
+    };
   if (d.page === "role") {
     const r = d.role;
     return {
@@ -912,10 +973,17 @@ function heading(d) {
     };
   }
   const n = d.node;
+  // 组织根另给「秘书」一行，点开是秘书的备忘与决定记录。
+  const people = [
+    ...(d.org
+      ? [["秘书", chipLink("秘书", "leader", leaderHref("secretary"))]]
+      : []),
+    ...(n.lead ? [["负责人", leadProp(n.lead)]] : []),
+  ];
   return {
     kind: KIND[n.kind] ?? "部分",
     name: title(n),
-    props: n.lead ? props([["负责人", leadProp(n.lead)]]) : "",
+    props: people.length ? props(people) : "",
     intro: (n.overview.what || "")
       .split(/\n+/)
       .map((s) => s.trim())
@@ -936,11 +1004,13 @@ function crumbsOf() {
     return d.node.chain.map((c) => ({ name: title(c), url: nodeHref(c.ref) }));
   const top = root ? [{ name: root.name, url: nodeHref(root.ref) }] : [];
   if (d.page === "leader")
-    return [
-      ...top,
-      { name: "负责人", url: nodeHref(root?.ref, "leaders") },
-      { name: d.leader.name },
-    ];
+    return isSecretary(d.leader)
+      ? [...top, { name: "秘书" }]
+      : [
+          ...top,
+          { name: "负责人", url: nodeHref(root?.ref, "leaders") },
+          { name: d.leader.name },
+        ];
   return d.page === "role"
     ? [
         ...top,
@@ -1059,9 +1129,14 @@ function pageHtml() {
           ["", "进行中"],
           ["all", "全部"],
         ]
-      : tab === "workers" && d.org && d.org.roles.length
-        ? [["", "全部"], ...d.org.roles.map((r) => [r.ref, r.name])]
-        : [];
+      : tab === "decisions"
+        ? [
+            ["", "有效"],
+            ["all", "全部"],
+          ]
+        : tab === "workers" && d.org && d.org.roles.length
+          ? [["", "全部"], ...d.org.roles.map((r) => [r.ref, r.name])]
+          : [];
   const current = pills.some(([id]) => id === state.route.extra)
     ? state.route.extra
     : "";

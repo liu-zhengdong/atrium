@@ -13,7 +13,7 @@ export type Run = { ok: boolean; stdout: string; stderr: string };
 export type Exec = (
   command: string,
   args: string[],
-  options?: { cwd?: string; timeoutMs?: number },
+  options?: { cwd?: string; timeoutMs?: number; signal?: AbortSignal },
 ) => Promise<Run>;
 
 export const exec: Exec = (command, args, options = {}) =>

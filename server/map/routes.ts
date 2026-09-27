@@ -133,7 +133,7 @@ export function registerMapRoutes(
   );
   app.get("/api/map/specialists", () => ({ specialists: mapRoles(db).roles }));
   app.get("/api/map/specialists/:id", async (request) =>
-    mapRole(db, id(request), await live(), options.workersDir),
+    mapRole(db, id(request), await live()),
   );
   app.get("/api/map/skills", () => mapSkills(db));
   // 负责人（leader）：组织根的页签与负责人页；/api/map/leaders/secretary 是秘书页。

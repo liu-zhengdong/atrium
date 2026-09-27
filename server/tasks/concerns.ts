@@ -83,13 +83,13 @@ export function concernsFor(db: DatabaseSync, value: unknown): number[] {
     if (node.kind !== "concern")
       throw new Problem(
         400,
-        `concern: ${ref(node.id)} ${node.name} 不是关注点（专员）节点`,
+        `concern: 只能请关注点（专员）节点，${ref(node.id)} ${node.name} 不是`,
         "usage",
         undefined,
         "atrium org tree",
       );
     if (node.archived_at !== null)
-      throw usage(`concern: ${ref(node.id)} ${node.name} 已归档`);
+      throw usage(`concern: 专员已归档：${ref(node.id)} ${node.name}`);
     if (!ids.includes(node.id)) ids.push(node.id);
   }
   return ids;

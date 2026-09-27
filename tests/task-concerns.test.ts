@@ -31,6 +31,7 @@ import {
   concernsText,
   hintLines,
 } from "../cli/task-concerns.ts";
+import { cliErrorMessage } from "../cli/error-message.ts";
 import { startApp, until } from "./task-fixture.ts";
 
 // ---- 纯函数 ----
@@ -291,8 +292,19 @@ test("task add/set --concern：只认关注点节点，去重，至多 5 位，�
   );
   assert.throws(
     () => createTask(db, { title: "x", concern: "runtime" }),
-    /concern: o3 runtime 不是关注点（专员）节点/,
+    /concern: 只能请关注点（专员）节点，o3 runtime 不是/,
   );
+  // 命令行原样透出中文原因，参数名换成 --concern
+  try {
+    createTask(db, { title: "x", concern: "o3" });
+  } catch (error) {
+    assert.equal(
+      cliErrorMessage((error as Error).message, {
+        options: { concern: { type: "string" } },
+      } as never),
+      "--concern：只能请关注点（专员）节点，o3 runtime 不是",
+    );
+  }
   assert.throws(
     () => createTask(db, { title: "x", concern: "不存在" }),
     /concern: 节点 不存在 不存在/,

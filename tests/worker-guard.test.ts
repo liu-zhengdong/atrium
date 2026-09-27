@@ -107,6 +107,8 @@ test(
       ["org", "tree"],
       ["events", "wait", "--timeout", "0"],
       ["task", "run", "t1"],
+      ["task", "note", "t1", "备注"],
+      ["task", "tell", "t1", "补充"],
     ]) {
       const result = await cli(args);
       assert.equal(result.code, 4, `${args.join(" ")}：${result.out}`);

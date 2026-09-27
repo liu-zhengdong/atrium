@@ -52,15 +52,16 @@ const NEXT = {
   next_run: "下次拉起执行者时写进提示词",
 } as const;
 
-/** 登记一条捎话并按判定送出；by 缺省 u1。 */
+/** 登记一条捎话并按判定送出；HTTP 作者以认证身份为准。 */
 export function tellTask(
   x: Executors,
   db: DatabaseSync,
   reference: unknown,
   body: unknown,
+  actor?: string,
 ) {
   const id = parseTaskRef(reference);
-  const { text, by } = tellInput(body);
+  const { text, by } = tellInput(body, actor);
   const task = getTask(db, id);
   const active = x.active.get(id);
   const running = !!active && !active.exited && !active.stop;

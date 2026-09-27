@@ -660,8 +660,8 @@ export class TaskRunner {
   }
 
   /** 给在跑的执行者捎话（#307）；不在跑的留到下次拉起时写进提示词。 */
-  tell(reference: unknown, body: unknown) {
-    const result = tellTask(this.x, this.db, reference, body);
+  tell(reference: unknown, body: unknown, actor?: string) {
+    const result = tellTask(this.x, this.db, reference, body, actor);
     this.waits.changed(result.task.id);
     return result;
   }

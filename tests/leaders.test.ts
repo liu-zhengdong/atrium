@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { test } from "node:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
@@ -116,6 +118,64 @@ const idsIn = (prompt: string) =>
     .trim()
     .split(/\s+/)
     .map(Number);
+
+test("leader 命令行写备注和捎话均记 aN，服务拒绝伪造作者", async (t) => {
+  const x = await open(t);
+  const url = await x.app.listen({ host: "127.0.0.1", port: 0 });
+  await x.ok("POST", "/api/leaders", { name: "负责人", worker: "codex" });
+  await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
+  await x.ok("POST", "/api/tasks", {
+    title: "待处理",
+    part: "o3",
+    deliver: "none",
+  });
+  let completed = false;
+  let failure: unknown;
+  x.set(async (spec) => {
+    try {
+      const env = { ...spec.env, ATRIUM_LEADER_URL: url };
+      const bin = join(import.meta.dirname, "..", "bin", "atrium.mjs");
+      const run = promisify(execFile);
+      await run(
+        process.execPath,
+        [bin, "task", "note", "t1", "leader 备注", "--as", "a1"],
+        { env },
+      );
+      await run(process.execPath, [bin, "task", "tell", "t1", "leader 捎话"], {
+        env,
+      });
+      const forged = await x.call(
+        "POST",
+        "/api/tasks/t1/note",
+        { text: "伪造", by: "u1" },
+        `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`,
+      );
+      assert.equal(forged.status, 403);
+      const forgedTell = await x.call(
+        "POST",
+        "/api/tasks/t1/tell",
+        { text: "伪造", by: "u1" },
+        `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`,
+      );
+      assert.equal(forgedTell.status, 403);
+    } catch (error) {
+      failure = error;
+    } finally {
+      completed = true;
+    }
+    return "ok";
+  });
+  publishTask(x.taskRunner.inbox, x.db, 1, "failed", { reason: "待处理" });
+  await until(() => completed, 20000);
+  if (failure) throw failure;
+  const shown = await x.ok("GET", "/api/tasks/t1");
+  assert.equal(shown.note_by, "a1");
+  assert.equal(shown.note, "leader 备注");
+  const tell = shown.events.find(
+    (event: { kind: string }) => event.kind === "tell",
+  );
+  assert.equal(JSON.parse(tell.detail).by, "a1");
+});
 
 test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上交「已上线」，秘书只收到一条", async (t) => {
   const x = await open(t);

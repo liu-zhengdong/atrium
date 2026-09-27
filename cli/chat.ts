@@ -1,10 +1,18 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import { Problem, closest } from "../server/problem.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import type { InboxEvent } from "../server/tasks/events.ts";
+import { claimSecretary } from "../server/tasks/secretary-lock.ts";
+import {
+  saveSecretarySession,
+  saveWakeCount,
+  secretarySessionFile,
+  wakeCount,
+} from "../server/tasks/secretary-session.ts";
 import {
   AcpConnection,
   agentEnvironment,
@@ -33,10 +41,8 @@ import {
 import { ServeWaker } from "./secretary-serve.ts";
 
 /**
- * `atrium chat`：和秘书对话的统一入口（#307）。按秘书所用工具选打开方式：
- * opencode 缺省开它的原生界面（`opencode serve` + `opencode attach`，Atrium 经服务端送事件）；
- * `--acp` 或不在终端里时，由 Atrium 自己的对话界面经 ACP 驱动。其余工具在后续步骤接入。
- * opencode 两条路都用秘书独立的数据目录（见 opencode-serve.ts），不与 opencode 执行者争同一个库。
+ * `atrium chat`：opencode 缺省开原生界面（serve + attach），--acp 改用 ACP；
+ * codex 经 codex-acp 使用 ACP。两种 opencode 界面共用秘书独立的数据目录。
  */
 
 type ChatMode =
@@ -51,7 +57,15 @@ export const CHAT_TOOLS: Record<string, ChatMode> = {
     native: "opencode",
   },
   kimi: { kind: "planned", note: "原生 kimi acp，后续接入" },
-  codex: { kind: "planned", note: "经 codex-acp 适配器，后续接入" },
+  codex: {
+    kind: "acp",
+    command: process.execPath,
+    args: [
+      fileURLToPath(
+        import.meta.resolve("@zed-industries/codex-acp/bin/codex-acp.js"),
+      ),
+    ],
+  },
   claude: { kind: "planned", note: "经 claude-code-acp 适配器，后续接入" },
 };
 
@@ -90,8 +104,18 @@ export function chatMode(tool: string) {
 }
 
 /** 秘书会话编号存在数据目录，下次打开接着上次；原生界面与 ACP 共用同一个会话。 */
-export function sessionStore(data: string, tool: string): SessionStore {
-  const file = join(data, "secretary", `${tool}-session.json`);
+export function sessionStore(
+  data: string,
+  tool: string,
+  cwd?: string,
+): SessionStore {
+  const file = join(
+    data,
+    "secretary",
+    tool === "codex" || tool === "opencode"
+      ? secretarySessionFile(tool)
+      : `${tool}-session.json`,
+  );
   return {
     load() {
       try {
@@ -106,12 +130,13 @@ export function sessionStore(data: string, tool: string): SessionStore {
       }
     },
     save(sessionId) {
-      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-      writeFileSync(
-        file,
-        `${JSON.stringify({ sessionId, updated_at: Date.now() })}\n`,
-        { mode: 0o600 },
-      );
+      if (cwd && (tool === "codex" || tool === "opencode"))
+        saveSecretarySession(data, { tool, sessionId, cwd });
+      else {
+        // Test-only stores for a synthetic ACP agent.
+        mkdirSync(join(data, "secretary"), { recursive: true, mode: 0o700 });
+        writeFileSync(file, JSON.stringify({ sessionId }), { mode: 0o600 });
+      }
     },
   };
 }
@@ -272,7 +297,7 @@ async function runNative(options: {
     const client = new OpencodeClient(server.url, cwd, password);
     const warning = hint(await client.model());
     if (warning) console.error(`[atrium] ${warning}`);
-    const store = sessionStore(data, "opencode");
+    const store = sessionStore(data, "opencode", cwd);
     const previous = options.fresh ? undefined : store.load();
     const resumed =
       previous !== undefined &&
@@ -286,6 +311,8 @@ async function runNative(options: {
     );
     waker = new ServeWaker({
       source: eventSource(api),
+      initialWakeCount: options.fresh ? 0 : wakeCount(data),
+      onWakeCountChange: (count) => saveWakeCount(data, count),
       session: {
         status: () => client.status(session),
         prompt: (text) => client.prompt(session, text),
@@ -293,6 +320,7 @@ async function runNative(options: {
         toast: (message, variant) => client.toast(message, variant),
       },
     });
+    if (options.fresh) saveWakeCount(data, 0);
     running = waker.run();
     // attach 占前台终端；Ctrl-C 由界面自己处理，这里不跟着退出。
     const ignore = () => {};
@@ -322,9 +350,9 @@ async function runNative(options: {
 }
 
 export const chatCommand: Command = {
-  args: "[--tool opencode] [--cwd 目录] [--new] [--acp] [--allow]",
+  args: "[--tool opencode|codex] [--cwd 目录] [--new] [--acp] [--allow]",
   about:
-    "和秘书对话；opencode 开原生界面（--acp 用 Atrium 的对话界面）；秘书空闲时自动送入待处理事件，忙时排队、一轮结束后合并送入；缺省接着上次的会话",
+    "和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理",
   options: {
     tool: { type: "string" },
     cwd: { type: "string" },
@@ -338,115 +366,139 @@ export const chatCommand: Command = {
       str(values, "tool") ?? process.env.ATRIUM_SECRETARY_TOOL ?? "opencode";
     const mode = chatMode(tool);
     const cwd = resolve(str(values, "cwd") ?? process.cwd());
-    const api = await (await import("./service.ts")).connect();
     const data = dataDirectory();
-    const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
-    if (mode.native && values.acp !== true) {
-      if (tty) {
-        await runNative({ api, data, cwd, fresh: values.new === true });
-        recordNext("再次打开：atrium chat");
-        return;
-      }
-      console.error("不在终端里，开不了 opencode 原生界面，改用 ACP 对话界面");
-    }
-    // 会话建好后再建 readline：启动期间的输入留在 stdin 缓冲里，不会在挂上监听前被读走。
-    let rl: Interface | undefined;
-    const view = terminalView({
-      tty,
-      allow: values.allow === true,
-      ask: (question) =>
-        new Promise((resolve) =>
-          rl ? rl.question(question, resolve) : resolve(""),
-        ),
-      prompt: () => {
-        if (tty) rl?.prompt(true);
-      },
-    });
-    let chat: SecretaryChat | undefined;
-    let env = agentEnvironment();
-    if (mode.native) {
-      const secretary = secretaryEnvironment(data);
-      env = secretary.env;
-      // ACP 路径拿不到 opencode 的缺省模型：列出只有 OAuth 的提供商。
-      const warning = secretary.hint();
-      if (warning) console.error(`[atrium] ${warning}`);
-    }
-    const connection = new AcpConnection(
-      mode.command,
-      mode.args,
-      {
-        cwd,
-        env,
-      },
-      {
-        update: (sessionId, update) => chat?.update(sessionId, update),
-        permission: (request) => view.permission(request),
-        exit: (reason) => chat?.exit(reason),
-      },
-    );
-    const cleanup = () => connection.close();
-    process.once("exit", cleanup);
-    chat = new SecretaryChat({
-      connection,
-      view,
-      cwd,
-      fresh: values.new === true,
-      store: sessionStore(data, tool),
-      source: eventSource(api),
-    });
-    try {
-      const init = await connection.request<{
-        agentCapabilities?: { loadSession?: boolean };
-      }>("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-        },
-        clientInfo: { name: "atrium", version: "1" },
-      });
-      const { resumed } = await chat.start({
-        loadSession: init.agentCapabilities?.loadSession === true,
-      });
-      console.error(
-        `秘书会话（${tool} · ACP 对话界面 · ${resumed ? "接着上次" : "新会话"} ${chat.session}）；待处理事件在秘书空闲时自动送入。Ctrl-C 取消本轮，空闲时 Ctrl-C 或 /exit 退出`,
-      );
-    } catch (error) {
-      connection.close();
+    const lock = claimSecretary(data);
+    if (!lock)
       throw new Problem(
-        503,
-        `秘书会话启动失败（${mode.command} ${mode.args.join(" ")}）：${error instanceof Error ? error.message : String(error)}`,
-        "internal",
+        409,
+        "秘书会话已经由界面或后台恢复进程持有；稍后重试",
+        "conflict",
       );
-    }
-    rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      terminal: tty,
-    });
-    rl.setPrompt("你> ");
-    const interrupt = () => {
-      if (chat.cancel()) view.notice("已请求取消本轮");
-      else chat.close();
+    let activeConnection: AcpConnection | undefined;
+    let activeRl: Interface | undefined;
+    let onInterrupt: (() => void) | undefined;
+    const cleanup = () => {
+      activeConnection?.close();
+      lock.release();
     };
-    rl.on("SIGINT", interrupt);
-    if (!tty) process.on("SIGINT", interrupt);
-    rl.on("line", (line) => {
-      const text = line.trim();
-      if (!text) return view.turnEnd("end_turn");
-      if (text === "/exit" || text === "/quit") return chat.close();
-      if (chat.running) view.notice("秘书正在处理，这条排在本轮之后");
-      chat.say(text);
-    });
-    rl.on("close", () => chat.end());
-    view.turnEnd("end_turn");
-    const reason = await chat.run();
-    rl.close();
-    connection.close();
-    process.off("exit", cleanup);
-    process.off("SIGINT", interrupt);
-    recordNext("再次打开：atrium chat");
-    if (reason)
-      throw new Problem(500, `秘书进程意外结束：${reason}`, "internal");
+    process.once("exit", cleanup);
+    try {
+      const api = await (await import("./service.ts")).connect();
+      const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+      if (mode.native && values.acp !== true) {
+        if (tty) {
+          await runNative({ api, data, cwd, fresh: values.new === true });
+          recordNext("再次打开：atrium chat");
+          return;
+        }
+        console.error(
+          "不在终端里，开不了 opencode 原生界面，改用 ACP 对话界面",
+        );
+      }
+      // 会话建好后再建 readline：启动期间的输入留在 stdin 缓冲里。
+      let rl: Interface | undefined;
+      const view = terminalView({
+        tty,
+        allow: values.allow === true,
+        ask: (question) =>
+          new Promise((resolve) =>
+            rl ? rl.question(question, resolve) : resolve(""),
+          ),
+        prompt: () => {
+          if (tty) rl?.prompt(true);
+        },
+      });
+      let chat: SecretaryChat | undefined;
+      let env = agentEnvironment();
+      if (mode.native) {
+        const secretary = secretaryEnvironment(data);
+        env = secretary.env;
+        const warning = secretary.hint();
+        if (warning) console.error(`[atrium] ${warning}`);
+      }
+      const connection = new AcpConnection(
+        mode.command,
+        mode.args,
+        {
+          cwd,
+          env,
+        },
+        {
+          update: (sessionId, update) => chat?.update(sessionId, update),
+          permission: (request) => view.permission(request),
+          exit: (reason) => chat?.exit(reason),
+        },
+      );
+      activeConnection = connection;
+      chat = new SecretaryChat({
+        connection,
+        view,
+        cwd,
+        fresh: values.new === true,
+        store: sessionStore(data, tool, cwd),
+        initialWakeCount: values.new === true ? 0 : wakeCount(data),
+        onWakeCountChange: (count) => saveWakeCount(data, count),
+        source: eventSource(api),
+      });
+      try {
+        const init = await connection.request<{
+          agentCapabilities?: { loadSession?: boolean };
+        }>("initialize", {
+          protocolVersion: 1,
+          clientCapabilities: {
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+          },
+          clientInfo: { name: "atrium", version: "1" },
+        });
+        const { resumed } = await chat.start({
+          loadSession: init.agentCapabilities?.loadSession === true,
+        });
+        if (values.new === true) saveWakeCount(data, 0);
+        console.error(
+          `秘书会话（${tool} · ACP 对话界面 · ${resumed ? "接着上次" : "新会话"} ${chat.session}）；待处理事件在秘书空闲时自动送入。Ctrl-C 取消本轮，空闲时 Ctrl-C 或 /exit 退出`,
+        );
+      } catch (error) {
+        connection.close();
+        throw new Problem(
+          503,
+          `秘书会话启动失败（${mode.command} ${mode.args.join(" ")}）：${error instanceof Error ? error.message : String(error)}`,
+          "internal",
+        );
+      }
+      rl = createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        terminal: tty,
+      });
+      activeRl = rl;
+      rl.setPrompt("你> ");
+      const interrupt = () => {
+        if (chat.cancel()) view.notice("已请求取消本轮");
+        else chat.close();
+      };
+      onInterrupt = interrupt;
+      rl.on("SIGINT", interrupt);
+      if (!tty) process.on("SIGINT", interrupt);
+      rl.on("line", (line) => {
+        const text = line.trim();
+        if (!text) return view.turnEnd("end_turn");
+        if (text === "/exit" || text === "/quit") return chat.close();
+        if (chat.running) view.notice("秘书正在处理，这条排在本轮之后");
+        chat.say(text);
+      });
+      rl.on("close", () => chat.end());
+      view.turnEnd("end_turn");
+      const reason = await chat.run();
+      recordNext("再次打开：atrium chat");
+      if (reason)
+        throw new Problem(500, `秘书进程意外结束：${reason}`, "internal");
+    } finally {
+      activeRl?.close();
+      activeConnection?.close();
+      if (onInterrupt) process.off("SIGINT", onInterrupt);
+      process.off("exit", cleanup);
+      lock.release();
+    }
   },
 };

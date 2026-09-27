@@ -49,6 +49,8 @@ export function agentEnvironment(
       !key.startsWith("CLAUDE_CODE_") &&
       key !== "CLAUDECODE" &&
       !key.startsWith("PI_") &&
+      !/_(API_KEY|TOKEN)$/.test(key) &&
+      !/^(ANTHROPIC|OPENAI|CLAUDE|GH|GITHUB)_/.test(key) &&
       key !== "NODE_TEST_CONTEXT"
     )
       env[key] = value;

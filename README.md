@@ -98,19 +98,19 @@ atrium events ack 1               # 确认已处理（编号见 events wait）
 ## 和秘书对话
 
 ```bash
-atrium chat                 # 打开秘书会话（缺省 opencode 原生界面，接着上次）；--new 新开，--cwd 指定秘书工作目录
-atrium chat --acp           # 改用 Atrium 自己的对话界面（ACP）；不在终端里时自动走这条
-atrium chat --acp --allow   # ACP 界面里秘书的权限请求自动允许一次（非交互时缺省拒绝）
+atrium chat                 # 缺省打开 opencode 原生界面，接着上次会话；--new 新开，--cwd 指定工作目录
+atrium chat --acp           # opencode 改用 Atrium 的 ACP 对话界面；非终端环境自动走 ACP
+atrium chat --tool codex    # 用 codex-acp 托管 Codex 秘书会话
+atrium chat --acp --allow   # ACP 权限请求自动允许一次（非交互时缺省拒绝）
 ```
 
-`atrium chat` 是和秘书对话的统一入口，按秘书所用工具（`--tool`，或环境变量 `ATRIUM_SECRETARY_TOOL`）选打开方式。现在接入的是 opencode：
+`atrium chat` 按 `--tool` 或 `ATRIUM_SECRETARY_TOOL` 选择秘书工具。opencode 缺省走原生界面：Atrium 启动只监听 127.0.0.1、随机端口和密码的 `opencode serve`，再以 `opencode attach` 打开会话。事件经服务端接口送进同一会话，消息以「【Atrium 事件】」开头，界面弹出「送入事件 #编号」；用户的输入框不受影响。`--acp` 改由 Atrium 以 `opencode acp` 托管；不在终端时也走 ACP。codex 经 `@zed-industries/codex-acp` 使用 ACP；依赖在 `package.json` 和 `package-lock.json` 精确锁定为 `0.16.0`，安装 Atrium 时运行 `npm ci` 安装对应平台二进制。
 
-- **原生界面（缺省）**：Atrium 起 `opencode serve`（只听 127.0.0.1、随机端口、每次随机密码，去掉 `HERDR_*` 环境变量），再用 `opencode attach` 打开 opencode 自己的界面连到秘书会话。Atrium 经服务端接口往同一会话送事件：送入的消息以「【Atrium 事件】」开头出现在对话里，界面右上弹「送入事件 #编号」；走会话接口、不碰输入框，你正在输入的内容不受影响。退出界面即停掉服务。
-- **ACP 对话界面（`--acp`）**：Atrium 以 ACP 客户端拉起 `opencode acp` 并持有会话，界面标出「送入事件 #编号」。
+opencode 两种界面共用 `<ATRIUM_DATA>/secretary/opencode-session.json`，codex 会话编号存在同目录的 `codex-acp.json`；工作目录也一并记录。秘书空闲时，事件按唤醒规则攒批送入；忙时排队、一轮结束后合并送入；连续自动送入 10 次后暂停，等用户发话再继续。送入即记为已送达，秘书处理完用 `atrium events ack` 确认；未确认事件在租约到期后重投。
 
-两种方式共用同一个会话（编号存在 `<ATRIUM_DATA>/secretary/`）。秘书空闲时，发给 `secretary` 的待处理事件按唤醒规则攒批后作为新消息送入；秘书忙时事件排队，一轮结束后合并送入；连续自动送入 10 次后暂停，等你发话再继续。送入即记为已送达，秘书处理完自己 `atrium events ack`，没确认的租约到期后重投；关掉界面不丢事件，下次打开一并送入。
+界面关闭时，服务按相同规则恢复上次会话：codex 执行 `codex exec resume <会话> -`，opencode 执行 `opencode run --session <会话>`，每批处理完即退出。原生界面、ACP 界面与后台恢复共用一把会话锁；有界面时不会另起后台进程。后台恢复只在 `atrium chat` 建过会话后启用，失败会释放事件租约再重试。后台 codex 使用无提示审批与完整文件访问，opencode 使用 `--auto`；秘书仍按原有权限与章程行事。
 
-秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开时，从用户 opencode 数据目录的 `auth.json` 同步 API key 类条目（`api`、`wellknown`），OAuth 登录（如 openai、xai）不带——提供商的刷新令牌多是一次性的，秘书一刷新，用户自己的登录可能失效；`mcp-auth.json` 在 opencode 里只存 MCP 的 OAuth 状态，同样不带。所用模型的提供商只有 OAuth 登录时，打开界面会提示换用有 API key 的提供商，或在秘书目录里单独登录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home opencode auth login`，秘书自己的登录不会被同步覆盖）。用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。codex、kimi、Claude Code 后续接入。
+秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开界面或后台恢复前，从用户 opencode 数据目录的 `auth.json` 同步 API key 类条目（`api`、`wellknown`），OAuth 登录（如 openai、xai）不带——提供商的刷新令牌多是一次性的，秘书一刷新，用户自己的登录可能失效；`mcp-auth.json` 在 opencode 里只存 MCP 的 OAuth 状态，同样不带。所用模型的提供商只有 OAuth 登录时，打开界面会提示换用有 API key 的提供商，或在秘书目录里单独登录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home opencode auth login`，秘书自己的登录不会被同步覆盖）。用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。kimi、Claude Code 后续接入。
 
 ## 组织树
 

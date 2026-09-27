@@ -249,6 +249,7 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
     assert.deepEqual(await client.getSession(session), { id: session });
 
     const delivered: number[][] = [];
+    const wakeCounts: number[] = [];
     waker = new ServeWaker({
       source: {
         peek: async (timeout, signal) =>
@@ -263,6 +264,7 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
         toast: (message, variant) => client.toast(message, variant),
       },
       delivered: (events) => delivered.push(events.map((event) => event.id)),
+      onWakeCountChange: (count) => wakeCounts.push(count),
       batchMs: 30,
       pollMs: 20,
       maxWakeups: 2,
@@ -333,6 +335,7 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
     await until(settled, "第二轮结束");
     publish(5);
     await until(() => delivered.length === 3, "第三批送入");
+    assert.deepEqual(wakeCounts, [1, 0, 1, 2]);
     await until(settled, "第三轮结束");
     const f = publish(6);
     await until(

@@ -14,6 +14,7 @@ import type { GoalCheckOptions } from "./goals/check-runtime.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
+import { SecretaryFallback } from "./tasks/secretary-fallback.ts";
 
 /** 打开数据库。旧运行时留下的表（身份、聊天、账号等）不读不写，也不因它们存在而报错。 */
 export function openDatabase(data: string) {
@@ -171,6 +172,13 @@ export async function createApp(options: {
     ...runnerEnvOptions(),
     ...options.tasks,
   });
+  const secretaryFallback = new SecretaryFallback(
+    taskRunner.inbox,
+    resolve(options.data),
+    { batchMs: options.tasks?.batchMs },
+  );
+  secretaryFallback.start();
+  app.addHook("preClose", async () => secretaryFallback.close());
   registerOrgRoutes(app, db);
   registerGoalRoutes(app, db, {
     data: resolve(options.data),

@@ -144,7 +144,12 @@ export function registerMapRoutes(
   );
   app.get("/api/map/workers/:id", (request) => mapWorker(db, id(request)));
   app.get("/api/map/context/:id", (request) =>
-    mapContext(db, id(request), parseMax(q(request.query).max)),
+    mapContext(
+      db,
+      id(request),
+      parseMax(q(request.query).max),
+      q(request.query).also,
+    ),
   );
   app.patch("/api/map/nodes/:id", { bodyLimit: 64 * 1024 }, (request) =>
     editMap(

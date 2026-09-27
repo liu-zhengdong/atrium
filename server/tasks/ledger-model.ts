@@ -75,6 +75,10 @@ export type Task = TaskRow & {
   concerns?: ConcernState[];
   /** 「要不要请某专员」的提示（concern-gate.ts inviteHints）；没有时不给。 */
   concern_hints?: InviteHint[];
+  /** 显式牵涉的部分（#373，also.ts）；没有时不给。 */
+  also?: string[];
+  /** 自动牵涉的部分：管方面的要点适用于归属部分；没有时不给。 */
+  also_auto?: string[];
   /** 现在球在谁手里（holder.ts）；只有单个任务视图给，已结束为 null。 */
   holder?: Holder | null;
 } & NoteView;

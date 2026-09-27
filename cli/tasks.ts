@@ -1,3 +1,4 @@
+import type { PickSpecialists } from "../server/tasks/specialist-scope.ts";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
@@ -166,13 +167,22 @@ function partInput(values: Values): { part?: string; goal?: string } {
   return part !== undefined ? { part } : goal !== undefined ? { goal } : {};
 }
 
+/** 牵涉的部分：显式的照写，自动的标「自动」。 */
+function alsoText(task: Task) {
+  return [
+    ...(task.also ?? []),
+    ...(task.also_auto ?? []).map((r) => `${r}（自动）`),
+  ].join("、");
+}
+
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分，--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急（跳过本机负载限制、排队插到最前）；旧 --job、--concern、--role 暂可用",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急（跳过本机负载限制、排队插到最前）；旧 --job、--concern、--role 暂可用",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
+    also: { type: "string" },
     concern: { type: "string" },
     ask: { type: "string" },
     goal: { type: "string" },
@@ -233,6 +243,9 @@ const add: Command = {
         ? {}
         : { from: str(values, "from") }),
       ...partInput(values),
+      ...(str(values, "also") === undefined
+        ? {}
+        : { also: str(values, "also") }),
       ...(str(values, "concern") === undefined
         ? {}
         : { concern: str(values, "concern") }),
@@ -262,7 +275,7 @@ const add: Command = {
     else
       console.log(
         [
-          `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}${task.concerns?.length ? ` · 请了 ${task.concerns.map((c) => c.name).join("、")}` : ""}`,
+          `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}${alsoText(task) ? ` · 牵涉 ${alsoText(task)}` : ""}${task.concerns?.length ? ` · 请了 ${task.concerns.map((c) => c.name).join("、")}` : ""}`,
           ...urgentLines(task),
           ...roleHint(task),
           ...hintLines(task),
@@ -386,6 +399,7 @@ const show: Command = {
         ],
         ["投任务的节点", task.origin_ref],
         ["归属部分", task.part_ref],
+        ["牵涉部分", alsoText(task) || null],
         ["请的专员", concernsText(task.concerns)],
         ["原里程碑", task.goal_ref],
         ["仓库", task.repo],
@@ -480,8 +494,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、详述、交付物、依赖、自动派发和紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）`,
+  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发和紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
@@ -490,6 +504,7 @@ const set: Command = {
     by: { type: "string" },
     from: { type: "string" },
     part: { type: "string" },
+    also: { type: "string" },
     concern: { type: "string" },
     ask: { type: "string" },
     goal: { type: "string" },
@@ -533,6 +548,7 @@ const set: Command = {
     const from = str(values, "from");
     if (from !== undefined) body.from = from;
     Object.assign(body, partInput(values));
+    if (str(values, "also") !== undefined) body.also = str(values, "also")!;
     const concern = str(values, "concern");
     if (concern !== undefined) body.concern = concern;
     const ask = str(values, "ask");
@@ -561,7 +577,7 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--brief、--deliver、--issue、--after、--after-pr、--auto 或 --urgent/--no-urgent",
+        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--also、--brief、--deliver、--issue、--after、--after-pr、--auto 或 --urgent/--no-urgent",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -811,16 +827,34 @@ const takeCell = (c: PickCandidate, job: PickView["job"]) =>
     .filter(Boolean)
     .join(" · ");
 
+/** 能请的专员一行：本部分、上级与牵涉部分的逐位写出，全组织的折在最后（#373）。 */
+export function specialistLine(list: PickSpecialists["available"]): string {
+  const near = list
+    .filter((s) => s.scope !== "org")
+    .map((s) => `${s.name}（${s.part_name ?? s.part}）`);
+  const org = list.filter((s) => s.scope === "org").map((s) => s.name);
+  return `能请的专员：${[...near, ...(org.length ? [`全组织的 ${org.join("、")}`] : [])].join("；") || "无"}`;
+}
+
 /** 候选一览的文本：推荐一句、表格；表格一行一位候选。 */
-export function formatPick(view: PickView & { task: string }): string {
+export function formatPick(
+  view: PickView & { task: string; specialists?: PickSpecialists },
+): string {
   const head = view.recommended
     ? `推荐 ${view.recommended}：${view.reason}`
     : `暂无推荐：${view.reason}`;
   const meta = `${view.task} · risk=${view.risk}${view.job ? ` · 干活的专员 ${view.job.name}（${view.job.ref}）` : " · 没指定干活的专员"} · 根章程给用户保留 ${view.reserve_percent}%${view.quota_known ? "" : " · 额度数据不可用"}`;
-  if (!view.candidates.length) return `${head}\n${meta}`;
+  const scope = view.specialists
+    ? [
+        ...(view.specialists.job_outside ? [view.specialists.job_outside] : []),
+        specialistLine(view.specialists.available),
+      ]
+    : [];
+  if (!view.candidates.length) return [head, meta, ...scope].join("\n");
   return [
     head,
     meta,
+    ...scope,
     "",
     table([
       ["", "执行者", "能不能接", "账号额度", "正忙", "交付记录"],
@@ -853,7 +887,7 @@ const pick: Command = {
       );
     const view = await (
       await client()
-    ).get<PickView & { task: string }>(
+    ).get<PickView & { task: string; specialists?: PickSpecialists }>(
       `/tasks/${id}/pick${risk ? `?${new URLSearchParams({ risk })}` : ""}`,
     );
     if (json) printJson(view);

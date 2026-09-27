@@ -1,3 +1,4 @@
+import { pickSpecialists } from "./specialist-scope.ts";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
@@ -412,7 +413,11 @@ export class TaskRunner {
       held: this.quota.held(),
       busy: this.x.busyTools(task.id),
     });
-    return { task: task.ref, ...view };
+    return {
+      task: task.ref,
+      ...view,
+      specialists: pickSpecialists(this.db, task),
+    };
   }
 
   async run(reference: unknown, body: unknown) {

@@ -45,6 +45,14 @@ import { getJobRole } from "./job-roles.ts";
 import { ref as nodeRef } from "../org/model.ts";
 import { briefText, readBriefFile } from "./brief.ts";
 import { specialistOptions } from "./specialist-options.ts";
+import {
+  alsoFor,
+  alsoOf,
+  involvedOf,
+  involvedView,
+  writeAlso,
+} from "./also.ts";
+import { checkSpecialists } from "./specialist-scope.ts";
 
 /** brief 给内容（brief_path 记来源）；只给 brief_path 时按路径读入，兼容旧调用方。 */
 function briefOf(input: Record<string, unknown>, repo: string | null) {
@@ -109,19 +117,36 @@ export type NewTask = {
   part?: string | null;
   /** 旧写法：gN 按目标树迁移映射到该目标的负责节点，等同 part。 */
   goal?: string | null;
+  /** 牵涉的部分（#373），逗号分隔。 */
+  also?: string | null;
   /** 请哪些专员：关注点节点，逗号分隔。 */
   concern?: string | null;
   ask?: string | null;
 };
 
-/** 任务读回时带上请的专员，改请专员或建任务时再带上按标题详述给的提示。 */
+/** 任务读回时带上请的专员与牵涉的部分，改请专员或建任务时再带上按标题详述给的提示。 */
 function withConcerns(db: DatabaseSync, task: TaskRow, hints: boolean) {
   const concerns = concernsOf(db, task.id);
   const concern_hints = hints ? textHints(db, task) : [];
   return {
     ...(concerns.length ? { concerns } : {}),
     ...(concern_hints.length ? { concern_hints } : {}),
+    ...involvedView(involvedOf(db, task)),
   };
+}
+
+/** 请的专员（`--by` 与 `--ask`）须在任务范围里：归属链、牵涉部分与全组织的（#373）。 */
+function checkScope(
+  db: DatabaseSync,
+  task: { part: number | null; also: readonly number[] },
+  job: number | null,
+  concerns: readonly number[],
+  byFlag: string,
+) {
+  checkSpecialists(db, task, [
+    { flag: byFlag, ids: job ? [job] : [] },
+    { flag: "ask", ids: concerns.filter((id) => id < 0).map((id) => -id) },
+  ]);
 }
 
 export function createTask(
@@ -153,6 +178,7 @@ export function createTask(
     "goal",
     "concern",
     "ask",
+    "also",
   ]);
   const specialist = specialistOptions(input);
   const urgent = urgentOf(input.urgent);
@@ -190,6 +216,14 @@ export function createTask(
     const concerns = specialist.modernAsk
       ? specialistsFor(db, specialist.ask)
       : concernsFor(db, specialist.ask);
+    const also = alsoFor(db, input.also);
+    checkScope(
+      db,
+      { part: part ?? node, also },
+      job,
+      concerns,
+      oldRoleSpecialist ? "role" : "by",
+    );
     const { lastInsertRowid } = db
       .prepare(
         "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
@@ -215,6 +249,7 @@ export function createTask(
     const id = Number(lastInsertRowid);
     setConditions(db, id, input, now);
     writeConcerns(db, id, concerns);
+    writeAlso(db, id, also);
     addEvent(db, id, now, "created", {
       title: values.title,
       ...(parent ? { parent: taskRef(parent) } : {}),
@@ -224,6 +259,7 @@ export function createTask(
       ...(job ? { job: `r${job}` } : {}),
       ...(concerns.length ? { concerns: concerns.map(specialistRef) } : {}),
       ...(urgent ? { urgent: true } : {}),
+      ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(by ? { by } : {}),
     });
     const task = requireRow(db, id);
@@ -264,11 +300,12 @@ export function updateTask(
     "goal",
     "concern",
     "ask",
+    "also",
   ]);
   const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、concern、status、deliver、issue、after、after_pr、auto、urgent、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、also、concern、status、deliver、issue、after、after_pr、auto、urgent、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -341,7 +378,36 @@ export function updateTask(
         undefined,
         `atrium task wait ${taskRef(id)}`,
       );
+    const also = "also" in input ? alsoFor(db, input.also) : undefined;
+    if (
+      "job_id" in fields ||
+      concerns ||
+      also ||
+      "part_id" in fields ||
+      "node_id" in fields
+    ) {
+      const job = "job_id" in fields ? fields.job_id : current.job_id;
+      checkScope(
+        db,
+        {
+          part:
+            ("part_id" in fields ? fields.part_id : current.part_id) ??
+            ("node_id" in fields ? fields.node_id : current.node_id),
+          also: also ?? alsoOf(db, id),
+        } as { part: number | null; also: number[] },
+        (job as number | null) ?? null,
+        concerns ?? concernRows(db, id).map((row) => row.node_id),
+        "role" in input && !specialist.byPresent ? "role" : "by",
+      );
+    }
     setConditions(db, id, input, now);
+    if (also) {
+      const before = alsoOf(db, id).map(nodeRef);
+      writeAlso(db, id, also);
+      const after = also.map(nodeRef);
+      if (before.join(",") !== after.join(","))
+        addEvent(db, id, now, "also", { from: before, to: after });
+    }
     if (concerns) {
       const before = concernRows(db, id).map((row) =>
         specialistRef(row.node_id),

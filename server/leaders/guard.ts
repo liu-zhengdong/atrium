@@ -1,3 +1,4 @@
+import { involvedOf } from "../tasks/also.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
@@ -23,6 +24,7 @@ import {
   nodeEditVerdict,
   ownerVerdict,
   scopeOf,
+  remarkVerdict,
   scopeVerdict,
   type ScopeCheck,
 } from "./scope.ts";
@@ -177,6 +179,15 @@ export function registerLeaderGuard(
           taskCheck(db, idParam(request)),
         ]);
         break;
+      case "task-remark": {
+        const task = getTask(db, idParam(request));
+        const { also, auto } = involvedOf(db, task);
+        verdict = remarkVerdict(leader, scope, taskCheck(db, task.ref), [
+          ...also,
+          ...auto,
+        ]);
+        break;
+      }
       case "task-patch":
         verdict =
           ownerVerdict(leader, body.owner) ??

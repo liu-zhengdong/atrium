@@ -2,7 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, one, ref, type DocRow } from "../org/model.ts";
 import { addNode, editOverviewFields } from "../org/write.ts";
-import type { Kind } from "../org/model.ts";
+import { canEdit, nodes, type Kind } from "../org/model.ts";
+import { appliesText, resolveApplies } from "../org/aspects.ts";
 import { validateOverviewField } from "../org/overview.ts";
 
 /**
@@ -23,6 +24,8 @@ const FIELDS: Record<string, "text" | "list"> = {
 };
 
 export type MapEdit = Partial<Record<keyof typeof FIELDS, unknown>> & {
+  /** 管方面的部分缺省适用于哪些部分（#373）；空串清掉，改回整个上级。 */
+  applies?: unknown;
   detail?: unknown;
   reason?: unknown;
   rev?: unknown;
@@ -37,7 +40,7 @@ export function mergeFields(
 ): Record<string, unknown> {
   const next = { ...current };
   for (const key of Object.keys(input)) {
-    if (["detail", "reason", "rev"].includes(key)) continue;
+    if (["detail", "reason", "rev", "applies"].includes(key)) continue;
     const type = FIELDS[key];
     if (!type) throw usage(`--${key}: 不是全景字段`);
     const value = input[key];
@@ -83,15 +86,46 @@ export function editMap(
     ? (JSON.parse(doc.fields) as Record<string, unknown>)
     : {};
   const fields = mergeFields(current, input as Record<string, unknown>);
+  const applies =
+    input.applies === undefined
+      ? undefined
+      : appliesText(resolveApplies(db, input.applies));
+  if (applies !== undefined && !node.aspect)
+    throw usage(
+      `--applies: ${ref(node.id)} ${node.name} 不是管方面的部分；管东西的部分的要点只对本块及下层生效`,
+    );
+  const appliesChanged =
+    applies !== undefined && applies !== (node.applies ?? null);
   const changed =
+    appliesChanged ||
     JSON.stringify(fields) !== JSON.stringify(current) ||
     (input.detail !== undefined && input.detail !== (doc?.body ?? ""));
   if (!changed)
     throw usage(
-      "没有要改的：给 --what、--uses、--flow、--alias、--analogy、--now、--next、--when 或 --detail 文件",
+      "没有要改的：给 --what、--uses、--flow、--alias、--analogy、--now、--next、--when、--applies 或 --detail 文件",
     );
   if (input.rev !== undefined && input.detail === undefined)
     throw usage("--rev: 只用于 --detail 修改章程正文");
+  if (appliesChanged) {
+    if (
+      (node.parent_id === null && actor !== "u1") ||
+      !canEdit(nodes(db), node, actor)
+    )
+      throw new Problem(
+        403,
+        `--applies 无权限：${actor} 不是 ${ref(node.id)} 的 leader 或祖先 leader`,
+      );
+    db.prepare("UPDATE org_nodes SET applies=?,updated_at=? WHERE id=?").run(
+      applies,
+      Date.now(),
+      node.id,
+    );
+    const rest = Object.keys(input).filter(
+      (k) =>
+        k !== "applies" && (input as Record<string, unknown>)[k] !== undefined,
+    );
+    if (!rest.length) return { node: ref(node.id) };
+  }
   return editOverviewFields(
     db,
     ref(node.id),
@@ -133,8 +167,9 @@ export function addMap(db: DatabaseSync, input: MapAdd, actor: string) {
   const parent = nodeByAddress(db, String(input.parent ?? ""));
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (!name) throw usage("名称不能为空");
-  const kind = (input.kind ?? CHILD[parent.kind]) as Kind | null;
-  if (!kind) throw usage(`${ref(parent.id)} 是关注点，下面不能再加部分`);
+  const kind = (input.kind ?? CHILD[parent.kind]) as Kind | "aspect" | null;
+  if (!kind || parent.kind === "concern")
+    throw usage(`${ref(parent.id)} 是关注点，下面不能再加部分`);
   if (kind === "concern")
     throw usage("关注点节点已下线；请用 atrium specialist add 创建专员");
   const slug = (input.slug ?? name).trim().toLowerCase();
@@ -160,8 +195,15 @@ export function addMap(db: DatabaseSync, input: MapAdd, actor: string) {
     db,
     { parent: ref(parent.id), slug, kind, name, reason },
     actor,
-  ) as { id: number };
+  ) as { id: number; kind: Kind };
   if (Object.keys(fields).length)
     editOverviewFields(db, ref(created.id), fields, actor);
-  return { node: ref(created.id), parent: ref(parent.id), name, kind, slug };
+  return {
+    node: ref(created.id),
+    parent: ref(parent.id),
+    name,
+    kind: created.kind,
+    aspect: kind === "aspect",
+    slug,
+  };
 }

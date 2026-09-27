@@ -1,3 +1,4 @@
+import { involvedOf, involvedView } from "./also.ts";
 import { holderFor } from "./holder-facts.ts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
@@ -49,6 +50,7 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     ...conditions(db, found.id),
     ...(concerns.length ? { concerns } : {}),
     ...(hints.length ? { concern_hints: hints } : {}),
+    ...involvedView(involvedOf(db, found)),
   };
 }
 

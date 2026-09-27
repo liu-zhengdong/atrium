@@ -17,3 +17,4 @@
 - 紧急（t113）：只认 `tasks.urgent`；闸门（`hostGate` 的 `urgent`）、排队先后（`queueOrder`，执行者队列 `queueHeads` 与合入队列 `NEXT_MERGE` 同一规则）、本地检查排位（`checkPlacement`）都在 `host-load.ts`，其余限制（额度保留、trust / max_risk、依赖）不因紧急放宽。
 - 任务详述（#355）：内容存 `tasks.brief`（校验与上限在 `brief.ts`），派活、审阅、会审、`task show` 只读库里的内容；`brief_path` 只记来源。运行时自己生成的详述（审阅、专员审查、会审意见与汇总）用 `clipBrief` 截到上限再存。
 - 持球人（#355）：未结束任务「球在谁手里」判定在 `holder.ts`（纯函数、穷举测试），事实在 `holder-facts.ts` 取；`top`、`task show` 与状态栏按它显示，不在命令行里另猜。
+- 横跨部分（#373）：管方面的部分与要点适用范围在 `server/org/aspects.ts`（`appliedFrom`、`covers` 纯函数）；任务牵涉的部分账在 `also.ts`（task_also 只存显式 `--also`，自动牵涉每次按要点算）；专员归属与可选范围在 `specialist-scope.ts`（`scopeOf`、`inScope` 纯函数），`--by`/`--ask` 校验、`task pick`、`specialist ls --part` 共用；牵涉知会 `publishInvolved`（notice.ts，info 级不叫醒），被牵涉部分的 leader 只能记备注与捎话（leaders/scope.ts `remarkVerdict`）。

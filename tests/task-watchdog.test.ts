@@ -2,9 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { getTask } from "../server/tasks/ledger.ts";
-import { finalClaudeResult } from "../server/tasks/watchdog.ts";
+import {
+  finalClaudeResult,
+  ProgressProbe,
+  STEP_CHUNK,
+} from "../server/tasks/watchdog.ts";
 import { startApp, until } from "./task-fixture.ts";
 
 test("最终 result 判定只接受最后一轮完整收尾", () => {
@@ -24,6 +36,39 @@ test("最终 result 判定只接受最后一轮完整收尾", () => {
     finalClaudeResult('{"is_error":true,"type":"result"}\n'),
     "error",
   );
+});
+
+test("步骤计数：日志里出现超过 1 MiB 的单行后，后续步骤照常计数", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-probe-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = join(dir, "run.log");
+  const step = '{"type":"assistant"}\n';
+  writeFileSync(log, "");
+  const probe = new ProgressProbe(log, dir, false, true);
+  await probe.baseline();
+  appendFileSync(log, step);
+  assert.equal((await probe.sample()).steps, 1);
+
+  // 一整行超长的步骤事件（带换行），其后再追加两个正常步骤。
+  const huge = `{"type":"assistant","text":"${"x".repeat(STEP_CHUNK + 512 * 1024)}"}\n`;
+  appendFileSync(log, huge + step + step);
+  assert.equal((await probe.sample()).steps, 3, "超长行跳过，后面的步骤照数");
+
+  // 超长行还在写（跨了几次采样才写完换行），写完后的步骤也照数。
+  appendFileSync(log, `{"type":"assistant","text":"${"y".repeat(STEP_CHUNK)}`);
+  assert.equal((await probe.sample()).steps, 3);
+  appendFileSync(log, "y".repeat(STEP_CHUNK));
+  assert.equal((await probe.sample()).steps, 3);
+  appendFileSync(log, '"}\n' + step);
+  assert.equal((await probe.sample()).steps, 4);
+
+  // 不足一块的半行留到下次，写完再数。
+  appendFileSync(log, '{"type":"assi');
+  assert.equal((await probe.sample()).steps, 4);
+  appendFileSync(log, 'stant"}\n');
+  const { signals } = await probe.poll();
+  assert.ok(signals.includes("json_events"));
+  assert.equal((await probe.sample()).steps, 5);
 });
 
 test("看门狗：Claude 已输出最终 result 却不退出，催退后照常过关卡", async (t) => {

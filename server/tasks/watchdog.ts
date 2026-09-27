@@ -118,9 +118,15 @@ async function walkFingerprint(dir: string) {
   return `${count}:${newest}`;
 }
 
+/** 数步骤时每块读多少字节；也是单行日志的上限，更长的行跳过不计。 */
+export const STEP_CHUNK = 1024 * 1024;
+const STEP_CHUNKS = 16;
+
 export class ProgressProbe {
   private offset = 0;
   private steps = 0;
+  /** 正在跳过一行超长日志的剩余部分。 */
+  private skipping = false;
   private last: Sample | undefined;
 
   constructor(
@@ -165,17 +171,37 @@ export class ProgressProbe {
 
   private async readSteps(size: number) {
     if (!this.jsonEvents || size <= this.offset) return;
-    // 只读新增部分，每次最多 1 MiB；跨界的半行留到下次。
-    const length = Math.min(size - this.offset, 1024 * 1024);
+    // 按块读新增部分，每块最多 1 MiB、每次采样最多 STEP_CHUNKS 块；跨界的半行留到下次。
+    // 整块都没有换行说明这一行超长：丢掉它（不计步），跳到下一个换行后接着数，内存不随行长增长。
     const handle = await open(this.logFile, "r");
     try {
-      const buffer = Buffer.alloc(length);
-      await handle.read(buffer, 0, length, this.offset);
-      const text = buffer.toString("utf8");
-      const cut = text.lastIndexOf("\n");
-      if (cut < 0) return;
-      this.steps += countSteps(text.slice(0, cut));
-      this.offset += Buffer.byteLength(text.slice(0, cut + 1));
+      const buffer = Buffer.alloc(Math.min(size - this.offset, STEP_CHUNK));
+      for (let round = 0; round < STEP_CHUNKS && this.offset < size; round++) {
+        const length = Math.min(size - this.offset, buffer.length);
+        const { bytesRead } = await handle.read(buffer, 0, length, this.offset);
+        if (!bytesRead) return;
+        const chunk = buffer.subarray(0, bytesRead);
+        let start = 0;
+        if (this.skipping) {
+          const newline = chunk.indexOf(0x0a);
+          if (newline < 0) {
+            this.offset += bytesRead;
+            continue;
+          }
+          this.skipping = false;
+          start = newline + 1;
+        }
+        const cut = chunk.lastIndexOf(0x0a);
+        if (cut < start) {
+          this.offset += start;
+          if (start > 0 || bytesRead < STEP_CHUNK) return;
+          this.skipping = true;
+          this.offset += bytesRead;
+          continue;
+        }
+        this.steps += countSteps(chunk.toString("utf8", start, cut));
+        this.offset += cut + 1;
+      }
     } finally {
       await handle.close();
     }

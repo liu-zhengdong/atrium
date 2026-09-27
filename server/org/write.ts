@@ -36,6 +36,8 @@ import {
 } from "./share-store.ts";
 import { exportShares } from "./shares.ts";
 import { HUMAN_KEYS } from "./overview.ts";
+import { aspectClearance } from "./aspects.ts";
+import { pointRef } from "./points.ts";
 
 function authorized(
   db: DatabaseSync,
@@ -452,6 +454,47 @@ function editDocInner(
       : {}),
   };
 }
+/**
+ * `org edit --kind aspect|module`：只切「管方面」标记，不动节点 kind。
+ * project / org 等不能改成 aspect；改回 module 前把还带适用范围的地方列出来，不静默丢。
+ */
+function switchAspect(db: DatabaseSync, node: NodeRow, value: unknown): number {
+  if (value !== "aspect" && value !== "module")
+    throw new Problem(400, "kind 只能是 aspect 或 module", "usage");
+  if (value === "aspect") {
+    if (node.kind !== "module")
+      throw new Problem(
+        400,
+        `kind: 只有 module 部分能改成 aspect（${ref(node.id)} ${node.name} 是 ${node.kind}）`,
+        "usage",
+      );
+    return 1;
+  }
+  const points = all<{ id: number; applies: string | null }>(
+    db,
+    "SELECT id,applies FROM org_points WHERE node_id=?",
+    node.id,
+  ).map((row) => ({ ref: pointRef(row.id), applies: row.applies }));
+  const blockers = aspectClearance(node.applies, points);
+  if (blockers.points.length || blockers.node) {
+    const steps = [
+      ...blockers.points.map(
+        (r) => `要点 ${r}（atrium org point-edit ${r} --applies ''）`,
+      ),
+      ...(blockers.node
+        ? [
+            `本部分的缺省适用范围（atrium map edit ${ref(node.id)} --applies ''）`,
+          ]
+        : []),
+    ];
+    throw new Problem(
+      400,
+      `${ref(node.id)} ${node.name} 还有适用范围，改回 module 前先清掉：${steps.join("、")}`,
+      "usage",
+    );
+  }
+  return 0;
+}
 export function editNode(
   db: DatabaseSync,
   address: string,
@@ -462,6 +505,8 @@ export function editNode(
     parent?: string;
     repos?: string[];
     archive?: boolean;
+    /** "aspect" 改为管方面的部分，"module" 改回普通部分（#373）；只切 aspect 标记，不动 kind。 */
+    kind?: unknown;
     rev?: string;
     reason: unknown;
   },
@@ -530,10 +575,16 @@ export function editNode(
       throw new Problem(400, "leader 应为 u1 或 aN");
     const repos =
       input.repos === undefined ? undefined : repoPaths(input.repos);
+    const aspect =
+      input.kind === undefined
+        ? node.aspect
+          ? 1
+          : 0
+        : switchAspect(db, node, input.kind);
     const archived = input.archive === true ? Date.now() : node.archived_at;
     db.prepare(
-      "UPDATE org_nodes SET parent_id=?,slug=?,name=?,leader=?,archived_at=?,updated_at=? WHERE id=?",
-    ).run(parent, slug, name, leader, archived, Date.now(), node.id);
+      "UPDATE org_nodes SET parent_id=?,slug=?,name=?,leader=?,archived_at=?,aspect=?,updated_at=? WHERE id=?",
+    ).run(parent, slug, name, leader, archived, aspect, Date.now(), node.id);
     if (repos !== undefined) {
       db.prepare("DELETE FROM org_node_repos WHERE node_id=?").run(node.id);
       for (const repo of repos)

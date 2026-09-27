@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode } from "../server/org/write.ts";
+import { addNode, editNode } from "../server/org/write.ts";
 import { addPoint, editPoint } from "../server/org/points.ts";
 import {
   appliedFrom,
@@ -343,6 +343,64 @@ test("管方面的部分：建、写适用范围、map context 自动带出并�
     ["安全 · 适用于网页"],
   );
 });
+test("已有部分改类型：module ↔ aspect 留节点修订；project/org 不许；改回 module 要先清适用范围", () => {
+  const db = dbOf();
+  const nodeRevs = () =>
+    (
+      db
+        .prepare(
+          "SELECT count(*) AS n FROM org_revisions WHERE node_id=3 AND target='node'",
+        )
+        .get() as { n: number }
+    ).n;
+  assert.equal(nodeRevs(), 1);
+  const turned = editNode(
+    db,
+    "o3",
+    { kind: "aspect", reason: "横向看性能" },
+    "u1",
+  );
+  assert.equal((turned as { aspect: number }).aspect, 1);
+  assert.equal(nodeRevs(), 2);
+  assert.equal(mapNode(db, "o3", []).aspect, true);
+  // 管方面后要点可写适用范围：改回 module 前要先清掉，且列出命令。
+  const k = addPoint(
+    db,
+    "o3",
+    { text: "延迟", why: "体验", by: "u1", applies: "o2" },
+    "u1",
+  );
+  problem(
+    () => editNode(db, "o3", { kind: "module", reason: "改回" }, "u1"),
+    /还有适用范围，改回 module 前先清掉：要点 k\d+（atrium org point-edit k\d+ --applies ''）/,
+  );
+  editPoint(db, k.ref, { applies: "" }, "u1");
+  // 部分级缺省范围也在：同样拦住，并给 map edit 命令。
+  editMap(db, "o3", { applies: "o2" }, "u1");
+  problem(
+    () => editNode(db, "o3", { kind: "module", reason: "改回" }, "u1"),
+    /本部分的缺省适用范围（atrium map edit o3 --applies ''）/,
+  );
+  editMap(db, "o3", { applies: "" }, "u1");
+  const back = editNode(db, "o3", { kind: "module", reason: "改回" }, "u1");
+  assert.equal((back as { aspect: number }).aspect, 0);
+  assert.equal(nodeRevs(), 3);
+  assert.equal(mapNode(db, "o3", []).aspect, false);
+  // 只有 module 能改成 aspect；未知 kind 报用法错。
+  problem(
+    () => editNode(db, "o2", { kind: "aspect", reason: "越级" }, "u1"),
+    /只有 module 部分能改成 aspect/,
+  );
+  problem(
+    () => editNode(db, "o1", { kind: "aspect", reason: "越级" }, "u1"),
+    /只有 module 部分能改成 aspect/,
+  );
+  problem(
+    () => editNode(db, "o3", { kind: "project", reason: "乱来" }, "u1"),
+    /kind 只能是 aspect 或 module/,
+  );
+});
+
 const pointApplies = (db: DatabaseSync, reference: string) =>
   (
     db

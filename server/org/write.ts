@@ -35,6 +35,7 @@ import {
   saveShares,
 } from "./share-store.ts";
 import { exportShares } from "./shares.ts";
+import { HUMAN_KEYS } from "./overview.ts";
 
 function authorized(
   db: DatabaseSync,
@@ -198,6 +199,60 @@ export function editDoc(
     );
   });
 }
+/** 全景人话字段只改当前章程；正文若同时修改，仍单独留章程修订。 */
+export function editOverviewFields(
+  db: DatabaseSync,
+  address: string,
+  fields: Record<string, unknown>,
+  actor: string,
+  detail?: { body: unknown; rev?: string; reason: unknown },
+) {
+  return transaction(db, () => {
+    const node = nodeByAddress(db, address);
+    authorized(db, node, actor, "charter");
+    if (node.archived_at !== null)
+      throw new Problem(400, `${ref(node.id)} 已归档`);
+    const old = current(db, node.id, "charter");
+    const validated = validateFields("charter", fields);
+    const previousFields = old
+      ? (JSON.parse(old.fields) as Record<string, unknown>)
+      : {};
+    for (const key of new Set([
+      ...Object.keys(previousFields),
+      ...Object.keys(validated),
+    ]))
+      if (
+        !HUMAN_KEYS.has(key) &&
+        JSON.stringify(previousFields[key]) !== JSON.stringify(validated[key])
+      )
+        throw new Problem(400, `${key} 应走章程修订`);
+    let revisionResult: ReturnType<typeof editDocInner> | undefined;
+    if (detail) {
+      expectedRev(detail.rev, old?.rev ?? 0, node.id, "charter");
+      revisionResult = editDocInner(
+        db,
+        node,
+        "charter",
+        { fields: previousFields, body: detail.body },
+        validateReason(detail.reason),
+        actor,
+      );
+    }
+    if (JSON.stringify(validated) !== (old?.fields ?? "{}")) {
+      const previous = current(db, node.id, "charter");
+      const at = Math.max(Date.now(), (previous?.updated_at ?? 0) + 1);
+      db.prepare(
+        "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,'charter',0,?,'',?,?) ON CONFLICT(node_id,doc) DO UPDATE SET fields=excluded.fields,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+      ).run(node.id, JSON.stringify(validated), actor, at);
+    }
+    return {
+      node: ref(node.id),
+      ...(revisionResult
+        ? { before: revisionResult.before, rev: revisionResult.rev }
+        : {}),
+    };
+  });
+}
 export function revertDoc(
   db: DatabaseSync,
   address: string,
@@ -228,6 +283,15 @@ export function revertDoc(
     if (doc === "charter") {
       snapshot.boundaries ??= [];
       snapshot.budget ??= {};
+      const latest = current(db, node.id, "charter");
+      const fields = snapshot.fields as Record<string, unknown>;
+      const currentFields = latest
+        ? (JSON.parse(latest.fields) as Record<string, unknown>)
+        : {};
+      for (const key of HUMAN_KEYS) {
+        if (Object.hasOwn(currentFields, key)) fields[key] = currentFields[key];
+        else delete fields[key];
+      }
     }
     return editDocInner(db, node, doc, snapshot, validateReason(reason), actor);
   });
@@ -246,7 +310,12 @@ function writeDoc(
     "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(node_id,doc) DO UPDATE SET rev=excluded.rev,fields=excluded.fields,body=excluded.body,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
   ).run(node, doc, next, JSON.stringify(fields), body, actor, Date.now());
   revision(db, node, doc, next, actor, reason, {
-    fields,
+    fields:
+      doc === "charter"
+        ? Object.fromEntries(
+            Object.entries(fields).filter(([key]) => !HUMAN_KEYS.has(key)),
+          )
+        : fields,
     body,
     ...(doc === "charter"
       ? {

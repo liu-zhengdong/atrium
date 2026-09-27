@@ -245,7 +245,7 @@ export const mapCommands: Record<string, Command> = {
   "map edit": {
     args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
     about:
-      "改一块的人话字段（是什么、能做什么、怎么走完、人话名与类比、现状与接下来）；--detail 文件换技术细节（章程正文）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
+      "改一块的人话字段，直接覆盖且不留修订；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
     options: {
       what: { type: "string" },
       uses: { type: "string", multiple: true },
@@ -287,15 +287,12 @@ export const mapCommands: Record<string, Command> = {
       };
       const result = await (
         await client()
-      ).patch<{ node: string; before: string; rev: string }>(
+      ).patch<{ node: string; before?: string; rev?: string }>(
         `/map/nodes/${enc(node!)}${as(values)}`,
         input,
       );
       if (json) printJson(result);
-      else
-        console.log(
-          `已改 ${result.node} 的全景（章程 ${result.before} → ${result.rev}，留修订历史）`,
-        );
+      else console.log(`已改 ${result.node} 的全景`);
       recordNext(`动作：atrium map context ${result.node}`);
       return 0;
     },

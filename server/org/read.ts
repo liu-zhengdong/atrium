@@ -15,7 +15,7 @@ import { exportDocument } from "./validate.ts";
 import { effective, exportBoundaries, summaryLength } from "./boundaries.ts";
 import { allBoundaries, chainLevels } from "./boundary-store.ts";
 import { goalChain, type GoalLevel } from "./goal-chain.ts";
-import { overviewOf } from "./overview.ts";
+import { HUMAN_KEYS, overviewOf } from "./overview.ts";
 import { chainPoints, nodePoints } from "./points.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
 import { allShares, rootLimits } from "./share-store.ts";
@@ -367,6 +367,7 @@ export function history(
       ...Object.keys(afterFields),
     ]))
       if (
+        (row.target !== "charter" || !HUMAN_KEYS.has(key)) &&
         JSON.stringify(beforeFields[key]) !== JSON.stringify(afterFields[key])
       )
         changes[`fields.${key}`] = {

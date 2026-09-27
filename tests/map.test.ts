@@ -9,7 +9,8 @@ import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { authPolicy } from "../server/auth-policy.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode } from "../server/org/write.ts";
+import { addNode, revertDoc } from "../server/org/write.ts";
+import { history } from "../server/org/read.ts";
 import { addPoint } from "../server/org/points.ts";
 import { withContext } from "../server/org/brief.ts";
 import {
@@ -20,7 +21,7 @@ import {
   type ContextInput,
 } from "../server/map/context.ts";
 import { MapLogin, LINK_TTL_MS, cookieOf } from "../server/map/login.ts";
-import { editMap, mergeFields } from "../server/map/write.ts";
+import { addMap, editMap, mergeFields } from "../server/map/write.ts";
 import { mapNode, mapTree, mapSignature } from "../server/map/view.ts";
 import { renderMapTree } from "../cli/map.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
@@ -253,11 +254,34 @@ test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；�
   );
   assert.throws(() => mergeFields({}, { owner: "x" }), /--owner: 不是全景字段/);
   const db = memory();
-  assert.equal(editMap(db, "o3", { now: "在做" }, "a2").rev, "r1");
+  assert.deepEqual(editMap(db, "o3", { now: "在做" }, "a2"), { node: "o3" });
+  assert.deepEqual(editMap(db, "o3", { next: "下一步" }, "a1"), {
+    node: "o3",
+  });
+  const charter = () =>
+    db
+      .prepare("SELECT * FROM org_docs WHERE node_id=3 AND doc='charter'")
+      .get() as {
+      rev: number;
+      fields: string;
+      body: string;
+    };
+  const revisions = () =>
+    db
+      .prepare(
+        "SELECT rev,snapshot FROM org_revisions WHERE node_id=3 AND target='charter' ORDER BY rev",
+      )
+      .all();
+  assert.equal(charter().rev, 0);
+  assert.deepEqual(JSON.parse(charter().fields), {
+    now: "在做",
+    next: "下一步",
+  });
+  assert.deepEqual(revisions(), []);
   assert.equal(
-    editMap(db, "o3", { next: "下一步" }, "a1").rev,
-    "r2",
-    "上级可改",
+    (history(db, "o3", { target: "charter" }) as { items: unknown[] }).items
+      .length,
+    0,
   );
   assert.throws(
     () => editMap(db, "o2", { now: "越权" }, "a2"),
@@ -274,7 +298,43 @@ test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；�
   );
   assert.throws(
     () => editMap(db, "o3", { now: "x", rev: "r1" }, "a2"),
-    /已是 r2/,
+    /--rev: 只用于 --detail/,
+  );
+  assert.deepEqual(
+    editMap(db, "o3", { now: "新现状", detail: "正文一", rev: "r0" }, "a2"),
+    { node: "o3", before: "r0", rev: "r1" },
+  );
+  assert.equal(charter().body, "正文一");
+  assert.equal(charter().rev, 1);
+  assert.deepEqual(JSON.parse(revisions()[0]!.snapshot as string).fields, {});
+  editMap(db, "o3", { now: "再更新" }, "a2");
+  assert.equal(charter().rev, 1);
+  assert.equal(revisions().length, 1);
+  assert.throws(
+    () => editMap(db, "o3", { detail: "正文二", rev: "r0" }, "a2"),
+    /已是 r1/,
+  );
+  editMap(db, "o3", { detail: "正文二", rev: "r1" }, "a2");
+  assert.equal(revisions().length, 2);
+  const diff = history(db, "o3", { target: "charter", rev: "r2" }) as {
+    changes: Record<string, unknown>;
+  };
+  assert.equal(diff.changes["fields.now"], undefined);
+  revertDoc(db, "o3", "charter", "r1", "回退正文", "a2");
+  assert.equal(JSON.parse(charter().fields).now, "再更新");
+  assert.equal(charter().body, "正文一");
+  const added = addMap(
+    db,
+    { parent: "o2", name: "新部分", slug: "new-part", what: "一句话" },
+    "a1",
+  );
+  assert.equal(
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM org_revisions WHERE node_id=? AND target='charter'",
+      )
+      .get(Number(added.node.slice(1)))!.n,
+    0,
   );
 });
 

@@ -1,13 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, one, ref, type DocRow } from "../org/model.ts";
-import { addNode, editDoc } from "../org/write.ts";
+import { addNode, editOverviewFields } from "../org/write.ts";
 import type { Kind } from "../org/model.ts";
 import { validateOverviewField } from "../org/overview.ts";
 
 /**
  * 全景图的写入（#322 第 4 步）：`map edit` 改人话字段，`map add` 在父节点下加一块。
- * 只是章程与节点写入的简写：权限、校验、修订历史都走 org/write.ts（负责部门 leader 或其上级；根只有 u1）。
+ * 人话字段只覆盖当前值；正文仍按章程修订。权限与校验走 org/write.ts。
  */
 
 /** 命令行参数 → 章程字段；列表给一个空串表示清空。 */
@@ -81,22 +81,24 @@ export function editMap(
     throw usage(
       "没有要改的：给 --what、--uses、--flow、--alias、--analogy、--now、--next 或 --detail 文件",
     );
-  const result = editDoc(
+  if (input.rev !== undefined && input.detail === undefined)
+    throw usage("--rev: 只用于 --detail 修改章程正文");
+  return editOverviewFields(
     db,
     ref(node.id),
-    "charter",
-    {
-      fields,
-      body: input.detail ?? doc?.body ?? "",
-      rev: typeof input.rev === "string" ? input.rev : undefined,
-      reason:
-        typeof input.reason === "string" && input.reason.trim()
-          ? input.reason
-          : "改全景人话字段（atrium map edit）",
-    },
+    fields,
     actor,
+    input.detail === undefined
+      ? undefined
+      : {
+          body: input.detail,
+          rev: typeof input.rev === "string" ? input.rev : undefined,
+          reason:
+            typeof input.reason === "string" && input.reason.trim()
+              ? input.reason
+              : "改全景技术细节（atrium map edit --detail）",
+        },
   );
-  return { node: ref(node.id), before: result.before, rev: result.rev };
 }
 
 const CHILD: Record<Kind, Kind | null> = {
@@ -117,7 +119,7 @@ export type MapAdd = {
   reason?: string;
 };
 
-/** 在父节点下加一块：建节点（修订 r1），给了人话字段再写一版章程。 */
+/** 在父节点下加一块：建节点留节点修订；人话字段只写当前值。 */
 export function addMap(db: DatabaseSync, input: MapAdd, actor: string) {
   const parent = nodeByAddress(db, String(input.parent ?? ""));
   const name = typeof input.name === "string" ? input.name.trim() : "";
@@ -149,12 +151,6 @@ export function addMap(db: DatabaseSync, input: MapAdd, actor: string) {
     actor,
   ) as { id: number };
   if (Object.keys(fields).length)
-    editDoc(
-      db,
-      ref(created.id),
-      "charter",
-      { fields, body: "", reason },
-      actor,
-    );
+    editOverviewFields(db, ref(created.id), fields, actor);
   return { node: ref(created.id), parent: ref(parent.id), name, kind, slug };
 }

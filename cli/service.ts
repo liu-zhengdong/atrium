@@ -1,7 +1,9 @@
 import {
+  alive,
   dataDirectory,
   readService,
   serviceUrl,
+  type ServiceRecord,
 } from "../server/service-state.ts";
 import { startService } from "../server/service.ts";
 import { restartInProgress } from "../server/supervisor.ts";
@@ -36,22 +38,46 @@ export async function connect(quietStart = false): Promise<Client> {
     console.error(
       `Atrium 服务已在后台启动 · PID ${record.pid} · ${serviceUrl(record)} · 停止：atrium stop`,
     );
-  return client(serviceUrl(record), data, async () =>
-    serviceUrl(await startService(data)),
+  let current = record;
+  return client(serviceUrl(record), data, async (error) => {
+    if (!resendable(error, data, current)) return null;
+    current = await startService(data);
+    return serviceUrl(current);
+  });
+}
+
+const causeCode = (error: unknown) =>
+  (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
+
+/**
+ * 请求没被服务处理、可以重发（#262 重启窗口）：
+ * - 连接被拒：旧服务已关、新服务还没起来，请求根本没送到；
+ * - 连接被断开且服务正在重启或已换人：服务关闭时会等在处理的请求回完再关，
+ *   没拿到响应就被断开的是它当作空闲关掉的复用连接，请求没被处理。
+ */
+export function resendable(
+  error: unknown,
+  data: string,
+  record: ServiceRecord,
+) {
+  const code = causeCode(error);
+  if (code === "ECONNREFUSED") return true;
+  if (code !== "ECONNRESET" && code !== "UND_ERR_SOCKET" && code !== "EPIPE")
+    return false;
+  const now = readService(data);
+  return (
+    !!restartInProgress(data) ||
+    !alive(record.pid) ||
+    now?.instance !== record.instance
   );
 }
 
-/** 连接被拒：请求没送到服务（旧服务刚关、新服务还没起来），重发不会重复执行。 */
-export const refused = (error: unknown) =>
-  (error as { cause?: { code?: unknown } } | undefined)?.cause?.code ===
-  "ECONNREFUSED";
-
 // 导出供测试直连内存服务（connect 会拉起独立服务进程）。
-// reconnect：连接被拒时（重启窗口）等服务就绪，返回新地址，请求重发一次。
+// reconnect：请求没被处理就断开时（重启窗口）等服务就绪，返回新地址，请求重发一次；返回 null 不重发。
 export function client(
   base: string,
   data: string,
-  reconnect?: () => Promise<string>,
+  reconnect?: (error: unknown) => Promise<string | null>,
 ) {
   // 不是 async：令牌缺失（auth_required）同步抛出，不被下面当成连接失败包成 503。
   function send(method: string, path: string, body?: unknown) {
@@ -72,8 +98,9 @@ export function client(
   ): Promise<T> {
     const response = await send(method, path, body)
       .catch(async (error: unknown) => {
-        if (!reconnect || !refused(error)) throw error;
-        base = await reconnect();
+        const next = reconnect ? await reconnect(error) : null;
+        if (!next) throw error;
+        base = next;
         return send(method, path, body);
       })
       .catch((error: unknown) => {

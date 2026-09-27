@@ -15,7 +15,7 @@ import {
   serviceUrl,
 } from "../server/service-state.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { client } from "../cli/service.ts";
+import { client, resendable } from "../cli/service.ts";
 import { WORKER_FLAG } from "../cli/worker-guard.ts";
 import { writeRestartState } from "../server/supervisor.ts";
 
@@ -183,8 +183,9 @@ test("连接被拒（旧服务刚关）：等服务就绪后重发一次；其�
   const closed = `http://127.0.0.1:${await freePort()}`;
   let reconnects = 0;
   await assert.rejects(
-    client(closed, data, async () => {
+    client(closed, data, async (error) => {
       reconnects++;
+      assert.equal(resendable(error, data, record), true);
       return serviceUrl(record);
     }).get("/nothing"),
     (error: Error) => {
@@ -197,4 +198,23 @@ test("连接被拒（旧服务刚关）：等服务就绪后重发一次；其�
   await assert.rejects(client(closed, data).get("/nothing"), {
     code: "service_unavailable",
   });
+  // 连接被断开：服务没在重启、还是原来那个时不重发（可能已经处理过）。
+  const reset = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("other side closed"), {
+      code: "UND_ERR_SOCKET",
+    }),
+  });
+  assert.equal(resendable(reset, data, record), false);
+  assert.equal(
+    resendable(reset, data, { ...record, instance: "gone" }),
+    true,
+    "服务已换人：旧服务关闭时断开的复用连接可重发",
+  );
+  assert.equal(
+    resendable(new TypeError("fetch failed"), data, {
+      ...record,
+      instance: "gone",
+    }),
+    false,
+  );
 });

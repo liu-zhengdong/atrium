@@ -9,7 +9,13 @@ import { addNode, editDoc } from "../server/org/write.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import { tree } from "../server/org/read.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
-import { beginUsage, endUsage, splitDelta } from "../server/tasks/usage.ts";
+import {
+  beginUsage,
+  endUsage,
+  resetAt,
+  sameWindow,
+  splitDelta,
+} from "../server/tasks/usage.ts";
 import { quotaHeadroom } from "../server/tasks/usage-budget.ts";
 import { pickWorker } from "../server/tasks/prepare.ts";
 import { DiskBudget } from "../server/tasks/disk-budget.ts";
@@ -102,6 +108,51 @@ test("用量快照按同窗口增量记账，并行时平分；节点子树约�
     0.5,
   );
   assert.deepEqual(splitDelta(15, 14, 2), { points: 0, basis: "unknown" });
+});
+
+test("重置时刻跨过五分钟取整边界：仍按同窗口平分记账并计入子树份额", (t) => {
+  const db = new DatabaseSync(":memory:");
+  t.after(() => db.close());
+  ensureTaskTables(db);
+  ensureOrgTables(db);
+  const root = addNode(
+    db,
+    { slug: "org", kind: "org", name: "组织", reason: "建树" },
+    "u1",
+  );
+  editDoc(
+    db,
+    `o${root.id}`,
+    "charter",
+    { fields: {}, body: "", budget: { quota: { kimi: 1 } }, reason: "分份额" },
+    "u1",
+  );
+  const a = createTask(db, { title: "A", role: `o${root.id}` });
+  const b = createTask(db, { title: "B", role: `o${root.id}` });
+  // 开始时的重置时刻离取整半界差 500 毫秒，结束与判断时已跨到下一个桶。
+  const now = 1_800_000_000_000 + 150_000 - 3_600_000 - 500;
+  assert.notEqual(resetAt(pace(10)[0], now), resetAt(pace(12)[0], now + 1001));
+  beginUsage(db, a.id, "kimi", pace(10), now);
+  beginUsage(db, b.id, "kimi", pace(10), now + 1);
+  endUsage(db, a.id, "kimi", pace(12), now + 1000);
+  endUsage(db, b.id, "kimi", pace(12), now + 1001);
+  const rows = db
+    .prepare("SELECT points,basis FROM task_usage ORDER BY task_id")
+    .all() as { points: number; basis: string }[];
+  assert.deepEqual(
+    rows.map((r) => [r.basis, r.points]),
+    [
+      ["split", 1],
+      ["split", 1],
+    ],
+  );
+  const room = quotaHeadroom(db, root.id, pace(12), 20, now + 1001).get(
+    "kimi",
+  )!;
+  assert.equal(room.points, -1);
+  assert.equal(sameWindow(0, 300_000), true);
+  assert.equal(sameWindow(0, 300_001), false);
+  assert.equal(sameWindow(18_000_000, 0), false);
 });
 
 test("挑人：份额用尽跳过并换人；钱为零时跳过 metered；pace 缺失不挡份额", () => {

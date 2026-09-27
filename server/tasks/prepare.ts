@@ -1,5 +1,5 @@
-import { readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, join, sep } from "node:path";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
 import { trustRefusal } from "./plan.ts";
@@ -67,18 +67,6 @@ export function buildPrompt({
 
 export type RoleDocs = { roleDoc: string; rootDoc: string; rolePath?: string };
 
-/** role 只能是 .agents/ 下的相对名：拒绝 `..`、绝对路径、隐藏段、空段和反斜杠。 */
-export function checkRole(role: string): string[] {
-  const text = role.trim();
-  if (!text) throw invalid("role 不能为空");
-  if (isAbsolute(text) || text.includes("\\") || text.includes("\0"))
-    throw invalid(`role 不合法：${role}`);
-  const segments = text.replace(/\.md$/, "").split("/");
-  if (segments.some((seg) => !seg || seg === ".." || seg.startsWith(".")))
-    throw invalid(`role 不合法：${role}`);
-  return segments;
-}
-
 async function readIfExists(file: string): Promise<string | undefined> {
   try {
     return await readFile(file, "utf8");
@@ -90,49 +78,20 @@ async function readIfExists(file: string): Promise<string | undefined> {
   }
 }
 
-/** 解析符号链接后仍须落在 .agents/ 内，防止链接指向仓库外。 */
-async function insideAgents(agentsDir: string, file: string) {
-  try {
-    const [root, real] = await Promise.all([
-      realpath(agentsDir),
-      realpath(file),
-    ]);
-    const rel = relative(root, real);
-    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-  } catch {
-    return false;
-  }
-}
-
 /**
- * 读岗位说明：任务对应组织节点（node，由 org/task-node.ts 解析）时取节点章程正文；否则按旧写法读仓库文件：
- * role 为 `modules/web`、`concerns/安全` 时按原路径找，只写名字（`web`）时依次找 modules/ 与 concerns/。
- * 另读根 `.agents/README.md`。文件不存在返回空串。
+ * 读岗位说明：只取任务对应组织节点（node，由 org/task-node.ts 解析）的章程正文，仓库里不再有部门说明（#264 修订）；
+ * 另读根 `.agents/README.md`。没有节点时岗位说明为空，文件不存在返回空串。
  */
 export async function loadRoleDocs(
   repo: string,
-  role?: string,
   node?: { body: string; ref: string },
 ): Promise<RoleDocs> {
   if (!isAbsolute(repo)) throw invalid("仓库须为绝对路径");
-  const agentsDir = join(repo, ".agents");
-  const rootDoc = (await readIfExists(join(agentsDir, "README.md"))) ?? "";
-  if (node) return { roleDoc: node.body, rootDoc, rolePath: node.ref };
-  if (role === undefined || role === null) return { roleDoc: "", rootDoc };
-  const segments = checkRole(role);
-  const name = segments.join("/");
-  const candidates =
-    segments.length === 1
-      ? [`modules/${name}.md`, `concerns/${name}.md`]
-      : [`${name}.md`];
-  for (const rel of candidates) {
-    const file = join(agentsDir, ...rel.split("/"));
-    if (!(await insideAgents(agentsDir, file))) continue;
-    const text = await readIfExists(file);
-    if (text !== undefined)
-      return { roleDoc: text, rootDoc, rolePath: `.agents/${rel}` };
-  }
-  return { roleDoc: "", rootDoc };
+  const rootDoc =
+    (await readIfExists(join(repo, ".agents", "README.md"))) ?? "";
+  return node
+    ? { roleDoc: node.body, rootDoc, rolePath: node.ref }
+    : { roleDoc: "", rootDoc };
 }
 
 /** openquota pace --json 的一条记录；只取用到的字段。 */

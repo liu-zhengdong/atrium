@@ -5,7 +5,6 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -404,26 +403,14 @@ test("buildPrompt：按段拼接，空段省略", () => {
   assert.throws(() => buildPrompt({ title: "  " }), /标题不能为空/);
 });
 
-test("loadRoleDocs：读岗位说明，拒绝路径穿越", async () => {
+test("loadRoleDocs：岗位说明只取节点章程，不读仓库部门文件", async () => {
   const repo = temp("repo");
-  const outside = temp("outside");
   try {
     mkdirSync(join(repo, ".agents/modules"), { recursive: true });
     mkdirSync(join(repo, ".agents/concerns"), { recursive: true });
     writeFileSync(join(repo, ".agents/README.md"), "根说明");
-    writeFileSync(join(repo, ".agents/modules/web.md"), "web 模块");
-    writeFileSync(join(repo, ".agents/concerns/安全.md"), "安全关注点");
-    writeFileSync(join(outside, "secret.md"), "机密");
-    symlinkSync(
-      join(outside, "secret.md"),
-      join(repo, ".agents/modules/leak.md"),
-    );
-
-    assert.deepEqual(await loadRoleDocs(repo, "web"), {
-      roleDoc: "web 模块",
-      rootDoc: "根说明",
-      rolePath: ".agents/modules/web.md",
-    });
+    writeFileSync(join(repo, ".agents/modules/web.md"), "仓库里的旧 web 说明");
+    writeFileSync(join(repo, ".agents/concerns/安全.md"), "仓库里的旧安全说明");
     const db = new DatabaseSync(":memory:");
     ensureOrgTables(db);
     addNode(
@@ -462,64 +449,33 @@ test("loadRoleDocs：读岗位说明，拒绝路径穿越", async () => {
       "u1",
     );
     const node = (role: string) => taskNode(db, { node_id: null, role, repo });
-    assert.deepEqual(
-      await loadRoleDocs(repo, "atrium/web", node("atrium/web")),
-      {
-        roleDoc: "节点章程",
-        rootDoc: "根说明",
-        rolePath: "o3",
-      },
-    );
+    assert.deepEqual(await loadRoleDocs(repo, node("atrium/web")), {
+      roleDoc: "节点章程",
+      rootDoc: "根说明",
+      rolePath: "o3",
+    });
     for (const role of ["web", "modules/web", "o3"])
       assert.equal(
-        (await loadRoleDocs(repo, role, node(role))).roleDoc,
+        (await loadRoleDocs(repo, node(role))).roleDoc,
         "节点章程",
-        role,
+        `旧写法 ${role} 在节点存在时取节点章程`,
       );
     assert.equal(node("concerns/安全"), undefined);
-    assert.equal(
-      (await loadRoleDocs(repo, "concerns/安全", node("concerns/安全")))
-        .roleDoc,
-      "安全关注点",
+    assert.deepEqual(
+      await loadRoleDocs(repo, node("concerns/安全")),
+      { roleDoc: "", rootDoc: "根说明" },
+      "没有节点时不回退读仓库文件",
     );
     db.close();
-    assert.equal(
-      (await loadRoleDocs(repo, "concerns/安全")).roleDoc,
-      "安全关注点",
-    );
-    assert.equal((await loadRoleDocs(repo, "安全")).roleDoc, "安全关注点");
-    assert.deepEqual(await loadRoleDocs(repo, "nope"), {
-      roleDoc: "",
-      rootDoc: "根说明",
-    });
     assert.deepEqual(await loadRoleDocs(repo), {
       roleDoc: "",
       rootDoc: "根说明",
     });
-    assert.equal(
-      (await loadRoleDocs(repo, "leak")).roleDoc,
-      "",
-      "符号链接指向仓库外不读",
-    );
-    for (const bad of [
-      "../x",
-      "modules/../../x",
-      "/etc/passwd",
-      ".secret",
-      "modules/.hidden",
-      "a//b",
-      "a\\b",
-      "",
-    ])
-      await assert.rejects(loadRoleDocs(repo, bad), /role/, bad);
-    assert.deepEqual(await loadRoleDocs(outside, "web"), {
-      roleDoc: "",
-      rootDoc: "",
-    });
-    await assert.rejects(loadRoleDocs("relative", "web"), /绝对路径/);
+    rmSync(join(repo, ".agents"), { recursive: true });
+    assert.deepEqual(await loadRoleDocs(repo), { roleDoc: "", rootDoc: "" });
+    await assert.rejects(loadRoleDocs("relative"), /绝对路径/);
   } finally {
     rmSync(repo, { recursive: true, force: true });
-    rmSync(outside, { recursive: true, force: true });
   }
 });
 

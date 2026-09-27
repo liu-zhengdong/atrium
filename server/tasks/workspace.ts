@@ -124,7 +124,7 @@ export async function prepareRun(
       ? nodeDoc(options.db, task.origin_node_id)
       : undefined;
   const docs = task.repo
-    ? await loadRoleDocs(worktree ?? task.repo, task.role ?? undefined, node)
+    ? await loadRoleDocs(worktree ?? task.repo, node)
     : { roleDoc: node?.body ?? "", rootDoc: "" };
   const where = branch
     ? `工作目录：${cwd}（分支 ${branch}，基于 origin/${base}）。`

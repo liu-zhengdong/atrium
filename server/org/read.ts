@@ -14,6 +14,7 @@ import {
 import { exportDocument } from "./validate.ts";
 import { effective, exportBoundaries, summaryLength } from "./boundaries.ts";
 import { allBoundaries, chainLevels } from "./boundary-store.ts";
+import { goalChain, type GoalLevel } from "./goal-chain.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
 
 export function tree(db: DatabaseSync) {
@@ -95,27 +96,36 @@ export function show(db: DatabaseSync, address: string, raw?: Doc) {
       doc: raw,
     };
   }
-  const chain = [];
+  const goalOf = (id: number) => {
+    const doc = one<DocRow>(
+      db,
+      "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
+      id,
+    );
+    const goal = doc
+      ? (JSON.parse(doc.fields) as { goal?: unknown }).goal
+      : undefined;
+    return typeof goal === "string" ? goal : "";
+  };
+  const levels: GoalLevel[] = [];
   let current: typeof node | undefined = node;
   while (current) {
-    chain.unshift({
+    const id = current.id;
+    levels.unshift({
       ref: current.ref,
       name: current.name,
-      goal: one<DocRow>(
-        db,
-        "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
-        current.id,
-      )?.fields,
+      goal: goalOf(id),
+      children: list.filter((item) => item.parent_id === id).map((c) => c.name),
     });
     current = list.find((item) => item.id === current?.parent_id);
   }
   const all = nodes(db);
   const name = (id: number) => all.find((item) => item.id === id)?.name ?? "";
-  const levels = chainLevels(all, owned, n.parent_id);
-  const inherited = new Set(effective(levels).map((e) => e.id));
+  const upper = chainLevels(all, owned, n.parent_id);
+  const inherited = new Set(effective(upper).map((e) => e.id));
   const own = owned.get(n.id) ?? [];
   const merged = effective([
-    ...levels,
+    ...upper,
     { node: n.id, name: n.name, entries: own },
   ]);
   const boundaries = {
@@ -153,12 +163,7 @@ export function show(db: DatabaseSync, address: string, raw?: Doc) {
     boundaries,
     charter: view(charter),
     card: view(card),
-    chain: chain.map((c) => ({
-      ...c,
-      goal: c.goal
-        ? ((JSON.parse(c.goal) as { goal?: string }).goal ?? "")
-        : "",
-    })),
+    chain: goalChain(levels),
   };
 }
 /** A compact line diff for a single revision; both inputs are capped at 16 KB. */

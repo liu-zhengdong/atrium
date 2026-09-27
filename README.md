@@ -91,10 +91,10 @@ atrium events ack 1               # 确认已处理（编号见 events wait）
 组织、项目、模块、关注点四类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严。根章程只有用户 `u1` 能改，其余由节点 leader 维护（`--as aN`）。
 
 ```bash
-atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md 与仓库 .agents/ 下的岗位
+atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md 与仓库 .agents/modules、concerns 下待导入的岗位（导入后仓库里删掉）
 atrium org import --repo . --apply                # 写入；重复执行不会重复建
 atrium org tree                                   # 节点层级
-atrium org show atrium/runtime                    # 章程链与能力卡
+atrium org show atrium/runtime                    # 目标链（组织 → 项目 → 模块，各层只列一次）、硬边界、章程与能力卡
 atrium org show atrium/runtime --charter --raw > /tmp/章程.md
 atrium org edit atrium/runtime --charter /tmp/章程.md --reason 更新目标
 atrium org history atrium/runtime                 # 修订；--target charter --rev r2 看字段差异
@@ -103,7 +103,7 @@ atrium task add "改派活" --role atrium/runtime --from atrium/质量   # 任�
 atrium org link-roles                             # 预览把旧 role 字符串的任务关联到节点；--apply 写入
 ```
 
-任务的 `--role` 指向组织节点（`o4` 或 `atrium/runtime`），派活时在岗位说明（节点章程正文）后附「章程要点」：本节点与父节点目标、整条链的硬边界（带参数的写最严值）、记账节点，整段不超过 2000 字、边界完整附上。旧写法 `--role runtime` 按任务仓库找挂了该仓库的同名节点，对不上时照旧读仓库 `.agents`。`org tree` 显示各节点子树里在做、卡住、待办的任务数。
+任务的 `--role` 指向组织节点（`o4` 或 `atrium/runtime`），派活时在岗位说明（节点章程正文）后附「章程要点」：本节点与父节点目标、整条链的硬边界（带参数的写最严值）、记账节点，整段不超过 2000 字、边界完整附上。旧写法 `--role runtime` 按任务仓库找挂了该仓库的同名节点；岗位说明只取节点章程，对不上节点时没有岗位说明，不再读仓库文件。`org tree` 显示各节点子树里在做、卡住、待办的任务数。
 
 ## 重启与升级
 

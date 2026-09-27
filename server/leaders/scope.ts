@@ -3,7 +3,7 @@
  * 服务端按「路由 → 规则 → 作用范围」判定，不靠提示词自律；没列出的写接口一律拒绝。
  *
  * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审；改本节点及子节点的要点、阶段与全景人话字段；
- * 写自己的备忘；给子节点指派下层 leader；确认投给自己的事件；上交。
+ * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交。
  * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改技能、清额度、登记 leader 等。
  */
 
@@ -18,6 +18,7 @@ export type LeaderRule =
   | "node-edit"
   | "map-edit"
   | "leader-edit"
+  | "self"
   | "escalate"
   | "events-ack"
   | "patrol-decide"
@@ -39,6 +40,10 @@ const RULES: Record<string, LeaderRule> = {
   "PATCH /api/org/nodes/:id": "node-edit",
   "PATCH /api/map/nodes/:id": "map-edit",
   "PATCH /api/leaders/:id": "leader-edit",
+  // 备忘与决定记录按 ?as= 定主人，guard 已把它锁成自己，不必再判。
+  "PUT /api/memo": "self",
+  "POST /api/decisions": "self",
+  "POST /api/decisions/:id/supersede": "self",
   "POST /api/leaders/:id/escalate": "escalate",
   "POST /api/patrol/findings/:id/decide": "patrol-decide",
 };

@@ -1,17 +1,34 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { all, nodePath, nodes, one, ref as nodeRef } from "../org/model.ts";
+import {
+  all,
+  nodePath,
+  nodes,
+  one,
+  ref as nodeRef,
+  transaction,
+} from "../org/model.ts";
 import { parseWorker, workerId } from "../tasks/profiles.ts";
+import {
+  ensureMemoTables,
+  MEMO_MAX,
+  memoText,
+  readMemo,
+  readMemos,
+  writeMemo,
+  type Memo,
+} from "../memos/store.ts";
+
+export { MEMO_MAX, memoProblem } from "../memos/store.ts";
 
 /**
- * leader 登记（#338 之后的 leader 层）：aN 是固定身份，存名称、执行者组合、备忘与最近一次唤醒。
+ * leader 登记（#338 之后的 leader 层）：aN 是固定身份，存名称、执行者组合与最近一次唤醒。
+ * 备忘与秘书的共用 memos 表（memos/store.ts）；org_leaders.memo 是早先的列，启动时迁过去后不再读写。
  * 负责哪些节点不在这里存，看 org_nodes.leader。短号全局一致、不复用：新号取登记过的与节点引用过的最大号加一。
  */
 
 export const LEADER_RE = /^a([1-9][0-9]{0,8})$/;
 export const NAME_MAX = 40;
-/** 备忘是 leader 跨唤醒的连续性；有上限，超了让它精简，不静默截断。 */
-export const MEMO_MAX = 2000;
 
 export type WakeStatus = "running" | "done" | "failed" | "handed_off";
 
@@ -19,7 +36,6 @@ type Row = {
   id: number;
   name: string;
   worker: string;
-  memo: string;
   created_at: number;
   updated_at: number;
   wake_at: number | null;
@@ -66,6 +82,7 @@ export function ensureLeaderTables(db: DatabaseSync) {
     wake_summary TEXT, wake_note TEXT,
     wake_failures INTEGER NOT NULL DEFAULT 0,
     wakes INTEGER NOT NULL DEFAULT 0)`);
+  ensureMemoTables(db);
 }
 
 const hasTable = (db: DatabaseSync, name: string) =>
@@ -144,21 +161,8 @@ const workerOf = (value: unknown) => {
   }
 };
 
-/** 备忘长度判定：纯函数，超了返回提示。 */
-export function memoProblem(memo: string, max = MEMO_MAX): string | null {
-  const size = Array.from(memo).length;
-  return size > max
-    ? `memo: 备忘 ${size} 字，超过上限 ${max} 字；请精简（留结论与待办，删过程）后再写`
-    : null;
-}
-
-const memoOf = (value: unknown, who: string) => {
-  if (typeof value !== "string") throw usage("memo: 应为文本");
-  const text = value.trim();
-  const problem = memoProblem(text);
-  if (problem) throw usage(problem, `atrium leader show ${who}`);
-  return text;
-};
+const memoOf = (value: unknown, who: string) =>
+  memoText(value, `atrium memo show --as ${who}`);
 
 const objectOf = (body: unknown) => {
   if (!body || typeof body !== "object" || Array.isArray(body))
@@ -206,8 +210,9 @@ export function addLeader(db: DatabaseSync, body: unknown, now = Date.now()) {
     const memo =
       input.memo === undefined ? "" : memoOf(input.memo, leaderRef(id));
     db.prepare(
-      "INSERT INTO org_leaders(id,name,worker,memo,created_at,updated_at) VALUES (?,?,?,?,?,?)",
-    ).run(id, name, worker, memo, now, now);
+      "INSERT INTO org_leaders(id,name,worker,created_at,updated_at) VALUES (?,?,?,?,?)",
+    ).run(id, name, worker, now, now);
+    if (memo) writeMemo(db, leaderRef(id), memo, now);
     db.exec("COMMIT");
     return showLeader(db, leaderRef(id));
   } catch (error) {
@@ -231,10 +236,15 @@ export function editLeader(
   const worker =
     input.worker === undefined ? row.worker : workerOf(input.worker);
   const memo =
-    input.memo === undefined ? row.memo : memoOf(input.memo, leaderRef(row.id));
-  db.prepare(
-    "UPDATE org_leaders SET name=?,worker=?,memo=?,updated_at=? WHERE id=?",
-  ).run(name, worker, memo, now, row.id);
+    input.memo === undefined
+      ? undefined
+      : memoOf(input.memo, leaderRef(row.id));
+  transaction(db, () => {
+    db.prepare(
+      "UPDATE org_leaders SET name=?,worker=?,updated_at=? WHERE id=?",
+    ).run(name, worker, now, row.id);
+    if (memo !== undefined) writeMemo(db, leaderRef(row.id), memo, now);
+  });
   return showLeader(db, leaderRef(row.id));
 }
 
@@ -267,11 +277,12 @@ function ledNodes(db: DatabaseSync) {
 const viewOf = (
   row: Row,
   led: Map<string, LeaderView["nodes"]>,
+  memo: Memo,
 ): LeaderView => ({
   ref: leaderRef(row.id),
   name: row.name,
   worker: row.worker,
-  memo: row.memo,
+  memo: memo.body,
   memo_max: MEMO_MAX,
   nodes: led.get(leaderRef(row.id)) ?? [],
   wake: wakeOf(row),
@@ -280,7 +291,8 @@ const viewOf = (
 });
 
 export function showLeader(db: DatabaseSync, reference: unknown): LeaderView {
-  return viewOf(requireLeader(db, reference), ledNodes(db));
+  const row = requireLeader(db, reference);
+  return viewOf(row, ledNodes(db), readMemo(db, leaderRef(row.id)));
 }
 
 /**
@@ -293,8 +305,12 @@ export function listLeaders(db: DatabaseSync) {
     ? all<Row>(db, "SELECT * FROM org_leaders ORDER BY id LIMIT 500")
     : [];
   const known = new Set(rows.map((r) => leaderRef(r.id)));
+  const memos = readMemos(db);
+  const empty: Memo = { body: "", updated_at: null };
   return {
-    leaders: rows.map((r) => viewOf(r, led)),
+    leaders: rows.map((r) =>
+      viewOf(r, led, memos.get(leaderRef(r.id)) ?? empty),
+    ),
     busy: rows
       .filter((r) => r.wake_status === "running" && r.wake_at !== null)
       .map((r) => ({

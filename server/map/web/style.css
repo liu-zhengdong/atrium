@@ -338,6 +338,34 @@ a.crumb:hover {
 .table-escalations .row {
   grid-template-columns: 96px 150px minmax(0, 1fr) minmax(0, 1.2fr) 70px 60px;
 }
+.table-decisions .row {
+  grid-template-columns: 90px minmax(0, 1fr) 90px 170px;
+  align-items: baseline;
+}
+.table-decisions .row.gone {
+  opacity: 0.55;
+}
+.cell.date {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.decision {
+  display: block;
+  font-weight: 550;
+  color: var(--text);
+}
+.decision .chip {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.why {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
 .cell {
   min-width: 0;
   overflow-wrap: anywhere;

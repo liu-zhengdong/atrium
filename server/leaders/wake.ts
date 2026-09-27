@@ -1,5 +1,6 @@
 import { Problem } from "../problem.ts";
 import { MEMO_MAX } from "./model.ts";
+import { decisionLine, type Decision } from "../memos/decisions.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、
@@ -162,6 +163,8 @@ export type PromptInput = {
   name: string;
   nodes: { ref: string; name: string; path: string; context: string }[];
   memo: string;
+  /** 最近的有效决定（已按条数与字数挑过）与没放下的条数。 */
+  decisions?: { shown: readonly Decision[]; omitted: number };
   events: readonly PromptEvent[];
   /** 过程事件摘要（已自动确认）。 */
   digest: readonly string[];
@@ -183,6 +186,16 @@ export function leaderPrompt(input: PromptInput): string {
     `## 你的备忘（上次留给自己的，上限 ${MEMO_MAX} 字）`,
     input.memo || "（空）",
     "",
+    "## 你的决定记录（最近有效的，新的在前）",
+    ...(input.decisions?.shown.length
+      ? input.decisions.shown.map((d) => `- ${decisionLine(d)}`)
+      : ["（还没有）"]),
+    ...(input.decisions?.omitted
+      ? [
+          `还有 ${input.decisions.omitted} 条没列：atrium decision ls（看已推翻的加 --all）`,
+        ]
+      : []),
+    "",
     `## 这批要处理的事件（${input.events.length} 条）`,
     ...input.events.map(eventLine),
     ...(input.digest.length
@@ -201,10 +214,11 @@ export function leaderPrompt(input: PromptInput): string {
     `- 请专员：atrium task set tN --concern 安全；会审：atrium review add 议题 --concerns 安全,质量 --part ${home}`,
     `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,
     `- 子节点指派 leader：atrium org edit 子节点 --leader aM`,
-    `- 备忘：atrium leader edit ${input.leader} --memo 文本（覆盖写，超过上限会被拒，先精简）`,
+    "- 备忘：atrium memo edit 文本（覆盖写，超过上限会被拒，先精简）；看全：atrium memo show",
+    "- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--issue N] [--task tN] [--supersedes dN]；推翻：atrium decision supersede dN --by dM",
     "",
     "## 权限边界（服务端强制，越权会被拒）",
-    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审；改这些节点的要点、阶段与全景人话字段；写自己的备忘；给子节点指派下层 leader。",
+    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审；改这些节点的要点、阶段与全景人话字段；写自己的备忘与决定记录；给子节点指派下层 leader。",
     "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、拍板上交的会审。",
     "",
     `## 上交（投给 ${input.upstream}；只有这四类才上交，其余自己处理）`,
@@ -214,7 +228,7 @@ export function leaderPrompt(input: PromptInput): string {
     "- stuck 搞不定（同一件事卡住多次、拿不定）→ atrium leader escalate --kind stuck 说明 [--task tN]",
     "",
     "## 收尾",
-    "1. 把要记住的（在等什么、下次先看什么）写进备忘。",
+    "1. 把要记住的（在等什么、下次先看什么）写进备忘；这次做了取舍的，记一条决定。",
     `2. 处理完确认：atrium events ack ${ids.join(" ")}`,
     "3. 退出。没确认的事件会再次唤醒你，连续失败会转交上层。",
   ].join("\n");

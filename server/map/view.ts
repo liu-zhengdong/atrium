@@ -613,7 +613,7 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
 }
 
 /**
- * 变化指纹：任务、任务事件、节点、章程、要点、角色、技能、交付记录、leader 唤醒与事件队列任一变了就不同。网页订阅它，变了再取数据局部刷新。
+ * 变化指纹：任务、任务事件、节点、章程、要点、角色、技能、交付记录、leader 唤醒与事件队列、备忘与决定记录任一变了就不同。网页订阅它，变了再取数据局部刷新。
  * 只读几个 max/count，毫秒级。
  */
 export function mapSignature(db: DatabaseSync): string {
@@ -641,6 +641,8 @@ export function mapSignature(db: DatabaseSync): string {
       "SELECT max(updated_at),max(wake_at),max(wake_ended_at),sum(wakes),count(*) FROM org_leaders",
     ),
     q("SELECT max(id),max(updated_at),max(acked_at) FROM task_inbox"),
+    q("SELECT max(updated_at),count(*) FROM memos"),
+    q("SELECT max(id),max(superseded_at) FROM decisions"),
   ].join("|");
 }
 

@@ -37,10 +37,12 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
   ];
   assert.deepEqual(prefixes.sort(), [
     "auth",
+    "decisions",
     "events",
     "goals",
     "leaders",
     "map",
+    "memo",
     "org",
     "patrol",
     "quota",

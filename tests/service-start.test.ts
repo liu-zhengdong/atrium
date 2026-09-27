@@ -23,6 +23,7 @@ import {
   finishFixture,
   trackFixture,
 } from "./fixture-signal.ts";
+import { readNumberLine } from "./child-output.ts";
 
 const entry = "tests/fixtures/fake-slow-service.ts";
 after(assertNoFixtureLeaks);
@@ -224,53 +225,50 @@ test("连接被拒（旧服务刚关）：等服务就绪后重发一次；其�
   );
 });
 
-test(
-  "请求进行中服务端强制断开连接：命令行不崩溃，按连接被断开重发到新服务",
-  {
-    skip: "本机偶发把强制断开判成不可重发（false !== true），会挡合入；另开任务修",
-  },
-  async (t) => {
-    const data = await fixture(t, { ATRIUM_FAKE_VERSION: currentVersion() });
-    const record = await startService(data, { entry, notice: () => {} });
-    writeFileSync(userTokenPath(data), `${"a".repeat(64)}\n`, { mode: 0o600 });
-    // 模拟正在关闭的旧服务：接受连接后立刻重置。放在子进程里，重置才会赶在
-    // 命令行处理 connect 事件之前到达；全局 fetch（undici）这时对已失效的套接字
-    // 调 setTypeOfService 抛 EINVAL，在事件回调里接不住，整个进程崩溃。
-    const closing = spawn(
-      process.execPath,
-      [
-        "-e",
-        `const s=require("node:net").createServer((c)=>c.resetAndDestroy());s.listen(0,"127.0.0.1",()=>console.log(s.address().port))`,
-      ],
-      { stdio: ["ignore", "pipe", "ignore"] },
+test("请求进行中服务端强制断开连接：命令行不崩溃，按连接被断开重发到新服务", async (t) => {
+  const data = await fixture(t, { ATRIUM_FAKE_VERSION: currentVersion() });
+  const record = await startService(data, { entry, notice: () => {} });
+  writeFileSync(userTokenPath(data), `${"a".repeat(64)}\n`, { mode: 0o600 });
+  // 模拟正在关闭的旧服务：接受连接后立刻重置。放在子进程里，重置才会赶在
+  // 命令行处理 connect 事件之前到达；全局 fetch（undici）这时对已失效的套接字
+  // 调 setTypeOfService 抛 EINVAL，在事件回调里接不住，整个进程崩溃。
+  const closing = spawn(
+    process.execPath,
+    [
+      "-e",
+      `const s=require("node:net").createServer((c)=>c.resetAndDestroy());s.listen(0,"127.0.0.1",()=>process.stdout.write(s.address().port+"\\n"))`,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  t.after(() => {
+    if (closing.exitCode == null) closing.kill("SIGKILL");
+  });
+  const port = await readNumberLine(closing, "模拟旧服务的端口");
+  const closingUrl = `http://127.0.0.1:${port}`;
+  const replaced = { ...record, instance: "gone" };
+  const codes = new Set<unknown>();
+  for (let i = 0; i < 30; i++) {
+    await assert.rejects(
+      client(closingUrl, data, async (error) => {
+        const code = (error as { cause?: { code?: unknown } }).cause?.code;
+        codes.add(code);
+        assert.equal(
+          resendable(error, data, replaced),
+          true,
+          `未判为可重发：${String(error)}（cause.code=${String(code)}）`,
+        );
+        return serviceUrl(record);
+      }).get("/nothing"),
+      // 重发到了新服务：拿到的是新服务的 404，而不是连接失败。
+      { message: "接口不存在" },
     );
-    t.after(() => {
-      if (closing.exitCode == null) closing.kill("SIGKILL");
-    });
-    const port = await new Promise<number>((resolve) =>
-      closing.stdout!.once("data", (chunk) => resolve(Number(String(chunk)))),
+  }
+  for (const code of codes)
+    assert.ok(
+      ["ECONNRESET", "EPIPE", "EINVAL"].includes(String(code)),
+      `未归为连接被断开：${String(code)}`,
     );
-    const closingUrl = `http://127.0.0.1:${port}`;
-    const replaced = { ...record, instance: "gone" };
-    const codes = new Set<unknown>();
-    for (let i = 0; i < 30; i++) {
-      await assert.rejects(
-        client(closingUrl, data, async (error) => {
-          codes.add((error as { cause?: { code?: unknown } }).cause?.code);
-          assert.equal(resendable(error, data, replaced), true);
-          return serviceUrl(record);
-        }).get("/nothing"),
-        // 重发到了新服务：拿到的是新服务的 404，而不是连接失败。
-        { message: "接口不存在" },
-      );
-    }
-    for (const code of codes)
-      assert.ok(
-        ["ECONNRESET", "EPIPE", "EINVAL"].includes(String(code)),
-        `未归为连接被断开：${String(code)}`,
-      );
-    await assert.rejects(client(closingUrl, data).get("/nothing"), {
-      code: "service_unavailable",
-    });
-  },
-);
+  await assert.rejects(client(closingUrl, data).get("/nothing"), {
+    code: "service_unavailable",
+  });
+});

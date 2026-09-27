@@ -9,6 +9,7 @@ import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
 import { ensureCouncilTables } from "./councils.ts";
 import { ensurePatrolTables } from "./patrol.ts";
+import { ensureWorkerProfiles } from "./worker-profiles.ts";
 
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
@@ -124,4 +125,6 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureCouncilTables(db);
   ensureDeliveryRecords(db);
   ensurePatrolTables(db);
+  // 执行者档案（#355）：三层档案与修订历史。
+  ensureWorkerProfiles(db);
 }

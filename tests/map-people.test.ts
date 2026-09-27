@@ -1,3 +1,4 @@
+import { importWorkerProfiles } from "../server/tasks/worker-profiles.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -142,6 +143,7 @@ function seeded() {
   ensureOrgTables(db);
   ensureTaskTables(db);
   ensureSkillTables(db);
+  importWorkerProfiles(db, workers, () => {});
   const node = (input: Record<string, unknown>) =>
     addNode(db, { reason: "创建", ...input } as never, "u1");
   node({ slug: "org", kind: "org", name: "组织" });
@@ -221,15 +223,15 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
   ]);
   assert.equal(skill!.last?.reason, "首版");
 
-  const all = await mapWorkers(db, undefined, workers);
+  const all = await mapWorkers(db, undefined);
   assert.equal(all.rows.length, 1, "在做的不单独成行");
   assert.equal(all.rows[0]!.deliveries, 5);
   assert.equal(all.rows[0]!.first_pass_rate, 0.8);
   assert.equal(all.rows[0]!.trust, "medium");
-  assert.deepEqual((await mapWorkers(db, "r2", workers)).rows, []);
-  await assert.rejects(mapWorkers(db, "r9", workers), /不存在/);
+  assert.deepEqual((await mapWorkers(db, "r2")).rows, []);
+  await assert.rejects(mapWorkers(db, "r9"), /不存在/);
 
-  const role = await mapRole(db, "r1", [], workers);
+  const role = await mapRole(db, "r1");
   assert.equal(role.tasks.length, 6);
   assert.equal(role.tasks[0]!.status, "running");
   assert.deepEqual(role.tasks[0]!.job, { ref: "r1", name: "后端" });
@@ -238,9 +240,9 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
     role.skills.map((s) => s.slug),
     ["atrium-cli"],
   );
-  await assert.rejects(mapRole(db, "r9", [], workers), /角色 r9 不存在/);
+  await assert.rejects(mapRole(db, "r9"), /角色 r9 不存在/);
 
-  const worker = await mapWorker(db, "codex+gpt-6-sol:high", workers);
+  const worker = await mapWorker(db, "codex+gpt-6-sol:high");
   assert.equal(worker.trust, "medium");
   assert.equal(worker.deliveries.length, 6);
   assert.deepEqual(worker.deliveries.map((d) => d.result.label).sort(), [
@@ -255,9 +257,9 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
     { date: "09-26", text: "后端放心。", by: "你说的" },
   ]);
   // 破坏输入：名字不合法 400；合法但既没交付也没模型或组合档案 404。
-  await assert.rejects(mapWorker(db, "foo+bar", workers), /未知的执行者工具/);
+  await assert.rejects(mapWorker(db, "foo+bar"), /未知的执行者工具/);
   await assert.rejects(
-    mapWorker(db, "claude+nope:high", workers),
+    mapWorker(db, "claude+nope:high"),
     /没有交付记录，也没有档案/,
   );
 

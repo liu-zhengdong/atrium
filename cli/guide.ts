@@ -41,6 +41,8 @@ export const groups: Record<string, string[]> = {
     "role edit",
     "workers",
     "workers show",
+    "workers ls",
+    "workers edit",
     "workers confirm",
   ],
   全景: ["map", "map context", "map edit", "map add"],
@@ -111,6 +113,9 @@ export function example(name: string, command: Command) {
     return "atrium review add 公开仓库 --concerns 安全,质量 --brief 议题.md --issue 322";
   if (name === "review decide")
     return "atrium review decide t1 先不公开，等凭据清理完";
+  if (name === "workers edit")
+    return "atrium workers edit combos/codex+gpt-6-sol --trust medium --reason 连续五次一次通过";
+  if (name === "workers show") return "atrium workers show harness/codex";
   if (name === "map") return "atrium map atrium --depth 2";
   if (name === "map edit")
     return "atrium map edit atrium/cli --what 一句话 --uses 场景一 --uses 场景二 --now 现状";

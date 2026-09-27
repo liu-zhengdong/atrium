@@ -75,7 +75,7 @@ export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
   for (const { name, preferred } of names) {
     let worker;
     try {
-      worker = await resolveWorker(name, options.workersDir);
+      worker = await resolveWorker(name, db);
     } catch {
       // 档案读不了或标识不合法（旧记录）：不当候选，其余照常。
       continue;

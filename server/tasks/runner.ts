@@ -20,7 +20,11 @@ import {
 import { readLogChunk, readLogTail } from "./log-view.ts";
 import { admit, placement, runRequest } from "./plan.ts";
 import type { PaceEntry } from "./prepare.ts";
-import { DEFAULT_WORKERS_DIR, type ResolvedWorker } from "./profiles.ts";
+import type { ResolvedWorker } from "./profiles.ts";
+import {
+  ensureWorkerProfiles,
+  importWorkerProfiles,
+} from "./worker-profiles.ts";
 import { dequeue, enqueue, ensureQueueTable, queued } from "./queue.ts";
 import { clock } from "./quota-holds.ts";
 import { QuotaGuard } from "./quota-runtime.ts";
@@ -80,6 +84,7 @@ import { existsSync } from "node:fs";
 
 export type RunnerOptions = {
   data: string;
+  /** 旧版执行者档案目录：首次启动导入一次（#355），之后只读数据库。 */
   workersDir?: string;
   /** 执行者环境的来源（再经白名单过滤）；缺省 process.env。 */
   env?: NodeJS.ProcessEnv;
@@ -140,6 +145,8 @@ export class TaskRunner {
     private readonly options: RunnerOptions,
   ) {
     ensureQueueTable(db);
+    ensureWorkerProfiles(db);
+    importWorkerProfiles(db, options.workersDir);
     this.inbox = new EventInbox(db, {
       batchMs: options.batchMs,
       leaseMs: options.leaseMs,
@@ -149,7 +156,6 @@ export class TaskRunner {
     this.launchOptions = {
       db,
       data: options.data,
-      workersDir: options.workersDir ?? DEFAULT_WORKERS_DIR,
       env: workerEnvironment(sourceEnv),
       patrolServiceEnv: {
         ...(sourceEnv.ATRIUM_DATA
@@ -241,7 +247,6 @@ export class TaskRunner {
     });
     this.review = new ReviewGate(db, {
       data: options.data,
-      workersDir: this.launchOptions.workersDir,
       run: this.exec,
       pickReviewer: (original) => this.pickReviewer(original),
       launch: (ref, worker) => this.run(ref, { worker, risk: "low" }),
@@ -572,7 +577,7 @@ export class TaskRunner {
 
   /** 服务重启自愈：进程已不在的置 failed；还在的按 pid 接管；再把排队的拉起来。 */
   recover() {
-    return recoverRunning(this.x, this.db, this.launchOptions.workersDir, {
+    return recoverRunning(this.x, this.db, {
       data: this.options.data,
       exec: this.exec,
       changed: (id) => this.waits.changed(id),

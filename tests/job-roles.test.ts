@@ -222,12 +222,10 @@ test("角色可配置 screenshots，未知关卡仍拒绝", async () => {
 });
 
 test("确认建议后写入隔离档案，当前样本的建议消失", async () => {
-  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
   const { workersReport, confirmWorkerAdvice } =
     await import("../server/tasks/workers-report.ts");
-  const dir = mkdtempSync(join(tmpdir(), "atrium-job-workers-"));
+  const { readProfile, profileHistory } =
+    await import("../server/tasks/worker-profiles.ts");
   const d = db();
   const r = role(d);
   try {
@@ -244,20 +242,24 @@ test("确认建议后写入隔离档案，当前样本的建议消失", async ()
       noteTask(d, t.id, "gates", { passed: true, results: [] }, 110 + i * 100);
       advanceTask(d, t.ref, { kind: "exit_ok" }, {}, undefined, 120 + i * 100);
     }
-    assert.equal((await workersReport(d, r.ref, dir)).suggestions.length, 1);
-    await confirmWorkerAdvice(
-      d,
-      { worker: "codex+gpt-6-sol:high", role: r.ref, action: "relax" },
-      dir,
-    );
+    assert.equal((await workersReport(d, r.ref)).suggestions.length, 1);
+    await confirmWorkerAdvice(d, {
+      worker: "codex+gpt-6-sol:high",
+      role: r.ref,
+      action: "relax",
+    });
     assert.match(
-      readFileSync(join(dir, "combos", "codex+gpt-6-sol.md"), "utf8"),
+      readProfile(d, "combos", "codex+gpt-6-sol")!.source,
       /trust: low/,
     );
-    assert.equal((await workersReport(d, r.ref, dir)).suggestions.length, 0);
+    // 确认建议写进库里的组合档案，并留一条修订。
+    assert.match(
+      profileHistory(d, "combos", "codex+gpt-6-sol")[0]!.reason,
+      /确认交付记录建议/,
+    );
+    assert.equal((await workersReport(d, r.ref)).suggestions.length, 0);
   } finally {
     d.close();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 

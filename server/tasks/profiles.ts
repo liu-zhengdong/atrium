@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import {
   ADAPTERS,
   invalid,
@@ -10,13 +10,14 @@ import {
   type Tool,
 } from "./adapters/index.ts";
 import { parseFrontmatter, type FrontValue } from "./frontmatter.ts";
+import { readProfile } from "./worker-profiles.ts";
 
 /**
  * 执行者档案（#262）：执行者 = 工具 + 模型（+ 思考强度）。档案三层叠加：
  * harness/<工具>.md ← models/<模型>.md ← combos/<工具>+<模型>.md。
  * 后层覆盖前层，但规则取更严：trust / max_risk 取较低、limits 逐项取较小、checks 取并集。
  * 组织技能相关的 skills、avoid_nodes 取并集，skills_for 按节点合并（#264 第 3b 步）。
- * 只读；档案由用户或秘书维护。
+ * 档案存数据库（worker-profiles.ts，#355），由用户或秘书用 `atrium workers edit` 维护并留修订。
  */
 
 export const RISKS = ["low", "medium", "high"] as const;
@@ -44,9 +45,14 @@ export type ProfileRules = {
 
 export type ProfileLayer = {
   layer: "harness" | "models" | "combos";
+  /** 档案标识 `层/名`，如 harness/codex。 */
   file: string;
+  rev: number;
   rules: ProfileRules;
+  /** 附进提示词的正文（不含「交付记录」段）。 */
   body: string;
+  /** 手写的「交付记录」段，作备注保留，不附进提示词（事实以交付记录表为准）。 */
+  notes: string;
   warnings: string[];
 };
 
@@ -58,6 +64,7 @@ export type EffectiveProfile = {
   warnings: string[];
 };
 
+/** 旧版档案目录；只在首次启动导入一次（worker-profiles.ts importWorkerProfiles）。 */
 export const DEFAULT_WORKERS_DIR = join(homedir(), "Atrium", "workers");
 
 export type WorkerSpec = { tool: Tool; model?: string; effort?: string };
@@ -103,25 +110,58 @@ export const workerId = (spec: WorkerSpec) =>
 export const modelKey = (model: string) =>
   model.slice(model.lastIndexOf("/") + 1);
 
-async function readLayer(
-  layer: ProfileLayer["layer"],
-  file: string,
-): Promise<ProfileLayer | undefined> {
-  let text: string;
-  try {
-    text = await readFile(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
+/**
+ * 拆出正文里手写的「交付记录」段（纯函数）：从 `#… 交付记录` 标题到下一个同级或更高级标题。
+ * 交付事实已在交付记录表里，这段只作备注保留，不再附进提示词。
+ */
+export function splitDeliveryNotes(body: string) {
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => /^#{1,6}\s*交付记录\s*$/.test(line));
+  if (start < 0) return { body, notes: "" };
+  const level = /^#+/.exec(lines[start]!)![0].length;
+  let end = start + 1;
+  while (end < lines.length) {
+    const heading = /^(#{1,6})\s/.exec(lines[end]!);
+    if (heading && heading[1]!.length <= level) break;
+    end++;
   }
-  const parsed = parseFrontmatter(text);
+  return {
+    body: [...lines.slice(0, start), ...lines.slice(end)].join("\n").trim(),
+    notes: lines
+      .slice(start + 1, end)
+      .join("\n")
+      .trim(),
+  };
+}
+
+/** 解析一份档案原文（纯函数）：规则、正文、备注与警告。 */
+export function parseProfileSource(source: string) {
+  const parsed = parseFrontmatter(source);
   const { rules, warnings } = normalizeRules(parsed.data);
+  return {
+    rules,
+    ...splitDeliveryNotes(parsed.body),
+    warnings: [...parsed.warnings, ...warnings],
+  };
+}
+
+function readLayer(
+  db: DatabaseSync | undefined,
+  layer: ProfileLayer["layer"],
+  name: string,
+): ProfileLayer | undefined {
+  const stored = db && readProfile(db, layer, name);
+  if (!stored) return undefined;
+  const file = `${layer}/${name}`;
+  const parsed = parseProfileSource(stored.source);
   return {
     layer,
     file,
-    rules,
+    rev: stored.rev,
+    rules: parsed.rules,
     body: parsed.body,
-    warnings: [...parsed.warnings, ...warnings].map((w) => `${file}：${w}`),
+    notes: parsed.notes,
+    warnings: parsed.warnings.map((w) => `${file}：${w}`),
   };
 }
 
@@ -240,28 +280,22 @@ export type ResolvedWorker = {
 };
 
 /**
- * 解析执行者标识并读取生效档案。只写工具时，默认模型取 harness 档案的 model，
- * 再退回适配器数据里的 defaultModel。`dir` 可注入，测试用临时目录。
+ * 解析执行者标识并从库里读取生效档案。只写工具时，默认模型取 harness 档案的 model，
+ * 再退回适配器数据里的 defaultModel；库里没有档案（或没给库）就只用内置缺省。
  */
 export async function resolveWorker(
   value: string | WorkerSpec,
-  dir = DEFAULT_WORKERS_DIR,
+  db: DatabaseSync | undefined,
 ): Promise<ResolvedWorker> {
   const spec = typeof value === "string" ? parseWorker(value) : value;
-  const harness = await readLayer(
-    "harness",
-    join(dir, "harness", `${spec.tool}.md`),
-  );
+  const harness = readLayer(db, "harness", spec.tool);
   const model =
     spec.model ?? harness?.rules.model ?? ADAPTERS[spec.tool].defaultModel;
   const layers: ProfileLayer[] = harness ? [harness] : [];
   if (model) {
     const key = modelKey(model);
-    const models = await readLayer("models", join(dir, "models", `${key}.md`));
-    const combos = await readLayer(
-      "combos",
-      join(dir, "combos", `${spec.tool}+${key}.md`),
-    );
+    const models = readLayer(db, "models", key);
+    const combos = readLayer(db, "combos", `${spec.tool}+${key}`);
     for (const layer of [models, combos]) if (layer) layers.push(layer);
   }
   const profile = mergeLayers(layers);

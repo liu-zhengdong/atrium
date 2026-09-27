@@ -246,7 +246,6 @@ export async function createApp(options: {
     login: mapLogin,
     live: async () => (await taskRunner.top()).rows,
     pollMs: options.mapPollMs,
-    workersDir: taskOptions.workersDir,
   });
   registerQuotaRoute(app, {
     bin: options.quotaBin,

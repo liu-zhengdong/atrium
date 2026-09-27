@@ -458,7 +458,6 @@ test("审阅关卡从账本续上：结论、失败、仍在排队、派不出�
   const published: [number, string, Record<string, unknown>][] = [];
   const gate = new ReviewGate(db, {
     data: "/unused",
-    workersDir: "/unused",
     run: async () => ({ ok: false, stdout: "", stderr: "unused" }),
     pickReviewer: async () => "grok",
     launch: async (ref) => {

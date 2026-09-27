@@ -144,27 +144,77 @@ const plainText = (text: string) =>
     .replace(/\*\*|__|`/g, "")
     .trim();
 
-/** 第一句：到句末标点、分号或全角冒号为止；`a.ts:12` 这类半角冒号不断句。 */
-const firstSentence = (text: string) =>
-  text.split(/[。！？!?；;：]|:\s/)[0]!.trim();
+const OPEN = "「『“（(";
+const CLOSE = "」』”）)";
+
+/** 第一句：到句末标点、分号或全角冒号为止；`a.ts:12` 这类半角冒号、引号和括号里的标点不断句。 */
+function firstSentence(text: string): string {
+  const chars = [...text];
+  let depth = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]!;
+    if (OPEN.includes(c)) depth++;
+    else if (CLOSE.includes(c)) depth = Math.max(0, depth - 1);
+    else if (
+      !depth &&
+      ("。！？!?；;：".includes(c) ||
+        (c === ":" && /\s/.test(chars[i + 1] ?? "")))
+    )
+      return chars.slice(0, i).join("").trim();
+  }
+  return text.trim();
+}
+
+/** 代码位置：`a.ts:12`、`a.ts:12-30`、`a.ts:12-30、40`。 */
+const LOCATION = /^[\w./-]+:\d+(?:[-–]\d+)?(?:[、,]\s*\d+(?:[-–]\d+)?)*/;
+
+/** 条目开头的编号与「位置：」去掉后的第一句；只剩位置时退回位置本身。 */
+function pointSentence(text: string): string {
+  const plain = plainText(text).replace(/^\d+[.)、]\s*/, "");
+  const at = LOCATION.exec(plain);
+  const rest = at && /^\s*[：:]/.test(plain.slice(at[0].length));
+  if (!rest) return firstSentence(plain);
+  return (
+    firstSentence(plain.slice(at[0].length).replace(/^\s*[：:]\s*/, "")) ||
+    at[0]
+  );
+}
 
 /** 放不下时先去掉开头的代码位置（`a.ts:12-30`）和括号里的补充说明，再按词截断。 */
 function fitSentence(sentence: string, max: number): string {
   if (width(sentence) <= max) return sentence;
   const lean =
     sentence
-      .replace(/^[\w./-]+:\d+(?:[-–]\d+)?\s*/, "")
+      .replace(LOCATION, "")
       .replace(/（[^（）]*）|\([^()]*\)/g, "")
+      .replace(/^[\s—–-]+/, "")
       .trim() || sentence;
   return clipWords(lean, max);
 }
 
-type ReviewLine = { text: string; item: boolean; heading: boolean };
+type ReviewLine = {
+  text: string;
+  /** 编号条目且以加粗起头：审阅者列问题的标题行。 */
+  headline: boolean;
+  heading: boolean;
+  /** 所在小节是不作为打回理由的（可选建议、已看过没问题的）。 */
+  aside: boolean;
+};
 
-/** 审阅意见逐行拆开：跳过代码块与分隔线；标记列表项和小标题（`#` 开头、整行加粗或以冒号收尾）。 */
+/** 「必须改的问题」小标题；「必须改的问题：无」也算。 */
+const MUST_FIX = /^必须(?:要)?改(?:的问题)?\s*(?:[：:]\s*(?:无|没有)?[。.]?)?$/;
+const MUST_FIX_HEAD = /必须(?:要)?改/;
+const ASIDE_HEAD =
+  /可选|建议|不打回|不作为|供参考|没有问题|没问题|已看过|核对过/;
+
+/**
+ * 审阅意见逐行拆开：跳过代码块与分隔线；编号在加粗里（`**1. …**`）也算编号条目；
+ * 小标题是非列表项里 `#` 开头、整行加粗、以冒号收尾或整行写「必须改的问题」的。
+ */
 function reviewLines(notes: string): ReviewLine[] {
   const lines: ReviewLine[] = [];
   let fenced = false;
+  let aside = false;
   for (const raw of notes.split(/\r?\n/)) {
     const line = raw.trim().replace(/^>\s*/, "");
     if (line.startsWith("```")) {
@@ -172,38 +222,52 @@ function reviewLines(notes: string): ReviewLine[] {
       continue;
     }
     if (fenced || !line || /^[-=*_|:\s]+$/.test(line)) continue;
-    const marker = /^(?:[-*+]\s+|\d+[.)、]\s*)/.exec(line);
-    const item = !!marker;
-    const text = marker ? line.slice(marker[0].length) : line;
+    const marker = /^(?:[-*+]\s+|(\d+)[.)、]\s*)/.exec(line);
+    let text = marker ? line.slice(marker[0].length) : line;
+    const boldNumber = /^\*\*\d+[.)、]\s*/.exec(text);
+    if (boldNumber) text = `**${text.slice(boldNumber[0].length)}`;
+    const item = !!marker || !!boldNumber;
     const bold = /^\*\*(.+?)\*\*\s*(.*)$/.exec(text);
+    const plain = plainText(text);
     const heading =
       !item &&
       (line.startsWith("#") ||
         (!!bold && !bold[2]!.replace(/^[：:]\s*/, "")) ||
-        /[：:]$/.test(plainText(text)));
-    lines.push({ text, item, heading });
+        /[：:]$/.test(plain) ||
+        MUST_FIX.test(plain.replace(/^#+\s*/, "")));
+    if (heading) aside = ASIDE_HEAD.test(plain) && !MUST_FIX_HEAD.test(plain);
+    const headline =
+      (!!marker?.[1] || !!boldNumber) && text.startsWith("**") && !aside;
+    lines.push({ text, headline, heading, aside: aside && !heading });
   }
   return lines;
 }
 
-/** 一行里要读的那句：加粗开头的取加粗部分，否则取第一句。 */
+/** 「**现象**：…」这类标签式加粗：标签不是要点，读冒号后面的话。 */
+const LABEL =
+  /^\*\*(?:现象|位置|复现|复现结果|怎么改|改法|对照|实测|原因|影响|结果|目标|说明)\s*[：:]?\*\*\s*[：:]?\s*/;
+
+/** 一行里要读的那句：跳过标签式加粗；加粗开头的取加粗部分，否则取第一句。 */
 function lineSentence(text: string): string {
+  const label = LABEL.exec(text);
+  if (label) return pointSentence(text.slice(label[0].length));
   const bold = /^\*\*(.+?)\*\*/.exec(text);
-  return firstSentence(plainText(bold ? bold[1]! : text));
+  return pointSentence(bold ? bold[1]! : text);
 }
 
 /**
  * 从审阅意见里挑打回的理由：「必须改的问题」小节的第一条；没有这一节时取「结论：」那句，
- * 再没有取第一句完整句子（开头被截过、以「…」起头的不算）。
+ * 再没有取第一个编号问题标题（开头被截掉、小节标题跟着没了的常见情形），
+ * 最后取第一句完整句子（开头被截过、以「…」起头的不算）。可选建议、已看过的小节都不取。
  */
 function reviewPoint(notes: string): string | null {
   const lines = reviewLines(notes);
   const section = lines.findIndex(
-    (line) => line.heading && /必须(?:要)?改/.test(line.text),
+    (line) => line.heading && MUST_FIX_HEAD.test(line.text),
   );
   if (section >= 0) {
     for (const line of lines.slice(section + 1)) {
-      if (line.heading && /必须(?:要)?改/.test(line.text)) continue;
+      if (line.heading && MUST_FIX_HEAD.test(line.text)) continue;
       if (line.heading) break;
       const sentence = lineSentence(line.text);
       if (sentence) return sentence;
@@ -214,9 +278,18 @@ function reviewPoint(notes: string): string | null {
     const sentence = verdict ? firstSentence(plainText(verdict[1]!)) : "";
     if (sentence) return sentence;
   }
-  for (const line of lines) {
-    if (line.heading || /^(?:…|\.\.\.)/.test(line.text)) continue;
-    if (/^(?:\*\*)?审阅结论/.test(line.text)) continue;
+  const readable = lines.filter(
+    (line) =>
+      !line.heading &&
+      !line.aside &&
+      !/^(?:…|\.\.\.)/.test(line.text) &&
+      !/^(?:\*\*)?审阅结论/.test(line.text),
+  );
+  for (const line of readable.filter((line) => line.headline)) {
+    const sentence = lineSentence(line.text);
+    if (sentence) return sentence;
+  }
+  for (const line of readable) {
     const sentence = lineSentence(line.text);
     if (sentence) return sentence;
   }
@@ -249,10 +322,9 @@ function checkShort(text: string, max: number): string {
   if (!/failed|失败|未通过|没过/i.test(head[1]!)) return label;
   const body = head[2]!.replace(/；\s*日志[\s\S]*$/, "").trim();
   if (!body || /^退出码/.test(body)) return label;
-  const name = body
-    .split("、")[0]!
-    .replace(/\s*\(\d+(?:\.\d+)?m?s\)$/, "")
-    .trim();
+  // 用例名里常带「、」：有耗时标记时按它切，没有才按「、」。
+  const timed = /^(.+?)\s*\(\d+(?:\.\d+)?m?s\)/.exec(body);
+  const name = (timed ? timed[1]! : body.split("、")[0]!).trim();
   const point = clipWords(name, max - width(`${label}：`));
   return point ? `${label}：${point}` : label;
 }

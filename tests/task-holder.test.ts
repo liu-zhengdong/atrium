@@ -458,6 +458,152 @@ test("审阅打回取「必须改的问题」第一条的第一句，放不下�
   );
 });
 
+/** t131、t134 真实的审阅打回原因：编号写在加粗里、条目以「文件:行：」起头、下面跟「**现象**：」这类标签。 */
+const T131 = `审阅打回（t131，claude+opus）：…rigin/main 跑同一场景对照过。
+
+## 必须改的问题
+
+**1. \`server/tasks/schedule-refresh.ts:42\`：上游换了新 PR 后，要等旧 PR 的退避结束才会去查**
+- **现象**：过滤条件 \`m.next_check_at IS NULL OR m.next_check_at<=?\` 没区分 \`task_pr_merge\` 里缓存的是不是当前这个 PR。上游的旧 PR 被关、退避很长之后，任务返工又交了新 PR，新 PR 也被旧的 \`next_check_at\` 挡住。下游这段时间一直显示「等待」，最长一天。
+- **复现**：旧 PR #7 的 \`next_check_at\` 设为 12 小时后、\`attempts\` 为 11，把上游 \`pr_url\` 改成 #8 再巡检一轮：gh 调用 0 次，下游 \`schedule_state\` 仍是 \`waiting\`。
+- **对照**：改前 \`fresh\` 为假时会立即重查。
+- 这个问题只影响在 GitHub 上手动合入的 PR；运行时合入队列合入的有 \`locallyMerged\` 兜底。
+- **怎么改**：
+  - 条件改成 \`(m.pr_url IS NOT t.pr_url OR m.next_check_at IS NULL OR m.next_check_at<=?)\`。
+  - 第 106 行 \`prior\` 在 \`fresh\` 为假时从 0 算起，不继承旧 PR 的连败次数。
+  - 补一条测试。
+
+**2. \`server/tasks/schedule-refresh.ts:180\`：外部 PR 一次查询失败，会把别的任务上已合入的记录改回未合入**
+- **现象**：UPDATE 只按 \`repo=? AND number=?\` 匹配，没带 \`merged=0\`。任务 X 已记下 \`o/r#5\` 已合入，新任务 Y 也依赖 \`o/r#5\`。这时 gh 查询失败（网络或认证问题），X 那行被写成 \`merged=0\` 加错误，X 会从「就绪」退回「等待」并进入退避。
+- **复现**：结果为 \`[{task_id:1, merged:0, error:'网络错误'}, {task_id:2, merged:0, …}]\`；origin/main 上 X 保持 \`merged:1\`。
+- **怎么改**：
+  - UPDATE 加 \`AND merged=0\`。
+  - 补一条测试：已合入的行不被失败的查询覆盖。
+
+## 不打回，供参考
+
+- **一个 main 上本来就有的问题**：巡检等 gh 的时候，用户把一个因上游受阻（\`schedule_state='blocked'\`）的任务取消了，这一轮仍会对它执行 \`manual_set todo\`，并自动派发出去。原因是比较状态时用的是本页开头读到的旧行（\`row.status\` 和 \`row.schedule_state\`）。这不是本 PR 引入的，但 PR 删掉了逐行重读，以后修的时候要在进入状态迁移前重读这三列。建议另开任务。
+- **关服务时会把「已取消」当成查询失败写库**：\`abortable\` 返回的「已取消」会走进失败分支，写入 \`error='已取消'\` 并让 \`attempts+1\`，看板会显示「查询失败：已取消」。建议在 \`stop()\` 为真时不写库。
+
+我没有改动工作树，也没有在 PR 上评论。临时复现脚本已删除，工作树 \`git status\` 为空。`;
+
+const T134 = `审阅打回（t134，claude+opus）：…查到已关闭，就会执行 \`dequeue\` 和 \`advanceTask(block)\`，状态机允许从 running 转成 blocked，结果运行中的任务被标受阻，还会发出一条 blocked 事件。
+- **复现结果**：上游 t1 已 done、交付 PR；下游 t2 等 t1。假执行器在 gh 调用里对 t2 执行 \`advanceTask(start)\`，并返回 \`CLOSED\`。
+  - 本 PR：t2 变成 \`blocked\`，测试失败。
+  - origin/main：同一测试 t2 仍是 \`running\`，测试通过。
+- **怎么改**：\`refreshDueSchedulePrs\` 返回后，按页再读一次 \`id,status,schedule_state,schedule_reason\`（一条 \`WHERE id IN (...)\` 查询，仍是每页常数条），和原 row 合并后再判定与推进状态。上面这个场景补成单测。
+
+**2. 每轮查询数仍随候选数线性增长，没达到任务目标**
+
+- **位置**：\`server/tasks/schedule.ts:282-289\`
+- **现象**：每个判为 ready 的候选都会单独查一次 \`SELECT status,auto,auto_dispatched,owner,deliver FROM tasks WHERE id=?\`，包括早已派过（\`auto_dispatched=1\`）、这轮什么都不做的任务。
+- **实测**：给 SQL 执行计数。50 个稳态 ready 候选，一轮 55 条语句；150 个候选，一轮 155 条，其中 150 条就是这句。PR 正文自己的数据也是「297 条（约 1/候选）」。原任务要求「每轮查询数不随候选数线性增长（批量查或只算变了的）」。
+- **怎么改**：先用本页读出的行（改完第 1 条后是重读过的）过滤 \`status==='todo' && auto===1 && auto_dispatched===0\` 等条件，只有真要派发的才再读库确认。补一条单测，断言稳态一轮的语句数与候选数无关。
+
+## 已看过、没有问题的部分
+
+- **需求覆盖**：
+  - 上游查询从 \`task_dependencies\` 按 task_id 驱动，有 \`EXPLAIN QUERY PLAN\` 守护测试。
+  - gh/git 挪到每页开头批量跑，同一上游只查一次。
+  - 上游本地已合入（\`delivery_stage\` 为 merged/online，或已有 \`merge_commit\`）时不调 gh。
+  - 关闭或查不到的 PR 按连败次数退避：1 分钟起逐次翻倍，封顶一天。上游换了新 PR 会立即重查，不被旧 PR 的退避挡住。
+  - \`close()\` 会中止在跑的 gh/git 子进程，有 1 秒内返回的测试。
+  - 没有越出任务范围的改动。
+- **旧库兼容**：两张表用 \`ALTER TABLE\` 补 \`next_check_at\` 和 \`attempts\`，旧记录按上次查询时刻补下次可查时间，升级时不会全体一起重查。
+- **安全**：SQL 全部参数化，一页最多 200 个占位符，没超 SQLite 上限。gh 用参数数组调用，不经过 shell。日志和输出里没有凭据。
+- **其他**：关服务中止的查询不写库，不会把「已取消」记成查询失败。查外部 PR 失败时只更新 \`merged=0\` 的行，不会把别处已合入的记录改回未合入。`;
+
+test("审阅打回：加粗里的编号算条目，跳过标签式加粗和开头的代码位置", () => {
+  assert.equal(
+    mergeShort(T131, 60),
+    "审阅打回：上游换了新 PR 后，要等旧 PR 的退避结束才会去查",
+  );
+  assert.equal(mergeShort(T131), "审阅打回：上游换了新 PR 后，要等旧…（t131）");
+  // 开头连同「必须改的问题」小标题被截掉：取第一个编号问题标题，不取「复现结果」下的细节。
+  assert.equal(
+    mergeShort(T134, 60),
+    "审阅打回：每轮查询数仍随候选数线性增长，没达到任务目标",
+  );
+  assert.equal(
+    mergeShort(T134),
+    "审阅打回：每轮查询数仍随候选数线性增…（t134）",
+  );
+  for (const reason of [T131, T134]) {
+    const text = holderOf({
+      ...base,
+      returned: { by: null, via: "merge" },
+      merge_returned: reason,
+    })!.text;
+    assert.ok(width(text) <= HOLDER_WIDTH, text);
+    assert.doesNotMatch(text, /现象|复现|schedule/);
+  }
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：## 必须改的问题\n1. `a.ts:42`：上游换了新 PR 后要等退避结束",
+    ),
+    "审阅打回：上游换了新 PR 后要等退避结束（t9）",
+  );
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：## 必须改的问题\n**1. a.ts:42、50: 没判空**",
+    ),
+    "审阅打回：没判空（t9）",
+  );
+  // 去掉位置后什么都不剩才退回位置本身。
+  assert.equal(
+    mergeShort("审阅打回（t9，x）：## 必须改的问题\n1. `a.ts:42`："),
+    "审阅打回：a.ts:42（t9）",
+  );
+  // 缩短时去掉位置，不留开头的破折号。
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：## 必须改的问题\n1. `server/tasks/very-long-file-name.ts:42` —— 没有判空，这里会在上游换 PR 时崩掉",
+    ),
+    "审阅打回：没有判空，这里会在上游换 PR 时崩掉",
+  );
+  // 引号里的冒号不断句。
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：必须改的问题\n**2. 条目以「文件:行：」起头时只剩位置**",
+      60,
+    ),
+    "审阅打回：条目以「文件:行：」起头时只剩位置（t9）",
+  );
+});
+
+test("审阅打回：整行「必须改的问题」算小标题，不当作理由", () => {
+  assert.equal(
+    mergeShort("审阅打回（t9，x）：先说背景\n必须改的问题\n- 没判空。"),
+    "审阅打回：没判空（t9）",
+  );
+  assert.equal(
+    mergeShort("审阅打回（t9，x）：必须要改\n- 没判空。"),
+    "审阅打回：没判空（t9）",
+  );
+  // 写明没有必须改的：不把小标题当理由，也不取可选建议。
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：必须改的问题：无\n\n## 可选建议\n- 命名可以更直白。",
+    ),
+    "审阅打回（t9）",
+  );
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：**必须改的问题**：无\n\n**不作为打回理由：**\n- 命名。",
+    ),
+    "审阅打回（t9）",
+  );
+});
+
+test("本地检查没过：用例名里带「、」时按耗时标记取第一个用例", () => {
+  assert.equal(
+    mergeShort(
+      "本地检查failed：持球人穷举：结束、取消 (3.2ms)、另一条 (1ms)；日志 /x/log",
+    ),
+    "本地检查没过：持球人穷举：结束、取消",
+  );
+});
+
 test("审阅意见没有「必须改的问题」时取结论句，再没有取第一句完整句子", () => {
   assert.equal(
     mergeShort(

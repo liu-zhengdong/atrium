@@ -97,6 +97,7 @@ const TAG = {
   queued: ["排队", "gray"],
   todo: ["待办", "gray"],
   merged: ["已合入", "gray"],
+  online: ["已上线", "gray"],
   done: ["完成", "gray"],
   failed: ["失败", "red"],
   cancelled: ["取消", "gray"],
@@ -106,8 +107,8 @@ const ORDER = Object.keys(TAG);
 function tagOf(t) {
   if (t.delivery_stage === "merge_queued" || t.delivery_stage === "merging")
     return "merge";
-  if (t.delivery_stage === "merged" || t.delivery_stage === "online")
-    return "merged";
+  if (t.delivery_stage === "online") return "online";
+  if (t.delivery_stage === "merged") return "merged";
   if (t.status === "running") return "doing";
   if (t.status === "todo") return t.queued ? "queued" : "todo";
   return TAG[t.status] ? t.status : "done";

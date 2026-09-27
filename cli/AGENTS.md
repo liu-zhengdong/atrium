@@ -9,3 +9,4 @@
 - 回执：成功时最后一行给下一步命令（`recordNext`），`--json` 只在 stdout 写一个对象；失败给错误码与退出码（`contract.ts`），修正命令只在明确可执行时给出，不拿通用帮助充数。
 - 校验错误用命令行参数名和中文表达（`error-message.ts`），不暴露接口字段名与英文验证句。
 - 需要等的动作提供等待与增量读取（`long-wait.ts`、`wait-options.ts`），不让调用方轮询。
+- 进状态栏、`top`、全景任务行的文字一律过 `oneLine`（`server/text-width.ts`：多行取第一行、按显示宽度截断加「…」）；整篇原因（审阅意见、检查输出）只在 `task show` 里给全文。

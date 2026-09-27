@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { Problem } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
-import { clip, pad, printJson, width } from "./format.ts";
+import { oneLine, pad, printJson, width } from "./format.ts";
 import type { Client } from "./service.ts";
 import type { Command, Values } from "./main.ts";
 import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
@@ -298,7 +298,8 @@ export function hostBrief(host: HostView | undefined): string {
 /** 画一屏。排队与受阻那两列本来就是空的，所以原因长一点也不会顶掉别的列。 */
 export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const rows = snapshot.rows;
-  const states = rows.map((row) => state(row, frame.now));
+  // 原因可能是整篇（审阅意见、检查输出）：只取第一行，定宽和截断都按这一行算。
+  const states = rows.map((row) => oneLine(state(row, frame.now), Infinity));
   // 状态列按时长那一类对齐；排队/受阻的原因是整段话，不参与定宽，借最近动作的空位展开。
   const stateW = Math.max(
     0,
@@ -324,18 +325,18 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
     ` · 未处理事件 ${snapshot.counts.events}`;
   const headRoom = Math.max(10, frame.width - width(clock) - 1);
   const lines = [
-    pad(clip(head, headRoom), headRoom) + clock,
+    pad(oneLine(head, headRoom), headRoom) + clock,
     ...rows.flatMap((row, index) => {
       // 原因再长也不能顶出屏幕：状态列的上限是它自己的宽度加最近动作那段的空位。
-      const cell = clip(states[index]!, plan.stateW + 2 + plan.actionW);
+      const cell = oneLine(states[index]!, plan.stateW + 2 + plan.actionW);
       const text = [
         `${SYMBOL[row.processing && phase(row) === "blocked" ? "processing" : phase(row)] ?? "·"} ${pad(row.ref, plan.refW)}`,
-        pad(clip(titleOf(row), plan.titleW), plan.titleW),
+        pad(oneLine(titleOf(row), plan.titleW), plan.titleW),
         ...(plan.showWorker
-          ? [pad(clip(row.worker ?? "", plan.workerW), plan.workerW)]
+          ? [pad(oneLine(row.worker ?? "", plan.workerW), plan.workerW)]
           : []),
         pad(cell, plan.stateW),
-        pad(clip(action(row, frame.now), plan.actionW), plan.actionW),
+        pad(oneLine(action(row, frame.now), plan.actionW), plan.actionW),
       ]
         .join("  ")
         .trimEnd();
@@ -344,16 +345,16 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
         line,
         ...(row.note
           ? [
-              `  ${clip(`备注（${row.note_by ?? "未知"} · ${new Date(row.note_at!).toLocaleString("zh-CN")}）：${row.note}`, frame.width - 2)}`,
+              `  ${oneLine(`备注（${row.note_by ?? "未知"} · ${new Date(row.note_at!).toLocaleString("zh-CN")}）：${row.note}`, frame.width - 2)}`,
             ]
           : []),
         ...(row.tells?.total
           ? [
-              `  ${clip(`捎话 ${row.tells.total} 条${row.tells.pending ? `，${row.tells.pending} 条待送达` : "，都已送达"}`, frame.width - 2)}`,
+              `  ${oneLine(`捎话 ${row.tells.total} 条${row.tells.pending ? `，${row.tells.pending} 条待送达` : "，都已送达"}`, frame.width - 2)}`,
             ]
           : []),
         ...(row.concerns?.length
-          ? [`  ${clip(concernsBrief(row.concerns)!, frame.width - 2)}`]
+          ? [`  ${oneLine(concernsBrief(row.concerns)!, frame.width - 2)}`]
           : []),
       ];
     }),
@@ -367,7 +368,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       "leader",
       ...snapshot.leaders.map(
         (l) =>
-          `  ${clip(`${l.ref} ${l.name} · 负责 ${l.nodes.join("、") || "（无）"} · ${wakeText(l.wake)}${l.events ? ` · 待处理 ${l.events}` : ""}`, frame.width - 2)}`,
+          `  ${oneLine(`${l.ref} ${l.name} · 负责 ${l.nodes.join("、") || "（无）"} · ${wakeText(l.wake)}${l.events ? ` · 待处理 ${l.events}` : ""}`, frame.width - 2)}`,
       ),
     );
   if (snapshot.map) {
@@ -389,7 +390,10 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   } else if (snapshot.map === null)
     lines.push(
       "",
-      clip(`全景：取不到（${snapshot.map_error ?? "未知原因"}）`, frame.width),
+      oneLine(
+        `全景：取不到（${snapshot.map_error ?? "未知原因"}）`,
+        frame.width,
+      ),
     );
   if (snapshot.plan) {
     lines.push("");
@@ -407,7 +411,10 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   } else if (snapshot.plan === null)
     lines.push(
       "",
-      clip(`排期：取不到（${snapshot.plan_error ?? "未知原因"}）`, frame.width),
+      oneLine(
+        `排期：取不到（${snapshot.plan_error ?? "未知原因"}）`,
+        frame.width,
+      ),
     );
   if (frame.footer) lines.push(`动作：${nextOf(rows)}`);
   return lines.join("\n");

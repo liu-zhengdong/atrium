@@ -1,5 +1,6 @@
 import type { TaskRow } from "./ledger-model.ts";
 import type { TaskStatus } from "./state.ts";
+import { oneLine } from "../text-width.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
@@ -19,9 +20,14 @@ export type Holder = {
   kind: HolderKind;
   /** 执行者组合、aN、secretary、u1；运行时自己推进时为 null。 */
   who: string | null;
-  /** 一句话：卡在哪、谁在接手，如「本地检查没过 · a1 已交回执行者」。 */
+  /** 一句话：卡在哪、谁在接手，如「本地检查没过 · a1 已交回执行者」。单行，至多 HOLDER_WIDTH 显示宽度。 */
   text: string;
+  /** 摘要背后的原因全文（审阅意见、检查输出）；只有单个任务视图（`task show`）给。 */
+  detail?: string | null;
 };
+
+/** 持球人一句话的显示宽度上限：状态栏与 top 一行里放得下。 */
+export const HOLDER_WIDTH = 60;
 
 export type HolderFacts = {
   status: TaskStatus;
@@ -92,7 +98,7 @@ const GATE_LABEL: Record<string, string> = {
   review: "审阅打回",
 };
 
-/** 受阻原因缩成一句：关卡不过按关卡名说，其余取第一段、至多 30 字。 */
+/** 受阻原因缩成一句：关卡不过按关卡名说，其余取第一行第一段、至多 40 显示宽度（20 个汉字）。 */
 export function blockShort(
   block: { reason: string | null; gates: string[] } | null,
 ): string {
@@ -101,13 +107,84 @@ export function blockShort(
   if (gate) return GATE_LABEL[gate]!;
   const reason = (block.reason ?? "").trim();
   if (!reason) return "受阻";
-  const first = reason.split(/[：；\n]/)[0]!.trim() || reason;
-  const chars = Array.from(first);
-  return chars.length > 30 ? `${chars.slice(0, 29).join("")}…` : first;
+  const line = oneLine(reason, Infinity);
+  return oneLine(line.split(/[：；]/)[0]!.trim() || line, 40);
 }
 
-/** 已结束且不在合入流水线、也不在等拍板的任务没有持球人。 */
+/** 从审阅意见里挑一句：跳过标题与「必须改的问题：」这类小标题，列表项有加粗开头的取加粗部分。 */
+function reviewPoint(notes: string): string | null {
+  let fenced = false;
+  for (const raw of notes.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("```")) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced || !line || line.startsWith("#")) continue;
+    const item = line
+      .replace(/^>\s*/, "")
+      .replace(/^(?:[-*+]|\d+[.)、])\s*/, "");
+    const bold = /^\*\*(.+?)\*\*\s*(.*)$/.exec(item);
+    // 整行只有加粗或以冒号收尾的，是小标题。
+    if (bold && !bold[2]!.replace(/^[：:]\s*/, "")) continue;
+    const plain = (bold ? bold[1]! : item)
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\*\*|__|`/g, "")
+      .trim();
+    if (!plain || /[：:]$/.test(plain) || /^[-=*_|:\s]+$/.test(plain)) continue;
+    const sentence = plain.split(/[。！？；!?;]|[：:]/)[0]!.trim();
+    if (sentence) return sentence;
+  }
+  return null;
+}
+
+/**
+ * 合入交回原因缩成一行：原因类别加一句话，如「审阅打回：性能目标没达到（t132）」「本地检查没过」「rebase 冲突」。
+ * 全文由 `task show` 给（Holder.detail）。
+ */
+export function mergeShort(reason: string): string {
+  const text = reason.trim();
+  const review = /^审阅打回(?:（(t\d+)[^）]*）)?\s*[：:]?([\s\S]*)$/.exec(text);
+  if (review) {
+    const point = reviewPoint(review[2]!);
+    const by = review[1] ? `（${review[1]}）` : "";
+    return point ? `审阅打回：${oneLine(point, 30)}${by}` : `审阅打回${by}`;
+  }
+  if (/rebase\s*冲突|变基\s*冲突|rebase\s+conflict/i.test(text))
+    return "rebase 冲突";
+  if (/^本地检查/.test(text))
+    return /超时|timeout/i.test(text.split(/[：:]/)[0]!)
+      ? "本地检查超时"
+      : "本地检查没过";
+  const line = oneLine(text, Infinity);
+  return oneLine(line.split(/[：:]/)[0]!.trim() || line, 30);
+}
+
+/** 合入交回的一句：审阅打回自成一类，其余写「合入没过：原因」。 */
+function mergeBack(reason: string | null): string {
+  if (!reason) return "合入没过";
+  const short = mergeShort(reason);
+  return short.startsWith("审阅打回") ? short : `合入没过：${short}`;
+}
+
+/** 已结束且不在合入流水线、也不在等拍板的任务没有持球人；一句话统一截成单行。 */
 export function holderOf(f: HolderFacts): Holder | null {
+  const holder = judge(f);
+  return holder
+    ? { ...holder, text: oneLine(holder.text, HOLDER_WIDTH) }
+    : null;
+}
+
+/** 摘要背后的原因全文：合入交回看交回原因，受阻或受阻后交回看受阻原因；没有为 null。 */
+export function holderDetail(f: HolderFacts): string | null {
+  if (f.status === "running" && f.returned?.via === "merge")
+    return f.merge_returned;
+  if (f.status === "blocked" || (f.status === "running" && f.returned))
+    return f.block?.reason ?? null;
+  return null;
+}
+
+function judge(f: HolderFacts): Holder | null {
   if (f.council_escalated)
     return { kind: "user", who: "u1", text: "会审上交，等你拍板" };
   if (f.delivery_stage === "reviewing")
@@ -135,7 +212,7 @@ export function holderOf(f: HolderFacts): Holder | null {
       return {
         kind: "worker",
         who: f.worker,
-        text: `合入没过${f.merge_returned ? `（${f.merge_returned}）` : ""} · 已交回执行者`,
+        text: `${mergeBack(f.merge_returned)} · 已交回执行者`,
       };
     if (f.returned)
       return {

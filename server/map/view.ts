@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
+import { oneLine } from "../text-width.ts";
 import {
   all,
   nodeByAddress,
@@ -321,6 +322,9 @@ export function jobNames(db: DatabaseSync): Map<number, string> {
   );
 }
 
+/** 全景任务行里原因、最近动作、备注的显示宽度上限：单行，全文看 `task show`。 */
+export const TASK_LINE_WIDTH = 120;
+
 export function taskView(
   row: TaskRow,
   live?: LiveRow,
@@ -337,8 +341,10 @@ export function taskView(
     worker: row.worker ?? live?.worker ?? null,
     started_at: row.started_at,
     updated_at: row.updated_at,
-    reason: live?.reason ?? null,
-    action: live?.action?.text ?? null,
+    reason: live?.reason ? oneLine(live.reason, TASK_LINE_WIDTH) : null,
+    action: live?.action?.text
+      ? oneLine(live.action.text, TASK_LINE_WIDTH)
+      : null,
     log_at: live?.log_at || null,
     part: row.part === null ? null : ref(row.part),
     pr_url: row.pr_url,
@@ -350,7 +356,9 @@ export function taskView(
         ? { ref: `r${row.job_id}`, name: jobs.get(row.job_id)! }
         : null,
     by: people?.by ?? null,
-    note: people?.note ?? null,
+    note: people?.note
+      ? { ...people.note, text: oneLine(people.note.text, TASK_LINE_WIDTH) }
+      : null,
     also: involved.also ?? [],
     home: involved.home ?? null,
   };

@@ -22,7 +22,14 @@ import {
 } from "../server/map/context.ts";
 import { MapLogin, LINK_TTL_MS, cookieOf } from "../server/map/login.ts";
 import { addMap, editMap, mergeFields } from "../server/map/write.ts";
-import { mapNode, mapTree, mapSignature } from "../server/map/view.ts";
+import {
+  mapNode,
+  mapTree,
+  mapSignature,
+  taskView,
+  TASK_LINE_WIDTH,
+} from "../server/map/view.ts";
+import { width } from "../server/text-width.ts";
 import { renderMapTree } from "../cli/map.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
 import { removeTemp } from "./temp-dir.ts";
@@ -660,4 +667,32 @@ test("失效通知：数据变了推 changed，网页据此局部重取", async 
   });
   await done;
   assert.deepEqual(events.slice(0, 2), ["hello", "changed"]);
+});
+
+test("全景任务行：原因、最近动作、备注都只出一行，按显示宽度截断", () => {
+  const essay = `审阅打回（t132，codex）：## 必须改的问题\n1. **性能目标没达到**\n## 可选建议`;
+  const long = "中英 mixed 混排".repeat(30);
+  const view = taskView(
+    { id: 7, title: "t", status: "blocked", part: null, urgent: 0 } as never,
+    {
+      ref: "t7",
+      status: "blocked",
+      worker: null,
+      started_at: null,
+      queued_at: null,
+      reason: essay,
+      log_at: 0,
+      action: { text: `${long}\n第二行`, kind: "step" },
+    },
+    new Map(),
+    {
+      by: null,
+      note: { text: "看过日志\n细节在下面", at: 1, by: null as never },
+    },
+  );
+  assert.equal(view.reason, "审阅打回（t132，codex）：## 必须改的问题");
+  assert.ok(
+    width(view.action!) <= TASK_LINE_WIDTH && view.action!.endsWith("…"),
+  );
+  assert.equal(view.note!.text, "看过日志");
 });

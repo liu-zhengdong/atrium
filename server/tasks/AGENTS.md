@@ -16,5 +16,5 @@
 - 本机减负（#358）：限额读取与判定在 `host-load.ts`（纯函数，采样在 `HostLoad`）；`TaskRunner.run` 与 `Executors.drain` 拉起前过同一道闸门，满了或太忙落库排队、巡检时按入队顺序拉起；本地检查并发由共享的 `sharedLocalChecks` 上限控制；测试并发经 `worker-env.ts` 注入 `ATRIUM_TEST_CONCURRENCY`。太忙看两条线（t113）：Atrium 进程树占的核数（`server/platform/cpu-plan.ts` 判定、`cpu.ts` 按平台采样，巡检时刷新）与整机负载保护线。
 - 紧急（t113）：只认 `tasks.urgent`；闸门（`hostGate` 的 `urgent`）、排队先后（`queueOrder`，执行者队列 `queueHeads` 与合入队列 `NEXT_MERGE` 同一规则）、本地检查排位（`checkPlacement`）都在 `host-load.ts`，其余限制（额度保留、trust / max_risk、依赖）不因紧急放宽。
 - 任务详述（#355）：内容存 `tasks.brief`（校验与上限在 `brief.ts`），派活、审阅、会审、`task show` 只读库里的内容；`brief_path` 只记来源。运行时自己生成的详述（审阅、专员审查、会审意见与汇总）用 `clipBrief` 截到上限再存。
-- 持球人（#355）：未结束任务「球在谁手里」判定在 `holder.ts`（纯函数、穷举测试），事实在 `holder-facts.ts` 取；`top`、`task show` 与状态栏按它显示，不在命令行里另猜。
+- 持球人（#355）：未结束任务「球在谁手里」判定在 `holder.ts`（纯函数、穷举测试），事实在 `holder-facts.ts` 取；`top`、`task show` 与状态栏按它显示，不在命令行里另猜。一句话单行、至多 `HOLDER_WIDTH`；合入交回原因由 `mergeShort` 缩成「类别 + 一句」，原因全文只在单个任务视图的 `holder.detail` 给 `task show`。
 - 横跨部分（#373）：管方面的部分与要点适用范围在 `server/org/aspects.ts`（`appliedFrom`、`covers` 纯函数）；任务牵涉的部分账在 `also.ts`（task_also 只存显式 `--also`，自动牵涉每次按要点算）；专员归属与可选范围在 `specialist-scope.ts`（`scopeOf`、`inScope` 纯函数），`--by`/`--ask` 校验、`task pick`、`specialist ls --part` 共用；牵涉知会 `publishInvolved`（notice.ts，info 级不叫醒），被牵涉部分的 leader 只能记备注与捎话（leaders/scope.ts `remarkVerdict`）。

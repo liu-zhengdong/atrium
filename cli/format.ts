@@ -1,9 +1,9 @@
 import { recordResult } from "./contract.ts";
-import { clip, width } from "../server/text-width.ts";
+import { clip, oneLine, width } from "../server/text-width.ts";
 
 /** 终端输出的几个小工具：按显示宽度对齐的表格、时间、单行摘要。 */
 
-export { clip, width };
+export { clip, oneLine, width };
 export const pad = (text: string, target: number) =>
   text + " ".repeat(Math.max(0, target - width(text)));
 

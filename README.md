@@ -35,7 +35,7 @@ atrium task add "上线任务账本" --repo .                         # 顶层�
 atrium task add "表与状态机" --parent t1 --deliver none         # 挂到 t1 下
 atrium task add "验收" --parent t1 --after t2 --deliver none    # t2 完成后才就绪；加 --auto 就绪即自动派活
 atrium task tree t1                                             # 缩进树：状态、交付物、执行者、PR
-atrium task plan                                                # 在跑、就绪、等待中、卡住
+atrium task plan                                                # 在跑、就绪、等待中、卡住；上游交付 PR 的，PR 合入才算满足
 atrium task show t2                                             # 详情与最近事件
 atrium task note t2 "等上游接口"                                 # 处理备注，最新一条显示为当前说明
 atrium task set t3 --status blocked                             # 人工修正状态；running 只能由执行者进入

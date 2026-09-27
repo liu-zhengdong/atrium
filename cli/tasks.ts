@@ -837,15 +837,20 @@ const run: Command = {
       task: Task & { events: TaskEventRow[] };
       queued: boolean;
       pick?: RunPick;
+      reassigned?: { worker: string; from: string; reason: string | null };
     }>(`/tasks/${id}/run`, body);
     const { task } = result;
     if (json) printJson(result);
     else
       console.log(
         [
-          result.queued
-            ? `${task.ref} 排队中：${queuedReason(task.events)}`
-            : `已派 ${task.ref} 给 ${task.worker}（${task.host_ref ? `${task.host_ref} 上 ` : ""}PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
+          result.reassigned && result.queued
+            ? `${task.ref} 已改派给 ${result.reassigned.worker}，仍在排队：${result.reassigned.reason ?? queuedReason(task.events)}`
+            : result.reassigned && task.status !== "running"
+              ? `${task.ref} 已改派给 ${result.reassigned.worker}，现在 ${task.status}`
+              : result.queued
+                ? `${task.ref} 排队中：${queuedReason(task.events)}`
+                : `已${result.reassigned ? "改" : ""}派 ${task.ref} 给 ${task.worker}（${task.host_ref ? `${task.host_ref} 上 ` : ""}PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
           ...urgentLines(task),
           ...pickLines(result.pick),
         ].join("\n"),

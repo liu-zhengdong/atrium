@@ -37,7 +37,20 @@ test("派活计划穷举：状态 × 在跑 × 排队 → 受理或拒绝", () =
             result.ok || result.reason,
             "正在运行或正在启动，不能重复派",
           );
-        else if (queued) assert.equal(result.ok || result.reason, "已在排队");
+        else if (queued) {
+          assert.equal(result.ok || result.reason, "已在排队");
+          assert.equal(
+            result.reassign,
+            true,
+            `queued should be reassignable: ${status}`,
+          );
+        } else if (!result.ok) {
+          assert.equal(
+            result.reassign,
+            undefined,
+            `non-queued reject should not be reassignable: ${status}`,
+          );
+        }
       }
   assert.equal(cases, 6 * 2 * 2);
   assert.equal(placement(true, true), "queue");

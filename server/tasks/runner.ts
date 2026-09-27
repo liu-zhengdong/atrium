@@ -20,14 +20,26 @@ import {
   type Task,
 } from "./ledger.ts";
 import { readLogChunk, readLogTail } from "./log-view.ts";
-import { admit, placement, runRequest } from "./plan.ts";
+import {
+  admit,
+  placement,
+  riskRefusal,
+  runRequest,
+  type RunRequest,
+} from "./plan.ts";
 import type { PaceEntry } from "./prepare.ts";
-import type { ResolvedWorker } from "./profiles.ts";
+import { resolveWorker, type ResolvedWorker } from "./profiles.ts";
 import {
   ensureWorkerProfiles,
   importWorkerProfiles,
 } from "./worker-profiles.ts";
-import { dequeue, enqueue, ensureQueueTable, queued } from "./queue.ts";
+import {
+  dequeue,
+  enqueue,
+  ensureQueueTable,
+  queued,
+  queueView,
+} from "./queue.ts";
 import { idleWaitText, isIdle } from "./priority.ts";
 import { clock } from "./quota-holds.ts";
 import { QuotaGuard } from "./quota-runtime.ts";
@@ -495,8 +507,8 @@ export class TaskRunner {
   async run(reference: unknown, body: unknown) {
     const request = runRequest(body);
     const id = parseTaskRef(reference);
-    // --urgent 派的同时标上紧急（t113）；已经在排队的，标上后立刻按紧急再排一轮。
-    if (request.urgent && queued(this.db, id)) {
+    // --urgent 派的同时标上紧急（t113）；已经在排队的，标上后立刻按紧急再排一轮（带 --worker 的走下面的改派）。
+    if (request.urgent && !request.worker && queued(this.db, id)) {
       this.markUrgent(id);
       await this.urgentQueued(id);
       return { task: getTask(this.db, id), queued: !!queued(this.db, id) };
@@ -530,7 +542,7 @@ export class TaskRunner {
       running: this.x.active.has(id) || this.x.launching.has(id),
       queued: !!queued(this.db, id),
     });
-    if (!admission.ok)
+    if (!admission.ok && !admission.reassign)
       throw new Problem(
         409,
         `${task.ref}：${admission.reason}`,
@@ -538,6 +550,21 @@ export class TaskRunner {
         undefined,
         `atrium task show ${task.ref}`,
       );
+    if (admission.reassign) {
+      // 排队中的任务：带 --worker 改派执行者；不带则维持现状并说明。
+      if (!request.worker) {
+        const entry = queued(this.db, id);
+        throw new Problem(
+          409,
+          `${task.ref}：已在排队（${entry?.worker ?? "原执行者"}，${queueView(this.db, id).queued_reason ?? "等待执行者可用后自动拉起"}），排队不变；要改派请带 --worker`,
+          "conflict",
+          undefined,
+          `atrium task run ${task.ref} --worker <工具+模型>`,
+        );
+      }
+      if (request.urgent && task.urgent !== 1) task = this.markUrgent(id);
+      return this.reassignQueued(task, request);
+    }
     if (request.urgent && task.urgent !== 1) task = this.markUrgent(id);
     // 指定的远程主机：按那台上报的已装工具挑执行者（#358）。
     const pinned =
@@ -954,6 +981,66 @@ export class TaskRunner {
     });
     this.waits.changed(task.id);
     return { task: getTask(this.db, task.id), queued: true };
+  }
+
+  /**
+   * 排队中的任务改派执行者（t139）：换掉排队记录里的执行者（及 risk），排队位置（queued_at）不变；
+   * 原因按新执行者重算，随即排一轮：新执行者空着就直接拉起。已经在跑的不走这里。
+   */
+  private async reassignQueued(task: Task, request: RunRequest) {
+    const prev = queued(this.db, task.id);
+    // 并发下可能刚好被拉起。
+    if (!prev)
+      throw new Problem(
+        409,
+        `${task.ref}：刚被拉起，不在排队了`,
+        "conflict",
+        undefined,
+        `atrium task show ${task.ref}`,
+      );
+    const worker = await resolveWorker(request.worker!, this.db);
+    const risk = request.risk ?? prev.risk;
+    if (isRisk(risk)) {
+      const refusal = riskRefusal(
+        worker.id,
+        worker.profile.rules.max_risk,
+        risk,
+      );
+      if (refusal) throw new Problem(400, refusal, "usage");
+    }
+    const adapter = ADAPTERS[worker.tool];
+    const gate = this.host.gate(this.x.inFlight(task.id), task.urgent === 1);
+    const reason = this.quota.held().has(adapter.quotaProvider)
+      ? `${adapter.quotaProvider} 额度用尽，恢复后自动拉起`
+      : adapter.exclusive && this.x.busy(worker.tool, task.id)
+        ? `${worker.tool} 同一时刻只跑一个，前一个结束后自动拉起`
+        : gate.ok
+          ? "等待执行者可用后自动拉起"
+          : gate.reason;
+    enqueue(this.db, {
+      task_id: task.id,
+      tool: worker.tool,
+      worker: worker.id,
+      risk,
+      queued_at: prev.queued_at,
+    });
+    noteTask(this.db, task.id, "queued", {
+      worker: worker.id,
+      reassigned_from: prev.worker,
+      reason,
+    });
+    this.waits.changed(task.id);
+    await this.urgentQueued(task.id);
+    const still = !!queued(this.db, task.id);
+    return {
+      task: getTask(this.db, task.id),
+      queued: still,
+      reassigned: {
+        worker: worker.id,
+        from: prev.worker,
+        reason: still ? queueView(this.db, task.id).queued_reason : null,
+      },
+    };
   }
 
   /** 服务重启自愈：进程已不在的置 failed；还在的按 pid 接管；再把排队的拉起来。 */

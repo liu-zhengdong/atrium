@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getTask } from "../server/tasks/ledger.ts";
 import { startApp } from "./task-fixture.ts";
+import { writeFakeBin } from "./fake-bin.ts";
 import { nodeCommand } from "./portable-shell.ts";
 
 test("隔离任务服务按档案执行 local_check 并记录关卡事件", async (t) => {
@@ -304,4 +305,78 @@ test("comment 与 none 交付不用 PR，评论链接进入摘要", async (t) =>
       assert.match(waited.body.task.result, /issuecomment-123/);
   }
   assert.equal(commentQueries, 1);
+});
+
+test("排队中的任务 task run --worker 可改派执行者（t139）", async (t) => {
+  // 假 opencode 一直跑着占住独占工具，排队的任务不会被自动拉起。
+  const { fx, data, call } = await startApp(t, (fx) => {
+    writeFakeBin(join(fx.root, "bin", "opencode"), "#!/bin/sh\nsleep 30\n");
+  });
+  for (const title of ["占位", "排队"])
+    assert.equal(
+      (await call("POST", "/api/tasks", { title, repo: fx.repo })).status,
+      201,
+    );
+  const r1 = await call("POST", "/api/tasks/t1/run", { worker: "opencode" });
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  assert.equal(r1.body.queued, false);
+  const r2 = await call("POST", "/api/tasks/t2/run", { worker: "opencode" });
+  assert.equal(r2.body.queued, true, JSON.stringify(r2.body));
+
+  // 不带 --worker：排队不变，409 说明现状与改派方法。
+  const same = await call("POST", "/api/tasks/t2/run", {});
+  assert.equal(same.status, 409);
+  assert.match(
+    same.body.error,
+    /已在排队（opencode.*排队不变；要改派请带 --worker/,
+  );
+
+  // 改派后新执行者仍在忙：换掉排队记录，仍在排队，原因按新执行者重算，排队位置不变。
+  const queuedRow = () => {
+    const db = new DatabaseSync(join(data, "atrium.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      return db
+        .prepare("SELECT worker,risk,queued_at FROM task_queue WHERE task_id=2")
+        .get() as
+        { worker: string; risk: string; queued_at: number } | undefined;
+    } finally {
+      db.close();
+    }
+  };
+  const before = queuedRow()!;
+  const busy = await call("POST", "/api/tasks/t2/run", {
+    worker: "opencode+deepseek",
+  });
+  assert.equal(busy.status, 200, JSON.stringify(busy.body));
+  assert.equal(busy.body.queued, true);
+  assert.equal(busy.body.reassigned.from, before.worker);
+  assert.match(busy.body.reassigned.worker, /^opencode\+deepseek/);
+  assert.match(busy.body.reassigned.reason, /opencode 同一时刻只跑一个/);
+  const after = queuedRow()!;
+  assert.equal(after.worker, busy.body.reassigned.worker);
+  assert.equal(after.queued_at, before.queued_at);
+
+  // 超出新执行者 max_risk 的拒绝，排队记录不动。
+  const risky = await call("POST", "/api/tasks/t2/run", {
+    worker: "kimi",
+    risk: "high",
+  });
+  assert.equal(risky.status, 400, JSON.stringify(risky.body));
+  assert.equal(queuedRow()!.worker, after.worker);
+
+  // 改派给空着的 kimi：立刻拉起，不再排队。
+  const moved = await call("POST", "/api/tasks/t2/run", { worker: "kimi" });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.equal(moved.body.queued, false);
+  assert.match(moved.body.reassigned.worker, /^kimi/);
+  assert.equal(moved.body.reassigned.reason, null);
+  assert.equal(queuedRow(), undefined);
+  assert.match(moved.body.task.worker, /^kimi/);
+
+  // 正在跑的不能改派。
+  const running = await call("POST", "/api/tasks/t1/run", { worker: "kimi" });
+  assert.equal(running.status, 409);
+  assert.match(running.body.error, /正在运行/);
 });

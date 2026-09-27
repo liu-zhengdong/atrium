@@ -60,13 +60,16 @@ export type Admission = {
   queued: boolean;
 };
 
-/** 能否受理一次 run；拒绝时给出 409 的中文原因。 */
-export function admit(
-  input: Admission,
-): { ok: true } | { ok: false; reason: string } {
+export type AdmitResult =
+  | { ok: true; reassign?: false }
+  | { ok: false; reassign?: false; reason: string }
+  | { ok: false; reassign: true; reason: string };
+
+/** 能否受理一次 run；拒绝时给出 409 的中文原因；排队中的可改派。 */
+export function admit(input: Admission): AdmitResult {
   if (input.running)
     return { ok: false, reason: "正在运行或正在启动，不能重复派" };
-  if (input.queued) return { ok: false, reason: "已在排队" };
+  if (input.queued) return { ok: false, reassign: true, reason: "已在排队" };
   const next = transition(input.status, { kind: "start" });
   return next.ok ? { ok: true } : { ok: false, reason: next.reason };
 }

@@ -36,13 +36,14 @@ export type Stage = {
   repo?: string;
 };
 
-/** 人话字段：文本上限（字）。 */
+/** 人话字段：文本上限（字）。when 只用于专员（关注点）：什么时候请来。 */
 export const OVERVIEW_TEXT: Record<string, number> = {
   what: 300,
   alias: 40,
   analogy: 100,
   now: 500,
   next: 500,
+  when: 200,
 };
 /** 人话字段：列表上限（项）与每项上限 300 字。 */
 export const OVERVIEW_LISTS: Record<string, number> = { uses: 10, flow: 12 };

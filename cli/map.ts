@@ -243,9 +243,9 @@ export const mapCommands: Record<string, Command> = {
     },
   },
   "map edit": {
-    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
+    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--when 什么时候请来] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
     about:
-      "改一块的人话字段，直接覆盖且不留修订；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
+      "改一块的人话字段，直接覆盖且不留修订；--when 只用于专员，写什么时候请它；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
     options: {
       what: { type: "string" },
       uses: { type: "string", multiple: true },
@@ -254,6 +254,7 @@ export const mapCommands: Record<string, Command> = {
       analogy: { type: "string" },
       now: { type: "string" },
       next: { type: "string" },
+      when: { type: "string" },
       detail: { type: "string" },
       rev: { type: "string" },
       reason: { type: "string" },
@@ -275,7 +276,7 @@ export const mapCommands: Record<string, Command> = {
         }
       const input = {
         ...Object.fromEntries(
-          (["what", "alias", "analogy", "now", "next"] as const)
+          (["what", "alias", "analogy", "now", "next", "when"] as const)
             .filter((k) => str(values, k) !== undefined)
             .map((k) => [k, str(values, k)]),
         ),

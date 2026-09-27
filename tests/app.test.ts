@@ -60,8 +60,13 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
   assert.deepEqual(exceptions.sort(), [
     "GET /api/map/nodes/:id",
     "GET /api/map/now",
+    "GET /api/map/roles",
+    "GET /api/map/roles/:id",
+    "GET /api/map/skills",
     "GET /api/map/stream",
     "GET /api/map/tree",
+    "GET /api/map/workers",
+    "GET /api/map/workers/:id",
     "GET /map",
     "GET /map/app.js",
     "GET /map/login",

@@ -66,6 +66,8 @@ export type MapTask = {
   /** PR 交付后的合入阶段：merge_queued / merging / merged / online；没进合入队列为 null。 */
   delivery_stage: string | null;
   ended_at: number | null;
+  /** 角色（`task add --job`）：短号与名称；没指定为 null。 */
+  job: { ref: string; name: string } | null;
 };
 /** 组成部分与专员的一行：在 Part 之外带一句「做什么」和下面还有几块（不含专员）。 */
 export type MapPart = Part & {
@@ -73,8 +75,15 @@ export type MapPart = Part & {
   what: string;
   parts: number;
 };
-/** 专员（关注点）的一行：另带什么时候请来（章程 invite_when）与在盯几件（请了它、还没结的任务）。 */
-export type MapConcern = MapPart & { invite_when: string[]; watching: number };
+/**
+ * 专员（关注点）的一行：另带什么时候请来——人话 when（`map edit --when`），与派活提示用的规则 invite_when——
+ * 和在盯几件（请了它、还没结的任务）。
+ */
+export type MapConcern = MapPart & {
+  when: string;
+  invite_when: string[];
+  watching: number;
+};
 
 export const DEPTH_MAX = 8;
 const OPEN = "('todo','running','blocked')";
@@ -234,7 +243,7 @@ function subtree(x: Index, id: number): number[] {
   return ids;
 }
 
-type TaskRow = {
+export type TaskRow = {
   id: number;
   title: string;
   status: string;
@@ -247,9 +256,31 @@ type TaskRow = {
   repo: string | null;
   delivery_stage: string | null;
   ended_at: number | null;
+  job_id: number | null;
 };
 
-function taskView(row: TaskRow, live?: LiveRow): MapTask {
+/** 角色短号 → 名称；旧库没有角色表时为空。 */
+export function jobNames(db: DatabaseSync): Map<number, string> {
+  if (
+    !one(
+      db,
+      "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='job_roles'",
+    )
+  )
+    return new Map();
+  return new Map(
+    all<{ id: number; name: string }>(
+      db,
+      "SELECT id,name FROM job_roles ORDER BY id LIMIT 200",
+    ).map((r) => [r.id, r.name]),
+  );
+}
+
+export function taskView(
+  row: TaskRow,
+  live?: LiveRow,
+  jobs: ReadonlyMap<number, string> = new Map(),
+): MapTask {
   return {
     ref: `t${row.id}`,
     title: row.title,
@@ -266,6 +297,10 @@ function taskView(row: TaskRow, live?: LiveRow): MapTask {
     issue: row.issue,
     delivery_stage: row.delivery_stage ?? null,
     ended_at: row.ended_at ?? null,
+    job:
+      row.job_id != null && jobs.has(row.job_id)
+        ? { ref: `r${row.job_id}`, name: jobs.get(row.job_id)! }
+        : null,
   };
 }
 
@@ -274,8 +309,8 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
     (c) => c.name === column,
   );
 }
-const taskColumns = (db: DatabaseSync) =>
-  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"}`;
+export const taskColumns = (db: DatabaseSync) =>
+  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
 
 /** 每位专员在盯几件：请了它、审查还没出结论、任务本身还没结（含等合入）。 */
@@ -344,9 +379,11 @@ export function mapNode(
   };
   const watch = watching(db);
   const concern = (c: NodeRow): MapConcern => {
-    const when = (x.fields.get(c.id) ?? {}).invite_when;
+    const f = x.fields.get(c.id) ?? {};
+    const when = f.invite_when;
     return {
       ...part(c),
+      when: str(f.when),
       invite_when: Array.isArray(when)
         ? when.filter((w): w is string => typeof w === "string" && !!w.trim())
         : [],
@@ -376,7 +413,8 @@ export function mapNode(
         ...ids,
       )
     : [];
-  const tasks = rows.map((r) => taskView(r, liveBy.get(`t${r.id}`)));
+  const jobs = jobNames(db);
+  const tasks = rows.map((r) => taskView(r, liveBy.get(`t${r.id}`), jobs));
   const urls = repoUrls(db);
   const prs = rows
     .filter((r) => r.pr_url)
@@ -491,6 +529,7 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
         )
       : [];
   const byRef = new Map(active.map((r) => [r.ref, r]));
+  const jobs = jobNames(db);
   const groups = new Map<
     string,
     {
@@ -507,7 +546,7 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
         : null,
       tasks: [],
     };
-    group.tasks.push(taskView(row, byRef.get(`t${row.id}`)));
+    group.tasks.push(taskView(row, byRef.get(`t${row.id}`), jobs));
     groups.set(key, group);
   }
   const list = [...groups.values()].sort(
@@ -525,7 +564,7 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
 }
 
 /**
- * 变化指纹：任务、任务事件、节点、章程、要点任一变了就不同。网页订阅它，变了再取数据局部刷新。
+ * 变化指纹：任务、任务事件、节点、章程、要点、角色、技能、交付记录任一变了就不同。网页订阅它，变了再取数据局部刷新。
  * 只读几个 max/count，毫秒级。
  */
 export function mapSignature(db: DatabaseSync): string {
@@ -545,6 +584,9 @@ export function mapSignature(db: DatabaseSync): string {
     q("SELECT max(updated_at),count(*) FROM org_docs"),
     q("SELECT max(updated_at),count(*),max(id) FROM org_points"),
     q("SELECT count(*),max(queued_at) FROM task_queue"),
+    q("SELECT max(updated_at),count(*) FROM job_roles"),
+    q("SELECT max(updated_at),count(*) FROM org_skills"),
+    q("SELECT max(id),max(ended_at) FROM deliveries"),
   ].join("|");
 }
 

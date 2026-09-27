@@ -15,6 +15,13 @@ import {
   type LiveRow,
 } from "./view.ts";
 import { addMap, editMap, type MapAdd, type MapEdit } from "./write.ts";
+import {
+  mapRole,
+  mapRoles,
+  mapSkills,
+  mapWorker,
+  mapWorkers,
+} from "./people.ts";
 
 /**
  * 全景图的接口与网页（#322 第 4 步）。同一份数据两张脸：
@@ -51,6 +58,8 @@ export type MapRouteOptions = {
   login: MapLogin;
   /** 失效通知的检查间隔，测试缩短。 */
   pollMs?: number;
+  /** 执行者档案目录（信任、观察）；缺省 ~/Atrium/workers。 */
+  workersDir?: string;
 };
 
 export function registerMapRoutes(
@@ -117,6 +126,18 @@ export function registerMapRoutes(
       : { ...node, tree: mapTree(db, node.ref, parseDepth(query.depth)).tree };
   });
   app.get("/api/map/now", async () => mapNow(db, await live()));
+  // 组织共用的角色、技能、执行者（组织根的页签与角色页、执行者页）。
+  app.get("/api/map/roles", () => mapRoles(db));
+  app.get("/api/map/roles/:id", async (request) =>
+    mapRole(db, id(request), await live(), options.workersDir),
+  );
+  app.get("/api/map/skills", () => mapSkills(db));
+  app.get("/api/map/workers", (request) =>
+    mapWorkers(db, q(request.query).role, options.workersDir),
+  );
+  app.get("/api/map/workers/:id", (request) =>
+    mapWorker(db, id(request), options.workersDir),
+  );
   app.get("/api/map/context/:id", (request) =>
     mapContext(db, id(request), parseMax(q(request.query).max)),
   );

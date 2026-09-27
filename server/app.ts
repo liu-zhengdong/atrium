@@ -207,11 +207,12 @@ export async function createApp(options: {
     return { rotated: true };
   });
   // 任务账本（#262）：表与路由在 server/tasks/；执行者进程由服务持有，日志在 <ATRIUM_DATA>/tasks/<id>/。
-  const taskRunner = registerTaskRoutes(app, db, {
+  const taskOptions = {
     data: resolve(options.data),
     ...runnerEnvOptions(),
     ...options.tasks,
-  });
+  };
+  const taskRunner = registerTaskRoutes(app, db, taskOptions);
   const secretaryFallback = new SecretaryFallback(
     taskRunner.inbox,
     resolve(options.data),
@@ -240,6 +241,7 @@ export async function createApp(options: {
     login: mapLogin,
     live: async () => (await taskRunner.top()).rows,
     pollMs: options.mapPollMs,
+    workersDir: taskOptions.workersDir,
   });
   registerQuotaRoute(app, { bin: options.quotaBin, db });
   return { app, db, taskRunner };

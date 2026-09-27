@@ -10,12 +10,16 @@
   --line-soft: #f3f1ed;
   --hover: #f7f6f3;
   --chip: #f1efea;
+  --leader: #0b6e69;
+  --leader-bg: #e2f3f1;
+  --page: #fff;
+  color-scheme: light dark;
   --pad-x: 96px;
   font-family:
     -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", sans-serif;
   color: var(--ink);
-  background: #fff;
+  background: var(--page);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -58,7 +62,7 @@ main:focus {
   align-items: center;
   gap: 16px;
   padding: 0 48px;
-  background: #fff;
+  background: var(--page);
   border-bottom: 1px solid var(--line);
 }
 .crumbs {
@@ -169,10 +173,11 @@ a.crumb:hover {
 .prop {
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   column-gap: 16px;
 }
 .prop dt {
+  padding-top: 3px;
   font-size: 14px;
   color: var(--faint);
 }
@@ -324,6 +329,15 @@ a.crumb:hover {
 .table-points .row {
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 110px 140px;
 }
+.table-leaders .row {
+  grid-template-columns: 200px minmax(0, 0.8fr) minmax(0, 1.2fr) 170px 24px;
+}
+.table-events .row {
+  grid-template-columns: 96px minmax(0, 1.2fr) 120px minmax(0, 1fr) 90px;
+}
+.table-escalations .row {
+  grid-template-columns: 96px 150px minmax(0, 1fr) minmax(0, 1.2fr) 70px 60px;
+}
 .cell {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -354,6 +368,49 @@ a.crumb:hover {
 }
 .task-title {
   min-width: 0;
+}
+/* leader 派的：标题下一行小字。 */
+.task-by {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--leader);
+}
+/* 任务的最新备注：在「最近在做」下面，作者名加深。 */
+.note-line {
+  margin-top: 2px;
+}
+.note-by {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* 负责人：名字胶囊 + 状态（在处理什么）。 */
+.lead,
+.lead-state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.lead-doing {
+  color: var(--body);
+}
+.cell .lead-state {
+  gap: 4px 8px;
+}
+.memo {
+  max-width: 760px;
+  margin-top: 18px;
+  padding: 16px 20px;
+  background: var(--hover);
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .cell.text {
   font-size: 14px;
@@ -492,6 +549,9 @@ a.crumb:hover {
 .icon-role {
   stroke: #2f6fb5;
 }
+.icon-leader {
+  stroke: var(--leader);
+}
 .icon-go {
   stroke: #b5b0a6;
   stroke-width: 2;
@@ -582,6 +642,14 @@ a.crumb:hover {
   text-overflow: ellipsis;
   vertical-align: middle;
 }
+.chip-leader {
+  color: var(--leader);
+  background: var(--leader-bg);
+  font-weight: 500;
+}
+.props .chip-leader {
+  font-weight: 500;
+}
 .chip-amber {
   color: #8c6a2e;
   background: #fff4de;
@@ -613,6 +681,119 @@ a.crumb:hover {
 .notice a {
   margin-left: 8px;
   color: #2447a8;
+}
+
+/* ---- 暗色：跟随系统。颜色语义与亮色一一对应，只换明度。 ---- */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ecebe8;
+    --body: #d6d4ce;
+    --text: #c4c1b9;
+    --muted: #a3a097;
+    --faint: #8a877f;
+    --line: #2f2e2b;
+    --line-soft: #272624;
+    --hover: #232220;
+    --chip: #2d2c29;
+    --leader: #6fd0c4;
+    --leader-bg: #173532;
+    --page: #191918;
+  }
+  :focus-visible {
+    outline-color: #8fb0ff;
+  }
+  .crumbs .sep {
+    color: #5a5750;
+  }
+  .live[data-state="on"] {
+    color: #7fd49a;
+  }
+  .live[data-state="on"]::before {
+    background: #3fb35f;
+  }
+  .live[data-state="down"],
+  .live[data-state="off"],
+  .bad,
+  .pass-poor {
+    color: #f0a070;
+  }
+  .live::before,
+  .chip-gray.dot::before {
+    background: #6b6862;
+  }
+  .filter {
+    border-color: #3a3935;
+  }
+  .filter[aria-current="true"] {
+    color: var(--page);
+  }
+  .cell.muted a {
+    border-bottom-color: #45433e;
+  }
+  .advice {
+    background: #2e2717;
+  }
+  .advice-text {
+    color: #e8d3a3;
+  }
+  .advice-wait,
+  .pass-fair {
+    color: #d9b56a;
+  }
+  .pass-good {
+    color: #7fd49a;
+  }
+  .icon-concern {
+    stroke: #a597f0;
+  }
+  .icon-role {
+    stroke: #7fb0e6;
+  }
+  .icon-point,
+  .icon-advice {
+    stroke: #e0a458;
+  }
+  .icon-go {
+    stroke: #6b6862;
+  }
+  .chip-green {
+    color: #7fd49a;
+    background: #1d3524;
+  }
+  .chip-green.dot::before {
+    background: #3fb35f;
+  }
+  .chip-orange {
+    color: #f3a878;
+    background: #3d2618;
+  }
+  .chip-orange.dot::before {
+    background: #e07a3c;
+  }
+  .chip-blue {
+    color: #9db7f5;
+    background: #1f2a45;
+  }
+  .chip-red {
+    color: #f59a90;
+    background: #3f1f1c;
+  }
+  .chip-purple {
+    color: #b7abf5;
+    background: #2a2545;
+  }
+  .chip-role {
+    color: #9cc0e8;
+    background: #1e2c3d;
+  }
+  .chip-amber {
+    color: #e6c07a;
+    background: #3a2f18;
+  }
+  .notice a {
+    color: #9db7f5;
+  }
 }
 
 /* ---- 窄屏：表格降为卡片式行 ---- */

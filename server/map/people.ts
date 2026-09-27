@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { taskPeople } from "./who.ts";
 import { Problem } from "../problem.ts";
 import { all, nodes, one } from "../org/model.ts";
 import { getJobRole, listJobRoles } from "../tasks/job-roles.ts";
@@ -135,13 +136,20 @@ export async function mapRole(
   const role = getJobRole(db, address);
   const liveBy = new Map(live.map((row) => [row.ref, row]));
   const jobs = jobNames(db);
-  const tasks = all<TaskRow>(
+  const rows = all<TaskRow>(
     db,
     `SELECT ${taskColumns(db)} FROM tasks WHERE job_id=?
       ORDER BY CASE WHEN status='running' THEN 0 WHEN status='blocked' THEN 1 WHEN status='todo' THEN 2 ELSE 3 END,
         updated_at DESC LIMIT 60`,
     role.id,
-  ).map((r) => taskView(r, liveBy.get(`t${r.id}`), jobs));
+  );
+  const who = taskPeople(
+    db,
+    rows.map((r) => r.id),
+  );
+  const tasks = rows.map((r) =>
+    taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id)),
+  );
   const report = await workersReport(db, role.ref, dir);
   const skills = mapSkills(db).skills.filter((s) =>
     role.skills.includes(s.slug),

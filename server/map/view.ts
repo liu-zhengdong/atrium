@@ -14,6 +14,7 @@ import { overviewOf, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { findingsForNode } from "../tasks/patrol.ts";
+import { taskPeople, type Person, type TaskPeople } from "./who.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
@@ -69,6 +70,10 @@ export type MapTask = {
   ended_at: number | null;
   /** 角色（`task add --job`）：短号与名称；没指定为 null。 */
   job: { ref: string; name: string } | null;
+  /** leader 派的（建任务的 aN 与名字）；用户与运行时建的为 null。 */
+  by: Person | null;
+  /** 最新一条备注，作者给名字（a1 → Atrium 负责人，u1 → 你）。 */
+  note: TaskPeople["note"];
 };
 /** 组成部分与专员的一行：在 Part 之外带一句「做什么」和下面还有几块（不含专员）。 */
 export type MapPart = Part & {
@@ -194,6 +199,28 @@ const leaderState = (x: Index, n: NodeRow) => {
   return state ? { leader_state: state } : {};
 };
 
+/**
+ * 这一块归谁管：自己或最近的上级登记过的 leader（事件也按这个投）。
+ * from 是 leader 挂在哪一块；挂在本块时为 null。一路都没有时为 null（事件投秘书）。
+ */
+export type NodeLead = LeaderBrief & {
+  from: { ref: string; name: string; alias: string } | null;
+};
+function leadOf(x: Index, n: NodeRow): NodeLead | null {
+  for (let c: NodeRow | undefined = n; c;) {
+    const brief = c.leader ? x.leaders.get(c.leader) : undefined;
+    if (brief) {
+      const h = head(x, c);
+      return {
+        ...brief,
+        from: c === n ? null : { ref: h.ref, name: h.name, alias: h.alias },
+      };
+    }
+    c = c.parent_id === null ? undefined : x.byId.get(c.parent_id);
+  }
+  return null;
+}
+
 function treeNode(x: Index, n: NodeRow, depth: number): MapTreeNode {
   const f = x.fields.get(n.id) ?? {};
   const counts = x.counts.get(n.id) ?? { running: 0, blocked: 0, open: 0 };
@@ -281,6 +308,7 @@ export function taskView(
   row: TaskRow,
   live?: LiveRow,
   jobs: ReadonlyMap<number, string> = new Map(),
+  people?: TaskPeople,
 ): MapTask {
   return {
     ref: `t${row.id}`,
@@ -302,6 +330,8 @@ export function taskView(
       row.job_id != null && jobs.has(row.job_id)
         ? { ref: `r${row.job_id}`, name: jobs.get(row.job_id)! }
         : null,
+    by: people?.by ?? null,
+    note: people?.note ?? null,
   };
 }
 
@@ -415,7 +445,13 @@ export function mapNode(
       )
     : [];
   const jobs = jobNames(db);
-  const tasks = rows.map((r) => taskView(r, liveBy.get(`t${r.id}`), jobs));
+  const who = taskPeople(
+    db,
+    rows.map((r) => r.id),
+  );
+  const tasks = rows.map((r) =>
+    taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id)),
+  );
   const urls = repoUrls(db);
   const prs = rows
     .filter((r) => r.pr_url)
@@ -458,6 +494,7 @@ export function mapNode(
     path: nodePath(x.list, n),
     leader: n.leader,
     ...leaderState(x, n),
+    lead: leadOf(x, n),
     archived: n.archived_at !== null,
     dot: dotOf(x.counts.get(n.id)!),
     counts: x.counts.get(n.id)!,
@@ -532,6 +569,10 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
       : [];
   const byRef = new Map(active.map((r) => [r.ref, r]));
   const jobs = jobNames(db);
+  const who = taskPeople(
+    db,
+    rows.map((r) => r.id),
+  );
   const groups = new Map<
     string,
     {
@@ -548,7 +589,9 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
         : null,
       tasks: [],
     };
-    group.tasks.push(taskView(row, byRef.get(`t${row.id}`), jobs));
+    group.tasks.push(
+      taskView(row, byRef.get(`t${row.id}`), jobs, who.get(row.id)),
+    );
     groups.set(key, group);
   }
   const list = [...groups.values()].sort(
@@ -558,6 +601,10 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
       (a.part?.ref ?? "").localeCompare(b.part?.ref ?? ""),
   );
   return {
+    /** 正在处理事件的负责人（顶栏「Atrium 负责人在处理」）。 */
+    leaders: [...x.leaders.values()]
+      .filter((l) => l.wake?.status === "running")
+      .map((l) => ({ ref: l.ref, name: l.name, doing: l.wake!.summary })),
     running: active.filter((r) => r.queued_at === null).length,
     queued: active.filter((r) => r.queued_at !== null).length,
     blocked: live.filter((r) => r.status === "blocked").length,
@@ -566,7 +613,7 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
 }
 
 /**
- * 变化指纹：任务、任务事件、节点、章程、要点、角色、技能、交付记录任一变了就不同。网页订阅它，变了再取数据局部刷新。
+ * 变化指纹：任务、任务事件、节点、章程、要点、角色、技能、交付记录、leader 唤醒与事件队列任一变了就不同。网页订阅它，变了再取数据局部刷新。
  * 只读几个 max/count，毫秒级。
  */
 export function mapSignature(db: DatabaseSync): string {
@@ -590,6 +637,10 @@ export function mapSignature(db: DatabaseSync): string {
     q("SELECT max(updated_at),count(*) FROM org_skills"),
     q("SELECT max(id),max(ended_at) FROM task_deliveries"),
     q("SELECT max(updated_at),count(*) FROM patrol_findings"),
+    q(
+      "SELECT max(updated_at),max(wake_at),max(wake_ended_at),sum(wakes),count(*) FROM org_leaders",
+    ),
+    q("SELECT max(id),max(updated_at),max(acked_at) FROM task_inbox"),
   ].join("|");
 }
 

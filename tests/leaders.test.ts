@@ -453,7 +453,7 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
     top.leaders.map((l: { ref: string }) => l.ref),
     ["a1"],
   );
-  assert.equal(top.leaders[0].wake.summary, "t1 failed");
+  assert.equal(top.leaders[0].wake.summary, "t1 失败");
 });
 
 test("leader：连续失败把没确认的事件转交秘书；超时直接转交", async (t) => {
@@ -539,4 +539,134 @@ test("leader：处理期间同一任务又有新结果，确认旧内容不吞�
     inbox.list("a1", { limit: 5 }).events.every((e) => e.acked_at !== null),
   );
   assert.equal(inbox.list("secretary", { limit: 5 }).events.length, 0);
+});
+
+test("全景看得到负责人：节点页、负责人页、状态栏字段，leader 派的任务与备注给名字", async (t) => {
+  const x = await open(t);
+  await x.ok("POST", "/api/leaders", {
+    name: "Atrium 负责人",
+    worker: "claude+sonnet",
+  });
+  await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
+  await x.ok("POST", "/api/tasks", {
+    title: "改规矩",
+    part: "o3",
+    deliver: "none",
+  });
+  // 还没唤醒：节点页有负责人（挂在上级 o2），状态栏字段为空。
+  const before = await x.ok("GET", "/api/map/nodes/o3");
+  assert.equal(before.lead.ref, "a1");
+  assert.equal(before.lead.name, "Atrium 负责人");
+  assert.equal(before.lead.from.ref, "o2");
+  assert.equal(before.lead.wake, null);
+  assert.equal((await x.ok("GET", "/api/map/nodes/o2")).lead.from, null);
+  assert.equal((await x.ok("GET", "/api/map/nodes/o4")).lead, null);
+  assert.deepEqual((await x.ok("GET", "/api/leaders")).busy, []);
+
+  let seen: Record<string, any> = {};
+  let failure: unknown;
+  x.set(async (spec) => {
+    try {
+      const token = `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`;
+      const as = (
+        method: Parameters<typeof x.call>[0],
+        url: string,
+        body?: unknown,
+      ) => x.call(method, url, body, token);
+      // 处理中：节点页、状态栏字段、顶栏都说它在处理什么（人话）。
+      seen = {
+        node: await x.ok("GET", "/api/map/nodes/o3"),
+        busy: (await x.ok("GET", "/api/leaders")).busy,
+        now: await x.ok("GET", "/api/map/now"),
+        page: await x.ok("GET", "/api/map/leaders/a1"),
+      };
+      assert.equal(
+        (await as("POST", "/api/tasks", { title: "拆出来的活", part: "o3" }))
+          .status,
+        201,
+      );
+      await as("POST", "/api/tasks/t1/note", { text: "等重派结果" });
+      await as("POST", "/api/tasks/t2/note", { text: "等 t1 再派" });
+      await as("POST", "/api/leaders/a1/escalate", {
+        kind: "cross",
+        note: "要 OpenQuota 出接口",
+        task: "t1",
+      });
+      await as("PATCH", "/api/leaders/a1", {
+        memo: "在等：t1 重派\n下次先看：t2",
+      });
+      await as("POST", "/api/events/ack", { ids: idsIn(spec.prompt) });
+    } catch (error) {
+      failure = error;
+    }
+    return "ok";
+  });
+  publishTask(x.taskRunner.inbox, x.db, 1, "failed", { reason: "测试没过" });
+  await until(() => !!failure || wakeStatus(x.db) === "done", 5000);
+  if (failure) throw failure;
+
+  assert.equal(seen.node.lead.wake.status, "running");
+  assert.equal(seen.node.lead.wake.summary, "t1 失败");
+  assert.deepEqual(
+    seen.busy.map((b: { name: string; doing: string }) => [b.name, b.doing]),
+    [["Atrium 负责人", "t1 失败"]],
+  );
+  assert.deepEqual(seen.now.leaders, [
+    { ref: "a1", name: "Atrium 负责人", doing: "t1 失败" },
+  ]);
+  assert.equal(seen.page.events[0].state, "doing");
+  assert.equal(seen.page.events[0].what, "失败");
+  assert.equal(seen.page.events[0].why, "测试没过");
+
+  // 处理完：负责人页记着处理过的事、上交、备忘；空闲后状态栏字段清空。
+  const page = await x.ok("GET", "/api/map/leaders/a1");
+  assert.equal(page.wake.status, "done");
+  assert.deepEqual(
+    page.nodes.map((n: { ref: string }) => n.ref),
+    ["o2"],
+  );
+  assert.equal(page.memo, "在等：t1 重派\n下次先看：t2");
+  assert.deepEqual(
+    page.events.map((e: { task: { ref: string }; state: string }) => [
+      e.task.ref,
+      e.state,
+    ]),
+    [["t1", "done"]],
+  );
+  assert.equal(page.escalations.length, 1);
+  assert.equal(page.escalations[0].label, "需要别的部分配合");
+  assert.equal(page.escalations[0].to.name, "秘书");
+  assert.equal(page.escalations[0].seen, false);
+  assert.deepEqual((await x.ok("GET", "/api/leaders")).busy, []);
+  const list = await x.ok("GET", "/api/map/leaders");
+  assert.deepEqual(
+    list.leaders.map((l: { ref: string; pending: number }) => [
+      l.ref,
+      l.pending,
+    ]),
+    [["a1", 0]],
+  );
+
+  // 任务行：leader 派的注明是谁，备注作者给名字；用户建的不标。
+  const node = await x.ok("GET", "/api/map/nodes/o3");
+  const rows = [...node.tasks.todo, ...node.tasks.recent] as {
+    ref: string;
+    by: { name: string } | null;
+    note: { text: string; by: { ref: string; name: string } } | null;
+  }[];
+  const t1 = rows.find((r) => r.ref === "t1")!;
+  const t2 = rows.find((r) => r.ref === "t2")!;
+  assert.equal(t1.by, null);
+  assert.deepEqual(t1.note?.by, { ref: "a1", name: "Atrium 负责人" });
+  assert.equal(t2.by?.name, "Atrium 负责人");
+  assert.equal(t2.note?.text, "等 t1 再派");
+  const shown = await x.ok("GET", "/api/tasks/t2");
+  assert.equal(shown.note_by, "a1");
+  assert.equal(shown.note_by_name, "Atrium 负责人");
+  await x.ok("POST", "/api/tasks/t1/note", { text: "我来看" });
+  assert.equal((await x.ok("GET", "/api/tasks/t1")).note_by_name, null);
+
+  // 破坏输入：没登记、格式不对。
+  assert.equal((await x.call("GET", "/api/map/leaders/a9")).status, 404);
+  assert.equal((await x.call("GET", "/api/map/leaders/u1")).status, 400);
 });

@@ -145,7 +145,7 @@ export function registerTaskRoutes(
     jobRoleHistory(db, params(request.params).id),
   );
   app.post("/api/tasks", { bodyLimit: 64 * 1024 }, async (request, reply) => {
-    const task = createTask(db, request.body);
+    const task = createTask(db, request.body, Date.now(), leaderOf(request));
     return reply.code(201).send(task);
   });
   app.get("/api/tasks", (request) => {

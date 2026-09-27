@@ -3,7 +3,8 @@
 // 一页一件东西：面包屑 → 小字类别、大标题、属性行与介绍 → 页签。三类页：
 // - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／角色／技能／执行者／原则，执行者可按角色筛（#o1/workers/r1）；
 // - 角色：#r1/workers，页签是任务／谁做得好／技能；
-// - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察。
+// - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察；
+// - 负责人（leader）：#a1/events，页签是备忘／处理过的事／上交。
 // 当前页、页签与筛选都写在 hash 里，刷新与前进后退都回到原处。
 
 const $ = (id) => document.getElementById(id);
@@ -22,7 +23,7 @@ const state = {
   /** 看过的页先用旧数据画出来，再换新的，切换时不闪白。键是页（o2、r1、w/…）。 */
   cache: new Map(),
   route: { page: "node", ref: null, tab: "", extra: "" },
-  /** 当前页的数据：{ page: "node", node, org? } / { page: "role", role } / { page: "worker", worker }。 */
+  /** 当前页的数据：{ page: "node", node, org? } / { page: "role", role } / { page: "worker", worker } / { page: "leader", leader }。 */
   data: null,
   /** 页面的整体状态：ok / missing（链接里的东西不存在）/ empty（没有组织树）/ down / expired。 */
   mode: "loading",
@@ -57,6 +58,7 @@ const PAGE_TABS = {
     "parts",
     "concerns",
     "tasks",
+    "leaders",
     "roles",
     "skills",
     "workers",
@@ -65,8 +67,13 @@ const PAGE_TABS = {
   ],
   role: ["tasks", "workers", "skills"],
   worker: ["deliveries", "notes"],
+  leader: ["memo", "events", "escalations"],
 };
-const REF = { node: /^o[1-9]\d{0,8}$/, role: /^r[1-9]\d{0,8}$/ };
+const REF = {
+  node: /^o[1-9]\d{0,8}$/,
+  role: /^r[1-9]\d{0,8}$/,
+  leader: /^a[1-9]\d{0,8}$/,
+};
 
 function parseRoute() {
   const parts = location.hash.slice(1).split("/");
@@ -82,6 +89,9 @@ function parseRoute() {
     }
   } else if (REF.role.test(head)) {
     page = "role";
+    ref = head;
+  } else if (REF.leader.test(head)) {
+    page = "leader";
     ref = head;
   } else if (REF.node.test(head)) ref = head;
   const [tab = "", extra = ""] = parts;
@@ -111,12 +121,13 @@ function href(page, ref, tab = "", extra = "") {
 const nodeHref = (ref, tab, extra) => href("node", ref, tab, extra);
 const roleHref = (ref, tab, extra) => href("role", ref, tab, extra);
 const workerHref = (id, tab) => href("worker", id, tab);
+const leaderHref = (ref, tab) => href("leader", ref, tab);
 const pageKey = (route, rootRef) =>
   route.page === "worker"
     ? `w/${route.ref}`
-    : route.page === "role"
-      ? route.ref
-      : (route.ref ?? rootRef);
+    : route.page === "node"
+      ? (route.ref ?? rootRef)
+      : route.ref;
 
 // ---- 人话 ----
 
@@ -131,6 +142,14 @@ function duration(ms) {
 const day = (at) => {
   const d = new Date(at);
   return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+/** 时刻：今天只给时分，其余带月日。 */
+const clock = (at) => {
+  const d = new Date(at);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return d.toDateString() === new Date().toDateString()
+    ? hm
+    : `${day(at)} ${hm}`;
 };
 const title = (n) => n.alias || n.name;
 const who = (by) => String(by ?? "").replace(/^u1\b/, "你");
@@ -188,6 +207,7 @@ const ICON = {
   part: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`,
   concern: `<svg class="icon icon-concern" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/></svg>`,
   role: `<svg class="icon icon-role" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>`,
+  leader: `<svg class="icon icon-leader" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><path d="M5 21v-1.5A5.5 5.5 0 0 1 10.5 14h3a5.5 5.5 0 0 1 5.5 5.5V21"/><path d="M12 14l-1.2 3.5L12 19l1.2-1.5z"/></svg>`,
   skill: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M8 7h6"/></svg>`,
   point: `<svg class="icon icon-point" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>`,
   advice: `<svg class="icon icon-advice" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>`,
@@ -199,9 +219,9 @@ const chip = (text, tone) =>
 const chipLink = (text, tone, url) =>
   `<a class="chip chip-${tone} chip-link" href="${esc(url)}">${esc(text)}</a>`;
 const none = `<span class="muted">—</span>`;
-/** 任务名：编号在前（与状态栏、top、汇报里的 tN 对得上），标题折行时编号不动。 */
-const taskName = (ref, title) =>
-  `<span class="task-ref">${esc(ref)}</span><span class="task-title">${esc(title)}</span>`;
+/** 任务名：编号在前（与状态栏、top、汇报里的 tN 对得上），标题折行时编号不动；leader 派的在标题下注明。 */
+const taskName = (ref, title, by) =>
+  `<span class="task-ref">${esc(ref)}</span><span class="task-title">${esc(title)}${by ? `<span class="task-by">${esc(by.name)}派的</span>` : ""}</span>`;
 /**
  * 表格的一格。extra 里的类：name/text/note 窄屏占满一行，none 窄屏隐藏（空格），
  * tagged 窄屏在值前带上列名（数字列单看不知道是什么）。
@@ -229,6 +249,7 @@ const TAG = {
   cancelled: ["取消", "gray"],
 };
 const ACTIVE = new Set(["doing", "merge", "blocked", "queued"]);
+const ENDED = new Set(["merged", "online", "done", "cancelled"]);
 const ORDER = Object.keys(TAG);
 function tagOf(t) {
   if (t.delivery_stage === "merge_queued" || t.delivery_stage === "merging")
@@ -268,16 +289,24 @@ function taskTable(all, { withRole, empty }) {
       const [label, tone] = TAG[t.tag];
       const worker = workerLabel(t.worker);
       const doing = t.action || t.reason || "";
+      // 最新备注只在任务没结时显示：作者用名字（Atrium 负责人、你）。
+      const note = t.note && !ENDED.has(t.tag) ? t.note : null;
+      const noteLine = note
+        ? `<span class="clamp note-line" title="${esc(`${note.by.name}：${note.text}`)}"><span class="note-by">${esc(note.by.name)}：</span>${esc(note.text)}</span>`
+        : "";
+      const recent = doing
+        ? `<span class="clamp" title="${esc(doing)}">${esc(doing)}</span>${noteLine}`
+        : noteLine;
       const role = t.job
         ? chipLink(t.job.name, "role", roleHref(t.job.ref))
         : none;
       return `<div class="row" role="row">
-        ${cell("任务", taskName(t.ref, t.title), " name plain task")}
+        ${cell("任务", taskName(t.ref, t.title, t.by), " name plain task")}
         ${withRole ? cell("角色", role, t.job ? "" : " none") : ""}
         ${cell("状态", chip(label, tone))}
         ${cell("谁在做", worker ? `<span class="chip chip-soft clip" title="${esc(worker)}">${esc(worker)}</span>` : none, worker ? "" : " none")}
         ${cell("用时", spent(t) || "—", spent(t) ? " muted tagged" : " muted none")}
-        ${cell("最近在做", doing ? `<span class="clamp" title="${esc(doing)}">${esc(doing)}</span>` : none, doing ? " note" : " note none")}
+        ${cell("最近在做", recent || none, recent ? " note" : " note none")}
       </div>`;
     }),
     state.route.extra === "all" ? empty.all : empty.active,
@@ -580,6 +609,114 @@ function drawNotes({ worker }) {
   );
 }
 
+// ---- 负责人（leader） ----
+
+/**
+ * 负责人现在的状态：在处理（带在处理什么）、空闲，或上次没处理完。
+ * full 为 true 时（负责人页）另带上次的时间与内容。
+ */
+function leadState(l, full = false) {
+  const w = l.wake;
+  const waiting =
+    l.pending && w?.status !== "running"
+      ? chip(`还有 ${l.pending} 件等它`, "amber")
+      : "";
+  if (!w)
+    return `<span class="lead-state">${chip("还没被叫醒过", "gray dot")}${waiting}</span>`;
+  if (w.status === "running")
+    return `<span class="lead-state">${chip("在处理", "green dot")}${w.summary ? `<span class="lead-doing">${esc(w.summary)}</span>` : ""}<span class="muted">${esc(since(w.at, full))}</span></span>`;
+  const last = full
+    ? `<span class="muted">上次 ${esc(clock(w.at))}${w.summary ? `：${esc(w.summary)}` : ""}</span>`
+    : "";
+  if (w.status === "failed" || w.status === "handed_off")
+    return `<span class="lead-state">${chip(w.status === "failed" ? "上次没处理完" : "上次没处理完，已转交上级", "orange dot")}${waiting}${full && w.note ? `<span class="muted">${esc(w.note)}</span>` : ""}</span>`;
+  return `<span class="lead-state">${chip("空闲", "gray dot")}${waiting}${last}</span>`;
+}
+
+/** 在处理了多久：不到一分钟说「刚开始」。 */
+function since(at, full) {
+  const ms = Date.now() - at;
+  const long = ms < 60000 ? "刚开始" : `已 ${duration(ms)}`;
+  return full ? `${clock(at)} 开始，${long}` : long;
+}
+
+/** 节点页的「负责人」一行：名字（点开是负责人页）与现在的状态；归上级管的注明是哪一块。 */
+function leadProp(lead) {
+  const from = lead.from
+    ? `<span class="muted lead-from">管整个「${esc(title(lead.from))}」</span>`
+    : "";
+  return `<span class="lead">${chipLink(lead.name, "leader", leaderHref(lead.ref))}${leadState({ ...lead, pending: 0 })}${from}</span>`;
+}
+
+function drawLeaders({ org }) {
+  return table(
+    "leaders",
+    ["负责人", "负责", "现在", "执行者", ""],
+    org.leaders.map(
+      (l) => `<a class="row link" role="row" href="${esc(leaderHref(l.ref))}">
+        ${cell("负责人", `${ICON.leader}<span>${esc(l.name)}</span>`, " name")}
+        ${cell("负责", l.nodes.length ? esc(l.nodes.map(title).join("、")) : `<span class="muted">还没指派</span>`, " text")}
+        ${cell("现在", leadState(l), " note")}
+        ${cell("执行者", `<span class="chip chip-soft clip" title="${esc(workerLabel(l.worker))}">${esc(workerLabel(l.worker))}</span>`)}
+        ${cell("", ICON.go, " go")}
+      </a>`,
+    ),
+    "还没有负责人。在终端用 atrium leader add 登记，再用 atrium org edit 部分 --leader aN 指派。",
+  );
+}
+
+function drawMemo({ leader: l }) {
+  if (!l.memo)
+    return `<p class="empty">备忘是空的。它每次被叫醒先读这里，处理完把在等什么、下次先看什么写进来。</p>`;
+  return `<div class="memo">${esc(l.memo)}</div>
+    <p class="foot">它每次被叫醒先读这份备忘，处理完再改写。</p>`;
+}
+
+const EVENT_STATE = {
+  waiting: ["等它处理", "amber"],
+  doing: ["在处理", "green"],
+  done: ["处理完", "gray"],
+  handed_off: ["转交上级", "orange"],
+};
+function drawLeaderEvents({ leader: l }) {
+  return table(
+    "events",
+    ["时间", "任务", "什么事", "说明", "结果"],
+    l.events.map((e) => {
+      const [label, tone] = EVENT_STATE[e.state] ?? EVENT_STATE.done;
+      const why = [e.from ? `${e.from.name}交上来的` : "", e.why ?? ""]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="row" role="row">
+        ${cell("时间", esc(clock(e.at)), " muted")}
+        ${cell("任务", e.task ? taskName(e.task.ref, e.task.title) : `<span class="muted">不关联任务</span>`, " name plain task")}
+        ${cell("什么事", chip(e.what, "soft"))}
+        ${cell("说明", why ? `<span class="clamp" title="${esc(why)}">${esc(why)}</span>` : none, why ? " note" : " note none")}
+        ${cell("结果", chip(label, tone))}
+      </div>`;
+    }),
+    "还没有事交给它。它负责的部分里任务有了结果（完成、失败、卡住、上线），会先交给它处理。",
+  );
+}
+
+function drawEscalations({ leader: l }) {
+  return table(
+    "escalations",
+    ["时间", "类型", "任务", "说明", "交给", ""],
+    l.escalations.map(
+      (e) => `<div class="row" role="row">
+        ${cell("时间", esc(clock(e.at)), " muted")}
+        ${cell("类型", chip(e.label, e.kind === "shipped" ? "green" : "orange"))}
+        ${cell("任务", e.task ? taskName(e.task.ref, e.task.title) : none, e.task ? " name plain task" : " none")}
+        ${cell("说明", e.note ? `<span class="clamp" title="${esc(e.note)}">${esc(e.note)}</span>` : none, e.note ? " note" : " note none")}
+        ${cell("交给", esc(e.to.name), " muted tagged")}
+        ${cell("", e.seen ? `<span class="muted small">已看</span>` : chip("还没看", "amber"))}
+      </div>`,
+    ),
+    "还没上交过。只有已上线、要别的部分配合、越权、搞不定这四类事才交给上级。",
+  );
+}
+
 // ---- 页签：加一个页签只加一项。count 显示在名字旁的小圆标里。 ----
 
 const TABS = {
@@ -639,13 +776,30 @@ const TABS = {
     count: (d) => d.worker.notes.length,
     draw: drawNotes,
   },
+  leaders: {
+    label: "负责人",
+    count: (d) => d.org.leaders.length,
+    draw: drawLeaders,
+  },
+  memo: { label: "备忘", count: () => null, draw: drawMemo },
+  events: {
+    label: "处理过的事",
+    count: (d) => d.leader.events.length,
+    draw: drawLeaderEvents,
+  },
+  escalations: {
+    label: "上交",
+    count: (d) => d.leader.escalations.length,
+    draw: drawEscalations,
+  },
 };
 /** 这一页有哪些页签（第一个是默认）；角色页的「执行者」叫「谁做得好」。 */
 function tabsOf(d) {
   if (d.page === "role") return ["tasks", "workers", "skills"];
   if (d.page === "worker") return ["deliveries", "notes"];
+  if (d.page === "leader") return ["memo", "events", "escalations"];
   return d.org
-    ? ["parts", "roles", "skills", "workers", "points", "findings"]
+    ? ["parts", "leaders", "roles", "skills", "workers", "points", "findings"]
     : ["parts", "concerns", "tasks", "points", "findings"];
 }
 const tabLabel = (d, id) =>
@@ -736,11 +890,32 @@ function heading(d) {
       intro: [],
     };
   }
+  if (d.page === "leader") {
+    const l = d.leader;
+    return {
+      kind: "负责人",
+      name: l.name,
+      props: props([
+        [
+          "负责",
+          chips(
+            l.nodes.map((n) => chipLink(title(n), "soft", nodeHref(n.ref))),
+            "还没指派",
+          ),
+        ],
+        ["现在", leadState(l, true)],
+        ["执行者", chip(workerLabel(l.worker), "soft")],
+      ]),
+      intro: [
+        "替你管上面这几块：这里的任务有了结果先交给它，它派活、盯进度、收结果；只有已上线、要别的部分配合、越权、搞不定这四类事才交给上级。",
+      ],
+    };
+  }
   const n = d.node;
   return {
     kind: KIND[n.kind] ?? "部分",
     name: title(n),
-    props: "",
+    props: n.lead ? props([["负责人", leadProp(n.lead)]]) : "",
     intro: (n.overview.what || "")
       .split(/\n+/)
       .map((s) => s.trim())
@@ -760,6 +935,12 @@ function crumbsOf() {
   if (d.page === "node")
     return d.node.chain.map((c) => ({ name: title(c), url: nodeHref(c.ref) }));
   const top = root ? [{ name: root.name, url: nodeHref(root.ref) }] : [];
+  if (d.page === "leader")
+    return [
+      ...top,
+      { name: "负责人", url: nodeHref(root?.ref, "leaders") },
+      { name: d.leader.name },
+    ];
   return d.page === "role"
     ? [
         ...top,
@@ -796,10 +977,17 @@ function drawLive() {
   } else if (live.dataset.state === "down") {
     live.textContent = "已断开，重连中";
   } else if (state.now) {
-    live.dataset.state = state.now.running ? "on" : "idle";
+    const busy = state.now.leaders ?? [];
+    live.dataset.state = state.now.running || busy.length ? "on" : "idle";
+    // 窄屏顶栏放不下名字，只说「负责人在处理」，不挤掉面包屑。
+    const narrow = matchMedia("(max-width: 720px)").matches;
+    const lead = busy.length
+      ? `${busy.length > 1 ? `${busy.length} 位负责人` : narrow ? "负责人" : busy[0].name}在处理`
+      : "";
     live.textContent = state.now.running
-      ? `在做 ${state.now.running} 件`
-      : "都停着";
+      ? [`在做 ${state.now.running} 件`, lead].filter(Boolean).join(" · ")
+      : lead || "都停着";
+    live.title = busy.map((l) => `${l.name}：${l.doing ?? ""}`).join("\n");
   }
 }
 
@@ -814,12 +1002,18 @@ const MISSING = {
     "找不到这个角色",
     `链接里的 <code>${esc(ref)}</code> 不存在，可能已经删掉了。`,
   ],
+  leader: (ref) => [
+    "找不到这位负责人",
+    `链接里的 <code>${esc(ref)}</code> 没有登记。`,
+  ],
   // 服务端说得清原因（名字不合法，或没有交付记录也没有档案），照着说。
   worker: (ref, why) => [
     "找不到这个执行者",
     why ? `${esc(why)}。` : `<code>${esc(ref)}</code> 不存在。`,
   ],
 };
+
+const badge = (n) => (n === null ? "" : `<span class="badge">${n}</span>`);
 
 function pageHtml() {
   const rootLink = state.root
@@ -855,7 +1049,7 @@ function pageHtml() {
     .map(
       (id) =>
         `<a class="tab" role="tab" href="${esc(href(page, at, id))}" aria-selected="${id === tab}">
-      <span>${esc(tabLabel(d, id))}</span><span class="badge">${TABS[id].count(d)}</span>
+      <span>${esc(tabLabel(d, id))}</span>${badge(TABS[id].count(d))}
     </a>`,
     )
     .join("");
@@ -933,21 +1127,32 @@ async function fetchPage(route, key) {
       page: "worker",
       worker: await get(`/workers/${encodeURIComponent(route.ref)}`),
     };
+  if (route.page === "leader")
+    return {
+      page: "leader",
+      leader: await get(`/leaders/${encodeURIComponent(key)}`),
+    };
   if (key !== state.root.ref)
     return {
       page: "node",
       node: await get(`/nodes/${encodeURIComponent(key)}`),
     };
-  const [node, roles, skills, workers] = await Promise.all([
+  const [node, roles, skills, workers, leaders] = await Promise.all([
     get(`/nodes/${encodeURIComponent(key)}`),
     get("/roles"),
     get("/skills"),
     get("/workers"),
+    get("/leaders"),
   ]);
   return {
     page: "node",
     node,
-    org: { roles: roles.roles, skills: skills.skills, workers },
+    org: {
+      roles: roles.roles,
+      skills: skills.skills,
+      workers,
+      leaders: leaders.leaders,
+    },
   };
 }
 

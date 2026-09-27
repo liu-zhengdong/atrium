@@ -26,8 +26,10 @@ import {
   escalateInput,
   leaderPrompt,
   wakeSummary,
+  eventWord,
   type WakeExit,
 } from "../server/leaders/wake.ts";
+import { eventState } from "../server/map/leaders.ts";
 
 /** leader 层的纯判定：事件路由、上交目标、权限边界、唤醒收尾、上交输入。 */
 
@@ -448,7 +450,7 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
       { id: 3, task: "t3", kind: "done", count: 1, detail: null },
       { id: 4, task: "t4", kind: "done", count: 1, detail: null },
     ]),
-    "t1 failed、escalated、t3 done 等 4 件",
+    "t1 失败、上交、t3 完成 等 4 件",
   );
 });
 
@@ -472,4 +474,24 @@ test("leader 令牌：按 aN 核对、重签作废旧的、撤销与过期即失
   assert.equal(tokens.verify(`Bearer ${third}`), null);
   assert.equal(tokens.verify(undefined), null);
   assert.equal(tokens.verify("Bearer a1.xyz"), null);
+});
+
+test("负责人页：事件处理状态与类型人话", () => {
+  const cases: [number | null, number | null, boolean, string][] = [
+    [null, null, false, "waiting"],
+    [null, 5, false, "doing"],
+    [9, 5, false, "done"],
+    [9, null, false, "done"],
+    [9, 5, true, "handed_off"],
+    [null, 5, true, "doing"],
+  ];
+  for (const [acked_at, delivered_at, handedOff, state] of cases)
+    assert.equal(
+      eventState({ acked_at, delivered_at }, handedOff),
+      state,
+      JSON.stringify({ acked_at, delivered_at, handedOff }),
+    );
+  assert.equal(eventWord("online"), "上线");
+  assert.equal(eventWord("escalated"), "上交");
+  assert.equal(eventWord("something_new"), "something_new");
 });

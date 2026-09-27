@@ -125,11 +125,35 @@ export function eventLine(event: PromptEvent) {
     .join(" ")}`;
 }
 
-/** 看板上的「在处理什么」：前几件事的任务与类型。 */
+/** 事件类型的人话（看板、全景、状态栏）；没列的原样给类型名。 */
+export const EVENT_WORDS: Record<string, string> = {
+  done: "完成",
+  failed: "失败",
+  blocked: "受阻",
+  stalled: "卡住",
+  ready: "可以派了",
+  waiting: "在等",
+  online: "上线",
+  online_failed: "上线失败",
+  release_overdue: "等发版超时",
+  merged: "已合入",
+  merge_returned: "合入被打回",
+  escalated: "上交",
+  ci_failure: "远端检查失败",
+  ci_success: "远端检查通过",
+  ci_unavailable: "远端检查跑不了",
+  recovery: "服务重启后接管",
+  review_passed: "审阅通过",
+  worker_advice: "执行者升降建议",
+  skill_proposal: "技能修订提议",
+};
+export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
+
+/** 看板上的「在处理什么」：前几件事的任务与人话类型，如「t84 上线」。 */
 export function wakeSummary(events: readonly PromptEvent[]) {
   const parts = events
     .slice(0, 3)
-    .map((e) => [e.task, e.kind].filter(Boolean).join(" "));
+    .map((e) => [e.task, eventWord(e.kind)].filter(Boolean).join(" "));
   return `${parts.join("、")}${events.length > 3 ? ` 等 ${events.length} 件` : ""}`;
 }
 

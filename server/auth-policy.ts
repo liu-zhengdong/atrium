@@ -26,6 +26,8 @@ const mapReadRoutes = new Set([
   "GET /api/map/skills",
   "GET /api/map/workers",
   "GET /api/map/workers/:id",
+  "GET /api/map/leaders",
+  "GET /api/map/leaders/:id",
 ]);
 
 export type AuthPolicy =

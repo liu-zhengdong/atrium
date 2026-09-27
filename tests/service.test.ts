@@ -506,13 +506,18 @@ test(
     );
     try {
       const result = await f.cli("--no-open");
-      assert.equal(result.code, 1, result.stdout);
-      assert.match(result.stderr, /启动失败/);
+      assert.equal(result.code, 4, result.stdout);
+      // t71：启动前就查出端口被占，只报一句人话，不拉起服务、不建数据目录。
+      assert.match(
+        result.stderr,
+        new RegExp(`端口 ${f.port} 已被其他程序占用；换端口请设 ATRIUM_PORT`),
+      );
+      assert.doesNotMatch(result.stderr, /EADDRINUSE|\n\s+at /, "不打印堆栈");
+      assert(!existsSync(f.data));
       assert.equal(
         await (await fetch(`http://127.0.0.1:${f.port}`)).text(),
         "not-atrium",
       );
-      assert.equal(readService(f.data), null);
     } finally {
       await new Promise<void>((resolve) => other.close(() => resolve()));
     }
@@ -553,55 +558,61 @@ test(
 );
 
 test(
-  "启动期子进程迟迟不初始化时，端口占用仍及时报启动失败并释放租约（#205）",
-  { timeout: 45000 },
+  "两份数据抢同一端口：报出占用者的数据目录，第二份数据不建表（t71）",
+  { timeout: 60000 },
   async (t) => {
     const f = await fixture(t);
-    // 永不回应 initialize 的假 ACP：只保持 stdin，用来复现 #205 的启动期延迟。
-    const fakeAcp = join(f.root, "slow-acp.mjs");
-    const fakeAcpPid = join(f.root, "slow-acp.pid");
-    writeFileSync(
-      fakeAcp,
-      `import { writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-writeFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "slow-acp.pid"),
-  String(process.pid),
-);
-process.stdin.resume();
-setInterval(() => {}, 1000);
-`,
+    const started = await f.cli("--no-open");
+    assert.equal(started.code, 0, started.stderr || started.stdout);
+    const info = await fetch(`http://127.0.0.1:${f.port}/api/service/info`);
+    assert.equal(info.status, 200, "服务信息接口免认证");
+    assert.deepEqual(
+      { ...((await info.json()) as object), version: undefined },
+      { service: "atrium", data: realpathSync(f.data), version: undefined },
     );
-    f.env.ATRIUM_PI_ACP_ENTRY = fakeAcp;
-    const other = createServer((_, reply) => reply.end("not-atrium"));
-    await new Promise<void>((resolve) =>
-      other.listen(f.port, "127.0.0.1", resolve),
+    const second = join(f.root, "second");
+    const expected = `端口 ${f.port} 已被另一份数据的 Atrium 占用：数据在 ${realpathSync(f.data)}；要用它请设 ATRIUM_DATA=${realpathSync(f.data)}`;
+    const env = { ...f.env, ATRIUM_DATA: second };
+    // 命令行：启动前就查出来，不拉起服务。
+    const viaCli = await exec(
+      process.execPath,
+      [join(packageRoot, "bin/atrium.mjs"), "--no-open"],
+      { env, cwd: f.root, timeout: 25000 },
+    ).then(
+      () => ({ code: 0, stderr: "" }),
+      (error: { code: number; stderr: string }) => error,
     );
-    try {
-      const result = await f.cli("--no-open");
-      assert.equal(result.code, 1, result.stdout);
-      assert.match(result.stderr, /启动失败/);
-      assert.match(
-        result.stderr,
-        /EADDRINUSE/,
-        "要报出真正的端口占用原因，而不是等到启动超时",
-      );
-      assert.equal(readService(f.data), null, "失败必须释放租约");
-      assert.equal(
-        await (await fetch(`http://127.0.0.1:${f.port}`)).text(),
-        "not-atrium",
-        "既有占用端口的服务不受影响",
-      );
-      // 假 ACP 可能还没写出 pid 就被终止；写出来了就绝不允许残留。
-      if (existsSync(fakeAcpPid)) {
-        const pid = Number(readFileSync(fakeAcpPid, "utf8"));
-        for (let n = 0; n < 100 && alive(pid); n++) await delay(30);
-        assert(!alive(pid), "启动期子进程不能残留");
-      }
-    } finally {
-      await new Promise<void>((resolve) => other.close(() => resolve()));
-    }
+    assert.equal(viaCli.code, 4, "端口冲突按 conflict 退出");
+    assert(viaCli.stderr.includes(expected), viaCli.stderr);
+    assert.doesNotMatch(viaCli.stderr, /EADDRINUSE|\n\s+at /);
+    assert(!existsSync(second), "命令行不建第二份数据目录");
+    // 经服务的命令（task ls）：同一句回执，不附第二份数据的日志与 status 修正。
+    const viaCommand = await exec(
+      process.execPath,
+      [join(packageRoot, "bin/atrium.mjs"), "task", "ls"],
+      { env, cwd: f.root, timeout: 25000 },
+    ).then(
+      () => ({ code: 0, stderr: "" }),
+      (error: { code: number; stderr: string }) => error,
+    );
+    assert.equal(viaCommand.code, 4);
+    assert(viaCommand.stderr.includes(expected), viaCommand.stderr);
+    assert.doesNotMatch(viaCommand.stderr, /日志：|atrium status/);
+    assert(!existsSync(second));
+    // 服务入口直接启动（绕过命令行）：同样在建表前退出。
+    const viaServer = await exec(
+      process.execPath,
+      ["--import", "tsx", join(packageRoot, "server/main.ts")],
+      { env, cwd: packageRoot, timeout: 25000 },
+    ).then(
+      () => ({ code: 0, stderr: "" }),
+      (error: { code: number; stderr: string }) => error,
+    );
+    assert.equal(viaServer.code, 1);
+    assert(viaServer.stderr.includes(expected), viaServer.stderr);
+    assert.doesNotMatch(viaServer.stderr, /EADDRINUSE|\n\s+at /);
+    assert(!existsSync(second), "服务入口也在登记与建表之前退出");
+    assert.equal((await f.cli("status")).code, 0, "原服务不受影响");
   },
 );
 

@@ -3,6 +3,7 @@
 const separatelyAuthenticatedRoutes = new Set([
   "POST /api/auth/rotate", // user or local instance-control credential
   "GET /api/service",
+  "GET /api/service/info", // 免认证：只回服务身份与数据目录，供撞端口时说明（t71）
   "GET /api/service/health",
   "POST /api/service/prepare-restart",
   "POST /api/service/stop",

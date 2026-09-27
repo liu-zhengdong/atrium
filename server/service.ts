@@ -11,8 +11,11 @@ import {
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
+import { portTakenMessage, probePort } from "./port-owner.ts";
+import { Problem } from "./problem.ts";
 import {
   alive,
+  legacyDataNotice,
   packageRoot,
   readService,
   servicePort,
@@ -111,7 +114,8 @@ async function unavailableReason(
 export async function serviceStatus(data: string) {
   const record = readService(data);
   if (!record || !alive(record.pid)) {
-    console.log(`Atrium 未运行\n数据：${data}`);
+    const legacy = !existsSync(data) && legacyDataNotice();
+    console.log(`Atrium 未运行\n数据：${data}${legacy ? `\n${legacy}` : ""}`);
     return;
   }
   const current = await request(record).catch(() => {
@@ -203,7 +207,12 @@ export async function startService(
   let launchError: Error | undefined;
   let logStart = 0;
   if (!record || !alive(record.pid)) {
-    servicePort();
+    const port = servicePort();
+    // t71：端口已被别的程序或另一份数据的 Atrium 占着，就不拉起服务、不建数据目录。
+    const taken = portTakenMessage(port, await probePort(port), data);
+    if (taken) throw new Problem(409, `Atrium 未启动：${taken}`, "conflict");
+    const legacy = !existsSync(data) && legacyDataNotice();
+    if (legacy) notice(legacy);
     mkdirSync(data, { recursive: true, mode: 0o700 });
     const log = openSync(join(data, "service.log"), "a", 0o600);
     logStart = fstatSync(log).size;

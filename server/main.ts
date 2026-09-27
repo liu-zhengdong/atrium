@@ -1,5 +1,6 @@
 import { sameSecret } from "../shared/secret.ts";
 import { createApp } from "./app.ts";
+import { portTakenMessage, probePort } from "./port-owner.ts";
 import {
   alive,
   claimService,
@@ -15,6 +16,20 @@ import {
 } from "./supervisor.ts";
 
 const data = dataDirectory();
+// t71：端口已被别的程序或另一份数据的 Atrium 占着，就在登记和建表之前退出，
+// 只留一句人话，不打印堆栈。本数据目录的服务占着时交给下面的单实例登记报错。
+const portTaken = async (port: number) => {
+  const owner = await probePort(port);
+  if (owner.kind === "free") return null;
+  return portTakenMessage(port, owner, data);
+};
+{
+  const taken = await portTaken(servicePort());
+  if (taken) {
+    console.error(`Atrium 未启动：${taken}`);
+    process.exit(1);
+  }
+}
 const lease = claimService(data, servicePort());
 // 旧版 `restart --when-idle` 留下的待重启记录不再挡派活：丢弃并记日志。
 discardLegacyIdleRestart(data);
@@ -68,7 +83,9 @@ try {
     return sameSecret(actual, lease.record.token);
   };
   app.addHook("onRequest", async (request, reply) => {
-    if (!request.routeOptions.url?.startsWith("/api/service")) return;
+    const route = request.routeOptions.url;
+    if (!route?.startsWith("/api/service") || route === "/api/service/info")
+      return;
     if (!authorize(request.headers.authorization))
       return reply.code(401).send({ error: "服务控制凭据无效" });
   });
@@ -82,6 +99,12 @@ try {
   app.get("/api/service", () => {
     return status();
   });
+  // 免认证的服务身份（t71）：别的数据目录的命令行撞端口时，据此说出这里的数据在哪。
+  app.get("/api/service/info", () => ({
+    service: "atrium",
+    data,
+    version: currentVersion(),
+  }));
   // 发起排空的 supervisor：请求体带 PID；旧版 supervisor 不带时参考 restart-state。
   const drainOwner = (value: unknown): number | null => {
     if (Number.isInteger(value) && (value as number) > 0)
@@ -189,7 +212,12 @@ try {
   await app.listen({ port: lease.record.port, host: "127.0.0.1" });
   console.log(`Atrium → ${serviceUrl(lease.record)}\n数据：${data}`);
 } catch (error) {
-  console.error(error);
+  // 查端口与监听之间被别人抢先占了端口：同样只报一句人话。
+  if ((error as NodeJS.ErrnoException).code === "EADDRINUSE")
+    console.error(
+      `Atrium 未启动：${(await portTaken(lease.record.port)) ?? `端口 ${lease.record.port} 已被占用`}`,
+    );
+  else console.error(error);
   // #205：启动失败的服务从未就绪，没有可排空的状态。`app.close()` 要等启动
   // 中的 ACP 握手与账号刷新，既会拖过命令行 12 秒的启动等待（把「端口占用」
   // 报成「启动超时」），也会撞上 Fastify 的插件超时抛出未捕获错误、跳过租约

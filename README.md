@@ -26,6 +26,8 @@ atrium guide         # 调用约定、退出码与命令参考（给 Agent 读�
 
 服务默认只监听本机 `127.0.0.1:4310`，同一数据目录只运行一份；除启动、`status`、`stop`、`auth status` 外，命令都经服务完成，服务不在就自动拉起。后台日志在数据目录的 `service.log`。
 
+端口被占时不拉起服务、不建数据目录：占着的是另一份数据的 Atrium，回执给出它的数据目录（`端口 4310 已被另一份数据的 Atrium 占用：数据在 X；要用它请设 ATRIUM_DATA=X`）；是别的程序则提示换 `ATRIUM_PORT`。前一代聊天运行时的数据目录 `~/.pi/atrium/data` 已归档，新一代不读不写；只有它、还没有 `~/.atrium` 时，启动与 `atrium status` 会提示一句。
+
 ## 任务账本
 
 任务用短号 `t1`、`t2`……，可以挂成树、声明依赖；交付物默认是 PR（`--deliver pr`），也可以是 issue 评论（`comment`，须给 `--issue`）或只看退出情况（`none`）。
@@ -239,7 +241,7 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 | 环境变量                       | 用途                                                       |
 | ------------------------------ | ---------------------------------------------------------- |
 | `ATRIUM_PORT`                  | 新启动服务的端口，默认 `4310`；已有服务沿用原端口          |
-| `ATRIUM_DATA`                  | 数据目录，默认 `~/.pi/atrium/data/`                        |
+| `ATRIUM_DATA`                  | 数据目录，默认 `~/.atrium/`                                |
 | `ATRIUM_WORKERS_DIR`           | 执行者档案目录，默认 `~/Atrium/workers`                    |
 | `ATRIUM_OPENQUOTA_BIN`         | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…` |
 | `ATRIUM_EVENT_LEASE_MINUTES`   | 取走的事件多久未确认就重投，默认 15                        |

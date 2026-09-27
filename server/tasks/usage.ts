@@ -24,12 +24,23 @@ export function ensureUsageTable(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS task_usage_window ON task_usage(provider,window_reset_at,started_at);`);
 }
 
+const WINDOW_BUCKET_MS = 300_000;
+
 /** 重置时间取整到五分钟，抵消连续 pace 读取时的秒级漂移。 */
 export function resetAt(entry: PaceEntry, now: number): number | null {
   const hours = entry.hoursToReset;
   return hours && Number.isFinite(hours) && hours > 0
-    ? Math.round((now + hours * 3_600_000) / 300_000) * 300_000
+    ? Math.round((now + hours * 3_600_000) / WINDOW_BUCKET_MS) *
+        WINDOW_BUCKET_MS
     : null;
+}
+
+/**
+ * 两次读数是否同一窗口：漂移恰好跨过取整边界时会落到相邻的桶，所以差一个桶以内都算同窗口；
+ * 同账号的不同窗口（五小时、每周）重置时刻相差远大于五分钟。
+ */
+export function sameWindow(a: number, b: number): boolean {
+  return Math.abs(a - b) <= WINDOW_BUCKET_MS;
 }
 
 export function usageSample(
@@ -98,15 +109,18 @@ export function endUsage(
   const overlap = row.window_reset_at
     ? (one<{ n: number }>(
         db,
-        "SELECT COUNT(*) AS n FROM task_usage WHERE provider=? AND window_reset_at=? AND started_at<=? AND (ended_at IS NULL OR ended_at>=?)",
+        "SELECT COUNT(*) AS n FROM task_usage WHERE provider=? AND window_reset_at BETWEEN ? AND ? AND started_at<=? AND (ended_at IS NULL OR ended_at>=?)",
         provider,
-        row.window_reset_at,
+        row.window_reset_at - WINDOW_BUCKET_MS,
+        row.window_reset_at + WINDOW_BUCKET_MS,
         now,
         row.started_at,
       )?.n ?? 1)
     : 1;
   const estimate =
-    sample?.reset === row.window_reset_at
+    sample &&
+    row.window_reset_at &&
+    sameWindow(sample.reset, row.window_reset_at)
       ? splitDelta(row.start_percent, sample.used, overlap)
       : { points: 0, basis: "unknown" as const };
   atomically(db, () =>
@@ -140,9 +154,15 @@ export function subtreeUsage(
     for (;;) {
       const rows = db
         .prepare(
-          `SELECT u.rowid AS id,u.points FROM task_usage u JOIN tasks t ON t.id=u.task_id WHERE t.node_id IN (${marks}) AND u.provider=? AND u.window_reset_at=? AND u.rowid>? ORDER BY u.rowid LIMIT 200`,
+          `SELECT u.rowid AS id,u.points FROM task_usage u JOIN tasks t ON t.id=u.task_id WHERE t.node_id IN (${marks}) AND u.provider=? AND u.window_reset_at BETWEEN ? AND ? AND u.rowid>? ORDER BY u.rowid LIMIT 200`,
         )
-        .all(...page, provider, reset, cursor) as {
+        .all(
+          ...page,
+          provider,
+          reset - WINDOW_BUCKET_MS,
+          reset + WINDOW_BUCKET_MS,
+          cursor,
+        ) as {
         id: number;
         points: number;
       }[];

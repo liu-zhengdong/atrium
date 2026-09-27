@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { taskDir } from "./active.ts";
+import { clipBrief } from "./brief.ts";
 import {
   councilOutcome,
   opinionsReady,
@@ -93,18 +94,15 @@ function openSummary(db: DatabaseSync, data: string, id: number) {
   const dir = taskDir(data, id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const brief = join(dir, "council-summary.md");
-  writeFileSync(brief, summaryBrief(topic, opinions, council.comment === 1), {
-    mode: 0o600,
-  });
+  const text = clipBrief(summaryBrief(topic, opinions, council.comment === 1));
+  writeFileSync(brief, text, { mode: 0o600 });
   atomically(db, () => {
     db.prepare(
       "UPDATE task_councils SET stage='summarizing' WHERE task_id=? AND stage='opinions'",
     ).run(id);
-    db.prepare("UPDATE tasks SET brief_path=?,updated_at=? WHERE id=?").run(
-      brief,
-      Date.now(),
-      id,
-    );
+    db.prepare(
+      "UPDATE tasks SET brief=?,brief_path=?,updated_at=? WHERE id=?",
+    ).run(text, brief, Date.now(), id);
     noteTask(db, id, "council_opinions", {
       opinions: opinions.map((o) => ({
         concern: o.ref,

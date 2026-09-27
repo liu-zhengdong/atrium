@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { clipBrief } from "./brief.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { redact } from "../secret-redact.ts";
 import { taskDir } from "./active.ts";
@@ -250,21 +251,6 @@ export class ReviewGate {
     );
   }
 
-  private readBrief(task: Task) {
-    if (!task.brief_path) return null;
-    const file = isAbsolute(task.brief_path)
-      ? task.brief_path
-      : task.repo
-        ? join(task.repo, task.brief_path)
-        : null;
-    if (!file) return null;
-    try {
-      return readFileSync(file, "utf8");
-    } catch {
-      return null;
-    }
-  }
-
   private async startReview(task: Task) {
     const { repo, worktree, pr_url: url } = task;
     if (!repo || !worktree || !url)
@@ -288,8 +274,7 @@ export class ReviewGate {
     const dir = taskDir(this.options.data, task.id);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, `review-${Date.now()}.md`);
-    writeFileSync(
-      file,
+    const text = clipBrief(
       reviewBrief({
         ref: task.ref,
         title: task.title,
@@ -300,16 +285,17 @@ export class ReviewGate {
         risk,
         reason: need.needed ? need.reason : "按规则需审阅",
         diff,
-        brief: this.readBrief(task),
+        brief: task.brief ?? null,
       }),
-      { mode: 0o600 },
     );
+    writeFileSync(file, text, { mode: 0o600 });
     const reviewer = atomically(this.db, () => {
       const current = getTask(this.db, task.id);
       if (current.delivery_stage !== "reviewing" || current.review_task)
         return null;
       const created = createTask(this.db, {
         title: `审阅 ${task.ref}：${task.title}`.slice(0, 200),
+        brief: text,
         brief_path: file,
         deliver: "none",
         ...(task.owner ? { owner: task.owner } : {}),

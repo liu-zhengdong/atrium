@@ -4,7 +4,7 @@ import {
   parseTaskRef,
   requireRow,
   TREE_MAX,
-  view,
+  listView,
   type TaskNode,
   type TaskRow,
 } from "./ledger-model.ts";
@@ -33,7 +33,7 @@ export function taskTree(db: DatabaseSync, root?: unknown) {
   );
   for (const found of rows.slice(0, TREE_MAX))
     nodes.set(found.id, {
-      ...view(found),
+      ...listView(found),
       ...noteView(db, found.id, found.status),
       children: [],
       child_summary: summaries.get(found.id) ?? null,

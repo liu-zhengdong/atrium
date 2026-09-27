@@ -6,6 +6,7 @@ export const groups: Record<string, string[]> = {
   任务: [
     "quota",
     "top",
+    "statusline",
     "task add",
     "task ls",
     "task plan",

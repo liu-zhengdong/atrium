@@ -1,0 +1,174 @@
+import type { TaskRow } from "./ledger-model.ts";
+import type { TaskStatus } from "./state.ts";
+
+/**
+ * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
+ * 纯函数：事实由 holder-facts.ts 从账本、收件箱、会审表取来。
+ *
+ * - worker：执行者在做；
+ * - merge：合入流水线（审阅、排队合入、合入中、等发版上线），运行时自己推进；
+ * - queue：排队等额度或执行者、等上游依赖，运行时到点自己派；
+ * - leader：leader aN 在处理或待处理；
+ * - secretary：秘书（或其他订阅者）在处理或待处理；
+ * - user：真的在等用户拍板——只有这一类用醒目颜色写「等你」。
+ */
+export type HolderKind =
+  "worker" | "merge" | "queue" | "leader" | "secretary" | "user";
+
+export type Holder = {
+  kind: HolderKind;
+  /** 执行者组合、aN、secretary、u1；运行时自己推进时为 null。 */
+  who: string | null;
+  /** 一句话：卡在哪、谁在接手，如「本地检查没过 · a1 已交回执行者」。 */
+  text: string;
+};
+
+export type HolderFacts = {
+  status: TaskStatus;
+  delivery_stage: TaskRow["delivery_stage"];
+  online_wait: number;
+  worker: string | null;
+  /** 在排队时的原因；不在排队为 null。 */
+  queued: { reason: string | null } | null;
+  /** 审阅关卡派出的审阅任务短号。 */
+  review_task: string | null;
+  schedule_state: string | null;
+  schedule_reason: string | null;
+  auto: boolean;
+  /** 最近一次受阻（block 事件）的原因与关卡名；从没受阻为 null。 */
+  block: { reason: string | null; gates: string[] } | null;
+  /** 最近一次受阻之后，把任务交回执行者的：捎话作者或运行时合入交回。 */
+  returned: { by: string | null; via: "tell" | "merge" | "rerun" } | null;
+  /** 最近一次合入交回执行者的原因（rebase 冲突、检查没过等）。 */
+  merge_returned: string | null;
+  /** 受阻之后的上交：交给了谁、谁交的。 */
+  escalated: { to: string; from: string } | null;
+  /** 受阻之后写了备注（有人在处理）：谁。 */
+  processing_by: string | null;
+  /** 受阻之后收件箱里这条任务最新的事件：投给了谁、确认了没有。 */
+  inbox: { subscriber: string; acked: boolean } | null;
+  /** 任务事件缺省投给谁（taskRoute），没有收件箱记录时用它。 */
+  route: string;
+  /** 这是一场会审，且已上交用户拍板、还没定。 */
+  council_escalated: boolean;
+};
+
+const FINISHED = new Set<TaskStatus>(["done", "failed", "cancelled"]);
+
+/** 订阅者属于哪一类：u1 是用户，aN 是 leader，其余（secretary 与负责人）归秘书这一侧。 */
+export function kindOf(who: string): HolderKind {
+  if (who === "u1") return "user";
+  if (/^a[1-9][0-9]*$/.test(who)) return "leader";
+  return "secretary";
+}
+
+/** 人话名字：u1 → 你，secretary → 秘书，其余原样。 */
+export function whoLabel(who: string): string {
+  return who === "u1" ? "你" : who === "secretary" ? "秘书" : who;
+}
+
+const GATE_LABEL: Record<string, string> = {
+  local_check: "本地检查没过",
+  ci: "CI 没过",
+  pr_exists: "没找到 PR",
+  finished: "执行者没做完",
+  file_growth: "改动规模超限",
+  claims_verified: "自述与事实对不上",
+  concern: "专员没通过",
+  review: "审阅打回",
+};
+
+/** 受阻原因缩成一句：关卡不过按关卡名说，其余取第一段、至多 30 字。 */
+export function blockShort(
+  block: { reason: string | null; gates: string[] } | null,
+): string {
+  if (!block) return "受阻";
+  const gate = block.gates.find((g) => GATE_LABEL[g]);
+  if (gate) return GATE_LABEL[gate]!;
+  const reason = (block.reason ?? "").trim();
+  if (!reason) return "受阻";
+  const first = reason.split(/[：；\n]/)[0]!.trim() || reason;
+  const chars = Array.from(first);
+  return chars.length > 30 ? `${chars.slice(0, 29).join("")}…` : first;
+}
+
+/** 已结束且不在合入流水线、也不在等拍板的任务没有持球人。 */
+export function holderOf(f: HolderFacts): Holder | null {
+  if (f.council_escalated)
+    return { kind: "user", who: "u1", text: "会审上交，等你拍板" };
+  if (f.delivery_stage === "reviewing")
+    return {
+      kind: "merge",
+      who: null,
+      text: `合入前审阅中${f.review_task ? `（${f.review_task}）` : ""}`,
+    };
+  if (f.delivery_stage === "merge_queued")
+    return { kind: "merge", who: null, text: "排队合入" };
+  if (f.delivery_stage === "merging")
+    return { kind: "merge", who: null, text: "合入中：rebase 并重跑本地检查" };
+  if (f.delivery_stage === "merged" && f.online_wait === 1)
+    return { kind: "merge", who: null, text: "已合入，等发版上线" };
+  if (FINISHED.has(f.status)) return null;
+  if (f.queued)
+    return {
+      kind: "queue",
+      who: null,
+      text: `排队${f.queued.reason ? `：${f.queued.reason}` : ""}`,
+    };
+  if (f.status === "running") {
+    const worker = f.worker ?? "执行者";
+    if (f.returned?.via === "merge")
+      return {
+        kind: "worker",
+        who: f.worker,
+        text: `合入没过${f.merge_returned ? `（${f.merge_returned}）` : ""} · 已交回执行者`,
+      };
+    if (f.returned)
+      return {
+        kind: "worker",
+        who: f.worker,
+        text: `${blockShort(f.block)} · ${f.returned.by ? `${whoLabel(f.returned.by)} ` : ""}已交回执行者`,
+      };
+    return { kind: "worker", who: f.worker, text: `${worker} 在做` };
+  }
+  if (f.status === "blocked") {
+    const why = blockShort(f.block);
+    if (f.escalated)
+      return {
+        kind: kindOf(f.escalated.to),
+        who: f.escalated.to,
+        text: `${why} · ${whoLabel(f.escalated.from)} 上交${f.escalated.to === "u1" ? "，等你" : `给${whoLabel(f.escalated.to)}`}`,
+      };
+    if (f.processing_by)
+      return {
+        kind: kindOf(f.processing_by),
+        who: f.processing_by,
+        text: `${why} · ${f.processing_by === "u1" ? "你在处理" : `${whoLabel(f.processing_by)} 在处理`}`,
+      };
+    const who = f.inbox?.subscriber ?? f.route;
+    return {
+      kind: kindOf(who),
+      who,
+      text:
+        who === "u1"
+          ? `${why} · 等你处理`
+          : `${why} · ${f.inbox?.acked ? `${whoLabel(who)} 已接手` : `等 ${whoLabel(who)} 处理`}`,
+    };
+  }
+  // todo：等上游或自动派发的由运行时派；手动的等负责的 leader 或秘书派。
+  if (f.schedule_state === "waiting")
+    return {
+      kind: "queue",
+      who: null,
+      text: `等上游${f.schedule_reason ? `：${f.schedule_reason}` : "完成"}`,
+    };
+  if (f.auto) return { kind: "queue", who: null, text: "就绪，自动派发" };
+  return {
+    kind: kindOf(f.route),
+    who: f.route,
+    text:
+      f.route === "u1"
+        ? "待派：等你派活"
+        : `待派：等 ${whoLabel(f.route)} 派活`,
+  };
+}

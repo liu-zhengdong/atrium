@@ -12,6 +12,7 @@ import type { ConcernState } from "../server/tasks/concern-gate.ts";
 import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
 import type { HostView } from "../server/tasks/host-load.ts";
+import type { Holder } from "../server/tasks/holder.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -41,6 +42,8 @@ export type TopRow = {
   tells?: { total: number; pending: number } | null;
   /** 请了的专员与本轮结论（#322）；旧版服务没有这个字段。 */
   concerns?: ConcernState[] | null;
+  /** 现在球在谁手里（服务端判定）；旧版服务没有这个字段。 */
+  holder?: Holder | null;
   /** 日志最后写入时刻；没有日志为 0。 */
   log_at: number;
   action: { text: string; kind: string } | null;
@@ -171,8 +174,11 @@ function state(row: TopRow, now: number) {
   if (kind === "merging") return "合入中";
   if (kind === "merged") return "已合入";
   if (kind === "online") return "已上线";
+  // 受阻由服务说清卡在哪、谁在接手；旧版服务没有 holder 时退回原写法。
   if (kind === "blocked")
-    return `${row.processing ? "处理中" : "卡住"}${row.reason ? `：${row.reason}` : ""}`;
+    return row.holder
+      ? row.holder.text
+      : `${row.processing ? "处理中" : "卡住"}${row.reason ? `：${row.reason}` : ""}`;
   const from = row.started_at;
   const to = FINISHED.has(kind) ? (row.ended_at ?? now) : now;
   return from ? duration(to - from) : "—";

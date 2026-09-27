@@ -18,6 +18,7 @@ import {
   type PickView,
   type RunPick,
 } from "../server/tasks/pick.ts";
+import { briefInput } from "./brief-input.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
@@ -162,9 +163,9 @@ function partInput(values: Values): { part?: string; goal?: string } {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--concern 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--job 角色] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--concern 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--job 角色] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--part 写归属哪一部分（全景图上的节点；旧写法 --goal gN 按迁移映射到节点），--concern 请专员（关注点节点，派活附其检查要点，交付后按清单审、可否决），--parent 挂到父任务下，--brief 附任务详述 md",
+    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--part 写归属哪一部分（全景图上的节点；旧写法 --goal gN 按迁移映射到节点），--concern 请专员（关注点节点，派活附其检查要点，交付后按清单审、可否决），--parent 挂到父任务下，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
@@ -222,7 +223,7 @@ const add: Command = {
         : { repo: existing(repo, "--repo", "directory") }),
       ...(brief === undefined
         ? {}
-        : { brief_path: existing(brief, "--brief", "file") }),
+        : await briefInput(brief, (path) => existing(path, "--brief", "file"))),
       ...(str(values, "owner") === undefined
         ? {}
         : { owner: str(values, "owner") }),
@@ -342,6 +343,7 @@ const show: Command = {
         ["合入交回次数", task.merge_returns || null],
         ["审阅任务", task.review_task ? `t${task.review_task}` : null],
         ["排队原因", task.queued_reason ?? null],
+        ["球在谁手里", task.holder?.text ?? null],
         ["最新备注", task.note],
         ["备注作者", task.note ? noteAuthor(task) : null],
         ["备注时间", task.note_at ? when(task.note_at) : null],
@@ -366,7 +368,7 @@ const show: Command = {
           "交付物",
           `${task.deliver}${task.issue ? `（issue #${task.issue}）` : ""}`,
         ],
-        ["详述", task.brief_path],
+        ["详述来源", task.brief_path],
         ["负责人", task.owner],
         ["角色", task.job_ref],
         ["执行者", task.worker],
@@ -387,6 +389,19 @@ const show: Command = {
             .filter(([, value]) => value !== null && value !== "")
             .map(([key, value]) => `  ${key}：${value}`),
           ...hintLines(task, true).map((line) => `  ${line}`),
+          ...(task.brief?.trim()
+            ? [
+                "详述：",
+                ...task.brief
+                  .trimEnd()
+                  .split("\n")
+                  .map((line) => `  ${line}`),
+              ]
+            : task.brief_path
+              ? [
+                  `详述：没有进库（原文件读不到），补上：atrium task set ${task.ref} --brief 文件`,
+                ]
+              : []),
           ...(task.result ? ["结果摘要：", task.result] : []),
           ...(task.events.length
             ? [
@@ -440,7 +455,7 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--role 节点] [--job 角色|''] [--from 节点|''] [--part 节点|''] [--concern 专员[,专员]|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  args: "tN [--status S] [--pr URL] [--role 节点] [--job 角色|''] [--from 节点|''] [--part 节点|''] [--concern 专员[,专员]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
   about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、归属部分、请的专员（--concern，下一轮派活生效）、详述、交付物、依赖和自动派发`,
   options: {
     status: { type: "string" },
@@ -480,8 +495,12 @@ const set: Command = {
     const concern = str(values, "concern");
     if (concern !== undefined) body.concern = concern;
     const brief = str(values, "brief");
-    if (brief !== undefined)
-      body.brief_path = brief === "" ? "" : existing(brief, "--brief", "file");
+    if (brief === "") body.brief = "";
+    else if (brief !== undefined)
+      Object.assign(
+        body,
+        await briefInput(brief, (path) => existing(path, "--brief", "file")),
+      );
     const kind = str(values, "deliver");
     if (kind !== undefined) body.deliver = deliver(kind);
     const issueText = str(values, "issue");

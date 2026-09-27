@@ -1,86 +1,54 @@
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { Problem } from "../problem.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { effective } from "../org/boundaries.ts";
 import { allBoundaries, chainLevels } from "../org/boundary-store.ts";
-import { nodes, one } from "../org/model.ts";
+import { nodes, one, ref } from "../org/model.ts";
 
-/** 每个订阅账号留给用户的额度；组织根章程导入前用文件及默认值兜底。 */
+/** 每个订阅账号留给用户的额度；根章程没写时的缺省。 */
 export const DEFAULT_QUOTA_RESERVE_PERCENT = 20;
-export const defaultCharterPath = () => join(homedir(), "Atrium", "charter.md");
 
-export function parseQuotaReservePercent(text: string): number {
-  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
-  const frontmatter = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized)?.[1];
-  if (frontmatter === undefined) return DEFAULT_QUOTA_RESERVE_PERCENT;
-  let inBudget = false;
-  for (const raw of frontmatter.split("\n")) {
-    if (/^budget:\s*(?:#.*)?$/.test(raw)) {
-      inBudget = true;
-      continue;
-    }
-    if (raw && !/^\s/.test(raw)) inBudget = false;
-    if (!inBudget) continue;
-    const match = /^\s+quota_reserve_percent:\s*([^#]*?)(?:\s*#.*)?$/.exec(raw);
-    if (!match) continue;
-    const value = match[1].trim();
-    const reserve = Number(value);
-    if (!value || !Number.isFinite(reserve) || reserve < 0 || reserve > 100)
-      throw new Problem(
-        400,
-        "章程 budget.quota_reserve_percent 须为 0 到 100 的数字",
-        "usage",
-      );
-    return reserve;
-  }
-  return DEFAULT_QUOTA_RESERVE_PERCENT;
+export type QuotaReserve = {
+  percent: number;
+  /** 由哪个节点的章程给出（o1 这样的短号）；根章程没写、用缺省时为 null。 */
+  set_by: string | null;
+};
+
+/**
+ * 给用户留的份额只读组织树（#355）：根到 nodeId 逐层叠加的 quota_reserve_percent 取最严；
+ * 没有组织树或没写就用缺省。旧的 ~/Atrium/charter.md 由启动导入一次写进根章程，不再读文件。
+ */
+export function quotaReserve(db?: DatabaseSync, nodeId?: number): QuotaReserve {
+  const fallback = { percent: DEFAULT_QUOTA_RESERVE_PERCENT, set_by: null };
+  if (
+    !db ||
+    !one(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_boundaries'",
+    )
+  )
+    return fallback;
+  const list = nodes(db);
+  const root = list.find((n) => n.parent_id === null);
+  if (!root) return fallback;
+  const node = list.find((n) => n.id === nodeId) ?? root;
+  const owned = allBoundaries(db);
+  const chain = [
+    ...chainLevels(list, owned, node.parent_id),
+    { node: node.id, name: node.name, entries: owned.get(node.id) ?? [] },
+  ];
+  // 不同条目都写了保留份额时取最大（最严）。
+  const found = effective(chain)
+    .filter((e) => e.param?.key === "quota_reserve_percent")
+    .sort((a, b) => b.param!.value - a.param!.value)[0];
+  return found
+    ? { percent: found.param!.value, set_by: ref(found.set_by) }
+    : fallback;
 }
 
-export async function readQuotaReservePercent(
-  charterPath = defaultCharterPath(),
+export function readQuotaReservePercent(
   db?: DatabaseSync,
   nodeId?: number,
-): Promise<number> {
-  if (
-    db &&
-    one(
-      db,
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_docs'",
-    )
-  ) {
-    const list = nodes(db);
-    const root = list.find((n) => n.parent_id === null);
-    if (
-      root &&
-      one(
-        db,
-        "SELECT 1 FROM org_docs WHERE node_id=? AND doc='charter'",
-        root.id,
-      )
-    ) {
-      const node = list.find((n) => n.id === nodeId) ?? root;
-      const owned = allBoundaries(db);
-      const chain = [
-        ...chainLevels(list, owned, node.parent_id),
-        { node: node.id, name: node.name, entries: owned.get(node.id) ?? [] },
-      ];
-      const reserve = effective(chain)
-        .filter((e) => e.param?.key === "quota_reserve_percent")
-        .map((e) => e.param!.value);
-      return reserve.length
-        ? Math.max(...reserve)
-        : DEFAULT_QUOTA_RESERVE_PERCENT;
-    }
-  }
-  try {
-    return parseQuotaReservePercent(await readFile(charterPath, "utf8"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return DEFAULT_QUOTA_RESERVE_PERCENT;
-    throw error;
-  }
+): number {
+  return quotaReserve(db, nodeId).percent;
 }
 
 /** 仅在 OpenQuota 明确给出已用比例时阻止派活；缺数据不猜测额度。 */

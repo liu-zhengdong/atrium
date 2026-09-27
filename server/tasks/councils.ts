@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { clipBrief } from "./brief.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, ref, type NodeRow } from "../org/model.ts";
@@ -46,7 +47,10 @@ export const STAGE_LABEL: Record<CouncilStage, string> = {
 export type CouncilRow = {
   task_id: number;
   topic: string;
+  /** 议题详述的来源路径（旧库只有它）。 */
   topic_brief: string | null;
+  /** 议题详述内容（#355）；汇总时议题任务的详述会换成汇总详述，议题原文留在这里。 */
+  topic_text: string | null;
   leader_node_id: number | null;
   comment: number;
   stage: CouncilStage;
@@ -78,6 +82,9 @@ export function ensureCouncilTables(db: DatabaseSync) {
     task_id INTEGER NOT NULL REFERENCES tasks(id), node_id INTEGER NOT NULL, pos INTEGER NOT NULL,
     opinion_id INTEGER NOT NULL, PRIMARY KEY(task_id,node_id));
   CREATE INDEX IF NOT EXISTS council_members_opinion ON council_members(opinion_id);`);
+  const columns = all<{ name: string }>(db, "PRAGMA table_info(task_councils)");
+  if (!columns.some((column) => column.name === "topic_text"))
+    db.exec("ALTER TABLE task_councils ADD COLUMN topic_text TEXT");
 }
 
 export const councilRow = (db: DatabaseSync, id: number) =>
@@ -97,20 +104,6 @@ export const isOpinionTask = (db: DatabaseSync, id: number) =>
 export const isCouncilTask = (db: DatabaseSync, id: number) =>
   !!councilRow(db, id);
 
-const BRIEF_READ_MAX = 64 * 1024;
-
-/** 议题详述原文；读不到时返回 null（派活时照样可跑，意见任务按标题判断）。 */
-export function readTopicBrief(path: string | null, repo: string | null) {
-  if (!path) return null;
-  const file = isAbsolute(path) ? path : repo ? join(repo, path) : null;
-  if (!file) return null;
-  try {
-    return readFileSync(file, "utf8").slice(0, BRIEF_READ_MAX);
-  } catch {
-    return null;
-  }
-}
-
 /** 会审的议题上下文（写进意见与汇总详述）。 */
 export function topicOf(db: DatabaseSync, id: number): Topic {
   const council = councilRow(db, id)!;
@@ -118,7 +111,7 @@ export function topicOf(db: DatabaseSync, id: number): Topic {
   return {
     ref: task.ref,
     topic: council.topic,
-    brief: readTopicBrief(council.topic_brief, task.repo),
+    brief: council.topic_text,
     brief_path: council.topic_brief,
     issue: task.issue,
     repo: task.repo,
@@ -181,6 +174,7 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
   onlyKeys(input, [
     "topic",
     "concerns",
+    "brief",
     "brief_path",
     "issue",
     "leader",
@@ -226,6 +220,7 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
         title: `会审：${topic}`,
         deliver: comment ? "comment" : "none",
         ...(leader ? { role: ref(leader.id) } : {}),
+        ...(input.brief !== undefined ? { brief: input.brief } : {}),
         ...(input.brief_path ? { brief_path: input.brief_path } : {}),
         ...(input.issue !== undefined ? { issue: input.issue } : {}),
         ...(input.repo ? { repo: input.repo } : {}),
@@ -235,11 +230,12 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
       now,
     );
     db.prepare(
-      "INSERT INTO task_councils(task_id,topic,topic_brief,leader_node_id,comment,stage,created_at) VALUES(?,?,?,?,?,'opinions',?)",
+      "INSERT INTO task_councils(task_id,topic,topic_brief,topic_text,leader_node_id,comment,stage,created_at) VALUES(?,?,?,?,?,?,'opinions',?)",
     ).run(
       parent.id,
       topic,
       parent.brief_path,
+      parent.brief ?? null,
       leader?.id ?? null,
       comment ? 1 : 0,
       now,
@@ -257,9 +253,8 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
     for (const nodeId of concerns) {
       const checklist = checklistOf(db, nodeId);
       const brief = join(dir, `opinion-${checklist.ref}.md`);
-      writeFileSync(brief, opinionBrief(topicView, checklist), {
-        mode: 0o600,
-      });
+      const text = clipBrief(opinionBrief(topicView, checklist));
+      writeFileSync(brief, text, { mode: 0o600 });
       const opinion = createTask(
         db,
         {
@@ -267,6 +262,7 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
           parent: parent.ref,
           role: checklist.ref,
           deliver: "none",
+          brief: text,
           brief_path: brief,
           ...(input.owner ? { owner: input.owner } : {}),
           ...(input.part ? { part: input.part } : {}),

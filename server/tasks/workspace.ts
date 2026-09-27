@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { ADAPTERS, type Adapter, type Launch } from "./adapters/index.ts";
@@ -62,7 +61,6 @@ export type LaunchOptions = {
   pace?: () => Promise<PaceEntry[] | undefined>;
   /** 用量快照单独采样；测试可注入假 OpenQuota，不改变挑人采样次数。 */
   usagePace?: () => Promise<PaceEntry[] | undefined>;
-  charterPath?: string;
 };
 
 export type Prepared = {
@@ -86,24 +84,17 @@ export type Prepared = {
 /** 续上原会话：带着这段补充，不重发整份提示词。 */
 export type ResumeWith = { session: string; text: string };
 
-async function readBrief(task: Task) {
+/** 详述只读库里的内容（#355）；只有来源路径没有内容，是旧任务回填时没读到，让用户补上。 */
+function briefOf(task: Task) {
+  if (task.brief != null) return task.brief;
   if (!task.brief_path) return undefined;
-  const file = isAbsolute(task.brief_path)
-    ? task.brief_path
-    : task.repo
-      ? join(task.repo, task.brief_path)
-      : undefined;
-  if (!file)
-    throw new Problem(
-      400,
-      `brief_path 是相对路径但任务没有仓库：${task.brief_path}`,
-      "usage",
-    );
-  try {
-    return await readFile(file, "utf8");
-  } catch {
-    throw new Problem(400, `任务详述读不到：${file}`, "usage");
-  }
+  throw new Problem(
+    400,
+    `${task.ref} 的任务详述没有进库（原文件 ${task.brief_path} 读不到）`,
+    "usage",
+    undefined,
+    `atrium task set ${task.ref} --brief 文件`,
+  );
 }
 
 /** 建工作目录、写提示词、算出进程调用；不拉起。 */
@@ -120,7 +111,7 @@ export async function prepareRun(
   const tells = options.db ? listTells(options.db, task.id) : [];
   const dir = taskDir(options.data, task.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const brief = await readBrief(task);
+  const brief = briefOf(task);
   let cwd: string;
   let worktree: string | null = null;
   let branch: string | null = null;

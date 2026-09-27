@@ -15,31 +15,61 @@ import { ensureOrgTables } from "../server/org/schema.ts";
 import { addNode, editDoc } from "../server/org/write.ts";
 import {
   DEFAULT_QUOTA_RESERVE_PERCENT,
-  parseQuotaReservePercent,
+  quotaReserve,
   readQuotaReservePercent,
 } from "../server/tasks/budget.ts";
 import { chooseWorker } from "../server/tasks/worker-choice.ts";
 
-test("章程预算：解析嵌套字段和注释；文件或字段缺失取默认，坏值拒绝", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-budget-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const charter = join(dir, "charter.md");
-  assert.equal(DEFAULT_QUOTA_RESERVE_PERCENT, 20);
-  assert.equal(await readQuotaReservePercent(charter), 20);
-  assert.equal(parseQuotaReservePercent("---\nstatus: 草稿\n---\n正文"), 20);
-  writeFileSync(
-    charter,
-    "---\nbudget:\n  quota_reserve_percent: 25 # 给用户\n---\n正文",
+/** 只有根节点的组织树（带空档案表），根章程写上保留份额（不写就不给 boundaries）。 */
+function rootWithReserve(reserve?: number) {
+  const db = profileDb();
+  ensureOrgTables(db);
+  const root = addNode(
+    db,
+    { slug: "org", kind: "org", name: "组织", reason: "建树" },
+    "u1",
   );
-  assert.equal(await readQuotaReservePercent(charter), 25);
-  for (const value of ["-1", "101", "NaN", ""])
-    assert.throws(
-      () =>
-        parseQuotaReservePercent(
-          `---\nbudget:\n  quota_reserve_percent: ${value}\n---\n`,
-        ),
-      /quota_reserve_percent/,
-    );
+  if (reserve !== undefined) setRootReserve(db, root.id, reserve);
+  return { db, root };
+}
+function setRootReserve(db: DatabaseSync, id: number, reserve: number) {
+  editDoc(
+    db,
+    `o${id}`,
+    "charter",
+    {
+      fields: {},
+      body: "",
+      boundaries: [
+        {
+          id: "quota-reserve",
+          summary: "留给用户",
+          param: { quota_reserve_percent: reserve },
+        },
+      ],
+      reason: "改保留份额",
+    },
+    "u1",
+  );
+}
+
+test("保留份额只读组织树：没有库、没有根、根章程没写都取缺省；写了就用根章程", (t) => {
+  assert.equal(DEFAULT_QUOTA_RESERVE_PERCENT, 20);
+  assert.deepEqual(quotaReserve(), { percent: 20, set_by: null });
+  const empty = new DatabaseSync(":memory:");
+  t.after(() => empty.close());
+  assert.equal(readQuotaReservePercent(empty), 20);
+  ensureOrgTables(empty);
+  assert.equal(readQuotaReservePercent(empty), 20);
+  const bare = rootWithReserve();
+  t.after(() => bare.db.close());
+  assert.deepEqual(quotaReserve(bare.db), { percent: 20, set_by: null });
+  const set = rootWithReserve(25);
+  t.after(() => set.db.close());
+  assert.deepEqual(quotaReserve(set.db), {
+    percent: 25,
+    set_by: `o${set.root.id}`,
+  });
 });
 
 test("指定执行者触及章程预算时拒绝并给出可选执行者；自动派活避开该账号", async (t) => {
@@ -52,15 +82,9 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
     chmodSync(file, 0o755);
   }
-  const charterPath = join(dir, "charter.md");
-  writeFileSync(
-    charterPath,
-    "---\nbudget:\n  quota_reserve_percent: 20\n---\n",
-  );
   const options = {
     data: dir,
     env: { PATH: bin },
-    charterPath,
     pace: async () => [
       { providerId: "grok", usedPercent: 89, sparePercent: 90 },
       { providerId: "kimi", usedPercent: 12, sparePercent: 40 },
@@ -72,12 +96,11 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
     /grok.*89%.*80%.*可选的其他执行者：kimi/,
   );
   assert.equal((await chooseWorker({}, options)).worker.tool, "kimi");
-  writeFileSync(
-    charterPath,
-    "---\nbudget:\n  quota_reserve_percent: 10\n---\n",
-  );
+  // 根章程把保留份额放宽到 10%：89% 还能派。
+  const { db } = rootWithReserve(10);
+  t.after(() => db.close());
   assert.equal(
-    (await chooseWorker({ worker: "grok" }, options)).worker.tool,
+    (await chooseWorker({ worker: "grok" }, { ...options, db })).worker.tool,
     "grok",
   );
 });
@@ -137,13 +160,10 @@ test("组织章程导入后按任务节点的最严保留额挑人", async (t) =
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
     chmodSync(file, 0o755);
   }
-  const charterPath = join(dir, "charter.md");
-  writeFileSync(charterPath, "---\nbudget:\n  quota_reserve_percent: 0\n---\n");
   const options = {
     db,
     data: dir,
     env: { PATH: bin },
-    charterPath,
     pace: async () => [
       { providerId: "grok", usedPercent: 75, sparePercent: 80 },
       { providerId: "kimi", usedPercent: 5, sparePercent: 20 },

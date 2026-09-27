@@ -5,11 +5,15 @@ import type { ChildSummary } from "./ledger-summary.ts";
 import type { Deliver } from "./deliver.ts";
 import type { NoteView } from "./notes.ts";
 import type { ConcernState, InviteHint } from "./concern-gate.ts";
+import type { Holder } from "./holder.ts";
 
 export type TaskRow = {
   id: number;
   parent_id: number | null;
   title: string;
+  /** 任务详述内容（#355）；列表类视图不带，单个任务才给。 */
+  brief?: string | null;
+  /** 详述的来源文件，仅作记录；派活读 brief。 */
   brief_path: string | null;
   role: string | null;
   job_id: number | null;
@@ -69,6 +73,8 @@ export type Task = TaskRow & {
   concerns?: ConcernState[];
   /** 「要不要请某专员」的提示（concern-gate.ts inviteHints）；没有时不给。 */
   concern_hints?: InviteHint[];
+  /** 现在球在谁手里（holder.ts）；只有单个任务视图给，已结束为 null。 */
+  holder?: Holder | null;
 } & NoteView;
 export type TaskNode = Task & {
   children: TaskNode[];
@@ -103,6 +109,9 @@ export const view = (
   part_ref: row.part_id == null ? null : `o${row.part_id}`,
   job_ref: row.job_id == null ? null : `r${row.job_id}`,
 });
+
+/** 列表、树、排期不带详述内容（至多 64 KB 一条），要看用 task show。 */
+export const listView = (row: TaskRow) => ({ ...view(row), brief: undefined });
 
 export const RESULT_MAX_BYTES = 4096;
 export const LIST_LIMIT = 200;

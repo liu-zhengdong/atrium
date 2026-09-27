@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { taskDir } from "./active.ts";
+import { clipBrief } from "./brief.ts";
 import { awaitingCi } from "./ci-poll.ts";
 import {
   concernOutcome,
@@ -82,8 +83,7 @@ export function openReviews(
   for (const row of concernRows(db, parentId)) {
     const checklist = checklistOf(db, row.node_id);
     const brief = join(dir, `concern-${checklist.ref}-${now}.md`);
-    writeFileSync(
-      brief,
+    const text = clipBrief(
       reviewBrief({
         checklist,
         task: { ref: parent.ref, title: parent.title },
@@ -93,8 +93,8 @@ export function openReviews(
         base: facts?.base ?? null,
         diff,
       }),
-      { mode: 0o600 },
     );
+    writeFileSync(brief, text, { mode: 0o600 });
     const review = createTask(db, {
       title: clipTitle(
         `专员审查：${checklist.name} · ${parent.ref} ${parent.title}`,
@@ -102,6 +102,7 @@ export function openReviews(
       parent: parent.ref,
       role: checklist.ref,
       deliver: "none",
+      brief: text,
       brief_path: brief,
       ...(parent.owner ? { owner: parent.owner } : {}),
       ...(parent.part_ref ? { part: parent.part_ref } : {}),

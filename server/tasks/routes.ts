@@ -172,7 +172,8 @@ export function registerTaskRoutes(
   app.get("/api/roles/:id/history", (request) =>
     jobRoleHistory(db, params(request.params).id),
   );
-  app.post("/api/tasks", { bodyLimit: 64 * 1024 }, async (request, reply) => {
+  // 详述进库（#355）：内容至多 64 KB，JSON 转义后留足余量。
+  app.post("/api/tasks", { bodyLimit: 256 * 1024 }, async (request, reply) => {
     const task = createTask(db, request.body, Date.now(), leaderOf(request));
     return reply.code(201).send(task);
   });
@@ -198,7 +199,7 @@ export function registerTaskRoutes(
   app.get("/api/tasks/:id", (request) =>
     getTask(db, params(request.params).id),
   );
-  app.patch("/api/tasks/:id", { bodyLimit: 64 * 1024 }, async (request) => {
+  app.patch("/api/tasks/:id", { bodyLimit: 256 * 1024 }, async (request) => {
     const task = updateTask(db, params(request.params).id, request.body);
     if (task.status === "cancelled") await runner.cleanupCancelled(task.id);
     return getTask(db, task.id);
@@ -242,7 +243,7 @@ export function registerTaskRoutes(
     ),
   );
   // 会审（#322 第 3 步）：议题 → 并行专员意见 → leader 汇总 → 结论。
-  app.post("/api/reviews", { bodyLimit: 16 * 1024 }, async (request, reply) =>
+  app.post("/api/reviews", { bodyLimit: 256 * 1024 }, async (request, reply) =>
     reply.code(201).send(await runner.addCouncil(request.body)),
   );
   app.get("/api/reviews/:id", (request) =>

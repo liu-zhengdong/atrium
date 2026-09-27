@@ -9,6 +9,7 @@ import { orgCommands } from "./org.ts";
 import { goalCommands } from "./goals.ts";
 import { skillCommands } from "./skills.ts";
 import { topCommand } from "./top.ts";
+import { statuslineCommand } from "./statusline.ts";
 import { quotaCommands } from "./quota.ts";
 import { leaderCommandGuard, workerGuard } from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
@@ -93,6 +94,7 @@ export const commands: Record<string, Command> = {
   ...authCommands,
   // 看板放在任务组最前：先看谁在干活，再看单个任务。
   top: topCommand,
+  statusline: statuslineCommand,
   ...taskCommands,
   ...roleCommands,
   ...workerCommands,

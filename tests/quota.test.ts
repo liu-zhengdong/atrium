@@ -119,7 +119,8 @@ test("命令表、帮助与说明书收录 atrium quota", () => {
   assert.equal(commands.quota.args, "[--clear <账号>] [--json]");
   assert.match(commands.quota.about, /额度/);
   assert.match(help(), /atrium quota \[--clear <账号>\] \[--json\]/);
-  assert.match(guide(commands), /派活前看额度：atrium quota/);
+  assert.match(guide(commands), /派活前看候选：atrium task pick t2/);
+  assert.match(guide(commands), /只看额度：atrium quota/);
   assert.match(guide(commands), /atrium quota --clear claude/);
 });
 

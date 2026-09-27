@@ -15,7 +15,6 @@ import {
 } from "./org-overview.ts";
 import type { Point } from "../server/org/points.ts";
 import type { LeaderBrief } from "../server/leaders/model.ts";
-import YAML from "yaml";
 import { wakeText } from "./leaders.ts";
 
 const str = (values: Values, key: string) =>
@@ -489,6 +488,8 @@ export const orgCommands: Record<string, Command> = {
       } catch {
         throw new Problem(400, `--file 文件无法读取：${name}`, "usage");
       }
+      // yaml 只有这条命令用，按需加载，别的命令启动不付它的加载时间（t117）。
+      const { default: YAML } = await import("yaml");
       let parsed: unknown;
       try {
         parsed = YAML.parse(text);

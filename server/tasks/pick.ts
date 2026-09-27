@@ -11,6 +11,7 @@ import {
 import { clock } from "./quota-holds.ts";
 import { avoidReason, type ChainNode } from "../skills/model.ts";
 import type { Headroom } from "./usage-budget.ts";
+import { signedPercent } from "./percent.ts";
 
 /**
  * 派活候选一览（task pick）：把候选执行者、账号额度、干活的专员与交付记录放在一张表里，
@@ -108,11 +109,7 @@ export type RunPick = {
   notice: string | null;
 };
 
-/** 富余百分比写成 +54% / −13%。 */
-export function signedPercent(value: number): string {
-  const n = Math.round(value);
-  return n > 0 ? `+${n}%` : n < 0 ? `−${-n}%` : "0%";
-}
+export { signedPercent };
 
 /** 一个账号的额度：多个窗口时已用取最大、富余取最小，距重置取最紧窗口的。 */
 export function accountOf(

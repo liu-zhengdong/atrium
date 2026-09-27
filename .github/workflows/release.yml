@@ -32,6 +32,10 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
       - run: npm run check && npm run format:check
+      # 编译安装产物（dist/），并在它上面起隔离服务量命令行启动；产物跑不起来就不发版。
+      - run: npm run bench:cli
+        env:
+          ATRIUM_BENCH_LIMIT_MS: "300"
       - name: 提交安装产物及版本标签
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,7 +46,11 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add package.json package-lock.json releases.json
           git commit -m "发布 v${VERSION}"
-          git tag "v${VERSION}"
           git push origin HEAD:main
+          # dist/ 只进版本标签：标签指向版本提交之上再加一个带编译产物的提交，main 不含 dist/。
+          # 从标签安装（atrium update、README）时 npm pack 直接沿用它，不需要 esbuild。
+          git add -f dist
+          git commit -m "v${VERSION} 安装产物"
+          git tag "v${VERSION}"
           git push origin "v${VERSION}"
           gh release create "v${VERSION}" --title "v${VERSION}" --notes "$SUMMARY"

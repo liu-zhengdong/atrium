@@ -1,6 +1,5 @@
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { request as httpRequest } from "node:http";
 import {
   closeSync,
   existsSync,
@@ -29,6 +28,10 @@ import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { Problem } from "./problem.ts";
 import { localFetch } from "./local-http.ts";
 import { probePort } from "./port-owner.ts";
+// 命令行经 service.ts 也会加载本模块：node:http 用 getBuiltinModule 取，免得 ESM 包装连带加载 undici（t117，见 local-http.ts）。
+const { request: httpRequest } = process.getBuiltinModule(
+  "node:http",
+) as typeof import("node:http");
 
 export type RestartStatus =
   /** 旧版 `restart --when-idle` 的遗留状态：只认得出来，启动时丢弃（discardLegacyIdleRestart）。 */

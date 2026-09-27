@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -23,6 +24,11 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+// 仓库里跑源码才用的开发依赖：装好的包走 dist/，不加载它们（t117）。
+const SOURCE_ONLY: Record<string, string[]> = {
+  "bin/entry.mjs": ["tsx"],
+};
+
 function missingRuntimeDependencies(dependencies: Record<string, string>) {
   const missing = new Set<string>();
   for (const dir of ["server", "cli", "shared", "bin"]) {
@@ -42,8 +48,10 @@ function missingRuntimeDependencies(dependencies: Record<string, string>) {
         const name = spec.startsWith("@")
           ? spec.split("/").slice(0, 2).join("/")
           : spec.split("/")[0];
+        const rel = file.slice(root.length + 1).replaceAll("\\", "/");
+        if (SOURCE_ONLY[rel]?.includes(name)) continue;
         if (!builtinModules.includes(name) && !dependencies[name])
-          missing.add(`${file.slice(root.length + 1)}: ${name}`);
+          missing.add(`${rel}: ${name}`);
       }
     }
   }
@@ -55,6 +63,7 @@ test("发布包内所有裸包 import 都在运行依赖中，缺少声明时失
     readFileSync(join(root, "package.json"), "utf8"),
   );
   assert.deepEqual(missingRuntimeDependencies(dependencies), []);
+  assert.equal(dependencies.tsx, undefined, "安装包不再需要运行时的 tsx");
   const { fastify: _, ...broken } = dependencies;
   assert.match(
     missingRuntimeDependencies(broken).join("\n"),
@@ -101,6 +110,60 @@ test("发布摘要、版本与锁文件在同一发布步骤同步", () => {
       /发布摘要不能为空/,
     );
     assert.equal(json("package.json").version, "0.1.5");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("发版标签带编译产物：先推版本提交，再把 dist/ 提交到标签上，npm pack 沿用它", () => {
+  const workflow = readFileSync(
+    join(root, ".github/workflows/release.yml"),
+    "utf8",
+  );
+  const order = [
+    "npm run bench:cli",
+    "git push origin HEAD:main",
+    "git add -f dist",
+    'git tag "v${VERSION}"',
+    'git push origin "v${VERSION}"',
+  ].map((step) => workflow.indexOf(step));
+  assert.ok(
+    order.every((at) => at >= 0),
+    `发版步骤缺失：${order}`,
+  );
+  assert.deepEqual(
+    [...order].sort((a, b) => a - b),
+    order,
+  );
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.ok(pkg.files.includes("dist"));
+  assert.match(pkg.scripts.prepack, /build-dist\.mjs --prepack/);
+});
+
+test("从标签打包（没有 node_modules）：--prepack 沿用已提交的 dist/，缺产物时失败，stdout 不输出", () => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-prepack-"));
+  try {
+    // 标签 clone 的样子：脚本在，esbuild 不在。
+    mkdirSync(join(dir, "scripts"));
+    const copy = join(dir, "scripts", "build-dist.mjs");
+    writeFileSync(copy, readFileSync(join(root, "scripts/build-dist.mjs")));
+    const run = () =>
+      spawnSync(process.execPath, [copy, "--prepack"], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+    const missing = run();
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /没有 esbuild/);
+    mkdirSync(join(dir, "dist"));
+    for (const name of ["cli", "server", "supervisor"])
+      writeFileSync(join(dir, "dist", `${name}.js`), "");
+    const kept = run();
+    assert.equal(kept.status, 0);
+    assert.match(kept.stderr, /沿用已编译/);
+    // atrium update（含旧版本）解析 `npm pack --json` 的 stdout，prepack 不能往里写。
+    assert.equal(kept.stdout, "");
+    assert.equal(readFileSync(join(dir, "dist", "cli.js"), "utf8"), "");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -12,7 +12,6 @@ import {
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { z } from "zod";
 
 export const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 // An installed update can replace package.json while the old service is alive.
@@ -55,13 +54,37 @@ export function servicePort() {
     throw new Error("ATRIUM_PORT 必须为有效端口");
   return port;
 }
-const recordSchema = z.object({
-  instance: z.uuid(),
-  pid: z.number().int().positive(),
-  port: z.number().int().min(1).max(65535),
-  token: z.string().regex(/^[a-f0-9]{64}$/),
-});
-export type ServiceRecord = z.infer<typeof recordSchema>;
+export type ServiceRecord = {
+  instance: string;
+  pid: number;
+  port: number;
+  token: string;
+};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isInt = (value: unknown, min: number, max: number) =>
+  Number.isInteger(value) &&
+  (value as number) >= min &&
+  (value as number) <= max;
+/**
+ * 服务登记记录的校验（纯函数）：不合格抛错，合格只留四个字段。
+ * 不用 zod：每条命令都要读登记，加载 zod 要二十多毫秒（t117）。
+ */
+export function parseServiceRecord(value: unknown): ServiceRecord {
+  const record = (value ?? {}) as Record<string, unknown>;
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof record.instance !== "string" ||
+    !UUID.test(record.instance) ||
+    !isInt(record.pid, 1, Number.MAX_SAFE_INTEGER) ||
+    !isInt(record.port, 1, 65535) ||
+    typeof record.token !== "string" ||
+    !/^[a-f0-9]{64}$/.test(record.token)
+  )
+    throw new Error("服务登记记录格式不对");
+  const { instance, pid, port, token } = record as ServiceRecord;
+  return { instance, pid, port, token };
+}
 export const serviceUrl = (record: ServiceRecord) =>
   `http://127.0.0.1:${record.port}`;
 export function alive(pid: number) {
@@ -74,7 +97,7 @@ export function alive(pid: number) {
 }
 function decode(value: unknown): ServiceRecord | null {
   if (!value) return null;
-  return recordSchema.parse(JSON.parse((value as { record: string }).record));
+  return parseServiceRecord(JSON.parse((value as { record: string }).record));
 }
 export function readService(data: string): ServiceRecord | null {
   const path = join(data, "service.sqlite");

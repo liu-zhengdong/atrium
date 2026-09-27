@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { register } from "tsx/esm/api";
-register();
-const { main } = await import("../cli/main.ts");
+import { load } from "./entry.mjs";
+const { main } = await load("cli");
 process.exitCode = await main(process.argv.slice(2));

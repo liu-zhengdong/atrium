@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveActor } from "../actor.ts";
 import { Problem } from "../problem.ts";
+import { packageRoot } from "../service-state.ts";
 import { ensureOrgTables } from "../org/schema.ts";
 import { mapContext, parseMax } from "./context.ts";
 import { LINK_TTL_MS, MapLogin, sessionCookie } from "./login.ts";
@@ -32,8 +34,9 @@ import {
  * 网页是服务直接托管的静态文件（原生 ES 模块、手写样式），不引入前端构建链。
  */
 
-const WEB = new URL("./web/", import.meta.url);
-const asset = (name: string) => readFileSync(new URL(name, WEB), "utf8");
+// 按包根取：编译后的服务在 dist/ 下，静态文件仍随包放在 server/map/web/（t117）。
+const WEB = join(packageRoot, "server", "map", "web");
+const asset = (name: string) => readFileSync(join(WEB, name), "utf8");
 const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 

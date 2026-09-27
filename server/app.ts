@@ -28,8 +28,11 @@ import { registerMemoRoutes } from "./memos/routes.ts";
 import {
   LeaderWaker,
   leaderEnvOptions,
+  leaderWakeEnabled,
   type LeaderWakerOptions,
 } from "./leaders/runtime.ts";
+import { registeredLeaders } from "./leaders/model.ts";
+import { isDefaultData } from "./service-state.ts";
 import { MapLogin } from "./map/login.ts";
 import { importLegacyState } from "./imports/index.ts";
 import {
@@ -256,7 +259,18 @@ export async function createApp(options: {
     ...leaderEnvOptions(),
     ...options.leaders,
   });
-  leaderWaker.start();
+  // 隔离服务缺省不起真 leader 进程（t128）；注入了假进程（测试）照常唤醒。
+  if (
+    options.leaders?.run ||
+    leaderWakeEnabled(process.env.ATRIUM_LEADER_WAKE, {
+      defaultData: isDefaultData(options.data),
+    })
+  )
+    leaderWaker.start();
+  else if (registeredLeaders(db).size)
+    console.warn(
+      "隔离数据目录不唤醒 leader，事件留在收件箱；要唤醒请设 ATRIUM_LEADER_WAKE=1",
+    );
   app.addHook("preClose", async () => leaderWaker.close());
   registerGoalRoutes(app, db, {
     data: resolve(options.data),

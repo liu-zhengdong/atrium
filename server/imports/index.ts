@@ -1,4 +1,3 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { backfillBriefs } from "./briefs.ts";
@@ -10,15 +9,7 @@ import { ensureImportMarks } from "./marks.ts";
  * 每类导入幂等（state_imports 记号），单条坏记录记日志跳过，不挡启动。
  */
 
-/**
- * 旧的 `~/Atrium` 目录：ATRIUM_LEGACY_DIR 可改。node:test 派生的服务不去读开发者主目录，
- * 没显式给就不导入。
- */
-export function legacyDir(env: NodeJS.ProcessEnv = process.env) {
-  if (env.ATRIUM_LEGACY_DIR) return env.ATRIUM_LEGACY_DIR;
-  if (env.NODE_TEST_CONTEXT) return undefined;
-  return join(homedir(), "Atrium");
-}
+export { legacyDir, legacyWorkersDir } from "./dirs.ts";
 
 export function importLegacyState(
   db: DatabaseSync,

@@ -71,7 +71,7 @@ import {
 import { selfRepoFlag, selfUpdateEnabled } from "./online.ts";
 import {
   currentVersion,
-  dataDirectory,
+  isDefaultData,
   packageRoot,
 } from "../service-state.ts";
 import { restartInProgress } from "../supervisor.ts";
@@ -274,7 +274,7 @@ export class TaskRunner {
         options.online?.selfUpdate ??
         selfUpdateEnabled(process.env.ATRIUM_SELF_UPDATE, {
           gitCheckout: existsSync(join(packageRoot, ".git")),
-          defaultData: options.data === dataDirectory({}),
+          defaultData: isDefaultData(options.data),
         }),
       selfRepo:
         options.online?.selfRepo !== undefined

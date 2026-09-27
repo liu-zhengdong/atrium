@@ -81,6 +81,19 @@ export function leaderEnvOptions(
   return options;
 }
 
+/**
+ * 是否用真进程唤醒 leader（t128）：`ATRIUM_LEADER_WAKE=0` 关、`=1` 开；缺省只在默认数据目录的服务上开。
+ * 另给 ATRIUM_DATA 的隔离服务（压测、验收）库里有 leader 也不起真的编码 CLI、不耗额度，事件留在收件箱。
+ */
+export function leaderWakeEnabled(
+  setting: string | undefined,
+  service: { defaultData: boolean },
+): boolean {
+  if (setting === "0") return false;
+  if (setting === "1") return true;
+  return service.defaultData;
+}
+
 /** leader 进程的环境：执行者白名单（不带 ATRIUM_WORKER），加上本次唤醒的身份、令牌与服务地址。 */
 export function leaderEnvironment(
   base: NodeJS.ProcessEnv,

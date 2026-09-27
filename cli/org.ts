@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
+import { legacyDir } from "../server/imports/dirs.ts";
 import type { Command, Values } from "./main.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
@@ -868,8 +869,15 @@ export const orgCommands: Record<string, Command> = {
     },
     positionals: [0, 1],
     async run({ positionals, values, json }) {
+      // 缺省读旧目录的 charter.md；隔离数据目录没有缺省，不去读主目录（t128）。
+      const legacy = legacyDir();
+      if (positionals[0] === undefined && !legacy)
+        throw new Problem(
+          400,
+          "隔离数据目录不缺省读主目录的 ~/Atrium/charter.md；请给出章程文件路径",
+        );
       const charterPath = resolve(
-        positionals[0] ?? join(process.env.HOME ?? "", "Atrium/charter.md"),
+        positionals[0] ?? join(legacy!, "charter.md"),
       );
       let source: string;
       try {

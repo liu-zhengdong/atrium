@@ -29,10 +29,24 @@ const bootVersion = (() => {
 export function currentVersion(): string {
   return bootVersion;
 }
-export function dataDirectory(env: NodeJS.ProcessEnv = process.env) {
+export function dataDirectory(
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+) {
   // Never keep mutable user data under an npm installation: npm update replaces it.
-  const path = resolve(env.ATRIUM_DATA ?? join(homedir(), ".atrium"));
+  const path = resolve(env.ATRIUM_DATA ?? join(home, ".atrium"));
   return existsSync(path) ? realpathSync(path) : path;
+}
+/**
+ * 数据目录是不是默认的 `~/.atrium`（t128）：另给 ATRIUM_DATA 的隔离服务不读主目录下的旧状态、
+ * 不自升级、不用真进程唤醒 leader。ATRIUM_DATA 显式写成默认目录也算默认。
+ */
+export function isDefaultData(
+  data: string = dataDirectory(),
+  home = homedir(),
+) {
+  const path = existsSync(data) ? realpathSync(data) : resolve(data);
+  return path === dataDirectory({}, home);
 }
 /**
  * 前一代（聊天运行时）的默认数据目录（t71）：已归档，新一代不读不写、不在上面建表。

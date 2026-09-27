@@ -21,6 +21,7 @@ const information = new Set([
   "thinking_retry",
   "ci_success",
   "ci_pending",
+  "patrol_finished",
 ]);
 
 export function eventLevel(kind: string, detail?: unknown): EventLevel {

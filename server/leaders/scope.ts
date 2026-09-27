@@ -20,6 +20,7 @@ export type LeaderRule =
   | "leader-edit"
   | "escalate"
   | "events-ack"
+  | "patrol-decide"
   | "deny";
 
 const RULES: Record<string, LeaderRule> = {
@@ -39,6 +40,7 @@ const RULES: Record<string, LeaderRule> = {
   "PATCH /api/map/nodes/:id": "map-edit",
   "PATCH /api/leaders/:id": "leader-edit",
   "POST /api/leaders/:id/escalate": "escalate",
+  "POST /api/patrol/findings/:id/decide": "patrol-decide",
 };
 
 /** 读接口都放行（订阅者名另由 asVerdict 锁定为自己）；写接口只认表里列出的。 */

@@ -8,6 +8,7 @@ import { ensureConcernTable } from "./concerns.ts";
 import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
 import { ensureCouncilTables } from "./councils.ts";
+import { ensurePatrolTables } from "./patrol.ts";
 
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
@@ -122,4 +123,5 @@ export function ensureTaskTables(db: DatabaseSync) {
   // 全景图第 3 步（#322）：会审的议题、受邀专员与结论。
   ensureCouncilTables(db);
   ensureDeliveryRecords(db);
+  ensurePatrolTables(db);
 }

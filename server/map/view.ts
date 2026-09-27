@@ -13,6 +13,7 @@ import {
 import { overviewOf, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
+import { findingsForNode } from "../tasks/patrol.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
@@ -466,6 +467,7 @@ export function mapNode(
     points: nodePoints(db, n.id),
     points_chain: chainPoints(db, n.id).filter((l) => l.node !== ref(n.id)),
     points_below: pointsBelow(db, x, n),
+    findings: findingsForNode(db, n.id),
     tasks: {
       running: tasks.filter((t) => t.status === "running"),
       blocked: tasks.filter((t) => t.status === "blocked"),
@@ -587,6 +589,7 @@ export function mapSignature(db: DatabaseSync): string {
     q("SELECT max(updated_at),count(*) FROM job_roles"),
     q("SELECT max(updated_at),count(*) FROM org_skills"),
     q("SELECT max(id),max(ended_at) FROM task_deliveries"),
+    q("SELECT max(updated_at),count(*) FROM patrol_findings"),
   ].join("|");
 }
 

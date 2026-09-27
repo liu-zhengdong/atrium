@@ -56,11 +56,11 @@ atrium task wait t4 --timeout 600           # 等到离开 running 或超时
 atrium task log t4                          # 执行者日志；--follow 跟到结束，--after 字节偏移续读
 atrium task stop t4                         # 仍在跑时停掉执行者（排队中的移出队列）；已结束的报错并给出 task show
 atrium task tell t4 "接口改用 v2"            # 给在跑的执行者捎话；--as 写作者，缺省 u1
-atrium top --once                           # 谁在干活、目标树上两层的任务汇总，下接排期
-atrium top --once --goals-depth 3           # 展开目标树三层
+atrium top --once                           # 谁在干活、全景图上两层各块的状态与在跑数，下接排期
+atrium top --once --depth 3                 # 全景展开三层（旧写法 --goals-depth 照旧接受）
 ```
 
-`atrium top` 的**目标**段（目标树迁为节点阶段记录后只显示一行指向 `atrium org show`，全景视图在 #322 后续步骤接入）默认显示目标树上两层，列出状态、下层合计的在跑和未结任务、未达成前置及卡住任务；`--goals-depth N` 可展开至 N 层（1～12）。`/api/goals/tree` 每个节点保留 `tasks`（直接挂载的任务状态计数）和 `waiting_for`（本节点未达成的前置短号），新增 `summary`：`running`、`open`、`blocked` 分别是本节点及全部下层的在跑、未结（todo/running/blocked）、卡住任务数；`waiting_for` 是全子树未达成前置短号去重列表。`top --json` 带 `goals` 字段，供状态栏读取。
+`atrium top` 的**全景**段（#322，取代原来的目标段）列出根下两层的各块：状态点（● 有任务在跑、✕ 有任务卡住、○ 空闲）、人话名、子树里在跑／卡住／待办的任务数（按任务的归属部分计，没有归属时按负责节点）和一句「是什么」；`--depth N` 展开至 N 层（1～8），超出行数折叠并提示 `atrium map`。`top --json` 带 `map` 字段（与 `/api/map/tree` 同形），供状态栏读取。
 
 下面是**排期**：就绪的（记账节点、是否 `--auto`、负责人）、依赖链（同一条链按先后缩进，标题给出最长路径）、等待中的（逐项列出在等谁：上游状态、在跑的执行者与已跑时长、上游交付 PR 的合入状态、外部 PR 条件）与因上游失败或取消卡住的；任务行标出归属部分 `oN`（迁移前的旧任务标里程碑 `gN`），只起归类作用的父任务作分组标题。行数超出折叠并提示 `atrium task plan`，`--json` 带 `plan` 字段。
 
@@ -111,6 +111,25 @@ opencode 两种界面共用 `<ATRIUM_DATA>/secretary/opencode-session.json`，co
 界面关闭时，服务按相同规则恢复上次会话：codex 执行 `codex exec resume <会话> -`，opencode 执行 `opencode run --session <会话>`，每批处理完即退出。原生界面、ACP 界面与后台恢复共用一把会话锁；有界面时不会另起后台进程。后台恢复只在 `atrium chat` 建过会话后启用，失败会释放事件租约再重试。后台 codex 使用无提示审批与完整文件访问，opencode 使用 `--auto`；秘书仍按原有权限与章程行事。
 
 秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开界面或后台恢复前，从用户 opencode 数据目录的 `auth.json` 同步 API key 类条目（`api`、`wellknown`），OAuth 登录（如 openai、xai）不带——提供商的刷新令牌多是一次性的，秘书一刷新，用户自己的登录可能失效；`mcp-auth.json` 在 opencode 里只存 MCP 的 OAuth 状态，同样不带。所用模型的提供商只有 OAuth 登录时，打开界面会提示换用有 API key 的提供商，或在秘书目录里单独登录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home opencode auth login`，秘书自己的登录不会被同步覆盖）。用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。kimi、Claude Code 后续接入。
+
+## 全景图
+
+同一份数据两张脸：人用网页看，Agent 用命令行读写；改动只走命令行，网页不提供编辑（#322）。
+
+```bash
+atrium map                                        # 终端打全景树，并在浏览器打开本机全景网页（一次性登录链接）
+atrium map atrium/runtime --json --depth 2        # 一块的人话字段、组成（专员单列）、要点、阶段、在推进的任务、PR 与 issue；与网页同一接口
+atrium map context atrium/cli                     # 从根到该块的人话链、组成、现状与本块及上级的要点；--max 字数，缺省 1500
+atrium map edit atrium/cli --what 一句话 --uses 场景一 --uses 场景二 --flow 第一步 --now 现状 --next 接下来
+atrium map edit atrium/cli --detail 细节.md --reason 补技术细节   # 技术细节即章程正文；给空串清掉一个字段
+atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板 --what 一句话
+```
+
+- **网页**：服务自带（`/map`），只听 127.0.0.1、只接受本机连接。`atrium map` 用用户令牌换一个一次性链接（2 分钟内有效、只能用一次），浏览器打开后换成本机会话 cookie（HttpOnly、SameSite=Strict，7 天有效，服务重启后仍有效）；会话只能读全景，写接口和其他接口仍要用户令牌。交互终端里直接打开浏览器，非终端、执行者环境或 `--no-open` 只打印链接。
+- **布局**：顶部「现在在推进什么」按归属部分列出在跑与排队的任务（执行者、跑了多久、最近动作）；左边全景树（状态点、在跑数）；右边选中的一块：是什么 → 能用它做什么 → 一件事怎么走完 → 由哪几部分组成 → 要点（人话、为什么、谁定的、守护它的检查，上级要点折叠）→ 现在做到哪与阶段 → 正在推进 → 请了哪些专员 → PR 与 issue → 技术细节（折叠）。窄屏时树收进「全部分块」。
+- **实时**：网页订阅 `/api/map/stream`（Server-Sent Events），任务、事件、节点、章程、要点变了推 `changed`，网页只重取并重画变了的区域；另每 30 秒刷新一次执行者的最近动作与时长。
+- **派活**：`map context` 的内容自动附进执行者提示词，与「章程要点」同一段、放在最前（任务有归属部分时取归属部分，否则取负责节点）；全景这段不超过 1500 字，按「位置链 > 本块是什么 > 本块要点 > 上级要点 > 上一层是什么 > 现状 > 组成 > 更上层」保留，截了就在末尾给全文命令。
+- **权限**：`map edit` / `map add` 是章程与节点写入的简写，留修订历史；负责部门 leader 或其上级可改（`--as aN`），根只有你能改。
 
 ## 组织树
 

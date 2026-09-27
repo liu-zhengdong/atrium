@@ -11,6 +11,7 @@ import { quotaCommands } from "./quota.ts";
 import { workerGuard } from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
+import { mapCommands } from "./map.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
@@ -87,6 +88,7 @@ export const commands: Record<string, Command> = {
   // 看板放在任务组最前：先看谁在干活，再看单个任务。
   top: topCommand,
   ...taskCommands,
+  ...mapCommands,
   ...orgCommands,
   ...goalCommands,
   ...skillCommands,
@@ -137,7 +139,7 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["任务", "目标", "组织"].flatMap((group) => [
+    ...["任务", "全景", "目标", "组织"].flatMap((group) => [
       "",
       group,
       ...Object.entries(commands)
@@ -219,8 +221,13 @@ export async function main(argv: string[]): Promise<number> {
           return 0;
         }
         const word = words[0];
+        // 同名命令带位置参数（atrium map o4）：第一个词不是子命令时交给同名命令。
+        const own =
+          word !== undefined &&
+          commands[`${name} ${word}`] === undefined &&
+          (commands[name]?.positionals[1] ?? 0) > 0;
         subcommand =
-          word === undefined
+          word === undefined || own
             ? name
             : `${name} ${rest.splice(rest.indexOf(word), 1)[0]}`;
       } else subcommand = name ?? "";

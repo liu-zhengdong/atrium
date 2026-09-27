@@ -19,6 +19,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 | 事件     | `server/tasks/events.ts`、`event-lease.ts`                                       | 任务完成、失败、受阻、卡死、CI 结果先落库，订阅者 `events wait` 取、`events ack` 确认；租约内不重投                                                                |
 | 组织树   | `server/org/`                                                                    | 节点（组织、项目、模块、关注点）、leader、章程与能力卡、硬边界、修订历史；子节点硬边界只能收紧；全景图人话字段（`overview.ts`）、要点（`points.ts`）与任务归属部分 |
 | 目标树   | `server/goals/`                                                                  | 旧目标树与迁移：`org migrate-goals` 把 gN 迁为节点章程里的阶段记录、任务回填归属部分，写入后 goal 接口下线（#322）                                                 |
+| 全景图   | `server/map/`、`cli/map.ts`                                                      | 全景只读视图（网页与 `map --json` 同一接口）、`map context` 派活附带、`map edit/add`；网页由服务托管（`server/map/web/`，不引入构建链），一次性链接换本机只读会话  |
 | 命令行   | `cli/`、`bin/atrium.mjs`                                                         | 统一入口；除启动、`status`、`stop`、`auth status` 外都经服务完成                                                                                                   |
 
 ## 实现约束

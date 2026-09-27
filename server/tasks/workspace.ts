@@ -16,7 +16,8 @@ import {
 } from "./prepare.ts";
 import type { ResolvedWorker, Risk } from "./profiles.ts";
 import { nodeDoc, taskNode } from "../org/task-node.ts";
-import { charterBrief } from "../org/brief.ts";
+import { charterBrief, withContext } from "../org/brief.ts";
+import { taskContext } from "../map/context.ts";
 import { skillsForTask } from "../skills/task-skills.ts";
 import { mountSkills } from "../skills/mount.ts";
 import { homedir } from "node:os";
@@ -177,7 +178,12 @@ export async function prepareRun(
     brief,
     tells: tellSection(tells),
     roleDoc: docs.roleDoc,
-    charter: node && options.db ? charterBrief(options.db, node.id) : undefined,
+    charter: options.db
+      ? withContext(
+          node ? charterBrief(options.db, node.id) : undefined,
+          taskContext(options.db, task.part_id ?? node?.id ?? null),
+        )
+      : undefined,
     originDoc: origin
       ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
       : undefined,

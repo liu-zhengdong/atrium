@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { ADAPTERS, type Adapter, type Launch } from "./adapters/index.ts";
 import { taskDir } from "./active.ts";
@@ -39,6 +40,7 @@ export function deliveryRules(task: Task): readonly string[] {
 }
 
 export type LaunchOptions = {
+  db?: DatabaseSync;
   data: string;
   workersDir: string;
   env: NodeJS.ProcessEnv;
@@ -115,7 +117,11 @@ export async function prepareRun(
     mkdirSync(cwd, { recursive: true });
   }
   const docs = task.repo
-    ? await loadRoleDocs(worktree ?? task.repo, task.role ?? undefined)
+    ? await loadRoleDocs(
+        worktree ?? task.repo,
+        task.role ?? undefined,
+        options.db,
+      )
     : { roleDoc: "", rootDoc: "" };
   const where = branch
     ? `工作目录：${cwd}（分支 ${branch}，基于 origin/${base}）。`

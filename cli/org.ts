@@ -13,6 +13,38 @@ const path = (value: string) => encodeURIComponent(value);
 const as = (values: Values) =>
   str(values, "as") ? `?as=${path(str(values, "as")!)}` : "";
 const options = { as: { type: "string" as const } };
+const person = (value: string | null) =>
+  value === "u1" ? "你" : (value ?? "无");
+export function formatOrgChanges(
+  changes: Record<string, { before: unknown; after: unknown; diff?: string }>,
+): string {
+  const value = (key: string, item: unknown) =>
+    key === "leader" && item === "u1"
+      ? "你"
+      : item == null || item === ""
+        ? "（空）"
+        : typeof item === "string"
+          ? item
+          : JSON.stringify(item);
+  const lines: string[] = [];
+  for (const [key, change] of Object.entries(changes)) {
+    if (key === "doc_path") continue;
+    if (key === "body") {
+      const diff = (change.diff ?? "").split("\n");
+      lines.push(
+        "正文：",
+        ...diff
+          .slice(0, 80)
+          .map((line) => (line.length > 300 ? `${line.slice(0, 300)}…` : line)),
+      );
+      if (diff.length > 80) lines.push(`…省略 ${diff.length - 80} 行`);
+    } else
+      lines.push(
+        `${key.replace(/^fields\./, "")}：${value(key, change.before)}→ ${value(key, change.after)}`,
+      );
+  }
+  return lines.join("\n") || "无字段变化";
+}
 const reason = (values: Values) => {
   const result = str(values, "reason");
   if (!result?.trim()) throw new Problem(400, "--reason 不能为空");
@@ -79,7 +111,7 @@ export const orgCommands: Record<string, Command> = {
         rows
           .map(
             (n) =>
-              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${n.leader}` : ""}${n.archived_at ? " · 已归档" : ""}`,
+              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
           )
           .join("\n") || "组织树为空",
         "atrium org show o1",
@@ -117,7 +149,6 @@ export const orgCommands: Record<string, Command> = {
         path: string;
         leader: string | null;
         repos: string[];
-        doc_path: string | null;
         charter: {
           rev: string;
           fields: Record<string, unknown>;
@@ -131,9 +162,8 @@ export const orgCommands: Record<string, Command> = {
         chain: { name: string; goal: string }[];
       };
       const lines = [
-        `${node.ref} [${node.kind}] ${node.path} · leader ${node.leader ?? "无"}`,
+        `${node.ref} [${node.kind}] ${node.path} · leader ${person(node.leader)}`,
         `仓库：${node.repos.join("、") || "无"}`,
-        `岗位说明：${node.doc_path ?? "无"}`,
         `目标链：${node.chain
           .map((c) => `${c.name}：${c.goal}`)
           .filter((c) => !c.endsWith("："))
@@ -146,14 +176,13 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org add": {
-    args: "父节点 slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--doc 文件] [--leader 身份]",
+    args: "父节点 slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--leader 身份]",
     about: "添加组织节点",
     options: {
       ...options,
       kind: { type: "string" },
       name: { type: "string" },
       repo: { type: "string", multiple: true },
-      doc: { type: "string" },
       leader: { type: "string" },
       reason: { type: "string" },
     },
@@ -175,7 +204,6 @@ export const orgCommands: Record<string, Command> = {
           kind: str(values, "kind"),
           name: str(values, "name") ?? slug,
           leader: str(values, "leader"),
-          doc_path: str(values, "doc"),
           repos,
           reason: reason(values),
         },
@@ -189,7 +217,7 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org edit": {
-    args: "节点 [--charter 文件|--card 文件|--name 名称] [--slug 路径名] [--leader aN|none] [--parent 节点] [--doc 文件] [--repo 路径] [--archive] [--rev rN] [--reason 原因]",
+    args: "节点 [--charter 文件|--card 文件|--name 名称] [--slug 路径名] [--leader aN|none] [--parent 节点] [--repo 路径] [--archive] [--rev rN] [--reason 原因]",
     about: "编辑节点、章程或能力卡",
     options: {
       ...common,
@@ -197,7 +225,6 @@ export const orgCommands: Record<string, Command> = {
       name: { type: "string" },
       leader: { type: "string" },
       parent: { type: "string" },
-      doc: { type: "string" },
       repo: { type: "string", multiple: true },
       archive: { type: "boolean" },
       rev: { type: "string" },
@@ -215,7 +242,7 @@ export const orgCommands: Record<string, Command> = {
       let result: unknown;
       if (target) {
         if (
-          ["slug", "name", "leader", "parent", "doc", "repo"].some(
+          ["slug", "name", "leader", "parent", "repo"].some(
             (key) => values[key] !== undefined,
           ) ||
           values.archive === true
@@ -231,7 +258,6 @@ export const orgCommands: Record<string, Command> = {
           name: str(values, "name"),
           leader: str(values, "leader"),
           parent: str(values, "parent"),
-          doc_path: str(values, "doc"),
           repos:
             values.repo === undefined
               ? undefined
@@ -245,7 +271,6 @@ export const orgCommands: Record<string, Command> = {
           !input.name &&
           !input.leader &&
           !input.parent &&
-          !input.doc_path &&
           !input.repos &&
           !input.archive
         )
@@ -290,14 +315,17 @@ export const orgCommands: Record<string, Command> = {
           at: number;
         }[];
         revision?: unknown;
-        changes?: unknown;
+        changes?: Record<
+          string,
+          { before: unknown; after: unknown; diff?: string }
+        >;
         has_more?: boolean;
       }>(`/org/nodes/${path(id!)}/history?${query}`);
       if (result.revision) {
         out(
           json,
           result,
-          `${id} 修订详情\n${JSON.stringify(result.changes, null, 2)}`,
+          `${id} 修订详情\n${formatOrgChanges(result.changes ?? {})}`,
           `atrium org history ${id}`,
         );
         return;
@@ -305,7 +333,7 @@ export const orgCommands: Record<string, Command> = {
       out(
         json,
         result,
-        `${id} 的修订（新→旧）\n${result.items?.map((r) => `r${r.rev} ${r.target} ${new Date(r.at).toLocaleString("zh-CN")} ${r.author} —— ${r.reason}`).join("\n") ?? ""}`,
+        `${id} 的修订（新→旧）\n${result.items?.map((r) => `r${r.rev} ${r.target} ${new Date(r.at).toLocaleString("zh-CN")} ${person(r.author)} —— ${r.reason}`).join("\n") ?? ""}`,
         `atrium org show ${id}`,
       );
     },
@@ -389,7 +417,8 @@ export const orgCommands: Record<string, Command> = {
         kind: "module" | "concern";
         slug: string;
         name: string;
-        doc_path: string;
+        source: string;
+        body: string;
       }[] = [];
       for (const [directory, kind] of [
         ["modules", "module"],
@@ -404,11 +433,22 @@ export const orgCommands: Record<string, Command> = {
         for (const name of files.filter((f) => f.endsWith(".md"))) {
           const slug = name.slice(0, -3);
           if (!/^(?:[a-z0-9-]|[\u3400-\u9fff]){1,40}$/.test(slug)) continue;
+          const source = `.agents/${directory}/${name}`;
+          const filename = join(repo, source);
+          let body: string;
+          try {
+            body = readFileSync(filename, "utf8");
+          } catch {
+            throw new Problem(400, `岗位文件无法读取：${filename}`);
+          }
+          if (Buffer.byteLength(body) > 16 * 1024)
+            throw new Problem(400, `${filename} 正文超过 16 KB`);
           docs.push({
             kind,
             slug,
             name: slug,
-            doc_path: `.agents/${directory}/${name}`,
+            source,
+            body,
           });
         }
       }
@@ -441,7 +481,7 @@ export const orgCommands: Record<string, Command> = {
           ? `导入预览（未写入）：\n${result.plan.join("\n")}`
           : result.created
             ? `已导入 ${result.created} 项：\n${result.plan.join("\n")}`
-            : "导入已是最新，无需变更",
+            : "已是最新",
         result.preview
           ? `atrium org import ${charterPath} --repo ${repo} --apply`
           : "atrium org tree",

@@ -24,16 +24,19 @@ export function tree(db: DatabaseSync) {
     }
   };
   visit(null);
-  return order.map((n) => ({
-    ...n,
-    ref: ref(n.id),
-    path: nodePath(list, n),
-    repos: all<{ repo: string }>(
-      db,
-      "SELECT repo FROM org_node_repos WHERE node_id=? ORDER BY repo",
-      n.id,
-    ).map((r) => r.repo),
-  }));
+  return order.map((original) => {
+    const { doc_path: _legacyDocPath, ...n } = original;
+    return {
+      ...n,
+      ref: ref(n.id),
+      path: nodePath(list, original),
+      repos: all<{ repo: string }>(
+        db,
+        "SELECT repo FROM org_node_repos WHERE node_id=? ORDER BY repo",
+        n.id,
+      ).map((r) => r.repo),
+    };
+  });
 }
 export function show(db: DatabaseSync, address: string, raw?: Doc) {
   const n = nodeByAddress(db, address),

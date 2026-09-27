@@ -1,4 +1,5 @@
 import { readFile, realpath } from "node:fs/promises";
+import type { DatabaseSync } from "node:sqlite";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
@@ -6,6 +7,7 @@ import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
 import { clock } from "./quota-holds.ts";
 import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
 import { idleFirst } from "./idle-first.ts";
+import { roleCharter } from "../org/role.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
@@ -100,12 +102,17 @@ async function insideAgents(agentsDir: string, file: string) {
 export async function loadRoleDocs(
   repo: string,
   role?: string,
+  db?: DatabaseSync,
 ): Promise<RoleDocs> {
   if (!isAbsolute(repo)) throw invalid("仓库须为绝对路径");
   const agentsDir = join(repo, ".agents");
   const rootDoc = (await readIfExists(join(agentsDir, "README.md"))) ?? "";
   if (role === undefined || role === null) return { roleDoc: "", rootDoc };
   const segments = checkRole(role);
+  if (db) {
+    const node = roleCharter(db, role);
+    if (node) return { roleDoc: node.body, rootDoc, rolePath: node.ref };
+  }
   const name = segments.join("/");
   const candidates =
     segments.length === 1

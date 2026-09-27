@@ -586,7 +586,7 @@ export function mapSignature(db: DatabaseSync): string {
     q("SELECT count(*),max(queued_at) FROM task_queue"),
     q("SELECT max(updated_at),count(*) FROM job_roles"),
     q("SELECT max(updated_at),count(*) FROM org_skills"),
-    q("SELECT max(id),max(ended_at) FROM deliveries"),
+    q("SELECT max(id),max(ended_at) FROM task_deliveries"),
   ].join("|");
 }
 

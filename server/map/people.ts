@@ -179,7 +179,7 @@ export async function mapWorkers(
   role?: string,
   dir = DEFAULT_WORKERS_DIR,
 ) {
-  if (!hasTable(db, "deliveries"))
+  if (!hasTable(db, "task_deliveries"))
     return { role: null, rows: [], suggestions: [] };
   const report = await workersReport(db, role || undefined, dir);
   return {
@@ -318,7 +318,7 @@ export async function mapWorker(
 ) {
   parseWorker(id);
   const resolved = await resolveWorker(id, dir);
-  const report = hasTable(db, "deliveries")
+  const report = hasTable(db, "task_deliveries")
     ? await workerReport(db, id, dir)
     : null;
   const profile = resolved.profile;

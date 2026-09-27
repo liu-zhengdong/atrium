@@ -10,20 +10,6 @@ const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version);
 if (!match) throw new Error(`不支持的版本号：${pkg.version}`);
 const next = `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
 if (releases[next]) throw new Error(`版本 v${next} 已存在`);
-const dependency = "@liuser/pi-atrium";
-const resolved = lock.packages?.[`node_modules/${dependency}`]?.resolved;
-if (pkg.dependencies?.[dependency]) {
-  const sha = /#([a-f0-9]{40})$/.exec(resolved ?? "")?.[1];
-  if (!sha) throw new Error("pi-atrium 锁文件缺少确定的提交号");
-  const spec = `github:liu-zhengdong/pi-atrium#${sha}`;
-  if (
-    pkg.dependencies[dependency].includes("#") &&
-    pkg.dependencies[dependency] !== spec
-  )
-    throw new Error("pi-atrium 的 package.json 与锁文件提交号不一致");
-  pkg.dependencies[dependency] = spec;
-  lock.packages[""].dependencies[dependency] = spec;
-}
 pkg.version = next;
 lock.version = next;
 lock.packages[""].version = next;

@@ -55,10 +55,10 @@ test("发布包内所有裸包 import 都在运行依赖中，缺少声明时失
     readFileSync(join(root, "package.json"), "utf8"),
   );
   assert.deepEqual(missingRuntimeDependencies(dependencies), []);
-  const { "@earendil-works/pi-ai": _, ...broken } = dependencies;
+  const { fastify: _, ...broken } = dependencies;
   assert.match(
     missingRuntimeDependencies(broken).join("\n"),
-    /server\/model\.ts: @earendil-works\/pi-ai/,
+    /server\/app\.ts: fastify/,
   );
 });
 
@@ -69,27 +69,13 @@ test("发布摘要、版本与锁文件在同一发布步骤同步", () => {
   try {
     writeFileSync(
       join(dir, "package.json"),
-      JSON.stringify({
-        version: "0.1.4",
-        dependencies: { "@liuser/pi-atrium": "github:liu-zhengdong/pi-atrium" },
-      }),
+      JSON.stringify({ version: "0.1.4" }),
     );
-    const sha = "a".repeat(40);
     writeFileSync(
       join(dir, "package-lock.json"),
       JSON.stringify({
         version: "0.1.4",
-        packages: {
-          "": {
-            version: "0.1.4",
-            dependencies: {
-              "@liuser/pi-atrium": "github:liu-zhengdong/pi-atrium",
-            },
-          },
-          "node_modules/@liuser/pi-atrium": {
-            resolved: `git+ssh://git@github.com/liu-zhengdong/pi-atrium.git#${sha}`,
-          },
-        },
+        packages: { "": { version: "0.1.4" } },
       }),
     );
     writeFileSync(join(dir, "releases.json"), '{"0.1.4":"旧版摘要"}');
@@ -104,15 +90,6 @@ test("发布摘要、版本与锁文件在同一发布步骤同步", () => {
     assert.equal(version, "0.1.5");
     assert.equal(json("package.json").version, "0.1.5");
     assert.equal(json("package-lock.json").packages[""].version, "0.1.5");
-    const pinned = `github:liu-zhengdong/pi-atrium#${sha}`;
-    assert.equal(
-      json("package.json").dependencies["@liuser/pi-atrium"],
-      pinned,
-    );
-    assert.equal(
-      json("package-lock.json").packages[""].dependencies["@liuser/pi-atrium"],
-      pinned,
-    );
     assert.equal(json("releases.json")["0.1.4"], "旧版摘要");
     assert.equal(json("releases.json")["0.1.5"], "更新 身份管理");
     assert.throws(

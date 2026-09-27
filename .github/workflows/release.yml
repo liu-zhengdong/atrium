@@ -41,7 +41,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add package.json package-lock.json releases.json
-          git add -f dist
           git commit -m "发布 v${VERSION}"
           git tag "v${VERSION}"
           git push origin HEAD:main

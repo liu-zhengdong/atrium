@@ -7,31 +7,14 @@ export const exitCodes = {
   internal: 1,
   usage: 2,
   confirmation_required: 2,
-  chat_not_found: 3,
-  agent_not_found: 3,
-  account_not_found: 3,
-  model_not_found: 3,
-  thinking_not_supported: 3,
   not_found: 3,
   restart_rollback: 3,
   conflict: 4,
-  runner_locked: 4,
-  runner_draining: 4,
-  validation_failed: 4,
-  already_assigned: 4,
-  unassigned_account: 4,
-  local_login_unavailable: 4,
   worker_environment: 4,
   service_unavailable: 5,
-  runner_offline: 5,
-  runner_changed: 5,
-  runner_outcome_unknown: 5,
-  new_session_failed: 5,
   auth_required: 6,
   upgrade_restart_required: 7,
-  launch_secret_unsupported: 7,
   restart_timeout: 124,
-  runner_busy: 124,
   timeout: 124,
 } as const;
 export type ErrorCode = keyof typeof exitCodes;
@@ -67,10 +50,6 @@ export function errorCode(error: unknown): ErrorCode {
 }
 export function correction(code: ErrorCode, usage?: string) {
   if (code === "usage") return usage ?? null;
-  if (code === "chat_not_found") return "atrium chats";
-  if (code === "agent_not_found") return "atrium list";
-  if (code === "account_not_found") return "atrium accounts";
-  if (code === "unassigned_account") return "atrium account check";
   if (code === "service_unavailable") return "atrium status";
   if (code === "auth_required") return "atrium auth rotate";
   if (code === "upgrade_restart_required") return "atrium restart";

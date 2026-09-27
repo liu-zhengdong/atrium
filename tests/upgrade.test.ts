@@ -1,17 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  rmSync,
-  existsSync,
-  readdirSync,
-} from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import {
   readRestartState,
   writeRestartState,
@@ -20,10 +11,6 @@ import {
   waitForRestart,
 } from "../server/supervisor.ts";
 import { createServer } from "node:http";
-import { Store } from "../server/store.ts";
-import { Runtimes } from "../server/runtime.ts";
-import type { RuntimeInfo } from "../shared/schema.ts";
-import { createApp } from "../server/legacy-app.ts";
 import { currentVersion, packageRoot } from "../server/service-state.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -86,35 +73,6 @@ test("损坏的待重启状态被挪开，后续请求可重新写入", () => {
   }
 });
 
-test("回滚告警在用户概览中可见，下一次成功后消失", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-rollback-ui-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const { app } = await createApp({ auth: false, data: dir, runtime: false });
-  t.after(() => app.close());
-  const state = {
-    id: "rst-ui",
-    status: "rolled_back" as const,
-    supervisorPid: process.pid,
-    startedAt: Date.now(),
-    fromVersion: "0.1.2",
-    failedVersion: "0.1.3",
-    error: "退出码 19",
-    data: dir,
-  };
-  writeRestartState(dir, state);
-  const rollback = (await app.inject({ url: "/api/overview" })).json();
-  assert.deepEqual(rollback.rollback, {
-    fromVersion: "0.1.2",
-    failedVersion: "0.1.3",
-    error: "退出码 19",
-  });
-  writeRestartState(dir, { ...state, status: "success" });
-  assert.equal(
-    (await app.inject({ url: "/api/overview" })).json().rollback,
-    null,
-  );
-});
-
 test("checkServiceHealth 在端口不可达时抛出异常", async () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-health-"));
   try {
@@ -162,146 +120,6 @@ test("重启健康检查只看 ok：不依赖模型，也不要求旧版的 runt
   } finally {
     server.close();
   }
-});
-
-test("排空在回合结束后才同步末尾轨迹；到期列出忙碌身份且旧服务可继续", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-drain-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const store = new Store(join(dir, "atrium.sqlite"));
-  t.after(() => store.close());
-  const { agent } = store.createAgent("验收", dir);
-  const info: RuntimeInfo = {
-    runtimeId: randomUUID(),
-    generation: randomUUID(),
-    sessionId: randomUUID(),
-    pid: process.pid,
-    ownerPid: process.pid,
-    sessionFile: null,
-    cwd: dir,
-    mode: "rpc",
-    busy: true,
-    model: "fixture",
-  };
-  const events: string[] = [];
-  let statusCalls = 0;
-  let finishAfter = 4;
-  const openTurns = new Map<string, { generation: string }>();
-  const runtime = Object.assign(Object.create(Runtimes.prototype), {
-    connections: new Map([[agent.id, { info }]]),
-    pumping: new Map(),
-    connecting: new Map(),
-    turns: { current: (id: string) => openTurns.get(id) ?? null },
-    store,
-    draining: false,
-    rpc: async () => {
-      statusCalls++;
-      events.push(statusCalls < finishAfter ? "busy" : "idle");
-      return { ...info, busy: statusCalls < finishAfter };
-    },
-    capture: async (
-      _id: string,
-      _info: RuntimeInfo,
-      pages: number,
-      strict: boolean,
-    ) => {
-      assert.equal(pages, 100);
-      assert.equal(strict, true);
-      events.push("trace_flushed");
-    },
-  }) as Runtimes;
-  const agents = await runtime.prepareShutdown(1000);
-  assert.deepEqual(agents, [agent.id]);
-  assert.deepEqual(events, ["busy", "busy", "busy", "idle", "trace_flushed"]);
-  assert.equal((runtime as unknown as { draining: boolean }).draining, true);
-  await assert.rejects(runtime.start(agent.id), /服务正在排空任务/);
-  await assert.rejects(
-    (
-      runtime as unknown as {
-        operation: (id: string, work: () => Promise<void>) => Promise<void>;
-      }
-    ).operation(agent.id, async () => {}),
-    /服务正在排空任务/,
-  );
-
-  (runtime as unknown as { draining: boolean }).draining = false;
-  finishAfter = Infinity;
-  statusCalls = 0;
-  events.length = 0;
-  await assert.rejects(runtime.prepareShutdown(210), (error: unknown) => {
-    assert.match(String(error), /验收（a1）/);
-    assert.match(
-      String(error),
-      /旧服务继续运行.*atrium restart.*--agent-timeout/,
-    );
-    return true;
-  });
-  assert.equal(events.includes("trace_flushed"), false);
-  assert.equal((runtime as unknown as { draining: boolean }).draining, false);
-
-  // The gateway can briefly report idle while Pi is still publishing the
-  // final tool/result events. A known open run must prevent a premature stop.
-  finishAfter = 1;
-  statusCalls = 0;
-  events.length = 0;
-  openTurns.set(agent.id, { generation: info.generation });
-  let flushes = 0;
-  (runtime as unknown as { capture: () => Promise<void> }).capture =
-    async () => {
-      flushes++;
-      if (flushes === 3) openTurns.delete(agent.id);
-    };
-  assert.deepEqual(await runtime.prepareShutdown(1000), [agent.id]);
-  assert.equal(flushes, 3);
-  assert.equal(statusCalls, 3);
-  assert.equal((runtime as unknown as { draining: boolean }).draining, true);
-
-  (runtime as unknown as { draining: boolean }).draining = false;
-  finishAfter = 1;
-  statusCalls = 0;
-  (runtime as unknown as { capture: () => Promise<void> }).capture =
-    async () => {
-      throw new Error("trace unavailable");
-    };
-  await assert.rejects(runtime.prepareShutdown(1000), /trace unavailable/);
-  assert.equal((runtime as unknown as { draining: boolean }).draining, false);
-});
-
-test("排空中途发起方断开：中止排空并恢复运行（#231）", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-drain-abort-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const store = new Store(join(dir, "atrium.sqlite"));
-  t.after(() => store.close());
-  const { agent } = store.createAgent("验收", dir);
-  const info: RuntimeInfo = {
-    runtimeId: randomUUID(),
-    generation: randomUUID(),
-    sessionId: randomUUID(),
-    pid: process.pid,
-    ownerPid: process.pid,
-    sessionFile: null,
-    cwd: dir,
-    mode: "rpc",
-    busy: true,
-    model: "fixture",
-  };
-  const runtime = Object.assign(Object.create(Runtimes.prototype), {
-    connections: new Map([[agent.id, { info }]]),
-    pumping: new Map(),
-    connecting: new Map(),
-    turns: { current: () => null },
-    store,
-    draining: false,
-    rpc: async () => ({ ...info, busy: true }),
-    capture: async () => {},
-  }) as Runtimes;
-  const abort = new AbortController();
-  const drain = runtime.prepareShutdown(30_000, abort.signal);
-  const timer = setTimeout(() => abort.abort(), 250);
-  await assert.rejects(drain, /排空中止：发起方已断开/);
-  clearTimeout(timer);
-  assert.equal((runtime as unknown as { draining: boolean }).draining, false);
-  // 已恢复运行：再次排空能进入等待（报忙碌超时），而不是被「正在排空」拒绝。
-  await assert.rejects(runtime.prepareShutdown(120), /旧服务继续运行/);
 });
 
 test("旧服务拒绝排空时透出正文而不只报 HTTP 409", async () => {

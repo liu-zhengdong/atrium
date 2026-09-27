@@ -9,12 +9,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { Problem } from "./problem.ts";
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 
-const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
-const CODE_MS = 60 * 1000;
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 const secret = () => randomBytes(32).toString("hex");
@@ -32,47 +29,17 @@ function atomicSecret(path: string, value: string) {
 }
 
 export const userTokenPath = (data: string) => join(data, "user-token");
-export const cookieName = (data: string) =>
-  `atrium_${digest(resolve(data)).slice(0, 16)}`;
 
-/** Authentication state is durable; login codes are deliberately volatile and one-use. */
+/** 用户凭据只有一份持久令牌：库里存哈希，原文只在数据目录的 user-token 文件里。 */
 export class UserAuth {
-  readonly name: string;
-  private codes = new Map<string, number>();
-  private store: {
-    one<T>(sql: string, ...values: SQLInputValue[]): T | undefined;
-    run(sql: string, ...values: SQLInputValue[]): void;
-    transaction(work: () => void): void;
-  };
   constructor(
-    db: DatabaseSync,
+    private db: DatabaseSync,
     private data: string,
   ) {
-    this.name = cookieName(data);
-    this.store = {
-      one: <T>(sql: string, ...values: SQLInputValue[]) =>
-        db.prepare(sql).get(...values) as T | undefined,
-      run: (sql, ...values) => {
-        db.prepare(sql).run(...values);
-      },
-      transaction: (work) => {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          work();
-          db.exec("COMMIT");
-        } catch (error) {
-          db.exec("ROLLBACK");
-          throw error;
-        }
-      },
-    };
     mkdirSync(data, { recursive: true, mode: 0o700 });
     db.exec(`CREATE TABLE IF NOT EXISTS user_auth (
-      id INTEGER PRIMARY KEY CHECK(id=1), token_hash TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS web_sessions (
-      token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS web_sessions_expires ON web_sessions(expires_at);`);
-    if (!this.store.one("SELECT id FROM user_auth WHERE id=1")) {
+      id INTEGER PRIMARY KEY CHECK(id=1), token_hash TEXT NOT NULL);`);
+    if (!db.prepare("SELECT id FROM user_auth WHERE id=1").get()) {
       const path = userTokenPath(data);
       // Recover from an interrupted first boot: the file is the only user copy.
       let token = existsSync(path) ? readFileSync(path, "utf8").trim() : null;
@@ -89,8 +56,7 @@ export class UserAuth {
         token = secret();
         atomicSecret(path, token);
       }
-      this.store.run(
-        "INSERT INTO user_auth(id,token_hash) VALUES(1,?)",
+      db.prepare("INSERT INTO user_auth(id,token_hash) VALUES(1,?)").run(
         digest(token),
       );
     }
@@ -98,89 +64,17 @@ export class UserAuth {
 
   validUser(value: string | undefined) {
     const token = /^Bearer ([a-f0-9]{64})$/i.exec(value ?? "")?.[1];
-    const row = this.store.one<{ token_hash: string }>(
-      "SELECT token_hash FROM user_auth WHERE id=1",
-    );
+    const row = this.db
+      .prepare("SELECT token_hash FROM user_auth WHERE id=1")
+      .get() as { token_hash: string } | undefined;
     return !!token && !!row && sameSecret(digest(token), row.token_hash);
   }
 
-  validSession(raw: string | undefined): boolean {
-    const token = raw
-      ?.split(/;\s*/)
-      .find((part) => part.startsWith(`${this.name}=`))
-      ?.slice(this.name.length + 1);
-    if (!token || !/^[a-f0-9]{64}$/.test(token)) return false;
-    const now = Date.now();
-    const tokenHash = digest(token);
-    const row = this.store.one<{ token_hash: string; expires_at: number }>(
-      "SELECT token_hash,expires_at FROM web_sessions WHERE token_hash=?",
-      tokenHash,
-    );
-    // The indexed lookup finds a session; verification uses the same comparison as other credentials.
-    if (!row || !sameSecret(tokenHash, row.token_hash) || row.expires_at <= now)
-      return false;
-    // Extend persisted expiry at most once a day; the browser cookie is refreshed on every request.
-    if (row.expires_at - now < SESSION_MS - 24 * 60 * 60 * 1000)
-      this.store.run(
-        "UPDATE web_sessions SET expires_at=? WHERE token_hash=?",
-        now + SESSION_MS,
-        tokenHash,
-      );
-    return true;
-  }
-
-  cookie(raw: string) {
-    return `${this.name}=${raw}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}`;
-  }
-  refreshCookie(raw: string | undefined) {
-    const token = raw
-      ?.split(/;\s*/)
-      .find((part) => part.startsWith(`${this.name}=`))
-      ?.slice(this.name.length + 1);
-    return token && /^[a-f0-9]{64}$/.test(token)
-      ? this.cookie(token)
-      : undefined;
-  }
-  clearCookie() {
-    return `${this.name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
-  }
-  issueCode() {
-    const now = Date.now();
-    for (const [key, expiry] of this.codes)
-      if (expiry <= now) this.codes.delete(key);
-    const code = secret();
-    this.codes.set(digest(code), now + CODE_MS);
-    return code;
-  }
-  claimCode(code: string) {
-    const key = digest(code);
-    const expiry = this.codes.get(key);
-    this.codes.delete(key);
-    if (!expiry || expiry <= Date.now())
-      throw new Problem(401, "登录链接已失效，请重新运行 atrium open");
-    const session = secret();
-    this.store.run("DELETE FROM web_sessions WHERE expires_at<=?", Date.now());
-    this.store.run(
-      "INSERT INTO web_sessions(token_hash,expires_at) VALUES(?,?)",
-      digest(session),
-      Date.now() + SESSION_MS,
-    );
-    return this.cookie(session);
-  }
-  logout() {
-    this.store.run("DELETE FROM web_sessions");
-    this.codes.clear();
-  }
   rotate() {
     const token = secret();
     atomicSecret(userTokenPath(this.data), token);
-    this.store.transaction(() => {
-      this.store.run(
-        "UPDATE user_auth SET token_hash=? WHERE id=1",
-        digest(token),
-      );
-      this.store.run("DELETE FROM web_sessions");
-    });
-    this.codes.clear();
+    this.db
+      .prepare("UPDATE user_auth SET token_hash=? WHERE id=1")
+      .run(digest(token));
   }
 }

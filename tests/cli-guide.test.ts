@@ -76,21 +76,6 @@ test("命令组的 --help 列出该组全部子命令，条目与 atrium --help 
   assert.match(taskHelp, /全部命令：atrium --help/);
 });
 
-test("runner drain timeout is a distinct retryable CLI result, not an internal error", () => {
-  const timedOut = failure(new Problem(409, "身份未排空", "runner_busy"));
-  assert.equal(timedOut.code, "runner_busy");
-  assert.equal(timedOut.exit, 124);
-  assert.match(guide(commands), /124  runner_busy/);
-  assert.equal(
-    failure(new Problem(409, "正在排空", "runner_draining")).code,
-    "runner_draining",
-  );
-  assert.equal(
-    failure(new Problem(503, "代际变化", "runner_changed")).code,
-    "runner_changed",
-  );
-});
-
 test("错误码与候选最多三项，短号优先", () => {
   assert.equal(new Problem(404, "不存在").code, "not_found");
   const candidates = closest("lris", [
@@ -115,15 +100,8 @@ test("错误码与候选最多三项，短号优先", () => {
 test("错误修正按类型给具体命令；没有修正时绝不退回 --help", () => {
   for (const code of Object.keys(exitCodes) as (keyof typeof exitCodes)[])
     assert.notEqual(correction(code), "atrium --help", code);
-  assert.equal(
-    failure(new Problem(404, "账号不存在", "account_not_found")).next,
-    "atrium accounts",
-  );
   assert.equal(failure(new Problem(404, "资源不存在")).next, null);
-  assert.equal(
-    failure(new Problem(404, "模型不存在", "model_not_found")).exit,
-    3,
-  );
+  assert.equal(failure(new Problem(404, "任务不存在", "not_found")).exit, 3);
   assert.equal(correction("usage"), null);
   assert.equal(failure(new Problem(401, "认证过期", "auth_required")).exit, 6);
   assert.equal(correction("auth_required"), "atrium auth rotate");
@@ -142,21 +120,21 @@ test("错误修正按类型给具体命令；没有修正时绝不退回 --help"
 test("校验错误展示选项名或参数名，不显示接口字段与英文验证句", () => {
   assert.equal(
     cliErrorMessage(
-      "heartbeat_seconds: Invalid input: expected number, received null",
-      commands.config,
+      "brief_path: Invalid input: expected string, received null",
+      commands["task add"],
     ),
-    "--heartbeat 要填秒数（5～3600 的整数）",
+    "--brief不符合要求",
   );
   assert.equal(
-    cliErrorMessage("body: 请输入内容或添加附件", commands.send),
-    "正文不能为空；也可用 --file 添加附件",
-  );
-  assert.match(
-    cliErrorMessage("model: 写法是 provider/id", commands.model),
-    /^模型：写法是 provider\/id$/,
+    cliErrorMessage("title: 标题不能为空", commands["task add"]),
+    "标题：标题不能为空",
   );
   assert.equal(
-    cliErrorMessage("mystery_code: Invalid input", commands.profile),
+    cliErrorMessage("role: 岗位不存在", commands["task add"]),
+    "--role：岗位不存在",
+  );
+  assert.equal(
+    cliErrorMessage("mystery_code: Invalid input", commands["task add"]),
     "参数不符合要求",
   );
   try {

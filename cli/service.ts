@@ -41,25 +41,15 @@ export function client(base: string, data: string) {
     method: string,
     path: string,
     body?: unknown,
-    raw?: { bytes: Uint8Array; headers: Record<string, string> },
     observe?: (headers: Headers) => void,
   ): Promise<T> {
     const response = await fetch(`${base}/api${path}`, {
       method,
       headers: {
-        ...(raw
-          ? raw.headers
-          : body === undefined
-            ? {}
-            : { "content-type": "application/json" }),
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
         authorization: userBearer(data),
       },
-      // Node 的 fetch 接受 Uint8Array 做请求体，DOM 的类型声明没跟上。
-      body: raw
-        ? (raw.bytes as unknown as BodyInit)
-        : body === undefined
-          ? undefined
-          : JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     }).catch((error: unknown) => {
       throw new Problem(
         503,
@@ -115,15 +105,10 @@ export function client(base: string, data: string) {
   }
   return {
     get: <T>(path: string, observe?: (headers: Headers) => void) =>
-      call<T>("GET", path, undefined, undefined, observe),
+      call<T>("GET", path, undefined, observe),
     post: <T>(path: string, body: unknown = {}) => call<T>("POST", path, body),
     put: <T>(path: string, body: unknown) => call<T>("PUT", path, body),
     patch: <T>(path: string, body: unknown) => call<T>("PATCH", path, body),
     delete: <T>(path: string, body?: unknown) => call<T>("DELETE", path, body),
-    upload: <T>(
-      path: string,
-      bytes: Uint8Array,
-      headers: Record<string, string>,
-    ) => call<T>("POST", path, undefined, { bytes, headers }),
   };
 }

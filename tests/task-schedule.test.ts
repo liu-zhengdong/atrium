@@ -11,7 +11,9 @@ import {
 } from "../server/tasks/ledger.ts";
 import { EventInbox } from "../server/tasks/events.ts";
 import {
+  CANDIDATES_SQL,
   classify,
+  PLAN_PAGE_SQL,
   Scheduler,
   taskPlan,
   upstreamCondition,
@@ -896,5 +898,44 @@ test("巡检进行中关闭：1 秒内返回", async () => {
   assert.ok(Date.now() - start < 1_000);
   release();
   inbox.close();
+  db.close();
+});
+
+test("巡检候选与 plan 走未结束任务的部分索引，不按主键扫已完成任务", () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const now = Date.now();
+  const done = db.prepare(
+    "INSERT INTO tasks(title,deliver,status,created_at,updated_at) VALUES ('x','none',?,?,?)",
+  );
+  for (let i = 0; i < 300; i++)
+    done.run(i % 10 ? "done" : "cancelled", now, now);
+  createTask(db, { title: "A", auto: true });
+  createTask(db, { title: "B", after: "t301" });
+  for (const [name, sql, params] of [
+    ["巡检候选", CANDIDATES_SQL, [0]],
+    ["plan", PLAN_PAGE_SQL, [0, 200]],
+  ] as const) {
+    const plan = (
+      db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as {
+        detail: string;
+      }[]
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    assert.match(
+      plan,
+      /SEARCH tasks USING (COVERING )?INDEX tasks_open/,
+      `${name}\n${plan}`,
+    );
+    assert.doesNotMatch(plan, /TEMP B-TREE/, `${name} 不该另排序\n${plan}`);
+  }
+  // 候选只有未结束的两条；已完成、已取消的不在结果里。
+  assert.deepEqual(
+    (db.prepare(CANDIDATES_SQL).all(0) as { id: number }[]).map(
+      (row) => row.id,
+    ),
+    [301, 302],
+  );
   db.close();
 });

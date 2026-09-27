@@ -69,15 +69,22 @@ export function settleCouncils(
 }
 
 /**
+ * 未定会审里议题任务已取消、或还在等意见就已完成的。CROSS JOIN 固定先按阶段索引取未定的会审、
+ * 再按主键查任务；否则规划器会按状态扫全部已完成任务（每轮随任务总数变慢，t154）。
+ */
+export const CLOSE_STALE_SQL = `SELECT c.task_id, t.status FROM task_councils c CROSS JOIN tasks t ON t.id=c.task_id
+  WHERE c.stage IN ${OPEN_STAGES}
+    AND (t.status='cancelled' OR (c.stage='opinions' AND t.status='done'))
+  ORDER BY c.task_id LIMIT ?`;
+
+/**
  * 议题任务已取消、或还在等意见就被改成完成的会审，转「已关闭」。
  * 取消时状态转移已顺手关闭；这里补上老库里早先卡住的，每轮至多关 limit 场。
  */
 function closeStale(db: DatabaseSync, limit: number) {
   const stale = all<{ task_id: number; status: string }>(
     db,
-    `SELECT c.task_id, t.status FROM task_councils c JOIN tasks t ON t.id=c.task_id
-      WHERE (c.stage IN ${OPEN_STAGES} AND t.status='cancelled') OR (c.stage='opinions' AND t.status='done')
-      ORDER BY c.task_id LIMIT ?`,
+    CLOSE_STALE_SQL,
     limit,
   );
   for (const { task_id, status } of stale)

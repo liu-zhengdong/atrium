@@ -309,69 +309,101 @@ export function ensureDeliveryRecords(db: DatabaseSync) {
   if (hadFacts) fillMissingFinishedDeliveryFacts(db);
   else recomputeAllDeliveryFacts(db);
 }
-/** 旧库启动时逐页回填；只用账本事件里的事实，不推测遗失的强度或风险。 */
+const END_KINDS = ["exit_ok", "exit_fail", "block", "manual_set", "cancel"];
+const marks = (n: number) => Array(n).fill("?").join(",");
+
+/**
+ * 旧库启动时逐页回填；只用账本事件里的事实，不推测遗失的强度或风险。
+ * 只看已记交付里最大的开工事件之后的 start（t154）：启动时的回填按 id 递增写入，
+ * 运行中开工当场记交付，更早的都处理过；再次启动时这里只剩常数条查询。
+ * 每页的已记交付、任务与后续事件各一条批量查询，循环里不查库（k23）。
+ */
 export function backfillDeliveries(db: DatabaseSync) {
-  let after = 0;
+  let after =
+    one<{ id: number | null }>(
+      db,
+      "SELECT MAX(start_event_id) AS id FROM task_deliveries",
+    )?.id ?? 0;
+  const insert = db.prepare(
+    "INSERT OR IGNORE INTO task_deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,ended_at,outcome,historical) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
+  );
   for (;;) {
     const starts = all<TaskEventRow>(
       db,
       "SELECT * FROM task_events WHERE kind='start' AND id>? ORDER BY id LIMIT 200",
       after,
     );
-    for (const start of starts) {
-      after = start.id;
-      if (
-        one(
+    if (!starts.length) break;
+    after = starts.at(-1)!.id;
+    const ids = starts.map((start) => start.id);
+    const recorded = new Set(
+      all<{ start_event_id: number }>(
+        db,
+        `SELECT start_event_id FROM task_deliveries WHERE start_event_id IN (${marks(ids.length)})`,
+        ...ids,
+      ).map((row) => row.start_event_id),
+    );
+    const todo = starts.filter((start) => !recorded.has(start.id));
+    const taskIds = [...new Set(todo.map((start) => start.task_id))];
+    if (taskIds.length) {
+      const tasks = new Map(
+        all<Pick<TaskRow, "id" | "worker" | "job_id" | "part_id">>(
           db,
-          "SELECT 1 FROM task_deliveries WHERE start_event_id=?",
-          start.id,
-        )
-      )
-        continue;
-      const task = one<TaskRow>(
+          `SELECT id,worker,job_id,part_id FROM tasks WHERE id IN (${marks(taskIds.length)})`,
+          ...taskIds,
+        ).map((task) => [task.id, task]),
+      );
+      // 每条 start 之后的下一次开工与其间第一个结束事件：按任务取回这页之后的事件，倒序走一遍配好。
+      const events = all<Pick<TaskEventRow, "id" | "task_id" | "at" | "kind">>(
         db,
-        "SELECT * FROM tasks WHERE id=?",
-        start.task_id,
+        `SELECT id,task_id,at,kind FROM task_events WHERE task_id IN (${marks(taskIds.length)}) AND id>? AND kind IN ('start',${marks(END_KINDS.length)}) ORDER BY id DESC`,
+        ...taskIds,
+        todo[0]!.id - 1,
+        ...END_KINDS,
       );
-      if (!task) continue;
-      const d = inner(start),
-        raw = text(d.worker) ?? task.worker;
-      if (!raw) continue;
-      let spec;
-      try {
-        spec = parseWorker(raw);
-      } catch {
-        continue;
-      }
-      const nextStart = one<TaskEventRow>(
-        db,
-        "SELECT * FROM task_events WHERE task_id=? AND id>? AND kind='start' ORDER BY id LIMIT 1",
-        task.id,
-        start.id,
-      );
-      const end = one<TaskEventRow>(
-        db,
-        "SELECT * FROM task_events WHERE task_id=? AND id>? AND id<? AND kind IN ('exit_ok','exit_fail','block','manual_set','cancel') ORDER BY id LIMIT 1",
-        task.id,
-        start.id,
-        nextStart?.id ?? Number.MAX_SAFE_INTEGER,
-      );
-      db.prepare(
-        "INSERT OR IGNORE INTO task_deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,ended_at,outcome,historical) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
-      ).run(
-        task.id,
-        start.id,
-        raw,
-        spec.tool,
-        spec.model ?? null,
-        null,
-        task.job_id,
-        text(d.risk),
-        task.part_id,
-        start.at,
-        end?.at ?? nextStart?.at ?? null,
-        end?.kind ?? (nextStart ? "switched" : null),
-      );
+      type Near = { at: number; kind: string } | undefined;
+      const later = new Map<number, { next: Near; end: Near }>();
+      const next = new Map<number, Near>();
+      const end = new Map<number, Near>();
+      for (const event of events)
+        if (event.kind === "start") {
+          later.set(event.id, {
+            next: next.get(event.task_id),
+            end: end.get(event.task_id),
+          });
+          next.set(event.task_id, event);
+          end.delete(event.task_id);
+        } else end.set(event.task_id, event);
+      atomically(db, () => {
+        for (const start of todo) {
+          const task = tasks.get(start.task_id);
+          if (!task) continue;
+          const d = inner(start),
+            raw = text(d.worker) ?? task.worker;
+          if (!raw) continue;
+          let spec;
+          try {
+            spec = parseWorker(raw);
+          } catch {
+            continue;
+          }
+          const near = later.get(start.id);
+          insert.run(
+            task.id,
+            start.id,
+            raw,
+            spec.tool,
+            spec.model ?? null,
+            null,
+            task.job_id,
+            text(d.risk),
+            task.part_id,
+            start.at,
+            near?.end?.at ?? near?.next?.at ?? null,
+            near?.end?.kind ?? (near?.next ? "switched" : null),
+          );
+        }
+      });
     }
     if (starts.length < 200) break;
   }

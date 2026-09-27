@@ -9,6 +9,7 @@ import {
 } from "../server/tasks/ledger.ts";
 import { createJobRole } from "../server/tasks/job-roles.ts";
 import {
+  backfillDeliveries,
   deliveryFacts,
   latestDeliveryByWorkerJob,
   latestDeliveryTaskId,
@@ -19,6 +20,7 @@ import {
   type Delivery,
   type DeliveryRow,
 } from "../server/tasks/delivery-records.ts";
+import { parseWorker } from "../server/tasks/profiles.ts";
 import {
   all,
   one,
@@ -455,4 +457,235 @@ test("按 worker / job 过滤的统计走索引而非整表", () => {
     plans.map((p) => p.detail).join("\n"),
   );
   db.close();
+});
+
+/** 改前的 backfillDeliveries（t154 前）：逐条 start 查交付、任务、下一次开工与结束事件。只用于对照。 */
+function oldBackfill(db: DatabaseSync) {
+  let after = 0;
+  for (;;) {
+    const starts = all<TaskEventRow>(
+      db,
+      "SELECT * FROM task_events WHERE kind='start' AND id>? ORDER BY id LIMIT 200",
+      after,
+    );
+    for (const start of starts) {
+      after = start.id;
+      if (
+        one(
+          db,
+          "SELECT 1 FROM task_deliveries WHERE start_event_id=?",
+          start.id,
+        )
+      )
+        continue;
+      const task = one<TaskRow>(
+        db,
+        "SELECT * FROM tasks WHERE id=?",
+        start.task_id,
+      );
+      if (!task) continue;
+      let d: Record<string, unknown> = {};
+      try {
+        const x = JSON.parse(start.detail ?? "{}").detail;
+        if (x && typeof x === "object") d = x;
+      } catch {}
+      const raw =
+        (typeof d.worker === "string" ? d.worker : null) ?? task.worker;
+      if (!raw) continue;
+      let spec;
+      try {
+        spec = parseWorker(raw);
+      } catch {
+        continue;
+      }
+      const nextStart = one<TaskEventRow>(
+        db,
+        "SELECT * FROM task_events WHERE task_id=? AND id>? AND kind='start' ORDER BY id LIMIT 1",
+        task.id,
+        start.id,
+      );
+      const end = one<TaskEventRow>(
+        db,
+        "SELECT * FROM task_events WHERE task_id=? AND id>? AND id<? AND kind IN ('exit_ok','exit_fail','block','manual_set','cancel') ORDER BY id LIMIT 1",
+        task.id,
+        start.id,
+        nextStart?.id ?? Number.MAX_SAFE_INTEGER,
+      );
+      db.prepare(
+        "INSERT OR IGNORE INTO task_deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,ended_at,outcome,historical) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
+      ).run(
+        task.id,
+        start.id,
+        raw,
+        spec.tool,
+        spec.model ?? null,
+        null,
+        task.job_id,
+        typeof d.risk === "string" ? d.risk : null,
+        task.part_id,
+        start.at,
+        end?.at ?? nextStart?.at ?? null,
+        end?.kind ?? (nextStart ? "switched" : null),
+      );
+    }
+    if (starts.length < 200) break;
+  }
+}
+
+/** 旧库：只有事件没有交付；多任务交错开工、换人、各种结束事件，伪随机但可复现。 */
+function legacyLedger(size: number, recorded = 0) {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  db.exec("BEGIN");
+  const insTask = db.prepare(
+    "INSERT INTO tasks(id,title,status,worker,job_id,part_id,created_at,updated_at) VALUES(?,?,'done',?,?,?,0,0)",
+  );
+  const insEvent = db.prepare(
+    "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
+  );
+  const insDeliv = db.prepare(
+    "INSERT INTO task_deliveries(task_id,start_event_id,worker,tool,model,started_at) VALUES(?,?,'claude+opus','claude','opus',?)",
+  );
+  for (let i = 1; i <= size; i++)
+    insTask.run(
+      i,
+      `旧活${i}`,
+      i % 7 === 0 ? null : "claude+opus",
+      i % 3 || null,
+      i % 5 || null,
+    );
+  let seed = 7;
+  const rnd = () =>
+    (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const kinds = [
+    "start",
+    "start",
+    "note",
+    "exit_ok",
+    "exit_fail",
+    "block",
+    "manual_set",
+    "cancel",
+    "gates",
+  ];
+  const workers = [
+    undefined,
+    "codex+gpt-6-sol",
+    "claude+opus:high",
+    "opencode",
+  ];
+  for (let k = 0; k < size * 6; k++) {
+    // 偶尔引用不存在的任务：回填应跳过。
+    const task = k % 97 === 0 ? size + 5 : 1 + Math.floor(rnd() * size);
+    const kind = kinds[Math.floor(rnd() * kinds.length)]!;
+    const worker = workers[Math.floor(rnd() * workers.length)];
+    const detail =
+      kind === "start"
+        ? JSON.stringify({
+            from: "todo",
+            to: "running",
+            detail: {
+              ...(worker ? { worker } : {}),
+              ...(k % 4 ? {} : { risk: "high" }),
+            },
+          })
+        : "{}";
+    const id = Number(
+      insEvent.run(task, 1000 + k, kind, detail).lastInsertRowid,
+    );
+    // 前面这些 start 模拟运行中已当场记过交付。
+    if (kind === "start" && k < recorded) insDeliv.run(task, id, 1000 + k);
+  }
+  db.exec("COMMIT");
+  return db;
+}
+
+const deliveryRows = (db: DatabaseSync) =>
+  db
+    .prepare(
+      "SELECT task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,ended_at,outcome,historical FROM task_deliveries ORDER BY start_event_id",
+    )
+    .all()
+    .map((row) => ({ ...row }));
+
+test("旧库回填与改前逐条回填结果一致（换人、结束事件、缺任务、缺执行者）", () => {
+  for (const [size, recorded] of [
+    [40, 0],
+    [300, 0],
+    [300, 500],
+  ] as const) {
+    const a = legacyLedger(size, recorded);
+    const b = legacyLedger(size, recorded);
+    oldBackfill(a);
+    backfillDeliveries(b);
+    const want = deliveryRows(a);
+    assert.ok(want.some((row) => row.outcome === "switched"));
+    assert.ok(want.some((row) => row.outcome === null));
+    assert.deepEqual(
+      deliveryRows(b),
+      want,
+      `size=${size} recorded=${recorded}`,
+    );
+    a.close();
+    b.close();
+  }
+});
+
+test("回填按页批量查询；再次启动只剩常数条语句，与任务数无关", () => {
+  const firstRun = (size: number) => {
+    const db = legacyLedger(size);
+    db.exec("DELETE FROM task_deliveries");
+    const starts = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM task_events WHERE kind='start'")
+        .get() as { n: number }
+    ).n;
+    const c = counting(db);
+    backfillDeliveries(db);
+    const count = c.read();
+    c.restore();
+    return { db, count, pages: Math.ceil(starts / 200) };
+  };
+  const small = firstRun(100);
+  const big = firstRun(1000);
+  // 首次回填：每页常数条（取 start、已记交付、任务、后续事件、事务、插入语句），不随每页条数增长。
+  assert.ok(
+    big.count <= (small.count / small.pages) * big.pages + 8,
+    `首次回填语句 ${big.count}，${big.pages} 页`,
+  );
+  const again = (db: DatabaseSync) => {
+    const c = counting(db);
+    backfillDeliveries(db);
+    const count = c.read();
+    c.restore();
+    return count;
+  };
+  const before = deliveryRows(big.db);
+  assert.equal(
+    again(big.db),
+    again(small.db),
+    "再次启动的语句数应与任务数无关",
+  );
+  assert.ok(again(big.db) <= 3);
+  assert.deepEqual(deliveryRows(big.db), before);
+  // 之后新写的 start 仍会被补上（只处理增量）。
+  const id = Number(
+    big.db
+      .prepare(
+        "INSERT INTO task_events(task_id,at,kind,detail) VALUES(1,9e9,'start',?)",
+      )
+      .run(JSON.stringify({ detail: { worker: "codex+gpt-6-sol" } }))
+      .lastInsertRowid,
+  );
+  backfillDeliveries(big.db);
+  assert.equal(
+    one<{ worker: string }>(
+      big.db,
+      "SELECT worker FROM task_deliveries WHERE start_event_id=?",
+      id,
+    )?.worker,
+    "codex+gpt-6-sol",
+  );
+  small.db.close();
+  big.db.close();
 });

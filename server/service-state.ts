@@ -32,10 +32,22 @@ export function currentVersion(): string {
 }
 export function dataDirectory(env: NodeJS.ProcessEnv = process.env) {
   // Never keep mutable user data under an npm installation: npm update replaces it.
-  const path = resolve(
-    env.ATRIUM_DATA ?? join(homedir(), ".pi", "atrium", "data"),
-  );
+  const path = resolve(env.ATRIUM_DATA ?? join(homedir(), ".atrium"));
   return existsSync(path) ? realpathSync(path) : path;
+}
+/**
+ * 前一代（聊天运行时）的默认数据目录（t71）：已归档，新一代不读不写、不在上面建表。
+ * 没设 ATRIUM_DATA、新默认目录还没有而旧目录在时，提示一句，免得以为数据丢了。
+ */
+export function legacyDataNotice(
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  if (env.ATRIUM_DATA !== undefined) return null;
+  const legacy = join(home, ".pi", "atrium", "data");
+  if (exists(join(home, ".atrium")) || !exists(legacy)) return null;
+  return `前一代数据在 ${legacy}，已归档，不再使用；新一代数据放在 ${join(home, ".atrium")}（可用 ATRIUM_DATA 改）`;
 }
 export function servicePort() {
   const port = Number(process.env.ATRIUM_PORT ?? 4310);

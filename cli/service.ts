@@ -26,6 +26,8 @@ export async function connect(quietStart = false): Promise<Client> {
   const before = readService(data);
   const restarting = restartInProgress(data);
   const record = await startService(data).catch((error: unknown) => {
+    // 端口被别的数据目录或程序占着（t71）：原样报，不附本数据目录的日志与 status 修正。
+    if (error instanceof Problem) throw error;
     throw new Problem(
       503,
       error instanceof Error ? error.message : String(error),

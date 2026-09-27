@@ -41,6 +41,10 @@ import { beginUsage, endUsage } from "./usage.ts";
 import { readPace, type PaceEntry } from "./prepare.ts";
 import { DiskBudget } from "./disk-budget.ts";
 import { chooseWorker } from "./worker-choice.ts";
+import { jobMismatch } from "./job-mismatch.ts";
+import { activeJobChecks } from "./delivery-records.ts";
+import { publishWorkerAdvice } from "./workers-report.ts";
+import { getJobRole } from "./job-roles.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { BudgetProblem } from "./budget-problem.ts";
 import {
@@ -306,6 +310,16 @@ export class Executors {
         await this.pace(),
       );
       if (await followUpTells(this, this.ctx.db, active, exit)) return;
+      const jobId = getTask(this.ctx.db, id).job_id;
+      if (jobId) {
+        const job = getJobRole(this.ctx.db, `r${jobId}`);
+        active.worker.profile.rules.checks = [
+          ...new Set([
+            ...(active.worker.profile.rules.checks ?? []),
+            ...(activeJobChecks(this.ctx.db, id) ?? job.checks),
+          ]),
+        ];
+      }
       const outcome = await settle(
         active,
         exit,
@@ -323,6 +337,10 @@ export class Executors {
       let { decision } = outcome;
       if (outcome.localCheck)
         noteTask(this.ctx.db, id, "local_check", outcome.localCheck);
+      if (outcome.workerGuardRefused)
+        noteTask(this.ctx.db, id, "worker_guard_refused", {
+          reason: "执行日志出现 Atrium 执行者防护的固定拒绝语句",
+        });
       const detail = exitDetail(exit);
       if (verdict)
         noteTask(this.ctx.db, id, "gates", {
@@ -333,6 +351,14 @@ export class Executors {
           ...(facts ? { diff: diffSize(facts) } : {}),
           ...detail,
         });
+      if (facts && jobId) {
+        const mismatch = jobMismatch(
+          getJobRole(this.ctx.db, `r${jobId}`).name,
+          facts.numstat.map((s) => s.file),
+        );
+        if (mismatch)
+          noteTask(this.ctx.db, id, "job_mismatch", { reason: mismatch });
+      }
       const hints = facts
         ? fileHints(
             this.ctx.db,
@@ -445,6 +471,8 @@ export class Executors {
           published,
           active.stop?.kind === "user" ? active.stop.by : undefined,
         );
+      if (!isReviewTask(this.ctx.db, id))
+        publishWorkerAdvice(this.ctx.db, this.ctx.inbox, id);
       if (isReviewTask(this.ctx.db, id)) this.ctx.reviews?.settle();
       if (isOpinionTask(this.ctx.db, id) || isCouncilTask(this.ctx.db, id))
         this.ctx.councils?.settle();

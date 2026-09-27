@@ -132,6 +132,8 @@ export type Settlement = {
   /** 从结构化日志识别出的异常结束；思考耗尽时收尾后按 thinking.ts 换执行者重跑。 */
   ending?: AbnormalEnd;
   localCheck?: LocalCheck;
+  /** 运行时在执行日志里看见命令行防护的固定拒绝语句。 */
+  workerGuardRefused?: boolean;
 };
 
 export async function settle(
@@ -142,6 +144,8 @@ export async function settle(
   env?: NodeJS.ProcessEnv,
 ): Promise<Settlement> {
   const log = await readLog(active);
+  const workerGuardRefused =
+    log?.includes("执行者环境里不能操作用户的 Atrium 服务") ?? false;
   const lastMessage = readLastMessage(active);
   const summary = readSummary(active, log, lastMessage);
   // 接管后退出没有退出码：按日志收尾结构判正常结束还是出错。
@@ -280,6 +284,7 @@ export async function settle(
     transient,
     ending,
     localCheck,
+    workerGuardRefused,
   };
 }
 

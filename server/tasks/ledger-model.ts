@@ -12,6 +12,9 @@ export type TaskRow = {
   title: string;
   brief_path: string | null;
   role: string | null;
+  job_id: number | null;
+  worker_effort: string | null;
+  worker_risk: string | null;
   repo: string | null;
   deliver: Deliver;
   issue: number | null;
@@ -59,6 +62,7 @@ export type Task = TaskRow & {
   origin_ref: string | null;
   goal_ref: string | null;
   part_ref: string | null;
+  job_ref: string | null;
   /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
   queued_reason?: string | null;
   /** 请了的专员与本轮结论（concerns.ts）；没请时不给。 */
@@ -88,6 +92,7 @@ export const view = (
   origin_ref: string | null;
   goal_ref: string | null;
   part_ref: string | null;
+  job_ref: string | null;
 } => ({
   ...row,
   ref: taskRef(row.id),
@@ -96,6 +101,7 @@ export const view = (
   origin_ref: row.origin_node_id == null ? null : `o${row.origin_node_id}`,
   goal_ref: row.goal_id == null ? null : `g${row.goal_id}`,
   part_ref: row.part_id == null ? null : `o${row.part_id}`,
+  job_ref: row.job_id == null ? null : `r${row.job_id}`,
 });
 
 export const RESULT_MAX_BYTES = 4096;

@@ -5,11 +5,14 @@ import { repairScheduleRecords } from "./schedule-recovery.ts";
 import { ensureUpstreamPrTable } from "./schedule-upstream.ts";
 import { ensureUsageTable } from "./usage.ts";
 import { ensureConcernTable } from "./concerns.ts";
+import { ensureDeliveryRecords } from "./delivery-records.ts";
+import { ensureJobRoles } from "./job-roles.ts";
 import { ensureCouncilTables } from "./councils.ts";
 
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
   ensureQueueTable(db);
+  ensureJobRoles(db);
   db.exec(`CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       parent_id INTEGER REFERENCES tasks(id),
@@ -32,6 +35,12 @@ export function ensureTaskTables(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id,id);`);
   // 负责人（事件订阅者）是后加的列：老库补上，缺省交给秘书。
   const columns = all<{ name: string }>(db, "PRAGMA table_info(tasks)");
+  if (!columns.some((column) => column.name === "job_id"))
+    db.exec("ALTER TABLE tasks ADD COLUMN job_id INTEGER");
+  if (!columns.some((column) => column.name === "worker_effort"))
+    db.exec("ALTER TABLE tasks ADD COLUMN worker_effort TEXT");
+  if (!columns.some((column) => column.name === "worker_risk"))
+    db.exec("ALTER TABLE tasks ADD COLUMN worker_risk TEXT");
   if (!columns.some((column) => column.name === "owner"))
     db.exec("ALTER TABLE tasks ADD COLUMN owner TEXT");
   if (!columns.some((column) => column.name === "deliver"))
@@ -112,4 +121,5 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureConcernTable(db);
   // 全景图第 3 步（#322）：会审的议题、受邀专员与结论。
   ensureCouncilTables(db);
+  ensureDeliveryRecords(db);
 }

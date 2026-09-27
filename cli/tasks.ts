@@ -150,7 +150,7 @@ function partInput(values: Values): { part?: string; goal?: string } {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--concern 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--concern 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--job 角色] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
     "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--part 写归属哪一部分（全景图上的节点；旧写法 --goal gN 按迁移映射到节点），--concern 请专员（关注点节点，派活附其检查要点，交付后按清单审、可否决），--parent 挂到父任务下，--brief 附任务详述 md",
   options: {
@@ -159,6 +159,7 @@ const add: Command = {
     concern: { type: "string" },
     goal: { type: "string" },
     role: { type: "string" },
+    job: { type: "string" },
     from: { type: "string" },
     repo: { type: "string" },
     brief: { type: "string" },
@@ -193,6 +194,7 @@ const add: Command = {
     const body = {
       title,
       ...(parent === undefined ? {} : { parent: ref(parent, "--parent") }),
+      ...(str(values, "job") === undefined ? {} : { job: str(values, "job") }),
       ...(str(values, "role") === undefined
         ? {}
         : { role: str(values, "role") }),
@@ -354,6 +356,7 @@ const show: Command = {
         ],
         ["详述", task.brief_path],
         ["负责人", task.owner],
+        ["角色", task.job_ref],
         ["执行者", task.worker],
         ["进程", task.pid],
         ["工作树", task.worktree],
@@ -425,12 +428,13 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--role 节点] [--from 节点|''] [--part 节点|''] [--concern 专员[,专员]|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  args: "tN [--status S] [--pr URL] [--role 节点] [--job 角色|''] [--from 节点|''] [--part 节点|''] [--concern 专员[,专员]|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
   about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、归属部分、请的专员（--concern，下一轮派活生效）、详述、交付物、依赖和自动派发`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
     role: { type: "string" },
+    job: { type: "string" },
     from: { type: "string" },
     part: { type: "string" },
     concern: { type: "string" },
@@ -456,6 +460,8 @@ const set: Command = {
     }
     const role = str(values, "role");
     if (role !== undefined) body.role = role;
+    const job = str(values, "job");
+    if (job !== undefined) body.job = job;
     const from = str(values, "from");
     if (from !== undefined) body.from = from;
     Object.assign(body, partInput(values));
@@ -477,7 +483,7 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--role、--from、--part、--concern、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
+        "至少给一项：--status、--pr、--title、--role、--job、--from、--part、--concern、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -504,9 +510,9 @@ const set: Command = {
 };
 
 const note: Command = {
-  args: "tN 文字 [--as 身份]",
+  args: "tN 文字 [--as 身份] [--verdict ok|fixed|rejected]",
   about: "追加处理备注（最多 300 字）；最新一条显示为当前说明",
-  options: { as: { type: "string" } },
+  options: { as: { type: "string" }, verdict: { type: "string" } },
   positionals: [2, 2],
   async run({ positionals: [reference, text], values, json }) {
     const id = ref(reference, "任务");
@@ -515,6 +521,7 @@ const note: Command = {
     ).post<Task>(`/tasks/${id}/note`, {
       text,
       by: str(values, "as") ?? "u1",
+      ...(str(values, "verdict") ? { verdict: str(values, "verdict") } : {}),
     });
     if (json) printJson(result);
     else console.log(`${id} 已追加备注（${result.note_by}）：${result.note}`);
@@ -553,7 +560,7 @@ export function tellLine(detail: string | null) {
 }
 
 const tell: Command = {
-  args: "tN 文字 [--as 身份]",
+  args: "tN 文字 [--as 身份] [--verdict ok|fixed|rejected]",
   about:
     "给在跑的执行者捎话：Claude Code 即时送入，codex 本轮结束后续上会话，其余停掉带着补充重派；不在跑的下次拉起时写进提示词",
   options: { as: { type: "string" } },

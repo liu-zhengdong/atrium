@@ -34,6 +34,10 @@ import { Scheduler, planItem } from "./schedule.ts";
 import { requireRow } from "./ledger-model.ts";
 import { schedulePrExec } from "./schedule-pr.ts";
 import type { LaunchOptions } from "./workspace.ts";
+import { rankRoleWorkers } from "./role-ranking.ts";
+import { listDeliveries, summarizeDeliveries } from "./delivery-records.ts";
+import { getJobRole } from "./job-roles.ts";
+import { avoidReason } from "../skills/model.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { tellTask } from "./tell-runtime.ts";
 import { DiskBudget } from "./disk-budget.ts";
@@ -119,6 +123,7 @@ export class TaskRunner {
   private readonly review: ReviewGate;
   private readonly online: OnlineWatch;
   private readonly timers: NodeJS.Timeout[] = [];
+  private readonly background = new Set<Promise<void>>();
   private readonly exec: Exec;
   private readonly launchOptions: LaunchOptions;
   private closed = false;
@@ -279,7 +284,10 @@ export class TaskRunner {
   start() {
     const every = (ms: number, fn: () => Promise<void>) => {
       const timer = setInterval(() => {
-        void fn().catch((error) => console.error("任务运行时：", error));
+        const job = fn()
+          .catch((error) => console.error("任务运行时：", error))
+          .finally(() => this.background.delete(job));
+        this.background.add(job);
       }, ms);
       timer.unref();
       this.timers.push(timer);
@@ -299,7 +307,7 @@ export class TaskRunner {
     every(this.options.online?.pollMs ?? 60_000, async () => {
       if (!this.closed && this.recovered) this.online.kick();
     });
-    void this.recover()
+    const recovery = this.recover()
       .then(async () => {
         this.recovered = true;
         if (!this.closed) await this.scheduler.tick();
@@ -307,16 +315,19 @@ export class TaskRunner {
         if (!this.closed) this.merge.kick();
         if (!this.closed) this.online.kick();
       })
-      .catch((error) => console.error("任务运行时自愈失败：", error));
+      .catch((error) => console.error("任务运行时自愈失败：", error))
+      .finally(() => this.background.delete(recovery));
+    this.background.add(recovery);
   }
 
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
-  close() {
+  async close() {
     this.closed = true;
     this.merge.close();
     this.review.close();
     this.online.close();
     for (const timer of this.timers) clearInterval(timer);
+    await Promise.allSettled([...this.background]);
     // 与服务退出时一样关掉即时捎话的写端：执行者处理完本轮后自己退出，重启后按 pid 接管。
     for (const active of this.x.active.values()) void active.live?.finish();
     this.inbox.close();
@@ -396,12 +407,53 @@ export class TaskRunner {
         noteTask(this.db, id, "budget_unknown", {
           reason: "额度数据不可用，份额不拦截",
         });
-      chosen = await chooseWorker(
-        request,
-        { ...this.launchOptions, pace: async () => pace },
-        this.quota.held(),
-        { busy: this.x.busyTools(id), chain: taskAvoidChain(this.db, task) },
-      );
+      const chain = taskAvoidChain(this.db, task);
+      const avoid = {
+        busy: this.x.busyTools(id),
+        chain,
+        jobRef: task.job_ref ?? undefined,
+      };
+      const options = { ...this.launchOptions, pace: async () => pace };
+      let preferred: Choice | undefined;
+      if (!request.worker && task.job_id) {
+        const job = getJobRole(this.db, `r${task.job_id}`);
+        const stats = summarizeDeliveries(
+          listDeliveries(this.db, { job: job.id }),
+        );
+        for (const candidate of rankRoleWorkers(
+          job.preferred,
+          stats,
+          job.name,
+        )) {
+          try {
+            const choice = await chooseWorker(
+              { ...request, worker: candidate },
+              options,
+              this.quota.held(),
+              avoid,
+            );
+            const rules = choice.worker.profile.rules;
+            const avoidedJob =
+              Array.isArray(rules.avoid_jobs) &&
+              rules.avoid_jobs.includes(job.ref);
+            if (
+              avoidedJob ||
+              avoidReason(chain, rules.avoid_nodes) ||
+              (ADAPTERS[choice.worker.tool].exclusive &&
+                avoid.busy.has(choice.worker.tool))
+            )
+              continue;
+            preferred = choice;
+            break;
+          } catch (error) {
+            if (!(error instanceof Problem || error instanceof BudgetProblem))
+              throw error;
+          }
+        }
+      }
+      chosen =
+        preferred ??
+        (await chooseWorker(request, options, this.quota.held(), avoid));
     } catch (error) {
       this.x.launching.delete(id);
       if (error instanceof BudgetProblem)

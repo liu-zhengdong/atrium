@@ -12,6 +12,11 @@ import {
   type Task,
   type TaskRow,
 } from "./ledger-model.ts";
+import {
+  endDelivery,
+  markDeliveryFinal,
+  startDelivery,
+} from "./delivery-records.ts";
 import { noteView } from "./notes.ts";
 
 /** 执行者这一侧可以随状态一起写入的运行字段。 */
@@ -94,6 +99,43 @@ export function applyTransition(
       to: next.status,
       ...(detail === undefined ? {} : { detail }),
     });
+  if (next.changed && next.status === "running" && fields.worker) {
+    const event = db
+      .prepare(
+        "SELECT id FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1",
+      )
+      .get(current.id) as { id: number };
+    startDelivery(
+      db,
+      current,
+      event.id,
+      fields.worker,
+      typeof (detail as { risk?: unknown } | undefined)?.risk === "string"
+        ? (detail as { risk: string }).risk
+        : null,
+      now,
+    );
+    db.prepare("UPDATE tasks SET worker_effort=?,worker_risk=? WHERE id=?").run(
+      fields.worker.includes(":")
+        ? (fields.worker.split(":").at(-1) ?? null)
+        : null,
+      typeof (detail as { risk?: unknown } | undefined)?.risk === "string"
+        ? (detail as { risk: string }).risk
+        : null,
+      current.id,
+    );
+  }
+  if (
+    next.changed &&
+    (next.status === "done" ||
+      next.status === "failed" ||
+      next.status === "cancelled" ||
+      next.status === "blocked")
+  ) {
+    endDelivery(db, current.id, event.kind, now);
+    if (next.status === "cancelled" || next.status === "failed")
+      markDeliveryFinal(db, current.id, next.status);
+  }
   return next.status;
 }
 

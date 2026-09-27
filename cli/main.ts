@@ -2,6 +2,8 @@ import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { dataDirectory, serviceUrl } from "../server/service-state.ts";
 import { pad, width } from "./format.ts";
 import { authCommands } from "./auth.ts";
+import { workerCommands } from "./workers.ts";
+import { roleCommands } from "./roles.ts";
 import { taskCommands } from "./tasks.ts";
 import { orgCommands } from "./org.ts";
 import { goalCommands } from "./goals.ts";
@@ -90,6 +92,8 @@ export const commands: Record<string, Command> = {
   // 看板放在任务组最前：先看谁在干活，再看单个任务。
   top: topCommand,
   ...taskCommands,
+  ...roleCommands,
+  ...workerCommands,
   ...reviewCommands,
   ...mapCommands,
   ...orgCommands,
@@ -143,7 +147,7 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["任务", "全景", "目标", "组织"].flatMap((group) => [
+    ...["任务", "角色", "全景", "目标", "组织"].flatMap((group) => [
       "",
       group,
       ...Object.entries(commands)

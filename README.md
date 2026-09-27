@@ -39,7 +39,7 @@ atrium task add "验收" --parent t1 --after t2 --deliver none    # t2 完成后
 atrium task tree t1                                             # 缩进树：状态、交付物、执行者、PR
 atrium task plan                                                # 在跑、就绪、等待中、卡住；上游交付 PR 的，PR 合入才算满足
 atrium task show t2                                             # 详情与最近事件
-atrium task note t2 "等上游接口"                                 # 处理备注，最新一条显示为当前说明
+atrium task note t2 "端到端已验证" --verdict ok                 # 秘书对上线结果作一句话标注                                 # 处理备注，最新一条显示为当前说明
 atrium task set t3 --status blocked                             # 人工修正状态；running 只能由执行者进入
 atrium task ls --status todo                                    # 按状态列；--parent、--after 翻页
 atrium task done t3                                             # 人工完成，触发下游排期
@@ -81,6 +81,24 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 **自动上线**：合入的是服务自身仓库（`ATRIUM_UPDATE_REPO`，缺省 `liu-zhengdong/atrium`）的 PR 时，运行时每分钟拉一次标签，等发版工作流打出含该合入提交的版本；版本比运行中的新就执行 `atrium update --to <版本>` 与 `atrium restart`（在跑的执行者由新服务接管），新服务起来后把任务标为「已上线」，给负责人发 `online` 事件「tN 已上线（vX）」并附执行者在 PR 正文里写的「端到端验证」一节（派活时的通用约束要求写这一节）。同一版本只自升级一次：升级或重启失败（含 supervisor 回滚）发 `online_failed`；合入 30 分钟仍未发版发一次 `release_overdue`。自升级缺省只在用默认数据目录（`~/.atrium`）的安装版上开；开发中的 git 检出、测试与另给 `ATRIUM_DATA` 的隔离服务不动全局安装，停在已合入（`ATRIUM_SELF_UPDATE=1` 强制开、`=0` 关）。其他仓库只到已合入。
 
 **看门狗与自愈**：日志、工作区、结构化事件长时间没有进展判卡死；供应商或网络临时错误先同一执行者重试、再换人重派；思考耗尽单次输出直接换人；额度用尽的账号打标记，到点前不再派。
+
+## 角色与执行者评价表
+
+组织级角色与全景组成部分、专员分开。`task add/set --role` 仍指组织节点；`--job` 指角色，派活会附角色说明、技能与交付关卡。角色的优先执行者在额度、风险和档案约束内选择；有足够交付样本时按一次通过率调整优先顺序。
+
+```bash
+atrium role add 前端 --description "界面设计与实现" --body ./frontend-role.md --preferred claude+opus:high --checks screenshot --skills visual-design,design-dialogue
+atrium role show 前端
+atrium role edit r1 --preferred claude+opus:high,codex+gpt-6-sol:high
+atrium role ls --json
+atrium task add "改页面" --job 前端 --role atrium/runtime
+atrium task set t1 --job 后端
+atrium workers --role 前端
+atrium workers show claude+opus:high
+atrium workers confirm claude+opus:high --role 前端 --action tighten
+```
+
+`workers` 展示组合 × 角色，并上卷到模型与工具；少于五次标「数据少」。建议只读，确认后才写组合档案。交付明细保留事实、缺失值与旧任务回填标记；`task note --verdict ok|fixed|rejected` 记录秘书的上线验证或用户纠正。
 
 ## 额度
 

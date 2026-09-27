@@ -195,3 +195,141 @@ test("隔离服务：A→B→C，A 完成后 B 自动派出，C 仍等待；上�
     await taskRunner.wait("t2", 20);
   }
 });
+
+test("排期纯判定：上游交付 PR 时合入才满足，关闭未合入卡住下游", () => {
+  const pr = (state: "open" | "merged" | "closed" | null, error = null) => [
+    {
+      ref: "t1",
+      status: "done" as const,
+      pr: { number: 308, state, error },
+    },
+  ];
+  const open = classify("todo", pr("open"), []);
+  assert.equal(open.group, "waiting");
+  assert.deepEqual(open.waiting_for, ["t1 的 PR #308 合入"]);
+  assert.match(classify("todo", pr(null), []).waiting_for[0]!, /尚未查询/);
+  assert.equal(classify("todo", pr("merged"), []).group, "ready");
+  const closed = classify("todo", pr("closed"), []);
+  assert.equal(closed.group, "blocked");
+  assert.equal(closed.reason, "上游 t1 的 PR #308 已关闭未合入");
+  // 下游因 PR 关闭被卡住后，PR 重开合入即恢复（原因以「上游 」开头）。
+  assert.equal(
+    classify("blocked", pr("merged"), [], closed.reason).group,
+    "ready",
+  );
+  assert.equal(
+    classify("todo", [{ ref: "t1", status: "done" }], []).group,
+    "ready",
+  );
+});
+
+test("A(pr)→B：A done 但 PR 未合入时 B 等待，合入后 B 就绪；comment 交付 done 即满足", async () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const inbox = new EventInbox(db);
+  createTask(db, { title: "A", deliver: "pr" });
+  createTask(db, { title: "B", after: "t1", auto: true });
+  createTask(db, { title: "C", deliver: "comment", issue: 1 });
+  createTask(db, { title: "D", after: "t3" });
+  db.prepare(
+    "UPDATE tasks SET status='done',pr_url='https://github.com/o/r/pull/308' WHERE id=1",
+  ).run();
+  db.prepare("UPDATE tasks SET status='done' WHERE id=3").run();
+  const calls: string[][] = [];
+  let state = "OPEN";
+  let dispatched = 0;
+  const scheduler = new Scheduler(
+    db,
+    inbox,
+    async () => {
+      dispatched++;
+    },
+    async (_command, args) => {
+      calls.push(args);
+      return {
+        ok: true,
+        stdout: JSON.stringify({
+          state,
+          mergedAt: state === "MERGED" ? "2026-09-27T00:00:00Z" : null,
+        }),
+        stderr: "",
+      };
+    },
+  );
+  const group = (ref: string) => {
+    const groups = taskPlan(db).groups;
+    for (const [name, items] of Object.entries(groups))
+      if (items.some((item) => item.task.ref === ref)) return name;
+  };
+  await scheduler.tick();
+  assert.equal(group("t2"), "waiting");
+  assert.equal(group("t4"), "ready");
+  assert.deepEqual(
+    taskPlan(db).groups.waiting.find((item) => item.task.ref === "t2")!
+      .waiting_for,
+    ["t1 的 PR #308 合入"],
+  );
+  assert.deepEqual(calls[0], [
+    "pr",
+    "view",
+    "308",
+    "-R",
+    "o/r",
+    "--json",
+    "state,mergedAt",
+  ]);
+  assert.equal(dispatched, 0);
+  // 一分钟内不重复查询。
+  await scheduler.tick();
+  assert.equal(calls.length, 1);
+  db.prepare("UPDATE task_pr_merge SET checked_at=0").run();
+  state = "MERGED";
+  await scheduler.tick();
+  assert.equal(dispatched, 1);
+  // 合入后不再查。
+  db.prepare("UPDATE task_pr_merge SET checked_at=0").run();
+  await scheduler.tick();
+  assert.equal(calls.length, 2);
+  inbox.close();
+  db.close();
+});
+
+test("上游 PR 关闭未合入：下游标卡住并说明，重开合入后恢复", async () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const inbox = new EventInbox(db);
+  createTask(db, { title: "A" });
+  createTask(db, { title: "B", after: "t1" });
+  db.prepare(
+    "UPDATE tasks SET status='done',pr_url='https://github.com/o/r/pull/9' WHERE id=1",
+  ).run();
+  let state = "CLOSED";
+  let ok = true;
+  const scheduler = new Scheduler(
+    db,
+    inbox,
+    async () => {},
+    async () => ({
+      ok,
+      stdout: ok ? JSON.stringify({ state }) : "",
+      stderr: ok ? "" : "HTTP 502\nsecond line",
+    }),
+  );
+  await scheduler.tick();
+  const blocked = getTask(db, "t2");
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.schedule_reason, "上游 t1 的 PR #9 已关闭未合入");
+  // 查询失败沿用上次状态，并写明失败原因。
+  ok = false;
+  db.prepare("UPDATE task_pr_merge SET checked_at=0").run();
+  await scheduler.tick();
+  assert.equal(getTask(db, "t2").status, "blocked");
+  ok = true;
+  state = "MERGED";
+  db.prepare("UPDATE task_pr_merge SET checked_at=0").run();
+  await scheduler.tick();
+  assert.equal(getTask(db, "t2").status, "todo");
+  assert.equal(taskPlan(db).groups.ready[0]!.task.ref, "t2");
+  inbox.close();
+  db.close();
+});

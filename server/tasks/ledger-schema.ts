@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { all } from "./ledger-model.ts";
 import { ensureQueueTable } from "./queue.ts";
 import { repairScheduleRecords } from "./schedule-recovery.ts";
+import { ensureUpstreamPrTable } from "./schedule-upstream.ts";
 
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
@@ -64,5 +65,6 @@ export function ensureTaskTables(db: DatabaseSync) {
     task_id INTEGER NOT NULL REFERENCES tasks(id), repo TEXT NOT NULL, number INTEGER NOT NULL,
     merged INTEGER NOT NULL DEFAULT 0, checked_at INTEGER, error TEXT,
     PRIMARY KEY(task_id,repo,number));`);
+  ensureUpstreamPrTable(db);
   repairScheduleRecords(db);
 }

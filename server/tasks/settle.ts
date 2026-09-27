@@ -11,6 +11,7 @@ import type { Exec } from "./git.ts";
 import type { RunFields } from "./ledger.ts";
 import {
   decideExit,
+  exitDetail,
   exitText,
   needsFacts,
   needsGates,
@@ -137,6 +138,8 @@ export type Settlement = {
   localCheck?: LocalCheck;
   /** 运行时在执行日志里看见命令行防护的固定拒绝语句。 */
   workerGuardRefused?: boolean;
+  /** 退出情况与判定依据，写进 gates 与状态转移事件。 */
+  exitDetail: Record<string, unknown>;
 };
 
 export async function settle(
@@ -204,7 +207,13 @@ export async function settle(
       retryAllowed: false,
       quota: quota.reason,
     });
-    return { summary, fields, decision, quota };
+    return {
+      summary,
+      fields,
+      decision,
+      quota,
+      exitDetail: exitDetail(exit, adopted),
+    };
   }
   let verdict: Verdict | undefined;
   let localCheck: LocalCheck | undefined;
@@ -276,6 +285,7 @@ export async function settle(
           logTail: log,
           json: jsonEvents(active),
         });
+  const delivered = deliveredDespiteUnknownExit(exit, facts);
   const decision = decideExit({
     stop: active.stop,
     exit,
@@ -287,7 +297,7 @@ export async function settle(
     thinking: ending?.kind === "thinking",
     transient: transient?.reason,
     // 远端已交付（PR 在、CI 过）的照常过关卡，不因日志里的出错判失败。
-    adopted: deliveredDespiteUnknownExit(exit, facts) ? undefined : adopted,
+    adopted: delivered ? undefined : adopted,
   });
   return {
     summary,
@@ -299,6 +309,7 @@ export async function settle(
     ending,
     localCheck,
     workerGuardRefused,
+    exitDetail: exitDetail(exit, adopted, delivered),
   };
 }
 

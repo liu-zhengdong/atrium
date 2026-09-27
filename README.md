@@ -80,6 +80,7 @@ atrium quota --clear claude   # 人工解除运行时的额度占用（误判时
 任务完成、失败、受阻、卡死和 CI 结果先落库，订阅者取走、确认后才算处理完；服务重启后仍在。
 
 ```bash
+atrium events                     # 查看最近事件的送达与确认状态；--before 翻页
 atrium events wait --timeout 5    # 取未确认的事件，没有就等；缺省订阅者 secretary
 atrium events ack 1               # 确认已处理（编号见 events wait）
 ```

@@ -67,6 +67,9 @@ export type InboxEvent = {
   detail: unknown;
   created_at: number;
   updated_at: number;
+  /** 最近一次送达时间；合并新内容后会清空，等待重新送达。 */
+  delivered_at: number | null;
+  acked_at: number | null;
 };
 
 const view = (row: InboxRow): InboxEvent => {
@@ -88,6 +91,8 @@ const view = (row: InboxRow): InboxEvent => {
     detail,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    delivered_at: row.delivered_at,
+    acked_at: row.acked_at,
   };
 };
 
@@ -107,6 +112,25 @@ export type Publish = {
 export const BATCH_LIMIT = 50;
 export const WAIT_MAX_SECONDS = 3600;
 export const ACK_MAX = 500;
+export const LIST_LIMIT = 50;
+export const LIST_MAX = 200;
+
+export function listOptions(query: { before?: string; limit?: string }) {
+  const positive = (value: string | undefined, name: string, max: number) => {
+    if (value === undefined) return undefined;
+    if (
+      !/^[1-9]\d*$/.test(value) ||
+      !Number.isSafeInteger(Number(value)) ||
+      Number(value) > max
+    )
+      throw usage(`${name}: 应为 1～${max} 的整数`);
+    return Number(value);
+  };
+  return {
+    before: positive(query.before, "before", Number.MAX_SAFE_INTEGER),
+    limit: positive(query.limit, "limit", LIST_MAX) ?? LIST_LIMIT,
+  };
+}
 
 export class EventInbox {
   private readonly emitter = new EventEmitter();
@@ -181,6 +205,25 @@ export class EventInbox {
     return view(row);
   }
 
+  /** 最近事件，含已送达与已确认记录；按编号倒序、有界分页。 */
+  list(subscriber: string, options: { before?: number; limit: number }) {
+    const who = ownerOf(subscriber, "as");
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM task_inbox WHERE subscriber=? AND id<? ORDER BY id DESC LIMIT ?",
+      )
+      .all(
+        who,
+        options.before ?? Number.MAX_SAFE_INTEGER,
+        options.limit + 1,
+      ) as InboxRow[];
+    const page = rows.slice(0, options.limit);
+    return {
+      events: page.map(view),
+      next_before: rows.length > options.limit ? page.at(-1)!.id : null,
+    };
+  }
+
   /** 可投递的事件（条件与 event-lease.ts 的 deliverable 一致），按编号升序，每批最多 50 条；只看不交。 */
   pending(subscriber: string, limit = BATCH_LIMIT): InboxEvent[] {
     const now = this.now();
@@ -216,7 +259,7 @@ export class EventInbox {
       );
       const now = this.now();
       for (const event of events) mark.run(now, event.id);
-      return events;
+      return events.map((event) => ({ ...event, delivered_at: now }));
     });
   }
 

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventInbox, ackIds } from "../server/tasks/events.ts";
+import { EventInbox, ackIds, listOptions } from "../server/tasks/events.ts";
 import {
   LEASE_MS,
   deliverable,
@@ -106,6 +106,69 @@ test("投递判定：租约内不重投、超时重投、ack 后永不再投、�
         false,
         "ack 后永不再投",
       );
+});
+
+test("事件列表：未送达、送达、确认、合并后重新待送、倒序分页", async () => {
+  let now = 1_000;
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const inbox = new EventInbox(db, { now: () => now });
+  const first = inbox.publish({
+    subscriber: "secretary",
+    source: "test",
+    kind: "done",
+    key: "first",
+  });
+  assert.deepEqual(inbox.list("secretary", { limit: 50 }).events[0], first);
+  now++;
+  const [delivered] = (await inbox.wait("secretary", 0)).events;
+  assert.equal(delivered!.delivered_at, now);
+  assert.equal(delivered!.acked_at, null);
+  assert.equal(
+    inbox.list("secretary", { limit: 50 }).events[0]!.delivered_at,
+    now,
+  );
+  now++;
+  inbox.publish({
+    subscriber: "secretary",
+    source: "test",
+    kind: "done",
+    key: "first",
+  });
+  assert.equal(
+    inbox.list("secretary", { limit: 50 }).events[0]!.delivered_at,
+    null,
+  );
+  const [again] = (await inbox.wait("secretary", 0)).events;
+  assert.equal(again!.delivered_at, now);
+  now++;
+  inbox.ack([first.id]);
+  assert.equal(inbox.list("secretary", { limit: 50 }).events[0]!.acked_at, now);
+  const second = inbox.publish({
+    subscriber: "secretary",
+    source: "test",
+    kind: "failed",
+    key: "second",
+  });
+  assert.deepEqual(
+    inbox.list("secretary", { limit: 1 }).next_before,
+    second.id,
+  );
+  assert.deepEqual(
+    inbox
+      .list("secretary", { before: second.id, limit: 1 })
+      .events.map((e) => e.id),
+    [first.id],
+  );
+  assert.equal(
+    inbox.list("secretary", { before: second.id, limit: 1 }).next_before,
+    null,
+  );
+  assert.deepEqual(inbox.list("lead", { limit: 50 }).events, []);
+  assert.deepEqual(listOptions({}), { before: undefined, limit: 50 });
+  assert.throws(() => listOptions({ limit: "201" }), /limit/);
+  assert.throws(() => listOptions({ before: "0" }), /before/);
+  inbox.close();
 });
 
 test("事件队列按判定投递：逐格与纯函数一致，租约到期唤醒 wait", async () => {

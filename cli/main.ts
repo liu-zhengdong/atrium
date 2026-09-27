@@ -196,8 +196,15 @@ export async function main(argv: string[]): Promise<number> {
         console.log(guide(commands));
         return 0;
       }
-      // 命令组（task、events …）：没有子命令时给组帮助，有子命令时拼出完整命令名。
-      if (name !== undefined && membersOf(name).length) {
+      // 命令组可同时有同名命令（events 列表）；带位置参数时解析子命令。
+      if (
+        name !== undefined &&
+        membersOf(name).length &&
+        (commands[name] === undefined ||
+          (rest[0] !== undefined && !rest[0].startsWith("-")) ||
+          (rest.length > 0 &&
+            rest.every((arg) => arg === "--help" || arg === "-h")))
+      ) {
         const words = rest.filter((arg) => !arg.startsWith("-"));
         const plain = rest.every(
           (arg) => arg === "--json" || arg === "--help" || arg === "-h",

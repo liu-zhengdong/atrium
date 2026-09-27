@@ -38,6 +38,7 @@ import { tellTask } from "./tell-runtime.ts";
 import { DiskBudget } from "./disk-budget.ts";
 import { BudgetProblem } from "./budget-problem.ts";
 import { readPace } from "./prepare.ts";
+import { MergeQueue } from "./merge-runtime.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -73,6 +74,7 @@ export class TaskRunner {
   private readonly quota: QuotaGuard;
   private readonly scheduler: Scheduler;
   private readonly disk: DiskBudget;
+  private readonly merge: MergeQueue;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly exec: Exec;
   private readonly launchOptions: LaunchOptions;
@@ -122,6 +124,38 @@ export class TaskRunner {
       disk: this.disk,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
+      onAccepted: (id) => {
+        const task = getTask(this.db, id);
+        if (task.deliver !== "pr" || !task.pr_url || !task.repo) return false;
+        this.merge.enqueue(id);
+        return true;
+      },
+    });
+    this.merge = new MergeQueue(db, {
+      data: options.data,
+      env: this.launchOptions.env,
+      run: this.exec,
+      changed: (id) => this.waits.changed(id),
+      publish: (id, kind, detail, actor) =>
+        this.x.publish(id, kind, detail, actor),
+      returned: async (task) => {
+        if (this.closed || !task.worker) return;
+        const start = this.db
+          .prepare(
+            "SELECT detail FROM task_events WHERE task_id=? AND kind='start' ORDER BY id DESC LIMIT 1",
+          )
+          .get(task.id) as { detail: string | null } | undefined;
+        let risk = "low";
+        try {
+          const detail = JSON.parse(start?.detail ?? "{}") as {
+            detail?: { risk?: string };
+          };
+          risk = detail.detail?.risk ?? risk;
+        } catch {
+          /* 旧事件使用低风险缺省值。 */
+        }
+        await this.run(task.ref, { worker: task.worker, risk });
+      },
     });
     this.scheduler = new Scheduler(
       db,
@@ -149,12 +183,14 @@ export class TaskRunner {
       if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();
+      if (!this.closed && this.recovered) this.merge.kick();
     });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
     void this.recover()
       .then(async () => {
         this.recovered = true;
         if (!this.closed) await this.scheduler.tick();
+        if (!this.closed) this.merge.kick();
       })
       .catch((error) => console.error("任务运行时自愈失败：", error));
   }
@@ -162,6 +198,7 @@ export class TaskRunner {
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
   close() {
     this.closed = true;
+    this.merge.close();
     for (const timer of this.timers) clearInterval(timer);
     // 与服务退出时一样关掉即时捎话的写端：执行者处理完本轮后自己退出，重启后按 pid 接管。
     for (const active of this.x.active.values()) void active.live?.finish();
@@ -339,6 +376,8 @@ export class TaskRunner {
           ...(outcome.detail ? { reason: outcome.detail } : {}),
           ...(outcome.accepted ? { accepted: true } : {}),
         });
+        if (outcome.accepted && outcome.task.deliver === "pr")
+          this.merge.enqueue(outcome.task.id);
         this.waits.changed(outcome.task.id);
       }
     } finally {
@@ -352,6 +391,9 @@ export class TaskRunner {
   stop(reference: unknown, by?: string) {
     const id = parseTaskRef(reference);
     const task = getTask(this.db, id);
+    const mergeStop = this.merge.stop(id, by);
+    if (mergeStop)
+      return { task: getTask(this.db, id), stopping: mergeStop.stopping };
     if (dequeue(this.db, id)) {
       noteTask(this.db, id, "unqueued", { reason: "人工停止，移出队列" });
       this.waits.changed(id);
@@ -400,6 +442,9 @@ export class TaskRunner {
   private pending(id: number, task: Task) {
     return (
       task.status === "running" ||
+      task.delivery_stage === "merge_queued" ||
+      task.delivery_stage === "merging" ||
+      this.merge.isReturning(id) ||
       !!queued(this.db, id) ||
       this.x.launching.has(id) ||
       this.x.finishing.has(id)

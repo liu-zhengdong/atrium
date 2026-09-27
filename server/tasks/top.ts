@@ -24,6 +24,8 @@ export type TopRow = NoteView & {
   title: string;
   /** 账本里的状态。 */
   status: TaskStatus;
+  delivery_stage?: TaskRow["delivery_stage"];
+  merge_queued_at?: number | null;
   worker: string | null;
   started_at: number | null;
   ended_at: number | null;
@@ -50,9 +52,10 @@ export function selectRows(
     db,
     `SELECT * FROM tasks
       WHERE status IN ('running','blocked')
+         OR delivery_stage IN ('merge_queued','merging')
          OR id IN (SELECT task_id FROM task_queue)
          OR (status IN (${FINISHED_STATUSES.map(() => "?").join(",")})
-             AND COALESCE(ended_at,updated_at) >= ?)
+             AND updated_at >= ?)
       ORDER BY id
       LIMIT ?`,
     ...params,
@@ -66,15 +69,24 @@ export function sortRows(rows: TopRow[]): TopRow[] {
   const group = (row: TopRow) =>
     row.queued_at !== null
       ? 1
-      : row.status === "running"
+      : row.delivery_stage === "merging"
         ? 0
-        : row.status === "blocked"
-          ? 2
-          : 3;
+        : row.status === "running"
+          ? 0
+          : row.delivery_stage === "merge_queued"
+            ? 1
+            : row.status === "blocked"
+              ? 2
+              : 3;
   const at = (row: TopRow) =>
     group(row) === 3
-      ? -(row.ended_at ?? row.updated_at)
-      : (row.queued_at ?? row.started_at ?? row.updated_at);
+      ? -(row.delivery_stage === "merged" || row.delivery_stage === "online"
+          ? row.updated_at
+          : (row.ended_at ?? row.updated_at))
+      : (row.queued_at ??
+        row.merge_queued_at ??
+        row.started_at ??
+        row.updated_at);
   return [...rows].sort((a, b) => group(a) - group(b) || at(a) - at(b));
 }
 
@@ -148,6 +160,8 @@ export function topRows(
       ref: taskRef(row.id),
       title: row.title,
       status: row.status,
+      delivery_stage: row.delivery_stage,
+      merge_queued_at: row.merge_queued_at,
       // 排队的任务账本里还没有执行者，用队列里记的那个。
       worker: row.worker ?? waiting?.worker ?? null,
       started_at: row.started_at,
@@ -165,6 +179,9 @@ export function topRows(
 export type TopCounts = {
   running: number;
   queued: number;
+  merge_queued?: number;
+  merging?: number;
+  merged?: number;
   blocked: number;
   processing: number;
   done: number;
@@ -185,6 +202,12 @@ export function countRows(rows: TopRow[]): TopCounts {
   };
   for (const row of rows)
     if (row.queued_at !== null) counts.queued++;
+    else if (row.delivery_stage === "merge_queued")
+      counts.merge_queued = (counts.merge_queued ?? 0) + 1;
+    else if (row.delivery_stage === "merging")
+      counts.merging = (counts.merging ?? 0) + 1;
+    else if (row.delivery_stage === "merged")
+      counts.merged = (counts.merged ?? 0) + 1;
     else if (row.status === "running") counts.running++;
     else if (row.status === "blocked") {
       if (row.processing) counts.processing++;

@@ -62,6 +62,18 @@ export function ensureTaskTables(db: DatabaseSync) {
   // 全景图（#322）：任务归属哪一部分，指向 org_nodes.id；旧 goal_id 由目标树迁移按目标的负责节点回填。
   if (!columns.some((column) => column.name === "part_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN part_id INTEGER");
+  // PR 交付后的合入阶段单独记录；旧任务不自动合入。
+  if (!columns.some((column) => column.name === "delivery_stage"))
+    db.exec("ALTER TABLE tasks ADD COLUMN delivery_stage TEXT");
+  if (!columns.some((column) => column.name === "merge_returns"))
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN merge_returns INTEGER NOT NULL DEFAULT 0",
+    );
+  if (!columns.some((column) => column.name === "merge_queued_at"))
+    db.exec("ALTER TABLE tasks ADD COLUMN merge_queued_at INTEGER");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS tasks_delivery_stage ON tasks(delivery_stage,id)",
+  );
   db.exec("CREATE INDEX IF NOT EXISTS tasks_part ON tasks(part_id,status)");
   db.exec(
     "CREATE INDEX IF NOT EXISTS tasks_node ON tasks(node_id,status); CREATE INDEX IF NOT EXISTS tasks_origin_node ON tasks(origin_node_id,status)",

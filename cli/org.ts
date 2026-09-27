@@ -106,7 +106,13 @@ export function formatBoundaries(view: BoundaryView): string[] {
     }
   return lines;
 }
-type TaskCounts = { todo: number; running: number; blocked: number };
+type TaskCounts = {
+  todo: number;
+  running: number;
+  blocked: number;
+  merge_queued?: number;
+  merging?: number;
+};
 type BudgetView = {
   own: Record<string, unknown>;
   quota: {
@@ -148,10 +154,17 @@ export function formatBudget(view: BudgetView, detail = false): string {
 export function formatCounts(own: TaskCounts, sent: TaskCounts): string {
   const parts = [
     own.running ? `在做 ${own.running}` : "",
+    own.merge_queued ? `排队合入 ${own.merge_queued}` : "",
+    own.merging ? `合入中 ${own.merging}` : "",
     own.blocked ? `卡住 ${own.blocked}` : "",
     own.todo ? `待办 ${own.todo}` : "",
   ];
-  const out = sent.running + sent.blocked + sent.todo;
+  const out =
+    sent.running +
+    sent.blocked +
+    sent.todo +
+    (sent.merge_queued ?? 0) +
+    (sent.merging ?? 0);
   if (out)
     parts.push(`投出 ${out}${sent.running ? `（在做 ${sent.running}）` : ""}`);
   return parts
@@ -337,6 +350,7 @@ export const orgCommands: Record<string, Command> = {
           ref: string;
           title: string;
           status: string;
+          delivery_stage?: string | null;
           worker: string | null;
           origin_ref: string | null;
         }[];
@@ -385,7 +399,7 @@ export const orgCommands: Record<string, Command> = {
                     `手上的任务（最近 ${node.recent_tasks.length} 条）`,
                     ...node.recent_tasks.map(
                       (t) =>
-                        `  ${t.ref} [${t.status}] ${t.title}${t.worker ? ` · ${t.worker}` : ""}${t.origin_ref ? ` · ${t.origin_ref} 投来` : ""}`,
+                        `  ${t.ref} [${t.delivery_stage === "merge_queued" ? "排队合入" : t.delivery_stage === "merging" ? "合入中" : t.delivery_stage === "merged" ? "已合入" : t.status}] ${t.title}${t.worker ? ` · ${t.worker}` : ""}${t.origin_ref ? ` · ${t.origin_ref} 投来` : ""}`,
                     ),
                   ]
                 : []),

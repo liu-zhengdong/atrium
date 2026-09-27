@@ -45,7 +45,7 @@ atrium task ls --status todo                                    # 按状态列�
 atrium task done t3                                             # 人工完成，触发下游排期
 ```
 
-状态：`todo` → `running` → `done` / `failed` / `blocked`，或 `cancelled`。任一上游失败或取消，整条下游链都不会就绪。
+状态：`todo` → `running` → `done` / `failed` / `blocked`，或 `cancelled`。PR 任务过交付关卡后另有 `排队合入 → 合入中 → 已合入` 阶段；`已上线` 留给后续自动上线步骤。任一上游失败或取消，整条下游链都不会就绪。
 
 ## 派活与执行者
 
@@ -54,9 +54,9 @@ atrium task done t3                                             # 人工完成�
 ```bash
 atrium task add "回复一句话" --deliver none
 atrium task run t4 --worker claude          # 派给执行者；不写 --worker 按额度挑，--risk 缺省 low
-atrium task wait t4 --timeout 600           # 等到离开 running 或超时
+atrium task wait t4 --timeout 600           # PR 任务等到合入或卡住；其他任务等到离开 running
 atrium task log t4                          # 执行者日志；--follow 跟到结束，--after 字节偏移续读
-atrium task stop t4                         # 仍在跑时停掉执行者（排队中的移出队列）；已结束的报错并给出 task show
+atrium task stop t4                         # 停执行者或合入队列；合入中会在安全点停下
 atrium task tell t4 "接口改用 v2"            # 给在跑的执行者捎话；--as 写作者，缺省 u1
 atrium top --once                           # 谁在干活、全景图上两层各块的状态与在跑数，下接排期
 atrium top --once --depth 3                 # 全景展开三层（旧写法 --goals-depth 照旧接受）
@@ -73,6 +73,8 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 **执行者档案**在 `~/Atrium/workers/`（`ATRIUM_WORKERS_DIR` 可改），三层叠加：`harness/<工具>.md` ← `models/<模型>.md` ← `combos/<工具>+<模型>.md`。frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时取更严；正文原样附进提示词。
 
 **验收关卡**：执行者退出后，运行时自己查事实（PR、提交、改动规模、CI、issue 评论），按档案 `checks`（`finished`、`pr_exists`、`ci`、`file_growth`、`claims_verified`）判定 `done` 或 `blocked`，原因写进任务事件，不采信执行者自述。
+
+**自动合入**：PR 任务过交付关卡后进入持久化的串行合入队列。运行时从仓库 `origin` 核对 PR，rebase 到最新默认分支，在任务 worktree 重跑 `.agents/check`（没有则 `npm run check`），通过后用检查过的头提交执行 `gh pr merge --squash --match-head-commit`；gh 查询与合入都明确带 `-R`。rebase 冲突、本地检查失败或 gh 合入失败会把文件名、失败用例和日志位置写进事件及补充说明，在原工作树与原分支重派原执行者；第三次交回转卡住并通知负责人。合入中断后从账本续上，`atrium task show tN`、`atrium top --once` 和 `atrium org show oN --detail` 可看阶段。远端 CI 仍只供参考，不挡合入。
 
 **看门狗与自愈**：日志、工作区、结构化事件长时间没有进展判卡死；供应商或网络临时错误先同一执行者重试、再换人重派；思考耗尽单次输出直接换人；额度用尽的账号打标记，到点前不再派。
 

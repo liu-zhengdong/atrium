@@ -141,7 +141,13 @@ export type Part = {
   alias: string;
   analogy: string;
   archived: boolean;
-  tasks: { todo: number; running: number; blocked: number };
+  tasks: {
+    todo: number;
+    running: number;
+    blocked: number;
+    merge_queued?: number;
+    merging?: number;
+  };
 };
 export type Overview = {
   alias: string;

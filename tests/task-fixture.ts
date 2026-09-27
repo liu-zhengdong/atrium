@@ -94,7 +94,7 @@ export function fixture(t: After) {
             "none of the git remotes configured for this repository point to a known GitHub host",
         })
       : exec(command, args, options);
-  return { root, repo: join(root, "repo"), env, workers, run };
+  return { root, repo: join(root, "repo"), env, workers, run, script };
 }
 
 export async function until(check: () => boolean, ms = 10_000) {

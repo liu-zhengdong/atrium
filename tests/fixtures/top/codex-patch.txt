@@ -1,0 +1,21 @@
+apply patch
+patch: completed
+/private/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog/edit.txt
+diff --git a/edit.txt b/edit.txt
+index c0d0fb45c382919737f8d0c20aaf57cf89b74af8..92ebdd7c3285c14a5f3e2ba1dd66c18f16028f01
+--- a/edit.txt
++++ b/edit.txt
+@@ -1,2 +1,2 @@
+-line1
++first
+ line2
+
+diff --git a/edit.txt b/edit.txt
+index c0d0fb45c382919737f8d0c20aaf57cf89b74af8..92ebdd7c3285c14a5f3e2ba1dd66c18f16028f01
+--- a/edit.txt
++++ b/edit.txt
+@@ -1,2 +1,2 @@
+-line1
++first
+ line2
+

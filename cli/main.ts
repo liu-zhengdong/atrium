@@ -12,6 +12,7 @@ import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { taskCommands } from "./tasks.ts";
 import { orgCommands } from "./org.ts";
+import { topCommand } from "./top.ts";
 import { quotaCommands } from "./quota.ts";
 import { workerGuard } from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
@@ -99,6 +100,8 @@ export const commands: Record<string, Command> = {
   ...runnerCommands,
   ...pluginCommands,
   ...resourceCommands,
+  // 看板放在任务组最前：先看谁在干活，再看单个任务。
+  top: topCommand,
   ...taskCommands,
   ...orgCommands,
   ...quotaCommands,

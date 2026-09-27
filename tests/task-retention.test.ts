@@ -5,6 +5,7 @@ import { EventInbox } from "../server/tasks/events.ts";
 import { ensureTaskTables } from "../server/tasks/ledger.ts";
 import {
   Retention,
+  RETENTION_SQL,
   SWEEP_TASKS_MAX,
   TASK_EVENT_TAIL,
 } from "../server/tasks/retention.ts";
@@ -207,6 +208,42 @@ test("任务事件保留：未结束、没过期、事件不足的都原样保�
   );
 });
 
+test("任务事件保留：老任务的 created 与最新一条 note 清理后仍在", () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const id = seedTask(db, "老任务", "done", NOW - 400 * DAY);
+  // 事件序：created(派发人，最早)、旧 note、最新 note，随后 10 条过程事件。
+  const created = seedEvent(db, id, "created", NOW - 400 * DAY);
+  const oldNote = seedEvent(db, id, "note", NOW - 400 * DAY + 1);
+  const latestNote = seedEvent(db, id, "note", NOW - 400 * DAY + 2);
+  for (let i = 0; i < 10; i++)
+    seedEvent(db, id, "running", NOW - 400 * DAY + 3 + i);
+
+  const retention = new Retention(db);
+  const removed = retention.sweepEvents(NOW, {
+    eventAgeMs: 90 * DAY,
+    eventTail: 3,
+    taskLimit: 100,
+  });
+  // 13 条里保留最近 3 条（id 11..13）；再兜底 created 与最新 note（id 3），旧 note 该删。
+  // 删掉 id<11 且非 created、非最新 note 的：id 2、4..10 共 8 条。
+  assert.equal(removed, 8);
+  const rows = db
+    .prepare("SELECT id,kind FROM task_events WHERE task_id=? ORDER BY id")
+    .all(id) as { id: number; kind: string }[];
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    [created, latestNote, 11, 12, 13],
+  );
+  assert.equal(rows[0]!.kind, "created");
+  assert.equal(rows[1]!.kind, "note");
+  assert.equal(
+    db.prepare("SELECT 1 FROM task_events WHERE id=?").get(oldNote),
+    undefined,
+    "旧 note 在窗口外，应被清掉",
+  );
+});
+
 test("任务事件保留：一批清不完时按 id 游标接着清，清完回到开头", () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
@@ -283,14 +320,19 @@ const INBOX_STATEMENTS: [string, string][] = [
     "leader 转交",
     "SELECT dedupe_key,updated_at FROM task_inbox WHERE source='leader' AND dedupe_key LIKE '%:handoff' AND json_extract(detail,'$.handoff.from')=? ORDER BY id DESC LIMIT 200",
   ],
-  [
-    "保留清理按时间",
-    "DELETE FROM task_inbox WHERE acked_at IS NOT NULL AND level='info' AND source<>'leader' AND acked_at < ?",
-  ],
-  [
-    "保留清理取阈值",
-    "SELECT acked_at,id FROM task_inbox WHERE acked_at IS NOT NULL AND level='info' AND source<>'leader' ORDER BY acked_at DESC,id DESC LIMIT 1 OFFSET ?",
-  ],
+  // 保留清理的三条直接从 RETENTION_SQL 引用，不抄副本，免得和真实语句对不上。
+  ["保留清理按时间", RETENTION_SQL.inboxByAge],
+  ["保留清理取阈值", RETENTION_SQL.inboxThreshold],
+  ["保留清理按条数", RETENTION_SQL.inboxByCount],
+];
+
+/** task_events 保留清理的语句：同样逐条断言不走整表扫描。 */
+const TASK_EVENT_STATEMENTS: [string, string][] = [
+  ["保留清理选任务", RETENTION_SQL.tasksToSweep],
+  ["保留清理找边界", RETENTION_SQL.tailBoundary],
+  ["保留清理找 start", RETENTION_SQL.lastStart],
+  ["保留清理找最新 note", RETENTION_SQL.lastNote],
+  ["保留清理删除", RETENTION_SQL.dropEvents],
 ];
 
 test("老库迁移：补 level 写回级别，并换掉不带级别的待投递索引", () => {
@@ -343,6 +385,19 @@ test("老库迁移：补 level 写回级别，并换掉不带级别的待投递�
   );
 });
 
+/** 取一条语句的查询计划摘要（用 1 占位每个参数）。 */
+function planOf(db: DatabaseSync, sql: string): string {
+  return (
+    db
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all(
+        ...Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => 1),
+      ) as { detail: string }[]
+  )
+    .map((row) => row.detail)
+    .join(" | ");
+}
+
 test("收件箱语句查询计划：每条都有索引，不扫整张表", () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
@@ -352,18 +407,23 @@ test("收件箱语句查询计划：每条都有索引，不扫整张表", () =>
     { kind: "merged", level: "info", acked_at: NOW },
   ]);
   for (const [name, sql] of INBOX_STATEMENTS) {
-    const detail = (
-      db
-        .prepare(`EXPLAIN QUERY PLAN ${sql}`)
-        .all(
-          ...Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => 1),
-        ) as { detail: string }[]
-    )
-      .map((row) => row.detail)
-      .join(" | ");
+    const detail = planOf(db, sql);
     assert.doesNotMatch(
       detail,
       /SCAN task_inbox/,
+      `${name} 扫了整张表：${detail}`,
+    );
+  }
+});
+
+test("任务事件保留语句查询计划：不扫 task_events 或 tasks 整表", () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  for (const [name, sql] of TASK_EVENT_STATEMENTS) {
+    const detail = planOf(db, sql);
+    assert.doesNotMatch(
+      detail,
+      /SCAN (task_events|tasks)\b/,
       `${name} 扫了整张表：${detail}`,
     );
   }

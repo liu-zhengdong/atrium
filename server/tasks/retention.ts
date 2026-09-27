@@ -10,10 +10,14 @@ import { all, one } from "./ledger-model.ts";
  *   task show（按 task_id 有界取最近）、交付统计（按 start 切窗口）、换执行者判断（取最新事实）
  *   读到的最近事实都不变；更早的历史明细会随时间被清掉，这是保留上限的本意。
  *
- * task_events 的读者（grep 全仓）：ledger-read/notes/queue/top/holder-facts 取最近若干条，
- * delivery-records 按 start 事件切窗口，review-runtime/merge-runtime/online-runtime/
- * schedule-upstream/ci-poll/concern-runtime/councils/workers-report 取某类事件最近一条，
- * map/who 取 created/note，map/view 取 max(id)。都只依赖「最近」语义。
+ * task_events 的读者（grep 全仓）分两类：
+ * - 只依赖「最近」语义，删旧历史不影响：ledger-read/notes/queue/top/holder-facts 取最近若干条，
+ *   delivery-records 按 start 事件切窗口（保留策略特意留住最近一次 start 之后），
+ *   review-runtime/merge-runtime/online-runtime/schedule-upstream/ci-poll/concern-runtime/
+ *   councils/workers-report/ledger-transition 取某类事件最近一条，map/view 取 max(id)。
+ * - 取「最早」或「全量里最新」的，删旧历史会读空，必须显式保留（见 sweepEvents）：
+ *   map/who 从 kind='created' 取派发人（它就是最早那一条），从 kind='note' 里 id 最大的一条
+ *   取最新备注（可能远早于最近 eventTail 条）。前者一律保留，后者每个任务保留最近一条。
  */
 
 /** 已确认知会的保留时间：14 天。 */
@@ -36,6 +40,30 @@ export type RetentionOptions = {
   taskLimit?: number;
 };
 
+/** 只清「已确认的知会类」；要处理、未确认、leader 上交/转交都不动。 */
+const INBOX_RETENTION_WHERE =
+  "acked_at IS NOT NULL AND level='info' AND source<>'leader'";
+
+/**
+ * 保留清理用到的静态语句。导出给 tests/task-retention.test.ts 的查询计划守卫直接引用，
+ * 免得测试里抄一份副本、日后和真实语句对不上。
+ */
+export const RETENTION_SQL = {
+  inboxByAge: `DELETE FROM task_inbox WHERE ${INBOX_RETENTION_WHERE} AND acked_at < ?`,
+  inboxThreshold: `SELECT acked_at,id FROM task_inbox WHERE ${INBOX_RETENTION_WHERE} ORDER BY acked_at DESC,id DESC LIMIT 1 OFFSET ?`,
+  inboxByCount: `DELETE FROM task_inbox WHERE ${INBOX_RETENTION_WHERE} AND (acked_at < ? OR (acked_at = ? AND id <= ?))`,
+  tasksToSweep:
+    "SELECT id FROM tasks WHERE status IN ('done','failed','cancelled') AND updated_at < ? AND id > ? ORDER BY id LIMIT ?",
+  tailBoundary:
+    "SELECT id FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1 OFFSET ?",
+  lastStart:
+    "SELECT id FROM task_events WHERE task_id=? AND kind='start' ORDER BY id DESC LIMIT 1",
+  lastNote:
+    "SELECT id FROM task_events WHERE task_id=? AND kind='note' ORDER BY id DESC LIMIT 1",
+  dropEvents:
+    "DELETE FROM task_events WHERE task_id=? AND id<? AND kind<>'created' AND id<>?",
+} as const;
+
 /**
  * 保留清理。收件箱先做（可能很大），任务事件按游标一次清一批；
  * 每轮语句数与数据量无关，且都有索引可走（见 tests/task-retention.test.ts 的查询计划守卫）。
@@ -57,24 +85,19 @@ export class Retention {
   sweepInbox(now: number, options: RetentionOptions = {}) {
     const age = options.inboxAgeMs ?? INBOX_INFO_RETENTION_MS;
     const max = options.inboxMax ?? INBOX_INFO_MAX;
-    const where = "acked_at IS NOT NULL AND level='info' AND source<>'leader'";
     let removed = Number(
-      this.db
-        .prepare(`DELETE FROM task_inbox WHERE ${where} AND acked_at < ?`)
-        .run(now - age).changes,
+      this.db.prepare(RETENTION_SQL.inboxByAge).run(now - age).changes,
     );
     if (max > 0) {
       const threshold = one<{ acked_at: number; id: number }>(
         this.db,
-        `SELECT acked_at,id FROM task_inbox WHERE ${where} ORDER BY acked_at DESC,id DESC LIMIT 1 OFFSET ?`,
+        RETENTION_SQL.inboxThreshold,
         max,
       );
       if (threshold)
         removed += Number(
           this.db
-            .prepare(
-              `DELETE FROM task_inbox WHERE ${where} AND (acked_at < ? OR (acked_at = ? AND id <= ?))`,
-            )
+            .prepare(RETENTION_SQL.inboxByCount)
             .run(threshold.acked_at, threshold.acked_at, threshold.id).changes,
         );
     }
@@ -83,7 +106,8 @@ export class Retention {
 
   /**
    * 任务事件：按 id 游标分页处理已结束且过期任务，每个任务只删「最近 start 之前、且不在最近
-   * eventTail 条内」的事件。返回本轮删掉的行数。
+   * eventTail 条内」的事件；kind='created'（派发人）和最近一条 note（最新备注）总是保留。
+   * 返回本轮删掉的行数。
    */
   sweepEvents(now: number, options: RetentionOptions = {}) {
     const age = options.eventAgeMs ?? TASK_EVENT_RETENTION_MS;
@@ -91,23 +115,16 @@ export class Retention {
     const limit = options.taskLimit ?? SWEEP_TASKS_MAX;
     const rows = all<{ id: number }>(
       this.db,
-      `SELECT id FROM tasks
-        WHERE status IN ('done','failed','cancelled') AND updated_at < ? AND id > ?
-        ORDER BY id LIMIT ?`,
+      RETENTION_SQL.tasksToSweep,
       now - age,
       this.cursor,
       limit,
     );
     let removed = 0;
-    const boundaryOf = this.db.prepare(
-      "SELECT id FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1 OFFSET ?",
-    );
-    const lastStartOf = this.db.prepare(
-      "SELECT id FROM task_events WHERE task_id=? AND kind='start' ORDER BY id DESC LIMIT 1",
-    );
-    const drop = this.db.prepare(
-      "DELETE FROM task_events WHERE task_id=? AND id < ?",
-    );
+    const boundaryOf = this.db.prepare(RETENTION_SQL.tailBoundary);
+    const lastStartOf = this.db.prepare(RETENTION_SQL.lastStart);
+    const lastNoteOf = this.db.prepare(RETENTION_SQL.lastNote);
+    const drop = this.db.prepare(RETENTION_SQL.dropEvents);
     for (const row of rows) {
       // 第 (tail+1) 新的事件（offset=tail）：它和更早的要删，最近 tail 条留下。
       // 不足 tail+1 条就没有边界，什么都不删。
@@ -117,7 +134,9 @@ export class Retention {
       const start = lastStartOf.get(row.id) as { id: number } | undefined;
       // 同时保留最近一次 start 起的事件（最新交付窗口）：边界取更早的那个，start 本身要留。
       const upper = start && start.id <= tailRow.id ? start.id : tailRow.id + 1;
-      removed += Number(drop.run(row.id, upper).changes);
+      // created 与最新 note 兜底保留：它们按「最早/全量最新」被读，不能落进上面的窗口外。
+      const note = lastNoteOf.get(row.id) as { id: number } | undefined;
+      removed += Number(drop.run(row.id, upper, note?.id ?? -1).changes);
     }
     this.cursor = rows.length < limit ? 0 : rows.at(-1)!.id;
     return removed;

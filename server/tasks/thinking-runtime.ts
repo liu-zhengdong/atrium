@@ -33,6 +33,7 @@ export async function retryAfterThinking(
   x.launching.set(active.id, null);
   try {
     const choice = await chooseAnother(x, ctx, active);
+    if (x.isClosed()) return;
     if ("note" in choice) return giveUp(`思考耗尽后${choice.note}`);
     const retry = {
       reason: decision.reason,
@@ -47,10 +48,12 @@ export async function retryAfterThinking(
     try {
       await x.launch(active.id, choice, true);
     } catch (error) {
+      if (x.isClosed()) return;
       const why = `思考耗尽后换 ${choice.worker.id} 拉起失败：${message(error)}`;
       noteTask(db, active.id, "retry_failed", { reason: why });
       return giveUp(why);
     }
+    if (x.isClosed()) return;
     x.publish(active.id, "thinking_retry", retry);
   } finally {
     x.launching.delete(active.id);

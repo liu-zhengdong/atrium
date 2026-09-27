@@ -16,7 +16,7 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { getTask } from "../server/tasks/ledger.ts";
-import { startApp } from "./task-fixture.ts";
+import { startApp, until } from "./task-fixture.ts";
 
 const OPENCODE = "opencode+opencode-go/mimo-v2.6-flash";
 
@@ -63,11 +63,19 @@ function transientFixture(
   };
 }
 
-async function setup(t: Parameters<typeof startApp>[0], kimiFails = false) {
+async function setup(
+  t: Parameters<typeof startApp>[0],
+  kimiFails = false,
+  pace?: Parameters<typeof startApp>[2],
+) {
   let fail: (times: number) => void = () => {};
-  const app = await startApp(t, (fx) => {
-    fail = transientFixture(fx, kimiFails).fail;
-  });
+  const app = await startApp(
+    t,
+    (fx) => {
+      fail = transientFixture(fx, kimiFails).fail;
+    },
+    pace,
+  );
   const db = new DatabaseSync(join(app.data, "atrium.sqlite"));
   t.after(() => db.close());
   const events = (ref: string) => getTask(db, ref).events;
@@ -76,8 +84,81 @@ async function setup(t: Parameters<typeof startApp>[0], kimiFails = false) {
     events(ref)
       .filter((e) => e.kind === kind)
       .map((e) => JSON.parse(e.detail!));
-  return { ...app, fail, kinds, details };
+  const inboxKinds = () =>
+    (
+      db.prepare("SELECT kind FROM task_inbox ORDER BY id").all() as {
+        kind: string;
+      }[]
+    ).map((row) => row.kind);
+  return {
+    ...app,
+    fail,
+    kinds,
+    details,
+    inboxKinds,
+    task: (ref: string) => getTask(db, ref),
+  };
 }
+
+function retryGap() {
+  let calls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    pace: async () => {
+      // 第一次是人工 run；第二次是同一执行者重试后的换人选择。
+      if (++calls === 2) await gate;
+      return undefined;
+    },
+    release,
+  };
+}
+
+test("重派选择期间 wait 不返回瞬时 failed，最终才投递失败", async (t) => {
+  const gap = retryGap();
+  const { call, fail, kinds, details, inboxKinds, task } = await setup(
+    t,
+    true,
+    gap.pace,
+  );
+  fail(5);
+  await call("POST", "/api/tasks", { title: "retry gap" });
+  await call("POST", "/api/tasks/t1/run", { worker: "opencode" });
+  const waiting = call("GET", "/api/tasks/t1/wait?timeout=20");
+  await until(
+    () =>
+      task("t1").status === "failed" && details("t1", "exit_fail").length === 2,
+  );
+  const early = await Promise.race([
+    waiting.then(() => true),
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+  ]);
+  assert.equal(early, false, "wait 在重派间隙提前返回");
+  assert.equal(inboxKinds().includes("failed"), false);
+  gap.release();
+  const result = await waiting;
+  assert.equal(result.body.task.status, "failed", JSON.stringify(kinds("t1")));
+  assert.equal(details("t1", "transient_retry").length, 2);
+  assert.equal(inboxKinds().filter((kind) => kind === "failed").length, 1);
+});
+
+test("服务关闭时放弃在途重派，不再访问已关闭的数据库", async (t) => {
+  const gap = retryGap();
+  const { app, call, fail, task, details } = await setup(t, true, gap.pace);
+  fail(5);
+  await call("POST", "/api/tasks", { title: "close during retry" });
+  await call("POST", "/api/tasks/t1/run", { worker: "opencode" });
+  await until(
+    () =>
+      task("t1").status === "failed" && details("t1", "exit_fail").length === 2,
+  );
+  await app.close();
+  gap.release();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(details("t1", "transient_retry").length, 1);
+});
 
 test("临时错误：同一执行者重试一次后完成，事件写明原因", async (t) => {
   const { call, fail, kinds, details } = await setup(t);

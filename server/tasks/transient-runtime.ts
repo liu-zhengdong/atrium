@@ -101,9 +101,11 @@ export async function retryAfterTransient(
     };
     noteTask(db, active.id, "transient_retry", { ...base, ...retry });
     x.active.delete(active.id);
-    x.launching.set(active.id, choice.worker.tool);
+    // 同一执行者重试留在原来那台主机上（#358）；换执行者的按本机派。
+    const host = route.kind === "same" ? active.host : undefined;
+    x.claim(active.id, choice.worker.tool, host);
     try {
-      await x.launch(active.id, choice, true);
+      await x.launch(active.id, { ...choice, host }, true);
     } catch (error) {
       if (x.isClosed()) return;
       const why = `临时错误后重派 ${choice.worker.id} 拉起失败：${message(error)}`;
@@ -113,6 +115,6 @@ export async function retryAfterTransient(
     if (x.isClosed()) return;
     x.publish(active.id, "transient_retry", { ...base, ...retry });
   } finally {
-    x.launching.delete(active.id);
+    x.release(active.id);
   }
 }

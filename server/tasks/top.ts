@@ -33,6 +33,8 @@ export type TopRow = NoteView & {
   delivery_stage?: TaskRow["delivery_stage"];
   merge_queued_at?: number | null;
   worker: string | null;
+  /** 在远程主机上跑（#358，hN）；本机或没在跑为 null。 */
+  host?: string | null;
   started_at: number | null;
   ended_at: number | null;
   /** 在队列里时的入队时刻；null 表示不在队列。 */
@@ -200,6 +202,10 @@ export function topRows(
       merge_queued_at: row.merge_queued_at,
       // 排队的任务账本里还没有执行者，用队列里记的那个。
       worker: row.worker ?? waiting?.worker ?? null,
+      host:
+        row.status === "running" && row.host_id != null && row.host_id !== 1
+          ? `h${row.host_id}`
+          : null,
       started_at: row.started_at,
       ended_at: row.ended_at,
       updated_at: row.updated_at,

@@ -7,7 +7,13 @@ import { transition, type TaskStatus } from "./state.ts";
  * 请求校验 → 能否受理（状态、是否已在跑/排队）→ 档案风险上限 → 立即拉起还是排队。
  */
 
-export type RunRequest = { worker?: string; risk?: Risk; urgent?: boolean };
+/** host：用户指定的主机短号（#358，hN）；不给按主机空闲挑。 */
+export type RunRequest = {
+  worker?: string;
+  risk?: Risk;
+  urgent?: boolean;
+  host?: string;
+};
 
 export function runRequest(body: unknown): RunRequest {
   if (body === undefined || body === null) return {};
@@ -15,12 +21,13 @@ export function runRequest(body: unknown): RunRequest {
     throw new Problem(400, "请求体应为 JSON 对象", "usage");
   const input = body as Record<string, unknown>;
   const extra = Object.keys(input).filter(
-    (key) => key !== "worker" && key !== "risk" && key !== "urgent",
+    (key) =>
+      key !== "worker" && key !== "risk" && key !== "urgent" && key !== "host",
   );
   if (extra.length)
     throw new Problem(
       400,
-      `不认识的字段：${extra.join("、")}；可用 worker、risk、urgent`,
+      `不认识的字段：${extra.join("、")}；可用 worker、risk、urgent、host`,
       "usage",
     );
   if (input.urgent !== undefined && typeof input.urgent !== "boolean")
@@ -35,9 +42,13 @@ export function runRequest(body: unknown): RunRequest {
   const risk = text("risk");
   if (risk !== undefined && !isRisk(risk))
     throw new Problem(400, `risk: 只能是 ${RISKS.join("、")}`, "usage");
+  const host = text("host");
+  if (host !== undefined && !/^h[1-9][0-9]{0,8}$/.test(host))
+    throw new Problem(400, "host: 应为主机短号，如 h2", "usage");
   return {
     worker: text("worker"),
     risk,
+    ...(host !== undefined ? { host } : {}),
     ...(input.urgent === true ? { urgent: true } : {}),
   };
 }

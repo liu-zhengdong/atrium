@@ -82,6 +82,34 @@ import { existsSync } from "node:fs";
 import { HostLoad, hostView } from "./host-load.ts";
 import { sharedLocalChecks } from "./local-check.ts";
 import { skipIfBusy } from "./reentry.ts";
+import { RemoteHosts } from "../hosts/remote.ts";
+import {
+  addHost,
+  ensureHostTables,
+  ensureLocalHost,
+  hostRow,
+  hostRows,
+  hostView as hostRowView,
+  removeHost,
+  setPaused,
+  type HostRow,
+  type HostView,
+} from "../hosts/model.ts";
+import {
+  chooseHost,
+  connection,
+  hostFit,
+  hostRef,
+  LOCAL_HOST,
+  parseHostRef,
+  type HostCandidate,
+  type HostInfo,
+  type HostLoadReport,
+  type HostNeed,
+} from "../hosts/state.ts";
+import { machineInfo } from "../hosts/info.ts";
+import { originRepo } from "./gh-repo.ts";
+import { patrolRun } from "./patrol.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -124,6 +152,10 @@ export type RunnerOptions = {
   };
   /** 本机减负（#358）：执行者并发上限、本地检查并发、负载阈值；缺省按服务环境与核数（host-load.ts）。 */
   host?: HostLoad;
+  /** 代理长轮询每轮最多挂多久（毫秒）；测试缩短。 */
+  agentPollMs?: number;
+  /** 派给代理要等结果的指令没人来领多久就报错（毫秒）；测试缩短。 */
+  agentPickupMs?: number;
 };
 
 export class TaskRunner {
@@ -138,6 +170,10 @@ export class TaskRunner {
   private readonly review: ReviewGate;
   private readonly online: OnlineWatch;
   private readonly host: HostLoad;
+  /** 远程主机的代理连接（#358 第 1 步）。 */
+  readonly remote: RemoteHosts;
+  /** 任务仓库路径 → owner/name（挑远程主机时对仓库白名单）；解析不出为 null。 */
+  private readonly repoKeys = new Map<string, string | null>();
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly background = new Set<Promise<void>>();
   private readonly exec: Exec;
@@ -160,6 +196,20 @@ export class TaskRunner {
     // 本机限额只看服务自己的环境（不是给执行者的 options.env）。
     this.host = options.host ?? HostLoad.fromEnv(process.env);
     sharedLocalChecks.limit = this.host.limits.maxChecks;
+    // 执行机器（#358）：本机登记为 h1；远程主机由代理接入。
+    ensureHostTables(db);
+    ensureLocalHost(
+      db,
+      machineInfo({
+        dataDir: options.data,
+        version: currentVersion(),
+        env: options.env ?? process.env,
+      }),
+    );
+    this.remote = new RemoteHosts(db, options.data, {
+      pollMs: options.agentPollMs,
+      pickupMs: options.agentPickupMs,
+    });
     this.inbox = new EventInbox(db, {
       batchMs: options.batchMs,
       leaseMs: options.leaseMs,
@@ -189,6 +239,8 @@ export class TaskRunner {
         this.x?.active.has(id) ||
         this.x?.launching.has(id) ||
         this.x?.finishing.has(id),
+      Date.now,
+      this.remote,
     );
     this.disk = new DiskBudget(
       db,
@@ -219,6 +271,12 @@ export class TaskRunner {
       closed: () => this.closed,
       onAccepted: (id) => this.review.admit(id),
       hostGate: (urgent) => this.host.gate(this.x.inFlight(), urgent),
+      remote: this.remote,
+      placement: {
+        need: (id, tool, urgent) => this.hostNeed(id, tool, urgent),
+        choose: (need, pinned) => this.chooseHostFor(need, pinned),
+        installed: (host) => this.remoteInstalled(host),
+      },
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
         settle: () => void this.settleReviews(),
@@ -335,7 +393,11 @@ export class TaskRunner {
       if (!this.closed)
         await this.host.refresh(
           [...this.x.active.values()]
-            .filter((active) => !active.child && !active.exited)
+            // 远程主机上的执行者不在本机，pid 对不上本机进程。
+            .filter(
+              (active) =>
+                !active.child && !active.exited && active.host === undefined,
+            )
             .map((active) => active.pid),
         );
       if (!this.closed) await this.cleanup.finished();
@@ -372,6 +434,7 @@ export class TaskRunner {
     // 先唤醒 HTTP 长轮询及内部事件消费者；后台工作可能仍在等事件。
     this.inbox.close();
     this.waits.close();
+    this.remote.close();
     const mergeClosing = this.merge.close();
     this.review.close();
     this.online.close();
@@ -423,6 +486,9 @@ export class TaskRunner {
       task: task.ref,
       ...view,
       specialists: pickSpecialists(this.db, task),
+      ...(this.hasRemoteHosts()
+        ? { hosts: await this.hostPicks(task, view.recommended) }
+        : {}),
     };
   }
 
@@ -473,6 +539,13 @@ export class TaskRunner {
         `atrium task show ${task.ref}`,
       );
     if (request.urgent && task.urgent !== 1) task = this.markUrgent(id);
+    // 指定的远程主机：按那台上报的已装工具挑执行者（#358）。
+    const pinned =
+      request.host === undefined ? null : this.pinnedHost(request.host);
+    const remoteTools =
+      pinned !== null && pinned !== LOCAL_HOST
+        ? this.remoteInstalled(pinned)
+        : undefined;
     this.x.launching.set(id, null);
     let chosen: Choice;
     let pick: RunPick;
@@ -490,6 +563,7 @@ export class TaskRunner {
         busy: this.x.busyTools(id),
         chain,
         jobRef: task.job_ref ?? undefined,
+        ...(remoteTools ? { installed: remoteTools } : {}),
       };
       const options = { ...this.launchOptions, pace: async () => pace };
       const held = this.quota.held();
@@ -501,9 +575,14 @@ export class TaskRunner {
         held,
         busy: avoid.busy,
       });
+      const recommended =
+        view.recommended &&
+        (!remoteTools || remoteTools[toolOf(view.recommended) ?? "codex"])
+          ? view.recommended
+          : null;
       chosen = await chooseWorker(
-        !request.worker && view.recommended
-          ? { ...request, worker: view.recommended }
+        !request.worker && recommended
+          ? { ...request, worker: recommended }
           : request,
         options,
         held,
@@ -540,6 +619,7 @@ export class TaskRunner {
           task,
           chosen,
           `${ADAPTERS[tool].quotaProvider} 额度用尽，等到 ${clock(chosen.waitUntil)} 恢复后自动拉起`,
+          pinned,
         ),
         pick,
       };
@@ -550,8 +630,39 @@ export class TaskRunner {
       this.x.launching.delete(id);
       return { ...this.enqueue(task, chosen, idleWaitText(ahead)), pick };
     }
+    // 挑主机（#358）：指定了只看那台（接不了拒绝、满了排队）；没指定在能接的主机里挑最空的。
+    // 本机减负：都满或太忙就落库排队，空出来后由 drain 按入队顺序拉起；紧急的不看负载与上限（t113）。
+    let need: HostNeed;
+    try {
+      need = await this.hostNeed(id, tool, task.urgent === 1);
+    } catch (error) {
+      this.x.launching.delete(id);
+      throw error;
+    }
+    const choice = this.chooseHostFor(need, pinned, id);
+    if (choice.kind === "refuse") {
+      this.x.launching.delete(id);
+      throw new Problem(
+        409,
+        `${task.ref} 派不到 ${hostRef(pinned ?? LOCAL_HOST)}：${choice.reason}`,
+        "conflict",
+        undefined,
+        pinned === null
+          ? "atrium host ls"
+          : `atrium host show ${hostRef(pinned)}`,
+      );
+    }
+    if (choice.kind === "queue") {
+      this.x.launching.delete(id);
+      return {
+        ...this.enqueue(task, chosen, choice.reason, choice.host),
+        pick,
+      };
+    }
+    const host = choice.host;
     if (
-      placement(ADAPTERS[tool].exclusive, this.x.busy(tool, id)) === "queue"
+      placement(ADAPTERS[tool].exclusive, this.x.busy(tool, id, host)) ===
+      "queue"
     ) {
       this.x.launching.delete(id);
       return {
@@ -559,26 +670,228 @@ export class TaskRunner {
           task,
           chosen,
           `${tool} 同一时刻只跑一个，前一个结束后自动拉起`,
+          pinned,
         ),
         pick,
       };
     }
-    // 本机减负（#358）：满了或太忙就落库排队，空出来后由 drain 按入队顺序拉起；紧急的不看这两条（t113）。
-    const gate = this.host.gate(this.x.inFlight(id), task.urgent === 1);
-    if (!gate.ok) {
-      this.x.launching.delete(id);
-      return this.enqueue(task, chosen, gate.reason);
-    }
-    this.x.launching.set(id, tool);
+    this.x.claim(id, tool, host);
     try {
-      return { task: await this.x.launch(id, chosen), queued: false, pick };
+      return {
+        task: await this.x.launch(id, { ...chosen, host }),
+        queued: false,
+        pick,
+      };
     } catch (error) {
       if (error instanceof BudgetProblem)
         return this.blockBudget(task, error.message);
       throw error;
     } finally {
-      this.x.launching.delete(id);
+      this.x.release(id);
     }
+  }
+
+  // ---- 执行机器（#358） ----
+
+  /** task pick 的主机一栏：推荐的执行者在各台能不能跑、为什么，自动派会去哪台。 */
+  private async hostPicks(task: Task, worker: string | null) {
+    const tool = toolOf(worker);
+    if (!tool) return [];
+    const need = await this.hostNeed(task.id, tool, task.urgent === 1);
+    const candidates = this.hostCandidates(task.id);
+    const choice = chooseHost(candidates, need);
+    const views = new Map(this.hosts().hosts.map((view) => [view.ref, view]));
+    return candidates.map((candidate) => {
+      const fit = hostFit(candidate, need, false);
+      const view = views.get(hostRef(candidate.id));
+      return {
+        ref: hostRef(candidate.id),
+        name: view?.name ?? "",
+        status: view?.status ?? "",
+        running: candidate.running,
+        max: view?.max ?? candidate.max,
+        fit: fit.ok ? "ok" : fit.kind,
+        reason: fit.ok ? null : fit.reason,
+        chosen: choice.kind === "run" && choice.host === candidate.id,
+      };
+    });
+  }
+
+  /** 用户指定的主机：须是登记过、没移除的。 */
+  private pinnedHost(reference: string) {
+    const id = parseHostRef(reference, "--host");
+    const row = hostRow(this.db, id);
+    if (row.removed_at !== null)
+      throw new Problem(
+        409,
+        `${hostRef(id)} 已移除`,
+        "conflict",
+        undefined,
+        "atrium host ls",
+      );
+    return id;
+  }
+
+  private hasRemoteHosts() {
+    return !!this.db
+      .prepare(
+        "SELECT 1 FROM hosts WHERE kind='remote' AND removed_at IS NULL AND token_hash IS NOT NULL LIMIT 1",
+      )
+      .get();
+  }
+
+  /** 远程主机上报的已装、没判为未登录的工具。 */
+  private remoteInstalled(host: number): Partial<Record<Tool, string>> {
+    const clis = parseJson<HostInfo>(hostRow(this.db, host).info)?.clis ?? {};
+    const installed: Partial<Record<Tool, string>> = {};
+    for (const tool of TOOLS)
+      if (clis[tool]?.installed && clis[tool]?.logged_in !== false)
+        installed[tool] = ADAPTERS[tool].executable;
+    return installed;
+  }
+
+  /** 这件活要什么样的主机：工具、仓库（owner/name）、是否紧急、能不能去远程。 */
+  private async hostNeed(
+    id: number,
+    tool: Tool,
+    urgent: boolean,
+  ): Promise<HostNeed> {
+    const task = getTask(this.db, id);
+    const localOnly = patrolRun(this.db, id) ? "体验巡检要连回本机服务" : null;
+    let repo: string | null = null;
+    if (task.repo) {
+      // 没有接入的远程主机时不查仓库，省一次 git。
+      if (!this.repoKeys.has(task.repo) && this.hasRemoteHosts()) {
+        const origin = await originRepo(task.repo, this.exec);
+        this.repoKeys.set(
+          task.repo,
+          "error" in origin ? null : `${origin.repo.owner}/${origin.repo.name}`,
+        );
+      }
+      repo = this.repoKeys.get(task.repo) ?? "?";
+    }
+    return { tool, repo, urgent, localOnly };
+  }
+
+  /** 各主机此刻的情况（本机按闸门，远程按代理上报与服务手里在跑的）。 */
+  private hostCandidates(except?: number): HostCandidate[] {
+    const now = Date.now();
+    return hostRows(this.db).map((row): HostCandidate => {
+      const running = this.x.inFlight(except, row.id);
+      if (row.kind === "local") {
+        const gate = this.host.gate(running, false);
+        return {
+          id: row.id,
+          kind: "local",
+          connection: "local",
+          paused: row.paused === 1,
+          clis: null,
+          repos: ["*"],
+          running,
+          // 上限已在闸门里判过（满了就是 busy）；这里只用来比谁更空。
+          max: this.host.limits.maxWorkers,
+          busy: gate.ok ? null : gate.reason,
+        };
+      }
+      const info = parseJson<HostInfo>(row.info);
+      const load = parseJson<HostLoadReport>(row.load);
+      return {
+        id: row.id,
+        kind: "remote",
+        connection: connection({
+          kind: "remote",
+          joined: row.token_hash !== null,
+          joinExpiresAt: row.join_expires_at,
+          lastSeenAt: row.last_seen_at,
+          polling: this.remote.polling(row.id),
+          now,
+        }),
+        paused: row.paused === 1,
+        clis: info?.clis ?? {},
+        repos: parseJson<string[]>(row.repos) ?? [],
+        running,
+        max: row.max_running ?? info?.max_workers ?? null,
+        busy: load?.busy ?? null,
+      };
+    });
+  }
+
+  private chooseHostFor(
+    need: HostNeed,
+    pinned: number | null,
+    except?: number,
+  ) {
+    return chooseHost(this.hostCandidates(except), need, pinned ?? undefined);
+  }
+
+  private viewOf(row: HostRow): HostView {
+    const running = this.x.inFlight(undefined, row.id);
+    const view = hostRowView(row, {
+      polling: this.remote.polling(row.id),
+      running,
+      localMax: this.host.limits.maxWorkers,
+    });
+    if (row.kind !== "local") return view;
+    const gate = this.host.gate(running, false);
+    return {
+      ...view,
+      load: {
+        load: Math.round(this.host.load() * 100) / 100,
+        running,
+        busy: gate.ok ? null : gate.reason,
+      },
+    };
+  }
+
+  hosts(all = false) {
+    return { hosts: hostRows(this.db, all).map((row) => this.viewOf(row)) };
+  }
+
+  hostDetail(reference: unknown) {
+    const id = parseHostRef(reference, "主机");
+    const view = this.viewOf(hostRow(this.db, id));
+    const tasks = this.db
+      .prepare(
+        `SELECT id,title,status FROM tasks WHERE status='running' AND ${id === LOCAL_HOST ? "(host_id IS NULL OR host_id=?)" : "host_id=?"} ORDER BY id LIMIT 200`,
+      )
+      .all(id) as { id: number; title: string; status: string }[];
+    return {
+      ...view,
+      tasks: tasks.map((task) => ({ ...task, ref: taskRef(task.id) })),
+    };
+  }
+
+  addHost(body: unknown) {
+    const input = (body ?? {}) as {
+      name?: unknown;
+      max?: unknown;
+      repos?: unknown;
+    };
+    if (typeof input.name !== "string")
+      throw new Problem(400, "名称：必填", "usage");
+    const repos = input.repos === undefined ? [] : input.repos;
+    if (!Array.isArray(repos) || repos.some((repo) => typeof repo !== "string"))
+      throw new Problem(400, "--repo 应为 owner/name 或 *", "usage");
+    const { id, code } = addHost(this.db, {
+      name: input.name,
+      max: input.max as number | undefined,
+      repos: repos as string[],
+    });
+    return { host: this.viewOf(hostRow(this.db, id)), code };
+  }
+
+  removeHost(reference: unknown) {
+    const id = parseHostRef(reference, "主机");
+    removeHost(this.db, id);
+    return { host: this.viewOf(hostRow(this.db, id)) };
+  }
+
+  pauseHost(reference: unknown, paused: boolean) {
+    const id = parseHostRef(reference, "主机");
+    setPaused(this.db, id, paused);
+    // 恢复接活：排着的可能能拉起了。
+    if (!paused && !this.closed && this.recovered) void this.x.drain();
+    return { host: this.viewOf(hostRow(this.db, id)) };
   }
 
   /** 排队中的任务刚标上紧急：立刻按紧急再排一轮，不等下次巡检。 */
@@ -612,13 +925,20 @@ export class TaskRunner {
     return { task: getTask(this.db, task.id), queued: false };
   }
 
-  private enqueue(task: Task, chosen: Chosen, reason: string) {
+  /** host：钉在哪台主机上排（用户指定的）；自动挑的不钉。 */
+  private enqueue(
+    task: Task,
+    chosen: Chosen,
+    reason: string,
+    host: number | null = null,
+  ) {
     enqueue(this.db, {
       task_id: task.id,
       tool: chosen.worker.tool,
       worker: chosen.worker.id,
       risk: chosen.risk,
       queued_at: Date.now(),
+      host_id: host,
     });
     if (task.status !== "todo")
       this.x.advance(
@@ -630,6 +950,7 @@ export class TaskRunner {
     noteTask(this.db, task.id, "queued", {
       worker: chosen.worker.id,
       reason,
+      ...(host !== null ? { host: hostRef(host) } : {}),
     });
     this.waits.changed(task.id);
     return { task: getTask(this.db, task.id), queued: true };
@@ -641,6 +962,10 @@ export class TaskRunner {
       data: this.options.data,
       exec: this.exec,
       changed: (id) => this.waits.changed(id),
+      remote: this.remote,
+    }).finally(() => {
+      // 远程主机的代理从此可以对账、补报退出。
+      this.x.ready = true;
     });
   }
 
@@ -729,9 +1054,13 @@ export class TaskRunner {
       active.stop = { kind: "user", ...(by ? { by } : {}) };
       noteTask(this.db, id, "stop_requested", {
         pid: active.pid,
+        ...(active.host !== undefined ? { host: hostRef(active.host) } : {}),
         ...(by ? { by } : {}),
       });
       this.x.kill(active);
+      // 远程主机离线：停止指令等它连上才送到。账本先按人工停止收尾，重连对账时代理会结束那个进程。
+      if (active.host !== undefined && !this.remote.online(active.host))
+        void this.x.finish(id, "unknown");
       return { task: getTask(this.db, id), stopping: true };
     }
     if (this.x.launching.has(id))
@@ -745,7 +1074,9 @@ export class TaskRunner {
         `atrium task show ${task.ref}`,
       );
     // 账本说在跑、服务却没有掌握这个进程：直接收尾，免得一直挂着。
-    if (task.pid) killTree(task.pid, "SIGTERM");
+    // 远程主机上的进程不在本机，不能按 pid 结束（重连对账时代理会结束账本不认的进程）。
+    if (task.pid && (task.host_id ?? LOCAL_HOST) === LOCAL_HOST)
+      killTree(task.pid, "SIGTERM");
     const stopped = this.x.advance(
       id,
       { kind: "exit_fail" },
@@ -972,6 +1303,18 @@ export class TaskRunner {
       },
       ...(leaders.length ? { leaders } : {}),
       host: this.hostView(),
+      // 接入过远程主机才列主机一行（#358）。
+      ...(this.hasRemoteHosts()
+        ? {
+            hosts: this.hosts().hosts.map((h) => ({
+              ref: h.ref,
+              name: h.name,
+              status: h.status,
+              running: h.running,
+              max: h.max,
+            })),
+          }
+        : {}),
       rows: rows.map((row, index) => {
         const action = recentAction({
           tool: toolOf(row.worker),
@@ -1015,6 +1358,15 @@ export class TaskRunner {
     return this.waits.wait(id, seconds, signal);
   }
 }
+
+const parseJson = <T>(text: string | null): T | null => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+};
 
 /** 执行者标识 `工具+模型[:强度]` 里的工具；取不出就不是已知工具，按未知日志处理。 */
 const toolOf = (worker: string | null): Tool | undefined => {

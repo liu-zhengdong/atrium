@@ -23,6 +23,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 | 目标树   | `server/goals/`                                                                                   | 旧目标树与迁移：`org migrate-goals` 把 gN 迁为节点章程里的阶段记录、任务回填归属部分，写入后 goal 接口下线（#322）                                                                                                                             |
 | 全景图   | `server/map/`、`cli/map.ts`                                                                       | 全景只读视图（网页与 `map --json` 同一接口）、`map context` 派活附带、`map edit/add`；网页由服务托管（`server/map/web/`，不引入构建链），一次性链接换本机只读会话                                                                              |
 | 命令行   | `cli/`、`bin/atrium.mjs`                                                                          | 统一入口；除启动、`status`、`stop`、`auth status` 外都经服务完成                                                                                                                                                                               |
+| 执行机器 | `server/hosts/`、`server/agent/`、`cli/hosts.ts`                                                  | 主机登记（本机 h1、远程 hN）、接入码换主机令牌、挑主机；代理（`atrium agent`）主动长轮询领指令，在那台机器上建工作树、拉起执行者、续传日志、补报退出；断线与服务重启后对账（#358）                                                             |
 | 平台层   | `server/platform/`                                                                                | macOS、Linux、Windows 的差异只写在这里：结束进程树（Unix 进程组，Windows `taskkill /T /F`）、进程存活与命令行、跑 shell 命令（`/bin/sh -c` / `cmd.exe /d /s /c`）、按名字找并拉起可执行文件（PATHEXT、npm 的 .cmd 包装）、路径与环境变量名判定 |
 
 ## 实现约束

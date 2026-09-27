@@ -447,6 +447,7 @@ const show: Command = {
         ["负责人", task.owner],
         ["干活的专员", task.job_ref],
         ["执行者", task.worker],
+        ["主机", task.host_ref ?? null],
         ["进程", task.pid],
         ["工作树", task.worktree],
         ["分支", task.branch],
@@ -784,12 +785,13 @@ const done: Command = {
 };
 
 const run: Command = {
-  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--urgent]",
+  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--urgent]",
   about:
-    "派给执行者（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low；--urgent 同时标紧急，跳过本机负载限制（额度保留、trust、依赖照旧）",
+    "派给执行者（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；--urgent 同时标紧急，跳过负载限制（额度保留、trust、依赖照旧）",
   options: {
     worker: { type: "string" },
     risk: { type: "string" },
+    host: { type: "string" },
     urgent: { type: "boolean" },
   },
   positionals: [1, 1],
@@ -817,6 +819,18 @@ const run: Command = {
         );
       body.risk = risk;
     }
+    const host = str(values, "host");
+    if (host !== undefined) {
+      if (!/^h[1-9][0-9]{0,8}$/.test(host.trim()))
+        throw new Problem(
+          400,
+          `--host 应为主机短号，如 h2（收到：${host}）`,
+          "usage",
+          undefined,
+          "atrium host ls",
+        );
+      body.host = host.trim();
+    }
     const result = await (
       await client()
     ).post<{
@@ -831,7 +845,7 @@ const run: Command = {
         [
           result.queued
             ? `${task.ref} 排队中：${queuedReason(task.events)}`
-            : `已派 ${task.ref} 给 ${task.worker}（PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
+            : `已派 ${task.ref} 给 ${task.worker}（${task.host_ref ? `${task.host_ref} 上 ` : ""}PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
           ...urgentLines(task),
           ...pickLines(result.pick),
         ].join("\n"),
@@ -890,8 +904,46 @@ export function specialistLine(list: PickSpecialists["available"]): string {
 }
 
 /** 候选一览的文本：推荐一句、表格；表格一行一位候选。 */
+type HostPick = {
+  ref: string;
+  name: string;
+  status: string;
+  running: number;
+  max: number | null;
+  fit: "ok" | "later" | "never";
+  reason: string | null;
+  chosen: boolean;
+};
+
+/** task pick 的主机一栏（#358）：推荐的执行者在各台能不能跑、自动派会去哪台。 */
+function hostPickLines(hosts: HostPick[] | undefined, worker: string | null) {
+  if (!hosts?.length || !worker) return [];
+  return [
+    "",
+    `主机（按推荐的 ${worker}）：`,
+    table(
+      hosts.map((h) => [
+        h.chosen ? "→" : "",
+        h.ref,
+        h.name,
+        h.status,
+        `${h.running}/${h.max ?? "不限"}`,
+        h.fit === "ok"
+          ? "能接"
+          : h.fit === "later"
+            ? `排队：${h.reason}`
+            : `不能接：${h.reason}`,
+      ]),
+    ),
+  ];
+}
+
 export function formatPick(
-  view: PickView & { task: string; specialists?: PickSpecialists },
+  view: PickView & {
+    task: string;
+    specialists?: PickSpecialists;
+    hosts?: HostPick[];
+  },
 ): string {
   const head = view.recommended
     ? `推荐 ${view.recommended}：${view.reason}`
@@ -908,6 +960,7 @@ export function formatPick(
     head,
     meta,
     ...scope,
+    ...hostPickLines(view.hosts, view.recommended),
     "",
     table([
       ["", "执行者", "能不能接", "账号额度", "正忙", "交付记录"],

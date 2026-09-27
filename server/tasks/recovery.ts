@@ -7,6 +7,9 @@ import type { Executors } from "./executors.ts";
 import { getTask, noteTask, type Task } from "./ledger.ts";
 import { resolveWorker, type ResolvedWorker } from "./profiles.ts";
 import { alive } from "./spawn.ts";
+import { hostRun, type HostRun } from "../hosts/model.ts";
+import { hostRef, LOCAL_HOST } from "../hosts/state.ts";
+import type { RemoteHosts } from "../hosts/remote.ts";
 
 /**
  * 服务重启自愈（#262）：找出账本里 running 的任务，判断它的执行者进程还在不在。
@@ -25,7 +28,15 @@ export async function ownsPid(pid: number, tool: Tool, exec: Exec) {
 export type Survivor =
   /** 进程已不在；worker 解析不出时无从收尾，只能置 failed。 */
   | { task: Task; kind: "gone"; worker?: ResolvedWorker; base: string | null }
-  | { task: Task; kind: "alive"; worker: ResolvedWorker; base: string | null };
+  | { task: Task; kind: "alive"; worker: ResolvedWorker; base: string | null }
+  /** 跑在远程主机上（#358）：不在本机查 pid，等那台的代理重连后对账、补报退出。 */
+  | {
+      task: Task;
+      kind: "remote";
+      worker: ResolvedWorker;
+      base: string | null;
+      run: HostRun;
+    };
 
 export async function surveyRunning(
   db: DatabaseSync,
@@ -49,6 +60,13 @@ export async function surveyRunning(
       worker && task.repo
         ? await defaultBranch(task.repo, exec).catch(() => null)
         : null;
+    if (task.host_id != null && task.host_id !== LOCAL_HOST) {
+      const run = hostRun(db, id);
+      if (worker && run && run.host_id === task.host_id)
+        found.push({ task, kind: "remote", worker, base, run });
+      else found.push({ task, kind: "gone", worker: undefined, base });
+      continue;
+    }
     if (task.pid && worker && (await ownsPid(task.pid, worker.tool, exec)))
       found.push({ task, kind: "alive", worker, base });
     else found.push({ task, kind: "gone", worker, base });
@@ -59,11 +77,36 @@ export async function surveyRunning(
 export async function recoverRunning(
   x: Executors,
   db: DatabaseSync,
-  ctx: { data: string; exec: Exec; changed: (id: number) => void },
+  ctx: {
+    data: string;
+    exec: Exec;
+    changed: (id: number) => void;
+    remote?: RemoteHosts;
+  },
 ) {
   const skip = (id: number) => x.active.has(id) || x.launching.has(id);
   for (const found of await surveyRunning(db, skip, ctx.exec)) {
     const { task } = found;
+    if (found.kind === "remote") {
+      const { run } = found;
+      const exec = ctx.remote ? ctx.remote.exec(run.host_id) : ctx.exec;
+      const active = adopted({
+        task,
+        worker: found.worker,
+        base: found.base,
+        data: ctx.data,
+        exec,
+        remote: { host: run.host_id, run: run.run, repo: run.clone },
+      });
+      x.active.set(task.id, active);
+      noteTask(db, task.id, "adopted", {
+        pid: task.pid,
+        host: hostRef(run.host_id),
+        reason: `服务重启后接管 ${hostRef(run.host_id)} 上的执行者，等那台的代理重连后补报`,
+      });
+      await active.probe.baseline();
+      continue;
+    }
     if (found.worker) {
       const active = adopted({
         task,
@@ -90,7 +133,10 @@ export async function recoverRunning(
       ctx.changed(task.id);
       continue;
     }
-    const reason = "服务重启时执行者进程已不在，执行者档案解析不出，无法收尾";
+    const reason =
+      task.host_id != null && task.host_id !== LOCAL_HOST
+        ? `服务重启时找不到 ${hostRef(task.host_id)} 上这一轮的记录（或执行者档案解析不出），无法接管`
+        : "服务重启时执行者进程已不在，执行者档案解析不出，无法收尾";
     x.advance(
       task.id,
       { kind: "exit_fail" },

@@ -24,12 +24,20 @@ import { closeCouncil } from "./council-close.ts";
 export type RunFields = Partial<
   Pick<
     TaskRow,
-    "worker" | "pid" | "worktree" | "branch" | "pr_url" | "ci" | "result"
+    | "worker"
+    | "pid"
+    | "host_id"
+    | "worktree"
+    | "branch"
+    | "pr_url"
+    | "ci"
+    | "result"
   >
 >;
 const RUN_FIELDS = [
   "worker",
   "pid",
+  "host_id",
   "worktree",
   "branch",
   "pr_url",

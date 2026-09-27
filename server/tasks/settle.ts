@@ -62,7 +62,10 @@ const jsonEvents = (active: Active) =>
 
 /** codex 本轮写出的最后消息（-o）；接管的进程按任务目录里的固定位置找，早于本轮开始的是上一轮留下的。 */
 function readLastMessage(active: Active) {
-  const resultFile = active.prepared?.launch.resultFile ?? active.resultFile;
+  // 远程的最后消息由代理传回本机任务目录（active.resultFile）。
+  const resultFile = active.host
+    ? active.resultFile
+    : (active.prepared?.launch.resultFile ?? active.resultFile);
   if (!resultFile) return undefined;
   try {
     if (statSync(resultFile).mtimeMs < active.startedAt) return undefined;
@@ -144,6 +147,8 @@ export async function settle(
   env?: NodeJS.ProcessEnv,
   /** 紧急任务（t113）：本地检查插到最前、不占并发名额。 */
   urgent = false,
+  /** 本地检查在哪跑：缺省本机；远程任务交给它所在主机的代理（#358）。 */
+  check: typeof runLocalCheck = runLocalCheck,
 ): Promise<Settlement> {
   const log = await readLog(active);
   const workerGuardRefused =
@@ -224,7 +229,7 @@ export async function settle(
   if (needsGates(active.stop, exit)) {
     const rules = active.worker.profile.rules;
     if (active.deliver === "pr" && rules.checks?.includes("local_check")) {
-      localCheck = await runLocalCheck({
+      localCheck = await check({
         worktree: active.worktree ?? "",
         taskDir: dirname(active.logFile),
         env,

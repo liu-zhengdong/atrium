@@ -84,8 +84,19 @@ test("anonymous requests are rejected before their declared body is read", async
         method === "POST" && authPolicy(method, url) !== "user",
     )
     .map(({ url }) => url);
-  assert.deepEqual(exceptions, ["/api/auth/rotate"]);
+  assert.deepEqual(exceptions.sort(), [
+    "/api/agent/exit",
+    "/api/agent/hello",
+    "/api/agent/join",
+    "/api/agent/log",
+    "/api/agent/poll",
+    "/api/agent/reply",
+    "/api/auth/rotate",
+  ]);
   assert.equal(await declaredBodyWithoutBytes(port, "/api/auth/rotate"), 401);
+  // 代理接口（#358）同样在读请求体之前认接入码或主机令牌。
+  for (const path of exceptions.filter((url) => url.startsWith("/api/agent/")))
+    assert.equal(await declaredBodyWithoutBytes(port, path), 401, path);
 });
 
 test("raw HTTP encoded and normalized paths cannot bypass auth", async (t) => {

@@ -12,6 +12,7 @@ import { mergeFailure } from "./merge-decision.ts";
 import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
 import { MergeClaim } from "./merge-claim.ts";
 import { addTell } from "./tell-ledger.ts";
+import { worktreePlan } from "./prepare.ts";
 
 type Stage = NonNullable<Task["delivery_stage"]>;
 type View = {
@@ -302,8 +303,61 @@ export class MergeQueue {
     return data as View;
   }
 
+  /**
+   * 在远程主机上做的任务（#358）：那边的工作树不在本机。合入在本机按任务的工作树规则另建一个，
+   * 对齐到 PR 头提交后照常 rebase、检查、推送；清理时一起删（worktree-cleanup.ts）。
+   */
+  private async localWorktree(
+    task: Task,
+    repo: string,
+    branch: string,
+    head: string,
+  ) {
+    const plan = worktreePlan(
+      repo,
+      task.id,
+      task.title,
+      task.role ?? undefined,
+    );
+    await this.command("git", [
+      "-C",
+      repo,
+      "fetch",
+      "origin",
+      `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+    ]);
+    if (!existsSync(plan.path)) {
+      await this.command("git", [
+        "-C",
+        repo,
+        "worktree",
+        "add",
+        "--no-track",
+        "-B",
+        branch,
+        plan.path,
+        head,
+      ]);
+      return plan.path;
+    }
+    const current = await this.options.run("git", [
+      "-C",
+      plan.path,
+      "symbolic-ref",
+      "--quiet",
+      "--short",
+      "HEAD",
+    ]);
+    if (!current.ok || current.stdout.trim() !== branch)
+      throw new MergeHold(
+        `本机合入用的工作树 ${plan.path} 不在分支 ${branch} 上，等待人工核对`,
+      );
+    return plan.path;
+  }
+
   private async process(task: Task) {
-    const { repo, worktree, branch, pr_url: url } = task;
+    const { repo, branch, pr_url: url } = task;
+    let worktree = task.worktree;
     if (!repo || !worktree || !branch || !url)
       throw new Error("合入任务缺少仓库、工作树、分支或 PR");
     const origin = await originRepo(repo, this.options.run);
@@ -324,6 +378,14 @@ export class MergeQueue {
       before.baseRefName !== base
     )
       throw new MergeHold("PR 状态、源分支或目标分支与任务不符");
+    const remote = task.host_id != null && task.host_id !== 1;
+    if (remote)
+      worktree = await this.localWorktree(
+        task,
+        repo,
+        branch,
+        before.headRefOid,
+      );
     if (task.delivery_stage === "merging") {
       for (const kind of ["rebase-merge", "rebase-apply"]) {
         const path = await this.command("git", [
@@ -339,6 +401,15 @@ export class MergeQueue {
         }
       }
     }
+    // 远程任务：本机这份只是合入用的副本，每次都对齐到 PR 头提交（上次没推成的 rebase 重做即可）。
+    if (remote)
+      await this.command("git", [
+        "-C",
+        worktree,
+        "reset",
+        "--hard",
+        before.headRefOid,
+      ]);
     const head = await this.command("git", [
       "-C",
       worktree,

@@ -61,13 +61,32 @@ import { hintText, needsReview } from "./concern-gate.ts";
 import { isCouncilTask, isOpinionTask } from "./councils.ts";
 import { taskRoute } from "../leaders/subscriber.ts";
 import type { HostGate } from "./host-load.ts";
+import type { RemoteHosts } from "../hosts/remote.ts";
+import { nextRun } from "../hosts/model.ts";
+import {
+  hostRef,
+  LOCAL_HOST,
+  type HostChoice,
+  type HostNeed,
+} from "../hosts/state.ts";
+import type { Assignment } from "../hosts/protocol.ts";
+import { runLocalCheck } from "./local-check.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
  * 收尾与看门狗的判定在 outcome.ts / watchdog.ts 的纯函数里，这里只执行并落库。
  */
 
-export type Chosen = { worker: ResolvedWorker; risk: Risk };
+/** host：派到哪台远程主机（#358）；不给或是本机就在本机跑。 */
+export type Chosen = { worker: ResolvedWorker; risk: Risk; host?: number };
+
+/** 挑主机（#358）：need 要查仓库（异步），choose 在占位前同步判定，免得两轮拉起抢同一个空位。 */
+export type Placement = {
+  need(taskId: number, tool: Tool, urgent: boolean): Promise<HostNeed>;
+  choose(need: HostNeed, pinned: number | null): HostChoice;
+  /** 远程主机上报的已装且没判为未登录的工具（挑执行者时代替本机 PATH）。 */
+  installed(host: number): Partial<Record<Tool, string>>;
+};
 
 export type ExecutorContext = {
   db: DatabaseSync;
@@ -93,6 +112,10 @@ export type ExecutorContext = {
   /** 本机还能不能再拉起一个执行者（#358 并发上限与负载）；缺省不限。 */
   /** 本机闸门（#358）；紧急任务传 urgent，跳过负载与执行者上限。 */
   hostGate?: (urgent: boolean) => HostGate;
+  /** 远程主机的代理连接（#358 第 1 步）；没有时只在本机跑。 */
+  remote?: RemoteHosts;
+  /** 排队拉起时挑主机；没有时只看本机闸门。 */
+  placement?: Placement;
 };
 
 export class Executors {
@@ -101,9 +124,52 @@ export class Executors {
   readonly launching = new Map<number, Tool | null>();
   /** 退出收尾期间仍可能自动重派；wait 不应把中途状态当作最终结果。 */
   readonly finishing = new Map<number, number>();
+  /** 正在往远程主机拉起的任务与主机号；不在这里的按本机算。 */
+  readonly launchHosts = new Map<number, number>();
   private ticking = false;
 
-  constructor(private readonly ctx: ExecutorContext) {}
+  constructor(private readonly ctx: ExecutorContext) {
+    ctx.remote?.attach({
+      ready: () => this.ready,
+      exited: (task, run, exit) => this.remoteExited(task, run, exit),
+      lost: (task, reason) => this.remoteLost(task, reason),
+      reconnected: (host) => {
+        for (const active of this.active.values())
+          if (active.host === host) active.state.lastProgressAt = Date.now();
+      },
+    });
+  }
+
+  /** 服务重启自愈做完后置 true：之前代理的对账与退出上报先等等。 */
+  ready = false;
+
+  /** 占位：正在拉起（host 是远程主机时记下，本机并发与独占按主机分开算）。 */
+  claim(id: number, tool: Tool | null, host?: number) {
+    this.launching.set(id, tool);
+    if (this.remoteHost(host)) this.launchHosts.set(id, host!);
+    else this.launchHosts.delete(id);
+  }
+
+  release(id: number) {
+    this.launching.delete(id);
+    this.launchHosts.delete(id);
+  }
+
+  /** 是远程主机（不是本机 h1）。 */
+  remoteHost(host: number | undefined): host is number {
+    return host !== undefined && host !== LOCAL_HOST;
+  }
+
+  private hostOf(active: Active) {
+    return active.host ?? LOCAL_HOST;
+  }
+
+  /** 查事实、探进展用的命令：远程任务的 git 在那台机器上跑。 */
+  execFor(active: Active) {
+    return active.host !== undefined && this.ctx.remote
+      ? this.ctx.remote.exec(active.host)
+      : this.ctx.exec;
+  }
 
   private async pace() {
     try {
@@ -117,32 +183,50 @@ export class Executors {
     return this.ctx.closed();
   }
 
-  busy(tool: Tool, except?: number) {
+  /** 这台主机（缺省本机）上这个工具是否正忙；独占工具按主机各跑一个。 */
+  busy(tool: Tool, except?: number, host: number = LOCAL_HOST) {
     for (const active of this.active.values())
-      if (active.tool === tool && active.id !== except && !active.exited)
+      if (
+        active.tool === tool &&
+        active.id !== except &&
+        !active.exited &&
+        this.hostOf(active) === host
+      )
         return true;
     for (const [id, launching] of this.launching)
-      if (launching === tool && id !== except) return true;
+      if (
+        launching === tool &&
+        id !== except &&
+        (this.launchHosts.get(id) ?? LOCAL_HOST) === host
+      )
+        return true;
     return false;
   }
 
-  /** 在跑（未退出）与正在启动的执行者个数，except 除外；本机并发上限按它算。 */
-  inFlight(except?: number) {
+  /** 这台主机（缺省本机）上在跑（未退出）与正在启动的执行者个数，except 除外；并发上限按它算。 */
+  inFlight(except?: number, host: number = LOCAL_HOST) {
     const ids = new Set<number>();
     for (const active of this.active.values())
-      if (!active.exited) ids.add(active.id);
-    for (const id of this.launching.keys()) ids.add(id);
+      if (!active.exited && this.hostOf(active) === host) ids.add(active.id);
+    for (const id of this.launching.keys())
+      if ((this.launchHosts.get(id) ?? LOCAL_HOST) === host) ids.add(id);
     ids.delete(except ?? -1);
     return ids.size;
   }
 
-  /** 已有任务在跑（或正在启动）的工具，except 除外；自动挑人时据此避开正忙的独占执行者。 */
+  /** 本机已有任务在跑（或正在启动）的工具，except 除外；自动挑人时据此避开正忙的独占执行者。 */
   busyTools(except?: number) {
     const tools = new Set<Tool>();
     for (const active of this.active.values())
-      if (active.id !== except && !active.exited) tools.add(active.tool);
+      if (
+        active.id !== except &&
+        !active.exited &&
+        this.hostOf(active) === LOCAL_HOST
+      )
+        tools.add(active.tool);
     for (const [id, launching] of this.launching)
-      if (launching && id !== except) tools.add(launching);
+      if (launching && id !== except && !this.launchHosts.has(id))
+        tools.add(launching);
     return tools;
   }
 
@@ -182,6 +266,8 @@ export class Executors {
 
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
     if (this.ctx.closed()) throw new Error("服务已关闭");
+    if (this.remoteHost(chosen.host))
+      return this.launchRemote(id, { ...chosen, host: chosen.host }, retried);
     const task = getTask(this.ctx.db, id);
     await this.ctx.disk.check(task.node_id, task.repo);
     const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
@@ -206,6 +292,7 @@ export class Executors {
         {
           worker: chosen.worker.id,
           pid,
+          host_id: null,
           worktree: prepared.worktree,
           branch: prepared.branch,
           pr_url: null,
@@ -242,6 +329,15 @@ export class Executors {
    */
   async relaunch(prev: Active, resume?: ResumeWith & { ids: number[] }) {
     if (this.ctx.closed()) throw new Error("服务已关闭");
+    if (prev.host !== undefined) {
+      await this.launchRemote(
+        prev.id,
+        { worker: prev.worker, risk: prev.risk, host: prev.host },
+        prev.retried,
+        { prev, resume },
+      );
+      return;
+    }
     const id = prev.id;
     const task = getTask(this.ctx.db, id);
     const chosen = { worker: prev.worker, risk: prev.risk };
@@ -280,26 +376,176 @@ export class Executors {
     );
   }
 
+  /**
+   * 派到远程主机（#358）：本机写好提示词、算好那台机器上的路径，交给代理建工作树并拉起；
+   * 拿到回执（pid）后与本机拉起一样记账、开始看门狗。retake 是捎话续上或重派（任务保持 running，只换 pid）。
+   */
+  private async launchRemote(
+    id: number,
+    chosen: Chosen & { host: number },
+    retried: boolean,
+    retake?: { prev: Active; resume?: ResumeWith & { ids: number[] } },
+  ): Promise<Task> {
+    const remote = this.ctx.remote;
+    if (!remote) throw new Error("服务没有接上远程主机");
+    const { host } = chosen;
+    const task = getTask(this.ctx.db, id);
+    const prepared = await prepareRun(
+      task,
+      chosen,
+      this.ctx.launchOptions,
+      retake?.resume,
+      { host, ...remote.site(host) },
+    );
+    const usagePace = await this.pace();
+    if (this.ctx.closed()) throw new Error("服务已关闭");
+    const plan = prepared.remote!;
+    const run = nextRun(this.ctx.db, id);
+    const assignment: Assignment = {
+      task: id,
+      ref: task.ref,
+      run,
+      worker: chosen.worker.id,
+      tool: chosen.worker.tool,
+      ...(chosen.worker.cliModel ? { model: chosen.worker.cliModel } : {}),
+      ...(chosen.worker.effort ? { effort: chosen.worker.effort } : {}),
+      prompt: plan.prompt,
+      ...(plan.resume ? { resume: plan.resume } : {}),
+      dir: plan.dir,
+      cwd: prepared.cwd,
+      ...(plan.repo ? { repo: plan.repo } : {}),
+    };
+    const ack = await remote.launch(host, assignment);
+    prepared.launch = { ...ack.launch };
+    const stop = () => remote.stop(host, id, run, "SIGKILL");
+    if (this.ctx.closed()) {
+      stop();
+      throw new Error("服务已关闭");
+    }
+    let started: Task;
+    try {
+      if (retake) {
+        const ids = retake.resume ? retake.resume.ids : prepared.tellIds;
+        started = patchRunFields(
+          this.ctx.db,
+          id,
+          { pid: ack.pid },
+          retake.resume ? "tell_resumed" : "tell_restarted",
+          {
+            pid: ack.pid,
+            host: hostRef(host),
+            worker: chosen.worker.id,
+            tells: ids.length,
+          },
+        );
+        markDelivered(
+          this.ctx.db,
+          id,
+          ids,
+          retake.resume ? "resume" : "restart",
+        );
+      } else {
+        started = this.advance(
+          id,
+          { kind: "start" },
+          {
+            worker: chosen.worker.id,
+            pid: ack.pid,
+            host_id: host,
+            worktree: prepared.worktree,
+            branch: prepared.branch,
+            pr_url: null,
+            ci: null,
+            result: null,
+          },
+          {
+            worker: chosen.worker.id,
+            risk: chosen.risk,
+            host: hostRef(host),
+            cwd: prepared.cwd,
+            ...(retried ? { retry: true } : {}),
+          },
+        );
+        markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
+      }
+    } catch (error) {
+      stop();
+      throw error;
+    }
+    await this.track(
+      started,
+      chosen,
+      prepared,
+      undefined,
+      0,
+      retried,
+      usagePace,
+      { host, run, pid: ack.pid },
+    );
+    return started;
+  }
+
+  /** 代理报告远程某一轮退出。 */
+  private remoteExited(
+    id: number,
+    run: number,
+    exit: Exit,
+  ): "done" | "retry" | "ignored" {
+    const active = this.active.get(id);
+    if (active && active.host !== undefined && active.run === run) {
+      if (!active.exited) void this.finish(id, exit);
+      return "done";
+    }
+    // 回执刚到、还没记上账（含收尾里续上会话、卡死重试的新一轮）：让代理过一会儿再报。
+    if (this.launching.has(id) || this.finishing.has(id)) return "retry";
+    return "ignored";
+  }
+
+  /** 代理不知道这一轮：按退出情况不明收尾（日志与交付事实照常查）。 */
+  private remoteLost(id: number, reason: string) {
+    const active = this.active.get(id);
+    if (!active || active.exited) return;
+    noteTask(this.ctx.db, id, "host_run_lost", {
+      host: hostRef(active.host ?? LOCAL_HOST),
+      reason,
+    });
+    void this.finish(id, "unknown");
+  }
+
   private async track(
     task: Task,
     chosen: Chosen,
     prepared: Prepared,
-    child: ChildProcess,
+    child: ChildProcess | undefined,
     offset: number,
     retried: boolean,
     usagePace: PaceEntry[] | undefined,
+    remote?: { host: number; run: number; pid: number },
   ) {
     const id = task.id;
     const active = launched({
       task,
-      pid: child.pid!,
+      pid: remote ? remote.pid : child!.pid!,
       child,
       prepared,
       retried,
-      exec: this.ctx.exec,
-      ...chosen,
+      exec:
+        remote && this.ctx.remote
+          ? this.ctx.remote.exec(remote.host)
+          : this.ctx.exec,
+      worker: chosen.worker,
+      risk: chosen.risk,
+      ...(remote
+        ? {
+            remote: {
+              host: remote.host,
+              run: remote.run,
+              repo: prepared.remote?.repo?.clone ?? null,
+            },
+          }
+        : {}),
     });
-    if (prepared.launch.input === "stream-json" && child.stdin)
+    if (child && prepared.launch.input === "stream-json" && child.stdin)
       active.live = new LiveInput(
         child.stdin,
         prepared.logFile,
@@ -315,7 +561,8 @@ export class Executors {
       ADAPTERS[chosen.worker.tool].quotaProvider,
       usagePace,
     );
-    child.once(
+    // 远程的退出由代理上报（remoteExited）。
+    child?.once(
       "exit",
       (code, signal) => void this.finish(id, { code, signal }),
     );
@@ -356,16 +603,27 @@ export class Executors {
           ]),
         ];
       }
+      const remote = this.ctx.remote;
+      const host = active.host;
       const outcome = await settle(
         active,
         exit,
-        this.ctx.exec,
+        this.execFor(active),
         (status, log) => {
           noteTask(this.ctx.db, id, `local_check_${status}`, { log });
           this.ctx.waits.changed(id);
         },
         this.ctx.launchOptions.env,
         getTask(this.ctx.db, id).urgent === 1,
+        // 远程任务的工作树在那台机器上：本地检查交给那台的代理跑。
+        host !== undefined && remote
+          ? (input) =>
+              remote.check(host, {
+                task: id,
+                worktree: input.worktree,
+                urgent: input.urgent ?? false,
+              })
+          : runLocalCheck,
       );
       if (this.ctx.closed()) return;
       this.collectSkills(active);
@@ -596,9 +854,10 @@ export class Executors {
     this.publish(active.id, "stalled", { reason, retry: true });
     this.active.delete(active.id);
     try {
+      // 卡死重试留在原来那台主机上。
       await this.launch(
         active.id,
-        { worker: active.worker, risk: active.risk },
+        { worker: active.worker, risk: active.risk, host: active.host },
         true,
       );
     } catch (error) {
@@ -630,7 +889,13 @@ export class Executors {
     try {
       for (const active of [...this.active.values()]) {
         if (active.exited) continue;
-        if (!active.child && !alive(active.pid)) {
+        if (active.host !== undefined) {
+          // 远程：进程在那台机器上，退出由代理上报；断线期间不判卡死，从重连起重新计空闲。
+          if (!this.ctx.remote?.online(active.host)) {
+            active.state.lastProgressAt = Date.now();
+            continue;
+          }
+        } else if (!active.child && !alive(active.pid)) {
           void this.finish(active.id, "unknown");
           continue;
         }
@@ -673,17 +938,24 @@ export class Executors {
   private forceFinalExit(active: Active) {
     if (active.exited || !active.finalizing || active.finalizing.forced) return;
     active.finalizing.forced = true;
-    killTree(active.pid, "SIGTERM");
+    this.signal(active, "SIGTERM");
     setTimeout(() => {
-      if (!active.exited) killTree(active.pid, "SIGKILL");
+      if (!active.exited) this.signal(active, "SIGKILL");
     }, this.ctx.killGraceMs ?? 10_000).unref();
   }
 
   kill(active: Active) {
-    killTree(active.pid, "SIGTERM");
+    this.signal(active, "SIGTERM");
     setTimeout(() => {
-      if (!active.exited) killTree(active.pid, "SIGKILL");
+      if (!active.exited) this.signal(active, "SIGKILL");
     }, this.ctx.killGraceMs ?? 10_000).unref();
+  }
+
+  /** 结束执行者的进程树：本机直接发信号，远程交给那台的代理。 */
+  private signal(active: Active, signal: "SIGTERM" | "SIGKILL") {
+    if (active.host !== undefined)
+      this.ctx.remote?.stop(active.host, active.id, active.run ?? 0, signal);
+    else killTree(active.pid, signal);
   }
 
   /**
@@ -698,16 +970,38 @@ export class Executors {
       const entryTool = entry.tool as Tool;
       if (this.ctx.closed() || held.has(ADAPTERS[entryTool].quotaProvider))
         continue;
-      if (ADAPTERS[entryTool].exclusive && this.busy(entryTool)) continue;
+      let host: number | undefined;
+      const placement = this.ctx.placement;
+      const need = placement
+        ? await placement
+            .need(entry.task_id, entryTool, entry.urgent)
+            .catch(() => undefined)
+        : undefined;
+      if (this.ctx.closed()) return moved;
+      // 判定与占位之间没有 await：同时进来的另一轮 drain 看得到这里的 launching。
       // 闲时的（t136）：同一工具或在等本机空位的普通任务还有没拉起的（队首只取每个工具一件），先让它们。
       if (entry.idle && this.idleAhead(entryTool)) continue;
-      // 判定与占位之间没有 await：同时进来的另一轮 drain 看得到这里的 launching。
       // 队首按紧急、普通、闲时排好：普通任务被挡住时，后面不会还有紧急的。
-      const gate = this.ctx.hostGate?.(entry.urgent);
-      if (gate && !gate.ok) break;
+      if (placement && need) {
+        const choice = placement.choose(need, entry.host_id ?? null);
+        // 指定的主机离线、暂停或满了：只等它，不挡别的队。
+        if (choice.kind !== "run") {
+          if (entry.host_id) continue;
+          break;
+        }
+        host = choice.host;
+      } else {
+        const gate = this.ctx.hostGate?.(entry.urgent);
+        if (gate && !gate.ok) break;
+      }
+      if (
+        ADAPTERS[entryTool].exclusive &&
+        this.busy(entryTool, undefined, host ?? LOCAL_HOST)
+      )
+        continue;
       if (!dequeue(this.ctx.db, entry.task_id)) continue;
       moved++;
-      this.launching.set(entry.task_id, entryTool);
+      this.claim(entry.task_id, entryTool, host);
       try {
         const worker = await resolveWorker(
           entry.worker,
@@ -719,9 +1013,18 @@ export class Executors {
           { worker: worker.id, risk: entry.risk as Risk },
           this.ctx.launchOptions,
           held,
-          { chain: taskAvoidChain(this.ctx.db, task) },
+          {
+            chain: taskAvoidChain(this.ctx.db, task),
+            ...(this.remoteHost(host) && placement
+              ? { installed: placement.installed(host) }
+              : {}),
+          },
         );
-        await this.launch(entry.task_id, { worker, risk: entry.risk as Risk });
+        await this.launch(entry.task_id, {
+          worker,
+          risk: entry.risk as Risk,
+          host,
+        });
       } catch (error) {
         if (this.ctx.closed()) return moved;
         const reason = `排队后拉起失败：${error instanceof Error ? error.message : String(error)}`;
@@ -739,7 +1042,7 @@ export class Executors {
             noteTask(this.ctx.db, entry.task_id, "launch_failed", { reason });
         }
       } finally {
-        this.launching.delete(entry.task_id);
+        this.release(entry.task_id);
         this.ctx.waits.changed(entry.task_id);
       }
     }

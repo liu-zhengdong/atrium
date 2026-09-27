@@ -32,6 +32,8 @@ export type Avoid = {
   chain?: PickInput["chain"];
   exclude?: ReadonlySet<Tool>;
   requireTrust?: boolean;
+  /** 派到远程主机（#358）：按那台上报的已装工具算，不看本机 PATH。 */
+  installed?: Partial<Record<Tool, string>>;
 };
 
 /**
@@ -66,10 +68,16 @@ export async function chooseWorker(
     // 写死的执行者：强度、模型搭配不合法当场报错，不等排到了才失败。
     checkEffort(ADAPTERS[worker.tool], worker.effort);
     ADAPTERS[worker.tool].checkModel?.(worker.cliModel, worker.effort);
-    if (!findExecutable(ADAPTERS[worker.tool].executable, path))
+    if (
+      avoid.installed
+        ? !avoid.installed[worker.tool]
+        : !findExecutable(ADAPTERS[worker.tool].executable, path)
+    )
       throw new Problem(
         400,
-        `执行者 ${worker.tool} 没装：PATH 上找不到 ${ADAPTERS[worker.tool].executable}`,
+        avoid.installed
+          ? `执行者 ${worker.tool} 在这台主机上没装或没登录`
+          : `执行者 ${worker.tool} 没装：PATH 上找不到 ${ADAPTERS[worker.tool].executable}`,
         "usage",
       );
     const account = ADAPTERS[worker.tool].quotaProvider;
@@ -88,7 +96,7 @@ export async function chooseWorker(
         overReserve(entry.usedPercent, reservePercent),
     );
     if (used) {
-      const installed = detectInstalled(path);
+      const installed = avoid.installed ?? detectInstalled(path);
       const tools = Object.keys(installed) as Tool[];
       const profiles = Object.fromEntries(
         await Promise.all(
@@ -118,7 +126,7 @@ export async function chooseWorker(
     }
     waitUntil = held.get(ADAPTERS[worker.tool].quotaProvider);
   } else {
-    const installed = detectInstalled(path);
+    const installed = avoid.installed ?? detectInstalled(path);
     const tools = Object.keys(installed) as Tool[];
     const profiles = Object.fromEntries(
       await Promise.all(

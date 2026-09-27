@@ -14,6 +14,8 @@ export type QueueEntry = {
   worker: string;
   risk: string;
   queued_at: number;
+  /** 用户用 --host 指定的主机（#358）；自动挑的为 null，空出来时再挑。 */
+  host_id?: number | null;
 };
 
 export function ensureQueueTable(db: DatabaseSync) {
@@ -23,12 +25,24 @@ export function ensureQueueTable(db: DatabaseSync) {
       worker TEXT NOT NULL,
       risk TEXT NOT NULL,
       queued_at INTEGER NOT NULL)`);
+  const columns = db.prepare("PRAGMA table_info(task_queue)").all() as {
+    name: string;
+  }[];
+  if (!columns.some((column) => column.name === "host_id"))
+    db.exec("ALTER TABLE task_queue ADD COLUMN host_id INTEGER");
 }
 
 export function enqueue(db: DatabaseSync, entry: QueueEntry) {
   db.prepare(
-    "INSERT INTO task_queue(task_id,tool,worker,risk,queued_at) VALUES (?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET tool=excluded.tool,worker=excluded.worker,risk=excluded.risk",
-  ).run(entry.task_id, entry.tool, entry.worker, entry.risk, entry.queued_at);
+    "INSERT INTO task_queue(task_id,tool,worker,risk,queued_at,host_id) VALUES (?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET tool=excluded.tool,worker=excluded.worker,risk=excluded.risk,host_id=excluded.host_id",
+  ).run(
+    entry.task_id,
+    entry.tool,
+    entry.worker,
+    entry.risk,
+    entry.queued_at,
+    entry.host_id ?? null,
+  );
 }
 
 export function dequeue(db: DatabaseSync, taskId: number) {
@@ -74,7 +88,7 @@ export function queueView(
 export type QueueHead = QueueEntry & { urgent: boolean; idle: boolean };
 
 /**
- * 每个工具的队首，按拉起先后排好：紧急 → 普通 → 闲时，同一档按入队先后（host-load.ts queueOrder）。
+ * 每个工具（指定了主机的按工具与主机）的队首，按拉起先后排好：紧急 → 普通 → 闲时，同一档按入队先后（host-load.ts queueOrder）。
  * 纯函数；drain 按这个顺序过闸门，普通任务被挡住时后面不会还有紧急的，闲时的排在最后。
  */
 export function queueHeads(entries: readonly QueueHead[]): QueueHead[] {
@@ -83,9 +97,12 @@ export function queueHeads(entries: readonly QueueHead[]): QueueHead[] {
       { urgent: a.urgent, idle: a.idle, at: a.queued_at, id: a.task_id },
       { urgent: b.urgent, idle: b.idle, at: b.queued_at, id: b.task_id },
     );
+  // 指定了主机的另排一队：那台离线或满了，不挡自动挑主机的同一工具。
   const first = new Map<string, QueueHead>();
-  for (const entry of [...entries].sort(order))
-    if (!first.has(entry.tool)) first.set(entry.tool, entry);
+  for (const entry of [...entries].sort(order)) {
+    const key = `${entry.tool}@${entry.host_id ?? ""}`;
+    if (!first.has(key)) first.set(key, entry);
+  }
   return [...first.values()].sort(order);
 }
 

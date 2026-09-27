@@ -102,6 +102,8 @@ test(
     assert.equal((await victim.exited).signal, "SIGKILL");
     assert.deepEqual(sweepTestRun(runId), [info.root]);
     assert.equal(existsSync(info.root), false);
+    // SIGKILL 只是发出信号，孤儿进程还要等系统回收，稍等再判。
+    for (let i = 0; i < 50 && alive(info.pid); i++) await delay(20);
     assert.equal(alive(info.pid), false);
     assert.deepEqual(sweepTestRun(runId), []);
   },

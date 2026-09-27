@@ -119,7 +119,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
 }
 
 test(
-  "task add 的下一步：带 --parent 建出的子任务提示派活，顶层任务仍提示拆子任务",
+  "task add 的下一步：带 --parent 建出的子任务提示看候选，顶层任务仍提示拆子任务",
   { timeout: manyCommands },
   async (t) => {
     const f = await fixture(t);
@@ -134,7 +134,7 @@ test(
     assert.equal(child.code, 0, child.stderr);
     assert.match(
       child.stdout.trimEnd().split("\n").at(-1)!,
-      /^派活：atrium task run t2$/,
+      /^看候选并派活：atrium task pick t2$/,
     );
     const json = await f.cli(
       "task",
@@ -145,7 +145,7 @@ test(
       "--json",
     );
     assert.equal(json.code, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).next, "atrium task run t3");
+    assert.equal(JSON.parse(json.stdout).next, "atrium task pick t3");
   },
 );
 

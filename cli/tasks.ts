@@ -11,6 +11,13 @@ import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 import { concernsText, hintLines } from "./task-concerns.ts";
+import {
+  signedPercent,
+  type PickAccount,
+  type PickCandidate,
+  type PickView,
+  type RunPick,
+} from "../server/tasks/pick.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
@@ -238,7 +245,7 @@ const add: Command = {
       str(values, "after") || str(values, "after-pr") || values.auto === true
         ? "看排期：atrium task plan"
         : task.parent_ref
-          ? `派活：atrium task run ${task.ref}`
+          ? `看候选并派活：atrium task pick ${task.ref}`
           : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
     );
   },
@@ -667,19 +674,119 @@ const run: Command = {
     }
     const result = await (
       await client()
-    ).post<{ task: Task & { events: TaskEventRow[] }; queued: boolean }>(
-      `/tasks/${id}/run`,
-      body,
-    );
+    ).post<{
+      task: Task & { events: TaskEventRow[] };
+      queued: boolean;
+      pick?: RunPick;
+    }>(`/tasks/${id}/run`, body);
     const { task } = result;
     if (json) printJson(result);
-    else if (result.queued)
-      console.log(`${task.ref} 排队中：${queuedReason(task.events)}`);
     else
       console.log(
-        `已派 ${task.ref} 给 ${task.worker}（PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
+        [
+          result.queued
+            ? `${task.ref} 排队中：${queuedReason(task.events)}`
+            : `已派 ${task.ref} 给 ${task.worker}（PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
+          ...pickLines(result.pick),
+        ].join("\n"),
       );
     recordNext(`等结果：atrium task wait ${task.ref}`);
+  },
+};
+
+/** 自动挑人写理由，写死执行者有更富余的候选时加一行提醒（不拦）。 */
+export function pickLines(pick: RunPick | undefined): string[] {
+  if (!pick) return [];
+  return [
+    ...(pick.auto && pick.reason
+      ? [`按额度挑了 ${pick.worker}，因为${pick.reason}`]
+      : []),
+    ...(pick.notice ? [pick.notice] : []),
+  ];
+}
+
+const accountCell = (q: PickAccount) => {
+  if (q.held_until !== null) return `额度用尽至 ${when(q.held_until)}`;
+  const parts = [
+    q.used_percent === null ? null : `已用 ${Math.round(q.used_percent)}%`,
+    q.spare_percent === null ? null : `富余 ${signedPercent(q.spare_percent)}`,
+    q.hours_to_reset === null
+      ? null
+      : `${q.hours_to_reset < 10 ? q.hours_to_reset.toFixed(1) : Math.round(q.hours_to_reset)} 小时后重置`,
+    q.left_percent === null ? null : `扣保留剩 ${Math.round(q.left_percent)}%`,
+  ].filter(Boolean);
+  return parts.length
+    ? `${q.account} ${parts.join("，")}`
+    : `${q.account} 无数据`;
+};
+
+const recordCell = (r: PickCandidate["record"]) =>
+  !r || !r.deliveries
+    ? "无记录"
+    : `${r.deliveries} 次${r.first_pass_rate === null ? "" : `，一次通过 ${Math.round(r.first_pass_rate * 100)}%`}${r.low_data ? "（样本少）" : ""}`;
+
+const takeCell = (c: PickCandidate, job: PickView["job"]) =>
+  [
+    c.eligible ? "能接" : `不能接：${c.refusals.join("；")}`,
+    c.preferred !== null && job ? `${job.name}专员第 ${c.preferred} 选` : "",
+    ...c.notes,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+/** 候选一览的文本：推荐一句、表格；表格一行一位候选。 */
+export function formatPick(view: PickView & { task: string }): string {
+  const head = view.recommended
+    ? `推荐 ${view.recommended}：${view.reason}`
+    : `暂无推荐：${view.reason}`;
+  const meta = `${view.task} · risk=${view.risk}${view.job ? ` · 干活的专员 ${view.job.name}（${view.job.ref}）` : " · 没指定干活的专员"} · 根章程给用户保留 ${view.reserve_percent}%${view.quota_known ? "" : " · 额度数据不可用"}`;
+  if (!view.candidates.length) return `${head}\n${meta}`;
+  return [
+    head,
+    meta,
+    "",
+    table([
+      ["", "执行者", "能不能接", "账号额度", "正忙", "交付记录"],
+      ...view.candidates.map((c) => [
+        c.rank === null ? "-" : String(c.rank),
+        c.worker,
+        takeCell(c, view.job),
+        accountCell(c.quota),
+        c.busy ? "正忙，派了会排队" : "空闲",
+        recordCell(c.record),
+      ]),
+    ]),
+  ].join("\n");
+}
+
+const pick: Command = {
+  args: "tN [--risk low|medium|high]",
+  about:
+    "看派活候选（只读，不派）：候选执行者能不能接、账号额度、是否正忙、在干活的专员下的交付记录，给出推荐与理由；--risk 缺省 low",
+  options: { risk: { type: "string" } },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values, json }) {
+    const id = ref(reference, "任务");
+    const risk = str(values, "risk");
+    if (risk !== undefined && !["low", "medium", "high"].includes(risk))
+      throw new Problem(
+        400,
+        `--risk 只能是 low、medium、high（收到：${risk}）`,
+        "usage",
+      );
+    const view = await (
+      await client()
+    ).get<PickView & { task: string }>(
+      `/tasks/${id}/pick${risk ? `?${new URLSearchParams({ risk })}` : ""}`,
+    );
+    if (json) printJson(view);
+    else console.log(formatPick(view));
+    const riskFlag = risk && risk !== "low" ? ` --risk ${risk}` : "";
+    recordNext(
+      view.recommended
+        ? `派活：atrium task run ${id} --worker ${view.recommended}${riskFlag}`
+        : "看额度：atrium quota",
+    );
   },
 };
 
@@ -828,6 +935,7 @@ export const taskCommands: Record<string, Command> = {
   "task note": note,
   "task tell": tell,
   "task done": done,
+  "task pick": pick,
   "task run": run,
   "task stop": stop,
   "task merge": merge,

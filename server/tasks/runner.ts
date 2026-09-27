@@ -34,10 +34,9 @@ import { Scheduler, planItem } from "./schedule.ts";
 import { requireRow } from "./ledger-model.ts";
 import { schedulePrExec } from "./schedule-pr.ts";
 import type { LaunchOptions } from "./workspace.ts";
-import { rankRoleWorkers } from "./role-ranking.ts";
-import { listDeliveries, summarizeDeliveries } from "./delivery-records.ts";
-import { getJobRole } from "./job-roles.ts";
-import { avoidReason } from "../skills/model.ts";
+import { pickFor } from "./pick-runtime.ts";
+import { writtenNotice, type RunPick } from "./pick.ts";
+import { isRisk } from "./profiles.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { tellTask } from "./tell-runtime.ts";
 import { DiskBudget } from "./disk-budget.ts";
@@ -375,6 +374,24 @@ export class TaskRunner {
 
   // ---- 派活 ----
 
+  /** 派活候选一览（只读）：候选执行者、额度、专员与交付记录，推荐与理由；与 run 自动挑人同一份排序。 */
+  async pick(reference: unknown, risk: unknown) {
+    const task = getTask(this.db, parseTaskRef(reference));
+    if (risk !== undefined && risk !== "" && !isRisk(risk))
+      throw new Problem(400, "risk: 只能是 low、medium、high", "usage");
+    const pace = await (this.launchOptions.pace ?? readPace)().catch(
+      () => undefined,
+    );
+    const view = await pickFor(task, isRisk(risk) ? risk : "low", {
+      db: this.db,
+      launchOptions: this.launchOptions,
+      pace,
+      held: this.quota.held(),
+      busy: this.x.busyTools(task.id),
+    });
+    return { task: task.ref, ...view };
+  }
+
   async run(reference: unknown, body: unknown) {
     const request = runRequest(body);
     const id = parseTaskRef(reference);
@@ -417,6 +434,7 @@ export class TaskRunner {
       );
     this.x.launching.set(id, null);
     let chosen: Choice;
+    let pick: RunPick;
     try {
       await this.disk.check(task.node_id, task.repo);
       const pace = await (this.launchOptions.pace ?? readPace)().catch(
@@ -433,46 +451,40 @@ export class TaskRunner {
         jobRef: task.job_ref ?? undefined,
       };
       const options = { ...this.launchOptions, pace: async () => pace };
-      let preferred: Choice | undefined;
-      if (!request.worker && task.job_id) {
-        const job = getJobRole(this.db, `r${task.job_id}`);
-        const stats = summarizeDeliveries(
-          listDeliveries(this.db, { job: job.id }),
-        );
-        for (const candidate of rankRoleWorkers(
-          job.preferred,
-          stats,
-          job.name,
-        )) {
-          try {
-            const choice = await chooseWorker(
-              { ...request, worker: candidate },
-              options,
-              this.quota.held(),
-              avoid,
-            );
-            const rules = choice.worker.profile.rules;
-            const avoidedJob =
-              Array.isArray(rules.avoid_jobs) &&
-              rules.avoid_jobs.includes(job.ref);
-            if (
-              avoidedJob ||
-              avoidReason(chain, rules.avoid_nodes) ||
-              (ADAPTERS[choice.worker.tool].exclusive &&
-                avoid.busy.has(choice.worker.tool))
-            )
-              continue;
-            preferred = choice;
-            break;
-          } catch (error) {
-            if (!(error instanceof Problem || error instanceof BudgetProblem))
-              throw error;
+      const held = this.quota.held();
+      // 与 task pick 同一份候选排序：专员优先、再按额度富余；写死执行者时据此提醒更富余的候选。
+      const view = await pickFor(task, request.risk ?? "low", {
+        db: this.db,
+        launchOptions: this.launchOptions,
+        pace,
+        held,
+        busy: avoid.busy,
+      });
+      chosen = await chooseWorker(
+        !request.worker && view.recommended
+          ? { ...request, worker: view.recommended }
+          : request,
+        options,
+        held,
+        avoid,
+      );
+      pick = request.worker
+        ? {
+            worker: chosen.worker.id,
+            auto: false,
+            reason: null,
+            notice: writtenNotice(
+              view,
+              { worker: chosen.worker.id, tool: chosen.worker.tool },
+              task.ref,
+            ),
           }
-        }
-      }
-      chosen =
-        preferred ??
-        (await chooseWorker(request, options, this.quota.held(), avoid));
+        : {
+            worker: chosen.worker.id,
+            auto: true,
+            reason: view.reason,
+            notice: null,
+          };
     } catch (error) {
       this.x.launching.delete(id);
       if (error instanceof BudgetProblem)
@@ -482,25 +494,31 @@ export class TaskRunner {
     const tool = chosen.worker.tool;
     if (chosen.waitUntil !== undefined) {
       this.x.launching.delete(id);
-      return this.enqueue(
-        task,
-        chosen,
-        `${ADAPTERS[tool].quotaProvider} 额度用尽，等到 ${clock(chosen.waitUntil)} 恢复后自动拉起`,
-      );
+      return {
+        ...this.enqueue(
+          task,
+          chosen,
+          `${ADAPTERS[tool].quotaProvider} 额度用尽，等到 ${clock(chosen.waitUntil)} 恢复后自动拉起`,
+        ),
+        pick,
+      };
     }
     if (
       placement(ADAPTERS[tool].exclusive, this.x.busy(tool, id)) === "queue"
     ) {
       this.x.launching.delete(id);
-      return this.enqueue(
-        task,
-        chosen,
-        `${tool} 同一时刻只跑一个，前一个结束后自动拉起`,
-      );
+      return {
+        ...this.enqueue(
+          task,
+          chosen,
+          `${tool} 同一时刻只跑一个，前一个结束后自动拉起`,
+        ),
+        pick,
+      };
     }
     this.x.launching.set(id, tool);
     try {
-      return { task: await this.x.launch(id, chosen), queued: false };
+      return { task: await this.x.launch(id, chosen), queued: false, pick };
     } catch (error) {
       if (error instanceof BudgetProblem)
         return this.blockBudget(task, error.message);

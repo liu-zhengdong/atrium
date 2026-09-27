@@ -191,6 +191,9 @@ export function registerTaskRoutes(
       leaderOf(request) ?? "u1",
     ),
   );
+  app.get("/api/tasks/:id/pick", (request) =>
+    runner.pick(params(request.params).id, query(request.query).risk),
+  );
   app.post("/api/tasks/:id/run", { bodyLimit: 16 * 1024 }, (request) =>
     runner.run(params(request.params).id, request.body),
   );

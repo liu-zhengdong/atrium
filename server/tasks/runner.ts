@@ -128,6 +128,10 @@ export class TaskRunner {
     );
   }
 
+  clearQuota(provider: string) {
+    return this.quota.clear(this.x, provider);
+  }
+
   /** 启动看门狗（顺带解除到期的额度标记）与 CI 轮询，并在后台自愈上次遗留的运行中任务（不阻塞启动）。 */
   start() {
     const every = (ms: number, fn: () => Promise<void>) => {

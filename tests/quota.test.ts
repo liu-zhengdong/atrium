@@ -116,10 +116,11 @@ function holdDb() {
 }
 
 test("命令表、帮助与说明书收录 atrium quota", () => {
-  assert.equal(commands.quota.args, "[--json]");
-  assert.match(commands.quota.about, /额度富余/);
-  assert.match(help(), /atrium quota \[--json\]/);
+  assert.equal(commands.quota.args, "[--clear <账号>] [--json]");
+  assert.match(commands.quota.about, /额度/);
+  assert.match(help(), /atrium quota \[--clear <账号>\] \[--json\]/);
   assert.match(guide(commands), /派活前看额度：atrium quota/);
+  assert.match(guide(commands), /atrium quota --clear claude/);
 });
 
 test("parseQuotaAccounts / sortBySpare：沿用字段、富余降序、无数据排最后", () => {

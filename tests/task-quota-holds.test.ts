@@ -19,12 +19,49 @@ import {
   placeHold,
   quotaReason,
   releaseHold,
+  clearHold,
   routeAfterQuota,
   type QuotaHold,
 } from "../server/tasks/quota-holds.ts";
+import { deliveredDespiteUnknownExit } from "../server/tasks/settle.ts";
+import type { Facts } from "../server/tasks/gates.ts";
 
 const NOW = Date.UTC(2026, 8, 27, 8, 0);
 const HOUR = 3_600_000;
+
+test("未知退出先看交付事实：有 PR 且 CI 成功走正常关卡，其余仍可查错误", () => {
+  const facts = {
+    pr: { url: "https://github.com/liu-zhengdong/atrium/pull/294" },
+    ci: "success",
+  } as Facts;
+  assert.equal(deliveredDespiteUnknownExit("unknown", facts), true);
+  assert.equal(
+    deliveredDespiteUnknownExit("unknown", { ...facts, ci: "pending" }),
+    false,
+  );
+  assert.equal(
+    deliveredDespiteUnknownExit("unknown", { ...facts, pr: null }),
+    false,
+  );
+  assert.equal(
+    deliveredDespiteUnknownExit({ code: 1, signal: null }, facts),
+    false,
+  );
+});
+
+test("人工解除精确删除标记，不影响别的账号", () => {
+  const db = new DatabaseSync(":memory:");
+  ensureQuotaHoldTable(db);
+  placeHold(db, { provider: "claude", until: NOW + HOUR, reason: "误判" }, NOW);
+  placeHold(db, { provider: "codex", until: NOW + HOUR, reason: "真实" }, NOW);
+  assert.equal(clearHold(db, "claude")?.reason, "误判");
+  assert.equal(clearHold(db, "claude"), undefined);
+  assert.deepEqual(
+    listHolds(db).map((h) => h.provider),
+    ["codex"],
+  );
+  db.close();
+});
 
 test("到期时刻：有恢复时间用它；恢复时间未知默认 now + 1 小时，可配置", () => {
   assert.equal(holdUntil(new Date(NOW + 90 * 60_000), NOW), NOW + 90 * 60_000);
@@ -113,6 +150,26 @@ test("pickWorker：跳过额度标记未到期的账号；全部被标记报不�
   });
   assert.equal(none.ok, false);
   assert.match(!none.ok ? none.reason : "", /额度用尽/);
+});
+
+test("额度换人时 max_risk 合格但 trust 低也跳过", () => {
+  const profile = (trust: "low" | "high") => ({
+    rules: { max_risk: "high" as const, trust },
+    body: "",
+    layers: [],
+    warnings: [],
+  });
+  const picked = pickWorker({
+    installed: ["opencode", "kimi"],
+    risk: "high",
+    requireTrust: true,
+    profiles: { opencode: profile("low"), kimi: profile("high") },
+  });
+  assert.equal(picked.ok && picked.tool, "kimi");
+  assert.match(
+    picked.skipped.find((skip) => skip.tool === "opencode")?.reason ?? "",
+    /trust=low/,
+  );
 });
 
 test("退出收尾：额度用尽直接受阻、不重试；被人工停下的仍按停止处理", () => {

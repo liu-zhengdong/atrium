@@ -155,6 +155,7 @@ atrium task tree t1                           # 缩进树：短号、状态、�
 atrium task set t2 --status done              # 人工收尾；running 只能由执行者启动进入
 atrium task set t2 --deliver comment --issue 262   # 改交付物；执行中不能改
 atrium quota                                  # 按额度富余从多到少列出各账号（读 OpenQuota）；--json 输出结构化数据
+atrium quota --clear claude                   # 人工解除运行时额度占用，记事件并立即派发排队任务
 
 # 组织树（#264 第 1 步：节点、章程、能力卡与修订）
 atrium org import --repo ~/code/atrium          # 预览 ~/Atrium/charter.md 与仓库岗位说明

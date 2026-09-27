@@ -147,3 +147,18 @@ export function releaseHold(
       .run(provider, unknownMs, now).changes > 0
   );
 }
+
+/** 人工解除：按 provider 精确删除，返回原标记以便记审计事件。 */
+export function clearHold(
+  db: DatabaseSync,
+  provider: string,
+): QuotaHold | undefined {
+  return atomically(db, () => {
+    const hold = db
+      .prepare("SELECT * FROM quota_holds WHERE provider=?")
+      .get(provider) as QuotaHold | undefined;
+    if (hold)
+      db.prepare("DELETE FROM quota_holds WHERE provider=?").run(provider);
+    return hold;
+  });
+}

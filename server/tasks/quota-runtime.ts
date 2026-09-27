@@ -1,11 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Active } from "./active.ts";
+import { Problem } from "../problem.ts";
 import { ADAPTERS } from "./adapters/index.ts";
 import type { EventInbox } from "./events.ts";
 import type { Executors } from "./executors.ts";
 import { DEFAULT_OWNER, getTask, noteTask } from "./ledger.ts";
 import {
   clock,
+  clearHold,
   DEFAULT_UNKNOWN_HOLD_MS,
   ensureQuotaHoldTable,
   expiredHolds,
@@ -50,6 +52,39 @@ export class QuotaGuard {
     return heldProviders(listHolds(this.ctx.db), now, this.unknownMs);
   }
 
+  /** 人工解除后立刻排空可派任务，并留下事件。 */
+  async clear(x: Executors, provider: string) {
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(provider))
+      throw new Problem(400, "--clear: 账号名不合法", "usage");
+    const hold = clearHold(this.ctx.db, provider);
+    if (!hold)
+      throw new Problem(
+        404,
+        `账号 ${provider} 没有运行时额度占用`,
+        "not_found",
+      );
+    this.ctx.inbox.publish({
+      subscriber: DEFAULT_OWNER,
+      source: "quota",
+      kind: "quota_cleared",
+      key: `quota:${provider}`,
+      detail: {
+        provider,
+        reason: `人工解除额度占用：${provider}`,
+        since: hold.since,
+        until: hold.until,
+        previous_reason: hold.reason,
+      },
+    });
+    let dispatched = 0;
+    while (true) {
+      const moved = await x.drain();
+      if (!moved) break;
+      dispatched += moved;
+    }
+    return { provider, cleared: true, dispatched };
+  }
+
   /**
    * 任务已按额度用尽置为受阻之后：记账号标记，再按档案换执行者、排队或留在受阻。
    * 同一账号已有未到期标记时（并行的任务先报过），自动换人或排队不再发事件；留在受阻的照发。
@@ -87,7 +122,7 @@ export class QuotaGuard {
           { risk: active.risk },
           this.ctx.launchOptions,
           this.held(),
-          { busy: x.busyTools(active.id) },
+          { busy: x.busyTools(active.id), requireTrust: true },
         );
       } catch (error) {
         return x.publish(active.id, "blocked", {
@@ -96,6 +131,11 @@ export class QuotaGuard {
         });
       }
       const tool = choice.worker.tool;
+      if (choice.worker.id === active.worker.id)
+        return x.publish(active.id, "blocked", {
+          ...base,
+          note: "没有可换的执行者：唯一合格执行者仍被额度占用",
+        });
       if (
         choice.waitUntil !== undefined ||
         (ADAPTERS[tool].exclusive && x.busy(tool, active.id)) ||

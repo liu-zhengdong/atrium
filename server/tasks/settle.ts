@@ -70,6 +70,10 @@ function readSummary(active: Active, log: string | undefined) {
 /** 额度判定只看日志最后这么多字符：更早的部分可能是执行者回显的提示词，里面也会有「额度」字样。 */
 const QUOTA_TAIL_CHARS = 4096;
 
+/** 重启时退出码遗失，远端交付事实足以让任务继续走正常关卡。 */
+export const deliveredDespiteUnknownExit = (exit: Exit, facts?: Facts) =>
+  exit === "unknown" && !!facts?.pr && facts.ci === "success";
+
 export type QuotaHit = {
   provider: string;
   resetAt: Date | null;
@@ -131,7 +135,28 @@ export async function settle(
   }
   const fields: RunFields = { result: summary };
   const endedAt = Date.now();
-  const quota = detectQuota(active, exit, log);
+  let facts: Facts | undefined;
+  if (
+    exit === "unknown" &&
+    active.deliver === "pr" &&
+    needsFacts(active.stop)
+  ) {
+    facts = await collectFacts(
+      {
+        repo: active.repo,
+        worktree: active.worktree,
+        branch: active.branch,
+        base: active.base,
+        summary,
+      },
+      exec,
+    );
+    fields.pr_url = facts.pr?.url ?? null;
+    fields.ci = facts.ci;
+  }
+  const quota = deliveredDespiteUnknownExit(exit, facts)
+    ? undefined
+    : detectQuota(active, exit, log);
   if (quota) {
     // 额度用尽：不查事实、不过关卡，直接受阻。
     const decision = decideExit({
@@ -142,9 +167,8 @@ export async function settle(
     });
     return { summary, fields, decision, quota };
   }
-  let facts: Facts | undefined;
   let verdict: Verdict | undefined;
-  if (active.deliver === "pr" && needsFacts(active.stop)) {
+  if (!facts && active.deliver === "pr" && needsFacts(active.stop)) {
     facts = await collectFacts(
       {
         repo: active.repo,

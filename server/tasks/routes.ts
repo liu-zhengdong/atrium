@@ -56,6 +56,11 @@ export function registerTaskRoutes(
   ensureTaskTables(db);
   const runner = new TaskRunner(db, runnerOptions);
   runner.start();
+  app.post("/api/quota/:provider/clear", (request) =>
+    runner.clearQuota(
+      ((request.params ?? {}) as { provider: string }).provider,
+    ),
+  );
   app.addHook("preClose", async () => runner.close());
   app.post("/api/tasks", { bodyLimit: 64 * 1024 }, async (request, reply) => {
     const task = createTask(db, request.body);

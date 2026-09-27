@@ -5,7 +5,7 @@ import {
   findExecutable,
   type Tool,
 } from "./adapters/index.ts";
-import { riskRefusal, type RunRequest } from "./plan.ts";
+import { riskRefusal, trustRefusal, type RunRequest } from "./plan.ts";
 import { pickWorker, readPace } from "./prepare.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import type { LaunchOptions } from "./workspace.ts";
@@ -23,7 +23,11 @@ export type Choice = {
 };
 
 /** 自动挑人时的避让：busy 是已有任务在跑的工具（独占的排到空闲候选之后），exclude 这次不挑。 */
-export type Avoid = { busy?: ReadonlySet<Tool>; exclude?: ReadonlySet<Tool> };
+export type Avoid = {
+  busy?: ReadonlySet<Tool>;
+  exclude?: ReadonlySet<Tool>;
+  requireTrust?: boolean;
+};
 
 /**
  * 解析执行者：写了就按写的（须已装），没写按额度富余挑、避开额度标记未到期的账号与正忙的独占执行者；
@@ -129,6 +133,10 @@ export async function chooseWorker(
   }
   const refusal = riskRefusal(worker.id, worker.profile.rules.max_risk, risk);
   if (refusal) throw new Problem(400, refusal, "usage");
+  const trust =
+    avoid.requireTrust &&
+    trustRefusal(worker.id, worker.profile.rules.trust, risk);
+  if (trust) throw new Problem(400, trust, "usage");
   return waitUntil === undefined
     ? { worker, risk }
     : { worker, risk, waitUntil };

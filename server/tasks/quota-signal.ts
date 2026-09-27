@@ -5,6 +5,7 @@
  */
 
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
+import { parseLine } from "./json-log.ts";
 
 export type QuotaVerdict =
   | { exhausted: false }
@@ -30,10 +31,76 @@ export type QuotaInput = {
  * 下划线算分隔，`rate_limit_error`、`insufficient_quota` 也能命中。
  */
 const QUOTA_MARK =
-  /(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?|(?<![a-zA-Z])quotas?(?![a-zA-Z])|too many requests|额度|用量|用尽|余额不足/i;
+  /(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|hit (?:your|the) [^\n]{0,40}limits?|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)|(?:用尽|不足|超限)[^\n]{0,20}(?:额度|用量|余额)/i;
 
 /** 整数 429，前后不能有数字或小数点，免得把日期片段、端口号算进去。 */
 const HTTP_429 = /(?<![\d.])429(?![\d])/;
+
+/** 只从执行者报错事件或非结构化的最后错误报文取证，绝不扫描助手正文或工具内容。 */
+export function quotaErrorText(logTail: string): string {
+  let last = "";
+  for (const line of logTail.split("\n")) {
+    const event = parseLine(line);
+    if (!event) {
+      // 纯文本适配器的退出前报文；普通叙述、命令名和摘要不是错误。
+      if (
+        /\b(?:error|failed|limit reached|limit exceeded|hit your .*limit|too many requests|HTTP\/\S+ 429)\b|额度.{0,20}(?:用尽|不足|超限)|余额不足/i.test(
+          line,
+        )
+      )
+        last = line;
+      else if (last && /\b(?:retry-after|try again in|resets? \d)/i.test(line))
+        last += `\n${line}`;
+      continue;
+    }
+    const type = event.type;
+    if (
+      type === "result" &&
+      event.is_error === false &&
+      event.stop_reason === "end_turn"
+    ) {
+      last = "";
+      continue;
+    }
+    if (type === "rate_limit_event") {
+      const info = event.rate_limit_info;
+      const status =
+        info && typeof info === "object" && "status" in info
+          ? info.status
+          : undefined;
+      if (
+        typeof status === "string" &&
+        /^(?:rejected|blocked|limited|rate_limited|exceeded|denied)$/i.test(
+          status,
+        )
+      )
+        last = `rate limit exceeded: ${status}`;
+      continue;
+    }
+    if (
+      type !== "error" &&
+      !(
+        type === "result" &&
+        (event.is_error === true || event.subtype === "error")
+      )
+    )
+      continue;
+    const report: string[] = [];
+    for (const value of [event.error, event.errors, event.message]) {
+      if (typeof value === "string") report.push(value);
+      else if (Array.isArray(value)) {
+        for (const item of value)
+          if (typeof item === "string") report.push(item);
+      } else if (value && typeof value === "object") {
+        const error = value as Record<string, unknown>;
+        for (const field of ["message", "type", "code"])
+          if (typeof error[field] === "string") report.push(error[field]);
+      }
+    }
+    if (report.length) last = report.join("\n");
+  }
+  return last;
+}
 
 /** codex / ChatGPT：`Try again in ~6826 min.` */
 const CODEX_MINUTES =
@@ -208,7 +275,7 @@ export function detectQuotaExhausted({
   tool,
 }: QuotaInput): QuotaVerdict {
   if (exitCode === 0) return { exhausted: false };
-  const text = logTail;
+  const text = quotaErrorText(logTail);
   const marked = QUOTA_MARK.test(text);
   const http429 = HTTP_429.test(text);
   if (!marked && !http429) return { exhausted: false };

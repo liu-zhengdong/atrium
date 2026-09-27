@@ -1,0 +1,3 @@
+{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour", "overageStatus": "rejected", "resetsAt": 1790484600}}
+{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour", "overageStatus": "rejected", "resetsAt": 1790484600}}
+{"type": "result", "subtype": "success", "is_error": false, "stop_reason": "end_turn", "result": "全局入口走完了整条路径：启动 → `task add/run/wait`（任务完成）→ `org tree` → `quota` → `events wait`（收到完成事件）→ `restart --when-idle"}

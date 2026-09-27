@@ -48,11 +48,19 @@ function quotaFixture(fx: {
   fx.env.PATH = `${bin}:/usr/bin:/bin`;
   writeFileSync(
     join(fx.workers, "harness", "codex.md"),
-    "---\nchecks: []\n---\n",
+    "---\ntrust: high\nmax_risk: high\nchecks: []\n---\n",
   );
   writeFileSync(
     join(fx.workers, "harness", "grok.md"),
-    "---\nchecks: []\n---\n",
+    "---\ntrust: low\nmax_risk: low\nchecks: []\n---\n",
+  );
+  writeFileSync(
+    join(fx.workers, "harness", "opencode.md"),
+    "---\ntrust: low\nmax_risk: low\nchecks: []\n---\n",
+  );
+  writeFileSync(
+    join(fx.workers, "harness", "kimi.md"),
+    "---\ntrust: low\nmax_risk: low\nchecks: []\n---\n",
   );
   writeFileSync(join(flag), "");
   return { flag };
@@ -170,5 +178,71 @@ test("额度用尽：受阻原因与时刻、账号避让、换执行者重派�
       .map((e: { key: string }) => e.key)
       .sort(),
     ["quota:codex", "quota:grok", "quota:kimi", "quota:opencode"],
+  );
+});
+
+test("手工解除占用后立即派发因该占用排队的任务，写解除事件；非法账号不改占用", async (t) => {
+  let flag = "";
+  const { data, call } = await startApp(t, (fx) => {
+    flag = quotaFixture(fx).flag;
+  });
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  t.after(() => db.close());
+  await call("POST", "/api/tasks", { title: "先触发额度占用" });
+  await call("POST", "/api/tasks/t1/run", { worker: "codex" });
+  await call("GET", "/api/tasks/t1/wait?timeout=20");
+  await call("POST", "/api/tasks", { title: "等 codex 恢复" });
+  const queued = await call("POST", "/api/tasks/t2/run", { worker: "codex" });
+  assert.equal(queued.body.queued, true);
+  assert.equal((await call("POST", "/api/quota/Bad%20Name/clear")).status, 400);
+  assert.ok(listHolds(db).some((h) => h.provider === "codex"));
+  rmSync(flag);
+  const cleared = await call("POST", "/api/quota/codex/clear");
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.dispatched, 1);
+  assert.equal(
+    (await call("GET", "/api/tasks/t2/wait?timeout=20")).body.task.status,
+    "done",
+  );
+  assert.equal(
+    listHolds(db).some((h) => h.provider === "codex"),
+    false,
+  );
+  const events = (await call("GET", "/api/events/wait?as=secretary&timeout=5"))
+    .body.events;
+  assert.ok(events.some((e: { kind: string }) => e.kind === "quota_cleared"));
+  assert.equal((await call("POST", "/api/quota/codex/clear")).status, 404);
+});
+
+test("高风险任务额度换人时，低 max_risk 或低 trust 的候选都不能接手", async (t) => {
+  const { data, call } = await startApp(t, (fx) => {
+    quotaFixture(fx);
+    writeFileSync(
+      join(fx.workers, "harness", "opencode.md"),
+      "---\ntrust: low\nmax_risk: low\nchecks: []\n---\n",
+    );
+  });
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  t.after(() => db.close());
+  await call("POST", "/api/tasks", { title: "高风险任务" });
+  assert.equal(
+    (await call("POST", "/api/tasks/t1/run", { worker: "codex", risk: "high" }))
+      .status,
+    200,
+  );
+  await until(() => getTask(db, "t1").status === "blocked");
+  const task = getTask(db, "t1");
+  assert.equal(
+    task.events.some((e) => e.kind === "quota_switch"),
+    false,
+  );
+  assert.ok(task.events.some((e) => e.kind === "quota_exhausted"));
+  const events = (await call("GET", "/api/events/wait?as=secretary&timeout=5"))
+    .body.events;
+  assert.ok(
+    events.some(
+      (e: { kind: string; detail?: { note?: string } }) =>
+        e.kind === "blocked" && /没有可换的执行者/.test(e.detail?.note ?? ""),
+    ),
   );
 });

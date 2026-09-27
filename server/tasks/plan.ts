@@ -1,5 +1,5 @@
 import { Problem } from "../problem.ts";
-import { RISKS, isRisk, type Risk } from "./profiles.ts";
+import { RISKS, TRUSTS, isRisk, type Risk, type Trust } from "./profiles.ts";
 import { transition, type TaskStatus } from "./state.ts";
 
 /**
@@ -63,6 +63,17 @@ export function riskRefusal(
   if (!maxRisk || RISKS.indexOf(maxRisk) >= RISKS.indexOf(risk))
     return undefined;
   return `执行者 ${workerId} 的档案 max_risk=${maxRisk}，接不了 risk=${risk} 的任务；换执行者或降低 --risk`;
+}
+
+/** 额度换人时还要核对信任等级；缺失的档案按 unknown 处理。 */
+export function trustRefusal(
+  workerId: string,
+  trust: Trust | undefined,
+  risk: Risk,
+) {
+  const actual = trust ?? "unknown";
+  if (TRUSTS.indexOf(actual) > RISKS.indexOf(risk)) return undefined;
+  return `执行者 ${workerId} 的档案 trust=${actual}，接不了 risk=${risk} 的额度重派任务`;
 }
 
 /** 独占工具正忙就排队，否则立即拉起。 */

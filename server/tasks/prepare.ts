@@ -2,6 +2,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
+import { trustRefusal } from "./plan.ts";
 import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
 import { clock } from "./quota-holds.ts";
 import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
@@ -220,6 +221,8 @@ export type PickInput = {
   busy?: ReadonlySet<Tool>;
   /** 这次不挑的工具（临时错误后换执行者时排除刚失败的那个）。 */
   exclude?: ReadonlySet<Tool>;
+  /** 额度换人额外要求档案 trust 覆盖任务风险。 */
+  requireTrust?: boolean;
 };
 
 export type Skip = { tool: Tool; reason: string };
@@ -248,6 +251,7 @@ export function pickWorker({
   reservePercent = DEFAULT_QUOTA_RESERVE_PERCENT,
   busy,
   exclude,
+  requireTrust,
 }: PickInput): PickResult {
   if (!(RISKS as readonly string[]).includes(risk))
     throw invalid(`risk 只能是 ${RISKS.join("、")}`);
@@ -275,6 +279,12 @@ export function pickWorker({
         tool,
         reason: `档案 max_risk=${max}，低于任务 risk=${risk}`,
       });
+      continue;
+    }
+    const trust =
+      requireTrust && trustRefusal(tool, profiles[tool]?.rules.trust, risk);
+    if (trust) {
+      skipped.push({ tool, reason: trust });
       continue;
     }
     const heldUntil = held?.get(ADAPTERS[tool].quotaProvider);

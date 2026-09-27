@@ -11,6 +11,7 @@ import {
 import { readLogTail } from "../server/tasks/log-view.ts";
 import {
   advanceTask,
+  addTaskNote,
   createTask,
   ensureTaskTables,
   noteTask,
@@ -185,6 +186,10 @@ const row = (over: Partial<TopRow>): TopRow => ({
   queued_at: null,
   reason: null,
   updated_at: NOW,
+  note: null,
+  note_by: null,
+  note_at: null,
+  processing: false,
   log_at: NOW - 12_000,
   action: { text: "写 server/org/write.ts", kind: "tool" },
   ...over,
@@ -197,6 +202,7 @@ const snapshot = (rows: TopRow[], over: Partial<Snapshot> = {}): Snapshot => ({
     running: 0,
     queued: 0,
     blocked: 0,
+    processing: 0,
     done: 0,
     failed: 0,
     cancelled: 0,
@@ -246,6 +252,7 @@ test("看板：四种状态一行四样，时长与最近动作按内容对齐",
           running: 2,
           queued: 1,
           blocked: 1,
+          processing: 0,
           done: 0,
           failed: 0,
           cancelled: 0,
@@ -258,7 +265,7 @@ test("看板：四种状态一行四样，时长与最近动作按内容对齐",
   const lines = frame.split("\n");
   assert.match(
     lines[0]!,
-    /^Atrium · 在跑 2 · 排队 1 · 卡住 1 · 未处理事件 1 {2,}08:42 刷新$/,
+    /^Atrium · 在跑 2 · 排队 1 · 处理中 0 · 卡住 1 · 未处理事件 1 {2,}08:42 刷新$/,
   );
   assert.match(
     lines[1]!,
@@ -276,6 +283,26 @@ test("看板：四种状态一行四样，时长与最近动作按内容对齐",
   assert.equal(lines[5], "动作：atrium task show t22");
   for (const line of lines)
     assert.ok(width(line) <= 100, `超宽：${width(line)}｜${line}`);
+});
+
+test("看板：卡住后补备注显示处理中，备注列在任务行下并受终端宽度约束", () => {
+  const frame = renderTop(
+    snapshot([
+      row({
+        status: "blocked",
+        reason: "等 CI",
+        processing: true,
+        note: "fork 浸泡测试在跑",
+        note_by: "a2",
+        note_at: NOW,
+      }),
+    ]),
+    { width: 80, now: NOW, footer: false, color: false },
+  );
+  const lines = frame.split("\n");
+  assert.match(lines[1]!, /^● t1.*处理中：等 CI/);
+  assert.match(lines[2]!, /^  备注（a2.*fork 浸泡测试在跑/);
+  assert.ok(lines.every((line) => width(line) <= 80));
 });
 
 test("看板：窄终端省掉执行者列，再窄就截标题与最近动作", () => {
@@ -476,6 +503,13 @@ test("筛选：只看在跑、受阻、排队与十分钟内结束的，不列�
     "CI 未运行",
     "受阻原因取 block 事件",
   );
+  assert.equal(rows.find((item) => item.ref === "t2")?.processing, false);
+  addTaskNote(db, "t2", { text: "有人接手", by: "a2" }, NOW);
+  const noted = topRows(db, NOW).rows;
+  assert.equal(noted.find((item) => item.ref === "t2")?.processing, true);
+  assert.equal(noted.find((item) => item.ref === "t2")?.note, "有人接手");
+  assert.equal(countRows(noted).processing, 1);
+  assert.equal(countRows(noted).blocked, 0);
   assert.equal(
     rows.find((item) => item.ref === "t3")?.reason,
     "opencode 同一时刻只跑一个",
@@ -498,6 +532,7 @@ test("筛选：只看在跑、受阻、排队与十分钟内结束的，不列�
     running: 1,
     queued: 1,
     blocked: 1,
+    processing: 0,
     done: 1,
     failed: 0,
     cancelled: 0,
@@ -537,6 +572,10 @@ test("次序：在跑的按跑了多久、排队按入队顺序、受阻与刚�
     queued_at: null,
     reason: null,
     updated_at: NOW,
+    note: null,
+    note_by: null,
+    note_at: null,
+    processing: false,
     ...over,
   });
   const rows: LedgerRow[] = [
@@ -658,9 +697,10 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
       running: body.counts.running,
       queued: body.counts.queued,
       blocked: body.counts.blocked,
+      processing: body.counts.processing,
       events: body.counts.events,
     },
-    { running: 1, queued: 1, blocked: 1, events: 0 },
+    { running: 1, queued: 1, blocked: 1, processing: 0, events: 0 },
   );
   const running = body.rows[0]!;
   assert.equal(running.status, "running");
@@ -805,7 +845,10 @@ test("实时模式：服务暂时不可用就把原因留在屏上，不退出",
     false,
   );
   assert.equal(frames[0], "Atrium · 服务正在重启");
-  assert.match(frames[1]!, /^Atrium · 在跑 0 · 排队 0 · 卡住 0 · 未处理事件 1/);
+  assert.match(
+    frames[1]!,
+    /^Atrium · 在跑 0 · 排队 0 · 处理中 0 · 卡住 0 · 未处理事件 1/,
+  );
   // 这一屏用真实时钟渲染，时长单位会随时钟走（45s / 41m / 1h3m），只断言形状不写死。
   assert.match(frames[1]!, /写 server\/org\/write\.ts · [0-9hms]+ 前/);
   assert.ok(frames[1]!.endsWith("动作：atrium task show t1"));

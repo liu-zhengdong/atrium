@@ -5,6 +5,7 @@ import { conditions } from "./schedule-ledger.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
 import { dequeue, queued } from "./queue.ts";
+import { noteView } from "./notes.ts";
 
 export type ScheduleGroup = "running" | "ready" | "waiting" | "blocked";
 export type PlanItem = {
@@ -74,6 +75,7 @@ export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
       ...row,
       ref: taskRef(row.id),
       parent_ref: row.parent_id === null ? null : taskRef(row.parent_id),
+      ...noteView(db, row.id, row.status),
     },
     ...classify(row.status, tasks, prs, row.schedule_reason),
   };

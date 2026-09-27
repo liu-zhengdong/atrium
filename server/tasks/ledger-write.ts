@@ -23,6 +23,7 @@ import {
 } from "./ledger-validate.ts";
 import { applyTransition } from "./ledger-transition.ts";
 import { setConditions } from "./schedule-ledger.ts";
+import { noteView } from "./notes.ts";
 import {
   deliverOf,
   issueOf,
@@ -100,7 +101,8 @@ export function createTask(
       title: values.title,
       ...(parent ? { parent: taskRef(parent) } : {}),
     });
-    return view(requireRow(db, id));
+    const task = requireRow(db, id);
+    return { ...view(task), ...noteView(db, id, task.status) };
   });
 }
 
@@ -123,10 +125,11 @@ export function updateTask(
     "after",
     "after_pr",
     "auto",
+    "pr_url",
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、status、deliver、issue、after、after_pr、auto",
+      "至少修改一项：title、brief_path、role、status、deliver、issue、after、after_pr、auto、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -135,9 +138,21 @@ export function updateTask(
   if ("role" in input) fields.role = optionalText(input.role, "role", 200);
   if ("deliver" in input) fields.deliver = deliverOf(input.deliver);
   if ("issue" in input) fields.issue = issueOf(input.issue);
+  if ("pr_url" in input) {
+    if (
+      typeof input.pr_url !== "string" ||
+      !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*$/.test(
+        input.pr_url,
+      )
+    )
+      throw usage("pr_url: 应为 https://github.com/owner/repo/pull/N");
+    fields.pr_url = input.pr_url;
+  }
   const target = "status" in input ? statusOf(input.status) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
+    if (fields.pr_url !== undefined && current.status === "running")
+      throw new Problem(409, "执行中不能人工补登 PR", "conflict");
     setConditions(db, id, input, now);
     if (
       current.status === "running" &&
@@ -155,6 +170,7 @@ export function updateTask(
         ([key, value]) => current[key as keyof TaskRow] !== value,
       ),
     );
+    if (changed.pr_url) changed.ci = "pending";
     if (Object.keys(changed).length) {
       db.prepare(
         `UPDATE tasks SET ${Object.keys(changed)
@@ -165,6 +181,7 @@ export function updateTask(
     }
     if (target !== undefined)
       applyTransition(db, current, { kind: "manual_set", to: target }, now);
-    return view(requireRow(db, id));
+    const task = requireRow(db, id);
+    return { ...view(task), ...noteView(db, id, task.status) };
   });
 }

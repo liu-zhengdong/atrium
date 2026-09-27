@@ -13,6 +13,7 @@ import {
 } from "../server/tasks/state.ts";
 import {
   advanceTask,
+  addTaskNote,
   clipResult,
   createTask,
   ensureTaskTables,
@@ -25,6 +26,7 @@ import {
 } from "../server/tasks/ledger.ts";
 import { createApp } from "../server/app.ts";
 import { renderTree } from "../cli/tasks.ts";
+import { isProcessing } from "../server/tasks/notes.ts";
 import { cliErrorMessage } from "../cli/error-message.ts";
 import { commands } from "../cli/main.ts";
 
@@ -389,6 +391,120 @@ test("账本：破坏输入在入口一处拒绝，数据不变", () => {
     updateTask(db, design.ref, { deliver: "none", issue: null }).deliver,
     "none",
   );
+});
+
+test("处理中判定：所有任务状态与备注、受阻事件的先后边界", () => {
+  for (const status of TASK_STATUSES)
+    for (const noteId of [null, 9, 10, 11])
+      for (const blockedId of [null, 10])
+        assert.equal(
+          isProcessing(status, noteId, blockedId),
+          status === "blocked" &&
+            blockedId !== null &&
+            noteId !== null &&
+            noteId > blockedId,
+          `${status} / note=${noteId} / block=${blockedId}`,
+        );
+});
+
+test("处理备注：多次追加、最新一条、卡住前后判定与人工补登 PR", () => {
+  const db = memory();
+  createTask(db, { title: "浸泡验证" }, 100);
+  assert.deepEqual(
+    [
+      getTask(db, "t1").note,
+      getTask(db, "t1").note_by,
+      getTask(db, "t1").note_at,
+    ],
+    [null, null, null],
+  );
+  addTaskNote(db, "t1", { text: "先查 CI", by: "a2" }, 101);
+  advanceTask(db, "t1", { kind: "block" }, {}, { reason: "等结果" }, 101);
+  assert.equal(getTask(db, "t1").processing, false, "同一毫秒按事件顺序比较");
+  addTaskNote(db, "t1", { text: "等 fork 浸泡测试", by: "a2" }, 101);
+  assert.equal(getTask(db, "t1").processing, true);
+  assert.equal(getTask(db, "t1").note, "等 fork 浸泡测试");
+  assert.equal(listTasks(db, {}).tasks[0]?.note_by, "a2");
+  addTaskNote(db, "t1", { text: "  已提交复测  " }, 102);
+  const latest = getTask(db, "t1");
+  assert.deepEqual(
+    [latest.note, latest.note_by, latest.note_at],
+    ["已提交复测", "u1", 102],
+  );
+  assert.equal(
+    latest.events.filter((event) => event.kind === "note").length,
+    3,
+  );
+  assert.throws(
+    () => addTaskNote(db, "t1", { text: "x".repeat(301) }),
+    /300 字/,
+  );
+  assert.throws(() => addTaskNote(db, "t1", { text: "  " }), /不能为空/);
+  assert.throws(
+    () => addTaskNote(db, "t1", { text: "x", by: "bad name" }),
+    /by:/,
+  );
+  assert.throws(() => addTaskNote(db, "t99", { text: "x" }), /不存在/);
+  assert.throws(
+    () => updateTask(db, "t1", { pr_url: "javascript:bad" }),
+    /pr_url:/,
+  );
+  const pr = "https://github.com/fork-owner/atrium/pull/7";
+  const patched = updateTask(db, "t1", { pr_url: pr }, 103);
+  assert.equal(patched.pr_url, pr);
+  assert.equal(patched.ci, "pending");
+  assert.equal(getTask(db, "t1").events.at(-1)?.kind, "edited");
+  db.close();
+});
+
+test("HTTP：任务备注需认证，列表和详情含当前备注", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-task-note-"));
+  t.after(() => rmSync(data, { recursive: true, force: true }));
+  const guarded = await createApp({
+    data: join(data, "guarded"),
+    runtime: false,
+  });
+  try {
+    const denied = await guarded.app.inject({
+      method: "POST",
+      url: "/api/tasks/t1/note",
+      payload: { text: "x" },
+      headers: { host: "127.0.0.1" },
+    });
+    assert.equal(denied.statusCode, 401);
+  } finally {
+    await guarded.app.close();
+  }
+  const { app } = await createApp({ data, runtime: false, auth: false });
+  try {
+    await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: { title: "待验证" },
+    });
+    const posted = await app.inject({
+      method: "POST",
+      url: "/api/tasks/t1/note",
+      payload: { text: "等 fork", by: "a1" },
+    });
+    assert.equal(posted.statusCode, 200);
+    assert.equal(posted.json().note_by, "a1");
+    const list = (await app.inject({ url: "/api/tasks" })).json().tasks[0];
+    const show = (await app.inject({ url: "/api/tasks/t1" })).json();
+    assert.deepEqual(
+      [list.note, list.note_by, list.note_at],
+      [show.note, show.note_by, show.note_at],
+    );
+    assert.equal(show.events.at(-1).kind, "note");
+    const bad = await app.inject({
+      method: "POST",
+      url: "/api/tasks/t1/note",
+      payload: { text: "x".repeat(301) },
+    });
+    assert.equal(bad.statusCode, 400);
+  } finally {
+    await app.close();
+  }
 });
 
 test("HTTP：五个接口走用户认证，校验报中文 400", async (t) => {

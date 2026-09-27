@@ -150,3 +150,33 @@ test(
     assert.equal(JSON.parse(json.stdout).next, "atrium task run t3");
   },
 );
+
+test(
+  "task note、ls、show 与 set --pr 共用隔离服务账本",
+  { timeout: manyCommands },
+  async (t) => {
+    const f = await fixture(t);
+    await f.warm();
+    assert.equal((await f.cli("task", "add", "浸泡验证")).code, 0);
+    const noted = await f.cli(
+      "task",
+      "note",
+      "t1",
+      "等 fork 浸泡结果",
+      "--as",
+      "a2",
+    );
+    assert.equal(noted.code, 0, noted.stderr);
+    assert.match(noted.stdout, /a2.*等 fork 浸泡结果/);
+    const ls = await f.cli("task", "ls");
+    assert.equal(ls.code, 0, ls.stderr);
+    assert.match(ls.stdout, /备注（a2.*等 fork 浸泡结果/);
+    const show = await f.cli("task", "show", "t1");
+    assert.equal(show.code, 0, show.stderr);
+    assert.match(show.stdout, /最新备注：等 fork 浸泡结果/);
+    const pr = "https://github.com/fork-owner/atrium/pull/7";
+    const patched = await f.cli("task", "set", "t1", "--pr", pr, "--json");
+    assert.equal(patched.code, 0, patched.stderr);
+    assert.equal(JSON.parse(patched.stdout).result.pr_url, pr);
+  },
+);

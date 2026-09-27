@@ -12,6 +12,7 @@ import {
   type Task,
   type TaskRow,
 } from "./ledger-model.ts";
+import { noteView } from "./notes.ts";
 
 /** 执行者这一侧可以随状态一起写入的运行字段。 */
 export type RunFields = Partial<
@@ -111,7 +112,8 @@ export function advanceTask(
   const id = parseTaskRef(reference);
   return atomically(db, () => {
     applyTransition(db, requireRow(db, id), event, now, fields, detail);
-    return view(requireRow(db, id));
+    const task = requireRow(db, id);
+    return { ...view(task), ...noteView(db, id, task.status) };
   });
 }
 
@@ -142,7 +144,8 @@ export function patchRunFields(
         id,
       );
     addEvent(db, id, now, kind, detail);
-    return view(requireRow(db, id));
+    const task = requireRow(db, id);
+    return { ...view(task), ...noteView(db, id, task.status) };
   });
 }
 

@@ -20,6 +20,10 @@ export type TopRow = {
   queued_at: number | null;
   reason: string | null;
   updated_at: number;
+  note: string | null;
+  note_by: string | null;
+  note_at: number | null;
+  processing: boolean;
   /** 日志最后写入时刻；没有日志为 0。 */
   log_at: number;
   action: { text: string; kind: string } | null;
@@ -33,6 +37,7 @@ export type Snapshot = {
     running: number;
     queued: number;
     blocked: number;
+    processing: number;
     done: number;
     failed: number;
     cancelled: number;
@@ -87,6 +92,7 @@ const SYMBOL: Record<string, string> = {
   running: "●",
   queued: "◌",
   blocked: "✕",
+  processing: "●",
   done: "✓",
   failed: "✕",
   cancelled: "·",
@@ -105,7 +111,8 @@ export const phase = (row: TopRow) =>
 function state(row: TopRow, now: number) {
   const kind = phase(row);
   if (kind === "queued") return `排队${row.reason ? `（${row.reason}）` : ""}`;
-  if (kind === "blocked") return `卡住${row.reason ? `：${row.reason}` : ""}`;
+  if (kind === "blocked")
+    return `${row.processing ? "处理中" : "卡住"}${row.reason ? `：${row.reason}` : ""}`;
   const from = row.started_at;
   const to = FINISHED.has(kind) ? (row.ended_at ?? now) : now;
   return from ? duration(to - from) : "—";
@@ -201,16 +208,17 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const head =
     `Atrium · 在跑 ${snapshot.counts.running}` +
     ` · 排队 ${snapshot.counts.queued}` +
+    ` · 处理中 ${snapshot.counts.processing}` +
     ` · 卡住 ${snapshot.counts.blocked}` +
     ` · 未处理事件 ${snapshot.counts.events}`;
   const headRoom = Math.max(10, frame.width - width(clock) - 1);
   const lines = [
     pad(clip(head, headRoom), headRoom) + clock,
-    ...rows.map((row, index) => {
+    ...rows.flatMap((row, index) => {
       // 原因再长也不能顶出屏幕：状态列的上限是它自己的宽度加最近动作那段的空位。
       const cell = clip(states[index]!, plan.stateW + 2 + plan.actionW);
       const text = [
-        `${SYMBOL[phase(row)] ?? "·"} ${pad(row.ref, plan.refW)}`,
+        `${SYMBOL[row.processing && phase(row) === "blocked" ? "processing" : phase(row)] ?? "·"} ${pad(row.ref, plan.refW)}`,
         pad(clip(row.title, plan.titleW), plan.titleW),
         ...(plan.showWorker
           ? [pad(clip(row.worker ?? "", plan.workerW), plan.workerW)]
@@ -220,7 +228,13 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       ]
         .join("  ")
         .trimEnd();
-      return FINISHED.has(phase(row)) && frame.color ? faint(text) : text;
+      const line = FINISHED.has(phase(row)) && frame.color ? faint(text) : text;
+      return row.note
+        ? [
+            line,
+            `  ${clip(`备注（${row.note_by ?? "未知"} · ${new Date(row.note_at!).toLocaleString("zh-CN")}）：${row.note}`, frame.width - 2)}`,
+          ]
+        : [line];
     }),
   ];
   if (!rows.length) lines.push("现在没有在跑、排队或受阻的任务");

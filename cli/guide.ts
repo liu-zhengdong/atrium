@@ -12,6 +12,7 @@ export const groups: Record<string, string[]> = {
     "task show",
     "task tree",
     "task set",
+    "task note",
     "task run",
     "task done",
     "task stop",

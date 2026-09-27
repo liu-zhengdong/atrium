@@ -12,6 +12,9 @@ const fieldNames: Record<string, string> = {
   name: "名称",
   title: "标题",
   brief_path: "--brief",
+  pr_url: "--pr",
+  text: "文字",
+  by: "--as",
 };
 
 export function cliErrorMessage(message: string, command?: Command): string {

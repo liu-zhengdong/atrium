@@ -6,6 +6,7 @@ import {
   type TaskRow,
 } from "./ledger-model.ts";
 import { FINISHED, type TaskStatus } from "./state.ts";
+import { noteView, type NoteView } from "./notes.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -17,7 +18,7 @@ export const RECENT_MS = 10 * 60_000;
 /** 一次最多多少行（连同日志尾部读取都是有界的）。 */
 export const TOP_MAX = 50;
 
-export type TopRow = {
+export type TopRow = NoteView & {
   ref: string;
   title: string;
   /** 账本里的状态。 */
@@ -150,6 +151,7 @@ export function topRows(
       updated_at: row.updated_at,
       queued_at: waiting?.queued_at ?? null,
       reason: reasonOf(history, "queued") ?? reasonOf(history, "block"),
+      ...noteView(db, row.id, row.status),
     };
   });
   return { rows: sortRows(rows), truncated: selected.truncated };
@@ -159,6 +161,7 @@ export type TopCounts = {
   running: number;
   queued: number;
   blocked: number;
+  processing: number;
   done: number;
   failed: number;
   cancelled: number;
@@ -170,6 +173,7 @@ export function countRows(rows: TopRow[]): TopCounts {
     running: 0,
     queued: 0,
     blocked: 0,
+    processing: 0,
     done: 0,
     failed: 0,
     cancelled: 0,
@@ -177,7 +181,9 @@ export function countRows(rows: TopRow[]): TopCounts {
   for (const row of rows)
     if (row.queued_at !== null) counts.queued++;
     else if (row.status === "running") counts.running++;
-    else if (row.status === "blocked") counts.blocked++;
-    else if (row.status !== "todo") counts[row.status]++;
+    else if (row.status === "blocked") {
+      if (row.processing) counts.processing++;
+      else counts.blocked++;
+    } else if (row.status !== "todo") counts[row.status]++;
   return counts;
 }

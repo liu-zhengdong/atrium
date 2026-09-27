@@ -1,6 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
-import { ackIds, listOptions, waitSeconds } from "./events.ts";
+import {
+  ackIds,
+  listOptions,
+  waitSeconds,
+  settleSeconds,
+  sinceTime,
+} from "./events.ts";
 import {
   DEFAULT_OWNER,
   addTaskNote,
@@ -143,8 +149,16 @@ export function registerTaskRoutes(
       actorOf(q),
       waitSeconds(q.timeout),
       disconnect(request),
-      { peek: q.peek === "1" || q.peek === "true" },
+      {
+        peek: q.peek === "1" || q.peek === "true",
+        all: q.all === "1",
+        settleSeconds: settleSeconds(q.settle),
+      },
     );
+  });
+  app.get("/api/events/digest", (request) => {
+    const q = query(request.query);
+    return runner.inbox.digest(actorOf(q), sinceTime(q.since));
   });
   app.post("/api/events/deliver", { bodyLimit: 64 * 1024 }, (request) => ({
     events: runner.inbox.deliver(

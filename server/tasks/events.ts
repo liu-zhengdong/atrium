@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { Problem } from "../problem.ts";
 import { LEASE_MS, selfInitiated } from "./event-lease.ts";
+import { eventLevel, summarizeEvents } from "./event-level.ts";
 import { atomically, ownerOf, taskRef } from "./ledger.ts";
 
 /**
@@ -60,6 +61,7 @@ export type InboxEvent = {
   task: string | null;
   source: string;
   kind: string;
+  level: "action" | "info";
   key: string;
   /** 发起者；执行者、CI 等自发的为 null。 */
   actor: string | null;
@@ -85,6 +87,7 @@ const view = (row: InboxRow): InboxEvent => {
     task: row.task_id === null ? null : taskRef(row.task_id),
     source: row.source,
     kind: row.kind,
+    level: eventLevel(row.kind, detail),
     key: row.dedupe_key,
     actor: row.actor,
     count: row.count,
@@ -225,15 +228,25 @@ export class EventInbox {
   }
 
   /** 可投递的事件（条件与 event-lease.ts 的 deliverable 一致），按编号升序，每批最多 50 条；只看不交。 */
-  pending(subscriber: string, limit = BATCH_LIMIT): InboxEvent[] {
+  pending(subscriber: string, limit = BATCH_LIMIT, all = false): InboxEvent[] {
     const now = this.now();
-    return (
-      this.db
+    const result: InboxEvent[] = [];
+    let after = 0;
+    while (result.length < limit) {
+      const rows = this.db
         .prepare(
-          "SELECT * FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND ready_at<=? AND (delivered_at IS NULL OR delivered_at<=?) ORDER BY id LIMIT ?",
+          "SELECT * FROM task_inbox WHERE subscriber=? AND id>? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND ready_at<=? AND (delivered_at IS NULL OR delivered_at<=?) ORDER BY id LIMIT 200",
         )
-        .all(subscriber, now, now - this.leaseMs, limit) as InboxRow[]
-    ).map(view);
+        .all(subscriber, after, now, now - this.leaseMs) as InboxRow[];
+      for (const row of rows) {
+        after = row.id;
+        const event = view(row);
+        if (all || event.level === "action") result.push(event);
+        if (result.length === limit) break;
+      }
+      if (rows.length < 200) break;
+    }
+    return result;
   }
 
   /**
@@ -241,19 +254,13 @@ export class EventInbox {
    * 计数封顶 cap，攒批窗口未到的事件也算未处理。
    */
   countPending(subscriber: string, cap = BATCH_LIMIT) {
-    const now = this.now();
-    const row = this.db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM (SELECT 1 FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND ready_at<=? AND (delivered_at IS NULL OR delivered_at<=?) LIMIT ?)",
-      )
-      .get(subscriber, now, now - this.leaseMs, cap) as { n: number };
-    return row.n;
+    return this.pending(subscriber, cap).length;
   }
 
   /** 取一批交给订阅者，并从现在起算处理中租约。 */
-  private take(subscriber: string): InboxEvent[] {
+  private take(subscriber: string, all = false): InboxEvent[] {
     return atomically(this.db, () => {
-      const events = this.pending(subscriber);
+      const events = this.pending(subscriber, BATCH_LIMIT, all);
       const mark = this.db.prepare(
         "UPDATE task_inbox SET delivered_at=? WHERE id=?",
       );
@@ -264,15 +271,20 @@ export class EventInbox {
   }
 
   /** 最早到期的处理中租约还有多久（毫秒）；没有处理中的返回 undefined。 */
-  private nextLeaseIn(subscriber: string) {
-    const row = this.db
-      .prepare(
-        "SELECT MIN(delivered_at) AS at FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND delivered_at IS NOT NULL AND (actor IS NULL OR actor<>subscriber)",
-      )
-      .get(subscriber) as { at: number | null };
-    return row.at === null
-      ? undefined
-      : Math.max(0, row.at + this.leaseMs - this.now());
+  private nextLeaseIn(subscriber: string, all = false) {
+    let offset = 0;
+    while (true) {
+      const rows = this.db
+        .prepare(
+          "SELECT * FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND delivered_at IS NOT NULL AND (actor IS NULL OR actor<>subscriber) ORDER BY delivered_at,id LIMIT 200 OFFSET ?",
+        )
+        .all(subscriber, offset) as InboxRow[];
+      const row = rows.find((entry) => all || view(entry).level === "action");
+      if (row)
+        return Math.max(0, row.delivered_at! + this.leaseMs - this.now());
+      if (rows.length < 200) return undefined;
+      offset += rows.length;
+    }
   }
 
   /**
@@ -283,8 +295,8 @@ export class EventInbox {
     const who = ownerOf(subscriber, "as");
     const wanted = new Set(ids);
     return atomically(this.db, () => {
-      const events = this.pending(who, Number.MAX_SAFE_INTEGER).filter(
-        (event) => wanted.has(event.id),
+      const events = this.pending(who, BATCH_LIMIT).filter((event) =>
+        wanted.has(event.id),
       );
       const mark = this.db.prepare(
         "UPDATE task_inbox SET delivered_at=? WHERE id=?",
@@ -317,7 +329,12 @@ export class EventInbox {
     subscriber: string,
     timeoutSeconds: number,
     signal?: AbortSignal,
-    options: { peek?: boolean; trackOnline?: boolean } = {},
+    options: {
+      peek?: boolean;
+      trackOnline?: boolean;
+      all?: boolean;
+      settleSeconds?: number;
+    } = {},
   ): Promise<{
     events: InboxEvent[];
     timed_out: boolean;
@@ -325,21 +342,32 @@ export class EventInbox {
   }> {
     const who = ownerOf(subscriber, "as");
     if (options.trackOnline !== false) this.lastWait.set(who, this.now());
-    const take = () => (options.peek ? this.pending(who) : this.take(who));
-    const ready = take();
-    if (ready.length || timeoutSeconds <= 0 || this.closed)
+    const all = options.all === true;
+    const settleMs = (options.settleSeconds ?? 0) * 1000;
+    const take = () =>
+      options.peek ? this.pending(who, BATCH_LIMIT, all) : this.take(who, all);
+    const ready = this.pending(who, 1, all);
+    if (
+      (ready.length && (settleMs === 0 || timeoutSeconds <= 0)) ||
+      (!ready.length && timeoutSeconds <= 0) ||
+      this.closed
+    )
       return {
-        events: ready,
+        events: take(),
         timed_out: !ready.length,
         ...(this.closed ? { restarting: true } : {}),
       };
     return new Promise((resolve) => {
       let settled = false;
+      let collecting = Boolean(ready.length);
+      let settleTimer: NodeJS.Timeout | undefined;
+      if (collecting) settleTimer = setTimeout(() => finish(), settleMs);
       const finish = (restarting = false) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         clearTimeout(lease);
+        clearTimeout(settleTimer);
         this.emitter.off(who, check);
         this.emitter.off("close", closing);
         signal?.removeEventListener("abort", aborted);
@@ -355,15 +383,20 @@ export class EventInbox {
       // 租约到期的事件要重投：到点醒来查一次，没查到就等下一个到期的。
       const arm = () => {
         clearTimeout(lease);
-        const leaseIn = this.nextLeaseIn(who);
+        const leaseIn = this.nextLeaseIn(who, all);
         lease =
           leaseIn !== undefined && leaseIn < timeoutSeconds * 1000
             ? setTimeout(check, leaseIn + 5)
             : undefined;
       };
       const check = () => {
-        if (this.pending(who, 1).length) finish();
-        else arm();
+        if (this.pending(who, 1, all).length) {
+          if (settleMs === 0) finish();
+          else if (!collecting) {
+            collecting = true;
+            settleTimer = setTimeout(() => finish(), settleMs);
+          }
+        } else arm();
       };
       const closing = () => finish(true);
       const aborted = () => finish();
@@ -391,6 +424,33 @@ export class EventInbox {
     return { acked, missing };
   }
 
+  /** 读取知会摘要与确认在同一事务中，避免读过却重复出现在下次摘要。 */
+  digest(subscriber: string, since?: number) {
+    const who = ownerOf(subscriber, "as");
+    return atomically(this.db, () => {
+      const events: InboxEvent[] = [];
+      let after = 0;
+      while (true) {
+        const rows = this.db
+          .prepare(
+            "SELECT * FROM task_inbox WHERE subscriber=? AND id>? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND updated_at>=? ORDER BY id LIMIT 200",
+          )
+          .all(who, after, since ?? 0) as InboxRow[];
+        for (const row of rows) {
+          after = row.id;
+          const event = view(row);
+          if (event.level === "info") events.push(event);
+        }
+        if (rows.length < 200) break;
+      }
+      const mark = this.db.prepare(
+        "UPDATE task_inbox SET acked_at=? WHERE id=? AND acked_at IS NULL",
+      );
+      for (const event of events) mark.run(this.now(), event.id);
+      return { items: summarizeEvents(events), acknowledged: events.length };
+    });
+  }
+
   /** 订阅者最近一次挂着 wait 的时间：#193 据此判断在线，无人在线时再后台唤醒。 */
   lastWaitAt(subscriber: string) {
     return this.lastWait.get(subscriber);
@@ -413,6 +473,23 @@ export function waitSeconds(value: unknown): number {
   if (!/^(0|[1-9]\d*)$/.test(text) || Number(text) > WAIT_MAX_SECONDS)
     throw usage(`timeout: 应为 0～${WAIT_MAX_SECONDS} 的整数秒`);
   return Number(text);
+}
+
+export function settleSeconds(value: unknown): number {
+  if (value === undefined) return 30;
+  if (!/^(0|[1-9]\d*)$/.test(String(value)) || Number(value) > 300)
+    throw usage("settle: 应为 0～300 的整数秒");
+  return Number(value);
+}
+
+export function sinceTime(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value))
+    throw usage("since: 应为带时区的 ISO 时间，如 2026-09-27T10:00:00+08:00");
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || !/(Z|[+-]\d{2}:\d{2})$/.test(value))
+    throw usage("since: 应为带时区的 ISO 时间，如 2026-09-27T10:00:00+08:00");
+  return parsed;
 }
 
 export function ackIds(body: unknown): number[] {

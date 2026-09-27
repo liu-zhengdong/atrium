@@ -57,7 +57,11 @@ test("事件队列：落库、同键合并、攒批窗口、wait 唤醒、ack �
     missing: [999],
   });
   assert.equal((await inbox.wait("secretary", 0)).events.length, 0);
-  assert.equal((await inbox.wait("lead", 0)).events.length, 1);
+  assert.equal((await inbox.wait("lead", 0)).events.length, 0);
+  assert.equal(
+    (await inbox.wait("lead", 0, undefined, { all: true })).events.length,
+    1,
+  );
   assert.throws(() => ackIds({ ids: ["x"] }), /正整数/);
   assert.throws(() => ackIds({ ids: [] }), /至少/);
   await assert.rejects(inbox.wait("有 空格", 0), /订阅者名/);
@@ -257,7 +261,13 @@ test("事件队列按判定投递：逐格与纯函数一致，租约到期唤�
   for (const offset of [0, 999, 1000, 5000]) {
     clock = base + offset;
     const expected = rows
-      .filter((row) => deliverable(row, clock, 1000))
+      .filter(
+        (row) =>
+          deliverable(row, clock, 1000) &&
+          inbox
+            .list("secretary", { limit: 50 })
+            .events.find((event) => event.id === row.id)?.level === "action",
+      )
       .map((row) => row.id);
     assert.deepEqual(
       inbox.pending("secretary").map((e) => e.id),
@@ -275,9 +285,9 @@ test("事件队列按判定投递：逐格与纯函数一致，租约到期唤�
     kind: "ci_success",
     key: "t9:ci",
   });
-  const [taken] = (await live.wait("lead", 0)).events;
+  const [taken] = (await live.wait("lead", 0, undefined, { all: true })).events;
   const started = Date.now();
-  const again = await live.wait("lead", 3);
+  const again = await live.wait("lead", 3, undefined, { all: true });
   assert.equal(again.events[0]?.id, taken!.id);
   assert.ok(Date.now() - started < 2000, "到点就醒，不等满超时");
   live.close();
@@ -387,13 +397,12 @@ test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立�
   assert.deepEqual(
     events.map((event) => [event.task, event.kind]),
     [
-      ["t1", "ci_success"],
       ["t2", "ci_failure"],
       ["t4", "ci_unavailable"],
     ],
   );
   assert.match(
-    JSON.stringify(events[2]!.detail),
+    JSON.stringify(events[1]!.detail),
     /CI 未运行：The job was not started.*需人工处理或本地验证/,
   );
   await runner.pollCi();
@@ -403,4 +412,73 @@ test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立�
     "出结果的不再查，只剩 t3",
   );
   runner.close();
+});
+
+test("事件分级、攒批与摘要：过程不叫醒，第三次退回转卡住", async () => {
+  const { eventLevel } = await import("../server/tasks/event-level.ts");
+  const { settleSeconds, sinceTime } =
+    await import("../server/tasks/events.ts");
+  const info = [
+    "merge_queued",
+    "merge_returned",
+    "merge_retry",
+    "merge_rebased",
+    "local_check_started",
+    "merged",
+    "review_queued",
+    "review_passed",
+    "quota_switched",
+    "done",
+    "ci_success",
+  ];
+  for (const kind of info)
+    assert.equal(eventLevel(kind), kind === "done" ? "action" : "info", kind);
+  for (const kind of [
+    "failed",
+    "blocked",
+    "stalled",
+    "skill_proposal",
+    "online",
+    "review_needed",
+    "hard_boundary",
+    "ci_failure",
+  ])
+    assert.equal(eventLevel(kind), "action", kind);
+  assert.equal(eventLevel("ready", { auto: true }), "info");
+  assert.equal(eventLevel("ready", { auto: false }), "action");
+  assert.throws(() => settleSeconds("-1"), /settle/);
+  assert.throws(() => sinceTime("bad"), /since/);
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const inbox = new EventInbox(db);
+  const publish = (kind: string) =>
+    inbox.publish({
+      subscriber: "secretary",
+      taskId: 67,
+      source: "merge",
+      kind,
+      key: `t67:${kind}`,
+    });
+  publish("merge_queued");
+  publish("merge_returned");
+  publish("merge_returned");
+  publish("merge_rebased");
+  publish("local_check_started");
+  publish("merged");
+  assert.equal((await inbox.wait("secretary", 0)).events.length, 0);
+  const summary = inbox.digest("secretary");
+  assert.equal(summary.acknowledged, 5);
+  assert.match(summary.items[0]!.summary, /t67：退回 2 次后合入/);
+  assert.equal(inbox.digest("secretary").items.length, 0);
+  const pending = inbox.wait("secretary", 2, undefined, {
+    settleSeconds: 0.05,
+  });
+  const blocked = publish("blocked");
+  const failed = publish("failed");
+  assert.deepEqual(
+    (await pending).events.map((event) => event.id),
+    [blocked.id, failed.id],
+  );
+  inbox.close();
+  db.close();
 });

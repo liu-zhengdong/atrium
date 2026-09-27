@@ -26,6 +26,13 @@ export const groups: Record<string, string[]> = {
     "patrol report",
     "patrol findings",
     "patrol decide",
+    "schedule add",
+    "schedule ls",
+    "schedule show",
+    "schedule run",
+    "schedule pause",
+    "schedule resume",
+    "schedule rm",
     "review add",
     "review show",
     "review decide",
@@ -121,6 +128,8 @@ export function example(name: string, command: Command) {
   if (name === "task run")
     return "atrium task run t1 --worker codex+gpt-6-sol:high";
   if (name === "patrol run") return "atrium patrol run o4";
+  if (name === "schedule add")
+    return "atrium schedule add atrium/cli --kind patrol --every 1d --at 09:30";
   if (name === "host add")
     return "atrium host add 书房台式机 --repo liu-zhengdong/atrium --max 4";
   if (name === "agent")
@@ -188,6 +197,7 @@ export function guide(commands: Record<string, Command>) {
   备忘与决定记录：秘书（secretary）与每位 leader 各有一份备忘（atrium memo edit 文本 [--as aN]，覆盖写、至多 2000 字，写在等什么、下次先看什么）和决定记录（atrium decision add 决定 --why 原因 [--by u1] [--issue N]，追加，短号 dN；推翻用 atrium decision supersede dN --by dM，decision ls 缺省只列有效的，--all 全列）；新会话或换人接手先跑 atrium memo show [--as aN]；leader 唤醒时自动附自己的备忘与最近的决定；和要点的区别：要点是执行者要守的约束，决定记录是给自己回看的取舍与原因
   看全景：人用网页，atrium map 打开本机全景网页（一次性登录链接、只读、实时刷新）；Agent 用命令行，atrium map o2 --json 读一块（人话字段、组成、阶段、在跑任务、巡检发现，与网页同一接口），atrium map context o2 是派活时自动附进提示词的全景位置与要点（有长度上限）；改只走命令行：atrium map edit o2 --what 一句话 --uses 场景 --flow 步骤 --now 现状，atrium map add o2 名称 --analogy 类比；专员清单：atrium specialist ls
   体验巡检：atrium patrol run o4 手动巡检一条 uses 场景（逐次轮换）；巡检进程只读全景、帮助和回执，用当前服务与真实数据，不读代码；发现用 atrium patrol report tN 记录，同节点同现象去重；结束后新增发现投给该节点 leader；leader 用 atrium patrol decide fN --task tN 或 --merge tN 或 --ignore 原因；atrium patrol findings o4 与全景可看处理结果
+  周期任务：atrium schedule add o4 --kind patrol --every 1d --at 09:30 每天巡检一次；atrium schedule add o2 周报 --every 7d --brief 周报.md 每周在节点下建一件普通任务；到点生成任务并派发（闲时/普通按节点缺省），上一轮还没结束就跳过本轮并记一笔，服务停机错过的只补一轮；atrium schedule run s1 马上跑一轮；atrium schedule ls、show s1 看节奏与最近几轮；pause、resume、rm 停、续、删（sN 不复用）
   全景图：atrium org show o2 先讲人话（是什么、能做什么、一件事怎么走完、由哪几部分组成、现在做到哪），--detail 展开章程正文、硬边界、预算等细节；人话字段写在章程 frontmatter：what、uses、flow、alias（人话名）、analogy（类比）、now、next、stages（阶段记录）；要点（必须守住的设计约束，不留修订）：atrium org point-add atrium/runtime 要点 --why 为什么 --by 'u1 09-27' --check 'tests/x.test.ts 用例名'，atrium org point-edit k1 --check ''，atrium org point-rm k1；已有部分改类型（只切「管方面」标记，留节点修订，project/org 不能改成 aspect，改回 module 前要先清掉适用范围）：atrium org edit 节点 --kind aspect|module；任务归属哪一部分：atrium task add 标题 --part atrium/runtime
   会审：影响面大、不可撤回的决定或疑难事故，atrium review add 议题 --concerns 前端,后端 --brief 议题.md [--issue 号 --repo 仓库 --comment] [--leader 节点]；每位专员并行出意见（最后一行「意见：同意／有条件同意／反对／否决」），收齐后 leader（缺省秘书）汇总一致与冲突、能定的定，碰到用户边界、谈不拢或有专员以底线否决的标「需用户拍板」；结局投 council_decided / council_escalated 事件；atrium task wait t1 等结论，atrium review show t1 看意见与结论，用户拍板后 atrium review decide t1 结论
   干活与请看：atrium task add 标题 --by 前端 --ask 后端（派活附检查要点，交付后建审查子任务按清单审，全部通过才完成、任一否决即卡住并写原因；专员的 invite_when 写提示规则，只提示不自动请）

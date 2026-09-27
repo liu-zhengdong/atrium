@@ -18,6 +18,7 @@ import { mapCommands } from "./map.ts";
 import { reviewCommands } from "./reviews.ts";
 import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
+import { scheduleCommands } from "./schedules.ts";
 import { memoCommands } from "./memos.ts";
 import { agentCommand, hostCommands } from "./hosts.ts";
 import { closest, Problem } from "../server/problem.ts";
@@ -104,6 +105,7 @@ export const commands: Record<string, Command> = {
   ...orgCommands,
   ...leaderCommands,
   ...patrolCommands,
+  ...scheduleCommands,
   ...memoCommands,
   ...goalCommands,
   ...skillCommands,

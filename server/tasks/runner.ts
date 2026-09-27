@@ -213,6 +213,10 @@ export class TaskRunner {
   private councilAgain = false;
   /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
   private recovered = false;
+  /** 上次遗留的在跑任务接管完了没有（周期任务等它再判上一轮）。 */
+  get ready() {
+    return this.recovered && !this.closed;
+  }
 
   constructor(
     private readonly db: DatabaseSync,

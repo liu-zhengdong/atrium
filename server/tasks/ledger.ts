@@ -23,3 +23,4 @@ export {
 export type { RunFields } from "./ledger-transition.ts";
 export type { NewTask } from "./ledger-write.ts";
 export type { ChildSummary } from "./ledger-summary.ts";
+export { addTaskNote } from "./notes.ts";

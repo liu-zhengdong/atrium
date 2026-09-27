@@ -3,6 +3,7 @@ import { Problem } from "../problem.ts";
 import type { TaskStatus } from "./state.ts";
 import type { ChildSummary } from "./ledger-summary.ts";
 import type { Deliver } from "./deliver.ts";
+import type { NoteView } from "./notes.ts";
 
 export type TaskRow = {
   id: number;
@@ -31,7 +32,10 @@ export type TaskRow = {
   ended_at: number | null;
   updated_at: number;
 };
-export type Task = TaskRow & { ref: string; parent_ref: string | null };
+export type Task = TaskRow & {
+  ref: string;
+  parent_ref: string | null;
+} & NoteView;
 export type TaskNode = Task & {
   children: TaskNode[];
   child_summary: ChildSummary | null;
@@ -45,7 +49,9 @@ export type TaskEventRow = {
 };
 
 export const taskRef = (id: number) => `t${id}`;
-export const view = (row: TaskRow): Task => ({
+export const view = (
+  row: TaskRow,
+): TaskRow & { ref: string; parent_ref: string | null } => ({
   ...row,
   ref: taskRef(row.id),
   parent_ref: row.parent_id === null ? null : taskRef(row.parent_id),

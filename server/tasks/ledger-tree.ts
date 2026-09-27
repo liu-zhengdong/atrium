@@ -9,6 +9,7 @@ import {
   type TaskRow,
 } from "./ledger-model.ts";
 import { childSummaries } from "./ledger-summary.ts";
+import { noteView } from "./notes.ts";
 
 /** root 给定时返回那一棵；不给返回全部顶层任务组成的森林。超出上限标 truncated。 */
 export function taskTree(db: DatabaseSync, root?: unknown) {
@@ -33,6 +34,7 @@ export function taskTree(db: DatabaseSync, root?: unknown) {
   for (const found of rows.slice(0, TREE_MAX))
     nodes.set(found.id, {
       ...view(found),
+      ...noteView(db, found.id, found.status),
       children: [],
       child_summary: summaries.get(found.id) ?? null,
     });

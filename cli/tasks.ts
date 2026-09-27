@@ -18,6 +18,12 @@ const str = (values: Values, key: string) => {
   return typeof value === "string" ? value : undefined;
 };
 const client = async () => (await import("./service.ts")).connect();
+const displayStatus = (task: Task) =>
+  task.processing ? "处理中" : task.status === "blocked" ? "卡住" : task.status;
+const noteLine = (task: Task) =>
+  task.note
+    ? `  备注（${task.note_by ?? "未知"} · ${when(task.note_at!)}）：${task.note.replace(/\s+/g, " ")}`
+    : null;
 
 /** 命令行只认 t 开头的短号；接口另外接受纯数字。 */
 function ref(value: string | undefined, flag: string) {
@@ -83,7 +89,7 @@ function queuedReason(events: TaskEventRow[]) {
 const line = (task: TaskNode) =>
   [
     task.ref,
-    `[${task.status}]`,
+    `[${displayStatus(task)}]`,
     task.title,
     `· ${task.deliver}${task.issue ? ` #${task.issue}` : ""}`,
     task.child_summary ? `· ${formatChildSummary(task.child_summary)}` : "",
@@ -204,20 +210,29 @@ const ls: Command = {
       console.log(
         wanted || parent || after ? "没有符合条件的任务" : "还没有任务",
       );
-    else
-      console.log(
-        table([
-          ["短号", "状态", "父任务", "标题", "执行者", "PR"],
-          ...result.tasks.map((task) => [
-            task.ref,
-            task.status,
-            task.parent_ref ?? "",
-            clip(task.title, 40),
-            task.worker ?? "",
-            task.pr_url ?? "",
-          ]),
+    else {
+      const lines = table([
+        ["短号", "状态", "父任务", "标题", "执行者", "PR"],
+        ...result.tasks.map((task) => [
+          task.ref,
+          displayStatus(task),
+          task.parent_ref ?? "",
+          clip(task.title, 40),
+          task.worker ?? "",
+          task.pr_url ?? "",
         ]),
+      ]).split("\n");
+      console.log(
+        [
+          lines[0],
+          ...result.tasks.flatMap((task, i) =>
+            [lines[i + 1], noteLine(task)].filter(
+              (line): line is string => !!line,
+            ),
+          ),
+        ].join("\n"),
       );
+    }
     if (result.next_after) {
       search.set("after", result.next_after);
       const flags = [...search]
@@ -250,7 +265,10 @@ const show: Command = {
     else {
       const rows: [string, string | number | null][] = [
         ["标题", task.title],
-        ["状态", task.status],
+        ["状态", displayStatus(task)],
+        ["最新备注", task.note],
+        ["备注作者", task.note_by],
+        ["备注时间", task.note_at ? when(task.note_at) : null],
         ["父任务", task.parent_ref],
         ["子任务", task.children || null],
         [
@@ -329,8 +347,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可改 --title --role --brief --deliver --issue、依赖和自动派发`,
+  args: "tN [--status S] [--pr URL] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、详述、交付物、依赖和自动派发`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
@@ -338,6 +356,7 @@ const set: Command = {
     brief: { type: "string" },
     deliver: { type: "string" },
     issue: { type: "string" },
+    pr: { type: "string" },
     after: { type: "string" },
     "after-pr": { type: "string" },
     auto: { type: "boolean" },
@@ -362,6 +381,8 @@ const set: Command = {
     if (kind !== undefined) body.deliver = deliver(kind);
     const issueText = str(values, "issue");
     if (issueText !== undefined) body.issue = String(issue(issueText));
+    const pr = str(values, "pr");
+    if (pr !== undefined) body.pr_url = pr;
     if (str(values, "after") !== undefined) body.after = str(values, "after")!;
     if (str(values, "after-pr") !== undefined)
       body.after_pr = str(values, "after-pr")!;
@@ -369,7 +390,7 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--title、--role、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
+        "至少给一项：--status、--pr、--title、--role、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -378,6 +399,25 @@ const set: Command = {
     if (json) printJson(task);
     else console.log(`${task.ref} 已更新 · [${task.status}] ${task.title}`);
     recordNext(`看全貌：atrium task tree ${task.parent_ref ?? task.ref}`);
+  },
+};
+
+const note: Command = {
+  args: "tN 文字 [--as 身份]",
+  about: "追加处理备注（最多 300 字）；最新一条显示为当前说明",
+  options: { as: { type: "string" } },
+  positionals: [2, 2],
+  async run({ positionals: [reference, text], values, json }) {
+    const id = ref(reference, "任务");
+    const result = await (
+      await client()
+    ).post<Task>(`/tasks/${id}/note`, {
+      text,
+      by: str(values, "as") ?? "u1",
+    });
+    if (json) printJson(result);
+    else console.log(`${id} 已追加备注（${result.note_by}）：${result.note}`);
+    recordNext(`看详情：atrium task show ${id}`);
   },
 };
 
@@ -612,6 +652,7 @@ export const taskCommands: Record<string, Command> = {
   "task show": show,
   "task tree": tree,
   "task set": set,
+  "task note": note,
   "task done": done,
   "task run": run,
   "task stop": stop,

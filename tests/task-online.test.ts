@@ -37,14 +37,24 @@ test("自身仓库的写法", () => {
   assert.equal(selfRepoFlag("github:../x"), null);
 });
 
-test("自升级开关：显式设置优先，缺省只在安装版上开", () => {
-  assert.equal(selfUpdateEnabled("0", false), false);
-  assert.equal(selfUpdateEnabled("0", true), false);
-  assert.equal(selfUpdateEnabled("1", true), true);
-  assert.equal(selfUpdateEnabled("1", false), true);
-  assert.equal(selfUpdateEnabled(undefined, true), false);
-  assert.equal(selfUpdateEnabled(undefined, false), true);
-  assert.equal(selfUpdateEnabled("yes", false), true);
+test("自升级开关：显式设置优先，缺省只在用默认数据目录的安装版上开", () => {
+  const installed = { gitCheckout: false, defaultData: true };
+  const checkout = { gitCheckout: true, defaultData: true };
+  const isolated = { gitCheckout: false, defaultData: false };
+  assert.equal(selfUpdateEnabled("0", installed), false);
+  assert.equal(selfUpdateEnabled("0", checkout), false);
+  assert.equal(selfUpdateEnabled("1", checkout), true);
+  assert.equal(selfUpdateEnabled("1", isolated), true);
+  assert.equal(selfUpdateEnabled(undefined, installed), true);
+  assert.equal(selfUpdateEnabled(undefined, checkout), false);
+  // 测试与隔离服务另给 ATRIUM_DATA：即使包目录不是 git 检出也不自升级。
+  assert.equal(selfUpdateEnabled(undefined, isolated), false);
+  assert.equal(
+    selfUpdateEnabled(undefined, { gitCheckout: true, defaultData: false }),
+    false,
+  );
+  assert.equal(selfUpdateEnabled("yes", installed), true);
+  assert.equal(selfUpdateEnabled("yes", isolated), false);
 });
 
 test("含合入提交的最早版本", () => {
@@ -473,6 +483,11 @@ for (const scenario of ["online", "rolled_back"] as const)
             cwd: fixture.repo,
             encoding: "utf8",
           }).trim();
+        // 可信执行者、低风险：不经审阅直接进合入队列（审阅分支见 task-review.test.ts）。
+        writeFileSync(
+          join(fixture.workers, "harness", "kimi.md"),
+          "---\ntrust: medium\nmax_risk: low\nchecks: [pr_exists, claims_verified]\n---\n",
+        );
         git("config", "user.name", "test");
         git("config", "user.email", "test@example.com");
         writeFileSync(

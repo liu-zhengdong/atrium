@@ -60,7 +60,11 @@ import {
   type DeployResult,
 } from "./online-runtime.ts";
 import { selfRepoFlag, selfUpdateEnabled } from "./online.ts";
-import { currentVersion, packageRoot } from "../service-state.ts";
+import {
+  currentVersion,
+  dataDirectory,
+  packageRoot,
+} from "../service-state.ts";
 import { restartInProgress } from "../supervisor.ts";
 import { existsSync } from "node:fs";
 
@@ -90,7 +94,7 @@ export type RunnerOptions = {
   killGraceMs?: number;
   /** 额度报文没给恢复时间时，账号标记保留多久（毫秒）；缺省 1 小时。 */
   quotaUnknownMs?: number;
-  /** 自动上线（#325）；缺省按 ATRIUM_UPDATE_REPO、ATRIUM_SELF_UPDATE 与本包是否 git 检出决定。 */
+  /** 自动上线（#325）；缺省按 ATRIUM_UPDATE_REPO、ATRIUM_SELF_UPDATE、本包是否 git 检出与是否默认数据目录决定。 */
   online?: {
     /** 服务自身仓库（`-R` 写法）；合入它的 PR 才自动上线。 */
     selfRepo?: string | null;
@@ -236,10 +240,10 @@ export class TaskRunner {
       version: options.online?.version ?? currentVersion,
       selfUpdate:
         options.online?.selfUpdate ??
-        selfUpdateEnabled(
-          process.env.ATRIUM_SELF_UPDATE,
-          existsSync(join(packageRoot, ".git")),
-        ),
+        selfUpdateEnabled(process.env.ATRIUM_SELF_UPDATE, {
+          gitCheckout: existsSync(join(packageRoot, ".git")),
+          defaultData: options.data === dataDirectory({}),
+        }),
       busy: () =>
         !!this.db
           .prepare("SELECT 1 FROM tasks WHERE delivery_stage='merging' LIMIT 1")

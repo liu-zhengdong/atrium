@@ -20,15 +20,16 @@ export function selfRepoFlag(source: string): string | null {
 
 /**
  * 是否允许服务对自己 update + restart：`ATRIUM_SELF_UPDATE=0` 关、`=1` 开；
- * 缺省只在安装版（包目录不是 git 检出）上开，开发中的 worktree 服务不去动全局安装。
+ * 缺省只在用默认数据目录的安装版（包目录不是 git 检出）上开：开发中的 worktree 服务、
+ * 测试与隔离服务（另给 ATRIUM_DATA）都不去动全局安装。
  */
 export function selfUpdateEnabled(
   setting: string | undefined,
-  gitCheckout: boolean,
+  service: { gitCheckout: boolean; defaultData: boolean },
 ): boolean {
   if (setting === "0") return false;
   if (setting === "1") return true;
-  return !gitCheckout;
+  return !service.gitCheckout && service.defaultData;
 }
 
 /** `git tag --contains` 的输出 → 含该提交的最早版本（去掉 v）；没有返回 null。 */

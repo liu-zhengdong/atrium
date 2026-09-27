@@ -1,0 +1,219 @@
+/* 任务视图原型（t120）新增的样式；其余全部沿用 server/map/web/style.css。 */
+
+/* 三组共用一套列宽：任务、专员两列在三组里上下对齐，眼睛往下扫不用重新找位置。 */
+.table-tg .row {
+  grid-template-columns: minmax(0, 1.3fr) 88px 120px 168px 84px minmax(0, 1fr);
+}
+.tg-no-role .row {
+  grid-template-columns: minmax(0, 1.3fr) 120px 168px 84px minmax(0, 1fr);
+}
+.tg-no-who .row {
+  grid-template-columns: minmax(0, 1.3fr) 88px 120px 84px minmax(0, 1fr);
+}
+.table-tg .chip-green,
+.table-tg .chip-orange,
+.table-tg .chip-blue,
+.table-tg .chip-red {
+  font-weight: 600;
+}
+
+/* 组标题：比表头大一档、比页签小；组与组之间拉开，组内行距不变。 */
+.group + .group {
+  margin-top: 40px;
+}
+.tg-panel > .group:first-child {
+  margin-top: 24px;
+}
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  padding: 0 12px;
+  font-size: 17px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.group-head .badge {
+  font-weight: 500;
+}
+.group-sum {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--faint);
+}
+
+/* 做完了按天分段：一行小字，不画线，靠留白与下一条分开。 */
+.day-row {
+  padding: 18px 12px 6px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-soft);
+}
+.row.head + .day-row {
+  padding-top: 12px;
+}
+
+/* 任务名下一行：归属部分（不是本页那块时）与谁派的。 */
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--faint);
+}
+.task-meta .by {
+  color: var(--leader);
+}
+.dot-sep {
+  padding: 0 6px;
+  color: var(--faint);
+}
+.urgent {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: 1px;
+  color: #b42318;
+  background: #fdecea;
+}
+.runtime {
+  font-size: 13px;
+  color: var(--muted);
+}
+.cell.wait-you {
+  color: #b42318;
+  font-weight: 500;
+}
+.cell.failed {
+  color: #9a3412;
+}
+.row.gone .task-title {
+  color: var(--faint);
+}
+.ref-link,
+.pr {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--text);
+  text-decoration: none;
+  border-bottom: 1px solid #d9d5cc;
+}
+.ref-link:hover,
+.pr:hover {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+/* 做完了底部：再看 N 条，沿用筛选胶囊的样子，旁边小字说一共多少。 */
+.more-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 12px 0;
+  font-size: 13px;
+}
+
+/* 找任务：放在页签行右侧筛选的位置，形状与筛选胶囊一致。 */
+.find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 220px;
+  padding: 4px 12px;
+  border: 1px solid #e4e1da;
+  border-radius: 999px;
+  background: var(--page);
+}
+.find:focus-within {
+  border-color: var(--muted);
+}
+.find .icon {
+  width: 14px;
+  height: 14px;
+}
+.find input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: transparent;
+}
+.find input::placeholder {
+  color: var(--faint);
+}
+
+@media (prefers-color-scheme: dark) {
+  .urgent,
+  .cell.wait-you {
+    color: #f59a90;
+  }
+  .urgent {
+    background: #3f1f1c;
+  }
+  .cell.failed {
+    color: #f0a070;
+  }
+  .ref-link,
+  .pr {
+    border-bottom-color: #45433e;
+  }
+  .find {
+    border-color: #3a3935;
+  }
+}
+
+@media (max-width: 720px) {
+  .group + .group {
+    margin-top: 32px;
+  }
+  .group-head {
+    flex-wrap: wrap;
+    padding: 0 4px;
+  }
+  .group-sum {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+  .day-row {
+    padding: 16px 4px 6px;
+  }
+  .more-bar {
+    padding: 14px 4px 0;
+  }
+  .find {
+    width: 100%;
+  }
+  .filters:has(.find) {
+    flex-basis: 100%;
+  }
+}
+
+/* 窄屏卡片：标题一行，下一行先放状态（或结果），再放专员、谁、用时，最后是说明。 */
+@media (max-width: 720px) {
+  .table-tg .cell {
+    order: 2;
+  }
+  .table-tg .cell.name {
+    order: 0;
+  }
+  .table-tg .cell[data-label="状态"],
+  .table-tg .cell[data-label="结果"] {
+    order: 1;
+  }
+  .table-tg .cell.note {
+    order: 3;
+  }
+}

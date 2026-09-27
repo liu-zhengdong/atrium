@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>任务视图原型 · Atrium 全景</title>
+    <link rel="icon" href="data:," />
+    <!-- 沿用线上全景的样式，只在 proto.css 里加任务视图新增的部分 -->
+    <link rel="stylesheet" href="../../../server/map/web/style.css" />
+    <link rel="stylesheet" href="proto.css" />
+    <script type="module" src="proto.js"></script>
+  </head>
+  <body>
+    <header class="bar">
+      <nav class="crumbs" id="crumbs" aria-label="位置"></nav>
+      <span class="live" id="live" data-state="on"></span>
+    </header>
+    <main class="page" id="page" tabindex="-1"></main>
+  </body>
+</html>

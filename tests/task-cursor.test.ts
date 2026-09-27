@@ -327,6 +327,12 @@ test("派给假 cursor-agent：白名单环境、标准输入提示词、缺省 
     ).body.error,
     /max_risk=low/,
   );
+  // 写死的执行者：auto 带强度、模型名已带强度，排队前当场 400。
+  for (const worker of ["cursor:high", "cursor+gpt-5.3-codex-high:low"]) {
+    const bad = await call("POST", "/api/tasks/t1/run", { worker });
+    assert.equal(bad.status, 400, worker);
+    assert.match(bad.body.error, /不能指定思考强度|已带强度/);
+  }
   const started = await call("POST", "/api/tasks/t1/run", { worker: "cursor" });
   assert.equal(started.status, 200, JSON.stringify(started.body));
   assert.equal(started.body.task.worker, "cursor+auto");

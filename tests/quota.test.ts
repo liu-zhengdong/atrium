@@ -400,7 +400,7 @@ test("listQuota：OpenQuota 输出无法解析或非 0 退出时照常返回并�
     const bin = fakeBin(dir, "#!/bin/sh\necho oops\n");
     const parse = await listQuota({ bin, readers: null });
     assert.deepEqual(parse.notes, ["OpenQuota 输出无法解析"]);
-    assert.equal(parse.accounts.length, 6);
+    assert.equal(parse.accounts.length, 7);
     fakeBin(dir, "#!/bin/sh\nexit 3\n");
     assert.deepEqual((await listQuota({ bin, readers: null })).notes, [
       "读取 OpenQuota 额度失败",

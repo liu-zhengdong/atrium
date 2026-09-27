@@ -87,6 +87,9 @@ export const cursor: Adapter = {
   ],
   tell: "resume",
   defaultRules: { trust: "unknown", max_risk: "low" },
+  checkModel(model, effort) {
+    cursorModel(model ?? cursor.defaultModel!, effort);
+  },
   build(input) {
     checkCommon(cursor, input);
     return {

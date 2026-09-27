@@ -71,6 +71,15 @@ export function verificationSection(text: string | null | undefined) {
     out.push(line);
   }
   if (start < 0) return null;
+  // 正文末尾的关联 issue 与署名行不属于验证步骤。
+  while (
+    out.length &&
+    (!out.at(-1)!.trim() ||
+      /^\s*((refs|closes|fixes|resolves)\s+#\d+|🤖 generated with)/i.test(
+        out.at(-1)!,
+      ))
+  )
+    out.pop();
   const body = out.join("\n").trim();
   return body ? body.slice(0, 4000) : null;
 }

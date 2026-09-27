@@ -73,6 +73,12 @@ test("端到端验证一节的提取", () => {
     "跑 a",
   );
   assert.equal(
+    verificationSection(
+      "## 端到端验证\n跑 a\n\nRefs #325\n\n🤖 Generated with [Claude Code](x)\n",
+    ),
+    "跑 a",
+  );
+  assert.equal(
     verificationSection(`## 端到端验证\n${"x".repeat(5000)}`)!.length,
     4000,
   );

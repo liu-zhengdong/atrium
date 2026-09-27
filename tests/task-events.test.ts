@@ -296,7 +296,7 @@ test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立�
       db,
       `t${n}`,
       { kind: "block" },
-      { pr_url: `https://x/pull/${n}`, ci: "pending" },
+      { pr_url: `https://github.com/o/r/pull/${n}`, ci: "pending" },
     );
     db.prepare(
       "INSERT INTO task_events(task_id,at,kind,detail) VALUES (?,?,?,?)",

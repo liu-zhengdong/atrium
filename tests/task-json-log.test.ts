@@ -177,11 +177,11 @@ test("CI 轮询：已完成或已取消的任务不再查 CI", async () => {
       db,
       `t${n}`,
       { kind: end },
-      { pr_url: `https://x/pull/${n}`, ci: "pending" },
+      { pr_url: `https://github.com/o/r/pull/${n}`, ci: "pending" },
     );
   }
   const outcomes = await pollCiOnce(db, 10, run);
-  assert.deepEqual(asked, ["https://x/pull/3"]);
+  assert.deepEqual(asked, ["https://github.com/o/r/pull/3"]);
   assert.deepEqual(
     outcomes.map((outcome) => [outcome.task.ref, outcome.ci]),
     [["t3", "failure"]],

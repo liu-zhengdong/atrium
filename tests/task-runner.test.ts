@@ -68,7 +68,7 @@ test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关�
   const block = task.events.find((event) => event.kind === "block");
   assert.match(
     block!.detail!,
-    /pr_exists：gh pr list --head task-t1-add-done-file 没找到 PR.*GitHub host/,
+    /pr_exists：gh pr list --head task-t1-add-done-file 没找到 PR：origin 远端 .* 解析不出 owner\/repo/,
   );
   assert.equal(verdict.diff.added, 1);
 
@@ -120,6 +120,16 @@ test("comment 与 none 交付不用 PR，评论链接进入摘要", async (t) =>
   const app = await startApp(t, (fixture) => {
     const original = fixture.run;
     fixture.run = async (command, args, options) => {
+      // 夹具的 origin 是本地 bare 仓库；评论关卡要从 origin 解析仓库，这里换成 GitHub 地址。
+      if (
+        command === "git" &&
+        args.slice(2).join(" ") === "remote get-url origin"
+      )
+        return {
+          ok: true,
+          stdout: "https://github.com/o/r.git\n",
+          stderr: "",
+        };
       if (
         command === "gh" &&
         args[0] === "api" &&

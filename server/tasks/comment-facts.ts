@@ -1,9 +1,10 @@
 import { exec as defaultExec, type Exec } from "./git.ts";
+import { apiArgs, originRepo } from "./gh-repo.ts";
 
 export type IssueComment = { created_at: string; html_url: string };
 export type CommentFacts = { comments: IssueComment[]; error?: string };
 
-/** gh 按更新时间分页筛选；创建时间仍由纯关卡逐条核对。 */
+/** gh 按更新时间分页筛选；创建时间仍由纯关卡逐条核对。仓库取自 origin，不让 gh 在 fork 里猜到上游。 */
 export async function collectComments(
   repo: string | null,
   issue: number,
@@ -12,11 +13,12 @@ export async function collectComments(
 ): Promise<CommentFacts> {
   if (!repo)
     return { comments: [], error: "任务没有仓库，无法查询 issue 评论" };
+  const origin = await originRepo(repo, run);
+  if ("error" in origin) return { comments: [], error: origin.error };
   const response = await run(
     "gh",
     [
-      "api",
-      `repos/{owner}/{repo}/issues/${issue}/comments`,
+      ...apiArgs(origin.repo, `issues/${issue}/comments`),
       "--method",
       "GET",
       "-f",
@@ -26,7 +28,7 @@ export async function collectComments(
       "--paginate",
       "--slurp",
     ],
-    { cwd: repo, timeoutMs: 30_000 },
+    { timeoutMs: 30_000 },
   );
   if (!response.ok)
     return {

@@ -47,7 +47,7 @@ test("真实 Actions 样本：零步骤与计费注解归入 CI 未运行", asyn
     /^The job was not started because recent account payments/,
   );
   assert.deepEqual(calls, [
-    "pr checks https://github.com/liu-zhengdong/atrium/pull/270 --json name,bucket,link",
+    "pr checks https://github.com/liu-zhengdong/atrium/pull/270 -R liu-zhengdong/atrium --json name,bucket,link",
     "api repos/example/atrium/actions/runs/123456789/jobs?per_page=100",
     "api repos/example/atrium/check-runs/987654321/annotations?per_page=100",
   ]);

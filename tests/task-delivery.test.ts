@@ -86,9 +86,18 @@ test("评论事实只读 gh 分页输出并保留失败原因", async () => {
     "/tmp/repo",
     262,
     start,
-    async (command, args, options) => {
+    async (command, args) => {
+      if (command === "git") {
+        assert.deepEqual(args, [
+          "-C",
+          "/tmp/repo",
+          "remote",
+          "get-url",
+          "origin",
+        ]);
+        return { ok: true, stdout: "git@github.com:o/r.git\n", stderr: "" };
+      }
       assert.equal(command, "gh");
-      assert.equal(options?.cwd, "/tmp/repo");
       calls.push(args);
       return {
         ok: true,
@@ -100,7 +109,7 @@ test("评论事实只读 gh 分页输出并保留失败原因", async () => {
   assert.deepEqual(facts.comments, [comment(start + 1000)]);
   assert.deepEqual(calls[0]?.slice(0, 2), [
     "api",
-    "repos/{owner}/{repo}/issues/262/comments",
+    "repos/o/r/issues/262/comments",
   ]);
   assert(calls[0]?.includes("--paginate"));
   assert.equal((await collectComments(null, 262, start)).comments.length, 0);

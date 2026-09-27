@@ -157,6 +157,14 @@ stages: # 阶段记录；原目标树的 gN 迁来后 id 沿用 gN
     evidence: ["#287 已合入"]
 ```
 
+**要点**是这一块必须守住的设计约束，排在「现在做到哪」之前显示。每条写人话一句、为什么、谁定的，可选守护它的检查（测试文件与用例名，或 `$ ` 命令）。要点单独存储、不留修订记录，权限同章程（根节点只有你能改），短号 `k1`……不复用。`org show --json` 的 `points_chain` 按根 → 本节点列出各层要点，供后续派活附进提示词。
+
+```bash
+atrium org point-add atrium/runtime "不采信执行者自述" --why "事实由运行时查" --by "u1 09-27" --check "tests/gates.test.ts 用例名"
+atrium org point-edit k1 --check ''     # 改一条；--check '' 去掉检查
+atrium org point-rm k1                  # 删掉过时的
+```
+
 任务用 `--part 节点` 标归属哪一部分（谁负责），与 `--role`（谁来做、记谁的账）分开记；旧写法 `--goal gN` 按目标的负责节点落到归属部分。
 
 ### 目标树迁移

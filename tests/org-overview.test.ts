@@ -15,6 +15,13 @@ import {
 } from "../server/org/validate.ts";
 import { overviewOf, type Overview } from "../server/org/overview.ts";
 import { formatOverview, titleOf } from "../cli/org-overview.ts";
+import {
+  addPoint,
+  chainPoints,
+  editPoint,
+  removePoint,
+  validatePoint,
+} from "../server/org/points.ts";
 import { formatMigration, type MigrationView } from "../cli/org.ts";
 import { evidenceOf, planMigration } from "../server/goals/migrate-rules.ts";
 import { ensureGoalTables } from "../server/goals/schema.ts";
@@ -577,4 +584,128 @@ test("top：目标树下线后目标段指向组织节点，不当成取不到",
   });
   assert.match(text, /目标：已迁为组织节点的阶段记录，看 atrium org tree/);
   assert.doesNotMatch(text, /目标：取不到/);
+});
+
+test("要点：增改删、权限同章程、不留修订；show 带本节点与上级链，排在现状前", async (t) => {
+  const db = setup();
+  const k1 = addPoint(
+    db,
+    "o2",
+    { text: "不采信执行者自述", why: "事实由运行时查", by: "u1 09-27" },
+    "a1",
+  );
+  assert.deepEqual([k1.ref, k1.node, k1.check], ["k1", "o2", null]);
+  const k2 = addPoint(
+    db,
+    "atrium/runtime",
+    {
+      text: "服务重启不带走执行者",
+      why: "升级随时可做",
+      by: "u1 09-26",
+      check: "tests/recovery.test.ts「按 pid 接管」",
+    },
+    "a2",
+  );
+  addPoint(db, "o1", { text: "根要点", why: "w", by: "u1" }, "u1");
+  assert.throws(
+    () => addPoint(db, "o1", { text: "x", why: "w", by: "a1" }, "a1"),
+    /根节点的要点只有你能改/,
+  );
+  assert.throws(
+    () => addPoint(db, "o2", { text: "x", why: "w", by: "a2" }, "a2"),
+    /a2 不是 o2 的 leader/,
+    "下级 leader 不能改上级的要点",
+  );
+  const bad: [Record<string, unknown>, RegExp][] = [
+    [{ why: "w", by: "u1" }, /要点: 要点必填/],
+    [{ text: " ", why: "w", by: "u1" }, /要点: 要点不能为空/],
+    [{ text: "x", by: "u1" }, /--why: 为什么必填/],
+    [{ text: "x", why: "w" }, /--by: 谁定的必填/],
+    [{ text: "x".repeat(201), why: "w", by: "u1" }, /不能超过 200 字/],
+    [{ text: "x", why: "w", by: "u1", check: 1 }, /--check: 应为/],
+    [{ text: "x", why: "w", by: "u1", who: 1 }, /who: 是未知字段/],
+  ];
+  for (const [input, message] of bad)
+    assert.throws(() => validatePoint(input), message);
+  assert.throws(() => validatePoint({}, true), /至少改一项/);
+  const edited = editPoint(db, "k2", { check: "" }, "a1");
+  assert.equal(edited.check, null, "上级 leader 能改，--check '' 去掉检查");
+  assert.equal(
+    editPoint(db, "k2", { text: "重启不丢执行者" }, "a2").why,
+    "升级随时可做",
+  );
+  assert.throws(
+    () => editPoint(db, "k9", { text: "x" }, "u1"),
+    /要点 k9 不存在/,
+  );
+  assert.throws(() => removePoint(db, "2", "u1"), /要点短号应为 k1/);
+  assert.deepEqual(
+    chainPoints(db, 3).map((l) => [l.node, l.points.map((p) => p.ref)]),
+    [
+      ["o1", ["k3"]],
+      ["o2", ["k1"]],
+      ["o3", ["k2"]],
+    ],
+  );
+  const shown = show(db, "o3");
+  assert.deepEqual(
+    shown.points.map((p) => p.text),
+    ["重启不丢执行者"],
+  );
+  assert.equal(shown.points_chain.length, 3);
+  assert.equal(
+    db
+      .prepare("SELECT count(*) AS n FROM org_revisions WHERE target='charter'")
+      .get()!.n,
+    0,
+    "要点不留修订",
+  );
+  charter(db, "o3", { what: "派活" }, "a2");
+  const lines = formatOverview(
+    { ref: "o3", name: "runtime" },
+    show(db, "o3").overview,
+    false,
+    shown.points,
+  );
+  const at = lines.indexOf("要点（必须守住）：");
+  assert.ok(at > 0 && at < lines.findIndex((l) => l.startsWith("现在做到哪")));
+  assert.equal(lines[at + 1], "  k2 重启不丢执行者");
+  assert.equal(lines[at + 2], "     为什么：升级随时可做 · u1 09-26 定");
+  assert.equal(removePoint(db, "k2", "a2").ref, "k2");
+  assert.equal(show(db, "o3").points.length, 0);
+  const k4 = addPoint(db, "o3", { text: "新", why: "w", by: "u1" }, "a2");
+  assert.equal(k4.ref, "k4", "短号不复用");
+  db.close();
+
+  const data = mkdtempSync(join(tmpdir(), "atrium-points-"));
+  t.after(() => rmSync(data, { recursive: true, force: true }));
+  const { app, db: live } = await createApp({ data, auth: false });
+  t.after(() => app.close());
+  seed(live);
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/org/nodes/o3/points?as=a2",
+    payload: { text: "x", why: "w", by: "u1 09-27" },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(
+    (
+      await app.inject({
+        method: "PATCH",
+        url: "/api/org/points/k1?as=a2",
+        payload: { why: "新理由" },
+      })
+    ).json().why,
+    "新理由",
+  );
+  assert.equal(
+    (await app.inject({ method: "DELETE", url: "/api/org/points/k1?as=a1" }))
+      .statusCode,
+    200,
+  );
+  assert.equal(
+    (await app.inject({ method: "DELETE", url: "/api/org/points/k1" }))
+      .statusCode,
+    404,
+  );
 });

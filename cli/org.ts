@@ -7,7 +7,13 @@ import { recordNext } from "./contract.ts";
 import type { Doc } from "../server/org/model.ts";
 import { formatParam, type Param } from "../server/org/boundaries.ts";
 import { OVERVIEW_KEYS, type Overview } from "../server/org/overview.ts";
-import { formatOverview, isBlank, titleOf } from "./org-overview.ts";
+import {
+  formatOverview,
+  isBlank,
+  pointLines,
+  titleOf,
+} from "./org-overview.ts";
+import type { Point } from "../server/org/points.ts";
 
 const str = (values: Values, key: string) =>
   typeof values[key] === "string" ? (values[key] as string) : undefined;
@@ -312,6 +318,8 @@ export const orgCommands: Record<string, Command> = {
         leader: string | null;
         repos: string[];
         overview: Overview;
+        points: Point[];
+        points_chain: { node: string; name: string; points: Point[] }[];
         charter: {
           rev: string;
           fields: Record<string, unknown>;
@@ -345,11 +353,20 @@ export const orgCommands: Record<string, Command> = {
       const lines = [
         titleOf(node, node.overview),
         `[${KIND_LABEL[node.kind] ?? node.kind}] ${node.path} · leader ${person(node.leader)}`,
-        ...formatOverview(node, node.overview, detail),
+        ...formatOverview(node, node.overview, detail, node.points),
         ...(detail
           ? [
               "—— 细节 ——",
               `仓库：${node.repos.join("、") || "无"}`,
+              ...node.points_chain
+                .filter((level) => level.node !== node.ref)
+                .flatMap((level) =>
+                  pointLines(level.points).map((line, i) =>
+                    i === 0
+                      ? `上级 ${level.node} ${level.name} 的${line}`
+                      : line,
+                  ),
+                ),
               ...(node.chain.length
                 ? [
                     "目标链",
@@ -508,6 +525,87 @@ export const orgCommands: Record<string, Command> = {
           ),
         ].join("\n"),
         `atrium org history ${id}`,
+      );
+    },
+  },
+  "org point-add": {
+    args: "节点 要点 --why 为什么 --by 谁定的 [--check 检查] [--as aN]",
+    about:
+      "给节点加一条要点（这一块必须守住的设计约束）：人话一句、为什么、谁定的（如 u1 09-27），可选守护它的检查（测试文件与用例名，或 $ 命令）；不留修订记录",
+    options: {
+      ...options,
+      why: { type: "string" },
+      by: { type: "string" },
+      check: { type: "string" },
+    },
+    positionals: [2, 2],
+    async run({ positionals: [id, text], values, json }) {
+      const result = await (
+        await client()
+      ).post<Point>(`/org/nodes/${path(id!)}/points${as(values)}`, {
+        text,
+        ...(str(values, "why") === undefined
+          ? {}
+          : { why: str(values, "why") }),
+        ...(str(values, "by") === undefined ? {} : { by: str(values, "by") }),
+        ...(str(values, "check") === undefined
+          ? {}
+          : { check: str(values, "check") }),
+      });
+      out(
+        json,
+        result,
+        `已加 ${result.ref}（${result.node}）：${result.text}`,
+        `atrium org show ${result.node}`,
+      );
+    },
+  },
+  "org point-edit": {
+    args: "kN [--text 要点] [--why 为什么] [--by 谁定的] [--check 检查|''] [--as aN]",
+    about: "改一条要点；--check '' 去掉检查",
+    options: {
+      ...options,
+      text: { type: "string" },
+      why: { type: "string" },
+      by: { type: "string" },
+      check: { type: "string" },
+    },
+    positionals: [1, 1],
+    async run({ positionals: [id], values, json }) {
+      const body: Record<string, string> = {};
+      for (const key of ["text", "why", "by", "check"])
+        if (str(values, key) !== undefined) body[key] = str(values, key)!;
+      if (!Object.keys(body).length)
+        throw new Problem(
+          400,
+          "至少改一项：--text、--why、--by、--check",
+          "usage",
+        );
+      const result = await (
+        await client()
+      ).patch<Point>(`/org/points/${path(id!)}${as(values)}`, body);
+      out(
+        json,
+        result,
+        `已改 ${result.ref}（${result.node}）：${result.text}`,
+        `atrium org show ${result.node}`,
+      );
+    },
+  },
+  "org point-rm": {
+    args: "kN [--as aN]",
+    about: "删掉一条过时的要点（不留修订记录）",
+    options,
+    positionals: [1, 1],
+    async run({ positionals: [id], values, json }) {
+      const result = await (
+        await client()
+      ).delete<Point>(`/org/points/${path(id!)}${as(values)}`);
+      out(
+        json,
+        result,
+        `已删 ${result.ref}（${result.node}）：${result.text}`,
+        `atrium org show ${result.node}`,
       );
     },
   },

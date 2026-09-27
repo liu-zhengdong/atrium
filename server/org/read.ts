@@ -16,6 +16,7 @@ import { effective, exportBoundaries, summaryLength } from "./boundaries.ts";
 import { allBoundaries, chainLevels } from "./boundary-store.ts";
 import { goalChain, type GoalLevel } from "./goal-chain.ts";
 import { overviewOf } from "./overview.ts";
+import { chainPoints, nodePoints } from "./points.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
 import { allShares, rootLimits } from "./share-store.ts";
 import { exportShares, shareCapacity, type ShareNode } from "./shares.ts";
@@ -272,6 +273,9 @@ export function show(
   return {
     ...node,
     overview,
+    points: nodePoints(db, n.id),
+    // 根 → 本节点每层的要点；后续派活按它附「本节点及上级的要点」
+    points_chain: chainPoints(db, n.id),
     recent_tasks: nodeTasks(db, n.id),
     boundaries,
     charter: view(charter),

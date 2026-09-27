@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { ensurePointTables } from "./points.ts";
 
 /** All org tables are additive and safe to create on every service start. */
 export function ensureOrgTables(db: DatabaseSync) {
@@ -47,4 +48,5 @@ export function ensureOrgTables(db: DatabaseSync) {
     BEFORE DELETE ON org_revisions BEGIN SELECT RAISE(ABORT,'org_revisions append only'); END;
   CREATE TRIGGER IF NOT EXISTS org_nodes_no_delete
     BEFORE DELETE ON org_nodes BEGIN SELECT RAISE(ABORT,'org_nodes archive only'); END;`);
+  ensurePointTables(db);
 }

@@ -1,8 +1,9 @@
 import type { Overview, Stage } from "../server/org/overview.ts";
 import { STAGE_LABEL } from "../server/org/overview.ts";
+import type { Point } from "../server/org/points.ts";
 
 /**
- * `org show` 的人话段（#322）：是什么 → 能用它做什么 → 一件事怎么走完 → 由哪几部分组成 → 现在做到哪、接下来。
+ * `org show` 的人话段（#322）：是什么 → 能用它做什么 → 一件事怎么走完 → 由哪几部分组成 → 要点 → 现在做到哪、接下来。
  * 没写的项标「未写」，一项都没写时只给一行怎么补。技术细节不在这里，由 `--detail` 另外展开。
  */
 
@@ -51,15 +52,29 @@ function stageDetail(stage: Stage): string[] {
   return lines.map((line) => `      ${line.split("\n").join("\n      ")}`);
 }
 
+/** 要点：人话一句在前，为什么、谁定的、守护它的检查缩进在下一行。 */
+export function pointLines(points: readonly Point[]): string[] {
+  if (!points.length) return [];
+  return [
+    "要点（必须守住）：",
+    ...points.flatMap((p) => [
+      `  ${p.ref} ${p.text}`,
+      `     为什么：${p.why} · ${p.by} 定${p.check ? ` · 检查：${p.check}` : ""}`,
+    ]),
+  ];
+}
+
 export function formatOverview(
   node: { ref: string; name: string },
   overview: Overview,
   detail = false,
+  points: readonly Point[] = [],
 ): string[] {
   if (isBlank(overview))
     return [
       `人话介绍还没写（是什么、能做什么、怎么走完、由哪几部分组成、现状）：atrium org show ${node.ref} --charter --raw > 章程.md，补上 what、uses、flow、alias、analogy、now、next 后 atrium org edit ${node.ref} --charter 章程.md --reason 原因`,
       ...partLines(overview, detail),
+      ...pointLines(points),
     ];
   const none = "（未写）";
   const stages = overview.stages;
@@ -83,6 +98,7 @@ export function formatOverview(
         ]
       : [`一件事怎么走完：${none}`]),
     ...partLines(overview, detail),
+    ...pointLines(points),
     `现在做到哪：${overview.now || none}`,
     `接下来：${overview.next || none}`,
     ...(stages.length

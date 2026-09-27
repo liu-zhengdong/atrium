@@ -31,7 +31,7 @@ export type QuotaInput = {
  * 下划线算分隔，`rate_limit_error`、`insufficient_quota` 也能命中。
  */
 const QUOTA_MARK =
-  /(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|hit (?:your|the) [^\n]{0,40}limits?|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)|(?:用尽|不足|超限)[^\n]{0,20}(?:额度|用量|余额)/i;
+  /(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)|(?:用尽|不足|超限)[^\n]{0,20}(?:额度|用量|余额)/i;
 
 /** 整数 429，前后不能有数字或小数点，免得把日期片段、端口号算进去。 */
 const HTTP_429 = /(?<![\d.])429(?![\d])/;
@@ -60,6 +60,15 @@ export function quotaErrorText(logTail: string): string {
       event.stop_reason === "end_turn"
     ) {
       last = "";
+      continue;
+    }
+    // agy：{event:"result",result:{status,error}}；SUCCESS 之前的报错已经越过去了。
+    if (event.event === "result") {
+      const result = event.result;
+      if (!result || typeof result !== "object") continue;
+      const { status, error } = result as Record<string, unknown>;
+      if (status === "SUCCESS") last = "";
+      else if (typeof error === "string" && error) last = error;
       continue;
     }
     if (type === "rate_limit_event") {

@@ -305,6 +305,8 @@ export class Executors {
         prepared.logFile,
         offset,
         (uuid) => markEchoed(this.ctx.db, id, uuid),
+        undefined,
+        prepared.launch.inputDialect,
       );
     this.active.set(id, active);
     beginUsage(

@@ -34,7 +34,14 @@ function budgetViews(db: DatabaseSync, pace?: readonly PaceEntry[]) {
     shares: owned.get(n.id) ?? [],
   }));
   const limits = rootLimits(db, list);
-  const scopes = new Set(["claude", "codex", "opencode", "kimi", "grok"]);
+  const scopes = new Set([
+    "claude",
+    "codex",
+    "opencode",
+    "kimi",
+    "grok",
+    "antigravity",
+  ]);
   const allocated = new Set<string>();
   for (const shares of owned.values())
     for (const s of shares)

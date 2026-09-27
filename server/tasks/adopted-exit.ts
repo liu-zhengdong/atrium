@@ -6,6 +6,7 @@ import { parseEvents, type JsonEvent } from "./json-log.ts";
  * 按各工具日志的收尾结构判它是正常结束还是出错：纯函数。
  * - claude stream-json：最后的 result 事件 is_error=false、stop_reason=end_turn 为正常；其余 result 或没有 result 为出错。
  * - opencode --format json：最后一个 step_finish 的 reason=stop 为正常；之后出现 error 事件或 reason 是别的为出错。
+ * - agy stream-json：最后的 result 事件 status=SUCCESS 为正常；其余 status 或没有 result 为出错。
  * - codex：本轮写出了最后消息文件（-o）为正常；没有则判不了。
  * - kimi、grok 是纯文本日志，判不了。
  */
@@ -59,6 +60,23 @@ function opencodeEnd(events: JsonEvent[]): AdoptedEnd {
     : { end: "error", evidence: `最后一步 reason=${String(reason ?? "无")}` };
 }
 
+function agyEnd(events: JsonEvent[]): AdoptedEnd {
+  const result = object(
+    events.findLast((event) => event.event === "result")?.result,
+  );
+  if (!result) return { end: "error", evidence: "日志没有收尾的 result 事件" };
+  if (result.status === "SUCCESS")
+    return { end: "clean", evidence: "result 事件 status=SUCCESS" };
+  const error =
+    typeof result.error === "string" && result.error
+      ? `：${result.error.slice(0, 200)}`
+      : "";
+  return {
+    end: "error",
+    evidence: `result 事件 status=${String(result.status ?? "无")}${error}`,
+  };
+}
+
 export function adoptedEnd(input: {
   tool: Tool;
   /** 日志末尾（已去掉 [atrium] 行）；读不到时为 undefined。 */
@@ -75,6 +93,10 @@ export function adoptedEnd(input: {
       return input.log === undefined
         ? { end: "unknown" }
         : opencodeEnd(parseEvents(input.log));
+    case "agy":
+      return input.log === undefined
+        ? { end: "unknown" }
+        : agyEnd(parseEvents(input.log));
     case "codex":
       return input.lastMessage?.trim()
         ? { end: "clean", evidence: "写出了最终消息" }

@@ -1,6 +1,7 @@
 import { Problem } from "../problem.ts";
 import {
   ADAPTERS,
+  checkEffort,
   detectInstalled,
   findExecutable,
   type Tool,
@@ -62,6 +63,9 @@ export async function chooseWorker(
     : new Map();
   if (request.worker) {
     worker = await resolveWorker(request.worker, options.db);
+    // 写死的执行者：强度、模型搭配不合法当场报错，不等排到了才失败。
+    checkEffort(ADAPTERS[worker.tool], worker.effort);
+    ADAPTERS[worker.tool].checkModel?.(worker.cliModel, worker.effort);
     if (!findExecutable(ADAPTERS[worker.tool].executable, path))
       throw new Problem(
         400,

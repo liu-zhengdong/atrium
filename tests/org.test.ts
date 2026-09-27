@@ -11,7 +11,7 @@ import {
 } from "../server/org/write.ts";
 import { history, show, tree } from "../server/org/read.ts";
 import { formatOrgChanges } from "../cli/org.ts";
-import { roleCharter } from "../server/org/role.ts";
+import { matchRole } from "../server/org/task-node.ts";
 import {
   exportDocument,
   parseDocument,
@@ -335,19 +335,15 @@ test("导入仅预览、重复 apply 不重复建", () => {
     (show(db, "atrium/runtime") as { charter: { body: string } }).charter.body,
     "# runtime\n岗位正文",
   );
-  assert.deepEqual(roleCharter(db, "atrium/runtime"), {
-    body: "# runtime\n岗位正文",
-    ref: "o4",
-  });
-  assert.deepEqual(roleCharter(db, "modules/runtime"), {
-    body: "# runtime\n岗位正文",
-    ref: "o4",
-  });
-  assert.deepEqual(roleCharter(db, "o4"), {
-    body: "# runtime\n岗位正文",
-    ref: "o4",
-  });
-  assert.equal(roleCharter(db, "modules/other"), undefined);
+  const matched = (role: string, repo: string | null = "/tmp/repo") =>
+    matchRole(db, role, repo).node?.id ?? null;
+  assert.equal(matched("atrium/runtime"), 4);
+  assert.equal(matched("modules/runtime"), 4);
+  assert.equal(matched("runtime.md"), 4);
+  assert.equal(matched("o4"), 4);
+  assert.equal(matched("runtime", "/tmp/other"), null);
+  assert.equal(matched("concerns/runtime"), null);
+  assert.equal(matched("modules/other"), null);
   const changed = importOrg(
     db,
     { ...input, docs: [{ ...input.docs[0]!, body: "更新正文" }], apply: true },

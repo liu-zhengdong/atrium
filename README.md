@@ -162,6 +162,8 @@ atrium org import --repo ~/code/atrium --apply  # 显式写入；重复执行不
 atrium org tree                                 # 看节点层级
 atrium org show atrium/runtime                  # 看章程链和能力卡
 atrium org history atrium/runtime               # 看修订；--target charter --rev r2 看差异
+atrium task add "改派活" --role atrium/runtime --from atrium/质量   # 任务记到节点；--from 写投任务的关注点
+atrium org link-roles                           # 预览把旧 role 字符串的任务关联到节点；--apply 写入
 
 # 运行实例
 atrium runtimes                               # 本机发现的 Pi 实例
@@ -332,10 +334,12 @@ npm run test:pi -- --ui  # 隔离 UI 演示，最多保留 5 分钟
 
 CI 执行上述检查并留存 Pi 验收材料。开发设计、实际界面截图、真实模型验收范围和剩余接入事项见 [设计与首版追踪 issue #1](https://github.com/liu-zhengdong/atrium/issues/1)。
 
-### 组织树（#264 第 1 步）
+### 组织树（#264）
 
 `atrium org import` 预览 `~/Atrium/charter.md` 和当前仓库 `.agents/modules/`、`.agents/concerns/` 的导入计划；`atrium org import --apply` 才写入。可用 `atrium org import 章程.md --repo 仓库 --apply` 指定来源。重复导入不会重复建节点或修订。
 
 `atrium org tree` 看树，`atrium org show o1` 看节点，`atrium org add o2 runtime --kind module --name runtime --reason 拆模块` 增加节点。章程和能力卡用 `atrium org show o3 --charter --raw > 章程.md` 导出，用 `atrium org edit o3 --charter 章程.md --rev r1 --reason 更新目标` 写回；能力卡用 `--card`。`atrium org history o3` 查修订，`atrium org history o3 --target charter --rev r2` 看字段差异，`atrium org revert o3 --charter --to r1 --reason 回退` 追加恢复修订。`--as aN` 以身份名义按节点 leader 权限写入；根章程只有 `u1` 能改。读命令支持 `--json`。
 
-本步只存节点、仓库指针、章程与能力卡及修订历史。硬边界和预算暂保留在根章程正文，任务归属与派活将在后续步骤接入。
+**任务挂到节点（第 3 步）**：`atrium task add 标题 --role o4`（或 `atrium/runtime`）把任务记到节点，`--from 节点` 记下投任务的节点（关注点往模块投时）。旧写法 `--role runtime`、`modules/runtime`、`concerns/安全` 按任务仓库找挂了该仓库的同名模块或关注点；对不上时照旧只存 role、派活读仓库 `.agents`，回执提示 `atrium org link-roles`。已有任务不自动改，`atrium org link-roles` 预览关联结果和无法对应的任务，`--apply`（只有你能执行）在一个事务里只写 `node_id` 并记 `org_link` 事件，role 原值不动。
+
+派到节点的任务，提示词在岗位说明（节点章程正文）后附「章程要点」：链路、本节点与父节点目标、整条链的硬边界与记账节点，整段不超过 2000 字；边界完整附上，超长时先截父节点目标。由关注点投来的任务另附「投任务的专员说明」。`atrium org tree` 显示各节点子树里在做、卡住、待办的任务数和关注点投出的任务数，`atrium org show` 列节点手上最近的任务。预算份额与用量在后续步骤接入。

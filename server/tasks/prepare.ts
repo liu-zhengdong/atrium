@@ -1,5 +1,4 @@
 import { readFile, realpath } from "node:fs/promises";
-import type { DatabaseSync } from "node:sqlite";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
@@ -7,7 +6,7 @@ import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
 import { clock } from "./quota-holds.ts";
 import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
 import { idleFirst } from "./idle-first.ts";
-import { roleCharter } from "../org/role.ts";
+import type { Brief } from "../org/brief.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
@@ -28,16 +27,22 @@ export type PromptParts = {
   title: string;
   brief?: string;
   roleDoc?: string;
+  /** 章程要点（组织树节点的链路、目标与硬边界），紧跟岗位说明。 */
+  charter?: Brief;
+  /** 投任务的节点（关注点）的说明。 */
+  originDoc?: string;
   rootDoc?: string;
   profileBody?: string;
   rules?: readonly string[];
 };
 
-/** 拼派活提示词：标题、详述、岗位说明、组织说明、执行者叮嘱、通用约束；空段省略。 */
+/** 拼派活提示词：标题、详述、岗位说明、章程要点、投任务的专员说明、组织说明、执行者叮嘱、通用约束；空段省略。 */
 export function buildPrompt({
   title,
   brief,
   roleDoc,
+  charter,
+  originDoc,
   rootDoc,
   profileBody,
   rules = DEFAULT_RULES,
@@ -47,6 +52,8 @@ export function buildPrompt({
   const sections: [string, string | undefined][] = [
     ["任务详述", brief],
     ["岗位说明", roleDoc],
+    ...(charter ? [[charter.heading, charter.text] as [string, string]] : []),
+    ["投任务的专员说明", originDoc],
     ["组织说明（.agents/README.md）", rootDoc],
     ["给你的额外叮嘱", profileBody],
     ["通用约束", rules.map((rule) => `- ${rule}`).join("\n")],
@@ -97,23 +104,21 @@ async function insideAgents(agentsDir: string, file: string) {
 }
 
 /**
- * 读岗位说明：role 为 `modules/web`、`concerns/安全` 时按原路径找；只写名字（`web`）时依次找
- * modules/ 与 concerns/。另读根 `.agents/README.md`。文件不存在返回空串。
+ * 读岗位说明：任务对应组织节点（node，由 org/task-node.ts 解析）时取节点章程正文；否则按旧写法读仓库文件：
+ * role 为 `modules/web`、`concerns/安全` 时按原路径找，只写名字（`web`）时依次找 modules/ 与 concerns/。
+ * 另读根 `.agents/README.md`。文件不存在返回空串。
  */
 export async function loadRoleDocs(
   repo: string,
   role?: string,
-  db?: DatabaseSync,
+  node?: { body: string; ref: string },
 ): Promise<RoleDocs> {
   if (!isAbsolute(repo)) throw invalid("仓库须为绝对路径");
   const agentsDir = join(repo, ".agents");
   const rootDoc = (await readIfExists(join(agentsDir, "README.md"))) ?? "";
+  if (node) return { roleDoc: node.body, rootDoc, rolePath: node.ref };
   if (role === undefined || role === null) return { roleDoc: "", rootDoc };
   const segments = checkRole(role);
-  if (db) {
-    const node = roleCharter(db, role);
-    if (node) return { roleDoc: node.body, rootDoc, rolePath: node.ref };
-  }
   const name = segments.join("/");
   const candidates =
     segments.length === 1

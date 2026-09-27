@@ -15,6 +15,8 @@ import {
   type PaceEntry,
 } from "./prepare.ts";
 import type { ResolvedWorker, Risk } from "./profiles.ts";
+import { nodeDoc, taskNode } from "../org/task-node.ts";
+import { charterBrief } from "../org/brief.ts";
 
 /**
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
@@ -116,13 +118,14 @@ export async function prepareRun(
     cwd = join(dir, "work");
     mkdirSync(cwd, { recursive: true });
   }
+  const node = options.db ? taskNode(options.db, task) : undefined;
+  const origin =
+    options.db && task.origin_node_id !== null
+      ? nodeDoc(options.db, task.origin_node_id)
+      : undefined;
   const docs = task.repo
-    ? await loadRoleDocs(
-        worktree ?? task.repo,
-        task.role ?? undefined,
-        options.db,
-      )
-    : { roleDoc: "", rootDoc: "" };
+    ? await loadRoleDocs(worktree ?? task.repo, task.role ?? undefined, node)
+    : { roleDoc: node?.body ?? "", rootDoc: "" };
   const where = branch
     ? `工作目录：${cwd}（分支 ${branch}，基于 origin/${base}）。`
     : `工作目录：${cwd}（没有仓库，结果写在最后的回复里）。`;
@@ -130,6 +133,10 @@ export async function prepareRun(
     title: task.title,
     brief,
     roleDoc: docs.roleDoc,
+    charter: node && options.db ? charterBrief(options.db, node.id) : undefined,
+    originDoc: origin
+      ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
+      : undefined,
     rootDoc: docs.rootDoc,
     profileBody: worker.profile.body,
     rules: [where, ...deliveryRules(task)],

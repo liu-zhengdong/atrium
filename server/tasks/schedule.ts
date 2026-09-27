@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { advanceTask, getTask, noteTask, type Task } from "./ledger.ts";
-import { all, taskRef, usage, type TaskRow } from "./ledger-model.ts";
+import { all, taskRef, usage, view, type TaskRow } from "./ledger-model.ts";
 import { conditions } from "./schedule-ledger.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
@@ -72,9 +72,7 @@ export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
   }));
   return {
     task: {
-      ...row,
-      ref: taskRef(row.id),
-      parent_ref: row.parent_id === null ? null : taskRef(row.parent_id),
+      ...view(row),
       ...noteView(db, row.id, row.status),
     },
     ...classify(row.status, tasks, prs, row.schedule_reason),

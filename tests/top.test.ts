@@ -419,6 +419,20 @@ test("看板：卡住后补备注显示处理中，备注列在任务行下并�
   assert.ok(lines.every((line) => width(line) <= 80));
 });
 
+test("看板：紧急任务的标题前写「紧急」，照样受终端宽度约束", () => {
+  const frame = renderTop(
+    snapshot([
+      row({ ref: "t112", title: "修全景网页打不开", urgent: true }),
+      row({ ref: "t9", title: "普通任务" }),
+    ]),
+    { width: 80, now: NOW, footer: false, color: false },
+  );
+  const lines = frame.split("\n");
+  assert.match(lines[1]!, /^● t112 {2}紧急 修全景网页打不开/);
+  assert.doesNotMatch(lines[2]!, /紧急/);
+  assert.ok(lines.every((line) => width(line) <= 80));
+});
+
 test("看板：窄终端省掉执行者列，再窄就截标题与最近动作", () => {
   const rows = [
     row({ ref: "t22" }),
@@ -686,6 +700,7 @@ test("次序：在跑的按跑了多久、排队按入队顺序、受阻与刚�
     ended_at: null,
     queued_at: null,
     reason: null,
+    urgent: false,
     updated_at: NOW,
     note: null,
     note_by: null,
@@ -768,6 +783,7 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
       maxWorkers: null,
       maxChecks: 1,
       testConcurrency: 1,
+      busyCores: null,
       busyLoad: 16,
     },
     () => 170,
@@ -847,7 +863,7 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
   assert.equal(body.rows[1]!.worker, "opencode+mimo");
   assert.equal(body.rows[1]!.action, null);
   assert.equal(body.rows[2]!.reason, "CI 未运行");
-  assert.match(body.host!.paused!, /本机太忙（负载 170，超过 16）/);
+  assert.match(body.host!.paused!, /本机太忙（整机负载 170，超过 16）/);
   // top 不是任务短号：单独确认没被 :id 路由吃掉。
   assert.equal((await call("GET", "/api/tasks/t1")).body.ref, "t1");
   assert.match(

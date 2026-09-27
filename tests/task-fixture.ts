@@ -136,7 +136,7 @@ export async function startApp(
   });
   t.after(() => app.close());
   const call = async (
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PATCH",
     url: string,
     payload?: object,
   ) => {

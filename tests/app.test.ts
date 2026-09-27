@@ -230,7 +230,12 @@ test("旧运行时留下的表原样保留，精简入口照常启动且不读�
   legacy.exec(`CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT);
     INSERT INTO agents VALUES ('x','旧身份');
     CREATE TABLE inbox_tokens (agent_id TEXT PRIMARY KEY REFERENCES agents(id), token_hash TEXT);
-    CREATE TABLE user_auth (id INTEGER PRIMARY KEY CHECK(id=1), token_hash TEXT NOT NULL);`);
+    CREATE TABLE user_auth (id INTEGER PRIMARY KEY CHECK(id=1), token_hash TEXT NOT NULL);
+    CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER, title TEXT NOT NULL,
+      brief_path TEXT, role TEXT, repo TEXT, status TEXT NOT NULL, worker TEXT, pid INTEGER, worktree TEXT,
+      branch TEXT, pr_url TEXT, ci TEXT, result TEXT, created_at INTEGER NOT NULL, started_at INTEGER,
+      ended_at INTEGER, updated_at INTEGER NOT NULL);
+    INSERT INTO tasks(title,status,created_at,updated_at) VALUES ('紧急：旧任务','todo',0,0);`);
   legacy.close();
   const { app, db } = await createApp({
     data,
@@ -246,6 +251,11 @@ test("旧运行时留下的表原样保留，精简入口照常启动且不读�
         .all()
         .map((row) => ({ ...row })),
       [{ id: "x", name: "旧身份" }],
+    );
+    // 旧版账本补上紧急列（t113）：标题写「紧急：」的旧任务不自动转换。
+    assert.deepEqual(
+      { ...db.prepare("SELECT title,urgent FROM tasks WHERE id=1").get() },
+      { title: "紧急：旧任务", urgent: 0 },
     );
   } finally {
     await app.close();

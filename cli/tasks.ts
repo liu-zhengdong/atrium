@@ -19,6 +19,7 @@ import {
   type RunPick,
 } from "../server/tasks/pick.ts";
 import { briefInput } from "./brief-input.ts";
+import { URGENT_NOTE } from "../server/tasks/host-load.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
@@ -58,6 +59,9 @@ const noteLine = (task: Task) =>
   task.note
     ? `  备注（${noteAuthor(task)} · ${when(task.note_at!)}）：${task.note.replace(/\s+/g, " ")}`
     : null;
+
+/** 标了紧急的回执说清跳过了什么（t113）。 */
+const urgentLines = (task: Task) => (task.urgent === 1 ? [URGENT_NOTE] : []);
 
 /** 命令行只认 t 开头的短号；接口另外接受纯数字。 */
 function ref(value: string | undefined, flag: string) {
@@ -163,9 +167,9 @@ function partInput(values: Values): { part?: string; goal?: string } {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分，--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；旧 --job、--concern、--role 暂可用",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分，--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急（跳过本机负载限制、排队插到最前）；旧 --job、--concern、--role 暂可用",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
@@ -184,6 +188,7 @@ const add: Command = {
     after: { type: "string" },
     "after-pr": { type: "string" },
     auto: { type: "boolean" },
+    urgent: { type: "boolean" },
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
@@ -250,6 +255,7 @@ const add: Command = {
         ? {}
         : { after_pr: str(values, "after-pr") }),
       ...(values.auto === true ? { auto: true } : {}),
+      ...(values.urgent === true ? { urgent: true } : {}),
     };
     const task = await (await client()).post<Task>("/tasks", body);
     if (json) printJson(task);
@@ -257,6 +263,7 @@ const add: Command = {
       console.log(
         [
           `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}${task.concerns?.length ? ` · 请了 ${task.concerns.map((c) => c.name).join("、")}` : ""}`,
+          ...urgentLines(task),
           ...roleHint(task),
           ...hintLines(task),
         ].join("\n"),
@@ -305,7 +312,7 @@ const ls: Command = {
           task.ref,
           displayStatus(task),
           task.parent_ref ?? "",
-          clip(task.title, 40),
+          clip(`${task.urgent === 1 ? "紧急 " : ""}${task.title}`, 40),
           task.worker ?? "",
           task.pr_url ?? "",
         ]),
@@ -354,6 +361,10 @@ const show: Command = {
       const rows: [string, string | number | null][] = [
         ["标题", task.title],
         ["状态", displayStatus(task)],
+        [
+          "紧急",
+          task.urgent === 1 ? "是（跳过本机负载限制，排队插到最前）" : null,
+        ],
         ["合入交回次数", task.merge_returns || null],
         ["审阅任务", task.review_task ? `t${task.review_task}` : null],
         ["排队原因", task.queued_reason ?? null],
@@ -397,7 +408,7 @@ const show: Command = {
       ];
       console.log(
         [
-          `${task.ref} · ${task.title}`,
+          `${task.ref} · ${task.urgent === 1 ? "紧急 " : ""}${task.title}`,
           ...rows
             .slice(1)
             .filter(([, value]) => value !== null && value !== "")
@@ -469,8 +480,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、详述、交付物、依赖和自动派发`,
+  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、详述、交付物、依赖、自动派发和紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
@@ -489,6 +500,8 @@ const set: Command = {
     after: { type: "string" },
     "after-pr": { type: "string" },
     auto: { type: "boolean" },
+    urgent: { type: "boolean" },
+    "no-urgent": { type: "boolean" },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
@@ -541,10 +554,14 @@ const set: Command = {
     if (str(values, "after-pr") !== undefined)
       body.after_pr = str(values, "after-pr")!;
     if (values.auto === true) body.auto = true;
+    if (values.urgent === true && values["no-urgent"] === true)
+      throw new Problem(400, "--urgent 与 --no-urgent 只能给一个", "usage");
+    if (values.urgent === true) body.urgent = true;
+    if (values["no-urgent"] === true) body.urgent = false;
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
+        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--brief、--deliver、--issue、--after、--after-pr、--auto 或 --urgent/--no-urgent",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -555,6 +572,8 @@ const set: Command = {
       console.log(
         [
           `${task.ref} 已更新 · [${task.status}] ${task.title}`,
+          ...(body.urgent === true ? urgentLines(task) : []),
+          ...(body.urgent === false ? ["已取消紧急：照常受本机负载限制"] : []),
           ...(role !== undefined ? roleHint(task) : []),
           ...(concern !== undefined || ask !== undefined
             ? [
@@ -668,7 +687,7 @@ const plan: Command = {
         console.log(`${label}（${result.groups[group].length}）`);
         for (const item of result.groups[group])
           console.log(
-            `  ${item.task.ref} ${item.task.title}${item.task.queued_reason ? ` · 排队：${item.task.queued_reason}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
+            `  ${item.task.ref} ${item.task.urgent === 1 ? "紧急 " : ""}${item.task.title}${item.task.queued_reason ? ` · 排队：${item.task.queued_reason}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
           );
       }
     }
@@ -696,16 +715,19 @@ const done: Command = {
 };
 
 const run: Command = {
-  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high]",
-  about: "派给执行者（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low",
+  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--urgent]",
+  about:
+    "派给执行者（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low；--urgent 同时标紧急，跳过本机负载限制（额度保留、trust、依赖照旧）",
   options: {
     worker: { type: "string" },
     risk: { type: "string" },
+    urgent: { type: "boolean" },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const id = ref(reference, "任务");
-    const body: Record<string, string> = {};
+    const body: Record<string, string | boolean> = {};
+    if (values.urgent === true) body.urgent = true;
     const worker = str(values, "worker");
     if (worker !== undefined) {
       if (!worker.trim())
@@ -741,6 +763,7 @@ const run: Command = {
           result.queued
             ? `${task.ref} 排队中：${queuedReason(task.events)}`
             : `已派 ${task.ref} 给 ${task.worker}（PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
+          ...urgentLines(task),
           ...pickLines(result.pick),
         ].join("\n"),
       );

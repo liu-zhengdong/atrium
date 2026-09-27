@@ -10,6 +10,7 @@ import {
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { workerEnvironment } from "./worker-env.ts";
+import { checkPlacement } from "./host-load.ts";
 
 /** 本地检查只由运行时执行；队列在同一服务进程的所有任务之间共享。 */
 export const LOCAL_CHECK_TIMEOUT_MS = 15 * 60_000;
@@ -21,9 +22,13 @@ export type LocalCheck = {
   failedTests: string[];
 };
 
-/** 本地检查排队：同时最多 limit 个（缺省 1，即串行），其余按到达顺序等空位（#358）。 */
+/**
+ * 本地检查排队：同时最多 limit 个（缺省 1，即串行），其余按到达顺序等空位（#358）。
+ * 紧急任务的检查（t113）立刻跑、不占名额，也不让等着的普通检查多等一个空位（host-load.ts checkPlacement）。
+ */
 export class LocalCheckQueue {
   private active = 0;
+  private urgentActive = 0;
   private readonly waiters: (() => void)[] = [];
 
   constructor(private max = 1) {}
@@ -39,7 +44,10 @@ export class LocalCheckQueue {
   }
 
   get size() {
-    return { running: this.active, waiting: this.waiters.length };
+    return {
+      running: this.active + this.urgentActive,
+      waiting: this.waiters.length,
+    };
   }
 
   private pump() {
@@ -49,8 +57,24 @@ export class LocalCheckQueue {
     }
   }
 
-  async run<T>(work: () => Promise<T>, queued?: () => void): Promise<T> {
-    if (this.active >= this.max) {
+  async run<T>(
+    work: () => Promise<T>,
+    queued?: () => void,
+    urgent = false,
+  ): Promise<T> {
+    if (
+      checkPlacement({ urgent, active: this.active, max: this.max }) === "run"
+    ) {
+      if (urgent) {
+        this.urgentActive++;
+        try {
+          return await work();
+        } finally {
+          this.urgentActive--;
+        }
+      }
+      this.active++;
+    } else {
       try {
         queued?.();
       } catch {
@@ -60,7 +84,7 @@ export class LocalCheckQueue {
         this.waiters.push(resolve);
         this.pump();
       });
-    } else this.active++;
+    }
     try {
       return await work();
     } finally {
@@ -140,6 +164,8 @@ export async function runLocalCheck(input: {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   onStatus?: (status: "queued" | "started", log: string) => void;
+  /** 紧急任务（t113）：立刻跑，不占并发名额。 */
+  urgent?: boolean;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
   return (input.queue ?? sharedLocalChecks).run(
@@ -226,5 +252,6 @@ export async function runLocalCheck(input: {
       return { status, command, log, detail, failedTests };
     },
     () => input.onStatus?.("queued", log),
+    input.urgent,
   );
 }

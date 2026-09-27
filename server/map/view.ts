@@ -56,6 +56,8 @@ export type MapTask = {
   title: string;
   status: string;
   queued: boolean;
+  /** 标了紧急（t113）：跳过本机负载限制、排队插到最前。 */
+  urgent: boolean;
   worker: string | null;
   started_at: number | null;
   updated_at: number;
@@ -281,6 +283,7 @@ export type TaskRow = {
   delivery_stage: string | null;
   ended_at: number | null;
   job_id: number | null;
+  urgent?: number | null;
 };
 
 /** 角色短号 → 名称；旧库没有角色表时为空。 */
@@ -311,6 +314,7 @@ export function taskView(
     title: row.title,
     status: row.status,
     queued: live?.queued_at != null,
+    urgent: row.urgent === 1,
     worker: row.worker ?? live?.worker ?? null,
     started_at: row.started_at,
     updated_at: row.updated_at,
@@ -337,7 +341,7 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
   );
 }
 export const taskColumns = (db: DatabaseSync) =>
-  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"}`;
+  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
 
 /** 仓库路径 → GitHub 地址：从账本里已有的 PR 链接推出来，推不出的不给链接。 */

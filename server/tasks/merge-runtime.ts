@@ -24,6 +24,10 @@ type View = {
 };
 class MergeHold extends Error {}
 
+/** 下一个合入：正在合入的先做完，再是紧急的（t113），其余按入队先后。 */
+export const NEXT_MERGE =
+  "SELECT id FROM tasks WHERE delivery_stage IN ('merge_queued','merging') AND status='done' ORDER BY delivery_stage='merging' DESC,urgent DESC,merge_queued_at,id LIMIT 1";
+
 /** PR 合入队列。状态先落库，单服务内只运行一个队首；重启后从账本续上。 */
 export class MergeQueue {
   private draining = false;
@@ -204,11 +208,7 @@ export class MergeQueue {
 
   kick() {
     if (this.closed || this.draining || Date.now() < this.retryAfter) return;
-    const row = this.db
-      .prepare(
-        "SELECT id FROM tasks WHERE delivery_stage IN ('merge_queued','merging') AND status='done' ORDER BY merge_queued_at,id LIMIT 1",
-      )
-      .get() as { id: number } | undefined;
+    const row = this.db.prepare(NEXT_MERGE).get() as { id: number } | undefined;
     if (!row || !this.claim.acquire(row.id)) return;
     this.active = this.drain().catch((error) =>
       console.error("合入队列失败：", redact(String(error))),
@@ -219,11 +219,8 @@ export class MergeQueue {
     this.draining = true;
     try {
       while (!this.closed) {
-        const row = this.db
-          .prepare(
-            "SELECT id FROM tasks WHERE delivery_stage IN ('merge_queued','merging') AND status='done' ORDER BY merge_queued_at,id LIMIT 1",
-          )
-          .get() as { id: number } | undefined;
+        const row = this.db.prepare(NEXT_MERGE).get() as
+          { id: number } | undefined;
         if (!row) return;
         this.stage(row.id, "merging", "merge_started");
         try {
@@ -413,6 +410,7 @@ export class MergeQueue {
       taskDir: taskDir(this.options.data, task.id),
       env: this.options.env,
       signal: this.abort.signal,
+      urgent: task.urgent === 1,
       onStatus: (status, log) => {
         if (!this.closed)
           noteTask(this.db, task.id, `merge_check_${status}`, { log });

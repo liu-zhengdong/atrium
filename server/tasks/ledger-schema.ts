@@ -62,6 +62,11 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec(
       "ALTER TABLE tasks ADD COLUMN auto_dispatched INTEGER NOT NULL DEFAULT 0 CHECK(auto_dispatched IN (0,1))",
     );
+  // 紧急（t113）：跳过本机负载与执行者上限，排队与本地检查插到最前；标题写「紧急：」不算。
+  if (!columns.some((column) => column.name === "urgent"))
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0 CHECK(urgent IN (0,1))",
+    );
   if (!columns.some((column) => column.name === "schedule_state"))
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_state TEXT");
   if (!columns.some((column) => column.name === "schedule_reason"))

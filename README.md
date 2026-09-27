@@ -58,6 +58,7 @@ atrium task done t3                                             # 人工完成�
 atrium task add "回复一句话" --deliver none
 atrium task pick t4                         # 看候选（只读）：能不能接、账号额度、正忙、交付记录，最上面是推荐与理由
 atrium task run t4 --worker claude          # 派给执行者；不写 --worker 按额度挑，--risk 缺省 low
+atrium task run t5 --urgent                  # 紧急：跳过本机负载限制，排队插到最前
 atrium task wait t4 --timeout 600           # PR 任务等到合入或卡住；其他任务等到离开 running
 atrium task log t4                          # 执行者日志；--follow 跟到结束，--after 字节偏移续读
 atrium task stop t4                         # 停执行者或合入队列；合入中会在安全点停下
@@ -75,7 +76,9 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 
 派活时运行时建 worktree（没有仓库时用任务目录下的 `work/`），把标题、详述（`--brief`）、岗位章程、仓库 `.agents/README.md`、执行者档案正文和通用约束拼成提示词，以白名单环境在独立进程组拉起执行者；服务重启不带走执行者，重启后按 pid 接管或判失败。
 
-**本机减负**（#358）：同时在跑的执行者超过上限（缺省核数的 3/4，`ATRIUM_MAX_WORKERS`），或 1 分钟负载超过阈值（缺省 2×核数，`ATRIUM_BUSY_LOAD`）时，新派的活落库排队（`task show` 的排队原因写「本机同时最多跑 N 个执行者」或「本机太忙（负载 X，超过 Y）」），有执行者结束或负载降下来后按入队顺序自动拉起；`atrium top` 抬头显示「本机太忙，排队中」，`top --json` 的 `host` 字段给出负载、在跑数与上限。已在跑任务的重试、续上不受限。本地检查同时最多跑核数的 1/4（`ATRIUM_MAX_CHECKS`），其余排队；执行者与本地检查的环境带 `ATRIUM_TEST_CONCURRENCY`（缺省核数的 1/4），仓库测试脚本据此限并发（本仓库的 `npm test` 传给 `--test-concurrency`）。
+**本机减负**（#358）：同时在跑的执行者超过上限（缺省核数的 3/4，`ATRIUM_MAX_WORKERS`），或本机太忙时，新派的活落库排队，有执行者结束或降下来后按入队顺序自动拉起。「太忙」有两条线：主线只看 Atrium 自己起的进程树（执行者及其子进程、本地检查、合入检查）占了几个核，超过核数的 3/4（8 核即 6 核，`ATRIUM_BUSY_CORES`）才暂停，系统进程再忙也不挡；整机 1 分钟负载只留一条保护线（缺省 4×核数，8 核即 32，`ATRIUM_BUSY_LOAD`），防止整台机器已经卡死时还往上加。进程树按平台统计：Linux 读 `/proc`，macOS 用 `ps`，Windows 经 PowerShell 查性能计数器。`task show` 的排队原因、`atrium top` 抬头与状态栏写清是哪条线：「本机太忙（Atrium 自己占了 6.3 核，超过 6）」「本机太忙（整机负载 35，超过 32）」「本机同时最多跑 N 个执行者」；`top --json` 的 `host` 字段给出负载、Atrium 占的核数、在跑数、上限与 `paused_by`（`own` / `load` / `full`）。已在跑任务的重试、续上不受限。本地检查同时最多跑核数的 1/4（`ATRIUM_MAX_CHECKS`），其余排队；执行者与本地检查的环境带 `ATRIUM_TEST_CONCURRENCY`（缺省核数的 1/4），仓库测试脚本据此限并发（本仓库的 `npm test` 传给 `--test-concurrency`）。
+
+**紧急任务**（t113）：`task add … --urgent`、`task set tN --urgent|--no-urgent`、`task run tN --urgent`（派的同时标上）；秘书与 leader 都可以标。标了紧急的跳过上面两条太忙的线和执行者上限，在排队、排期就绪组里排最前；本地检查（包括合入队列的检查）立刻跑、不占并发名额，合入队列里也排在普通任务前面。其余限制照旧：额度保留份额、执行者 trust / `max_risk`、依赖。已在排队的任务标上紧急后立刻拉起。回执写「紧急：跳过本机负载限制」，`task show`、`top`、状态栏与全景任务行显示「紧急」。只认这个字段，标题以「紧急：」开头的旧任务不自动转换。
 
 **捎话**（`task tell`）按工具能力分三档：Claude Code 以 `--input-format stream-json` 拉起、标准输入保持打开，补充作为新的用户消息即时写入，在工具调用边界读入，回显后记为已送达；codex 不能运行中追加，本轮结束后用 `codex exec resume <会话>` 带着补充续上原会话，关卡按续上后的结果判；其余工具停掉、保留工作树、把补充写进提示词重派。档案 `tell: stdin|resume|restart` 可改成工具支持的其他方式。每条捎话记一条 `tell` 事件（作者、时间、送达方式、是否送达），`task show` 与 `top` 可见；任务不在跑时留到下次拉起写进提示词。
 
@@ -370,24 +373,25 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 
 ## 配置与数据
 
-| 环境变量                        | 用途                                                          |
-| ------------------------------- | ------------------------------------------------------------- |
-| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口             |
-| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                   |
-| `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers` |
-| `ATRIUM_LEGACY_DIR`             | 旧状态目录，默认 `~/Atrium`；启动时从这里导入一次根章程预算   |
-| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`    |
-| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                   |
-| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                           |
-| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                                |
-| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60             |
-| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                              |
-| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                |
-| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`    |
-| `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限  |
-| `ATRIUM_BUSY_LOAD`              | 1 分钟负载超过多少暂停派新活，默认 2×核数；`0` 不看负载       |
-| `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的 1/4（至少 1）                  |
-| `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数的 1/4（至少 1）      |
+| 环境变量                        | 用途                                                             |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口                |
+| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                      |
+| `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers`    |
+| `ATRIUM_LEGACY_DIR`             | 旧状态目录，默认 `~/Atrium`；启动时从这里导入一次根章程预算      |
+| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`       |
+| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                      |
+| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                              |
+| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                                   |
+| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60                |
+| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                                 |
+| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                   |
+| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`       |
+| `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限     |
+| `ATRIUM_BUSY_CORES`             | Atrium 进程树占用超过几个核暂停派新活，默认核数的 3/4；`0` 不看  |
+| `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载 |
+| `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的 1/4（至少 1）                     |
+| `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数的 1/4（至少 1）         |
 
 Atrium 的状态都在数据目录的数据库里（任务详述、组织树与章程预算等），换机器带走数据目录即可；旧状态的导入每类只做一次，记在 `state_imports` 表，重复启动不重复导入。数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
 

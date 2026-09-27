@@ -33,6 +33,8 @@ export type TopRow = {
   ended_at: number | null;
   queued_at: number | null;
   reason: string | null;
+  /** 标了紧急（t113）；旧版服务没有这个字段。 */
+  urgent?: boolean;
   updated_at: number;
   note: string | null;
   note_by: string | null;
@@ -165,6 +167,10 @@ export const phase = (row: TopRow) =>
         ? row.status
         : row.status));
 
+/** 任务行的标题：标了紧急的前面写「紧急」（t113）。 */
+export const titleOf = (row: TopRow) =>
+  row.urgent ? `紧急 ${row.title}` : row.title;
+
 /** 排队与受阻没有时长可言，直接说清在等什么。 */
 function state(row: TopRow, now: number) {
   const kind = phase(row);
@@ -249,7 +255,7 @@ export function layoutOf(
   const titleW = Math.max(
     MIN_TITLE,
     Math.min(
-      Math.max(MIN_TITLE, ...rows.map((row) => width(row.title))),
+      Math.max(MIN_TITLE, ...rows.map((row) => width(titleOf(row)))),
       Math.max(MIN_TITLE, Math.floor(room * TITLE_SHARE)),
     ),
   );
@@ -263,13 +269,29 @@ export function layoutOf(
   };
 }
 
-/** 抬头里的本机状态（#358）：只在暂停派新活时出现，放在排队数后面免得被截掉。 */
+/**
+ * 抬头里的本机状态（#358）：只在暂停派新活时出现，放在排队数后面免得被截掉；
+ * 写清是哪条线触发的（t113）：Atrium 自己占的核数，还是整机负载保护线，还是执行者满了。
+ */
 export function hostBrief(host: HostView | undefined): string {
   if (!host?.paused) return "";
   const load = (value: number) =>
     value >= 10 ? value.toFixed(0) : value.toFixed(1);
-  if (host.busy_load !== null && host.load > host.busy_load)
-    return ` · 本机太忙，排队中（负载 ${load(host.load)}/${load(host.busy_load)}）`;
+  const cores = (value: number) =>
+    Number.isInteger(value) ? String(value) : value.toFixed(1);
+  if (
+    host.paused_by === "own" &&
+    host.own_cores != null &&
+    host.busy_cores != null
+  )
+    return ` · 本机太忙，排队中（Atrium 自己占了 ${cores(host.own_cores)} 核，超过 ${cores(host.busy_cores)}）`;
+  if (
+    host.paused_by === "load" ||
+    (host.paused_by === undefined &&
+      host.busy_load !== null &&
+      host.load > host.busy_load)
+  )
+    return ` · 本机太忙，排队中（整机负载 ${load(host.load)}，超过 ${load(host.busy_load!)}）`;
   return ` · 本机满 ${host.running}/${host.max_workers}，排队中`;
 }
 
@@ -308,7 +330,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       const cell = clip(states[index]!, plan.stateW + 2 + plan.actionW);
       const text = [
         `${SYMBOL[row.processing && phase(row) === "blocked" ? "processing" : phase(row)] ?? "·"} ${pad(row.ref, plan.refW)}`,
-        pad(clip(row.title, plan.titleW), plan.titleW),
+        pad(clip(titleOf(row), plan.titleW), plan.titleW),
         ...(plan.showWorker
           ? [pad(clip(row.worker ?? "", plan.workerW), plan.workerW)]
           : []),

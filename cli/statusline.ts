@@ -3,7 +3,7 @@ import type { Holder, HolderKind } from "../server/tasks/holder.ts";
 import { printJson, clip } from "./format.ts";
 import type { Command } from "./main.ts";
 import type { Client } from "./service.ts";
-import { duration, type Snapshot, type TopRow } from "./top.ts";
+import { duration, hostBrief, type Snapshot, type TopRow } from "./top.ts";
 import type { PlanView } from "./top-plan.ts";
 
 /**
@@ -53,7 +53,7 @@ type Paint = (color: string, text: string) => string;
 
 function taskLine(row: TopRow, holder: Holder, now: number, paint: Paint) {
   const [mark, color] = MARK[holder.kind];
-  const title = `「${clip(row.title, TITLE_MAX)}」`;
+  const title = `${row.urgent ? `${paint(`${BOLD}${RED}`, "紧急")} ` : ""}「${clip(row.title, TITLE_MAX)}」`;
   if (holder.kind === "user")
     return `${paint(color, mark)} ${row.ref} ${title} ${paint(color, `等你：${holder.text}`)}`;
   if (holder.kind === "worker") {
@@ -105,7 +105,8 @@ export function renderStatusline(input: StatuslineInput): string {
     ...(count("queue") ? [`排队 ${count("queue")}`] : []),
   ];
   const head = [
-    `Atrium ${parts.join(" · ")}`,
+    // 暂停派新活时写清是哪条线（t113）：Atrium 自己占的核、整机负载保护线，还是执行者满了。
+    `Atrium ${parts.join(" · ")}${hostBrief(snapshot.host)}`,
     ...(count("user") ? [paint(`${BOLD}${RED}`, `等你 ${count("user")}`)] : []),
     ...(events
       ? [

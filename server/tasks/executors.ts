@@ -89,7 +89,8 @@ export type ExecutorContext = {
   /** 会审（#322）：专员意见或 leader 汇总结束后推进会审（否则等下一轮巡检）。 */
   councils?: { settle: () => void };
   /** 本机还能不能再拉起一个执行者（#358 并发上限与负载）；缺省不限。 */
-  hostGate?: () => HostGate;
+  /** 本机闸门（#358）；紧急任务传 urgent，跳过负载与执行者上限。 */
+  hostGate?: (urgent: boolean) => HostGate;
 };
 
 export class Executors {
@@ -344,6 +345,7 @@ export class Executors {
           this.ctx.waits.changed(id);
         },
         this.ctx.launchOptions.env,
+        getTask(this.ctx.db, id).urgent === 1,
       );
       if (this.ctx.closed()) return;
       this.collectSkills(active);
@@ -665,7 +667,7 @@ export class Executors {
   }
 
   /**
-   * 拉起排队中的任务：每个工具的队首，前提是独占工具空闲、账号额度标记已解除、本机没满也不太忙；
+   * 拉起排队中的任务：每个工具的队首（紧急的在前），前提是独占工具空闲、账号额度标记已解除、本机没满也不太忙（紧急的不看这两条）；
    * 返回出队几个。几处（退出收尾、巡检、额度解除）可能同时调用，出队以删到队列行为准。
    */
   async drain(tool?: Tool) {
@@ -678,7 +680,8 @@ export class Executors {
         continue;
       if (ADAPTERS[entryTool].exclusive && this.busy(entryTool)) continue;
       // 判定与占位之间没有 await：同时进来的另一轮 drain 看得到这里的 launching。
-      const gate = this.ctx.hostGate?.();
+      // 队首按紧急在前排好：普通任务被挡住时，后面不会还有紧急的。
+      const gate = this.ctx.hostGate?.(entry.urgent);
       if (gate && !gate.ok) break;
       if (!dequeue(this.ctx.db, entry.task_id)) continue;
       moved++;

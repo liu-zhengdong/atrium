@@ -315,6 +315,82 @@ test(
 );
 
 test(
+  "紧急任务走真实后台服务：本机太忙时普通任务排队，--urgent 立刻派出，top 标紧急",
+  { timeout: 90_000 },
+  async (t) => {
+    const f = await fixture(t);
+    const worker = workerFixture(t);
+    for (const tool of ["grok", "codex"]) {
+      writeFileSync(
+        join(worker.workers, "harness", `${tool}.md`),
+        "---\nlimits: {startup_minutes: 10}\n---\n",
+      );
+      writeFileSync(join(worker.root, "bin", tool), "#!/bin/sh\nsleep 120\n", {
+        mode: 0o755,
+      });
+    }
+    f.env.ATRIUM_WORKERS_DIR = worker.workers;
+    f.env.PATH = worker.env.PATH;
+    f.env.HOME = worker.env.HOME;
+    // 整机负载保护线调到几乎为 0：普通任务一定排队。
+    f.env.ATRIUM_BUSY_LOAD = "0.001";
+    assert.equal((await f.cli("--no-open")).code, 0);
+    const a = await f.cli("task", "add", "普通 A", "--repo", worker.repo);
+    assert.equal(a.code, 0, a.stderr);
+    const b = await f.cli(
+      "task",
+      "add",
+      "修全景网页",
+      "--repo",
+      worker.repo,
+      "--urgent",
+    );
+    assert.equal(b.code, 0, b.stderr);
+    assert.match(b.stdout, /紧急：跳过本机负载限制/);
+    const queued = await f.cli("task", "run", "t1", "--worker", "grok");
+    assert.equal(queued.code, 0, queued.stderr);
+    assert.match(
+      queued.stdout,
+      /t1 排队中：本机太忙（整机负载 .+，超过 0\.0）/,
+    );
+    const urgent = await f.cli(
+      "task",
+      "run",
+      "t2",
+      "--worker",
+      "codex",
+      "--urgent",
+    );
+    assert.equal(urgent.code, 0, urgent.stderr);
+    assert.match(urgent.stdout, /已派 t2 给 codex/);
+    assert.match(urgent.stdout, /紧急：跳过本机负载限制/);
+    const top = JSON.parse((await f.cli("top", "--json")).stdout).result as {
+      rows: { ref: string; urgent: boolean }[];
+      host: { paused_by: string };
+    };
+    assert.equal(top.rows.find((row) => row.ref === "t2")?.urgent, true);
+    assert.equal(top.host.paused_by, "load");
+    const shown = await f.cli("task", "show", "t2");
+    assert.match(shown.stdout, /t2 · 紧急 修全景网页/);
+    assert.match(shown.stdout, /紧急：是（跳过本机负载限制/);
+    // 破坏输入：两个开关一起给。
+    const both = await f.cli("task", "set", "t2", "--urgent", "--no-urgent");
+    assert.notEqual(both.code, 0);
+    assert.match(both.stderr, /--urgent 与 --no-urgent 只能给一个/);
+    const off = await f.cli("task", "set", "t2", "--no-urgent");
+    assert.equal(off.code, 0, off.stderr);
+    assert.match(off.stdout, /已取消紧急/);
+    // 排队中的 t1 标上紧急：不等巡检，回执之前已拉起。
+    const on = await f.cli("task", "set", "t1", "--urgent");
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stdout, /t1 已更新 · \[running\]/);
+    assert.match(on.stdout, /紧急：跳过本机负载限制/);
+    for (const ref of ["t1", "t2"])
+      assert.equal((await f.cli("task", "stop", ref)).code, 0);
+  },
+);
+
+test(
   "用户令牌轮换与丢失后恢复走真实后台服务",
   { timeout: 45000 },
   async (t) => {

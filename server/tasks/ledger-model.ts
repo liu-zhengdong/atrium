@@ -48,6 +48,8 @@ export type TaskRow = {
   owner: string | null;
   auto: number;
   auto_dispatched: number;
+  /** 1 表示紧急（t113）：跳过本机负载限制，排队插到最前。 */
+  urgent: number;
   schedule_state: string | null;
   schedule_reason: string | null;
   node_id: number | null;

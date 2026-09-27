@@ -1,9 +1,8 @@
-import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { recentAction } from "./action.ts";
-import { taskDir, type Active } from "./active.ts";
+import { taskDir } from "./active.ts";
 import { ADAPTERS, isTool, type Tool } from "./adapters/index.ts";
 import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
 import { EventInbox } from "./events.ts";
@@ -80,7 +79,6 @@ export class TaskRunner {
   private closed = false;
   private polling = false;
   /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
-  private readonly cwds = new Map<number, string>();
   private recovered = false;
 
   constructor(
@@ -445,11 +443,9 @@ export class TaskRunner {
         events: this.inbox.countPending(who),
       },
       rows: rows.map((row, index) => {
-        const id = Number(row.ref.slice(1));
         const action = recentAction({
           tool: toolOf(row.worker),
           tail: logs[index]!.text,
-          cwd: this.cwdOf(id, this.x.active.get(id)),
         });
         return {
           ...row,
@@ -459,26 +455,6 @@ export class TaskRunner {
       }),
       truncated,
     };
-  }
-
-  /**
-   * 日志里的路径按执行者真正看到的工作目录缩短。macOS 上 /var 是 /private/var 的软链，
-   * 进程里 PWD 是解析后的那份，不解析就缩不掉；解析一次就够，任务在跑期间目录不变。
-   */
-  private cwdOf(id: number, active: Active | undefined) {
-    const known = this.cwds.get(id);
-    if (known) return known;
-    const path = active?.prepared?.cwd ?? active?.worktree;
-    if (!path) return undefined;
-    let real = path;
-    try {
-      real = realpathSync(path);
-    } catch {
-      // 目录已经没了就用原样，缩不掉也不该让看板失败。
-    }
-    if (this.cwds.size > 500) this.cwds.clear();
-    this.cwds.set(id, real);
-    return real;
   }
 
   private settled(id: number) {

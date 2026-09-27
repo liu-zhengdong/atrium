@@ -1,9 +1,13 @@
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
+import { clip } from "../text-width.ts";
+import { commandGist } from "./command-gist.ts";
 import { parseEvents, textOf, type JsonEvent } from "./json-log.ts";
 
 /**
- * 执行者日志里的「最近一个动作」（#262 `atrium top`）：实时视图要看出执行者此刻在做什么，
- * 拿的是日志尾部最后一次工具调用或一步说明，不是整份日志。纯函数，只读入参里的文本。
+ * 执行者日志里的「最近动作」（#262 `atrium top`、#322 全景网页）：看板要让人一眼看懂执行者此刻在做什么。
+ * 优先取执行者自己说的话——日志尾部最近一段助手文本的首句（如「正在补单测」）；
+ * 没有时退回最后一次工具调用的人话概括：读/改了哪个文件（只写文件名）、跑了什么检查
+ * （command-gist.ts），不显示命令参数与 heredoc 内容。纯函数，只读入参里的文本。
  *
  * 按适配器选解析方式：progressSignals 含 json_events 的（claude stream-json、opencode --format json）
  * 逐行 JSON 事件；codex 的 exec 不带 --json，是分段纯文本，单独一套解析。grok、kimi 的输出格式
@@ -11,50 +15,85 @@ import { parseEvents, textOf, type JsonEvent } from "./json-log.ts";
  */
 
 export type Action = {
-  /** 一行描述，如「跑 npm run check」「写 server/org/write.ts」「已读 PR 评论」。 */
+  /** 一句人话，如「正在补单测」「跑完整检查」「改 write.ts」「开 PR」。 */
   text: string;
-  /** tool：一次工具调用；step：一段助手文本（下一步该做什么）。 */
+  /** tool：一次工具调用的概括；step：执行者自己说的一句话。 */
   kind: "tool" | "step";
 };
 
-const CAP = 100;
+/** 显示宽度上限：40 个汉字（中英混排按显示宽度算，汉字两格）。 */
+export const ACTION_WIDTH = 80;
 
-/** 描述一行，命令行还会按窗口宽度再截一次。 */
-const oneLine = (text: string) => {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length > CAP ? `${line.slice(0, CAP)}…` : line;
-};
+const cap = (text: string) => clip(text, ACTION_WIDTH);
 
-/** 工作目录里的绝对路径缩成相对路径，窄屏里省地方。 */
-function relative(file: string, cwd?: string) {
-  if (!cwd) return file;
-  const root = cwd.replace(/\/+$/, "");
-  return file.startsWith(`${root}/`) ? file.slice(root.length + 1) : file;
+/** 句末标点；英文句点后须跟空白或到结尾，免得切在文件名、版本号里。 */
+const SENTENCE_END = /[。！？；!?;]|\.(?=\s|$)/;
+
+/**
+ * 一段助手文本的首句：取第一行有字的正文，去掉 Markdown 记号（标题、列表、加粗、行内代码、链接），
+ * 切在第一个句末标点，去掉句尾的标点。代码块里的内容不算话。
+ */
+export function firstSentence(text: string): string | undefined {
+  let fenced = false;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("```")) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    const plain = line
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^(?:[-*+]|\d+[.)])\s+/, "")
+      .replace(/^>\s*/, "")
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\*\*|__|`/g, "")
+      .trim();
+    if (!plain || /^[-=*_|:\s]+$/.test(plain)) continue;
+    const end = SENTENCE_END.exec(plain);
+    const sentence = (end ? plain.slice(0, end.index) : plain)
+      .replace(/[，,：:、\s]+$/, "")
+      .trim();
+    if (sentence) return sentence;
+  }
+  return undefined;
 }
 
-/** 工具名 → 动词与取哪个入参当目标；名字大小写不敏感（claude 是 Bash、opencode 是 bash）。 */
-const VERBS: Record<string, [verb: string, keys: string[], isPath: boolean]> = {
-  read: ["读", ["filePath", "file_path", "path"], true],
-  view: ["读", ["filePath", "file_path", "path"], true],
-  write: ["写", ["filePath", "file_path", "path"], true],
-  create: ["写", ["filePath", "file_path", "path"], true],
-  edit: ["改", ["filePath", "file_path", "path"], true],
-  patch: ["改", ["filePath", "file_path", "path"], true],
-  multiedit: ["改", ["filePath", "file_path", "path"], true],
-  notebookedit: ["改", ["notebook_path", "filePath"], true],
-  bash: ["跑", ["command"], false],
-  bashoutput: ["看", ["bash_id"], false],
-  shell: ["跑", ["command"], false],
-  grep: ["搜", ["pattern"], false],
-  glob: ["列文件", ["pattern"], false],
-  list: ["列目录", ["path"], true],
-  ls: ["列目录", ["path"], true],
-  webfetch: ["取", ["url"], false],
-  websearch: ["搜", ["query"], false],
-  fetch: ["取", ["url"], false],
-  task: ["派活", ["description"], false],
-  todowrite: ["列待办", [], false],
-  todoread: ["看待办", [], false],
+const step = (text: string): Action | undefined => {
+  const sentence = firstSentence(text);
+  return sentence ? { kind: "step", text: cap(sentence) } : undefined;
+};
+
+/** 路径只留文件名：看板上一眼看出改的是哪个文件就够。 */
+const fileName = (path: string) =>
+  path.replace(/\/+$/, "").split("/").pop() || path;
+
+/** 工具名 → 人话；名字大小写不敏感（claude 是 Bash、opencode 是 bash）。 */
+const PATH_KEYS = ["filePath", "file_path", "path", "notebook_path"];
+const FILE_VERBS: Record<string, string> = {
+  read: "读",
+  view: "读",
+  write: "写",
+  create: "写",
+  edit: "改",
+  patch: "改",
+  multiedit: "改",
+  notebookedit: "改",
+  apply_patch: "改",
+};
+const FIXED: Record<string, string> = {
+  grep: "搜代码",
+  glob: "列文件",
+  list: "列目录",
+  ls: "列目录",
+  webfetch: "取网页",
+  fetch: "取网页",
+  websearch: "搜网页",
+  todowrite: "列待办",
+  todoread: "看待办",
+  bashoutput: "看后台输出",
+  killshell: "停后台命令",
+  toolsearch: "找工具",
 };
 
 const object = (value: unknown) =>
@@ -62,52 +101,55 @@ const object = (value: unknown) =>
     ? (value as JsonEvent)
     : undefined;
 
-/** 工具入参里的目标；codex 的 shell 参数是数组（["bash","-lc","ls"]）。 */
-function targetOf(input: JsonEvent | undefined, key: string) {
+/** 工具入参里的文字；codex 的 shell 参数是数组（["bash","-lc","ls"]）。 */
+function textIn(input: JsonEvent | undefined, key: string) {
   const value = input?.[key];
   const text = Array.isArray(value) ? value.join(" ") : value;
   return typeof text === "string" && text.trim() ? text.trim() : undefined;
 }
 
-function describe(
-  name: string,
-  input: JsonEvent | undefined,
-  cwd?: string,
-): Action {
-  const spec = VERBS[name.toLowerCase()];
-  if (!spec) return { kind: "tool", text: oneLine(name || "调用工具") };
-  const [verb, keys, isPath] = spec;
-  for (const key of keys) {
-    const target = targetOf(input, key);
-    if (target)
-      return {
-        kind: "tool",
-        text: oneLine(`${verb} ${isPath ? relative(target, cwd) : target}`),
-      };
+export function describe(name: string, input: JsonEvent | undefined): Action {
+  const key = name.toLowerCase();
+  const tool = (text: string): Action => ({ kind: "tool", text: cap(text) });
+  if (key === "bash" || key === "shell") {
+    const command = textIn(input, "command");
+    return tool(command ? commandGist(command) : "跑命令");
   }
-  return { kind: "tool", text: verb };
+  const verb = FILE_VERBS[key];
+  if (verb) {
+    const path = PATH_KEYS.map((k) => textIn(input, k)).find(Boolean);
+    return tool(path ? `${verb} ${fileName(path)}` : `${verb}文件`);
+  }
+  if (FIXED[key]) return tool(FIXED[key]);
+  if (key === "task" || key === "agent") {
+    const what = textIn(input, "description");
+    return tool(what ? `派子任务：${what}` : "派子任务");
+  }
+  if (key === "skill") {
+    const skill = textIn(input, "skill") ?? textIn(input, "name");
+    return tool(skill ? `用技能 ${skill}` : "用技能");
+  }
+  return tool(name || "调用工具");
 }
 
 /**
- * 结构化日志（claude stream-json、opencode --format json）里的最后一个动作。
- * 从后往前找：opencode 的 tool_use 事件、claude 的 assistant 内容块、助手文本；
+ * 结构化日志（claude stream-json、opencode --format json）里的最近动作。
+ * 从后往前找：助手文本（opencode 的 text 事件、claude assistant 的 text 块）一出现就用它的首句；
+ * 找到头也没有文本，才用最后一次工具调用（opencode 的 tool_use 事件、claude 的 tool_use 块）。
  * claude 的 user 事件只是工具结果，不是动作。
  */
-export function structuredAction(
-  tail: string,
-  cwd?: string,
-): Action | undefined {
+export function structuredAction(tail: string): Action | undefined {
   const events = parseEvents(tail);
+  let lastTool: Action | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
     // opencode：{type:"tool_use",part:{tool,state:{input}}}
     if (event.type === "tool_use") {
       const part = object(event.part);
       if (part)
-        return describe(
+        lastTool ??= describe(
           String(part.tool ?? ""),
           object(object(part.state)?.input),
-          cwd,
         );
       continue;
     }
@@ -118,26 +160,25 @@ export function structuredAction(
         for (let j = content.length - 1; j >= 0; j--) {
           const item = object(content[j]);
           if (item?.type === "tool_use")
-            return describe(String(item.name ?? ""), object(item.input), cwd);
-          if (
-            item?.type === "text" &&
-            typeof item.text === "string" &&
-            item.text.trim()
-          )
-            return { kind: "step", text: oneLine(item.text) };
+            lastTool ??= describe(String(item.name ?? ""), object(item.input));
+          if (item?.type === "text" && typeof item.text === "string") {
+            const said = step(item.text);
+            if (said) return said;
+          }
         }
       continue;
     }
     const text = textOf(event);
-    if (text !== undefined) return { kind: "step", text: oneLine(text) };
+    const said = text === undefined ? undefined : step(text);
+    if (said) return said;
   }
-  return undefined;
+  return lastTool;
 }
 
 // ---- codex exec 的分段纯文本（0.157.1 实测）----
 // 抬头是「OpenAI Codex v…」，之后每一段以段名独占一行开头：
-// codex（助手这一轮说的话）、exec（跑的命令，下一行是「<shell> … in <目录>」）、
-// apply patch（改文件）、tokens used（收尾账目，不是动作）。
+// codex（助手这一轮说的话）、exec（跑的命令，下一行起是「<shell> -lc "…" in <目录>」，
+// 命令带 heredoc 时跨多行）、apply patch（改文件）、tokens used（收尾账目，不是动作）。
 const CODEX_HEADS = new Set([
   "user",
   "codex",
@@ -146,62 +187,82 @@ const CODEX_HEADS = new Set([
   "tokens used",
 ]);
 
-/** 去掉 exec 行的「/bin/zsh -lc "…" in /目录」外壳，留下真正跑的命令。 */
-function unwrapShell(line: string) {
-  const match = /^(.*) in \/\S+$/.exec(line);
-  const command = match ? match[1]! : line;
+/** 去掉 exec 的「/bin/zsh -lc "…" in /目录」外壳，留下真正跑的命令（可能跨行）。 */
+function unwrapShell(text: string) {
+  const match = /^([\s\S]*) in \/\S+$/.exec(text);
+  const command = match ? match[1]! : text;
   const shell =
-    /^\S+\s+-lc\s+"(.*)"$/.exec(command) ??
-    /^\S+\s+-lc\s+'(.*)'$/.exec(command) ??
-    /^\S+\s+-c\s+"(.*)"$/.exec(command) ??
-    /^\S+\s+-c\s+'(.*)'$/.exec(command);
-  return shell ? shell[1]! : command;
+    /^\S+\s+-l?c\s+"([\s\S]*)"$/.exec(command) ??
+    /^\S+\s+-l?c\s+'([\s\S]*)'$/.exec(command);
+  return shell ? shell[1]!.replace(/\\(["\\$`])/g, "$1") : command;
 }
 
-/** apply patch 段的目标：先找 patch 提示后的绝对路径，再找 diff 的 +++ b/<文件>。 */
-function patchTarget(body: string[], cwd?: string) {
+/** exec 段的命令：从段名下一行起，到以「 in /目录」收尾的那一行（heredoc 会跨多行）。 */
+function execCommand(lines: string[]) {
+  const taken: string[] = [];
+  for (const line of lines.slice(0, 400)) {
+    taken.push(line);
+    if (/ in \/\S+$/.test(line)) return unwrapShell(taken.join("\n"));
+  }
+  return lines[0] === undefined ? undefined : unwrapShell(lines[0]);
+}
+
+/** apply patch 段的目标文件名：先找 patch 提示后的绝对路径，再找 diff 的 +++ b/<文件>。 */
+function patchTarget(body: string[]) {
   const path = body.find((line) => line.startsWith("/"));
-  if (path) return relative(path, cwd);
+  if (path) return fileName(path);
   const diff = /^\+\+\+ b\/(.+)$/m.exec(body.join("\n"));
-  return diff ? diff[1]! : "文件";
+  return diff ? fileName(diff[1]!) : "文件";
 }
 
-/** codex 的最近一个动作：最后一段（跳过 tokens used）里的工具调用或助手那一段话。 */
-export function codexAction(tail: string, cwd?: string): Action | undefined {
+/**
+ * codex 的最近动作：从后往前找段，codex 段（助手说的话）一出现就用它的首句；
+ * 找到头也没有，才用最后一段 exec / apply patch 的概括。
+ */
+export function codexAction(tail: string): Action | undefined {
   const lines = tail.split("\n");
+  let lastTool: Action | undefined;
   for (let i = lines.length - 1; i >= 0; i--) {
     const head = lines[i]!.trim();
-    if (!head || head === "--------" || !CODEX_HEADS.has(head)) continue;
+    if (!head || !CODEX_HEADS.has(head)) continue;
     if (head === "tokens used" || head === "user") continue;
-    const body = lines
-      .slice(i + 1)
-      .map((line) => line.trim())
-      .filter(Boolean);
     if (head === "exec") {
-      const command = body[0];
-      return {
+      const command = execCommand(lines.slice(i + 1));
+      lastTool ??= {
         kind: "tool",
-        text: oneLine(command ? `跑 ${unwrapShell(command)}` : "跑命令"),
+        text: cap(command ? commandGist(command) : "跑命令"),
       };
+      continue;
     }
-    if (head === "apply patch")
-      return { kind: "tool", text: oneLine(`改 ${patchTarget(body, cwd)}`) };
-    const prose = body[0];
-    return prose ? { kind: "step", text: oneLine(prose) } : undefined;
+    if (head === "apply patch") {
+      const body = lines
+        .slice(i + 1, i + 40)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      lastTool ??= { kind: "tool", text: cap(`改 ${patchTarget(body)}`) };
+      continue;
+    }
+    // codex 段：到下一个段名为止是这一轮说的话。
+    const body: string[] = [];
+    for (const line of lines.slice(i + 1)) {
+      if (CODEX_HEADS.has(line.trim())) break;
+      body.push(line);
+    }
+    const said = step(body.join("\n"));
+    if (said) return said;
   }
-  return undefined;
+  return lastTool;
 }
 
 /** 按适配器取日志尾部的最近一个动作；解析不了返回 undefined。 */
 export function recentAction(input: {
   tool: Tool | undefined;
   tail: string;
-  cwd?: string;
 }): Action | undefined {
   if (!input.tool) return undefined;
   return ADAPTERS[input.tool].progressSignals.includes("json_events")
-    ? structuredAction(input.tail, input.cwd)
+    ? structuredAction(input.tail)
     : input.tool === "codex"
-      ? codexAction(input.tail, input.cwd)
+      ? codexAction(input.tail)
       : undefined;
 }

@@ -32,3 +32,19 @@ codex 0.157.1，临时目录里两个文件（hello.txt、edit.txt）。
 | ---------------------- | ----------------------------------------------- |
 | `opencode-tools.jsonl` | grep 工具调用、非 JSON 行、被拒的 bash 工具调用 |
 | `opencode-text.jsonl`  | `text` 事件的助手文本（收尾汇报）               |
+
+## 人话化的补充夹具（#322 全景网页的「最近动作」）
+
+2026-09-27 从本机 Atrium 任务日志（`~/Atrium/runtime-data/tasks/<n>/log`）原样截取的行，覆盖
+heredoc、长管道与中文说明；解析优先取助手自己说的话的首句，没有时才把工具调用概括成人话。
+
+| 夹具                     | 来源                 | 覆盖的形态                                                                      |
+| ------------------------ | -------------------- | ------------------------------------------------------------------------------- |
+| `claude-said.jsonl`      | t62 第 206～208 行   | 中文说明 → `python3 - <<'EOF'` 工具调用 → 工具结果                              |
+| `claude-heredoc.jsonl`   | t62 第 207～208 行   | 只有 heredoc 工具调用与结果                                                     |
+| `claude-pipeline.jsonl`  | t62 第 424～425 行   | `mkdir && for …; do … > …; done; ls …; cat > harness.ts <<'EOF'` 长管道         |
+| `codex-said.txt`         | t65 第 1049～1075 行 | `codex` 段的中文长句，后面跟 exec                                               |
+| `codex-heredoc.txt`      | t65 第 2412～2444 行 | 跨行的 `node - <<'NODE'` exec                                                   |
+| `codex-pipeline.txt`     | t65 第 2117～2135 行 | `rg … \| cut … \| tail` 长管道                                                  |
+| `opencode-said.jsonl`    | t29 第 12～16 行     | 中文 `text` 事件后跟两次 gh 调用                                                |
+| `opencode-heredoc.jsonl` | t8、t6、t51 各一行   | `cat > … <<'EOF'`、`gh pr create --body "$(cat <<'EOF' …)"`、`python3 - <<'PY'` |

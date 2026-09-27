@@ -1,17 +1,22 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
-import { trackFixture, untrackFixture } from "./fixture-signal.ts";
+import {
+  assertNoFixtureLeaks,
+  finishFixture,
+  trackFixture,
+} from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
+after(assertNoFixtureLeaks);
 /**
  * 单条命令的等待上限。每条命令都是一个独立 node 进程：自身冷启动，再请求服务；
  * 机器越忙越慢——本机实测同时有 20 份本文件在跑、后台再跑一次完整 npm test 时，
@@ -109,14 +114,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     await waitService(data);
     await started;
   };
-  t.after(async () => {
-    await cli("stop");
-    const record = readService(data);
-    if (record && record.pid !== process.pid && alive(record.pid))
-      process.kill(record.pid, "SIGKILL");
-    rmSync(root, { recursive: true, force: true });
-    untrackFixture(signal);
-  });
+  t.after(() => finishFixture(signal));
   return { root, data, env, cli, signal, warm };
 }
 

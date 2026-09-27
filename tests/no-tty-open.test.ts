@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -7,17 +7,21 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { packageRoot } from "../server/service-state.ts";
-import { trackFixture, untrackFixture } from "./fixture-signal.ts";
+import {
+  assertNoFixtureLeaks,
+  finishFixture,
+  trackFixture,
+} from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
+after(assertNoFixtureLeaks);
 
 /** 隔离夹具：随机端口、临时数据与模板；PATH 前置桩 open/xdg-open，被调用就写标记文件。 */
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
@@ -71,11 +75,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       };
     }
   };
-  t.after(async () => {
-    await cli("stop");
-    rmSync(root, { recursive: true, force: true });
-    untrackFixture(signal);
-  });
+  t.after(() => finishFixture(signal));
   return { cli, marker };
 }
 

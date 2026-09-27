@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
@@ -18,8 +18,14 @@ import { userTokenPath } from "../server/user-auth.ts";
 import { client, resendable } from "../cli/service.ts";
 import { WORKER_FLAG } from "../cli/worker-guard.ts";
 import { writeRestartState } from "../server/supervisor.ts";
+import {
+  assertNoFixtureLeaks,
+  finishFixture,
+  trackFixture,
+} from "./fixture-signal.ts";
 
 const entry = "tests/fixtures/fake-slow-service.ts";
+after(assertNoFixtureLeaks);
 
 async function freePort() {
   const server = createServer();
@@ -36,6 +42,7 @@ async function fixture(
 ) {
   const root = mkdtempSync(join(tmpdir(), "atrium-start-"));
   const data = join(root, "data");
+  const tracked = trackFixture(data, root);
   const saved = { ...process.env };
   delete process.env[WORKER_FLAG];
   Object.assign(process.env, {
@@ -44,15 +51,13 @@ async function fixture(
     ...env,
   });
   t.after(async () => {
-    const record = readService(data);
-    if (record && alive(record.pid)) {
-      process.kill(record.pid, "SIGTERM");
-      for (let i = 0; i < 50 && alive(record.pid); i++) await delay(100);
+    try {
+      await finishFixture(tracked);
+    } finally {
+      for (const key of Object.keys(process.env))
+        if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
     }
-    for (const key of Object.keys(process.env))
-      if (!(key in saved)) delete process.env[key];
-    Object.assign(process.env, saved);
-    rmSync(root, { recursive: true, force: true });
   });
   return data;
 }

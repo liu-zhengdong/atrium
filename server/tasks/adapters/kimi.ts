@@ -19,6 +19,7 @@ export const kimi: Adapter = {
     "只用 -p，不加 -y/--auto",
     "退出时可能有内部报错但活已干完，以实际产物为准",
   ],
+  tell: "restart",
   build(input) {
     checkCommon(kimi, input);
     const args = ["-p", input.prompt];

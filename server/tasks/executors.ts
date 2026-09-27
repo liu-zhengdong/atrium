@@ -9,6 +9,7 @@ import {
   advanceTask,
   getTask,
   noteTask,
+  patchRunFields,
   taskRef,
   type RunFields,
   type Task,
@@ -26,7 +27,16 @@ import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
 import { retryAfterTransient } from "./transient-runtime.ts";
 import type { TaskWaits } from "./waits.ts";
 import { judge } from "./watchdog.ts";
-import { prepareRun, type LaunchOptions } from "./workspace.ts";
+import {
+  prepareRun,
+  type LaunchOptions,
+  type Prepared,
+  type ResumeWith,
+} from "./workspace.ts";
+import { LiveInput } from "./live-input.ts";
+import { markDelivered, markEchoed } from "./tell-ledger.ts";
+import { followUpTells } from "./tell-runtime.ts";
+import type { ChildProcess } from "node:child_process";
 import { collectSkillEdits } from "../skills/collect.ts";
 
 /**
@@ -103,7 +113,7 @@ export class Executors {
     const task = getTask(this.ctx.db, id);
     const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
     if (this.ctx.closed()) throw new Error("服务已关闭");
-    const child = await spawnWorker(
+    const { child, offset } = await spawnWorker(
       prepared,
       this.ctx.launchOptions.env,
       task.ref,
@@ -138,15 +148,71 @@ export class Executors {
       signalGroup(pid, "SIGKILL");
       throw error;
     }
+    markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
+    await this.track(started, chosen, prepared, child, offset, retried);
+    return started;
+  }
+
+  /**
+   * 同一轮里换进程（#307 捎话）：带着补充续上原会话（resume），或保留工作树带着补充重派（未给 resume）。
+   * 任务保持 running，只换 pid；关卡按新进程退出后的结果判。
+   */
+  async relaunch(prev: Active, resume?: ResumeWith & { ids: number[] }) {
+    if (this.ctx.closed()) throw new Error("服务已关闭");
+    const id = prev.id;
+    const task = getTask(this.ctx.db, id);
+    const chosen = { worker: prev.worker, risk: prev.risk };
+    const prepared = await prepareRun(
+      task,
+      chosen,
+      this.ctx.launchOptions,
+      resume,
+    );
+    if (this.ctx.closed()) throw new Error("服务已关闭");
+    const { child, offset } = await spawnWorker(
+      prepared,
+      this.ctx.launchOptions.env,
+      task.ref,
+      !!resume,
+    );
+    const pid = child.pid!;
+    const ids = resume ? resume.ids : prepared.tellIds;
+    const updated = patchRunFields(
+      this.ctx.db,
+      id,
+      { pid },
+      resume ? "tell_resumed" : "tell_restarted",
+      { pid, worker: prev.worker.id, tells: ids.length },
+    );
+    markDelivered(this.ctx.db, id, ids, resume ? "resume" : "restart");
+    await this.track(updated, chosen, prepared, child, offset, prev.retried);
+  }
+
+  private async track(
+    task: Task,
+    chosen: Chosen,
+    prepared: Prepared,
+    child: ChildProcess,
+    offset: number,
+    retried: boolean,
+  ) {
+    const id = task.id;
     const active = launched({
-      task: started,
-      pid,
+      task,
+      pid: child.pid!,
       child,
       prepared,
       retried,
       exec: this.ctx.exec,
       ...chosen,
     });
+    if (prepared.launch.input === "stream-json" && child.stdin)
+      active.live = new LiveInput(
+        child.stdin,
+        prepared.logFile,
+        offset,
+        (uuid) => markEchoed(this.ctx.db, id, uuid),
+      );
     this.active.set(id, active);
     child.once(
       "exit",
@@ -154,7 +220,6 @@ export class Executors {
     );
     await active.probe.baseline();
     this.ctx.waits.changed(id);
-    return started;
   }
 
   // ---- 退出收尾 ----
@@ -165,6 +230,7 @@ export class Executors {
     active.exited = true;
     this.finishing.set(id, (this.finishing.get(id) ?? 0) + 1);
     try {
+      if (await followUpTells(this, this.ctx.db, active, exit)) return;
       const outcome = await settle(
         active,
         exit,

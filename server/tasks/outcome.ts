@@ -9,7 +9,9 @@ import type { Verdict } from "./gates.ts";
 export type Stop =
   | { kind: "user"; by?: string }
   | { kind: "stalled"; reason: string }
-  | { kind: "idle"; reason: string };
+  | { kind: "idle"; reason: string }
+  /** 为送捎话停下、随后带着补充重派（#307 tell 兜底）；只有重派失败才会走到收尾。 */
+  | { kind: "tell" };
 
 export type Exit =
   { code: number | null; signal: NodeJS.Signals | null } | "unknown";
@@ -80,6 +82,13 @@ export function decideExit(input: {
       event: "exit_fail",
       publish: "failed",
       reason: "人工停止",
+      retry: false,
+    };
+  if (stop?.kind === "tell")
+    return {
+      event: "exit_fail",
+      publish: "failed",
+      reason: "为送捎话停下后重派失败",
       retry: false,
     };
   if (stop?.kind === "stalled")

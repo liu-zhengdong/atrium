@@ -5,6 +5,7 @@ import {
   ADAPTERS,
   invalid,
   isTool,
+  TELL_MODES,
   TOOLS,
   type Tool,
 } from "./adapters/index.ts";
@@ -150,6 +151,11 @@ function normalizeRules(data: Record<string, FrontValue>) {
       if (typeof value === "string" && MODEL_RE.test(value))
         rules.model = value;
       else warnings.push("model 不合法");
+    } else if (key === "tell") {
+      // 捎话送达方式（#307）；工具不支持的方式在派活时退回适配器缺省（tell.ts tellModeOf）。
+      if ((TELL_MODES as readonly FrontValue[]).includes(value))
+        rules.tell = value;
+      else warnings.push(`tell 只能是 ${TELL_MODES.join("、")}`);
     } else rules[key] = value;
   }
   return { rules, warnings };

@@ -339,7 +339,13 @@ const show: Command = {
                 "事件：",
                 ...task.events.map(
                   (event) =>
-                    `  ${when(event.at)}  ${event.kind}${event.detail ? `  ${clip(event.detail, 80)}` : ""}`,
+                    `  ${when(event.at)}  ${event.kind}${
+                      event.kind === "tell"
+                        ? `  ${tellLine(event.detail)}`
+                        : event.detail
+                          ? `  ${clip(event.detail, 80)}`
+                          : ""
+                    }`,
                 ),
               ]
             : []),
@@ -460,6 +466,56 @@ const note: Command = {
     if (json) printJson(result);
     else console.log(`${id} 已追加备注（${result.note_by}）：${result.note}`);
     recordNext(`看详情：atrium task show ${id}`);
+  },
+};
+
+const TELL_VIA: Record<string, string> = {
+  stdin: "即时送入",
+  resume: "续上会话",
+  restart: "停掉重派",
+  prompt: "写进提示词",
+};
+const TELL_STATE: Record<string, string> = {
+  pending: "待送达",
+  written: "已写入，待确认",
+};
+
+/** task show 里一条捎话事件：作者、送达状态、原文。 */
+export function tellLine(detail: string | null) {
+  try {
+    const tell = JSON.parse(detail ?? "") as {
+      by?: string;
+      text?: string;
+      state?: string;
+      delivered_via?: string;
+    };
+    const state =
+      tell.state === "delivered"
+        ? `已送达·${TELL_VIA[tell.delivered_via ?? ""] ?? tell.delivered_via}`
+        : (TELL_STATE[tell.state ?? ""] ?? "待送达");
+    return `${tell.by ?? "未知"} [${state}] ${clip((tell.text ?? "").replace(/\s+/g, " "), 80)}`;
+  } catch {
+    return clip(detail ?? "", 80);
+  }
+}
+
+const tell: Command = {
+  args: "tN 文字 [--as 身份]",
+  about:
+    "给在跑的执行者捎话：Claude Code 即时送入，codex 本轮结束后续上会话，其余停掉带着补充重派；不在跑的下次拉起时写进提示词",
+  options: { as: { type: "string" } },
+  positionals: [2, 2],
+  async run({ positionals: [reference, text], values, json }) {
+    const id = ref(reference, "任务");
+    const result = await (
+      await client()
+    ).post<{ task: Task; tell: { id: number; by: string }; how: string }>(
+      `/tasks/${id}/tell`,
+      { text, by: str(values, "as") ?? "u1" },
+    );
+    if (json) printJson(result);
+    else console.log(`${id} 已登记捎话（${result.tell.by}）：${result.how}`);
+    recordNext(`看送达状态：atrium task show ${id}`);
   },
 };
 
@@ -695,6 +751,7 @@ export const taskCommands: Record<string, Command> = {
   "task tree": tree,
   "task set": set,
   "task note": note,
+  "task tell": tell,
   "task done": done,
   "task run": run,
   "task stop": stop,

@@ -28,6 +28,8 @@ export const DEFAULT_RULES: readonly string[] = [
 export type PromptParts = {
   title: string;
   brief?: string;
+  /** 之前运行中收到的捎话（tell.ts tellSection），紧跟任务详述。 */
+  tells?: string;
   roleDoc?: string;
   /** 章程要点（组织树节点的链路、目标与硬边界），紧跟岗位说明。 */
   charter?: Brief;
@@ -40,10 +42,11 @@ export type PromptParts = {
   rules?: readonly string[];
 };
 
-/** 拼派活提示词：标题、详述、岗位说明、章程要点、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
+/** 拼派活提示词：标题、详述、运行中收到的补充、岗位说明、章程要点、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
 export function buildPrompt({
   title,
   brief,
+  tells,
   roleDoc,
   charter,
   originDoc,
@@ -56,6 +59,7 @@ export function buildPrompt({
   if (!heading) throw invalid("任务标题不能为空");
   const sections: [string, string | undefined][] = [
     ["任务详述", brief],
+    ["运行中收到的补充", tells],
     ["岗位说明", roleDoc],
     ...(charter ? [[charter.heading, charter.text] as [string, string]] : []),
     ["投任务的专员说明", originDoc],

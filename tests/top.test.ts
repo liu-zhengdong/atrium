@@ -564,6 +564,7 @@ test("次序：在跑的按跑了多久、排队按入队顺序、受阻与刚�
   // 账本侧的行没有 log_at/action，命令行的行多这两列；排序只按前九个字段。
   const item = (over: Partial<LedgerRow>): LedgerRow => ({
     ref: "t1",
+    tells: null,
     title: "标题",
     status: "running",
     worker: "codex+gpt-6-sol",

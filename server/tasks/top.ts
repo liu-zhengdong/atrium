@@ -7,6 +7,7 @@ import {
 } from "./ledger-model.ts";
 import { FINISHED, type TaskStatus } from "./state.ts";
 import { noteView, type NoteView } from "./notes.ts";
+import { tellCounts } from "./tell-ledger.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -31,6 +32,8 @@ export type TopRow = NoteView & {
   /** 排队或受阻的原因。 */
   reason: string | null;
   updated_at: number;
+  /** 捎话条数与其中还没送达的（#307）；没有捎话为 null。 */
+  tells: { total: number; pending: number } | null;
 };
 
 const FINISHED_STATUSES = [...FINISHED] as TaskStatus[];
@@ -137,6 +140,7 @@ export function topRows(
       events.set(event.task_id, history);
     }
   }
+  const tells = tellCounts(db, ids);
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
@@ -151,6 +155,7 @@ export function topRows(
       updated_at: row.updated_at,
       queued_at: waiting?.queued_at ?? null,
       reason: reasonOf(history, "queued") ?? reasonOf(history, "block"),
+      tells: tells.get(row.id) ?? null,
       ...noteView(db, row.id, row.status),
     };
   });

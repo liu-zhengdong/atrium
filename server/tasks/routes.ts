@@ -94,6 +94,9 @@ export function registerTaskRoutes(
   app.post("/api/tasks/:id/note", { bodyLimit: 4 * 1024 }, (request) =>
     addTaskNote(db, params(request.params).id, request.body),
   );
+  app.post("/api/tasks/:id/tell", { bodyLimit: 32 * 1024 }, (request) =>
+    runner.tell(params(request.params).id, request.body),
+  );
   app.post("/api/tasks/:id/run", { bodyLimit: 16 * 1024 }, (request) =>
     runner.run(params(request.params).id, request.body),
   );

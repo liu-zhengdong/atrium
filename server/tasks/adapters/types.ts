@@ -24,7 +24,12 @@ export type LaunchInput = {
   effort?: string;
   /** 执行者最后一条消息写到哪里（只有 codex 支持 -o）；缺省放在提示词文件旁。 */
   resultFile?: string;
+  /** 运行中能即时送入捎话（tell: "stdin"）时，标准输入改成保持打开的消息流。 */
+  live?: boolean;
 };
+
+/** 按会话续上：提示词文件与正文是这次要补充的话。 */
+export type ResumeInput = LaunchInput & { session: string };
 
 export type Launch = {
   command: string;
@@ -32,11 +37,23 @@ export type Launch = {
   cwd: string;
   /** 要接到标准输入的文件路径；为空表示标准输入关闭。 */
   stdin?: string;
+  /**
+   * stream-json：标准输入改成管道，拉起方先把 stdin 文件的内容作为第一条用户消息写入并保持打开，
+   * 运行中的捎话作为新的用户消息写入（live-input.ts）。
+   */
+  input?: "stream-json";
   /** 工具会把最后一条消息写进这个文件（codex -o）。 */
   resultFile?: string;
   /** 在白名单环境之上额外设置的变量（挂载技能用的 CODEX_HOME 等）。 */
   env?: Record<string, string>;
 };
+
+/**
+ * 运行中捎话（atrium task tell）怎么送到（#307）：
+ * stdin：即时写入标准输入，在工具调用边界读入；resume：本轮结束后按会话续上；restart：停掉带着补充重派。
+ */
+export const TELL_MODES = ["stdin", "resume", "restart"] as const;
+export type TellMode = (typeof TELL_MODES)[number];
 
 /** 进展信号来源：看门狗据此判断执行者是否卡死（#262「执行者卡死检测」，下一部分实现）。 */
 /** json_events：工具在标准输出里逐步打出结构化事件（如 opencode --format json）。 */
@@ -68,7 +85,13 @@ export type Adapter = {
   skillMount?: "claude-plugin" | "codex-home" | "opencode-config";
   /** 已知的坑，给人看，也会进 PR/档案对照。 */
   notes: readonly string[];
+  /** 捎话的缺省送达方式；档案 `tell` 可改成本工具支持的其他方式。 */
+  tell: TellMode;
   build(input: LaunchInput): Launch;
+  /** 带着补充续上原会话；undefined 表示不支持按会话续上。 */
+  resume?(input: ResumeInput): Launch;
+  /** 从日志开头取会话 id（续上时用）；取不到返回 undefined。 */
+  sessionOf?(log: string): string | undefined;
 };
 
 /** macOS ARG_MAX 为 1 MiB（getconf ARG_MAX），argv 与环境共用；单个参数保守取 256 KiB。 */

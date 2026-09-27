@@ -28,6 +28,7 @@ export const opencode: Adapter = {
     "拉起环境去掉 HERDR_*，否则卡在 init",
     "常停在提交前，验收查 finished",
   ],
+  tell: "restart",
   build(input) {
     checkCommon(opencode, input);
     const args = ["run", "--format", "json", "--auto"];

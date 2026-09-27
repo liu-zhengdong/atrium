@@ -20,6 +20,9 @@ import { charterBrief } from "../org/brief.ts";
 import { skillsForTask } from "../skills/task-skills.ts";
 import { mountSkills } from "../skills/mount.ts";
 import { homedir } from "node:os";
+import { listTells, unsent } from "./tell-ledger.ts";
+import { TELL_RULE, tellModeOf, tellSection } from "./tell.ts";
+import type { TellMode } from "./adapters/index.ts";
 
 /**
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
@@ -66,7 +69,14 @@ export type Prepared = {
   promptFile: string;
   logFile: string;
   launch: Launch;
+  /** 这次运行的捎话送达方式（适配器缺省，档案 tell 可改）。 */
+  tellMode: TellMode;
+  /** 这次写进提示词、拉起成功后即算送达的捎话。 */
+  tellIds: number[];
 };
+
+/** 续上原会话：带着这段补充，不重发整份提示词。 */
+export type ResumeWith = { session: string; text: string };
 
 async function readBrief(task: Task) {
   if (!task.brief_path) return undefined;
@@ -93,10 +103,13 @@ export async function prepareRun(
   task: Task,
   chosen: { worker: ResolvedWorker; risk: Risk },
   options: LaunchOptions,
+  resume?: ResumeWith,
 ): Promise<Prepared> {
   const run = options.run ?? exec;
   const { worker } = chosen;
   const adapter = ADAPTERS[worker.tool];
+  const tellMode = tellModeOf(adapter, worker.profile.rules.tell);
+  const tells = options.db ? listTells(options.db, task.id) : [];
   const dir = taskDir(options.data, task.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const brief = await readBrief(task);
@@ -160,6 +173,7 @@ export async function prepareRun(
   const prompt = buildPrompt({
     title: task.title,
     brief,
+    tells: tellSection(tells),
     roleDoc: docs.roleDoc,
     charter: node && options.db ? charterBrief(options.db, node.id) : undefined,
     originDoc: origin
@@ -168,19 +182,33 @@ export async function prepareRun(
     skills: mount?.section,
     rootDoc: docs.rootDoc,
     profileBody: worker.profile.body,
-    rules: [where, ...deliveryRules(task)],
+    rules: [where, ...deliveryRules(task), TELL_RULE],
   });
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, prompt, { mode: 0o600 });
   const logFile = join(dir, "log");
-  const launch = adapter.build({
+  const input = {
     promptFile,
     prompt,
     cwd,
     model: worker.cliModel,
     effort: worker.effort,
     resultFile: join(dir, "last-message.md"),
-  });
+    live: tellMode === "stdin",
+  };
+  let launch: Launch;
+  if (resume) {
+    if (!adapter.resume)
+      throw new Problem(400, `${adapter.tool} 不支持续上会话`, "usage");
+    const tellFile = join(dir, "tell.md");
+    writeFileSync(tellFile, resume.text, { mode: 0o600 });
+    launch = adapter.resume({
+      ...input,
+      promptFile: tellFile,
+      prompt: resume.text,
+      session: resume.session,
+    });
+  } else launch = adapter.build(input);
   if (mount) {
     launch.args.push(...mount.args);
     if (Object.keys(mount.env).length)
@@ -198,5 +226,7 @@ export async function prepareRun(
     promptFile,
     logFile,
     launch,
+    tellMode,
+    tellIds: resume ? [] : unsent(tells).map((tell) => tell.id),
   };
 }

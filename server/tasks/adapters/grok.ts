@@ -16,6 +16,7 @@ export const grok: Adapter = {
   watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["log_growth", "worktree_change"],
   notes: ["grok-4.6 易把逻辑堆进一个文件，验收查 file_growth"],
+  tell: "restart",
   build(input) {
     checkCommon(grok, input);
     const args = ["-p", input.prompt];

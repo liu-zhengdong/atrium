@@ -24,6 +24,8 @@ export type TopRow = {
   note_by: string | null;
   note_at: number | null;
   processing: boolean;
+  /** 捎话条数与未送达条数；旧版服务没有这个字段。 */
+  tells?: { total: number; pending: number } | null;
   /** 日志最后写入时刻；没有日志为 0。 */
   log_at: number;
   action: { text: string; kind: string } | null;
@@ -229,12 +231,19 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
         .join("  ")
         .trimEnd();
       const line = FINISHED.has(phase(row)) && frame.color ? faint(text) : text;
-      return row.note
-        ? [
-            line,
-            `  ${clip(`备注（${row.note_by ?? "未知"} · ${new Date(row.note_at!).toLocaleString("zh-CN")}）：${row.note}`, frame.width - 2)}`,
-          ]
-        : [line];
+      return [
+        line,
+        ...(row.note
+          ? [
+              `  ${clip(`备注（${row.note_by ?? "未知"} · ${new Date(row.note_at!).toLocaleString("zh-CN")}）：${row.note}`, frame.width - 2)}`,
+            ]
+          : []),
+        ...(row.tells?.total
+          ? [
+              `  ${clip(`捎话 ${row.tells.total} 条${row.tells.pending ? `，${row.tells.pending} 条待送达` : "，都已送达"}`, frame.width - 2)}`,
+            ]
+          : []),
+      ];
     }),
   ];
   if (!rows.length) lines.push("现在没有在跑、排队或受阻的任务");

@@ -35,6 +35,7 @@ import { requireRow } from "./ledger-model.ts";
 import { schedulePrExec } from "./schedule-pr.ts";
 import type { LaunchOptions } from "./workspace.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
+import { tellTask } from "./tell-runtime.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -155,6 +156,8 @@ export class TaskRunner {
   close() {
     this.closed = true;
     for (const timer of this.timers) clearInterval(timer);
+    // 与服务退出时一样关掉即时捎话的写端：执行者处理完本轮后自己退出，重启后按 pid 接管。
+    for (const active of this.x.active.values()) void active.live?.finish();
     this.inbox.close();
     this.waits.close();
   }
@@ -345,6 +348,13 @@ export class TaskRunner {
     this.x.publish(id, "failed", { reason: "人工停止" }, by);
     this.waits.changed(id);
     return { task: stopped, stopping: false };
+  }
+
+  /** 给在跑的执行者捎话（#307）；不在跑的留到下次拉起时写进提示词。 */
+  tell(reference: unknown, body: unknown) {
+    const result = tellTask(this.x, this.db, reference, body);
+    this.waits.changed(result.task.id);
+    return result;
   }
 
   private pending(id: number, task: Task) {

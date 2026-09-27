@@ -1,13 +1,17 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import {
+  appendFileSync,
   closeSync,
   existsSync,
   openSync,
+  readFileSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { Problem } from "../problem.ts";
 import { findExecutable } from "./adapters/index.ts";
+import { userLine } from "./live-input.ts";
 import type { Prepared } from "./workspace.ts";
 
 /**
@@ -23,30 +27,37 @@ export const shortArg = (arg: string) => {
 
 /**
  * 拉起执行者：独立进程组、白名单环境、stdout/stderr 直接写日志文件。
- * 上一次运行的日志改名留档，本次日志从抬头开始。
+ * 上一次运行的日志改名留档，本次日志从抬头开始；append（续上会话）时接着原日志写。
+ * launch.input 为 stream-json 时标准输入是管道：先写提示词作为第一条用户消息，写端交给调用方保持打开。
+ * 返回的 offset 是抬头写完时的日志长度，之后都是执行者的输出。
  */
 export async function spawnWorker(
   prepared: Prepared,
   env: NodeJS.ProcessEnv,
   taskRefText: string,
-): Promise<ChildProcess> {
+  append = false,
+): Promise<{ child: ChildProcess; offset: number }> {
   const { launch, logFile } = prepared;
-  if (existsSync(logFile)) renameSync(logFile, `${logFile}-${Date.now()}`);
+  if (!append && existsSync(logFile))
+    renameSync(logFile, `${logFile}-${Date.now()}`);
   const command =
     findExecutable(launch.command, env.PATH ?? "") ?? launch.command;
-  writeFileSync(
-    logFile,
-    `[atrium] ${taskRefText} · ${prepared.worker.id} · ${new Date().toISOString()}\n[atrium] cwd ${launch.cwd}\n${Object.entries(
-      launch.env ?? {},
-    )
-      .map(([key, value]) => `[atrium] env ${key}=${value}\n`)
-      .join(
-        "",
-      )}[atrium] ${[command, ...launch.args.map(shortArg)].join(" ")}\n`,
-    { mode: 0o600 },
-  );
+  const header = `[atrium] ${taskRefText} · ${prepared.worker.id} · ${new Date().toISOString()}${append ? " · 续上会话" : ""}\n[atrium] cwd ${launch.cwd}\n${Object.entries(
+    launch.env ?? {},
+  )
+    .map(([key, value]) => `[atrium] env ${key}=${value}\n`)
+    .join("")}[atrium] ${[command, ...launch.args.map(shortArg)].join(" ")}\n`;
+  if (append) appendFileSync(logFile, header, { mode: 0o600 });
+  else writeFileSync(logFile, header, { mode: 0o600 });
+  const offset = statSync(logFile).size;
   const out = openSync(logFile, "a");
-  const input = launch.stdin ? openSync(launch.stdin, "r") : "ignore";
+  const piped = launch.input === "stream-json";
+  const input =
+    launch.stdin && !piped
+      ? openSync(launch.stdin, "r")
+      : piped
+        ? "pipe"
+        : "ignore";
   let child: ChildProcess;
   try {
     child = spawn(command, launch.args, {
@@ -69,8 +80,17 @@ export async function spawnWorker(
       "internal",
     );
   }
+  if (piped && child.stdin) {
+    child.stdin.on("error", () => {
+      // 执行者提前退出时写端 EPIPE；退出由 exit 事件收尾。
+    });
+    if (launch.stdin)
+      child.stdin.write(userLine(readFileSync(launch.stdin, "utf8")));
+    // 写端不拖住服务进程退出；服务退出时写端关闭，执行者处理完本轮后退出。
+    (child.stdin as unknown as { unref?: () => void }).unref?.();
+  }
   child.unref();
-  return child;
+  return { child, offset };
 }
 
 /** 进程组整体发信号；进程已不在时静默。 */

@@ -115,6 +115,7 @@ export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
       sum.todo += c.todo;
       sum.running += c.running;
       sum.blocked += c.blocked;
+      if (c.reviewing) sum.reviewing = (sum.reviewing ?? 0) + c.reviewing;
       if (c.merge_queued)
         sum.merge_queued = (sum.merge_queued ?? 0) + c.merge_queued;
       if (c.merging) sum.merging = (sum.merging ?? 0) + c.merging;

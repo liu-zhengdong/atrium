@@ -5,6 +5,7 @@ import { nodes } from "../org/model.ts";
 
 /**
  * 把任务结果投递给负责人（#262）：完成、失败、受阻、卡死共用去重键 tN:outcome，CI 用 tN:ci。
+ * 审阅任务（#325）不单独投递：结论与失败由审阅关卡记在原任务上再投。
  */
 export function publishTask(
   inbox: EventInbox,
@@ -14,6 +15,8 @@ export function publishTask(
   detail: Record<string, unknown>,
   actor?: string,
 ) {
+  if (db.prepare("SELECT 1 FROM tasks WHERE review_task=? LIMIT 1").get(id))
+    return;
   const task = getTask(db, id);
   inbox.publish({
     subscriber: task.owner ?? DEFAULT_OWNER,

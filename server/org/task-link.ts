@@ -11,10 +11,18 @@ export type TaskCounts = {
   todo: number;
   running: number;
   blocked: number;
+  reviewing?: number;
   merge_queued?: number;
   merging?: number;
 };
-const OPEN = ["todo", "running", "blocked", "merge_queued", "merging"] as const;
+const OPEN = [
+  "todo",
+  "running",
+  "blocked",
+  "reviewing",
+  "merge_queued",
+  "merging",
+] as const;
 const empty = (): TaskCounts => ({ todo: 0, running: 0, blocked: 0 });
 
 /** 服务里任务表总在；单测只建组织表时没有任务可数。 */
@@ -39,10 +47,10 @@ export function taskCounts(db: DatabaseSync): {
     for (const row of all<{ id: number; status: string; n: number }>(
       db,
       `SELECT ${column} AS id,
-         CASE WHEN delivery_stage IN ('merge_queued','merging') THEN delivery_stage ELSE status END AS status,
+         CASE WHEN delivery_stage IN ('reviewing','merge_queued','merging') THEN delivery_stage ELSE status END AS status,
          COUNT(*) AS n FROM tasks WHERE ${column} IS NOT NULL
-         AND (status IN ('todo','running','blocked') OR delivery_stage IN ('merge_queued','merging'))
-         GROUP BY ${column},CASE WHEN delivery_stage IN ('merge_queued','merging') THEN delivery_stage ELSE status END LIMIT 2500`,
+         AND (status IN ('todo','running','blocked') OR delivery_stage IN ('reviewing','merge_queued','merging'))
+         GROUP BY ${column},CASE WHEN delivery_stage IN ('reviewing','merge_queued','merging') THEN delivery_stage ELSE status END LIMIT 2500`,
     )) {
       const counts = map.get(row.id) ?? empty();
       if (OPEN.includes(row.status as (typeof OPEN)[number]))
@@ -72,7 +80,7 @@ export function nodeTasks(db: DatabaseSync, id: number, limit = 5): NodeTask[] {
     origin_node_id: number | null;
   }>(
     db,
-    "SELECT id,title,status,delivery_stage,worker,origin_node_id FROM tasks WHERE node_id=? ORDER BY status IN ('todo','running','blocked') OR delivery_stage IN ('merge_queued','merging') DESC,id DESC LIMIT ?",
+    "SELECT id,title,status,delivery_stage,worker,origin_node_id FROM tasks WHERE node_id=? ORDER BY status IN ('todo','running','blocked') OR delivery_stage IN ('reviewing','merge_queued','merging') DESC,id DESC LIMIT ?",
     id,
     limit,
   ).map((t) => ({

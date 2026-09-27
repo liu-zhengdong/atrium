@@ -21,7 +21,8 @@ export type TopRow = {
   ref: string;
   title: string;
   status: string;
-  delivery_stage?: "merge_queued" | "merging" | "merged" | "online" | null;
+  delivery_stage?:
+    "reviewing" | "merge_queued" | "merging" | "merged" | "online" | null;
   merge_queued_at?: number | null;
   worker: string | null;
   started_at: number | null;
@@ -49,6 +50,7 @@ export type Snapshot = {
   counts: {
     running: number;
     queued: number;
+    reviewing?: number;
     merge_queued?: number;
     merging?: number;
     merged?: number;
@@ -129,6 +131,7 @@ const SYMBOL: Record<string, string> = {
   done: "✓",
   failed: "✕",
   cancelled: "·",
+  reviewing: "●",
   merge_queued: "◌",
   merging: "●",
   merged: "✓",
@@ -149,6 +152,7 @@ export const phase = (row: TopRow) =>
 function state(row: TopRow, now: number) {
   const kind = phase(row);
   if (kind === "queued") return `排队${row.reason ? `（${row.reason}）` : ""}`;
+  if (kind === "reviewing") return "审阅中";
   if (kind === "merge_queued") return "排队合入";
   if (kind === "merging") return "合入中";
   if (kind === "merged") return "已合入";
@@ -253,6 +257,9 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const head =
     `Atrium · 在跑 ${snapshot.counts.running}` +
     ` · 排队 ${snapshot.counts.queued}` +
+    (snapshot.counts.reviewing
+      ? ` · 审阅中 ${snapshot.counts.reviewing}`
+      : "") +
     (snapshot.counts.merge_queued
       ? ` · 排队合入 ${snapshot.counts.merge_queued}`
       : "") +

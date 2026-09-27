@@ -441,55 +441,66 @@ test("专员结论补判：人工改过状态的父任务不动；重跑审查�
   assert.equal(getTask(db, other.ref).concerns?.[0]?.verdict, "veto");
 });
 
-test("专员关卡通过后才进合入队列：PR 任务投 merge_queued，不先投 done", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-concern-merge-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const db = ledger();
-  const parent = createTask(db, {
-    title: "父",
-    concern: "安全",
-    repo: "/repo/atrium",
+for (const trusted of [true, false])
+  test(`专员关卡通过后才去合入：${trusted ? "可信执行者投 merge_queued" : "trust 不明先投 review_queued"}，不先投 done`, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "atrium-concern-merge-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const db = ledger();
+    const parent = createTask(db, {
+      title: "父",
+      concern: "安全",
+      repo: "/repo/atrium",
+    });
+    const review = createTask(db, {
+      title: "审",
+      parent: parent.ref,
+      deliver: "none",
+    });
+    db.prepare("UPDATE task_concerns SET review_id=? WHERE task_id=?").run(
+      review.id,
+      parent.id,
+    );
+    advanceTask(db, parent.ref, { kind: "start" });
+    advanceTask(
+      db,
+      parent.ref,
+      { kind: "block" },
+      { pr_url: "https://github.com/o/r/pull/9" },
+      { reason: "等专员审查" },
+    );
+    advanceTask(db, review.ref, { kind: "start" });
+    advanceTask(db, review.ref, { kind: "exit_ok" }, { result: "结论：通过" });
+    // 专员通过后再按风险分档（#325）：可信、低风险直接进合入队列，trust 低的先审阅。
+    mkdirSync(join(root, "workers", "harness"), { recursive: true });
+    writeFileSync(
+      join(root, "workers", "harness", "kimi.md"),
+      `---\ntrust: ${trusted ? "medium" : "low"}\n---\n`,
+    );
+    db.prepare("UPDATE tasks SET worker='kimi' WHERE id=?").run(parent.id);
+    const runner = new TaskRunner(db, {
+      data: root,
+      workersDir: join(root, "workers"),
+      env: { PATH: "/usr/bin:/bin" },
+      exec: async () => {
+        throw new Error("测试不联网");
+      },
+    });
+    t.after(() => runner.close());
+    await runner.settleReviews();
+    const task = getTask(db, parent.ref);
+    // 测试机上没有可挑的审阅者，trust 低的随后转受阻（review_blocked），这里只看去向。
+    if (trusted) assert.equal(task.status, "done");
+    const next = trusted ? "merge_queued" : "review_needed";
+    // 入队后队列立刻开始处理，阶段可能已到 merging；以账本事件为准
+    assert.ok(task.events.some((e) => e.kind === next));
+    const kinds = (
+      db
+        .prepare("SELECT kind FROM task_inbox WHERE task_id=? ORDER BY id")
+        .all(parent.id) as { kind: string }[]
+    ).map((e) => e.kind);
+    assert.equal(kinds[0], trusted ? "merge_queued" : "review_queued");
+    assert.ok(!kinds.includes("done"));
   });
-  const review = createTask(db, {
-    title: "审",
-    parent: parent.ref,
-    deliver: "none",
-  });
-  db.prepare("UPDATE task_concerns SET review_id=? WHERE task_id=?").run(
-    review.id,
-    parent.id,
-  );
-  advanceTask(db, parent.ref, { kind: "start" });
-  advanceTask(
-    db,
-    parent.ref,
-    { kind: "block" },
-    { pr_url: "https://github.com/o/r/pull/9" },
-    { reason: "等专员审查" },
-  );
-  advanceTask(db, review.ref, { kind: "start" });
-  advanceTask(db, review.ref, { kind: "exit_ok" }, { result: "结论：通过" });
-  const runner = new TaskRunner(db, {
-    data: root,
-    workersDir: join(root, "none"),
-    env: { PATH: "/usr/bin:/bin" },
-    exec: async () => {
-      throw new Error("测试不联网");
-    },
-  });
-  t.after(() => runner.close());
-  runner.settleReviews();
-  const task = getTask(db, parent.ref);
-  assert.equal(task.status, "done");
-  // 入队后队列立刻开始处理，阶段可能已到 merging；以账本事件为准
-  assert.ok(task.events.some((e) => e.kind === "merge_queued"));
-  const kinds = (
-    db
-      .prepare("SELECT kind FROM task_inbox WHERE task_id=? ORDER BY id")
-      .all(parent.id) as { kind: string }[]
-  ).map((e) => e.kind);
-  assert.deepEqual(kinds, ["merge_queued"]);
-});
 
 // ---- 隔离服务：请了安全专员的任务，通过与否决各一次 ----
 

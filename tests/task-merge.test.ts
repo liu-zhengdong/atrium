@@ -115,6 +115,11 @@ for (const scenario of [
           cwd: fixture.repo,
           encoding: "utf8",
         }).trim();
+      // 可信执行者、低风险：不经审阅直接进合入队列（审阅分支见 task-review.test.ts）。
+      writeFileSync(
+        join(fixture.workers, "harness", "kimi.md"),
+        "---\ntrust: medium\nmax_risk: low\nchecks: [pr_exists, claims_verified]\n---\n",
+      );
       git("config", "user.name", "test");
       git("config", "user.email", "test@example.com");
       writeFileSync(join(fixture.repo, "done.txt"), "base\n");

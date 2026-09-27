@@ -128,8 +128,36 @@ export function ensureTaskTables(db: DatabaseSync) {
     );
   if (!columns.some((column) => column.name === "online_attempt"))
     db.exec("ALTER TABLE tasks ADD COLUMN online_attempt TEXT");
+  // 旧任务回填查过即记下（t125）：别的仓库不再每分钟起 git。
+  if (!columns.some((column) => column.name === "online_checked_at"))
+    db.exec("ALTER TABLE tasks ADD COLUMN online_checked_at INTEGER");
+  // CI 轮询公平（t125）：仍 pending 的记下本次查过，下一轮让后面的排上。
+  if (!columns.some((column) => column.name === "ci_polled_at"))
+    db.exec("ALTER TABLE tasks ADD COLUMN ci_polled_at INTEGER");
   db.exec(
     "CREATE INDEX IF NOT EXISTS tasks_delivery_stage ON tasks(delivery_stage,id)",
+  );
+  // 合入队、清理、上线回填、CI pending：部分索引，避免巡检误走 tasks_status 扫全部已完成。
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS tasks_merge_queue ON tasks(delivery_stage,urgent,merge_queued_at,id) WHERE delivery_stage IN ('merge_queued','merging') AND status='done'",
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS tasks_cleanup_cancelled ON tasks(id)
+     WHERE status='cancelled' AND worktree IS NOT NULL AND repo IS NOT NULL`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS tasks_cleanup_done ON tasks(id)
+     WHERE status='done' AND delivery_stage IN ('merged','online')
+       AND worktree IS NOT NULL AND repo IS NOT NULL`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS tasks_online_legacy ON tasks(id)
+     WHERE delivery_stage='merged' AND online_wait=0 AND release_version IS NULL
+       AND online_attempt IS NULL AND online_checked_at IS NULL`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS tasks_ci_pending ON tasks(ci_polled_at,id)
+     WHERE ci='pending' AND pr_url IS NOT NULL AND status NOT IN ('done','cancelled')`,
   );
   db.exec("CREATE INDEX IF NOT EXISTS tasks_part ON tasks(part_id,status)");
   db.exec(

@@ -16,13 +16,35 @@ type Finished = {
   delivery_stage: string | null;
 };
 
+const BACKOFF_MIN_MS = 60_000;
+const BACKOFF_MAX_MS = 24 * 60 * 60_000;
+
+/** 清理失败退避：一次 1 分钟起，逐次翻倍，封顶一天。 */
+export function cleanupBackoffMs(attempts: number): number {
+  const step = Math.min(Math.max(attempts, 1) - 1, 16);
+  return Math.min(BACKOFF_MIN_MS * 2 ** step, BACKOFF_MAX_MS);
+}
+
+/** 有界分页；INDEXED BY 部分索引，避免优化器走 tasks_status 扫全部已完成。 */
+export const CLEANUP_PAGE_SQL = `SELECT id FROM (
+  SELECT id FROM tasks INDEXED BY tasks_cleanup_cancelled
+   WHERE id>? AND repo IS NOT NULL AND worktree IS NOT NULL AND status='cancelled'
+  UNION ALL
+  SELECT id FROM tasks INDEXED BY tasks_cleanup_done
+   WHERE id>? AND repo IS NOT NULL AND worktree IS NOT NULL
+     AND status='done' AND delivery_stage IN ('merged','online')
+) ORDER BY id LIMIT 100`;
+
 /** 只清账本中已合入或已取消的 Git 工作树；失败与待合入任务可继续使用原树。 */
 export class WorktreeCleanup {
   private readonly cleaning = new Map<number, Promise<void>>();
+  private readonly retryAt = new Map<number, number>();
+  private readonly attempts = new Map<number, number>();
   constructor(
     private readonly db: DatabaseSync,
     private readonly run: Exec = exec,
     private readonly active: (id: number) => boolean = () => false,
+    private readonly now: () => number = Date.now,
   ) {}
 
   private candidate(id: number) {
@@ -129,23 +151,24 @@ export class WorktreeCleanup {
     }
   }
 
-  /** 有界分页；同一轮里失败的任务只尝试一次。 */
+  /** 有界分页；同一轮里失败的任务只尝试一次，随后按连败退避。 */
   async finished(): Promise<number> {
     let after = 0;
     let count = 0;
+    const now = this.now();
     for (;;) {
-      const rows = all<{ id: number }>(
-        this.db,
-        `SELECT id FROM tasks WHERE id>? AND repo IS NOT NULL AND worktree IS NOT NULL
-         AND (status='cancelled' OR (status='done' AND delivery_stage IN ('merged','online')))
-         ORDER BY id LIMIT 100`,
-        after,
-      );
+      const rows = all<{ id: number }>(this.db, CLEANUP_PAGE_SQL, after, after);
       if (!rows.length) return count;
       for (const row of rows) {
+        if ((this.retryAt.get(row.id) ?? 0) > now) continue;
         try {
           if (await this.cleanup(row.id)) count++;
+          this.retryAt.delete(row.id);
+          this.attempts.delete(row.id);
         } catch (error) {
+          const n = (this.attempts.get(row.id) ?? 0) + 1;
+          this.attempts.set(row.id, n);
+          this.retryAt.set(row.id, now + cleanupBackoffMs(n));
           console.error(`t${row.id} 工作树清理失败：${redact(String(error))}`);
         }
       }

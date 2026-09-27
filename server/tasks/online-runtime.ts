@@ -8,6 +8,7 @@ import { firstLine, type Exec } from "./git.ts";
 import { originRepo, repoFlag } from "./gh-repo.ts";
 import { atomically, getTask, noteTask } from "./ledger.ts";
 import type { TaskRow } from "./ledger-model.ts";
+import { backfillLegacyPage } from "./online-backfill.ts";
 import {
   firstRelease,
   includedInVersion,
@@ -152,69 +153,21 @@ export class OnlineWatch {
     }
   }
 
-  /** 旧任务没有 online_wait；只有合入提交确实落在运行版本内才补状态，不补通知。 */
+  /** 旧任务没有 online_wait；查过（含无结果、别的仓库）即记下，不再起子进程。 */
   private async backfillLegacy(current: string) {
     if (!this.options.selfRepo) return;
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM tasks WHERE id>? AND delivery_stage='merged' AND online_wait=0
-         AND release_version IS NULL AND online_attempt IS NULL AND repo IS NOT NULL
-         ORDER BY id LIMIT 100`,
-      )
-      .all(this.legacyCursor) as TaskRow[];
-    if (!rows.length) {
-      this.legacyCursor = 0;
-      return;
-    }
-    const fetched = new Map<string, boolean>();
-    for (const row of rows) {
-      if (this.closed) return;
-      this.legacyCursor = row.id;
-      if (!row.repo) continue;
-      const origin = await originRepo(row.repo, this.options.run);
-      if ("error" in origin || repoFlag(origin.repo) !== this.options.selfRepo)
-        continue;
-      const commit = row.merge_commit ?? (await this.mergeCommit(row));
-      if (!commit) continue;
-      if (!fetched.has(row.repo)) {
-        const fetch = await this.options.run(
-          "git",
-          ["-C", row.repo, "fetch", "--quiet", "--tags", "--force", "origin"],
-          { timeoutMs: 120_000 },
-        );
-        fetched.set(row.repo, fetch.ok);
-      }
-      if (!fetched.get(row.repo)) continue;
-      const tags = await this.options.run("git", [
-        "-C",
-        row.repo,
-        "tag",
-        "--contains",
-        commit,
-        "--list",
-        "v*",
-      ]);
-      const release = tags.ok ? firstRelease(tags.stdout) : null;
-      if (
-        !release ||
-        !includedInVersion(tags.stdout, current) ||
-        compareSemver(release, current) > 0
-      )
-        continue;
-      atomically(this.db, () => {
-        this.db
-          .prepare(
-            "UPDATE tasks SET delivery_stage='online',release_version=?,updated_at=? WHERE id=? AND delivery_stage='merged'",
-          )
-          .run(release, this.now(), row.id);
-        noteTask(this.db, row.id, "online_backfilled", {
-          version: current,
-          release,
-        });
-      });
-      this.options.changed(row.id);
-    }
-    if (rows.length < 100) this.legacyCursor = 0;
+    const page = await backfillLegacyPage({
+      db: this.db,
+      run: this.options.run,
+      selfRepo: this.options.selfRepo,
+      current,
+      now: this.now(),
+      closed: () => this.closed,
+      changed: this.options.changed,
+      commitOf: (row) => this.mergeCommit(row),
+      afterId: this.legacyCursor,
+    });
+    this.legacyCursor = page.more ? page.lastId : 0;
   }
 
   /** 按仓库拉一次标签，找含合入提交的最早版本；超时没发版提醒一次。 */
@@ -267,7 +220,11 @@ export class OnlineWatch {
     }
   }
 
-  private async mergeCommit(row: TaskRow) {
+  private async mergeCommit(row: {
+    id: number;
+    repo: string | null;
+    pr_url: string | null;
+  }) {
     if (!row.pr_url || !row.repo) return null;
     const origin = await originRepo(row.repo, this.options.run);
     if ("error" in origin) return null;

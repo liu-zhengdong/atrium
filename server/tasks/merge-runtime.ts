@@ -24,9 +24,13 @@ type View = {
 };
 class MergeHold extends Error {}
 
-/** 下一个合入：正在合入的先做完，再是紧急的（t113），其余按入队先后。 */
-export const NEXT_MERGE =
-  "SELECT id FROM tasks WHERE delivery_stage IN ('merge_queued','merging') AND status='done' ORDER BY delivery_stage='merging' DESC,urgent DESC,merge_queued_at,id LIMIT 1";
+/** 下一个合入：正在合入的先做完，再是紧急的（t113），其余按入队先后。
+ * 按 delivery_stage 各查一次，走 tasks_merge_queue / tasks_delivery_stage，不扫全部已完成。 */
+export const NEXT_MERGE = `SELECT id FROM (
+  SELECT id,urgent,merge_queued_at,0 AS seq FROM tasks WHERE delivery_stage='merging' AND status='done'
+  UNION ALL
+  SELECT id,urgent,merge_queued_at,1 AS seq FROM tasks WHERE delivery_stage='merge_queued' AND status='done'
+) ORDER BY seq,urgent DESC,merge_queued_at,id LIMIT 1`;
 
 /** PR 合入队列。状态先落库，单服务内只运行一个队首；重启后从账本续上。 */
 export class MergeQueue {

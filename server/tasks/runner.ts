@@ -81,6 +81,7 @@ import { hasOrg } from "../org/task-node.ts";
 import { existsSync } from "node:fs";
 import { HostLoad, hostView } from "./host-load.ts";
 import { sharedLocalChecks } from "./local-check.ts";
+import { skipIfBusy } from "./reentry.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -97,6 +98,8 @@ export type RunnerOptions = {
   pace?: () => Promise<PaceEntry[] | undefined>;
   usagePace?: () => Promise<PaceEntry[] | undefined>;
   diskFreeGb?: (path: string) => Promise<number>;
+  /** 测试注入：计数 du，不碰本机真实 du。 */
+  diskDu?: (path: string) => Promise<number>;
   tickMs?: number;
   ciPollMs?: number;
   ciBatch?: number;
@@ -192,6 +195,7 @@ export class TaskRunner {
       options.data,
       options.diskFreeGb,
       this.cleanup,
+      options.diskDu,
     );
     this.waits = new TaskWaits(
       (id) => this.settled(id),
@@ -315,8 +319,9 @@ export class TaskRunner {
   /** 启动看门狗（顺带解除到期的额度标记）与 CI 轮询，并在后台自愈上次遗留的运行中任务（不阻塞启动）。 */
   start() {
     const every = (ms: number, fn: () => Promise<void>) => {
+      const guarded = skipIfBusy(fn);
       const timer = setInterval(() => {
-        const job = fn()
+        const job = guarded()
           .catch((error) => console.error("任务运行时：", error))
           .finally(() => this.background.delete(job));
         this.background.add(job);

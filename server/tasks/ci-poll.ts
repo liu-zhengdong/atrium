@@ -13,6 +13,11 @@ import { concernsOf } from "./concerns.ts";
 export const CI_POLL_MS = 60_000;
 export const CI_BATCH = 10;
 
+/** 仍 pending 的按上次轮询时刻排队，走 tasks_ci_pending，不永远占着每批名额。 */
+export const CI_PENDING_SQL = `SELECT id,pr_url,status FROM tasks
+ WHERE ci='pending' AND pr_url IS NOT NULL AND status NOT IN ('done','cancelled')
+ ORDER BY ci_polled_at,id LIMIT ?`;
+
 type Row = { id: number; pr_url: string; status: string };
 
 /** 最近一次关卡判定是否「只差 CI」。 */
@@ -41,14 +46,14 @@ export async function pollCiOnce(
   batch = CI_BATCH,
   run: Exec = defaultExec,
 ): Promise<CiOutcome[]> {
-  const rows = db
-    .prepare(
-      "SELECT id,pr_url,status FROM tasks WHERE ci='pending' AND pr_url IS NOT NULL AND status NOT IN ('done','cancelled') ORDER BY updated_at,id LIMIT ?",
-    )
-    .all(batch) as Row[];
+  const rows = db.prepare(CI_PENDING_SQL).all(batch) as Row[];
   const outcomes: CiOutcome[] = [];
   for (const row of rows) {
     const { ci, detail: ciDetail } = await readCi(row.pr_url, run);
+    db.prepare("UPDATE tasks SET ci_polled_at=? WHERE id=?").run(
+      Date.now(),
+      row.id,
+    );
     if (ci === "pending") continue;
     const detail =
       ci === "unavailable" ? ciUnavailableReason(ciDetail) : ciDetail;

@@ -44,9 +44,11 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "org",
     "quota",
     "reviews",
+    "roles",
     "skill-proposals",
     "skills",
     "tasks",
+    "workers",
   ]);
   // 全景网页（#322）的页面与只读接口另认本机会话；其余一律要用户凭据。
   const exceptions = routes

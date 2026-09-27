@@ -1,0 +1,302 @@
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  lstatSync,
+} from "node:fs";
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { Problem } from "../problem.ts";
+import { atomically, one } from "./ledger-model.ts";
+import { getJobRole } from "./job-roles.ts";
+import {
+  adviceFor,
+  listDeliveries,
+  summarizeDeliveries,
+  type Delivery,
+  type WorkerStat,
+} from "./delivery-records.ts";
+import {
+  DEFAULT_WORKERS_DIR,
+  modelKey,
+  parseWorker,
+  resolveWorker,
+  TRUSTS,
+} from "./profiles.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import type { EventInbox } from "./events.ts";
+
+function pendingSuggestions(
+  db: DatabaseSync,
+  records: Delivery[],
+  stats: WorkerStat[],
+) {
+  return stats.flatMap((stat) => {
+    const advice = adviceFor(stat);
+    if (!advice) return [];
+    const latest = records.find(
+      (row) => row.worker === stat.worker && row.job_name === stat.role,
+    );
+    if (!latest) return [];
+    const confirmations = db
+      .prepare(
+        "SELECT detail FROM task_events WHERE task_id=? AND kind='worker_advice_confirmed' ORDER BY id DESC LIMIT 20",
+      )
+      .all(latest.task_id) as { detail: string }[];
+    const confirmed = confirmations.some(({ detail }) => {
+      try {
+        const data = JSON.parse(detail) as Record<string, unknown>;
+        return (
+          data.worker === stat.worker &&
+          data.role === latest.job_ref &&
+          data.action === advice.action
+        );
+      } catch {
+        return false;
+      }
+    });
+    return confirmed ? [] : [{ stat, advice }];
+  });
+}
+
+export async function workersReport(
+  db: DatabaseSync,
+  role?: string,
+  dir = DEFAULT_WORKERS_DIR,
+) {
+  const job = role ? getJobRole(db, role) : undefined;
+  const records = listDeliveries(db, { job: job?.id });
+  const ids = [
+    ...new Set(
+      records.flatMap((r) => [
+        r.worker,
+        r.model ? `${r.tool}+${r.model}` : r.tool,
+        r.tool,
+      ]),
+    ),
+  ];
+  const trust = new Map(
+    await Promise.all(
+      ids.map(
+        async (id) =>
+          [
+            id,
+            await resolveWorker(id, dir)
+              .then((x) => x.profile.rules.trust ?? "unknown")
+              .catch(() => "unknown"),
+          ] as const,
+      ),
+    ),
+  );
+  const stats = summarizeDeliveries(records, trust);
+  return {
+    role: job ?? null,
+    stats,
+    suggestions: pendingSuggestions(db, records, stats),
+  };
+}
+export async function workerReport(
+  db: DatabaseSync,
+  worker: string,
+  dir = DEFAULT_WORKERS_DIR,
+) {
+  parseWorker(worker);
+  const resolved = await resolveWorker(worker, dir);
+  const records = listDeliveries(db, {
+    worker: resolved.id,
+  }).filter((r) => r.worker === resolved.id);
+  const stats = summarizeDeliveries(
+    records,
+    new Map([[resolved.id, resolved.profile.rules.trust ?? "unknown"]]),
+  ).filter((s) => s.scope === "combination");
+  return {
+    worker: resolved.id,
+    tool: resolved.tool,
+    model: resolved.model ?? null,
+    effort: resolved.effort ?? null,
+    profile: resolved.profile,
+    stats,
+    deliveries: records,
+    suggestions: pendingSuggestions(db, records, stats),
+  };
+}
+/** 有充分样本才提醒秘书；按统计条件变化去重，确认前只生成建议。 */
+export function publishWorkerAdvice(
+  db: DatabaseSync,
+  inbox: EventInbox,
+  taskId: number,
+) {
+  const task = one<{ job_id: number | null; worker: string | null }>(
+    db,
+    "SELECT job_id,worker FROM tasks WHERE id=?",
+    taskId,
+  );
+  if (!task?.job_id || !task.worker) return;
+  const rows = listDeliveries(db, { job: task.job_id, worker: task.worker });
+  const last = rows.find((r) => r.task_id === taskId);
+  if (!last || !last.job_id) return;
+  const stats = summarizeDeliveries(rows).filter(
+    (s) =>
+      s.scope === "combination" &&
+      s.worker === last.worker &&
+      s.role === last.job_name,
+  );
+  for (const stat of stats) {
+    const advice = adviceFor(stat);
+    if (!advice) return;
+    const event = db
+      .prepare(
+        "SELECT 1 FROM task_events WHERE task_id=? AND kind='worker_advice' AND detail LIKE ? LIMIT 1",
+      )
+      .get(taskId, `%${advice.action}%`);
+    if (event) return;
+    const data = {
+      worker: stat.worker,
+      role: last.job_ref,
+      action: advice.action,
+      reason: advice.reason,
+    };
+    db.prepare(
+      "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
+    ).run(taskId, Date.now(), "worker_advice", JSON.stringify(data));
+    inbox.publish({
+      subscriber: "secretary",
+      taskId,
+      source: "workers",
+      kind: "worker_advice",
+      key: `t${taskId}:worker_advice`,
+      detail: data,
+    });
+  }
+}
+const patchFront = (source: string, key: string, value: string) => {
+  if (!source.startsWith("---\n"))
+    return `---\n${key}: ${value}\n---\n\n${source}`;
+  const end = source.indexOf("\n---", 4);
+  if (end < 0)
+    throw new Problem(409, "执行者档案 frontmatter 不完整", "conflict");
+  const head = source.slice(4, end).split("\n");
+  const at = head.findIndex((line) => new RegExp(`^${key}\\s*:`).test(line));
+  if (at >= 0) head[at] = `${key}: ${value}`;
+  else head.push(`${key}: ${value}`);
+  return `---\n${head.join("\n")}\n---${source.slice(end + 4)}`;
+};
+export async function confirmWorkerAdvice(
+  db: DatabaseSync,
+  body: unknown,
+  dir = DEFAULT_WORKERS_DIR,
+) {
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    throw new Problem(400, "请求体应为 JSON 对象", "usage");
+  const b = body as Record<string, unknown>;
+  if (
+    typeof b.worker !== "string" ||
+    typeof b.role !== "string" ||
+    typeof b.action !== "string"
+  )
+    throw new Problem(400, "worker、role、action 必填", "usage");
+  const role = getJobRole(db, b.role);
+  const spec = parseWorker(b.worker);
+  if (!spec.model) throw new Problem(400, "worker 须包含模型", "usage");
+  const report = await workersReport(db, role.ref, dir);
+  const suggestion = report.suggestions.find(
+    (x) =>
+      x.stat.worker === b.worker &&
+      x.stat.role === role.name &&
+      x.advice?.action === b.action,
+  );
+  if (!suggestion)
+    throw new Problem(
+      409,
+      "当前统计没有这条建议，请重新运行 atrium workers 查看",
+      "conflict",
+    );
+  const profile = await resolveWorker(b.worker, dir);
+  const comboDir = join(dir, "combos");
+  const file = join(comboDir, `${spec.tool}+${modelKey(spec.model)}.md`);
+  mkdirSync(comboDir, { recursive: true, mode: 0o700 });
+  if (lstatSync(comboDir).isSymbolicLink())
+    throw new Problem(409, "执行者档案目录是符号链接，拒绝写入", "conflict");
+  let source = "";
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink())
+      throw new Problem(409, "档案不是普通文件", "conflict");
+    source = readFileSync(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  if (parseFrontmatter(source).warnings.length)
+    throw new Problem(
+      409,
+      "档案有无法解析的 frontmatter，先修正后确认",
+      "conflict",
+    );
+  let key: string, value: string;
+  if (b.action === "avoid_role") {
+    key = "avoid_jobs";
+    const old = profile.profile.rules.avoid_jobs;
+    const items = Array.isArray(old)
+      ? old.filter((x): x is string => typeof x === "string")
+      : [];
+    value = JSON.stringify([...new Set([...items, role.ref])]);
+  } else {
+    key = "trust";
+    const actual = profile.profile.rules.trust ?? "unknown";
+    const index = TRUSTS.indexOf(actual);
+    const next =
+      b.action === "relax"
+        ? Math.min(TRUSTS.length - 1, index + 1)
+        : Math.max(0, index - 1);
+    value = TRUSTS[next]!;
+    if (
+      b.action === "relax" &&
+      profile.profile.layers.some(
+        (layer) =>
+          layer.layer !== "combos" &&
+          layer.rules.trust !== undefined &&
+          TRUSTS.indexOf(layer.rules.trust) < next,
+      )
+    )
+      throw new Problem(
+        409,
+        "上层档案的 trust 更严，组合档案无法放宽；请先审查上层档案",
+        "conflict",
+      );
+  }
+  const next = patchFront(source, key, value);
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, next, { mode: 0o600 });
+  renameSync(temp, file);
+  atomically(db, () =>
+    db
+      .prepare(
+        "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
+      )
+      .run(
+        suggestion.stat.deliveries
+          ? listDeliveries(db, {
+              worker: String(b.worker),
+              job: role.id,
+              limit: 1,
+            })[0]!.task_id
+          : 0,
+        Date.now(),
+        "worker_advice_confirmed",
+        JSON.stringify({
+          worker: b.worker,
+          role: role.ref,
+          action: b.action,
+          file,
+        }),
+      ),
+  );
+  return {
+    worker: b.worker,
+    role: role.ref,
+    action: b.action,
+    file,
+    [key]: value,
+  };
+}

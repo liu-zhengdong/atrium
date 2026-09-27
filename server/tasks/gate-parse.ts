@@ -3,7 +3,7 @@
  */
 
 export type Ci = "pending" | "success" | "failure" | "unavailable";
-export type Pr = { number: number; url: string; state: string };
+export type Pr = { number: number; url: string; state: string; body?: string };
 export type FileStat = { file: string; added: number; removed: number };
 export type FunctionSpan = { file: string; name: string; lines: number };
 export type Claim = { kind: "pr" | "commit"; value: string };

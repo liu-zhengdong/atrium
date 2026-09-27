@@ -18,6 +18,18 @@ import {
   taskTree,
   updateTask,
 } from "./ledger.ts";
+import {
+  confirmWorkerAdvice,
+  workerReport,
+  workersReport,
+} from "./workers-report.ts";
+import {
+  createJobRole,
+  editJobRole,
+  getJobRole,
+  jobRoleHistory,
+  listJobRoles,
+} from "./job-roles.ts";
 import { TaskRunner, type RunnerOptions } from "./runner.ts";
 import { taskPlan } from "./schedule.ts";
 import { parseTaskRef } from "./ledger.ts";
@@ -76,6 +88,61 @@ export function registerTaskRoutes(
     ),
   );
   app.addHook("preClose", async () => runner.close());
+  app.get("/api/workers", (request) =>
+    workersReport(db, query(request.query).role, runnerOptions.workersDir),
+  );
+  app.get("/api/workers/:id", (request) =>
+    workerReport(db, params(request.params).id!, runnerOptions.workersDir),
+  );
+  app.post("/api/workers/advice/confirm", { bodyLimit: 4096 }, (request) =>
+    confirmWorkerAdvice(db, request.body, runnerOptions.workersDir),
+  );
+  app.get("/api/roles", () => listJobRoles(db));
+  app.post("/api/roles", { bodyLimit: 32 * 1024 }, (request, reply) =>
+    reply.code(201).send(createJobRole(db, request.body)),
+  );
+  app.get("/api/roles/:id", async (request) => {
+    const role = getJobRole(db, params(request.params).id);
+    const tasks = (
+      db
+        .prepare(
+          "SELECT id,title,status,worker,created_at,started_at,ended_at,delivery_stage FROM tasks WHERE job_id=? ORDER BY id DESC LIMIT 200",
+        )
+        .all(role.id) as {
+        id: number;
+        title: string;
+        status: string;
+        worker: string | null;
+        created_at: number;
+        started_at: number | null;
+        ended_at: number | null;
+        delivery_stage: string | null;
+      }[]
+    ).map((task) => ({ ...task, ref: `t${task.id}` }));
+    const workers = await workersReport(db, role.ref, runnerOptions.workersDir);
+    const skillDetails = role.skills
+      .map((slug) =>
+        db
+          .prepare(
+            "SELECT id,slug,name,description,rev FROM org_skills WHERE slug=? AND archived_at IS NULL",
+          )
+          .get(slug),
+      )
+      .filter(Boolean);
+    return {
+      ...role,
+      tasks,
+      skill_details: skillDetails,
+      workers: workers.stats,
+      suggestions: workers.suggestions,
+    };
+  });
+  app.patch("/api/roles/:id", { bodyLimit: 32 * 1024 }, (request) =>
+    editJobRole(db, params(request.params).id, request.body),
+  );
+  app.get("/api/roles/:id/history", (request) =>
+    jobRoleHistory(db, params(request.params).id),
+  );
   app.post("/api/tasks", { bodyLimit: 64 * 1024 }, async (request, reply) => {
     const task = createTask(db, request.body);
     return reply.code(201).send(task);

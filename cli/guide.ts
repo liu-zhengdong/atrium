@@ -28,6 +28,15 @@ export const groups: Record<string, string[]> = {
     "events ack",
     "chat",
   ],
+  角色: [
+    "role ls",
+    "role show",
+    "role add",
+    "role edit",
+    "workers",
+    "workers show",
+    "workers confirm",
+  ],
   全景: ["map", "map context", "map edit", "map add"],
   "目标（迁移后下线）": [
     "goal tree",

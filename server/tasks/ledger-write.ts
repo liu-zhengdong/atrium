@@ -39,6 +39,7 @@ import {
   textHints,
   writeConcerns,
 } from "./concerns.ts";
+import { getJobRole } from "./job-roles.ts";
 import { ref as nodeRef } from "../org/model.ts";
 
 /** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
@@ -65,6 +66,7 @@ export type NewTask = {
   title: string;
   parent?: string | number | null;
   role?: string | null;
+  job?: string | null;
   repo?: string | null;
   brief_path?: string | null;
   owner?: string | null;
@@ -103,6 +105,7 @@ export function createTask(
     "title",
     "parent",
     "role",
+    "job",
     "repo",
     "brief_path",
     "owner",
@@ -132,12 +135,13 @@ export function createTask(
   return atomically(db, () => {
     const parent = parentOf(db, input.parent);
     const node = roleNode(db, values.role, values.repo);
+    const job = input.job ? getJobRole(db, input.job).id : null;
     const origin = fromNode(db, input.from);
     const part = partOf(db, input);
     const concerns = concernsFor(db, input.concern);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,'todo',?,?)",
       )
       .run(
         parent,
@@ -151,6 +155,7 @@ export function createTask(
         node,
         origin,
         part,
+        job,
         now,
         now,
       );
@@ -163,6 +168,7 @@ export function createTask(
       ...(node ? { node: `o${node}` } : {}),
       ...(origin ? { from: `o${origin}` } : {}),
       ...(part ? { part: `o${part}` } : {}),
+      ...(job ? { job: `r${job}` } : {}),
       ...(concerns.length ? { concerns: concerns.map(nodeRef) } : {}),
     });
     const task = requireRow(db, id);
@@ -187,6 +193,7 @@ export function updateTask(
     "title",
     "brief_path",
     "role",
+    "job",
     "status",
     "deliver",
     "issue",
@@ -201,7 +208,7 @@ export function updateTask(
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、from、part、concern、status、deliver、issue、after、after_pr、auto、pr_url",
+      "至少修改一项：title、brief_path、role、job、from、part、concern、status、deliver、issue、after、after_pr、auto、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -223,6 +230,18 @@ export function updateTask(
   const target = "status" in input ? statusOf(input.status) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
+    if ("job" in input)
+      fields.job_id = input.job ? getJobRole(db, input.job).id : null;
+    if (
+      current.status === "running" &&
+      "job_id" in fields &&
+      fields.job_id !== current.job_id
+    )
+      throw new Problem(
+        409,
+        "执行中不能修改 --job：本轮角色已附进提示词",
+        "conflict",
+      );
     if ("role" in fields)
       fields.node_id = roleNode(db, fields.role as string | null, current.repo);
     if ("from" in input) fields.origin_node_id = fromNode(db, input.from);

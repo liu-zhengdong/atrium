@@ -18,6 +18,7 @@ import type { ResolvedWorker, Risk } from "./profiles.ts";
 import { nodeDoc, taskNode } from "../org/task-node.ts";
 import { charterBrief, withContext } from "../org/brief.ts";
 import { taskContext } from "../map/context.ts";
+import { getJobRole } from "./job-roles.ts";
 import { skillsForTask } from "../skills/task-skills.ts";
 import { mountSkills } from "../skills/mount.ts";
 import { homedir } from "node:os";
@@ -144,12 +145,26 @@ export async function prepareRun(
     options.db && task.origin_node_id !== null
       ? nodeDoc(options.db, task.origin_node_id)
       : undefined;
+  const job =
+    options.db && task.job_id
+      ? getJobRole(options.db, `r${task.job_id}`)
+      : undefined;
   const docs = task.repo
     ? await loadRoleDocs(worktree ?? task.repo, node)
     : { roleDoc: node?.body ?? "", rootDoc: "" };
   // 组织技能：节点链上绑定的 ∪ 档案指定的，拷进任务目录，只对这次运行生效。
   const picked = options.db
-    ? skillsForTask(options.db, task, worker.profile.rules)
+    ? skillsForTask(options.db, task, {
+        ...worker.profile.rules,
+        skills: [
+          ...new Set([
+            ...(Array.isArray(worker.profile.rules.skills)
+              ? worker.profile.rules.skills
+              : []),
+            ...(job?.skills ?? []),
+          ]),
+        ],
+      })
     : undefined;
   const mount = picked
     ? mountSkills(
@@ -179,7 +194,14 @@ export async function prepareRun(
     title: task.title,
     brief,
     tells: tellSection(tells),
-    roleDoc: docs.roleDoc,
+    roleDoc: [
+      job
+        ? `# 角色：${job.name}\n\n${job.body}\n\n交付要求：${job.checks.join("、") || "按任务与档案要求"}`
+        : "",
+      docs.roleDoc,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
     charter: options.db
       ? withContext(
           node ? charterBrief(options.db, node.id) : undefined,

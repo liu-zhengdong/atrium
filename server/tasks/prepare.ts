@@ -204,6 +204,7 @@ export type PickInput = {
   requireTrust?: boolean;
   /** 任务所在节点链（根 → 本节点）：档案 avoid_nodes 命中的执行者不挑。 */
   chain?: readonly ChainNode[];
+  jobRef?: string;
 };
 
 export type Skip = { tool: Tool; reason: string };
@@ -235,6 +236,7 @@ export function pickWorker({
   exclude,
   requireTrust,
   chain,
+  jobRef,
 }: PickInput): PickResult {
   if (!(RISKS as readonly string[]).includes(risk))
     throw invalid(`risk 只能是 ${RISKS.join("、")}`);
@@ -262,6 +264,11 @@ export function pickWorker({
         tool,
         reason: `档案 max_risk=${max}，低于任务 risk=${risk}`,
       });
+      continue;
+    }
+    const jobAvoid = profiles[tool]?.rules.avoid_jobs;
+    if (jobRef && Array.isArray(jobAvoid) && jobAvoid.includes(jobRef)) {
+      skipped.push({ tool, reason: `档案 avoid_jobs 避开角色 ${jobRef}` });
       continue;
     }
     const avoided =

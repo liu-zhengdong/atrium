@@ -85,8 +85,15 @@ export function addTaskNote(
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw usage("请求体应为 JSON 对象");
   const input = body as Record<string, unknown>;
-  if (Object.keys(input).some((key) => key !== "text" && key !== "by"))
-    throw usage("只接受 text、by 字段");
+  if (
+    Object.keys(input).some((key) => !["text", "by", "verdict"].includes(key))
+  )
+    throw usage("只接受 text、by、verdict 字段");
+  if (
+    input.verdict !== undefined &&
+    !["ok", "fixed", "rejected"].includes(String(input.verdict))
+  )
+    throw usage("verdict: 只能是 ok、fixed、rejected");
   if (typeof input.text !== "string" || !input.text.trim())
     throw usage("text: 备注不能为空");
   const text = input.text.trim();
@@ -94,7 +101,11 @@ export function addTaskNote(
   const by = input.by === undefined ? "u1" : ownerOf(input.by, "by");
   return atomically(db, () => {
     const task = requireRow(db, id);
-    addEvent(db, id, now, "note", { text, by });
+    addEvent(db, id, now, "note", {
+      text,
+      by,
+      ...(input.verdict ? { verdict: input.verdict } : {}),
+    });
     db.prepare("UPDATE tasks SET updated_at=? WHERE id=?").run(now, id);
     return { ...noteView(db, id, task.status) };
   });

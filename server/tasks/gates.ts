@@ -16,6 +16,7 @@ export const GATES = [
   "finished",
   "file_growth",
   "claims_verified",
+  "screenshot",
 ] as const;
 export type Gate = (typeof GATES)[number];
 
@@ -192,6 +193,19 @@ function fileGrowth(facts: Facts, limits: Limits): GateResult {
       };
 }
 
+function screenshot(facts: Facts): GateResult {
+  const body = facts.pr?.body ?? "";
+  const attached =
+    /!\[[^\]]*\]\(https:\/\/[^)]+\.(?:png|jpe?g|gif|webp)(?:\?[^)]*)?\)|https:\/\/github\.com\/user-attachments\/assets\/[\w-]+|<img\s[^>]*src=["']https:\/\//i.test(
+      body,
+    );
+  return {
+    gate: "screenshot",
+    ok: attached,
+    evidence: attached ? "PR 正文有图片附件" : "PR 正文没有可核对的图片附件",
+  };
+}
+
 function claimsVerified(facts: Facts): GateResult {
   if (!facts.claims.length)
     return {
@@ -234,6 +248,8 @@ export function evaluateGates(
         return fileGrowth(facts, limits);
       case "claims_verified":
         return claimsVerified(facts);
+      case "screenshot":
+        return screenshot(facts);
       default:
         return {
           gate,

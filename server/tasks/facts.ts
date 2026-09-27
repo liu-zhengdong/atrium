@@ -55,7 +55,7 @@ export async function findPr(
       "--state",
       "all",
       "--json",
-      "number,url,state",
+      "number,url,state,body",
       "--limit",
       "1",
     ],

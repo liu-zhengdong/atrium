@@ -27,8 +27,10 @@ export type DeliveryRow = {
   historical: number;
   job_rev: number | null;
   job_checks: string | null;
+  /** 事件保留清理前固化的交付事实（JSON，#t126）；只在读交付明细时取。 */
+  facts?: string | null;
 };
-export type Delivery = DeliveryRow & {
+export type Delivery = Omit<DeliveryRow, "facts"> & {
   task_ref: string;
   task_title: string;
   final_result: string;
@@ -256,7 +258,8 @@ export function ensureDeliveryRecords(db: DatabaseSync) {
     incident_count INTEGER NOT NULL DEFAULT 0,
     incident_flags INTEGER NOT NULL DEFAULT 0,
     gate_passed INTEGER NOT NULL DEFAULT 0,
-    duration_ms INTEGER)`);
+    duration_ms INTEGER,
+    facts TEXT)`);
   const columns = new Set(
     all<{ name: string }>(db, "PRAGMA table_info(task_deliveries)").map(
       (x) => x.name,
@@ -269,6 +272,9 @@ export function ensureDeliveryRecords(db: DatabaseSync) {
       "final_outcome",
       "ALTER TABLE task_deliveries ADD COLUMN final_outcome TEXT",
     ],
+    // 事件保留清理会删掉旧交付窗口的事件（#t126）；清理前把从事件算出的展示事实固化到这里，
+    // 之后读固化结果，listDeliveries / summarizeDeliveries 与清理前完全一致。
+    ["facts", "ALTER TABLE task_deliveries ADD COLUMN facts TEXT"],
   ] as const)
     if (!columns.has(name)) db.exec(ddl);
   // 统计事实（#t123）：旧库在这里补列，随后按事件回填一次。
@@ -660,13 +666,14 @@ export type TaskLite = Pick<
   TaskRow,
   "id" | "title" | "status" | "delivery_stage"
 >;
-export function deliveryFacts(
+function factsFromEvents(
   row: DeliveryRow,
   task: TaskLite,
   events: TaskEventRow[],
   usage: { points: number; basis: string } | undefined,
   jobName: string | null,
 ): Delivery {
+  const { facts: _frozen, ...base } = row;
   const w = windowOf(row, events);
   const gateDiff = w.gates
     .map((d) => d.diff)
@@ -688,7 +695,7 @@ export function deliveryFacts(
     ((task.delivery_stage === "merged" || task.delivery_stage === "online") &&
       !w.untilNext);
   return {
-    ...row,
+    ...base,
     task_ref: `t${row.task_id}`,
     task_title: task.title,
     final_result:
@@ -729,6 +736,88 @@ export function deliveryFacts(
     verdict: text(lastNote?.verdict),
     verdict_note: text(lastNote?.text),
   };
+}
+/** 解析已固化的事实；坏 JSON 或非对象当作没固化，回退到从事件现算。 */
+function frozenFacts(row: DeliveryRow): Delivery | null {
+  if (!row.facts) return null;
+  try {
+    const x = JSON.parse(row.facts) as unknown;
+    return x && typeof x === "object" && !Array.isArray(x)
+      ? (x as Delivery)
+      : null;
+  } catch {
+    return null;
+  }
+}
+/** 读一条交付：优先用清理前固化的事实，没有才从事件现算。 */
+export function deliveryFacts(
+  row: DeliveryRow,
+  task: TaskLite,
+  events: TaskEventRow[],
+  usage: { points: number; basis: string } | undefined,
+  jobName: string | null,
+): Delivery {
+  return frozenFacts(row) ?? factsFromEvents(row, task, events, usage, jobName);
+}
+/**
+ * 把一个任务名下还没固化的交付事实写进 task_deliveries.facts（返回固化条数）。
+ * 事件保留清理删行前调用：此刻事件仍完整，固化后即便旧窗口的事件被清掉，
+ * listDeliveries / summarizeDeliveries 读到的仍是清理前的结果。统计列（first_pass 等）
+ * 由 applyDeliveryEvent 增量维护；这里顺手补齐该任务「已结束但没统计事实」的行，
+ * 免得之后 fillMissingFinishedDeliveryFacts 对着被清过的事件重算。
+ */
+export function freezeTaskDeliveries(db: DatabaseSync, taskId: number) {
+  const rows = all<DeliveryRow>(
+    db,
+    `SELECT ${DELIVERY_COLUMNS},facts FROM task_deliveries WHERE task_id=? AND (facts IS NULL OR facts='') ORDER BY id`,
+    taskId,
+  );
+  if (!rows.length) return 0;
+  const task = one<TaskLite>(
+    db,
+    "SELECT id,title,status,delivery_stage FROM tasks WHERE id=?",
+    taskId,
+  );
+  if (!task) return 0;
+  const events = taskEventsFor(db, [taskId], DISPLAY_EVENTS);
+  const usage = all<UsageLite>(
+    db,
+    "SELECT task_id,started_at,points,basis FROM task_usage WHERE task_id=?",
+    taskId,
+  );
+  const jobs = jobNamesOf(
+    db,
+    rows.map((r) => r.job_id).filter((x): x is number => x !== null),
+  );
+  const missing = all<DeliveryRow>(
+    db,
+    `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries WHERE task_id=? AND ended_at IS NOT NULL AND duration_ms IS NULL`,
+    taskId,
+  );
+  writeFacts(
+    db,
+    missing.map((row) => ({
+      facts: storedFactsOf(row, windowOf(row, windowEventsFor(db, row))),
+      id: row.id,
+    })),
+  );
+  const update = db.prepare("UPDATE task_deliveries SET facts=? WHERE id=?");
+  atomically(db, () => {
+    for (const row of rows)
+      update.run(
+        JSON.stringify(
+          factsFromEvents(
+            row,
+            task,
+            events,
+            pickUsage(usage, row),
+            row.job_id === null ? null : (jobs.get(row.job_id) ?? null),
+          ),
+        ),
+        row.id,
+      );
+  });
+  return rows.length;
 }
 function page<T>(items: readonly T[], size: number, fn: (slice: T[]) => void) {
   for (let i = 0; i < items.length; i += size) fn(items.slice(i, i + size));
@@ -1086,7 +1175,7 @@ export function listDeliveries(
     const clause = base ? `${base} AND id<?` : "WHERE id<?";
     const batch = all<DeliveryRow>(
       db,
-      `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries ${clause} ORDER BY id DESC LIMIT ?`,
+      `SELECT ${DELIVERY_COLUMNS},facts FROM task_deliveries ${clause} ORDER BY id DESC LIMIT ?`,
       ...params,
       before,
       Math.min(200, limit - rows.length),
@@ -1096,6 +1185,10 @@ export function listDeliveries(
     before = batch.at(-1)!.id;
   }
   if (!rows.length) return [];
+  // 已固化的交付直接读 facts，只给还没固化的任务读事件与用量。
+  const liveIds = [
+    ...new Set(rows.filter((r) => !frozenFacts(r)).map((r) => r.task_id)),
+  ].sort((a, b) => a - b);
   const taskIds = [...new Set(rows.map((r) => r.task_id))].sort(
     (a, b) => a - b,
   );
@@ -1113,13 +1206,13 @@ export function listDeliveries(
     rows.map((r) => r.job_id).filter((x): x is number => x !== null),
   );
   const eventsByTask = new Map<number, TaskEventRow[]>();
-  for (const event of taskEventsFor(db, taskIds, DISPLAY_EVENTS)) {
+  for (const event of taskEventsFor(db, liveIds, DISPLAY_EVENTS)) {
     const list = eventsByTask.get(event.task_id) ?? [];
     list.push(event);
     eventsByTask.set(event.task_id, list);
   }
   const usageByTask = new Map<number, UsageLite[]>();
-  page(taskIds, 200, (slice) => {
+  page(liveIds, 200, (slice) => {
     for (const u of all<UsageLite>(
       db,
       `SELECT task_id,started_at,points,basis FROM task_usage WHERE task_id IN (${marksOf(slice.length)})`,

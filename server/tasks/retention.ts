@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { all, one } from "./ledger-model.ts";
+import { freezeTaskDeliveries } from "./delivery-records.ts";
 
 /**
  * 收件箱与任务事件的保留上限（#t126）。两张表都会只增不减：
@@ -12,12 +13,13 @@ import { all, one } from "./ledger-model.ts";
  *
  * task_events 的读者（grep 全仓）分两类：
  * - 只依赖「最近」语义，删旧历史不影响：ledger-read/notes/queue/top/holder-facts 取最近若干条，
- *   delivery-records 按 start 事件切窗口（保留策略特意留住最近一次 start 之后），
  *   review-runtime/merge-runtime/online-runtime/schedule-upstream/ci-poll/concern-runtime/
  *   councils/workers-report/ledger-transition 取某类事件最近一条，map/view 取 max(id)。
- * - 取「最早」或「全量里最新」的，删旧历史会读空，必须显式保留（见 sweepEvents）：
+ * - 读的窗口会被清到、必须特殊处理的：
+ *   delivery-records 按 start 切交付窗口，老窗口的事件会被清，所以删行前先把从这个窗口算出的
+ *   事实固化进 task_deliveries.facts（freezeTaskDeliveries），之后交付统计读固化结果不变。
  *   map/who 从 kind='created' 取派发人（它就是最早那一条），从 kind='note' 里 id 最大的一条
- *   取最新备注（可能远早于最近 eventTail 条）。前者一律保留，后者每个任务保留最近一条。
+ *   取最新备注（可能远早于最近 eventTail 条）；前者一律保留，后者每个任务保留最近一条。
  */
 
 /** 已确认知会的保留时间：14 天。 */
@@ -107,7 +109,7 @@ export class Retention {
   /**
    * 任务事件：按 id 游标分页处理已结束且过期任务，每个任务只删「最近 start 之前、且不在最近
    * eventTail 条内」的事件；kind='created'（派发人）和最近一条 note（最新备注）总是保留。
-   * 返回本轮删掉的行数。
+   * 删行前先把交付事实固化进 task_deliveries，交付统计不受影响。返回本轮删掉的行数。
    */
   sweepEvents(now: number, options: RetentionOptions = {}) {
     const age = options.eventAgeMs ?? TASK_EVENT_RETENTION_MS;
@@ -136,6 +138,9 @@ export class Retention {
       const upper = start && start.id <= tailRow.id ? start.id : tailRow.id + 1;
       // created 与最新 note 兜底保留：它们按「最早/全量最新」被读，不能落进上面的窗口外。
       const note = lastNoteOf.get(row.id) as { id: number } | undefined;
+      // 交付统计从事件现算，删旧窗口的事件前先把事实固化进 task_deliveries（#t126），
+      // 之后 listDeliveries / summarizeDeliveries 与清理前完全一致。
+      freezeTaskDeliveries(this.db, row.id);
       removed += Number(drop.run(row.id, upper, note?.id ?? -1).changes);
     }
     this.cursor = rows.length < limit ? 0 : rows.at(-1)!.id;

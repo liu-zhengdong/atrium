@@ -2,6 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { EventInbox } from "../server/tasks/events.ts";
+import {
+  listDeliveries,
+  summarizeDeliveries,
+} from "../server/tasks/delivery-records.ts";
 import { ensureTaskTables } from "../server/tasks/ledger.ts";
 import {
   Retention,
@@ -151,13 +155,14 @@ function seedEvent(
   taskId: number,
   kind: string,
   at: number,
+  detailText = "{}",
 ): number {
   return Number(
     db
       .prepare(
         "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
       )
-      .run(taskId, at, kind, "{}").lastInsertRowid,
+      .run(taskId, at, kind, detailText).lastInsertRowid,
   );
 }
 
@@ -242,6 +247,119 @@ test("任务事件保留：老任务的 created 与最新一条 note 清理后�
     undefined,
     "旧 note 在窗口外，应被清掉",
   );
+});
+
+test("任务事件保留：多轮交付清理前后交付统计完全一致", () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const id = seedTask(db, "多轮交付的老任务", "done", NOW - 400 * DAY);
+  // 第一轮交付窗口：start → gates 未过 → note 打回 → 合入退回 → 卡死。
+  const s1 = seedEvent(
+    db,
+    id,
+    "start",
+    NOW - 400 * DAY,
+    JSON.stringify({ worker: "claude+opus" }),
+  );
+  seedEvent(
+    db,
+    id,
+    "gates",
+    NOW - 400 * DAY + 1,
+    JSON.stringify({
+      results: [{ gate: "ci", ok: false, evidence: "红了" }],
+      diff: { files: 3, added: 10, deleted: 2 },
+      passed: false,
+    }),
+  );
+  seedEvent(
+    db,
+    id,
+    "note",
+    NOW - 400 * DAY + 2,
+    JSON.stringify({ verdict: "rejected", text: "改" }),
+  );
+  seedEvent(
+    db,
+    id,
+    "merge_returned",
+    NOW - 400 * DAY + 3,
+    JSON.stringify({ reason: "rebase 冲突" }),
+  );
+  seedEvent(db, id, "stalled", NOW - 400 * DAY + 4);
+  // 第二轮交付窗口：start → gates 通过 → merged。
+  const s2 = seedEvent(
+    db,
+    id,
+    "start",
+    NOW - 400 * DAY + 5,
+    JSON.stringify({ worker: "codex+gpt" }),
+  );
+  seedEvent(
+    db,
+    id,
+    "gates",
+    NOW - 400 * DAY + 6,
+    JSON.stringify({
+      results: [{ gate: "ci", ok: true }],
+      diff: { files: 1, added: 5, deleted: 1 },
+      passed: true,
+    }),
+  );
+  seedEvent(db, id, "merged", NOW - 400 * DAY + 7);
+  // 过程事件撑过保留条数，让第一轮窗口落进要删的范围。
+  for (let i = 0; i < 20; i++)
+    seedEvent(db, id, "run", NOW - 400 * DAY + 8 + i);
+
+  const insertDelivery = db.prepare(
+    "INSERT INTO task_deliveries(task_id,start_event_id,worker,tool,model,started_at,ended_at,outcome,final_outcome,historical) VALUES(?,?,?,?,?,?,?,?,?,0)",
+  );
+  insertDelivery.run(
+    id,
+    s1,
+    "claude+opus",
+    "claude",
+    "opus",
+    NOW - 400 * DAY,
+    NOW - 400 * DAY + 4,
+    "block",
+    "returned",
+  );
+  insertDelivery.run(
+    id,
+    s2,
+    "codex+gpt",
+    "codex",
+    "gpt",
+    NOW - 400 * DAY + 5,
+    NOW - 400 * DAY + 7,
+    "exit_ok",
+    "merged",
+  );
+  db.prepare("UPDATE tasks SET delivery_stage='merged' WHERE id=?").run(id);
+
+  const before = listDeliveries(db);
+  const beforeStats = summarizeDeliveries(before);
+
+  const retention = new Retention(db);
+  const removed = retention.sweepEvents(NOW, {
+    eventAgeMs: 90 * DAY,
+    eventTail: 3,
+    taskLimit: 100,
+  });
+  assert.ok(removed > 0, "老任务的旧事件应被清掉");
+  assert.equal(
+    db.prepare("SELECT 1 FROM task_events WHERE id=?").get(s1),
+    undefined,
+    "第一轮的 start 会被清掉，固化必须兜住它读出的交付事实",
+  );
+  assert.ok(
+    db.prepare("SELECT 1 FROM task_events WHERE id=?").get(s2),
+    "第二轮（最新交付窗口）的事件要留着",
+  );
+
+  assert.deepEqual(listDeliveries(db), before);
+  assert.deepEqual(summarizeDeliveries(listDeliveries(db)), beforeStats);
 });
 
 test("任务事件保留：一批清不完时按 id 游标接着清，清完回到开头", () => {

@@ -114,33 +114,40 @@ test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关�
 
 test("comment 与 none 交付不用 PR，评论链接进入摘要", async (t) => {
   let commentQueries = 0;
-  let commentAt = 0;
   const link = "https://github.com/o/r/issues/262#issuecomment-123";
-  const { fx, call } = await startApp(t, (fixture) => {
+  // 评论时间取任务真实的开始时间：假执行者可能在 run 请求返回前就结束并查评论，不能等测试侧赋值。
+  let call!: Awaited<ReturnType<typeof startApp>>["call"];
+  const app = await startApp(t, (fixture) => {
     const original = fixture.run;
-    fixture.run = (command, args, options) => {
+    fixture.run = async (command, args, options) => {
       if (
         command === "gh" &&
         args[0] === "api" &&
         args[1]?.includes("/issues/262/comments")
       ) {
         commentQueries++;
-        return Promise.resolve({
+        const listed = await call("GET", "/api/tasks");
+        const task = (
+          listed.body.tasks as { issue: number | null; started_at: number }[]
+        ).find((item) => item.issue === 262)!;
+        return {
           ok: true,
           stdout: JSON.stringify([
             [
               {
-                created_at: new Date(commentAt).toISOString(),
+                created_at: new Date(task.started_at).toISOString(),
                 html_url: link,
               },
             ],
           ]),
           stderr: "",
-        });
+        };
       }
       return original(command, args, options);
     };
   });
+  const { fx } = app;
+  call = app.call;
   const invalid = await call("POST", "/api/tasks", {
     title: "设计",
     repo: fx.repo,
@@ -163,7 +170,6 @@ test("comment 与 none 交付不用 PR，评论链接进入摘要", async (t) =>
       worker: "kimi",
     });
     assert.equal(started.status, 200);
-    if (deliver === "comment") commentAt = started.body.task.started_at;
     const waited = await call(
       "GET",
       `/api/tasks/${created.body.ref}/wait?timeout=20`,

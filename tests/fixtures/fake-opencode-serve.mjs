@@ -1,6 +1,7 @@
 // 假 opencode serve：只听 127.0.0.1 随机端口，启动后打印与真 opencode 相同的地址行。
 // 要求 basic 认证（opencode:$OPENCODE_SERVER_PASSWORD）。prompt_async 立即返回，稍后才转 busy，
 // 一轮 150 毫秒（消息含 SLOW 时 600 毫秒）；忙时收到的消息排在本轮之后。
+// 消息含 HOLD 时这一轮不设时限，等 /fake/release 放开（测试要精确观察「忙」这段）。
 // /fake/state 返回消息、提示与拉起环境里的 XDG_DATA_HOME、HERDR_* 键，/fake/user 模拟用户在界面里发话。
 import { createServer } from "node:http";
 
@@ -28,6 +29,7 @@ function add(session, role, text) {
 
 // 空闲时新一轮 60 毫秒后才转 busy；忙时排队的消息接着跑，中间不回 idle（与真 opencode 相同）。
 let starting = false;
+let held = null;
 function pump() {
   if (busy || starting || !queue.length) return;
   starting = true;
@@ -35,16 +37,16 @@ function pump() {
 }
 function run() {
   starting = false;
-  const { session, text } = queue.shift();
-  busy = session.id;
-  setTimeout(
-    () => {
-      add(session, "assistant", `收到：${text.split("\n", 1)[0]}`);
-      if (queue.length) return run();
-      busy = null;
-    },
-    text.includes("SLOW") ? 600 : 150,
-  );
+  const item = queue.shift();
+  busy = item.session.id;
+  const finish = () => {
+    add(item.session, "assistant", `收到：${item.text.split("\n", 1)[0]}`);
+    if (queue.length) return run();
+    busy = null;
+  };
+  // HOLD：这一轮由测试按着，/fake/release 才结束，不靠固定时长撑住「忙」。
+  if (item.text.includes("HOLD")) return void (held = finish);
+  setTimeout(finish, item.text.includes("SLOW") ? 600 : 150);
 }
 
 const json = (response, status, value) => {
@@ -112,6 +114,12 @@ createServer(async (request, response) => {
     queue.push({ session, text: input.text });
     pump();
     return json(response, 200, true);
+  }
+  if (path === "/fake/release") {
+    const finish = held;
+    held = null;
+    finish?.();
+    return json(response, 200, { released: Boolean(finish) });
   }
   if (path === "/fake/state")
     return json(response, 200, {

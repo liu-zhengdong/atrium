@@ -275,6 +275,7 @@ test("listQuota：假 pace 按富余降序，没有额度标记时 runtime 为�
         ["codex", -5.6, null],
         ["antigravity", null, null],
         ["copilot", null, null],
+        ["cursor", null, null],
         ["grok", null, null],
         ["kimi", null, null],
       ],
@@ -287,6 +288,7 @@ test("listQuota：假 pace 按富余降序，没有额度标记时 runtime 为�
         ["codex", "openquota", null],
         ["antigravity", null, "没有额度数据"],
         ["copilot", "openquota", null],
+        ["cursor", null, "没有额度数据"],
         ["grok", null, "没有额度数据"],
         ["kimi", null, "没有额度数据"],
       ],
@@ -383,6 +385,7 @@ test("listQuota：没装 OpenQuota 也不报错，执行者账号显示没有额
       ["antigravity", null, "没有额度数据"],
       ["claude", null, "没有额度数据"],
       ["codex", null, "没有额度数据"],
+      ["cursor", null, "没有额度数据"],
       ["grok", null, "没有额度数据"],
       ["kimi", null, "没有额度数据"],
       ["opencode", null, "没有额度数据"],
@@ -509,7 +512,16 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
     const body = ok.json() as { accounts: QuotaAccount[] };
     assert.deepEqual(
       body.accounts.map((row) => row.providerId),
-      ["opencode", "claude", "codex", "antigravity", "copilot", "grok", "kimi"],
+      [
+        "opencode",
+        "claude",
+        "codex",
+        "antigravity",
+        "copilot",
+        "cursor",
+        "grok",
+        "kimi",
+      ],
     );
     assert.equal(body.accounts[0]!.runtime, null);
     assert.equal(body.accounts[0]!.hold, null);

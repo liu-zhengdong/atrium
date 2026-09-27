@@ -1079,6 +1079,7 @@ test("atrium quota：没有 OpenQuota 时三家读取器给数据或读不到原
       ["claude", "builtin", null],
       ["antigravity", null, "没有额度数据"],
       ["codex", "builtin", "读不到：Codex 用量接口返回 HTTP 500"],
+      ["cursor", null, "没有额度数据"],
       ["grok", null, "没有额度数据"],
       ["kimi", null, "没有额度数据"],
       [

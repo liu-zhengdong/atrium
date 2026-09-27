@@ -171,11 +171,12 @@ test("送入消息列出事件、查看与确认命令", () => {
   assert.match(text, /atrium events ack 7 8$/);
 });
 
-test("按工具选打开方式：opencode 走 ACP，未接入与不认识的给出可执行修正", () => {
+test("按工具选打开方式：opencode 有原生界面、也可走 ACP，未接入与不认识的给出可执行修正", () => {
   assert.deepEqual(chatMode("opencode"), {
     kind: "acp",
     command: "opencode",
     args: ["acp"],
+    native: "opencode",
   });
   assert.throws(
     () => chatMode("codex"),

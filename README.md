@@ -95,11 +95,19 @@ atrium events ack 1               # 确认已处理（编号见 events wait）
 ## 和秘书对话
 
 ```bash
-atrium chat                 # 打开秘书会话（缺省 opencode，接着上次）；--new 新开，--cwd 指定秘书工作目录
-atrium chat --allow         # 秘书的权限请求自动允许一次（非交互时缺省拒绝）
+atrium chat                 # 打开秘书会话（缺省 opencode 原生界面，接着上次）；--new 新开，--cwd 指定秘书工作目录
+atrium chat --acp           # 改用 Atrium 自己的对话界面（ACP）；不在终端里时自动走这条
+atrium chat --acp --allow   # ACP 界面里秘书的权限请求自动允许一次（非交互时缺省拒绝）
 ```
 
-`atrium chat` 是和秘书对话的统一入口，按秘书所用工具（`--tool`，或环境变量 `ATRIUM_SECRETARY_TOOL`）选打开方式。现在接入的是 opencode：Atrium 以 ACP 客户端拉起 `opencode acp`（去掉 `HERDR_*` 环境变量）并持有会话，会话编号存在 `<ATRIUM_DATA>/secretary/`。秘书空闲时，发给 `secretary` 的待处理事件按唤醒规则攒批后作为新消息送入，界面标出「送入事件 #编号」；秘书忙时事件排队，一轮结束后合并送入；连续自动送入 10 次后暂停，等你发话再继续。送入即记为已送达，秘书处理完自己 `atrium events ack`，没确认的租约到期后重投；关掉界面不丢事件，下次打开一并送入。codex、kimi、Claude Code 与 opencode 原生界面（serve + attach）后续接入。
+`atrium chat` 是和秘书对话的统一入口，按秘书所用工具（`--tool`，或环境变量 `ATRIUM_SECRETARY_TOOL`）选打开方式。现在接入的是 opencode：
+
+- **原生界面（缺省）**：Atrium 起 `opencode serve`（只听 127.0.0.1、随机端口、每次随机密码，去掉 `HERDR_*` 环境变量），再用 `opencode attach` 打开 opencode 自己的界面连到秘书会话。Atrium 经服务端接口往同一会话送事件：送入的消息以「【Atrium 事件】」开头出现在对话里，界面右上弹「送入事件 #编号」；走会话接口、不碰输入框，你正在输入的内容不受影响。退出界面即停掉服务。
+- **ACP 对话界面（`--acp`）**：Atrium 以 ACP 客户端拉起 `opencode acp` 并持有会话，界面标出「送入事件 #编号」。
+
+两种方式共用同一个会话（编号存在 `<ATRIUM_DATA>/secretary/`）。秘书空闲时，发给 `secretary` 的待处理事件按唤醒规则攒批后作为新消息送入；秘书忙时事件排队，一轮结束后合并送入；连续自动送入 10 次后暂停，等你发话再继续。送入即记为已送达，秘书处理完自己 `atrium events ack`，没确认的租约到期后重投；关掉界面不丢事件，下次打开一并送入。
+
+秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开时，用户 opencode 数据目录里的 `auth.json`、`mcp-auth.json` 比这边新就拷一份进来，用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。codex、kimi、Claude Code 后续接入。
 
 ## 组织树
 

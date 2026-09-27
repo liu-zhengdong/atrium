@@ -7,6 +7,7 @@ import { taskDir } from "./active.ts";
 import { ADAPTERS, isTool, TOOLS, type Tool } from "./adapters/index.ts";
 import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
 import { EventInbox } from "./events.ts";
+import { Retention } from "./retention.ts";
 import { Executors, type Chosen } from "./executors.ts";
 import { exec as defaultExec, type Exec } from "./git.ts";
 import {
@@ -128,6 +129,9 @@ import { patrolRun } from "./patrol.ts";
  * 工作区、拉起、事实收集、重启勘察、CI 轮询各在自己的模块。
  */
 
+/** 收件箱与任务事件保留清理的间隔（#t126）：半小时一轮，每轮有界。 */
+const RETENTION_SWEEP_MS = 30 * 60_000;
+
 export type RunnerOptions = {
   data: string;
   /** 旧版执行者档案目录：首次启动导入一次（#355），之后只读数据库。 */
@@ -176,6 +180,7 @@ export class TaskRunner {
   private readonly waits: TaskWaits;
   private readonly quota: QuotaGuard;
   private readonly scheduler: Scheduler;
+  private readonly retention: Retention;
   private readonly disk: DiskBudget;
   private readonly cleanup: WorktreeCleanup;
   private readonly merge: MergeQueue;
@@ -226,6 +231,7 @@ export class TaskRunner {
       batchMs: options.batchMs,
       leaseMs: options.leaseMs,
     });
+    this.retention = new Retention(db);
     this.exec = options.exec ?? defaultExec;
     const sourceEnv = options.env ?? process.env;
     this.launchOptions = {
@@ -427,6 +433,10 @@ export class TaskRunner {
     every(this.options.online?.pollMs ?? 60_000, async () => {
       if (!this.closed && this.recovered) this.online.kick();
     });
+    // 保留上限（#t126）：低频清理收件箱已确认知会与过期任务事件，不占常用路径。
+    every(RETENTION_SWEEP_MS, async () => {
+      if (!this.closed) this.retention.sweep();
+    });
     const recovery = this.recover()
       .then(async () => {
         this.recovered = true;
@@ -434,6 +444,13 @@ export class TaskRunner {
         if (!this.closed) this.review.kick();
         if (!this.closed) this.merge.kick();
         if (!this.closed) this.online.kick();
+        // 保留清理失败不该挡住自愈后的派活，单独兜住。
+        if (!this.closed)
+          try {
+            this.retention.sweep();
+          } catch (error) {
+            console.error("保留清理失败：", error);
+          }
       })
       .catch((error) => console.error("任务运行时自愈失败：", error))
       .finally(() => this.background.delete(recovery));

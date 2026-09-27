@@ -2,7 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { Problem } from "../problem.ts";
 import { LEASE_MS, selfInitiated } from "./event-lease.ts";
-import { eventLevel, summarizeEvents } from "./event-level.ts";
+import {
+  eventLevel,
+  INFORMATION_KINDS,
+  summarizeEvents,
+} from "./event-level.ts";
 import { atomically, ownerOf, taskRef } from "./ledger.ts";
 
 /**
@@ -24,8 +28,8 @@ export function ensureEventTables(db: DatabaseSync) {
       detail TEXT,
       count INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, ready_at INTEGER NOT NULL,
-      acked_at INTEGER);
-    CREATE INDEX IF NOT EXISTS task_inbox_pending ON task_inbox(subscriber,acked_at,id);
+      acked_at INTEGER,
+      level TEXT NOT NULL DEFAULT 'action');
     CREATE INDEX IF NOT EXISTS task_inbox_key ON task_inbox(subscriber,dedupe_key,acked_at);`);
   const columns = new Set(
     (
@@ -36,6 +40,53 @@ export function ensureEventTables(db: DatabaseSync) {
     db.exec("ALTER TABLE task_inbox ADD COLUMN actor TEXT");
   if (!columns.has("delivered_at"))
     db.exec("ALTER TABLE task_inbox ADD COLUMN delivered_at INTEGER");
+  // 级别进 SQL（#t126）：知会/要处理是写入时就定下的事实，不用每次读出来再逐行判。
+  const freshLevel = !columns.has("level");
+  if (freshLevel)
+    db.exec(
+      "ALTER TABLE task_inbox ADD COLUMN level TEXT NOT NULL DEFAULT 'action'",
+    );
+  if (freshLevel) backfillLevels(db);
+  // 逐条语句都要走索引（#t126）：按任务查、按订阅者看最近事件、看某一订阅者上交的记录。
+  db.exec(`CREATE INDEX IF NOT EXISTS task_inbox_task ON task_inbox(task_id,id);
+    CREATE INDEX IF NOT EXISTS task_inbox_sub_id ON task_inbox(subscriber,id);
+    CREATE INDEX IF NOT EXISTS task_inbox_sub_updated ON task_inbox(subscriber,updated_at,id);
+    CREATE INDEX IF NOT EXISTS task_inbox_source ON task_inbox(source,id);
+    CREATE INDEX IF NOT EXISTS task_inbox_acked ON task_inbox(level,acked_at,id) WHERE acked_at IS NOT NULL;`);
+  // 待投递索引带上级别：老的（subscriber,acked_at,id）换成（subscriber,acked_at,level,id），
+  // 只取「要处理」时直接在索引里定位，不必先扫出一堆知会再在 JS 里丢。
+  const pending = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type='index' AND name='task_inbox_pending'",
+    )
+    .get() as { sql: string | null } | undefined;
+  if (pending && !(pending.sql ?? "").includes("level"))
+    db.exec("DROP INDEX task_inbox_pending");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS task_inbox_pending ON task_inbox(subscriber,acked_at,level,id)",
+  );
+}
+
+/** 老库补级别：知会类型直接按集合标 info；ready 的自愈知会要看 detail。 */
+function backfillLevels(db: DatabaseSync) {
+  const kinds = [...INFORMATION_KINDS];
+  const marks = kinds.map(() => "?").join(",");
+  db.prepare(`UPDATE task_inbox SET level='info' WHERE kind IN (${marks})`).run(
+    ...kinds,
+  );
+  const ready = db
+    .prepare("SELECT id,detail FROM task_inbox WHERE kind='ready'")
+    .all() as { id: number; detail: string | null }[];
+  const mark = db.prepare("UPDATE task_inbox SET level=? WHERE id=?");
+  for (const row of ready) {
+    let detail: unknown = null;
+    try {
+      detail = row.detail === null ? null : JSON.parse(row.detail);
+    } catch {
+      detail = row.detail;
+    }
+    if (eventLevel("ready", detail) === "info") mark.run("info", row.id);
+  }
 }
 
 type InboxRow = {
@@ -53,6 +104,7 @@ type InboxRow = {
   acked_at: number | null;
   actor: string | null;
   delivered_at: number | null;
+  level: string | null;
 };
 
 export type InboxEvent = {
@@ -87,7 +139,8 @@ const view = (row: InboxRow): InboxEvent => {
     task: row.task_id === null ? null : taskRef(row.task_id),
     source: row.source,
     kind: row.kind,
-    level: eventLevel(row.kind, detail),
+    // 写入时已定级别；老行没有级别时按内容判，保证读出来的语义不变。
+    level: row.level === "info" ? "info" : eventLevel(row.kind, detail),
     key: row.dedupe_key,
     actor: row.actor,
     count: row.count,
@@ -162,6 +215,7 @@ export class EventInbox {
     const self = selfInitiated(subscriber, actor);
     const detail =
       event.detail === undefined ? null : JSON.stringify(event.detail);
+    const level = eventLevel(event.kind, event.detail);
     // 自己发起的只和自己发起的合并，免得盖掉一条还没投出去的别人的事件。
     const existing = this.db
       .prepare(
@@ -175,14 +229,14 @@ export class EventInbox {
       // 内容更新了就是新消息：清掉处理中租约，重新投递。
       this.db
         .prepare(
-          "UPDATE task_inbox SET kind=?,source=?,actor=?,detail=?,count=count+1,updated_at=?,delivered_at=NULL WHERE id=?",
+          "UPDATE task_inbox SET kind=?,source=?,actor=?,detail=?,level=?,count=count+1,updated_at=?,delivered_at=NULL WHERE id=?",
         )
-        .run(event.kind, event.source, actor, detail, now, existing.id);
+        .run(event.kind, event.source, actor, detail, level, now, existing.id);
       id = existing.id;
     } else {
       const inserted = this.db
         .prepare(
-          "INSERT INTO task_inbox(subscriber,task_id,source,kind,dedupe_key,actor,detail,created_at,updated_at,ready_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO task_inbox(subscriber,task_id,source,kind,dedupe_key,actor,detail,level,created_at,updated_at,ready_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         )
         .run(
           subscriber,
@@ -192,6 +246,7 @@ export class EventInbox {
           event.key,
           actor,
           detail,
+          level,
           now,
           now,
           now + this.batchMs,
@@ -232,16 +287,16 @@ export class EventInbox {
     const now = this.now();
     const result: InboxEvent[] = [];
     let after = 0;
+    const level = all ? "" : " AND level='action'";
     while (result.length < limit) {
       const rows = this.db
         .prepare(
-          "SELECT * FROM task_inbox WHERE subscriber=? AND id>? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND ready_at<=? AND (delivered_at IS NULL OR delivered_at<=?) ORDER BY id LIMIT 200",
+          `SELECT * FROM task_inbox WHERE subscriber=? AND id>? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND ready_at<=? AND (delivered_at IS NULL OR delivered_at<=?)${level} ORDER BY id LIMIT 200`,
         )
         .all(subscriber, after, now, now - this.leaseMs) as InboxRow[];
       for (const row of rows) {
         after = row.id;
-        const event = view(row);
-        if (all || event.level === "action") result.push(event);
+        result.push(view(row));
         if (result.length === limit) break;
       }
       if (rows.length < 200) break;
@@ -273,13 +328,14 @@ export class EventInbox {
   /** 最早到期的处理中租约还有多久（毫秒）；没有处理中的返回 undefined。 */
   private nextLeaseIn(subscriber: string, all = false) {
     let offset = 0;
+    const level = all ? "" : " AND level='action'";
     while (true) {
       const rows = this.db
         .prepare(
-          "SELECT * FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND delivered_at IS NOT NULL AND (actor IS NULL OR actor<>subscriber) ORDER BY delivered_at,id LIMIT 200 OFFSET ?",
+          `SELECT * FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND delivered_at IS NOT NULL AND (actor IS NULL OR actor<>subscriber)${level} ORDER BY delivered_at,id LIMIT 200 OFFSET ?`,
         )
         .all(subscriber, offset) as InboxRow[];
-      const row = rows.find((entry) => all || view(entry).level === "action");
+      const row = rows[0];
       if (row)
         return Math.max(0, row.delivered_at! + this.leaseMs - this.now());
       if (rows.length < 200) return undefined;
@@ -489,13 +545,12 @@ export class EventInbox {
       while (true) {
         const rows = this.db
           .prepare(
-            "SELECT * FROM task_inbox WHERE subscriber=? AND id>? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND updated_at>=? ORDER BY id LIMIT 200",
+            "SELECT * FROM task_inbox WHERE subscriber=? AND id>? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND level='info' AND updated_at>=? ORDER BY id LIMIT 200",
           )
           .all(who, after, since ?? 0) as InboxRow[];
         for (const row of rows) {
           after = row.id;
-          const event = view(row);
-          if (event.level === "info") events.push(event);
+          events.push(view(row));
         }
         if (rows.length < 200) break;
       }

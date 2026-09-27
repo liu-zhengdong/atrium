@@ -11,7 +11,7 @@
 - 请专员（#322）：账在 `concerns.ts`（task_concerns，一位专员一行、本轮审查任务与结论），判定在 `concern-gate.ts`（审查结论、专员关卡合成、`invite_when` 提示、提示词段落），执行在 `concern-runtime.ts`（其余关卡通过后建审查子任务、审查不再跑后记结论并补判父任务）；审查任务自己的结局不单独投递。
 - 合入前审阅（`review.ts` 判定、`review-runtime.ts` 编排）：状态只在 `tasks.delivery_stage='reviewing'` 与 `review_task`，巡检从账本续上；审阅结论只认审阅者摘要里最后一个「审阅结论：通过/打回」，打回走合入队列的 `handBack`。专员关卡在前、审阅在后：专员都通过后同样经 `review.admit` 分档。
 - 会审（#322）：账在 `councils.ts`（task_councils 议题一行、council_members 每位专员一个意见任务），判定在 `council-gate.ts`（意见立场、汇总解析、结局合成、提示词），编排在 `council-runtime.ts`（意见收齐交 leader 汇总、汇总完成记结论）；议题任务自己的执行者运行就是汇总，意见任务与汇总的完成不单独投递，结局投 `council_decided` / `council_escalated`。议题任务取消时会审转「已关闭」（`council-close.ts`，状态转移同一事务里关；巡检补关老库里卡住的），推进按议题分页走完全部未定会审，不被卡住的挤掉。
-- 事件先落库再投递；同一订阅者、同一去重键的未确认事件合并；订阅者自己发起的动作不投给他本人。
+- 事件先落库再投递；同一订阅者、同一去重键的未确认事件合并；订阅者自己发起的动作不投给他本人。事件级别（要处理/知会）写入 `task_inbox.level`，过滤在 SQL 里做（`events.ts`）；两张表的保留上限在 `retention.ts`（已确认知会按时间/条数清，已结束任务的旧事件留最近一段与最新交付窗口），由运行时低频清理。
 - 测试用 `tests/task-fixture.ts` 的假执行者和临时目录，不依赖本机装了哪些 CLI 或 OpenQuota。
 - 本机减负（#358）：限额读取与判定在 `host-load.ts`（纯函数，采样在 `HostLoad`）；`TaskRunner.run` 与 `Executors.drain` 拉起前过同一道闸门，满了或太忙落库排队、巡检时按入队顺序拉起；本地检查并发由共享的 `sharedLocalChecks` 上限控制；测试并发经 `worker-env.ts` 注入 `ATRIUM_TEST_CONCURRENCY`。太忙看两条线（t113）：Atrium 进程树占的核数（`server/platform/cpu-plan.ts` 判定、`cpu.ts` 按平台采样，巡检时刷新）与整机负载保护线。
 - 紧急（t113）：只认 `tasks.urgent`；闸门（`hostGate` 的 `urgent`）、排队先后（`queueOrder`，执行者队列 `queueHeads` 与合入队列 `NEXT_MERGE` 同一规则）、本地检查排位（`checkPlacement`）都在 `host-load.ts`，其余限制（额度保留、trust / max_risk、依赖）不因紧急放宽。

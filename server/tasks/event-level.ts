@@ -1,7 +1,11 @@
 /** 事件分级只依赖事件内容；未知类型保持要处理，避免新事件被静默吞掉。 */
 export type EventLevel = "action" | "info";
 
-const information = new Set([
+/**
+ * 知会级事件类型；级别要写进 task_inbox.level 供 SQL 过滤（#t126），
+ * 这里的集合是数据迁移回填时的来源，新事件在写入时就带上级别。
+ */
+export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "merge_queued",
   "merge_returned",
   "merge_retry",
@@ -31,7 +35,7 @@ export function eventLevel(kind: string, detail?: unknown): EventLevel {
     const data = detail as { auto?: unknown; unassigned?: unknown } | null;
     return data?.auto === true && data.unassigned !== true ? "info" : "action";
   }
-  return information.has(kind) ? "info" : "action";
+  return INFORMATION_KINDS.has(kind) ? "info" : "action";
 }
 
 export type DigestItem = {

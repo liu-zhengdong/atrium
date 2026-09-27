@@ -57,7 +57,8 @@ test("命令组的 --help 列出该组全部子命令，条目与 atrium --help 
   assert.equal(captured.length, 2, "两组各打一份帮助，不报不认识的命令");
   const [taskHelp, eventsHelp] = captured as [string, string];
   assert.match(taskHelp, /^用法：atrium task <子命令> …/);
-  assert.match(eventsHelp, /^用法：atrium events <子命令> …/);
+  assert.match(eventsHelp, /^用法：atrium events \[--as 订阅者\]/);
+  assert.match(eventsHelp, /atrium events <子命令> …/);
   const members = (group: string) =>
     Object.keys(commands).filter((name) => name.startsWith(`${group} `));
   for (const [group, text] of [
@@ -74,6 +75,30 @@ test("命令组的 --help 列出该组全部子命令，条目与 atrium --help 
   assert(!taskHelp.includes("events wait"), "task 组不混入 events 子命令");
   assert(!eventsHelp.includes("task add"), "events 组不混入 task 子命令");
   assert.match(taskHelp, /全部命令：atrium --help/);
+});
+
+test("全景组的 --help 先讲裸命令：atrium map 打开网页，并列出 --depth / --no-open / --json", async () => {
+  const captured: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    assert.equal(await main(["map", "--help"]), 0);
+  } finally {
+    console.log = original;
+  }
+  assert.equal(captured.length, 1);
+  const text = captured[0]!;
+  assert.match(
+    text,
+    /^用法：atrium map \[节点\] \[--depth N\] \[--no-open\] \[--json\]/,
+  );
+  assert.match(text, /atrium map <子命令> …/);
+  assert.match(text, /打开本机网页/);
+  assert.match(text, /--depth/);
+  assert.match(text, /--no-open/);
+  assert.match(text, /--json/);
+  for (const name of ["map", "map context", "map edit", "map add"])
+    assert(text.includes(`atrium ${name} `), `全景组缺 ${name}`);
 });
 
 test("错误码与候选最多三项，短号优先", () => {

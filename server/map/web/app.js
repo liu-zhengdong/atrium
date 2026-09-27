@@ -8,15 +8,9 @@
 // - 秘书：#secretary，页签是备忘／决定记录。
 // 当前页、页签与筛选都写在 hash 里，刷新与前进后退都回到原处。
 
+import { escapeHtml as esc, linkify, liveText } from "./format.js";
+
 const $ = (id) => document.getElementById(id);
-const esc = (value) =>
-  String(value ?? "").replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        c
-      ],
-  );
 
 const state = {
   root: null,
@@ -297,7 +291,7 @@ function taskTable(all, { withRole, empty }) {
         ? `<span class="clamp note-line" title="${esc(`${note.by.name}：${note.text}`)}"><span class="note-by">${esc(note.by.name)}：</span>${esc(note.text)}</span>`
         : "";
       const recent = doing
-        ? `<span class="clamp" title="${esc(doing)}">${esc(doing)}</span>${noteLine}`
+        ? `<span class="clamp" title="${esc(doing)}">${linkify(doing)}</span>${noteLine}`
         : noteLine;
       const role = t.job
         ? chipLink(t.job.name, "role", roleHref(t.job.ref))
@@ -1048,15 +1042,18 @@ function drawLive() {
     live.textContent = "已断开，重连中";
   } else if (state.now) {
     const busy = state.now.leaders ?? [];
-    live.dataset.state = state.now.running || busy.length ? "on" : "idle";
+    // 在跑数看当前部分（含子部分）；角色页与执行者页没有所属部分，退回全组织。
+    const text = liveText(state.route.page, state.data, state.now);
+    live.dataset.state = text !== "都停着" || busy.length ? "on" : "idle";
     // 窄屏顶栏放不下名字，只说「负责人在处理」，不挤掉面包屑。
     const narrow = matchMedia("(max-width: 720px)").matches;
     const lead = busy.length
       ? `${busy.length > 1 ? `${busy.length} 位负责人` : narrow ? "负责人" : busy[0].name}在处理`
       : "";
-    live.textContent = state.now.running
-      ? [`在做 ${state.now.running} 件`, lead].filter(Boolean).join(" · ")
-      : lead || "都停着";
+    live.textContent =
+      text === "都停着"
+        ? lead || "都停着"
+        : [text, lead].filter(Boolean).join(" · ");
     live.title = busy.map((l) => `${l.name}：${l.doing ?? ""}`).join("\n");
   }
 }

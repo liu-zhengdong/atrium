@@ -22,25 +22,43 @@ export type PlanItem = {
   reason: string | null;
 };
 
-/** 上游 done 且交付 PR 时，PR 合入才算满足；PR 关闭未合入与上游失败一样卡住下游。 */
-function upstreamProblem(dep: Dependency): string | null {
-  if (dep.status === "failed" || dep.status === "cancelled")
-    return `${dep.ref} [${dep.status}]`;
-  if (dep.status === "done" && dep.pr?.state === "closed")
-    return `${dep.ref} 的 PR #${dep.pr.number} 已关闭未合入`;
-  return null;
-}
+export type UpstreamCondition =
+  | { kind: "met" }
+  | { kind: "wait"; text: string }
+  | { kind: "blocked"; text: string };
 
-function upstreamWait(dep: Dependency): string | null {
-  if (dep.status !== "done") return `${dep.ref} [${dep.status}]`;
-  if (!dep.pr || dep.pr.state === "merged" || dep.pr.state === "closed")
-    return null;
+/**
+ * 一个上游是否满足（纯函数）：上游 done 且交付 PR 时 PR 合入才算；合入服务自身仓库、
+ * 要自动上线的，上线才算（t130，下游要用新命令）；PR 关闭未合入、上线失败与上游失败一样卡住下游。
+ */
+export function upstreamCondition(dep: Dependency): UpstreamCondition {
+  if (dep.status === "failed" || dep.status === "cancelled")
+    return { kind: "blocked", text: `${dep.ref} [${dep.status}]` };
+  if (dep.status !== "done")
+    return { kind: "wait", text: `${dep.ref} [${dep.status}]` };
+  if (dep.release === "online") return { kind: "met" };
+  if (dep.release === "failed")
+    return { kind: "blocked", text: `${dep.ref} 上线失败` };
+  if (dep.release === "waiting")
+    return { kind: "wait", text: `${dep.ref} 上线` };
+  if (!dep.pr) return { kind: "met" };
+  if (dep.pr.state === "closed")
+    return {
+      kind: "blocked",
+      text: `${dep.ref} 的 PR #${dep.pr.number} 已关闭未合入`,
+    };
+  // 运行时还在合入时 gh 可能已显示合入，但要不要等上线得等它记完账再说。
+  if (dep.pr.state === "merged" && dep.release !== "merging")
+    return { kind: "met" };
   const note = dep.pr.error
     ? `（查询失败：${dep.pr.error}）`
     : dep.pr.state === null
       ? "（尚未查询）"
       : "";
-  return `${dep.ref} 的 PR #${dep.pr.number} 合入${note}`;
+  return {
+    kind: "wait",
+    text: `${dep.ref} 的 PR #${dep.pr.number} 合入${note}`,
+  };
 }
 
 /** 状态判定不碰 IO；任一上游失败或取消时，整条任务链都不能就绪。 */
@@ -52,13 +70,10 @@ export function classify(
 ): Pick<PlanItem, "group" | "waiting_for" | "reason"> {
   if (status === "running")
     return { group: "running", waiting_for: [], reason: null };
-  const failed = dependencies
-    .map(upstreamProblem)
-    .filter((text): text is string => text !== null);
+  const checks = dependencies.map(upstreamCondition);
+  const failed = checks.flatMap((c) => (c.kind === "blocked" ? [c.text] : []));
   const waiting = [
-    ...dependencies
-      .map(upstreamWait)
-      .filter((text): text is string => text !== null),
+    ...checks.flatMap((c) => (c.kind === "wait" ? [c.text] : [])),
     ...prs.filter((pr) => !pr.merged).map((pr) => `${pr.ref} 未合入`),
   ];
   if (failed.length)
@@ -84,20 +99,28 @@ export function classify(
   return { group: "ready", waiting_for: [], reason: null };
 }
 
-export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
+/** 读账本里的依赖事实再判定；不查 gh，PR 状态用排期器缓存的结果。 */
+export function scheduleOf(
+  db: DatabaseSync,
+  row: Pick<TaskRow, "id" | "status" | "schedule_reason">,
+) {
   const deps = conditions(db, row.id);
   const tasks = deps.after.map((ref) => dependencyOf(db, Number(ref.slice(1))));
   const prs = deps.after_pr.map((pr) => ({
     ref: `${pr.repo}#${pr.number}${pr.error ? `（查询失败：${pr.error}）` : ""}`,
     merged: pr.merged,
   }));
+  return classify(row.status, tasks, prs, row.schedule_reason);
+}
+
+export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
   return {
     task: {
       ...listView(row),
       ...noteView(db, row.id, row.status),
       ...queueView(db, row.id),
     },
-    ...classify(row.status, tasks, prs, row.schedule_reason),
+    ...scheduleOf(db, row),
   };
 }
 

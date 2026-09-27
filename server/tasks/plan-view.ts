@@ -1,7 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { all, taskRef, type TaskRow } from "./ledger-model.ts";
 import { conditions } from "./schedule-ledger.ts";
-import { dependencyOf, type PrState } from "./schedule-upstream.ts";
+import {
+  dependencyOf,
+  type PrState,
+  type Release,
+} from "./schedule-upstream.ts";
 
 /**
  * 排期的只读细节（`atrium top` 排期段，#262）：每条待办的记账节点路径、未结束子任务数，
@@ -17,6 +21,8 @@ export type UpstreamView = {
   started_at: number | null;
   /** 上游 done 且交付 PR 时才有；state 为 null 表示还没查过。 */
   pr: { number: number; state: PrState | null; error: string | null } | null;
+  /** 合入服务自身仓库、要自动上线的才有（t130）；null 表示合入即满足。 */
+  release: Release | null;
 };
 export type AfterPrView = {
   repo: string;
@@ -97,6 +103,7 @@ export function planDetails(
           worker: task.worker,
           started_at: task.started_at,
           pr: dep.pr ?? null,
+          release: dep.release ?? null,
         };
       }),
       after_pr: deps.after_pr.map((pr) => ({

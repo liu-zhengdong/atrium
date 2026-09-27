@@ -13,6 +13,8 @@ import {
   updateTask,
 } from "./ledger.ts";
 import { TaskRunner, type RunnerOptions } from "./runner.ts";
+import { taskPlan } from "./schedule.ts";
+import { parseTaskRef } from "./ledger.ts";
 
 type Query = Record<string, string | undefined>;
 const params = (value: unknown) => (value ?? {}) as { id?: string };
@@ -76,6 +78,14 @@ export function registerTaskRoutes(
   app.get("/api/tasks/top", (request) =>
     requireRunner().top({ as: query(request.query).as }),
   );
+  app.get("/api/tasks/plan", (request) => {
+    const q = query(request.query);
+    return taskPlan(
+      db,
+      q.after ? parseTaskRef(q.after, "after") : 0,
+      q.limit ? Number(q.limit) : 200,
+    );
+  });
   app.get("/api/tasks/:id", (request) =>
     getTask(db, params(request.params).id),
   );

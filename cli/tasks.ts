@@ -101,7 +101,7 @@ export function renderTree(nodes: TaskNode[], depth = 0): string[] {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--role R] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role R] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about: "建任务；--parent 挂到父任务下，--brief 附任务详述 md",
   options: {
     parent: { type: "string" },
@@ -111,6 +111,9 @@ const add: Command = {
     owner: { type: "string" },
     deliver: { type: "string" },
     issue: { type: "string" },
+    after: { type: "string" },
+    "after-pr": { type: "string" },
+    auto: { type: "boolean" },
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
@@ -150,6 +153,13 @@ const add: Command = {
         : { owner: str(values, "owner") }),
       ...(kind === undefined ? {} : { deliver: deliver(kind) }),
       ...(issueText === undefined ? {} : { issue: issue(issueText) }),
+      ...(str(values, "after") === undefined
+        ? {}
+        : { after: str(values, "after") }),
+      ...(str(values, "after-pr") === undefined
+        ? {}
+        : { after_pr: str(values, "after-pr") }),
+      ...(values.auto === true ? { auto: true } : {}),
     };
     const task = await (await client()).post<Task>("/tasks", body);
     if (json) printJson(task);
@@ -158,9 +168,11 @@ const add: Command = {
         `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}`,
       );
     recordNext(
-      task.parent_ref
-        ? `派活：atrium task run ${task.ref}`
-        : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
+      str(values, "after") || str(values, "after-pr") || values.auto === true
+        ? "看排期：atrium task plan"
+        : task.parent_ref
+          ? `派活：atrium task run ${task.ref}`
+          : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
     );
   },
 };
@@ -317,8 +329,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN --status S",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可改 --title --role --brief --deliver --issue`,
+  args: "tN [--status S] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可改 --title --role --brief --deliver --issue、依赖和自动派发`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
@@ -326,11 +338,14 @@ const set: Command = {
     brief: { type: "string" },
     deliver: { type: "string" },
     issue: { type: "string" },
+    after: { type: "string" },
+    "after-pr": { type: "string" },
+    auto: { type: "boolean" },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const id = ref(reference, "任务");
-    const body: Record<string, string> = {};
+    const body: Record<string, string | boolean> = {};
     const wanted = str(values, "status");
     if (wanted !== undefined) body.status = status(wanted);
     const title = str(values, "title");
@@ -347,10 +362,14 @@ const set: Command = {
     if (kind !== undefined) body.deliver = deliver(kind);
     const issueText = str(values, "issue");
     if (issueText !== undefined) body.issue = String(issue(issueText));
+    if (str(values, "after") !== undefined) body.after = str(values, "after")!;
+    if (str(values, "after-pr") !== undefined)
+      body.after_pr = str(values, "after-pr")!;
+    if (values.auto === true) body.auto = true;
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--title、--role、--brief、--deliver 或 --issue",
+        "至少给一项：--status、--title、--role、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -359,6 +378,61 @@ const set: Command = {
     if (json) printJson(task);
     else console.log(`${task.ref} 已更新 · [${task.status}] ${task.title}`);
     recordNext(`看全貌：atrium task tree ${task.parent_ref ?? task.ref}`);
+  },
+};
+
+type Plan = {
+  groups: Record<
+    "running" | "ready" | "waiting" | "blocked",
+    { task: Task; waiting_for: string[]; reason: string | null }[]
+  >;
+  next_after: string | null;
+};
+const plan: Command = {
+  args: "[--after tN]",
+  about: "按在跑、就绪、等待中、卡住列出待办及依赖；--json 给脚本",
+  options: { after: { type: "string" } },
+  positionals: [0, 0],
+  async run({ values, json }) {
+    const after = str(values, "after");
+    const result = await (
+      await client()
+    ).get<Plan>(`/tasks/plan${after ? `?after=${ref(after, "--after")}` : ""}`);
+    if (json) printJson(result);
+    else {
+      for (const [group, label] of [
+        ["running", "在跑"],
+        ["ready", "就绪"],
+        ["waiting", "等待中"],
+        ["blocked", "卡住"],
+      ] as const) {
+        console.log(`${label}（${result.groups[group].length}）`);
+        for (const item of result.groups[group])
+          console.log(
+            `  ${item.task.ref} ${item.task.title}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
+          );
+      }
+    }
+    recordNext(
+      result.next_after
+        ? `下一页：atrium task plan --after ${result.next_after}`
+        : "建任务：atrium task add 标题",
+    );
+  },
+};
+
+const done: Command = {
+  args: "tN",
+  about: "人工完成任务；等同 task set tN --status done",
+  positionals: [1, 1],
+  async run({ positionals: [reference], json }) {
+    const id = ref(reference, "任务");
+    const task = await (
+      await client()
+    ).patch<Task>(`/tasks/${id}`, { status: "done" });
+    if (json) printJson(task);
+    else console.log(`${task.ref} 已完成 · ${task.title}`);
+    recordNext("看排期：atrium task plan");
   },
 };
 
@@ -534,9 +608,11 @@ const wait: Command = {
 export const taskCommands: Record<string, Command> = {
   "task add": add,
   "task ls": ls,
+  "task plan": plan,
   "task show": show,
   "task tree": tree,
   "task set": set,
+  "task done": done,
   "task run": run,
   "task stop": stop,
   "task log": log,

@@ -15,6 +15,7 @@ export type PlanTask = {
   owner: string | null;
   auto: number;
   node_ref?: string | null;
+  goal_ref?: string | null;
   schedule_state?: string | null;
 };
 export type PlanUpstream = {
@@ -142,25 +143,37 @@ export function waitText(entry: PlanEntry, now: number, wide: boolean) {
 
 function detail(item: Item, now: number, wide: boolean) {
   const task = item.task;
+  const goal = task.goal_ref ? `${task.goal_ref} · ` : "";
   if (item.group === "running") {
     const took = task.started_at ? elapsed(now - task.started_at) : "";
-    return wide
-      ? ["在跑", task.worker, took].filter(Boolean).join(" · ")
-      : `在跑${took ? ` ${took}` : ""}`;
+    return (
+      goal +
+      (wide
+        ? ["在跑", task.worker, took].filter(Boolean).join(" · ")
+        : `在跑${took ? ` ${took}` : ""}`)
+    );
   }
   // 链里的上游自己跑失败了：它是下游卡住的原因，照实写失败。
   if (item.group === "blocked" && !scheduleBlocked(item))
-    return item.task.status === "failed"
-      ? `失败${item.reason && item.reason !== "任务失败" ? `：${item.reason}` : ""}`
-      : `卡住：${item.reason ?? "任务受阻"}`;
+    return (
+      goal +
+      (item.task.status === "failed"
+        ? `失败${item.reason && item.reason !== "任务失败" ? `：${item.reason}` : ""}`
+        : `卡住：${item.reason ?? "任务受阻"}`)
+    );
   if (item.group === "blocked")
-    return `卡住：${readable(item.reason ?? "任务受阻")}`;
-  if (item.group === "waiting") return waitText(item, now, wide);
+    return `${goal}卡住：${readable(item.reason ?? "任务受阻")}`;
+  if (item.group === "waiting") return goal + waitText(item, now, wide);
   const auto = task.auto ? "自动派" : "手动派";
   const owner = task.owner ?? "secretary";
-  return wide
-    ? [item.node_path ?? task.node_ref, auto, owner].filter(Boolean).join(" · ")
-    : `${task.auto ? "自动" : "手动"} · ${owner}`;
+  return (
+    goal +
+    (wide
+      ? [item.node_path ?? task.node_ref, auto, owner]
+          .filter(Boolean)
+          .join(" · ")
+      : `${task.auto ? "自动" : "手动"} · ${owner}`)
+  );
 }
 
 /** 上游短号：有细节用细节，旧版服务从 waiting_for 的开头取。 */
@@ -376,7 +389,7 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
         const indent = "  ".repeat(-row.indent);
         lines.push({
           text: fit(
-            `${indent}▸ ${row.item.ref} ${row.item.task.title}`,
+            `${indent}▸ ${row.item.ref} ${row.item.task.title}${row.item.task.goal_ref ? ` · ${row.item.task.goal_ref}` : ""}`,
             frame.width,
           ),
         });

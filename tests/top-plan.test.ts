@@ -13,6 +13,9 @@ import {
   type PlanView,
 } from "../cli/top-plan.ts";
 import { renderTop, snapshotOf, type Snapshot } from "../cli/top.ts";
+import { goalsDepth } from "../cli/top.ts";
+import { renderTopGoals } from "../cli/top-goals.ts";
+import type { GoalNode } from "../server/goals/read.ts";
 import type { Client } from "../cli/service.ts";
 import { width } from "../cli/format.ts";
 
@@ -209,6 +212,53 @@ test("排期段：窄屏去掉节点与执行者，每行都不超宽", () => {
   assert.doesNotMatch(narrow, /已满足/);
 });
 
+test("排期任务行标出所属里程碑，窄屏仍可见", () => {
+  const plan = sample();
+  plan.groups.ready[0]!.task.goal_ref = "g12";
+  for (const cols of [100, 60]) {
+    const lines = draw(plan, cols).lines;
+    const line = lines.find((line) => line.includes("t35"))!;
+    assert.match(line, /g12/);
+    assert.ok(width(line) <= cols);
+  }
+});
+
+const goal = (
+  ref: string,
+  result: string,
+  children: GoalNode[] = [],
+): GoalNode =>
+  ({
+    ref,
+    result,
+    status: "active",
+    status_label: "进行中",
+    summary: { running: 1, open: 2, blocked: 1, waiting_for: ["g8"] },
+    children,
+  }) as GoalNode;
+
+test("目标段：默认上两层、可展开、折叠与窄屏", () => {
+  const tree = [
+    goal("g1", "AI 组织运行底座", [
+      goal("g2", "命令行视图", [goal("g3", "完成汇总")]),
+    ]),
+  ];
+  const shallow = renderTopGoals(tree, 100);
+  assert.match(shallow.join("\n"), /g1.*在跑 1 未结 2.*前置 g8、任务卡住 1/);
+  assert.match(shallow.join("\n"), /g2/);
+  assert.doesNotMatch(shallow.join("\n"), /g3/);
+  assert.match(shallow.join("\n"), /…下层 1 个/);
+  assert.match(renderTopGoals(tree, 100, 3).join("\n"), /g3/);
+  assert.match(renderTopGoals(tree, 100, 3, 3).at(-1)!, /还有 .* 行/);
+  const narrow = renderTopGoals(tree, 60, 3);
+  for (const line of narrow) assert.ok(width(line) <= 60);
+  assert.match(narrow.join("\n"), /卡在 前置 g8、任务卡住 1/);
+  assert.equal(goalsDepth(undefined), 2);
+  assert.equal(goalsDepth("3"), 3);
+  for (const invalid of ["0", "13", "abc", "2.5"])
+    assert.throws(() => goalsDepth(invalid), /--goals-depth/);
+});
+
 test("排期段：超出行数折叠，提示 atrium task plan；不止一页也提示", () => {
   const { lines } = draw(sample(), 100, 5);
   assert.equal(lines.length, 5);
@@ -325,7 +375,7 @@ test("top 屏：排期段接在看板下面；取不到排期不影响看板；�
     },
   } as unknown as Client;
   const got = await snapshotOf(ok, undefined);
-  assert.deepEqual(calls.sort(), ["/tasks/plan", "/tasks/top"]);
+  assert.deepEqual(calls.sort(), ["/goals/tree", "/tasks/plan", "/tasks/top"]);
   assert.equal(got.plan?.groups.ready.length, 2);
   const failing = {
     get: async (path: string) => {

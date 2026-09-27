@@ -1,6 +1,6 @@
 import type { TaskRow } from "./ledger-model.ts";
 import type { TaskStatus } from "./state.ts";
-import { oneLine } from "../text-width.ts";
+import { oneLine, width } from "../text-width.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
@@ -111,60 +111,185 @@ export function blockShort(
   return oneLine(line.split(/[：；]/)[0]!.trim() || line, 40);
 }
 
-/** 从审阅意见里挑一句：跳过标题与「必须改的问题：」这类小标题，列表项有加粗开头的取加粗部分。 */
-function reviewPoint(notes: string): string | null {
+/** 标识符、路径、数字里的字符：截断不落在两个这样的字符之间。 */
+const ID_CHAR = /[\w./:@#$-]/;
+
+/**
+ * 按显示宽度截断，只在词或标点边界下刀，末尾带「…」（算一格）；
+ * 连第一个词都放不下时返回空串，由调用方退回只写类别。
+ */
+export function clipWords(text: string, max: number): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  if (width(line) <= max) return line;
+  const chars = [...line];
+  let used = 0;
+  let cut = 0;
+  for (let i = 0; i < chars.length; i++) {
+    used += width(chars[i]!);
+    if (used > max - 1) break;
+    const next = chars[i + 1];
+    if (!next || !(ID_CHAR.test(chars[i]!) && ID_CHAR.test(next))) cut = i + 1;
+  }
+  const head = chars
+    .slice(0, cut)
+    .join("")
+    .replace(/[\s、，,：:；;（(「“'"`-]+$/, "");
+  return head ? `${head}…` : "";
+}
+
+/** 去掉 markdown 记号，留下给人读的文字。 */
+const plainText = (text: string) =>
+  text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*|__|`/g, "")
+    .trim();
+
+/** 第一句：到句末标点、分号或全角冒号为止；`a.ts:12` 这类半角冒号不断句。 */
+const firstSentence = (text: string) =>
+  text.split(/[。！？!?；;：]|:\s/)[0]!.trim();
+
+/** 放不下时先去掉开头的代码位置（`a.ts:12-30`）和括号里的补充说明，再按词截断。 */
+function fitSentence(sentence: string, max: number): string {
+  if (width(sentence) <= max) return sentence;
+  const lean =
+    sentence
+      .replace(/^[\w./-]+:\d+(?:[-–]\d+)?\s*/, "")
+      .replace(/（[^（）]*）|\([^()]*\)/g, "")
+      .trim() || sentence;
+  return clipWords(lean, max);
+}
+
+type ReviewLine = { text: string; item: boolean; heading: boolean };
+
+/** 审阅意见逐行拆开：跳过代码块与分隔线；标记列表项和小标题（`#` 开头、整行加粗或以冒号收尾）。 */
+function reviewLines(notes: string): ReviewLine[] {
+  const lines: ReviewLine[] = [];
   let fenced = false;
   for (const raw of notes.split(/\r?\n/)) {
-    const line = raw.trim();
+    const line = raw.trim().replace(/^>\s*/, "");
     if (line.startsWith("```")) {
       fenced = !fenced;
       continue;
     }
-    if (fenced || !line || line.startsWith("#")) continue;
-    const item = line
-      .replace(/^>\s*/, "")
-      .replace(/^(?:[-*+]|\d+[.)、])\s*/, "");
-    const bold = /^\*\*(.+?)\*\*\s*(.*)$/.exec(item);
-    // 整行只有加粗或以冒号收尾的，是小标题。
-    if (bold && !bold[2]!.replace(/^[：:]\s*/, "")) continue;
-    const plain = (bold ? bold[1]! : item)
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/\*\*|__|`/g, "")
-      .trim();
-    if (!plain || /[：:]$/.test(plain) || /^[-=*_|:\s]+$/.test(plain)) continue;
-    const sentence = plain.split(/[。！？；!?;]|[：:]/)[0]!.trim();
+    if (fenced || !line || /^[-=*_|:\s]+$/.test(line)) continue;
+    const marker = /^(?:[-*+]\s+|\d+[.)、]\s*)/.exec(line);
+    const item = !!marker;
+    const text = marker ? line.slice(marker[0].length) : line;
+    const bold = /^\*\*(.+?)\*\*\s*(.*)$/.exec(text);
+    const heading =
+      !item &&
+      (line.startsWith("#") ||
+        (!!bold && !bold[2]!.replace(/^[：:]\s*/, "")) ||
+        /[：:]$/.test(plainText(text)));
+    lines.push({ text, item, heading });
+  }
+  return lines;
+}
+
+/** 一行里要读的那句：加粗开头的取加粗部分，否则取第一句。 */
+function lineSentence(text: string): string {
+  const bold = /^\*\*(.+?)\*\*/.exec(text);
+  return firstSentence(plainText(bold ? bold[1]! : text));
+}
+
+/**
+ * 从审阅意见里挑打回的理由：「必须改的问题」小节的第一条；没有这一节时取「结论：」那句，
+ * 再没有取第一句完整句子（开头被截过、以「…」起头的不算）。
+ */
+function reviewPoint(notes: string): string | null {
+  const lines = reviewLines(notes);
+  const section = lines.findIndex(
+    (line) => line.heading && /必须(?:要)?改/.test(line.text),
+  );
+  if (section >= 0) {
+    for (const line of lines.slice(section + 1)) {
+      if (line.heading && /必须(?:要)?改/.test(line.text)) continue;
+      if (line.heading) break;
+      const sentence = lineSentence(line.text);
+      if (sentence) return sentence;
+    }
+  }
+  for (const line of lines) {
+    const verdict = /^(?:\*\*)?结论(?:\*\*)?\s*[：:]\s*(.+)$/.exec(line.text);
+    const sentence = verdict ? firstSentence(plainText(verdict[1]!)) : "";
+    if (sentence) return sentence;
+  }
+  for (const line of lines) {
+    if (line.heading || /^(?:…|\.\.\.)/.test(line.text)) continue;
+    if (/^(?:\*\*)?审阅结论/.test(line.text)) continue;
+    const sentence = lineSentence(line.text);
     if (sentence) return sentence;
   }
   return null;
 }
 
+const REVIEW = /^审阅打回(?:（(t\d+)[^）]*）)?\s*[：:]?([\s\S]*)$/;
+const RETURNED = " · 已交回执行者";
+const MERGE_FAILED = "合入没过：";
+/** 合入交回那一句的显示宽度上限：后面还要接「 · 已交回执行者」。 */
+const MERGE_WIDTH = HOLDER_WIDTH - width(RETURNED);
+
+/** rebase 冲突写冲突文件数；原因里没有文件清单（git 只给了报错）时只写类别。 */
+function conflictShort(text: string): string {
+  const list = /冲突\s*[：:]\s*(.+)$/.exec(oneLine(text, Infinity))?.[1];
+  const files = list?.split("、").filter(Boolean) ?? [];
+  if (!files.length || files.some((file) => /\s/.test(file)))
+    return "rebase 冲突";
+  // merge-runtime 最多列 30 个文件。
+  return files.length >= 30
+    ? "rebase 冲突（至少 30 个文件）"
+    : `rebase 冲突（${files.length} 个文件）`;
+}
+
+/** 本地检查：超时单说；没过时写第一个失败用例名，没抓到用例名只写类别。 */
+function checkShort(text: string, max: number): string {
+  const head = /^本地检查\s*([^：:]*)[：:]?([\s\S]*)$/.exec(text)!;
+  if (/超时|timeout/i.test(head[1]!)) return "本地检查超时";
+  const label = "本地检查没过";
+  if (!/failed|失败|未通过|没过/i.test(head[1]!)) return label;
+  const body = head[2]!.replace(/；\s*日志[\s\S]*$/, "").trim();
+  if (!body || /^退出码/.test(body)) return label;
+  const name = body
+    .split("、")[0]!
+    .replace(/\s*\(\d+(?:\.\d+)?m?s\)$/, "")
+    .trim();
+  const point = clipWords(name, max - width(`${label}：`));
+  return point ? `${label}：${point}` : label;
+}
+
 /**
- * 合入交回原因缩成一行：原因类别加一句话，如「审阅打回：性能目标没达到（t132）」「本地检查没过」「rebase 冲突」。
- * 全文由 `task show` 给（Holder.detail）。
+ * 合入交回原因缩成一行、至多 max 显示宽度：原因类别加一句话，如「审阅打回：性能目标没达到（t132）」
+ * 「本地检查没过：用例名」「rebase 冲突：2 个文件」。全文由 `task show` 给（Holder.detail）。
  */
-export function mergeShort(reason: string): string {
+export function mergeShort(reason: string, max = MERGE_WIDTH): string {
   const text = reason.trim();
-  const review = /^审阅打回(?:（(t\d+)[^）]*）)?\s*[：:]?([\s\S]*)$/.exec(text);
+  const review = REVIEW.exec(text);
   if (review) {
-    const point = reviewPoint(review[2]!);
     const by = review[1] ? `（${review[1]}）` : "";
-    return point ? `审阅打回：${oneLine(point, 30)}${by}` : `审阅打回${by}`;
+    const point = reviewPoint(review[2]!);
+    if (!point) return `审阅打回${by}`;
+    const room = max - width("审阅打回：");
+    const fitted = fitSentence(point, room - width(by));
+    if (by && (!fitted || fitted.endsWith("…"))) {
+      // 理由比审阅者短号要紧：带着短号要截断、去掉就放得下时不写短号。
+      const alone = fitSentence(point, room);
+      if (alone && !alone.endsWith("…")) return `审阅打回：${alone}`;
+    }
+    return fitted ? `审阅打回：${fitted}${by}` : `审阅打回${by}`;
   }
   if (/rebase\s*冲突|变基\s*冲突|rebase\s+conflict/i.test(text))
-    return "rebase 冲突";
-  if (/^本地检查/.test(text))
-    return /超时|timeout/i.test(text.split(/[：:]/)[0]!)
-      ? "本地检查超时"
-      : "本地检查没过";
+    return conflictShort(text);
+  if (/^本地检查/.test(text)) return checkShort(text, max);
   const line = oneLine(text, Infinity);
-  return oneLine(line.split(/[：:]/)[0]!.trim() || line, 30);
+  const head = firstSentence(line) || line;
+  return clipWords(head, max) || oneLine(head, max);
 }
 
 /** 合入交回的一句：审阅打回自成一类，其余写「合入没过：原因」。 */
 function mergeBack(reason: string | null): string {
   if (!reason) return "合入没过";
-  const short = mergeShort(reason);
-  return short.startsWith("审阅打回") ? short : `合入没过：${short}`;
+  if (REVIEW.test(reason.trim())) return mergeShort(reason);
+  return `${MERGE_FAILED}${mergeShort(reason, MERGE_WIDTH - width(MERGE_FAILED))}`;
 }
 
 /** 已结束且不在合入流水线、也不在等拍板的任务没有持球人；一句话统一截成单行。 */
@@ -215,7 +340,7 @@ function judge(f: HolderFacts): Holder | null {
       return {
         kind: "worker",
         who: f.worker,
-        text: `${mergeBack(f.merge_returned)} · 已交回执行者`,
+        text: `${mergeBack(f.merge_returned)}${RETURNED}`,
       };
     if (f.returned)
       return {

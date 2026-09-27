@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import {
   blockShort,
+  clipWords,
   HOLDER_WIDTH,
   holderDetail,
   holderOf,
@@ -139,7 +140,7 @@ test("持球人穷举：结束、会审、合入流水线、排队、在做与�
       returned: { by: null, via: "merge" },
       merge_returned: "rebase 冲突：a.ts",
     })!.text,
-    "合入没过：rebase 冲突 · 已交回执行者",
+    "合入没过：rebase 冲突（1 个文件） · 已交回执行者",
   );
   assert.equal(
     of({ returned: { by: null, via: "merge" } })!.text,
@@ -328,11 +329,41 @@ test("合入交回原因缩成一行：审阅打回取一句要点，其余按�
     mergeShort("审阅打回（t9，x）：## 必须改的问题\n```\ncode\n```"),
     "审阅打回（t9）",
   );
-  assert.equal(mergeShort("rebase 冲突：a.ts、b.ts"), "rebase 冲突");
+  assert.equal(
+    mergeShort("rebase 冲突：a.ts、b.ts"),
+    "rebase 冲突（2 个文件）",
+  );
+  assert.equal(
+    mergeShort(
+      `rebase 冲突：${Array.from({ length: 30 }, (_, i) => `f${i}.ts`).join("、")}`,
+    ),
+    "rebase 冲突（至少 30 个文件）",
+  );
+  assert.equal(
+    mergeShort("rebase 冲突：error: could not apply 1a2b3c"),
+    "rebase 冲突",
+  );
   assert.equal(
     mergeShort("本地检查failed：tests/a.test.ts、tests/b.test.ts；日志 /x/log"),
+    "本地检查没过：tests/a.test.ts",
+  );
+  assert.equal(
+    mergeShort("本地检查failed：持球人判定 (12.5ms)、另一条；日志 /x/log"),
+    "本地检查没过：持球人判定",
+  );
+  assert.equal(
+    mergeShort("本地检查failed：退出码 1；日志 /x/log"),
     "本地检查没过",
   );
+  assert.equal(
+    mergeShort("本地检查error：Error: spawn sh ENOENT；日志 /x/log"),
+    "本地检查没过",
+  );
+  const longCase = mergeShort(
+    "本地检查failed：合入交回原因缩成一行：审阅打回取一句要点，其余按类别、b；日志 /x",
+    36,
+  );
+  assert.ok(width(longCase) <= 36 && longCase.endsWith("…"), longCase);
   assert.equal(
     mergeShort("本地检查timeout：超过 15 分钟；日志 /x"),
     "本地检查超时",
@@ -342,7 +373,7 @@ test("合入交回原因缩成一行：审阅打回取一句要点，其余按�
     "检查后推送失败",
   );
   assert.equal(mergeShort("gh 合入失败：GraphQL error"), "gh 合入失败");
-  const other = mergeShort(`${"很长的原因".repeat(20)}\n第二行`);
+  const other = mergeShort(`${"很长的原因".repeat(20)}\n第二行`, 30);
   assert.ok(width(other) <= 30 && other.endsWith("…") && !other.includes("\n"));
 });
 
@@ -374,4 +405,104 @@ test("合入交回的持球人：整篇审阅意见只出一行，全文在 deta
     holderDetail({ ...base, status: "blocked", block: localCheck }),
     localCheck.reason,
   );
+});
+
+/** t123 真实的审阅打回原因（task_events merge_returned）：开头已被截过，「必须改的问题」第一条以代码位置起头。 */
+const T123 = `审阅打回（t132，claude+opus）：…ishWorkerAdvice\` 取最近一条、\`confirmWorkerAdvice\` 找不到交付时回退为 0、\`pick\` 无专员时只看最近 1000 条，都与旧行为等价。
+- SQL 全部参数化，没有越出任务范围的改动；\`executors.ts\` 和 \`map/people.ts\` 的调用点通过改 \`publishWorkerAdvice\`、\`workersReport\` 一并覆盖。
+- 本地类型检查通过，prettier 检查通过，相关 4 个测试文件 36 个测试全过。CI 在 ubuntu 和 macOS 上通过，windows 在我查时还没跑完。
+
+**必须改的问题**
+
+1. **\`server/tasks/delivery-records.ts:583-610\`（\`deliveryMetrics\` 不带 limit 的分支）没达到原任务的性能和内存目标。**
+   - 目标：workers、pick 都 ≤50 ms，调用后内存增量 ≤20 MB。
+   - PR 自己报的实测：workers 135 ms，调用后常驻内存 242 MB，连续调用后稳定在约 185 MB，而空闲约 115 MB，增量约 70–127 MB；pick 50 ms，刚好卡在上限。正文把这组数当作达标来写，没说明差距。
+   - 我在内存库上抽查（1 万任务、1.5 万交付、约 6 万条相关事件）：\`deliveryMetrics(db)\` 约 108–110 ms。其中光把交付和相关事件从 SQLite 读进来、什么都不做，就要约 59 ms。
+   - 也就是说，只要每次请求都把全部交付和相关事件读进 JS 再逐条解析，就不可能到 50 ms，内存也会随交付数增长。标题说「改 SQL 聚合」，实际仍是在 JS 里归并。
+   - 怎么改：把每条交付的统计事实（\`first_pass\`、\`gate_return_count\`、\`merge_return_count\`、\`incident_count\`、\`duration_ms\`）作为列存进 \`task_deliveries\`。在交付结束、写入 gates、合入退回、卡死、越界等事件时更新，启动迁移时对旧数据回填一次；小库对照测试照旧保留，用来保证回填结果与旧实现一致。
+   - 这样 \`workersReport\` 和 \`pickFacts\` 就能直接用 SQL \`GROUP BY\` 算出各组的次数、一次通过率、平均退回次数、事故数，不再逐条读事件。中位耗时可以按组用窗口函数取，或者只取每组的耗时列。
+   - 改完用 1 万任务压测库重测，PR 正文给出达标的改前/改后数字；如果确实做不到，要在正文里如实写明差距和原因。
+
+**可选建议（不作为打回理由）**
+- 按 worker 过滤并 \`ORDER BY id DESC LIMIT\` 时，查询计划里有 \`USE TEMP B-TREE FOR ORDER BY\`：\`task_deliveries_worker_id\` 的列序是 (worker, job_id, id)，没法按 id 直接倒序取。再加一个 (worker, id) 索引就能避免排序。
+- \`walkMetrics\` 和 \`walkMetricsStream\` 的归并逻辑基本重复，可以合并成一个吃迭代器的函数。
+- \`workerReport\` 的交付明细现在只返回最近 200 条（统计仍看全部），命令行显示的交付列表会变短。这是有意为之、符合「列表有界」，但 PR 正文可以写明。`;
+
+test("审阅打回取「必须改的问题」第一条的第一句，放不下时在词边界截断", () => {
+  // 带上「（t132）」整行会超出一格，理由优先、不写审阅者短号。
+  assert.equal(mergeShort(T123), "审阅打回：没达到原任务的性能和内存目标");
+  const holder = holderOf({
+    ...base,
+    returned: { by: null, via: "merge" },
+    merge_returned: T123,
+  })!;
+  assert.equal(
+    holder.text,
+    "审阅打回：没达到原任务的性能和内存目标 · 已交回执行者",
+  );
+  assert.ok(width(holder.text) <= HOLDER_WIDTH);
+  // 宽度够时带上审阅者短号。
+  assert.equal(
+    mergeShort(T123, 60),
+    "审阅打回：没达到原任务的性能和内存目标（t132）",
+  );
+  // 窄时在词边界截断，不截半个词。
+  assert.equal(mergeShort(T123, 30), "审阅打回：没达到原任…（t132）");
+  // 放得下时保留代码位置与括号说明。
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：**必须改的问题**\n1. `a.ts:3` 漏了判空。",
+      60,
+    ),
+    "审阅打回：a.ts:3 漏了判空（t9）",
+  );
+});
+
+test("审阅意见没有「必须改的问题」时取结论句，再没有取第一句完整句子", () => {
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：先说背景。\n\n结论：测试没覆盖 Windows 路径。\n审阅结论：打回",
+    ),
+    "审阅打回：测试没覆盖 Windows 路径（t9）",
+  );
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：…前面被截掉的半句，后面。\n改动把旧表也删了。\n审阅结论：打回",
+    ),
+    "审阅打回：改动把旧表也删了（t9）",
+  );
+  assert.equal(
+    mergeShort(
+      "审阅打回（t9，x）：## 可选建议\n- 命名可以更直白。\n\n## 必须改的问题\n- **没加测试**：见上。\n## 其他\n- x",
+    ),
+    "审阅打回：没加测试（t9）",
+  );
+  assert.equal(
+    mergeShort("审阅打回（t9，x）：审阅结论：打回"),
+    "审阅打回（t9）",
+  );
+});
+
+test("clipWords 只在词或标点边界截断", () => {
+  assert.equal(clipWords("短句", 10), "短句");
+  assert.equal(clipWords("修改 publishWorkerAdvice 的查询", 12), "修改…");
+  assert.equal(
+    clipWords("修改 publishWorkerAdvice 的查询", 26),
+    "修改 publishWorkerAdvice…",
+  );
+  assert.equal(clipWords("一二三四五六七八九十", 9), "一二三四…");
+  assert.equal(clipWords("性能没达到，内存也超了", 14), "性能没达到…");
+  assert.equal(clipWords("server/tasks/delivery-records.ts", 10), "");
+  const line = T123.split("\n")[0]!.replace(/\s+/g, " ");
+  const id = /[\w./:@#$-]/;
+  for (let max = 1; max <= 80; max++) {
+    const out = clipWords(line, max);
+    assert.ok(width(out) <= max, `${max}: ${out}`);
+    if (!out) continue;
+    const kept = out.slice(0, -1);
+    assert.ok(line.startsWith(kept), out);
+    const last = kept.at(-1)!;
+    const next = line[kept.length] ?? "";
+    assert.ok(!(id.test(last) && id.test(next)), `${max}: ${out}`);
+  }
 });

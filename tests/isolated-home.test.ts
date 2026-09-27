@@ -38,18 +38,21 @@ after(assertNoFixtureLeaks);
 
 test("旧目录只在默认数据目录缺省读；隔离数据目录要显式给", () => {
   const home = "/h";
-  assert.equal(legacyDir({}, home), "/h/Atrium");
-  assert.equal(legacyDir({ ATRIUM_DATA: "/h/.atrium" }, home), "/h/Atrium");
+  assert.equal(legacyDir({}, home), join(home, "Atrium"));
+  assert.equal(
+    legacyDir({ ATRIUM_DATA: "/h/.atrium" }, home),
+    join(home, "Atrium"),
+  );
   assert.equal(legacyDir({ ATRIUM_DATA: "/tmp/iso" }, home), undefined);
   assert.equal(
     legacyDir({ ATRIUM_DATA: "/tmp/iso", ATRIUM_LEGACY_DIR: "/x" }, home),
     "/x",
   );
   assert.equal(legacyDir({ NODE_TEST_CONTEXT: "child" }, home), undefined);
-  assert.equal(legacyWorkersDir({}, home), "/h/Atrium/workers");
+  assert.equal(legacyWorkersDir({}, home), join(home, "Atrium", "workers"));
   assert.equal(
     legacyWorkersDir({ ATRIUM_LEGACY_DIR: "/x" }, home),
-    "/x/workers",
+    join("/x", "workers"),
   );
   assert.equal(legacyWorkersDir({ ATRIUM_DATA: "/tmp/iso" }, home), undefined);
   assert.equal(

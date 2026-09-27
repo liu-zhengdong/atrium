@@ -6,6 +6,14 @@ import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import type { Doc } from "../server/org/model.ts";
 import { formatParam, type Param } from "../server/org/boundaries.ts";
+import { OVERVIEW_KEYS, type Overview } from "../server/org/overview.ts";
+import {
+  formatOverview,
+  isBlank,
+  pointLines,
+  titleOf,
+} from "./org-overview.ts";
+import type { Point } from "../server/org/points.ts";
 
 const str = (values: Values, key: string) =>
   typeof values[key] === "string" ? (values[key] as string) : undefined;
@@ -151,6 +159,12 @@ export function formatCounts(own: TaskCounts, sent: TaskCounts): string {
     .map((p) => ` · ${p}`)
     .join("");
 }
+const KIND_LABEL: Record<string, string> = {
+  org: "组织",
+  project: "项目",
+  module: "模块",
+  concern: "关注点",
+};
 const FIELD_LABELS: Record<string, string> = {
   goal: "目标",
   report: "汇报",
@@ -270,10 +284,12 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org show": {
-    args: "节点 [--charter|--card --raw]",
-    about: "查看节点、章程和能力卡",
+    args: "节点 [--detail] [--charter|--card --raw]",
+    about:
+      "看节点：先讲人话（是什么、能做什么、怎么走完、由哪几部分组成、现状与阶段），--detail 展开章程正文、硬边界、预算、能力卡等技术细节",
     options: {
       ...options,
+      detail: { type: "boolean" },
       charter: { type: "boolean" },
       card: { type: "boolean" },
       raw: { type: "boolean" },
@@ -296,10 +312,14 @@ export const orgCommands: Record<string, Command> = {
       }
       const node = result as {
         ref: string;
+        name: string;
         kind: string;
         path: string;
         leader: string | null;
         repos: string[];
+        overview: Overview;
+        points: Point[];
+        points_chain: { node: string; name: string; points: Point[] }[];
         charter: {
           rev: string;
           fields: Record<string, unknown>;
@@ -321,32 +341,69 @@ export const orgCommands: Record<string, Command> = {
           origin_ref: string | null;
         }[];
       };
+      const detail = values.detail === true;
+      const technical = node.charter && {
+        ...node.charter,
+        fields: Object.fromEntries(
+          Object.entries(node.charter.fields).filter(
+            ([key]) => !OVERVIEW_KEYS.has(key),
+          ),
+        ),
+      };
       const lines = [
-        `${node.ref} [${node.kind}] ${node.path} · leader ${person(node.leader)}`,
-        `仓库：${node.repos.join("、") || "无"}`,
-        ...(node.chain.length
+        titleOf(node, node.overview),
+        `[${KIND_LABEL[node.kind] ?? node.kind}] ${node.path} · leader ${person(node.leader)}`,
+        ...formatOverview(node, node.overview, detail, node.points),
+        ...(detail
           ? [
-              "目标链",
-              ...node.chain.map(
-                (c) => `  ${c.name}：${c.goal.split("\n").join("\n    ")}`,
-              ),
+              "—— 细节 ——",
+              `仓库：${node.repos.join("、") || "无"}`,
+              ...node.points_chain
+                .filter((level) => level.node !== node.ref)
+                .flatMap((level) =>
+                  pointLines(level.points).map((line, i) =>
+                    i === 0
+                      ? `上级 ${level.node} ${level.name} 的${line}`
+                      : line,
+                  ),
+                ),
+              ...(node.chain.length
+                ? [
+                    "目标链",
+                    ...node.chain.map(
+                      (c) =>
+                        `  ${c.name}：${c.goal.split("\n").join("\n    ")}`,
+                    ),
+                  ]
+                : ["目标链：无"]),
+              ...formatBoundaries(node.boundaries),
+              `预算：${formatBudget(node.budget, true)}`,
+              ...formatDoc("章程", technical),
+              ...formatDoc("能力卡", node.card),
+              ...(node.recent_tasks.length
+                ? [
+                    `手上的任务（最近 ${node.recent_tasks.length} 条）`,
+                    ...node.recent_tasks.map(
+                      (t) =>
+                        `  ${t.ref} [${t.status}] ${t.title}${t.worker ? ` · ${t.worker}` : ""}${t.origin_ref ? ` · ${t.origin_ref} 投来` : ""}`,
+                    ),
+                  ]
+                : []),
             ]
-          : ["目标链：无"]),
-        ...formatBoundaries(node.boundaries),
-        `预算：${formatBudget(node.budget, true)}`,
-        ...formatDoc("章程", node.charter),
-        ...formatDoc("能力卡", node.card),
-        ...(node.recent_tasks.length
-          ? [
-              `手上的任务（最近 ${node.recent_tasks.length} 条）`,
-              ...node.recent_tasks.map(
-                (t) =>
-                  `  ${t.ref} [${t.status}] ${t.title}${t.worker ? ` · ${t.worker}` : ""}${t.origin_ref ? ` · ${t.origin_ref} 投来` : ""}`,
-              ),
-            ]
-          : []),
+          : [
+              `细节已折叠（章程正文、硬边界、预算、能力卡、手上的任务）：atrium org show ${node.ref} --detail`,
+            ]),
       ];
-      out(json, result, lines.join("\n"), `atrium org history ${node.ref}`);
+      out(
+        json,
+        result,
+        lines.join("\n"),
+        isBlank(node.overview)
+          ? `atrium org show ${node.ref} --charter --raw`
+          : detail
+            ? `atrium org history ${node.ref}`
+            : `atrium org show ${node.ref} --detail`,
+      );
     },
   },
   "org add": {
@@ -468,6 +525,87 @@ export const orgCommands: Record<string, Command> = {
           ),
         ].join("\n"),
         `atrium org history ${id}`,
+      );
+    },
+  },
+  "org point-add": {
+    args: "节点 要点 --why 为什么 --by 谁定的 [--check 检查] [--as aN]",
+    about:
+      "给节点加一条要点（这一块必须守住的设计约束）：人话一句、为什么、谁定的（如 u1 09-27），可选守护它的检查（测试文件与用例名，或 $ 命令）；不留修订记录",
+    options: {
+      ...options,
+      why: { type: "string" },
+      by: { type: "string" },
+      check: { type: "string" },
+    },
+    positionals: [2, 2],
+    async run({ positionals: [id, text], values, json }) {
+      const result = await (
+        await client()
+      ).post<Point>(`/org/nodes/${path(id!)}/points${as(values)}`, {
+        text,
+        ...(str(values, "why") === undefined
+          ? {}
+          : { why: str(values, "why") }),
+        ...(str(values, "by") === undefined ? {} : { by: str(values, "by") }),
+        ...(str(values, "check") === undefined
+          ? {}
+          : { check: str(values, "check") }),
+      });
+      out(
+        json,
+        result,
+        `已加 ${result.ref}（${result.node}）：${result.text}`,
+        `atrium org show ${result.node}`,
+      );
+    },
+  },
+  "org point-edit": {
+    args: "kN [--text 要点] [--why 为什么] [--by 谁定的] [--check 检查|''] [--as aN]",
+    about: "改一条要点；--check '' 去掉检查",
+    options: {
+      ...options,
+      text: { type: "string" },
+      why: { type: "string" },
+      by: { type: "string" },
+      check: { type: "string" },
+    },
+    positionals: [1, 1],
+    async run({ positionals: [id], values, json }) {
+      const body: Record<string, string> = {};
+      for (const key of ["text", "why", "by", "check"])
+        if (str(values, key) !== undefined) body[key] = str(values, key)!;
+      if (!Object.keys(body).length)
+        throw new Problem(
+          400,
+          "至少改一项：--text、--why、--by、--check",
+          "usage",
+        );
+      const result = await (
+        await client()
+      ).patch<Point>(`/org/points/${path(id!)}${as(values)}`, body);
+      out(
+        json,
+        result,
+        `已改 ${result.ref}（${result.node}）：${result.text}`,
+        `atrium org show ${result.node}`,
+      );
+    },
+  },
+  "org point-rm": {
+    args: "kN [--as aN]",
+    about: "删掉一条过时的要点（不留修订记录）",
+    options,
+    positionals: [1, 1],
+    async run({ positionals: [id], values, json }) {
+      const result = await (
+        await client()
+      ).delete<Point>(`/org/points/${path(id!)}${as(values)}`);
+      out(
+        json,
+        result,
+        `已删 ${result.ref}（${result.node}）：${result.text}`,
+        `atrium org show ${result.node}`,
       );
     },
   },
@@ -615,6 +753,30 @@ export const orgCommands: Record<string, Command> = {
       );
     },
   },
+  "org migrate-goals": {
+    args: "[--apply]",
+    about:
+      "把目标树（gN）迁为所在节点的阶段记录、任务按目标回填归属部分；默认只预览，--apply 先备份再写入，之后 goal 命令下线",
+    options: { ...options, apply: { type: "boolean" } },
+    positionals: [0, 0],
+    async run({ values, json }) {
+      const result = await (
+        await client()
+      ).post<MigrationView>(`/goals/migrate${as(values)}`, {
+        apply: values.apply === true,
+      });
+      const pending =
+        result.stages > 0 || result.tasks.length > 0 || !result.retired;
+      out(
+        json,
+        result,
+        formatMigration(result),
+        result.preview && pending
+          ? "atrium org migrate-goals --apply"
+          : `atrium org show ${result.nodes[0]?.node ?? "o1"}`,
+      );
+    },
+  },
   "org import": {
     args: "[章程文件] [--repo 仓库] [--apply]",
     about: "预览或导入根章程与岗位节点",
@@ -737,3 +899,72 @@ export const orgCommands: Record<string, Command> = {
     },
   },
 };
+
+export type MigrationView = {
+  preview: boolean;
+  retired: boolean;
+  backup?: string | null;
+  stages: number;
+  nodes: {
+    node: string;
+    name: string;
+    path: string;
+    stages: {
+      id: string;
+      result: string;
+      status_label: string;
+      criteria: number;
+      evidence: number;
+    }[];
+    kept: string[];
+  }[];
+  tasks: { task: string; goal: string; part: string; part_name: string }[];
+  tasks_kept: {
+    task: string;
+    goal: string;
+    part: string;
+    part_name: string;
+  }[];
+  orphans: { goal: string; node: string }[];
+};
+/** 迁移回执：按节点列「迁入的阶段」与「已在章程里的」，再列任务的 goal → 归属部分对照。 */
+export function formatMigration(view: MigrationView): string {
+  const head = view.preview
+    ? view.retired
+      ? "目标树已迁移过；再迁会补上新出现的（预览，未写入）："
+      : "目标树迁为节点阶段记录（预览，未写入）："
+    : "已迁移：";
+  const lines = [head];
+  for (const node of view.nodes) {
+    if (!node.stages.length && !node.kept.length) continue;
+    lines.push(
+      `  ${node.node} ${node.name}（${node.path}）← ${node.stages.length} 条阶段${node.kept.length ? `，已在章程里 ${node.kept.join("、")}` : ""}`,
+      ...node.stages.map(
+        (s) =>
+          `    ${s.id} [${s.status_label}] ${s.result}${s.criteria ? ` · 验收 ${s.criteria} 条` : ""}${s.evidence ? ` · 证据 ${s.evidence} 条` : ""}`,
+      ),
+    );
+  }
+  if (view.tasks.length)
+    lines.push(
+      `  任务归属（按目标的负责节点回填 ${view.tasks.length} 个）：`,
+      ...view.tasks.map(
+        (t) => `    ${t.task} ${t.goal} → ${t.part} ${t.part_name}`,
+      ),
+    );
+  if (view.tasks_kept.length)
+    lines.push(
+      `  已有归属部分、不改 ${view.tasks_kept.length} 个：${view.tasks_kept.map((t) => `${t.task}（${t.part}）`).join("、")}`,
+    );
+  if (view.orphans.length)
+    lines.push(
+      `  负责节点不在组织树里、不能迁：${view.orphans.map((o) => `${o.goal}（${o.node}）`).join("、")}`,
+    );
+  if (lines.length === 1) lines.push("  没有要迁的目标或任务");
+  if (view.preview)
+    lines.push(
+      "写入时先整库备份；阶段写进各节点章程并留修订（可 atrium org revert），goals 表与任务原来的 goal 不改；写入后 goal 命令下线",
+    );
+  else if (view.backup) lines.push(`备份：${view.backup}`);
+  return lines.join("\n");
+}

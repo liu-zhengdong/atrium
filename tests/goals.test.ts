@@ -44,6 +44,20 @@ const ORG = [
   { id: 5, parent_id: 1, leader: "a4" },
 ];
 
+/** 迁移前的旧数据：任务直接挂在 goal_id 上（task --goal 已改为归属部分，#322）。 */
+function legacyTask(
+  db: DatabaseSync,
+  input: Record<string, unknown> & { goal: string },
+) {
+  const { goal, ...rest } = input;
+  const task = createTask(db, rest);
+  db.prepare("UPDATE tasks SET goal_id=? WHERE id=?").run(
+    Number(goal.slice(1)),
+    Number(task.ref.slice(1)),
+  );
+  return getTask(db, task.ref);
+}
+
 function setup() {
   const db = new DatabaseSync(":memory:");
   ensureOrgTables(db);
@@ -282,9 +296,9 @@ test("目标树汇总下层任务和前置，不重复计数", () => {
     "a1",
   );
   addGoal(db, { result: "子阶段", parent: "g3", after: "g2" }, "a1");
-  const a = createTask(db, { title: "在跑", goal: "g3" });
-  const b = createTask(db, { title: "卡住", goal: "g4" });
-  createTask(db, { title: "完成", goal: "g4" });
+  const a = legacyTask(db, { title: "在跑", goal: "g3" });
+  const b = legacyTask(db, { title: "卡住", goal: "g4" });
+  legacyTask(db, { title: "完成", goal: "g4" });
   db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(
     Number(a.ref.slice(1)),
   );
@@ -392,7 +406,7 @@ test("达成、放弃、改回：放弃要原因，下层与挂着的任务先�
   addGoal(db, { result: "顶层" }, "u1");
   addGoal(db, { result: "M", parent: "g1", node: "atrium" }, "u1");
   addGoal(db, { result: "M.1", parent: "g2" }, "u1");
-  const task = createTask(db, { title: "干活", goal: "g3" });
+  const task = legacyTask(db, { title: "干活", goal: "g3" });
   assert.throws(
     () => settleGoal(db, "g3", { kind: "drop" }, {}, "a1"),
     /--reason: 放弃要写原因/,
@@ -422,10 +436,6 @@ test("达成、放弃、改回：放弃要原因，下层与挂着的任务先�
   assert.throws(
     () => addGoal(db, { result: "往放弃的下面拆", parent: "g3" }, "a1"),
     /g3 已放弃，先改回再往下拆/,
-  );
-  assert.throws(
-    () => createTask(db, { title: "挂到放弃的", goal: "g3" }),
-    /goal: g3 已放弃/,
   );
   const back = editGoal(db, "g3", { status: "active" }, "a1");
   assert.equal(back.status, "active");
@@ -533,16 +543,15 @@ test("破坏输入：按参数名中文报错，数据不变", () => {
   db.close();
 });
 
-test("task add/set --goal：挂上、换挂、摘下；目标树按里程碑数任务", () => {
+test("迁移前挂在 goal_id 上的任务：目标树按里程碑数任务", () => {
   const db = setup();
   addGoal(db, { result: "顶层" }, "u1");
   addGoal(db, { result: "M", parent: "g1", node: "atrium" }, "u1");
-  const a = createTask(db, { title: "a", goal: "g2" });
+  const a = legacyTask(db, { title: "a", goal: "g2" });
   assert.equal(a.goal_ref, "g2");
-  const b = createTask(db, { title: "b", goal: "g2" });
+  const b = legacyTask(db, { title: "b", goal: "g2" });
   advanceTask(db, b.ref, { kind: "start" }, { worker: "codex" });
-  createTask(db, { title: "c" });
-  assert.equal(updateTask(db, "t3", { goal: "g1" }).goal_ref, "g1");
+  legacyTask(db, { title: "c", goal: "g1" });
   const node = goalTree(db).goals[0]!.children[0]!;
   assert.deepEqual(
     { todo: node.tasks.todo, running: node.tasks.running },
@@ -556,12 +565,6 @@ test("task add/set --goal：挂上、换挂、摘下；目标树按里程碑数�
   assert.deepEqual(
     shown.tasks.map((t) => t.ref),
     ["t2", "t1"],
-  );
-  assert.equal(updateTask(db, a.ref, { goal: "" }).goal_ref, null);
-  assert.match(
-    JSON.stringify(getTask(db, a.ref).events.at(-1)),
-    /goal_id/,
-    "改挂记事件",
   );
   db.close();
 });
@@ -581,7 +584,7 @@ test("父任务迁为里程碑：默认预览不写；apply 后子任务挂上�
     role: "atrium/runtime",
   });
   const c1 = createTask(db, { title: "第 1 步", parent: parent.ref });
-  const c2 = createTask(db, {
+  const c2 = legacyTask(db, {
     title: "第 2 步",
     parent: parent.ref,
     goal: "g1",
@@ -704,7 +707,11 @@ test("接口：?as= 决定操作者，非 leader 的 aN 被拒；任务接口带
   });
   assert.equal(milestone.body.ref, "g2");
   const task = await call("POST", "/api/tasks", { title: "t", goal: "g2" });
-  assert.equal(task.body.goal_ref, "g2");
+  assert.equal(
+    task.body.part_ref,
+    "o2",
+    "旧写法 goal 按目标的负责节点落到归属部分",
+  );
   assert.equal(
     (await call("POST", "/api/goals/g2/done?as=a1")).body.status,
     "achieved",

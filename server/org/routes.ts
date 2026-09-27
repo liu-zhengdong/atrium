@@ -17,6 +17,7 @@ import type { Doc } from "./model.ts";
 import { parseDocument } from "./validate.ts";
 import { linkRoles } from "./task-link.ts";
 import { readPace } from "../tasks/prepare.ts";
+import { addPoint, editPoint, removePoint } from "./points.ts";
 
 type Query = {
   as?: string;
@@ -124,6 +125,28 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
       actor(request.query),
     );
   });
+  // 要点（#322）：不留修订记录，权限同章程（leader 链；根只有 u1）。
+  app.post(
+    "/api/org/nodes/:id/points",
+    { bodyLimit: 8 * 1024 },
+    (request, reply) =>
+      reply
+        .code(201)
+        .send(
+          addPoint(
+            db,
+            p(request.params).id,
+            request.body,
+            actor(request.query),
+          ),
+        ),
+  );
+  app.patch("/api/org/points/:id", { bodyLimit: 8 * 1024 }, (request) =>
+    editPoint(db, p(request.params).id, request.body, actor(request.query)),
+  );
+  app.delete("/api/org/points/:id", (request) =>
+    removePoint(db, p(request.params).id, actor(request.query)),
+  );
   // 旧 role 字符串回填 node_id：默认预览，apply 只有你能执行。
   app.post("/api/org/link-roles", { bodyLimit: 1024 }, (request) => {
     const apply = body(request.body).apply === true;

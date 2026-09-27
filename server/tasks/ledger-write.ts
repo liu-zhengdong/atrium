@@ -31,7 +31,7 @@ import {
   type Deliver,
 } from "./deliver.ts";
 import { matchRole, originNode } from "../org/task-node.ts";
-import { goalForTask } from "../goals/task-goal.ts";
+import { partForTask } from "../org/task-part.ts";
 
 /** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
 const roleNode = (
@@ -43,6 +43,15 @@ const fromNode = (db: DatabaseSync, value: unknown) => {
   const text = optionalText(value, "from", 200);
   return text ? originNode(db, text).id : null;
 };
+
+/** part 与旧写法 goal 二选一；goal 的 gN 按迁移映射到负责节点。 */
+function partOf(db: DatabaseSync, input: Record<string, unknown>) {
+  if ("part" in input && "goal" in input)
+    throw usage("part: 与 goal 只能给一个；goal 已改为归属部分，用 part");
+  return "goal" in input
+    ? partForTask(db, input.goal, "goal")
+    : partForTask(db, input.part);
+}
 
 export type NewTask = {
   title: string;
@@ -58,7 +67,9 @@ export type NewTask = {
   auto?: boolean;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
-  /** 挂到目标树的哪个节点（gN）。 */
+  /** 归属哪一部分（组织节点）。 */
+  part?: string | null;
+  /** 旧写法：gN 按目标树迁移映射到该目标的负责节点，等同 part。 */
   goal?: string | null;
 };
 
@@ -81,6 +92,7 @@ export function createTask(
     "after_pr",
     "auto",
     "from",
+    "part",
     "goal",
   ]);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
@@ -100,10 +112,10 @@ export function createTask(
     const parent = parentOf(db, input.parent);
     const node = roleNode(db, values.role, values.repo);
     const origin = fromNode(db, input.from);
-    const goal = goalForTask(db, input.goal);
+    const part = partOf(db, input);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,goal_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -116,7 +128,7 @@ export function createTask(
         issue,
         node,
         origin,
-        goal,
+        part,
         now,
         now,
       );
@@ -127,7 +139,7 @@ export function createTask(
       ...(parent ? { parent: taskRef(parent) } : {}),
       ...(node ? { node: `o${node}` } : {}),
       ...(origin ? { from: `o${origin}` } : {}),
-      ...(goal ? { goal: `g${goal}` } : {}),
+      ...(part ? { part: `o${part}` } : {}),
     });
     const task = requireRow(db, id);
     return { ...view(task), ...noteView(db, id, task.status) };
@@ -155,11 +167,12 @@ export function updateTask(
     "auto",
     "pr_url",
     "from",
+    "part",
     "goal",
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、from、goal、status、deliver、issue、after、after_pr、auto、pr_url",
+      "至少修改一项：title、brief_path、role、from、part、status、deliver、issue、after、after_pr、auto、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -184,7 +197,7 @@ export function updateTask(
     if ("role" in fields)
       fields.node_id = roleNode(db, fields.role as string | null, current.repo);
     if ("from" in input) fields.origin_node_id = fromNode(db, input.from);
-    if ("goal" in input) fields.goal_id = goalForTask(db, input.goal);
+    if ("part" in input || "goal" in input) fields.part_id = partOf(db, input);
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
     setConditions(db, id, input, now);

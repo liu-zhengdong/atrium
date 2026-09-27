@@ -548,13 +548,22 @@ const adopt: Command = {
   },
 };
 
-export const goalCommands: Record<string, Command> = {
-  "goal tree": tree,
-  "goal show": show,
-  "goal add": add,
-  "goal edit": edit,
-  "goal check": check,
-  "goal done": done,
-  "goal drop": drop,
-  "goal adopt": adopt,
-};
+/** 目标树迁为节点阶段记录（#322）后整组下线：服务回 410 并指向迁去的节点，帮助里先说清。 */
+export const goalCommands: Record<string, Command> = Object.fromEntries(
+  Object.entries({
+    "goal tree": tree,
+    "goal show": show,
+    "goal add": add,
+    "goal edit": edit,
+    "goal check": check,
+    "goal done": done,
+    "goal drop": drop,
+    "goal adopt": adopt,
+  }).map(([name, command]) => [
+    name,
+    {
+      ...command,
+      about: `${command.about}（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）`,
+    },
+  ]),
+);

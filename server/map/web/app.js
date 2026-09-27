@@ -20,7 +20,7 @@ const state = {
   route: { page: "node", ref: null, tab: "", extra: "" },
   /** 当前页的数据：{ page: "node", node, org? } / { page: "role", role } / { page: "worker", worker } / { page: "leader", leader }。 */
   data: null,
-  /** 页面的整体状态：ok / missing（链接里的东西不存在）/ empty（没有组织树）/ down / expired。 */
+  /** 页面的整体状态：ok / missing（链接里的东西不存在）/ empty（没有组织树）/ down / expired / forbidden。 */
   mode: "loading",
   missing: null,
   seq: 0,
@@ -30,6 +30,7 @@ const state = {
 // ---- 取数据 ----
 
 class Expired extends Error {}
+class Forbidden extends Error {}
 class Missing extends Error {}
 async function get(path) {
   const response = await fetch(`/api/map${path}`, {
@@ -37,6 +38,7 @@ async function get(path) {
     credentials: "same-origin",
   });
   if (response.status === 401) throw new Expired();
+  if (response.status === 403) throw new Forbidden();
   const body = await response.json().catch(() => ({}));
   // 404 不存在、400 链接里的名字不合法：都当「找不到」，给人话提示。
   if (response.status === 404 || response.status === 400)
@@ -1002,9 +1004,10 @@ function drawCrumbs() {
 
 function drawLive() {
   const live = $("live");
-  if (state.mode === "expired") {
+  if (state.mode === "expired" || state.mode === "forbidden") {
     live.dataset.state = "off";
-    live.textContent = "登录已失效";
+    live.textContent =
+      state.mode === "expired" ? "登录已失效" : "数据接口未开放";
   } else if (live.dataset.state === "down") {
     live.textContent = "已断开，重连中";
   } else if (state.now) {
@@ -1057,6 +1060,11 @@ function pageHtml() {
     return notice(
       "全景网页的登录已失效",
       "在终端运行 <code>atrium map</code>，会重新打开一个登录链接。",
+    );
+  if (state.mode === "forbidden")
+    return notice(
+      "这个页面的数据接口没开放给网页",
+      "Atrium 的问题，不是你的登录。",
     );
   if (state.mode === "empty")
     return notice(
@@ -1147,6 +1155,8 @@ function fail(error) {
   if (error instanceof Expired) {
     state.mode = "expired";
     document.body.classList.add("expired");
+  } else if (error instanceof Forbidden) {
+    state.mode = "forbidden";
   } else {
     $("live").dataset.state = "down";
     if (!state.data) state.mode = "down";

@@ -69,6 +69,8 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "GET /api/map/roles",
     "GET /api/map/roles/:id",
     "GET /api/map/skills",
+    "GET /api/map/specialists",
+    "GET /api/map/specialists/:id",
     "GET /api/map/stream",
     "GET /api/map/tree",
     "GET /api/map/workers",

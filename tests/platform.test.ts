@@ -33,6 +33,7 @@ import {
   workerAllowed,
   workerEnvironment,
 } from "../server/tasks/worker-env.ts";
+import { readNumberLine, waitExit } from "./child-output.ts";
 import { removeTemp } from "./temp-dir.ts";
 
 const PLATFORMS: Platform[] = ["darwin", "linux", "win32"];
@@ -318,36 +319,40 @@ test("本机：按名字找可执行文件、拉起 shell 命令、判断进程�
   assert.equal(processAlive(child.pid!), false);
 });
 
-test(
-  "本机：结束进程树连孙进程一起结束",
-  { skip: "killTree 后子进程偶发不退出，会卡住整套测试；另开任务修" },
-  async () => {
-    // 子进程再拉一个孙进程并打印其 pid，然后都常驻。
-    const script = `
+test("本机：结束进程树连孙进程一起结束", async (t) => {
+  // 子进程再拉一个孙进程并报出其 pid，然后都常驻。
+  const script = `
     const { spawn } = require("node:child_process");
     const g = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-    console.log(g.pid);
+    g.on("error", (error) => { console.error(error.message); process.exit(1); });
+    process.stdout.write(g.pid + "\\n");
     setInterval(() => {}, 1000);
   `;
-    const child = spawnInvocation(
-      { command: process.execPath, args: ["-e", script] },
-      { detached: true, stdio: ["ignore", "pipe", "ignore"] },
-    );
-    const grandchild = await new Promise<number>((resolve) =>
-      child.stdout!.once("data", (chunk) =>
-        resolve(Number(String(chunk).trim())),
-      ),
-    );
-    assert.ok(processAlive(grandchild));
-    const exited = new Promise((resolve) => child.once("exit", resolve));
-    killTree(child.pid!, "SIGTERM");
-    await exited;
-    const deadline = Date.now() + 10_000;
-    while (processAlive(grandchild) && Date.now() < deadline)
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(processAlive(grandchild), false);
-  },
-);
+  const child = spawnInvocation(
+    { command: process.execPath, args: ["-e", script] },
+    { detached: true, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let grandchild: number | undefined;
+  // 中途断言失败也要收掉整棵树：否则常驻的子进程开着管道，整份测试文件结束不了。
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null)
+      killTree(child.pid!, "SIGKILL");
+    if (grandchild && processAlive(grandchild))
+      process.kill(grandchild, "SIGKILL");
+  });
+  grandchild = await readNumberLine(child, "孙进程 pid");
+  assert.ok(processAlive(grandchild), `孙进程 ${grandchild} 拉起后不在`);
+  killTree(child.pid!, "SIGTERM");
+  await waitExit(child, "killTree SIGTERM 后子进程没有退出");
+  const deadline = Date.now() + 10_000;
+  while (processAlive(grandchild) && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(
+    processAlive(grandchild),
+    false,
+    `killTree SIGTERM 后 10 秒孙进程 ${grandchild} 仍在`,
+  );
+});
 
 test("去掉结尾分隔符：保留根路径，Windows 两种分隔符都去", () => {
   const cases: Array<[Platform, string, string]> = [

@@ -37,9 +37,12 @@ function transientFixture(
     chmodSync(join(bin, name), 0o755);
   };
   // 假 opencode：计数文件里还有次数就输出证书错误并以 1 退出，否则正常完成。
+  // 有 hold 文件时一直占着，直到测试写 release（最多 20 秒），不靠固定睡眠：慢机器上 2 秒不够。
+  const hold = join(fx.root, "hold-opencode");
+  const release = join(fx.root, "release-opencode");
   script(
     "opencode",
-    `n=$(cat '${left}' 2>/dev/null || echo 0)\nif [ "$n" -gt 0 ]; then echo $((n-1)) > '${left}'; cat '${sample}'; exit 1; fi\n[ -f "$PWD/../hold-opencode" ] && sleep 2\necho '{"type":"text","part":{"text":"ok"}}'`,
+    `n=$(cat '${left}' 2>/dev/null || echo 0)\nif [ "$n" -gt 0 ]; then echo $((n-1)) > '${left}'; cat '${sample}'; exit 1; fi\nif [ -f '${hold}' ]; then i=0; while [ ! -f '${release}' ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i+1)); done; fi\necho '{"type":"text","part":{"text":"ok"}}'`,
   );
   script(
     "kimi",
@@ -139,6 +142,7 @@ test("自动挑人：opencode 正忙时挑空闲的 kimi，不排队", async (t)
   assert.equal(second.status, 200);
   assert.equal(second.body.queued, false, JSON.stringify(kinds("t2")));
   assert.equal(second.body.task.worker, "kimi");
+  writeFileSync(join(fx.root, "release-opencode"), "");
   for (const ref of ["t1", "t2"])
     assert.equal(
       (await call("GET", `/api/tasks/${ref}/wait?timeout=20`)).body.task.status,

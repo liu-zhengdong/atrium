@@ -94,8 +94,13 @@ test("anonymous requests are rejected before their declared body is read", async
     "/api/agent/quota",
     "/api/agent/reply",
     "/api/auth/rotate",
+    "/api/choices/:id/pass",
+    "/api/choices/:id/pick",
   ]);
   assert.equal(await declaredBodyWithoutBytes(port, "/api/auth/rotate"), 401);
+  // 网页拍板（map-write）没有令牌也没有会话时同样在读请求体之前拒绝。
+  for (const path of ["/api/choices/c1/pick", "/api/choices/c1/pass"])
+    assert.equal(await declaredBodyWithoutBytes(port, path), 401, path);
   // 代理接口（#358）同样在读请求体之前认接入码或主机令牌。
   for (const path of exceptions.filter((url) => url.startsWith("/api/agent/")))
     assert.equal(await declaredBodyWithoutBytes(port, path), 401, path);

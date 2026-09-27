@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { all, nodeByAddress, one, ref as nodeRef } from "../org/model.ts";
-import { parseTaskRef } from "../tasks/ledger-model.ts";
+import { atomically, parseTaskRef } from "../tasks/ledger-model.ts";
 
 /**
  * 决定记录（t97）：秘书与 leader 各自追加的取舍与原因，给自己回看、换人接手用。
@@ -317,8 +317,7 @@ export function addDecision(
   now = Date.now(),
 ): Decision {
   const input = validateDecision(body, owner, now);
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return atomically(db, () => {
     const node = input.node === null ? null : nodeByAddress(db, input.node).id;
     if (
       input.task !== null &&
@@ -350,12 +349,8 @@ export function addDecision(
     );
     if (input.supersedes !== null)
       supersede(db, owner, input.supersedes, id, now);
-    db.exec("COMMIT");
     return getDecision(db, id, owner);
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export function supersedeDecision(

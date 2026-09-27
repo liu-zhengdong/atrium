@@ -22,6 +22,7 @@ import {
 } from "../org/aspects.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { findingsForNode, findingsForNodes } from "../tasks/patrol.ts";
+import { choicesForNodes, pendingChoices } from "../choices/store.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
 
 /**
@@ -655,6 +656,8 @@ export function mapNode(
     findings: findingsForNode(db, n.id),
     /** 下层各块的巡检发现，注明来自哪一块；与本块的合起来就是网页「巡检发现」页签。 */
     findings_below: findingsBelow(db, x, n),
+    /** 本块及下层（产品部）的选项单，开放中的在前；网页「选项」页签。 */
+    choices: choicesForNodes(db, ids, x.byId),
     tasks: {
       running: tasks.filter((t) => t.status === "running"),
       blocked: tasks.filter((t) => t.status === "blocked"),
@@ -801,6 +804,8 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
     queued: active.filter((r) => r.queued_at !== null).length,
     blocked: live.filter((r) => r.status === "blocked").length,
     groups: list,
+    /** 等用户拍板的选项单（组织根页顶部「等你拍板：N」）。 */
+    choices: pendingChoices(db),
   };
 }
 

@@ -14,6 +14,7 @@ import { LeaderTokens } from "./tokens.ts";
 import {
   ackVerdict,
   asVerdict,
+  choiceAddVerdict,
   denied,
   denyReason,
   escalateVerdict,
@@ -248,6 +249,20 @@ export function registerLeaderGuard(
           ...(given(body.task) ? [taskCheck(db, body.task)] : []),
         ]);
         break;
+      case "choice-add": {
+        const list = nodes(db);
+        verdict = choiceAddVerdict({
+          leader,
+          node:
+            typeof body.node === "string" && body.node.trim()
+              ? nodeByAddress(db, body.node.trim()).id
+              : null,
+          led,
+          scope,
+          parents: new Map(list.map((n) => [n.id, n.parent_id])),
+        });
+        break;
+      }
     }
     if (verdict) throw forbid(verdict);
   });

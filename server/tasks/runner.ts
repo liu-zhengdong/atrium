@@ -126,6 +126,7 @@ import { setHostQuotaSource, type HostQuotaSnapshot } from "../hosts/quota.ts";
 import { machineInfo } from "../hosts/info.ts";
 import { originRepo } from "./gh-repo.ts";
 import { patrolRun } from "./patrol.ts";
+import { pendingChoices } from "../choices/store.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -1518,10 +1519,13 @@ export class TaskRunner {
           events: this.inbox.countPending(l.ref),
         }))
       : [];
+    const choices = pendingChoices(this.db);
     return {
       now,
       recent_ms: RECENT_MS,
       subscriber: who,
+      // 等用户拍板的选项单（产品部）；没有时不给。
+      ...(choices.open ? { choices } : {}),
       counts: {
         ...countRows(rows),
         events: this.inbox.countPending(who),

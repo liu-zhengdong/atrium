@@ -22,6 +22,8 @@ const WATCHED = [
   "task_inbox",
   "memos",
   "decisions",
+  "choices",
+  "choice_options",
 ] as const;
 
 /** 检测用的语句：主键点查，查询计划不扫业务表。 */

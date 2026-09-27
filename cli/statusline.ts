@@ -9,6 +9,7 @@ import type { Command } from "./main.ts";
 import type { Client } from "./service.ts";
 import { duration, hostBrief, type Snapshot, type TopRow } from "./top.ts";
 import type { PlanView } from "./top-plan.ts";
+import { pendingLine } from "../server/choices/model.ts";
 
 /**
  * `atrium statusline`（#355）：Claude Code 状态栏。数据经服务取（`/api/tasks/top` 与 `/api/tasks/plan`），
@@ -106,7 +107,17 @@ export function renderStatusline(input: StatuslineInput): string {
   const events = snapshot.counts.events;
   const ready = input.plan?.groups.ready.length ?? 0;
   const waiting = input.plan?.groups.waiting.length ?? 0;
-  if (!held.length && !leaders.length && !events && !ready && !waiting)
+  const choice = snapshot.choices
+    ? pendingLine(snapshot.choices.list, snapshot.choices.open, TITLE_MAX)
+    : null;
+  if (
+    !held.length &&
+    !leaders.length &&
+    !events &&
+    !ready &&
+    !waiting &&
+    !choice
+  )
     return paint(DIM, "Atrium 空闲");
   const parts = [
     `在做 ${count("worker")}`,
@@ -129,6 +140,7 @@ export function renderStatusline(input: StatuslineInput): string {
       : []),
   ].join(" · ");
   const lines = [head];
+  if (choice) lines.push(paint(`${BOLD}${RED}`, `✱ ${choice}`));
   for (const row of held.slice(0, TASK_LINES))
     lines.push(taskLine(row, row.holder, now, paint));
   if (held.length > TASK_LINES)
@@ -171,7 +183,7 @@ function drainStdin() {
 export const statuslineCommand: Command = {
   args: "[--json]",
   about:
-    "Claude Code 状态栏：未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、未处理事件；服务不在只显示未运行，不拉起",
+    "Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、未处理事件；服务不在只显示未运行，不拉起",
   positionals: [0, 0],
   async run({ json }) {
     const done = drainStdin();

@@ -3,8 +3,8 @@
  * 服务端按「路由 → 规则 → 作用范围」判定，不靠提示词自律；没列出的写接口一律拒绝。
  *
  * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
- * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交。
- * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改技能、清额度、登记 leader 等。
+ * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交；在负责的部分或它的上一层提选项单。
+ * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审与选项单、改技能、清额度、登记 leader 等。
  */
 
 export type LeaderRule =
@@ -23,6 +23,7 @@ export type LeaderRule =
   | "escalate"
   | "events-ack"
   | "patrol-decide"
+  | "choice-add"
   | "deny";
 
 const RULES: Record<string, LeaderRule> = {
@@ -47,6 +48,8 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/decisions/:id/supersede": "self",
   "POST /api/leaders/:id/escalate": "escalate",
   "POST /api/patrol/findings/:id/decide": "patrol-decide",
+  // 产品部提选项；拍板（pick / pass）是用户的事，不在表里。
+  "POST /api/choices": "choice-add",
 };
 
 /** 读接口都放行（订阅者名另由 asVerdict 锁定为自己）；写接口只认表里列出的。 */
@@ -81,6 +84,8 @@ export function denyReason(leader: string, method: string, route: string) {
   if (key === "POST /api/leaders") return denied(leader, "登记新的 leader");
   if (route.startsWith("/api/hosts"))
     return denied(leader, "登记、移除或暂停执行机器");
+  if (route.startsWith("/api/choices/"))
+    return denied(leader, "拍板选项单（那是用户的决定）");
   return denied(leader, `调用 ${key}`);
 }
 
@@ -193,6 +198,28 @@ export function leaderEditVerdict(
 
 export function escalateVerdict(leader: string, target: string) {
   return target === leader ? null : denied(leader, `替 ${target} 上交`);
+}
+
+/**
+ * 提选项单：挂在自己负责的部分及以下，或自己负责的部分的上一层——产品部管的是父节点的演进，
+ * 选项要挂在它要演进的那一块上。node 为 null（查不到）算范围外。
+ */
+export function choiceAddVerdict(input: {
+  leader: string;
+  node: number | null;
+  led: ReadonlySet<number>;
+  scope: ReadonlySet<number>;
+  parents: ReadonlyMap<number, number | null>;
+}) {
+  if (input.node === null)
+    return denied(input.leader, "在查不到的节点上提选项单");
+  if (input.scope.has(input.node)) return null;
+  for (const id of input.led)
+    if (input.parents.get(id) === input.node) return null;
+  return denied(
+    input.leader,
+    `在 o${input.node} 上提选项单：只能挂在你负责的部分、它的下层或它的上一层`,
+  );
 }
 
 /** 确认事件：只能确认投给自己的。 */

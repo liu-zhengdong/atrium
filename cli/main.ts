@@ -20,6 +20,7 @@ import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
 import { scheduleCommands } from "./schedules.ts";
 import { memoCommands } from "./memos.ts";
+import { choiceCommands } from "./choices.ts";
 import { agentCommand, hostCommands } from "./hosts.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
@@ -107,6 +108,7 @@ export const commands: Record<string, Command> = {
   ...patrolCommands,
   ...scheduleCommands,
   ...memoCommands,
+  ...choiceCommands,
   ...goalCommands,
   ...skillCommands,
   ...quotaCommands,
@@ -175,6 +177,7 @@ export function help(): string {
       "目标",
       "组织",
       "备忘与决定",
+      "选项与拍板",
     ].flatMap((group) => [
       "",
       group,

@@ -15,9 +15,22 @@ const client = async () => (await import("./service.ts")).connect();
 
 export function eventLine(event: InboxEvent) {
   const detail = (event.detail ?? {}) as Record<string, unknown>;
-  const reason = typeof detail.reason === "string" ? detail.reason : "";
+  const reason =
+    typeof detail.message === "string"
+      ? detail.message
+      : typeof detail.reason === "string"
+        ? detail.reason
+        : "";
   const title = typeof detail.title === "string" ? detail.title : "";
-  return [
+  // 已上线通知把执行者写的端到端验证原样附在下面，秘书照着在线上跑。
+  const verification =
+    event.kind === "online" && typeof detail.verification === "string"
+      ? `\n  端到端验证：\n${detail.verification
+          .split("\n")
+          .map((line) => `    ${line}`)
+          .join("\n")}`
+      : "";
+  const line = [
     `#${event.id}`,
     event.task ?? "",
     event.kind,
@@ -31,6 +44,7 @@ export function eventLine(event: InboxEvent) {
   ]
     .filter(Boolean)
     .join(" ");
+  return line + verification;
 }
 
 const list: Command = {

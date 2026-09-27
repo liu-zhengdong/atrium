@@ -46,6 +46,9 @@ export function runnerEnvOptions(env: NodeJS.ProcessEnv = process.env) {
     const gb = Number(env.ATRIUM_TEST_DISK_FREE_GB);
     if (Number.isFinite(gb) && gb >= 0) options.diskFreeGb = async () => gb;
   }
+  const online = Number(env.ATRIUM_ONLINE_POLL_SECONDS);
+  if (Number.isFinite(online) && online > 0)
+    options.online = { pollMs: online * 1000 };
   return options;
 }
 

@@ -219,9 +219,11 @@ test(
       join(worker.workers, "harness", "codex.md"),
       "---\nlimits: {startup_minutes: 10}\n---\n",
     );
-    writeFileSync(join(worker.root, "bin", "codex"), "#!/bin/sh\nsleep 30\n", {
-      mode: 0o755,
-    });
+    // sleep 要长于整个用例：负载高时重启可能拖过 30 秒，执行者先跑完会让最后的 task stop 返回 409。
+    for (const tool of ["grok", "codex"])
+      writeFileSync(join(worker.root, "bin", tool), "#!/bin/sh\nsleep 120\n", {
+        mode: 0o755,
+      });
     f.env.ATRIUM_WORKERS_DIR = worker.workers;
     f.env.PATH = worker.env.PATH;
     f.env.HOME = worker.env.HOME;

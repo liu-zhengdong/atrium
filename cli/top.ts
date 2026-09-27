@@ -54,6 +54,7 @@ export type Snapshot = {
     merge_queued?: number;
     merging?: number;
     merged?: number;
+    online?: number;
     blocked: number;
     processing: number;
     done: number;
@@ -265,6 +266,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       : "") +
     (snapshot.counts.merging ? ` · 合入中 ${snapshot.counts.merging}` : "") +
     (snapshot.counts.merged ? ` · 已合入 ${snapshot.counts.merged}` : "") +
+    (snapshot.counts.online ? ` · 已上线 ${snapshot.counts.online}` : "") +
     ` · 处理中 ${snapshot.counts.processing}` +
     ` · 卡住 ${snapshot.counts.blocked}` +
     ` · 未处理事件 ${snapshot.counts.events}`;

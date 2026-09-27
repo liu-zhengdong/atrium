@@ -17,6 +17,7 @@ type View = {
   headRefName: string;
   baseRefName: string;
   isCrossRepository: boolean;
+  mergeCommit?: { oid?: string } | null;
 };
 class MergeHold extends Error {}
 
@@ -47,6 +48,10 @@ export class MergeQueue {
       ) => void;
       changed: (id: number) => void;
       cleaned?: (id: number) => Promise<void>;
+      /** 服务自身仓库的 `-R` 写法；合入它的 PR 才等发版自动上线。 */
+      selfRepo?: string | null;
+      /** 合入后通知上线观察者。 */
+      onMerged?: (id: number) => void;
     },
   ) {}
 
@@ -200,7 +205,7 @@ export class MergeQueue {
       "-R",
       repo,
       "--json",
-      "state,headRefOid,headRefName,baseRefName,isCrossRepository",
+      "state,headRefOid,headRefName,baseRefName,isCrossRepository,mergeCommit",
     ]);
     const value: unknown = JSON.parse(output);
     if (!value || typeof value !== "object")
@@ -228,7 +233,7 @@ export class MergeQueue {
       throw new MergeHold("PR 与仓库 origin 不一致，拒绝合入");
     const base = await defaultBranch(repo, this.options.run);
     const before = await this.pr(task, flag);
-    if (before.state === "MERGED") return this.merged(task);
+    if (before.state === "MERGED") return this.merged(task, flag, before);
     if (this.stopped(task.id)) return;
     if (before.isCrossRepository)
       throw new MergeHold("PR 来源不是仓库 origin 的分支，拒绝合入");
@@ -394,7 +399,7 @@ export class MergeQueue {
     );
     if (!merge.ok) {
       const state = await this.pr(task, flag);
-      if (state.state === "MERGED") return this.merged(task);
+      if (state.state === "MERGED") return this.merged(task, flag, state);
       if (this.stopped(task.id)) return;
       return this.handBack(
         task,
@@ -404,12 +409,31 @@ export class MergeQueue {
     const after = await this.pr(task, flag);
     if (after.state !== "MERGED")
       throw new Error("gh 合入后 PR 尚未显示 MERGED");
-    await this.merged(task);
+    await this.merged(task, flag, after);
   }
 
-  private async merged(task: Task) {
+  private async merged(task: Task, flag: string, view: View) {
     if (this.closed) return;
-    this.stage(task.id, "merged", "merged", { pr_url: task.pr_url }, false);
+    const commit =
+      typeof view.mergeCommit?.oid === "string" &&
+      /^[0-9a-f]{7,64}$/i.test(view.mergeCommit.oid)
+        ? view.mergeCommit.oid
+        : null;
+    const online = !!this.options.selfRepo && this.options.selfRepo === flag;
+    this.db
+      .prepare("UPDATE tasks SET merge_commit=?,online_wait=? WHERE id=?")
+      .run(commit, online ? 1 : 0, task.id);
+    this.stage(
+      task.id,
+      "merged",
+      "merged",
+      {
+        pr_url: task.pr_url,
+        ...(commit ? { commit } : {}),
+        ...(online ? { online: "等发版后自动上线" } : {}),
+      },
+      false,
+    );
     try {
       await this.options.cleaned?.(task.id);
     } catch (error) {
@@ -417,6 +441,7 @@ export class MergeQueue {
     }
     this.options.changed(task.id);
     this.options.publish(task.id, "merged", { pr_url: task.pr_url });
+    if (online) this.options.onMerged?.(task.id);
   }
 
   /** 交回原执行者在原分支续做；超过次数转卡住。审阅打回也走这里。 */

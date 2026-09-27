@@ -125,11 +125,13 @@ export class QuotaGuard {
           { busy: x.busyTools(active.id), requireTrust: true },
         );
       } catch (error) {
+        if (x.isClosed()) return;
         return x.publish(active.id, "blocked", {
           ...base,
           note: `没有可换的执行者：${message(error)}`,
         });
       }
+      if (x.isClosed()) return;
       const tool = choice.worker.tool;
       if (choice.worker.id === active.worker.id)
         return x.publish(active.id, "blocked", {
@@ -163,6 +165,7 @@ export class QuotaGuard {
     try {
       await x.launch(active.id, choice);
     } catch (error) {
+      if (x.isClosed()) return;
       return x.publish(active.id, "blocked", {
         ...base,
         note: `换执行者 ${choice.worker.id} 拉起失败：${message(error)}`,
@@ -170,6 +173,7 @@ export class QuotaGuard {
     } finally {
       x.launching.delete(active.id);
     }
+    if (x.isClosed()) return;
     if (fresh) x.publish(active.id, "quota_switched", { ...base, ...switched });
   }
 

@@ -49,12 +49,18 @@ export class Executors {
   readonly active = new Map<number, Active>();
   /** 正在准备（建 worktree、写提示词）的任务及其工具，防止重复派与独占冲突。 */
   readonly launching = new Map<number, Tool | null>();
+  /** 退出收尾期间仍可能自动重派；wait 不应把中途状态当作最终结果。 */
+  readonly finishing = new Map<number, number>();
   private ticking = false;
 
   constructor(private readonly ctx: ExecutorContext) {}
 
   isPaused() {
     return this.ctx.paused();
+  }
+
+  isClosed() {
+    return this.ctx.closed();
   }
 
   busy(tool: Tool, except?: number) {
@@ -95,14 +101,20 @@ export class Executors {
   }
 
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
+    if (this.ctx.closed()) throw new Error("服务已关闭");
     const task = getTask(this.ctx.db, id);
     const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
+    if (this.ctx.closed()) throw new Error("服务已关闭");
     const child = await spawnWorker(
       prepared,
       this.ctx.launchOptions.env,
       task.ref,
     );
     const pid = child.pid!;
+    if (this.ctx.closed()) {
+      signalGroup(pid, "SIGKILL");
+      throw new Error("服务已关闭");
+    }
     let started: Task;
     try {
       started = this.advance(
@@ -153,6 +165,7 @@ export class Executors {
     const active = this.active.get(id);
     if (!active || active.exited) return;
     active.exited = true;
+    this.finishing.set(id, (this.finishing.get(id) ?? 0) + 1);
     try {
       const outcome = await settle(
         active,
@@ -164,6 +177,7 @@ export class Executors {
         },
         this.ctx.launchOptions.env,
       );
+      if (this.ctx.closed()) return;
       if (getTask(this.ctx.db, id).status !== "running") return;
       const { decision, verdict, facts } = outcome;
       if (outcome.localCheck)
@@ -239,6 +253,9 @@ export class Executors {
     } finally {
       // 重试或换执行者重派后，表里已是新的一轮，别删掉。
       if (this.active.get(id) === active) this.active.delete(id);
+      const remaining = this.finishing.get(id)! - 1;
+      if (remaining) this.finishing.set(id, remaining);
+      else this.finishing.delete(id);
       this.ctx.waits.changed(id);
       if (!this.ctx.closed() && !this.ctx.paused())
         void this.drain(active.tool);
@@ -246,6 +263,7 @@ export class Executors {
   }
 
   private async retry(active: Active, reason: string) {
+    if (this.ctx.closed()) return;
     this.publish(active.id, "stalled", { reason, retry: true });
     this.active.delete(active.id);
     if (this.ctx.paused()) {
@@ -265,6 +283,7 @@ export class Executors {
         true,
       );
     } catch (error) {
+      if (this.ctx.closed()) return;
       const why = `卡死后重试拉起失败：${error instanceof Error ? error.message : String(error)}`;
       noteTask(this.ctx.db, active.id, "retry_failed", { reason: why });
       this.publish(active.id, "failed", { reason: why });
@@ -272,6 +291,7 @@ export class Executors {
   }
 
   private failAfterError(id: number, error: unknown) {
+    if (this.ctx.closed()) return;
     console.error(`任务 ${taskRef(id)} 收尾失败：`, error);
     try {
       if (getTask(this.ctx.db, id).status !== "running") return;
@@ -320,7 +340,7 @@ export class Executors {
 
   /** 拉起排队中的任务：每个工具的队首，前提是独占工具空闲、账号额度标记已解除；返回出队几个。 */
   async drain(tool?: Tool) {
-    if (this.ctx.paused()) return 0;
+    if (this.ctx.closed() || this.ctx.paused()) return 0;
     const held = this.ctx.quota.held();
     let moved = 0;
     for (const entry of heads(this.ctx.db, tool)) {
@@ -340,8 +360,10 @@ export class Executors {
           entry.worker,
           this.ctx.launchOptions.workersDir,
         );
+        if (this.ctx.closed()) return moved;
         await this.launch(entry.task_id, { worker, risk: entry.risk as Risk });
       } catch (error) {
+        if (this.ctx.closed()) return moved;
         const reason = `排队后拉起失败：${error instanceof Error ? error.message : String(error)}`;
         try {
           // 因额度排队的任务本来就受阻，转移会被拒；照样记下并投递。
@@ -350,7 +372,8 @@ export class Executors {
           else this.advance(entry.task_id, { kind: "block" }, {}, { reason });
           this.publish(entry.task_id, "blocked", { reason });
         } catch {
-          noteTask(this.ctx.db, entry.task_id, "launch_failed", { reason });
+          if (!this.ctx.closed())
+            noteTask(this.ctx.db, entry.task_id, "launch_failed", { reason });
         }
       } finally {
         this.launching.delete(entry.task_id);

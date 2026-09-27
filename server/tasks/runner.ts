@@ -374,7 +374,8 @@ export class TaskRunner {
     return (
       task.status === "running" ||
       !!queued(this.db, id) ||
-      this.x.launching.has(id)
+      this.x.launching.has(id) ||
+      this.x.finishing.has(id)
     );
   }
 

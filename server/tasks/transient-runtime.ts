@@ -13,7 +13,7 @@ import { chooseWorker, type Choice } from "./worker-choice.ts";
 import type { LaunchOptions } from "./workspace.ts";
 
 /**
- * 临时错误后的重派（#262）：任务已按退出码置为失败之后，同一执行者重试一次，再失败按档案换执行者重派一次。
+ * 临时错误后的重派（#262）：任务按退出码记账后，同一执行者重试一次，再失败按档案换执行者重派一次。
  * 判定在 transient.ts 的纯函数里，这里只执行并落库。
  */
 
@@ -80,6 +80,7 @@ export async function retryAfterTransient(
       choice = { worker: active.worker, risk: active.risk };
     else {
       const other = await chooseAnother(x, ctx, active);
+      if (x.isClosed()) return;
       if ("note" in other)
         return x.publish(active.id, "failed", {
           ...base,
@@ -99,10 +100,12 @@ export async function retryAfterTransient(
     try {
       await x.launch(active.id, choice, true);
     } catch (error) {
+      if (x.isClosed()) return;
       const why = `临时错误后重派 ${choice.worker.id} 拉起失败：${message(error)}`;
       noteTask(db, active.id, "retry_failed", { reason: why });
       return x.publish(active.id, "failed", { ...base, note: why });
     }
+    if (x.isClosed()) return;
     x.publish(active.id, "transient_retry", { ...base, ...retry });
   } finally {
     x.launching.delete(active.id);

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
+import type { PaceEntry } from "../server/tasks/prepare.ts";
 
 /** 派活集成测试的夹具（#262）：本地 bare origin + 临时仓库 + PATH 前置的假执行者 + 临时档案。 */
 
@@ -108,6 +109,7 @@ export async function until(check: () => boolean, ms = 10_000) {
 export async function startApp(
   t: After,
   tweak?: (fx: ReturnType<typeof fixture>) => void,
+  pace: () => Promise<PaceEntry[] | undefined> = async () => undefined,
 ) {
   const fx = fixture(t);
   tweak?.(fx);
@@ -122,7 +124,7 @@ export async function startApp(
       exec: fx.run,
       tickMs: 100,
       killGraceMs: 200,
-      pace: async () => undefined,
+      pace,
     },
   });
   t.after(() => app.close());

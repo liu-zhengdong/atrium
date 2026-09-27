@@ -173,3 +173,16 @@ test("校验错误展示选项名或参数名，不显示接口字段与英文�
 test("当日结束时间仅写时分", () => {
   assert.match(when(Date.now()), /^\d{2}:\d{2}$/);
 });
+
+test("时间按本地时区显示：UTC 12:07 在 Asia/Shanghai 为 20:07", () => {
+  const original = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    const rendered = when(Date.UTC(2026, 8, 27, 12, 7));
+    assert.match(rendered, /20:07/);
+    assert.doesNotMatch(rendered, /12:07/);
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});

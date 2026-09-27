@@ -127,6 +127,7 @@ export class MergeQueue {
       noteTask(this.db, id, "merge_queued", { pr_url: task.pr_url });
     });
     this.options.changed(id);
+    this.options.publish(id, "merge_queued", { pr_url: task.pr_url });
     this.kick();
   }
 
@@ -325,6 +326,8 @@ export class MergeQueue {
       "HEAD",
     ]);
     noteTask(this.db, task.id, "merge_rebased", { head: checkedHead });
+    this.options.publish(task.id, "merge_rebased", { head: checkedHead });
+    this.options.publish(task.id, "local_check_started", {});
     const checked = await runLocalCheck({
       worktree,
       taskDir: taskDir(this.options.data, task.id),

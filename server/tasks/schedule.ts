@@ -301,8 +301,16 @@ export class Scheduler {
       taskId: id,
       source: "schedule",
       kind,
-      key: `${task.ref}:schedule`,
-      detail: { title: task.title, reason, waiting_for: waiting },
+      key: `${task.ref}:schedule:${kind}`,
+      detail: {
+        title: task.title,
+        reason,
+        waiting_for: waiting,
+        auto: task.auto === 1,
+        unassigned:
+          (task.owner ?? "secretary") === "secretary" &&
+          task.deliver === "none",
+      },
     });
   }
 }

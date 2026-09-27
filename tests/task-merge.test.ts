@@ -270,6 +270,21 @@ for (const scenario of [
         }).trim(),
         "",
       );
+      const urgent = await call("GET", "/api/events/wait?timeout=0");
+      assert.equal(urgent.body.events.length, 0, "过程事件不叫醒秘书");
+      const digest = await call("GET", "/api/events/digest");
+      assert.match(digest.body.items[0].summary, /合入/);
+      assert.ok(digest.body.acknowledged >= 2);
+      if (scenario === "success") {
+        assert.equal(
+          (await call("GET", "/api/events/digest?since=bad")).status,
+          400,
+        );
+        assert.equal(
+          (await call("GET", "/api/events/wait?timeout=0&settle=-1")).status,
+          400,
+        );
+      }
     } else if (scenario === "wrong_origin" || scenario === "stopped") {
       assert.equal(task.status, "blocked");
       assert.equal(task.delivery_stage, null);
@@ -298,6 +313,13 @@ for (const scenario of [
         ).length,
         1,
       );
+      const urgent = await call("GET", "/api/events/wait?timeout=0");
+      assert.deepEqual(
+        urgent.body.events.map((event: { kind: string }) => event.kind),
+        ["blocked"],
+      );
+      const digest = await call("GET", "/api/events/digest");
+      assert.match(digest.body.items[0].summary, /退回 2 次/);
     }
   });
 }

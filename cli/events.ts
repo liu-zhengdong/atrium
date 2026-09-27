@@ -79,18 +79,34 @@ const list: Command = {
 };
 
 const wait: Command = {
-  args: "[--as 订阅者] [--timeout 秒]",
+  args: "[--as 订阅者] [--timeout 秒] [--settle 秒] [--all]",
   about:
-    "取未确认的事件（任务完成、失败、受阻、卡死、CI）；没有就等，有就打印一批退出；取走的 15 分钟内不重投；缺省订阅者 secretary",
-  options: { as: { type: "string" }, timeout: { type: "string" } },
+    "缺省只取要处理事件，首条后最多攒批 30 秒；--all 包括过程知会；取走后 15 分钟内不重投",
+  options: {
+    as: { type: "string" },
+    timeout: { type: "string" },
+    settle: { type: "string" },
+    all: { type: "boolean" },
+  },
   positionals: [0, 0],
   async run({ values, json }) {
     const who = str(values, "as") ?? "secretary";
     if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
     const seconds = waitSeconds(str(values, "timeout"));
+    const settle = str(values, "settle");
+    if (
+      settle !== undefined &&
+      (!/^(0|[1-9]\d*)$/.test(settle) || Number(settle) > 300)
+    )
+      throw new Problem(400, "--settle 应为 0～300 的整数秒", "usage");
     const api = await client();
     const query = (timeout: number) =>
-      new URLSearchParams({ as: who, timeout: String(timeout) });
+      new URLSearchParams({
+        as: who,
+        timeout: String(timeout),
+        ...(settle === undefined ? {} : { settle }),
+        ...(values.all === true ? { all: "1" } : {}),
+      });
     const result = await longWait<{
       events: InboxEvent[];
       timed_out: boolean;
@@ -113,6 +129,43 @@ const wait: Command = {
       );
     else console.log(result.events.map(eventLine).join("\n"));
     return ids.length ? 0 : 124;
+  },
+};
+
+const digest: Command = {
+  args: "[--as 订阅者] [--since 时间]",
+  about:
+    "按任务合并尚未确认的知会事件；读取后自动确认；--since 使用带时区的 ISO 时间",
+  options: { as: { type: "string" }, since: { type: "string" } },
+  positionals: [0, 0],
+  async run({ values, json }) {
+    const who = str(values, "as") ?? "secretary";
+    const since = str(values, "since");
+    if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
+    if (
+      since !== undefined &&
+      (!/^\d{4}-\d{2}-\d{2}T/.test(since) ||
+        !Number.isFinite(Date.parse(since)) ||
+        !/(Z|[+-]\d{2}:\d{2})$/.test(since))
+    )
+      throw new Problem(400, "--since 应为带时区的 ISO 时间", "usage");
+    const query = new URLSearchParams({
+      as: who,
+      ...(since === undefined ? {} : { since }),
+    });
+    const result = await (
+      await client()
+    ).get<{ items: { summary: string }[]; acknowledged: number }>(
+      `/events/digest?${query}`,
+    );
+    if (json) printJson(result);
+    else
+      console.log(
+        result.items.length
+          ? result.items.map((item) => item.summary).join("\n")
+          : "没有新的知会事件",
+      );
+    recordNext(`等要处理的事：atrium events wait --as ${who}`);
   },
 };
 
@@ -158,5 +211,6 @@ const ack: Command = {
 export const eventCommands: Record<string, Command> = {
   events: list,
   "events wait": wait,
+  "events digest": digest,
   "events ack": ack,
 };

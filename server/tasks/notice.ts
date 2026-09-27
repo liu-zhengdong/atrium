@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { EventInbox } from "./events.ts";
 import { DEFAULT_OWNER, getTask } from "./ledger.ts";
+import { eventLevel } from "./event-level.ts";
 import { nodes } from "../org/model.ts";
 
 /**
@@ -23,7 +24,7 @@ export function publishTask(
     taskId: id,
     source: detail.source === undefined ? "runner" : String(detail.source),
     kind,
-    key: `${task.ref}:${kind.startsWith("ci") ? "ci" : "outcome"}`,
+    key: `${task.ref}:${eventLevel(kind, detail) === "action" ? (kind.startsWith("ci") ? "ci" : "outcome") : kind}`,
     actor,
     detail: {
       title: task.title,

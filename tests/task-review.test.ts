@@ -337,7 +337,7 @@ for (const scenario of [
       assert.match(events, /改动 1 个文件，\+1 −0：done\.txt/);
       // 审阅任务本身不单独投给秘书，结论在原任务上。
       const inbox = (
-        await call("GET", "/api/events/wait?as=secretary&timeout=0")
+        await call("GET", "/api/events/wait?as=secretary&timeout=0&all=1")
       ).body.events as { task: string }[];
       assert.ok(inbox.some((event) => event.task === ref));
       assert.ok(

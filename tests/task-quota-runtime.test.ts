@@ -112,7 +112,7 @@ test("额度用尽：受阻原因与时刻、账号避让、换执行者重派�
   let events = (await call("GET", "/api/events/wait?as=secretary&timeout=0"))
     .body.events;
   const outcome = events.find((e: { task: string }) => e.task === "t1");
-  assert.equal(outcome.count, 2, "换执行者与完成合并在同一去重键");
+  assert.equal(outcome.count, 1, "完成单独投递，换人过程进入知会摘要");
   assert.equal(outcome.kind, "done");
 
   // 2. 到期前 codex 不再被选：不写执行者挑 opencode；写死 codex 就排队并写明等到何时。
@@ -148,8 +148,8 @@ test("额度用尽：受阻原因与时刻、账号避让、换执行者重派�
     "恢复时间未知兜底 1 小时",
   );
   assert.match(detail("t4", "queued").reason, /等到 .* 额度恢复后派给 codex/);
-  events = (await call("GET", "/api/events/wait?as=secretary&timeout=0")).body
-    .events;
+  events = (await call("GET", "/api/events/wait?as=secretary&timeout=0&all=1"))
+    .body.events;
   const queued = events.find((e: { task: string }) => e.task === "t4");
   assert.equal(queued.kind, "quota_queued");
   assert.equal(queued.detail.wait_until, hold.until);
@@ -170,8 +170,8 @@ test("额度用尽：受阻原因与时刻、账号避让、换执行者重派�
     );
   assert.deepEqual(listHolds(db), []);
   assert.match(getTask(db, "t4").worker ?? "", /^codex\b/);
-  events = (await call("GET", "/api/events/wait?as=secretary&timeout=0")).body
-    .events;
+  events = (await call("GET", "/api/events/wait?as=secretary&timeout=0&all=1"))
+    .body.events;
   assert.deepEqual(
     events
       .filter((e: { kind: string }) => e.kind === "quota_restored")
@@ -208,9 +208,8 @@ test("手工解除占用后立即派发因该占用排队的任务，写解除�
     listHolds(db).some((h) => h.provider === "codex"),
     false,
   );
-  const events = (await call("GET", "/api/events/wait?as=secretary&timeout=5"))
-    .body.events;
-  assert.ok(events.some((e: { kind: string }) => e.kind === "quota_cleared"));
+  const digest = (await call("GET", "/api/events/digest?as=secretary")).body;
+  assert.ok(digest.acknowledged >= 1);
   assert.equal((await call("POST", "/api/quota/codex/clear")).status, 404);
 });
 

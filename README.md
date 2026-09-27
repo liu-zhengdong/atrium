@@ -93,11 +93,13 @@ atrium quota --clear claude   # 人工解除运行时的额度占用（误判时
 
 ## 事件
 
-任务完成、失败、受阻、卡死和 CI 结果先落库，订阅者取走、确认后才算处理完；服务重启后仍在。
+事件先落库：失败、卡住、卡死、待派任务、需要秘书确认的事和已上线属于要处理；合入队列及自动派发等过程属于知会。订阅者取走要处理事件、确认后才算处理完；服务重启后仍在。
 
 ```bash
 atrium events                     # 查看最近事件的送达与确认状态；--before 翻页
-atrium events wait --timeout 5    # 取未确认的事件，没有就等；缺省订阅者 secretary
+atrium events wait --timeout 5    # 只取要处理事件；首条后攒批最多 30 秒，--settle 可调
+atrium events wait --all           # 连同知会一起取
+atrium events digest --since 2026-09-27T00:00:00+08:00  # 按任务合并知会，读后自动确认
 atrium events ack 1               # 确认已处理（编号见 events wait）
 ```
 
@@ -114,7 +116,7 @@ atrium chat --acp --allow   # ACP 权限请求自动允许一次（非交互时�
 
 `atrium chat` 按 `--tool` 或 `ATRIUM_SECRETARY_TOOL` 选择秘书工具。opencode 缺省走原生界面：Atrium 启动只监听 127.0.0.1、随机端口和密码的 `opencode serve`，再以 `opencode attach` 打开会话。事件经服务端接口送进同一会话，消息以「【Atrium 事件】」开头，界面弹出「送入事件 #编号」；用户的输入框不受影响。`--acp` 改由 Atrium 以 `opencode acp` 托管；不在终端时也走 ACP。codex 经 `@zed-industries/codex-acp` 使用 ACP；依赖在 `package.json` 和 `package-lock.json` 精确锁定为 `0.16.0`，安装 Atrium 时运行 `npm ci` 安装对应平台二进制。
 
-opencode 两种界面共用 `<ATRIUM_DATA>/secretary/opencode-session.json`，codex 会话编号存在同目录的 `codex-acp.json`；工作目录也一并记录。秘书空闲时，事件按唤醒规则攒批送入；忙时排队、一轮结束后合并送入；连续自动送入 10 次后暂停，等用户发话再继续。送入即记为已送达，秘书处理完用 `atrium events ack` 确认；未确认事件在租约到期后重投。
+opencode 两种界面共用 `<ATRIUM_DATA>/secretary/opencode-session.json`，codex 会话编号存在同目录的 `codex-acp.json`；工作目录也一并记录。秘书空闲时，要处理事件按唤醒规则攒批送入；忙时排队、一轮结束后合并送入；连续自动送入 10 次后暂停，等用户发话再继续。送入即记为已送达，秘书处理完用 `atrium events ack` 确认；未确认事件在租约到期后重投。
 
 界面关闭时，服务按相同规则恢复上次会话：codex 执行 `codex exec resume <会话> -`，opencode 执行 `opencode run --session <会话>`，每批处理完即退出。原生界面、ACP 界面与后台恢复共用一把会话锁；有界面时不会另起后台进程。后台恢复只在 `atrium chat` 建过会话后启用，失败会释放事件租约再重试。后台 codex 使用无提示审批与完整文件访问，opencode 使用 `--auto`；秘书仍按原有权限与章程行事。
 

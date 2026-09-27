@@ -498,7 +498,7 @@ for (const trusted of [true, false])
         .prepare("SELECT kind FROM task_inbox WHERE task_id=? ORDER BY id")
         .all(parent.id) as { kind: string }[]
     ).map((e) => e.kind);
-    assert.equal(kinds[0], trusted ? "merge_queued" : "review_queued");
+    assert.ok(kinds.includes(trusted ? "merge_queued" : "review_queued"));
     assert.ok(!kinds.includes("done"));
   });
 

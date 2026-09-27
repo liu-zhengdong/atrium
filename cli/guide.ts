@@ -18,6 +18,7 @@ export const groups: Record<string, string[]> = {
     "task stop",
     "task log",
     "task wait",
+    "events",
     "events wait",
     "events ack",
   ],
@@ -81,5 +82,5 @@ export function guide(commands: Record<string, Command>) {
   看组织：atrium org tree；atrium org show o2；树为空时先 atrium org import --repo 仓库 预览、加 --apply 写入
   组织技能：atrium skill add web-design ./web-design --reason 原因；atrium skill bind web-design atrium/web；执行者改了挂载副本会生成提议：atrium skill proposals；atrium skill accept p1
   看谁在干什么：atrium top（默认每 2 秒全屏刷新，q 退出；只打一次用 --once，脚本用 --once --json）
-  派活并等结果：atrium task run t2 --worker opencode；atrium task wait t2；atrium task log t2 --follow\n  等事件：atrium events wait --as secretary；处理完 atrium events ack 12；取走的事件处理中 15 分钟内不重投（ATRIUM_EVENT_LEASE_MINUTES 可调），到点仍未确认才重投；自己 task stop 引出的事件不投给自己\n  空闲时重启：atrium restart --when-idle；进度看 atrium status\n  报错后怎么办：按候选短号重试，或执行回执里的修正命令。\n\n命令参考（由命令表生成）\n${reference}`;
+  派活并等结果：atrium task run t2 --worker opencode；atrium task wait t2；atrium task log t2 --follow\n  等事件：atrium events 查看送达与确认状态；atrium events wait --as secretary；处理完 atrium events ack 12；取走的事件处理中 15 分钟内不重投（ATRIUM_EVENT_LEASE_MINUTES 可调），到点仍未确认才重投；自己 task stop 引出的事件不投给自己\n  空闲时重启：atrium restart --when-idle；进度看 atrium status\n  报错后怎么办：按候选短号重试，或执行回执里的修正命令。\n\n命令参考（由命令表生成）\n${reference}`;
 }

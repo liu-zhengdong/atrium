@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
-import { ackIds, waitSeconds } from "./events.ts";
+import { ackIds, listOptions, waitSeconds } from "./events.ts";
 import {
   DEFAULT_OWNER,
   addTaskNote,
@@ -117,6 +117,10 @@ export function registerTaskRoutes(
       waitSeconds(q.timeout),
       disconnect(request),
     );
+  });
+  app.get("/api/events", (request) => {
+    const q = query(request.query);
+    return runner.inbox.list(actorOf(q), listOptions(q));
   });
   app.post("/api/events/ack", { bodyLimit: 64 * 1024 }, (request) =>
     runner.inbox.ack(ackIds(request.body)),

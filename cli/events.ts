@@ -23,6 +23,8 @@ function line(event: InboxEvent) {
     event.kind,
     title ? clip(title, 40) : "",
     event.count > 1 ? `（合并 ${event.count} 次）` : "",
+    event.delivered_at !== null ? "已送达" : "未送达",
+    event.acked_at !== null ? "已确认" : "未确认",
     typeof detail.pr_url === "string" ? detail.pr_url : "",
     reason ? `· ${clip(reason, 160)}` : "",
     `· ${when(event.updated_at)}`,
@@ -30,6 +32,37 @@ function line(event: InboxEvent) {
     .filter(Boolean)
     .join(" ");
 }
+
+const list: Command = {
+  args: "[--as 订阅者] [--before 编号] [--limit 条数]",
+  about: "查看事件的送达与确认状态，缺省显示 secretary 最近 50 条",
+  options: {
+    as: { type: "string" },
+    before: { type: "string" },
+    limit: { type: "string" },
+  },
+  positionals: [0, 0],
+  async run({ values, json }) {
+    const who = str(values, "as") ?? "secretary";
+    if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
+    const query = new URLSearchParams({ as: who });
+    for (const key of ["before", "limit"])
+      if (str(values, key) !== undefined) query.set(key, str(values, key)!);
+    const result = await (
+      await client()
+    ).get<{ events: InboxEvent[]; next_before: number | null }>(
+      `/events?${query}`,
+    );
+    if (result.next_before !== null)
+      recordNext(
+        `继续查看：atrium events --as ${who} --before ${result.next_before}`,
+      );
+    else recordNext(`等新事件：atrium events wait --as ${who}`);
+    if (json) printJson(result);
+    else if (!result.events.length) console.log(`${who} 没有事件`);
+    else console.log(result.events.map(line).join("\n"));
+  },
+};
 
 const wait: Command = {
   args: "[--as 订阅者] [--timeout 秒]",
@@ -109,6 +142,7 @@ const ack: Command = {
 };
 
 export const eventCommands: Record<string, Command> = {
+  events: list,
   "events wait": wait,
   "events ack": ack,
 };

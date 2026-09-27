@@ -24,7 +24,7 @@ import {
 import { startService, stopService } from "./service.ts";
 import { installVersion } from "./install-version.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
-import { Store, Problem } from "./store.ts";
+import { Problem } from "./problem.ts";
 
 export type RestartStatus =
   | "waiting_idle"
@@ -48,8 +48,6 @@ export type RestartState = {
   oldPid?: number;
   repo?: string;
   newPid?: number;
-  agentsToWake?: string[];
-  wokenAgents?: string[];
   error?: string;
   failedVersion?: string;
   rollbackVersion?: string;
@@ -120,11 +118,7 @@ export function writeRestartState(data: string, state: RestartState): void {
   }
 }
 
-export async function checkServiceHealth(
-  record: ServiceRecord,
-  data: string,
-  options?: { probeAgent?: string },
-): Promise<void> {
+export async function checkServiceHealth(record: ServiceRecord): Promise<void> {
   // 1. 接口能响应
   const statusRes = await fetch(`${serviceUrl(record)}/api/service`, {
     headers: { authorization: `Bearer ${record.token}` },
@@ -141,21 +135,22 @@ export async function checkServiceHealth(
     throw new Error("服务身份不匹配");
   if (statusJson.stopping) throw new Error("服务仍处于 stopping 状态");
 
-  // 网关异步启动；等待有界就绪，不能把首个尚未握手的瞬间误判为失败。
+  // 等待有界就绪，不能把首个尚未就绪的瞬间误判为失败。
   const deadline = Date.now() + 15000;
-  let healthError = "网关未就绪";
+  let healthError = "服务未就绪";
   let ready = false;
   while (Date.now() < deadline) {
-    if (!alive(record.pid)) throw new Error("服务在网关握手前退出");
+    if (!alive(record.pid)) throw new Error("服务在就绪前退出");
     const healthRes = await fetch(`${serviceUrl(record)}/api/service/health`, {
       headers: { authorization: `Bearer ${record.token}` },
       signal: AbortSignal.timeout(6000),
     });
+    // 回滚到的旧版本在 runtimes 里报未就绪原因；ok 已涵盖它的可用性。
     const health = (await healthRes.json().catch(() => ({}))) as {
       ok?: boolean;
-      runtimes?: { available?: boolean; error?: string | null };
+      runtimes?: { error?: string | null };
     };
-    if (healthRes.ok && health.ok && health.runtimes?.available) {
+    if (healthRes.ok && health.ok) {
       ready = true;
       break;
     }
@@ -163,61 +158,13 @@ export async function checkServiceHealth(
     await delay(250);
   }
   if (!ready) throw new Error(`健康检查未通过：${healthError}`);
-
-  // A real model turn is an optional, explicit acceptance check. The service
-  // and MCP gateway can be healthy when credentials or providers are offline.
-  if (options?.probeAgent) {
-    const probeRes = await fetch(`${serviceUrl(record)}/api/service/probe`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${record.token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ id: options.probeAgent }),
-      signal: AbortSignal.timeout(70000),
-    });
-    if (!probeRes.ok) {
-      const body = (await probeRes.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      throw new Error(`身份回合验证失败：${body.error ?? probeRes.status}`);
-    }
-  }
-}
-
-export function sendRollbackNotification(
-  data: string,
-  details: { fromVersion: string; failedVersion: string; error: string },
-) {
-  try {
-    const dbPath = join(data, "atrium.sqlite");
-    if (!existsSync(dbPath)) return;
-    const store = new Store(dbPath);
-    try {
-      const agents = store.agents();
-      const targetAgentId = agents[0]?.id;
-      if (targetAgentId) {
-        store.run(
-          `INSERT INTO inbox(agent_id, source, title, body, created_at) VALUES(?, 'system', 'Atrium 升级回滚', ?, ?)`,
-          targetAgentId,
-          `Atrium 启动失败，已自动回滚至 v${details.fromVersion}。\n原版本：v${details.fromVersion}\n失败版本：v${details.failedVersion}\n失败原因：${details.error}`,
-          Date.now(),
-        );
-      }
-    } finally {
-      store.close();
-    }
-  } catch (e) {
-    console.warn("记录回滚通知至数据库失败：", e);
-  }
 }
 
 export type SupervisorLaunchOptions = {
   data: string;
   fromVersion?: string;
   targetVersion?: string;
-  probeAgent?: string;
-  wakeAgent?: string;
+  /** 旧服务排空的上限（毫秒）。 */
   agentTimeout?: number;
 };
 
@@ -268,8 +215,6 @@ export async function startSupervisor(
     ...(options.targetVersion
       ? ["--target-version", options.targetVersion]
       : []),
-    ...(options.probeAgent ? ["--probe-agent", options.probeAgent] : []),
-    ...(options.wakeAgent ? ["--wake-agent", options.wakeAgent] : []),
     ...(options.agentTimeout
       ? ["--agent-timeout", String(options.agentTimeout)]
       : []),
@@ -297,7 +242,7 @@ export async function startSupervisor(
 export async function requestDrain(
   record: ServiceRecord,
   timeout: number,
-): Promise<string[]> {
+): Promise<void> {
   // 长排空会超过 undici 默认 headersTimeout（约 300 秒，#231），全局 fetch
   // 会在响应头之前断开；改用 node:http，整体超时时只由 AbortSignal 控制。
   // 带上自己的 PID：旧服务排空完成后据此判断接手的 supervisor 是否还在（#244）。
@@ -333,10 +278,7 @@ export async function requestDrain(
   );
   const parsed = (() => {
     try {
-      return JSON.parse(response.body) as {
-        error?: string;
-        agentsToWake?: string[];
-      };
+      return JSON.parse(response.body) as { error?: string };
     } catch {
       return {};
     }
@@ -345,7 +287,6 @@ export async function requestDrain(
     throw new Error(
       `旧服务拒绝平滑退出（HTTP ${response.status}）：${parsed.error ?? "请检查旧服务日志"}`,
     );
-  return parsed.agentsToWake ?? [];
 }
 
 export async function runSupervisor(args: string[]): Promise<void> {
@@ -353,8 +294,6 @@ export async function runSupervisor(args: string[]): Promise<void> {
   let taskId = "";
   let fromVersion = "";
   let targetVersion: string | undefined;
-  let probeAgent: string | undefined;
-  let wakeAgent: string | undefined;
   let agentTimeout = 300000;
 
   for (let i = 0; i < args.length; i++) {
@@ -364,8 +303,6 @@ export async function runSupervisor(args: string[]): Promise<void> {
       fromVersion = args[++i];
     else if (args[i] === "--target-version" && args[i + 1])
       targetVersion = args[++i];
-    else if (args[i] === "--probe-agent" && args[i + 1]) probeAgent = args[++i];
-    else if (args[i] === "--wake-agent" && args[i + 1]) wakeAgent = args[++i];
     else if (args[i] === "--agent-timeout" && args[i + 1])
       agentTimeout = Number(args[++i]);
   }
@@ -384,21 +321,12 @@ export async function runSupervisor(args: string[]): Promise<void> {
   writeRestartState(data, state);
 
   // 1. 停止当前旧服务
-  let agentsToWake: string[] = wakeAgent ? [wakeAgent] : [];
-  state.agentsToWake = agentsToWake;
   const oldRecord = readService(data);
   if (oldRecord && alive(oldRecord.pid)) {
     state.oldPid = oldRecord.pid;
     writeRestartState(data, state);
     try {
-      agentsToWake = [
-        ...new Set([
-          ...agentsToWake,
-          ...(await requestDrain(oldRecord, agentTimeout)),
-        ]),
-      ];
-      state.agentsToWake = agentsToWake;
-      writeRestartState(data, state);
+      await requestDrain(oldRecord, agentTimeout);
       await stopService(data);
     } catch (error) {
       state.status = "failed";
@@ -420,7 +348,7 @@ export async function runSupervisor(args: string[]): Promise<void> {
     state.status = "checking";
     writeRestartState(data, state);
 
-    await checkServiceHealth(newRecord, data, { probeAgent });
+    await checkServiceHealth(newRecord);
     const reported = (await (
       await fetch(`${serviceUrl(newRecord)}/api/service`, {
         headers: { authorization: `Bearer ${newRecord.token}` },
@@ -431,31 +359,6 @@ export async function runSupervisor(args: string[]): Promise<void> {
         `启动版本不符：预期 ${state.targetVersion}，实际 ${reported.version}`,
       );
 
-    // 唤醒此前正在干活的 Agent；唤醒失败不得报告成功。
-    // The probe identity has already finished a turn but still needs a resume message.
-    const woken: string[] = [];
-    for (const agentId of state.agentsToWake ?? []) {
-      try {
-        const response = await fetch(
-          `${serviceUrl(newRecord)}/api/service/wake`,
-          {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${newRecord.token}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({ id: agentId }),
-            signal: AbortSignal.timeout(10000),
-          },
-        );
-        if (!response.ok)
-          throw new Error(`唤醒 ${agentId} 失败：HTTP ${response.status}`);
-        woken.push(agentId);
-      } catch (err) {
-        throw new Error(`重启后身份续跑失败：${String(err)}`);
-      }
-    }
-    state.wokenAgents = woken;
     state.status = "success";
     state.finishedAt = Date.now();
     writeRestartState(data, state);
@@ -502,12 +405,7 @@ export async function runSupervisor(args: string[]): Promise<void> {
     try {
       const rolledBack = await startService(data);
       state.newPid = rolledBack.pid;
-      await checkServiceHealth(rolledBack, data);
-      sendRollbackNotification(data, {
-        fromVersion: state.fromVersion,
-        failedVersion: state.failedVersion,
-        error: state.error,
-      });
+      await checkServiceHealth(rolledBack);
     } catch (startOldErr) {
       state.status = "failed";
       state.error += `；回滚版本未能启动：${String(startOldErr)}`;

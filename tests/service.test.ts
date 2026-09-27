@@ -17,7 +17,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer, request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { Store } from "../server/store.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { declaredBodyWithoutBytes } from "./raw-http.ts";
 import { setTimeout as delay } from "node:timers/promises";
@@ -28,7 +27,6 @@ import {
   readService,
   serviceUrl,
 } from "../server/service-state.ts";
-import { openWeb } from "../server/service.ts";
 import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 import { fixture as workerFixture, until } from "./task-fixture.ts";
@@ -152,9 +150,8 @@ test("新 CLI 连接旧服务：提示 restart 和退出码 7，不进入 rotate
     }
   };
   for (const args of [
-    ["list", "--json"],
+    ["task", "ls", "--json"],
     ["auth", "rotate", "--json"],
-    ["open", "--json"],
   ]) {
     const outcome = await cli(...args);
     assert.equal(outcome.code, 7, `${args.join(" ")}: ${outcome.stderr}`);
@@ -171,7 +168,7 @@ test("新 CLI 连接旧服务：提示 restart 和退出码 7，不进入 rotate
 });
 
 test(
-  "CLI 从任意目录启动 Web、并发复用、保持数据并可重复停止",
+  "CLI 从任意目录启动服务、并发复用、保持数据并可重复停止",
   { timeout: 60000 },
   async (t) => {
     const f = await fixture(t);
@@ -179,55 +176,31 @@ test(
     assert(!existsSync(f.data));
     assert.equal((await f.cli("typo")).code, 2);
     assert(!existsSync(f.data));
-    const starts = await Promise.all([
-      f.cli("--no-open"),
-      f.cli("--no-open"),
-      f.cli("--no-open"),
-    ]);
+    const starts = await Promise.all([f.cli(), f.cli("--no-open"), f.cli()]);
     for (const result of starts) assert.equal(result.code, 0, result.stderr);
     const record = readService(f.data)!;
     for (const result of starts)
       assert(result.stdout.includes(`PID ${record.pid}`));
     assert.equal(statSync(join(f.data, "service.sqlite")).mode & 0o777, 0o600);
     const url = serviceUrl(record);
-    const page = await fetch(url);
-    assert.equal(page.status, 200);
-    assert.match(await page.text(), /<title>Atrium/);
+    // 没有 Web 外壳：未认证的路径一律 401，不泄露页面。
+    assert.equal((await fetch(url)).status, 401);
     assert.match((await f.cli("status")).stdout, /PID/);
     // Explicitly different requested port still reuses this data directory's owner.
     f.env.ATRIUM_PORT = String(f.port + 1);
-    assert((await f.cli("--no-open")).stdout.includes(url));
-    const template = join(f.root, "template");
-    mkdirSync(template);
-    writeFileSync(join(template, "settings.json"), '{"packages":[]}');
-    const response = await fetch(`${url}/api/agents`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...f.userHeaders() },
-      body: JSON.stringify({ name: "入口验收", template }),
-    });
-    assert.equal(response.status, 201);
-    const { agent } = (await response.json()) as {
-      agent: { id: string; cwd: string };
-    };
-    assert(
-      existsSync(join(f.root, "desktops", "入口验收")),
-      "创建即分配固定桌面目录",
-    );
-    assert.match((await f.cli("list")).stdout, /a1\s+入口验收\s+未分配账号/);
-    assert.equal((await f.cli("run", "入口验收", "--forbidden")).code, 2);
+    assert((await f.cli()).stdout.includes(url));
+    const added = await f.cli("task", "add", "入口验收", "--json");
+    assert.equal(added.code, 0, added.stderr);
     assert.equal((await f.cli("stop")).code, 0);
     assert.match((await f.cli("stop")).stdout, /已停止/);
     assert.equal(readService(f.data), null);
     assert(existsSync(join(f.data, "atrium.sqlite")));
-    assert.equal((await f.cli("--no-open")).code, 0);
+    assert.equal((await f.cli()).code, 0);
     const restarted = readService(f.data)!;
     assert.notEqual(restarted.instance, record.instance);
-    const overview = (await (
-      await fetch(`${serviceUrl(restarted)}/api/overview`, {
-        headers: f.userHeaders(),
-      })
-    ).json()) as { agents: { id: string }[] };
-    assert.equal(overview.agents[0]?.id, agent.id);
+    const listed = await f.cli("task", "ls", "--json");
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.match(listed.stdout, /入口验收/);
   },
 );
 
@@ -300,76 +273,28 @@ test(
 );
 
 test(
-  "CLI 登录、外部推送地址轮换与用户令牌恢复走真实后台服务",
+  "用户令牌轮换与丢失后恢复走真实后台服务",
   { timeout: 45000 },
   async (t) => {
     const f = await fixture(t);
-    assert.equal((await f.cli("create", "通知测试")).code, 0);
-    const link = await f.cli("open", "--print");
-    assert.equal(link.code, 0, link.stderr);
-    assert.match(
-      link.stdout.trim(),
-      /^http:\/\/atrium\.localhost:\d+\/auth\/claim\/[a-f0-9]{64}$/,
-    );
-    const claimed = await fetch(link.stdout.trim(), { redirect: "manual" });
-    assert.equal(claimed.status, 302);
-    const cookie = claimed.headers.get("set-cookie")!;
+    assert.equal((await f.cli()).code, 0);
     const record = readService(f.data)!;
+    const before = f.userHeaders();
     assert.equal(
-      (
-        await fetch(`${serviceUrl(record)}/api/overview`, {
-          headers: { cookie },
-        })
-      ).status,
+      (await fetch(`${serviceUrl(record)}/api/tasks`, { headers: before }))
+        .status,
       200,
     );
-    assert.equal((await f.cli("stop")).code, 0);
-    assert.equal((await f.cli("--no-open")).code, 0);
-    const restarted = readService(f.data)!;
-    assert.equal(
-      (
-        await fetch(`${serviceUrl(restarted)}/api/overview`, {
-          headers: { cookie },
-        })
-      ).status,
-      200,
-      "a valid browser session survives the controlled service restart",
-    );
-    const first = await f.cli("adapters", "url", "通知测试");
-    assert.equal(first.code, 0, first.stderr);
-    assert.match(
-      first.stdout.trim(),
-      /^http:\/\/atrium\.localhost:\d+\/hooks\/[^/]+\/[a-f0-9]{64}$/,
-    );
-    const post = (address: string) =>
-      fetch(address, {
-        method: "POST",
-        headers: { "content-type": "text/plain" },
-        body: "仅可写消息箱",
-      });
-    assert.equal((await post(first.stdout.trim())).status, 200);
-    const second = await f.cli("adapters", "url", "通知测试", "--rotate");
-    assert.equal(second.code, 0, second.stderr);
-    assert.notEqual(first.stdout, second.stdout);
-    assert.equal((await post(first.stdout.trim())).status, 404);
-    assert.equal((await post(second.stdout.trim())).status, 200);
-    assert.equal(
-      (await f.cli("adapters", "url", "通知测试", "--revoke")).code,
-      0,
-    );
-    assert.equal((await post(second.stdout.trim())).status, 404);
     const rotated = await f.cli("auth", "rotate");
     assert.equal(rotated.code, 0, rotated.stderr);
     assert.equal(
-      (
-        await fetch(`${serviceUrl(record)}/api/overview`, {
-          headers: { cookie },
-        })
-      ).status,
+      (await fetch(`${serviceUrl(record)}/api/tasks`, { headers: before }))
+        .status,
       401,
+      "旧令牌轮换后失效",
     );
     assert.equal(
-      (await f.cli("list")).code,
+      (await f.cli("task", "ls")).code,
       0,
       "CLI automatically uses the rotated local token",
     );
@@ -383,7 +308,7 @@ test(
       authenticated: true,
     });
     unlinkSync(userTokenPath(f.data));
-    const missing = await f.cli("list", "--json");
+    const missing = await f.cli("task", "ls", "--json");
     assert.equal(missing.code, 6, missing.stderr);
     assert.equal(JSON.parse(missing.stdout).error.code, "auth_required");
     assert.match(
@@ -395,100 +320,51 @@ test(
       0,
       "service control restores a lost token",
     );
-    assert.equal((await f.cli("list")).code, 0);
+    assert.equal((await f.cli("task", "ls")).code, 0);
   },
 );
 
 test(
-  "十个旧身份不阻塞服务监听；按需启动前仍保持旧目录以待迁移",
+  "旧运行时留下的表不读不写，也不妨碍启动（#291）",
   { timeout: 45000 },
   async (t) => {
     const f = await fixture(t);
     mkdirSync(f.data);
-    const store = new Store(join(f.data, "atrium.sqlite"));
-    const directories: string[] = [];
-    for (let index = 0; index < 10; index++) {
-      const directory = join(f.root, `legacy-${index}`);
-      directories.push(directory);
-      mkdirSync(directory);
-      writeFileSync(
-        join(directory, "settings.json"),
-        JSON.stringify({ packages: [] }),
-      );
-      const { agent } = store.createAgent(`旧身份${index}`, f.root);
-      store.run(
-        "UPDATE agents SET agent_directory=? WHERE id=?",
-        directory,
-        agent.id,
-      );
-    }
-    store.close();
-    const started = Date.now();
-    const result = await f.cli("--no-open");
-    const elapsed = Date.now() - started;
+    const legacy = new DatabaseSync(join(f.data, "atrium.sqlite"));
+    legacy.exec(`CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE messages(id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE inbox_tokens(agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, token_hash TEXT NOT NULL);`);
+    legacy.prepare("INSERT INTO agents VALUES(?,?)").run("legacy-1", "旧身份");
+    legacy.prepare("INSERT INTO messages(body) VALUES(?)").run("旧消息");
+    legacy.close();
+    const result = await f.cli();
     assert.equal(result.code, 0, result.stderr);
-    assert(elapsed < 12000, `命令启动耗时 ${elapsed}ms，超出 12 秒上限`);
     const record = readService(f.data)!;
     assert.equal(
       (
-        await fetch(`${serviceUrl(record)}/api/overview`, {
+        await fetch(`${serviceUrl(record)}/api/tasks`, {
           headers: f.userHeaders(),
         })
       ).status,
       200,
     );
-    for (const directory of directories)
-      assert.equal(existsSync(join(directory, ".atrium-packages.json")), false);
-  },
-);
-
-test(
-  "默认命令在非交互环境只打印登录链接；浏览器失败不丢失已启动服务",
-  { timeout: 45000, skip: process.platform === "win32" },
-  async (t) => {
-    const f = await fixture(t);
-    const bin = join(f.root, "bin");
-    mkdirSync(bin);
-    const opener = join(
-      bin,
-      process.platform === "darwin" ? "open" : "xdg-open",
-    );
-    const opened = join(f.root, "opened");
-    writeFileSync(opener, `#!/bin/sh\nprintf '%s' "$1" > '${opened}'\n`, {
-      mode: 0o700,
+    assert.equal((await f.cli("org", "tree")).code, 0);
+    assert.equal((await f.cli("stop")).code, 0);
+    const after = new DatabaseSync(join(f.data, "atrium.sqlite"), {
+      readOnly: true,
     });
-    f.env.PATH = `${bin}:${process.env.PATH}`;
-    const start = await f.cli();
-    assert.equal(start.code, 0, start.stderr);
-    // 非交互（管道 stdio）不调用浏览器，改为打印一次性登录链接。
-    assert.match(start.stdout, /非交互环境，没有打开浏览器/);
-    assert.match(
-      start.stdout,
-      /登录链接：http:\/\/atrium\.localhost:\d+\/auth\/claim\/[a-f0-9]{64}/,
-    );
-    assert.ok(!existsSync(opened), "非 TTY 不应调用 openWeb");
-    // 浏览器打开失败只打提示，已启动的服务不受影响。
-    writeFileSync(opener, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-    const record = readService(f.data)!;
-    const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}:${previousPath}`;
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args.join(" "));
     try {
-      await openWeb(record);
+      assert.deepEqual(
+        { ...after.prepare("SELECT id,name FROM agents").get() },
+        { id: "legacy-1", name: "旧身份" },
+      );
+      assert.equal(
+        after.prepare("SELECT count(*) AS n FROM messages").get()?.n,
+        1,
+      );
     } finally {
-      console.error = originalError;
-      process.env.PATH = previousPath;
+      after.close();
     }
-    assert.match(
-      errors.join("\n"),
-      /无法自动打开浏览器；服务已就绪，请手动打开/,
-    );
-    const afterFailure = await f.cli();
-    assert.equal(afterFailure.code, 0);
-    assert.match(afterFailure.stdout, /非交互环境，没有打开浏览器/);
-    assert.match((await f.cli("status")).stdout, /PID/);
   },
 );
 
@@ -505,8 +381,6 @@ test(
       "/api/service/stop",
       "/api/service/prepare-restart",
       "/api/service/restart-when-idle",
-      "/api/service/probe",
-      "/api/service/wake",
     ])
       assert.equal(
         await declaredBodyWithoutBytes(record.port, path),
@@ -621,7 +495,14 @@ test(
       const record = readService(f.data);
       if (record) {
         try {
-          if ((await fetch(`${serviceUrl(record)}/api/overview`)).ok) break;
+          if (
+            (
+              await fetch(`${serviceUrl(record)}/api/tasks`, {
+                headers: f.userHeaders(),
+              })
+            ).ok
+          )
+            break;
         } catch {}
       }
       await delay(50);
@@ -687,45 +568,7 @@ setInterval(() => {}, 1000);
 );
 
 test(
-  "CLI create 无需先开 Web；服务运行时走 API 并可 fork",
-  { timeout: 45000 },
-  async (t) => {
-    const f = await fixture(t);
-    const created = await f.cli("create", "林岚");
-    assert.equal(created.code, 0, created.stderr);
-    assert.match(created.stdout, /林岚/);
-    assert(
-      existsSync(join(f.root, "desktops", "林岚")),
-      "创建即分配固定桌面目录",
-    );
-    assert(
-      existsSync(join(f.root, ".pi", "agents", "林岚")),
-      "名称入口指向身份配置",
-    );
-    assert.equal((await f.cli("create", "林岚")).code, 4);
-    assert.equal((await f.cli("create", "bad/name")).code, 2);
-    assert.match((await f.cli("list")).stdout, /a1\s+林岚\s+未分配账号/);
-    assert.equal((await f.cli("--no-open")).code, 0, "start after create");
-    const forked = await f.cli("create", "沈默", "--from", "林岚");
-    assert.equal(forked.code, 0, forked.stderr);
-    assert.match(forked.stdout, /沈默/);
-    const overview = (await (
-      await fetch(`${serviceUrl(readService(f.data)!)}/api/overview`, {
-        headers: f.userHeaders(),
-      })
-    ).json()) as { agents: { ref: string; name: string }[] };
-    assert.deepEqual(
-      overview.agents.map((a) => [a.ref, a.name]),
-      [
-        ["a1", "林岚"],
-        ["a2", "沈默"],
-      ],
-    );
-  },
-);
-
-test(
-  "排空完成后再次 prepare-restart 返回唤醒名单；stopping 中 CLI 给出明确下一步（#231）",
+  "排空完成后再次 prepare-restart 仍返回就绪；stopping 中 CLI 给出明确下一步（#231）",
   { timeout: 60000 },
   async (t) => {
     const f = await fixture(t);
@@ -757,7 +600,7 @@ test(
     assert.equal(again.status, 200);
     assert.deepEqual(await again.json(), drained);
     // 新版 CLI 遇到 stopping 的旧服务：给出明确的下一步（场景 3）
-    const listed = await f.cli("list");
+    const listed = await f.cli("task", "ls");
     assert.notEqual(listed.code, 0);
     assert.match(`${listed.stdout}\n${listed.stderr}`, /平滑重启或关闭中/);
     assert.match(`${listed.stdout}\n${listed.stderr}`, /restart --wait/);
@@ -839,7 +682,7 @@ test(
     ) as { status: string; error: string };
     assert.equal(state.status, "failed");
     assert.match(state.error, /已自动恢复运行.*atrium restart/);
-    const listed = await f.cli("list");
+    const listed = await f.cli("task", "ls");
     assert.equal(listed.code, 0, listed.stderr || listed.stdout);
 
     // 恢复后可以再次平滑重启；收到 stop 后不再恢复，正常退出。

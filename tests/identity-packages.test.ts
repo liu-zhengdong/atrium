@@ -23,7 +23,7 @@ import {
   saveAgentDefaults,
 } from "../server/identity-packages.ts";
 import { Problem, Store } from "../server/store.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { Accounts } from "../server/accounts.ts";
 import { Runtimes } from "../server/runtime.ts";
 

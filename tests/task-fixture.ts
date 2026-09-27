@@ -114,7 +114,7 @@ export async function startApp(
   const data = join(fx.root, "data");
   const { app, taskRunner } = await createApp({
     data,
-    runtime: false,
+
     auth: false,
     tasks: {
       env: fx.env,

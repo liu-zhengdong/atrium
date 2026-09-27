@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import type { Store } from "./store.ts";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { Problem } from "./problem.ts";
 
 const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -39,21 +39,40 @@ export const cookieName = (data: string) =>
 export class UserAuth {
   readonly name: string;
   private codes = new Map<string, number>();
+  private store: {
+    one<T>(sql: string, ...values: SQLInputValue[]): T | undefined;
+    run(sql: string, ...values: SQLInputValue[]): void;
+    transaction(work: () => void): void;
+  };
   constructor(
-    private store: Store,
+    db: DatabaseSync,
     private data: string,
   ) {
     this.name = cookieName(data);
+    this.store = {
+      one: <T>(sql: string, ...values: SQLInputValue[]) =>
+        db.prepare(sql).get(...values) as T | undefined,
+      run: (sql, ...values) => {
+        db.prepare(sql).run(...values);
+      },
+      transaction: (work) => {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          work();
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+      },
+    };
     mkdirSync(data, { recursive: true, mode: 0o700 });
-    store.db.exec(`CREATE TABLE IF NOT EXISTS user_auth (
+    db.exec(`CREATE TABLE IF NOT EXISTS user_auth (
       id INTEGER PRIMARY KEY CHECK(id=1), token_hash TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS web_sessions (
       token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS web_sessions_expires ON web_sessions(expires_at);
-      CREATE TABLE IF NOT EXISTS inbox_tokens (
-      agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-      token_hash TEXT NOT NULL);`);
-    if (!store.one("SELECT id FROM user_auth WHERE id=1")) {
+      CREATE INDEX IF NOT EXISTS web_sessions_expires ON web_sessions(expires_at);`);
+    if (!this.store.one("SELECT id FROM user_auth WHERE id=1")) {
       const path = userTokenPath(data);
       // Recover from an interrupted first boot: the file is the only user copy.
       let token = existsSync(path) ? readFileSync(path, "utf8").trim() : null;
@@ -70,7 +89,7 @@ export class UserAuth {
         token = secret();
         atomicSecret(path, token);
       }
-      store.run(
+      this.store.run(
         "INSERT INTO user_auth(id,token_hash) VALUES(1,?)",
         digest(token),
       );
@@ -163,33 +182,5 @@ export class UserAuth {
       this.store.run("DELETE FROM web_sessions");
     });
     this.codes.clear();
-  }
-  validHook(agentId: string, token: string) {
-    if (!/^[a-f0-9]{64}$/.test(token)) return false;
-    const row = this.store.one<{ token_hash: string }>(
-      "SELECT token_hash FROM inbox_tokens WHERE agent_id=?",
-      agentId,
-    );
-    return !!row && sameSecret(digest(token), row.token_hash);
-  }
-  setHook(agentId: string, tokenHash: string | null) {
-    if (tokenHash && !/^[a-f0-9]{64}$/.test(tokenHash))
-      throw new Problem(400, "推送令牌摘要无效");
-    this.store.agent(agentId);
-    if (tokenHash)
-      this.store.run(
-        "INSERT INTO inbox_tokens(agent_id,token_hash) VALUES(?,?) ON CONFLICT(agent_id) DO UPDATE SET token_hash=excluded.token_hash",
-        agentId,
-        tokenHash,
-      );
-    else this.store.run("DELETE FROM inbox_tokens WHERE agent_id=?", agentId);
-  }
-  hookHash(agentId: string) {
-    return (
-      this.store.one<{ token_hash: string }>(
-        "SELECT token_hash FROM inbox_tokens WHERE agent_id=?",
-        agentId,
-      )?.token_hash ?? null
-    );
   }
 }

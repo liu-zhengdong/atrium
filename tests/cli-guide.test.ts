@@ -16,7 +16,7 @@ test("说明书从命令表与退出码表生成；示例均通过参数解析",
   assert.match(help(), /^服务\n  atrium\s+启动/m);
   assert.match(
     text,
-    /atrium send a1 正文[\s\S]*atrium group 项目群 甲；atrium invite c2 乙/,
+    /atrium task add 目标[\s\S]*atrium org tree[\s\S]*atrium events wait --as secretary/,
   );
   for (const [name, command] of Object.entries(commands)) {
     assert(text.includes(`atrium ${name} ${command.args}`.trimEnd()), name);

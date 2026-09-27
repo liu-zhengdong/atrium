@@ -176,7 +176,7 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org add": {
-    args: "父节点 slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--leader 身份]",
+    args: "父节点 slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--leader u1|aN]",
     about: "添加组织节点",
     options: {
       ...options,

@@ -425,7 +425,6 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
   t.after(() => rmSync(data, { recursive: true, force: true }));
   const guarded = await createApp({
     data: join(data, "guarded"),
-    runtime: false,
   });
   try {
     const denied = await guarded.app.inject({
@@ -440,9 +439,9 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
   const { dir, done } = temp();
   t.after(done);
   const bin = fakeBin(dir, paceScript(SAMPLE));
-  const { app, store } = await createApp({
+  const { app, db } = await createApp({
     data,
-    runtime: false,
+
     auth: false,
     quotaBin: bin,
   });
@@ -462,7 +461,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
     // 记下未到期标记后，同一个接口把记录挂到对应账号上。
     const until = Date.now() + HOUR;
     const reason = quotaReason("codex", new Date(until));
-    placeHold(store.db, { provider: "codex", until, reason }, Date.now());
+    placeHold(db, { provider: "codex", until, reason }, Date.now());
     const held = (
       await app.inject({ url: "/api/quota", headers: { host: "127.0.0.1" } })
     ).json() as { accounts: QuotaAccount[] };
@@ -473,7 +472,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
       held.accounts.find((row) => row.providerId === "opencode")!.hold,
       null,
     );
-    releaseHold(store.db, "codex", Date.now());
+    releaseHold(db, "codex", Date.now());
     const released = (
       await app.inject({ url: "/api/quota", headers: { host: "127.0.0.1" } })
     ).json() as { accounts: QuotaAccount[] };
@@ -485,7 +484,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
     // 到点的标记不显示；运行时解除后同样不留记录。
     const past = Date.now() - 1000;
     placeHold(
-      store.db,
+      db,
       {
         provider: "claude",
         until: past,
@@ -501,7 +500,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
       null,
       "已到期的标记不显示",
     );
-    assert.equal(releaseHold(store.db, "claude", Date.now()), true);
+    assert.equal(releaseHold(db, "claude", Date.now()), true);
     const gone = (
       await app.inject({ url: "/api/quota", headers: { host: "127.0.0.1" } })
     ).json() as { accounts: QuotaAccount[] };
@@ -516,7 +515,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
 
   const missing = await createApp({
     data: join(data, "missing"),
-    runtime: false,
+
     auth: false,
     quotaBin: join(dir, "missing-openquota"),
   });

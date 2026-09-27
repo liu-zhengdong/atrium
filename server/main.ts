@@ -1,36 +1,25 @@
 import { sameSecret } from "../shared/secret.ts";
-import { join } from "node:path";
-import { templateChoice } from "./identity-env.ts";
 import { createApp } from "./app.ts";
-import { RunnerBridge } from "./runner-bridge.ts";
-import { ownerOf, rebindStopped } from "./runner-ownership.ts";
-import { z } from "zod";
 import {
   alive,
   claimService,
   currentVersion,
   dataDirectory,
-  packageRoot,
   servicePort,
   serviceUrl,
 } from "./service-state.ts";
-import { ensureWebDist } from "./web-dist.ts";
 import { readRestartState, writeRestartState } from "./supervisor.ts";
 import { IdleRestart } from "./tasks/idle-restart.ts";
 
-await ensureWebDist(packageRoot);
 const data = dataDirectory();
 const lease = claimService(data, servicePort());
 let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;
-// #205：启动失败的收尾要拿到这两者来终止启动期子进程，声明提到 try 外。
-let runtimes: Awaited<ReturnType<typeof createApp>>["runtimes"] | undefined;
-let accounts: Awaited<ReturnType<typeof createApp>>["accounts"] | undefined;
 let idleRestart: IdleRestart | undefined;
 let stopping = false;
 let shutdownStarted = false;
-// #231：排空完成后上一个 supervisor 可能失联；保留唤醒名单，让接替的
-// supervisor 再次 prepare-restart 时拿到 200 与名单，接着把升级做完。
-let drainedAgentsToWake: string[] | null = null;
+// #231：排空完成后上一个 supervisor 可能失联；记下已排空，让接替的
+// supervisor 再次 prepare-restart 时拿到 200，接着把升级做完。
+let drained = false;
 // #244：排空完成后等停的上限。超过上限且发起排空的 supervisor 已不在、也没收到
 // stop，才恢复运行；supervisor 还活着就一直等它，避免它发 stop 前抢先恢复、与
 // 它随后拉起的新服务同时写数据。测试用 ATRIUM_DRAIN_RECOVER_MS 缩短。
@@ -67,64 +56,12 @@ process.once("SIGTERM", () => {
   void shutdown();
 });
 try {
-  const template = templateChoice(process.env);
-  console.log(`Pi 模板：${template.path}（来源：${template.source}）`);
-  let store: Awaited<ReturnType<typeof createApp>>["store"];
-  let runnerAuth: Awaited<ReturnType<typeof createApp>>["runnerAuth"];
   let taskRunner: Awaited<ReturnType<typeof createApp>>["taskRunner"];
-  ({ app, runtimes, accounts, store, runnerAuth, taskRunner } = await createApp(
-    {
-      data,
-      webRoot: join(packageRoot, "dist"),
-      controlToken: lease.record.token,
-    },
-  ));
-  if (taskRunner)
-    idleRestart = new IdleRestart(data, taskRunner, undefined, () => !stopping);
-  const bridge = new RunnerBridge(
-    app.server,
-    (token) => runnerAuth.authenticateRunner(`Bearer ${token}`),
-    (principal) =>
-      runnerAuth.validRunnerCredential(
-        principal.runnerId,
-        principal.credentialId,
-      ),
-    (agentId) => ownerOf(store, agentId),
-    async (principal, method, payload) => {
-      if (method === "runner.heartbeat") return { ok: true };
-      if (method !== "runner.reconcile")
-        throw new Error("unsupported runner method");
-      const input = z
-        .object({
-          oldGeneration: z.string().nullable(),
-          defaultStatus: z.enum(["exited", "alive", "unknown"]),
-          statuses: z.record(
-            z.string(),
-            z.enum(["exited", "alive", "unknown"]),
-          ),
-        })
-        .strict()
-        .parse(payload);
-      const generation = bridge.generation(principal.runnerId);
-      if (!generation) throw new Error("运行器连接已断开");
-      const result = rebindStopped(
-        store,
-        principal.runnerId,
-        input.oldGeneration,
-        generation,
-        input.statuses,
-        input.defaultStatus,
-      );
-      runtimes?.noteRunnerRecovery(result.rebound, result.locked);
-      return result;
-    },
-    (agentId) => store.agent(agentId).ref,
-  );
-  runnerAuth.listenFencing((_runnerId, credentialIds) => {
-    for (const credentialId of credentialIds)
-      bridge.revokeCredential(credentialId);
-  });
-  runtimes?.setBridge(bridge);
+  ({ app, taskRunner } = await createApp({
+    data,
+    controlToken: lease.record.token,
+  }));
+  idleRestart = new IdleRestart(data, taskRunner, undefined, () => !stopping);
   const authorize = (value: string | undefined) => {
     const actual = /^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "";
     return sameSecret(actual, lease.record.token);
@@ -167,22 +104,13 @@ try {
       ? state.supervisorPid
       : null;
   };
-  const recoverFromDrain = async (supervisorPid: number | null) => {
+  const recoverFromDrain = (supervisorPid: number | null) => {
     clearDrainWatch();
-    const agents = drainedAgentsToWake ?? [];
     stopping = false;
-    drainedAgentsToWake = null;
+    drained = false;
     const reason = `排空完成后 ${drainRecoverMs / 1000} 秒内没有收到停止请求，发起重启的 supervisor${supervisorPid ? `（PID ${supervisorPid}）` : ""}已不在`;
-    const names = agents.map((id) => {
-      try {
-        const agent = store.agent(id);
-        return `${agent.name}（${agent.ref}）`;
-      } catch {
-        return id;
-      }
-    });
     console.warn(
-      `[${new Date().toISOString()}] 平滑重启未完成：${reason}；旧服务恢复接收新回合，唤醒 ${names.join("、") || "（无）"}`,
+      `[${new Date().toISOString()}] 平滑重启未完成：${reason}；旧服务恢复运行`,
     );
     try {
       const state = readRestartState(data);
@@ -201,7 +129,6 @@ try {
     } catch (error) {
       console.warn(`更新 restart-state 失败：${String(error)}`);
     }
-    await runtimes?.resumeAfterDrain(agents);
   };
   const armDrainWatch = (supervisorPid: number | null) => {
     clearDrainWatch();
@@ -222,21 +149,23 @@ try {
           waitingLogged = true;
           return;
         }
-        void recoverFromDrain(supervisorPid);
+        recoverFromDrain(supervisorPid);
       },
       Math.min(1000, drainRecoverMs),
     );
     drainWatch.unref();
   };
+  // 执行者进程由任务运行时持有，重启后按账本恢复（server/tasks/recovery.ts），
+  // 这里不必等它们结束；要等空闲再重启用 restart-when-idle。
   app.post("/api/service/prepare-restart", async (request, reply) => {
     const body =
       (request.body as
         { timeout?: number; supervisorPid?: number } | undefined) ?? {};
     if (stopping) {
-      if (drainedAgentsToWake && !stopRequested) {
+      if (drained && !stopRequested) {
         // 接替的 supervisor 接手：之后以它为准重新计时。
         armDrainWatch(drainOwner(body.supervisorPid));
-        return { ready: true, agentsToWake: drainedAgentsToWake };
+        return { ready: true, agentsToWake: [] };
       }
       return reply.code(409).send({ error: "服务正在关闭" });
     }
@@ -245,85 +174,21 @@ try {
       return reply
         .code(400)
         .send({ error: "timeout 必须为 1000–7200000 毫秒" });
-    // #231：supervisor 在排空中途断开时中止排空、恢复运行，不再永久卡在
-    // stopping；响应已发出后触发的 close 不影响结果。
-    // 必须监听响应而非请求：Node 16+ 的 IncomingMessage 在请求体读完时就发
-    // close，那样每次排空一开始就被中止，忙碌身份的 restart 立即 409。
-    const drainAbort = new AbortController();
-    reply.raw.once("close", () => {
-      if (!reply.raw.writableEnded) drainAbort.abort();
-    });
-    let agentsToWake: string[];
-    try {
-      agentsToWake =
-        (await runtimes?.prepareShutdown(timeout, drainAbort.signal)) ?? [];
-    } catch (error) {
-      console.warn(`平滑重启排空未完成，服务继续运行：${String(error)}`);
-      return reply.code(409).send({ error: String(error) });
-    }
     stopping = true;
-    drainedAgentsToWake = agentsToWake;
+    drained = true;
     armDrainWatch(drainOwner(body.supervisorPid));
-    return { ready: true, agentsToWake };
+    return { ready: true, agentsToWake: [] };
   });
   app.get("/api/service/health", async (_request, reply) => {
-    const runtimesHealth = runtimes
-      ? runtimes.health()
-      : { available: false, error: "运行时未初始化" };
     const health = {
-      ok: !stopping && runtimesHealth.available,
+      ok: !stopping,
       version: currentVersion(),
       instance: lease.record.instance,
       pid: process.pid,
       stopping,
-      runtimes: runtimesHealth,
     };
-    if (!health.ok) {
-      return reply.code(503).send(health);
-    }
+    if (!health.ok) return reply.code(503).send(health);
     return health;
-  });
-  app.post("/api/service/probe", async (request, reply) => {
-    const id = (request.body as { id?: string } | undefined)?.id;
-    if (typeof id !== "string" || !store || !runtimes)
-      return reply.code(400).send({ error: "缺少身份 ID" });
-    try {
-      store.agent(id);
-      if (!runtimes.connections.has(id)) await runtimes.start(id);
-      const deliveryId = store.queue(
-        id,
-        "direct",
-        "[Atrium 健康检查] 回复一句即可，勿执行其他任务。",
-      );
-      void runtimes.pump(id, true);
-      const deadline = Date.now() + 60000;
-      while (Date.now() < deadline) {
-        const delivery = store.one<{ state: string; error: string | null }>(
-          "SELECT state,error FROM deliveries WHERE id=?",
-          deliveryId,
-        );
-        if (delivery?.state === "complete") return { completed: true, id };
-        if (delivery?.error) throw new Error(delivery.error);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      throw new Error("身份回合验证超时");
-    } catch (error) {
-      return reply.code(503).send({ error: String(error) });
-    }
-  });
-  app.post("/api/service/wake", async (request, reply) => {
-    const id = (request.body as { id?: string } | undefined)?.id;
-    if (typeof id !== "string" || !store || !runtimes)
-      return reply.code(400).send({ error: "缺少身份 ID" });
-    store.agent(id);
-    if (!runtimes.connections.has(id)) await runtimes.start(id);
-    store.queue(
-      id,
-      "direct",
-      "[Atrium 重启完成] 请继续刚才的工作；先核对当前状态，避免重复执行已完成的操作。",
-    );
-    void runtimes.pump(id, true);
-    return { woken: true };
   });
   app.post("/api/service/stop", (_request, reply) => {
     // 收到 stop 后不再恢复：supervisor 接下来会拉起新服务。
@@ -345,8 +210,6 @@ try {
   // 释放。这里反过来收尾：先还租约，终止启动期子进程，再退出，让失败原因、
   // 租约和子进程在命令行的等待窗口内一起消失。
   lease.release();
-  runtimes?.abort();
-  void accounts?.close().catch(() => undefined);
   process.exitCode = 1;
   // 通常随子进程退出自然结束；句柄残留时兜底强制退出，不等命令行超时。
   setTimeout(() => process.exit(1), 2000).unref();

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../server/store.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { createMcp } from "../server/mcp.ts";
 import { MAX_FILE_BYTES } from "../server/attachments.ts";
 import { LOCAL_USER } from "../shared/user.ts";

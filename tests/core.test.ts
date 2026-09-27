@@ -18,7 +18,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { createServer as createViteServer } from "vite";
 import { Store } from "../server/store.ts";
 import { removeMember } from "../server/groups.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { receiveInbox, writeGithubTemplate } from "../server/adapters.ts";
 import { displayDesktops, defaultDesktops } from "../server/agents.ts";
 import { mentionsAll, resolveMentions } from "../shared/mentions.ts";

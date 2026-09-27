@@ -13,7 +13,7 @@ import {
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { ensureDesktopCwd, existingDirectoryPath } from "../server/agents.ts";
 import { Problem, Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";

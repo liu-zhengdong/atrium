@@ -12,16 +12,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { Runtimes } from "../server/runtime.ts";
 import { Store } from "../server/store.ts";
 import { Accounts } from "../server/accounts.ts";
 import { mergeReadState } from "../web/chat/readState.ts";
-import { packageRoot } from "../server/service-state.ts";
 import { LOCAL_USER } from "../shared/user.ts";
-import { childEnv } from "./child-env.ts";
 
 const require = createRequire(import.meta.url);
 const { claimIdentity } = require("@liuser/pi-atrium/dist/identity.js") as {
@@ -30,7 +26,6 @@ const { claimIdentity } = require("@liuser/pi-atrium/dist/identity.js") as {
     cwd: string,
   ): { release(): void };
 };
-const exec = promisify(execFile);
 const transport = Runtimes.prototype as unknown as {
   rpc(method: string, params: unknown): Promise<unknown>;
 };
@@ -203,14 +198,6 @@ test("删除撤销访问和唤醒，保留历史、回执、文件；名称可�
   const reused = store.createAgent(agent.name, root).agent;
   assert.equal(reused.ref, "a3");
   assert.notEqual(reused.id, agent.id);
-  await assert.rejects(
-    exec(
-      process.execPath,
-      [join(packageRoot, "bin/atrium.mjs"), "run", agent.ref],
-      { env: childEnv({ ATRIUM_DATA: data }), timeout: 5000 },
-    ),
-    /Agent 不存在/,
-  );
   const reopened = new Store(join(data, "atrium.sqlite"));
   try {
     assert(!reopened.agents().some((a) => a.id === agent.id));
@@ -325,76 +312,6 @@ test("运行、未发现的具名占用、未知状态与并发启动均拒绝�
     404,
   );
 });
-
-test(
-  "全局 CLI 具名启动持有占用：运行时拒绝删除，退出后允许",
-  { timeout: 15000, skip: process.platform === "win32" },
-  async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "atrium-delete-cli-"));
-    const profile = join(root, "profile"),
-      data = join(root, "data"),
-      marker = join(root, "started");
-    mkdirSync(profile);
-    const command = join(root, "pi-fixture");
-    writeFileSync(
-      command,
-      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started'); setTimeout(() => {}, 3500);\n`,
-      { mode: 0o700 },
-    );
-    t.mock.property(process, "env", {
-      ...process.env,
-      PI_ACP_DIR: join(root, "acp"),
-    });
-    t.mock.method(transport, "rpc", async () => ({ runtimes: [] }));
-    t.mock.method(Runtimes.prototype, "pump", async () => {});
-    const { app, store, runtimes } = await createApp({
-      auth: false,
-      data,
-      piHome: join(root, ".pi"),
-    });
-    t.after(async () => {
-      await app.close();
-      rmSync(root, { recursive: true, force: true });
-    });
-    const agent = store.createAgent("终端占用", root).agent;
-    store.run(
-      "UPDATE agents SET agent_directory=? WHERE id=?",
-      profile,
-      agent.id,
-    );
-    const accounts = new Accounts(store, data);
-    accounts.assign(
-      agent.id,
-      accounts.add("deepseek", "fixture", "TEST_KEY").id,
-    );
-    const running = exec(
-      process.execPath,
-      [join(packageRoot, "bin/atrium.mjs"), "run", agent.ref],
-      {
-        env: childEnv({
-          ATRIUM_DATA: data,
-          PI_ACP_PI_COMMAND: command,
-          // 服务白名单只保留 ATRIUM_PI_BIN（#213）。
-          ATRIUM_PI_BIN: command,
-        }),
-        timeout: 8000,
-      },
-    );
-    const { setTimeout: delay } = await import("node:timers/promises");
-    try {
-      for (let i = 0; i < 250 && !existsSync(marker); i++) await delay(20);
-      assert(existsSync(marker));
-      await assert.rejects(
-        runtimes!.remove(agent.id, agent.ref),
-        /仍被占用或状态不明/,
-      );
-    } finally {
-      await running;
-    }
-    await runtimes!.remove(agent.id, agent.ref);
-    assert.throws(() => store.agent(agent.id));
-  },
-);
 
 test("身份启动占用仍记录故障并显示在名册", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-start-occupied-"));

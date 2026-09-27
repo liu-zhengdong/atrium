@@ -19,7 +19,6 @@ import {
   serviceUrl,
   type ServiceRecord,
 } from "./service-state.ts";
-import { ensureWebDist } from "./web-dist.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { readRestartState } from "./supervisor.ts";
 
@@ -182,17 +181,12 @@ export async function startService(
     entry = "server/main.ts",
   }: StartWaitOptions = {},
 ) {
-  await ensureWebDist(packageRoot);
   let record = readService(data);
   let child: ReturnType<typeof spawn> | undefined;
   let launchError: Error | undefined;
   let logStart = 0;
   if (!record || !alive(record.pid)) {
     servicePort();
-    if (!existsSync(join(packageRoot, "dist/index.html")))
-      throw new Error(
-        `Web 构建后仍缺少 ${join(packageRoot, "dist/index.html")}`,
-      );
     mkdirSync(data, { recursive: true, mode: 0o700 });
     const log = openSync(join(data, "service.log"), "a", 0o600);
     logStart = fstatSync(log).size;
@@ -266,33 +260,4 @@ export async function startService(
     `Atrium 启动超时（已等 ${Math.round((Date.now() - started) / 1000)} 秒）`,
     logStart,
   );
-}
-/** 交互判定：stdin 与 stdout 都是终端时才自动打开浏览器；脚本、CI 和重定向里改为打印链接。 */
-export function canOpenBrowser(
-  stdin: { isTTY?: boolean },
-  stdout: { isTTY?: boolean },
-): boolean {
-  return stdin.isTTY === true && stdout.isTTY === true;
-}
-
-/** 不打开浏览器时的回执：链接与有效期一并给出。 */
-export function noBrowserHint(url: string): string {
-  return `非交互环境，没有打开浏览器；登录链接：${url}（60 秒内有效，只能用一次）`;
-}
-
-export async function openWeb(record: ServiceRecord, url = serviceUrl(record)) {
-  const [command, args] =
-    process.platform === "darwin"
-      ? ["open", [url]]
-      : process.platform === "win32"
-        ? ["rundll32.exe", ["url.dll,FileProtocolHandler", url]]
-        : ["xdg-open", [url]];
-  try {
-    await promisify(execFile)(command, args, {
-      timeout: 10000,
-      windowsHide: true,
-    });
-  } catch {
-    console.error(`无法自动打开浏览器；服务已就绪，请手动打开 ${url}`);
-  }
 }

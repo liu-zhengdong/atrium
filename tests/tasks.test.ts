@@ -396,7 +396,6 @@ test("HTTP：五个接口走用户认证，校验报中文 400", async (t) => {
   t.after(() => rmSync(data, { recursive: true, force: true }));
   const guarded = await createApp({
     data: join(data, "guarded"),
-    runtime: false,
   });
   try {
     for (const [method, url] of [
@@ -418,7 +417,7 @@ test("HTTP：五个接口走用户认证，校验报中文 400", async (t) => {
     await guarded.app.close();
   }
 
-  const { app } = await createApp({ data, runtime: false, auth: false });
+  const { app } = await createApp({ data, auth: false });
   const headers = { host: "127.0.0.1" };
   try {
     const post = (payload: unknown) =>

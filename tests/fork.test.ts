@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { createAgent } from "../server/agents.ts";
 import { createMcp } from "../server/mcp.ts";
 import { syncIdentityNotes } from "../server/profile.ts";

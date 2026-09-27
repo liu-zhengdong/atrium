@@ -21,7 +21,7 @@ import {
 } from "../server/accounts.ts";
 import { Store, Problem } from "../server/store.ts";
 import { TraceStore } from "../server/trace.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { classifyRefreshError } from "../server/account-error.mjs";
 import { AccountFiles } from "../server/account-files.ts";
 import { AccountRefresh } from "../server/account-refresh.ts";

@@ -5,10 +5,23 @@ import {
   createTask,
   ensureTaskTables,
   getTask,
+  noteTask,
   updateTask,
 } from "../server/tasks/ledger.ts";
 import { EventInbox } from "../server/tasks/events.ts";
-import { classify, Scheduler, taskPlan } from "../server/tasks/schedule.ts";
+import {
+  classify,
+  Scheduler,
+  taskPlan,
+  upstreamCondition,
+} from "../server/tasks/schedule.ts";
+import {
+  releaseOf,
+  type Dependency,
+  type PrState,
+  type Release,
+} from "../server/tasks/schedule-upstream.ts";
+import { holderFor } from "../server/tasks/holder-facts.ts";
 import { startApp } from "./task-fixture.ts";
 
 async function eventually(check: () => Promise<boolean>) {
@@ -330,6 +343,209 @@ test("上游 PR 关闭未合入：下游标卡住并说明，重开合入后恢�
   await scheduler.tick();
   assert.equal(getTask(db, "t2").status, "todo");
   assert.equal(taskPlan(db).groups.ready[0]!.task.ref, "t2");
+  inbox.close();
+  db.close();
+});
+
+test("上线进度纯判定：账本阶段 × online_wait × 上线失败穷举", () => {
+  const stages = [
+    null,
+    "reviewing",
+    "merge_queued",
+    "merging",
+    "merged",
+    "online",
+  ] as const;
+  for (const delivery_stage of stages)
+    for (const online_wait of [0, 1])
+      for (const online_failed of [false, true]) {
+        const got = releaseOf({ delivery_stage, online_wait, online_failed });
+        const want: Release | undefined =
+          delivery_stage === "merging"
+            ? "merging"
+            : delivery_stage === "online"
+              ? "online"
+              : delivery_stage !== "merged"
+                ? undefined
+                : online_wait === 1
+                  ? "waiting"
+                  : online_failed
+                    ? "failed"
+                    : undefined;
+        assert.equal(
+          got,
+          want,
+          `${delivery_stage}/${online_wait}/${online_failed}`,
+        );
+      }
+});
+
+test("依赖就绪纯判定：要自动上线的上游上线才算，上线失败卡住，不上线的仓库合入即可", () => {
+  const dep = (
+    state: PrState | null,
+    release?: Release,
+    status: Dependency["status"] = "done",
+  ): Dependency => ({
+    ref: "t1",
+    status,
+    pr: { number: 9, state, error: null },
+    ...(release ? { release } : {}),
+  });
+  // 已合入未上线：等上线，不就绪。
+  const waiting = classify("todo", [dep("merged", "waiting")], []);
+  assert.equal(waiting.group, "waiting");
+  assert.deepEqual(waiting.waiting_for, ["t1 上线"]);
+  // PR 缓存还没刷新成合入，但账本已记合入：同样说等上线。
+  assert.deepEqual(classify("todo", [dep("open", "waiting")], []).waiting_for, [
+    "t1 上线",
+  ]);
+  // 已上线：就绪。
+  assert.equal(classify("todo", [dep("merged", "online")], []).group, "ready");
+  // 上线失败：卡住并写明，已被它卡住的上线后恢复。
+  const failed = classify("todo", [dep("merged", "failed")], []);
+  assert.equal(failed.group, "blocked");
+  assert.equal(failed.reason, "上游 t1 上线失败");
+  assert.equal(
+    classify("blocked", [dep("merged", "online")], [], failed.reason).group,
+    "ready",
+  );
+  // 不上线的仓库（别的仓库、本服务不自升级）：合入即就绪。
+  assert.equal(classify("todo", [dep("merged")], []).group, "ready");
+  // 运行时正在合入、还没记账：gh 显示已合入也先等，免得先发「就绪」再改口。
+  assert.deepEqual(
+    classify("todo", [dep("merged", "merging")], []).waiting_for,
+    ["t1 的 PR #9 合入"],
+  );
+  // 穷举：上游没完成的一律按上游状态说；完成的按上线进度优先、PR 其次。
+  const statuses = [
+    "todo",
+    "running",
+    "blocked",
+    "failed",
+    "cancelled",
+    "done",
+  ] as const;
+  const states = [null, "open", "merged", "closed"] as const;
+  const releases = [
+    undefined,
+    "merging",
+    "waiting",
+    "online",
+    "failed",
+  ] as const;
+  for (const status of statuses)
+    for (const state of states)
+      for (const release of releases) {
+        const got = upstreamCondition(dep(state, release, status));
+        const label = `${status}/${state}/${release}`;
+        if (status === "failed" || status === "cancelled")
+          assert.deepEqual(
+            got,
+            { kind: "blocked", text: `t1 [${status}]` },
+            label,
+          );
+        else if (status !== "done")
+          assert.deepEqual(
+            got,
+            { kind: "wait", text: `t1 [${status}]` },
+            label,
+          );
+        else if (release === "online") assert.equal(got.kind, "met", label);
+        else if (release === "failed")
+          assert.deepEqual(
+            got,
+            { kind: "blocked", text: "t1 上线失败" },
+            label,
+          );
+        else if (release === "waiting")
+          assert.deepEqual(got, { kind: "wait", text: "t1 上线" }, label);
+        else if (state === "closed") assert.equal(got.kind, "blocked", label);
+        else if (state === "merged" && release === undefined)
+          assert.equal(got.kind, "met", label);
+        else {
+          assert.equal(got.kind, "wait", label);
+          assert.match((got as { text: string }).text, /的 PR #9 合入/, label);
+        }
+      }
+  // 没交付 PR 的上游：done 即满足（上线进度只对交付 PR 的有）。
+  assert.equal(upstreamCondition({ ref: "t1", status: "done" }).kind, "met");
+});
+
+test("上游合入自身仓库：已合入不发就绪，上线后才发；上线失败卡住下游；别的仓库合入即就绪", async () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const inbox = new EventInbox(db);
+  // t1 合入 Atrium 自身（等上线），t3 合入 OpenQuota（不上线），t5 上线失败。
+  for (const title of ["A", "B", "C", "D", "E", "F"])
+    createTask(db, {
+      title,
+      auto: false,
+      ...(title === "B" ? { after: "t1" } : {}),
+      ...(title === "D" ? { after: "t3" } : {}),
+      ...(title === "F" ? { after: "t5" } : {}),
+    });
+  const merged = (id: number, wait: 0 | 1) => {
+    db.prepare(
+      "UPDATE tasks SET status='done',deliver='pr',pr_url=?,delivery_stage='merged',online_wait=? WHERE id=?",
+    ).run(`https://github.com/o/r/pull/${id}`, wait, id);
+    noteTask(db, id, "merged", {});
+  };
+  merged(1, 1);
+  merged(3, 0);
+  merged(5, 0);
+  noteTask(db, 5, "online_failed", { reason: "自升级失败" });
+  const scheduler = new Scheduler(
+    db,
+    inbox,
+    async () => {},
+    async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        state: "MERGED",
+        mergedAt: "2026-09-27T00:00:00Z",
+      }),
+      stderr: "",
+    }),
+  );
+  const events = (kind: string) =>
+    (
+      db
+        .prepare("SELECT task_id FROM task_inbox WHERE kind=? ORDER BY id")
+        .all(kind) as { task_id: number }[]
+    ).map((row) => `t${row.task_id}`);
+  await scheduler.tick();
+  const plan = taskPlan(db).groups;
+  assert.deepEqual(
+    plan.waiting.map((item) => [item.task.ref, item.waiting_for]),
+    [["t2", ["t1 上线"]]],
+  );
+  assert.deepEqual(
+    plan.waiting[0]!.upstream.map((up) => up.release),
+    ["waiting"],
+  );
+  // 状态栏的持球人也写清等谁上线。
+  assert.equal(
+    holderFor(
+      db,
+      db.prepare("SELECT * FROM tasks WHERE id=2").get() as never,
+      null,
+    )!.text,
+    "等 t1 上线",
+  );
+  assert.deepEqual(events("ready"), ["t4"]);
+  assert.equal(getTask(db, "t6").status, "blocked");
+  assert.equal(getTask(db, "t6").schedule_reason, "上游 t5 上线失败");
+  // t1 上线：t2 就绪并发一次事件。
+  db.prepare(
+    "UPDATE tasks SET delivery_stage='online',online_wait=0 WHERE id=1",
+  ).run();
+  noteTask(db, 1, "online", { version: "0.1.96" });
+  // t5 后来补记上线（手动升级后回填）：t6 恢复。
+  db.prepare("UPDATE tasks SET delivery_stage='online' WHERE id=5").run();
+  noteTask(db, 5, "online_backfilled", { version: "0.1.96" });
+  await scheduler.tick();
+  assert.deepEqual(events("ready"), ["t4", "t2", "t6"]);
+  assert.equal(getTask(db, "t6").status, "todo");
   inbox.close();
   db.close();
 });

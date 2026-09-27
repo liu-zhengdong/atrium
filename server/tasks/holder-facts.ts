@@ -8,6 +8,7 @@ import {
   type TaskRow,
 } from "./ledger-model.ts";
 import { holderOf, type Holder, type HolderFacts } from "./holder.ts";
+import { scheduleOf } from "./schedule.ts";
 
 /** 从账本、收件箱、会审表取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
 
@@ -123,6 +124,10 @@ export function holderFacts(
     review_task: row.review_task ? taskRef(row.review_task) : null,
     schedule_state: row.schedule_state,
     schedule_reason: row.schedule_reason,
+    waiting_for:
+      row.status === "todo" && row.schedule_state === "waiting"
+        ? scheduleOf(db, row).waiting_for
+        : [],
     auto: row.auto === 1,
     block: block ? blockOf(block) : null,
     returned,

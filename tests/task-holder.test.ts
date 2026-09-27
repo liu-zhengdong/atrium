@@ -24,6 +24,7 @@ const base: HolderFacts = {
   review_task: null,
   schedule_state: null,
   schedule_reason: null,
+  waiting_for: [],
   auto: false,
   block: null,
   returned: null,
@@ -213,6 +214,15 @@ test("持球人穷举：受阻时上交、备注、收件箱与缺省路由；�
     of({ status: "todo", schedule_state: "waiting", schedule_reason: "t3" })!
       .text,
     "等上游：t3",
+  );
+  // 排期给了条件就逐项写清（t130）：等谁上线、上游在跑。
+  assert.equal(
+    of({
+      status: "todo",
+      schedule_state: "waiting",
+      waiting_for: ["t3 上线", "t4 [running]"],
+    })!.text,
+    "等 t3 上线、t4 在跑",
   );
   assert.deepEqual(of({ status: "todo", auto: true }), {
     kind: "queue",

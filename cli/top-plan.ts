@@ -26,6 +26,8 @@ export type PlanUpstream = {
   worker: string | null;
   started_at: number | null;
   pr: { number: number; state: string | null; error: string | null } | null;
+  /** 旧版服务没有这一项。 */
+  release?: "merging" | "waiting" | "online" | "failed" | null;
 };
 export type PlanEntry = {
   task: PlanTask;
@@ -107,7 +109,12 @@ export function upstreamText(
   }
   if (dep.status !== "done")
     return `${dep.ref} ${STATUS[dep.status] ?? dep.status}`;
-  if (!dep.pr || dep.pr.state === "merged") return null;
+  // 与服务端 upstreamCondition 同一规则：要自动上线的，上线才算满足。
+  if (dep.release === "online") return null;
+  if (dep.release === "failed") return `${dep.ref} 上线失败`;
+  if (dep.release === "waiting") return `${dep.ref} 上线`;
+  if (!dep.pr || (dep.pr.state === "merged" && dep.release !== "merging"))
+    return null;
   if (dep.pr.state === "closed")
     return `${dep.ref} 的 PR #${dep.pr.number} 已关闭未合入`;
   const note = dep.pr.error

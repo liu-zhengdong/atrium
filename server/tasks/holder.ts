@@ -34,6 +34,8 @@ export type HolderFacts = {
   review_task: string | null;
   schedule_state: string | null;
   schedule_reason: string | null;
+  /** 排期在等的上游条件（如「t3 上线」）；不在等为空。 */
+  waiting_for: string[];
   auto: boolean;
   /** 最近一次受阻（block 事件）的原因与关卡名；从没受阻为 null。 */
   block: { reason: string | null; gates: string[] } | null;
@@ -54,6 +56,18 @@ export type HolderFacts = {
 };
 
 const FINISHED = new Set<TaskStatus>(["done", "failed", "cancelled"]);
+
+const STATUS_TEXT: Record<string, string> = {
+  todo: "待办",
+  running: "在跑",
+  blocked: "卡住",
+};
+/** 排期给的条件里上游状态是 `[running]` 这样的英文标记，换成中文。 */
+const readable = (text: string) =>
+  text.replace(
+    / \[([a-z]+)\]/g,
+    (_, status: string) => ` ${STATUS_TEXT[status] ?? status}`,
+  );
 
 /** 订阅者属于哪一类：u1 是用户，aN 是 leader，其余（secretary 与负责人）归秘书这一侧。 */
 export function kindOf(who: string): HolderKind {
@@ -160,7 +174,9 @@ export function holderOf(f: HolderFacts): Holder | null {
     return {
       kind: "queue",
       who: null,
-      text: `等上游${f.schedule_reason ? `：${f.schedule_reason}` : "完成"}`,
+      text: f.waiting_for.length
+        ? `等 ${f.waiting_for.map(readable).join("、")}`
+        : `等上游${f.schedule_reason ? `：${f.schedule_reason}` : "完成"}`,
     };
   if (f.auto) return { kind: "queue", who: null, text: "就绪，自动派发" };
   return {

@@ -38,7 +38,7 @@ atrium task add "表与状态机" --parent t1 --deliver none         # 挂到 t1
 atrium task add "验收" --parent t1 --after t2 --deliver none    # t2 完成后才就绪；加 --auto 就绪即自动派活
 atrium task add "改登录页" --brief 详述.md                      # 详述建任务时读入存库；--brief - 从标准输入读
 atrium task tree t1                                             # 缩进树：状态、交付物、执行者、PR
-atrium task plan                                                # 在跑、就绪、等待中、卡住；上游交付 PR 的，PR 合入才算满足
+atrium task plan                                                # 在跑、就绪、等待中、卡住；上游交付 PR 的，PR 合入才算满足，合入 Atrium 自身的要等上线
 atrium task show t2                                             # 详情与最近事件
 atrium task note t2 "端到端已验证" --verdict ok                 # 秘书对上线结果作一句话标注                                 # 处理备注，最新一条显示为当前说明
 atrium task set t3 --status blocked                             # 人工修正状态；running 只能由执行者进入
@@ -48,7 +48,7 @@ atrium task done t3                                             # 人工完成�
 
 **详述进库**（#355）：`--brief 文件` 在建任务时把内容读进账本（至多 64 KB，超了报错并提示精简），`--brief -` 从标准输入读；派活、审阅、`task show` 都用库里的内容，原文件之后改了或删了都不影响，`brief_path` 只记来源。`task set tN --brief 文件|-` 换详述，`--brief ''` 清空。升级前只存了路径的旧任务，服务启动时按路径回填一次；读不到的记日志、保留路径，派活时报错并提示 `atrium task set tN --brief 文件`。
 
-状态：`todo` → `running` → `done` / `failed` / `blocked`，或 `cancelled`。PR 任务过交付关卡后另有 `（审阅中）→ 排队合入 → 合入中 → 已合入 → 已上线` 阶段（已上线只用于 Atrium 自身仓库）。任一上游失败或取消，整条下游链都不会就绪。
+状态：`todo` → `running` → `done` / `failed` / `blocked`，或 `cancelled`。PR 任务过交付关卡后另有 `（审阅中）→ 排队合入 → 合入中 → 已合入 → 已上线` 阶段（已上线只用于 Atrium 自身仓库）。任一上游失败或取消，整条下游链都不会就绪。上游合入的是会自动上线的仓库（Atrium 自身）时，下游等它「已上线」才就绪（新命令上线后才用得上），`task plan` 与状态栏写「等 tN 上线」，上线失败按上游卡住处理；不自动上线的仓库（如 OpenQuota）合入即满足。
 
 ## 派活与执行者
 

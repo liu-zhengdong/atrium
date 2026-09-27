@@ -15,11 +15,32 @@ export type UpstreamPr = {
   state: PrState | null;
   error: string | null;
 };
+/**
+ * 上游交付的上线进度（t130）：合入服务自身仓库的要等自动上线，新命令上线后下游才用得上。
+ * merging：运行时正在合入，gh 显示已合入也还没记账；waiting：已合入、等发版上线；
+ * online：已上线；failed：自升级失败，停在已合入。不经自动上线的（别的仓库、本服务不自升级、
+ * 不经合入队列）没有这一项，合入即满足。
+ */
+export type Release = "merging" | "waiting" | "online" | "failed";
 export type Dependency = {
   ref: string;
   status: TaskRow["status"];
   pr?: UpstreamPr;
+  release?: Release;
 };
+
+/** 账本事实 → 上线进度；`failed` 指合入后最近一次上线结论是失败。 */
+export function releaseOf(facts: {
+  delivery_stage: TaskRow["delivery_stage"];
+  online_wait: number;
+  online_failed: boolean;
+}): Release | undefined {
+  if (facts.delivery_stage === "merging") return "merging";
+  if (facts.delivery_stage === "online") return "online";
+  if (facts.delivery_stage !== "merged") return undefined;
+  if (facts.online_wait === 1) return "waiting";
+  return facts.online_failed ? "failed" : undefined;
+}
 
 export function ensureUpstreamPrTable(db: DatabaseSync) {
   db.exec(`CREATE TABLE IF NOT EXISTS task_pr_merge (
@@ -34,6 +55,7 @@ export function prNumber(url: string): number | null {
 }
 
 type Upstream = Pick<TaskRow, "id" | "status" | "deliver" | "pr_url" | "repo">;
+type UpstreamRow = Upstream & Pick<TaskRow, "delivery_stage" | "online_wait">;
 
 /** 只有交付 PR 且已记下链接的 done 任务才要等合入；comment、none 或没记 PR 的，done 即满足。 */
 function watched(row: Upstream): row is Upstream & { pr_url: string } {
@@ -45,12 +67,32 @@ function watched(row: Upstream): row is Upstream & { pr_url: string } {
   );
 }
 
+/** 合入之后最近一次上线结论是不是失败（online_failed 晚于最近的 merged）。 */
+function onlineFailed(db: DatabaseSync, id: number) {
+  const last = db
+    .prepare(
+      "SELECT kind FROM task_events WHERE task_id=? AND kind IN ('merged','online','online_backfilled','online_failed') ORDER BY id DESC LIMIT 1",
+    )
+    .get(id) as { kind: string } | undefined;
+  return last?.kind === "online_failed";
+}
+
 export function dependencyOf(db: DatabaseSync, id: number): Dependency {
   const row = db
-    .prepare("SELECT id,status,deliver,pr_url,repo FROM tasks WHERE id=?")
-    .get(id) as Upstream;
+    .prepare(
+      "SELECT id,status,deliver,pr_url,repo,delivery_stage,online_wait FROM tasks WHERE id=?",
+    )
+    .get(id) as UpstreamRow;
   const ref = `t${id}`;
   if (!watched(row)) return { ref, status: row.status };
+  const release = releaseOf({
+    delivery_stage: row.delivery_stage,
+    online_wait: row.online_wait,
+    online_failed:
+      row.delivery_stage === "merged" &&
+      row.online_wait === 0 &&
+      onlineFailed(db, id),
+  });
   const cached = db
     .prepare(
       "SELECT state,error FROM task_pr_merge WHERE task_id=? AND pr_url=?",
@@ -65,6 +107,7 @@ export function dependencyOf(db: DatabaseSync, id: number): Dependency {
       state: cached?.state ?? null,
       error: cached?.error ?? null,
     },
+    ...(release ? { release } : {}),
   };
 }
 

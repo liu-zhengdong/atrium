@@ -310,6 +310,32 @@ test("排期段：条件说明逐项覆盖；旧版服务没有细节字段时�
       ),
       want,
     );
+  // 合入服务自身仓库的上游（t130）：上线才算满足。
+  const merged = { number: 9, state: "merged", error: null };
+  for (const [release, want] of [
+    ["waiting", "t1 上线"],
+    ["failed", "t1 上线失败"],
+    ["online", null],
+    ["merging", "t1 的 PR #9 合入"],
+    [null, null],
+  ] as const)
+    assert.equal(
+      upstreamText(up("t1", "done", { pr: merged, release }), NOW, true),
+      want,
+    );
+  assert.equal(
+    waitText(
+      {
+        task: task("t2", "用新命令"),
+        waiting_for: ["t1 上线"],
+        reason: null,
+        upstream: [up("t1", "done", { pr: merged, release: "waiting" })],
+      },
+      NOW,
+      false,
+    ),
+    "等 t1 上线",
+  );
   const legacy = {
     task: task("t5", "旧服务"),
     waiting_for: ["t4 [running]", "o/r#1 未合入"],
@@ -441,6 +467,7 @@ test("排期接口：记账节点路径、未结束子任务数与逐项上游�
       worker: "codex+gpt-6-sol",
       started_at: NOW - 60_000,
       pr: null,
+      release: null,
     },
   ]);
   assert.deepEqual(find("t3").after_pr, [

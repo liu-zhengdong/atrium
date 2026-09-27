@@ -151,6 +151,13 @@ atrium task set t2 --status done              # 人工收尾；running 只能由
 atrium task set t2 --deliver comment --issue 262   # 改交付物；执行中不能改
 atrium quota                                  # 按额度富余从多到少列出各账号（读 OpenQuota）；--json 输出结构化数据
 
+# 组织树（#264 第 1 步：节点、章程、能力卡与修订）
+atrium org import --repo ~/code/atrium          # 预览 ~/Atrium/charter.md 与仓库岗位说明
+atrium org import --repo ~/code/atrium --apply  # 显式写入；重复执行不会重复建
+atrium org tree                                 # 看节点层级
+atrium org show atrium/runtime                  # 看章程链和能力卡
+atrium org history atrium/runtime               # 看修订；--target charter --rev r2 看差异
+
 # 运行实例
 atrium runtimes                               # 本机发现的 Pi 实例
 atrium attach 林岚 实例ID                       # 把发现的实例接到身份上
@@ -319,3 +326,11 @@ npm run test:pi -- --ui  # 隔离 UI 演示，最多保留 5 分钟
 `test:pi` 在隔离目录经「Atrium → ACP → pi-atrium → 原 Pi」验证临时实例不自动建号、旧身份直接聊天、原进程／原会话接入、忙时工具边界插入、真实 MCP 回话、模型 tools/system 稳定、@ 把离线身份唤醒成后台 RPC 及断线不重复拉起。具名身份验证按用户入口实际执行 `atrium list`／`atrium run <名称>`，覆盖 TUI 与 RPC 交叉占用拒绝、原生 `/new` 保持身份、退出后恢复最近会话和同一私聊。它不使用云端模型，不能替代真实模型和界面的产品验收。原始请求、TUI 输出、启动前的源码副本与哈希清单保留在命令输出的证据目录，结束后复核原件与工作源码，不参与格式化。
 
 CI 执行上述检查并留存 Pi 验收材料。开发设计、实际界面截图、真实模型验收范围和剩余接入事项见 [设计与首版追踪 issue #1](https://github.com/liu-zhengdong/atrium/issues/1)。
+
+### 组织树（#264 第 1 步）
+
+`atrium org import` 预览 `~/Atrium/charter.md` 和当前仓库 `.agents/modules/`、`.agents/concerns/` 的导入计划；`atrium org import --apply` 才写入。可用 `atrium org import 章程.md --repo 仓库 --apply` 指定来源。重复导入不会重复建节点或修订。
+
+`atrium org tree` 看树，`atrium org show o1` 看节点，`atrium org add o2 runtime --kind module --name runtime --reason 拆模块` 增加节点。章程和能力卡用 `atrium org show o3 --charter --raw > 章程.md` 导出，用 `atrium org edit o3 --charter 章程.md --rev r1 --reason 更新目标` 写回；能力卡用 `--card`。`atrium org history o3` 查修订，`atrium org history o3 --target charter --rev r2` 看字段差异，`atrium org revert o3 --charter --to r1 --reason 回退` 追加恢复修订。`--as aN` 以身份名义按节点 leader 权限写入；根章程只有 `u1` 能改。读命令支持 `--json`。
+
+本步只存节点、仓库指针、章程与能力卡及修订历史。硬边界和预算暂保留在根章程正文，任务归属与派活将在后续步骤接入。

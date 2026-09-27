@@ -1,0 +1,226 @@
+import type { DatabaseSync } from "node:sqlite";
+import { Problem } from "../problem.ts";
+import {
+  all,
+  nodeByAddress,
+  nodePath,
+  nodes,
+  one,
+  ref,
+  type Doc,
+  type DocRow,
+  type RevisionRow,
+} from "./model.ts";
+import { exportDocument } from "./validate.ts";
+
+export function tree(db: DatabaseSync) {
+  const list = nodes(db);
+  if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
+  const order: typeof list = [];
+  const visit = (parent: number | null) => {
+    for (const n of list.filter((item) => item.parent_id === parent)) {
+      order.push(n);
+      visit(n.id);
+    }
+  };
+  visit(null);
+  return order.map((n) => ({
+    ...n,
+    ref: ref(n.id),
+    path: nodePath(list, n),
+    repos: all<{ repo: string }>(
+      db,
+      "SELECT repo FROM org_node_repos WHERE node_id=? ORDER BY repo",
+      n.id,
+    ).map((r) => r.repo),
+  }));
+}
+export function show(db: DatabaseSync, address: string, raw?: Doc) {
+  const n = nodeByAddress(db, address),
+    list = tree(db);
+  const node = list.find((item) => item.id === n.id)!;
+  const charter = one<DocRow>(
+    db,
+    "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
+    n.id,
+  );
+  const card = one<DocRow>(
+    db,
+    "SELECT * FROM org_docs WHERE node_id=? AND doc='card'",
+    n.id,
+  );
+  const view = (doc: DocRow | undefined) =>
+    doc
+      ? {
+          rev: `r${doc.rev}`,
+          fields: JSON.parse(doc.fields) as Record<string, unknown>,
+          body: doc.body,
+          updated_by: doc.updated_by,
+          updated_at: doc.updated_at,
+        }
+      : null;
+  if (raw) {
+    const found = raw === "charter" ? charter : card;
+    return {
+      raw: exportDocument(
+        found ? (JSON.parse(found.fields) as Record<string, unknown>) : {},
+        found?.body ?? "",
+      ),
+      ref: ref(n.id),
+      doc: raw,
+    };
+  }
+  const chain = [];
+  let current: typeof node | undefined = node;
+  while (current) {
+    chain.unshift({
+      ref: current.ref,
+      name: current.name,
+      goal: one<DocRow>(
+        db,
+        "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
+        current.id,
+      )?.fields,
+    });
+    current = list.find((item) => item.id === current?.parent_id);
+  }
+  return {
+    ...node,
+    charter: view(charter),
+    card: view(card),
+    chain: chain.map((c) => ({
+      ...c,
+      goal: c.goal
+        ? ((JSON.parse(c.goal) as { goal?: string }).goal ?? "")
+        : "",
+    })),
+  };
+}
+/** A compact line diff for a single revision; both inputs are capped at 16 KB. */
+function bodyDiff(before: string, after: string): string {
+  const a = before.split("\n"),
+    b = after.split("\n");
+  let head = 0,
+    tail = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  while (
+    tail < a.length - head &&
+    tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  )
+    tail++;
+  return [
+    ...a.slice(head, a.length - tail).map((line) => `- ${line}`),
+    ...b.slice(head, b.length - tail).map((line) => `+ ${line}`),
+  ].join("\n");
+}
+
+export function history(
+  db: DatabaseSync,
+  address: string,
+  options: {
+    before?: string;
+    after?: string;
+    rev?: string;
+    limit?: number;
+    target?: string;
+  },
+) {
+  const n = nodeByAddress(db, address);
+  const parse = (value: string | undefined, field: string) => {
+    if (value === undefined) return undefined;
+    if (!/^r[1-9][0-9]*$/.test(value))
+      throw new Problem(400, `${field} 应为 rN`);
+    return Number(value.slice(1));
+  };
+  const before = parse(options.before, "--before"),
+    after = parse(options.after, "--after"),
+    wanted = parse(options.rev, "--rev");
+  const target = options.target;
+  if (target !== undefined && !["node", "charter", "card"].includes(target))
+    throw new Problem(400, "--target 只能是 node、charter、card");
+  const limit = options.limit ?? 20;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+    throw new Problem(400, "--limit 应为 1–100");
+  if (wanted !== undefined) {
+    const matches = all<RevisionRow>(
+      db,
+      "SELECT * FROM org_revisions WHERE node_id=? AND rev=? AND (? IS NULL OR target=?) ORDER BY id DESC LIMIT 4",
+      n.id,
+      wanted,
+      target ?? null,
+      target ?? null,
+    );
+    if (matches.length > 1)
+      throw new Problem(
+        409,
+        `r${wanted} 在多个文档中存在，请加 --target ${matches.map((m) => m.target).join("|")}`,
+      );
+    const row = matches[0];
+    if (!row) throw new Problem(404, `${ref(n.id)} r${wanted} 不存在`);
+    const previous = one<RevisionRow>(
+      db,
+      "SELECT * FROM org_revisions WHERE node_id=? AND target=? AND rev=?",
+      n.id,
+      row.target,
+      wanted - 1,
+    );
+    const current = JSON.parse(row.snapshot) as Record<string, unknown>,
+      old = previous
+        ? (JSON.parse(previous.snapshot) as Record<string, unknown>)
+        : {};
+    const beforeFields = (old.fields ?? {}) as Record<string, unknown>,
+      afterFields = (current.fields ?? {}) as Record<string, unknown>;
+    const changes: Record<
+      string,
+      { before: unknown; after: unknown; diff?: string }
+    > = {};
+    for (const key of new Set([
+      ...Object.keys(beforeFields),
+      ...Object.keys(afterFields),
+    ]))
+      if (
+        JSON.stringify(beforeFields[key]) !== JSON.stringify(afterFields[key])
+      )
+        changes[`fields.${key}`] = {
+          before: beforeFields[key] ?? null,
+          after: afterFields[key] ?? null,
+        };
+    for (const key of new Set([...Object.keys(old), ...Object.keys(current)])) {
+      if (key === "fields") continue;
+      if (JSON.stringify(old[key]) !== JSON.stringify(current[key]))
+        changes[key] = {
+          before: old[key] ?? null,
+          after: current[key] ?? null,
+          ...(key === "body"
+            ? {
+                diff: bodyDiff(
+                  String(old[key] ?? ""),
+                  String(current[key] ?? ""),
+                ),
+              }
+            : {}),
+        };
+    }
+    return { ref: ref(n.id), revision: { ...row, snapshot: current }, changes };
+  }
+  const rows = all<RevisionRow>(
+    db,
+    `SELECT * FROM org_revisions WHERE node_id=? AND (? IS NULL OR target=?) AND (? IS NULL OR rev<?) AND (? IS NULL OR rev>?) ORDER BY id DESC LIMIT ?`,
+    n.id,
+    target ?? null,
+    target ?? null,
+    before ?? null,
+    before ?? null,
+    after ?? null,
+    after ?? null,
+    limit + 1,
+  );
+  return {
+    ref: ref(n.id),
+    items: rows
+      .slice(0, limit)
+      .map((row) => ({ ...row, snapshot: JSON.parse(row.snapshot) })),
+    has_more: rows.length > limit,
+  };
+}

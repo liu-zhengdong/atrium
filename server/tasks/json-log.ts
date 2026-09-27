@@ -1,5 +1,5 @@
 /**
- * 结构化日志（适配器 progressSignals 含 json_events：opencode --format json、claude / agy stream-json）
+ * 结构化日志（适配器 progressSignals 含 json_events：opencode --format json、claude / agy / cursor stream-json）
  * 的解析（#262）：逐行 JSON 事件，取最后一条助手文本、识别异常结束。纯函数。
  */
 
@@ -143,6 +143,7 @@ const count = (value: unknown) =>
  * `tokens.reasoning` 大于 0 而 `tokens.output` 为 0 或极少。
  * claude stream-json 的 usage 不分思考与正文、中间事件的 stop_reason 为 null，没有等价信号，不判；
  * agy 的步骤 usage 有 thinking_tokens，但没有结束原因与单次上限，分不出「用满了」还是「本来就只想了这些」，也不判；
+ * cursor stream-json 的 usage 也不分思考与正文（usage 只有 inputTokens/outputTokens/cache*，result 没有 stop_reason），不判；
  * codex、kimi、grok 是文本日志，也不判。
  */
 export function thinkingExhausted(

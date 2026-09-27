@@ -2,6 +2,7 @@ import { findExecutable } from "../../platform/index.ts";
 import { agy } from "./agy.ts";
 import { claude } from "./claude.ts";
 import { codex } from "./codex.ts";
+import { cursor } from "./cursor.ts";
 import { grok } from "./grok.ts";
 import { kimi } from "./kimi.ts";
 import { opencode } from "./opencode.ts";
@@ -16,6 +17,7 @@ export const ADAPTERS: Readonly<Record<Tool, Adapter>> = {
   grok,
   kimi,
   agy,
+  cursor,
 };
 
 /** 在 PATH 上找可执行文件（平台层；Windows 按 PATHEXT 补扩展名）。 */

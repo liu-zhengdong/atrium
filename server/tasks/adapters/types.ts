@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import { Problem } from "../../problem.ts";
+import type { Risk, Trust } from "../profiles.ts";
 
 /**
  * 执行者适配器（#262 B 部分）：每个工具一份数据 + 一个把「提示词、工作目录、模型、思考强度」
@@ -13,6 +14,7 @@ export const TOOLS = [
   "grok",
   "kimi",
   "agy",
+  "cursor",
 ] as const;
 export type Tool = (typeof TOOLS)[number];
 export const isTool = (value: unknown): value is Tool =>
@@ -100,6 +102,8 @@ export type Adapter = {
   tell: TellMode;
   /** 模型与思考强度搭不搭（派活前、排队前先查，免得排到时才报错）；不合法抛 400。 */
   checkModel?(model: string | undefined, effort: string | undefined): void;
+  /** 档案（三层叠加后）没写时的规则缺省：新接入、还没有交付记录的工具先压低，按交付记录再在档案里升。 */
+  defaultRules?: Readonly<{ trust?: Trust; max_risk?: Risk }>;
   build(input: LaunchInput): Launch;
   /** 带着补充续上原会话；undefined 表示不支持按会话续上。 */
   resume?(input: ResumeInput): Launch;

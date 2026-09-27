@@ -29,9 +29,10 @@ export type QuotaInput = {
 /**
  * 看起来是额度/限流的词。前后不能是字母，免得把 `openquota` 这样的工具名算进来；
  * 下划线算分隔，`rate_limit_error`、`insufficient_quota` 也能命中。
+ * Cursor 的月度额度用完：`Your usage limits will reset when your monthly cycle ends`、`set a Spend Limit to continue`。
  */
 const QUOTA_MARK =
-  /(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)|(?:用尽|不足|超限)[^\n]{0,20}(?:额度|用量|余额)/i;
+  /(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|usage limits? will reset|set (?:a|your) spend(?:ing)? limit|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)|(?:用尽|不足|超限)[^\n]{0,20}(?:额度|用量|余额)/i;
 
 /** 整数 429，前后不能有数字或小数点，免得把日期片段、端口号算进去。 */
 const HTTP_429 = /(?<![\d.])429(?![\d])/;
@@ -44,7 +45,7 @@ export function quotaErrorText(logTail: string): string {
     if (!event) {
       // 纯文本适配器的退出前报文；普通叙述、命令名和摘要不是错误。
       if (
-        /\b(?:error|failed|limit reached|limit exceeded|hit your .*limit|too many requests|HTTP\/\S+ 429)\b|额度.{0,20}(?:用尽|不足|超限)|余额不足/i.test(
+        /\b(?:error|failed|limit reached|limit exceeded|hit your .*limit|usage limits? will reset|spend(?:ing)? limit|too many requests|HTTP\/\S+ 429)\b|额度.{0,20}(?:用尽|不足|超限)|余额不足/i.test(
           line,
         )
       )
@@ -54,10 +55,12 @@ export function quotaErrorText(logTail: string): string {
       continue;
     }
     const type = event.type;
+    // 正常收尾：claude 的 stop_reason=end_turn；cursor 的 result 没有 stop_reason，看 subtype=success。
     if (
       type === "result" &&
       event.is_error === false &&
-      event.stop_reason === "end_turn"
+      (event.stop_reason === "end_turn" ||
+        (event.stop_reason === undefined && event.subtype === "success"))
     ) {
       last = "";
       continue;
@@ -95,7 +98,9 @@ export function quotaErrorText(logTail: string): string {
     )
       continue;
     const report: string[] = [];
-    for (const value of [event.error, event.errors, event.message]) {
+    // 出错的 result 事件正文就是报错（cursor / claude stream-json 的 is_error=true）。
+    const result = type === "result" ? event.result : undefined;
+    for (const value of [event.error, event.errors, event.message, result]) {
       if (typeof value === "string") report.push(value);
       else if (Array.isArray(value)) {
         for (const item of value)

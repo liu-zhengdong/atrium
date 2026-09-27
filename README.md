@@ -52,9 +52,11 @@ atrium task done t3                                             # 人工完成�
 
 ## 派活与执行者
 
-执行者 = 工具 + 模型（+ 思考强度），写作 `工具+模型[:强度]`。支持的工具：`claude`、`codex`、`opencode`、`kimi`、`grok`、`agy`（须已装在 PATH 上）。
+执行者 = 工具 + 模型（+ 思考强度），写作 `工具+模型[:强度]`。支持的工具：`claude`、`codex`、`opencode`、`kimi`、`grok`、`agy`、`cursor`（须已装在 PATH 上）。
 
 `agy` 是 Antigravity CLI，一个账号（额度账号 `antigravity`）下有 Gemini、Claude、GPT-OSS 几族模型，`agy models` 列出可选的。缺省模型 `claude-opus-4-6-thinking`。强度按 agy 自己的规矩：gemini 模型名自带强度的直接用（`agy+gemini-3.8-flash-high`），也可写基名加强度（`agy+gemini-3.8-flash:high`，与 `--effort high` 等价）；模型名已带强度再写不同的 `:强度`、或给 `claude-*`、`gpt-oss-*` 写强度（它们不接受 `--effort`），派活时直接报错，不静默丢弃。agy 支持运行中捎话（`--input-format stream-json`，补充排在本轮之后另起一轮）与按会话续上（`--conversation`）。
+
+`cursor` 缺省模型 `auto`（Cursor 自己挑），额度账号 `cursor`（经 OpenQuota 读）；强度写进模型名后缀，`cursor+gpt-5.3-codex:high` 交给 `--model gpt-5.3-codex-high`，`auto` 不能指定强度。新接入没有交付记录，档案没写时按 `trust: unknown`、`max_risk: low`（只接低风险、合入前另派审阅），交付记录攒够后用 `atrium workers edit harness/cursor` 升。
 
 ```bash
 atrium task add "回复一句话" --deliver none
@@ -85,7 +87,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 
 **闲时任务**（t136）：归属部分是管方面的部分（安全、性能、体验…，`org_nodes.aspect`）或在它下面的任务，建时缺省「闲时」，其余「普通」；`task add … --priority 闲时|普通` 覆盖，`task set tN --priority …` 随时改（换归属部分时，没被人改过的档位跟着新部分的缺省走）。派发先后是紧急 → 普通 → 闲时：闲时任务只有在没有普通任务在等同一类执行者时才派——同一工具的普通任务在排队，或别的普通任务只是在等本机空位（执行者满或太忙），都让它们先；普通任务在等的是自己那个工具（独占工具正忙、额度用尽）不挡别的工具。巡检自动派发同一轮里先派普通任务、闲时的最后派。已在跑的闲时任务不打断。这只是排序，不是配额，也不加关卡；紧急的闲时任务按紧急算。回执写「闲时：排在普通任务后面，有空闲执行者才派」；`task plan`、`top`、状态栏与全景任务行标「闲时」，排队中的写「等空闲：前面还有 N 件普通任务」（按当下的队列现算）。升级时在途的管方面任务补成闲时。
 
-**捎话**（`task tell`）按工具能力分三档：Claude Code 以 `--input-format stream-json` 拉起、标准输入保持打开，补充作为新的用户消息即时写入，在工具调用边界读入，回显后记为已送达；codex 不能运行中追加，本轮结束后用 `codex exec resume <会话>` 带着补充续上原会话，关卡按续上后的结果判；其余工具停掉、保留工作树、把补充写进提示词重派。档案 `tell: stdin|resume|restart` 可改成工具支持的其他方式。每条捎话记一条 `tell` 事件（作者、时间、送达方式、是否送达），`task show` 与 `top` 可见；任务不在跑时留到下次拉起写进提示词。
+**捎话**（`task tell`）按工具能力分三档：Claude Code 以 `--input-format stream-json` 拉起、标准输入保持打开，补充作为新的用户消息即时写入，在工具调用边界读入，回显后记为已送达；codex 与 cursor 不能运行中追加，本轮结束后用 `codex exec resume <会话>` / `cursor-agent --resume <会话>` 带着补充续上原会话，关卡按续上后的结果判；其余工具停掉、保留工作树、把补充写进提示词重派。档案 `tell: stdin|resume|restart` 可改成工具支持的其他方式。每条捎话记一条 `tell` 事件（作者、时间、送达方式、是否送达），`task show` 与 `top` 可见；任务不在跑时留到下次拉起写进提示词。
 
 **派活候选**（`task pick tN [--risk …]`，只读）：一行一位候选执行者——能不能接（没装、档案 `max_risk` 低于任务风险、`avoid_jobs` / `avoid_nodes` 避开、额度用尽标记、触及根章程保留份额、`billing=metered`；trust 低于 medium 的注明合入前另派审阅）、账号额度（已用、富余、距重置、扣掉保留份额后还剩多少）、是否正忙（独占工具，派了会排队）、此组合在干活的专员下的交付记录（次数、一次通过率）。最上面是推荐与一句理由（如「推荐 claude+opus：前端专员优先、claude 富余 +54%；codex 富余 −13%」），最后一行是 `atrium task run tN --worker <推荐>`；`--json` 给全部字段。候选顺序：干活的专员的优先执行者（按交付记录调整后的顺序）里能接、不正忙的在前，其余能接的按账号富余从多到少，正忙的独占工具最后；专员第 1 选超速（富余为负）而另有能接、不正忙、trust 至少 medium（且够接任务 risk）的候选富余为正且多出 30 个百分点以上时，改推荐那一位（专员候选优先），理由写「后端专员第 1 选 codex+gpt-6-sol:high 超速（codex −17%），改用第 2 选 claude+opus:high（claude +52%）」。理由只对照最多两个相关账号。`task run` 不写 `--worker`（含 `--auto` 自动派）时按同一份顺序挑，回执写「按额度挑了 X，因为…」；写死 `--worker` 且不是推荐的那位时，若另有候选按同一判定（同一个 30 点阈值）更富余，回执加一行提醒（不拦），按推荐写死不提醒。`task add --parent` 建出的子任务回执下一步是 `atrium task pick tN`（顶层任务仍提示拆子任务）。
 

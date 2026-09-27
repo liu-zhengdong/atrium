@@ -15,7 +15,7 @@ import {
  * 没有时退回最后一次工具调用的人话概括：读/改了哪个文件（只写文件名）、跑了什么检查
  * （command-gist.ts），不显示命令参数与 heredoc 内容。纯函数，只读入参里的文本。
  *
- * 按适配器选解析方式：progressSignals 含 json_events 的（claude / agy stream-json、opencode --format json）
+ * 按适配器选解析方式：progressSignals 含 json_events 的（claude / agy / cursor stream-json、opencode --format json）
  * 逐行 JSON 事件；codex 的 exec 不带 --json，是分段纯文本，单独一套解析。grok、kimi 的输出格式
  * 没有样本，一律返回 undefined，由命令行显示「日志 N 秒前有输出」，不猜。
  */
@@ -101,6 +101,7 @@ const FILE_VERBS: Record<string, string> = {
   replace_file_content: "改",
   multi_replace_file_content: "改",
   sed_file: "改",
+  delete: "删",
 };
 const FIXED: Record<string, string> = {
   grep: "搜代码",
@@ -112,6 +113,7 @@ const FIXED: Record<string, string> = {
   websearch: "搜网页",
   todowrite: "列待办",
   todoread: "看待办",
+  updatetodos: "列待办",
   bashoutput: "看后台输出",
   killshell: "停后台命令",
   toolsearch: "找工具",
@@ -160,10 +162,25 @@ export function describe(name: string, input: JsonEvent | undefined): Action {
 }
 
 /**
- * 结构化日志（claude / agy stream-json、opencode --format json）里的最近动作。
- * 从后往前找：助手文本（opencode 的 text 事件、claude assistant 的 text 块、agy 同一步的 text_delta 拼起来）
+ * cursor 的工具调用：{type:"tool_call",subtype:"started",tool_call:{readToolCall:{args:{path}}}}；
+ * 键名去掉 ToolCall 就是工具名（read、shell、edit、grep…），completed 是同一调用的结果，不另算。
+ */
+function cursorTool(event: JsonEvent): Action | undefined {
+  if (event.subtype !== "started") return undefined;
+  const call = object(event.tool_call);
+  const key = Object.keys(call ?? {}).find((k) => k.endsWith("ToolCall"));
+  if (!key) return undefined;
+  return describe(
+    key.slice(0, -"ToolCall".length),
+    object(object(call![key])?.args),
+  );
+}
+
+/**
+ * 结构化日志（claude / agy / cursor stream-json、opencode --format json）里的最近动作。
+ * 从后往前找：助手文本（opencode 的 text 事件、claude / cursor assistant 的 text 块、agy 同一步的 text_delta 拼起来）
  * 一出现就用它的首句；找到头也没有文本，才用最后一次工具调用（opencode 的 tool_use 事件、claude 的 tool_use 块、
- * agy step_type 为 tool 的步骤）。claude 的 user 事件只是工具结果，不是动作。
+ * agy step_type 为 tool 的步骤、cursor 的 tool_call 事件）。claude 的 user 事件只是工具结果，不是动作。
  */
 export function structuredAction(tail: string): Action | undefined {
   const events = parseEvents(tail);
@@ -194,6 +211,10 @@ export function structuredAction(tail: string): Action | undefined {
           String(part.tool ?? ""),
           object(object(part.state)?.input),
         );
+      continue;
+    }
+    if (event.type === "tool_call") {
+      lastTool ??= cursorTool(event);
       continue;
     }
     // claude：{type:"assistant",message:{content:[{type,name,input}|{type:"text",text}]}}

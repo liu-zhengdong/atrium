@@ -102,16 +102,38 @@ export function parseDocument(source: string, doc: Doc) {
   } catch {
     return bad(doc, "frontmatter 格式错误");
   }
+  // 章程的 boundaries 单独成表，不进 fields；不写表示不改
+  let boundaries: unknown;
+  if (
+    doc === "charter" &&
+    fields &&
+    typeof fields === "object" &&
+    !Array.isArray(fields) &&
+    Object.hasOwn(fields, "boundaries")
+  ) {
+    const { boundaries: list, ...rest } = fields as Record<string, unknown>;
+    boundaries = list ?? [];
+    fields = rest;
+  }
   return {
     fields: validateFields(doc, fields),
     body: validateBody(source.slice(end + 5)),
+    ...(boundaries === undefined ? {} : { boundaries }),
   };
 }
 export function exportDocument(
   fields: Record<string, unknown>,
   body: string,
+  boundaries?: unknown[],
 ): string {
-  return `---\n${Object.entries(fields)
-    .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
-    .join("\n")}\n---\n${body}`;
+  const lines = Object.entries(fields).map(
+    ([k, v]) => `${k}: ${JSON.stringify(v)}`,
+  );
+  if (boundaries)
+    lines.push(
+      boundaries.length
+        ? YAML.stringify({ boundaries }, { lineWidth: 0 }).trimEnd()
+        : "boundaries: []",
+    );
+  return `---\n${lines.join("\n")}\n---\n${body}`;
 }

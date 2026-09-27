@@ -22,6 +22,12 @@ import {
   validateSlug,
   validParent,
 } from "./validate.ts";
+import { exportBoundaries, type Converted } from "./boundaries.ts";
+import {
+  ownBoundaries,
+  planBoundaries,
+  saveBoundaries,
+} from "./boundary-store.ts";
 
 function authorized(
   db: DatabaseSync,
@@ -159,7 +165,13 @@ export function editDoc(
   db: DatabaseSync,
   address: string,
   doc: Doc,
-  input: { fields: unknown; body: unknown; rev?: string; reason: unknown },
+  input: {
+    fields: unknown;
+    body: unknown;
+    boundaries?: unknown;
+    rev?: string;
+    reason: unknown;
+  },
   actor: string,
 ) {
   return transaction(db, () => {
@@ -167,26 +179,15 @@ export function editDoc(
     authorized(db, node, actor, doc);
     if (node.archived_at !== null)
       throw new Problem(400, `${ref(node.id)} 已归档`);
-    const old = current(db, node.id, doc),
-      before = old?.rev ?? 0;
-    expectedRev(input.rev, before, node.id, doc);
-    const fields = validateFields(doc, input.fields),
-      body = validateBody(input.body),
-      reason = validateReason(input.reason);
-    const now = Date.now(),
-      next = before + 1;
-    db.prepare(
-      "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(node_id,doc) DO UPDATE SET rev=excluded.rev,fields=excluded.fields,body=excluded.body,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
-    ).run(node.id, doc, next, JSON.stringify(fields), body, actor, now);
-    revision(db, node.id, doc, next, actor, reason, { fields, body });
-    return {
-      node: ref(node.id),
+    expectedRev(input.rev, current(db, node.id, doc)?.rev ?? 0, node.id, doc);
+    return editDocInner(
+      db,
+      node,
       doc,
-      before: `r${before}`,
-      rev: `r${next}`,
-      fields,
-      body,
-    };
+      input,
+      validateReason(input.reason),
+      actor,
+    );
   });
 }
 export function revertDoc(
@@ -212,34 +213,99 @@ export function revertDoc(
     const snapshot = JSON.parse(found.snapshot) as {
       fields: unknown;
       body: unknown;
+      boundaries?: unknown;
     };
+    // 第 2 步之前的章程修订没有 boundaries：当时本节点没有边界
+    if (doc === "charter") snapshot.boundaries ??= [];
     return editDocInner(db, node, doc, snapshot, validateReason(reason), actor);
   });
+}
+function writeDoc(
+  db: DatabaseSync,
+  node: number,
+  doc: Doc,
+  fields: Record<string, unknown>,
+  body: string,
+  reason: string,
+  actor: string,
+) {
+  const next = (current(db, node, doc)?.rev ?? 0) + 1;
+  db.prepare(
+    "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(node_id,doc) DO UPDATE SET rev=excluded.rev,fields=excluded.fields,body=excluded.body,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+  ).run(node, doc, next, JSON.stringify(fields), body, actor, Date.now());
+  revision(db, node, doc, next, actor, reason, {
+    fields,
+    body,
+    ...(doc === "charter"
+      ? { boundaries: exportBoundaries(ownBoundaries(db, node)) }
+      : {}),
+  });
+  return next;
+}
+/** 上层删除或移走条目后，后代的覆盖条目转为自有条目：补上文字并给后代章程追加修订。 */
+function applyConverted(
+  db: DatabaseSync,
+  from: NodeRow,
+  converted: Converted[],
+  reason: string,
+  actor: string,
+) {
+  const touched = [...new Set(converted.map((c) => c.node))];
+  const update = db.prepare(
+    "UPDATE org_boundaries SET summary=? WHERE node_id=? AND bid=?",
+  );
+  for (const c of converted) update.run(c.summary, c.node, c.id);
+  for (const id of touched) {
+    const old = current(db, id, "charter");
+    writeDoc(
+      db,
+      id,
+      "charter",
+      old ? (JSON.parse(old.fields) as Record<string, unknown>) : {},
+      old?.body ?? "",
+      `因 ${ref(from.id)} ${from.name} 的修改，${converted
+        .filter((c) => c.node === id)
+        .map((c) => c.id)
+        .join("、")} 转为本节点自有条目：${reason}`,
+      actor,
+    );
+  }
+  return converted.map((c) => ({ node: ref(c.node), id: c.id }));
 }
 function editDocInner(
   db: DatabaseSync,
   node: NodeRow,
   doc: Doc,
-  snapshot: { fields: unknown; body: unknown },
+  snapshot: { fields: unknown; body: unknown; boundaries?: unknown },
   reason: string,
   actor: string,
 ) {
-  const old = current(db, node.id, doc),
-    next = (old?.rev ?? 0) + 1;
+  const before = current(db, node.id, doc)?.rev ?? 0;
   const fields = validateFields(doc, snapshot.fields),
-    body = validateBody(snapshot.body),
-    now = Date.now();
-  db.prepare(
-    "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(node_id,doc) DO UPDATE SET rev=excluded.rev,fields=excluded.fields,body=excluded.body,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
-  ).run(node.id, doc, next, JSON.stringify(fields), body, actor, now);
-  revision(db, node.id, doc, next, actor, reason, { fields, body });
+    body = validateBody(snapshot.body);
+  let converted: Converted[] = [];
+  if (doc === "card") {
+    if (snapshot.boundaries !== undefined)
+      throw new Problem(400, "card.boundaries 是未知字段，边界写在章程里");
+  } else if (snapshot.boundaries !== undefined) {
+    const plan = planBoundaries(db, nodes(db), node, snapshot.boundaries);
+    saveBoundaries(db, node.id, plan.entries);
+    converted = plan.converted;
+  }
+  const next = writeDoc(db, node.id, doc, fields, body, reason, actor);
   return {
     node: ref(node.id),
     doc,
-    before: `r${next - 1}`,
+    before: `r${before}`,
     rev: `r${next}`,
     fields,
     body,
+    ...(doc === "charter"
+      ? {
+          boundaries: exportBoundaries(ownBoundaries(db, node.id)),
+          converted: applyConverted(db, node, converted, reason, actor),
+        }
+      : {}),
   };
 }
 export function editNode(
@@ -272,6 +338,7 @@ export function editNode(
     expectedRev(input.rev, old, node.id, "node");
     const reason = validateReason(input.reason);
     let parent = node.parent_id;
+    let moved: Converted[] = [];
     if (input.parent !== undefined) {
       const target = nodeByAddress(db, input.parent);
       authorized(db, target, actor, "node");
@@ -295,6 +362,11 @@ export function editNode(
         );
       if (depth + height(node.id) - 1 > 8)
         throw new Problem(400, "parent 层级超过深度 8");
+      if (target.id !== node.parent_id)
+        moved = planBoundaries(db, list, node, undefined, {
+          newParent: target.id,
+          what: "位置",
+        }).converted;
       parent = target.id;
     }
     const slug =
@@ -334,7 +406,12 @@ export function editNode(
       reason,
       nodeSnapshot(db, node.id),
     );
-    return { ...nodeSnapshot(db, node.id), rev: `r${old + 1}` };
+    const converted = applyConverted(db, node, moved, reason, actor);
+    return {
+      ...nodeSnapshot(db, node.id),
+      rev: `r${old + 1}`,
+      ...(converted.length ? { converted } : {}),
+    };
   });
 }
 export type ImportInput = {

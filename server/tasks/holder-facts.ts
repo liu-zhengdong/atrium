@@ -106,6 +106,8 @@ export function holderFacts(
       })()
     : null;
   const note = block ? last("note", block.id) : undefined;
+  // 取「任务受阻后最新一条收件箱记录」；若它正好是被保留清理清掉的已确认知会（#t126），
+  // 会退回去读更早的一条，只影响「这次由谁接手」的展示，不影响判定。
   const inbox =
     row.status === "blocked" && block && tables.inbox
       ? one<{ subscriber: string; acked_at: number | null }>(

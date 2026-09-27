@@ -1,7 +1,15 @@
 /** 事件分级只依赖事件内容；未知类型保持要处理，避免新事件被静默吞掉。 */
 export type EventLevel = "action" | "info";
 
-const information = new Set([
+/**
+ * 知会级事件类型；级别要写进 task_inbox.level 供 SQL 过滤（#t126），
+ * 这里的集合是数据迁移回填时的来源，新事件在写入时就带上级别。
+ *
+ * 改这个集合时必须同时补一次迁移，把库里已有行按新集合重算 level 回写：
+ * 回填只在补列那一次做，之后 `view()` 只把 `level='info'` 当真，`level='action'`
+ * 的旧行一律按当前集合/内容重算；不迁移就会让库里存的级别与 SQL 过滤、读出的 level 不一致。
+ */
+export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "merge_queued",
   "merge_returned",
   "merge_retry",
@@ -31,7 +39,7 @@ export function eventLevel(kind: string, detail?: unknown): EventLevel {
     const data = detail as { auto?: unknown; unassigned?: unknown } | null;
     return data?.auto === true && data.unassigned !== true ? "info" : "action";
   }
-  return information.has(kind) ? "info" : "action";
+  return INFORMATION_KINDS.has(kind) ? "info" : "action";
 }
 
 export type DigestItem = {

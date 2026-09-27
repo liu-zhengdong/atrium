@@ -46,6 +46,8 @@ export function ensureTaskTables(db: DatabaseSync) {
       created_at INTEGER NOT NULL, started_at INTEGER, ended_at INTEGER, updated_at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_id,id);
     CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,id);
+    -- top 的取行（#t126）：按结束状态+时间走索引，不整表扫。
+    CREATE INDEX IF NOT EXISTS tasks_status_updated ON tasks(status,updated_at,id);
     CREATE TABLE IF NOT EXISTS task_events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
       at INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
     CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id,id);
@@ -161,6 +163,10 @@ export function ensureTaskTables(db: DatabaseSync) {
   db.exec(
     `CREATE INDEX IF NOT EXISTS tasks_ci_pending ON tasks(ci_polled_at,id)
      WHERE ci='pending' AND pr_url IS NOT NULL AND status NOT IN ('done','cancelled')`,
+  );
+  // top 里「已合入、等上线」的一支（#t126）：直接定位 online_wait=1，不扫全部 merged。
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS tasks_online_wait ON tasks(online_wait,delivery_stage,id) WHERE online_wait=1",
   );
   db.exec("CREATE INDEX IF NOT EXISTS tasks_part ON tasks(part_id,status)");
   db.exec(

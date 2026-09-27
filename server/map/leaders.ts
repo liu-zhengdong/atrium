@@ -7,7 +7,6 @@ import {
   type LeaderWake,
 } from "../leaders/model.ts";
 import { eventWord } from "../leaders/wake.ts";
-import { eventLevel } from "../tasks/event-level.ts";
 import { peopleNames, personOf, type Person } from "./who.ts";
 import { listDecisions, PAGE_MAX, type Decision } from "../memos/decisions.ts";
 import { readMemo, MEMO_MAX } from "../memos/store.ts";
@@ -85,6 +84,7 @@ type InboxRow = {
   acked_at: number | null;
   actor: string | null;
   delivered_at: number | null;
+  level: string | null;
 };
 
 const EVENTS_MAX = 30;
@@ -137,14 +137,14 @@ function titles(db: DatabaseSync, ids: number[]): Map<number, string> {
   );
 }
 
-/** 投给它、还没处理的「要处理」事件数；封顶 99。 */
+/** 投给它、还没处理的「要处理」事件数；封顶 99。级别在 SQL 里过滤（#t126），不把知会读出来再丢。 */
 function pendingCount(db: DatabaseSync, leader: string) {
   if (!hasInbox(db)) return 0;
   return all<{ kind: string; detail: string | null }>(
     db,
-    "SELECT kind,detail FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) ORDER BY id DESC LIMIT 200",
+    "SELECT kind,detail FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND level='action' ORDER BY id DESC LIMIT 200",
     leader,
-  ).filter((r) => eventLevel(r.kind, parse(r.detail)) === "action").length;
+  ).length;
 }
 
 const rowOf = (
@@ -184,11 +184,10 @@ function events(
 ): MapLeaderEvent[] {
   const rows = all<InboxRow>(
     db,
-    "SELECT * FROM task_inbox WHERE subscriber=? AND (actor IS NULL OR actor<>subscriber) ORDER BY updated_at DESC,id DESC LIMIT 200",
+    "SELECT * FROM task_inbox WHERE subscriber=? AND (actor IS NULL OR actor<>subscriber) AND level='action' ORDER BY updated_at DESC,id DESC LIMIT 200",
     leader,
   )
     .map((row) => ({ row, detail: parse(row.detail) }))
-    .filter(({ row, detail }) => eventLevel(row.kind, detail) === "action")
     .slice(0, EVENTS_MAX);
   // 它没处理完、由运行时转交上一层的：转交事件的去重键是原键加 :handoff，转交与确认在同一刻。
   const handoffs = all<{ dedupe_key: string; updated_at: number }>(

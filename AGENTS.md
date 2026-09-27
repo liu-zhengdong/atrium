@@ -18,6 +18,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 | 额度     | `server/tasks/quota*.ts`、`openquota.ts`、`budget.ts`                            | 读 OpenQuota 的余量，按富余挑执行者；根章程 `budget.quota_reserve_percent` 给用户留的份额不派                                                      |
 | 事件     | `server/tasks/events.ts`、`event-lease.ts`                                       | 任务完成、失败、受阻、卡死、CI 结果先落库，订阅者 `events wait` 取、`events ack` 确认；租约内不重投                                                |
 | 组织树   | `server/org/`                                                                    | 节点（组织、项目、模块、关注点）、leader、章程与能力卡、硬边界、修订历史；子节点硬边界只能收紧                                                     |
+| 目标树   | `server/goals/`                                                                  | 顶层目标与多层里程碑（结果、验收标准、状态、负责部门、前置）、任务挂里程碑、父任务迁移；顶层只有 u1 能改，不留修订记录                             |
 | 命令行   | `cli/`、`bin/atrium.mjs`                                                         | 统一入口；除启动、`status`、`stop`、`auth status` 外都经服务完成                                                                                   |
 
 ## 实现约束
@@ -28,7 +29,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 - 执行者与服务子进程用白名单环境启动（`server/service-env.ts`、`server/tasks/worker-env.ts`），不继承凭据类（`*_API_KEY`、`*_TOKEN`）、身份类（`CLAUDE_CODE_*`、`PI_*`）与 `HERDR_*`；执行者固定带 `ATRIUM_WORKER=1`，命令行据此拒绝操作用户的服务。
 - 凭据不进日志、提交、PR、issue 或模型提示词；报错回显的令牌要抹掉。认证放在路由匹配后的统一入口，默认拒绝；路径参数拒绝 `..`、绝对路径、隐藏段和指向目录外的软链接。
 - 命令行的主要调用者是 Agent：成功回执最后一行给下一步命令，只有修正明确可执行时才提示修正，字段校验用参数名和中文；读命令支持 `--json`；异步状态提供等待与增量读取（`task wait`、`task log --follow`、`events wait`），不让调用方轮询。新命令接入 `cli/main.ts` 的命令表，`atrium --help` 与 `atrium guide` 由命令表生成，README 同步。
-- 用户短号 `u1`，任务 `t1`，组织节点 `o1`，节点 leader `a1`；短号全局一致、持久、不复用。
+- 用户短号 `u1`，任务 `t1`，目标与里程碑 `g1`，组织节点 `o1`，节点 leader `a1`；短号全局一致、持久、不复用。
 - 组织（部门、专员、章程、能力卡）存在 Atrium，改动留修订历史；仓库只留跟着代码走的约定：本文件、`.agents/README.md`（派活时附给执行者）和代码目录旁的 `AGENTS.md`。
 
 ## 验证与协作

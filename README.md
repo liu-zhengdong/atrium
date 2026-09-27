@@ -122,6 +122,24 @@ atrium org link-roles                             # 预览把旧 role 字符串�
 
 章程 frontmatter 的 `budget` 分配份额，例如 `budget: { quota: { claude: 30, "*": 10 }, disk: 20, money: 0 }`。`quota` 数值是账号当前周期额度的百分点；具体账号覆盖 `*`。没有显式份额的节点使用父节点未分配给兄弟的共享池。`org show --charter --raw` 可导出并编辑。当前只显示份额，不统计节点用量或按份额拦截派活；这两项在第 5 步实现。
 
+## 目标树
+
+组织树是「谁」，目标树是「要什么」。根是顶层目标，下面任意多层里程碑，短号 `g1`……；每个节点写结果（一句话）、验收标准（可检验的条目，能写成命令的就写命令）、状态（规划中／进行中／达成／受阻／放弃）、负责部门（组织节点）和可选的目标日期，里程碑之间可设前置。顶层目标只有你能建和改；里程碑由负责部门的 leader 或其上级 leader 操作（`--as aN`），在别的部门的里程碑下拆还要能管那个部门。不留修订记录，不认可就直接改回或放弃。
+
+```bash
+atrium goal add "Atrium 成为 AI 组织的运行底座" --node atrium          # 顶层目标
+atrium goal add "组织树可用" --parent g1 --status active --criteria "atrium org tree 列出全部节点" --as a1
+atrium goal add "用量估算与派活拦截" --parent g2 --node atrium/runtime --after g3 --due 2026-10-15
+atrium task add "估算模型" --goal g3                                   # 任务挂在里程碑上；task set --goal '' 摘下
+atrium goal tree                                                       # 各层状态、负责部门、前置、挂着的任务；--depth 2 只看上两层
+atrium goal show g3                                                    # 上层路径、验收标准、前置、下层与任务
+atrium goal done g3 --note "t36 已合入"                                # 前置都达成才能标达成
+atrium goal drop g4 --reason 并入 g3                                   # 下层与挂着的任务先收尾；改回用 goal edit --status active
+atrium goal adopt t21 --parent g1                                      # 预览把归类用的父任务迁为里程碑；--apply 写入
+```
+
+父里程碑是否达成看它自己的验收标准，不等于子项全完。`goal adopt` 只接受从没派过执行者、没有 PR、有子任务的父任务：父任务标题作里程碑结果，直接子任务挂上新里程碑并上移一层，父任务标取消并留痕。
+
 ## 组织技能
 
 技能是组织资产，存在 Atrium：SKILL.md 与附属文件（最多 32 个、合计 256 KB），frontmatter 的 `name` 与 slug 一致、`description` 必填；每次修改存一版历史，可回退。你、技能 owner 节点或其祖先的 leader 能改；绑定看被绑节点的 leader 权限。

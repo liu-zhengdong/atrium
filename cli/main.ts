@@ -4,6 +4,7 @@ import { pad, width } from "./format.ts";
 import { authCommands } from "./auth.ts";
 import { taskCommands } from "./tasks.ts";
 import { orgCommands } from "./org.ts";
+import { goalCommands } from "./goals.ts";
 import { skillCommands } from "./skills.ts";
 import { topCommand } from "./top.ts";
 import { quotaCommands } from "./quota.ts";
@@ -87,6 +88,7 @@ export const commands: Record<string, Command> = {
   top: topCommand,
   ...taskCommands,
   ...orgCommands,
+  ...goalCommands,
   ...skillCommands,
   ...quotaCommands,
   ...eventCommands,
@@ -135,7 +137,7 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["任务", "组织"].flatMap((group) => [
+    ...["任务", "目标", "组织"].flatMap((group) => [
       "",
       group,
       ...Object.entries(commands)

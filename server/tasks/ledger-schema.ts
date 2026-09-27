@@ -54,6 +54,10 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec("ALTER TABLE tasks ADD COLUMN node_id INTEGER");
   if (!columns.some((column) => column.name === "origin_node_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN origin_node_id INTEGER");
+  // 目标树（#313）：任务挂在哪个里程碑上，指向 goals.id；表与校验在 server/goals/。
+  if (!columns.some((column) => column.name === "goal_id"))
+    db.exec("ALTER TABLE tasks ADD COLUMN goal_id INTEGER");
+  db.exec("CREATE INDEX IF NOT EXISTS tasks_goal ON tasks(goal_id,status)");
   db.exec(
     "CREATE INDEX IF NOT EXISTS tasks_node ON tasks(node_id,status); CREATE INDEX IF NOT EXISTS tasks_origin_node ON tasks(origin_node_id,status)",
   );

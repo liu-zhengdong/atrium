@@ -24,6 +24,15 @@ export const groups: Record<string, string[]> = {
     "events ack",
     "chat",
   ],
+  目标: [
+    "goal tree",
+    "goal show",
+    "goal add",
+    "goal edit",
+    "goal done",
+    "goal drop",
+    "goal adopt",
+  ],
   组织: [
     "org tree",
     "org show",
@@ -61,6 +70,10 @@ export function example(name: string, command: Command) {
   if (name === "task run")
     return "atrium task run t1 --worker codex+gpt-6-sol:high";
   if (name === "events ack") return "atrium events ack 12 13";
+  if (name === "goal add")
+    return "atrium goal add 组织树可用 --parent g1 --node atrium --criteria 条目";
+  if (name === "goal drop") return "atrium goal drop g2 --reason 不再需要";
+  if (name === "goal adopt") return "atrium goal adopt t21 --parent g1";
   const sample = command.args
     .split("[")[0]!
     .replace(/\S+…/g, "甲")
@@ -80,7 +93,8 @@ export function guide(commands: Record<string, Command>) {
         `\n  ${command.about}\n  示例：${example(name, command)}`,
     )
     .join("\n");
-  return `Atrium 命令行说明书\n\n调用约定\n  任务用 t1，组织节点用 o1，用户用 u1，组织节点 leader 用 a1。\n  task/events 的 --as 是事件订阅者名，缺省 secretary；org/skill 的 --as 是 u1 或某个节点 leader 的 aN，缺省 u1；技能修订提议用 p1。\n  所有命令支持 --json：成功 {"ok":true,"result":接口结果,"next":下一步命令或null}；失败 {"ok":false,"error":{"code","message","candidates"?},"next":修正命令或null}。只在 stdout 写一个 JSON 对象，提示在 stderr。\n  文本回执最后一行是「动作：atrium 命令」，没有下一步则省略。\n  退出码与 code：\n  0  成功\n${codes}\n\n常见任务\n  令牌失效：atrium auth rotate（使用当前 ATRIUM_DATA）。\n  拆任务看全貌：atrium task add 目标；atrium task add 子任务 --parent t1；atrium task tree t1；人工收尾：atrium task set t2 --status done\n  派活前看额度：atrium quota；人工解除误判占用：atrium quota --clear claude
+  return `Atrium 命令行说明书\n\n调用约定\n  任务用 t1，目标与里程碑用 g1，组织节点用 o1，用户用 u1，组织节点 leader 用 a1。\n  task/events 的 --as 是事件订阅者名，缺省 secretary；org/skill/goal 的 --as 是 u1 或某个节点 leader 的 aN，缺省 u1；技能修订提议用 p1。\n  所有命令支持 --json：成功 {"ok":true,"result":接口结果,"next":下一步命令或null}；失败 {"ok":false,"error":{"code","message","candidates"?},"next":修正命令或null}。只在 stdout 写一个 JSON 对象，提示在 stderr。\n  文本回执最后一行是「动作：atrium 命令」，没有下一步则省略。\n  退出码与 code：\n  0  成功\n${codes}\n\n常见任务\n  令牌失效：atrium auth rotate（使用当前 ATRIUM_DATA）。\n  拆任务看全貌：atrium task add 目标；atrium task add 子任务 --parent t1；atrium task tree t1；人工收尾：atrium task set t2 --status done\n  派活前看额度：atrium quota；人工解除误判占用：atrium quota --clear claude
+  目标树：atrium goal tree；顶层目标只有你能建改（atrium goal add 结果 --node o1），里程碑由负责部门 leader 或上级 leader 操作（--as aN）：atrium goal add 结果 --parent g1 --node atrium/runtime --criteria 条目 --as a1；任务挂上：atrium task add 标题 --goal g2；达成 atrium goal done g2；归类用的父任务迁为里程碑：atrium goal adopt t21 --parent g1（加 --apply 写入）
   看组织：atrium org tree；atrium org show o2；树为空时先 atrium org import --repo 仓库 预览、加 --apply 写入
   组织技能：atrium skill add web-design ./web-design --reason 原因；atrium skill bind web-design atrium/web；执行者改了挂载副本会生成提议：atrium skill proposals；atrium skill accept p1
   看谁在干什么：atrium top（默认每 2 秒全屏刷新，q 退出；只打一次用 --once，脚本用 --once --json）

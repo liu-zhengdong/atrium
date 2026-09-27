@@ -31,6 +31,7 @@ import {
   type Deliver,
 } from "./deliver.ts";
 import { matchRole, originNode } from "../org/task-node.ts";
+import { goalForTask } from "../goals/task-goal.ts";
 
 /** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
 const roleNode = (
@@ -57,6 +58,8 @@ export type NewTask = {
   auto?: boolean;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
+  /** 挂到目标树的哪个节点（gN）。 */
+  goal?: string | null;
 };
 
 export function createTask(
@@ -78,6 +81,7 @@ export function createTask(
     "after_pr",
     "auto",
     "from",
+    "goal",
   ]);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
@@ -96,9 +100,10 @@ export function createTask(
     const parent = parentOf(db, input.parent);
     const node = roleNode(db, values.role, values.repo);
     const origin = fromNode(db, input.from);
+    const goal = goalForTask(db, input.goal);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,goal_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -111,6 +116,7 @@ export function createTask(
         issue,
         node,
         origin,
+        goal,
         now,
         now,
       );
@@ -121,6 +127,7 @@ export function createTask(
       ...(parent ? { parent: taskRef(parent) } : {}),
       ...(node ? { node: `o${node}` } : {}),
       ...(origin ? { from: `o${origin}` } : {}),
+      ...(goal ? { goal: `g${goal}` } : {}),
     });
     const task = requireRow(db, id);
     return { ...view(task), ...noteView(db, id, task.status) };
@@ -148,10 +155,11 @@ export function updateTask(
     "auto",
     "pr_url",
     "from",
+    "goal",
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、from、status、deliver、issue、after、after_pr、auto、pr_url",
+      "至少修改一项：title、brief_path、role、from、goal、status、deliver、issue、after、after_pr、auto、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -176,6 +184,7 @@ export function updateTask(
     if ("role" in fields)
       fields.node_id = roleNode(db, fields.role as string | null, current.repo);
     if ("from" in input) fields.origin_node_id = fromNode(db, input.from);
+    if ("goal" in input) fields.goal_id = goalForTask(db, input.goal);
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
     setConditions(db, id, input, now);

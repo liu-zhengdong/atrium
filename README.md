@@ -107,11 +107,19 @@ atrium workers confirm claude+opus:high --role 前端 --action tighten
 ## 额度
 
 ```bash
-atrium quota                  # 各账号按富余从多到少，标出额度用尽待恢复的；--json 给脚本
+atrium quota                  # 各账号按富余从多到少，标出来源、读不到的原因和额度用尽待恢复的；--json 给脚本
 atrium quota --clear claude   # 人工解除运行时的额度占用（误判时用），记事件并立即派发排队任务
 ```
 
-额度来自 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota)（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径）。组织树根章程导入后，派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度；导入前仍读 `~/Atrium/charter.md`，缺省 20%。
+额度由 Atrium 自己读（「来源」列写「自带」）：服务进程读各工具本机已登录的凭据，调供应商的用量接口，只读、不刷新对方凭据；同一账号成功缓存 5 分钟、失败 1 分钟，限流按 Retry-After 推迟，读不到时 6 小时内沿用上次读数并注明。目前覆盖 Claude Code、Codex、OpenCode Go：
+
+| 账号     | macOS                                                                   | Linux                                                                      | Windows                                   |
+| -------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------- |
+| claude   | 钥匙串「Claude Code-credentials」，再退回 `~/.claude/.credentials.json` | `~/.claude/.credentials.json`、`$XDG_CONFIG_HOME/claude/.credentials.json` | `%USERPROFILE%\.claude\.credentials.json` |
+| codex    | `~/.config/codex/auth.json`、`~/.codex/auth.json`（`CODEX_HOME` 覆盖）  | 同左                                                                       | 同左（`%USERPROFILE%` 下）                |
+| opencode | `~/.local/share/opencode/auth.json` 的 `opencode-go`                    | `$XDG_DATA_HOME/opencode/auth.json`，缺省同左                              | 同左（`%USERPROFILE%` 下）                |
+
+自带还没覆盖的账号（kimi、grok 等），本机装了 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 就用它补（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径），自带读不到的账号也先用它补并注明；都没有就显示「没有额度数据」，挑执行者退回档案顺序与运行时的额度用尽标记。组织树根章程导入后，派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度；导入前仍读 `~/Atrium/charter.md`，缺省 20%。
 
 ## 事件
 
@@ -336,6 +344,7 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 | `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                |
 | `ATRIUM_WORKERS_DIR`            | 执行者档案目录，默认 `~/Atrium/workers`                    |
 | `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…` |
+| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                |
 | `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                        |
 | `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                             |
 | `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60          |

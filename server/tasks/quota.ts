@@ -1,11 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import {
-  parseOpenquotaRows,
-  readOpenquotaPace,
-  type OpenquotaOptions,
-} from "./openquota.ts";
+import { parseOpenquotaRows } from "./openquota.ts";
+import { readQuotaRows, type QuotaSourceOptions } from "./quota-source.ts";
+import type { QuotaSource } from "../quota-readers/merge.ts";
 import {
   clock,
   DEFAULT_UNKNOWN_HOLD_MS,
@@ -16,7 +14,8 @@ import {
 } from "./quota-holds.ts";
 
 /**
- * 账号额度一览（#267）：服务端读 `openquota pace --json`，按富余降序。
+ * 账号额度一览（#267、#352）：服务端经 quota-source 读额度（自带读取器优先，OpenQuota 补），按富余降序。
+ * 每行带来源（自带 / OpenQuota）与说明（读不到的原因、沿用上次读数等）。
  * 「运行时记录」列取自额度用尽标记（quota-holds 的未到期行），没有标记就留空；
  * 表格给一句话，--json 另给 until / reason 供程序判断。
  */
@@ -29,6 +28,12 @@ export type QuotaRuntime = { note: string; hold: QuotaAccountHold };
 
 export type QuotaAccount = {
   providerId: string;
+  /** 套餐名（如 Max 5x）；不知道为 null。 */
+  plan: string | null;
+  /** 数据来源：builtin 自带读取器、openquota 本机 OpenQuota；两边都没有为 null。 */
+  source: QuotaSource | null;
+  /** 给人看的说明：读不到的原因、没有额度数据、沿用上次读数等；正常为 null。 */
+  note: string | null;
   usedPercent: number | null;
   periodElapsedPercent: number | null;
   sparePercent: number | null;
@@ -41,7 +46,11 @@ export type QuotaAccount = {
   hold: QuotaAccountHold | null;
 };
 
-export type QuotaList = { accounts: QuotaAccount[] };
+export type QuotaList = {
+  accounts: QuotaAccount[];
+  /** 整体提示（如 OpenQuota 装了但读失败）；没有为空数组。 */
+  notes: string[];
+};
 
 /**
  * 恢复时间未知时 quotaReason 写的收尾语（见 quota-holds.ts）。until 为空只可能来自手工写入，
@@ -89,6 +98,13 @@ function providerIdOf(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
 
+const textOf = (value: unknown) =>
+  typeof value === "string" && value ? value : null;
+
+function sourceOf(value: unknown): QuotaSource | null {
+  return value === "builtin" || value === "openquota" ? value : null;
+}
+
 function row(
   item: Record<string, unknown>,
   runtimes: ReadonlyMap<string, QuotaRuntime> = new Map(),
@@ -98,6 +114,9 @@ function row(
   const runtime = runtimes.get(providerId);
   return {
     providerId,
+    plan: textOf(item.plan),
+    source: sourceOf(item.source),
+    note: textOf(item.note),
     usedPercent: finiteNumber(item.usedPercent),
     periodElapsedPercent: finiteNumber(item.periodElapsedPercent),
     sparePercent: finiteNumber(item.sparePercent),
@@ -109,7 +128,7 @@ function row(
   };
 }
 
-/** 从 openquota pace --json 抽出额度行；非对象或缺少 providerId 的项跳过。 */
+/** 从 openquota pace --json 抽出额度行（来源记为 OpenQuota）；非对象或缺少 providerId 的项跳过。 */
 export function parseQuotaAccounts(
   stdout: string,
   runtimes?: ReadonlyMap<string, QuotaRuntime>,
@@ -117,7 +136,14 @@ export function parseQuotaAccounts(
   const data = parseOpenquotaRows(stdout);
   if (!data)
     throw new Problem(400, "OpenQuota 输出无法解析", "service_unavailable");
-  return parseQuotaRows(data, runtimes);
+  return parseQuotaRows(
+    data.map((item) =>
+      item && typeof item === "object"
+        ? { ...item, source: "openquota" }
+        : item,
+    ),
+    runtimes,
+  );
 }
 
 function parseQuotaRows(
@@ -147,7 +173,7 @@ export function sortBySpare(accounts: readonly QuotaAccount[]): QuotaAccount[] {
   });
 }
 
-export type QuotaListOptions = OpenquotaOptions & {
+export type QuotaListOptions = Omit<QuotaSourceOptions, "now"> & {
   /** 额度标记所在的库；没有它（例如未启用任务运行时）就只有额度数据。 */
   db?: DatabaseSync;
   /** 判定标记是否到期的时刻；缺省系统时间。 */
@@ -159,29 +185,19 @@ export type QuotaListOptions = OpenquotaOptions & {
 export async function listQuota(
   options: QuotaListOptions = {},
 ): Promise<QuotaList> {
-  const { db, now = Date.now(), unknownMs, ...openquota } = options;
-  const result = await readOpenquotaPace(openquota);
-  if ("missing" in result)
-    throw new Problem(404, "未找到 OpenQuota", "not_found");
-  if ("error" in result) {
-    const message = {
-      timeout: "读取 OpenQuota 额度超时",
-      parse: "OpenQuota 输出无法解析",
-      failed: "读取 OpenQuota 额度失败",
-    }[result.error];
-    throw new Problem(400, message, "service_unavailable");
-  }
+  const { db, now = Date.now(), unknownMs, ...source } = options;
+  const { rows, notes } = await readQuotaRows({ now: () => now, ...source });
   const runtimes = db
     ? holdRuntimes(listHolds(db), now, unknownMs)
     : new Map<string, QuotaRuntime>();
-  return { accounts: sortBySpare(parseQuotaRows(result.rows, runtimes)) };
+  return { accounts: sortBySpare(parseQuotaRows(rows, runtimes)), notes };
 }
 
 export function registerQuotaRoute(
   app: FastifyInstance,
-  options: { bin?: string; db?: DatabaseSync } = {},
+  options: Pick<QuotaListOptions, "bin" | "db" | "readers"> = {},
 ) {
   // 任务运行时没启用时额度标记表可能还不存在，读之前先确保它在。
   if (options.db) ensureQuotaHoldTable(options.db);
-  app.get("/api/quota", () => listQuota({ bin: options.bin, db: options.db }));
+  app.get("/api/quota", () => listQuota(options));
 }

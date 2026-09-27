@@ -7,9 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { formatQuotaTable } from "../cli/quota.ts";
 import { commands, help } from "../cli/main.ts";
 import { guide } from "../cli/guide.ts";
-import { failure } from "../cli/contract.ts";
 import { createApp } from "../server/app.ts";
-import { Problem } from "../server/problem.ts";
 import {
   holdRuntime,
   holdRuntimes,
@@ -17,6 +15,7 @@ import {
   parseQuotaAccounts,
   sortBySpare,
   type QuotaAccount,
+  type QuotaList,
 } from "../server/tasks/quota.ts";
 import {
   clock,
@@ -94,8 +93,13 @@ function paceScript(payload: unknown) {
 const NOW = Date.now();
 const HOUR = 3_600_000;
 
-function account(partial: Partial<QuotaAccount> & { providerId: string }) {
+function account(
+  partial: Partial<QuotaAccount> & { providerId: string },
+): QuotaAccount {
   return {
+    plan: null,
+    source: null,
+    note: null,
     usedPercent: null,
     periodElapsedPercent: null,
     sparePercent: null,
@@ -259,7 +263,7 @@ test("listQuota：假 pace 按富余降序，没有额度标记时 runtime 为�
   const { dir, done } = temp();
   try {
     const bin = fakeBin(dir, paceScript(SAMPLE));
-    const result = await listQuota({ bin });
+    const result = await listQuota({ bin, readers: null });
     assert.deepEqual(
       result.accounts.map((row) => [
         row.providerId,
@@ -271,8 +275,23 @@ test("listQuota：假 pace 按富余降序，没有额度标记时 runtime 为�
         ["claude", 54.2, null],
         ["codex", -5.6, null],
         ["copilot", null, null],
+        ["grok", null, null],
+        ["kimi", null, null],
       ],
     );
+    assert.deepEqual(
+      result.accounts.map((row) => [row.providerId, row.source, row.note]),
+      [
+        ["opencode", "openquota", null],
+        ["claude", "openquota", null],
+        ["codex", "openquota", null],
+        ["copilot", "openquota", null],
+        ["grok", null, "没有额度数据"],
+        ["kimi", null, "没有额度数据"],
+      ],
+      "关掉自带读取时全部来自 OpenQuota；执行者账号两边都没有补一行没有额度数据",
+    );
+    assert.deepEqual(result.notes, []);
     assert.equal(result.accounts[0]!.usedPercent, 22);
     assert.equal(result.accounts[0]!.shortWindowUsedPercent, 0);
     assert.equal(result.accounts[0]!.refreshedAt, "2026-09-26T17:07:59Z");
@@ -295,7 +314,7 @@ test("listQuota：未到期标记落到对应账号，标记已过期和未标�
       { provider: "claude", until: NOW - 60_000, reason: "额度用尽：claude" },
       NOW - 2 * HOUR,
     );
-    const result = await listQuota({ bin, db, now: NOW });
+    const result = await listQuota({ bin, db, now: NOW, readers: null });
     const byProvider = new Map(
       result.accounts.map((row) => [row.providerId, row]),
     );
@@ -324,13 +343,19 @@ test("listQuota：按兜底时长配置决定 until 为空的手工标记是否�
     db.prepare(
       "INSERT INTO quota_holds(provider,until,reason,since) VALUES (?,?,?,?)",
     ).run("codex", null, "手工标记", NOW - 10 * 60_000);
-    const short = await listQuota({ bin, db, now: NOW, unknownMs: 5 * 60_000 });
+    const short = await listQuota({
+      bin,
+      db,
+      now: NOW,
+      unknownMs: 5 * 60_000,
+      readers: null,
+    });
     assert.equal(
       short.accounts.find((row) => row.providerId === "codex")!.runtime,
       null,
       "5 分钟兜底下已过期",
     );
-    const long = await listQuota({ bin, db, now: NOW });
+    const long = await listQuota({ bin, db, now: NOW, readers: null });
     assert.equal(
       long.accounts.find((row) => row.providerId === "codex")!.runtime,
       "额度用尽，恢复时间未知",
@@ -345,30 +370,36 @@ test("listQuota：按兜底时长配置决定 until 为空的手工标记是否�
   }
 });
 
-test("listQuota：找不到 OpenQuota 时中文提示，不带英文原生错误", async () => {
-  await assert.rejects(
-    () => listQuota({ bin: join(tmpdir(), "no-such-openquota-atrium") }),
-    (error: unknown) => {
-      assert.ok(error instanceof Problem);
-      assert.equal(error.statusCode, 404);
-      assert.equal(error.code, "not_found");
-      assert.match(error.message, /未找到 OpenQuota/);
-      assert.doesNotMatch(error.message, /ENOENT|no such file/i);
-      const cli = failure(error);
-      assert.notEqual(cli.exit, 0);
-      assert.match(cli.message, /未找到 OpenQuota/);
-      return true;
-    },
+test("listQuota：没装 OpenQuota 也不报错，执行者账号显示没有额度数据", async () => {
+  const result = await listQuota({
+    bin: join(tmpdir(), "no-such-openquota-atrium"),
+    readers: null,
+  });
+  assert.deepEqual(result.notes, [], "没装 OpenQuota 是正常情形，不提示");
+  assert.deepEqual(
+    result.accounts.map((row) => [row.providerId, row.source, row.note]),
+    [
+      ["claude", null, "没有额度数据"],
+      ["codex", null, "没有额度数据"],
+      ["grok", null, "没有额度数据"],
+      ["kimi", null, "没有额度数据"],
+      ["opencode", null, "没有额度数据"],
+    ],
   );
+  assert.doesNotMatch(JSON.stringify(result), /ENOENT|no such file/i);
 });
 
-test("listQuota：输出无法解析或非 0 退出时中文失败", async () => {
+test("listQuota：OpenQuota 输出无法解析或非 0 退出时照常返回并附中文提示", async () => {
   const { dir, done } = temp();
   try {
     const bin = fakeBin(dir, "#!/bin/sh\necho oops\n");
-    await assert.rejects(() => listQuota({ bin }), /OpenQuota 输出无法解析/);
+    const parse = await listQuota({ bin, readers: null });
+    assert.deepEqual(parse.notes, ["OpenQuota 输出无法解析"]);
+    assert.equal(parse.accounts.length, 5);
     writeFileSync(bin, "#!/bin/sh\nexit 3\n");
-    await assert.rejects(() => listQuota({ bin }), /读取 OpenQuota 额度失败/);
+    assert.deepEqual((await listQuota({ bin, readers: null })).notes, [
+      "读取 OpenQuota 额度失败",
+    ]);
   } finally {
     done();
   }
@@ -381,6 +412,7 @@ test("listQuota：子进程环境不传凭据", async () => {
     const bin = fakeBin(dir, `#!/bin/sh\nenv > "${seen}"\necho '[]'\n`);
     await listQuota({
       bin,
+      readers: null,
       env: {
         PATH: process.env.PATH,
         HOME: dir,
@@ -397,28 +429,46 @@ test("listQuota：子进程环境不传凭据", async () => {
   }
 });
 
-test("文本表：中文表头、按传入顺序、运行时记录列照服务端文案", () => {
+test("文本表：中文表头、按传入顺序、来源与说明列、运行时记录列照服务端文案", () => {
   const note = `额度用尽，预计 ${clock(NOW + HOUR)} 恢复`;
-  const text = formatQuotaTable([
-    account({ providerId: "opencode", sparePercent: 59.7, usedPercent: 22 }),
-    account({
-      providerId: "codex",
-      runtime: note,
-      hold: { until: NOW + HOUR, reason: null },
-    }),
-    account({ providerId: "copilot" }),
-  ]);
+  const text = formatQuotaTable(
+    [
+      account({
+        providerId: "opencode",
+        source: "builtin",
+        sparePercent: 59.7,
+        usedPercent: 22,
+      }),
+      account({
+        providerId: "codex",
+        source: "openquota",
+        runtime: note,
+        hold: { until: NOW + HOUR, reason: null },
+      }),
+      account({
+        providerId: "claude",
+        source: "builtin",
+        note: "读不到：Claude 用量接口限流",
+      }),
+      account({ providerId: "kimi", note: "没有额度数据" }),
+      account({ providerId: "copilot" }),
+    ],
+    ["读取 OpenQuota 额度超时"],
+  );
   assert.match(
     text,
-    /^账号\s+已用%\s+周期进度%\s+富余%\s+距重置（小时）\s+短窗已用%\s+刷新时间\s+运行时记录$/m,
+    /^账号\s+来源\s+已用%\s+周期进度%\s+富余%\s+距重置（小时）\s+短窗已用%\s+刷新时间\s+运行时记录\s+说明$/m,
   );
   const lines = text.split("\n");
-  assert.match(lines[1]!, /^opencode\s+22\s+59\.7\s*$/);
+  assert.match(lines[1]!, /^opencode\s+自带\s+22\s+59\.7\s*$/);
   assert.match(
     lines[2]!,
-    /^codex\s+额度用尽，预计 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 恢复$/,
+    /^codex\s+OpenQuota\s+额度用尽，预计 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 恢复$/,
   );
-  assert.match(lines[3]!, /^copilot\s*$/);
+  assert.match(lines[3]!, /^claude\s+自带\s+读不到：Claude 用量接口限流$/);
+  assert.match(lines[4]!, /^kimi\s+没有额度数据$/);
+  assert.match(lines[5]!, /^copilot\s*$/);
+  assert.equal(lines[6], "读取 OpenQuota 额度超时");
   assert.equal(formatQuotaTable([]), "没有账号额度数据");
 });
 
@@ -446,6 +496,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
 
     auth: false,
     quotaBin: bin,
+    quotaReaders: null,
   });
   try {
     const ok = await app.inject({
@@ -456,7 +507,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
     const body = ok.json() as { accounts: QuotaAccount[] };
     assert.deepEqual(
       body.accounts.map((row) => row.providerId),
-      ["opencode", "claude", "codex", "copilot"],
+      ["opencode", "claude", "codex", "copilot", "grok", "kimi"],
     );
     assert.equal(body.accounts[0]!.runtime, null);
     assert.equal(body.accounts[0]!.hold, null);
@@ -520,15 +571,21 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
 
     auth: false,
     quotaBin: join(dir, "missing-openquota"),
+    quotaReaders: null,
   });
   try {
-    const failed = await missing.app.inject({
+    const listed = await missing.app.inject({
       url: "/api/quota",
       headers: { host: "127.0.0.1" },
     });
-    assert.equal(failed.statusCode, 404);
-    assert.match(failed.json().error, /未找到 OpenQuota/);
-    assert.doesNotMatch(JSON.stringify(failed.json()), /ENOENT|no such file/i);
+    assert.equal(listed.statusCode, 200, "没装 OpenQuota 不再是错误");
+    const body = listed.json() as QuotaList;
+    assert.deepEqual(body.notes, []);
+    assert.equal(
+      body.accounts.every((row) => row.note === "没有额度数据"),
+      true,
+    );
+    assert.doesNotMatch(JSON.stringify(body), /ENOENT|no such file/i);
   } finally {
     await missing.app.close();
   }

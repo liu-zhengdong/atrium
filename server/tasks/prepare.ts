@@ -3,7 +3,9 @@ import { isAbsolute, join, sep } from "node:path";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
 import { trustRefusal } from "./plan.ts";
-import { parseOpenquotaRows, readOpenquotaPace } from "./openquota.ts";
+import { parseOpenquotaRows } from "./openquota.ts";
+import { readQuotaRows, type QuotaSourceOptions } from "./quota-source.ts";
+import { hasQuotaData } from "../quota-readers/merge.ts";
 import { clock } from "./quota-holds.ts";
 import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
 import { idleFirst } from "./idle-first.ts";
@@ -109,7 +111,7 @@ export async function loadRoleDocs(
     : { roleDoc: "", rootDoc };
 }
 
-/** openquota pace --json 的一条记录；只取用到的字段。 */
+/** 额度 pace 行（自带读取器或 openquota pace --json）；只取用到的字段。 */
 export type PaceEntry = {
   providerId: string;
   sparePercent: number | null;
@@ -118,13 +120,18 @@ export type PaceEntry = {
   hoursToReset?: number | null;
 };
 
-/** 调 `openquota pace --json`；没装、超时、输出不是预期 JSON 都返回 undefined。 */
+/**
+ * 读各账号额度（quota-source：自带读取器优先，OpenQuota 补）；一个有数据的账号都没有时返回 undefined，
+ * 挑执行者退回档案与运行时额度用尽标记。读不到的账号不进结果。
+ */
 export async function readPace(
   bin?: string,
   timeoutMs = 10_000,
+  source: Omit<QuotaSourceOptions, "bin" | "timeoutMs"> = {},
 ): Promise<PaceEntry[] | undefined> {
-  const result = await readOpenquotaPace({ bin, timeoutMs });
-  return "ok" in result ? parsePaceRows(result.rows) : undefined;
+  const { rows } = await readQuotaRows({ ...source, bin, timeoutMs });
+  const entries = parsePaceRows(rows.filter(hasQuotaData));
+  return entries.length ? entries : undefined;
 }
 
 export function parsePace(text: string): PaceEntry[] | undefined {

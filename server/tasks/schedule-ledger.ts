@@ -62,6 +62,42 @@ export function conditions(db: DatabaseSync, id: number): Conditions {
   };
 }
 
+/** 一页任务的依赖条件批量取（k23）：常数条查询，不随任务数线性增长。 */
+export function conditionsOfMany(
+  db: DatabaseSync,
+  ids: number[],
+): Map<number, Conditions> {
+  const result = new Map<number, Conditions>(
+    ids.map((id) => [id, { after: [], after_pr: [] }]),
+  );
+  if (!ids.length) return result;
+  const list = ids.map(() => "?").join(",");
+  for (const row of all<{ task_id: number; after_id: number }>(
+    db,
+    `SELECT task_id,after_id FROM task_dependencies WHERE task_id IN (${list}) ORDER BY task_id,after_id`,
+    ...ids,
+  )) {
+    const found = result.get(row.task_id);
+    if (found) found.after.push(taskRef(row.after_id));
+  }
+  for (const row of all<PrCondition & { task_id: number }>(
+    db,
+    `SELECT task_id,repo,number,merged,checked_at,error FROM task_pr_dependencies WHERE task_id IN (${list}) ORDER BY task_id,repo,number`,
+    ...ids,
+  )) {
+    const found = result.get(row.task_id);
+    if (found)
+      found.after_pr.push({
+        repo: row.repo,
+        number: row.number,
+        merged: !!row.merged,
+        checked_at: row.checked_at,
+        error: row.error,
+      });
+  }
+  return result;
+}
+
 export function setConditions(
   db: DatabaseSync,
   id: number,

@@ -176,7 +176,25 @@ export function ensureTaskTables(db: DatabaseSync) {
     CREATE TABLE IF NOT EXISTS task_pr_dependencies (
     task_id INTEGER NOT NULL REFERENCES tasks(id), repo TEXT NOT NULL, number INTEGER NOT NULL,
     merged INTEGER NOT NULL DEFAULT 0, checked_at INTEGER, error TEXT,
-    PRIMARY KEY(task_id,repo,number));`);
+    PRIMARY KEY(task_id,repo,number));
+    CREATE INDEX IF NOT EXISTS task_pr_dependencies_pr ON task_pr_dependencies(repo,number);`);
+  // 外部 PR 也记下一次可查时刻与连败次数（t122）：查不到的退避，不再每分钟空转。
+  const prColumns = all<{ name: string }>(
+    db,
+    "PRAGMA table_info(task_pr_dependencies)",
+  );
+  if (!prColumns.some((column) => column.name === "next_check_at"))
+    db.exec(
+      "ALTER TABLE task_pr_dependencies ADD COLUMN next_check_at INTEGER",
+    );
+  if (!prColumns.some((column) => column.name === "attempts"))
+    db.exec(
+      "ALTER TABLE task_pr_dependencies ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+    );
+  // 旧库补下一次可查时刻：沿用上次查询的一分钟节奏，避免升级瞬间全体重查。
+  db.exec(
+    "UPDATE task_pr_dependencies SET next_check_at=COALESCE(checked_at,0)+60000 WHERE next_check_at IS NULL AND merged=0",
+  );
   ensureUpstreamPrTable(db);
   repairScheduleRecords(db);
   ensureUsageTable(db);

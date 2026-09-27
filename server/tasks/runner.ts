@@ -443,6 +443,8 @@ export class TaskRunner {
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
   async close() {
     this.closed = true;
+    // 先让巡检收手：中止在跑的 gh / git，别等子进程超时（t122）。
+    this.scheduler.close();
     // 先唤醒 HTTP 长轮询及内部事件消费者；后台工作可能仍在等事件。
     this.inbox.close();
     this.waits.close();

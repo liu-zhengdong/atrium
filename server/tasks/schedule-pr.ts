@@ -27,6 +27,7 @@ export const schedulePrExec: Exec = (command, args, options = {}) =>
         cwd: options.cwd ?? homedir(),
         timeout: options.timeoutMs ?? 15_000,
         maxBuffer: 64 * 1024,
+        ...(options.signal ? { signal: options.signal } : {}),
       },
       (error, stdout, stderr) =>
         resolve({

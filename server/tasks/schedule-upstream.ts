@@ -1,12 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { all, type TaskRow } from "./ledger-model.ts";
-import { firstLine, type Exec } from "./git.ts";
-import { originRepo, parsePrUrl, repoFlag } from "./gh-repo.ts";
 
 /**
  * 上游交付 PR 的合入状态（#262）：运行时的 done 只表示交付物过了关卡，
  * 合入由交付关卡后的运行时队列完成；`--after tN` 在 tN 交付 PR 时要等这个 PR 合入。
- * 状态按上游任务缓存，多个下游共用一次查询。
+ * 状态按上游任务缓存，多个下游共用一次查询。刷新与退避在 schedule-refresh.ts。
  */
 
 export type PrState = "open" | "merged" | "closed";
@@ -42,10 +40,34 @@ export function releaseOf(facts: {
   return facts.online_failed ? "failed" : undefined;
 }
 
+/** 本地已记下合入的任务：不必再问 gh。 */
+export function locallyMerged(row: {
+  delivery_stage: TaskRow["delivery_stage"];
+  merge_commit: string | null;
+}): boolean {
+  return (
+    row.delivery_stage === "merged" ||
+    row.delivery_stage === "online" ||
+    row.merge_commit !== null
+  );
+}
+
 export function ensureUpstreamPrTable(db: DatabaseSync) {
   db.exec(`CREATE TABLE IF NOT EXISTS task_pr_merge (
     task_id INTEGER PRIMARY KEY REFERENCES tasks(id), pr_url TEXT NOT NULL,
     state TEXT CHECK(state IN ('open','merged','closed')), checked_at INTEGER, error TEXT);`);
+  const columns = all<{ name: string }>(db, "PRAGMA table_info(task_pr_merge)");
+  // 关闭与查不到的 PR 退避（t122）：记下下次可查时刻与连败次数，不再每分钟空转。
+  if (!columns.some((column) => column.name === "next_check_at"))
+    db.exec("ALTER TABLE task_pr_merge ADD COLUMN next_check_at INTEGER");
+  if (!columns.some((column) => column.name === "attempts"))
+    db.exec(
+      "ALTER TABLE task_pr_merge ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+    );
+  // 旧库没有 next_check_at：按上次查询时刻沿用一分钟节奏补上，避免升级瞬间全体重查。
+  db.exec(
+    "UPDATE task_pr_merge SET next_check_at=COALESCE(checked_at,0)+60000 WHERE next_check_at IS NULL",
+  );
 }
 
 export function prNumber(url: string): number | null {
@@ -54,11 +76,20 @@ export function prNumber(url: string): number | null {
   return Number.isSafeInteger(number) ? number : null;
 }
 
-type Upstream = Pick<TaskRow, "id" | "status" | "deliver" | "pr_url" | "repo">;
-type UpstreamRow = Upstream & Pick<TaskRow, "delivery_stage" | "online_wait">;
+type Upstream = Pick<
+  TaskRow,
+  | "id"
+  | "status"
+  | "deliver"
+  | "pr_url"
+  | "repo"
+  | "delivery_stage"
+  | "merge_commit"
+  | "online_wait"
+>;
 
 /** 只有交付 PR 且已记下链接的 done 任务才要等合入；comment、none 或没记 PR 的，done 即满足。 */
-function watched(row: Upstream): row is Upstream & { pr_url: string } {
+export function watched(row: Upstream): row is Upstream & { pr_url: string } {
   return (
     row.status === "done" &&
     row.deliver === "pr" &&
@@ -80,9 +111,9 @@ function onlineFailed(db: DatabaseSync, id: number) {
 export function dependencyOf(db: DatabaseSync, id: number): Dependency {
   const row = db
     .prepare(
-      "SELECT id,status,deliver,pr_url,repo,delivery_stage,online_wait FROM tasks WHERE id=?",
+      "SELECT id,status,deliver,pr_url,repo,delivery_stage,merge_commit,online_wait FROM tasks WHERE id=?",
     )
-    .get(id) as UpstreamRow;
+    .get(id) as Upstream;
   const ref = `t${id}`;
   if (!watched(row)) return { ref, status: row.status };
   const release = releaseOf({
@@ -99,16 +130,90 @@ export function dependencyOf(db: DatabaseSync, id: number): Dependency {
     )
     .get(id, row.pr_url) as
     { state: PrState | null; error: string | null } | undefined;
+  // 本地已合入的（#322 合入队列）不必等 gh 结果。
+  const state = locallyMerged(row) ? "merged" : (cached?.state ?? null);
   return {
     ref,
     status: row.status,
     pr: {
       number: prNumber(row.pr_url)!,
-      state: cached?.state ?? null,
-      error: cached?.error ?? null,
+      state,
+      error: state === "merged" ? null : (cached?.error ?? null),
     },
     ...(release ? { release } : {}),
   };
+}
+
+/** 一页用到的上游任务批量取依赖状态（k23）：常数条查询，不随下游数线性增长。 */
+export function dependencyOfMany(
+  db: DatabaseSync,
+  ids: number[],
+): Map<number, Dependency> {
+  const result = new Map<number, Dependency>();
+  if (!ids.length) return result;
+  const list = ids.map(() => "?").join(",");
+  const rows = all<Upstream>(
+    db,
+    `SELECT id,status,deliver,pr_url,repo,delivery_stage,merge_commit,online_wait FROM tasks WHERE id IN (${list})`,
+    ...ids,
+  );
+  // 合入后最近一次上线结论（t130）：只看停在 merged、不等上线的，一条查询取各自最新一条。
+  const settled = rows.filter(
+    (row) => row.delivery_stage === "merged" && row.online_wait === 0,
+  );
+  const failed = new Set<number>();
+  if (settled.length)
+    for (const row of all<{ task_id: number; kind: string }>(
+      db,
+      `SELECT task_id,kind FROM task_events WHERE id IN (SELECT MAX(id) FROM task_events WHERE task_id IN (${settled.map(() => "?").join(",")}) AND kind IN ('merged','online','online_backfilled','online_failed') GROUP BY task_id)`,
+      ...settled.map((row) => row.id),
+    ))
+      if (row.kind === "online_failed") failed.add(row.task_id);
+  const cached = new Map<
+    number,
+    { pr_url: string; state: PrState | null; error: string | null }
+  >();
+  for (const row of all<{
+    task_id: number;
+    pr_url: string;
+    state: PrState | null;
+    error: string | null;
+  }>(
+    db,
+    `SELECT task_id,pr_url,state,error FROM task_pr_merge WHERE task_id IN (${list})`,
+    ...ids,
+  ))
+    cached.set(row.task_id, row);
+  for (const row of rows) {
+    const ref = `t${row.id}`;
+    if (!watched(row)) {
+      result.set(row.id, { ref, status: row.status });
+      continue;
+    }
+    const release = releaseOf({
+      delivery_stage: row.delivery_stage,
+      online_wait: row.online_wait,
+      online_failed: failed.has(row.id),
+    });
+    const hit = cached.get(row.id);
+    const fresh = hit?.pr_url === row.pr_url;
+    const state = locallyMerged(row)
+      ? "merged"
+      : fresh
+        ? (hit!.state ?? null)
+        : null;
+    result.set(row.id, {
+      ref,
+      status: row.status,
+      pr: {
+        number: prNumber(row.pr_url)!,
+        state,
+        error: state === "merged" ? null : fresh ? (hit!.error ?? null) : null,
+      },
+      ...(release ? { release } : {}),
+    });
+  }
+  return result;
 }
 
 /** gh 的 state 字段：MERGED、CLOSED、OPEN；读不懂就报错，不当作合入。 */
@@ -120,78 +225,4 @@ export function parsePrState(stdout: string): PrState {
   throw new Error(`gh 返回的 PR 状态看不懂：${String(parsed.state)}`);
 }
 
-/** 刷新某任务全部上游的 PR 状态；已合入的不再查，其余每分钟最多查一次。 */
-export async function refreshUpstreamPrs(
-  db: DatabaseSync,
-  taskId: number,
-  now: number,
-  run: Exec,
-) {
-  const rows = all<
-    Upstream & {
-      cached_url: string | null;
-      checked_at: number | null;
-      state: PrState | null;
-    }
-  >(
-    db,
-    `SELECT t.id,t.status,t.deliver,t.pr_url,t.repo,m.pr_url AS cached_url,m.checked_at,m.state
-     FROM task_dependencies d JOIN tasks t ON t.id=d.after_id LEFT JOIN task_pr_merge m ON m.task_id=t.id
-     WHERE d.task_id=? AND t.status='done' AND t.deliver='pr' AND t.pr_url IS NOT NULL
-     ORDER BY t.id LIMIT 20`,
-    taskId,
-  );
-  for (const row of rows) {
-    if (!watched(row)) continue;
-    const fresh = row.cached_url === row.pr_url;
-    if (
-      fresh &&
-      (row.state === "merged" ||
-        (row.checked_at !== null && row.checked_at >= now - 60_000))
-    )
-      continue;
-    let state: PrState | null = null;
-    let error: string | null = null;
-    try {
-      const target = await ghTarget(row, run);
-      const result = await run(
-        "gh",
-        [
-          "pr",
-          "view",
-          String(prNumber(row.pr_url)),
-          "-R",
-          target,
-          "--json",
-          "state,mergedAt",
-        ],
-        { timeoutMs: 15_000 },
-      );
-      if (!result.ok)
-        throw new Error(firstLine(result.stderr) || "gh 查询失败");
-      state = parsePrState(result.stdout);
-    } catch (cause) {
-      error = (cause instanceof Error ? cause.message : String(cause)).slice(
-        0,
-        300,
-      );
-      // 查询失败保留上次查到的状态，只记下错误。
-      state = fresh ? row.state : null;
-    }
-    db.prepare(
-      `INSERT INTO task_pr_merge(task_id,pr_url,state,checked_at,error) VALUES (?,?,?,?,?)
-       ON CONFLICT(task_id) DO UPDATE SET pr_url=excluded.pr_url,state=excluded.state,checked_at=excluded.checked_at,error=excluded.error`,
-    ).run(row.id, row.pr_url, state, now, error);
-  }
-}
-
-/** `-R` 目标按任务仓库的 origin 解析；任务没记仓库或 origin 不是托管地址时用 PR 链接里的仓库。 */
-async function ghTarget(row: Upstream & { pr_url: string }, run: Exec) {
-  if (row.repo) {
-    const origin = await originRepo(row.repo, run);
-    if ("repo" in origin) return repoFlag(origin.repo);
-  }
-  const fromUrl = parsePrUrl(row.pr_url);
-  if (!fromUrl) throw new Error(`PR 链接 ${row.pr_url} 解析不出 owner/repo`);
-  return repoFlag(fromUrl);
-}
+export type { Upstream };

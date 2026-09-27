@@ -7,7 +7,11 @@ import { WORKER_FLAG } from "../cli/worker-guard.ts";
  * 只用于测试的子进程：服务给执行者设的 ATRIUM_WORKER 由 server/tasks/worker-env.ts 负责。
  */
 export function childEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, ...overrides };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ATRIUM_TEST_DISK_FREE_GB: "1000",
+    ...overrides,
+  };
   delete env[WORKER_FLAG];
   return env;
 }

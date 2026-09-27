@@ -41,6 +41,11 @@ export function runnerEnvOptions(env: NodeJS.ProcessEnv = process.env) {
   const unknown = Number(env.ATRIUM_QUOTA_UNKNOWN_MINUTES);
   if (Number.isFinite(unknown) && unknown > 0)
     options.quotaUnknownMs = unknown * 60_000;
+  // 仅 node:test 派生的隔离服务可模拟磁盘；生产服务始终读 statfs。
+  if (env.NODE_TEST_CONTEXT && env.ATRIUM_TEST_DISK_FREE_GB) {
+    const gb = Number(env.ATRIUM_TEST_DISK_FREE_GB);
+    if (Number.isFinite(gb) && gb >= 0) options.diskFreeGb = async () => gb;
+  }
   return options;
 }
 
@@ -88,9 +93,11 @@ export function registerTaskRoutes(
   app.get("/api/tasks/:id", (request) =>
     getTask(db, params(request.params).id),
   );
-  app.patch("/api/tasks/:id", { bodyLimit: 64 * 1024 }, (request) =>
-    updateTask(db, params(request.params).id, request.body),
-  );
+  app.patch("/api/tasks/:id", { bodyLimit: 64 * 1024 }, async (request) => {
+    const task = updateTask(db, params(request.params).id, request.body);
+    if (task.status === "cancelled") await runner.cleanupCancelled(task.id);
+    return getTask(db, task.id);
+  });
   app.post("/api/tasks/:id/note", { bodyLimit: 4 * 1024 }, (request) =>
     addTaskNote(db, params(request.params).id, request.body),
   );

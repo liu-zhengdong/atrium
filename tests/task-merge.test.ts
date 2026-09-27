@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -65,6 +65,33 @@ test("合入队列按入队时间处理，后续任务更新时间不插队", as
   assert.equal(started.task_id, 1);
   queue.close();
   db.close();
+});
+
+test("任务取消后立即移除有未提交文件的工作树", async (t) => {
+  const { fx, call, app } = await startApp(t);
+  const created = await call("POST", "/api/tasks", {
+    title: "取消任务",
+    repo: fx.repo,
+  });
+  assert.equal(created.status, 201);
+  const ref = created.body.ref as string;
+  const started = await call("POST", `/api/tasks/${ref}/run`, {
+    worker: "kimi",
+  });
+  assert.equal(started.status, 200);
+  const path = started.body.task.worktree as string;
+  const waited = await call("GET", `/api/tasks/${ref}/wait?timeout=20`);
+  assert.equal(waited.body.task.status, "blocked");
+  writeFileSync(join(path, "untracked.txt"), "unfinished");
+  const cancelled = await app.inject({
+    method: "PATCH",
+    url: `/api/tasks/${ref}`,
+    headers: { host: "127.0.0.1" },
+    payload: { status: "cancelled" },
+  });
+  assert.equal(cancelled.statusCode, 200);
+  assert.equal(cancelled.json().worktree, null);
+  assert.equal(existsSync(path), false);
 });
 
 for (const scenario of [
@@ -200,10 +227,11 @@ for (const scenario of [
     });
     assert.equal(created.status, 201);
     const ref = created.body.ref as string;
-    assert.equal(
-      (await call("POST", `/api/tasks/${ref}/run`, { worker: "kimi" })).status,
-      200,
-    );
+    const started = await call("POST", `/api/tasks/${ref}/run`, {
+      worker: "kimi",
+    });
+    assert.equal(started.status, 200);
+    const worktree = started.body.task.worktree as string;
     if (scenario === "stopped") {
       const until = Date.now() + 10_000;
       for (;;) {
@@ -229,6 +257,14 @@ for (const scenario of [
       assert.equal(task.merge_returns, 0);
       assert.equal(mergeCalls, 1);
       assert.equal(merged, true);
+      assert.equal(task.worktree, null);
+      assert.equal(existsSync(worktree), false);
+      assert.equal(
+        execFileSync("git", ["-C", fx.repo, "branch", "--list", headBranch], {
+          encoding: "utf8",
+        }).trim(),
+        "",
+      );
     } else if (scenario === "wrong_origin" || scenario === "stopped") {
       assert.equal(task.status, "blocked");
       assert.equal(task.delivery_stage, null);
@@ -240,6 +276,7 @@ for (const scenario of [
       );
     } else {
       assert.equal(task.status, "blocked");
+      assert.ok(task.worktree && existsSync(task.worktree));
       assert.equal(task.delivery_stage, null);
       assert.equal(task.merge_returns, 3);
       assert.equal(mergeCalls, scenario === "merge_failed" ? 3 : 0);

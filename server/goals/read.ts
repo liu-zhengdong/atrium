@@ -12,6 +12,8 @@ import {
 } from "./model.ts";
 import { STATUS_LABEL, prerequisiteMet, type GoalStatus } from "./rules.ts";
 import { summarize, type GoalSummary } from "./summary.ts";
+import { itemStates, readiness } from "./check-rules.ts";
+import { checkView, latestChecks, type CheckRow } from "./checks.ts";
 
 export type GoalTasks = {
   todo: number;
@@ -47,7 +49,17 @@ type Context = {
   byId: Map<number, GoalRow>;
   after: Map<number, number[]>;
   org: Map<number, { name: string; path: string }>;
+  checks: Map<number, CheckRow[]>;
 };
+/** 只建目标表的旧库（或单测）可能还没有判定表。 */
+function checksOf(db: DatabaseSync) {
+  return all<{ name: string }>(
+    db,
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='goal_checks'",
+  ).length
+    ? latestChecks(db)
+    : new Map<number, CheckRow[]>();
+}
 function context(db: DatabaseSync, goals?: GoalRow[]): Context {
   const list = goals ?? allGoals(db);
   const after = new Map<number, number[]>();
@@ -59,7 +71,12 @@ function context(db: DatabaseSync, goals?: GoalRow[]): Context {
     for (const n of nodeList)
       org.set(n.id, { name: n.name, path: nodePath(nodeList, n) });
   }
-  return { byId: new Map(list.map((g) => [g.id, g])), after, org };
+  return {
+    byId: new Map(list.map((g) => [g.id, g])),
+    after,
+    org,
+    checks: checksOf(db),
+  };
 }
 
 function view(row: GoalRow, ctx: Context) {
@@ -77,6 +94,8 @@ function view(row: GoalRow, ctx: Context) {
         ]
       : [];
   });
+  const items = itemStates(criteria.items, ctx.checks.get(row.id) ?? []);
+  const ready = readiness(row.status, items, after);
   return {
     ref: goalRef(row.id),
     parent_ref: row.parent_id === null ? null : goalRef(row.parent_id),
@@ -84,6 +103,15 @@ function view(row: GoalRow, ctx: Context) {
     result: row.result,
     criteria: criteria.items,
     ...(criteria.broken ? { criteria_broken: true } : {}),
+    // 每条的最新判定与证据（#313 第 2 步）；ready 为真时提示可标达成，不自动标。
+    items: items.map((i) => ({
+      n: i.n,
+      text: i.text,
+      command: i.command,
+      latest: i.latest ? checkView(i.latest) : null,
+    })),
+    ready: ready.ready,
+    ready_blockers: ready.blockers,
     status: row.status,
     status_label: STATUS_LABEL[row.status],
     note: row.note,
@@ -91,6 +119,7 @@ function view(row: GoalRow, ctx: Context) {
     node_name: ctx.org.get(row.node_id)?.name ?? null,
     node_path: ctx.org.get(row.node_id)?.path ?? null,
     due: row.due,
+    repo: row.repo,
     after,
     waiting_for: after.filter((p) => !p.met).map((p) => p.ref),
     updated_by: row.updated_by,

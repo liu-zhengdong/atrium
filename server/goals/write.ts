@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { isAbsolute, normalize } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import {
@@ -33,6 +35,7 @@ import {
   type Permission,
 } from "./rules.ts";
 import { goalView, hasTaskGoals } from "./read.ts";
+import { criterionProblem } from "./check-rules.ts";
 
 const RESULT_MAX = 200;
 const CRITERION_MAX = 500;
@@ -60,7 +63,27 @@ function criteriaOf(value: unknown): string[] {
       throw usage(`--criteria: 每条不能超过 ${CRITERION_MAX} 字`);
   if (new Set(items).size !== items.length)
     throw usage("--criteria: 验收标准不能重复");
+  for (const item of items) {
+    const problem = criterionProblem(item);
+    if (problem) throw usage(`--criteria: ${problem}（收到：${item}）`);
+  }
   return items;
+}
+/** 命令型验收在哪个仓库跑：已存在目录的绝对路径，不含 `..`；空值清掉。 */
+function repoOf(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !isAbsolute(value.trim()))
+    throw usage("--repo: 应为仓库的绝对路径");
+  const path = value.trim();
+  if (path.split(/[\\/]/).includes("..")) throw usage("--repo: 路径不能含 ..");
+  let dir = false;
+  try {
+    dir = statSync(path).isDirectory();
+  } catch {
+    /* 下面统一报 */
+  }
+  if (!dir) throw usage(`--repo: 目录不存在：${path}`);
+  return normalize(path).replace(/\/+$/, "") || "/";
 }
 function dueOf(value: unknown): string | null {
   if (value === undefined || value === null || value === "") return null;
@@ -162,10 +185,12 @@ export function addGoal(
     "after",
     "due",
     "status",
+    "repo",
   ]);
   const result = resultOf(input.result),
     criteria = criteriaOf(input.criteria),
     due = dueOf(input.due),
+    repo = repoOf(input.repo),
     after = afterOf(input.after);
   const status = input.status ?? "planned";
   if (status !== "planned" && status !== "active")
@@ -191,7 +216,7 @@ export function addGoal(
     if (parent) checkDepth(goals, parent);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO goals(parent_id,result,criteria,status,node_id,due,updated_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO goals(parent_id,result,criteria,status,node_id,due,repo,updated_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         parent?.id ?? null,
@@ -200,6 +225,7 @@ export function addGoal(
         status,
         node.id,
         due,
+        repo,
         actor,
         now,
         now,
@@ -228,11 +254,12 @@ export function editGoal(
     "due",
     "status",
     "note",
+    "repo",
   ];
   onlyKeys(input, keys);
   if (!Object.keys(input).length)
     throw usage(
-      "至少改一项：--result、--criteria、--node、--parent、--after、--due、--status、--note",
+      "至少改一项：--result、--criteria、--node、--parent、--after、--due、--repo、--status、--note",
     );
   const fields: Record<string, string | number | null> = {};
   if ("result" in input) fields.result = resultOf(input.result);
@@ -240,6 +267,7 @@ export function editGoal(
     fields.criteria = JSON.stringify(criteriaOf(input.criteria));
   if ("due" in input) fields.due = dueOf(input.due);
   if ("note" in input) fields.note = noteOf(input.note);
+  if ("repo" in input) fields.repo = repoOf(input.repo);
   const after = "after" in input ? afterOf(input.after) : undefined;
   return transaction(db, () => {
     const current = requireGoal(db, id);

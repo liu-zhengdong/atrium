@@ -225,7 +225,7 @@ export const orgCommands: Record<string, Command> = {
               `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${formatCounts(n.tasks, n.sent)}${n.archived_at ? " · 已归档" : ""}`,
           )
           .join("\n") || "组织树为空",
-        "atrium org show o1",
+        rows.length ? "atrium org show o1" : "atrium org import",
       );
     },
   },

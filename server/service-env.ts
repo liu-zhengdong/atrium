@@ -90,10 +90,10 @@ export function serviceEnvironment(base: NodeJS.ProcessEnv = process.env): {
   };
 }
 
-/** start/restart 回执：一行变量名，说明身份只用分配的账号；不打印值。 */
+/** start/restart 回执：一行变量名，说明服务与执行者不继承它们；不打印值。 */
 export function reportDroppedIdentity(names: readonly string[]) {
   if (!names.length) return;
   console.error(
-    `已忽略身份/凭据环境变量：${names.join(", ")}；身份只用分配的账号。`,
+    `已忽略身份/凭据环境变量：${names.join(", ")}；服务与执行者不继承这些变量。`,
   );
 }

@@ -138,7 +138,7 @@ export async function restart({
     console.error(`原版本：v${finalState.fromVersion}`);
     console.error(`失败版本：v${finalState.failedVersion}`);
     console.error(`失败原因：${finalState.error}`);
-    console.error("回滚记录可在 Atrium 网页查看；Agent 消息箱也会收到通知。");
+    console.error("回滚经过记在数据目录的 supervisor.log。");
     recordResult({
       status: "rolled_back",
       from: finalState.fromVersion,

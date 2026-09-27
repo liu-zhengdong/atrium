@@ -64,7 +64,7 @@ export function guide(commands: Record<string, Command>) {
     )
     .join("\n");
   return `Atrium 命令行说明书\n\n调用约定\n  任务用 t1，组织节点用 o1，用户用 u1，组织节点 leader 用 a1。\n  task/events 的 --as 是事件订阅者名，缺省 secretary；org 的 --as 是 u1 或某个节点 leader 的 aN，缺省 u1。\n  所有命令支持 --json：成功 {"ok":true,"result":接口结果,"next":下一步命令或null}；失败 {"ok":false,"error":{"code","message","candidates"?},"next":修正命令或null}。只在 stdout 写一个 JSON 对象，提示在 stderr。\n  文本回执最后一行是「动作：atrium 命令」，没有下一步则省略。\n  退出码与 code：\n  0  成功\n${codes}\n\n常见任务\n  令牌失效：atrium auth rotate（使用当前 ATRIUM_DATA）。\n  拆任务看全貌：atrium task add 目标；atrium task add 子任务 --parent t1；atrium task tree t1；人工收尾：atrium task set t2 --status done\n  派活前看额度：atrium quota；人工解除误判占用：atrium quota --clear claude
-  看组织：atrium org tree；atrium org show o2
+  看组织：atrium org tree；atrium org show o2；树为空时先 atrium org import --repo 仓库 预览、加 --apply 写入
   看谁在干什么：atrium top（默认每 2 秒全屏刷新，q 退出；只打一次用 --once，脚本用 --once --json）
   派活并等结果：atrium task run t2 --worker opencode；atrium task wait t2；atrium task log t2 --follow\n  等事件：atrium events wait --as secretary；处理完 atrium events ack 12；取走的事件处理中 15 分钟内不重投（ATRIUM_EVENT_LEASE_MINUTES 可调），到点仍未确认才重投；自己 task stop 引出的事件不投给自己\n  空闲时重启：atrium restart --when-idle；进度看 atrium status\n  报错后怎么办：按候选短号重试，或执行回执里的修正命令。\n\n命令参考（由命令表生成）\n${reference}`;
 }

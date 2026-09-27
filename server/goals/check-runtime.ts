@@ -209,20 +209,21 @@ export class GoalChecker {
         mkdirSync(base, { recursive: true, mode: 0o700 });
         const fd = openSync(log, "w", 0o600);
         let prepared: { cleanup: () => Promise<void> } | null = null;
+        let outcome: Parameters<typeof finishCheck>[2];
         const from = writeSync(fd, `$ ${command}\n`);
         try {
           prepared = await this.prepare(work, repo, fd);
-          const outcome = await this.spawn(checkId, command, work, fd);
+          const runOutcome = await this.spawn(checkId, command, work, fd);
           closeSync(fd);
           const output = summarize(logTail(log, from));
-          finishCheck(this.db, checkId, {
-            ...outcome,
+          outcome = {
+            ...runOutcome,
             summary:
-              outcome.result === "timeout" || !output
-                ? [output, outcome.detail].filter(Boolean).join("\n")
+              runOutcome.result === "timeout" || !output
+                ? [output, runOutcome.detail].filter(Boolean).join("\n")
                 : output,
             log,
-          });
+          };
         } catch (error) {
           try {
             closeSync(fd);
@@ -231,16 +232,18 @@ export class GoalChecker {
           }
           const message =
             error instanceof Error ? error.message : String(error);
-          finishCheck(this.db, checkId, {
+          outcome = {
             result: "error",
             exit_code: null,
             summary: summarize(message),
             log,
-          });
+          };
         } finally {
           await prepared?.cleanup().catch(() => undefined);
           rmSync(work, { recursive: true, force: true });
         }
+        // 等 worktree 注销、目录删除后才公布结论；wait 的调用方据此可立即检查现场。
+        finishCheck(this.db, checkId, outcome);
       });
     } catch (error) {
       if (this.closed) return;

@@ -8,6 +8,7 @@ import { defaultBranch, firstLine, type Exec } from "./git.ts";
 import { originRepo, parsePrUrl, repoFlag } from "./gh-repo.ts";
 import { atomically, getTask, noteTask, type Task } from "./ledger.ts";
 import { runLocalCheck } from "./local-check.ts";
+import type { CheckDispatch } from "../hosts/check-runtime.ts";
 import { mergeFailure } from "./merge-decision.ts";
 import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
 import { MergeClaim } from "./merge-claim.ts";
@@ -69,6 +70,8 @@ export class MergeQueue {
       onMerged?: (id: number) => void;
       /** GitHub PR 头视图追上推送的最长等待时间；测试可缩短。 */
       prHeadWaitMs?: number;
+      /** 重跑检查派到哪台（#358 第 2 步）；缺省在本机跑。合入本身仍在本机。 */
+      checks?: CheckDispatch;
     },
   ) {
     this.claim = new MergeClaim(db);
@@ -480,20 +483,42 @@ export class MergeQueue {
     noteTask(this.db, task.id, "merge_rebased", { head: checkedHead });
     this.options.publish(task.id, "merge_rebased", { head: checkedHead });
     this.options.publish(task.id, "local_check_started", {});
-    const checked = await runLocalCheck({
+    const request = {
       worktree,
       taskDir: taskDir(this.options.data, task.id),
       env: this.options.env,
       signal: this.abort.signal,
       urgent: task.urgent === 1,
-      onStatus: (status, log) => {
-        if (!this.closed)
-          noteTask(this.db, task.id, `merge_check_${status}`, { log });
-      },
-    });
+    };
+    const onStatus = (
+      status: "queued" | "started",
+      log: string,
+      host?: string,
+    ) => {
+      if (!this.closed)
+        noteTask(this.db, task.id, `merge_check_${status}`, {
+          log,
+          ...(host ? { host } : {}),
+        });
+    };
+    const checked = this.options.checks
+      ? await this.options.checks.run({
+          ...request,
+          task: task.id,
+          base,
+          onStatus,
+          onMoved: (from, reason) => {
+            if (!this.closed)
+              noteTask(this.db, task.id, "merge_check_moved", { from, reason });
+          },
+        })
+      : await runLocalCheck({ ...request, onStatus });
     if (this.closed) return;
     if (this.stopped(task.id)) return;
     noteTask(this.db, task.id, "merge_check", checked);
+    // 派到别的主机时检查的是 rebase 后的这个提交；对不上就不算数。
+    if (checked.commit && checked.commit !== checkedHead)
+      throw new MergeHold("检查回来的提交与 rebase 后的提交不一致，拒绝合入");
     if (checked.status !== "passed")
       return this.handBack(
         task,

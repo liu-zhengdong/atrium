@@ -142,16 +142,29 @@ export type Settlement = {
   exitDetail: Record<string, unknown>;
 };
 
+/** 跑一次本地检查（本机、派到别的主机，或远程任务所在那台）；host 是在哪台跑的（hN）。 */
+export type CheckFn = (input: {
+  worktree: string;
+  taskDir: string;
+  env?: NodeJS.ProcessEnv;
+  onStatus?: (status: "queued" | "started", log: string, host?: string) => void;
+  urgent?: boolean;
+}) => Promise<LocalCheck>;
+
 export async function settle(
   active: Active,
   exit: Exit,
   exec: Exec,
-  onLocalCheckStatus?: (status: "queued" | "started", log: string) => void,
+  onLocalCheckStatus?: (
+    status: "queued" | "started",
+    log: string,
+    host?: string,
+  ) => void,
   env?: NodeJS.ProcessEnv,
   /** 紧急任务（t113）：本地检查插到最前、不占并发名额。 */
   urgent = false,
-  /** 本地检查在哪跑：缺省本机；远程任务交给它所在主机的代理（#358）。 */
-  check: typeof runLocalCheck = runLocalCheck,
+  /** 本地检查在哪跑：缺省本机；派到空闲主机或远程任务所在那台由调用方给（#358）。 */
+  check: CheckFn = runLocalCheck,
 ): Promise<Settlement> {
   const log = await readLog(active);
   const workerGuardRefused =

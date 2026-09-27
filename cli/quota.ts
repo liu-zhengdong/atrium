@@ -7,7 +7,8 @@ import type { QuotaReserve } from "../server/tasks/budget.ts";
 
 /**
  * 账号额度一览的命令行（#267、#352）：只经 HTTP 调服务，不直接读凭据或跑 OpenQuota。
- * 「来源」列：自带（Atrium 自己读的）或 OpenQuota；「说明」列写读不到的原因或没有额度数据。
+ * 「来源」列：自带（Atrium 自己读的）或 OpenQuota；「主机」列（有主机信息时）是这个账号的 CLI 能在哪几台用；
+ * 「说明」列写读不到的原因、没有额度数据、读数来自别的主机或别的主机登录的是另一个账号。
  * 「运行时记录」列由服务给：账号被额度标记挡住时写明预计恢复时刻（或恢复时间未知），
  * 没有标记留空；--json 里同一信息是结构化的 hold.until / hold.reason。
  */
@@ -33,10 +34,13 @@ export function formatQuotaTable(
 ): string {
   const tail = notes.length ? `\n${notes.join("\n")}` : "";
   if (!accounts.length) return `没有账号额度数据${tail}`;
+  // 有远程主机信息时多一列：这个账号的 CLI 能在哪几台用（#358 第 2 步）。
+  const withHosts = accounts.some((account) => account.hosts !== undefined);
   const body = table([
     [
       "账号",
       "来源",
+      ...(withHosts ? ["主机"] : []),
       "已用%",
       "周期进度%",
       "富余%",
@@ -49,6 +53,7 @@ export function formatQuotaTable(
     ...accounts.map((account) => [
       account.providerId,
       account.source ? SOURCE_LABEL[account.source] : "",
+      ...(withHosts ? [(account.hosts ?? []).join(" ")] : []),
       cell(account.usedPercent),
       cell(account.periodElapsedPercent),
       cell(account.sparePercent),

@@ -59,7 +59,13 @@ export type HolderFacts = {
   route: string;
   /** 这是一场会审，且已上交用户拍板、还没定。 */
   council_escalated: boolean;
+  /** 本地检查正在跑（交付后或合入队列重跑）：在哪台（hN，旧记录没有）；没在跑为 null。 */
+  checking?: { host: string | null } | null;
 };
+
+/** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
+const where = (checking: HolderFacts["checking"]) =>
+  checking?.host && checking.host !== "h1" ? `在 ${checking.host} 上` : "";
 
 const FINISHED = new Set<TaskStatus>(["done", "failed", "cancelled"]);
 
@@ -393,7 +399,13 @@ function judge(f: HolderFacts): Holder | null {
   if (f.delivery_stage === "merge_queued")
     return { kind: "merge", who: null, text: "排队合入" };
   if (f.delivery_stage === "merging")
-    return { kind: "merge", who: null, text: "合入中：rebase 并重跑本地检查" };
+    return {
+      kind: "merge",
+      who: null,
+      text: where(f.checking)
+        ? `合入中：${where(f.checking)}重跑本地检查`
+        : "合入中：rebase 并重跑本地检查",
+    };
   if (f.delivery_stage === "merged" && f.online_wait === 1)
     return { kind: "merge", who: null, text: "已合入，等发版上线" };
   if (FINISHED.has(f.status)) return null;
@@ -408,6 +420,14 @@ function judge(f: HolderFacts): Holder | null {
     };
   if (f.status === "running") {
     const worker = f.worker ?? "执行者";
+    if (f.checking)
+      return {
+        kind: "worker",
+        who: f.worker,
+        text: where(f.checking)
+          ? `${worker} 交付了，${where(f.checking)}跑检查`
+          : `${worker} 交付了，本地检查中`,
+      };
     if (f.returned?.via === "merge")
       return {
         kind: "worker",

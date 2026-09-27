@@ -1,7 +1,9 @@
 import {
+  accountKey,
   describeSource,
   firstCredential,
   jwtExpiry,
+  jwtPayload,
   parseJsonDocument,
 } from "./credentials.ts";
 import {
@@ -27,8 +29,32 @@ const SESSION = 5 * 60 * 60;
 const WEEK = 7 * 24 * 60 * 60;
 
 export type CodexLogin =
-  | { apiKeyOnly: false; accessToken: string; accountId: string | null }
+  | {
+      apiKeyOnly: false;
+      accessToken: string;
+      accountId: string | null;
+      /** 账号指纹（id_token 里的用户 + ChatGPT 账号）；认不出为 null。 */
+      account: string | null;
+    }
   | { apiKeyOnly: true };
+
+/** 同一个 ChatGPT 工作区里每个人的额度是分开的：指纹按「用户 + 账号」算。 */
+function codexAccount(
+  tokens: Record<string, unknown>,
+  accountId: string | null,
+): string | null {
+  const idToken = typeof tokens.id_token === "string" ? tokens.id_token : "";
+  const claims = jwtPayload(idToken) ?? {};
+  const auth = isObject(claims["https://api.openai.com/auth"])
+    ? claims["https://api.openai.com/auth"]
+    : {};
+  const user =
+    [auth.chatgpt_user_id, auth.user_id, claims.sub].find(
+      (value): value is string => typeof value === "string" && !!value.trim(),
+    ) ?? null;
+  if (!user && !accountId) return null;
+  return accountKey("codex", `${user ?? ""}:${accountId ?? ""}`);
+}
 
 export function parseCodexLogin(text: string): CodexLogin | undefined {
   const document = parseJsonDocument(text);
@@ -36,15 +62,18 @@ export function parseCodexLogin(text: string): CodexLogin | undefined {
   const tokens = isObject(document.tokens) ? document.tokens : {};
   const token =
     typeof tokens.access_token === "string" ? tokens.access_token.trim() : "";
-  if (token)
+  if (token) {
+    const accountId =
+      typeof tokens.account_id === "string" && tokens.account_id.trim()
+        ? tokens.account_id.trim()
+        : null;
     return {
       apiKeyOnly: false,
       accessToken: token,
-      accountId:
-        typeof tokens.account_id === "string" && tokens.account_id.trim()
-          ? tokens.account_id.trim()
-          : null,
+      accountId,
+      account: codexAccount(tokens, accountId),
     };
+  }
   return typeof document.OPENAI_API_KEY === "string" &&
     document.OPENAI_API_KEY.trim()
     ? { apiKeyOnly: true }
@@ -225,6 +254,7 @@ export async function readCodex(deps: ReaderDeps): Promise<ReadResult> {
     plan: codexPlan(isObject(reply.body) ? reply.body.plan_type : undefined),
     windows,
     refreshedAt: now,
+    account: login.account,
   };
 }
 

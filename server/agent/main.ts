@@ -1,10 +1,12 @@
 import type { ChildProcess } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   openSync,
   readSync,
   closeSync,
   readFileSync,
+  rmSync,
   statSync,
 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
@@ -13,11 +15,7 @@ import { killTree, processAlive } from "../platform/index.ts";
 import { ADAPTERS, isTool } from "../tasks/adapters/index.ts";
 import { exec as defaultExec, type Exec } from "../tasks/git.ts";
 import { hostGate, hostLimits } from "../tasks/host-load.ts";
-import {
-  LocalCheckQueue,
-  runLocalCheck,
-  type LocalCheck,
-} from "../tasks/local-check.ts";
+import { LocalCheckQueue, runLocalCheck } from "../tasks/local-check.ts";
 import { ownsPid } from "../tasks/recovery.ts";
 import { machineInfo } from "../hosts/info.ts";
 import {
@@ -25,8 +23,17 @@ import {
   POLL_WAIT_MS,
   type AgentCommand,
   type Assignment,
+  type CheckReply,
   type LaunchAck,
+  type PollReply,
 } from "../hosts/protocol.ts";
+import {
+  defaultReaderDeps,
+  OK_TTL_MS,
+  QuotaReaders,
+  readersEnabled,
+} from "../quota-readers/index.ts";
+import { checkCommit } from "./check.ts";
 import {
   backoffMs,
   type AgentRun,
@@ -57,6 +64,21 @@ export type AgentOptions = {
   /** 日志续传与进程巡检的间隔，缺省 1 秒。 */
   tickMs?: number;
   exec?: Exec;
+  /** 额度读取器（#358 第 2 步）；缺省按环境开关用自带读取器，null 不报额度。 */
+  quota?: QuotaReaders | null;
+  /** 多久报一次额度；缺省 5 分钟（读取器自己也缓存 5 分钟）。 */
+  quotaMs?: number;
+};
+
+/** 一次检查的日志续传：按指令 id 传到服务，偏移是代理这边检查日志的字节位置。 */
+type CheckTrack = {
+  id: string;
+  file: string;
+  uploaded: number;
+  /** 服务说这次检查它不再等了：不再续传。 */
+  abandoned?: boolean;
+  /** 正在传的那一趟（续传串行，免得两趟交错）。 */
+  uploading?: Promise<void>;
 };
 
 type Track = {
@@ -128,6 +150,12 @@ export class Agent {
   private readonly busy = new Set<string>();
   private readonly abort = new AbortController();
   private readonly checks: LocalCheckQueue;
+  private readonly checkTracks = new Map<string, CheckTrack>();
+  private readonly checkAborts = new Map<string, AbortController>();
+  private readonly cloneLocks = new Map<string, Promise<unknown>>();
+  private readonly slots = new Map<string, Set<number>>();
+  private readonly quota: QuotaReaders | null;
+  private quotaTimer: NodeJS.Timeout | undefined;
   private readonly exec: Exec;
   private readonly server: string;
   private timer: NodeJS.Timeout | undefined;
@@ -144,6 +172,12 @@ export class Agent {
     this.exec = options.exec ?? defaultExec;
     const limits = hostLimits(options.env, availableParallelism()).limits;
     this.checks = new LocalCheckQueue(limits.maxChecks);
+    this.quota =
+      options.quota !== undefined
+        ? options.quota
+        : readersEnabled(options.env)
+          ? new QuotaReaders(defaultReaderDeps(options.env))
+          : null;
   }
 
   private log(line: string) {
@@ -293,10 +327,38 @@ export class Agent {
       this.options.tickMs ?? 1000,
     );
     this.timer.unref?.();
+    if (this.quota) {
+      this.quotaTimer = setInterval(
+        () => void this.reportQuota(),
+        this.options.quotaMs ?? OK_TTL_MS,
+      );
+      this.quotaTimer.unref?.();
+    }
     try {
       await this.loop();
     } finally {
       clearInterval(this.timer);
+      clearInterval(this.quotaTimer);
+    }
+  }
+
+  /** 读这台登录的 CLI 额度并上报：只有额度数字与账号指纹，凭据不出这台。 */
+  private async reportQuota() {
+    if (!this.quota || !this.connected || this.stopped) return;
+    try {
+      const outcomes = await this.quota.read();
+      await this.call(
+        "quota",
+        {
+          readings: [...outcomes].map(([provider, outcome]) => ({
+            provider,
+            outcome,
+          })),
+        },
+        30_000,
+      );
+    } catch {
+      // 下一轮再报；额度读不到不影响派活。
     }
   }
 
@@ -338,12 +400,22 @@ export class Agent {
         this.connected = true;
         attempt = 0;
         void this.tick();
+        void this.reportQuota();
         while (!this.stopped) {
-          const { commands } = await this.call<{ commands: AgentCommand[] }>(
+          const { commands, cancel } = await this.call<PollReply>(
             "poll",
             { load: this.load(), busy: [...this.busy] },
             POLL_WAIT_MS + 20_000,
           );
+          // 服务已不再等的检查（退回本机或别的主机了）：停下，别白占这台的 CPU。
+          for (const id of cancel ?? []) {
+            const abort = this.checkAborts.get(id);
+            if (!abort || abort.signal.aborted) continue;
+            this.log("服务已不再等一次检查，停下它");
+            const track = this.checkTracks.get(id);
+            if (track) track.abandoned = true;
+            abort.abort();
+          }
           for (const command of commands) {
             if (this.busy.has(command.id)) continue;
             this.busy.add(command.id);
@@ -377,13 +449,15 @@ export class Agent {
       case "exec":
         return { ok: false, stdout: "", stderr: why };
       case "check":
+        // 这台没跑成：服务换一台或回本机重跑。
         return {
           status: "error",
           command: "",
           log: "",
           detail: why,
           failedTests: [],
-        } satisfies LocalCheck;
+          infra: why,
+        } satisfies CheckReply;
       default:
         return { ok: false, error: why };
     }
@@ -414,13 +488,7 @@ export class Agent {
             });
             break;
           case "check":
-            result = await runLocalCheck({
-              worktree: command.worktree,
-              taskDir: join(this.options.data, "tasks", String(command.task)),
-              env: this.options.env,
-              urgent: command.urgent,
-              queue: this.checks,
-            });
+            result = await this.check(command);
             break;
         }
       await this.reply(command, result);
@@ -430,7 +498,159 @@ export class Agent {
       );
     } finally {
       this.busy.delete(command.id);
+      if (command.kind === "check") this.endCheck(command.id);
     }
+  }
+
+  private checkDir(id: string) {
+    return join(this.options.data, "checks", id.replace(/[^A-Za-z0-9-]/g, ""));
+  }
+
+  /**
+   * 跑一次检查：远程任务在它的工作树里跑，按提交派来的在检查工作树里跑（check.ts）。
+   * 日志边跑边续传，结束时先补齐再回执（服务收全了才落定结果）。
+   */
+  private async check(
+    command: Extract<AgentCommand, { kind: "check" }>,
+  ): Promise<CheckReply> {
+    const dir = this.checkDir(command.id);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const track: CheckTrack = {
+      id: command.id,
+      file: join(dir, "local-check.log"),
+      uploaded: 0,
+    };
+    const abort = new AbortController();
+    this.checkTracks.set(command.id, track);
+    this.checkAborts.set(command.id, abort);
+    const task = `t${command.task}`;
+    this.log(
+      command.source
+        ? `领到 ${task} 的检查（提交 ${command.source.commit.slice(0, 12)}）`
+        : `领到 ${task} 的检查`,
+    );
+    const source = command.source;
+    const result: CheckReply = source
+      ? await this.checks.run(
+          () =>
+            checkCommit({
+              id: command.id,
+              source,
+              urgent: command.urgent,
+              dir,
+              env: this.options.env,
+              run: this.exec,
+              signal: abort.signal,
+              withClone: (clone, work) => this.withClone(clone, work),
+              slot: (clone) => this.slot(clone),
+            }),
+          undefined,
+          command.urgent,
+        )
+      : await runLocalCheck({
+          worktree: command.worktree ?? "",
+          taskDir: dir,
+          env: this.options.env,
+          urgent: command.urgent,
+          queue: this.checks,
+          signal: abort.signal,
+        });
+    this.log(`${task} 的检查结束：${result.status}（${result.detail}）`);
+    await this.flushCheck(track);
+    return { ...result, size: this.size(track.file) };
+  }
+
+  private endCheck(id: string) {
+    this.checkTracks.delete(id);
+    this.checkAborts.delete(id);
+    rmSync(this.checkDir(id), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+    });
+  }
+
+  /** 同一克隆上的 git 操作排成一串。 */
+  private withClone<T>(clone: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.cloneLocks.get(clone) ?? Promise.resolve();
+    const next = previous.then(work, work);
+    const settled = next.catch(() => undefined);
+    this.cloneLocks.set(clone, settled);
+    void settled.then(() => {
+      if (this.cloneLocks.get(clone) === settled) this.cloneLocks.delete(clone);
+    });
+    return next;
+  }
+
+  private slot(clone: string) {
+    const used = this.slots.get(clone) ?? new Set<number>();
+    this.slots.set(clone, used);
+    let index = 0;
+    while (used.has(index)) index++;
+    used.add(index);
+    return {
+      index,
+      release: () => {
+        used.delete(index);
+        if (!used.size) this.slots.delete(clone);
+      },
+    };
+  }
+
+  /** 把检查日志传到服务：一趟最多 16 段；服务说不再等了就停。 */
+  private uploadCheck(track: CheckTrack): Promise<void> {
+    if (track.uploading) return track.uploading;
+    const work = (async () => {
+      for (let round = 0; round < 16 && !track.abandoned; round++) {
+        const chunk = nextChunk(
+          track.uploaded,
+          this.size(track.file),
+          LOG_CHUNK,
+        );
+        if (!chunk) return;
+        const data = this.readChunk(track.file, chunk);
+        const answer = await this.call<{ offset?: number; done?: boolean }>(
+          "check-log",
+          { id: track.id, offset: chunk.offset, data: data.toString("base64") },
+          30_000,
+        );
+        if (answer.done) {
+          track.abandoned = true;
+          return;
+        }
+        if (answer.offset === undefined) return;
+        track.uploaded = answer.offset;
+      }
+    })().finally(() => {
+      track.uploading = undefined;
+    });
+    track.uploading = work;
+    return work;
+  }
+
+  /** 检查结束后把日志传完（断线时隔几秒重试，连上后补齐）。 */
+  private async flushCheck(track: CheckTrack) {
+    for (let attempt = 0; !this.stopped && !track.abandoned; attempt++) {
+      try {
+        await this.uploadCheck(track);
+        if (track.uploaded >= this.size(track.file)) return;
+        attempt = 0;
+      } catch {
+        await sleep(Math.min(5000, 1000 * (attempt + 1)), this.abort.signal);
+      }
+    }
+  }
+
+  private readChunk(file: string, chunk: { offset: number; length: number }) {
+    const buffer = Buffer.alloc(chunk.length);
+    const fd = openSync(file, "r");
+    let read = 0;
+    try {
+      read = readSync(fd, buffer, 0, chunk.length, chunk.offset);
+    } finally {
+      closeSync(fd);
+    }
+    return buffer.subarray(0, read);
   }
 
   /** 回执送到为止（断线时隔几秒重试）；服务说对不上的拉起，结束刚起的进程。 */
@@ -446,11 +666,24 @@ export class Agent {
     };
     for (let attempt = 0; !this.stopped; attempt++) {
       try {
-        const answer = await this.call<{ cancel?: boolean }>(
-          "reply",
-          { id: command.id, result },
-          30_000,
-        );
+        const answer = await this.call<{
+          cancel?: boolean;
+          ok?: boolean;
+          offset?: number;
+        }>("reply", { id: command.id, result }, 30_000);
+        // 检查日志服务还没收全：从它收到的地方补传，再交回执。
+        if (
+          command.kind === "check" &&
+          answer.ok === false &&
+          typeof answer.offset === "number"
+        ) {
+          const track = this.checkTracks.get(command.id);
+          if (track) {
+            track.uploaded = answer.offset;
+            await this.flushCheck(track);
+            continue;
+          }
+        }
         confirm();
         if (
           answer.cancel &&
@@ -549,6 +782,11 @@ export class Agent {
     if (this.ticking || this.stopped) return;
     this.ticking = true;
     try {
+      // 检查日志边跑边传：服务那边 task log 能看到进度；断线时留给结束后的补传。
+      if (this.connected)
+        for (const track of this.checkTracks.values())
+          if (!track.abandoned)
+            await this.uploadCheck(track).catch(() => undefined);
       for (const track of [...this.runs.values()]) {
         if (this.stopped) return;
         const { record } = track;

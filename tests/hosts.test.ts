@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -13,6 +15,7 @@ import { createApp } from "../server/app.ts";
 import { Agent } from "../server/agent/main.ts";
 import { fixture, until } from "./task-fixture.ts";
 import { nodeCommand } from "./portable-shell.ts";
+import { QuotaReaders } from "../server/quota-readers/index.ts";
 
 /**
  * 远程执行者（#358 第 1 步）：真 HTTP 服务 + 同机起的代理（数据目录分开），假执行者。
@@ -22,7 +25,12 @@ import { nodeCommand } from "./portable-shell.ts";
 type Fx = ReturnType<typeof fixture>;
 type After = { after: (fn: () => void | Promise<void>) => void };
 
-async function serve(fx: Fx, data: string, port = 0) {
+async function serve(
+  fx: Fx,
+  data: string,
+  port = 0,
+  extra: { agentOnlineMs?: number; agentCheckWatchMs?: number } = {},
+) {
   const created = await createApp({
     data,
     auth: false,
@@ -37,6 +45,7 @@ async function serve(fx: Fx, data: string, port = 0) {
       diskFreeGb: async () => 1000,
       agentPollMs: 500,
       agentPickupMs: 1500,
+      ...extra,
     },
   });
   await created.app.listen({ port, host: "127.0.0.1" });
@@ -72,6 +81,7 @@ function startAgent(
     env: NodeJS.ProcessEnv;
     code?: string;
     fetch?: typeof fetch;
+    quota?: QuotaReaders | null;
   },
 ) {
   const lines: string[] = [];
@@ -85,6 +95,7 @@ function startAgent(
     tickMs: 100,
     log: (line) => lines.push(line),
     ...(input.fetch ? { fetch: input.fetch } : {}),
+    ...(input.quota !== undefined ? { quota: input.quota } : {}),
   });
   const done = agent.start().catch((error: unknown) => {
     lines.push(`启动失败：${String(error)}`);
@@ -338,11 +349,18 @@ test("远程主机：有仓库的活在代理机器上克隆、建工作树，�
     task.events.find((e: { kind: string }) => e.kind === "local_check").detail,
   );
   assert.equal(local.status, "passed", JSON.stringify(local));
-  assert.match(local.log, /^h2:/);
-  assert.match(
-    readFileSync(join(agentData, "tasks", "1", "local-check.log"), "utf8"),
-    /remote-checked-.*repos/,
+  // 检查在 h2 上跑，日志续传回服务这边的任务目录；代理那边跑完即清。
+  assert.equal(local.host, "h2");
+  assert.equal(
+    local.log,
+    join(fx.root, "data", "tasks", "1", "local-check.log"),
   );
+  assert.match(readFileSync(local.log, "utf8"), /remote-checked-.*repos/);
+  const started = JSON.parse(
+    task.events.find((e: { kind: string }) => e.kind === "local_check_started")
+      .detail,
+  );
+  assert.equal(started.host, "h2");
   assert.equal(task.status, "done", JSON.stringify(gates));
   // 执行者环境是代理机器上的白名单环境。
   const seen = readFileSync(join(agentData, "repos", "env-seen.txt"), "utf8");
@@ -519,4 +537,374 @@ test("远程主机：拉起回执晚到时，执行者已经结束也照样补�
     .task;
   assert.equal(task.status, "done", JSON.stringify(task.events.slice(-3)));
   assert.match(task.result, /瞬间完成/);
+});
+
+/**
+ * 本机任务的本地检查派到远程（#358 第 2 步）用的仓库：检查脚本写出工作目录与交付文件，
+ * 在代理的检查工作树（路径带 -check-）里多睡 sleepMs，便于在检查进行中看状态、断网。
+ * 假 kimi 等 marker 出现才提交（不推送），测试在这之前把本机暂停接活，检查就只能派到 h2。
+ */
+function checkRepo(fx: Fx, sleepMs: number) {
+  // 这个文件在时远程多睡 10 秒（断网太久的场景）。
+  const slow = join(fx.root, "slow").replace(/\\/g, "/");
+  mkdirSync(join(fx.repo, ".agents"));
+  writeFileSync(
+    join(fx.repo, ".agents", "check"),
+    nodeCommand(
+      [
+        "const fs = require('fs')",
+        "const remote = process.cwd().includes('-check-')",
+        "console.log('checked-in:' + process.cwd())",
+        "console.log('delivered:' + (fs.existsSync('done.txt') ? fs.readFileSync('done.txt', 'utf8').trim() : 'missing'))",
+        `setTimeout(() => { console.log('check-finished'); process.exit(0) }, remote ? (fs.existsSync('${slow}') ? 10000 : ${sleepMs}) : 0)`,
+      ].join("; "),
+    ),
+  );
+  execFileSync("git", ["-C", fx.repo, "add", ".agents/check"]);
+  execFileSync("git", [
+    "-C",
+    fx.repo,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@e",
+    "commit",
+    "-qm",
+    "check",
+  ]);
+  execFileSync("git", ["-C", fx.repo, "push", "-q", "origin", "main"]);
+  writeFileSync(
+    join(fx.workers, "harness", "kimi.md"),
+    "---\nchecks: [local_check, claims_verified]\n---\n",
+  );
+  const marker = join(fx.root, "deliver");
+  fx.script(
+    "kimi",
+    `set -e\nwhile [ ! -f "${marker.replace(/\\/g, "/")}" ]; do sleep 0.1; done\necho hi > done.txt\ngit add done.txt\ngit commit -qm done\necho "完成，提交 $(git rev-parse --short HEAD)"`,
+  );
+  return { marker, slow };
+}
+
+/** 反复查到条件成立：每次等上一趟请求回来再发下一趟（服务关了就不再发）。 */
+async function eventually(check: () => Promise<boolean>, ms = 10_000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("等待超时");
+}
+
+type Event = { kind: string; detail: string | null };
+const eventsOf = (task: { events: Event[] }, kind: string) =>
+  task.events
+    .filter((e) => e.kind === kind)
+    .map((e) => JSON.parse(e.detail ?? "{}"));
+
+/** 本机暂停接活后放假 kimi 交付：本地检查只能派到远程。 */
+async function deliverWithLocalPaused(
+  call: Awaited<ReturnType<typeof serve>>["call"],
+  marker: string,
+) {
+  const paused = await call("POST", "/api/hosts/h1/pause", { paused: true });
+  assert.equal(paused.status, 200, JSON.stringify(paused.body));
+  writeFileSync(marker, "");
+}
+
+test("远程检查：本机任务交付后，检查带着没推送的提交派到 h2 跑完，结果与日志回到本机，看板说在 h2 上跑检查", async (t) => {
+  const fx = fixture(t);
+  const { marker } = checkRepo(fx, 1500);
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data);
+  t.after(() => server.close());
+  const { call, port } = server;
+  const { code } = (
+    await call("POST", "/api/hosts", { name: "远程", repos: ["*"] })
+  ).body;
+  const agentData = join(fx.root, "agent");
+  const { lines } = startAgent(t, { port, data: agentData, env: fx.env, code });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  await call("POST", "/api/tasks", { title: "Local change", repo: fx.repo });
+  const run = await call("POST", "/api/tasks/t1/run", { worker: "kimi" });
+  assert.equal(run.status, 200, JSON.stringify(run.body));
+  assert.equal(run.body.task.host ?? null, null);
+  const worktree: string = run.body.task.worktree;
+  await deliverWithLocalPaused(call, marker);
+  // 检查进行中：task show 与 top 都说在 h2 上跑检查。
+  await eventually(async () => {
+    const shown = (await call("GET", "/api/tasks/t1")).body;
+    return (shown.task ?? shown).holder?.text?.includes("在 h2 上跑检查");
+  }, 20_000);
+  const top = (await call("GET", "/api/tasks/top")).body;
+  const row = top.rows.find((r: { ref: string }) => r.ref === "t1");
+  assert.match(row.holder.text, /在 h2 上跑检查/);
+  const task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
+  const [check] = eventsOf(task, "local_check");
+  assert.equal(check.status, "passed", JSON.stringify(check));
+  assert.equal(check.host, "h2");
+  // 检查的就是本机工作树里没推送的交付提交。
+  const head = execFileSync("git", ["-C", worktree, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  assert.equal(check.commit, head);
+  assert.equal(check.log, join(data, "tasks", "1", "local-check.log"));
+  const log = readFileSync(check.log, "utf8");
+  assert.match(log, /checked-in:.*-check-0/);
+  assert.match(log, /delivered:hi/);
+  assert.match(log, /check-finished/);
+  assert.equal(eventsOf(task, "local_check_started")[0].host, "h2");
+  assert.equal(task.status, "done", JSON.stringify(task.events.slice(-4)));
+  // 代理那边的检查目录跑完即清；检查工作树留着下次沿用。
+  await until(
+    () =>
+      !existsSync(join(agentData, "checks")) ||
+      readdirSync(join(agentData, "checks")).length === 0,
+    5_000,
+  );
+});
+
+test("远程检查：进行中断网再恢复，结果与日志补齐；断线太久退回本机重跑，只记一次结果", async (t) => {
+  const fx = fixture(t);
+  const { marker, slow } = checkRepo(fx, 2500);
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data, 0, {
+    agentOnlineMs: 3000,
+    agentCheckWatchMs: 200,
+  });
+  t.after(() => server.close());
+  const { call, port } = server;
+  const { code } = (
+    await call("POST", "/api/hosts", { name: "远程", repos: ["*"] })
+  ).body;
+  // 断网：代理发出的请求一律失败（进行中的长轮询照旧收尾）。
+  let cut = false;
+  const flaky: typeof fetch = (input, init) =>
+    cut ? Promise.reject(new TypeError("fetch failed")) : fetch(input, init);
+  const agentData = join(fx.root, "agent");
+  const { lines } = startAgent(t, {
+    port,
+    data: agentData,
+    env: fx.env,
+    code,
+    fetch: flaky,
+  });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  const logFile = (id: number) =>
+    join(data, "tasks", String(id), "local-check.log");
+  const readLog = (id: number) => {
+    try {
+      return readFileSync(logFile(id), "utf8");
+    } catch {
+      return "";
+    }
+  };
+
+  // 一、短断网（比离线判定短）：检查在 h2 跑完，恢复后日志补齐、结果照常。
+  await call("POST", "/api/tasks", { title: "Short cut", repo: fx.repo });
+  assert.equal(
+    (await call("POST", "/api/tasks/t1/run", { worker: "kimi" })).status,
+    200,
+  );
+  await deliverWithLocalPaused(call, marker);
+  await until(() => readLog(1).includes("checked-in:"), 20_000);
+  cut = true;
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  cut = false;
+  let task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
+  let checks = eventsOf(task, "local_check");
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].host, "h2", JSON.stringify(checks[0]));
+  assert.equal(checks[0].status, "passed");
+  assert.match(readLog(1), /checked-in:[\s\S]*check-finished/);
+  assert.equal(eventsOf(task, "local_check_moved").length, 0);
+  assert.equal(task.status, "done");
+
+  // 二、长断网（超过离线判定）：服务不再等 h2，退回本机重跑；恢复后 h2 晚到的结果不算。
+  // 等代理重连上（断网时它在退避重试）。
+  await until(
+    () => lines.filter((line) => line.includes("已连上")).length >= 2,
+    15_000,
+  );
+  rmSync(marker, { force: true });
+  writeFileSync(slow, "");
+  // 本机恢复接活，t2 才在本机跑；交付前再暂停，检查才派到 h2。
+  await call("POST", "/api/hosts/h1/pause", { paused: false });
+  await call("POST", "/api/tasks", { title: "Long cut", repo: fx.repo });
+  assert.equal(
+    (await call("POST", "/api/tasks/t2/run", { worker: "kimi" })).status,
+    200,
+  );
+  await deliverWithLocalPaused(call, marker);
+  await until(() => readLog(2).includes("checked-in:"), 20_000);
+  cut = true;
+  task = (await call("GET", "/api/tasks/t2/wait?timeout=30")).body.task;
+  cut = false;
+  checks = eventsOf(task, "local_check");
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].host, "h1", JSON.stringify(checks[0]));
+  assert.equal(checks[0].status, "passed");
+  const [moved] = eventsOf(task, "local_check_moved");
+  assert.equal(moved.from, "h2");
+  assert.match(moved.reason, /离线/);
+  assert.equal(task.status, "done");
+  // 本机重跑的日志：本机工作树，不是 h2 的检查工作树。
+  assert.doesNotMatch(readLog(2), /-check-/);
+  // 恢复后代理那边这次检查被服务叫停或回执被丢掉，目录清掉；账本里仍只有一次结果。
+  await until(
+    () =>
+      !existsSync(join(agentData, "checks")) ||
+      readdirSync(join(agentData, "checks")).length === 0,
+    15_000,
+  );
+  const again = (await call("GET", "/api/tasks/t2")).body;
+  assert.equal(eventsOf(again.task ?? again, "local_check").length, 1);
+});
+
+test("远程检查：没有在线的远程主机时照旧在本机跑", async (t) => {
+  const fx = fixture(t);
+  const { marker } = checkRepo(fx, 0);
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data, 0, { agentOnlineMs: 1000 });
+  t.after(() => server.close());
+  const { call, port } = server;
+  const { code } = (
+    await call("POST", "/api/hosts", { name: "远程", repos: ["*"] })
+  ).body;
+  const { agent, lines, done } = startAgent(t, {
+    port,
+    data: join(fx.root, "agent"),
+    env: fx.env,
+    code,
+  });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  agent.stop();
+  await done;
+  await eventually(
+    async () =>
+      (await call("GET", "/api/hosts/h2")).body.connection === "offline",
+  );
+  await call("POST", "/api/tasks", { title: "Offline", repo: fx.repo });
+  assert.equal(
+    (await call("POST", "/api/tasks/t1/run", { worker: "kimi" })).status,
+    200,
+  );
+  await deliverWithLocalPaused(call, marker);
+  const task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
+  const [check] = eventsOf(task, "local_check");
+  assert.equal(check.host, "h1", JSON.stringify(check));
+  assert.equal(check.status, "passed");
+  assert.equal(eventsOf(task, "local_check_moved").length, 0);
+});
+
+test("额度多主机合并：代理上报读数与账号指纹，atrium quota 合并后给出读自哪台与 CLI 在哪几台可用", async (t) => {
+  const fx = fixture(t);
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data);
+  t.after(() => server.close());
+  const { call, port } = server;
+  const { code } = (
+    await call("POST", "/api/hosts", { name: "远程", repos: ["*"] })
+  ).body;
+  const now = Date.now();
+  const token = "sk-secret-token-should-not-leave";
+  const readers = new QuotaReaders(
+    {
+      platform: "linux",
+      home: fx.root,
+      env: {},
+      readFile: async () => undefined,
+      keychain: async () => undefined,
+      fetch,
+      now: () => now,
+      timeoutMs: 1000,
+    },
+    [
+      {
+        provider: "opencode",
+        read: async () => ({
+          ok: true,
+          plan: "Go",
+          windows: [
+            {
+              id: "weekly",
+              label: "Weekly",
+              usedPercent: 42,
+              resetsAt: now + 3600_000,
+              periodSeconds: 604800,
+            },
+          ],
+          refreshedAt: now,
+          account: "0123456789abcdef",
+        }),
+      },
+      {
+        provider: "codex",
+        read: async () => ({ ok: false, reason: "没有找到 Codex 登录" }),
+      },
+    ],
+  );
+  const { lines } = startAgent(t, {
+    port,
+    data: join(fx.root, "agent"),
+    env: fx.env,
+    code,
+    quota: readers,
+  });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  let accounts: {
+    providerId: string;
+    from?: string | null;
+    hosts?: string[];
+    note: string | null;
+    usedPercent: number | null;
+  }[] = [];
+  await eventually(async () => {
+    accounts = (await call("GET", "/api/quota")).body.accounts;
+    return accounts.some((a) => a.providerId === "opencode" && a.from === "h2");
+  });
+  const opencode = accounts.find((a) => a.providerId === "opencode")!;
+  assert.equal(opencode.usedPercent, 42);
+  assert.match(opencode.note ?? "", /读自 h2/);
+  // 假 opencode、kimi 在两台的 PATH 里都有：本机与 h2 都能用。
+  assert.deepEqual(opencode.hosts, ["h1", "h2"]);
+  const codex = accounts.find((a) => a.providerId === "codex")!;
+  assert.match(codex.note ?? "", /没有找到 Codex 登录/);
+  // 只传额度数字与指纹：令牌不出现在服务的任何回答里。
+  assert.doesNotMatch(JSON.stringify(accounts), new RegExp(token));
+  // 破坏输入：读数里夹带多余字段或非法指纹会被拒收。
+  const hostToken = JSON.parse(
+    readFileSync(join(fx.root, "agent", "agent.json"), "utf8"),
+  ).token as string;
+  const bad = await fetch(`http://127.0.0.1:${port}/api/agent/quota`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${hostToken}`,
+    },
+    body: JSON.stringify({
+      readings: [
+        {
+          provider: "opencode",
+          outcome: {
+            ok: true,
+            result: {
+              ok: true,
+              plan: null,
+              windows: [],
+              refreshedAt: now,
+              account: token,
+            },
+            note: null,
+          },
+        },
+      ],
+    }),
+  });
+  assert.equal(bad.status, 400);
+  const anonymous = await fetch(`http://127.0.0.1:${port}/api/agent/quota`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ readings: [] }),
+  });
+  assert.equal(anonymous.status, 401);
 });

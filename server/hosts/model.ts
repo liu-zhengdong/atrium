@@ -443,7 +443,13 @@ const parse = <T>(text: string | null): T | null => {
 
 export function hostView(
   row: HostRow,
-  runtime: { polling: boolean; running: number; localMax?: number | null },
+  runtime: {
+    polling: boolean;
+    running: number;
+    localMax?: number | null;
+    /** 多久没来算离线；缺省 ONLINE_MS。 */
+    onlineMs?: number;
+  },
   now = Date.now(),
 ): HostView {
   const info = parse<HostInfo>(row.info);
@@ -454,6 +460,7 @@ export function hostView(
     lastSeenAt: row.last_seen_at,
     polling: runtime.polling,
     now,
+    onlineMs: runtime.onlineMs,
   });
   return {
     ref: hostRef(row.id),

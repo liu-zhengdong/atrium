@@ -713,6 +713,21 @@ const stop: Command = {
   },
 };
 
+const merge: Command = {
+  args: "tN",
+  about: "将关卡已通过、带 PR 的受阻合入任务重新排队",
+  positionals: [1, 1],
+  async run({ positionals: [reference], json }) {
+    const id = ref(reference, "任务");
+    const result = await (
+      await client()
+    ).post<{ task: Task }>(`/tasks/${id}/merge`, {});
+    if (json) printJson(result);
+    else console.log(`${id} 已重新排队合入`);
+    recordNext(`等合入：atrium task wait ${id}`);
+  },
+};
+
 type LogChunk = {
   text: string;
   next: number;
@@ -815,6 +830,7 @@ export const taskCommands: Record<string, Command> = {
   "task done": done,
   "task run": run,
   "task stop": stop,
+  "task merge": merge,
   "task log": log,
   "task wait": wait,
 };

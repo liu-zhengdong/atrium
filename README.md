@@ -57,6 +57,7 @@ atrium task run t4 --worker claude          # 派给执行者；不写 --worker 
 atrium task wait t4 --timeout 600           # PR 任务等到合入或卡住；其他任务等到离开 running
 atrium task log t4                          # 执行者日志；--follow 跟到结束，--after 字节偏移续读
 atrium task stop t4                         # 停执行者或合入队列；合入中会在安全点停下
+atrium task merge t4                        # 关卡已通过且带 PR 的受阻任务重新排队合入
 atrium task tell t4 "接口改用 v2"            # 给在跑的执行者捎话；--as 写作者，缺省 u1
 atrium top --once                           # 谁在干活、全景图上两层各块的状态与在跑数，下接排期
 atrium top --once --depth 3                 # 全景展开三层（旧写法 --goals-depth 照旧接受）

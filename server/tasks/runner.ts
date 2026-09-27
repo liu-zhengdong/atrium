@@ -92,6 +92,8 @@ export type RunnerOptions = {
   tickMs?: number;
   ciPollMs?: number;
   ciBatch?: number;
+  /** 测试可缩短 PR 推送后 GitHub 头视图的等待窗口。 */
+  mergeHeadWaitMs?: number;
   /** 事件攒批窗口（毫秒），缺省 0。 */
   batchMs?: number;
   /** 事件交出后的处理中租约（毫秒），缺省 15 分钟；超时仍未 ack 才重投。 */
@@ -207,6 +209,7 @@ export class TaskRunner {
       data: options.data,
       env: this.launchOptions.env,
       run: this.exec,
+      prHeadWaitMs: options.mergeHeadWaitMs,
       changed: (id) => this.waits.changed(id),
       cleaned: async (id) => {
         await this.cleanup.cleanup(id);
@@ -323,7 +326,7 @@ export class TaskRunner {
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
   async close() {
     this.closed = true;
-    this.merge.close();
+    const mergeClosing = this.merge.close();
     this.review.close();
     this.online.close();
     for (const timer of this.timers) clearInterval(timer);
@@ -332,6 +335,7 @@ export class TaskRunner {
     for (const active of this.x.active.values()) void active.live?.finish();
     this.inbox.close();
     this.waits.close();
+    await mergeClosing;
   }
 
   /** Count the ledger and in-flight launches, including work recovered after a service crash. */
@@ -605,6 +609,10 @@ export class TaskRunner {
   }
 
   // ---- 停止、日志、等待 ----
+
+  requeueMerge(reference: unknown) {
+    return { task: this.merge.requeue(parseTaskRef(reference)) };
+  }
 
   /** by：发起停止的订阅者，由此产生的事件不投给他本人。 */
   stop(reference: unknown, by?: string) {

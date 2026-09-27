@@ -113,11 +113,13 @@ export async function runLocalCheck(input: {
   timeoutMs?: number;
   queue?: LocalCheckQueue;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   onStatus?: (status: "queued" | "started", log: string) => void;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
   return (input.queue ?? sharedQueue).run(
     async () => {
+      if (input.signal?.aborted) throw new Error("服务正在关闭");
       mkdirSync(input.taskDir, { recursive: true, mode: 0o700 });
       let command = "";
       try {
@@ -160,8 +162,7 @@ export async function runLocalCheck(input: {
       }
       closeSync(fd);
       let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
+      const abort = () => {
         if (child.pid) {
           try {
             process.kill(-child.pid, "SIGKILL");
@@ -169,6 +170,12 @@ export async function runLocalCheck(input: {
             /* already exited */
           }
         }
+      };
+      input.signal?.addEventListener("abort", abort, { once: true });
+      if (input.signal?.aborted) abort();
+      const timer = setTimeout(() => {
+        timedOut = true;
+        abort();
       }, input.timeoutMs ?? LOCAL_CHECK_TIMEOUT_MS);
       const result = await new Promise<{ code: number | null; error?: Error }>(
         (resolve) => {
@@ -177,6 +184,7 @@ export async function runLocalCheck(input: {
         },
       );
       clearTimeout(timer);
+      input.signal?.removeEventListener("abort", abort);
       const tail = logTail(log);
       const failedTests = failedTestNames(tail);
       const status = timedOut

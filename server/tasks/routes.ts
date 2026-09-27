@@ -186,6 +186,9 @@ export function registerTaskRoutes(
   app.post("/api/tasks/:id/stop", (request) =>
     runner.stop(params(request.params).id, actorOf(query(request.query))),
   );
+  app.post("/api/tasks/:id/merge", (request) =>
+    runner.requeueMerge(params(request.params).id),
+  );
   app.get("/api/tasks/:id/log", (request) =>
     runner.log(params(request.params).id, query(request.query).after),
   );

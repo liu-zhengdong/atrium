@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { Problem } from "../problem.ts";
 import { redact } from "../secret-redact.ts";
 import { taskDir } from "./active.ts";
 import { defaultBranch, firstLine, type Exec } from "./git.ts";
@@ -9,6 +10,7 @@ import { atomically, getTask, noteTask, type Task } from "./ledger.ts";
 import { runLocalCheck } from "./local-check.ts";
 import { mergeFailure } from "./merge-decision.ts";
 import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
+import { MergeClaim } from "./merge-claim.ts";
 import { addTell } from "./tell-ledger.ts";
 
 type Stage = NonNullable<Task["delivery_stage"]>;
@@ -29,6 +31,9 @@ export class MergeQueue {
   private retryAfter = 0;
   private readonly returning = new Set<number>();
   private readonly stopping = new Map<number, string | undefined>();
+  private readonly claim: MergeClaim;
+  private readonly abort = new AbortController();
+  private active?: Promise<void>;
 
   isReturning(id: number) {
     return this.returning.has(id);
@@ -53,11 +58,17 @@ export class MergeQueue {
       selfRepo?: string | null;
       /** 合入后通知上线观察者。 */
       onMerged?: (id: number) => void;
+      /** GitHub PR 头视图追上推送的最长等待时间；测试可缩短。 */
+      prHeadWaitMs?: number;
     },
-  ) {}
+  ) {
+    this.claim = new MergeClaim(db);
+  }
 
-  close() {
+  async close() {
     this.closed = true;
+    this.abort.abort();
+    await this.active;
   }
 
   /** 用户停止排队或合入；已发出的 gh merge 仍以 PR 实际状态为准。 */
@@ -132,9 +143,74 @@ export class MergeQueue {
     this.kick();
   }
 
+  /** 仅重新排入已通过交付关卡、曾进入合入队列的受阻 PR。 */
+  requeue(id: number): Task {
+    const task = getTask(this.db, id);
+    const gate = this.db
+      .prepare(
+        "SELECT detail FROM task_events WHERE task_id=? AND kind='gates' ORDER BY id DESC LIMIT 1",
+      )
+      .get(id) as { detail: string | null } | undefined;
+    let passed = false;
+    try {
+      passed =
+        (JSON.parse(gate?.detail ?? "null") as { passed?: unknown })?.passed ===
+        true;
+    } catch {
+      // 损坏的关卡事件不能授权重新排队。
+    }
+    const admitted = this.db
+      .prepare(
+        "SELECT 1 FROM task_events WHERE task_id=? AND kind='merge_queued' LIMIT 1",
+      )
+      .get(id);
+    if (
+      task.deliver !== "pr" ||
+      !task.pr_url ||
+      !task.repo ||
+      !task.worktree ||
+      !task.branch
+    )
+      throw new Problem(
+        409,
+        `${task.ref} 没有可合入的 PR、仓库或工作树`,
+        "conflict",
+      );
+    if (
+      task.status !== "blocked" ||
+      task.delivery_stage !== null ||
+      !passed ||
+      !admitted
+    )
+      throw new Problem(
+        409,
+        `${task.ref} 未通过交付关卡，或不在可重新排队的受阻状态`,
+        "conflict",
+      );
+    const now = Date.now();
+    atomically(this.db, () => {
+      this.db
+        .prepare(
+          "UPDATE tasks SET status='done',delivery_stage='merge_queued',merge_queued_at=?,ended_at=?,updated_at=? WHERE id=?",
+        )
+        .run(now, now, now, id);
+      noteTask(this.db, id, "merge_queued", { pr_url: task.pr_url });
+    });
+    this.options.changed(id);
+    this.options.publish(id, "merge_queued", { pr_url: task.pr_url });
+    this.kick();
+    return getTask(this.db, id);
+  }
+
   kick() {
     if (this.closed || this.draining || Date.now() < this.retryAfter) return;
-    void this.drain().catch((error) =>
+    const row = this.db
+      .prepare(
+        "SELECT id FROM tasks WHERE delivery_stage IN ('merge_queued','merging') AND status='done' ORDER BY merge_queued_at,id LIMIT 1",
+      )
+      .get() as { id: number } | undefined;
+    if (!row || !this.claim.acquire(row.id)) return;
+    this.active = this.drain().catch((error) =>
       console.error("合入队列失败：", redact(String(error))),
     );
   }
@@ -181,6 +257,7 @@ export class MergeQueue {
       }
     } finally {
       this.draining = false;
+      this.claim.release();
     }
   }
 
@@ -190,6 +267,7 @@ export class MergeQueue {
       ...(cwd ? { cwd } : {}),
       timeoutMs: command === "git" && args.includes("fetch") ? 120_000 : 30_000,
     });
+    if (this.closed) throw new Error("服务正在关闭");
     if (!result.ok)
       throw new Error(
         redact(
@@ -297,6 +375,7 @@ export class MergeQueue {
       ["-C", worktree, "rebase", `origin/${base}`],
       { timeoutMs: 120_000 },
     );
+    if (this.closed) return;
     if (!rebase.ok) {
       const files = await this.options.run("git", [
         "-C",
@@ -333,6 +412,7 @@ export class MergeQueue {
       worktree,
       taskDir: taskDir(this.options.data, task.id),
       env: this.options.env,
+      signal: this.abort.signal,
       onStatus: (status, log) => {
         if (!this.closed)
           noteTask(this.db, task.id, `merge_check_${status}`, { log });
@@ -365,28 +445,59 @@ export class MergeQueue {
     )
       throw new MergeHold("本地检查修改了工作树，拒绝合入");
     if (this.stopped(task.id)) return;
-    const pushed = await this.options.run(
-      "git",
-      [
-        "-C",
-        worktree,
-        "push",
-        `--force-with-lease=refs/heads/${branch}:${before.headRefOid}`,
-        "origin",
-        `HEAD:refs/heads/${branch}`,
-      ],
-      { timeoutMs: 120_000 },
-    );
-    if (!pushed.ok)
-      return this.handBack(
-        task,
-        `检查后推送失败：${firstLine(pushed.stderr) || "未知原因"}`,
+    const remoteHead = async () =>
+      (
+        await this.command("git", [
+          "-C",
+          repo,
+          "ls-remote",
+          "--heads",
+          "origin",
+          branch,
+        ])
+      ).split(/\s+/)[0];
+    const remoteBeforePush = await remoteHead();
+    if (remoteBeforePush !== checkedHead) {
+      if (remoteBeforePush !== before.headRefOid)
+        throw new MergeHold("检查后远端分支头提交发生变化，拒绝合入");
+      const pushed = await this.options.run(
+        "git",
+        [
+          "-C",
+          worktree,
+          "push",
+          `--force-with-lease=refs/heads/${branch}:${before.headRefOid}`,
+          "origin",
+          `HEAD:refs/heads/${branch}`,
+        ],
+        { timeoutMs: 120_000 },
       );
+      if (!pushed.ok)
+        return this.handBack(
+          task,
+          `检查后推送失败：${firstLine(pushed.stderr) || "未知原因"}`,
+        );
+    }
     if (this.closed) return;
-    const current = await this.pr(task, flag);
-    if (this.stopped(task.id)) return;
+    // 推送成功后 gh 的 PR 视图可能仍返回旧头；在时限内等它追上本轮检查的提交。
+    const deadline = Date.now() + (this.options.prHeadWaitMs ?? 60_000);
+    let current = await this.pr(task, flag);
+    while (
+      current.state === "OPEN" &&
+      current.headRefOid !== checkedHead &&
+      Date.now() < deadline
+    ) {
+      if (this.stopped(task.id) || this.closed) return;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(1000, deadline - Date.now())),
+      );
+      current = await this.pr(task, flag);
+    }
+    if (this.stopped(task.id) || this.closed) return;
     if (current.state !== "OPEN" || current.headRefOid !== checkedHead)
-      throw new MergeHold("检查后 PR 头提交发生变化，拒绝合入");
+      throw new MergeHold(
+        `等待 PR 头提交更新超时或状态变化：检查过 ${checkedHead}，PR 头 ${current.headRefOid}（${current.state}），拒绝合入`,
+      );
     const merge = await this.options.run(
       "gh",
       [

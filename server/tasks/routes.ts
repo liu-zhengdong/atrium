@@ -119,8 +119,15 @@ export function registerTaskRoutes(
       actorOf(q),
       waitSeconds(q.timeout),
       disconnect(request),
+      { peek: q.peek === "1" || q.peek === "true" },
     );
   });
+  app.post("/api/events/deliver", { bodyLimit: 64 * 1024 }, (request) => ({
+    events: runner.inbox.deliver(
+      actorOf(query(request.query)),
+      ackIds(request.body),
+    ),
+  }));
   app.get("/api/events", (request) => {
     const q = query(request.query);
     return runner.inbox.list(actorOf(q), listOptions(q));

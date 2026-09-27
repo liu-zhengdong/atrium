@@ -94,9 +94,11 @@ export function client(
     method: string,
     path: string,
     body?: unknown,
+    signal?: AbortSignal,
   ): Promise<LocalResponse> {
     return localFetch(`${base}/api${path}`, {
       method,
+      signal,
       headers: {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
         authorization: userBearer(data),
@@ -109,13 +111,16 @@ export function client(
     path: string,
     body?: unknown,
     observe?: (headers: Headers) => void,
+    signal?: AbortSignal,
   ): Promise<T> {
-    const response = await send(method, path, body)
+    const response = await send(method, path, body, signal)
       .catch(async (error: unknown) => {
+        // 调用方主动取消（如秘书界面收回等待）不算断连，不重发。
+        if (signal?.aborted) throw error;
         const next = reconnect ? await reconnect(error) : null;
         if (!next) throw error;
         base = next;
-        return send(method, path, body);
+        return send(method, path, body, signal);
       })
       .catch((error: unknown) => {
         if (error instanceof Problem) throw error;
@@ -172,8 +177,11 @@ export function client(
     return value as T;
   }
   return {
-    get: <T>(path: string, observe?: (headers: Headers) => void) =>
-      call<T>("GET", path, undefined, observe),
+    get: <T>(
+      path: string,
+      observe?: (headers: Headers) => void,
+      signal?: AbortSignal,
+    ) => call<T>("GET", path, undefined, observe, signal),
     post: <T>(path: string, body: unknown = {}) => call<T>("POST", path, body),
     put: <T>(path: string, body: unknown) => call<T>("PUT", path, body),
     patch: <T>(path: string, body: unknown) => call<T>("PATCH", path, body),

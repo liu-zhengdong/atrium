@@ -194,6 +194,7 @@ async function verifyClaims(
 export async function collectFacts(
   input: FactInput,
   run: Exec = defaultExec,
+  includeCi = true,
 ): Promise<Facts> {
   const empty: Facts = {
     repo: false,
@@ -256,7 +257,7 @@ export async function collectFacts(
     if (!remoteSha) facts.pushDetail = `origin 上没有分支 ${branch}`;
     else if (!facts.pushed) facts.pushDetail = "origin 上的分支落后于本地";
   }
-  if (facts.pr) {
+  if (facts.pr && includeCi) {
     const ci = await readCi(facts.pr.url, run);
     facts.ci = ci.ci;
     facts.ciDetail = ci.detail;

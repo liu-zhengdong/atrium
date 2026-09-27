@@ -5,11 +5,13 @@
 
 import type { Ci, Claim, FileStat, FunctionSpan, Pr } from "./gate-parse.ts";
 import { ciUnavailableReason } from "./ci-classify.ts";
+import type { LocalCheck } from "./local-check.ts";
 
 export * from "./gate-parse.ts";
 
 export const GATES = [
   "pr_exists",
+  "local_check",
   "ci",
   "finished",
   "file_growth",
@@ -30,6 +32,7 @@ export type Facts = {
   prError?: string;
   ci: Ci | null;
   ciDetail?: string;
+  localCheck?: LocalCheck;
   numstat: FileStat[];
   functions: FunctionSpan[];
   /** 未提交（含未跟踪）的路径。 */
@@ -114,6 +117,21 @@ function ci(facts: Facts): GateResult {
     gate: "ci",
     ok: false,
     evidence: `PR 上没有 CI 检查${facts.ciDetail ? `：${facts.ciDetail}` : ""}`,
+  };
+}
+
+function localCheck(facts: Facts): GateResult {
+  const result = facts.localCheck;
+  if (!result)
+    return {
+      gate: "local_check",
+      ok: false,
+      evidence: "运行时没有本地检查结果",
+    };
+  return {
+    gate: "local_check",
+    ok: result.status === "passed",
+    evidence: `本地检查${result.status === "passed" ? "通过" : "未通过"}：${result.detail}${result.failedTests.length ? `；失败用例：${result.failedTests.join("、")}` : ""}；日志：${result.log}`,
   };
 }
 
@@ -206,6 +224,8 @@ export function evaluateGates(
     switch (gate) {
       case "pr_exists":
         return prExists(facts);
+      case "local_check":
+        return localCheck(facts);
       case "ci":
         return ci(facts);
       case "finished":

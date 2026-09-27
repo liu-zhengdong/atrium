@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import {
@@ -13,6 +13,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
+import { DatabaseSync } from "node:sqlite";
 import {
   alive,
   currentVersion,
@@ -26,6 +28,7 @@ import { installVersion } from "./install-version.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { Problem } from "./problem.ts";
 import { localFetch } from "./local-http.ts";
+import { probePort } from "./port-owner.ts";
 
 export type RestartStatus =
   /** 旧版 `restart --when-idle` 的遗留状态：只认得出来，启动时丢弃（discardLegacyIdleRestart）。 */
@@ -48,6 +51,7 @@ export type RestartState = {
   targetVersion?: string;
   data: string;
   oldPid?: number;
+  recoverOldPid?: number;
   repo?: string;
   newPid?: number;
   error?: string;
@@ -206,6 +210,7 @@ export async function startSupervisor(
   options: SupervisorLaunchOptions,
 ): Promise<{ pid: number; taskId: string }> {
   const data = options.data;
+  const previous = readRestartState(data);
   const taskId = `rst-${Date.now()}`;
   const pendingPath = join(data, "pending-update.json");
   const pending = existsSync(pendingPath)
@@ -228,6 +233,7 @@ export async function startSupervisor(
     targetVersion: options.targetVersion ?? pending?.to ?? currentVersion(),
     repo: pending?.repo ?? process.env.ATRIUM_UPDATE_REPO,
     data,
+    recoverOldPid: previous?.status === "failed" ? previous.oldPid : undefined,
   };
   writeRestartState(data, initialState);
 
@@ -323,6 +329,61 @@ export async function requestDrain(
     );
 }
 
+/** 旧进程已停止监听时的最后接管。只处理原登记实例，且确认任务账本可读。 */
+export async function reclaimStoppedService(
+  record: ServiceRecord,
+  data: string,
+): Promise<void> {
+  const current = readService(data);
+  if (
+    !current ||
+    current.instance !== record.instance ||
+    current.pid !== record.pid
+  )
+    throw new Error("旧服务登记已变化，不能按 PID 结束进程");
+  if ((await probePort(record.port)).kind !== "free")
+    throw new Error("旧服务仍在监听，不能强制结束进程");
+  const db = new DatabaseSync(join(data, "atrium.sqlite"), { readOnly: true });
+  try {
+    // 执行者的 PID 和任务状态在账本中，新服务按这些记录接管。
+    db.prepare("SELECT id, status, pid FROM tasks ORDER BY id LIMIT 1").all();
+    const unrecorded = db
+      .prepare(
+        "SELECT id FROM tasks WHERE status='running' AND pid IS NULL LIMIT 1",
+      )
+      .get();
+    if (unrecorded)
+      throw new Error("有运行中任务尚未记录执行者 PID，不能结束旧服务");
+  } finally {
+    db.close();
+  }
+  if (!alive(record.pid)) return;
+  // 登记可能在崩溃后残留，PID 也可能被系统复用；再核对进程命令。
+  const { stdout: command } = await promisify(execFile)(
+    "ps",
+    ["-ww", "-p", String(record.pid), "-o", "command="],
+    { timeout: 2000 },
+  );
+  if (!/(?:^|\s|\/)server\/main\.ts(?:\s|$)/.test(command))
+    throw new Error("旧服务 PID 已不是 Atrium 服务进程，不能强制结束");
+  try {
+    process.kill(record.pid, "SIGTERM");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  for (let i = 0; i < 20 && alive(record.pid); i++) await delay(100);
+  if (alive(record.pid)) {
+    // 已验证实例、监听和持久化；SIGTERM 无效时旧进程不能继续挡住升级。
+    try {
+      process.kill(record.pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+    for (let i = 0; i < 30 && alive(record.pid); i++) await delay(100);
+  }
+  if (alive(record.pid)) throw new Error("旧服务进程仍未退出");
+}
+
 export async function runSupervisor(args: string[]): Promise<void> {
   let data = "";
   let taskId = "";
@@ -360,8 +421,23 @@ export async function runSupervisor(args: string[]): Promise<void> {
     state.oldPid = oldRecord.pid;
     writeRestartState(data, state);
     try {
-      await requestDrain(oldRecord, agentTimeout);
-      await stopService(data);
+      try {
+        await requestDrain(oldRecord, agentTimeout);
+      } catch (error) {
+        // 上一轮升级已确认旧服务关监听但没退出；重新运行 restart 可接管。
+        if (state.recoverOldPid !== oldRecord.pid) throw error;
+        await reclaimStoppedService(oldRecord, data);
+      }
+      if (alive(oldRecord.pid)) {
+        try {
+          await stopService(data);
+        } catch (error) {
+          console.warn(
+            `旧服务未按时退出，检查持久化记录后接管：${String(error)}`,
+          );
+          await reclaimStoppedService(oldRecord, data);
+        }
+      }
     } catch (error) {
       state.status = "failed";
       state.error = `旧服务未停止：${String(error)}`;

@@ -9,14 +9,87 @@ import {
   checkServiceHealth,
   requestDrain,
   waitForRestart,
+  reclaimStoppedService,
 } from "../server/supervisor.ts";
 import { createServer } from "node:http";
-import { currentVersion, packageRoot } from "../server/service-state.ts";
-import { execFile } from "node:child_process";
+import { alive, currentVersion, packageRoot } from "../server/service-state.ts";
+import { execFile, spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { childEnv } from "./child-env.ts";
+import { serviceStatus } from "../server/service.ts";
 
 const exec = promisify(execFile);
+
+test("旧服务关监听后只接管已登记实例，且执行者 PID 必须已落盘", async (t) => {
+  const data = mkdtempSync(join(tmpdir(), "atrium-reclaim-"));
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      "process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)",
+      "server/main.ts",
+    ],
+    { stdio: ["ignore", "pipe", "ignore"] },
+  );
+  t.after(() => {
+    if (alive(child.pid!)) child.kill("SIGKILL");
+    rmSync(data, { recursive: true, force: true });
+  });
+  await new Promise<void>((resolve) =>
+    child.stdout.once("data", () => resolve()),
+  );
+  const socket = createServer();
+  await new Promise<void>((resolve) => socket.listen(0, "127.0.0.1", resolve));
+  const port = (socket.address() as { port: number }).port;
+  await new Promise<void>((resolve) => socket.close(() => resolve()));
+  const record = {
+    instance: randomUUID(),
+    pid: child.pid!,
+    port,
+    token: "a".repeat(64),
+  };
+  const service = new DatabaseSync(join(data, "service.sqlite"));
+  service.exec(
+    "CREATE TABLE service (id INTEGER PRIMARY KEY, record TEXT NOT NULL)",
+  );
+  service
+    .prepare("INSERT INTO service(id,record) VALUES(1,?)")
+    .run(JSON.stringify(record));
+  service.close();
+  const tasks = new DatabaseSync(join(data, "atrium.sqlite"));
+  tasks.exec(
+    "CREATE TABLE tasks(id INTEGER PRIMARY KEY, status TEXT, pid INTEGER)",
+  );
+  tasks.exec("INSERT INTO tasks VALUES(1,'running',NULL)");
+  writeRestartState(data, {
+    id: "rst-half-dead",
+    status: "failed",
+    supervisorPid: 0,
+    startedAt: Date.now(),
+    fromVersion: "0.1.80",
+    oldPid: child.pid!,
+    data,
+  });
+  await assert.rejects(
+    serviceStatus(data),
+    /已关监听但进程未退出；运行 atrium restart/,
+  );
+  await assert.rejects(
+    reclaimStoppedService(record, data),
+    /尚未记录执行者 PID/,
+  );
+  assert(alive(child.pid!));
+  tasks.exec("UPDATE tasks SET pid=12345 WHERE id=1");
+  tasks.close();
+  await assert.rejects(
+    reclaimStoppedService({ ...record, instance: randomUUID() }, data),
+    /登记已变化/,
+  );
+  await reclaimStoppedService(record, data);
+  assert.equal(alive(child.pid!), false);
+});
 
 test("supervisor 状态读写正确保持持久化", () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-sup-"));

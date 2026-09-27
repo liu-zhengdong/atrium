@@ -23,7 +23,7 @@ import {
   type ServiceRecord,
 } from "./service-state.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
-import { restartInProgress } from "./supervisor.ts";
+import { readRestartState, restartInProgress } from "./supervisor.ts";
 import { localFetch } from "./local-http.ts";
 
 async function request(record: ServiceRecord, stop = false) {
@@ -118,7 +118,17 @@ export async function serviceStatus(data: string) {
     console.log(`Atrium 未运行\n数据：${data}${legacy ? `\n${legacy}` : ""}`);
     return;
   }
-  const current = await request(record).catch(() => {
+  const current = await request(record).catch(async () => {
+    const state = readRestartState(data);
+    if (
+      state?.oldPid === record.pid &&
+      (await probePort(record.port)).kind === "free"
+    )
+      throw new Error(
+        state.status === "failed"
+          ? `旧服务 PID ${record.pid} 已关监听但进程未退出；运行 atrium restart 接管升级，再运行 atrium restart --wait 查看结果`
+          : `旧服务 PID ${record.pid} 已关监听，正在等待进程退出；运行 atrium restart --wait 查看结果`,
+      );
     throw unavailable(record, data);
   });
   if (current.stopping) throw await unavailableReason(record, data);

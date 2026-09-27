@@ -60,8 +60,19 @@ const shutdown = async () => {
   shutdownStarted = true;
   stopping = true;
   clearDrainWatch();
+  // preClose 会先唤醒 SSE/长轮询；剩余连接或清理句柄仍不能无限拖住升级。
+  const disconnect = setTimeout(() => {
+    console.warn("HTTP 关闭超过 5 秒，断开剩余连接");
+    app?.server.closeAllConnections();
+  }, 5000);
+  const deadline = setTimeout(() => {
+    console.error("服务关闭超过 8 秒，退出旧进程供新服务接管执行者");
+    process.exit(1);
+  }, 8000);
   try {
     await app?.close();
+    clearTimeout(disconnect);
+    clearTimeout(deadline);
     lease.release();
     process.exit(0);
   } catch (error) {

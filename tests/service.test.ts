@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createServer, request as httpRequest } from "node:http";
+import { Agent, createServer, request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { userTokenPath } from "../server/user-auth.ts";
 import { declaredBodyWithoutBytes } from "./raw-http.ts";
@@ -621,6 +621,67 @@ test(
     assert.equal((await f.cli("--no-open")).code, 0);
     assert.equal(readService(f.data)?.pid, child.pid);
     assert.equal((await f.cli("stop")).code, 0);
+  },
+);
+
+test(
+  "SSE、空闲 keep-alive 与 events wait 在重启时断开或返回，新服务可重新连接",
+  { timeout: 90_000 },
+  async (t) => {
+    const f = await fixture(t);
+    assert.equal((await f.cli("--no-open")).code, 0);
+    const old = readService(f.data)!;
+    const url = serviceUrl(old);
+    const headers = f.userHeaders();
+    const agent = new Agent({ keepAlive: true });
+    t.after(() => agent.destroy());
+    await new Promise<void>((resolve, reject) => {
+      const req = httpRequest(`${url}/api/service/info`, { agent }, (res) => {
+        res.resume();
+        res.on("end", resolve);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(Object.keys(agent.freeSockets).length, 1);
+
+    let stream: ReturnType<typeof httpRequest>;
+    const disconnected = new Promise<void>((resolve, reject) => {
+      stream = httpRequest(`${url}/api/map/stream`, { headers }, (res) => {
+        if (res.statusCode !== 200)
+          reject(new Error(`SSE HTTP ${res.statusCode}`));
+        res.on("data", (chunk: Buffer) => {
+          if (chunk.toString().includes("event: hello")) ready();
+        });
+        res.on("close", resolve);
+      });
+      stream.on("error", reject);
+      stream.end();
+    });
+    let ready!: () => void;
+    const hello = new Promise<void>((resolve) => (ready = resolve));
+    t.after(() => stream?.destroy());
+    await hello;
+    const waiting = fetch(`${url}/api/events/wait?timeout=60`, {
+      headers,
+    }).then((response) => response.json() as Promise<{ restarting?: boolean }>);
+    await delay(200);
+    const started = await f.cli("restart");
+    assert.equal(started.code, 0, started.stderr);
+    const finished = await f.cli("restart", "--wait", "--timeout", "60");
+    assert.equal(finished.code, 0, finished.stderr || finished.stdout);
+    assert.equal((await waiting).restarting, true);
+    await disconnected;
+    assert.equal(alive(old.pid), false);
+    const next = readService(f.data)!;
+    assert.notEqual(next.instance, old.instance);
+    assert.equal((await f.cli("status")).code, 0);
+    const reconnected = await fetch(`${serviceUrl(next)}/api/map/stream`, {
+      headers,
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(reconnected.status, 200);
+    await reconnected.body?.cancel();
   },
 );
 

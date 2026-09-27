@@ -75,6 +75,7 @@ export async function createApp(options: {
   const app = Fastify({
     logger: { level: "warn" },
     bodyLimit: 4 * 1024 * 1024,
+    forceCloseConnections: "idle",
   });
   app.addHook("onRoute", (route) => {
     for (const method of [route.method].flat())

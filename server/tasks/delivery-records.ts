@@ -71,20 +71,20 @@ const number = (x: unknown) =>
 export const isRebaseConflict = (reason: string) =>
   /rebase\s*冲突|变基\s*冲突|rebase\s+conflict/i.test(reason);
 export function ensureDeliveryRecords(db: DatabaseSync) {
-  db.exec(`CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id INTEGER NOT NULL,start_event_id INTEGER NOT NULL UNIQUE,worker TEXT NOT NULL,tool TEXT NOT NULL,model TEXT,effort TEXT,job_id INTEGER,risk TEXT,part_id INTEGER,started_at INTEGER NOT NULL,ended_at INTEGER,outcome TEXT,final_outcome TEXT,historical INTEGER NOT NULL DEFAULT 0,job_rev INTEGER,job_checks TEXT);
-  CREATE INDEX IF NOT EXISTS deliveries_worker ON deliveries(tool,model,effort,job_id,id);
-  CREATE INDEX IF NOT EXISTS deliveries_task ON deliveries(task_id,id);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS task_deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id INTEGER NOT NULL,start_event_id INTEGER NOT NULL UNIQUE,worker TEXT NOT NULL,tool TEXT NOT NULL,model TEXT,effort TEXT,job_id INTEGER,risk TEXT,part_id INTEGER,started_at INTEGER NOT NULL,ended_at INTEGER,outcome TEXT,final_outcome TEXT,historical INTEGER NOT NULL DEFAULT 0,job_rev INTEGER,job_checks TEXT);
+  CREATE INDEX IF NOT EXISTS task_deliveries_worker ON task_deliveries(tool,model,effort,job_id,id);
+  CREATE INDEX IF NOT EXISTS task_deliveries_task ON task_deliveries(task_id,id);`);
   const columns = new Set(
-    all<{ name: string }>(db, "PRAGMA table_info(deliveries)").map(
+    all<{ name: string }>(db, "PRAGMA table_info(task_deliveries)").map(
       (x) => x.name,
     ),
   );
   if (!columns.has("job_rev"))
-    db.exec("ALTER TABLE deliveries ADD COLUMN job_rev INTEGER");
+    db.exec("ALTER TABLE task_deliveries ADD COLUMN job_rev INTEGER");
   if (!columns.has("job_checks"))
-    db.exec("ALTER TABLE deliveries ADD COLUMN job_checks TEXT");
+    db.exec("ALTER TABLE task_deliveries ADD COLUMN job_checks TEXT");
   if (!columns.has("final_outcome"))
-    db.exec("ALTER TABLE deliveries ADD COLUMN final_outcome TEXT");
+    db.exec("ALTER TABLE task_deliveries ADD COLUMN final_outcome TEXT");
   backfillDeliveries(db);
 }
 /** 旧库启动时逐页回填；只用账本事件里的事实，不推测遗失的强度或风险。 */
@@ -98,7 +98,13 @@ export function backfillDeliveries(db: DatabaseSync) {
     );
     for (const start of starts) {
       after = start.id;
-      if (one(db, "SELECT 1 FROM deliveries WHERE start_event_id=?", start.id))
+      if (
+        one(
+          db,
+          "SELECT 1 FROM task_deliveries WHERE start_event_id=?",
+          start.id,
+        )
+      )
         continue;
       const task = one<TaskRow>(
         db,
@@ -129,7 +135,7 @@ export function backfillDeliveries(db: DatabaseSync) {
         nextStart?.id ?? Number.MAX_SAFE_INTEGER,
       );
       db.prepare(
-        "INSERT OR IGNORE INTO deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,ended_at,outcome,historical) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
+        "INSERT OR IGNORE INTO task_deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,ended_at,outcome,historical) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
       ).run(
         task.id,
         start.id,
@@ -164,10 +170,10 @@ export function startDelivery(
   }
   const job = task.job_id ? getJobRole(db, `r${task.job_id}`) : null;
   db.prepare(
-    "UPDATE deliveries SET final_outcome='switched',ended_at=COALESCE(ended_at,?),outcome=COALESCE(outcome,'switched') WHERE id=(SELECT id FROM deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1) AND worker<>? AND COALESCE(final_outcome,'') NOT IN ('merged','cancelled')",
+    "UPDATE task_deliveries SET final_outcome='switched',ended_at=COALESCE(ended_at,?),outcome=COALESCE(outcome,'switched') WHERE id=(SELECT id FROM task_deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1) AND worker<>? AND COALESCE(final_outcome,'') NOT IN ('merged','cancelled')",
   ).run(at, task.id, worker);
   db.prepare(
-    "INSERT OR IGNORE INTO deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,historical,job_rev,job_checks) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)",
+    "INSERT OR IGNORE INTO task_deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,historical,job_rev,job_checks) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)",
   ).run(
     task.id,
     eventId,
@@ -189,7 +195,7 @@ export function activeJobChecks(
 ): string[] | null {
   const row = one<{ job_checks: string | null }>(
     db,
-    "SELECT job_checks FROM deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1",
+    "SELECT job_checks FROM task_deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1",
     taskId,
   );
   if (!row?.job_checks) return null;
@@ -209,7 +215,7 @@ export function endDelivery(
   at: number,
 ) {
   db.prepare(
-    "UPDATE deliveries SET ended_at=?,outcome=?,final_outcome=? WHERE id=(SELECT id FROM deliveries WHERE task_id=? AND ended_at IS NULL ORDER BY id DESC LIMIT 1)",
+    "UPDATE task_deliveries SET ended_at=?,outcome=?,final_outcome=? WHERE id=(SELECT id FROM task_deliveries WHERE task_id=? AND ended_at IS NULL ORDER BY id DESC LIMIT 1)",
   ).run(at, outcome, outcome, taskId);
 }
 export function markDeliveryFinal(
@@ -218,7 +224,7 @@ export function markDeliveryFinal(
   result: string,
 ) {
   db.prepare(
-    "UPDATE deliveries SET final_outcome=? WHERE id=(SELECT id FROM deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1)",
+    "UPDATE task_deliveries SET final_outcome=? WHERE id=(SELECT id FROM task_deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1)",
   ).run(result, taskId);
 }
 export function deliveryFacts(
@@ -369,7 +375,7 @@ export function listDeliveries(
   while (rows.length < limit) {
     const page = all<DeliveryRow>(
       db,
-      "SELECT * FROM deliveries WHERE (? IS NULL OR worker=?) AND (? IS NULL OR job_id=?) AND id<? ORDER BY id DESC LIMIT ?",
+      "SELECT * FROM task_deliveries WHERE (? IS NULL OR worker=?) AND (? IS NULL OR job_id=?) AND id<? ORDER BY id DESC LIMIT ?",
       filter.worker ?? null,
       filter.worker ?? null,
       filter.job ?? null,

@@ -125,7 +125,7 @@ test("交付事实、冲突不归责、未知强度、五次样本后建议", ()
   assert.equal(stat.first_pass_rate, 1);
   assert.equal(stat.low_data, false);
   assert.equal(adviceFor(stat)?.action, "relax");
-  d.prepare("DELETE FROM deliveries WHERE id=?").run(rows[0]!.id);
+  d.prepare("DELETE FROM task_deliveries WHERE id=?").run(rows[0]!.id);
   assert.equal(
     summarizeDeliveries(listDeliveries(d)).find(
       (s) => s.scope === "combination",

@@ -44,6 +44,7 @@ import { width } from "../cli/format.ts";
 import { commands, help } from "../cli/main.ts";
 import { guide } from "../cli/guide.ts";
 import { startApp } from "./task-fixture.ts";
+import { HostLoad } from "../server/tasks/host-load.ts";
 
 /**
  * atrium top（#262）：最近动作的解析、看板的列宽与筛选规则。
@@ -760,7 +761,25 @@ test("原因：detail 写坏或没有 reason 时不失败", () => {
 // ---- 接口与命令表 ----
 
 test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与日志时刻", async (t) => {
-  const { data, call } = await startApp(t);
+  // 本机太忙：手工排队的 t3 留在队列里，不被巡检拉起（#358）。
+  const host = new HostLoad(
+    {
+      cores: 8,
+      maxWorkers: null,
+      maxChecks: 1,
+      testConcurrency: 1,
+      busyLoad: 16,
+    },
+    () => 170,
+  );
+  const { data, call } = await startApp(
+    t,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { host },
+  );
   const db = new DatabaseSync(join(data, "atrium.sqlite"));
   t.after(() => db.close());
   const at = Date.now() - 41 * minute;
@@ -828,6 +847,7 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
   assert.equal(body.rows[1]!.worker, "opencode+mimo");
   assert.equal(body.rows[1]!.action, null);
   assert.equal(body.rows[2]!.reason, "CI 未运行");
+  assert.match(body.host!.paused!, /本机太忙（负载 170，超过 16）/);
   // top 不是任务短号：单独确认没被 :id 路由吃掉。
   assert.equal((await call("GET", "/api/tasks/t1")).body.ref, "t1");
   assert.match(

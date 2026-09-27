@@ -1,3 +1,6 @@
+import { availableParallelism } from "node:os";
+import { hostLimits } from "./host-load.ts";
+
 /**
  * 执行者进程的环境白名单（#262，沿用 #213 服务环境白名单的思路）。
  *
@@ -6,6 +9,8 @@
  * 继承来的窗格号连 herdr，卡在 init）、CLAUDECODE / CLAUDE_CODE_*（嵌套会话标记）、PI_*、
  * NODE_TEST_CONTEXT，以及 *_API_KEY、*_TOKEN 等凭据。白名单外的名字不看值、直接丢弃。
  * 固定加上 ATRIUM_WORKER=1：命令行据此拒绝操作用户的 Atrium 服务。
+ * 另注入 ATRIUM_TEST_CONCURRENCY（#358）：测试并发上限，仓库的测试脚本据此限并发，
+ * 免得每个 worktree 各占满全部核；来源环境里设了合法值就沿用，否则按核数给缺省。
  */
 
 const SYSTEM = new Set([
@@ -50,5 +55,8 @@ export function workerEnvironment(
   env.GH_PROMPT_DISABLED = "1";
   // 命令行见到这个标记就拒绝操作用户的 Atrium 服务（cli/worker-guard.ts）。
   env.ATRIUM_WORKER = "1";
+  env.ATRIUM_TEST_CONCURRENCY = String(
+    hostLimits(base, availableParallelism()).limits.testConcurrency,
+  );
   return env;
 }

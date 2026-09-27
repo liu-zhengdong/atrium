@@ -58,6 +58,7 @@ import { fileHints } from "./concerns.ts";
 import { hintText, needsReview } from "./concern-gate.ts";
 import { isCouncilTask, isOpinionTask } from "./councils.ts";
 import { taskRoute } from "../leaders/subscriber.ts";
+import type { HostGate } from "./host-load.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -87,6 +88,8 @@ export type ExecutorContext = {
   };
   /** 会审（#322）：专员意见或 leader 汇总结束后推进会审（否则等下一轮巡检）。 */
   councils?: { settle: () => void };
+  /** 本机还能不能再拉起一个执行者（#358 并发上限与负载）；缺省不限。 */
+  hostGate?: () => HostGate;
 };
 
 export class Executors {
@@ -118,6 +121,16 @@ export class Executors {
     for (const [id, launching] of this.launching)
       if (launching === tool && id !== except) return true;
     return false;
+  }
+
+  /** 在跑（未退出）与正在启动的执行者个数，except 除外；本机并发上限按它算。 */
+  inFlight(except?: number) {
+    const ids = new Set<number>();
+    for (const active of this.active.values())
+      if (!active.exited) ids.add(active.id);
+    for (const id of this.launching.keys()) ids.add(id);
+    ids.delete(except ?? -1);
+    return ids.size;
   }
 
   /** 已有任务在跑（或正在启动）的工具，except 除外；自动挑人时据此避开正忙的独占执行者。 */
@@ -491,7 +504,8 @@ export class Executors {
       if (remaining) this.finishing.set(id, remaining);
       else this.finishing.delete(id);
       this.ctx.waits.changed(id);
-      if (!this.ctx.closed()) void this.drain(active.tool);
+      // 本机并发上限（#358）按所有工具算：谁结束都可能空出位置给别的工具的队首。
+      if (!this.ctx.closed()) void this.drain();
     }
   }
 
@@ -650,7 +664,10 @@ export class Executors {
     }, this.ctx.killGraceMs ?? 10_000).unref();
   }
 
-  /** 拉起排队中的任务：每个工具的队首，前提是独占工具空闲、账号额度标记已解除；返回出队几个。 */
+  /**
+   * 拉起排队中的任务：每个工具的队首，前提是独占工具空闲、账号额度标记已解除、本机没满也不太忙；
+   * 返回出队几个。几处（退出收尾、巡检、额度解除）可能同时调用，出队以删到队列行为准。
+   */
   async drain(tool?: Tool) {
     if (this.ctx.closed()) return 0;
     const held = this.ctx.quota.held();
@@ -660,7 +677,10 @@ export class Executors {
       if (this.ctx.closed() || held.has(ADAPTERS[entryTool].quotaProvider))
         continue;
       if (ADAPTERS[entryTool].exclusive && this.busy(entryTool)) continue;
-      dequeue(this.ctx.db, entry.task_id);
+      // 判定与占位之间没有 await：同时进来的另一轮 drain 看得到这里的 launching。
+      const gate = this.ctx.hostGate?.();
+      if (gate && !gate.ok) break;
+      if (!dequeue(this.ctx.db, entry.task_id)) continue;
       moved++;
       this.launching.set(entry.task_id, entryTool);
       try {

@@ -275,11 +275,35 @@ export class EventInbox {
       : Math.max(0, row.at + this.leaseMs - this.now());
   }
 
-  /** 有可取事件立即返回；否则等到有事件、超时或服务关闭。 */
+  /**
+   * 只把仍可投递的指定事件记为已送达（唤醒通道送入会话前调用），返回实际标记的事件；
+   * 已确认、处理中或不属于该订阅者的编号略过。之后与 wait 取走的一样走处理中租约。
+   */
+  deliver(subscriber: string, ids: readonly number[]): InboxEvent[] {
+    const who = ownerOf(subscriber, "as");
+    const wanted = new Set(ids);
+    return atomically(this.db, () => {
+      const events = this.pending(who, Number.MAX_SAFE_INTEGER).filter(
+        (event) => wanted.has(event.id),
+      );
+      const mark = this.db.prepare(
+        "UPDATE task_inbox SET delivered_at=? WHERE id=?",
+      );
+      const now = this.now();
+      for (const event of events) mark.run(now, event.id);
+      return events.map((event) => ({ ...event, delivered_at: now }));
+    });
+  }
+
+  /**
+   * 有可取事件立即返回；否则等到有事件、超时或服务关闭。
+   * peek 只看不取：不记送达、不起租约，供唤醒通道判断空闲后再 deliver。
+   */
   async wait(
     subscriber: string,
     timeoutSeconds: number,
     signal?: AbortSignal,
+    options: { peek?: boolean } = {},
   ): Promise<{
     events: InboxEvent[];
     timed_out: boolean;
@@ -287,7 +311,8 @@ export class EventInbox {
   }> {
     const who = ownerOf(subscriber, "as");
     this.lastWait.set(who, this.now());
-    const ready = this.take(who);
+    const take = () => (options.peek ? this.pending(who) : this.take(who));
+    const ready = take();
     if (ready.length || timeoutSeconds <= 0 || this.closed)
       return { events: ready, timed_out: !ready.length };
     return new Promise((resolve) => {
@@ -301,7 +326,7 @@ export class EventInbox {
         this.emitter.off("close", closing);
         signal?.removeEventListener("abort", aborted);
         this.lastWait.set(who, this.now());
-        const events = this.take(who);
+        const events = take();
         resolve({
           events,
           timed_out: !events.length,

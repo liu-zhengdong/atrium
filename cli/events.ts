@@ -13,7 +13,7 @@ const str = (values: Values, key: string) => {
 };
 const client = async () => (await import("./service.ts")).connect();
 
-function line(event: InboxEvent) {
+export function eventLine(event: InboxEvent) {
   const detail = (event.detail ?? {}) as Record<string, unknown>;
   const reason = typeof detail.reason === "string" ? detail.reason : "";
   const title = typeof detail.title === "string" ? detail.title : "";
@@ -60,7 +60,7 @@ const list: Command = {
     else recordNext(`等新事件：atrium events wait --as ${who}`);
     if (json) printJson(result);
     else if (!result.events.length) console.log(`${who} 没有事件`);
-    else console.log(result.events.map(line).join("\n"));
+    else console.log(result.events.map(eventLine).join("\n"));
   },
 };
 
@@ -97,7 +97,7 @@ const wait: Command = {
       console.log(
         `${seconds} 秒内 ${who} 没有新事件；atrium events wait --as ${who}`,
       );
-    else console.log(result.events.map(line).join("\n"));
+    else console.log(result.events.map(eventLine).join("\n"));
     return ids.length ? 0 : 124;
   },
 };

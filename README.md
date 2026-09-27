@@ -90,6 +90,15 @@ atrium events ack 1               # 确认已处理（编号见 events wait）
 
 同一订阅者、同一去重键的未确认事件合并成一条；取走的事件 15 分钟内不重投（`ATRIUM_EVENT_LEASE_MINUTES` 可调），到点仍未确认才重投；自己 `task stop` 引出的事件不投给自己。
 
+## 和秘书对话
+
+```bash
+atrium chat                 # 打开秘书会话（缺省 opencode，接着上次）；--new 新开，--cwd 指定秘书工作目录
+atrium chat --allow         # 秘书的权限请求自动允许一次（非交互时缺省拒绝）
+```
+
+`atrium chat` 是和秘书对话的统一入口，按秘书所用工具（`--tool`，或环境变量 `ATRIUM_SECRETARY_TOOL`）选打开方式。现在接入的是 opencode：Atrium 以 ACP 客户端拉起 `opencode acp`（去掉 `HERDR_*` 环境变量）并持有会话，会话编号存在 `<ATRIUM_DATA>/secretary/`。秘书空闲时，发给 `secretary` 的待处理事件按唤醒规则攒批后作为新消息送入，界面标出「送入事件 #编号」；秘书忙时事件排队，一轮结束后合并送入；连续自动送入 10 次后暂停，等你发话再继续。送入即记为已送达，秘书处理完自己 `atrium events ack`，没确认的租约到期后重投；关掉界面不丢事件，下次打开一并送入。codex、kimi、Claude Code 与 opencode 原生界面（serve + attach）后续接入。
+
 ## 组织树
 
 组织、项目、模块、关注点四类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严，显式分配给兄弟的份额之和不得超过父节点的可分配量。根章程只有用户 `u1` 能改，其余由节点 leader 维护（`--as aN`）。

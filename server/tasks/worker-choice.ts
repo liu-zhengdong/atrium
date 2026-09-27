@@ -6,7 +6,7 @@ import {
   type Tool,
 } from "./adapters/index.ts";
 import { riskRefusal, trustRefusal, type RunRequest } from "./plan.ts";
-import { pickWorker, readPace } from "./prepare.ts";
+import { pickWorker, readPace, type PickInput } from "./prepare.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import type { LaunchOptions } from "./workspace.ts";
 import { readQuotaReservePercent, overReserve } from "./budget.ts";
@@ -25,6 +25,8 @@ export type Choice = {
 /** 自动挑人时的避让：busy 是已有任务在跑的工具（独占的排到空闲候选之后），exclude 这次不挑。 */
 export type Avoid = {
   busy?: ReadonlySet<Tool>;
+  /** 任务所在节点链：档案 avoid_nodes 命中的执行者自动挑人时跳过（写死执行者不受影响）。 */
+  chain?: PickInput["chain"];
   exclude?: ReadonlySet<Tool>;
   requireTrust?: boolean;
 };

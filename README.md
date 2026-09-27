@@ -105,6 +105,24 @@ atrium org link-roles                             # 预览把旧 role 字符串�
 
 任务的 `--role` 指向组织节点（`o4` 或 `atrium/runtime`），派活时在岗位说明（节点章程正文）后附「章程要点」：本节点与父节点目标、整条链的硬边界（带参数的写最严值）、记账节点，整段不超过 2000 字、边界完整附上。旧写法 `--role runtime` 按任务仓库找挂了该仓库的同名节点；岗位说明只取节点章程，对不上节点时没有岗位说明，不再读仓库文件。`org tree` 显示各节点子树里在做、卡住、待办的任务数。
 
+## 组织技能
+
+技能是组织资产，存在 Atrium：SKILL.md 与附属文件（最多 32 个、合计 256 KB），frontmatter 的 `name` 与 slug 一致、`description` 必填；每次修改存一版历史，可回退。你、技能 owner 节点或其祖先的 leader 能改；绑定看被绑节点的 leader 权限。
+
+```bash
+atrium skill add web-design ./web-design --owner atrium/web --reason 前端约定
+atrium skill bind web-design atrium/web          # 派到该节点及子节点的任务都带上
+atrium skill show web-design --out /tmp/wd       # 导出，改完写回
+atrium skill edit web-design /tmp/wd --rev r1 --reason "用户纠正：按钮间距" --source PR 链接
+atrium skill proposals                           # 执行者改了挂载副本生成的待审提议
+atrium skill proposal p1                         # 看差异
+atrium skill accept p1                           # 写成新修订；skill history web-design 查来源
+```
+
+派活时生效集合 = 节点链上绑定的 ∪ 执行者档案 `skills: [slug…]`（总是带）∪ `skills_for: { atrium/web: [slug…] }`（做该节点或其子节点的活时带），去重，每次最多 8 个；档案 `avoid_nodes: [atrium/web]` 让自动挑人避开。技能拷进任务目录，只对这次运行生效，不写用户全局配置、不写仓库工作树：Claude Code 用 `--plugin-dir <任务目录>/skills-plugin`，codex 用 `CODEX_HOME=<任务目录>/codex-home`（登录、配置、AGENTS.md、rules、plugins 和用户自己的 codex 技能软链回 `~/.codex`），opencode 用 `OPENCODE_CONFIG_DIR=<任务目录>/opencode`，其他工具只在提示词里给简介和 SKILL.md 路径。
+
+执行者可以直接改挂载的副本，并把原因写进任务目录的 `skill-notes.md`。收尾时比对副本与挂载时的修订，有差异就生成修订提议（`p1`），记在任务上并通知任务负责人。`skill accept` 写成新修订，作者记任务号、审核人另记；基于的版本已被别的修订更新时按文件三方合并，冲突就拒绝，用 `skill proposal p1 --out 目录` 导出、手工合并后 `skill edit <slug> 目录 --proposal p1 --reason …` 写回。
+
 ## 重启与升级
 
 ```bash
@@ -155,12 +173,13 @@ ATRIUM_PORT=4391 ATRIUM_DATA=$PWD/.atrium node bin/atrium.mjs
 ATRIUM_PORT=4391 ATRIUM_DATA=$PWD/.atrium node bin/atrium.mjs stop
 ```
 
-| 目录            | 职责                                                         |
-| --------------- | ------------------------------------------------------------ |
-| `bin/`、`cli/`  | 命令入口与各命令实现                                         |
-| `server/`       | 服务生命周期、单实例登记、用户认证、重启监督与升级           |
-| `server/tasks/` | 任务账本、执行者适配器与档案、派活、关卡、看门狗、额度、事件 |
-| `server/org/`   | 组织树：节点、章程、能力卡、硬边界、修订                     |
-| `tests/`        | 纯函数与接口测试；派活用假执行者和临时仓库                   |
+| 目录             | 职责                                                         |
+| ---------------- | ------------------------------------------------------------ |
+| `bin/`、`cli/`   | 命令入口与各命令实现                                         |
+| `server/`        | 服务生命周期、单实例登记、用户认证、重启监督与升级           |
+| `server/tasks/`  | 任务账本、执行者适配器与档案、派活、关卡、看门狗、额度、事件 |
+| `server/org/`    | 组织树：节点、章程、能力卡、硬边界、修订                     |
+| `server/skills/` | 组织技能：修订、绑定、派活挂载、回收提议与三方合并           |
+| `tests/`         | 纯函数与接口测试；派活用假执行者和临时仓库                   |
 
 仓库规范见 [AGENTS.md](AGENTS.md)；代码约定写在对应目录的 `AGENTS.md`。

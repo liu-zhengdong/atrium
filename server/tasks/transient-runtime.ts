@@ -11,6 +11,7 @@ import {
 } from "./transient.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import type { LaunchOptions } from "./workspace.ts";
+import { taskAvoidChain } from "../skills/task-skills.ts";
 
 /**
  * 临时错误后的重派（#262）：任务按退出码记账后，同一执行者重试一次，再失败按档案换执行者重派一次。
@@ -40,7 +41,11 @@ export async function chooseAnother(
       { risk: active.risk },
       ctx.launchOptions,
       ctx.held(),
-      { busy: x.busyTools(active.id), exclude: new Set([active.tool]) },
+      {
+        busy: x.busyTools(active.id),
+        exclude: new Set([active.tool]),
+        chain: taskAvoidChain(ctx.db, getTask(ctx.db, active.id)),
+      },
     );
   } catch (error) {
     return { note: `没有可换的执行者：${message(error)}` };

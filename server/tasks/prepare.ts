@@ -8,6 +8,7 @@ import { clock } from "./quota-holds.ts";
 import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
 import { idleFirst } from "./idle-first.ts";
 import type { Brief } from "../org/brief.ts";
+import { avoidReason, type ChainNode } from "../skills/model.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
@@ -32,18 +33,21 @@ export type PromptParts = {
   charter?: Brief;
   /** 投任务的节点（关注点）的说明。 */
   originDoc?: string;
+  /** 本次挂载的组织技能（server/skills/mount.ts 生成）。 */
+  skills?: string;
   rootDoc?: string;
   profileBody?: string;
   rules?: readonly string[];
 };
 
-/** 拼派活提示词：标题、详述、岗位说明、章程要点、投任务的专员说明、组织说明、执行者叮嘱、通用约束；空段省略。 */
+/** 拼派活提示词：标题、详述、岗位说明、章程要点、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
 export function buildPrompt({
   title,
   brief,
   roleDoc,
   charter,
   originDoc,
+  skills,
   rootDoc,
   profileBody,
   rules = DEFAULT_RULES,
@@ -55,6 +59,7 @@ export function buildPrompt({
     ["岗位说明", roleDoc],
     ...(charter ? [[charter.heading, charter.text] as [string, string]] : []),
     ["投任务的专员说明", originDoc],
+    ["本次挂载的技能", skills],
     ["组织说明（.agents/README.md）", rootDoc],
     ["给你的额外叮嘱", profileBody],
     ["通用约束", rules.map((rule) => `- ${rule}`).join("\n")],
@@ -182,6 +187,8 @@ export type PickInput = {
   exclude?: ReadonlySet<Tool>;
   /** 额度换人额外要求档案 trust 覆盖任务风险。 */
   requireTrust?: boolean;
+  /** 任务所在节点链（根 → 本节点）：档案 avoid_nodes 命中的执行者不挑。 */
+  chain?: readonly ChainNode[];
 };
 
 export type Skip = { tool: Tool; reason: string };
@@ -197,7 +204,7 @@ export type PickResult =
   | { ok: false; reason: string; skipped: Skip[] };
 
 /**
- * 挑执行者：跳过没装的、档案风险不允许的、额度标记未到期的、触及章程保留额的；pace 可用时按账号富余从多到少，
+ * 挑执行者：跳过没装的、档案风险不允许的、档案 avoid_nodes 避开任务节点的、额度标记未到期的、触及章程保留额的；pace 可用时按账号富余从多到少，
  * 没有富余数据的工具排在有数据的之后并按固定顺序；pace 不可用时整体按固定顺序。
  * 最后把正忙的独占工具挪到空闲候选之后（idle-first.ts）。
  */
@@ -211,6 +218,7 @@ export function pickWorker({
   busy,
   exclude,
   requireTrust,
+  chain,
 }: PickInput): PickResult {
   if (!(RISKS as readonly string[]).includes(risk))
     throw invalid(`risk 只能是 ${RISKS.join("、")}`);
@@ -238,6 +246,12 @@ export function pickWorker({
         tool,
         reason: `档案 max_risk=${max}，低于任务 risk=${risk}`,
       });
+      continue;
+    }
+    const avoided =
+      chain?.length && avoidReason(chain, profiles[tool]?.rules.avoid_nodes);
+    if (avoided) {
+      skipped.push({ tool, reason: avoided });
       continue;
     }
     const trust =

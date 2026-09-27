@@ -14,6 +14,7 @@ export const claude: Adapter = {
   exclusive: false,
   efforts: ["low", "medium", "high", "xhigh", "max"],
   quotaProvider: "claude",
+  skillMount: "claude-plugin",
   resumeArgs: ["-p", "--continue"],
   watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["json_events", "worktree_change"],

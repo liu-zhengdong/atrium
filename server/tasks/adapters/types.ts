@@ -34,6 +34,8 @@ export type Launch = {
   stdin?: string;
   /** 工具会把最后一条消息写进这个文件（codex -o）。 */
   resultFile?: string;
+  /** 在白名单环境之上额外设置的变量（挂载技能用的 CODEX_HOME 等）。 */
+  env?: Record<string, string>;
 };
 
 /** 进展信号来源：看门狗据此判断执行者是否卡死（#262「执行者卡死检测」，下一部分实现）。 */
@@ -62,6 +64,8 @@ export type Adapter = {
   /** 预留给看门狗：启动后多久无进展判卡死、运行中多久无进展判受阻（分钟）。 */
   watchdog: { startupMinutes: number; idleMinutes: number };
   progressSignals: readonly ProgressSignal[];
+  /** 派活时怎么把组织技能交给它（server/skills/mount.ts）；undefined 表示只在提示词里给路径。 */
+  skillMount?: "claude-plugin" | "codex-home" | "opencode-config";
   /** 已知的坑，给人看，也会进 PR/档案对照。 */
   notes: readonly string[];
   build(input: LaunchInput): Launch;

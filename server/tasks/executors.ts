@@ -1,9 +1,11 @@
+import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { launched, type Active } from "./active.ts";
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
 import {
+  DEFAULT_OWNER,
   advanceTask,
   getTask,
   noteTask,
@@ -25,6 +27,7 @@ import { retryAfterTransient } from "./transient-runtime.ts";
 import type { TaskWaits } from "./waits.ts";
 import { judge } from "./watchdog.ts";
 import { prepareRun, type LaunchOptions } from "./workspace.ts";
+import { collectSkillEdits } from "../skills/collect.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -178,6 +181,7 @@ export class Executors {
         this.ctx.launchOptions.env,
       );
       if (this.ctx.closed()) return;
+      this.collectSkills(active);
       if (getTask(this.ctx.db, id).status !== "running") return;
       const { decision, verdict, facts } = outcome;
       if (outcome.localCheck)
@@ -259,6 +263,40 @@ export class Executors {
       this.ctx.waits.changed(id);
       if (!this.ctx.closed() && !this.ctx.paused())
         void this.drain(active.tool);
+    }
+  }
+
+  /** 执行者改了挂载的技能副本：生成修订提议，通知任务负责人（事件里带技能 owner 与其 leader）。 */
+  private collectSkills(active: Active) {
+    try {
+      const { proposals, problems } = collectSkillEdits(
+        this.ctx.db,
+        active.id,
+        dirname(active.logFile),
+      );
+      if (problems.length)
+        noteTask(this.ctx.db, active.id, "skill_proposal_skipped", {
+          problems,
+        });
+      if (!proposals.length) return;
+      const task = getTask(this.ctx.db, active.id);
+      for (const p of proposals) {
+        noteTask(this.ctx.db, active.id, "skill_proposal", p);
+        this.ctx.inbox.publish({
+          subscriber: task.owner ?? DEFAULT_OWNER,
+          taskId: active.id,
+          source: "runner",
+          kind: "skill_proposal",
+          key: `${task.ref}:skill:${p.proposal}`,
+          detail: {
+            title: task.title,
+            ...p,
+            next: `atrium skill proposal ${p.proposal}`,
+          },
+        });
+      }
+    } catch (error) {
+      console.error(`任务 ${taskRef(active.id)} 回收技能改动失败：`, error);
     }
   }
 

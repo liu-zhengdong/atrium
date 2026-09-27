@@ -7,8 +7,14 @@ import { roleMatcher } from "./task-node.ts";
  * node_id 的显式迁移（org link-roles，默认只预览）。只读写 tasks.node_id 与 task_events，不改 role 原值。
  */
 
-export type TaskCounts = { todo: number; running: number; blocked: number };
-const OPEN = ["todo", "running", "blocked"] as const;
+export type TaskCounts = {
+  todo: number;
+  running: number;
+  blocked: number;
+  merge_queued?: number;
+  merging?: number;
+};
+const OPEN = ["todo", "running", "blocked", "merge_queued", "merging"] as const;
 const empty = (): TaskCounts => ({ todo: 0, running: 0, blocked: 0 });
 
 /** 服务里任务表总在；单测只建组织表时没有任务可数。 */
@@ -32,10 +38,15 @@ export function taskCounts(db: DatabaseSync): {
   ] as const)
     for (const row of all<{ id: number; status: string; n: number }>(
       db,
-      `SELECT ${column} AS id,status,COUNT(*) AS n FROM tasks WHERE ${column} IS NOT NULL AND status IN ('todo','running','blocked') GROUP BY ${column},status LIMIT 1500`,
+      `SELECT ${column} AS id,
+         CASE WHEN delivery_stage IN ('merge_queued','merging') THEN delivery_stage ELSE status END AS status,
+         COUNT(*) AS n FROM tasks WHERE ${column} IS NOT NULL
+         AND (status IN ('todo','running','blocked') OR delivery_stage IN ('merge_queued','merging'))
+         GROUP BY ${column},CASE WHEN delivery_stage IN ('merge_queued','merging') THEN delivery_stage ELSE status END LIMIT 2500`,
     )) {
       const counts = map.get(row.id) ?? empty();
-      counts[row.status as (typeof OPEN)[number]] = row.n;
+      if (OPEN.includes(row.status as (typeof OPEN)[number]))
+        counts[row.status as (typeof OPEN)[number]] = row.n;
       map.set(row.id, counts);
     }
   return { own, sent };
@@ -45,6 +56,7 @@ export type NodeTask = {
   ref: string;
   title: string;
   status: string;
+  delivery_stage?: string | null;
   worker: string | null;
   origin_ref: string | null;
 };
@@ -55,17 +67,19 @@ export function nodeTasks(db: DatabaseSync, id: number, limit = 5): NodeTask[] {
     id: number;
     title: string;
     status: string;
+    delivery_stage?: string | null;
     worker: string | null;
     origin_node_id: number | null;
   }>(
     db,
-    "SELECT id,title,status,worker,origin_node_id FROM tasks WHERE node_id=? ORDER BY status IN ('todo','running','blocked') DESC,id DESC LIMIT ?",
+    "SELECT id,title,status,delivery_stage,worker,origin_node_id FROM tasks WHERE node_id=? ORDER BY status IN ('todo','running','blocked') OR delivery_stage IN ('merge_queued','merging') DESC,id DESC LIMIT ?",
     id,
     limit,
   ).map((t) => ({
     ref: `t${t.id}`,
     title: t.title,
     status: t.status,
+    delivery_stage: t.delivery_stage,
     worker: t.worker,
     origin_ref: t.origin_node_id === null ? null : ref(t.origin_node_id),
   }));

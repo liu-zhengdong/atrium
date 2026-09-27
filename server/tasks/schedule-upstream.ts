@@ -5,7 +5,7 @@ import { originRepo, parsePrUrl, repoFlag } from "./gh-repo.ts";
 
 /**
  * 上游交付 PR 的合入状态（#262）：运行时的 done 只表示交付物过了关卡，
- * 合入是验收方之后的一步；`--after tN` 在 tN 交付 PR 时要等这个 PR 合入。
+ * 合入由交付关卡后的运行时队列完成；`--after tN` 在 tN 交付 PR 时要等这个 PR 合入。
  * 状态按上游任务缓存，多个下游共用一次查询。
  */
 

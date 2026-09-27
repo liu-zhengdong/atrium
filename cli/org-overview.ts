@@ -7,9 +7,17 @@ import type { Point } from "../server/org/points.ts";
  * 没写的项标「未写」，一项都没写时只给一行怎么补。技术细节不在这里，由 `--detail` 另外展开。
  */
 
-const counts = (t: { todo: number; running: number; blocked: number }) =>
+const counts = (t: {
+  todo: number;
+  running: number;
+  blocked: number;
+  merge_queued?: number;
+  merging?: number;
+}) =>
   [
     t.running ? `在做 ${t.running}` : "",
+    t.merge_queued ? `排队合入 ${t.merge_queued}` : "",
+    t.merging ? `合入中 ${t.merging}` : "",
     t.blocked ? `卡住 ${t.blocked}` : "",
     t.todo ? `待办 ${t.todo}` : "",
   ]

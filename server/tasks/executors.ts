@@ -62,6 +62,7 @@ export type ExecutorContext = {
   disk: DiskBudget;
   killGraceMs?: number;
   closed: () => boolean;
+  onAccepted?: (id: number) => boolean;
 };
 
 export class Executors {
@@ -361,7 +362,9 @@ export class Executors {
           decision,
           published,
         );
-      else
+      else if (decision.publish === "done" && this.ctx.onAccepted?.(id)) {
+        this.publish(id, "merge_queued", published);
+      } else
         this.publish(
           id,
           decision.publish,

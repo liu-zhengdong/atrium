@@ -19,6 +19,8 @@ export type TopRow = {
   ref: string;
   title: string;
   status: string;
+  delivery_stage?: "merge_queued" | "merging" | "merged" | "online" | null;
+  merge_queued_at?: number | null;
   worker: string | null;
   started_at: number | null;
   ended_at: number | null;
@@ -43,6 +45,9 @@ export type Snapshot = {
   counts: {
     running: number;
     queued: number;
+    merge_queued?: number;
+    merging?: number;
+    merged?: number;
     blocked: number;
     processing: number;
     done: number;
@@ -120,6 +125,10 @@ const SYMBOL: Record<string, string> = {
   done: "✓",
   failed: "✕",
   cancelled: "·",
+  merge_queued: "◌",
+  merging: "●",
+  merged: "✓",
+  online: "✓",
 };
 const FINISHED = new Set(["done", "failed", "cancelled"]);
 
@@ -127,14 +136,19 @@ const FINISHED = new Set(["done", "failed", "cancelled"]);
 export const phase = (row: TopRow) =>
   row.queued_at !== null
     ? "queued"
-    : row.status === "running" || row.status === "blocked"
-      ? row.status
-      : row.status;
+    : (row.delivery_stage ??
+      (row.status === "running" || row.status === "blocked"
+        ? row.status
+        : row.status));
 
 /** 排队与受阻没有时长可言，直接说清在等什么。 */
 function state(row: TopRow, now: number) {
   const kind = phase(row);
   if (kind === "queued") return `排队${row.reason ? `（${row.reason}）` : ""}`;
+  if (kind === "merge_queued") return "排队合入";
+  if (kind === "merging") return "合入中";
+  if (kind === "merged") return "已合入";
+  if (kind === "online") return "已上线";
   if (kind === "blocked")
     return `${row.processing ? "处理中" : "卡住"}${row.reason ? `：${row.reason}` : ""}`;
   const from = row.started_at;
@@ -235,6 +249,11 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const head =
     `Atrium · 在跑 ${snapshot.counts.running}` +
     ` · 排队 ${snapshot.counts.queued}` +
+    (snapshot.counts.merge_queued
+      ? ` · 排队合入 ${snapshot.counts.merge_queued}`
+      : "") +
+    (snapshot.counts.merging ? ` · 合入中 ${snapshot.counts.merging}` : "") +
+    (snapshot.counts.merged ? ` · 已合入 ${snapshot.counts.merged}` : "") +
     ` · 处理中 ${snapshot.counts.processing}` +
     ` · 卡住 ${snapshot.counts.blocked}` +
     ` · 未处理事件 ${snapshot.counts.events}`;

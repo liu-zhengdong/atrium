@@ -293,7 +293,11 @@ export function textHints(
   const invited = new Set(
     concernRows(db, task.id).map((r) => specialistRef(r.node_id)),
   );
-  return inviteHints(rules, { text: `${task.title}\n${task.brief ?? ""}` }, invited);
+  return inviteHints(
+    rules,
+    { text: `${task.title}\n${task.brief ?? ""}` },
+    invited,
+  );
 }
 
 /** 执行者交付后的提示：按改动的文件。 */

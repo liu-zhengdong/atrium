@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   all,
   one,
@@ -70,10 +70,148 @@ const number = (x: unknown) =>
   typeof x === "number" && Number.isFinite(x) ? x : null;
 export const isRebaseConflict = (reason: string) =>
   /rebase\s*冲突|变基\s*冲突|rebase\s+conflict/i.test(reason);
+/** 一次交付窗口内的事实：只取本轮 start 之后、下一次 start 之前的事件（纯函数）。 */
+type WindowFacts = {
+  untilNext: TaskEventRow | undefined;
+  current: TaskEventRow[];
+  gates: EventDetail[];
+  failedGates: string[];
+  mergeReturns: string[];
+  conflicts: number;
+  incidents: string[];
+  passed: boolean;
+  gateReturnCount: number;
+};
+function windowOf(row: DeliveryRow, events: TaskEventRow[]): WindowFacts {
+  const later = events.filter((e) => e.id > row.start_event_id);
+  const untilNext = later.find((e) => e.kind === "start");
+  const current = later.filter((e) => !untilNext || e.id < untilNext.id);
+  const gates = current.filter((e) => e.kind === "gates").map(detail);
+  const failedGates = gates.flatMap((d) =>
+    Array.isArray(d.results)
+      ? d.results
+          .filter(
+            (x): x is EventDetail =>
+              !!x && typeof x === "object" && !Array.isArray(x),
+          )
+          .filter((x) => x.ok === false && x.pending !== true)
+          .map(
+            (x) => `${text(x.gate) ?? "关卡"}：${text(x.evidence) ?? "未过"}`,
+          )
+      : [],
+  );
+  const mergeReturns = current
+    .filter((e) => e.kind === "merge_returned" || e.kind === "merge_blocked")
+    .map((e) => text(detail(e).reason) ?? "合入队列退回");
+  const conflicts = mergeReturns.filter(isRebaseConflict).length;
+  const incidents = [
+    ...(current.some(
+      (e) => e.kind === "stalled" || /卡死/.test(text(inner(e).reason) ?? ""),
+    )
+      ? ["卡死"]
+      : []),
+    ...(current.some((e) => e.kind === "thinking_retry") ? ["思考耗尽"] : []),
+    ...(gates.some(
+      (d) =>
+        Array.isArray(d.results) &&
+        d.results.some(
+          (x: unknown) =>
+            !!x &&
+            typeof x === "object" &&
+            "gate" in x &&
+            (x as EventDetail).gate === "pr_exists" &&
+            (x as EventDetail).ok === false,
+        ),
+    )
+      ? ["没开 PR"]
+      : []),
+    ...(failedGates.some((x) => x.startsWith("claims_verified"))
+      ? ["虚报"]
+      : []),
+    ...(current.some((e) => /worker_guard|worker-guard/.test(e.kind))
+      ? ["越界"]
+      : []),
+  ];
+  return {
+    untilNext,
+    current,
+    gates,
+    failedGates,
+    mergeReturns,
+    conflicts,
+    incidents,
+    passed: gates.some((d) => d.passed === true),
+    gateReturnCount: gates.filter(
+      (d) =>
+        Array.isArray(d.results) &&
+        d.results.some(
+          (x: unknown) =>
+            !!x &&
+            typeof x === "object" &&
+            "ok" in x &&
+            (x as EventDetail).ok === false &&
+            (x as EventDetail).pending !== true,
+        ),
+    ).length,
+  };
+}
+const firstPassOf = (row: DeliveryRow, w: WindowFacts): boolean | null =>
+  row.ended_at === null
+    ? null
+    : w.passed &&
+      w.failedGates.length === 0 &&
+      w.mergeReturns.length === w.conflicts;
+/**
+ * 交付统计只需要一小组事实（#t123）：交给 SQL 读、不在 JS 里回表。逐字段与原 Delivery 一致，
+ * 但不用任务标题、简报等大字段，也不为每条交付单独查事件、用量、岗位。
+ */
+export type DeliveryMetric = {
+  id: number;
+  task_id: number;
+  worker: string;
+  tool: string;
+  model: string | null;
+  job_id: number | null;
+  job_name: string | null;
+  ended_at: number | null;
+  first_pass: boolean | null;
+  duration_ms: number | null;
+  gate_return_count: number;
+  merge_return_count: number;
+  incident_count: number;
+};
+function metricOf(
+  row: DeliveryRow,
+  w: WindowFacts,
+  jobName: string | null,
+): DeliveryMetric {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    worker: row.worker,
+    tool: row.tool,
+    model: row.model,
+    job_id: row.job_id,
+    job_name: jobName,
+    ended_at: row.ended_at,
+    first_pass: firstPassOf(row, w),
+    duration_ms:
+      row.ended_at === null ? null : Math.max(0, row.ended_at - row.started_at),
+    gate_return_count: w.gateReturnCount,
+    // 统计里只算不归责的合入退回（与旧 Delivery.merge_returns 一致）。
+    merge_return_count: w.mergeReturns.length - w.conflicts,
+    incident_count: w.incidents.length,
+  };
+}
 export function ensureDeliveryRecords(db: DatabaseSync) {
   db.exec(`CREATE TABLE IF NOT EXISTS task_deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id INTEGER NOT NULL,start_event_id INTEGER NOT NULL UNIQUE,worker TEXT NOT NULL,tool TEXT NOT NULL,model TEXT,effort TEXT,job_id INTEGER,risk TEXT,part_id INTEGER,started_at INTEGER NOT NULL,ended_at INTEGER,outcome TEXT,final_outcome TEXT,historical INTEGER NOT NULL DEFAULT 0,job_rev INTEGER,job_checks TEXT);
   CREATE INDEX IF NOT EXISTS task_deliveries_worker ON task_deliveries(tool,model,effort,job_id,id);
-  CREATE INDEX IF NOT EXISTS task_deliveries_task ON task_deliveries(task_id,id);`);
+  CREATE INDEX IF NOT EXISTS task_deliveries_task ON task_deliveries(task_id,id);
+  -- 交付统计按 worker / job 过滤：开头的索引让查询只碰命中的行，不扫整张表。
+  CREATE INDEX IF NOT EXISTS task_deliveries_worker_id ON task_deliveries(worker,job_id,id);
+  CREATE INDEX IF NOT EXISTS task_deliveries_job_id ON task_deliveries(job_id,id);
+  -- 无过滤的统计按 task 顺序扫覆盖索引即可拿到需要的列，不回表读整行。
+  CREATE INDEX IF NOT EXISTS task_deliveries_stats ON task_deliveries(task_id,start_event_id,id,worker,tool,model,job_id,started_at,ended_at);`);
   const columns = new Set(
     all<{ name: string }>(db, "PRAGMA table_info(task_deliveries)").map(
       (x) => x.name,
@@ -227,63 +365,19 @@ export function markDeliveryFinal(
     "UPDATE task_deliveries SET final_outcome=? WHERE id=(SELECT id FROM task_deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1)",
   ).run(result, taskId);
 }
+export type TaskLite = Pick<
+  TaskRow,
+  "id" | "title" | "status" | "delivery_stage"
+>;
 export function deliveryFacts(
   row: DeliveryRow,
-  task: TaskRow,
+  task: TaskLite,
   events: TaskEventRow[],
   usage: { points: number; basis: string } | undefined,
   jobName: string | null,
 ): Delivery {
-  const later = events.filter((e) => e.id > row.start_event_id);
-  const untilNext = later.find((e) => e.kind === "start");
-  const current = later.filter((e) => !untilNext || e.id < untilNext.id);
-  const gates = current.filter((e) => e.kind === "gates").map(detail);
-  const failedGates = gates.flatMap((d) =>
-    Array.isArray(d.results)
-      ? d.results
-          .filter(
-            (x): x is EventDetail =>
-              !!x && typeof x === "object" && !Array.isArray(x),
-          )
-          .filter((x) => x.ok === false && x.pending !== true)
-          .map(
-            (x) => `${text(x.gate) ?? "关卡"}：${text(x.evidence) ?? "未过"}`,
-          )
-      : [],
-  );
-  const mergeReturns = current
-    .filter((e) => e.kind === "merge_returned" || e.kind === "merge_blocked")
-    .map((e) => text(detail(e).reason) ?? "合入队列退回");
-  const conflicts = mergeReturns.filter(isRebaseConflict).length;
-  const incidents = [
-    ...(current.some(
-      (e) => e.kind === "stalled" || /卡死/.test(text(inner(e).reason) ?? ""),
-    )
-      ? ["卡死"]
-      : []),
-    ...(current.some((e) => e.kind === "thinking_retry") ? ["思考耗尽"] : []),
-    ...(gates.some(
-      (d) =>
-        Array.isArray(d.results) &&
-        d.results.some(
-          (x: unknown) =>
-            !!x &&
-            typeof x === "object" &&
-            "gate" in x &&
-            (x as EventDetail).gate === "pr_exists" &&
-            (x as EventDetail).ok === false,
-        ),
-    )
-      ? ["没开 PR"]
-      : []),
-    ...(failedGates.some((x) => x.startsWith("claims_verified"))
-      ? ["虚报"]
-      : []),
-    ...(current.some((e) => /worker_guard|worker-guard/.test(e.kind))
-      ? ["越界"]
-      : []),
-  ];
-  const gateDiff = gates
+  const w = windowOf(row, events);
+  const gateDiff = w.gates
     .map((d) => d.diff)
     .find((x) => !!x && typeof x === "object") as EventDetail | undefined;
   const diff = gateDiff
@@ -293,16 +387,15 @@ export function deliveryFacts(
         deleted: number(gateDiff.deleted) ?? number(gateDiff.removed) ?? 0,
       }
     : null;
-  const notes = current
+  const notes = w.current
     .filter((e) => e.kind === "note")
     .map(detail)
     .filter((d) => ["ok", "fixed", "rejected"].includes(text(d.verdict) ?? ""));
   const lastNote = notes.at(-1);
   const merged =
-    current.some((e) => e.kind === "merged") ||
+    w.current.some((e) => e.kind === "merged") ||
     ((task.delivery_stage === "merged" || task.delivery_stage === "online") &&
-      !untilNext);
-  const passed = gates.some((d) => d.passed === true);
+      !w.untilNext);
   return {
     ...row,
     task_ref: `t${row.task_id}`,
@@ -313,13 +406,13 @@ export function deliveryFacts(
         : row.final_outcome === "cancelled"
           ? "取消"
           : row.final_outcome === "switched" ||
-              (untilNext && text(inner(untilNext).worker) !== row.worker)
+              (w.untilNext && text(inner(w.untilNext).worker) !== row.worker)
             ? "换人"
             : row.final_outcome === "rebase_conflict"
               ? "变基冲突"
               : row.final_outcome === "returned"
                 ? "合入退回"
-                : !untilNext && task.status === "cancelled"
+                : !w.untilNext && task.status === "cancelled"
                   ? "取消"
                   : row.outcome === "exit_ok"
                     ? "交付"
@@ -333,34 +426,220 @@ export function deliveryFacts(
     duration_ms:
       row.ended_at === null ? null : Math.max(0, row.ended_at - row.started_at),
     diff,
-    gate_returns: failedGates,
-    gate_return_count: gates.filter(
-      (d) =>
-        Array.isArray(d.results) &&
-        d.results.some(
-          (x: unknown) =>
-            !!x &&
-            typeof x === "object" &&
-            "ok" in x &&
-            (x as EventDetail).ok === false &&
-            (x as EventDetail).pending !== true,
-        ),
-    ).length,
-    merge_returns: mergeReturns.filter((r) => !isRebaseConflict(r)),
-    rebase_conflicts: conflicts,
-    incidents,
-    first_pass:
-      row.ended_at === null
-        ? null
-        : passed &&
-          failedGates.length === 0 &&
-          mergeReturns.length === conflicts,
+    gate_returns: w.failedGates,
+    gate_return_count: w.gateReturnCount,
+    merge_returns: w.mergeReturns.filter((r) => !isRebaseConflict(r)),
+    rebase_conflicts: w.conflicts,
+    incidents: w.incidents,
+    first_pass: firstPassOf(row, w),
     merged,
     usage_points: usage?.basis === "unknown" ? null : (usage?.points ?? null),
     usage_basis: usage?.basis ?? null,
     verdict: text(lastNote?.verdict),
     verdict_note: text(lastNote?.text),
   };
+}
+function page<T>(items: readonly T[], size: number, fn: (slice: T[]) => void) {
+  for (let i = 0; i < items.length; i += size) fn(items.slice(i, i + size));
+}
+const marksOf = (n: number) => Array.from({ length: n }, () => "?").join(",");
+/** 交付统计的过滤条件：只写实际给的项，查询计划才用得上索引，也避免 `? IS NULL` 这种写法。 */
+function deliveryWhere(filter: { worker?: string; job?: number }): {
+  sql: string;
+  params: SQLInputValue[];
+} {
+  const clauses: string[] = [];
+  const params: SQLInputValue[] = [];
+  if (filter.worker !== undefined) {
+    clauses.push("worker=?");
+    params.push(filter.worker);
+  }
+  if (filter.job !== undefined && filter.job !== null) {
+    clauses.push("job_id=?");
+    params.push(filter.job);
+  }
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+/** 统计只关心这些事件；窗口边界靠 start。 */
+const METRIC_EVENTS =
+  "kind IN ('start','gates','merge_returned','merge_blocked','stalled','thinking_retry') OR kind LIKE '%worker_guard%' OR kind LIKE '%worker-guard%' OR detail LIKE '%卡死%'";
+/** 展示交付事实要看的事件（比统计多 merged、note）。 */
+const DISPLAY_EVENTS =
+  "kind IN ('start','gates','merge_returned','merge_blocked','stalled','thinking_retry','merged','note') OR kind LIKE '%worker_guard%' OR kind LIKE '%worker-guard%' OR detail LIKE '%卡死%'";
+function jobNamesOf(db: DatabaseSync, ids: readonly number[]) {
+  const map = new Map<number, string>();
+  page(ids, 200, (slice) => {
+    for (const r of all<{ id: number; name: string }>(
+      db,
+      `SELECT id,name FROM job_roles WHERE id IN (${marksOf(slice.length)})`,
+      ...slice,
+    ))
+      map.set(r.id, r.name);
+  });
+  return map;
+}
+function taskEventsFor(
+  db: DatabaseSync,
+  taskIds: readonly number[],
+  kinds: string,
+): TaskEventRow[] {
+  const out: TaskEventRow[] = [];
+  const sorted = [...taskIds].sort((a, b) => a - b);
+  page(sorted, 200, (slice) => {
+    out.push(
+      ...all<TaskEventRow>(
+        db,
+        `SELECT id,task_id,kind,detail FROM task_events WHERE task_id IN (${marksOf(slice.length)}) AND (${kinds}) ORDER BY task_id,id`,
+        ...slice,
+      ),
+    );
+  });
+  return out;
+}
+/** 按 task 顺序走一遍交付与事件，给每条交付切出窗口事实；语句数与交付数无关（纯 JS 归并）。 */
+function walkMetrics(
+  deliveries: readonly DeliveryRow[],
+  events: readonly TaskEventRow[],
+  jobNames: ReadonlyMap<number, string>,
+): DeliveryMetric[] {
+  const metrics: DeliveryMetric[] = [];
+  let p = 0;
+  for (const d of deliveries) {
+    while (
+      p < events.length &&
+      (events[p]!.task_id < d.task_id ||
+        (events[p]!.task_id === d.task_id && events[p]!.id <= d.start_event_id))
+    )
+      p++;
+    const window: TaskEventRow[] = [];
+    while (
+      p < events.length &&
+      events[p]!.task_id === d.task_id &&
+      events[p]!.kind !== "start"
+    ) {
+      window.push(events[p]!);
+      p++;
+    }
+    metrics.push(
+      metricOf(
+        d,
+        windowOf(d, window),
+        d.job_id === null ? null : (jobNames.get(d.job_id) ?? null),
+      ),
+    );
+  }
+  return metrics;
+}
+function allJobNames(db: DatabaseSync) {
+  return new Map(
+    all<{ id: number; name: string }>(db, "SELECT id,name FROM job_roles").map(
+      (r) => [r.id, r.name],
+    ),
+  );
+}
+/** walkMetrics 的流式版本：交付与事件各一个游标，边读边切窗口，峰值内存与交付数无关。 */
+function walkMetricsStream(
+  deliveries: IterableIterator<unknown>,
+  events: IterableIterator<unknown>,
+  jobNames: ReadonlyMap<number, string>,
+): DeliveryMetric[] {
+  const metrics: DeliveryMetric[] = [];
+  let e = events.next();
+  for (let d = deliveries.next(); !d.done; d = deliveries.next()) {
+    const row = d.value as DeliveryRow;
+    while (
+      !e.done &&
+      ((e.value as TaskEventRow).task_id < row.task_id ||
+        ((e.value as TaskEventRow).task_id === row.task_id &&
+          (e.value as TaskEventRow).id <= row.start_event_id))
+    )
+      e = events.next();
+    const window: TaskEventRow[] = [];
+    while (
+      !e.done &&
+      (e.value as TaskEventRow).task_id === row.task_id &&
+      (e.value as TaskEventRow).kind !== "start"
+    ) {
+      window.push(e.value as TaskEventRow);
+      e = events.next();
+    }
+    metrics.push(
+      metricOf(
+        row,
+        windowOf(row, window),
+        row.job_id === null ? null : (jobNames.get(row.job_id) ?? null),
+      ),
+    );
+  }
+  return metrics;
+}
+const DELIVERY_COLUMNS =
+  "id,task_id,start_event_id,worker,tool,model,effort,job_id,started_at,ended_at,outcome,final_outcome,historical,job_rev,job_checks";
+/**
+ * 交付统计用的事实（#t123）：按 worker / job 走索引读交付，事件一次批量读、JS 归并切窗口；
+ * 不读任务简报等大字段，也不为每条交付单独查库。limit 给定时只取最近若干条交付。
+ */
+export function deliveryMetrics(
+  db: DatabaseSync,
+  filter: { worker?: string; job?: number } = {},
+  limit?: number,
+): DeliveryMetric[] {
+  const { sql: where, params } = deliveryWhere(filter);
+  if (limit === undefined) {
+    // 流式：逐条交付与逐条事件同步推进，不把整库塞进内存；语句数固定。
+    const jobNames = allJobNames(db);
+    const deliveries = db
+      .prepare(
+        `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries ${where} ORDER BY task_id,start_event_id`,
+      )
+      .iterate(...params);
+    const events = db
+      .prepare(
+        `SELECT id,task_id,kind,detail FROM task_events WHERE task_id IN (SELECT task_id FROM task_deliveries ${where}) AND (${METRIC_EVENTS}) ORDER BY task_id,id`,
+      )
+      .iterate(...params);
+    return walkMetricsStream(deliveries, events, jobNames);
+  }
+  const capped = Math.max(1, Math.min(limit, 1000));
+  const ids = all<{ id: number }>(
+    db,
+    `SELECT id FROM task_deliveries ${where} ORDER BY id DESC LIMIT ?`,
+    ...params,
+    capped,
+  ).map((r) => r.id);
+  if (!ids.length) return [];
+  const deliveries = all<DeliveryRow>(
+    db,
+    `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries WHERE id IN (${marksOf(ids.length)}) ORDER BY task_id,start_event_id`,
+    ...ids,
+  );
+  const jobNames = jobNamesOf(
+    db,
+    deliveries.map((d) => d.job_id).filter((x): x is number => x !== null),
+  );
+  const events = taskEventsFor(
+    db,
+    [...new Set(deliveries.map((d) => d.task_id))],
+    METRIC_EVENTS,
+  );
+  return walkMetrics(deliveries, events, jobNames);
+}
+/** 某位执行者、某个专员下最近一条交付的任务短号；确认建议时只读这一条。 */
+export function latestDeliveryTaskId(
+  db: DatabaseSync,
+  filter: { worker?: string; job?: number } = {},
+): number | null {
+  const { sql: where, params } = deliveryWhere(filter);
+  return (
+    one<{ task_id: number }>(
+      db,
+      `SELECT task_id FROM task_deliveries ${where} ORDER BY id DESC LIMIT 1`,
+      ...params,
+    )?.task_id ?? null
+  );
 }
 export function listDeliveries(
   db: DatabaseSync,
@@ -372,57 +651,86 @@ export function listDeliveries(
       : Math.max(1, Math.min(filter.limit, 1000));
   const rows: DeliveryRow[] = [];
   let before = Number.MAX_SAFE_INTEGER;
+  const { sql: base, params } = deliveryWhere(filter);
   while (rows.length < limit) {
-    const page = all<DeliveryRow>(
+    const clause = base ? `${base} AND id<?` : "WHERE id<?";
+    const batch = all<DeliveryRow>(
       db,
-      "SELECT * FROM task_deliveries WHERE (? IS NULL OR worker=?) AND (? IS NULL OR job_id=?) AND id<? ORDER BY id DESC LIMIT ?",
-      filter.worker ?? null,
-      filter.worker ?? null,
-      filter.job ?? null,
-      filter.job ?? null,
+      `SELECT * FROM task_deliveries ${clause} ORDER BY id DESC LIMIT ?`,
+      ...params,
       before,
       Math.min(200, limit - rows.length),
     );
-    rows.push(...page);
-    if (page.length < 200 || rows.length >= limit) break;
-    before = page.at(-1)!.id;
+    rows.push(...batch);
+    if (batch.length < 200 || rows.length >= limit) break;
+    before = batch.at(-1)!.id;
   }
-  return rows.flatMap((row) => {
-    const task = one<TaskRow>(
+  if (!rows.length) return [];
+  const taskIds = [...new Set(rows.map((r) => r.task_id))].sort(
+    (a, b) => a - b,
+  );
+  const taskMap = new Map<number, TaskLite>();
+  page(taskIds, 200, (slice) => {
+    for (const t of all<TaskLite>(
       db,
-      "SELECT * FROM tasks WHERE id=?",
-      row.task_id,
-    );
-    if (!task) return [];
-    const events: TaskEventRow[] = [];
-    let cursor = row.start_event_id;
-    for (;;) {
-      const page = all<TaskEventRow>(
-        db,
-        "SELECT * FROM task_events WHERE task_id=? AND id>? ORDER BY id LIMIT 200",
-        row.task_id,
-        cursor,
-      );
-      events.push(...page);
-      if (page.length < 200 || page.some((event) => event.kind === "start"))
-        break;
-      cursor = page.at(-1)!.id;
-    }
-    const usage = one<{ points: number; basis: string }>(
-      db,
-      "SELECT points,basis FROM task_usage WHERE task_id=? AND started_at>=? ORDER BY started_at LIMIT 1",
-      row.task_id,
-      row.started_at - 2000,
-    );
-    const job = row.job_id
-      ? one<{ name: string }>(
-          db,
-          "SELECT name FROM job_roles WHERE id=?",
-          row.job_id,
-        )
-      : undefined;
-    return [deliveryFacts(row, task, events, usage, job?.name ?? null)];
+      `SELECT id,title,status,delivery_stage FROM tasks WHERE id IN (${marksOf(slice.length)})`,
+      ...slice,
+    ))
+      taskMap.set(t.id, t);
   });
+  const jobMap = jobNamesOf(
+    db,
+    rows.map((r) => r.job_id).filter((x): x is number => x !== null),
+  );
+  const eventsByTask = new Map<number, TaskEventRow[]>();
+  for (const event of taskEventsFor(db, taskIds, DISPLAY_EVENTS)) {
+    const list = eventsByTask.get(event.task_id) ?? [];
+    list.push(event);
+    eventsByTask.set(event.task_id, list);
+  }
+  const usageByTask = new Map<number, UsageLite[]>();
+  page(taskIds, 200, (slice) => {
+    for (const u of all<UsageLite>(
+      db,
+      `SELECT task_id,started_at,points,basis FROM task_usage WHERE task_id IN (${marksOf(slice.length)})`,
+      ...slice,
+    )) {
+      const list = usageByTask.get(u.task_id) ?? [];
+      list.push(u);
+      usageByTask.set(u.task_id, list);
+    }
+  });
+  return rows.flatMap((row) => {
+    const task = taskMap.get(row.task_id);
+    if (!task) return [];
+    return [
+      deliveryFacts(
+        row,
+        task,
+        eventsByTask.get(row.task_id) ?? [],
+        pickUsage(usageByTask.get(row.task_id), row),
+        row.job_id === null ? null : (jobMap.get(row.job_id) ?? null),
+      ),
+    ];
+  });
+}
+type UsageLite = {
+  task_id: number;
+  started_at: number;
+  points: number;
+  basis: string;
+};
+function pickUsage(
+  list: readonly UsageLite[] | undefined,
+  row: DeliveryRow,
+): { points: number; basis: string } | undefined {
+  if (!list?.length) return undefined;
+  const threshold = row.started_at - 2000;
+  let best: UsageLite | undefined;
+  for (const u of list)
+    if (u.started_at >= threshold && (!best || u.started_at < best.started_at))
+      best = u;
+  return best ? { points: best.points, basis: best.basis } : undefined;
 }
 export type WorkerStat = {
   scope: "combination" | "model" | "tool";
@@ -436,8 +744,9 @@ export type WorkerStat = {
   low_data: boolean;
   trust: string | null;
 };
-export function summarizeDeliveries(
-  rows: readonly Delivery[],
+/** 与 summarizeDeliveries 同一算法，但吃的是 SQL 取好的小事实，不用整条交付。 */
+export function summarizeMetrics(
+  rows: readonly DeliveryMetric[],
   trust: ReadonlyMap<string, string> = new Map(),
 ): WorkerStat[] {
   const groups = new Map<
@@ -446,7 +755,7 @@ export function summarizeDeliveries(
       scope: WorkerStat["scope"];
       worker: string;
       role: string | null;
-      rows: Delivery[];
+      rows: DeliveryMetric[];
     }
   >();
   for (const row of rows)
@@ -486,12 +795,12 @@ export function summarizeDeliveries(
           : null,
         average_returns: finished.length
           ? finished.reduce(
-              (n, r) => n + r.gate_return_count + r.merge_returns.length,
+              (n, r) => n + r.gate_return_count + r.merge_return_count,
               0,
             ) / finished.length
           : 0,
         median_ms: mid,
-        incidents: finished.reduce((n, r) => n + r.incidents.length, 0),
+        incidents: finished.reduce((n, r) => n + r.incident_count, 0),
         low_data: finished.length < 5,
         trust: trust.get(g.worker) ?? null,
       };
@@ -502,6 +811,30 @@ export function summarizeDeliveries(
         a.scope.localeCompare(b.scope) ||
         a.worker.localeCompare(b.worker),
     );
+}
+/** 旧入口：用手上的整条交付折成统计事实，结果与 summarizeMetrics 一致。 */
+export function summarizeDeliveries(
+  rows: readonly Delivery[],
+  trust: ReadonlyMap<string, string> = new Map(),
+): WorkerStat[] {
+  return summarizeMetrics(
+    rows.map((d) => ({
+      id: d.id,
+      task_id: d.task_id,
+      worker: d.worker,
+      tool: d.tool,
+      model: d.model,
+      job_id: d.job_id,
+      job_name: d.job_name,
+      ended_at: d.ended_at,
+      first_pass: d.first_pass,
+      duration_ms: d.duration_ms,
+      gate_return_count: d.gate_return_count,
+      merge_return_count: d.merge_returns.length,
+      incident_count: d.incidents.length,
+    })),
+    trust,
+  );
 }
 export function adviceFor(
   stat: WorkerStat,

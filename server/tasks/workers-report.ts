@@ -4,9 +4,11 @@ import { atomically, one } from "./ledger-model.ts";
 import { getJobRole } from "./job-roles.ts";
 import {
   adviceFor,
+  deliveryMetrics,
+  latestDeliveryTaskId,
   listDeliveries,
-  summarizeDeliveries,
-  type Delivery,
+  summarizeMetrics,
+  type DeliveryMetric,
   type WorkerStat,
 } from "./delivery-records.ts";
 import { modelKey, parseWorker, resolveWorker, TRUSTS } from "./profiles.ts";
@@ -14,29 +16,41 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { patchFront, readProfile, writeProfile } from "./worker-profiles.ts";
 import type { EventInbox } from "./events.ts";
 
+/** `workers show` / 执行者页展示的交付明细上限；统计仍看全部交付。 */
+const DELIVERY_DETAIL_LIMIT = 200;
+
+/** 每位执行者×专员最近一条交付的任务短号（一次遍历，不按建议条数查库）。 */
+function latestByWorkerRole(metrics: readonly DeliveryMetric[]) {
+  const latest = new Map<string, DeliveryMetric>();
+  for (const row of metrics) {
+    const key = `${row.worker}\u0000${row.job_name ?? ""}`;
+    const prev = latest.get(key);
+    if (!prev || row.id > prev.id) latest.set(key, row);
+  }
+  return latest;
+}
 function pendingSuggestions(
   db: DatabaseSync,
-  records: Delivery[],
+  metrics: DeliveryMetric[],
   stats: WorkerStat[],
 ) {
+  const latest = latestByWorkerRole(metrics);
   return stats.flatMap((stat) => {
     const advice = adviceFor(stat);
     if (!advice) return [];
-    const latest = records.find(
-      (row) => row.worker === stat.worker && row.job_name === stat.role,
-    );
-    if (!latest) return [];
+    const row = latest.get(`${stat.worker}\u0000${stat.role ?? ""}`);
+    if (!row) return [];
     const confirmations = db
       .prepare(
         "SELECT detail FROM task_events WHERE task_id=? AND kind='worker_advice_confirmed' ORDER BY id DESC LIMIT 20",
       )
-      .all(latest.task_id) as { detail: string }[];
+      .all(row.task_id) as { detail: string }[];
     const confirmed = confirmations.some(({ detail }) => {
       try {
         const data = JSON.parse(detail) as Record<string, unknown>;
         return (
           data.worker === stat.worker &&
-          data.role === latest.job_ref &&
+          data.role === (row.job_id === null ? null : `r${row.job_id}`) &&
           data.action === advice.action
         );
       } catch {
@@ -49,10 +63,10 @@ function pendingSuggestions(
 
 export async function workersReport(db: DatabaseSync, role?: string) {
   const job = role ? getJobRole(db, role) : undefined;
-  const records = listDeliveries(db, { job: job?.id });
+  const metrics = deliveryMetrics(db, { job: job?.id });
   const ids = [
     ...new Set(
-      records.flatMap((r) => [
+      metrics.flatMap((r) => [
         r.worker,
         r.model ? `${r.tool}+${r.model}` : r.tool,
         r.tool,
@@ -72,23 +86,26 @@ export async function workersReport(db: DatabaseSync, role?: string) {
       ),
     ),
   );
-  const stats = summarizeDeliveries(records, trust);
+  const stats = summarizeMetrics(metrics, trust);
   return {
     role: job ?? null,
     stats,
-    suggestions: pendingSuggestions(db, records, stats),
+    suggestions: pendingSuggestions(db, metrics, stats),
   };
 }
 export async function workerReport(db: DatabaseSync, worker: string) {
   parseWorker(worker);
   const resolved = await resolveWorker(worker, db);
-  const records = listDeliveries(db, {
-    worker: resolved.id,
-  }).filter((r) => r.worker === resolved.id);
-  const stats = summarizeDeliveries(
-    records,
+  const metrics = deliveryMetrics(db, { worker: resolved.id });
+  const stats = summarizeMetrics(
+    metrics,
     new Map([[resolved.id, resolved.profile.rules.trust ?? "unknown"]]),
   ).filter((s) => s.scope === "combination");
+  // 统计看全部交付；明细只给最近一段（网页与命令行都只展示这些）。
+  const deliveries = listDeliveries(db, {
+    worker: resolved.id,
+    limit: DELIVERY_DETAIL_LIMIT,
+  });
   return {
     worker: resolved.id,
     tool: resolved.tool,
@@ -96,8 +113,8 @@ export async function workerReport(db: DatabaseSync, worker: string) {
     effort: resolved.effort ?? null,
     profile: resolved.profile,
     stats,
-    deliveries: records,
-    suggestions: pendingSuggestions(db, records, stats),
+    deliveries,
+    suggestions: pendingSuggestions(db, metrics, stats),
   };
 }
 /** 有充分样本才提醒秘书；按统计条件变化去重，确认前只生成建议。 */
@@ -112,14 +129,20 @@ export function publishWorkerAdvice(
     taskId,
   );
   if (!task?.job_id || !task.worker) return;
-  const rows = listDeliveries(db, { job: task.job_id, worker: task.worker });
-  const last = rows.find((r) => r.task_id === taskId);
-  if (!last || !last.job_id) return;
-  const stats = summarizeDeliveries(rows).filter(
+  const metrics = deliveryMetrics(db, {
+    job: task.job_id,
+    worker: task.worker,
+  });
+  let last: DeliveryMetric | undefined;
+  for (const row of metrics)
+    if (row.task_id === taskId && (!last || row.id > last.id)) last = row;
+  if (!last || last.job_id === null) return;
+  const roleRef = `r${last.job_id}`;
+  const stats = summarizeMetrics(metrics).filter(
     (s) =>
       s.scope === "combination" &&
-      s.worker === last.worker &&
-      s.role === last.job_name,
+      s.worker === last!.worker &&
+      s.role === last!.job_name,
   );
   for (const stat of stats) {
     const advice = adviceFor(stat);
@@ -132,7 +155,7 @@ export function publishWorkerAdvice(
     if (event) return;
     const data = {
       worker: stat.worker,
-      role: last.job_ref,
+      role: roleRef,
       action: advice.action,
       reason: advice.reason,
     };
@@ -229,11 +252,10 @@ export async function confirmWorkerAdvice(db: DatabaseSync, body: unknown) {
       "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
     ).run(
       suggestion.stat.deliveries
-        ? listDeliveries(db, {
+        ? (latestDeliveryTaskId(db, {
             worker: String(b.worker),
             job: role.id,
-            limit: 1,
-          })[0]!.task_id
+          }) ?? 0)
         : 0,
       Date.now(),
       "worker_advice_confirmed",

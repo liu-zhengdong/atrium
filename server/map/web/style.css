@@ -339,6 +339,22 @@ a.crumb:hover {
 .cell.name.plain {
   font-weight: 550;
 }
+.cell.name.task {
+  align-items: baseline;
+  gap: 8px;
+}
+.task-ref {
+  flex: none;
+  min-width: 4ch;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.task-title {
+  min-width: 0;
+}
 .cell.text {
   font-size: 14px;
   line-height: 1.6;

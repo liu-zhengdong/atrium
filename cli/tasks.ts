@@ -106,11 +106,11 @@ export function renderTree(nodes: TaskNode[], depth = 0): string[] {
   ]);
 }
 
-/** role 是旧 .agents 写法、还没对应组织节点时提示迁移命令；不报错，照常可派。 */
+/** role 是旧 .agents 写法、还没对应组织节点时提示迁移命令；不报错，照常可派（没有岗位说明）。 */
 function roleHint(task: Task): string[] {
   return task.role && !task.node_ref
     ? [
-        `岗位 ${task.role} 没有对应组织节点，派活时照旧读仓库 .agents；关联节点：atrium org link-roles`,
+        `岗位 ${task.role} 没有对应组织节点，派活时没有岗位说明；关联节点：atrium org link-roles`,
       ]
     : [];
 }

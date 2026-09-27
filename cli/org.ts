@@ -283,10 +283,14 @@ export const orgCommands: Record<string, Command> = {
       const lines = [
         `${node.ref} [${node.kind}] ${node.path} · leader ${person(node.leader)}`,
         `仓库：${node.repos.join("、") || "无"}`,
-        `目标链：${node.chain
-          .map((c) => `${c.name}：${c.goal}`)
-          .filter((c) => !c.endsWith("："))
-          .join(" → ")}`,
+        ...(node.chain.length
+          ? [
+              "目标链",
+              ...node.chain.map(
+                (c) => `  ${c.name}：${c.goal.split("\n").join("\n    ")}`,
+              ),
+            ]
+          : ["目标链：无"]),
         ...formatBoundaries(node.boundaries),
         ...formatDoc("章程", node.charter),
         ...formatDoc("能力卡", node.card),

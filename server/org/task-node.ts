@@ -16,6 +16,7 @@ import {
  * - 节点：`o4`、`atrium/runtime`，解析不到就报错（写明了要挂节点）；
  * - 旧 `.agents` 名：`runtime`、`modules/runtime`、`concerns/安全`，按任务仓库找挂了该仓库的同名模块／关注点；
  * - 其余带 `/` 的写法先当节点路径，找不到再当旧 `.agents` 相对路径，不报错。
+ * 岗位说明只取节点章程；对不上节点时派活不带岗位说明，不再读仓库文件。
  */
 
 export type RoleMatch =

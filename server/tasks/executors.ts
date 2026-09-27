@@ -52,6 +52,7 @@ import {
 } from "./concern-runtime.ts";
 import { fileHints } from "./concerns.ts";
 import { hintText, needsReview } from "./concern-gate.ts";
+import { isCouncilTask, isOpinionTask } from "./councils.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -79,6 +80,8 @@ export type ExecutorContext = {
     dispatch: (ref: string) => Promise<unknown>;
     settle: () => void;
   };
+  /** 会审（#322）：专员意见或 leader 汇总结束后推进会审（否则等下一轮巡检）。 */
+  councils?: { settle: () => void };
 };
 
 export class Executors {
@@ -422,6 +425,13 @@ export class Executors {
       else if (isReviewTask(this.ctx.db, id)) {
         /* 由 reviews.settle 补判父任务。 */
       }
+      // 会审：专员意见经 leader 汇总上报；汇总完成由 councils.settle 记结论后投递。
+      else if (
+        isOpinionTask(this.ctx.db, id) ||
+        (decision.publish === "done" && isCouncilTask(this.ctx.db, id))
+      ) {
+        /* 由 councils.settle 推进会审。 */
+      }
       // 关卡（含专员）都过了才去审阅或合入队列。
       else if (
         decision.publish === "done" &&
@@ -436,6 +446,8 @@ export class Executors {
           active.stop?.kind === "user" ? active.stop.by : undefined,
         );
       if (isReviewTask(this.ctx.db, id)) this.ctx.reviews?.settle();
+      if (isOpinionTask(this.ctx.db, id) || isCouncilTask(this.ctx.db, id))
+        this.ctx.councils?.settle();
     } catch (error) {
       this.failAfterError(id, error);
     } finally {

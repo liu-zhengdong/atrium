@@ -154,6 +154,9 @@ atrium org add atrium web --kind module --reason 拆模块
 atrium task add "改派活" --role atrium/runtime --from atrium/质量   # 任务记到节点；--from 记投任务的关注点
 atrium task add "接看板" --part atrium/runtime                      # 任务归属全景图上的哪一部分；task set --part '' 摘下
 atrium task add "改登录日志" --concern 安全,质量                    # 请专员：派活附检查要点，交付后按清单审、可否决；task set --concern '' 都不请
+atrium review add "公开仓库" --concerns 安全,质量,体验 --brief 议题.md   # 会审：专员并行出意见，leader 汇总一致与冲突、能定的定；--issue 号 --repo 仓库 --comment 同步为 issue 评论
+atrium review show t9                              # 各方意见（立场与原文）、一致与冲突、结论、需用户拍板的事
+atrium review decide t9 "先清理凭据，下周公开"          # 记下用户对上交事项的拍板（--as 缺省 u1）
 atrium org link-roles                             # 预览把旧 role 字符串的任务关联到节点；--apply 写入
 ```
 
@@ -211,6 +214,16 @@ boundaries:
   - id: no-secret
     summary: 凭据不进日志、提交与 PR # 底线：越过即否决
 ```
+
+### 会审
+
+影响面大、不可撤回的决定（公开仓库、归档旧代码、大版本）或疑难事故，由 leader 发起会审：`atrium review add 议题 --concerns 安全,质量,体验 [--brief 议题.md] [--issue 号] [--leader 节点]`。
+
+1. **议题**：建一个议题任务「会审：议题」（记在 `--leader` 节点上，缺省由秘书主持），每位受邀专员一个意见子任务（记在关注点节点上、只交摘要），详述写明议题原文、关联 issue、全部受邀专员，以及该专员的章程目标、要点与底线。
+2. **并行出意见**：意见任务同时派出，各是一个一次性执行者；摘要最后一行写立场：`意见：同意`、`意见：有条件同意：条件`、`意见：反对：原因` 或 `意见：否决：越过的底线`。失败、受阻或没写立场的算「没出意见」。
+3. **leader 汇总**：意见都不再跑后，运行时把各方意见原文写进议题任务的详述（`council-summary.md`），拉起议题任务本身做汇总：写「一致」「冲突」两段，能定的自己定，碰到用户定的边界或谈不拢的每条写一行 `需用户拍板：…`，最后一行 `结论：…`。
+4. **结局**：运行时读汇总记在议题上。leader 标了需用户拍板、没写结论、专员都没出意见、或有专员以底线否决而 leader 没上交的，一律转「需用户拍板」（专员否决不能由 leader 自行推翻），投 `council_escalated`；其余转「已定」，投 `council_decided`。意见任务与汇总自己的完成不单独投递。`atrium task wait t9` 等到结局才返回。
+5. **记录与拍板**：`atrium review show t9` 看意见与结论；用户拍板后 `atrium review decide t9 结论` 记下（留拍板人，原上交事项保留）。`--comment`（需 `--issue` 与 `--repo`）让汇总任务把结论发成 issue 评论，由评论关卡查实。
 
 ### 目标树迁移
 

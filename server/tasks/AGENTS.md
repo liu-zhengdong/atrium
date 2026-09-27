@@ -10,5 +10,6 @@
 - 捎话（`task tell`）：判定在 `tell.ts`（送达方式、退出后续上/重派/收尾），账在 `tell-ledger.ts`（task_events kind=tell，送达后原地更新 detail），标准输入写端在 `live-input.ts`，续上与重派在 `tell-runtime.ts`；适配器用 `tell`、`resume`、`sessionOf` 声明能力。
 - 请专员（#322）：账在 `concerns.ts`（task_concerns，一位专员一行、本轮审查任务与结论），判定在 `concern-gate.ts`（审查结论、专员关卡合成、`invite_when` 提示、提示词段落），执行在 `concern-runtime.ts`（其余关卡通过后建审查子任务、审查不再跑后记结论并补判父任务）；审查任务自己的结局不单独投递。
 - 合入前审阅（`review.ts` 判定、`review-runtime.ts` 编排）：状态只在 `tasks.delivery_stage='reviewing'` 与 `review_task`，巡检从账本续上；审阅结论只认审阅者摘要里最后一个「审阅结论：通过/打回」，打回走合入队列的 `handBack`。专员关卡在前、审阅在后：专员都通过后同样经 `review.admit` 分档。
+- 会审（#322）：账在 `councils.ts`（task_councils 议题一行、council_members 每位专员一个意见任务），判定在 `council-gate.ts`（意见立场、汇总解析、结局合成、提示词），编排在 `council-runtime.ts`（意见收齐交 leader 汇总、汇总完成记结论）；议题任务自己的执行者运行就是汇总，意见任务与汇总的完成不单独投递，结局投 `council_decided` / `council_escalated`。
 - 事件先落库再投递；同一订阅者、同一去重键的未确认事件合并；订阅者自己发起的动作不投给他本人。
 - 测试用 `tests/task-fixture.ts` 的假执行者和临时目录，不依赖本机装了哪些 CLI 或 OpenQuota。

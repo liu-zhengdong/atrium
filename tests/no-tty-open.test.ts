@@ -14,7 +14,6 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { packageRoot } from "../server/service-state.ts";
-import { canOpenBrowser, noBrowserHint } from "../server/service.ts";
 import { trackFixture, untrackFixture } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 
@@ -80,63 +79,24 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   return { cli, marker };
 }
 
-function assertPrintedLoginLink(stdout: string) {
-  assert.match(stdout, /非交互环境，没有打开浏览器/);
-  assert.match(
-    stdout,
-    /登录链接：http:\/\/atrium\.localhost:\d+\/auth\/claim\//,
-  );
-}
-
-test("canOpenBrowser：stdin 与 stdout 都是终端才放行", () => {
-  assert.equal(canOpenBrowser({ isTTY: true }, { isTTY: true }), true);
-  const notBoth: Array<[{ isTTY?: boolean }, { isTTY?: boolean }]> = [
-    [{ isTTY: false }, { isTTY: true }],
-    [{ isTTY: true }, { isTTY: false }],
-    [{ isTTY: false }, { isTTY: false }],
-    [{}, { isTTY: true }],
-    [{ isTTY: true }, {}],
-  ];
-  for (const [stdin, stdout] of notBoth)
-    assert.equal(canOpenBrowser(stdin, stdout), false);
-  assert.match(
-    noBrowserHint("http://atrium.localhost:1/auth/claim/x"),
-    /非交互环境，没有打开浏览器；登录链接：/,
-  );
-});
-
 test(
-  "非交互命令不打开浏览器，打印登录链接；--print 与 --no-open 行为不变",
+  "没有 Web：atrium 与 --no-open 都只输出地址、不调用浏览器；open 已不是命令",
   { timeout: 90000 },
   async (t) => {
     const { cli, marker } = await fixture(t);
-    // 无参数：不调用浏览器（桩标记不出现），输出登录链接与提示。
-    const bare = await cli();
-    assert.equal(bare.code, 0, bare.stderr);
-    assertPrintedLoginLink(bare.stdout);
-    assert.ok(
-      !existsSync(marker),
-      `openWeb 不应被调用（桩标记 ${marker} 不应出现）`,
-    );
-    // open：同样不调用浏览器，输出登录链接与提示。
+    for (const args of [[], ["--no-open"]]) {
+      const result = await cli(...args);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /服务已就绪/);
+      assert.doesNotMatch(result.stdout, /登录链接|浏览器/);
+      assert.ok(
+        !existsSync(marker),
+        `不应调用浏览器（桩标记 ${marker} 不应出现）`,
+      );
+    }
     const open = await cli("open");
-    assert.equal(open.code, 0, open.stderr);
-    assertPrintedLoginLink(open.stdout);
-    assert.ok(!existsSync(marker));
-    // open --print：只输出链接本身，不带提示。
-    const print = await cli("open", "--print");
-    assert.equal(print.code, 0, print.stderr);
-    assert.match(
-      print.stdout.trim(),
-      /^http:\/\/atrium\.localhost:\d+\/auth\/claim\//,
-    );
-    assert.doesNotMatch(print.stdout, /非交互环境/);
-    assert.ok(!existsSync(marker));
-    // --no-open：输出地址，不输出登录链接。
-    const noOpen = await cli("--no-open");
-    assert.equal(noOpen.code, 0, noOpen.stderr);
-    assert.match(noOpen.stdout, /服务已就绪/);
-    assert.doesNotMatch(noOpen.stdout, /登录链接/);
+    assert.notEqual(open.code, 0);
+    assert.match(open.stderr, /不认识的命令：open/);
     assert.ok(!existsSync(marker));
   },
 );

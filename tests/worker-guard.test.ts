@@ -100,7 +100,7 @@ test(
       ["--no-open"],
       ["status"],
       ["stop"],
-      ["list"],
+      ["org", "tree"],
       ["events", "wait", "--timeout", "0"],
       ["task", "run", "t1"],
     ]) {

@@ -7,7 +7,6 @@ import {
   writeFileSync,
   rmSync,
   existsSync,
-  symlinkSync,
   readdirSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -17,16 +16,14 @@ import {
   readRestartState,
   writeRestartState,
   checkServiceHealth,
-  sendRollbackNotification,
   requestDrain,
   waitForRestart,
 } from "../server/supervisor.ts";
-import { initiatorAgent } from "../cli/restart.ts";
 import { createServer } from "node:http";
 import { Store } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 import type { RuntimeInfo } from "../shared/schema.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { currentVersion, packageRoot } from "../server/service-state.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -118,28 +115,6 @@ test("回滚告警在用户概览中可见，下一次成功后消失", async (t
   );
 });
 
-test("sendRollbackNotification 正确写入回滚通知至消息箱", () => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-notify-"));
-  try {
-    const store = new Store(join(dir, "atrium.sqlite"));
-    const { agent } = store.createAgent("测试 Agent", dir);
-
-    sendRollbackNotification(dir, {
-      fromVersion: "0.1.0",
-      failedVersion: "0.2.0",
-      error: "健康检查失败",
-    });
-
-    const box = store.box(agent.id);
-    assert.equal(box.items.length, 1);
-    assert.equal(box.items[0].title, "Atrium 升级回滚");
-    assert.match(box.items[0].body, /已自动回滚至 v0.1.0/);
-    assert.match(box.items[0].body, /健康检查失败/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("checkServiceHealth 在端口不可达时抛出异常", async () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-health-"));
   try {
@@ -151,14 +126,14 @@ test("checkServiceHealth 在端口不可达时抛出异常", async () => {
       version: 1,
     };
     await assert.rejects(async () => {
-      await checkServiceHealth(mockRecord, dir);
+      await checkServiceHealth(mockRecord);
     }, /fetch failed|ECONNREFUSED|connect/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("重启健康检查默认不依赖模型，显式探针失败仍被拒绝", async () => {
+test("重启健康检查只看 ok：不依赖模型，也不要求旧版的 runtimes 字段", async () => {
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/api/service")
@@ -166,7 +141,7 @@ test("重启健康检查默认不依赖模型，显式探针失败仍被拒绝",
         JSON.stringify({ instance: "test", pid: process.pid, stopping: false }),
       );
     else if (request.url === "/api/service/health")
-      response.end(JSON.stringify({ ok: true, runtimes: { available: true } }));
+      response.end(JSON.stringify({ ok: true }));
     else {
       response.statusCode = 503;
       response.end(JSON.stringify({ error: "模型不可用" }));
@@ -183,42 +158,9 @@ test("重启健康检查默认不依赖模型，显式探针失败仍被拒绝",
       token: "test",
       version: 1,
     };
-    await checkServiceHealth(record, "unused");
-    await assert.rejects(
-      checkServiceHealth(record, "unused", { probeAgent: "a1" }),
-      /模型不可用/,
-    );
+    await checkServiceHealth(record);
   } finally {
     server.close();
-  }
-});
-
-test("Agent 从符号链接目录启动，或只有会话路径时仍能续跑", () => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-wake-"));
-  try {
-    const profile = join(dir, "profile");
-    mkdirSync(profile);
-    symlinkSync(profile, join(dir, "alias"));
-    const session = join(profile, "sessions", "a.jsonl");
-    mkdirSync(join(profile, "sessions"));
-    writeFileSync(session, "");
-    const store = new Store(join(dir, "atrium.sqlite"));
-    try {
-      const { agent } = store.createAgent("Self", profile);
-      store.run(
-        "UPDATE agents SET agent_directory=?, session_file=? WHERE id=?",
-        profile,
-        session,
-        agent.id,
-      );
-      assert.equal(initiatorAgent(store, join(dir, "alias")), agent.id);
-      assert.equal(initiatorAgent(store, undefined, session), agent.id);
-      assert.equal(initiatorAgent(store, join(dir, "another")), undefined);
-    } finally {
-      store.close();
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 

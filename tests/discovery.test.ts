@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Runtimes } from "../server/runtime.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { agentName } from "../shared/agent-name.ts";
 import {
   displayName,

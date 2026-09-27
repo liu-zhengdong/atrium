@@ -1,15 +1,7 @@
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { dataDirectory, serviceUrl } from "../server/service-state.ts";
-import { commandAgent } from "../shared/command-agent.ts";
 import { pad, width } from "./format.ts";
-import { agentCommands } from "./agents.ts";
-import { chatCommands } from "./chats.ts";
-import { accountCommands } from "./accounts.ts";
 import { authCommands } from "./auth.ts";
-import { runnerCommands } from "./runners.ts";
-import { connectCommand } from "./connect.ts";
-import { pluginCommands } from "./plugins.ts";
-import { resourceCommands } from "./resources.ts";
 import { taskCommands } from "./tasks.ts";
 import { orgCommands } from "./org.ts";
 import { topCommand } from "./top.ts";
@@ -64,15 +56,13 @@ const updateCommand: Command = {
 };
 
 const restartCommand: Command = {
-  args: "[--when-idle] [--wait] [--timeout <秒>] [--agent-timeout <毫秒>]",
+  args: "[--when-idle] [--wait] [--timeout <秒>]",
   about: "平滑重启 Atrium 服务；--when-idle 等执行者空闲后自动重启",
   options: {
     wait: { type: "boolean", default: false },
     "when-idle": { type: "boolean", default: false },
     timeout: { type: "string" },
     data: { type: "string" },
-    "probe-agent": { type: "string" },
-    "agent-timeout": { type: "string" },
   },
   positionals: [0, 0],
   run: async ({ values }) => {
@@ -83,8 +73,6 @@ const restartCommand: Command = {
         "when-idle"?: boolean;
         timeout?: string;
         data?: string;
-        "probe-agent"?: string;
-        "agent-timeout"?: string;
       },
     );
     return 0;
@@ -92,14 +80,7 @@ const restartCommand: Command = {
 };
 
 export const commands: Record<string, Command> = {
-  ...agentCommands,
-  ...chatCommands,
-  connect: connectCommand,
-  ...accountCommands,
   ...authCommands,
-  ...runnerCommands,
-  ...pluginCommands,
-  ...resourceCommands,
   // 看板放在任务组最前：先看谁在干活，再看单个任务。
   top: topCommand,
   ...taskCommands,
@@ -110,13 +91,13 @@ export const commands: Record<string, Command> = {
   restart: restartCommand,
 };
 const service: [usage: string, about: string][] = [
-  ["atrium", "启动或复用后台服务，打开 Web"],
-  ["atrium --no-open", "启动或复用服务，仅输出地址"],
-  ["atrium open", "生成一次性登录链接并打开 Web；--print 仅打印链接"],
+  ["atrium", "启动或复用后台服务，输出地址"],
   ["atrium status", "查看服务状态、地址和数据目录"],
-  ["atrium stop", "停止服务及其托管的 Agent，保留数据"],
+  ["atrium stop", "停止服务，保留数据；在跑的执行者由下次启动接管"],
   ["atrium restart", "平滑重启服务；--when-idle 等执行者空闲后重启"],
   ["atrium update", "检查并更新 Atrium 版本；--to 指定目标版本"],
+  ["atrium auth status", "查看本机用户认证状态（不启动服务）"],
+  ["atrium auth rotate", "轮换用户令牌"],
 ];
 const usage = "用法：atrium [命令] …；atrium --help 列出全部命令";
 
@@ -150,15 +131,13 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["身份", "聊天", "任务", "组织", "账号与凭据", "插件技能与规则"].flatMap(
-      (group) => [
-        "",
-        group,
-        ...Object.entries(commands)
-          .filter(([name]) => groupOf(name) === group)
-          .map(([name, command]) => entry(name, command)),
-      ],
-    ),
+    ...["任务", "组织"].flatMap((group) => [
+      "",
+      group,
+      ...Object.entries(commands)
+        .filter(([name]) => groupOf(name) === group)
+        .map(([name, command]) => entry(name, command)),
+    ]),
     "",
     "命令详情：atrium <命令> --help；调用约定：atrium guide",
   ].join("\n");
@@ -177,7 +156,6 @@ export async function main(argv: string[]): Promise<number> {
     let code = 0;
     let failed = false;
     let subcommand = name ?? "";
-    let usageNext: string | undefined;
     try {
       // 执行者环境：除帮助外一律先过防护，拒绝时不会拉起服务、不碰默认数据目录。
       if (
@@ -188,27 +166,19 @@ export async function main(argv: string[]): Promise<number> {
       if (name === undefined || name === "--no-open") {
         if (rest.filter((part) => part !== "--json").length)
           throw new Problem(400, usage, "usage");
-        const { startService, openWeb, canOpenBrowser, noBrowserHint } =
-          await import("../server/service.ts");
+        // --no-open 是没有 Web 之前的写法，照旧接受，行为相同。
+        const { startService } = await import("../server/service.ts");
         const data = dataDirectory();
         const record = await startService(data);
         console.log(
           `Atrium → ${serviceUrl(record)}\n服务已就绪 · PID ${record.pid}\n数据：${data}`,
         );
-        if (name === undefined) {
-          const { loginLink } = await import("./auth.ts");
-          const url = await loginLink(data, record);
-          if (canOpenBrowser(process.stdin, process.stdout))
-            await openWeb(record, url);
-          else console.log(noBrowserHint(url));
-        }
         return 0;
       }
       if (["--help", "-h", "help"].includes(name)) {
         console.log(help());
         return 0;
       }
-      // 不带名称的 status / stop 说的是服务本身；带名称的是某个身份。
       if (
         (name === "status" || name === "stop") &&
         rest.every((arg) => arg === "--json")
@@ -242,8 +212,6 @@ export async function main(argv: string[]): Promise<number> {
             : `${name} ${rest.splice(rest.indexOf(word), 1)[0]}`;
       } else subcommand = name ?? "";
       const command = commands[subcommand];
-      if (subcommand === "account login")
-        throw new Problem(400, "已由 atrium connect 代替", "usage");
       if (!command) {
         const candidate = closest(
           subcommand,
@@ -283,20 +251,9 @@ export async function main(argv: string[]): Promise<number> {
       }
       const [min, max] = command.positionals;
       if (parsed.positionals.length < min || parsed.positionals.length > max) {
-        if (subcommand === "unassign" && parsed.positionals.length === 1) {
-          const { connect } = await import("./service.ts");
-          const credentials = await (
-            await connect(true)
-          ).get<{
-            ref: string;
-            assigned: { provider: string }[];
-          }>(`/credentials/${encodeURIComponent(parsed.positionals[0]!)}`);
-          if (credentials.assigned.length === 1)
-            usageNext = `atrium unassign ${commandAgent(parsed.positionals[0]!, credentials.ref)} ${credentials.assigned[0]!.provider}`;
-        }
         throw new Problem(
           400,
-          `用法：atrium ${subcommand} ${command.args}${usageNext ? "" : `\n示例：${example(subcommand, command)}`}`,
+          `用法：atrium ${subcommand} ${command.args}\n示例：${example(subcommand, command)}`,
           "usage",
         );
       }
@@ -311,18 +268,10 @@ export async function main(argv: string[]): Promise<number> {
       return code;
     } catch (error) {
       failed = true;
-      const result = failure(error, usageNext);
+      const result = failure(error);
       result.message = cliErrorMessage(result.message, commands[subcommand]);
-      if (subcommand === "account login") result.next = "atrium connect --help";
       if (!commands[subcommand] && result.candidates?.[0])
         result.next = `atrium ${result.candidates[0].ref} --help`;
-      if (
-        subcommand === "model" &&
-        result.code === "model_not_found" &&
-        result.candidates?.[0] &&
-        rest[0]
-      )
-        result.next = `atrium model ${rest[0]} ${result.candidates[0].ref}`;
       if (json) {
         state.lines = [];
         originalLog(
@@ -374,22 +323,8 @@ export async function main(argv: string[]): Promise<number> {
 }
 function defaultNext(name: string): string | null {
   if (name === "" || name === "--no-open") return "停止：atrium stop";
-  if (
-    [
-      "stop",
-      "delete",
-      "disband",
-      "account remove",
-      "unassign",
-      "kick",
-    ].includes(name)
-  )
-    return null;
   if (name === "update") return "生效：atrium restart";
   if (name === "restart") return "查看状态：atrium status";
-  if (name === "assign") return "看分配：atrium accounts";
-  if (name === "status") return "查看身份：atrium list";
-  if (name === "list") return "查看会话：atrium chats";
-  if (name === "chats") return "查看身份：atrium list";
+  if (name === "status") return "看任务：atrium top";
   return null;
 }

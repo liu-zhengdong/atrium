@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store } from "../server/store.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
 function storeFixture(t: { after: (fn: () => void) => void }) {

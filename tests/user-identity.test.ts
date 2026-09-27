@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Store } from "../server/store.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { readUser, writeUser } from "../server/users.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 import type { Overview } from "../shared/schema.ts";

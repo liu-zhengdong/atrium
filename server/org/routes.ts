@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
-import type { Store } from "../store.ts";
-import { resolveActor } from "../users.ts";
+import { resolveActor } from "../actor.ts";
 import { Problem } from "../problem.ts";
 import { ensureOrgTables } from "./schema.ts";
 import { history, show, tree } from "./read.ts";
@@ -34,25 +33,16 @@ const doc = (value: unknown): Doc => {
     throw new Problem(400, "doc 只能是 charter 或 card");
   return value;
 };
-export function registerOrgRoutes(
-  app: FastifyInstance,
-  db: DatabaseSync,
-  store: Store,
-) {
+export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
   ensureOrgTables(db);
-  const actor = (query: unknown) => {
-    const value = resolveActor(store, q(query).as);
-    return value === "u1" ? value : store.agentRef(value);
-  };
-  const checkedLeader = (input: Record<string, unknown>) => {
-    if (input.leader === "none" || input.leader === "无")
-      return { ...input, leader: null };
-    if (typeof input.leader === "string" && input.leader !== "u1") {
-      const id = store.resolveAgentId(input.leader);
-      return { ...input, leader: store.agentRef(id) };
-    }
-    return input;
-  };
+  const actor = (query: unknown) => resolveActor(db, q(query).as);
+  // leader 只收短号（u1 或 aN），格式由 write.ts 校验；none／无 表示清空。
+  const checkedLeader = (input: Record<string, unknown>) =>
+    input.leader === "none" || input.leader === "无"
+      ? { ...input, leader: null }
+      : typeof input.leader === "string"
+        ? { ...input, leader: input.leader.trim() }
+        : input;
   app.get("/api/org/tree", () => tree(db));
   app.get("/api/org/nodes/:id", (request) =>
     show(

@@ -61,7 +61,7 @@ test("假执行者在跑时暂缓重启，新任务记等待事件，结束后�
   await app.close();
   const next = await createApp({
     data,
-    runtime: false,
+
     auth: false,
     tasks: {
       env: fx.env,
@@ -73,7 +73,7 @@ test("假执行者在跑时暂缓重启，新任务记等待事件，结束后�
   });
   t.after(() => next.app.close());
   await until(() =>
-    getTask(next.store.db, "t2").events.some((event) => event.kind === "start"),
+    getTask(next.db, "t2").events.some((event) => event.kind === "start"),
   );
   await until(() => next.taskRunner?.runningTaskRefs().length === 0);
   assert.equal(launched, 1);

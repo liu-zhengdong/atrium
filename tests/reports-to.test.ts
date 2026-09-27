@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store } from "../server/store.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 
 test("汇报链可清空、拒绝环/已删除对象，并在删除上级后回退用户", (t) => {
   const store = new Store(":memory:");

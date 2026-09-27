@@ -1,6 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
-import { Problem } from "../problem.ts";
 import { ackIds, waitSeconds } from "./events.ts";
 import {
   DEFAULT_OWNER,
@@ -51,18 +50,12 @@ export function runnerEnvOptions(env: NodeJS.ProcessEnv = process.env) {
 export function registerTaskRoutes(
   app: FastifyInstance,
   db: DatabaseSync,
-  runnerOptions?: RunnerOptions,
+  runnerOptions: RunnerOptions,
 ) {
   ensureTaskTables(db);
-  const runner = runnerOptions ? new TaskRunner(db, runnerOptions) : undefined;
-  const requireRunner = () => {
-    if (!runner) throw new Problem(503, "任务运行时未启用");
-    return runner;
-  };
-  if (runner) {
-    runner.start();
-    app.addHook("preClose", async () => runner.close());
-  }
+  const runner = new TaskRunner(db, runnerOptions);
+  runner.start();
+  app.addHook("preClose", async () => runner.close());
   app.post("/api/tasks", { bodyLimit: 64 * 1024 }, async (request, reply) => {
     const task = createTask(db, request.body);
     return reply.code(201).send(task);
@@ -76,7 +69,7 @@ export function registerTaskRoutes(
   );
   // 静态路径要排在 :id 前面，别让 top 被当成任务短号。
   app.get("/api/tasks/top", (request) =>
-    requireRunner().top({ as: query(request.query).as }),
+    runner.top({ as: query(request.query).as }),
   );
   app.get("/api/tasks/plan", (request) => {
     const q = query(request.query);
@@ -93,19 +86,16 @@ export function registerTaskRoutes(
     updateTask(db, params(request.params).id, request.body),
   );
   app.post("/api/tasks/:id/run", { bodyLimit: 16 * 1024 }, (request) =>
-    requireRunner().run(params(request.params).id, request.body),
+    runner.run(params(request.params).id, request.body),
   );
   app.post("/api/tasks/:id/stop", (request) =>
-    requireRunner().stop(
-      params(request.params).id,
-      actorOf(query(request.query)),
-    ),
+    runner.stop(params(request.params).id, actorOf(query(request.query))),
   );
   app.get("/api/tasks/:id/log", (request) =>
-    requireRunner().log(params(request.params).id, query(request.query).after),
+    runner.log(params(request.params).id, query(request.query).after),
   );
   app.get("/api/tasks/:id/wait", (request) =>
-    requireRunner().wait(
+    runner.wait(
       params(request.params).id,
       waitSeconds(query(request.query).timeout),
       disconnect(request),
@@ -113,14 +103,14 @@ export function registerTaskRoutes(
   );
   app.get("/api/events/wait", (request) => {
     const q = query(request.query);
-    return requireRunner().inbox.wait(
+    return runner.inbox.wait(
       actorOf(q),
       waitSeconds(q.timeout),
       disconnect(request),
     );
   });
   app.post("/api/events/ack", { bodyLimit: 64 * 1024 }, (request) =>
-    requireRunner().inbox.ack(ackIds(request.body)),
+    runner.inbox.ack(ackIds(request.body)),
   );
   return runner;
 }

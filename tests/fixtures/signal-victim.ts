@@ -1,6 +1,6 @@
 /**
  * tests/fixture-signal.test.ts 的受害者进程（#222）：
- * 与各测试夹具同法拉起真实后台服务（detached），再触发 pi-atrium 网关子进程，
+ * 与各测试夹具同法拉起真实后台服务（detached），
  * 把进程树和临时目录以一行 JSON 报告给父进程后挂住，等待被信号打断。
  * VICTIM_NO_CLEANUP=1 时不登记中断收尾，用于反向对照（复现泄漏）。
  */
@@ -9,7 +9,6 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { alive, packageRoot, readService } from "../../server/service-state.ts";
 import { descendantsOf, trackFixture } from "../fixture-signal.ts";
@@ -41,16 +40,11 @@ const cli = (...args: string[]) =>
     cwd: root,
     timeout: 60000,
   });
-await cli("list"); // 第一条经服务的命令把 detached 服务拉起来
+await cli("task", "ls"); // 第一条经服务的命令把 detached 服务拉起来
 const record = readService(data);
 if (!record || !alive(record.pid)) throw new Error("服务没有起来");
-// runtimes 列表走 _pi/runtime/list，逼服务把 pi-atrium 网关子进程开出来。
-await cli("runtimes").catch(() => {});
-let descendants: number[] = [];
-for (let i = 0; i < 100 && descendants.length === 0; i++) {
-  descendants = descendantsOf(record.pid);
-  if (descendants.length === 0) await delay(200);
-}
+// 组织运行时空闲时不开子进程；有就一并报告，收尾时整棵树都要带走。
+const descendants = descendantsOf(record.pid);
 process.stdout.write(
   JSON.stringify({ root, pid: record.pid, descendants }) + "\n",
 );

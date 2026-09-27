@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Accounts } from "../server/accounts.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { RunnerDaemon } from "../server/runner-daemon.ts";
 import { randomUUID } from "node:crypto";
 import { assignedSetupTokenRef } from "../server/launch-account.ts";

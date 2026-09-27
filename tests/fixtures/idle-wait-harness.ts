@@ -2,7 +2,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { createApp } from "../../server/app.ts";
+import { createApp } from "../../server/legacy-app.ts";
 import { claimService } from "../../server/service-state.ts";
 import { sameSecret } from "../../shared/secret.ts";
 

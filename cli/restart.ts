@@ -4,81 +4,38 @@ import {
   waitForRestart,
 } from "../server/supervisor.ts";
 import { alive, dataDirectory } from "../server/service-state.ts";
-import { Store } from "../server/store.ts";
-import { realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { recordNext, recordResult } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
 import { startService } from "../server/service.ts";
 import { serviceUrl } from "../server/service-state.ts";
 import { missingRoute, outdatedService } from "./version-check.ts";
 
-const canonical = (path: string) => {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
-};
-
-export function initiatorAgent(
-  store: Store,
-  directory?: string,
-  session?: string,
-): string | undefined {
-  return store
-    .agents()
-    .find(
-      (agent) =>
-        (directory &&
-          agent.agent_directory &&
-          canonical(agent.agent_directory) === canonical(directory)) ||
-        (session &&
-          agent.session_file &&
-          canonical(agent.session_file) === canonical(session)),
-    )?.id;
-}
-
 export async function restart({
   wait = false,
   timeout,
   "when-idle": whenIdle = false,
   data,
-  "probe-agent": probeAgent,
-  "agent-timeout": agentTimeout,
 }: {
   wait?: boolean;
   "when-idle"?: boolean;
   timeout?: string;
   data?: string;
-  "probe-agent"?: string;
-  "agent-timeout"?: string;
 }) {
   const dir = data ?? dataDirectory();
   const timeoutSec = Number(timeout ?? (whenIdle ? "1800" : "300"));
-  const agentTimeoutMs = agentTimeout ? Number(agentTimeout) : undefined;
   if (
     !Number.isInteger(timeoutSec) ||
     timeoutSec < 1 ||
-    timeoutSec > (whenIdle ? 7200 : 600) ||
-    (agentTimeoutMs !== undefined &&
-      (!Number.isInteger(agentTimeoutMs) ||
-        agentTimeoutMs < 1000 ||
-        agentTimeoutMs > 7200000))
+    timeoutSec > (whenIdle ? 7200 : 600)
   )
     throw new Problem(
       400,
-      `--timeout 必须为 1–${whenIdle ? 7200 : 600} 秒，--agent-timeout 为 1000–7200000 毫秒`,
+      `--timeout 必须为 1–${whenIdle ? 7200 : 600} 秒`,
       "usage",
     );
 
   if (whenIdle) {
-    if (wait || probeAgent || agentTimeout)
-      throw new Problem(
-        400,
-        "--when-idle 不能与 --wait、--probe-agent 或 --agent-timeout 同用",
-        "usage",
-      );
+    if (wait) throw new Problem(400, "--when-idle 不能与 --wait 同用", "usage");
     const record = await startService(dir);
     const response = await fetch(
       `${serviceUrl(record)}/api/service/restart-when-idle`,
@@ -150,31 +107,7 @@ export async function restart({
       "conflict",
     );
   if (!wait) {
-    // The initiating Agent can finish its tool call before the supervisor
-    // samples active turns. Remember it explicitly so it is resumed too.
-    let wakeAgent: string | undefined;
-    let probeId: string | undefined;
-    if (
-      probeAgent ||
-      process.env.PI_CODING_AGENT_DIR ||
-      process.env.PI_SESSION_FILE
-    ) {
-      const store = new Store(join(dir, "atrium.sqlite"));
-      try {
-        if (probeAgent) probeId = store.resolveAgentId(probeAgent);
-        const directory = process.env.PI_CODING_AGENT_DIR;
-        const session = process.env.PI_SESSION_FILE;
-        wakeAgent = initiatorAgent(store, directory, session);
-      } finally {
-        store.close();
-      }
-    }
-    await startSupervisor({
-      data: dir,
-      probeAgent: probeId,
-      agentTimeout: agentTimeoutMs,
-      wakeAgent,
-    });
+    await startSupervisor({ data: dir });
   }
 
   if (!wait) {
@@ -191,14 +124,10 @@ export async function restart({
 
   const finalState = await waitForRestart(dir, timeoutSec * 1000);
   if (finalState.status === "success") {
-    const wokenStr = finalState.wokenAgents?.length
-      ? `\n已唤醒 ${finalState.wokenAgents.length} 个身份：${finalState.wokenAgents.join("、")}`
-      : "";
-    console.log(`Atrium 已平滑重启 · PID ${finalState.newPid}${wokenStr}`);
+    console.log(`Atrium 已平滑重启 · PID ${finalState.newPid}`);
     recordResult({
       status: "success",
       pid: finalState.newPid,
-      woken_agents: finalState.wokenAgents ?? [],
       version: finalState.targetVersion ?? finalState.fromVersion,
     });
     recordNext("查看状态：atrium status");

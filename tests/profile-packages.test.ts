@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import { Problem } from "../server/store.ts";
 import { Runtimes } from "../server/runtime.ts";
 import {

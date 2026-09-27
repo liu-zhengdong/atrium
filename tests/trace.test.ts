@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../server/store.ts";
 import { commandSummary, TraceStore, toolTitle } from "../server/trace.ts";
 import { createMcp } from "../server/mcp.ts";
-import { createApp } from "../server/app.ts";
+import { createApp } from "../server/legacy-app.ts";
 import type { RuntimeEventPage } from "../shared/trace.ts";
 import { LOCAL_USER } from "../shared/user.ts";
 
@@ -80,8 +80,8 @@ test("轨迹标题：一句话说清这一步在干什么", () => {
     "读取 · /Users/liu/.agents/skills/ego-browser/SKILL.md",
   );
   assert.equal(
-    title("lsp", { file_path: "server/app.ts" }),
-    "lsp · server/app.ts",
+    title("lsp", { file_path: "server/legacy-app.ts" }),
+    "lsp · server/legacy-app.ts",
   );
 });
 

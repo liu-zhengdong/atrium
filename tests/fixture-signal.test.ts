@@ -1,6 +1,6 @@
 /**
  * #222：测试进程被 SIGINT/SIGTERM 打断时，fixture-signal 登记的中断收尾要把
- * 夹具拉起的后台服务、它的 pi-atrium 网关子进程和临时目录一起带走，
+ * 夹具拉起的后台服务、它的子进程和临时目录一起带走，
  * 退出码 130/143；不属于本次测试的服务不能误伤。
  * 反向对照：同一个受害者脚本不登记收尾时，同样的打断会留下服务——
  * 证明上面的断言确实由收尾逻辑承担。
@@ -80,11 +80,15 @@ async function startOutsider(t: { after: (fn: () => Promise<void>) => void }) {
     ATRIUM_PI_TEMPLATE: template,
     PI_ACP_DIR: join(root, "acp"),
   });
-  await exec(process.execPath, [join(packageRoot, "bin/atrium.mjs"), "list"], {
-    env,
-    cwd: root,
-    timeout: 60000,
-  });
+  await exec(
+    process.execPath,
+    [join(packageRoot, "bin/atrium.mjs"), "task", "ls"],
+    {
+      env,
+      cwd: root,
+      timeout: 60000,
+    },
+  );
   const record = readService(data);
   assert.ok(record && alive(record.pid), "对照服务要活着");
   const pid = record.pid;
@@ -133,7 +137,7 @@ function collectVictim(
 }
 
 test(
-  "SIGINT 打断：服务、网关子进程与临时目录收尾，退出码 130，不误伤别人的服务",
+  "SIGINT 打断：服务、子进程与临时目录收尾，退出码 130，不误伤别人的服务",
   { timeout: 240000, skip: process.platform === "win32" },
   async (t) => {
     const outsider = await startOutsider(t);
@@ -143,10 +147,6 @@ test(
     const info = await victim.ready;
     box.info = info;
     assert.ok(alive(info.pid), "打断前服务要活着");
-    assert.ok(
-      info.descendants.length > 0,
-      "打断前服务要已有 pi-atrium 网关子进程",
-    );
     for (const pid of info.descendants) assert.ok(alive(pid));
     const tree = [info.pid, ...info.descendants];
     victim.child.kill("SIGINT");
@@ -163,7 +163,7 @@ test(
 );
 
 test(
-  "SIGTERM 打断：服务、网关子进程与临时目录收尾，退出码 143",
+  "SIGTERM 打断：服务、子进程与临时目录收尾，退出码 143",
   { timeout: 240000, skip: process.platform === "win32" },
   async (t) => {
     const victim = startVictim(true);
@@ -172,7 +172,6 @@ test(
     const info = await victim.ready;
     box.info = info;
     const tree = [info.pid, ...info.descendants];
-    assert.ok(tree.length > 1, "打断前服务要已有 pi-atrium 网关子进程");
     victim.child.kill("SIGTERM");
     const { code } = await victim.exited;
     assert.equal(code, 143, "中断收尾后按 SIGTERM 约定退出");

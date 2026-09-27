@@ -203,6 +203,7 @@ export type TopCounts = {
   merge_queued?: number;
   merging?: number;
   merged?: number;
+  online?: number;
   blocked: number;
   processing: number;
   done: number;
@@ -231,6 +232,8 @@ export function countRows(rows: TopRow[]): TopCounts {
       counts.merging = (counts.merging ?? 0) + 1;
     else if (row.delivery_stage === "merged")
       counts.merged = (counts.merged ?? 0) + 1;
+    else if (row.delivery_stage === "online")
+      counts.online = (counts.online ?? 0) + 1;
     else if (row.status === "running") counts.running++;
     else if (row.status === "blocked") {
       if (row.processing) counts.processing++;

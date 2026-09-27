@@ -76,6 +76,17 @@ export function ensureTaskTables(db: DatabaseSync) {
   // 审阅关卡（#325）：这一轮审阅派出的审阅任务；每次进审阅重置。
   if (!columns.some((column) => column.name === "review_task"))
     db.exec("ALTER TABLE tasks ADD COLUMN review_task INTEGER");
+  // 自动上线（#325）：合入提交、含它的版本、是否在等上线、为哪个版本自升级过。
+  if (!columns.some((column) => column.name === "merge_commit"))
+    db.exec("ALTER TABLE tasks ADD COLUMN merge_commit TEXT");
+  if (!columns.some((column) => column.name === "release_version"))
+    db.exec("ALTER TABLE tasks ADD COLUMN release_version TEXT");
+  if (!columns.some((column) => column.name === "online_wait"))
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN online_wait INTEGER NOT NULL DEFAULT 0",
+    );
+  if (!columns.some((column) => column.name === "online_attempt"))
+    db.exec("ALTER TABLE tasks ADD COLUMN online_attempt TEXT");
   db.exec(
     "CREATE INDEX IF NOT EXISTS tasks_delivery_stage ON tasks(delivery_stage,id)",
   );

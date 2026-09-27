@@ -53,6 +53,16 @@ import {
   decideCouncil,
   STAGE_LABEL,
 } from "./councils.ts";
+import {
+  cliDeploy,
+  lastRestartError,
+  OnlineWatch,
+  type DeployResult,
+} from "./online-runtime.ts";
+import { selfRepoFlag, selfUpdateEnabled } from "./online.ts";
+import { currentVersion, packageRoot } from "../service-state.ts";
+import { restartInProgress } from "../supervisor.ts";
+import { existsSync } from "node:fs";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -80,6 +90,15 @@ export type RunnerOptions = {
   killGraceMs?: number;
   /** 额度报文没给恢复时间时，账号标记保留多久（毫秒）；缺省 1 小时。 */
   quotaUnknownMs?: number;
+  /** 自动上线（#325）；缺省按 ATRIUM_UPDATE_REPO、ATRIUM_SELF_UPDATE 与本包是否 git 检出决定。 */
+  online?: {
+    /** 服务自身仓库（`-R` 写法）；合入它的 PR 才自动上线。 */
+    selfRepo?: string | null;
+    selfUpdate?: boolean;
+    version?: () => string;
+    deploy?: (version: string) => Promise<DeployResult>;
+    pollMs?: number;
+  };
 };
 
 export class TaskRunner {
@@ -92,6 +111,7 @@ export class TaskRunner {
   private readonly cleanup: WorktreeCleanup;
   private readonly merge: MergeQueue;
   private readonly review: ReviewGate;
+  private readonly online: OnlineWatch;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly exec: Exec;
   private readonly launchOptions: LaunchOptions;
@@ -182,6 +202,13 @@ export class TaskRunner {
       },
       publish: (id, kind, detail, actor) =>
         this.x.publish(id, kind, detail, actor),
+      selfRepo:
+        options.online?.selfRepo !== undefined
+          ? options.online.selfRepo
+          : selfRepoFlag(
+              process.env.ATRIUM_UPDATE_REPO ?? "github:liu-zhengdong/atrium",
+            ),
+      onMerged: () => this.online.kick(),
       returned: async (task) => {
         if (this.closed || !task.worker) return;
         await this.run(task.ref, {
@@ -203,6 +230,24 @@ export class TaskRunner {
       changed: (id) => this.waits.changed(id),
       publish: (id, kind, detail, actor) =>
         this.x.publish(id, kind, detail, actor),
+    });
+    this.online = new OnlineWatch(db, {
+      run: this.exec,
+      version: options.online?.version ?? currentVersion,
+      selfUpdate:
+        options.online?.selfUpdate ??
+        selfUpdateEnabled(
+          process.env.ATRIUM_SELF_UPDATE,
+          existsSync(join(packageRoot, ".git")),
+        ),
+      busy: () =>
+        !!this.db
+          .prepare("SELECT 1 FROM tasks WHERE delivery_stage='merging' LIMIT 1")
+          .get() || !!restartInProgress(options.data),
+      deploy: options.online?.deploy ?? cliDeploy(options.data),
+      restartError: (version) => lastRestartError(options.data, version),
+      publish: (id, kind, detail) => this.x.publish(id, kind, detail),
+      changed: (id) => this.waits.changed(id),
     });
     this.scheduler = new Scheduler(
       db,
@@ -245,12 +290,16 @@ export class TaskRunner {
       if (!this.closed && this.recovered) this.merge.kick();
     });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
+    every(this.options.online?.pollMs ?? 60_000, async () => {
+      if (!this.closed && this.recovered) this.online.kick();
+    });
     void this.recover()
       .then(async () => {
         this.recovered = true;
         if (!this.closed) await this.scheduler.tick();
         if (!this.closed) this.review.kick();
         if (!this.closed) this.merge.kick();
+        if (!this.closed) this.online.kick();
       })
       .catch((error) => console.error("任务运行时自愈失败：", error));
   }
@@ -260,6 +309,7 @@ export class TaskRunner {
     this.closed = true;
     this.merge.close();
     this.review.close();
+    this.online.close();
     for (const timer of this.timers) clearInterval(timer);
     // 与服务退出时一样关掉即时捎话的写端：执行者处理完本轮后自己退出，重启后按 pid 接管。
     for (const active of this.x.active.values()) void active.live?.finish();

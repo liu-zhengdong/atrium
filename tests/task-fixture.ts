@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
 import type { PaceEntry } from "../server/tasks/prepare.ts";
+import type { RunnerOptions } from "../server/tasks/runner.ts";
 
 /** 派活集成测试的夹具（#262）：本地 bare origin + 临时仓库 + PATH 前置的假执行者 + 临时档案。 */
 
@@ -112,6 +113,7 @@ export async function startApp(
   pace: () => Promise<PaceEntry[] | undefined> = async () => undefined,
   usagePace: () => Promise<PaceEntry[] | undefined> = async () => undefined,
   diskFreeGb: (path: string) => Promise<number> = async () => 1000,
+  tasks: Partial<RunnerOptions> = {},
 ) {
   const fx = fixture(t);
   tweak?.(fx);
@@ -129,6 +131,7 @@ export async function startApp(
       pace,
       usagePace,
       diskFreeGb,
+      ...tasks,
     },
   });
   t.after(() => app.close());

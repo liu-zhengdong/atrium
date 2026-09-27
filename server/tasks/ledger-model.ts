@@ -30,6 +30,14 @@ export type TaskRow = {
   /** 审阅关卡这一轮派出的审阅任务 id。 */
   review_task: number | null;
   merge_queued_at: number | null;
+  /** 合入后的 squash 提交；自动上线据此找含它的版本。 */
+  merge_commit: string | null;
+  /** 含合入提交的最早版本（不带 v）。 */
+  release_version: string | null;
+  /** 1 表示合入的是服务自身的仓库，正在等发版上线。 */
+  online_wait: number;
+  /** 已为哪个版本发起过自升级；同一版本不重复升级。 */
+  online_attempt: string | null;
   owner: string | null;
   auto: number;
   auto_dispatched: number;

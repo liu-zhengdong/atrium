@@ -8,6 +8,7 @@ import {
   addNode,
   editDoc,
   editNode,
+  editStages,
   importOrg,
   revertDoc,
   type AddInput,
@@ -18,6 +19,7 @@ import { parseDocument } from "./validate.ts";
 import { linkRoles } from "./task-link.ts";
 import { readPace } from "../tasks/prepare.ts";
 import { addPoint, editPoint, removePoint } from "./points.ts";
+import { isRegistered } from "../leaders/model.ts";
 
 type Query = {
   as?: string;
@@ -40,12 +42,28 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
   ensureOrgTables(db);
   const actor = (query: unknown) => resolveActor(db, q(query).as);
   // leader 只收短号（u1 或 aN），格式由 write.ts 校验；none／无 表示清空。
-  const checkedLeader = (input: Record<string, unknown>) =>
-    input.leader === "none" || input.leader === "无"
+  // 指派 aN 须先登记（atrium leader add），免得事件投给一个不会被唤醒的身份。
+  const checkedLeader = (input: Record<string, unknown>) => {
+    const leader =
+      typeof input.leader === "string" ? input.leader.trim() : input.leader;
+    if (
+      typeof leader === "string" &&
+      /^a[1-9][0-9]*$/.test(leader) &&
+      !isRegistered(db, leader)
+    )
+      throw new Problem(
+        404,
+        `--leader: ${leader} 没有登记为 leader`,
+        "not_found",
+        undefined,
+        `atrium leader add 名称 --worker claude+opus --id ${leader}`,
+      );
+    return leader === "none" || leader === "无"
       ? { ...input, leader: null }
-      : typeof input.leader === "string"
-        ? { ...input, leader: input.leader.trim() }
+      : typeof leader === "string"
+        ? { ...input, leader }
         : input;
+  };
   app.get("/api/org/tree", async () => tree(db, await readPace()));
   app.get("/api/org/nodes/:id", async (request) =>
     show(
@@ -122,6 +140,20 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
       doc(input.doc),
       String(input.to ?? ""),
       String(input.reason ?? ""),
+      actor(request.query),
+    );
+  });
+  // 阶段记录：只改章程的 stages，其余不动（leader 可改本节点及子节点的阶段）。
+  app.put("/api/org/nodes/:id/stages", { bodyLimit: 64 * 1024 }, (request) => {
+    const input = body(request.body);
+    for (const key of Object.keys(input))
+      if (key !== "stages" && key !== "reason")
+        throw new Problem(400, `${key}: 是未知字段`);
+    return editStages(
+      db,
+      p(request.params).id,
+      input.stages,
+      input.reason,
       actor(request.query),
     );
   });

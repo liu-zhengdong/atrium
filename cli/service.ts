@@ -10,7 +10,7 @@ import { restartInProgress } from "../server/supervisor.ts";
 import { Problem } from "../server/problem.ts";
 import { localFetch, type LocalResponse } from "../server/local-http.ts";
 import { recordResult } from "./contract.ts";
-import { workerGuard } from "./worker-guard.ts";
+import { leaderSession, workerGuard } from "./worker-guard.ts";
 import { requireUserAuthService, userBearer } from "./auth.ts";
 import { missingRoute, outdatedServiceAt } from "./version-check.ts";
 
@@ -22,6 +22,9 @@ export type Client = ReturnType<typeof client>;
  */
 export async function connect(quietStart = false): Promise<Client> {
   workerGuard();
+  // leader 进程：以本次唤醒的令牌直连服务，不拉起、不读用户令牌，服务重启时不重发。
+  const leader = leaderSession();
+  if (leader) return client(leader.url, "", undefined, leader.bearer);
   const data = dataDirectory();
   const before = readService(data);
   const restarting = restartInProgress(data);
@@ -90,6 +93,7 @@ export function client(
   base: string,
   data: string,
   reconnect?: (error: unknown) => Promise<string | null>,
+  bearer?: string,
 ) {
   // 不是 async：令牌缺失（auth_required）同步抛出，不被下面当成连接失败包成 503。
   function send(
@@ -103,7 +107,7 @@ export function client(
       signal,
       headers: {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
-        authorization: userBearer(data),
+        authorization: bearer ?? userBearer(data),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -155,7 +159,10 @@ export function client(
         );
     }
     if (!response.ok) {
-      if (missingRoute(response.status, value as { error?: unknown })) {
+      if (
+        !bearer &&
+        missingRoute(response.status, value as { error?: unknown })
+      ) {
         const outdated = await outdatedServiceAt(data);
         if (outdated) throw outdated;
       }

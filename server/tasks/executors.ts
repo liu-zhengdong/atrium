@@ -5,7 +5,6 @@ import { ADAPTERS, type Tool } from "./adapters/index.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
 import {
-  DEFAULT_OWNER,
   advanceTask,
   getTask,
   noteTask,
@@ -53,6 +52,7 @@ import {
 import { fileHints } from "./concerns.ts";
 import { hintText, needsReview } from "./concern-gate.ts";
 import { isCouncilTask, isOpinionTask } from "./councils.ts";
+import { taskRoute } from "../leaders/subscriber.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -504,7 +504,7 @@ export class Executors {
       for (const p of proposals) {
         noteTask(this.ctx.db, active.id, "skill_proposal", p);
         this.ctx.inbox.publish({
-          subscriber: task.owner ?? DEFAULT_OWNER,
+          subscriber: taskRoute(this.ctx.db, task).subscriber,
           taskId: active.id,
           source: "runner",
           kind: "skill_proposal",

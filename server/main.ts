@@ -77,6 +77,7 @@ try {
   ({ app } = await createApp({
     data,
     controlToken: lease.record.token,
+    serviceUrl: `http://127.0.0.1:${servicePort()}`,
   }));
   const authorize = (value: string | undefined) => {
     const actual = /^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "";

@@ -992,3 +992,48 @@ test("命令表：help、guide 与参数校验都认 top", async () => {
     );
   }
 });
+
+test("看板：有 leader 时单列一段，写负责的节点、最近一次唤醒在处理什么与待处理件数", () => {
+  const text = renderTop(
+    snapshot([], {
+      leaders: [
+        {
+          ref: "a1",
+          name: "Atrium 负责人",
+          nodes: ["o2"],
+          wake: {
+            at: NOW - 60_000,
+            ended_at: null,
+            status: "running",
+            summary: "t5 failed",
+            note: null,
+            failures: 0,
+            count: 3,
+          },
+          events: 2,
+        },
+        {
+          ref: "a2",
+          name: "OpenQuota 负责人",
+          nodes: [],
+          wake: null,
+          events: 0,
+        },
+      ],
+    }),
+    { now: NOW, width: 120, color: false, footer: false },
+  );
+  assert.match(
+    text,
+    /\nleader\n {2}a1 Atrium 负责人 · 负责 o2 · .*起处理中：t5 failed · 待处理 2\n {2}a2 OpenQuota 负责人 · 负责 （无） · 还没唤醒过/,
+  );
+  assert.doesNotMatch(
+    renderTop(snapshot([]), {
+      now: NOW,
+      width: 120,
+      color: false,
+      footer: false,
+    }),
+    /\nleader\n/,
+  );
+});

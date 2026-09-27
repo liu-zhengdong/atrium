@@ -1,6 +1,7 @@
 import { Problem } from "../server/problem.ts";
 import type { InboxEvent } from "../server/tasks/events.ts";
 import { recordNext } from "./contract.ts";
+import { defaultSubscriber } from "./worker-guard.ts";
 import { clip, printJson, when } from "./format.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
 import type { Command, Values } from "./main.ts";
@@ -57,7 +58,7 @@ const list: Command = {
   },
   positionals: [0, 0],
   async run({ values, json }) {
-    const who = str(values, "as") ?? "secretary";
+    const who = str(values, "as") ?? defaultSubscriber();
     if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
     const query = new URLSearchParams({ as: who });
     for (const key of ["before", "limit"])
@@ -90,7 +91,7 @@ const wait: Command = {
   },
   positionals: [0, 0],
   async run({ values, json }) {
-    const who = str(values, "as") ?? "secretary";
+    const who = str(values, "as") ?? defaultSubscriber();
     if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
     const seconds = waitSeconds(str(values, "timeout"));
     const settle = str(values, "settle");
@@ -139,7 +140,7 @@ const digest: Command = {
   options: { as: { type: "string" }, since: { type: "string" } },
   positionals: [0, 0],
   async run({ values, json }) {
-    const who = str(values, "as") ?? "secretary";
+    const who = str(values, "as") ?? defaultSubscriber();
     const since = str(values, "since");
     if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
     if (

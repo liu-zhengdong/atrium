@@ -66,6 +66,8 @@ import {
   packageRoot,
 } from "../service-state.ts";
 import { restartInProgress } from "../supervisor.ts";
+import { listLeaders } from "../leaders/model.ts";
+import { hasOrg } from "../org/task-node.ts";
 import { existsSync } from "node:fs";
 
 /**
@@ -792,6 +794,16 @@ export class TaskRunner {
         return readLogTail(join(taskDir(this.options.data, id), "log"));
       }),
     );
+    // leader 层：每位 leader 负责什么、最近一次唤醒、在处理什么、还有几件要处理的事。没有 leader 时不给。
+    const leaders = hasOrg(this.db)
+      ? listLeaders(this.db).leaders.map((l) => ({
+          ref: l.ref,
+          name: l.name,
+          nodes: l.nodes.map((n) => n.ref),
+          wake: l.wake,
+          events: this.inbox.countPending(l.ref),
+        }))
+      : [];
     return {
       now,
       recent_ms: RECENT_MS,
@@ -800,6 +812,7 @@ export class TaskRunner {
         ...countRows(rows),
         events: this.inbox.countPending(who),
       },
+      ...(leaders.length ? { leaders } : {}),
       rows: rows.map((row, index) => {
         const action = recentAction({
           tool: toolOf(row.worker),

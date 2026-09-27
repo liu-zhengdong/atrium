@@ -9,6 +9,8 @@ import { renderTopMap } from "./map.ts";
 import { DEPTH_MAX, type MapTreeNode } from "../server/map/view.ts";
 import { concernsBrief } from "./task-concerns.ts";
 import type { ConcernState } from "../server/tasks/concern-gate.ts";
+import type { LeaderWake } from "../server/leaders/model.ts";
+import { wakeText } from "./leaders.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -64,6 +66,14 @@ export type Snapshot = {
   };
   rows: TopRow[];
   truncated: boolean;
+  /** leader 层：每位负责什么、最近一次唤醒在处理什么、还有几件要处理的事；没有 leader 时不给。 */
+  leaders?: {
+    ref: string;
+    name: string;
+    nodes: string[];
+    wake: LeaderWake | null;
+    events: number;
+  }[];
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
   plan?: PlanView | null;
   plan_error?: string;
@@ -309,6 +319,15 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   if (!rows.length) lines.push("现在没有在跑、排队或受阻的任务");
   if (snapshot.truncated)
     lines.push(`（任务过多，只显示前 ${rows.length} 个）`);
+  if (snapshot.leaders?.length)
+    lines.push(
+      "",
+      "leader",
+      ...snapshot.leaders.map(
+        (l) =>
+          `  ${clip(`${l.ref} ${l.name} · 负责 ${l.nodes.join("、") || "（无）"} · ${wakeText(l.wake)}${l.events ? ` · 待处理 ${l.events}` : ""}`, frame.width - 2)}`,
+      ),
+    );
   if (snapshot.map) {
     lines.push("");
     const room = frame.height

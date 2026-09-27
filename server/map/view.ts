@@ -12,6 +12,7 @@ import {
 } from "../org/model.ts";
 import { overviewOf, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
+import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
@@ -31,6 +32,8 @@ export type MapTreeNode = {
   archived: boolean;
   dot: Dot;
   tasks: Counts;
+  /** 登记过的 leader 与其最近一次唤醒；节点没有 aN leader 或未登记时不给。 */
+  leader_state?: LeaderBrief;
   /** 超出 depth 时不展开，只给下层个数。 */
   children?: MapTreeNode[];
   children_count: number;
@@ -133,6 +136,7 @@ type Index = {
   children: Map<number | null, NodeRow[]>;
   fields: Map<number, Record<string, unknown>>;
   counts: Map<number, Counts>;
+  leaders: Map<string, LeaderBrief>;
 };
 
 function index(db: DatabaseSync): Index {
@@ -161,6 +165,7 @@ function index(db: DatabaseSync): Index {
     children,
     fields: charters(db),
     counts,
+    leaders: leaderBriefs(db),
   };
 }
 
@@ -174,6 +179,11 @@ const head = (x: Index, n: NodeRow) => {
   };
 };
 
+const leaderState = (x: Index, n: NodeRow) => {
+  const state = n.leader ? x.leaders.get(n.leader) : undefined;
+  return state ? { leader_state: state } : {};
+};
+
 function treeNode(x: Index, n: NodeRow, depth: number): MapTreeNode {
   const f = x.fields.get(n.id) ?? {};
   const counts = x.counts.get(n.id) ?? { running: 0, blocked: 0, open: 0 };
@@ -185,6 +195,7 @@ function treeNode(x: Index, n: NodeRow, depth: number): MapTreeNode {
     archived: n.archived_at !== null,
     dot: dotOf(counts),
     tasks: counts,
+    ...leaderState(x, n),
     ...(depth > 0
       ? { children: kids.map((c) => treeNode(x, c, depth - 1)) }
       : {}),
@@ -407,6 +418,7 @@ export function mapNode(
     kind: n.kind,
     path: nodePath(x.list, n),
     leader: n.leader,
+    ...leaderState(x, n),
     archived: n.archived_at !== null,
     dot: dotOf(x.counts.get(n.id)!),
     counts: x.counts.get(n.id)!,

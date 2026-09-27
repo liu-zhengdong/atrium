@@ -60,7 +60,18 @@ export type MapTask = {
   part: string | null;
   pr_url: string | null;
   issue: number | null;
+  /** PR 交付后的合入阶段：merge_queued / merging / merged / online；没进合入队列为 null。 */
+  delivery_stage: string | null;
+  ended_at: number | null;
 };
+/** 组成部分与专员的一行：在 Part 之外带一句「做什么」和下面还有几块（不含专员）。 */
+export type MapPart = Part & {
+  kind: NodeRow["kind"];
+  what: string;
+  parts: number;
+};
+/** 专员（关注点）的一行：另带什么时候请来（章程 invite_when）与在盯几件（请了它、还没结的任务）。 */
+export type MapConcern = MapPart & { invite_when: string[]; watching: number };
 
 export const DEPTH_MAX = 8;
 const OPEN = "('todo','running','blocked')";
@@ -223,6 +234,8 @@ type TaskRow = {
   pr_url: string | null;
   issue: number | null;
   repo: string | null;
+  delivery_stage: string | null;
+  ended_at: number | null;
 };
 
 function taskView(row: TaskRow, live?: LiveRow): MapTask {
@@ -240,11 +253,40 @@ function taskView(row: TaskRow, live?: LiveRow): MapTask {
     part: row.part === null ? null : ref(row.part),
     pr_url: row.pr_url,
     issue: row.issue,
+    delivery_stage: row.delivery_stage ?? null,
+    ended_at: row.ended_at ?? null,
   };
 }
 
-const TASK_COLUMNS =
-  "id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo";
+function hasColumn(db: DatabaseSync, table: string, column: string) {
+  return all<{ name: string }>(db, `PRAGMA table_info(${table})`).some(
+    (c) => c.name === column,
+  );
+}
+const taskColumns = (db: DatabaseSync) =>
+  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"}`;
+const MERGING = "delivery_stage IN ('merge_queued','merging')";
+
+/** 每位专员在盯几件：请了它、审查还没出结论、任务本身还没结（含等合入）。 */
+function watching(db: DatabaseSync): Map<number, number> {
+  const map = new Map<number, number>();
+  if (
+    !one(
+      db,
+      "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='task_concerns'",
+    ) ||
+    !hasColumn(db, "tasks", "delivery_stage")
+  )
+    return map;
+  for (const row of all<{ node_id: number; n: number }>(
+    db,
+    `SELECT c.node_id,COUNT(*) AS n FROM task_concerns c JOIN tasks t ON t.id=c.task_id
+      WHERE c.verdict IS NULL AND (t.status IN ${OPEN} OR t.${MERGING})
+      GROUP BY c.node_id LIMIT 600`,
+  ))
+    map.set(row.node_id, row.n);
+  return map;
+}
 
 /** 仓库路径 → GitHub 地址：从账本里已有的 PR 链接推出来，推不出的不给链接。 */
 function repoUrls(db: DatabaseSync): Map<string, string> {
@@ -271,16 +313,33 @@ export function mapNode(
   const n = nodeByAddress(db, address);
   const fields = x.fields.get(n.id) ?? {};
   const kids = x.children.get(n.id) ?? [];
-  const part = (c: NodeRow): Part => {
+  const part = (c: NodeRow): MapPart => {
     const counts = x.counts.get(c.id)!;
+    const f = x.fields.get(c.id) ?? {};
     return {
       ...head(x, c),
+      kind: c.kind,
+      what: firstLine(str(f.what) || str(f.goal), 120),
       archived: c.archived_at !== null,
+      parts: (x.children.get(c.id) ?? []).filter(
+        (k) => k.kind !== "concern" && k.archived_at === null,
+      ).length,
       tasks: {
         todo: counts.open - counts.running - counts.blocked,
         running: counts.running,
         blocked: counts.blocked,
       },
+    };
+  };
+  const watch = watching(db);
+  const concern = (c: NodeRow): MapConcern => {
+    const when = (x.fields.get(c.id) ?? {}).invite_when;
+    return {
+      ...part(c),
+      invite_when: Array.isArray(when)
+        ? when.filter((w): w is string => typeof w === "string" && !!w.trim())
+        : [],
+      watching: watch.get(c.id) ?? 0,
     };
   };
   const overview: Overview = overviewOf(
@@ -299,8 +358,9 @@ export function mapNode(
   const rows = hasTasks(db)
     ? all<TaskRow>(
         db,
-        `SELECT ${TASK_COLUMNS} FROM tasks WHERE COALESCE(part_id,node_id) IN (${marks})
-          ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2 ELSE 3 END,
+        `SELECT ${taskColumns(db)} FROM tasks WHERE COALESCE(part_id,node_id) IN (${marks})
+          ORDER BY CASE WHEN status='running' THEN 0 WHEN status='blocked' THEN 1
+            WHEN ${hasColumn(db, "tasks", "delivery_stage") ? MERGING : "0"} THEN 1 WHEN status='todo' THEN 2 ELSE 3 END,
             updated_at DESC LIMIT 60`,
         ...ids,
       )
@@ -352,16 +412,17 @@ export function mapNode(
     counts: x.counts.get(n.id)!,
     chain,
     overview,
-    concerns: kids.filter((c) => c.kind === "concern").map(part),
+    concerns: kids.filter((c) => c.kind === "concern").map(concern),
     points: nodePoints(db, n.id),
     points_chain: chainPoints(db, n.id).filter((l) => l.node !== ref(n.id)),
+    points_below: pointsBelow(db, x, n),
     tasks: {
       running: tasks.filter((t) => t.status === "running"),
       blocked: tasks.filter((t) => t.status === "blocked"),
       todo: tasks.filter((t) => t.status === "todo").slice(0, 10),
       recent: tasks
         .filter((t) => !["running", "blocked", "todo"].includes(t.status))
-        .slice(0, 5),
+        .slice(0, 20),
     },
     links: { prs, issues: [...issues.values()] },
     detail: {
@@ -375,7 +436,34 @@ export function mapNode(
 }
 export type MapNode = ReturnType<typeof mapNode>;
 
-/** 顶部「现在在推进什么」：在跑与排队的任务按归属部分归组；没有归属的放「未归属」。 */
+/** 下层各块（组成部分与专员，深度优先、不含本块与已归档的）自己的要点；空块省略，至多 200 块。 */
+function pointsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
+  const levels: {
+    node: string;
+    name: string;
+    alias: string;
+    points: Point[];
+  }[] = [];
+  let seen = 0;
+  const walk = (parent: NodeRow) => {
+    for (const c of x.children.get(parent.id) ?? []) {
+      if (c.archived_at !== null || ++seen > 200) continue;
+      const points = nodePoints(db, c.id);
+      if (points.length)
+        levels.push({
+          node: ref(c.id),
+          name: c.name,
+          alias: head(x, c).alias,
+          points,
+        });
+      walk(c);
+    }
+  };
+  walk(n);
+  return levels;
+}
+
+/** 在跑与排队的任务（`/api/map/now`，网页顶栏「在做 N 件」）：在跑与排队的任务按归属部分归组；没有归属的放「未归属」。 */
 export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
   const active = live.filter(
     (r) => r.status === "running" || r.queued_at !== null,
@@ -386,7 +474,7 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
     ids.length && hasTasks(db)
       ? all<TaskRow>(
           db,
-          `SELECT ${TASK_COLUMNS} FROM tasks WHERE id IN (${ids.map(() => "?").join(",")}) LIMIT 100`,
+          `SELECT ${taskColumns(db)} FROM tasks WHERE id IN (${ids.map(() => "?").join(",")}) LIMIT 100`,
           ...ids,
         )
       : [];

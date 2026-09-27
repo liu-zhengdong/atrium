@@ -242,6 +242,55 @@ test("全景树与节点：按归属部分汇总任务，专员单列，要点�
   assert.notEqual(mapSignature(db), before, "要点变了指纹就变");
 });
 
+test("全景节点给网页页签用的字段：部分做什么与下面几块、专员何时请与在盯几件、下层要点、合入阶段", () => {
+  const db = memory();
+  editMap(db, "o3", { what: "派活和验收" }, "u1");
+  editMap(db, "o5", { what: "凭据与权限" }, "u1");
+  node(db, { parent: "o3", slug: "gates", kind: "module", name: "gates" });
+  node(db, { parent: "o3", slug: "质量", kind: "concern", name: "质量" });
+  db.prepare(
+    "UPDATE org_docs SET fields=json_set(fields,'$.invite_when',json(?)) WHERE doc='charter' AND node_id=5",
+  ).run(JSON.stringify(["凭据", "server/auth*", 3]));
+  point(db, "o2", "本块要点");
+  point(db, "o7", "gates 的要点");
+  point(db, "o5", "安全的要点");
+  const id = (t: { ref: string }) => Number(t.ref.slice(1));
+  const watched = createTask(db, { title: "改登录", part: "o4" });
+  const merging = createTask(db, { title: "等合入", part: "o4" });
+  const closed = createTask(db, { title: "已结", part: "o4" });
+  db.prepare(
+    "UPDATE tasks SET status='done',delivery_stage='merge_queued',started_at=1,ended_at=9 WHERE id=?",
+  ).run(id(merging));
+  db.prepare("UPDATE tasks SET status='done' WHERE id=?").run(id(closed));
+  for (const t of [watched, merging, closed])
+    db.prepare(
+      "INSERT INTO task_concerns(task_id,node_id,pos) VALUES(?,5,0)",
+    ).run(id(t));
+
+  const view = mapNode(db, "o2");
+  const runtime = view.overview.parts.find((p) => p.ref === "o3") as never as {
+    what: string;
+    parts: number;
+  };
+  assert.equal(runtime.what, "派活和验收");
+  assert.equal(runtime.parts, 1, "下面几块不算专员");
+  assert.deepEqual(view.concerns[0]!.invite_when, ["凭据", "server/auth*"]);
+  assert.equal(view.concerns[0]!.watching, 2, "已结的任务不算在盯");
+  assert.deepEqual(
+    view.points_below.map((l) => [l.node, l.points.map((p) => p.text)]),
+    [
+      ["o7", ["gates 的要点"]],
+      ["o5", ["安全的要点"]],
+    ],
+    "下层部分与专员的要点，深度优先，空块省略",
+  );
+  assert.equal(view.points[0]!.text, "本块要点");
+  const queued = view.tasks.recent.find((t) => t.title === "等合入")!;
+  assert.equal(queued.delivery_stage, "merge_queued");
+  assert.equal(queued.ended_at, 9);
+  assert.equal(view.tasks.recent[0]!.title, "等合入", "等合入排在已结任务前面");
+});
+
 // ---- 写：权限与字段 ----
 
 test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；坏输入用参数名报错", () => {

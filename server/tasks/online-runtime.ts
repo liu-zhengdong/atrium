@@ -10,11 +10,13 @@ import { atomically, getTask, noteTask } from "./ledger.ts";
 import type { TaskRow } from "./ledger-model.ts";
 import {
   firstRelease,
+  includedInVersion,
   onlineMessage,
   planOnline,
   RELEASE_OVERDUE_MS,
   verificationSection,
 } from "./online.ts";
+import { compareSemver } from "../releases.ts";
 
 export type DeployResult = { ok: true } | { ok: false; reason: string };
 
@@ -30,6 +32,7 @@ export class OnlineWatch {
   private running = false;
   private closed = false;
   private restartingUntil = 0;
+  private legacyCursor = 0;
 
   constructor(
     private readonly db: DatabaseSync,
@@ -38,6 +41,8 @@ export class OnlineWatch {
       /** 正在运行的服务版本。 */
       version: () => string;
       selfUpdate: boolean;
+      /** 历史任务只核对自身仓库，避免把别的项目误记为本服务已上线。 */
+      selfRepo?: string | null;
       /** 合入进行中或别处正在重启时先不重启。 */
       busy: () => boolean;
       deploy: (version: string) => Promise<DeployResult>;
@@ -82,7 +87,10 @@ export class OnlineWatch {
     this.running = true;
     try {
       let rows = this.rows();
-      if (!rows.length) return;
+      if (!rows.length) {
+        await this.backfillLegacy(this.options.version());
+        return;
+      }
       await this.findReleases(rows.filter((row) => !row.release_version));
       if (this.closed) return;
       rows = this.rows();
@@ -96,7 +104,27 @@ export class OnlineWatch {
         current,
         { selfUpdate: this.options.selfUpdate, busy: this.options.busy() },
       );
-      for (const id of plan.online) await this.online(id, current);
+      const published: { id: number; detail: Record<string, unknown> }[] = [];
+      for (const id of plan.online)
+        published.push({ id, detail: await this.prepareOnline(id, current) });
+      // 状态和通知一同提交；同一版本连续入队，秘书的攒批唤醒只处理一批。
+      atomically(this.db, () => {
+        for (const item of published) {
+          this.db
+            .prepare(
+              "UPDATE tasks SET delivery_stage='online',online_wait=0,updated_at=? WHERE id=?",
+            )
+            .run(this.now(), item.id);
+          noteTask(this.db, item.id, "online", {
+            version: current,
+            release: item.detail.release,
+            verification: item.detail.hasVerification,
+          });
+          const { hasVerification: _, ...detail } = item.detail;
+          this.options.publish(item.id, "online", detail);
+        }
+      });
+      for (const item of published) this.options.changed(item.id);
       for (const id of plan.failed) {
         const task = getTask(this.db, id);
         this.fail(
@@ -118,9 +146,75 @@ export class OnlineWatch {
         this.options.changed(id);
       }
       if (plan.deploy && !this.closed) await this.deploy(plan);
+      if (!this.closed) await this.backfillLegacy(current);
     } finally {
       this.running = false;
     }
+  }
+
+  /** 旧任务没有 online_wait；只有合入提交确实落在运行版本内才补状态，不补通知。 */
+  private async backfillLegacy(current: string) {
+    if (!this.options.selfRepo) return;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE id>? AND delivery_stage='merged' AND online_wait=0
+         AND release_version IS NULL AND online_attempt IS NULL AND repo IS NOT NULL
+         ORDER BY id LIMIT 100`,
+      )
+      .all(this.legacyCursor) as TaskRow[];
+    if (!rows.length) {
+      this.legacyCursor = 0;
+      return;
+    }
+    const fetched = new Map<string, boolean>();
+    for (const row of rows) {
+      if (this.closed) return;
+      this.legacyCursor = row.id;
+      if (!row.repo) continue;
+      const origin = await originRepo(row.repo, this.options.run);
+      if ("error" in origin || repoFlag(origin.repo) !== this.options.selfRepo)
+        continue;
+      const commit = row.merge_commit ?? (await this.mergeCommit(row));
+      if (!commit) continue;
+      if (!fetched.has(row.repo)) {
+        const fetch = await this.options.run(
+          "git",
+          ["-C", row.repo, "fetch", "--quiet", "--tags", "--force", "origin"],
+          { timeoutMs: 120_000 },
+        );
+        fetched.set(row.repo, fetch.ok);
+      }
+      if (!fetched.get(row.repo)) continue;
+      const tags = await this.options.run("git", [
+        "-C",
+        row.repo,
+        "tag",
+        "--contains",
+        commit,
+        "--list",
+        "v*",
+      ]);
+      const release = tags.ok ? firstRelease(tags.stdout) : null;
+      if (
+        !release ||
+        !includedInVersion(tags.stdout, current) ||
+        compareSemver(release, current) > 0
+      )
+        continue;
+      atomically(this.db, () => {
+        this.db
+          .prepare(
+            "UPDATE tasks SET delivery_stage='online',release_version=?,updated_at=? WHERE id=? AND delivery_stage='merged'",
+          )
+          .run(release, this.now(), row.id);
+        noteTask(this.db, row.id, "online_backfilled", {
+          version: current,
+          release,
+        });
+      });
+      this.options.changed(row.id);
+    }
+    if (rows.length < 100) this.legacyCursor = 0;
   }
 
   /** 按仓库拉一次标签，找含合入提交的最早版本；超时没发版提醒一次。 */
@@ -220,7 +314,7 @@ export class OnlineWatch {
     this.options.publish(row.id, "release_overdue", { reason });
   }
 
-  private async online(id: number, current: string) {
+  private async prepareOnline(id: number, current: string) {
     const task = getTask(this.db, id);
     let body: string | null = null;
     if (task.pr_url && task.repo) {
@@ -247,26 +341,14 @@ export class OnlineWatch {
     const verification =
       verificationSection(body) ?? verificationSection(task.result);
     const message = onlineMessage(task.ref, current);
-    atomically(this.db, () => {
-      this.db
-        .prepare(
-          "UPDATE tasks SET delivery_stage='online',online_wait=0,updated_at=? WHERE id=?",
-        )
-        .run(this.now(), id);
-      noteTask(this.db, id, "online", {
-        version: current,
-        release: task.release_version,
-        verification: verification !== null,
-      });
-    });
-    this.options.changed(id);
-    this.options.publish(id, "online", {
+    return {
       message,
       version: current,
       release: task.release_version,
+      hasVerification: verification !== null,
       verification:
         verification ?? "执行者没有写「端到端验证」一节；请按任务目标自行验证",
-    });
+    };
   }
 
   private fail(id: number, why: string) {

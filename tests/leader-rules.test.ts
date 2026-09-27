@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { memoProblem, MEMO_MAX } from "../server/leaders/model.ts";
 import {
+  deliveryRoutes,
   escalationRoute,
   routeTaskEvent,
   type ChainNode,
@@ -34,6 +35,29 @@ const node = (ref: string, leader: string | null, name = ref): ChainNode => ({
   ref,
   name,
   leader,
+});
+
+test("上线和上线失败同时投 leader 与秘书，普通完成只投原路由", () => {
+  for (const subscriber of ["a1", "secretary", "u1"])
+    for (const kind of [
+      "online",
+      "online_failed",
+      "done",
+      "failed",
+      "merged",
+    ]) {
+      const route = { subscriber, why: "原路由", via: "o2" };
+      const targets = deliveryRoutes(kind, route);
+      assert.deepEqual(
+        targets.map((target) => target.subscriber),
+        kind === "online" || kind === "online_failed"
+          ? subscriber === "secretary"
+            ? ["secretary"]
+            : [subscriber, "secretary"]
+          : [subscriber],
+      );
+      assert.equal(targets[0], route);
+    }
 });
 
 test("任务事件：写了负责人按负责人投；没写从归属部分向上找最近的已登记 leader，找不到投秘书", () => {
@@ -412,6 +436,7 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
     "不可以：动别的部分的任务",
     "上交（投给 秘书",
     "atrium leader escalate --kind shipped",
+    "单个任务上线运行时已自动通知秘书，不必再报",
     "atrium events ack 12 13",
   ])
     assert(prompt.includes(part), part);

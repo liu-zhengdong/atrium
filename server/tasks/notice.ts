@@ -4,6 +4,7 @@ import { getTask } from "./ledger.ts";
 import { eventLevel } from "./event-level.ts";
 import { nodes } from "../org/model.ts";
 import { taskRoute } from "../leaders/subscriber.ts";
+import { deliveryRoutes } from "../leaders/route.ts";
 
 /**
  * 把任务结果投递给负责人（#262）：完成、失败、受阻、卡死共用去重键 tN:outcome，CI 用 tN:ci。
@@ -22,23 +23,32 @@ export function publishTask(
     return;
   const task = getTask(db, id);
   const route = taskRoute(db, task);
-  inbox.publish({
-    subscriber: route.subscriber,
-    taskId: id,
-    source: detail.source === undefined ? "runner" : String(detail.source),
-    kind,
-    key: `${task.ref}:${eventLevel(kind, detail) === "action" ? (kind.startsWith("ci") ? "ci" : "outcome") : kind}`,
-    actor,
-    detail: {
-      title: task.title,
-      status: task.status,
-      worker: task.worker,
-      pr_url: task.pr_url,
-      ci: task.ci,
-      ...detail,
-      routed: { to: route.subscriber, why: route.why },
-    },
-  });
+  const key =
+    kind === "online" || kind === "online_failed"
+      ? kind
+      : eventLevel(kind, detail) === "info"
+        ? kind
+        : kind.startsWith("ci")
+          ? "ci"
+          : "outcome";
+  for (const target of deliveryRoutes(kind, route))
+    inbox.publish({
+      subscriber: target.subscriber,
+      taskId: id,
+      source: detail.source === undefined ? "runner" : String(detail.source),
+      kind,
+      key: `${task.ref}:${key}`,
+      actor,
+      detail: {
+        title: task.title,
+        status: task.status,
+        worker: task.worker,
+        pr_url: task.pr_url,
+        ci: task.ci,
+        ...detail,
+        routed: { to: target.subscriber, why: target.why },
+      },
+    });
   if (
     kind === "blocked" &&
     detail.source === "budget" &&

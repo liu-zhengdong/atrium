@@ -931,11 +931,15 @@ test("实时模式：服务暂时不可用就把原因留在屏上，不退出",
   const frames: string[] = [];
   let drawn = 0;
   let quit: (() => void) | undefined;
+  // watch 用实时时钟绘制；这个用例的时间也用实时时钟，避免固定日期越久列宽越长。
+  const now = Date.now();
   const api = {
     get: async () => {
       if (++drawn === 1)
         throw new Problem(503, "服务正在重启", "service_unavailable");
-      return snapshot([row({})]);
+      return snapshot([
+        row({ started_at: now - 41 * minute, log_at: now - 12_000 }),
+      ]);
     },
   } as unknown as Client;
   await watch(

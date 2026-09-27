@@ -1,7 +1,7 @@
 import { Problem } from "../problem.ts";
 
 /**
- * 全景图的人话字段（#322 第 1 步）：写在节点章程的字段里，随章程留修订历史、按章程权限改。
+ * 全景图的人话字段（#322 第 1 步）：写在节点章程当前字段里，不留修订历史，按章程权限改。
  * 顺序即 `org show` 的讲法：是什么 → 能用它做什么 → 一件事怎么走完 → 由哪几部分组成 → 现在做到哪、接下来做什么。
  * 组成部分不单写：取子节点，各自章程里的 alias（人话名）与 analogy（类比）。技术细节是章程正文，默认折叠。
  * 阶段记录（stages）由原目标树迁来（g 短号留作 id），之后在章程里直接改。纯函数，不读库。
@@ -191,8 +191,8 @@ export function overviewOf(
 }
 
 /** 章程里的人话字段名（`--detail` 展示章程时不重复列出）。 */
-export const OVERVIEW_KEYS = new Set([
+export const HUMAN_KEYS = new Set([
   ...Object.keys(OVERVIEW_TEXT),
   ...Object.keys(OVERVIEW_LISTS),
-  "stages",
 ]);
+export const OVERVIEW_KEYS = new Set([...HUMAN_KEYS, "stages"]);

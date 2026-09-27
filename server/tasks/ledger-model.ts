@@ -5,6 +5,7 @@ import type { ChildSummary } from "./ledger-summary.ts";
 import type { Deliver } from "./deliver.ts";
 import type { NoteView } from "./notes.ts";
 import type { ConcernState, InviteHint } from "./concern-gate.ts";
+import type { Holder } from "./holder.ts";
 
 export type TaskRow = {
   id: number;
@@ -72,6 +73,8 @@ export type Task = TaskRow & {
   concerns?: ConcernState[];
   /** 「要不要请某专员」的提示（concern-gate.ts inviteHints）；没有时不给。 */
   concern_hints?: InviteHint[];
+  /** 现在球在谁手里（holder.ts）；只有单个任务视图给，已结束为 null。 */
+  holder?: Holder | null;
 } & NoteView;
 export type TaskNode = Task & {
   children: TaskNode[];

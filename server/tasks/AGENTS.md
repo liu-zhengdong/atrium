@@ -14,3 +14,5 @@
 - 事件先落库再投递；同一订阅者、同一去重键的未确认事件合并；订阅者自己发起的动作不投给他本人。
 - 测试用 `tests/task-fixture.ts` 的假执行者和临时目录，不依赖本机装了哪些 CLI 或 OpenQuota。
 - 本机减负（#358）：限额读取与判定在 `host-load.ts`（纯函数，采样在 `HostLoad`）；`TaskRunner.run` 与 `Executors.drain` 拉起前过同一道闸门，满了或太忙落库排队、巡检时按入队顺序拉起；本地检查并发由共享的 `sharedLocalChecks` 上限控制；测试并发经 `worker-env.ts` 注入 `ATRIUM_TEST_CONCURRENCY`。
+- 任务详述（#355）：内容存 `tasks.brief`（校验与上限在 `brief.ts`），派活、审阅、会审、`task show` 只读库里的内容；`brief_path` 只记来源。运行时自己生成的详述（审阅、专员审查、会审意见与汇总）用 `clipBrief` 截到上限再存。
+- 持球人（#355）：未结束任务「球在谁手里」判定在 `holder.ts`（纯函数、穷举测试），事实在 `holder-facts.ts` 取；`top`、`task show` 与状态栏按它显示，不在命令行里另猜。

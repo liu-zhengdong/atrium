@@ -10,6 +10,8 @@ import { noteView, type NoteView } from "./notes.ts";
 import { tellCounts } from "./tell-ledger.ts";
 import { concernStates } from "./concerns.ts";
 import type { ConcernState } from "./concern-gate.ts";
+import { holderFacts } from "./holder-facts.ts";
+import { holderOf, type Holder } from "./holder.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -40,6 +42,8 @@ export type TopRow = NoteView & {
   tells: { total: number; pending: number } | null;
   /** 请了的专员与本轮结论（#322）；没请为 null。 */
   concerns?: ConcernState[] | null;
+  /** 现在球在谁手里（holder.ts）；已结束的为 null。 */
+  holder?: Holder | null;
 };
 
 const FINISHED_STATUSES = [...FINISHED] as TaskStatus[];
@@ -57,6 +61,8 @@ export function selectRows(
     `SELECT * FROM tasks
       WHERE status IN ('running','blocked')
          OR delivery_stage IN ('reviewing','merge_queued','merging')
+         OR (delivery_stage='merged' AND online_wait=1)
+         OR id IN (SELECT task_id FROM task_councils WHERE stage='escalated')
          OR id IN (SELECT task_id FROM task_queue)
          OR (status IN (${FINISHED_STATUSES.map(() => "?").join(",")})
              AND updated_at >= ?)
@@ -166,6 +172,11 @@ export function topRows(
   }
   const tells = tellCounts(db, ids);
   const concerns = concernStates(db, ids);
+  const inbox = !!db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_inbox'",
+    )
+    .get();
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
@@ -190,6 +201,14 @@ export function topRows(
           : reasonOf(history, "block")),
       tells: tells.get(row.id) ?? null,
       concerns: concerns.get(row.id) ?? null,
+      holder: holderOf(
+        holderFacts(
+          db,
+          row,
+          waiting ? { reason: reasonOf(history, "queued") } : null,
+          { inbox },
+        ),
+      ),
       ...noteView(db, row.id, row.status),
     };
   });

@@ -36,6 +36,7 @@ atrium guide         # 调用约定、退出码与命令参考（给 Agent 读�
 atrium task add "上线任务账本" --repo .                         # 顶层任务 t1；--repo 为工作仓库
 atrium task add "表与状态机" --parent t1 --deliver none         # 挂到 t1 下
 atrium task add "验收" --parent t1 --after t2 --deliver none    # t2 完成后才就绪；加 --auto 就绪即自动派活
+atrium task add "改登录页" --brief 详述.md                      # 详述建任务时读入存库；--brief - 从标准输入读
 atrium task tree t1                                             # 缩进树：状态、交付物、执行者、PR
 atrium task plan                                                # 在跑、就绪、等待中、卡住；上游交付 PR 的，PR 合入才算满足
 atrium task show t2                                             # 详情与最近事件
@@ -44,6 +45,8 @@ atrium task set t3 --status blocked                             # 人工修正�
 atrium task ls --status todo                                    # 按状态列；--parent、--after 翻页
 atrium task done t3                                             # 人工完成，触发下游排期
 ```
+
+**详述进库**（#355）：`--brief 文件` 在建任务时把内容读进账本（至多 64 KB，超了报错并提示精简），`--brief -` 从标准输入读；派活、审阅、`task show` 都用库里的内容，原文件之后改了或删了都不影响，`brief_path` 只记来源。`task set tN --brief 文件|-` 换详述，`--brief ''` 清空。升级前只存了路径的旧任务，服务启动时按路径回填一次；读不到的记日志、保留路径，派活时报错并提示 `atrium task set tN --brief 文件`。
 
 状态：`todo` → `running` → `done` / `failed` / `blocked`，或 `cancelled`。PR 任务过交付关卡后另有 `（审阅中）→ 排队合入 → 合入中 → 已合入 → 已上线` 阶段（已上线只用于 Atrium 自身仓库）。任一上游失败或取消，整条下游链都不会就绪。
 
@@ -63,6 +66,8 @@ atrium task tell t4 "接口改用 v2"            # 给在跑的执行者捎话�
 atrium top --once                           # 谁在干活、全景图上两层各块的状态与在跑数，下接排期
 atrium top --once --depth 3                 # 全景展开三层（旧写法 --goals-depth 照旧接受）
 ```
+
+**球在谁手里**：服务给每个未结束任务一个 `holder`（`top --json` 的行、`task show`）——执行者在做（`worker`）、合入流水线（`merge`：审阅、排队合入、合入中、等发版）、排队（`queue`）、leader aN 在处理（`leader`）、秘书（`secretary`）或等你拍板（`user`），附一句经过，如「本地检查没过 · a1 已交回执行者」。判定在 `server/tasks/holder.ts`；`top` 与状态栏按它显示，不再从状态或 PR 自己猜。
 
 `atrium top` 的**全景**段（#322，取代原来的目标段）列出根下两层的各块：状态点（● 有任务在跑、✕ 有任务卡住、○ 空闲）、人话名、子树里在跑／卡住／待办的任务数（按任务的归属部分计，没有归属时按负责节点）和一句「是什么」；`--depth N` 展开至 N 层（1～8），超出行数折叠并提示 `atrium map`。`top --json` 带 `map` 字段（与 `/api/map/tree` 同形），供状态栏读取。
 
@@ -129,7 +134,21 @@ atrium quota --clear claude   # 人工解除运行时的额度占用（误判时
 | codex    | `~/.config/codex/auth.json`、`~/.codex/auth.json`（`CODEX_HOME` 覆盖）  | 同左                                                                       | 同左（`%USERPROFILE%` 下）                |
 | opencode | `~/.local/share/opencode/auth.json` 的 `opencode-go`                    | `$XDG_DATA_HOME/opencode/auth.json`，缺省同左                              | 同左（`%USERPROFILE%` 下）                |
 
-自带还没覆盖的账号（kimi、grok 等），本机装了 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 就用它补（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径），自带读不到的账号也先用它补并注明；都没有就显示「没有额度数据」，挑执行者退回档案顺序与运行时的额度用尽标记。组织树根章程导入后，派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度；导入前仍读 `~/Atrium/charter.md`，缺省 20%。
+自带还没覆盖的账号（kimi、grok 等），本机装了 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 就用它补（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径），自带读不到的账号也先用它补并注明；都没有就显示「没有额度数据」，挑执行者退回档案顺序与运行时的额度用尽标记。给用户留的份额只读组织树：派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度，根章程没写时缺省 20%；`atrium quota` 表格下一行写明份额与出自哪份章程（`--json` 的 `reserve`）。旧的 `~/Atrium/charter.md` 不再读取：服务首次启动时，若根节点缺某项预算（`quota_reserve_percent`、`disk_min_free_gb`、`money`）而旧章程 frontmatter 的 `budget` 里有，就导入一次写进根章程（留修订），之后改预算用 `atrium org edit o1 --charter`。
+
+## Claude Code 状态栏
+
+```bash
+atrium statusline     # 一屏概况：未结束任务各在谁手里、leader 在处理什么、秘书未处理事件、接下来就绪与等待的数目
+```
+
+在 `~/.claude/settings.json` 里配置：
+
+```json
+{ "statusLine": { "type": "command", "command": "atrium statusline" } }
+```
+
+服务不在只显示「Atrium 未运行」，不拉起服务；只有真的在等你拍板的任务用醒目红色写「等你」。全局装好的 `atrium` 就够，不再需要 `~/Atrium/tools/` 下的 `statusline.py` 与 `org` 包装脚本；数据目录不是默认的 `~/.atrium` 时在命令前带上 `ATRIUM_DATA=…`。
 
 ## 事件
 
@@ -372,6 +391,7 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 | `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口             |
 | `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                   |
 | `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers` |
+| `ATRIUM_LEGACY_DIR`             | 旧状态目录，默认 `~/Atrium`；启动时从这里导入一次根章程预算   |
 | `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`    |
 | `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                   |
 | `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                           |
@@ -385,7 +405,7 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 | `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的 1/4（至少 1）                  |
 | `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数的 1/4（至少 1）      |
 
-数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
+Atrium 的状态都在数据目录的数据库里（任务详述、组织树与章程预算等），换机器带走数据目录即可；旧状态的导入每类只做一次，记在 `state_imports` 表，重复启动不重复导入。数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
 
 ## 开发与验证
 
@@ -402,13 +422,14 @@ ATRIUM_PORT=4391 ATRIUM_DATA=$PWD/.atrium node bin/atrium.mjs
 ATRIUM_PORT=4391 ATRIUM_DATA=$PWD/.atrium node bin/atrium.mjs stop
 ```
 
-| 目录             | 职责                                                         |
-| ---------------- | ------------------------------------------------------------ |
-| `bin/`、`cli/`   | 命令入口与各命令实现                                         |
-| `server/`        | 服务生命周期、单实例登记、用户认证、重启监督与升级           |
-| `server/tasks/`  | 任务账本、执行者适配器与档案、派活、关卡、看门狗、额度、事件 |
-| `server/org/`    | 组织树：节点、章程、能力卡、硬边界、修订                     |
-| `server/skills/` | 组织技能：修订、绑定、派活挂载、回收提议与三方合并           |
-| `tests/`         | 纯函数与接口测试；派活用假执行者和临时仓库                   |
+| 目录              | 职责                                                         |
+| ----------------- | ------------------------------------------------------------ |
+| `bin/`、`cli/`    | 命令入口与各命令实现                                         |
+| `server/`         | 服务生命周期、单实例登记、用户认证、重启监督与升级           |
+| `server/tasks/`   | 任务账本、执行者适配器与档案、派活、关卡、看门狗、额度、事件 |
+| `server/org/`     | 组织树：节点、章程、能力卡、硬边界、修订                     |
+| `server/imports/` | 启动时把旧状态（任务详述、根章程预算）导入数据库，幂等       |
+| `server/skills/`  | 组织技能：修订、绑定、派活挂载、回收提议与三方合并           |
+| `tests/`          | 纯函数与接口测试；派活用假执行者和临时仓库                   |
 
 仓库规范见 [AGENTS.md](AGENTS.md)；代码约定写在对应目录的 `AGENTS.md`。

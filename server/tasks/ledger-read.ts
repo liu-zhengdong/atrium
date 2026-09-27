@@ -1,3 +1,4 @@
+import { holderFor } from "./holder-facts.ts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   all,
@@ -15,7 +16,7 @@ import { parentOf, statusOf } from "./ledger-validate.ts";
 import { childSummaries } from "./ledger-summary.ts";
 import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
-import { queueView } from "./queue.ts";
+import { queued, queueView } from "./queue.ts";
 import { concernsOf } from "./concerns.ts";
 import type { InviteHint } from "./concern-gate.ts";
 
@@ -32,10 +33,16 @@ export function getTask(db: DatabaseSync, reference: unknown) {
   const child_summary = childSummaries(db, [found.id]).get(found.id) ?? null;
   const concerns = concernsOf(db, found.id);
   const hints = lastHints(db, found.id);
+  const queue = queueView(db, found.id);
   return {
     ...view(found),
     ...noteView(db, found.id, found.status),
-    ...queueView(db, found.id),
+    ...queue,
+    holder: holderFor(
+      db,
+      found,
+      queued(db, found.id) ? { reason: queue.queued_reason } : null,
+    ),
     children: child_summary?.total ?? 0,
     child_summary,
     events,

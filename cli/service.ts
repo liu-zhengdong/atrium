@@ -52,6 +52,17 @@ export async function connect(quietStart = false): Promise<Client> {
   });
 }
 
+/** 服务在跑才连上，不在跑返回 null、不拉起（状态栏这类随手刷新的读命令用）。 */
+export function connectRunning(): Client | null {
+  workerGuard();
+  const leader = leaderSession();
+  if (leader) return client(leader.url, "", undefined, leader.bearer);
+  const data = dataDirectory();
+  const record = readService(data);
+  if (!record || !alive(record.pid)) return null;
+  return client(serviceUrl(record), data);
+}
+
 const causeCode = (error: unknown) =>
   (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
 

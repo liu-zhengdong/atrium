@@ -343,6 +343,7 @@ const show: Command = {
         ["合入交回次数", task.merge_returns || null],
         ["审阅任务", task.review_task ? `t${task.review_task}` : null],
         ["排队原因", task.queued_reason ?? null],
+        ["球在谁手里", task.holder?.text ?? null],
         ["最新备注", task.note],
         ["备注作者", task.note ? noteAuthor(task) : null],
         ["备注时间", task.note_at ? when(task.note_at) : null],

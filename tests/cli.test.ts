@@ -174,3 +174,29 @@ test(
     assert.equal(JSON.parse(patched.stdout).result.pr_url, pr);
   },
 );
+
+test(
+  "statusline：服务不在只说未运行、不拉起；在跑时给一屏概况；task show 的详述读库里的内容",
+  { timeout: manyCommands },
+  async (t) => {
+    const f = await fixture(t);
+    const idle = await f.cli("statusline");
+    assert.equal(idle.code, 0, idle.stderr);
+    assert.equal(idle.stdout, "Atrium 未运行\n");
+    assert.equal(readService(f.data), null);
+    await f.warm();
+    const brief = join(f.root, "详述.md");
+    writeFileSync(brief, "# 要做\n按清单做");
+    const added = await f.cli("task", "add", "状态栏任务", "--brief", brief);
+    assert.equal(added.code, 0, added.stderr);
+    writeFileSync(brief, "文件后来改了");
+    const shown = await f.cli("task", "show", "t1");
+    assert.match(shown.stdout, /详述来源：.*详述\.md/);
+    assert.match(shown.stdout, /详述：\n  # 要做\n  按清单做/);
+    assert.match(shown.stdout, /球在谁手里：待派：等 秘书 派活/);
+    const line = await f.cli("statusline");
+    assert.equal(line.code, 0, line.stderr);
+    // 待派的任务不在看板行里，只进「接下来」；状态栏不带下一步命令行。
+    assert.equal(line.stdout, "Atrium 在做 0\n接下来：就绪 1 · 等待中 0\n");
+  },
+);

@@ -444,9 +444,115 @@ test("会审推进：还在等意见时不能拍板；取消的会审不再推�
     /还没汇总完（等专员意见）/,
   );
   updateTask(db, "t1", { status: "cancelled" });
+  // 议题任务取消，会审随之关闭
+  const closed = councilView(db, "t1");
+  assert.equal(closed.stage, "closed");
+  assert.equal(closed.stage_label, "已关闭");
+  assert.equal(closed.conclusion, "议题任务已取消");
+  assert.ok(getTask(db, "t1").events.some((e) => e.kind === "council_closed"));
+  assert.match(
+    renderCouncil(closed),
+    /已关闭：议题任务已取消；要重议另发起会审/,
+  );
+  assert.throws(
+    () => decideCouncil(db, "t1", { conclusion: "发" }, "u1"),
+    /会审已关闭（议题任务已取消）/,
+  );
   advanceTask(db, "t2", { kind: "start" });
   advanceTask(db, "t2", { kind: "exit_ok" }, { result: "意见：同意" });
   assert.deepEqual(settleCouncils(db, data).dispatch, []);
+  // 改回待办也不复活：要重议另发起会审
+  updateTask(db, "t1", { status: "todo" });
+  assert.deepEqual(settleCouncils(db, data).dispatch, []);
+  assert.equal(councilView(db, "t1").stage, "closed");
+});
+
+test("会审推进：攒了 50 多场议题已取消或卡住的会审，新会审照常推进；老库卡住的会审被清理", (t) => {
+  const { db, data } = ledger(t);
+  const opinionDone = (ref: string) => {
+    advanceTask(db, ref, { kind: "start" });
+    advanceTask(db, ref, { kind: "exit_ok" }, { result: "意见：同意" });
+  };
+  // 55 场老库里议题已取消却停在中途的会审（取消时还没有随之关闭，直接改库模拟）
+  const stale: number[] = [];
+  for (let i = 0; i < 55; i++) {
+    const { council } = createCouncil(db, data, {
+      topic: `旧议题 ${i}`,
+      concerns: "质量",
+    });
+    const id = Number(council.ref.slice(1));
+    stale.push(id);
+    db.prepare("UPDATE tasks SET status='cancelled' WHERE id=?").run(id);
+  }
+  // 55 场意见一直出不来的会审（意见任务还是待办）
+  for (let i = 0; i < 55; i++)
+    createCouncil(db, data, { topic: `等意见 ${i}`, concerns: "质量" });
+  // 新会审：意见已收齐
+  const fresh = createCouncil(db, data, { topic: "新议题", concerns: "质量" });
+  opinionDone(fresh.opinions[0]!);
+  const progress = settleCouncils(db, data);
+  assert.deepEqual(progress.dispatch, [fresh.council.ref]);
+  assert.equal(councilView(db, fresh.council.ref).stage, "summarizing");
+  // 每轮至多清 50 场，第二轮清完；清理后不再重复
+  const stages = () =>
+    stale.map(
+      (id) =>
+        (
+          db
+            .prepare("SELECT stage FROM task_councils WHERE task_id=?")
+            .get(id) as { stage: string }
+        ).stage,
+    );
+  assert.equal(stages().filter((s) => s === "closed").length, 50);
+  settleCouncils(db, data);
+  assert.ok(stages().every((s) => s === "closed"));
+  assert.equal(
+    getTask(db, `t${stale[0]}`).events.filter(
+      (e) => e.kind === "council_closed",
+    ).length,
+    1,
+  );
+});
+
+test("老库的会审表没有「已关闭」阶段：启动时重建，数据原样保留", (t) => {
+  const { db, data } = ledger(t);
+  createCouncil(db, data, { topic: "老议题", concerns: "质量" });
+  const rows = db.prepare("SELECT * FROM task_councils").all();
+  db.exec(`DROP TABLE task_councils;
+    CREATE TABLE task_councils (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id), topic TEXT NOT NULL, topic_brief TEXT,
+    leader_node_id INTEGER, comment INTEGER NOT NULL DEFAULT 0,
+    stage TEXT NOT NULL CHECK(stage IN ('opinions','summarizing','decided','escalated')),
+    conclusion TEXT, escalate TEXT, agreed TEXT, conflicts TEXT, decided_by TEXT, decided_at INTEGER,
+    created_at INTEGER NOT NULL);
+    CREATE INDEX task_councils_stage ON task_councils(stage,task_id);
+    ALTER TABLE task_councils ADD COLUMN topic_text TEXT;`);
+  const insert = db.prepare(
+    "INSERT INTO task_councils(task_id,topic,topic_brief,topic_text,leader_node_id,comment,stage,created_at) VALUES(?,?,?,?,?,?,?,?)",
+  );
+  for (const row of rows as Record<string, never>[])
+    insert.run(
+      row.task_id,
+      row.topic,
+      row.topic_brief,
+      row.topic_text,
+      row.leader_node_id,
+      row.comment,
+      row.stage,
+      row.created_at,
+    );
+  ensureTaskTables(db);
+  ensureTaskTables(db);
+  assert.equal(councilView(db, "t1").topic, "老议题");
+  updateTask(db, "t1", { status: "cancelled" });
+  assert.equal(councilView(db, "t1").stage, "closed");
+  assert.ok(
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='task_councils_stage'",
+      )
+      .get(),
+  );
 });
 
 test("命令行写法：意见立场、汇总与需用户拍板", () => {

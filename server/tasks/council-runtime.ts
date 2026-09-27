@@ -10,6 +10,7 @@ import {
   summaryBrief,
   type CouncilOutcome,
 } from "./council-gate.ts";
+import { closeCouncil, OPEN_STAGES } from "./council-close.ts";
 import {
   councilRow,
   opinionsOf,
@@ -25,7 +26,7 @@ import { all, atomically, taskRef } from "./ledger-model.ts";
  * - 等专员意见：意见任务都不再跑后，把各方意见写进汇总详述、议题任务转「leader 汇总中」，交调用方拉起；
  * - leader 汇总中：议题任务还是待办且没人在拉起（服务重启、拉起前退出）时再交调用方拉起；
  *   议题任务完成后读汇总，合成结局（已定／需用户拍板）记在议题上。
- * 汇总任务失败、受阻或取消时照常投递，留在「汇总中」，重跑即可。
+ * 汇总任务失败、受阻时照常投递，留在「汇总中」，重跑即可；议题任务取消时会审转「已关闭」，不再推进。
  */
 
 export type CouncilDecision = {
@@ -48,42 +49,79 @@ export function settleCouncils(
   limit = 50,
 ): CouncilProgress {
   const progress: CouncilProgress = { dispatch: [], decided: [] };
-  const open = all<CouncilRow & { status: string }>(
-    db,
-    `SELECT c.*, t.status AS status FROM task_councils c JOIN tasks t ON t.id=c.task_id
-      WHERE c.stage IN ('opinions','summarizing') ORDER BY c.task_id LIMIT ?`,
-    limit,
-  );
-  for (const council of open) {
-    const id = council.task_id;
-    // 人工取消的会审不再推进。
-    if (council.status === "cancelled") continue;
-    if (council.stage === "opinions") {
-      const members = all<{ opinion_id: number; status: string }>(
-        db,
-        `SELECT m.opinion_id, t.status FROM council_members m JOIN tasks t ON t.id=m.opinion_id
-          WHERE m.task_id=? ORDER BY m.pos LIMIT 50`,
-        id,
-      );
-      if (
-        !opinionsReady(
-          members.map((m) => ({ status: m.status, busy: busy(m.opinion_id) })),
-        )
-      )
-        continue;
-      if (busy(id)) continue;
-      openSummary(db, data, id);
-      progress.dispatch.push(taskRef(id));
-      continue;
-    }
-    if (busy(id)) continue;
-    if (council.status === "todo") progress.dispatch.push(taskRef(id));
-    else if (council.status === "done") {
-      const decision = decide(db, id);
-      if (decision) progress.decided.push(decision);
-    }
+  closeStale(db, limit);
+  // 按议题分页走完全部未定的会审：前面的卡着（等不来的意见、汇总失败）也挤不掉后面的。
+  let after = 0;
+  while (true) {
+    const open = all<CouncilRow & { status: string }>(
+      db,
+      `SELECT c.*, t.status AS status FROM task_councils c JOIN tasks t ON t.id=c.task_id
+        WHERE c.stage IN ${OPEN_STAGES} AND c.task_id>? AND t.status!='cancelled'
+        ORDER BY c.task_id LIMIT ?`,
+      after,
+      limit,
+    );
+    for (const council of open) settleOne(db, data, busy, council, progress);
+    if (open.length < limit) break;
+    after = open.at(-1)!.task_id;
   }
   return progress;
+}
+
+/**
+ * 议题任务已取消、或还在等意见就被改成完成的会审，转「已关闭」。
+ * 取消时状态转移已顺手关闭；这里补上老库里早先卡住的，每轮至多关 limit 场。
+ */
+function closeStale(db: DatabaseSync, limit: number) {
+  const stale = all<{ task_id: number; status: string }>(
+    db,
+    `SELECT c.task_id, t.status FROM task_councils c JOIN tasks t ON t.id=c.task_id
+      WHERE (c.stage IN ${OPEN_STAGES} AND t.status='cancelled') OR (c.stage='opinions' AND t.status='done')
+      ORDER BY c.task_id LIMIT ?`,
+    limit,
+  );
+  for (const { task_id, status } of stale)
+    atomically(db, () =>
+      closeCouncil(
+        db,
+        task_id,
+        status === "cancelled" ? "议题任务已取消" : "议题任务已结束",
+      ),
+    );
+}
+
+function settleOne(
+  db: DatabaseSync,
+  data: string,
+  busy: (id: number) => boolean,
+  council: CouncilRow & { status: string },
+  progress: CouncilProgress,
+) {
+  const id = council.task_id;
+  if (council.stage === "opinions") {
+    const members = all<{ opinion_id: number; status: string }>(
+      db,
+      `SELECT m.opinion_id, t.status FROM council_members m JOIN tasks t ON t.id=m.opinion_id
+        WHERE m.task_id=? ORDER BY m.pos LIMIT 50`,
+      id,
+    );
+    if (
+      !opinionsReady(
+        members.map((m) => ({ status: m.status, busy: busy(m.opinion_id) })),
+      )
+    )
+      return;
+    if (busy(id)) return;
+    openSummary(db, data, id);
+    progress.dispatch.push(taskRef(id));
+    return;
+  }
+  if (busy(id)) return;
+  if (council.status === "todo") progress.dispatch.push(taskRef(id));
+  else if (council.status === "done") {
+    const decision = decide(db, id);
+    if (decision) progress.decided.push(decision);
+  }
 }
 
 /** 意见收齐：写汇总详述（含各方意见原文）、议题任务的详述换成它、阶段转汇总中。 */

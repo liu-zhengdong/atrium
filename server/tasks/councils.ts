@@ -40,13 +40,15 @@ import { reasonOf } from "./top.ts";
  * 汇总完成后记结论与「需用户拍板」。这里只读写账与写详述文件；判定在 council-gate.ts，编排在 council-runtime.ts。
  */
 
-export type CouncilStage = "opinions" | "summarizing" | "decided" | "escalated";
+export type CouncilStage =
+  "opinions" | "summarizing" | "decided" | "escalated" | "closed";
 
 export const STAGE_LABEL: Record<CouncilStage, string> = {
   opinions: "等专员意见",
   summarizing: "leader 汇总中",
   decided: "已定",
   escalated: "需用户拍板",
+  closed: "已关闭",
 };
 
 export type CouncilRow = {
@@ -75,14 +77,18 @@ export type MemberRow = {
   opinion_id: number;
 };
 
-export function ensureCouncilTables(db: DatabaseSync) {
-  db.exec(`CREATE TABLE IF NOT EXISTS task_councils (
+const COUNCIL_TABLE = (name: string) => `CREATE TABLE IF NOT EXISTS ${name} (
     task_id INTEGER PRIMARY KEY REFERENCES tasks(id), topic TEXT NOT NULL, topic_brief TEXT,
     leader_node_id INTEGER, comment INTEGER NOT NULL DEFAULT 0,
-    stage TEXT NOT NULL CHECK(stage IN ('opinions','summarizing','decided','escalated')),
+    stage TEXT NOT NULL CHECK(stage IN ('opinions','summarizing','decided','escalated','closed')),
     conclusion TEXT, escalate TEXT, agreed TEXT, conflicts TEXT, decided_by TEXT, decided_at INTEGER,
-    created_at INTEGER NOT NULL);
-  CREATE INDEX IF NOT EXISTS task_councils_stage ON task_councils(stage,task_id);
+    created_at INTEGER NOT NULL, topic_text TEXT)`;
+
+const COUNCIL_COLUMNS =
+  "task_id,topic,topic_brief,leader_node_id,comment,stage,conclusion,escalate,agreed,conflicts,decided_by,decided_at,created_at,topic_text";
+
+export function ensureCouncilTables(db: DatabaseSync) {
+  db.exec(`${COUNCIL_TABLE("task_councils")};
   CREATE TABLE IF NOT EXISTS council_members (
     task_id INTEGER NOT NULL REFERENCES tasks(id), node_id INTEGER NOT NULL, pos INTEGER NOT NULL,
     opinion_id INTEGER NOT NULL, PRIMARY KEY(task_id,node_id));
@@ -90,6 +96,22 @@ export function ensureCouncilTables(db: DatabaseSync) {
   const columns = all<{ name: string }>(db, "PRAGMA table_info(task_councils)");
   if (!columns.some((column) => column.name === "topic_text"))
     db.exec("ALTER TABLE task_councils ADD COLUMN topic_text TEXT");
+  // 老库的阶段约束没有「已关闭」（t129）：按新定义重建表，数据原样搬过去。
+  const table = one<{ sql: string }>(
+    db,
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_councils'",
+  );
+  if (table && !table.sql.includes("'closed'"))
+    atomically(db, () => {
+      db.exec(`DROP TABLE IF EXISTS task_councils_next;
+        ${COUNCIL_TABLE("task_councils_next")};
+        INSERT INTO task_councils_next(${COUNCIL_COLUMNS}) SELECT ${COUNCIL_COLUMNS} FROM task_councils;
+        DROP TABLE task_councils;
+        ALTER TABLE task_councils_next RENAME TO task_councils;`);
+    });
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS task_councils_stage ON task_councils(stage,task_id)",
+  );
 }
 
 export const councilRow = (db: DatabaseSync, id: number) =>
@@ -458,6 +480,14 @@ export function decideCouncil(
     throw usage(`conclusion: 结论至多 ${DECISION_MAX} 字`);
   return atomically(db, () => {
     const council = councilView(db, id);
+    if (council.stage === "closed")
+      throw new Problem(
+        409,
+        `${council.ref} 会审已关闭（${council.conclusion ?? "议题任务已取消"}）；要重议另发起会审`,
+        "conflict",
+        undefined,
+        `atrium review show ${council.ref}`,
+      );
     if (council.stage !== "escalated" && council.stage !== "decided")
       throw new Problem(
         409,

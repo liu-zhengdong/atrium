@@ -69,9 +69,48 @@ export function lastAssistantText(events: JsonEvent[]): string | undefined {
 }
 
 export type AbnormalEnd = {
-  kind: "length" | "permission" | "midway";
+  kind: "length" | "thinking" | "permission" | "midway";
   reason: string;
 };
+
+/** 最后一步思考用满单次输出、正文为 0 或极少：这一轮的产出全耗在思考上。 */
+export type ThinkingExhausted = {
+  reasoning: number;
+  output: number;
+  /** 单次输出上限：因长度结束时思考加正文就是用满的上限。 */
+  limit: number;
+};
+
+/** 正文不超过这么多 token 算「极少」：一两句话，写不出交付。 */
+const THIN_OUTPUT = 64;
+
+const count = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+
+/**
+ * 思考耗尽单次输出（#262）：opencode 的 step_finish `reason: "length"`，
+ * `tokens.reasoning` 大于 0 而 `tokens.output` 为 0 或极少。
+ * claude stream-json 的 usage 不分思考与正文、中间事件的 stop_reason 为 null，没有等价信号，不判；
+ * codex、kimi、grok 是文本日志，也不判。
+ */
+export function thinkingExhausted(
+  finish: JsonEvent,
+): ThinkingExhausted | undefined {
+  if (finish.type !== "step_finish") return undefined;
+  const part = object(finish.part);
+  if (part?.reason !== "length") return undefined;
+  const tokens = object(part.tokens);
+  const reasoning = count(tokens?.reasoning);
+  const output = count(tokens?.output);
+  if (!reasoning || output === undefined || output > THIN_OUTPUT)
+    return undefined;
+  return { reasoning, output, limit: reasoning + output };
+}
+
+export const thinkingReason = (hit: ThinkingExhausted) =>
+  `思考耗尽单次输出（reasoning ${hit.reasoning} / 上限 ${hit.limit}，正文 ${hit.output}）`;
 
 const TARGET_MAX = 200;
 
@@ -106,7 +145,7 @@ function rejection(events: JsonEvent[]): string | undefined {
 
 /**
  * 从事件识别异常结束（opencode 的 step_finish / tool_use 事件）：
- * 最后一步因长度结束 → 长度用尽；最后一步里最后一个出错的工具调用是权限被拒 → 权限被拒；
+ * 最后一步因长度结束且正文为 0 或极少 → 思考耗尽单次输出；其余因长度结束 → 长度用尽；最后一步里最后一个出错的工具调用是权限被拒 → 权限被拒；
  * 最后一步以 tool-calls 结束且之后没有文本 → 对话中途退出。正常结束返回 undefined。
  */
 export function abnormalEnding(events: JsonEvent[]): AbnormalEnd | undefined {
@@ -115,6 +154,8 @@ export function abnormalEnding(events: JsonEvent[]): AbnormalEnd | undefined {
     if (events[i]!.type === "step_finish") finish = i;
   if (finish < 0) return undefined;
   const reason = object(events[finish]!.part)?.reason;
+  const thinking = thinkingExhausted(events[finish]!);
+  if (thinking) return { kind: "thinking", reason: thinkingReason(thinking) };
   if (reason === "length")
     return { kind: "length", reason: "上下文或输出长度用尽" };
   const rejected = rejection(events.slice(0, finish));

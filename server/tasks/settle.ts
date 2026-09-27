@@ -16,7 +16,7 @@ import {
   type Exit,
   type ExitDecision,
 } from "./outcome.ts";
-import { abnormalEnding, parseEvents } from "./json-log.ts";
+import { abnormalEnding, parseEvents, type AbnormalEnd } from "./json-log.ts";
 import { quotaReason } from "./quota-holds.ts";
 import { detectQuotaExhausted } from "./quota-signal.ts";
 import { summarize } from "./summary.ts";
@@ -110,6 +110,8 @@ export type Settlement = {
   quota?: QuotaHit;
   /** 供应商或网络临时错误：收尾后按 transient.ts 重试或换执行者。 */
   transient?: TransientHit;
+  /** 从结构化日志识别出的异常结束；思考耗尽时收尾后按 thinking.ts 换执行者重跑。 */
+  ending?: AbnormalEnd;
 };
 
 export async function settle(
@@ -204,9 +206,10 @@ export async function settle(
     verdict,
     ending: ending?.reason,
     abnormalFatal: active.deliver !== "pr",
+    thinking: ending?.kind === "thinking",
     transient: transient?.reason,
   });
-  return { summary, fields, decision, verdict, facts, transient };
+  return { summary, fields, decision, verdict, facts, transient, ending };
 }
 
 /** 记进 gates 事件与完成事件的改动规模。 */

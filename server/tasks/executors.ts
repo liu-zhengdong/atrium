@@ -19,6 +19,8 @@ import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, settle } from "./settle.ts";
 import { alive, signalGroup, spawnWorker } from "./spawn.ts";
 import type { TaskEvent } from "./state.ts";
+import { routeAfterThinking } from "./thinking.ts";
+import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
 import { retryAfterTransient } from "./transient-runtime.ts";
 import type { TaskWaits } from "./waits.ts";
 import { judge } from "./watchdog.ts";
@@ -172,32 +174,53 @@ export class Executors {
           : {}),
         ...detail,
       });
+      const retryContext = {
+        db: this.ctx.db,
+        launchOptions: this.ctx.launchOptions,
+        held: () => this.ctx.quota.held(),
+      };
+      const published = {
+        ...(decision.reason ? { reason: decision.reason } : {}),
+        ...(decision.publish === "done" && facts
+          ? { diff: diffSize(facts) }
+          : {}),
+        ...(verdict && !verdict.passed ? { gates: verdict.failed } : {}),
+      };
+      const thinking = routeAfterThinking({
+        thinking: outcome.ending?.kind === "thinking",
+        stop: active.stop,
+        decision,
+        verdict,
+        attempts:
+          outcome.ending?.kind === "thinking"
+            ? attemptsOf(retryContext, id)
+            : 0,
+      });
       if (outcome.quota)
         await this.ctx.quota.exhausted(this, active, outcome.quota);
       else if (decision.retry) await this.retry(active, decision.reason!);
       else if (outcome.transient)
         await retryAfterTransient(
           this,
-          {
-            db: this.ctx.db,
-            launchOptions: this.ctx.launchOptions,
-            held: () => this.ctx.quota.held(),
-          },
+          retryContext,
           active,
           outcome.transient,
           decision.reason ?? outcome.transient.reason,
+        );
+      else if (thinking.kind !== "none")
+        await retryAfterThinking(
+          this,
+          retryContext,
+          active,
+          thinking,
+          decision,
+          published,
         );
       else
         this.publish(
           id,
           decision.publish,
-          {
-            ...(decision.reason ? { reason: decision.reason } : {}),
-            ...(decision.publish === "done" && facts
-              ? { diff: diffSize(facts) }
-              : {}),
-            ...(verdict && !verdict.passed ? { gates: verdict.failed } : {}),
-          },
+          published,
           active.stop?.kind === "user" ? active.stop.by : undefined,
         );
     } catch (error) {

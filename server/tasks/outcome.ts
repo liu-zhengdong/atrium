@@ -51,6 +51,8 @@ export function decideExit(input: {
   /** 从结构化日志识别出的异常结束（长度用尽、权限被拒、中途退出），写在失败与受阻原因前面。 */
   ending?: string;
   abnormalFatal?: boolean;
+  /** 异常结束是思考耗尽单次输出：不判失败而转受阻，由调用方按 thinking.ts 换执行者重跑。 */
+  thinking?: boolean;
   /** 从日志识别出的供应商或网络临时错误（transient.ts），同样写在原因前面；重试由调用方按 transient.ts 决定。 */
   transient?: string;
 }): ExitDecision {
@@ -106,12 +108,19 @@ export function decideExit(input: {
       retry: false,
     };
   if (input.abnormalFatal && input.ending)
-    return {
-      event: "exit_fail",
-      publish: "failed",
-      reason: input.ending,
-      retry: false,
-    };
+    return input.thinking
+      ? {
+          event: "block",
+          publish: "blocked",
+          reason: input.ending,
+          retry: false,
+        }
+      : {
+          event: "exit_fail",
+          publish: "failed",
+          reason: input.ending,
+          retry: false,
+        };
   const verdict = input.verdict;
   if (!verdict) throw new Error("正常退出须先给出关卡结论");
   if (verdict.passed)

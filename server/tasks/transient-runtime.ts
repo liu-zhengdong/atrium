@@ -26,6 +26,36 @@ export type TransientContext = {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/**
+ * 换一个执行者：按现有挑选逻辑排除刚失败的工具。换过去还得排队或正忙的不换，返回原因（「没有可换的执行者……」）。
+ */
+export async function chooseAnother(
+  x: Executors,
+  ctx: TransientContext,
+  active: Active,
+): Promise<Choice | { note: string }> {
+  let choice: Choice;
+  try {
+    choice = await chooseWorker(
+      { risk: active.risk },
+      ctx.launchOptions,
+      ctx.held(),
+      { busy: x.busyTools(active.id), exclude: new Set([active.tool]) },
+    );
+  } catch (error) {
+    return { note: `没有可换的执行者：${message(error)}` };
+  }
+  const tool = choice.worker.tool;
+  // 换过去还得排队的不排：排队后的拉起算新一轮，重试次数会被清零。
+  if (choice.waitUntil !== undefined)
+    return {
+      note: `可换的 ${choice.worker.id} 额度用尽至 ${clock(choice.waitUntil)}`,
+    };
+  if (ADAPTERS[tool].exclusive && x.busy(tool, active.id))
+    return { note: `可换的 ${choice.worker.id} 正忙` };
+  return choice;
+}
+
 /** reason 是任务的失败原因（含临时错误类别与退出码），放弃时原样投递。 */
 export async function retryAfterTransient(
   x: Executors,
@@ -49,31 +79,13 @@ export async function retryAfterTransient(
     if (route.kind === "same")
       choice = { worker: active.worker, risk: active.risk };
     else {
-      try {
-        choice = await chooseWorker(
-          { risk: active.risk },
-          ctx.launchOptions,
-          ctx.held(),
-          { busy: x.busyTools(active.id), exclude: new Set([active.tool]) },
-        );
-      } catch (error) {
+      const other = await chooseAnother(x, ctx, active);
+      if ("note" in other)
         return x.publish(active.id, "failed", {
           ...base,
-          note: `临时错误后没有可换的执行者：${message(error)}`,
+          note: `临时错误后${other.note}`,
         });
-      }
-      const tool = choice.worker.tool;
-      // 换过去还得排队的不排：排队后的拉起算新一轮，重试次数会被清零。
-      if (choice.waitUntil !== undefined)
-        return x.publish(active.id, "failed", {
-          ...base,
-          note: `临时错误后可换的 ${choice.worker.id} 额度用尽至 ${clock(choice.waitUntil)}`,
-        });
-      if (ADAPTERS[tool].exclusive && x.busy(tool, active.id))
-        return x.publish(active.id, "failed", {
-          ...base,
-          note: `临时错误后可换的 ${choice.worker.id} 正忙`,
-        });
+      choice = other;
     }
     const retry = {
       retry: route.kind,

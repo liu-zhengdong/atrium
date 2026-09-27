@@ -4,10 +4,13 @@ import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  ACTION_WIDTH,
   codexAction,
+  firstSentence,
   recentAction,
   structuredAction,
 } from "../server/tasks/action.ts";
+import { commandGist } from "../server/tasks/command-gist.ts";
 import { readLogTail } from "../server/tasks/log-view.ts";
 import {
   advanceTask,
@@ -49,84 +52,117 @@ import { startApp } from "./task-fixture.ts";
 
 const FIXTURES = join(import.meta.dirname, "fixtures", "top");
 const sample = (name: string) => readFileSync(join(FIXTURES, name), "utf8");
-/** codex 那次抓日志用的工作目录，片段里的绝对路径都以它开头。 */
-const CODEX_DIR =
-  "/private/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog";
+const lines = (name: string) => sample(name).split("\n").filter(Boolean);
 
-test("最近动作 · codex：末段的 exec、apply patch 与助手散文", () => {
-  const tools = sample("codex-tools.txt");
+test("最近动作 · codex：助手说的话优先，没有才概括 exec 与 apply patch", () => {
+  // 末段是 exec，但前面有 codex 段说「先查看文件」：取那句话的首句。
   assert.deepEqual(
-    recentAction({ tool: "codex", tail: tools, cwd: CODEX_DIR }),
+    recentAction({ tool: "codex", tail: sample("codex-tools.txt") }),
     {
-      kind: "tool",
-      // 去掉 /bin/zsh -lc '…' 外壳与 in <目录> 尾巴。
-      text: "跑 cat edit.txt; git status --short; git ls-files; git diff --check",
+      kind: "step",
+      text: "我先查看文件内容，再把 line1 改为 first",
     },
   );
+  // 中文长句：首句切在第一个句号，去掉行内代码记号，按 40 个汉字截断带省略号。
+  const said = recentAction({ tool: "codex", tail: sample("codex-said.txt") })!;
+  assert.equal(said.kind, "step");
+  assert.match(said.text, /^已找到直接线索：t59 日志的最终 result 使用的是/);
+  assert.ok(said.text.endsWith("…"));
+  assert.ok(width(said.text) <= ACTION_WIDTH, `宽度 ${width(said.text)}`);
+  assert.ok(!said.text.includes("我正在核对"), "只取首句");
   assert.deepEqual(
-    recentAction({
-      tool: "codex",
-      tail: sample("codex-patch.txt"),
-      cwd: CODEX_DIR,
-    }),
+    recentAction({ tool: "codex", tail: sample("codex-final.txt") }),
+    {
+      kind: "step",
+      text: "已将 edit.txt 中的 line1 改为 first，line2 保持不变",
+    },
+  );
+  // 没有 codex 段：跨行的 heredoc 命令只给「跑 node 脚本」，不露脚本内容。
+  assert.deepEqual(
+    recentAction({ tool: "codex", tail: sample("codex-heredoc.txt") }),
+    { kind: "tool", text: "跑 node 脚本" },
+  );
+  // 长管道 rg … | cut … | tail：只看第一段。
+  assert.deepEqual(
+    recentAction({ tool: "codex", tail: sample("codex-pipeline.txt") }),
+    { kind: "tool", text: "搜代码" },
+  );
+  // 改文件只写文件名。
+  assert.deepEqual(
+    recentAction({ tool: "codex", tail: sample("codex-patch.txt") }),
     { kind: "tool", text: "改 edit.txt" },
   );
-  const final = recentAction({
-    tool: "codex",
-    tail: sample("codex-final.txt"),
-    cwd: CODEX_DIR,
-  });
-  assert.equal(final?.kind, "step");
-  assert.match(final!.text, /^已将 \[edit\.txt\]/);
-  assert.ok(final!.text.endsWith("…"), "超长压一行并收尾");
-  assert.ok(final!.text.length <= 101, `长度 ${final!.text.length}`);
 });
 
-test("最近动作 · claude：assistant 里的工具调用与文本块（跳过 user 的工具结果）", () => {
-  const lines = sample("claude-stream.jsonl").split("\n").filter(Boolean);
-  assert.deepEqual(recentAction({ tool: "claude", tail: lines[0]! }), {
-    kind: "tool",
-    text: "跑 sleep 60; gh pr checks 278 2>&1 | head",
-  });
-  // 末行是助手文本；user 的 tool_result 不是动作。
-  const last = recentAction({ tool: "claude", tail: lines.join("\n") });
-  assert.equal(last?.kind, "step");
-  assert.match(last!.text, /^I found and fixed the root cause/);
+test("最近动作 · claude：文本块优先，工具调用概括成人话（跳过 user 的工具结果）", () => {
+  // heredoc：python3 - <<'EOF' … 只给命令名。
   assert.deepEqual(
-    recentAction({ tool: "claude", tail: lines.slice(0, 2).join("\n") }),
-    { kind: "tool", text: "跑 sleep 60; gh pr checks 278 2>&1 | head" },
+    recentAction({ tool: "claude", tail: sample("claude-heredoc.jsonl") }),
+    { kind: "tool", text: "跑 python3 脚本" },
   );
+  // 长管道：mkdir && for …; do …; done; ls; cat > harness.ts <<'EOF' → 建目录让位给写文件。
+  assert.deepEqual(
+    recentAction({ tool: "claude", tail: sample("claude-pipeline.jsonl") }),
+    { kind: "tool", text: "写 harness.ts" },
+  );
+  // 中文说明在前、工具调用与工具结果在后：取那句话。
+  const said = recentAction({
+    tool: "claude",
+    tail: sample("claude-said.jsonl"),
+  })!;
+  assert.equal(said.kind, "step");
+  assert.match(
+    said.text,
+    /^全景的读取、context 截断、一次性登录和写入这几块服务端模块已写好/,
+  );
+  assert.ok(said.text.endsWith("…") && width(said.text) <= ACTION_WIDTH);
+  const stream = lines("claude-stream.jsonl");
+  assert.deepEqual(recentAction({ tool: "claude", tail: stream[0]! }), {
+    kind: "tool",
+    text: "看 CI",
+  });
+  assert.deepEqual(
+    recentAction({ tool: "claude", tail: stream.slice(0, 2).join("\n") }),
+    { kind: "tool", text: "看 CI" },
+  );
+  const english = recentAction({ tool: "claude", tail: stream.join("\n") })!;
+  assert.equal(english.kind, "step");
+  assert.match(english.text, /^I found and fixed the root cause/);
   assert.equal(recentAction({ tool: "claude", tail: "不是 JSON" }), undefined);
 });
 
-test("最近动作 · opencode：工具调用、收尾文本、跳过非 JSON 行", () => {
+test("最近动作 · opencode：文本事件优先，heredoc 与 gh 命令概括", () => {
+  assert.deepEqual(
+    recentAction({ tool: "opencode", tail: sample("opencode-said.jsonl") }),
+    { kind: "step", text: "已有一次提交并推送到 origin/task-t29-1" },
+  );
+  const heredoc = lines("opencode-heredoc.jsonl");
+  const each = heredoc.map((line) =>
+    recentAction({ tool: "opencode", tail: line }),
+  );
+  assert.deepEqual(each, [
+    // mkdir -p … && cat > …/openquota <<'EOF'
+    { kind: "tool", text: "写 openquota" },
+    // gh pr create … --body "$(cat <<'EOF' … EOF)"
+    { kind: "tool", text: "开 PR" },
+    // cd … && python3 - <<'PY'
+    { kind: "tool", text: "跑 python3 脚本" },
+  ]);
   assert.deepEqual(
     recentAction({ tool: "opencode", tail: sample("opencode-tools.jsonl") }),
-    {
-      kind: "tool",
-      text: "跑 cat ~/.gitconfig 2>/dev/null; echo ---; git config --global --list 2>/dev/null",
-    },
+    { kind: "tool", text: "读 .gitconfig" },
   );
-  const last = recentAction({
-    tool: "opencode",
-    tail: sample("opencode-text.jsonl"),
-  });
-  assert.equal(last?.kind, "step");
-  assert.match(last!.text, /^完成。 \*\*PR\*\*：https:\/\/github\.com/);
   assert.deepEqual(
-    structuredAction(
-      '{"type":"tool_use","part":{"tool":"read","state":{"input":{"filePath":"/w/a.ts"}}}}',
-    ),
-    { kind: "tool", text: "读 /w/a.ts" },
+    recentAction({ tool: "opencode", tail: sample("opencode-text.jsonl") }),
+    { kind: "step", text: "完成" },
   );
-  // 目标在工作目录里就缩成相对路径；不认识的动作不猜，照名字显示。
   assert.deepEqual(
     structuredAction(
       '{"type":"tool_use","part":{"tool":"edit","state":{"input":{"filePath":"/w/server/x.ts"}}}}',
-      "/w",
     ),
-    { kind: "tool", text: "改 server/x.ts" },
+    { kind: "tool", text: "改 x.ts" },
   );
+  // 不认识的工具不猜，照名字显示。
   assert.deepEqual(
     structuredAction(
       '{"type":"tool_use","part":{"tool":"whatever","state":{"input":{}}}}',
@@ -139,6 +175,83 @@ test("最近动作 · opencode：工具调用、收尾文本、跳过非 JSON �
     ),
     { kind: "tool", text: "列待办" },
   );
+});
+
+test("最近动作 · 命令的人话：常见命令映射，其余只给命令名", () => {
+  const cases: [string, string][] = [
+    ["npm run check", "跑完整检查"],
+    ["npm run check 2>&1 | tail -50", "跑完整检查"],
+    ["cd /w && NODE_OPTIONS=--x npm test", "跑测试"],
+    ["npm run format:check", "查格式"],
+    ["npx prettier --write server/a.ts", "排版"],
+    ["npx tsc --noEmit", "类型检查"],
+    ["git push -u origin task-t69-top", "推送"],
+    [
+      "git add -A && git commit -q -F - <<'EOF'\n标题\n\n正文 | 不是管道; 也不是分隔\nEOF",
+      "暂存改动",
+    ],
+    ["git commit -m 'a; b | c'", "提交"],
+    ["git -C /w status --short", "看改动"],
+    [
+      "gh pr create -R a/b --title 'x' --body \"$(cat <<'EOF'\nRefs #1\nEOF\n)\"",
+      "开 PR",
+    ],
+    ["sleep 60; gh pr checks 278 -R a/b --watch", "看 CI"],
+    ["gh -R a/b issue view 322", "看 issue"],
+    ["gh run view 1 --log-failed | tail", "看 CI"],
+    ["rg -n 'a|b' server | head", "搜代码"],
+    ["sed -n '1,80p' server/tasks/action.ts", "读 action.ts"],
+    ["cat /Users/x/.gitconfig 2>/dev/null; echo ---", "读 .gitconfig"],
+    [
+      "python3 - <<'EOF'\np='README.md'\nopen(p).read()\nEOF",
+      "跑 python3 脚本",
+    ],
+    ["node -e 'console.log(1)'", "跑 node 脚本"],
+    ["node --test tests/a.test.ts", "跑测试"],
+    [
+      "ATRIUM_PORT=4399 ATRIUM_DATA=/w/.atrium node bin/atrium.mjs top --once",
+      "跑 atrium top",
+    ],
+    ["timeout 30 cargo test --all", "跑 cargo"],
+    ["mkdir -p /tmp/x && for i in 1 2; do mkdir -p /tmp/x/$i; done", "建目录"],
+    ["for i in 1 2; do tail -c 10 /a/$i/log > /tmp/$i/log; done", "复制文件"],
+    ["echo hi", "跑 echo"],
+    ["sleep 60", "等待"],
+    ["", "跑命令"],
+  ];
+  for (const [command, expected] of cases)
+    assert.equal(commandGist(command), expected, command);
+});
+
+test("最近动作 · 首句与宽度：去 Markdown 记号、切在句末、中英混排按显示宽度截断", () => {
+  assert.equal(firstSentence("正在补单测。接着跑检查。"), "正在补单测");
+  assert.equal(
+    firstSentence("## 进度\n\n- **正在**改 `action.ts`：加首句解析"),
+    "进度",
+  );
+  assert.equal(
+    firstSentence("```\ncode\n```\n看 [PR #1](https://x/1) 的评论！"),
+    "看 PR #1 的评论",
+  );
+  assert.equal(firstSentence("Bump v0.1.59. Then push."), "Bump v0.1.59");
+  assert.equal(firstSentence("\n  \n"), undefined);
+  const long = `正在${"补".repeat(60)}单测`;
+  const step = structuredAction(
+    JSON.stringify({ type: "text", part: { text: long } }),
+  )!;
+  // 汉字占两格：39 个字加省略号正好不超 40 个字宽。
+  assert.equal(width(step.text), ACTION_WIDTH - 1);
+  assert.ok(step.text.endsWith("…"));
+  const mixed = structuredAction(
+    JSON.stringify({
+      type: "text",
+      part: {
+        text: `改 server/tasks/action.ts 里的首句解析，顺带${"整理".repeat(20)}`,
+      },
+    }),
+  )!;
+  assert.ok(width(mixed.text) <= ACTION_WIDTH && mixed.text.endsWith("…"));
+  assert.ok(mixed.text.length > 40, "英文按半格算，能多放几个字");
 });
 
 test("最近动作 · 没样本的工具不猜：grok、kimi 与未知执行者都交回空", () => {
@@ -706,7 +819,7 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
   const running = body.rows[0]!;
   assert.equal(running.status, "running");
   assert.equal(running.worker, "opencode+mimo");
-  assert.deepEqual(running.action, { text: "跑 npm run check", kind: "tool" });
+  assert.deepEqual(running.action, { text: "跑完整检查", kind: "tool" });
   assert.ok(
     Math.abs(running.log_at - past.getTime()) < 2000,
     `log_at 应是日志写入时刻：${running.log_at}`,

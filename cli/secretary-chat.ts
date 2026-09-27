@@ -8,7 +8,8 @@ import type {
   PermissionRequest,
   StopReason,
 } from "./acp.ts";
-import { eventLine } from "./events.ts";
+import { wakePrompt } from "../server/tasks/wake-prompt.ts";
+export { wakePrompt } from "../server/tasks/wake-prompt.ts";
 
 /**
  * ACP 托管的秘书会话（#307 第 2 步）：Atrium 持有会话，用户消息与待处理事件都作为新一轮送入。
@@ -45,23 +46,6 @@ export const PEEK_SECONDS = 240;
 export const DEFAULT_BATCH_MS = 2000;
 export const DEFAULT_MAX_WAKEUPS = 10;
 
-/** 送入会话的事件消息：列出事件、给出查看与确认命令。 */
-export function wakePrompt(events: readonly InboxEvent[]): string {
-  const ids = events.map((event) => event.id);
-  const tasks = [
-    ...new Set(events.flatMap((event) => (event.task ? [event.task] : []))),
-  ];
-  return [
-    `【Atrium 事件】${events.length} 条待处理事件已送达（编号 ${ids.join("、")}）：`,
-    ...events.map((event) => `- ${eventLine(event)}`),
-    "",
-    tasks.length
-      ? `看详情：${tasks.map((task) => `atrium task show ${task}`).join("；")}`
-      : "看详情：atrium events",
-    `处理完确认：atrium events ack ${ids.join(" ")}`,
-  ].join("\n");
-}
-
 type Connection = Pick<AcpConnection, "request" | "notify" | "close">;
 
 export class SecretaryChat {
@@ -92,11 +76,14 @@ export class SecretaryChat {
       batchMs?: number;
       maxWakeups?: number;
       now?: () => number;
+      initialWakeCount?: number;
+      onWakeCountChange?: (count: number) => void;
     },
   ) {
     this.now = options.now ?? Date.now;
     this.batchMs = options.batchMs ?? DEFAULT_BATCH_MS;
     this.maxWakeups = options.maxWakeups ?? DEFAULT_MAX_WAKEUPS;
+    this.wakeCount = options.initialWakeCount ?? 0;
   }
 
   get session() {
@@ -212,6 +199,7 @@ export class SecretaryChat {
       const message = this.queue.shift();
       if (message !== undefined) {
         this.wakeCount = nextWakeCount(this.wakeCount, "user_turn");
+        this.options.onWakeCountChange?.(this.wakeCount);
         limited = false;
         await this.turn(message);
         continue;
@@ -259,6 +247,7 @@ export class SecretaryChat {
           this.wakeCount,
           ok ? "delivered" : "failed",
         );
+        this.options.onWakeCountChange?.(this.wakeCount);
       }
     }
     this.peekAbort?.abort();

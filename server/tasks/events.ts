@@ -295,6 +295,20 @@ export class EventInbox {
     });
   }
 
+  /** A failed one-shot wake can relinquish its lease without touching newer merges or acknowledgements. */
+  release(subscriber: string, events: readonly InboxEvent[]) {
+    const who = ownerOf(subscriber, "as");
+    const clear = this.db.prepare(
+      "UPDATE task_inbox SET delivered_at=NULL WHERE subscriber=? AND id=? AND acked_at IS NULL AND delivered_at=? AND updated_at=?",
+    );
+    atomically(this.db, () => {
+      for (const event of events)
+        if (event.delivered_at !== null)
+          clear.run(who, event.id, event.delivered_at, event.updated_at);
+    });
+    this.emitter.emit(who);
+  }
+
   /**
    * 有可取事件立即返回；否则等到有事件、超时或服务关闭。
    * peek 只看不取：不记送达、不起租约，供唤醒通道判断空闲后再 deliver。
@@ -303,18 +317,22 @@ export class EventInbox {
     subscriber: string,
     timeoutSeconds: number,
     signal?: AbortSignal,
-    options: { peek?: boolean } = {},
+    options: { peek?: boolean; trackOnline?: boolean } = {},
   ): Promise<{
     events: InboxEvent[];
     timed_out: boolean;
     restarting?: boolean;
   }> {
     const who = ownerOf(subscriber, "as");
-    this.lastWait.set(who, this.now());
+    if (options.trackOnline !== false) this.lastWait.set(who, this.now());
     const take = () => (options.peek ? this.pending(who) : this.take(who));
     const ready = take();
     if (ready.length || timeoutSeconds <= 0 || this.closed)
-      return { events: ready, timed_out: !ready.length };
+      return {
+        events: ready,
+        timed_out: !ready.length,
+        ...(this.closed ? { restarting: true } : {}),
+      };
     return new Promise((resolve) => {
       let settled = false;
       const finish = (restarting = false) => {
@@ -325,7 +343,7 @@ export class EventInbox {
         this.emitter.off(who, check);
         this.emitter.off("close", closing);
         signal?.removeEventListener("abort", aborted);
-        this.lastWait.set(who, this.now());
+        if (options.trackOnline !== false) this.lastWait.set(who, this.now());
         const events = take();
         resolve({
           events,

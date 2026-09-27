@@ -171,15 +171,19 @@ test("送入消息列出事件、查看与确认命令", () => {
   assert.match(text, /atrium events ack 7 8$/);
 });
 
-test("按工具选打开方式：opencode 有原生界面、也可走 ACP，未接入与不认识的给出可执行修正", () => {
+test("按工具选打开方式：opencode 原生界面或 ACP、codex ACP，未知工具给出修正", () => {
   assert.deepEqual(chatMode("opencode"), {
     kind: "acp",
     command: "opencode",
     args: ["acp"],
     native: "opencode",
   });
+  const codex = chatMode("codex");
+  assert.equal(codex.kind, "acp");
+  if (codex.kind === "acp")
+    assert.match(codex.args.join(" "), /@zed-industries\/codex-acp/);
   assert.throws(
-    () => chatMode("codex"),
+    () => chatMode("kimi"),
     (error: unknown) =>
       error instanceof Problem &&
       error.code === "conflict" &&
@@ -202,6 +206,9 @@ test("拉起 Agent 的环境去掉 HERDR_* 与嵌套会话标记", () => {
     CLAUDECODE: "1",
     PI_ID: "x",
     ATRIUM_PORT: "4999",
+    OPENAI_API_KEY: "secret",
+    GH_TOKEN: "secret",
+    CUSTOM_API_KEY: "secret",
   });
   assert.deepEqual(env, { PATH: "/bin", ATRIUM_PORT: "4999" });
 });

@@ -48,7 +48,7 @@ export function userTurnSince(
 
 export class ServeWaker {
   private closed = false;
-  private wakeCount = 0;
+  private wakeCount: number;
   private lastWakeAt = 0;
   private readonly waiters = new Set<() => void>();
   private peekAbort: AbortController | null = null;
@@ -67,12 +67,16 @@ export class ServeWaker {
       maxWakeups?: number;
       pollMs?: number;
       now?: () => number;
+      initialWakeCount?: number;
+      onWakeCountChange?: (count: number) => void;
     },
   ) {
     this.now = options.now ?? Date.now;
     this.batchMs = options.batchMs ?? DEFAULT_BATCH_MS;
     this.maxWakeups = options.maxWakeups ?? DEFAULT_MAX_WAKEUPS;
     this.pollMs = options.pollMs ?? 1000;
+    this.wakeCount = options.initialWakeCount ?? 0;
+    if (this.wakeCount > 0) this.lastWakeAt = this.now();
   }
 
   close() {
@@ -94,6 +98,7 @@ export class ServeWaker {
           const recent = await this.options.session.messages(20);
           if (userTurnSince(recent, this.lastWakeAt)) {
             this.wakeCount = nextWakeCount(this.wakeCount, "user_turn");
+            this.options.onWakeCountChange?.(this.wakeCount);
             limited = false;
           }
         }
@@ -153,6 +158,7 @@ export class ServeWaker {
     }
     this.lastWakeAt = this.now();
     this.wakeCount = nextWakeCount(this.wakeCount, "delivered");
+    this.options.onWakeCountChange?.(this.wakeCount);
     this.toast(
       `送入事件 ${delivered.map((event) => `#${event.id}`).join(" ")}`,
       "info",

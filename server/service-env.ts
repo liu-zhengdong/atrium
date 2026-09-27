@@ -22,6 +22,7 @@ const SYSTEM = new Set([
   "TMPDIR",
   "LANG",
   "TZ",
+  "XDG_DATA_HOME",
 ]);
 
 /** 出网：模型与 npm 都可能依赖代理与自定义证书。 */

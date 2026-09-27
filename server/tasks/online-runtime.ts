@@ -112,7 +112,7 @@ export class OnlineWatch {
             .run(this.now(), id);
           noteTask(this.db, id, "online_skipped", {
             reason:
-              "本服务不自升级（开发中的检出或 ATRIUM_SELF_UPDATE=0），停在已合入",
+              "本服务不自升级（开发中的检出、另给 ATRIUM_DATA 的隔离服务或 ATRIUM_SELF_UPDATE=0），停在已合入",
           });
         });
         this.options.changed(id);

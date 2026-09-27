@@ -39,6 +39,31 @@ export function queued(db: DatabaseSync, taskId: number) {
     QueueEntry | undefined;
 }
 
+/**
+ * 排队中的任务为什么排队（task ls / show / plan 显示用）：取最近一条 queued 事件的 reason；
+ * 不在队列里为 null，事件缺失或写坏时给通用说法。
+ */
+export function queueView(
+  db: DatabaseSync,
+  taskId: number,
+): { queued_reason: string | null } {
+  if (!queued(db, taskId)) return { queued_reason: null };
+  const row = db
+    .prepare(
+      "SELECT detail FROM task_events WHERE task_id=? AND kind='queued' ORDER BY id DESC LIMIT 1",
+    )
+    .get(taskId) as { detail: string | null } | undefined;
+  try {
+    const reason = (JSON.parse(row?.detail ?? "null") as { reason?: unknown })
+      ?.reason;
+    if (typeof reason === "string" && reason.trim())
+      return { queued_reason: reason.trim() };
+  } catch {
+    // 历史上写坏的事件不该让列表失败。
+  }
+  return { queued_reason: "等待执行者可用后自动拉起" };
+}
+
 /** 某工具下一个该跑的；不给工具时返回每个工具的队首。 */
 export function heads(db: DatabaseSync, tool?: string): QueueEntry[] {
   return (

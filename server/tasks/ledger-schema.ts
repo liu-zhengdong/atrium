@@ -1,8 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { all } from "./ledger-model.ts";
+import { ensureQueueTable } from "./queue.ts";
 import { repairScheduleRecords } from "./schedule-recovery.ts";
 
 export function ensureTaskTables(db: DatabaseSync) {
+  // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
+  ensureQueueTable(db);
   db.exec(`CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       parent_id INTEGER REFERENCES tasks(id),

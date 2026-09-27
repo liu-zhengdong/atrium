@@ -20,7 +20,7 @@ import {
   type ServiceRecord,
 } from "./service-state.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
-import { readRestartState } from "./supervisor.ts";
+import { restartInProgress } from "./supervisor.ts";
 
 async function request(record: ServiceRecord, stop = false) {
   const response = await fetch(
@@ -37,11 +37,6 @@ async function request(record: ServiceRecord, stop = false) {
     instance?: string;
     pid?: number;
     stopping?: boolean;
-    idle_restart?: {
-      pending: boolean;
-      running: string[];
-      deadline: number;
-    } | null;
   };
   if (result.instance !== record.instance || result.pid !== record.pid)
     throw new Error("服务身份不匹配");
@@ -123,10 +118,8 @@ export async function serviceStatus(data: string) {
     throw unavailable(record, data);
   });
   if (current.stopping) throw await unavailableReason(record, data);
-  const idle = current.idle_restart;
-  const timedOut = readRestartState(data);
   console.log(
-    `Atrium 正在运行 · PID ${record.pid}\n${serviceUrl(record)}\n数据：${data}\n日志：${join(data, "service.log")}（后台启动）${idle?.pending ? `\n待重启：还有 ${idle.running.length} 个执行者在跑${idle.running.length ? `（${idle.running.join("、")}）` : ""}` : timedOut?.status === "idle_timeout" ? `\n待重启超时：超时时仍在运行 ${timedOut.remainingTasks?.join("、") || "未知"}；未强制停止` : ""}`,
+    `Atrium 正在运行 · PID ${record.pid}\n${serviceUrl(record)}\n数据：${data}\n日志：${join(data, "service.log")}（后台启动）`,
   );
 }
 export async function stopService(data: string) {
@@ -181,6 +174,30 @@ export async function startService(
     entry = "server/main.ts",
   }: StartWaitOptions = {},
 ) {
+  // 重启进行中：旧服务在关、新服务由 supervisor 拉起。这里不抢着自己拉，等新服务
+  // 就绪后照常返回，调用方（task run / task add 等）看不出中断。
+  const waitStarted = Date.now();
+  let waitNoticed = false;
+  for (let state = restartInProgress(data); state;) {
+    const current = readService(data);
+    if (
+      current &&
+      alive(current.pid) &&
+      (await probe(current)) === "ready" &&
+      state.status !== "stopping"
+    )
+      return current;
+    if (Date.now() - waitStarted >= totalMs)
+      throw new Error(
+        `Atrium 正在重启（${state.status}），已等 ${Math.round(totalMs / 1000)} 秒仍未就绪；运行 atrium restart --wait 查看结果`,
+      );
+    if (!waitNoticed && Date.now() - waitStarted >= noticeMs) {
+      waitNoticed = true;
+      notice("Atrium 正在重启，等新服务就绪…");
+    }
+    await delay(100);
+    state = restartInProgress(data);
+  }
   let record = readService(data);
   let child: ReturnType<typeof spawn> | undefined;
   let launchError: Error | undefined;

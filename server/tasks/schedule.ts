@@ -4,7 +4,7 @@ import { all, taskRef, usage, view, type TaskRow } from "./ledger-model.ts";
 import { conditions } from "./schedule-ledger.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
-import { dequeue, queued } from "./queue.ts";
+import { dequeue, queued, queueView } from "./queue.ts";
 import { noteView } from "./notes.ts";
 
 export type ScheduleGroup = "running" | "ready" | "waiting" | "blocked";
@@ -74,6 +74,7 @@ export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
     task: {
       ...view(row),
       ...noteView(db, row.id, row.status),
+      ...queueView(db, row.id),
     },
     ...classify(row.status, tasks, prs, row.schedule_reason),
   };

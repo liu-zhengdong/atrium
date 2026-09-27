@@ -127,12 +127,11 @@ atrium skill accept p1                           # 写成新修订；skill histo
 ## 重启与升级
 
 ```bash
-atrium restart --when-idle --timeout 60    # 停止派发新执行者，现有执行者全部结束后平滑重启；超时只报告仍在跑的任务
-atrium restart                             # 立即平滑重启；--wait 等结果
+atrium restart                             # 随时平滑重启，不等空闲；--wait 等结果
 atrium update                              # 安装最新 GitHub 标签；--to 0.1.30 指定版本，也可回退
 ```
 
-`atrium update` 只安装，之后执行 `atrium restart` 才生效。重启时旧服务排空、新服务通过健康检查后才接手；新版本起不来就自动装回原版本并重启，经过记在数据目录的 `supervisor.log`。版本降级须确保数据库迁移与上一版兼容。
+`atrium update` 只安装，之后执行 `atrium restart` 才生效。重启随时可做：在跑的执行者各自是独立进程组，不中断，新服务按 pid 接管；重启窗口内退出的由接管后补做收尾（日志、关卡、事件不丢），接管后退出拿不到退出码时按日志收尾结构判正常结束还是出错。重启期间的 `task run`、`task add` 等命令等新服务就绪再发，不排队、不报错。旧版的 `--when-idle` 只打印提示后直接重启，遗留的待空闲重启记录在启动时丢弃。重启时旧服务排空、新服务通过健康检查后才接手；新版本起不来就自动装回原版本并重启，经过记在数据目录的 `supervisor.log`。版本降级须确保数据库迁移与上一版兼容。
 
 每次 main 合入由 CI 加补丁号、打标签并以 PR 标题作版本摘要。
 

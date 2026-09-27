@@ -9,7 +9,8 @@ import { alive } from "./spawn.ts";
 
 /**
  * 服务重启自愈（#262）：找出账本里 running 的任务，判断它的执行者进程还在不在。
- * surveyRunning 只读；recoverRunning 据此置 failed 或按 pid 接管，再把排队的拉起来。
+ * surveyRunning 只读；recoverRunning 据此按 pid 接管，或对重启窗口内已经退出的补做收尾
+ * （日志、关卡、事件与正常退出同一条路径），再把排队的拉起来。
  */
 
 /** pid 还在，且确实是该工具的进程（防 pid 复用误接管、误杀）。 */
@@ -22,7 +23,8 @@ export async function ownsPid(pid: number, tool: Tool, exec: Exec) {
 }
 
 export type Survivor =
-  | { task: Task; kind: "gone" }
+  /** 进程已不在；worker 解析不出时无从收尾，只能置 failed。 */
+  | { task: Task; kind: "gone"; worker?: ResolvedWorker; base: string | null }
   | { task: Task; kind: "alive"; worker: ResolvedWorker; base: string | null };
 
 export async function surveyRunning(
@@ -46,12 +48,13 @@ export async function surveyRunning(
     } catch {
       worker = undefined;
     }
-    if (task.pid && worker && (await ownsPid(task.pid, worker.tool, exec))) {
-      const base = task.repo
+    const base =
+      worker && task.repo
         ? await defaultBranch(task.repo, exec).catch(() => null)
         : null;
+    if (task.pid && worker && (await ownsPid(task.pid, worker.tool, exec)))
       found.push({ task, kind: "alive", worker, base });
-    } else found.push({ task, kind: "gone" });
+    else found.push({ task, kind: "gone", worker, base });
   }
   return found;
 }
@@ -65,7 +68,7 @@ export async function recoverRunning(
   const skip = (id: number) => x.active.has(id) || x.launching.has(id);
   for (const found of await surveyRunning(db, skip, workersDir, ctx.exec)) {
     const { task } = found;
-    if (found.kind === "alive") {
+    if (found.worker) {
       const active = adopted({
         task,
         worker: found.worker,
@@ -73,15 +76,25 @@ export async function recoverRunning(
         data: ctx.data,
         exec: ctx.exec,
       });
-      await active.probe.baseline();
       x.active.set(task.id, active);
+      if (found.kind === "alive") {
+        await active.probe.baseline();
+        noteTask(db, task.id, "adopted", {
+          pid: task.pid,
+          reason: "服务重启后按 pid 接管",
+        });
+        continue;
+      }
+      // 重启窗口内已经退出：接管后立即收尾，退出码不可得，按日志与交付事实判结局。
       noteTask(db, task.id, "adopted", {
         pid: task.pid,
-        reason: "服务重启后按 pid 接管",
+        reason: "服务重启时执行者已退出，接管后补做收尾",
       });
+      await x.finish(task.id, "unknown");
+      ctx.changed(task.id);
       continue;
     }
-    const reason = "服务重启时执行者进程已不在";
+    const reason = "服务重启时执行者进程已不在，执行者档案解析不出，无法收尾";
     x.advance(
       task.id,
       { kind: "exit_fail" },

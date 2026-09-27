@@ -24,6 +24,8 @@ export type Active = {
   risk: Risk;
   prepared?: Prepared;
   logFile: string;
+  /** 接管的进程没有 prepared：codex 最后消息文件按任务目录里的固定位置找。 */
+  resultFile?: string;
   repo: string | null;
   worktree: string | null;
   branch: string | null;
@@ -126,6 +128,7 @@ export function adopted(input: {
     worker,
     risk: "low",
     logFile,
+    resultFile: join(dir, "last-message.md"),
     repo: task.repo,
     worktree: task.worktree,
     branch: task.branch,

@@ -43,6 +43,22 @@ test("看门狗：假执行者零输出判卡死、按档案重试一次后失�
   });
   assert.equal(second.body.queued, true);
   assert.equal(second.body.task.status, "todo");
+  // 排队原因在 show / ls / plan 里都带出来。
+  const why = /opencode 同一时刻只跑一个/;
+  assert.match(second.body.task.queued_reason, why);
+  const listed = (await call("GET", "/api/tasks")).body.tasks as {
+    ref: string;
+    queued_reason: string | null;
+  }[];
+  assert.match(listed.find((task) => task.ref === "t3")!.queued_reason!, why);
+  assert.equal(listed.find((task) => task.ref === "t2")!.queued_reason, null);
+  const plan = (await call("GET", "/api/tasks/plan")).body.groups.ready as {
+    task: { ref: string; queued_reason: string | null };
+  }[];
+  assert.match(
+    plan.find((item) => item.task.ref === "t3")!.task.queued_reason!,
+    why,
+  );
   assert.equal(
     (await call("GET", "/api/tasks/t3/wait?timeout=20")).body.task.status,
     "done",

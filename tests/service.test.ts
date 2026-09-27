@@ -205,70 +205,112 @@ test(
 );
 
 test(
-  "全局命令安排空闲重启：运行时显示待重启，停止假执行者后自动重启并续派",
-  { timeout: 60_000 },
+  "执行者在跑时随时重启：新服务按 pid 接管，重启后立即续派；遗留的待空闲重启记录被丢弃",
+  { timeout: 90_000 },
   async (t) => {
     const f = await fixture(t);
     const worker = workerFixture(t);
+    // 两个一直在跑的假执行者：grok 与 codex 都只 sleep，不输出、不改文件。
     writeFileSync(
       join(worker.workers, "harness", "grok.md"),
       "---\nlimits: {startup_minutes: 10}\n---\n",
     );
+    writeFileSync(
+      join(worker.workers, "harness", "codex.md"),
+      "---\nlimits: {startup_minutes: 10}\n---\n",
+    );
+    writeFileSync(join(worker.root, "bin", "codex"), "#!/bin/sh\nsleep 30\n", {
+      mode: 0o755,
+    });
     f.env.ATRIUM_WORKERS_DIR = worker.workers;
     f.env.PATH = worker.env.PATH;
     f.env.HOME = worker.env.HOME;
+    // 旧版 restart --when-idle 留下的记录：启动时丢弃，不再挡派活。
+    mkdirSync(f.data, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(f.data, "restart-state.json"),
+      JSON.stringify({
+        id: "rst-legacy",
+        status: "waiting_idle",
+        supervisorPid: 0,
+        startedAt: Date.now(),
+        idleDeadline: Date.now() + 1_800_000,
+        fromVersion: "0.1.38",
+        data: f.data,
+      }),
+    );
     assert.equal((await f.cli("--no-open")).code, 0);
+    assert.equal(existsSync(join(f.data, "restart-state.json")), false);
+    assert.match(
+      readFileSync(join(f.data, "service.log"), "utf8"),
+      /丢弃旧版待空闲重启记录（rst-legacy，waiting_idle）/,
+    );
     const record = readService(f.data)!;
-    const create = async (title: string) => {
-      const response = await fetch(`${serviceUrl(record)}/api/tasks`, {
-        method: "POST",
-        headers: { ...f.userHeaders(), "content-type": "application/json" },
-        body: JSON.stringify({ title, repo: worker.repo }),
-      });
-      assert.equal(response.status, 201, await response.text());
-    };
-    await create("long");
-    await create("next");
-    const running = await f.cli("task", "run", "t1", "--worker", "grok");
-    assert.equal(running.code, 0, running.stderr);
-    const bad = await f.cli("restart", "--when-idle", "--timeout", "bad");
-    assert.notEqual(bad.code, 0);
-    assert.match(bad.stderr, /--timeout/);
-    const scheduled = await f.cli("restart", "--when-idle", "--timeout", "20");
-    assert.equal(scheduled.code, 0, scheduled.stderr);
-    assert.match((await f.cli("status")).stdout, /待重启：还有 1 个执行者在跑/);
-    const queued = await f.cli("task", "run", "t2", "--worker", "opencode");
-    assert.equal(queued.code, 0, queued.stderr);
-    assert.match(queued.stdout, /等待重启/);
-    assert.equal((await f.cli("task", "stop", "t1")).code, 0);
-    await until(() => readRestartState(f.data)?.status === "success", 30_000);
-    const newer = readService(f.data)!;
-    assert.notEqual(newer.instance, record.instance);
-    await until(() => {
-      const db = new DatabaseSync(join(f.data, "atrium.sqlite"), {
-        readOnly: true,
-      });
-      try {
-        return !!db
-          .prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind=?")
-          .get(2, "start");
-      } finally {
-        db.close();
-      }
-    }, 15_000);
-    await until(() => {
+    for (const title of ["long-a", "long-b", "next", "spare"]) {
+      const added = await f.cli("task", "add", title, "--repo", worker.repo);
+      assert.equal(added.code, 0, added.stderr);
+    }
+    for (const [ref, tool] of [
+      ["t1", "grok"],
+      ["t2", "codex"],
+    ]) {
+      const run = await f.cli("task", "run", ref, "--worker", tool);
+      assert.equal(run.code, 0, run.stderr);
+      assert.doesNotMatch(run.stdout, /排队/);
+    }
+    const pids = [1, 2].map((id) => {
       const db = new DatabaseSync(join(f.data, "atrium.sqlite"), {
         readOnly: true,
       });
       try {
         return (
-          db.prepare("SELECT status FROM tasks WHERE id=?").get(2)?.status !==
-          "running"
-        );
+          db.prepare("SELECT pid FROM tasks WHERE id=?").get(id) as {
+            pid: number;
+          }
+        ).pid;
       } finally {
         db.close();
       }
-    }, 15_000);
+    });
+    for (const pid of pids) assert.equal(alive(pid), true);
+
+    // 兼容参数 --when-idle：提示后直接重启；紧接着的 task add 等新服务就绪后自动发出。
+    const restarting = await f.cli("restart", "--when-idle");
+    assert.equal(restarting.code, 0, restarting.stderr);
+    assert.match(restarting.stderr, /不需要等执行者空闲.*--when-idle 不再生效/);
+    assert.match(restarting.stdout, /平滑重启已启动/);
+    const during = await f.cli("task", "add", "重启期间建的", "--json");
+    assert.equal(during.code, 0, during.stderr);
+    assert.equal(JSON.parse(during.stdout).result.ref, "t5");
+    const waited = await f.cli("restart", "--wait", "--timeout", "60");
+    assert.equal(waited.code, 0, waited.stderr);
+    assert.equal(readRestartState(f.data)?.status, "success");
+    const newer = readService(f.data)!;
+    assert.notEqual(newer.instance, record.instance);
+
+    // 执行者不中断，被新服务接管。
+    for (const pid of pids) assert.equal(alive(pid), true);
+    for (const ref of ["t1", "t2"]) {
+      const shown = await f.cli("task", "show", ref, "--json");
+      assert.equal(shown.code, 0, shown.stderr);
+      const task = JSON.parse(shown.stdout).result as {
+        status: string;
+        events: { kind: string; detail: string }[];
+      };
+      assert.equal(task.status, "running");
+      assert.match(
+        task.events.find((event) => event.kind === "adopted")?.detail ?? "",
+        /服务重启后按 pid 接管/,
+      );
+    }
+    // 新任务立即派出，不排队。
+    const next = await f.cli("task", "run", "t3", "--worker", "opencode");
+    assert.equal(next.code, 0, next.stderr);
+    assert.doesNotMatch(next.stdout, /排队|等待重启/);
+    const listed = await f.cli("task", "ls");
+    assert.doesNotMatch(listed.stdout, /等待重启/);
+    for (const ref of ["t1", "t2"])
+      assert.equal((await f.cli("task", "stop", ref)).code, 0);
   },
 );
 
@@ -377,11 +419,7 @@ test(
     assert.equal(started.code, 0, started.stderr || started.stdout);
     const record = readService(f.data)!;
     const url = serviceUrl(record);
-    for (const path of [
-      "/api/service/stop",
-      "/api/service/prepare-restart",
-      "/api/service/restart-when-idle",
-    ])
+    for (const path of ["/api/service/stop", "/api/service/prepare-restart"])
       assert.equal(
         await declaredBodyWithoutBytes(record.port, path),
         401,

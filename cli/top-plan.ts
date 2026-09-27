@@ -1,4 +1,4 @@
-import { clip, pad, width } from "./format.ts";
+import { oneLine, pad, width } from "./format.ts";
 
 /**
  * `atrium top` 的排期段（#262）：就绪、依赖链、等待中与因上游卡住的待办，数据来自 `/api/tasks/plan`。
@@ -408,9 +408,9 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
         `${"  ".repeat(row.indent)}${SYMBOL[row.item.group]} ${row.item.ref}`,
         prefixW,
       );
-      const title = pad(clip(row.item.task.title, titleW), titleW);
+      const title = pad(oneLine(row.item.task.title, titleW), titleW);
       const text = detail(row.item, frame.now, frame.wide);
-      const tail = detailW >= 6 && text ? `  ${clip(text, detailW)}` : "";
+      const tail = detailW >= 6 && text ? `  ${oneLine(text, detailW)}` : "";
       lines.push({
         text: fit(`${prefix}  ${title}${tail}`.trimEnd(), frame.width),
         item: row.item.ref,

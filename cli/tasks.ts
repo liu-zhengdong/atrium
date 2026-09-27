@@ -441,6 +441,15 @@ const show: Command = {
                   `详述：没有进库（原文件读不到），补上：atrium task set ${task.ref} --brief 文件`,
                 ]
               : []),
+          ...(task.holder?.detail?.trim()
+            ? [
+                "原因全文：",
+                ...task.holder.detail
+                  .trimEnd()
+                  .split("\n")
+                  .map((line) => `  ${line}`),
+              ]
+            : []),
           ...(task.result ? ["结果摘要：", task.result] : []),
           ...(task.events.length
             ? [

@@ -1,6 +1,10 @@
 import { Problem } from "../server/problem.ts";
-import type { Holder, HolderKind } from "../server/tasks/holder.ts";
-import { printJson, clip } from "./format.ts";
+import {
+  HOLDER_WIDTH,
+  type Holder,
+  type HolderKind,
+} from "../server/tasks/holder.ts";
+import { printJson, oneLine } from "./format.ts";
 import type { Command } from "./main.ts";
 import type { Client } from "./service.ts";
 import { duration, hostBrief, type Snapshot, type TopRow } from "./top.ts";
@@ -51,9 +55,11 @@ export function workerLabel(worker: string | null): string {
 
 type Paint = (color: string, text: string) => string;
 
-function taskLine(row: TopRow, holder: Holder, now: number, paint: Paint) {
+function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
+  // 旧版服务给的一句话可能是整篇原因，这里再截一次。
+  const holder = { ...full, text: oneLine(full.text, HOLDER_WIDTH) };
   const [mark, color] = MARK[holder.kind];
-  const title = `${row.urgent ? `${paint(`${BOLD}${RED}`, "紧急")} ` : ""}「${clip(row.title, TITLE_MAX)}」`;
+  const title = `${row.urgent ? `${paint(`${BOLD}${RED}`, "紧急")} ` : ""}「${oneLine(row.title, TITLE_MAX)}」`;
   if (holder.kind === "user")
     return `${paint(color, mark)} ${row.ref} ${title} ${paint(color, `等你：${holder.text}`)}`;
   if (holder.kind === "worker") {
@@ -127,7 +133,7 @@ export function renderStatusline(input: StatuslineInput): string {
   for (const leader of leaders) {
     const doing =
       leader.wake?.status === "running"
-        ? `处理中${leader.wake.summary ? `：${clip(leader.wake.summary, 40)}` : ""}`
+        ? `处理中${leader.wake.summary ? `：${oneLine(leader.wake.summary, 40)}` : ""}`
         : "";
     const pending = leader.events ? `待处理 ${leader.events} 件` : "";
     lines.push(

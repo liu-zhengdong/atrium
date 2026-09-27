@@ -7,7 +7,12 @@ import {
   type TaskEventRow,
   type TaskRow,
 } from "./ledger-model.ts";
-import { holderOf, type Holder, type HolderFacts } from "./holder.ts";
+import {
+  holderDetail,
+  holderOf,
+  type Holder,
+  type HolderFacts,
+} from "./holder.ts";
 import { scheduleOf } from "./schedule.ts";
 
 /** 从账本、收件箱、会审表取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
@@ -142,10 +147,13 @@ export function holderFacts(
   };
 }
 
+/** 单个任务视图（`task show`）用：一句话之外附上原因全文。 */
 export function holderFor(
   db: DatabaseSync,
   row: TaskRow,
   queued: { reason: string | null } | null,
 ): Holder | null {
-  return holderOf(holderFacts(db, row, queued));
+  const facts = holderFacts(db, row, queued);
+  const holder = holderOf(facts);
+  return holder ? { ...holder, detail: holderDetail(facts) } : null;
 }

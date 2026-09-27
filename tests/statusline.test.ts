@@ -7,7 +7,8 @@ import {
   type StatuslineInput,
 } from "../cli/statusline.ts";
 import type { TopRow } from "../cli/top.ts";
-import type { Holder } from "../server/tasks/holder.ts";
+import { HOLDER_WIDTH, type Holder } from "../server/tasks/holder.ts";
+import { width } from "../server/text-width.ts";
 
 const now = 10 * 60 * 60_000;
 const row = (ref: string, holder: Holder | null, extra: Partial<TopRow> = {}) =>
@@ -205,4 +206,27 @@ test("状态栏：紧急任务标「紧急」，暂停派新活时写清是哪�
     }),
   });
   assert.match(byLoad, /本机太忙，排队中（整机负载 35，超过 32）/);
+});
+
+test("状态栏：旧服务给的整篇原因与多行标题只出一行，按显示宽度截断", () => {
+  const essay = `合入没过（审阅打回（t132，codex）：## 必须改的问题\n\n1. **性能目标没达到**：${"很长".repeat(80)}\n## 可选建议\n- 改名） · 已交回执行者`;
+  const out = render({
+    snapshot: snapshot([
+      row(
+        "t123",
+        { kind: "worker", who: "claude+opus:high", text: essay },
+        { title: "第一行标题\n第二行" },
+      ),
+    ]),
+  });
+  const lines = out.split("\n");
+  assert.equal(lines.length, 2, out);
+  assert.match(
+    lines[1]!,
+    /^● t123 「第一行标题」 claude · opus 12m · 合入没过/,
+  );
+  assert.ok(!out.includes("可选建议") && !out.includes("第二行"), out);
+  const story = lines[1]!.split(" · ").slice(2).join(" · ");
+  assert.ok(width(story) <= HOLDER_WIDTH + 12, story);
+  assert.ok(story.endsWith("## 必须改的问题"), story);
 });

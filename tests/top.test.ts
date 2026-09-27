@@ -419,6 +419,32 @@ test("看板：卡住后补备注显示处理中，备注列在任务行下并�
   assert.ok(lines.every((line) => width(line) <= 80));
 });
 
+test("看板：受阻原因是整篇多行文字时只出第一行，状态列不被它撑宽", () => {
+  const essay = `审阅打回（t132，codex）：## 必须改的问题\n1. **性能目标没达到**\n${"细节很长。".repeat(40)}`;
+  const frame = renderTop(
+    snapshot([
+      row({ ref: "t22", status: "blocked", reason: essay }),
+      row({
+        ref: "t23",
+        status: "blocked",
+        reason: "等 CI",
+        holder: {
+          kind: "worker",
+          who: null,
+          text: `合入没过（${essay}） · 已交回执行者`,
+        },
+      }),
+    ]),
+    { width: 80, now: NOW, footer: false, color: false },
+  );
+  const lines = frame.split("\n");
+  assert.ok(!frame.includes("细节很长"), frame);
+  assert.ok(!frame.includes("性能目标"), frame);
+  assert.match(lines[1]!, /卡住：审阅打回（t132，codex）：## 必须改/);
+  for (const line of lines)
+    assert.ok(width(line) <= 80, `超宽：${width(line)}｜${line}`);
+});
+
 test("看板：紧急任务的标题前写「紧急」，照样受终端宽度约束", () => {
   const frame = renderTop(
     snapshot([

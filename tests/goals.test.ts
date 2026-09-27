@@ -272,6 +272,45 @@ test("多层目标树：顶层只有 u1 能建改，里程碑按部门 leader；
   db.close();
 });
 
+test("目标树汇总下层任务和前置，不重复计数", () => {
+  const db = setup();
+  addGoal(db, { result: "顶层" }, "u1");
+  addGoal(db, { result: "前置", parent: "g1", node: "atrium" }, "a1");
+  addGoal(
+    db,
+    { result: "阶段", parent: "g1", node: "atrium", after: "g2" },
+    "a1",
+  );
+  addGoal(db, { result: "子阶段", parent: "g3", after: "g2" }, "a1");
+  const a = createTask(db, { title: "在跑", goal: "g3" });
+  const b = createTask(db, { title: "卡住", goal: "g4" });
+  createTask(db, { title: "完成", goal: "g4" });
+  db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(
+    Number(a.ref.slice(1)),
+  );
+  db.prepare("UPDATE tasks SET status='blocked' WHERE id=?").run(
+    Number(b.ref.slice(1)),
+  );
+  db.prepare("UPDATE tasks SET status='done' WHERE title='完成'").run();
+  const root = goalTree(db).goals[0]!;
+  assert.deepEqual(root.summary, {
+    running: 1,
+    open: 2,
+    blocked: 1,
+    waiting_for: ["g2"],
+  });
+  assert.deepEqual(root.children[1]!.summary, root.summary);
+  assert.deepEqual(root.tasks, {
+    todo: 0,
+    running: 0,
+    blocked: 0,
+    done: 0,
+    failed: 0,
+    cancelled: 0,
+  });
+  db.close();
+});
+
 test("挪层级：不能挪到自己下层、不能把顶层挂到别处；深度有上限", () => {
   const db = setup();
   addGoal(db, { result: "顶层" }, "u1");

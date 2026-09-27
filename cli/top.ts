@@ -5,6 +5,9 @@ import { clip, pad, printJson, width } from "./format.ts";
 import type { Client } from "./service.ts";
 import type { Command, Values } from "./main.ts";
 import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
+import { renderTopGoals } from "./top-goals.ts";
+import type { GoalNode } from "../server/goals/read.ts";
+import { DEPTH_MAX } from "../server/goals/rules.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -52,6 +55,9 @@ export type Snapshot = {
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
   plan?: PlanView | null;
   plan_error?: string;
+  /** 目标树（`/api/goals/tree`）；取不到为 null，原因在 goals_error。 */
+  goals?: GoalNode[] | null;
+  goals_error?: string;
 };
 
 // 不从 main.ts 取值：测试先加载本模块，main.ts 再回头引入会撞上循环初始化。
@@ -91,6 +97,17 @@ function columns(value: string | undefined) {
       "usage",
     );
   return number;
+}
+
+export function goalsDepth(value: string | undefined) {
+  if (value === undefined) return 2;
+  if (!/^[1-9][0-9]*$/.test(value) || Number(value) > DEPTH_MAX)
+    throw new Problem(
+      400,
+      `--goals-depth 应为 1～${DEPTH_MAX} 的整数（收到：${value}）`,
+      "usage",
+    );
+  return Number(value);
 }
 
 // ---- 一行画成什么样 ----
@@ -153,6 +170,7 @@ export type Frame = {
   color: boolean;
   /** 终端行数；给了就让排期段填满剩下的高度，没给用 PLAN_LINES。 */
   height?: number;
+  goalsDepth?: number;
 };
 
 const DIM = "\x1b[2m";
@@ -256,6 +274,30 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   if (!rows.length) lines.push("现在没有在跑、排队或受阻的任务");
   if (snapshot.truncated)
     lines.push(`（任务过多，只显示前 ${rows.length} 个）`);
+  if (snapshot.goals) {
+    lines.push("");
+    const room = frame.height
+      ? Math.max(
+          3,
+          frame.height - lines.length - PLAN_MIN_LINES - (frame.footer ? 1 : 0),
+        )
+      : 20;
+    lines.push(
+      ...renderTopGoals(
+        snapshot.goals,
+        frame.width,
+        frame.goalsDepth ?? 2,
+        room,
+      ),
+    );
+  } else if (snapshot.goals === null)
+    lines.push(
+      "",
+      clip(
+        `目标：取不到（${snapshot.goals_error ?? "未知原因"}）`,
+        frame.width,
+      ),
+    );
   if (snapshot.plan) {
     lines.push("");
     const room = frame.height
@@ -292,12 +334,12 @@ export const nextOf = (rows: TopRow[]) => {
 /** 终端再矮，排期段也至少留这么几行（含标题与折叠提示）。 */
 const PLAN_MIN_LINES = 4;
 
-/** 看板与排期一起取；排期取不到（如旧版服务）不影响看板，原因留在屏上。 */
+/** 看板、目标、排期一起取；附加接口取不到不影响看板。 */
 export async function snapshotOf(
   api: Client,
   as: string | undefined,
 ): Promise<Snapshot> {
-  const [snapshot, plan] = await Promise.all([
+  const [snapshot, plan, goals] = await Promise.all([
     api.get<Snapshot>(path(as)),
     api.get<PlanView>("/tasks/plan").then(
       (value) => ({ value }),
@@ -305,12 +347,26 @@ export async function snapshotOf(
         error: error instanceof Error ? error.message : String(error),
       }),
     ),
+    api.get<{ goals: GoalNode[] }>("/goals/tree").then(
+      (value) => ({ value }),
+      (error: unknown) => ({
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    ),
   ]);
-  if ("error" in plan)
-    return { ...snapshot, plan: null, plan_error: plan.error };
-  if (!plan.value?.groups || typeof plan.value.groups !== "object")
-    return { ...snapshot, plan: null, plan_error: "排期接口返回的格式看不懂" };
-  return { ...snapshot, plan: plan.value };
+  return {
+    ...snapshot,
+    ...("error" in goals
+      ? { goals: null, goals_error: goals.error }
+      : Array.isArray(goals.value?.goals)
+        ? { goals: goals.value.goals }
+        : { goals: null, goals_error: "目标接口返回的格式看不懂" }),
+    ...("error" in plan
+      ? { plan: null, plan_error: plan.error }
+      : plan.value?.groups && typeof plan.value.groups === "object"
+        ? { plan: plan.value }
+        : { plan: null, plan_error: "排期接口返回的格式看不懂" }),
+  };
 }
 
 export const path = (as: string | undefined) =>
@@ -369,6 +425,7 @@ export async function watch(
   seconds: number,
   terminal: Terminal,
   once = false,
+  depth = 2,
 ) {
   let stopped = false;
   const stop = () => {
@@ -409,6 +466,7 @@ export async function watch(
               footer: true,
               color: terminal.color(),
               height: terminal.rows?.(),
+              goalsDepth: depth,
             })
           : `Atrium · ${reason}`,
       );
@@ -425,13 +483,14 @@ export async function watch(
 }
 
 export const topCommand: Command = {
-  args: "[--once] [--json] [--interval 秒] [--width 列] [--as 订阅者]",
+  args: "[--once] [--json] [--interval 秒] [--width 列] [--goals-depth N] [--as 订阅者]",
   about:
-    "实时看谁在干活：在跑、排队、受阻与刚结束的任务，带执行者、已运行时长与最近一个动作；下面是排期（就绪、依赖链、等待中及在等谁）；缺省每 2 秒刷新，q 或 Ctrl-C 退出",
+    "实时看谁在干活、目标树上两层的状态与任务汇总，以及排期；--goals-depth 展开目标层数；缺省每 2 秒刷新，q 或 Ctrl-C 退出",
   options: {
     once: { type: "boolean", default: false },
     interval: { type: "string" },
     width: { type: "string" },
+    "goals-depth": { type: "string" },
     as: { type: "string" },
   },
   positionals: [0, 0],
@@ -441,6 +500,7 @@ export const topCommand: Command = {
       throw new Problem(400, "--as 不能为空", "usage");
     const seconds = interval(str(values, "interval"));
     const width_ = columns(str(values, "width"));
+    const depth = goalsDepth(str(values, "goals-depth"));
     // 非终端、--once 与 --json 都只打一次；实时模式要能接管按键与清屏。
     const once =
       values.once === true ||
@@ -448,7 +508,7 @@ export const topCommand: Command = {
       !process.stdout.isTTY ||
       !process.stdin.isTTY;
     const api = await client();
-    if (!once) return watch(api, as, seconds, liveTerminal());
+    if (!once) return watch(api, as, seconds, liveTerminal(), false, depth);
     const snapshot = await snapshotOf(api, as);
     if (json) {
       printJson(snapshot);
@@ -460,6 +520,7 @@ export const topCommand: Command = {
           now: Date.now(),
           footer: false,
           color: false,
+          goalsDepth: depth,
         }),
       );
       recordNext(`动作：${nextOf(snapshot.rows)}`);

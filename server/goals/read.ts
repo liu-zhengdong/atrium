@@ -11,6 +11,7 @@ import {
   type GoalRow,
 } from "./model.ts";
 import { STATUS_LABEL, prerequisiteMet, type GoalStatus } from "./rules.ts";
+import { summarize, type GoalSummary } from "./summary.ts";
 
 export type GoalTasks = {
   todo: number;
@@ -122,7 +123,12 @@ function taskCounts(db: DatabaseSync): Map<number, GoalTasks> {
   return counts;
 }
 
-export type GoalNode = GoalView & { tasks: GoalTasks; children: GoalNode[] };
+export type GoalNode = GoalView & {
+  tasks: GoalTasks;
+  /** 直接及全部下层里程碑的任务和未达成前置汇总。 */
+  summary: GoalSummary;
+  children: GoalNode[];
+};
 
 /** 整棵目标树（或 root 那一棵）；按 id 升序，父节点总先建。 */
 export function goalTree(db: DatabaseSync, root?: unknown) {
@@ -137,6 +143,7 @@ export function goalTree(db: DatabaseSync, root?: unknown) {
     built.set(row.id, {
       ...view(row, ctx),
       tasks: counts.get(row.id) ?? emptyTasks(),
+      summary: { running: 0, open: 0, blocked: 0, waiting_for: [] },
       children: [],
     });
   const roots: GoalNode[] = [];
@@ -147,6 +154,7 @@ export function goalTree(db: DatabaseSync, root?: unknown) {
     else if (row.parent_id !== null)
       built.get(row.parent_id)?.children.push(node);
   }
+  for (const root of roots) summarize(root);
   return { goals: roots };
 }
 

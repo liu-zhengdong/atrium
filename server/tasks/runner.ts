@@ -31,6 +31,9 @@ import { TaskWaits } from "./waits.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import { workerEnvironment } from "./worker-env.ts";
 import { readRestartState } from "../supervisor.ts";
+import { Scheduler, planItem } from "./schedule.ts";
+import { requireRow } from "./ledger-model.ts";
+import { schedulePrExec } from "./schedule-pr.ts";
 import type { LaunchOptions } from "./workspace.ts";
 
 /**
@@ -64,6 +67,7 @@ export class TaskRunner {
   private readonly x: Executors;
   private readonly waits: TaskWaits;
   private readonly quota: QuotaGuard;
+  private readonly scheduler: Scheduler;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly exec: Exec;
   private readonly launchOptions: LaunchOptions;
@@ -71,6 +75,7 @@ export class TaskRunner {
   private polling = false;
   /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
   private readonly cwds = new Map<number, string>();
+  private recovered = false;
   private restartPending: boolean;
 
   constructor(
@@ -115,6 +120,12 @@ export class TaskRunner {
       closed: () => this.closed,
       paused: () => this.restartPending,
     });
+    this.scheduler = new Scheduler(
+      db,
+      this.inbox,
+      (ref) => this.run(ref, {}),
+      options.exec ?? schedulePrExec,
+    );
   }
 
   /** 启动看门狗（顺带解除到期的额度标记）与 CI 轮询，并在后台自愈上次遗留的运行中任务（不阻塞启动）。 */
@@ -129,11 +140,15 @@ export class TaskRunner {
     every(this.options.tickMs ?? 5000, async () => {
       await this.x.tick();
       if (!this.closed) await this.quota.releaseExpired(this.x);
+      if (!this.closed && this.recovered) await this.scheduler.tick();
     });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
-    void this.recover().catch((error) =>
-      console.error("任务运行时自愈失败：", error),
-    );
+    void this.recover()
+      .then(async () => {
+        this.recovered = true;
+        if (!this.closed) await this.scheduler.tick();
+      })
+      .catch((error) => console.error("任务运行时自愈失败：", error));
   }
 
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
@@ -185,6 +200,18 @@ export class TaskRunner {
     const request = runRequest(body);
     const id = parseTaskRef(reference);
     const task = getTask(this.db, id);
+    const schedule = planItem(this.db, requireRow(this.db, id));
+    if (
+      schedule.group === "waiting" ||
+      (schedule.group === "blocked" && task.schedule_state === "blocked")
+    )
+      throw new Problem(
+        409,
+        `${task.ref} 依赖未就绪：${schedule.reason ?? schedule.waiting_for.join("、")}`,
+        "conflict",
+        undefined,
+        "atrium task plan",
+      );
     const admission = admit({
       status: task.status,
       running: this.x.active.has(id) || this.x.launching.has(id),

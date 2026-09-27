@@ -147,6 +147,9 @@ atrium task add "表与状态机" --parent t1 --role web --brief docs/t2.md   # 
 atrium task add "组织树设计" --repo ~/code/atrium --deliver comment --issue 262   # 评论交付；运行期间须在该 issue 新增评论
 atrium task add "调查运行器" --deliver none      # 摘要交付；只按退出情况验收。默认 --deliver pr
 atrium task ls --status running               # 列任务；--parent t1 只看直接子任务，--after tN 翻页
+atrium task add "验收" --after t2,t3 --after-pr owner/repo#6 --auto  # 全部依赖满足后自动派活
+atrium task plan                              # 在跑、就绪、等待中、卡住；--json 可供脚本读取
+atrium task done t2                           # 人工完成并触发下游排期
 atrium task show t2                           # 详情：交付物类型、字段、执行者、PR、最近事件
 atrium task tree t1                           # 缩进树：短号、状态、标题、交付物、执行者、PR；不写 tN 看全部
 atrium task set t2 --status done              # 人工收尾；running 只能由执行者启动进入

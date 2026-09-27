@@ -22,6 +22,10 @@ export type TaskRow = {
   ci: string | null;
   result: string | null;
   owner: string | null;
+  auto: number;
+  auto_dispatched: number;
+  schedule_state: string | null;
+  schedule_reason: string | null;
   created_at: number;
   started_at: number | null;
   ended_at: number | null;

@@ -22,6 +22,7 @@ import {
   title,
 } from "./ledger-validate.ts";
 import { applyTransition } from "./ledger-transition.ts";
+import { setConditions } from "./schedule-ledger.ts";
 import {
   deliverOf,
   issueOf,
@@ -38,6 +39,9 @@ export type NewTask = {
   owner?: string | null;
   deliver?: Deliver;
   issue?: number;
+  after?: string;
+  after_pr?: string;
+  auto?: boolean;
 };
 
 export function createTask(
@@ -55,6 +59,9 @@ export function createTask(
     "owner",
     "deliver",
     "issue",
+    "after",
+    "after_pr",
+    "auto",
   ]);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
@@ -88,6 +95,7 @@ export function createTask(
         now,
       );
     const id = Number(lastInsertRowid);
+    setConditions(db, id, input, now);
     addEvent(db, id, now, "created", {
       title: values.title,
       ...(parent ? { parent: taskRef(parent) } : {}),
@@ -112,10 +120,13 @@ export function updateTask(
     "status",
     "deliver",
     "issue",
+    "after",
+    "after_pr",
+    "auto",
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、status、deliver、issue",
+      "至少修改一项：title、brief_path、role、status、deliver、issue、after、after_pr、auto",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -127,6 +138,7 @@ export function updateTask(
   const target = "status" in input ? statusOf(input.status) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
+    setConditions(db, id, input, now);
     if (
       current.status === "running" &&
       ((fields.deliver !== undefined && fields.deliver !== current.deliver) ||

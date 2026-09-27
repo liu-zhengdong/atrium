@@ -12,6 +12,7 @@ import {
 } from "./ledger-model.ts";
 import { parentOf, statusOf } from "./ledger-validate.ts";
 import { childSummaries } from "./ledger-summary.ts";
+import { conditions } from "./schedule-ledger.ts";
 
 const EVENTS_SHOWN = 50;
 
@@ -29,6 +30,7 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     children: child_summary?.total ?? 0,
     child_summary,
     events,
+    ...conditions(db, found.id),
   };
 }
 

@@ -7,6 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -21,17 +22,44 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
-import { descendantsOf } from "./fixture-signal.ts";
+import {
+  descendantsOf,
+  finishFixture,
+  sweepTestRun,
+  trackFixture,
+} from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 
 const exec = promisify(execFile);
 const victimScript = join(packageRoot, "tests", "fixtures", "signal-victim.ts");
 
+test("服务启动途中尚无登记时，仍按夹具目录杀掉进程", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-early-service-"));
+  const data = join(root, "data");
+  mkdirSync(data);
+  const fixture = trackFixture(data, root);
+  t.after(() => finishFixture(fixture));
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd: data,
+    detached: true,
+    stdio: "ignore",
+  });
+  assert.ok(child.pid);
+  await new Promise<void>((resolve) => child.once("spawn", resolve));
+  await finishFixture(fixture);
+  for (let i = 0; i < 20 && alive(child.pid); i++) await delay(50);
+  assert.equal(alive(child.pid), false);
+  assert.equal(existsSync(root), false);
+});
+
 type VictimInfo = { root: string; pid: number; descendants: number[] };
 
-function startVictim(cleanup: boolean) {
+function startVictim(cleanup: boolean, runId?: string) {
   const child = spawn(process.execPath, ["--import", "tsx", victimScript], {
-    env: childEnv({ VICTIM_NO_CLEANUP: cleanup ? "0" : "1" }),
+    env: childEnv({
+      VICTIM_NO_CLEANUP: cleanup ? "0" : "1",
+      ...(runId ? { ATRIUM_TEST_RUN_ID: runId } : {}),
+    }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
@@ -59,6 +87,25 @@ function startVictim(cleanup: boolean) {
   );
   return { child, ready, exited, stderr: () => stderr };
 }
+
+test(
+  "SIGKILL 测试子进程后，父启动器按本轮标记清理并判定遗留",
+  { timeout: 240000, skip: process.platform === "win32" },
+  async (t) => {
+    const runId = randomUUID();
+    const victim = startVictim(true, runId);
+    const box: { info?: VictimInfo } = {};
+    collectVictim(t, victim, box);
+    const info = await victim.ready;
+    box.info = info;
+    victim.child.kill("SIGKILL");
+    assert.equal((await victim.exited).signal, "SIGKILL");
+    assert.deepEqual(sweepTestRun(runId), [info.root]);
+    assert.equal(existsSync(info.root), false);
+    assert.equal(alive(info.pid), false);
+    assert.deepEqual(sweepTestRun(runId), []);
+  },
+);
 
 /** 打断前另起一个不属于本次测试的服务（不同数据目录），用来验证不误伤。 */
 async function startOutsider(t: { after: (fn: () => Promise<void>) => void }) {

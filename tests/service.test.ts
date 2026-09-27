@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -27,12 +27,18 @@ import {
   readService,
   serviceUrl,
 } from "../server/service-state.ts";
-import { trackChild, trackFixture, untrackFixture } from "./fixture-signal.ts";
+import {
+  assertNoFixtureLeaks,
+  finishFixture,
+  trackChild,
+  trackFixture,
+} from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 import { fixture as workerFixture, until } from "./task-fixture.ts";
 import { readRestartState } from "../server/supervisor.ts";
 
 const exec = promisify(execFile);
+after(assertNoFixtureLeaks);
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-service-"));
   const signal = trackFixture(join(root, "data"), root);
@@ -77,15 +83,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       };
     }
   };
-  t.after(async () => {
-    await cli("stop");
-    const record = readService(data);
-    // Only this fixture's service record, never the user's default instance.
-    if (record && record.pid !== process.pid && alive(record.pid))
-      process.kill(record.pid, "SIGKILL");
-    rmSync(root, { recursive: true, force: true });
-    untrackFixture(signal);
-  });
+  t.after(() => finishFixture(signal));
   const userHeaders = () => ({
     authorization: `Bearer ${readFileSync(userTokenPath(data), "utf8").trim()}`,
   });

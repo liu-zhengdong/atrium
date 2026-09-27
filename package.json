@@ -20,7 +20,7 @@
     "dev": "tsx watch server/main.ts",
     "build": "tsc --noEmit",
     "start": "tsx server/main.ts",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx tests/run-tests.ts",
     "check": "npm run build && npm test",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

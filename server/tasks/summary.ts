@@ -14,7 +14,7 @@ export function summarize(tail: string, json = false): string {
   return clipResult(tail.trim());
 }
 
-/** 结构化日志里的步骤事件数（opencode 的 step_start/step_finish、claude 的 assistant/user 轮次）。 */
+/** 结构化日志里的步骤事件数（opencode 的 step_start/step_finish、claude 的 assistant/user 轮次、agy 的 step_update）。 */
 export function countSteps(chunk: string): number {
   let steps = 0;
   for (const line of chunk.split("\n")) {
@@ -25,7 +25,8 @@ export function countSteps(chunk: string): number {
       event.type === "step_finish" ||
       event.type === "tool_use" ||
       event.type === "assistant" ||
-      event.type === "user"
+      event.type === "user" ||
+      event.event === "step_update"
     )
       steps++;
   }

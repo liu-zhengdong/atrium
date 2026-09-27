@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { TOOLS } from "../server/tasks/adapters/index.ts";
+import { ADAPTERS, TOOLS } from "../server/tasks/adapters/index.ts";
 import { decideExit } from "../server/tasks/outcome.ts";
 import { pickWorker } from "../server/tasks/prepare.ts";
 import {
@@ -146,7 +146,9 @@ test("pickWorker：跳过额度标记未到期的账号；全部被标记报不�
     installed: [...TOOLS],
     risk: "low",
     profiles: {},
-    held: new Map(TOOLS.map((tool) => [tool, NOW + HOUR])),
+    held: new Map(
+      TOOLS.map((tool) => [ADAPTERS[tool].quotaProvider, NOW + HOUR]),
+    ),
   });
   assert.equal(none.ok, false);
   assert.match(!none.ok ? none.reason : "", /额度用尽/);

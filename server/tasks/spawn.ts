@@ -97,7 +97,13 @@ export async function spawnWorker(
       // 执行者提前退出时写端 EPIPE；退出由 exit 事件收尾。
     });
     if (launch.stdin)
-      child.stdin.write(userLine(readFileSync(launch.stdin, "utf8")));
+      child.stdin.write(
+        userLine(
+          readFileSync(launch.stdin, "utf8"),
+          undefined,
+          launch.inputDialect,
+        ),
+      );
     // 写端不拖住服务进程退出；服务退出时写端关闭，执行者处理完本轮后退出。
     (child.stdin as unknown as { unref?: () => void }).unref?.();
   }

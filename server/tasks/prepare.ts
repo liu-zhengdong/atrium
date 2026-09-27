@@ -191,6 +191,7 @@ export const FALLBACK_ORDER: readonly Tool[] = [
   "opencode",
   "grok",
   "kimi",
+  "agy",
 ];
 
 export type PickInput = {

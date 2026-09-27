@@ -102,6 +102,7 @@ export function planShares(
     "opencode",
     "kimi",
     "grok",
+    "antigravity",
   ]);
   if (problems.length) reject(node, problems);
   return parsed.entries;
@@ -126,6 +127,7 @@ export function checkStoredShares(
     "opencode",
     "kimi",
     "grok",
+    "antigravity",
   ]);
   if (problems.length) reject(node, problems);
 }

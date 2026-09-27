@@ -6,7 +6,14 @@ import { Problem } from "../../problem.ts";
  * 变成进程调用的纯函数。这里不拉起进程；拉起、日志、看门狗在「派活与等待」部分实现。
  */
 
-export const TOOLS = ["codex", "opencode", "claude", "grok", "kimi"] as const;
+export const TOOLS = [
+  "codex",
+  "opencode",
+  "claude",
+  "grok",
+  "kimi",
+  "agy",
+] as const;
 export type Tool = (typeof TOOLS)[number];
 export const isTool = (value: unknown): value is Tool =>
   typeof value === "string" && (TOOLS as readonly string[]).includes(value);
@@ -42,11 +49,15 @@ export type Launch = {
    * 运行中的捎话作为新的用户消息写入（live-input.ts）。
    */
   input?: "stream-json";
+  /** 消息流的格式：claude 为 `{type:"user",…}`（缺省），agy 为 `{event:"user",…}`（live-input.ts）。 */
+  inputDialect?: InputDialect;
   /** 工具会把最后一条消息写进这个文件（codex -o）。 */
   resultFile?: string;
   /** 在白名单环境之上额外设置的变量（挂载技能用的 CODEX_HOME 等）。 */
   env?: Record<string, string>;
 };
+
+export type InputDialect = "claude" | "agy";
 
 /**
  * 运行中捎话（atrium task tell）怎么送到（#307）：

@@ -1,5 +1,5 @@
 /**
- * 结构化日志（适配器 progressSignals 含 json_events：opencode --format json、claude stream-json）
+ * 结构化日志（适配器 progressSignals 含 json_events：opencode --format json、claude / agy stream-json）
  * 的解析（#262）：逐行 JSON 事件，取最后一条助手文本、识别异常结束。纯函数。
  */
 
@@ -52,7 +52,48 @@ export function textOf(event: JsonEvent): string | undefined {
   return undefined;
 }
 
-/** 最后一条助手文本；claude 的 result 事件是整段收尾，排在最后时优先用它。 */
+/** agy 的一步：`{event:"step_update",step_update:{step_index,step_type,state,text_delta?,tool_name?,tool_info?}}`。 */
+export function agyStep(event: JsonEvent) {
+  if (event.event !== "step_update") return undefined;
+  const step = object(event.step_update);
+  return step && typeof step.step_index === "number"
+    ? (step as JsonEvent & { step_index: number })
+    : undefined;
+}
+
+/** agy 收尾 result 事件里的整段回复。 */
+function agyResponse(event: JsonEvent) {
+  if (event.event !== "result") return undefined;
+  const response = object(event.result)?.response;
+  return typeof response === "string" && response.trim() ? response : undefined;
+}
+
+/**
+ * agy 的助手文本是逐段的 text_delta：从第 end 个事件往前，把同一步（step_index 相同）的片段拼回一段。
+ * 返回拼好的文本与这一步第一个片段的位置；end 不是文本片段时返回 undefined。
+ */
+export function agyTextAt(
+  events: JsonEvent[],
+  end: number,
+): { text: string; start: number } | undefined {
+  const last = agyStep(events[end]!);
+  if (
+    last?.step_type !== "agent_response" ||
+    typeof last.text_delta !== "string"
+  )
+    return undefined;
+  const parts: string[] = [];
+  let start = end;
+  for (let i = end; i >= 0; i--) {
+    const step = agyStep(events[i]!);
+    if (!step || step.step_index !== last.step_index) break;
+    if (typeof step.text_delta === "string") parts.unshift(step.text_delta);
+    start = i;
+  }
+  return { text: parts.join(""), start };
+}
+
+/** 最后一条助手文本；claude 的 result 事件、agy 的 result.response 是整段收尾，排在最后时优先用它。 */
 export function lastAssistantText(events: JsonEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
@@ -62,6 +103,14 @@ export function lastAssistantText(events: JsonEvent[]): string | undefined {
       event.result.trim()
     )
       return event.result;
+    const response = agyResponse(event);
+    if (response !== undefined) return response;
+    const pieces = agyTextAt(events, i);
+    if (pieces) {
+      if (pieces.text.trim()) return pieces.text;
+      i = pieces.start;
+      continue;
+    }
     const text = textOf(event);
     if (text !== undefined) return text;
   }
@@ -93,6 +142,7 @@ const count = (value: unknown) =>
  * 思考耗尽单次输出（#262）：opencode 的 step_finish `reason: "length"`，
  * `tokens.reasoning` 大于 0 而 `tokens.output` 为 0 或极少。
  * claude stream-json 的 usage 不分思考与正文、中间事件的 stop_reason 为 null，没有等价信号，不判；
+ * agy 的步骤 usage 有 thinking_tokens，但没有结束原因与单次上限，分不出「用满了」还是「本来就只想了这些」，也不判；
  * codex、kimi、grok 是文本日志，也不判。
  */
 export function thinkingExhausted(

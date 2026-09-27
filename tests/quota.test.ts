@@ -273,6 +273,7 @@ test("listQuota：假 pace 按富余降序，没有额度标记时 runtime 为�
         ["opencode", 59.7, null],
         ["claude", 54.2, null],
         ["codex", -5.6, null],
+        ["antigravity", null, null],
         ["copilot", null, null],
         ["grok", null, null],
         ["kimi", null, null],
@@ -284,6 +285,7 @@ test("listQuota：假 pace 按富余降序，没有额度标记时 runtime 为�
         ["opencode", "openquota", null],
         ["claude", "openquota", null],
         ["codex", "openquota", null],
+        ["antigravity", null, "没有额度数据"],
         ["copilot", "openquota", null],
         ["grok", null, "没有额度数据"],
         ["kimi", null, "没有额度数据"],
@@ -378,6 +380,7 @@ test("listQuota：没装 OpenQuota 也不报错，执行者账号显示没有额
   assert.deepEqual(
     result.accounts.map((row) => [row.providerId, row.source, row.note]),
     [
+      ["antigravity", null, "没有额度数据"],
       ["claude", null, "没有额度数据"],
       ["codex", null, "没有额度数据"],
       ["grok", null, "没有额度数据"],
@@ -394,7 +397,7 @@ test("listQuota：OpenQuota 输出无法解析或非 0 退出时照常返回并�
     const bin = fakeBin(dir, "#!/bin/sh\necho oops\n");
     const parse = await listQuota({ bin, readers: null });
     assert.deepEqual(parse.notes, ["OpenQuota 输出无法解析"]);
-    assert.equal(parse.accounts.length, 5);
+    assert.equal(parse.accounts.length, 6);
     fakeBin(dir, "#!/bin/sh\nexit 3\n");
     assert.deepEqual((await listQuota({ bin, readers: null })).notes, [
       "读取 OpenQuota 额度失败",
@@ -506,7 +509,7 @@ test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => 
     const body = ok.json() as { accounts: QuotaAccount[] };
     assert.deepEqual(
       body.accounts.map((row) => row.providerId),
-      ["opencode", "claude", "codex", "copilot", "grok", "kimi"],
+      ["opencode", "claude", "codex", "antigravity", "copilot", "grok", "kimi"],
     );
     assert.equal(body.accounts[0]!.runtime, null);
     assert.equal(body.accounts[0]!.hold, null);

@@ -1,7 +1,13 @@
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
 import { clip } from "../text-width.ts";
 import { commandGist } from "./command-gist.ts";
-import { parseEvents, textOf, type JsonEvent } from "./json-log.ts";
+import {
+  agyStep,
+  agyTextAt,
+  parseEvents,
+  textOf,
+  type JsonEvent,
+} from "./json-log.ts";
 
 /**
  * 执行者日志里的「最近动作」（#262 `atrium top`、#322 全景网页）：看板要让人一眼看懂执行者此刻在做什么。
@@ -9,7 +15,7 @@ import { parseEvents, textOf, type JsonEvent } from "./json-log.ts";
  * 没有时退回最后一次工具调用的人话概括：读/改了哪个文件（只写文件名）、跑了什么检查
  * （command-gist.ts），不显示命令参数与 heredoc 内容。纯函数，只读入参里的文本。
  *
- * 按适配器选解析方式：progressSignals 含 json_events 的（claude stream-json、opencode --format json）
+ * 按适配器选解析方式：progressSignals 含 json_events 的（claude / agy stream-json、opencode --format json）
  * 逐行 JSON 事件；codex 的 exec 不带 --json，是分段纯文本，单独一套解析。grok、kimi 的输出格式
  * 没有样本，一律返回 undefined，由命令行显示「日志 N 秒前有输出」，不猜。
  */
@@ -68,18 +74,33 @@ const step = (text: string): Action | undefined => {
 const fileName = (path: string) =>
   path.replace(/\/+$/, "").split("/").pop() || path;
 
-/** 工具名 → 人话；名字大小写不敏感（claude 是 Bash、opencode 是 bash）。 */
-const PATH_KEYS = ["filePath", "file_path", "path", "notebook_path"];
+/** 工具名 → 人话；名字大小写不敏感（claude 是 Bash、opencode 是 bash，agy 是 run_command、view_file 等）。 */
+const PATH_KEYS = [
+  "filePath",
+  "file_path",
+  "path",
+  "notebook_path",
+  "AbsolutePath",
+  "TargetFile",
+];
+const COMMAND_TOOLS = new Set(["bash", "shell", "run_command"]);
+const COMMAND_KEYS = ["command", "CommandLine"];
 const FILE_VERBS: Record<string, string> = {
   read: "读",
   view: "读",
+  view_file: "读",
   write: "写",
   create: "写",
+  write_to_file: "写",
   edit: "改",
   patch: "改",
   multiedit: "改",
   notebookedit: "改",
+  notebook_edit: "改",
   apply_patch: "改",
+  replace_file_content: "改",
+  multi_replace_file_content: "改",
+  sed_file: "改",
 };
 const FIXED: Record<string, string> = {
   grep: "搜代码",
@@ -94,6 +115,12 @@ const FIXED: Record<string, string> = {
   bashoutput: "看后台输出",
   killshell: "停后台命令",
   toolsearch: "找工具",
+  grep_search: "搜代码",
+  find_by_name: "列文件",
+  list_dir: "列目录",
+  read_url_content: "取网页",
+  search_web: "搜网页",
+  command_status: "看后台输出",
 };
 
 const object = (value: unknown) =>
@@ -111,8 +138,8 @@ function textIn(input: JsonEvent | undefined, key: string) {
 export function describe(name: string, input: JsonEvent | undefined): Action {
   const key = name.toLowerCase();
   const tool = (text: string): Action => ({ kind: "tool", text: cap(text) });
-  if (key === "bash" || key === "shell") {
-    const command = textIn(input, "command");
+  if (COMMAND_TOOLS.has(key)) {
+    const command = COMMAND_KEYS.map((k) => textIn(input, k)).find(Boolean);
     return tool(command ? commandGist(command) : "跑命令");
   }
   const verb = FILE_VERBS[key];
@@ -121,7 +148,7 @@ export function describe(name: string, input: JsonEvent | undefined): Action {
     return tool(path ? `${verb} ${fileName(path)}` : `${verb}文件`);
   }
   if (FIXED[key]) return tool(FIXED[key]);
-  if (key === "task" || key === "agent") {
+  if (key === "task" || key === "agent" || key === "invoke_subagent") {
     const what = textIn(input, "description");
     return tool(what ? `派子任务：${what}` : "派子任务");
   }
@@ -133,16 +160,32 @@ export function describe(name: string, input: JsonEvent | undefined): Action {
 }
 
 /**
- * 结构化日志（claude stream-json、opencode --format json）里的最近动作。
- * 从后往前找：助手文本（opencode 的 text 事件、claude assistant 的 text 块）一出现就用它的首句；
- * 找到头也没有文本，才用最后一次工具调用（opencode 的 tool_use 事件、claude 的 tool_use 块）。
- * claude 的 user 事件只是工具结果，不是动作。
+ * 结构化日志（claude / agy stream-json、opencode --format json）里的最近动作。
+ * 从后往前找：助手文本（opencode 的 text 事件、claude assistant 的 text 块、agy 同一步的 text_delta 拼起来）
+ * 一出现就用它的首句；找到头也没有文本，才用最后一次工具调用（opencode 的 tool_use 事件、claude 的 tool_use 块、
+ * agy step_type 为 tool 的步骤）。claude 的 user 事件只是工具结果，不是动作。
  */
 export function structuredAction(tail: string): Action | undefined {
   const events = parseEvents(tail);
   let lastTool: Action | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
+    // agy：{event:"step_update",step_update:{step_type:"tool",tool_name,tool_info:{parameters}}}
+    const agy = agyStep(event);
+    if (agy) {
+      if (agy.step_type === "tool")
+        lastTool ??= describe(
+          String(agy.tool_name ?? ""),
+          object(object(agy.tool_info)?.parameters),
+        );
+      const pieces = agyTextAt(events, i);
+      if (pieces) {
+        const said = step(pieces.text);
+        if (said) return said;
+        i = pieces.start;
+      }
+      continue;
+    }
     // opencode：{type:"tool_use",part:{tool,state:{input}}}
     if (event.type === "tool_use") {
       const part = object(event.part);

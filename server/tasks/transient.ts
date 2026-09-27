@@ -17,7 +17,7 @@ export type TransientInput = {
   /** 退出码：0 不判（跑完了就按关卡收尾）；null（被信号结束或退出码未知）也不判。 */
   exitCode: number | null;
   logTail: string;
-  /** 适配器是否输出结构化事件（opencode --format json、claude stream-json）。 */
+  /** 适配器是否输出结构化事件（opencode --format json、claude / agy stream-json）。 */
   json: boolean;
 };
 
@@ -58,9 +58,18 @@ function classify(text: string) {
 
 /**
  * 出错事件的正文：opencode `{type:"error",error:{name,data:{message}}}`；
- * claude stream-json `{type:"result",is_error:true,result}`。其他事件返回 undefined。
+ * claude stream-json `{type:"result",is_error:true,result}`；
+ * agy stream-json `{event:"result",result:{status:"ERROR",error}}`。其他事件返回 undefined。
  */
 export function errorText(event: JsonEvent): string | undefined {
+  if (event.event === "result") {
+    const result = object(event.result);
+    if (!result || result.status === "SUCCESS") return undefined;
+    const parts = [result.status, result.error].filter(
+      (part): part is string => typeof part === "string" && !!part,
+    );
+    return parts.length ? parts.join(": ") : undefined;
+  }
   if (event.type === "error") {
     const error = object(event.error);
     const parts = [
@@ -81,11 +90,14 @@ export function errorText(event: JsonEvent): string | undefined {
   return undefined;
 }
 
-/** 最后一个出错事件；它不是临时错误就不再往前找（更早的错误执行者已经越过去了）。 */
+/** 最后一个出错事件；它不是临时错误、或之后有一轮成功（agy 的 SUCCESS result）就不再往前找（更早的错误执行者已经越过去了）。 */
 function fromEvents(text: string): TransientHit | undefined {
   const events = parseEvents(text);
   for (let i = events.length - 1; i >= 0; i--) {
-    const body = errorText(events[i]!);
+    const event = events[i]!;
+    if (event.event === "result" && object(event.result)?.status === "SUCCESS")
+      return undefined;
+    const body = errorText(event);
     if (body === undefined) continue;
     const kind = classify(body);
     return kind ? hit(kind, body) : undefined;

@@ -60,6 +60,11 @@ export function renderCouncil(view: CouncilView, full = true): string {
       ...(full && o.text?.trim() ? [indent(o.text)] : []),
     ]),
   ];
+  if (view.stage === "closed")
+    lines.push(
+      "",
+      `已关闭：${view.conclusion ?? "议题任务已取消"}；要重议另发起会审`,
+    );
   if (view.stage === "decided" || view.stage === "escalated") {
     lines.push("", `汇总（${view.summary.task}）：`);
     if (view.agreed.length)
@@ -184,7 +189,9 @@ const show: Command = {
         ? `用户拍板后记下：atrium review decide ${id} 结论`
         : view.stage === "decided"
           ? `按结论建后续任务：atrium task add 标题 --parent ${id}`
-          : `等结论：atrium task wait ${id}`,
+          : view.stage === "closed"
+            ? `要重议另发起会审：atrium review add 议题 --concerns 专员`
+            : `等结论：atrium task wait ${id}`,
     );
   },
 };

@@ -18,6 +18,7 @@ import {
   releaseHold,
   routeAfterQuota,
 } from "./quota-holds.ts";
+import { hasEvent } from "./ledger-model.ts";
 import { enqueue } from "./queue.ts";
 import type { QuotaHit } from "./settle.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
@@ -108,9 +109,8 @@ export class QuotaGuard {
     });
     const route = routeAfterQuota({
       switchAllowed: active.worker.profile.rules.switch_on_quota !== false,
-      switched: getTask(db, active.id).events.some(
-        (event) => event.kind === "quota_switch",
-      ),
+      // 按事件类型直查：getTask 只带最近 50 条事件，事件多的任务会被看成没换过、重复换人。
+      switched: hasEvent(db, active.id, "quota_switch"),
     });
     if (route.kind === "blocked")
       return x.publish(active.id, "blocked", { ...base, note: route.why });

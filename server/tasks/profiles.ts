@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   ADAPTERS,
@@ -63,9 +61,6 @@ export type EffectiveProfile = {
   layers: ProfileLayer[];
   warnings: string[];
 };
-
-/** 旧版档案目录；只在首次启动导入一次（worker-profiles.ts importWorkerProfiles）。 */
-export const DEFAULT_WORKERS_DIR = join(homedir(), "Atrium", "workers");
 
 export type WorkerSpec = { tool: Tool; model?: string; effort?: string };
 

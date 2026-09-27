@@ -84,7 +84,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 
 **派活候选**（`task pick tN [--risk …]`，只读）：一行一位候选执行者——能不能接（没装、档案 `max_risk` 低于任务风险、`avoid_jobs` / `avoid_nodes` 避开、额度用尽标记、触及根章程保留份额、`billing=metered`；trust 低于 medium 的注明合入前另派审阅）、账号额度（已用、富余、距重置、扣掉保留份额后还剩多少）、是否正忙（独占工具，派了会排队）、此组合在干活的专员下的交付记录（次数、一次通过率）。最上面是推荐与一句理由（如「推荐 claude+opus：前端专员优先、claude 富余 +54%；codex 富余 −13%」），最后一行是 `atrium task run tN --worker <推荐>`；`--json` 给全部字段。候选顺序：干活的专员的优先执行者（按交付记录调整后的顺序）里能接、不正忙的在前，其余能接的按账号富余从多到少，正忙的独占工具最后；专员第 1 选超速（富余为负）而另有能接、不正忙、trust 至少 medium（且够接任务 risk）的候选富余为正且多出 30 个百分点以上时，改推荐那一位（专员候选优先），理由写「后端专员第 1 选 codex+gpt-6-sol:high 超速（codex −17%），改用第 2 选 claude+opus:high（claude +52%）」。理由只对照最多两个相关账号。`task run` 不写 `--worker`（含 `--auto` 自动派）时按同一份顺序挑，回执写「按额度挑了 X，因为…」；写死 `--worker` 且不是推荐的那位时，若另有候选按同一判定（同一个 30 点阈值）更富余，回执加一行提醒（不拦），按推荐写死不提醒。`task add --parent` 建出的子任务回执下一步是 `atrium task pick tN`（顶层任务仍提示拆子任务）。
 
-**执行者档案**存在数据目录的数据库里，每次改动留修订。三层叠加：`harness/<工具>` ← `models/<模型>` ← `combos/<工具>+<模型>`。每份档案是 frontmatter + 正文：frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时取更严；正文原样附进提示词，其中 `## 交付记录` 一段作备注保留、不附进提示词（交付事实以交付记录表为准）。库里没有档案时用内置缺省（适配器的默认模型）。首次启动若 `ATRIUM_WORKERS_DIR`（缺省 `~/Atrium/workers/`）存在，把其中的 `*.md` 导入一次；读不了、名字不合法或超过 64 KB 的单个文件跳过并记日志，其余照常；导入后不再读这个目录。
+**执行者档案**存在数据目录的数据库里，每次改动留修订。三层叠加：`harness/<工具>` ← `models/<模型>` ← `combos/<工具>+<模型>`。每份档案是 frontmatter + 正文：frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时取更严；正文原样附进提示词，其中 `## 交付记录` 一段作备注保留、不附进提示词（交付事实以交付记录表为准）。库里没有档案时用内置缺省（适配器的默认模型）。首次启动若 `ATRIUM_WORKERS_DIR`（缺省 `~/Atrium/workers/`，只有默认数据目录才有缺省；另给 `ATRIUM_DATA` 的隔离服务不读主目录，要导入须显式设置）存在，把其中的 `*.md` 导入一次；读不了、名字不合法或超过 64 KB 的单个文件跳过并记日志，其余照常；导入后不再读这个目录。
 
 ```bash
 atrium workers ls
@@ -139,7 +139,7 @@ atrium quota --clear claude   # 人工解除运行时的额度占用（误判时
 | codex    | `~/.config/codex/auth.json`、`~/.codex/auth.json`（`CODEX_HOME` 覆盖）  | 同左                                                                       | 同左（`%USERPROFILE%` 下）                |
 | opencode | `~/.local/share/opencode/auth.json` 的 `opencode-go`                    | `$XDG_DATA_HOME/opencode/auth.json`，缺省同左                              | 同左（`%USERPROFILE%` 下）                |
 
-自带还没覆盖的账号（kimi、grok 等），本机装了 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 就用它补（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径），自带读不到的账号也先用它补并注明；都没有就显示「没有额度数据」，挑执行者退回档案顺序与运行时的额度用尽标记。给用户留的份额只读组织树：派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度，根章程没写时缺省 20%；`atrium quota` 表格下一行写明份额与出自哪份章程（`--json` 的 `reserve`）。旧的 `~/Atrium/charter.md` 不再读取：服务首次启动时，若根节点缺某项预算（`quota_reserve_percent`、`disk_min_free_gb`、`money`）而旧章程 frontmatter 的 `budget` 里有，就导入一次写进根章程（留修订），之后改预算用 `atrium org edit o1 --charter`。
+自带还没覆盖的账号（kimi、grok 等），本机装了 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 就用它补（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径），自带读不到的账号也先用它补并注明；都没有就显示「没有额度数据」，挑执行者退回档案顺序与运行时的额度用尽标记。给用户留的份额只读组织树：派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度，根章程没写时缺省 20%；`atrium quota` 表格下一行写明份额与出自哪份章程（`--json` 的 `reserve`）。旧的 `~/Atrium/charter.md` 不再读取：用默认数据目录的服务首次启动时（隔离服务只认显式的 `ATRIUM_LEGACY_DIR`），若根节点缺某项预算（`quota_reserve_percent`、`disk_min_free_gb`、`money`）而旧章程 frontmatter 的 `budget` 里有，就导入一次写进根章程（留修订），之后改预算用 `atrium org edit o1 --charter`。
 
 ## Claude Code 状态栏
 
@@ -184,7 +184,7 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 ```
 
 - **投给谁**：任务没写 `--owner` 时，从任务的归属部分（`--part`，旧任务的归属节点次之，都没写沿父任务往上找）向上找最近的、已登记的 leader；找不到投秘书。事件的 `routed` 写明投给谁、为什么。写了 `--owner`（包括 `--owner secretary`）就按负责人投。过程事件（合入、退回等知会）也投给 leader，但只有「要处理」的才唤醒它。
-- **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
+- **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。只有默认数据目录的服务缺省唤醒；另给 `ATRIUM_DATA` 的隔离服务（压测、验收）库里有 leader 也不起真进程、不耗额度，事件留在收件箱，要唤醒设 `ATRIUM_LEADER_WAKE=1`（`=0` 在默认目录也关）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
 - **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
 - **上交**只有四类：`shipped` 已上线（里程碑完成，须带 `--task`，说明里附端到端验证）、`cross` 需要别的部分配合、`beyond` 越过权限／预算／硬边界、`stuck` 搞不定（卡住多次、拿不定）。生成一条投给上一层 leader（没有就秘书）的「要处理」事件 `escalated`，带 `--task` 时任务上也记一笔。
 - **连续性**存在 Atrium：节点要点、阶段、交付记录与 leader 的备忘和决定记录，不靠进程上下文。`org tree`、`map --json`（`leader_state`；`lead` 是这一块归谁管，含从上级继承的）、`atrium top` 显示每个节点的 leader 与最近一次唤醒、在处理什么（人话，如「t84 上线」）。
@@ -262,7 +262,7 @@ atrium patrol findings atrium/cli                  # 看发现及 leader 的处�
 组织、项目、模块三类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严，显式分配给兄弟的份额之和不得超过父节点的可分配量。根章程只有用户 `u1` 能改，其余由节点 leader 维护（`--as aN`）。
 
 ```bash
-atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md 与仓库 .agents/modules 下待导入的模块（导入后仓库里删掉）
+atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md（隔离数据目录须给出路径）与仓库 .agents/modules 下待导入的模块（导入后仓库里删掉）
 atrium org import --repo . --apply                # 写入；重复执行不会重复建
 atrium org tree                                   # 节点层级、任务计数、预算份额与约用量
 atrium org show atrium/runtime                    # 先讲人话：是什么、能做什么、一件事怎么走完、由哪几部分组成、现状与阶段
@@ -385,25 +385,26 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 
 ## 配置与数据
 
-| 环境变量                        | 用途                                                             |
-| ------------------------------- | ---------------------------------------------------------------- |
-| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口                |
-| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                      |
-| `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers`    |
-| `ATRIUM_LEGACY_DIR`             | 旧状态目录，默认 `~/Atrium`；启动时从这里导入一次根章程预算      |
-| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`       |
-| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                      |
-| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                              |
-| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                                   |
-| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60                |
-| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                                 |
-| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                   |
-| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`       |
-| `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限     |
-| `ATRIUM_BUSY_CORES`             | Atrium 进程树占用超过几个核暂停派新活，默认核数的 3/4；`0` 不看  |
-| `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载 |
-| `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的 1/4（至少 1）                     |
-| `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数的 1/4（至少 1）         |
+| 环境变量                        | 用途                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------- |
+| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口                               |
+| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                                     |
+| `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers`（隔离服务无默认） |
+| `ATRIUM_LEGACY_DIR`             | 旧状态目录，默认 `~/Atrium`（隔离服务无默认）；启动时从这里导入一次根章程预算   |
+| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`                      |
+| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                                     |
+| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                                             |
+| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                                                  |
+| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60                               |
+| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                                                |
+| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                                  |
+| `ATRIUM_LEADER_WAKE`            | `1` 让隔离服务也唤醒 leader，`0` 关掉；默认只在默认数据目录唤醒                 |
+| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`                      |
+| `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限                    |
+| `ATRIUM_BUSY_CORES`             | Atrium 进程树占用超过几个核暂停派新活，默认核数的 3/4；`0` 不看                 |
+| `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载                |
+| `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的 1/4（至少 1）                                    |
+| `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数的 1/4（至少 1）                        |
 
 Atrium 的状态都在数据目录的数据库里（任务详述、组织树与章程预算等），换机器带走数据目录即可；旧状态的导入每类只做一次，记在 `state_imports` 表，重复启动不重复导入。数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
 

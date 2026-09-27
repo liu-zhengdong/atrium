@@ -126,7 +126,10 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
   return {
     groups: {
       running: items.filter((item) => item.group === "running"),
-      ready: items.filter((item) => item.group === "ready"),
+      // 紧急的排最前（t113），其余照短号。
+      ready: items
+        .filter((item) => item.group === "ready")
+        .sort((a, b) => b.task.urgent - a.task.urgent),
       waiting: items.filter((item) => item.group === "waiting"),
       blocked: items.filter((item) => item.group === "blocked"),
     },

@@ -15,6 +15,7 @@ import {
   ownerOf,
   parseTaskRef,
   taskRef,
+  updateTask,
   type Task,
 } from "./ledger.ts";
 import { readLogChunk, readLogTail } from "./log-view.ts";
@@ -211,7 +212,7 @@ export class TaskRunner {
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
       onAccepted: (id) => this.review.admit(id),
-      hostGate: () => this.host.gate(this.x.inFlight()),
+      hostGate: (urgent) => this.host.gate(this.x.inFlight(), urgent),
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
         settle: () => void this.settleReviews(),
@@ -323,6 +324,13 @@ export class TaskRunner {
     };
     every(this.options.tickMs ?? 5000, async () => {
       await this.x.tick();
+      // Atrium 进程树占了几个核（t113）：接管来的执行者父进程已不是服务，单独给。
+      if (!this.closed)
+        await this.host.refresh(
+          [...this.x.active.values()]
+            .filter((active) => !active.child && !active.exited)
+            .map((active) => active.pid),
+        );
       if (!this.closed) await this.cleanup.finished();
       if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
@@ -410,7 +418,13 @@ export class TaskRunner {
   async run(reference: unknown, body: unknown) {
     const request = runRequest(body);
     const id = parseTaskRef(reference);
-    const task = getTask(this.db, id);
+    // --urgent 派的同时标上紧急（t113）；已经在排队的，标上后立刻按紧急再排一轮。
+    if (request.urgent && queued(this.db, id)) {
+      this.markUrgent(id);
+      await this.urgentQueued(id);
+      return { task: getTask(this.db, id), queued: !!queued(this.db, id) };
+    }
+    let task = getTask(this.db, id);
     const council = councilRow(this.db, id);
     if (council && council.stage !== "summarizing")
       throw new Problem(
@@ -447,6 +461,7 @@ export class TaskRunner {
         undefined,
         `atrium task show ${task.ref}`,
       );
+    if (request.urgent && task.urgent !== 1) task = this.markUrgent(id);
     this.x.launching.set(id, null);
     let chosen: Choice;
     let pick: RunPick;
@@ -531,8 +546,8 @@ export class TaskRunner {
         pick,
       };
     }
-    // 本机减负（#358）：满了或太忙就落库排队，空出来后由 drain 按入队顺序拉起。
-    const gate = this.host.gate(this.x.inFlight(id));
+    // 本机减负（#358）：满了或太忙就落库排队，空出来后由 drain 按入队顺序拉起；紧急的不看这两条（t113）。
+    const gate = this.host.gate(this.x.inFlight(id), task.urgent === 1);
     if (!gate.ok) {
       this.x.launching.delete(id);
       return this.enqueue(task, chosen, gate.reason);
@@ -547,6 +562,18 @@ export class TaskRunner {
     } finally {
       this.x.launching.delete(id);
     }
+  }
+
+  /** 排队中的任务刚标上紧急：立刻按紧急再排一轮，不等下次巡检。 */
+  async urgentQueued(id: number) {
+    if (!this.closed && this.recovered && queued(this.db, id))
+      await this.x.drain();
+  }
+
+  private markUrgent(id: number) {
+    const task = updateTask(this.db, id, { urgent: true });
+    this.waits.changed(id);
+    return getTask(this.db, task.id);
   }
 
   private blockBudget(task: Task, reason: string) {
@@ -948,6 +975,7 @@ export class TaskRunner {
     return hostView({
       limits: this.host.limits,
       load: this.host.load(),
+      own: this.host.own(),
       running: this.x.inFlight(),
       checks: sharedLocalChecks.size,
     });

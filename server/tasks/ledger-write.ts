@@ -57,6 +57,13 @@ function briefOf(input: Record<string, unknown>, repo: string | null) {
   };
 }
 
+/** 紧急标记（t113）：只认布尔值；只按这个字段判断，标题写「紧急：」不算。 */
+function urgentOf(value: unknown) {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") throw usage("urgent: 应为 true 或 false");
+  return value;
+}
+
 /** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
 const roleNode = (
   db: DatabaseSync,
@@ -94,6 +101,8 @@ export type NewTask = {
   after?: string;
   after_pr?: string;
   auto?: boolean;
+  /** 紧急：跳过本机负载限制，排队插到最前。 */
+  urgent?: boolean;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
   /** 归属哪一部分（组织节点）。 */
@@ -138,6 +147,7 @@ export function createTask(
     "after",
     "after_pr",
     "auto",
+    "urgent",
     "from",
     "part",
     "goal",
@@ -145,6 +155,7 @@ export function createTask(
     "ask",
   ]);
   const specialist = specialistOptions(input);
+  const urgent = urgentOf(input.urgent);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
   validateDeliver(deliver, issue);
@@ -181,7 +192,7 @@ export function createTask(
       : concernsFor(db, specialist.ask);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -197,6 +208,7 @@ export function createTask(
         origin,
         part,
         job,
+        urgent ? 1 : 0,
         now,
         now,
       );
@@ -211,6 +223,7 @@ export function createTask(
       ...(part ? { part: `o${part}` } : {}),
       ...(job ? { job: `r${job}` } : {}),
       ...(concerns.length ? { concerns: concerns.map(specialistRef) } : {}),
+      ...(urgent ? { urgent: true } : {}),
       ...(by ? { by } : {}),
     });
     const task = requireRow(db, id);
@@ -244,6 +257,7 @@ export function updateTask(
     "after",
     "after_pr",
     "auto",
+    "urgent",
     "pr_url",
     "from",
     "part",
@@ -254,13 +268,15 @@ export function updateTask(
   const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、concern、status、deliver、issue、after、after_pr、auto、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、concern、status、deliver、issue、after、after_pr、auto、urgent、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
   if ("role" in input) fields.role = optionalText(input.role, "role", 200);
   if ("deliver" in input) fields.deliver = deliverOf(input.deliver);
   if ("issue" in input) fields.issue = issueOf(input.issue);
+  // 紧急随时可改（在跑、排队中也行）：排队中的下一轮巡检按新标记拉起。
+  if ("urgent" in input) fields.urgent = urgentOf(input.urgent) ? 1 : 0;
   if ("pr_url" in input) {
     if (
       typeof input.pr_url !== "string" ||

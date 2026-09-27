@@ -163,3 +163,46 @@ test("状态栏：任务多了折叠并提示 atrium top", () => {
   assert.equal(lines.length, 1 + TASK_LINES + 1);
   assert.equal(lines.at(-1), "  …还有 3 个，atrium top 看全部");
 });
+
+test("状态栏：紧急任务标「紧急」，暂停派新活时写清是哪条线", () => {
+  const worker: Holder = { kind: "worker", text: "claude 在做" } as Holder;
+  const queue: Holder = { kind: "queue", text: "排队：本机太忙" } as Holder;
+  const host = {
+    cores: 8,
+    load: 18,
+    busy_load: 32,
+    own_cores: 6.3,
+    busy_cores: 6,
+    running: 3,
+    max_workers: 6,
+    checks: { running: 0, waiting: 0, max: 2 },
+    test_concurrency: 2,
+    paused: "本机太忙（Atrium 自己占了 6.3 核，超过 6），降下来后自动拉起",
+    paused_by: "own" as const,
+  };
+  const text = render({
+    snapshot: snapshot(
+      [
+        row("t112", worker, { title: "修全景网页", urgent: true }),
+        row("t9", queue, { status: "todo" }),
+      ],
+      { host },
+    ),
+  });
+  const [head, ...lines] = text.split("\n");
+  assert.match(head!, /本机太忙，排队中（Atrium 自己占了 6\.3 核，超过 6）/);
+  assert.match(
+    lines.find((line) => line.includes("t112"))!,
+    /t112 紧急 「修全景网页」/,
+  );
+  assert.doesNotMatch(
+    lines.find((line) => line.includes("t9"))!,
+    /紧急/,
+  );
+  const byLoad = render({
+    snapshot: snapshot([row("t9", queue, { status: "todo" })], {
+      host: { ...host, load: 35, own_cores: 1, paused_by: "load" },
+    }),
+  });
+  assert.match(byLoad, /本机太忙，排队中（整机负载 35，超过 32）/);
+});

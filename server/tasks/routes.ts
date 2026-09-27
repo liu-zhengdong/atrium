@@ -204,6 +204,7 @@ export function registerTaskRoutes(
   app.patch("/api/tasks/:id", { bodyLimit: 256 * 1024 }, async (request) => {
     const task = updateTask(db, params(request.params).id, request.body);
     if (task.status === "cancelled") await runner.cleanupCancelled(task.id);
+    if (task.urgent === 1) await runner.urgentQueued(task.id);
     return getTask(db, task.id);
   });
   app.post("/api/tasks/:id/note", { bodyLimit: 4 * 1024 }, (request) =>

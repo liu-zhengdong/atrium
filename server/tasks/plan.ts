@@ -7,7 +7,7 @@ import { transition, type TaskStatus } from "./state.ts";
  * 请求校验 → 能否受理（状态、是否已在跑/排队）→ 档案风险上限 → 立即拉起还是排队。
  */
 
-export type RunRequest = { worker?: string; risk?: Risk };
+export type RunRequest = { worker?: string; risk?: Risk; urgent?: boolean };
 
 export function runRequest(body: unknown): RunRequest {
   if (body === undefined || body === null) return {};
@@ -15,14 +15,16 @@ export function runRequest(body: unknown): RunRequest {
     throw new Problem(400, "请求体应为 JSON 对象", "usage");
   const input = body as Record<string, unknown>;
   const extra = Object.keys(input).filter(
-    (key) => key !== "worker" && key !== "risk",
+    (key) => key !== "worker" && key !== "risk" && key !== "urgent",
   );
   if (extra.length)
     throw new Problem(
       400,
-      `不认识的字段：${extra.join("、")}；可用 worker、risk`,
+      `不认识的字段：${extra.join("、")}；可用 worker、risk、urgent`,
       "usage",
     );
+  if (input.urgent !== undefined && typeof input.urgent !== "boolean")
+    throw new Problem(400, "urgent: 应为 true 或 false", "usage");
   const text = (key: string) => {
     const value = input[key];
     if (value === undefined || value === null || value === "") return undefined;
@@ -33,7 +35,11 @@ export function runRequest(body: unknown): RunRequest {
   const risk = text("risk");
   if (risk !== undefined && !isRisk(risk))
     throw new Problem(400, `risk: 只能是 ${RISKS.join("、")}`, "usage");
-  return { worker: text("worker"), risk };
+  return {
+    worker: text("worker"),
+    risk,
+    ...(input.urgent === true ? { urgent: true } : {}),
+  };
 }
 
 export type Admission = {

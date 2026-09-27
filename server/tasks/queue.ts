@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { queueOrder } from "./host-load.ts";
 
 /**
  * 独占执行者的排队（#262「并发限制」）：适配器 exclusive=true 时同一工具同一时刻只跑一个，
@@ -64,19 +65,33 @@ export function queueView(
   return { queued_reason: "等待执行者可用后自动拉起" };
 }
 
-/** 某工具下一个该跑的；不给工具时返回每个工具的队首。 */
-export function heads(db: DatabaseSync, tool?: string): QueueEntry[] {
-  return (
-    tool
-      ? db
-          .prepare(
-            "SELECT * FROM task_queue WHERE tool=? ORDER BY queued_at,task_id LIMIT 1",
-          )
-          .all(tool)
-      : db
-          .prepare(
-            "SELECT q.* FROM task_queue q WHERE NOT EXISTS (SELECT 1 FROM task_queue p WHERE p.tool=q.tool AND (p.queued_at<q.queued_at OR (p.queued_at=q.queued_at AND p.task_id<q.task_id))) ORDER BY queued_at",
-          )
-          .all()
-  ) as QueueEntry[];
+export type QueueHead = QueueEntry & { urgent: boolean };
+
+/**
+ * 每个工具的队首，按拉起先后排好：紧急的在前，同样紧急的按入队先后（host-load.ts queueOrder）。
+ * 纯函数；drain 按这个顺序过闸门，普通任务被挡住时后面不会还有紧急的。
+ */
+export function queueHeads(entries: readonly QueueHead[]): QueueHead[] {
+  const order = (a: QueueHead, b: QueueHead) =>
+    queueOrder(
+      { urgent: a.urgent, at: a.queued_at, id: a.task_id },
+      { urgent: b.urgent, at: b.queued_at, id: b.task_id },
+    );
+  const first = new Map<string, QueueHead>();
+  for (const entry of [...entries].sort(order))
+    if (!first.has(entry.tool)) first.set(entry.tool, entry);
+  return [...first.values()].sort(order);
+}
+
+/** 一轮最多看多少条排队（按紧急、入队先后取，队首一定在里面）。 */
+const QUEUE_SCAN = 1000;
+
+/** 某工具下一个该跑的；不给工具时返回每个工具的队首（紧急的在前）。 */
+export function heads(db: DatabaseSync, tool?: string): QueueHead[] {
+  const rows = db
+    .prepare(
+      `SELECT q.*,COALESCE(t.urgent,0) AS urgent FROM task_queue q LEFT JOIN tasks t ON t.id=q.task_id${tool ? " WHERE q.tool=?" : ""} ORDER BY COALESCE(t.urgent,0) DESC,q.queued_at,q.task_id LIMIT ${QUEUE_SCAN}`,
+    )
+    .all(...(tool ? [tool] : [])) as (QueueEntry & { urgent: number })[];
+  return queueHeads(rows.map((row) => ({ ...row, urgent: row.urgent === 1 })));
 }

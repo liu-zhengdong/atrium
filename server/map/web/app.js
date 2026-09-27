@@ -299,7 +299,7 @@ function taskTable(all, { withRole, empty }) {
       return `<div class="row" role="row">
         ${cell("任务", taskName(t.ref, t.title, t.by), " name plain task")}
         ${withRole ? cell("专员", role, t.job ? "" : " none") : ""}
-        ${cell("状态", chip(label, tone))}
+        ${cell("状态", t.urgent ? `<span class="chips">${chip("紧急", "red")}${chip(label, tone)}</span>` : chip(label, tone))}
         ${cell("谁在做", worker ? `<span class="chip chip-soft clip" title="${esc(worker)}">${esc(worker)}</span>` : none, worker ? "" : " none")}
         ${cell("用时", spent(t) || "—", spent(t) ? " muted tagged" : " muted none")}
         ${cell("最近在做", recent || none, recent ? " note" : " note none")}

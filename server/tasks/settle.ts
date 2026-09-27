@@ -142,6 +142,8 @@ export async function settle(
   exec: Exec,
   onLocalCheckStatus?: (status: "queued" | "started", log: string) => void,
   env?: NodeJS.ProcessEnv,
+  /** 紧急任务（t113）：本地检查插到最前、不占并发名额。 */
+  urgent = false,
 ): Promise<Settlement> {
   const log = await readLog(active);
   const workerGuardRefused =
@@ -227,6 +229,7 @@ export async function settle(
         taskDir: dirname(active.logFile),
         env,
         onStatus: onLocalCheckStatus,
+        urgent,
       });
       if (facts) facts.localCheck = localCheck;
     }

@@ -37,6 +37,8 @@ export type TopRow = NoteView & {
   queued_at: number | null;
   /** 排队或受阻的原因。 */
   reason: string | null;
+  /** 标了紧急（t113）。 */
+  urgent: boolean;
   updated_at: number;
   /** 捎话条数与其中还没送达的（#307）；没有捎话为 null。 */
   tells: { total: number; pending: number } | null;
@@ -192,6 +194,7 @@ export function topRows(
       ended_at: row.ended_at,
       updated_at: row.updated_at,
       queued_at: waiting?.queued_at ?? null,
+      urgent: row.urgent === 1,
       reason:
         reasonOf(history, "queued") ??
         // 专员关卡的结论晚于受阻事件：否决或没出结论的原因以它为准。

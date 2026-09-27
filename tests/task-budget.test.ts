@@ -20,9 +20,9 @@ import {
 } from "../server/tasks/budget.ts";
 import { chooseWorker } from "../server/tasks/worker-choice.ts";
 
-/** 只有根节点的组织树，根章程写上保留份额（不写就不给 boundaries）。 */
+/** 只有根节点的组织树（带空档案表），根章程写上保留份额（不写就不给 boundaries）。 */
 function rootWithReserve(reserve?: number) {
-  const db = new DatabaseSync(":memory:");
+  const db = profileDb();
   ensureOrgTables(db);
   const root = addNode(
     db,

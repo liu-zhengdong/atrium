@@ -111,7 +111,7 @@ test("建任务存详述内容，改文件不影响；改详述事件只记字�
         worker: { tool: "claude", profile: { rules: {} } } as never,
         risk: "low",
       },
-      { data: dir, workersDir: dir, env: {} },
+      { data: dir, env: {} },
     ),
     (error: Error & { nextCommand?: string }) =>
       /任务详述没有进库/.test(error.message) &&

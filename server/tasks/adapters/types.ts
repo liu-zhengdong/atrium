@@ -98,6 +98,8 @@ export type Adapter = {
   notes: readonly string[];
   /** 捎话的缺省送达方式；档案 `tell` 可改成本工具支持的其他方式。 */
   tell: TellMode;
+  /** 模型与思考强度搭不搭（派活前、排队前先查，免得排到时才报错）；不合法抛 400。 */
+  checkModel?(model: string | undefined, effort: string | undefined): void;
   build(input: LaunchInput): Launch;
   /** 带着补充续上原会话；undefined 表示不支持按会话续上。 */
   resume?(input: ResumeInput): Launch;

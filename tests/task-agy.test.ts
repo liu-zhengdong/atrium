@@ -455,6 +455,10 @@ test("端到端：假 agy 在运行中收到捎话，排成下一轮，读入后
   const told = await call("POST", "/api/tasks/t1/tell", { text: "改用 v2" });
   assert.equal(told.status, 200, JSON.stringify(told.body));
   assert.equal(told.body.tell.route, "stdin");
+  assert.equal(
+    told.body.how,
+    "已写进执行者的输入，本轮做完后接着作为下一轮读入",
+  );
   const done = await call("GET", "/api/tasks/t1/wait?timeout=20");
   assert.equal(done.body.task.status, "done", JSON.stringify(done.body.task));
   assert.match(
@@ -473,4 +477,23 @@ test("端到端：假 agy 在运行中收到捎话，排成下一轮，读入后
     .map((event: { detail: string }) => JSON.parse(event.detail))[0];
   assert.equal(tell.state, "delivered");
   assert.equal(tell.delivered_via, "stdin");
+});
+
+test("写死的 agy 执行者：模型与强度不搭当场 400，不进排队", async (t) => {
+  const { call } = await startApp(t, (fx) => {
+    writeFakeBin(join(fx.root, "bin", "agy"), FAKE_AGY);
+  });
+  await call("POST", "/api/tasks", { title: "破坏输入", deliver: "none" });
+  for (const [worker, message] of [
+    ["agy+claude-opus-4-6-thinking:high", /不接受思考强度/],
+    ["agy+gemini-3.8-flash-high:low", /已带强度 high，与 :low 冲突/],
+    ["agy+gemini-3.8-flash:xhigh", /思考强度只能是 low、medium、high、max/],
+  ] as const) {
+    const run = await call("POST", "/api/tasks/t1/run", { worker });
+    assert.equal(run.status, 400, worker);
+    assert.match(run.body.error, message);
+  }
+  const task = await call("GET", "/api/tasks/t1");
+  assert.equal(task.body.status, "todo");
+  assert.equal(task.body.queued ?? null, null);
 });

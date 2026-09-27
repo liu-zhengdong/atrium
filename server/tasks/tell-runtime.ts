@@ -47,6 +47,8 @@ async function readHead(file: string) {
 
 const NEXT = {
   stdin: "已写进执行者的输入，在下一个工具调用边界读入",
+  /** agy 的消息流每行一轮：运行中写入的排在本轮之后另起一轮。 */
+  stdin_turn: "已写进执行者的输入，本轮做完后接着作为下一轮读入",
   after_turn: "执行者这一轮结束后带着补充续上原会话",
   restart: "执行者不支持运行中追加，正在停下并带着补充重派（工作树保留）",
   next_run: "下次拉起执行者时写进提示词",
@@ -99,7 +101,11 @@ export function tellTask(
   return {
     task: getTask(db, id),
     tell: { ...saved, route: kind },
-    how: NEXT[kind],
+    how: NEXT[
+      kind === "stdin" && active?.prepared?.launch.inputDialect === "agy"
+        ? "stdin_turn"
+        : kind
+    ],
   };
 }
 

@@ -85,6 +85,9 @@ export const agy: Adapter = {
     "额度按模型分桶（Gemini、Claude 各一份），用尽标记按整个 antigravity 账号记",
   ],
   tell: "stdin",
+  checkModel(model, effort) {
+    agyModelArgs(model, effort);
+  },
   build(input) {
     checkCommon(agy, input);
     return launch(input);

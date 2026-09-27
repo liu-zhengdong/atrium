@@ -1,11 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { detectInstalled, type Tool } from "./adapters/index.ts";
 import { readQuotaReservePercent } from "./budget.ts";
-import {
-  listDeliveries,
-  summarizeDeliveries,
-  type Delivery,
-} from "./delivery-records.ts";
+import { workerStats, type WorkerStat } from "./delivery-records.ts";
 import { getJobRole } from "./job-roles.ts";
 import type { Task } from "./ledger.ts";
 import { pickView, type PickCandidateFact, type PickRecord } from "./pick.ts";
@@ -31,11 +27,11 @@ export type PickContext = {
 };
 
 const recordOf = (
-  rows: readonly Delivery[],
+  stats: readonly WorkerStat[],
   worker: string,
   role: string | null,
 ): PickRecord | undefined => {
-  const stat = summarizeDeliveries(rows).find(
+  const stat = stats.find(
     (s) => s.scope === "combination" && s.worker === worker && s.role === role,
   );
   return stat
@@ -56,12 +52,11 @@ export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
   const headroom = quotaHeadroom(db, nodeId ?? null, pace, reservePercent);
   const installed = detectInstalled(options.env.PATH ?? "");
   const job = task.job_id ? getJobRole(db, `r${task.job_id}`) : null;
-  const jobRows = job ? listDeliveries(db, { job: job.id }) : [];
+  const jobStats = job ? workerStats(db, { job: job.id }) : [];
   const names: { name: string; preferred: number | null }[] = [
-    ...(job
-      ? rankRoleWorkers(job.preferred, summarizeDeliveries(jobRows), job.name)
-      : []
-    ).map((name, index) => ({ name, preferred: index })),
+    ...(job ? rankRoleWorkers(job.preferred, jobStats, job.name) : []).map(
+      (name, index) => ({ name, preferred: index }),
+    ),
     ...FALLBACK_ORDER.filter((tool) => installed[tool]).map((tool) => ({
       name: tool,
       preferred: null,
@@ -92,10 +87,13 @@ export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
   const records = new Map<string, PickRecord>();
   for (const candidate of candidates) {
     const record = job
-      ? recordOf(jobRows, candidate.worker, job.name)
-      : recordOf(
-          listDeliveries(db, { worker: candidate.worker, limit: 1000 }).map(
-            (row) => ({ ...row, job_name: null }),
+      ? recordOf(jobStats, candidate.worker, job.name)
+      : // 没有专员时只按执行者看最近一千条，不区分专员（与旧行为一致）。
+        recordOf(
+          workerStats(
+            db,
+            { worker: candidate.worker },
+            { limitPerWorker: 1000, roleNull: true },
           ),
           candidate.worker,
           null,

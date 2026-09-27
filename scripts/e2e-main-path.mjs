@@ -541,6 +541,13 @@ try {
     // 接管的进程没有退出码：按 stream-json 收尾的 result 事件判正常结束。
     const log = ok(atrium("task", "log", "t2"), "task log t2");
     expect(log.stdout, /按日志判为正常结束/, "task log t2");
+    // 判定依据同样写进事件，task show 能看到。
+    const shown = ok(atrium("task", "show", "t2"), "task show t2");
+    expect(
+      shown.stdout.replace(/\x1b\[[0-9;]*m/g, ""),
+      /exit_ok .*按日志判为正常结束/,
+      "task show t2",
+    );
     const deadline = Date.now() + 10_000;
     while (alive(pid)) {
       if (Date.now() > deadline) fail(`执行者 pid ${pid} 完成后没退出`);

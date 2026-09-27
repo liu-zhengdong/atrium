@@ -11,7 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adoptedEnd } from "../server/tasks/adopted-exit.ts";
-import { decideExit } from "../server/tasks/outcome.ts";
+import { decideExit, exitDetail } from "../server/tasks/outcome.ts";
 import {
   advanceTask,
   createTask,
@@ -178,6 +178,9 @@ function setup(t: { after: (fn: () => void) => void }) {
 const DEAD_PID = 2 ** 22 + 12345;
 const kinds = (db: DatabaseSync, ref: string) =>
   getTask(db, ref).events.map((event) => event.kind);
+/** 状态转移事件的 detail 是 { from, to, detail }。 */
+const transition = (event: { detail: string | null }) =>
+  JSON.parse(event.detail!).detail;
 
 test("重启窗口内已经退出：接管后补做收尾，按日志判正常结束或出错，事件照投", async (t) => {
   const { root, db, runner, running } = setup(t);
@@ -202,6 +205,15 @@ test("重启窗口内已经退出：接管后补做收尾，按日志判正常�
     okLog,
     /\[atrium\] .* 接管后退出，退出码不可得；按日志判为正常结束（result 事件 stop_reason=end_turn）/,
   );
+  // 判定依据同样写进事件，task show 能看到。
+  const judgedOk = {
+    exit: "unknown",
+    judged: "按日志判为正常结束（result 事件 stop_reason=end_turn）",
+  };
+  assert.deepEqual(transition(done.events.at(-1)!), judgedOk);
+  const gates = JSON.parse(done.events.at(-2)!.detail!);
+  assert.equal(gates.exit, judgedOk.exit);
+  assert.equal(gates.judged, judgedOk.judged);
 
   const failed = getTask(db, bad.ref);
   assert.equal(failed.status, "failed");
@@ -210,6 +222,10 @@ test("重启窗口内已经退出：接管后补做收尾，按日志判正常�
     /接管后退出，退出码不可得；日志显示出错结束：result 事件 subtype=error_during_execution/,
   );
   assert.doesNotMatch(failed.events.at(-1)!.detail!, /服务重启期间/);
+  assert.equal(
+    transition(failed.events.at(-1)!).judged,
+    "按日志判为异常结束（result 事件 subtype=error_during_execution stop_reason=无 is_error=true）",
+  );
 
   const { events } = await runner.inbox.wait("secretary", 0);
   assert.deepEqual(events.map((event) => [event.key, event.kind]).sort(), [
@@ -275,12 +291,55 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
       getTask(db, bad.ref).status !== "running",
     15_000,
   );
-  assert.equal(getTask(db, ok.ref).status, "done");
+  const done = getTask(db, ok.ref);
+  assert.equal(done.status, "done");
+  assert.equal(done.events.at(-1)!.kind, "exit_ok");
+  assert.deepEqual(transition(done.events.at(-1)!), {
+    exit: "unknown",
+    judged: "按日志判为正常结束（result 事件 stop_reason=end_turn）",
+  });
   const failed = getTask(db, bad.ref);
   assert.equal(failed.status, "failed");
   assert.match(
     failed.events.at(-1)!.detail!,
     /接管后退出，退出码不可得；日志显示出错结束/,
+  );
+  assert.match(
+    transition(failed.events.at(-1)!).judged,
+    /^按日志判为异常结束（result 事件 subtype=error_during_execution/,
+  );
+});
+
+test("退出情况写进事件：接管后退出带判定依据，有退出码的不带", () => {
+  assert.deepEqual(exitDetail({ code: 0, signal: null }), {
+    code: 0,
+    signal: null,
+  });
+  assert.deepEqual(exitDetail("unknown"), { exit: "unknown" });
+  assert.deepEqual(
+    exitDetail("unknown", {
+      end: "clean",
+      evidence: "result 事件 subtype=success",
+    }),
+    {
+      exit: "unknown",
+      judged: "按日志判为正常结束（result 事件 subtype=success）",
+    },
+  );
+  assert.deepEqual(exitDetail("unknown", { end: "error", evidence: "e" }), {
+    exit: "unknown",
+    judged: "按日志判为异常结束（e）",
+  });
+  assert.deepEqual(exitDetail("unknown", { end: "unknown" }), {
+    exit: "unknown",
+    judged: "日志判不出正常或异常结束",
+  });
+  assert.deepEqual(
+    exitDetail("unknown", { end: "error", evidence: "e" }, true),
+    {
+      exit: "unknown",
+      judged: "按日志判为异常结束（e）；PR 在且 CI 通过，照常过关卡",
+    },
   );
 });
 

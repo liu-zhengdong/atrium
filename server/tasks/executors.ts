@@ -636,7 +636,7 @@ export class Executors {
         noteTask(this.ctx.db, id, "worker_guard_refused", {
           reason: "执行日志出现 Atrium 执行者防护的固定拒绝语句",
         });
-      const detail = exitDetail(exit);
+      const detail = outcome.exitDetail;
       if (verdict)
         noteTask(this.ctx.db, id, "gates", {
           worker: active.worker.id,

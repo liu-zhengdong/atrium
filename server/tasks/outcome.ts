@@ -27,18 +27,40 @@ export type ExitDecision = {
 /** 接管后退出的执行者没有退出码（服务重启后按 pid 接管，或重启窗口内已经退出）。 */
 export const ADOPTED_EXIT = "接管后退出，退出码不可得";
 
+/** 接管后退出按日志判出的结局与依据；判不了为 undefined。 */
+export function adoptedText(adopted?: AdoptedEnd) {
+  if (!adopted || adopted.end === "unknown") return undefined;
+  return `按日志判为${adopted.end === "clean" ? "正常结束" : "异常结束"}（${adopted.evidence}）`;
+}
+
 export function exitText(exit: Exit, adopted?: AdoptedEnd) {
-  if (exit === "unknown")
-    return adopted && adopted.end !== "unknown"
-      ? `${ADOPTED_EXIT}；按日志判为${adopted.end === "clean" ? "正常结束" : "出错"}（${adopted.evidence}）`
-      : ADOPTED_EXIT;
+  if (exit === "unknown") {
+    const judged = adoptedText(adopted);
+    return judged ? `${ADOPTED_EXIT}；${judged}` : ADOPTED_EXIT;
+  }
   return exit.signal ? `被信号 ${exit.signal} 结束` : `退出码 ${exit.code}`;
 }
 
-export function exitDetail(exit: Exit): Record<string, unknown> {
-  return exit === "unknown"
-    ? { exit: "unknown" }
-    : { code: exit.code, signal: exit.signal };
+/**
+ * 退出情况写进事件 detail。接管后退出的带上判定依据（judged），`task show` 能看到怎么判的；
+ * delivered 为远端已交付（PR 在、CI 过），日志判为异常也照常过关卡。
+ */
+export function exitDetail(
+  exit: Exit,
+  adopted?: AdoptedEnd,
+  delivered = false,
+): Record<string, unknown> {
+  if (exit !== "unknown") return { code: exit.code, signal: exit.signal };
+  if (!adopted) return { exit: "unknown" };
+  const judged = adoptedText(adopted) ?? "日志判不出正常或异常结束";
+  // judged 放前面：task show 把事件 detail 截到 80 列。
+  return {
+    judged:
+      delivered && adopted.end === "error"
+        ? `${judged}；PR 在且 CI 通过，照常过关卡`
+        : judged,
+    exit: "unknown",
+  };
 }
 
 /** 被停下的（人工、卡死、空闲）不查事实；其余都要查事实。 */

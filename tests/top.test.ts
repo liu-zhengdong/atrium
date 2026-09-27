@@ -53,7 +53,7 @@ const CODEX_DIR =
   "/private/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog";
 
 test("最近动作 · codex：末段的 exec、apply patch 与助手散文", () => {
-  const tools = sample("codex-tools.log");
+  const tools = sample("codex-tools.txt");
   assert.deepEqual(
     recentAction({ tool: "codex", tail: tools, cwd: CODEX_DIR }),
     {
@@ -65,14 +65,14 @@ test("最近动作 · codex：末段的 exec、apply patch 与助手散文", () 
   assert.deepEqual(
     recentAction({
       tool: "codex",
-      tail: sample("codex-patch.log"),
+      tail: sample("codex-patch.txt"),
       cwd: CODEX_DIR,
     }),
     { kind: "tool", text: "改 edit.txt" },
   );
   const final = recentAction({
     tool: "codex",
-    tail: sample("codex-final.log"),
+    tail: sample("codex-final.txt"),
     cwd: CODEX_DIR,
   });
   assert.equal(final?.kind, "step");
@@ -141,7 +141,7 @@ test("最近动作 · opencode：工具调用、收尾文本、跳过非 JSON �
 });
 
 test("最近动作 · 没样本的工具不猜：grok、kimi 与未知执行者都交回空", () => {
-  const codexLog = sample("codex-tools.log");
+  const codexLog = sample("codex-tools.txt");
   assert.equal(recentAction({ tool: "grok", tail: codexLog }), undefined);
   assert.equal(recentAction({ tool: "kimi", tail: codexLog }), undefined);
   assert.equal(recentAction({ tool: undefined, tail: codexLog }), undefined);
@@ -638,7 +638,7 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
     join(logs, "1", "log"),
     `${sample("opencode-tools.jsonl")}\n${JSON.stringify({ type: "tool_use", part: { tool: "bash", state: { status: "completed", input: { command: "npm run check" } } } })}\n`,
   );
-  writeFileSync(join(logs, "2", "log"), sample("codex-final.log"));
+  writeFileSync(join(logs, "2", "log"), sample("codex-final.txt"));
   const past = new Date(Date.now() - 12_000);
   utimesSync(join(logs, "1", "log"), past, past);
 

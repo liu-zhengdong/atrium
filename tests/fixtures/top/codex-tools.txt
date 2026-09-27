@@ -1,0 +1,54 @@
+codex
+我先查看文件内容，再把 `line1` 改为 `first`。
+exec
+/bin/zsh -lc "pwd && ls -la && rg -n 'line1' edit.txt && cat edit.txt" in /private/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog
+ succeeded in 0ms:
+/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog
+total 32
+drwxr-xr-x  7 liuzhengdong  staff   224 Sep 27 08:40 .
+drwxr-xr-x  3 liuzhengdong  staff    96 Sep 27 08:39 ..
+drwxr-xr-x  9 liuzhengdong  staff   288 Sep 27 08:39 .git
+-rw-r--r--  1 liuzhengdong  staff    12 Sep 27 08:40 edit.txt
+-rw-r--r--  1 liuzhengdong  staff     3 Sep 27 08:40 hello.txt
+-rw-r--r--  1 liuzhengdong  staff  1016 Sep 27 08:40 raw.log
+-rw-r--r--  1 liuzhengdong  staff   407 Sep 27 08:40 raw2.log
+1:line1
+line1
+line2
+
+apply patch
+patch: completed
+/private/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog/edit.txt
+diff --git a/edit.txt b/edit.txt
+index c0d0fb45c382919737f8d0c20aaf57cf89b74af8..92ebdd7c3285c14a5f3e2ba1dd66c18f16028f01
+--- a/edit.txt
++++ b/edit.txt
+@@ -1,2 +1,2 @@
+-line1
++first
+ line2
+
+diff --git a/edit.txt b/edit.txt
+index c0d0fb45c382919737f8d0c20aaf57cf89b74af8..92ebdd7c3285c14a5f3e2ba1dd66c18f16028f01
+--- a/edit.txt
++++ b/edit.txt
+@@ -1,2 +1,2 @@
+-line1
++first
+ line2
+
+exec
+/bin/zsh -lc "git diff --check && git diff -- edit.txt && rg --files -g 'AGENTS.md' -g 'Cargo.toml' -g 'package.json' -g 'Makefile' -g 'pyproject.toml'" in /private/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog
+ exited 1 in 0ms:
+diff --git a/edit.txt b/edit.txt
+index c0d0fb45c382919737f8d0c20aaf57cf89b74af8..92ebdd7c3285c14a5f3e2ba1dd66c18f16028f01
+--- a/edit.txt
++++ b/edit.txt
+@@ -1,2 +1,2 @@
+-line1
++first
+ line2
+
+exec
+/bin/zsh -lc 'cat edit.txt; git status --short; git ls-files; git diff --check' in /private/var/folders/h5/m1jhd2vj3_ndpvcymhws4p580000gn/T/opencode/codexlog
+ succeeded in 0ms:

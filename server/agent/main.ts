@@ -152,6 +152,8 @@ export class Agent {
   private readonly checks: LocalCheckQueue;
   private readonly checkTracks = new Map<string, CheckTrack>();
   private readonly checkAborts = new Map<string, AbortController>();
+  /** 服务已叫停、还在收尾的检查：不再报「手上在做」，免得服务一轮轮重复叫停。 */
+  private readonly cancelled = new Set<string>();
   private readonly cloneLocks = new Map<string, Promise<unknown>>();
   private readonly slots = new Map<string, Set<number>>();
   private readonly quota: QuotaReaders | null;
@@ -404,13 +406,17 @@ export class Agent {
         while (!this.stopped) {
           const { commands, cancel } = await this.call<PollReply>(
             "poll",
-            { load: this.load(), busy: [...this.busy] },
+            {
+              load: this.load(),
+              busy: [...this.busy].filter((id) => !this.cancelled.has(id)),
+            },
             POLL_WAIT_MS + 20_000,
           );
           // 服务已不再等的检查（退回本机或别的主机了）：停下，别白占这台的 CPU。
           for (const id of cancel ?? []) {
             const abort = this.checkAborts.get(id);
             if (!abort || abort.signal.aborted) continue;
+            this.cancelled.add(id);
             this.log("服务已不再等一次检查，停下它");
             const track = this.checkTracks.get(id);
             if (track) track.abandoned = true;
@@ -561,6 +567,7 @@ export class Agent {
   }
 
   private endCheck(id: string) {
+    this.cancelled.delete(id);
     this.checkTracks.delete(id);
     this.checkAborts.delete(id);
     rmSync(this.checkDir(id), {

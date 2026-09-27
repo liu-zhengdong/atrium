@@ -84,8 +84,11 @@ export function mergeHostReadings(input: {
   for (const [provider, { groups, failures }] of providers) {
     const list = [...groups.values()];
     if (!list.length) {
+      // 本机的原因原样给；只有别的主机读过时写明是哪台的原因。
+      const remote = [...failures].find(([host]) => host !== input.local);
       const reason =
-        failures.get(input.local) ?? failures.values().next().value ?? NO_DATA;
+        failures.get(input.local) ??
+        (remote ? `${remote[1]}（${remote[0]}）` : NO_DATA);
       merged.set(provider, { outcome: { ok: false, reason }, from: null });
       continue;
     }

@@ -71,7 +71,7 @@ import {
   type HostNeed,
 } from "../hosts/state.ts";
 import type { Assignment } from "../hosts/protocol.ts";
-import { runLocalCheck } from "./local-check.ts";
+import { checkDetail, runLocalCheck } from "./local-check.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -650,8 +650,8 @@ export class Executors {
         this.execFor(active),
         (status, log, host) => {
           noteTask(this.ctx.db, id, `local_check_${status}`, {
-            log,
             ...(host ? { host } : {}),
+            log,
           });
           this.ctx.waits.changed(id);
         },
@@ -665,7 +665,12 @@ export class Executors {
       const { verdict, facts } = outcome;
       let { decision } = outcome;
       if (outcome.localCheck)
-        noteTask(this.ctx.db, id, "local_check", outcome.localCheck);
+        noteTask(
+          this.ctx.db,
+          id,
+          "local_check",
+          checkDetail(outcome.localCheck),
+        );
       if (outcome.workerGuardRefused)
         noteTask(this.ctx.db, id, "worker_guard_refused", {
           reason: "执行日志出现 Atrium 执行者防护的固定拒绝语句",

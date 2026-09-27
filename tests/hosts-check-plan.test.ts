@@ -333,6 +333,27 @@ test("额度多主机合并：同一账号只算一份取最新；认不出账�
     outcome: { ok: false, reason: "本机没登录" },
     from: null,
   });
+  // 本机没读（自带读取关着）、只有别的主机读不到：写明是哪台的原因。
+  merged = mergeHostReadings({
+    local: "h1",
+    localReadings: new Map(),
+    reports: [
+      {
+        host: "h2",
+        readings: [
+          {
+            provider: "claude",
+            outcome: { ok: false, reason: "没有找到登录" },
+          },
+        ],
+      },
+    ],
+    now,
+  });
+  assert.deepEqual(merged.get("claude"), {
+    outcome: { ok: false, reason: "没有找到登录（h2）" },
+    from: null,
+  });
   // 本机的读数不会被自称 h1 的上报顶掉。
   merged = mergeHostReadings({
     local: "h1",

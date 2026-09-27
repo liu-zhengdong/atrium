@@ -749,7 +749,13 @@ test("远程检查：进行中断网再恢复，结果与日志补齐；断线�
   assert.equal(task.status, "done");
   // 本机重跑的日志：本机工作树，不是 h2 的检查工作树。
   assert.doesNotMatch(readLog(2), /-check-/);
-  // 恢复后代理那边这次检查被服务叫停或回执被丢掉，目录清掉；账本里仍只有一次结果。
+  // 恢复后代理重连，服务在长轮询的回答里叫停这次检查（远程还要睡 10 秒，叫停在那之前）；
+  // 目录清掉，账本里仍只有一次结果。
+  await until(
+    () => lines.some((line) => line.includes("服务已不再等一次检查")),
+    8_000,
+  );
+  assert.ok(!lines.some((line) => line.includes("t2 的检查结束：passed")));
   await until(
     () =>
       !existsSync(join(agentData, "checks")) ||

@@ -7,7 +7,7 @@ import { taskDir } from "./active.ts";
 import { defaultBranch, firstLine, type Exec } from "./git.ts";
 import { originRepo, parsePrUrl, repoFlag } from "./gh-repo.ts";
 import { atomically, getTask, noteTask, type Task } from "./ledger.ts";
-import { runLocalCheck } from "./local-check.ts";
+import { checkDetail, runLocalCheck } from "./local-check.ts";
 import type { CheckDispatch } from "../hosts/check-runtime.ts";
 import { mergeFailure } from "./merge-decision.ts";
 import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
@@ -497,8 +497,8 @@ export class MergeQueue {
     ) => {
       if (!this.closed)
         noteTask(this.db, task.id, `merge_check_${status}`, {
-          log,
           ...(host ? { host } : {}),
+          log,
         });
     };
     const checked = this.options.checks
@@ -515,7 +515,7 @@ export class MergeQueue {
       : await runLocalCheck({ ...request, onStatus });
     if (this.closed) return;
     if (this.stopped(task.id)) return;
-    noteTask(this.db, task.id, "merge_check", checked);
+    noteTask(this.db, task.id, "merge_check", checkDetail(checked));
     // 派到别的主机时检查的是 rebase 后的这个提交；对不上就不算数。
     if (checked.commit && checked.commit !== checkedHead)
       throw new MergeHold("检查回来的提交与 rebase 后的提交不一致，拒绝合入");

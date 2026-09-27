@@ -325,7 +325,13 @@ export class RemoteHosts {
         .filter((entry) => !busy.has(entry.command.id))
         .map((entry) => entry.command);
     let commands = take();
-    if (!commands.length && !this.closed && !signal?.aborted) {
+    // 有要叫停的就立刻回答，不挂满一轮。
+    if (
+      !commands.length &&
+      !cancel.length &&
+      !this.closed &&
+      !signal?.aborted
+    ) {
       await new Promise<void>((resolve) => {
         const waiters = this.waiters.get(host) ?? new Set();
         this.waiters.set(host, waiters);

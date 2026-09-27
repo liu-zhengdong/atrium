@@ -26,6 +26,17 @@ export type LocalCheck = {
   commit?: string;
 };
 
+/** 记进事件的检查结果：结论、在哪台、哪个提交排在前面（`task show` 一行里先看到）。 */
+export function checkDetail(check: LocalCheck) {
+  const { status, host, commit, ...rest } = check;
+  return {
+    status,
+    ...(host ? { host } : {}),
+    ...(commit ? { commit } : {}),
+    ...rest,
+  };
+}
+
 /**
  * 本地检查排队：同时最多 limit 个（缺省 1，即串行），其余按到达顺序等空位（#358）。
  * 紧急任务的检查（t113）立刻跑、不占名额，也不让等着的普通检查多等一个空位（host-load.ts checkPlacement）。

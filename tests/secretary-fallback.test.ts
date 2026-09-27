@@ -37,6 +37,14 @@ async function until(check: () => boolean, what: string, ms = 5000) {
   }
 }
 
+function parsedResumeLog<T>(path: string): T | undefined {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch {
+    return undefined;
+  }
+}
+
 test("恢复命令指定同一会话，拒绝不合法的编号", () => {
   const codex = {
     tool: "codex" as const,
@@ -125,7 +133,7 @@ test("opencode 后台恢复使用秘书独立数据目录且只同步 API key", 
   const executable = join(bin, "opencode");
   writeFileSync(
     executable,
-    `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.ATRIUM_TEST_RESUME_LOG, JSON.stringify({args: process.argv.slice(2), home: process.env.XDG_DATA_HOME}));\n`,
+    `#!/usr/bin/env node\nconst fs = require('node:fs');\nconst target = process.env.ATRIUM_TEST_RESUME_LOG;\nconst tmp = target + '.tmp';\nfs.writeFileSync(tmp, JSON.stringify({args: process.argv.slice(2), home: process.env.XDG_DATA_HOME}));\nfs.renameSync(tmp, target);\n`,
   );
   chmodSync(executable, 0o700);
   const oldPath = process.env.PATH;
@@ -267,7 +275,7 @@ test("服务真实拉起一次性 codex 恢复进程并登记送达", async () =
   const executable = join(bin, "codex");
   writeFileSync(
     executable,
-    `#!/usr/bin/env node\nconst fs = require('node:fs');\nlet input = '';\nprocess.stdin.on('data', chunk => input += chunk);\nprocess.stdin.on('end', () => fs.writeFileSync(process.env.ATRIUM_TEST_RESUME_LOG, JSON.stringify({args: process.argv.slice(2), input})));\n`,
+    `#!/usr/bin/env node\nconst fs = require('node:fs');\nlet input = '';\nprocess.stdin.on('data', chunk => input += chunk);\nprocess.stdin.on('end', () => { const target = process.env.ATRIUM_TEST_RESUME_LOG; const tmp = target + '.tmp'; fs.writeFileSync(tmp, JSON.stringify({args: process.argv.slice(2), input})); fs.renameSync(tmp, target); });\n`,
   );
   chmodSync(executable, 0o700);
   const oldPath = process.env.PATH;
@@ -288,17 +296,17 @@ test("服务真实拉起一次性 codex 恢复进程并登记送达", async () =
       kind: "done",
       key: "one",
     });
-    await until(() => existsSync(log), "恢复进程完成");
+    await until(
+      () => parsedResumeLog(log) !== undefined,
+      "恢复进程写出可解析的日志",
+    );
     await until(
       () =>
         typeof app!.taskRunner.inbox.list("secretary", { limit: 1 }).events[0]
           ?.delivered_at === "number",
       "服务登记送达",
     );
-    const resume = JSON.parse(readFileSync(log, "utf8")) as {
-      args: string[];
-      input: string;
-    };
+    const resume = parsedResumeLog<{ args: string[]; input: string }>(log)!;
     assert.deepEqual(resume.args.slice(-2), [
       "019c6e27-e55b-73d1-87d8-4e01f1f75043",
       "-",

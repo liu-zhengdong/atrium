@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
+import { quotaReserve, type QuotaReserve } from "./budget.ts";
 import { parseOpenquotaRows } from "./openquota.ts";
 import { readQuotaRows, type QuotaSourceOptions } from "./quota-source.ts";
 import type { QuotaSource } from "../quota-readers/merge.ts";
@@ -50,6 +51,8 @@ export type QuotaList = {
   accounts: QuotaAccount[];
   /** 整体提示（如 OpenQuota 装了但读失败）；没有为空数组。 */
   notes: string[];
+  /** 给用户留的份额（组织根章程，#355）；旧版服务没有这个字段。 */
+  reserve?: QuotaReserve;
 };
 
 /**
@@ -190,7 +193,11 @@ export async function listQuota(
   const runtimes = db
     ? holdRuntimes(listHolds(db), now, unknownMs)
     : new Map<string, QuotaRuntime>();
-  return { accounts: sortBySpare(parseQuotaRows(rows, runtimes)), notes };
+  return {
+    accounts: sortBySpare(parseQuotaRows(rows, runtimes)),
+    notes,
+    reserve: quotaReserve(db),
+  };
 }
 
 export function registerQuotaRoute(

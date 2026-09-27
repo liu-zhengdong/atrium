@@ -94,7 +94,6 @@ export type RunnerOptions = {
   pace?: () => Promise<PaceEntry[] | undefined>;
   usagePace?: () => Promise<PaceEntry[] | undefined>;
   diskFreeGb?: (path: string) => Promise<number>;
-  charterPath?: string;
   tickMs?: number;
   ciPollMs?: number;
   ciBatch?: number;
@@ -176,7 +175,6 @@ export class TaskRunner {
       run: this.exec,
       pace: options.pace,
       usagePace: options.usagePace,
-      charterPath: options.charterPath,
     };
     this.cleanup = new WorktreeCleanup(
       db,

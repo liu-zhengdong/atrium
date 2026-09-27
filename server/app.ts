@@ -28,6 +28,7 @@ import {
   type LeaderWakerOptions,
 } from "./leaders/runtime.ts";
 import { MapLogin } from "./map/login.ts";
+import { importLegacyState } from "./imports/index.ts";
 import {
   expiredPage,
   isLoopback,
@@ -69,6 +70,8 @@ export async function createApp(options: {
   serviceUrl?: string;
   /** leader 唤醒的注入项：测试用来缩短攒批、替换 leader 进程。 */
   leaders?: Partial<Omit<LeaderWakerOptions, "data">>;
+  /** 旧的 ~/Atrium 目录（main.ts 给）：启动时导入一次根章程预算；不给就不读。 */
+  legacyDir?: string;
 }) {
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   const db = openDatabase(options.data);
@@ -229,6 +232,8 @@ export async function createApp(options: {
   app.addHook("preClose", async () => secretaryFallback.close());
   inbox = () => taskRunner.inbox;
   registerOrgRoutes(app, db);
+  // 账本与组织树的表都建好后导入旧状态（#355）：详述回填、根章程预算；幂等，坏记录只记日志。
+  importLegacyState(db, { legacyDir: options.legacyDir });
   registerLeaderRoutes(app, db, taskRunner.inbox);
   registerMemoRoutes(app, db);
   const leaderWaker = new LeaderWaker(db, taskRunner.inbox, leaderTokens, {

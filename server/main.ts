@@ -1,5 +1,6 @@
 import { sameSecret } from "../shared/secret.ts";
 import { createApp } from "./app.ts";
+import { legacyDir } from "./imports/index.ts";
 import { DEFAULT_WORKERS_DIR } from "./tasks/profiles.ts";
 import { portTakenMessage, probePort } from "./port-owner.ts";
 import {
@@ -96,6 +97,7 @@ try {
     tasks: {
       workersDir: process.env.ATRIUM_WORKERS_DIR || DEFAULT_WORKERS_DIR,
     },
+    legacyDir: legacyDir(),
   }));
   const authorize = (value: string | undefined) => {
     const actual = /^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "";

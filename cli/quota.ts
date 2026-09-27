@@ -3,6 +3,7 @@ import { printJson, table, when } from "./format.ts";
 import type { Command } from "./main.ts";
 import { Problem } from "../server/problem.ts";
 import type { QuotaAccount, QuotaList } from "../server/tasks/quota.ts";
+import type { QuotaReserve } from "../server/tasks/budget.ts";
 
 /**
  * 账号额度一览的命令行（#267、#352）：只经 HTTP 调服务，不直接读凭据或跑 OpenQuota。
@@ -61,6 +62,14 @@ export function formatQuotaTable(
   return `${body}${tail}`;
 }
 
+/** 保留份额一行：来自哪份章程；根章程没写时说明用的缺省与怎么改。 */
+export function reserveLine(reserve: QuotaReserve | undefined): string | null {
+  if (!reserve) return null;
+  return reserve.set_by
+    ? `给你留的份额：每个账号至少 ${reserve.percent}%（${reserve.set_by} 章程）`
+    : `给你留的份额：每个账号至少 ${reserve.percent}%（缺省；在根章程 boundaries 里写 quota_reserve_percent 可改）`;
+}
+
 const quota: Command = {
   args: "[--clear <账号>] [--json]",
   about: "列出账号额度；--clear 人工解除运行时占用并立即重派排队任务",
@@ -89,7 +98,15 @@ const quota: Command = {
     }
     const result = await (await client()).get<QuotaList>("/quota");
     if (json) printJson(result);
-    else console.log(formatQuotaTable(result.accounts, result.notes ?? []));
+    else
+      console.log(
+        [
+          formatQuotaTable(result.accounts, result.notes ?? []),
+          reserveLine(result.reserve),
+        ]
+          .filter((line) => line !== null)
+          .join("\n"),
+      );
     recordNext("看任务：atrium task ls");
   },
 };

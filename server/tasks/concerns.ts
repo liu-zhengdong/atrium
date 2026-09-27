@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, ref, type DocRow, type NodeRow } from "../org/model.ts";
@@ -243,36 +241,19 @@ export function inviteRules(db: DatabaseSync): InviteRule[] {
   });
 }
 
-const BRIEF_READ_MAX = 64 * 1024;
-
-/** 建任务、改任务时的提示：按标题与详述里的关键词（详述读不到就只看标题）。 */
+/** 建任务、改任务时的提示：按标题与库里的详述里的关键词。 */
 export function textHints(
   db: DatabaseSync,
-  task: {
-    id: number;
-    title: string;
-    brief_path: string | null;
-    repo: string | null;
-  },
+  task: { id: number; title: string; brief?: string | null },
 ): InviteHint[] {
   const rules = inviteRules(db);
   if (!rules.length) return [];
-  let brief = "";
-  const file = task.brief_path
-    ? isAbsolute(task.brief_path)
-      ? task.brief_path
-      : task.repo
-        ? join(task.repo, task.brief_path)
-        : undefined
-    : undefined;
-  if (file)
-    try {
-      brief = readFileSync(file, "utf8").slice(0, BRIEF_READ_MAX);
-    } catch {
-      // 详述读不到时只看标题；派活时会另外报错。
-    }
   const invited = new Set(concernRows(db, task.id).map((r) => ref(r.node_id)));
-  return inviteHints(rules, { text: `${task.title}\n${brief}` }, invited);
+  return inviteHints(
+    rules,
+    { text: `${task.title}\n${task.brief ?? ""}` },
+    invited,
+  );
 }
 
 /** 执行者交付后的提示：按改动的文件。 */

@@ -1,3 +1,4 @@
+import { briefInput } from "./brief-input.ts";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
@@ -80,7 +81,7 @@ export function renderCouncil(view: CouncilView, full = true): string {
 }
 
 const add: Command = {
-  args: "议题 --concerns 专员[,专员] [--brief 文件] [--issue 号] [--leader 节点] [--repo 路径] [--comment] [--part 节点] [--owner 订阅者]",
+  args: "议题 --concerns 专员[,专员] [--brief 文件|-] [--issue 号] [--leader 节点] [--repo 路径] [--comment] [--part 节点] [--owner 订阅者]",
   about:
     "发起会审：并行给每位受邀专员（关注点节点）派一个一次性执行者按各自章程与清单出意见，收齐后 leader（--leader 节点，缺省秘书）汇总一致与冲突、能定的定，碰到用户边界或谈不拢的标「需用户拍板」投事件；结论记在议题上，--comment 同步为 --issue 的评论",
   options: {
@@ -132,7 +133,7 @@ const add: Command = {
       concerns,
       ...(brief === undefined
         ? {}
-        : { brief_path: existing(brief, "--brief", "file") }),
+        : await briefInput(brief, (path) => existing(path, "--brief", "file"))),
       ...(issue === undefined ? {} : { issue }),
       ...(str(values, "leader") === undefined
         ? {}

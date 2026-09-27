@@ -191,21 +191,12 @@ test("章程份额事务、展示、修订与数据库保留额", async (t) => {
     (show(db, `o${render.id}`) as { charter: { rev: string } }).charter.rev,
     "r1",
   );
-  assert.equal(
-    await readQuotaReservePercent("/missing-charter", db, physics.id),
-    20,
-  );
+  assert.equal(readQuotaReservePercent(db, physics.id), 20);
   update(physics.id, { quota: { claude: 15 } }, [
     { id: "quota-reserve", param: { quota_reserve_percent: 25 } },
   ]);
-  assert.equal(
-    await readQuotaReservePercent("/missing-charter", db, physics.id),
-    25,
-  );
-  assert.equal(
-    await readQuotaReservePercent("/missing-charter", db, render.id),
-    20,
-  );
+  assert.equal(readQuotaReservePercent(db, physics.id), 25);
+  assert.equal(readQuotaReservePercent(db, render.id), 20);
   const diff = history(db, `o${physics.id}`, { rev: "r1", target: "charter" });
   assert.equal(
     (diff as { changes: Record<string, unknown> }).changes[

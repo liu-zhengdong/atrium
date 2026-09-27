@@ -4,6 +4,7 @@ import {
   parseTaskRef,
   requireRow,
   view,
+  listView,
   LIST_LIMIT,
   LIST_MAX,
   type TaskEventRow,
@@ -96,7 +97,7 @@ export function listTasks(
   );
   const more = rows.length > limit;
   const tasks = rows.slice(0, limit).map((row) => ({
-    ...view(row),
+    ...listView(row),
     ...noteView(db, row.id, row.status),
     ...queueView(db, row.id),
   }));

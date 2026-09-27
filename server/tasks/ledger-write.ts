@@ -41,6 +41,18 @@ import {
 } from "./concerns.ts";
 import { getJobRole } from "./job-roles.ts";
 import { ref as nodeRef } from "../org/model.ts";
+import { briefText, readBriefFile } from "./brief.ts";
+
+/** brief 给内容（brief_path 记来源）；只给 brief_path 时按路径读入，兼容旧调用方。 */
+function briefOf(input: Record<string, unknown>, repo: string | null) {
+  const brief_path = optionalText(input.brief_path, "brief_path");
+  if (input.brief !== undefined)
+    return { brief: briefText(input.brief), brief_path };
+  return {
+    brief: brief_path ? readBriefFile(brief_path, repo) : null,
+    brief_path,
+  };
+}
 
 /** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
 const roleNode = (
@@ -68,6 +80,9 @@ export type NewTask = {
   role?: string | null;
   job?: string | null;
   repo?: string | null;
+  /** 任务详述内容（#355）。 */
+  brief?: string | null;
+  /** 详述来源文件；只给它时建任务当下读入内容。 */
   brief_path?: string | null;
   owner?: string | null;
   deliver?: Deliver;
@@ -109,6 +124,7 @@ export function createTask(
     "role",
     "job",
     "repo",
+    "brief",
     "brief_path",
     "owner",
     "deliver",
@@ -124,6 +140,7 @@ export function createTask(
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
   validateDeliver(deliver, issue);
+  const repo = repoOf(input.repo);
   const values = {
     owner:
       input.owner === undefined || input.owner === null || input.owner === ""
@@ -131,8 +148,8 @@ export function createTask(
         : ownerOf(input.owner),
     title: title(input.title),
     role: optionalText(input.role, "role", 200),
-    repo: repoOf(input.repo),
-    brief_path: optionalText(input.brief_path, "brief_path"),
+    repo,
+    ...briefOf(input, repo),
   };
   return atomically(db, () => {
     const parent = parentOf(db, input.parent);
@@ -143,11 +160,12 @@ export function createTask(
     const concerns = concernsFor(db, input.concern);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ?,'todo',?,?)",
       )
       .run(
         parent,
         values.title,
+        values.brief,
         values.brief_path,
         values.role,
         values.repo,
@@ -183,7 +201,7 @@ export function createTask(
   });
 }
 
-/** 人工修正：title / brief_path / role / status；status 经状态机的 manual_set。 */
+/** 人工修正：title / brief / role / status；status 经状态机的 manual_set。 */
 export function updateTask(
   db: DatabaseSync,
   reference: unknown,
@@ -194,6 +212,7 @@ export function updateTask(
   const input = objectOf(body);
   onlyKeys(input, [
     "title",
+    "brief",
     "brief_path",
     "role",
     "job",
@@ -211,12 +230,10 @@ export function updateTask(
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、job、from、part、concern、status、deliver、issue、after、after_pr、auto、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、concern、status、deliver、issue、after、after_pr、auto、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
-  if ("brief_path" in input)
-    fields.brief_path = optionalText(input.brief_path, "brief_path");
   if ("role" in input) fields.role = optionalText(input.role, "role", 200);
   if ("deliver" in input) fields.deliver = deliverOf(input.deliver);
   if ("issue" in input) fields.issue = issueOf(input.issue);
@@ -233,6 +250,8 @@ export function updateTask(
   const target = "status" in input ? statusOf(input.status) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
+    if ("brief" in input || "brief_path" in input)
+      Object.assign(fields, briefOf(input, current.repo));
     if ("job" in input)
       fields.job_id = input.job ? getJobRole(db, input.job).id : null;
     if (
@@ -292,7 +311,21 @@ export function updateTask(
           .map((key) => `${key}=?`)
           .join(",")},updated_at=? WHERE id=?`,
       ).run(...Object.values(changed), now, id);
-      addEvent(db, id, now, "edited", changed);
+      // 详述内容可能很长，事件里只记改了多少字。
+      addEvent(
+        db,
+        id,
+        now,
+        "edited",
+        "brief" in changed
+          ? {
+              ...changed,
+              brief: changed.brief
+                ? `已更新（${Array.from(String(changed.brief)).length} 字）`
+                : "已清空",
+            }
+          : changed,
+      );
     }
     if (target !== undefined)
       applyTransition(db, current, { kind: "manual_set", to: target }, now);

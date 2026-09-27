@@ -793,7 +793,8 @@ test("隔离服务：被牵涉部分的 leader 收到知会不被叫醒，能写
   const results: Record<string, number> = {};
   let done = false;
   behave = async (spec) => {
-    if (spec.leader !== "a2") return "ok";
+    // 这里不确认事件：a2 的唤醒会重试、再转交上级 a1；只记 a2 第一次的结果，免得被覆盖。
+    if (done || spec.leader !== "a2") return "ok";
     const auth = `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`;
     results.note = (
       await call(

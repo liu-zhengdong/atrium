@@ -174,10 +174,11 @@ export class Agent {
     this.exec = options.exec ?? defaultExec;
     const limits = hostLimits(options.env, availableParallelism()).limits;
     this.checks = new LocalCheckQueue(limits.maxChecks);
+    // 服务进程自己的开关也要看：测试（NODE_TEST_CONTEXT）或显式关掉时不读这台的登录。
     this.quota =
       options.quota !== undefined
         ? options.quota
-        : readersEnabled(options.env)
+        : readersEnabled(options.env) && readersEnabled(process.env)
           ? new QuotaReaders(defaultReaderDeps(options.env))
           : null;
   }

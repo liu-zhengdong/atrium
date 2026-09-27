@@ -20,6 +20,7 @@ import { dequeue, heads } from "./queue.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
 import { alive, signalGroup, spawnWorker } from "./spawn.ts";
+import { finishPatrol, patrolRun } from "./patrol.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
@@ -154,11 +155,12 @@ export class Executors {
     const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
     const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");
-    const { child, offset } = await spawnWorker(
-      prepared,
-      this.ctx.launchOptions.env,
-      task.ref,
-    );
+    const env = { ...this.ctx.launchOptions.env };
+    if (patrolRun(this.ctx.db, id)) {
+      delete env.ATRIUM_WORKER;
+      Object.assign(env, this.ctx.launchOptions.patrolServiceEnv);
+    }
+    const { child, offset } = await spawnWorker(prepared, env, task.ref);
     const pid = child.pid!;
     if (this.ctx.closed()) {
       signalGroup(pid, "SIGKILL");
@@ -457,6 +459,10 @@ export class Executors {
         (decision.publish === "done" && isCouncilTask(this.ctx.db, id))
       ) {
         /* 由 councils.settle 推进会审。 */
+      } else if (patrolRun(this.ctx.db, id)) {
+        finishPatrol(this.ctx.db, this.ctx.inbox, id);
+        if (decision.publish !== "done")
+          this.publish(id, decision.publish, published);
       }
       // 关卡（含专员）都过了才去审阅或合入队列。
       else if (

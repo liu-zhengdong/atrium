@@ -103,6 +103,13 @@ const field = (detail: unknown, key: string, max: number) => {
 };
 
 export function eventLine(event: PromptEvent) {
+  if (event.kind === "patrol_findings") {
+    const detail = event.detail as {
+      node?: string;
+      findings?: { ref: string; phenomenon: string }[];
+    } | null;
+    return `- #${event.id} 巡检发现 ${detail?.node ?? ""}：${(detail?.findings ?? []).map((f) => `${f.ref} ${f.phenomenon}`).join("；")}`;
+  }
   return `- ${[
     `#${event.id}`,
     event.task,
@@ -166,6 +173,7 @@ export function leaderPrompt(input: PromptInput): string {
     "- 看：atrium task show tN；atrium task log tN；atrium task tree tN；atrium top --once；atrium map oN --json",
     "- 重派：atrium task run tN [--worker 工具+模型[:强度]]；捎话：atrium task tell tN 补充；停：atrium task stop tN；备注：atrium task note tN 文字",
     `- 新活：atrium task add 标题 --part ${home} [--brief 文件] [--repo 路径] [--concern 专员]；再 atrium task run tN`,
+    "- 巡检发现：atrium patrol findings oN；开任务后 atrium patrol decide fN --task tN，合到已有任务用 --merge tN，忽略用 --ignore 原因；处理后确认事件",
     `- 请专员：atrium task set tN --concern 安全；会审：atrium review add 议题 --concerns 安全,质量 --part ${home}`,
     `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,
     `- 子节点指派 leader：atrium org edit 子节点 --leader aM`,

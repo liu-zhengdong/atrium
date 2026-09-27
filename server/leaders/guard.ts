@@ -8,6 +8,7 @@ import { getTask } from "../tasks/ledger.ts";
 import { parentOf } from "../tasks/ledger-validate.ts";
 import { ackIds, type EventInbox } from "../tasks/events.ts";
 import { taskPartId } from "./subscriber.ts";
+import { findingNode } from "../tasks/patrol.ts";
 import { LeaderTokens } from "./tokens.ts";
 import {
   ackVerdict,
@@ -227,6 +228,15 @@ export function registerLeaderGuard(
         verdict = ackVerdict(leader, [...found.values()]);
         break;
       }
+      case "patrol-decide":
+        verdict = scopeVerdict(leader, scope, [
+          {
+            what: `发现 ${idParam(request)}`,
+            node: findingNode(db, idParam(request)),
+          },
+          ...(given(body.task) ? [taskCheck(db, body.task)] : []),
+        ]);
+        break;
     }
     if (verdict) throw forbid(verdict);
   });

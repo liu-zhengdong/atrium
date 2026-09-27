@@ -53,7 +53,16 @@ async function get(path) {
 
 /** 各类页的页签（第一个是默认）；组织根与其他块的页签在 nodeTabs 里再挑。 */
 const PAGE_TABS = {
-  node: ["parts", "concerns", "tasks", "roles", "skills", "workers", "points"],
+  node: [
+    "parts",
+    "concerns",
+    "tasks",
+    "roles",
+    "skills",
+    "workers",
+    "points",
+    "findings",
+  ],
   role: ["tasks", "workers", "skills"],
   worker: ["deliveries", "notes"],
 };
@@ -354,6 +363,28 @@ function drawNodeTasks({ node: n }) {
   });
 }
 
+function drawFindings({ node: n }) {
+  const status = {
+    new: "待处理",
+    task: "已开任务",
+    merged: "并入任务",
+    ignored: "已忽略",
+  };
+  return table(
+    "findings",
+    ["发现", "步骤与命令", "预期与实际", "处理"],
+    n.findings.map(
+      (f) => `<div class="row" role="row">
+      ${cell("发现", `<strong>${esc(f.ref)} ${esc(f.phenomenon)}</strong><br>${esc(f.kind === "broken" ? "坏了" : "不顺手")}`, "name plain")}
+      ${cell("步骤与命令", `${esc(f.step)}<br><code>${esc(f.command)}</code>`, "text")}
+      ${cell("预期与实际", `预期：${esc(f.expected)}<br>实际：${esc(f.actual)}`, "text")}
+      ${cell("处理", `${esc(status[f.status] || f.status)}${f.linked_task ? ` · ${esc(f.linked_task)}` : ""}${f.reason ? `<br>${esc(f.reason)}` : ""}`, "note")}
+    </div>`,
+    ),
+    "还没有巡检发现。",
+  );
+}
+
 function drawPoints({ node: n }) {
   return table(
     "points",
@@ -593,6 +624,11 @@ const TABS = {
     count: (d) => allPoints(d.node).length,
     draw: drawPoints,
   },
+  findings: {
+    label: "巡检发现",
+    count: (d) => d.node.findings.length,
+    draw: drawFindings,
+  },
   deliveries: {
     label: "交付记录",
     count: (d) => d.worker.deliveries.length,
@@ -609,8 +645,8 @@ function tabsOf(d) {
   if (d.page === "role") return ["tasks", "workers", "skills"];
   if (d.page === "worker") return ["deliveries", "notes"];
   return d.org
-    ? ["parts", "roles", "skills", "workers", "points"]
-    : ["parts", "concerns", "tasks", "points"];
+    ? ["parts", "roles", "skills", "workers", "points", "findings"]
+    : ["parts", "concerns", "tasks", "points", "findings"];
 }
 const tabLabel = (d, id) =>
   d.page === "role" && id === "workers" ? "谁做得好" : TABS[id].label;

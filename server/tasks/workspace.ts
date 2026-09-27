@@ -27,6 +27,7 @@ import { TELL_RULE, tellModeOf, tellSection } from "./tell.ts";
 import type { TellMode } from "./adapters/index.ts";
 import { checklists } from "./concerns.ts";
 import { concernSection } from "./concern-gate.ts";
+import { patrolRun } from "./patrol.ts";
 
 /**
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
@@ -56,6 +57,8 @@ export type LaunchOptions = {
   data: string;
   workersDir: string;
   env: NodeJS.ProcessEnv;
+  /** 隔离服务显式指定的数据与端口，巡检进程据此连回该服务。 */
+  patrolServiceEnv?: NodeJS.ProcessEnv;
   run?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
   /** 用量快照单独采样；测试可注入假 OpenQuota，不改变挑人采样次数。 */
@@ -149,23 +152,25 @@ export async function prepareRun(
     options.db && task.job_id
       ? getJobRole(options.db, `r${task.job_id}`)
       : undefined;
+  const patrol = options.db ? patrolRun(options.db, task.id) : undefined;
   const docs = task.repo
     ? await loadRoleDocs(worktree ?? task.repo, node)
     : { roleDoc: node?.body ?? "", rootDoc: "" };
   // 组织技能：节点链上绑定的 ∪ 档案指定的，拷进任务目录，只对这次运行生效。
-  const picked = options.db
-    ? skillsForTask(options.db, task, {
-        ...worker.profile.rules,
-        skills: [
-          ...new Set([
-            ...(Array.isArray(worker.profile.rules.skills)
-              ? worker.profile.rules.skills
-              : []),
-            ...(job?.skills ?? []),
-          ]),
-        ],
-      })
-    : undefined;
+  const picked =
+    options.db && !patrol
+      ? skillsForTask(options.db, task, {
+          ...worker.profile.rules,
+          skills: [
+            ...new Set([
+              ...(Array.isArray(worker.profile.rules.skills)
+                ? worker.profile.rules.skills
+                : []),
+              ...(job?.skills ?? []),
+            ]),
+          ],
+        })
+      : undefined;
   const mount = picked
     ? mountSkills(
         dir,
@@ -192,32 +197,43 @@ export async function prepareRun(
     : `工作目录：${cwd}（没有仓库，结果写在最后的回复里）。`;
   const prompt = buildPrompt({
     title: task.title,
-    brief,
+    brief: patrol
+      ? `节点：o${patrol.node_id}\n本轮场景：${patrol.scenario}\n一件事怎么走完：${(JSON.parse(patrol.flow) as string[]).map((step, i) => `${i + 1}. ${step}`).join("\n") || "按场景自行走通"}\n\n按场景实际操作；只读全景、帮助和命令回执。遇到问题用 atrium patrol report ${task.ref} --phenomenon 简短现象 --step 哪一步 --command '实际命令' --expected '预期' --actual '实际' --kind broken|awkward 记录。无发现也正常结束。`
+      : brief,
     tells: tellSection(tells),
     roleDoc: [
+      patrol
+        ? "# 角色：体验巡检\n\n把自己当用户使用 Atrium，找核心体验上的毛病。不读代码、不改代码、不查凭据或权限边界。不直接建改动任务；发现交给节点 leader。"
+        : "",
       job
         ? `# 角色：${job.name}\n\n${job.body}\n\n交付要求：${job.checks.join("、") || "按任务与档案要求"}`
         : "",
-      docs.roleDoc,
+      patrol ? "" : docs.roleDoc,
     ]
       .filter(Boolean)
       .join("\n\n"),
-    charter: options.db
-      ? withContext(
-          node ? charterBrief(options.db, node.id) : undefined,
-          taskContext(options.db, task.part_id ?? node?.id ?? null),
-        )
-      : undefined,
+    charter:
+      options.db && !patrol
+        ? withContext(
+            node ? charterBrief(options.db, node.id) : undefined,
+            taskContext(options.db, task.part_id ?? node?.id ?? null),
+          )
+        : undefined,
     concerns: options.db
       ? concernSection(checklists(options.db, task.id))
       : undefined,
     originDoc: origin
       ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
       : undefined,
-    skills: mount?.section,
-    rootDoc: docs.rootDoc,
-    profileBody: worker.profile.body,
-    rules: [where, ...deliveryRules(task), TELL_RULE],
+    skills: patrol ? undefined : mount?.section,
+    rootDoc: patrol ? undefined : docs.rootDoc,
+    profileBody: patrol ? undefined : worker.profile.body,
+    rules: patrol
+      ? [
+          "直接使用当前服务与真实数据。只看 atrium map / org show 的人话字段、atrium --help、atrium guide 和命令回执；不读仓库代码。只运行与本轮场景有关的命令；有副作用的操作只按场景实际需要执行。",
+          "每个不同现象只报告一次；结束后报告你走过的步骤。",
+        ]
+      : [where, ...deliveryRules(task), TELL_RULE],
   });
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, prompt, { mode: 0o600 });

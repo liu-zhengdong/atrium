@@ -8,6 +8,7 @@ import { Problem } from "./problem.ts";
 import { UserAuth } from "./user-auth.ts";
 import { authPolicy } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
+import { registerPatrolRoutes } from "./tasks/patrol-routes.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { registerGoalRoutes } from "./goals/routes.ts";
 import type { GoalCheckOptions } from "./goals/check-runtime.ts";
@@ -213,6 +214,7 @@ export async function createApp(options: {
     ...options.tasks,
   };
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
+  registerPatrolRoutes(app, db, taskRunner);
   const secretaryFallback = new SecretaryFallback(
     taskRunner.inbox,
     resolve(options.data),

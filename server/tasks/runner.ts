@@ -146,11 +146,20 @@ export class TaskRunner {
       leaseMs: options.leaseMs,
     });
     this.exec = options.exec ?? defaultExec;
+    const sourceEnv = options.env ?? process.env;
     this.launchOptions = {
       db,
       data: options.data,
       workersDir: options.workersDir ?? DEFAULT_WORKERS_DIR,
-      env: workerEnvironment(options.env ?? process.env),
+      env: workerEnvironment(sourceEnv),
+      patrolServiceEnv: {
+        ...(sourceEnv.ATRIUM_DATA
+          ? { ATRIUM_DATA: sourceEnv.ATRIUM_DATA }
+          : {}),
+        ...(sourceEnv.ATRIUM_PORT
+          ? { ATRIUM_PORT: sourceEnv.ATRIUM_PORT }
+          : {}),
+      },
       run: this.exec,
       pace: options.pace,
       usagePace: options.usagePace,

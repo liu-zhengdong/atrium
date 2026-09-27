@@ -2,16 +2,10 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { packageRoot } from "../server/service-state.ts";
 import {
   assertNoFixtureLeaks,
@@ -19,6 +13,7 @@ import {
   trackFixture,
 } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
+import { writeFakeBin } from "./fake-bin.ts";
 
 const exec = promisify(execFile);
 after(assertNoFixtureLeaks);
@@ -40,12 +35,10 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   mkdirSync(bin);
   const marker = join(root, "browser-opened");
   const stub = `#!/bin/sh\nprintf '%s' "$@" > "${marker}"\n`;
-  for (const name of ["open", "xdg-open"]) {
-    writeFileSync(join(bin, name), stub);
-    chmodSync(join(bin, name), 0o755);
-  }
+  for (const name of ["open", "xdg-open", "explorer"])
+    writeFakeBin(join(bin, name), stub);
   const env: NodeJS.ProcessEnv = childEnv({
-    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
     ATRIUM_DATA: data,
     ATRIUM_PORT: String(port),
     ATRIUM_DESKTOPS: join(root, "desktops"),

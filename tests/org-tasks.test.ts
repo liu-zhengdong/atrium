@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import { addPoint } from "../server/org/points.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -20,6 +20,7 @@ import {
 import { buildPrompt } from "../server/tasks/prepare.ts";
 import { prepareRun } from "../server/tasks/workspace.ts";
 import { formatCounts, formatDoc } from "../cli/org.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const ATRIUM = "/repo/atrium";
 const OPENQUOTA = "/repo/openquota";
@@ -355,7 +356,7 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
         at("- [Atrium] 随时升级") < at("硬边界（任何情况都不能放开）"),
     );
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
     db.close();
   }
   const plain = buildPrompt({ title: "旧任务", roleDoc: "旧岗位" });

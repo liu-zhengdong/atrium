@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -36,6 +36,7 @@ import {
 import { createApp } from "../server/app.ts";
 import { renderTop, snapshotOf } from "../cli/top.ts";
 import type { Client } from "../cli/service.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /** 不带 raw 的 org show。 */
 const show = (db: DatabaseSync, at: string) =>
@@ -439,7 +440,7 @@ test("task --part 与旧写法 --goal：落到节点、摘下、归档与二选�
 
 test("迁移接口：预览不写；只有 u1 能写；写入先备份，阶段进章程、任务回填、goal 接口下线并指路", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-migrate-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const { app, db } = await createApp({ data, auth: false });
   t.after(() => app.close());
   seed(db);
@@ -723,7 +724,7 @@ test("要点：增改删、权限同章程、不留修订；show 带本节点与
   db.close();
 
   const data = mkdtempSync(join(tmpdir(), "atrium-points-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const { app, db: live } = await createApp({ data, auth: false });
   t.after(() => app.close());
   seed(live);

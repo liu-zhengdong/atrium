@@ -1,13 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -42,6 +35,8 @@ import {
 } from "../cli/task-concerns.ts";
 import { cliErrorMessage } from "../cli/error-message.ts";
 import { startApp, until } from "./task-fixture.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 // ---- 纯函数 ----
 
@@ -444,7 +439,7 @@ test("专员结论补判：人工改过状态的父任务不动；重跑审查�
 for (const trusted of [true, false])
   test(`专员关卡通过后才去合入：${trusted ? "可信执行者投 merge_queued" : "trust 不明先投 review_queued"}，不先投 done`, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "atrium-concern-merge-"));
-    t.after(() => rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTemp(root));
     const db = ledger();
     const parent = createTask(db, {
       title: "父",
@@ -520,9 +515,10 @@ test("隔离服务：请了安全专员的任务交付后派审查任务，通�
   let veto = "";
   const { fx, data, call } = await startApp(t, (fx) => {
     veto = join(fx.env.HOME, "veto");
-    const file = join(fx.root, "bin", "claude");
-    writeFileSync(file, `#!/bin/sh\n${FAKE_REVIEWER}\n`);
-    chmodSync(file, 0o755);
+    writeFakeBin(
+      join(fx.root, "bin", "claude"),
+      `#!/bin/sh\n${FAKE_REVIEWER}\n`,
+    );
     mkdirSync(join(fx.root, "data"), { recursive: true });
     const db = new DatabaseSync(join(fx.root, "data", "atrium.sqlite"));
     ensureTaskTables(db);
@@ -575,7 +571,7 @@ test("隔离服务：请了安全专员的任务交付后派审查任务，通�
     "utf8",
   );
   assert.match(reviewPrompt, /# 任务：专员审查：安全 · t1 改登录日志/);
-  assert.match(reviewPrompt, new RegExp(`工作树：${passed.worktree}`));
+  assert.ok(reviewPrompt.includes(`工作树：${passed.worktree}`), reviewPrompt);
   assert.match(reviewPrompt, /结论：通过/);
 
   // 否决：同样的任务，专员给出否决

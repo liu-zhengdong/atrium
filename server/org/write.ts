@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { hasParentSegment, isAbsolutePath } from "../platform/plan.ts";
 import { Problem } from "../problem.ts";
 import {
   all,
@@ -84,8 +85,8 @@ function repoPaths(value: unknown): string[] {
     value.some(
       (repo) =>
         typeof repo !== "string" ||
-        !repo.startsWith("/") ||
-        repo.split("/").includes(".."),
+        !isAbsolutePath(process.platform, repo) ||
+        hasParentSegment(process.platform, repo),
     )
   )
     throw new Problem(400, "repos 应为绝对路径列表，不能包含 ..");

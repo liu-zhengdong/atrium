@@ -1,17 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  chmodSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { EventInbox } from "../server/tasks/events.ts";
 import { createApp } from "../server/app.ts";
@@ -28,6 +26,8 @@ import {
   wakeCount,
 } from "../server/tasks/secretary-session.ts";
 import { sessionStore } from "../cli/chat.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 async function until(check: () => boolean, what: string, ms = 5000) {
   const end = Date.now() + ms;
@@ -87,7 +87,7 @@ test("坏的秘书会话记录移开后其余数据仍可读取", () => {
     });
     assert.equal(loadSecretarySession(data)?.sessionId, "ses_123abc");
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });
 
@@ -109,7 +109,7 @@ test("原生界面与 ACP 共用 opencode-session.json，恢复读取同一个�
       cwd: data,
     });
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });
 
@@ -131,15 +131,14 @@ test("opencode 后台恢复使用秘书独立数据目录且只同步 API key", 
   });
   writeFileSync(auth, userAuth, { mode: 0o600 });
   const executable = join(bin, "opencode");
-  writeFileSync(
+  writeFakeBin(
     executable,
     `#!/usr/bin/env node\nconst fs = require('node:fs');\nconst target = process.env.ATRIUM_TEST_RESUME_LOG;\nconst tmp = target + '.tmp';\nfs.writeFileSync(tmp, JSON.stringify({args: process.argv.slice(2), home: process.env.XDG_DATA_HOME}));\nfs.renameSync(tmp, target);\n`,
   );
-  chmodSync(executable, 0o700);
   const oldPath = process.env.PATH;
   const oldHome = process.env.XDG_DATA_HOME;
   const oldLog = process.env.ATRIUM_TEST_RESUME_LOG;
-  process.env.PATH = `${bin}:${oldPath ?? ""}`;
+  process.env.PATH = `${bin}${delimiter}${oldPath ?? ""}`;
   process.env.XDG_DATA_HOME = userHome;
   process.env.ATRIUM_TEST_RESUME_LOG = log;
   try {
@@ -179,7 +178,7 @@ test("opencode 后台恢复使用秘书独立数据目录且只同步 API key", 
     else process.env.XDG_DATA_HOME = oldHome;
     if (oldLog === undefined) delete process.env.ATRIUM_TEST_RESUME_LOG;
     else process.env.ATRIUM_TEST_RESUME_LOG = oldLog;
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });
 
@@ -201,7 +200,7 @@ test("秘书会话所有权跨进程状态原子领取，存活子进程阻止�
     recovered.release();
     db.close();
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });
 
@@ -263,7 +262,7 @@ test("无界面恢复会话处理事件；界面持锁时不另起；失败不�
   } finally {
     await fallback.close();
     db.close();
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });
 
@@ -273,14 +272,13 @@ test("服务真实拉起一次性 codex 恢复进程并登记送达", async () =
   const log = join(data, "resume.json");
   mkdirSync(bin);
   const executable = join(bin, "codex");
-  writeFileSync(
+  writeFakeBin(
     executable,
     `#!/usr/bin/env node\nconst fs = require('node:fs');\nlet input = '';\nprocess.stdin.on('data', chunk => input += chunk);\nprocess.stdin.on('end', () => { const target = process.env.ATRIUM_TEST_RESUME_LOG; const tmp = target + '.tmp'; fs.writeFileSync(tmp, JSON.stringify({args: process.argv.slice(2), input})); fs.renameSync(tmp, target); });\n`,
   );
-  chmodSync(executable, 0o700);
   const oldPath = process.env.PATH;
   const oldLog = process.env.ATRIUM_TEST_RESUME_LOG;
-  process.env.PATH = `${bin}:${oldPath ?? ""}`;
+  process.env.PATH = `${bin}${delimiter}${oldPath ?? ""}`;
   process.env.ATRIUM_TEST_RESUME_LOG = log;
   let app: Awaited<ReturnType<typeof createApp>> | undefined;
   try {
@@ -318,6 +316,6 @@ test("服务真实拉起一次性 codex 恢复进程并登记送达", async () =
     else process.env.PATH = oldPath;
     if (oldLog === undefined) delete process.env.ATRIUM_TEST_RESUME_LOG;
     else process.env.ATRIUM_TEST_RESUME_LOG = oldLog;
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });

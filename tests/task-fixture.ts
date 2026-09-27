@@ -1,17 +1,13 @@
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
 import type { PaceEntry } from "../server/tasks/prepare.ts";
 import type { RunnerOptions } from "../server/tasks/runner.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /** 派活集成测试的夹具（#262）：本地 bare origin + 临时仓库 + PATH 前置的假执行者 + 临时档案。 */
 
@@ -19,7 +15,7 @@ type After = { after: (fn: () => void | Promise<void>) => void };
 
 export function fixture(t: After) {
   const root = mkdtempSync(join(tmpdir(), "atrium-runner-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTemp(root));
   const home = join(root, "home");
   mkdirSync(home);
   writeFileSync(
@@ -27,7 +23,7 @@ export function fixture(t: After) {
     "[user]\n\tname = t\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
   );
   const env = {
-    PATH: `${join(root, "bin")}:${process.env.PATH}`,
+    PATH: `${join(root, "bin")}${delimiter}${process.env.PATH}`,
     HOME: home,
     HERDR_PANE: "9",
     CLAUDECODE: "1",
@@ -55,9 +51,7 @@ export function fixture(t: After) {
   git(join(root, "repo"), "push", "-q", "-u", "origin", "main");
   mkdirSync(join(root, "bin"));
   const script = (name: string, body: string) => {
-    const file = join(root, "bin", name);
-    writeFileSync(file, `#!/bin/sh\n${body}\n`);
-    chmodSync(file, 0o755);
+    writeFakeBin(join(root, "bin", name), `#!/bin/sh\n${body}\n`);
   };
   // 假 kimi：记下环境、改一个文件并提交，汇报提交号；不开 PR。提交失败即非零退出，不冒充完成。
   script(

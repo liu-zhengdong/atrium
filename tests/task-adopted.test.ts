@@ -1,13 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -28,6 +25,9 @@ import {
   writeRestartState,
 } from "../server/supervisor.ts";
 import { until } from "./task-fixture.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { spawnCommand } from "../server/platform/index.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const line = (event: object) => JSON.stringify(event);
 const CLAUDE_OK = [
@@ -154,7 +154,7 @@ test("接管后退出的收尾决定：正常结束过关卡，出错判失败�
 
 function setup(t: { after: (fn: () => void) => void }) {
   const root = mkdtempSync(join(tmpdir(), "atrium-adopted-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTemp(root));
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const runner = new TaskRunner(db, {
@@ -238,11 +238,12 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
   const bin = join(root, "bin");
   mkdirSync(bin);
   // 名字叫 claude 的假执行者：ownsPid 按命令行里的可执行名认领。
-  const fake = join(bin, "claude");
-  writeFileSync(fake, '#!/bin/sh\nsleep "$1"\n');
-  chmodSync(fake, 0o755);
+  const fake = writeFakeBin(join(bin, "claude"), '#!/bin/sh\nsleep "$1"\n');
   const start = (seconds: string) => {
-    const child = spawn(fake, [seconds], { detached: true, stdio: "ignore" });
+    const child = spawnCommand(fake, [seconds], {
+      detached: true,
+      stdio: "ignore",
+    });
     child.unref();
     t.after(() => {
       try {
@@ -285,7 +286,7 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
 
 test("旧版遗留的待空闲重启记录：丢弃并记日志，不再挡派活", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-legacy-idle-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTemp(root));
   for (const status of ["waiting_idle", "idle_timeout"] as const) {
     writeRestartState(root, {
       id: `rst-${status}`,

@@ -15,20 +15,18 @@ const concurrency = process.env.ATRIUM_TEST_CONCURRENCY?.trim() ?? "";
 const limit = /^[1-9][0-9]{0,5}$/.test(concurrency)
   ? [`--test-concurrency=${concurrency}`]
   : [];
-const child = spawn(
-  join(root, "node_modules/.bin/tsx"),
-  ["--test", ...limit, ...tests],
-  {
-    cwd: root,
-    // 自带额度读取不碰开发者本机的登录与供应商接口；读取器测试显式注入假凭据。
-    env: {
-      ...process.env,
-      ATRIUM_TEST_RUN_ID: runId,
-      ATRIUM_QUOTA_READERS: "off",
-    },
-    stdio: "inherit",
+// 直接用 node 跑 tsx 的命令行：Windows 上 node_modules/.bin/tsx 是 .cmd，不能直接拉起。
+const tsx = fileURLToPath(import.meta.resolve("tsx/cli"));
+const child = spawn(process.execPath, [tsx, "--test", ...limit, ...tests], {
+  cwd: root,
+  // 自带额度读取不碰开发者本机的登录与供应商接口；读取器测试显式注入假凭据。
+  env: {
+    ...process.env,
+    ATRIUM_TEST_RUN_ID: runId,
+    ATRIUM_QUOTA_READERS: "off",
   },
-);
+  stdio: "inherit",
+});
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => child.kill(signal));
 const result = await new Promise<number>((resolve) => {

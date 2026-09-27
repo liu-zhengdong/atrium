@@ -3,12 +3,11 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { createApp } from "../server/app.ts";
@@ -31,10 +30,11 @@ import {
   writeProfile,
 } from "../server/tasks/worker-profiles.ts";
 import { profileDb } from "./profile-fixture.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 function legacyDir(t: { after: (fn: () => void) => void }) {
   const dir = mkdtempSync(join(tmpdir(), "atrium-workers-legacy-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   for (const sub of ["harness", "models", "combos"]) mkdirSync(join(dir, sub));
   const write = (file: string, text: string) =>
     writeFileSync(join(dir, file), text);
@@ -191,7 +191,9 @@ test("首次启动导入旧目录：坏记录跳过记日志、其余照常；�
   const result = importWorkerProfiles(db, dir, (m) => logs.push(m))!;
   assert.equal(result.imported, 4);
   assert.deepEqual(
-    result.skipped.map((s) => s.file.slice(dir.length + 1)).sort(),
+    result.skipped
+      .map((s) => relative(dir, s.file).split(sep).join("/"))
+      .sort(),
     [
       "combos/codex+x.md",
       "harness/gemini.md",
@@ -219,7 +221,7 @@ test("首次启动导入旧目录：坏记录跳过记日志、其余照常；�
   );
   assert.doesNotMatch(readProfile(db, "harness", "codex")!.source, /high/);
 
-  rmSync(dir, { recursive: true, force: true });
+  removeTemp(dir);
   const grok = await resolveWorker("grok", db);
   assert.equal(grok.model, "grok-4.6");
   assert.equal(grok.profile.rules.max_risk, "low");
@@ -319,7 +321,7 @@ test("改档案：整份替换或按字段改，校验不过不写，留修订",
 
 test("接口：带旧运行时表的库启动时导入档案，ls/show/edit 走库，leader 不能改档案", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-profiles-app-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const legacy = new DatabaseSync(join(data, "atrium.sqlite"));
   legacy.exec(
     "CREATE TABLE deliveries (id INTEGER PRIMARY KEY, body TEXT); CREATE TABLE agents (id TEXT PRIMARY KEY);",

@@ -5,13 +5,12 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { EventInbox } from "../server/tasks/events.ts";
 import { ensureTaskTables } from "../server/tasks/ledger.ts";
@@ -30,6 +29,7 @@ import {
   WAKE_PREFIX,
   userTurnSince,
 } from "../cli/secretary-serve.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const SERVE = join(import.meta.dirname, "fixtures", "fake-opencode-serve.mjs");
 
@@ -97,7 +97,9 @@ test("秘书的 opencode 数据目录独立：只同步 API key、不带 OAuth�
       JSON.parse(readFileSync(join(home, "opencode", "mcp-auth.json"), "utf8")),
       {},
     );
-    assert.equal(statSync(copy).mode & 0o777, 0o600);
+    // Windows 没有 POSIX 权限位，数据目录靠用户目录的 ACL。
+    if (process.platform !== "win32")
+      assert.equal(statSync(copy).mode & 0o777, 0o600);
     assert.throws(
       () => statSync(join(home, "opencode", "opencode.db")),
       "库不拷",
@@ -166,10 +168,10 @@ test("秘书的 opencode 数据目录独立：只同步 API key、不带 OAuth�
     );
     assert.equal(
       userOpencodeData({ XDG_DATA_HOME: "/x/share" }),
-      join("/x/share", "opencode"),
+      resolve("/x/share", "opencode"),
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   }
 });
 
@@ -420,6 +422,6 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
     await running;
     server.close();
     db.close();
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   }
 });

@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { legacyDir, legacyWorkersDir } from "../server/imports/index.ts";
@@ -26,6 +26,7 @@ import {
   finishFixture,
   trackFixture,
 } from "./fixture-signal.ts";
+import { writeFakeBin } from "./fake-bin.ts";
 
 /**
  * 隔离服务不读主目录（t128）：另给 ATRIUM_DATA 的服务不导入 ~/Atrium 的根章程与执行者档案，
@@ -37,18 +38,21 @@ after(assertNoFixtureLeaks);
 
 test("旧目录只在默认数据目录缺省读；隔离数据目录要显式给", () => {
   const home = "/h";
-  assert.equal(legacyDir({}, home), "/h/Atrium");
-  assert.equal(legacyDir({ ATRIUM_DATA: "/h/.atrium" }, home), "/h/Atrium");
+  assert.equal(legacyDir({}, home), join(home, "Atrium"));
+  assert.equal(
+    legacyDir({ ATRIUM_DATA: "/h/.atrium" }, home),
+    join(home, "Atrium"),
+  );
   assert.equal(legacyDir({ ATRIUM_DATA: "/tmp/iso" }, home), undefined);
   assert.equal(
     legacyDir({ ATRIUM_DATA: "/tmp/iso", ATRIUM_LEGACY_DIR: "/x" }, home),
     "/x",
   );
   assert.equal(legacyDir({ NODE_TEST_CONTEXT: "child" }, home), undefined);
-  assert.equal(legacyWorkersDir({}, home), "/h/Atrium/workers");
+  assert.equal(legacyWorkersDir({}, home), join(home, "Atrium", "workers"));
   assert.equal(
     legacyWorkersDir({ ATRIUM_LEGACY_DIR: "/x" }, home),
-    "/x/workers",
+    join("/x", "workers"),
   );
   assert.equal(legacyWorkersDir({ ATRIUM_DATA: "/tmp/iso" }, home), undefined);
   assert.equal(
@@ -103,16 +107,15 @@ test(
     const bin = join(root, "bin");
     const mark = join(root, "claude-ran");
     mkdirSync(bin);
-    writeFileSync(
+    writeFakeBin(
       join(bin, "claude"),
       `#!/bin/sh\necho ran >> '${mark}'\ncat > /dev/null\nexit 0\n`,
-      { mode: 0o755 },
     );
     const env = childEnv({
       ATRIUM_DATA: data,
       ATRIUM_PORT: String(await freePort()),
       HOME: home,
-      PATH: `${bin}:${process.env.PATH}`,
+      PATH: `${bin}${delimiter}${process.env.PATH}`,
       ATRIUM_LEADER_BATCH_SECONDS: "0",
       ATRIUM_QUOTA_READERS: "off",
       ATRIUM_OPENQUOTA_BIN: join(root, "no-openquota"),

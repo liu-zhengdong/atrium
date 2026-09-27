@@ -5,19 +5,14 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { getTask } from "../server/tasks/ledger.ts";
 import { clock, listHolds } from "../server/tasks/quota-holds.ts";
 import { startApp, until } from "./task-fixture.ts";
+import { isolatedPath, writeFakeBin } from "./fake-bin.ts";
+import { fileURLToPath } from "node:url";
 
 const HOUR = 3_600_000;
 
@@ -29,13 +24,11 @@ function quotaFixture(fx: {
   const bin = join(fx.root, "bin");
   const flag = join(fx.root, "codex-quota");
   const script = (name: string, body: string) => {
-    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
-    chmodSync(join(bin, name), 0o755);
+    writeFakeBin(join(bin, name), `#!/bin/sh\n${body}\n`);
   };
-  const sample = new URL(
-    "./fixtures/quota/codex-usage-limit.txt",
-    import.meta.url,
-  ).pathname;
+  const sample = fileURLToPath(
+    new URL("./fixtures/quota/codex-usage-limit.txt", import.meta.url),
+  );
   // 假 codex：标记文件在时输出真实额度报文并以 1 退出，否则正常完成。
   script(
     "codex",
@@ -43,9 +36,7 @@ function quotaFixture(fx: {
   );
   // 假 grok：429 但没有恢复时间。
   script("grok", 'echo "Error: 429 Too Many Requests"\nexit 1');
-  const git = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  if (!existsSync(join(bin, "git"))) symlinkSync(git, join(bin, "git"));
-  fx.env.PATH = `${bin}:/usr/bin:/bin`;
+  fx.env.PATH = isolatedPath(bin);
   writeFileSync(
     join(fx.workers, "harness", "codex.md"),
     "---\ntrust: high\nmax_risk: high\nchecks: []\n---\n",

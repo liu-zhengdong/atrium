@@ -1,12 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +44,8 @@ import { renderCouncil } from "../cli/reviews.ts";
 import { cliErrorMessage } from "../cli/error-message.ts";
 import { commands } from "../cli/main.ts";
 import { startApp, until } from "./task-fixture.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 // ---- 纯函数 ----
 
@@ -283,7 +283,7 @@ function seed(db: DatabaseSync, repo: string) {
 
 function ledger(t: { after: (fn: () => void) => void }) {
   const data = mkdtempSync(join(tmpdir(), "atrium-council-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   seed(db, "/repo/atrium");
@@ -637,9 +637,7 @@ test("隔离服务：三位专员并行出意见，leader 汇总后记结论并�
   let escalate = "";
   const { data, call } = await startApp(t, (fx) => {
     escalate = join(fx.env.HOME, "escalate");
-    const file = join(fx.root, "bin", "claude");
-    writeFileSync(file, `#!/bin/sh\n${FAKE_CLAUDE}\n`);
-    chmodSync(file, 0o755);
+    writeFakeBin(join(fx.root, "bin", "claude"), `#!/bin/sh\n${FAKE_CLAUDE}\n`);
     mkdirSync(join(fx.root, "data"), { recursive: true });
     const db = new DatabaseSync(join(fx.root, "data", "atrium.sqlite"));
     ensureTaskTables(db);

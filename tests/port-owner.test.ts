@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
   classifyPortReply,
@@ -12,21 +12,27 @@ import { dataDirectory, legacyDataNotice } from "../server/service-state.ts";
 
 test("默认数据目录是 ~/.atrium，ATRIUM_DATA 可覆盖（t71）", () => {
   assert.equal(dataDirectory({}), join(homedir(), ".atrium"));
-  assert.equal(dataDirectory({ ATRIUM_DATA: "/tmp/nope-x" }), "/tmp/nope-x");
+  assert.equal(
+    dataDirectory({ ATRIUM_DATA: "/tmp/nope-x" }),
+    resolve("/tmp/nope-x"),
+  );
 });
 
 test("只有前一代数据目录时提示已归档，其余情形不提示（t71）", () => {
   const home = "/h";
-  const legacy = "/h/.pi/atrium/data";
+  const legacy = join(home, ".pi", "atrium", "data");
   const has =
     (...paths: string[]) =>
     (path: string) =>
       paths.includes(path);
   assert.equal(
     legacyDataNotice({}, home, has(legacy)),
-    "前一代数据在 /h/.pi/atrium/data，已归档，不再使用；新一代数据放在 /h/.atrium（可用 ATRIUM_DATA 改）",
+    `前一代数据在 ${legacy}，已归档，不再使用；新一代数据放在 ${join(home, ".atrium")}（可用 ATRIUM_DATA 改）`,
   );
-  assert.equal(legacyDataNotice({}, home, has(legacy, "/h/.atrium")), null);
+  assert.equal(
+    legacyDataNotice({}, home, has(legacy, join(home, ".atrium"))),
+    null,
+  );
   assert.equal(legacyDataNotice({}, home, has()), null);
   assert.equal(
     legacyDataNotice({ ATRIUM_DATA: "/x" }, home, has(legacy)),

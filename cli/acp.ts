@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { killTree, spawnCommand } from "../server/platform/index.ts";
 
 /**
  * 最小 ACP（Agent Client Protocol）客户端：换行分隔的 JSON-RPC 2.0，经 stdio 与 Agent 进程通信。
@@ -72,12 +73,12 @@ export class AcpConnection {
     private readonly handlers: AcpHandlers,
   ) {
     // 独立进程组：终端的 Ctrl-C 由聊天界面处理（取消本轮），退出时整组结束。
-    this.child = spawn(command, args, {
+    this.child = spawnCommand(command, args, {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
-    });
+    }) as ChildProcessWithoutNullStreams;
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => this.read(chunk));
     this.child.stderr.setEncoding("utf8");
@@ -117,11 +118,8 @@ export class AcpConnection {
 
   close() {
     if (this.exited) return;
-    try {
-      process.kill(-this.child.pid!, "SIGTERM");
-    } catch {
-      this.child.kill("SIGTERM");
-    }
+    if (this.child.pid) killTree(this.child.pid, "SIGTERM");
+    else this.child.kill("SIGTERM");
   }
 
   private write(message: unknown) {

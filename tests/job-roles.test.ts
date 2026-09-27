@@ -22,6 +22,7 @@ import {
 } from "../server/tasks/delivery-records.ts";
 import { rankRoleWorkers } from "../server/tasks/role-ranking.ts";
 import { jobMismatch } from "../server/tasks/job-mismatch.ts";
+import { removeTemp } from "./temp-dir.ts";
 const db = () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);

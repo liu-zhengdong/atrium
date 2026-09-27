@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -21,6 +21,7 @@ import { pickWorker } from "../server/tasks/prepare.ts";
 import { DiskBudget } from "../server/tasks/disk-budget.ts";
 import { WorktreeCleanup } from "../server/tasks/worktree-cleanup.ts";
 import { fixture, startApp } from "./task-fixture.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const pace = (usedPercent: number, hoursToReset = 1) => [
   {
@@ -200,7 +201,7 @@ test("磁盘：生效下限与节点 worktree 份额在派活前拒绝", async (
   ensureTaskTables(db);
   ensureOrgTables(db);
   const dir = mkdtempSync(join(tmpdir(), "atrium-disk-budget-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   const root = addNode(
     db,
     { slug: "org", kind: "org", name: "组织", reason: "建树" },

@@ -1,13 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -39,6 +33,8 @@ import { GoalChecker } from "../server/goals/check-runtime.ts";
 import { GOAL_STATUSES } from "../server/goals/rules.ts";
 import { createApp } from "../server/app.ts";
 import { checkLine, itemLines } from "../cli/goals.ts";
+import { removeTemp } from "./temp-dir.ts";
+import { nodeCommand, sleepCommand, TRUE_COMMAND } from "./portable-shell.ts";
 
 /** 组织 o1（u1）；Atrium o2（a1）下 runtime o3（a2）、质量 o4（a3，关注点）；OpenQuota o5（a4）下质量 o6（a5）。 */
 const ORG = [
@@ -257,7 +253,7 @@ test("命令结论、人工判定只给非命令条目、输出摘要截尾并�
 test("写验收标准与仓库：$ 笔误拒绝；--repo 须是存在目录的绝对路径", (t) => {
   const db = setup();
   const dir = mkdtempSync(join(tmpdir(), "atrium-goal-repo-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   assert.throws(
     () => addGoal(db, { result: "顶层", criteria: ["$npm test"] }, "u1"),
     /--criteria: .*\$ 后空一格/,
@@ -404,7 +400,7 @@ async function settle(checker: GoalChecker, ref: string, ids: number[]) {
 
 test("运行时跑命令：没填仓库在空临时目录跑，通过与失败各一次，白名单环境，跑完删临时目录", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-goal-check-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const db = setup();
   const checker = new GoalChecker(db, {
     data,
@@ -416,9 +412,9 @@ test("运行时跑命令：没填仓库在空临时目录跑，通过与失败�
     {
       result: "顶层",
       criteria: [
-        '$ test -z "$(ls -A)" && echo 空目录',
-        "$ echo 坏了 >&2; exit 3",
-        '$ test -z "$SECRET_TOKEN" && test "$ATRIUM_WORKER" = 1',
+        `$ ${nodeCommand("if (require('fs').readdirSync('.').length) process.exit(1); console.log('空目录')")}`,
+        `$ ${nodeCommand("console.error('坏了'); process.exit(3)")}`,
+        `$ ${nodeCommand("process.exit(!process.env.SECRET_TOKEN && process.env.ATRIUM_WORKER === '1' ? 0 : 1)")}`,
         "人工条目",
       ],
     },
@@ -462,8 +458,8 @@ test("运行时跑命令：在仓库的临时 worktree 里跑（不碰原工作�
   const data = mkdtempSync(join(tmpdir(), "atrium-goal-check-"));
   const repo = mkdtempSync(join(tmpdir(), "atrium-goal-repo-"));
   t.after(() => {
-    rmSync(data, { recursive: true, force: true });
-    rmSync(repo, { recursive: true, force: true });
+    removeTemp(data);
+    removeTemp(repo);
   });
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" }).toString();
@@ -489,8 +485,8 @@ test("运行时跑命令：在仓库的临时 worktree 里跑（不碰原工作�
       result: "顶层",
       repo,
       criteria: [
-        "$ grep -q 已提交 marker.txt && test ! -e dirty.txt && touch 产物.txt",
-        "$ sleep 30",
+        `$ ${nodeCommand("const fs = require('fs'); if (!fs.readFileSync('marker.txt', 'utf8').includes('已提交') || fs.existsSync('dirty.txt')) process.exit(1); fs.writeFileSync('产物.txt', '')")}`,
+        `$ ${sleepCommand(30)}`,
       ],
     },
     "u1",
@@ -513,13 +509,17 @@ test("运行时跑命令：仓库不是 git 时判没跑成；关服务时在跑
   const data = mkdtempSync(join(tmpdir(), "atrium-goal-check-"));
   const plain = mkdtempSync(join(tmpdir(), "atrium-goal-plain-"));
   t.after(() => {
-    rmSync(data, { recursive: true, force: true });
-    rmSync(plain, { recursive: true, force: true });
+    removeTemp(data);
+    removeTemp(plain);
   });
   const db = setup();
   const checker = new GoalChecker(db, { data });
-  addGoal(db, { result: "顶层", repo: plain, criteria: ["$ true"] }, "u1");
-  addGoal(db, { result: "另一个", criteria: ["$ sleep 30"] }, "u1");
+  addGoal(
+    db,
+    { result: "顶层", repo: plain, criteria: [`$ ${TRUE_COMMAND}`] },
+    "u1",
+  );
+  addGoal(db, { result: "另一个", criteria: [`$ ${sleepCommand(30)}`] }, "u1");
   const bad = checker.start("g1", undefined, "u1");
   const [error] = await settle(checker, "g1", [bad.checks[0]!.id]);
   assert.equal(error!.result, "error");
@@ -535,7 +535,7 @@ test("运行时跑命令：仓库不是 git 时判没跑成；关服务时在跑
 
 test("HTTP：goal check 跑命令并等结果，人工判定走同一入口，goal show 给可标达成", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-goal-http-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const { app, db } = await createApp({ data, auth: false });
   t.after(() => app.close());
   addNode(
@@ -556,7 +556,7 @@ test("HTTP：goal check 跑命令并等结果，人工判定走同一入口，go
   };
   await call("POST", "/api/goals", {
     result: "顶层",
-    criteria: ["$ true", "$ exit 1", "看过"],
+    criteria: [`$ ${TRUE_COMMAND}`, "$ exit 1", "看过"],
   });
   assert.equal(
     (await call("POST", "/api/goals/g1/check", { item: 1, bogus: 1 })).status,

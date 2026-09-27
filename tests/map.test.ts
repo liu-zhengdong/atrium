@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,7 @@ import { addMap, editMap, mergeFields } from "../server/map/write.ts";
 import { mapNode, mapTree, mapSignature } from "../server/map/view.ts";
 import { renderMapTree } from "../cli/map.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const chars = (text: string) => Array.from(text).length;
 const node = (db: DatabaseSync, input: Record<string, unknown>) =>
@@ -429,7 +430,7 @@ test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；�
 
 async function service(t: { after: (fn: () => unknown) => void }) {
   const data = mkdtempSync(join(tmpdir(), "atrium-map-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const created = await createApp({
     data,
     tasks: { pace: async () => undefined },

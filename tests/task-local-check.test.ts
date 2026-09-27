@@ -4,7 +4,6 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -17,6 +16,8 @@ import {
   runLocalCheck,
   type LocalCheck,
 } from "../server/tasks/local-check.ts";
+import { removeTemp } from "./temp-dir.ts";
+import { nodeCommand, sleepCommand } from "./portable-shell.ts";
 
 const facts: Facts = {
   repo: true,
@@ -76,7 +77,7 @@ test("检查命令优先读取 .agents/check，缺失时读取 package.json", as
     writeFileSync(join(root, ".agents", "check"), "");
     await assert.rejects(checkCommand(root), /为空/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   }
 });
 
@@ -93,7 +94,7 @@ test("拒绝指向工作树外的检查脚本", async () => {
     assert.equal(result.status, "error");
     assert.match(result.detail, /工作树外/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   }
 });
 
@@ -106,7 +107,9 @@ test("本地检查输出落任务目录，超时杀进程组并记录失败用�
     const script = join(worktree, ".agents", "check");
     writeFileSync(
       script,
-      "echo \"worker=$ATRIUM_WORKER secret=$PRIVATE_TEST_TOKEN\"; echo 'not ok 1 - 边界用例'; exit 1\n",
+      nodeCommand(
+        "console.log('worker=' + (process.env.ATRIUM_WORKER || '') + ' secret=' + (process.env.PRIVATE_TEST_TOKEN || '')); console.log('not ok 1 - 边界用例'); process.exit(1)",
+      ),
     );
     const failed = await runLocalCheck({
       worktree,
@@ -118,7 +121,7 @@ test("本地检查输出落任务目录，超时杀进程组并记录失败用�
     assert.match(readFileSync(failed.log, "utf8"), /not ok 1/);
     assert.match(readFileSync(failed.log, "utf8"), /worker=1 secret=$/m);
 
-    writeFileSync(script, "sleep 10\n");
+    writeFileSync(script, sleepCommand(10));
     const timed = await runLocalCheck({
       worktree,
       taskDir: dir,
@@ -127,7 +130,7 @@ test("本地检查输出落任务目录，超时杀进程组并记录失败用�
     assert.equal(timed.status, "timeout");
     assert.match(timed.detail, /超过/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   }
 });
 
@@ -141,7 +144,10 @@ test("多个任务共用队列，后一份等前一份结束再运行", async ()
       mkdirSync(join(root, name, ".agents"), { recursive: true });
       writeFileSync(
         join(root, name, ".agents", "check"),
-        `echo ${name}-start >> '${marker}'; sleep 0.1; echo ${name}-end >> '${marker}'\n`,
+        nodeCommand(
+          `const fs = require('fs'); fs.appendFileSync(process.argv[1], '${name}-start\\n'); setTimeout(() => fs.appendFileSync(process.argv[1], '${name}-end\\n'), 100)`,
+          marker,
+        ),
       );
     }
     const run = (name: string) =>
@@ -162,6 +168,6 @@ test("多个任务共用队列，后一份等前一份结束再运行", async ()
       "b-end",
     ]);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   }
 });

@@ -19,7 +19,8 @@ import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import { dequeue, heads } from "./queue.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
-import { alive, signalGroup, spawnWorker } from "./spawn.ts";
+import { killTree } from "../platform/index.ts";
+import { alive, spawnWorker } from "./spawn.ts";
 import { finishPatrol, patrolRun } from "./patrol.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
@@ -177,7 +178,7 @@ export class Executors {
     const { child, offset } = await spawnWorker(prepared, env, task.ref);
     const pid = child.pid!;
     if (this.ctx.closed()) {
-      signalGroup(pid, "SIGKILL");
+      killTree(pid, "SIGKILL");
       throw new Error("服务已关闭");
     }
     let started: Task;
@@ -202,7 +203,7 @@ export class Executors {
         },
       );
     } catch (error) {
-      signalGroup(pid, "SIGKILL");
+      killTree(pid, "SIGKILL");
       throw error;
     }
     markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
@@ -653,16 +654,16 @@ export class Executors {
   private forceFinalExit(active: Active) {
     if (active.exited || !active.finalizing || active.finalizing.forced) return;
     active.finalizing.forced = true;
-    signalGroup(active.pid, "SIGTERM");
+    killTree(active.pid, "SIGTERM");
     setTimeout(() => {
-      if (!active.exited) signalGroup(active.pid, "SIGKILL");
+      if (!active.exited) killTree(active.pid, "SIGKILL");
     }, this.ctx.killGraceMs ?? 10_000).unref();
   }
 
   kill(active: Active) {
-    signalGroup(active.pid, "SIGTERM");
+    killTree(active.pid, "SIGTERM");
     setTimeout(() => {
-      if (!active.exited) signalGroup(active.pid, "SIGKILL");
+      if (!active.exited) killTree(active.pid, "SIGKILL");
     }, this.ctx.killGraceMs ?? 10_000).unref();
   }
 

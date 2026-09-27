@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import {
   closeSync,
   fstatSync,
@@ -9,6 +8,7 @@ import {
 } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { killTree, spawnShell } from "../platform/index.ts";
 import { workerEnvironment } from "./worker-env.ts";
 import { checkPlacement } from "./host-load.ts";
 
@@ -97,7 +97,7 @@ export class LocalCheckQueue {
 /** 服务里所有任务共用的本地检查队列；并发上限由运行时按本机配置设（host-load.ts）。 */
 export const sharedLocalChecks = new LocalCheckQueue();
 
-/** .agents/check 是仓库内的 shell 脚本；没有时读取 package.json 的 check 脚本。 */
+/** .agents/check 是仓库内的 shell 命令（Unix 经 /bin/sh，Windows 经 cmd.exe）；没有时读取 package.json 的 check 脚本。 */
 export async function checkCommand(worktree: string): Promise<string> {
   const root = await realpath(worktree);
   const inside = async (file: string) => {
@@ -195,7 +195,7 @@ export async function runLocalCheck(input: {
       const fd = openSync(log, "w", 0o600);
       let child;
       try {
-        child = spawn("/bin/sh", ["-c", command], {
+        child = spawnShell(command, {
           cwd: input.worktree,
           env: workerEnvironment(input.env),
           detached: true,
@@ -214,13 +214,7 @@ export async function runLocalCheck(input: {
       closeSync(fd);
       let timedOut = false;
       const abort = () => {
-        if (child.pid) {
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch {
-            /* already exited */
-          }
-        }
+        if (child.pid) killTree(child.pid, "SIGKILL");
       };
       input.signal?.addEventListener("abort", abort, { once: true });
       if (input.signal?.aborted) abort();

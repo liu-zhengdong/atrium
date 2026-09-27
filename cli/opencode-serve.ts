@@ -1,4 +1,6 @@
-import { spawn } from "node:child_process";
+import type { ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
+import { killTree, spawnCommand } from "../server/platform/index.ts";
 import { randomBytes } from "node:crypto";
 export {
   AUTH_FILES,
@@ -39,21 +41,18 @@ export function startOpencodeServe(options: {
     "0",
   ];
   // 独立进程组：终端的 Ctrl-C 只给前台界面，退出时整组结束。
-  const child = spawn(command, args, {
+  const child = spawnCommand(command, args, {
     cwd: options.cwd,
     env: options.env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
-  });
+  }) as ChildProcessByStdio<null, Readable, Readable>;
   let output = "";
   let tail = "";
   const close = () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
-    try {
-      process.kill(-child.pid!, "SIGTERM");
-    } catch {
-      child.kill("SIGTERM");
-    }
+    if (child.pid) killTree(child.pid, "SIGTERM");
+    else child.kill("SIGTERM");
   };
   const exited = new Promise<string>((resolve) => {
     child.on("error", (error) => resolve(error.message));

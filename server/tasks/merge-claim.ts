@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { processAlive } from "../platform/index.ts";
 import { atomically } from "./ledger.ts";
 
 /** 全局合入队首的进程占用。旧进程仍在时，新服务不能碰同一工作树。 */
@@ -19,13 +20,8 @@ export class MergeClaim {
         .get() as { pid: number; token: string } | undefined;
       if (held) {
         if (held.token === this.token) return false;
-        try {
-          process.kill(held.pid, 0);
-          return false;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
-          this.db.prepare("DELETE FROM merge_claim WHERE id=1").run();
-        }
+        if (processAlive(held.pid)) return false;
+        this.db.prepare("DELETE FROM merge_claim WHERE id=1").run();
       }
       this.db
         .prepare(

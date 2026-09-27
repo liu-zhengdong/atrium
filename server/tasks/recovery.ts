@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { commandLineInvocation } from "../platform/index.ts";
 import { adopted } from "./active.ts";
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
 import { defaultBranch, type Exec } from "./git.ts";
@@ -16,9 +17,8 @@ import { alive } from "./spawn.ts";
 /** pid 还在，且确实是该工具的进程（防 pid 复用误接管、误杀）。 */
 export async function ownsPid(pid: number, tool: Tool, exec: Exec) {
   if (!alive(pid)) return false;
-  const ps = await exec("ps", ["-o", "command=", "-p", String(pid)], {
-    timeoutMs: 5000,
-  });
+  const call = commandLineInvocation(process.platform, pid);
+  const ps = await exec(call.command, call.args, { timeoutMs: 10_000 });
   return ps.ok && ps.stdout.includes(ADAPTERS[tool].executable);
 }
 

@@ -4,7 +4,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -13,10 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 async function fixture(t: { after: (fn: () => unknown) => void }) {
   const data = mkdtempSync(join(tmpdir(), "atrium-auth-test-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const { app } = await createApp({
     data,
     controlToken: "fixture-control",
@@ -29,7 +29,7 @@ async function fixture(t: { after: (fn: () => unknown) => void }) {
 
 test("interrupted first boot preserves an invalid token file and starts with a new one", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-auth-recover-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   writeFileSync(userTokenPath(data), "broken", { mode: 0o600 });
   const { app } = await createApp({
     data,
@@ -39,7 +39,9 @@ test("interrupted first boot preserves an invalid token file and starts with a n
   const files = readdirSync(data);
   assert(files.some((name) => name.startsWith("user-token.invalid-")));
   assert.match(readFileSync(userTokenPath(data), "utf8"), /^[a-f0-9]{64}\n$/);
-  assert.equal(statSync(userTokenPath(data)).mode & 0o777, 0o600);
+  // Windows 没有 POSIX 权限位，数据目录靠用户目录的 ACL。
+  if (process.platform !== "win32")
+    assert.equal(statSync(userTokenPath(data)).mode & 0o777, 0o600);
 });
 
 test("user API requires the bearer token and rejects foreign Host or Origin", async (t) => {
@@ -110,7 +112,9 @@ test("rotate accepts the user or control credential and revokes the old token", 
   assert.equal(rotated.statusCode, 200);
   const fresh = readFileSync(userTokenPath(f.data), "utf8").trim();
   assert.notEqual(fresh, f.token);
-  assert.equal(statSync(userTokenPath(f.data)).mode & 0o777, 0o600);
+  // Windows 没有 POSIX 权限位，数据目录靠用户目录的 ACL。
+  if (process.platform !== "win32")
+    assert.equal(statSync(userTokenPath(f.data)).mode & 0o777, 0o600);
   assert.equal(
     (
       await f.app.inject({

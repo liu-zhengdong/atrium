@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { EventInbox } from "./events.ts";
 import { claimSecretary } from "./secretary-lock.ts";
@@ -16,6 +15,9 @@ import {
 } from "./secretary-session.ts";
 import { wakePrompt } from "./wake-prompt.ts";
 import { decideWake, nextWakeCount } from "./wake-rule.ts";
+import type { ChildProcessByStdio } from "node:child_process";
+import type { Writable } from "node:stream";
+import { killTree, spawnCommand } from "../platform/index.ts";
 import { serviceEnvironment } from "../service-env.ts";
 
 export type ResumeRun = (
@@ -71,24 +73,26 @@ export const resumeTurn: ResumeRun = (
     env = opencodeEnvironment(env, { home });
   }
   return new Promise((resolve) => {
-    const child = spawn(spec.command, spec.args, {
-      cwd: session.cwd,
-      env,
-      stdio: ["pipe", "ignore", "ignore"],
-      detached: process.platform !== "win32",
-    });
+    let child: ChildProcessByStdio<Writable, null, null>;
+    try {
+      child = spawnCommand(spec.command, spec.args, {
+        cwd: session.cwd,
+        env,
+        stdio: ["pipe", "ignore", "ignore"],
+        detached: true,
+      }) as ChildProcessByStdio<Writable, null, null>;
+    } catch {
+      resolve(false);
+      return;
+    }
     if (child.pid) childPid(child.pid);
     child.stdin.on("error", () => {});
     if (spec.stdin) child.stdin.end(spec.stdin);
     else child.stdin.end();
     let timedOut = false;
-    const signalChild = (signal: NodeJS.Signals) => {
-      try {
-        if (process.platform === "win32") child.kill(signal);
-        else if (child.pid) process.kill(-child.pid, signal);
-      } catch {
-        child.kill(signal);
-      }
+    const signalChild = (signal: "SIGTERM" | "SIGKILL") => {
+      if (child.pid) killTree(child.pid, signal);
+      else child.kill(signal);
     };
     let force: NodeJS.Timeout | undefined;
     const stop = () => {

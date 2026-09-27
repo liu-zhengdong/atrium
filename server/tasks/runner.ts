@@ -31,7 +31,7 @@ import { dequeue, enqueue, ensureQueueTable, queued } from "./queue.ts";
 import { clock } from "./quota-holds.ts";
 import { QuotaGuard } from "./quota-runtime.ts";
 import { recoverRunning } from "./recovery.ts";
-import { signalGroup } from "./spawn.ts";
+import { killTree } from "../platform/index.ts";
 import { countRows, RECENT_MS, topRows } from "./top.ts";
 import { TaskWaits } from "./waits.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
@@ -733,7 +733,7 @@ export class TaskRunner {
         `atrium task show ${task.ref}`,
       );
     // 账本说在跑、服务却没有掌握这个进程：直接收尾，免得一直挂着。
-    if (task.pid) signalGroup(task.pid, "SIGTERM");
+    if (task.pid) killTree(task.pid, "SIGTERM");
     const stopped = this.x.advance(
       id,
       { kind: "exit_fail" },

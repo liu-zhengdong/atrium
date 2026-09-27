@@ -4,10 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import {
   appendFileSync,
-  chmodSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +16,8 @@ import {
   STEP_CHUNK,
 } from "../server/tasks/watchdog.ts";
 import { startApp, until } from "./task-fixture.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 test("最终 result 判定只接受最后一轮完整收尾", () => {
   const result =
@@ -40,7 +40,7 @@ test("最终 result 判定只接受最后一轮完整收尾", () => {
 
 test("步骤计数：日志里出现超过 1 MiB 的单行后，后续步骤照常计数", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-probe-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   const log = join(dir, "run.log");
   const step = '{"type":"assistant"}\n';
   writeFileSync(log, "");
@@ -73,9 +73,8 @@ test("步骤计数：日志里出现超过 1 MiB 的单行后，后续步骤照�
 
 test("看门狗：Claude 已输出最终 result 却不退出，催退后照常过关卡", async (t) => {
   const { data, call } = await startApp(t, (fx) => {
-    const file = join(fx.root, "bin", "claude");
-    writeFileSync(
-      file,
+    writeFakeBin(
+      join(fx.root, "bin", "claude"),
       `#!/usr/bin/env node
 const out = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
 process.stdin.resume();
@@ -84,7 +83,6 @@ setInterval(() => {}, 1000);
 setTimeout(() => out({ stop_reason: "end_turn", is_error: false, result: "done", type: "result" }), 100);
 `,
     );
-    chmodSync(file, 0o755);
     writeFileSync(
       join(fx.workers, "harness", "claude.md"),
       "---\nchecks: []\nlimits: {idle_minutes: 0.01}\n---\n",
@@ -172,8 +170,12 @@ test("看门狗：假执行者零输出判卡死、按档案重试一次后失�
   );
   const t3 = getTask(db, "t3").events.map((event) => event.kind);
   assert.ok(t3.indexOf("queued") < t3.indexOf("start"));
-  const t2 = getTask(db, "t2");
-  assert.ok(t2.ended_at! <= getTask(db, "t3").started_at!, "独占工具不重叠");
+  // 独占按进程是否退出放行；账本的 ended_at 要等关卡收尾才写（Windows 上更慢），不拿它比。
+  // 假 opencode 要跑 0.6 秒：t3 在 t2 拉起 0.5 秒之后才拉起（留出记账的毫秒差），两者进程没有重叠。
+  assert.ok(
+    getTask(db, "t3").started_at! - getTask(db, "t2").started_at! >= 500,
+    "独占工具不重叠",
+  );
 
   await call("POST", "/api/tasks", { title: "to stop" });
   const running = await call("POST", "/api/tasks/t4/run", { worker: "grok" });

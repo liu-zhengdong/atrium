@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
+import { samePath } from "../platform/plan.ts";
 import { redact } from "../secret-redact.ts";
 import { exec, type Exec } from "./git.ts";
 import { all, one } from "./ledger-model.ts";
@@ -63,7 +64,11 @@ export class WorktreeCleanup {
         : task.worktree;
       const registered = listed.stdout
         .split("\n")
-        .some((line) => line === `worktree ${path}`);
+        .some(
+          (line) =>
+            line.startsWith("worktree ") &&
+            samePath(process.platform, line.slice("worktree ".length), path),
+        );
       if (!registered && existsSync(task.worktree))
         throw new Error(`t${id} 工作树路径存在但未登记在 Git，保留待核对`);
       if (registered) {

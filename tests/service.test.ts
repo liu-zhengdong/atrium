@@ -36,6 +36,8 @@ import {
 import { childEnv } from "./child-env.ts";
 import { fixture as workerFixture, until } from "./task-fixture.ts";
 import { readRestartState } from "../server/supervisor.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const exec = promisify(execFile);
 after(assertNoFixtureLeaks);
@@ -120,7 +122,7 @@ test("新 CLI 连接旧服务：提示 restart 和退出码 7，不进入 rotate
   t.after(async () => {
     await new Promise<void>((resolve) => old.close(() => resolve()));
     lease.release();
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   });
   const cli = async (...args: string[]) => {
     try {
@@ -179,7 +181,12 @@ test(
     const record = readService(f.data)!;
     for (const result of starts)
       assert(result.stdout.includes(`PID ${record.pid}`));
-    assert.equal(statSync(join(f.data, "service.sqlite")).mode & 0o777, 0o600);
+    // Windows 没有 POSIX 权限位，数据目录靠用户目录的 ACL。
+    if (process.platform !== "win32")
+      assert.equal(
+        statSync(join(f.data, "service.sqlite")).mode & 0o777,
+        0o600,
+      );
     const url = serviceUrl(record);
     // 没有 Web 外壳：未认证的路径一律 401，不泄露页面。
     assert.equal((await fetch(url)).status, 401);
@@ -219,9 +226,7 @@ test(
     );
     // sleep 要长于整个用例：负载高时重启可能拖过 30 秒，执行者先跑完会让最后的 task stop 返回 409。
     for (const tool of ["grok", "codex"])
-      writeFileSync(join(worker.root, "bin", tool), "#!/bin/sh\nsleep 120\n", {
-        mode: 0o755,
-      });
+      writeFakeBin(join(worker.root, "bin", tool), "#!/bin/sh\nsleep 120\n");
     f.env.ATRIUM_WORKERS_DIR = worker.workers;
     f.env.PATH = worker.env.PATH;
     f.env.HOME = worker.env.HOME;
@@ -290,18 +295,24 @@ test(
 
     // 执行者不中断，被新服务接管。
     for (const pid of pids) assert.equal(alive(pid), true);
+    // 接管在新服务启动后异步进行（Windows 上查进程命令行要经 PowerShell，慢一些），等事件出现。
     for (const ref of ["t1", "t2"]) {
-      const shown = await f.cli("task", "show", ref, "--json");
-      assert.equal(shown.code, 0, shown.stderr);
-      const task = JSON.parse(shown.stdout).result as {
-        status: string;
-        events: { kind: string; detail: string }[];
-      };
-      assert.equal(task.status, "running");
-      assert.match(
-        task.events.find((event) => event.kind === "adopted")?.detail ?? "",
-        /服务重启后按 pid 接管/,
-      );
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const shown = await f.cli("task", "show", ref, "--json");
+        assert.equal(shown.code, 0, shown.stderr);
+        const task = JSON.parse(shown.stdout).result as {
+          status: string;
+          events: { kind: string; detail: string }[];
+        };
+        assert.equal(task.status, "running");
+        const adopted = task.events.find((event) => event.kind === "adopted");
+        if (adopted || Date.now() > deadline) {
+          assert.match(adopted?.detail ?? "", /服务重启后按 pid 接管/);
+          break;
+        }
+        await delay(300);
+      }
     }
     // 新任务立即派出，不排队。
     const next = await f.cli("task", "run", "t3", "--worker", "opencode");
@@ -314,9 +325,10 @@ test(
   },
 );
 
+// 用整机负载保护线造「本机太忙」；Windows 上 loadavg 恒为 0，这条线不生效（进程树那条线见 host-load 单测）。
 test(
   "紧急任务走真实后台服务：本机太忙时普通任务排队，--urgent 立刻派出，top 标紧急",
-  { timeout: 90_000 },
+  { timeout: 90_000, skip: process.platform === "win32" },
   async (t) => {
     const f = await fixture(t);
     const worker = workerFixture(t);
@@ -325,9 +337,7 @@ test(
         join(worker.workers, "harness", `${tool}.md`),
         "---\nlimits: {startup_minutes: 10}\n---\n",
       );
-      writeFileSync(join(worker.root, "bin", tool), "#!/bin/sh\nsleep 120\n", {
-        mode: 0o755,
-      });
+      writeFakeBin(join(worker.root, "bin", tool), "#!/bin/sh\nsleep 120\n");
     }
     f.env.ATRIUM_WORKERS_DIR = worker.workers;
     f.env.PATH = worker.env.PATH;
@@ -787,6 +797,15 @@ test(
       assert.ok(Date.now() < deadline, "假包目录中的服务启动超时");
       await delay(100);
       record = readService(f.data);
+    }
+    // 登记在监听之前：等服务真正应答再删目录、发起重启（Windows 上建应用较慢，否则排空请求被拒）。
+    for (;;) {
+      const ok = await fetch(`http://127.0.0.1:${f.port}/api/service/info`)
+        .then((response) => response.ok)
+        .catch(() => false);
+      if (ok) break;
+      assert.ok(Date.now() < deadline, "假包目录中的服务就绪超时");
+      await delay(100);
     }
     // 模拟 npm 安装覆盖旧包目录；旧服务仍在运行，原 cwd 已被删除。
     rmSync(fakePackage, { recursive: true });

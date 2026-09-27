@@ -14,6 +14,31 @@ import type { WorktreeCleanup } from "./worktree-cleanup.ts";
 const run = promisify(execFile);
 const GB = 1024 ** 3;
 type Worktree = { node_id: number; worktree: string };
+export type SizeOf = (path: string) => Promise<number>;
+
+async function defaultSize(path: string): Promise<number> {
+  await stat(path);
+  const { stdout } = await run("du", ["-sk", path], {
+    timeout: 10_000,
+    maxBuffer: 1024,
+  });
+  const gb = (Number.parseInt(stdout, 10) * 1024) / GB;
+  if (!Number.isFinite(gb)) throw new Error("du 输出无效");
+  return gb;
+}
+
+/** 章程里有没有磁盘份额；没有则巡检不起 du。 */
+export function hasDiskShare(db: DatabaseSync): boolean {
+  const table = db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_budgets' LIMIT 1",
+    )
+    .get();
+  if (!table) return false;
+  return !!db
+    .prepare("SELECT 1 FROM org_budgets WHERE dim='disk' LIMIT 1")
+    .get();
+}
 
 /** du 结果仅保留一个巡检周期；路径必须来自账本已有任务的 worktree。 */
 export class DiskBudget {
@@ -29,19 +54,14 @@ export class DiskBudget {
       return (space.bavail * space.bsize) / GB;
     },
     private readonly cleanup?: WorktreeCleanup,
+    private readonly sizeOf: SizeOf = defaultSize,
   ) {}
 
   private async size(path: string): Promise<number> {
     const cached = this.cache.get(path);
     if (cached && Date.now() - cached.at < 30_000) return cached.gb;
     try {
-      await stat(path);
-      const { stdout } = await run("du", ["-sk", path], {
-        timeout: 10_000,
-        maxBuffer: 1024,
-      });
-      const gb = (Number.parseInt(stdout, 10) * 1024) / GB;
-      if (!Number.isFinite(gb)) throw new Error("du 输出无效");
+      const gb = await this.sizeOf(path);
       this.cache.set(path, { at: Date.now(), gb });
       return gb;
     } catch (error) {
@@ -50,8 +70,13 @@ export class DiskBudget {
     }
   }
 
-  /** 看门狗每轮只巡五个 worktree，避免 du 扫描长期占住派活。 */
+  /** 没配磁盘份额不起 du；有份额时每轮只巡五个 worktree。 */
   async refresh() {
+    if (!hasDiskShare(this.db)) {
+      this.cursor = 0;
+      this.cache.clear();
+      return;
+    }
     const rows = all<{ id: number; worktree: string }>(
       this.db,
       "SELECT id,worktree FROM tasks WHERE id>? AND worktree IS NOT NULL ORDER BY id LIMIT 5",

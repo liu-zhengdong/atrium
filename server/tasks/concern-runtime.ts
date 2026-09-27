@@ -154,6 +154,14 @@ type Pending = {
   updated_at: number;
 };
 
+/** CROSS JOIN 从 task_concerns 驱动，按主键查审查任务，不走 tasks_status 扫全部已完成。 */
+export const SETTLE_REVIEWS_SQL = `SELECT c.task_id, c.node_id, c.review_id, r.status, r.result, r.updated_at
+       FROM task_concerns c CROSS JOIN tasks r ON r.id=c.review_id
+      WHERE c.review_id IS NOT NULL
+        AND (c.decided_at IS NULL OR r.updated_at > c.decided_at)
+        AND r.status IN ('done','failed','cancelled','blocked')
+      ORDER BY c.task_id, c.pos LIMIT ?`;
+
 /**
  * 扫一遍不再跑的审查任务：把结论记到父任务的专员行（审查任务重跑后结论跟着更新），
  * 父任务仍在受阻且本轮全部出了结论时合成去向。busy 为正在拉起、收尾或排队中的任务，先不判。
@@ -163,15 +171,7 @@ export function settleReviews(
   busy: (id: number) => boolean = () => false,
   limit = 50,
 ): ReviewResolution[] {
-  const rows = all<Pending>(
-    db,
-    `SELECT c.task_id, c.node_id, c.review_id, r.status, r.result, r.updated_at
-       FROM task_concerns c JOIN tasks r ON r.id=c.review_id
-      WHERE r.status IN ('done','failed','cancelled','blocked')
-        AND (c.decided_at IS NULL OR r.updated_at > c.decided_at)
-      ORDER BY c.task_id, c.pos LIMIT ?`,
-    limit,
-  );
+  const rows = all<Pending>(db, SETTLE_REVIEWS_SQL, limit);
   const parents = new Set<number>();
   for (const row of rows) {
     if (busy(row.review_id)) continue;

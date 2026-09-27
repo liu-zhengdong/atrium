@@ -2,8 +2,70 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { getTask } from "../server/tasks/ledger.ts";
+import { finalClaudeResult } from "../server/tasks/watchdog.ts";
 import { startApp, until } from "./task-fixture.ts";
+
+test("最终 result 判定只接受最后一轮完整收尾", () => {
+  const result =
+    '{"stop_reason":"end_turn","is_error":false,"type":"result"}\n';
+  assert.equal(finalClaudeResult(result), "clean");
+  assert.equal(
+    finalClaudeResult(`${result}{"type":"command_lifecycle"}\n`),
+    "clean",
+  );
+  assert.equal(
+    finalClaudeResult(`${result}{"type":"user","isReplay":true}\n`),
+    undefined,
+  );
+  assert.equal(finalClaudeResult(`${result}[atrium] 续上会话\n`), undefined);
+  assert.equal(
+    finalClaudeResult('{"is_error":true,"type":"result"}\n'),
+    "error",
+  );
+});
+
+test("看门狗：Claude 已输出最终 result 却不退出，催退后照常过关卡", async (t) => {
+  const { data, call } = await startApp(t, (fx) => {
+    const file = join(fx.root, "bin", "claude");
+    writeFileSync(
+      file,
+      `#!/usr/bin/env node
+const out = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
+process.stdin.resume();
+process.stdin.on("end", () => out({ type: "system", subtype: "stdin_closed" }));
+setInterval(() => {}, 1000);
+setTimeout(() => out({ stop_reason: "end_turn", is_error: false, result: "done", type: "result" }), 100);
+`,
+    );
+    chmodSync(file, 0o755);
+    writeFileSync(
+      join(fx.workers, "harness", "claude.md"),
+      "---\nchecks: []\nlimits: {idle_minutes: 0.01}\n---\n",
+    );
+  });
+  await call("POST", "/api/tasks", { title: "收尾未退出", deliver: "none" });
+  await call("POST", "/api/tasks/t1/run", { worker: "claude" });
+  const done = await call("GET", "/api/tasks/t1/wait?timeout=10");
+  assert.equal(
+    done.body.task.status,
+    "done",
+    JSON.stringify(done.body.task.events),
+  );
+  assert.equal(done.body.task.result, "done");
+  const kinds = done.body.task.events.map(
+    (event: { kind: string }) => event.kind,
+  );
+  assert.ok(kinds.includes("finalizing"));
+  assert.ok(kinds.includes("final_result_exit"));
+  assert.ok(kinds.includes("gates"));
+  assert.ok(!kinds.includes("idle"));
+  assert.match(
+    readFileSync(join(data, "tasks", "1", "log"), "utf8"),
+    /stdin_closed/,
+  );
+});
 
 test("看门狗：假执行者零输出判卡死、按档案重试一次后失败；独占工具排队；stop 停进程", async (t) => {
   const { fx, data, call } = await startApp(t);

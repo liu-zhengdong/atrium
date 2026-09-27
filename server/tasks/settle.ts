@@ -32,9 +32,9 @@ import { dirname } from "node:path";
 
 const TAIL_BYTES = 64 * 1024;
 
-async function tail(file: string) {
+export async function logTail(file: string, bytes = TAIL_BYTES) {
   const size = (await stat(file)).size;
-  const start = Math.max(0, size - TAIL_BYTES);
+  const start = Math.max(0, size - bytes);
   const handle = await open(file, "r");
   try {
     const buffer = Buffer.alloc(size - start);
@@ -48,7 +48,7 @@ async function tail(file: string) {
 /** 日志末尾（去掉 [atrium] 抬头与收尾行）；读不到时为 undefined。 */
 async function readLog(active: Active) {
   try {
-    return (await tail(active.logFile))
+    return (await logTail(active.logFile))
       .split("\n")
       .filter((line) => !line.startsWith("[atrium] "))
       .join("\n");

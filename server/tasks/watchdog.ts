@@ -3,6 +3,7 @@ import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { exec as defaultExec, type Exec } from "./git.ts";
 import { countSteps } from "./summary.ts";
+import { parseLine } from "./json-log.ts";
 
 /**
  * 执行者卡死检测（#262）。判定是纯函数 judge；进展信号由 ProgressProbe 采样：
@@ -44,6 +45,30 @@ export function judge(
       reason: `连续 ${minutes(limits.idleMs)}没有进展信号，判定受阻`,
     };
   return { kind: "ok" };
+}
+
+/** 最后的 Claude result 已出现，且其后没有新一轮用户或助手消息。 */
+export function finalClaudeResult(log: string): "clean" | "error" | undefined {
+  let result: "clean" | "error" | undefined;
+  for (const line of log.split("\n")) {
+    if (line.startsWith("[atrium] ")) {
+      result = undefined;
+      continue;
+    }
+    const event = parseLine(line);
+    if (!event) continue;
+    if (event.type === "result")
+      result =
+        event.is_error === false && event.stop_reason === "end_turn"
+          ? "clean"
+          : "error";
+    else if (
+      event.type !== "command_lifecycle" &&
+      !(event.type === "system" && event.subtype === "stdin_closed")
+    )
+      result = undefined;
+  }
+  return result;
 }
 
 /** 适配器缺省值，档案 limits.startup_minutes / idle_minutes 可收紧（合并时取较小）。 */

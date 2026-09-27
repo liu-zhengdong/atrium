@@ -40,6 +40,8 @@ export type Active = {
   retried: boolean;
   stop?: Stop;
   exited: boolean;
+  /** 看门狗看到最后的 result 后正在催进程退出；forced 表示已发终止信号。 */
+  finalizing?: { result: "clean" | "error"; forced: boolean };
   /** 即时捎话的标准输入写端（#307）；没有表示这一轮不能即时写入（不支持、已结束或是接管来的进程）。 */
   live?: LiveInput;
 };

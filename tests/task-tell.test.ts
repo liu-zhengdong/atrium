@@ -172,6 +172,13 @@ test("日志行：只认 result 与带 uuid 的回显", () => {
   assert.deepEqual(lineSignal('{"type":"result","subtype":"success"}'), {
     kind: "result",
   });
+  assert.deepEqual(lineSignal('{"stop_reason":"end_turn","type":"result"}'), {
+    kind: "result",
+  });
+  assert.equal(
+    lineSignal('{"message":{"type":"result"},"type":"assistant"}'),
+    undefined,
+  );
   assert.deepEqual(
     lineSignal(
       `{"type":"user","message":{"role":"user","content":"x"},"uuid":"${SESSION}","isReplay":true}`,
@@ -197,6 +204,12 @@ test("标准输入写端：读到 result 关掉，回显按 uuid 确认，退出
   const log = join(dir, "log");
   writeFileSync(log, "[atrium] 抬头\n");
   const stdin = new PassThrough();
+  let ends = 0;
+  const originalEnd = stdin.end.bind(stdin);
+  stdin.end = ((...args: Parameters<typeof stdin.end>) => {
+    ends++;
+    return originalEnd(...args);
+  }) as typeof stdin.end;
   let written = "";
   stdin.on("data", (chunk) => (written += chunk));
   const echoed: string[] = [];
@@ -218,6 +231,7 @@ test("标准输入写端：读到 result 关掉，回显按 uuid 确认，退出
   assert.equal(live.open, false, "本轮结束就关掉写端");
   assert.equal(live.send("晚了", SESSION), false);
   await live.finish();
+  assert.equal(ends, 1, "写端只关闭一次");
 });
 
 test("捎话的账：登记、写入、回显送达、计数与破坏输入", () => {
@@ -364,6 +378,48 @@ test("即时送入：假 Claude 在运行中收到捎话，回显后记为已送
   assert.equal(tell.by, "a1");
   const top = await call("GET", "/api/tasks/top");
   assert.deepEqual(top.body.rows[0].tells, { total: 1, pending: 0 });
+});
+
+test("捎话跨两轮 result：假 Claude 最后一轮结束后收到 EOF 并正常退出", async (t) => {
+  const { fx, data, call } = await tellApp(t);
+  writeFileSync(
+    join(fx.root, "bin", "claude"),
+    `#!/usr/bin/env node
+const out = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
+let count = 0;
+let second = false;
+out({ type: "system", subtype: "init", session_id: "${SESSION}" });
+require("node:readline").createInterface({ input: process.stdin })
+  .on("line", (line) => {
+    const message = JSON.parse(line);
+    count++;
+    if (count === 1) {
+      out({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } });
+      setTimeout(() => out({ stop_reason: "end_turn", result: "first", is_error: false, type: "result" }), 300);
+    } else {
+      setTimeout(() => out({ ...message, isReplay: true }), 450);
+      setTimeout(() => { second = true; out({ stop_reason: "end_turn", result: "second", is_error: false, type: "result" }); }, 650);
+    }
+  })
+  .on("close", () => {
+    out({ type: "system", subtype: "stdin_closed", count });
+    process.exit(second ? 0 : 3);
+  });
+`,
+  );
+  await call("POST", "/api/tasks", { title: "两轮", deliver: "none" });
+  await call("POST", "/api/tasks/t1/run", { worker: "claude" });
+  const log = join(data, "tasks", "1", "log");
+  await until(() => readFileSync(log, "utf8").includes('"tool_use"'));
+  assert.equal(
+    (await call("POST", "/api/tasks/t1/tell", { text: "补充" })).body.tell
+      .route,
+    "stdin",
+  );
+  const done = await call("GET", "/api/tasks/t1/wait?timeout=5");
+  assert.equal(done.body.task.status, "done");
+  assert.equal(done.body.task.result, "second");
+  assert.match(readFileSync(log, "utf8"), /"subtype":"stdin_closed","count":2/);
 });
 
 test("不捎话时 Claude 照旧：提示词作为第一条消息写入，本轮结束关掉输入，退出码 0", async (t) => {

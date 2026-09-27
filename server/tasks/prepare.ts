@@ -21,6 +21,7 @@ export const DEFAULT_RULES: readonly string[] = [
   "做完后依次：运行项目检查、提交、推送、开 PR（正文写 Refs 对应 issue）、等 CI；任何一步做不了，写清楚卡在哪一步再结束。",
   "汇报里的 PR 号、提交号、CI 结果必须来自你刚执行过的命令输出；没做的步骤直接写「没做」。",
   "文档、提交说明和 PR 使用中文。",
+  "gh 命令一律带 `-R <owner/repo>`（取自 origin 远端）：fork 仓库另有 upstream 时，不带 -R 会查到或开到上游；PR 开在 origin 上。",
 ];
 
 export type PromptParts = {

@@ -16,10 +16,18 @@ import {
   type Job,
   type Observation,
 } from "./ci-classify.ts";
+import {
+  apiArgs,
+  originRepo,
+  parsePrUrl,
+  repoFlag,
+  type GhRepo,
+} from "./gh-repo.ts";
 
 /**
  * 执行者退出后运行时自己查事实（#262）：PR、CI、改动规模、是否收尾、摘要里的声明是否存在。
  * 只读调用 git / gh；查不到的记原因，交给关卡判定。
+ * gh 一律显式指定仓库（见 gh-repo.ts），fork 里不落到上游。
  */
 
 export type FactInput = {
@@ -31,7 +39,7 @@ export type FactInput = {
 };
 
 export async function findPr(
-  repo: string,
+  target: GhRepo,
   branch: string,
   run: Exec = defaultExec,
 ): Promise<{ pr: Pr | null; error?: string }> {
@@ -40,6 +48,8 @@ export async function findPr(
     [
       "pr",
       "list",
+      "-R",
+      repoFlag(target),
       "--head",
       branch,
       "--state",
@@ -49,7 +59,7 @@ export async function findPr(
       "--limit",
       "1",
     ],
-    { cwd: repo },
+    { timeoutMs: 30_000 },
   );
   if (!listed.ok) return { pr: null, error: firstLine(listed.stderr) };
   try {
@@ -64,11 +74,16 @@ export async function readCi(
   prUrl: string,
   run: Exec = defaultExec,
 ): Promise<{ ci: Ci | null; detail?: string }> {
+  const target = parsePrUrl(prUrl);
+  if (!target)
+    return { ci: null, detail: `PR 链接 ${prUrl} 解析不出 owner/repo` };
   // gh pr checks 在有失败或未出结果时退出码非 0，但 --json 输出照样完整，所以看输出不看退出码。
   const checks = await run("gh", [
     "pr",
     "checks",
     prUrl,
+    "-R",
+    repoFlag(target),
     "--json",
     "name,bucket,link",
   ]);
@@ -87,14 +102,20 @@ export async function readCi(
   const jobs = new Map<string, Job[]>();
   const observations: Observation[] = [];
   for (const check of failing) {
-    const target = actionJob(check.link);
-    if (!target) continue;
-    const runKey = `${target.repo}/${target.run}`;
+    const action = actionJob(check.link);
+    if (!action) continue;
+    const runKey = `${action.repo}/${action.run}`;
+    // Actions 链接里的 owner/repo 就是跑 CI 的仓库，路径写全，不靠 gh 解析本地远端。
+    const actions: GhRepo = {
+      ...target,
+      owner: action.repo.split("/")[0]!,
+      name: action.repo.split("/")[1]!,
+    };
     if (!jobs.has(runKey)) {
-      const response = await run("gh", [
-        "api",
-        `repos/${target.repo}/actions/runs/${target.run}/jobs?per_page=100`,
-      ]);
+      const response = await run(
+        "gh",
+        apiArgs(actions, `actions/runs/${action.run}/jobs?per_page=100`),
+      );
       let listed: Job[] = [];
       if (response.ok) {
         try {
@@ -112,11 +133,11 @@ export async function readCi(
       }
       jobs.set(runKey, listed);
     }
-    const job = jobs.get(runKey)?.find((entry) => entry.id === target.job);
-    const annotations = await run("gh", [
-      "api",
-      `repos/${target.repo}/check-runs/${target.job}/annotations?per_page=100`,
-    ]);
+    const job = jobs.get(runKey)?.find((entry) => entry.id === action.job);
+    const annotations = await run(
+      "gh",
+      apiArgs(actions, `check-runs/${action.job}/annotations?per_page=100`),
+    );
     let parsedAnnotations: Annotation[] = [];
     if (annotations.ok) {
       try {
@@ -132,7 +153,7 @@ export async function readCi(
 }
 
 async function verifyClaims(
-  repo: string,
+  target: GhRepo | { error: string },
   worktree: string,
   summary: string,
   run: Exec,
@@ -140,10 +161,14 @@ async function verifyClaims(
   const checked: CheckedClaim[] = [];
   for (const claim of extractClaims(summary)) {
     if (claim.kind === "pr") {
+      if ("error" in target) {
+        checked.push({ ...claim, ok: false, detail: target.error });
+        continue;
+      }
       const view = await run(
         "gh",
-        ["pr", "view", claim.value, "--json", "number"],
-        { cwd: repo },
+        ["pr", "view", claim.value, "-R", repoFlag(target), "--json", "number"],
+        { timeoutMs: 30_000 },
       );
       checked.push({
         ...claim,
@@ -189,6 +214,8 @@ export async function collectFacts(
       timeoutMs: 30_000,
     });
   const range = `origin/${base}...${branch}`;
+  const origin = await originRepo(repo, run);
+  const target = "error" in origin ? origin : origin.repo;
   const [numstat, diff, status, ahead, head, remote, found] = await Promise.all(
     [
       git("diff", "--numstat", range),
@@ -197,7 +224,9 @@ export async function collectFacts(
       git("rev-list", "--count", `origin/${base}..${branch}`),
       git("rev-parse", branch),
       git("ls-remote", "origin", `refs/heads/${branch}`),
-      findPr(repo, branch, run),
+      "error" in target
+        ? Promise.resolve({ pr: null, error: target.error })
+        : findPr(target, branch, run),
     ],
   );
   const facts: Facts = {
@@ -205,6 +234,7 @@ export async function collectFacts(
     repo: true,
     branch,
     base,
+    ghRepo: "error" in target ? undefined : repoFlag(target),
     pr: found.pr,
     prError: found.error,
     numstat: numstat.ok ? parseNumstat(numstat.stdout) : [],
@@ -231,6 +261,6 @@ export async function collectFacts(
     facts.ci = ci.ci;
     facts.ciDetail = ci.detail;
   }
-  facts.claims = await verifyClaims(repo, worktree, input.summary, run);
+  facts.claims = await verifyClaims(target, worktree, input.summary, run);
   return facts;
 }

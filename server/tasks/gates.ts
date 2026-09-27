@@ -24,6 +24,8 @@ export type Facts = {
   repo: boolean;
   branch?: string;
   base?: string;
+  /** gh 查询用的 `-R` 仓库（origin 解析所得）；解析不出时为空，原因在 prError。 */
+  ghRepo?: string;
   pr: Pr | null;
   prError?: string;
   ci: Ci | null;
@@ -79,7 +81,7 @@ function prExists(facts: Facts): GateResult {
   return {
     gate: "pr_exists",
     ok: false,
-    evidence: `gh pr list --head ${facts.branch} 没找到 PR${facts.prError ? `：${facts.prError}` : ""}`,
+    evidence: `gh pr list${facts.ghRepo ? ` -R ${facts.ghRepo}` : ""} --head ${facts.branch} 没找到 PR${facts.prError ? `：${facts.prError}` : ""}`,
   };
 }
 

@@ -46,6 +46,7 @@ export class MergeQueue {
         actor?: string,
       ) => void;
       changed: (id: number) => void;
+      cleaned?: (id: number) => Promise<void>;
     },
   ) {}
 
@@ -95,6 +96,7 @@ export class MergeQueue {
     stage: Stage | null,
     kind: string,
     detail?: unknown,
+    changed = true,
   ) {
     atomically(this.db, () => {
       this.db
@@ -104,7 +106,7 @@ export class MergeQueue {
         .run(stage, stage, Date.now(), id);
       noteTask(this.db, id, kind, detail);
     });
-    this.options.changed(id);
+    if (changed) this.options.changed(id);
   }
 
   enqueue(id: number) {
@@ -402,12 +404,18 @@ export class MergeQueue {
     const after = await this.pr(task, flag);
     if (after.state !== "MERGED")
       throw new Error("gh 合入后 PR 尚未显示 MERGED");
-    this.merged(task);
+    await this.merged(task);
   }
 
-  private merged(task: Task) {
+  private async merged(task: Task) {
     if (this.closed) return;
-    this.stage(task.id, "merged", "merged", { pr_url: task.pr_url });
+    this.stage(task.id, "merged", "merged", { pr_url: task.pr_url }, false);
+    try {
+      await this.options.cleaned?.(task.id);
+    } catch (error) {
+      console.error(`t${task.id} 工作树清理失败：${redact(String(error))}`);
+    }
+    this.options.changed(task.id);
     this.options.publish(task.id, "merged", { pr_url: task.pr_url });
   }
 

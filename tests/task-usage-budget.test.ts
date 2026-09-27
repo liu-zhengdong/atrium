@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { addNode, editDoc } from "../server/org/write.ts";
@@ -12,7 +13,8 @@ import { beginUsage, endUsage, splitDelta } from "../server/tasks/usage.ts";
 import { quotaHeadroom } from "../server/tasks/usage-budget.ts";
 import { pickWorker } from "../server/tasks/prepare.ts";
 import { DiskBudget } from "../server/tasks/disk-budget.ts";
-import { startApp } from "./task-fixture.ts";
+import { WorktreeCleanup } from "../server/tasks/worktree-cleanup.ts";
+import { fixture, startApp } from "./task-fixture.ts";
 
 const pace = (usedPercent: number, hoursToReset = 1) => [
   {
@@ -174,7 +176,8 @@ test("磁盘：生效下限与节点 worktree 份额在派活前拒绝", async (
     { fields: {}, body: "", budget: { disk: 0 }, reason: "磁盘限额" },
     "u1",
   );
-  const disk = new DiskBudget(db, dir);
+  let free = 1000;
+  const disk = new DiskBudget(db, dir, async () => free);
   await assert.rejects(
     disk.check(project.id),
     /磁盘份额 0 GB.*worktree 已占约/,
@@ -197,7 +200,80 @@ test("磁盘：生效下限与节点 worktree 份额在派活前拒绝", async (
     },
     "u1",
   );
+  free = 0;
   await assert.rejects(disk.check(project.id), /低于章程下限 100000 GB/);
+});
+
+test("磁盘不足先清已合入工作树并重查；受阻任务保留，仍不足才拦截", async (t) => {
+  const fx = fixture(t);
+  const db = new DatabaseSync(":memory:");
+  t.after(() => db.close());
+  ensureTaskTables(db);
+  ensureOrgTables(db);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", fx.repo, ...args], { encoding: "utf8" }).trim();
+  const merged = createTask(db, { title: "已合入", repo: fx.repo });
+  const blocked = createTask(db, { title: "受阻", repo: fx.repo });
+  const cancelled = createTask(db, { title: "已取消", repo: fx.repo });
+  const path = `${fx.repo}-merged`;
+  const kept = `${fx.repo}-blocked`;
+  const cancelledPath = `${fx.repo}-cancelled`;
+  git("worktree", "add", "-q", "-b", "task-merged", path, "main");
+  git("worktree", "add", "-q", "-b", "task-blocked", kept, "main");
+  git("worktree", "add", "-q", "-b", "task-cancelled", cancelledPath, "main");
+  writeFileSync(join(cancelledPath, "untracked.txt"), "unfinished");
+  db.prepare(
+    "UPDATE tasks SET status='done',delivery_stage='merged',worktree=?,branch=? WHERE id=?",
+  ).run(path, "task-merged", merged.id);
+  db.prepare(
+    "UPDATE tasks SET status='blocked',worktree=?,branch=? WHERE id=?",
+  ).run(kept, "task-blocked", blocked.id);
+  db.prepare(
+    "UPDATE tasks SET status='cancelled',worktree=?,branch=? WHERE id=?",
+  ).run(cancelledPath, "task-cancelled", cancelled.id);
+  const cleanup = new WorktreeCleanup(db);
+  const disk = new DiskBudget(
+    db,
+    fx.repo,
+    async () => (existsSync(path) ? 10 : 20),
+    cleanup,
+  );
+  await disk.check(null, fx.repo);
+  assert.equal(existsSync(path), false);
+  assert.equal(existsSync(cancelledPath), false);
+  assert.equal(existsSync(kept), true);
+  assert.equal(git("branch", "--list", "task-merged"), "");
+  assert.match(git("branch", "--list", "task-blocked"), /task-blocked/);
+  assert.equal(
+    (
+      db.prepare("SELECT worktree FROM tasks WHERE id=?").get(merged.id) as {
+        worktree: string | null;
+      }
+    ).worktree,
+    null,
+  );
+  const low = new DiskBudget(db, fx.repo, async () => 10, cleanup);
+  await assert.rejects(low.check(null, fx.repo), /低于章程下限 15 GB/);
+});
+
+test("磁盘清后仍不足：派活转 blocked 并通知秘书", async (t) => {
+  const { call, taskRunner } = await startApp(
+    t,
+    undefined,
+    undefined,
+    undefined,
+    async () => 0,
+  );
+  const created = await call("POST", "/api/tasks", { title: "磁盘不足" });
+  const run = await call("POST", `/api/tasks/${created.body.ref}/run`, {});
+  assert.equal(run.body.task.status, "blocked");
+  assert.match(
+    JSON.stringify(run.body.task.events),
+    /budget_blocked.*磁盘可用/,
+  );
+  const inbox = await taskRunner.inbox.wait("secretary", 0);
+  assert.equal(inbox.events[0]?.kind, "blocked");
+  assert.match(JSON.stringify(inbox.events[0]?.detail), /磁盘可用/);
 });
 
 test("隔离运行时：份额用尽转 blocked 通知 leader；pace 不可用记事件并允许派活", async (t) => {

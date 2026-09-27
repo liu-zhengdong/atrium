@@ -42,6 +42,7 @@ import { readPace } from "./prepare.ts";
 import { MergeQueue } from "./merge-runtime.ts";
 import { settleReviews } from "./concern-runtime.ts";
 import { awaitingReview } from "./concerns.ts";
+import { WorktreeCleanup } from "./worktree-cleanup.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -56,6 +57,7 @@ export type RunnerOptions = {
   exec?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
   usagePace?: () => Promise<PaceEntry[] | undefined>;
+  diskFreeGb?: (path: string) => Promise<number>;
   charterPath?: string;
   tickMs?: number;
   ciPollMs?: number;
@@ -77,6 +79,7 @@ export class TaskRunner {
   private readonly quota: QuotaGuard;
   private readonly scheduler: Scheduler;
   private readonly disk: DiskBudget;
+  private readonly cleanup: WorktreeCleanup;
   private readonly merge: MergeQueue;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly exec: Exec;
@@ -106,7 +109,20 @@ export class TaskRunner {
       usagePace: options.usagePace,
       charterPath: options.charterPath,
     };
-    this.disk = new DiskBudget(db, options.data);
+    this.cleanup = new WorktreeCleanup(
+      db,
+      this.exec,
+      (id) =>
+        this.x?.active.has(id) ||
+        this.x?.launching.has(id) ||
+        this.x?.finishing.has(id),
+    );
+    this.disk = new DiskBudget(
+      db,
+      options.data,
+      options.diskFreeGb,
+      this.cleanup,
+    );
     this.waits = new TaskWaits(
       (id) => this.settled(id),
       (id) => getTask(this.db, id),
@@ -138,6 +154,9 @@ export class TaskRunner {
       env: this.launchOptions.env,
       run: this.exec,
       changed: (id) => this.waits.changed(id),
+      cleaned: async (id) => {
+        await this.cleanup.cleanup(id);
+      },
       publish: (id, kind, detail, actor) =>
         this.x.publish(id, kind, detail, actor),
       returned: async (task) => {
@@ -167,6 +186,14 @@ export class TaskRunner {
     );
   }
 
+  async cleanupCancelled(id: number) {
+    try {
+      await this.cleanup.cleanup(id);
+    } catch (error) {
+      console.error(`t${id} 工作树清理失败：`, error);
+    }
+  }
+
   clearQuota(provider: string) {
     return this.quota.clear(this.x, provider);
   }
@@ -182,6 +209,7 @@ export class TaskRunner {
     };
     every(this.options.tickMs ?? 5000, async () => {
       await this.x.tick();
+      if (!this.closed) await this.cleanup.finished();
       if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();

@@ -9,6 +9,7 @@ import { allShares } from "../org/share-store.ts";
 import { ownAmount } from "../org/shares.ts";
 import { all } from "./ledger-model.ts";
 import { BudgetProblem } from "./budget-problem.ts";
+import type { WorktreeCleanup } from "./worktree-cleanup.ts";
 
 const run = promisify(execFile);
 const GB = 1024 ** 3;
@@ -21,6 +22,13 @@ export class DiskBudget {
   constructor(
     private readonly db: DatabaseSync,
     private readonly data: string,
+    private readonly freeGb: (path: string) => Promise<number> = async (
+      path,
+    ) => {
+      const space = await statfs(path);
+      return (space.bavail * space.bsize) / GB;
+    },
+    private readonly cleanup?: WorktreeCleanup,
   ) {}
 
   private async size(path: string): Promise<number> {
@@ -81,8 +89,11 @@ export class DiskBudget {
         .filter((b) => b.param?.key === "disk_min_free_gb")
         .map((b) => b.param!.value),
     );
-    const space = await statfs(repo ?? this.data);
-    const free = (space.bavail * space.bsize) / GB;
+    let free = await this.freeGb(repo ?? this.data);
+    if (free < minFree && this.cleanup) {
+      await this.cleanup.finished();
+      free = await this.freeGb(repo ?? this.data);
+    }
     if (free < minFree)
       throw new BudgetProblem(
         `磁盘可用约 ${free.toFixed(1)} GB，低于章程下限 ${minFree} GB；先清理组织临时产物`,

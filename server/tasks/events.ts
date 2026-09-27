@@ -193,6 +193,20 @@ export class EventInbox {
     ).map(view);
   }
 
+  /**
+   * 未处理事件条数（#262 `atrium top` 的汇总行）：条件与 pending 一致，只数不取。
+   * 计数封顶 cap，攒批窗口未到的事件也算未处理。
+   */
+  countPending(subscriber: string, cap = BATCH_LIMIT) {
+    const now = this.now();
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM (SELECT 1 FROM task_inbox WHERE subscriber=? AND acked_at IS NULL AND (actor IS NULL OR actor<>subscriber) AND ready_at<=? AND (delivered_at IS NULL OR delivered_at<=?) LIMIT ?)",
+      )
+      .get(subscriber, now, now - this.leaseMs, cap) as { n: number };
+    return row.n;
+  }
+
   /** 取一批交给订阅者，并从现在起算处理中租约。 */
   private take(subscriber: string): InboxEvent[] {
     return atomically(this.db, () => {

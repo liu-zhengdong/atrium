@@ -140,6 +140,8 @@ atrium search 开工
 atrium user --name 老刘                        # 用户资料，Agent 只读
 
 # 任务账本（#262：拆任务 → 派执行者 → 等结果 → 验收 → 汇报）
+atrium top                                       # 实时看谁在干活：在跑、排队、受阻与刚结束的任务，带执行者、已运行时长、最近一个动作
+atrium top --once                                # 只打一次（非 TTY 时自动如此）；--once --json 给脚本；--interval 定刷新秒数
 atrium task add "上线任务账本" --repo ~/code/atrium   # 建顶层任务，短号 t1；--repo 为工作仓库
 atrium task add "表与状态机" --parent t1 --role web --brief docs/t2.md   # 挂到 t1 下；--brief 为任务详述 md
 atrium task add "组织树设计" --repo ~/code/atrium --deliver comment --issue 262   # 评论交付；运行期间须在该 issue 新增评论

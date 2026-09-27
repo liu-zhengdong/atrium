@@ -1,14 +1,23 @@
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { taskDir } from "./active.ts";
-import { ADAPTERS } from "./adapters/index.ts";
+import { recentAction } from "./action.ts";
+import { taskDir, type Active } from "./active.ts";
+import { ADAPTERS, isTool, type Tool } from "./adapters/index.ts";
 import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
 import { EventInbox } from "./events.ts";
 import { Executors, type Chosen } from "./executors.ts";
 import { exec as defaultExec, type Exec } from "./git.ts";
-import { getTask, noteTask, parseTaskRef, type Task } from "./ledger.ts";
-import { readLogChunk } from "./log-view.ts";
+import {
+  DEFAULT_OWNER,
+  getTask,
+  noteTask,
+  ownerOf,
+  parseTaskRef,
+  type Task,
+} from "./ledger.ts";
+import { readLogChunk, readLogTail } from "./log-view.ts";
 import { admit, placement, runRequest } from "./plan.ts";
 import type { PaceEntry } from "./prepare.ts";
 import { DEFAULT_WORKERS_DIR } from "./profiles.ts";
@@ -17,6 +26,7 @@ import { clock } from "./quota-holds.ts";
 import { QuotaGuard } from "./quota-runtime.ts";
 import { recoverRunning } from "./recovery.ts";
 import { signalGroup } from "./spawn.ts";
+import { countRows, RECENT_MS, topRows } from "./top.ts";
 import { TaskWaits } from "./waits.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import { workerEnvironment } from "./worker-env.ts";
@@ -59,6 +69,8 @@ export class TaskRunner {
   private readonly launchOptions: LaunchOptions;
   private closed = false;
   private polling = false;
+  /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
+  private readonly cwds = new Map<number, string>();
   private restartPending: boolean;
 
   constructor(
@@ -348,6 +360,66 @@ export class TaskRunner {
     return { ...chunk, running: this.pending(id, task), status: task.status };
   }
 
+  /**
+   * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻与刚结束的，
+   * 每行带日志尾部解析出的最近一个动作与日志最后写入时刻。只读，日志最多读尾部固定字节数。
+   * 解析不出动作时 action 为 null，但 log_at 照给，命令行据此说「日志 N 秒前有输出」。
+   */
+  async top(input: { as?: string; now?: number } = {}) {
+    const now = input.now ?? Date.now();
+    const who = input.as ? ownerOf(input.as, "as") : DEFAULT_OWNER;
+    const { rows, truncated } = topRows(this.db, now);
+    const logs = await Promise.all(
+      rows.map((row) => {
+        const id = Number(row.ref.slice(1));
+        return readLogTail(join(taskDir(this.options.data, id), "log"));
+      }),
+    );
+    return {
+      now,
+      recent_ms: RECENT_MS,
+      subscriber: who,
+      counts: {
+        ...countRows(rows),
+        events: this.inbox.countPending(who),
+      },
+      rows: rows.map((row, index) => {
+        const id = Number(row.ref.slice(1));
+        const action = recentAction({
+          tool: toolOf(row.worker),
+          tail: logs[index]!.text,
+          cwd: this.cwdOf(id, this.x.active.get(id)),
+        });
+        return {
+          ...row,
+          log_at: logs[index]!.at,
+          action: action ? { text: action.text, kind: action.kind } : null,
+        };
+      }),
+      truncated,
+    };
+  }
+
+  /**
+   * 日志里的路径按执行者真正看到的工作目录缩短。macOS 上 /var 是 /private/var 的软链，
+   * 进程里 PWD 是解析后的那份，不解析就缩不掉；解析一次就够，任务在跑期间目录不变。
+   */
+  private cwdOf(id: number, active: Active | undefined) {
+    const known = this.cwds.get(id);
+    if (known) return known;
+    const path = active?.prepared?.cwd ?? active?.worktree;
+    if (!path) return undefined;
+    let real = path;
+    try {
+      real = realpathSync(path);
+    } catch {
+      // 目录已经没了就用原样，缩不掉也不该让看板失败。
+    }
+    if (this.cwds.size > 500) this.cwds.clear();
+    this.cwds.set(id, real);
+    return real;
+  }
+
   private settled(id: number) {
     const task = getTask(this.db, id);
     return this.pending(id, task) ? null : task;
@@ -365,3 +437,9 @@ export class TaskRunner {
     return this.waits.wait(id, seconds, signal);
   }
 }
+
+/** 执行者标识 `工具+模型[:强度]` 里的工具；取不出就不是已知工具，按未知日志处理。 */
+const toolOf = (worker: string | null): Tool | undefined => {
+  const head = worker?.split(/[+:]/, 1)[0]?.trim();
+  return isTool(head) ? head : undefined;
+};

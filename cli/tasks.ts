@@ -213,7 +213,9 @@ const ls: Command = {
         .join(" ");
       recordNext(`下一页：atrium task ls ${flags}`);
     } else if (result.tasks[0])
-      recordNext(`看详情：atrium task show ${result.tasks[0].ref}`);
+      recordNext(
+        `在跑的在实时视图里看（--once 打印一次、--json 给脚本）：atrium top\n看详情：atrium task show ${result.tasks[0].ref}`,
+      );
     else recordNext("建任务：atrium task add 标题");
   },
 };

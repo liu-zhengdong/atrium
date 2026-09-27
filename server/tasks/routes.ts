@@ -72,6 +72,10 @@ export function registerTaskRoutes(
   app.get("/api/tasks/tree", (request) =>
     taskTree(db, query(request.query).root),
   );
+  // 静态路径要排在 :id 前面，别让 top 被当成任务短号。
+  app.get("/api/tasks/top", (request) =>
+    requireRunner().top({ as: query(request.query).as }),
+  );
   app.get("/api/tasks/:id", (request) =>
     getTask(db, params(request.params).id),
   );

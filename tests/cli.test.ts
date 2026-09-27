@@ -86,12 +86,12 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     // 服务白名单会丢掉 PI_*；ATRIUM_PI_BIN 是服务侧的保留开关（#213）。
     ATRIUM_PI_BIN: join(root, "no-such-pi"),
   });
-  const cli = async (...args: string[]) => {
+  const cliWith = async (extra: NodeJS.ProcessEnv, ...args: string[]) => {
     try {
       const output = await exec(
         process.execPath,
         [join(packageRoot, "bin/atrium.mjs"), ...args],
-        { env, cwd: root, timeout: commandBudget },
+        { env: { ...env, ...extra }, cwd: root, timeout: commandBudget },
       );
       return { ...output, code: 0 };
     } catch (error) {
@@ -107,6 +107,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       };
     }
   };
+  const cli = (...args: string[]) => cliWith({}, ...args);
   // 冷启动慢过命令行 12 秒窗口时那条命令会以 503 收场，但它已经把服务拉起来了：
   // 回执不等，只等服务真的能应答，之后每条命令都打在热服务上，命令的成败只反映命令本身。
   const warm = async () => {
@@ -115,7 +116,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     await started;
   };
   t.after(() => finishFixture(signal));
-  return { root, data, env, cli, signal, warm };
+  return { root, data, env, cli, cliWith, signal, warm };
 }
 
 test(
@@ -198,5 +199,12 @@ test(
     assert.equal(line.code, 0, line.stderr);
     // 待派的任务不在看板行里，只进「接下来」；状态栏不带下一步命令行。
     assert.equal(line.stdout, "Atrium 在做 0\n接下来：就绪 1 · 等待中 0\n");
+    // 状态栏的输出进 Claude Code 的管道，不是终端也上色；只有 NO_COLOR 关掉颜色。
+    const colored = await f.cliWith({ NO_COLOR: "" }, "statusline");
+    assert.equal(colored.code, 0, colored.stderr);
+    assert.equal(
+      colored.stdout,
+      "Atrium 在做 0\n\x1b[2m接下来：就绪 1 · 等待中 0\x1b[0m\n",
+    );
   },
 );

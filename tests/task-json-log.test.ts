@@ -52,10 +52,16 @@ test("结构化日志摘要：取最后一条助手文本，取不到退回日�
 });
 
 test("异常结束：长度用尽、权限被拒、中途退出；正常收尾不算", () => {
-  assert.deepEqual(ending("opencode-length.jsonl"), {
-    kind: "length",
-    reason: "上下文或输出长度用尽",
-  });
+  // 这份夹具最后一步正文为 0，是思考耗尽（task-thinking.test.ts 细测）；有正文的长度结束才是长度用尽。
+  assert.equal(ending("opencode-length.jsonl")?.kind, "thinking");
+  assert.deepEqual(
+    abnormalEnding(
+      parseEvents(
+        read("opencode-length.jsonl").replace('"output":0', '"output":20000'),
+      ),
+    ),
+    { kind: "length", reason: "上下文或输出长度用尽" },
+  );
   assert.deepEqual(ending("opencode-rejected.jsonl"), {
     kind: "permission",
     reason:

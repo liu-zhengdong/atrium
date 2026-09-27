@@ -142,7 +142,7 @@ export function routeAfterTransient(input: {
   return { kind: "fail", why: "临时错误已重试过同一执行者并换过执行者" };
 }
 
-type EventLike = { kind: string; detail: string | null };
+export type EventLike = { kind: string; detail: string | null };
 
 const startDetail = (event: EventLike) => {
   try {
@@ -157,10 +157,18 @@ const startDetail = (event: EventLike) => {
  * 往后数 transient_retry 事件；人工再派一次就重新计数。
  */
 export function transientAttempts(events: readonly EventLike[]): number {
+  return retryAttempts(events, "transient_retry");
+}
+
+/** 同上，数的是指定种类的重派事件（思考耗尽后的 thinking_retry 也按这个数）。 */
+export function retryAttempts(
+  events: readonly EventLike[],
+  kind: string,
+): number {
   let count = 0;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
-    if (event.kind === "transient_retry") count++;
+    if (event.kind === kind) count++;
     else if (event.kind === "start" && !startDetail(event)?.retry) break;
   }
   return count;

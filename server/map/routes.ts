@@ -71,6 +71,7 @@ export function registerMapRoutes(
   const pages = {
     "/map": ["text/html; charset=utf-8", asset("index.html")],
     "/map/app.js": ["text/javascript; charset=utf-8", asset("app.js")],
+    "/map/format.js": ["text/javascript; charset=utf-8", asset("format.js")],
     "/map/style.css": ["text/css; charset=utf-8", asset("style.css")],
   } as const;
   for (const [url, [type, body]] of Object.entries(pages))

@@ -255,7 +255,7 @@ export async function startSupervisor(
   ];
 
   const child = spawn(process.execPath, args, {
-    cwd: packageRoot,
+    cwd: data,
     detached: true,
     stdio: ["ignore", log, log],
     windowsHide: true,

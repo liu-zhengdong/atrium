@@ -221,9 +221,9 @@ export async function startService(
       reportDroppedIdentity(droppedSensitive);
       child = spawn(
         process.execPath,
-        ["--import", "tsx", resolve(packageRoot, entry)],
+        ["--import", import.meta.resolve("tsx"), resolve(packageRoot, entry)],
         {
-          cwd: packageRoot,
+          cwd: data,
           env: {
             ...env,
             ATRIUM_DATA: data,

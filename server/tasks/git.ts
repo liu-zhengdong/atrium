@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { Problem } from "../problem.ts";
 import type { WorktreePlan } from "./prepare.ts";
 
@@ -21,7 +22,7 @@ export const exec: Exec = (command, args, options = {}) =>
       command,
       args,
       {
-        cwd: options.cwd,
+        cwd: options.cwd ?? homedir(),
         timeout: options.timeoutMs ?? 30_000,
         maxBuffer: 8 * 1024 * 1024,
         env: {

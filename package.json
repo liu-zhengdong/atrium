@@ -1,6 +1,6 @@
 {
   "name": "atrium",
-  "version": "0.1.93",
+  "version": "0.1.94",
   "private": true,
   "type": "module",
   "bin": {

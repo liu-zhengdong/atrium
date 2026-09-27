@@ -68,6 +68,10 @@ export async function createApp(options: {
   goals?: Partial<Omit<GoalCheckOptions, "data">>;
   /** 全景网页失效通知的检查间隔（毫秒），测试缩短。 */
   mapPollMs?: number;
+  /** 全景变更检测（测试可注入计数）；缺省读 map_revision。 */
+  mapDetect?: (db: DatabaseSync) => string | number;
+  /** 全景检测定时器（测试可手动打点）；缺省 setInterval。 */
+  mapRepeat?: (ms: number, tick: () => void) => () => void;
   /** OpenQuota 可执行文件路径，测试注入假二进制。 */
   quotaBin?: string;
   /** 自带额度读取器（#352），测试注入假凭据与假接口；null 关掉，缺省用服务共用的一份。 */
@@ -281,6 +285,8 @@ export async function createApp(options: {
     login: mapLogin,
     live: async () => (await taskRunner.top()).rows,
     pollMs: options.mapPollMs,
+    detect: options.mapDetect,
+    repeat: options.mapRepeat,
   });
   registerQuotaRoute(app, {
     bin: options.quotaBin,

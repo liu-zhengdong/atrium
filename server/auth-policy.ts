@@ -14,6 +14,7 @@ const mapLoginRoutes = new Set(["GET /map/login"]);
 const mapPageRoutes = new Set([
   "GET /map",
   "GET /map/app.js",
+  "GET /map/boot.js",
   "GET /map/format.js",
   "GET /map/style.css",
 ]);

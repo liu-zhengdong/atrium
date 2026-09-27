@@ -10,6 +10,9 @@ import { authPolicy } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
 import { registerPatrolRoutes } from "./tasks/patrol-routes.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
+import { ensureOrgTables } from "./org/schema.ts";
+import { ensureTaskTables } from "./tasks/ledger-schema.ts";
+import { migrateSpecialists } from "./tasks/specialist-migrate.ts";
 import { registerGoalRoutes } from "./goals/routes.ts";
 import type { GoalCheckOptions } from "./goals/check-runtime.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
@@ -221,6 +224,10 @@ export async function createApp(options: {
     ...runnerEnvOptions(),
     ...options.tasks,
   };
+  // 旧关注点先迁完，任务运行时才接管与派发；避免短暂读到混合状态。
+  ensureTaskTables(db);
+  ensureOrgTables(db);
+  migrateSpecialists(db);
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
   registerPatrolRoutes(app, db, taskRunner);
   const secretaryFallback = new SecretaryFallback(

@@ -892,16 +892,13 @@ export const orgCommands: Record<string, Command> = {
         .split("\n")
         .filter((line) => line.startsWith("- "));
       const docs: {
-        kind: "module" | "concern";
+        kind: "module";
         slug: string;
         name: string;
         source: string;
         body: string;
       }[] = [];
-      for (const [directory, kind] of [
-        ["modules", "module"],
-        ["concerns", "concern"],
-      ] as const) {
+      for (const [directory, kind] of [["modules", "module"]] as const) {
         let files: string[] = [];
         try {
           files = readdirSync(join(repo, ".agents", directory));

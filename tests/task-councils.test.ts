@@ -581,7 +581,7 @@ test("隔离服务：三位专员并行出意见，leader 汇总后记结论并�
     "utf8",
   );
   assert.match(summaryPrompt, /# 任务：会审：回执加提示段/);
-  assert.match(summaryPrompt, /### 体验（o6 · t4）：反对——回执超过三行/);
+  assert.match(summaryPrompt, /### 体验（r3 · t4）：反对——回执超过三行/);
   assert.match(summaryPrompt, /命令行回执变长/);
   // 专员意见任务的提示词带议题详述与自己的清单
   const opinionPrompt = readFileSync(

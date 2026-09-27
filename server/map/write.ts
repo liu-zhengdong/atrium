@@ -72,7 +72,7 @@ export function editMap(
     input.when.trim()
   )
     throw usage(
-      `--when: 只用于专员（关注点）；${ref(node.id)} ${node.name} 不是专员`,
+      `--when: 专员请用 atrium specialist edit <专员> --invite-when 修改；${ref(node.id)} ${node.name} 是组织节点`,
     );
   const doc = one<DocRow>(
     db,
@@ -135,6 +135,8 @@ export function addMap(db: DatabaseSync, input: MapAdd, actor: string) {
   if (!name) throw usage("名称不能为空");
   const kind = (input.kind ?? CHILD[parent.kind]) as Kind | null;
   if (!kind) throw usage(`${ref(parent.id)} 是关注点，下面不能再加部分`);
+  if (kind === "concern")
+    throw usage("关注点节点已下线；请用 atrium specialist add 创建专员");
   const slug = (input.slug ?? name).trim().toLowerCase();
   if (!/^(?:[a-z0-9-]|[㐀-鿿])+$/.test(slug))
     throw usage(

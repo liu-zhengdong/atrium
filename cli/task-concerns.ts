@@ -42,6 +42,6 @@ export function hintLines(
     ...hints.map(
       (h) => `提示：可能要请「${h.name}」专员（${h.matched.join("；")}）`,
     ),
-    `要请：atrium task set ${task.ref} --concern ${hints.map((h) => h.ref).join(",")}${rerun ? `，再 atrium task run ${task.ref}` : ""}`,
+    `要请：atrium task set ${task.ref} --ask ${hints.map((h) => h.ref).join(",")}${rerun ? `，再 atrium task run ${task.ref}` : ""}`,
   ];
 }

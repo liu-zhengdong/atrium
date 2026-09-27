@@ -83,15 +83,22 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
     });
   });
   app.post("/api/org/nodes", { bodyLimit: 64 * 1024 }, (request, reply) =>
-    reply
-      .code(201)
-      .send(
-        addNode(
-          db,
-          checkedLeader(body(request.body)) as AddInput,
-          actor(request.query),
-        ),
+    reply.code(201).send(
+      addNode(
+        db,
+        (() => {
+          const input = checkedLeader(body(request.body));
+          if (input.kind === "concern")
+            throw new Problem(
+              400,
+              "关注点节点已下线；请用 atrium specialist add 创建专员",
+              "usage",
+            );
+          return input as AddInput;
+        })(),
+        actor(request.query),
       ),
+    ),
   );
   app.patch("/api/org/nodes/:id", { bodyLimit: 64 * 1024 }, (request) =>
     editNode(

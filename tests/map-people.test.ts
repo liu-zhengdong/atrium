@@ -240,7 +240,7 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
     role.skills.map((s) => s.slug),
     ["atrium-cli"],
   );
-  await assert.rejects(mapRole(db, "r9"), /角色 r9 不存在/);
+  await assert.rejects(mapRole(db, "r9"), /专员 r9 不存在/);
 
   const worker = await mapWorker(db, "codex+gpt-6-sol:high");
   assert.equal(worker.trust, "medium");
@@ -267,13 +267,13 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
   const node = mapNode(db, "o3");
   assert.deepEqual(node.tasks.running[0]!.job, { ref: "r1", name: "后端" });
   editMap(db, "o4", { when: "动到凭据、权限时" }, "u1");
-  assert.equal(mapNode(db, "o2").concerns[0]!.when, "动到凭据、权限时");
+  assert.equal("concerns" in mapNode(db, "o2"), false);
   assert.throws(
     () => editMap(db, "o3", { when: "随时" }, "u1"),
-    /--when: 只用于专员/,
+    /--when: 专员请用 atrium specialist edit/,
   );
   editMap(db, "o4", { when: "" }, "u1");
-  assert.equal(mapNode(db, "o2").concerns[0]!.when, "");
+  assert.equal("concerns" in mapNode(db, "o2"), false);
   db.close();
 });
 

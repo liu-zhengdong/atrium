@@ -100,7 +100,7 @@ export function openReviews(
         `专员审查：${checklist.name} · ${parent.ref} ${parent.title}`,
       ),
       parent: parent.ref,
-      role: checklist.ref,
+      ...(row.node_id < 0 ? { job: checklist.ref } : { role: checklist.ref }),
       deliver: "none",
       brief: text,
       brief_path: brief,
@@ -196,7 +196,7 @@ export function settleReviews(
       row.review_id,
     );
     noteTask(db, row.task_id, "concern_review", {
-      concern: `o${row.node_id}`,
+      concern: row.node_id < 0 ? `r${-row.node_id}` : `o${row.node_id}`,
       review: taskRef(row.review_id),
       verdict: conclusion.verdict,
       reason: conclusion.reason,

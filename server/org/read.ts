@@ -93,7 +93,7 @@ function budgetViews(db: DatabaseSync, pace?: readonly PaceEntry[]) {
 }
 
 export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
-  const list = nodes(db);
+  const list = nodes(db).filter((node) => node.kind !== "concern");
   if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
   const order: typeof list = [];
   const visit = (parent: number | null) => {
@@ -150,8 +150,14 @@ export function show(
   raw?: Doc,
   pace?: readonly PaceEntry[],
 ) {
-  const n = nodeByAddress(db, address),
-    list = tree(db, pace);
+  const n = nodeByAddress(db, address);
+  if (n.kind === "concern")
+    throw new Problem(
+      410,
+      `关注点 ${n.name} 已从组织树下线；请用 atrium specialist ls 查看专员`,
+      "gone",
+    );
+  const list = tree(db, pace);
   const node = list.find((item) => item.id === n.id)!;
   const charter = one<DocRow>(
     db,

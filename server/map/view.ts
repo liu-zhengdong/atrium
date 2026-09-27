@@ -68,29 +68,19 @@ export type MapTask = {
   /** PR 交付后的合入阶段：merge_queued / merging / merged / online；没进合入队列为 null。 */
   delivery_stage: string | null;
   ended_at: number | null;
-  /** 角色（`task add --job`）：短号与名称；没指定为 null。 */
+  /** 专员（`task add --by`）：短号与名称；没指定为 null。 */
   job: { ref: string; name: string } | null;
   /** leader 派的（建任务的 aN 与名字）；用户与运行时建的为 null。 */
   by: Person | null;
   /** 最新一条备注，作者给名字（a1 → Atrium 负责人，u1 → 你）。 */
   note: TaskPeople["note"];
 };
-/** 组成部分与专员的一行：在 Part 之外带一句「做什么」和下面还有几块（不含专员）。 */
+/** 组成部分的一行：在 Part 之外带一句「做什么」和下面还有几块。 */
 export type MapPart = Part & {
   kind: NodeRow["kind"];
   what: string;
   parts: number;
 };
-/**
- * 专员（关注点）的一行：另带什么时候请来——人话 when（`map edit --when`），与派活提示用的规则 invite_when——
- * 和在盯几件（请了它、还没结的任务）。
- */
-export type MapConcern = MapPart & {
-  when: string;
-  invite_when: string[];
-  watching: number;
-};
-
 export const DEPTH_MAX = 8;
 const OPEN = "('todo','running','blocked')";
 const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
@@ -155,7 +145,7 @@ type Index = {
 };
 
 function index(db: DatabaseSync): Index {
-  const list = nodes(db);
+  const list = nodes(db).filter((node) => node.kind !== "concern");
   if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
   const children = new Map<number | null, NodeRow[]>();
   for (const n of list)
@@ -260,6 +250,12 @@ export function mapTree(db: DatabaseSync, root?: string, depth = DEPTH_MAX) {
       tree: null,
       next: "atrium org import --repo 仓库",
     };
+  if (start.kind === "concern")
+    throw new Problem(
+      404,
+      `关注点节点 ${root} 已下线，请查看专员名单`,
+      "not_found",
+    );
   return { root: ref(start.id), tree: treeNode(x, start, depth) };
 }
 
@@ -344,27 +340,6 @@ export const taskColumns = (db: DatabaseSync) =>
   `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
 
-/** 每位专员在盯几件：请了它、审查还没出结论、任务本身还没结（含等合入）。 */
-function watching(db: DatabaseSync): Map<number, number> {
-  const map = new Map<number, number>();
-  if (
-    !one(
-      db,
-      "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='task_concerns'",
-    ) ||
-    !hasColumn(db, "tasks", "delivery_stage")
-  )
-    return map;
-  for (const row of all<{ node_id: number; n: number }>(
-    db,
-    `SELECT c.node_id,COUNT(*) AS n FROM task_concerns c JOIN tasks t ON t.id=c.task_id
-      WHERE c.verdict IS NULL AND (t.status IN ${OPEN} OR t.${MERGING})
-      GROUP BY c.node_id LIMIT 600`,
-  ))
-    map.set(row.node_id, row.n);
-  return map;
-}
-
 /** 仓库路径 → GitHub 地址：从账本里已有的 PR 链接推出来，推不出的不给链接。 */
 function repoUrls(db: DatabaseSync): Map<string, string> {
   const map = new Map<string, string>();
@@ -380,7 +355,7 @@ function repoUrls(db: DatabaseSync): Map<string, string> {
   return map;
 }
 
-/** 选中节点的详情：人话字段、组成（专员单列）、要点、阶段、在推进的任务、PR 与 issue、技术细节。 */
+/** 选中节点的详情：人话字段、组成、要点、阶段、在推进的任务、PR 与 issue、技术细节。 */
 export function mapNode(
   db: DatabaseSync,
   address: string,
@@ -388,6 +363,12 @@ export function mapNode(
 ) {
   const x = index(db);
   const n = nodeByAddress(db, address);
+  if (n.kind === "concern")
+    throw new Problem(
+      404,
+      `关注点节点 ${address} 已下线，请查看专员名单`,
+      "not_found",
+    );
   const fields = x.fields.get(n.id) ?? {};
   const kids = x.children.get(n.id) ?? [];
   const part = (c: NodeRow): MapPart => {
@@ -406,19 +387,6 @@ export function mapNode(
         running: counts.running,
         blocked: counts.blocked,
       },
-    };
-  };
-  const watch = watching(db);
-  const concern = (c: NodeRow): MapConcern => {
-    const f = x.fields.get(c.id) ?? {};
-    const when = f.invite_when;
-    return {
-      ...part(c),
-      when: str(f.when),
-      invite_when: Array.isArray(when)
-        ? when.filter((w): w is string => typeof w === "string" && !!w.trim())
-        : [],
-      watching: watch.get(c.id) ?? 0,
     };
   };
   const overview: Overview = overviewOf(
@@ -500,7 +468,6 @@ export function mapNode(
     counts: x.counts.get(n.id)!,
     chain,
     overview,
-    concerns: kids.filter((c) => c.kind === "concern").map(concern),
     points: nodePoints(db, n.id),
     points_chain: chainPoints(db, n.id).filter((l) => l.node !== ref(n.id)),
     points_below: pointsBelow(db, x, n),

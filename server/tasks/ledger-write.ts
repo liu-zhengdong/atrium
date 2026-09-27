@@ -35,6 +35,8 @@ import { partForTask } from "../org/task-part.ts";
 import {
   concernRows,
   concernsFor,
+  specialistsFor,
+  specialistRef,
   concernsOf,
   textHints,
   writeConcerns,
@@ -42,6 +44,7 @@ import {
 import { getJobRole } from "./job-roles.ts";
 import { ref as nodeRef } from "../org/model.ts";
 import { briefText, readBriefFile } from "./brief.ts";
+import { specialistOptions } from "./specialist-options.ts";
 
 /** brief 给内容（brief_path 记来源）；只给 brief_path 时按路径读入，兼容旧调用方。 */
 function briefOf(input: Record<string, unknown>, repo: string | null) {
@@ -79,6 +82,7 @@ export type NewTask = {
   parent?: string | number | null;
   role?: string | null;
   job?: string | null;
+  by?: string | null;
   repo?: string | null;
   /** 任务详述内容（#355）。 */
   brief?: string | null;
@@ -98,6 +102,7 @@ export type NewTask = {
   goal?: string | null;
   /** 请哪些专员：关注点节点，逗号分隔。 */
   concern?: string | null;
+  ask?: string | null;
 };
 
 /** 任务读回时带上请的专员，改请专员或建任务时再带上按标题详述给的提示。 */
@@ -123,6 +128,7 @@ export function createTask(
     "parent",
     "role",
     "job",
+    "by",
     "repo",
     "brief",
     "brief_path",
@@ -136,7 +142,9 @@ export function createTask(
     "part",
     "goal",
     "concern",
+    "ask",
   ]);
+  const specialist = specialistOptions(input);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
   validateDeliver(deliver, issue);
@@ -153,11 +161,24 @@ export function createTask(
   };
   return atomically(db, () => {
     const parent = parentOf(db, input.parent);
-    const node = roleNode(db, values.role, values.repo);
-    const job = input.job ? getJobRole(db, input.job).id : null;
+    let oldRoleSpecialist: number | null = null;
+    if (values.role && !specialist.byPresent)
+      try {
+        oldRoleSpecialist = getJobRole(db, values.role).id;
+      } catch (error) {
+        if (!(error instanceof Problem) || error.statusCode !== 404)
+          throw error;
+      }
+    const role = oldRoleSpecialist ? null : values.role;
+    const node = roleNode(db, role, values.repo);
+    const job = specialist.by
+      ? getJobRole(db, specialist.by).id
+      : oldRoleSpecialist;
     const origin = fromNode(db, input.from);
     const part = partOf(db, input);
-    const concerns = concernsFor(db, input.concern);
+    const concerns = specialist.modernAsk
+      ? specialistsFor(db, specialist.ask)
+      : concernsFor(db, specialist.ask);
     const { lastInsertRowid } = db
       .prepare(
         "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ?,'todo',?,?)",
@@ -167,7 +188,7 @@ export function createTask(
         values.title,
         values.brief,
         values.brief_path,
-        values.role,
+        role,
         values.repo,
         values.owner,
         deliver,
@@ -189,7 +210,7 @@ export function createTask(
       ...(origin ? { from: `o${origin}` } : {}),
       ...(part ? { part: `o${part}` } : {}),
       ...(job ? { job: `r${job}` } : {}),
-      ...(concerns.length ? { concerns: concerns.map(nodeRef) } : {}),
+      ...(concerns.length ? { concerns: concerns.map(specialistRef) } : {}),
       ...(by ? { by } : {}),
     });
     const task = requireRow(db, id);
@@ -216,6 +237,7 @@ export function updateTask(
     "brief_path",
     "role",
     "job",
+    "by",
     "status",
     "deliver",
     "issue",
@@ -227,7 +249,9 @@ export function updateTask(
     "part",
     "goal",
     "concern",
+    "ask",
   ]);
+  const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
       "至少修改一项：title、brief、brief_path、role、job、from、part、concern、status、deliver、issue、after、after_pr、auto、pr_url",
@@ -252,8 +276,28 @@ export function updateTask(
     const current = requireRow(db, id);
     if ("brief" in input || "brief_path" in input)
       Object.assign(fields, briefOf(input, current.repo));
-    if ("job" in input)
-      fields.job_id = input.job ? getJobRole(db, input.job).id : null;
+    if (specialist.byPresent)
+      fields.job_id = specialist.by ? getJobRole(db, specialist.by).id : null;
+    if ("role" in fields) {
+      let oldRoleSpecialist: number | null = null;
+      if (fields.role && !specialist.byPresent)
+        try {
+          oldRoleSpecialist = getJobRole(db, fields.role).id;
+        } catch (error) {
+          if (!(error instanceof Problem) || error.statusCode !== 404)
+            throw error;
+        }
+      if (oldRoleSpecialist) {
+        fields.job_id = oldRoleSpecialist;
+        fields.role = null;
+        fields.node_id = null;
+      } else
+        fields.node_id = roleNode(
+          db,
+          fields.role as string | null,
+          current.repo,
+        );
+    }
     if (
       current.status === "running" &&
       "job_id" in fields &&
@@ -261,17 +305,18 @@ export function updateTask(
     )
       throw new Problem(
         409,
-        "执行中不能修改 --job：本轮角色已附进提示词",
+        "执行中不能修改 --by：本轮专员已附进提示词",
         "conflict",
       );
-    if ("role" in fields)
-      fields.node_id = roleNode(db, fields.role as string | null, current.repo);
     if ("from" in input) fields.origin_node_id = fromNode(db, input.from);
     if ("part" in input || "goal" in input) fields.part_id = partOf(db, input);
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
-    const concerns =
-      "concern" in input ? concernsFor(db, input.concern) : undefined;
+    const concerns = specialist.askPresent
+      ? specialist.modernAsk
+        ? specialistsFor(db, specialist.ask)
+        : concernsFor(db, specialist.ask)
+      : undefined;
     if (concerns && current.status === "running")
       throw new Problem(
         409,
@@ -282,9 +327,11 @@ export function updateTask(
       );
     setConditions(db, id, input, now);
     if (concerns) {
-      const before = concernRows(db, id).map((row) => nodeRef(row.node_id));
+      const before = concernRows(db, id).map((row) =>
+        specialistRef(row.node_id),
+      );
       writeConcerns(db, id, concerns);
-      const after = concerns.map(nodeRef);
+      const after = concerns.map(specialistRef);
       if (before.join(",") !== after.join(","))
         addEvent(db, id, now, "concerns", { from: before, to: after });
     }

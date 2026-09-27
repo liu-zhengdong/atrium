@@ -14,15 +14,31 @@ export type JobRole = {
   preferred: string[];
   checks: string[];
   skills: string[];
+  review_goal: string;
+  review_points: { ref: string; text: string; why: string }[];
+  review_bottom: string[];
+  invite_when: string[];
   rev: number;
   created_at: number;
   updated_at: number;
   running?: number;
 };
-type Row = Omit<JobRole, "ref" | "preferred" | "checks" | "skills"> & {
+type Row = Omit<
+  JobRole,
+  | "ref"
+  | "preferred"
+  | "checks"
+  | "skills"
+  | "review_points"
+  | "review_bottom"
+  | "invite_when"
+> & {
   preferred: string;
   checks: string;
   skills: string;
+  review_points: string;
+  review_bottom: string;
+  invite_when: string;
 };
 const view = (r: Row): JobRole => ({
   ...r,
@@ -30,6 +46,9 @@ const view = (r: Row): JobRole => ({
   preferred: JSON.parse(r.preferred) as string[],
   checks: JSON.parse(r.checks) as string[],
   skills: JSON.parse(r.skills) as string[],
+  review_points: JSON.parse(r.review_points) as JobRole["review_points"],
+  review_bottom: JSON.parse(r.review_bottom) as string[],
+  invite_when: JSON.parse(r.invite_when) as string[],
 });
 const bad = (message: string): never => {
   throw new Problem(400, message, "usage");
@@ -40,6 +59,17 @@ export function ensureJobRoles(db: DatabaseSync) {
   CREATE INDEX IF NOT EXISTS job_role_revisions_role ON job_role_revisions(role_id,rev);
   CREATE TRIGGER IF NOT EXISTS job_role_revisions_no_update BEFORE UPDATE ON job_role_revisions BEGIN SELECT RAISE(ABORT,'job role revisions append only'); END;
   CREATE TRIGGER IF NOT EXISTS job_role_revisions_no_delete BEFORE DELETE ON job_role_revisions BEGIN SELECT RAISE(ABORT,'job role revisions append only'); END;`);
+  const columns = db.prepare("PRAGMA table_info(job_roles)").all() as {
+    name: string;
+  }[];
+  for (const [name, definition] of [
+    ["review_goal", "TEXT NOT NULL DEFAULT ''"],
+    ["review_points", "TEXT NOT NULL DEFAULT '[]'"],
+    ["review_bottom", "TEXT NOT NULL DEFAULT '[]'"],
+    ["invite_when", "TEXT NOT NULL DEFAULT '[]'"],
+  ])
+    if (!columns.some((column) => column.name === name))
+      db.exec(`ALTER TABLE job_roles ADD COLUMN ${name} ${definition}`);
 }
 const required = (value: unknown, flag: string, max: number) => {
   if (typeof value !== "string" || !value.trim() || [...value].length > max)
@@ -103,11 +133,51 @@ function values(
     )
       bad(`skills: 技能 ${slug} 不存在`);
   }
-  return { name, description, body, preferred, checks, skills };
+  const review_goal =
+    input.review_goal === undefined
+      ? (previous?.review_goal ?? "")
+      : typeof input.review_goal === "string" && input.review_goal.length <= 300
+        ? input.review_goal.trim()
+        : bad("review_goal 应为不超过 300 字的文字");
+  const review_points =
+    input.review_points === undefined
+      ? (previous?.review_points ?? [])
+      : Array.isArray(input.review_points) &&
+          input.review_points.length <= 30 &&
+          input.review_points.every(
+            (p) =>
+              p &&
+              typeof p === "object" &&
+              typeof p.ref === "string" &&
+              typeof p.text === "string" &&
+              typeof p.why === "string",
+          )
+        ? (input.review_points as JobRole["review_points"])
+        : bad("review_points 应为不超过 30 条检查要点");
+  const review_bottom =
+    input.review_bottom === undefined
+      ? (previous?.review_bottom ?? [])
+      : list(input.review_bottom, "review_bottom");
+  const invite_when =
+    input.invite_when === undefined
+      ? (previous?.invite_when ?? [])
+      : list(input.invite_when, "invite_when");
+  return {
+    name,
+    description,
+    body,
+    preferred,
+    checks,
+    skills,
+    review_goal,
+    review_points,
+    review_bottom,
+    invite_when,
+  };
 }
 function inputOf(body: unknown) {
   if (!body || typeof body !== "object" || Array.isArray(body))
-    bad("角色字段应为 JSON 对象");
+    bad("专员字段应为 JSON 对象");
   const input = body as Record<string, unknown>;
   if (
     Object.keys(input).some(
@@ -119,11 +189,15 @@ function inputOf(body: unknown) {
           "preferred",
           "checks",
           "skills",
+          "review_goal",
+          "review_points",
+          "review_bottom",
+          "invite_when",
           "author",
         ].includes(key),
     )
   )
-    bad("角色含不支持的字段");
+    bad("专员含不支持的字段");
   return input;
 }
 function author(input: Record<string, unknown>) {
@@ -151,7 +225,7 @@ export function getJobRole(db: DatabaseSync, reference: unknown): JobRole {
     ? one<Row>(db, "SELECT * FROM job_roles WHERE id=?", Number(r[1]))
     : one<Row>(db, "SELECT * FROM job_roles WHERE name=? COLLATE NOCASE", text);
   if (!row)
-    throw new Problem(404, `角色 ${text || "（空）"} 不存在`, "not_found");
+    throw new Problem(404, `专员 ${text || "（空）"} 不存在`, "not_found");
   return view(row);
 }
 export function createJobRole(
@@ -165,11 +239,11 @@ export function createJobRole(
     if (
       one(db, "SELECT 1 FROM job_roles WHERE name=? COLLATE NOCASE", data.name)
     )
-      bad(`角色名称已存在：${data.name}`);
+      bad(`专员名称已存在：${data.name}`);
     const id = Number(
       db
         .prepare(
-          "INSERT INTO job_roles(name,description,body,preferred,checks,skills,rev,created_at,updated_at) VALUES (?,?,?,?,?,?,1,?,?)",
+          "INSERT INTO job_roles(name,description,body,preferred,checks,skills,review_goal,review_points,review_bottom,invite_when,rev,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)",
         )
         .run(
           data.name,
@@ -178,6 +252,10 @@ export function createJobRole(
           JSON.stringify(data.preferred),
           JSON.stringify(data.checks),
           JSON.stringify(data.skills),
+          data.review_goal,
+          JSON.stringify(data.review_points),
+          JSON.stringify(data.review_bottom),
+          JSON.stringify(data.invite_when),
           now,
           now,
         ).lastInsertRowid,
@@ -207,9 +285,9 @@ export function editJobRole(
         old.id,
       )
     )
-      bad(`角色名称已存在：${data.name}`);
+      bad(`专员名称已存在：${data.name}`);
     db.prepare(
-      "UPDATE job_roles SET name=?,description=?,body=?,preferred=?,checks=?,skills=?,rev=rev+1,updated_at=? WHERE id=?",
+      "UPDATE job_roles SET name=?,description=?,body=?,preferred=?,checks=?,skills=?,review_goal=?,review_points=?,review_bottom=?,invite_when=?,rev=rev+1,updated_at=? WHERE id=?",
     ).run(
       data.name,
       data.description,
@@ -217,6 +295,10 @@ export function editJobRole(
       JSON.stringify(data.preferred),
       JSON.stringify(data.checks),
       JSON.stringify(data.skills),
+      data.review_goal,
+      JSON.stringify(data.review_points),
+      JSON.stringify(data.review_bottom),
+      JSON.stringify(data.invite_when),
       now,
       old.id,
     );

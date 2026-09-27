@@ -19,8 +19,8 @@ import {
 } from "./view.ts";
 
 /**
- * 全景网页的角色、技能、执行者视图（只读）：组织根的三个页签与角色页、执行者页。
- * 数据来自角色表、组织技能、交付记录与执行者档案（`atrium role`、`atrium workers` 同一份），
+ * 全景网页的专员、技能、执行者视图（只读）：组织根的三个页签与专员页、执行者页。
+ * 数据来自专员表、组织技能、交付记录与执行者档案（`atrium specialist`、`atrium workers` 同一份），
  * 这里只挑网页要的字段并把事实翻成人话（结果标签、经过、观察），判定写成纯函数。
  */
 
@@ -37,7 +37,7 @@ type SkillBrief = {
   slug: string;
   name: string;
   description: string;
-  /** 挂在哪：角色（role）或组织节点（part，人话名优先）。 */
+  /** 挂在哪：专员（role）或组织节点（part，人话名优先）。 */
   on: { kind: "role" | "part"; ref: string; name: string }[];
   /** 最近一次修订：时间、谁、为什么。 */
   last: { at: number; author: string; reason: string } | null;
@@ -106,7 +106,7 @@ export function mapSkills(db: DatabaseSync): { skills: SkillBrief[] } {
   return { skills };
 }
 
-// ---- 角色 ----
+// ---- 专员 ----
 
 export function mapRoles(db: DatabaseSync) {
   if (!hasTable(db, "job_roles")) return { roles: [] };
@@ -123,14 +123,14 @@ export function mapRoles(db: DatabaseSync) {
   };
 }
 
-/** 角色页：角色本身、它名下的任务（与各部分任务表同一形状）、谁做得好、挂的技能。 */
+/** 专员页：专员本身、它名下的任务（与各部分任务表同一形状）、谁做得好、挂的技能。 */
 export async function mapRole(
   db: DatabaseSync,
   address: string,
   live: readonly LiveRow[] = [],
 ) {
   if (!hasTable(db, "job_roles"))
-    throw new Problem(404, `角色 ${address} 不存在`, "not_found");
+    throw new Problem(404, `专员 ${address} 不存在`, "not_found");
   const role = getJobRole(db, address);
   const liveBy = new Map(live.map((row) => [row.ref, row]));
   const jobs = jobNames(db);
@@ -158,6 +158,10 @@ export async function mapRole(
     description: role.description,
     preferred: role.preferred,
     checks: role.checks,
+    review_goal: role.review_goal,
+    review_points: role.review_points,
+    review_bottom: role.review_bottom,
+    invite_when: role.invite_when,
     skills,
     tasks,
     workers: combinations(report.stats),
@@ -179,7 +183,7 @@ const adviceView = ({ stat, advice }: Advice) => ({
   reason: advice.reason,
 });
 
-/** 执行者页签：一行 = 组合 × 角色；按角色筛选时只留该角色。另给待秘书确认的升降建议。 */
+/** 执行者页签：一行 = 组合 × 专员；按专员筛选时只留该专员。另给待秘书确认的升降建议。 */
 export async function mapWorkers(db: DatabaseSync, role?: string) {
   if (!hasTable(db, "task_deliveries"))
     return { role: null, rows: [], suggestions: [] };

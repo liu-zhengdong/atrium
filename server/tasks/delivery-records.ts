@@ -515,7 +515,7 @@ export function adviceFor(
   if (stat.first_pass_rate !== null && stat.first_pass_rate < 0.5)
     return {
       action: "avoid_role",
-      reason: `${stat.role ?? "未指定角色"} ${stat.deliveries} 次交付一次通过率 ${Math.round(stat.first_pass_rate * 100)}%`,
+      reason: `${stat.role ?? "未指定专员"} ${stat.deliveries} 次交付一次通过率 ${Math.round(stat.first_pass_rate * 100)}%`,
     };
   if (
     stat.first_pass_rate === 1 &&

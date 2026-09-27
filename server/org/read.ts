@@ -16,6 +16,52 @@ import { effective, exportBoundaries, summaryLength } from "./boundaries.ts";
 import { allBoundaries, chainLevels } from "./boundary-store.ts";
 import { goalChain, type GoalLevel } from "./goal-chain.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
+import { allShares, rootLimits } from "./share-store.ts";
+import { exportShares, shareCapacity, type ShareNode } from "./shares.ts";
+
+function budgetViews(db: DatabaseSync) {
+  const list = nodes(db);
+  const owned = allShares(db);
+  const tree: ShareNode[] = list.map((n) => ({
+    id: n.id,
+    parent: n.parent_id,
+    name: n.name,
+    shares: owned.get(n.id) ?? [],
+  }));
+  const limits = rootLimits(db, list);
+  const scopes = new Set(["claude", "codex", "opencode", "kimi", "grok"]);
+  const allocated = new Set<string>();
+  for (const shares of owned.values())
+    for (const s of shares)
+      if (s.dim === "quota") {
+        allocated.add(s.scope);
+        if (s.scope !== "*") scopes.add(s.scope);
+      }
+  return new Map(
+    list.map((n) => [
+      n.id,
+      {
+        own: exportShares(owned.get(n.id) ?? []),
+        quota: [...scopes].sort().map((scope) => ({
+          scope,
+          amount: shareCapacity(tree, n.id, "quota", scope, limits),
+          relevant: allocated.has(scope) || allocated.has("*"),
+          shared: !(owned.get(n.id) ?? []).some(
+            (s) => s.dim === "quota" && (s.scope === scope || s.scope === "*"),
+          ),
+        })),
+        disk: {
+          amount: shareCapacity(tree, n.id, "disk", "", limits),
+          shared: !(owned.get(n.id) ?? []).some((s) => s.dim === "disk"),
+        },
+        money: {
+          amount: shareCapacity(tree, n.id, "money", "", limits),
+          shared: !(owned.get(n.id) ?? []).some((s) => s.dim === "money"),
+        },
+      },
+    ]),
+  );
+}
 
 export function tree(db: DatabaseSync) {
   const list = nodes(db);
@@ -30,6 +76,7 @@ export function tree(db: DatabaseSync) {
   visit(null);
   // 名下任务按子树汇总（项目的「在做」含各模块）；投出的只算节点自己。
   const counts = taskCounts(db);
+  const budgets = budgetViews(db);
   const subtree = new Map<number, TaskCounts>();
   for (const n of [...order].reverse()) {
     const sum = {
@@ -56,6 +103,7 @@ export function tree(db: DatabaseSync) {
       ).map((r) => r.repo),
       tasks: subtree.get(n.id)!,
       sent: counts.sent.get(n.id) ?? { todo: 0, running: 0, blocked: 0 },
+      budget: budgets.get(n.id),
     };
   });
 }
@@ -91,6 +139,9 @@ export function show(db: DatabaseSync, address: string, raw?: Doc) {
         found ? (JSON.parse(found.fields) as Record<string, unknown>) : {},
         found?.body ?? "",
         raw === "charter" ? exportBoundaries(owned.get(n.id) ?? []) : undefined,
+        raw === "charter"
+          ? exportShares(allShares(db).get(n.id) ?? [])
+          : undefined,
       ),
       ref: ref(n.id),
       doc: raw,
@@ -274,8 +325,43 @@ export function history(
             after: b.get(id) ?? null,
           };
     }
+    if (current.budget !== undefined || old.budget !== undefined) {
+      const flatten = (value: unknown) => {
+        const data =
+          value && typeof value === "object"
+            ? (value as Record<string, unknown>)
+            : {};
+        const quota =
+          data.quota && typeof data.quota === "object"
+            ? (data.quota as Record<string, unknown>)
+            : {};
+        const flat: Record<string, unknown> = {
+          ...Object.fromEntries(
+            Object.entries(quota).map(([scope, amount]) => [
+              `quota.${scope}`,
+              amount,
+            ]),
+          ),
+          ...(data.disk === undefined ? {} : { disk: data.disk }),
+          ...(data.money === undefined ? {} : { money: data.money }),
+        };
+        return flat;
+      };
+      const before = flatten(old.budget),
+        after = flatten(current.budget);
+      for (const key of new Set([
+        ...Object.keys(before),
+        ...Object.keys(after),
+      ]))
+        if (before[key] !== after[key])
+          changes[`budget.${key}`] = {
+            before: before[key] ?? null,
+            after: after[key] ?? null,
+          };
+    }
     for (const key of new Set([...Object.keys(old), ...Object.keys(current)])) {
-      if (key === "fields" || key === "boundaries") continue;
+      if (key === "fields" || key === "boundaries" || key === "budget")
+        continue;
       if (JSON.stringify(old[key]) !== JSON.stringify(current[key]))
         changes[key] = {
           before: old[key] ?? null,

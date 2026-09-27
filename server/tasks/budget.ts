@@ -2,8 +2,12 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Problem } from "../problem.ts";
+import type { DatabaseSync } from "node:sqlite";
+import { effective } from "../org/boundaries.ts";
+import { allBoundaries, chainLevels } from "../org/boundary-store.ts";
+import { nodes, one } from "../org/model.ts";
 
-/** 章程里每个订阅账号须留给用户的额度；缺文件或缺字段时沿用默认值。 */
+/** 每个订阅账号留给用户的额度；组织根章程导入前用文件及默认值兜底。 */
 export const DEFAULT_QUOTA_RESERVE_PERCENT = 20;
 export const defaultCharterPath = () => join(homedir(), "Atrium", "charter.md");
 
@@ -36,7 +40,40 @@ export function parseQuotaReservePercent(text: string): number {
 
 export async function readQuotaReservePercent(
   charterPath = defaultCharterPath(),
+  db?: DatabaseSync,
+  nodeId?: number,
 ): Promise<number> {
+  if (
+    db &&
+    one(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_docs'",
+    )
+  ) {
+    const list = nodes(db);
+    const root = list.find((n) => n.parent_id === null);
+    if (
+      root &&
+      one(
+        db,
+        "SELECT 1 FROM org_docs WHERE node_id=? AND doc='charter'",
+        root.id,
+      )
+    ) {
+      const node = list.find((n) => n.id === nodeId) ?? root;
+      const owned = allBoundaries(db);
+      const chain = [
+        ...chainLevels(list, owned, node.parent_id),
+        { node: node.id, name: node.name, entries: owned.get(node.id) ?? [] },
+      ];
+      const reserve = effective(chain)
+        .filter((e) => e.param?.key === "quota_reserve_percent")
+        .map((e) => e.param!.value);
+      return reserve.length
+        ? Math.max(...reserve)
+        : DEFAULT_QUOTA_RESERVE_PERCENT;
+    }
+  }
   try {
     return parseQuotaReservePercent(await readFile(charterPath, "utf8"));
   } catch (error) {

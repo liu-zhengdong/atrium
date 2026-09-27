@@ -73,7 +73,7 @@ atrium quota                  # 各账号按富余从多到少，标出额度用
 atrium quota --clear claude   # 人工解除运行时的额度占用（误判时用），记事件并立即派发排队任务
 ```
 
-额度来自 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota)（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径）。根章程 `~/Atrium/charter.md` 的 `budget.quota_reserve_percent`（缺省 20）是每个订阅账号留给用户的份额，自动挑人不会用到它。
+额度来自 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota)（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径）。组织树根章程导入后，派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度；导入前仍读 `~/Atrium/charter.md`，缺省 20%。
 
 ## 事件
 
@@ -89,13 +89,13 @@ atrium events ack 1               # 确认已处理（编号见 events wait）
 
 ## 组织树
 
-组织、项目、模块、关注点四类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严。根章程只有用户 `u1` 能改，其余由节点 leader 维护（`--as aN`）。
+组织、项目、模块、关注点四类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严，显式分配给兄弟的份额之和不得超过父节点的可分配量。根章程只有用户 `u1` 能改，其余由节点 leader 维护（`--as aN`）。
 
 ```bash
 atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md 与仓库 .agents/modules、concerns 下待导入的岗位（导入后仓库里删掉）
 atrium org import --repo . --apply                # 写入；重复执行不会重复建
-atrium org tree                                   # 节点层级
-atrium org show atrium/runtime                    # 目标链（组织 → 项目 → 模块，各层只列一次）、硬边界、章程与能力卡
+atrium org tree                                   # 节点层级、任务计数和显式预算份额
+atrium org show atrium/runtime                    # 目标链、硬边界、预算份额、章程与能力卡
 atrium org show atrium/runtime --charter --raw > /tmp/章程.md
 atrium org edit atrium/runtime --charter /tmp/章程.md --reason 更新目标
 atrium org history atrium/runtime                 # 修订；--target charter --rev r2 看字段差异
@@ -105,6 +105,8 @@ atrium org link-roles                             # 预览把旧 role 字符串�
 ```
 
 任务的 `--role` 指向组织节点（`o4` 或 `atrium/runtime`），派活时在岗位说明（节点章程正文）后附「章程要点」：本节点与父节点目标、整条链的硬边界（带参数的写最严值）、记账节点，整段不超过 2000 字、边界完整附上。旧写法 `--role runtime` 按任务仓库找挂了该仓库的同名节点；岗位说明只取节点章程，对不上节点时没有岗位说明，不再读仓库文件。`org tree` 显示各节点子树里在做、卡住、待办的任务数。
+
+章程 frontmatter 的 `budget` 分配份额，例如 `budget: { quota: { claude: 30, "*": 10 }, disk: 20, money: 0 }`。`quota` 数值是账号当前周期额度的百分点；具体账号覆盖 `*`。没有显式份额的节点使用父节点未分配给兄弟的共享池。`org show --charter --raw` 可导出并编辑。当前只显示份额，不统计节点用量或按份额拦截派活；这两项在第 5 步实现。
 
 ## 组织技能
 

@@ -109,6 +109,7 @@ export type PaceEntry = {
   sparePercent: number | null;
   usedPercent?: number | null;
   windowId?: string | null;
+  hoursToReset?: number | null;
 };
 
 /** 调 `openquota pace --json`；没装、超时、输出不是预期 JSON 都返回 undefined。 */
@@ -129,10 +130,8 @@ function parsePaceRows(data: unknown[]): PaceEntry[] {
   const entries: PaceEntry[] = [];
   for (const item of data) {
     if (!item || typeof item !== "object") continue;
-    const { providerId, sparePercent, usedPercent, windowId } = item as Record<
-      string,
-      unknown
-    >;
+    const { providerId, sparePercent, usedPercent, windowId, hoursToReset } =
+      item as Record<string, unknown>;
     if (typeof providerId !== "string") continue;
     entries.push({
       providerId,
@@ -145,6 +144,11 @@ function parsePaceRows(data: unknown[]): PaceEntry[] {
           ? usedPercent
           : null,
       windowId: typeof windowId === "string" ? windowId : null,
+      ...(typeof hoursToReset === "number" &&
+      Number.isFinite(hoursToReset) &&
+      hoursToReset > 0
+        ? { hoursToReset }
+        : {}),
     });
   }
   return entries;
@@ -185,6 +189,7 @@ export type PickInput = {
   /** 额度被标记用尽、还没到期的账号：provider → 到期时刻（#267）。 */
   held?: ReadonlyMap<string, number>;
   reservePercent?: number;
+  headroom?: ReadonlyMap<string, { points: number; reason: string }>;
   /** 已有任务在跑的工具：其中独占的排到空闲候选之后。 */
   busy?: ReadonlySet<Tool>;
   /** 这次不挑的工具（临时错误后换执行者时排除刚失败的那个）。 */
@@ -219,6 +224,7 @@ export function pickWorker({
   profiles,
   held,
   reservePercent = DEFAULT_QUOTA_RESERVE_PERCENT,
+  headroom,
   busy,
   exclude,
   requireTrust,
@@ -277,6 +283,15 @@ export function pickWorker({
         tool,
         reason: `已用额度 ${used.usedPercent}% 达到章程上限 ${100 - reservePercent}%（须留 ${reservePercent}% 给用户）`,
       });
+      continue;
+    }
+    const room = headroom?.get(ADAPTERS[tool].quotaProvider);
+    if (pace && room && room.points < 1) {
+      skipped.push({ tool, reason: room.reason });
+      continue;
+    }
+    if (profiles[tool]?.rules.billing === "metered") {
+      skipped.push({ tool, reason: "档案 billing=metered，当前钱份额为 0 元" });
       continue;
     }
     eligible.push(tool);

@@ -18,8 +18,10 @@ import { goalChain, type GoalLevel } from "./goal-chain.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
 import { allShares, rootLimits } from "./share-store.ts";
 import { exportShares, shareCapacity, type ShareNode } from "./shares.ts";
+import type { PaceEntry } from "../tasks/prepare.ts";
+import { usageSample, subtreeUsage } from "../tasks/usage.ts";
 
-function budgetViews(db: DatabaseSync) {
+function budgetViews(db: DatabaseSync, pace?: readonly PaceEntry[]) {
   const list = nodes(db);
   const owned = allShares(db);
   const tree: ShareNode[] = list.map((n) => ({
@@ -37,6 +39,14 @@ function budgetViews(db: DatabaseSync) {
         allocated.add(s.scope);
         if (s.scope !== "*") scopes.add(s.scope);
       }
+  const subtree = (id: number) => {
+    const ids = [id];
+    for (let i = 0; i < ids.length; i++)
+      for (const child of list.filter((n) => n.parent_id === ids[i]))
+        ids.push(child.id);
+    return ids;
+  };
+  const now = Date.now();
   return new Map(
     list.map((n) => [
       n.id,
@@ -45,6 +55,22 @@ function budgetViews(db: DatabaseSync) {
         quota: [...scopes].sort().map((scope) => ({
           scope,
           amount: shareCapacity(tree, n.id, "quota", scope, limits),
+          used:
+            scope === "*"
+              ? null
+              : (() => {
+                  const sample = usageSample(pace, scope, now);
+                  return sample
+                    ? Number(
+                        subtreeUsage(
+                          db,
+                          subtree(n.id),
+                          scope,
+                          sample.reset,
+                        ).toFixed(2),
+                      )
+                    : null;
+                })(),
           relevant: allocated.has(scope) || allocated.has("*"),
           shared: !(owned.get(n.id) ?? []).some(
             (s) => s.dim === "quota" && (s.scope === scope || s.scope === "*"),
@@ -63,7 +89,7 @@ function budgetViews(db: DatabaseSync) {
   );
 }
 
-export function tree(db: DatabaseSync) {
+export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
   const list = nodes(db);
   if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
   const order: typeof list = [];
@@ -76,7 +102,7 @@ export function tree(db: DatabaseSync) {
   visit(null);
   // 名下任务按子树汇总（项目的「在做」含各模块）；投出的只算节点自己。
   const counts = taskCounts(db);
-  const budgets = budgetViews(db);
+  const budgets = budgetViews(db, pace);
   const subtree = new Map<number, TaskCounts>();
   for (const n of [...order].reverse()) {
     const sum = {
@@ -107,9 +133,14 @@ export function tree(db: DatabaseSync) {
     };
   });
 }
-export function show(db: DatabaseSync, address: string, raw?: Doc) {
+export function show(
+  db: DatabaseSync,
+  address: string,
+  raw?: Doc,
+  pace?: readonly PaceEntry[],
+) {
   const n = nodeByAddress(db, address),
-    list = tree(db);
+    list = tree(db, pace);
   const node = list.find((item) => item.id === n.id)!;
   const charter = one<DocRow>(
     db,

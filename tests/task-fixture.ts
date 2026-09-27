@@ -125,6 +125,7 @@ export async function startApp(
       tickMs: 100,
       killGraceMs: 200,
       pace,
+      usagePace: async () => undefined,
     },
   });
   t.after(() => app.close());

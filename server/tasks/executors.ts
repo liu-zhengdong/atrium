@@ -38,6 +38,12 @@ import { markDelivered, markEchoed } from "./tell-ledger.ts";
 import { followUpTells } from "./tell-runtime.ts";
 import type { ChildProcess } from "node:child_process";
 import { collectSkillEdits } from "../skills/collect.ts";
+import { beginUsage, endUsage } from "./usage.ts";
+import { readPace, type PaceEntry } from "./prepare.ts";
+import { DiskBudget } from "./disk-budget.ts";
+import { chooseWorker } from "./worker-choice.ts";
+import { taskAvoidChain } from "../skills/task-skills.ts";
+import { BudgetProblem } from "./budget-problem.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -53,6 +59,7 @@ export type ExecutorContext = {
   launchOptions: LaunchOptions;
   waits: TaskWaits;
   quota: QuotaGuard;
+  disk: DiskBudget;
   killGraceMs?: number;
   closed: () => boolean;
 };
@@ -66,6 +73,14 @@ export class Executors {
   private ticking = false;
 
   constructor(private readonly ctx: ExecutorContext) {}
+
+  private async pace() {
+    try {
+      return await (this.ctx.launchOptions.usagePace ?? readPace)();
+    } catch {
+      return undefined;
+    }
+  }
 
   isClosed() {
     return this.ctx.closed();
@@ -111,7 +126,9 @@ export class Executors {
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const task = getTask(this.ctx.db, id);
+    await this.ctx.disk.check(task.node_id, task.repo);
     const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
+    const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const { child, offset } = await spawnWorker(
       prepared,
@@ -149,7 +166,15 @@ export class Executors {
       throw error;
     }
     markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
-    await this.track(started, chosen, prepared, child, offset, retried);
+    await this.track(
+      started,
+      chosen,
+      prepared,
+      child,
+      offset,
+      retried,
+      usagePace,
+    );
     return started;
   }
 
@@ -168,6 +193,7 @@ export class Executors {
       this.ctx.launchOptions,
       resume,
     );
+    const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const { child, offset } = await spawnWorker(
       prepared,
@@ -185,7 +211,15 @@ export class Executors {
       { pid, worker: prev.worker.id, tells: ids.length },
     );
     markDelivered(this.ctx.db, id, ids, resume ? "resume" : "restart");
-    await this.track(updated, chosen, prepared, child, offset, prev.retried);
+    await this.track(
+      updated,
+      chosen,
+      prepared,
+      child,
+      offset,
+      prev.retried,
+      usagePace,
+    );
   }
 
   private async track(
@@ -195,6 +229,7 @@ export class Executors {
     child: ChildProcess,
     offset: number,
     retried: boolean,
+    usagePace: PaceEntry[] | undefined,
   ) {
     const id = task.id;
     const active = launched({
@@ -214,6 +249,12 @@ export class Executors {
         (uuid) => markEchoed(this.ctx.db, id, uuid),
       );
     this.active.set(id, active);
+    beginUsage(
+      this.ctx.db,
+      id,
+      ADAPTERS[chosen.worker.tool].quotaProvider,
+      usagePace,
+    );
     child.once(
       "exit",
       (code, signal) => void this.finish(id, { code, signal }),
@@ -230,6 +271,12 @@ export class Executors {
     active.exited = true;
     this.finishing.set(id, (this.finishing.get(id) ?? 0) + 1);
     try {
+      endUsage(
+        this.ctx.db,
+        id,
+        ADAPTERS[active.tool].quotaProvider,
+        await this.pace(),
+      );
       if (await followUpTells(this, this.ctx.db, active, exit)) return;
       const outcome = await settle(
         active,
@@ -445,6 +492,13 @@ export class Executors {
           this.ctx.launchOptions.workersDir,
         );
         if (this.ctx.closed()) return moved;
+        const task = getTask(this.ctx.db, entry.task_id);
+        await chooseWorker(
+          { worker: worker.id, risk: entry.risk as Risk },
+          this.ctx.launchOptions,
+          held,
+          { chain: taskAvoidChain(this.ctx.db, task) },
+        );
         await this.launch(entry.task_id, { worker, risk: entry.risk as Risk });
       } catch (error) {
         if (this.ctx.closed()) return moved;
@@ -454,7 +508,10 @@ export class Executors {
           if (getTask(this.ctx.db, entry.task_id).status === "blocked")
             noteTask(this.ctx.db, entry.task_id, "launch_failed", { reason });
           else this.advance(entry.task_id, { kind: "block" }, {}, { reason });
-          this.publish(entry.task_id, "blocked", { reason });
+          this.publish(entry.task_id, "blocked", {
+            reason,
+            ...(error instanceof BudgetProblem ? { source: "budget" } : {}),
+          });
         } catch {
           if (!this.ctx.closed())
             noteTask(this.ctx.db, entry.task_id, "launch_failed", { reason });

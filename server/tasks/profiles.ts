@@ -33,6 +33,7 @@ const isTrust = (value: unknown): value is Trust =>
 export type ProfileRules = {
   trust?: Trust;
   max_risk?: Risk;
+  billing?: "subscription" | "metered";
   checks?: string[];
   limits?: Record<string, number>;
   /** 交给工具的模型 id；harness 层的 model 同时是只写工具时的默认模型。 */
@@ -134,6 +135,10 @@ function normalizeRules(data: Record<string, FrontValue>) {
     } else if (key === "max_risk") {
       if (isRisk(value)) rules.max_risk = value;
       else warnings.push(`max_risk 只能是 ${RISKS.join("、")}`);
+    } else if (key === "billing") {
+      if (value === "subscription" || value === "metered")
+        rules.billing = value;
+      else warnings.push("billing 只能是 subscription 或 metered");
     } else if (key === "checks") {
       const list = Array.isArray(value) ? value : [value];
       rules.checks = list.filter(
@@ -187,6 +192,8 @@ export function mergeLayers(layers: ProfileLayer[]): EffectiveProfile {
     const merged: ProfileRules = { ...rules, ...next };
     merged.trust = lower(TRUSTS, rules.trust, next.trust);
     merged.max_risk = lower(RISKS, rules.max_risk, next.max_risk);
+    if (rules.billing === "metered" || next.billing === "metered")
+      merged.billing = "metered";
     if (rules.checks || next.checks)
       merged.checks = [
         ...new Set([...(rules.checks ?? []), ...(next.checks ?? [])]),

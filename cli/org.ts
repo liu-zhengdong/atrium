@@ -104,6 +104,7 @@ type BudgetView = {
   quota: {
     scope: string;
     amount?: number;
+    used?: number | null;
     shared: boolean;
     relevant: boolean;
   }[];
@@ -115,7 +116,8 @@ export function formatBudget(view: BudgetView, detail = false): string {
     detail ? q.amount !== undefined : !q.shared || q.relevant,
   );
   const parts = quota.map(
-    (q) => `${q.scope} ${q.shared ? `共享池 ${q.amount}` : `份额 ${q.amount}`}`,
+    (q) =>
+      `${q.scope} ${q.shared ? "共享池" : "份额"} ${q.amount}${q.used === null || q.used === undefined ? "（额度数据不可用）" : `（约用 ${q.used}）`}`,
   );
   if (detail && !parts.length) parts.push("共享池（暂无额度数据）");
   const disk =
@@ -260,7 +262,9 @@ export const orgCommands: Record<string, Command> = {
             (n) =>
               `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${formatCounts(n.tasks, n.sent)}${formatBudget(n.budget) ? ` · ${formatBudget(n.budget)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
           )
-          .join("\n") || "组织树为空",
+          .join("\n") +
+          (rows.length ? "\n额度用量为估算；账号总览看 atrium quota" : "") ||
+          "组织树为空",
         rows.length ? "atrium org show o1" : "atrium org import",
       );
     },

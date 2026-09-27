@@ -320,7 +320,11 @@ test("排队中的任务 task run --worker 可改派执行者（t139）", async 
   const r1 = await call("POST", "/api/tasks/t1/run", { worker: "opencode" });
   assert.equal(r1.status, 200, JSON.stringify(r1.body));
   assert.equal(r1.body.queued, false);
-  const r2 = await call("POST", "/api/tasks/t2/run", { worker: "opencode" });
+  // 指定本机 h1 排队：改派不带 --host 时保留。
+  const r2 = await call("POST", "/api/tasks/t2/run", {
+    worker: "opencode",
+    host: "h1",
+  });
   assert.equal(r2.body.queued, true, JSON.stringify(r2.body));
 
   // 不带 --worker：排队不变，409 说明现状与改派方法。
@@ -338,9 +342,12 @@ test("排队中的任务 task run --worker 可改派执行者（t139）", async 
     });
     try {
       return db
-        .prepare("SELECT worker,risk,queued_at FROM task_queue WHERE task_id=2")
+        .prepare(
+          "SELECT worker,risk,queued_at,host_id FROM task_queue WHERE task_id=2",
+        )
         .get() as
-        { worker: string; risk: string; queued_at: number } | undefined;
+        | { worker: string; risk: string; queued_at: number; host_id: number }
+        | undefined;
     } finally {
       db.close();
     }
@@ -357,6 +364,8 @@ test("排队中的任务 task run --worker 可改派执行者（t139）", async 
   const after = queuedRow()!;
   assert.equal(after.worker, busy.body.reassigned.worker);
   assert.equal(after.queued_at, before.queued_at);
+  assert.equal(before.host_id, 1);
+  assert.equal(after.host_id, 1);
 
   // 超出新执行者 max_risk 的拒绝，排队记录不动。
   const risky = await call("POST", "/api/tasks/t2/run", {

@@ -1008,11 +1008,17 @@ export class TaskRunner {
       );
       if (refusal) throw new Problem(400, refusal, "usage");
     }
+    // 指定的主机：带 --host 换成新的，否则保留原排队记录里的（#358）。
+    const host =
+      request.host === undefined
+        ? (prev.host_id ?? null)
+        : this.pinnedHost(request.host);
     const adapter = ADAPTERS[worker.tool];
     const gate = this.host.gate(this.x.inFlight(task.id), task.urgent === 1);
     const reason = this.quota.held().has(adapter.quotaProvider)
       ? `${adapter.quotaProvider} 额度用尽，恢复后自动拉起`
-      : adapter.exclusive && this.x.busy(worker.tool, task.id)
+      : adapter.exclusive &&
+          this.x.busy(worker.tool, task.id, host ?? LOCAL_HOST)
         ? `${worker.tool} 同一时刻只跑一个，前一个结束后自动拉起`
         : gate.ok
           ? "等待执行者可用后自动拉起"
@@ -1023,11 +1029,13 @@ export class TaskRunner {
       worker: worker.id,
       risk,
       queued_at: prev.queued_at,
+      host_id: host,
     });
     noteTask(this.db, task.id, "queued", {
       worker: worker.id,
       reassigned_from: prev.worker,
       reason,
+      ...(host !== null ? { host: hostRef(host) } : {}),
     });
     this.waits.changed(task.id);
     await this.urgentQueued(task.id);

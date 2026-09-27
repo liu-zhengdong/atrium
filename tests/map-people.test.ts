@@ -322,6 +322,10 @@ test("接口：网页会话能读角色、技能、执行者，不存在的给 4
     ["/api/map/leaders/a9", 404],
     ["/api/map/leaders/o1", 400],
     ["/api/map/leaders/..%2Fa1", 400],
+    // 按部分列专员：部分不存在或名字不合法都不给。
+    ["/api/map/specialists?part=o99", 404],
+    ["/api/map/specialists?part=..%2Fo1", 404],
+    ["/api/map/specialists?part=", 200],
   ] as const)
     assert.equal(
       (await app.inject({ url, headers: session })).statusCode,

@@ -17,6 +17,7 @@ import {
 import { mapLeader, mapLeaders } from "./leaders.ts";
 import { addMap, editMap, type MapAdd, type MapEdit } from "./write.ts";
 import {
+  mapPartRoles,
   mapRole,
   mapRoles,
   mapSkills,
@@ -131,7 +132,13 @@ export function registerMapRoutes(
   app.get("/api/map/roles/:id", async (request) =>
     mapRole(db, id(request), await live()),
   );
-  app.get("/api/map/specialists", () => ({ specialists: mapRoles(db).roles }));
+  // 带 part 时只列这一部分能请的（本部分、上级、牵涉部分、全组织，各注明哪一档）。
+  app.get("/api/map/specialists", (request) => {
+    const part = q(request.query).part;
+    return part
+      ? { specialists: mapPartRoles(db, part).roles }
+      : { specialists: mapRoles(db).roles };
+  });
   app.get("/api/map/specialists/:id", async (request) =>
     mapRole(db, id(request), await live()),
   );

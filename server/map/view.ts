@@ -12,7 +12,13 @@ import {
 } from "../org/model.ts";
 import { overviewOf, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
-import { appliedPoints, appliesRefs } from "../org/aspects.ts";
+import {
+  appliedFrom,
+  appliedPoints,
+  appliesRefs,
+  aspectFacts,
+  parseApplies,
+} from "../org/aspects.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { findingsForNode, findingsForNodes } from "../tasks/patrol.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
@@ -79,10 +85,18 @@ export type MapTask = {
   by: Person | null;
   /** 最新一条备注，作者给名字（a1 → Atrium 负责人，u1 → 你）。 */
   note: TaskPeople["note"];
+  /** 牵涉的部分（#373）：显式 `--also` 在前，其后是自动牵涉（管方面的要点适用于归属部分）。 */
+  also: Involved[];
+  /** 因为牵涉某一块而列在那一块页上时，任务归哪一块；列在自己归属的部分页上为 null。 */
+  home: PartBrief | null;
 };
+export type PartBrief = { ref: string; name: string; alias: string };
+export type Involved = PartBrief & { auto: boolean };
 /** 组成部分的一行：在 Part 之外带一句「做什么」和下面还有几块。 */
 export type MapPart = Part & {
   kind: NodeRow["kind"];
+  /** 管方面的部分（#373）。 */
+  aspect: boolean;
   what: string;
   parts: number;
 };
@@ -312,6 +326,7 @@ export function taskView(
   live?: LiveRow,
   jobs: ReadonlyMap<number, string> = new Map(),
   people?: TaskPeople,
+  involved: { also?: Involved[]; home?: PartBrief | null } = {},
 ): MapTask {
   return {
     ref: `t${row.id}`,
@@ -336,9 +351,128 @@ export function taskView(
         : null,
     by: people?.by ?? null,
     note: people?.note ?? null,
+    also: involved.also ?? [],
+    home: involved.home ?? null,
   };
 }
 
+const brief = (x: Index, n: NodeRow): PartBrief => {
+  const h = head(x, n);
+  return { ref: h.ref, name: h.name, alias: h.alias };
+};
+const alive = (x: Index, id: number) => {
+  const n = x.byId.get(id);
+  return n && n.archived_at === null ? n : undefined;
+};
+
+/** 每个部分自动牵涉的管方面部分（算一次读一次库）；没有组织树或旧库缺列时为空。 */
+function autoByPart(
+  db: DatabaseSync,
+  parts: readonly number[],
+): Map<number, number[]> {
+  const map = new Map<number, number[]>();
+  if (!parts.length) return map;
+  try {
+    const { list, points } = aspectFacts(db);
+    for (const part of new Set(parts))
+      map.set(
+        part,
+        appliedFrom(list, points, part, []).map((l) => Number(l.node.slice(1))),
+      );
+  } catch {
+    // 旧库没有 aspect 列：不算自动牵涉。
+  }
+  return map;
+}
+
+/** 一批任务牵涉的部分：显式的（task_also，按写的顺序）与自动的；归档或不在了的部分不列。 */
+export function involvedOfTasks(
+  db: DatabaseSync,
+  rows: readonly Pick<TaskRow, "id" | "part">[],
+  x: Index = index(db),
+): Map<number, Involved[]> {
+  const out = new Map<number, Involved[]>();
+  if (!rows.length) return out;
+  const explicit = new Map<number, number[]>();
+  if (hasTable(db, "task_also"))
+    for (const r of all<{ task_id: number; node_id: number }>(
+      db,
+      `SELECT task_id,node_id FROM task_also WHERE task_id IN (${rows.map(() => "?").join(",")})
+        ORDER BY task_id,pos LIMIT 2000`,
+      ...rows.map((r) => r.id),
+    ))
+      explicit.set(r.task_id, [...(explicit.get(r.task_id) ?? []), r.node_id]);
+  const auto = autoByPart(
+    db,
+    rows.flatMap((r) => (r.part === null ? [] : [r.part])),
+  );
+  for (const row of rows) {
+    const mine = explicit.get(row.id) ?? [];
+    const list: Involved[] = [];
+    for (const id of mine) {
+      const n = alive(x, id);
+      if (n) list.push({ ...brief(x, n), auto: false });
+    }
+    for (const id of row.part === null ? [] : (auto.get(row.part) ?? [])) {
+      const n = alive(x, id);
+      if (n && !mine.includes(id)) list.push({ ...brief(x, n), auto: true });
+    }
+    if (list.length) out.set(row.id, list);
+  }
+  return out;
+}
+
+/**
+ * 牵涉本块（子树）却归别处的任务：显式 `--also` 了子树里某一块的，以及归属部分被子树里管方面的部分自动牵涉的。
+ * 按与本块任务相同的顺序，至多 30 件。
+ */
+function involvedRows(db: DatabaseSync, x: Index, ids: readonly number[]) {
+  if (!hasTasks(db)) return [];
+  const inTree = new Set(ids);
+  const aspects = ids.filter((id) => x.byId.get(id)?.aspect);
+  let covered: number[] = [];
+  if (aspects.length) {
+    const parts = all<{ part: number }>(
+      db,
+      "SELECT DISTINCT COALESCE(part_id,node_id) AS part FROM tasks WHERE COALESCE(part_id,node_id) IS NOT NULL LIMIT 500",
+    )
+      .map((r) => r.part)
+      .filter((p) => !inTree.has(p));
+    const auto = autoByPart(db, parts);
+    covered = parts.filter((p) =>
+      (auto.get(p) ?? []).some((a) => aspects.includes(a)),
+    );
+  }
+  const also = hasTable(db, "task_also");
+  if (!also && !covered.length) return [];
+  const marks = (list: readonly unknown[]) => list.map(() => "?").join(",");
+  const where = [
+    ...(also
+      ? [
+          `id IN (SELECT task_id FROM task_also WHERE node_id IN (${marks(ids)}))`,
+        ]
+      : []),
+    ...(covered.length
+      ? [`COALESCE(part_id,node_id) IN (${marks(covered)})`]
+      : []),
+  ].join(" OR ");
+  return all<TaskRow>(
+    db,
+    `SELECT ${taskColumns(db)} FROM tasks
+      WHERE (${where}) AND COALESCE(part_id,node_id) NOT IN (${marks(ids)})
+      ORDER BY ${TASK_ORDER(db)}, updated_at DESC LIMIT 30`,
+    ...(also ? ids : []),
+    ...covered,
+    ...ids,
+  );
+}
+
+const hasTable = (db: DatabaseSync, name: string) =>
+  !!one(
+    db,
+    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
+    name,
+  );
 function hasColumn(db: DatabaseSync, table: string, column: string) {
   return all<{ name: string }>(db, `PRAGMA table_info(${table})`).some(
     (c) => c.name === column,
@@ -347,6 +481,10 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
 export const taskColumns = (db: DatabaseSync) =>
   `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
+/** 任务在部分页上的顺序：在跑、卡住与等合入、待办、其余。 */
+const TASK_ORDER = (db: DatabaseSync) =>
+  `CASE WHEN status='running' THEN 0 WHEN status='blocked' THEN 1
+    WHEN ${hasColumn(db, "tasks", "delivery_stage") ? MERGING : "0"} THEN 1 WHEN status='todo' THEN 2 ELSE 3 END`;
 
 /** 仓库路径 → GitHub 地址：从账本里已有的 PR 链接推出来，推不出的不给链接。 */
 function repoUrls(db: DatabaseSync): Map<string, string> {
@@ -385,6 +523,7 @@ export function mapNode(
     return {
       ...head(x, c),
       kind: c.kind,
+      aspect: !!c.aspect,
       what: firstLine(str(f.what) || str(f.goal), 120),
       archived: c.archived_at !== null,
       parts: (x.children.get(c.id) ?? []).filter(
@@ -414,20 +553,35 @@ export function mapNode(
     ? all<TaskRow>(
         db,
         `SELECT ${taskColumns(db)} FROM tasks WHERE COALESCE(part_id,node_id) IN (${marks})
-          ORDER BY CASE WHEN status='running' THEN 0 WHEN status='blocked' THEN 1
-            WHEN ${hasColumn(db, "tasks", "delivery_stage") ? MERGING : "0"} THEN 1 WHEN status='todo' THEN 2 ELSE 3 END,
-            updated_at DESC LIMIT 60`,
+          ORDER BY ${TASK_ORDER(db)}, updated_at DESC LIMIT 60`,
         ...ids,
       )
     : [];
+  const others = involvedRows(db, x, ids);
   const jobs = jobNames(db);
+  const both = [...rows, ...others];
   const who = taskPeople(
     db,
-    rows.map((r) => r.id),
+    both.map((r) => r.id),
   );
-  const tasks = rows.map((r) =>
-    taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id)),
-  );
+  const involved = involvedOfTasks(db, both, x);
+  const homeOf = (r: TaskRow) => {
+    const h = r.part === null ? undefined : x.byId.get(r.part);
+    return h ? brief(x, h) : null;
+  };
+  const tasks = [
+    ...rows.map((r) =>
+      taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id), {
+        also: involved.get(r.id),
+      }),
+    ),
+    ...others.map((r) =>
+      taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id), {
+        also: involved.get(r.id),
+        home: homeOf(r),
+      }),
+    ),
+  ];
   const urls = repoUrls(db);
   const prs = rows
     .filter((r) => r.pr_url)
@@ -470,6 +624,8 @@ export function mapNode(
     /** 管方面的部分与它的要点缺省适用于哪些部分（null 为整个上级），#373。 */
     aspect: !!n.aspect,
     applies: appliesRefs(n.applies),
+    /** 网页用：管方面的部分缺省适用于哪几块（带名字）；管东西的部分为 null。 */
+    scope: n.aspect ? scopeOf(x, n, null) : null,
     path: nodePath(x.list, n),
     leader: n.leader,
     ...leaderState(x, n),
@@ -479,7 +635,7 @@ export function mapNode(
     counts: x.counts.get(n.id)!,
     chain,
     overview,
-    points: nodePoints(db, n.id),
+    points: scoped(x, n, nodePoints(db, n.id)),
     points_chain: chainPoints(db, n.id).filter((l) => l.node !== ref(n.id)),
     points_below: pointsBelow(db, x, n),
     /** 别处管方面的部分里适用于本块的要点，注明来源。 */
@@ -507,13 +663,37 @@ export function mapNode(
 }
 export type MapNode = ReturnType<typeof mapNode>;
 
+/** 适用范围（带名字）：explicit 为写了具体部分，否则是「整个上级」。 */
+export type Scope = { explicit: boolean; parts: PartBrief[] };
+export type ScopedPoint = Point & { scope?: Scope };
+
+/** 管方面的部分 n 的一条要点（refs 为要点自己写的适用范围）适用于哪几块；指向的部分归档或不在了就不列。 */
+function scopeOf(x: Index, n: NodeRow, refs: string[] | null): Scope {
+  const own = refs?.map((r) => Number(r.slice(1))) ?? null;
+  const node = parseApplies(n.applies);
+  const ids = own ?? node ?? [n.parent_id ?? n.id];
+  return {
+    explicit: (own ?? node) !== null,
+    parts: ids.flatMap((id) => {
+      const p = alive(x, id);
+      return p ? [brief(x, p)] : [];
+    }),
+  };
+}
+/** 管方面的部分的要点带上适用范围；管东西的原样返回。 */
+const scoped = (x: Index, n: NodeRow, points: Point[]): ScopedPoint[] =>
+  n.aspect
+    ? points.map((p) => ({ ...p, scope: scopeOf(x, n, p.applies) }))
+    : points;
+
 /** 下层各块（组成部分与专员，深度优先、不含本块与已归档的）自己的要点；空块省略，至多 200 块。 */
 function pointsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
   const levels: {
     node: string;
     name: string;
     alias: string;
-    points: Point[];
+    aspect: boolean;
+    points: ScopedPoint[];
   }[] = [];
   let seen = 0;
   const walk = (parent: NodeRow) => {
@@ -525,7 +705,8 @@ function pointsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
           node: ref(c.id),
           name: c.name,
           alias: head(x, c).alias,
-          points,
+          aspect: !!c.aspect,
+          points: scoped(x, c, points),
         });
       walk(c);
     }

@@ -18,6 +18,7 @@ import {
 import { addMap, editMap } from "../server/map/write.ts";
 import { contextOf, formatContext, mapContext } from "../server/map/context.ts";
 import { mapNode } from "../server/map/view.ts";
+import { mapPartRoles, mapRole, mapRoles } from "../server/map/people.ts";
 import {
   createJobRole,
   editJobRole,
@@ -475,6 +476,158 @@ test("专员归属与任务牵涉：范围外报错并列出可选专员，--als
   // 专员改回全组织：行为与旧专员一致。
   assert.equal(editJobRole(db, "安全专员", { part: "" }).part, null);
   assert.equal(getJobRole(db, "r3").part_id, null);
+});
+
+test("全景网页（第 2 步）：管方面与适用范围、任务牵涉与归属、专员按层", async () => {
+  const db = dbOf();
+  addMap(
+    db,
+    { parent: "o2", name: "安全", slug: "security", kind: "aspect" },
+    "u1",
+  );
+  addPoint(
+    db,
+    "o5",
+    { text: "网页不回显令牌", why: "泄露", by: "u1", applies: "o3" },
+    "u1",
+  );
+  addPoint(db, "o5", { text: "跟随节点", why: "w", by: "u1" }, "u1");
+  createJobRole(db, { name: "前端", description: "页面", body: "做页面" });
+  createJobRole(db, {
+    name: "安全专员",
+    description: "查安全",
+    body: "查",
+    part: "o5",
+  });
+  createJobRole(db, {
+    name: "网页设计",
+    description: "版式",
+    body: "排",
+    part: "o3",
+  });
+  const web = createTask(db, { title: "改网页", part: "o3", deliver: "none" });
+  const cli = createTask(db, {
+    title: "改命令行",
+    part: "o4",
+    also: "安全",
+    deliver: "none",
+  });
+  const plain = createTask(db, {
+    title: "命令行别的",
+    part: "o4",
+    deliver: "none",
+  });
+  const brief = (list: { ref: string; auto?: boolean }[]) =>
+    list.map((p) => `${p.ref}${p.auto ? "（自动）" : ""}`);
+  const all = (n: ReturnType<typeof mapNode>) =>
+    [
+      ...n.tasks.running,
+      ...n.tasks.blocked,
+      ...n.tasks.todo,
+      ...n.tasks.recent,
+    ].map((t) => ({
+      ref: t.ref,
+      also: brief(t.also),
+      home: t.home?.ref ?? null,
+    }));
+
+  // 组成部分标出管方面；管方面的部分带适用范围（缺省整个上级），要点带各自的范围。
+  const atrium = mapNode(db, "o2", []);
+  assert.deepEqual(
+    atrium.overview.parts.map((p) => [
+      p.ref,
+      (p as { aspect?: boolean }).aspect,
+    ]),
+    [
+      ["o3", false],
+      ["o4", false],
+      ["o5", true],
+    ],
+  );
+  assert.equal(atrium.scope, null);
+  const security = mapNode(db, "o5", []);
+  assert.deepEqual(security.scope, {
+    explicit: false,
+    parts: [{ ref: "o2", name: "Atrium", alias: "" }],
+  });
+  assert.deepEqual(
+    security.points.map((p) => [
+      p.text,
+      p.scope?.explicit,
+      p.scope?.parts.map((x) => x.ref),
+    ]),
+    [
+      ["网页不回显令牌", true, ["o3"]],
+      ["跟随节点", false, ["o2"]],
+    ],
+  );
+  // 上层页的「下层要点」也带范围；管东西的部分的要点不带。
+  assert.equal(atrium.points_below[0]?.aspect, true);
+  assert.deepEqual(atrium.points_below[0]?.points[0]?.scope?.explicit, true);
+  assert.equal(mapNode(db, "o3", []).points_applied[0]?.node, "o5");
+
+  // 任务行：自己部分页上写也牵涉（显式在前，自动的标出）；管方面的部分页列牵涉它的任务并写归哪一块。
+  assert.deepEqual(all(mapNode(db, "o3", [])), [
+    { ref: web.ref, also: ["o5（自动）"], home: null },
+  ]);
+  assert.deepEqual(
+    all(mapNode(db, "o4", [])).sort((a, b) => a.ref.localeCompare(b.ref)),
+    [
+      { ref: cli.ref, also: ["o5"], home: null },
+      { ref: plain.ref, also: ["o5（自动）"], home: null },
+    ].sort((a, b) => a.ref.localeCompare(b.ref)),
+  );
+  assert.deepEqual(
+    all(mapNode(db, "o5", []))
+      .map((t) => [t.ref, t.home])
+      .sort(),
+    [
+      [cli.ref, "o4"],
+      [plain.ref, "o4"],
+      [web.ref, "o3"],
+    ].sort(),
+  );
+  // 只写要点级范围时，范围外的部分不算牵涉：改成节点级只管网页后，命令行的任务只剩显式牵涉的那件。
+  editMap(db, "o5", { applies: "o3" }, "u1");
+  assert.deepEqual(
+    all(mapNode(db, "o5", []))
+      .map((t) => [t.ref, t.home])
+      .sort(),
+    [
+      [cli.ref, "o4"],
+      [web.ref, "o3"],
+    ].sort(),
+  );
+  // 组织根不重复列（子树里的任务都算自己的）。
+  assert.ok(all(mapNode(db, "o1", [])).every((t) => t.home === null));
+
+  // 专员按层：部分页的范围与 specialist ls --part 一致；全组织名单带归属；专员页写属于哪一块。
+  assert.deepEqual(
+    mapPartRoles(db, "o3").roles.map((r) => [r.name, r.scope]),
+    [
+      ["网页设计", "own"],
+      ["安全专员", "also"],
+      ["前端", "org"],
+    ],
+  );
+  assert.deepEqual(
+    mapPartRoles(db, "o4").roles.map((r) => r.name),
+    ["前端"],
+  );
+  assert.deepEqual(
+    mapRoles(db).roles.map((r) => [r.name, r.part?.ref ?? null]),
+    [
+      ["前端", null],
+      ["安全专员", "o5"],
+      ["网页设计", "o3"],
+    ],
+  );
+  assert.deepEqual((await mapRole(db, "安全专员")).part, {
+    ref: "o5",
+    name: "安全",
+    alias: "",
+  });
+  assert.throws(() => mapPartRoles(db, "o99"), /o99/);
 });
 
 test("旧库补列：org_nodes、org_points、job_roles 没有新列也能启动，旧运行时表不动", () => {

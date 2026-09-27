@@ -183,7 +183,8 @@ export function appliedFrom(
 }
 const strip = ({ applies: _applies, ...rest }: AspectPoint) => rest;
 
-function aspectFacts(db: DatabaseSync) {
+/** 读库：节点与各节点的要点（算适用范围用）；全景一次读、按部分多次算。 */
+export function aspectFacts(db: DatabaseSync) {
   const list = all<ScopeNode>(
     db,
     "SELECT id,parent_id,name,archived_at,aspect,applies FROM org_nodes ORDER BY id LIMIT 501",

@@ -323,7 +323,7 @@ export class TaskRunner {
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
   async close() {
     this.closed = true;
-    this.merge.close();
+    const mergeClosing = this.merge.close();
     this.review.close();
     this.online.close();
     for (const timer of this.timers) clearInterval(timer);
@@ -332,6 +332,7 @@ export class TaskRunner {
     for (const active of this.x.active.values()) void active.live?.finish();
     this.inbox.close();
     this.waits.close();
+    await mergeClosing;
   }
 
   /** Count the ledger and in-flight launches, including work recovered after a service crash. */
@@ -605,6 +606,10 @@ export class TaskRunner {
   }
 
   // ---- 停止、日志、等待 ----
+
+  requeueMerge(reference: unknown) {
+    return { task: this.merge.requeue(parseTaskRef(reference)) };
+  }
 
   /** by：发起停止的订阅者，由此产生的事件不投给他本人。 */
   stop(reference: unknown, by?: string) {

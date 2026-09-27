@@ -12,6 +12,8 @@ import {
 import { startApp } from "./task-fixture.ts";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import { MergeQueue } from "../server/tasks/merge-runtime.ts";
+import { MergeClaim } from "../server/tasks/merge-claim.ts";
+import { createApp } from "../server/app.ts";
 
 test("合入失败次数的边界", () => {
   assert.deepEqual(mergeFailure(0, "冲突"), {
@@ -63,7 +65,101 @@ test("合入队列按入队时间处理，后续任务更新时间不插队", as
     )
     .get() as { task_id: number };
   assert.equal(started.task_id, 1);
-  queue.close();
+  await queue.close();
+  db.close();
+});
+
+test("两个流程争同一合入占用，旧进程退出后接管", () => {
+  const db = new DatabaseSync(":memory:");
+  const first = new MergeClaim(db);
+  const second = new MergeClaim(db);
+  assert.equal(first.acquire(1), true);
+  assert.equal(second.acquire(1), false);
+  first.release();
+  assert.equal(second.acquire(1), true);
+  second.release();
+  db.prepare(
+    "INSERT INTO merge_claim(id,task_id,pid,token) VALUES (1,1,?,?)",
+  ).run(2147483647, "dead");
+  assert.equal(first.acquire(1), true);
+  first.release();
+  db.close();
+});
+
+test("合入流程尚在外部命令中时，第二队列不能启动同一任务", async () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  db.prepare(
+    "INSERT INTO tasks(title,deliver,status,delivery_stage,merge_queued_at,repo,worktree,branch,pr_url,created_at,updated_at) VALUES ('并发','pr','done','merge_queued',1,'/repo','/worktree','task','https://github.com/acme/demo/pull/1',1,1)",
+  ).run();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const options = {
+    data: "/unused",
+    env: {},
+    returned: async () => {},
+    publish: () => {},
+    changed: () => {},
+  };
+  const first = new MergeQueue(db, {
+    ...options,
+    run: async () => {
+      await held;
+      return { ok: false, stdout: "", stderr: "stopped" };
+    },
+  });
+  const second = new MergeQueue(db, {
+    ...options,
+    run: async () => ({ ok: false, stdout: "", stderr: "unused" }),
+  });
+  const starts = () =>
+    (
+      db
+        .prepare(
+          "SELECT count(*) AS n FROM task_events WHERE kind='merge_started'",
+        )
+        .get() as { n: number }
+    ).n;
+  first.kick();
+  assert.equal(starts(), 1);
+  second.kick();
+  assert.equal(starts(), 1);
+  const closing = first.close();
+  release();
+  await closing;
+  second.kick();
+  assert.equal(starts(), 2);
+  await second.close();
+  db.close();
+});
+
+test("重新排队拒绝无 PR 与交付关卡未通过", async () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  const insert = db.prepare(
+    "INSERT INTO tasks(title,deliver,status,repo,worktree,branch,pr_url,created_at,updated_at) VALUES (?,'pr','blocked','/repo','/worktree','task',?,1,1)",
+  );
+  insert.run("无 PR", null);
+  insert.run("关卡失败", "https://github.com/acme/demo/pull/1");
+  db.prepare(
+    "INSERT INTO task_events(task_id,at,kind,detail) VALUES (2,1,'gates',?)",
+  ).run(JSON.stringify({ passed: false }));
+  db.prepare(
+    "INSERT INTO task_events(task_id,at,kind,detail) VALUES (2,1,'merge_queued','{}')",
+  ).run();
+  const queue = new MergeQueue(db, {
+    data: "/unused",
+    env: {},
+    run: async () => ({ ok: false, stdout: "", stderr: "unused" }),
+    returned: async () => {},
+    publish: () => {},
+    changed: () => {},
+  });
+  assert.throws(() => queue.requeue(1), /没有可合入的 PR/);
+  assert.throws(() => queue.requeue(2), /未通过交付关卡/);
+  await queue.close();
   db.close();
 });
 
@@ -104,13 +200,25 @@ for (const scenario of [
   "push_failed",
   "wrong_origin",
   "stopped",
+  "restart_check",
+  "head_changed",
+  "stale_pr_head",
+  "stale_pr_head_persistent",
 ] as const) {
   test(`隔离服务与假 gh/执行者：${scenario}`, async (t) => {
     let merged = false;
     let mergeCalls = 0;
     let headBranch = "";
     let advancedMain = false;
-    const { fx, call } = await startApp(t, (fixture) => {
+    let pushed = false;
+    let staleViews = 0;
+    let originalHead = "";
+    const {
+      fx,
+      data,
+      app,
+      call: firstCall,
+    } = await startApp(t, (fixture) => {
       const git = (...args: string[]) =>
         execFileSync("git", args, {
           cwd: fixture.repo,
@@ -131,7 +239,7 @@ for (const scenario of [
             check:
               scenario === "check_failed"
                 ? "echo 'not ok 1 - 故意失败'; exit 1"
-                : scenario === "stopped"
+                : scenario === "stopped" || scenario === "restart_check"
                   ? "sleep 2; true"
                   : "true",
           },
@@ -142,7 +250,7 @@ for (const scenario of [
       git("push", "-q", "origin", "main");
       fixture.script(
         "kimi",
-        "set -e\necho change >> done.txt\ngit add done.txt\ngit commit -qm 修复\ngit push -q -u origin HEAD\necho 完成",
+        `set -e\necho change >> done.txt\ngit add done.txt\ngit commit -qm 修复\ngit push ${scenario === "push_failed" ? "--force-with-lease " : ""}-q -u origin HEAD\necho 完成`,
       );
       const origin = join(fixture.root, "origin.git");
       const remoteHead = () =>
@@ -168,12 +276,33 @@ for (const scenario of [
           args.some((arg) => arg.startsWith("--force-with-lease="))
         )
           return { ok: false, stdout: "", stderr: "push rejected" };
+        if (
+          command === "git" &&
+          args.some((arg) => arg.startsWith("--force-with-lease="))
+        ) {
+          const result = await exec(command, args, options);
+          pushed = result.ok;
+          if (scenario === "head_changed" && result.ok)
+            execFileSync("git", [
+              "--git-dir",
+              join(fixture.root, "origin.git"),
+              "update-ref",
+              `refs/heads/${headBranch}`,
+              originalHead,
+            ]);
+          return result;
+        }
         if (command !== "gh") return exec(command, args, options);
         assert.equal(args[args.indexOf("-R") + 1], "acme/demo");
         if (args[0] === "pr" && args[1] === "list") {
           headBranch = args[args.indexOf("--head") + 1]!;
           if (
-            (scenario === "conflict" || scenario === "rebase_success") &&
+            (scenario === "conflict" ||
+              scenario === "rebase_success" ||
+              scenario === "push_failed" ||
+              scenario === "head_changed" ||
+              scenario === "stale_pr_head" ||
+              scenario === "stale_pr_head_persistent") &&
             !advancedMain
           ) {
             advancedMain = true;
@@ -200,7 +329,11 @@ for (const scenario of [
             ok: true,
             stdout: JSON.stringify({
               state: merged ? "MERGED" : "OPEN",
-              headRefOid: remoteHead(),
+              headRefOid:
+                (scenario === "stale_pr_head" && pushed && staleViews++ < 2) ||
+                (scenario === "stale_pr_head_persistent" && pushed)
+                  ? originalHead
+                  : remoteHead(),
               headRefName: headBranch,
               baseRefName: "main",
               isCrossRepository: false,
@@ -230,6 +363,7 @@ for (const scenario of [
       };
       fixture.run = fake;
     });
+    let call = firstCall;
     const created = await call("POST", "/api/tasks", {
       title: "合入测试",
       repo: fx.repo,
@@ -241,7 +375,10 @@ for (const scenario of [
     });
     assert.equal(started.status, 200);
     const worktree = started.body.task.worktree as string;
-    if (scenario === "stopped") {
+    originalHead = execFileSync("git", ["-C", worktree, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+    if (scenario === "stopped" || scenario === "restart_check") {
       const until = Date.now() + 10_000;
       for (;;) {
         const current = (await call("GET", `/api/tasks/${ref}`)).body;
@@ -254,7 +391,54 @@ for (const scenario of [
         assert.ok(Date.now() < until, "等待合入检查启动超时");
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      assert.equal((await call("POST", `/api/tasks/${ref}/stop`)).status, 200);
+      if (scenario === "stopped")
+        assert.equal(
+          (await call("POST", `/api/tasks/${ref}/stop`)).status,
+          200,
+        );
+      else {
+        await app.close();
+        const resumed = await createApp({
+          data,
+          auth: false,
+          tasks: {
+            env: fx.env,
+            workersDir: fx.workers,
+            exec: fx.run,
+            tickMs: 100,
+            diskFreeGb: async () => 1000,
+          },
+        });
+        t.after(() => resumed.app.close());
+        call = async (method, url, payload) => {
+          const response = await resumed.app.inject({
+            method,
+            url,
+            headers: { host: "127.0.0.1" },
+            ...(payload ? { payload } : {}),
+          });
+          return { status: response.statusCode, body: response.json() };
+        };
+      }
+    }
+    if (scenario === "stale_pr_head_persistent") {
+      const until = Date.now() + 15_000;
+      for (;;) {
+        const current = (await call("GET", `/api/tasks/${ref}`)).body;
+        if (
+          current.events.some(
+            (event: { kind: string }) => event.kind === "merge_retry",
+          )
+        ) {
+          assert.equal(current.status, "done");
+          assert.equal(current.delivery_stage, "merge_queued");
+          assert.equal(mergeCalls, 0);
+          break;
+        }
+        assert.ok(Date.now() < until, "PR 视图陈旧时没有进入重试");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return;
     }
     const waited = await call("GET", `/api/tasks/${ref}/wait?timeout=30`);
     assert.equal(waited.status, 200);
@@ -263,13 +447,16 @@ for (const scenario of [
     if (
       scenario === "success" ||
       scenario === "rebase_success" ||
-      scenario === "return_then_merge"
+      scenario === "return_then_merge" ||
+      scenario === "push_failed" ||
+      scenario === "restart_check" ||
+      scenario === "stale_pr_head"
     ) {
       assert.equal(task.delivery_stage, "merged");
       assert.equal(task.status, "done");
       assert.equal(
         task.merge_returns,
-        scenario === "return_then_merge" ? 1 : 0,
+        scenario === "return_then_merge" || scenario === "push_failed" ? 1 : 0,
       );
       assert.equal(mergeCalls, scenario === "return_then_merge" ? 2 : 1);
       assert.equal(merged, true);
@@ -286,7 +473,9 @@ for (const scenario of [
       const digest = await call("GET", "/api/events/digest");
       assert.match(
         digest.body.items[0].summary,
-        scenario === "return_then_merge" ? /退回 1 次后合入/ : /合入/,
+        scenario === "return_then_merge" || scenario === "push_failed"
+          ? /退回 1 次后合入/
+          : /合入/,
       );
       assert.ok(digest.body.acknowledged >= 2);
       if (scenario === "success") {
@@ -299,14 +488,22 @@ for (const scenario of [
           400,
         );
       }
-    } else if (scenario === "wrong_origin" || scenario === "stopped") {
+    } else if (
+      scenario === "wrong_origin" ||
+      scenario === "stopped" ||
+      scenario === "head_changed"
+    ) {
       assert.equal(task.status, "blocked");
       assert.equal(task.delivery_stage, null);
       assert.equal(task.merge_returns, 0);
       assert.equal(mergeCalls, 0);
       assert.match(
         JSON.stringify(task.events),
-        scenario === "stopped" ? /merge_stopped/ : /origin 不一致/,
+        scenario === "stopped"
+          ? /merge_stopped/
+          : scenario === "head_changed"
+            ? /头提交发生变化/
+            : /origin 不一致/,
       );
     } else {
       assert.equal(task.status, "blocked");
@@ -334,6 +531,14 @@ for (const scenario of [
       );
       const digest = await call("GET", "/api/events/digest");
       assert.match(digest.body.items[0].summary, /退回 2 次/);
+    }
+    if (scenario === "head_changed") {
+      const requeued = await call("POST", `/api/tasks/${ref}/merge`);
+      assert.equal(requeued.status, 200);
+      assert.equal(requeued.body.task.status, "done");
+      assert.ok(
+        ["merge_queued", "merging"].includes(requeued.body.task.delivery_stage),
+      );
     }
   });
 }

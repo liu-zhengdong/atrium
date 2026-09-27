@@ -329,6 +329,59 @@ a.crumb:hover {
 .table-points .row {
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 110px 140px;
 }
+/* 巡检发现：发现最宽，步骤、预期实际次之，处理窄；有下层的多一列「来自」。 */
+.table-findings .row,
+.table-findings-plain .row {
+  grid-template-columns:
+    minmax(0, 1.3fr) minmax(0, 1.1fr) minmax(0, 1.2fr)
+    150px 120px;
+  align-items: start;
+}
+.table-findings-plain .row {
+  grid-template-columns:
+    minmax(0, 1.3fr) minmax(0, 1.1fr) minmax(0, 1.2fr)
+    150px;
+}
+.table-findings .row.head,
+.table-findings-plain .row.head {
+  align-items: center;
+}
+.finding-kind {
+  display: block;
+  margin-top: 6px;
+}
+.finding-step,
+.finding-line,
+.finding-reason {
+  display: block;
+}
+.finding-command {
+  display: inline-block;
+  max-width: 100%;
+  margin-top: 6px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.finding-line + .finding-line {
+  margin-top: 4px;
+}
+.finding-label {
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.cell.fate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.finding-reason {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
 .table-leaders .row {
   grid-template-columns: 200px minmax(0, 0.8fr) minmax(0, 1.2fr) 170px 24px;
 }
@@ -890,8 +943,14 @@ a.crumb:hover {
   .cell.name,
   .cell.text,
   .cell.note,
-  .cell.body {
+  .cell.body,
+  .cell.fate {
     flex-basis: 100%;
+  }
+  .cell.fate {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
   }
   .table-notes .cell.body {
     order: -1;

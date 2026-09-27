@@ -283,6 +283,52 @@ test("全景节点给网页页签用的字段：部分做什么与下面几块�
   assert.equal(view.tasks.recent[0]!.title, "等合入", "等合入排在已结任务前面");
 });
 
+test("全景节点的巡检发现：下层各块汇总进来并注明来自哪一块，新的在前，已归档的不算", () => {
+  const db = memory();
+  node(db, { parent: "o4", slug: "web", kind: "module", name: "web" });
+  const patrol = createTask(db, { title: "巡检", part: "o4" });
+  const finding = (at: number, phenomenon: string) =>
+    db
+      .prepare(
+        "INSERT INTO patrol_findings(node_id,task_id,fingerprint,phenomenon,step,command,expected,actual,kind,status,created_at,updated_at) VALUES (?,?,?,?,'步骤','atrium map','预期','实际','broken','new',1,1)",
+      )
+      .run(at, Number(patrol.ref.slice(1)), phenomenon, phenomenon);
+  finding(2, "Atrium 自己的");
+  finding(4, "cli 的");
+  finding(7, "web 的");
+  finding(6, "OQ 的");
+
+  const root = mapNode(db, "o1");
+  assert.deepEqual(root.findings, []);
+  assert.deepEqual(
+    root.findings_below.map((f) => [f.ref, f.from.ref, f.from.name]),
+    [
+      ["f4", "o6", "OQ"],
+      ["f3", "o7", "web"],
+      ["f2", "o4", "cli"],
+      ["f1", "o2", "Atrium"],
+    ],
+    "根页汇总全部下层，新的在前",
+  );
+  const atrium = mapNode(db, "o2");
+  assert.deepEqual(
+    atrium.findings.map((f) => f.ref),
+    ["f1"],
+  );
+  assert.deepEqual(
+    atrium.findings_below.map((f) => f.ref),
+    ["f3", "f2"],
+    "只汇总自己下层，不含别的项目",
+  );
+  assert.deepEqual(mapNode(db, "o7").findings_below, [], "叶子没有下层");
+  db.prepare("UPDATE org_nodes SET archived_at=1 WHERE id=7").run();
+  assert.deepEqual(
+    mapNode(db, "o2").findings_below.map((f) => f.ref),
+    ["f2"],
+    "已归档的块不汇总",
+  );
+});
+
 // ---- 写：权限与字段 ----
 
 test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；坏输入用参数名报错", () => {

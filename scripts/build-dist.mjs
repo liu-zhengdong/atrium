@@ -13,6 +13,9 @@
 // 安装步骤）时 clone 下来没有 node_modules：--prepack（npm pack 前自动跑）在没有 esbuild、
 // dist/ 又齐全时沿用它，不报错。
 //
+// 提示一律写 stderr：atrium update 用 `npm pack --json` 并解析 stdout，prepack 的输出混进去
+// 会让（包括旧版本的）更新失败。
+//
 //   node scripts/build-dist.mjs [--outdir <目录>] [--prepack]
 import { existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -37,7 +40,7 @@ try {
     values.prepack &&
     entries.every((name) => existsSync(join(outdir, `${name}.js`)))
   ) {
-    console.log(`没有 esbuild，沿用已编译的 ${outdir}`);
+    console.error(`没有 esbuild，沿用已编译的 ${outdir}`);
     process.exit(0);
   }
   console.error("没有 esbuild：先在仓库里运行 npm ci");
@@ -69,4 +72,4 @@ await build({
   entryPoints: { server: "server/main.ts", supervisor: "server/supervisor.ts" },
   splitting: false,
 });
-console.log(`已编译到 ${outdir}`);
+console.error(`已编译到 ${outdir}`);

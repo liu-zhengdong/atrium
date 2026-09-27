@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -140,7 +140,7 @@ test("发版标签带编译产物：先推版本提交，再把 dist/ 提交到�
   assert.match(pkg.scripts.prepack, /build-dist\.mjs --prepack/);
 });
 
-test("从标签打包（没有 node_modules）：--prepack 沿用已提交的 dist/，缺产物时失败", () => {
+test("从标签打包（没有 node_modules）：--prepack 沿用已提交的 dist/，缺产物时失败，stdout 不输出", () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-prepack-"));
   try {
     // 标签 clone 的样子：脚本在，esbuild 不在。
@@ -148,16 +148,21 @@ test("从标签打包（没有 node_modules）：--prepack 沿用已提交的 di
     const copy = join(dir, "scripts", "build-dist.mjs");
     writeFileSync(copy, readFileSync(join(root, "scripts/build-dist.mjs")));
     const run = () =>
-      execFileSync(process.execPath, [copy, "--prepack"], {
+      spawnSync(process.execPath, [copy, "--prepack"], {
         cwd: dir,
-        stdio: "pipe",
         encoding: "utf8",
       });
-    assert.throws(run, /没有 esbuild/);
+    const missing = run();
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /没有 esbuild/);
     mkdirSync(join(dir, "dist"));
     for (const name of ["cli", "server", "supervisor"])
       writeFileSync(join(dir, "dist", `${name}.js`), "");
-    assert.match(run(), /沿用已编译/);
+    const kept = run();
+    assert.equal(kept.status, 0);
+    assert.match(kept.stderr, /沿用已编译/);
+    // atrium update（含旧版本）解析 `npm pack --json` 的 stdout，prepack 不能往里写。
+    assert.equal(kept.stdout, "");
     assert.equal(readFileSync(join(dir, "dist", "cli.js"), "utf8"), "");
   } finally {
     rmSync(dir, { recursive: true, force: true });

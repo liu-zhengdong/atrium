@@ -806,7 +806,8 @@ test("实时模式：服务暂时不可用就把原因留在屏上，不退出",
   );
   assert.equal(frames[0], "Atrium · 服务正在重启");
   assert.match(frames[1]!, /^Atrium · 在跑 0 · 排队 0 · 卡住 0 · 未处理事件 1/);
-  assert.match(frames[1]!, /写 server\/org\/write\.ts · \d+[smh] 前/);
+  // 这一屏用真实时钟渲染，时长单位会随时钟走（45s / 41m / 1h3m），只断言形状不写死。
+  assert.match(frames[1]!, /写 server\/org\/write\.ts · [0-9hms]+ 前/);
   assert.ok(frames[1]!.endsWith("动作：atrium task show t1"));
 });
 

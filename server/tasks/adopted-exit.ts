@@ -5,6 +5,7 @@ import { parseEvents, type JsonEvent } from "./json-log.ts";
  * 接管后退出的执行者（#262）：服务重启后按 pid 接管的进程没有句柄，退出码不可得。
  * 按各工具日志的收尾结构判它是正常结束还是出错：纯函数。
  * - claude stream-json：最后的 result 事件 is_error=false、stop_reason=end_turn 为正常；其余 result 或没有 result 为出错。
+ * - cursor stream-json：result 事件没有 stop_reason，is_error=false、subtype=success 为正常；其余同 claude。
  * - opencode --format json：最后一个 step_finish 的 reason=stop 为正常；之后出现 error 事件或 reason 是别的为出错。
  * - agy stream-json：最后的 result 事件 status=SUCCESS 为正常；其余 status 或没有 result 为出错。
  * - codex：本轮写出了最后消息文件（-o）为正常；没有则判不了。
@@ -21,11 +22,21 @@ const object = (value: unknown) =>
     ? (value as JsonEvent)
     : undefined;
 
-function claudeEnd(events: JsonEvent[]): AdoptedEnd {
+function streamEnd(events: JsonEvent[], tool: "claude" | "cursor"): AdoptedEnd {
   const result = events.findLast((event) => event.type === "result");
   if (!result) return { end: "error", evidence: "日志没有收尾的 result 事件" };
-  if (result.is_error === false && result.stop_reason === "end_turn")
+  if (
+    tool === "claude" &&
+    result.is_error === false &&
+    result.stop_reason === "end_turn"
+  )
     return { end: "clean", evidence: "result 事件 stop_reason=end_turn" };
+  if (
+    tool === "cursor" &&
+    result.is_error === false &&
+    result.subtype === "success"
+  )
+    return { end: "clean", evidence: "result 事件 subtype=success" };
   const detail = [
     typeof result.subtype === "string" ? `subtype=${result.subtype}` : "",
     `stop_reason=${String(result.stop_reason ?? "无")}`,
@@ -86,9 +97,10 @@ export function adoptedEnd(input: {
 }): AdoptedEnd {
   switch (input.tool) {
     case "claude":
+    case "cursor":
       return input.log === undefined
         ? { end: "unknown" }
-        : claudeEnd(parseEvents(input.log));
+        : streamEnd(parseEvents(input.log), input.tool);
     case "opencode":
       return input.log === undefined
         ? { end: "unknown" }

@@ -41,6 +41,7 @@ function budgetViews(db: DatabaseSync, pace?: readonly PaceEntry[]) {
     "kimi",
     "grok",
     "antigravity",
+    "cursor",
   ]);
   const allocated = new Set<string>();
   for (const shares of owned.values())

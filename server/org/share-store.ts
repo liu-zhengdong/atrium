@@ -103,6 +103,7 @@ export function planShares(
     "kimi",
     "grok",
     "antigravity",
+    "cursor",
   ]);
   if (problems.length) reject(node, problems);
   return parsed.entries;
@@ -128,6 +129,7 @@ export function checkStoredShares(
     "kimi",
     "grok",
     "antigravity",
+    "cursor",
   ]);
   if (problems.length) reject(node, problems);
 }

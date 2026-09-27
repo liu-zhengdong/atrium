@@ -299,6 +299,11 @@ export async function resolveWorker(
     .reverse()
     .find((layer) => layer.layer !== "harness" && layer.rules.model)
     ?.rules.model;
+  // 档案没写 trust / max_risk 时取适配器缺省（新接入的工具先压低）；档案写了就以档案为准。
+  for (const [key, value] of Object.entries(
+    ADAPTERS[spec.tool].defaultRules ?? {},
+  ))
+    profile.rules[key] ??= value;
   const cliModel = layerModel ?? model;
   if (cliModel) profile.rules.model = cliModel;
   else delete profile.rules.model;

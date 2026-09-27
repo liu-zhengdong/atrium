@@ -192,6 +192,7 @@ export const FALLBACK_ORDER: readonly Tool[] = [
   "grok",
   "kimi",
   "agy",
+  "cursor",
 ];
 
 export type PickInput = {

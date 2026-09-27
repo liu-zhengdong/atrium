@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { createApp } from "../server/app.ts";
@@ -9,6 +10,7 @@ import { exec, type Exec } from "../server/tasks/git.ts";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import {
   firstRelease,
+  includedInVersion,
   onlineMessage,
   planOnline,
   RELEASE_OVERDUE_MS,
@@ -21,6 +23,8 @@ import {
   type DeployResult,
 } from "../server/tasks/online-runtime.ts";
 import { eventLine } from "../cli/events.ts";
+import { claimService } from "../server/service-state.ts";
+import { topRows, countRows } from "../server/tasks/top.ts";
 import { startApp } from "./task-fixture.ts";
 
 test("自身仓库的写法", () => {
@@ -66,6 +70,8 @@ test("含合入提交的最早版本", () => {
     "0.2.0-rc.1",
   );
   assert.equal(firstRelease("v1.0.0\nv1.0.0-rc.1"), "1.0.0-rc.1");
+  assert.equal(includedInVersion("v0.1.1\nv0.1.2", "0.1.2"), true);
+  assert.equal(includedInVersion("v0.1.1\nv0.1.3", "0.1.2"), false);
 });
 
 test("端到端验证一节的提取", () => {
@@ -184,6 +190,8 @@ function watcher(
     body?: string;
     now?: () => number;
     fetchFails?: boolean;
+    tagsForCommit?: Record<string, string>;
+    otherRepo?: string;
   } = {},
 ) {
   const calls: string[][] = [];
@@ -198,7 +206,9 @@ function watcher(
     if (command === "git" && args.includes("get-url"))
       return {
         ok: true,
-        stdout: "https://github.com/acme/demo.git\n",
+        stdout: args.includes("/other")
+          ? `https://github.com/${options.otherRepo ?? "acme/demo"}.git\n`
+          : "https://github.com/acme/demo.git\n",
         stderr: "",
       };
     if (command === "git" && args.includes("fetch"))
@@ -206,7 +216,14 @@ function watcher(
         ? { ok: false, stdout: "", stderr: "network down" }
         : { ok: true, stdout: "", stderr: "" };
     if (command === "git" && args.includes("tag"))
-      return { ok: true, stdout: options.tags ?? "", stderr: "" };
+      return {
+        ok: true,
+        stdout:
+          options.tagsForCommit?.[args[args.indexOf("--contains") + 1]!] ??
+          options.tags ??
+          "",
+        stderr: "",
+      };
     if (command === "gh" && args.includes("mergeCommit"))
       return {
         ok: true,
@@ -227,6 +244,7 @@ function watcher(
     run,
     version: () => options.version ?? "0.1.0",
     selfUpdate: options.selfUpdate ?? true,
+    selfRepo: "acme/demo",
     busy: () => options.busy ?? false,
     deploy:
       options.deploy ??
@@ -297,6 +315,37 @@ test("已发版且版本已在运行：标记上线并附 PR 里的端到端验�
   assert.equal(published.length, 1);
 });
 
+test("历史合入任务只在提交属于运行版本时补已上线状态，不补通知", async () => {
+  const db = memory();
+  const old = merged(db);
+  db.prepare("UPDATE tasks SET online_wait=0 WHERE id=?").run(old);
+  const future = merged(db, { commit: "def5678" });
+  db.prepare("UPDATE tasks SET online_wait=0 WHERE id=?").run(future);
+  const unrelated = merged(db, { commit: "987abcd" });
+  db.prepare("UPDATE tasks SET online_wait=0,repo='/other' WHERE id=?").run(
+    unrelated,
+  );
+  const { watch, published } = watcher(db, {
+    version: "0.1.1",
+    tagsForCommit: { abc1234: "v0.1.1", def5678: "v0.1.2" },
+    otherRepo: "other/project",
+  });
+  // firstRelease 只认确实含合入提交的标签，且运行版本必须达到它。
+  await watch.tick();
+  assert.equal(row(db, old).delivery_stage, "online");
+  assert.equal(row(db, old).release_version, "0.1.1");
+  assert.deepEqual(kinds(db, old), ["merged", "online_backfilled"]);
+  const top = topRows(db, Date.now()).rows;
+  assert.equal(
+    top.find((task) => task.ref === `t${old}`)?.delivery_stage,
+    "online",
+  );
+  assert.equal(countRows(top).online, 1);
+  assert.equal(row(db, future).delivery_stage, "merged");
+  assert.equal(row(db, unrelated).delivery_stage, "merged");
+  assert.deepEqual(published, []);
+});
+
 test("PR 正文读不到时退回执行者汇报；都没有写明请自行验证", async () => {
   const db = memory();
   const a = merged(db, { result: "完成。\n\n## 端到端验证\n运行 atrium top" });
@@ -306,6 +355,13 @@ test("PR 正文读不到时退回执行者汇报；都没有写明请自行验�
     version: "0.1.0",
   });
   await watch.tick();
+  assert.deepEqual(
+    published.map((event) => [event.id, event.kind, event.detail.version]),
+    [
+      [a, "online", "0.1.0"],
+      [b, "online", "0.1.0"],
+    ],
+  );
   assert.equal(
     published.find((event) => event.id === a)!.detail.verification,
     "运行 atrium top",
@@ -573,8 +629,35 @@ for (const scenario of ["online", "rolled_back"] as const)
       undefined,
       { online },
     );
+    assert.equal(
+      (
+        await call("POST", "/api/org/nodes", {
+          slug: "org",
+          kind: "org",
+          name: "组织",
+          reason: "测试",
+        })
+      ).status,
+      201,
+    );
+    assert.equal(
+      (
+        await call("POST", "/api/org/nodes", {
+          parent: "o1",
+          slug: "atrium",
+          kind: "project",
+          name: "Atrium",
+          reason: "测试",
+        })
+      ).status,
+      201,
+    );
     const ref = (
-      await call("POST", "/api/tasks", { title: "上线测试", repo: fx.repo })
+      await call("POST", "/api/tasks", {
+        title: "上线测试",
+        repo: fx.repo,
+        part: "o2",
+      })
     ).body.ref as string;
     assert.equal(
       (await call("POST", `/api/tasks/${ref}/run`, { worker: "kimi" })).status,
@@ -597,12 +680,32 @@ for (const scenario of ["online", "rolled_back"] as const)
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert.deepEqual(deployed, ["0.1.1"]);
+    assert.equal(
+      (
+        await call("POST", "/api/leaders", {
+          name: "Atrium 负责人",
+          worker: "kimi",
+        })
+      ).status,
+      201,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: "/api/org/nodes/o2",
+          payload: { leader: "a1", reason: "测试投递" },
+        })
+      ).statusCode,
+      200,
+    );
     await app.close();
 
     // 「重启」：同一数据目录起新服务；成功时新服务报新版本，回滚时仍是旧版本。
     const next = await createApp({
       data,
       auth: false,
+      leaders: { pollMs: 60_000 },
       tasks: {
         env: fx.env,
         workersDir: fx.workers,
@@ -616,6 +719,19 @@ for (const scenario of ["online", "rolled_back"] as const)
       },
     });
     t.after(() => next.app.close());
+    let serviceRecord: ReturnType<typeof claimService>["record"] | undefined;
+    next.app.get("/api/service", () => ({
+      instance: serviceRecord?.instance,
+      pid: process.pid,
+      userAuth: "user-v1",
+    }));
+    const url = await next.app.listen({ host: "127.0.0.1", port: 0 });
+    const port = Number(new URL(url).port);
+    const claimed = claimService(data, port);
+    serviceRecord = claimed.record;
+    t.after(() => {
+      if (existsSync(data)) claimed.release();
+    });
     const get = async (url: string) =>
       (
         await next.app.inject({
@@ -643,6 +759,57 @@ for (const scenario of ["online", "rolled_back"] as const)
     const last = events.find((event) =>
       ["online", "online_failed"].includes(event.kind),
     )!;
+    const wait = async (as: string) => {
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        [
+          join(import.meta.dirname, "..", "bin", "atrium.mjs"),
+          "events",
+          "wait",
+          "--as",
+          as,
+          "--timeout",
+          "1",
+          "--settle",
+          "0",
+          "--json",
+        ],
+        {
+          env: { ...process.env, ATRIUM_DATA: data, ATRIUM_PORT: String(port) },
+        },
+      );
+      return (
+        JSON.parse(stdout) as {
+          result: {
+            events: {
+              kind: string;
+              task: string;
+              detail: Record<string, unknown>;
+            }[];
+          };
+        }
+      ).result.events;
+    };
+    const leaderEvents = await wait("a1");
+    const secretaryEvents = await wait("secretary");
+    assert.equal(
+      leaderEvents.find((event) => event.kind === last.kind)?.task,
+      ref,
+    );
+    assert.equal(
+      secretaryEvents.find((event) => event.kind === last.kind)?.task,
+      ref,
+    );
+    assert.equal(
+      secretaryEvents.find((event) => event.kind === last.kind)?.detail.pr_url,
+      "https://github.com/acme/demo/pull/1",
+    );
+    if (scenario === "online")
+      assert.equal(
+        secretaryEvents.find((event) => event.kind === "online")?.detail
+          .verification,
+        "atrium task show t1\n期望：[已上线]",
+      );
     if (scenario === "online") {
       assert.equal(task.delivery_stage, "online");
       assert.equal(last.kind, "online");
@@ -656,4 +823,5 @@ for (const scenario of ["online", "rolled_back"] as const)
       assert.equal(last.kind, "online_failed");
       assert.match(String(last.detail.reason), /运行版本仍是 v0\.1\.0/);
     }
+    claimed.release();
   });

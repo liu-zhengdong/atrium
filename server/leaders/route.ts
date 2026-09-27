@@ -17,6 +17,21 @@ export type Route = {
   via: string | null;
 };
 
+/** 上线结论还须交秘书做线上验证；已有秘书路由时只投一次。 */
+export function deliveryRoutes(kind: string, route: Route): Route[] {
+  if (kind !== "online" && kind !== "online_failed") return [route];
+  return route.subscriber === SECRETARY
+    ? [route]
+    : [
+        route,
+        {
+          subscriber: SECRETARY,
+          why: "上线结论直接通知秘书，按端到端验证在线上复核",
+          via: null,
+        },
+      ];
+}
+
 const label = (n: ChainNode) => `${n.ref}「${n.name}」`;
 
 /** 沿链找第一个已登记的 aN；跳过的未登记 aN 记下来写进原因。 */

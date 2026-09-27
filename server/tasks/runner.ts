@@ -254,6 +254,12 @@ export class TaskRunner {
           gitCheckout: existsSync(join(packageRoot, ".git")),
           defaultData: options.data === dataDirectory({}),
         }),
+      selfRepo:
+        options.online?.selfRepo !== undefined
+          ? options.online.selfRepo
+          : selfRepoFlag(
+              process.env.ATRIUM_UPDATE_REPO ?? "github:liu-zhengdong/atrium",
+            ),
       busy: () =>
         !!this.db
           .prepare("SELECT 1 FROM tasks WHERE delivery_stage='merging' LIMIT 1")

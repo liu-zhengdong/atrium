@@ -50,6 +50,11 @@ export function firstRelease(tags: string): string | null {
   return versions[0] ?? null;
 }
 
+/** 只凭版本号大小不能证明提交在当前运行的版本分支里，须看当前版本的标签本身。 */
+export function includedInVersion(tags: string, current: string): boolean {
+  return tags.split("\n").some((tag) => tag.trim() === `v${current}`);
+}
+
 /** 从 PR 正文或执行者汇报里取「端到端验证」一节（到下一个同级或更高标题为止）；没有返回 null。 */
 export function verificationSection(text: string | null | undefined) {
   if (!text) return null;

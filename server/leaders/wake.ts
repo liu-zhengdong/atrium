@@ -176,7 +176,7 @@ export function leaderPrompt(input: PromptInput): string {
     "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、拍板上交的会审。",
     "",
     `## 上交（投给 ${input.upstream}；只有这四类才上交，其余自己处理）`,
-    "- shipped 已上线：里程碑完成，附端到端验证 → atrium leader escalate --kind shipped 说明 --task tN",
+    "- shipped 已上线：只在里程碑／阶段达成时上交 → atrium leader escalate --kind shipped 说明 --task tN；单个任务上线运行时已自动通知秘书，不必再报",
     "- cross 需要别的部分配合 → atrium leader escalate --kind cross 说明 [--task tN]",
     "- beyond 越过权限／预算／硬边界 → atrium leader escalate --kind beyond 说明 [--task tN]",
     "- stuck 搞不定（同一件事卡住多次、拿不定）→ atrium leader escalate --kind stuck 说明 [--task tN]",

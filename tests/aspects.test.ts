@@ -630,11 +630,17 @@ test("隔离服务：被牵涉部分的 leader 收到知会不被叫醒，能写
     ["t1", "t2"],
   );
   await new Promise((r) => setTimeout(r, 150));
-  assert.equal(runs.length, 0, "知会不叫醒 leader");
+  // 只看 a2：a1 可能因为 t1、t2 自己的事件被叫醒，与知会无关。
+  assert.equal(
+    runs.filter((r) => r.leader === "a2").length,
+    0,
+    "知会不叫醒 leader",
+  );
   // 叫醒 a2（安全自己的任务失败），用它的令牌试说话与越权。
   const results: Record<string, number> = {};
   let done = false;
   behave = async (spec) => {
+    if (spec.leader !== "a2") return "ok";
     const auth = `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`;
     results.note = (
       await call(

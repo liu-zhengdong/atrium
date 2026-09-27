@@ -220,6 +220,18 @@ export function findingsForNode(db: DatabaseSync, nodeId: number) {
   ).map(findingView);
 }
 
+/** 多个节点的发现合在一起，新的在前，至多 100 条（全景里汇总下层部分用）。 */
+export function findingsForNodes(db: DatabaseSync, nodeIds: readonly number[]) {
+  if (!nodeIds.length) return [];
+  return (
+    db
+      .prepare(
+        `SELECT * FROM patrol_findings WHERE node_id IN (${nodeIds.map(() => "?").join(",")}) ORDER BY id DESC LIMIT 100`,
+      )
+      .all(...nodeIds) as Finding[]
+  ).map(findingView);
+}
+
 export function findingNode(
   db: DatabaseSync,
   reference: string,

@@ -224,11 +224,14 @@ const taskName = (ref, title, by) =>
  */
 const cell = (label, body, extra = "") =>
   `<span class="cell${extra}" role="cell" data-label="${esc(label)}">${body}</span>`;
+/** 表格；没有行时只说一句空状态，不出表头。 */
 const table = (kind, heads, rows, empty) =>
-  `<div class="table table-${kind}" role="table">
+  rows.length
+    ? `<div class="table table-${kind}" role="table">
     ${heads ? `<div class="row head" role="row">${heads.map((h) => `<span role="columnheader">${esc(h)}</span>`).join("")}</div>` : ""}
-    ${rows.length ? rows.join("") : `<p class="empty">${esc(empty)}</p>`}
-  </div>`;
+    ${rows.join("")}
+  </div>`
+    : `<p class="empty">${esc(empty)}</p>`;
 
 // ---- 任务：状态标签与筛选 ----
 
@@ -353,24 +356,48 @@ function drawNodeTasks({ node: n }) {
   });
 }
 
+/** 本块与下层各块的巡检发现：待处理的在前，其余新的在前；下层的注明来自哪一块。 */
+const allFindings = (n) =>
+  [
+    ...n.findings.map((f) => ({ ...f, from: null })),
+    ...n.findings_below.map((f) => ({
+      ...f,
+      from: { ref: f.from.ref, name: title(f.from) },
+    })),
+  ].sort((a, b) => (b.status === "new") - (a.status === "new") || b.id - a.id);
+
+const FINDING_STATUS = {
+  new: ["待处理", "amber"],
+  task: ["已开任务", "blue"],
+  merged: ["并入任务", "gray"],
+  ignored: ["已忽略", "gray"],
+};
+const FINDING_KIND = {
+  broken: ["坏了", "orange"],
+  awkward: ["不顺手", "soft"],
+};
+
 function drawFindings({ node: n }) {
-  const status = {
-    new: "待处理",
-    task: "已开任务",
-    merged: "并入任务",
-    ignored: "已忽略",
-  };
+  const list = allFindings(n);
+  const below = list.some((f) => f.from);
   return table(
-    "findings",
-    ["发现", "步骤与命令", "预期与实际", "处理"],
-    n.findings.map(
-      (f) => `<div class="row" role="row">
-      ${cell("发现", `<strong>${esc(f.ref)} ${esc(f.phenomenon)}</strong><br>${esc(f.kind === "broken" ? "坏了" : "不顺手")}`, "name plain")}
-      ${cell("步骤与命令", `${esc(f.step)}<br><code>${esc(f.command)}</code>`, "text")}
-      ${cell("预期与实际", `预期：${esc(f.expected)}<br>实际：${esc(f.actual)}`, "text")}
-      ${cell("处理", `${esc(status[f.status] || f.status)}${f.linked_task ? ` · ${esc(f.linked_task)}` : ""}${f.reason ? `<br>${esc(f.reason)}` : ""}`, "note")}
-    </div>`,
-    ),
+    below ? "findings" : "findings-plain",
+    ["发现", "步骤与命令", "预期与实际", "处理", ...(below ? ["来自"] : [])],
+    list.map((f) => {
+      const [kind, kindTone] = FINDING_KIND[f.kind] ?? ["", "gray"];
+      const [label, tone] = FINDING_STATUS[f.status] ?? [f.status, "gray"];
+      const fate = [
+        chip(label, tone),
+        f.linked_task ? chip(f.linked_task, "soft") : "",
+      ].join("");
+      return `<div class="row" role="row">
+        ${cell("发现", `<span class="task-ref">${esc(f.ref)}</span><span class="task-title">${esc(f.phenomenon)}${kind ? `<span class="finding-kind">${chip(kind, kindTone)}</span>` : ""}</span>`, " name plain task")}
+        ${cell("步骤与命令", `<span class="finding-step">${esc(f.step)}</span><code class="finding-command">${esc(f.command)}</code>`, " text")}
+        ${cell("预期与实际", `<span class="finding-line"><span class="finding-label">预期</span>${esc(f.expected)}</span><span class="finding-line"><span class="finding-label">实际</span>${esc(f.actual)}</span>`, " text")}
+        ${cell("处理", `<span class="chips">${fate}</span>${f.reason ? `<span class="finding-reason">${esc(f.reason)}</span>` : ""}`, " fate")}
+        ${below ? cell("来自", f.from ? `<a href="${esc(nodeHref(f.from.ref, "findings"))}">${esc(f.from.name)}</a>` : "这一块", " muted tagged") : ""}
+      </div>`;
+    }),
     "还没有巡检发现。",
   );
 }
@@ -761,7 +788,7 @@ const TABS = {
   },
   findings: {
     label: "巡检发现",
-    count: (d) => d.node.findings.length,
+    count: (d) => allFindings(d.node).length,
     draw: drawFindings,
   },
   deliveries: {

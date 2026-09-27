@@ -14,7 +14,7 @@ import { overviewOf, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
 import { appliedPoints, appliesRefs } from "../org/aspects.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
-import { findingsForNode } from "../tasks/patrol.ts";
+import { findingsForNode, findingsForNodes } from "../tasks/patrol.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
 
 /**
@@ -485,6 +485,8 @@ export function mapNode(
     /** 别处管方面的部分里适用于本块的要点，注明来源。 */
     points_applied: appliedPoints(db, n.id),
     findings: findingsForNode(db, n.id),
+    /** 下层各块的巡检发现，注明来自哪一块；与本块的合起来就是网页「巡检发现」页签。 */
+    findings_below: findingsBelow(db, x, n),
     tasks: {
       running: tasks.filter((t) => t.status === "running"),
       blocked: tasks.filter((t) => t.status === "blocked"),
@@ -530,6 +532,23 @@ function pointsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
   };
   walk(n);
   return levels;
+}
+
+/** 下层各块（与 pointsBelow 同一范围：深度优先、不含本块与已归档的，至多 200 块）的巡检发现，新的在前，至多 100 条。 */
+function findingsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
+  const below = new Map<number, NodeRow>();
+  const walk = (parent: NodeRow) => {
+    for (const c of x.children.get(parent.id) ?? []) {
+      if (c.archived_at !== null || below.size >= 200) continue;
+      below.set(c.id, c);
+      walk(c);
+    }
+  };
+  walk(n);
+  return findingsForNodes(db, [...below.keys()]).map((f) => {
+    const { ref: at, name, alias } = head(x, below.get(f.node_id)!);
+    return { ...f, from: { ref: at, name, alias } };
+  });
 }
 
 /** 在跑与排队的任务（`/api/map/now`，网页顶栏「在做 N 件」）：在跑与排队的任务按归属部分归组；没有归属的放「未归属」。 */

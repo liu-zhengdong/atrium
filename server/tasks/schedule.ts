@@ -11,6 +11,7 @@ import {
   refreshUpstreamPrs,
   type Dependency,
 } from "./schedule-upstream.ts";
+import { planDetails, type PlanDetail } from "./plan-view.ts";
 
 export type ScheduleGroup = "running" | "ready" | "waiting" | "blocked";
 export type PlanItem = {
@@ -114,7 +115,13 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
     after,
     limit + 1,
   );
-  const items = rows.slice(0, limit).map((row) => planItem(db, row));
+  const page = rows.slice(0, limit);
+  const details = planDetails(db, page);
+  // 细节是只读附加字段（top 的排期段用）；分组判定仍只看 planItem。
+  const items: (PlanItem & PlanDetail)[] = page.map((row) => ({
+    ...planItem(db, row),
+    ...details.get(row.id)!,
+  }));
   return {
     groups: {
       running: items.filter((item) => item.group === "running"),

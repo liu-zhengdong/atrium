@@ -164,6 +164,11 @@ export function ensureTaskTables(db: DatabaseSync) {
     `CREATE INDEX IF NOT EXISTS tasks_ci_pending ON tasks(ci_polled_at,id)
      WHERE ci='pending' AND pr_url IS NOT NULL AND status NOT IN ('done','cancelled')`,
   );
+  // 未结束的任务（t154）：调度巡检与 plan 按 id 翻页只碰这些行，已完成的再多也不扫；
+  // 带上 auto、schedule_state，巡检的候选过滤在索引里做完，不为不相干的行回表读大字段。
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS tasks_open ON tasks(id,auto,schedule_state) WHERE status NOT IN ('done','cancelled')",
+  );
   // top 里「已合入、等上线」的一支（#t126）：直接定位 online_wait=1，不扫全部 merged。
   db.exec(
     "CREATE INDEX IF NOT EXISTS tasks_online_wait ON tasks(online_wait,delivery_stage,id) WHERE online_wait=1",

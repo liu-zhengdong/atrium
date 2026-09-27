@@ -6,6 +6,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
 import { CI_PENDING_SQL, pollCiOnce } from "../server/tasks/ci-poll.ts";
 import { SETTLE_REVIEWS_SQL } from "../server/tasks/concern-runtime.ts";
+import { CLOSE_STALE_SQL } from "../server/tasks/council-runtime.ts";
 import { DiskBudget } from "../server/tasks/disk-budget.ts";
 import type { Exec } from "../server/tasks/git.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
@@ -59,6 +60,7 @@ test("合入队、清理、上线回填、CI、专员：查询计划不按状态
     ["上线回填", planOf(db, LEGACY_ONLINE_SQL, 0)],
     ["CI", planOf(db, CI_PENDING_SQL, 10)],
     ["专员", planOf(db, SETTLE_REVIEWS_SQL, 50)],
+    ["会审", planOf(db, CLOSE_STALE_SQL, 50)],
   ] as const) {
     assert.doesNotMatch(
       plan,
@@ -74,6 +76,7 @@ test("合入队、清理、上线回填、CI、专员：查询计划不按状态
   assert.match(planOf(db, CLEANUP_PAGE_SQL, 0, 0), /tasks_cleanup_done/);
   assert.match(planOf(db, LEGACY_ONLINE_SQL, 0), /tasks_online_legacy/);
   assert.match(planOf(db, CI_PENDING_SQL, 10), /tasks_ci_pending/);
+  assert.match(planOf(db, CLOSE_STALE_SQL, 50), /task_councils_stage/);
   assert.match(
     planOf(db, SETTLE_REVIEWS_SQL, 50),
     /task_concerns|INTEGER PRIMARY KEY/,

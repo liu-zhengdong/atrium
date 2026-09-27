@@ -150,7 +150,10 @@ export function planItem(
  * 巡检一页的排期判定：依赖条件按页批量取（k23），判定不碰库。
  * 判定后某条任务状态变了（受阻/恢复），用 setStatus 同步给同为上游的后续候选。
  */
-export function pagePlan(db: DatabaseSync, rows: TaskRow[]) {
+export function pagePlan(
+  db: DatabaseSync,
+  rows: Pick<TaskRow, "id" | "status" | "schedule_reason">[],
+) {
   const conditions = conditionsOfMany(
     db,
     rows.map((row) => row.id),
@@ -160,7 +163,9 @@ export function pagePlan(db: DatabaseSync, rows: TaskRow[]) {
     for (const ref of condition.after) afterIds.add(Number(ref.slice(1)));
   const deps = dependencyOfMany(db, [...afterIds]);
   return {
-    classify(row: TaskRow): Pick<PlanItem, "group" | "waiting_for" | "reason"> {
+    classify(
+      row: Pick<TaskRow, "id" | "status" | "schedule_reason">,
+    ): Pick<PlanItem, "group" | "waiting_for" | "reason"> {
       const condition = conditions.get(row.id)!;
       const tasks = condition.after.map((ref) =>
         deps.get(Number(ref.slice(1)))!,
@@ -178,6 +183,10 @@ export function pagePlan(db: DatabaseSync, rows: TaskRow[]) {
   };
 }
 
+/** plan 一页未结束的任务；同样走部分索引 tasks_open（t154）。 */
+export const PLAN_PAGE_SQL =
+  "SELECT * FROM tasks WHERE id>? AND status NOT IN ('done','cancelled') ORDER BY id LIMIT ?";
+
 export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
   if (
     !Number.isSafeInteger(after) ||
@@ -187,12 +196,7 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
     limit > 500
   )
     throw usage("plan: after 应为非负整数，limit 应为 1～500");
-  const rows = all<TaskRow>(
-    db,
-    "SELECT * FROM tasks WHERE id>? AND status NOT IN ('done','cancelled') ORDER BY id LIMIT ?",
-    after,
-    limit + 1,
-  );
+  const rows = all<TaskRow>(db, PLAN_PAGE_SQL, after, limit + 1);
   const page = rows.slice(0, limit);
   const details = planDetails(db, page);
   const ahead = once(() => idleWaits(db));
@@ -217,6 +221,31 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
 
 const planRank = (task: Pick<TaskRow, "urgent" | "priority">) =>
   rank({ urgent: task.urgent === 1, idle: isIdle(task) });
+
+/** 巡检候选只用这几列。 */
+type CandidateRow = Pick<
+  TaskRow,
+  | "id"
+  | "status"
+  | "schedule_state"
+  | "schedule_reason"
+  | "auto"
+  | "auto_dispatched"
+  | "owner"
+  | "deliver"
+>;
+
+/**
+ * 巡检候选：未结束且开了自动、有排期状态或有依赖的任务，每页 200 条。
+ * 条件里的 `status NOT IN ('done','cancelled')` 与部分索引 tasks_open 的定义一字不差，
+ * 查询才用得上它（见 ledger-schema.ts）。
+ */
+export const CANDIDATES_SQL = `SELECT id,status,schedule_state,schedule_reason,auto,auto_dispatched,owner,deliver FROM tasks
+  WHERE id>? AND status NOT IN ('done','cancelled')
+    AND (auto=1 OR schedule_state IS NOT NULL
+      OR EXISTS(SELECT 1 FROM task_dependencies WHERE task_id=tasks.id)
+      OR EXISTS(SELECT 1 FROM task_pr_dependencies WHERE task_id=tasks.id))
+  ORDER BY id LIMIT 200`;
 
 export class Scheduler {
   private busy = false;
@@ -253,11 +282,9 @@ export class Scheduler {
       const later: number[] = [];
       for (;;) {
         if (this.stopped) return;
-        const rows = all<TaskRow>(
-          this.db,
-          `SELECT * FROM tasks WHERE id>? AND status NOT IN ('done','cancelled') AND (auto=1 OR schedule_state IS NOT NULL OR EXISTS(SELECT 1 FROM task_dependencies WHERE task_id=tasks.id) OR EXISTS(SELECT 1 FROM task_pr_dependencies WHERE task_id=tasks.id)) ORDER BY id LIMIT 200`,
-          after,
-        );
+        // 走部分索引 tasks_open：只碰未结束的任务，已完成的再多也不扫（t154）；
+        // 只取判定与派发要的列，不读详述、结果这些大字段。
+        const rows = all<CandidateRow>(this.db, CANDIDATES_SQL, after);
         if (!rows.length) break;
         after = rows[rows.length - 1]!.id;
         // gh / git 只在每页开始时批量跑一次，不放进逐候选循环；共享的上游只查一次。

@@ -199,7 +199,7 @@ test("本机闸门：先看 Atrium 自己占的核，再看整机负载保护线
   }
 });
 
-test("排队先后：紧急的在前，同样紧急的按入队先后、再按任务号", () => {
+test("排队先后：紧急的在前、闲时的在后，同一档按入队先后、再按任务号", () => {
   const entries = [
     { urgent: false, at: 1, id: 1 },
     { urgent: true, at: 5, id: 4 },
@@ -212,11 +212,23 @@ test("排队先后：紧急的在前，同样紧急的按入队先后、再按�
     [...entries].sort(queueOrder).map((entry) => entry.id),
     [2, 9, 4, 7, 0, 1],
   );
+  const tiers = [
+    { urgent: false, idle: true, at: 0, id: 1 },
+    { urgent: false, at: 9, id: 2 },
+    { urgent: true, idle: true, at: 9, id: 3 },
+    { urgent: false, idle: false, at: 5, id: 4 },
+    { urgent: false, idle: true, at: 1, id: 5 },
+  ];
+  assert.deepEqual(
+    [...tiers].sort(queueOrder).map((entry) => entry.id),
+    [3, 4, 2, 1, 5],
+  );
   const q = (
     task_id: number,
     tool: string,
     queued_at: number,
     urgent = false,
+    idle = false,
   ) => ({
     task_id,
     tool,
@@ -224,6 +236,7 @@ test("排队先后：紧急的在前，同样紧急的按入队先后、再按�
     risk: "low",
     queued_at,
     urgent,
+    idle,
   });
   // 每个工具一个队首：同一工具里紧急的顶到前面；各工具的队首之间也是紧急的在前。
   assert.deepEqual(
@@ -235,6 +248,17 @@ test("排队先后：紧急的在前，同样紧急的按入队先后、再按�
       q(5, "codex", 3),
     ]).map((entry) => entry.task_id),
     [2, 4, 3],
+  );
+  // 闲时的（t136）排在同一工具的普通任务后面，各工具队首之间也在普通后面；标了紧急的闲时任务按紧急算。
+  assert.deepEqual(
+    queueHeads([
+      q(1, "kimi", 0, false, true),
+      q(2, "kimi", 5),
+      q(3, "codex", 0, false, true),
+      q(4, "claude", 9),
+      q(5, "grok", 9, true, true),
+    ]).map((entry) => entry.task_id),
+    [5, 2, 4, 3],
   );
   assert.deepEqual(queueHeads([]), []);
 });

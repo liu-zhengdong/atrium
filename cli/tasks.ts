@@ -21,6 +21,12 @@ import type {
 } from "../server/tasks/pick.ts";
 import { briefInput } from "./brief-input.ts";
 import { URGENT_NOTE } from "../server/tasks/host-load.ts";
+import {
+  IDLE_NOTE,
+  PRIORITY_LABEL,
+  parsePriority,
+  priorityTag,
+} from "../server/tasks/priority.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
@@ -61,8 +67,30 @@ const noteLine = (task: Task) =>
     ? `  备注（${noteAuthor(task)} · ${when(task.note_at!)}）：${task.note.replace(/\s+/g, " ")}`
     : null;
 
-/** 标了紧急的回执说清跳过了什么（t113）。 */
-const urgentLines = (task: Task) => (task.urgent === 1 ? [URGENT_NOTE] : []);
+/** 标了紧急的回执说清跳过了什么（t113）；闲时的说清怎么排（t136）。 */
+const urgentLines = (task: Task) =>
+  task.urgent === 1 ? [URGENT_NOTE] : priorityTag(task) ? [IDLE_NOTE] : [];
+
+/** 标题前的「紧急 」「闲时 」。 */
+const tagText = (task: Pick<Task, "urgent" | "priority">) => {
+  const tag = priorityTag(task);
+  return tag ? `${tag} ` : "";
+};
+
+/** 排队原因：闲时任务的「等空闲：…」本身说清了在等什么，其余前面加「排队：」。 */
+const queuedText = (reason: string) =>
+  reason.startsWith("等空闲") ? reason : `排队：${reason}`;
+
+/** --priority 闲时|普通（也认 idle、normal）；写错时用参数名说清。 */
+function priorityInput(values: Values) {
+  const text = str(values, "priority");
+  if (text === undefined) return {};
+  try {
+    return { priority: parsePriority(text) };
+  } catch {
+    throw new Problem(400, "--priority 只能是 闲时 或 普通", "usage");
+  }
+}
 
 /** 命令行只认 t 开头的短号；接口另外接受纯数字。 */
 function ref(value: string | undefined, flag: string) {
@@ -176,9 +204,9 @@ function alsoText(task: Task) {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急（跳过本机负载限制、排队插到最前）；旧 --job、--concern、--role 暂可用",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急（跳过本机负载限制、排队插到最前）；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
@@ -199,6 +227,7 @@ const add: Command = {
     "after-pr": { type: "string" },
     auto: { type: "boolean" },
     urgent: { type: "boolean" },
+    priority: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
@@ -269,6 +298,7 @@ const add: Command = {
         : { after_pr: str(values, "after-pr") }),
       ...(values.auto === true ? { auto: true } : {}),
       ...(values.urgent === true ? { urgent: true } : {}),
+      ...priorityInput(values),
     };
     const task = await (await client()).post<Task>("/tasks", body);
     if (json) printJson(task);
@@ -325,7 +355,7 @@ const ls: Command = {
           task.ref,
           displayStatus(task),
           task.parent_ref ?? "",
-          clip(`${task.urgent === 1 ? "紧急 " : ""}${task.title}`, 40),
+          clip(`${tagText(task)}${task.title}`, 40),
           task.worker ?? "",
           task.pr_url ?? "",
         ]),
@@ -378,6 +408,12 @@ const show: Command = {
           "紧急",
           task.urgent === 1 ? "是（跳过本机负载限制，排队插到最前）" : null,
         ],
+        [
+          "优先级",
+          task.priority === "idle"
+            ? `${PRIORITY_LABEL.idle}（排在普通任务后面，有空闲执行者才派）`
+            : null,
+        ],
         ["合入交回次数", task.merge_returns || null],
         ["审阅任务", task.review_task ? `t${task.review_task}` : null],
         ["排队原因", task.queued_reason ?? null],
@@ -422,7 +458,7 @@ const show: Command = {
       ];
       console.log(
         [
-          `${task.ref} · ${task.urgent === 1 ? "紧急 " : ""}${task.title}`,
+          `${task.ref} · ${tagText(task)}${task.title}`,
           ...rows
             .slice(1)
             .filter(([, value]) => value !== null && value !== "")
@@ -503,8 +539,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发和紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）`,
+  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--priority 闲时|普通]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发、紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
@@ -526,6 +562,7 @@ const set: Command = {
     auto: { type: "boolean" },
     urgent: { type: "boolean" },
     "no-urgent": { type: "boolean" },
+    priority: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
@@ -583,10 +620,11 @@ const set: Command = {
       throw new Problem(400, "--urgent 与 --no-urgent 只能给一个", "usage");
     if (values.urgent === true) body.urgent = true;
     if (values["no-urgent"] === true) body.urgent = false;
+    Object.assign(body, priorityInput(values));
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--also、--brief、--deliver、--issue、--after、--after-pr、--auto 或 --urgent/--no-urgent",
+        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--also、--brief、--deliver、--issue、--after、--after-pr、--auto、--urgent/--no-urgent 或 --priority",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -599,6 +637,12 @@ const set: Command = {
           `${task.ref} 已更新 · [${task.status}] ${task.title}`,
           ...(body.urgent === true ? urgentLines(task) : []),
           ...(body.urgent === false ? ["已取消紧急：照常受本机负载限制"] : []),
+          ...(body.priority === "idle" && body.urgent !== true
+            ? urgentLines(task)
+            : []),
+          ...(body.priority === "normal"
+            ? ["优先级：普通，照常排（紧急的仍在前）"]
+            : []),
           ...(role !== undefined ? roleHint(task) : []),
           ...(concern !== undefined || ask !== undefined
             ? [
@@ -712,7 +756,7 @@ const plan: Command = {
         console.log(`${label}（${result.groups[group].length}）`);
         for (const item of result.groups[group])
           console.log(
-            `  ${item.task.ref} ${item.task.urgent === 1 ? "紧急 " : ""}${item.task.title}${item.task.queued_reason ? ` · 排队：${item.task.queued_reason}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
+            `  ${item.task.ref} ${tagText(item.task)}${item.task.title}${item.task.queued_reason ? ` · ${queuedText(item.task.queued_reason)}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
           );
       }
     }

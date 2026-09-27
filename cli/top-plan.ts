@@ -18,6 +18,9 @@ export type PlanTask = {
   goal_ref?: string | null;
   part_ref?: string | null;
   schedule_state?: string | null;
+  /** 旧版服务没有这两项。 */
+  urgent?: number;
+  priority?: string;
 };
 export type PlanUpstream = {
   ref: string;
@@ -82,6 +85,17 @@ const readable = (text: string) =>
     / \[([a-z]+)\]/g,
     (_, status: string) => ` ${STATUS[status] ?? status}`,
   );
+
+/** 标题前写「紧急」（t113）或「闲时」（t136）。 */
+const labelOf = (task: PlanTask) =>
+  task.urgent === 1
+    ? `紧急 ${task.title}`
+    : task.priority === "idle"
+      ? `闲时 ${task.title}`
+      : task.title;
+
+const tier = (task: PlanTask) =>
+  task.urgent === 1 ? 0 : task.priority === "idle" ? 2 : 1;
 
 const idOf = (ref: string) => Number(ref.slice(1)) || 0;
 const byRef = (a: { ref: string }, b: { ref: string }) =>
@@ -267,7 +281,10 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
   const alone = [...items.values()]
     .filter((item) => !inChain.has(item.ref))
     .sort(byRef);
-  const ready = alone.filter((item) => item.group === "ready");
+  // 就绪的与服务端排期同一先后：紧急 → 普通 → 闲时（t136），同一档照短号。
+  const ready = alone
+    .filter((item) => item.group === "ready")
+    .sort((a, b) => tier(a.task) - tier(b.task) || byRef(a, b));
   const waiting = alone.filter((item) => item.group === "waiting");
   const blocked = alone.filter(
     (item) => item.group === "blocked" && scheduleBlocked(item),
@@ -375,7 +392,7 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
     8,
     ...rows
       .filter((row) => row.indent >= 0)
-      .map((row) => width(row.item.task.title)),
+      .map((row) => width(labelOf(row.item.task))),
   );
   const titleW = Math.min(
     longest,
@@ -408,7 +425,7 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
         `${"  ".repeat(row.indent)}${SYMBOL[row.item.group]} ${row.item.ref}`,
         prefixW,
       );
-      const title = pad(oneLine(row.item.task.title, titleW), titleW);
+      const title = pad(oneLine(labelOf(row.item.task), titleW), titleW);
       const text = detail(row.item, frame.now, frame.wide);
       const tail = detailW >= 6 && text ? `  ${oneLine(text, detailW)}` : "";
       lines.push({

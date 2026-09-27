@@ -204,7 +204,10 @@ function judge(f: HolderFacts): Holder | null {
     return {
       kind: "queue",
       who: null,
-      text: `排队${f.queued.reason ? `：${f.queued.reason}` : ""}`,
+      // 闲时任务的「等空闲：前面还有 N 件普通任务」自己说清了在等什么（t136）。
+      text: f.queued.reason?.startsWith("等空闲")
+        ? f.queued.reason
+        : `排队${f.queued.reason ? `：${f.queued.reason}` : ""}`,
     };
   if (f.status === "running") {
     const worker = f.worker ?? "执行者";

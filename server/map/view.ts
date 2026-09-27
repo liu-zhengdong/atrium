@@ -68,6 +68,8 @@ export type MapTask = {
   queued: boolean;
   /** 标了紧急（t113）：跳过本机负载限制、排队插到最前。 */
   urgent: boolean;
+  /** 闲时（t136）：排在普通任务后面，有空闲执行者才派；标了紧急的不算。 */
+  idle: boolean;
   worker: string | null;
   started_at: number | null;
   updated_at: number;
@@ -303,6 +305,7 @@ export type TaskRow = {
   ended_at: number | null;
   job_id: number | null;
   urgent?: number | null;
+  priority?: string | null;
 };
 
 /** 角色短号 → 名称；旧库没有角色表时为空。 */
@@ -338,6 +341,7 @@ export function taskView(
     status: row.status,
     queued: live?.queued_at != null,
     urgent: row.urgent === 1,
+    idle: row.priority === "idle" && row.urgent !== 1,
     worker: row.worker ?? live?.worker ?? null,
     started_at: row.started_at,
     updated_at: row.updated_at,
@@ -487,7 +491,7 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
   );
 }
 export const taskColumns = (db: DatabaseSync) =>
-  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"}`;
+  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"},${hasColumn(db, "tasks", "priority") ? "priority" : "NULL AS priority"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
 /** 任务在部分页上的顺序：在跑、卡住与等合入、待办、其余。 */
 const TASK_ORDER = (db: DatabaseSync) =>

@@ -28,6 +28,7 @@ import {
   importWorkerProfiles,
 } from "./worker-profiles.ts";
 import { dequeue, enqueue, ensureQueueTable, queued } from "./queue.ts";
+import { idleWaitText, isIdle } from "./priority.ts";
 import { clock } from "./quota-holds.ts";
 import { QuotaGuard } from "./quota-runtime.ts";
 import { recoverRunning } from "./recovery.ts";
@@ -537,6 +538,12 @@ export class TaskRunner {
         ),
         pick,
       };
+    }
+    // 闲时（t136）：前面还有普通任务在等同一类执行者就先排着，由 drain 按紧急、普通、闲时的先后拉起。
+    const ahead = isIdle(task) ? this.x.idleAhead(tool, id) : 0;
+    if (ahead) {
+      this.x.launching.delete(id);
+      return { ...this.enqueue(task, chosen, idleWaitText(ahead)), pick };
     }
     if (
       placement(ADAPTERS[tool].exclusive, this.x.busy(tool, id)) === "queue"

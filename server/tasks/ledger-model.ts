@@ -50,6 +50,8 @@ export type TaskRow = {
   auto_dispatched: number;
   /** 1 表示紧急（t113）：跳过本机负载限制，排队插到最前。 */
   urgent: number;
+  /** 闲时（t136）：idle 排在普通任务后面，有空闲执行者才派；缺省按归属部分是否管方面。 */
+  priority: "normal" | "idle";
   schedule_state: string | null;
   schedule_reason: string | null;
   node_id: number | null;

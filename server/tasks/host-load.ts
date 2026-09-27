@@ -1,5 +1,6 @@
 import { availableParallelism, loadavg } from "node:os";
 import { ProcessCpu } from "../platform/cpu.ts";
+import { rank } from "./priority.ts";
 
 /**
  * 本机减负（#358 第 0 步）：同时在跑的执行者上限、本地检查并发上限、注入给执行者与检查的测试并发，
@@ -156,13 +157,19 @@ export function hostGate(input: {
 }
 
 /**
- * 排队先后（执行者队列与本地检查共用）：紧急的在前，同样紧急的按入队先后，再按任务号。
+ * 排队先后（执行者队列与本地检查共用）：紧急的在前，再普通、闲时（t136，priority.ts；不给 idle 当普通），
+ * 同一档按入队先后，再按任务号。
  */
 export function queueOrder(
-  a: { urgent: boolean; at: number; id: number },
-  b: { urgent: boolean; at: number; id: number },
+  a: { urgent: boolean; idle?: boolean; at: number; id: number },
+  b: { urgent: boolean; idle?: boolean; at: number; id: number },
 ) {
-  return Number(b.urgent) - Number(a.urgent) || a.at - b.at || a.id - b.id;
+  return (
+    rank({ urgent: a.urgent, idle: !!a.idle }) -
+      rank({ urgent: b.urgent, idle: !!b.idle }) ||
+    a.at - b.at ||
+    a.id - b.id
+  );
 }
 
 /** 本地检查：紧急的立刻跑、不占并发名额；其余有空位就跑，没有就排队。 */

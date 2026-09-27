@@ -159,6 +159,31 @@ test("排期段：就绪带节点、自动派与负责人；等待逐项带状�
   assert.doesNotMatch(text, /t37/);
 });
 
+test("排期段：就绪的按紧急 → 普通 → 闲时排，标题前标紧急或闲时（t136）", () => {
+  const plan: PlanView = {
+    next_after: null,
+    groups: {
+      running: [],
+      ready: [
+        entry("t1", "性能巡检", { task: { priority: "idle" } }),
+        entry("t2", "功能 A", { task: { priority: "normal" } }),
+        entry("t3", "性能急事", { task: { priority: "idle", urgent: 1 } }),
+        entry("t4", "旧服务的任务"),
+      ],
+      waiting: [],
+      blocked: [],
+    },
+  };
+  const rows = draw(plan, 120)
+    .lines.slice(2)
+    .map((line) => line.trim());
+  assert.deepEqual(
+    rows.map((line) => line.split(/\s+/).slice(0, 3).join(" ")),
+    ["○ t3 紧急", "○ t2 功能", "○ t4 旧服务的任务", "○ t1 闲时"],
+  );
+  assert.match(rows[3]!, /闲时 性能巡检/);
+});
+
 test("排期段：依赖链按先后缩进，标题给出关键路径；分组父任务只当标题", () => {
   const lines = draw(sample(), 120).lines;
   const at = (pattern: RegExp) => lines.findIndex((line) => pattern.test(line));

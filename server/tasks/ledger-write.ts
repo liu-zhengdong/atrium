@@ -33,6 +33,12 @@ import {
 import { matchRole, originNode } from "../org/task-node.ts";
 import { partForTask } from "../org/task-part.ts";
 import {
+  aspectPart,
+  defaultPriority,
+  parsePriority,
+  priorityAfterMove,
+} from "./priority.ts";
+import {
   concernRows,
   concernsFor,
   specialistsFor,
@@ -111,6 +117,8 @@ export type NewTask = {
   auto?: boolean;
   /** 紧急：跳过本机负载限制，排队插到最前。 */
   urgent?: boolean;
+  /** 闲时 / 普通（t136）；不写按归属部分：管方面的为闲时。 */
+  priority?: string;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
   /** 归属哪一部分（组织节点）。 */
@@ -173,6 +181,7 @@ export function createTask(
     "after_pr",
     "auto",
     "urgent",
+    "priority",
     "from",
     "part",
     "goal",
@@ -182,6 +191,8 @@ export function createTask(
   ]);
   const specialist = specialistOptions(input);
   const urgent = urgentOf(input.urgent);
+  const priority =
+    input.priority === undefined ? undefined : parsePriority(input.priority);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
   validateDeliver(deliver, issue);
@@ -224,9 +235,10 @@ export function createTask(
       concerns,
       oldRoleSpecialist ? "role" : "by",
     );
+    const level = priority ?? defaultPriority(aspectPart(db, part ?? node));
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -243,6 +255,7 @@ export function createTask(
         part,
         job,
         urgent ? 1 : 0,
+        level,
         now,
         now,
       );
@@ -259,6 +272,7 @@ export function createTask(
       ...(job ? { job: `r${job}` } : {}),
       ...(concerns.length ? { concerns: concerns.map(specialistRef) } : {}),
       ...(urgent ? { urgent: true } : {}),
+      ...(level === "idle" ? { priority: level } : {}),
       ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(by ? { by } : {}),
     });
@@ -294,6 +308,7 @@ export function updateTask(
     "after_pr",
     "auto",
     "urgent",
+    "priority",
     "pr_url",
     "from",
     "part",
@@ -305,7 +320,7 @@ export function updateTask(
   const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、also、concern、status、deliver、issue、after、after_pr、auto、urgent、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、also、concern、status、deliver、issue、after、after_pr、auto、urgent、priority、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -314,6 +329,8 @@ export function updateTask(
   if ("issue" in input) fields.issue = issueOf(input.issue);
   // 紧急随时可改（在跑、排队中也行）：排队中的下一轮巡检按新标记拉起。
   if ("urgent" in input) fields.urgent = urgentOf(input.urgent) ? 1 : 0;
+  // 闲时随时可改：排队中的下一轮拉起按新档位排；已在跑的不打断。
+  if ("priority" in input) fields.priority = parsePriority(input.priority);
   if ("pr_url" in input) {
     if (
       typeof input.pr_url !== "string" ||
@@ -363,6 +380,18 @@ export function updateTask(
       );
     if ("from" in input) fields.origin_node_id = fromNode(db, input.from);
     if ("part" in input || "goal" in input) fields.part_id = partOf(db, input);
+    // 换了归属部分、又没同时指定档位：没被人改过的档位跟着新部分的缺省走。
+    if (!("priority" in fields) && ("part_id" in fields || "node_id" in fields))
+      fields.priority = priorityAfterMove(
+        current.priority,
+        aspectPart(db, current.part_id ?? current.node_id),
+        aspectPart(
+          db,
+          ((("part_id" in fields ? fields.part_id : current.part_id) ??
+            ("node_id" in fields ? fields.node_id : current.node_id)) as
+            number | null) ?? null,
+        ),
+      );
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
     const concerns = specialist.askPresent

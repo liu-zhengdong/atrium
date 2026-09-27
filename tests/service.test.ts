@@ -377,9 +377,23 @@ test(
     const legacy = new DatabaseSync(join(f.data, "atrium.sqlite"));
     legacy.exec(`CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE messages(id INTEGER PRIMARY KEY, body TEXT NOT NULL);
-      CREATE TABLE inbox_tokens(agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, token_hash TEXT NOT NULL);`);
+      CREATE TABLE inbox_tokens(agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, token_hash TEXT NOT NULL);
+      CREATE TABLE deliveries(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), kind TEXT NOT NULL, text TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending', slot TEXT, error TEXT, created_at INTEGER NOT NULL, chat_id TEXT, through_message INTEGER, accepted_at INTEGER, UNIQUE(agent_id,slot));
+      CREATE INDEX deliveries_pending ON deliveries(agent_id,created_at) WHERE state='pending';
+      CREATE INDEX deliveries_accepted ON deliveries(agent_id,accepted_at) WHERE state='accepted';`);
     legacy.prepare("INSERT INTO agents VALUES(?,?)").run("legacy-1", "旧身份");
     legacy.prepare("INSERT INTO messages(body) VALUES(?)").run("旧消息");
+    legacy
+      .prepare(
+        "INSERT INTO deliveries(id,agent_id,kind,text,created_at) VALUES(?,?,?,?,?)",
+      )
+      .run("d1", "legacy-1", "text", "旧交付", 123);
+    const oldDeliverySchema = legacy
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='deliveries'",
+      )
+      .get()?.sql;
     legacy.close();
     const result = await f.cli();
     assert.equal(result.code, 0, result.stderr);
@@ -393,6 +407,21 @@ test(
       200,
     );
     assert.equal((await f.cli("org", "tree")).code, 0);
+    writeFileSync(join(f.root, "role.md"), "实现并检查服务功能");
+    const addedRole = await f.cli(
+      "role",
+      "add",
+      "服务维护",
+      "--description",
+      "维护服务",
+      "--body",
+      join(f.root, "role.md"),
+    );
+    assert.equal(addedRole.code, 0, addedRole.stderr);
+    const addedTask = await f.cli("task", "add", "检查旧库兼容", "--job", "r1");
+    assert.equal(addedTask.code, 0, addedTask.stderr);
+    assert.equal((await f.cli("role", "show", "r1")).code, 0);
+    assert.equal((await f.cli("workers")).code, 0);
     assert.equal((await f.cli("stop")).code, 0);
     const after = new DatabaseSync(join(f.data, "atrium.sqlite"), {
       readOnly: true,
@@ -404,6 +433,44 @@ test(
       );
       assert.equal(
         after.prepare("SELECT count(*) AS n FROM messages").get()?.n,
+        1,
+      );
+      assert.equal(
+        after
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='deliveries'",
+          )
+          .get()?.sql,
+        oldDeliverySchema,
+      );
+      assert.deepEqual(
+        {
+          ...after
+            .prepare(
+              "SELECT id,agent_id,kind,text,state,created_at FROM deliveries",
+            )
+            .get()!,
+        },
+        {
+          id: "d1",
+          agent_id: "legacy-1",
+          kind: "text",
+          text: "旧交付",
+          state: "pending",
+          created_at: 123,
+        },
+      );
+      assert.equal(
+        after.prepare("SELECT count(*) AS n FROM task_deliveries").get()?.n,
+        0,
+      );
+      assert.equal(
+        after.prepare("SELECT count(*) AS n FROM job_roles").get()?.n,
+        1,
+      );
+      assert.equal(
+        after.prepare("SELECT count(*) AS n FROM tasks WHERE job_id=1").get()
+          ?.n,
         1,
       );
     } finally {

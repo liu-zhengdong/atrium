@@ -519,8 +519,9 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org edit": {
-    args: "节点 [--charter 文件|--card 文件|--name 名称] [--slug 路径名] [--leader aN|none] [--parent 节点] [--repo 路径] [--archive] [--rev rN] [--reason 原因]",
-    about: "编辑节点、章程或能力卡",
+    args: "节点 [--charter 文件|--card 文件|--name 名称] [--slug 路径名] [--leader aN|none] [--parent 节点] [--repo 路径] [--kind aspect|module] [--archive] [--rev rN] [--reason 原因]",
+    about:
+      "编辑节点、章程或能力卡；--kind aspect 改成管方面的部分，--kind module 改回普通部分（改回前要先清掉要点与部分的适用范围）",
     options: {
       ...common,
       slug: { type: "string" },
@@ -528,6 +529,7 @@ export const orgCommands: Record<string, Command> = {
       leader: { type: "string" },
       parent: { type: "string" },
       repo: { type: "string", multiple: true },
+      kind: { type: "string" },
       archive: { type: "boolean" },
       rev: { type: "string" },
       reason: { type: "string" },
@@ -544,7 +546,7 @@ export const orgCommands: Record<string, Command> = {
       let result: unknown;
       if (target) {
         if (
-          ["slug", "name", "leader", "parent", "repo"].some(
+          ["slug", "name", "leader", "parent", "repo", "kind"].some(
             (key) => values[key] !== undefined,
           ) ||
           values.archive === true
@@ -566,6 +568,7 @@ export const orgCommands: Record<string, Command> = {
               : (Array.isArray(values.repo) ? values.repo : [values.repo]).map(
                   (repo) => resolve(String(repo)),
                 ),
+          kind: str(values, "kind"),
           archive: values.archive === true,
         });
         if (
@@ -574,6 +577,7 @@ export const orgCommands: Record<string, Command> = {
           !input.leader &&
           !input.parent &&
           !input.repos &&
+          !input.kind &&
           !input.archive
         )
           throw new Problem(400, "org edit 需指定要修改的字段");

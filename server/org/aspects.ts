@@ -284,3 +284,19 @@ export const appliesText = (ids: number[] | null) =>
   ids && ids.length ? JSON.stringify(ids) : null;
 export const appliesRefs = (value: string | null | undefined) =>
   parseApplies(value)?.map(ref) ?? null;
+
+/**
+ * 纯函数：把管方面的部分改回普通 module 前，哪些适用范围还在、要先清掉。
+ * 返回还带 applies 的要点短号，以及本部分的缺省范围是否也还在。
+ */
+export function aspectClearance(
+  nodeApplies: string | null | undefined,
+  points: readonly { ref: string; applies?: string | null }[],
+): { points: string[]; node: boolean } {
+  return {
+    points: points
+      .filter((p) => parseApplies(p.applies) !== null)
+      .map((p) => p.ref),
+    node: parseApplies(nodeApplies) !== null,
+  };
+}

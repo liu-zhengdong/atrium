@@ -462,7 +462,6 @@ test("HTTP：任务备注需认证，列表和详情含当前备注", async (t) 
   t.after(() => rmSync(data, { recursive: true, force: true }));
   const guarded = await createApp({
     data: join(data, "guarded"),
-    runtime: false,
   });
   try {
     const denied = await guarded.app.inject({
@@ -475,7 +474,7 @@ test("HTTP：任务备注需认证，列表和详情含当前备注", async (t) 
   } finally {
     await guarded.app.close();
   }
-  const { app } = await createApp({ data, runtime: false, auth: false });
+  const { app } = await createApp({ data, auth: false });
   try {
     await app.inject({
       method: "POST",

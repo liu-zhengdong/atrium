@@ -19,14 +19,14 @@ import { exitDetail, type Exit } from "./outcome.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import { dequeue, heads } from "./queue.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
-import { diffSize, settle } from "./settle.ts";
+import { diffSize, logTail, settle } from "./settle.ts";
 import { alive, signalGroup, spawnWorker } from "./spawn.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
 import { retryAfterTransient } from "./transient-runtime.ts";
 import type { TaskWaits } from "./waits.ts";
-import { judge } from "./watchdog.ts";
+import { finalClaudeResult, judge } from "./watchdog.ts";
 import {
   prepareRun,
   type LaunchOptions,
@@ -271,6 +271,14 @@ export class Executors {
     active.exited = true;
     this.finishing.set(id, (this.finishing.get(id) ?? 0) + 1);
     try {
+      if (active.finalizing?.forced) {
+        noteTask(this.ctx.db, id, "final_result_exit", {
+          ...exitDetail(exit),
+          result: active.finalizing.result,
+        });
+        // 终止信号只用于催退。按日志中的最终 result 判本轮结局，事实与关卡照常检查。
+        exit = "unknown";
+      }
       endUsage(
         this.ctx.db,
         id,
@@ -450,11 +458,31 @@ export class Executors {
           void this.finish(active.id, "unknown");
           continue;
         }
-        if (active.stop) continue;
+        if (active.stop || active.finalizing) continue;
         const { signals } = await active.probe.poll();
         if (signals.length) active.state.lastProgressAt = Date.now();
         const verdict = judge(active.state, active.limits, Date.now());
         if (verdict.kind === "ok") continue;
+        if (active.tool === "claude") {
+          const result = await logTail(active.logFile, 1024 * 1024)
+            .then(finalClaudeResult)
+            .catch(() => undefined);
+          if (result) {
+            active.finalizing = { result, forced: false };
+            noteTask(this.ctx.db, active.id, "finalizing", {
+              reason: "最终 result 已输出，执行者仍未退出，催促收尾",
+              result,
+            });
+            if (active.live?.open) {
+              active.live.end();
+              setTimeout(
+                () => this.forceFinalExit(active),
+                this.ctx.killGraceMs ?? 10_000,
+              ).unref();
+            } else this.forceFinalExit(active);
+            continue;
+          }
+        }
         active.stop = verdict;
         noteTask(this.ctx.db, active.id, verdict.kind, {
           reason: verdict.reason,
@@ -464,6 +492,15 @@ export class Executors {
     } finally {
       this.ticking = false;
     }
+  }
+
+  private forceFinalExit(active: Active) {
+    if (active.exited || !active.finalizing || active.finalizing.forced) return;
+    active.finalizing.forced = true;
+    signalGroup(active.pid, "SIGTERM");
+    setTimeout(() => {
+      if (!active.exited) signalGroup(active.pid, "SIGKILL");
+    }, this.ctx.killGraceMs ?? 10_000).unref();
   }
 
   kill(active: Active) {

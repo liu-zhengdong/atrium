@@ -5,7 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 /**
  * 即时捎话的标准输入（#307）：claude --input-format stream-json 时服务握着执行者标准输入的写端。
  * 先写提示词，运行中把捎话作为新的用户消息写入；从日志里认两件事：
- * - result 事件：这一轮结束了，关掉标准输入，执行者处理完已读入的消息就退出（与读提示词文件时一样）；
+ * - result 事件：最后一条已写入的消息已回显且本轮结束时关掉标准输入；
  * - 带 isReplay 的用户消息（--replay-user-messages 回显）：按 uuid 确认这条捎话已被读入。
  * 服务退出时写端随之关闭，执行者同样在本轮结束后退出；重启后接管的进程没有写端，捎话改为续上会话。
  */
@@ -26,14 +26,23 @@ const CHUNK = 256 * 1024;
 
 export type LineSignal = { kind: "result" } | { kind: "echo"; uuid: string };
 
-/** 日志里的一行是不是本轮结束或捎话回显；只解析这两类行首，不扫描正文。 */
+/** 日志里的一行是不是本轮结束或捎话回显；先筛候选，再核对顶层 type。 */
 export function lineSignal(line: string): LineSignal | undefined {
-  if (line.startsWith('{"type":"result"')) return { kind: "result" };
-  if (!line.startsWith('{"type":"user"') || !line.includes('"isReplay":true'))
+  if (
+    !line.startsWith("{") ||
+    (!line.includes('"type":"result"') && !line.includes('"isReplay":true'))
+  )
     return undefined;
   try {
-    const event = JSON.parse(line) as { uuid?: unknown; isReplay?: unknown };
-    return event.isReplay === true && typeof event.uuid === "string"
+    const event = JSON.parse(line) as {
+      type?: unknown;
+      uuid?: unknown;
+      isReplay?: unknown;
+    };
+    if (event.type === "result") return { kind: "result" };
+    return event.type === "user" &&
+      event.isReplay === true &&
+      typeof event.uuid === "string"
       ? { kind: "echo", uuid: event.uuid }
       : undefined;
   } catch {
@@ -45,6 +54,7 @@ export class LiveInput {
   private buffer = "";
   private readonly decoder = new StringDecoder("utf8");
   private ended = false;
+  private readonly awaitingEcho = new Set<string>();
   private scanning?: Promise<void>;
   private readonly timer: NodeJS.Timeout;
 
@@ -70,6 +80,7 @@ export class LiveInput {
 
   send(text: string, uuid: string) {
     if (!this.open) return false;
+    this.awaitingEcho.add(uuid);
     this.stdin.write(userLine(text, uuid));
     return true;
   }
@@ -121,8 +132,11 @@ export class LiveInput {
       const line = this.buffer.slice(0, index);
       this.buffer = this.buffer.slice(index + 1);
       const signal = lineSignal(line);
-      if (signal?.kind === "result") this.end();
-      else if (signal?.kind === "echo") this.onEcho(signal.uuid);
+      if (signal?.kind === "result" && !this.awaitingEcho.size) this.end();
+      else if (signal?.kind === "echo") {
+        this.awaitingEcho.delete(signal.uuid);
+        this.onEcho(signal.uuid);
+      }
     }
     if (this.buffer.length > LINE_MAX) this.buffer = "";
   }

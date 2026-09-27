@@ -269,6 +269,7 @@ test("权限、层级、乐观并发、修订追加与导出写回", () => {
   assert.deepEqual(parseDocument(exported, "charter"), {
     fields: { goal: "跑通", report: "每周" },
     body: "# 正文\n",
+    boundaries: [],
   });
   const parsed = parseDocument(exported, "charter");
   editDoc(db, "o3", "charter", { ...parsed, rev: "r1", reason: "写回" }, "a2");

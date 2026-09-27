@@ -12,6 +12,8 @@ import {
   type RevisionRow,
 } from "./model.ts";
 import { exportDocument } from "./validate.ts";
+import { effective, exportBoundaries, summaryLength } from "./boundaries.ts";
+import { allBoundaries, chainLevels } from "./boundary-store.ts";
 
 export function tree(db: DatabaseSync) {
   const list = nodes(db);
@@ -62,12 +64,14 @@ export function show(db: DatabaseSync, address: string, raw?: Doc) {
           updated_at: doc.updated_at,
         }
       : null;
+  const owned = allBoundaries(db);
   if (raw) {
     const found = raw === "charter" ? charter : card;
     return {
       raw: exportDocument(
         found ? (JSON.parse(found.fields) as Record<string, unknown>) : {},
         found?.body ?? "",
+        raw === "charter" ? exportBoundaries(owned.get(n.id) ?? []) : undefined,
       ),
       ref: ref(n.id),
       doc: raw,
@@ -87,8 +91,47 @@ export function show(db: DatabaseSync, address: string, raw?: Doc) {
     });
     current = list.find((item) => item.id === current?.parent_id);
   }
+  const all = nodes(db);
+  const name = (id: number) => all.find((item) => item.id === id)?.name ?? "";
+  const levels = chainLevels(all, owned, n.parent_id);
+  const inherited = new Set(effective(levels).map((e) => e.id));
+  const own = owned.get(n.id) ?? [];
+  const merged = effective([
+    ...levels,
+    { node: n.id, name: n.name, entries: own },
+  ]);
+  const boundaries = {
+    chars: summaryLength(merged),
+    inherited: merged.filter((e) => e.from !== n.id).length,
+    added: merged.filter((e) => e.from === n.id).length,
+    items: merged.map((e) => ({
+      ...e,
+      from: ref(e.from),
+      from_name: name(e.from),
+      set_by: ref(e.set_by),
+      set_by_name: name(e.set_by),
+    })),
+    own: own.map((e) => {
+      const live = merged.find((item) => item.id === e.id)!;
+      const shadowed =
+        e.param && live.param && live.set_by !== n.id
+          ? live.param.value !== e.param.value
+          : false;
+      return {
+        ...e,
+        override: inherited.has(e.id),
+        ...(shadowed
+          ? {
+              shadowed_by: ref(live.set_by),
+              shadowed_by_name: name(live.set_by),
+            }
+          : {}),
+      };
+    }),
+  };
   return {
     ...node,
+    boundaries,
     charter: view(charter),
     card: view(card),
     chain: chain.map((c) => ({
@@ -189,8 +232,26 @@ export function history(
           before: beforeFields[key] ?? null,
           after: afterFields[key] ?? null,
         };
+    if (current.boundaries !== undefined || old.boundaries !== undefined) {
+      type Item = { id: string };
+      const list = (value: unknown) =>
+        new Map(
+          (Array.isArray(value) ? (value as Item[]) : []).map((item) => [
+            item.id,
+            item,
+          ]),
+        );
+      const a = list(old.boundaries),
+        b = list(current.boundaries);
+      for (const id of new Set([...a.keys(), ...b.keys()]))
+        if (JSON.stringify(a.get(id)) !== JSON.stringify(b.get(id)))
+          changes[`boundaries.${id}`] = {
+            before: a.get(id) ?? null,
+            after: b.get(id) ?? null,
+          };
+    }
     for (const key of new Set([...Object.keys(old), ...Object.keys(current)])) {
-      if (key === "fields") continue;
+      if (key === "fields" || key === "boundaries") continue;
       if (JSON.stringify(old[key]) !== JSON.stringify(current[key]))
         changes[key] = {
           before: old[key] ?? null,

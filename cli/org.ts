@@ -5,6 +5,7 @@ import type { Command, Values } from "./main.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import type { Doc } from "../server/org/model.ts";
+import { formatParam, type Param } from "../server/org/boundaries.ts";
 
 const str = (values: Values, key: string) =>
   typeof values[key] === "string" ? (values[key] as string) : undefined;
@@ -18,14 +19,24 @@ const person = (value: string | null) =>
 export function formatOrgChanges(
   changes: Record<string, { before: unknown; after: unknown; diff?: string }>,
 ): string {
+  const boundary = (item: {
+    summary?: string;
+    param?: Record<string, number>;
+  }) =>
+    [
+      item.summary ?? "（文字沿用上层）",
+      ...Object.entries(item.param ?? {}).map(([k, v]) => `${k}=${v}`),
+    ].join(" ");
   const value = (key: string, item: unknown) =>
-    key === "leader" && item === "u1"
-      ? "你"
-      : item == null || item === ""
-        ? "（空）"
-        : typeof item === "string"
-          ? item
-          : JSON.stringify(item);
+    key.startsWith("boundaries.") && item && typeof item === "object"
+      ? boundary(item)
+      : key === "leader" && item === "u1"
+        ? "你"
+        : item == null || item === ""
+          ? "（空）"
+          : typeof item === "string"
+            ? item
+            : JSON.stringify(item);
   const lines: string[] = [];
   for (const [key, change] of Object.entries(changes)) {
     if (key === "doc_path") continue;
@@ -44,6 +55,48 @@ export function formatOrgChanges(
       );
   }
   return lines.join("\n") || "无字段变化";
+}
+type BoundaryView = {
+  chars: number;
+  inherited: number;
+  added: number;
+  items: {
+    id: string;
+    summary: string;
+    param: Param | null;
+    from: string;
+    from_name: string;
+    set_by: string;
+    set_by_name: string;
+  }[];
+  own: {
+    id: string;
+    param: Param | null;
+    shadowed_by?: string;
+    shadowed_by_name?: string;
+  }[];
+};
+/** org show 的硬边界段：生效条目按根→叶，参数显示最严值与出处。 */
+export function formatBoundaries(view: BoundaryView): string[] {
+  if (!view.items.length) return ["硬边界：无"];
+  const width = Math.max(...view.items.map((e) => e.id.length));
+  const lines = [
+    `硬边界（继承 ${view.inherited} + 本节点 ${view.added}，summary 合计 ${view.chars}/1200 字）`,
+    ...view.items.map((e) => {
+      const param = e.param
+        ? `：${formatParam(e.param)}${e.set_by !== e.from ? `（${e.set_by} ${e.set_by_name} 收紧）` : ""}`
+        : "";
+      return `  ${e.id.padEnd(width)}  ${e.summary}${param} · ${e.from} ${e.from_name}`;
+    }),
+  ];
+  for (const own of view.own)
+    if (own.shadowed_by && own.param) {
+      const live = view.items.find((e) => e.id === own.id)!;
+      lines.push(
+        `  本节点 ${own.id} 写的${formatParam(own.param)} 已被上层覆盖：${own.shadowed_by} ${own.shadowed_by_name} 要求${formatParam(live.param!)}`,
+      );
+    }
+  return lines;
 }
 const reason = (values: Values) => {
   const result = str(values, "reason");
@@ -160,6 +213,7 @@ export const orgCommands: Record<string, Command> = {
           body: string;
         } | null;
         chain: { name: string; goal: string }[];
+        boundaries: BoundaryView;
       };
       const lines = [
         `${node.ref} [${node.kind}] ${node.path} · leader ${person(node.leader)}`,
@@ -168,6 +222,7 @@ export const orgCommands: Record<string, Command> = {
           .map((c) => `${c.name}：${c.goal}`)
           .filter((c) => !c.endsWith("："))
           .join(" → ")}`,
+        ...formatBoundaries(node.boundaries),
         `章程 ${node.charter?.rev ?? "r0"}：${JSON.stringify(node.charter?.fields ?? {})}`,
         node.charter?.body ?? "",
         `能力卡 ${node.card?.rev ?? "r0"}：${JSON.stringify(node.card?.fields ?? {})}`,
@@ -279,11 +334,20 @@ export const orgCommands: Record<string, Command> = {
           await client()
         ).patch(`/org/nodes/${path(id!)}${as(values)}`, input);
       }
-      const value = result as { rev: string; before?: string };
+      const value = result as {
+        rev: string;
+        before?: string;
+        converted?: { node: string; id: string }[];
+      };
       out(
         json,
         result,
-        `已更新 ${id} ${target ?? "节点"} ${value.before ?? ""} → ${value.rev}`,
+        [
+          `已更新 ${id} ${target ?? "节点"} ${value.before ?? ""} → ${value.rev}`,
+          ...(value.converted ?? []).map(
+            (c) => `${c.node} 的 ${c.id} 不再覆盖上层，转为该节点自有条目`,
+          ),
+        ].join("\n"),
         `atrium org history ${id}`,
       );
     },

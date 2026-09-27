@@ -162,7 +162,7 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["任务", "角色", "全景", "目标", "组织", "备忘与决定"].flatMap(
+    ...["任务", "专员", "全景", "目标", "组织", "备忘与决定"].flatMap(
       (group) => [
         "",
         group,

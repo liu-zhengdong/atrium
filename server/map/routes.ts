@@ -126,10 +126,14 @@ export function registerMapRoutes(
       : { ...node, tree: mapTree(db, node.ref, parseDepth(query.depth)).tree };
   });
   app.get("/api/map/now", async () => mapNow(db, await live()));
-  // 组织共用的角色、技能、执行者（组织根的页签与角色页、执行者页）。
+  // 组织共用的专员、技能、执行者（组织根与专员页）。旧 roles 路径暂留兼容。
   app.get("/api/map/roles", () => mapRoles(db));
   app.get("/api/map/roles/:id", async (request) =>
     mapRole(db, id(request), await live()),
+  );
+  app.get("/api/map/specialists", () => ({ specialists: mapRoles(db).roles }));
+  app.get("/api/map/specialists/:id", async (request) =>
+    mapRole(db, id(request), await live(), options.workersDir),
   );
   app.get("/api/map/skills", () => mapSkills(db));
   // 负责人（leader）：组织根的页签与负责人页；/api/map/leaders/secretary 是秘书页。

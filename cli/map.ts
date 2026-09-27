@@ -159,7 +159,7 @@ export const mapCommands: Record<string, Command> = {
   map: {
     args: "[节点] [--depth N] [--no-open] [--json]",
     about:
-      "看全景：终端打全景树并打开本机网页（一次性登录链接）；--json 返回节点人话字段、组成、阶段、在跑任务与专员（与网页同一接口）",
+      "看全景：终端打全景树并打开本机网页（一次性登录链接）；--json 返回节点人话字段、组成、阶段与在跑任务（与网页同一接口）",
     options: {
       depth: { type: "string" },
       "no-open": { type: "boolean", default: false },
@@ -243,9 +243,9 @@ export const mapCommands: Record<string, Command> = {
     },
   },
   "map edit": {
-    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--when 什么时候请来] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
+    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
     about:
-      "改一块的人话字段，直接覆盖且不留修订；--when 只用于专员，写什么时候请它；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
+      "改一块的人话字段，直接覆盖且不留修订；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
     options: {
       what: { type: "string" },
       uses: { type: "string", multiple: true },
@@ -262,6 +262,10 @@ export const mapCommands: Record<string, Command> = {
     },
     positionals: [1, 1],
     async run({ positionals: [node], values, json }) {
+      if (str(values, "when") !== undefined)
+        console.error(
+          "--when 已迁到专员的 --invite-when；请用 atrium specialist edit；旧写法暂可用",
+        );
       const detail = str(values, "detail");
       let body: string | undefined;
       if (detail !== undefined)

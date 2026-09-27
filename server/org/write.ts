@@ -548,7 +548,7 @@ export type ImportInput = {
   atrium_goal?: string;
   openquota_goal?: string;
   docs: {
-    kind: "module" | "concern";
+    kind: "module";
     slug: string;
     name: string;
     source: string;
@@ -567,14 +567,12 @@ export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
   for (const doc of input.docs) {
     validateSlug(doc.slug);
     if (
-      !["module", "concern"].includes(doc.kind) ||
-      !/^\.agents\/(modules|concerns)\/(?:[a-z0-9-]|[\u3400-\u9fff]){1,40}\.md$/.test(
+      doc.kind !== "module" ||
+      !/^\.agents\/modules\/(?:[a-z0-9-]|[\u3400-\u9fff]){1,40}\.md$/.test(
         doc.source,
       ) ||
       doc.source.includes("..") ||
-      !doc.source.startsWith(
-        doc.kind === "module" ? ".agents/modules/" : ".agents/concerns/",
-      )
+      !doc.source.startsWith(".agents/modules/")
     )
       throw new Problem(400, "docs 格式错误");
     try {

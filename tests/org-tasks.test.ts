@@ -362,7 +362,7 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
   assert.ok(!plain.includes("章程要点"), "没有节点的任务照旧");
 });
 
-test("org tree 按子树汇总在做／卡住，关注点记投出；org show 列手上的任务", () => {
+test("org tree 按子树汇总在做／卡住，旧关注点不再列出；org show 列手上的任务", () => {
   const db = setup();
   const status = db.prepare("UPDATE tasks SET status=? WHERE id=?");
   const add = (role: string, s: string, from?: string) =>
@@ -376,14 +376,10 @@ test("org tree 按子树汇总在做／卡住，关注点记投出；org show �
   assert.deepEqual(rows.get("o3")!.tasks, { todo: 0, running: 2, blocked: 1 });
   assert.deepEqual(rows.get("o2")!.tasks, { todo: 0, running: 2, blocked: 1 });
   assert.deepEqual(rows.get("o1")!.tasks, { todo: 1, running: 2, blocked: 1 });
-  assert.deepEqual(rows.get("o4")!.sent, { todo: 1, running: 1, blocked: 0 });
+  assert.equal(rows.has("o4"), false);
   assert.equal(
     formatCounts(rows.get("o1")!.tasks, rows.get("o1")!.sent),
     " · 在做 2 · 卡住 1 · 待办 1",
-  );
-  assert.equal(
-    formatCounts(rows.get("o4")!.tasks, rows.get("o4")!.sent),
-    " · 投出 2（在做 1）",
   );
   assert.equal(formatCounts(rows.get("o6")!.sent, rows.get("o6")!.sent), "");
   const recent = (show(db, "o3") as { recent_tasks: { ref: string }[] })

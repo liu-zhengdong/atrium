@@ -196,7 +196,7 @@ export async function prepareRun(
         ? "# 角色：体验巡检\n\n把自己当用户使用 Atrium，找核心体验上的毛病。不读代码、不改代码、不查凭据或权限边界。不直接建改动任务；发现交给节点 leader。"
         : "",
       job
-        ? `# 角色：${job.name}\n\n${job.body}\n\n交付要求：${job.checks.join("、") || "按任务与档案要求"}`
+        ? `# 干活的专员：${job.name}\n\n${job.body}\n\n交付要求：${job.checks.join("、") || "按任务与档案要求"}`
         : "",
       patrol ? "" : docs.roleDoc,
     ]

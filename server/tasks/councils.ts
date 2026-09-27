@@ -4,9 +4,14 @@ import { clipBrief } from "./brief.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, ref, type NodeRow } from "../org/model.ts";
-import { hasOrg } from "../org/task-node.ts";
 import { taskDir } from "./active.ts";
-import { checklistOf, concernsFor } from "./concerns.ts";
+import {
+  checklistOf,
+  concernsFor,
+  specialistsFor,
+  specialistRef,
+} from "./concerns.ts";
+import { getJobRole } from "./job-roles.ts";
 import {
   opinionBrief,
   opinionOf,
@@ -117,14 +122,17 @@ export function topicOf(db: DatabaseSync, id: number): Topic {
     repo: task.repo,
     leader: leaderLabel(db, council.leader_node_id),
     concerns: memberRows(db, id).map((m) => ({
-      ref: ref(m.node_id),
+      ref: specialistRef(m.node_id),
       name: nodeName(db, m.node_id),
     })),
   };
 }
 
 const nodeName = (db: DatabaseSync, id: number) =>
-  one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", id)?.name ?? ref(id);
+  id < 0
+    ? getJobRole(db, `r${-id}`).name
+    : (one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", id)?.name ??
+      ref(id));
 
 const leaderLabel = (db: DatabaseSync, id: number | null) =>
   id === null ? "秘书" : `${nodeName(db, id)}（${ref(id)}）的 leader`;
@@ -151,8 +159,25 @@ function leaderNode(db: DatabaseSync, address: string): NodeRow {
 /** 受邀专员：同 task --concern 的写法，报错里的字段名换成 concerns。 */
 function invited(db: DatabaseSync, value: unknown) {
   try {
-    return concernsFor(db, value);
+    return specialistsFor(db, value);
   } catch (error) {
+    if (error instanceof Problem && error.code === "not_found")
+      try {
+        return concernsFor(db, value);
+      } catch (legacyError) {
+        if (
+          legacyError instanceof Problem &&
+          legacyError.message.startsWith("concern: ")
+        )
+          throw new Problem(
+            legacyError.statusCode,
+            `concerns: ${legacyError.message.slice("concern: ".length)}`,
+            legacyError.code,
+            legacyError.candidates,
+            legacyError.nextCommand,
+          );
+        throw legacyError;
+      }
     if (error instanceof Problem && error.message.startsWith("concern: "))
       throw new Problem(
         error.statusCode,
@@ -186,13 +211,13 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
   if (typeof input.topic !== "string" || !input.topic.trim())
     throw usage(
       "topic: 议题不能为空",
-      "atrium review add 议题 --concerns 安全,质量",
+      "atrium review add 议题 --concerns 前端,后端",
     );
   const topic = input.topic.trim().replace(/\s+/g, " ");
   if (Array.from(topic).length > TOPIC_MAX)
     throw usage(`topic: 议题至多 ${TOPIC_MAX} 字，长内容写进 --brief 文件`);
   if (input.concerns === undefined || input.concerns === "")
-    throw usage("concerns: 至少请一位专员，如 安全,质量");
+    throw usage("concerns: 至少请一位专员，如 前端,后端");
   const comment = input.comment === true;
   if (input.comment !== undefined && typeof input.comment !== "boolean")
     throw usage("comment: 应为 true 或 false");
@@ -210,8 +235,7 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
   if (input.owner !== undefined) ownerOf(input.owner);
   return atomically(db, () => {
     const concerns = invited(db, input.concerns);
-    if (!hasOrg(db) || !concerns.length)
-      throw usage("concerns: 至少请一位专员，如 安全,质量");
+    if (!concerns.length) throw usage("concerns: 至少请一位专员，如 前端,后端");
     const leader = input.leader ? leaderNode(db, String(input.leader)) : null;
     const now = Date.now();
     const parent = createTask(
@@ -260,7 +284,7 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
         {
           title: `会审意见：${checklist.name} · ${topic}`,
           parent: parent.ref,
-          role: checklist.ref,
+          ...(nodeId < 0 ? { job: checklist.ref } : { role: checklist.ref }),
           deliver: "none",
           brief: text,
           brief_path: brief,
@@ -351,7 +375,7 @@ export function opinionsOf(db: DatabaseSync, id: number): OpinionView[] {
       reason: status === "running" ? "正在出意见" : "还没开始",
     };
     return {
-      ref: ref(m.node_id),
+      ref: specialistRef(m.node_id),
       name: nodeName(db, m.node_id),
       task: taskRef(m.opinion_id),
       status,

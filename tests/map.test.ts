@@ -193,7 +193,7 @@ test("全景树与节点：按归属部分汇总任务，专员单列，要点�
   assert.deepEqual(tree!.tasks, { running: 1, blocked: 0, open: 2 });
   assert.equal(tree!.dot, "running");
   assert.equal(tree!.children![0]!.children, undefined, "depth 1 只展开一层");
-  assert.equal(tree!.children![0]!.children_count, 3);
+  assert.equal(tree!.children![0]!.children_count, 2);
   const text = renderMapTree(mapTree(db).tree!).join("\n");
   assert.match(text, /● o1 组织 · 在跑 1 · 待办 1/);
   assert.match(text, / {4}● o3 派活员（runtime）——项目经理 · 在跑 1/);
@@ -232,11 +232,7 @@ test("全景树与节点：按归属部分汇总任务，专员单列，要点�
     atrium.overview.parts.map((p) => p.ref),
     ["o3", "o4"],
   );
-  assert.deepEqual(
-    atrium.concerns.map((p) => p.ref),
-    ["o5"],
-    "专员单列",
-  );
+  assert.equal("concerns" in atrium, false, "节点不带专员栏");
   const before = mapSignature(db);
   point(db, "o4", "新要点");
   assert.notEqual(mapSignature(db), before, "要点变了指纹就变");
@@ -274,15 +270,11 @@ test("全景节点给网页页签用的字段：部分做什么与下面几块�
   };
   assert.equal(runtime.what, "派活和验收");
   assert.equal(runtime.parts, 1, "下面几块不算专员");
-  assert.deepEqual(view.concerns[0]!.invite_when, ["凭据", "server/auth*"]);
-  assert.equal(view.concerns[0]!.watching, 2, "已结的任务不算在盯");
+  assert.equal("concerns" in view, false, "节点不再列专员");
   assert.deepEqual(
     view.points_below.map((l) => [l.node, l.points.map((p) => p.text)]),
-    [
-      ["o7", ["gates 的要点"]],
-      ["o5", ["安全的要点"]],
-    ],
-    "下层部分与专员的要点，深度优先，空块省略",
+    [["o7", ["gates 的要点"]]],
+    "只列下层部分的要点，深度优先，空块省略",
   );
   assert.equal(view.points[0]!.text, "本块要点");
   const queued = view.tasks.recent.find((t) => t.title === "等合入")!;
@@ -418,7 +410,7 @@ test("接口：令牌读写；网页登录链接只能用一次，会话只能�
     url: "/api/map/nodes/atrium?depth=1",
     headers: auth,
   });
-  assert.equal(withTree.json().tree.children.length, 3);
+  assert.equal(withTree.json().tree.children.length, 2);
   const edited = await app.inject({
     method: "PATCH",
     url: "/api/map/nodes/o3?as=a2",

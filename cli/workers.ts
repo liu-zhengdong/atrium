@@ -68,12 +68,14 @@ async function showProfile(ref: string, json: boolean) {
 
 export const workerCommands: Record<string, Command> = {
   workers: {
-    args: "[--role 角色] [--json]",
-    about: "按执行者组合、模型、工具与角色查看交付事实",
-    options: { role: { type: "string" } },
+    args: "[--specialist 专员] [--json]",
+    about: "按执行者组合、模型、工具与干活的专员查看交付事实",
+    options: { role: { type: "string" }, specialist: { type: "string" } },
     positionals: [0, 0],
     async run({ values, json }) {
-      const role = str(values, "role");
+      const role = str(values, "specialist") ?? str(values, "role");
+      if (str(values, "role") !== undefined)
+        console.error("--role 已改为 --specialist；旧写法暂可用");
       const q = role ? `?role=${encodeURIComponent(role)}` : "";
       const data = await (await client()).get<List>(`/workers${q}`);
       if (json) printJson(data);
@@ -83,7 +85,7 @@ export const workerCommands: Record<string, Command> = {
             [
               "层级",
               "执行者",
-              "角色",
+              "专员",
               "次数",
               "一次通过",
               "平均退回",
@@ -246,18 +248,31 @@ export const workerCommands: Record<string, Command> = {
     },
   },
   "workers confirm": {
-    args: "工具+模型[:强度] --role 角色 --action relax|tighten|avoid_role",
+    args: "工具+模型[:强度] --specialist 专员 --action relax|tighten|avoid_specialist",
     about: "秘书确认统计建议后写入组合档案",
-    options: { role: { type: "string" }, action: { type: "string" } },
+    options: {
+      role: { type: "string" },
+      specialist: { type: "string" },
+      action: { type: "string" },
+    },
     positionals: [1, 1],
     async run({ positionals: [worker], values, json }) {
-      const role = str(values, "role"),
-        action = str(values, "action");
-      if (!role?.trim()) throw new Problem(400, "--role 不能为空", "usage");
+      const role = str(values, "specialist") ?? str(values, "role"),
+        suppliedAction = str(values, "action"),
+        action =
+          suppliedAction === "avoid_specialist" ? "avoid_role" : suppliedAction;
+      if (str(values, "role") !== undefined)
+        console.error("--role 已改为 --specialist；旧写法暂可用");
+      if (!role?.trim())
+        throw new Problem(400, "--specialist 不能为空", "usage");
+      if (suppliedAction === "avoid_role")
+        console.error(
+          "--action avoid_role 已改为 avoid_specialist；旧写法暂可用",
+        );
       if (!action || !["relax", "tighten", "avoid_role"].includes(action))
         throw new Problem(
           400,
-          "--action 只能是 relax、tighten、avoid_role",
+          "--action 只能是 relax、tighten、avoid_specialist",
           "usage",
         );
       const result = await (

@@ -135,6 +135,8 @@ export function addMap(db: DatabaseSync, input: MapAdd, actor: string) {
   if (!name) throw usage("名称不能为空");
   const kind = (input.kind ?? CHILD[parent.kind]) as Kind | null;
   if (!kind) throw usage(`${ref(parent.id)} 是关注点，下面不能再加部分`);
+  if (kind === "concern")
+    throw usage("关注点节点已下线；请用 atrium specialist add 创建专员");
   const slug = (input.slug ?? name).trim().toLowerCase();
   if (!/^(?:[a-z0-9-]|[㐀-鿿])+$/.test(slug))
     throw usage(

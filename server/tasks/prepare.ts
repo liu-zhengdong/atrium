@@ -275,7 +275,7 @@ export function pickWorker({
     }
     const jobAvoid = profiles[tool]?.rules.avoid_jobs;
     if (jobRef && Array.isArray(jobAvoid) && jobAvoid.includes(jobRef)) {
-      skipped.push({ tool, reason: `档案 avoid_jobs 避开角色 ${jobRef}` });
+      skipped.push({ tool, reason: `档案 avoid_jobs 避开专员 ${jobRef}` });
       continue;
     }
     const avoided =

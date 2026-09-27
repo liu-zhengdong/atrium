@@ -234,7 +234,7 @@ test("命令行写法：请了谁与各自结论，提示给出请的命令", ()
     ),
     [
       "提示：可能要请「安全」专员（提到「凭据」）",
-      "要请：atrium task set t5 --concern o3，再 atrium task run t5",
+      "要请：atrium task set t5 --ask o3，再 atrium task run t5",
     ],
   );
 });
@@ -534,7 +534,7 @@ test("隔离服务：请了安全专员的任务交付后派审查任务，通�
   const added = await call("POST", "/api/tasks", {
     title: "改登录日志",
     repo: fx.repo,
-    concern: "安全",
+    ask: "安全",
   });
   assert.equal(added.status, 201, JSON.stringify(added.body));
   assert.equal(added.body.concerns[0].name, "安全");
@@ -568,7 +568,7 @@ test("隔离服务：请了安全专员的任务交付后派审查任务，通�
   assert.match(prompt, /底线（越过即否决）：\n- 凭据不进日志、提交与 PR/);
   const reviewTask = (await call("GET", "/api/tasks/t2")).body;
   assert.equal(reviewTask.parent_ref, "t1");
-  assert.equal(reviewTask.node_ref, "o4");
+  assert.equal(reviewTask.job_ref, "r1");
   assert.equal(reviewTask.deliver, "none");
   const reviewPrompt = readFileSync(
     join(data, "tasks", "2", "prompt.md"),
@@ -583,7 +583,7 @@ test("隔离服务：请了安全专员的任务交付后派审查任务，通�
   await call("POST", "/api/tasks", {
     title: "再改登录日志",
     repo: fx.repo,
-    concern: "安全",
+    ask: "安全",
   });
   await call("POST", "/api/tasks/t3/run", { worker: "opencode" });
   const vetoed = await call("GET", "/api/tasks/t3/wait?timeout=20");
@@ -595,7 +595,7 @@ test("隔离服务：请了安全专员的任务交付后派审查任务，通�
   const row = top.rows.find((r: { ref: string }) => r.ref === "t3");
   assert.match(
     row.reason,
-    /专员否决：安全（o4 · t4）：server\/log\.ts 把令牌写进日志/,
+    /专员否决：安全（r1 · t4）：server\/log\.ts 把令牌写进日志/,
   );
   assert.equal(row.concerns[0].verdict, "veto");
   // 负责人收到否决：blocked 事件带原因与专员结论；审查任务本身不单独投递

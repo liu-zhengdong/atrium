@@ -5,6 +5,7 @@ import { hasOrg } from "../org/task-node.ts";
 import { nodePoints } from "../org/points.ts";
 import { ownBoundaries } from "../org/boundary-store.ts";
 import { formatParam } from "../org/boundaries.ts";
+import { getJobRole, listJobRoles } from "./job-roles.ts";
 import { all, one, taskRef, usage } from "./ledger-model.ts";
 import {
   inviteHints,
@@ -22,6 +23,8 @@ import {
  */
 
 export const CONCERNS_MAX = 5;
+export const specialistId = (id: number) => -id;
+export const specialistRef = (id: number) => (id < 0 ? `r${-id}` : ref(id));
 
 export type ConcernRow = {
   task_id: number;
@@ -52,18 +55,19 @@ export function concernsFor(db: DatabaseSync, value: unknown): number[] {
     .map((part) => part.trim())
     .filter(Boolean);
   if (!names.length) return [];
-  if (!hasOrg(db))
-    throw new Problem(
-      400,
-      "concern: 还没有组织树",
-      "usage",
-      undefined,
-      "atrium org import",
-    );
   if (names.length > CONCERNS_MAX)
     throw usage(`concern: 一个任务至多请 ${CONCERNS_MAX} 位专员`);
   const ids: number[] = [];
   for (const name of names) {
+    try {
+      const id = specialistId(getJobRole(db, name).id);
+      if (!ids.includes(id)) ids.push(id);
+      continue;
+    } catch (error) {
+      if (!(error instanceof Problem) || error.statusCode !== 404) throw error;
+    }
+    if (!hasOrg(db))
+      throw usage("concern: 专员不存在；请先用 atrium specialist add 创建");
     let node: NodeRow;
     try {
       node = nodeByAddress(db, name);
@@ -91,6 +95,22 @@ export function concernsFor(db: DatabaseSync, value: unknown): number[] {
     if (!ids.includes(node.id)) ids.push(node.id);
   }
   return ids;
+}
+
+/** 新写法只认组织共用的专员名单。旧 --concern 仍走关注点节点兼容路径。 */
+export function specialistsFor(db: DatabaseSync, value: unknown): number[] {
+  if (value === undefined || value === null || value === "") return [];
+  if (typeof value !== "string")
+    throw usage("ask: 应为专员名称或 rN，多个用逗号分隔");
+  const names = value
+    .split(/[,，、]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (names.length > CONCERNS_MAX)
+    throw usage(`ask: 一个任务至多请 ${CONCERNS_MAX} 位专员`);
+  return [
+    ...new Set(names.map((name) => specialistId(getJobRole(db, name).id))),
+  ];
 }
 
 /** 在调用方的事务里改请的专员：去掉的删行，保留的原样（含本轮审查结论），新请的追加。 */
@@ -132,11 +152,13 @@ export function concernStates(
   ids: readonly number[],
 ): Map<number, ConcernState[]> {
   const map = new Map<number, ConcernState[]>();
-  if (!ids.length || !hasOrg(db)) return map;
+  if (!ids.length) return map;
+  const org = hasOrg(db);
   const rows = all<ConcernRow & { name: string; review_status: string | null }>(
     db,
-    `SELECT c.*, n.name AS name, r.status AS review_status
-       FROM task_concerns c JOIN org_nodes n ON n.id=c.node_id
+    `SELECT c.*, ${org ? "COALESCE(s.name,n.name)" : "s.name"} AS name, r.status AS review_status
+       FROM task_concerns c ${org ? "LEFT JOIN org_nodes n ON n.id=c.node_id AND c.node_id>0" : ""}
+       LEFT JOIN job_roles s ON s.id=-c.node_id AND c.node_id<0
        LEFT JOIN tasks r ON r.id=c.review_id
       WHERE c.task_id IN (${ids.map(() => "?").join(",")})
       ORDER BY c.task_id, c.pos LIMIT 1000`,
@@ -145,7 +167,7 @@ export function concernStates(
   for (const row of rows) {
     const list = map.get(row.task_id) ?? [];
     list.push({
-      ref: ref(row.node_id),
+      ref: specialistRef(row.node_id),
       name: row.name,
       review: row.review_id === null ? null : taskRef(row.review_id),
       review_status: row.review_status,
@@ -193,6 +215,16 @@ const charterFields = (db: DatabaseSync, id: number) => {
 
 /** 专员的清单：章程目标、本节点要点、本节点自己的硬边界（底线）。 */
 export function checklistOf(db: DatabaseSync, nodeId: number): Checklist {
+  if (nodeId < 0) {
+    const specialist = getJobRole(db, `r${-nodeId}`);
+    return {
+      ref: specialist.ref,
+      name: specialist.name,
+      goal: specialist.review_goal || specialist.description,
+      points: specialist.review_points,
+      bottom: specialist.review_bottom,
+    };
+  }
   const node = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", nodeId);
   const goal = charterFields(db, nodeId).goal;
   return {
@@ -211,34 +243,44 @@ export function checklistOf(db: DatabaseSync, nodeId: number): Checklist {
 }
 
 export function checklists(db: DatabaseSync, taskId: number): Checklist[] {
-  if (!hasOrg(db)) return [];
   return concernRows(db, taskId).map((row) => checklistOf(db, row.node_id));
 }
 
 /** 各关注点章程里的 invite_when 规则（没归档的关注点才算）。 */
 export function inviteRules(db: DatabaseSync): InviteRule[] {
-  if (!hasOrg(db)) return [];
-  return all<NodeRow & { fields: string }>(
-    db,
-    `SELECT n.*, d.fields AS fields FROM org_nodes n JOIN org_docs d ON d.node_id=n.id AND d.doc='charter'
+  const specialists = listJobRoles(db)
+    .filter((role) => role.invite_when.length)
+    .map((role) => ({
+      ref: role.ref,
+      name: role.name,
+      when: role.invite_when,
+    }));
+  if (!hasOrg(db)) return specialists;
+  return [
+    ...specialists,
+    ...all<NodeRow & { fields: string }>(
+      db,
+      `SELECT n.*, d.fields AS fields FROM org_nodes n JOIN org_docs d ON d.node_id=n.id AND d.doc='charter'
       WHERE n.kind='concern' AND n.archived_at IS NULL ORDER BY n.id LIMIT 500`,
-  ).flatMap((row) => {
-    let when: unknown;
-    try {
-      when = (JSON.parse(row.fields) as { invite_when?: unknown }).invite_when;
-    } catch {
-      return [];
-    }
-    return Array.isArray(when) && when.length
-      ? [
-          {
-            ref: ref(row.id),
-            name: row.name,
-            when: when.filter((w): w is string => typeof w === "string"),
-          },
-        ]
-      : [];
-  });
+    ).flatMap((row) => {
+      let when: unknown;
+      try {
+        when = (JSON.parse(row.fields) as { invite_when?: unknown })
+          .invite_when;
+      } catch {
+        return [];
+      }
+      return Array.isArray(when) && when.length
+        ? [
+            {
+              ref: ref(row.id),
+              name: row.name,
+              when: when.filter((w): w is string => typeof w === "string"),
+            },
+          ]
+        : [];
+    }),
+  ];
 }
 
 /** 建任务、改任务时的提示：按标题与库里的详述里的关键词。 */
@@ -248,12 +290,10 @@ export function textHints(
 ): InviteHint[] {
   const rules = inviteRules(db);
   if (!rules.length) return [];
-  const invited = new Set(concernRows(db, task.id).map((r) => ref(r.node_id)));
-  return inviteHints(
-    rules,
-    { text: `${task.title}\n${task.brief ?? ""}` },
-    invited,
+  const invited = new Set(
+    concernRows(db, task.id).map((r) => specialistRef(r.node_id)),
   );
+  return inviteHints(rules, { text: `${task.title}\n${task.brief ?? ""}` }, invited);
 }
 
 /** 执行者交付后的提示：按改动的文件。 */
@@ -264,6 +304,8 @@ export function fileHints(
 ): InviteHint[] {
   const rules = inviteRules(db);
   if (!rules.length || !files.length) return [];
-  const invited = new Set(concernRows(db, taskId).map((r) => ref(r.node_id)));
+  const invited = new Set(
+    concernRows(db, taskId).map((r) => specialistRef(r.node_id)),
+  );
   return inviteHints(rules, { files }, invited);
 }

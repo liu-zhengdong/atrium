@@ -10,8 +10,8 @@ export function jobMismatch(
     ),
   ).length;
   if (role === "后端" && ui > files.length / 2)
-    return `任务标为后端，但 ${ui}/${files.length} 个改动文件属于界面，请核对角色`;
+    return `任务标为后端，但 ${ui}/${files.length} 个改动文件属于界面，请核对干活的专员`;
   if (role === "前端" && files.length - ui > files.length / 2)
-    return `任务标为前端，但 ${files.length - ui}/${files.length} 个改动文件属于非界面，请核对角色`;
+    return `任务标为前端，但 ${files.length - ui}/${files.length} 个改动文件属于非界面，请核对干活的专员`;
   return null;
 }

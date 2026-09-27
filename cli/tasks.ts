@@ -163,16 +163,18 @@ function partInput(values: Values): { part?: string; goal?: string } {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--concern 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--job 角色] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--part 写归属哪一部分（全景图上的节点；旧写法 --goal gN 按迁移映射到节点），--concern 请专员（关注点节点，派活附其检查要点，交付后按清单审、可否决），--parent 挂到父任务下，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分，--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；旧 --job、--concern、--role 暂可用",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
     concern: { type: "string" },
+    ask: { type: "string" },
     goal: { type: "string" },
     role: { type: "string" },
     job: { type: "string" },
+    by: { type: "string" },
     from: { type: "string" },
     repo: { type: "string" },
     brief: { type: "string" },
@@ -185,6 +187,16 @@ const add: Command = {
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
+    for (const [old, replacement] of [
+      ["job", "by"],
+      ["concern", "ask"],
+    ])
+      if (str(values, old) !== undefined)
+        console.error(`--${old} 已改为 --${replacement}；旧写法暂可用`);
+    if (str(values, "role") !== undefined)
+      console.error(
+        "--role 已过时；专员用 --by，归属部分用 --part；旧写法暂可用",
+      );
     const parent = str(values, "parent");
     const repo = str(values, "repo");
     const brief = str(values, "brief");
@@ -208,6 +220,7 @@ const add: Command = {
       title,
       ...(parent === undefined ? {} : { parent: ref(parent, "--parent") }),
       ...(str(values, "job") === undefined ? {} : { job: str(values, "job") }),
+      ...(str(values, "by") === undefined ? {} : { by: str(values, "by") }),
       ...(str(values, "role") === undefined
         ? {}
         : { role: str(values, "role") }),
@@ -218,6 +231,7 @@ const add: Command = {
       ...(str(values, "concern") === undefined
         ? {}
         : { concern: str(values, "concern") }),
+      ...(str(values, "ask") === undefined ? {} : { ask: str(values, "ask") }),
       ...(repo === undefined
         ? {}
         : { repo: existing(repo, "--repo", "directory") }),
@@ -370,7 +384,7 @@ const show: Command = {
         ],
         ["详述来源", task.brief_path],
         ["负责人", task.owner],
-        ["角色", task.job_ref],
+        ["干活的专员", task.job_ref],
         ["执行者", task.worker],
         ["进程", task.pid],
         ["工作树", task.worktree],
@@ -455,16 +469,18 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--role 节点] [--job 角色|''] [--from 节点|''] [--part 节点|''] [--concern 专员[,专员]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、归属部分、请的专员（--concern，下一轮派活生效）、详述、交付物、依赖和自动派发`,
+  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、详述、交付物、依赖和自动派发`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
     role: { type: "string" },
     job: { type: "string" },
+    by: { type: "string" },
     from: { type: "string" },
     part: { type: "string" },
     concern: { type: "string" },
+    ask: { type: "string" },
     goal: { type: "string" },
     brief: { type: "string" },
     deliver: { type: "string" },
@@ -476,6 +492,16 @@ const set: Command = {
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
+    for (const [old, replacement] of [
+      ["job", "by"],
+      ["concern", "ask"],
+    ])
+      if (str(values, old) !== undefined)
+        console.error(`--${old} 已改为 --${replacement}；旧写法暂可用`);
+    if (str(values, "role") !== undefined)
+      console.error(
+        "--role 已过时；专员用 --by，归属部分用 --part；旧写法暂可用",
+      );
     const id = ref(reference, "任务");
     const body: Record<string, string | boolean> = {};
     const wanted = str(values, "status");
@@ -489,11 +515,15 @@ const set: Command = {
     if (role !== undefined) body.role = role;
     const job = str(values, "job");
     if (job !== undefined) body.job = job;
+    const by = str(values, "by");
+    if (by !== undefined) body.by = by;
     const from = str(values, "from");
     if (from !== undefined) body.from = from;
     Object.assign(body, partInput(values));
     const concern = str(values, "concern");
     if (concern !== undefined) body.concern = concern;
+    const ask = str(values, "ask");
+    if (ask !== undefined) body.ask = ask;
     const brief = str(values, "brief");
     if (brief === "") body.brief = "";
     else if (brief !== undefined)
@@ -514,7 +544,7 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--role、--job、--from、--part、--concern、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
+        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -526,7 +556,7 @@ const set: Command = {
         [
           `${task.ref} 已更新 · [${task.status}] ${task.title}`,
           ...(role !== undefined ? roleHint(task) : []),
-          ...(concern !== undefined
+          ...(concern !== undefined || ask !== undefined
             ? [
                 task.concerns?.length
                   ? `请了 ${task.concerns.map((c) => `${c.name}（${c.ref}）`).join("、")}：派活时附检查要点，交付后按清单审`

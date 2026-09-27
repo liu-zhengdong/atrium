@@ -1,8 +1,8 @@
 // Atrium 全景网页：只读。数据来自与 `atrium map --json` 相同的接口，
 // 订阅 /api/map/stream 的失效通知，变了只重取并重画，不整页重载。
 // 一页一件东西：面包屑 → 小字类别、大标题、属性行与介绍 → 页签。三类页：
-// - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／角色／技能／执行者／原则，执行者可按角色筛（#o1/workers/r1）；
-// - 角色：#r1/workers，页签是任务／谁做得好／技能；
+// - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／负责人／专员／技能／执行者／原则，执行者可按专员筛（#o1/workers/r1）；
+// - 专员：#r1/workers，页签是任务／谁做得好／技能；
 // - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察；
 // - 负责人（leader）：#a1/events，页签是备忘／决定记录／处理过的事／上交，决定记录可看全部（#a1/decisions/all）；
 // - 秘书：#secretary，页签是备忘／决定记录。
@@ -51,7 +51,6 @@ async function get(path) {
 const PAGE_TABS = {
   node: [
     "parts",
-    "concerns",
     "tasks",
     "leaders",
     "roles",
@@ -201,7 +200,6 @@ const checkLabel = (c) => CHECK[c] ?? c;
 
 const ICON = {
   part: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`,
-  concern: `<svg class="icon icon-concern" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/></svg>`,
   role: `<svg class="icon icon-role" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>`,
   leader: `<svg class="icon icon-leader" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><path d="M5 21v-1.5A5.5 5.5 0 0 1 10.5 14h3a5.5 5.5 0 0 1 5.5 5.5V21"/><path d="M12 14l-1.2 3.5L12 19l1.2-1.5z"/></svg>`,
   skill: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M8 7h6"/></svg>`,
@@ -271,12 +269,12 @@ function spent(t) {
   return duration(end - t.started_at);
 }
 
-/** 任务表：各块与角色页共用；角色页不再列「角色」。 */
+/** 任务表：各块与专员页共用；专员页不再列「专员」。 */
 function taskTable(all, { withRole, empty }) {
   const list =
     state.route.extra === "all" ? all : all.filter((t) => ACTIVE.has(t.tag));
   const heads = withRole
-    ? ["任务", "角色", "状态", "谁在做", "用时", "最近在做"]
+    ? ["任务", "专员", "状态", "谁在做", "用时", "最近在做"]
     : ["任务", "状态", "谁在做", "用时", "最近在做"];
   return table(
     withRole ? "tasks" : "tasks-plain",
@@ -298,7 +296,7 @@ function taskTable(all, { withRole, empty }) {
         : none;
       return `<div class="row" role="row">
         ${cell("任务", taskName(t.ref, t.title, t.by), " name plain task")}
-        ${withRole ? cell("角色", role, t.job ? "" : " none") : ""}
+        ${withRole ? cell("专员", role, t.job ? "" : " none") : ""}
         ${cell("状态", chip(label, tone))}
         ${cell("谁在做", worker ? `<span class="chip chip-soft clip" title="${esc(worker)}">${esc(worker)}</span>` : none, worker ? "" : " none")}
         ${cell("用时", spent(t) || "—", spent(t) ? " muted tagged" : " muted none")}
@@ -312,7 +310,6 @@ function taskTable(all, { withRole, empty }) {
 // ---- 块的页签 ----
 
 const liveParts = (n) => n.overview.parts.filter((p) => !p.archived);
-const liveConcerns = (n) => n.concerns.filter((p) => !p.archived);
 const allPoints = (n) => [
   ...n.points.map((p) => ({ ...p, from: null })),
   ...n.points_below.flatMap((l) =>
@@ -344,40 +341,6 @@ function drawParts({ node: n }) {
       </a>`,
     ),
     "这一块没有再往下分。",
-  );
-}
-
-/** 什么时候请来：优先人话 when（map edit --when）；没写时由派活提示规则拼一句。 */
-function inviteText(q) {
-  if (q.when) return esc(q.when);
-  const rules = q.invite_when ?? [];
-  const words = rules.filter((r) => !isPathRule(r)).slice(0, 4);
-  const paths = rules.filter(isPathRule).slice(0, 3);
-  const parts = [
-    words.length ? `提到${words.map((w) => `「${esc(w)}」`).join("")}` : "",
-    paths.length
-      ? `改到 ${paths.map((p) => `<code>${esc(p)}</code>`).join("、")}`
-      : "",
-  ].filter(Boolean);
-  return parts.length
-    ? `${parts.join("，或")}时`
-    : `<span class="muted">没写，派活时手动请</span>`;
-}
-
-function drawConcerns({ node: n }) {
-  return table(
-    "concerns",
-    ["专员", "盯什么", "什么时候请来", "现在", ""],
-    liveConcerns(n).map(
-      (q) => `<a class="row link" role="row" href="${esc(nodeHref(q.ref))}">
-        ${cell("专员", `${ICON.concern}<span>${esc(title(q))}</span>`, " name")}
-        ${cell("盯什么", q.what ? esc(q.what) : `<span class="muted">还没写</span>`, " text")}
-        ${cell("什么时候请来", inviteText(q), " note tagged")}
-        ${cell("现在", q.watching ? chip(`在盯 ${q.watching} 件`, "purple") : chip("没被请", "gray"))}
-        ${cell("", ICON.go, " go")}
-      </a>`,
-    ),
-    "这一块还没有专员。",
   );
 }
 
@@ -426,15 +389,15 @@ function drawPoints({ node: n }) {
   );
 }
 
-// ---- 组织根：角色、技能、执行者 ----
+// ---- 组织根：专员、技能、执行者 ----
 
 function drawRoles({ org }) {
   return table(
     "roles",
-    ["角色", "干什么活", "优先派给", "交付要求", "在做", ""],
+    ["专员", "干什么活", "优先派给", "交付要求", "在做", ""],
     org.roles.map(
       (r) => `<a class="row link" role="row" href="${esc(roleHref(r.ref))}">
-        ${cell("角色", `${ICON.role}<span>${esc(r.name)}</span>`, " name")}
+        ${cell("专员", `${ICON.role}<span>${esc(r.name)}</span>`, " name")}
         ${cell("干什么活", esc(r.description), " text")}
         ${cell("优先派给", r.preferred.length ? `<span class="chip chip-soft clip" title="${esc(r.preferred.map(workerLabel).join("、"))}">${esc(workerLabel(r.preferred[0]))}</span>` : `<span class="muted">没指定</span>`, r.preferred.length ? "" : " none")}
         ${cell("交付要求", r.checks.length ? esc(r.checks.map(checkLabel).join("、")) : "—", r.checks.length ? " note tagged" : " note none")}
@@ -442,13 +405,13 @@ function drawRoles({ org }) {
         ${cell("", ICON.go, " go")}
       </a>`,
     ),
-    "还没有角色。在终端用 atrium role add 建一个。",
+    "还没有专员。在终端用 atrium specialist add 建一个。",
   );
 }
 
 const onChip = (o) =>
   o.kind === "role"
-    ? chipLink(`角色：${o.name}`, "role", roleHref(o.ref))
+    ? chipLink(`专员：${o.name}`, "role", roleHref(o.ref))
     : chipLink(`部分：${o.name}`, "soft", nodeHref(o.ref));
 
 function skillTable(skills, empty) {
@@ -479,7 +442,7 @@ const ADVICE = {
 function adviceBars(list) {
   return list
     .map((s) => {
-      const role = s.role ?? "未指定角色";
+      const role = s.role ?? "未指定专员";
       const reason = s.reason.startsWith(role)
         ? s.reason.slice(role.length).trim()
         : s.reason;
@@ -492,7 +455,7 @@ function adviceBars(list) {
 const passTone = (rate) =>
   rate >= 0.8 ? "good" : rate >= 0.5 ? "fair" : "poor";
 
-/** 执行者表：一行 = 组合 × 角色；按一次通过率排。角色页不再列「角色」。 */
+/** 执行者表：一行 = 组合 × 专员；按一次通过率排。专员页不再列「专员」。 */
 function workerTable(rows, { withRole, empty }) {
   const sorted = [...rows].sort(
     (a, b) =>
@@ -502,7 +465,7 @@ function workerTable(rows, { withRole, empty }) {
   );
   const heads = [
     "执行者（工具 · 模型 · 强度）",
-    ...(withRole ? ["角色"] : []),
+    ...(withRole ? ["专员"] : []),
     "交付",
     "一次通过",
     "平均打回",
@@ -521,7 +484,7 @@ function workerTable(rows, { withRole, empty }) {
           : `<span class="pass pass-${passTone(w.first_pass_rate)}">${percent(w.first_pass_rate)}</span>`;
       return `<a class="row link" role="row" href="${esc(workerHref(w.worker))}">
         ${cell("执行者", `<span>${esc(workerLabel(w.worker))}</span>`, " name")}
-        ${withRole ? cell("角色", w.role ? chip(w.role, "role") : `<span class="muted small">没指定</span>`) : ""}
+        ${withRole ? cell("专员", w.role ? chip(w.role, "role") : `<span class="muted small">没指定</span>`) : ""}
         ${cell("交付", `${w.deliveries} 次`, " num tagged")}
         ${cell("一次通过", `${pass}${w.low_data ? `<span class="thin">数据少</span>` : ""}`, " pass-cell tagged")}
         ${cell("平均打回", w.average_returns.toFixed(1), " num tagged")}
@@ -548,40 +511,40 @@ function drawWorkers({ org }) {
     withRole: true,
     empty: filter
       ? `${filter.name}还没有交付记录。`
-      : "还没有交付记录；任务做完后按执行者和角色统计在这里。",
+      : "还没有交付记录；任务做完后按执行者和专员统计在这里。",
   })}${rows.length ? WORKERS_FOOT : ""}`;
 }
 
-// ---- 角色页 ----
+// ---- 专员页 ----
 
 function drawRoleTasks({ role }) {
   return taskTable(sortTasks(role.tasks), {
     withRole: false,
     empty: {
-      all: "还没有任务标成这个角色。",
-      active: "这个角色现在没有进行中的任务。",
+      all: "还没有任务标成这个专员。",
+      active: "这个专员现在没有进行中的任务。",
     },
   });
 }
 function drawRoleWorkers({ role }) {
   return `${adviceBars(role.suggestions)}${workerTable(role.workers, {
     withRole: false,
-    empty: "还没有人做过这个角色的活。",
+    empty: "还没有人做过这个专员的活。",
   })}${role.workers.length ? WORKERS_FOOT : ""}`;
 }
 const drawRoleSkills = ({ role }) =>
-  skillTable(role.skills, "这个角色没挂技能。");
+  skillTable(role.skills, "这个专员没挂技能。");
 
 // ---- 执行者页 ----
 
 function drawDeliveries({ worker }) {
   return table(
     "deliveries",
-    ["任务", "角色", "结果", "用时", "经过"],
+    ["任务", "专员", "结果", "用时", "经过"],
     worker.deliveries.map(
       (d) => `<div class="row" role="row">
         ${cell("任务", taskName(d.task, d.title), " name plain task")}
-        ${cell("角色", d.role ? chipLink(d.role.name, "role", roleHref(d.role.ref)) : none, d.role ? "" : " none")}
+        ${cell("专员", d.role ? chipLink(d.role.name, "role", roleHref(d.role.ref)) : none, d.role ? "" : " none")}
         ${cell("结果", chip(d.result.label, `${d.result.tone} strong`))}
         ${cell("用时", d.duration_ms === null ? "—" : duration(d.duration_ms), d.duration_ms === null ? " muted none" : " muted tagged")}
         ${cell("经过", d.story ? esc(d.story) : none, d.story ? " note" : " note none")}
@@ -763,11 +726,6 @@ const TABS = {
     count: (d) => liveParts(d.node).length,
     draw: drawParts,
   },
-  concerns: {
-    label: "专员",
-    count: (d) => liveConcerns(d.node).length,
-    draw: drawConcerns,
-  },
   tasks: {
     label: "任务",
     count: (d) =>
@@ -777,7 +735,7 @@ const TABS = {
     draw: (d) => (d.page === "role" ? drawRoleTasks(d) : drawNodeTasks(d)),
   },
   roles: {
-    label: "角色",
+    label: "专员",
     count: (d) => d.org.roles.length,
     draw: drawRoles,
   },
@@ -836,7 +794,7 @@ const TABS = {
     draw: drawEscalations,
   },
 };
-/** 这一页有哪些页签（第一个是默认）；角色页的「执行者」叫「谁做得好」。 */
+/** 这一页有哪些页签（第一个是默认）；专员页的「执行者」叫「谁做得好」。 */
 function tabsOf(d) {
   if (d.page === "role") return ["tasks", "workers", "skills"];
   if (d.page === "worker") return ["deliveries", "notes"];
@@ -846,14 +804,14 @@ function tabsOf(d) {
       : ["memo", "decisions", "events", "escalations"];
   return d.org
     ? ["parts", "leaders", "roles", "skills", "workers", "points", "findings"]
-    : ["parts", "concerns", "tasks", "points", "findings"];
+    : ["parts", "tasks", "points", "findings"];
 }
 const tabLabel = (d, id) =>
   d.page === "role" && id === "workers" ? "谁做得好" : TABS[id].label;
 
 // ---- 页头：小字类别、标题、属性行、介绍 ----
 
-const KIND = { org: "组织", project: "部分", module: "部分", concern: "专员" };
+const KIND = { org: "组织", project: "部分", module: "部分" };
 const props = (rows) =>
   `<dl class="props">${rows
     .map(
@@ -879,7 +837,7 @@ function heading(d) {
   if (d.page === "role") {
     const r = d.role;
     return {
-      kind: "角色",
+      kind: "专员",
       name: r.name,
       props: props([
         [
@@ -904,7 +862,16 @@ function heading(d) {
           ),
         ],
       ]),
-      intro: [r.description],
+      intro: [
+        r.description,
+        ...(r.review_goal ? [`请来看时：${r.review_goal}`] : []),
+        ...(r.review_points?.length
+          ? [`检查要点：${r.review_points.map((p) => p.text).join("；")}`]
+          : []),
+        ...(r.review_bottom?.length
+          ? [`审查底线：${r.review_bottom.join("；")}`]
+          : []),
+      ],
     };
   }
   if (d.page === "worker") {
@@ -935,7 +902,7 @@ function heading(d) {
           ),
         ],
         [
-          "接过的角色",
+          "接过的专员",
           chips(
             w.stats.filter((s) => s.role).map((s) => chip(s.role, "role")),
             "还没有",
@@ -1008,7 +975,7 @@ function crumbsOf() {
   return d.page === "role"
     ? [
         ...top,
-        { name: "角色", url: nodeHref(root?.ref, "roles") },
+        { name: "专员", url: nodeHref(root?.ref, "roles") },
         { name: d.role.name },
       ]
     : [
@@ -1066,7 +1033,7 @@ const MISSING = {
     `链接里的 <code>${esc(ref)}</code> 不存在，可能已经删掉了。`,
   ],
   role: (ref) => [
-    "找不到这个角色",
+    "找不到这个专员",
     `链接里的 <code>${esc(ref)}</code> 不存在，可能已经删掉了。`,
   ],
   leader: (ref) => [
@@ -1187,12 +1154,12 @@ function fail(error) {
   draw();
 }
 
-/** 取一页的数据；组织根另带角色、技能、执行者。 */
+/** 取一页的数据；组织根另带专员、技能、执行者。 */
 async function fetchPage(route, key) {
   if (route.page === "role")
     return {
       page: "role",
-      role: await get(`/roles/${encodeURIComponent(key)}`),
+      role: await get(`/specialists/${encodeURIComponent(key)}`),
     };
   if (route.page === "worker")
     return {
@@ -1211,7 +1178,7 @@ async function fetchPage(route, key) {
     };
   const [node, roles, skills, workers, leaders] = await Promise.all([
     get(`/nodes/${encodeURIComponent(key)}`),
-    get("/roles"),
+    get("/specialists"),
     get("/skills"),
     get("/workers"),
     get("/leaders"),
@@ -1220,7 +1187,7 @@ async function fetchPage(route, key) {
     page: "node",
     node,
     org: {
-      roles: roles.roles,
+      roles: roles.specialists,
       skills: skills.skills,
       workers,
       leaders: leaders.leaders,

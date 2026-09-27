@@ -36,13 +36,34 @@ const SERVE = join(import.meta.dirname, "fixtures", "fake-opencode-serve.mjs");
 async function until(
   check: () => boolean | Promise<boolean>,
   what: string,
-  ms = 5000,
+  // 本机高负载时一趟要几秒，等不到就报错，不当成偶发失败。
+  ms = 20_000,
 ) {
   const deadline = Date.now() + ms;
   while (!(await check())) {
     if (Date.now() > deadline) throw new Error(`等不到：${what}`);
     await delay(20);
   }
+}
+
+/**
+ * 送入通道的闸门：hold() 握住这一轮取到的事件，等 release() 才交出去；
+ * 放行后重取一次，期间到的事件跟这一批一起走。
+ * 测试用它显式决定「这一批送入看见哪些事件」，不靠两条 publish 挤进同一个攒批窗口。
+ */
+function peekGate() {
+  let held = false;
+  let waiting: (() => void)[] = [];
+  return {
+    hold: () => void (held = true),
+    release: () => {
+      held = false;
+      for (const wake of waiting.splice(0)) wake();
+    },
+    async pass() {
+      while (held) await new Promise<void>((resolve) => waiting.push(resolve));
+    },
+  };
 }
 
 test("秘书的 opencode 数据目录独立：只同步 API key、不带 OAuth、不动用户目录", () => {
@@ -221,6 +242,7 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const inbox = new EventInbox(db);
+  const gate = peekGate();
   let waker: ServeWaker | undefined;
   let running: Promise<void> | undefined;
   try {
@@ -250,15 +272,44 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
 
     const delivered: number[][] = [];
     const wakeCounts: number[] = [];
+    /** 送入登记：deliver 一被叫到就记，早于送入成功，用来看秘书「有没有想送」。 */
+    const registered: number[][] = [];
+    /** 送入通道最近一次交出去的事件编号。 */
+    let peeked: number[] = [];
+    /** 攒着等这一轮结束的事件；秘书握着它们判过几轮忙，就是「忙时排队」的凭据。 */
+    let queued: number[] = [];
+    let busyRounds = 0;
     waker = new ServeWaker({
       source: {
-        peek: async (timeout, signal) =>
-          (await inbox.wait("secretary", timeout, signal, { peek: true }))
-            .events,
-        deliver: async (ids) => inbox.deliver("secretary", ids),
+        peek: async (timeout, signal) => {
+          const first = (
+            await inbox.wait("secretary", timeout, signal, { peek: true })
+          ).events;
+          if (!first.length) return first;
+          // 闸门关着就等测试把这批事件放齐；放行后重取一次，这一批整批交出去。
+          await gate.pass();
+          const events = (
+            await inbox.wait("secretary", 0, signal, { peek: true })
+          ).events;
+          peeked = events.map((event) => event.id);
+          return events;
+        },
+        deliver: async (ids) => {
+          registered.push([...ids]);
+          return inbox.deliver("secretary", ids);
+        },
       },
       session: {
-        status: () => client.status(session),
+        status: async () => {
+          const value = await client.status(session);
+          if (
+            value === "busy" &&
+            queued.length > 0 &&
+            queued.every((id) => peeked.includes(id))
+          )
+            busyRounds += 1;
+          return value;
+        },
         prompt: (text) => client.prompt(session, text),
         messages: (limit) => client.messages(session, limit),
         toast: (message, variant) => client.toast(message, variant),
@@ -279,6 +330,24 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
         key: `t${task}:outcome`,
         detail: { title: `任务${task}` },
       }).id;
+    /** 攒一批送入：握住通道，把这批事件一次放齐，再放行（不靠两条 publish 挤进窗口）。 */
+    const publishBatch = (...tasks: number[]) => {
+      gate.hold();
+      const ids = tasks.map(publish);
+      gate.release();
+      return ids;
+    };
+    const fake = (path: string, body: unknown) =>
+      fetch(`${server.url}${path}?directory=${root}`, {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${Buffer.from("opencode:secret-pw").toString("base64")}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    /** 用户在界面里发话。 */
+    const user = (text: string) => fake("/fake/user", { session, text });
     // 一轮答完：空闲且最后一条是回复（刚送出时服务端还没转 busy，不能只看状态）。
     const settled = async () =>
       (await client.status(session)) === "idle" &&
@@ -289,8 +358,7 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
       ).map((message) => message.parts[0]!.text!.split("\n", 1)[0]!);
 
     // 空闲：攒批后两条合并一次送入，界面弹提示。
-    const a = publish(1);
-    const b = publish(2);
+    const [a, b] = publishBatch(1, 2);
     await until(() => delivered.length === 1, "第一批送入");
     assert.deepEqual(delivered[0], [a, b]);
     await until(
@@ -300,31 +368,30 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
     await until(settled, "第一轮结束");
 
     // 用户在界面里发话、秘书忙：事件等这一轮结束后才送入，排在用户消息之后。
-    await fetch(`${server.url}/fake/user?directory=${root}`, {
-      method: "POST",
-      headers: {
-        authorization: `Basic ${Buffer.from("opencode:secret-pw").toString("base64")}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ session, text: "SLOW 用户的问题" }),
-    });
+    // 这一轮由测试按着不放（HOLD），「忙」多长都不靠固定延时撑着。
+    const question = "HOLD 用户的问题";
+    await user(question);
     await until(
       async () => (await client.status(session)) === "busy",
       "用户这一轮开始",
     );
-    const c = publish(3);
-    const d = publish(4);
-    await delay(200);
-    assert.equal(delivered.length, 1, "忙时不送");
+    const [c, d] = publishBatch(3, 4);
+    queued = [c, d];
+    // 这一轮被按着不放，秘书会一轮轮地重判：判过两轮还没送入，才说明确实在排队。
+    await until(
+      () => busyRounds >= 2 || registered.length > 1,
+      "秘书连着判忙，两条事件留在队列",
+    );
+    assert.equal(registered.length, 1, "忙时不送");
+    await fake("/fake/release", {});
     await until(() => delivered.length === 2, "一轮结束后送入");
     assert.deepEqual(delivered[1], [c, d], "忙时攒下的合并送入");
+    queued = [];
     const texts = await userTexts();
-    assert.equal(texts[1], "SLOW 用户的问题");
+    assert.equal(texts[1], question);
     assert.ok(texts[2]!.startsWith(`${WAKE_PREFIX}2 条`));
     const messages = (await state()).sessions[0]!.messages;
-    const userAt = messages.findIndex(
-      (m) => m.parts[0]!.text === "SLOW 用户的问题",
-    );
+    const userAt = messages.findIndex((m) => m.parts[0]!.text === question);
     assert.equal(
       messages[userAt + 1]!.info.role,
       "assistant",
@@ -344,17 +411,11 @@ test("opencode 原生界面：空闲时送入事件；忙时排队、一轮结�
       "到上限提示",
     );
     assert.equal(delivered.length, 3);
-    await fetch(`${server.url}/fake/user?directory=${root}`, {
-      method: "POST",
-      headers: {
-        authorization: `Basic ${Buffer.from("opencode:secret-pw").toString("base64")}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ session, text: "继续" }),
-    });
+    await user("继续");
     await until(() => delivered.length === 4, "用户发话后继续送入");
     assert.deepEqual(delivered[3], [f]);
   } finally {
+    gate.release();
     waker?.close();
     await running;
     server.close();

@@ -63,6 +63,7 @@ atrium task add "回复一句话" --deliver none
 atrium task pick t4                         # 看候选（只读）：能不能接、账号额度、正忙、交付记录，最上面是推荐与理由
 atrium task run t4 --worker claude          # 派给执行者；不写 --worker 按额度挑，--risk 缺省 low
 atrium task run t5 --urgent                  # 紧急：跳过本机负载限制，排队插到最前
+atrium task run t7 --worker agy             # 还在排队的任务：改派执行者（及 --risk），排队位置不变；新执行者空着就立刻拉起
 atrium task set t6 --priority 普通           # 管方面的部分开的任务缺省「闲时」，改成普通照常排
 atrium task run t6 --host h2                 # 派到指定的执行机器；不写在能接的主机里挑最空的
 atrium task wait t4 --timeout 600           # PR 任务等到合入或卡住；其他任务等到离开 running

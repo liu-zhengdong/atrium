@@ -2,27 +2,33 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
-  statSync,
+  renameSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { oauthOnly, planAuthFile, type Skipped } from "./opencode-auth.ts";
 
 /**
  * 秘书的 opencode（#307 第 3 步）：`opencode serve` + `opencode attach`，Atrium 经服务端接口往同一会话送事件。
  *
  * 数据目录：秘书用独立的 `XDG_DATA_HOME`（`<ATRIUM_DATA>/secretary/opencode-home`），只从用户的
- * opencode 数据目录拷入登录凭据（auth.json、mcp-auth.json），不改用户原目录。opencode 执行者用用户
+ * opencode 数据目录同步 API key 类凭据（auth.json、mcp-auth.json 里的非 OAuth 条目，见 opencode-auth.ts），
+ * 不改用户原目录。opencode 执行者用用户
  * 原目录；同一数据目录的并发会死锁或 SQLITE_BUSY（上游 anomalyco/opencode#29395、#21215），
  * 分开后秘书常开也不挡执行者。不选互斥：秘书会话一开就是几个小时，互斥等于期间 opencode 执行者全停。
  * 配置（`~/.config/opencode`）与状态目录不变，用户的模型、权限、插件设置照常生效。
  */
 
-/** 从用户 opencode 数据目录拷进来的登录凭据。 */
+/** 从用户 opencode 数据目录按条目同步过来的凭据文件（只带 API key 类，见 opencode-auth.ts）。 */
 export const AUTH_FILES = ["auth.json", "mcp-auth.json"] as const;
+
+/** 秘书数据目录里记「上次从用户那边同步了哪些条目」的文件。 */
+const SYNCED = "atrium-synced.json";
 
 /** 秘书 opencode 的 XDG_DATA_HOME。 */
 export function secretaryOpencodeHome(data: string) {
@@ -39,36 +45,84 @@ export function userOpencodeData(env: NodeJS.ProcessEnv = process.env) {
 
 const real = (path: string) => (existsSync(path) ? realpathSync(path) : path);
 
+const readText = (path: string) => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+};
+
+function readSynced(path: string): Record<string, string[]> {
+  try {
+    const value: unknown = JSON.parse(readText(path) ?? "{}");
+    if (typeof value !== "object" || value === null) return {};
+    const result: Record<string, string[]> = {};
+    for (const [file, names] of Object.entries(value))
+      if (Array.isArray(names))
+        result[file] = names.filter((name) => typeof name === "string");
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export type HomeReport = {
+  /** 内容有变、重写了的文件。 */
+  written: string[];
+  /** 秘书用不上的提供商（用户那边只有 OAuth）。 */
+  oauthOnly: string[];
+  /** 没带过来的 MCP 登录。 */
+  mcpSkipped: Skipped[];
+  problems: string[];
+};
+
 /**
- * 备好秘书的数据目录：用户那边的凭据比这边新（或这边没有）就拷一份；只读用户目录。
- * 返回拷入的文件名。两边指向同一目录时什么都不做。
+ * 备好秘书的数据目录：按条目从用户那边同步 API key 类凭据，OAuth 不带（opencode-auth.ts）。
+ * 用户目录只读；秘书那份坏了挪到 `.bad-<时间>` 再重建。两边指向同一目录时什么都不做。
  */
-export function prepareOpencodeHome(home: string, source: string): string[] {
+export function prepareOpencodeHome(home: string, source: string): HomeReport {
+  const report: HomeReport = {
+    written: [],
+    oauthOnly: [],
+    mcpSkipped: [],
+    problems: [],
+  };
   const target = join(home, "opencode");
   mkdirSync(target, { recursive: true, mode: 0o700 });
-  if (real(target) === real(source)) return [];
-  const copied: string[] = [];
+  if (real(target) === real(source)) return report;
+  const syncedPath = join(home, SYNCED);
+  const synced = readSynced(syncedPath);
+  const next: Record<string, string[]> = {};
   for (const name of AUTH_FILES) {
-    const from = join(source, name);
     const to = join(target, name);
-    let fromTime: number;
+    let from: string | undefined;
     try {
-      fromTime = statSync(from).mtimeMs;
-    } catch {
+      from = readText(join(source, name));
+    } catch (error) {
+      report.problems.push(
+        `读不了用户的 opencode ${name}（${(error as NodeJS.ErrnoException).code ?? "未知错误"}），这次不同步`,
+      );
+      next[name] = synced[name] ?? [];
       continue;
     }
-    let toTime = -1;
-    try {
-      toTime = statSync(to).mtimeMs;
-    } catch {
-      // 没有就拷
-    }
-    if (toTime >= fromTime) continue;
-    copyFileSync(from, to);
-    chmodSync(to, 0o600);
-    copied.push(name);
+    const current = readText(to);
+    const plan = planAuthFile(name, from, current, synced[name]);
+    report.problems.push(...plan.problems);
+    next[name] = plan.synced;
+    if (name === "auth.json") report.oauthOnly = oauthOnly(plan);
+    else report.mcpSkipped = plan.skipped;
+    if (plan.content === undefined || plan.content === current) continue;
+    if (current !== undefined && plan.problems.length)
+      renameSync(to, `${to}.bad-${Date.now()}`);
+    writeFileSync(`${to}.tmp`, plan.content, { mode: 0o600 });
+    chmodSync(`${to}.tmp`, 0o600);
+    renameSync(`${to}.tmp`, to);
+    report.written.push(name);
   }
-  return copied;
+  writeFileSync(syncedPath, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+  return report;
 }
 
 /**
@@ -237,6 +291,16 @@ export class OpencodeClient {
       undefined,
       { limit: String(limit) },
     );
+  }
+
+  /** 缺省模型（`提供商/模型`）；读不到时 undefined。 */
+  async model(): Promise<string | undefined> {
+    try {
+      const config = await this.call<{ model?: unknown }>("GET", "/config");
+      return typeof config?.model === "string" ? config.model : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** 在 attach 的界面里弹提示；不碰输入框。 */

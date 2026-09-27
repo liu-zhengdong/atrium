@@ -13,6 +13,7 @@ import {
 } from "./acp.ts";
 import { recordNext } from "./contract.ts";
 import { eventLine } from "./events.ts";
+import { mcpHint, oauthHint } from "./opencode-auth.ts";
 import { clip } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 import {
@@ -225,11 +226,20 @@ function eventSource(api: Api) {
   };
 }
 
-/** 秘书 opencode 的环境：独立数据目录，登录凭据从用户目录拷入（只读用户目录）。 */
+/**
+ * 秘书 opencode 的环境：独立数据目录，只从用户目录同步 API key 类凭据（只读用户目录）。
+ * 返回的 hint 在知道所用模型后调用，其提供商只有 OAuth 登录时给出提示。
+ */
 function secretaryEnvironment(data: string, password?: string) {
   const home = secretaryOpencodeHome(data);
-  prepareOpencodeHome(home, userOpencodeData());
-  return opencodeEnvironment(agentEnvironment(), { home, password });
+  const report = prepareOpencodeHome(home, userOpencodeData());
+  for (const problem of report.problems) console.error(`[atrium] ${problem}`);
+  const mcp = mcpHint(home, report.mcpSkipped);
+  if (mcp) console.error(`[atrium] ${mcp}`);
+  return {
+    env: opencodeEnvironment(agentEnvironment(), { home, password }),
+    hint: (model?: string) => oauthHint(home, report.oauthOnly, model),
+  };
 }
 
 /** opencode 原生界面：起 serve、建或接上会话，attach 占前台；期间按唤醒规则经服务端送事件。 */
@@ -241,7 +251,7 @@ async function runNative(options: {
 }) {
   const { api, data, cwd } = options;
   const password = newPassword();
-  const env = secretaryEnvironment(data, password);
+  const { env, hint } = secretaryEnvironment(data, password);
   let server;
   try {
     server = await startOpencodeServe({ cwd, env });
@@ -260,6 +270,8 @@ async function runNative(options: {
   let running: Promise<void> | undefined;
   try {
     const client = new OpencodeClient(server.url, cwd, password);
+    const warning = hint(await client.model());
+    if (warning) console.error(`[atrium] ${warning}`);
     const store = sessionStore(data, "opencode");
     const previous = options.fresh ? undefined : store.load();
     const resumed =
@@ -351,12 +363,20 @@ export const chatCommand: Command = {
       },
     });
     let chat: SecretaryChat | undefined;
+    let env = agentEnvironment();
+    if (mode.native) {
+      const secretary = secretaryEnvironment(data);
+      env = secretary.env;
+      // ACP 路径拿不到 opencode 的缺省模型：列出只有 OAuth 的提供商。
+      const warning = secretary.hint();
+      if (warning) console.error(`[atrium] ${warning}`);
+    }
     const connection = new AcpConnection(
       mode.command,
       mode.args,
       {
         cwd,
-        env: mode.native ? secretaryEnvironment(data) : agentEnvironment(),
+        env,
       },
       {
         update: (sessionId, update) => chat?.update(sessionId, update),

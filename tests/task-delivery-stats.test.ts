@@ -10,13 +10,13 @@ import {
 import { createJobRole } from "../server/tasks/job-roles.ts";
 import {
   deliveryFacts,
-  deliveryMetrics,
+  latestDeliveryByWorkerJob,
   latestDeliveryTaskId,
   listDeliveries,
+  recomputeAllDeliveryFacts,
   summarizeDeliveries,
-  summarizeMetrics,
+  workerStats,
   type Delivery,
-  type DeliveryMetric,
   type DeliveryRow,
 } from "../server/tasks/delivery-records.ts";
 import {
@@ -27,8 +27,9 @@ import {
 } from "../server/tasks/ledger-model.ts";
 
 /**
- * 交付统计改 SQL 聚合（t123）的守护检查：语句数与交付数无关、查询计划不扫整张交付表、
- * 结果与改前（逐条回表的旧实现）逐字段一致。全部用内存库，不依赖本机数据。
+ * 交付统计改 SQL 聚合（t123）的守护检查：事实落库并在事件写入时增量维护、启动迁移回填；
+ * 统计走 SQL 聚合，语句数与交付数无关、查询计划不扫整张交付表；结果与改前逐字段一致。
+ * 全部用内存库，不依赖本机数据。
  */
 
 /** 改前的 listDeliveries：每条交付回表读任务、逐条翻事件、查用量与岗位。只用于对照。 */
@@ -75,16 +76,29 @@ function oldListDeliveries(db: DatabaseSync): Delivery[] {
   });
 }
 
-const metricOfDelivery = (d: Delivery): DeliveryMetric => ({
+type StoredFacts = {
+  id: number;
+  first_pass: number | null;
+  duration_ms: number | null;
+  gate_return_count: number;
+  merge_return_count: number;
+  incident_count: number;
+};
+const readStored = (db: DatabaseSync) =>
+  all<StoredFacts>(
+    db,
+    "SELECT id,first_pass,duration_ms,gate_return_count,merge_return_count,incident_count FROM task_deliveries ORDER BY id",
+  ).map((r) => ({
+    id: r.id,
+    first_pass: r.first_pass,
+    duration_ms: r.duration_ms,
+    gate_return_count: r.gate_return_count,
+    merge_return_count: r.merge_return_count,
+    incident_count: r.incident_count,
+  }));
+const expectedFacts = (d: Delivery): StoredFacts => ({
   id: d.id,
-  task_id: d.task_id,
-  worker: d.worker,
-  tool: d.tool,
-  model: d.model,
-  job_id: d.job_id,
-  job_name: d.job_name,
-  ended_at: d.ended_at,
-  first_pass: d.first_pass,
+  first_pass: d.first_pass === null ? null : d.first_pass ? 1 : 0,
   duration_ms: d.duration_ms,
   gate_return_count: d.gate_return_count,
   merge_return_count: d.merge_returns.length,
@@ -186,21 +200,85 @@ function richDb() {
   );
   finish(switched, 2000);
 
-  // 有专员、但还没结束的：统计里不算，明细里有。
+  // 有专员、但还没结束的：统计里不算，事实列里 first_pass/duration 为空。
   const running = run("进行中", claude, role.ref);
 
   return { db, role, running };
 }
 
-test("交付统计与改前逐字段一致（小库对照旧实现）", () => {
+test("事实列在事件写入时增量维护，与改前逐字段一致", () => {
   const { db } = richDb();
   const old = oldListDeliveries(db);
-  const metrics = deliveryMetrics(db);
+  assert.deepEqual(readStored(db), old.map(expectedFacts).sort(byId));
+  db.close();
+});
+
+test("workerStats 的聚合结果与改前 summarizeDeliveries 一致", () => {
+  const { db, role } = richDb();
+  const old = oldListDeliveries(db);
+  assert.deepEqual(workerStats(db), summarizeDeliveries(old));
   assert.deepEqual(
-    metrics.slice().sort(byId),
-    old.map(metricOfDelivery).sort(byId),
+    workerStats(db, { job: role.id }),
+    summarizeDeliveries(old.filter((d) => d.job_id === role.id)),
   );
-  assert.deepEqual(summarizeMetrics(metrics), summarizeDeliveries(old));
+  assert.deepEqual(
+    workerStats(db, { worker: "codex+gpt-6-sol:high" }),
+    summarizeDeliveries(old.filter((d) => d.worker === "codex+gpt-6-sol:high")),
+  );
+  // 没有专员时只看最近一千条、不区分专员（与旧行为一致）。
+  assert.deepEqual(
+    workerStats(
+      db,
+      { worker: "codex+gpt-6-sol:high" },
+      { limitPerWorker: 1000, roleNull: true },
+    ),
+    summarizeDeliveries(
+      old
+        .filter((d) => d.worker === "codex+gpt-6-sol:high")
+        .slice(0, 1000)
+        .map((d) => ({ ...d, job_name: null })),
+    ),
+  );
+  db.close();
+});
+
+test("旧库迁移：补出事实列并按事件回填，结果与旧实现一致", () => {
+  const { db } = richDb();
+  const old = oldListDeliveries(db);
+  const expected = old.map(expectedFacts).sort(byId);
+  // 还原成没有事实列的旧库，再走一次启动迁移。
+  db.exec(
+    "DROP INDEX IF EXISTS task_deliveries_facts; DROP INDEX IF EXISTS task_deliveries_job_facts; DROP INDEX IF EXISTS task_deliveries_missing_facts; DROP INDEX IF EXISTS task_deliveries_med_worker; DROP INDEX IF EXISTS task_deliveries_med_model; DROP INDEX IF EXISTS task_deliveries_med_tool;",
+  );
+  for (const column of [
+    "first_pass",
+    "gate_return_count",
+    "merge_return_count",
+    "incident_count",
+    "incident_flags",
+    "gate_passed",
+    "duration_ms",
+  ])
+    db.exec(`ALTER TABLE task_deliveries DROP COLUMN ${column}`);
+  ensureTaskTables(db);
+  assert.deepEqual(readStored(db), expected);
+  db.close();
+});
+
+test("latestDeliveryByWorkerJob 与旧实现的最近一条一致", () => {
+  const { db } = richDb();
+  const latest = new Map<string, Delivery>();
+  for (const d of oldListDeliveries(db)) {
+    const key = `${d.worker}\u0000${d.job_name ?? ""}`;
+    if (!latest.has(key) || d.id > latest.get(key)!.id) latest.set(key, d);
+  }
+  const got = latestDeliveryByWorkerJob(db);
+  assert.equal(got.length, latest.size);
+  for (const row of got)
+    assert.equal(
+      row.task_id,
+      latest.get(`${row.worker}\u0000${row.role ?? ""}`)!.task_id,
+    );
   db.close();
 });
 
@@ -232,7 +310,7 @@ test("latestDeliveryTaskId 取最近一条交付", () => {
   db.close();
 });
 
-/** 直接灌 N 条交付：一任务一次交付，混入关卡、合入退回、卡死事件。 */
+/** 直接灌 N 条交付与事件：一任务一次交付，混入关卡、合入退回、卡死事件；随后按事件回填事实。 */
 function seeded(size: number, db = new DatabaseSync(":memory:")) {
   ensureTaskTables(db);
   db.exec("BEGIN");
@@ -279,6 +357,7 @@ function seeded(size: number, db = new DatabaseSync(":memory:")) {
       );
   }
   db.exec("COMMIT");
+  recomputeAllDeliveryFacts(db);
   return db;
 }
 
@@ -305,68 +384,72 @@ function counting(db: DatabaseSync) {
   };
 }
 
-test("交付统计的语句数与交付数无关，查询计划不扫整张交付表", () => {
+test("统计的语句数与交付数无关，查询计划不扫整张交付表", () => {
   const small = seeded(20);
   const c1 = counting(small);
-  const smallMetrics = deliveryMetrics(small);
+  workerStats(small);
   const smallCount = c1.read();
   const smallSqls = c1.sqls;
   c1.restore();
-  assert.equal(smallMetrics.length, 20);
+  assert.ok(smallCount > 0);
 
   const big = seeded(15000);
   const c2 = counting(big);
-  const bigMetrics = deliveryMetrics(big);
+  const bigStats = workerStats(big);
   const bigCount = c2.read();
   const bigSqls = c2.sqls;
   c2.restore();
-  assert.equal(bigMetrics.length, 15000);
   assert.equal(bigCount, smallCount, "语句数应随交付数保持不变");
+  assert.ok(bigStats.some((s) => s.deliveries > 0));
 
-  // 交付筛选按 worker / job 走索引，无过滤走覆盖索引，都不整表扫描。
+  // 每条统计 SQL 里交付表都要走索引（无过滤走覆盖索引），不能整表扫描。
+  let covering = false;
   for (const sql of [...smallSqls, ...bigSqls]) {
     if (!sql.includes("task_deliveries")) continue;
     const plan = big.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as {
       detail: string;
     }[];
-    for (const step of plan)
-      if (step.detail.includes("task_deliveries"))
-        assert.match(
-          step.detail,
-          /USING/,
-          `交付表整表扫描：${step.detail}\n${sql}`,
-        );
+    for (const step of plan) {
+      if (!step.detail.includes("task_deliveries")) continue;
+      assert.match(step.detail, /USING/, `交付表整表扫描：${step.detail}`);
+      if (step.detail.includes("COVERING INDEX")) covering = true;
+    }
   }
-  // 分页明细：条数封顶，语句数同样与总数无关。
-  const d1 = counting(small);
-  listDeliveries(small, { worker: "codex+gpt-6-sol", limit: 200 });
-  const listSmall = d1.read();
-  d1.restore();
-  const d2 = counting(big);
-  listDeliveries(big, { worker: "codex+gpt-6-sol", limit: 200 });
-  const listBig = d2.read();
-  d2.restore();
-  assert.equal(listBig, listSmall, "明细语句数应随交付数保持不变");
+  assert.ok(covering, "无过滤统计应走覆盖索引");
+
+  // 最近一条交付：语句数同样与总数无关。
+  const l1 = counting(small);
+  latestDeliveryByWorkerJob(small);
+  const listSmall = l1.read();
+  l1.restore();
+  const l2 = counting(big);
+  latestDeliveryByWorkerJob(big);
+  const listBig = l2.read();
+  l2.restore();
+  assert.equal(listBig, listSmall, "最近一条交付的语句数应随交付数保持不变");
 
   small.close();
   big.close();
 });
 
-test("按 worker 过滤的交付统计走索引而非整表", () => {
+test("按 worker / job 过滤的统计走索引而非整表", () => {
   const db = seeded(2000);
   const c = counting(db);
-  deliveryMetrics(db, { worker: "codex+gpt-6-sol" });
+  workerStats(db, { worker: "codex+gpt-6-sol" });
+  workerStats(db, { job: 1 });
   const sqls = c.sqls;
   c.restore();
   const plans = sqls
     .filter(
-      (sql) => sql.includes("FROM task_deliveries") && sql.includes("worker=?"),
+      (sql) =>
+        sql.includes("FROM task_deliveries") &&
+        (sql.includes("worker=?") || sql.includes("job_id=?")),
     )
     .flatMap(
       (sql) =>
         db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[],
     );
-  assert.ok(plans.length > 0, "应有按 worker 过滤的查询");
+  assert.ok(plans.length > 0, "应有按 worker / job 过滤的查询");
   assert.ok(
     plans.some((step) => /SEARCH task_deliveries USING/.test(step.detail)),
     plans.map((p) => p.detail).join("\n"),

@@ -4,11 +4,10 @@ import { atomically, one } from "./ledger-model.ts";
 import { getJobRole } from "./job-roles.ts";
 import {
   adviceFor,
-  deliveryMetrics,
+  latestDeliveryByWorkerJob,
   latestDeliveryTaskId,
   listDeliveries,
-  summarizeMetrics,
-  type DeliveryMetric,
+  workerStats,
   type WorkerStat,
 } from "./delivery-records.ts";
 import { modelKey, parseWorker, resolveWorker, TRUSTS } from "./profiles.ts";
@@ -19,22 +18,24 @@ import type { EventInbox } from "./events.ts";
 /** `workers show` / 执行者页展示的交付明细上限；统计仍看全部交付。 */
 const DELIVERY_DETAIL_LIMIT = 200;
 
-/** 每位执行者×专员最近一条交付的任务短号（一次遍历，不按建议条数查库）。 */
-function latestByWorkerRole(metrics: readonly DeliveryMetric[]) {
-  const latest = new Map<string, DeliveryMetric>();
-  for (const row of metrics) {
-    const key = `${row.worker}\u0000${row.job_name ?? ""}`;
-    const prev = latest.get(key);
-    if (!prev || row.id > prev.id) latest.set(key, row);
-  }
-  return latest;
+type LatestDelivery = { task_id: number; job_id: number | null };
+/** 每位执行者×专员最近一条交付（SQL 取好），建议只认这一条。 */
+function latestMap(
+  rows: ReturnType<typeof latestDeliveryByWorkerJob>,
+): Map<string, LatestDelivery> {
+  const map = new Map<string, LatestDelivery>();
+  for (const row of rows)
+    map.set(`${row.worker}\u0000${row.role ?? ""}`, {
+      task_id: row.task_id,
+      job_id: row.job_id,
+    });
+  return map;
 }
 function pendingSuggestions(
   db: DatabaseSync,
-  metrics: DeliveryMetric[],
+  latest: ReadonlyMap<string, LatestDelivery>,
   stats: WorkerStat[],
 ) {
-  const latest = latestByWorkerRole(metrics);
   return stats.flatMap((stat) => {
     const advice = adviceFor(stat);
     if (!advice) return [];
@@ -63,16 +64,8 @@ function pendingSuggestions(
 
 export async function workersReport(db: DatabaseSync, role?: string) {
   const job = role ? getJobRole(db, role) : undefined;
-  const metrics = deliveryMetrics(db, { job: job?.id });
-  const ids = [
-    ...new Set(
-      metrics.flatMap((r) => [
-        r.worker,
-        r.model ? `${r.tool}+${r.model}` : r.tool,
-        r.tool,
-      ]),
-    ),
-  ];
+  const counts = workerStats(db, { job: job?.id });
+  const ids = [...new Set(counts.map((s) => s.worker))];
   const trust = new Map(
     await Promise.all(
       ids.map(
@@ -86,21 +79,26 @@ export async function workersReport(db: DatabaseSync, role?: string) {
       ),
     ),
   );
-  const stats = summarizeMetrics(metrics, trust);
+  const stats = counts.map((s) => ({
+    ...s,
+    trust: trust.get(s.worker) ?? null,
+  }));
+  const latest = latestMap(latestDeliveryByWorkerJob(db, { job: job?.id }));
   return {
     role: job ?? null,
     stats,
-    suggestions: pendingSuggestions(db, metrics, stats),
+    suggestions: pendingSuggestions(db, latest, stats),
   };
 }
 export async function workerReport(db: DatabaseSync, worker: string) {
   parseWorker(worker);
   const resolved = await resolveWorker(worker, db);
-  const metrics = deliveryMetrics(db, { worker: resolved.id });
-  const stats = summarizeMetrics(
-    metrics,
-    new Map([[resolved.id, resolved.profile.rules.trust ?? "unknown"]]),
-  ).filter((s) => s.scope === "combination");
+  const stats = workerStats(db, { worker: resolved.id })
+    .filter((s) => s.scope === "combination")
+    .map((s) => ({
+      ...s,
+      trust: resolved.profile.rules.trust ?? "unknown",
+    }));
   // 统计看全部交付；明细只给最近一段（网页与命令行都只展示这些）。
   const deliveries = listDeliveries(db, {
     worker: resolved.id,
@@ -114,7 +112,11 @@ export async function workerReport(db: DatabaseSync, worker: string) {
     profile: resolved.profile,
     stats,
     deliveries,
-    suggestions: pendingSuggestions(db, metrics, stats),
+    suggestions: pendingSuggestions(
+      db,
+      latestMap(latestDeliveryByWorkerJob(db, { worker: resolved.id })),
+      stats,
+    ),
   };
 }
 /** 有充分样本才提醒秘书；按统计条件变化去重，确认前只生成建议。 */
@@ -129,21 +131,21 @@ export function publishWorkerAdvice(
     taskId,
   );
   if (!task?.job_id || !task.worker) return;
-  const metrics = deliveryMetrics(db, {
+  if (
+    !one(
+      db,
+      "SELECT 1 FROM task_deliveries WHERE task_id=? AND worker=? AND job_id=? LIMIT 1",
+      taskId,
+      task.worker,
+      task.job_id,
+    )
+  )
+    return;
+  const stats = workerStats(db, {
     job: task.job_id,
     worker: task.worker,
-  });
-  let last: DeliveryMetric | undefined;
-  for (const row of metrics)
-    if (row.task_id === taskId && (!last || row.id > last.id)) last = row;
-  if (!last || last.job_id === null) return;
-  const roleRef = `r${last.job_id}`;
-  const stats = summarizeMetrics(metrics).filter(
-    (s) =>
-      s.scope === "combination" &&
-      s.worker === last!.worker &&
-      s.role === last!.job_name,
-  );
+  }).filter((s) => s.scope === "combination");
+  const roleRef = `r${task.job_id}`;
   for (const stat of stats) {
     const advice = adviceFor(stat);
     if (!advice) return;

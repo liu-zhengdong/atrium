@@ -1,11 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { detectInstalled, type Tool } from "./adapters/index.ts";
 import { readQuotaReservePercent } from "./budget.ts";
-import {
-  deliveryMetrics,
-  summarizeMetrics,
-  type WorkerStat,
-} from "./delivery-records.ts";
+import { workerStats, type WorkerStat } from "./delivery-records.ts";
 import { getJobRole } from "./job-roles.ts";
 import type { Task } from "./ledger.ts";
 import { pickView, type PickCandidateFact, type PickRecord } from "./pick.ts";
@@ -56,9 +52,7 @@ export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
   const headroom = quotaHeadroom(db, nodeId ?? null, pace, reservePercent);
   const installed = detectInstalled(options.env.PATH ?? "");
   const job = task.job_id ? getJobRole(db, `r${task.job_id}`) : null;
-  const jobStats = job
-    ? summarizeMetrics(deliveryMetrics(db, { job: job.id }))
-    : [];
+  const jobStats = job ? workerStats(db, { job: job.id }) : [];
   const names: { name: string; preferred: number | null }[] = [
     ...(job ? rankRoleWorkers(job.preferred, jobStats, job.name) : []).map(
       (name, index) => ({ name, preferred: index }),
@@ -96,10 +90,10 @@ export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
       ? recordOf(jobStats, candidate.worker, job.name)
       : // 没有专员时只按执行者看最近一千条，不区分专员（与旧行为一致）。
         recordOf(
-          summarizeMetrics(
-            deliveryMetrics(db, { worker: candidate.worker }, 1000).map(
-              (row) => ({ ...row, job_name: null }),
-            ),
+          workerStats(
+            db,
+            { worker: candidate.worker },
+            { limitPerWorker: 1000, roleNull: true },
           ),
           candidate.worker,
           null,

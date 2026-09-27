@@ -6,6 +6,7 @@ import type { Deliver } from "./deliver.ts";
 import type { NoteView } from "./notes.ts";
 import type { ConcernState, InviteHint } from "./concern-gate.ts";
 import type { Holder } from "./holder.ts";
+import { applyDeliveryEvent } from "./delivery-records.ts";
 
 export type TaskRow = {
   id: number;
@@ -205,16 +206,15 @@ export function addEvent(
   kind: string,
   detail?: unknown,
 ) {
-  db.prepare(
-    "INSERT INTO task_events(task_id,at,kind,detail) VALUES (?,?,?,?)",
-  ).run(
-    id,
-    at,
-    kind,
+  const encoded =
     detail === undefined
       ? null
       : typeof detail === "string"
         ? detail
-        : JSON.stringify(detail),
-  );
+        : JSON.stringify(detail);
+  db.prepare(
+    "INSERT INTO task_events(task_id,at,kind,detail) VALUES (?,?,?,?)",
+  ).run(id, at, kind, encoded);
+  // 交付统计事实（#t123）随事件增量维护：只认统计相关的事件，其余这里直接返回。
+  applyDeliveryEvent(db, id, kind, detail);
 }

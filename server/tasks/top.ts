@@ -8,6 +8,8 @@ import {
 import { FINISHED, type TaskStatus } from "./state.ts";
 import { noteView, type NoteView } from "./notes.ts";
 import { tellCounts } from "./tell-ledger.ts";
+import { concernStates } from "./concerns.ts";
+import type { ConcernState } from "./concern-gate.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -36,6 +38,8 @@ export type TopRow = NoteView & {
   updated_at: number;
   /** 捎话条数与其中还没送达的（#307）；没有捎话为 null。 */
   tells: { total: number; pending: number } | null;
+  /** 请了的专员与本轮结论（#322）；没请为 null。 */
+  concerns?: ConcernState[] | null;
 };
 
 const FINISHED_STATUSES = [...FINISHED] as TaskStatus[];
@@ -117,6 +121,14 @@ export function reasonOf(events: TaskEventRow[], kind: string) {
   }
 }
 
+/** 两类事件里哪一类更新（按自增 id）；都没有为 null。 */
+function latestOf(events: TaskEventRow[], a: string, b: string) {
+  const idOf = (kind: string) =>
+    events.findLast((event) => event.kind === kind)?.id ?? 0;
+  const [x, y] = [idOf(a), idOf(b)];
+  return x === 0 && y === 0 ? null : x > y ? a : b;
+}
+
 /** 看板的每一行：账本字段 + 排队时刻与执行者 + 排队或受阻的原因。 */
 export function topRows(
   db: DatabaseSync,
@@ -142,7 +154,7 @@ export function topRows(
     // 每个任务只留最近一条 queued 与 block；索引是 (task_id,id)，倒序取完再正序攒回去。
     for (const event of all<TaskEventRow>(
       db,
-      `SELECT * FROM task_events WHERE task_id IN (${marks}) AND kind IN ('queued','block')
+      `SELECT * FROM task_events WHERE task_id IN (${marks}) AND kind IN ('queued','block','concern_gate')
         ORDER BY task_id, id DESC`,
       ...ids,
     )) {
@@ -153,6 +165,7 @@ export function topRows(
     }
   }
   const tells = tellCounts(db, ids);
+  const concerns = concernStates(db, ids);
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
@@ -168,8 +181,15 @@ export function topRows(
       ended_at: row.ended_at,
       updated_at: row.updated_at,
       queued_at: waiting?.queued_at ?? null,
-      reason: reasonOf(history, "queued") ?? reasonOf(history, "block"),
+      reason:
+        reasonOf(history, "queued") ??
+        // 专员关卡的结论晚于受阻事件：否决或没出结论的原因以它为准。
+        (latestOf(history, "concern_gate", "block") === "concern_gate" &&
+        row.status === "blocked"
+          ? reasonOf(history, "concern_gate")
+          : reasonOf(history, "block")),
       tells: tells.get(row.id) ?? null,
+      concerns: concerns.get(row.id) ?? null,
       ...noteView(db, row.id, row.status),
     };
   });

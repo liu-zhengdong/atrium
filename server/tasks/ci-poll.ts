@@ -3,6 +3,7 @@ import { readCi } from "./facts.ts";
 import { ciUnavailableReason } from "./ci-classify.ts";
 import { exec as defaultExec, type Exec } from "./git.ts";
 import { advanceTask, patchRunFields, taskRef, type Task } from "./ledger.ts";
+import { concernsOf } from "./concerns.ts";
 
 /**
  * CI 轮询（#262 外部事件源第一版）：只查账本里 ci=pending、有 PR 且未完成或取消的任务，每轮有上限。
@@ -60,7 +61,9 @@ export async function pollCiOnce(
     if (
       ci === "success" &&
       row.status === "blocked" &&
-      awaitingCi(db, row.id)
+      awaitingCi(db, row.id) &&
+      // 请了专员的，本轮都通过才补判；否则由专员关卡在全部出结论时补判。
+      concernsOf(db, row.id).every((c) => c.verdict === "pass")
     ) {
       task = advanceTask(
         db,

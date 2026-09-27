@@ -4,6 +4,7 @@ import type { TaskStatus } from "./state.ts";
 import type { ChildSummary } from "./ledger-summary.ts";
 import type { Deliver } from "./deliver.ts";
 import type { NoteView } from "./notes.ts";
+import type { ConcernState, InviteHint } from "./concern-gate.ts";
 
 export type TaskRow = {
   id: number;
@@ -49,6 +50,10 @@ export type Task = TaskRow & {
   part_ref: string | null;
   /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
   queued_reason?: string | null;
+  /** 请了的专员与本轮结论（concerns.ts）；没请时不给。 */
+  concerns?: ConcernState[];
+  /** 「要不要请某专员」的提示（concern-gate.ts inviteHints）；没有时不给。 */
+  concern_hints?: InviteHint[];
 } & NoteView;
 export type TaskNode = Task & {
   children: TaskNode[];

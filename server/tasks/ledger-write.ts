@@ -32,6 +32,14 @@ import {
 } from "./deliver.ts";
 import { matchRole, originNode } from "../org/task-node.ts";
 import { partForTask } from "../org/task-part.ts";
+import {
+  concernRows,
+  concernsFor,
+  concernsOf,
+  textHints,
+  writeConcerns,
+} from "./concerns.ts";
+import { ref as nodeRef } from "../org/model.ts";
 
 /** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
 const roleNode = (
@@ -71,7 +79,19 @@ export type NewTask = {
   part?: string | null;
   /** 旧写法：gN 按目标树迁移映射到该目标的负责节点，等同 part。 */
   goal?: string | null;
+  /** 请哪些专员：关注点节点，逗号分隔。 */
+  concern?: string | null;
 };
+
+/** 任务读回时带上请的专员，改请专员或建任务时再带上按标题详述给的提示。 */
+function withConcerns(db: DatabaseSync, task: TaskRow, hints: boolean) {
+  const concerns = concernsOf(db, task.id);
+  const concern_hints = hints ? textHints(db, task) : [];
+  return {
+    ...(concerns.length ? { concerns } : {}),
+    ...(concern_hints.length ? { concern_hints } : {}),
+  };
+}
 
 export function createTask(
   db: DatabaseSync,
@@ -94,6 +114,7 @@ export function createTask(
     "from",
     "part",
     "goal",
+    "concern",
   ]);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
@@ -113,6 +134,7 @@ export function createTask(
     const node = roleNode(db, values.role, values.repo);
     const origin = fromNode(db, input.from);
     const part = partOf(db, input);
+    const concerns = concernsFor(db, input.concern);
     const { lastInsertRowid } = db
       .prepare(
         "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
@@ -134,15 +156,21 @@ export function createTask(
       );
     const id = Number(lastInsertRowid);
     setConditions(db, id, input, now);
+    writeConcerns(db, id, concerns);
     addEvent(db, id, now, "created", {
       title: values.title,
       ...(parent ? { parent: taskRef(parent) } : {}),
       ...(node ? { node: `o${node}` } : {}),
       ...(origin ? { from: `o${origin}` } : {}),
       ...(part ? { part: `o${part}` } : {}),
+      ...(concerns.length ? { concerns: concerns.map(nodeRef) } : {}),
     });
     const task = requireRow(db, id);
-    return { ...view(task), ...noteView(db, id, task.status) };
+    return {
+      ...view(task),
+      ...noteView(db, id, task.status),
+      ...withConcerns(db, task, true),
+    };
   });
 }
 
@@ -169,10 +197,11 @@ export function updateTask(
     "from",
     "part",
     "goal",
+    "concern",
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、from、part、status、deliver、issue、after、after_pr、auto、pr_url",
+      "至少修改一项：title、brief_path、role、from、part、concern、status、deliver、issue、after、after_pr、auto、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -200,7 +229,24 @@ export function updateTask(
     if ("part" in input || "goal" in input) fields.part_id = partOf(db, input);
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
+    const concerns =
+      "concern" in input ? concernsFor(db, input.concern) : undefined;
+    if (concerns && current.status === "running")
+      throw new Problem(
+        409,
+        "执行中不能改请的专员：提示词已经发出；等它结束再改，下一轮生效",
+        "conflict",
+        undefined,
+        `atrium task wait ${taskRef(id)}`,
+      );
     setConditions(db, id, input, now);
+    if (concerns) {
+      const before = concernRows(db, id).map((row) => nodeRef(row.node_id));
+      writeConcerns(db, id, concerns);
+      const after = concerns.map(nodeRef);
+      if (before.join(",") !== after.join(","))
+        addEvent(db, id, now, "concerns", { from: before, to: after });
+    }
     if (
       current.status === "running" &&
       ((fields.deliver !== undefined && fields.deliver !== current.deliver) ||
@@ -229,6 +275,10 @@ export function updateTask(
     if (target !== undefined)
       applyTransition(db, current, { kind: "manual_set", to: target }, now);
     const task = requireRow(db, id);
-    return { ...view(task), ...noteView(db, id, task.status) };
+    return {
+      ...view(task),
+      ...noteView(db, id, task.status),
+      ...withConcerns(db, task, concerns !== undefined || "title" in input),
+    };
   });
 }

@@ -24,6 +24,8 @@ import { homedir } from "node:os";
 import { listTells, unsent } from "./tell-ledger.ts";
 import { TELL_RULE, tellModeOf, tellSection } from "./tell.ts";
 import type { TellMode } from "./adapters/index.ts";
+import { checklists } from "./concerns.ts";
+import { concernSection } from "./concern-gate.ts";
 
 /**
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
@@ -183,6 +185,9 @@ export async function prepareRun(
           node ? charterBrief(options.db, node.id) : undefined,
           taskContext(options.db, task.part_id ?? node?.id ?? null),
         )
+      : undefined,
+    concerns: options.db
+      ? concernSection(checklists(options.db, task.id))
       : undefined,
     originDoc: origin
       ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`

@@ -14,6 +14,7 @@ import {
   noteTask,
   ownerOf,
   parseTaskRef,
+  taskRef,
   type Task,
 } from "./ledger.ts";
 import { readLogChunk, readLogTail } from "./log-view.ts";
@@ -39,6 +40,8 @@ import { DiskBudget } from "./disk-budget.ts";
 import { BudgetProblem } from "./budget-problem.ts";
 import { readPace } from "./prepare.ts";
 import { MergeQueue } from "./merge-runtime.ts";
+import { settleReviews } from "./concern-runtime.ts";
+import { awaitingReview } from "./concerns.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -124,11 +127,10 @@ export class TaskRunner {
       disk: this.disk,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
-      onAccepted: (id) => {
-        const task = getTask(this.db, id);
-        if (task.deliver !== "pr" || !task.pr_url || !task.repo) return false;
-        this.merge.enqueue(id);
-        return true;
+      onAccepted: (id) => this.enqueueMerge(id),
+      reviews: {
+        dispatch: (ref) => this.run(ref, {}),
+        settle: () => this.settleReviews(),
       },
     });
     this.merge = new MergeQueue(db, {
@@ -183,6 +185,7 @@ export class TaskRunner {
       if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();
+      if (!this.closed && this.recovered) this.settleReviews();
       if (!this.closed && this.recovered) this.merge.kick();
     });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
@@ -439,12 +442,50 @@ export class TaskRunner {
     return result;
   }
 
+  /** 专员关卡补判（#322）：审查任务不再跑后记结论，父任务全部出结论时补判通过或留在受阻并投递。 */
+  settleReviews() {
+    if (this.closed) return;
+    const busy = (id: number) =>
+      this.x.active.has(id) ||
+      this.x.launching.has(id) ||
+      this.x.finishing.has(id) ||
+      !!queued(this.db, id);
+    for (const resolution of settleReviews(this.db, busy)) {
+      const { parent, outcome, concerns } = resolution;
+      // 专员关卡是最后一道关：通过后再进合入队列。
+      const merging = resolution.accepted && this.enqueueMerge(parent);
+      const kind = merging
+        ? "merge_queued"
+        : resolution.accepted
+          ? "done"
+          : "blocked";
+      this.x.publish(parent, kind, {
+        reason: outcome.reason,
+        concerns,
+        ...(outcome.kind === "vetoed" ? { vetoed: true } : {}),
+        ...(resolution.accepted
+          ? {}
+          : { next: `atrium task show ${taskRef(parent)}` }),
+      });
+      this.waits.changed(parent);
+    }
+  }
+
+  /** 验收通过的 PR 任务进合入队列；返回是否进了队列。 */
+  private enqueueMerge(id: number) {
+    const task = getTask(this.db, id);
+    if (task.deliver !== "pr" || !task.pr_url || !task.repo) return false;
+    this.merge.enqueue(id);
+    return true;
+  }
+
   private pending(id: number, task: Task) {
     return (
       task.status === "running" ||
       task.delivery_stage === "merge_queued" ||
       task.delivery_stage === "merging" ||
       this.merge.isReturning(id) ||
+      (task.status === "blocked" && awaitingReview(this.db, id)) ||
       !!queued(this.db, id) ||
       this.x.launching.has(id) ||
       this.x.finishing.has(id)

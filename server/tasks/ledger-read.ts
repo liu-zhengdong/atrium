@@ -15,6 +15,8 @@ import { childSummaries } from "./ledger-summary.ts";
 import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
 import { queueView } from "./queue.ts";
+import { concernsOf } from "./concerns.ts";
+import type { InviteHint } from "./concern-gate.ts";
 
 const EVENTS_SHOWN = 50;
 
@@ -27,6 +29,8 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     EVENTS_SHOWN,
   );
   const child_summary = childSummaries(db, [found.id]).get(found.id) ?? null;
+  const concerns = concernsOf(db, found.id);
+  const hints = lastHints(db, found.id);
   return {
     ...view(found),
     ...noteView(db, found.id, found.status),
@@ -35,7 +39,24 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     child_summary,
     events,
     ...conditions(db, found.id),
+    ...(concerns.length ? { concerns } : {}),
+    ...(hints.length ? { concern_hints: hints } : {}),
   };
+}
+
+/** 最近一次交付后按改动范围给的「要不要请某专员」提示。 */
+function lastHints(db: DatabaseSync, id: number): InviteHint[] {
+  const row = all<TaskEventRow>(
+    db,
+    "SELECT * FROM task_events WHERE task_id=? AND kind='concern_hints' ORDER BY id DESC LIMIT 1",
+    id,
+  )[0];
+  try {
+    const hints = row?.detail ? JSON.parse(row.detail).hints : undefined;
+    return Array.isArray(hints) ? hints : [];
+  } catch {
+    return [];
+  }
 }
 
 export function listTasks(

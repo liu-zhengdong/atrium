@@ -7,6 +7,8 @@ import type { Command, Values } from "./main.ts";
 import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
 import { renderTopMap } from "./map.ts";
 import { DEPTH_MAX, type MapTreeNode } from "../server/map/view.ts";
+import { concernsBrief } from "./task-concerns.ts";
+import type { ConcernState } from "../server/tasks/concern-gate.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -33,6 +35,8 @@ export type TopRow = {
   processing: boolean;
   /** 捎话条数与未送达条数；旧版服务没有这个字段。 */
   tells?: { total: number; pending: number } | null;
+  /** 请了的专员与本轮结论（#322）；旧版服务没有这个字段。 */
+  concerns?: ConcernState[] | null;
   /** 日志最后写入时刻；没有日志为 0。 */
   log_at: number;
   action: { text: string; kind: string } | null;
@@ -286,6 +290,9 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
           ? [
               `  ${clip(`捎话 ${row.tells.total} 条${row.tells.pending ? `，${row.tells.pending} 条待送达` : "，都已送达"}`, frame.width - 2)}`,
             ]
+          : []),
+        ...(row.concerns?.length
+          ? [`  ${clip(concernsBrief(row.concerns)!, frame.width - 2)}`]
           : []),
       ];
     }),

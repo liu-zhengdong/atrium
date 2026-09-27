@@ -48,8 +48,9 @@ export function validateFields(
     doc === "charter"
       ? { goal: 300, report: 200, escalate: 200 }
       : { status: 300 };
+  // invite_when：关注点按改动范围提示「要不要请本专员」的规则（路径通配或关键词，#322）。
   const lists: Record<string, number> =
-    doc === "card" ? { owns: 10, accepts: 10, asks: 5 } : {};
+    doc === "card" ? { owns: 10, accepts: 10, asks: 5 } : { invite_when: 20 };
   for (const [key, v] of Object.entries(fields)) {
     const field = `${doc}.${key}`;
     if (doc === "charter" && validateOverviewField(key, v)) continue;

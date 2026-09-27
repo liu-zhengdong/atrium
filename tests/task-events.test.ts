@@ -283,12 +283,12 @@ test("事件队列按判定投递：逐格与纯函数一致，租约到期唤�
   live.close();
 });
 
-test("服务重启自愈：running 且 pid 已不在的任务置 failed 并投递事件", async (t) => {
+test("服务重启自愈：running 且 pid 已不在、日志判不了结局的任务收尾为 failed 并投递事件", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-recover-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
-  createTask(db, { title: "orphan" });
+  createTask(db, { title: "orphan", deliver: "none" });
   advanceTask(
     db,
     "t1",
@@ -303,11 +303,10 @@ test("服务重启自愈：running 且 pid 已不在的任务置 failed 并投�
   await runner.recover();
   const task = getTask(db, "t1");
   assert.equal(task.status, "failed");
-  assert.match(task.events.at(-1)!.detail!, /服务重启时执行者进程已不在/);
+  assert.match(task.events.at(-1)!.detail!, /接管后退出，退出码不可得/);
   const events = await runner.inbox.wait("secretary", 0);
   assert.equal(events.events[0]!.kind, "failed");
   runner.close();
-  assert.equal(existsSync(join(root, "tasks")), false);
 });
 
 test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立事件", async (t) => {

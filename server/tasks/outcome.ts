@@ -1,3 +1,4 @@
+import type { AdoptedEnd } from "./adopted-exit.ts";
 import type { Verdict } from "./gates.ts";
 
 /**
@@ -21,8 +22,14 @@ export type ExitDecision = {
   retry: boolean;
 };
 
-export function exitText(exit: Exit) {
-  if (exit === "unknown") return "退出码未知（服务重启期间退出）";
+/** 接管后退出的执行者没有退出码（服务重启后按 pid 接管，或重启窗口内已经退出）。 */
+export const ADOPTED_EXIT = "接管后退出，退出码不可得";
+
+export function exitText(exit: Exit, adopted?: AdoptedEnd) {
+  if (exit === "unknown")
+    return adopted && adopted.end !== "unknown"
+      ? `${ADOPTED_EXIT}；按日志判为${adopted.end === "clean" ? "正常结束" : "出错"}（${adopted.evidence}）`
+      : ADOPTED_EXIT;
   return exit.signal ? `被信号 ${exit.signal} 结束` : `退出码 ${exit.code}`;
 }
 
@@ -55,6 +62,8 @@ export function decideExit(input: {
   thinking?: boolean;
   /** 从日志识别出的供应商或网络临时错误（transient.ts），同样写在原因前面；重试由调用方按 transient.ts 决定。 */
   transient?: string;
+  /** 接管后退出时按日志收尾结构判出的结局（adopted-exit.ts）；只在 exit 为 unknown 时有意义。 */
+  adopted?: AdoptedEnd;
 }): ExitDecision {
   const { stop, exit } = input;
   const lead = (reason: string) =>
@@ -100,7 +109,21 @@ export function decideExit(input: {
       retry: false,
     };
   }
-  if (input.abnormalFatal && exit === "unknown")
+  if (exit === "unknown" && input.adopted?.end === "error")
+    return {
+      event: "exit_fail",
+      publish: "failed",
+      reason: lead(
+        `${ADOPTED_EXIT}；日志显示出错结束：${input.adopted.evidence}`,
+      ),
+      retry: false,
+    };
+  // 日志判为正常结束的，与退出码 0 一样过关卡。
+  if (
+    input.abnormalFatal &&
+    exit === "unknown" &&
+    input.adopted?.end !== "clean"
+  )
     return {
       event: "exit_fail",
       publish: "failed",

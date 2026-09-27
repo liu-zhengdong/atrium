@@ -1,6 +1,7 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { readFileSync, statSync, appendFileSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import type { Active } from "./active.ts";
+import { adoptedEnd } from "./adopted-exit.ts";
 import { ADAPTERS } from "./adapters/index.ts";
 import { collectFacts } from "./facts.ts";
 import { type Facts, type Verdict } from "./gates.ts";
@@ -59,13 +60,25 @@ async function readLog(active: Active) {
 const jsonEvents = (active: Active) =>
   ADAPTERS[active.tool].progressSignals.includes("json_events");
 
-/** 摘要：codex 的最后消息文件优先；结构化日志取最后一条助手文本；否则取日志末尾。 */
-function readSummary(active: Active, log: string | undefined) {
-  const resultFile = active.prepared?.launch.resultFile;
-  if (resultFile && existsSync(resultFile)) {
-    const text = readFileSync(resultFile, "utf8").trim();
-    if (text) return summarize(text);
+/** codex 本轮写出的最后消息（-o）；接管的进程按任务目录里的固定位置找，早于本轮开始的是上一轮留下的。 */
+function readLastMessage(active: Active) {
+  const resultFile = active.prepared?.launch.resultFile ?? active.resultFile;
+  if (!resultFile) return undefined;
+  try {
+    if (statSync(resultFile).mtimeMs < active.startedAt) return undefined;
+    return readFileSync(resultFile, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
   }
+}
+
+/** 摘要：codex 的最后消息文件优先；结构化日志取最后一条助手文本；否则取日志末尾。 */
+function readSummary(
+  active: Active,
+  log: string | undefined,
+  lastMessage: string | undefined,
+) {
+  if (lastMessage) return summarize(lastMessage);
   return log === undefined ? "" : summarize(log, jsonEvents(active));
 }
 
@@ -129,11 +142,17 @@ export async function settle(
   env?: NodeJS.ProcessEnv,
 ): Promise<Settlement> {
   const log = await readLog(active);
-  const summary = readSummary(active, log);
+  const lastMessage = readLastMessage(active);
+  const summary = readSummary(active, log, lastMessage);
+  // 接管后退出没有退出码：按日志收尾结构判正常结束还是出错。
+  const adopted =
+    exit === "unknown"
+      ? adoptedEnd({ tool: active.tool, log, lastMessage })
+      : undefined;
   try {
     appendFileSync(
       active.logFile,
-      `\n[atrium] ${new Date().toISOString()} ${exitText(exit)}\n`,
+      `\n[atrium] ${new Date().toISOString()} ${exitText(exit, adopted)}\n`,
     );
   } catch {
     // 日志目录被删不影响收尾。
@@ -249,6 +268,8 @@ export async function settle(
     abnormalFatal: active.deliver !== "pr",
     thinking: ending?.kind === "thinking",
     transient: transient?.reason,
+    // 远端已交付（PR 在、CI 过）的照常过关卡，不因日志里的出错判失败。
+    adopted: deliveredDespiteUnknownExit(exit, facts) ? undefined : adopted,
   });
   return {
     summary,

@@ -57,8 +57,8 @@ const updateCommand: Command = {
 };
 
 const restartCommand: Command = {
-  args: "[--when-idle] [--wait] [--timeout <秒>]",
-  about: "平滑重启 Atrium 服务；--when-idle 等执行者空闲后自动重启",
+  args: "[--wait] [--timeout <秒>]",
+  about: "平滑重启 Atrium 服务，随时可做：在跑的执行者不中断，由新服务接管",
   options: {
     wait: { type: "boolean", default: false },
     "when-idle": { type: "boolean", default: false },
@@ -96,7 +96,7 @@ const service: [usage: string, about: string][] = [
   ["atrium", "启动或复用后台服务，输出地址"],
   ["atrium status", "查看服务状态、地址和数据目录"],
   ["atrium stop", "停止服务，保留数据；在跑的执行者由下次启动接管"],
-  ["atrium restart", "平滑重启服务；--when-idle 等执行者空闲后重启"],
+  ["atrium restart", "平滑重启服务；在跑的执行者由新服务接管，不等空闲"],
   ["atrium update", "检查并更新 Atrium 版本；--to 指定目标版本"],
   ["atrium auth status", "查看本机用户认证状态（不启动服务）"],
   ["atrium auth rotate", "轮换用户令牌"],

@@ -6,6 +6,7 @@ import {
 } from "../server/service-state.ts";
 import { compareSemver } from "../server/releases.ts";
 import { Problem } from "../server/problem.ts";
+import { localFetch } from "../server/local-http.ts";
 
 /**
  * 新命令行调旧服务的新接口时，旧服务要么回 404「接口不存在」，
@@ -19,7 +20,7 @@ export async function outdatedService(
   if (!record) return null;
   let version: unknown;
   try {
-    const response = await fetch(`${serviceUrl(record)}/api/service`, {
+    const response = await localFetch(`${serviceUrl(record)}/api/service`, {
       headers: { authorization: `Bearer ${record.token}` },
       signal: AbortSignal.timeout(1500),
     });

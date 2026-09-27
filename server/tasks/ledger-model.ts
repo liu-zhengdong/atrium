@@ -39,6 +39,8 @@ export type Task = TaskRow & {
   parent_ref: string | null;
   node_ref: string | null;
   origin_ref: string | null;
+  /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
+  queued_reason?: string | null;
 } & NoteView;
 export type TaskNode = Task & {
   children: TaskNode[];

@@ -14,6 +14,7 @@ import { parentOf, statusOf } from "./ledger-validate.ts";
 import { childSummaries } from "./ledger-summary.ts";
 import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
+import { queueView } from "./queue.ts";
 
 const EVENTS_SHOWN = 50;
 
@@ -29,6 +30,7 @@ export function getTask(db: DatabaseSync, reference: unknown) {
   return {
     ...view(found),
     ...noteView(db, found.id, found.status),
+    ...queueView(db, found.id),
     children: child_summary?.total ?? 0,
     child_summary,
     events,
@@ -75,6 +77,7 @@ export function listTasks(
   const tasks = rows.slice(0, limit).map((row) => ({
     ...view(row),
     ...noteView(db, row.id, row.status),
+    ...queueView(db, row.id),
   }));
   return { tasks, next_after: more ? tasks.at(-1)!.ref : null };
 }

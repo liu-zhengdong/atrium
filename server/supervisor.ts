@@ -25,8 +25,10 @@ import { startService, stopService } from "./service.ts";
 import { installVersion } from "./install-version.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { Problem } from "./problem.ts";
+import { localFetch } from "./local-http.ts";
 
 export type RestartStatus =
+  /** 旧版 `restart --when-idle` 的遗留状态：只认得出来，启动时丢弃（discardLegacyIdleRestart）。 */
   | "waiting_idle"
   | "idle_timeout"
   | "stopping"
@@ -52,8 +54,6 @@ export type RestartState = {
   failedVersion?: string;
   rollbackVersion?: string;
   finishedAt?: number;
-  idleDeadline?: number;
-  remainingTasks?: string[];
 };
 
 export function restartStatePath(data: string): string {
@@ -84,9 +84,7 @@ export function readRestartState(data: string): RestartState | null {
       !Number.isSafeInteger(state.supervisorPid) ||
       !Number.isSafeInteger(state.startedAt) ||
       typeof state.fromVersion !== "string" ||
-      typeof state.data !== "string" ||
-      (state.status === "waiting_idle" &&
-        !Number.isSafeInteger(state.idleDeadline))
+      typeof state.data !== "string"
     )
       throw new Error("字段无效");
     return state as RestartState;
@@ -100,6 +98,39 @@ export function readRestartState(data: string): RestartState | null {
     }
     return null;
   }
+}
+
+/**
+ * 旧版 `restart --when-idle` 留下的 waiting_idle / idle_timeout：重启不再等空闲，
+ * 这些记录只会挡派活、挡 restart。遇到就删掉并记日志；返回是否丢弃了。
+ */
+export function discardLegacyIdleRestart(data: string): boolean {
+  const state = readRestartState(data);
+  if (state?.status !== "waiting_idle" && state?.status !== "idle_timeout")
+    return false;
+  try {
+    unlinkSync(restartStatePath(data));
+    console.warn(
+      `[${new Date().toISOString()}] 丢弃旧版待空闲重启记录（${state.id}，${state.status}）：重启已不需要等执行者空闲，不再挡派活`,
+    );
+  } catch (error) {
+    console.warn(`丢弃旧版待空闲重启记录失败：${String(error)}`);
+  }
+  return true;
+}
+
+/** 另一个进程里的 supervisor 正在重启服务（旧服务在关、新服务在起）；本进程就是 supervisor 时不算。 */
+export function restartInProgress(data: string): RestartState | null {
+  const state = readRestartState(data);
+  return state &&
+    ["stopping", "starting", "checking", "rolling_back"].includes(
+      state.status,
+    ) &&
+    state.supervisorPid > 0 &&
+    state.supervisorPid !== process.pid &&
+    alive(state.supervisorPid)
+    ? state
+    : null;
 }
 
 export function writeRestartState(data: string, state: RestartState): void {
@@ -120,7 +151,7 @@ export function writeRestartState(data: string, state: RestartState): void {
 
 export async function checkServiceHealth(record: ServiceRecord): Promise<void> {
   // 1. 接口能响应
-  const statusRes = await fetch(`${serviceUrl(record)}/api/service`, {
+  const statusRes = await localFetch(`${serviceUrl(record)}/api/service`, {
     headers: { authorization: `Bearer ${record.token}` },
     signal: AbortSignal.timeout(4000),
   });
@@ -141,10 +172,13 @@ export async function checkServiceHealth(record: ServiceRecord): Promise<void> {
   let ready = false;
   while (Date.now() < deadline) {
     if (!alive(record.pid)) throw new Error("服务在就绪前退出");
-    const healthRes = await fetch(`${serviceUrl(record)}/api/service/health`, {
-      headers: { authorization: `Bearer ${record.token}` },
-      signal: AbortSignal.timeout(6000),
-    });
+    const healthRes = await localFetch(
+      `${serviceUrl(record)}/api/service/health`,
+      {
+        headers: { authorization: `Bearer ${record.token}` },
+        signal: AbortSignal.timeout(6000),
+      },
+    );
     // 回滚到的旧版本在 runtimes 里报未就绪原因；ok 已涵盖它的可用性。
     const health = (await healthRes.json().catch(() => ({}))) as {
       ok?: boolean;
@@ -350,7 +384,7 @@ export async function runSupervisor(args: string[]): Promise<void> {
 
     await checkServiceHealth(newRecord);
     const reported = (await (
-      await fetch(`${serviceUrl(newRecord)}/api/service`, {
+      await localFetch(`${serviceUrl(newRecord)}/api/service`, {
         headers: { authorization: `Bearer ${newRecord.token}` },
       })
     ).json()) as { version: string };
@@ -434,8 +468,7 @@ export async function waitForRestart(
       if (
         state.status === "success" ||
         state.status === "rolled_back" ||
-        state.status === "failed" ||
-        state.status === "idle_timeout"
+        state.status === "failed"
       ) {
         return state;
       }

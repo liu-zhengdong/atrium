@@ -30,7 +30,6 @@ import { countRows, RECENT_MS, topRows } from "./top.ts";
 import { TaskWaits } from "./waits.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import { workerEnvironment } from "./worker-env.ts";
-import { readRestartState } from "../supervisor.ts";
 import { Scheduler, planItem } from "./schedule.ts";
 import { requireRow } from "./ledger-model.ts";
 import { schedulePrExec } from "./schedule-pr.ts";
@@ -77,14 +76,11 @@ export class TaskRunner {
   /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
   private readonly cwds = new Map<number, string>();
   private recovered = false;
-  private restartPending: boolean;
 
   constructor(
     private readonly db: DatabaseSync,
     private readonly options: RunnerOptions,
   ) {
-    this.restartPending =
-      readRestartState(options.data)?.status === "waiting_idle";
     ensureQueueTable(db);
     this.inbox = new EventInbox(db, {
       batchMs: options.batchMs,
@@ -119,7 +115,6 @@ export class TaskRunner {
       quota: this.quota,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
-      paused: () => this.restartPending,
     });
     this.scheduler = new Scheduler(
       db,
@@ -164,14 +159,6 @@ export class TaskRunner {
     this.waits.close();
   }
 
-  setRestartPending(value: boolean) {
-    this.restartPending = value;
-  }
-
-  isRestartPending() {
-    return this.restartPending;
-  }
-
   /** Count the ledger and in-flight launches, including work recovered after a service crash. */
   runningTaskRefs(): string[] {
     const query = this.db.prepare(
@@ -190,13 +177,6 @@ export class TaskRunner {
     ]
       .sort((a, b) => a - b)
       .map((id) => `t${id}`);
-  }
-
-  async resumeQueue() {
-    if (!this.closed && !this.restartPending)
-      while ((await this.x.drain()) > 0) {
-        /* each pass removes at least one entry */
-      }
   }
 
   // ---- 派活 ----
@@ -244,10 +224,6 @@ export class TaskRunner {
       throw error;
     }
     const tool = chosen.worker.tool;
-    if (this.restartPending) {
-      this.x.launching.delete(id);
-      return this.enqueue(task, chosen, "等待重启；重启完成后自动派发");
-    }
     if (chosen.waitUntil !== undefined) {
       this.x.launching.delete(id);
       return this.enqueue(

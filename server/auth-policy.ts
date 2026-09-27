@@ -5,7 +5,6 @@ const separatelyAuthenticatedRoutes = new Set([
   "GET /api/service",
   "GET /api/service/health",
   "POST /api/service/prepare-restart",
-  "POST /api/service/restart-when-idle",
   "POST /api/service/stop",
 ]);
 

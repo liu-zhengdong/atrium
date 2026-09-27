@@ -19,7 +19,16 @@ const str = (values: Values, key: string) => {
 };
 const client = async () => (await import("./service.ts")).connect();
 const displayStatus = (task: Task) =>
-  task.processing ? "处理中" : task.status === "blocked" ? "卡住" : task.status;
+  task.queued_reason
+    ? "排队"
+    : task.processing
+      ? "处理中"
+      : task.status === "blocked"
+        ? "卡住"
+        : task.status;
+/** 排队中的任务说清在等什么。 */
+const queueLine = (task: Task) =>
+  task.queued_reason ? `  排队原因：${task.queued_reason}` : null;
 const noteLine = (task: Task) =>
   task.note
     ? `  备注（${task.note_by ?? "未知"} · ${when(task.note_at!)}）：${task.note.replace(/\s+/g, " ")}`
@@ -243,7 +252,7 @@ const ls: Command = {
         [
           lines[0],
           ...result.tasks.flatMap((task, i) =>
-            [lines[i + 1], noteLine(task)].filter(
+            [lines[i + 1], queueLine(task), noteLine(task)].filter(
               (line): line is string => !!line,
             ),
           ),
@@ -283,6 +292,7 @@ const show: Command = {
       const rows: [string, string | number | null][] = [
         ["标题", task.title],
         ["状态", displayStatus(task)],
+        ["排队原因", task.queued_reason ?? null],
         ["最新备注", task.note],
         ["备注作者", task.note_by],
         ["备注时间", task.note_at ? when(task.note_at) : null],
@@ -481,7 +491,7 @@ const plan: Command = {
         console.log(`${label}（${result.groups[group].length}）`);
         for (const item of result.groups[group])
           console.log(
-            `  ${item.task.ref} ${item.task.title}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
+            `  ${item.task.ref} ${item.task.title}${item.task.queued_reason ? ` · 排队：${item.task.queued_reason}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
           );
       }
     }

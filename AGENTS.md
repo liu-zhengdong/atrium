@@ -35,7 +35,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 
 - `npm run check` 执行类型检查与全部测试；`npm run format:check` 检查格式。本机负载高时测试超时先串行重跑再判断。
 - 执行者交付停在 PR；运行时关卡按执行者档案的 `checks` 判定（`finished`、`pr_exists`、`ci`、`file_growth`、`claims_verified`），结论写进任务事件。远端 CI 结果记入账本供参考，不挡合入：合入前由验收者在任务 worktree rebase 到最新 main、本地跑检查、审阅代码与回执后决定。
-- 交付须从全局命令走通主要路径（`atrium` → `task add/run/wait` → `org tree` → `quota` → `events wait` → `restart --when-idle` → `update`），不以命令已安装或分别启动各组件替代。校验与权限至少实测一份破坏输入。
+- 交付须从全局命令走通主要路径（`atrium` → `task add/run/wait` → `org tree` → `quota` → `events wait` → `restart`（在跑执行者由新服务接管）→ `update`），不以命令已安装或分别启动各组件替代。校验与权限至少实测一份破坏输入。
 - 开发中的改动在自己的 worktree 验收：4310 上跑的是安装版服务，不要启动、停止或重启它，也不要把全局 `atrium` npm link 到仓库。隔离服务用 `ATRIUM_PORT=<端口> ATRIUM_DATA=<worktree>/.atrium node bin/atrium.mjs`，用完以同样变量 `stop`。合入并发版后用 `atrium update` 走安装后路径。
 - 多个执行者共用同一个仓库，`git stash` 在所有 worktree 间共用；不要用 stash，未完成的改动提交到自己的分支。
 - 测试显式使用临时目录与假执行者，不依赖开发者主目录中的档案、章程或 OpenQuota。凭据、数据库和服务登记文件不提交。

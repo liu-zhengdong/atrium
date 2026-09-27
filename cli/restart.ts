@@ -1,4 +1,5 @@
 import {
+  discardLegacyIdleRestart,
   readRestartState,
   startSupervisor,
   waitForRestart,
@@ -6,9 +7,6 @@ import {
 import { alive, dataDirectory } from "../server/service-state.ts";
 import { recordNext, recordResult } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
-import { startService } from "../server/service.ts";
-import { serviceUrl } from "../server/service-state.ts";
-import { missingRoute, outdatedService } from "./version-check.ts";
 
 export async function restart({
   wait = false,
@@ -22,60 +20,15 @@ export async function restart({
   data?: string;
 }) {
   const dir = data ?? dataDirectory();
-  const timeoutSec = Number(timeout ?? (whenIdle ? "1800" : "300"));
-  if (
-    !Number.isInteger(timeoutSec) ||
-    timeoutSec < 1 ||
-    timeoutSec > (whenIdle ? 7200 : 600)
-  )
-    throw new Problem(
-      400,
-      `--timeout 必须为 1–${whenIdle ? 7200 : 600} 秒`,
-      "usage",
+  const timeoutSec = Number(timeout ?? "300");
+  if (!Number.isInteger(timeoutSec) || timeoutSec < 1 || timeoutSec > 600)
+    throw new Problem(400, "--timeout 必须为 1–600 秒", "usage");
+  // 兼容参数：执行者不随服务退出、新服务按 pid 接管，重启不必等空闲。
+  if (whenIdle)
+    console.error(
+      "Atrium 重启已不需要等执行者空闲，--when-idle 不再生效；直接重启，在跑的执行者由新服务接管",
     );
-
-  if (whenIdle) {
-    if (wait) throw new Problem(400, "--when-idle 不能与 --wait 同用", "usage");
-    const record = await startService(dir);
-    const response = await fetch(
-      `${serviceUrl(record)}/api/service/restart-when-idle`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${record.token}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ timeout: timeoutSec * 1000 }),
-      },
-    );
-    const result = (await response.json().catch(() => ({}))) as {
-      task_id?: string;
-      running?: string[];
-      error?: string;
-      code?: string;
-    };
-    // 旧服务没有这个接口：路由未登记会落到用户认证回 401，不能当认证问题报。
-    if (!response.ok && missingRoute(response.status, result, true)) {
-      const outdated = await outdatedService(record);
-      if (outdated) throw outdated;
-    }
-    if (!response.ok)
-      throw new Problem(
-        response.status,
-        result.error ?? "待重启请求失败",
-        "conflict",
-      );
-    console.log(
-      `Atrium 已安排空闲时重启（任务 ${result.task_id}）；还有 ${result.running?.length ?? 0} 个执行者在跑${result.running?.length ? `：${result.running.join("、")}` : ""}`,
-    );
-    recordResult({
-      status: "waiting_idle",
-      task_id: result.task_id,
-      running: result.running ?? [],
-    });
-    recordNext("查看进度：atrium status");
-    return;
-  }
+  discardLegacyIdleRestart(dir);
 
   const state = readRestartState(dir);
   // #231：supervisor 已退出（被杀或崩溃）时状态会停在进行中；不能因此永久拒绝新的 restart。
@@ -94,12 +47,6 @@ export async function restart({
       "没有可等待的重启任务；先运行 atrium restart",
       "not_found",
     );
-  if (!wait && state?.status === "waiting_idle")
-    throw new Problem(
-      409,
-      "已有待重启请求；运行 atrium status 查看进度",
-      "conflict",
-    );
   if (!wait && isRunning)
     throw new Problem(
       409,
@@ -112,7 +59,9 @@ export async function restart({
 
   if (!wait) {
     const current = readRestartState(dir);
-    console.log(`Atrium 平滑重启已启动（任务 ${current?.id ?? "rst"}）`);
+    console.log(
+      `Atrium 平滑重启已启动（任务 ${current?.id ?? "rst"}）；在跑的执行者不中断，由新服务接管；重启期间的命令会等新服务就绪`,
+    );
     recordResult({
       status: "restarting",
       pid: current?.supervisorPid,
@@ -150,12 +99,6 @@ export async function restart({
       500,
       `Atrium 启动失败，已自动回滚至 v${finalState.rollbackVersion ?? finalState.fromVersion}：${finalState.error}`,
       "restart_rollback",
-    );
-  } else if (finalState.status === "idle_timeout") {
-    throw new Problem(
-      504,
-      `等待执行者空闲超时；超时时仍在运行：${finalState.remainingTasks?.join("、") || "未知"}。未强制停止执行者`,
-      "restart_timeout",
     );
   } else {
     throw new Problem(

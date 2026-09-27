@@ -298,7 +298,12 @@ test("接口：网页会话能读角色、技能、执行者，不存在的给 4
     ...host,
     cookie: String(login.headers["set-cookie"]).split(";")[0]!,
   };
-  for (const url of ["/api/map/roles", "/api/map/skills", "/api/map/workers"]) {
+  for (const url of [
+    "/api/map/roles",
+    "/api/map/skills",
+    "/api/map/workers",
+    "/api/map/leaders",
+  ]) {
     assert.equal(authPolicy("GET", url), "map-read");
     const res = await app.inject({ url, headers: session });
     assert.equal(res.statusCode, 200, `${url} ${res.body}`);
@@ -312,6 +317,9 @@ test("接口：网页会话能读角色、技能、执行者，不存在的给 4
     ["/api/map/workers/claude%2Bnope%3Ahigh", 404],
     ["/api/map/workers/foo%2Bbar", 400],
     ["/api/map/workers?role=r9", 404],
+    ["/api/map/leaders/a9", 404],
+    ["/api/map/leaders/o1", 400],
+    ["/api/map/leaders/..%2Fa1", 400],
   ] as const)
     assert.equal(
       (await app.inject({ url, headers: session })).statusCode,

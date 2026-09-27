@@ -99,6 +99,8 @@ export function createTask(
   db: DatabaseSync,
   body: unknown,
   now = Date.now(),
+  /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
+  by?: string,
 ): Task {
   const input = objectOf(body);
   onlyKeys(input, [
@@ -170,6 +172,7 @@ export function createTask(
       ...(part ? { part: `o${part}` } : {}),
       ...(job ? { job: `r${job}` } : {}),
       ...(concerns.length ? { concerns: concerns.map(nodeRef) } : {}),
+      ...(by ? { by } : {}),
     });
     const task = requireRow(db, id);
     return {

@@ -283,7 +283,10 @@ export function showLeader(db: DatabaseSync, reference: unknown): LeaderView {
   return viewOf(requireLeader(db, reference), ledNodes(db));
 }
 
-/** 全部 leader；节点上引用了但没登记的单列，提示登记。 */
+/**
+ * 全部 leader；节点上引用了但没登记的单列，提示登记。
+ * busy 是正在处理的 leader 与一句话（状态栏读它：「Atrium 负责人 在处理 t84 上线」），空闲时为空数组。
+ */
 export function listLeaders(db: DatabaseSync) {
   const led = ledNodes(db);
   const rows = hasTable(db, "org_leaders")
@@ -292,6 +295,14 @@ export function listLeaders(db: DatabaseSync) {
   const known = new Set(rows.map((r) => leaderRef(r.id)));
   return {
     leaders: rows.map((r) => viewOf(r, led)),
+    busy: rows
+      .filter((r) => r.wake_status === "running" && r.wake_at !== null)
+      .map((r) => ({
+        ref: leaderRef(r.id),
+        name: r.name,
+        doing: r.wake_summary ?? "",
+        since: r.wake_at!,
+      })),
     unregistered: [...led]
       .filter(([who]) => !known.has(who))
       .map(([who, list]) => ({ ref: who, nodes: list })),

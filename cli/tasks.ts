@@ -48,9 +48,14 @@ const displayStatus = (task: Task) =>
 /** 排队中的任务说清在等什么。 */
 const queueLine = (task: Task) =>
   task.queued_reason ? `  排队原因：${task.queued_reason}` : null;
+/** 备注作者：leader 给名字带短号（Atrium 负责人（a1）），其余照短号。 */
+const noteAuthor = (task: Task) =>
+  task.note_by_name
+    ? `${task.note_by_name}（${task.note_by}）`
+    : (task.note_by ?? "未知");
 const noteLine = (task: Task) =>
   task.note
-    ? `  备注（${task.note_by ?? "未知"} · ${when(task.note_at!)}）：${task.note.replace(/\s+/g, " ")}`
+    ? `  备注（${noteAuthor(task)} · ${when(task.note_at!)}）：${task.note.replace(/\s+/g, " ")}`
     : null;
 
 /** 命令行只认 t 开头的短号；接口另外接受纯数字。 */
@@ -338,7 +343,7 @@ const show: Command = {
         ["审阅任务", task.review_task ? `t${task.review_task}` : null],
         ["排队原因", task.queued_reason ?? null],
         ["最新备注", task.note],
-        ["备注作者", task.note_by],
+        ["备注作者", task.note ? noteAuthor(task) : null],
         ["备注时间", task.note_at ? when(task.note_at) : null],
         ["父任务", task.parent_ref],
         ["子任务", task.children || null],

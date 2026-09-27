@@ -14,6 +14,7 @@ import {
   parseDepth,
   type LiveRow,
 } from "./view.ts";
+import { mapLeader, mapLeaders } from "./leaders.ts";
 import { addMap, editMap, type MapAdd, type MapEdit } from "./write.ts";
 import {
   mapRole,
@@ -132,6 +133,9 @@ export function registerMapRoutes(
     mapRole(db, id(request), await live(), options.workersDir),
   );
   app.get("/api/map/skills", () => mapSkills(db));
+  // 负责人（leader）：组织根的页签与负责人页。
+  app.get("/api/map/leaders", () => mapLeaders(db));
+  app.get("/api/map/leaders/:id", (request) => mapLeader(db, id(request)));
   app.get("/api/map/workers", (request) =>
     mapWorkers(db, q(request.query).role, options.workersDir),
   );

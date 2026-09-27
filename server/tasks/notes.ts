@@ -14,6 +14,8 @@ import type { TaskStatus } from "./state.ts";
 export type NoteView = {
   note: string | null;
   note_by: string | null;
+  /** 作者是登记过的 leader 时给名字（Atrium 负责人），其余为 null。 */
+  note_by_name?: string | null;
   note_at: number | null;
   processing: boolean;
 };
@@ -28,6 +30,25 @@ export const isProcessing = (
   noteId !== null &&
   blockedId !== null &&
   noteId > blockedId;
+
+function leaderName(db: DatabaseSync, by: string): string | null {
+  const match = /^a([1-9][0-9]{0,8})$/.exec(by);
+  if (
+    !match ||
+    !one(
+      db,
+      "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='org_leaders'",
+    )
+  )
+    return null;
+  return (
+    one<{ name: string }>(
+      db,
+      "SELECT name FROM org_leaders WHERE id=?",
+      Number(match[1]),
+    )?.name ?? null
+  );
+}
 
 export function noteView(
   db: DatabaseSync,
@@ -66,6 +87,7 @@ export function noteView(
   return {
     note: text,
     note_by: by,
+    note_by_name: by === null ? null : leaderName(db, by),
     note_at: text === null ? null : note!.at,
     processing: isProcessing(
       status,

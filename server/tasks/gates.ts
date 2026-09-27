@@ -6,6 +6,7 @@
 import type { Ci, Claim, FileStat, FunctionSpan, Pr } from "./gate-parse.ts";
 import { ciUnavailableReason } from "./ci-classify.ts";
 import type { LocalCheck } from "./local-check.ts";
+import type { ScreenshotFact } from "./screenshot-facts.ts";
 
 export * from "./gate-parse.ts";
 
@@ -17,6 +18,7 @@ export const GATES = [
   "file_growth",
   "claims_verified",
   "screenshot",
+  "screenshots",
 ] as const;
 export type Gate = (typeof GATES)[number];
 
@@ -44,6 +46,7 @@ export type Facts = {
   pushed: boolean | null;
   pushDetail?: string;
   claims: CheckedClaim[];
+  screenshots?: ScreenshotFact[];
 };
 
 export type GateResult = {
@@ -193,16 +196,33 @@ function fileGrowth(facts: Facts, limits: Limits): GateResult {
       };
 }
 
-function screenshot(facts: Facts): GateResult {
-  const body = facts.pr?.body ?? "";
-  const attached =
-    /!\[[^\]]*\]\(https:\/\/[^)]+\.(?:png|jpe?g|gif|webp)(?:\?[^)]*)?\)|https:\/\/github\.com\/user-attachments\/assets\/[\w-]+|<img\s[^>]*src=["']https:\/\//i.test(
-      body,
-    );
+function screenshots(
+  facts: Facts,
+  gate: "screenshot" | "screenshots",
+): GateResult {
+  if (!facts.pr)
+    return { gate, ok: false, evidence: "没有 PR；请开 PR 并在正文附截图" };
+  if (!facts.screenshots?.length)
+    return {
+      gate,
+      ok: false,
+      evidence: "PR 正文没有图片；请添加 Markdown 图片或 GitHub 图片附件链接",
+    };
+  const bad = facts.screenshots.filter((image) => image.status !== 200);
+  const showUrl = (value: string) => {
+    try {
+      const url = new URL(value);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return "无效图片链接";
+    }
+  };
   return {
-    gate: "screenshot",
-    ok: attached,
-    evidence: attached ? "PR 正文有图片附件" : "PR 正文没有可核对的图片附件",
+    gate,
+    ok: bad.length === 0,
+    evidence: bad.length
+      ? `截图链接 HEAD 未返回 200：${bad.map((image) => `${showUrl(image.url)}（${image.status ?? image.error ?? "未检查"}）`).join("；")}`
+      : `PR 正文 ${facts.screenshots.length} 张截图均可访问（HEAD 200）`,
   };
 }
 
@@ -249,7 +269,8 @@ export function evaluateGates(
       case "claims_verified":
         return claimsVerified(facts);
       case "screenshot":
-        return screenshot(facts);
+      case "screenshots":
+        return screenshots(facts, gate);
       default:
         return {
           gate,

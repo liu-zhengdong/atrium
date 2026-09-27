@@ -13,6 +13,7 @@ import {
 import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { Agent } from "../server/agent/main.ts";
+import { killTree, processAlive } from "../server/platform/index.ts";
 import { fixture, until } from "./task-fixture.ts";
 import { nodeCommand } from "./portable-shell.ts";
 import { QuotaReaders } from "../server/quota-readers/index.ts";
@@ -503,6 +504,46 @@ test("远程主机：离线时停下任务先在账本收尾，代理重启后�
   ).catch((error: Error) => {
     throw new Error(`${error.message}；代理日志：\n${second.lines.join("\n")}`);
   });
+});
+
+test("远程主机：代理停下后执行者才结束，停下的代理不再写运行记录", async (t) => {
+  const fx = fixture(t);
+  fx.script("opencode", 'echo \'{"type":"step_start","part":{}}\'\nsleep 60');
+  const server = await serve(fx, join(fx.root, "data"));
+  t.after(() => server.close());
+  const agentData = join(fx.root, "agent");
+  const { code } = (
+    await server.call("POST", "/api/hosts", { name: "远程", repos: ["*"] })
+  ).body;
+  const first = startAgent(t, {
+    port: server.port,
+    data: agentData,
+    env: fx.env,
+    code,
+  });
+  await until(
+    () => first.lines.some((line) => line.includes("已连上")),
+    10_000,
+  );
+  await server.call("POST", "/api/tasks", { title: "要停的", deliver: "none" });
+  const run = await server.call("POST", "/api/tasks/t1/run", {
+    worker: "opencode",
+    host: "h2",
+  });
+  assert.equal(run.status, 200, JSON.stringify(run.body));
+  const pid: number = run.body.task.pid;
+  first.agent.stop();
+  await first.done;
+  const file = join(agentData, "runs", "1.json");
+  const before = readFileSync(file, "utf8");
+  // 停下的代理实例还握着子进程，照样收到退出事件；记录已归下一个代理，它不能再写。
+  // 否则下一个代理补报、删掉记录后又被写回来（Windows 上 pid 看到进程没了可能早于退出事件）。
+  killTree(pid, "SIGKILL");
+  await until(() => !processAlive(pid), 10_000);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(readFileSync(file, "utf8"), before);
+  assert.equal(JSON.parse(before).exit, undefined);
+  assert.ok(!first.lines.some((line) => line.includes("t1 已退出")));
 });
 
 test("远程主机：拉起回执晚到时，执行者已经结束也照样补传日志与结果", async (t) => {

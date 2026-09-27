@@ -754,7 +754,10 @@ export class Agent {
       };
       this.runs.set(assignment.task, track);
       launched.child.once("exit", (code, signal) => {
-        if (track.record.exit !== undefined) return;
+        // 代理停下后运行记录交给下一个代理（它按 pid 看进程还在不在）：这里再写会把
+        // 下一个代理已补报、删掉的记录写回来（同一进程里重启代理时；Windows 上 pid
+        // 看到进程没了可能早于这个退出事件）。
+        if (this.stopped || track.record.exit !== undefined) return;
         track.record.exit = { code, signal };
         this.state.saveRun(track.record);
         this.log(

@@ -1,6 +1,7 @@
-import { recordNext } from "./contract.ts";
+import { recordNext, recordResult } from "./contract.ts";
 import { printJson, table, when } from "./format.ts";
 import type { Command } from "./main.ts";
+import { Problem } from "../server/problem.ts";
 import type { QuotaAccount, QuotaList } from "../server/tasks/quota.ts";
 
 /**
@@ -49,10 +50,31 @@ export function formatQuotaTable(accounts: QuotaAccount[]): string {
 }
 
 const quota: Command = {
-  args: "[--json]",
-  about: "按额度富余从多到少列出各账号，标出额度用尽待恢复的账号",
+  args: "[--clear <账号>] [--json]",
+  about: "列出账号额度；--clear 人工解除运行时占用并立即重派排队任务",
+  options: { clear: { type: "string" } },
   positionals: [0, 0],
-  async run({ json }) {
+  async run({ json, values }) {
+    const provider =
+      typeof values.clear === "string" ? values.clear : undefined;
+    if (values.clear !== undefined) {
+      if (!provider || !/^[a-z][a-z0-9_-]{0,63}$/.test(provider))
+        throw new Problem(400, "--clear: 账号名不合法", "usage");
+      const result = await (
+        await client()
+      ).post<{ provider: string; cleared: boolean; dispatched: number }>(
+        `/quota/${encodeURIComponent(provider)}/clear`,
+        {},
+      );
+      recordResult(result);
+      if (json) printJson(result);
+      else
+        console.log(
+          `已解除 ${provider} 的运行时额度占用；立即派发 ${result.dispatched} 个排队任务`,
+        );
+      recordNext("看任务：atrium task ls");
+      return;
+    }
     const result = await (await client()).get<QuotaList>("/quota");
     if (json) printJson(result);
     else console.log(formatQuotaTable(result.accounts));

@@ -4,6 +4,7 @@ import {
   admit,
   placement,
   riskRefusal,
+  trustRefusal,
   runRequest,
 } from "../server/tasks/plan.ts";
 import {
@@ -12,7 +13,7 @@ import {
   type Exit,
   type Stop,
 } from "../server/tasks/outcome.ts";
-import { RISKS, type Risk } from "../server/tasks/profiles.ts";
+import { RISKS, TRUSTS, type Risk } from "../server/tasks/profiles.ts";
 import { TASK_STATUSES } from "../server/tasks/state.ts";
 import type { Verdict } from "../server/tasks/gates.ts";
 
@@ -55,6 +56,18 @@ test("风险上限穷举：max_risk × 任务 risk", () => {
       if (refusal)
         assert.match(refusal, new RegExp(`max_risk=${max}.*risk=${risk}`));
     }
+});
+
+test("额度换人信任等级穷举：缺省 unknown，trust 必须覆盖任务 risk", () => {
+  for (const trust of [undefined, ...TRUSTS] as (
+    (typeof TRUSTS)[number] | undefined
+  )[])
+    for (const risk of RISKS)
+      assert.equal(
+        !!trustRefusal("candidate", trust, risk),
+        TRUSTS.indexOf(trust ?? "unknown") <= RISKS.indexOf(risk),
+        `${trust} vs ${risk}`,
+      );
 });
 
 test("run 请求校验：只认 worker、risk", () => {

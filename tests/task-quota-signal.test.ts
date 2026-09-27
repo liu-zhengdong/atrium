@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   detectQuotaExhausted,
+  quotaErrorText,
   type QuotaVerdict,
 } from "../server/tasks/quota-signal.ts";
 
@@ -151,6 +152,80 @@ test("退出码 0：即便日志里有额度报文也不判额度（任务已经
       {
         exitCode: 0,
       },
+    ),
+    { exhausted: false },
+  );
+});
+
+test("t29 重启日志：摘要命令 quota 与 allowed 信息事件都不是额度错误", () => {
+  const log = sample("t29-restart-success.jsonl");
+  assert.equal(quotaErrorText(log), "");
+  assert.deepEqual(
+    detect(log, new Date("2026-09-27T10:47:00+08:00"), {
+      exitCode: null,
+      tool: "claude",
+    }),
+    { exhausted: false },
+  );
+});
+
+test("t32 重启日志：例行 rate_limit_event 包含 overageStatus=rejected 也不算受限", () => {
+  const log = sample("t32-restart-success.jsonl");
+  assert.equal(quotaErrorText(log), "");
+  assert.deepEqual(
+    detect(log, new Date("2026-09-27T11:13:00+08:00"), {
+      exitCode: null,
+      tool: "claude",
+    }),
+    { exhausted: false },
+  );
+});
+
+test("助手正文、工具结果、单独 quota/用量 不算信号；受限 status 和错误结构才算", () => {
+  const now = new Date("2026-09-27T11:13:00+08:00");
+  for (const text of [
+    "quota\n用量\n",
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"quota exceeded 429"}]}}',
+    '{"type":"user","message":{"content":[{"type":"tool_result","content":"quota exceeded 429"}]}}',
+    '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","overageStatus":"rejected"}}',
+  ])
+    assert.deepEqual(
+      detect(text, now, { exitCode: null, tool: "claude" }),
+      { exhausted: false },
+      text,
+    );
+  assert.equal(
+    hit(
+      detect(
+        '{"type":"rate_limit_event","rate_limit_info":{"status":"rate_limited"}}',
+        now,
+        { tool: "claude" },
+      ),
+    ).provider,
+    "claude",
+  );
+  assert.equal(
+    hit(
+      detect(
+        '{"type":"result","is_error":true,"error":"quota exceeded"}',
+        now,
+        { tool: "claude" },
+      ),
+    ).provider,
+    "claude",
+  );
+});
+
+test("只取退出前最后一条错误报文；后续正常结束清掉旧额度事件", () => {
+  const now = new Date("2026-09-27T11:13:00+08:00");
+  assert.deepEqual(
+    detect("ERROR quota exceeded\nERROR authentication required", now),
+    { exhausted: false },
+  );
+  assert.deepEqual(
+    detect(
+      '{"type":"error","error":"rate limit exceeded"}\n{"type":"result","is_error":false,"stop_reason":"end_turn"}',
+      now,
     ),
     { exhausted: false },
   );

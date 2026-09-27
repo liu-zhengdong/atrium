@@ -192,6 +192,31 @@ test("日志行：只认 result 与带 uuid 的回显", () => {
   );
   assert.equal(lineSignal('{"type":"assistant","result":"x"}'), undefined);
   assert.equal(lineSignal('{"type":"user","isReplay":true,"x":'), undefined);
+  // claude 2.1.283：result 行 type 不在行首；正文里转义过的字样不算
+  assert.deepEqual(
+    lineSignal(
+      '{"duration_api_ms":6168,"stop_reason":"end_turn","result":"好了","type":"result","subtype":"success"}',
+    ),
+    { kind: "result" },
+  );
+  assert.deepEqual(
+    lineSignal(
+      `{"message":{"role":"user","content":"x"},"isReplay":true,"type":"user","uuid":"${SESSION}"}`,
+    ),
+    { kind: "echo", uuid: SESSION },
+  );
+  assert.equal(
+    lineSignal(
+      JSON.stringify({ type: "assistant", text: '{"type":"result"}' }),
+    ),
+    undefined,
+  );
+  assert.equal(
+    lineSignal(
+      JSON.stringify({ type: "assistant", inner: { type: "result" } }),
+    ),
+    undefined,
+  );
   const line = JSON.parse(userLine("你好", SESSION));
   assert.deepEqual(line.message, { role: "user", content: "你好" });
   assert.equal(line.uuid, SESSION);

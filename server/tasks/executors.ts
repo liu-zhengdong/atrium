@@ -44,6 +44,14 @@ import { DiskBudget } from "./disk-budget.ts";
 import { chooseWorker } from "./worker-choice.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { BudgetProblem } from "./budget-problem.ts";
+import {
+  blockUnsent,
+  invitedFor,
+  isReviewTask,
+  openReviews,
+} from "./concern-runtime.ts";
+import { fileHints } from "./concerns.ts";
+import { hintText, needsReview } from "./concern-gate.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -63,6 +71,11 @@ export type ExecutorContext = {
   killGraceMs?: number;
   closed: () => boolean;
   onAccepted?: (id: number) => boolean;
+  /** 专员关卡（#322）：拉起审查任务；审查任务结束后立即补判父任务（否则等下一轮巡检）。 */
+  reviews?: {
+    dispatch: (ref: string) => Promise<unknown>;
+    settle: () => void;
+  };
 };
 
 export class Executors {
@@ -300,7 +313,8 @@ export class Executors {
       if (this.ctx.closed()) return;
       this.collectSkills(active);
       if (getTask(this.ctx.db, id).status !== "running") return;
-      const { decision, verdict, facts } = outcome;
+      const { verdict, facts } = outcome;
+      let { decision } = outcome;
       if (outcome.localCheck)
         noteTask(this.ctx.db, id, "local_check", outcome.localCheck);
       const detail = exitDetail(exit);
@@ -313,6 +327,32 @@ export class Executors {
           ...(facts ? { diff: diffSize(facts) } : {}),
           ...detail,
         });
+      const hints = facts
+        ? fileHints(
+            this.ctx.db,
+            id,
+            facts.numstat.map((stat) => stat.file),
+          )
+        : [];
+      if (hints.length)
+        noteTask(this.ctx.db, id, "concern_hints", {
+          hints,
+          next: `atrium task set ${taskRef(id)} --concern ${hints.map((h) => h.ref).join(",")}`,
+        });
+      // 专员关卡：其余关卡通过（或只差 CI）才请专员审；审查结果由 settleReviews 补判。
+      const reviewing =
+        !outcome.quota &&
+        !!verdict &&
+        (decision.event === "exit_ok" ||
+          (decision.event === "block" && verdict.awaitingCi)) &&
+        needsReview(invitedFor(this.ctx.db, id).length);
+      if (reviewing)
+        decision = {
+          event: "block",
+          publish: "blocked",
+          retry: false,
+          reason: [decision.reason, "等专员审查"].filter(Boolean).join("；"),
+        };
       this.advance(id, { kind: decision.event }, outcome.fields, {
         ...(decision.reason ? { reason: decision.reason } : {}),
         ...(verdict && !verdict.passed
@@ -320,6 +360,10 @@ export class Executors {
           : {}),
         ...detail,
       });
+      if (reviewing) {
+        await this.openReviews(id, facts);
+        return;
+      }
       const retryContext = {
         db: this.ctx.db,
         launchOptions: this.ctx.launchOptions,
@@ -331,6 +375,12 @@ export class Executors {
           ? { diff: diffSize(facts) }
           : {}),
         ...(verdict && !verdict.passed ? { gates: verdict.failed } : {}),
+        ...(hints.length
+          ? {
+              concern_hints: hints.map(hintText),
+              next: `要请专员复审：atrium task set ${taskRef(id)} --concern ${hints.map((h) => h.ref).join(",")}，再 atrium task run ${taskRef(id)}`,
+            }
+          : {}),
       };
       const thinking = routeAfterThinking({
         thinking: outcome.ending?.kind === "thinking",
@@ -362,6 +412,11 @@ export class Executors {
           decision,
           published,
         );
+      // 审查任务的结局经父任务的专员关卡汇报，不单独投给负责人。
+      else if (isReviewTask(this.ctx.db, id)) {
+        /* 由 reviews.settle 补判父任务。 */
+      }
+      // 关卡（含专员）都过了才进合入队列。
       else if (decision.publish === "done" && this.ctx.onAccepted?.(id)) {
         this.publish(id, "merge_queued", published);
       } else
@@ -371,6 +426,7 @@ export class Executors {
           published,
           active.stop?.kind === "user" ? active.stop.by : undefined,
         );
+      if (isReviewTask(this.ctx.db, id)) this.ctx.reviews?.settle();
     } catch (error) {
       this.failAfterError(id, error);
     } finally {
@@ -382,6 +438,32 @@ export class Executors {
       this.ctx.waits.changed(id);
       if (!this.ctx.closed()) void this.drain(active.tool);
     }
+  }
+
+  /** 建本轮专员审查任务并逐个拉起；拉不起的标受阻，由巡检判为没出结论。 */
+  private async openReviews(
+    id: number,
+    facts: Parameters<typeof openReviews>[3],
+  ) {
+    const refs = openReviews(
+      this.ctx.db,
+      this.ctx.launchOptions.data,
+      id,
+      facts,
+    );
+    for (const ref of refs) {
+      try {
+        if (!this.ctx.reviews) throw new Error("运行时没有接上专员审查");
+        await this.ctx.reviews.dispatch(ref);
+      } catch (error) {
+        blockUnsent(
+          this.ctx.db,
+          ref,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    this.ctx.reviews?.settle();
   }
 
   /** 执行者改了挂载的技能副本：生成修订提议，通知任务负责人（事件里带技能 owner 与其 leader）。 */

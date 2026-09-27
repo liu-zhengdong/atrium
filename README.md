@@ -151,6 +151,7 @@ atrium org history atrium/runtime                 # 修订；--target charter --
 atrium org add atrium web --kind module --reason 拆模块
 atrium task add "改派活" --role atrium/runtime --from atrium/质量   # 任务记到节点；--from 记投任务的关注点
 atrium task add "接看板" --part atrium/runtime                      # 任务归属全景图上的哪一部分；task set --part '' 摘下
+atrium task add "改登录日志" --concern 安全,质量                    # 请专员：派活附检查要点，交付后按清单审、可否决；task set --concern '' 都不请
 atrium org link-roles                             # 预览把旧 role 字符串的任务关联到节点；--apply 写入
 ```
 
@@ -189,6 +190,25 @@ atrium org point-rm k1                  # 删掉过时的
 ```
 
 任务用 `--part 节点` 标归属哪一部分（谁负责），与 `--role`（谁来做、记谁的账）分开记；旧写法 `--goal gN` 按目标的负责节点落到归属部分。
+
+### 任务请专员
+
+专员（关注点节点）不拥有代码，也不是每件事都过目，被请来才上场。任务用 `--concern 安全,质量` 请专员（至多 5 位，只认关注点节点；执行中不能改，下一轮派活生效）：
+
+1. **开工前**：派活提示词附「请了的专员与检查要点」——每位专员的章程目标、本节点要点（`org point-add` 写的那些）和底线（该关注点节点自己的硬边界）。
+2. **交付后**：执行者档案的关卡都通过（或只差 CI）时，任务先转受阻「等专员审查」，运行时给每位专员建一个一次性的审查子任务（记在关注点节点上、只交摘要），详述里写明 PR、工作树、改动规模和清单。审查摘要最后一行须是 `结论：通过` 或 `结论：否决：原因`。
+3. **补判**：全部通过才补判完成；任一否决，任务留在卡住，原因写「专员否决：安全（o4 · t9）：……」；审查任务失败、受阻或没写结论判「没出结论」，同样卡住，重跑审查任务后结论跟着更新。结论与证据记在任务事件（`concern_review`、`concern_gate`）里，否决或没出结论投给负责人；审查任务自己的结局不单独投递。`task wait` 等到专员出结论才返回。
+4. **看**：`task show` 的「请的专员」逐位写结论；`atrium top` 每行下面一行「专员：安全 通过 · 质量 审查中 t9」。
+
+**要不要请的提示**只提示、不自动请。规则写在关注点章程的 `invite_when`（至多 20 条）：带 `/`、`*`、`?` 或以 `.` 开头的是路径通配（`**` 跨目录），对照交付后的改动文件；其余是关键词，对照标题、详述与文件路径。建任务、改标题时按关键词提示，交付后按改动文件提示（记 `concern_hints` 事件，完成事件里带上），回执给出 `atrium task set tN --concern o4`。
+
+```yaml
+# 安全（关注点）章程 frontmatter
+invite_when: ["server/auth*", "**/*secret*", "凭据", "token"]
+boundaries:
+  - id: no-secret
+    summary: 凭据不进日志、提交与 PR # 底线：越过即否决
+```
 
 ### 目标树迁移
 

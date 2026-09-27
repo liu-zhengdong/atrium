@@ -9,6 +9,7 @@ import { recordNext } from "./contract.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { concernsText, hintLines } from "./task-concerns.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
@@ -146,12 +147,13 @@ function partInput(values: Values): { part?: string; goal?: string } {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--concern 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--part 写归属哪一部分（全景图上的节点；旧写法 --goal gN 按迁移映射到节点），--parent 挂到父任务下，--brief 附任务详述 md",
+    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--part 写归属哪一部分（全景图上的节点；旧写法 --goal gN 按迁移映射到节点），--concern 请专员（关注点节点，派活附其检查要点，交付后按清单审、可否决），--parent 挂到父任务下，--brief 附任务详述 md",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
+    concern: { type: "string" },
     goal: { type: "string" },
     role: { type: "string" },
     from: { type: "string" },
@@ -195,6 +197,9 @@ const add: Command = {
         ? {}
         : { from: str(values, "from") }),
       ...partInput(values),
+      ...(str(values, "concern") === undefined
+        ? {}
+        : { concern: str(values, "concern") }),
       ...(repo === undefined
         ? {}
         : { repo: existing(repo, "--repo", "directory") }),
@@ -219,8 +224,9 @@ const add: Command = {
     else
       console.log(
         [
-          `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}`,
+          `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}${task.concerns?.length ? ` · 请了 ${task.concerns.map((c) => c.name).join("、")}` : ""}`,
           ...roleHint(task),
+          ...hintLines(task),
         ].join("\n"),
       );
     recordNext(
@@ -335,6 +341,7 @@ const show: Command = {
         ],
         ["投任务的节点", task.origin_ref],
         ["归属部分", task.part_ref],
+        ["请的专员", concernsText(task.concerns)],
         ["原里程碑", task.goal_ref],
         ["仓库", task.repo],
         [
@@ -360,6 +367,7 @@ const show: Command = {
             .slice(1)
             .filter(([, value]) => value !== null && value !== "")
             .map(([key, value]) => `  ${key}：${value}`),
+          ...hintLines(task, true).map((line) => `  ${line}`),
           ...(task.result ? ["结果摘要：", task.result] : []),
           ...(task.events.length
             ? [
@@ -413,14 +421,15 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--role 节点] [--from 节点|''] [--part 节点|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、归属部分、详述、交付物、依赖和自动派发`,
+  args: "tN [--status S] [--pr URL] [--role 节点] [--from 节点|''] [--part 节点|''] [--concern 专员[,专员]|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、归属部分、请的专员（--concern，下一轮派活生效）、详述、交付物、依赖和自动派发`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
     role: { type: "string" },
     from: { type: "string" },
     part: { type: "string" },
+    concern: { type: "string" },
     goal: { type: "string" },
     brief: { type: "string" },
     deliver: { type: "string" },
@@ -446,6 +455,8 @@ const set: Command = {
     const from = str(values, "from");
     if (from !== undefined) body.from = from;
     Object.assign(body, partInput(values));
+    const concern = str(values, "concern");
+    if (concern !== undefined) body.concern = concern;
     const brief = str(values, "brief");
     if (brief !== undefined)
       body.brief_path = brief === "" ? "" : existing(brief, "--brief", "file");
@@ -462,7 +473,7 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--role、--from、--part、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
+        "至少给一项：--status、--pr、--title、--role、--from、--part、--concern、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -474,6 +485,14 @@ const set: Command = {
         [
           `${task.ref} 已更新 · [${task.status}] ${task.title}`,
           ...(role !== undefined ? roleHint(task) : []),
+          ...(concern !== undefined
+            ? [
+                task.concerns?.length
+                  ? `请了 ${task.concerns.map((c) => `${c.name}（${c.ref}）`).join("、")}：派活时附检查要点，交付后按清单审`
+                  : "没有请专员",
+              ]
+            : []),
+          ...hintLines(task),
         ].join("\n"),
       );
     recordNext(`看全貌：atrium task tree ${task.parent_ref ?? task.ref}`);

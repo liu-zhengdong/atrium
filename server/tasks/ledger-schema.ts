@@ -82,6 +82,9 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec(
       "ALTER TABLE tasks ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0 CHECK(urgent IN (0,1))",
     );
+  // 远程执行者（#358）：这一轮跑在哪台主机上，指向 hosts.id；本机为 NULL。
+  if (!columns.some((column) => column.name === "host_id"))
+    db.exec("ALTER TABLE tasks ADD COLUMN host_id INTEGER");
   if (!columns.some((column) => column.name === "schedule_state"))
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_state TEXT");
   if (!columns.some((column) => column.name === "schedule_reason"))

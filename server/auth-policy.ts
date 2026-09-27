@@ -34,11 +34,23 @@ const mapReadRoutes = new Set([
   "GET /api/map/leaders/:id",
 ]);
 
+// 远程主机的代理（#358）：接入认一次性接入码（请求体里），其余认主机令牌，都由路由自己校验；
+// 代理经用户自己的转发或 VPN 连进来，Host 不一定是本机名。
+const agentRoutes = new Set([
+  "POST /api/agent/join",
+  "POST /api/agent/hello",
+  "POST /api/agent/poll",
+  "POST /api/agent/reply",
+  "POST /api/agent/log",
+  "POST /api/agent/exit",
+]);
+
 export type AuthPolicy =
-  "separate" | "user" | "map-login" | "map-page" | "map-read";
+  "separate" | "user" | "map-login" | "map-page" | "map-read" | "agent";
 export function authPolicy(method: string, route: string): AuthPolicy {
   const key = `${method === "HEAD" ? "GET" : method} ${route}`;
   if (separatelyAuthenticatedRoutes.has(key)) return "separate";
+  if (agentRoutes.has(key)) return "agent";
   if (mapLoginRoutes.has(key)) return "map-login";
   if (mapPageRoutes.has(key)) return "map-page";
   if (mapReadRoutes.has(key)) return "map-read";

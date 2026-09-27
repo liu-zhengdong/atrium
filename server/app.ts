@@ -25,6 +25,7 @@ import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
+import { registerHostRoutes } from "./hosts/routes.ts";
 import {
   LeaderWaker,
   leaderEnvOptions,
@@ -141,6 +142,9 @@ export async function createApp(options: {
     reply
       .header("X-Content-Type-Options", "nosniff")
       .header("Referrer-Policy", "no-referrer");
+    // 代理接口（#358）只认主机令牌，远程机器经转发连进来时 Host 不是本机名；其余管理入口仅面向本机。
+    const agent =
+      authPolicy(request.method, request.routeOptions.url ?? "") === "agent";
     let hostname: string;
     try {
       hostname = new URL(`http://${request.headers.host}`).hostname;
@@ -148,6 +152,7 @@ export async function createApp(options: {
       throw new Problem(403, "不接受此 Host");
     }
     if (
+      !agent &&
       !["localhost", "atrium.localhost", "127.0.0.1", "[::1]"].includes(
         hostname,
       )
@@ -208,7 +213,8 @@ export async function createApp(options: {
           .header("cache-control", "no-store")
           .send(expiredPage("全景网页的登录已失效"));
     }
-    // /api/service/* 由 main.ts 用实例控制凭据校验；没有 Web 外壳，未匹配的路径也要求用户凭据再报 404。
+    // /api/service/* 由 main.ts 用实例控制凭据校验；代理接口由路由自己认接入码或主机令牌；
+    // 没有 Web 外壳，未匹配的路径也要求用户凭据再报 404。
     else if (policy !== "user") return;
     if (auth.validUser(request.headers.authorization)) return;
     if (mapLogin.valid(request.headers.cookie))
@@ -243,6 +249,7 @@ export async function createApp(options: {
   migrateSpecialists(db);
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
   registerPatrolRoutes(app, db, taskRunner);
+  registerHostRoutes(app, db, taskRunner);
   const secretaryFallback = new SecretaryFallback(
     taskRunner.inbox,
     resolve(options.data),

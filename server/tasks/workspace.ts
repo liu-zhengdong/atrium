@@ -2,7 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { ADAPTERS, type Adapter, type Launch } from "./adapters/index.ts";
+import {
+  ADAPTERS,
+  type Adapter,
+  type Launch,
+  type LaunchInput,
+} from "./adapters/index.ts";
 import { taskDir } from "./active.ts";
 import { defaultBranch, ensureWorktree, exec, type Exec } from "./git.ts";
 import { noteTask, type Task } from "./ledger.ts";
@@ -28,6 +33,8 @@ import type { TellMode } from "./adapters/index.ts";
 import { checklists } from "./concerns.ts";
 import { concernSection } from "./concern-gate.ts";
 import { patrolRun } from "./patrol.ts";
+import { firstLine } from "./git.ts";
+import { remoteLayout } from "../hosts/state.ts";
 
 /**
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
@@ -80,6 +87,26 @@ export type Prepared = {
   tellMode: TellMode;
   /** 这次写进提示词、拉起成功后即算送达的捎话。 */
   tellIds: number[];
+  /** 派到远程主机（#358）：cwd、worktree 是那台机器上的路径，launch 在代理回执后换成它实际的调用。 */
+  remote?: RemotePlan;
+};
+
+/** 远程主机（#358）：系统与代理数据目录决定那台机器上的路径。 */
+export type RemoteSite = { host: number; os: string; data_dir: string };
+
+/** 交给代理的：提示词、那台机器上的任务目录，有仓库时怎么克隆、在哪建工作树。 */
+export type RemotePlan = {
+  host: number;
+  prompt: string;
+  dir: string;
+  resume?: ResumeWith;
+  repo?: {
+    url: string;
+    clone: string;
+    worktree: string;
+    branch: string;
+    base: string;
+  };
 };
 
 /** 续上原会话：带着这段补充，不重发整份提示词。 */
@@ -98,12 +125,37 @@ function briefOf(task: Task) {
   );
 }
 
-/** 建工作目录、写提示词、算出进程调用；不拉起。 */
+/**
+ * 按适配器算出进程调用；续上会话时把补充写进 tellFile，以它为这次的提示词。
+ * 本机派活与远程代理（server/agent/）共用这一份。
+ */
+export function buildLaunch(
+  adapter: Adapter,
+  input: LaunchInput,
+  resume?: ResumeWith & { file: string },
+): Launch {
+  if (!resume) return adapter.build(input);
+  if (!adapter.resume)
+    throw new Problem(400, `${adapter.tool} 不支持续上会话`, "usage");
+  writeFileSync(resume.file, resume.text, { mode: 0o600 });
+  return adapter.resume({
+    ...input,
+    promptFile: resume.file,
+    prompt: resume.text,
+    session: resume.session,
+  });
+}
+
+/**
+ * 建工作目录、写提示词、算出进程调用；不拉起。
+ * 给了 site（远程主机）时不在本机建工作树、不挂技能：只算那台机器上的路径、写好提示词，交给代理去建和拉起。
+ */
 export async function prepareRun(
   task: Task,
   chosen: { worker: ResolvedWorker; risk: Risk },
   options: LaunchOptions,
   resume?: ResumeWith,
+  site?: RemoteSite,
 ): Promise<Prepared> {
   const run = options.run ?? exec;
   const { worker } = chosen;
@@ -117,6 +169,7 @@ export async function prepareRun(
   let worktree: string | null = null;
   let branch: string | null = null;
   let base: string | null = null;
+  let remote: RemotePlan | undefined;
   if (task.repo) {
     if (!existsSync(task.repo))
       throw new Problem(400, `任务仓库不存在：${task.repo}`, "usage");
@@ -127,9 +180,42 @@ export async function prepareRun(
       task.role ?? undefined,
     );
     base = await defaultBranch(task.repo, run);
-    await ensureWorktree(task.repo, plan, base, run);
-    cwd = worktree = plan.path;
+    if (site) {
+      const origin = await run(
+        "git",
+        ["-C", task.repo, "remote", "get-url", "origin"],
+        { timeoutMs: 10_000 },
+      );
+      const url = origin.ok ? origin.stdout.trim() : "";
+      if (!url)
+        throw new Problem(
+          409,
+          `读不到仓库 ${task.repo} 的 origin 远端，远程主机无从克隆：${firstLine(origin.stderr) || "没有 origin"}`,
+          "conflict",
+        );
+      const layout = remoteLayout(site, { id: task.id, slug: plan.slug }, url);
+      cwd = worktree = layout.worktree!;
+      remote = {
+        host: site.host,
+        prompt: "",
+        dir: layout.dir,
+        repo: {
+          url,
+          clone: layout.clone!,
+          worktree: layout.worktree!,
+          branch: plan.branch,
+          base,
+        },
+      };
+    } else {
+      await ensureWorktree(task.repo, plan, base, run);
+      cwd = worktree = plan.path;
+    }
     branch = plan.branch;
+  } else if (site) {
+    const layout = remoteLayout(site, { id: task.id, slug: null }, null);
+    cwd = layout.cwd;
+    remote = { host: site.host, prompt: "", dir: layout.dir };
   } else {
     cwd = join(dir, "work");
     mkdirSync(cwd, { recursive: true });
@@ -144,8 +230,9 @@ export async function prepareRun(
       ? getJobRole(options.db, `r${task.job_id}`)
       : undefined;
   const patrol = options.db ? patrolRun(options.db, task.id) : undefined;
+  // 远程的工作树不在本机：说明文件读本机仓库的。
   const docs = task.repo
-    ? await loadRoleDocs(worktree ?? task.repo, node)
+    ? await loadRoleDocs(site ? task.repo : (worktree ?? task.repo), node)
     : { roleDoc: node?.body ?? "", rootDoc: "" };
   // 组织技能：节点链上绑定的 ∪ 档案指定的，拷进任务目录，只对这次运行生效。
   const picked =
@@ -162,14 +249,22 @@ export async function prepareRun(
           ],
         })
       : undefined;
-  const mount = picked
-    ? mountSkills(
-        dir,
-        worker.tool,
-        picked.skills,
-        options.env.HOME ?? homedir(),
-      )
-    : undefined;
+  // 远程主机上暂不挂载组织技能（技能副本在本机任务目录），记一笔。
+  if (site && options.db && picked?.skills.length)
+    noteTask(options.db, task.id, "skills_skipped", {
+      host: `h${site.host}`,
+      reason: "远程主机上暂不挂载组织技能",
+      skills: picked.skills.map((skill) => skill.slug),
+    });
+  const mount =
+    picked && !site
+      ? mountSkills(
+          dir,
+          worker.tool,
+          picked.skills,
+          options.env.HOME ?? homedir(),
+        )
+      : undefined;
   if (
     options.db &&
     picked &&
@@ -233,28 +328,36 @@ export async function prepareRun(
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, prompt, { mode: 0o600 });
   const logFile = join(dir, "log");
-  const input = {
-    promptFile,
-    prompt,
-    cwd,
-    model: worker.cliModel,
-    effort: worker.effort,
-    resultFile: join(dir, "last-message.md"),
-    live: tellMode === "stdin",
-  };
-  let launch: Launch;
-  if (resume) {
-    if (!adapter.resume)
-      throw new Problem(400, `${adapter.tool} 不支持续上会话`, "usage");
-    const tellFile = join(dir, "tell.md");
-    writeFileSync(tellFile, resume.text, { mode: 0o600 });
-    launch = adapter.resume({
-      ...input,
-      promptFile: tellFile,
-      prompt: resume.text,
-      session: resume.session,
-    });
-  } else launch = adapter.build(input);
+  if (remote)
+    return {
+      worker,
+      adapter,
+      risk: chosen.risk,
+      cwd,
+      worktree,
+      branch,
+      base,
+      dir,
+      promptFile,
+      logFile,
+      launch: { command: adapter.executable, args: [], cwd },
+      tellMode,
+      tellIds: resume ? [] : unsent(tells).map((tell) => tell.id),
+      remote: { ...remote, prompt, ...(resume ? { resume } : {}) },
+    };
+  const launch = buildLaunch(
+    adapter,
+    {
+      promptFile,
+      prompt,
+      cwd,
+      model: worker.cliModel,
+      effort: worker.effort,
+      resultFile: join(dir, "last-message.md"),
+      live: tellMode === "stdin",
+    },
+    resume ? { ...resume, file: join(dir, "tell.md") } : undefined,
+  );
   if (mount) {
     launch.args.push(...mount.args);
     if (Object.keys(mount.env).length)

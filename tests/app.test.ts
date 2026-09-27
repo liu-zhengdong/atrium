@@ -37,10 +37,12 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     ),
   ];
   assert.deepEqual(prefixes.sort(), [
+    "agent",
     "auth",
     "decisions",
     "events",
     "goals",
+    "hosts",
     "leaders",
     "map",
     "memo",
@@ -55,7 +57,7 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "tasks",
     "workers",
   ]);
-  // 全景网页（#322）的页面与只读接口另认本机会话；其余一律要用户凭据。
+  // 全景网页（#322）的页面与只读接口另认本机会话；远程主机的代理接口（#358）认接入码或主机令牌；其余一律要用户凭据。
   const exceptions = routes
     .filter(
       ({ method, url }) =>
@@ -82,6 +84,12 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "GET /map/format.js",
     "GET /map/login",
     "GET /map/style.css",
+    "POST /api/agent/exit",
+    "POST /api/agent/hello",
+    "POST /api/agent/join",
+    "POST /api/agent/log",
+    "POST /api/agent/poll",
+    "POST /api/agent/reply",
     "POST /api/auth/rotate",
   ]);
   for (const { method, url } of routes) {
@@ -253,6 +261,14 @@ test("旧运行时留下的表原样保留，精简入口照常启动且不读�
         .all()
         .map((row) => ({ ...row })),
       [{ id: "x", name: "旧身份" }],
+    );
+    // 执行机器（#358）是新表：本机登记为 h1，旧表 agents 不受影响。
+    assert.deepEqual(
+      db
+        .prepare("SELECT id,kind FROM hosts")
+        .all()
+        .map((row) => ({ ...row })),
+      [{ id: 1, kind: "local" }],
     );
     // 旧版账本补上紧急列（t113）：标题写「紧急：」的旧任务不自动转换。
     assert.deepEqual(

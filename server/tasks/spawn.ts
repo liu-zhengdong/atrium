@@ -32,7 +32,7 @@ export const shortArg = (arg: string) => {
  * 返回的 offset 是抬头写完时的日志长度，之后都是执行者的输出。
  */
 export async function spawnWorker(
-  prepared: Prepared,
+  prepared: Pick<Prepared, "launch" | "logFile"> & { worker: { id: string } },
   env: NodeJS.ProcessEnv,
   taskRefText: string,
   append = false,

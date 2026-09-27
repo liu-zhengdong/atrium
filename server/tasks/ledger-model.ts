@@ -25,6 +25,8 @@ export type TaskRow = {
   status: TaskStatus;
   worker: string | null;
   pid: number | null;
+  /** 这一轮跑在哪台远程主机上（#358，hosts.id）；本机为 null。pid、worktree 是那台机器上的。 */
+  host_id?: number | null;
   worktree: string | null;
   branch: string | null;
   pr_url: string | null;
@@ -71,6 +73,8 @@ export type Task = TaskRow & {
   goal_ref: string | null;
   part_ref: string | null;
   job_ref: string | null;
+  /** 跑在哪台远程主机上（hN）；本机为 null。 */
+  host_ref: string | null;
   /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
   queued_reason?: string | null;
   /** 请了的专员与本轮结论（concerns.ts）；没请时不给。 */
@@ -107,6 +111,7 @@ export const view = (
   goal_ref: string | null;
   part_ref: string | null;
   job_ref: string | null;
+  host_ref: string | null;
 } => ({
   ...row,
   ref: taskRef(row.id),
@@ -116,6 +121,7 @@ export const view = (
   goal_ref: row.goal_id == null ? null : `g${row.goal_id}`,
   part_ref: row.part_id == null ? null : `o${row.part_id}`,
   job_ref: row.job_id == null ? null : `r${row.job_id}`,
+  host_ref: row.host_id == null ? null : `h${row.host_id}`,
 });
 
 /** 列表、树、排期不带详述内容（至多 64 KB 一条），要看用 task show。 */

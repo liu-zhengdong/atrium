@@ -29,6 +29,8 @@ export type TopRow = {
     "reviewing" | "merge_queued" | "merging" | "merged" | "online" | null;
   merge_queued_at?: number | null;
   worker: string | null;
+  /** 在远程主机上跑（#358，hN）；本机或旧版服务没有。 */
+  host?: string | null;
   started_at: number | null;
   ended_at: number | null;
   queued_at: number | null;
@@ -76,6 +78,14 @@ export type Snapshot = {
   truncated: boolean;
   /** 本机负载与限额（#358）；旧版服务没有这个字段。 */
   host?: HostView;
+  /** 接入的远程主机（#358 第 1 步）；没有远程主机时不给。 */
+  hosts?: {
+    ref: string;
+    name: string;
+    status: string;
+    running: number;
+    max: number | null;
+  }[];
   /** leader 层：每位负责什么、最近一次唤醒在处理什么、还有几件要处理的事；没有 leader 时不给。 */
   leaders?: {
     ref: string;
@@ -236,6 +246,10 @@ export type Layout = {
   stateW: number;
 };
 
+/** 执行者列：跑在远程主机上的前面带主机短号（#358）。 */
+const workerCell = (row: TopRow) =>
+  row.host ? `${row.host} ${row.worker ?? ""}` : (row.worker ?? "");
+
 /** 标题最多占剩下的 55%，免得它在窄屏上把最近动作挤没。 */
 const TITLE_SHARE = 0.55;
 
@@ -248,7 +262,7 @@ export function layoutOf(
   const refW = Math.max(3, ...rows.map((row) => width(row.ref)));
   const workerW = Math.min(
     MAX_WORKER,
-    Math.max(0, ...rows.map((row) => width(row.worker ?? ""))),
+    Math.max(0, ...rows.map((row) => width(workerCell(row)))),
   );
   const showWorker = width_ >= WORKER_MIN_WIDTH && workerW > 0;
   const overhead =
@@ -335,7 +349,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
         `${SYMBOL[row.processing && phase(row) === "blocked" ? "processing" : phase(row)] ?? "·"} ${pad(row.ref, plan.refW)}`,
         pad(oneLine(titleOf(row), plan.titleW), plan.titleW),
         ...(plan.showWorker
-          ? [pad(oneLine(row.worker ?? "", plan.workerW), plan.workerW)]
+          ? [pad(oneLine(workerCell(row), plan.workerW), plan.workerW)]
           : []),
         pad(cell, plan.stateW),
         pad(oneLine(action(row, frame.now), plan.actionW), plan.actionW),
@@ -364,6 +378,14 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   if (!rows.length) lines.push("现在没有在跑、排队或受阻的任务");
   if (snapshot.truncated)
     lines.push(`（任务过多，只显示前 ${rows.length} 个）`);
+  if (snapshot.hosts?.length)
+    lines.push(
+      "",
+      oneLine(
+        `主机：${snapshot.hosts.map((h) => `${h.ref} ${h.name} ${h.status} ${h.running}/${h.max ?? "不限"}`).join(" · ")}`,
+        frame.width,
+      ),
+    );
   if (snapshot.leaders?.length)
     lines.push(
       "",

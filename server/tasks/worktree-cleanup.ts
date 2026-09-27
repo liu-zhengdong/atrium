@@ -6,6 +6,10 @@ import { redact } from "../secret-redact.ts";
 import { exec, type Exec } from "./git.ts";
 import { all, one } from "./ledger-model.ts";
 import { noteTask } from "./ledger.ts";
+import { worktreePlan } from "./prepare.ts";
+import { hostRun } from "../hosts/model.ts";
+import { hostRef } from "../hosts/state.ts";
+import type { RemoteHosts } from "../hosts/remote.ts";
 
 type Finished = {
   id: number;
@@ -14,6 +18,9 @@ type Finished = {
   branch: string | null;
   status: string;
   delivery_stage: string | null;
+  host_id: number | null;
+  title: string;
+  role: string | null;
 };
 
 const BACKOFF_MIN_MS = 60_000;
@@ -45,12 +52,14 @@ export class WorktreeCleanup {
     private readonly run: Exec = exec,
     private readonly active: (id: number) => boolean = () => false,
     private readonly now: () => number = Date.now,
+    /** 远程主机的代理（#358）：远程任务的工作树在那台机器上，经它清。 */
+    private readonly remote?: RemoteHosts,
   ) {}
 
   private candidate(id: number) {
     return one<Finished>(
       this.db,
-      `SELECT id,repo,worktree,branch,status,delivery_stage FROM tasks
+      `SELECT id,repo,worktree,branch,status,delivery_stage,host_id,title,role FROM tasks
        WHERE id=? AND repo IS NOT NULL AND worktree IS NOT NULL
          AND (status='cancelled' OR (status='done' AND delivery_stage IN ('merged','online')))`,
       id,
@@ -73,6 +82,8 @@ export class WorktreeCleanup {
       }),
     );
     try {
+      if (task.host_id != null && task.host_id !== 1)
+        return await this.cleanupRemote(task);
       const listed = await this.run("git", [
         "-C",
         task.repo,
@@ -149,6 +160,68 @@ export class WorktreeCleanup {
       this.cleaning.delete(id);
       finished();
     }
+  }
+
+  /**
+   * 远程任务（#358）：本机只有合入时建的副本（按工作树规则的路径），直接删；
+   * 那台机器上的工作树与分支经代理删，代理离线就留到下次巡检。
+   */
+  private async cleanupRemote(task: Finished): Promise<boolean> {
+    const host = task.host_id!;
+    if (!this.remote?.online(host)) return false;
+    const copy = worktreePlan(
+      task.repo,
+      task.id,
+      task.title,
+      task.role ?? undefined,
+    ).path;
+    if (existsSync(copy)) {
+      const removed = await this.run(
+        "git",
+        ["-C", task.repo, "worktree", "remove", "--force", copy],
+        { timeoutMs: 120_000 },
+      );
+      if (!removed.ok) throw new Error(redact(removed.stderr));
+    }
+    if (task.status === "done" && task.branch) {
+      const found = await this.run("git", [
+        "-C",
+        task.repo,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        `refs/heads/${task.branch}`,
+      ]);
+      if (found.ok)
+        await this.run("git", ["-C", task.repo, "branch", "-D", task.branch]);
+    }
+    const clone = hostRun(this.db, task.id)?.clone;
+    if (clone) {
+      const git = this.remote.exec(host);
+      const removed = await git(
+        "git",
+        ["-C", clone, "worktree", "remove", "--force", task.worktree],
+        { timeoutMs: 120_000 },
+      );
+      // 那边已经没有这个工作树也算清掉了。
+      if (
+        !removed.ok &&
+        !/is not a working tree|not a working tree/i.test(removed.stderr)
+      )
+        throw new Error(redact(removed.stderr));
+      if (task.branch)
+        await git("git", ["-C", clone, "branch", "-D", task.branch]);
+    }
+    this.db
+      .prepare(
+        "UPDATE tasks SET worktree=NULL,updated_at=? WHERE id=? AND worktree=?",
+      )
+      .run(Date.now(), task.id, task.worktree);
+    noteTask(this.db, task.id, "worktree_cleaned", {
+      path: task.worktree,
+      host: hostRef(host),
+    });
+    return true;
   }
 
   /** 有界分页；同一轮里失败的任务只尝试一次，随后按连败退避。 */

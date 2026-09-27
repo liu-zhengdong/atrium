@@ -20,6 +20,10 @@ export type Active = {
   pid: number;
   /** 服务重启后接管的进程没有句柄，只能按 pid 轮询。 */
   child?: ChildProcess;
+  /** 跑在远程主机上（#358）：pid、repo、worktree 都是那台机器上的，进程由代理拉起与结束。 */
+  host?: number;
+  /** 远程的第几轮（日志与退出按它对上）。 */
+  run?: number;
   tool: Tool;
   worker: ResolvedWorker;
   risk: Risk;
@@ -76,24 +80,31 @@ export function probeFor(
 export function launched(input: {
   task: Task;
   pid: number;
-  child: ChildProcess;
+  child?: ChildProcess;
   worker: ResolvedWorker;
   risk: Risk;
   prepared: Prepared;
   retried: boolean;
   exec: Exec;
+  /** 远程：主机与轮号；repo 是那台机器上的克隆。 */
+  remote?: { host: number; run: number; repo: string | null };
 }): Active {
   const { prepared, worker } = input;
   return {
     id: input.task.id,
     pid: input.pid,
     child: input.child,
+    ...(input.remote ? { host: input.remote.host, run: input.remote.run } : {}),
     tool: worker.tool,
     worker,
     risk: input.risk,
     prepared,
     logFile: prepared.logFile,
-    repo: input.task.repo,
+    // 远程的最后消息由代理传回本机任务目录。
+    ...(input.remote
+      ? { resultFile: join(prepared.dir, "last-message.md") }
+      : {}),
+    repo: input.remote ? input.remote.repo : input.task.repo,
     worktree: prepared.worktree,
     branch: prepared.branch,
     base: prepared.base,
@@ -121,6 +132,8 @@ export function adopted(input: {
   base: string | null;
   data: string;
   exec: Exec;
+  /** 远程：主机、轮号与那台机器上的克隆（host_runs）。 */
+  remote?: { host: number; run: number; repo: string | null };
 }): Active {
   const { task, worker } = input;
   const dir = taskDir(input.data, task.id);
@@ -129,12 +142,13 @@ export function adopted(input: {
   return {
     id: task.id,
     pid: task.pid!,
+    ...(input.remote ? { host: input.remote.host, run: input.remote.run } : {}),
     tool: worker.tool,
     worker,
     risk: "low",
     logFile,
     resultFile: join(dir, "last-message.md"),
-    repo: task.repo,
+    repo: input.remote ? input.remote.repo : task.repo,
     worktree: task.worktree,
     branch: task.branch,
     base: input.base,

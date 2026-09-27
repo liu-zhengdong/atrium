@@ -79,6 +79,8 @@ export function denyReason(leader: string, method: string, route: string) {
   if (route.startsWith("/api/workers/profiles"))
     return denied(leader, "改执行者档案");
   if (key === "POST /api/leaders") return denied(leader, "登记新的 leader");
+  if (route.startsWith("/api/hosts"))
+    return denied(leader, "登记、移除或暂停执行机器");
   return denied(leader, `调用 ${key}`);
 }
 

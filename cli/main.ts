@@ -151,13 +151,15 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["任务", "角色", "全景", "目标", "组织"].flatMap((group) => [
-      "",
-      group,
-      ...Object.entries(commands)
-        .filter(([name]) => groupOf(name) === group)
-        .map(([name, command]) => entry(name, command)),
-    ]),
+    ...["任务", "角色", "全景", "目标", "组织", "备忘与决定"].flatMap(
+      (group) => [
+        "",
+        group,
+        ...Object.entries(commands)
+          .filter(([name]) => groupOf(name) === group)
+          .map(([name, command]) => entry(name, command)),
+      ],
+    ),
     "",
     "命令详情：atrium <命令> --help；调用约定：atrium guide",
   ].join("\n");

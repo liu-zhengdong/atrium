@@ -120,6 +120,20 @@ export function registerTaskRoutes(
       disconnect(request),
     ),
   );
+  // 会审（#322 第 3 步）：议题 → 并行专员意见 → leader 汇总 → 结论。
+  app.post("/api/reviews", { bodyLimit: 16 * 1024 }, async (request, reply) =>
+    reply.code(201).send(await runner.addCouncil(request.body)),
+  );
+  app.get("/api/reviews/:id", (request) =>
+    runner.council(params(request.params).id),
+  );
+  app.post("/api/reviews/:id/decide", { bodyLimit: 16 * 1024 }, (request) => {
+    const q = query(request.query);
+    // 拍板人缺省是用户 u1；秘书代为转达时也记 u1 的决定。
+    const actor =
+      q.as === undefined || q.as === "" ? "u1" : ownerOf(q.as, "as");
+    return runner.decideCouncil(params(request.params).id, request.body, actor);
+  });
   app.get("/api/events/wait", (request) => {
     const q = query(request.query);
     return runner.inbox.wait(

@@ -8,6 +8,8 @@ const fieldNames: Record<string, string> = {
   pr_url: "--pr",
   text: "文字",
   by: "--as",
+  topic: "议题",
+  conclusion: "结论",
 };
 
 export function cliErrorMessage(message: string, command?: Command): string {

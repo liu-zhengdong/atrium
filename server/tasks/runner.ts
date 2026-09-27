@@ -45,6 +45,14 @@ import { awaitingReview } from "./concerns.ts";
 import { WorktreeCleanup } from "./worktree-cleanup.ts";
 import { ReviewGate, taskRisk } from "./review-runtime.ts";
 import { reviewerRefusal } from "./review.ts";
+import { settleCouncils } from "./council-runtime.ts";
+import {
+  councilRow,
+  councilView,
+  createCouncil,
+  decideCouncil,
+  STAGE_LABEL,
+} from "./councils.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -89,6 +97,9 @@ export class TaskRunner {
   private readonly launchOptions: LaunchOptions;
   private closed = false;
   private polling = false;
+  /** 会审推进在跑时再来的请求只记一笔，跑完再补一轮，免得重复拉起汇总。 */
+  private councilSettling: Promise<void> | null = null;
+  private councilAgain = false;
   /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
   private recovered = false;
 
@@ -150,6 +161,15 @@ export class TaskRunner {
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
         settle: () => void this.settleReviews(),
+      },
+      // 在收尾的 finally 之后再推进，免得刚结束的任务还算在收尾里。
+      councils: {
+        settle: () =>
+          setImmediate(() =>
+            this.settleCouncils().catch((error) =>
+              console.error("会审推进失败：", error),
+            ),
+          ),
       },
     });
     this.merge = new MergeQueue(db, {
@@ -220,6 +240,7 @@ export class TaskRunner {
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();
       if (!this.closed && this.recovered) await this.settleReviews();
+      if (!this.closed && this.recovered) await this.settleCouncils();
       if (!this.closed && this.recovered) this.review.kick();
       if (!this.closed && this.recovered) this.merge.kick();
     });
@@ -272,6 +293,17 @@ export class TaskRunner {
     const request = runRequest(body);
     const id = parseTaskRef(reference);
     const task = getTask(this.db, id);
+    const council = councilRow(this.db, id);
+    if (council && council.stage !== "summarizing")
+      throw new Problem(
+        409,
+        council.stage === "opinions"
+          ? `${task.ref} 是会审议题，还在等专员意见；意见收齐后自动交 leader 汇总`
+          : `${task.ref} 会审${STAGE_LABEL[council.stage]}；要重议另发起会审`,
+        "conflict",
+        undefined,
+        `atrium review show ${task.ref}`,
+      );
     const schedule = planItem(this.db, requireRow(this.db, id));
     if (
       schedule.group === "waiting" ||
@@ -548,6 +580,121 @@ export class TaskRunner {
     }
   }
 
+  // ---- 会审（#322 第 3 步） ----
+
+  /** 发起会审：建议题与各专员的意见任务，并行拉起；拉不起的标受阻，汇总时算没出意见。 */
+  async addCouncil(body: unknown) {
+    const { council, opinions } = createCouncil(
+      this.db,
+      this.options.data,
+      body,
+    );
+    await Promise.all(opinions.map((ref) => this.dispatchCouncil(ref)));
+    // 全部拉不起时意见已齐，直接进汇总。
+    await this.settleCouncils();
+    return councilView(this.db, council.ref);
+  }
+
+  council(reference: unknown) {
+    return councilView(this.db, reference);
+  }
+
+  /** 用户对上交的会审拍板。 */
+  decideCouncil(reference: unknown, body: unknown, actor: string) {
+    const view = decideCouncil(this.db, reference, body, actor);
+    this.x.publish(
+      Number(view.ref.slice(1)),
+      "council_decided",
+      {
+        conclusion: view.conclusion,
+        by: actor,
+        next: `atrium review show ${view.ref}`,
+      },
+      actor,
+    );
+    this.waits.changed(Number(view.ref.slice(1)));
+    return view;
+  }
+
+  /** 拉起会审里的任务（专员意见或 leader 汇总）；拉不起的标受阻并写原因。 */
+  private async dispatchCouncil(ref: string) {
+    try {
+      await this.run(ref, {});
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const task = getTask(this.db, ref);
+      if (task.status === "todo")
+        this.x.advance(
+          task.id,
+          { kind: "block" },
+          {},
+          { reason: `会审任务拉不起来：${reason}` },
+        );
+      this.waits.changed(task.id);
+    }
+  }
+
+  /** 推进会审：意见收齐交 leader 汇总；汇总完成记结论，已定或需用户拍板都投给负责人。 */
+  settleCouncils(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.councilSettling) {
+      this.councilAgain = true;
+      return this.councilSettling;
+    }
+    const run = async () => {
+      do {
+        this.councilAgain = false;
+        const busy = (id: number) =>
+          this.x.active.has(id) ||
+          this.x.launching.has(id) ||
+          this.x.finishing.has(id) ||
+          !!queued(this.db, id);
+        const progress = settleCouncils(this.db, this.options.data, busy);
+        for (const decision of progress.decided) {
+          const { id, outcome, opinions } = decision;
+          const ref = taskRef(id);
+          this.x.publish(id, `council_${outcome.kind}`, {
+            conclusion: outcome.conclusion,
+            opinions: opinions.map((o) => ({
+              concern: o.ref,
+              name: o.name,
+              stance: o.stance,
+            })),
+            ...(outcome.escalate.length ? { escalate: outcome.escalate } : {}),
+            next:
+              outcome.kind === "escalated"
+                ? `需用户拍板：atrium review show ${ref}；拍板后 atrium review decide ${ref} 结论`
+                : `atrium review show ${ref}`,
+          });
+          this.waits.changed(id);
+        }
+        for (const ref of progress.dispatch) {
+          if (this.closed) return;
+          await this.dispatchCouncil(ref);
+        }
+      } while (this.councilAgain && !this.closed);
+    };
+    // 在 finally 里清锁：没有要等的动作时 run() 同步跑完，不能在赋值前就清掉。
+    const settling = run().finally(() => {
+      if (this.councilSettling === settling) this.councilSettling = null;
+    });
+    this.councilSettling = settling;
+    return settling;
+  }
+
+  /** 会审议题在专员出意见、leader 汇总到记下结论之前都算没结束。 */
+  private councilPending(id: number, task: Task) {
+    const council = councilRow(this.db, id);
+    if (!council || task.status === "cancelled") return false;
+    if (council.stage === "opinions") return true;
+    return (
+      council.stage === "summarizing" &&
+      (task.status === "todo" ||
+        task.status === "running" ||
+        task.status === "done")
+    );
+  }
+
   private pending(id: number, task: Task) {
     return (
       task.status === "running" ||
@@ -556,6 +703,7 @@ export class TaskRunner {
       task.delivery_stage === "merging" ||
       this.merge.isReturning(id) ||
       (task.status === "blocked" && awaitingReview(this.db, id)) ||
+      this.councilPending(id, task) ||
       !!queued(this.db, id) ||
       this.x.launching.has(id) ||
       this.x.finishing.has(id)

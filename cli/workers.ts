@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Command, Values } from "./main.ts";
-import { printJson, table } from "./format.ts";
+import { printJson, table, when } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
 import type { WorkerStat } from "../server/tasks/delivery-records.ts";
@@ -35,8 +35,6 @@ type ProfileView = ProfileRow & {
   source: string;
   history: { rev: number; author: string; at: number; reason: string }[];
 };
-const day = (at: number) =>
-  new Date(at).toISOString().slice(0, 16).replace("T", " ");
 /** `层/名` 形式的档案标识（harness/codex、combos/codex+gpt-6-sol）；执行者标识不以层名开头。 */
 const isProfileRef = (value: string) =>
   /^(harness|models|combos)\//.test(value);
@@ -56,14 +54,14 @@ async function showProfile(ref: string, json: boolean) {
   if (json) printJson(data);
   else {
     console.log(
-      `${data.ref} · 第 ${data.rev} 版 · ${data.updated_by} ${day(data.updated_at)}`,
+      `${data.ref} · 第 ${data.rev} 版 · ${data.updated_by} ${when(data.updated_at)}`,
     );
     console.log(data.source.trimEnd());
     if (data.notes) console.log("\n（交付记录段作备注保留，不附进提示词）");
     for (const w of data.warnings) console.log(`警告：${w}`);
     console.log("\n修订：");
     for (const h of data.history)
-      console.log(`  第 ${h.rev} 版 · ${h.author} ${day(h.at)} · ${h.reason}`);
+      console.log(`  第 ${h.rev} 版 · ${h.author} ${when(h.at)} · ${h.reason}`);
   }
   recordNext(`改档案：atrium workers edit ${ref} --file 文件`);
 }
@@ -138,7 +136,7 @@ export const workerCommands: Record<string, Command> = {
               p.max_risk ?? "—",
               p.model ?? "—",
               p.checks?.join(",") || "—",
-              `${p.updated_by} ${day(p.updated_at)}${p.warnings.length ? " · 有警告" : ""}`,
+              `${p.updated_by} ${when(p.updated_at)}${p.warnings.length ? " · 有警告" : ""}`,
             ]),
           ]),
         );

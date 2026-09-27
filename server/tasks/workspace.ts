@@ -17,6 +17,7 @@ import type { ResolvedWorker, Risk } from "./profiles.ts";
 import { nodeDoc, taskNode } from "../org/task-node.ts";
 import { charterBrief, withContext } from "../org/brief.ts";
 import { taskContext } from "../map/context.ts";
+import { alsoOf } from "./also.ts";
 import { getJobRole } from "./job-roles.ts";
 import { skillsForTask } from "../skills/task-skills.ts";
 import { mountSkills } from "../skills/mount.ts";
@@ -206,7 +207,11 @@ export async function prepareRun(
       options.db && !patrol
         ? withContext(
             node ? charterBrief(options.db, node.id) : undefined,
-            taskContext(options.db, task.part_id ?? node?.id ?? null),
+            taskContext(
+              options.db,
+              task.part_id ?? node?.id ?? null,
+              alsoOf(options.db, task.id),
+            ),
           )
         : undefined,
     concerns: options.db

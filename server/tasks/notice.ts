@@ -3,8 +3,11 @@ import type { EventInbox } from "./events.ts";
 import { getTask } from "./ledger.ts";
 import { eventLevel } from "./event-level.ts";
 import { nodes } from "../org/model.ts";
-import { taskRoute } from "../leaders/subscriber.ts";
-import { deliveryRoutes } from "../leaders/route.ts";
+import { partRoute, taskRoute } from "../leaders/subscriber.ts";
+import { deliveryRoutes, SECRETARY } from "../leaders/route.ts";
+import { involvedOf } from "./also.ts";
+import { ref } from "../org/model.ts";
+import { hasOrg } from "../org/task-node.ts";
 
 /**
  * 把任务结果投递给负责人（#262）：完成、失败、受阻、卡死共用去重键 tN:outcome，CI 用 tN:ci。
@@ -67,4 +70,51 @@ export function publishTask(
         detail: { title: task.title, ...detail },
       });
   }
+}
+
+/**
+ * 牵涉知会（#373）：任务新牵涉了某个部分（显式 --also 或管方面要点自动适用），投给那一部分最近的 leader 一条
+ * `involved` 事件（info 级，不叫醒，下次唤醒时一并看到）。那一部分找不到 leader、或就是任务本来的投递对象时不投。
+ * before 是改动前已牵涉的部分，已知会过的不重复。返回投了哪些部分。
+ */
+export function publishInvolved(
+  inbox: EventInbox,
+  db: DatabaseSync,
+  id: number,
+  before: readonly number[] = [],
+  actor?: string,
+): string[] {
+  if (!hasOrg(db)) return [];
+  const task = getTask(db, id);
+  if (task.status === "done" || task.status === "cancelled") return [];
+  const { also, auto } = involvedOf(db, task);
+  const main = taskRoute(db, task).subscriber;
+  const list = nodes(db);
+  const sent: string[] = [];
+  for (const nodeId of [...also, ...auto]) {
+    if (before.includes(nodeId)) continue;
+    const route = partRoute(db, nodeId);
+    if (route.subscriber === SECRETARY || route.subscriber === main) continue;
+    const name = list.find((n) => n.id === nodeId)?.name ?? ref(nodeId);
+    inbox.publish({
+      subscriber: route.subscriber,
+      taskId: id,
+      source: "ledger",
+      kind: "involved",
+      key: `${task.ref}:involved:${ref(nodeId)}`,
+      actor,
+      detail: {
+        title: task.title,
+        status: task.status,
+        part: task.part_ref,
+        involved: ref(nodeId),
+        involved_name: name,
+        auto: auto.includes(nodeId),
+        hint: `${task.ref} 牵涉你负责的「${name}」${auto.includes(nodeId) ? "（它的要点适用于这个任务的归属部分）" : ""}：负责与汇报不在你这里；有话写备注 atrium task note ${task.ref} 文字，或捎话 atrium task tell ${task.ref} 文字；要否决发起会审 atrium review add`,
+        routed: { to: route.subscriber, why: route.why },
+      },
+    });
+    sent.push(ref(nodeId));
+  }
+  return sent;
 }

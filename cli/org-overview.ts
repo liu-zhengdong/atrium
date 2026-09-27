@@ -68,7 +68,7 @@ export function pointLines(points: readonly Point[]): string[] {
   return [
     "要点（必须守住）：",
     ...points.flatMap((p) => [
-      `  ${p.ref} ${p.text}`,
+      `  ${p.ref} ${p.text}${p.applies?.length ? `（适用于 ${p.applies.join("、")}）` : ""}`,
       `     为什么：${p.why} · ${p.by} 定${p.check ? ` · 检查：${p.check}` : ""}`,
     ]),
   ];

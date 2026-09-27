@@ -1,14 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
 import { nodeByAddress, nodes, one, ref, type DocRow } from "../org/model.ts";
 import { chainPoints } from "../org/points.ts";
+import { appliedPoints, resolveApplies } from "../org/aspects.ts";
 import { Problem } from "../problem.ts";
 
 /**
  * `atrium map context <节点>`（#322 第 4 步）：从根到本节点的人话链、本块组成、现状与要点，压成一段短文，
  * 派活时附进执行者提示词（与章程要点同一段），让执行者知道自己这块在整体里的位置、必须守住什么。
  *
+ * 归属链之外（#373）再附两类别处的要点，各注明来源（「安全 · 适用于网页」）：管方面的部分里适用于本节点的
+ * （自动牵涉），以及任务 `--also` 显式牵涉的部分的要点。
+ *
  * 有长度上限（缺省 CONTEXT_MAX 字）。超长时按重要程度保留：位置链 > 本块是什么 > 本块要点 > 上级要点（近的先）
- * > 上一层是什么 > 现状与接下来 > 组成 > 更上层是什么；丢掉或截短了就在末尾给全文命令。纯函数 formatContext 不读库。
+ * 与牵涉部分的要点 > 上一层是什么 > 现状与接下来 > 组成 > 更上层是什么；丢掉或截短了就在末尾给全文命令。
+ * 纯函数 formatContext 不读库。
  */
 
 export const CONTEXT_MAX = 1500;
@@ -37,6 +42,8 @@ export type ContextInput = {
   next: string;
   /** 根 → 本节点，每层的要点；空层可省略。 */
   points: { name: string; points: ContextPoint[] }[];
+  /** 归属链之外附进来的要点：来源（「安全 · 适用于网页」）与条目。 */
+  applied?: { source: string; points: ContextPoint[] }[];
 };
 export type Context = {
   ref: string;
@@ -115,6 +122,20 @@ export function formatContext(
       );
     });
   }
+  const applied = (input.applied ?? []).filter((l) => l.points.length);
+  if (applied.length) {
+    add(1000, 0, "牵涉部分的要点（同样必须守住）：");
+    applied.forEach((level, i) =>
+      level.points.forEach((p, j) =>
+        add(
+          1001 + i * 40 + j,
+          // 与上一层的要点同级：比本块要点低，比更远的上级高。
+          3 + i / 10 + j / 100,
+          `- [${level.source}] ${p.text}（为什么：${p.why}；${p.by} 定${p.check ? `；检查：${p.check}` : ""}）`,
+        ),
+      ),
+    );
+  }
   const budget = max - chars(more) - 1;
   const kept: typeof items = [];
   let used = 0;
@@ -129,9 +150,12 @@ export function formatContext(
     } else dropped = true;
   }
   // 只剩「要点」标题没有条目时去掉标题。
-  const hasPoint = kept.some((k) => k.order > 60);
+  const hasPoint = kept.some((k) => k.order > 60 && k.order < 1000);
+  const hasApplied = kept.some((k) => k.order > 1000);
   const lines = kept
-    .filter((k) => k.order !== 60 || hasPoint)
+    .filter(
+      (k) => (k.order !== 60 || hasPoint) && (k.order !== 1000 || hasApplied),
+    )
     .sort((a, b) => a.order - b.order)
     .map((k) => k.text);
   const truncated = dropped || clipped;
@@ -147,20 +171,22 @@ export function formatContext(
 
 const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 
-/** 读库拼 context；max 为字数上限。 */
+/** 读库拼 context；max 为字数上限，also 为牵涉的部分（`--also o20,o4`）。 */
 export function mapContext(
   db: DatabaseSync,
   address: string,
   max = CONTEXT_MAX,
+  also?: unknown,
 ): Context {
   const n = nodeByAddress(db, address);
-  return contextOf(db, n.id, max);
+  return contextOf(db, n.id, max, resolveApplies(db, also, "--also") ?? []);
 }
 
 export function contextOf(
   db: DatabaseSync,
   id: number,
   max = CONTEXT_MAX,
+  also: readonly number[] = [],
 ): Context {
   const list = nodes(db);
   const fieldsOf = (nodeId: number): Record<string, unknown> => {
@@ -205,6 +231,7 @@ export function contextOf(
         name: level.name,
         points: level.points,
       })),
+      applied: appliedPoints(db, id, also),
     },
     ref(id),
     max,
@@ -224,15 +251,16 @@ export function parseMax(value: unknown): number {
   return n;
 }
 
-/** 派活用：任务归属部分（没有时取负责节点）的 context；节点不在了或没有组织树返回 undefined。 */
+/** 派活用：任务归属部分（没有时取负责节点）的 context，带上任务牵涉的部分；节点不在了或没有组织树返回 undefined。 */
 export function taskContext(
   db: DatabaseSync,
   id: number | null,
+  also: readonly number[] = [],
 ): string | undefined {
   if (id === null) return undefined;
   try {
     if (!one(db, "SELECT 1 FROM org_nodes WHERE id=?", id)) return undefined;
-    return contextOf(db, id).text || undefined;
+    return contextOf(db, id, CONTEXT_MAX, also).text || undefined;
   } catch {
     return undefined;
   }

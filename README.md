@@ -106,13 +106,15 @@ cat grok.md | atrium workers edit models/grok-4.6 --file -
 
 ## 专员与执行者评价表
 
-专员是全组织共用的名单，不挂在组织树上。任务用 `--by` 指定一位干活的专员，派活会附专员说明与技能；用 `--ask` 请至多五位专员按清单审查。专员的优先执行者在额度、风险和档案约束内选择；评价表按执行者 × 干活的专员统计，已有 rN 短号与交付记录保留。
+专员不挂在组织树上，但有归属（#373）：不写 `--part` 是全组织共用的（前端、后端），写了就属于那一部分（安全专员属于安全）。一个任务能请的专员 = 归属链上各层的 + 牵涉部分的 + 全组织的；`--by`、`--ask` 与 `task pick` 都按这个范围，请不到时报错并列出能请的。`specialist ls` 缺省只列全组织的，`--part 部分` 列这一部分能请的（本部分的在前，上级与全组织的折成一行「另有 全组织的 前端、后端」），`--all` 展开。任务用 `--by` 指定一位干活的专员，派活会附专员说明与技能；用 `--ask` 请至多五位专员按清单审查。专员的优先执行者在额度、风险和档案约束内选择；评价表按执行者 × 干活的专员统计，已有 rN 短号与交付记录保留。
 
 ```bash
 atrium specialist add 前端 --description "界面设计与实现" --body ./frontend-role.md --preferred claude+opus:high --checks screenshots --skills visual-design,design-dialogue
 atrium specialist show 前端
 atrium specialist edit r1 --preferred claude+opus:high,codex+gpt-6-sol:high
 atrium specialist ls --json
+atrium specialist add 安全专员 --part atrium/security --description "查凭据与权限" --body ./security-role.md
+atrium specialist ls --part atrium/web     # 网页能请的：本部分的列表，继承的折成一行；--all 展开
 atrium task add "改页面" --by 前端 --ask 后端 --part atrium/runtime
 atrium task set t1 --by 后端
 atrium workers --specialist 前端
@@ -183,7 +185,7 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 
 - **投给谁**：任务没写 `--owner` 时，从任务的归属部分（`--part`，旧任务的归属节点次之，都没写沿父任务往上找）向上找最近的、已登记的 leader；找不到投秘书。事件的 `routed` 写明投给谁、为什么。写了 `--owner`（包括 `--owner secretary`）就按负责人投。过程事件（合入、退回等知会）也投给 leader，但只有「要处理」的才唤醒它。
 - **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
-- **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，改这些节点的要点、阶段与全景人话字段，写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
+- **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
 - **上交**只有四类：`shipped` 已上线（里程碑完成，须带 `--task`，说明里附端到端验证）、`cross` 需要别的部分配合、`beyond` 越过权限／预算／硬边界、`stuck` 搞不定（卡住多次、拿不定）。生成一条投给上一层 leader（没有就秘书）的「要处理」事件 `escalated`，带 `--task` 时任务上也记一笔。
 - **连续性**存在 Atrium：节点要点、阶段、交付记录与 leader 的备忘和决定记录，不靠进程上下文。`org tree`、`map --json`（`leader_state`；`lead` 是这一块归谁管，含从上级继承的）、`atrium top` 显示每个节点的 leader 与最近一次唤醒、在处理什么（人话，如「t84 上线」）。
 - **看得到**：全景网页每块标题下有「负责人」一行（名字与在处理什么，点开是负责人页），顶栏在它处理时写「Atrium 负责人在处理」；leader 建的任务在任务行注明「Atrium 负责人派的」，备注作者给名字（`task ls/show` 显示「Atrium 负责人（a1）」，接口字段 `note_by_name`）。状态栏读 `GET /api/leaders` 的 `busy`：`[{ref, name, doing, since}]`，只列正在处理的 leader，空闲为空数组。
@@ -230,10 +232,12 @@ opencode 两种界面共用 `<ATRIUM_DATA>/secretary/opencode-session.json`，co
 ```bash
 atrium map                                        # 终端打全景树，并在浏览器打开本机全景网页（一次性登录链接）
 atrium map atrium/runtime --json --depth 2        # 一块的人话字段、组成、要点（含下层 points_below）、阶段、任务、PR 与 issue；与网页同一接口
-atrium map context atrium/cli                     # 从根到该块的人话链、组成、现状与本块及上级的要点；--max 字数，缺省 1500
+atrium map context atrium/cli                     # 从根到该块的人话链、组成、现状与本块及上级的要点，加适用于它的管方面要点；--also 部分 附牵涉部分的；--max 字数，缺省 1500
 atrium map edit atrium/cli --what 一句话 --uses 场景一 --uses 场景二 --flow 第一步 --now 现状 --next 接下来
 atrium map edit atrium/cli --detail 细节.md --reason 补技术细节   # 技术细节即章程正文；给空串清掉一个字段
 atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板 --what 一句话
+atrium map add atrium 安全 --slug security --kind aspect     # 管方面的部分：要点横跨多个部分
+atrium map edit atrium/security --applies atrium/web,atrium/cli  # 它的要点缺省适用于哪些部分；空串改回整个上级
 atrium patrol run atrium/cli                       # 手动巡检一条 uses 场景；下一次轮换到下一条
 atrium patrol findings atrium/cli                  # 看发现及 leader 的处理结果
 ```
@@ -246,7 +250,8 @@ atrium patrol findings atrium/cli                  # 看发现及 leader 的处�
 - **专员页**（`/map#r1`）：面包屑「全部 / 专员 / 前端」，属性行是优先派给、交付要求、技能；页签是任务（带进行中／全部）、谁做得好、技能。**执行者页**（`/map#w/claude+opus:high`）：属性行是信任、交付次数与一次通过、接过的专员；页签是交付记录（任务、专员、结果、用时、经过——事故、验收没过的原因、合入退回，冲突注明不算它的）与观察（执行者档案里带日期的记录，如「（2026-09-27 你纠正：……）」；冒号前没写人的算秘书记的）。**负责人页**（`/map#a1`）：属性行是负责哪几块（可点）、现在（在处理什么、几点开始；空闲时给上次处理的事）、执行者；页签是备忘（它记着的在等什么、下次先看什么）、处理过的事（投给它的要处理事件：任务、什么事、说明、结果——等它处理／在处理／处理完／转交上级）与上交（类型、任务、说明、交给谁、对方看没看）。找不到专员、执行者或负责人时，页面说明原因并给回到最上层的链接。
 - **地址**：当前页、页签与筛选写在地址里（如 `/map#o2/tasks/all`、`/map#o1/workers/r1`、`/map#r1/workers`），刷新与前进后退回到原处；窄屏（≤ 720px）表格降为卡片式行，不横向滚动。
 - **实时**：网页订阅 `/api/map/stream`（Server-Sent Events），任务、事件、节点、章程、要点、专员、技能、交付记录、leader 唤醒与事件队列、备忘与决定记录变了推 `changed`，网页只重取并重画变了的区域；另每 30 秒刷新一次执行者的最近动作与时长。
-- **派活**：`map context` 的内容自动附进执行者提示词，与「章程要点」同一段、放在最前（任务有归属部分时取归属部分，否则取负责节点）；全景这段不超过 1500 字，按「位置链 > 本块是什么 > 本块要点 > 上级要点 > 上一层是什么 > 现状 > 组成 > 更上层」保留，截了就在末尾给全文命令。
+- **派活**：`map context` 的内容自动附进执行者提示词，与「章程要点」同一段、放在最前（任务有归属部分时取归属部分，否则取负责节点）；归属链之外再附「牵涉部分的要点」：任务 `--also` 牵涉的部分的要点，以及管方面的部分里适用于归属部分的要点（自动牵涉），每条注明来源（如「安全 · 适用于网页」）。全景这段不超过 1500 字，按「位置链 > 本块是什么 > 本块要点 > 上级要点与牵涉部分的要点 > 上一层是什么 > 现状 > 组成 > 更上层」保留，截了就在末尾给全文命令。提示词只附本任务用到的专员（干活的与请来看的）。
+- **管方面的部分**（#373）：除了管东西的部分（命令行、网页、派活），还有管方面的部分（安全，以后可能有性能、体验），它们的要点横跨多个部分。`map add … --kind aspect` 建，`map edit … --applies` 写它的要点缺省适用于哪些部分，单条要点可用 `org point-add/point-edit --applies` 覆盖；都不写即适用于整个上级。`map --json` 给 `aspect`、`applies` 与本块适用的别处要点 `points_applied`。
 - **权限与修订**：`map edit` 的人话字段（what、uses、flow、alias、analogy、now、next、when）直接覆盖当前值，不留修订、无需 `--rev`；`--detail` 是章程正文，仍留章程修订，`--rev` 仅用于此。`map add` 的节点创建仍留节点修订，人话字段不留修订。硬边界、份额等组织规矩仍按章程修订。负责部门 leader 或其上级可改（`--as aN`），根只有你能改。
 
 ## 组织树
@@ -265,6 +270,7 @@ atrium org history atrium/runtime                 # 修订；--target charter --
 atrium org add atrium web --kind module --reason 拆模块
 atrium task add "改派活" --by 后端 --part atrium/runtime  # 干活的专员与归属部分
 atrium task add "接看板" --part atrium/runtime                      # 任务归属全景图上的哪一部分；task set --part '' 摘下
+atrium task add "改登录页" --part atrium/web --also atrium/cli      # 还牵涉命令行；task set --also '' 摘下
 atrium task add "改登录日志" --by 后端 --ask 前端         # 请前端来看；task set --ask '' 清空
 atrium review add "公开仓库" --concerns 前端,后端 --brief 议题.md   # 会审：专员并行出意见，leader 汇总一致与冲突、能定的定；--issue 号 --repo 仓库 --comment 同步为 issue 评论
 atrium review show t9                              # 各方意见（立场与原文）、一致与冲突、结论、需用户拍板的事
@@ -302,11 +308,14 @@ stages: # 阶段记录；原目标树的 gN 迁来后 id 沿用 gN
 
 ```bash
 atrium org point-add atrium/runtime "不采信执行者自述" --why "事实由运行时查" --by "u1 09-27" --check "tests/gates.test.ts 用例名"
-atrium org point-edit k1 --check ''     # 改一条；--check '' 去掉检查
+atrium org point-add atrium/security "网页不回显令牌" --why "泄露收不回" --by "u1 09-27" --applies atrium/web  # 管方面的部分：这条适用于哪些部分
+atrium org point-edit k1 --check ''     # 改一条；--check '' 去掉检查，--applies '' 改回跟随部分
 atrium org point-rm k1                  # 删掉过时的
 ```
 
 任务用 `--part 节点` 标归属哪一部分（谁负责），用 `--by 专员` 指定干活的专员（谁做、附什么技能），用 `--ask 专员[,专员]` 请专员来看。
+
+任务**归**一个部分（负责与汇报只有一处），可以用 `--also 部分[,部分]` **牵涉**至多五个部分；管方面的部分有要点适用于归属部分时自动牵涉，不用写（`task show` 标「自动」）。牵涉带来三件事：派活附被牵涉部分的要点（注明来源）；能请被牵涉部分的专员；被牵涉部分最近的 leader 收到一条 `involved` 知会（不叫醒，下次唤醒时看到），它可以在任务上写备注或捎话，但不能派、停、改；要否决走会审。几位专员一起干默认是一个执行者兼带几方面的技能与检查清单，真要分头干再拆子任务。
 
 ### 任务请专员
 

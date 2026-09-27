@@ -2,7 +2,7 @@
  * leader 的权限边界（纯函数，穷举测试）。leader 进程拿的是服务签发的 leader 令牌，
  * 服务端按「路由 → 规则 → 作用范围」判定，不靠提示词自律；没列出的写接口一律拒绝。
  *
- * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审；改本节点及子节点的要点、阶段与全景人话字段；
+ * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
  * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交。
  * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改技能、清额度、登记 leader 等。
  */
@@ -11,6 +11,7 @@ export type LeaderRule =
   | "read"
   | "task-create"
   | "task"
+  | "task-remark"
   | "task-patch"
   | "review-create"
   | "point"
@@ -27,8 +28,8 @@ export type LeaderRule =
 const RULES: Record<string, LeaderRule> = {
   "POST /api/tasks": "task-create",
   "PATCH /api/tasks/:id": "task-patch",
-  "POST /api/tasks/:id/note": "task",
-  "POST /api/tasks/:id/tell": "task",
+  "POST /api/tasks/:id/note": "task-remark",
+  "POST /api/tasks/:id/tell": "task-remark",
   "POST /api/tasks/:id/run": "task",
   "POST /api/tasks/:id/stop": "task",
   "POST /api/reviews": "review-create",
@@ -124,6 +125,20 @@ export function scopeVerdict(
     if (check.node === null || !scope.has(check.node))
       return denied(leader, `动${check.what}：不在你负责的部分里`);
   return null;
+}
+
+/**
+ * 记备注、捎话（#373）：任务在范围里照常；不在时，任务牵涉的部分（显式或自动）有一个在范围里也行——
+ * 被牵涉部分的 leader 可以说话，但不能派、停、改。
+ */
+export function remarkVerdict(
+  leader: string,
+  scope: ReadonlySet<number>,
+  check: ScopeCheck,
+  involved: readonly number[],
+) {
+  if (involved.some((id) => scope.has(id))) return null;
+  return scopeVerdict(leader, scope, [check]);
 }
 
 /** 负责人（owner）：不写或写自己；不能把事件改投给别人。 */

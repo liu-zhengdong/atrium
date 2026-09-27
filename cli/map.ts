@@ -71,7 +71,7 @@ export function renderMapTree(
   const walk = (node: MapTreeNode, level: number) => {
     if (node.archived) return;
     const indent = "  ".repeat(level);
-    const line = `${indent}${DOT[node.dot]} ${label(node)}${counts(node.tasks)}`;
+    const line = `${indent}${DOT[node.dot]} ${label(node)}${node.aspect ? " · 管方面" : ""}${counts(node.tasks)}`;
     lines.push(options.width ? fit(line, options.width) : line);
     if (options.what !== false && node.what && level <= 1)
       lines.push(
@@ -220,18 +220,22 @@ export const mapCommands: Record<string, Command> = {
     },
   },
   "map context": {
-    args: "节点 [--max 字数]",
+    args: "节点 [--also 部分[,部分]] [--max 字数]",
     about:
-      "给出从根到该节点的人话链、组成、现状与本节点及上级的要点（有长度上限）；派活时自动附进执行者提示词",
-    options: { max: { type: "string" } },
+      "给出从根到该节点的人话链、组成、现状与本节点及上级的要点，再加适用于本节点的管方面要点与 --also 牵涉部分的要点（注明来源，有长度上限）；派活时自动附进执行者提示词",
+    options: { max: { type: "string" }, also: { type: "string" } },
     positionals: [1, 1],
     async run({ positionals: [node], values, json }) {
-      const max = str(values, "max");
+      const query = new URLSearchParams(
+        Object.fromEntries(
+          (["max", "also"] as const)
+            .filter((k) => str(values, k) !== undefined)
+            .map((k) => [k, str(values, k)!]),
+        ),
+      ).toString();
       const result = await (
         await client()
-      ).get<Context>(
-        `/map/context/${enc(node!)}${max === undefined ? "" : `?max=${enc(max)}`}`,
-      );
+      ).get<Context>(`/map/context/${enc(node!)}${query ? `?${query}` : ""}`);
       if (json) printJson(result);
       else
         console.log(
@@ -243,10 +247,11 @@ export const mapCommands: Record<string, Command> = {
     },
   },
   "map edit": {
-    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
+    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--applies 部分[,部分]] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
     about:
-      "改一块的人话字段，直接覆盖且不留修订；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
+      "改一块的人话字段，直接覆盖且不留修订；--applies 只用于管方面的部分，写它的要点缺省适用于哪些部分（空串改回整个上级）；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
     options: {
+      applies: { type: "string" },
       what: { type: "string" },
       uses: { type: "string", multiple: true },
       flow: { type: "string", multiple: true },
@@ -280,7 +285,17 @@ export const mapCommands: Record<string, Command> = {
         }
       const input = {
         ...Object.fromEntries(
-          (["what", "alias", "analogy", "now", "next", "when"] as const)
+          (
+            [
+              "what",
+              "alias",
+              "analogy",
+              "now",
+              "next",
+              "when",
+              "applies",
+            ] as const
+          )
             .filter((k) => str(values, k) !== undefined)
             .map((k) => [k, str(values, k)]),
         ),
@@ -303,9 +318,9 @@ export const mapCommands: Record<string, Command> = {
     },
   },
   "map add": {
-    args: "父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--kind 类型] [--reason 原因] [--as aN]",
+    args: "父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--kind aspect] [--reason 原因] [--as aN]",
     about:
-      "在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug",
+      "在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug；--kind aspect 建管方面的部分（如安全，要点横跨多个部分，用 map edit --applies 或 org point-add --applies 写适用范围）",
     options: {
       analogy: { type: "string" },
       alias: { type: "string" },
@@ -319,25 +334,30 @@ export const mapCommands: Record<string, Command> = {
     async run({ positionals: [parent, name], values, json }) {
       const result = await (
         await client()
-      ).post<{ node: string; parent: string; name: string; kind: string }>(
-        `/map/nodes${as(values)}`,
-        {
-          parent,
-          name,
-          ...Object.fromEntries(
-            (["analogy", "alias", "what", "slug", "kind", "reason"] as const)
-              .filter((k) => str(values, k) !== undefined)
-              .map((k) => [k, str(values, k)]),
-          ),
-        },
-      );
+      ).post<{
+        node: string;
+        parent: string;
+        name: string;
+        kind: string;
+        aspect: boolean;
+      }>(`/map/nodes${as(values)}`, {
+        parent,
+        name,
+        ...Object.fromEntries(
+          (["analogy", "alias", "what", "slug", "kind", "reason"] as const)
+            .filter((k) => str(values, k) !== undefined)
+            .map((k) => [k, str(values, k)]),
+        ),
+      });
       if (json) printJson(result);
       else
         console.log(
-          `已在 ${result.parent} 下加了 ${result.node} ${result.name}（${result.kind}）`,
+          `已在 ${result.parent} 下加了 ${result.node} ${result.name}（${result.aspect ? "管方面" : result.kind}）`,
         );
       recordNext(
-        `动作：atrium map edit ${result.node} --what 一句话 --uses 场景 --flow 步骤`,
+        result.aspect
+          ? `动作：atrium org point-add ${result.node} 要点 --why 为什么 --by 谁定的 --applies 部分`
+          : `动作：atrium map edit ${result.node} --what 一句话 --uses 场景 --flow 步骤`,
       );
       return 0;
     },

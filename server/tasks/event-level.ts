@@ -22,6 +22,8 @@ const information = new Set([
   "ci_success",
   "ci_pending",
   "patrol_finished",
+  // 牵涉知会（#373）：让被牵涉部分的 leader 知道，不叫醒。
+  "involved",
 ]);
 
 export function eventLevel(kind: string, detail?: unknown): EventLevel {

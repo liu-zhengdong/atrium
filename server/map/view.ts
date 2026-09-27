@@ -12,6 +12,7 @@ import {
 } from "../org/model.ts";
 import { overviewOf, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
+import { appliedPoints, appliesRefs } from "../org/aspects.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { findingsForNode } from "../tasks/patrol.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
@@ -30,6 +31,8 @@ export type MapTreeNode = {
   alias: string;
   analogy: string;
   kind: NodeRow["kind"];
+  /** 管方面的部分（#373）。 */
+  aspect?: boolean;
   what: string;
   archived: boolean;
   dot: Dot;
@@ -220,6 +223,7 @@ function treeNode(x: Index, n: NodeRow, depth: number): MapTreeNode {
   return {
     ...head(x, n),
     kind: n.kind,
+    aspect: !!n.aspect,
     what: firstLine(str(f.what) || str(f.goal)),
     archived: n.archived_at !== null,
     dot: dotOf(counts),
@@ -463,6 +467,9 @@ export function mapNode(
   return {
     ...head(x, n),
     kind: n.kind,
+    /** 管方面的部分与它的要点缺省适用于哪些部分（null 为整个上级），#373。 */
+    aspect: !!n.aspect,
+    applies: appliesRefs(n.applies),
     path: nodePath(x.list, n),
     leader: n.leader,
     ...leaderState(x, n),
@@ -475,6 +482,8 @@ export function mapNode(
     points: nodePoints(db, n.id),
     points_chain: chainPoints(db, n.id).filter((l) => l.node !== ref(n.id)),
     points_below: pointsBelow(db, x, n),
+    /** 别处管方面的部分里适用于本块的要点，注明来源。 */
+    points_applied: appliedPoints(db, n.id),
     findings: findingsForNode(db, n.id),
     tasks: {
       running: tasks.filter((t) => t.status === "running"),
@@ -603,6 +612,7 @@ export function mapSignature(db: DatabaseSync): string {
     q("SELECT max(updated_at),count(*) FROM org_nodes"),
     q("SELECT max(updated_at),count(*) FROM org_docs"),
     q("SELECT max(updated_at),count(*),max(id) FROM org_points"),
+    q("SELECT count(*),max(rowid) FROM task_also"),
     q("SELECT count(*),max(queued_at) FROM task_queue"),
     q("SELECT max(updated_at),count(*) FROM job_roles"),
     q("SELECT max(updated_at),count(*) FROM org_skills"),

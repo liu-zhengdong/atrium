@@ -269,6 +269,7 @@ export const orgCommands: Record<string, Command> = {
           parent_id: number | null;
           ref: string;
           kind: string;
+          aspect?: number;
           name: string;
           leader: string | null;
           archived_at: number | null;
@@ -294,7 +295,7 @@ export const orgCommands: Record<string, Command> = {
         rows
           .map(
             (n) =>
-              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}${n.leader_state ? `（${n.leader_state.name}，${wakeText(n.leader_state.wake)}）` : ""}` : ""}${formatCounts(n.tasks, n.sent)}${formatBudget(n.budget) ? ` · ${formatBudget(n.budget)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
+              `${"  ".repeat(depth(n))}${n.ref} [${n.aspect ? "管方面" : labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}${n.leader_state ? `（${n.leader_state.name}，${wakeText(n.leader_state.wake)}）` : ""}` : ""}${formatCounts(n.tasks, n.sent)}${formatBudget(n.budget) ? ` · ${formatBudget(n.budget)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
           )
           .join("\n") +
           (rows.length ? "\n额度用量为估算；账号总览看 atrium quota" : "") ||
@@ -334,6 +335,7 @@ export const orgCommands: Record<string, Command> = {
         ref: string;
         name: string;
         kind: string;
+        aspect?: number;
         path: string;
         leader: string | null;
         repos: string[];
@@ -373,7 +375,7 @@ export const orgCommands: Record<string, Command> = {
       };
       const lines = [
         titleOf(node, node.overview),
-        `[${KIND_LABEL[node.kind] ?? node.kind}] ${node.path} · leader ${person(node.leader)}`,
+        `[${node.aspect ? "管方面" : (KIND_LABEL[node.kind] ?? node.kind)}] ${node.path} · leader ${person(node.leader)}`,
         ...formatOverview(node, node.overview, detail, node.points),
         ...(detail
           ? [
@@ -597,14 +599,15 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org point-add": {
-    args: "节点 要点 --why 为什么 --by 谁定的 [--check 检查] [--as aN]",
+    args: "节点 要点 --why 为什么 --by 谁定的 [--check 检查] [--applies 部分[,部分]] [--as aN]",
     about:
-      "给节点加一条要点（这一块必须守住的设计约束）：人话一句、为什么、谁定的（如 u1 09-27），可选守护它的检查（测试文件与用例名，或 $ 命令）；不留修订记录",
+      "给节点加一条要点（这一块必须守住的设计约束）：人话一句、为什么、谁定的（如 u1 09-27），可选守护它的检查（测试文件与用例名，或 $ 命令）；管方面的部分可用 --applies 写这条适用于哪些部分（不写跟随部分，缺省整个上级）；不留修订记录",
     options: {
       ...options,
       why: { type: "string" },
       by: { type: "string" },
       check: { type: "string" },
+      applies: { type: "string" },
     },
     positionals: [2, 2],
     async run({ positionals: [id, text], values, json }) {
@@ -619,6 +622,9 @@ export const orgCommands: Record<string, Command> = {
         ...(str(values, "check") === undefined
           ? {}
           : { check: str(values, "check") }),
+        ...(str(values, "applies") === undefined
+          ? {}
+          : { applies: str(values, "applies") }),
       });
       out(
         json,
@@ -629,24 +635,26 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org point-edit": {
-    args: "kN [--text 要点] [--why 为什么] [--by 谁定的] [--check 检查|''] [--as aN]",
-    about: "改一条要点；--check '' 去掉检查",
+    args: "kN [--text 要点] [--why 为什么] [--by 谁定的] [--check 检查|''] [--applies 部分[,部分]|''] [--as aN]",
+    about:
+      "改一条要点；--check '' 去掉检查，--applies '' 改回跟随部分的适用范围",
     options: {
       ...options,
       text: { type: "string" },
       why: { type: "string" },
       by: { type: "string" },
       check: { type: "string" },
+      applies: { type: "string" },
     },
     positionals: [1, 1],
     async run({ positionals: [id], values, json }) {
       const body: Record<string, string> = {};
-      for (const key of ["text", "why", "by", "check"])
+      for (const key of ["text", "why", "by", "check", "applies"])
         if (str(values, key) !== undefined) body[key] = str(values, key)!;
       if (!Object.keys(body).length)
         throw new Problem(
           400,
-          "至少改一项：--text、--why、--by、--check",
+          "至少改一项：--text、--why、--by、--check、--applies",
           "usage",
         );
       const result = await (

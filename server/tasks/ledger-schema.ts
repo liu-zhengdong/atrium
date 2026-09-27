@@ -5,6 +5,7 @@ import { repairScheduleRecords } from "./schedule-recovery.ts";
 import { ensureUpstreamPrTable } from "./schedule-upstream.ts";
 import { ensureUsageTable } from "./usage.ts";
 import { ensureConcernTable } from "./concerns.ts";
+import { ensureAlsoTable } from "./also.ts";
 import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
 import { ensureCouncilTables } from "./councils.ts";
@@ -129,6 +130,7 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureUsageTable(db);
   // 全景图第 2 步（#322）：任务请了哪些专员、本轮审查任务与结论。
   ensureConcernTable(db);
+  ensureAlsoTable(db);
   // 全景图第 3 步（#322）：会审的议题、受邀专员与结论。
   ensureCouncilTables(db);
   ensureDeliveryRecords(db);

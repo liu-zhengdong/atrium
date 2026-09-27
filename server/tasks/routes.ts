@@ -1,3 +1,6 @@
+import { publishInvolved } from "./notice.ts";
+import { involvedOf } from "./also.ts";
+import { specialistsForPart } from "./specialist-scope.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { leaderOf } from "../leaders/guard.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -127,7 +130,10 @@ export function registerTaskRoutes(
     confirmWorkerAdvice(db, request.body),
   );
   for (const path of ["/api/specialists", "/api/roles"]) {
-    app.get(path, () => listJobRoles(db));
+    app.get(path, (request) => {
+      const part = query(request.query).part;
+      return part ? specialistsForPart(db, part) : listJobRoles(db);
+    });
     app.post(path, { bodyLimit: 32 * 1024 }, (request, reply) =>
       reply.code(201).send(createJobRole(db, request.body)),
     );
@@ -177,6 +183,7 @@ export function registerTaskRoutes(
   // 详述进库（#355）：内容至多 64 KB，JSON 转义后留足余量。
   app.post("/api/tasks", { bodyLimit: 256 * 1024 }, async (request, reply) => {
     const task = createTask(db, request.body, Date.now(), leaderOf(request));
+    publishInvolved(runner.inbox, db, task.id, [], leaderOf(request));
     return reply.code(201).send(task);
   });
   app.get("/api/tasks", (request) => {
@@ -202,9 +209,20 @@ export function registerTaskRoutes(
     getTask(db, params(request.params).id),
   );
   app.patch("/api/tasks/:id", { bodyLimit: 256 * 1024 }, async (request) => {
+    const id = parseTaskRef(params(request.params).id);
+    const exists = db.prepare("SELECT 1 FROM tasks WHERE id=?").get(id);
+    const before = exists ? involvedOf(db, getTask(db, id)) : undefined;
     const task = updateTask(db, params(request.params).id, request.body);
     if (task.status === "cancelled") await runner.cleanupCancelled(task.id);
     if (task.urgent === 1) await runner.urgentQueued(task.id);
+    if (task.status !== "cancelled" && before)
+      publishInvolved(
+        runner.inbox,
+        db,
+        task.id,
+        [...before.also, ...before.auto],
+        leaderOf(request),
+      );
     return getTask(db, task.id);
   });
   app.post("/api/tasks/:id/note", { bodyLimit: 4 * 1024 }, (request) =>

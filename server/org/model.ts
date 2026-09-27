@@ -15,6 +15,10 @@ export type NodeRow = {
   archived_at: number | null;
   created_at: number;
   updated_at: number;
+  /** 1 表示「管方面」的部分（#373，aspects.ts）；旧库补列前的行可能没有。 */
+  aspect?: number;
+  /** 管方面的部分缺省适用于哪些部分：节点 id 的 JSON 数组；NULL 为整个上级。 */
+  applies?: string | null;
 };
 export type DocRow = {
   node_id: number;

@@ -92,7 +92,8 @@ function repoPaths(value: unknown): string[] {
 export type AddInput = {
   parent?: string;
   slug: string;
-  kind: Kind;
+  /** "aspect" 建管方面的部分（#373）：按父节点取 project / module，另记 aspect=1。 */
+  kind: Kind | "aspect";
   name: string;
   leader?: string | null;
   repos?: string[];
@@ -104,13 +105,20 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
       throw new Problem(400, "doc_path 已停用，请编辑节点章程正文");
     const list = nodes(db);
     if (list.length >= 500) throw new Problem(400, "组织树已达 500 个节点");
-    const kind = validateKind(input.kind),
+    const parent = input.parent ? nodeByAddress(db, input.parent) : null;
+    const aspect = input.kind === "aspect";
+    if (aspect && !parent)
+      throw new Problem(400, "管方面的部分要挂在某个部分下面");
+    const kind = aspect
+        ? parent!.kind === "org"
+          ? "project"
+          : "module"
+        : validateKind(input.kind),
       slug = validateSlug(input.slug),
       reason = validateReason(input.reason);
     const name = input.name?.trim();
     if (!name || Array.from(name).length > 100)
       throw new Problem(400, "name 应为 1–100 字");
-    const parent = input.parent ? nodeByAddress(db, input.parent) : null;
     if (!parent && (kind !== "org" || list.length))
       throw new Problem(400, "parent 必须指定合法父节点；org 只能有一个根");
     if (parent) {
@@ -135,9 +143,18 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
     const now = Date.now();
     const result = db
       .prepare(
-        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,aspect,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
       )
-      .run(parent?.id ?? null, kind, slug, name, leader, now, now);
+      .run(
+        parent?.id ?? null,
+        kind,
+        slug,
+        name,
+        leader,
+        aspect ? 1 : 0,
+        now,
+        now,
+      );
     const id = Number(result.lastInsertRowid);
     for (const repo of repos)
       db.prepare("INSERT INTO org_node_repos(node_id,repo) VALUES(?,?)").run(

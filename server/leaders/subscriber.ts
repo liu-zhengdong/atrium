@@ -83,3 +83,12 @@ export function upstreamRoute(db: DatabaseSync, leader: string): Route {
     .map((n) => chainFrom(list, n.parent_id));
   return escalationRoute({ leader, chains, registered: registeredLeaders(db) });
 }
+
+/** 某个部分的事件投给谁（牵涉知会用）：从这一部分往上找最近的已登记 leader。 */
+export function partRoute(db: DatabaseSync, nodeId: number): Route {
+  return routeTaskEvent({
+    owner: null,
+    chain: chainFrom(nodes(db), nodeId),
+    registered: registeredLeaders(db),
+  });
+}

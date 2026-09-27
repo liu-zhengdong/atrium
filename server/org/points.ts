@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
+import { appliesRefs, appliesText, resolveApplies } from "./aspects.ts";
 import {
   all,
   canEdit,
@@ -30,6 +31,7 @@ export type PointRow = {
   check_ref: string | null;
   updated_by: string;
   updated_at: number;
+  applies?: string | null;
 };
 export type Point = {
   ref: string;
@@ -38,6 +40,8 @@ export type Point = {
   why: string;
   by: string;
   check: string | null;
+  /** 管方面的部分的要点适用于哪些部分（oN）；null 为跟随节点（缺省整个上级）。 */
+  applies: string[] | null;
   updated_by: string;
   updated_at: number;
 };
@@ -60,6 +64,7 @@ const view = (row: PointRow): Point => ({
   why: row.why,
   by: row.decided_by,
   check: row.check_ref,
+  applies: appliesRefs(row.applies),
   updated_by: row.updated_by,
   updated_at: row.updated_at,
 });
@@ -71,9 +76,15 @@ const usage = (message: string, next?: string) =>
 export function validatePoint(
   input: Record<string, unknown>,
   partial = false,
-): { text?: string; why?: string; by?: string; check?: string | null } {
+): {
+  text?: string;
+  why?: string;
+  by?: string;
+  check?: string | null;
+  applies?: unknown;
+} {
   for (const key of Object.keys(input))
-    if (!["text", "why", "by", "check"].includes(key))
+    if (!["text", "why", "by", "check", "applies"].includes(key))
       throw usage(`${key}: 是未知字段`);
   const out: ReturnType<typeof validatePoint> = {};
   const field = (key: "text" | "why" | "by", flag: string, label: string) => {
@@ -100,8 +111,10 @@ export function validatePoint(
       throw usage(`--check: 不能超过 ${POINT_LIMITS.check} 字`);
     else out.check = value.trim();
   }
+  // 适用范围要查库解析，这里原样带出（addPoint / editPoint 里解析）。
+  if ("applies" in input) out.applies = input.applies;
   if (partial && !Object.keys(out).length)
-    throw usage("至少改一项：要点、--why、--by、--check");
+    throw usage("至少改一项：要点、--why、--by、--check、--applies");
   return out;
 }
 
@@ -179,6 +192,7 @@ export function addPoint(
   return transaction(db, () => {
     const node = nodeByAddress(db, address);
     authorize(db, node, actor);
+    const applies = appliesOf(db, node, input.applies);
     const count = one<{ n: number; pos: number | null }>(
       db,
       "SELECT count(*) AS n, max(pos) AS pos FROM org_points WHERE node_id=?",
@@ -195,7 +209,7 @@ export function addPoint(
     const id = Number(
       db
         .prepare(
-          "INSERT INTO org_points(node_id,pos,text,why,decided_by,check_ref,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+          "INSERT INTO org_points(node_id,pos,text,why,decided_by,check_ref,applies,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
         )
         .run(
           node.id,
@@ -204,6 +218,7 @@ export function addPoint(
           input.why,
           input.by,
           input.check ?? null,
+          applies === undefined ? null : appliesText(applies),
           actor,
           Date.now(),
         ).lastInsertRowid,
@@ -221,14 +236,17 @@ export function editPoint(
   const input = validatePoint(objectOf(body), true);
   return transaction(db, () => {
     const row = requirePoint(db, reference);
-    authorize(db, nodeByAddress(db, ref(row.node_id)), actor);
+    const node = nodeByAddress(db, ref(row.node_id));
+    authorize(db, node, actor);
+    const applies = appliesOf(db, node, input.applies);
     db.prepare(
-      "UPDATE org_points SET text=?,why=?,decided_by=?,check_ref=?,updated_by=?,updated_at=? WHERE id=?",
+      "UPDATE org_points SET text=?,why=?,decided_by=?,check_ref=?,applies=?,updated_by=?,updated_at=? WHERE id=?",
     ).run(
       input.text ?? row.text,
       input.why ?? row.why,
       input.by ?? row.decided_by,
       input.check === undefined ? row.check_ref : input.check,
+      applies === undefined ? (row.applies ?? null) : appliesText(applies),
       actor,
       Date.now(),
       row.id,
@@ -250,6 +268,17 @@ export function removePoint(
     db.prepare("DELETE FROM org_points WHERE id=?").run(row.id);
     return view(row);
   });
+}
+
+/** 适用范围只给管方面的部分写；没给为 undefined，清掉为 null。 */
+function appliesOf(db: DatabaseSync, node: NodeRow, value: unknown) {
+  if (value === undefined) return undefined;
+  const ids = resolveApplies(db, value);
+  if (ids && !node.aspect)
+    throw usage(
+      `--applies: ${ref(node.id)} ${node.name} 不是管方面的部分；管东西的部分的要点只对本块及下层生效`,
+    );
+  return ids;
 }
 
 function objectOf(value: unknown): Record<string, unknown> {

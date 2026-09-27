@@ -36,6 +36,9 @@ import { schedulePrExec } from "./schedule-pr.ts";
 import type { LaunchOptions } from "./workspace.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { tellTask } from "./tell-runtime.ts";
+import { DiskBudget } from "./disk-budget.ts";
+import { BudgetProblem } from "./budget-problem.ts";
+import { readPace } from "./prepare.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -49,6 +52,7 @@ export type RunnerOptions = {
   env?: NodeJS.ProcessEnv;
   exec?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
+  usagePace?: () => Promise<PaceEntry[] | undefined>;
   charterPath?: string;
   tickMs?: number;
   ciPollMs?: number;
@@ -69,6 +73,7 @@ export class TaskRunner {
   private readonly waits: TaskWaits;
   private readonly quota: QuotaGuard;
   private readonly scheduler: Scheduler;
+  private readonly disk: DiskBudget;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly exec: Exec;
   private readonly launchOptions: LaunchOptions;
@@ -95,8 +100,10 @@ export class TaskRunner {
       env: workerEnvironment(options.env ?? process.env),
       run: this.exec,
       pace: options.pace,
+      usagePace: options.usagePace,
       charterPath: options.charterPath,
     };
+    this.disk = new DiskBudget(db, options.data);
     this.waits = new TaskWaits(
       (id) => this.settled(id),
       (id) => getTask(this.db, id),
@@ -114,6 +121,7 @@ export class TaskRunner {
       launchOptions: this.launchOptions,
       waits: this.waits,
       quota: this.quota,
+      disk: this.disk,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
     });
@@ -140,6 +148,7 @@ export class TaskRunner {
     };
     every(this.options.tickMs ?? 5000, async () => {
       await this.x.tick();
+      if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();
     });
@@ -216,14 +225,24 @@ export class TaskRunner {
     this.x.launching.set(id, null);
     let chosen: Choice;
     try {
+      await this.disk.check(task.node_id, task.repo);
+      const pace = await (this.launchOptions.pace ?? readPace)().catch(
+        () => undefined,
+      );
+      if (!pace)
+        noteTask(this.db, id, "budget_unknown", {
+          reason: "额度数据不可用，份额不拦截",
+        });
       chosen = await chooseWorker(
         request,
-        this.launchOptions,
+        { ...this.launchOptions, pace: async () => pace },
         this.quota.held(),
         { busy: this.x.busyTools(id), chain: taskAvoidChain(this.db, task) },
       );
     } catch (error) {
       this.x.launching.delete(id);
+      if (error instanceof BudgetProblem)
+        return this.blockBudget(task, error.message);
       throw error;
     }
     const tool = chosen.worker.tool;
@@ -248,9 +267,32 @@ export class TaskRunner {
     this.x.launching.set(id, tool);
     try {
       return { task: await this.x.launch(id, chosen), queued: false };
+    } catch (error) {
+      if (error instanceof BudgetProblem)
+        return this.blockBudget(task, error.message);
+      throw error;
     } finally {
       this.x.launching.delete(id);
     }
+  }
+
+  private blockBudget(task: Task, reason: string) {
+    noteTask(this.db, task.id, "budget_blocked", { reason });
+    this.x.advance(
+      task.id,
+      task.status === "todo"
+        ? { kind: "block" }
+        : { kind: "manual_set", to: "blocked" },
+      {},
+      { reason },
+    );
+    this.x.publish(task.id, "blocked", {
+      reason,
+      source: "budget",
+      next: "等窗口重置或请上层调整份额",
+    });
+    this.waits.changed(task.id);
+    return { task: getTask(this.db, task.id), queued: false };
   }
 
   private enqueue(task: Task, chosen: Chosen, reason: string) {

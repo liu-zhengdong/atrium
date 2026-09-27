@@ -3,6 +3,7 @@ import { all } from "./ledger-model.ts";
 import { ensureQueueTable } from "./queue.ts";
 import { repairScheduleRecords } from "./schedule-recovery.ts";
 import { ensureUpstreamPrTable } from "./schedule-upstream.ts";
+import { ensureUsageTable } from "./usage.ts";
 
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
@@ -71,4 +72,5 @@ export function ensureTaskTables(db: DatabaseSync) {
     PRIMARY KEY(task_id,repo,number));`);
   ensureUpstreamPrTable(db);
   repairScheduleRecords(db);
+  ensureUsageTable(db);
 }

@@ -110,6 +110,7 @@ export async function startApp(
   t: After,
   tweak?: (fx: ReturnType<typeof fixture>) => void,
   pace: () => Promise<PaceEntry[] | undefined> = async () => undefined,
+  usagePace: () => Promise<PaceEntry[] | undefined> = async () => undefined,
 ) {
   const fx = fixture(t);
   tweak?.(fx);
@@ -125,6 +126,7 @@ export async function startApp(
       tickMs: 100,
       killGraceMs: 200,
       pace,
+      usagePace,
     },
   });
   t.after(() => app.close());

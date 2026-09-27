@@ -10,6 +10,8 @@ import { pickWorker, readPace, type PickInput } from "./prepare.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import type { LaunchOptions } from "./workspace.ts";
 import { readQuotaReservePercent, overReserve } from "./budget.ts";
+import { quotaHeadroom } from "./usage-budget.ts";
+import { BudgetProblem } from "./budget-problem.ts";
 
 /**
  * 解析执行者（#262）：读档案、查是否已装、按额度挑；判定本身在 plan.ts / prepare.ts 的纯函数里。
@@ -51,6 +53,14 @@ export async function chooseWorker(
     avoid.chain?.at(-1)?.id,
   );
   const pace = await (options.pace ?? (() => readPace()))();
+  const headroom = options.db
+    ? quotaHeadroom(
+        options.db,
+        avoid.chain?.at(-1)?.id ?? null,
+        pace,
+        reservePercent,
+      )
+    : new Map();
   if (request.worker) {
     worker = await resolveWorker(request.worker, options.workersDir);
     if (!findExecutable(ADAPTERS[worker.tool].executable, path))
@@ -60,6 +70,15 @@ export async function chooseWorker(
         "usage",
       );
     const account = ADAPTERS[worker.tool].quotaProvider;
+    const room = headroom.get(account);
+    if (pace && room && room.points < 1)
+      throw new BudgetProblem(
+        `执行者 ${worker.tool} 的账号 ${account} 份额不足：${room.reason}；等窗口重置或请上层调整份额`,
+      );
+    if (worker.profile.rules.billing === "metered")
+      throw new BudgetProblem(
+        `执行者 ${worker.tool} 的档案 billing=metered，当前钱份额为 0 元`,
+      );
     const used = pace?.find(
       (entry) =>
         entry.providerId === account &&
@@ -83,6 +102,7 @@ export async function chooseWorker(
         profiles,
         held,
         reservePercent,
+        headroom,
       });
       const available = picked.ok
         ? picked.available.filter((tool) => tool !== worker.tool)
@@ -112,6 +132,7 @@ export async function chooseWorker(
       profiles,
       held,
       reservePercent,
+      headroom,
       ...avoid,
     });
     if (!picked.ok && held.size) {
@@ -122,6 +143,7 @@ export async function chooseWorker(
         risk,
         profiles,
         reservePercent,
+        headroom,
         ...avoid,
       });
       if (waiting.ok) {
@@ -129,12 +151,17 @@ export async function chooseWorker(
         waitUntil = held.get(ADAPTERS[waiting.tool].quotaProvider);
       }
     }
-    if (!picked.ok)
-      throw new Problem(
-        409,
-        `${picked.reason}（${picked.skipped.map((skip) => `${skip.tool}：${skip.reason}`).join("；")}）`,
-        "conflict",
+    if (!picked.ok) {
+      const blocked = picked.skipped.some(
+        (skip) =>
+          skip.reason.includes("份额") ||
+          skip.reason.includes("billing=metered"),
       );
+      const message = `${picked.reason}（${picked.skipped.map((skip) => `${skip.tool}：${skip.reason}`).join("；")}）`;
+      if (blocked)
+        throw new BudgetProblem(`${message}；等窗口重置或请上层调整份额`);
+      throw new Problem(409, message, "conflict");
+    }
     worker = await resolveWorker(picked.tool, options.workersDir);
   }
   const refusal = riskRefusal(worker.id, worker.profile.rules.max_risk, risk);

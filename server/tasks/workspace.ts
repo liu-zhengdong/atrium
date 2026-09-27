@@ -54,6 +54,8 @@ export type LaunchOptions = {
   env: NodeJS.ProcessEnv;
   run?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
+  /** 用量快照单独采样；测试可注入假 OpenQuota，不改变挑人采样次数。 */
+  usagePace?: () => Promise<PaceEntry[] | undefined>;
   charterPath?: string;
 };
 

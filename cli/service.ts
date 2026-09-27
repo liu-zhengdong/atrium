@@ -8,6 +8,7 @@ import {
 import { startService } from "../server/service.ts";
 import { restartInProgress } from "../server/supervisor.ts";
 import { Problem } from "../server/problem.ts";
+import { localFetch, type LocalResponse } from "../server/local-http.ts";
 import { recordResult } from "./contract.ts";
 import { workerGuard } from "./worker-guard.ts";
 import { requireUserAuthService, userBearer } from "./auth.ts";
@@ -49,11 +50,21 @@ export async function connect(quietStart = false): Promise<Client> {
 const causeCode = (error: unknown) =>
   (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
 
+// 连接被断开的底层套接字错误：对端重置、写到已关的连接、套接字已失效（socket hang up 的 code 也是 ECONNRESET）。
+const DISCONNECTED = new Set([
+  "ECONNRESET",
+  "EPIPE",
+  "EINVAL",
+  "ENOTCONN",
+  "UND_ERR_SOCKET",
+]);
+
 /**
  * 请求没被服务处理、可以重发（#262 重启窗口）：
  * - 连接被拒：旧服务已关、新服务还没起来，请求根本没送到；
  * - 连接被断开且服务正在重启或已换人：服务关闭时会等在处理的请求回完再关，
- *   没拿到响应就被断开的是它当作空闲关掉的复用连接，请求没被处理。
+ *   没拿到响应就被断开的是刚建立就被关掉的连接，请求没被处理。
+ *   请求走 node:http（server/local-http.ts），这类断开以错误交回而不是让进程崩溃。
  */
 export function resendable(
   error: unknown,
@@ -62,8 +73,7 @@ export function resendable(
 ) {
   const code = causeCode(error);
   if (code === "ECONNREFUSED") return true;
-  if (code !== "ECONNRESET" && code !== "UND_ERR_SOCKET" && code !== "EPIPE")
-    return false;
+  if (typeof code !== "string" || !DISCONNECTED.has(code)) return false;
   const now = readService(data);
   return (
     !!restartInProgress(data) ||
@@ -80,8 +90,12 @@ export function client(
   reconnect?: (error: unknown) => Promise<string | null>,
 ) {
   // 不是 async：令牌缺失（auth_required）同步抛出，不被下面当成连接失败包成 503。
-  function send(method: string, path: string, body?: unknown) {
-    return fetch(`${base}/api${path}`, {
+  function send(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<LocalResponse> {
+    return localFetch(`${base}/api${path}`, {
       method,
       headers: {
         ...(body === undefined ? {} : { "content-type": "application/json" }),

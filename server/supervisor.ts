@@ -25,6 +25,7 @@ import { startService, stopService } from "./service.ts";
 import { installVersion } from "./install-version.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { Problem } from "./problem.ts";
+import { localFetch } from "./local-http.ts";
 
 export type RestartStatus =
   /** 旧版 `restart --when-idle` 的遗留状态：只认得出来，启动时丢弃（discardLegacyIdleRestart）。 */
@@ -150,7 +151,7 @@ export function writeRestartState(data: string, state: RestartState): void {
 
 export async function checkServiceHealth(record: ServiceRecord): Promise<void> {
   // 1. 接口能响应
-  const statusRes = await fetch(`${serviceUrl(record)}/api/service`, {
+  const statusRes = await localFetch(`${serviceUrl(record)}/api/service`, {
     headers: { authorization: `Bearer ${record.token}` },
     signal: AbortSignal.timeout(4000),
   });
@@ -171,10 +172,13 @@ export async function checkServiceHealth(record: ServiceRecord): Promise<void> {
   let ready = false;
   while (Date.now() < deadline) {
     if (!alive(record.pid)) throw new Error("服务在就绪前退出");
-    const healthRes = await fetch(`${serviceUrl(record)}/api/service/health`, {
-      headers: { authorization: `Bearer ${record.token}` },
-      signal: AbortSignal.timeout(6000),
-    });
+    const healthRes = await localFetch(
+      `${serviceUrl(record)}/api/service/health`,
+      {
+        headers: { authorization: `Bearer ${record.token}` },
+        signal: AbortSignal.timeout(6000),
+      },
+    );
     // 回滚到的旧版本在 runtimes 里报未就绪原因；ok 已涵盖它的可用性。
     const health = (await healthRes.json().catch(() => ({}))) as {
       ok?: boolean;
@@ -380,7 +384,7 @@ export async function runSupervisor(args: string[]): Promise<void> {
 
     await checkServiceHealth(newRecord);
     const reported = (await (
-      await fetch(`${serviceUrl(newRecord)}/api/service`, {
+      await localFetch(`${serviceUrl(newRecord)}/api/service`, {
         headers: { authorization: `Bearer ${newRecord.token}` },
       })
     ).json()) as { version: string };

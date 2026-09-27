@@ -8,11 +8,12 @@ import {
 import { userTokenPath } from "../server/user-auth.ts";
 import { startService } from "../server/service.ts";
 import { Problem } from "../server/problem.ts";
+import { localFetch } from "../server/local-http.ts";
 import { recordResult } from "./contract.ts";
 import type { Command } from "./main.ts";
 
 async function serviceStatus(record: ServiceRecord) {
-  const response = await fetch(`${serviceUrl(record)}/api/service`, {
+  const response = await localFetch(`${serviceUrl(record)}/api/service`, {
     headers: { authorization: `Bearer ${record.token}` },
     signal: AbortSignal.timeout(1500),
   }).catch(() => {
@@ -90,10 +91,13 @@ export const authCommands: Record<string, Command> = {
           connected = true;
           upgradeRequired = !(await supportsUserAuth(record));
           if (!upgradeRequired && token) {
-            const check = await fetch(`${serviceUrl(record)}/api/org/tree`, {
-              headers: { authorization: `Bearer ${token}` },
-              signal: AbortSignal.timeout(1500),
-            });
+            const check = await localFetch(
+              `${serviceUrl(record)}/api/org/tree`,
+              {
+                headers: { authorization: `Bearer ${token}` },
+                signal: AbortSignal.timeout(1500),
+              },
+            );
             authenticated = check.ok;
           }
         } catch {
@@ -125,7 +129,7 @@ export const authCommands: Record<string, Command> = {
       await requireUserAuthService(record);
       const url = `${serviceUrl(record)}/api/auth/rotate`;
       const rotate = (token: string) =>
-        fetch(url, {
+        localFetch(url, {
           method: "POST",
           headers: { authorization: `Bearer ${token}` },
         });

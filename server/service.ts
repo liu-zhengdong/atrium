@@ -21,14 +21,14 @@ import {
 } from "./service-state.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { restartInProgress } from "./supervisor.ts";
+import { localFetch } from "./local-http.ts";
 
 async function request(record: ServiceRecord, stop = false) {
-  const response = await fetch(
+  const response = await localFetch(
     `${serviceUrl(record)}/api/service${stop ? "/stop" : ""}`,
     {
       method: stop ? "POST" : "GET",
       headers: { authorization: `Bearer ${record.token}` },
-      redirect: "error",
       signal: AbortSignal.timeout(700),
     },
   );

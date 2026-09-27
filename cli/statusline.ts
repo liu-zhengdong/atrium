@@ -59,7 +59,12 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
   // 旧版服务给的一句话可能是整篇原因，这里再截一次。
   const holder = { ...full, text: oneLine(full.text, HOLDER_WIDTH) };
   const [mark, color] = MARK[holder.kind];
-  const title = `${row.urgent ? `${paint(`${BOLD}${RED}`, "紧急")} ` : ""}「${oneLine(row.title, TITLE_MAX)}」`;
+  const tag = row.urgent
+    ? `${paint(`${BOLD}${RED}`, "紧急")} `
+    : row.idle
+      ? `${paint(DIM, "闲时")} `
+      : "";
+  const title = `${tag}「${oneLine(row.title, TITLE_MAX)}」`;
   if (holder.kind === "user")
     return `${paint(color, mark)} ${row.ref} ${title} ${paint(color, `等你：${holder.text}`)}`;
   if (holder.kind === "worker") {

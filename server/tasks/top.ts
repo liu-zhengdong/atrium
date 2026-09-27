@@ -12,6 +12,8 @@ import { concernStates } from "./concerns.ts";
 import type { ConcernState } from "./concern-gate.ts";
 import { holderFacts } from "./holder-facts.ts";
 import { holderOf, type Holder } from "./holder.ts";
+import { idleWaits } from "./queue.ts";
+import { idleWaitText, isIdle } from "./priority.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -39,6 +41,8 @@ export type TopRow = NoteView & {
   reason: string | null;
   /** 标了紧急（t113）。 */
   urgent: boolean;
+  /** 闲时（t136）：排在普通任务后面，有空闲执行者才派；标了紧急的不算。 */
+  idle: boolean;
   updated_at: number;
   /** 捎话条数与其中还没送达的（#307）；没有捎话为 null。 */
   tells: { total: number; pending: number } | null;
@@ -172,6 +176,8 @@ export function topRows(
       events.set(event.task_id, history);
     }
   }
+  // 闲时任务在等什么按当下的队列现算（一次查询）；没有排队的就不读。
+  const ahead = queue.size ? idleWaits(db) : new Map<number, number>();
   const tells = tellCounts(db, ids);
   const concerns = concernStates(db, ids);
   const inbox = !!db
@@ -182,6 +188,10 @@ export function topRows(
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
+    const idleAhead = waiting ? ahead.get(row.id) : undefined;
+    const queuedReason = idleAhead
+      ? idleWaitText(idleAhead)
+      : reasonOf(history, "queued");
     return {
       ref: taskRef(row.id),
       title: row.title,
@@ -195,8 +205,9 @@ export function topRows(
       updated_at: row.updated_at,
       queued_at: waiting?.queued_at ?? null,
       urgent: row.urgent === 1,
+      idle: isIdle(row),
       reason:
-        reasonOf(history, "queued") ??
+        queuedReason ??
         // 专员关卡的结论晚于受阻事件：否决或没出结论的原因以它为准。
         (latestOf(history, "concern_gate", "block") === "concern_gate" &&
         row.status === "blocked"
@@ -205,12 +216,9 @@ export function topRows(
       tells: tells.get(row.id) ?? null,
       concerns: concerns.get(row.id) ?? null,
       holder: holderOf(
-        holderFacts(
-          db,
-          row,
-          waiting ? { reason: reasonOf(history, "queued") } : null,
-          { inbox },
-        ),
+        holderFacts(db, row, waiting ? { reason: queuedReason } : null, {
+          inbox,
+        }),
       ),
       ...noteView(db, row.id, row.status),
     };

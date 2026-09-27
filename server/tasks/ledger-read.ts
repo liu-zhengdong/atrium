@@ -17,11 +17,17 @@ import { parentOf, statusOf } from "./ledger-validate.ts";
 import { childSummaries } from "./ledger-summary.ts";
 import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
-import { queued, queueView } from "./queue.ts";
+import { idleWaits, queued, queueView } from "./queue.ts";
 import { concernsOf } from "./concerns.ts";
 import type { InviteHint } from "./concern-gate.ts";
 
 const EVENTS_SHOWN = 50;
+
+/** 只算一次、要时才算（列表里没有排队的任务就不读队列）。 */
+export function once<T>(compute: () => T): () => T {
+  let value: { v: T } | undefined;
+  return () => (value ??= { v: compute() }).v;
+}
 
 export function getTask(db: DatabaseSync, reference: unknown) {
   const found = requireRow(db, parseTaskRef(reference));
@@ -105,10 +111,11 @@ export function listTasks(
     limit + 1,
   );
   const more = rows.length > limit;
+  const ahead = once(() => idleWaits(db));
   const tasks = rows.slice(0, limit).map((row) => ({
     ...listView(row),
     ...noteView(db, row.id, row.status),
-    ...queueView(db, row.id),
+    ...queueView(db, row.id, ahead),
   }));
   return { tasks, next_after: more ? tasks.at(-1)!.ref : null };
 }

@@ -214,7 +214,12 @@ export function registerTaskRoutes(
     const before = exists ? involvedOf(db, getTask(db, id)) : undefined;
     const task = updateTask(db, params(request.params).id, request.body);
     if (task.status === "cancelled") await runner.cleanupCancelled(task.id);
-    if (task.urgent === 1) await runner.urgentQueued(task.id);
+    // 标了紧急或改了闲时 / 普通：排队中的立刻按新先后再排一轮。
+    const reordered =
+      !!request.body &&
+      typeof request.body === "object" &&
+      "priority" in request.body;
+    if (task.urgent === 1 || reordered) await runner.urgentQueued(task.id);
     if (task.status !== "cancelled" && before)
       publishInvolved(
         runner.inbox,

@@ -35,6 +35,8 @@ export type TopRow = {
   reason: string | null;
   /** 标了紧急（t113）；旧版服务没有这个字段。 */
   urgent?: boolean;
+  /** 闲时（t136）：排在普通任务后面；旧版服务没有这个字段。 */
+  idle?: boolean;
   updated_at: number;
   note: string | null;
   note_by: string | null;
@@ -167,9 +169,9 @@ export const phase = (row: TopRow) =>
         ? row.status
         : row.status));
 
-/** 任务行的标题：标了紧急的前面写「紧急」（t113）。 */
+/** 任务行的标题：标了紧急的前面写「紧急」（t113），闲时的写「闲时」（t136）。 */
 export const titleOf = (row: TopRow) =>
-  row.urgent ? `紧急 ${row.title}` : row.title;
+  row.urgent ? `紧急 ${row.title}` : row.idle ? `闲时 ${row.title}` : row.title;
 
 /** 排队与受阻没有时长可言，直接说清在等什么。 */
 function state(row: TopRow, now: number) {

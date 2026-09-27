@@ -727,6 +727,7 @@ test("次序：在跑的按跑了多久、排队按入队顺序、受阻与刚�
     queued_at: null,
     reason: null,
     urgent: false,
+    idle: false,
     updated_at: NOW,
     note: null,
     note_by: null,

@@ -4,7 +4,9 @@ import { all, listView, taskRef, usage, type TaskRow } from "./ledger-model.ts";
 import { conditions } from "./schedule-ledger.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
-import { dequeue, queued, queueView } from "./queue.ts";
+import { dequeue, idleWaits, queued, queueView } from "./queue.ts";
+import { once } from "./ledger-read.ts";
+import { isIdle, rank } from "./priority.ts";
 import { noteView } from "./notes.ts";
 import {
   dependencyOf,
@@ -113,12 +115,16 @@ export function scheduleOf(
   return classify(row.status, tasks, prs, row.schedule_reason);
 }
 
-export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
+export function planItem(
+  db: DatabaseSync,
+  row: TaskRow,
+  ahead?: () => ReadonlyMap<number, number>,
+): PlanItem {
   return {
     task: {
       ...listView(row),
       ...noteView(db, row.id, row.status),
-      ...queueView(db, row.id),
+      ...queueView(db, row.id, ahead),
     },
     ...scheduleOf(db, row),
   };
@@ -141,24 +147,30 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
   );
   const page = rows.slice(0, limit);
   const details = planDetails(db, page);
+  const ahead = once(() => idleWaits(db));
   // 细节是只读附加字段（top 的排期段用）；分组判定仍只看 planItem。
   const items: (PlanItem & PlanDetail)[] = page.map((row) => ({
-    ...planItem(db, row),
+    ...planItem(db, row, ahead),
     ...details.get(row.id)!,
   }));
   return {
     groups: {
       running: items.filter((item) => item.group === "running"),
-      // 紧急的排最前（t113），其余照短号。
+      // 紧急的排最前（t113），闲时的排最后（t136），同一档照短号。
       ready: items
         .filter((item) => item.group === "ready")
-        .sort((a, b) => b.task.urgent - a.task.urgent),
+        .sort((a, b) => planRank(a.task) - planRank(b.task)),
       waiting: items.filter((item) => item.group === "waiting"),
       blocked: items.filter((item) => item.group === "blocked"),
     },
     next_after: rows.length > limit ? taskRef(rows[limit - 1]!.id) : null,
   };
 }
+
+const NO_AHEAD = () => new Map<number, number>();
+
+const planRank = (task: Pick<TaskRow, "urgent" | "priority">) =>
+  rank({ urgent: task.urgent === 1, idle: isIdle(task) });
 
 export class Scheduler {
   private busy = false;
@@ -176,6 +188,7 @@ export class Scheduler {
       const now = Date.now();
       // 有界扫描；游标循环覆盖任意规模账本。
       let after = 0;
+      const later: number[] = [];
       for (;;) {
         const rows = all<TaskRow>(
           this.db,
@@ -187,14 +200,19 @@ export class Scheduler {
           after = row.id;
           await this.refreshPrs(row.id, now);
           await refreshUpstreamPrs(this.db, row.id, now, this.exec);
-          const item = planItem(this.db, {
-            ...row,
-            ...(this.db
-              .prepare(
-                "SELECT status,schedule_state,schedule_reason FROM tasks WHERE id=?",
-              )
-              .get(row.id) as TaskRow),
-          });
+          const item = planItem(
+            this.db,
+            {
+              ...row,
+              ...(this.db
+                .prepare(
+                  "SELECT status,schedule_state,schedule_reason FROM tasks WHERE id=?",
+                )
+                .get(row.id) as TaskRow),
+            },
+            // 巡检只看分组，不用排队原因；免得每条排队任务都读一遍队列。
+            NO_AHEAD,
+          );
           const state =
             item.group === "waiting"
               ? "waiting"
@@ -256,33 +274,39 @@ export class Scheduler {
               fresh.deliver === "none"
             )
           ) {
-            if (queued(this.db, row.id)) {
-              this.db
-                .prepare("UPDATE tasks SET auto_dispatched=1 WHERE id=?")
-                .run(row.id);
-              continue;
-            }
-            try {
-              await this.run(fresh.ref);
-              this.db
-                .prepare("UPDATE tasks SET auto_dispatched=1 WHERE id=?")
-                .run(row.id);
-            } catch (error) {
-              const reason = `自动派发失败：${error instanceof Error ? error.message : String(error)}`;
-              advanceTask(this.db, row.id, { kind: "block" }, {}, { reason });
-              this.db
-                .prepare(
-                  "UPDATE tasks SET schedule_state='blocked',schedule_reason=? WHERE id=?",
-                )
-                .run(reason, row.id);
-              this.publish(row.id, "blocked", reason, []);
-            }
+            // 闲时的等这一轮普通任务都派完（拉起或排进队列）再派，派时由 run 看前面还有没有普通任务在等。
+            if (isIdle(fresh)) later.push(row.id);
+            else await this.dispatch(row.id);
           }
         }
         if (rows.length < 200) break;
       }
+      for (const id of later) await this.dispatch(id);
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** 自动派发一件就绪任务；已在排队的只记下派过，派不出去的标受阻并投递。 */
+  private async dispatch(id: number) {
+    const fresh = getTask(this.db, id);
+    if (fresh.status !== "todo" || fresh.auto_dispatched !== 0) return;
+    if (queued(this.db, id)) {
+      this.db.prepare("UPDATE tasks SET auto_dispatched=1 WHERE id=?").run(id);
+      return;
+    }
+    try {
+      await this.run(fresh.ref);
+      this.db.prepare("UPDATE tasks SET auto_dispatched=1 WHERE id=?").run(id);
+    } catch (error) {
+      const reason = `自动派发失败：${error instanceof Error ? error.message : String(error)}`;
+      advanceTask(this.db, id, { kind: "block" }, {}, { reason });
+      this.db
+        .prepare(
+          "UPDATE tasks SET schedule_state='blocked',schedule_reason=? WHERE id=?",
+        )
+        .run(reason, id);
+      this.publish(id, "blocked", reason, []);
     }
   }
 

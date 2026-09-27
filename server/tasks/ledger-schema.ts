@@ -12,6 +12,19 @@ import { ensureCouncilTables } from "./councils.ts";
 import { ensurePatrolTables } from "./patrol.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
 
+/** 在途任务归属管方面的部分（或在它下面）的补成闲时；旧库没有组织表或 aspect 列就不动。 */
+function backfillIdle(db: DatabaseSync) {
+  const aspect = all<{ name: string }>(db, "PRAGMA table_info(org_nodes)").some(
+    (column) => column.name === "aspect",
+  );
+  if (!aspect) return;
+  db.exec(`WITH RECURSIVE idle(id) AS (
+      SELECT id FROM org_nodes WHERE aspect=1
+      UNION SELECT n.id FROM org_nodes n JOIN idle ON n.parent_id=idle.id)
+    UPDATE tasks SET priority='idle'
+      WHERE status NOT IN ('done','cancelled') AND COALESCE(part_id,node_id) IN (SELECT id FROM idle)`);
+}
+
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
   ensureQueueTable(db);
@@ -85,6 +98,13 @@ export function ensureTaskTables(db: DatabaseSync) {
   // 全景图（#322）：任务归属哪一部分，指向 org_nodes.id；旧 goal_id 由目标树迁移按目标的负责节点回填。
   if (!columns.some((column) => column.name === "part_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN part_id INTEGER");
+  // 闲时（t136）：管方面的部分开的任务缺省排在普通任务后面；加列时把在途的管方面任务补成闲时。
+  if (!columns.some((column) => column.name === "priority")) {
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('normal','idle'))",
+    );
+    backfillIdle(db);
+  }
   // PR 交付后的合入阶段单独记录；旧任务不自动合入。
   if (!columns.some((column) => column.name === "delivery_stage"))
     db.exec("ALTER TABLE tasks ADD COLUMN delivery_stage TEXT");

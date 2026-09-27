@@ -16,7 +16,8 @@ import {
 import { publishTask } from "./notice.ts";
 import { exitDetail, type Exit } from "./outcome.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
-import { dequeue, heads } from "./queue.ts";
+import { dequeue, heads, queuedNormals } from "./queue.ts";
+import { idleAhead } from "./priority.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
@@ -143,6 +144,22 @@ export class Executors {
     for (const [id, launching] of this.launching)
       if (launching && id !== except) tools.add(launching);
     return tools;
+  }
+
+  /**
+   * 闲时任务（t136）要用 tool 时，前面还有几件普通任务在等同一类执行者：同一工具的，或只在等本机空位的；
+   * 在等自己那个工具（独占工具正忙、额度用尽）的不算。0 表示可以派。
+   */
+  idleAhead(tool: Tool, except?: number) {
+    const held = this.ctx.quota.held();
+    return idleAhead(tool, queuedNormals(this.ctx.db, except), (other) => {
+      const adapter = ADAPTERS[other as Tool];
+      if (!adapter) return false;
+      return (
+        held.has(adapter.quotaProvider) ||
+        (!!adapter.exclusive && this.busy(other as Tool))
+      );
+    });
   }
 
   publish(
@@ -668,7 +685,7 @@ export class Executors {
   }
 
   /**
-   * 拉起排队中的任务：每个工具的队首（紧急的在前），前提是独占工具空闲、账号额度标记已解除、本机没满也不太忙（紧急的不看这两条）；
+   * 拉起排队中的任务：每个工具的队首（紧急的在前、闲时的在后），闲时的还要前面没有普通任务在等同一类执行者，前提是独占工具空闲、账号额度标记已解除、本机没满也不太忙（紧急的不看这两条）；
    * 返回出队几个。几处（退出收尾、巡检、额度解除）可能同时调用，出队以删到队列行为准。
    */
   async drain(tool?: Tool) {
@@ -680,8 +697,10 @@ export class Executors {
       if (this.ctx.closed() || held.has(ADAPTERS[entryTool].quotaProvider))
         continue;
       if (ADAPTERS[entryTool].exclusive && this.busy(entryTool)) continue;
+      // 闲时的（t136）：同一工具或在等本机空位的普通任务还有没拉起的（队首只取每个工具一件），先让它们。
+      if (entry.idle && this.idleAhead(entryTool)) continue;
       // 判定与占位之间没有 await：同时进来的另一轮 drain 看得到这里的 launching。
-      // 队首按紧急在前排好：普通任务被挡住时，后面不会还有紧急的。
+      // 队首按紧急、普通、闲时排好：普通任务被挡住时，后面不会还有紧急的。
       const gate = this.ctx.hostGate?.(entry.urgent);
       if (gate && !gate.ok) break;
       if (!dequeue(this.ctx.db, entry.task_id)) continue;

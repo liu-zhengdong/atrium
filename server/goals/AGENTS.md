@@ -7,3 +7,4 @@
 - 不留修订记录（u1 定），只记 `updated_by` / `updated_at`；节点只增不删（触发器拦 DELETE），放弃用状态表达，短号 `gN` 不复用。
 - 前置只有「达成」算满足；达成判定只看前置和操作者，不看子项（父里程碑看自己的验收标准）。
 - 达成判定（第 2 步）：以 `$ ` 开头的验收标准是命令，由 `check-runtime.ts` 在里程碑 `repo` 的临时 worktree（origin 默认分支，没有 origin 用 HEAD；没填仓库用空临时目录）里以白名单环境、独立进程组、串行、限时执行，退出码 0 为满足；其余条目人工判（负责部门 leader 链或同项目关注点 leader，必须写证据）。判定只增不删记在 `goal_checks`，按条目原文取最新（改措辞即作废）；纯判定在 `check-rules.ts`。全部满足且前置达成只提示可标达成，不自动标。服务停止时在跑的检查判中断，启动时按进程号清理残留。
+- 下线（#322 第 1 步）：`migrate-rules.ts` 纯判定把 gN 变成负责节点章程 `stages` 里的一条（id 沿用 gN，保留结果、验收、状态、证据、截止、前置、上级），任务按目标负责节点回填 `tasks.part_id`；`migrate.ts` 默认预览，apply 只有 u1，先 `VACUUM INTO` 备份再在一个事务里写，记 `goal_migrations` 映射与 `goal_retirement`。有 `goal_retirement` 后除 `/api/goals/migrate` 外的目标接口一律 410 并指向迁去的节点；`goals`、`goal_checks`、`tasks.goal_id` 不改不删。

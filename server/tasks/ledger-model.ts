@@ -30,6 +30,7 @@ export type TaskRow = {
   node_id: number | null;
   origin_node_id: number | null;
   goal_id: number | null;
+  part_id: number | null;
   created_at: number;
   started_at: number | null;
   ended_at: number | null;
@@ -41,6 +42,7 @@ export type Task = TaskRow & {
   node_ref: string | null;
   origin_ref: string | null;
   goal_ref: string | null;
+  part_ref: string | null;
   /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
   queued_reason?: string | null;
 } & NoteView;
@@ -65,6 +67,7 @@ export const view = (
   node_ref: string | null;
   origin_ref: string | null;
   goal_ref: string | null;
+  part_ref: string | null;
 } => ({
   ...row,
   ref: taskRef(row.id),
@@ -72,6 +75,7 @@ export const view = (
   node_ref: row.node_id == null ? null : `o${row.node_id}`,
   origin_ref: row.origin_node_id == null ? null : `o${row.origin_node_id}`,
   goal_ref: row.goal_id == null ? null : `g${row.goal_id}`,
+  part_ref: row.part_id == null ? null : `o${row.part_id}`,
 });
 
 export const RESULT_MAX_BYTES = 4096;

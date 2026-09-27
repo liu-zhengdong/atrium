@@ -58,6 +58,8 @@ export type Snapshot = {
   /** 目标树（`/api/goals/tree`）；取不到为 null，原因在 goals_error。 */
   goals?: GoalNode[] | null;
   goals_error?: string;
+  /** 目标树已迁为组织节点阶段记录（#322）时的说明；此时 goals 为 undefined。 */
+  goals_retired?: string;
 };
 
 // 不从 main.ts 取值：测试先加载本模块，main.ts 再回头引入会撞上循环初始化。
@@ -290,7 +292,9 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
         room,
       ),
     );
-  } else if (snapshot.goals === null)
+  } else if (snapshot.goals_retired)
+    lines.push("", clip(`目标：${snapshot.goals_retired}`, frame.width));
+  else if (snapshot.goals === null)
     lines.push(
       "",
       clip(
@@ -349,18 +353,25 @@ export async function snapshotOf(
     ),
     api.get<{ goals: GoalNode[] }>("/goals/tree").then(
       (value) => ({ value }),
-      (error: unknown) => ({
-        error: error instanceof Error ? error.message : String(error),
-      }),
+      (error: unknown) =>
+        error instanceof Problem && error.statusCode === 410
+          ? {
+              retired: `已迁为组织节点的阶段记录，看 ${error.nextCommand ?? "atrium org tree"}`,
+            }
+          : {
+              error: error instanceof Error ? error.message : String(error),
+            },
     ),
   ]);
   return {
     ...snapshot,
-    ...("error" in goals
-      ? { goals: null, goals_error: goals.error }
-      : Array.isArray(goals.value?.goals)
-        ? { goals: goals.value.goals }
-        : { goals: null, goals_error: "目标接口返回的格式看不懂" }),
+    ...("retired" in goals
+      ? { goals_retired: goals.retired }
+      : "error" in goals
+        ? { goals: null, goals_error: goals.error }
+        : Array.isArray(goals.value?.goals)
+          ? { goals: goals.value.goals }
+          : { goals: null, goals_error: "目标接口返回的格式看不懂" }),
     ...("error" in plan
       ? { plan: null, plan_error: plan.error }
       : plan.value?.groups && typeof plan.value.groups === "object"

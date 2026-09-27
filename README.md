@@ -60,9 +60,9 @@ atrium top --once                           # 谁在干活、目标树上两层�
 atrium top --once --goals-depth 3           # 展开目标树三层
 ```
 
-`atrium top` 的**目标**段默认显示目标树上两层，列出状态、下层合计的在跑和未结任务、未达成前置及卡住任务；`--goals-depth N` 可展开至 N 层（1～12）。`/api/goals/tree` 每个节点保留 `tasks`（直接挂载的任务状态计数）和 `waiting_for`（本节点未达成的前置短号），新增 `summary`：`running`、`open`、`blocked` 分别是本节点及全部下层的在跑、未结（todo/running/blocked）、卡住任务数；`waiting_for` 是全子树未达成前置短号去重列表。`top --json` 带 `goals` 字段，供状态栏读取。
+`atrium top` 的**目标**段（目标树迁为节点阶段记录后只显示一行指向 `atrium org show`，全景视图在 #322 后续步骤接入）默认显示目标树上两层，列出状态、下层合计的在跑和未结任务、未达成前置及卡住任务；`--goals-depth N` 可展开至 N 层（1～12）。`/api/goals/tree` 每个节点保留 `tasks`（直接挂载的任务状态计数）和 `waiting_for`（本节点未达成的前置短号），新增 `summary`：`running`、`open`、`blocked` 分别是本节点及全部下层的在跑、未结（todo/running/blocked）、卡住任务数；`waiting_for` 是全子树未达成前置短号去重列表。`top --json` 带 `goals` 字段，供状态栏读取。
 
-下面是**排期**：就绪的（记账节点、是否 `--auto`、负责人）、依赖链（同一条链按先后缩进，标题给出最长路径）、等待中的（逐项列出在等谁：上游状态、在跑的执行者与已跑时长、上游交付 PR 的合入状态、外部 PR 条件）与因上游失败或取消卡住的；任务行标出所属里程碑 `gN`，只起归类作用的父任务作分组标题。行数超出折叠并提示 `atrium task plan`，`--json` 带 `plan` 字段。
+下面是**排期**：就绪的（记账节点、是否 `--auto`、负责人）、依赖链（同一条链按先后缩进，标题给出最长路径）、等待中的（逐项列出在等谁：上游状态、在跑的执行者与已跑时长、上游交付 PR 的合入状态、外部 PR 条件）与因上游失败或取消卡住的；任务行标出归属部分 `oN`（迁移前的旧任务标里程碑 `gN`），只起归类作用的父任务作分组标题。行数超出折叠并提示 `atrium task plan`，`--json` 带 `plan` 字段。
 
 派活时运行时建 worktree（没有仓库时用任务目录下的 `work/`），把标题、详述（`--brief`）、岗位章程、仓库 `.agents/README.md`、执行者档案正文和通用约束拼成提示词，以白名单环境在独立进程组拉起执行者；服务重启不带走执行者，重启后按 pid 接管或判失败。
 
@@ -120,12 +120,14 @@ opencode 两种界面共用 `<ATRIUM_DATA>/secretary/opencode-session.json`，co
 atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md 与仓库 .agents/modules、concerns 下待导入的岗位（导入后仓库里删掉）
 atrium org import --repo . --apply                # 写入；重复执行不会重复建
 atrium org tree                                   # 节点层级、任务计数、预算份额与约用量
-atrium org show atrium/runtime                    # 目标链、硬边界、预算份额、章程与能力卡
+atrium org show atrium/runtime                    # 先讲人话：是什么、能做什么、一件事怎么走完、由哪几部分组成、现状与阶段
+atrium org show atrium/runtime --detail           # 再展开细节：章程正文、目标链、硬边界、预算份额、能力卡、手上的任务
 atrium org show atrium/runtime --charter --raw > /tmp/章程.md
 atrium org edit atrium/runtime --charter /tmp/章程.md --reason 更新目标
 atrium org history atrium/runtime                 # 修订；--target charter --rev r2 看字段差异
 atrium org add atrium web --kind module --reason 拆模块
 atrium task add "改派活" --role atrium/runtime --from atrium/质量   # 任务记到节点；--from 记投任务的关注点
+atrium task add "接看板" --part atrium/runtime                      # 任务归属全景图上的哪一部分；task set --part '' 摘下
 atrium org link-roles                             # 预览把旧 role 字符串的任务关联到节点；--apply 写入
 ```
 
@@ -133,26 +135,40 @@ atrium org link-roles                             # 预览把旧 role 字符串�
 
 章程 frontmatter 的 `budget` 分配份额，例如 `budget: { quota: { claude: 30, "*": 10 }, disk: 20, money: 0 }`。`quota` 数值是账号当前周期额度的百分点；具体账号覆盖 `*`。没有显式份额的节点使用父节点未分配给兄弟的共享池。`org show --charter --raw` 可导出并编辑。派活时按账号当前窗口用量估算节点子树的「约用」；份额不足 1 个百分点时换账号，全部不足则将任务置为受阻并通知节点 leader。OpenQuota 数据不可用时记录事件，不按份额拦截。磁盘低于章程下限或节点 worktree 占满磁盘份额时也受阻；档案 `billing: metered` 在钱份额为 0 时不可派。
 
-## 目标树
+## 全景图（节点的人话介绍）
 
-组织树是「谁」，目标树是「要什么」。根是顶层目标，下面任意多层里程碑，短号 `g1`……；每个节点写结果（一句话）、验收标准（可检验的条目，能写成命令的就写命令）、状态（规划中／进行中／达成／受阻／放弃）、负责部门（组织节点）和可选的目标日期，里程碑之间可设前置。顶层目标只有你能建和改；里程碑由负责部门的 leader 或其上级 leader 操作（`--as aN`），在别的部门的里程碑下拆还要能管那个部门。不留修订记录，不认可就直接改回或放弃。
+组织树每个节点按同一个顺序讲清自己（#322）：**是什么**（一句话，帮谁解决什么问题）→ **能用它做什么**（使用者视角的几个场景）→ **一件事怎么走完**（一条流程）→ **由哪几部分组成**（子节点，各自的人话名与类比，如「待办本——团队的任务白板」）→ **现在做到哪、接下来做什么**（含阶段记录）。技术细节（代码位置、协议、约定）是章程正文，`org show` 默认折叠，`--detail` 才展开。
 
-```bash
-atrium goal add "Atrium 成为 AI 组织的运行底座" --node atrium          # 顶层目标
-atrium goal add "组织树可用" --parent g1 --status active --criteria "atrium org tree 列出全部节点" --as a1
-atrium goal add "用量估算与派活拦截" --parent g2 --node atrium/runtime --after g3 --due 2026-10-15
-atrium task add "估算模型" --goal g3                                   # 任务挂在里程碑上；task set --goal '' 摘下
-atrium goal tree                                                       # 各层状态、负责部门、前置、挂着的任务；--depth 2 只看上两层
-atrium goal show g3                                                    # 上层路径、验收标准（每条最新判定与证据）、前置、下层与任务
-atrium goal edit g3 --repo ~/code/atrium --criteria '$ npm run check' --criteria "秘书看过回执"
-atrium goal check g3                                                   # 运行时在仓库临时 worktree 里跑「$ 」开头的条目，退出码 0 为满足
-atrium goal check g3 --item 2 --pass --note "回执见 PR #320"          # 写不成命令的条目人工判，必须写证据
-atrium goal done g3 --note "t36 已合入"                                # 前置都达成才能标达成
-atrium goal drop g4 --reason 并入 g3                                   # 下层与挂着的任务先收尾；改回用 goal edit --status active
-atrium goal adopt t21 --parent g1                                      # 预览把归类用的父任务迁为里程碑；--apply 写入
+这些写在章程 frontmatter 里，随章程留修订、按章程权限改（根节点只有你能改）：
+
+```yaml
+what: "帮用户把一句话目标变成有人做完、验过的事"
+alias: "派活员" # 自己在上层「组成」里的人话名
+analogy: "项目经理" # 类比
+uses: ["提一句目标，等汇报", "看谁手上有什么"]
+flow: ["提目标", "秘书拆任务", "派给执行者", "关卡验收", "汇报"]
+now: "命令行跑通闭环"
+next: "全景图视图"
+stages: # 阶段记录；原目标树的 gN 迁来后 id 沿用 gN
+  - id: g5
+    result: "节点、章程、边界、份额由机器校验"
+    status: achieved # planned / active / achieved / blocked / dropped
+    criteria: ["$ npm run check"]
+    evidence: ["#287 已合入"]
 ```
 
-父里程碑是否达成看它自己的验收标准，不等于子项全完。验收标准以 `$ ` 开头的是命令：`goal check` 由运行时在里程碑 `--repo` 仓库的临时 worktree（origin 默认分支，没有 origin 用 HEAD；没填仓库在空临时目录）里执行，白名单环境、串行、单条最多 15 分钟，结果与抹掉凭据的输出摘要记在里程碑上，完整日志在 `<ATRIUM_DATA>/goals/gN/`。其余条目由负责部门 leader 链或同项目关注点（如质量）的 leader 用 `--item N --pass|--fail --note 证据` 判。改了条目措辞，旧判定作废。所有条目满足且前置达成时 `goal show`、`goal tree` 提示「可标达成」，不自动标。`goal adopt` 只接受从没派过执行者、没有 PR、有子任务的父任务：父任务标题作里程碑结果，直接子任务挂上新里程碑并上移一层，父任务标取消并留痕。
+任务用 `--part 节点` 标归属哪一部分（谁负责），与 `--role`（谁来做、记谁的账）分开记；旧写法 `--goal gN` 按目标的负责节点落到归属部分。
+
+### 目标树迁移
+
+原目标树（`g1`……）迁为所在节点的阶段记录，保留结果、验收标准、状态和证据（达成说明与每条验收的最新判定），另记上级与前置：
+
+```bash
+atrium org migrate-goals            # 预览：各节点将迁入哪些阶段、哪些任务按目标回填归属部分
+atrium org migrate-goals --apply    # 只有你能执行：先整库备份到 <ATRIUM_DATA>/backups/，再一次写入
+```
+
+写入时阶段追加进负责节点的章程（留修订，可 `org revert`），挂在 `gN` 上的任务把归属部分填成该目标的负责节点（已有归属的不改），`goals` 表与任务原来的 `goal_id` 不改不删；重复执行只补新出现的，不重复写。写入后 `goal` 命令整组下线，回执指向该目标迁去的节点（`atrium org show oN`）。迁移前 `goal` 命令照旧可用，用法见 `atrium goal --help`。
 
 ## 组织技能
 

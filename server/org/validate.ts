@@ -1,6 +1,7 @@
 import YAML from "yaml";
 import { Problem } from "../problem.ts";
 import type { Doc, Kind } from "./model.ts";
+import { validateOverviewField } from "./overview.ts";
 
 const bad = (field: string, message: string) => {
   throw new Problem(400, `${field} ${message}`, "usage");
@@ -51,6 +52,7 @@ export function validateFields(
     doc === "card" ? { owns: 10, accepts: 10, asks: 5 } : {};
   for (const [key, v] of Object.entries(fields)) {
     const field = `${doc}.${key}`;
+    if (doc === "charter" && validateOverviewField(key, v)) continue;
     if (Object.hasOwn(rules, key)) text(v, field, rules[key]!);
     else if (Object.hasOwn(lists, key)) {
       if (!Array.isArray(v)) bad(field, "应为文本列表");
@@ -140,8 +142,11 @@ export function exportDocument(
   boundaries?: unknown[],
   budget?: Record<string, unknown>,
 ): string {
-  const lines = Object.entries(fields).map(
-    ([k, v]) => `${k}: ${JSON.stringify(v)}`,
+  // 阶段记录是对象列表，按 YAML 块写出好读好改；其余字段沿用单行 JSON 标量
+  const lines = Object.entries(fields).map(([k, v]) =>
+    k === "stages" && Array.isArray(v) && v.length
+      ? YAML.stringify({ [k]: v }, { lineWidth: 0 }).trimEnd()
+      : `${k}: ${JSON.stringify(v)}`,
   );
   if (boundaries)
     lines.push(

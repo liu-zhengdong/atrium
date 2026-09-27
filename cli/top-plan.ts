@@ -16,6 +16,7 @@ export type PlanTask = {
   auto: number;
   node_ref?: string | null;
   goal_ref?: string | null;
+  part_ref?: string | null;
   schedule_state?: string | null;
 };
 export type PlanUpstream = {
@@ -143,7 +144,8 @@ export function waitText(entry: PlanEntry, now: number, wide: boolean) {
 
 function detail(item: Item, now: number, wide: boolean) {
   const task = item.task;
-  const goal = task.goal_ref ? `${task.goal_ref} · ` : "";
+  const part = task.part_ref ?? task.goal_ref;
+  const goal = part ? `${part} · ` : "";
   if (item.group === "running") {
     const took = task.started_at ? elapsed(now - task.started_at) : "";
     return (
@@ -389,7 +391,7 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
         const indent = "  ".repeat(-row.indent);
         lines.push({
           text: fit(
-            `${indent}▸ ${row.item.ref} ${row.item.task.title}${row.item.task.goal_ref ? ` · ${row.item.task.goal_ref}` : ""}`,
+            `${indent}▸ ${row.item.ref} ${row.item.task.title}${(row.item.task.part_ref ?? row.item.task.goal_ref) ? ` · ${row.item.task.part_ref ?? row.item.task.goal_ref}` : ""}`,
             frame.width,
           ),
         });

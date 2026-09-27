@@ -43,4 +43,12 @@ export function ensureGoalTables(db: DatabaseSync) {
     started_at INTEGER NOT NULL, ended_at INTEGER);
   CREATE INDEX IF NOT EXISTS goal_checks_goal ON goal_checks(goal_id,id);
   CREATE INDEX IF NOT EXISTS goal_checks_running ON goal_checks(result) WHERE result='running';`);
+  // 全景图（#322）：目标树迁为节点阶段记录后下线。goal_migrations 记每个 gN 迁到哪个节点（任务 --goal gN 照此映射），
+  // goal_retirement 只有一行，有它就表示已迁移、goal 命令下线；goals 表原样保留，便于核对与回滚。
+  db.exec(`CREATE TABLE IF NOT EXISTS goal_migrations (
+    goal_id INTEGER PRIMARY KEY REFERENCES goals(id),
+    node_id INTEGER NOT NULL, at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS goal_retirement (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    at INTEGER NOT NULL, actor TEXT NOT NULL, backup TEXT);`);
 }

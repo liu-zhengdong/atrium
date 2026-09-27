@@ -15,6 +15,7 @@ import { exportDocument } from "./validate.ts";
 import { effective, exportBoundaries, summaryLength } from "./boundaries.ts";
 import { allBoundaries, chainLevels } from "./boundary-store.ts";
 import { goalChain, type GoalLevel } from "./goal-chain.ts";
+import { overviewOf } from "./overview.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
 import { allShares, rootLimits } from "./share-store.ts";
 import { exportShares, shareCapacity, type ShareNode } from "./shares.ts";
@@ -239,8 +240,38 @@ export function show(
       };
     }),
   };
+  const fieldsOf = (id: number) => {
+    const doc = one<DocRow>(
+      db,
+      "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
+      id,
+    );
+    try {
+      return doc ? (JSON.parse(doc.fields) as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  };
+  const overview = overviewOf(
+    fieldsOf(n.id),
+    list
+      .filter((item) => item.parent_id === n.id)
+      .map((child) => {
+        const fields = fieldsOf(child.id);
+        return {
+          ref: child.ref,
+          name: child.name,
+          alias: typeof fields.alias === "string" ? fields.alias.trim() : "",
+          analogy:
+            typeof fields.analogy === "string" ? fields.analogy.trim() : "",
+          archived: child.archived_at !== null,
+          tasks: child.tasks,
+        };
+      }),
+  );
   return {
     ...node,
+    overview,
     recent_tasks: nodeTasks(db, n.id),
     boundaries,
     charter: view(charter),

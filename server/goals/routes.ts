@@ -9,6 +9,7 @@ import { adoptTask } from "./adopt.ts";
 import { judgeItem } from "./checks.ts";
 import { GoalChecker, type GoalCheckOptions } from "./check-runtime.ts";
 import { objectOf } from "../tasks/ledger-validate.ts";
+import { goalsRetired, migrateGoals, retiredProblem } from "./migrate.ts";
 
 type Query = { as?: string; root?: string; ids?: string; timeout?: string };
 const q = (value: unknown) => (value ?? {}) as Query;
@@ -27,6 +28,23 @@ export function registerGoalRoutes(
   const checker = new GoalChecker(db, checks);
   app.addHook("onClose", async () => checker.close());
   const actor = (query: unknown) => resolveActor(db, q(query).as);
+  // 迁为节点阶段记录（#322）后整组下线，只留迁移入口（重复执行只报已迁移）。
+  const live = (id?: unknown) => {
+    if (goalsRetired(db))
+      throw retiredProblem(db, typeof id === "string" ? id : undefined);
+  };
+  app.addHook("preHandler", async (request) => {
+    const url = request.routeOptions.url;
+    if (!url?.startsWith("/api/goals") || url === "/api/goals/migrate") return;
+    live((request.params as { id?: unknown } | undefined)?.id);
+  });
+  app.post("/api/goals/migrate", { bodyLimit: 1024 }, (request) =>
+    migrateGoals(db, {
+      apply: objectOf(request.body ?? {}).apply === true,
+      actor: actor(request.query),
+      data: checks.data,
+    }),
+  );
   app.get("/api/goals/tree", (request) => goalTree(db, q(request.query).root));
   app.get("/api/goals/:id", (request) => goalShow(db, p(request.params).id));
   app.post("/api/goals", { bodyLimit: 64 * 1024 }, (request, reply) =>

@@ -45,6 +45,14 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_state TEXT");
   if (!columns.some((column) => column.name === "schedule_reason"))
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_reason TEXT");
+  // 组织树第 3 步（#264）：谁来做（记在谁的账上）、谁投的；指向 org_nodes.id，旧任务留空，经 org link-roles 显式回填。
+  if (!columns.some((column) => column.name === "node_id"))
+    db.exec("ALTER TABLE tasks ADD COLUMN node_id INTEGER");
+  if (!columns.some((column) => column.name === "origin_node_id"))
+    db.exec("ALTER TABLE tasks ADD COLUMN origin_node_id INTEGER");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS tasks_node ON tasks(node_id,status); CREATE INDEX IF NOT EXISTS tasks_origin_node ON tasks(origin_node_id,status)",
+  );
   db.exec(`CREATE TABLE IF NOT EXISTS task_dependencies (
     task_id INTEGER NOT NULL REFERENCES tasks(id), after_id INTEGER NOT NULL REFERENCES tasks(id),
     PRIMARY KEY(task_id,after_id));

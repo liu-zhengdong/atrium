@@ -98,6 +98,62 @@ export function formatBoundaries(view: BoundaryView): string[] {
     }
   return lines;
 }
+type TaskCounts = { todo: number; running: number; blocked: number };
+/** org tree 的任务计数；为零的项省略。 */
+export function formatCounts(own: TaskCounts, sent: TaskCounts): string {
+  const parts = [
+    own.running ? `在做 ${own.running}` : "",
+    own.blocked ? `卡住 ${own.blocked}` : "",
+    own.todo ? `待办 ${own.todo}` : "",
+  ];
+  const out = sent.running + sent.blocked + sent.todo;
+  if (out)
+    parts.push(`投出 ${out}${sent.running ? `（在做 ${sent.running}）` : ""}`);
+  return parts
+    .filter(Boolean)
+    .map((p) => ` · ${p}`)
+    .join("");
+}
+const FIELD_LABELS: Record<string, string> = {
+  goal: "目标",
+  report: "汇报",
+  escalate: "找上层",
+  owns: "负责",
+  accepts: "能接",
+  status: "现状",
+  commitments: "承诺",
+  asks: "要上面定",
+};
+/** 章程／能力卡：逐个字段一行，空字段省略；什么都没写时只标「未填写」。 */
+export function formatDoc(
+  label: string,
+  doc: { rev: string; fields: Record<string, unknown>; body: string } | null,
+): string[] {
+  const value = (item: unknown): string =>
+    Array.isArray(item)
+      ? item
+          .map((entry) =>
+            entry && typeof entry === "object"
+              ? (() => {
+                  const c = entry as {
+                    id?: string;
+                    text?: string;
+                    due?: string;
+                  };
+                  return `${c.id ? `${c.id} ` : ""}${c.text ?? ""}${c.due ? `（${c.due}）` : ""}`;
+                })()
+              : String(entry),
+          )
+          .join("、")
+      : String(item ?? "");
+  const lines = Object.entries(doc?.fields ?? {})
+    .map(([key, item]) => [FIELD_LABELS[key] ?? key, value(item).trim()])
+    .filter(([, text]) => text)
+    .map(([key, text]) => `  ${key}：${text}`);
+  const body = doc?.body.trim() ?? "";
+  if (!lines.length && !body) return [`${label} ${doc?.rev ?? "r0"}：未填写`];
+  return [`${label} ${doc?.rev ?? "r0"}`, ...lines, ...(body ? [body] : [])];
+}
 const reason = (values: Values) => {
   const result = str(values, "reason");
   if (!result?.trim()) throw new Problem(400, "--reason 不能为空");
@@ -146,6 +202,8 @@ export const orgCommands: Record<string, Command> = {
           name: string;
           leader: string | null;
           archived_at: number | null;
+          tasks: TaskCounts;
+          sent: TaskCounts;
         }>
       >(`/org/tree${as(values)}`);
       const labels: Record<string, string> = {
@@ -164,7 +222,7 @@ export const orgCommands: Record<string, Command> = {
         rows
           .map(
             (n) =>
-              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
+              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${formatCounts(n.tasks, n.sent)}${n.archived_at ? " · 已归档" : ""}`,
           )
           .join("\n") || "组织树为空",
         "atrium org show o1",
@@ -214,6 +272,13 @@ export const orgCommands: Record<string, Command> = {
         } | null;
         chain: { name: string; goal: string }[];
         boundaries: BoundaryView;
+        recent_tasks: {
+          ref: string;
+          title: string;
+          status: string;
+          worker: string | null;
+          origin_ref: string | null;
+        }[];
       };
       const lines = [
         `${node.ref} [${node.kind}] ${node.path} · leader ${person(node.leader)}`,
@@ -223,9 +288,17 @@ export const orgCommands: Record<string, Command> = {
           .filter((c) => !c.endsWith("："))
           .join(" → ")}`,
         ...formatBoundaries(node.boundaries),
-        `章程 ${node.charter?.rev ?? "r0"}：${JSON.stringify(node.charter?.fields ?? {})}`,
-        node.charter?.body ?? "",
-        `能力卡 ${node.card?.rev ?? "r0"}：${JSON.stringify(node.card?.fields ?? {})}`,
+        ...formatDoc("章程", node.charter),
+        ...formatDoc("能力卡", node.card),
+        ...(node.recent_tasks.length
+          ? [
+              `手上的任务（最近 ${node.recent_tasks.length} 条）`,
+              ...node.recent_tasks.map(
+                (t) =>
+                  `  ${t.ref} [${t.status}] ${t.title}${t.worker ? ` · ${t.worker}` : ""}${t.origin_ref ? ` · ${t.origin_ref} 投来` : ""}`,
+              ),
+            ]
+          : []),
       ];
       out(json, result, lines.join("\n"), `atrium org history ${node.ref}`);
     },
@@ -428,6 +501,71 @@ export const orgCommands: Record<string, Command> = {
         result,
         `已恢复 ${id} ${target}，新增 ${result.rev}`,
         `atrium org history ${id}`,
+      );
+    },
+  },
+  "org link-roles": {
+    args: "[--apply]",
+    about: "把旧 role 字符串的任务关联到组织节点（默认只预览）",
+    options: { ...options, apply: { type: "boolean" } },
+    positionals: [0, 0],
+    async run({ values, json }) {
+      const apply = values.apply === true;
+      const result = await (
+        await client()
+      ).post<{
+        preview: boolean;
+        linked: number;
+        groups: {
+          node: string;
+          path: string;
+          roles: string[];
+          tasks: string[];
+        }[];
+        unmatched: {
+          task: string;
+          title: string;
+          role: string;
+          reason: string;
+        }[];
+        truncated: boolean;
+      }>(`/org/link-roles${as(values)}`, { apply });
+      const lines = [
+        result.preview
+          ? `将关联 ${result.linked} 个任务（预览，未写入）：`
+          : `已关联 ${result.linked} 个任务：`,
+        ...result.groups.map(
+          (g) =>
+            `  ${g.roles.join(" / ")} → ${g.node} ${g.path}  ${g.tasks.length} 个（${g.tasks.slice(0, 10).join("、")}${g.tasks.length > 10 ? "…" : ""}）`,
+        ),
+        ...(result.unmatched.length
+          ? [
+              `无法对应 ${result.unmatched.length} 个（保留原 role，node_id 留空）：`,
+              ...result.unmatched
+                .slice(0, 50)
+                .map(
+                  (u) => `  ${u.task}「${u.title}」role=${u.role}：${u.reason}`,
+                ),
+              ...(result.unmatched.length > 50
+                ? [
+                    `  …另有 ${result.unmatched.length - 50} 个，用 --json 看全部`,
+                  ]
+                : []),
+            ]
+          : []),
+        ...(result.truncated
+          ? ["一次最多处理 5000 个；apply 后再跑一次处理其余"]
+          : []),
+      ];
+      if (!result.linked && !result.unmatched.length)
+        lines.splice(0, lines.length, "没有待关联的旧 role 任务");
+      out(
+        json,
+        result,
+        lines.join("\n"),
+        result.preview && result.linked
+          ? "atrium org link-roles --apply"
+          : "atrium org tree",
       );
     },
   },

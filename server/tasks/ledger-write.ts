@@ -30,6 +30,18 @@ import {
   validateDeliver,
   type Deliver,
 } from "./deliver.ts";
+import { matchRole, originNode } from "../org/task-node.ts";
+
+/** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
+const roleNode = (
+  db: DatabaseSync,
+  role: string | null,
+  repo: string | null,
+) => (role ? (matchRole(db, role, repo, true).node?.id ?? null) : null);
+const fromNode = (db: DatabaseSync, value: unknown) => {
+  const text = optionalText(value, "from", 200);
+  return text ? originNode(db, text).id : null;
+};
 
 export type NewTask = {
   title: string;
@@ -43,6 +55,8 @@ export type NewTask = {
   after?: string;
   after_pr?: string;
   auto?: boolean;
+  /** 投任务的节点（关注点往模块投时）。 */
+  from?: string | null;
 };
 
 export function createTask(
@@ -63,6 +77,7 @@ export function createTask(
     "after",
     "after_pr",
     "auto",
+    "from",
   ]);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
   const issue = issueOf(input.issue);
@@ -79,9 +94,11 @@ export function createTask(
   };
   return atomically(db, () => {
     const parent = parentOf(db, input.parent);
+    const node = roleNode(db, values.role, values.repo);
+    const origin = fromNode(db, input.from);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,title,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -92,6 +109,8 @@ export function createTask(
         values.owner,
         deliver,
         issue,
+        node,
+        origin,
         now,
         now,
       );
@@ -100,6 +119,8 @@ export function createTask(
     addEvent(db, id, now, "created", {
       title: values.title,
       ...(parent ? { parent: taskRef(parent) } : {}),
+      ...(node ? { node: `o${node}` } : {}),
+      ...(origin ? { from: `o${origin}` } : {}),
     });
     const task = requireRow(db, id);
     return { ...view(task), ...noteView(db, id, task.status) };
@@ -126,10 +147,11 @@ export function updateTask(
     "after_pr",
     "auto",
     "pr_url",
+    "from",
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief_path、role、status、deliver、issue、after、after_pr、auto、pr_url",
+      "至少修改一项：title、brief_path、role、from、status、deliver、issue、after、after_pr、auto、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -151,6 +173,9 @@ export function updateTask(
   const target = "status" in input ? statusOf(input.status) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
+    if ("role" in fields)
+      fields.node_id = roleNode(db, fields.role as string | null, current.repo);
+    if ("from" in input) fields.origin_node_id = fromNode(db, input.from);
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
     setConditions(db, id, input, now);

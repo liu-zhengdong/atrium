@@ -106,12 +106,23 @@ export function renderTree(nodes: TaskNode[], depth = 0): string[] {
   ]);
 }
 
+/** role 是旧 .agents 写法、还没对应组织节点时提示迁移命令；不报错，照常可派。 */
+function roleHint(task: Task): string[] {
+  return task.role && !task.node_ref
+    ? [
+        `岗位 ${task.role} 没有对应组织节点，派活时照旧读仓库 .agents；关联节点：atrium org link-roles`,
+      ]
+    : [];
+}
+
 const add: Command = {
-  args: "标题 [--parent tN] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role R] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
-  about: "建任务；--parent 挂到父任务下，--brief 附任务详述 md",
+  args: "标题 [--parent tN] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  about:
+    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--parent 挂到父任务下，--brief 附任务详述 md",
   options: {
     parent: { type: "string" },
     role: { type: "string" },
+    from: { type: "string" },
     repo: { type: "string" },
     brief: { type: "string" },
     owner: { type: "string" },
@@ -148,6 +159,9 @@ const add: Command = {
       ...(str(values, "role") === undefined
         ? {}
         : { role: str(values, "role") }),
+      ...(str(values, "from") === undefined
+        ? {}
+        : { from: str(values, "from") }),
       ...(repo === undefined
         ? {}
         : { repo: existing(repo, "--repo", "directory") }),
@@ -171,7 +185,10 @@ const add: Command = {
     if (json) printJson(task);
     else
       console.log(
-        `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}`,
+        [
+          `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}`,
+          ...roleHint(task),
+        ].join("\n"),
       );
     recordNext(
       str(values, "after") || str(values, "after-pr") || values.auto === true
@@ -275,7 +292,13 @@ const show: Command = {
           "子任务汇总",
           task.child_summary ? formatChildSummary(task.child_summary) : null,
         ],
-        ["岗位", task.role],
+        [
+          "岗位",
+          task.role
+            ? `${task.role}${task.node_ref && task.node_ref !== task.role ? `（${task.node_ref}）` : ""}`
+            : task.node_ref,
+        ],
+        ["投任务的节点", task.origin_ref],
         ["仓库", task.repo],
         [
           "交付物",
@@ -347,12 +370,13 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  args: "tN [--status S] [--pr URL] [--role 节点] [--from 节点|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
   about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、详述、交付物、依赖和自动派发`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
     role: { type: "string" },
+    from: { type: "string" },
     brief: { type: "string" },
     deliver: { type: "string" },
     issue: { type: "string" },
@@ -374,6 +398,8 @@ const set: Command = {
     }
     const role = str(values, "role");
     if (role !== undefined) body.role = role;
+    const from = str(values, "from");
+    if (from !== undefined) body.from = from;
     const brief = str(values, "brief");
     if (brief !== undefined)
       body.brief_path = brief === "" ? "" : existing(brief, "--brief", "file");
@@ -390,14 +416,20 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--role、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
+        "至少给一项：--status、--pr、--title、--role、--from、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
       );
     const task = await (await client()).patch<Task>(`/tasks/${id}`, body);
     if (json) printJson(task);
-    else console.log(`${task.ref} 已更新 · [${task.status}] ${task.title}`);
+    else
+      console.log(
+        [
+          `${task.ref} 已更新 · [${task.status}] ${task.title}`,
+          ...(role !== undefined ? roleHint(task) : []),
+        ].join("\n"),
+      );
     recordNext(`看全貌：atrium task tree ${task.parent_ref ?? task.ref}`);
   },
 };

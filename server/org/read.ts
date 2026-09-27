@@ -14,6 +14,7 @@ import {
 import { exportDocument } from "./validate.ts";
 import { effective, exportBoundaries, summaryLength } from "./boundaries.ts";
 import { allBoundaries, chainLevels } from "./boundary-store.ts";
+import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
 
 export function tree(db: DatabaseSync) {
   const list = nodes(db);
@@ -26,6 +27,21 @@ export function tree(db: DatabaseSync) {
     }
   };
   visit(null);
+  // 名下任务按子树汇总（项目的「在做」含各模块）；投出的只算节点自己。
+  const counts = taskCounts(db);
+  const subtree = new Map<number, TaskCounts>();
+  for (const n of [...order].reverse()) {
+    const sum = {
+      ...(counts.own.get(n.id) ?? { todo: 0, running: 0, blocked: 0 }),
+    };
+    for (const child of list.filter((item) => item.parent_id === n.id)) {
+      const c = subtree.get(child.id)!;
+      sum.todo += c.todo;
+      sum.running += c.running;
+      sum.blocked += c.blocked;
+    }
+    subtree.set(n.id, sum);
+  }
   return order.map((original) => {
     const { doc_path: _legacyDocPath, ...n } = original;
     return {
@@ -37,6 +53,8 @@ export function tree(db: DatabaseSync) {
         "SELECT repo FROM org_node_repos WHERE node_id=? ORDER BY repo",
         n.id,
       ).map((r) => r.repo),
+      tasks: subtree.get(n.id)!,
+      sent: counts.sent.get(n.id) ?? { todo: 0, running: 0, blocked: 0 },
     };
   });
 }
@@ -131,6 +149,7 @@ export function show(db: DatabaseSync, address: string, raw?: Doc) {
   };
   return {
     ...node,
+    recent_tasks: nodeTasks(db, n.id),
     boundaries,
     charter: view(charter),
     card: view(card),

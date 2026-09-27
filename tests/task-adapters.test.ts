@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { taskNode } from "../server/org/task-node.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import { addNode, editDoc } from "../server/org/write.ts";
 import {
@@ -437,6 +438,7 @@ test("loadRoleDocs：读岗位说明，拒绝路径穿越", async () => {
         slug: "atrium",
         kind: "project",
         name: "Atrium",
+        repos: [repo],
         reason: "创建",
       },
       "u1",
@@ -459,19 +461,25 @@ test("loadRoleDocs：读岗位说明，拒绝路径穿越", async () => {
       { fields: {}, body: "节点章程", reason: "导入" },
       "u1",
     );
-    assert.deepEqual(await loadRoleDocs(repo, "atrium/web", db), {
-      roleDoc: "节点章程",
-      rootDoc: "根说明",
-      rolePath: "o3",
-    });
-    assert.equal((await loadRoleDocs(repo, "web", db)).roleDoc, "节点章程");
-    assert.equal(
-      (await loadRoleDocs(repo, "modules/web", db)).roleDoc,
-      "节点章程",
+    const node = (role: string) => taskNode(db, { node_id: null, role, repo });
+    assert.deepEqual(
+      await loadRoleDocs(repo, "atrium/web", node("atrium/web")),
+      {
+        roleDoc: "节点章程",
+        rootDoc: "根说明",
+        rolePath: "o3",
+      },
     );
-    assert.equal((await loadRoleDocs(repo, "o3", db)).roleDoc, "节点章程");
+    for (const role of ["web", "modules/web", "o3"])
+      assert.equal(
+        (await loadRoleDocs(repo, role, node(role))).roleDoc,
+        "节点章程",
+        role,
+      );
+    assert.equal(node("concerns/安全"), undefined);
     assert.equal(
-      (await loadRoleDocs(repo, "concerns/安全", db)).roleDoc,
+      (await loadRoleDocs(repo, "concerns/安全", node("concerns/安全")))
+        .roleDoc,
       "安全关注点",
     );
     db.close();

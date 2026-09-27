@@ -27,6 +27,8 @@ export type TaskRow = {
   auto_dispatched: number;
   schedule_state: string | null;
   schedule_reason: string | null;
+  node_id: number | null;
+  origin_node_id: number | null;
   created_at: number;
   started_at: number | null;
   ended_at: number | null;
@@ -35,6 +37,8 @@ export type TaskRow = {
 export type Task = TaskRow & {
   ref: string;
   parent_ref: string | null;
+  node_ref: string | null;
+  origin_ref: string | null;
 } & NoteView;
 export type TaskNode = Task & {
   children: TaskNode[];
@@ -51,10 +55,17 @@ export type TaskEventRow = {
 export const taskRef = (id: number) => `t${id}`;
 export const view = (
   row: TaskRow,
-): TaskRow & { ref: string; parent_ref: string | null } => ({
+): TaskRow & {
+  ref: string;
+  parent_ref: string | null;
+  node_ref: string | null;
+  origin_ref: string | null;
+} => ({
   ...row,
   ref: taskRef(row.id),
   parent_ref: row.parent_id === null ? null : taskRef(row.parent_id),
+  node_ref: row.node_id == null ? null : `o${row.node_id}`,
+  origin_ref: row.origin_node_id == null ? null : `o${row.origin_node_id}`,
 });
 
 export const RESULT_MAX_BYTES = 4096;

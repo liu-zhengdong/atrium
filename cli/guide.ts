@@ -29,6 +29,7 @@ export const groups: Record<string, string[]> = {
     "org history",
     "org revert",
     "org import",
+    "org link-roles",
   ],
 };
 export function groupOf(name: string) {

@@ -15,6 +15,7 @@ import {
 } from "./write.ts";
 import type { Doc } from "./model.ts";
 import { parseDocument } from "./validate.ts";
+import { linkRoles } from "./task-link.ts";
 
 type Query = {
   as?: string;
@@ -114,6 +115,13 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
       String(input.reason ?? ""),
       actor(request.query),
     );
+  });
+  // 旧 role 字符串回填 node_id：默认预览，apply 只有你能执行。
+  app.post("/api/org/link-roles", { bodyLimit: 1024 }, (request) => {
+    const apply = body(request.body).apply === true;
+    if (apply && actor(request.query) !== "u1")
+      throw new Problem(403, "org link-roles --apply 只有你能执行");
+    return linkRoles(db, apply);
   });
   // 最多 200 份各 16 KB 的岗位正文，另留请求字段与根章程空间。
   app.post("/api/org/import", { bodyLimit: 4 * 1024 * 1024 }, (request) =>

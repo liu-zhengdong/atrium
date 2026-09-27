@@ -97,6 +97,7 @@ test("任务取消后立即移除有未提交文件的工作树", async (t) => {
 for (const scenario of [
   "success",
   "rebase_success",
+  "return_then_merge",
   "conflict",
   "check_failed",
   "merge_failed",
@@ -213,7 +214,10 @@ for (const scenario of [
             args[args.indexOf("--match-head-commit") + 1],
             remoteHead(),
           );
-          if (scenario === "merge_failed")
+          if (
+            scenario === "merge_failed" ||
+            (scenario === "return_then_merge" && mergeCalls === 1)
+          )
             return { ok: false, stdout: "", stderr: "merge rejected" };
           merged = true;
           return { ok: true, stdout: "merged", stderr: "" };
@@ -256,11 +260,18 @@ for (const scenario of [
     assert.equal(waited.status, 200);
     assert.equal(waited.body.timed_out, false);
     const task = waited.body.task;
-    if (scenario === "success" || scenario === "rebase_success") {
+    if (
+      scenario === "success" ||
+      scenario === "rebase_success" ||
+      scenario === "return_then_merge"
+    ) {
       assert.equal(task.delivery_stage, "merged");
       assert.equal(task.status, "done");
-      assert.equal(task.merge_returns, 0);
-      assert.equal(mergeCalls, 1);
+      assert.equal(
+        task.merge_returns,
+        scenario === "return_then_merge" ? 1 : 0,
+      );
+      assert.equal(mergeCalls, scenario === "return_then_merge" ? 2 : 1);
       assert.equal(merged, true);
       assert.equal(task.worktree, null);
       assert.equal(existsSync(worktree), false);
@@ -273,7 +284,10 @@ for (const scenario of [
       const urgent = await call("GET", "/api/events/wait?timeout=0");
       assert.equal(urgent.body.events.length, 0, "过程事件不叫醒秘书");
       const digest = await call("GET", "/api/events/digest");
-      assert.match(digest.body.items[0].summary, /合入/);
+      assert.match(
+        digest.body.items[0].summary,
+        scenario === "return_then_merge" ? /退回 1 次后合入/ : /合入/,
+      );
       assert.ok(digest.body.acknowledged >= 2);
       if (scenario === "success") {
         assert.equal(

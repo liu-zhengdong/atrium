@@ -6,7 +6,7 @@ import { Problem } from "../problem.ts";
 import { ADAPTERS, type Adapter, type Launch } from "./adapters/index.ts";
 import { taskDir } from "./active.ts";
 import { defaultBranch, ensureWorktree, exec, type Exec } from "./git.ts";
-import type { Task } from "./ledger.ts";
+import { noteTask, type Task } from "./ledger.ts";
 import {
   DEFAULT_RULES,
   buildPrompt,
@@ -17,6 +17,9 @@ import {
 import type { ResolvedWorker, Risk } from "./profiles.ts";
 import { nodeDoc, taskNode } from "../org/task-node.ts";
 import { charterBrief } from "../org/brief.ts";
+import { skillsForTask } from "../skills/task-skills.ts";
+import { mountSkills } from "../skills/mount.ts";
+import { homedir } from "node:os";
 
 /**
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
@@ -126,6 +129,31 @@ export async function prepareRun(
   const docs = task.repo
     ? await loadRoleDocs(worktree ?? task.repo, node)
     : { roleDoc: node?.body ?? "", rootDoc: "" };
+  // 组织技能：节点链上绑定的 ∪ 档案指定的，拷进任务目录，只对这次运行生效。
+  const picked = options.db
+    ? skillsForTask(options.db, task, worker.profile.rules)
+    : undefined;
+  const mount = picked
+    ? mountSkills(
+        dir,
+        worker.tool,
+        picked.skills,
+        options.env.HOME ?? homedir(),
+      )
+    : undefined;
+  if (
+    options.db &&
+    picked &&
+    (mount || picked.dropped.length || picked.unknown.length)
+  )
+    noteTask(options.db, task.id, "skills_mounted", {
+      worker: worker.id,
+      skills: mount?.skills.map((s) => `${s.slug}@r${s.rev}`) ?? [],
+      ...(picked.dropped.length
+        ? { dropped: picked.dropped.map((d) => d.slug) }
+        : {}),
+      ...(picked.unknown.length ? { unknown: picked.unknown } : {}),
+    });
   const where = branch
     ? `工作目录：${cwd}（分支 ${branch}，基于 origin/${base}）。`
     : `工作目录：${cwd}（没有仓库，结果写在最后的回复里）。`;
@@ -137,6 +165,7 @@ export async function prepareRun(
     originDoc: origin
       ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
       : undefined,
+    skills: mount?.section,
     rootDoc: docs.rootDoc,
     profileBody: worker.profile.body,
     rules: [where, ...deliveryRules(task)],
@@ -152,6 +181,11 @@ export async function prepareRun(
     effort: worker.effort,
     resultFile: join(dir, "last-message.md"),
   });
+  if (mount) {
+    launch.args.push(...mount.args);
+    if (Object.keys(mount.env).length)
+      launch.env = { ...launch.env, ...mount.env };
+  }
   return {
     worker,
     adapter,

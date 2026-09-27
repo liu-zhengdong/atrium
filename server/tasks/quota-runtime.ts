@@ -22,6 +22,7 @@ import { enqueue } from "./queue.ts";
 import type { QuotaHit } from "./settle.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import type { LaunchOptions } from "./workspace.ts";
+import { taskAvoidChain } from "../skills/task-skills.ts";
 
 /**
  * 额度用尽的运行时编排（#267 2）：记账号标记、按档案换执行者重派一次或排队、到点解除并重派。
@@ -122,7 +123,11 @@ export class QuotaGuard {
           { risk: active.risk },
           this.ctx.launchOptions,
           this.held(),
-          { busy: x.busyTools(active.id), requireTrust: true },
+          {
+            busy: x.busyTools(active.id),
+            requireTrust: true,
+            chain: taskAvoidChain(db, getTask(db, active.id)),
+          },
         );
       } catch (error) {
         if (x.isClosed()) return;

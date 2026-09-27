@@ -36,7 +36,13 @@ export async function spawnWorker(
     findExecutable(launch.command, env.PATH ?? "") ?? launch.command;
   writeFileSync(
     logFile,
-    `[atrium] ${taskRefText} · ${prepared.worker.id} · ${new Date().toISOString()}\n[atrium] cwd ${launch.cwd}\n[atrium] ${[command, ...launch.args.map(shortArg)].join(" ")}\n`,
+    `[atrium] ${taskRefText} · ${prepared.worker.id} · ${new Date().toISOString()}\n[atrium] cwd ${launch.cwd}\n${Object.entries(
+      launch.env ?? {},
+    )
+      .map(([key, value]) => `[atrium] env ${key}=${value}\n`)
+      .join(
+        "",
+      )}[atrium] ${[command, ...launch.args.map(shortArg)].join(" ")}\n`,
     { mode: 0o600 },
   );
   const out = openSync(logFile, "a");
@@ -45,7 +51,7 @@ export async function spawnWorker(
   try {
     child = spawn(command, launch.args, {
       cwd: launch.cwd,
-      env,
+      env: launch.env ? { ...env, ...launch.env } : env,
       detached: true,
       stdio: [input, out, out],
     });

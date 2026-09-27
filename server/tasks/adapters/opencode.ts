@@ -18,6 +18,7 @@ export const opencode: Adapter = {
   exclusive: true,
   efforts: ["minimal", "low", "medium", "high", "max"],
   quotaProvider: "opencode",
+  skillMount: "opencode-config",
   resumeArgs: ["run", "--continue"],
   watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["json_events", "worktree_change"],

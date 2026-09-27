@@ -9,6 +9,7 @@ import { UserAuth } from "./user-auth.ts";
 import { authPolicy } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
+import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 
@@ -167,6 +168,7 @@ export async function createApp(options: {
     ...options.tasks,
   });
   registerOrgRoutes(app, db);
+  registerSkillRoutes(app, db);
   registerQuotaRoute(app, { bin: options.quotaBin, db });
   return { app, db, taskRunner };
 }

@@ -4,6 +4,7 @@ import { pad, width } from "./format.ts";
 import { authCommands } from "./auth.ts";
 import { taskCommands } from "./tasks.ts";
 import { orgCommands } from "./org.ts";
+import { skillCommands } from "./skills.ts";
 import { topCommand } from "./top.ts";
 import { quotaCommands } from "./quota.ts";
 import { workerGuard } from "./worker-guard.ts";
@@ -85,6 +86,7 @@ export const commands: Record<string, Command> = {
   top: topCommand,
   ...taskCommands,
   ...orgCommands,
+  ...skillCommands,
   ...quotaCommands,
   ...eventCommands,
   update: updateCommand,

@@ -14,6 +14,7 @@ export const codex: Adapter = {
   exclusive: false,
   efforts: ["minimal", "low", "medium", "high", "xhigh"],
   quotaProvider: "codex",
+  skillMount: "codex-home",
   resumeArgs: ["exec", "resume", "--last"],
   watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["log_growth", "worktree_change"],

@@ -14,6 +14,7 @@ import { parseFrontmatter, type FrontValue } from "./frontmatter.ts";
  * 执行者档案（#262）：执行者 = 工具 + 模型（+ 思考强度）。档案三层叠加：
  * harness/<工具>.md ← models/<模型>.md ← combos/<工具>+<模型>.md。
  * 后层覆盖前层，但规则取更严：trust / max_risk 取较低、limits 逐项取较小、checks 取并集。
+ * 组织技能相关的 skills、avoid_nodes 取并集，skills_for 按节点合并（#264 第 3b 步）。
  * 只读；档案由用户或秘书维护。
  */
 
@@ -163,7 +164,17 @@ const lower = <T extends string>(order: readonly T[], a?: T, b?: T) =>
         ? a
         : b;
 
-/** 三层合并：后层覆盖前层；trust、max_risk、limits 取更严，checks 取并集。 */
+const strings = (value: FrontValue | undefined): string[] =>
+  (Array.isArray(value) ? value : value === undefined ? [] : [value]).filter(
+    (item): item is string => typeof item === "string",
+  );
+const union = (a: FrontValue | undefined, b: FrontValue | undefined) => [
+  ...new Set([...strings(a), ...strings(b)]),
+];
+const mapOf = (value: FrontValue | undefined) =>
+  value && typeof value === "object" && !Array.isArray(value) ? value : {};
+
+/** 三层合并：后层覆盖前层；trust、max_risk、limits 取更严，checks、skills、avoid_nodes 取并集，skills_for 按节点合并。 */
 export function mergeLayers(layers: ProfileLayer[]): EffectiveProfile {
   let rules: ProfileRules = {};
   for (const { rules: next } of layers) {
@@ -179,6 +190,15 @@ export function mergeLayers(layers: ProfileLayer[]): EffectiveProfile {
       for (const [name, n] of Object.entries(next.limits ?? {}))
         limits[name] = name in limits ? Math.min(limits[name], n) : n;
       merged.limits = limits;
+    }
+    for (const key of ["skills", "avoid_nodes"])
+      if (rules[key] !== undefined || next[key] !== undefined)
+        merged[key] = union(rules[key], next[key]);
+    if (rules.skills_for !== undefined || next.skills_for !== undefined) {
+      const scoped: Record<string, FrontValue> = { ...mapOf(rules.skills_for) };
+      for (const [node, slugs] of Object.entries(mapOf(next.skills_for)))
+        scoped[node] = union(scoped[node], slugs);
+      merged.skills_for = scoped;
     }
     for (const key of Object.keys(merged))
       if (merged[key] === undefined) delete merged[key];

@@ -34,6 +34,8 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "events",
     "org",
     "quota",
+    "skill-proposals",
+    "skills",
     "tasks",
   ]);
   const exceptions = routes

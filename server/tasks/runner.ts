@@ -35,6 +35,7 @@ import { Scheduler, planItem } from "./schedule.ts";
 import { requireRow } from "./ledger-model.ts";
 import { schedulePrExec } from "./schedule-pr.ts";
 import type { LaunchOptions } from "./workspace.ts";
+import { taskAvoidChain } from "../skills/task-skills.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -236,7 +237,7 @@ export class TaskRunner {
         request,
         this.launchOptions,
         this.quota.held(),
-        { busy: this.x.busyTools(id) },
+        { busy: this.x.busyTools(id), chain: taskAvoidChain(this.db, task) },
       );
     } catch (error) {
       this.x.launching.delete(id);

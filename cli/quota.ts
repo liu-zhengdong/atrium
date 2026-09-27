@@ -5,7 +5,8 @@ import { Problem } from "../server/problem.ts";
 import type { QuotaAccount, QuotaList } from "../server/tasks/quota.ts";
 
 /**
- * 账号额度一览的命令行（#267）：只经 HTTP 调服务，不直接跑 OpenQuota。
+ * 账号额度一览的命令行（#267、#352）：只经 HTTP 调服务，不直接读凭据或跑 OpenQuota。
+ * 「来源」列：自带（Atrium 自己读的）或 OpenQuota；「说明」列写读不到的原因或没有额度数据。
  * 「运行时记录」列由服务给：账号被额度标记挡住时写明预计恢复时刻（或恢复时间未知），
  * 没有标记留空；--json 里同一信息是结构化的 hold.until / hold.reason。
  */
@@ -23,11 +24,18 @@ function refreshed(value: string | null): string {
   return Number.isFinite(at) ? when(at) : value;
 }
 
-export function formatQuotaTable(accounts: QuotaAccount[]): string {
-  if (!accounts.length) return "没有账号额度数据";
-  return table([
+const SOURCE_LABEL = { builtin: "自带", openquota: "OpenQuota" } as const;
+
+export function formatQuotaTable(
+  accounts: QuotaAccount[],
+  notes: readonly string[] = [],
+): string {
+  const tail = notes.length ? `\n${notes.join("\n")}` : "";
+  if (!accounts.length) return `没有账号额度数据${tail}`;
+  const body = table([
     [
       "账号",
+      "来源",
       "已用%",
       "周期进度%",
       "富余%",
@@ -35,9 +43,11 @@ export function formatQuotaTable(accounts: QuotaAccount[]): string {
       "短窗已用%",
       "刷新时间",
       "运行时记录",
+      "说明",
     ],
     ...accounts.map((account) => [
       account.providerId,
+      account.source ? SOURCE_LABEL[account.source] : "",
       cell(account.usedPercent),
       cell(account.periodElapsedPercent),
       cell(account.sparePercent),
@@ -45,8 +55,10 @@ export function formatQuotaTable(accounts: QuotaAccount[]): string {
       cell(account.shortWindowUsedPercent),
       refreshed(account.refreshedAt),
       account.runtime ?? "",
+      account.note ?? "",
     ]),
   ]);
+  return `${body}${tail}`;
 }
 
 const quota: Command = {
@@ -77,7 +89,7 @@ const quota: Command = {
     }
     const result = await (await client()).get<QuotaList>("/quota");
     if (json) printJson(result);
-    else console.log(formatQuotaTable(result.accounts));
+    else console.log(formatQuotaTable(result.accounts, result.notes ?? []));
     recordNext("看任务：atrium task ls");
   },
 };

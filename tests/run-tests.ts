@@ -12,7 +12,12 @@ const tests = readdirSync(join(root, "tests"))
 const runId = randomUUID();
 const child = spawn(join(root, "node_modules/.bin/tsx"), ["--test", ...tests], {
   cwd: root,
-  env: { ...process.env, ATRIUM_TEST_RUN_ID: runId },
+  // 自带额度读取不碰开发者本机的登录与供应商接口；读取器测试显式注入假凭据。
+  env: {
+    ...process.env,
+    ATRIUM_TEST_RUN_ID: runId,
+    ATRIUM_QUOTA_READERS: "off",
+  },
   stdio: "inherit",
 });
 for (const signal of ["SIGINT", "SIGTERM"] as const)

@@ -14,6 +14,7 @@ import { registerGoalRoutes } from "./goals/routes.ts";
 import type { GoalCheckOptions } from "./goals/check-runtime.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
+import type { QuotaReaders } from "./quota-readers/index.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 import { SecretaryFallback } from "./tasks/secretary-fallback.ts";
 import type { EventInbox } from "./tasks/events.ts";
@@ -61,6 +62,8 @@ export async function createApp(options: {
   mapPollMs?: number;
   /** OpenQuota 可执行文件路径，测试注入假二进制。 */
   quotaBin?: string;
+  /** 自带额度读取器（#352），测试注入假凭据与假接口；null 关掉，缺省用服务共用的一份。 */
+  quotaReaders?: QuotaReaders | null;
   /** 服务地址（main.ts 给），写进 leader 进程环境；内存服务没有。 */
   serviceUrl?: string;
   /** leader 唤醒的注入项：测试用来缩短攒批、替换 leader 进程。 */
@@ -245,6 +248,10 @@ export async function createApp(options: {
     pollMs: options.mapPollMs,
     workersDir: taskOptions.workersDir,
   });
-  registerQuotaRoute(app, { bin: options.quotaBin, db });
+  registerQuotaRoute(app, {
+    bin: options.quotaBin,
+    db,
+    readers: options.quotaReaders,
+  });
   return { app, db, taskRunner };
 }

@@ -1,11 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   accountOf,
   NOTICE_SPARE_GAP,
   pickView,
   refusalsOf,
+  richerAlternative,
   signedPercent,
+  trusted,
   writtenNotice,
   type PickCandidateFact,
   type PickFacts,
@@ -180,6 +184,31 @@ test("pickView：没有专员时按富余从多到少，没有富余数据的在
   );
 });
 
+test("pickView：理由只对照两个相关账号，其余看表格", () => {
+  const view = pickView(
+    facts({
+      candidates: [
+        cand("claude+opus"),
+        cand("codex+c"),
+        cand("opencode+x"),
+        cand("grok+g"),
+        cand("kimi"),
+      ],
+      pace: pace([
+        ["claude", 60, 10],
+        ["codex", 40, 10],
+        ["opencode", 30, 10],
+        ["grok", 20, 10],
+        ["kimi", 10, 10],
+      ]),
+    }),
+  );
+  assert.equal(
+    view.reason,
+    "claude 富余 +60%；codex 富余 +40%；opencode 富余 +30%",
+  );
+});
+
 test("pickView：额度数据不可用时按固定顺序 claude、codex、opencode、grok、kimi", () => {
   const view = pickView(
     facts({
@@ -239,6 +268,192 @@ test("pickView：专员候选能接、不正忙的按专员顺序在前，即使
     first_pass_rate: 0.5,
     low_data: false,
   });
+});
+
+test("pickView：专员第 1 选超速、第 2 选富余多出 30 点以上时改推荐第 2 选，理由只列这两个账号", () => {
+  const view = pickView(
+    facts({
+      job: { ref: "r2", name: "后端" },
+      candidates: [
+        cand("codex+gpt-6-sol:high", { preferred: 0 }),
+        cand("claude+opus:high", { preferred: 1 }),
+        cand("opencode+x"),
+        cand("grok+g"),
+      ],
+      pace: pace([
+        ["codex", -17, 60],
+        ["claude", 52, 20],
+        ["opencode", 80, 5],
+        ["grok", 10, 5],
+      ]),
+    }),
+  );
+  assert.equal(view.recommended, "claude+opus:high");
+  assert.deepEqual(
+    view.candidates.map((c) => [c.worker, c.rank]),
+    [
+      ["claude+opus:high", 1],
+      ["codex+gpt-6-sol:high", 2],
+      ["opencode+x", 3],
+      ["grok+g", 4],
+    ],
+  );
+  assert.equal(
+    view.reason,
+    "后端专员第 1 选 codex+gpt-6-sol:high 超速（codex −17%），改用第 2 选 claude+opus:high（claude +52%）",
+  );
+  // 按推荐去派不提醒；写专员第 1 选则提醒推荐的那位。
+  const codex = { worker: "codex+gpt-6-sol:high", tool: "codex" as Tool };
+  assert.equal(
+    writtenNotice(
+      view,
+      { worker: "claude+opus:high", tool: "claude" as Tool },
+      "t9",
+    ),
+    null,
+  );
+  assert.match(
+    writtenNotice(view, codex, "t9")!,
+    /^提醒：claude\+opus:high 同样能接，claude 富余 \+52%，比 codex\+gpt-6-sol:high 的 codex（−17%）多 69 个百分点/,
+  );
+});
+
+test("pickView：专员第 1 选超速、只有非专员候选富余时改推荐它", () => {
+  const view = pickView(
+    facts({
+      job: { ref: "r2", name: "后端" },
+      candidates: [cand("codex+c", { preferred: 0 }), cand("claude+opus")],
+      pace: pace([
+        ["codex", -17, 60],
+        ["claude", 52, 20],
+      ]),
+    }),
+  );
+  assert.equal(view.recommended, "claude+opus");
+  assert.equal(
+    view.reason,
+    "后端专员第 1 选 codex+c 超速（codex −17%），改用 claude+opus（claude +52%）",
+  );
+});
+
+test("pickView：两边都富余时仍按专员顺序，按推荐去派不提醒", () => {
+  const view = pickView(
+    facts({
+      job: { ref: "r2", name: "后端" },
+      candidates: [
+        cand("codex+c", { preferred: 0 }),
+        cand("claude+opus", { preferred: 1 }),
+      ],
+      pace: pace([
+        ["codex", 5, 30],
+        ["claude", 90, 5],
+      ]),
+    }),
+  );
+  assert.equal(view.recommended, "codex+c");
+  assert.equal(view.reason, "后端专员优先、codex 富余 +5%；claude 富余 +90%");
+  assert.equal(
+    writtenNotice(view, { worker: "codex+c", tool: "codex" }, "t9"),
+    null,
+  );
+});
+
+test("pickView：两边都超速时不换人", () => {
+  const view = pickView(
+    facts({
+      job: { ref: "r2", name: "后端" },
+      candidates: [
+        cand("codex+c", { preferred: 0 }),
+        cand("claude+opus", { preferred: 1 }),
+      ],
+      pace: pace([
+        ["codex", -60, 70],
+        ["claude", -5, 50],
+      ]),
+    }),
+  );
+  assert.equal(view.recommended, "codex+c");
+  assert.match(view.reason, /^后端专员优先、codex 富余 −60%/);
+});
+
+test("pickView：只有信任度不够的执行者富余时不换人", () => {
+  const view = (trust: "low" | "unknown" | "medium", risk = "low" as const) =>
+    pickView(
+      facts({
+        risk,
+        job: { ref: "r2", name: "后端" },
+        candidates: [
+          cand("codex+c", { preferred: 0 }),
+          cand("kimi", { rules: { trust } }),
+          cand("grok+g", { preferred: 1, rules: { trust } }),
+        ],
+        pace: pace([
+          ["codex", -17, 60],
+          ["kimi", 80, 5],
+          ["grok", 70, 5],
+        ]),
+      }),
+    );
+  for (const trust of ["low", "unknown"] as const) {
+    assert.equal(view(trust).recommended, "codex+c");
+    assert.equal(
+      writtenNotice(view(trust), { worker: "codex+c", tool: "codex" }, "t9"),
+      null,
+    );
+  }
+  assert.equal(view("medium").recommended, "grok+g");
+});
+
+test("richerAlternative：与提醒共用一个阈值；富余须为正、能接、不忙、信任度够、另一账号", () => {
+  const rival = (over: object = {}) => ({
+    worker: "claude+opus",
+    account: "claude",
+    spare: 30,
+    eligible: true,
+    busy: false,
+    trust: "medium" as const,
+    ...over,
+  });
+  const own = { account: "codex", spare: 0 };
+  assert.equal(richerAlternative([rival()], own, "low")?.gap, NOTICE_SPARE_GAP);
+  assert.equal(richerAlternative([rival({ spare: 29.4 })], own, "low"), null);
+  assert.equal(
+    richerAlternative(
+      [rival({ spare: 0 })],
+      { account: "codex", spare: -40 },
+      "low",
+    ),
+    null,
+  );
+  assert.equal(
+    richerAlternative([rival({ eligible: false })], own, "low"),
+    null,
+  );
+  assert.equal(richerAlternative([rival({ busy: true })], own, "low"), null);
+  assert.equal(richerAlternative([rival({ trust: "low" })], own, "low"), null);
+  assert.equal(
+    richerAlternative([rival({ account: "codex" })], own, "low"),
+    null,
+  );
+  assert.equal(richerAlternative([rival({ spare: null })], own, "low"), null);
+  assert.equal(
+    richerAlternative([rival()], { account: "codex", spare: null }, "low"),
+    null,
+  );
+  // 按给定顺序取第一个达标的。
+  assert.equal(
+    richerAlternative(
+      [rival({ worker: "a", spare: 31 }), rival({ worker: "b", spare: 90 })],
+      own,
+      "low",
+    )?.worker,
+    "a",
+  );
+  assert.equal(trusted("medium", "medium"), true);
+  assert.equal(trusted("medium", "high"), false);
+  assert.equal(trusted("high", "high"), true);
+  assert.equal(trusted("low", "low"), false);
+  assert.equal(trusted("unknown", "low"), false);
 });
 
 test("pickView：专员候选都不能接时按额度挑并写明", () => {
@@ -452,10 +667,18 @@ test("命令行文本：推荐一句、表格一行一位候选；task run 回�
 
 test("隔离服务：task pick 推荐富余的执行者；写死超速的回执带提醒；自动挑人带理由；专员优先", async (t) => {
   const { startApp } = await import("./task-fixture.ts");
-  const { call } = await startApp(t, undefined, async () => [
-    { providerId: "kimi", sparePercent: -13, usedPercent: 60 },
-    { providerId: "opencode", sparePercent: 54, usedPercent: 10 },
-  ]);
+  const { call } = await startApp(
+    t,
+    (fx) =>
+      writeFileSync(
+        join(fx.workers, "harness", "opencode.md"),
+        "---\nchecks: []\ntrust: medium\n---\n",
+      ),
+    async () => [
+      { providerId: "kimi", sparePercent: -13, usedPercent: 60 },
+      { providerId: "opencode", sparePercent: 54, usedPercent: 10 },
+    ],
+  );
   const add = async (title: string, extra: object = {}) =>
     (await call("POST", "/api/tasks", { title, deliver: "none", ...extra }))
       .body as { ref: string };
@@ -512,7 +735,7 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   assert.equal(auto.body.pick.auto, true);
   assert.match(auto.body.pick.worker, /^opencode/);
   assert.match(auto.body.pick.reason, /^opencode 富余 \+54%/);
-  // 干活的专员优先 kimi：即使额度更紧也推荐它，理由写明。
+  // 干活的专员第 1 选 kimi 超速、opencode 富余多出 30 点以上：改推荐 opencode，自动派也挑它。
   const role = await call("POST", "/api/roles", {
     name: "前端",
     description: "界面",
@@ -520,9 +743,26 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
     preferred: ["kimi"],
   });
   assert.equal(role.status, 201, JSON.stringify(role.body));
+  // opencode 独占，等自动派的那个跑完，免得它正忙。
+  await call("GET", `/api/tasks/${t2.ref}/wait?timeout=30`);
   const t3 = await add("改页面", { job: "前端" });
   const favoured = await call("GET", `/api/tasks/${t3.ref}/pick`);
-  assert.match(favoured.body.recommended, /^kimi/);
-  assert.match(favoured.body.reason, /^前端专员优先、kimi 富余 −13%/);
+  assert.match(favoured.body.recommended, /^opencode/);
+  assert.match(
+    favoured.body.reason,
+    /^前端专员第 1 选 kimi\S* 超速（kimi −13%），改用 opencode\S*（opencode \+54%）$/,
+  );
   assert.equal(favoured.body.job.name, "前端");
+  const dispatched = await call("POST", `/api/tasks/${t3.ref}/run`, {});
+  assert.equal(dispatched.status, 200, JSON.stringify(dispatched.body));
+  assert.equal(dispatched.body.pick.worker, favoured.body.recommended);
+  assert.equal(dispatched.body.pick.reason, favoured.body.reason);
+  // 按推荐写死不提醒。
+  await call("GET", `/api/tasks/${t3.ref}/wait?timeout=30`);
+  const t4 = await add("照推荐写死", { job: "前端" });
+  const same = await call("POST", `/api/tasks/${t4.ref}/run`, {
+    worker: favoured.body.recommended,
+  });
+  assert.equal(same.status, 200, JSON.stringify(same.body));
+  assert.equal(same.body.pick.notice, null);
 });

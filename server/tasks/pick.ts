@@ -1,7 +1,13 @@
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
 import { overReserve } from "./budget.ts";
 import { FALLBACK_ORDER, spareByProvider, type PaceEntry } from "./prepare.ts";
-import { RISKS, type ProfileRules, type Risk, type Trust } from "./profiles.ts";
+import {
+  RISKS,
+  TRUSTS,
+  type ProfileRules,
+  type Risk,
+  type Trust,
+} from "./profiles.ts";
 import { clock } from "./quota-holds.ts";
 import { avoidReason, type ChainNode } from "../skills/model.ts";
 import type { Headroom } from "./usage-budget.ts";
@@ -12,7 +18,10 @@ import type { Headroom } from "./usage-budget.ts";
  * 纯函数：事实由 pick-runtime.ts 收集。
  */
 
-/** 写死执行者时，另有能接的候选富余多出这么多个百分点就提醒。 */
+/**
+ * 另有能接的候选富余多出这么多个百分点：专员优先的执行者超速时改推荐它，写死执行者时提醒它。
+ * 两处都经 richerAlternative 判定。
+ */
 export const NOTICE_SPARE_GAP = 30;
 
 export type PickRecord = {
@@ -184,7 +193,8 @@ function notesOf(candidate: PickCandidateFact): string[] {
 
 /**
  * 排序：专员候选里能接、不正忙的按专员顺序在前；其余能接的按账号富余从多到少（没有富余数据的在后、按固定顺序），
- * 正忙的独占工具排到最后（只剩它时仍推荐它，派了会排队）。与 task run 自动挑人一致。
+ * 正忙的独占工具排到最后（只剩它时仍推荐它，派了会排队）；专员第 1 选超速且 richerAlternative 找到更富余的，
+ * 那一位提到最前。与 task run 自动挑人（含 --auto 自动派）一致。
  */
 export function pickView(facts: PickFacts): PickView {
   const spare = facts.pace ? spareByProvider(facts.pace) : new Map();
@@ -219,7 +229,33 @@ export function pickView(facts: PickFacts): PickView {
             : -1;
       return b.spare - a.spare || byOrder(a) - byOrder(b) || a.index - b.index;
     });
-  const ranked = [...favoured, ...rest];
+  const ordered = [...favoured, ...rest];
+  // 专员第 1 选超速（富余为负）、另有信任度够的候选富余多出 NOTICE_SPARE_GAP 以上：改推荐那一位。
+  const first = favoured[0];
+  const swap =
+    first && first.spare !== undefined && first.spare < 0
+      ? richerAlternative(
+          ordered.map((row) => ({
+            worker: row.candidate.worker,
+            account: ADAPTERS[row.candidate.tool].quotaProvider,
+            spare: row.spare ?? null,
+            eligible: true,
+            busy: row.busy,
+            trust: row.candidate.rules.trust ?? "unknown",
+          })),
+          {
+            account: ADAPTERS[first.candidate.tool].quotaProvider,
+            spare: first.spare,
+          },
+          facts.risk,
+        )
+      : null;
+  const ranked = swap
+    ? [
+        ordered.find((row) => row.candidate.worker === swap.worker)!,
+        ...ordered.filter((row) => row.candidate.worker !== swap.worker),
+      ]
+    : ordered;
   const refused = rows.filter((row) => row.refusals.length);
   const candidates: PickCandidate[] = [...ranked, ...refused].map((row) => ({
     worker: row.candidate.worker,
@@ -244,19 +280,80 @@ export function pickView(facts: PickFacts): PickView {
     quota_known: !!facts.pace,
     candidates,
     recommended: top?.worker ?? null,
-    reason: pickReason(candidates, facts),
+    reason: pickReason(
+      candidates,
+      facts,
+      swap
+        ? candidates.find((c) => c.worker === first!.candidate.worker)
+        : undefined,
+    ),
   };
 }
+
+/** richerAlternative 比较用的候选：PickCandidate 与排序中间结果都能转成它。 */
+export type SpareRival = {
+  worker: string;
+  account: string;
+  spare: number | null;
+  eligible: boolean;
+  busy: boolean;
+  trust: Trust;
+};
+
+/** 信任度够：不用合入前另派审阅（至少 medium），也够接这个 risk。 */
+export function trusted(trust: Trust, risk: Risk): boolean {
+  const level = TRUSTS.indexOf(trust);
+  return level >= TRUSTS.indexOf("medium") && level > RISKS.indexOf(risk);
+}
+
+/**
+ * 比 own 账号富余多出至少 NOTICE_SPARE_GAP 个百分点、自身富余为正、能接、不正忙、信任度够的
+ * 另一账号候选，按给定顺序取第一个；own 或对方没有富余数据不算。排序改推荐与写死提醒共用。
+ */
+export function richerAlternative(
+  rivals: readonly SpareRival[],
+  own: { account: string; spare: number | null | undefined },
+  risk: Risk,
+): (SpareRival & { spare: number; gap: number }) | null {
+  if (own.spare === null || own.spare === undefined) return null;
+  for (const rival of rivals) {
+    if (
+      !rival.eligible ||
+      rival.busy ||
+      rival.account === own.account ||
+      rival.spare === null ||
+      rival.spare <= 0 ||
+      !trusted(rival.trust, risk)
+    )
+      continue;
+    const gap = Math.round(rival.spare - own.spare);
+    if (gap >= NOTICE_SPARE_GAP) return { ...rival, spare: rival.spare, gap };
+  }
+  return null;
+}
+
+const rivalOf = (c: PickCandidate): SpareRival => ({
+  worker: c.worker,
+  account: c.quota.account,
+  spare: c.quota.spare_percent,
+  eligible: c.eligible,
+  busy: c.busy,
+  trust: c.trust,
+});
 
 const spareText = (quota: PickAccount) =>
   quota.spare_percent === null
     ? `${quota.account} 没有富余数据`
     : `${quota.account} 富余 ${signedPercent(quota.spare_percent)}`;
 
-/** 推荐理由一句话：为什么是它，再对照其他账号或不能接的专员候选。 */
+/**
+ * 推荐理由一句话：为什么是它，再对照最多两个相关账号或不能接的专员候选。
+ * overSpeed：专员第 1 选超速、改推荐了更富余的候选时，被换下的那位。
+ */
 export function pickReason(
   candidates: readonly PickCandidate[],
   facts: Pick<PickFacts, "job" | "pace">,
+  overSpeed?: PickCandidate,
 ): string {
   const top = candidates[0]?.eligible ? candidates[0] : undefined;
   if (!top) {
@@ -267,6 +364,14 @@ export function pickReason(
     return candidates.length
       ? `没有能接的执行者（${why}）`
       : "没有候选执行者：已装的编码 CLI 一个都没有";
+  }
+  if (overSpeed) {
+    const job = facts.job ? `${facts.job.name}专员` : "专员";
+    const to =
+      top.preferred !== null
+        ? `第 ${top.preferred} 选 ${top.worker}`
+        : ` ${top.worker}`;
+    return `${job}第 ${overSpeed.preferred} 选 ${overSpeed.worker} 超速（${overSpeed.quota.account} ${signedPercent(overSpeed.quota.spare_percent!)}），改用${to}（${top.quota.account} ${signedPercent(top.quota.spare_percent!)}）`;
   }
   const why: string[] = [];
   if (facts.job && top.preferred !== null)
@@ -279,16 +384,16 @@ export function pickReason(
     );
   why.push(facts.pace ? spareText(top.quota) : "额度数据不可用，按固定顺序");
   if (top.busy) why.push(`${top.tool} 正忙，派了会排队`);
+  // 只对照两个：不能接的专员候选，或有富余数据的其他账号（其余看表格）。
   const others: string[] = [];
   const seen = new Set([top.quota.account]);
   for (const c of candidates) {
-    if (others.length >= 3) break;
+    if (others.length >= 2) break;
     if (!c.eligible && c.preferred !== null) {
       others.push(`${c.worker} 不能接：${c.refusals[0]}`);
       seen.add(c.quota.account);
       continue;
     }
-    // 其余只对照有富余数据的账号（没装、没数据的看表格）。
     if (
       seen.has(c.quota.account) ||
       !facts.pace ||
@@ -304,29 +409,24 @@ export function pickReason(
 }
 
 /**
- * 写死执行者时的提醒：另有能接、不正忙的候选，账号富余比写死的多至少 30 个百分点。
- * 写死的账号或对照账号没有富余数据时不提醒。
+ * 写死执行者时的提醒：写的不是推荐的那位，且另有能接、不正忙、信任度够的候选账号富余多出至少
+ * NOTICE_SPARE_GAP 个百分点（与排序改推荐同一判定，按推荐顺序取第一个）。
+ * 写的就是推荐的、写死的账号或对照账号没有富余数据时不提醒。
  */
 export function writtenNotice(
   view: PickView,
   written: { worker: string; tool: Tool },
   taskRef: string,
 ): string | null {
+  if (written.worker === view.recommended) return null;
   const account = ADAPTERS[written.tool].quotaProvider;
-  const own = view.candidates.find((c) => c.quota.account === account)?.quota;
-  const mine = own?.spare_percent;
-  if (mine === null || mine === undefined) return null;
-  const better = view.candidates
-    .filter(
-      (c) =>
-        c.eligible &&
-        !c.busy &&
-        c.quota.account !== account &&
-        c.quota.spare_percent !== null,
-    )
-    .sort((a, b) => b.quota.spare_percent! - a.quota.spare_percent!)[0];
+  const mine = view.candidates.find((c) => c.quota.account === account)?.quota
+    .spare_percent;
+  const better = richerAlternative(
+    view.candidates.map(rivalOf),
+    { account, spare: mine },
+    view.risk,
+  );
   if (!better) return null;
-  const gap = Math.round(better.quota.spare_percent! - mine);
-  if (gap < NOTICE_SPARE_GAP) return null;
-  return `提醒：${better.worker} 同样能接，${better.quota.account} 富余 ${signedPercent(better.quota.spare_percent!)}，比 ${written.worker} 的 ${account}（${signedPercent(mine)}）多 ${gap} 个百分点；看候选：atrium task pick ${taskRef}`;
+  return `提醒：${better.worker} 同样能接，${better.account} 富余 ${signedPercent(better.spare)}，比 ${written.worker} 的 ${account}（${signedPercent(mine!)}）多 ${better.gap} 个百分点；看候选：atrium task pick ${taskRef}`;
 }

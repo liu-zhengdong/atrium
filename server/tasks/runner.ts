@@ -92,6 +92,8 @@ export type RunnerOptions = {
   tickMs?: number;
   ciPollMs?: number;
   ciBatch?: number;
+  /** 测试可缩短 PR 推送后 GitHub 头视图的等待窗口。 */
+  mergeHeadWaitMs?: number;
   /** 事件攒批窗口（毫秒），缺省 0。 */
   batchMs?: number;
   /** 事件交出后的处理中租约（毫秒），缺省 15 分钟；超时仍未 ack 才重投。 */
@@ -207,6 +209,7 @@ export class TaskRunner {
       data: options.data,
       env: this.launchOptions.env,
       run: this.exec,
+      prHeadWaitMs: options.mergeHeadWaitMs,
       changed: (id) => this.waits.changed(id),
       cleaned: async (id) => {
         await this.cleanup.cleanup(id);

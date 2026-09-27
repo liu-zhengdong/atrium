@@ -58,6 +58,8 @@ export class MergeQueue {
       selfRepo?: string | null;
       /** 合入后通知上线观察者。 */
       onMerged?: (id: number) => void;
+      /** GitHub PR 头视图追上推送的最长等待时间；测试可缩短。 */
+      prHeadWaitMs?: number;
     },
   ) {
     this.claim = new MergeClaim(db);
@@ -477,26 +479,25 @@ export class MergeQueue {
         );
     }
     if (this.closed) return;
-    // 推送成功后 gh 的 PR 视图可能仍返回旧头；始终与本轮实际检查过的提交比较。
+    // 推送成功后 gh 的 PR 视图可能仍返回旧头；在时限内等它追上本轮检查的提交。
+    const deadline = Date.now() + (this.options.prHeadWaitMs ?? 60_000);
     let current = await this.pr(task, flag);
-    for (
-      let attempt = 0;
-      attempt < 5 &&
+    while (
       current.state === "OPEN" &&
-      current.headRefOid !== checkedHead;
-      attempt++
+      current.headRefOid !== checkedHead &&
+      Date.now() < deadline
     ) {
       if (this.stopped(task.id) || this.closed) return;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(1000, deadline - Date.now())),
+      );
       current = await this.pr(task, flag);
     }
-    if (this.stopped(task.id)) return;
-    if (current.state === "OPEN" && current.headRefOid !== checkedHead) {
-      if ((await remoteHead()) === checkedHead)
-        throw new Error("PR 头提交视图尚未更新，稍后重试");
-    }
+    if (this.stopped(task.id) || this.closed) return;
     if (current.state !== "OPEN" || current.headRefOid !== checkedHead)
-      throw new MergeHold("检查后 PR 头提交发生变化，拒绝合入");
+      throw new MergeHold(
+        `等待 PR 头提交更新超时或状态变化：检查过 ${checkedHead}，PR 头 ${current.headRefOid}（${current.state}），拒绝合入`,
+      );
     const merge = await this.options.run(
       "gh",
       [

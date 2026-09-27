@@ -203,7 +203,7 @@ for (const scenario of [
   "restart_check",
   "head_changed",
   "stale_pr_head",
-  "stale_pr_head_persistent",
+  "stale_pr_head_timeout",
 ] as const) {
   test(`隔离服务与假 gh/执行者：${scenario}`, async (t) => {
     let merged = false;
@@ -218,151 +218,166 @@ for (const scenario of [
       data,
       app,
       call: firstCall,
-    } = await startApp(t, (fixture) => {
-      const git = (...args: string[]) =>
-        execFileSync("git", args, {
-          cwd: fixture.repo,
-          encoding: "utf8",
-        }).trim();
-      // 可信执行者、低风险：不经审阅直接进合入队列（审阅分支见 task-review.test.ts）。
-      writeFileSync(
-        join(fixture.workers, "harness", "kimi.md"),
-        "---\ntrust: medium\nmax_risk: low\nchecks: [pr_exists, claims_verified]\n---\n",
-      );
-      git("config", "user.name", "test");
-      git("config", "user.email", "test@example.com");
-      writeFileSync(join(fixture.repo, "done.txt"), "base\n");
-      writeFileSync(
-        join(fixture.repo, "package.json"),
-        JSON.stringify({
-          scripts: {
-            check:
-              scenario === "check_failed"
-                ? "echo 'not ok 1 - 故意失败'; exit 1"
-                : scenario === "stopped" || scenario === "restart_check"
-                  ? "sleep 2; true"
-                  : "true",
-          },
-        }),
-      );
-      git("add", ".");
-      git("commit", "-qm", "检查夹具");
-      git("push", "-q", "origin", "main");
-      fixture.script(
-        "kimi",
-        `set -e\necho change >> done.txt\ngit add done.txt\ngit commit -qm 修复\ngit push ${scenario === "push_failed" ? "--force-with-lease " : ""}-q -u origin HEAD\necho 完成`,
-      );
-      const origin = join(fixture.root, "origin.git");
-      const remoteHead = () =>
-        execFileSync(
-          "git",
-          ["--git-dir", origin, "rev-parse", `refs/heads/${headBranch}`],
-          { encoding: "utf8" },
-        ).trim();
-      const fake: Exec = async (command, args, options) => {
-        if (
-          command === "git" &&
-          args.includes("get-url") &&
-          args.includes("origin")
-        )
-          return {
-            ok: true,
-            stdout: "https://github.com/acme/demo.git\n",
-            stderr: "",
-          };
-        if (
-          scenario === "push_failed" &&
-          command === "git" &&
-          args.some((arg) => arg.startsWith("--force-with-lease="))
-        )
-          return { ok: false, stdout: "", stderr: "push rejected" };
-        if (
-          command === "git" &&
-          args.some((arg) => arg.startsWith("--force-with-lease="))
-        ) {
-          const result = await exec(command, args, options);
-          pushed = result.ok;
-          if (scenario === "head_changed" && result.ok)
-            execFileSync("git", [
-              "--git-dir",
-              join(fixture.root, "origin.git"),
-              "update-ref",
-              `refs/heads/${headBranch}`,
-              originalHead,
-            ]);
-          return result;
-        }
-        if (command !== "gh") return exec(command, args, options);
-        assert.equal(args[args.indexOf("-R") + 1], "acme/demo");
-        if (args[0] === "pr" && args[1] === "list") {
-          headBranch = args[args.indexOf("--head") + 1]!;
+    } = await startApp(
+      t,
+      (fixture) => {
+        const git = (...args: string[]) =>
+          execFileSync("git", args, {
+            cwd: fixture.repo,
+            encoding: "utf8",
+          }).trim();
+        // 可信执行者、低风险：不经审阅直接进合入队列（审阅分支见 task-review.test.ts）。
+        writeFileSync(
+          join(fixture.workers, "harness", "kimi.md"),
+          "---\ntrust: medium\nmax_risk: low\nchecks: [pr_exists, claims_verified]\n---\n",
+        );
+        git("config", "user.name", "test");
+        git("config", "user.email", "test@example.com");
+        writeFileSync(join(fixture.repo, "done.txt"), "base\n");
+        writeFileSync(
+          join(fixture.repo, "package.json"),
+          JSON.stringify({
+            scripts: {
+              check:
+                scenario === "check_failed"
+                  ? "echo 'not ok 1 - 故意失败'; exit 1"
+                  : scenario === "stopped" || scenario === "restart_check"
+                    ? "sleep 2; true"
+                    : "true",
+            },
+          }),
+        );
+        git("add", ".");
+        git("commit", "-qm", "检查夹具");
+        git("push", "-q", "origin", "main");
+        fixture.script(
+          "kimi",
+          `set -e\necho change >> done.txt\ngit add done.txt\ngit commit -qm 修复\ngit push ${scenario === "push_failed" ? "--force-with-lease " : ""}-q -u origin HEAD\necho 完成`,
+        );
+        const origin = join(fixture.root, "origin.git");
+        const remoteHead = () =>
+          execFileSync(
+            "git",
+            ["--git-dir", origin, "rev-parse", `refs/heads/${headBranch}`],
+            { encoding: "utf8" },
+          ).trim();
+        const fake: Exec = async (command, args, options) => {
           if (
-            (scenario === "conflict" ||
-              scenario === "rebase_success" ||
-              scenario === "push_failed" ||
-              scenario === "head_changed" ||
-              scenario === "stale_pr_head" ||
-              scenario === "stale_pr_head_persistent") &&
-            !advancedMain
+            command === "git" &&
+            args.includes("get-url") &&
+            args.includes("origin")
+          )
+            return {
+              ok: true,
+              stdout: "https://github.com/acme/demo.git\n",
+              stderr: "",
+            };
+          if (
+            scenario === "push_failed" &&
+            command === "git" &&
+            args.some((arg) => arg.startsWith("--force-with-lease="))
+          )
+            return { ok: false, stdout: "", stderr: "push rejected" };
+          if (
+            command === "git" &&
+            args.some((arg) => arg.startsWith("--force-with-lease="))
           ) {
-            advancedMain = true;
-            const changed = scenario === "conflict" ? "done.txt" : "README.md";
-            writeFileSync(join(fixture.repo, changed), "main change\n");
-            git("add", changed);
-            git("commit", "-qm", "主线改动");
-            git("push", "-q", "origin", "main");
+            const result = await exec(command, args, options);
+            pushed = result.ok;
+            if (scenario === "head_changed" && result.ok)
+              execFileSync("git", [
+                "--git-dir",
+                join(fixture.root, "origin.git"),
+                "update-ref",
+                `refs/heads/${headBranch}`,
+                originalHead,
+              ]);
+            return result;
+          }
+          if (command !== "gh") return exec(command, args, options);
+          assert.equal(args[args.indexOf("-R") + 1], "acme/demo");
+          if (args[0] === "pr" && args[1] === "list") {
+            headBranch = args[args.indexOf("--head") + 1]!;
+            if (
+              (scenario === "conflict" ||
+                scenario === "rebase_success" ||
+                scenario === "push_failed" ||
+                scenario === "head_changed" ||
+                scenario === "stale_pr_head" ||
+                scenario === "stale_pr_head_timeout") &&
+              !advancedMain
+            ) {
+              advancedMain = true;
+              const changed =
+                scenario === "conflict" ? "done.txt" : "README.md";
+              writeFileSync(join(fixture.repo, changed), "main change\n");
+              git("add", changed);
+              git("commit", "-qm", "主线改动");
+              git("push", "-q", "origin", "main");
+            }
+            return {
+              ok: true,
+              stdout: JSON.stringify([
+                {
+                  number: 1,
+                  url: `https://github.com/acme/${scenario === "wrong_origin" ? "other" : "demo"}/pull/1`,
+                  state: "OPEN",
+                },
+              ]),
+              stderr: "",
+            };
+          }
+          if (args[0] === "pr" && args[1] === "view")
+            return {
+              ok: true,
+              stdout: JSON.stringify({
+                state: merged ? "MERGED" : "OPEN",
+                headRefOid:
+                  (scenario === "stale_pr_head" &&
+                    pushed &&
+                    staleViews++ < 7) ||
+                  (scenario === "stale_pr_head_timeout" && pushed)
+                    ? originalHead
+                    : remoteHead(),
+                headRefName: headBranch,
+                baseRefName: "main",
+                isCrossRepository: false,
+              }),
+              stderr: "",
+            };
+          if (args[0] === "pr" && args[1] === "merge") {
+            mergeCalls++;
+            assert.ok(args.includes("--squash"));
+            assert.equal(
+              args[args.indexOf("--match-head-commit") + 1],
+              remoteHead(),
+            );
+            if (
+              scenario === "merge_failed" ||
+              (scenario === "return_then_merge" && mergeCalls === 1)
+            )
+              return { ok: false, stdout: "", stderr: "merge rejected" };
+            merged = true;
+            return { ok: true, stdout: "merged", stderr: "" };
           }
           return {
-            ok: true,
-            stdout: JSON.stringify([
-              {
-                number: 1,
-                url: `https://github.com/acme/${scenario === "wrong_origin" ? "other" : "demo"}/pull/1`,
-                state: "OPEN",
-              },
-            ]),
-            stderr: "",
+            ok: false,
+            stdout: "",
+            stderr: `unexpected gh ${args.join(" ")}`,
           };
-        }
-        if (args[0] === "pr" && args[1] === "view")
-          return {
-            ok: true,
-            stdout: JSON.stringify({
-              state: merged ? "MERGED" : "OPEN",
-              headRefOid:
-                (scenario === "stale_pr_head" && pushed && staleViews++ < 2) ||
-                (scenario === "stale_pr_head_persistent" && pushed)
-                  ? originalHead
-                  : remoteHead(),
-              headRefName: headBranch,
-              baseRefName: "main",
-              isCrossRepository: false,
-            }),
-            stderr: "",
-          };
-        if (args[0] === "pr" && args[1] === "merge") {
-          mergeCalls++;
-          assert.ok(args.includes("--squash"));
-          assert.equal(
-            args[args.indexOf("--match-head-commit") + 1],
-            remoteHead(),
-          );
-          if (
-            scenario === "merge_failed" ||
-            (scenario === "return_then_merge" && mergeCalls === 1)
-          )
-            return { ok: false, stdout: "", stderr: "merge rejected" };
-          merged = true;
-          return { ok: true, stdout: "merged", stderr: "" };
-        }
-        return {
-          ok: false,
-          stdout: "",
-          stderr: `unexpected gh ${args.join(" ")}`,
         };
-      };
-      fixture.run = fake;
-    });
+        fixture.run = fake;
+      },
+      undefined,
+      undefined,
+      undefined,
+      {
+        mergeHeadWaitMs:
+          scenario === "stale_pr_head_timeout" || scenario === "head_changed"
+            ? 150
+            : undefined,
+      },
+    );
     let call = firstCall;
     const created = await call("POST", "/api/tasks", {
       title: "合入测试",
@@ -421,25 +436,6 @@ for (const scenario of [
         };
       }
     }
-    if (scenario === "stale_pr_head_persistent") {
-      const until = Date.now() + 15_000;
-      for (;;) {
-        const current = (await call("GET", `/api/tasks/${ref}`)).body;
-        if (
-          current.events.some(
-            (event: { kind: string }) => event.kind === "merge_retry",
-          )
-        ) {
-          assert.equal(current.status, "done");
-          assert.equal(current.delivery_stage, "merge_queued");
-          assert.equal(mergeCalls, 0);
-          break;
-        }
-        assert.ok(Date.now() < until, "PR 视图陈旧时没有进入重试");
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      return;
-    }
     const waited = await call("GET", `/api/tasks/${ref}/wait?timeout=30`);
     assert.equal(waited.status, 200);
     assert.equal(waited.body.timed_out, false);
@@ -491,7 +487,8 @@ for (const scenario of [
     } else if (
       scenario === "wrong_origin" ||
       scenario === "stopped" ||
-      scenario === "head_changed"
+      scenario === "head_changed" ||
+      scenario === "stale_pr_head_timeout"
     ) {
       assert.equal(task.status, "blocked");
       assert.equal(task.delivery_stage, null);
@@ -502,9 +499,21 @@ for (const scenario of [
         scenario === "stopped"
           ? /merge_stopped/
           : scenario === "head_changed"
-            ? /头提交发生变化/
-            : /origin 不一致/,
+            ? /等待 PR 头提交更新超时/
+            : scenario === "stale_pr_head_timeout"
+              ? /等待 PR 头提交更新超时/
+              : /origin 不一致/,
       );
+      if (scenario === "stale_pr_head_timeout") {
+        const checkedHead = execFileSync(
+          "git",
+          ["-C", worktree, "rev-parse", "HEAD"],
+          { encoding: "utf8" },
+        ).trim();
+        const events = JSON.stringify(task.events);
+        assert.ok(events.includes(checkedHead));
+        assert.ok(events.includes(originalHead));
+      }
     } else {
       assert.equal(task.status, "blocked");
       assert.ok(task.worktree && existsSync(task.worktree));
@@ -532,13 +541,15 @@ for (const scenario of [
       const digest = await call("GET", "/api/events/digest");
       assert.match(digest.body.items[0].summary, /退回 2 次/);
     }
-    if (scenario === "head_changed") {
+    if (scenario === "head_changed" || scenario === "stale_pr_head_timeout") {
       const requeued = await call("POST", `/api/tasks/${ref}/merge`);
       assert.equal(requeued.status, 200);
       assert.equal(requeued.body.task.status, "done");
       assert.ok(
         ["merge_queued", "merging"].includes(requeued.body.task.delivery_stage),
       );
+      assert.equal(requeued.body.task.started_at, task.started_at);
+      assert.equal(requeued.body.task.pid, task.pid);
     }
   });
 }

@@ -50,6 +50,28 @@ async function listen(
   return Number(new URL(address).port);
 }
 
+test("所有已注册的全景 GET 接口都允许网页只读会话，令牌专用接口显式列出", async (t) => {
+  const routes: { method: string; url: string }[] = [];
+  await listen(t, (method, url) => routes.push({ method, url }));
+  const tokenOnly = new Set(["/api/map/context/:id"]);
+  const mapGets = routes.filter(
+    ({ method, url }) => method === "GET" && url.startsWith("/api/map/"),
+  );
+  assert.ok(mapGets.length > tokenOnly.size);
+  for (const route of mapGets) {
+    assert.equal(
+      authPolicy(route.method, route.url),
+      tokenOnly.has(route.url) ? "user" : "map-read",
+      `${route.method} ${route.url}`,
+    );
+  }
+  assert.deepEqual(
+    mapGets.filter(({ url }) => tokenOnly.has(url)).map(({ url }) => url),
+    [...tokenOnly],
+    "令牌专用例外必须仍是已注册路由",
+  );
+});
+
 test("anonymous requests are rejected before their declared body is read", async (t) => {
   const routes: { method: string; url: string }[] = [];
   const port = await listen(t, (method, url) => routes.push({ method, url }));

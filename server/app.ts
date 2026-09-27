@@ -204,6 +204,12 @@ export async function createApp(options: {
     // /api/service/* 由 main.ts 用实例控制凭据校验；没有 Web 外壳，未匹配的路径也要求用户凭据再报 404。
     else if (policy !== "user") return;
     if (auth.validUser(request.headers.authorization)) return;
+    if (mapLogin.valid(request.headers.cookie))
+      throw new Problem(
+        403,
+        "这个页面的数据接口没开放给网页（Atrium 的问题，不是你的登录）",
+        "map_session_forbidden",
+      );
     throw new Problem(
       401,
       request.headers.authorization

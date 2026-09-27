@@ -489,12 +489,20 @@ test("接口：令牌读写；网页登录链接只能用一次，会话只能�
     "/api/map/tree",
     "/api/map/nodes/o2",
     "/api/map/now",
+    "/api/map/roles",
+    "/api/map/specialists",
   ])
     assert.equal(
       (await app.inject({ url, headers: session })).statusCode,
       200,
       url,
     );
+  const missingSpecialist = await app.inject({
+    url: "/api/map/specialists/r1",
+    headers: session,
+  });
+  assert.equal(missingSpecialist.statusCode, 404);
+  assert.equal(missingSpecialist.json().code, "not_found");
   // 会话只读全景：写全景、签新链接、读别的接口都要用户令牌。
   for (const [method, url] of [
     ["PATCH", "/api/map/nodes/o3"],
@@ -503,19 +511,17 @@ test("接口：令牌读写；网页登录链接只能用一次，会话只能�
     ["GET", "/api/map/context/o3"],
     ["GET", "/api/tasks"],
     ["GET", "/api/org/tree"],
-  ] as const)
-    assert.equal(
-      (
-        await app.inject({
-          method,
-          url,
-          headers: session,
-          ...(method === "GET" ? {} : { payload: {} }),
-        })
-      ).statusCode,
-      401,
-      `${method} ${url}`,
-    );
+  ] as const) {
+    const response = await app.inject({
+      method,
+      url,
+      headers: session,
+      ...(method === "GET" ? {} : { payload: {} }),
+    });
+    assert.equal(response.statusCode, 403, `${method} ${url}`);
+    assert.equal(response.json().code, "map_session_forbidden");
+    assert.match(response.json().error, /Atrium 的问题，不是你的登录/);
+  }
   // 非本机：连接地址不是回环或 Host 不是本机都拒绝，带着有效会话也不行。
   const remote = await app.inject({
     url: "/api/map/tree",

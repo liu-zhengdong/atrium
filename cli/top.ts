@@ -4,10 +4,12 @@ import { recordNext } from "./contract.ts";
 import { clip, pad, printJson, width } from "./format.ts";
 import type { Client } from "./service.ts";
 import type { Command, Values } from "./main.ts";
+import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
  * 默认全屏刷新，q / Ctrl-C 退出并还原终端；非 TTY 或 --once 只打一次，--json 给脚本。
+ * 下面接一段排期（就绪、依赖链、等待中、因上游卡住），取自 `/api/tasks/plan`。
  */
 
 export type TopRow = {
@@ -47,6 +49,9 @@ export type Snapshot = {
   };
   rows: TopRow[];
   truncated: boolean;
+  /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
+  plan?: PlanView | null;
+  plan_error?: string;
 };
 
 // 不从 main.ts 取值：测试先加载本模块，main.ts 再回头引入会撞上循环初始化。
@@ -146,6 +151,8 @@ export type Frame = {
   now: number;
   footer: boolean;
   color: boolean;
+  /** 终端行数；给了就让排期段填满剩下的高度，没给用 PLAN_LINES。 */
+  height?: number;
 };
 
 const DIM = "\x1b[2m";
@@ -249,6 +256,24 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   if (!rows.length) lines.push("现在没有在跑、排队或受阻的任务");
   if (snapshot.truncated)
     lines.push(`（任务过多，只显示前 ${rows.length} 个）`);
+  if (snapshot.plan) {
+    lines.push("");
+    const room = frame.height
+      ? frame.height - lines.length - (frame.footer ? 1 : 0)
+      : PLAN_LINES;
+    lines.push(
+      ...renderPlan(snapshot.plan, {
+        width: frame.width,
+        now: frame.now,
+        maxLines: Math.max(PLAN_MIN_LINES, room),
+        wide: frame.width >= WORKER_MIN_WIDTH,
+      }).lines,
+    );
+  } else if (snapshot.plan === null)
+    lines.push(
+      "",
+      clip(`排期：取不到（${snapshot.plan_error ?? "未知原因"}）`, frame.width),
+    );
   if (frame.footer) lines.push(`动作：${nextOf(rows)}`);
   return lines.join("\n");
 }
@@ -264,6 +289,30 @@ export const nextOf = (rows: TopRow[]) => {
   return live ? `atrium task show ${live.ref}` : "atrium task add 标题";
 };
 
+/** 终端再矮，排期段也至少留这么几行（含标题与折叠提示）。 */
+const PLAN_MIN_LINES = 4;
+
+/** 看板与排期一起取；排期取不到（如旧版服务）不影响看板，原因留在屏上。 */
+export async function snapshotOf(
+  api: Client,
+  as: string | undefined,
+): Promise<Snapshot> {
+  const [snapshot, plan] = await Promise.all([
+    api.get<Snapshot>(path(as)),
+    api.get<PlanView>("/tasks/plan").then(
+      (value) => ({ value }),
+      (error: unknown) => ({
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    ),
+  ]);
+  if ("error" in plan)
+    return { ...snapshot, plan: null, plan_error: plan.error };
+  if (!plan.value?.groups || typeof plan.value.groups !== "object")
+    return { ...snapshot, plan: null, plan_error: "排期接口返回的格式看不懂" };
+  return { ...snapshot, plan: plan.value };
+}
+
 export const path = (as: string | undefined) =>
   as === undefined ? "/tasks/top" : `/tasks/top?${new URLSearchParams({ as })}`;
 
@@ -272,6 +321,7 @@ export const path = (as: string | undefined) =>
 /** 终端这一侧要做的事；抽出来是为了 --once 与测试不走终端分支。 */
 export type Terminal = {
   columns: () => number;
+  rows?: () => number;
   color: () => boolean;
   enter: () => void;
   leave: () => void;
@@ -285,6 +335,7 @@ export function liveTerminal(): Terminal {
   let release: (() => void) | undefined;
   return {
     columns: () => process.stdout.columns || 80,
+    rows: () => process.stdout.rows || 24,
     color: () => Boolean(process.stdout.isTTY),
     enter: () => process.stdout.write("\x1b[?1049h\x1b[?25l"),
     leave: () => process.stdout.write("\x1b[?25h\x1b[?1049l"),
@@ -343,7 +394,7 @@ export async function watch(
       let snapshot: Snapshot | undefined;
       let reason: string | null = null;
       try {
-        snapshot = await api.get<Snapshot>(path(as));
+        snapshot = await snapshotOf(api, as);
       } catch (error) {
         reason =
           error instanceof Problem
@@ -357,6 +408,7 @@ export async function watch(
               now: Date.now(),
               footer: true,
               color: terminal.color(),
+              height: terminal.rows?.(),
             })
           : `Atrium · ${reason}`,
       );
@@ -375,7 +427,7 @@ export async function watch(
 export const topCommand: Command = {
   args: "[--once] [--json] [--interval 秒] [--width 列] [--as 订阅者]",
   about:
-    "实时看谁在干活：在跑、排队、受阻与刚结束的任务，带执行者、已运行时长与最近一个动作；缺省每 2 秒刷新，q 或 Ctrl-C 退出",
+    "实时看谁在干活：在跑、排队、受阻与刚结束的任务，带执行者、已运行时长与最近一个动作；下面是排期（就绪、依赖链、等待中及在等谁）；缺省每 2 秒刷新，q 或 Ctrl-C 退出",
   options: {
     once: { type: "boolean", default: false },
     interval: { type: "string" },
@@ -397,7 +449,7 @@ export const topCommand: Command = {
       !process.stdin.isTTY;
     const api = await client();
     if (!once) return watch(api, as, seconds, liveTerminal());
-    const snapshot = await api.get<Snapshot>(path(as));
+    const snapshot = await snapshotOf(api, as);
     if (json) {
       printJson(snapshot);
       recordNext("实时看：atrium top");

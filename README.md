@@ -56,8 +56,10 @@ atrium task wait t4 --timeout 600           # 等到离开 running 或超时
 atrium task log t4                          # 执行者日志；--follow 跟到结束，--after 字节偏移续读
 atrium task stop t4                         # 仍在跑时停掉执行者（排队中的移出队列）；已结束的报错并给出 task show
 atrium task tell t4 "接口改用 v2"            # 给在跑的执行者捎话；--as 写作者，缺省 u1
-atrium top --once                           # 谁在干活：在跑、排队、受阻与刚结束的任务
+atrium top --once                           # 谁在干活：在跑、排队、受阻与刚结束的任务，下接排期
 ```
+
+`atrium top` 下半屏是**排期**：就绪的（记账节点、是否 `--auto`、负责人）、依赖链（同一条链按先后缩进，标题给出最长路径）、等待中的（逐项列出在等谁：上游状态、在跑的执行者与已跑时长、上游交付 PR 的合入状态、外部 PR 条件）与因上游失败或取消卡住的；只起归类作用的父任务作分组标题。行数超出折叠并提示 `atrium task plan`，`--json` 带 `plan` 字段。
 
 派活时运行时建 worktree（没有仓库时用任务目录下的 `work/`），把标题、详述（`--brief`）、岗位章程、仓库 `.agents/README.md`、执行者档案正文和通用约束拼成提示词，以白名单环境在独立进程组拉起执行者；服务重启不带走执行者，重启后按 pid 接管或判失败。
 

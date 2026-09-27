@@ -1,5 +1,7 @@
-// Atrium 全景网页（#322 第 4 步）：只读。数据来自与 `atrium map --json` 相同的接口，
-// 订阅 /api/map/stream 的失效通知，变了只重取并重画变化的区域，不整页重载。
+// Atrium 全景网页：只读。数据来自与 `atrium map --json` 相同的接口，
+// 订阅 /api/map/stream 的失效通知，变了只重取并重画，不整页重载。
+// 一块一页：面包屑 → 大标题与介绍 → 页签（组成部分／专员／任务／原则）。
+// 当前块、页签与任务筛选写在地址的 hash 里（#o2/tasks/all），刷新与前进后退都回到原处。
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
@@ -10,347 +12,440 @@ const esc = (value) =>
         c
       ],
   );
-const OPEN_KEY = "atrium-map-open";
+
 const state = {
-  tree: null,
   root: null,
   node: null,
   now: null,
-  selected: null,
-  open: new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || "[]")),
-  byRef: new Map(),
-  parentOf: new Map(),
-  drawn: { tree: "", now: "", detail: "" },
+  /** 看过的块先用旧数据画出来，再换新的，切换时不闪白。 */
+  cache: new Map(),
+  route: { ref: null, tab: "parts", show: "active" },
+  /** 页面的整体状态：ok / missing（链接里的块不存在）/ empty（没有组织树）/ down / expired。 */
+  mode: "loading",
+  missing: null,
+  seq: 0,
+  drawn: { crumbs: "", page: "" },
 };
 
 // ---- 取数据 ----
 
 class Expired extends Error {}
+class Missing extends Error {}
 async function get(path) {
   const response = await fetch(`/api/map${path}`, {
     headers: { accept: "application/json" },
     credentials: "same-origin",
   });
   if (response.status === 401) throw new Expired();
+  if (response.status === 404) throw new Missing();
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
   return body;
 }
 
-function expired() {
-  $("live").dataset.state = "off";
-  $("live").textContent = "登录已失效";
-  document.body.classList.add("expired");
-  $("detail").innerHTML =
-    `<div class="empty"><h1>全景网页的登录已失效</h1><p>在终端运行 <code>atrium map</code>，会重新打开一个登录链接。</p></div>`;
-}
+// ---- 地址 ----
 
-// ---- 时间与人话 ----
+const TAB_IDS = ["parts", "concerns", "tasks", "points"];
+function parseRoute() {
+  const [ref, tab, show] = location.hash.slice(1).split("/");
+  return {
+    ref: /^o[1-9]\d{0,8}$/.test(ref ?? "") ? ref : null,
+    tab: TAB_IDS.includes(tab) ? tab : "parts",
+    show: tab === "tasks" && show === "all" ? "all" : "active",
+  };
+}
+const href = (ref, tab = "parts", show = "active") =>
+  `#${ref}${tab === "parts" ? "" : `/${tab}`}${tab === "tasks" && show === "all" ? "/all" : ""}`;
+
+// ---- 人话 ----
 
 function duration(ms) {
   const m = Math.max(0, Math.round(ms / 60000));
   if (m < 1) return "不到 1 分钟";
   if (m < 60) return `${m} 分钟`;
   const h = Math.floor(m / 60);
-  return m % 60 ? `${h} 小时 ${m % 60} 分` : `${h} 小时`;
+  if (h < 48) return m % 60 ? `${h} 小时 ${m % 60} 分` : `${h} 小时`;
+  return `${Math.floor(h / 24)} 天`;
 }
-const ago = (at) => (at ? `${duration(Date.now() - at)}前` : "");
-const title = (n) => (n.alias && n.alias !== n.name ? n.alias : n.name);
-const subtitle = (n) => (n.alias && n.alias !== n.name ? n.name : "");
-const DOT_LABEL = {
-  running: "有任务在跑",
-  blocked: "有任务卡住",
-  idle: "没有在跑的任务",
-};
-const dot = (kind) =>
-  `<span class="dot dot-${esc(kind)}" role="img" aria-label="${DOT_LABEL[kind] ?? ""}"></span>`;
+const title = (n) => n.alias || n.name;
 const workerName = (w) => (w ? w.split(/[+:]/)[0] : "");
+const who = (by) => String(by ?? "").replace(/^u1\b/, "你");
+const isPathRule = (rule) => /[/*?]|^\./.test(rule);
 
-// ---- 顶部：现在在推进什么 ----
+const ICON = {
+  part: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`,
+  concern: `<svg class="icon icon-concern" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/></svg>`,
+  point: `<svg class="icon icon-point" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>`,
+  go: `<svg class="icon icon-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`,
+};
+const chip = (text, tone) =>
+  `<span class="chip chip-${tone}">${esc(text)}</span>`;
+const cell = (label, body, extra = "") =>
+  `<span class="cell${extra}" role="cell" data-label="${esc(label)}">${body}</span>`;
+const table = (kind, heads, rows, empty) =>
+  `<div class="table table-${kind}" role="table">
+    <div class="row head" role="row">${heads.map((h) => `<span role="columnheader">${esc(h)}</span>`).join("")}</div>
+    ${rows.length ? rows.join("") : `<p class="empty">${esc(empty)}</p>`}
+  </div>`;
 
-function taskLine(t) {
-  const meta = [
-    t.queued ? "排队中" : "",
-    workerName(t.worker),
-    t.started_at && !t.queued
-      ? `跑了 ${duration(Date.now() - t.started_at)}`
+// ---- 任务：状态标签与筛选 ----
+
+const TAG = {
+  doing: ["进行中", "green"],
+  merge: ["等合入", "blue"],
+  blocked: ["卡住", "orange"],
+  queued: ["排队", "gray"],
+  todo: ["待办", "gray"],
+  merged: ["已合入", "gray"],
+  done: ["完成", "gray"],
+  failed: ["失败", "red"],
+  cancelled: ["取消", "gray"],
+};
+const ACTIVE = new Set(["doing", "merge", "blocked", "queued"]);
+const ORDER = Object.keys(TAG);
+function tagOf(t) {
+  if (t.delivery_stage === "merge_queued" || t.delivery_stage === "merging")
+    return "merge";
+  if (t.delivery_stage === "merged" || t.delivery_stage === "online")
+    return "merged";
+  if (t.status === "running") return "doing";
+  if (t.status === "todo") return t.queued ? "queued" : "todo";
+  return TAG[t.status] ? t.status : "done";
+}
+function taskList(n) {
+  const { running, blocked, todo, recent } = n.tasks;
+  return [...running, ...blocked, ...todo, ...recent]
+    .map((t) => ({ ...t, tag: tagOf(t) }))
+    .sort((a, b) => ORDER.indexOf(a.tag) - ORDER.indexOf(b.tag));
+}
+function spent(t) {
+  if (!t.started_at) return "";
+  const end =
+    t.ended_at ?? (t.status === "running" ? Date.now() : t.updated_at);
+  return duration(end - t.started_at);
+}
+
+// ---- 各页签 ----
+
+const liveParts = (n) => n.overview.parts.filter((p) => !p.archived);
+const liveConcerns = (n) => n.concerns.filter((p) => !p.archived);
+const allPoints = (n) => [
+  ...n.points.map((p) => ({ ...p, from: null })),
+  ...n.points_below.flatMap((l) =>
+    l.points.map((p) => ({ ...p, from: { ref: l.node, name: title(l) } })),
+  ),
+];
+
+function partState(p) {
+  const chips = [
+    p.tasks.blocked ? chip(`卡住 ${p.tasks.blocked} 件`, "orange dot") : "",
+    p.tasks.running ? chip(`在做 ${p.tasks.running} 件`, "green dot") : "",
+  ].filter(Boolean);
+  return chips.length
+    ? `<span class="chips">${chips.join("")}</span>`
+    : chip("空闲", "gray dot");
+}
+
+function drawParts(n) {
+  return table(
+    "parts",
+    ["名称", "做什么", "状态", "下面", ""],
+    liveParts(n).map(
+      (p) => `<a class="row link" role="row" href="${esc(href(p.ref))}">
+        ${cell("名称", `${ICON.part}<span>${esc(title(p))}</span>`, " name")}
+        ${cell("做什么", p.what ? esc(p.what) : `<span class="muted">还没写</span>`, " text")}
+        ${cell("状态", partState(p))}
+        ${cell("下面", p.parts ? `${p.parts} 块` : "—", p.parts ? " muted" : " muted none")}
+        ${cell("", ICON.go, " go")}
+      </a>`,
+    ),
+    "这一块没有再往下分。",
+  );
+}
+
+function inviteText(rules) {
+  const words = rules.filter((r) => !isPathRule(r)).slice(0, 4);
+  const paths = rules.filter(isPathRule).slice(0, 3);
+  const parts = [
+    words.length ? `提到${words.map((w) => `「${esc(w)}」`).join("")}` : "",
+    paths.length
+      ? `改到 ${paths.map((p) => `<code>${esc(p)}</code>`).join("、")}`
       : "",
   ].filter(Boolean);
-  const action = t.action
-    ? `<span class="action">${esc(t.action)}${t.log_at ? ` · ${ago(t.log_at)}` : ""}</span>`
-    : t.reason
-      ? `<span class="action">${esc(t.reason)}</span>`
-      : "";
-  return `<li class="task">
-    <div class="task-head"><span class="ref">${esc(t.ref)}</span><span class="task-title">${esc(t.title)}</span></div>
-    <div class="task-meta">${meta.map(esc).join(" · ")}${action ? `${meta.length ? " · " : ""}${action}` : ""}</div>
-  </li>`;
+  return parts.length
+    ? `${parts.join("，或")}时`
+    : `<span class="muted">没写，派活时手动请</span>`;
 }
 
-function drawNow() {
-  const now = state.now;
-  if (!now) return;
-  const total = now.running + now.queued;
-  const html = total
-    ? `<div class="now-head"><h2>现在在推进什么</h2><span class="muted">在跑 ${now.running}${now.queued ? ` · 排队 ${now.queued}` : ""}${now.blocked ? ` · <span class="warn">卡住 ${now.blocked}</span>` : ""}</span></div>
-      <div class="now-groups">${now.groups
-        .map(
-          (g) => `<section class="now-group">
-            <h3>${g.part ? `<a href="#${esc(g.part.ref)}">${esc(title(g.part))}</a>` : "未归属"}</h3>
-            <ul class="tasks">${g.tasks.map((t) => taskLine(t)).join("")}</ul>
-          </section>`,
-        )
-        .join("")}</div>`
-    : `<div class="now-head"><h2>现在在推进什么</h2><span class="muted">没有在跑的任务${now.blocked ? ` · <span class="warn">卡住 ${now.blocked}</span>` : ""}</span></div>`;
-  if (html === state.drawn.now) return;
-  state.drawn.now = html;
-  $("now").innerHTML = html;
+function drawConcerns(n) {
+  return table(
+    "concerns",
+    ["专员", "盯什么", "什么时候请来", "现在", ""],
+    liveConcerns(n).map(
+      (q) => `<a class="row link" role="row" href="${esc(href(q.ref))}">
+        ${cell("专员", `${ICON.concern}<span>${esc(title(q))}</span>`, " name")}
+        ${cell("盯什么", q.what ? esc(q.what) : `<span class="muted">还没写</span>`, " text")}
+        ${cell("什么时候请来", inviteText(q.invite_when ?? []), " note")}
+        ${cell("现在", q.watching ? chip(`在盯 ${q.watching} 件`, "purple") : chip("没被请", "gray"))}
+        ${cell("", ICON.go, " go")}
+      </a>`,
+    ),
+    "这一块还没有专员。",
+  );
 }
 
-// ---- 左：全景树 ----
-
-function index(node, parent) {
-  state.byRef.set(node.ref, node);
-  if (parent) state.parentOf.set(node.ref, parent.ref);
-  for (const child of node.children ?? []) index(child, node);
+function drawTasks(n) {
+  const all = taskList(n);
+  const list =
+    state.route.show === "all" ? all : all.filter((t) => ACTIVE.has(t.tag));
+  return table(
+    "tasks",
+    ["任务", "状态", "谁在做", "用时", "最近在做"],
+    list.map((t) => {
+      const [label, tone] = TAG[t.tag];
+      const worker = workerName(t.worker);
+      const doing = t.action || t.reason || "";
+      return `<div class="row" role="row">
+        ${cell("任务", `<span title="${esc(t.ref)}">${esc(t.title)}</span>`, " name plain")}
+        ${cell("状态", chip(label, tone))}
+        ${cell("谁在做", worker ? chip(worker, "soft") : `<span class="muted">—</span>`, worker ? "" : " none")}
+        ${cell("用时", spent(t) || "—", spent(t) ? " muted" : " muted none")}
+        ${cell("最近在做", doing ? `<span class="clamp" title="${esc(doing)}">${esc(doing)}</span>` : `<span class="muted">—</span>`, doing ? " note" : " note none")}
+      </div>`;
+    }),
+    state.route.show === "all"
+      ? "这一块还没有任务。"
+      : "现在没有进行中的任务。",
+  );
 }
 
-function treeRow(node, level) {
-  const kids = (node.children ?? []).filter((c) => !c.archived);
-  const open =
-    level === 0 || state.open.has(node.ref) || state.selected === node.ref;
-  const selected = state.selected === node.ref;
-  const count = node.tasks.running
-    ? `<span class="count">在跑 ${node.tasks.running}</span>`
-    : node.tasks.blocked
-      ? `<span class="count warn">卡住 ${node.tasks.blocked}</span>`
-      : "";
-  const caret = kids.length
-    ? `<button class="caret" data-toggle="${esc(node.ref)}" aria-label="${open ? "折叠" : "展开"}" aria-expanded="${open}"></button>`
-    : `<span class="caret-space"></span>`;
-  return `<li role="treeitem" aria-expanded="${kids.length ? open : ""}" aria-selected="${selected}">
-    <div class="row${selected ? " selected" : ""}" style="--level:${level}">
-      ${caret}<a href="#${esc(node.ref)}" class="row-link">${dot(node.dot)}<span class="row-name">${esc(title(node))}</span>${count}</a>
-    </div>
-    ${kids.length && open ? `<ul role="group">${kids.map((c) => treeRow(c, level + 1)).join("")}</ul>` : ""}
-  </li>`;
+function drawPoints(n) {
+  return table(
+    "points",
+    ["原则", "为什么", "谁定的", "来自"],
+    allPoints(n).map(
+      (p) => `<div class="row" role="row">
+        ${cell("原则", `${ICON.point}<span>${esc(p.text)}</span>`, " name plain")}
+        ${cell("为什么", esc(p.why), " note")}
+        ${cell("谁定的", chip(who(p.by), "amber"))}
+        ${cell("来自", p.from ? `<a href="${esc(href(p.from.ref))}">${esc(p.from.name)}</a>` : "这一块", " muted")}
+      </div>`,
+    ),
+    "这一块还没写原则。",
+  );
 }
 
-function drawTree() {
-  if (!state.tree) return;
-  const html = treeRow(state.tree, 0);
-  if (html === state.drawn.tree) return;
-  state.drawn.tree = html;
-  $("tree").innerHTML = html;
-}
+/** 页签：加一个页签只加一项。count 显示在名字旁的小圆标里。 */
+const TABS = [
+  {
+    id: "parts",
+    label: "组成部分",
+    count: (n) => liveParts(n).length,
+    draw: drawParts,
+  },
+  {
+    id: "concerns",
+    label: "专员",
+    count: (n) => liveConcerns(n).length,
+    draw: drawConcerns,
+  },
+  {
+    id: "tasks",
+    label: "任务",
+    count: (n) => taskList(n).filter((t) => ACTIVE.has(t.tag)).length,
+    draw: drawTasks,
+  },
+  {
+    id: "points",
+    label: "原则",
+    count: (n) => allPoints(n).length,
+    draw: drawPoints,
+  },
+];
 
-$("tree").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-toggle]");
-  if (!button) return;
-  event.preventDefault();
-  const ref = button.dataset.toggle;
-  if (state.open.has(ref)) state.open.delete(ref);
-  else state.open.add(ref);
-  localStorage.setItem(OPEN_KEY, JSON.stringify([...state.open]));
-  drawTree();
-});
+// ---- 画 ----
 
-// ---- 右：选中的一块 ----
-
-function section(label, body, extra = "") {
-  return body
-    ? `<section class="block${extra}"><h2>${esc(label)}</h2>${body}</section>`
-    : "";
-}
-const unwritten = (what) => `<p class="unwritten">${esc(what)}还没写</p>`;
-
-function checkLink(check, repoUrl) {
-  if (!check) return "";
-  const file = /^(tests\/[\w./-]+\.ts)/.exec(check);
-  const text = `<code>${esc(check)}</code>`;
-  return file && repoUrl
-    ? `<a href="${esc(`${repoUrl}/blob/main/${file[1]}`)}" target="_blank" rel="noreferrer">${text}</a>`
-    : text;
-}
-
-function point(p, repoUrl) {
-  return `<li class="point">
-    <p class="point-text">${esc(p.text)}</p>
-    <p class="point-meta">为什么：${esc(p.why)}<span class="sep">·</span>${esc(p.by)} 定${p.check ? `<span class="sep">·</span>检查 ${checkLink(p.check, repoUrl)}` : ""}</p>
-  </li>`;
-}
-
-const STAGE = {
-  planned: "规划中",
-  active: "进行中",
-  achieved: "达成",
-  blocked: "受阻",
-  dropped: "放弃",
-};
-
-function partRow(p) {
-  const tree = state.byRef.get(p.ref);
-  const counts = [
-    p.tasks.running ? `在跑 ${p.tasks.running}` : "",
-    p.tasks.blocked ? `<span class="warn">卡住 ${p.tasks.blocked}</span>` : "",
-    p.tasks.todo ? `待办 ${p.tasks.todo}` : "",
-  ].filter(Boolean);
-  return `<li><a class="part" href="#${esc(p.ref)}">
-    <span class="part-head">${dot(tree?.dot ?? (p.tasks.running ? "running" : "idle"))}<span class="part-name">${esc(title(p))}</span>${p.analogy ? `<span class="analogy">${esc(p.analogy)}</span>` : ""}<span class="part-count">${counts.join(" · ")}</span></span>
-    ${tree?.what ? `<span class="part-what">${esc(tree.what)}</span>` : ""}
-  </a></li>`;
-}
-
-const prList = (prs) =>
-  prs.length
-    ? `<ul class="plain links">${prs.map((p) => `<li><a href="${esc(p.url)}" target="_blank" rel="noreferrer">PR #${esc(p.url.split("/").pop())}</a> <span class="muted">${esc(p.title)}（${esc(p.task)}）</span></li>`).join("")}</ul>`
-    : "";
-
-function drawDetail() {
-  const n = state.node;
-  if (!n) return;
-  const o = n.overview;
-  const crumbs = n.chain
+function drawCrumbs() {
+  const n = state.mode === "ok" ? state.node : null;
+  const chain = n
+    ? n.chain
+    : state.root
+      ? [
+          {
+            ref: state.root.ref,
+            name: state.root.name,
+            alias: state.root.alias,
+          },
+        ]
+      : [];
+  const html = chain
     .map((c, i) =>
-      i === n.chain.length - 1
-        ? `<span aria-current="page">${esc(title(c))}</span>`
-        : `<a href="#${esc(c.ref)}">${esc(title(c))}</a>`,
+      i === chain.length - 1 && n
+        ? `<span class="crumb current" aria-current="page">${esc(title(c))}</span>`
+        : `<a class="crumb" href="${esc(href(c.ref))}">${esc(title(c))}</a>`,
     )
-    .join(`<span class="sep">/</span>`);
-  const parts = o.parts.filter((p) => !p.archived);
-  const ownPoints = n.points;
-  const upperPoints = n.points_chain.flatMap((l) =>
-    l.points.map((p) => ({ ...p, from: l.name })),
-  );
-  const tasks = n.tasks;
-  const live = [...tasks.running, ...tasks.blocked];
-  const html = `
-    <nav class="crumbs" aria-label="位置">${crumbs}</nav>
-    <header class="head">
-      <h1>${esc(title(n))}${subtitle(n) ? `<span class="aka">${esc(subtitle(n))}</span>` : ""}</h1>
-      ${n.analogy ? `<p class="head-analogy">${esc(n.analogy)}</p>` : ""}
-      <p class="lead">${o.what ? esc(o.what) : `<span class="unwritten">是什么还没写</span>`}</p>
+    .join(`<span class="sep" aria-hidden="true">/</span>`);
+  if (html === state.drawn.crumbs) return;
+  state.drawn.crumbs = html;
+  $("crumbs").innerHTML = html;
+}
+
+function drawLive() {
+  const live = $("live");
+  if (state.mode === "expired") {
+    live.dataset.state = "off";
+    live.textContent = "登录已失效";
+  } else if (live.dataset.state === "down") {
+    live.textContent = "已断开，重连中";
+  } else if (state.now) {
+    live.dataset.state = state.now.running ? "on" : "idle";
+    live.textContent = state.now.running
+      ? `在做 ${state.now.running} 件`
+      : "都停着";
+  }
+}
+
+const notice = (head, body) =>
+  `<section class="notice"><h1>${head}</h1><p>${body}</p></section>`;
+
+function pageHtml() {
+  const rootLink = state.root
+    ? `<a href="${esc(href(state.root.ref))}">回到最上层</a>`
+    : "";
+  if (state.mode === "expired")
+    return notice(
+      "全景网页的登录已失效",
+      "在终端运行 <code>atrium map</code>，会重新打开一个登录链接。",
+    );
+  if (state.mode === "empty")
+    return notice(
+      "还没有组织树",
+      "在终端运行 <code>atrium org import --repo 仓库</code> 建一份。",
+    );
+  if (state.mode === "missing")
+    return notice(
+      "找不到这一块",
+      `链接里的 <code>${esc(state.missing)}</code> 不存在，可能已经删掉了。${rootLink}`,
+    );
+  if (state.mode === "down" || !state.node)
+    return notice(
+      state.mode === "down" ? "暂时取不到数据" : "正在读取…",
+      state.mode === "down" ? "服务可能在重启，页面会自己重试。" : "",
+    );
+  const n = state.node;
+  const { tab, show } = state.route;
+  const intro = (n.overview.what || "")
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const tabs = TABS.map(
+    (
+      t,
+    ) => `<a class="tab" role="tab" href="${esc(href(n.ref, t.id))}" aria-selected="${t.id === tab}">
+      <span>${esc(t.label)}</span><span class="badge">${t.count(n)}</span>
+    </a>`,
+  ).join("");
+  const filters =
+    tab === "tasks"
+      ? `<div class="filters" aria-label="筛选">${[
+          ["active", "进行中"],
+          ["all", "全部"],
+        ]
+          .map(
+            ([id, label]) =>
+              `<a class="filter" href="${esc(href(n.ref, "tasks", id))}" aria-current="${id === show}">${label}</a>`,
+          )
+          .join("")}</div>`
+      : "";
+  const current = TABS.find((t) => t.id === tab) ?? TABS[0];
+  return `<header class="intro">
+      <h1>${esc(title(n))}</h1>
+      ${intro.length ? intro.map((p) => `<p>${esc(p)}</p>`).join("") : `<p class="muted">这一块还没写是做什么的。</p>`}
     </header>
-    ${section(
-      "能用它做什么",
-      o.uses.length
-        ? `<ul class="bullets">${o.uses.map((u) => `<li>${esc(u)}</li>`).join("")}</ul>`
-        : "",
-    )}
-    ${section(
-      "一件事怎么走完",
-      o.flow.length
-        ? `<ol class="flow">${o.flow.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>`
-        : "",
-    )}
-    ${section(
-      "由哪几部分组成",
-      parts.length
-        ? `<ul class="parts">${parts.map(partRow).join("")}</ul>`
-        : "",
-    )}
-    ${section(
-      "要点",
-      ownPoints.length || upperPoints.length
-        ? `${ownPoints.length ? `<ul class="points">${ownPoints.map((p) => point(p, n.detail.repo_url)).join("")}</ul>` : `<p class="unwritten">这一块自己还没有要点</p>`}
-           ${upperPoints.length ? `<details class="inherit"><summary>上级的要点 ${upperPoints.length} 条，也要守住</summary><ul class="points">${upperPoints.map((p) => point({ ...p, by: `${p.by}（${p.from}）` }, n.detail.repo_url)).join("")}</ul></details>` : ""}`
-        : "",
-    )}
-    ${section(
-      "现在做到哪",
-      o.now || o.next || o.stages.length
-        ? `${o.now ? `<p>${esc(o.now)}</p>` : unwritten("现状")}
-           ${o.next ? `<p class="next"><span class="label">接下来</span>${esc(o.next)}</p>` : ""}
-           ${o.stages.length ? `<ul class="stages">${o.stages.map((s) => `<li class="stage stage-${esc(s.status)}"><span class="chip">${STAGE[s.status] ?? esc(s.status)}</span><span>${esc(s.result)}</span>${s.due ? `<span class="muted">${esc(s.due)}</span>` : ""}</li>`).join("")}</ul>` : ""}`
-        : "",
-    )}
-    ${section(
-      "正在推进",
-      live.length || tasks.todo.length
-        ? `${live.length ? `<ul class="tasks">${live.map((t) => taskLine(t)).join("")}</ul>` : `<p class="muted">现在没有在跑的任务</p>`}
-           ${tasks.todo.length ? `<details class="todo"><summary>待办 ${tasks.todo.length}${n.counts.open - n.counts.running - n.counts.blocked > tasks.todo.length ? `（共 ${n.counts.open - n.counts.running - n.counts.blocked}）` : ""}</summary><ul class="plain">${tasks.todo.map((t) => `<li><span class="ref">${esc(t.ref)}</span> ${esc(t.title)}</li>`).join("")}</ul></details>` : ""}`
-        : "",
-    )}
-    ${section(
-      "请了哪些专员",
-      n.concerns.length
-        ? `<ul class="parts">${n.concerns.map(partRow).join("")}</ul>`
-        : "",
-    )}
-    ${section(
-      "PR 与 issue",
-      n.links.prs.length || n.links.issues.length
-        ? `${n.links.issues.length ? `<p class="issues">${n.links.issues.map((i) => `<a href="${esc(i.url)}" target="_blank" rel="noreferrer">issue #${esc(i.number)}</a>`).join("")}</p>` : ""}${prList(n.links.prs.slice(0, 4))}${n.links.prs.length > 4 ? `<details class="more"><summary>更早的 PR ${n.links.prs.length - 4} 个</summary>${prList(n.links.prs.slice(4))}</details>` : ""}`
-        : "",
-    )}
-    <details class="block tech">
-      <summary>技术细节</summary>
-      <dl>
-        <dt>短号与路径</dt><dd><code>${esc(n.ref)}</code> <code>${esc(n.path)}</code></dd>
-        <dt>负责</dt><dd>${esc(n.leader ?? "无")}</dd>
-        ${n.detail.repos.length ? `<dt>仓库</dt><dd>${n.detail.repos.map((r) => `<code>${esc(r)}</code>`).join(" ")}</dd>` : ""}
-        ${n.detail.rev ? `<dt>章程</dt><dd>${esc(n.detail.rev)} · ${esc(new Date(n.detail.updated_at).toLocaleString("zh-CN"))}</dd>` : ""}
-      </dl>
-      ${n.detail.body.trim() ? `<pre class="body">${esc(n.detail.body.trim())}</pre>` : ""}
-      <p class="muted">改这一块：<code>atrium map edit ${esc(n.ref)} --what …</code></p>
-    </details>`;
-  if (html === state.drawn.detail) return;
-  // 保留技术细节等折叠块的展开状态。
-  const opened = [...$("detail").querySelectorAll("details[open]")].map(
-    (d) => d.className,
-  );
-  state.drawn.detail = html;
-  $("detail").innerHTML = html;
-  for (const d of $("detail").querySelectorAll("details"))
-    if (opened.includes(d.className)) d.open = true;
-  document.title = `${title(n)} · Atrium 全景`;
+    <section class="view">
+      <div class="tabbar"><div class="tabs" role="tablist" aria-label="视图">${tabs}</div>${filters}</div>
+      <div role="tabpanel">${current.draw(n)}</div>
+    </section>`;
+}
+
+function draw() {
+  drawCrumbs();
+  drawLive();
+  const html = pageHtml();
+  if (html !== state.drawn.page) {
+    state.drawn.page = html;
+    $("page").innerHTML = html;
+  }
+  document.title =
+    state.mode === "ok" && state.node
+      ? `${title(state.node)} · Atrium 全景`
+      : "Atrium 全景";
 }
 
 // ---- 路由与刷新 ----
 
-function selectedRef() {
-  const hash = location.hash.slice(1);
-  return /^o\d+$/.test(hash) ? hash : state.root;
+function fail(error) {
+  if (error instanceof Expired) {
+    state.mode = "expired";
+    document.body.classList.add("expired");
+  } else {
+    $("live").dataset.state = "down";
+    if (!state.node) state.mode = "down";
+  }
+  draw();
 }
 
-async function loadNode(move = false) {
-  const ref = selectedRef();
-  if (!ref) return;
-  const changed = ref !== state.selected;
-  state.selected = ref;
-  // 展开到选中的那一块。
-  for (let p = state.parentOf.get(ref); p; p = state.parentOf.get(p))
-    state.open.add(p);
-  drawTree();
-  state.node = await get(`/nodes/${encodeURIComponent(ref)}`);
-  drawDetail();
+/** 取当前地址对应的块；move 为 true 表示换了块（滚回顶部、焦点给正文）。 */
+async function load(move = false) {
+  const seq = ++state.seq;
+  const route = parseRoute();
+  const changed = route.ref !== state.route.ref;
+  state.route = route;
+  if (!state.root) {
+    const { root, tree } = await get("/tree?depth=0");
+    state.root = tree
+      ? { ref: root, name: tree.name, alias: tree.alias }
+      : null;
+  }
+  if (!state.root) {
+    state.mode = "empty";
+    return draw();
+  }
+  const ref = route.ref ?? state.root.ref;
+  // 切到看过的块：先用上次的数据画，不留白。
+  if (changed && state.cache.has(ref)) {
+    state.node = state.cache.get(ref);
+    state.mode = "ok";
+    draw();
+  } else if (!changed && state.node?.ref === ref) draw();
+  try {
+    const node = await get(`/nodes/${encodeURIComponent(ref)}`);
+    if (seq !== state.seq) return;
+    state.cache.set(ref, node);
+    state.node = node;
+    state.mode = "ok";
+  } catch (error) {
+    if (seq !== state.seq) return;
+    if (!(error instanceof Missing)) throw error;
+    state.mode = "missing";
+    state.missing = ref;
+    state.node = null;
+  }
+  draw();
   if (move && changed) {
     window.scrollTo({ top: 0 });
-    $("detail").focus({ preventScroll: true });
-    if (matchMedia("(max-width: 760px)").matches) $("side-toggle").open = false;
+    $("page").focus({ preventScroll: true });
   }
 }
 
 async function refresh() {
+  if (state.mode === "expired") return;
   try {
-    const [tree, now] = await Promise.all([get("/tree"), get("/now")]);
-    state.tree = tree.tree;
-    state.root = tree.root;
-    state.byRef.clear();
-    state.parentOf.clear();
-    if (tree.tree) index(tree.tree, null);
-    state.now = now;
-    drawNow();
-    if (!tree.tree) {
-      $("detail").innerHTML =
-        `<div class="empty"><h1>还没有组织树</h1><p>在终端运行 <code>atrium org import --repo 仓库</code>。</p></div>`;
-      return;
-    }
-    await loadNode();
+    state.now = await get("/now");
+    if ($("live").dataset.state === "down") $("live").dataset.state = "on";
+    await load();
   } catch (error) {
-    if (error instanceof Expired) return expired();
-    $("live").dataset.state = "off";
-    $("live").textContent = "取数据失败，稍后重试";
+    fail(error);
   }
 }
 
@@ -358,35 +453,28 @@ function subscribe() {
   const source = new EventSource("/api/map/stream");
   source.addEventListener("hello", () => {
     $("live").dataset.state = "on";
-    $("live").textContent = "实时";
     refresh();
   });
   source.addEventListener("changed", () => refresh());
   source.onerror = async () => {
-    $("live").dataset.state = "off";
-    $("live").textContent = "已断开，重连中";
+    $("live").dataset.state = "down";
+    drawLive();
     // 会话失效时 EventSource 会一直重试：先问一次，失效就停下。
     try {
       await get("/now");
     } catch (error) {
       if (error instanceof Expired) {
         source.close();
-        expired();
+        fail(error);
       }
     }
   };
 }
 
-window.addEventListener("hashchange", () =>
-  loadNode(true).catch((error) => {
-    if (error instanceof Expired) expired();
-  }),
-);
-if (matchMedia("(max-width: 760px)").matches) $("side-toggle").open = false;
+window.addEventListener("hashchange", () => load(true).catch(fail));
 await refresh();
-subscribe();
-// 执行者的最近动作与「跑了多久」不改账本，隔一会儿重取一次。
+if (state.mode !== "expired") subscribe();
+// 执行者的最近动作与「用时」不改账本，隔一会儿重取一次。
 setInterval(() => {
-  if (!document.hidden && !document.body.classList.contains("expired"))
-    refresh();
+  if (!document.hidden) refresh();
 }, 30000);

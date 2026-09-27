@@ -5,23 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
     <title>Atrium 全景</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/map/style.css" />
     <script type="module" src="/map/app.js"></script>
   </head>
   <body>
     <header class="bar">
-      <a class="brand" href="#">Atrium 全景</a>
+      <nav class="crumbs" id="crumbs" aria-label="位置"></nav>
       <span class="live" id="live" data-state="connecting">连接中</span>
     </header>
-    <section class="now" id="now" aria-label="现在在推进什么"></section>
-    <div class="shell">
-      <nav class="side" aria-label="全景树">
-        <details class="side-toggle" id="side-toggle" open>
-          <summary>全部分块</summary>
-          <ul class="tree" id="tree" role="tree"></ul>
-        </details>
-      </nav>
-      <main class="detail" id="detail" tabindex="-1"></main>
-    </div>
+    <main class="page" id="page" tabindex="-1"></main>
   </body>
 </html>

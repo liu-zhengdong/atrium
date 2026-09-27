@@ -163,10 +163,13 @@ export function registerMapRoutes(
 
   // 失效通知（Server-Sent Events）：数据指纹变了就发 changed，网页据此局部重取；空闲时定期发注释保活。
   const streams = new Set<() => void>();
+  let closing = false;
   app.addHook("preClose", async () => {
+    closing = true;
     for (const close of [...streams]) close();
   });
   app.get("/api/map/stream", (request, reply: FastifyReply) => {
+    if (closing) return reply.code(503).send({ restarting: true });
     reply.hijack();
     const res = reply.raw;
     res.writeHead(200, {

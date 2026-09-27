@@ -345,6 +345,9 @@ export class TaskRunner {
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
   async close() {
     this.closed = true;
+    // 先唤醒 HTTP 长轮询及内部事件消费者；后台工作可能仍在等事件。
+    this.inbox.close();
+    this.waits.close();
     const mergeClosing = this.merge.close();
     this.review.close();
     this.online.close();
@@ -352,8 +355,6 @@ export class TaskRunner {
     await Promise.allSettled([...this.background]);
     // 与服务退出时一样关掉即时捎话的写端：执行者处理完本轮后自己退出，重启后按 pid 接管。
     for (const active of this.x.active.values()) void active.live?.finish();
-    this.inbox.close();
-    this.waits.close();
     await mergeClosing;
   }
 

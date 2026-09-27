@@ -419,13 +419,32 @@ test("备忘：秘书 memo edit 后 memo show 可见；leader edit --memo 与 me
     "在等 t97 上线，先看合入队列",
   );
 
-  // 网页详情页：秘书与 leader 各一页，含已推翻的；没登记的 404。
+  // 网页详情页：秘书页与负责人页（含已推翻的决定）；没登记的 404。
+  const old = await x.ok("POST", "/api/decisions?as=a1", {
+    text: "旧做法",
+    why: "当时够用",
+  });
+  await x.ok("POST", "/api/decisions?as=a1", {
+    text: "新做法",
+    why: "旧的不够",
+    supersedes: old.ref,
+  });
   const page = await x.ok("GET", "/api/map/leaders/a1");
   assert.equal(page.kind, "leader");
   assert.equal(page.memo, "memo edit 写的");
-  assert.equal(
-    (await x.ok("GET", "/api/map/leaders/secretary")).kind,
-    "secretary",
+  assert.equal(typeof page.memo_updated_at, "number");
+  assert.deepEqual(
+    page.decisions.map((d: { text: string }) => d.text).sort(),
+    ["新做法", "旧做法"].sort(),
+  );
+  assert.ok(Array.isArray(page.events));
+  const secretary = await x.ok("GET", "/api/map/leaders/secretary");
+  assert.equal(secretary.kind, "secretary");
+  assert.equal(secretary.memo, "在等 t97 上线，先看合入队列");
+  assert.ok(
+    secretary.decisions.every(
+      (d: { owner: string }) => d.owner === "secretary",
+    ),
   );
   assert.equal((await x.call("GET", "/api/map/leaders/a9")).status, 404);
 });

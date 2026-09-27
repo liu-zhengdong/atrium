@@ -706,7 +706,7 @@ function drawDecisions({ leader: l }) {
       return `<div class="row${d.superseded_by ? " gone" : ""}" role="row">
         ${cell("日期", `${esc(d.date.slice(5))}<span class="task-ref">${esc(d.ref)}</span>`, " muted date")}
         ${cell("决定与原因", `<span class="decision">${esc(d.text)}${fate ? ` ${fate}` : ""}</span><span class="why">${esc(d.why)}</span>`, " body")}
-        ${cell("谁定的", chip(who(d.by), "amber"))}
+        ${cell("谁定的", chip(d.by === l.ref && !isSecretary(l) ? l.name : who(d.by), "amber"))}
         ${cell("关联", links || none, links ? "" : " none")}
       </div>`;
     }),

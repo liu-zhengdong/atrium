@@ -11,11 +11,13 @@ const counts = (t: {
   todo: number;
   running: number;
   blocked: number;
+  reviewing?: number;
   merge_queued?: number;
   merging?: number;
 }) =>
   [
     t.running ? `在做 ${t.running}` : "",
+    t.reviewing ? `审阅中 ${t.reviewing}` : "",
     t.merge_queued ? `排队合入 ${t.merge_queued}` : "",
     t.merging ? `合入中 ${t.merging}` : "",
     t.blocked ? `卡住 ${t.blocked}` : "",

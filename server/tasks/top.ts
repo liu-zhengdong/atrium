@@ -56,7 +56,7 @@ export function selectRows(
     db,
     `SELECT * FROM tasks
       WHERE status IN ('running','blocked')
-         OR delivery_stage IN ('merge_queued','merging')
+         OR delivery_stage IN ('reviewing','merge_queued','merging')
          OR id IN (SELECT task_id FROM task_queue)
          OR (status IN (${FINISHED_STATUSES.map(() => "?").join(",")})
              AND updated_at >= ?)
@@ -73,7 +73,7 @@ export function sortRows(rows: TopRow[]): TopRow[] {
   const group = (row: TopRow) =>
     row.queued_at !== null
       ? 1
-      : row.delivery_stage === "merging"
+      : row.delivery_stage === "merging" || row.delivery_stage === "reviewing"
         ? 0
         : row.status === "running"
           ? 0
@@ -199,6 +199,7 @@ export function topRows(
 export type TopCounts = {
   running: number;
   queued: number;
+  reviewing?: number;
   merge_queued?: number;
   merging?: number;
   merged?: number;
@@ -222,6 +223,8 @@ export function countRows(rows: TopRow[]): TopCounts {
   };
   for (const row of rows)
     if (row.queued_at !== null) counts.queued++;
+    else if (row.delivery_stage === "reviewing")
+      counts.reviewing = (counts.reviewing ?? 0) + 1;
     else if (row.delivery_stage === "merge_queued")
       counts.merge_queued = (counts.merge_queued ?? 0) + 1;
     else if (row.delivery_stage === "merging")

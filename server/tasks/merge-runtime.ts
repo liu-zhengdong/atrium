@@ -419,7 +419,8 @@ export class MergeQueue {
     this.options.publish(task.id, "merged", { pr_url: task.pr_url });
   }
 
-  private async handBack(task: Task, reason: string) {
+  /** 交回原执行者在原分支续做；超过次数转卡住。审阅打回也走这里。 */
+  async handBack(task: Task, reason: string) {
     if (this.closed) return;
     const safeReason = redact(reason);
     const decision = mergeFailure(task.merge_returns, safeReason);

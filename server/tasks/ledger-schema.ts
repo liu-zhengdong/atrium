@@ -72,10 +72,16 @@ export function ensureTaskTables(db: DatabaseSync) {
     );
   if (!columns.some((column) => column.name === "merge_queued_at"))
     db.exec("ALTER TABLE tasks ADD COLUMN merge_queued_at INTEGER");
+  // 审阅关卡（#325）：这一轮审阅派出的审阅任务；每次进审阅重置。
+  if (!columns.some((column) => column.name === "review_task"))
+    db.exec("ALTER TABLE tasks ADD COLUMN review_task INTEGER");
   db.exec(
     "CREATE INDEX IF NOT EXISTS tasks_delivery_stage ON tasks(delivery_stage,id)",
   );
   db.exec("CREATE INDEX IF NOT EXISTS tasks_part ON tasks(part_id,status)");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS tasks_review_task ON tasks(review_task) WHERE review_task IS NOT NULL",
+  );
   db.exec(
     "CREATE INDEX IF NOT EXISTS tasks_node ON tasks(node_id,status); CREATE INDEX IF NOT EXISTS tasks_origin_node ON tasks(origin_node_id,status)",
   );

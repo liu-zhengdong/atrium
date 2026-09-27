@@ -26,15 +26,17 @@ const displayStatus = (task: Task) =>
       ? "处理中"
       : task.status === "blocked"
         ? "卡住"
-        : task.delivery_stage === "merge_queued"
-          ? "排队合入"
-          : task.delivery_stage === "merging"
-            ? "合入中"
-            : task.delivery_stage === "merged"
-              ? "已合入"
-              : task.delivery_stage === "online"
-                ? "已上线"
-                : task.status;
+        : task.delivery_stage === "reviewing"
+          ? "审阅中"
+          : task.delivery_stage === "merge_queued"
+            ? "排队合入"
+            : task.delivery_stage === "merging"
+              ? "合入中"
+              : task.delivery_stage === "merged"
+                ? "已合入"
+                : task.delivery_stage === "online"
+                  ? "已上线"
+                  : task.status;
 /** 排队中的任务说清在等什么。 */
 const queueLine = (task: Task) =>
   task.queued_reason ? `  排队原因：${task.queued_reason}` : null;
@@ -323,6 +325,7 @@ const show: Command = {
         ["标题", task.title],
         ["状态", displayStatus(task)],
         ["合入交回次数", task.merge_returns || null],
+        ["审阅任务", task.review_task ? `t${task.review_task}` : null],
         ["排队原因", task.queued_reason ?? null],
         ["最新备注", task.note],
         ["备注作者", task.note_by],

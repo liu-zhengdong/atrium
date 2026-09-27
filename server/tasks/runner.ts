@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { recentAction } from "./action.ts";
 import { taskDir } from "./active.ts";
-import { ADAPTERS, isTool, type Tool } from "./adapters/index.ts";
+import { ADAPTERS, isTool, TOOLS, type Tool } from "./adapters/index.ts";
 import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
 import { EventInbox } from "./events.ts";
 import { Executors, type Chosen } from "./executors.ts";
@@ -20,7 +20,7 @@ import {
 import { readLogChunk, readLogTail } from "./log-view.ts";
 import { admit, placement, runRequest } from "./plan.ts";
 import type { PaceEntry } from "./prepare.ts";
-import { DEFAULT_WORKERS_DIR } from "./profiles.ts";
+import { DEFAULT_WORKERS_DIR, type ResolvedWorker } from "./profiles.ts";
 import { dequeue, enqueue, ensureQueueTable, queued } from "./queue.ts";
 import { clock } from "./quota-holds.ts";
 import { QuotaGuard } from "./quota-runtime.ts";
@@ -43,6 +43,8 @@ import { MergeQueue } from "./merge-runtime.ts";
 import { settleReviews } from "./concern-runtime.ts";
 import { awaitingReview } from "./concerns.ts";
 import { WorktreeCleanup } from "./worktree-cleanup.ts";
+import { ReviewGate, taskRisk } from "./review-runtime.ts";
+import { reviewerRefusal } from "./review.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -81,6 +83,7 @@ export class TaskRunner {
   private readonly disk: DiskBudget;
   private readonly cleanup: WorktreeCleanup;
   private readonly merge: MergeQueue;
+  private readonly review: ReviewGate;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly exec: Exec;
   private readonly launchOptions: LaunchOptions;
@@ -143,10 +146,10 @@ export class TaskRunner {
       disk: this.disk,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
-      onAccepted: (id) => this.enqueueMerge(id),
+      onAccepted: (id) => this.review.admit(id),
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
-        settle: () => this.settleReviews(),
+        settle: () => void this.settleReviews(),
       },
     });
     this.merge = new MergeQueue(db, {
@@ -161,22 +164,25 @@ export class TaskRunner {
         this.x.publish(id, kind, detail, actor),
       returned: async (task) => {
         if (this.closed || !task.worker) return;
-        const start = this.db
-          .prepare(
-            "SELECT detail FROM task_events WHERE task_id=? AND kind='start' ORDER BY id DESC LIMIT 1",
-          )
-          .get(task.id) as { detail: string | null } | undefined;
-        let risk = "low";
-        try {
-          const detail = JSON.parse(start?.detail ?? "{}") as {
-            detail?: { risk?: string };
-          };
-          risk = detail.detail?.risk ?? risk;
-        } catch {
-          /* 旧事件使用低风险缺省值。 */
-        }
-        await this.run(task.ref, { worker: task.worker, risk });
+        await this.run(task.ref, {
+          worker: task.worker,
+          risk: taskRisk(this.db, task.id),
+        });
       },
+    });
+    this.review = new ReviewGate(db, {
+      data: options.data,
+      workersDir: this.launchOptions.workersDir,
+      run: this.exec,
+      pickReviewer: (original) => this.pickReviewer(original),
+      launch: (ref, worker) => this.run(ref, { worker, risk: "low" }),
+      inFlight: (id) => this.pending(id, getTask(this.db, id)),
+      stopTask: (ref, by) => void this.stop(ref, by),
+      enqueue: (id) => this.merge.enqueue(id),
+      handBack: (task, reason) => this.merge.handBack(task, reason),
+      changed: (id) => this.waits.changed(id),
+      publish: (id, kind, detail, actor) =>
+        this.x.publish(id, kind, detail, actor),
     });
     this.scheduler = new Scheduler(
       db,
@@ -213,7 +219,8 @@ export class TaskRunner {
       if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();
-      if (!this.closed && this.recovered) this.settleReviews();
+      if (!this.closed && this.recovered) await this.settleReviews();
+      if (!this.closed && this.recovered) this.review.kick();
       if (!this.closed && this.recovered) this.merge.kick();
     });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
@@ -221,6 +228,7 @@ export class TaskRunner {
       .then(async () => {
         this.recovered = true;
         if (!this.closed) await this.scheduler.tick();
+        if (!this.closed) this.review.kick();
         if (!this.closed) this.merge.kick();
       })
       .catch((error) => console.error("任务运行时自愈失败：", error));
@@ -230,6 +238,7 @@ export class TaskRunner {
   close() {
     this.closed = true;
     this.merge.close();
+    this.review.close();
     for (const timer of this.timers) clearInterval(timer);
     // 与服务退出时一样关掉即时捎话的写端：执行者处理完本轮后自己退出，重启后按 pid 接管。
     for (const active of this.x.active.values()) void active.live?.finish();
@@ -408,12 +417,51 @@ export class TaskRunner {
           ...(outcome.accepted ? { accepted: true } : {}),
         });
         if (outcome.accepted && outcome.task.deliver === "pr")
-          this.merge.enqueue(outcome.task.id);
+          await this.review.admit(outcome.task.id);
         this.waits.changed(outcome.task.id);
       }
     } finally {
       this.polling = false;
     }
+  }
+
+  /** 审阅者：自动挑人，跳过原执行者的工具、同模型与 trust 不足 medium 的，直到挑到或无人可挑。 */
+  private async pickReviewer(original: ResolvedWorker | undefined) {
+    const exclude = new Set<Tool>(original ? [original.tool] : []);
+    const refusals: string[] = [];
+    while (exclude.size <= TOOLS.length) {
+      let choice: Choice;
+      try {
+        choice = await chooseWorker(
+          { risk: "low" },
+          this.launchOptions,
+          this.quota.held(),
+          { exclude },
+        );
+      } catch (error) {
+        // 排除过的工具在挑人函数里按「临时错误换人」措辞，不照抄，免得误导。
+        refusals.push(
+          refusals.length
+            ? "其余执行者都不可用"
+            : error instanceof Error
+              ? error.message
+              : String(error),
+        );
+        break;
+      }
+      const refusal = reviewerRefusal(
+        { tool: original?.tool ?? "", model: original?.cliModel },
+        {
+          tool: choice.worker.tool,
+          model: choice.worker.cliModel,
+          trust: choice.worker.profile.rules.trust,
+        },
+      );
+      if (!refusal) return choice.worker.id;
+      refusals.push(refusal);
+      exclude.add(choice.worker.tool);
+    }
+    throw new Error(refusals.join("；"));
   }
 
   // ---- 停止、日志、等待 ----
@@ -422,7 +470,7 @@ export class TaskRunner {
   stop(reference: unknown, by?: string) {
     const id = parseTaskRef(reference);
     const task = getTask(this.db, id);
-    const mergeStop = this.merge.stop(id, by);
+    const mergeStop = this.review.stop(id, by) ?? this.merge.stop(id, by);
     if (mergeStop)
       return { task: getTask(this.db, id), stopping: mergeStop.stopping };
     if (dequeue(this.db, id)) {
@@ -471,7 +519,7 @@ export class TaskRunner {
   }
 
   /** 专员关卡补判（#322）：审查任务不再跑后记结论，父任务全部出结论时补判通过或留在受阻并投递。 */
-  settleReviews() {
+  async settleReviews() {
     if (this.closed) return;
     const busy = (id: number) =>
       this.x.active.has(id) ||
@@ -480,15 +528,16 @@ export class TaskRunner {
       !!queued(this.db, id);
     for (const resolution of settleReviews(this.db, busy)) {
       const { parent, outcome, concerns } = resolution;
-      // 专员关卡是最后一道关：通过后再进合入队列。
-      const merging = resolution.accepted && this.enqueueMerge(parent);
-      const kind = merging
-        ? "merge_queued"
+      // 专员关卡通过后再按风险去审阅或合入队列。
+      const admitted = resolution.accepted && (await this.review.admit(parent));
+      const kind = admitted
+        ? admitted.kind
         : resolution.accepted
           ? "done"
           : "blocked";
       this.x.publish(parent, kind, {
-        reason: outcome.reason,
+        ...(admitted ? admitted.detail : {}),
+        reason: (admitted && admitted.detail?.reason) || outcome.reason,
         concerns,
         ...(outcome.kind === "vetoed" ? { vetoed: true } : {}),
         ...(resolution.accepted
@@ -499,17 +548,10 @@ export class TaskRunner {
     }
   }
 
-  /** 验收通过的 PR 任务进合入队列；返回是否进了队列。 */
-  private enqueueMerge(id: number) {
-    const task = getTask(this.db, id);
-    if (task.deliver !== "pr" || !task.pr_url || !task.repo) return false;
-    this.merge.enqueue(id);
-    return true;
-  }
-
   private pending(id: number, task: Task) {
     return (
       task.status === "running" ||
+      task.delivery_stage === "reviewing" ||
       task.delivery_stage === "merge_queued" ||
       task.delivery_stage === "merging" ||
       this.merge.isReturning(id) ||

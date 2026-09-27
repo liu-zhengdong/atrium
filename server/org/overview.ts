@@ -145,6 +145,7 @@ export type Part = {
     todo: number;
     running: number;
     blocked: number;
+    reviewing?: number;
     merge_queued?: number;
     merging?: number;
   };

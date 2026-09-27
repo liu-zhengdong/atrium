@@ -70,7 +70,10 @@ export type ExecutorContext = {
   disk: DiskBudget;
   killGraceMs?: number;
   closed: () => boolean;
-  onAccepted?: (id: number) => boolean;
+  /** 交付关卡通过后的去向（审阅或合入队列）；返回要发的事件，false 表示照常发 done。 */
+  onAccepted?: (
+    id: number,
+  ) => Promise<{ kind: string; detail?: Record<string, unknown> } | false>;
   /** 专员关卡（#322）：拉起审查任务；审查任务结束后立即补判父任务（否则等下一轮巡检）。 */
   reviews?: {
     dispatch: (ref: string) => Promise<unknown>;
@@ -382,6 +385,9 @@ export class Executors {
             }
           : {}),
       };
+      let admitted: Awaited<
+        ReturnType<NonNullable<ExecutorContext["onAccepted"]>>
+      > = false;
       const thinking = routeAfterThinking({
         thinking: outcome.ending?.kind === "thinking",
         stop: active.stop,
@@ -416,9 +422,12 @@ export class Executors {
       else if (isReviewTask(this.ctx.db, id)) {
         /* 由 reviews.settle 补判父任务。 */
       }
-      // 关卡（含专员）都过了才进合入队列。
-      else if (decision.publish === "done" && this.ctx.onAccepted?.(id)) {
-        this.publish(id, "merge_queued", published);
+      // 关卡（含专员）都过了才去审阅或合入队列。
+      else if (
+        decision.publish === "done" &&
+        (admitted = (await this.ctx.onAccepted?.(id)) ?? false)
+      ) {
+        this.publish(id, admitted.kind, { ...published, ...admitted.detail });
       } else
         this.publish(
           id,

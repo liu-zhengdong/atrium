@@ -24,8 +24,11 @@ export type TaskRow = {
   ci: string | null;
   result: string | null;
   /** PR 交付后的阶段；null 表示尚未进入合入流程。 */
-  delivery_stage: "merge_queued" | "merging" | "merged" | "online" | null;
+  delivery_stage:
+    "reviewing" | "merge_queued" | "merging" | "merged" | "online" | null;
   merge_returns: number;
+  /** 审阅关卡这一轮派出的审阅任务 id。 */
+  review_task: number | null;
   merge_queued_at: number | null;
   owner: string | null;
   auto: number;

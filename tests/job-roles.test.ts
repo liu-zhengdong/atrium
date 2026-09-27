@@ -175,8 +175,19 @@ test("旧任务回填缺失强度不猜；角色不符只提醒", () => {
   d.close();
 });
 
-test("截图关卡只认 PR 正文里的实际图片附件", async () => {
+test("角色可配置 screenshots，未知关卡仍拒绝", async () => {
   const { evaluateGates } = await import("../server/tasks/gates.ts");
+  const d = db();
+  const r = role(d);
+  assert.deepEqual(
+    editJobRole(d, r.ref, { checks: ["local_check", "screenshots"] }).checks,
+    ["local_check", "screenshots"],
+  );
+  assert.throws(
+    () => editJobRole(d, r.ref, { checks: ["not_a_gate"] }),
+    /checks: 未知验收关卡 not_a_gate/,
+  );
+  d.close();
   const base = {
     repo: true,
     branch: "x",
@@ -195,14 +206,15 @@ test("截图关卡只认 PR 正文里的实际图片附件", async () => {
     pushed: true,
     claims: [],
   };
-  assert.equal(evaluateGates(["screenshot"], {}, base).passed, false);
+  assert.equal(evaluateGates(["screenshots"], {}, base).passed, false);
   assert.equal(
     evaluateGates(
-      ["screenshot"],
+      ["screenshots"],
       {},
       {
         ...base,
         pr: { ...base.pr, body: "![页面](https://example.com/screen.png)" },
+        screenshots: [{ url: "https://example.com/screen.png", status: 200 }],
       },
     ).passed,
     true,
@@ -261,7 +273,7 @@ test("执行中角色关卡用派活时修订；统计跨有界分页包含所�
     { worker: "codex+gpt-6-sol:high", risk: "low" },
     100,
   );
-  editJobRole(d, r.ref, { checks: ["screenshot"] });
+  editJobRole(d, r.ref, { checks: ["screenshots"] });
   assert.deepEqual(activeJobChecks(d, t.id), ["local_check"]);
   advanceTask(d, t.ref, { kind: "exit_ok" }, {}, undefined, 110);
   for (let i = 0; i < 205; i++) {
@@ -283,6 +295,16 @@ test("执行中角色关卡用派活时修订；统计跨有界分页包含所�
   }
   ensureTaskTables(d);
   assert.equal(listDeliveries(d).length, 206);
+  const next = createTask(d, { title: "下一轮", job: r.ref });
+  advanceTask(
+    d,
+    next.ref,
+    { kind: "start" },
+    { worker: "codex+gpt-6-sol:high" },
+    { worker: "codex+gpt-6-sol:high", risk: "low" },
+    3000,
+  );
+  assert.deepEqual(activeJobChecks(d, next.id), ["screenshots"]);
   d.close();
 });
 

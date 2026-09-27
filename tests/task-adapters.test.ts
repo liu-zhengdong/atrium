@@ -347,7 +347,7 @@ test("resolveWorker：三层读取、默认模型与档案 model", async () => {
     );
     writeFileSync(
       join(dir, "combos/opencode+mimo-v2.6-flash.md"),
-      "---\ntrust: medium\nmax_risk: medium\nchecks: [finished]\n---\n记得提交",
+      "---\ntrust: medium\nmax_risk: medium\nchecks: [finished, screenshots]\n---\n记得提交",
     );
     writeFileSync(
       join(dir, "harness/grok.md"),
@@ -362,7 +362,12 @@ test("resolveWorker：三层读取、默认模型与档案 model", async () => {
     assert.equal(oc.model, "opencode-go/mimo-v2.6-flash");
     assert.equal(oc.cliModel, "opencode-go/mimo-v2.6-flash");
     assert.equal(oc.id, "opencode+opencode-go/mimo-v2.6-flash");
-    assert.deepEqual(oc.profile.rules.checks, ["pr_exists", "ci", "finished"]);
+    assert.deepEqual(oc.profile.rules.checks, [
+      "pr_exists",
+      "ci",
+      "finished",
+      "screenshots",
+    ]);
     assert.equal(oc.profile.rules.max_risk, "medium");
     assert.equal(oc.profile.body, "工具的坑\n\n记得提交");
 

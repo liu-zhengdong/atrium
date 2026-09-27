@@ -73,7 +73,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 
 **执行者档案**在 `~/Atrium/workers/`（`ATRIUM_WORKERS_DIR` 可改），三层叠加：`harness/<工具>.md` ← `models/<模型>.md` ← `combos/<工具>+<模型>.md`。frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时取更严；正文原样附进提示词。
 
-**验收关卡**：执行者退出后，运行时自己查事实（PR、提交、改动规模、CI、issue 评论），按档案 `checks`（`finished`、`pr_exists`、`ci`、`file_growth`、`claims_verified`）判定 `done` 或 `blocked`，原因写进任务事件，不采信执行者自述。
+**验收关卡**：执行者退出后，运行时自己查事实（PR、提交、改动规模、CI、issue 评论），按档案 `checks`（`finished`、`pr_exists`、`local_check`、`ci`、`file_growth`、`claims_verified`、`screenshots`）判定 `done` 或 `blocked`，原因写进任务事件，不采信执行者自述。`screenshots` 要求 PR 正文附 Markdown 图片或 GitHub 图片附件链接，所有截图的 HEAD 请求均返回 200。
 
 **自动合入**：PR 任务过交付关卡后进入持久化的串行合入队列。运行时从仓库 `origin` 核对 PR，rebase 到最新默认分支，在任务 worktree 重跑 `.agents/check`（没有则 `npm run check`），通过后用检查过的头提交执行 `gh pr merge --squash --match-head-commit`；gh 查询与合入都明确带 `-R`。rebase 冲突、本地检查失败或 gh 合入失败会把文件名、失败用例和日志位置写进事件及补充说明，在原工作树与原分支重派原执行者；第三次交回转卡住并通知负责人。合入中断后从账本续上，`atrium task show tN`、`atrium top --once` 和 `atrium org show oN --detail` 可看阶段。远端 CI 仍只供参考，不挡合入。
 
@@ -88,7 +88,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 组织级角色与全景组成部分、专员分开。`task add/set --role` 仍指组织节点；`--job` 指角色，派活会附角色说明、技能与交付关卡。角色的优先执行者在额度、风险和档案约束内选择；有足够交付样本时按一次通过率调整优先顺序。
 
 ```bash
-atrium role add 前端 --description "界面设计与实现" --body ./frontend-role.md --preferred claude+opus:high --checks screenshot --skills visual-design,design-dialogue
+atrium role add 前端 --description "界面设计与实现" --body ./frontend-role.md --preferred claude+opus:high --checks screenshots --skills visual-design,design-dialogue
 atrium role show 前端
 atrium role edit r1 --preferred claude+opus:high,codex+gpt-6-sol:high
 atrium role ls --json

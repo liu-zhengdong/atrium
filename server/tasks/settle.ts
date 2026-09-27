@@ -179,6 +179,9 @@ export async function settle(
       },
       exec,
       active.worker.profile.rules.checks?.includes("ci") ?? false,
+      active.worker.profile.rules.checks?.some((gate) =>
+        ["screenshot", "screenshots"].includes(gate),
+      ) ?? false,
     );
     fields.pr_url = facts.pr?.url ?? null;
     fields.ci = facts.ci;
@@ -209,6 +212,9 @@ export async function settle(
       },
       exec,
       active.worker.profile.rules.checks?.includes("ci") ?? false,
+      active.worker.profile.rules.checks?.some((gate) =>
+        ["screenshot", "screenshots"].includes(gate),
+      ) ?? false,
     );
     fields.pr_url = facts.pr?.url ?? null;
     fields.ci = facts.ci;

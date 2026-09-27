@@ -23,6 +23,7 @@ import {
   repoFlag,
   type GhRepo,
 } from "./gh-repo.ts";
+import { readScreenshots } from "./screenshot-facts.ts";
 
 /**
  * 执行者退出后运行时自己查事实（#262）：PR、CI、改动规模、是否收尾、摘要里的声明是否存在。
@@ -195,6 +196,7 @@ export async function collectFacts(
   input: FactInput,
   run: Exec = defaultExec,
   includeCi = true,
+  includeScreenshots = false,
 ): Promise<Facts> {
   const empty: Facts = {
     repo: false,
@@ -262,6 +264,8 @@ export async function collectFacts(
     facts.ci = ci.ci;
     facts.ciDetail = ci.detail;
   }
+  if (facts.pr && includeScreenshots)
+    facts.screenshots = await readScreenshots(facts.pr.body ?? "");
   facts.claims = await verifyClaims(target, worktree, input.summary, run);
   return facts;
 }

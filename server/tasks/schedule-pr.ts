@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
 import type { Exec } from "./git.ts";
 
 /** PR 查询仅传 gh 查元数据需要的环境；不继承身份、凭据或终端代理变量。 */
@@ -23,7 +24,7 @@ export const schedulePrExec: Exec = (command, args, options = {}) =>
       args,
       {
         env,
-        cwd: options.cwd,
+        cwd: options.cwd ?? homedir(),
         timeout: options.timeoutMs ?? 15_000,
         maxBuffer: 64 * 1024,
       },

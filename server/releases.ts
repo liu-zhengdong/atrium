@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { packageRoot } from "./service-state.ts";
@@ -59,7 +60,7 @@ export async function listRemoteTags(repoUrl: string): Promise<string[]> {
     const { stdout } = await execFileAsync(
       "git",
       ["ls-remote", "--tags", target],
-      { timeout: 15000 },
+      { cwd: homedir(), timeout: 15000 },
     );
     const tags = new Set<string>();
     for (const line of stdout.split("\n")) {

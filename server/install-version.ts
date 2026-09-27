@@ -20,6 +20,7 @@ export async function installVersion(version: string, repo: string) {
       "git",
       ["clone", "--depth", "1", "--branch", `v${version}`, source, checkout],
       {
+        cwd: dir,
         timeout: 60000,
       },
     );
@@ -46,6 +47,7 @@ export async function installVersion(version: string, repo: string) {
       npmCmd,
       ["install", "-g", join(dir, files[0].filename)],
       {
+        cwd: dir,
         env: process.env,
         timeout: 240000,
       },

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
 
 export const OPENQUOTA_BIN =
   "/Applications/OpenQuota.app/Contents/MacOS/openquota";
@@ -64,6 +65,7 @@ export function readOpenquotaPace(
       resolveOpenquotaBin(options.bin, env),
       ["pace", "--json"],
       {
+        cwd: homedir(),
         timeout: options.timeoutMs ?? PACE_TIMEOUT_MS,
         maxBuffer: PACE_MAX_BUFFER,
         env: childEnv(env),

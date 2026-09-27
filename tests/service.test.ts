@@ -627,6 +627,48 @@ test(
 );
 
 test(
+  "服务从假包目录启动后该目录被替换，仍能平滑重启",
+  { timeout: 90000 },
+  async (t) => {
+    const f = await fixture(t);
+    const fakePackage = join(f.root, "fake-package");
+    mkdirSync(fakePackage);
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        join(packageRoot, "server/main.ts"),
+      ],
+      { cwd: fakePackage, env: f.env, stdio: "ignore" },
+    );
+    trackChild(f.signal, child);
+    t.after(() => {
+      if (child.exitCode === null) child.kill();
+    });
+    const deadline = Date.now() + 30000;
+    let record = readService(f.data);
+    while (record?.pid !== child.pid) {
+      assert.ok(Date.now() < deadline, "假包目录中的服务启动超时");
+      await delay(100);
+      record = readService(f.data);
+    }
+    // 模拟 npm 安装覆盖旧包目录；旧服务仍在运行，原 cwd 已被删除。
+    rmSync(fakePackage, { recursive: true });
+    assert.equal(existsSync(fakePackage), false);
+    const started = await f.cli("restart");
+    assert.equal(started.code, 0, started.stderr || started.stdout);
+    const finished = await f.cli("restart", "--wait", "--timeout", "60");
+    assert.equal(finished.code, 0, finished.stderr || finished.stdout);
+    const next = readService(f.data);
+    assert.ok(next);
+    assert.notEqual(next.pid, child.pid);
+    assert.equal(readRestartState(f.data)?.status, "success");
+    assert.equal((await f.cli("status")).code, 0);
+  },
+);
+
+test(
   "两份数据抢同一端口：报出占用者的数据目录，第二份数据不建表（t71）",
   { timeout: 60000 },
   async (t) => {

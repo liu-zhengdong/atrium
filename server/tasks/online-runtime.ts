@@ -307,19 +307,24 @@ export class OnlineWatch {
 export function cliDeploy(data: string, env: NodeJS.ProcessEnv = process.env) {
   const bin = join(packageRoot, "bin", "atrium.mjs");
   const cli = (args: string[], timeout: number) =>
-    new Promise<{ ok: boolean; stderr: string }>((resolve) => {
+    new Promise<{ ok: boolean; output: string }>((resolve) => {
       execFile(
         process.execPath,
         [bin, ...args],
         {
+          cwd: data,
           timeout,
           maxBuffer: 4 * 1024 * 1024,
           env: { ...env, ATRIUM_DATA: data },
         },
-        (error, _stdout, stderr) =>
+        (error, stdout, stderr) =>
           resolve({
             ok: !error,
-            stderr: String(stderr || (error ? error.message : "")),
+            output: [stdout, stderr, error?.message]
+              .filter(Boolean)
+              .map(String)
+              .join("\n")
+              .trim(),
           }),
       );
     });
@@ -328,13 +333,13 @@ export function cliDeploy(data: string, env: NodeJS.ProcessEnv = process.env) {
     if (!update.ok)
       return {
         ok: false,
-        reason: `atrium update：${redact(firstLine(update.stderr)) || "执行失败"}`,
+        reason: `atrium update：${redact(update.output) || "执行失败"}`,
       };
     const restart = await cli(["restart"], 60_000);
     if (!restart.ok)
       return {
         ok: false,
-        reason: `atrium restart：${redact(firstLine(restart.stderr)) || "执行失败"}`,
+        reason: `atrium restart：${redact(restart.output) || "执行失败"}`,
       };
     return { ok: true };
   };

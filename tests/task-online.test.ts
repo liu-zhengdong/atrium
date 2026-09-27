@@ -374,12 +374,16 @@ test("自升级命令失败：立即判上线失败，凭据抹掉", async () =>
     deploy: async () => ({
       ok: false,
       reason:
-        "atrium update：token ghp_abcdefghijklmnopqrstuvwxyz0123456789 无效",
+        "atrium update：第一行失败\n详情：token ghp_abcdefghijklmnopqrstuvwxyz0123456789 无效\n最后一行",
     }),
   });
   await watch.tick();
   assert.equal(published[0]!.kind, "online_failed");
   assert.match(String(published[0]!.detail.reason), /自升级到 v0\.2\.0 失败/);
+  assert.match(
+    String(published[0]!.detail.reason),
+    /第一行失败\n详情：token \*\*\* 无效\n最后一行/,
+  );
   assert.doesNotMatch(String(published[0]!.detail.reason), /ghp_abcdef/);
   assert.equal(row(db, id).online_wait, 0);
 });

@@ -31,6 +31,8 @@ const portTaken = async (port: number) => {
   }
 }
 const lease = claimService(data, servicePort());
+// npm 升级会替换包目录；长期运行的服务不能留在会被删除的 cwd。
+process.chdir(data);
 // 旧版 `restart --when-idle` 留下的待重启记录不再挡派活：丢弃并记日志。
 discardLegacyIdleRestart(data);
 let app: Awaited<ReturnType<typeof createApp>>["app"] | undefined;

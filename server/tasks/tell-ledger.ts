@@ -8,7 +8,7 @@ import {
   usage,
   type TaskEventRow,
 } from "./ledger-model.ts";
-import { ownerOf } from "./ledger-validate.ts";
+import { attributedAuthor } from "./ledger-validate.ts";
 import { TELL_MAX_CHARS, type TellEntry, type TellRoute } from "./tell.ts";
 
 /**
@@ -58,8 +58,8 @@ function parse(row: TaskEventRow): Tell | undefined {
   }
 }
 
-/** 校验请求体：text 必填、不超过上限；by 缺省 u1。 */
-export function tellInput(body: unknown) {
+/** 校验请求体：text 必填、不超过上限；HTTP 作者以认证身份为准。 */
+export function tellInput(body: unknown, actor?: string) {
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw usage("请求体应为 JSON 对象");
   const input = body as Record<string, unknown>;
@@ -70,7 +70,7 @@ export function tellInput(body: unknown) {
   const text = input.text.trim();
   if ([...text].length > TELL_MAX_CHARS)
     throw usage(`text: 捎话不能超过 ${TELL_MAX_CHARS} 字`);
-  const by = input.by === undefined ? "u1" : ownerOf(input.by, "by");
+  const by = attributedAuthor(input.by, actor);
   return { text, by };
 }
 

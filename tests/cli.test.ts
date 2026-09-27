@@ -158,19 +158,15 @@ test(
     const f = await fixture(t);
     await f.warm();
     assert.equal((await f.cli("task", "add", "浸泡验证")).code, 0);
-    const noted = await f.cli(
-      "task",
-      "note",
-      "t1",
-      "等 fork 浸泡结果",
-      "--as",
-      "a2",
-    );
+    const noted = await f.cli("task", "note", "t1", "等 fork 浸泡结果");
     assert.equal(noted.code, 0, noted.stderr);
-    assert.match(noted.stdout, /a2.*等 fork 浸泡结果/);
+    assert.match(noted.stdout, /u1.*等 fork 浸泡结果/);
+    const forged = await f.cli("task", "note", "t1", "冒名", "--as", "a2");
+    assert.equal(forged.code, 1);
+    assert.match(forged.stderr, /只能以自己的身份（u1）写入/);
     const ls = await f.cli("task", "ls");
     assert.equal(ls.code, 0, ls.stderr);
-    assert.match(ls.stdout, /备注（a2.*等 fork 浸泡结果/);
+    assert.match(ls.stdout, /备注（u1.*等 fork 浸泡结果/);
     const show = await f.cli("task", "show", "t1");
     assert.equal(show.code, 0, show.stderr);
     assert.match(show.stdout, /最新备注：等 fork 浸泡结果/);

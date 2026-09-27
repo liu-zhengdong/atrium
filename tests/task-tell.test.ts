@@ -386,7 +386,6 @@ test("即时送入：假 Claude 在运行中收到捎话，回显后记为已送
   });
   const told = await call("POST", "/api/tasks/t1/tell", {
     text: "接口改用 v2",
-    by: "a1",
   });
   assert.equal(told.status, 200, JSON.stringify(told.body));
   assert.equal(told.body.tell.route, "stdin");
@@ -395,12 +394,12 @@ test("即时送入：假 Claude 在运行中收到捎话，回显后记为已送
   const text = readFileSync(log, "utf8");
   assert.match(text, /--input-format stream-json --replay-user-messages/);
   assert.match(text, /"isReplay":true/);
-  assert.match(text, /收到补充：补充说明（a1 · [^）]+）：\\n\\n接口改用 v2/);
+  assert.match(text, /收到补充：补充说明（u1 · [^）]+）：\\n\\n接口改用 v2/);
   assert.match(text, /stdin_closed/, "本轮结束后服务关掉了标准输入");
   const [tell] = tellsOf(done.body.task.events);
   assert.equal(tell.state, "delivered");
   assert.equal(tell.delivered_via, "stdin");
-  assert.equal(tell.by, "a1");
+  assert.equal(tell.by, "u1");
   const top = await call("GET", "/api/tasks/top");
   assert.deepEqual(top.body.rows[0].tells, { total: 1, pending: 0 });
 });

@@ -8,7 +8,7 @@ import {
   usage,
   type TaskEventRow,
 } from "./ledger-model.ts";
-import { ownerOf } from "./ledger-validate.ts";
+import { attributedAuthor } from "./ledger-validate.ts";
 import type { TaskStatus } from "./state.ts";
 
 export type NoteView = {
@@ -80,6 +80,7 @@ export function addTaskNote(
   reference: unknown,
   body: unknown,
   now = Date.now(),
+  actor?: string,
 ) {
   const id = parseTaskRef(reference);
   if (!body || typeof body !== "object" || Array.isArray(body))
@@ -98,7 +99,7 @@ export function addTaskNote(
     throw usage("text: 备注不能为空");
   const text = input.text.trim();
   if ([...text].length > 300) throw usage("text: 备注不能超过 300 字");
-  const by = input.by === undefined ? "u1" : ownerOf(input.by, "by");
+  const by = attributedAuthor(input.by, actor);
   return atomically(db, () => {
     const task = requireRow(db, id);
     addEvent(db, id, now, "note", {

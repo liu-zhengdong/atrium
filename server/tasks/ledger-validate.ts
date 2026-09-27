@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isAbsolute } from "node:path";
+import { Problem } from "../problem.ts";
 import { TASK_STATUSES, isTaskStatus } from "./state.ts";
 import { parseTaskRef, row, taskRef, usage } from "./ledger-model.ts";
 
@@ -13,6 +14,13 @@ export function ownerOf(value: unknown, field = "owner") {
   if (typeof value !== "string" || !OWNER_RE.test(value.trim()))
     throw usage(`${field}: 订阅者名只能用字母、数字、_ . -，1～60 字`);
   return value.trim();
+}
+/** HTTP 写入的作者由已认证的调用身份决定；请求体只能与该身份一致。 */
+export function attributedAuthor(value: unknown, actor?: string) {
+  const by = value === undefined ? (actor ?? "u1") : ownerOf(value, "by");
+  if (actor && by !== actor)
+    throw new Problem(403, `by: 只能以自己的身份（${actor}）写入`, "forbidden");
+  return actor ?? by;
 }
 export const optionalText = (value: unknown, field: string, max = TEXT_MAX) => {
   if (value === undefined || value === null) return null;

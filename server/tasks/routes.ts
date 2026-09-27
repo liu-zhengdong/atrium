@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { leaderOf } from "../leaders/guard.ts";
 import type { DatabaseSync } from "node:sqlite";
 import {
   ackIds,
@@ -175,10 +176,20 @@ export function registerTaskRoutes(
     return getTask(db, task.id);
   });
   app.post("/api/tasks/:id/note", { bodyLimit: 4 * 1024 }, (request) =>
-    addTaskNote(db, params(request.params).id, request.body),
+    addTaskNote(
+      db,
+      params(request.params).id,
+      request.body,
+      Date.now(),
+      leaderOf(request) ?? "u1",
+    ),
   );
   app.post("/api/tasks/:id/tell", { bodyLimit: 32 * 1024 }, (request) =>
-    runner.tell(params(request.params).id, request.body),
+    runner.tell(
+      params(request.params).id,
+      request.body,
+      leaderOf(request) ?? "u1",
+    ),
   );
   app.post("/api/tasks/:id/run", { bodyLimit: 16 * 1024 }, (request) =>
     runner.run(params(request.params).id, request.body),

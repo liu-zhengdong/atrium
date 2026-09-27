@@ -484,10 +484,16 @@ test("HTTP：任务备注需认证，列表和详情含当前备注", async (t) 
     const posted = await app.inject({
       method: "POST",
       url: "/api/tasks/t1/note",
-      payload: { text: "等 fork", by: "a1" },
+      payload: { text: "等 fork" },
     });
     assert.equal(posted.statusCode, 200);
-    assert.equal(posted.json().note_by, "a1");
+    assert.equal(posted.json().note_by, "u1");
+    const forged = await app.inject({
+      method: "POST",
+      url: "/api/tasks/t1/note",
+      payload: { text: "冒名", by: "a1" },
+    });
+    assert.equal(forged.statusCode, 403);
     const list = (await app.inject({ url: "/api/tasks" })).json().tasks[0];
     const show = (await app.inject({ url: "/api/tasks/t1" })).json();
     assert.deepEqual(

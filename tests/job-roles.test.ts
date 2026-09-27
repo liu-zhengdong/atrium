@@ -18,6 +18,7 @@ import {
   summarizeDeliveries,
   adviceFor,
   activeJobChecks,
+  markDeliveryFinal,
 } from "../server/tasks/delivery-records.ts";
 import { rankRoleWorkers } from "../server/tasks/role-ranking.ts";
 import { jobMismatch } from "../server/tasks/job-mismatch.ts";
@@ -111,6 +112,12 @@ test("交付事实、冲突不归责、未知强度、五次样本后建议", ()
   const conflict = rows.find((x) => x.rebase_conflicts === 1)!;
   assert.equal(conflict.merge_returns.length, 0);
   assert.equal(conflict.first_pass, true);
+  markDeliveryFinal(d, conflict.task_id, "rebase_conflict");
+  assert.equal(
+    listDeliveries(d).find((x) => x.task_id === conflict.task_id)
+      ?.final_outcome,
+    "rebase_conflict",
+  );
   const stat = summarizeDeliveries(rows).find(
     (s) => s.scope === "combination",
   )!;

@@ -8,6 +8,7 @@ import { originRepo, parsePrUrl, repoFlag } from "./gh-repo.ts";
 import { atomically, getTask, noteTask, type Task } from "./ledger.ts";
 import { runLocalCheck } from "./local-check.ts";
 import { mergeFailure } from "./merge-decision.ts";
+import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
 import { addTell } from "./tell-ledger.ts";
 
 type Stage = NonNullable<Task["delivery_stage"]>;
@@ -437,6 +438,7 @@ export class MergeQueue {
       },
       false,
     );
+    markDeliveryFinal(this.db, task.id, "merged");
     try {
       await this.options.cleaned?.(task.id);
     } catch (error) {
@@ -464,6 +466,11 @@ export class MergeQueue {
         task.id,
         decision.blocked ? "merge_blocked" : "merge_returned",
         decision,
+      );
+      markDeliveryFinal(
+        this.db,
+        task.id,
+        isRebaseConflict(safeReason) ? "rebase_conflict" : "returned",
       );
       if (!decision.blocked)
         addTell(this.db, task.id, {

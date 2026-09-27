@@ -23,6 +23,7 @@ export type DeliveryRow = {
   started_at: number;
   ended_at: number | null;
   outcome: string | null;
+  final_outcome: string | null;
   historical: number;
   job_rev: number | null;
   job_checks: string | null;
@@ -70,7 +71,7 @@ const number = (x: unknown) =>
 export const isRebaseConflict = (reason: string) =>
   /rebase\s*冲突|变基\s*冲突|rebase\s+conflict/i.test(reason);
 export function ensureDeliveryRecords(db: DatabaseSync) {
-  db.exec(`CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id INTEGER NOT NULL,start_event_id INTEGER NOT NULL UNIQUE,worker TEXT NOT NULL,tool TEXT NOT NULL,model TEXT,effort TEXT,job_id INTEGER,risk TEXT,part_id INTEGER,started_at INTEGER NOT NULL,ended_at INTEGER,outcome TEXT,historical INTEGER NOT NULL DEFAULT 0,job_rev INTEGER,job_checks TEXT);
+  db.exec(`CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id INTEGER NOT NULL,start_event_id INTEGER NOT NULL UNIQUE,worker TEXT NOT NULL,tool TEXT NOT NULL,model TEXT,effort TEXT,job_id INTEGER,risk TEXT,part_id INTEGER,started_at INTEGER NOT NULL,ended_at INTEGER,outcome TEXT,final_outcome TEXT,historical INTEGER NOT NULL DEFAULT 0,job_rev INTEGER,job_checks TEXT);
   CREATE INDEX IF NOT EXISTS deliveries_worker ON deliveries(tool,model,effort,job_id,id);
   CREATE INDEX IF NOT EXISTS deliveries_task ON deliveries(task_id,id);`);
   const columns = new Set(
@@ -82,6 +83,8 @@ export function ensureDeliveryRecords(db: DatabaseSync) {
     db.exec("ALTER TABLE deliveries ADD COLUMN job_rev INTEGER");
   if (!columns.has("job_checks"))
     db.exec("ALTER TABLE deliveries ADD COLUMN job_checks TEXT");
+  if (!columns.has("final_outcome"))
+    db.exec("ALTER TABLE deliveries ADD COLUMN final_outcome TEXT");
   backfillDeliveries(db);
 }
 /** 旧库启动时逐页回填；只用账本事件里的事实，不推测遗失的强度或风险。 */
@@ -161,6 +164,9 @@ export function startDelivery(
   }
   const job = task.job_id ? getJobRole(db, `r${task.job_id}`) : null;
   db.prepare(
+    "UPDATE deliveries SET final_outcome='switched',ended_at=COALESCE(ended_at,?),outcome=COALESCE(outcome,'switched') WHERE id=(SELECT id FROM deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1) AND worker<>? AND COALESCE(final_outcome,'') NOT IN ('merged','cancelled')",
+  ).run(at, task.id, worker);
+  db.prepare(
     "INSERT OR IGNORE INTO deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,historical,job_rev,job_checks) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)",
   ).run(
     task.id,
@@ -203,8 +209,17 @@ export function endDelivery(
   at: number,
 ) {
   db.prepare(
-    "UPDATE deliveries SET ended_at=?,outcome=? WHERE id=(SELECT id FROM deliveries WHERE task_id=? AND ended_at IS NULL ORDER BY id DESC LIMIT 1)",
-  ).run(at, outcome, taskId);
+    "UPDATE deliveries SET ended_at=?,outcome=?,final_outcome=? WHERE id=(SELECT id FROM deliveries WHERE task_id=? AND ended_at IS NULL ORDER BY id DESC LIMIT 1)",
+  ).run(at, outcome, outcome, taskId);
+}
+export function markDeliveryFinal(
+  db: DatabaseSync,
+  taskId: number,
+  result: string,
+) {
+  db.prepare(
+    "UPDATE deliveries SET final_outcome=? WHERE id=(SELECT id FROM deliveries WHERE task_id=? ORDER BY id DESC LIMIT 1)",
+  ).run(result, taskId);
 }
 export function deliveryFacts(
   row: DeliveryRow,
@@ -287,19 +302,26 @@ export function deliveryFacts(
     task_ref: `t${row.task_id}`,
     task_title: task.title,
     final_result:
-      untilNext && text(inner(untilNext).worker) !== row.worker
-        ? "换人"
-        : merged
-          ? "已合入"
-          : !untilNext && task.status === "cancelled"
-            ? "取消"
-            : row.outcome === "exit_ok"
-              ? "交付"
-              : row.outcome === "exit_fail"
-                ? "失败"
-                : row.outcome === "block"
-                  ? "受阻"
-                  : (row.outcome ?? "进行中"),
+      row.final_outcome === "merged" || merged
+        ? "已合入"
+        : row.final_outcome === "cancelled"
+          ? "取消"
+          : row.final_outcome === "switched" ||
+              (untilNext && text(inner(untilNext).worker) !== row.worker)
+            ? "换人"
+            : row.final_outcome === "rebase_conflict"
+              ? "变基冲突"
+              : row.final_outcome === "returned"
+                ? "合入退回"
+                : !untilNext && task.status === "cancelled"
+                  ? "取消"
+                  : row.outcome === "exit_ok"
+                    ? "交付"
+                    : row.outcome === "exit_fail"
+                      ? "失败"
+                      : row.outcome === "block"
+                        ? "受阻"
+                        : (row.outcome ?? "进行中"),
     job_ref: row.job_id ? `r${row.job_id}` : null,
     job_name: jobName,
     duration_ms:

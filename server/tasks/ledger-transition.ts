@@ -12,7 +12,11 @@ import {
   type Task,
   type TaskRow,
 } from "./ledger-model.ts";
-import { endDelivery, startDelivery } from "./delivery-records.ts";
+import {
+  endDelivery,
+  markDeliveryFinal,
+  startDelivery,
+} from "./delivery-records.ts";
 import { noteView } from "./notes.ts";
 
 /** 执行者这一侧可以随状态一起写入的运行字段。 */
@@ -127,8 +131,11 @@ export function applyTransition(
       next.status === "failed" ||
       next.status === "cancelled" ||
       next.status === "blocked")
-  )
+  ) {
     endDelivery(db, current.id, event.kind, now);
+    if (next.status === "cancelled" || next.status === "failed")
+      markDeliveryFinal(db, current.id, next.status);
+  }
   return next.status;
 }
 

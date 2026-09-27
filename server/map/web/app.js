@@ -190,6 +190,9 @@ const chip = (text, tone) =>
 const chipLink = (text, tone, url) =>
   `<a class="chip chip-${tone} chip-link" href="${esc(url)}">${esc(text)}</a>`;
 const none = `<span class="muted">—</span>`;
+/** 任务名：编号在前（与状态栏、top、汇报里的 tN 对得上），标题折行时编号不动。 */
+const taskName = (ref, title) =>
+  `<span class="task-ref">${esc(ref)}</span><span class="task-title">${esc(title)}</span>`;
 /**
  * 表格的一格。extra 里的类：name/text/note 窄屏占满一行，none 窄屏隐藏（空格），
  * tagged 窄屏在值前带上列名（数字列单看不知道是什么）。
@@ -260,7 +263,7 @@ function taskTable(all, { withRole, empty }) {
         ? chipLink(t.job.name, "role", roleHref(t.job.ref))
         : none;
       return `<div class="row" role="row">
-        ${cell("任务", `<span title="${esc(t.ref)}">${esc(t.title)}</span>`, " name plain")}
+        ${cell("任务", taskName(t.ref, t.title), " name plain task")}
         ${withRole ? cell("角色", role, t.job ? "" : " none") : ""}
         ${cell("状态", chip(label, tone))}
         ${cell("谁在做", worker ? `<span class="chip chip-soft clip" title="${esc(worker)}">${esc(worker)}</span>` : none, worker ? "" : " none")}
@@ -521,7 +524,7 @@ function drawDeliveries({ worker }) {
     ["任务", "角色", "结果", "用时", "经过"],
     worker.deliveries.map(
       (d) => `<div class="row" role="row">
-        ${cell("任务", `<span title="${esc(d.task)}">${esc(d.title)}</span>`, " name plain")}
+        ${cell("任务", taskName(d.task, d.title), " name plain task")}
         ${cell("角色", d.role ? chipLink(d.role.name, "role", roleHref(d.role.ref)) : none, d.role ? "" : " none")}
         ${cell("结果", chip(d.result.label, `${d.result.tone} strong`))}
         ${cell("用时", d.duration_ms === null ? "—" : duration(d.duration_ms), d.duration_ms === null ? " muted none" : " muted tagged")}

@@ -154,9 +154,20 @@ export class Executors {
     if (!active || active.exited) return;
     active.exited = true;
     try {
-      const outcome = await settle(active, exit, this.ctx.exec);
+      const outcome = await settle(
+        active,
+        exit,
+        this.ctx.exec,
+        (status, log) => {
+          noteTask(this.ctx.db, id, `local_check_${status}`, { log });
+          this.ctx.waits.changed(id);
+        },
+        this.ctx.launchOptions.env,
+      );
       if (getTask(this.ctx.db, id).status !== "running") return;
       const { decision, verdict, facts } = outcome;
+      if (outcome.localCheck)
+        noteTask(this.ctx.db, id, "local_check", outcome.localCheck);
       const detail = exitDetail(exit);
       if (verdict)
         noteTask(this.ctx.db, id, "gates", {

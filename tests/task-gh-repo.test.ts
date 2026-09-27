@@ -233,6 +233,25 @@ test("fork 形态仓库：PR、CI、声明核对与评论都查 origin 而不是
     ["pr list", "pr checks", "pr view"],
   );
 
+  const optionalCalls: string[][] = [];
+  const withoutCi = await collectFacts(
+    {
+      repo,
+      worktree: repo,
+      branch: "task-t27-openquota",
+      base: "main",
+      summary: "",
+    },
+    forkExec(repo, optionalCalls),
+    false,
+  );
+  assert.equal(withoutCi.pr?.number, 7);
+  assert.equal(withoutCi.ci, null);
+  assert.deepEqual(
+    optionalCalls.map((args) => args.slice(0, 2).join(" ")),
+    ["pr list"],
+  );
+
   const comments = await collectComments(repo, 7, Date.now() - 60_000, run);
   assert.equal(comments.error, undefined);
   assert.equal(comments.comments.length, 1);

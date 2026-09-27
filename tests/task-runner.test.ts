@@ -3,8 +3,114 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getTask } from "../server/tasks/ledger.ts";
 import { startApp } from "./task-fixture.ts";
+
+test("隔离任务服务按档案执行 local_check 并记录关卡事件", async (t) => {
+  const { fx, data, call } = await startApp(t, (fx) => {
+    mkdirSync(join(fx.repo, ".agents"));
+    writeFileSync(
+      join(fx.repo, ".agents", "check"),
+      'echo local-checked-$ATRIUM_WORKER; test "$ATRIUM_WORKER" = 1\n',
+    );
+    execFileSync("git", ["-C", fx.repo, "add", ".agents/check"]);
+    execFileSync("git", [
+      "-C",
+      fx.repo,
+      "-c",
+      "user.name=test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-qm",
+      "add check",
+    ]);
+    execFileSync("git", ["-C", fx.repo, "push", "-q", "origin", "main"]);
+    writeFileSync(
+      join(fx.workers, "harness", "kimi.md"),
+      "---\nchecks: [pr_exists, local_check]\n---\n",
+    );
+  });
+  // 从任务 worktree 的真实分支执行仓库脚本，不采信假执行者的文字汇报。
+  assert.equal(
+    (
+      await call("POST", "/api/tasks", {
+        title: "Check locally",
+        repo: fx.repo,
+      })
+    ).status,
+    201,
+  );
+  assert.equal(
+    (await call("POST", "/api/tasks/t1/run", { worker: "kimi" })).status,
+    200,
+  );
+  const result = await call("GET", "/api/tasks/t1/wait?timeout=20");
+  assert.equal(result.body.task.status, "blocked");
+  const task = result.body.task;
+  const local = task.events.find(
+    (event: { kind: string }) => event.kind === "local_check",
+  );
+  assert.ok(local);
+  assert.equal(JSON.parse(local.detail).status, "passed");
+  assert.match(
+    readFileSync(join(data, "tasks", "1", "local-check.log"), "utf8"),
+    /local-checked-1/,
+  );
+  const gates = JSON.parse(
+    task.events.find((event: { kind: string }) => event.kind === "gates")
+      .detail,
+  );
+  assert.deepEqual(
+    gates.results.map((entry: { gate: string; ok: boolean }) => [
+      entry.gate,
+      entry.ok,
+    ]),
+    [
+      ["pr_exists", false],
+      ["local_check", true],
+    ],
+  );
+
+  writeFileSync(
+    join(fx.repo, ".agents", "check"),
+    "echo 'not ok 1 - 关键失败用例'; exit 1\n",
+  );
+  execFileSync("git", ["-C", fx.repo, "add", ".agents/check"]);
+  execFileSync("git", [
+    "-C",
+    fx.repo,
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-qm",
+    "fail check",
+  ]);
+  execFileSync("git", ["-C", fx.repo, "push", "-q", "origin", "main"]);
+  assert.equal(
+    (
+      await call("POST", "/api/tasks", {
+        title: "Failed check",
+        repo: fx.repo,
+      })
+    ).status,
+    201,
+  );
+  assert.equal(
+    (await call("POST", "/api/tasks/t2/run", { worker: "kimi" })).status,
+    200,
+  );
+  const failedTask = (await call("GET", "/api/tasks/t2/wait?timeout=20")).body
+    .task;
+  assert.equal(failedTask.status, "blocked");
+  const block = failedTask.events.find(
+    (event: { kind: string }) => event.kind === "block",
+  );
+  assert.match(block.detail, /local_check：.*失败用例：关键失败用例/);
+});
 
 test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关卡判受阻、事件投递；破坏输入被拒", async (t) => {
   const { fx, data, call } = await startApp(t);

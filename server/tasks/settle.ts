@@ -21,6 +21,8 @@ import { quotaReason } from "./quota-holds.ts";
 import { detectQuotaExhausted } from "./quota-signal.ts";
 import { summarize } from "./summary.ts";
 import { detectTransient, type TransientHit } from "./transient.ts";
+import { runLocalCheck, type LocalCheck } from "./local-check.ts";
+import { dirname } from "node:path";
 
 /**
  * 退出后的事实收集与关卡（#262）：读摘要、在日志末尾记退出情况、查事实、过关卡，
@@ -116,12 +118,15 @@ export type Settlement = {
   transient?: TransientHit;
   /** 从结构化日志识别出的异常结束；思考耗尽时收尾后按 thinking.ts 换执行者重跑。 */
   ending?: AbnormalEnd;
+  localCheck?: LocalCheck;
 };
 
 export async function settle(
   active: Active,
   exit: Exit,
   exec: Exec,
+  onLocalCheckStatus?: (status: "queued" | "started", log: string) => void,
+  env?: NodeJS.ProcessEnv,
 ): Promise<Settlement> {
   const log = await readLog(active);
   const summary = readSummary(active, log);
@@ -150,6 +155,7 @@ export async function settle(
         summary,
       },
       exec,
+      active.worker.profile.rules.checks?.includes("ci") ?? false,
     );
     fields.pr_url = facts.pr?.url ?? null;
     fields.ci = facts.ci;
@@ -168,6 +174,7 @@ export async function settle(
     return { summary, fields, decision, quota };
   }
   let verdict: Verdict | undefined;
+  let localCheck: LocalCheck | undefined;
   if (!facts && active.deliver === "pr" && needsFacts(active.stop)) {
     facts = await collectFacts(
       {
@@ -178,12 +185,22 @@ export async function settle(
         summary,
       },
       exec,
+      active.worker.profile.rules.checks?.includes("ci") ?? false,
     );
     fields.pr_url = facts.pr?.url ?? null;
     fields.ci = facts.ci;
   }
   if (needsGates(active.stop, exit)) {
     const rules = active.worker.profile.rules;
+    if (active.deliver === "pr" && rules.checks?.includes("local_check")) {
+      localCheck = await runLocalCheck({
+        worktree: active.worktree ?? "",
+        taskDir: dirname(active.logFile),
+        env,
+        onStatus: onLocalCheckStatus,
+      });
+      if (facts) facts.localCheck = localCheck;
+    }
     const comments =
       active.deliver === "comment" && active.issue
         ? await collectComments(
@@ -233,7 +250,16 @@ export async function settle(
     thinking: ending?.kind === "thinking",
     transient: transient?.reason,
   });
-  return { summary, fields, decision, verdict, facts, transient, ending };
+  return {
+    summary,
+    fields,
+    decision,
+    verdict,
+    facts,
+    transient,
+    ending,
+    localCheck,
+  };
 }
 
 /** 记进 gates 事件与完成事件的改动规模。 */

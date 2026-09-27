@@ -124,7 +124,8 @@ export function registerOrgRoutes(
       actor(request.query),
     );
   });
-  app.post("/api/org/import", { bodyLimit: 128 * 1024 }, (request) =>
+  // 最多 200 份各 16 KB 的岗位正文，另留请求字段与根章程空间。
+  app.post("/api/org/import", { bodyLimit: 4 * 1024 * 1024 }, (request) =>
     importOrg(db, body(request.body) as ImportInput, actor(request.query)),
   );
 }

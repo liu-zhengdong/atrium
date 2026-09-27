@@ -10,6 +10,8 @@ import {
   revertDoc,
 } from "../server/org/write.ts";
 import { history, show, tree } from "../server/org/read.ts";
+import { formatOrgChanges } from "../cli/org.ts";
+import { roleCharter } from "../server/org/role.ts";
 import {
   exportDocument,
   parseDocument,
@@ -308,7 +310,8 @@ test("导入仅预览、重复 apply 不重复建", () => {
         kind: "module" as const,
         slug: "runtime",
         name: "runtime",
-        doc_path: ".agents/modules/runtime.md",
+        source: ".agents/modules/runtime.md",
+        body: "# runtime\n岗位正文",
       },
     ],
     apply: false,
@@ -321,6 +324,52 @@ test("导入仅预览、重复 apply 不重复建", () => {
   const repeated = importOrg(db, { ...input, apply: true }, "u1");
   assert.equal("created" in repeated ? repeated.created : null, 0);
   assert.equal(tree(db).length, count);
+  assert.deepEqual(repeated.plan, []);
+  assert.equal(
+    (history(db, "o4", { target: "charter" }) as { items: unknown[] }).items
+      .length,
+    1,
+  );
+  assert.equal(
+    (show(db, "atrium/runtime") as { charter: { body: string } }).charter.body,
+    "# runtime\n岗位正文",
+  );
+  assert.deepEqual(roleCharter(db, "atrium/runtime"), {
+    body: "# runtime\n岗位正文",
+    ref: "o4",
+  });
+  assert.deepEqual(roleCharter(db, "modules/runtime"), {
+    body: "# runtime\n岗位正文",
+    ref: "o4",
+  });
+  assert.deepEqual(roleCharter(db, "o4"), {
+    body: "# runtime\n岗位正文",
+    ref: "o4",
+  });
+  assert.equal(roleCharter(db, "modules/other"), undefined);
+  const changed = importOrg(
+    db,
+    { ...input, docs: [{ ...input.docs[0]!, body: "更新正文" }], apply: true },
+    "u1",
+  );
+  assert.deepEqual(changed.plan, ["更新 o4 atrium/runtime 章程 r2"]);
+  assert.equal(
+    (
+      history(db, "o4", { target: "charter", rev: "r2" }) as {
+        revision: { reason: string };
+      }
+    ).revision.reason,
+    "从 .agents 导入",
+  );
+  assert.throws(
+    () =>
+      importOrg(
+        db,
+        { ...input, docs: [{ ...input.docs[0]!, body: "字".repeat(6000) }] },
+        "u1",
+      ),
+    /runtime\.md.*16 KB/,
+  );
   const project = show(db, "atrium");
   assert.equal(
     "charter" in project ? project.charter?.fields.goal : null,
@@ -333,6 +382,28 @@ test("导入仅预览、重复 apply 不重复建", () => {
   db.close();
 });
 
+test("修订差异的人读格式与边界", () => {
+  assert.equal(
+    formatOrgChanges({
+      "fields.goal": { before: null, after: "派活闭环不需要人盯" },
+      body: { before: "旧", after: "新", diff: "- 旧\n+ 新" },
+    }),
+    "goal：（空）→ 派活闭环不需要人盯\n正文：\n- 旧\n+ 新",
+  );
+  const long = Array.from({ length: 90 }, (_, i) => `+ ${i}`).join("\n");
+  assert.match(
+    formatOrgChanges({ body: { before: "", after: "", diff: long } }),
+    /省略 10 行/,
+  );
+  assert.equal(
+    formatOrgChanges({
+      leader: { before: null, after: "u1" },
+      doc_path: { before: null, after: ".agents/modules/runtime.md" },
+    }),
+    "leader：（空）→ 你",
+  );
+});
+
 test("节点只归档、移动有层级与深度限制", () => {
   const db = setup();
   const { project, module } = seed(db);
@@ -342,7 +413,6 @@ test("节点只归档、移动有层级与深度限制", () => {
     {
       slug: "engine",
       name: "引擎",
-      doc_path: ".agents/modules/runtime.md",
       repos: ["/tmp/atrium"],
       reason: "更新岗位",
     },
@@ -350,9 +420,19 @@ test("节点只归档、移动有层级与深度限制", () => {
   );
   assert.equal(renamed.slug, "engine");
   assert.deepEqual(renamed.repos, ["/tmp/atrium"]);
-  assert.equal(
-    (show(db, "atrium/engine") as { doc_path: string }).doc_path,
-    ".agents/modules/runtime.md",
+  assert.equal("doc_path" in show(db, "atrium/engine"), false);
+  assert.throws(
+    () =>
+      editNode(
+        db,
+        `o${module.id}`,
+        {
+          doc_path: ".agents/modules/runtime.md",
+          reason: "旧字段",
+        } as Parameters<typeof editNode>[2],
+        "a1",
+      ),
+    /doc_path 已停用/,
   );
   const archived = editNode(
     db,

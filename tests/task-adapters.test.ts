@@ -10,6 +10,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { ensureOrgTables } from "../server/org/schema.ts";
+import { addNode, editDoc } from "../server/org/write.ts";
 import {
   ADAPTERS,
   ARG_PROMPT_MAX_BYTES,
@@ -420,6 +423,58 @@ test("loadRoleDocs：读岗位说明，拒绝路径穿越", async () => {
       rootDoc: "根说明",
       rolePath: ".agents/modules/web.md",
     });
+    const db = new DatabaseSync(":memory:");
+    ensureOrgTables(db);
+    addNode(
+      db,
+      { slug: "org", kind: "org", name: "组织", reason: "创建" },
+      "u1",
+    );
+    addNode(
+      db,
+      {
+        parent: "o1",
+        slug: "atrium",
+        kind: "project",
+        name: "Atrium",
+        reason: "创建",
+      },
+      "u1",
+    );
+    addNode(
+      db,
+      {
+        parent: "o2",
+        slug: "web",
+        kind: "module",
+        name: "web",
+        reason: "创建",
+      },
+      "u1",
+    );
+    editDoc(
+      db,
+      "o3",
+      "charter",
+      { fields: {}, body: "节点章程", reason: "导入" },
+      "u1",
+    );
+    assert.deepEqual(await loadRoleDocs(repo, "atrium/web", db), {
+      roleDoc: "节点章程",
+      rootDoc: "根说明",
+      rolePath: "o3",
+    });
+    assert.equal((await loadRoleDocs(repo, "web", db)).roleDoc, "节点章程");
+    assert.equal(
+      (await loadRoleDocs(repo, "modules/web", db)).roleDoc,
+      "节点章程",
+    );
+    assert.equal((await loadRoleDocs(repo, "o3", db)).roleDoc, "节点章程");
+    assert.equal(
+      (await loadRoleDocs(repo, "concerns/安全", db)).roleDoc,
+      "安全关注点",
+    );
+    db.close();
     assert.equal(
       (await loadRoleDocs(repo, "concerns/安全")).roleDoc,
       "安全关注点",

@@ -54,26 +54,13 @@ function revision(
 }
 function nodeSnapshot(db: DatabaseSync, id: number) {
   const node = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", id)!;
+  const { doc_path: _legacyDocPath, ...visible } = node;
   const repos = all<{ repo: string }>(
     db,
     "SELECT repo FROM org_node_repos WHERE node_id=? ORDER BY repo",
     id,
   ).map((r) => r.repo);
-  return { ...node, repos };
-}
-function docPath(value: string | null | undefined): string | null {
-  if (value === undefined || value === null) return null;
-  if (
-    !/^\.agents\/(modules|concerns)\/(?:[a-z0-9-]|[\u3400-\u9fff]){1,40}\.md$/.test(
-      value,
-    ) ||
-    value.includes("..")
-  )
-    throw new Problem(
-      400,
-      "doc_path 应为 .agents/modules 或 .agents/concerns 下的 Markdown 文件",
-    );
-  return value;
+  return { ...visible, repos };
 }
 function repoPaths(value: unknown): string[] {
   if (
@@ -94,12 +81,13 @@ export type AddInput = {
   kind: Kind;
   name: string;
   leader?: string | null;
-  doc_path?: string | null;
   repos?: string[];
   reason: string;
 };
 export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
   return transaction(db, () => {
+    if ("doc_path" in input)
+      throw new Problem(400, "doc_path 已停用，请编辑节点章程正文");
     const list = nodes(db);
     if (list.length >= 500) throw new Problem(400, "组织树已达 500 个节点");
     const kind = validateKind(input.kind),
@@ -123,20 +111,19 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
         current = list.find((n) => n.id === current?.parent_id);
       }
       if (depth > 8) throw new Problem(400, "parent 层级超过深度 8");
-    } else if (actor !== "u1") throw new Problem(403, "根节点只有 u1 能创建");
+    } else if (actor !== "u1") throw new Problem(403, "根节点只有你能创建");
     if (list.some((n) => n.parent_id === parent?.id && n.slug === slug))
       throw new Problem(409, `slug ${slug} 在同一父节点下已存在`);
     const leader = input.leader ?? (kind === "org" ? "u1" : null);
     if (leader !== null && !/^(u1|a[1-9][0-9]*)$/.test(leader))
       throw new Problem(400, "leader 应为 u1 或 aN");
-    const document = docPath(input.doc_path);
     const repos = repoPaths(input.repos ?? []);
     const now = Date.now();
     const result = db
       .prepare(
-        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,doc_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
       )
-      .run(parent?.id ?? null, kind, slug, name, leader, document, now, now);
+      .run(parent?.id ?? null, kind, slug, name, leader, now, now);
     const id = Number(result.lastInsertRowid);
     for (const repo of repos)
       db.prepare("INSERT INTO org_node_repos(node_id,repo) VALUES(?,?)").run(
@@ -263,7 +250,6 @@ export function editNode(
     name?: string;
     leader?: string | null;
     parent?: string;
-    doc_path?: string | null;
     repos?: string[];
     archive?: boolean;
     rev?: string;
@@ -272,10 +258,12 @@ export function editNode(
   actor: string,
 ) {
   return transaction(db, () => {
+    if ("doc_path" in input)
+      throw new Problem(400, "doc_path 已停用，请编辑节点章程正文");
     const node = nodeByAddress(db, address);
     authorized(db, node, actor, "node");
     if (node.parent_id === null && actor !== "u1")
-      throw new Problem(403, "根节点只有 u1 能改");
+      throw new Problem(403, "根节点只有你能改");
     const old = one<{ rev: number }>(
       db,
       "SELECT rev FROM org_revisions WHERE node_id=? AND target='node' ORDER BY rev DESC LIMIT 1",
@@ -323,14 +311,12 @@ export function editNode(
     const leader = input.leader === undefined ? node.leader : input.leader;
     if (leader !== null && !/^(u1|a[1-9][0-9]*)$/.test(leader))
       throw new Problem(400, "leader 应为 u1 或 aN");
-    const document =
-      input.doc_path === undefined ? node.doc_path : docPath(input.doc_path);
     const repos =
       input.repos === undefined ? undefined : repoPaths(input.repos);
     const archived = input.archive === true ? Date.now() : node.archived_at;
     db.prepare(
-      "UPDATE org_nodes SET parent_id=?,slug=?,name=?,leader=?,doc_path=?,archived_at=?,updated_at=? WHERE id=?",
-    ).run(parent, slug, name, leader, document, archived, Date.now(), node.id);
+      "UPDATE org_nodes SET parent_id=?,slug=?,name=?,leader=?,archived_at=?,updated_at=? WHERE id=?",
+    ).run(parent, slug, name, leader, archived, Date.now(), node.id);
     if (repos !== undefined) {
       db.prepare("DELETE FROM org_node_repos WHERE node_id=?").run(node.id);
       for (const repo of repos)
@@ -360,12 +346,13 @@ export type ImportInput = {
     kind: "module" | "concern";
     slug: string;
     name: string;
-    doc_path: string;
+    source: string;
+    body: string;
   }[];
   apply: boolean;
 };
 export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
-  if (actor !== "u1") throw new Problem(403, "org import 只有 u1 能执行");
+  if (actor !== "u1") throw new Problem(403, "org import 只有你能执行");
   const fields = validateFields("charter", input.charter?.fields),
     body = validateBody(input.charter?.body);
   repoPaths([input.repo]);
@@ -377,14 +364,19 @@ export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
     if (
       !["module", "concern"].includes(doc.kind) ||
       !/^\.agents\/(modules|concerns)\/(?:[a-z0-9-]|[\u3400-\u9fff]){1,40}\.md$/.test(
-        doc.doc_path,
+        doc.source,
       ) ||
-      doc.doc_path.includes("..") ||
-      !doc.doc_path.startsWith(
+      doc.source.includes("..") ||
+      !doc.source.startsWith(
         doc.kind === "module" ? ".agents/modules/" : ".agents/concerns/",
       )
     )
       throw new Problem(400, "docs 格式错误");
+    try {
+      validateBody(doc.body);
+    } catch {
+      throw new Problem(400, `${doc.source} 正文超过 16 KB 或格式错误`);
+    }
     if (seen.has(doc.slug)) throw new Problem(400, `docs.${doc.slug} 重复`);
     seen.add(doc.slug);
   }
@@ -396,16 +388,23 @@ export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
   ];
   if (!input.apply) return { preview: true, plan };
   return transaction(db, () => {
-    let created = 0;
+    const changes: string[] = [];
     let root = nodes(db).find((n) => n.parent_id === null);
     if (!root) {
-      addNodeInnerRoot(db, actor);
-      created++;
+      const id = addNodeInnerRoot(db, actor);
+      changes.push(`新建 ${ref(id)} 组织`);
       root = nodes(db).find((n) => n.parent_id === null)!;
     }
     if (!current(db, root.id, "charter")) {
-      editDocInner(db, root, "charter", { fields, body }, "导入根章程", actor);
-      created++;
+      const edit = editDocInner(
+        db,
+        root,
+        "charter",
+        { fields, body },
+        "导入根章程",
+        actor,
+      );
+      changes.push(`更新 ${ref(root.id)} 组织章程 ${edit.rev}`);
     }
     const project = (
       slug: string,
@@ -424,15 +423,14 @@ export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
           slug,
           name,
           actor,
-          null,
           repos,
           "组织树初始化",
         );
-        created++;
+        changes.push(`新建 ${ref(id)} ${name}`);
         found = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", id)!;
       }
       if (!current(db, found.id, "charter")) {
-        editDocInner(
+        const edit = editDocInner(
           db,
           found,
           "charter",
@@ -440,7 +438,7 @@ export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
           "导入项目目标",
           actor,
         );
-        created++;
+        changes.push(`更新 ${ref(found.id)} ${name} 章程 ${edit.rev}`);
       }
       return found;
     };
@@ -459,24 +457,45 @@ export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
       ),
       [],
     );
-    for (const doc of input.docs)
-      if (
-        !nodes(db).some((n) => n.parent_id === atrium.id && n.slug === doc.slug)
-      ) {
-        insertNode(
+    for (const doc of input.docs) {
+      let found = nodes(db).find(
+        (n) => n.parent_id === atrium.id && n.slug === doc.slug,
+      );
+      if (!found) {
+        const id = insertNode(
           db,
           atrium.id,
           doc.kind,
           doc.slug,
           doc.name,
           actor,
-          doc.doc_path,
           [input.repo],
           "导入岗位说明",
         );
-        created++;
+        changes.push(`新建 ${ref(id)} atrium/${doc.slug}`);
+        found = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", id)!;
       }
-    return { preview: false, plan, created };
+      if (found.kind !== doc.kind)
+        throw new Problem(409, `atrium/${doc.slug} 类型不是 ${doc.kind}`);
+      const previous = current(db, found.id, "charter");
+      if (!previous || previous.body !== doc.body) {
+        const edit = editDocInner(
+          db,
+          found,
+          "charter",
+          {
+            fields: previous ? JSON.parse(previous.fields) : {},
+            body: doc.body,
+          },
+          "从 .agents 导入",
+          actor,
+        );
+        changes.push(
+          `更新 ${ref(found.id)} atrium/${doc.slug} 章程 ${edit.rev}`,
+        );
+      }
+    }
+    return { preview: false, plan: changes, created: changes.length };
   });
 }
 function insertNode(
@@ -486,7 +505,6 @@ function insertNode(
   slug: string,
   name: string,
   actor: string,
-  docPath: string | null,
   repos: string[],
   reason: string,
 ) {
@@ -495,18 +513,10 @@ function insertNode(
   const id = Number(
     db
       .prepare(
-        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,doc_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
       )
-      .run(
-        parent,
-        kind,
-        slug,
-        name,
-        kind === "org" ? "u1" : null,
-        docPath,
-        now,
-        now,
-      ).lastInsertRowid,
+      .run(parent, kind, slug, name, kind === "org" ? "u1" : null, now, now)
+      .lastInsertRowid,
   );
   for (const repo of repos)
     db.prepare("INSERT INTO org_node_repos(node_id,repo) VALUES(?,?)").run(
@@ -517,5 +527,5 @@ function insertNode(
   return id;
 }
 function addNodeInnerRoot(db: DatabaseSync, actor: string) {
-  insertNode(db, null, "org", "org", "组织", actor, null, [], "组织树初始化");
+  return insertNode(db, null, "org", "org", "组织", actor, [], "组织树初始化");
 }

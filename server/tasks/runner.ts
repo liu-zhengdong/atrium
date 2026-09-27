@@ -74,6 +74,7 @@ export class TaskRunner {
     });
     this.exec = options.exec ?? defaultExec;
     this.launchOptions = {
+      db,
       data: options.data,
       workersDir: options.workersDir ?? DEFAULT_WORKERS_DIR,
       env: workerEnvironment(options.env ?? process.env),

@@ -2,14 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readlinkSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,6 +54,8 @@ import {
 } from "../server/tasks/profiles.ts";
 import type { Tool } from "../server/tasks/adapters/index.ts";
 import { readSkillSource } from "../cli/skills.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const md = (slug: string, description: string, body = "正文") =>
   `---\nname: ${slug}\ndescription: ${description}\n---\n\n${body}\n`;
@@ -698,7 +698,7 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
     assert.ok(!existsSync(join(data, "tasks", String(t5), "skills.json")));
     assert.deepEqual(skillsForTask(db, getTask(db, `t${t5}`)).skills, []);
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
     db.close();
   }
 });
@@ -864,7 +864,7 @@ test("回收：改了副本生成提议，采纳写成作者为任务号的新�
     assert.deepEqual(listProposals(db), []);
     assert.throws(() => showProposal(db, "x1"), /提议应写成 p1/);
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
     db.close();
   }
 });
@@ -886,7 +886,7 @@ test("命令行读技能来源：目录跳过隐藏文件与符号链接，单�
     assert.throws(() => readSkillSource(join(dir, "ref")), /没有 SKILL.md/);
     assert.throws(() => readSkillSource(join(dir, "nope")), /读不到/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 
@@ -895,7 +895,7 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
   const { fx, call } = await startApp(t, (fx) => {
     // 假 codex：按 CODEX_HOME 找到挂载的技能副本改一行、写原因，再在 worktree 里提交。
     const file = join(fx.root, "bin", "codex");
-    writeFileSync(
+    writeFakeBin(
       file,
       [
         "#!/bin/sh",
@@ -911,7 +911,6 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
         'echo "完成，提交 $(git rev-parse --short HEAD)"',
       ].join("\n"),
     );
-    execChmod(file);
   });
   const ok = async (method: "GET" | "POST", url: string, payload?: object) => {
     const response = await call(method, url, payload);
@@ -984,7 +983,7 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
   await ok("POST", "/api/tasks/t1/run", { worker: "codex" });
   await ok("GET", "/api/tasks/t1/wait?timeout=20");
   const env = readFileSync(join(fx.root, "codex-env.txt"), "utf8");
-  assert.match(env, /^CODEX_HOME=.*\/tasks\/1\/codex-home$/m);
+  assert.match(env, /^CODEX_HOME=.*[\\/]tasks[\\/]1[\\/]codex-home$/m);
   const proposals = await ok("GET", "/api/skill-proposals");
   assert.deepEqual(
     proposals.map(
@@ -1032,9 +1031,6 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
   );
 });
 
-function execChmod(file: string) {
-  chmodSync(file, 0o755);
-}
 function execGit(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }

@@ -5,14 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -29,6 +22,7 @@ import {
 import { getTask } from "../server/tasks/ledger.ts";
 import { startApp } from "./task-fixture.ts";
 
+import { isolatedPath, removeFakeBin } from "./fake-bin.ts";
 const sample = join(
   import.meta.dirname,
   "fixtures",
@@ -200,10 +194,8 @@ test("派活：opencode 思考耗尽后换 kimi 重跑一次，仍没交付就�
       join(bin, "opencode"),
       `#!/bin/sh\ncat '${sample}'\nexit 0\n`,
     );
-    rmSync(join(bin, "grok"), { force: true });
-    const git = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    if (!existsSync(join(bin, "git"))) symlinkSync(git, join(bin, "git"));
-    fx.env.PATH = `${bin}:/usr/bin:/bin`;
+    removeFakeBin(join(bin, "grok"));
+    fx.env.PATH = isolatedPath(bin);
     writeFileSync(
       join(fx.workers, "harness", "opencode.md"),
       "---\nchecks: [pr_exists]\n---\n",

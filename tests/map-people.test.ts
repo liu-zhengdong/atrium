@@ -1,13 +1,7 @@
 import { importWorkerProfiles } from "../server/tasks/worker-profiles.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -37,6 +31,7 @@ import {
   mapWorkers,
   profileNotes,
 } from "../server/map/people.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 // ---- 纯函数：结果标签、经过、档案里的观察 ----
 
@@ -206,7 +201,7 @@ function seeded() {
 
 test("全景的角色、技能、执行者视图：挂在哪、谁做得好、交付记录与观察", async (t) => {
   const { db, workers, root } = seeded();
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTemp(root));
 
   const { roles } = mapRoles(db);
   assert.deepEqual(
@@ -279,7 +274,7 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
 
 test("接口：网页会话能读角色、技能、执行者，不存在的给 404", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-map-people-app-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const { app } = await createApp({
     data,
     tasks: { pace: async () => undefined, workersDir: join(data, "workers") },

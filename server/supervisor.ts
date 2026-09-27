@@ -27,6 +27,7 @@ import { installVersion } from "./install-version.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { Problem } from "./problem.ts";
 import { localFetch } from "./local-http.ts";
+import { commandLineInvocation } from "./platform/index.ts";
 import { probePort } from "./port-owner.ts";
 // 命令行经 service.ts 也会加载本模块：node:http 用 getBuiltinModule 取，免得 ESM 包装连带加载 undici（t117，见 local-http.ts）。
 const { request: httpRequest } = process.getBuiltinModule(
@@ -361,14 +362,16 @@ export async function reclaimStoppedService(
     db.close();
   }
   if (!alive(record.pid)) return;
-  // 登记可能在崩溃后残留，PID 也可能被系统复用；再核对进程命令。
+  // 登记可能在崩溃后残留，PID 也可能被系统复用；再核对进程命令（Windows 上经 PowerShell，慢一些）。
+  const call = commandLineInvocation(process.platform, record.pid);
   const { stdout: command } = await promisify(execFile)(
-    "ps",
-    ["-ww", "-p", String(record.pid), "-o", "command="],
-    { timeout: 2000 },
+    call.command,
+    call.args,
+    { timeout: 15_000, windowsHide: true },
   );
-  if (!/(?:^|\s|\/)server\/main\.ts(?:\s|$)/.test(command))
+  if (!/(?:^|[\s"/\\])server[/\\]main\.ts(?:["\s]|$)/.test(command))
     throw new Error("旧服务 PID 已不是 Atrium 服务进程，不能强制结束");
+  // 只结束服务进程本身（Windows 上即强制结束），不按进程树：执行者要留给新服务接管。
   try {
     process.kill(record.pid, "SIGTERM");
   } catch (error) {

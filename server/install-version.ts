@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { commandInvocation } from "./platform/index.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -14,7 +15,19 @@ export async function installVersion(version: string, repo: string) {
     : repo;
   const dir = mkdtempSync(join(tmpdir(), "atrium-install-"));
   const checkout = join(dir, "source");
-  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  // Windows 上 npm 是 npm.cmd，由平台层经 cmd.exe 拉起。
+  const npm = async (
+    args: string[],
+    options: { cwd: string; timeout: number },
+  ) => {
+    const call = commandInvocation("npm", args);
+    return execFileAsync(call.command, call.args, {
+      ...options,
+      env: process.env,
+      windowsHide: true,
+      windowsVerbatimArguments: call.verbatim,
+    });
+  };
   try {
     await execFileAsync(
       "git",
@@ -31,27 +44,17 @@ export async function installVersion(version: string, repo: string) {
     };
     if (pkg.version !== version)
       throw new Error(`版本标签 v${version} 的内容版本是 ${pkg.version}`);
-    const { stdout } = await execFileAsync(
-      npmCmd,
+    const { stdout } = await npm(
       ["pack", "--json", "--pack-destination", dir],
-      {
-        cwd: checkout,
-        env: process.env,
-        timeout: 60000,
-      },
+      { cwd: checkout, timeout: 60000 },
     );
     const files = JSON.parse(stdout) as Array<{ filename: string }>;
     if (files.length !== 1 || !/^atrium-[\d.]+\.tgz$/.test(files[0].filename))
       throw new Error("版本产物打包失败");
-    await execFileAsync(
-      npmCmd,
-      ["install", "-g", join(dir, files[0].filename)],
-      {
-        cwd: dir,
-        env: process.env,
-        timeout: 240000,
-      },
-    );
+    await npm(["install", "-g", join(dir, files[0].filename)], {
+      cwd: dir,
+      timeout: 240000,
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

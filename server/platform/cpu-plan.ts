@@ -8,10 +8,9 @@
  * - 瞬时（Windows 性能计数器 PercentProcessorTime，单核 100%）：直接相加。
  */
 
-export type Platform = NodeJS.Platform;
+import type { Invocation, Platform } from "./plan.ts";
 
-/** 一次进程调用。 */
-export type Invocation = { command: string; args: string[] };
+export type { Invocation, Platform };
 
 /** 一个进程的读数：cpu 在累计读数里是秒，在瞬时读数里是核数。 */
 export type ProcCpu = { pid: number; ppid: number; cpu: number };

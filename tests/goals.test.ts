@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -34,6 +34,7 @@ import {
 } from "../server/tasks/ledger.ts";
 import { createApp } from "../server/app.ts";
 import { goalLine, renderGoalTree } from "../cli/goals.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /** 组织 o1（leader u1）；Atrium o2（a1）下 runtime o3（a2）、质量 o4（a3）；OpenQuota o5（a4）。 */
 const ORG = [
@@ -656,7 +657,7 @@ test("父任务迁为里程碑：默认预览不写；apply 后子任务挂上�
 
 test("接口：?as= 决定操作者，非 leader 的 aN 被拒；任务接口带 goal_ref", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-goals-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const { app, db } = await createApp({ data, auth: false });
   t.after(() => app.close());
   addNode(

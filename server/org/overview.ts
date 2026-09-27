@@ -1,3 +1,4 @@
+import { hasParentSegment, isAbsolutePath } from "../platform/plan.ts";
 import { Problem } from "../problem.ts";
 
 /**
@@ -108,8 +109,8 @@ export function validateStages(value: unknown, field = "charter.stages") {
     if (stage.parent !== undefined) text(stage.parent, `${at}.parent`, 40);
     if (
       stage.repo !== undefined &&
-      (!text(stage.repo, `${at}.repo`, 500).startsWith("/") ||
-        (stage.repo as string).split("/").includes(".."))
+      (!isAbsolutePath(process.platform, text(stage.repo, `${at}.repo`, 500)) ||
+        hasParentSegment(process.platform, stage.repo as string))
     )
       bad(`${at}.repo`, "应为绝对路径，不能包含 ..");
     if (

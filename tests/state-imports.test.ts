@@ -20,10 +20,11 @@ import {
 } from "../server/imports/charter.ts";
 import { legacyDir } from "../server/imports/index.ts";
 import { ensureImportMarks, importMark } from "../server/imports/marks.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const temp = (t: { after: (fn: () => unknown) => void }, name: string) => {
   const dir = mkdtempSync(join(tmpdir(), `atrium-${name}-`));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   return dir;
 };
 
@@ -352,7 +353,7 @@ test("带旧表与旧式任务表的库启动：详述回填、根章程预算�
   const quota = (db: DatabaseSync) => quotaReserve(db).percent;
   assert.equal(quota(db), 35);
   await app.close();
-  rmSync(legacy, { recursive: true, force: true });
+  removeTemp(legacy);
   ({ app, db } = await start());
   try {
     const task = await show();

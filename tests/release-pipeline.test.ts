@@ -5,13 +5,13 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { removeTemp } from "./temp-dir.ts";
 
 const root = join(import.meta.dirname, "..");
 const script = join(root, "scripts/prepare-release.mjs");
@@ -67,7 +67,7 @@ test("发布包内所有裸包 import 都在运行依赖中，缺少声明时失
   const { fastify: _, ...broken } = dependencies;
   assert.match(
     missingRuntimeDependencies(broken).join("\n"),
-    /server\/app\.ts: fastify/,
+    /server[\\/]app\.ts: fastify/,
   );
 });
 
@@ -111,7 +111,7 @@ test("发布摘要、版本与锁文件在同一发布步骤同步", () => {
     );
     assert.equal(json("package.json").version, "0.1.5");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 
@@ -165,6 +165,6 @@ test("从标签打包（没有 node_modules）：--prepack 沿用已提交的 di
     assert.equal(kept.stdout, "");
     assert.equal(readFileSync(join(dir, "dist", "cli.js"), "utf8"), "");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });

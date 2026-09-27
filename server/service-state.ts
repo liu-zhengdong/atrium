@@ -1,7 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
-  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -12,6 +11,7 @@ import {
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { processAlive, restrictToOwner } from "./platform/index.ts";
 
 export const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 // An installed update can replace package.json while the old service is alive.
@@ -101,14 +101,7 @@ export function parseServiceRecord(value: unknown): ServiceRecord {
 }
 export const serviceUrl = (record: ServiceRecord) =>
   `http://127.0.0.1:${record.port}`;
-export function alive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
+export const alive = processAlive;
 function decode(value: unknown): ServiceRecord | null {
   if (!value) return null;
   return parseServiceRecord(JSON.parse((value as { record: string }).record));
@@ -135,7 +128,7 @@ export function claimService(data: string, port: number) {
   mkdirSync(data, { recursive: true, mode: 0o700 });
   const path = join(data, "service.sqlite");
   closeSync(openSync(path, "a", 0o600));
-  chmodSync(path, 0o600);
+  restrictToOwner(path);
   const db = new DatabaseSync(path);
   const record: ServiceRecord = {
     instance: randomUUID(),

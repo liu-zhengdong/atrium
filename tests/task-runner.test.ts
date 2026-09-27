@@ -6,13 +6,16 @@ import { join } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getTask } from "../server/tasks/ledger.ts";
 import { startApp } from "./task-fixture.ts";
+import { nodeCommand } from "./portable-shell.ts";
 
 test("隔离任务服务按档案执行 local_check 并记录关卡事件", async (t) => {
   const { fx, data, call } = await startApp(t, (fx) => {
     mkdirSync(join(fx.repo, ".agents"));
     writeFileSync(
       join(fx.repo, ".agents", "check"),
-      'echo local-checked-$ATRIUM_WORKER; test "$ATRIUM_WORKER" = 1\n',
+      nodeCommand(
+        "console.log('local-checked-' + process.env.ATRIUM_WORKER); process.exit(process.env.ATRIUM_WORKER === '1' ? 0 : 1)",
+      ),
     );
     execFileSync("git", ["-C", fx.repo, "add", ".agents/check"]);
     execFileSync("git", [
@@ -75,7 +78,7 @@ test("隔离任务服务按档案执行 local_check 并记录关卡事件", asyn
 
   writeFileSync(
     join(fx.repo, ".agents", "check"),
-    "echo 'not ok 1 - 关键失败用例'; exit 1\n",
+    nodeCommand("console.log('not ok 1 - 关键失败用例'); process.exit(1)"),
   );
   execFileSync("git", ["-C", fx.repo, "add", ".agents/check"]);
   execFileSync("git", [

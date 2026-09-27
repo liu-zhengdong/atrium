@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import {
+  appendFileSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -11,11 +11,11 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { contextOf } from "../map/context.ts";
-import { ADAPTERS, findExecutable } from "../tasks/adapters/index.ts";
+import { killTree, spawnCommand } from "../platform/index.ts";
+import { ADAPTERS } from "../tasks/adapters/index.ts";
 import type { EventInbox, InboxEvent } from "../tasks/events.ts";
 import { parseTaskRef } from "../tasks/ledger.ts";
 import { parseWorker } from "../tasks/profiles.ts";
-import { signalGroup } from "../tasks/spawn.ts";
 import { decideWake } from "../tasks/wake-rule.ts";
 import { workerEnvironment } from "../tasks/worker-env.ts";
 import {
@@ -132,16 +132,15 @@ export const runLeaderProcess: LeaderRun = async (spec) => {
   const input = launch.stdin ? openSync(launch.stdin, "r") : "ignore";
   let child;
   try {
-    child = spawn(
-      findExecutable(launch.command, spec.env.PATH ?? "") ?? launch.command,
-      launch.args,
-      {
-        cwd: launch.cwd,
-        env: launch.env ? { ...spec.env, ...launch.env } : spec.env,
-        detached: true,
-        stdio: [input, out, out],
-      },
-    );
+    child = spawnCommand(launch.command, launch.args, {
+      cwd: launch.cwd,
+      env: launch.env ? { ...spec.env, ...launch.env } : spec.env,
+      detached: true,
+      stdio: [input, out, out],
+    });
+  } catch (error) {
+    appendFileSync(logFile, `[atrium] 拉起失败：${(error as Error).message}\n`);
+    return "failed";
   } finally {
     closeSync(out);
     if (typeof input === "number") closeSync(input);
@@ -149,9 +148,9 @@ export const runLeaderProcess: LeaderRun = async (spec) => {
   return new Promise<WakeExit>((resolve) => {
     let timedOut = false;
     const stop = () => {
-      if (child.pid) signalGroup(child.pid, "SIGTERM");
+      if (child.pid) killTree(child.pid, "SIGTERM");
       setTimeout(() => {
-        if (child.pid) signalGroup(child.pid, "SIGKILL");
+        if (child.pid) killTree(child.pid, "SIGKILL");
       }, 5000).unref();
     };
     const timer = setTimeout(() => {

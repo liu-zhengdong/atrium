@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -17,6 +17,7 @@ import { leaderEnvironment } from "../server/leaders/runtime.ts";
 import { workerEnvironment } from "../server/tasks/worker-env.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import { childEnv } from "./child-env.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const run = promisify(execFile);
 const bin = join(import.meta.dirname, "..", "bin", "atrium.mjs");
@@ -75,7 +76,7 @@ test(
   { timeout: 60000 },
   async (t) => {
     const home = mkdtempSync(join(tmpdir(), "atrium-worker-home-"));
-    t.after(() => rmSync(home, { recursive: true, force: true }));
+    t.after(() => removeTemp(home));
     const env = {
       PATH: process.env.PATH,
       HOME: home,

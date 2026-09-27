@@ -1,5 +1,10 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
+import {
+  commandInvocation,
+  envKey,
+  WINDOWS_SYSTEM_ENV,
+} from "../platform/index.ts";
 
 export const OPENQUOTA_BIN =
   "/Applications/OpenQuota.app/Contents/MacOS/openquota";
@@ -37,12 +42,18 @@ export function resolveOpenquotaBin(
   return fromEnv || OPENQUOTA_BIN;
 }
 
+/** 只传系统基本变量；Windows 上按大写比对并另放行平台层列出的系统变量。 */
 function childEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const keep = new Set<string>([
+    ...SYSTEM_ENV,
+    ...(process.platform === "win32" ? WINDOWS_SYSTEM_ENV : []),
+  ]);
   const env: NodeJS.ProcessEnv = {};
-  for (const key of SYSTEM_ENV)
-    if (base[key] !== undefined) env[key] = base[key];
-  for (const [key, value] of Object.entries(base))
-    if (key.startsWith("LC_") && value !== undefined) env[key] = value;
+  for (const [key, value] of Object.entries(base)) {
+    const name = envKey(process.platform, key);
+    if (value !== undefined && (keep.has(name) || name.startsWith("LC_")))
+      env[name] = value;
+  }
   return env;
 }
 
@@ -60,15 +71,23 @@ export function readOpenquotaPace(
   options: OpenquotaOptions = {},
 ): Promise<OpenquotaPace> {
   const env = options.env ?? process.env;
+  const child = childEnv(env);
+  const call = commandInvocation(
+    resolveOpenquotaBin(options.bin, env),
+    ["pace", "--json"],
+    child,
+  );
   return new Promise((resolve) => {
     execFile(
-      resolveOpenquotaBin(options.bin, env),
-      ["pace", "--json"],
+      call.command,
+      call.args,
       {
         cwd: homedir(),
         timeout: options.timeoutMs ?? PACE_TIMEOUT_MS,
         maxBuffer: PACE_MAX_BUFFER,
-        env: childEnv(env),
+        env: child,
+        windowsHide: true,
+        windowsVerbatimArguments: call.verbatim,
       },
       (error, stdout) => {
         if (error) {

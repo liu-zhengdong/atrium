@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { isAbsolute, join, sep } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { trimTrailingSeparators } from "../platform/plan.ts";
 import { ADAPTERS, invalid, type Tool } from "./adapters/index.ts";
 import { RISKS, type EffectiveProfile, type Risk } from "./profiles.ts";
 import { trustRefusal } from "./plan.ts";
@@ -397,8 +398,7 @@ export function worktreePlan(
   if (!isAbsolute(repo)) throw invalid("仓库须为绝对路径");
   if (!Number.isSafeInteger(taskId) || taskId <= 0)
     throw invalid("任务编号不合法");
-  const base =
-    repo.length > 1 ? repo.replace(new RegExp(`\\${sep}+$`), "") : repo;
+  const base = trimTrailingSeparators(process.platform, repo);
   const slug = slugBase(title) || slugBase(role ?? "") || "task";
   return {
     path: `${base}-t${taskId}-${slug}`,

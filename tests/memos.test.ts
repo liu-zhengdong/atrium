@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -20,6 +20,7 @@ import {
 import { ensureMemoTables, memoText } from "../server/memos/store.ts";
 import { leaderRule } from "../server/leaders/scope.ts";
 import { until } from "./task-fixture.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /**
  * 秘书与 leader 的备忘和决定记录（t97）：纯函数判定穷举；集成走内存服务，
@@ -209,7 +210,7 @@ test("早先 org_leaders.memo 里的 leader 备忘启动时迁到 memos，已有
 
 async function open(t: { after: (fn: () => unknown) => void }) {
   const data = mkdtempSync(join(tmpdir(), "atrium-memos-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const runs: LeaderRunSpec[] = [];
   let behave: (spec: LeaderRunSpec) => Promise<"ok"> = async () => "ok";
   const created = await createApp({

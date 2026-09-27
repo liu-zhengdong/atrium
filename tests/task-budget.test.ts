@@ -1,13 +1,7 @@
 import { profileDb } from "./profile-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -19,6 +13,8 @@ import {
   readQuotaReservePercent,
 } from "../server/tasks/budget.ts";
 import { chooseWorker } from "../server/tasks/worker-choice.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /** 只有根节点的组织树（带空档案表），根章程写上保留份额（不写就不给 boundaries）。 */
 function rootWithReserve(reserve?: number) {
@@ -74,13 +70,11 @@ test("保留份额只读组织树：没有库、没有根、根章程没写都�
 
 test("指定执行者触及章程预算时拒绝并给出可选执行者；自动派活避开该账号", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-budget-choice-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   const bin = join(dir, "bin");
   mkdirSync(bin);
   for (const name of ["grok", "kimi", "codex"]) {
-    const file = join(bin, name);
-    writeFileSync(file, "#!/bin/sh\nexit 0\n");
-    chmodSync(file, 0o755);
+    writeFakeBin(join(bin, name), "#!/bin/sh\nexit 0\n");
   }
   const options = {
     data: dir,
@@ -107,7 +101,7 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
 
 test("组织章程导入后按任务节点的最严保留额挑人", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-budget-org-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   const db = profileDb(undefined, new DatabaseSync(":memory:"));
   t.after(() => db.close());
   ensureOrgTables(db);
@@ -156,9 +150,7 @@ test("组织章程导入后按任务节点的最严保留额挑人", async (t) =
   const bin = join(dir, "bin");
   mkdirSync(bin);
   for (const name of ["grok", "kimi"]) {
-    const file = join(bin, name);
-    writeFileSync(file, "#!/bin/sh\nexit 0\n");
-    chmodSync(file, 0o755);
+    writeFakeBin(join(bin, name), "#!/bin/sh\nexit 0\n");
   }
   const options = {
     db,

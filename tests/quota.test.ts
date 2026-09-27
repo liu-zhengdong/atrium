@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -31,6 +31,8 @@ import {
   resolveOpenquotaBin,
   OPENQUOTA_BIN,
 } from "../server/tasks/openquota.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const SAMPLE = [
   {
@@ -75,15 +77,12 @@ function temp() {
   const dir = mkdtempSync(join(tmpdir(), "atrium-quota-"));
   return {
     dir,
-    done: () => rmSync(dir, { recursive: true, force: true }),
+    done: () => removeTemp(dir),
   };
 }
 
 function fakeBin(dir: string, source: string) {
-  const bin = join(dir, "openquota");
-  writeFileSync(bin, source);
-  chmodSync(bin, 0o755);
-  return bin;
+  return writeFakeBin(join(dir, "openquota"), source);
 }
 
 function paceScript(payload: unknown) {
@@ -250,9 +249,9 @@ test("共享 OpenQuota 读取：校验调用参数并区分缺失、解析和执
     assert.deepEqual(await readOpenquotaPace({ bin: join(dir, "missing") }), {
       missing: true,
     });
-    writeFileSync(bin, "#!/bin/sh\necho oops\n");
+    fakeBin(dir, "#!/bin/sh\necho oops\n");
     assert.deepEqual(await readOpenquotaPace({ bin }), { error: "parse" });
-    writeFileSync(bin, "#!/bin/sh\nexit 3\n");
+    fakeBin(dir, "#!/bin/sh\nexit 3\n");
     assert.deepEqual(await readOpenquotaPace({ bin }), { error: "failed" });
   } finally {
     done();
@@ -396,7 +395,7 @@ test("listQuota：OpenQuota 输出无法解析或非 0 退出时照常返回并�
     const parse = await listQuota({ bin, readers: null });
     assert.deepEqual(parse.notes, ["OpenQuota 输出无法解析"]);
     assert.equal(parse.accounts.length, 5);
-    writeFileSync(bin, "#!/bin/sh\nexit 3\n");
+    fakeBin(dir, "#!/bin/sh\nexit 3\n");
     assert.deepEqual((await listQuota({ bin, readers: null })).notes, [
       "读取 OpenQuota 额度失败",
     ]);
@@ -474,7 +473,7 @@ test("文本表：中文表头、按传入顺序、来源与说明列、运行�
 
 test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-quota-http-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const guarded = await createApp({
     data: join(data, "guarded"),
   });

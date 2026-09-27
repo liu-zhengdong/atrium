@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import {
   closeSync,
   fstatSync,
@@ -11,9 +11,9 @@ import {
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
+import { killTree, processAlive, spawnShell } from "../platform/index.ts";
 import { Problem } from "../problem.ts";
 import { all } from "../org/model.ts";
-import { alive } from "../tasks/spawn.ts";
 import { defaultBranch, exec, type Exec } from "../tasks/git.ts";
 import { LocalCheckQueue } from "../tasks/local-check.ts";
 import { workerEnvironment } from "../tasks/worker-env.ts";
@@ -31,7 +31,7 @@ import {
 
 /**
  * 命令型验收的执行（#313 第 2 步）：服务在里程碑仓库的临时 worktree（origin 默认分支，没有 origin 用 HEAD）
- * 里用白名单环境跑 `/bin/sh -c 命令`，独立进程组、有超时、串行排队；输出写日志，摘要抹凭据后落库。
+ * 里用白名单环境跑 shell 命令（平台层：Unix `/bin/sh -c`，Windows `cmd.exe /c`），独立进程组、有超时、串行排队；输出写日志，摘要抹凭据后落库。
  * 没填仓库的里程碑在空的临时目录里跑。跑完删掉临时目录。
  */
 
@@ -73,7 +73,7 @@ export class GoalChecker {
     private readonly options: GoalCheckOptions,
   ) {
     try {
-      sweepInterrupted(db, alive);
+      sweepInterrupted(db, processAlive);
     } catch (error) {
       console.error(`目标判定：清理中断的检查失败：${String(error)}`);
     }
@@ -174,12 +174,7 @@ export class GoalChecker {
   close() {
     this.closed = true;
     for (const [checkId, child] of this.children) {
-      if (child.pid)
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          /* 已退出 */
-        }
+      if (child.pid) killTree(child.pid, "SIGKILL");
       try {
         finishCheck(this.db, checkId, {
           result: "error",
@@ -310,7 +305,7 @@ export class GoalChecker {
 
   private spawn(checkId: number, command: string, cwd: string, fd: number) {
     const timeoutMs = this.options.timeoutMs ?? GOAL_CHECK_TIMEOUT_MS;
-    const child = spawn("/bin/sh", ["-c", command], {
+    const child = spawnShell(command, {
       cwd,
       env: workerEnvironment(this.options.env),
       detached: true,
@@ -320,12 +315,7 @@ export class GoalChecker {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      if (child.pid)
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          /* 已退出 */
-        }
+      if (child.pid) killTree(child.pid, "SIGKILL");
     }, timeoutMs);
     return new Promise<{
       result: "pass" | "fail" | "timeout" | "error";

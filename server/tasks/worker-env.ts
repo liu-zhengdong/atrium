@@ -11,7 +11,10 @@ import { hostLimits } from "./host-load.ts";
  * 固定加上 ATRIUM_WORKER=1：命令行据此拒绝操作用户的 Atrium 服务。
  * 另注入 ATRIUM_TEST_CONCURRENCY（#358）：测试并发上限，仓库的测试脚本据此限并发，
  * 免得每个 worktree 各占满全部核；来源环境里设了合法值就沿用，否则按核数给缺省。
+ * Windows 上变量名不分大小写，按大写比对与落键，另放行平台层列出的系统变量（SystemRoot、PATHEXT 等）。
  */
+
+import { envKey, WINDOWS_SYSTEM_ENV, type Platform } from "../platform/plan.ts";
 
 const SYSTEM = new Set([
   "PATH",
@@ -38,16 +41,29 @@ const NETWORK = new Set([
   "SSL_CERT_FILE",
 ]);
 
-export function workerAllowed(key: string) {
-  return SYSTEM.has(key) || NETWORK.has(key) || key.startsWith("LC_");
+const WINDOWS = new Set<string>(WINDOWS_SYSTEM_ENV);
+
+export function workerAllowed(
+  key: string,
+  platform: Platform = process.platform,
+) {
+  const name = envKey(platform, key);
+  return (
+    SYSTEM.has(name) ||
+    NETWORK.has(name) ||
+    name.startsWith("LC_") ||
+    (platform === "win32" && WINDOWS.has(name))
+  );
 }
 
 export function workerEnvironment(
   base: NodeJS.ProcessEnv = process.env,
+  platform: Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(base))
-    if (value !== undefined && workerAllowed(key)) env[key] = value;
+    if (value !== undefined && workerAllowed(key, platform))
+      env[envKey(platform, key)] = value;
   // 非交互运行：不要分页器，不要颜色码污染日志。
   env.NO_COLOR = "1";
   env.GIT_PAGER = "cat";

@@ -11,9 +11,16 @@ concurrency:
   cancel-in-progress: true
 jobs:
   check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
+      # Windows 上保持 LF：格式检查与按行解析的测试都以仓库内容为准。
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -21,7 +28,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run format:check
+      # 格式不过也照跑测试，一次看全三平台结果。
       - run: npm run check
+        if: ${{ !cancelled() }}
       - run: npm run bench:cli
         env:
           ATRIUM_BENCH_LIMIT_MS: "300"

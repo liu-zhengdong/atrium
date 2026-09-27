@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { trimTrailingSeparators } from "../platform/plan.ts";
 import { Problem } from "../problem.ts";
 import {
   nodeByAddress,
@@ -83,7 +84,7 @@ function repoOf(value: unknown): string | null {
     /* 下面统一报 */
   }
   if (!dir) throw usage(`--repo: 目录不存在：${path}`);
-  return normalize(path).replace(/\/+$/, "") || "/";
+  return trimTrailingSeparators(process.platform, normalize(path));
 }
 function dueOf(value: unknown): string | null {
   if (value === undefined || value === null || value === "") return null;

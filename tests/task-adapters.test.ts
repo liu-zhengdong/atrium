@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { taskNode } from "../server/org/task-node.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
@@ -40,8 +40,12 @@ import {
   spareByProvider,
   worktreePlan,
 } from "../server/tasks/prepare.ts";
+import { writeFakeBin } from "./fake-bin.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const temp = (name: string) => mkdtempSync(join(tmpdir(), `atrium-${name}-`));
+/** codex 的最后消息文件放在提示词旁（按平台拼路径）。 */
+const LAST_MESSAGE = join("/tmp/t1", "last-message.md");
 const base = {
   promptFile: "/tmp/t1/prompt.md",
   prompt: "修一个 bug",
@@ -64,12 +68,12 @@ test("适配器：各工具的真实调用参数", () => {
         "-c",
         'model_reasoning_effort="high"',
         "-o",
-        "/tmp/t1/last-message.md",
+        LAST_MESSAGE,
         "-",
       ],
       cwd: "/w/repo-t1-x",
       stdin: "/tmp/t1/prompt.md",
-      resultFile: "/tmp/t1/last-message.md",
+      resultFile: LAST_MESSAGE,
     },
   );
   assert.deepEqual(
@@ -191,17 +195,16 @@ test("适配器：破坏输入被拒", () => {
 test("detectInstalled：只认 PATH 上可执行的文件", () => {
   const dir = temp("path");
   try {
-    writeFileSync(join(dir, "codex"), "#!/bin/sh\n");
-    chmodSync(join(dir, "codex"), 0o755);
+    const codex = writeFakeBin(join(dir, "codex"), "#!/bin/sh\n");
     writeFileSync(join(dir, "kimi"), "not executable");
     chmodSync(join(dir, "kimi"), 0o644);
     mkdirSync(join(dir, "grok"));
-    assert.deepEqual(detectInstalled(`/nonexistent:${dir}`), {
-      codex: join(dir, "codex"),
+    assert.deepEqual(detectInstalled(`/nonexistent${delimiter}${dir}`), {
+      codex,
     });
     assert.deepEqual(detectInstalled(""), {});
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 
@@ -391,7 +394,7 @@ test("resolveWorker：三层读取、默认模型与档案 model", async () => {
     assert.equal(km.model, undefined);
     assert.equal(km.id, "kimi");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 
@@ -484,7 +487,7 @@ test("loadRoleDocs：岗位说明只取节点章程，不读仓库部门文件",
     assert.deepEqual(await loadRoleDocs(repo), { roleDoc: "", rootDoc: "" });
     await assert.rejects(loadRoleDocs("relative"), /绝对路径/);
   } finally {
-    rmSync(repo, { recursive: true, force: true });
+    removeTemp(repo);
   }
 });
 
@@ -625,12 +628,10 @@ test("readPace / parsePace：失败返回 undefined", async () => {
   assert.equal(await readPace("/nonexistent/openquota"), undefined);
   const dir = temp("pace");
   try {
-    const bin = join(dir, "openquota");
-    writeFileSync(
-      bin,
+    const bin = writeFakeBin(
+      join(dir, "openquota"),
       `#!/bin/sh\necho '[{"providerId":"codex","sparePercent":12.5,"usedPercent":89,"windowId":"weekly"},{"providerId":"copilot","sparePercent":null}]'\n`,
     );
-    chmodSync(bin, 0o755);
     assert.deepEqual(await readPace(bin), [
       {
         providerId: "codex",
@@ -645,12 +646,12 @@ test("readPace / parsePace：失败返回 undefined", async () => {
         windowId: null,
       },
     ]);
-    writeFileSync(bin, "#!/bin/sh\necho oops\n");
+    writeFakeBin(join(dir, "openquota"), "#!/bin/sh\necho oops\n");
     assert.equal(await readPace(bin), undefined);
-    writeFileSync(bin, "#!/bin/sh\nexit 3\n");
+    writeFakeBin(join(dir, "openquota"), "#!/bin/sh\nexit 3\n");
     assert.equal(await readPace(bin), undefined);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
   assert.equal(parsePace('{"a":1}'), undefined);
   assert.deepEqual(parsePace('[1, {"providerId": 2}]'), []);

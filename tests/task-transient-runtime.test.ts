@@ -5,25 +5,19 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { getTask } from "../server/tasks/ledger.ts";
 import { startApp, until } from "./task-fixture.ts";
+import { isolatedPath, removeFakeBin, writeFakeBin } from "./fake-bin.ts";
+import { fileURLToPath } from "node:url";
 
 const OPENCODE = "opencode+opencode-go/mimo-v2.6-flash";
 
-const sample = new URL(
-  "./fixtures/transient/opencode-cert.jsonl",
-  import.meta.url,
-).pathname;
+const sample = fileURLToPath(
+  new URL("./fixtures/transient/opencode-cert.jsonl", import.meta.url),
+);
 
 /** failures：假 opencode 连续出错几次（计数文件在夹具目录）；kimiFails：假 kimi 也报网络错。 */
 function transientFixture(
@@ -33,8 +27,7 @@ function transientFixture(
   const bin = join(fx.root, "bin");
   const left = join(fx.root, "opencode-failures");
   const script = (name: string, body: string) => {
-    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
-    chmodSync(join(bin, name), 0o755);
+    writeFakeBin(join(bin, name), `#!/bin/sh\n${body}\n`);
   };
   // 假 opencode：计数文件里还有次数就输出证书错误并以 1 退出，否则正常完成。
   // 有 hold 文件时一直占着，直到测试写 release（最多 20 秒），不靠固定睡眠：慢机器上 2 秒不够。
@@ -50,10 +43,8 @@ function transientFixture(
       ? 'echo "Error: read ECONNRESET" >&2\nexit 1'
       : 'echo "kimi 完成"',
   );
-  rmSync(join(bin, "grok"), { force: true });
-  const git = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  if (!existsSync(join(bin, "git"))) symlinkSync(git, join(bin, "git"));
-  fx.env.PATH = `${bin}:/usr/bin:/bin`;
+  removeFakeBin(join(bin, "grok"));
+  fx.env.PATH = isolatedPath(bin);
   writeFileSync(
     join(fx.workers, "harness", "kimi.md"),
     "---\nchecks: []\n---\n",

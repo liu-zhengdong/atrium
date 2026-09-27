@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { sameSecret } from "../shared/secret.ts";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -11,6 +10,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { restrictToOwner } from "./platform/index.ts";
 
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -22,7 +22,7 @@ function atomicSecret(path: string, value: string) {
   try {
     writeFileSync(temp, `${value}\n`, { flag: "wx", mode: 0o600 });
     renameSync(temp, path);
-    chmodSync(path, 0o600);
+    restrictToOwner(path);
   } finally {
     if (existsSync(temp)) unlinkSync(temp);
   }
@@ -46,7 +46,7 @@ export class UserAuth {
       if (token !== null && !/^[a-f0-9]{64}$/.test(token)) {
         const preserved = `${path}.invalid-${randomBytes(6).toString("hex")}`;
         renameSync(path, preserved);
-        chmodSync(preserved, 0o600);
+        restrictToOwner(preserved);
         console.warn(
           `用户令牌文件无效，原件已保留：${preserved}；已生成新令牌`,
         );

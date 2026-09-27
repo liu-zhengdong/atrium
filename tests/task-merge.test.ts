@@ -14,6 +14,7 @@ import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import { MergeQueue } from "../server/tasks/merge-runtime.ts";
 import { MergeClaim } from "../server/tasks/merge-claim.ts";
 import { createApp } from "../server/app.ts";
+import { nodeCommand, sleepCommand, TRUE_COMMAND } from "./portable-shell.ts";
 
 test("合入失败次数的边界", () => {
   assert.deepEqual(mergeFailure(0, "冲突"), {
@@ -240,10 +241,12 @@ for (const scenario of [
             scripts: {
               check:
                 scenario === "check_failed"
-                  ? "echo 'not ok 1 - 故意失败'; exit 1"
+                  ? nodeCommand(
+                      "console.log('not ok 1 - 故意失败'); process.exit(1)",
+                    )
                   : scenario === "stopped" || scenario === "restart_check"
-                    ? "sleep 2; true"
-                    : "true",
+                    ? sleepCommand(2)
+                    : TRUE_COMMAND,
             },
           }),
         );

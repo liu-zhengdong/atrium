@@ -209,14 +209,24 @@ test("ProcessCpu：第二次采样起给核数，采样失败回到不知道，�
 });
 
 test("本机实测：能列出进程，并认出自己起的子进程", async (t) => {
-  if (process.platform === "win32") return t.skip("Windows 由 CI 覆盖");
-  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 15000)"], {
     stdio: "ignore",
   });
   t.after(() => child.kill());
   await new Promise((resolve) => child.once("spawn", resolve));
-  const shot = await snapshot();
-  assert.equal(shot.kind, "total");
-  assert.ok(shot.procs.length > 1);
-  assert.ok(atriumTree(shot.procs, { service: process.pid }).has(child.pid!));
+  // Windows 读性能计数器（瞬时读数），新进程可能晚一两秒才出现在计数器里。
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const shot = await snapshot();
+    assert.equal(shot.kind, process.platform === "win32" ? "rate" : "total");
+    assert.ok(shot.procs.length > 1);
+    const found = atriumTree(shot.procs, { service: process.pid }).has(
+      child.pid!,
+    );
+    if (found || Date.now() > deadline) {
+      assert.ok(found);
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 });

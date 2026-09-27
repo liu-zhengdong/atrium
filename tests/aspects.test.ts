@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
@@ -44,6 +44,7 @@ import { publishTask } from "../server/tasks/notice.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import { Problem } from "../server/problem.ts";
 import { until } from "./task-fixture.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /**
  * 横跨部分第 1 步（#373）：管方面的部分、要点适用范围、任务牵涉、专员归属。
@@ -729,7 +730,7 @@ test("旧库补列：org_nodes、org_points、job_roles 没有新列也能启动
 
 test("隔离服务：被牵涉部分的 leader 收到知会不被叫醒，能写备注不能派活", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-aspects-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const runs: LeaderRunSpec[] = [];
   let behave = async (_spec: LeaderRunSpec) => "ok" as const;
   const created = await createApp({

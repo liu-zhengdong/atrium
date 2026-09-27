@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import {
 } from "../cli/secretary-chat.ts";
 import { chatMode, sessionStore } from "../cli/chat.ts";
 import { Problem } from "../server/problem.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const AGENT = join(import.meta.dirname, "fixtures", "fake-acp-agent.mjs");
 
@@ -181,7 +182,7 @@ test("按工具选打开方式：opencode 原生界面或 ACP、codex ACP，未�
   const codex = chatMode("codex");
   assert.equal(codex.kind, "acp");
   if (codex.kind === "acp")
-    assert.match(codex.args.join(" "), /@zed-industries\/codex-acp/);
+    assert.match(codex.args.join(" "), /@zed-industries[\\/]codex-acp/);
   assert.throws(
     () => chatMode("kimi"),
     (error: unknown) =>
@@ -276,7 +277,7 @@ test("秘书会话：空闲时自动送入事件；忙时排队、一轮结束�
     fresh.chat.close();
     await created.running;
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });
 
@@ -301,6 +302,6 @@ test("连续自动送入到上限后暂停，用户发话后继续；Agent 退�
     const reason = await running;
     assert.match(reason ?? "", /退出码 3/);
   } finally {
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   }
 });

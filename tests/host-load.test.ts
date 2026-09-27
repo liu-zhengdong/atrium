@@ -1,12 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -32,6 +26,8 @@ import { workerEnvironment } from "../server/tasks/worker-env.ts";
 import { getTask } from "../server/tasks/ledger.ts";
 import { hostBrief } from "../cli/top.ts";
 import { startApp, until } from "./task-fixture.ts";
+import { removeTemp } from "./temp-dir.ts";
+import { nodeCommand } from "./portable-shell.ts";
 
 const limits = (over: Partial<HostLimits> = {}): HostLimits => ({
   cores: 8,
@@ -418,7 +414,10 @@ test("本地检查带上测试并发上限", async () => {
     mkdirSync(join(root, "wt", ".agents"), { recursive: true });
     writeFileSync(
       join(root, "wt", ".agents", "check"),
-      `echo "$ATRIUM_TEST_CONCURRENCY" > '${join(root, "seen")}'\n`,
+      nodeCommand(
+        "require('fs').writeFileSync(process.argv[1], String(process.env.ATRIUM_TEST_CONCURRENCY))",
+        join(root, "seen"),
+      ),
     );
     const result = await runLocalCheck({
       worktree: join(root, "wt"),
@@ -429,7 +428,7 @@ test("本地检查带上测试并发上限", async () => {
     assert.equal(result.status, "passed");
     assert.equal(readFileSync(join(root, "seen"), "utf8").trim(), "3");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   }
 });
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { childEnv } from "./child-env.ts";
 import { serviceStatus } from "../server/service.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const exec = promisify(execFile);
 
@@ -35,7 +36,7 @@ test("旧服务关监听后只接管已登记实例，且执行者 PID 必须已
   );
   t.after(() => {
     if (alive(child.pid!)) child.kill("SIGKILL");
-    rmSync(data, { recursive: true, force: true });
+    removeTemp(data);
   });
   await new Promise<void>((resolve) =>
     child.stdout.once("data", () => resolve()),
@@ -117,7 +118,7 @@ test("supervisor 状态读写正确保持持久化", () => {
     assert.equal(readRestartState(dir)?.status, "success");
     assert.equal(readRestartState(dir)?.newPid, 12345);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 
@@ -142,7 +143,7 @@ test("损坏的待重启状态被挪开，后续请求可重新写入", () => {
     writeRestartState(dir, state);
     assert.deepEqual(readRestartState(dir), state);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 
@@ -160,7 +161,7 @@ test("checkServiceHealth 在端口不可达时抛出异常", async () => {
       await checkServiceHealth(mockRecord);
     }, /fetch failed|ECONNREFUSED|connect/i);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 
@@ -242,7 +243,7 @@ test("等待回滚超时说明后台状态，不声称已经失败", async () =>
       /rolling_back.*后台任务仍可能在继续/,
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 });
 

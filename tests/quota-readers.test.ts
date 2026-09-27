@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -54,6 +54,8 @@ import type {
 } from "../server/quota-readers/types.ts";
 import { readPace } from "../server/tasks/prepare.ts";
 import { listQuota, type QuotaList } from "../server/tasks/quota.ts";
+import { removeTemp } from "./temp-dir.ts";
+import { writeFakeBin } from "./fake-bin.ts";
 
 const HOUR = 3_600_000;
 const WEEK_S = 7 * 24 * 3600;
@@ -1058,13 +1060,10 @@ function fakeReaders() {
 }
 
 function fakeOpenquota(dir: string, rows: unknown[]) {
-  const bin = join(dir, "openquota");
-  writeFileSync(
-    bin,
+  return writeFakeBin(
+    join(dir, "openquota"),
     `#!/bin/sh\necho '${JSON.stringify(rows).replace(/'/g, "")}'\n`,
   );
-  chmodSync(bin, 0o755);
-  return bin;
 }
 
 test("atrium quota：没有 OpenQuota 时三家读取器给数据或读不到原因，每行标来源", async () => {
@@ -1097,7 +1096,7 @@ test("atrium quota：没有 OpenQuota 时三家读取器给数据或读不到原
 
 test("atrium quota 与 readPace：自带没覆盖的账号由 OpenQuota 补，读不到的不进挑执行者", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-quota-readers-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeTemp(dir));
   const bin = fakeOpenquota(dir, [
     {
       providerId: "kimi",

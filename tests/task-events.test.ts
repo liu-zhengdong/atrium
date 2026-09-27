@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ import {
 } from "../server/tasks/ledger.ts";
 import { TaskRunner } from "../server/tasks/runner.ts";
 import type { Exec } from "../server/tasks/git.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 test("事件队列：落库、同键合并、攒批窗口、wait 唤醒、ack 后不再投递", async () => {
   const db = new DatabaseSync(":memory:");
@@ -295,7 +296,7 @@ test("事件队列按判定投递：逐格与纯函数一致，租约到期唤�
 
 test("服务重启自愈：running 且 pid 已不在、日志判不了结局的任务收尾为 failed 并投递事件", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-recover-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTemp(root));
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   createTask(db, { title: "orphan", deliver: "none" });
@@ -321,7 +322,7 @@ test("服务重启自愈：running 且 pid 已不在、日志判不了结局的�
 
 test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立事件", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-ci-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTemp(root));
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const calls: string[][] = [];

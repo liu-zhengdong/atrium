@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { test } from "node:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +12,7 @@ import { publishTask } from "../server/tasks/notice.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import type { WakeExit } from "../server/leaders/wake.ts";
 import { until } from "./task-fixture.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /**
  * leader 层的集成：内存服务 + 假 leader 进程（直接用服务签发的令牌调接口）。
@@ -23,7 +24,7 @@ type Behave = (spec: LeaderRunSpec) => Promise<WakeExit>;
 
 async function open(t: { after: (fn: () => unknown) => void }) {
   const data = mkdtempSync(join(tmpdir(), "atrium-leaders-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const runs: LeaderRunSpec[] = [];
   let behave: Behave = async () => "ok";
   const created = await createApp({

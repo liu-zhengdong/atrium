@@ -10,13 +10,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,28 +23,38 @@ import {
   trackFixture,
 } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const exec = promisify(execFile);
 const victimScript = join(packageRoot, "tests", "fixtures", "signal-victim.ts");
 
-test("服务启动途中尚无登记时，仍按夹具目录杀掉进程", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-early-service-"));
-  const data = join(root, "data");
-  mkdirSync(data);
-  const fixture = trackFixture(data, root);
-  t.after(() => finishFixture(fixture));
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    cwd: data,
-    detached: true,
-    stdio: "ignore",
-  });
-  assert.ok(child.pid);
-  await new Promise<void>((resolve) => child.once("spawn", resolve));
-  await finishFixture(fixture);
-  for (let i = 0; i < 20 && alive(child.pid); i++) await delay(50);
-  assert.equal(alive(child.pid), false);
-  assert.equal(existsSync(root), false);
-});
+// Windows 读不到别的进程的工作目录，按夹具目录找进程只在 Unix 上成立（同文件其余信号用例同样只跑 Unix）。
+test(
+  "服务启动途中尚无登记时，仍按夹具目录杀掉进程",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "atrium-early-service-"));
+    const data = join(root, "data");
+    mkdirSync(data);
+    const fixture = trackFixture(data, root);
+    t.after(() => finishFixture(fixture));
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        cwd: data,
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+    assert.ok(child.pid);
+    await new Promise<void>((resolve) => child.once("spawn", resolve));
+    await finishFixture(fixture);
+    for (let i = 0; i < 20 && alive(child.pid); i++) await delay(50);
+    assert.equal(alive(child.pid), false);
+    assert.equal(existsSync(root), false);
+  },
+);
 
 type VictimInfo = { root: string; pid: number; descendants: number[] };
 
@@ -148,7 +152,7 @@ async function startOutsider(t: { after: (fn: () => Promise<void>) => void }) {
       { env, cwd: root, timeout: 30000 },
     ).catch(() => {});
     if (alive(pid)) process.kill(pid, "SIGKILL");
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
   });
   return { root, pid };
 }
@@ -181,7 +185,7 @@ function collectVictim(
         }
       }
     }
-    rmSync(info.root, { recursive: true, force: true });
+    removeTemp(info.root);
   });
 }
 
@@ -259,6 +263,6 @@ test(
     } catch {
       process.kill(info.pid, "SIGKILL");
     }
-    rmSync(info.root, { recursive: true, force: true });
+    removeTemp(info.root);
   },
 );

@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { openUrlInvocation, spawnCommand } from "../server/platform/index.ts";
 import { Problem } from "../server/problem.ts";
 import {
   dataDirectory,
@@ -125,14 +125,12 @@ export function renderTopMap(
 
 /** 交互终端里打开浏览器；执行者环境、非终端与 --no-open 都只打印链接。 */
 function openBrowser(url: string) {
-  const command =
-    process.platform === "darwin"
-      ? "open"
-      : process.platform === "win32"
-        ? "explorer"
-        : "xdg-open";
   try {
-    const child = spawn(command, [url], { detached: true, stdio: "ignore" });
+    const { command, args } = openUrlInvocation(process.platform, url);
+    const child = spawnCommand(command, args, {
+      detached: true,
+      stdio: "ignore",
+    });
     child.on("error", () => {});
     child.unref();
     return true;

@@ -10,7 +10,10 @@
  * 其余一律不传：身份只用分配的账号、凭据只用库里的（#150、#213）——不传 *_API_KEY、*_TOKEN、
  * ANTHROPIC_、CLAUDE_、OPENAI_ 前缀变量、SSH_AUTH_SOCK、HERDR_*，以及除 PI_ACP_DIR 之外的 PI_*。
  * 不加任何绕过白名单的测试开关；测试与运行配置走上面已列出的变量。
+ * Windows 上变量名不分大小写，按大写比对与落键，另放行平台层列出的系统变量（SystemRoot、PATHEXT 等）。
  */
+
+import { envKey, WINDOWS_SYSTEM_ENV, type Platform } from "./platform/plan.ts";
 
 /** 服务进程运行、读日志与起子进程所需的系统变量。 */
 const SYSTEM = new Set([
@@ -48,13 +51,17 @@ const ISOLATION = new Set([
   "NODE_TEST_CONTEXT",
 ]);
 
-function allowed(key: string) {
+const WINDOWS = new Set<string>(WINDOWS_SYSTEM_ENV);
+
+function allowed(key: string, platform: Platform) {
+  const name = envKey(platform, key);
   return (
-    SYSTEM.has(key) ||
-    NETWORK.has(key) ||
-    ISOLATION.has(key) ||
-    key.startsWith("ATRIUM_") ||
-    key.startsWith("LC_")
+    SYSTEM.has(name) ||
+    NETWORK.has(name) ||
+    ISOLATION.has(name) ||
+    name.startsWith("ATRIUM_") ||
+    name.startsWith("LC_") ||
+    (platform === "win32" && WINDOWS.has(name))
   );
 }
 
@@ -74,7 +81,10 @@ export function droppedSensitiveNames(keys: Iterable<string>): string[] {
  * 过滤出服务进程的环境；`droppedSensitive` 是被丢掉的凭据/身份类变量名，
  * 供 start/restart 回执打印（只报名字，不打印值）。
  */
-export function serviceEnvironment(base: NodeJS.ProcessEnv = process.env): {
+export function serviceEnvironment(
+  base: NodeJS.ProcessEnv = process.env,
+  platform: Platform = process.platform,
+): {
   env: NodeJS.ProcessEnv;
   droppedSensitive: string[];
 } {
@@ -82,12 +92,14 @@ export function serviceEnvironment(base: NodeJS.ProcessEnv = process.env): {
   const keys = Object.keys(base);
   for (const key of keys) {
     const value = base[key];
-    if (value !== undefined && allowed(key)) env[key] = value;
+    if (value !== undefined && allowed(key, platform))
+      env[envKey(platform, key)] = value;
   }
-  const kept = new Set(Object.keys(env));
   return {
     env,
-    droppedSensitive: droppedSensitiveNames(keys.filter((k) => !kept.has(k))),
+    droppedSensitive: droppedSensitiveNames(
+      keys.filter((k) => !allowed(k, platform)),
+    ),
   };
 }
 

@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import { Problem, closest } from "../server/problem.ts";
+import { spawnCommand } from "../server/platform/index.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import type { InboxEvent } from "../server/tasks/events.ts";
 import {
@@ -327,7 +327,7 @@ async function runNative(options: {
     const ignore = () => {};
     process.on("SIGINT", ignore);
     const outcome = await new Promise<string | null>((resolve) => {
-      const child = spawn(
+      const child = spawnCommand(
         "opencode",
         ["attach", server.url, "--session", session, "--dir", cwd],
         { cwd, env, stdio: "inherit" },

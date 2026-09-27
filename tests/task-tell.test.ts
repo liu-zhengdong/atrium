@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
@@ -25,6 +25,7 @@ import {
   unsent,
 } from "../server/tasks/tell-ledger.ts";
 import { startApp, until } from "./task-fixture.ts";
+import { writeFakeBin } from "./fake-bin.ts";
 
 const SESSION = "11111111-2222-4333-8444-555555555555";
 const base = {
@@ -153,7 +154,7 @@ test("适配器：claude 即时输入与续上的参数，codex 续上与会话 
     "-c",
     'model_reasoning_effort="high"',
     "-o",
-    "/tmp/t/last-message.md",
+    join("/tmp/t", "last-message.md"),
     SESSION,
     "-",
   ]);
@@ -352,9 +353,7 @@ async function tellApp(t: Parameters<typeof startApp>[0]) {
       ["codex", FAKE_CODEX],
       ["kimi", FAKE_KIMI],
     ] as const) {
-      const file = join(fx.root, "bin", name);
-      writeFileSync(file, body);
-      chmodSync(file, 0o755);
+      writeFakeBin(join(fx.root, "bin", name), body);
       writeFileSync(
         join(fx.workers, "harness", `${name}.md`),
         "---\nchecks: []\n---\n",

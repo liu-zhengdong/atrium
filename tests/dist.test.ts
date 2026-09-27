@@ -6,13 +6,12 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { serviceArgs, useDist } from "../server/entry.ts";
@@ -28,6 +27,7 @@ import {
   finishFixture,
   trackFixture,
 } from "./fixture-signal.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 const exec = promisify(execFile);
 after(assertNoFixtureLeaks);
@@ -55,7 +55,7 @@ test("拉起服务的参数：装好的包跑 dist/server.js；仓库里、没�
   const root = mkdtempSync(join(tmpdir(), "atrium-entry-"));
   const forced = process.env.ATRIUM_DIST;
   t.after(() => {
-    rmSync(root, { recursive: true, force: true });
+    removeTemp(root);
     if (forced === undefined) delete process.env.ATRIUM_DIST;
     else process.env.ATRIUM_DIST = forced;
   });
@@ -78,7 +78,7 @@ test("拉起服务的参数：装好的包跑 dist/server.js；仓库里、没�
   assert.deepEqual(serviceArgs("/abs/x.ts", root), [
     "--import",
     import.meta.resolve("tsx"),
-    "/abs/x.ts",
+    resolve(root, "/abs/x.ts"),
   ]);
   writeFileSync(join(root, ".git"), "gitdir: elsewhere\n");
   assert.deepEqual(serviceArgs(undefined, root), tsx("server/main.ts"));

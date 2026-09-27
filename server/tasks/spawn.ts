@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import {
   appendFileSync,
   closeSync,
@@ -9,8 +9,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { commandInvocation, spawnInvocation } from "../platform/index.ts";
 import { Problem } from "../problem.ts";
-import { findExecutable } from "./adapters/index.ts";
 import { userLine } from "./live-input.ts";
 import type { Prepared } from "./workspace.ts";
 
@@ -40,13 +40,25 @@ export async function spawnWorker(
   const { launch, logFile } = prepared;
   if (!append && existsSync(logFile))
     renameSync(logFile, `${logFile}-${Date.now()}`);
-  const command =
-    findExecutable(launch.command, env.PATH ?? "") ?? launch.command;
+  const childEnv = launch.env ? { ...env, ...launch.env } : env;
+  let invocation;
+  try {
+    invocation = commandInvocation(launch.command, launch.args, childEnv);
+  } catch (error) {
+    throw new Problem(
+      500,
+      `拉起 ${prepared.worker.id} 失败：${(error as Error).message}`,
+      "internal",
+    );
+  }
+  const command = invocation.command;
   const header = `[atrium] ${taskRefText} · ${prepared.worker.id} · ${new Date().toISOString()}${append ? " · 续上会话" : ""}\n[atrium] cwd ${launch.cwd}\n${Object.entries(
     launch.env ?? {},
   )
     .map(([key, value]) => `[atrium] env ${key}=${value}\n`)
-    .join("")}[atrium] ${[command, ...launch.args.map(shortArg)].join(" ")}\n`;
+    .join(
+      "",
+    )}[atrium] ${[command, ...invocation.args.map(shortArg)].join(" ")}\n`;
   if (append) appendFileSync(logFile, header, { mode: 0o600 });
   else writeFileSync(logFile, header, { mode: 0o600 });
   const offset = statSync(logFile).size;
@@ -60,9 +72,9 @@ export async function spawnWorker(
         : "ignore";
   let child: ChildProcess;
   try {
-    child = spawn(command, launch.args, {
+    child = spawnInvocation(invocation, {
       cwd: launch.cwd,
-      env: launch.env ? { ...env, ...launch.env } : env,
+      env: childEnv,
       detached: true,
       stdio: [input, out, out],
     });
@@ -93,24 +105,5 @@ export async function spawnWorker(
   return { child, offset };
 }
 
-/** 进程组整体发信号；进程已不在时静默。 */
-export function signalGroup(pid: number, signal: NodeJS.Signals) {
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    try {
-      process.kill(pid, signal);
-    } catch {
-      // 已退出。
-    }
-  }
-}
-
-export function alive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
+/** 进程是否还在（平台层判定）。 */
+export { processAlive as alive } from "../platform/index.ts";

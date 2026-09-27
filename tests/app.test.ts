@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { authPolicy } from "../server/auth-policy.ts";
 import { userTokenPath } from "../server/user-auth.ts";
+import { removeTemp } from "./temp-dir.ts";
 
 /** 组织运行时的精简入口（#291）：只有认证、任务、组织、额度与事件路由。 */
 async function open(t: { after: (fn: () => unknown) => void }, auth = true) {
   const data = mkdtempSync(join(tmpdir(), "atrium-app-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const routes: { method: string; url: string }[] = [];
   const created = await createApp({
     data,
@@ -225,7 +226,7 @@ test("--as 只认 u1 与组织节点 leader 的短号；leader 只收短号", as
 
 test("旧运行时留下的表原样保留，精简入口照常启动且不读写它们", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-app-legacy-"));
-  t.after(() => rmSync(data, { recursive: true, force: true }));
+  t.after(() => removeTemp(data));
   const legacy = new DatabaseSync(join(data, "atrium.sqlite"));
   legacy.exec(`CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT);
     INSERT INTO agents VALUES ('x','旧身份');

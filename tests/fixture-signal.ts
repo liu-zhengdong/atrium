@@ -11,8 +11,9 @@ import {
 import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
-import { alive } from "../server/service-state.ts";
+import { alive, readService } from "../server/service-state.ts";
 import { stopService } from "../server/service.ts";
+import { killProcessesUnder } from "./win-processes.ts";
 
 /**
  * 测试被中断（Ctrl-C、超时强杀）时的收尾：夹具起的后台服务、它的子进程
@@ -143,7 +144,34 @@ function stopFixture(fixture: OpenFixture): void {
       /* 已退出 */
     }
   }
-  rmSync(fixture.root, { recursive: true, force: true });
+  // Windows 读不到进程的工作目录：按服务登记的 pid 与命令行结束目录下的进程；
+  // 刚退出的进程还占着目录时带重试。
+  if (process.platform === "win32") {
+    let pid: number | undefined;
+    try {
+      pid = readService(fixture.data)?.pid;
+    } catch {
+      /* 没有登记 */
+    }
+    if (pid && pid !== process.pid && alive(pid)) {
+      fixture.pids.add(pid);
+      try {
+        execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } catch {
+        /* 已退出 */
+      }
+    }
+    killProcessesUnder(fixture.root);
+  }
+  rmSync(fixture.root, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === "win32" ? 20 : 0,
+    retryDelay: 100,
+  });
 }
 
 /** 夹具创建时登记：进程被打断时由信号处理器统一收尾。 */

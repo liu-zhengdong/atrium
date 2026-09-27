@@ -76,6 +76,8 @@ import { restartInProgress } from "../supervisor.ts";
 import { listLeaders } from "../leaders/model.ts";
 import { hasOrg } from "../org/task-node.ts";
 import { existsSync } from "node:fs";
+import { HostLoad, hostView } from "./host-load.ts";
+import { sharedLocalChecks } from "./local-check.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -115,6 +117,8 @@ export type RunnerOptions = {
     deploy?: (version: string) => Promise<DeployResult>;
     pollMs?: number;
   };
+  /** 本机减负（#358）：执行者并发上限、本地检查并发、负载阈值；缺省按服务环境与核数（host-load.ts）。 */
+  host?: HostLoad;
 };
 
 export class TaskRunner {
@@ -128,6 +132,7 @@ export class TaskRunner {
   private readonly merge: MergeQueue;
   private readonly review: ReviewGate;
   private readonly online: OnlineWatch;
+  private readonly host: HostLoad;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly background = new Set<Promise<void>>();
   private readonly exec: Exec;
@@ -147,6 +152,9 @@ export class TaskRunner {
     ensureQueueTable(db);
     ensureWorkerProfiles(db);
     importWorkerProfiles(db, options.workersDir);
+    // 本机限额只看服务自己的环境（不是给执行者的 options.env）。
+    this.host = options.host ?? HostLoad.fromEnv(process.env);
+    sharedLocalChecks.limit = this.host.limits.maxChecks;
     this.inbox = new EventInbox(db, {
       batchMs: options.batchMs,
       leaseMs: options.leaseMs,
@@ -205,6 +213,7 @@ export class TaskRunner {
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
       onAccepted: (id) => this.review.admit(id),
+      hostGate: () => this.host.gate(this.x.inFlight()),
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
         settle: () => void this.settleReviews(),
@@ -320,6 +329,8 @@ export class TaskRunner {
       if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();
+      // 因本机满或太忙排队的，负载降下来后在这里拉起。
+      if (!this.closed && this.recovered) await this.x.drain();
       if (!this.closed && this.recovered) await this.settleReviews();
       if (!this.closed && this.recovered) await this.settleCouncils();
       if (!this.closed && this.recovered) this.review.kick();
@@ -521,6 +532,12 @@ export class TaskRunner {
         ),
         pick,
       };
+    }
+    // 本机减负（#358）：满了或太忙就落库排队，空出来后由 drain 按入队顺序拉起。
+    const gate = this.host.gate(this.x.inFlight(id));
+    if (!gate.ok) {
+      this.x.launching.delete(id);
+      return this.enqueue(task, chosen, gate.reason);
     }
     this.x.launching.set(id, tool);
     try {
@@ -912,6 +929,7 @@ export class TaskRunner {
         events: this.inbox.countPending(who),
       },
       ...(leaders.length ? { leaders } : {}),
+      host: this.hostView(),
       rows: rows.map((row, index) => {
         const action = recentAction({
           tool: toolOf(row.worker),
@@ -925,6 +943,16 @@ export class TaskRunner {
       }),
       truncated,
     };
+  }
+
+  /** 本机负载与限额（#358）：`top` 抬头显示「本机太忙，排队中」用。 */
+  hostView() {
+    return hostView({
+      limits: this.host.limits,
+      load: this.host.load(),
+      running: this.x.inFlight(),
+      checks: sharedLocalChecks.size,
+    });
   }
 
   private settled(id: number) {

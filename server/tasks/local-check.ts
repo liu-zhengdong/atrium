@@ -21,32 +21,57 @@ export type LocalCheck = {
   failedTests: string[];
 };
 
+/** 本地检查排队：同时最多 limit 个（缺省 1，即串行），其余按到达顺序等空位（#358）。 */
 export class LocalCheckQueue {
-  private tail: Promise<void> = Promise.resolve();
-  private waiting = 0;
+  private active = 0;
+  private readonly waiters: (() => void)[] = [];
+
+  constructor(private max = 1) {}
+
+  get limit() {
+    return this.max;
+  }
+
+  /** 调整并发上限；调大时立刻放行等着的。 */
+  set limit(value: number) {
+    this.max = Math.max(1, Math.floor(value));
+    this.pump();
+  }
+
+  get size() {
+    return { running: this.active, waiting: this.waiters.length };
+  }
+
+  private pump() {
+    while (this.active < this.max && this.waiters.length) {
+      this.active++;
+      this.waiters.shift()!();
+    }
+  }
 
   async run<T>(work: () => Promise<T>, queued?: () => void): Promise<T> {
-    const previous = this.tail;
-    let release!: () => void;
-    this.tail = new Promise<void>((resolve) => (release = resolve));
-    if (this.waiting++ > 0) {
+    if (this.active >= this.max) {
       try {
         queued?.();
       } catch {
-        // 事件记录失败不能让等待者绕开前一份检查。
+        // 事件记录失败不能让等待者绕开前面的检查。
       }
-    }
-    await previous;
+      await new Promise<void>((resolve) => {
+        this.waiters.push(resolve);
+        this.pump();
+      });
+    } else this.active++;
     try {
       return await work();
     } finally {
-      this.waiting--;
-      release();
+      this.active--;
+      this.pump();
     }
   }
 }
 
-const sharedQueue = new LocalCheckQueue();
+/** 服务里所有任务共用的本地检查队列；并发上限由运行时按本机配置设（host-load.ts）。 */
+export const sharedLocalChecks = new LocalCheckQueue();
 
 /** .agents/check 是仓库内的 shell 脚本；没有时读取 package.json 的 check 脚本。 */
 export async function checkCommand(worktree: string): Promise<string> {
@@ -117,7 +142,7 @@ export async function runLocalCheck(input: {
   onStatus?: (status: "queued" | "started", log: string) => void;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
-  return (input.queue ?? sharedQueue).run(
+  return (input.queue ?? sharedLocalChecks).run(
     async () => {
       if (input.signal?.aborted) throw new Error("服务正在关闭");
       mkdirSync(input.taskDir, { recursive: true, mode: 0o700 });

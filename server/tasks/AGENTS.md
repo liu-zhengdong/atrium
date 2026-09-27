@@ -13,3 +13,4 @@
 - 会审（#322）：账在 `councils.ts`（task_councils 议题一行、council_members 每位专员一个意见任务），判定在 `council-gate.ts`（意见立场、汇总解析、结局合成、提示词），编排在 `council-runtime.ts`（意见收齐交 leader 汇总、汇总完成记结论）；议题任务自己的执行者运行就是汇总，意见任务与汇总的完成不单独投递，结局投 `council_decided` / `council_escalated`。
 - 事件先落库再投递；同一订阅者、同一去重键的未确认事件合并；订阅者自己发起的动作不投给他本人。
 - 测试用 `tests/task-fixture.ts` 的假执行者和临时目录，不依赖本机装了哪些 CLI 或 OpenQuota。
+- 本机减负（#358）：限额读取与判定在 `host-load.ts`（纯函数，采样在 `HostLoad`）；`TaskRunner.run` 与 `Executors.drain` 拉起前过同一道闸门，满了或太忙落库排队、巡检时按入队顺序拉起；本地检查并发由共享的 `sharedLocalChecks` 上限控制；测试并发经 `worker-env.ts` 注入 `ATRIUM_TEST_CONCURRENCY`。

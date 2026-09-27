@@ -11,6 +11,7 @@ import { concernsBrief } from "./task-concerns.ts";
 import type { ConcernState } from "../server/tasks/concern-gate.ts";
 import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
+import type { HostView } from "../server/tasks/host-load.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -66,6 +67,8 @@ export type Snapshot = {
   };
   rows: TopRow[];
   truncated: boolean;
+  /** 本机负载与限额（#358）；旧版服务没有这个字段。 */
+  host?: HostView;
   /** leader 层：每位负责什么、最近一次唤醒在处理什么、还有几件要处理的事；没有 leader 时不给。 */
   leaders?: {
     ref: string;
@@ -254,6 +257,16 @@ export function layoutOf(
   };
 }
 
+/** 抬头里的本机状态（#358）：只在暂停派新活时出现，放在排队数后面免得被截掉。 */
+export function hostBrief(host: HostView | undefined): string {
+  if (!host?.paused) return "";
+  const load = (value: number) =>
+    value >= 10 ? value.toFixed(0) : value.toFixed(1);
+  if (host.busy_load !== null && host.load > host.busy_load)
+    return ` · 本机太忙，排队中（负载 ${load(host.load)}/${load(host.busy_load)}）`;
+  return ` · 本机满 ${host.running}/${host.max_workers}，排队中`;
+}
+
 /** 画一屏。排队与受阻那两列本来就是空的，所以原因长一点也不会顶掉别的列。 */
 export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const rows = snapshot.rows;
@@ -268,6 +281,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const head =
     `Atrium · 在跑 ${snapshot.counts.running}` +
     ` · 排队 ${snapshot.counts.queued}` +
+    hostBrief(snapshot.host) +
     (snapshot.counts.reviewing
       ? ` · 审阅中 ${snapshot.counts.reviewing}`
       : "") +

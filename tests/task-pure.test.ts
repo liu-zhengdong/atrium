@@ -70,6 +70,7 @@ test("执行者环境白名单：去掉 HERDR_*、CLAUDECODE、CLAUDE_CODE_*、P
     SSH_AUTH_SOCK: "/s",
   });
   assert.deepEqual(Object.keys(env).sort(), [
+    "ATRIUM_TEST_CONCURRENCY",
     "ATRIUM_WORKER",
     "GH_PROMPT_DISABLED",
     "GIT_PAGER",

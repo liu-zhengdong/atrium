@@ -188,8 +188,12 @@ test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关�
   const seen = execFileSync("cat", [join(fx.root, "env-seen.txt")], {
     encoding: "utf8",
   });
-  assert.doesNotMatch(seen, /HERDR_|CLAUDECODE|ATRIUM_(?!WORKER=1\n)/);
+  assert.doesNotMatch(
+    seen,
+    /HERDR_|CLAUDECODE|ATRIUM_(?!WORKER=1\n|TEST_CONCURRENCY=[1-9][0-9]*\n)/,
+  );
   assert.match(seen, /^ATRIUM_WORKER=1$/m);
+  assert.match(seen, /^ATRIUM_TEST_CONCURRENCY=[1-9][0-9]*$/m);
 
   const log = await call("GET", "/api/tasks/t1/log?after=0");
   assert.match(log.body.text, /working/);

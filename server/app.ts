@@ -9,6 +9,10 @@ import { UserAuth } from "./user-auth.ts";
 import { authPolicy } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
 import { registerPatrolRoutes } from "./tasks/patrol-routes.ts";
+import { ensureScheduleTables } from "./schedules/model.ts";
+import { SchedulePump } from "./schedules/runtime.ts";
+import { registerScheduleRoutes } from "./schedules/routes.ts";
+import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
 import { ensureTaskTables } from "./tasks/ledger-schema.ts";
@@ -83,6 +87,8 @@ export async function createApp(options: {
   leaders?: Partial<Omit<LeaderWakerOptions, "data">>;
   /** 旧的 ~/Atrium 目录（main.ts 给）：启动时导入一次根章程预算；不给就不读。 */
   legacyDir?: string;
+  /** 周期任务（#404）：测试缩短巡检间隔、注入时钟与时区。 */
+  schedules?: { tickMs?: number; now?: () => number; offset?: Offset };
 }) {
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   const db = openDatabase(options.data);
@@ -246,9 +252,22 @@ export async function createApp(options: {
   // 旧关注点先迁完，任务运行时才接管与派发；避免短暂读到混合状态。
   ensureTaskTables(db);
   ensureOrgTables(db);
+  ensureScheduleTables(db);
   migrateSpecialists(db);
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
   registerPatrolRoutes(app, db, taskRunner);
+  // 周期任务（#404）：到点在节点下建普通任务并派发；等任务运行时接管完上次在跑的再判上一轮。
+  const schedulePump = new SchedulePump(
+    db,
+    {
+      run: (reference, body) => taskRunner.run(reference, body),
+      inbox: taskRunner.inbox,
+    },
+    { ready: () => taskRunner.ready, ...options.schedules },
+  );
+  registerScheduleRoutes(app, db, schedulePump);
+  schedulePump.start();
+  app.addHook("preClose", async () => schedulePump.close());
   registerHostRoutes(app, db, taskRunner);
   const secretaryFallback = new SecretaryFallback(
     taskRunner.inbox,

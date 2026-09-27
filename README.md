@@ -275,9 +275,16 @@ atrium map edit atrium/security --applies atrium/web,atrium/cli  # 它的要点�
 atrium org edit atrium/perf --kind aspect --reason 横向看性能   # 已有部分改成管方面；改回 module 前要先清掉适用范围
 atrium patrol run atrium/cli                       # 手动巡检一条 uses 场景；下一次轮换到下一条
 atrium patrol findings atrium/cli                  # 看发现及 leader 的处理结果
+atrium schedule add atrium/cli --kind patrol --every 1d --at 09:30  # 每天 09:30 巡检一次
+atrium schedule add atrium 周报 --every 7d --brief 周报.md          # 每周在节点下建一件普通任务
+atrium schedule run s1                             # 马上跑一轮，不改下次时间
+atrium schedule ls --node atrium                   # 列该节点及下层的周期任务；show s1 看最近几轮
+atrium schedule pause s1                           # 暂停；resume 续上（暂停期间不补），rm 删除（sN 不复用）
 ```
 
-体验巡检以当前用户环境使用安装版服务与默认数据目录；隔离服务启动时显式设置的 `ATRIUM_DATA`、`ATRIUM_PORT` 会传给巡检进程。巡检只看全景人话字段、帮助与命令回执，不读代码。巡检进程用 `atrium patrol report tN --phenomenon 现象 --step 步骤 --command 命令 --expected 预期 --actual 实际 --kind broken|awkward` 记发现；同节点同现象去重，已忽略的也不再报。任务结束后新增发现投给节点 leader，leader 开任务后用 `atrium patrol decide fN --task tN` 关联，或用 `--merge tN` 并入已有任务，或用 `--ignore 原因` 记下忽略理由。全景节点的「巡检发现」页签与 `map --json` 都显示处理结果。本步只支持手动触发。
+体验巡检以当前用户环境使用安装版服务与默认数据目录；隔离服务启动时显式设置的 `ATRIUM_DATA`、`ATRIUM_PORT` 会传给巡检进程。巡检只看全景人话字段、帮助与命令回执，不读代码。巡检进程用 `atrium patrol report tN --phenomenon 现象 --step 步骤 --command 命令 --expected 预期 --actual 实际 --kind broken|awkward` 记发现；同节点同现象去重，已忽略的也不再报。任务结束后新增发现投给节点 leader，leader 开任务后用 `atrium patrol decide fN --task tN` 关联，或用 `--merge tN` 并入已有任务，或用 `--ignore 原因` 记下忽略理由。全景节点的「巡检发现」页签与 `map --json` 都显示处理结果。
+
+周期任务（`schedule`，短号 `s1`…，全局持久不复用）：到点在该节点下生成一件普通任务并按 `task run` 同一条路派发（不写 `--worker` 就按 `task pick` 挑人；闲时/普通按节点缺省）。`--every` 写 `7d`、`1d`、`12h`、`2w`（至少 1 小时）；`--at 09:30` 定本机钟点，只用于整天的周期，不写就从添加时算起一个周期后第一轮。`--kind task`（缺省）建普通任务，可带 `--brief`、`--by`；`--kind patrol` 生成与 `patrol run` 同样的体验巡检（按 uses 轮换，节点没有 uses 时添加即报错）；`--kind research` 只调研、不交 PR。上一轮（todo / running / blocked）还没结束就跳过本轮并记一笔；服务停机错过好几轮只补一轮；建不出任务或派发失败记在 `schedule show` 的最近几轮里，并以 `schedule_failed` 事件投给该节点最近的 leader（找不到投秘书）。周期任务只能由用户增删改，leader 只读。
 
 - **网页**：服务自带（`/map`），只听 127.0.0.1、只接受本机连接。`atrium map` 用用户令牌换一个一次性链接（2 分钟内有效、只能用一次），浏览器打开后换成本机会话 cookie（HttpOnly、SameSite=Strict，7 天有效，服务重启后仍有效）；会话只能读全景，写接口和其他接口仍要用户令牌。交互终端里直接打开浏览器，非终端、执行者环境或 `--no-open` 只打印链接。
 - **布局**：一块一页。顶栏是面包屑（从根到当前块，可点回上层）和「在做 N 件」——数字是当前部分含其子部分的在跑数，专员页与执行者页显示全组织的「全组织在做 N 件」；下面是小字类别（组织／部分／管方面的部分／专员）、人话名与介绍。组织节点展示组成部分、任务、专员、原则与巡检发现（现象、步骤与命令、预期与实际、处理结果）。任务默认只看进行中，可切「全部」；「最近在做」一列里执行者写的 http(s) 链接（如 PR 地址）点得开，新标签页打开。

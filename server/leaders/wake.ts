@@ -147,6 +147,7 @@ export const EVENT_WORDS: Record<string, string> = {
   review_passed: "审阅通过",
   worker_advice: "执行者升降建议",
   skill_proposal: "技能修订提议",
+  schedule_failed: "周期任务没建成",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
 

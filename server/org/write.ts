@@ -28,6 +28,13 @@ import {
   planBoundaries,
   saveBoundaries,
 } from "./boundary-store.ts";
+import {
+  checkStoredShares,
+  ownShares,
+  planShares,
+  saveShares,
+} from "./share-store.ts";
+import { exportShares } from "./shares.ts";
 
 function authorized(
   db: DatabaseSync,
@@ -169,6 +176,7 @@ export function editDoc(
     fields: unknown;
     body: unknown;
     boundaries?: unknown;
+    budget?: unknown;
     rev?: string;
     reason: unknown;
   },
@@ -214,9 +222,13 @@ export function revertDoc(
       fields: unknown;
       body: unknown;
       boundaries?: unknown;
+      budget?: unknown;
     };
     // 第 2 步之前的章程修订没有 boundaries：当时本节点没有边界
-    if (doc === "charter") snapshot.boundaries ??= [];
+    if (doc === "charter") {
+      snapshot.boundaries ??= [];
+      snapshot.budget ??= {};
+    }
     return editDocInner(db, node, doc, snapshot, validateReason(reason), actor);
   });
 }
@@ -237,7 +249,10 @@ function writeDoc(
     fields,
     body,
     ...(doc === "charter"
-      ? { boundaries: exportBoundaries(ownBoundaries(db, node)) }
+      ? {
+          boundaries: exportBoundaries(ownBoundaries(db, node)),
+          budget: exportShares(ownShares(db, node)),
+        }
       : {}),
   });
   return next;
@@ -276,7 +291,12 @@ function editDocInner(
   db: DatabaseSync,
   node: NodeRow,
   doc: Doc,
-  snapshot: { fields: unknown; body: unknown; boundaries?: unknown },
+  snapshot: {
+    fields: unknown;
+    body: unknown;
+    boundaries?: unknown;
+    budget?: unknown;
+  },
   reason: string,
   actor: string,
 ) {
@@ -287,11 +307,18 @@ function editDocInner(
   if (doc === "card") {
     if (snapshot.boundaries !== undefined)
       throw new Problem(400, "card.boundaries 是未知字段，边界写在章程里");
+    if (snapshot.budget !== undefined)
+      throw new Problem(400, "card.budget 是未知字段，份额写在章程里");
   } else if (snapshot.boundaries !== undefined) {
     const plan = planBoundaries(db, nodes(db), node, snapshot.boundaries);
     saveBoundaries(db, node.id, plan.entries);
     converted = plan.converted;
   }
+  if (doc === "charter" && snapshot.budget !== undefined)
+    saveShares(db, node.id, planShares(db, node, snapshot.budget));
+  // 根保留或花费边界变严时，已有下级份额也必须满足新上限。
+  if (doc === "charter" && snapshot.boundaries !== undefined)
+    checkStoredShares(db, node);
   const next = writeDoc(db, node.id, doc, fields, body, reason, actor);
   return {
     node: ref(node.id),
@@ -303,6 +330,7 @@ function editDocInner(
     ...(doc === "charter"
       ? {
           boundaries: exportBoundaries(ownBoundaries(db, node.id)),
+          budget: exportShares(ownShares(db, node.id)),
           converted: applyConverted(db, node, converted, reason, actor),
         }
       : {}),
@@ -367,6 +395,7 @@ export function editNode(
           newParent: target.id,
           what: "位置",
         }).converted;
+      if (target.id !== node.parent_id) checkStoredShares(db, node, target.id);
       parent = target.id;
     }
     const slug =

@@ -45,7 +45,11 @@ export async function chooseWorker(
   const path = options.env.PATH ?? "";
   let worker: ResolvedWorker;
   let waitUntil: number | undefined;
-  const reservePercent = await readQuotaReservePercent(options.charterPath);
+  const reservePercent = await readQuotaReservePercent(
+    options.charterPath,
+    options.db,
+    avoid.chain?.at(-1)?.id,
+  );
   const pace = await (options.pace ?? (() => readPace()))();
   if (request.worker) {
     worker = await resolveWorker(request.worker, options.workersDir);

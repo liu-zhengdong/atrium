@@ -99,6 +99,41 @@ export function formatBoundaries(view: BoundaryView): string[] {
   return lines;
 }
 type TaskCounts = { todo: number; running: number; blocked: number };
+type BudgetView = {
+  own: Record<string, unknown>;
+  quota: {
+    scope: string;
+    amount?: number;
+    shared: boolean;
+    relevant: boolean;
+  }[];
+  disk: { amount?: number; shared: boolean };
+  money: { amount?: number; shared: boolean };
+};
+export function formatBudget(view: BudgetView, detail = false): string {
+  const quota = view.quota.filter((q) =>
+    detail ? q.amount !== undefined : !q.shared || q.relevant,
+  );
+  const parts = quota.map(
+    (q) => `${q.scope} ${q.shared ? `共享池 ${q.amount}` : `份额 ${q.amount}`}`,
+  );
+  if (detail && !parts.length) parts.push("共享池（暂无额度数据）");
+  const disk =
+    view.disk.amount === undefined
+      ? detail
+        ? "磁盘共享池（动态）"
+        : ""
+      : !detail && view.disk.shared
+        ? ""
+        : `磁盘 ${view.disk.shared ? "共享池" : "份额"} ${view.disk.amount} GB`;
+  const money =
+    !detail && view.money.shared
+      ? ""
+      : `钱 ${view.money.shared ? "共享池" : "份额"} ${view.money.amount ?? 0} 元`;
+  return [parts.length ? `额度 ${parts.join("、")}` : "", disk, money]
+    .filter(Boolean)
+    .join(" · ");
+}
 /** org tree 的任务计数；为零的项省略。 */
 export function formatCounts(own: TaskCounts, sent: TaskCounts): string {
   const parts = [
@@ -204,6 +239,7 @@ export const orgCommands: Record<string, Command> = {
           archived_at: number | null;
           tasks: TaskCounts;
           sent: TaskCounts;
+          budget: BudgetView;
         }>
       >(`/org/tree${as(values)}`);
       const labels: Record<string, string> = {
@@ -222,7 +258,7 @@ export const orgCommands: Record<string, Command> = {
         rows
           .map(
             (n) =>
-              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${formatCounts(n.tasks, n.sent)}${n.archived_at ? " · 已归档" : ""}`,
+              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${formatCounts(n.tasks, n.sent)}${formatBudget(n.budget) ? ` · ${formatBudget(n.budget)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
           )
           .join("\n") || "组织树为空",
         rows.length ? "atrium org show o1" : "atrium org import",
@@ -272,6 +308,7 @@ export const orgCommands: Record<string, Command> = {
         } | null;
         chain: { name: string; goal: string }[];
         boundaries: BoundaryView;
+        budget: BudgetView;
         recent_tasks: {
           ref: string;
           title: string;
@@ -292,6 +329,7 @@ export const orgCommands: Record<string, Command> = {
             ]
           : ["目标链：无"]),
         ...formatBoundaries(node.boundaries),
+        `预算：${formatBudget(node.budget, true)}`,
         ...formatDoc("章程", node.charter),
         ...formatDoc("能力卡", node.card),
         ...(node.recent_tasks.length

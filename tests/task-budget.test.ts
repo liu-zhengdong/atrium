@@ -9,6 +9,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { ensureOrgTables } from "../server/org/schema.ts";
+import { addNode, editDoc } from "../server/org/write.ts";
 import {
   DEFAULT_QUOTA_RESERVE_PERCENT,
   parseQuotaReservePercent,
@@ -78,5 +81,96 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
   assert.equal(
     (await chooseWorker({ worker: "grok" }, options)).worker.tool,
     "grok",
+  );
+});
+
+test("组织章程导入后按任务节点的最严保留额挑人", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atrium-budget-org-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const db = new DatabaseSync(":memory:");
+  t.after(() => db.close());
+  ensureOrgTables(db);
+  const root = addNode(
+    db,
+    { slug: "org", kind: "org", name: "组织", reason: "建树" },
+    "u1",
+  );
+  const project = addNode(
+    db,
+    {
+      parent: `o${root.id}`,
+      slug: "project",
+      kind: "project",
+      name: "项目",
+      reason: "建项目",
+    },
+    "u1",
+  );
+  const boundary = (reserve: number) => [
+    {
+      id: "reserve",
+      summary: "留给用户",
+      param: { quota_reserve_percent: reserve },
+    },
+  ];
+  editDoc(
+    db,
+    `o${root.id}`,
+    "charter",
+    { fields: {}, body: "", boundaries: boundary(20), reason: "导入" },
+    "u1",
+  );
+  editDoc(
+    db,
+    `o${project.id}`,
+    "charter",
+    {
+      fields: {},
+      body: "",
+      boundaries: [{ id: "reserve", param: { quota_reserve_percent: 30 } }],
+      reason: "收紧",
+    },
+    "u1",
+  );
+  const bin = join(dir, "bin");
+  const workersDir = join(dir, "workers");
+  mkdirSync(bin);
+  mkdirSync(workersDir);
+  for (const name of ["grok", "kimi"]) {
+    const file = join(bin, name);
+    writeFileSync(file, "#!/bin/sh\nexit 0\n");
+    chmodSync(file, 0o755);
+  }
+  const charterPath = join(dir, "charter.md");
+  writeFileSync(charterPath, "---\nbudget:\n  quota_reserve_percent: 0\n---\n");
+  const options = {
+    db,
+    data: dir,
+    workersDir,
+    env: { PATH: bin },
+    charterPath,
+    pace: async () => [
+      { providerId: "grok", usedPercent: 75, sparePercent: 80 },
+      { providerId: "kimi", usedPercent: 5, sparePercent: 20 },
+    ],
+  };
+  assert.equal(
+    (
+      await chooseWorker({}, options, new Map(), {
+        chain: [{ id: root.id, ref: `o${root.id}`, path: "" }],
+      })
+    ).worker.tool,
+    "grok",
+  );
+  assert.equal(
+    (
+      await chooseWorker({}, options, new Map(), {
+        chain: [
+          { id: root.id, ref: `o${root.id}`, path: "" },
+          { id: project.id, ref: `o${project.id}`, path: "project" },
+        ],
+      })
+    ).worker.tool,
+    "kimi",
   );
 });

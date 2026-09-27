@@ -104,6 +104,7 @@ export function parseDocument(source: string, doc: Doc) {
   }
   // 章程的 boundaries 单独成表，不进 fields；不写表示不改
   let boundaries: unknown;
+  let budget: unknown;
   if (
     doc === "charter" &&
     fields &&
@@ -115,16 +116,29 @@ export function parseDocument(source: string, doc: Doc) {
     boundaries = list ?? [];
     fields = rest;
   }
+  if (
+    doc === "charter" &&
+    fields &&
+    typeof fields === "object" &&
+    !Array.isArray(fields) &&
+    Object.hasOwn(fields, "budget")
+  ) {
+    const { budget: shares, ...rest } = fields as Record<string, unknown>;
+    budget = shares;
+    fields = rest;
+  }
   return {
     fields: validateFields(doc, fields),
     body: validateBody(source.slice(end + 5)),
     ...(boundaries === undefined ? {} : { boundaries }),
+    ...(budget === undefined ? {} : { budget }),
   };
 }
 export function exportDocument(
   fields: Record<string, unknown>,
   body: string,
   boundaries?: unknown[],
+  budget?: Record<string, unknown>,
 ): string {
   const lines = Object.entries(fields).map(
     ([k, v]) => `${k}: ${JSON.stringify(v)}`,
@@ -135,5 +149,7 @@ export function exportDocument(
         ? YAML.stringify({ boundaries }, { lineWidth: 0 }).trimEnd()
         : "boundaries: []",
     );
+  if (budget && Object.keys(budget).length)
+    lines.push(YAML.stringify({ budget }, { lineWidth: 0 }).trimEnd());
   return `---\n${lines.join("\n")}\n---\n${body}`;
 }

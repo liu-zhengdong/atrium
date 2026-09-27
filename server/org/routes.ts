@@ -86,7 +86,12 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
     (request) => {
       const input = body(request.body),
         target = doc((request.params as { doc: string }).doc);
-      const parsed: { fields?: unknown; body?: unknown; boundaries?: unknown } =
+      const parsed: {
+        fields?: unknown;
+        body?: unknown;
+        boundaries?: unknown;
+        budget?: unknown;
+      } =
         typeof input.source === "string"
           ? parseDocument(input.source, target)
           : input;
@@ -98,6 +103,7 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
           fields: parsed.fields,
           body: parsed.body,
           boundaries: parsed.boundaries,
+          budget: parsed.budget,
           rev: input.rev as string | undefined,
           reason: input.reason,
         },

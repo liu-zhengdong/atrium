@@ -143,13 +143,16 @@ atrium goal add "组织树可用" --parent g1 --status active --criteria "atrium
 atrium goal add "用量估算与派活拦截" --parent g2 --node atrium/runtime --after g3 --due 2026-10-15
 atrium task add "估算模型" --goal g3                                   # 任务挂在里程碑上；task set --goal '' 摘下
 atrium goal tree                                                       # 各层状态、负责部门、前置、挂着的任务；--depth 2 只看上两层
-atrium goal show g3                                                    # 上层路径、验收标准、前置、下层与任务
+atrium goal show g3                                                    # 上层路径、验收标准（每条最新判定与证据）、前置、下层与任务
+atrium goal edit g3 --repo ~/code/atrium --criteria '$ npm run check' --criteria "秘书看过回执"
+atrium goal check g3                                                   # 运行时在仓库临时 worktree 里跑「$ 」开头的条目，退出码 0 为满足
+atrium goal check g3 --item 2 --pass --note "回执见 PR #320"          # 写不成命令的条目人工判，必须写证据
 atrium goal done g3 --note "t36 已合入"                                # 前置都达成才能标达成
 atrium goal drop g4 --reason 并入 g3                                   # 下层与挂着的任务先收尾；改回用 goal edit --status active
 atrium goal adopt t21 --parent g1                                      # 预览把归类用的父任务迁为里程碑；--apply 写入
 ```
 
-父里程碑是否达成看它自己的验收标准，不等于子项全完。`goal adopt` 只接受从没派过执行者、没有 PR、有子任务的父任务：父任务标题作里程碑结果，直接子任务挂上新里程碑并上移一层，父任务标取消并留痕。
+父里程碑是否达成看它自己的验收标准，不等于子项全完。验收标准以 `$ ` 开头的是命令：`goal check` 由运行时在里程碑 `--repo` 仓库的临时 worktree（origin 默认分支，没有 origin 用 HEAD；没填仓库在空临时目录）里执行，白名单环境、串行、单条最多 15 分钟，结果与抹掉凭据的输出摘要记在里程碑上，完整日志在 `<ATRIUM_DATA>/goals/gN/`。其余条目由负责部门 leader 链或同项目关注点（如质量）的 leader 用 `--item N --pass|--fail --note 证据` 判。改了条目措辞，旧判定作废。所有条目满足且前置达成时 `goal show`、`goal tree` 提示「可标达成」，不自动标。`goal adopt` 只接受从没派过执行者、没有 PR、有子任务的父任务：父任务标题作里程碑结果，直接子任务挂上新里程碑并上移一层，父任务标取消并留痕。
 
 ## 组织技能
 

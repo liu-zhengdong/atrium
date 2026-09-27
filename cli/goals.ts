@@ -1,9 +1,13 @@
+import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
 import type { Command, Values } from "./main.ts";
-import { printJson } from "./format.ts";
+import { printJson, when } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import type { GoalNode, GoalTasks, GoalView } from "../server/goals/read.ts";
 import type { AdoptPlan } from "../server/goals/adopt.ts";
+import type { CheckView } from "../server/goals/checks.ts";
+import { CHECK_LABEL } from "../server/goals/check-rules.ts";
+import { longWait, waitSeconds } from "./long-wait.ts";
 
 /** 目标树的命令行（#313）：只经 HTTP 调服务。--as 是 u1 或组织节点 leader aN。 */
 
@@ -53,6 +57,7 @@ export function goalLine(goal: GoalView & { tasks?: GoalTasks }): string {
   const waiting = goal.after.filter((a) => !a.met);
   return [
     `${goal.ref} [${goal.status_label}] ${goal.result}`,
+    goal.ready ? "· 可标达成" : "",
     `· ${goal.node_ref}${goal.node_name ? ` ${goal.node_name}` : ""}`,
     goal.after.length
       ? `· 前置 ${goal.after.map((a) => `${a.ref}${a.met ? "✓" : ""}`).join(",")}${waiting.length ? `（等 ${waiting.map((a) => a.ref).join(",")}）` : ""}`
@@ -159,8 +164,9 @@ const show: Command = {
       ...(goal.needed_by.length
         ? [`  被依赖：${goal.needed_by.join("、")}`]
         : []),
-      ...(goal.criteria.length
-        ? ["  验收标准：", ...goal.criteria.map((c, i) => `    ${i + 1}. ${c}`)]
+      ...(goal.repo ? [`  仓库：${goal.repo}`] : []),
+      ...(goal.items.length
+        ? ["  验收标准：", ...goal.items.flatMap(itemLines)]
         : [
             goal.criteria_broken
               ? "  验收标准：记录损坏，请用 goal edit --criteria 重写"
@@ -183,27 +189,159 @@ const show: Command = {
             ),
           ]
         : []),
+      ...(goal.ready
+        ? ["  验收标准全部满足、前置都已达成：可标达成"]
+        : goal.ready_blockers.length && goal.items.length
+          ? [`  未满足：${goal.ready_blockers.join("；")}`]
+          : []),
       `  最后改动：${person(goal.updated_by)}`,
     ];
     out(
       json,
       goal,
       lines.join("\n"),
-      goal.children.length
-        ? `看下层：atrium goal tree ${goal.ref}`
-        : goal.tasks[0]
-          ? `看任务：atrium task show ${goal.tasks[0].ref}`
-          : `挂任务：atrium task add 标题 --goal ${goal.ref}`,
+      goal.ready
+        ? `标达成：atrium goal done ${goal.ref} --note 证据`
+        : goal.items.some((i) => i.command && i.latest?.result !== "pass")
+          ? `跑命令条目：atrium goal check ${goal.ref}`
+          : goal.children.length
+            ? `看下层：atrium goal tree ${goal.ref}`
+            : goal.tasks[0]
+              ? `看任务：atrium task show ${goal.tasks[0].ref}`
+              : `挂任务：atrium task add 标题 --goal ${goal.ref}`,
     );
   },
 };
 
-const add: Command = {
-  args: "结果 [--parent gN] [--node 节点] [--criteria 条目]… [--after gN[,gM]] [--due 日期] [--status planned|active] [--as aN]",
+/** 判定一行：满足/不满足/执行中，谁判的、何时；命令带退出码。 */
+export function checkLine(check: CheckView): string {
+  const mark =
+    check.result === "pass" ? "✓" : check.result === "running" ? "…" : "✗";
+  return `${mark} ${CHECK_LABEL[check.result]}（${
+    check.kind === "command"
+      ? `运行时${check.exit_code === null ? "" : `，退出码 ${check.exit_code}`}`
+      : `${person(check.actor)} 判`
+  }，${when(check.ended_at ?? check.started_at)}）`;
+}
+const indent = (text: string, prefix: string) =>
+  text
+    .split("\n")
+    .slice(-8)
+    .map((line) => `${prefix}${line}`);
+/** 一条验收标准及其最新判定与证据（人工判定的 note，命令的输出摘要末 8 行）。 */
+export function itemLines(item: GoalView["items"][number]): string[] {
+  const head = `    ${item.n}. ${item.text}`;
+  if (!item.latest) return [`${head}  · ${item.command ? "还没跑" : "还没判"}`];
+  const evidence = item.latest.note ?? item.latest.summary;
+  return [
+    `${head}  · ${checkLine(item.latest)}`,
+    ...(evidence ? indent(evidence, "       ") : []),
+  ];
+}
+
+const check: Command = {
+  args: "gN [--item N] [--pass|--fail --note 证据] [--timeout 秒] [--as aN]",
   about:
-    "建顶层目标（不给 --parent，只有你能建）或里程碑；--node 负责部门（缺省同上层），--criteria 可多次给",
+    "判定验收标准：不给 --pass/--fail 时运行时在隔离的临时 worktree 里跑命令条目（`$ ` 开头；给 --item 只跑那条），退出码 0 为满足；写不成命令的条目用 --item N --pass|--fail --note 证据 人工判",
   options: {
     ...options,
+    item: { type: "string" },
+    pass: { type: "boolean" },
+    fail: { type: "boolean" },
+    note: { type: "string" },
+    timeout: { type: "string" },
+  },
+  positionals: [1, 1],
+  async run({ positionals: [id], values, json }) {
+    const goal = ref(id);
+    const itemText = str(values, "item");
+    const item = itemText === undefined ? undefined : Number(itemText);
+    if (
+      item !== undefined &&
+      (!/^[1-9][0-9]*$/.test(itemText!) || !Number.isSafeInteger(item))
+    )
+      throw new Problem(400, "--item 应为正整数，如 --item 2", "usage");
+    if (values.pass === true && values.fail === true)
+      throw new Problem(400, "--pass 与 --fail 只能给一个", "usage");
+    const verdict =
+      values.pass === true ? "pass" : values.fail === true ? "fail" : undefined;
+    if (verdict === undefined && str(values, "note") !== undefined)
+      throw new Problem(
+        400,
+        "--note 只配人工判定：同时给 --item N 和 --pass 或 --fail",
+        "usage",
+      );
+    const seconds = waitSeconds(str(values, "timeout"));
+    const api = await client();
+    const started = await api.post<{ checks: CheckView[] }>(
+      `/goals/${goal}/check${as(values)}`,
+      {
+        ...(item === undefined ? {} : { item }),
+        ...(verdict === undefined
+          ? {}
+          : { verdict, note: str(values, "note") ?? "" }),
+      },
+    );
+    let checks = started.checks;
+    let timedOut = false;
+    if (checks.some((c) => c.result === "running")) {
+      const ids = checks.map((c) => c.id).join(",");
+      const waited = await longWait<{
+        checks: CheckView[];
+        timed_out: boolean;
+        restarting?: boolean;
+      }>(
+        seconds,
+        (timeout) =>
+          api.get(`/goals/${goal}/check-wait?ids=${ids}&timeout=${timeout}`),
+        () => `atrium goal check ${goal}`,
+      );
+      checks = waited.checks;
+      timedOut = waited.timed_out;
+    }
+    const view = await api.get<GoalView>(`/goals/${goal}`);
+    const number = (c: CheckView) =>
+      view.items.find((i) => i.text === c.criterion)?.n;
+    const lines = [
+      ...checks.flatMap((c) => [
+        `${goal} 第 ${number(c) ?? "?"} 条 ${c.criterion}  · ${checkLine(c)}`,
+        ...((c.note ?? c.summary)
+          ? indent((c.note ?? c.summary)!, "    ")
+          : []),
+      ]),
+      ...(timedOut ? [`${seconds} 秒内还没跑完；再运行同一命令接着等`] : []),
+      view.ready
+        ? `${goal} 验收标准全部满足、前置都已达成：可标达成（运行时不自动标）`
+        : `${goal} 还不能标达成：${view.ready_blockers.join("；") || "已达成或已放弃"}`,
+    ];
+    out(
+      json,
+      {
+        checks,
+        timed_out: timedOut,
+        ready: view.ready,
+        ready_blockers: view.ready_blockers,
+      },
+      lines.join("\n"),
+      timedOut
+        ? `接着等：atrium goal check ${goal}${item === undefined ? "" : ` --item ${item}`}`
+        : view.ready
+          ? `标达成：atrium goal done ${goal} --note 证据`
+          : `看详情：atrium goal show ${goal}`,
+    );
+  },
+};
+
+/** --repo 相对路径按当前目录补成绝对路径；空串表示清掉。 */
+const repoPath = (value: string) => (value.trim() ? resolve(value) : "");
+
+const add: Command = {
+  args: "结果 [--parent gN] [--node 节点] [--criteria 条目]… [--after gN[,gM]] [--due 日期] [--repo 路径] [--status planned|active] [--as aN]",
+  about:
+    "建顶层目标（不给 --parent，只有你能建）或里程碑；--node 负责部门（缺省同上层），--criteria 可多次给，以 `$ ` 开头的条目是命令，由运行时在 --repo 仓库里跑",
+  options: {
+    ...options,
+    repo: { type: "string" },
     parent: { type: "string" },
     node: { type: "string" },
     criteria: { type: "string", multiple: true },
@@ -227,6 +365,9 @@ const add: Command = {
         ? {}
         : { after: str(values, "after") }),
       ...(str(values, "due") === undefined ? {} : { due: str(values, "due") }),
+      ...(str(values, "repo") === undefined
+        ? {}
+        : { repo: repoPath(str(values, "repo")!) }),
       ...(str(values, "status") === undefined
         ? {}
         : { status: str(values, "status") }),
@@ -244,7 +385,7 @@ const add: Command = {
 };
 
 const edit: Command = {
-  args: "gN [--result 结果] [--criteria 条目]… [--node 节点] [--parent gN] [--after gN[,gM]|''] [--due 日期|''] [--status planned|active|blocked] [--note 说明] [--as aN]",
+  args: "gN [--result 结果] [--criteria 条目]… [--node 节点] [--parent gN] [--after gN[,gM]|''] [--due 日期|''] [--repo 路径|''] [--status planned|active|blocked] [--note 说明] [--as aN]",
   about:
     "改目标或里程碑；--criteria 整组替换（给一次空串清空），--after 整组替换；不留修订记录",
   options: {
@@ -255,21 +396,32 @@ const edit: Command = {
     parent: { type: "string" },
     after: { type: "string" },
     due: { type: "string" },
+    repo: { type: "string" },
     status: { type: "string" },
     note: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [id], values, json }) {
     const body: Record<string, unknown> = {};
-    for (const key of ["result", "node", "after", "due", "status", "note"])
+    for (const key of [
+      "result",
+      "node",
+      "after",
+      "due",
+      "repo",
+      "status",
+      "note",
+    ])
       if (str(values, key) !== undefined) body[key] = str(values, key);
+    if (str(values, "repo") !== undefined)
+      body.repo = repoPath(str(values, "repo")!);
     if (str(values, "parent") !== undefined)
       body.parent = ref(str(values, "parent"));
     if (values.criteria !== undefined) body.criteria = strs(values, "criteria");
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--result、--criteria、--node、--parent、--after、--due、--status 或 --note",
+        "至少给一项：--result、--criteria、--node、--parent、--after、--due、--repo、--status 或 --note",
         "usage",
       );
     const goal = await (
@@ -401,6 +553,7 @@ export const goalCommands: Record<string, Command> = {
   "goal show": show,
   "goal add": add,
   "goal edit": edit,
+  "goal check": check,
   "goal done": done,
   "goal drop": drop,
   "goal adopt": adopt,

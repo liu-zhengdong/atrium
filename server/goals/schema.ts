@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { all } from "../org/model.ts";
 
 /**
  * 目标树（#313）：顶层目标（parent_id 为空）与多层里程碑。不留修订记录（u1 定），只记最后改动人与时间。
@@ -23,4 +24,23 @@ export function ensureGoalTables(db: DatabaseSync) {
   CREATE INDEX IF NOT EXISTS goal_dependencies_after ON goal_dependencies(after_id,goal_id);
   CREATE TRIGGER IF NOT EXISTS goals_no_delete
     BEFORE DELETE ON goals BEGIN SELECT RAISE(ABORT,'goals drop only'); END;`);
+  // 第 2 步（达成判定）：命令型验收在哪个仓库跑（绝对路径，可空）；每次判定一行，只增不删。
+  if (
+    !all<{ name: string }>(db, "PRAGMA table_info(goals)").some(
+      (c) => c.name === "repo",
+    )
+  )
+    db.exec("ALTER TABLE goals ADD COLUMN repo TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS goal_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id INTEGER NOT NULL REFERENCES goals(id),
+    criterion TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('command','manual')),
+    result TEXT NOT NULL CHECK(result IN ('running','pass','fail','timeout','error')),
+    exit_code INTEGER, summary TEXT, note TEXT, log TEXT,
+    owner INTEGER,
+    actor TEXT NOT NULL,
+    started_at INTEGER NOT NULL, ended_at INTEGER);
+  CREATE INDEX IF NOT EXISTS goal_checks_goal ON goal_checks(goal_id,id);
+  CREATE INDEX IF NOT EXISTS goal_checks_running ON goal_checks(result) WHERE result='running';`);
 }

@@ -10,6 +10,7 @@ import { authPolicy } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { registerGoalRoutes } from "./goals/routes.ts";
+import type { GoalCheckOptions } from "./goals/check-runtime.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
@@ -36,6 +37,8 @@ export async function createApp(options: {
   onRoute?: (method: string, url: string) => void;
   /** 任务运行时（#262）的注入项：测试用来缩短看门狗间隔、替换 git/gh 调用。 */
   tasks?: Partial<RunnerOptions>;
+  /** 目标判定（#313）的注入项：测试用来缩短命令超时、替换 git 调用。 */
+  goals?: Partial<Omit<GoalCheckOptions, "data">>;
   /** OpenQuota 可执行文件路径，测试注入假二进制。 */
   quotaBin?: string;
 }) {
@@ -169,7 +172,10 @@ export async function createApp(options: {
     ...options.tasks,
   });
   registerOrgRoutes(app, db);
-  registerGoalRoutes(app, db);
+  registerGoalRoutes(app, db, {
+    data: resolve(options.data),
+    ...options.goals,
+  });
   registerSkillRoutes(app, db);
   registerQuotaRoute(app, { bin: options.quotaBin, db });
   return { app, db, taskRunner };

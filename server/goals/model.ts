@@ -12,6 +12,7 @@ export type GoalRow = {
   note: string | null;
   node_id: number;
   due: string | null;
+  repo: string | null;
   updated_by: string;
   created_at: number;
   updated_at: number;

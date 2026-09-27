@@ -270,7 +270,7 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
   assert.equal("concerns" in mapNode(db, "o2"), false);
   assert.throws(
     () => editMap(db, "o3", { when: "随时" }, "u1"),
-    /--when: 只用于专员/,
+    /--when: 专员请用 atrium specialist edit/,
   );
   editMap(db, "o4", { when: "" }, "u1");
   assert.equal("concerns" in mapNode(db, "o2"), false);

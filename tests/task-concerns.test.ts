@@ -320,7 +320,7 @@ test("task add/set --concern：只认关注点节点，去重，至多 5 位，�
   );
   assert.throws(
     () => createTask(db, { title: "x", concern: 7 }),
-    /concern: 应为关注点节点/,
+    /concern: 应为专员名称或 rN/,
   );
   assert.throws(
     () => createTask(db, { title: "x", concern: "o4,o5,o4,o5,o4,o5" }),

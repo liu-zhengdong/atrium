@@ -164,6 +164,20 @@ test("启动迁移逐条隔离坏记录；旧运行时表保持原样", () => {
     1,
   );
   assert.equal(
+    typeof db.prepare("SELECT archived_at FROM org_nodes WHERE id=3").get()!
+      .archived_at,
+    "number",
+  );
+  migrateSpecialists(db);
+  assert.equal(
+    db
+      .prepare(
+        "SELECT COUNT(*) n FROM specialist_migration_quarantine WHERE node_id=3",
+      )
+      .get()!.n,
+    1,
+  );
+  assert.equal(
     db.prepare("SELECT value FROM pi_accounts WHERE id=1").get()!.value,
     "legacy",
   );

@@ -45,11 +45,11 @@ export function ensureConcernTable(db: DatabaseSync) {
   CREATE INDEX IF NOT EXISTS task_concerns_review ON task_concerns(review_id);`);
 }
 
-/** `安全,质量`（也认顿号、中文逗号）→ 关注点节点 id；空值表示都不请。 */
+/** 旧 --concern 兼容专员名称与未迁移的关注点节点；空值表示都不请。 */
 export function concernsFor(db: DatabaseSync, value: unknown): number[] {
   if (value === undefined || value === null || value === "") return [];
   if (typeof value !== "string")
-    throw usage("concern: 应为关注点节点，多个用逗号分隔，如 安全,质量");
+    throw usage("concern: 应为专员名称或 rN，多个用逗号分隔");
   const names = value
     .split(/[,，、]/)
     .map((part) => part.trim())

@@ -34,9 +34,16 @@ export function migrateSpecialists(db: DatabaseSync) {
       transaction(db, () => migrateOne(db, node));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      db.prepare(
-        "INSERT INTO specialist_migration_quarantine(node_id,snapshot,error,at) VALUES(?,?,?,?)",
-      ).run(node.id, JSON.stringify(node), message, Date.now());
+      const now = Date.now();
+      transaction(db, () => {
+        db.prepare(
+          "INSERT INTO specialist_migration_quarantine(node_id,snapshot,error,at) VALUES(?,?,?,?)",
+        ).run(node.id, JSON.stringify(node), message, now);
+        // 原节点及其文档仍留在库中供核查；从活跃树挪开，避免每次启动重复迁移。
+        db.prepare(
+          "UPDATE org_nodes SET archived_at=?,updated_at=? WHERE id=? AND archived_at IS NULL",
+        ).run(now, now, node.id);
+      });
       console.error(`专员迁移：o${node.id} 已隔离：${message}`);
     }
   }

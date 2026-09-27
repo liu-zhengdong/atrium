@@ -72,7 +72,7 @@ export function editMap(
     input.when.trim()
   )
     throw usage(
-      `--when: 只用于专员（关注点）；${ref(node.id)} ${node.name} 不是专员`,
+      `--when: 专员请用 atrium specialist edit <专员> --invite-when 修改；${ref(node.id)} ${node.name} 是组织节点`,
     );
   const doc = one<DocRow>(
     db,

@@ -7,9 +7,28 @@ const separatelyAuthenticatedRoutes = new Set([
   "POST /api/service/prepare-restart",
   "POST /api/service/stop",
 ]);
+// 全景网页（#322）：一次性链接自己校验 code；页面与静态文件只认本机会话 cookie；
+// 只读接口用户令牌或本机会话都行。写接口不在这里，只认用户令牌。
+const mapLoginRoutes = new Set(["GET /map/login"]);
+const mapPageRoutes = new Set([
+  "GET /map",
+  "GET /map/app.js",
+  "GET /map/style.css",
+]);
+const mapReadRoutes = new Set([
+  "GET /api/map/tree",
+  "GET /api/map/nodes/:id",
+  "GET /api/map/now",
+  "GET /api/map/stream",
+]);
 
-export type AuthPolicy = "separate" | "user";
+export type AuthPolicy =
+  "separate" | "user" | "map-login" | "map-page" | "map-read";
 export function authPolicy(method: string, route: string): AuthPolicy {
   const key = `${method === "HEAD" ? "GET" : method} ${route}`;
-  return separatelyAuthenticatedRoutes.has(key) ? "separate" : "user";
+  if (separatelyAuthenticatedRoutes.has(key)) return "separate";
+  if (mapLoginRoutes.has(key)) return "map-login";
+  if (mapPageRoutes.has(key)) return "map-page";
+  if (mapReadRoutes.has(key)) return "map-read";
+  return "user";
 }

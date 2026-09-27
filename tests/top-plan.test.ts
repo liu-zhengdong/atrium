@@ -13,9 +13,9 @@ import {
   type PlanView,
 } from "../cli/top-plan.ts";
 import { renderTop, snapshotOf, type Snapshot } from "../cli/top.ts";
-import { goalsDepth } from "../cli/top.ts";
-import { renderTopGoals } from "../cli/top-goals.ts";
-import type { GoalNode } from "../server/goals/read.ts";
+import { mapDepth } from "../cli/top.ts";
+import { renderTopMap } from "../cli/map.ts";
+import type { MapTreeNode } from "../server/map/view.ts";
 import type { Client } from "../cli/service.ts";
 import { width } from "../cli/format.ts";
 
@@ -223,40 +223,49 @@ test("排期任务行标出所属里程碑，窄屏仍可见", () => {
   }
 });
 
-const goal = (
+const part = (
   ref: string,
-  result: string,
-  children: GoalNode[] = [],
-): GoalNode =>
-  ({
-    ref,
-    result,
-    status: "active",
-    status_label: "进行中",
-    summary: { running: 1, open: 2, blocked: 1, waiting_for: ["g8"] },
-    children,
-  }) as GoalNode;
+  name: string,
+  children: MapTreeNode[] = [],
+  tasks = { running: 0, blocked: 0, open: 0 },
+): MapTreeNode => ({
+  ref,
+  name,
+  alias: "",
+  analogy: "",
+  kind: "module",
+  what: `${name}是什么`,
+  archived: false,
+  dot: tasks.running ? "running" : tasks.blocked ? "blocked" : "idle",
+  tasks,
+  children,
+  children_count: children.length,
+});
 
-test("目标段：默认上两层、可展开、折叠与窄屏", () => {
-  const tree = [
-    goal("g1", "AI 组织运行底座", [
-      goal("g2", "命令行视图", [goal("g3", "完成汇总")]),
-    ]),
-  ];
-  const shallow = renderTopGoals(tree, 100);
-  assert.match(shallow.join("\n"), /g1.*在跑 1 未结 2.*前置 g8、任务卡住 1/);
-  assert.match(shallow.join("\n"), /g2/);
-  assert.doesNotMatch(shallow.join("\n"), /g3/);
-  assert.match(shallow.join("\n"), /…下层 1 个/);
-  assert.match(renderTopGoals(tree, 100, 3).join("\n"), /g3/);
-  assert.match(renderTopGoals(tree, 100, 3, 3).at(-1)!, /还有 .* 行/);
-  const narrow = renderTopGoals(tree, 60, 3);
-  for (const line of narrow) assert.ok(width(line) <= 60);
-  assert.match(narrow.join("\n"), /卡在 前置 g8、任务卡住 1/);
-  assert.equal(goalsDepth(undefined), 2);
-  assert.equal(goalsDepth("3"), 3);
-  for (const invalid of ["0", "13", "abc", "2.5"])
-    assert.throws(() => goalsDepth(invalid), /--goals-depth/);
+test("全景段：默认根下两层、可展开、折叠与窄屏", () => {
+  const tree = part("o1", "组织", [
+    part("o2", "Atrium", [part("o3", "命令行", [part("o5", "看板")])], {
+      running: 1,
+      blocked: 1,
+      open: 3,
+    }),
+    { ...part("o4", "旧模块"), archived: true },
+  ]);
+  const shallow = renderTopMap(tree, 100).join("\n");
+  assert.match(
+    shallow,
+    /^全景\n {2}● o2 Atrium · 在跑 1 · 卡住 1 · 待办 1 · Atrium是什么/,
+  );
+  assert.match(shallow, /o3 命令行/);
+  assert.doesNotMatch(shallow, /o5|o4/, "只展开两层，归档的不列");
+  assert.match(renderTopMap(tree, 100, 3).join("\n"), /o5 看板/);
+  assert.match(renderTopMap(tree, 100, 3, 3).at(-1)!, /还有 .* 行：atrium map/);
+  for (const line of renderTopMap(tree, 40, 3)) assert.ok(width(line) <= 40);
+  assert.match(renderTopMap(null, 80).join("\n"), /还没有组织树/);
+  assert.equal(mapDepth(undefined), 2);
+  assert.equal(mapDepth("3"), 3);
+  for (const invalid of ["0", "9", "abc", "2.5"])
+    assert.throws(() => mapDepth(invalid, "--goals-depth"), /--goals-depth/);
 });
 
 test("排期段：超出行数折叠，提示 atrium task plan；不止一页也提示", () => {
@@ -375,7 +384,11 @@ test("top 屏：排期段接在看板下面；取不到排期不影响看板；�
     },
   } as unknown as Client;
   const got = await snapshotOf(ok, undefined);
-  assert.deepEqual(calls.sort(), ["/goals/tree", "/tasks/plan", "/tasks/top"]);
+  assert.deepEqual(calls.sort(), [
+    "/map/tree?depth=2",
+    "/tasks/plan",
+    "/tasks/top",
+  ]);
   assert.equal(got.plan?.groups.ready.length, 2);
   const failing = {
     get: async (path: string) => {

@@ -1,0 +1,179 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { readFileSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
+import { resolveActor } from "../actor.ts";
+import { Problem } from "../problem.ts";
+import { ensureOrgTables } from "../org/schema.ts";
+import { mapContext, parseMax } from "./context.ts";
+import { LINK_TTL_MS, MapLogin, sessionCookie } from "./login.ts";
+import {
+  mapNode,
+  mapNow,
+  mapSignature,
+  mapTree,
+  parseDepth,
+  type LiveRow,
+} from "./view.ts";
+import { addMap, editMap, type MapAdd, type MapEdit } from "./write.ts";
+
+/**
+ * 全景图的接口与网页（#322 第 4 步）。同一份数据两张脸：
+ * - Agent 走命令行（用户令牌）：读 tree／nodes／now／context，写 edit／add；
+ * - 人走网页（一次性链接换来的本机会话）：只能读 tree／nodes／now 与失效通知 stream，不能写。
+ * 网页是服务直接托管的静态文件（原生 ES 模块、手写样式），不引入前端构建链。
+ */
+
+const WEB = new URL("./web/", import.meta.url);
+const asset = (name: string) => readFileSync(new URL(name, WEB), "utf8");
+const CSP =
+  "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+export const isLoopback = (address: string | undefined) =>
+  LOOPBACK.has(address ?? "");
+
+/** 会话失效时浏览器看到的页面：说清怎么重新进，不给别的。 */
+export const expiredPage = (message: string) => `<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Atrium 全景</title>
+<body style="font:16px/1.6 -apple-system,'PingFang SC',sans-serif;max-width:32em;margin:18vh auto;padding:0 20px;color:#333">
+<h1 style="font-size:20px;margin:0 0 8px">${message}</h1>
+<p style="margin:0;color:#666">在终端运行 <code style="background:#f2f2f2;padding:2px 6px;border-radius:4px">atrium map</code>，会重新打开一个登录链接。</p>
+</body></html>`;
+
+type Q = Record<string, string | undefined>;
+const q = (value: unknown) => (value ?? {}) as Q;
+const id = (request: FastifyRequest) => (request.params as { id: string }).id;
+
+export type MapRouteOptions = {
+  /** 看板的行（带执行者与最近动作）；取不到就当没有。 */
+  live: () => Promise<readonly LiveRow[]>;
+  login: MapLogin;
+  /** 失效通知的检查间隔，测试缩短。 */
+  pollMs?: number;
+};
+
+export function registerMapRoutes(
+  app: FastifyInstance,
+  db: DatabaseSync,
+  options: MapRouteOptions,
+) {
+  ensureOrgTables(db);
+  const live = () => options.live().catch(() => [] as readonly LiveRow[]);
+  const pages = {
+    "/map": ["text/html; charset=utf-8", asset("index.html")],
+    "/map/app.js": ["text/javascript; charset=utf-8", asset("app.js")],
+    "/map/style.css": ["text/css; charset=utf-8", asset("style.css")],
+  } as const;
+  for (const [url, [type, body]] of Object.entries(pages))
+    app.get(url, (_request, reply) =>
+      reply
+        .header("content-type", type)
+        .header("cache-control", "no-store")
+        .header("content-security-policy", CSP)
+        .header("x-frame-options", "DENY")
+        .send(body),
+    );
+
+  // 一次性链接：code 对上就换会话 cookie，跳到全景页（node 只认 oN）。
+  app.get("/map/login", (request, reply) => {
+    const query = q(request.query);
+    const session = options.login.exchange(query.code);
+    if (!session)
+      return reply
+        .code(401)
+        .header("content-type", "text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .send(expiredPage("登录链接已失效（只能用一次，2 分钟内有效）"));
+    const node = /^o[1-9][0-9]{0,8}$/.test(query.node ?? "")
+      ? `#${query.node}`
+      : "";
+    return reply
+      .code(303)
+      .header("set-cookie", sessionCookie(session.token))
+      .header("cache-control", "no-store")
+      .header("location", `/map${node}`)
+      .send();
+  });
+  // 只有持用户令牌的命令行能签发登录链接。
+  app.post("/api/map/login", { bodyLimit: 1024 }, () => {
+    const link = options.login.link();
+    return {
+      path: `/map/login?code=${link.token}`,
+      expires_at: link.expires_at,
+      ttl_ms: LINK_TTL_MS,
+    };
+  });
+
+  app.get("/api/map/tree", (request) => {
+    const query = q(request.query);
+    return mapTree(db, query.root || undefined, parseDepth(query.depth));
+  });
+  app.get("/api/map/nodes/:id", async (request) => {
+    const query = q(request.query);
+    const node = mapNode(db, id(request), await live());
+    return query.depth === undefined
+      ? node
+      : { ...node, tree: mapTree(db, node.ref, parseDepth(query.depth)).tree };
+  });
+  app.get("/api/map/now", async () => mapNow(db, await live()));
+  app.get("/api/map/context/:id", (request) =>
+    mapContext(db, id(request), parseMax(q(request.query).max)),
+  );
+  app.patch("/api/map/nodes/:id", { bodyLimit: 64 * 1024 }, (request) =>
+    editMap(
+      db,
+      id(request),
+      (request.body ?? {}) as MapEdit,
+      resolveActor(db, q(request.query).as),
+    ),
+  );
+  app.post("/api/map/nodes", { bodyLimit: 16 * 1024 }, (request, reply) =>
+    reply
+      .code(201)
+      .send(
+        addMap(
+          db,
+          (request.body ?? {}) as MapAdd,
+          resolveActor(db, q(request.query).as),
+        ),
+      ),
+  );
+
+  // 失效通知（Server-Sent Events）：数据指纹变了就发 changed，网页据此局部重取；空闲时定期发注释保活。
+  const streams = new Set<() => void>();
+  app.addHook("preClose", async () => {
+    for (const close of [...streams]) close();
+  });
+  app.get("/api/map/stream", (request, reply: FastifyReply) => {
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      connection: "keep-alive",
+    });
+    let last = mapSignature(db);
+    let beats = 0;
+    res.write(`retry: 3000\nevent: hello\ndata: {}\n\n`);
+    const timer = setInterval(() => {
+      const now = mapSignature(db);
+      if (now !== last) {
+        last = now;
+        res.write("event: changed\ndata: {}\n\n");
+      } else if (++beats % 10 === 0) res.write(": ping\n\n");
+    }, options.pollMs ?? 1500);
+    const close = () => {
+      if (!streams.delete(close)) return;
+      clearInterval(timer);
+      res.end();
+    };
+    streams.add(close);
+    request.raw.on("close", close);
+  });
+}
+
+/** 路由上的会话校验失败（非本机、没登录）时抛的错。 */
+export const notLocal = () =>
+  new Problem(403, "全景网页只接受本机访问", "conflict");

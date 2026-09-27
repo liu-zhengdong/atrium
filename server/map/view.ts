@@ -1,0 +1,451 @@
+import type { DatabaseSync } from "node:sqlite";
+import { Problem } from "../problem.ts";
+import {
+  all,
+  nodeByAddress,
+  nodePath,
+  nodes,
+  one,
+  ref,
+  type DocRow,
+  type NodeRow,
+} from "../org/model.ts";
+import { overviewOf, type Overview, type Part } from "../org/overview.ts";
+import { chainPoints, nodePoints, type Point } from "../org/points.ts";
+
+/**
+ * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
+ * 任务按「归属部分」计：part_id，没有归属时退回负责节点 node_id；计数按子树汇总。
+ * 执行者最近动作来自看板（runner.top）的日志解析，由路由注入，这里只按短号对上。
+ */
+
+export type Counts = { running: number; blocked: number; open: number };
+export type Dot = "running" | "blocked" | "idle";
+export type MapTreeNode = {
+  ref: string;
+  name: string;
+  alias: string;
+  analogy: string;
+  kind: NodeRow["kind"];
+  what: string;
+  archived: boolean;
+  dot: Dot;
+  tasks: Counts;
+  /** 超出 depth 时不展开，只给下层个数。 */
+  children?: MapTreeNode[];
+  children_count: number;
+};
+/** 看板里的一行在全景里用到的部分（`runner.top` 的 rows）。 */
+export type LiveRow = {
+  ref: string;
+  status: string;
+  worker: string | null;
+  started_at: number | null;
+  queued_at: number | null;
+  reason: string | null;
+  log_at: number;
+  action: { text: string; kind: string } | null;
+};
+export type MapTask = {
+  ref: string;
+  title: string;
+  status: string;
+  queued: boolean;
+  worker: string | null;
+  started_at: number | null;
+  updated_at: number;
+  reason: string | null;
+  action: string | null;
+  log_at: number | null;
+  part: string | null;
+  pr_url: string | null;
+  issue: number | null;
+};
+
+export const DEPTH_MAX = 8;
+const OPEN = "('todo','running','blocked')";
+const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+
+/** 本块第一句：人话「是什么」，没写时取章程目标；一行以内。 */
+export function firstLine(text: string, max = 80): string {
+  const line = text.split("\n", 1)[0]!.trim();
+  const chars = Array.from(line);
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : line;
+}
+
+export function dotOf(counts: Counts): Dot {
+  return counts.running ? "running" : counts.blocked ? "blocked" : "idle";
+}
+
+function hasTasks(db: DatabaseSync) {
+  return all<{ name: string }>(db, "PRAGMA table_info(tasks)").some(
+    (c) => c.name === "part_id",
+  );
+}
+
+function charters(db: DatabaseSync): Map<number, Record<string, unknown>> {
+  const map = new Map<number, Record<string, unknown>>();
+  for (const row of all<Pick<DocRow, "node_id" | "fields">>(
+    db,
+    "SELECT node_id,fields FROM org_docs WHERE doc='charter' LIMIT 600",
+  ))
+    try {
+      map.set(row.node_id, JSON.parse(row.fields) as Record<string, unknown>);
+    } catch {
+      map.set(row.node_id, {});
+    }
+  return map;
+}
+
+/** 每个节点自己名下（按归属部分）的在跑、卡住、未结数；不含子树。 */
+function ownCounts(db: DatabaseSync): Map<number, Counts> {
+  const map = new Map<number, Counts>();
+  if (!hasTasks(db)) return map;
+  for (const row of all<{ id: number; status: string; n: number }>(
+    db,
+    `SELECT COALESCE(part_id,node_id) AS id,status,COUNT(*) AS n FROM tasks
+      WHERE COALESCE(part_id,node_id) IS NOT NULL AND status IN ${OPEN}
+      GROUP BY 1,2 LIMIT 1500`,
+  )) {
+    const c = map.get(row.id) ?? { running: 0, blocked: 0, open: 0 };
+    if (row.status === "running") c.running += row.n;
+    if (row.status === "blocked") c.blocked += row.n;
+    c.open += row.n;
+    map.set(row.id, c);
+  }
+  return map;
+}
+
+type Index = {
+  list: NodeRow[];
+  byId: Map<number, NodeRow>;
+  children: Map<number | null, NodeRow[]>;
+  fields: Map<number, Record<string, unknown>>;
+  counts: Map<number, Counts>;
+};
+
+function index(db: DatabaseSync): Index {
+  const list = nodes(db);
+  if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
+  const children = new Map<number | null, NodeRow[]>();
+  for (const n of list)
+    children.set(n.parent_id, [...(children.get(n.parent_id) ?? []), n]);
+  const own = ownCounts(db);
+  const counts = new Map<number, Counts>();
+  const sum = (n: NodeRow): Counts => {
+    const c = { ...(own.get(n.id) ?? { running: 0, blocked: 0, open: 0 }) };
+    for (const child of children.get(n.id) ?? []) {
+      const s = sum(child);
+      c.running += s.running;
+      c.blocked += s.blocked;
+      c.open += s.open;
+    }
+    counts.set(n.id, c);
+    return c;
+  };
+  for (const root of children.get(null) ?? []) sum(root);
+  return {
+    list,
+    byId: new Map(list.map((n) => [n.id, n])),
+    children,
+    fields: charters(db),
+    counts,
+  };
+}
+
+const head = (x: Index, n: NodeRow) => {
+  const f = x.fields.get(n.id) ?? {};
+  return {
+    ref: ref(n.id),
+    name: n.name,
+    alias: str(f.alias),
+    analogy: str(f.analogy),
+  };
+};
+
+function treeNode(x: Index, n: NodeRow, depth: number): MapTreeNode {
+  const f = x.fields.get(n.id) ?? {};
+  const counts = x.counts.get(n.id) ?? { running: 0, blocked: 0, open: 0 };
+  const kids = x.children.get(n.id) ?? [];
+  return {
+    ...head(x, n),
+    kind: n.kind,
+    what: firstLine(str(f.what) || str(f.goal)),
+    archived: n.archived_at !== null,
+    dot: dotOf(counts),
+    tasks: counts,
+    ...(depth > 0
+      ? { children: kids.map((c) => treeNode(x, c, depth - 1)) }
+      : {}),
+    children_count: kids.length,
+  };
+}
+
+export function parseDepth(value: unknown, fallback = DEPTH_MAX): number {
+  if (value === undefined || value === "") return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > DEPTH_MAX)
+    throw new Problem(400, `--depth 应为 0～${DEPTH_MAX} 的整数`, "usage");
+  return n;
+}
+
+/** 全景树：从 root（缺省组织根）往下 depth 层。 */
+export function mapTree(db: DatabaseSync, root?: string, depth = DEPTH_MAX) {
+  const x = index(db);
+  const start = root
+    ? nodeByAddress(db, root)
+    : (x.children.get(null) ?? [])[0];
+  if (!start)
+    return {
+      root: null,
+      tree: null,
+      next: "atrium org import --repo 仓库",
+    };
+  return { root: ref(start.id), tree: treeNode(x, start, depth) };
+}
+
+/** 子树所有节点 id（含自己）。 */
+function subtree(x: Index, id: number): number[] {
+  const ids = [id];
+  for (let i = 0; i < ids.length; i++)
+    for (const c of x.children.get(ids[i]!) ?? []) ids.push(c.id);
+  return ids;
+}
+
+type TaskRow = {
+  id: number;
+  title: string;
+  status: string;
+  worker: string | null;
+  started_at: number | null;
+  updated_at: number;
+  part: number | null;
+  pr_url: string | null;
+  issue: number | null;
+  repo: string | null;
+};
+
+function taskView(row: TaskRow, live?: LiveRow): MapTask {
+  return {
+    ref: `t${row.id}`,
+    title: row.title,
+    status: row.status,
+    queued: live?.queued_at != null,
+    worker: row.worker ?? live?.worker ?? null,
+    started_at: row.started_at,
+    updated_at: row.updated_at,
+    reason: live?.reason ?? null,
+    action: live?.action?.text ?? null,
+    log_at: live?.log_at || null,
+    part: row.part === null ? null : ref(row.part),
+    pr_url: row.pr_url,
+    issue: row.issue,
+  };
+}
+
+const TASK_COLUMNS =
+  "id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo";
+
+/** 仓库路径 → GitHub 地址：从账本里已有的 PR 链接推出来，推不出的不给链接。 */
+function repoUrls(db: DatabaseSync): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of all<{ repo: string; pr_url: string }>(
+    db,
+    "SELECT repo,pr_url FROM tasks WHERE repo IS NOT NULL AND pr_url LIKE 'https://github.com/%' ORDER BY id DESC LIMIT 2000",
+  )) {
+    const m = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/pull\/\d+/.exec(
+      row.pr_url,
+    );
+    if (m && !map.has(row.repo)) map.set(row.repo, m[1]!);
+  }
+  return map;
+}
+
+/** 选中节点的详情：人话字段、组成（专员单列）、要点、阶段、在推进的任务、PR 与 issue、技术细节。 */
+export function mapNode(
+  db: DatabaseSync,
+  address: string,
+  live: readonly LiveRow[] = [],
+) {
+  const x = index(db);
+  const n = nodeByAddress(db, address);
+  const fields = x.fields.get(n.id) ?? {};
+  const kids = x.children.get(n.id) ?? [];
+  const part = (c: NodeRow): Part => {
+    const counts = x.counts.get(c.id)!;
+    return {
+      ...head(x, c),
+      archived: c.archived_at !== null,
+      tasks: {
+        todo: counts.open - counts.running - counts.blocked,
+        running: counts.running,
+        blocked: counts.blocked,
+      },
+    };
+  };
+  const overview: Overview = overviewOf(
+    fields,
+    kids.filter((c) => c.kind !== "concern").map(part),
+  );
+  const chain: { ref: string; name: string; alias: string }[] = [];
+  for (let c: NodeRow | undefined = n; c;) {
+    const h = head(x, c);
+    chain.unshift({ ref: h.ref, name: h.name, alias: h.alias });
+    c = c.parent_id === null ? undefined : x.byId.get(c.parent_id);
+  }
+  const liveBy = new Map(live.map((row) => [row.ref, row]));
+  const ids = subtree(x, n.id);
+  const marks = ids.map(() => "?").join(",");
+  const rows = hasTasks(db)
+    ? all<TaskRow>(
+        db,
+        `SELECT ${TASK_COLUMNS} FROM tasks WHERE COALESCE(part_id,node_id) IN (${marks})
+          ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2 ELSE 3 END,
+            updated_at DESC LIMIT 60`,
+        ...ids,
+      )
+    : [];
+  const tasks = rows.map((r) => taskView(r, liveBy.get(`t${r.id}`)));
+  const urls = repoUrls(db);
+  const prs = rows
+    .filter((r) => r.pr_url)
+    .slice(0, 10)
+    .map((r) => ({ task: `t${r.id}`, title: r.title, url: r.pr_url! }));
+  const issues = new Map<string, { number: number; url: string }>();
+  for (const r of rows) {
+    const base = r.repo ? urls.get(r.repo) : undefined;
+    if (r.issue && base && issues.size < 10)
+      issues.set(`${base}#${r.issue}`, {
+        number: r.issue,
+        url: `${base}/issues/${r.issue}`,
+      });
+  }
+  const charter = one<DocRow>(
+    db,
+    "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
+    n.id,
+  );
+  const repos = all<{ repo: string }>(
+    db,
+    "SELECT repo FROM org_node_repos WHERE node_id=? ORDER BY repo LIMIT 20",
+    n.id,
+  ).map((r) => r.repo);
+  // 本块（或最近的上级）挂的仓库在 GitHub 上的地址：网页把要点里的测试文件链到那里。
+  let repoUrl: string | null = null;
+  for (let c: NodeRow | undefined = n; c && !repoUrl;) {
+    for (const r of all<{ repo: string }>(
+      db,
+      "SELECT repo FROM org_node_repos WHERE node_id=? ORDER BY repo LIMIT 20",
+      c.id,
+    ))
+      repoUrl ??=
+        urls.get(r.repo) ?? urls.get(r.repo.replace(/\/+$/, "")) ?? null;
+    c = c.parent_id === null ? undefined : x.byId.get(c.parent_id);
+  }
+  return {
+    ...head(x, n),
+    kind: n.kind,
+    path: nodePath(x.list, n),
+    leader: n.leader,
+    archived: n.archived_at !== null,
+    dot: dotOf(x.counts.get(n.id)!),
+    counts: x.counts.get(n.id)!,
+    chain,
+    overview,
+    concerns: kids.filter((c) => c.kind === "concern").map(part),
+    points: nodePoints(db, n.id),
+    points_chain: chainPoints(db, n.id).filter((l) => l.node !== ref(n.id)),
+    tasks: {
+      running: tasks.filter((t) => t.status === "running"),
+      blocked: tasks.filter((t) => t.status === "blocked"),
+      todo: tasks.filter((t) => t.status === "todo").slice(0, 10),
+      recent: tasks
+        .filter((t) => !["running", "blocked", "todo"].includes(t.status))
+        .slice(0, 5),
+    },
+    links: { prs, issues: [...issues.values()] },
+    detail: {
+      body: charter?.body ?? "",
+      rev: charter ? `r${charter.rev}` : null,
+      updated_at: charter?.updated_at ?? null,
+      repos,
+      repo_url: repoUrl,
+    },
+  };
+}
+export type MapNode = ReturnType<typeof mapNode>;
+
+/** 顶部「现在在推进什么」：在跑与排队的任务按归属部分归组；没有归属的放「未归属」。 */
+export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
+  const active = live.filter(
+    (r) => r.status === "running" || r.queued_at !== null,
+  );
+  const x = index(db);
+  const ids = active.map((r) => Number(r.ref.slice(1)));
+  const rows =
+    ids.length && hasTasks(db)
+      ? all<TaskRow>(
+          db,
+          `SELECT ${TASK_COLUMNS} FROM tasks WHERE id IN (${ids.map(() => "?").join(",")}) LIMIT 100`,
+          ...ids,
+        )
+      : [];
+  const byRef = new Map(active.map((r) => [r.ref, r]));
+  const groups = new Map<
+    string,
+    {
+      part: { ref: string; name: string; alias: string } | null;
+      tasks: MapTask[];
+    }
+  >();
+  for (const row of rows) {
+    const node = row.part === null ? undefined : x.byId.get(row.part);
+    const key = node ? ref(node.id) : "";
+    const group = groups.get(key) ?? {
+      part: node
+        ? { ref: ref(node.id), name: node.name, alias: head(x, node).alias }
+        : null,
+      tasks: [],
+    };
+    group.tasks.push(taskView(row, byRef.get(`t${row.id}`)));
+    groups.set(key, group);
+  }
+  const list = [...groups.values()].sort(
+    (a, b) =>
+      b.tasks.length - a.tasks.length ||
+      (a.part ? 0 : 1) - (b.part ? 0 : 1) ||
+      (a.part?.ref ?? "").localeCompare(b.part?.ref ?? ""),
+  );
+  return {
+    running: active.filter((r) => r.queued_at === null).length,
+    queued: active.filter((r) => r.queued_at !== null).length,
+    blocked: live.filter((r) => r.status === "blocked").length,
+    groups: list,
+  };
+}
+
+/**
+ * 变化指纹：任务、任务事件、节点、章程、要点任一变了就不同。网页订阅它，变了再取数据局部刷新。
+ * 只读几个 max/count，毫秒级。
+ */
+export function mapSignature(db: DatabaseSync): string {
+  const q = (sql: string) => {
+    try {
+      return Object.values(
+        (db.prepare(sql).get() ?? {}) as Record<string, unknown>,
+      ).join(":");
+    } catch {
+      return "-";
+    }
+  };
+  return [
+    q("SELECT max(updated_at),count(*) FROM tasks"),
+    q("SELECT max(id) FROM task_events"),
+    q("SELECT max(updated_at),count(*) FROM org_nodes"),
+    q("SELECT max(updated_at),count(*) FROM org_docs"),
+    q("SELECT max(updated_at),count(*),max(id) FROM org_points"),
+    q("SELECT count(*),max(queued_at) FROM task_queue"),
+  ].join("|");
+}
+
+export type { Point };

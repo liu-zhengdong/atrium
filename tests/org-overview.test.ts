@@ -543,47 +543,92 @@ test("迁移接口：预览不写；只有 u1 能写；写入先备份，阶段�
   assert.equal(mapped.body.part_ref, "o2", "迁移后 --goal gN 照映射落到节点");
 });
 
-test("top：目标树下线后目标段指向组织节点，不当成取不到", async () => {
-  const api = {
-    get: async (path: string) => {
-      if (path === "/goals/tree")
-        throw new Problem(
-          410,
-          "目标树已迁为组织节点的阶段记录",
-          "conflict",
-          undefined,
-          "atrium org tree",
-        );
-      if (path === "/tasks/plan") throw new Error("没排期");
-      return {
-        now: 0,
-        recent_ms: 0,
-        subscriber: "secretary",
-        counts: {
-          running: 0,
-          queued: 0,
-          blocked: 0,
-          processing: 0,
-          done: 0,
-          failed: 0,
-          cancelled: 0,
-          events: 0,
-        },
-        rows: [],
-        truncated: false,
-      };
+test("top：目标段改读全景图；全景取不到不影响看板", async () => {
+  const board = {
+    now: 0,
+    recent_ms: 0,
+    subscriber: "secretary",
+    counts: {
+      running: 0,
+      queued: 0,
+      blocked: 0,
+      processing: 0,
+      done: 0,
+      failed: 0,
+      cancelled: 0,
+      events: 0,
     },
-  } as unknown as Client;
-  const snapshot = await snapshotOf(api, undefined);
-  assert.equal(snapshot.goals, undefined);
+    rows: [],
+    truncated: false,
+  };
+  const paths: string[] = [];
+  const api = (map: () => unknown) =>
+    ({
+      get: async (path: string) => {
+        paths.push(path);
+        if (path.startsWith("/map/tree")) return map();
+        if (path === "/tasks/plan") throw new Error("没排期");
+        return board;
+      },
+    }) as unknown as Client;
+  const tree = {
+    root: "o1",
+    tree: {
+      ref: "o1",
+      name: "组织",
+      alias: "",
+      analogy: "",
+      kind: "org",
+      what: "",
+      archived: false,
+      dot: "running",
+      tasks: { running: 1, blocked: 0, open: 1 },
+      children_count: 1,
+      children: [
+        {
+          ref: "o2",
+          name: "Atrium",
+          alias: "底座",
+          analogy: "",
+          kind: "project",
+          what: "AI 组织的运行底座",
+          archived: false,
+          dot: "running",
+          tasks: { running: 1, blocked: 0, open: 1 },
+          children_count: 0,
+          children: [],
+        },
+      ],
+    },
+  };
+  const snapshot = await snapshotOf(
+    api(() => tree),
+    undefined,
+    3,
+  );
+  assert.ok(paths.includes("/map/tree?depth=3"));
+  assert.equal(snapshot.map?.root, "o1", "状态栏读 top --json 的 map 字段");
   const text = renderTop(snapshot, {
     width: 100,
     now: 0,
     footer: false,
     color: false,
   });
-  assert.match(text, /目标：已迁为组织节点的阶段记录，看 atrium org tree/);
-  assert.doesNotMatch(text, /目标：取不到/);
+  assert.match(
+    text,
+    /全景\n {2}● o2 底座（Atrium） · 在跑 1 · AI 组织的运行底座/,
+  );
+  const broken = await snapshotOf(
+    api(() => {
+      throw new Error("连不上");
+    }),
+    undefined,
+  );
+  assert.equal(broken.map, null);
+  assert.match(
+    renderTop(broken, { width: 100, now: 0, footer: false, color: false }),
+    /全景：取不到（连不上）/,
+  );
 });
 
 test("要点：增改删、权限同章程、不留修订；show 带本节点与上级链，排在现状前", async (t) => {

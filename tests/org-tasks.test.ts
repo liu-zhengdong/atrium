@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { addPoint } from "../server/org/points.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -304,6 +305,12 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
       "碰到边界或预算不够：停下，在结果里写「需要上层决定：……」，不要绕过。",
     ].join("\n"),
   );
+  addPoint(
+    db,
+    "o2",
+    { text: "随时升级", why: "不等空闲", by: "u1 09-27" },
+    "u1",
+  );
   const task = getTask(
     db,
     createTask(db, { title: "修派活", role: "o3", from: "o4" }).ref,
@@ -340,6 +347,13 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
         ),
     );
     assert.ok(prompt.includes("- 不用 git stash"));
+    // 全景位置与本节点及上级的要点（map context）附在章程要点同一段、硬边界之前（#322）。
+    assert.ok(
+      at(
+        "## 章程要点（组织 → Atrium → runtime）\n\n全景位置：组织 → Atrium → runtime",
+      ) < at("- [Atrium] 随时升级（为什么：不等空闲；u1 09-27 定）") &&
+        at("- [Atrium] 随时升级") < at("硬边界（任何情况都不能放开）"),
+    );
   } finally {
     rmSync(data, { recursive: true, force: true });
     db.close();

@@ -108,3 +108,16 @@ export function charterBrief(db: DatabaseSync, id: number): Brief | undefined {
     boundaries: effective(levels),
   });
 }
+
+/**
+ * 章程要点与全景位置（#322 第 4 步，`map context`）合成同一段：全景位置与要点在前，章程目标与硬边界在后。
+ * 章程要点自己不超过 BRIEF_MAX，全景段不超过 CONTEXT_MAX，整段不超过两者之和。
+ */
+export function withContext(
+  brief: Brief | undefined,
+  context: string | undefined,
+): Brief | undefined {
+  if (!context) return brief;
+  if (!brief) return { heading: "全景位置与要点", text: context };
+  return { heading: brief.heading, text: `${context}\n\n${brief.text}` };
+}

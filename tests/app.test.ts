@@ -28,21 +28,42 @@ const host = { host: "127.0.0.1" };
 
 test("精简入口只注册新运行时路由，除令牌轮换外一律要求用户凭据", async (t) => {
   const { app, routes } = await open(t);
-  const prefixes = [...new Set(routes.map(({ url }) => url.split("/")[2]))];
+  const prefixes = [
+    ...new Set(
+      routes.map(({ url }) =>
+        url.startsWith("/api/") ? url.split("/")[2] : url.split("/")[1],
+      ),
+    ),
+  ];
   assert.deepEqual(prefixes.sort(), [
     "auth",
     "events",
     "goals",
+    "map",
     "org",
     "quota",
     "skill-proposals",
     "skills",
     "tasks",
   ]);
+  // 全景网页（#322）的页面与只读接口另认本机会话；其余一律要用户凭据。
   const exceptions = routes
-    .filter(({ method, url }) => authPolicy(method, url) !== "user")
+    .filter(
+      ({ method, url }) =>
+        method !== "HEAD" && authPolicy(method, url) !== "user",
+    )
     .map(({ method, url }) => `${method} ${url}`);
-  assert.deepEqual(exceptions, ["POST /api/auth/rotate"]);
+  assert.deepEqual(exceptions.sort(), [
+    "GET /api/map/nodes/:id",
+    "GET /api/map/now",
+    "GET /api/map/stream",
+    "GET /api/map/tree",
+    "GET /map",
+    "GET /map/app.js",
+    "GET /map/login",
+    "GET /map/style.css",
+    "POST /api/auth/rotate",
+  ]);
   for (const { method, url } of routes) {
     const response = await app.inject({
       method: method as "GET",

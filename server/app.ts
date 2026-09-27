@@ -15,6 +15,13 @@ import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 import { SecretaryFallback } from "./tasks/secretary-fallback.ts";
+import { MapLogin } from "./map/login.ts";
+import {
+  expiredPage,
+  isLoopback,
+  notLocal,
+  registerMapRoutes,
+} from "./map/routes.ts";
 
 /** 打开数据库。旧运行时留下的表（身份、聊天、账号等）不读不写，也不因它们存在而报错。 */
 export function openDatabase(data: string) {
@@ -26,7 +33,7 @@ export function openDatabase(data: string) {
 }
 
 /**
- * 组织运行时的 HTTP 入口（#291）：只注册用户认证、任务账本与派活、组织树、目标树、额度和事件路由；
+ * 组织运行时的 HTTP 入口（#291）：只注册用户认证、任务账本与派活、组织树、目标树、全景图、额度和事件路由；
  * 服务控制（/api/service/*）由 main.ts 注册。
  */
 export async function createApp(options: {
@@ -40,6 +47,8 @@ export async function createApp(options: {
   tasks?: Partial<RunnerOptions>;
   /** 目标判定（#313）的注入项：测试用来缩短命令超时、替换 git 调用。 */
   goals?: Partial<Omit<GoalCheckOptions, "data">>;
+  /** 全景网页失效通知的检查间隔（毫秒），测试缩短。 */
+  mapPollMs?: number;
   /** OpenQuota 可执行文件路径，测试注入假二进制。 */
   quotaBin?: string;
 }) {
@@ -142,15 +151,29 @@ export async function createApp(options: {
       );
   };
   // onRequest 拿得到匹配的路由，且在读请求体之前运行。
-  app.addHook("onRequest", async (request) => {
+  const mapLogin = new MapLogin(db);
+  app.addHook("onRequest", async (request, reply) => {
     if (options.auth === false) return;
     const route = request.routeOptions.url ?? "";
     if (route === "/api/auth/rotate") {
       requireRotation(request.headers.authorization);
       return;
     }
+    const policy = authPolicy(request.method, route);
+    // 全景网页（#322）：只接受本机连接；页面认会话 cookie，只读接口令牌或会话都行，一次性链接由路由自己校验。
+    if (policy.startsWith("map-")) {
+      if (!isLoopback(request.socket.remoteAddress)) throw notLocal();
+      if (policy === "map-login") return;
+      if (mapLogin.valid(request.headers.cookie)) return;
+      if (policy === "map-page")
+        return reply
+          .code(401)
+          .header("content-type", "text/html; charset=utf-8")
+          .header("cache-control", "no-store")
+          .send(expiredPage("全景网页的登录已失效"));
+    }
     // /api/service/* 由 main.ts 用实例控制凭据校验；没有 Web 外壳，未匹配的路径也要求用户凭据再报 404。
-    if (authPolicy(request.method, route) !== "user") return;
+    else if (policy !== "user") return;
     if (auth.validUser(request.headers.authorization)) return;
     throw new Problem(
       401,
@@ -185,6 +208,11 @@ export async function createApp(options: {
     ...options.goals,
   });
   registerSkillRoutes(app, db);
+  registerMapRoutes(app, db, {
+    login: mapLogin,
+    live: async () => (await taskRunner.top()).rows,
+    pollMs: options.mapPollMs,
+  });
   registerQuotaRoute(app, { bin: options.quotaBin, db });
   return { app, db, taskRunner };
 }

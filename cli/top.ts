@@ -5,14 +5,14 @@ import { clip, pad, printJson, width } from "./format.ts";
 import type { Client } from "./service.ts";
 import type { Command, Values } from "./main.ts";
 import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
-import { renderTopGoals } from "./top-goals.ts";
-import type { GoalNode } from "../server/goals/read.ts";
-import { DEPTH_MAX } from "../server/goals/rules.ts";
+import { renderTopMap } from "./map.ts";
+import { DEPTH_MAX, type MapTreeNode } from "../server/map/view.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
  * 默认全屏刷新，q / Ctrl-C 退出并还原终端；非 TTY 或 --once 只打一次，--json 给脚本。
- * 下面接一段排期（就绪、依赖链、等待中、因上游卡住），取自 `/api/tasks/plan`。
+ * 下面接全景段（根下各块的状态、在跑数与一句是什么，取自 `/api/map/tree`，#322）
+ * 和排期（就绪、依赖链、等待中、因上游卡住，取自 `/api/tasks/plan`）。
  */
 
 export type TopRow = {
@@ -55,11 +55,9 @@ export type Snapshot = {
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
   plan?: PlanView | null;
   plan_error?: string;
-  /** 目标树（`/api/goals/tree`）；取不到为 null，原因在 goals_error。 */
-  goals?: GoalNode[] | null;
-  goals_error?: string;
-  /** 目标树已迁为组织节点阶段记录（#322）时的说明；此时 goals 为 undefined。 */
-  goals_retired?: string;
+  /** 全景树（`/api/map/tree`，根下 depth 层）；取不到为 null，原因在 map_error。状态栏读这个字段。 */
+  map?: { root: string | null; tree: MapTreeNode | null } | null;
+  map_error?: string;
 };
 
 // 不从 main.ts 取值：测试先加载本模块，main.ts 再回头引入会撞上循环初始化。
@@ -101,12 +99,12 @@ function columns(value: string | undefined) {
   return number;
 }
 
-export function goalsDepth(value: string | undefined) {
+export function mapDepth(value: string | undefined, flag = "--depth") {
   if (value === undefined) return 2;
   if (!/^[1-9][0-9]*$/.test(value) || Number(value) > DEPTH_MAX)
     throw new Problem(
       400,
-      `--goals-depth 应为 1～${DEPTH_MAX} 的整数（收到：${value}）`,
+      `${flag} 应为 1～${DEPTH_MAX} 的整数（收到：${value}）`,
       "usage",
     );
   return Number(value);
@@ -172,7 +170,7 @@ export type Frame = {
   color: boolean;
   /** 终端行数；给了就让排期段填满剩下的高度，没给用 PLAN_LINES。 */
   height?: number;
-  goalsDepth?: number;
+  mapDepth?: number;
 };
 
 const DIM = "\x1b[2m";
@@ -276,7 +274,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   if (!rows.length) lines.push("现在没有在跑、排队或受阻的任务");
   if (snapshot.truncated)
     lines.push(`（任务过多，只显示前 ${rows.length} 个）`);
-  if (snapshot.goals) {
+  if (snapshot.map) {
     lines.push("");
     const room = frame.height
       ? Math.max(
@@ -285,22 +283,17 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
         )
       : 20;
     lines.push(
-      ...renderTopGoals(
-        snapshot.goals,
+      ...renderTopMap(
+        snapshot.map.tree,
         frame.width,
-        frame.goalsDepth ?? 2,
+        frame.mapDepth ?? 2,
         room,
       ),
     );
-  } else if (snapshot.goals_retired)
-    lines.push("", clip(`目标：${snapshot.goals_retired}`, frame.width));
-  else if (snapshot.goals === null)
+  } else if (snapshot.map === null)
     lines.push(
       "",
-      clip(
-        `目标：取不到（${snapshot.goals_error ?? "未知原因"}）`,
-        frame.width,
-      ),
+      clip(`全景：取不到（${snapshot.map_error ?? "未知原因"}）`, frame.width),
     );
   if (snapshot.plan) {
     lines.push("");
@@ -338,12 +331,13 @@ export const nextOf = (rows: TopRow[]) => {
 /** 终端再矮，排期段也至少留这么几行（含标题与折叠提示）。 */
 const PLAN_MIN_LINES = 4;
 
-/** 看板、目标、排期一起取；附加接口取不到不影响看板。 */
+/** 看板、全景、排期一起取；附加接口取不到不影响看板。 */
 export async function snapshotOf(
   api: Client,
   as: string | undefined,
+  depth = 2,
 ): Promise<Snapshot> {
-  const [snapshot, plan, goals] = await Promise.all([
+  const [snapshot, plan, map] = await Promise.all([
     api.get<Snapshot>(path(as)),
     api.get<PlanView>("/tasks/plan").then(
       (value) => ({ value }),
@@ -351,27 +345,25 @@ export async function snapshotOf(
         error: error instanceof Error ? error.message : String(error),
       }),
     ),
-    api.get<{ goals: GoalNode[] }>("/goals/tree").then(
-      (value) => ({ value }),
-      (error: unknown) =>
-        error instanceof Problem && error.statusCode === 410
-          ? {
-              retired: `已迁为组织节点的阶段记录，看 ${error.nextCommand ?? "atrium org tree"}`,
-            }
-          : {
-              error: error instanceof Error ? error.message : String(error),
-            },
-    ),
+    api
+      .get<{
+        root: string | null;
+        tree: MapTreeNode | null;
+      }>(`/map/tree?depth=${depth}`)
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ),
   ]);
   return {
     ...snapshot,
-    ...("retired" in goals
-      ? { goals_retired: goals.retired }
-      : "error" in goals
-        ? { goals: null, goals_error: goals.error }
-        : Array.isArray(goals.value?.goals)
-          ? { goals: goals.value.goals }
-          : { goals: null, goals_error: "目标接口返回的格式看不懂" }),
+    ...("error" in map
+      ? { map: null, map_error: map.error }
+      : map.value && "tree" in map.value
+        ? { map: { root: map.value.root, tree: map.value.tree } }
+        : { map: null, map_error: "全景接口返回的格式看不懂" }),
     ...("error" in plan
       ? { plan: null, plan_error: plan.error }
       : plan.value?.groups && typeof plan.value.groups === "object"
@@ -462,7 +454,7 @@ export async function watch(
       let snapshot: Snapshot | undefined;
       let reason: string | null = null;
       try {
-        snapshot = await snapshotOf(api, as);
+        snapshot = await snapshotOf(api, as, depth);
       } catch (error) {
         reason =
           error instanceof Problem
@@ -477,7 +469,7 @@ export async function watch(
               footer: true,
               color: terminal.color(),
               height: terminal.rows?.(),
-              goalsDepth: depth,
+              mapDepth: depth,
             })
           : `Atrium · ${reason}`,
       );
@@ -494,13 +486,15 @@ export async function watch(
 }
 
 export const topCommand: Command = {
-  args: "[--once] [--json] [--interval 秒] [--width 列] [--goals-depth N] [--as 订阅者]",
+  args: "[--once] [--json] [--interval 秒] [--width 列] [--depth N] [--as 订阅者]",
   about:
-    "实时看谁在干活、目标树上两层的状态与任务汇总，以及排期；--goals-depth 展开目标层数；缺省每 2 秒刷新，q 或 Ctrl-C 退出",
+    "实时看谁在干活、全景图上两层各块的状态与在跑数，以及排期；--depth 展开全景层数；缺省每 2 秒刷新，q 或 Ctrl-C 退出",
   options: {
     once: { type: "boolean", default: false },
     interval: { type: "string" },
     width: { type: "string" },
+    depth: { type: "string" },
+    // 旧写法：目标树已并进全景图，照旧接受，等同 --depth。
     "goals-depth": { type: "string" },
     as: { type: "string" },
   },
@@ -511,7 +505,10 @@ export const topCommand: Command = {
       throw new Problem(400, "--as 不能为空", "usage");
     const seconds = interval(str(values, "interval"));
     const width_ = columns(str(values, "width"));
-    const depth = goalsDepth(str(values, "goals-depth"));
+    const depth =
+      str(values, "depth") !== undefined
+        ? mapDepth(str(values, "depth"))
+        : mapDepth(str(values, "goals-depth"), "--goals-depth");
     // 非终端、--once 与 --json 都只打一次；实时模式要能接管按键与清屏。
     const once =
       values.once === true ||
@@ -520,7 +517,7 @@ export const topCommand: Command = {
       !process.stdin.isTTY;
     const api = await client();
     if (!once) return watch(api, as, seconds, liveTerminal(), false, depth);
-    const snapshot = await snapshotOf(api, as);
+    const snapshot = await snapshotOf(api, as, depth);
     if (json) {
       printJson(snapshot);
       recordNext("实时看：atrium top");
@@ -531,7 +528,7 @@ export const topCommand: Command = {
           now: Date.now(),
           footer: false,
           color: false,
-          goalsDepth: depth,
+          mapDepth: depth,
         }),
       );
       recordNext(`动作：${nextOf(snapshot.rows)}`);

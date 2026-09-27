@@ -9,6 +9,7 @@ import { UserAuth } from "./user-auth.ts";
 import { authPolicy } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
+import { registerGoalRoutes } from "./goals/routes.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
@@ -23,7 +24,7 @@ export function openDatabase(data: string) {
 }
 
 /**
- * 组织运行时的 HTTP 入口（#291）：只注册用户认证、任务账本与派活、组织树、额度和事件路由；
+ * 组织运行时的 HTTP 入口（#291）：只注册用户认证、任务账本与派活、组织树、目标树、额度和事件路由；
  * 服务控制（/api/service/*）由 main.ts 注册。
  */
 export async function createApp(options: {
@@ -168,6 +169,7 @@ export async function createApp(options: {
     ...options.tasks,
   });
   registerOrgRoutes(app, db);
+  registerGoalRoutes(app, db);
   registerSkillRoutes(app, db);
   registerQuotaRoute(app, { bin: options.quotaBin, db });
   return { app, db, taskRunner };

@@ -125,11 +125,12 @@ function roleHint(task: Task): string[] {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--goal gN] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--role 节点] [--from 节点] [--repo 路径] [--brief 文件] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--parent 挂到父任务下，--brief 附任务详述 md",
+    "建任务；--role 记到组织节点（o4 或 atrium/runtime），--from 写投任务的节点，--goal 挂到里程碑，--parent 挂到父任务下，--brief 附任务详述 md",
   options: {
     parent: { type: "string" },
+    goal: { type: "string" },
     role: { type: "string" },
     from: { type: "string" },
     repo: { type: "string" },
@@ -171,6 +172,9 @@ const add: Command = {
       ...(str(values, "from") === undefined
         ? {}
         : { from: str(values, "from") }),
+      ...(str(values, "goal") === undefined
+        ? {}
+        : { goal: str(values, "goal") }),
       ...(repo === undefined
         ? {}
         : { repo: existing(repo, "--repo", "directory") }),
@@ -195,7 +199,7 @@ const add: Command = {
     else
       console.log(
         [
-          `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}`,
+          `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.goal_ref ? ` · 挂在 ${task.goal_ref}` : ""}`,
           ...roleHint(task),
         ].join("\n"),
       );
@@ -309,6 +313,7 @@ const show: Command = {
             : task.node_ref,
         ],
         ["投任务的节点", task.origin_ref],
+        ["里程碑", task.goal_ref],
         ["仓库", task.repo],
         [
           "交付物",
@@ -386,13 +391,14 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--role 节点] [--from 节点|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、详述、交付物、依赖和自动派发`,
+  args: "tN [--status S] [--pr URL] [--role 节点] [--from 节点|''] [--goal gN|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、岗位、里程碑、详述、交付物、依赖和自动派发`,
   options: {
     status: { type: "string" },
     title: { type: "string" },
     role: { type: "string" },
     from: { type: "string" },
+    goal: { type: "string" },
     brief: { type: "string" },
     deliver: { type: "string" },
     issue: { type: "string" },
@@ -416,6 +422,8 @@ const set: Command = {
     if (role !== undefined) body.role = role;
     const from = str(values, "from");
     if (from !== undefined) body.from = from;
+    const goal = str(values, "goal");
+    if (goal !== undefined) body.goal = goal;
     const brief = str(values, "brief");
     if (brief !== undefined)
       body.brief_path = brief === "" ? "" : existing(brief, "--brief", "file");
@@ -432,7 +440,7 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--role、--from、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
+        "至少给一项：--status、--pr、--title、--role、--from、--goal、--brief、--deliver、--issue、--after、--after-pr 或 --auto",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,

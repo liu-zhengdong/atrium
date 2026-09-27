@@ -107,7 +107,7 @@ atrium chat --acp --allow   # ACP 界面里秘书的权限请求自动允许一�
 
 两种方式共用同一个会话（编号存在 `<ATRIUM_DATA>/secretary/`）。秘书空闲时，发给 `secretary` 的待处理事件按唤醒规则攒批后作为新消息送入；秘书忙时事件排队，一轮结束后合并送入；连续自动送入 10 次后暂停，等你发话再继续。送入即记为已送达，秘书处理完自己 `atrium events ack`，没确认的租约到期后重投；关掉界面不丢事件，下次打开一并送入。
 
-秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开时，用户 opencode 数据目录里的 `auth.json`、`mcp-auth.json` 比这边新就拷一份进来，用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。codex、kimi、Claude Code 后续接入。
+秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开时，从用户 opencode 数据目录的 `auth.json` 同步 API key 类条目（`api`、`wellknown`），OAuth 登录（如 openai、xai）不带——提供商的刷新令牌多是一次性的，秘书一刷新，用户自己的登录可能失效；`mcp-auth.json` 在 opencode 里只存 MCP 的 OAuth 状态，同样不带。所用模型的提供商只有 OAuth 登录时，打开界面会提示换用有 API key 的提供商，或在秘书目录里单独登录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home opencode auth login`，秘书自己的登录不会被同步覆盖）。用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。codex、kimi、Claude Code 后续接入。
 
 ## 组织树
 

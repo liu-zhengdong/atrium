@@ -4,9 +4,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -45,20 +45,37 @@ async function until(
   }
 }
 
-test("秘书的 opencode 数据目录独立：只拷入凭据、不动用户目录，用户那边更新了才重拷", () => {
+test("秘书的 opencode 数据目录独立：只同步 API key、不带 OAuth、不动用户目录", () => {
   const root = mkdtempSync(join(tmpdir(), "atrium-opencode-home-"));
   try {
     const source = join(root, "user", "opencode");
     mkdirSync(source, { recursive: true });
-    writeFileSync(join(source, "auth.json"), '{"a":{"type":"api"}}');
+    const userAuth = JSON.stringify({
+      a: { type: "api", key: "sk-a" },
+      openai: { type: "oauth", refresh: "r1", access: "x1", expires: 1 },
+    });
+    const userMcp = JSON.stringify({
+      notion: { tokens: { accessToken: "m1", refreshToken: "m2" } },
+    });
+    writeFileSync(join(source, "auth.json"), userAuth);
+    writeFileSync(join(source, "mcp-auth.json"), userMcp);
     writeFileSync(join(source, "opencode.db"), "user db");
     const before = statSync(join(source, "auth.json")).mtimeMs;
     const home = secretaryOpencodeHome(join(root, "data"));
     assert.equal(home, join(root, "data", "secretary", "opencode-home"));
 
-    assert.deepEqual(prepareOpencodeHome(home, source), ["auth.json"]);
+    const report = prepareOpencodeHome(home, source);
+    assert.deepEqual(report.written, ["auth.json", "mcp-auth.json"]);
+    assert.deepEqual(report.oauthOnly, ["openai"]);
+    assert.deepEqual(report.mcpSkipped, [{ name: "notion", reason: "oauth" }]);
     const copy = join(home, "opencode", "auth.json");
-    assert.equal(readFileSync(copy, "utf8"), '{"a":{"type":"api"}}');
+    assert.deepEqual(JSON.parse(readFileSync(copy, "utf8")), {
+      a: { type: "api", key: "sk-a" },
+    });
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(home, "opencode", "mcp-auth.json"), "utf8")),
+      {},
+    );
     assert.equal(statSync(copy).mode & 0o777, 0o600);
     assert.throws(
       () => statSync(join(home, "opencode", "opencode.db")),
@@ -69,20 +86,63 @@ test("秘书的 opencode 数据目录独立：只拷入凭据、不动用户目�
       before,
       "用户目录不动",
     );
+    assert.equal(readFileSync(join(source, "auth.json"), "utf8"), userAuth);
+    assert.equal(readFileSync(join(source, "mcp-auth.json"), "utf8"), userMcp);
 
-    assert.deepEqual(prepareOpencodeHome(home, source), [], "没更新不重拷");
-    writeFileSync(join(source, "auth.json"), '{"b":{"type":"api"}}');
-    writeFileSync(join(source, "mcp-auth.json"), "{}");
-    const later = Date.now() / 1000 + 5;
-    utimesSync(join(source, "auth.json"), later, later);
-    assert.deepEqual(prepareOpencodeHome(home, source), [
-      "auth.json",
-      "mcp-auth.json",
-    ]);
-    assert.equal(readFileSync(copy, "utf8"), '{"b":{"type":"api"}}');
+    assert.deepEqual(
+      prepareOpencodeHome(home, source).written,
+      [],
+      "没变不重写",
+    );
+
+    // 秘书在自己目录里单独登录了 xai；用户换了 a 的 key、删了 b 之外没别的变化。
+    const own = { type: "oauth", refresh: "own", access: "own", expires: 2 };
+    writeFileSync(
+      copy,
+      JSON.stringify({ a: { type: "api", key: "sk-a" }, xai: own }),
+    );
+    writeFileSync(
+      join(source, "auth.json"),
+      JSON.stringify({ a: { type: "api", key: "sk-a2" } }),
+    );
+    assert.deepEqual(prepareOpencodeHome(home, source).written, ["auth.json"]);
+    assert.deepEqual(JSON.parse(readFileSync(copy, "utf8")), {
+      xai: own,
+      a: { type: "api", key: "sk-a2" },
+    });
+    // 用户删掉 a：上次同步来的跟着删，秘书自己的登录留着。
+    writeFileSync(join(source, "auth.json"), "{}");
+    prepareOpencodeHome(home, source);
+    assert.deepEqual(JSON.parse(readFileSync(copy, "utf8")), { xai: own });
+
+    // 秘书那份坏了：挪开重建。
+    writeFileSync(copy, "{坏");
+    const broken = prepareOpencodeHome(home, source);
+    assert.deepEqual(broken.written, ["auth.json"]);
+    assert.match(broken.problems.join("\n"), /秘书的 auth\.json 不是合法 JSON/);
+    assert.equal(readFileSync(copy, "utf8"), "{}\n");
+    assert.ok(
+      readdirSync(join(home, "opencode")).some((name) =>
+        name.startsWith("auth.json.bad-"),
+      ),
+    );
+
+    // 用户那份坏了：秘书那份不动。
+    writeFileSync(join(source, "auth.json"), "not json");
+    const bad = prepareOpencodeHome(home, source);
+    assert.deepEqual(bad.written, []);
+    assert.match(
+      bad.problems.join("\n"),
+      /用户的 opencode auth\.json 不是合法 JSON/,
+    );
+    assert.equal(readFileSync(copy, "utf8"), "{}\n");
+    assert.equal(readFileSync(join(source, "auth.json"), "utf8"), "not json");
 
     // 用户自己就把 XDG_DATA_HOME 指到了这里：什么都不做。
-    assert.deepEqual(prepareOpencodeHome(home, join(home, "opencode")), []);
+    assert.deepEqual(
+      prepareOpencodeHome(home, join(home, "opencode")).written,
+      [],
+    );
     assert.equal(
       userOpencodeData({ XDG_DATA_HOME: "/x/share" }),
       join("/x/share", "opencode"),

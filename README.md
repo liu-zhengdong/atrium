@@ -105,6 +105,26 @@ atrium events ack 1               # 确认已处理（编号见 events wait）
 
 同一订阅者、同一去重键的未确认事件合并成一条；取走的事件 15 分钟内不重投（`ATRIUM_EVENT_LEASE_MINUTES` 可调），到点仍未确认才重投；自己 `task stop` 引出的事件不投给自己。
 
+## Leader：按部分分层汇报
+
+用户只和秘书对话；秘书建任务、派活，但任务的过程事件交给任务所属部分的 leader，不直接到秘书。leader 是登记在 Atrium 的固定身份（`a1`……），按事唤醒、无常驻会话，只把四类事上交秘书。
+
+```bash
+atrium leader add Atrium负责人 --worker claude+opus:high   # 登记（名称、被唤醒时用的执行者组合）；--id aN 认领节点上已引用的号
+atrium org edit atrium --leader a1 --reason 试点           # 指派；指派没登记的 aN 会被拒
+atrium leader ls                                          # 每位负责什么、最近一次唤醒在处理什么
+atrium leader show a1                                     # 连同备忘
+atrium leader edit a1 --memo "在等 t5 合入"                # 备忘（覆盖写，上限 2000 字，超了先精简）
+atrium leader escalate "t5 已上线；端到端：…" --kind shipped --task t5 --as a1   # 上交（leader 进程里缺省以自己的身份）
+atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点的阶段记录，其余章程不动
+```
+
+- **投给谁**：任务没写 `--owner` 时，从任务的归属部分（`--part`，其次 `--role`，都没写沿父任务往上找）向上找最近的、已登记的 leader；找不到投秘书。事件的 `routed` 写明投给谁、为什么。写了 `--owner`（包括 `--owner secretary`）就按负责人投。过程事件（合入、退回等知会）也投给 leader，但只有「要处理」的才唤醒它。
+- **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
+- **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，改这些节点的要点、阶段与全景人话字段，写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
+- **上交**只有四类：`shipped` 已上线（里程碑完成，须带 `--task`，说明里附端到端验证）、`cross` 需要别的部分配合、`beyond` 越过权限／预算／硬边界、`stuck` 搞不定（卡住多次、拿不定）。生成一条投给上一层 leader（没有就秘书）的「要处理」事件 `escalated`，带 `--task` 时任务上也记一笔。
+- **连续性**存在 Atrium：节点要点、阶段、交付记录与 leader 备忘，不靠进程上下文。`org tree`、`map --json`（`leader_state`）、`atrium top` 显示每个节点的 leader 与最近一次唤醒、在处理什么。
+
 ## 和秘书对话
 
 ```bash
@@ -276,19 +296,22 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 - 所有命令支持 `--json`：成功 `{"ok":true,"result":…,"next":…}`，失败 `{"ok":false,"error":{"code","message","candidates"?},"next":…}`；stdout 只写一个 JSON 对象。
 - 文本回执最后一行给下一步命令；报错只在修正明确可执行时给出修正命令。
 - 执行者进程带 `ATRIUM_WORKER=1`，此时命令行拒绝连接用户的服务，只能显式使用隔离的 `ATRIUM_DATA` 与 `ATRIUM_PORT`。
+- leader 进程带 `ATRIUM_LEADER`、`ATRIUM_LEADER_TOKEN`（本次唤醒签发、结束即作废）与 `ATRIUM_LEADER_URL`，命令行据此以 aN 身份直连服务，`events`、`task stop` 的 `--as` 缺省是自己；权限由服务端判定。
 
 ## 配置与数据
 
-| 环境变量                       | 用途                                                       |
-| ------------------------------ | ---------------------------------------------------------- |
-| `ATRIUM_PORT`                  | 新启动服务的端口，默认 `4310`；已有服务沿用原端口          |
-| `ATRIUM_DATA`                  | 数据目录，默认 `~/.atrium/`                                |
-| `ATRIUM_WORKERS_DIR`           | 执行者档案目录，默认 `~/Atrium/workers`                    |
-| `ATRIUM_OPENQUOTA_BIN`         | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…` |
-| `ATRIUM_EVENT_LEASE_MINUTES`   | 取走的事件多久未确认就重投，默认 15                        |
-| `ATRIUM_EVENT_BATCH_SECONDS`   | 事件攒批窗口，默认 0（到即取）                             |
-| `ATRIUM_QUOTA_UNKNOWN_MINUTES` | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60          |
-| `ATRIUM_UPDATE_REPO`           | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium` |
+| 环境变量                        | 用途                                                       |
+| ------------------------------- | ---------------------------------------------------------- |
+| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口          |
+| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                |
+| `ATRIUM_WORKERS_DIR`            | 执行者档案目录，默认 `~/Atrium/workers`                    |
+| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…` |
+| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                        |
+| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                             |
+| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60          |
+| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                           |
+| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20             |
+| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium` |
 
 数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
 

@@ -12,6 +12,7 @@ import {
   type Dependency,
 } from "./schedule-upstream.ts";
 import { planDetails, type PlanDetail } from "./plan-view.ts";
+import { taskRoute } from "../leaders/subscriber.ts";
 
 export type ScheduleGroup = "running" | "ready" | "waiting" | "blocked";
 export type PlanItem = {
@@ -296,8 +297,9 @@ export class Scheduler {
     waiting: string[],
   ) {
     const task = getTask(this.db, id);
+    const route = taskRoute(this.db, task);
     this.inbox.publish({
-      subscriber: task.owner ?? "secretary",
+      subscriber: route.subscriber,
       taskId: id,
       source: "schedule",
       kind,
@@ -310,6 +312,7 @@ export class Scheduler {
         unassigned:
           (task.owner ?? "secretary") === "secretary" &&
           task.deliver === "none",
+        routed: { to: route.subscriber, why: route.why },
       },
     });
   }

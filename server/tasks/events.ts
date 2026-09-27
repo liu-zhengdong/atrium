@@ -321,6 +321,62 @@ export class EventInbox {
     this.emitter.emit(who);
   }
 
+  /** 服务重启后收回上次唤醒没确认完的处理中租约，免得等满租约才重投。 */
+  releaseAll(subscriber: string) {
+    const who = ownerOf(subscriber, "as");
+    this.db
+      .prepare(
+        "UPDATE task_inbox SET delivered_at=NULL WHERE subscriber=? AND acked_at IS NULL AND delivered_at IS NOT NULL",
+      )
+      .run(who);
+    this.emitter.emit(who);
+  }
+
+  /** 事件编号各自的订阅者；不存在的编号不出现在结果里。 */
+  subscribersOf(ids: readonly number[]): Map<number, string> {
+    const map = new Map<number, string>();
+    const get = this.db.prepare("SELECT subscriber FROM task_inbox WHERE id=?");
+    for (const id of ids) {
+      const row = get.get(id) as { subscriber: string } | undefined;
+      if (row) map.set(id, row.subscriber);
+    }
+    return map;
+  }
+
+  /**
+   * 送达后内容又被合并更新过的事件（处理期间同一任务又有新结果）：已确认的重新打开、收回租约，
+   * 让新内容再投一次，免得「确认旧内容」顺带吞掉新结果。返回内容变过的编号。
+   */
+  reopenChanged(subscriber: string, events: readonly InboxEvent[]): number[] {
+    const who = ownerOf(subscriber, "as");
+    const read = this.db.prepare(
+      "SELECT updated_at FROM task_inbox WHERE subscriber=? AND id=?",
+    );
+    const reopen = this.db.prepare(
+      "UPDATE task_inbox SET acked_at=NULL,delivered_at=NULL WHERE subscriber=? AND id=?",
+    );
+    const changed = atomically(this.db, () =>
+      events.flatMap((event) => {
+        const row = read.get(who, event.id) as
+          { updated_at: number } | undefined;
+        if (!row || row.updated_at <= event.updated_at) return [];
+        reopen.run(who, event.id);
+        return [event.id];
+      }),
+    );
+    if (changed.length) this.emitter.emit(who);
+    return changed;
+  }
+
+  /** 这批事件里还没确认的编号。 */
+  unacked(ids: readonly number[]): number[] {
+    const get = this.db.prepare("SELECT acked_at FROM task_inbox WHERE id=?");
+    return ids.filter((id) => {
+      const row = get.get(id) as { acked_at: number | null } | undefined;
+      return row !== undefined && row.acked_at === null;
+    });
+  }
+
   /**
    * 有可取事件立即返回；否则等到有事件、超时或服务关闭。
    * peek 只看不取：不记送达、不起租约，供唤醒通道判断空闲后再 deliver。

@@ -199,6 +199,36 @@ export function editDoc(
     );
   });
 }
+/**
+ * 只改章程里的阶段记录（stages），其余字段、正文、边界与预算原样保留；留章程修订。
+ * leader 改本节点的阶段走这里，不经整份章程（那会连带边界与预算）。
+ */
+export function editStages(
+  db: DatabaseSync,
+  address: string,
+  stages: unknown,
+  reason: unknown,
+  actor: string,
+) {
+  return transaction(db, () => {
+    const node = nodeByAddress(db, address);
+    authorized(db, node, actor, "charter");
+    if (node.archived_at !== null)
+      throw new Problem(400, `${ref(node.id)} 已归档`);
+    const old = current(db, node.id, "charter");
+    const fields = old
+      ? (JSON.parse(old.fields) as Record<string, unknown>)
+      : {};
+    return editDocInner(
+      db,
+      node,
+      "charter",
+      { fields: { ...fields, stages }, body: old?.body ?? "" },
+      validateReason(reason),
+      actor,
+    );
+  });
+}
 /** 全景人话字段只改当前章程；正文若同时修改，仍单独留章程修订。 */
 export function editOverviewFields(
   db: DatabaseSync,

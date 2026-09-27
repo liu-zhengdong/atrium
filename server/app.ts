@@ -15,6 +15,15 @@ import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 import { SecretaryFallback } from "./tasks/secretary-fallback.ts";
+import type { EventInbox } from "./tasks/events.ts";
+import { LeaderTokens } from "./leaders/tokens.ts";
+import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
+import { registerLeaderRoutes } from "./leaders/routes.ts";
+import {
+  LeaderWaker,
+  leaderEnvOptions,
+  type LeaderWakerOptions,
+} from "./leaders/runtime.ts";
 import { MapLogin } from "./map/login.ts";
 import {
   expiredPage,
@@ -51,6 +60,10 @@ export async function createApp(options: {
   mapPollMs?: number;
   /** OpenQuota 可执行文件路径，测试注入假二进制。 */
   quotaBin?: string;
+  /** 服务地址（main.ts 给），写进 leader 进程环境；内存服务没有。 */
+  serviceUrl?: string;
+  /** leader 唤醒的注入项：测试用来缩短攒批、替换 leader 进程。 */
+  leaders?: Partial<Omit<LeaderWakerOptions, "data">>;
 }) {
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   const db = openDatabase(options.data);
@@ -150,10 +163,14 @@ export async function createApp(options: {
         "atrium auth rotate",
       );
   };
+  // leader 令牌（每次唤醒签发）先于用户认证判定：认出来就按 leader 的权限边界走，不再要求用户令牌。
+  const leaderTokens = new LeaderTokens();
+  let inbox: (() => EventInbox) | undefined;
+  registerLeaderGuard(app, db, leaderTokens, () => inbox!());
   // onRequest 拿得到匹配的路由，且在读请求体之前运行。
   const mapLogin = new MapLogin(db);
   app.addHook("onRequest", async (request, reply) => {
-    if (options.auth === false) return;
+    if (options.auth === false || leaderOf(request)) return;
     const route = request.routeOptions.url ?? "";
     if (route === "/api/auth/rotate") {
       requireRotation(request.headers.authorization);
@@ -202,7 +219,18 @@ export async function createApp(options: {
   );
   secretaryFallback.start();
   app.addHook("preClose", async () => secretaryFallback.close());
+  inbox = () => taskRunner.inbox;
   registerOrgRoutes(app, db);
+  registerLeaderRoutes(app, db, taskRunner.inbox);
+  const leaderWaker = new LeaderWaker(db, taskRunner.inbox, leaderTokens, {
+    data: resolve(options.data),
+    env: options.tasks?.env,
+    url: () => options.serviceUrl,
+    ...leaderEnvOptions(),
+    ...options.leaders,
+  });
+  leaderWaker.start();
+  app.addHook("preClose", async () => leaderWaker.close());
   registerGoalRoutes(app, db, {
     data: resolve(options.data),
     ...options.goals,

@@ -14,6 +14,9 @@ import {
   titleOf,
 } from "./org-overview.ts";
 import type { Point } from "../server/org/points.ts";
+import type { LeaderBrief } from "../server/leaders/model.ts";
+import YAML from "yaml";
+import { wakeText } from "./leaders.ts";
 
 const str = (values: Values, key: string) =>
   typeof values[key] === "string" ? (values[key] as string) : undefined;
@@ -272,6 +275,7 @@ export const orgCommands: Record<string, Command> = {
           tasks: TaskCounts;
           sent: TaskCounts;
           budget: BudgetView;
+          leader_state?: LeaderBrief;
         }>
       >(`/org/tree${as(values)}`);
       const labels: Record<string, string> = {
@@ -290,7 +294,7 @@ export const orgCommands: Record<string, Command> = {
         rows
           .map(
             (n) =>
-              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}` : ""}${formatCounts(n.tasks, n.sent)}${formatBudget(n.budget) ? ` · ${formatBudget(n.budget)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
+              `${"  ".repeat(depth(n))}${n.ref} [${labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}${n.leader_state ? `（${n.leader_state.name}，${wakeText(n.leader_state.wake)}）` : ""}` : ""}${formatCounts(n.tasks, n.sent)}${formatBudget(n.budget) ? ` · ${formatBudget(n.budget)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
           )
           .join("\n") +
           (rows.length ? "\n额度用量为估算；账号总览看 atrium quota" : "") ||
@@ -461,6 +465,53 @@ export const orgCommands: Record<string, Command> = {
         result,
         `已新建 o${result.id} [${result.kind}] ${result.name}，章程与能力卡为空（r0）`,
         `atrium org edit o${result.id} --charter 章程.md --reason 原因`,
+      );
+    },
+  },
+  "org stages": {
+    args: "节点 --file 文件 --reason 原因 [--as aN]",
+    about:
+      "改节点的阶段记录（章程里的 stages），其余字段、正文、边界与预算不动，留章程修订；文件是 YAML 或 JSON 的阶段列表（也可写成 stages: 列表）；leader 可改自己负责的节点及子节点",
+    options: {
+      ...options,
+      file: { type: "string" },
+      reason: { type: "string" },
+    },
+    positionals: [1, 1],
+    async run({ positionals: [id], values, json }) {
+      const name = str(values, "file");
+      if (!name) throw new Problem(400, "--file 应指定阶段文件", "usage");
+      let text: string;
+      try {
+        text = readFileSync(resolve(name), "utf8");
+      } catch {
+        throw new Problem(400, `--file 文件无法读取：${name}`, "usage");
+      }
+      let parsed: unknown;
+      try {
+        parsed = YAML.parse(text);
+      } catch (error) {
+        throw new Problem(
+          400,
+          `--file 不是合法的 YAML/JSON：${(error as Error).message.split("\n")[0]}`,
+          "usage",
+        );
+      }
+      const stages =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as { stages?: unknown }).stages
+          : parsed;
+      const result = await (
+        await client()
+      ).put<{ rev: string; before?: string }>(
+        `/org/nodes/${path(id!)}/stages${as(values)}`,
+        { stages: stages ?? [], reason: reason(values) },
+      );
+      out(
+        json,
+        result,
+        `已更新 ${id} 阶段 ${result.before ?? ""} → ${result.rev}`,
+        `atrium map ${id}`,
       );
     },
   },

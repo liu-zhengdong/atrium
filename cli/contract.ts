@@ -11,6 +11,7 @@ export const exitCodes = {
   restart_rollback: 3,
   conflict: 4,
   worker_environment: 4,
+  leader_scope: 4,
   service_unavailable: 5,
   auth_required: 6,
   upgrade_restart_required: 7,

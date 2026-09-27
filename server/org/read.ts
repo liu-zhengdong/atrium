@@ -22,6 +22,7 @@ import { allShares, rootLimits } from "./share-store.ts";
 import { exportShares, shareCapacity, type ShareNode } from "./shares.ts";
 import type { PaceEntry } from "../tasks/prepare.ts";
 import { usageSample, subtreeUsage } from "../tasks/usage.ts";
+import { leaderBriefs } from "../leaders/model.ts";
 
 function budgetViews(db: DatabaseSync, pace?: readonly PaceEntry[]) {
   const list = nodes(db);
@@ -105,6 +106,7 @@ export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
   // 名下任务按子树汇总（项目的「在做」含各模块）；投出的只算节点自己。
   const counts = taskCounts(db);
   const budgets = budgetViews(db, pace);
+  const leaders = leaderBriefs(db);
   const subtree = new Map<number, TaskCounts>();
   for (const n of [...order].reverse()) {
     const sum = {
@@ -136,6 +138,9 @@ export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
       tasks: subtree.get(n.id)!,
       sent: counts.sent.get(n.id) ?? { todo: 0, running: 0, blocked: 0 },
       budget: budgets.get(n.id),
+      ...(n.leader && leaders.has(n.leader)
+        ? { leader_state: leaders.get(n.leader) }
+        : {}),
     };
   });
 }

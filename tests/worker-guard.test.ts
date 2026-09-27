@@ -8,8 +8,12 @@ import { promisify } from "node:util";
 import {
   WORKER_FLAG,
   WORKER_REFUSAL,
+  defaultSubscriber,
+  leaderCommandGuard,
+  leaderSession,
   workerGuard,
 } from "../cli/worker-guard.ts";
+import { leaderEnvironment } from "../server/leaders/runtime.ts";
 import { workerEnvironment } from "../server/tasks/worker-env.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import { childEnv } from "./child-env.ts";
@@ -137,3 +141,63 @@ test(
     assert.doesNotMatch(isolated.out, /执行者环境/);
   },
 );
+
+test("leader 环境：令牌、身份与本机地址对得上才算 leader 会话；服务控制命令一律拒绝", () => {
+  const token = `a3.${"f".repeat(64)}`;
+  const env = {
+    ATRIUM_LEADER: "a3",
+    ATRIUM_LEADER_TOKEN: token,
+    ATRIUM_LEADER_URL: "http://127.0.0.1:4310",
+  };
+  assert.equal(leaderSession({}), null);
+  assert.deepEqual(leaderSession(env), {
+    leader: "a3",
+    url: "http://127.0.0.1:4310",
+    bearer: `Bearer ${token}`,
+  });
+  assert.equal(defaultSubscriber(env), "a3");
+  assert.equal(defaultSubscriber({}), "secretary");
+  for (const bad of [
+    { ...env, ATRIUM_LEADER: "a4" },
+    { ...env, ATRIUM_LEADER: "" },
+    { ...env, ATRIUM_LEADER_URL: "http://example.com:4310" },
+    { ...env, ATRIUM_LEADER_URL: "" },
+  ])
+    assert.throws(() => leaderSession(bad), /leader 环境不完整/);
+  for (const name of [
+    undefined,
+    "--no-open",
+    "stop",
+    "restart",
+    "update",
+    "auth",
+    "chat",
+  ])
+    assert.throws(
+      () => leaderCommandGuard(name, env),
+      (error: Error & { code?: string }) =>
+        error.code === "leader_scope" && /上交秘书/.test(error.message),
+    );
+  for (const name of [
+    "task",
+    "events",
+    "leader",
+    "org",
+    "map",
+    "top",
+    "status",
+  ])
+    leaderCommandGuard(name, env);
+  leaderCommandGuard("restart", {});
+  // leader 进程的环境：执行者白名单，不带 ATRIUM_WORKER 与继承来的凭据，只加本次唤醒的身份。
+  const child = leaderEnvironment(
+    { PATH: "/bin", ATRIUM_WORKER: "1", GH_TOKEN: "x", ATRIUM_DATA: "/d" },
+    { leader: "a3", token, url: "http://127.0.0.1:4310" },
+  );
+  assert.equal(child.ATRIUM_WORKER, undefined);
+  assert.equal(child.GH_TOKEN, undefined);
+  assert.equal(child.ATRIUM_DATA, undefined);
+  assert.equal(child.ATRIUM_LEADER, "a3");
+  assert.equal(child.ATRIUM_LEADER_TOKEN, token);
+  assert.equal(child.ATRIUM_LEADER_URL, "http://127.0.0.1:4310");
+});

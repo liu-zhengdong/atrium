@@ -6,6 +6,7 @@ import { DELIVERS, type Deliver } from "../server/tasks/deliver.ts";
 import type { Task, TaskEventRow, TaskNode } from "../server/tasks/ledger.ts";
 import { formatChildSummary } from "../server/tasks/ledger-summary.ts";
 import { recordNext } from "./contract.ts";
+import { defaultSubscriber } from "./worker-guard.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
@@ -683,7 +684,7 @@ const stop: Command = {
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const id = ref(reference, "任务");
-    const who = str(values, "as") ?? "secretary";
+    const who = str(values, "as") ?? defaultSubscriber();
     if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
     const result = await (
       await client()

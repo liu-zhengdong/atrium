@@ -8,11 +8,12 @@ import { goalCommands } from "./goals.ts";
 import { skillCommands } from "./skills.ts";
 import { topCommand } from "./top.ts";
 import { quotaCommands } from "./quota.ts";
-import { workerGuard } from "./worker-guard.ts";
+import { leaderCommandGuard, workerGuard } from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
 import { mapCommands } from "./map.ts";
 import { reviewCommands } from "./reviews.ts";
+import { leaderCommands } from "./leaders.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
@@ -92,6 +93,7 @@ export const commands: Record<string, Command> = {
   ...reviewCommands,
   ...mapCommands,
   ...orgCommands,
+  ...leaderCommands,
   ...goalCommands,
   ...skillCommands,
   ...quotaCommands,
@@ -171,8 +173,10 @@ export async function main(argv: string[]): Promise<number> {
       if (
         !["--help", "-h", "help", "guide"].includes(name ?? "") &&
         !rest.includes("--help")
-      )
+      ) {
         workerGuard();
+        leaderCommandGuard(name);
+      }
       if (name === undefined || name === "--no-open") {
         if (rest.filter((part) => part !== "--json").length)
           throw new Problem(400, usage, "usage");

@@ -39,6 +39,7 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "auth",
     "events",
     "goals",
+    "leaders",
     "map",
     "org",
     "quota",
@@ -125,6 +126,23 @@ test("--as 只认 u1 与组织节点 leader 的短号；leader 只收短号", as
     reason: "创建",
   });
   assert.equal(root.statusCode, 201, root.body);
+  // 指派 aN 前须先登记。
+  const unregistered = await post("/api/org/nodes", {
+    parent: "o1",
+    slug: "atrium",
+    kind: "project",
+    name: "Atrium",
+    leader: "a1",
+    reason: "创建",
+  });
+  assert.equal(unregistered.statusCode, 404);
+  assert.match(unregistered.json().error, /a1 没有登记为 leader/);
+  const registered = await post("/api/leaders", {
+    name: "Atrium 负责人",
+    worker: "claude+opus",
+  });
+  assert.equal(registered.statusCode, 201, registered.body);
+  assert.equal(registered.json().ref, "a1");
   const project = await post("/api/org/nodes", {
     parent: "o1",
     slug: "atrium",

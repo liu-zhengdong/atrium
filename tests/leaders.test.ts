@@ -1,0 +1,482 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { createApp } from "../server/app.ts";
+import { userTokenPath } from "../server/user-auth.ts";
+import { publishTask } from "../server/tasks/notice.ts";
+import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
+import type { WakeExit } from "../server/leaders/wake.ts";
+import { until } from "./task-fixture.ts";
+
+/**
+ * leader 层的集成：内存服务 + 假 leader 进程（直接用服务签发的令牌调接口）。
+ * 走通：节点设 leader → 任务事件只投 leader → 唤醒 → 越权被拒 → 上交「已上线」→ 秘书只收到一条；
+ * 连续失败转交秘书；破坏输入逐条报错。
+ */
+
+type Behave = (spec: LeaderRunSpec) => Promise<WakeExit>;
+
+async function open(t: { after: (fn: () => unknown) => void }) {
+  const data = mkdtempSync(join(tmpdir(), "atrium-leaders-"));
+  t.after(() => rmSync(data, { recursive: true, force: true }));
+  const runs: LeaderRunSpec[] = [];
+  let behave: Behave = async () => "ok";
+  const created = await createApp({
+    data,
+    auth: true,
+    controlToken: "c".repeat(64),
+    tasks: { pace: async () => undefined },
+    leaders: {
+      batchMs: 0,
+      pollMs: 20,
+      maxFailures: 2,
+      run: async (spec) => {
+        runs.push(spec);
+        return behave(spec);
+      },
+    },
+  });
+  t.after(() => created.app.close());
+  const user = `Bearer ${readFileSync(userTokenPath(data), "utf8").trim()}`;
+  const call = async (
+    method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+    url: string,
+    payload?: unknown,
+    authorization = user,
+  ) => {
+    const response = await created.app.inject({
+      method,
+      url,
+      headers: { host: "127.0.0.1", authorization },
+      ...(payload === undefined ? {} : { payload: payload as object }),
+    });
+    return {
+      status: response.statusCode,
+      body: response.body ? (response.json() as Record<string, any>) : {},
+    };
+  };
+  const ok = async (...args: Parameters<typeof call>) => {
+    const result = await call(...args);
+    assert(
+      result.status < 300,
+      `${args[0]} ${args[1]} → ${result.status} ${JSON.stringify(result.body)}`,
+    );
+    return result.body;
+  };
+  // 组织 o1 → Atrium o2（a1）→ 组织和规矩 o3；OpenQuota o4（没有 leader）。
+  await ok("POST", "/api/org/nodes", {
+    slug: "org",
+    kind: "org",
+    name: "组织",
+    reason: "建",
+  });
+  await ok("POST", "/api/org/nodes", {
+    parent: "o1",
+    slug: "atrium",
+    kind: "project",
+    name: "Atrium",
+    reason: "建",
+  });
+  await ok("POST", "/api/org/nodes", {
+    parent: "o2",
+    slug: "rules",
+    kind: "module",
+    name: "组织和规矩",
+    reason: "建",
+  });
+  await ok("POST", "/api/org/nodes", {
+    parent: "o1",
+    slug: "openquota",
+    kind: "project",
+    name: "OpenQuota",
+    reason: "建",
+  });
+  return {
+    ...created,
+    runs,
+    call,
+    ok,
+    set: (next: Behave) => {
+      behave = next;
+    },
+  };
+}
+
+const wakeStatus = (db: DatabaseSync) =>
+  (
+    db.prepare("SELECT wake_status FROM org_leaders WHERE id=1").get() as
+      { wake_status: string | null } | undefined
+  )?.wake_status;
+
+const idsIn = (prompt: string) =>
+  (/atrium events ack ([\d ]+)/.exec(prompt)?.[1] ?? "")
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+
+test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上交「已上线」，秘书只收到一条", async (t) => {
+  const x = await open(t);
+  // 破坏输入：指派没登记的 aN、登记时执行者不合法。
+  const unregistered = await x.call("PATCH", "/api/org/nodes/o2", {
+    leader: "a1",
+    reason: "指派",
+  });
+  assert.equal(unregistered.status, 404);
+  assert.match(unregistered.body.error, /a1 没有登记为 leader/);
+  assert.match(unregistered.body.nextCommand, /atrium leader add .* --id a1/);
+  const badWorker = await x.call("POST", "/api/leaders", {
+    name: "甲",
+    worker: "notatool",
+  });
+  assert.equal(badWorker.status, 400);
+  assert.match(badWorker.body.error, /worker: 未知的执行者工具/);
+  const leader = await x.ok("POST", "/api/leaders", {
+    name: "Atrium 负责人",
+    worker: "claude+opus:high",
+  });
+  assert.equal(leader.ref, "a1");
+  assert.equal((await x.call("GET", "/api/leaders/a9")).status, 404);
+  await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
+
+  // 秘书建任务：t1 归属 o3（a1 负责）、t2 归属 o4（没 leader）、t3 归属 o3 但指定秘书盯。
+  await x.ok("POST", "/api/tasks", {
+    title: "改规矩",
+    part: "o3",
+    deliver: "none",
+  });
+  await x.ok("POST", "/api/tasks", {
+    title: "改额度",
+    part: "o4",
+    deliver: "none",
+  });
+  await x.ok("POST", "/api/tasks", {
+    title: "秘书自己盯",
+    part: "o3",
+    owner: "secretary",
+    deliver: "none",
+  });
+  const inbox = x.taskRunner.inbox;
+
+  let stolen = "";
+  const secretaryBefore = inbox.list("secretary", { limit: 50 }).events.length;
+  x.set(async (spec) => {
+    const token = `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`;
+    stolen = token;
+    assert.equal(spec.env.ATRIUM_LEADER, "a1");
+    assert.equal(spec.env.ATRIUM_WORKER, undefined);
+    assert.equal(spec.worker, "claude+opus:high");
+    assert.match(spec.prompt, /#\d+ t1 failed 改规矩 · 测试没过/);
+    assert.match(spec.prompt, /Atrium/);
+    const as = (
+      method: Parameters<typeof x.call>[0],
+      url: string,
+      body?: unknown,
+    ) => x.call(method, url, body, token);
+    // 可以：看、在自己负责的部分建任务（不写归属默认记到负责的节点）、备注、改阶段、给子节点指派 leader、写备忘。
+    assert.equal((await as("GET", "/api/tasks/t1")).status, 200);
+    const own = await as("POST", "/api/tasks", {
+      title: "a1 拆的活",
+      deliver: "none",
+    });
+    assert.equal(own.status, 201, JSON.stringify(own.body));
+    assert.equal(own.body.part_ref, "o2");
+    assert.equal(
+      (await as("POST", "/api/tasks/t1/note", { text: "a1 看过" })).status,
+      200,
+    );
+    const stages = await as("PUT", "/api/org/nodes/o2/stages", {
+      stages: [{ id: "s1", result: "leader 层可用", status: "active" }],
+      reason: "a1 推进阶段",
+    });
+    assert.equal(stages.status, 200, JSON.stringify(stages.body));
+    assert.equal(
+      (
+        await as("PATCH", "/api/org/nodes/o3", {
+          leader: "none",
+          reason: "空着",
+          archive: false,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await as("PATCH", "/api/leaders/a1", {
+          memo: "t1 失败过一次，看重派结果",
+        })
+      ).status,
+      200,
+    );
+    // 不可以：逐条拒绝并提示上交。
+    const denied: [Parameters<typeof x.call>[0], string, unknown, RegExp][] = [
+      [
+        "POST",
+        "/api/tasks",
+        { title: "越界", part: "o4" },
+        /动归属部分 o4：不在你负责的部分里/,
+      ],
+      [
+        "POST",
+        "/api/tasks",
+        { title: "越界", part: "o3", owner: "secretary" },
+        /负责人设为 secretary/,
+      ],
+      ["POST", "/api/tasks/t2/stop", undefined, /动任务 t2/],
+      ["PATCH", "/api/tasks/t1", { part: "o4" }, /归属部分 o4/],
+      [
+        "PUT",
+        "/api/org/nodes/o1/docs/charter",
+        { source: "x", reason: "改" },
+        /改章程、边界与预算/,
+      ],
+      [
+        "PUT",
+        "/api/org/nodes/o1/stages",
+        { stages: [], reason: "改" },
+        /节点 o1/,
+      ],
+      [
+        "PATCH",
+        "/api/org/nodes/o2",
+        { leader: "none", reason: "卸任" },
+        /自己负责的节点/,
+      ],
+      ["PATCH", "/api/org/nodes/o3", { name: "改名", reason: "改" }, /name/],
+      ["PATCH", "/api/map/nodes/o2", { detail: "正文" }, /章程正文/],
+      [
+        "POST",
+        "/api/org/nodes",
+        { parent: "o2", slug: "x", kind: "module", name: "x", reason: "建" },
+        /新建组织节点/,
+      ],
+      ["PATCH", "/api/leaders/a1", { worker: "codex" }, /只能改备忘/],
+      [
+        "POST",
+        "/api/leaders",
+        { name: "乙", worker: "codex" },
+        /登记新的 leader/,
+      ],
+      ["POST", "/api/quota/claude/clear", undefined, /额度/],
+      ["GET", "/api/events?as=secretary", undefined, /以 secretary 的名义/],
+      ["POST", "/api/reviews/t1/decide", { conclusion: "x" }, /拍板/],
+    ];
+    for (const [method, url, body, message] of denied) {
+      const result = await as(method, url, body);
+      assert.equal(
+        result.status,
+        403,
+        `${method} ${url} ${JSON.stringify(result.body)}`,
+      );
+      assert.equal(result.body.code, "leader_scope");
+      assert.match(result.body.error, message);
+      assert.match(result.body.error, /上交秘书：atrium leader escalate/);
+    }
+    const memo = await as("PATCH", "/api/leaders/a1", {
+      memo: "字".repeat(2001),
+    });
+    assert.equal(memo.status, 400);
+    assert.match(memo.body.error, /超过上限 2000 字；请精简/);
+    const kind = await as("POST", "/api/leaders/a1/escalate", {
+      kind: "done",
+      note: "x",
+    });
+    assert.equal(kind.status, 400);
+    assert.match(kind.body.error, /上交类型只能是/);
+    assert.equal(
+      (
+        await as("POST", "/api/leaders/a2/escalate", {
+          kind: "stuck",
+          note: "x",
+        })
+      ).status,
+      403,
+    );
+    // 上交「已上线」。
+    const up = await as("POST", "/api/leaders/a1/escalate", {
+      kind: "shipped",
+      note: "leader 层已上线；端到端：atrium org tree 看到 leader",
+      task: "t1",
+    });
+    assert.equal(up.status, 200, JSON.stringify(up.body));
+    assert.equal(up.body.to, "secretary");
+    // 确认别人的事件被拒，确认自己的放行。
+    const theirs = inbox.list("secretary", { limit: 1 }).events[0]!.id;
+    assert.equal(
+      (await as("POST", "/api/events/ack", { ids: [theirs] })).status,
+      403,
+    );
+    const acked = await as("POST", "/api/events/ack", {
+      ids: idsIn(spec.prompt),
+    });
+    assert.equal(acked.status, 200, JSON.stringify(acked.body));
+    return "ok";
+  });
+
+  publishTask(inbox, x.db, 1, "failed", { reason: "测试没过" });
+  publishTask(inbox, x.db, 2, "failed", { reason: "别处失败" });
+  publishTask(inbox, x.db, 3, "failed", { reason: "秘书盯的" });
+  // 过程事件也投 leader，但不唤醒。
+  publishTask(inbox, x.db, 1, "merge_returned", { reason: "rebase 冲突" });
+  const toLeader = inbox.list("a1", { limit: 10 }).events;
+  assert.deepEqual(toLeader.map((e) => e.kind).sort(), [
+    "failed",
+    "merge_returned",
+  ]);
+  const routed = (
+    toLeader.find((e) => e.kind === "failed")!.detail as {
+      routed: { to: string; why: string };
+    }
+  ).routed;
+  assert.equal(routed.to, "a1");
+  assert.match(
+    routed.why,
+    /任务归属 o3「组织和规矩」，最近的 leader 是 o2「Atrium」的 a1/,
+  );
+
+  await until(() => wakeStatus(x.db) === "done", 5000);
+  assert.equal(x.runs.length, 1);
+  assert(
+    inbox.list("a1", { limit: 10 }).events.every((e) => e.acked_at !== null),
+  );
+  const shown = await x.ok("GET", "/api/leaders/a1");
+  assert.equal(shown.wake.status, "done");
+  assert.equal(shown.wake.count, 1);
+  assert.equal(shown.memo, "t1 失败过一次，看重派结果");
+  // 令牌随唤醒结束作废。
+  assert.equal(
+    (await x.call("GET", "/api/tasks/t1", undefined, stolen)).status,
+    401,
+  );
+  assert.equal(
+    (
+      await x.call(
+        "GET",
+        "/api/tasks/t1",
+        undefined,
+        `Bearer a1.${"0".repeat(64)}`,
+      )
+    ).status,
+    401,
+  );
+
+  // 秘书：只收到 t2（没 leader）、t3（指定秘书）和一条上交；没有 t1 的过程事件。
+  const secretary = inbox
+    .list("secretary", { limit: 50 })
+    .events.slice(0, -secretaryBefore || undefined);
+  const kinds = secretary.map((e) => `${e.task} ${e.kind}`).sort();
+  assert.deepEqual(kinds, ["t1 escalated", "t2 failed", "t3 failed"]);
+  const escalated = secretary.find((e) => e.kind === "escalated")!;
+  assert.equal(escalated.level, "action");
+  assert.match(JSON.stringify(escalated.detail), /已上线/);
+  // 任务上也记了一笔。
+  assert(
+    x.db
+      .prepare("SELECT 1 FROM task_events WHERE task_id=1 AND kind='escalated'")
+      .get(),
+  );
+
+  // 视图：org tree、map、top 都带 leader 与最近一次唤醒。
+  const tree = (await x.ok("GET", "/api/org/tree")) as unknown as {
+    ref: string;
+    leader_state?: { name: string; wake: { status: string } };
+  }[];
+  const o2 = tree.find((n) => n.ref === "o2")!;
+  assert.equal(o2.leader_state?.name, "Atrium 负责人");
+  assert.equal(o2.leader_state?.wake.status, "done");
+  const map = await x.ok("GET", "/api/map/nodes/o2");
+  assert.equal(map.leader_state.ref, "a1");
+  const top = await x.ok("GET", "/api/tasks/top");
+  assert.deepEqual(
+    top.leaders.map((l: { ref: string }) => l.ref),
+    ["a1"],
+  );
+  assert.equal(top.leaders[0].wake.summary, "t1 failed");
+});
+
+test("leader：连续失败把没确认的事件转交秘书；超时直接转交", async (t) => {
+  const x = await open(t);
+  await x.ok("POST", "/api/leaders", { name: "负责人", worker: "codex" });
+  await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
+  await x.ok("POST", "/api/tasks", {
+    title: "改规矩",
+    part: "o3",
+    deliver: "none",
+  });
+  const inbox = x.taskRunner.inbox;
+  x.set(async () => "failed");
+  publishTask(inbox, x.db, 1, "blocked", { reason: "缺依赖" });
+  await until(
+    () =>
+      inbox
+        .list("secretary", { limit: 5 })
+        .events.some((e) => e.kind === "blocked"),
+    5000,
+  );
+  assert.equal(x.runs.length, 2);
+  const forwarded = inbox
+    .list("secretary", { limit: 5 })
+    .events.find((e) => e.kind === "blocked")!;
+  const detail = forwarded.detail as {
+    handoff: { from: string; note: string };
+    routed: { why: string };
+  };
+  assert.equal(detail.handoff.from, "a1");
+  assert.match(detail.handoff.note, /连续 2 次失败，转交/);
+  assert.match(detail.routed.why, /给 秘书/);
+  assert(
+    inbox.list("a1", { limit: 5 }).events.every((e) => e.acked_at !== null),
+  );
+  await until(() => wakeStatus(x.db) === "handed_off", 5000);
+  const shown = await x.ok("GET", "/api/leaders/a1");
+  assert.equal(shown.wake.status, "handed_off");
+
+  // 超时：一次就转交。
+  x.set(async () => "timeout");
+  publishTask(inbox, x.db, 1, "failed", { reason: "又挂了" });
+  await until(
+    () =>
+      inbox
+        .list("secretary", { limit: 10 })
+        .events.some((e) => e.kind === "failed"),
+    5000,
+  );
+  assert.equal(x.runs.length, 3);
+});
+
+test("leader：处理期间同一任务又有新结果，确认旧内容不吞掉新结果，下次唤醒再送", async (t) => {
+  const x = await open(t);
+  await x.ok("POST", "/api/leaders", { name: "负责人", worker: "codex" });
+  await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
+  await x.ok("POST", "/api/tasks", {
+    title: "改规矩",
+    part: "o3",
+    deliver: "none",
+  });
+  const inbox = x.taskRunner.inbox;
+  const seen: string[] = [];
+  x.set(async (spec) => {
+    const token = `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`;
+    seen.push(/ t1 (failed|done)/.exec(spec.prompt)?.[1] ?? "?");
+    // 第一次处理时重派，执行者很快做完：done 合并进同一条事件。
+    if (seen.length === 1)
+      publishTask(inbox, x.db, 1, "done", { reason: "重派后完成" });
+    const acked = await x.call(
+      "POST",
+      "/api/events/ack",
+      { ids: idsIn(spec.prompt) },
+      token,
+    );
+    assert.equal(acked.status, 200);
+    return "ok";
+  });
+  publishTask(inbox, x.db, 1, "failed", { reason: "测试没过" });
+  await until(() => seen.length === 2 && wakeStatus(x.db) === "done", 5000);
+  assert.deepEqual(seen, ["failed", "done"]);
+  assert(
+    inbox.list("a1", { limit: 5 }).events.every((e) => e.acked_at !== null),
+  );
+  assert.equal(inbox.list("secretary", { limit: 5 }).events.length, 0);
+});

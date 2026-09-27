@@ -12,8 +12,14 @@ import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import { choiceAddVerdict, leaderRule } from "../server/leaders/scope.ts";
 import {
   CHOICE_LIMITS,
+  COMMENTS_MAX,
+  commentLine,
+  decideRight,
   decideVerdict,
   noteOf,
+  parseDecider,
+  resolveDecider,
+  validateComment,
   parseChoiceRef,
   parsePicks,
   pendingLine,
@@ -287,6 +293,168 @@ test("没选的记决定：写这轮不做 X，原因取说明，没写说明也
   assert.ok(Array.from(long.why).length <= 1000);
 });
 
+test("拍板人：最近写了设置的节点说了算，缺省用户；下放找最近已登记 leader，找不到仍是用户", () => {
+  const reg = new Set(["a1", "a2"]);
+  const link = (
+    id: number,
+    setting: "u1" | "leader" | null,
+    leader: string | null,
+  ) => ({ id, setting, leader });
+  // 选项单挂在 o3（链：o3 → o2 → o1）。
+  const cases: [
+    ReturnType<typeof link>[],
+    string,
+    "u1" | "leader",
+    number | null,
+    RegExp,
+  ][] = [
+    [[], "u1", "u1", null, /缺省由用户拍板/],
+    [
+      [link(3, null, null), link(2, null, "a2"), link(1, null, null)],
+      "u1",
+      "u1",
+      null,
+      /缺省/,
+    ],
+    [
+      [link(3, null, null), link(2, "leader", "a2")],
+      "a2",
+      "leader",
+      2,
+      /o2 设为 leader 拍板：a2（负责 o2）/,
+    ],
+    [
+      [link(3, null, "a1"), link(2, "leader", "a2")],
+      "a1",
+      "leader",
+      2,
+      /a1（负责 o3）/,
+    ],
+    [
+      [link(3, "leader", null), link(2, null, "a2")],
+      "a2",
+      "leader",
+      3,
+      /o3 设为 leader/,
+    ],
+    [
+      [link(3, "u1", "a1"), link(2, "leader", "a2")],
+      "u1",
+      "u1",
+      3,
+      /o3 设为用户拍板/,
+    ],
+    [
+      [link(3, null, "a9"), link(2, "leader", null)],
+      "u1",
+      "leader",
+      2,
+      /找不到已登记的 leader，仍由用户拍板/,
+    ],
+    [
+      [link(3, "leader", null), link(1, null, null)],
+      "u1",
+      "leader",
+      3,
+      /仍由用户拍板/,
+    ],
+    [[link(3, null, "a9"), link(2, "leader", "a2")], "a2", "leader", 2, /a2/],
+  ];
+  for (const [chain, decider, mode, setAt, why] of cases) {
+    const got = resolveDecider(chain, reg);
+    assert.equal(got.decider, decider, JSON.stringify(chain));
+    assert.equal(got.mode, mode);
+    assert.equal(got.set_at, setAt);
+    assert.match(got.why, why);
+  }
+  assert.equal(parseDecider("u1"), "u1");
+  assert.equal(parseDecider("leader"), "leader");
+  for (const bad of ["a1", "", "LEADER", null, 1])
+    usage(() => parseDecider(bad), /--decider: 只能是 u1/);
+
+  for (const [actor, decider, allowed] of [
+    ["u1", "u1", true],
+    ["u1", "a2", true],
+    ["a2", "a2", true],
+    ["a1", "u1", false],
+    ["a1", "a2", false],
+    ["secretary", "u1", false],
+  ] as const) {
+    const verdict = decideRight(actor, decider, "c3");
+    if (allowed) assert.equal(verdict, null, `${actor}/${decider}`);
+    else
+      assert.match(
+        verdict!,
+        decider === "u1"
+          ? /不能拍板 c3：拍板人是用户（u1）；可以写意见：atrium choice comment c3/
+          : /不能拍板 c3：拍板人是 a2/,
+      );
+  }
+});
+
+test("意见：一段话，可标倾向、补依据；字段、范围、条数上限都报清楚", () => {
+  assert.deepEqual(validateComment({ text: " 先做 1 " }, 4, 0), {
+    text: "先做 1",
+    prefer: [],
+    basis: [],
+  });
+  assert.deepEqual(
+    validateComment({ text: "x", prefer: ["3,1"], basis: ["f3", "t9"] }, 4, 0),
+    { text: "x", prefer: [1, 3], basis: ["f3", "t9"] },
+  );
+  assert.deepEqual(validateComment({ text: "x", prefer: 2 }, 4, 0).prefer, [2]);
+  assert.deepEqual(
+    validateComment({ text: "x", prefer: [""] }, 4, 0).prefer,
+    [],
+  );
+  const bad: [unknown, RegExp][] = [
+    [null, /意见应为对象/],
+    [{ text: "x", owner: "a1" }, /owner: 是未知字段/],
+    [{ text: "" }, /意见不能为空/],
+    [{ text: "长".repeat(1001) }, /意见不能超过 1000 字/],
+    [{ text: "x", prefer: [5] }, /--prefer: 没有选项 5/],
+    [{ text: "x", prefer: ["1", 1] }, /--prefer: 选项 1 写了两次/],
+    [{ text: "x", basis: "f3" }, /--basis: 应为列表/],
+    [{ text: "x", basis: Array(11).fill("f") }, /--basis: 至多 10 条/],
+    [{ text: "x", basis: ["f", " "] }, /--basis 第 2 条不能为空/],
+  ];
+  for (const [body, pattern] of bad)
+    usage(() => validateComment(body, 4, 0), pattern);
+  assert.throws(
+    () => validateComment({ text: "x" }, 4, COMMENTS_MAX),
+    (e: { statusCode: number; message: string }) =>
+      e.statusCode === 409 && /已有 20 条意见/.test(e.message),
+  );
+  assert.equal(
+    commentLine({ by: "a2", text: "先做看板", prefer: [1, 3], basis: ["f3"] }),
+    "a2：先做看板（倾向选项 1、3）；补依据：f3",
+  );
+  assert.equal(
+    commentLine({ by: "secretary", text: "合并了两份", prefer: [], basis: [] }),
+    "秘书：合并了两份",
+  );
+});
+
+test("下放后 leader 拍板：详述与决定写明是谁拍的，并带上拍板前的意见", () => {
+  const comments = [{ by: "a2", text: "先做看板", prefer: [2], basis: ["f3"] }];
+  const brief = pickedBrief(facts, opt(), "这周做", "a2", comments);
+  assert.match(brief, /的选项 2，a2拍板要做/);
+  assert.match(brief, /a2说明：这周做/);
+  assert.match(
+    brief,
+    /## 拍板前的意见\n\n- a2：先做看板（倾向选项 2）；补依据：f3/,
+  );
+  assert.doesNotMatch(pickedBrief(facts, opt(), null), /拍板前的意见/);
+  assert.match(
+    skippedDecision(facts, opt(), null, "pick", "a2").why,
+    /^a2选了别的选项，没写原因。/,
+  );
+  assert.match(
+    skippedDecision(facts, opt(), null, "pass", "a2").why,
+    /^a2这轮都不要，没写原因。/,
+  );
+});
+
 test("状态栏一行：最早一份加还有几份，没有就是 null，标题按宽度截", () => {
   const pending = [
     {
@@ -317,7 +485,7 @@ test("状态栏一行：最早一份加还有几份，没有就是 null，标题
   assert.ok(width(long) < 60, long);
 });
 
-test("leader 提选项单：自己负责的部分、下层、上一层可以，别处与查不到的不行；拍板一律拒绝", () => {
+test("leader 提选项单、写意见：自己负责的部分、下层、上一层可以，别处与查不到的不行", () => {
   // o1 ─ o2 ─ o3（a1 负责）─ o4；o1 ─ o5
   const parents = new Map<number, number | null>([
     [1, null],
@@ -348,8 +516,19 @@ test("leader 提选项单：自己负责的部分、下层、上一层可以，�
     /在查不到的节点上提选项单/,
   );
   assert.equal(leaderRule("POST", "/api/choices"), "choice-add");
-  assert.equal(leaderRule("POST", "/api/choices/:id/pick"), "deny");
-  assert.equal(leaderRule("POST", "/api/choices/:id/pass"), "deny");
+  assert.equal(leaderRule("POST", "/api/choices/:id/pick"), "choice-decide");
+  assert.equal(leaderRule("POST", "/api/choices/:id/pass"), "choice-decide");
+  assert.equal(
+    leaderRule("POST", "/api/choices/:id/comment"),
+    "choice-comment",
+  );
+  assert.equal(leaderRule("PUT", "/api/product/nodes/:id"), "deny");
+  assert.match(
+    choiceAddVerdict({ ...input, node: 5, what: "给选项单写意见" })!,
+    /a1 无权在 o5 上给选项单写意见/,
+  );
+  assert.equal(authPolicy("PUT", "/api/product/nodes/:id"), "user");
+  assert.equal(authPolicy("POST", "/api/choices/:id/comment"), "user");
   assert.equal(leaderRule("GET", "/api/choices"), "read");
   assert.equal(authPolicy("POST", "/api/choices/:id/pick"), "map-write");
   assert.equal(authPolicy("POST", "/api/choices/:id/pass"), "map-write");
@@ -447,7 +626,7 @@ async function open(t: { after: (fn: () => unknown) => void }) {
   t.after(() => created.app.close());
   const user = `Bearer ${readFileSync(userTokenPath(data), "utf8").trim()}`;
   const call = async (
-    method: "GET" | "POST" | "PATCH",
+    method: "GET" | "POST" | "PATCH" | "PUT",
     url: string,
     payload?: unknown,
     headers: Record<string, string> = { authorization: user },
@@ -547,11 +726,35 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
       [4, null],
     ],
   );
-  const ready = inboxOf(x.db, "choice:c1");
-  assert.equal(ready.length, 1);
-  assert.equal(ready[0]!.subscriber, "secretary");
-  assert.equal(ready[0]!.kind, "choice_ready");
-  assert.equal(ready[0]!.level, "action");
+  assert.equal(c1.decider, "u1");
+  // 拍板人是用户：秘书被叫醒；项目 leader（o2 的 a2）收到去写意见，不能拍板。
+  assert.deepEqual(
+    inboxOf(x.db, "choice:c1").map((e) => [e.subscriber, e.kind, e.level]),
+    [
+      ["secretary", "choice_ready", "action"],
+      ["a2", "choice_review", "action"],
+    ],
+  );
+  const commented = await x.ok("POST", "/api/choices/c1/comment", {
+    text: "先做看板",
+    prefer: ["1"],
+    basis: ["f3"],
+  });
+  assert.deepEqual(
+    commented.comments.map((c: { by: string; prefer: number[] }) => [
+      c.by,
+      c.prefer,
+    ]),
+    [["secretary", [1]]],
+  );
+  assert.deepEqual(
+    inboxOf(x.db, "choice-comment:c1").map((e) => [e.subscriber, e.level]),
+    [["secretary", "info"]],
+  );
+  assert.equal(
+    (await x.call("POST", "/api/choices/c1/comment", { text: "" })).status,
+    400,
+  );
 
   const c2 = await x.ok("POST", "/api/choices", {
     node: "oq",
@@ -656,6 +859,7 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.match(task.brief, /来源：选项单 c1「Atrium 下一步」的选项 1/);
   assert.match(task.brief, /用户说明：选项2等额度宽裕再说/);
   assert.match(task.brief, /- 能多做到什么：能多做到1/);
+  assert.match(task.brief, /- 秘书：先做看板（倾向选项 1）；补依据：f3/);
   const decisions = await x.ok("GET", "/api/decisions?as=a2");
   const skipped = decisions.decisions.find(
     (d: { ref: string }) => d.ref === picked.decisions[0].ref,
@@ -684,12 +888,21 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.match(text, /1\. 选项1（推荐） → 已选，建了 t\d+/);
   assert.match(text, /2\. 选项2 → 没选，记为 d\d+/);
   assert.match(text, /用户说明：选项2等额度宽裕再说/);
+  assert.match(text, /用户拍板于/);
+  assert.match(text, /意见：\n- 秘书：先做看板/);
 
-  // 秘书收到的「等拍板」被同一去重键改成知会，不再叫醒。
-  const decided = inboxOf(x.db, "choice:c1");
-  assert.equal(decided.length, 1);
-  assert.equal(decided[0]!.kind, "choice_decided");
-  assert.equal(decided[0]!.level, "info");
+  // 秘书与 leader 那条都被同一去重键改成知会，不再叫醒。
+  assert.deepEqual(
+    inboxOf(x.db, "choice:c1").map((e) => [e.subscriber, e.kind, e.level]),
+    [
+      ["secretary", "choice_decided", "info"],
+      ["a2", "choice_decided", "info"],
+    ],
+  );
+  assert.equal(
+    (await x.call("POST", "/api/choices/c1/comment", { text: "晚了" })).status,
+    409,
+  );
 
   // 定了就不能再改。
   for (const action of ["pick", "pass"]) {
@@ -721,6 +934,53 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
     ["c2", "c1"],
   );
 
+  // 下放：o2 设为 leader 拍板，下层 o3 没另设就沿用；新选项单投给 a2 拍板，秘书只收知会，状态栏不算。
+  for (const [body, status] of [
+    [{ decider: "a2" }, 400],
+    [{ decider: "leader", extra: 1 }, 400],
+    [{}, 400],
+  ] as const)
+    assert.equal(
+      (await x.call("PUT", "/api/product/nodes/o2", body)).status,
+      status,
+    );
+  assert.equal(
+    (await x.ok("GET", "/api/product/nodes/o2")).decider,
+    "u1",
+    "缺省用户拍板",
+  );
+  const handed = await x.ok("PUT", "/api/product/nodes/o2", {
+    decider: "leader",
+  });
+  assert.equal(handed.setting, "leader");
+  assert.equal(handed.decider, "a2");
+  const below = await x.ok("GET", "/api/product/nodes/o3");
+  assert.equal(below.setting, null);
+  assert.equal(below.decider, "a1");
+  assert.equal((await x.ok("GET", "/api/product/nodes/o1")).decider, "u1");
+  const c3 = await x.ok("POST", "/api/choices", {
+    node: "o2",
+    choice: sheet(),
+  });
+  assert.equal(c3.decider, "a2");
+  assert.deepEqual(
+    inboxOf(x.db, "choice:c3").map((e) => [e.subscriber, e.kind, e.level]),
+    [
+      ["a2", "choice_ready", "action"],
+      ["secretary", "choice_notice", "info"],
+    ],
+  );
+  assert.equal((await x.ok("GET", "/api/tasks/top")).choices, undefined);
+  assert.equal((await x.ok("GET", "/api/map/now")).choices.open, 0);
+  assert.match(
+    choiceText((await x.ok("GET", "/api/choices/c3")) as never),
+    /拍板人：a2（o2 设为 leader 拍板：a2（负责 o2））/,
+  );
+  // 收回：状态栏重新显示。
+  await x.ok("PUT", "/api/product/nodes/o2", { decider: "u1" });
+  assert.equal((await x.ok("GET", "/api/tasks/top")).choices.open, 1);
+  assert.equal((await x.ok("GET", "/api/choices/c3")).decider, "u1");
+
   assert.equal(
     (
       x.db.prepare("SELECT value FROM pi_identities WHERE id=1").get() as {
@@ -731,13 +991,14 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   );
 });
 
-test("拍板只认用户：leader 令牌能提不能拍，网页会话同源才能拍，匿名拒绝", async (t) => {
+test("拍板权：leader 能提、能写意见，下放给自己的才能拍，改不了设置；网页会话同源才能拍，匿名拒绝", async (t) => {
   const x = await open(t);
   await x.ok("POST", "/api/tasks", {
     title: "待处理",
     part: "o3",
     deliver: "none",
   });
+  await x.ok("PUT", "/api/product/nodes/o3", { decider: "leader" });
   let checked = false;
   let failure: unknown;
   x.set(async (spec) => {
@@ -761,8 +1022,17 @@ test("拍板只认用户：leader 令牌能提不能拍，网页会话同源才�
       assert.equal(outside.status, 403);
       assert.match(
         outside.body.error,
-        /只能挂在你负责的部分、它的下层或它的上一层/,
+        /只能是你负责的部分、它的下层或它的上一层/,
       );
+      const comment = await x.call(
+        "POST",
+        `/api/choices/${upper.body.ref}/comment`,
+        { text: "我倾向 3", prefer: [3] },
+        token,
+      );
+      assert.equal(comment.status, 201, JSON.stringify(comment.body));
+      assert.equal(comment.body.comments[0].by, "a1");
+      // o2 的拍板人是用户：a1 不能拍。
       const pick = await x.call(
         "POST",
         `/api/choices/${upper.body.ref}/pick`,
@@ -770,7 +1040,43 @@ test("拍板只认用户：leader 令牌能提不能拍，网页会话同源才�
         token,
       );
       assert.equal(pick.status, 403);
-      assert.match(pick.body.error, /拍板选项单（那是用户的决定）/);
+      assert.match(pick.body.error, /a1 不能拍板 c1：拍板人是用户（u1）/);
+      const setting = await x.call(
+        "PUT",
+        "/api/product/nodes/o3",
+        { decider: "u1" },
+        token,
+      );
+      assert.equal(setting.status, 403);
+      assert.match(setting.body.error, /改谁拍板选项单（那是用户的决定）/);
+      // o3 已下放给 a1：a1 提的自己拍，不给自己再投待办，秘书只收知会。
+      const own = await x.call(
+        "POST",
+        "/api/choices",
+        { node: "o3", choice: sheet({ title: "产品部自己的" }) },
+        token,
+      );
+      assert.equal(own.status, 201, JSON.stringify(own.body));
+      assert.equal(own.body.decider, "a1");
+      assert.deepEqual(
+        inboxOf(x.db, `choice:${own.body.ref}`).map((e) => [
+          e.subscriber,
+          e.kind,
+        ]),
+        [["secretary", "choice_notice"]],
+      );
+      const decided = await x.call(
+        "POST",
+        `/api/choices/${own.body.ref}/pass`,
+        { note: "先不做" },
+        token,
+      );
+      assert.equal(decided.status, 200, JSON.stringify(decided.body));
+      assert.equal(decided.body.choice.decided_by, "a1");
+      assert.deepEqual(
+        decided.body.decisions.map((d: { owner: string }) => d.owner),
+        ["a1", "a1", "a1", "a1"],
+      );
       checked = true;
     } catch (error) {
       failure = error;
@@ -780,8 +1086,21 @@ test("拍板只认用户：leader 令牌能提不能拍，网页会话同源才�
   publishTask(x.taskRunner.inbox, x.db, 1, "failed", { reason: "测试没过" });
   await until(() => checked || failure !== undefined, 20000);
   if (failure) throw failure;
-  const ready = inboxOf(x.db, "choice:c1");
-  assert.equal(ready[0]!.kind, "choice_ready");
+  assert.deepEqual(
+    inboxOf(x.db, "choice:c1").map((e) => [e.subscriber, e.kind]),
+    [
+      ["secretary", "choice_ready"],
+      ["a2", "choice_review"],
+    ],
+  );
+  const pending = await x.ok("GET", "/api/tasks/top");
+  assert.deepEqual(
+    pending.choices.list.map((c: { ref: string }) => c.ref),
+    ["c1"],
+  );
+  const decisions = await x.ok("GET", "/api/decisions?as=a1");
+  assert.equal(decisions.decisions[0].by, "a1");
+  assert.match(decisions.decisions[0].why, /^先不做。/);
 
   // 网页会话：同源（带 Origin）才能拍；不带 Origin、跨源、匿名都不行；会话也不能提选项单。
   const link = await x.ok("POST", "/api/map/login");

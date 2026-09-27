@@ -923,6 +923,20 @@ label.option-head {
   line-height: 1.6;
   color: var(--text);
 }
+.choice-comments {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.choice-comments ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.choice-comments strong {
+  font-weight: 600;
+  color: var(--ink);
+}
 .choice-label {
   display: inline-block;
   margin-right: 8px;

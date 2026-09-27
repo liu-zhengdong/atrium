@@ -10,16 +10,26 @@ import {
 } from "../org/model.ts";
 import { addDecision, decisionRef } from "../memos/decisions.ts";
 import { partRoute } from "../leaders/subscriber.ts";
+import { registeredLeaders } from "../leaders/model.ts";
 import { atomically, createTask, parseTaskRef } from "../tasks/ledger.ts";
 import {
   choiceRef,
+  decideRight,
   decideVerdict,
+  DECIDER_MODES,
+  parseDecider,
+  resolveDecider,
+  validateComment,
+  type Decider,
+  type DeciderLink,
+  type DeciderMode,
   noteOf,
   parseChoiceRef,
   parsePicks,
   pickedBrief,
   skippedDecision,
   statusAfter,
+  COMMENTS_MAX,
   STATUS_TEXT,
   validateChoice,
   type ChoiceFacts,
@@ -62,7 +72,61 @@ export function ensureChoiceTables(db: DatabaseSync) {
     picked INTEGER,
     task_id INTEGER,
     decision_id INTEGER,
-    PRIMARY KEY(choice_id,seq));`);
+    PRIMARY KEY(choice_id,seq));
+  CREATE TABLE IF NOT EXISTS choice_settings (
+    node_id INTEGER PRIMARY KEY,
+    decider TEXT NOT NULL CHECK(decider IN ('u1','leader')),
+    updated_by TEXT NOT NULL,
+    updated_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS choice_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    choice_id INTEGER NOT NULL REFERENCES choices(id),
+    by TEXT NOT NULL,
+    text TEXT NOT NULL,
+    prefer TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    created_at INTEGER NOT NULL);
+  CREATE INDEX IF NOT EXISTS choice_comments_choice ON choice_comments(choice_id,id);`);
+}
+
+function settingsOf(db: DatabaseSync): Map<number, DeciderMode> {
+  return new Map(
+    all<{ node_id: number; decider: string }>(
+      db,
+      "SELECT node_id,decider FROM choice_settings ORDER BY node_id LIMIT 500",
+    )
+      .filter((r) => DECIDER_MODES.includes(r.decider as DeciderMode))
+      .map((r) => [r.node_id, r.decider as DeciderMode]),
+  );
+}
+
+/** 几个节点上的选项单各由谁拍板：一次读节点、设置与已登记 leader，判定在 model.ts。 */
+export function decidersFor(
+  db: DatabaseSync,
+  ids: Iterable<number>,
+  list: readonly NodeRow[] = nodes(db),
+): Map<number, Decider> {
+  const byId = new Map(list.map((n) => [n.id, n]));
+  const settings = settingsOf(db);
+  const registered = registeredLeaders(db);
+  const out = new Map<number, Decider>();
+  for (const id of new Set(ids)) {
+    const chain: DeciderLink[] = [];
+    const seen = new Set<number>();
+    let current = byId.get(id);
+    while (current && !seen.has(current.id) && chain.length < 50) {
+      seen.add(current.id);
+      chain.push({
+        id: current.id,
+        setting: settings.get(current.id) ?? null,
+        leader: current.archived_at === null ? current.leader : null,
+      });
+      current =
+        current.parent_id === null ? undefined : byId.get(current.parent_id);
+    }
+    out.set(id, resolveDecider(chain, registered));
+  }
+  return out;
 }
 
 export const PAGE_DEFAULT = 20;
@@ -138,7 +202,19 @@ export type Choice = {
   decided_by: string | null;
   decided_at: number | null;
   created_at: number;
+  /** 拍板人：u1 或（下放后）aN，按节点设置实时判。 */
+  decider: string;
+  decider_why: string;
   options: ChoiceOption[];
+  /** 拍板前各方（项目 leader、秘书）写的意见，先写的在前。 */
+  comments: ChoiceComment[];
+};
+export type ChoiceComment = {
+  by: string;
+  text: string;
+  prefer: number[];
+  basis: string[];
+  created_at: number;
 };
 
 function aliasOf(db: DatabaseSync, ids: readonly number[]) {
@@ -185,8 +261,33 @@ function views(db: DatabaseSync, rows: Row[], byId?: Map<number, NodeRow>) {
         decision: o.decision_id === null ? null : decisionRef(o.decision_id),
       },
     ]);
+  const comments = new Map<number, ChoiceComment[]>();
+  for (const c of all<{
+    choice_id: number;
+    by: string;
+    text: string;
+    prefer: string;
+    basis: string;
+    created_at: number;
+  }>(
+    db,
+    `SELECT choice_id,by,text,prefer,basis,created_at FROM choice_comments WHERE choice_id IN (${ids.map(() => "?").join(",")}) ORDER BY choice_id,id LIMIT ${ids.length * COMMENTS_MAX}`,
+    ...ids,
+  ))
+    comments.set(c.choice_id, [
+      ...(comments.get(c.choice_id) ?? []),
+      {
+        by: c.by,
+        text: c.text,
+        prefer: list(c.prefer, isNumber),
+        basis: list(c.basis, isString),
+        created_at: c.created_at,
+      },
+    ]);
   const names = byId ?? new Map(nodes(db).map((n) => [n.id, n]));
-  const aliases = aliasOf(db, [...new Set(rows.map((r) => r.node_id))]);
+  const nodeIds = [...new Set(rows.map((r) => r.node_id))];
+  const aliases = aliasOf(db, nodeIds);
+  const deciders = decidersFor(db, nodeIds, [...names.values()]);
   return rows.map((r): Choice => ({
     ref: choiceRef(r.id),
     node: ref(r.node_id),
@@ -203,8 +304,115 @@ function views(db: DatabaseSync, rows: Row[], byId?: Map<number, NodeRow>) {
     decided_by: r.decided_by,
     decided_at: r.decided_at,
     created_at: r.created_at,
+    decider: deciders.get(r.node_id)?.decider ?? "u1",
+    decider_why: deciders.get(r.node_id)?.why ?? "缺省由用户拍板",
     options: options.get(r.id) ?? [],
+    comments: comments.get(r.id) ?? [],
   }));
+}
+
+/** 选项单挂在哪个节点上（leader 写意见时判范围用）；不存在报 404。 */
+export function choiceNodeId(db: DatabaseSync, reference: unknown): number {
+  ensureChoiceTables(db);
+  return requireRow(db, parseChoiceRef(reference)).node_id;
+}
+
+/** 写一条意见：只收等拍板中的选项单。by 是秘书或 leader。 */
+export function addComment(
+  db: DatabaseSync,
+  reference: unknown,
+  body: unknown,
+  by: string,
+  now = Date.now(),
+): Choice {
+  const id = parseChoiceRef(reference);
+  ensureChoiceTables(db);
+  return atomically(db, () => {
+    const row = requireRow(db, id);
+    if (row.status !== "open")
+      throw new Problem(
+        409,
+        `${choiceRef(id)} 已经定了（${STATUS_TEXT[row.status]}），不再收意见`,
+        "conflict",
+        undefined,
+        `atrium choice show ${choiceRef(id)}`,
+      );
+    const count = one<{ n: number }>(
+      db,
+      "SELECT count(*) AS n FROM choice_options WHERE choice_id=?",
+      id,
+    )!.n;
+    const existing = one<{ n: number }>(
+      db,
+      "SELECT count(*) AS n FROM choice_comments WHERE choice_id=?",
+      id,
+    )!.n;
+    const comment = validateComment(body, count, existing);
+    db.prepare(
+      "INSERT INTO choice_comments(choice_id,by,text,prefer,basis,created_at) VALUES(?,?,?,?,?,?)",
+    ).run(
+      id,
+      by,
+      comment.text,
+      JSON.stringify(comment.prefer),
+      JSON.stringify(comment.basis),
+      now,
+    );
+    return getChoice(db, choiceRef(id));
+  });
+}
+
+export type DeciderSetting = {
+  node: string;
+  node_name: string;
+  /** 这个节点上写的设置；没写为 null（沿用上层或缺省）。 */
+  setting: DeciderMode | null;
+  /** 挂在这个节点上的选项单实际由谁拍板。 */
+  decider: string;
+  why: string;
+};
+
+export function deciderSetting(
+  db: DatabaseSync,
+  address: string,
+): DeciderSetting {
+  ensureChoiceTables(db);
+  const list = nodes(db);
+  const node = nodeByAddress(db, address);
+  const resolved = decidersFor(db, [node.id], list).get(node.id)!;
+  return {
+    node: ref(node.id),
+    node_name: node.name,
+    setting: settingsOf(db).get(node.id) ?? null,
+    decider: resolved.decider,
+    why: resolved.why,
+  };
+}
+
+/** 设谁拍板这个节点（及没另设的下层）上的选项单：只由用户改；写 u1 也记下，挡住上层的下放。 */
+export function setDecider(
+  db: DatabaseSync,
+  address: string,
+  body: unknown,
+  now = Date.now(),
+): DeciderSetting {
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    throw new Problem(400, "请求体应为对象", "usage");
+  for (const key of Object.keys(body))
+    if (key !== "decider")
+      throw new Problem(400, `${key}: 是未知字段（只认 decider）`, "usage");
+  const mode = parseDecider((body as { decider?: unknown }).decider);
+  ensureChoiceTables(db);
+  return atomically(db, () => {
+    const node = nodeByAddress(db, address);
+    if (node.archived_at !== null)
+      throw new Problem(409, `${ref(node.id)} 已归档`, "conflict");
+    db.prepare(
+      `INSERT INTO choice_settings(node_id,decider,updated_by,updated_at) VALUES(?,?,'u1',?)
+       ON CONFLICT(node_id) DO UPDATE SET decider=excluded.decider,updated_by='u1',updated_at=excluded.updated_at`,
+    ).run(node.id, mode, now);
+    return deciderSetting(db, ref(node.id));
+  });
 }
 
 function requireRow(db: DatabaseSync, id: number): Row {
@@ -413,18 +621,18 @@ function hasChoices(db: DatabaseSync) {
   return ok;
 }
 
-/** 等用户拍板的选项单：总数与最早的几份（状态栏、top、全景根页入口）。 */
+const PENDING_SCAN = 200;
+
+/**
+ * 等用户拍板的选项单：总数与最早的几份（状态栏、top、全景根页入口）。拍板权已下放给 leader 的
+ * 不算——那些用户只收知会。开放中的至多看 200 份。
+ */
 export function pendingChoices(
   db: DatabaseSync,
   max = 3,
 ): { open: number; list: PendingChoice[] } {
   if (!hasChoices(db)) return { open: 0, list: [] };
-  const open = one<{ n: number }>(
-    db,
-    "SELECT count(*) AS n FROM choices WHERE status='open'",
-  )!.n;
-  if (!open) return { open: 0, list: [] };
-  const rows = all<{
+  const scanned = all<{
     id: number;
     title: string;
     node_id: number;
@@ -436,8 +644,18 @@ export function pendingChoices(
        (SELECT count(*) FROM choice_options o WHERE o.choice_id=c.id) AS options
      FROM choices c LEFT JOIN org_nodes n ON n.id=c.node_id
      WHERE c.status='open' ORDER BY c.id LIMIT ?`,
-    max,
+    PENDING_SCAN,
   );
+  if (!scanned.length) return { open: 0, list: [] };
+  const deciders = decidersFor(
+    db,
+    scanned.map((r) => r.node_id),
+  );
+  const mine = scanned.filter(
+    (r) => (deciders.get(r.node_id)?.decider ?? "u1") === "u1",
+  );
+  const open = mine.length;
+  const rows = mine.slice(0, max);
   return {
     open,
     list: rows.map((r) => ({
@@ -466,6 +684,7 @@ export function decideChoice(
   reference: unknown,
   action: "pick" | "pass",
   body: unknown,
+  actor = "u1",
   now = Date.now(),
 ): Decided {
   const id = parseChoiceRef(reference);
@@ -483,6 +702,15 @@ export function decideChoice(
     const list = nodes(db);
     const node = list.find((n) => n.id === row.node_id);
     const choice = views(db, [row], new Map(list.map((n) => [n.id, n])))[0]!;
+    const right = decideRight(actor, choice.decider, choice.ref);
+    if (right)
+      throw new Problem(
+        403,
+        right,
+        "leader_scope",
+        undefined,
+        `atrium choice comment ${choice.ref} 意见 --prefer 选项号`,
+      );
     const verdict = decideVerdict({
       ref: choice.ref,
       status: row.status,
@@ -524,18 +752,18 @@ export function decideChoice(
           {
             title: option.title,
             part: choice.node,
-            brief: pickedBrief(facts, o, note),
+            brief: pickedBrief(facts, o, note, actor, choice.comments),
           },
           now,
         );
         mark.run(1, task.id, null, id, option.seq);
         tasks.push({ ref: task.ref, option: option.seq, title: option.title });
       } else {
-        const text = skippedDecision(facts, o, note, action);
+        const text = skippedDecision(facts, o, note, action, actor);
         const decision = addDecision(
           db,
           owner,
-          { ...text, by: "u1", node: choice.node },
+          { ...text, by: actor, node: choice.node },
           now,
         );
         mark.run(0, null, parseInt(decision.ref.slice(1), 10), id, option.seq);
@@ -543,8 +771,8 @@ export function decideChoice(
       }
     }
     db.prepare(
-      "UPDATE choices SET status=?,note=?,decided_by='u1',decided_at=? WHERE id=? AND status='open'",
-    ).run(statusAfter(action), note, now, id);
+      "UPDATE choices SET status=?,note=?,decided_by=?,decided_at=? WHERE id=? AND status='open'",
+    ).run(statusAfter(action), note, actor, now, id);
     return { choice: getChoice(db, choice.ref), tasks, decisions };
   });
 }

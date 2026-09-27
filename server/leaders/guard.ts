@@ -10,6 +10,7 @@ import { parentOf } from "../tasks/ledger-validate.ts";
 import { ackIds, type EventInbox } from "../tasks/events.ts";
 import { taskPartId } from "./subscriber.ts";
 import { findingNode } from "../tasks/patrol.ts";
+import { choiceNodeId } from "../choices/store.ts";
 import { LeaderTokens } from "./tokens.ts";
 import {
   ackVerdict,
@@ -249,20 +250,28 @@ export function registerLeaderGuard(
           ...(given(body.task) ? [taskCheck(db, body.task)] : []),
         ]);
         break;
-      case "choice-add": {
+      case "choice-add":
+      case "choice-comment": {
         const list = nodes(db);
+        const node =
+          rule === "choice-comment"
+            ? choiceNodeId(db, idParam(request))
+            : typeof body.node === "string" && body.node.trim()
+              ? nodeByAddress(db, body.node.trim()).id
+              : null;
         verdict = choiceAddVerdict({
           leader,
-          node:
-            typeof body.node === "string" && body.node.trim()
-              ? nodeByAddress(db, body.node.trim()).id
-              : null,
+          node,
           led,
           scope,
           parents: new Map(list.map((n) => [n.id, n.parent_id])),
+          what: rule === "choice-comment" ? "给选项单写意见" : "提选项单",
         });
         break;
       }
+      // 是不是这份选项单的拍板人由 choices/store.ts 按节点设置判，这里不重复。
+      case "choice-decide":
+        break;
     }
     if (verdict) throw forbid(verdict);
   });

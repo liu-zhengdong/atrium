@@ -35,7 +35,7 @@ const mapReadRoutes = new Set([
 ]);
 
 // 拍板选项单：用户令牌，或本机全景网页会话（须带同源 Origin，cookie 为 SameSite=Strict）。
-// 只有这两条写接口对网页开放；leader 令牌由 leaders/scope.ts 拒绝。
+// 只有这两条写接口对网页开放；leader 令牌另由 leaders/guard.ts 与 choices/store.ts 按节点设置判。
 const mapWriteRoutes = new Set([
   "POST /api/choices/:id/pick",
   "POST /api/choices/:id/pass",

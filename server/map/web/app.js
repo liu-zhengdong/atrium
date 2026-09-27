@@ -511,15 +511,31 @@ function choiceHtml(c, here) {
     c.node !== here
       ? `<a href="${esc(nodeHref(c.node, "choices"))}">${esc(c.node_alias || c.node_name)}</a>`
       : "";
+  const decider = (by) => (!by || by === "u1" ? "你" : esc(by));
+  const handed = open && c.decider && c.decider !== "u1";
   const meta = [
     `${who(c.created_by)}提于 ${clock(c.created_at)}`,
     c.task ? `出自 ${esc(c.task)}` : "",
-    c.decided_at ? `你拍板于 ${clock(c.decided_at)}` : "",
+    c.decided_at ? `${decider(c.decided_by)}拍板于 ${clock(c.decided_at)}` : "",
+    handed ? `拍板权已下放给 ${esc(c.decider)}，你也可以直接拍` : "",
   ]
     .filter(Boolean)
     .join(" · ");
   const options = `<ol class="choice-options">${c.options.map((o) => optionHtml(c, o, open)).join("")}</ol>`;
-  const recommend = `<p class="choice-recommend"><span class="choice-label">产品部推荐</span>选项 ${c.recommend.join("、")}——${esc(c.why)}</p>`;
+  const comments = (c.comments ?? []).length
+    ? `<div class="choice-comments"><span class="choice-label">意见</span><ul>${c.comments
+        .map((m) => {
+          const prefer = m.prefer?.length
+            ? `（倾向选项 ${m.prefer.join("、")}）`
+            : "";
+          const basis = m.basis?.length
+            ? `；补依据：${m.basis.map(linkify).join("；")}`
+            : "";
+          return `<li><strong>${esc(who(m.by))}</strong>：${esc(m.text)}${prefer}${basis}</li>`;
+        })
+        .join("")}</ul></div>`
+    : "";
+  const recommend = `<p class="choice-recommend"><span class="choice-label">产品部推荐</span>选项 ${c.recommend.join("、")}——${esc(c.why)}</p>${comments}`;
   const body = open
     ? `<form class="choice-form" data-choice="${esc(c.ref)}">
         ${options}
@@ -533,7 +549,7 @@ function choiceHtml(c, here) {
           <span class="choice-error" role="alert"></span>
         </div>
       </form>`
-    : `${options}${recommend}${c.note ? `<p class="choice-recommend"><span class="choice-label">你的说明</span>${esc(c.note)}</p>` : ""}`;
+    : `${options}${recommend}${c.note ? `<p class="choice-recommend"><span class="choice-label">${decider(c.decided_by)}的说明</span>${esc(c.note)}</p>` : ""}`;
   return `<article class="choice" id="choice-${esc(c.ref)}" data-status="${esc(c.status)}">
     <header class="choice-head">
       <span class="task-ref">${esc(c.ref)}</span>

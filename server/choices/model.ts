@@ -226,6 +226,139 @@ export function statusAfter(action: "pick" | "pass"): ChoiceStatus {
   return action === "pick" ? "picked" : "passed";
 }
 
+/** 谁拍板选项单：用户（缺省），或下放给选项单所在节点最近的 leader。 */
+export type DeciderMode = "u1" | "leader";
+export const DECIDER_MODES: readonly DeciderMode[] = ["u1", "leader"];
+
+export function parseDecider(value: unknown): DeciderMode {
+  if (value === "u1" || value === "leader") return value;
+  throw usage(
+    "--decider: 只能是 u1（用户拍板）或 leader（下放给该节点的 leader）",
+  );
+}
+
+/** 从选项单所在节点往上到根的一段：节点上的设置与 leader（已归档的节点 leader 记 null）。 */
+export type DeciderLink = {
+  id: number;
+  setting: DeciderMode | null;
+  leader: string | null;
+};
+export type Decider = {
+  /** 拍板人：u1 或 aN。 */
+  decider: string;
+  mode: DeciderMode;
+  /** 设置写在哪个节点上；缺省为 null。 */
+  set_at: number | null;
+  why: string;
+};
+
+/**
+ * 拍板人（纯函数）：最近一个写了设置的节点说了算，都没写就是用户。下放给 leader 时找选项单所在节点
+ * 往上最近的已登记 leader；找不到就仍由用户拍板，不让选项单没人管。
+ */
+export function resolveDecider(
+  chain: readonly DeciderLink[],
+  registered: ReadonlySet<string>,
+): Decider {
+  const at = chain.find((link) => link.setting !== null);
+  if (!at || at.setting === "u1")
+    return {
+      decider: "u1",
+      mode: "u1",
+      set_at: at?.id ?? null,
+      why: at ? `o${at.id} 设为用户拍板` : "缺省由用户拍板",
+    };
+  const lead = chain.find(
+    (link) => link.leader !== null && registered.has(link.leader),
+  );
+  if (!lead)
+    return {
+      decider: "u1",
+      mode: "leader",
+      set_at: at.id,
+      why: `o${at.id} 设为 leader 拍板，但往上找不到已登记的 leader，仍由用户拍板`,
+    };
+  return {
+    decider: lead.leader!,
+    mode: "leader",
+    set_at: at.id,
+    why: `o${at.id} 设为 leader 拍板：${lead.leader}（负责 o${lead.id}）`,
+  };
+}
+
+/** 能不能拍板（纯函数）：用户始终可以；leader 只在拍板权下放给自己时可以。 */
+export function decideRight(
+  actor: string,
+  decider: string,
+  ref: string,
+): string | null {
+  if (actor === "u1" || actor === decider) return null;
+  return decider === "u1"
+    ? `${actor} 不能拍板 ${ref}：拍板人是用户（u1）；可以写意见：atrium choice comment ${ref} 意见 --prefer 选项号`
+    : `${actor} 不能拍板 ${ref}：拍板人是 ${decider}`;
+}
+
+export const COMMENTS_MAX = 20;
+export type CommentInput = { text: string; prefer: number[]; basis: string[] };
+
+/**
+ * 意见（纯函数）：一段话，可标倾向哪几个选项、补几条依据。existing 是这份已有的意见条数，
+ * 到上限就不收，免得一份选项单被刷屏。
+ */
+export function validateComment(
+  body: unknown,
+  count: number,
+  existing: number,
+): CommentInput {
+  if (!isObject(body)) throw usage("意见应为对象");
+  for (const key of Object.keys(body))
+    if (!["text", "prefer", "basis"].includes(key))
+      throw usage(`${key}: 是未知字段（意见只认 text、prefer、basis）`);
+  if (existing >= COMMENTS_MAX)
+    throw new Problem(
+      409,
+      `这份选项单已有 ${COMMENTS_MAX} 条意见，不再收；要补充就合并成一条写进新的选项单`,
+      "conflict",
+    );
+  const text_ = text(body.text, "意见", CHOICE_LIMITS.note);
+  const preferRaw = body.prefer ?? [];
+  const preferList = Array.isArray(preferRaw) ? preferRaw : [preferRaw];
+  const prefer =
+    preferList.length && preferList.some((v) => v !== "")
+      ? parsePicks(preferList, count, "--prefer")
+      : [];
+  const basisRaw = body.basis ?? [];
+  if (!Array.isArray(basisRaw)) throw usage("--basis: 应为列表");
+  if (basisRaw.length > CHOICE_LIMITS.basis_count)
+    throw usage(`--basis: 至多 ${CHOICE_LIMITS.basis_count} 条`);
+  return {
+    text: text_,
+    prefer,
+    basis: basisRaw.map((item, i) =>
+      text(item, `--basis 第 ${i + 1} 条`, CHOICE_LIMITS.basis_item),
+    ),
+  };
+}
+
+export type CommentFacts = {
+  by: string;
+  text: string;
+  prefer: number[];
+  basis: string[];
+};
+
+/** 意见一行（纯函数）：谁、说了什么、倾向哪几个、补了什么依据。 */
+export function commentLine(comment: CommentFacts): string {
+  const prefer = comment.prefer.length
+    ? `（倾向选项 ${comment.prefer.join("、")}）`
+    : "";
+  const basis = comment.basis.length
+    ? `；补依据：${comment.basis.join("；")}`
+    : "";
+  const who = comment.by === "secretary" ? "秘书" : comment.by;
+  return `${who}：${comment.text}${prefer}${basis}`;
+}
+
 export type ChoiceFacts = {
   ref: string;
   title: string;
@@ -237,17 +370,23 @@ export type OptionFacts = OptionInput & { seq: number };
 
 const bullet = (label: string, value: string) => `- ${label}：${value}`;
 
-/** 被选中的选项建成任务时的详述（纯函数）：选项全文、来源、用户说明，交节点 leader 拆解。 */
+/**
+ * 被选中的选项建成任务时的详述（纯函数）：选项全文、来源、拍板说明、各方意见，交节点 leader 拆解。
+ * by 是拍板人（u1 或下放后的 aN）。
+ */
 export function pickedBrief(
   choice: ChoiceFacts,
   option: OptionFacts,
   note: string | null,
+  by = "u1",
+  comments: readonly CommentFacts[] = [],
 ): string {
+  const who = by === "u1" ? "用户" : by;
   return [
     `# ${option.title}`,
     "",
-    `来源：选项单 ${choice.ref}「${choice.title}」的选项 ${option.seq}，用户拍板要做（${choice.node.ref}「${choice.node.name}」）。`,
-    ...(note ? ["", `用户说明：${note}`] : []),
+    `来源：选项单 ${choice.ref}「${choice.title}」的选项 ${option.seq}，${who}拍板要做（${choice.node.ref}「${choice.node.name}」）。`,
+    ...(note ? ["", `${who}说明：${note}`] : []),
     "",
     "## 选项全文",
     "",
@@ -258,6 +397,14 @@ export function pickedBrief(
     ...(option.basis.length ? [bullet("依据", option.basis.join("；"))] : []),
     "",
     `产品部推荐：选项 ${choice.recommend.join("、")}——${choice.why}`,
+    ...(comments.length
+      ? [
+          "",
+          "## 拍板前的意见",
+          "",
+          ...comments.map((c) => `- ${commentLine(c)}`),
+        ]
+      : []),
     "",
     "## 怎么接",
     "",
@@ -274,17 +421,19 @@ export function skippedDecision(
   option: OptionFacts,
   note: string | null,
   action: "pick" | "pass",
+  by = "u1",
 ): { text: string; why: string } {
   const where = `（${choice.ref} 选项 ${option.seq}）`;
   const head = "这轮不做「";
   const room =
     DECISION_TEXT - Array.from(head).length - 1 - Array.from(where).length;
   const title = clip(option.title, Math.max(8, room));
+  const who = by === "u1" ? "用户" : by;
   const reason =
     note ??
     (action === "pass"
-      ? "用户这轮都不要，没写原因"
-      : "用户选了别的选项，没写原因");
+      ? `${who}这轮都不要，没写原因`
+      : `${who}选了别的选项，没写原因`);
   const why = `${reason}。当时的说法：能多做到「${oneLine(option.gain, 200)}」；不做会「${oneLine(option.skip, 200)}」。情况没变就不再提。`;
   return {
     text: `${head}${title}」${where}`,

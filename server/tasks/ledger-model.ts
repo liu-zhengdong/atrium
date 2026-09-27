@@ -89,10 +89,22 @@ export type Task = TaskRow & {
   /** 现在球在谁手里（holder.ts）；只有单个任务视图给，已结束为 null。 */
   holder?: Holder | null;
 } & NoteView;
-export type TaskNode = Task & {
+/** 树只带画树要的列（t155）；详述、结果摘要等大字段要看用 task show。 */
+export type TaskNode = Pick<
+  TaskRow,
+  | "title"
+  | "status"
+  | "deliver"
+  | "issue"
+  | "worker"
+  | "pr_url"
+  | "delivery_stage"
+> & {
+  ref: string;
+  parent_ref: string | null;
   children: TaskNode[];
   child_summary: ChildSummary | null;
-};
+} & NoteView;
 export type TaskEventRow = {
   id: number;
   task_id: number;
@@ -132,6 +144,10 @@ export const RESULT_MAX_BYTES = 4096;
 export const LIST_LIMIT = 200;
 export const LIST_MAX = 500;
 export const TREE_MAX = 2000;
+/** 不写根时每页列几个顶层任务（t155），上限与已结束的顶层列最近几个。 */
+export const TREE_ROOTS = 30;
+export const TREE_ROOTS_MAX = 200;
+export const TREE_RECENT = 10;
 
 export const usage = (message: string, next?: string) =>
   new Problem(400, message, "usage", undefined, next);

@@ -278,3 +278,75 @@ test("隔离运行时：份额用尽转 blocked 通知 leader；pace 不可用�
   const read = await call("GET", "/api/tasks/t2");
   assert.match(JSON.stringify(read.body.events), /budget_unknown/);
 });
+
+test("真实执行者生命周期采样：OpenQuota 已用上升时节点约用同向上升", async (t) => {
+  let samples = 0;
+  const { data, call } = await startApp(
+    t,
+    (fx) =>
+      writeFileSync(
+        join(fx.root, "bin", "kimi"),
+        "#!/bin/sh\necho '采样完成'\n",
+      ),
+    async () => pace(10),
+    async () => pace(samples++ === 0 ? 10 : 12),
+  );
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  t.after(() => db.close());
+  const root = addNode(
+    db,
+    { slug: "org", kind: "org", name: "组织", reason: "建树" },
+    "u1",
+  );
+  const project = addNode(
+    db,
+    {
+      parent: `o${root.id}`,
+      slug: "game",
+      kind: "project",
+      name: "游戏",
+      reason: "建树",
+    },
+    "u1",
+  );
+  editDoc(
+    db,
+    `o${project.id}`,
+    "charter",
+    { fields: {}, body: "", budget: { quota: { kimi: 10 } }, reason: "分份额" },
+    "u1",
+  );
+  const before = tree(db, pace(10))
+    .find((n) => n.id === project.id)!
+    .budget!.quota.find((q) => q.scope === "kimi")!.used;
+  assert.equal(
+    (
+      await call("POST", "/api/tasks", {
+        title: "用量采样",
+        role: `o${project.id}`,
+        deliver: "none",
+      })
+    ).status,
+    201,
+  );
+  assert.equal(
+    (await call("POST", "/api/tasks/t1/run", { worker: "kimi" })).status,
+    200,
+  );
+  const waited = await call("GET", "/api/tasks/t1/wait?timeout=20");
+  assert.equal(
+    waited.body.task.status,
+    "done",
+    JSON.stringify(waited.body.task.events),
+  );
+  const usage = db
+    .prepare("SELECT points,basis FROM task_usage WHERE task_id=1")
+    .get() as { points: number; basis: string };
+  assert.equal(usage.points, 2);
+  assert.equal(usage.basis, "delta");
+  const after = tree(db, pace(12))
+    .find((n) => n.id === project.id)!
+    .budget!.quota.find((q) => q.scope === "kimi")!.used;
+  assert.equal(before, 0);
+  assert.equal(after, 2);
+});

@@ -12,12 +12,12 @@ import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 import { concernsText, hintLines } from "./task-concerns.ts";
-import {
-  signedPercent,
-  type PickAccount,
-  type PickCandidate,
-  type PickView,
-  type RunPick,
+import { signedPercent } from "../server/tasks/percent.ts";
+import type {
+  PickAccount,
+  PickCandidate,
+  PickView,
+  RunPick,
 } from "../server/tasks/pick.ts";
 import { briefInput } from "./brief-input.ts";
 import { URGENT_NOTE } from "../server/tasks/host-load.ts";

@@ -8,7 +8,7 @@ import {
   readSync,
   statSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { portTakenMessage, probePort } from "./port-owner.ts";
@@ -16,13 +16,13 @@ import { Problem } from "./problem.ts";
 import {
   alive,
   legacyDataNotice,
-  packageRoot,
   readService,
   servicePort,
   serviceUrl,
   type ServiceRecord,
 } from "./service-state.ts";
 import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
+import { serviceArgs } from "./entry.ts";
 import { readRestartState, restartInProgress } from "./supervisor.ts";
 import { localFetch } from "./local-http.ts";
 
@@ -166,7 +166,7 @@ export async function stopService(data: string) {
   );
 }
 /**
- * 冷启动等待（#262）：机器忙时 tsx 加载加开库要十几秒，不能按固定窗口判死。
+ * 冷启动等待（#262）：机器忙时加载代码加开库要十几秒，不能按固定窗口判死。
  * 自己拉起的进程还活着就一直等；别人拉起或已在跑但未就绪的，
  * 登记文件或日志在 stallMs 内有推进才继续等。总上限 totalMs；进程退出立即失败。
  */
@@ -185,7 +185,7 @@ export async function startService(
     stallMs = 12000,
     noticeMs = 5000,
     notice = (message: string) => console.error(message),
-    entry = "server/main.ts",
+    entry,
   }: StartWaitOptions = {},
 ) {
   // 重启进行中：旧服务在关、新服务由 supervisor 拉起。这里不抢着自己拉，等新服务
@@ -229,20 +229,16 @@ export async function startService(
     try {
       const { env, droppedSensitive } = serviceEnvironment(process.env);
       reportDroppedIdentity(droppedSensitive);
-      child = spawn(
-        process.execPath,
-        ["--import", import.meta.resolve("tsx"), resolve(packageRoot, entry)],
-        {
-          cwd: data,
-          env: {
-            ...env,
-            ATRIUM_DATA: data,
-          },
-          detached: true,
-          stdio: ["ignore", log, log],
-          windowsHide: true,
+      child = spawn(process.execPath, serviceArgs(entry), {
+        cwd: data,
+        env: {
+          ...env,
+          ATRIUM_DATA: data,
         },
-      );
+        detached: true,
+        stdio: ["ignore", log, log],
+        windowsHide: true,
+      });
       child.on("error", (error) => {
         launchError = error;
       });

@@ -6,7 +6,6 @@ import { createInterface, type Interface } from "node:readline";
 import { Problem, closest } from "../server/problem.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import type { InboxEvent } from "../server/tasks/events.ts";
-import { claimSecretary } from "../server/tasks/secretary-lock.ts";
 import {
   saveSecretarySession,
   saveWakeCount,
@@ -369,6 +368,9 @@ export const chatCommand: Command = {
     const mode = chatMode(tool);
     const cwd = resolve(str(values, "cwd") ?? process.cwd());
     const data = dataDirectory();
+    // 秘书锁要开 SQLite：只有 chat 用，按需加载（t117）。
+    const { claimSecretary } =
+      await import("../server/tasks/secretary-lock.ts");
     const lock = claimSecretary(data);
     if (!lock)
       throw new Problem(

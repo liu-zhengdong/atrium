@@ -48,6 +48,15 @@ export const groups: Record<string, string[]> = {
     "events wait",
     "events ack",
   ],
+  组织: [
+    "org tree",
+    "org show",
+    "org add",
+    "org edit",
+    "org history",
+    "org revert",
+    "org import",
+  ],
   账号与凭据: [
     "connect",
     "accounts",

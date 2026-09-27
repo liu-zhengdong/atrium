@@ -11,6 +11,7 @@ import { connectCommand } from "./connect.ts";
 import { pluginCommands } from "./plugins.ts";
 import { resourceCommands } from "./resources.ts";
 import { taskCommands } from "./tasks.ts";
+import { orgCommands } from "./org.ts";
 import { quotaCommands } from "./quota.ts";
 import { workerGuard } from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
@@ -99,6 +100,7 @@ export const commands: Record<string, Command> = {
   ...pluginCommands,
   ...resourceCommands,
   ...taskCommands,
+  ...orgCommands,
   ...quotaCommands,
   ...eventCommands,
   update: updateCommand,
@@ -145,7 +147,7 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...["身份", "聊天", "任务", "账号与凭据", "插件技能与规则"].flatMap(
+    ...["身份", "聊天", "任务", "组织", "账号与凭据", "插件技能与规则"].flatMap(
       (group) => [
         "",
         group,

@@ -53,6 +53,7 @@ import { UserAuth } from "./user-auth.ts";
 import { RunnerAuth } from "./runner-auth.ts";
 import { authPolicy, protectedNamespace } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
+import { registerOrgRoutes } from "./org/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 import { claimRunner, releaseRunner, ownerOf } from "./runner-ownership.ts";
@@ -336,6 +337,7 @@ export async function createApp(options: {
     ...runnerEnvOptions(),
     ...options.tasks,
   });
+  registerOrgRoutes(app, store.db, store);
   registerQuotaRoute(app, { bin: options.quotaBin, db: store.db });
   app.get("/api/runners", () => runnerAuth.list());
   app.post("/api/runners", (request) => {

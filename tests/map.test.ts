@@ -538,6 +538,7 @@ test("接口：令牌读写；网页登录链接只能用一次，会话只能�
   assert.match(html.body, /<script type="module" src="\/map\/app.js">/);
   for (const url of [
     "/map/app.js",
+    "/map/boot.js",
     "/map/format.js",
     "/map/style.css",
     "/api/map/tree",

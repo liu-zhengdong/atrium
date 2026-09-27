@@ -804,39 +804,5 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
   };
 }
 
-/**
- * 变化指纹：任务、任务事件、节点、章程、要点、角色、技能、交付记录、leader 唤醒与事件队列、备忘与决定记录任一变了就不同。网页订阅它，变了再取数据局部刷新。
- * 只读几个 max/count，毫秒级。
- */
-export function mapSignature(db: DatabaseSync): string {
-  const q = (sql: string) => {
-    try {
-      return Object.values(
-        (db.prepare(sql).get() ?? {}) as Record<string, unknown>,
-      ).join(":");
-    } catch {
-      return "-";
-    }
-  };
-  return [
-    q("SELECT max(updated_at),count(*) FROM tasks"),
-    q("SELECT max(id) FROM task_events"),
-    q("SELECT max(updated_at),count(*) FROM org_nodes"),
-    q("SELECT max(updated_at),count(*) FROM org_docs"),
-    q("SELECT max(updated_at),count(*),max(id) FROM org_points"),
-    q("SELECT count(*),max(rowid) FROM task_also"),
-    q("SELECT count(*),max(queued_at) FROM task_queue"),
-    q("SELECT max(updated_at),count(*) FROM job_roles"),
-    q("SELECT max(updated_at),count(*) FROM org_skills"),
-    q("SELECT max(id),max(ended_at) FROM task_deliveries"),
-    q("SELECT max(updated_at),count(*) FROM patrol_findings"),
-    q(
-      "SELECT max(updated_at),max(wake_at),max(wake_ended_at),sum(wakes),count(*) FROM org_leaders",
-    ),
-    q("SELECT max(id),max(updated_at),max(acked_at) FROM task_inbox"),
-    q("SELECT max(updated_at),count(*) FROM memos"),
-    q("SELECT max(id),max(superseded_at) FROM decisions"),
-  ].join("|");
-}
-
+export { mapSignature } from "./watch.ts";
 export type { Point };

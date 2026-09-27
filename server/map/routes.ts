@@ -8,14 +8,8 @@ import { packageRoot } from "../service-state.ts";
 import { ensureOrgTables } from "../org/schema.ts";
 import { mapContext, parseMax } from "./context.ts";
 import { LINK_TTL_MS, MapLogin, sessionCookie } from "./login.ts";
-import {
-  mapNode,
-  mapNow,
-  mapSignature,
-  mapTree,
-  parseDepth,
-  type LiveRow,
-} from "./view.ts";
+import { mapNode, mapNow, mapTree, parseDepth, type LiveRow } from "./view.ts";
+import { ensureMapWatch, startMapWatch, type MapRepeat } from "./watch.ts";
 import { mapLeader, mapLeaders } from "./leaders.ts";
 import { addMap, editMap, type MapAdd, type MapEdit } from "./write.ts";
 import {
@@ -63,6 +57,10 @@ export type MapRouteOptions = {
   login: MapLogin;
   /** 失效通知的检查间隔，测试缩短。 */
   pollMs?: number;
+  /** 变化检测（测试可注入计数）；缺省读 map_revision。 */
+  detect?: (db: DatabaseSync) => string | number;
+  /** 定时器（测试可手动打点）；缺省 setInterval。 */
+  repeat?: MapRepeat;
 };
 
 export function registerMapRoutes(
@@ -71,10 +69,12 @@ export function registerMapRoutes(
   options: MapRouteOptions,
 ) {
   ensureOrgTables(db);
+  ensureMapWatch(db);
   const live = () => options.live().catch(() => [] as readonly LiveRow[]);
   const pages = {
     "/map": ["text/html; charset=utf-8", asset("index.html")],
     "/map/app.js": ["text/javascript; charset=utf-8", asset("app.js")],
+    "/map/boot.js": ["text/javascript; charset=utf-8", asset("boot.js")],
     "/map/format.js": ["text/javascript; charset=utf-8", asset("format.js")],
     "/map/style.css": ["text/css; charset=utf-8", asset("style.css")],
   } as const;
@@ -181,11 +181,17 @@ export function registerMapRoutes(
       ),
   );
 
-  // 失效通知（Server-Sent Events）：数据指纹变了就发 changed，网页据此局部重取；空闲时定期发注释保活。
+  // 失效通知：全服务一份变更检测，指纹变了给所有连接推 changed；空闲时定期发注释保活。
+  const watch = startMapWatch(db, {
+    pollMs: options.pollMs,
+    detect: options.detect ? () => options.detect!(db) : undefined,
+    repeat: options.repeat,
+  });
   const streams = new Set<() => void>();
   let closing = false;
   app.addHook("preClose", async () => {
     closing = true;
+    watch.close();
     for (const close of [...streams]) close();
   });
   app.get("/api/map/stream", (request, reply: FastifyReply) => {
@@ -198,19 +204,15 @@ export function registerMapRoutes(
       "x-content-type-options": "nosniff",
       connection: "keep-alive",
     });
-    let last = mapSignature(db);
-    let beats = 0;
     res.write(`retry: 3000\nevent: hello\ndata: {}\n\n`);
-    const timer = setInterval(() => {
-      const now = mapSignature(db);
-      if (now !== last) {
-        last = now;
-        res.write("event: changed\ndata: {}\n\n");
-      } else if (++beats % 10 === 0) res.write(": ping\n\n");
-    }, options.pollMs ?? 1500);
+    const unsub = watch.subscribe((event) => {
+      res.write(
+        event === "changed" ? "event: changed\ndata: {}\n\n" : ": ping\n\n",
+      );
+    });
     const close = () => {
       if (!streams.delete(close)) return;
-      clearInterval(timer);
+      unsub();
       res.end();
     };
     streams.add(close);

@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { escapeHtml, linkify, liveText } from "../server/map/web/format.js";
+import {
+  fetchRootOrg,
+  keepWorkers,
+  sseReloadOnHello,
+  withWorkers,
+} from "../server/map/web/boot.js";
 
 test("全景网页转义：尖括号、引号与 & 都变成实体", () => {
   assert.equal(
@@ -58,4 +64,41 @@ test("顶栏在做数看当前部分（含子部分），角色与执行者页�
     "都停着",
   );
   assert.equal(liveText("node", node, null), "在做 2 件");
+});
+
+test("组织根首屏不取执行者统计，画完再补", async () => {
+  const paths: string[] = [];
+  const get = async (path: string) => {
+    paths.push(path);
+    if (path.startsWith("/nodes/")) return { ref: "o1" };
+    if (path.startsWith("/specialists")) return { specialists: [] };
+    if (path === "/skills") return { skills: [] };
+    if (path === "/leaders") return { leaders: [] };
+    throw new Error(`首屏不该取 ${path}`);
+  };
+  const page = await fetchRootOrg(get, "o1");
+  assert.equal(
+    paths.some((p) => p === "/workers" || p.startsWith("/workers?")),
+    false,
+  );
+  assert.equal(page.org.workers.pending, true);
+  assert.equal(page.org.workers.rows.length, 0);
+  const filled = withWorkers(page, {
+    role: null,
+    rows: [{ worker: "claude" }],
+    suggestions: [],
+  });
+  assert.equal(filled.org.workers.pending, false);
+  assert.equal(filled.org.workers.rows.length, 1);
+  const kept = keepWorkers(
+    { org: { workers: { pending: true, rows: [] } } },
+    filled,
+  );
+  assert.equal(kept.org.workers.pending, false);
+  assert.equal(kept.org.workers.rows.length, 1);
+});
+
+test("SSE 第一次 hello 不重取，重连才重取", () => {
+  assert.equal(sseReloadOnHello(false), false);
+  assert.equal(sseReloadOnHello(true), true);
 });

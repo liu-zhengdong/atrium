@@ -10,6 +10,12 @@
 // 当前页、页签与筛选都写在 hash 里，刷新与前进后退都回到原处。
 
 import { escapeHtml as esc, linkify, liveText } from "./format.js";
+import {
+  fetchRootOrg,
+  keepWorkers,
+  sseReloadOnHello,
+  withWorkers,
+} from "./boot.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -642,6 +648,7 @@ function workerTable(rows, { withRole, empty }) {
 const WORKERS_FOOT = `<p class="foot">合入时和别人的改动冲突不算执行者的问题；少于 5 次的按模型、工具合起来看。</p>`;
 
 function drawWorkers({ org }) {
+  if (org.workers.pending) return `<p class="muted">正在统计执行者…</p>`;
   const filter = org.roles.find((r) => r.ref === state.route.extra);
   const rows = filter
     ? org.workers.rows.filter((w) => w.role === filter.name)
@@ -894,7 +901,9 @@ const TABS = {
     count: (d) =>
       d.page === "role"
         ? d.role.workers.length
-        : new Set(d.org.workers.rows.map((w) => w.worker)).size,
+        : d.org.workers.pending
+          ? null
+          : new Set(d.org.workers.rows.map((w) => w.worker)).size,
     draw: (d) => (d.page === "role" ? drawRoleWorkers(d) : drawWorkers(d)),
   },
   points: {
@@ -1371,26 +1380,7 @@ async function fetchPage(route, key) {
     ]);
     return { page: "node", node, team: specialists };
   }
-  const [node, specialists, roles, skills, workers, leaders] =
-    await Promise.all([
-      get(`/nodes/${encodeURIComponent(key)}`),
-      team(),
-      get("/specialists"),
-      get("/skills"),
-      get("/workers"),
-      get("/leaders"),
-    ]);
-  return {
-    page: "node",
-    node,
-    team: specialists,
-    org: {
-      roles: roles.specialists,
-      skills: skills.skills,
-      workers,
-      leaders: leaders.leaders,
-    },
-  };
+  return keepWorkers(await fetchRootOrg(get, key), state.cache.get(key));
 }
 
 /** 取当前地址对应的页；move 为 true 表示换了页（滚回顶部、焦点给正文）。 */
@@ -1423,6 +1413,7 @@ async function load(move = false) {
     state.cache.set(key, data);
     state.data = data;
     state.mode = "ok";
+    if (data.page === "node" && data.org) fillWorkers(seq, key);
   } catch (error) {
     if (seq !== state.seq) return;
     if (!(error instanceof Missing)) throw error;
@@ -1441,12 +1432,33 @@ async function load(move = false) {
   }
 }
 
+function fillWorkers(seq, key) {
+  get("/workers")
+    .then((workers) => {
+      if (seq !== state.seq) return;
+      const data = state.cache.get(key);
+      if (!data) return;
+      const next = withWorkers(data, workers);
+      state.cache.set(key, next);
+      if (pageKey(state.route, state.root.ref) === key) {
+        state.data = next;
+        if (state.mode === "ok") draw();
+      }
+    })
+    .catch((error) => {
+      if (seq !== state.seq) return;
+      if (error instanceof Expired || error instanceof Forbidden) fail(error);
+    });
+}
+
 async function refresh() {
   if (state.mode === "expired") return;
   try {
-    state.now = await get("/now");
-    if ($("live").dataset.state === "down") $("live").dataset.state = "on";
-    await load();
+    const nowP = get("/now").then((now) => {
+      state.now = now;
+      if ($("live").dataset.state === "down") $("live").dataset.state = "on";
+    });
+    await Promise.all([nowP, load()]);
   } catch (error) {
     fail(error);
   }
@@ -1454,9 +1466,11 @@ async function refresh() {
 
 function subscribe() {
   const source = new EventSource("/api/map/stream");
+  let greeted = false;
   source.addEventListener("hello", () => {
     $("live").dataset.state = "on";
-    refresh();
+    if (sseReloadOnHello(greeted)) refresh();
+    greeted = true;
   });
   source.addEventListener("changed", () => refresh());
   source.onerror = async () => {

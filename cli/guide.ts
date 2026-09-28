@@ -42,6 +42,14 @@ export const groups: Record<string, string[]> = {
     "events ack",
     "chat",
   ],
+  推送到手机: [
+    "notify",
+    "notify token",
+    "notify bind",
+    "notify set",
+    "notify test",
+    "notify remove",
+  ],
   执行机器: [
     "host ls",
     "host show",
@@ -166,6 +174,8 @@ export function example(name: string, command: Command) {
   if (name === "patrol decide")
     return "atrium patrol decide f1 --ignore 已有同类改进计划";
   if (name === "events ack") return "atrium events ack 12 13";
+  if (name === "notify set")
+    return "atrium notify set --quiet 23:00-08:00 --proxy http://127.0.0.1:7890";
   if (name === "review add")
     return "atrium review add 公开仓库 --concerns 前端,后端 --brief 议题.md --issue 322";
   if (name === "review decide")

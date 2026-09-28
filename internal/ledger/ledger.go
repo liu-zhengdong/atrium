@@ -421,11 +421,11 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 	return Get(ctx, db, id)
 }
 
-// Bounces 数这件任务最近一次人工改状态（task set --status）之后被交回了几次。
+// Bounces 数这件任务最近一次人工改状态（task set --status、task merge）之后被交回了几次。
 func Bounces(ctx context.Context, q store.Querier, id string) (int, error) {
 	var n int
 	err := q.QueryRowContext(ctx, `SELECT count(*) FROM task_events WHERE task = ? AND kind = 'bounce'
-		AND id > COALESCE((SELECT max(id) FROM task_events WHERE task = ? AND kind = 'set'), 0)`, id, id).Scan(&n)
+		AND id > COALESCE((SELECT max(id) FROM task_events WHERE task = ? AND kind IN ('set', 'deliver')), 0)`, id, id).Scan(&n)
 	return n, err
 }
 

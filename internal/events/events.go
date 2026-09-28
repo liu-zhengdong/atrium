@@ -23,6 +23,7 @@ const (
 	TaskStatus = "task.status" // 任务状态变化；Body: {"from","to","stage","title"}
 	Overdue    = "overdue"     // 持球人到期（watch 包发）；Body: {"holder","held_ms","next",…}
 	ChoiceOpen = "choice.open" // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
+	Online     = "task.online" // 已上线（release 包发）；Body: {"version","title","pr"}
 )
 
 // 级别。

@@ -1,0 +1,50 @@
+name: Atrium v2 发版（Go 二进制）
+# 在 v2 分支上打 vX.Y.Z（X≥2）的 tag 时：交叉编译 darwin/linux/windows × amd64/arm64，发到 GitHub Release。
+# 资产名 atrium-<goos>-<goarch>[.exe] 与 internal/release/version.go 的 Asset 一致；运行时 update 按它下载。
+on:
+  push:
+    tags: ["v2.*", "v3.*", "v4.*", "v5.*", "v6.*", "v7.*", "v8.*", "v9.*"]
+permissions:
+  contents: write
+concurrency:
+  group: atrium-release-v2-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: tag 须为 vX.Y.Z 且在 v2 分支上
+        run: |
+          echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "tag 应为 vX.Y.Z：$GITHUB_REF_NAME"; exit 1; }
+          git fetch -q origin v2
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/v2 || { echo "$GITHUB_REF_NAME 不在 v2 分支上"; exit 1; }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 交叉编译
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            goos=${target%/*}; goarch=${target#*/}
+            out="dist/atrium-$goos-$goarch"; [ "$goos" = windows ] && out="$out.exe"
+            GOOS=$goos GOARCH=$goarch go build -trimpath \
+              -ldflags "-s -w -X github.com/liu-zhengdong/atrium/internal/service.Version=$GITHUB_REF_NAME" \
+              -o "$out" ./cmd/atrium
+          done
+          ls -l dist
+      - name: 本平台二进制能跑且版本对
+        run: |
+          ./dist/atrium-linux-amd64 --help >/dev/null
+          data=$(mktemp -d)
+          ATRIUM_DATA="$data" ./dist/atrium-linux-amd64 status --json | tee /dev/stderr | grep -q '"ok":true'
+      - name: 发 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum atrium-* > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* --target "$GITHUB_SHA" --title "$GITHUB_REF_NAME" --generate-notes

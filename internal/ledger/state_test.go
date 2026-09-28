@@ -33,6 +33,8 @@ func TestTransition(t *testing.T) {
 		{"取消在队列的", st(Queued, ""), Event{Kind: Cancel}, st(Cancelled, "")},
 		{"人工改回 todo 清阶段", st(Blocked, StageReview), Event{Kind: Set, To: Todo}, st(Todo, "")},
 		{"人工完成", st(Running, StageMerge), Event{Kind: Set, To: Done}, st(Done, StageMerge)},
+		{"登记亲手做的 PR", st(Todo, ""), Event{Kind: Deliver}, st(Running, StageMerge)},
+		{"放行受阻的交付", st(Blocked, StageMerge), Event{Kind: Deliver}, st(Running, StageMerge)},
 	}
 	for _, c := range ok {
 		got, err := Transition(c.from, c.ev)
@@ -61,6 +63,8 @@ func TestTransition(t *testing.T) {
 		{"人工不能进 queued", st(Todo, ""), Event{Kind: Set, To: Queued}},
 		{"未知状态", st(Todo, ""), Event{Kind: Set, To: "wat"}},
 		{"未知事件", st(Todo, ""), Event{Kind: "wat"}},
+		{"在跑的执行者不能放进合入队列", st(Running, ""), Event{Kind: Deliver}},
+		{"完成的不能放进合入队列", st(Done, StageMerged), Event{Kind: Deliver}},
 	}
 	for _, c := range bad {
 		if got, err := Transition(c.from, c.ev); err == nil || got != c.from {

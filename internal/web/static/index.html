@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Atrium</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/ui/assets/app.css">
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="side">
+    <div class="brand"><i>A</i>Atrium</div>
+    <nav class="nav">
+      <a href="#today" data-nav="today"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>今天<span class="count num" id="askCount" hidden></span></a>
+      <a href="#records" data-nav="records"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2.5h8v11H4z"/><path d="M6 6h4M6 8.5h4"/></svg>决定</a>
+      <a href="#legion" data-nav="legion"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5.5" cy="6" r="2"/><circle cx="10.5" cy="6" r="2"/><path d="M2 13c.5-2 2-3 3.5-3s3 1 3.5 3M7 13c.5-2 2-3 3.5-3s3 1 3.5 3"/></svg>执行者</a>
+    </nav>
+    <div>
+      <div class="group">部门</div>
+      <nav class="nav tree" id="tree"></nav>
+    </div>
+    <div class="side-foot">
+      <div class="me"><b>你</b>只读<button class="theme" id="theme" aria-label="切换明暗">◐</button></div>
+    </div>
+  </aside>
+  <main class="island" id="island">
+    <div class="mobile-top">Atrium<select id="mnav" aria-label="页面"></select></div>
+    <div class="scroll" id="scroll"><div class="page" id="page"><div class="loading">正在读取…</div></div></div>
+    <div class="scrim" id="scrim"></div>
+    <section class="drawer" id="drawer" aria-label="详情" tabindex="-1"></section>
+  </main>
+</div>
+<script src="/ui/assets/app.js"></script>
+</body>
+</html>

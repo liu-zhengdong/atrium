@@ -1,5 +1,0 @@
-✖ 任务验收
- AssertionError [ERR_ASSERTION]: expected 3 to be 4
-    at TestContext.<anonymous> (tests/task-pure.test.ts:42:5)
-✖ tests/task-pure.test.ts (3)
-npm error command failed

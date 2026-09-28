@@ -1,6 +1,0 @@
-POST https://api.example.com/v1/responses
-HTTP/1.1 429 Too Many Requests
-Retry-After: Sun, 27 Sep 2026 20:00:00 GMT
-content-type: application/json
-
-{"error":{"type":"rate_limit_exceeded","message":"Rate limit reached"}}

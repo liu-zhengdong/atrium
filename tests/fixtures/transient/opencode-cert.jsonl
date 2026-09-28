@@ -1,4 +1,0 @@
-{"type":"step_start","timestamp":1790452190000,"sessionID":"ses_f20cd430affeRSQW738FggfWFo","part":{"type":"step-start"}}
-{"type":"tool_use","timestamp":1790452195000,"sessionID":"ses_f20cd430affeRSQW738FggfWFo","part":{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"/tmp/repo/server/net.ts"},"output":"// 失败时报 fetch failed 或 ECONNRESET，交给调用方重试"}}}
-{"type":"step_finish","timestamp":1790452200074,"sessionID":"ses_f20cd430affeRSQW738FggfWFo","part":{"reason":"tool-calls","type":"step-finish"}}
-{"type":"error","error":{"name":"UnknownError","data":{"message":"unknown certificate verification error"}}}

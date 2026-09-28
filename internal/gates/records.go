@@ -1,0 +1,103 @@
+package gates
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
+)
+
+// 与 dispatch 的约定（都记在任务经历 task_events 里，取最近一条）：
+//
+//	worktree        dispatch 拉起执行者时记：{"dir": "<工作树绝对路径>"}；关卡在这里查事实
+//	risk            task run --risk 记：high / medium / low（没记按 low）
+//	result          执行者退出时记它最后的回复原文；审阅结论从这里读
+//	worker_require  gates 建审阅任务时记（Requirement 的 JSON）；dispatch 挑执行者时按它排除
+const (
+	KindWorktree = "worktree"
+	KindRisk     = "risk"
+	KindResult   = "result"
+	KindRequire  = "worker_require"
+	KindReviewOf = "review_of" // 审阅任务上：被审的原任务 tN
+	KindReviewer = "reviewer"  // 原任务上：这一轮的审阅任务 tN
+	KindGate     = "gate"      // 关卡结论（Verdict JSON）
+	KindReview   = "review"    // 审阅结论
+	KindMerge    = "merge"     // 合入队列的经过：冲突文件、检查没过的摘要、跳过检查
+	// KindMergeCommit 是合入后 merge 记的 {"pr","commit"}；release 据此等含它的版本。
+	KindMergeCommit = "merge_commit"
+)
+
+// Last 取一件任务某类经历的最近一条正文；没有时 found=false。
+func Last(ctx context.Context, q store.Querier, task, kind string) (body string, found bool, err error) {
+	err = q.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = ? ORDER BY id DESC LIMIT 1`,
+		task, kind).Scan(&body)
+	if store.IsNotFound(err) {
+		return "", false, nil
+	}
+	return body, err == nil, err
+}
+
+// Workspace 取执行者的工作树目录。
+func Workspace(ctx context.Context, q store.Querier, task string) (string, error) {
+	body, ok, err := Last(ctx, q, task, KindWorktree)
+	if err != nil || !ok {
+		return "", firstErr(err, fmt.Errorf("%s 没有工作树登记（经历里没有 %s）", task, KindWorktree))
+	}
+	var w struct {
+		Dir string `json:"dir"`
+	}
+	if err := json.Unmarshal([]byte(body), &w); err != nil || w.Dir == "" {
+		return "", fmt.Errorf("%s 的工作树登记不是 {\"dir\":…}：%s", task, body)
+	}
+	return w.Dir, nil
+}
+
+// Risk 取任务风险；没记按 low。
+func Risk(ctx context.Context, q store.Querier, task string) (string, error) {
+	body, ok, err := Last(ctx, q, task, KindRisk)
+	if err != nil || !ok {
+		return "low", err
+	}
+	return strings.TrimSpace(body), nil
+}
+
+func firstErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// Profile 是关卡要的档案事实：工具、模型、信任、checks。
+type Profile struct {
+	Name   string
+	Tool   string
+	Model  string
+	Trust  string
+	Checks []string // nil 表示档案没写，按 DefaultChecks
+}
+
+// LoadProfile 按执行者标识（任务上记的「工具+模型[:强度]」）取三层叠加后的档案事实（workers.Resolve）。
+func LoadProfile(ctx context.Context, q store.Querier, worker string) (Profile, error) {
+	r, err := workers.Resolve(ctx, q, worker)
+	if err != nil {
+		return Profile{}, err
+	}
+	return Profile{Name: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Trust: r.Rules.EffectiveTrust(), Checks: r.Rules.Checks}, nil
+}
+
+// Enqueue 是派活入队（即 task run：dispatch.Enqueue），dispatch 装配时接上。建审阅任务后用它派出去。
+// 交回（Bounce）不用它：转 queued 的任务 dispatch 沿用上次拉起的执行者与选项。
+var Enqueue func(ctx context.Context, id, by string) error
+
+// Bounce 交回原执行者（同工作树同分支重派）：记原因、按次数转 queued 或 blocked。
+// 转 queued 的由 dispatch 按上次拉起的执行者、风险与凭据重派，不另写队列行。
+func Bounce(ctx context.Context, db *store.DB, id, actor, reason string) (ledger.Task, error) {
+	return ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Bounce}, actor, reason)
+}

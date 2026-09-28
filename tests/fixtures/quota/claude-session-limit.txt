@@ -1,2 +1,0 @@
-$ claude -p --output-format stream-json --verbose -
-{"type":"result","subtype":"error","is_error":true,"error":"You've hit your session limit · resets 3:50pm (Asia/Shanghai)"}

@@ -1,4 +1,0 @@
-{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour", "overageStatus": "rejected", "resetsAt": 1790484600}}
-{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour", "overageStatus": "rejected", "resetsAt": 1790484600}}
-{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour", "overageStatus": "rejected", "resetsAt": 1790484600}}
-{"type": "result", "subtype": "success", "is_error": false, "stop_reason": "end_turn", "result": "已开 PR #298，CI 通过。"}

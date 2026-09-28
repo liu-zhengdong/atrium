@@ -1,88 +1,50 @@
-name: Atrium 版本发布
+name: 发版
+# 在 main 上打 vX.Y.Z 的 tag 时：交叉编译 darwin/linux/windows × amd64/arm64，发到 GitHub Release。
+# 资产名 atrium-<goos>-<goarch>[.exe] 与 internal/release/version.go 的 Asset 一致；运行时 update 按它下载。
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    tags: ["v*"]
 permissions:
   contents: write
-  pull-requests: read
 concurrency:
-  group: atrium-release
+  group: atrium-release-${{ github.ref_name }}
   cancel-in-progress: false
 jobs:
-  release:
-    if: ${{ !startsWith(github.event.head_commit.message, '发布 v') }}
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - name: tag 须为 vX.Y.Z 且在 main 上
+        run: |
+          echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "tag 应为 vX.Y.Z：$GITHUB_REF_NAME"; exit 1; }
+          git fetch -q origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_REF_NAME 不在 main 上"; exit 1; }
+      - uses: actions/setup-go@v5
         with:
-          node-version: "24"
-      - run: npm ci
-      - name: 从合入 PR 取摘要并计算补丁版本
-        id: version
+          go-version-file: go.mod
+      - name: 交叉编译
         env:
-          GH_TOKEN: ${{ github.token }}
+          CGO_ENABLED: "0"
         run: |
-          summary=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '.[0].title // empty')
-          if [ -z "$summary" ]; then summary=$(git log -1 --format=%s); fi
-          version=$(node scripts/prepare-release.mjs "$summary")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "summary=$summary" >> "$GITHUB_OUTPUT"
-      # 不再重跑测试：合入队列已在合入前按 .agents/check 检查过这个提交（与发版同一个提交），
-      # 全量测试由 check.yml 在每次推送时跑、作体检，不挡发版（用户 09-28 定）。
-      # 编译安装产物（dist/），并在它上面起隔离服务量命令行启动；产物跑不起来就不发版。
-      - run: npm run bench:cli
-        env:
-          ATRIUM_BENCH_LIMIT_MS: "300"
-      - name: 提交安装产物及版本标签
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          SUMMARY: ${{ steps.version.outputs.summary }}
-          ATRIUM_BENCH_LIMIT_MS: "300"
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # 推 main 被拒（发版这几分钟里又合入了 PR，或排队的这一轮 checkout 的是旧提交）时，
-          # 不强推：取最新 main，在它上面重算版本号再提交。版本提交只改下面三个文件，
-          # 直接变基会和别的发版改同一行版本号冲突；重算与「变基后重跑 prepare-release」等价。
-          commit_version() {
-            git add package.json package-lock.json releases.json
-            git commit -q -m "发布 v${VERSION}"
-          }
-          built=$(git rev-parse HEAD) # dist/ 是在这个提交的源码上编译的
-          commit_version
-          attempt=1
-          until git push origin HEAD:main; do
-            if [ "$attempt" -ge 5 ]; then
-              echo "::error::推 main 连续 ${attempt} 次被拒，放弃本次发版；main 上下一次合入会再发版"
-              exit 1
-            fi
-            sleep $((attempt * 3))
-            attempt=$((attempt + 1))
-            git fetch origin +refs/heads/main:refs/remotes/origin/main
-            if ! git merge-base --is-ancestor "$built" origin/main; then
-              echo "::error::origin/main 已不包含 ${built}（历史被改写），放弃本次发版，不强推"
-              exit 1
-            fi
-            git reset -q --hard origin/main
-            VERSION=$(node scripts/prepare-release.mjs "$SUMMARY")
-            commit_version
-            # main 上多了别的提交：运行时按「标签是否包含合入提交」判定上线，
-            # 标签里的 dist/ 必须和这次推上去的源码一致，所以重装依赖、重新编译并量启动。
-            if [ "$(git rev-parse HEAD^)" != "$built" ]; then
-              npm ci
-              npm run bench:cli
-              built=$(git rev-parse HEAD^)
-            fi
+          mkdir -p dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            goos=${target%/*}; goarch=${target#*/}
+            out="dist/atrium-$goos-$goarch"; [ "$goos" = windows ] && out="$out.exe"
+            GOOS=$goos GOARCH=$goarch go build -trimpath \
+              -ldflags "-s -w -X github.com/liu-zhengdong/atrium/internal/service.Version=$GITHUB_REF_NAME" \
+              -o "$out" ./cmd/atrium
           done
-          # dist/ 只进版本标签：标签指向版本提交之上再加一个带编译产物的提交，main 不含 dist/。
-          # 从标签安装（atrium update、README）时 npm pack 直接沿用它，不需要 esbuild。
-          git add -f dist
-          git commit -m "v${VERSION} 安装产物"
-          git tag "v${VERSION}"
-          git push origin "v${VERSION}"
-          gh release create "v${VERSION}" --title "v${VERSION}" --notes "$SUMMARY"
+          ls -l dist
+      - name: 本平台二进制能跑且版本对
+        run: |
+          ./dist/atrium-linux-amd64 --help >/dev/null
+          data=$(mktemp -d)
+          ATRIUM_DATA="$data" ./dist/atrium-linux-amd64 status --json | tee /dev/stderr | grep -q '"ok":true'
+      - name: 发 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum atrium-* > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* --target "$GITHUB_SHA" --title "$GITHUB_REF_NAME" --generate-notes

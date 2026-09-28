@@ -200,3 +200,23 @@ test("时间按本地时区显示：UTC 12:07 在 Asia/Shanghai 为 20:07", () =
     else process.env.TZ = original;
   }
 });
+
+test("--version 打印版本；纯本地信息在执行者环境也放行", async () => {
+  assert.match(help(), /atrium --version/);
+  const lines: string[] = [];
+  const log = console.log;
+  const worker = process.env.ATRIUM_WORKER;
+  console.log = (...args: unknown[]) => lines.push(args.join(" "));
+  process.env.ATRIUM_WORKER = "1";
+  try {
+    assert.equal(await main(["--version"]), 0);
+    assert.equal(await main(["-v"]), 0);
+  } finally {
+    console.log = log;
+    if (worker === undefined) delete process.env.ATRIUM_WORKER;
+    else process.env.ATRIUM_WORKER = worker;
+  }
+  assert.equal(lines.length, 2, lines.join("\n"));
+  assert.match(lines[0]!, /^\d+\.\d+\.\d+/);
+  assert.equal(lines[1], lines[0]);
+});

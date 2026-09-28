@@ -1,5 +1,9 @@
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
-import { dataDirectory, serviceUrl } from "../server/service-state.ts";
+import {
+  currentVersion,
+  dataDirectory,
+  serviceUrl,
+} from "../server/service-state.ts";
 import { pad, width } from "./format.ts";
 import { authCommands } from "./auth.ts";
 import { workerCommands } from "./workers.ts";
@@ -186,7 +190,7 @@ export function help(): string {
           .map(([name, command]) => entry(name, command)),
       ]),
     "",
-    "命令详情：atrium <命令> --help；调用约定：atrium guide",
+    "命令详情：atrium <命令> --help；版本：atrium --version；调用约定：atrium guide",
   ].join("\n");
 }
 
@@ -204,9 +208,11 @@ export async function main(argv: string[]): Promise<number> {
     let failed = false;
     let subcommand = name ?? "";
     try {
-      // 执行者环境：除帮助外一律先过防护，拒绝时不会拉起服务、不碰默认数据目录。
+      // 执行者环境：除帮助与版本外一律先过防护，拒绝时不会拉起服务、不碰默认数据目录。
       if (
-        !["--help", "-h", "help", "guide"].includes(name ?? "") &&
+        !["--help", "-h", "help", "guide", "--version", "-v"].includes(
+          name ?? "",
+        ) &&
         !rest.includes("--help")
       ) {
         if (!workerReadable(name, rest)) workerGuard();
@@ -226,6 +232,11 @@ export async function main(argv: string[]): Promise<number> {
       }
       if (["--help", "-h", "help"].includes(name)) {
         console.log(help());
+        return 0;
+      }
+      // 版本是纯本地信息：不查服务、不碰数据目录，跟 --help 一样随处可跑。
+      if (name === "--version" || name === "-v") {
+        console.log(currentVersion());
         return 0;
       }
       if (

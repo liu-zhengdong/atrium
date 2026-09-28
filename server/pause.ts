@@ -94,6 +94,12 @@ export function taskPause(db: DatabaseSync, taskId: number): Pause | null {
   return partPause(db, row?.part ?? null);
 }
 
+/** 恢复这一条的命令。 */
+export const resumeCommand = (pause: Pause) =>
+  pause.scope === "all"
+    ? "atrium resume"
+    : `atrium resume --${pause.scope.startsWith("h") ? "host" : "part"} ${pause.scope}`;
+
 /** 人话：「已暂停（全部，u1 09-28 10:00：原因）」。 */
 export function pauseText(pause: Pause) {
   const at = new Date(pause.at);

@@ -156,6 +156,7 @@ import {
   listPauses,
   partPause,
   pauseText,
+  resumeCommand,
   setPause,
   taskPause,
 } from "../pause.ts";
@@ -558,11 +559,11 @@ export class TaskRunner {
             )
             .map((active) => active.pid),
         );
+      // 全局暂停（server/pause.ts）：只留看门狗，不清理、不派活、不推进合入与验证。
+      if (globalPause(this.db)) return;
       if (!this.closed) this.orphans.sweep(this.host.orphans());
       if (!this.closed) await this.cleanup.finished();
       if (!this.closed) await this.quota.releaseExpired(this.x);
-      // 全局暂停（server/pause.ts）：不做任何自主动作，只看门狗与清理照常。
-      if (globalPause(this.db)) return;
       if (!this.closed && this.recovered) await this.scheduler.tick();
       // 因本机满或太忙排队的，负载降下来后在这里拉起。
       if (!this.closed && this.recovered) await this.x.drain();
@@ -585,10 +586,13 @@ export class TaskRunner {
     const recovery = this.recover()
       .then(async () => {
         this.recovered = true;
-        if (!this.closed) await this.scheduler.tick();
-        if (!this.closed) this.review.kick();
-        if (!this.closed) this.merge.kick();
-        if (!this.closed) this.online.kick();
+        // 全局暂停着（server/pause.ts）就先不派、不推进，恢复时再补。
+        if (!this.closed && !globalPause(this.db)) {
+          await this.scheduler.tick();
+          this.review.kick();
+          this.merge.kick();
+          this.online.kick();
+        }
         // 保留清理失败不该挡住自愈后的派活，单独兜住。
         if (!this.closed)
           try {
@@ -809,6 +813,20 @@ export class TaskRunner {
       throw error;
     }
     const tool = chosen.worker.tool;
+    // 一键停机：全局或这一部分暂停着就先排队，恢复后按顺序拉起。
+    const pause = taskPause(this.db, id);
+    if (pause) {
+      this.x.launching.delete(id);
+      return {
+        ...this.enqueue(
+          task,
+          chosen,
+          `${pauseText(pause)}；恢复：${resumeCommand(pause)}`,
+          pinned,
+        ),
+        pick,
+      };
+    }
     if (chosen.waitUntil !== undefined) {
       this.x.launching.delete(id);
       return {
@@ -881,20 +899,6 @@ export class TaskRunner {
           task,
           chosen,
           `${tool} 同一时刻只跑一个，前一个结束后自动拉起`,
-          pinned,
-        ),
-        pick,
-      };
-    }
-    // 一键停机：全局或这一部分暂停着就先排队，恢复后按顺序拉起。
-    const pause = taskPause(this.db, id);
-    if (pause) {
-      this.x.launching.delete(id);
-      return {
-        ...this.enqueue(
-          task,
-          chosen,
-          `${pauseText(pause)}；恢复：atrium resume`,
           pinned,
         ),
         pick,
@@ -1418,13 +1422,14 @@ export class TaskRunner {
     const resumed = clearPause(this.db, scope);
     if (resumed) {
       console.log(`${pauseText(resumed)} 由 ${by} 恢复`);
-      // 排着的按顺序拉起，合入、审阅接着走。
+      // 排着的按顺序拉起，合入、审阅、上线接着走。
       if (!this.closed && this.recovered)
         void this.x
           .drain()
           .then(() => {
             this.review.kick();
             this.merge.kick();
+            this.online.kick();
           })
           .catch((error) => console.error("恢复后拉起失败：", error));
     }

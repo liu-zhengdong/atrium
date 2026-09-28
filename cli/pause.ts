@@ -108,7 +108,7 @@ export const pauseCommands: Record<string, Command> = {
         console.log(
           [
             result.resumed
-              ? `已恢复：${pauseText(result.resumed).replace(/^已暂停/, "")}`
+              ? `已恢复；原来是 ${pauseText(result.resumed)}`
               : "这一范围本来就没暂停",
             ...pauseLines(result.pauses).map((line) => `仍在暂停：${line}`),
           ].join("\n"),

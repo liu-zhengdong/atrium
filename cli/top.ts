@@ -15,7 +15,7 @@ import {
   type SecretaryView,
 } from "../server/tasks/secretary-watch.ts";
 import type { Holder } from "../server/tasks/holder.ts";
-import { pauseText, type Pause } from "../server/pause.ts";
+import { pauseText, resumeCommand, type Pause } from "../server/pause.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
 import { tagTitle } from "../server/tasks/priority.ts";
@@ -471,7 +471,10 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const lines = [
     pad(oneLine(head, headRoom), headRoom) + clock,
     ...(snapshot.pauses ?? []).map((pause) =>
-      oneLine(`■ ${pauseText(pause)}；恢复：atrium resume`, frame.width),
+      oneLine(
+        `■ ${pauseText(pause)}；恢复：${resumeCommand(pause)}`,
+        frame.width,
+      ),
     ),
     ...(choice ? [oneLine(choice, frame.width)] : []),
     // 紧急任务太多（t215）：不拒绝，只提醒。

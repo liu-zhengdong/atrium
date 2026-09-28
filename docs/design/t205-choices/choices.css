@@ -1,0 +1,306 @@
+/*
+ * 设计稿：选项单默认一行一个选项、点开看详情（t205）。
+ * 叠在 server/map/web/style.css 之上，只覆盖「选项单」一节；实现时并进 style.css 替换原来的 .choice-option / .option-* 规则。
+ */
+
+/* 宽屏限宽：标题、一句话和右侧代价标签离得近，长文一行不过宽。 */
+.choices {
+  max-width: 960px;
+}
+
+/* ---- 顶部推荐：先给结论 ---- */
+
+.choice-advice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--hover);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.choice-advice .choice-label {
+  margin-right: 0;
+}
+.advice-pick {
+  font-weight: 600;
+  color: var(--ink);
+}
+.advice-body {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.advice-more {
+  display: inline;
+}
+.advice-more > summary {
+  display: inline;
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+.advice-more > summary::-webkit-details-marker {
+  display: none;
+}
+.advice-more > summary::after {
+  content: " ▸";
+}
+.advice-more[open] > summary::after {
+  content: " ▾";
+}
+.advice-more > p {
+  margin: 6px 0 0;
+}
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: #2447a8;
+  cursor: pointer;
+}
+.link-button:hover {
+  text-decoration: underline;
+}
+.choice-advice + .choice-comments {
+  margin: -6px 0 14px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+/* ---- 选项列表：一行一个，像 Linear 的列表行；点行展开，像 Notion 的折叠块 ---- */
+
+.list-tools {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--faint);
+}
+.choice-options {
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+.choice-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  border-bottom: 1px solid var(--line);
+}
+.choice-option.can-pick {
+  grid-template-columns: 28px minmax(0, 1fr);
+}
+.choice-option.picked {
+  box-shadow: inset 3px 0 0 #1e8e3e;
+}
+.option-pick {
+  width: 16px;
+  height: 16px;
+  margin: 15px 0 0 6px;
+  cursor: pointer;
+}
+.option-more > summary {
+  list-style: none;
+}
+.option-more > summary::-webkit-details-marker {
+  display: none;
+}
+.option-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 20px;
+  align-items: start;
+  gap: 4px 16px;
+  padding: 11px 8px 11px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.option-row:hover {
+  background: var(--hover);
+}
+.option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.option-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.option-seq {
+  flex: none;
+  min-width: 1ch;
+}
+.option-summary {
+  padding-left: calc(1ch + 8px);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.option-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 1px;
+}
+.chip-size {
+  font-weight: 400;
+  color: var(--text);
+  background: var(--chip);
+}
+.chip-size b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.option-toggle {
+  width: 20px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  transition: transform 0.15s ease;
+}
+.option-more[open] .option-toggle {
+  transform: rotate(90deg);
+}
+.option-facts {
+  margin: 0 36px 14px calc(6px + 1ch + 8px);
+  padding-top: 2px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.option-fact {
+  grid-template-columns: 6em minmax(0, 1fr);
+  gap: 12px;
+}
+.basis-list {
+  display: inline;
+}
+.basis-list > summary {
+  display: inline;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+.basis-list > summary::-webkit-details-marker {
+  display: none;
+}
+.basis-list > summary::after {
+  content: " ▸";
+}
+.basis-list[open] > summary::after {
+  content: " ▾";
+}
+.basis-items {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.basis-list a {
+  color: #2447a8;
+}
+
+/* ---- 已拍板的单子：整份折成一行 ---- */
+
+details.choice-done {
+  padding: 0;
+}
+details.choice-done > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+details.choice-done > summary::-webkit-details-marker {
+  display: none;
+}
+details.choice-done > summary:hover {
+  background: var(--hover);
+}
+details.choice-done > summary::before {
+  content: "▸";
+  color: var(--faint);
+  font-size: 12px;
+}
+details.choice-done[open] > summary::before {
+  content: "▾";
+}
+.done-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.done-result {
+  flex-basis: 100%;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.done-body {
+  padding: 0 18px 16px;
+}
+.choice-sheet {
+  padding: 16px 18px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .link-button,
+  .basis-list a {
+    color: #9db7f5;
+  }
+  .choice-option.picked {
+    box-shadow: inset 3px 0 0 #3fb35f;
+  }
+}
+
+@media (max-width: 720px) {
+  .choice-sheet {
+    padding: 14px 12px;
+  }
+  .option-row {
+    grid-template-columns: minmax(0, 1fr) 20px;
+    padding-right: 2px;
+  }
+  .option-tags {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: flex-start;
+    padding-left: calc(1ch + 8px);
+  }
+  .option-toggle {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .option-facts {
+    margin: 0 4px 14px 0;
+  }
+  .option-fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  details.choice-done > summary {
+    padding: 12px;
+  }
+  .done-body {
+    padding: 0 12px 14px;
+  }
+}

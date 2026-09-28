@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>设计稿窄屏框（截图用）</title>
+    <style>
+      body {
+        margin: 0;
+        background: #888;
+      }
+      iframe {
+        display: block;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 截窄屏用：Chrome 无头窗口有最小宽度，按 ?w= 宽、?h= 高开一个 iframe，其余参数原样传给设计稿。 -->
+    <script>
+      const p = new URLSearchParams(location.search);
+      const f = document.createElement("iframe");
+      f.width = p.get("w") || "390";
+      f.height = p.get("h") || "1500";
+      p.delete("w");
+      p.delete("h");
+      f.src = `./index.html?${p}`;
+      document.body.append(f);
+    </script>
+  </body>
+</html>

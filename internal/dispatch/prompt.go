@@ -19,21 +19,22 @@ type PromptInput struct {
 	Bounces []string // 交回原因（最近的在后）
 	Repo    string   // 仓库；空表示没有仓库
 	Branch  string
+	Guide   string // 目标仓库自己的约定（.agents/README.md 正文）；没有就空
 }
 
-// 通用约束：每件活都附。
+// 通用约束：对所有仓库成立的，每件活都附；仓库自己的约定从目标仓库的 .agents/README.md 读（PromptInput.Guide）。
 var commonRules = []string{
 	"凭据不打印、不写进提交、PR、issue 或日志。",
-	"不碰用户的真实环境：不要启动、停止或重启 4310 端口上的 Atrium 服务，不读写 ~/.atrium；要跑 atrium 就用临时 ATRIUM_DATA 与空闲 ATRIUM_PORT 起隔离实例，用完 stop。",
-	"不要跑全量测试，只跑改动相关的检查；不要用 git stash（各工作树共用）。",
+	"不碰用户的真实环境：不启停用户在跑的服务，不读写用户主目录里的数据；要跑起来验证，就用临时数据目录与空闲端口起隔离实例，用完停掉。",
+	"只跑改动相关的快检查，不跑全量测试（全量由运行时跑）。",
 }
 
 var repoRules = []string{
 	"只交 PR：在分支 %s 上提交、推送并开 PR；不要合入、不要改默认分支、不要发版。",
-	"PR 正文写两节：「端到端验证」（在隔离实例里怎么验的、输出摘要；会停服务、改机器状态的步骤标注「只在隔离环境」）与「碰到哪些已有能力」（交叉到哪些已有能力、各验了什么；没有写「无」）。",
+	"PR 正文写「端到端验证」一节：在隔离实例里跑了什么、输出摘要；会停服务、改机器状态的步骤标注「只在隔离环境」。",
 }
 
-// BuildPrompt 拼提示词（纯函数）：标题 + 详述 + 部门要点链 + 技能路径 + 执行者档案正文 + 捎话与交回原因 + 通用约束。
+// BuildPrompt 拼提示词（纯函数）：标题 + 详述 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
 func BuildPrompt(in PromptInput) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# 任务 %s：%s\n", in.Task, in.Title)
@@ -55,6 +56,9 @@ func BuildPrompt(in PromptInput) string {
 	}
 	if p := strings.TrimSpace(in.Profile); p != "" {
 		fmt.Fprintf(&b, "\n## 给这个执行者的叮嘱\n\n%s\n", p)
+	}
+	if g := strings.TrimSpace(in.Guide); g != "" {
+		fmt.Fprintf(&b, "\n## 这个仓库的约定（.agents/README.md）\n\n%s\n", g)
 	}
 	section("上次交付被交回的原因（先解决这些）", in.Bounces)
 	section("运行中的补充（后说的优先）", in.Tells)

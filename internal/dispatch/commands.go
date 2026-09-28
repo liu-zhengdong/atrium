@@ -254,9 +254,31 @@ func dryText(r RunResult) string {
 	}
 	fmt.Fprintf(&b, "推荐：%s\n", v.Reason)
 	if r.Host != nil {
-		fmt.Fprintf(&b, "机器：%s %s（%s）\n", r.Host.Kind, r.Host.Host, r.Host.Reason)
+		b.WriteString(hostLine(r.Host.Kind, r.Host.Host, r.Host.Reason) + "\n")
 	}
 	return b.String()
+}
+
+// hostLine 是 --dry-run 的机器一行（纯函数）：在哪台拉起、排队或接不了；没有原因不写括号。
+func hostLine(kind, host, reason string) string {
+	s := "机器："
+	switch kind {
+	case "run":
+		s += "在 " + host + " 拉起"
+	case "queue":
+		s += "排队"
+		if host != "" {
+			s += "等 " + host
+		}
+	case "refuse":
+		s += "接不了"
+	default:
+		s += kind + " " + host
+	}
+	if reason != "" {
+		s += "（" + reason + "）"
+	}
+	return s
 }
 
 func dryNext(id string, r RunResult, risk string) string {

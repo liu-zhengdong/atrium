@@ -87,7 +87,7 @@ cd ~/秘书目录 && atrium secretary bridge --install-hook   # 装一次：事�
 ```bash
 go build ./...
 go test ./internal/<包>/          # 只跑改动相关的包
-.agents/check-v2                  # 快检查：gofmt、vet（含 Windows、Linux 交叉）、构建、全部测试、--help
+.agents/check                     # 快检查：gofmt、vet 与交叉编译（Windows、Linux）、构建、全部测试、--help
 scripts/v2-smoke.sh               # 主路径端到端（隔离服务、假执行者、假 gh）
 ```
 

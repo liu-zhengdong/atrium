@@ -101,7 +101,7 @@ v2 已在 ${ATRIUM_PORT:-4320} 上运行，数据目录 $v2_data，仍处于全�
 旧库副本：$backup（原库 $old_data 没动过）。
 还要手动做的（见 docs/v2-cutover.md）：
   - 负责人没挂部门的，按秘书备忘恢复：atrium org edit oN --leader aN
-  - 远程机器 ggb：atrium host rm h3，再 atrium host add ggb … 重新接入
+  - 远程机器 ggb：atrium host edit h3 --join，照回执在那台上接入（隧道目标与私钥已导入）
   - Claude Code 秘书会话：atrium secretary bridge --install-hook
 确认无误后：atrium resume
 EOF

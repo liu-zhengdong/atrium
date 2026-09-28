@@ -402,3 +402,23 @@ func TestRecordAndRead(t *testing.T) {
 		t.Error("Format")
 	}
 }
+
+func TestFormatNoData(t *testing.T) {
+	used := 40.0
+	now := int64(1_000_000)
+	ov := Overview{Reserve: 20, Lines: []Line{
+		{Pace: Pace{Account: "claude", UsedPercent: &used}},
+		{Pace: Pace{Account: "kimi"}},
+		{Pace: Pace{Account: "grok"}, Note: "没登录"},
+		{Pace: Pace{Account: "codex"}, Hold: &Hold{Until: now + 1}},
+	}}
+	out := Format(ov, now)
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(l) == "" || strings.TrimSpace(l) == "kimi" {
+			t.Errorf("不该有空行或只有账号名的行：\n%s", out)
+		}
+	}
+	if !strings.Contains(out, "没有额度数据：kimi、grok（没登录）") || !strings.Contains(out, "codex") {
+		t.Errorf("没数据的应汇成一行、有用尽标记的照列：\n%s", out)
+	}
+}

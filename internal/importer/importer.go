@@ -431,7 +431,7 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 		return err
 	}
 	it := Item{Kind: "资料"}
-	units := map[string]int{}
+	units, bins := map[string]int{}, map[string]int{}
 	var order []string
 	for _, m := range list {
 		ref, dept := fmt.Sprintf("m%d", m.id), fmt.Sprintf("o%d", m.node)
@@ -485,10 +485,16 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 				VALUES (?, ?, ?, 'detail', ?, ?, ?, ?, ?, ?, ?, ?)`, id, m.version, dept, e.Path, note, base, len(content), n, binary, m.by, m.at); err != nil {
 				return err
 			}
-			if units[dept] == 0 {
+			if _, ok := units[dept]; !ok {
 				order = append(order, dept)
 			}
 			units[dept] += n
+			if binary {
+				bins[dept] += len(content)
+			}
+			if len(content) > org.MaxMaterialFile<<20 {
+				rep.Over = append(rep.Over, fmt.Sprintf("资料 %s 的 %s 有 %d MB，超过单个文件 %d MB", id, e.Path, org.MB(len(content)), org.MaxMaterialFile))
+			}
 			made = append(made, id)
 			it.Imported++
 		}
@@ -499,7 +505,10 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 	}
 	for _, d := range order {
 		if units[d] > org.MaxMaterial {
-			rep.Over = append(rep.Over, fmt.Sprintf("资料总量超过每部门 %d 折算字：%s %d", org.MaxMaterial, d, units[d]))
+			rep.Over = append(rep.Over, fmt.Sprintf("资料文本总量超过每部门 %d 字：%s %d", org.MaxMaterial, d, units[d]))
+		}
+		if bins[d] > org.MaxMaterialBin<<20 {
+			rep.Over = append(rep.Over, fmt.Sprintf("二进制资料超过每部门 %d MB：%s %d MB", org.MaxMaterialBin, d, org.MB(bins[d])))
 		}
 	}
 	add(rep, it)
@@ -565,10 +574,12 @@ func importProfiles(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) e
 	return rows.Err()
 }
 
-// importHosts 搬没移除的机器：名字、种类、仓库、并发上限、机器信息原样；令牌与接入码不搬，远程机器要重新接入。
+// importHosts 搬没移除的机器：名字、种类、仓库、并发上限、机器信息、ssh 隧道目标与私钥路径、隧道远端端口原样；
+// 隧道本机端口不搬（旧版是 4310，v2 按自己的服务端口）。令牌与接入码不搬，远程机器要 host edit --join 重新接入。
 func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) error {
 	rows, err := old.QueryContext(ctx, `SELECT id, name, kind, COALESCE(info, ''), COALESCE(repos, '[]'), max_running,
-		removed_at IS NOT NULL, last_seen_at, created_at FROM hosts ORDER BY id LIMIT 10000`)
+		removed_at IS NOT NULL, last_seen_at, created_at, COALESCE(ssh_target, ''), COALESCE(ssh_key, ''), tunnel_remote_port
+		FROM hosts ORDER BY id LIMIT 10000`)
 	if err != nil {
 		return err
 	}
@@ -577,10 +588,10 @@ func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 	remote := 0
 	for rows.Next() {
 		var id, at int64
-		var name, kind, info, repos string
-		var maxRunning, seen sql.NullInt64
+		var name, kind, info, repos, sshTarget, sshKey string
+		var maxRunning, seen, tunnelRemote sql.NullInt64
 		var removed bool
-		if err := rows.Scan(&id, &name, &kind, &info, &repos, &maxRunning, &removed, &seen, &at); err != nil {
+		if err := rows.Scan(&id, &name, &kind, &info, &repos, &maxRunning, &removed, &seen, &at, &sshTarget, &sshKey, &tunnelRemote); err != nil {
 			return err
 		}
 		ref := fmt.Sprintf("h%d", id)
@@ -592,9 +603,16 @@ func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 		if err := checkHostJSON(info, repos); err != nil {
 			return fmt.Errorf("机器 %s：%w", ref, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO hosts (id, name, kind, repos, max_running, info, last_seen_at, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ref, name, kind, repos, nullInt(maxRunning), info, nullInt(seen), at); err != nil {
+		if sshTarget == "" || !tunnelRemote.Valid {
+			sshKey, tunnelRemote = "", sql.NullInt64{}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO hosts (id, name, kind, repos, max_running, info, last_seen_at, created_at,
+			ssh_target, ssh_key, tunnel_remote) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ref, name, kind, repos, nullInt(maxRunning), info,
+			nullInt(seen), at, sshTarget, sshKey, nullInt(tunnelRemote)); err != nil {
 			return err
+		}
+		if sshTarget != "" {
+			it.Notes = append(it.Notes, fmt.Sprintf("%s 的 ssh 隧道 %s（私钥 %s）带过来了", ref, sshTarget, or(sshKey, "没登记")))
 		}
 		if kind == "remote" {
 			remote++
@@ -602,10 +620,17 @@ func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 		it.Imported++
 	}
 	if remote > 0 {
-		it.Notes = append(it.Notes, fmt.Sprintf("%d 台远程机器的令牌没搬，要在那台机器上重新接入", remote))
+		it.Notes = append(it.Notes, fmt.Sprintf("%d 台远程机器的令牌没搬，要重新接入：atrium host edit hN --join，照回执在那台上跑", remote))
 	}
 	add(rep, it)
 	return rows.Err()
+}
+
+func or(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func nullInt(n sql.NullInt64) any {

@@ -232,6 +232,7 @@ CREATE TABLE IF NOT EXISTS hosts (
   info            TEXT NOT NULL DEFAULT '',
   load            TEXT NOT NULL DEFAULT '',
   ssh_target      TEXT NOT NULL DEFAULT '',
+  ssh_key         TEXT NOT NULL DEFAULT '',
   tunnel_local    INTEGER,
   tunnel_remote   INTEGER,
   last_seen_at    INTEGER,

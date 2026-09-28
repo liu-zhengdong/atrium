@@ -20,20 +20,22 @@ import (
 )
 
 // 资料：部门的知识分两层——一份「总览」（每次附给负责人，≤MaxOverview 字）与按需取的细节文件。
-// 整个部门没归档的资料合计 ≤MaxMaterial 折算字（口径见 Units）。内容在 materials/<mN>/r<rev>/，改了追加一版。
+// 整个部门没归档的资料：文本合计 ≤MaxMaterial 字，二进制合计 ≤MaxMaterialBin MB，单个文件 ≤MaxMaterialFile MB。内容在 materials/<mN>/r<rev>/，改了追加一版。
 const (
 	maxMaterialNote  = 200
 	maxMaterialFiles = 50
 	maxMaterialDepth = 4
+	// 一次上传的原始字节上限（JSON 里 base64 再涨 1/3，请求体上限按它放宽，见 materialRoutes）。
+	maxMaterialRequest = 2 * MaxMaterialFile << 20
 )
 
-// Units 纯函数：资料的折算字数。文本（合法 UTF-8、无 NUL）按字（rune）数；二进制按 3 字节折一字
-// （一个汉字的 UTF-8 正好 3 字节），向上取整。
+// Units 纯函数：资料的字数。文本（合法 UTF-8、无 NUL）按字（rune）数；二进制（图片等）不折算字数，
+// 记 0，另按字节数计入二进制总量。
 func Units(content []byte) (units int, binary bool) {
 	if IsText(content) {
 		return utf8.RuneCount(content), false
 	}
-	return (len(content) + 2) / 3, true
+	return 0, true
 }
 
 type Material struct {
@@ -67,16 +69,24 @@ type MaterialInput struct {
 
 // MaterialPlan 纯判定用：部门现有资料（最新版、没归档的）。
 type materialSlot struct {
-	id, kind, title string
-	units, rev      int
+	id, kind, title  string
+	units, size, rev int
+	binary           bool
 }
 
 // PlanMaterials 纯判定：每个文件是新建（id 空）还是给已有资料追加一版，以及加完后部门总量是否超限。
 // 总览同一部门只有一份，再加就是它的新一版；细节按标题认同一份。
 func PlanMaterials(dept string, existing []materialSlot, in MaterialInput) ([]materialSlot, error) {
-	total := 0
+	text, bin := 0, 0
+	tally := func(s materialSlot, sign int) {
+		if s.binary {
+			bin += sign * s.size
+		} else {
+			text += sign * s.units
+		}
+	}
 	for _, e := range existing {
-		total += e.units
+		tally(e, 1)
 	}
 	var plan []materialSlot
 	seen := map[string]bool{}
@@ -85,6 +95,9 @@ func PlanMaterials(dept string, existing []materialSlot, in MaterialInput) ([]ma
 			return nil, api.Usage("文件 %s 重复", f.Name)
 		}
 		seen[f.Name] = true
+		if len(f.Content) > MaxMaterialFile<<20 {
+			return nil, Full("material_file", dept, MB(len(f.Content)))
+		}
 		units, binary := Units(f.Content)
 		kind := "detail"
 		if in.Overview {
@@ -96,18 +109,21 @@ func PlanMaterials(dept string, existing []materialSlot, in MaterialInput) ([]ma
 				return nil, Full("overview", dept, units)
 			}
 		}
-		slot := materialSlot{kind: kind, title: f.Name, units: units}
+		slot := materialSlot{kind: kind, title: f.Name, units: units, size: len(f.Content), binary: binary}
 		for _, e := range existing {
 			if e.kind == kind && (kind == "overview" || e.title == f.Name) {
 				slot.id, slot.rev = e.id, e.rev
-				total -= e.units
+				tally(e, -1)
 			}
 		}
-		total += units
+		tally(slot, 1)
 		plan = append(plan, slot)
 	}
-	if total > MaxMaterial {
-		return nil, Full("materials", dept, total)
+	if text > MaxMaterial {
+		return nil, Full("materials", dept, text)
+	}
+	if bin > MaxMaterialBin<<20 {
+		return nil, Full("material_bin", dept, MB(bin))
 	}
 	return plan, nil
 }
@@ -226,7 +242,7 @@ func AddMaterials(ctx context.Context, db *store.DB, data string, in MaterialInp
 		}
 		existing := make([]materialSlot, len(cur))
 		for i, m := range cur {
-			existing[i] = materialSlot{id: m.ID, kind: m.Kind, title: m.Title, units: m.Units, rev: m.Rev}
+			existing[i] = materialSlot{id: m.ID, kind: m.Kind, title: m.Title, units: m.Units, size: m.Size, binary: m.Binary, rev: m.Rev}
 		}
 		plan, err := PlanMaterials(in.Org, existing, in)
 		if err != nil {
@@ -239,10 +255,9 @@ func AddMaterials(ctx context.Context, db *store.DB, data string, in MaterialInp
 					return err
 				}
 			}
-			_, binary := Units(f.Content)
 			file := path.Base(f.Name)
 			if _, err := tx.ExecContext(ctx, `INSERT INTO materials (`+materialCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-				s.id, s.rev+1, in.Org, s.kind, f.Name, in.Note, file, len(f.Content), s.units, binary, actor, store.Now()); err != nil {
+				s.id, s.rev+1, in.Org, s.kind, f.Name, in.Note, file, s.size, s.units, s.binary, actor, store.Now()); err != nil {
 				return err
 			}
 			if err := writeFile(materialFile(data, s.id, s.rev+1, file), f.Content, 0o600); err != nil {
@@ -284,15 +299,21 @@ func ArchiveMaterial(ctx context.Context, db *store.DB, data, id string, undo bo
 			if err != nil {
 				return err
 			}
-			total := m.Units
+			existing := make([]materialSlot, 0, len(cur))
 			for _, c := range cur {
 				if c.Kind == "overview" && m.Kind == "overview" {
 					return api.Conflict("部门 %s 已有总览 %s：先归档它", m.Org, c.ID).WithNext("atrium material archive " + c.ID)
 				}
-				total += c.Units
+				existing = append(existing, materialSlot{id: c.ID, kind: c.Kind, title: c.Title, units: c.Units, size: c.Size, binary: c.Binary})
 			}
-			if total > MaxMaterial {
-				return Full("materials", m.Org, total)
+			// 撤销归档按「加回这一份」走同一个判定；它的内容取自己的文件。
+			content, err := os.ReadFile(m.Path)
+			if err != nil {
+				return err
+			}
+			if _, err := PlanMaterials(m.Org, existing, MaterialInput{Overview: m.Kind == "overview",
+				Files: []MaterialFile{{Name: "\x00" + m.ID, Content: content}}}); err != nil {
+				return err
 			}
 			_, err = tx.ExecContext(ctx, `UPDATE materials SET archived_at = NULL WHERE id = ?`, id)
 			return err
@@ -320,7 +341,7 @@ func materialRoutes(r *api.Router, env *app.Env) {
 	})
 	r.Handle("POST /api/materials", func(q *api.Req) (any, error) {
 		var in MaterialInput
-		if err := q.Decode(&in); err != nil {
+		if err := q.DecodeMax(&in, maxMaterialRequest/3*4+1<<20); err != nil {
 			return nil, err
 		}
 		return AddMaterials(q.Context(), db, data, in, q.Actor.ID)
@@ -395,7 +416,11 @@ func materialLine(m Material) string {
 	if m.Kind == "overview" {
 		kind = "总览"
 	}
-	s := fmt.Sprintf("%s  %s  %s  %d 字  第 %d 版", m.ID, kind, m.Title, m.Units, m.Rev)
+	amount := fmt.Sprintf("%d 字", m.Units)
+	if m.Binary {
+		amount = fmt.Sprintf("%.1f MB", float64(m.Size)/(1<<20))
+	}
+	s := fmt.Sprintf("%s  %s  %s  %s  第 %d 版", m.ID, kind, m.Title, amount, m.Rev)
 	if m.Note != "" {
 		s += "  —— " + m.Note
 	}
@@ -405,7 +430,8 @@ func materialLine(m Material) string {
 func materialCommands(t *cli.Table) {
 	t.Group("material", "资料")
 	t.Add(cli.Command{Path: "material add", Args: "<oN> <文件或目录>",
-		Summary: fmt.Sprintf("加资料或给同名资料追加一版（总览 ≤%d 字，部门合计 ≤%d 字）", MaxOverview, MaxMaterial),
+		Summary: fmt.Sprintf("加资料或给同名资料追加一版（总览 ≤%d 字，部门文本合计 ≤%d 字；单个文件 ≤%d MB，部门二进制合计 ≤%d MB）",
+			MaxOverview, MaxMaterial, MaxMaterialFile, MaxMaterialBin),
 		Flags: []cli.Flag{
 			{Name: "overview", Bool: true, Help: "这是部门总览（每次附给负责人；一个部门一份）"},
 			{Name: "note", Value: "文字", Help: "这份资料是什么、什么时候用（必填）"},
@@ -426,13 +452,15 @@ func materialCommands(t *cli.Table) {
 			if err != nil {
 				return err
 			}
-			sum := 0
-			for _, f := range files {
-				u, _ := Units(f.Content)
-				sum += u
+			if _, err := PlanMaterials(dept, nil, MaterialInput{Files: files, Overview: c.Bool("overview")}); err != nil {
+				return err
 			}
-			if sum > MaxMaterial {
-				return Full("materials", dept, sum)
+			size := 0
+			for _, f := range files {
+				size += len(f.Content)
+			}
+			if size > maxMaterialRequest {
+				return api.Usage("一次加的文件合计 %d MB，超过一次上传的 %d MB：分几次加", MB(size), maxMaterialRequest>>20)
 			}
 			var list []Material
 			in := MaterialInput{Org: dept, Files: files, Overview: c.Bool("overview"), Note: c.Str("note")}

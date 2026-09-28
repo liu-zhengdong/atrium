@@ -92,7 +92,12 @@ func runOnce(ctx context.Context, db *store.DB, script, dir, logDir, task string
 	w := &tailWriter{f: f}
 	// 快检查跑的是仓库里的代码：用执行者白名单环境（不带凭据与 ATRIUM_*），不碰用户的服务。
 	env := platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()))
-	cmd, err := platform.Start(platform.Spec{Path: script, Dir: dir, Env: env, Stdout: w, Stderr: w, Detached: true})
+	spec, err := platform.Script(script, env)
+	if err != nil {
+		return out, false, err
+	}
+	spec.Dir, spec.Stdout, spec.Stderr, spec.Detached = dir, w, w, true
+	cmd, err := platform.Start(spec)
 	if err != nil {
 		return out, false, err
 	}

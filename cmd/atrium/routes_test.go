@@ -60,6 +60,7 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"POST /api/skills":                    leaders.RuleDeny,
 		"POST /api/workers/edit":              leaders.RuleDeny,
 		"POST /api/hosts":                     leaders.RuleDeny,
+		"PATCH /api/hosts/{id}":               leaders.RuleDeny,
 		"DELETE /api/hosts/{id}":              leaders.RuleDeny,
 		"POST /api/quota":                     leaders.RuleDeny,
 		"POST /api/events/listen":             leaders.RuleDeny, // 「在听」只给秘书会话

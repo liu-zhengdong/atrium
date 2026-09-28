@@ -364,7 +364,14 @@ func Commands(t *cli.Table) {
 		}})
 }
 
-// Format 是 quota 的人读输出：一行一个账号。
+func or(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// Format 是 quota 的人读输出：有数据的一行一个账号，没有数据的汇成一行。
 func Format(ov Overview, now int64) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "给用户留 %d%%；富余 = 周期已过 − 已用\n", ov.Reserve)
@@ -374,10 +381,20 @@ func Format(ov Overview, now int64) string {
 		}
 		return fmt.Sprintf("%.1f%%", *p)
 	}
+	var none []string // 没有额度数据的账号，汇成一行
 	for _, l := range ov.Lines {
+		held := l.Hold != nil && l.Hold.Until > now
+		if l.UsedPercent == nil && !held {
+			if l.Note != "" {
+				none = append(none, l.Account+"（"+l.Note+"）")
+			} else {
+				none = append(none, l.Account)
+			}
+			continue
+		}
 		fmt.Fprintf(&b, "%-12s", l.Account)
 		if l.UsedPercent == nil {
-			fmt.Fprintf(&b, "%s", l.Note)
+			fmt.Fprintf(&b, "%s", or(l.Note, "没有额度数据"))
 		} else {
 			fmt.Fprintf(&b, "已用 %s  富余 %s  短窗 %s", pct(l.UsedPercent), pct(l.SparePercent), pct(l.ShortUsedPct))
 			if l.Plan != "" {
@@ -393,10 +410,13 @@ func Format(ov Overview, now int64) string {
 				fmt.Fprintf(&b, "  （%s）", l.Note)
 			}
 		}
-		if l.Hold != nil && l.Hold.Until > now {
+		if held {
 			fmt.Fprintf(&b, "  额度用尽，%s 恢复", time.UnixMilli(l.Hold.Until).Format("01-02 15:04"))
 		}
 		b.WriteString("\n")
+	}
+	if len(none) > 0 {
+		fmt.Fprintf(&b, "没有额度数据：%s\n", strings.Join(none, "、"))
 	}
 	for _, n := range ov.Notes {
 		fmt.Fprintf(&b, "提示：%s\n", n)

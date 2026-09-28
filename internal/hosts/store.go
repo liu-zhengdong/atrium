@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -27,6 +28,7 @@ type Host struct {
 	Info         *Info    `json:"info,omitempty"`
 	Load         *Load    `json:"load,omitempty"`
 	SSH          string   `json:"ssh,omitempty"`
+	Key          string   `json:"key,omitempty"` // 隧道私钥路径
 	TunnelLocal  int      `json:"tunnel_local,omitempty"`
 	TunnelRemote int      `json:"tunnel_remote,omitempty"`
 	LastSeen     int64    `json:"last_seen_at,omitempty"`
@@ -42,13 +44,13 @@ func secret() string {
 }
 
 const hostCols = `id, name, kind, repos, COALESCE(max_running, 0), token_hash != '', COALESCE(join_expires_at, 0), info, load,
-	ssh_target, COALESCE(tunnel_local, 0), COALESCE(tunnel_remote, 0), COALESCE(last_seen_at, 0), created_at`
+	ssh_target, ssh_key, COALESCE(tunnel_local, 0), COALESCE(tunnel_remote, 0), COALESCE(last_seen_at, 0), created_at`
 
 func scanHost(sc interface{ Scan(...any) error }) (Host, error) {
 	var h Host
 	var repos, info, load string
 	if err := sc.Scan(&h.ID, &h.Name, &h.Kind, &repos, &h.MaxRunning, &h.Joined, &h.JoinExpires, &info, &load,
-		&h.SSH, &h.TunnelLocal, &h.TunnelRemote, &h.LastSeen, &h.CreatedAt); err != nil {
+		&h.SSH, &h.Key, &h.TunnelLocal, &h.TunnelRemote, &h.LastSeen, &h.CreatedAt); err != nil {
 		return h, err
 	}
 	if err := json.Unmarshal([]byte(repos), &h.Repos); err != nil {
@@ -138,8 +140,8 @@ func Add(ctx context.Context, db *store.DB, in AddInput, servicePort int) (Host,
 		code = id + "-" + secret()
 		now := store.Now()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO hosts (id, name, kind, repos, max_running, join_hash, join_expires_at,
-			ssh_target, tunnel_local, tunnel_remote, created_at) VALUES (?, ?, 'remote', ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, in.Name, string(repos), nullInt(in.Max), digest(code), now+joinTTL, in.SSH, nullInt(local), nullInt(remote), now); err != nil {
+			ssh_target, ssh_key, tunnel_local, tunnel_remote, created_at) VALUES (?, ?, 'remote', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, in.Name, string(repos), nullInt(in.Max), digest(code), now+joinTTL, in.SSH, in.Key, nullInt(local), nullInt(remote), now); err != nil {
 			return err
 		}
 		h, err = Get(ctx, tx, id)
@@ -153,6 +155,85 @@ func nullInt(n int) any {
 		return nil
 	}
 	return n
+}
+
+// EditInput 是 host edit 的参数：nil 表示不改。SSH 给空串是去掉隧道（连同端口与私钥）。
+type EditInput struct {
+	Repos  *[]string `json:"repos,omitempty"`
+	Max    *int      `json:"max,omitempty"`
+	SSH    *string   `json:"ssh,omitempty"`
+	Tunnel *string   `json:"tunnel,omitempty"`
+	Key    *string   `json:"key,omitempty"`
+	Join   bool      `json:"join,omitempty"` // 发新的一次性接入码（导入的旧机器没有令牌，要重新接入）
+}
+
+// EditPlan 纯判定：把改动叠到现有登记上，得到按 host add 同一套规则校验的完整参数。
+// 隧道本机端口没登记过（导入的旧机器）时按服务端口算。
+func EditPlan(h Host, e EditInput, servicePort int) AddInput {
+	in := AddInput{Name: h.Name, Repos: h.Repos, Max: h.MaxRunning, SSH: h.SSH, Key: h.Key}
+	if h.SSH != "" && h.TunnelRemote != 0 {
+		local := h.TunnelLocal
+		if local == 0 {
+			local = servicePort
+		}
+		in.Tunnel = fmt.Sprintf("%d:%d", local, h.TunnelRemote)
+	}
+	if e.Repos != nil {
+		in.Repos = *e.Repos
+	}
+	if e.Max != nil {
+		in.Max = *e.Max
+	}
+	if e.SSH != nil {
+		in.SSH = *e.SSH
+		if in.SSH == "" {
+			in.Tunnel, in.Key = "", ""
+		}
+	}
+	if e.Tunnel != nil {
+		in.Tunnel = *e.Tunnel
+	}
+	if e.Key != nil {
+		in.Key = *e.Key
+	}
+	return in
+}
+
+// Edit 改一台远程机器的登记（仓库、并发上限、隧道与私钥）；隧道由后台循环按新登记重连。
+// Join 时另发一次性接入码（30 分钟有效；旧令牌在新代理接入前照常有效）。
+func Edit(ctx context.Context, db *store.DB, id string, e EditInput, servicePort int) (Host, string, error) {
+	var h Host
+	var code string
+	err := db.Tx(ctx, func(tx *sql.Tx) error {
+		cur, err := Get(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if cur.Kind == "local" {
+			return api.Conflict("本机（h1）不用登记这些；不想在本机跑可以暂停它").WithNext("atrium pause --host h1")
+		}
+		in := EditPlan(cur, e, servicePort)
+		local, remote, err := in.Validate(servicePort)
+		if err != nil {
+			return err
+		}
+		repos, _ := json.Marshal(in.Repos)
+		if _, err := tx.ExecContext(ctx, `UPDATE hosts SET repos = ?, max_running = ?, ssh_target = ?, ssh_key = ?,
+			tunnel_local = ?, tunnel_remote = ? WHERE id = ?`,
+			string(repos), nullInt(in.Max), in.SSH, in.Key, nullInt(local), nullInt(remote), id); err != nil {
+			return err
+		}
+		if e.Join {
+			code = id + "-" + secret()
+			if _, err := tx.ExecContext(ctx, `UPDATE hosts SET join_hash = ?, join_expires_at = ? WHERE id = ?`,
+				digest(code), store.Now()+joinTTL, id); err != nil {
+				return err
+			}
+		}
+		h, err = Get(ctx, tx, id)
+		return err
+	})
+	return h, code, err
 }
 
 // Remove 移除远程机器：令牌作废，短号不复用；上面还有在跑的任务时拒绝。
@@ -186,7 +267,7 @@ var (
 // Join 用接入码换这台机器专用的令牌（只回这一次）；码用过即作废。
 func Join(ctx context.Context, db *store.DB, code string, info Info) (string, string, error) {
 	refused := &api.Error{Status: 401, Code: "unauthorized",
-		Message: "接入码无效、已用过或已过期；在服务那台机器上重新运行 atrium host add 拿新的接入码"}
+		Message: "接入码无效、已用过或已过期；在服务那台机器上运行 atrium host edit <hN> --join 拿新的接入码"}
 	m := joinPattern.FindStringSubmatch(code)
 	if m == nil {
 		return "", "", refused

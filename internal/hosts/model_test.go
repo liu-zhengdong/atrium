@@ -112,6 +112,9 @@ func TestValidate(t *testing.T) {
 		{AddInput{Name: "x", SSH: "-oProxyCommand=x"}, false, 0, 0},
 		{AddInput{Name: "x", SSH: "me@host", Tunnel: "99999:1"}, false, 0, 0},
 		{AddInput{Name: "x", Tunnel: "1:2"}, false, 0, 0},
+		{AddInput{Name: "x", SSH: "me@host", Key: "/k/id"}, true, 4320, 4320},
+		{AddInput{Name: "x", SSH: "me@host", Key: "id_rsa"}, false, 0, 0},
+		{AddInput{Name: "x", Key: "/k/id"}, false, 0, 0},
 	}
 	for i, c := range cases {
 		l, r, err := c.in.Validate(4320)
@@ -124,8 +127,11 @@ func TestValidate(t *testing.T) {
 	if !reflect.DeepEqual(in.Repos, []string{"a/b", "*"}) {
 		t.Errorf("去重：%v", in.Repos)
 	}
-	args := strings.Join(TunnelArgs("me@h", 1, 2), " ")
-	if !strings.Contains(args, "-R 127.0.0.1:2:127.0.0.1:1 me@h") || !strings.Contains(args, "BatchMode=yes") {
+	args := strings.Join(TunnelArgs("me@h", "", 1, 2), " ")
+	if !strings.Contains(args, "-R 127.0.0.1:2:127.0.0.1:1 me@h") || !strings.Contains(args, "BatchMode=yes") || strings.Contains(args, "-i") {
+		t.Error(args)
+	}
+	if args := strings.Join(TunnelArgs("me@h", "/k/id", 1, 2), " "); !strings.Contains(args, "-i /k/id -o IdentitiesOnly=yes") {
 		t.Error(args)
 	}
 	for url, want := range map[string]string{"https://github.com/a/b.git": "a-b", "git@github.com:a/b.git": "a-b", "/tmp/x/repo.git/": "x-repo", "": "repo"} {
@@ -280,5 +286,24 @@ func TestServiceLayout(t *testing.T) {
 	env := CarriedEnv("windows", map[string]string{"Path": "x", "OPENAI_API_KEY": "k", "LC_ALL": "c", "https_proxy": "p"})
 	if env["PATH"] != "x" || env["OPENAI_API_KEY"] != "" || env["LC_ALL"] != "c" {
 		t.Errorf("%v", env)
+	}
+}
+
+func TestEditPlan(t *testing.T) {
+	h := Host{Name: "ggb", Repos: []string{"*"}, MaxRunning: 2, SSH: "me@g", Key: "/k/id", TunnelRemote: 14310}
+	str := func(s string) *string { return &s }
+	cases := []struct {
+		name string
+		e    EditInput
+		want AddInput
+	}{
+		{"不改：导入的旧机器本机端口按服务端口", EditInput{}, AddInput{Name: "ggb", Repos: []string{"*"}, Max: 2, SSH: "me@g", Key: "/k/id", Tunnel: "4320:14310"}},
+		{"换私钥", EditInput{Key: str("/k/new")}, AddInput{Name: "ggb", Repos: []string{"*"}, Max: 2, SSH: "me@g", Key: "/k/new", Tunnel: "4320:14310"}},
+		{"去掉隧道连同私钥", EditInput{SSH: str("")}, AddInput{Name: "ggb", Repos: []string{"*"}, Max: 2}},
+	}
+	for _, c := range cases {
+		if got := EditPlan(h, c.e, 4320); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s：%+v", c.name, got)
+		}
 	}
 }

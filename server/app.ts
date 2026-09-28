@@ -12,6 +12,7 @@ import { registerPatrolRoutes } from "./tasks/patrol-routes.ts";
 import { ensureScheduleTables } from "./schedules/model.ts";
 import { SchedulePump } from "./schedules/runtime.ts";
 import { registerScheduleRoutes } from "./schedules/routes.ts";
+import { registerProductRoutes } from "./products/routes.ts";
 import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
@@ -276,6 +277,8 @@ export async function createApp(options: {
     { ready: () => taskRunner.ready, ...options.schedules },
   );
   registerScheduleRoutes(app, db, schedulePump);
+  // 产品部（#404 第 3 步）：建节点、leader 与 research 周期任务；研究收尾在任务运行时里登记选项单。
+  registerProductRoutes(app, db, schedulePump);
   schedulePump.start();
   app.addHook("preClose", async () => schedulePump.close());
   registerHostRoutes(app, db, taskRunner);

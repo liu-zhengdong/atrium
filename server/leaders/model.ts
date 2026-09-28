@@ -193,8 +193,7 @@ export function addLeader(db: DatabaseSync, body: unknown, now = Date.now()) {
   onlyKeys(input, ["name", "worker", "memo", "id"]);
   const name = nameOf(input.name);
   const worker = workerOf(input.worker);
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return transaction(db, () => {
     let id: number;
     if (input.id !== undefined && input.id !== null && input.id !== "") {
       id = leaderId(input.id, "id");
@@ -213,12 +212,8 @@ export function addLeader(db: DatabaseSync, body: unknown, now = Date.now()) {
       "INSERT INTO org_leaders(id,name,worker,created_at,updated_at) VALUES (?,?,?,?,?)",
     ).run(id, name, worker, now, now);
     if (memo) writeMemo(db, leaderRef(id), memo, now);
-    db.exec("COMMIT");
     return showLeader(db, leaderRef(id));
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export function editLeader(

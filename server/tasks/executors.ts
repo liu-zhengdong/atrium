@@ -23,6 +23,7 @@ import { diffSize, logTail, settle, type CheckFn } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
 import { alive, spawnWorker } from "./spawn.ts";
 import { finishPatrol, patrolRun } from "./patrol.ts";
+import { settleRound } from "../products/settle.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
@@ -806,7 +807,18 @@ export class Executors {
         this.publish(
           id,
           decision.publish,
-          published,
+          {
+            ...published,
+            // 产品部的研究：把工作目录里的选项单登记上，结果（cN 或错误）随完成事件交给产品部 leader。
+            ...(decision.publish === "done"
+              ? settleRound(
+                  this.ctx.db,
+                  this.ctx.inbox,
+                  this.ctx.launchOptions.data,
+                  id,
+                )
+              : {}),
+          },
           active.stop?.kind === "user" ? active.stop.by : undefined,
         );
       if (!isReviewTask(this.ctx.db, id))

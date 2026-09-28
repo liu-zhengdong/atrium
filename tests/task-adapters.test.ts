@@ -571,6 +571,35 @@ test("pickWorker：按富余选，跳过没装与风险不允许的", () => {
     profiles: {},
   });
   assert.ok(partial.ok && partial.tool === "grok");
+
+  // 旧数不算富余：有新数的排在旧数之前；只剩旧数时整体按固定顺序。
+  const stale = pickWorker({
+    installed: ["claude", "grok", "kimi"],
+    pace: [
+      { providerId: "claude", sparePercent: -30, stale: true },
+      { providerId: "grok", sparePercent: 90, stale: true },
+      { providerId: "kimi", sparePercent: 5 },
+    ],
+    risk: "low",
+    profiles: {},
+  });
+  assert.ok(stale.ok);
+  assert.deepEqual(stale.available, ["kimi", "claude", "grok"]);
+  assert.equal(stale.basis, "pace");
+  const allStale = pickWorker({
+    installed: ["claude", "grok"],
+    pace: [
+      { providerId: "claude", sparePercent: -30, stale: true },
+      { providerId: "grok", sparePercent: 90, stale: true },
+    ],
+    risk: "low",
+    profiles: {},
+  });
+  assert.ok(allStale.ok);
+  assert.deepEqual(
+    [allStale.tool, allStale.basis, allStale.spare],
+    ["claude", "fallback", undefined],
+  );
 });
 
 test("pickWorker：已用额度触及保留线时跳过，边界与多窗口都生效", () => {
@@ -676,6 +705,35 @@ test("readPace / parsePace：失败返回 undefined", async () => {
   }
   assert.equal(parsePace('{"a":1}'), undefined);
   assert.deepEqual(parsePace('[1, {"providerId": 2}]'), []);
+  assert.deepEqual(
+    parsePace(
+      '[{"providerId":"cursor","sparePercent":40,"stale":true,"refreshedHoursAgo":3.2},{"providerId":"grok","sparePercent":1,"stale":"yes"},{"providerId":"kimi","sparePercent":2,"stale":true}]',
+    ),
+    [
+      {
+        providerId: "cursor",
+        sparePercent: 40,
+        usedPercent: null,
+        windowId: null,
+        stale: true,
+        refreshedHoursAgo: 3.2,
+      },
+      {
+        providerId: "grok",
+        sparePercent: 1,
+        usedPercent: null,
+        windowId: null,
+      },
+      {
+        providerId: "kimi",
+        sparePercent: 2,
+        usedPercent: null,
+        windowId: null,
+        stale: true,
+        refreshedHoursAgo: null,
+      },
+    ],
+  );
 });
 
 test("worktreePlan：路径、分支与 slug", () => {

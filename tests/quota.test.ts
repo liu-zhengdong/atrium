@@ -105,6 +105,8 @@ function account(
     hoursToReset: null,
     shortWindowUsedPercent: null,
     refreshedAt: null,
+    stale: false,
+    refreshedHoursAgo: null,
     runtime: null,
     hold: null,
     ...partial,
@@ -142,6 +144,29 @@ test("parseQuotaAccounts / sortBySpare：沿用字段、富余降序、无数据
   assert.deepEqual(
     sortBySpare(parsed).map((row) => row.providerId),
     ["opencode", "claude", "codex", "copilot"],
+  );
+  const stale = parseQuotaAccounts(
+    JSON.stringify([
+      {
+        providerId: "cursor",
+        sparePercent: 90,
+        stale: true,
+        refreshedHoursAgo: 3,
+      },
+      { providerId: "kimi", sparePercent: -40, stale: false },
+    ]),
+  );
+  assert.deepEqual(
+    stale.map((row) => [row.providerId, row.stale, row.refreshedHoursAgo]),
+    [
+      ["cursor", true, 3],
+      ["kimi", false, null],
+    ],
+  );
+  assert.deepEqual(
+    sortBySpare(stale).map((row) => row.providerId),
+    ["kimi", "cursor"],
+    "旧数不参与富余排序",
   );
   assert.equal(parseQuotaAccounts("[]").length, 0);
   assert.throws(() => parseQuotaAccounts("oops"), /OpenQuota 输出无法解析/);
@@ -457,6 +482,19 @@ test("文本表：中文表头、按传入顺序、来源与说明列、运行�
       }),
       account({ providerId: "kimi", note: "没有额度数据" }),
       account({ providerId: "copilot" }),
+      account({
+        providerId: "cursor",
+        source: "openquota",
+        usedPercent: 40,
+        stale: true,
+        refreshedHoursAgo: 2.5,
+      }),
+      account({
+        providerId: "grok",
+        source: "builtin",
+        stale: true,
+        note: "读自 h2",
+      }),
     ],
     ["读取 OpenQuota 额度超时"],
   );
@@ -473,7 +511,9 @@ test("文本表：中文表头、按传入顺序、来源与说明列、运行�
   assert.match(lines[3]!, /^claude\s+自带\s+读不到：Claude 用量接口限流$/);
   assert.match(lines[4]!, /^kimi\s+没有额度数据$/);
   assert.match(lines[5]!, /^copilot\s*$/);
-  assert.equal(lines[6], "读取 OpenQuota 额度超时");
+  assert.match(lines[6]!, /^cursor\s+OpenQuota\s+40\s+旧数（2\.5 小时前）$/);
+  assert.match(lines[7]!, /^grok\s+自带\s+旧数；读自 h2$/);
+  assert.equal(lines[8], "读取 OpenQuota 额度超时");
   assert.equal(formatQuotaTable([]), "没有账号额度数据");
 });
 

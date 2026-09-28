@@ -41,6 +41,10 @@ export type QuotaAccount = {
   hoursToReset: number | null;
   shortWindowUsedPercent: number | null;
   refreshedAt: string | null;
+  /** 读数超过 10 分钟没刷新（OpenQuota 的 stale，自带读取器同一口径）：不参与富余排序。 */
+  stale: boolean;
+  /** 读数是多少小时前刷新的；不知道为 null。 */
+  refreshedHoursAgo: number | null;
   /** 未到期标记的文案（预计恢复时刻 / 恢复时间未知）；没有标记为 null。 */
   runtime: string | null;
   /** 同一标记的结构化形式，--json 消费；没有标记为 null。 */
@@ -130,6 +134,8 @@ function row(
     hoursToReset: finiteNumber(item.hoursToReset),
     shortWindowUsedPercent: finiteNumber(item.shortWindowUsedPercent),
     refreshedAt: typeof item.refreshedAt === "string" ? item.refreshedAt : null,
+    stale: item.stale === true,
+    refreshedHoursAgo: finiteNumber(item.refreshedHoursAgo),
     runtime: runtime?.note ?? null,
     hold: runtime?.hold ?? null,
     ...(Array.isArray(item.hosts)
@@ -174,17 +180,18 @@ function parseQuotaRows(
   return accounts;
 }
 
-/** 按 sparePercent 降序；没有富余数据的排在最后，同富余按账号名。 */
+/** 按 sparePercent 降序；没有富余数据的与旧数排在最后，同富余按账号名。 */
 export function sortBySpare(accounts: readonly QuotaAccount[]): QuotaAccount[] {
+  const spareOf = (account: QuotaAccount) =>
+    account.stale ? null : account.sparePercent;
   return [...accounts].sort((a, b) => {
-    if (a.sparePercent === null && b.sparePercent === null)
+    const sa = spareOf(a);
+    const sb = spareOf(b);
+    if (sa === null && sb === null)
       return a.providerId.localeCompare(b.providerId);
-    if (a.sparePercent === null) return 1;
-    if (b.sparePercent === null) return -1;
-    return (
-      b.sparePercent - a.sparePercent ||
-      a.providerId.localeCompare(b.providerId)
-    );
+    if (sa === null) return 1;
+    if (sb === null) return -1;
+    return sb - sa || a.providerId.localeCompare(b.providerId);
   });
 }
 

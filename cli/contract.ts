@@ -44,7 +44,7 @@ export function commandOnly(next: string | null): string | null {
   return first && start >= 0 ? first.slice(start) : null;
 }
 
-export function errorCode(error: unknown): ErrorCode {
+function errorCode(error: unknown): ErrorCode {
   if (error instanceof Problem && error.code in exitCodes)
     return error.code as ErrorCode;
   return "internal";

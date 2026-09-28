@@ -1,8 +1,7 @@
 import { profileDb } from "./profile-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
@@ -12,10 +11,10 @@ import {
   DEFAULT_QUOTA_RESERVE_PERCENT,
   quotaReserve,
   readQuotaReservePercent,
-} from "../server/tasks/budget.ts";
-import { chooseWorker } from "../server/tasks/worker-choice.ts";
+} from "../server/tasks/quota/budget.ts";
+import { chooseWorker } from "../server/tasks/dispatch/worker-choice.ts";
 import { writeFakeBin } from "./fake-bin.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 /** 只有根节点的组织树（带空档案表），根节点配置写上保留份额（不写就不设）。 */
 function rootWithReserve(reserve?: number) {
@@ -53,8 +52,7 @@ test("保留份额只读组织树：没有库、没有根、根节点没设都�
 });
 
 test("指定执行者触及保留额时拒绝并给出可选执行者；自动派活避开该账号", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-budget-choice-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-budget-choice-");
   const bin = join(dir, "bin");
   mkdirSync(bin);
   for (const name of ["grok", "kimi", "codex"]) {

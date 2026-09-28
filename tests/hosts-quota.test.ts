@@ -6,7 +6,7 @@ import { accountKey } from "../server/quota-readers/credentials.ts";
 import { claudeAccount } from "../server/quota-readers/claude.ts";
 import { parseCodexLogin } from "../server/quota-readers/codex.ts";
 import { claudeAccountFile } from "../server/quota-readers/paths.ts";
-import { usableByProvider } from "../server/tasks/quota-source.ts";
+import { usableByProvider } from "../server/tasks/quota/quota-source.ts";
 
 /** 额度多主机合并（#358 第 2 步）：按账号合并、CLI 能在哪几台用、账号指纹。纯函数穷举。 */
 

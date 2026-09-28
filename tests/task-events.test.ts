@@ -1,25 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventInbox, ackIds, listOptions } from "../server/tasks/events.ts";
+import {
+  EventInbox,
+  ackIds,
+  listOptions,
+} from "../server/tasks/events/events.ts";
 import {
   LEASE_MS,
   deliverable,
   selfInitiated,
   type DeliveryState,
-} from "../server/tasks/event-lease.ts";
+} from "../server/tasks/events/event-lease.ts";
 import {
   advanceTask,
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import { TaskRunner } from "../server/tasks/runner.ts";
 import type { Exec } from "../server/tasks/git.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 test("事件队列：落库、同键合并、攒批窗口、wait 唤醒、ack 后不再投递", async () => {
   const db = new DatabaseSync(":memory:");
@@ -295,8 +298,7 @@ test("事件队列按判定投递：逐格与纯函数一致，租约到期唤�
 });
 
 test("服务重启自愈：running 且 pid 已不在、日志判不了结局的任务收尾为 failed 并投递事件", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-recover-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-recover-");
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   createTask(db, { title: "orphan", deliver: "none" });
@@ -321,8 +323,7 @@ test("服务重启自愈：running 且 pid 已不在、日志判不了结局的�
 });
 
 test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立事件", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-ci-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-ci-");
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const calls: string[][] = [];
@@ -416,9 +417,9 @@ test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立�
 });
 
 test("事件分级、攒批与摘要：过程不叫醒，第三次退回转卡住", async () => {
-  const { eventLevel } = await import("../server/tasks/event-level.ts");
+  const { eventLevel } = await import("../server/tasks/events/event-level.ts");
   const { settleSeconds, sinceTime } =
-    await import("../server/tasks/events.ts");
+    await import("../server/tasks/events/events.ts");
   const info = [
     "merge_queued",
     "merge_returned",

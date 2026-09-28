@@ -1,23 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adoptedEnd } from "../server/tasks/adopted-exit.ts";
-import { decideExit, exitDetail } from "../server/tasks/outcome.ts";
+import { adoptedEnd } from "../server/tasks/dispatch/adopted-exit.ts";
+import { decideExit, exitDetail } from "../server/tasks/gates/outcome.ts";
 import {
   advanceTask,
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import { TaskRunner } from "../server/tasks/runner.ts";
 import {
   discardLegacyIdleRestart,
@@ -27,7 +20,7 @@ import {
 import { until } from "./task-fixture.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { spawnCommand } from "../server/platform/index.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 const line = (event: object) => JSON.stringify(event);
 const CLAUDE_OK = [
@@ -153,8 +146,7 @@ test("接管后退出的收尾决定：正常结束过关卡，出错判失败�
 });
 
 function setup(t: { after: (fn: () => void) => void }) {
-  const root = mkdtempSync(join(tmpdir(), "atrium-adopted-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-adopted-");
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const runner = new TaskRunner(db, {
@@ -349,8 +341,7 @@ test("退出情况写进事件：接管后退出带判定依据，有退出码�
 });
 
 test("旧版遗留的待空闲重启记录：丢弃并记日志，不再挡派活", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-legacy-idle-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-legacy-idle-");
   for (const status of ["waiting_idle", "idle_timeout"] as const) {
     writeRestartState(root, {
       id: `rst-${status}`,

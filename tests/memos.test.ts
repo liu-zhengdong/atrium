@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { publishTask } from "../server/tasks/notice.ts";
+import { publishTask } from "../server/tasks/events/notice.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import {
   dateOf,
@@ -20,7 +18,7 @@ import {
 import { ensureMemoTables, memoText } from "../server/memos/store.ts";
 import { leaderRule } from "../server/leaders/scope.ts";
 import { until } from "./task-fixture.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 /**
  * 备忘（每位一份）与决定记录（只记用户拍板的事）：纯函数判定穷举；集成走内存服务，
@@ -184,8 +182,7 @@ test("早先 org_leaders.memo 里的 leader 备忘启动时迁到 memos，已有
 // ---- 集成 ----
 
 async function open(t: { after: (fn: () => unknown) => void }) {
-  const data = mkdtempSync(join(tmpdir(), "atrium-memos-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-memos-");
   const runs: LeaderRunSpec[] = [];
   let behave: (spec: LeaderRunSpec) => Promise<"ok"> = async () => "ok";
   const created = await createApp({

@@ -1,5 +1,5 @@
-import type { AdoptedEnd } from "../adopted-exit.ts";
-import type { AbnormalEnd } from "../json-log.ts";
+import type { AdoptedEnd } from "../dispatch/adopted-exit.ts";
+import type { AbnormalEnd } from "../logs/json-log.ts";
 import type { OutputRules } from "./types.ts";
 
 /**

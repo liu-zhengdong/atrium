@@ -102,7 +102,7 @@ export type OpencodeMessage = {
   parts: { type: string; text?: string }[];
 };
 
-export class OpencodeHttpError extends Error {
+class OpencodeHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,

@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 import { Problem } from "../../problem.ts";
-import type { Risk, Trust } from "../profiles.ts";
+import type { Risk, Trust } from "../workers/profiles.ts";
 
 /**
  * 执行者适配器（#262 B 部分）：每个工具一份数据 + 一个把「提示词、工作目录、模型、思考强度」
@@ -152,7 +152,7 @@ export const ARG_PROMPT_MAX_BYTES = 256 * 1024;
 /** 输入不合法：接口层转成 400。 */
 export const invalid = (message: string) => new Problem(400, message);
 
-export function checkArgPrompt(adapter: Adapter, prompt: string) {
+function checkArgPrompt(adapter: Adapter, prompt: string) {
   if (!prompt.trim()) throw invalid("提示词为空");
   const limit = adapter.maxPromptBytes ?? ARG_PROMPT_MAX_BYTES;
   const size = Buffer.byteLength(prompt, "utf8");

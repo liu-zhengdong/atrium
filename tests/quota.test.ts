@@ -16,7 +16,7 @@ import {
   sortBySpare,
   type QuotaAccount,
   type QuotaList,
-} from "../server/tasks/quota.ts";
+} from "../server/tasks/quota/quota.ts";
 import {
   clock,
   DEFAULT_UNKNOWN_HOLD_MS,
@@ -25,14 +25,14 @@ import {
   quotaReason,
   releaseHold,
   type QuotaHold,
-} from "../server/tasks/quota-holds.ts";
+} from "../server/tasks/quota/quota-holds.ts";
 import {
   readOpenquotaPace,
   resolveOpenquotaBin,
   OPENQUOTA_BIN,
-} from "../server/tasks/openquota.ts";
+} from "../server/tasks/quota/openquota.ts";
 import { writeFakeBin } from "./fake-bin.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { removeTemp, tempDir } from "./temp-dir.ts";
 
 const SAMPLE = [
   {
@@ -518,8 +518,7 @@ test("文本表：中文表头、按传入顺序、来源与说明列、运行�
 });
 
 test("HTTP GET /api/quota：认证、假 pace、缺失 OpenQuota", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-quota-http-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-quota-http-");
   const guarded = await createApp({
     data: join(data, "guarded"),
   });

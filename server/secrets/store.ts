@@ -27,6 +27,7 @@ import {
   staleSecret,
   type SecretCandidate,
 } from "./model.ts";
+import { hasTable, marks } from "../sqlite.ts";
 
 /**
  * 凭据的存储：`node_secrets` 一个凭据一行（只有名称、时间、谁设的、清理线索，没有值），
@@ -75,20 +76,12 @@ export type SecretRow = {
   hinted_at: number | null;
 };
 
-export const secretsRoot = (data: string) => join(data, "secrets");
+const secretsRoot = (data: string) => join(data, "secrets");
 const valueFile = (data: string, id: number) =>
   join(secretsRoot(data), String(id));
 
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
-const marks = (n: number) => Array.from({ length: n }, () => "?").join(",");
-
 /** 给人看的一行：没有值，也不给值的长度。 */
-export function secretView(
+function secretView(
   row: SecretRow,
   list?: ReadonlyMap<number, NodeRow>,
   now = Date.now(),
@@ -125,7 +118,7 @@ function findRow(db: DatabaseSync, node: number, name: string) {
   );
 }
 
-export function getSecret(db: DatabaseSync, address: unknown, name: unknown) {
+function getSecret(db: DatabaseSync, address: unknown, name: unknown) {
   if (typeof address !== "string" || !address.trim())
     throw new Problem(400, "节点: 要写凭据挂在哪个节点上，如 o4", "usage");
   const node = nodeByAddress(db, address.trim());
@@ -308,7 +301,7 @@ export function staleSecrets(
   const list = byId(db);
   return all<SecretRow>(
     db,
-    `SELECT * FROM node_secrets WHERE archived_at IS NULL AND keep_at IS NULL AND node_id IN (${marks(nodeIds.length)}) ORDER BY id LIMIT 2000`,
+    `SELECT * FROM node_secrets WHERE archived_at IS NULL AND keep_at IS NULL AND node_id IN (${marks(nodeIds)}) ORDER BY id LIMIT 2000`,
     ...nodeIds,
   )
     .map((row) => ({ row, view: secretView(row, list, now) }))
@@ -322,7 +315,7 @@ export function markSecretsHinted(
 ) {
   if (!ids.length) return;
   db.prepare(
-    `UPDATE node_secrets SET hinted_at=? WHERE id IN (${marks(ids.length)})`,
+    `UPDATE node_secrets SET hinted_at=? WHERE id IN (${marks(ids)})`,
   ).run(now, ...ids);
 }
 
@@ -351,7 +344,7 @@ export function writeTaskSecrets(
 }
 
 /** 本节点在前、逐级往上的节点链；没有节点时是各个根节点；没有组织树时为空。 */
-export function secretChain(db: DatabaseSync, start: number | null) {
+function secretChain(db: DatabaseSync, start: number | null) {
   if (!hasTable(db, "org_nodes")) return [];
   const list = nodes(db);
   if (start === null)
@@ -368,7 +361,7 @@ export function secretChain(db: DatabaseSync, start: number | null) {
 }
 
 /** 在节点链上按名称找（只看没归档的，一次查询）。 */
-export function findSecrets(
+function findSecrets(
   db: DatabaseSync,
   start: number | null,
   names: readonly string[],
@@ -378,7 +371,7 @@ export function findSecrets(
     names.length && chain.length && hasTable(db, "node_secrets")
       ? all<SecretCandidate>(
           db,
-          `SELECT id,node_id,name FROM node_secrets WHERE archived_at IS NULL AND name IN (${marks(names.length)}) AND node_id IN (${marks(chain.length)})`,
+          `SELECT id,node_id,name FROM node_secrets WHERE archived_at IS NULL AND name IN (${marks(names)}) AND node_id IN (${marks(chain)})`,
           ...names,
           ...chain,
         )
@@ -489,6 +482,6 @@ export function markSecretsUsed(
 ) {
   if (!ids.length) return;
   db.prepare(
-    `UPDATE node_secrets SET last_used_at=?,last_used_task=? WHERE id IN (${marks(ids.length)})`,
+    `UPDATE node_secrets SET last_used_at=?,last_used_task=? WHERE id IN (${marks(ids)})`,
   ).run(now, taskId, ...ids);
 }

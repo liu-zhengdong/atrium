@@ -12,7 +12,7 @@ import {
   STILL_RUNNING_MS,
   type FileRun,
 } from "./still-running.ts";
-import { scanOutput, stuckAt } from "../server/tasks/check-quiet.ts";
+import { scanOutput, stuckAt } from "../server/tasks/merge/check-quiet.ts";
 import { removeTemp } from "./temp-dir.ts";
 
 test("runStep：文件级的开始与结束、用例结束，其余事件不管", () => {

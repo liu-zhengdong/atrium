@@ -6,20 +6,19 @@ import {
   createTask,
   advanceTask,
   noteTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import {
   createJobRole,
   editJobRole,
   getJobRole,
   jobRoleHistory,
-} from "../server/tasks/job-roles.ts";
+} from "../server/tasks/workers/job-roles.ts";
 import {
   listDeliveries,
   summarizeDeliveries,
   activeJobChecks,
   markDeliveryFinal,
-} from "../server/tasks/delivery-records.ts";
-import { removeTemp } from "./temp-dir.ts";
+} from "../server/tasks/gates/delivery-records.ts";
 const db = () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
@@ -132,7 +131,7 @@ test("交付事实、冲突不归责、未知强度、五次样本后数据够",
 });
 
 test("角色可配置 screenshots，未知关卡仍拒绝", async () => {
-  const { evaluateGates } = await import("../server/tasks/gates.ts");
+  const { evaluateGates } = await import("../server/tasks/gates/gates.ts");
   const d = db();
   const r = role(d);
   assert.deepEqual(
@@ -213,7 +212,7 @@ test("执行中角色关卡用派活时修订；统计跨有界分页包含所�
 });
 
 test("专员避让作用于默认挑人", async () => {
-  const { pickWorker } = await import("../server/tasks/prepare.ts");
+  const { pickWorker } = await import("../server/tasks/dispatch/prepare.ts");
   const choice = pickWorker({
     installed: { codex: "/tmp/codex", claude: "/tmp/claude" },
     risk: "low",

@@ -4,12 +4,10 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   carriedEnvironment,
@@ -33,7 +31,7 @@ import { agentAlive, runAgent } from "../server/agent/run.ts";
 import { AgentState } from "../server/agent/state.ts";
 import { killTree, spawnNode } from "../server/platform/index.ts";
 import { writeFakeBin } from "./fake-bin.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 /**
  * 代理装成系统服务（t183）：服务定义与步骤按三平台穷举（纯函数）；
@@ -455,8 +453,7 @@ const LOCAL: ServicePlatform[] =
 
 for (const platform of LOCAL)
   test(`${platform}（假系统命令）：装、再装不动、环境变了重装、看状态、卸载、再卸载`, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "atrium-agent-service-"));
-    t.after(() => removeTemp(root));
+    const root = tempDir(t, "atrium-agent-service-");
     const fake = fakeSystem(root);
     const data = join(root, "agent-data");
     mkdirSync(data);
@@ -596,8 +593,7 @@ for (const platform of LOCAL)
   });
 
 test("同一数据目录只跑一个代理：服务里的代理等前台的停下，前台的遇到服务里的拒绝", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-agent-lock-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-agent-lock-");
   const data = join(root, "data");
   const state = new AgentState(data);
   state.saveConfig({

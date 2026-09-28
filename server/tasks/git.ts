@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { runFile } from "../platform/index.ts";
 import { Problem } from "../problem.ts";
-import type { WorktreePlan } from "./prepare.ts";
+import type { WorktreePlan } from "./dispatch/prepare.ts";
 
 /**
  * 派活与验收用到的只读 git / gh 调用和建 worktree（#262）。

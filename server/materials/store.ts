@@ -35,6 +35,7 @@ import {
   type Stale,
   type Upload,
 } from "./model.ts";
+import { hasTable, marks } from "../sqlite.ts";
 
 /**
  * 资料的存储：四张新表（materials、material_versions、material_reads、material_links），
@@ -125,15 +126,11 @@ type VersionRow = {
   created_at: number;
 };
 
-export const materialsRoot = (data: string) => join(data, "materials");
+const materialsRoot = (data: string) => join(data, "materials");
 export const versionDir = (data: string, id: number, version: number) =>
   join(materialsRoot(data), materialRef(id), `v${version}`);
 
-/** 读者的叫法：秘书、aN，或任务 tN（执行者 material get）。 */
-export const readerWord = (reader: string) =>
-  reader === "secretary" ? "秘书" : reader;
-
-export function materialView(row: MaterialRow, list?: readonly NodeRow[]) {
+function materialView(row: MaterialRow, list?: readonly NodeRow[]) {
   const node = list?.find((n) => n.id === row.node_id);
   return {
     ref: materialRef(row.id),
@@ -175,8 +172,6 @@ export function getMaterial(db: DatabaseSync, reference: unknown): MaterialRow {
   return row;
 }
 
-const marks = (n: number) => Array.from({ length: n }, () => "?").join(",");
-
 /** 关联的目标都得在：任务、要点、决定各查一次（IN），不在循环里查库。 */
 function checkLinks(db: DatabaseSync, links: readonly Link[]) {
   const tables: Record<LinkKind, string> = {
@@ -191,7 +186,7 @@ function checkLinks(db: DatabaseSync, links: readonly Link[]) {
       hasTable(db, tables[kind])
         ? all<{ id: number }>(
             db,
-            `SELECT id FROM ${tables[kind]} WHERE id IN (${marks(ids.length)})`,
+            `SELECT id FROM ${tables[kind]} WHERE id IN (${marks(ids)})`,
             ...ids,
           ).map((r) => r.id)
         : [],
@@ -205,13 +200,6 @@ function checkLinks(db: DatabaseSync, links: readonly Link[]) {
       );
   }
 }
-
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
 
 const sha = (bytes: Buffer | string) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -378,7 +366,7 @@ function linkAll(db: DatabaseSync, id: number, links: readonly Link[]) {
 }
 
 /** 关联是否都已结束：按类别各查一次；任务结束、要点删了、决定被推翻或不在了都算结束。 */
-export function linkFacts(
+function linkFacts(
   db: DatabaseSync,
   ids: readonly number[],
 ): Map<number, { ref: string; ended: boolean }[]> {
@@ -386,7 +374,7 @@ export function linkFacts(
   if (!ids.length) return result;
   const links = all<{ material_id: number; kind: LinkKind; target_id: number }>(
     db,
-    `SELECT material_id,kind,target_id FROM material_links WHERE material_id IN (${marks(ids.length)}) ORDER BY material_id,kind,target_id`,
+    `SELECT material_id,kind,target_id FROM material_links WHERE material_id IN (${marks(ids)}) ORDER BY material_id,kind,target_id`,
     ...ids,
   );
   const open = (kind: LinkKind, sql: string, table: string) => {
@@ -397,7 +385,7 @@ export function linkFacts(
     return new Set(
       all<{ id: number }>(
         db,
-        `${sql} AND id IN (${marks(targets.length)})`,
+        `${sql} AND id IN (${marks(targets)})`,
         ...targets,
       ).map((r) => r.id),
     );
@@ -713,8 +701,7 @@ export function staleMaterials(
   nodeIds: readonly number[] | null,
   now = Date.now(),
 ): (StaleItem & { hinted_at: number | null })[] {
-  const scope =
-    nodeIds === null ? "" : ` AND node_id IN (${marks(nodeIds.length)})`;
+  const scope = nodeIds === null ? "" : ` AND node_id IN (${marks(nodeIds)})`;
   if (nodeIds !== null && !nodeIds.length) return [];
   const rows = all<MaterialRow>(
     db,
@@ -776,7 +763,7 @@ export function markHinted(
 ) {
   if (!ids.length) return;
   db.prepare(
-    `UPDATE materials SET ${column}=? WHERE id IN (${marks(ids.length)})`,
+    `UPDATE materials SET ${column}=? WHERE id IN (${marks(ids)})`,
   ).run(now, ...ids);
 }
 

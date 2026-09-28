@@ -183,7 +183,7 @@ try {
     drainWatch.unref();
   };
   // 执行者在独立进程组里，不随服务退出；新服务按 pid 接管，重启窗口内退出的由
-  // 接管后的收尾补上（server/tasks/recovery.ts），所以随时可以重启，不等空闲。
+  // 接管后的收尾补上（server/tasks/dispatch/recovery.ts），所以随时可以重启，不等空闲。
   app.post("/api/service/prepare-restart", async (request, reply) => {
     const body =
       (request.body as

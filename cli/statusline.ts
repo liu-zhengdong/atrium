@@ -3,13 +3,13 @@ import {
   HOLDER_WIDTH,
   type Holder,
   type HolderKind,
-} from "../server/tasks/holder.ts";
+} from "../server/tasks/watch/holder.ts";
 import { printJson, oneLine } from "./format.ts";
 import type { Command } from "./main.ts";
 import type { Client } from "./service.ts";
 import { duration, hostBrief, type Snapshot, type TopRow } from "./top.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
-import { planCounts } from "../server/tasks/plan-count.ts";
+import { planCounts } from "../server/tasks/ledger/plan-count.ts";
 import { pauseText } from "../server/pause.ts";
 import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
@@ -17,12 +17,12 @@ import {
   priorityCountsText,
   priorityTag,
   titleTag,
-} from "../server/tasks/priority.ts";
+} from "../server/tasks/ledger/priority.ts";
 import { recordNext } from "./contract.ts";
 import {
   secretaryText,
   type SecretaryTone,
-} from "../server/tasks/secretary-watch.ts";
+} from "../server/tasks/secretary/secretary-watch.ts";
 
 /**
  * `atrium statusline`（#355）：Claude Code 状态栏。数据经服务取（`/api/tasks/top` 与 `/api/tasks/plan`），
@@ -127,7 +127,7 @@ type Item = { row: Held } | { total: TopTotal; rows: Held[] };
  * 总任务下的子任务并成一行（t190）：「▸ t174「离开电脑也能拍板」5/12 · 在做 t181 xx…、t183 yy…」。
  * 等你的照旧单列，不藏进总任务里；没有总任务的照旧单行。位置取组里第一个子任务的位置。
  */
-export function groupRows(held: readonly Held[]): Item[] {
+function groupRows(held: readonly Held[]): Item[] {
   const items: Item[] = [];
   const groups = new Map<string, { total: TopTotal; rows: Held[] }>();
   for (const row of held) {

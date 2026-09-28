@@ -13,13 +13,16 @@ import {
   parseEvents,
   thinkingExhausted,
   type JsonEvent,
-} from "../server/tasks/json-log.ts";
-import { decideExit, type ExitDecision } from "../server/tasks/outcome.ts";
+} from "../server/tasks/logs/json-log.ts";
+import {
+  decideExit,
+  type ExitDecision,
+} from "../server/tasks/gates/outcome.ts";
 import {
   routeAfterThinking,
   thinkingAttempts,
-} from "../server/tasks/thinking.ts";
-import { getTask } from "../server/tasks/ledger.ts";
+} from "../server/tasks/watch/thinking.ts";
+import { getTask } from "../server/tasks/ledger/ledger.ts";
 import { startApp } from "./task-fixture.ts";
 
 import { isolatedPath, removeFakeBin } from "./fake-bin.ts";

@@ -1,9 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { request } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
@@ -24,8 +22,8 @@ import {
 } from "../server/map/view.ts";
 import { width } from "../server/text-width.ts";
 import { renderMapTree } from "../cli/map.ts";
-import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { createTask, ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
+import { tempDir } from "./temp-dir.ts";
 import { ensureHostTables } from "../server/hosts/model.ts";
 
 const node = (db: DatabaseSync, input: Record<string, unknown>) =>
@@ -295,8 +293,7 @@ test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；�
 // ---- 接口：认证、一次性链接、非本机、只读 ----
 
 async function service(t: { after: (fn: () => unknown) => void }) {
-  const data = mkdtempSync(join(tmpdir(), "atrium-map-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-map-");
   const created = await createApp({
     data,
     tasks: { pace: async () => undefined },

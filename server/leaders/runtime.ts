@@ -13,11 +13,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { contextOf } from "../map/context.ts";
 import { killTree, spawnCommand } from "../platform/index.ts";
 import { ADAPTERS } from "../tasks/adapters/index.ts";
-import type { EventInbox, InboxEvent } from "../tasks/events.ts";
-import { parseTaskRef } from "../tasks/ledger.ts";
-import { parseWorker } from "../tasks/profiles.ts";
-import { decideWake } from "../tasks/wake-rule.ts";
-import { workerEnvironment } from "../tasks/worker-env.ts";
+import type { EventInbox, InboxEvent } from "../tasks/events/events.ts";
+import { parseTaskRef } from "../tasks/ledger/ledger.ts";
+import { parseWorker } from "../tasks/workers/profiles.ts";
+import { decideWake } from "../tasks/secretary/wake-rule.ts";
+import { workerEnvironment } from "../tasks/dispatch/worker-env.ts";
 import {
   closeStaleWakes,
   markWakeEnd,
@@ -64,9 +64,9 @@ export type LeaderWakerOptions = {
   paused?: (leader?: string) => boolean;
 };
 
-export const LEADER_BATCH_MS = 30_000;
-export const LEADER_TIMEOUT_MS = 20 * 60_000;
-export const LEADER_MAX_FAILURES = 2;
+const LEADER_BATCH_MS = 30_000;
+const LEADER_TIMEOUT_MS = 20 * 60_000;
+const LEADER_MAX_FAILURES = 2;
 
 /**
  * 从环境读：ATRIUM_LEADER_BATCH_SECONDS（攒批）、ATRIUM_LEADER_TIMEOUT_MINUTES（单次唤醒上限）。
@@ -111,7 +111,7 @@ export function leaderEnvironment(
 }
 
 /** 缺省的 leader 进程：按执行者组合找适配器拉起，输出写 leaders/aN/log，超时或服务关闭时停整个进程组。 */
-export const runLeaderProcess: LeaderRun = async (spec) => {
+const runLeaderProcess: LeaderRun = async (spec) => {
   const worker = parseWorker(spec.worker);
   const adapter = ADAPTERS[worker.tool];
   mkdirSync(spec.dir, { recursive: true, mode: 0o700 });

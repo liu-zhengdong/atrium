@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveActor } from "../server/actor.ts";
 import { createApp } from "../server/app.ts";
@@ -12,7 +10,7 @@ import { addNode } from "../server/org/write.ts";
 import { addPoint } from "../server/org/points.ts";
 import { actsForUser } from "../shared/user.ts";
 import { defaultActor } from "../cli/worker-guard.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 test("以谁的名义：u1、secretary（秘书）与 leader；权限上秘书同用户", () => {
   const db = new DatabaseSync(":memory:");
@@ -73,8 +71,7 @@ test("leader 令牌不能以秘书名义；命令行缺省名义只在秘书会�
 });
 
 test("服务：?as=secretary 改档案、节点、配置，修订如实记秘书；不带仍记 u1", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-actor-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-actor-");
   const { app } = await createApp({
     data,
     auth: false,

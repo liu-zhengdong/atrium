@@ -5,16 +5,16 @@ import {
   riskRefusal,
   trustRefusal,
   runRequest,
-} from "../server/tasks/plan.ts";
+} from "../server/tasks/dispatch/plan.ts";
 import {
   decideExit,
   needsFacts,
   type Exit,
   type Stop,
-} from "../server/tasks/outcome.ts";
-import { RISKS, TRUSTS, type Risk } from "../server/tasks/profiles.ts";
-import { TASK_STATUSES } from "../server/tasks/state.ts";
-import type { Verdict } from "../server/tasks/gates.ts";
+} from "../server/tasks/gates/outcome.ts";
+import { RISKS, TRUSTS, type Risk } from "../server/tasks/workers/profiles.ts";
+import { TASK_STATUSES } from "../server/tasks/ledger/state.ts";
+import type { Verdict } from "../server/tasks/gates/gates.ts";
 
 test("派活计划穷举：状态 × 在跑 × 排队 → 受理或拒绝", () => {
   let cases = 0;

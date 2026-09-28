@@ -36,7 +36,7 @@ export type ClaudeLogin = {
   rateLimitTier: string | null;
 };
 
-export function parseClaudeLogin(text: string): ClaudeLogin | undefined {
+function parseClaudeLogin(text: string): ClaudeLogin | undefined {
   const document = parseJsonDocument(text);
   if (!isObject(document) || !isObject(document.claudeAiOauth))
     return undefined;

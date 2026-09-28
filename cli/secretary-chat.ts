@@ -1,6 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { InboxEvent } from "../server/tasks/events.ts";
-import { decideWake, nextWakeCount } from "../server/tasks/wake-rule.ts";
+import type { InboxEvent } from "../server/tasks/events/events.ts";
+import {
+  decideWake,
+  nextWakeCount,
+} from "../server/tasks/secretary/wake-rule.ts";
 import type {
   AcpConnection,
   AcpUpdate,
@@ -8,8 +11,8 @@ import type {
   PermissionRequest,
   StopReason,
 } from "./acp.ts";
-import { wakePrompt } from "../server/tasks/wake-prompt.ts";
-export { wakePrompt } from "../server/tasks/wake-prompt.ts";
+import { wakePrompt } from "../server/tasks/secretary/wake-prompt.ts";
+export { wakePrompt } from "../server/tasks/secretary/wake-prompt.ts";
 
 /**
  * ACP 托管的秘书会话（#307 第 2 步）：Atrium 持有会话，用户消息与待处理事件都作为新一轮送入。

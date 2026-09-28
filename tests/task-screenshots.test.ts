@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { evaluateGates, type Facts } from "../server/tasks/gates.ts";
+import { evaluateGates, type Facts } from "../server/tasks/gates/gates.ts";
 import {
   checkScreenshot,
   readScreenshots,
   screenshotUrls,
-} from "../server/tasks/screenshot-facts.ts";
+} from "../server/tasks/gates/screenshot-facts.ts";
 
 const pr = {
   number: 1,

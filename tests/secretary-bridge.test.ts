@@ -1,17 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { DatabaseSync } from "node:sqlite";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   EventInbox,
   listenInput,
   type InboxEvent,
-} from "../server/tasks/events.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+} from "../server/tasks/events/events.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import {
   bridgeClaim,
   bridgeLine,
@@ -21,16 +20,16 @@ import {
   planBatch,
   recordSent,
   type Sent,
-} from "../server/tasks/bridge-plan.ts";
+} from "../server/tasks/secretary/bridge-plan.ts";
 import { SecretaryBridge, type BridgeSource } from "../cli/secretary-bridge.ts";
 import { sessionInbox, withBridgeHook } from "../cli/secretary.ts";
 import { chatMode } from "../cli/chat.ts";
-import { SecretaryFallback } from "../server/tasks/secretary-fallback.ts";
-import { saveSecretarySession } from "../server/tasks/secretary-session.ts";
+import { SecretaryFallback } from "../server/tasks/secretary/secretary-fallback.ts";
+import { saveSecretarySession } from "../server/tasks/secretary/secretary-session.ts";
 import { createApp } from "../server/app.ts";
 import { main } from "../cli/main.ts";
 import { Problem } from "../server/problem.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 async function until(check: () => boolean, what: string, ms = 5000) {
   const end = Date.now() + ms;
@@ -204,8 +203,7 @@ test("SessionStart hook：合并进已有设置，已装过不重复，结构认
 });
 
 test("--install-hook 写进秘书目录的 .claude/settings.local.json，保留原有设置；坏 JSON 不改", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-bridge-hook-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-bridge-hook-");
   const file = join(dir, ".claude", "settings.local.json");
   mkdirSync(join(dir, ".claude"));
   writeFileSync(file, JSON.stringify({ permissions: { allow: ["Bash"] } }));
@@ -307,8 +305,7 @@ test("在听：请求体校验，有效期内算在听，过期或 stop 即不�
 });
 
 test("服务接口：POST/GET /api/events/listen 报与查在听，坏请求体 400", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-bridge-app-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-bridge-app-");
   const { app } = await createApp({
     data,
     auth: false,
@@ -344,8 +341,7 @@ test("服务接口：POST/GET /api/events/listen 报与查在听，坏请求体 
 });
 
 test("bridge 在听时后台兜底不另起秘书；不听了再接手", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-bridge-fallback-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-bridge-fallback-");
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const inbox = new EventInbox(db);
@@ -411,8 +407,7 @@ async function fakeInbox(path: string) {
 }
 
 test("bridge：经 socket 送认证行和一条消息；按编号去重，没确认的满间隔再提醒；会话没了就退出", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-bridge-sock-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-bridge-sock-");
   const path =
     process.platform === "win32"
       ? `\\\\.\\pipe\\atrium-bridge-test-${process.pid}-${Date.now()}`

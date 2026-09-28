@@ -3,6 +3,7 @@ import { recordNext } from "./contract.ts";
 import { printJson, when } from "./format.ts";
 import { longWait } from "./long-wait.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 
 /**
  * 推送到手机（atrium notify）：用户自己在 @BotFather 建机器人，token 从标准输入交给服务存进
@@ -11,10 +12,6 @@ import type { Command, Values } from "./main.ts";
  */
 
 const client = async () => (await import("./service.ts")).connect();
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 
 type Status = {
   configured: boolean;

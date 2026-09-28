@@ -15,7 +15,7 @@ import {
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import {
   killLine,
   LEFTOVER_LIMIT,
@@ -29,8 +29,11 @@ import {
   type LeftoverKill,
   type LeftoverRow,
   type LeftoverTarget,
-} from "../server/tasks/leftovers.ts";
-import { cleanHost, reapLeftovers } from "../server/tasks/leftovers-reap.ts";
+} from "../server/tasks/dispatch/leftovers.ts";
+import {
+  cleanHost,
+  reapLeftovers,
+} from "../server/tasks/dispatch/leftovers-reap.ts";
 
 /**
  * host clean 清残留执行者进程（t217）：哪些算残留（纯函数穷举）、本机与代理共用的核对结束（假进程读数）、

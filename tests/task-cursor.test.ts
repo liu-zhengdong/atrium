@@ -5,19 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADAPTERS, detectInstalled } from "../server/tasks/adapters/index.ts";
 import { cursorModel } from "../server/tasks/adapters/cursor.ts";
-import { recentAction } from "../server/tasks/action.ts";
-import { adoptedEnd } from "../server/tasks/adopted-exit.ts";
+import { recentAction } from "../server/tasks/logs/action.ts";
+import { adoptedEnd } from "../server/tasks/dispatch/adopted-exit.ts";
 import {
   abnormalEnding,
   lastAssistantText,
   parseEvents,
-} from "../server/tasks/json-log.ts";
-import { FALLBACK_ORDER } from "../server/tasks/prepare.ts";
-import { resolveWorker } from "../server/tasks/profiles.ts";
-import { detectQuotaExhausted } from "../server/tasks/quota-signal.ts";
-import { countSteps } from "../server/tasks/summary.ts";
-import { tellModeOf } from "../server/tasks/tell.ts";
-import { detectTransient } from "../server/tasks/transient.ts";
+} from "../server/tasks/logs/json-log.ts";
+import { FALLBACK_ORDER } from "../server/tasks/dispatch/prepare.ts";
+import { resolveWorker } from "../server/tasks/workers/profiles.ts";
+import { detectQuotaExhausted } from "../server/tasks/quota/quota-signal.ts";
+import { countSteps } from "../server/tasks/logs/summary.ts";
+import { tellModeOf } from "../server/tasks/dispatch/tell.ts";
+import { detectTransient } from "../server/tasks/watch/transient.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { profileDb } from "./profile-fixture.ts";
 import { startApp, until } from "./task-fixture.ts";

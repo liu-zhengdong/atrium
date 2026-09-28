@@ -1,11 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -13,11 +7,14 @@ import test from "node:test";
 import { createApp } from "../server/app.ts";
 import { leaderRule } from "../server/leaders/scope.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { resolveWorker, splitDeliveryNotes } from "../server/tasks/profiles.ts";
+import {
+  resolveWorker,
+  splitDeliveryNotes,
+} from "../server/tasks/workers/profiles.ts";
 import {
   editProfile,
   profileView,
-} from "../server/tasks/worker-profile-edit.ts";
+} from "../server/tasks/workers/worker-profile-edit.ts";
 import {
   importWorkerProfiles,
   listProfiles,
@@ -28,13 +25,12 @@ import {
   PROFILE_MAX_BYTES,
   readProfile,
   writeProfile,
-} from "../server/tasks/worker-profiles.ts";
+} from "../server/tasks/workers/worker-profiles.ts";
 import { profileDb } from "./profile-fixture.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { removeTemp, tempDir } from "./temp-dir.ts";
 
 function legacyDir(t: { after: (fn: () => void) => void }) {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-workers-legacy-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-workers-legacy-");
   for (const sub of ["harness", "models", "combos"]) mkdirSync(join(dir, sub));
   const write = (file: string, text: string) =>
     writeFileSync(join(dir, file), text);
@@ -354,8 +350,7 @@ test("改档案：整份替换或按字段改，校验不过不写，留修订",
 });
 
 test("接口：带旧运行时表的库启动时导入档案，ls/show/edit 走库，leader 不能改档案", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-profiles-app-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-profiles-app-");
   const legacy = new DatabaseSync(join(data, "atrium.sqlite"));
   legacy.exec(
     "CREATE TABLE deliveries (id INTEGER PRIMARY KEY, body TEXT); CREATE TABLE agents (id TEXT PRIMARY KEY);",

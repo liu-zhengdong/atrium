@@ -6,7 +6,7 @@ import {
   probeEndpoint,
   type EndpointResult,
 } from "../server/platform/endpoint.ts";
-import type { InboxEvent } from "../server/tasks/events.ts";
+import type { InboxEvent } from "../server/tasks/events/events.ts";
 import {
   BRIDGE_VIA,
   LISTEN_EVERY_MS,
@@ -19,12 +19,12 @@ import {
   recordSent,
   type BridgeRecord,
   type Sent,
-} from "../server/tasks/bridge-plan.ts";
+} from "../server/tasks/secretary/bridge-plan.ts";
 
 /**
  * `atrium secretary bridge` 的常驻循环（t243）：挂 `events wait` 取秘书要处理的事件，
  * 拼成一条经 Claude Code 会话收件 socket 送进会话；定时向服务报「在听」，会话没了就退出。
- * 不确认事件（秘书处理完自己 ack）。判定在 `server/tasks/bridge-plan.ts`。
+ * 不确认事件（秘书处理完自己 ack）。判定在 `server/tasks/secretary/bridge-plan.ts`。
  */
 
 export type BridgeSource = {
@@ -155,8 +155,7 @@ const message = (error: unknown) =>
 
 // ---- 登记（数据目录 secretary/bridge.json）----
 
-export const bridgeFile = (data: string) =>
-  join(data, "secretary", "bridge.json");
+const bridgeFile = (data: string) => join(data, "secretary", "bridge.json");
 export const bridgeLog = (data: string) =>
   join(data, "secretary", "bridge.log");
 

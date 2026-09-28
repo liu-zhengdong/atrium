@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
@@ -10,11 +9,15 @@ import {
   BRIEF_MAX_BYTES,
   briefText,
   clipBrief,
-} from "../server/tasks/brief.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
-import { createTask, getTask, updateTask } from "../server/tasks/ledger.ts";
-import { prepareRun } from "../server/tasks/workspace.ts";
-import { removeTemp } from "./temp-dir.ts";
+} from "../server/tasks/ledger/brief.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
+import {
+  createTask,
+  getTask,
+  updateTask,
+} from "../server/tasks/ledger/ledger.ts";
+import { prepareRun } from "../server/tasks/dispatch/workspace.ts";
+import { tempDir } from "./temp-dir.ts";
 
 const stdin = (text: string, tty = false) =>
   Object.assign(Readable.from([Buffer.from(text)]), {
@@ -36,8 +39,7 @@ test("详述内容校验：非文本拒绝、空白算没有、超限说明大�
 });
 
 test("--brief 文件或 -：读成内容带来源；空、超限、终端上的 - 都报错", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-brief-cli-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-brief-cli-");
   const file = join(dir, "b.md");
   writeFileSync(file, "# 文件详述");
   assert.deepEqual(await briefInput(file, same), {
@@ -68,8 +70,7 @@ test("--brief 文件或 -：读成内容带来源；空、超限、终端上的 
 });
 
 test("建任务存详述内容，改文件不影响；改详述事件只记字数；派活读库里的内容", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-brief-ledger-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-brief-ledger-");
   const db = new DatabaseSync(":memory:");
   t.after(() => db.close());
   ensureTaskTables(db);

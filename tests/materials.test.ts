@@ -38,7 +38,7 @@ import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import { collect } from "../cli/materials.ts";
 import { workerReadable } from "../cli/worker-guard.ts";
 import { until } from "./task-fixture.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { removeTemp, tempDir } from "./temp-dir.ts";
 
 /**
  * 资料（t192 第 1 步）：纯函数（短号、路径、名称、关联、上传校验、清理线索、真删、派活清单）穷举；
@@ -320,8 +320,7 @@ test("leader 权限表：加、归档、恢复、留下按节点判，取资料�
 // ---- 集成 ----
 
 async function open(t: { after: (fn: () => unknown) => void }) {
-  const data = mkdtempSync(join(tmpdir(), "atrium-materials-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-materials-");
   // 旧运行时留下的 attachments 表：不读不写，也不妨碍启动。
   const legacy = new DatabaseSync(join(data, "atrium.sqlite"));
   legacy.exec(
@@ -742,7 +741,7 @@ test("leader 令牌：负责的部门里能加、归档、留下，别处的不�
     }
     return "ok";
   });
-  const { publishTask } = await import("../server/tasks/notice.ts");
+  const { publishTask } = await import("../server/tasks/events/notice.ts");
   publishTask(x.taskRunner.inbox, x.db, 1, "failed", { reason: "测试没过" });
   await until(() => checked || failure !== undefined, 20000);
   if (failure) throw failure;

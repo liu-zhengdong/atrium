@@ -10,7 +10,11 @@ import {
 } from "../org/model.ts";
 import { addDecision, decisionRef } from "../memos/decisions.ts";
 import { partRoute } from "../leaders/subscriber.ts";
-import { atomically, createTask, parseTaskRef } from "../tasks/ledger.ts";
+import {
+  atomically,
+  createTask,
+  parseTaskRef,
+} from "../tasks/ledger/ledger.ts";
 import {
   choiceRef,
   decideRight,

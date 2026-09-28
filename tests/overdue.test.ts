@@ -9,15 +9,18 @@ import {
   HOLDER_WIDTH,
   holderOf,
   type HolderFacts,
-} from "../server/tasks/holder.ts";
-import { holderFor } from "../server/tasks/holder-facts.ts";
-import { EventInbox, ensureEventTables } from "../server/tasks/events.ts";
-import { eventLevel } from "../server/tasks/event-level.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
-import { createTask, noteTask } from "../server/tasks/ledger.ts";
-import { advanceTask } from "../server/tasks/ledger-transition.ts";
-import { addTaskNote } from "../server/tasks/notes.ts";
-import { downstreamOf } from "../server/tasks/schedule-ledger.ts";
+} from "../server/tasks/watch/holder.ts";
+import { holderFor } from "../server/tasks/watch/holder-facts.ts";
+import {
+  EventInbox,
+  ensureEventTables,
+} from "../server/tasks/events/events.ts";
+import { eventLevel } from "../server/tasks/events/event-level.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
+import { createTask, noteTask } from "../server/tasks/ledger/ledger.ts";
+import { advanceTask } from "../server/tasks/ledger/ledger-transition.ts";
+import { addTaskNote } from "../server/tasks/ledger/notes.ts";
+import { downstreamOf } from "../server/tasks/ledger/schedule-ledger.ts";
 import {
   DUE,
   dueStep,
@@ -25,8 +28,8 @@ import {
   overdueDetail,
   spanText,
   type DueKind,
-} from "../server/tasks/overdue.ts";
-import { patrolOverdue } from "../server/tasks/overdue-runtime.ts";
+} from "../server/tasks/watch/overdue.ts";
+import { patrolOverdue } from "../server/tasks/watch/overdue-runtime.ts";
 import { pushOf } from "../server/notify/model.ts";
 import { width } from "../server/text-width.ts";
 

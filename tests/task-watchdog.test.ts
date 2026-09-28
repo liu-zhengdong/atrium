@@ -2,22 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
-import {
-  appendFileSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { getTask } from "../server/tasks/ledger.ts";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { getTask } from "../server/tasks/ledger/ledger.ts";
 import {
   finalClaudeResult,
   ProgressProbe,
   STEP_CHUNK,
-} from "../server/tasks/watchdog.ts";
+} from "../server/tasks/watch/watchdog.ts";
 import { startApp, until } from "./task-fixture.ts";
 import { writeFakeBin } from "./fake-bin.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 test("最终 result 判定只接受最后一轮完整收尾", () => {
   const result =
@@ -39,8 +33,7 @@ test("最终 result 判定只接受最后一轮完整收尾", () => {
 });
 
 test("步骤计数：日志里出现超过 1 MiB 的单行后，后续步骤照常计数", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-probe-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-probe-");
   const log = join(dir, "run.log");
   const step = '{"type":"assistant"}\n';
   writeFileSync(log, "");

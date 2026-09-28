@@ -9,17 +9,17 @@ import {
   firstSentence,
   recentAction,
   structuredAction,
-} from "../server/tasks/action.ts";
-import { commandGist } from "../server/tasks/command-gist.ts";
-import { readLogTail } from "../server/tasks/log-view.ts";
+} from "../server/tasks/logs/action.ts";
+import { commandGist } from "../server/tasks/logs/command-gist.ts";
+import { readLogTail } from "../server/tasks/logs/log-view.ts";
 import {
   advanceTask,
   addTaskNote,
   createTask,
   ensureTaskTables,
   noteTask,
-} from "../server/tasks/ledger.ts";
-import { enqueue, ensureQueueTable } from "../server/tasks/queue.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { enqueue, ensureQueueTable } from "../server/tasks/dispatch/queue.ts";
 import {
   countRows,
   RECENT_MS,
@@ -29,7 +29,7 @@ import {
   topRows,
   type TopRow as LedgerRow,
 } from "../server/tasks/top.ts";
-import type { TaskEventRow } from "../server/tasks/ledger-model.ts";
+import type { TaskEventRow } from "../server/tasks/ledger/ledger-model.ts";
 import {
   renderTop,
   watch,
@@ -44,7 +44,7 @@ import { width } from "../cli/format.ts";
 import { commands, help } from "../cli/main.ts";
 import { guide } from "../cli/guide.ts";
 import { startApp } from "./task-fixture.ts";
-import { HostLoad } from "../server/tasks/host-load.ts";
+import { HostLoad } from "../server/tasks/dispatch/host-load.ts";
 import { ensureHostTables } from "../server/hosts/model.ts";
 
 /**

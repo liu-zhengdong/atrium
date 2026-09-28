@@ -18,10 +18,10 @@ import { killTree, processAlive } from "../server/platform/index.ts";
 import { fixture, until } from "./task-fixture.ts";
 import { QuotaReaders } from "../server/quota-readers/index.ts";
 import { skippedSkillsLine } from "../cli/tasks.ts";
-import { resolveWorker } from "../server/tasks/profiles.ts";
-import type { Executors } from "../server/tasks/executors.ts";
-import { HostLoad } from "../server/tasks/host-load.ts";
-import { getTask } from "../server/tasks/ledger.ts";
+import { resolveWorker } from "../server/tasks/workers/profiles.ts";
+import type { Executors } from "../server/tasks/dispatch/executors.ts";
+import { HostLoad } from "../server/tasks/dispatch/host-load.ts";
+import { getTask } from "../server/tasks/ledger/ledger.ts";
 import { DatabaseSync } from "node:sqlite";
 
 /**

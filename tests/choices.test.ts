@@ -1,14 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { authPolicy } from "../server/auth-policy.ts";
-import { publishTask } from "../server/tasks/notice.ts";
+import { publishTask } from "../server/tasks/events/notice.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import { choiceAddVerdict, leaderRule } from "../server/leaders/scope.ts";
 import {
@@ -38,7 +37,7 @@ import { choiceText } from "../cli/choices.ts";
 import { choiceFileOf, settleRound } from "../server/choices/settle.ts";
 import { width } from "../server/text-width.ts";
 import { until } from "./task-fixture.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 const option = (n: number, over: Record<string, unknown> = {}) => ({
   title: `选项${n}`,
@@ -558,8 +557,7 @@ test("看板与状态栏：有等拍板的选项单时在第一行下面单出�
 // ---- 集成 ----
 
 async function open(t: { after: (fn: () => unknown) => void }) {
-  const data = mkdtempSync(join(tmpdir(), "atrium-choices-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-choices-");
   mkdirSync(data, { recursive: true });
   const legacy = new DatabaseSync(join(data, "atrium.sqlite"));
   legacy.exec(

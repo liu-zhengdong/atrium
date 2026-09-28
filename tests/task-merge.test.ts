@@ -9,14 +9,14 @@ import { exec, type Exec } from "../server/tasks/git.ts";
 import {
   MAX_MERGE_RETURNS,
   mergeFailure,
-} from "../server/tasks/merge-decision.ts";
+} from "../server/tasks/merge/merge-decision.ts";
 import { eventTrail, startApp } from "./task-fixture.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
-import { MergeQueue } from "../server/tasks/merge-runtime.ts";
-import { MergeClaim } from "../server/tasks/merge-claim.ts";
-import { getTask } from "../server/tasks/ledger.ts";
-import { listTells } from "../server/tasks/tell-ledger.ts";
-import { whoLabel } from "../server/tasks/holder.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
+import { MergeQueue } from "../server/tasks/merge/merge-runtime.ts";
+import { MergeClaim } from "../server/tasks/merge/merge-claim.ts";
+import { getTask } from "../server/tasks/ledger/ledger.ts";
+import { listTells } from "../server/tasks/dispatch/tell-ledger.ts";
+import { whoLabel } from "../server/tasks/watch/holder.ts";
 import { createApp } from "../server/app.ts";
 import { nodeCommand, sleepCommand, TRUE_COMMAND } from "./portable-shell.ts";
 

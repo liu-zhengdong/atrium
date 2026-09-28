@@ -67,7 +67,7 @@ function parseRev(value: unknown, field: string): number {
   return Number(match[1]);
 }
 
-export function skillBySlug(db: DatabaseSync, slug: string): SkillRow {
+function skillBySlug(db: DatabaseSync, slug: string): SkillRow {
   const row = one<SkillRow>(
     db,
     "SELECT * FROM org_skills WHERE slug=?",

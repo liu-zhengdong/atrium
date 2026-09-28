@@ -7,9 +7,9 @@ import {
   atomically,
   createTask,
   type Task,
-} from "../tasks/ledger.ts";
+} from "../tasks/ledger/ledger.ts";
 import { startPatrol } from "../tasks/patrol.ts";
-import type { EventInbox } from "../tasks/events.ts";
+import type { EventInbox } from "../tasks/events/events.ts";
 import { publishMaterialHints } from "../materials/hints.ts";
 import { publishSecretHints } from "../secrets/hints.ts";
 import { catchUp, dayLabel, decide, localOffset, type Offset } from "./plan.ts";
@@ -37,7 +37,7 @@ type Round = { task: Task; scenario?: string };
  * 建出本轮的任务（在调用方事务里）：patrol 按节点的 uses 场景轮换，task / research 是节点下的普通任务，
  * research 只调研、不交 PR（工作目录写了 choice.json 就登记成选项单，见 choices/settle.ts）。
  */
-export function createRound(
+function createRound(
   db: DatabaseSync,
   row: Pick<
     ScheduleInput,
@@ -63,7 +63,7 @@ export function createRound(
 }
 
 /** 登记：先试建一轮再回滚，节点、专员、剧本建不出任务的当场报错，不等到点才失败。 */
-export function addSchedule(
+function addSchedule(
   db: DatabaseSync,
   raw: unknown,
   now = Date.now(),

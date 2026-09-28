@@ -10,15 +10,18 @@ import {
   kindOf,
   mergeShort,
   type HolderFacts,
-} from "../server/tasks/holder.ts";
+} from "../server/tasks/watch/holder.ts";
 import { width } from "../server/text-width.ts";
-import { holderFacts, holderFor } from "../server/tasks/holder-facts.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
-import { ensureEventTables } from "../server/tasks/events.ts";
-import { createTask, getTask } from "../server/tasks/ledger.ts";
-import { advanceTask, noteTask } from "../server/tasks/ledger-transition.ts";
-import { addTaskNote } from "../server/tasks/notes.ts";
-import type { TaskStatus } from "../server/tasks/state.ts";
+import { holderFacts, holderFor } from "../server/tasks/watch/holder-facts.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
+import { ensureEventTables } from "../server/tasks/events/events.ts";
+import { createTask, getTask } from "../server/tasks/ledger/ledger.ts";
+import {
+  advanceTask,
+  noteTask,
+} from "../server/tasks/ledger/ledger-transition.ts";
+import { addTaskNote } from "../server/tasks/ledger/notes.ts";
+import type { TaskStatus } from "../server/tasks/ledger/state.ts";
 import { ensureHostTables } from "../server/hosts/model.ts";
 
 const base: HolderFacts = {

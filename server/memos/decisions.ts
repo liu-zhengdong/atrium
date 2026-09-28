@@ -8,7 +8,8 @@ import {
   ref as nodeRef,
 } from "../org/model.ts";
 import { LOCAL_USER, SECRETARY } from "../../shared/user.ts";
-import { atomically, parseTaskRef } from "../tasks/ledger-model.ts";
+import { atomically, parseTaskRef } from "../tasks/ledger/ledger-model.ts";
+import { marks } from "../sqlite.ts";
 
 /**
  * 决定记录：只记用户拍板的事与原因，给人回看的档案（不附进任何提示词）。要守的规矩写成要点（org/points.ts）；
@@ -18,7 +19,7 @@ import { atomically, parseTaskRef } from "../tasks/ledger-model.ts";
 
 export const DECISION_LIMITS = { text: 300, why: 1000 };
 /** 一条决定至多挂几个节点。 */
-export const NODES_MAX = 10;
+const NODES_MAX = 10;
 export const PAGE_MAX = 200;
 export const PAGE_DEFAULT = 50;
 
@@ -28,7 +29,7 @@ export const decisionRef = (id: number) => `d${id}`;
 const usage = (message: string, next?: string) =>
   new Problem(400, message, "usage", undefined, next);
 
-export function parseDecisionRef(value: unknown, field = "决定"): number {
+function parseDecisionRef(value: unknown, field = "决定"): number {
   const match =
     typeof value === "string" ? DECISION_RE.exec(value.trim()) : null;
   if (!match) throw usage(`${field}: 决定短号应为 d1 这样的格式`);
@@ -191,10 +192,6 @@ export type Row = {
   created_at: number;
 };
 
-/** 参数化 IN 列表的占位符。 */
-export const marks = (list: readonly unknown[]) =>
-  list.map(() => "?").join(",");
-
 function append<K, V>(map: Map<K, V[]>, key: K, value: V) {
   const list = map.get(key);
   if (list) list.push(value);
@@ -261,7 +258,7 @@ function requireRow(db: DatabaseSync, id: number): Row {
   return row;
 }
 
-export function getDecision(db: DatabaseSync, id: number) {
+function getDecision(db: DatabaseSync, id: number) {
   return views(db, [requireRow(db, id)])[0]!;
 }
 

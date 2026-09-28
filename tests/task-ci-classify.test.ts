@@ -7,10 +7,10 @@ import {
   type Check,
   type Job,
   type Annotation,
-} from "../server/tasks/ci-classify.ts";
-import { readCi } from "../server/tasks/facts.ts";
-import { evaluateGates, type Facts } from "../server/tasks/gates.ts";
-import { decideExit } from "../server/tasks/outcome.ts";
+} from "../server/tasks/gates/ci-classify.ts";
+import { readCi } from "../server/tasks/gates/facts.ts";
+import { evaluateGates, type Facts } from "../server/tasks/gates/gates.ts";
+import { decideExit } from "../server/tasks/gates/outcome.ts";
 import type { Exec } from "../server/tasks/git.ts";
 
 const sample = JSON.parse(

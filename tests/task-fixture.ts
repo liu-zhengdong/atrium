@@ -1,21 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
-import type { PaceEntry } from "../server/tasks/prepare.ts";
+import type { PaceEntry } from "../server/tasks/dispatch/prepare.ts";
 import type { RunnerOptions } from "../server/tasks/runner.ts";
 import { writeFakeBin } from "./fake-bin.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 /** 派活集成测试的夹具（#262）：本地 bare origin + 临时仓库 + PATH 前置的假执行者 + 临时档案。 */
 
 type After = { after: (fn: () => void | Promise<void>) => void };
 
 export function fixture(t: After) {
-  const root = mkdtempSync(join(tmpdir(), "atrium-runner-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-runner-");
   const home = join(root, "home");
   mkdirSync(home);
   writeFileSync(

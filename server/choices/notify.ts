@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { SECRETARY } from "../leaders/route.ts";
 import { partRoute } from "../leaders/subscriber.ts";
 import { nodeByAddress } from "../org/model.ts";
-import type { EventInbox } from "../tasks/events.ts";
+import type { EventInbox } from "../tasks/events/events.ts";
 import { smallHint } from "./model.ts";
 import { decideChoice, type Choice, type Decided } from "./store.ts";
 
@@ -22,7 +22,7 @@ export const choiceBrief = (choice: Choice) => ({
 });
 
 /** 选项单所在节点最近的 leader；没有为 null。 */
-export function choiceLeader(db: DatabaseSync, choice: Choice): string | null {
+function choiceLeader(db: DatabaseSync, choice: Choice): string | null {
   const subscriber = partRoute(
     db,
     nodeByAddress(db, choice.node).id,
@@ -30,7 +30,7 @@ export function choiceLeader(db: DatabaseSync, choice: Choice): string | null {
   return subscriber === SECRETARY ? null : subscriber;
 }
 
-export function publishChoice(
+function publishChoice(
   inbox: EventInbox,
   subscriber: string,
   kind: string,

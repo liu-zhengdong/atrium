@@ -2,7 +2,8 @@ import { Problem } from "../server/problem.ts";
 import { SECRET_VALUE_MAX, secretValue } from "../server/secrets/model.ts";
 import { recordNext } from "./contract.ts";
 import { oneLine, printJson, table, when } from "./format.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 
 /**
  * 凭据（t194）：挂在节点上的令牌、密码，按「节点 + 名称」找，名称就是注入执行者时的环境变量名。
@@ -10,10 +11,6 @@ import type { Command, Values } from "./main.ts";
  * 清理只归档不删（archive / restore / keep），真删（rm）只有用户。
  */
 
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async () => (await import("./service.ts")).connect();
 
 type Secret = {
@@ -78,7 +75,7 @@ function readHidden(stdin: NodeJS.ReadStream, prompt: string): Promise<string> {
   });
 }
 
-export async function readSecretInput(
+async function readSecretInput(
   name: string,
   stdin: NodeJS.ReadStream = process.stdin,
 ) {

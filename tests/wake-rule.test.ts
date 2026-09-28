@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideWake, nextWakeCount } from "../server/tasks/wake-rule.ts";
+import {
+  decideWake,
+  nextWakeCount,
+} from "../server/tasks/secretary/wake-rule.ts";
 
 test("唤醒规则：攒批、会话可用、当前一轮、连续上限的所有组合", () => {
   const now = 10_000;

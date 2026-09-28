@@ -7,7 +7,7 @@ import {
   extractClaims,
   parseNumstat,
   type Facts,
-} from "../server/tasks/gates.ts";
+} from "../server/tasks/gates/gates.ts";
 
 const baseFacts: Facts = {
   repo: true,

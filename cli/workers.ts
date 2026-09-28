@@ -1,17 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Command, Values } from "./main.ts";
+import { str, strs } from "./args.ts";
 import { printJson, table, when } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
-import type { WorkerStat } from "../server/tasks/delivery-records.ts";
+import type { WorkerStat } from "../server/tasks/gates/delivery-records.ts";
 import { defaultActor } from "./worker-guard.ts";
-const str = (v: Values, k: string) =>
-  typeof v[k] === "string" ? (v[k] as string) : undefined;
-const strs = (v: Values, k: string) =>
-  Array.isArray(v[k])
-    ? (v[k] as unknown[]).filter((x): x is string => typeof x === "string")
-    : [];
 const client = async () => (await import("./service.ts")).connect();
 type List = { stats: WorkerStat[] };
 const percent = (n: number | null) =>

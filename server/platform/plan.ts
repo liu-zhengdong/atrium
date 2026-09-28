@@ -376,7 +376,7 @@ export function samePath(platform: Platform, a: string, b: string) {
 }
 
 /** 路径各段：Windows 上 / 与 \ 都是分隔符。 */
-export const pathSegments = (platform: Platform, path: string) =>
+const pathSegments = (platform: Platform, path: string) =>
   path.split(platform === "win32" ? /[\\/]/ : "/");
 
 /** 路径是否含 `..` 段（按平台的分隔符切）。 */

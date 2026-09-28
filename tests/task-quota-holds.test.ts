@@ -6,8 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { ADAPTERS, TOOLS } from "../server/tasks/adapters/index.ts";
-import { decideExit } from "../server/tasks/outcome.ts";
-import { pickWorker } from "../server/tasks/prepare.ts";
+import { decideExit } from "../server/tasks/gates/outcome.ts";
+import { pickWorker } from "../server/tasks/dispatch/prepare.ts";
 import {
   clock,
   DEFAULT_UNKNOWN_HOLD_MS,
@@ -22,9 +22,9 @@ import {
   clearHold,
   routeAfterQuota,
   type QuotaHold,
-} from "../server/tasks/quota-holds.ts";
-import { deliveredDespiteUnknownExit } from "../server/tasks/settle.ts";
-import type { Facts } from "../server/tasks/gates.ts";
+} from "../server/tasks/quota/quota-holds.ts";
+import { deliveredDespiteUnknownExit } from "../server/tasks/gates/settle.ts";
+import type { Facts } from "../server/tasks/gates/gates.ts";
 
 const NOW = Date.UTC(2026, 8, 27, 8, 0);
 const HOUR = 3_600_000;

@@ -11,7 +11,7 @@ import {
   parseCliSpec,
   type CliSpec,
 } from "../server/tasks/adapters/cli-spec.ts";
-import { parseProfileSource } from "../server/tasks/profiles.ts";
+import { parseProfileSource } from "../server/tasks/workers/profiles.ts";
 
 /**
  * 通用命令行执行者（t271）：档案写法解析、参数与环境展开、提示词三种给法、端点、结局判定，纯函数穷举。

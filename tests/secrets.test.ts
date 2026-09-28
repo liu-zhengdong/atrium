@@ -649,7 +649,7 @@ test("leader 令牌：负责的部门里能设值、归档、留下，别处的�
     }
     return "ok";
   });
-  const { publishTask } = await import("../server/tasks/notice.ts");
+  const { publishTask } = await import("../server/tasks/events/notice.ts");
   publishTask(x.taskRunner.inbox, x.db, 1, "failed", { reason: "测试没过" });
   await until(() => checked || failure !== undefined, 20000);
   if (failure) throw failure;

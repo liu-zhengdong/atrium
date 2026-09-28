@@ -9,12 +9,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { evaluateGates, type Facts } from "../server/tasks/gates.ts";
+import { evaluateGates, type Facts } from "../server/tasks/gates/gates.ts";
 import {
   checkCommand,
   runLocalCheck,
   type LocalCheck,
-} from "../server/tasks/local-check.ts";
+} from "../server/tasks/merge/local-check.ts";
 import { removeTemp } from "./temp-dir.ts";
 import { nodeCommand, sleepCommand } from "./portable-shell.ts";
 

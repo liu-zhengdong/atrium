@@ -9,6 +9,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import { defaultActor } from "./worker-guard.ts";
@@ -17,8 +18,6 @@ import { defaultActor } from "./worker-guard.ts";
  * atrium skill：组织技能（#264 第 3b 步）。技能存在 Atrium，派活时按节点绑定与执行者档案临时挂载。
  */
 
-const str = (values: Values, key: string) =>
-  typeof values[key] === "string" ? (values[key] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
 const path = (value: string) => encodeURIComponent(value);
 const as = (values: Values) => {

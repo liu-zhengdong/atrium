@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, one as orgOne, ref } from "../org/model.ts";
 import { overviewOf } from "../org/overview.ts";
-import { createTask, atomically } from "./ledger.ts";
+import { createTask, atomically } from "./ledger/ledger.ts";
 
 /**
  * 体验巡检（周期任务 kind=patrol）：按节点 uses 场景轮换，巡检进程连本机服务照场景用一遍；

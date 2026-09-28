@@ -1,27 +1,27 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
-import { TASK_STATUSES, isTaskStatus } from "../server/tasks/state.ts";
-import { DELIVERS, type Deliver } from "../server/tasks/deliver.ts";
+import { TASK_STATUSES, isTaskStatus } from "../server/tasks/ledger/state.ts";
+import { DELIVERS, type Deliver } from "../server/tasks/ledger/deliver.ts";
 import type {
   Task,
   TaskEventRow,
   TaskNode,
   TaskTree,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import {
   TREE_MAX,
   TREE_RECENT,
   TREE_ROOTS,
-} from "../server/tasks/ledger-model.ts";
-import { formatChildSummary } from "../server/tasks/ledger-summary.ts";
-import { planCounts } from "../server/tasks/plan-count.ts";
+} from "../server/tasks/ledger/ledger-model.ts";
+import { formatChildSummary } from "../server/tasks/ledger/ledger-summary.ts";
+import { planCounts } from "../server/tasks/ledger/plan-count.ts";
 import {
   progressOf,
   rollupLabel,
   rollupText,
   type Rollup,
-} from "../server/tasks/rollup.ts";
+} from "../server/tasks/ledger/rollup.ts";
 import { recordNext } from "./contract.ts";
 import {
   defaultActor,
@@ -31,28 +31,25 @@ import {
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Input, Values } from "./main.ts";
-import { signedPercent, staleLabel } from "../server/tasks/percent.ts";
+import { str } from "./args.ts";
+import { signedPercent, staleLabel } from "../server/tasks/quota/percent.ts";
 import type {
   PickAccount,
   PickCandidate,
   PickView,
   RunPick,
-} from "../server/tasks/pick.ts";
+} from "../server/tasks/dispatch/pick.ts";
 import { briefInput } from "./brief-input.ts";
 import {
   PRIORITY_LABEL,
   parsePriority,
   priorityTag,
   tagTitle,
-} from "../server/tasks/priority.ts";
+} from "../server/tasks/ledger/priority.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
 // 不从 main.ts 取值：测试会先加载本模块，main.ts 再回头引入时会撞上循环初始化。
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async () => (await import("./service.ts")).connect();
 const displayStatus = (
   task: Pick<Task, "status" | "delivery_stage" | "processing"> & {
@@ -774,7 +771,7 @@ const TELL_STATE: Record<string, string> = {
 };
 
 /** task show 里一条捎话事件：作者、送达状态、原文。 */
-export function tellLine(detail: string | null) {
+function tellLine(detail: string | null) {
   try {
     const tell = JSON.parse(detail ?? "") as {
       by?: string;

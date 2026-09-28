@@ -5,8 +5,8 @@ import {
   hasConclusion,
   shouldAsk,
   type ConclusionKind,
-} from "../server/tasks/conclusion.ts";
-import type { Exit, Stop } from "../server/tasks/outcome.ts";
+} from "../server/tasks/gates/conclusion.ts";
+import type { Exit, Stop } from "../server/tasks/gates/outcome.ts";
 
 const KINDS: ConclusionKind[] = ["review"];
 

@@ -8,7 +8,7 @@ import {
   ref as nodeRef,
   transaction,
 } from "../org/model.ts";
-import { parseWorker, workerId } from "../tasks/profiles.ts";
+import { parseWorker, workerId } from "../tasks/workers/profiles.ts";
 import {
   ensureMemoTables,
   MEMO_MAX,
@@ -18,6 +18,7 @@ import {
   writeMemo,
   type Memo,
 } from "../memos/store.ts";
+import { hasTable } from "../sqlite.ts";
 
 export { MEMO_MAX, memoProblem } from "../memos/store.ts";
 
@@ -85,20 +86,13 @@ export function ensureLeaderTables(db: DatabaseSync) {
   ensureMemoTables(db);
 }
 
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
-
 export const leaderRef = (id: number) => `a${id}`;
 
 const usage = (message: string, next?: string) =>
   new Problem(400, message, "usage", undefined, next);
 
 /** 解析 aN；格式不对是用法错误。 */
-export function leaderId(value: unknown, field = "leader"): number {
+function leaderId(value: unknown, field = "leader"): number {
   const text = typeof value === "string" ? value.trim() : "";
   const match = LEADER_RE.exec(text);
   if (!match)

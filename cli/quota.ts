@@ -2,9 +2,9 @@ import { recordNext, recordResult } from "./contract.ts";
 import { printJson, table, when } from "./format.ts";
 import type { Command } from "./main.ts";
 import { Problem } from "../server/problem.ts";
-import type { QuotaAccount, QuotaList } from "../server/tasks/quota.ts";
-import type { QuotaReserve } from "../server/tasks/budget.ts";
-import { staleLabel } from "../server/tasks/percent.ts";
+import type { QuotaAccount, QuotaList } from "../server/tasks/quota/quota.ts";
+import type { QuotaReserve } from "../server/tasks/quota/budget.ts";
+import { staleLabel } from "../server/tasks/quota/percent.ts";
 
 /**
  * 账号额度一览的命令行（#267、#352）：只经 HTTP 调服务，不直接读凭据或跑 OpenQuota。
@@ -74,7 +74,7 @@ export function formatQuotaTable(
 }
 
 /** 保留份额一行：你设过的，或缺省与怎么改。 */
-export function reserveLine(reserve: QuotaReserve | undefined): string | null {
+function reserveLine(reserve: QuotaReserve | undefined): string | null {
   if (!reserve) return null;
   return reserve.set_by
     ? `给你留的份额：每个账号至少 ${reserve.percent}%（atrium org limits 可改）`

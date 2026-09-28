@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { all, nodeByAddress, nodes, one, ref } from "../org/model.ts";
-import { briefText } from "../tasks/brief.ts";
-import { parseWorker, workerId } from "../tasks/profiles.ts";
+import { briefText } from "../tasks/ledger/brief.ts";
+import { parseWorker, workerId } from "../tasks/workers/profiles.ts";
 import {
   atText,
   everyText,
@@ -41,7 +41,7 @@ export function ensureScheduleTables(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS schedule_runs_task ON schedule_runs(task_id);`);
 }
 
-export const RUNS_KEPT = 20;
+const RUNS_KEPT = 20;
 
 export type ScheduleRow = {
   id: number;

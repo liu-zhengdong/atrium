@@ -19,14 +19,14 @@ import { envKey, type Invocation, type Platform } from "../platform/plan.ts";
 
 export type ServicePlatform = "darwin" | "linux" | "win32";
 
-export const LAUNCHD_LABEL = "dev.atrium.agent";
-export const SYSTEMD_UNIT = "atrium-agent.service";
-export const WINDOWS_TASK = "AtriumAgent";
+const LAUNCHD_LABEL = "dev.atrium.agent";
+const SYSTEMD_UNIT = "atrium-agent.service";
+const WINDOWS_TASK = "AtriumAgent";
 /** 异常退出后多久重起（秒）。 */
-export const RESTART_SECONDS = 10;
+const RESTART_SECONDS = 10;
 
 export const SERVICE_ENV_FILE = "service-env.json";
-export const SERVICE_LOG_FILE = "agent-service.log";
+const SERVICE_LOG_FILE = "agent-service.log";
 
 export function servicePlatform(platform: Platform): ServicePlatform | null {
   return platform === "darwin" || platform === "linux" || platform === "win32"

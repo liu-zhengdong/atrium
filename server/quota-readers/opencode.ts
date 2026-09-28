@@ -18,7 +18,7 @@ import type { QuotaWindow, ReadResult, Reader, ReaderDeps } from "./types.ts";
 export const OPENCODE_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 
 /** auth.json 里 opencode-go 的 key；没有这一项为 null，文件不是 JSON 对象为 undefined。 */
-export function parseOpencodeKey(text: string): string | null | undefined {
+function parseOpencodeKey(text: string): string | null | undefined {
   let document: unknown;
   try {
     document = JSON.parse(text);

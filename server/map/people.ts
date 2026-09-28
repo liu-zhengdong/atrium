@@ -2,14 +2,21 @@ import type { DatabaseSync } from "node:sqlite";
 import { taskPeople } from "./who.ts";
 import { Problem } from "../problem.ts";
 import { all, nodes, one } from "../org/model.ts";
-import { getJobRole, listJobRoles, type JobRole } from "../tasks/job-roles.ts";
-import type { Delivery, WorkerStat } from "../tasks/delivery-records.ts";
+import {
+  getJobRole,
+  listJobRoles,
+  type JobRole,
+} from "../tasks/workers/job-roles.ts";
+import type { Delivery, WorkerStat } from "../tasks/gates/delivery-records.ts";
 import {
   parseWorker,
   resolveWorker,
   type ProfileLayer,
-} from "../tasks/profiles.ts";
-import { workerReport, workersReport } from "../tasks/workers-report.ts";
+} from "../tasks/workers/profiles.ts";
+import {
+  workerReport,
+  workersReport,
+} from "../tasks/workers/workers-report.ts";
 import { runningHostNames } from "../hosts/model.ts";
 import {
   jobNames,
@@ -18,19 +25,13 @@ import {
   type LiveRow,
   type TaskRow,
 } from "./view.ts";
+import { hasTable } from "../sqlite.ts";
 
 /**
  * 全景网页的专员、技能、执行者视图（只读）：组织根的三个页签与专员页、执行者页。
  * 数据来自专员表、组织技能、交付记录与执行者档案（`atrium specialist`、`atrium workers` 同一份），
  * 这里只挑网页要的字段并把事实翻成人话（结果标签、经过、观察），判定写成纯函数。
  */
-
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
 
 // ---- 技能 ----
 

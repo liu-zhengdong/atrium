@@ -11,7 +11,7 @@ import { Problem } from "../problem.ts";
  */
 
 export const CONTEXT_MAX = 1500;
-export const CONTEXT_MIN = 200;
+const CONTEXT_MIN = 200;
 /** 一条要点里「为什么」最多占多少字，免得一条挤掉其余；整段放不下时先去掉「为什么」。 */
 const WHY_MAX = 40;
 

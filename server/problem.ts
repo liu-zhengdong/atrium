@@ -25,7 +25,7 @@ export class Problem extends Error {
 }
 
 /** 编辑距离；候选排序在名字之外也会拿模型 id 来比，所以单独抽出来共用。 */
-export function editDistance(a: string, b: string): number {
+function editDistance(a: string, b: string): number {
   let row = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
     const next = [i];

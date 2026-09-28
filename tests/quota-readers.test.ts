@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createApp } from "../server/app.ts";
@@ -56,9 +54,9 @@ import {
   parsePace,
   readPace,
   spareByProvider,
-} from "../server/tasks/prepare.ts";
-import { listQuota, type QuotaList } from "../server/tasks/quota.ts";
-import { removeTemp } from "./temp-dir.ts";
+} from "../server/tasks/dispatch/prepare.ts";
+import { listQuota, type QuotaList } from "../server/tasks/quota/quota.ts";
+import { tempDir } from "./temp-dir.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 
 const HOUR = 3_600_000;
@@ -1145,8 +1143,7 @@ test("atrium quota：没有 OpenQuota 时三家读取器给数据或读不到原
 });
 
 test("atrium quota 与 readPace：自带没覆盖的账号由 OpenQuota 补，读不到的不进挑执行者", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-quota-readers-"));
-  t.after(() => removeTemp(dir));
+  const dir = tempDir(t, "atrium-quota-readers-");
   const bin = fakeOpenquota(dir, [
     {
       providerId: "kimi",

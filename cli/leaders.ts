@@ -4,17 +4,14 @@ import type { LeaderView, LeaderWake } from "../server/leaders/model.ts";
 import { ESCALATE_KINDS } from "../server/leaders/wake.ts";
 import { recordNext } from "./contract.ts";
 import { printJson, when } from "./format.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 
 /**
  * leader 层（atrium leader …）：aN 是固定身份，按事唤醒、无常驻会话。
  * 登记与改名、换执行者只有用户能做；leader 进程里只能改自己的备忘、替自己上交（服务端判定）。
  */
 
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async () => (await import("./service.ts")).connect();
 const enc = encodeURIComponent;
 

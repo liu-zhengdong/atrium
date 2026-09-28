@@ -10,7 +10,7 @@ import {
  * 自定义端点（t271）：用配置覆盖加一个 model_provider。codex 已去掉 `wire_api = "chat"`（0.157 实测报
  * 「no longer supported」），只能接 Responses 接口；密钥由 codex 按 env_key 自己读环境。
  */
-export function codexEndpoint(endpoint: LaunchEndpoint): string[] {
+function codexEndpoint(endpoint: LaunchEndpoint): string[] {
   const set = (key: string, value: string) => [
     "-c",
     `model_providers.atrium.${key}=${JSON.stringify(value)}`,

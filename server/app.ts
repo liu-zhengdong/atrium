@@ -14,17 +14,17 @@ import { registerScheduleRoutes } from "./schedules/routes.ts";
 import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
-import { ensureTaskTables } from "./tasks/ledger-schema.ts";
+import { ensureTaskTables } from "./tasks/ledger/ledger-schema.ts";
 import { globalPause, migrateOldPauses, partPause } from "./pause.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
-import { registerQuotaRoute } from "./tasks/quota.ts";
+import { registerQuotaRoute } from "./tasks/quota/quota.ts";
 import type { QuotaReaders } from "./quota-readers/index.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 import {
   SecretaryFallback,
   type ResumeRun,
-} from "./tasks/secretary-fallback.ts";
-import type { EventInbox } from "./tasks/events.ts";
+} from "./tasks/secretary/secretary-fallback.ts";
+import type { EventInbox } from "./tasks/events/events.ts";
 import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
@@ -55,7 +55,7 @@ import {
 } from "./map/routes.ts";
 
 /** 打开数据库。旧运行时留下的表（身份、聊天、账号等）不读不写，也不因它们存在而报错。 */
-export function openDatabase(data: string) {
+function openDatabase(data: string) {
   const db = new DatabaseSync(join(data, "atrium.sqlite"));
   db.exec(
     "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;",

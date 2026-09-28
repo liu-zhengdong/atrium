@@ -1,6 +1,7 @@
 import { recordNext } from "./contract.ts";
 import { printJson } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 import { Problem } from "../server/problem.ts";
 import { pauseText, type Pause } from "../server/pause.ts";
 import { defaultActor } from "./worker-guard.ts";
@@ -8,8 +9,6 @@ import { defaultActor } from "./worker-guard.ts";
 /** 一键停机的命令行（server/pause.ts）：只经 HTTP 调服务。 */
 
 const client = async () => (await import("./service.ts")).connect();
-const str = (values: Values, key: string) =>
-  typeof values[key] === "string" ? (values[key] as string) : undefined;
 
 /** --part 节点、--host hN 两个只能给一个；都不给是全局。 */
 function scopeOf(values: Values) {

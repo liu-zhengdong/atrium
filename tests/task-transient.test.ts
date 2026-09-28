@@ -5,15 +5,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { idleFirst } from "../server/tasks/idle-first.ts";
-import { pickWorker } from "../server/tasks/prepare.ts";
-import { detectQuotaExhausted } from "../server/tasks/quota-signal.ts";
-import { abnormalEnding, parseEvents } from "../server/tasks/json-log.ts";
+import { idleFirst } from "../server/tasks/dispatch/idle-first.ts";
+import { pickWorker } from "../server/tasks/dispatch/prepare.ts";
+import { detectQuotaExhausted } from "../server/tasks/quota/quota-signal.ts";
+import { abnormalEnding, parseEvents } from "../server/tasks/logs/json-log.ts";
 import {
   detectTransient,
   routeAfterTransient,
   transientAttempts,
-} from "../server/tasks/transient.ts";
+} from "../server/tasks/watch/transient.ts";
 
 const cert = readFileSync(
   new URL("./fixtures/transient/opencode-cert.jsonl", import.meta.url),

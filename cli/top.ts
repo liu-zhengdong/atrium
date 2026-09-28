@@ -3,18 +3,19 @@ import { Problem } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
 import { oneLine, pad, printJson, width } from "./format.ts";
 import type { Client } from "./service.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
 import { renderTopMap } from "./map.ts";
 import { DEPTH_MAX, type MapTreeNode } from "../server/map/view.ts";
 import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
-import type { HostView } from "../server/tasks/host-load.ts";
+import type { HostView } from "../server/tasks/dispatch/host-load.ts";
 import {
   secretaryText,
   type SecretaryView,
-} from "../server/tasks/secretary-watch.ts";
-import type { Holder } from "../server/tasks/holder.ts";
+} from "../server/tasks/secretary/secretary-watch.ts";
+import type { Holder } from "../server/tasks/watch/holder.ts";
 import { pauseText, resumeCommand, type Pause } from "../server/pause.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
@@ -24,8 +25,8 @@ import {
   tagTitle,
   type Priority,
   type PriorityCounts,
-} from "../server/tasks/priority.ts";
-import { heldText } from "../server/tasks/overdue.ts";
+} from "../server/tasks/ledger/priority.ts";
+import { heldText } from "../server/tasks/watch/overdue.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -72,7 +73,7 @@ export type TopRow = {
  * 按最近的总任务分组（t190）：组里的行挪到组里第一行的位置、前面加一行总任务；
  * 没有总任务的照旧单行。返回画的次序，heading 为 null 的是普通行。
  */
-export function groupByTotal(
+function groupByTotal(
   rows: readonly TopRow[],
 ): { heading: TopTotal | null; rows: TopRow[] }[] {
   const out: { heading: TopTotal | null; rows: TopRow[] }[] = [];
@@ -94,7 +95,7 @@ export function groupByTotal(
 }
 
 /** 「▸ t174 离开电脑也能拍板 5/12 · 在做 t181、t183」 */
-export function totalHeading(total: TopTotal, rows: readonly TopRow[]) {
+function totalHeading(total: TopTotal, rows: readonly TopRow[]) {
   const live = rows.filter((row) => !FINISHED.has(phase(row)));
   return `▸ ${total.ref} ${total.title} ${total.progress}${live.length ? ` · 在做 ${live.map((row) => row.ref).join("、")}` : ""}`;
 }
@@ -156,10 +157,6 @@ export type Snapshot = {
 };
 
 // 不从 main.ts 取值：测试先加载本模块，main.ts 再回头引入会撞上循环初始化。
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async (): Promise<Client> =>
   (await import("./service.ts")).connect();
 
@@ -542,7 +539,7 @@ const rowTakesStateWidth = (row: TopRow) => {
 };
 
 /** 下一步：先看在跑的，没有就看列表里第一个；一个都没有就叫建任务。 */
-export const nextOf = (rows: TopRow[]) => {
+const nextOf = (rows: TopRow[]) => {
   const live = rows.find((row) => phase(row) === "running") ?? rows[0];
   return live ? `atrium task show ${live.ref}` : "atrium task add 标题";
 };
@@ -609,7 +606,7 @@ export type Terminal = {
 };
 
 /** 真的终端才接管按键与清屏；q、Q、Ctrl-C、Ctrl-D 退出，其余按键忽略。 */
-export function liveTerminal(): Terminal {
+function liveTerminal(): Terminal {
   let release: (() => void) | undefined;
   return {
     columns: () => process.stdout.columns || 80,

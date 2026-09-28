@@ -10,7 +10,7 @@ import {
   detectQuotaExhausted,
   quotaErrorText,
   type QuotaVerdict,
-} from "../server/tasks/quota-signal.ts";
+} from "../server/tasks/quota/quota-signal.ts";
 
 const sample = (name: string) =>
   readFileSync(

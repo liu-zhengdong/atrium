@@ -42,7 +42,7 @@ export function ownerOf(db: DatabaseSync, value: unknown): string {
 }
 
 /** 一位的全貌：名称、备忘；秘书开新会话、网页详情页都用它。 */
-export function memoView(db: DatabaseSync, owner: string) {
+function memoView(db: DatabaseSync, owner: string) {
   const memo = readMemo(db, owner);
   const leader =
     owner === SECRETARY || owner === LOCAL_USER ? null : showLeader(db, owner);

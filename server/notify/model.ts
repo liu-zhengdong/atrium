@@ -14,7 +14,7 @@ import { oneLine } from "../text-width.ts";
 
 export type PushKind = "choice" | "stuck" | "beyond" | "shipped" | "away";
 
-export const PUSH_LABEL: Record<PushKind, string> = {
+const PUSH_LABEL: Record<PushKind, string> = {
   choice: "等你拍板",
   stuck: "卡住了",
   beyond: "越界要你定",
@@ -497,8 +497,8 @@ export function proxyText(proxy: string | null) {
 
 // ---- 设置与凭据 ----
 
-export const BATCH_DEFAULT_SECONDS = 60;
-export const BATCH_MAX_SECONDS = 3600;
+const BATCH_DEFAULT_SECONDS = 60;
+const BATCH_MAX_SECONDS = 3600;
 
 export function parseBatch(value: unknown): number {
   const raw = String(value ?? "").trim();

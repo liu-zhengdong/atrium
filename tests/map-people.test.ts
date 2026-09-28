@@ -1,4 +1,4 @@
-import { importWorkerProfiles } from "../server/tasks/worker-profiles.ts";
+import { importWorkerProfiles } from "../server/tasks/workers/worker-profiles.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,8 +17,8 @@ import {
   createTask,
   ensureTaskTables,
   noteTask,
-} from "../server/tasks/ledger.ts";
-import { createJobRole } from "../server/tasks/job-roles.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { createJobRole } from "../server/tasks/workers/job-roles.ts";
 import { editMap } from "../server/map/write.ts";
 import { mapNode } from "../server/map/view.ts";
 import {
@@ -31,7 +31,7 @@ import {
   mapWorkers,
   profileNotes,
 } from "../server/map/people.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { removeTemp, tempDir } from "./temp-dir.ts";
 
 // ---- 纯函数：结果标签、经过、档案里的观察 ----
 
@@ -271,8 +271,7 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
 });
 
 test("接口：网页会话能读角色、技能、执行者，不存在的给 404", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-map-people-app-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-map-people-app-");
   const { app } = await createApp({
     data,
     tasks: { pace: async () => undefined, workersDir: join(data, "workers") },

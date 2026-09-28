@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
-import { ensureUpstreamPrTable } from "../server/tasks/schedule-upstream.ts";
-import { taskPlan } from "../server/tasks/schedule.ts";
+import { createTask, ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
+import { ensureUpstreamPrTable } from "../server/tasks/ledger/schedule-upstream.ts";
+import { taskPlan } from "../server/tasks/ledger/schedule.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import {
   renderPlan,

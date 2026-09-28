@@ -1,5 +1,8 @@
 import type { LaunchEndpoint, Tool } from "../tasks/adapters/types.ts";
-import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
+import type {
+  LeftoverKill,
+  LeftoverTarget,
+} from "../tasks/dispatch/leftovers.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { SkillCopy, SkillMountAck } from "../skills/remote.ts";
 import type { AgentRun, HostInfo, HostLoadReport } from "./state.ts";

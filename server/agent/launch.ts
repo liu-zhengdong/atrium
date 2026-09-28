@@ -6,9 +6,9 @@ import { mountSkills, type Mount } from "../skills/mount.ts";
 import { fillSkillSlot, type SkillMountAck } from "../skills/remote.ts";
 import { ADAPTERS } from "../tasks/adapters/index.ts";
 import { ensureWorktree, firstLine, type Exec } from "../tasks/git.ts";
-import { spawnWorker } from "../tasks/spawn.ts";
-import { workerEnvironment } from "../tasks/worker-env.ts";
-import { buildLaunch } from "../tasks/workspace.ts";
+import { spawnWorker } from "../tasks/dispatch/spawn.ts";
+import { workerEnvironment } from "../tasks/dispatch/worker-env.ts";
+import { buildLaunch } from "../tasks/dispatch/workspace.ts";
 import type { Assignment } from "../hosts/protocol.ts";
 import { withSecrets } from "../secrets/model.ts";
 
@@ -37,7 +37,7 @@ export type Launched = {
 };
 
 /** 仓库还没克隆就克隆（大仓库可能要几分钟）；已克隆的交给 ensureWorktree 去 fetch。 */
-export async function ensureClone(url: string, clone: string, run: Exec) {
+async function ensureClone(url: string, clone: string, run: Exec) {
   if (existsSync(join(clone, ".git")) || existsSync(join(clone, "HEAD")))
     return;
   mkdirSync(dirname(clone), { recursive: true, mode: 0o700 });

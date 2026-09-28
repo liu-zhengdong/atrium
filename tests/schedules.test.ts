@@ -29,7 +29,7 @@ import {
   ensureScheduleTables,
   insertSchedule,
 } from "../server/schedules/model.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import { fixture, until } from "./task-fixture.ts";
 
 const utc8 = () => 480;

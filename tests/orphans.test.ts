@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readCwd, readEnv, snapshot } from "../server/platform/cpu.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import {
   cwdTask,
   cwdTaskIds,
@@ -19,7 +19,7 @@ import {
   spawnOwner,
   worktreesByPath,
   type TaskWorktree,
-} from "../server/tasks/orphans.ts";
+} from "../server/tasks/dispatch/orphans.ts";
 import { removeTemp } from "./temp-dir.ts";
 import type { StopSignal } from "../server/platform/plan.ts";
 

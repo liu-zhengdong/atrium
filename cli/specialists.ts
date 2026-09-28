@@ -1,11 +1,10 @@
 import { Problem } from "../server/problem.ts";
-import type { JobRole } from "../server/tasks/job-roles.ts";
+import type { JobRole } from "../server/tasks/workers/job-roles.ts";
 import { recordNext } from "./contract.ts";
 import { printJson, table } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 import { defaultActor } from "./worker-guard.ts";
-const str = (v: Values, k: string) =>
-  typeof v[k] === "string" ? (v[k] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
 const path = (s: string) => encodeURIComponent(s);
 const fields = (v: Values) => ({

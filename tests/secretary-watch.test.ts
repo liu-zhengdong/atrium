@@ -14,15 +14,15 @@ import {
   watchDecision,
   type SecretaryView,
   type WatchInput,
-} from "../server/tasks/secretary-watch.ts";
-import { EventInbox } from "../server/tasks/events.ts";
+} from "../server/tasks/secretary/secretary-watch.ts";
+import { EventInbox } from "../server/tasks/events/events.ts";
 import { createApp } from "../server/app.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import {
   SecretaryFallback,
   type SecretaryAlert,
-} from "../server/tasks/secretary-fallback.ts";
-import { saveSecretarySession } from "../server/tasks/secretary-session.ts";
+} from "../server/tasks/secretary/secretary-fallback.ts";
+import { saveSecretarySession } from "../server/tasks/secretary/secretary-session.ts";
 import { renderStatusline } from "../cli/statusline.ts";
 import { awayPush, messageText } from "../server/notify/model.ts";
 import { removeTemp } from "./temp-dir.ts";

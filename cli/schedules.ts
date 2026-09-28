@@ -1,12 +1,11 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 import { printJson, when } from "./format.ts";
 import { recordNext } from "./contract.ts";
 
-const str = (values: Values, key: string) =>
-  typeof values[key] === "string" ? (values[key] as string) : undefined;
 const api = async () => (await import("./service.ts")).connect();
 const enc = encodeURIComponent;
 
@@ -39,7 +38,7 @@ const stateText = { active: "", removed: "已删除" };
 const outcomeText = { created: "生成", skipped: "跳过", failed: "失败" };
 
 /** 周期的人话：每天、每 7 天、每 12 小时。 */
-export function everyWords(every: string, at: string | null) {
+function everyWords(every: string, at: string | null) {
   const match = /^(\d+)([mhd])$/.exec(every);
   const unit = { m: "分钟", h: "小时", d: "天" }[match?.[2] ?? "d"]!;
   const n = Number(match?.[1] ?? 0);
@@ -54,7 +53,7 @@ export function everyWords(every: string, at: string | null) {
 }
 
 /** 一行：s1 体验巡检 · 每天 09:30 · 命令行（o2）· 下次 09:30 · 上一轮 t12 done */
-export function scheduleLine(s: Schedule) {
+function scheduleLine(s: Schedule) {
   return [
     `${s.ref} ${s.title}`,
     everyWords(s.every, s.at),

@@ -12,7 +12,7 @@ export const MATERIAL_MAX_FILES = 500;
 export const NAME_MAX = 80;
 export const NOTE_MAX = 200;
 /** 一份资料最多关联几项（任务、要点、决定）。 */
-export const LINKS_MAX = 20;
+const LINKS_MAX = 20;
 /** 每份资料留最近几条读取记录。 */
 export const READS_KEPT = 50;
 export const PAGE_DEFAULT = 50;

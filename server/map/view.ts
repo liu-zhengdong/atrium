@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { oneLine } from "../text-width.ts";
-import { priorityOf, type Priority } from "../tasks/priority.ts";
+import { priorityOf, type Priority } from "../tasks/ledger/priority.ts";
 import { runningHostNames } from "../hosts/model.ts";
 import {
   all,
@@ -12,14 +12,19 @@ import {
   ref,
   type NodeRow,
 } from "../org/model.ts";
-import { overviewOf, type Overview, type Part } from "../org/overview.ts";
+import { overviewOf, str, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { choicesForNodes, pendingChoices } from "../choices/store.ts";
 import { materialsForNode } from "../materials/store.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
-import { rollups } from "../tasks/rollup-ledger.ts";
-import { progressOf, rollupLabel, type RollupStatus } from "../tasks/rollup.ts";
+import { rollups } from "../tasks/ledger/rollup-ledger.ts";
+import {
+  progressOf,
+  rollupLabel,
+  type RollupStatus,
+} from "../tasks/ledger/rollup.ts";
+import { hasColumn } from "../sqlite.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
@@ -112,7 +117,6 @@ export type MapPart = Part & {
 };
 export const DEPTH_MAX = 8;
 const OPEN = "('todo','running','blocked')";
-const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 
 /** 本块第一句：人话「是什么」；一行以内。 */
 export function firstLine(text: string, max = 80): string {
@@ -121,7 +125,7 @@ export function firstLine(text: string, max = 80): string {
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : line;
 }
 
-export function dotOf(counts: Counts): Dot {
+function dotOf(counts: Counts): Dot {
   return counts.running ? "running" : counts.blocked ? "blocked" : "idle";
 }
 
@@ -244,7 +248,7 @@ function leadOf(x: Index, n: NodeRow): NodeLead | null {
 }
 
 /** 一次返回最多展开这么多块；组织再大也不拒绝，超出的层只给下层个数，按需再取（`atrium map oN`、网页点开）。 */
-export const TREE_NODES_MAX = 1000;
+const TREE_NODES_MAX = 1000;
 
 /**
  * 广度优先分名额：浅层先展开，名额用完的块不再往下；一块的下层多于剩余名额时只给前几块。
@@ -473,11 +477,6 @@ export function taskView(
   };
 }
 
-function hasColumn(db: DatabaseSync, table: string, column: string) {
-  return all<{ name: string }>(db, `PRAGMA table_info(${table})`).some(
-    (c) => c.name === column,
-  );
-}
 export const taskColumns = (db: DatabaseSync) =>
   `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "host_id") ? "host_id" : "NULL AS host_id"},${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "prio") ? "prio" : "NULL AS prio"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";

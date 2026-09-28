@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateDelivery } from "../server/tasks/delivery-gates.ts";
-import { collectComments } from "../server/tasks/comment-facts.ts";
-import { decideExit } from "../server/tasks/outcome.ts";
-import type { Facts } from "../server/tasks/gates.ts";
+import { evaluateDelivery } from "../server/tasks/gates/delivery-gates.ts";
+import { collectComments } from "../server/tasks/gates/comment-facts.ts";
+import { decideExit } from "../server/tasks/gates/outcome.ts";
+import type { Facts } from "../server/tasks/gates/gates.ts";
 
 const start = Date.parse("2026-09-27T10:00:00.000Z");
 const end = start + 10_000;

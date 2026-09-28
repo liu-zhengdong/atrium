@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
-import { BRIEF_MAX_BYTES } from "../server/tasks/brief.ts";
-import { quotaReserve } from "../server/tasks/budget.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
+import { BRIEF_MAX_BYTES } from "../server/tasks/ledger/brief.ts";
+import { quotaReserve } from "../server/tasks/quota/budget.ts";
 import { backfillBriefs, readLegacyBrief } from "../server/imports/briefs.ts";
 import {
   commonAncestor,

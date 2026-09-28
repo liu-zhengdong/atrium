@@ -18,7 +18,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { legacyDir, legacyWorkersDir } from "../server/imports/index.ts";
 import { leaderWakeEnabled } from "../server/leaders/runtime.ts";
 import { isDefaultData, packageRoot } from "../server/service-state.ts";
-import { quotaReserve } from "../server/tasks/budget.ts";
+import { quotaReserve } from "../server/tasks/quota/budget.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { childEnv } from "./child-env.ts";
 import {

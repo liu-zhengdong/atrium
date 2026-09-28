@@ -5,17 +5,17 @@ import { existsSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
+import { createTask, ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import {
   beginUsage,
   endUsage,
   resetAt,
   sameWindow,
   splitDelta,
-} from "../server/tasks/usage.ts";
-import { quotaHeadroom } from "../server/tasks/usage-budget.ts";
-import { pickWorker } from "../server/tasks/prepare.ts";
-import { WorktreeCleanup } from "../server/tasks/worktree-cleanup.ts";
+} from "../server/tasks/quota/usage.ts";
+import { quotaHeadroom } from "../server/tasks/quota/usage-budget.ts";
+import { pickWorker } from "../server/tasks/dispatch/prepare.ts";
+import { WorktreeCleanup } from "../server/tasks/merge/worktree-cleanup.ts";
 import { fixture } from "./task-fixture.ts";
 
 const pace = (usedPercent: number, hoursToReset = 1) => [

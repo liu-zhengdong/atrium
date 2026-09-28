@@ -14,7 +14,7 @@ import { localFetch } from "../server/local-http.ts";
  * 这时比对服务自报的版本：服务确实旧于命令行，就如实报版本不匹配，不再让人去查认证。
  * 版本相同或拿不到版本时返回 null，调用方按原错误处理。
  */
-export async function outdatedService(
+async function outdatedService(
   record: ServiceRecord | null,
 ): Promise<Problem | null> {
   if (!record) return null;

@@ -23,7 +23,7 @@ const hasSkills = (db: DatabaseSync) =>
   );
 
 /** 任务所在节点链（根 → 归属部门；旧任务看 node_id）；没关联节点返回空。 */
-export function taskChain(db: DatabaseSync, task: TaskLike): ChainNode[] {
+function taskChain(db: DatabaseSync, task: TaskLike): ChainNode[] {
   const id = task.part_id ?? task.node_id;
   if (id === null || !hasOrg(db)) return [];
   const list = nodes(db);

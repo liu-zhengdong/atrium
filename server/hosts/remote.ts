@@ -9,11 +9,14 @@ import {
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { taskDir } from "../tasks/active.ts";
+import { taskDir } from "../tasks/dispatch/active.ts";
 import { exec as localExec, type Exec } from "../tasks/git.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
-import type { Exit } from "../tasks/outcome.ts";
-import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
+import type { Exit } from "../tasks/gates/outcome.ts";
+import type {
+  LeftoverKill,
+  LeftoverTarget,
+} from "../tasks/dispatch/leftovers.ts";
 import {
   beginRun,
   hostRow,
@@ -59,7 +62,7 @@ type CommandInput = AgentCommand extends infer C
   : never;
 
 /** 拉起、查事实、本地检查这类要等结果的指令：代理这么久没来领就先报错。 */
-export const PICKUP_MS = 45_000;
+const PICKUP_MS = 45_000;
 
 /** 某台代理上报的额度读数（按 provider 一份，内存里留最近一次）。 */
 export type HostQuota = {

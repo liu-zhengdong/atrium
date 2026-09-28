@@ -2,7 +2,7 @@ import { Problem } from "../problem.ts";
 import { MEMO_MAX } from "./model.ts";
 import { forwardedOf } from "./route.ts";
 import { CLOSING_ACTIONS } from "./actions.ts";
-import { DUE, spanText } from "../tasks/overdue.ts";
+import { DUE, spanText } from "../tasks/watch/overdue.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、
@@ -190,7 +190,7 @@ export function eventLine(event: PromptEvent) {
 }
 
 /** 事件类型的人话（看板、全景、状态栏）；没列的原样给类型名。 */
-export const EVENT_WORDS: Record<string, string> = {
+const EVENT_WORDS: Record<string, string> = {
   done: "完成",
   failed: "失败",
   blocked: "受阻",

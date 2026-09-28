@@ -6,13 +6,13 @@ import {
 } from "./types.ts";
 
 /** 自定义端点在 opencode 里的 provider 名：模型写成 `atrium/<模型>`。 */
-export const ENDPOINT_PROVIDER = "atrium";
+const ENDPOINT_PROVIDER = "atrium";
 
 /**
  * 自定义端点（t271）：经 OPENCODE_CONFIG_CONTENT 加一个 provider（与用户配置、技能目录合并），
  * 密钥写成 `{env:变量名}` 由 opencode 自己读环境，值不进参数与日志抬头。
  */
-export function opencodeEndpoint(endpoint: LaunchEndpoint, model: string) {
+function opencodeEndpoint(endpoint: LaunchEndpoint, model: string) {
   const options: Record<string, string> = { baseURL: endpoint.base_url };
   if (endpoint.keyEnv) options.apiKey = `{env:${endpoint.keyEnv}}`;
   const config = {

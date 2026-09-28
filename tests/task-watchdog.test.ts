@@ -249,7 +249,8 @@ test("看门狗：执行者一段时间没进展先提醒（知会、状态栏�
   assert.equal(warned.length, 1, "同一段安静只提醒一次");
   assert.match(
     JSON.parse(warned[0]!.detail!).reason,
-    /^执行者 \d+ 秒没有进展（没有日志输出、没有工具调用、工作目录没变化）；到 20 分钟没进展会判卡死$/,
+    /^执行者 \d+ 秒没有进展（没有日志输出、没有工具调用、工作目录没变化）；到 (?:3|20) 分钟没进展会判卡死$/,
+    // 执行者还没有任何输出时按启动阶段算（3 分钟），有过输出后按运行中算（20 分钟）；CI 机器上两种都可能先到。
   );
   // 知会负责人（缺省秘书）：info 级，不叫醒。
   const inbox = (await call("GET", "/api/events?as=secretary&limit=50")).body

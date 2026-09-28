@@ -31,7 +31,8 @@ jobs:
           version=$(node scripts/prepare-release.mjs "$summary")
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
-      - run: npm run check && npm run format:check
+      # 不再重跑测试：合入队列已在合入前按 .agents/check 检查过这个提交（与发版同一个提交），
+      # 全量测试由 check.yml 在每次推送时跑、作体检，不挡发版（用户 09-28 定）。
       # 编译安装产物（dist/），并在它上面起隔离服务量命令行启动；产物跑不起来就不发版。
       - run: npm run bench:cli
         env:

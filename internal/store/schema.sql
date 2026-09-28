@@ -222,18 +222,25 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
 );
 
 -- 待投递事件：订阅者 wait 取、ack 确认；租约内不重投。target 是投递对象（aN 或 secretary）。
+-- level：act 要处理、info 知会。key 是去重键：同一 target 同一 key 还没取走、没确认的合并成一条（count 加一）。
 CREATE TABLE IF NOT EXISTS events (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   at           INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
   kind         TEXT NOT NULL,
+  level        TEXT NOT NULL CHECK (level IN ('act', 'info')),
+  key          TEXT NOT NULL DEFAULT '',
+  count        INTEGER NOT NULL DEFAULT 1,
   task         TEXT REFERENCES tasks (id),
   department   TEXT REFERENCES departments (id),
-  target       TEXT NOT NULL DEFAULT '',
+  target       TEXT NOT NULL,
   body         TEXT NOT NULL DEFAULT '',
   leased_until INTEGER,
-  acked_at     INTEGER
+  acked_at     INTEGER,
+  acked_by     TEXT
 );
 CREATE INDEX IF NOT EXISTS events_pending ON events (target, acked_at, id);
+CREATE INDEX IF NOT EXISTS events_key ON events (key, target);
 
 -- 额度读数缓存：每个账号一行。
 CREATE TABLE IF NOT EXISTS quota_cache (

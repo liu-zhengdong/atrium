@@ -92,3 +92,20 @@ func TestEnvRoundTrip(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+func TestMessagingEndpoint(t *testing.T) {
+	cases := []struct{ goos, raw, want string }{
+		{"darwin", "/tmp/cc.sock", "/tmp/cc.sock"},
+		{"linux", "uds:/run/x.sock", "/run/x.sock"},
+		{"linux", "relative.sock", ""},
+		{"linux", "/tmp/a\nb", ""},
+		{"linux", "  ", ""},
+		{"windows", `\\.\pipe\claude-1`, `\\.\pipe\claude-1`},
+		{"windows", `C:\tmp\x.sock`, ""},
+	}
+	for _, c := range cases {
+		if got := MessagingEndpoint(c.goos, c.raw); got != c.want {
+			t.Errorf("MessagingEndpoint(%s, %q) = %q，应为 %q", c.goos, c.raw, got, c.want)
+		}
+	}
+}

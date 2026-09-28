@@ -4,11 +4,12 @@ import { partRoute } from "../leaders/subscriber.ts";
 import { nodeByAddress } from "../org/model.ts";
 import type { EventInbox } from "../tasks/events.ts";
 import { smallHint } from "./model.ts";
-import type { Choice } from "./store.ts";
+import { decideChoice, type Choice, type Decided } from "./store.ts";
 
 /**
  * 选项单的事件投递（接口与产品部研究收尾共用）：建好后项目 leader 收 choice_review（写意见）；
- * 拍板人是用户时秘书收 choice_ready（叫醒），下放时 leader 收 choice_ready、秘书只收知会 choice_notice。
+ * 拍板人是用户时秘书收 choice_ready（叫醒），下放时 leader 收 choice_ready、秘书只收知会 choice_notice；
+ * 拍板（接口、Telegram 按钮共用）后同一去重键改投知会 choice_decided。
  * 随单的小改进另投 choice_small 给建单时记下的项目 leader（没有 leader 为秘书），由它自己定，不进选项单。
  */
 
@@ -96,4 +97,44 @@ export function announceChoice(
   publishChoice(inbox, SECRETARY, "choice_notice", choice, creator, {
     hint: `${choice.node_name}有一份新的选项单，拍板权已下放给 ${choice.decider}，只需知会用户：${show}`,
   });
+}
+
+/**
+ * 拍板并投知会：秘书与该节点 leader 那条待办（choice_review / choice_ready）改成知会 choice_decided。
+ * actor 是 u1（用户：命令行、全景网页、Telegram）或拍板权下放给的 leader。
+ */
+export function decideAndAnnounce(
+  db: DatabaseSync,
+  inbox: EventInbox,
+  reference: unknown,
+  action: "pick" | "pass",
+  body: unknown,
+  actor: string,
+): Decided {
+  const result = decideChoice(db, reference, action, body, actor);
+  const detail = {
+    decided_by: actor,
+    tasks: result.tasks.map((t) => t.ref),
+    decisions: result.decisions.map((d) => d.ref),
+    note: result.choice.note,
+  };
+  publishChoice(
+    inbox,
+    SECRETARY,
+    "choice_decided",
+    result.choice,
+    actor === "u1" ? undefined : actor,
+    detail,
+  );
+  const leader = choiceLeader(db, result.choice);
+  if (leader)
+    publishChoice(
+      inbox,
+      leader,
+      "choice_decided",
+      result.choice,
+      undefined,
+      detail,
+    );
+  return result;
 }

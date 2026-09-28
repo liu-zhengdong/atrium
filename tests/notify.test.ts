@@ -16,11 +16,18 @@ import { createApp } from "../server/app.ts";
 import {
   afterFailure,
   bindMatch,
+  BUTTON_TITLE_MAX,
   bypassed,
+  cardKeyboard,
+  cardText,
+  decidedCardText,
   inQuiet,
   MAX_ATTEMPTS,
   MESSAGE_ITEMS,
   messageText,
+  noteReply,
+  noteTarget,
+  parseCallback,
   parseBatch,
   parseProxy,
   parseQuiet,
@@ -32,8 +39,12 @@ import {
   scrub,
   sendAt,
   settingsPatch,
+  sourceOf,
+  togglePick,
+  type CardChoice,
   type PushEvent,
 } from "../server/notify/model.ts";
+import { width } from "../server/text-width.ts";
 import { telegramFile } from "../server/notify/store.ts";
 import { publishUrgentStage } from "../server/tasks/notice.ts";
 import { redact } from "../server/secret-redact.ts";
@@ -414,6 +425,138 @@ test("权限：leader 令牌不能改推送设置，状态读不到 token", () =
 
 // ---- 假 Telegram 接口 ----
 
+test("选项单卡片：按钮只放选项号与选项标题，回调数据短且可解析，卡片不带选项正文", () => {
+  const choice: CardChoice = {
+    ref: "c12",
+    title: "Atrium 下一步",
+    status: "open",
+    options: [
+      { seq: 1, title: "先做推送", task: null },
+      {
+        seq: 2,
+        title: "一个很长很长的选项标题，超过按钮能放下的宽度还要再长一些",
+        task: null,
+      },
+    ],
+  };
+  const keys = cardKeyboard(choice, { picks: [], note: null });
+  assert.deepEqual(
+    keys.map((row) => row.map((b) => b.text)),
+    [["1. 先做推送"], [keys[1]![0]!.text], ["拍板", "都不选"]],
+  );
+  assert.match(keys[1]![0]!.text, /^2\. 一个很长.*…$/);
+  assert(width(keys[1]![0]!.text) <= BUTTON_TITLE_MAX + 3);
+  assert.deepEqual(
+    keys.flat().map((b) => b.callback_data),
+    ["c:12:1", "c:12:2", "c:12:ok", "c:12:no"],
+  );
+  for (const b of keys.flat()) assert(Buffer.byteLength(b.callback_data) <= 64);
+  const picked = cardKeyboard(choice, { picks: [2], note: null });
+  assert.equal(picked[1]![0]!.text.slice(0, 5), "✅ 2. ");
+  assert.equal(picked[2]![0]!.text, "拍板（选 2）");
+
+  const text = cardText(choice, { picks: [], note: null });
+  assert.match(text, /^【等你拍板】c12 Atrium 下一步\n/);
+  assert.match(text, /回复这条消息写一句说明/);
+  assert.match(text, /atrium choice show c12/);
+  assert.match(
+    cardText(choice, { picks: [], note: "先做 1\n第二行不显示" }),
+    /说明：先做 1（再回复一条可改）/,
+  );
+  assert.equal(
+    decidedCardText(
+      {
+        ...choice,
+        status: "picked",
+        options: [
+          { seq: 1, title: "a", task: "t7" },
+          { seq: 2, title: "b", task: null },
+        ],
+      },
+      "注意接口",
+    ),
+    "【已拍板】c12 Atrium 下一步\n选了 1，建了 t7\n说明：注意接口",
+  );
+  assert.equal(
+    decidedCardText({ ...choice, status: "passed" }, null),
+    "【已拍板】c12 Atrium 下一步\n这轮都不要",
+  );
+
+  assert.deepEqual(parseCallback("c:12:2"), {
+    kind: "toggle",
+    choice: "c12",
+    seq: 2,
+  });
+  assert.deepEqual(parseCallback("c:12:ok"), { kind: "pick", choice: "c12" });
+  assert.deepEqual(parseCallback("c:12:no"), { kind: "pass", choice: "c12" });
+  for (const bad of [
+    "c:0:1",
+    "c:12:0",
+    "c:12:x",
+    "c:12:1:2",
+    "x:12:1",
+    "",
+    12,
+    null,
+    "c:12345678901234567:1",
+  ])
+    assert.equal(parseCallback(bad), null, String(bad));
+
+  assert.deepEqual(togglePick([], 3), [3]);
+  assert.deepEqual(togglePick([3], 1), [1, 3]);
+  assert.deepEqual(togglePick([1, 3], 3), [1]);
+});
+
+test("收到的更新只认绑定的私聊；回复说明归哪份选项单", () => {
+  const button = (from: number, at: number) => ({
+    update_id: 1,
+    callback_query: {
+      id: "q",
+      data: "c:1:ok",
+      from: { id: from },
+      message: { message_id: 5, chat: { id: at } },
+    },
+  });
+  assert.deepEqual(sourceOf(button(42, 42), 42), { kind: "bound" });
+  assert.deepEqual(sourceOf(button(7, 42), 42), { kind: "foreign", chat: 42 });
+  assert.deepEqual(sourceOf(button(42, -9), 42), { kind: "foreign", chat: -9 });
+  const message = (chat: number, type: string, from: number) => ({
+    update_id: 2,
+    message: {
+      message_id: 6,
+      text: "说明",
+      chat: { id: chat, type },
+      from: { id: from },
+    },
+  });
+  assert.deepEqual(sourceOf(message(42, "private", 42), 42), { kind: "bound" });
+  assert.deepEqual(sourceOf(message(-5, "group", 42), 42), {
+    kind: "foreign",
+    chat: -5,
+  });
+  assert.deepEqual(sourceOf(message(99, "private", 99), 42), {
+    kind: "foreign",
+    chat: 99,
+  });
+  assert.deepEqual(sourceOf({ update_id: 3 }, 42), { kind: "skip" });
+
+  assert.deepEqual(noteTarget({ card: "c3" }, ["c1", "c2"]), {
+    kind: "choice",
+    choice: "c3",
+  });
+  assert.deepEqual(noteTarget({ card: null }, ["c1"]), { kind: "not_card" });
+  assert.deepEqual(noteTarget(null, ["c1"]), { kind: "choice", choice: "c1" });
+  assert.deepEqual(noteTarget(null, ["c1", "c2"]), {
+    kind: "ambiguous",
+    count: 2,
+  });
+  assert.deepEqual(noteTarget(null, []), { kind: "none" });
+  assert.equal(noteReply({ kind: "choice", choice: "c1" }), null);
+  assert.match(noteReply({ kind: "ambiguous", count: 2 })!, /有 2 份等你拍板/);
+  assert.match(noteReply({ kind: "not_card" })!, /不是等你拍板的卡片/);
+  assert.match(noteReply({ kind: "none" })!, /没有等你拍板/);
+});
+
 type Call = { method: string; token: string; body: Record<string, any> };
 
 function fakeTelegram(t: { after: (fn: () => unknown) => void }) {
@@ -448,14 +591,26 @@ function fakeTelegram(t: { after: (fn: () => unknown) => void }) {
           },
         });
       if (method === "getUpdates") {
+        // 和真接口一样长轮询：没有新更新就等到有或到 timeout 秒。
         const offset = typeof body.offset === "number" ? body.offset : 0;
-        return reply(200, {
-          ok: true,
-          result: updates.filter(
-            (u) => (u as { update_id: number }).update_id >= offset,
-          ),
+        const until = Date.now() + (Number(body.timeout) || 0) * 1000;
+        let gone = false;
+        res.on("close", () => {
+          gone = true;
         });
+        const check = () => {
+          if (gone) return;
+          const result = updates.filter(
+            (u) => (u as { update_id: number }).update_id >= offset,
+          );
+          if (result.length || Date.now() >= until)
+            return reply(200, { ok: true, result });
+          setTimeout(check, 10);
+        };
+        return check();
       }
+      if (method === "answerCallbackQuery" || method === "editMessageText")
+        return reply(200, { ok: true, result: true });
       if (method === "sendMessage") {
         const failure = failures.shift();
         if (failure)
@@ -537,6 +692,7 @@ async function open(
       now: () => clock,
       offset: EAST8,
       timeoutMs: 3000,
+      pollSeconds: 1,
       log: (line) => logs.push(line),
     },
   });
@@ -684,7 +840,7 @@ test("绑定：token 从请求体存进 0600 凭据文件，状态与回执都�
   assert.equal(test2.body.nextCommand, "pbpaste | atrium notify token");
 });
 
-test("推送：上交与选项单攒成一条，过程事件不推，只带标题与短号", async (t) => {
+test("推送：上交攒成一条、选项单单发带按钮的卡片，过程事件不推，只带标题与短号", async (t) => {
   const x = await open(t);
   await bindUp(x);
   await x.ok("PATCH", "/api/notify/telegram", { batch_seconds: 60 });
@@ -747,22 +903,36 @@ test("推送：上交与选项单攒成一条，过程事件不推，只带标�
   assert.equal(x.tg.sent().length, before);
   x.tick(60_000);
   await x.notifier.flush();
-  assert.equal(x.tg.sent().length, before + 1);
-  const text = x.tg.sent().at(-1)!.text as string;
+  assert.equal(x.tg.sent().length, before + 2);
+  const [digest, card] = x.tg.sent().slice(-2);
   assert.equal(
-    text,
+    digest!.text,
     [
-      "Atrium：3 件事",
+      "Atrium：2 件事",
       "【卡住了】a1",
       `【里程碑上线】${task.ref} 组织树上线`,
-      `【等你拍板】${choice.ref} Atrium 下一步`,
     ].join("\n"),
   );
-  assert.doesNotMatch(text, /上交说明|端到端|正文|推荐理由|过程事件/);
+  assert.equal(digest!.reply_markup, undefined);
+  assert.match(
+    card!.text,
+    new RegExp(`^【等你拍板】${choice.ref} Atrium 下一步\n`),
+  );
+  assert.deepEqual(
+    card!.reply_markup.inline_keyboard
+      .flat()
+      .map((b: { text: string }) => b.text),
+    ["1. 选项1", "2. 选项2", "3. 选项3", "拍板", "都不选"],
+  );
+  for (const sent of [digest!, card!])
+    assert.doesNotMatch(
+      JSON.stringify(sent),
+      /上交说明|端到端|正文|推荐理由|过程事件/,
+    );
   assert.equal(x.notifier.queued().length, 0);
   // 已发过的同一条事件不重推。
   await x.notifier.flush();
-  assert.equal(x.tg.sent().length, before + 1);
+  assert.equal(x.tg.sent().length, before + 2);
 
   // 排队期间拍了板的选项单不再推。
   const second = await x.ok("POST", "/api/choices", {
@@ -777,7 +947,7 @@ test("推送：上交与选项单攒成一条，过程事件不推，只带标�
   await x.ok("POST", `/api/choices/${second.ref}/pass`, { note: "不要" });
   x.tick(60_000);
   await x.notifier.flush();
-  assert.equal(x.tg.sent().length, before + 1);
+  assert.equal(x.tg.sent().length, before + 2);
   assert.equal(x.notifier.queued().length, 0);
 
   // 关掉：不排队。
@@ -1030,4 +1200,274 @@ test("启动自愈：凭据文件写坏了挪开留档，按没配处理；重�
   again.tick(3600_000);
   await again.notifier.flush();
   assert.match(again.tg.sent().at(-1)!.text, /c3 重启前排队/);
+});
+
+/** 等到条件成立（收消息是后台长轮询，按钮与回复的结果异步回来）。 */
+async function until<T>(
+  read: () => T | undefined | null | false,
+  what: string,
+) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const value = read();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error(`等不到：${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test("在 Telegram 里拍板：点选项再点拍板等同 choice pick，回复卡片附说明；重复点回已拍板，别的聊天一律忽略", async (t) => {
+  const x = await open(t);
+  await bindUp(x);
+  await x.ok("PATCH", "/api/notify/telegram", { batch_seconds: 0 });
+  for (const node of [
+    { slug: "org", kind: "org", name: "组织" },
+    { parent: "o1", slug: "atrium", kind: "project", name: "Atrium" },
+  ])
+    await x.ok("POST", "/api/org/nodes", { ...node, reason: "建" });
+  const option = (n: number) => ({
+    title: `选项${n}`,
+    gain: "选项正文不上手机",
+    why_now: "正文",
+    cost: "正文",
+    skip: "正文",
+    basis: [],
+  });
+  const make = (title: string) =>
+    x.ok("POST", "/api/choices", {
+      node: "o2",
+      choice: {
+        title,
+        options: [option(1), option(2), option(3)],
+        recommend: [1],
+        why: "推荐理由不推",
+      },
+    });
+  const first = await make("Atrium 下一步");
+  const second = await make("第二份");
+  const third = await make("第三份");
+  await x.notifier.flush();
+  const cards = await until(() => {
+    const list = x.tg.calls.flatMap((c, i): Record<string, any>[] =>
+      c.method === "sendMessage" && c.body.reply_markup
+        ? [{ ...c.body, message_id: i + 1 }]
+        : [],
+    );
+    return list.length === 3 && list;
+  }, "三张卡片");
+  const cardOf = (ref: string) =>
+    cards.find((c) => c.text.startsWith(`【等你拍板】${ref} `))!;
+  for (const card of cards)
+    assert.doesNotMatch(JSON.stringify(card), /正文|推荐理由/);
+
+  let updateId = 100;
+  let queryId = 0;
+  const calls = (method: string) =>
+    x.tg.calls.filter((c) => c.method === method).map((c) => c.body);
+  /** 点一个按钮，等回执（answerCallbackQuery）。 */
+  const click = async (data: string, message: number, chat = 42) => {
+    const id = `q${++queryId}`;
+    x.tg.updates.push({
+      update_id: updateId++,
+      callback_query: {
+        id,
+        data,
+        from: { id: chat },
+        message: { message_id: message, chat: { id: chat } },
+      },
+    });
+    return until(
+      () =>
+        calls("answerCallbackQuery").find((a) => a.callback_query_id === id),
+      `按钮 ${data} 的回执`,
+    );
+  };
+  /** 发一句话（可回复某条消息），等机器人回。 */
+  const say = async (text: string, replyTo?: number) => {
+    const message_id = updateId * 10;
+    x.tg.updates.push({
+      update_id: updateId++,
+      message: {
+        message_id,
+        text,
+        chat: { id: 42, type: "private" },
+        from: { id: 42 },
+        ...(replyTo ? { reply_to_message: { message_id: replyTo } } : {}),
+      },
+    });
+    return until(
+      () => x.tg.sent().find((m) => m.reply_to_message_id === message_id),
+      `「${text}」的回复`,
+    );
+  };
+  const edits = () => calls("editMessageText");
+  const taskCount = () =>
+    (x.db.prepare("SELECT COUNT(*) AS n FROM tasks").get() as { n: number }).n;
+  const choiceOf = (ref: string) => x.ok("GET", `/api/choices/${ref}`);
+  const id1 = cardOf(first.ref).message_id;
+  const n1 = first.ref.slice(1);
+
+  // 有三份等拍板时不用回复发的话不猜归谁。
+  assert.match((await say("先做 1")).text, /有 3 份等你拍板/);
+  // 回复卡片：记成那份的说明，卡片上显示。
+  assert.match(
+    (await say("先做 1 和 3，别动接口", id1)).text,
+    new RegExp(`已记下，拍板 ${first.ref} 时附上`),
+  );
+  assert.match(edits().at(-1)!.text, /说明：先做 1 和 3，别动接口/);
+  assert.equal(edits().at(-1)!.message_id, id1);
+  // 太长的说明不记，原说明保留。
+  assert.match(
+    (await say("长".repeat(1001), id1)).text,
+    /^说明不能超过 1000 字/,
+  );
+  // 命令与贴图不当说明。
+  assert.match((await say("/start")).text, /这里只收拍板/);
+
+  // 点选项：选上、再点取消；卡片跟着打勾。
+  assert.equal((await click(`c:${n1}:1`, id1)).text, "已选 1，再点「拍板」");
+  assert.equal((await click(`c:${n1}:2`, id1)).text, "已选 1、2，再点「拍板」");
+  assert.equal((await click(`c:${n1}:2`, id1)).text, "已选 1，再点「拍板」");
+  assert.equal((await click(`c:${n1}:3`, id1)).text, "已选 1、3，再点「拍板」");
+  assert.equal((await click(`c:${n1}:9`, id1)).text, `${first.ref} 没有选项 9`);
+  assert.deepEqual(
+    edits()
+      .at(-1)!
+      .reply_markup.inline_keyboard.flat()
+      .map((b: { text: string }) => b.text),
+    ["✅ 1. 选项1", "2. 选项2", "✅ 3. 选项3", "拍板（选 1、3）", "都不选"],
+  );
+  assert.equal((await click("c:abc:1", id1)).text, "这个按钮已失效");
+
+  // 别的聊天点按钮、发消息：不处理、不回，记日志（不含 token）。
+  const answered = calls("answerCallbackQuery").length;
+  x.tg.updates.push(
+    {
+      update_id: updateId++,
+      callback_query: {
+        id: "evil",
+        data: `c:${n1}:ok`,
+        from: { id: 99 },
+        message: { message_id: id1, chat: { id: 99 } },
+      },
+    },
+    {
+      update_id: updateId++,
+      message: {
+        message_id: 1,
+        text: "说明",
+        chat: { id: -5, type: "group" },
+        from: { id: 42 },
+      },
+    },
+  );
+  await until(
+    () => x.logs.some((l) => /未绑定的聊天（-5）/.test(l)),
+    "外来聊天的日志",
+  );
+  assert(x.logs.some((l) => /未绑定的聊天（99）/.test(l)));
+  assert.equal(calls("answerCallbackQuery").length, answered);
+  assert.equal((await choiceOf(first.ref)).status, "open");
+
+  // 拍板：等同 atrium choice pick 1 3 --note …，拍板人是用户。
+  assert.equal((await click(`c:${n1}:ok`, id1)).text, "已拍板");
+  const picked = await choiceOf(first.ref);
+  assert.equal(picked.status, "picked");
+  assert.equal(picked.decided_by, "u1");
+  assert.equal(picked.note, "先做 1 和 3，别动接口");
+  assert.deepEqual(
+    picked.options.map((o: { picked: boolean }) => o.picked),
+    [true, false, true],
+  );
+  const done = await until(
+    () =>
+      edits().find((e) => e.message_id === id1 && /^【已拍板】/.test(e.text)),
+    "卡片改成已拍板",
+  );
+  assert.deepEqual(done.reply_markup.inline_keyboard, []);
+  assert.match(done.text, /选了 1、3，建了 t\d+、t\d+\n说明：先做 1 和 3/);
+  const inbox = x.db
+    .prepare(
+      "SELECT kind FROM task_inbox WHERE subscriber='secretary' AND dedupe_key=?",
+    )
+    .get(`choice:${first.ref}`) as { kind: string };
+  assert.equal(inbox.kind, "choice_decided");
+
+  // 重复点、点已拍板卡片上的旧按钮：幂等，回「已拍板」，不再建任务。
+  const tasks = taskCount();
+  assert.equal((await click(`c:${n1}:ok`, id1)).text, "已拍板");
+  assert.equal((await click(`c:${n1}:no`, id1)).text, "已拍板");
+  assert.equal((await click(`c:${n1}:2`, id1)).text, "已拍板");
+  assert.equal(taskCount(), tasks);
+  assert.equal((await choiceOf(first.ref)).status, "picked");
+  // 回复已拍板的卡片：不再记。
+  assert.match((await say("补一句", id1)).text, /不是等你拍板的卡片/);
+
+  // 没选就点拍板：提示先选。
+  const id2 = cardOf(second.ref).message_id;
+  const n2 = second.ref.slice(1);
+  const empty = await click(`c:${n2}:ok`, id2);
+  assert.match(empty.text, /先点要做的选项/);
+  assert.equal(empty.show_alert, true);
+  // 「都不选」：等同 atrium choice pass。
+  assert.equal((await click(`c:${n2}:no`, id2)).text, "已拍板");
+  assert.equal((await choiceOf(second.ref)).status, "passed");
+  await until(
+    () =>
+      edits().find((e) => e.message_id === id2 && /这轮都不要/.test(e.text)),
+    "卡片改成这轮都不要",
+  );
+
+  // 只剩一份时不用回复发的话就归它；在命令行拍板后卡片也改成结果。
+  const id3 = cardOf(third.ref).message_id;
+  assert.match(
+    (await say("都不要了")).text,
+    new RegExp(`拍板 ${third.ref} 时`),
+  );
+  await x.ok("POST", `/api/choices/${third.ref}/pick`, { picks: [2] });
+  await until(
+    () =>
+      edits().find(
+        (e) => e.message_id === id3 && /^【已拍板】.*\n选了 2/.test(e.text),
+      ),
+    "命令行拍板后卡片改成结果",
+  );
+  assert.equal((await click(`c:${third.ref.slice(1)}:no`, id3)).text, "已拍板");
+  assert.equal((await choiceOf(third.ref)).status, "picked");
+
+  // token 不进日志，也不进任何请求体。
+  assert(x.logs.every((l) => !l.includes(TOKEN)));
+  assert(x.tg.calls.every((c) => !JSON.stringify(c.body).includes(TOKEN)));
+  // 收消息走长轮询，只要按钮与消息两类更新。
+  const polls = calls("getUpdates").filter((b) =>
+    b.allowed_updates?.includes("callback_query"),
+  );
+  assert(polls.length > 0);
+});
+
+test("收消息：绑定时让出长轮询，绑定完接着收；关掉推送后不再收", async (t) => {
+  const x = await open(t);
+  await bindUp(x);
+  await until(
+    () =>
+      x.tg.calls.some(
+        (c) =>
+          c.method === "getUpdates" &&
+          c.body.allowed_updates?.includes("callback_query"),
+      ),
+    "绑定后开始收消息",
+  );
+  await x.ok("PATCH", "/api/notify/telegram", { enabled: false });
+  const count = x.tg.calls.filter((c) => c.method === "getUpdates").length;
+  await new Promise((resolve) => setTimeout(resolve, 1300));
+  // 停下后至多还有停之前那一轮收尾。
+  assert(
+    x.tg.calls.filter((c) => c.method === "getUpdates").length <= count + 1,
+  );
+  await x.ok("PATCH", "/api/notify/telegram", { enabled: true });
+  await until(
+    () =>
+      x.tg.calls.filter((c) => c.method === "getUpdates").length > count + 1,
+    "打开后接着收",
+  );
 });

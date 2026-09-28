@@ -7,7 +7,7 @@ import type { Command, Values } from "./main.ts";
 /**
  * 推送到手机（atrium notify …）：用户自己在 @BotFather 建机器人，token 从标准输入交给服务存进
  * Atrium 自己的凭据文件（0600），再给机器人发绑定码绑定聊天。只推等你拍板、上交到你这层的卡住／越界、
- * 里程碑上线（另有紧急任务的上线、卡住、止损失败），只带标题和短号。
+ * 里程碑上线（另有紧急任务的上线、卡住、止损失败），只带标题和短号；选项单卡片上点按钮拍板、回复卡片附说明。
  */
 
 const client = async () => (await import("./service.ts")).connect();

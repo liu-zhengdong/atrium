@@ -6,6 +6,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join, sep } from "node:path";
@@ -13,7 +14,12 @@ import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { alive, readService } from "../server/service-state.ts";
 import { stopService } from "../server/service.ts";
-import { killProcessesUnder, type Launcher } from "./win-processes.ts";
+import {
+  creationTimes,
+  killProcessesUnder,
+  type Launcher,
+  type Named,
+} from "./win-processes.ts";
 
 /**
  * 测试被中断（Ctrl-C、超时强杀）时的收尾：夹具起的后台服务、它的子进程
@@ -29,6 +35,8 @@ export type OpenFixture = {
   pids: Set<number>;
   /** 夹具拉起的命令行进程：Windows 收尾时按父进程号找它们拉起、尚未登记的服务。 */
   launchers: Launcher[];
+  /** Windows 收尾结束的进程的创建时间：进程号很快会被复用，检查遗留时据此分辨。 */
+  started: Map<number, number>;
 };
 
 const openFixtures = new Set<OpenFixture>();
@@ -154,36 +162,31 @@ function stopFixture(fixture: OpenFixture): void {
   // 以及夹具拉起的命令行进程的子进程（服务还没写登记时只能这样找到）结束进程；
   // 刚退出的进程还占着目录时带重试。
   if (process.platform === "win32") {
-    let pid: number | undefined;
+    const named: Named[] = [];
     // 服务正在写登记时读会撞上锁：稍等重读，读不到 pid 就会漏掉服务。
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        pid = readService(fixture.data)?.pid;
+        const pid = readService(fixture.data)?.pid;
+        // 登记里的进程早于登记写入就在；之后才创建的是复用了进程号的别人。
+        if (pid && pid !== process.pid)
+          named.push({
+            pid,
+            before: statSync(join(fixture.data, "service.sqlite")).mtimeMs,
+          });
         break;
       } catch {
         sleepSync(200);
       }
     }
-    if (pid && pid !== process.pid && alive(pid)) {
+    const killed = killProcessesUnder(fixture.root, fixture.launchers, named);
+    for (const { pid, created } of killed) {
       fixture.pids.add(pid);
-      try {
-        execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-          stdio: "ignore",
-          windowsHide: true,
-        });
-      } catch {
-        /* 已退出 */
-      }
+      fixture.started.set(pid, created);
     }
-    const killed = killProcessesUnder(fixture.root, fixture.launchers);
-    for (const killedPid of killed) fixture.pids.add(killedPid);
     // taskkill /F 只是发出结束；机器忙时进程要过一阵才真正退出、放开目录里的文件，
     // 下面删目录的重试只有两秒左右，先等这些进程没了再删。
     const gone = Date.now() + 10_000;
-    const victims = [...fixture.pids].filter(
-      (victim) => victim !== process.pid,
-    );
-    while (Date.now() < gone && victims.some((victim) => alive(victim)))
+    while (Date.now() < gone && killed.some(({ pid }) => alive(pid)))
       sleepSync(100);
   }
   rmSync(fixture.root, {
@@ -202,6 +205,7 @@ export function trackFixture(data: string, root: string): OpenFixture {
     children: new Set<ChildProcess>(),
     pids: new Set<number>(),
     launchers: [],
+    started: new Map<number, number>(),
   };
   openFixtures.add(fixture);
   allFixtures.add(fixture);
@@ -251,11 +255,22 @@ export async function assertNoFixtureLeaks(): Promise<void> {
       break;
     await delay(50);
   }
+  const living = [...allFixtures].flatMap((fixture) =>
+    [...fixture.pids]
+      .filter((pid) => alive(pid))
+      .map((pid) => ({ fixture, pid })),
+  );
+  // Windows 很快复用进程号：还在的进程创建时间与收尾时结束的那个不同，就是别人。
+  const current = creationTimes(living.map(({ pid }) => pid));
+  const reused = ({ fixture, pid }: (typeof living)[number]) =>
+    process.platform === "win32" &&
+    fixture.started.has(pid) &&
+    current.get(pid) !== fixture.started.get(pid);
   const leaks = [...allFixtures].flatMap((fixture) => [
     ...(existsSync(fixture.root) ? [`目录 ${fixture.root}`] : []),
-    ...[...fixture.pids]
-      .filter((pid) => alive(pid))
-      .map((pid) => `进程 ${pid} (${fixture.root})`),
+    ...living
+      .filter((item) => item.fixture === fixture && !reused(item))
+      .map(({ pid }) => `进程 ${pid} (${fixture.root})`),
     ...(openFixtures.has(fixture) ? [`未收尾 ${fixture.root}`] : []),
   ]);
   if (leaks.length) throw new Error(`测试留下临时服务：${leaks.join("，")}`);
@@ -279,6 +294,7 @@ export function sweepTestRun(runId: string): string[] {
       children: new Set(),
       pids: new Set(),
       launchers: [],
+      started: new Map(),
     });
   }
   return leaked;

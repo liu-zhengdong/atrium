@@ -17,13 +17,20 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { alive, packageRoot, readService } from "../server/service-state.ts";
 import {
+  assertNoFixtureLeaks,
   descendantsOf,
   finishFixture,
   sweepTestRun,
   trackFixture,
   trackLauncher,
+  untrackFixture,
 } from "./fixture-signal.ts";
-import { processesToKill, type WinProcess } from "./win-processes.ts";
+import {
+  creationTimes,
+  processesToKill,
+  type Named,
+  type WinProcess,
+} from "./win-processes.ts";
 import { childEnv } from "./child-env.ts";
 import { removeTemp } from "./temp-dir.ts";
 
@@ -58,13 +65,18 @@ test(
   },
 );
 
-test("Windows 收尾挑进程：命令行带夹具目录的，或登记的命令行进程存活期间拉起的（t198）", () => {
+test("Windows 收尾挑进程：命令行带夹具目录的、登记且早于登记的、登记的命令行进程存活期间拉起的（t198）", () => {
   const row = (pid: number, parent: number, created: number, under = false) =>
     ({ pid, parent, created, under }) satisfies WinProcess;
   const exited = { pid: 100, from: 10_000, until: 20_000 };
   const running = { pid: 200, from: 30_000 };
-  const pick = (rows: WinProcess[]) =>
-    processesToKill(rows, [exited, running], 60_000, 1);
+  const pick = (rows: WinProcess[], named: Named[] = []) =>
+    processesToKill(rows, {
+      launchers: [exited, running],
+      named,
+      now: 60_000,
+      self: 1,
+    }).map(({ pid }) => pid);
   // 已退出的命令行进程：它活着时拉起的服务（还没登记）要结束。
   assert.deepEqual(pick([row(11, 100, 15_000)]), [11]);
   // 进程号被复用：命令行退出之后同号新进程拉起的，不动。
@@ -80,19 +92,69 @@ test("Windows 收尾挑进程：命令行带夹具目录的，或登记的命令
     pick([row(31, 300, 15_000), row(32, 300, 15_000, true)]),
     [32],
   );
+  // 登记的服务：登记写入前就在的结束；之后才创建的是复用了进程号的别人，不动。
+  assert.deepEqual(
+    pick(
+      [row(51, 7, 40_000), row(52, 7, 48_000)],
+      [
+        { pid: 51, before: 45_000 },
+        { pid: 52, before: 45_000 },
+      ],
+    ),
+    [51],
+  );
   // 从不结束测试进程自己。
-  assert.deepEqual(pick([row(1, 100, 15_000, true)]), []);
+  assert.deepEqual(
+    pick([row(1, 100, 15_000, true)], [{ pid: 1, before: 1e9 }]),
+    [],
+  );
   // 同一个进程号先后登记过两次：落在任一存活窗内都算。
   assert.deepEqual(
     processesToKill(
       [row(41, 100, 15_000), row(42, 100, 45_000), row(43, 100, 35_000)],
-      [exited, { pid: 100, from: 40_000, until: 50_000 }],
-      60_000,
-      1,
-    ),
+      {
+        launchers: [exited, { pid: 100, from: 40_000, until: 50_000 }],
+        now: 60_000,
+        self: 1,
+      },
+    ).map(({ pid }) => pid),
     [41, 42],
   );
 });
+
+test(
+  "Windows 检查遗留：进程号被复用（创建时间与收尾时结束的对不上）不算遗留（t198）",
+  { skip: process.platform !== "win32" },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "atrium-reused-pid-"));
+    const fixture = trackFixture(join(root, "data"), root);
+    const other = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    );
+    t.after(() => {
+      fixture.pids.clear();
+      other.kill("SIGKILL");
+    });
+    await new Promise<void>((resolve) => other.once("spawn", resolve));
+    const pid = other.pid!;
+    const created = creationTimes([pid]).get(pid);
+    assert.ok(created, "查得到活进程的创建时间");
+    untrackFixture(fixture);
+    removeTemp(root);
+    fixture.pids.add(pid);
+    // 收尾时结束的是更早的同号进程：现在这个是别人。
+    fixture.started.set(pid, created - 5000);
+    await assertNoFixtureLeaks();
+    // 同一个进程还活着：照样报遗留。
+    fixture.started.set(pid, created);
+    await assert.rejects(assertNoFixtureLeaks(), new RegExp(`进程 ${pid}`));
+  },
+);
 
 // 命令行按需拉起服务后被杀（用例超时），服务还没写登记：Windows 上既读不到它的工作目录、
 // 命令行里也不带夹具目录，只能按父进程找（t198）；Unix 上按工作目录找。

@@ -254,9 +254,15 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
   const bin = join(root, "bin");
   mkdirSync(bin);
   // 名字叫 claude 的假执行者：ownsPid 按命令行里的可执行名认领。
-  const fake = writeFakeBin(join(bin, "claude"), '#!/bin/sh\nsleep "$1"\n');
-  const start = (seconds: string) => {
-    const child = spawnCommand(fake, [seconds], {
+  // 放行文件出现才退出：机器忙时接管要好几秒，按固定时长退出会赶在接管之前，断言不到「接管时还在跑」。
+  const release = join(root, "release");
+  const fake = writeFakeBin(
+    join(bin, "claude"),
+    '#!/bin/sh\nwhile [ ! -f "$1" ]; do sleep 0.1; done\n',
+  );
+  const start = () => {
+    // Git 自带的 sh 认正斜杠的 Windows 路径。
+    const child = spawnCommand(fake, [release.replace(/\\/g, "/")], {
       detached: true,
       stdio: "ignore",
     });
@@ -270,9 +276,8 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
     });
     return child.pid!;
   };
-  // 要活过接管：机器忙时从拉起到接管完成会超过 1.5 秒，进程先退了就断言不到「接管时还在跑」。
-  const ok = running("claude", start("4"), CLAUDE_OK);
-  const bad = running("claude", start("4"), CLAUDE_ERROR);
+  const ok = running("claude", start(), CLAUDE_OK);
+  const bad = running("claude", start(), CLAUDE_ERROR);
   runner.start();
   await until(
     () =>
@@ -286,6 +291,7 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
     getTask(db, ok.ref).events.at(-1)!.detail!,
     /服务重启后按 pid 接管/,
   );
+  writeFileSync(release, "");
   await until(
     () =>
       getTask(db, ok.ref).status !== "running" &&

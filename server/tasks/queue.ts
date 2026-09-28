@@ -86,33 +86,48 @@ export function queueView(
 }
 
 /** fix：修复任务（t237，不算紧急的）；旧调用方不给按功能。 */
-export type QueueHead = QueueEntry & {
+export type QueueItem = QueueEntry & {
   urgent: boolean;
   idle: boolean;
   fix?: boolean;
 };
 
 /**
- * 每个工具（指定了主机的按工具与主机）的队首，按拉起先后排好：紧急 → 普通 → 闲时，同一档按入队先后（host-load.ts queueOrder）。
- * 纯函数；drain 按这个顺序过闸门，普通任务被挡住时后面不会还有紧急的，闲时的排在最后。
- * 修复与功能各出一个队首（t237）：功能队首只被修复保底名额挡着时，排在它后面的修复照样轮得到。
+ * 排队任务按拉起先后排好：紧急 → 普通 → 闲时，同一档按入队先后（host-load.ts queueOrder）。
+ * 纯函数；drain 按这个顺序一件件挑主机（t229）：前面一件去不了（指定的主机满了、只能在本机跑而本机满了、
+ * 那台没装它的工具、功能任务只被修复保底名额挡着，t237），不挡后面能去别台的或排在后面的修复；
+ * 同一工具先入队的先挑，独占工具被前一件占上后后面的自然等着。
  */
-export function queueHeads(entries: readonly QueueHead[]): QueueHead[] {
-  const order = (a: QueueHead, b: QueueHead) =>
+export function queueWalk(entries: readonly QueueItem[]): QueueItem[] {
+  return [...entries].sort((a, b) =>
     queueOrder(
       { urgent: a.urgent, idle: a.idle, at: a.queued_at, id: a.task_id },
       { urgent: b.urgent, idle: b.idle, at: b.queued_at, id: b.task_id },
-    );
-  // 指定了主机的另排一队：那台离线或满了，不挡自动挑主机的同一工具。
-  const first = new Map<string, QueueHead>();
-  for (const entry of [...entries].sort(order)) {
-    const key = `${entry.tool}@${entry.host_id ?? ""}@${entry.fix ? "fix" : ""}`;
-    if (!first.has(key)) first.set(key, entry);
-  }
-  return [...first.values()].sort(order);
+    ),
+  );
 }
 
-/** 一轮最多看多少条排队（按紧急、普通、闲时与入队先后取，队首一定在里面）。 */
+/**
+ * drain 走到一件排队任务时先看什么（纯函数，t229）：额度账号用尽的跳过；普通与闲时的，哪台都没空位就整轮收手
+ * （紧急的排在最前、已经挑过，后面不会还有紧急的）；闲时的前面还有普通任务在等同一类执行者就跳过；
+ * 其余去挑主机（挑不到只跳过这件，不挡后面能去别台的）。
+ */
+export function drainGate(facts: {
+  urgent: boolean;
+  /** 这件用的账号额度已标用尽。 */
+  held: boolean;
+  /** 还有哪台能再接一件普通任务。 */
+  room: boolean;
+  /** 闲时任务前面还有几件普通任务在等（普通、紧急的给 0）。 */
+  idleAhead: number;
+}): "place" | "skip" | "stop" {
+  if (facts.held) return "skip";
+  if (!facts.urgent && !facts.room) return "stop";
+  if (facts.idleAhead > 0) return "skip";
+  return "place";
+}
+
+/** 一轮最多看多少条排队（按紧急、普通、闲时与入队先后取）。 */
 const QUEUE_SCAN = 1000;
 
 type ScanRow = QueueEntry & {
@@ -121,7 +136,7 @@ type ScanRow = QueueEntry & {
   task_type: string | null;
 };
 
-function scan(db: DatabaseSync, tool?: string) {
+function scan(db: DatabaseSync, tool?: string): QueueItem[] {
   const rows = db
     .prepare(
       `SELECT q.*,COALESCE(t.urgent,0) AS urgent,t.priority AS priority,t.task_type AS task_type FROM task_queue q LEFT JOIN tasks t ON t.id=q.task_id${tool ? " WHERE q.tool=?" : ""}
@@ -134,15 +149,17 @@ function scan(db: DatabaseSync, tool?: string) {
     worker: row.worker,
     risk: row.risk,
     queued_at: row.queued_at,
+    // 用户 --host 钉住的主机：drain 只往那台派（t229 之前这里漏了，钉住的也被当成自动挑）。
+    host_id: row.host_id ?? null,
     urgent: row.urgent === 1,
     idle: isIdle(row),
     fix: row.task_type === "fix" && row.urgent !== 1,
   }));
 }
 
-/** 某工具下一个该跑的；不给工具时返回每个工具的队首（紧急的在前、闲时的在后）。 */
-export function heads(db: DatabaseSync, tool?: string): QueueHead[] {
-  return queueHeads(scan(db, tool));
+/** 排着的任务（只看某工具或全部），按拉起先后排好。 */
+export function pending(db: DatabaseSync, tool?: string): QueueItem[] {
+  return queueWalk(scan(db, tool));
 }
 
 /** 在排队的普通（含紧急）任务各用哪个工具；闲时任务派不派据此判断（priority.ts idleAhead）。 */

@@ -50,21 +50,46 @@ export async function ensureClone(url: string, clone: string, run: Exec) {
     );
 }
 
+/** 同一克隆上的 git 操作排成一串（按克隆目录）。 */
+export type CloneLock = <T>(
+  clone: string,
+  work: () => Promise<T>,
+) => Promise<T>;
+
+/** 按克隆目录排队：前一件做完（成功或失败）才做下一件，不同克隆互不等。 */
+export function cloneLock(): CloneLock {
+  const tails = new Map<string, Promise<unknown>>();
+  return <T>(clone: string, work: () => Promise<T>) => {
+    const next = (tails.get(clone) ?? Promise.resolve()).then(work, work);
+    const settled = next.catch(() => undefined);
+    tails.set(clone, settled);
+    void settled.then(() => {
+      if (tails.get(clone) === settled) tails.delete(clone);
+    });
+    return next;
+  };
+}
+
 export async function launchAssignment(
   assignment: Assignment,
-  ctx: { env: NodeJS.ProcessEnv; run: Exec },
+  ctx: { env: NodeJS.ProcessEnv; run: Exec; withClone?: CloneLock },
 ): Promise<Launched> {
   const adapter = ADAPTERS[assignment.tool];
   mkdirSync(assignment.dir, { recursive: true, mode: 0o700 });
   if (assignment.repo) {
     const { url, clone, worktree, branch, base } = assignment.repo;
-    await ensureClone(url, clone, ctx.run);
-    await ensureWorktree(
-      clone,
-      { path: worktree, branch, slug: "" },
-      base,
-      ctx.run,
-    );
+    // 两件任务同时拉起时各自 fetch 同一克隆会抢 refs/remotes/origin/<base> 的锁（t229）：
+    // 克隆、fetch、建工作树与按提交检查排成一串。
+    const withClone: CloneLock = ctx.withClone ?? ((_clone, work) => work());
+    await withClone(clone, async () => {
+      await ensureClone(url, clone, ctx.run);
+      await ensureWorktree(
+        clone,
+        { path: worktree, branch, slug: "" },
+        base,
+        ctx.run,
+      );
+    });
   } else mkdirSync(assignment.cwd, { recursive: true });
   // 组织技能（t232）：与本机同一套挂载；挂不上不拦拉起，提示词与回执写明。
   let mount: Mount | undefined;

@@ -25,7 +25,7 @@ import {
   getTask,
   updateTask,
 } from "../server/tasks/ledger.ts";
-import { enqueue, heads, queueHeads } from "../server/tasks/queue.ts";
+import { enqueue, pending, queueWalk } from "../server/tasks/queue.ts";
 import { topRows, typeCounts } from "../server/tasks/top.ts";
 import {
   chooseHost,
@@ -300,7 +300,7 @@ test("挑主机：功能被保底名额挡着排队并标 reserve，修复与紧
   assert.deepEqual(chooseHost([h1, h2], feature), { kind: "run", host: 2 });
 });
 
-test("队首：修复与功能各出一个，功能被保底挡着时后面的修复轮得到", () => {
+test("逐件走：整条队都走到，功能被保底挡着时后面的修复轮得到", () => {
   const entry = (task_id: number, fix: boolean, at: number) => ({
     task_id,
     tool: "kimi",
@@ -311,15 +311,20 @@ test("队首：修复与功能各出一个，功能被保底挡着时后面的�
     idle: false,
     fix,
   });
-  const got = queueHeads([
-    entry(1, false, 1),
+  const got = queueWalk([
+    entry(4, true, 4),
     entry(2, false, 2),
     entry(3, true, 3),
-    entry(4, true, 4),
+    entry(1, false, 1),
   ]);
   assert.deepEqual(
-    got.map((head) => head.task_id),
-    [1, 3],
+    got.map((head) => [head.task_id, head.fix]),
+    [
+      [1, false],
+      [2, false],
+      [3, true],
+      [4, true],
+    ],
   );
 });
 
@@ -497,7 +502,7 @@ test("读配置：ATRIUM_FIX_RESERVE_PERCENT 缺省 25，测试进程里没设�
   assert.match(bad.problems.join("\n"), /ATRIUM_FIX_RESERVE_PERCENT=很多/);
 });
 
-test("队列扫描：修复任务带 fix 标记、单独出队首；紧急的修复按紧急算，和功能共用一个队首", () => {
+test("队列扫描：修复任务带 fix 标记；紧急的修复按紧急算、排最前，不带 fix", () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   createTask(db, { title: "功能" });
@@ -511,13 +516,14 @@ test("队列扫描：修复任务带 fix 标记、单独出队首；紧急的修
       risk: "low",
       queued_at: id,
     });
-  const got = heads(db).map((h) => ({
+  const got = pending(db).map((h) => ({
     id: h.task_id,
     fix: h.fix,
     urgent: h.urgent,
   }));
   assert.deepEqual(got, [
     { id: 3, fix: false, urgent: true },
+    { id: 1, fix: false, urgent: false },
     { id: 2, fix: true, urgent: false },
   ]);
 });

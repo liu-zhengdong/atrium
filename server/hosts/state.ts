@@ -284,6 +284,18 @@ export const crowded = (c: HostCandidate) =>
   !!c.busy || (c.max !== null && c.running >= c.max);
 
 /**
+ * 还有没有哪台能再接一件普通任务（本机或在线的远程、没暂停、不满不忙）；
+ * 都没有时排队的普通任务不必一件件再挑主机（t229，drain 据此提前收手）。
+ */
+export const hasRoom = (candidates: readonly HostCandidate[]) =>
+  candidates.some(
+    (c) =>
+      !c.paused &&
+      (c.kind === "local" || c.connection === "online") &&
+      !crowded(c),
+  );
+
+/**
  * 挑主机：指定了就只看那台（接不了拒绝，满了排队）；没指定在能接的里挑最空的，一样空时本机优先；
  * 紧急的先挑不满不忙的（不用抢占），同样时本机优先；任务写了避开的主机一律不派（t215）；
  * 要带组织技能的先挑能挂技能的（t232，挂不了的仍能接，只排在后面）；

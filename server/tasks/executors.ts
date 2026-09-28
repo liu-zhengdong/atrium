@@ -17,8 +17,14 @@ import {
 import { publishTask, publishUrgentStage } from "./notice.ts";
 import { exitDetail, type Exit } from "./outcome.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
-import { dequeue, heads, queuedFixes, queuedNormals } from "./queue.ts";
-import { idleAhead } from "./priority.ts";
+import {
+  dequeue,
+  drainGate,
+  pending,
+  queuedFixes,
+  queuedNormals,
+} from "./queue.ts";
+import { idleAhead, idleAheadAll } from "./priority.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
@@ -117,6 +123,8 @@ export type Chosen = {
 export type Placement = {
   need(taskId: number, tool: Tool, urgent: boolean): Promise<HostNeed>;
   choose(need: HostNeed, pinned: number | null): HostChoice;
+  /** 还有没有哪台能再接一件普通任务（都满或太忙时 drain 提前收手，不再一件件挑）。 */
+  room(): boolean;
   /** 远程主机上报的已装且没判为未登录的工具（挑执行者时代替本机 PATH）。 */
   installed(host: number): Partial<Record<Tool, string>>;
   /** 这台暂停接活了没：拉起前最后再看一眼，重试、换人、续派都不往暂停的主机上起（t227）。 */
@@ -186,6 +194,10 @@ export class Executors {
       reconnected: (host) => {
         for (const active of this.active.values())
           if (active.host === host) active.state.lastProgressAt = Date.now();
+        // 主机恢复接活（t229）：排着的按各主机此刻的空位再挑一轮，不等下次巡检。
+        setImmediate(() => {
+          if (this.ready && !this.ctx.closed()) void this.drain();
+        });
       },
     });
   }
@@ -1424,19 +1436,45 @@ export class Executors {
   }
 
   /**
-   * 拉起排队中的任务：每个工具的队首（紧急的在前、闲时的在后），闲时的还要前面没有普通任务在等同一类执行者，前提是独占工具空闲、账号额度标记已解除、本机没满也不太忙（紧急的不看这两条）；
-   * 返回出队几个。几处（退出收尾、巡检、额度解除）可能同时调用，出队以删到队列行为准。
+   * 拉起排队中的任务：整条队按紧急 → 普通 → 闲时、入队先后一件件按各主机此刻的空位挑主机（t229），
+   * 钉了主机的（--host）只去那台、写了避开的不去；一件去不了（钉的那台满了、只能在本机跑而本机满了、
+   * 别台没装它的工具、独占工具正忙、功能任务只被修复保底名额挡着 t237）只跳过它，不挡后面能去别台的或排在后面的修复；
+   * 哪台都没空位时普通任务整轮收手。
+   * 闲时的还要前面没有普通任务在等同一类执行者；额度标记没解除的不派。
+   * 返回出队几个。几处（退出收尾、巡检、额度解除、主机恢复）可能同时调用，出队以删到队列行为准。
    */
   async drain(tool?: Tool) {
     if (this.ctx.closed()) return 0;
     const held = this.ctx.quota.held();
+    const placement = this.ctx.placement;
+    const entries = pending(this.ctx.db, tool);
+    // 这一轮没拉起的普通任务：闲时任务让不让，按它们算（普通的都排在闲时前面，走到闲时时已定）。
+    const waiting = new Set(
+      entries.filter((entry) => !entry.idle).map((entry) => entry.task_id),
+    );
+    let idleWait: Map<number, number> | undefined;
+    // 还有没有哪台有空位：本轮拉起一件后重算（别处同时腾出的位置下一轮再用）。
+    let room: boolean | undefined;
     let moved = 0;
-    for (const entry of heads(this.ctx.db, tool)) {
+    for (const entry of entries) {
       const entryTool = entry.tool as Tool;
-      if (this.ctx.closed() || held.has(ADAPTERS[entryTool].quotaProvider))
-        continue;
+      if (this.ctx.closed()) return moved;
+      if (entry.idle)
+        idleWait ??= idleAheadAll(
+          entries.filter((other) => other.idle || waiting.has(other.task_id)),
+          (other) => this.ownWait(other, held),
+        );
+      const gate = drainGate({
+        urgent: entry.urgent,
+        held: held.has(ADAPTERS[entryTool].quotaProvider),
+        room: (room ??= placement
+          ? placement.room()
+          : (this.ctx.hostGate?.(false).ok ?? true)),
+        idleAhead: entry.idle ? (idleWait?.get(entry.task_id) ?? 0) : 0,
+      });
+      if (gate === "stop") break;
+      if (gate === "skip") continue;
       let host: number | undefined;
-      const placement = this.ctx.placement;
       const need = placement
         ? await placement
             .need(entry.task_id, entryTool, entry.urgent)
@@ -1444,22 +1482,14 @@ export class Executors {
         : undefined;
       if (this.ctx.closed()) return moved;
       // 判定与占位之间没有 await：同时进来的另一轮 drain 看得到这里的 launching。
-      // 闲时的（t136）：同一工具或在等本机空位的普通任务还有没拉起的（队首只取每个工具一件），先让它们。
-      if (entry.idle && this.idleAhead(entryTool)) continue;
-      // 队首按紧急、普通、闲时排好：普通任务被挡住时，后面不会还有紧急的。
       if (placement && need) {
         const choice = placement.choose(need, entry.host_id ?? null);
-        // 指定的主机离线、暂停或满了：只等它，不挡别的队。
-        // 只是被修复保底名额挡着的功能任务（t237）：后面的修复任务照样能派，不就此停下。
-        if (choice.kind !== "run") {
-          if (entry.host_id || (choice.kind === "queue" && choice.reserve))
-            continue;
-          break;
-        }
+        // 这件此刻去不了（钉的主机离线、暂停或满了，能接的都满了）：只跳过它，后面的照样挑。
+        if (choice.kind !== "run") continue;
         host = choice.host;
       } else {
-        const gate = this.ctx.hostGate?.(entry.urgent);
-        if (gate && !gate.ok) break;
+        const local = this.ctx.hostGate?.(entry.urgent);
+        if (local && !local.ok) continue;
       }
       if (
         ADAPTERS[entryTool].exclusive &&
@@ -1477,6 +1507,8 @@ export class Executors {
       )
         continue;
       if (!dequeue(this.ctx.db, entry.task_id)) continue;
+      waiting.delete(entry.task_id);
+      room = undefined;
       moved++;
       this.claim(entry.task_id, entryTool, host);
       try {

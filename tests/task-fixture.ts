@@ -92,6 +92,16 @@ export function fixture(t: After) {
   return { root, repo: join(root, "repo"), env, workers, run, script };
 }
 
+/** 断言失败时附上任务的事件轨迹（kind 与 detail 前 300 字），在别的平台挂了也能看出原因。 */
+export function eventTrail(task: {
+  status?: string;
+  events?: { kind: string; detail?: string | null }[];
+}) {
+  return `任务 ${task.status}，事件：\n${(task.events ?? [])
+    .map((event) => `${event.kind} ${(event.detail ?? "").slice(0, 300)}`)
+    .join("\n")}`;
+}
+
 export async function until(check: () => boolean, ms = 10_000) {
   const end = Date.now() + ms;
   while (!check()) {

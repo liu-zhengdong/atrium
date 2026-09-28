@@ -26,6 +26,7 @@ import { finishPatrol, patrolRun } from "./patrol.ts";
 import { VERIFIER_FLAG } from "./verify.ts";
 import { isVerifyTask } from "./verify-runtime.ts";
 import { settleRound } from "../products/settle.ts";
+import { settleDraft } from "../drafts/store.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
@@ -1046,6 +1047,10 @@ export class Executors {
                   this.ctx.launchOptions.data,
                   id,
                 )
+              : {}),
+            // 全景初稿：读工作目录里的初稿存进账，完成事件带下一步（先看再确认写入）或错误。
+            ...(decision.publish === "done"
+              ? settleDraft(this.ctx.db, this.ctx.launchOptions.data, id)
               : {}),
           },
           active.stop?.kind === "user" ? active.stop.by : undefined,

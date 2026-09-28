@@ -425,6 +425,8 @@ atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板 --
 atrium map add atrium 安全 --slug security --kind aspect     # 管方面的部分：要点横跨多个部分
 atrium map edit atrium/security --applies atrium/web,atrium/cli  # 它的要点缺省适用于哪些部分；空串改回整个上级
 atrium org edit atrium/perf --kind aspect --reason 横向看性能   # 已有部分改成管方面；改回 module 前要先清掉适用范围
+atrium map draft ~/code/openquota --node openquota  # 从本机仓库起草这一块的全景初稿（一次性执行者只读仓库）
+atrium map apply t12 --dry-run                     # 看初稿和写进节点会改哪些字段；不带 --dry-run 才写进去
 atrium patrol run atrium/cli                       # 手动巡检一条 uses 场景；下一次轮换到下一条
 atrium patrol findings atrium/cli                  # 看发现及 leader 的处理结果
 atrium schedule add atrium/cli --kind patrol --every 1d --at 09:30  # 每天 09:30 巡检一次
@@ -448,6 +450,7 @@ atrium schedule pause s1                           # 暂停；resume 续上（�
 - **实时**：网页订阅 `/api/map/stream`（Server-Sent Events）。全服务一份变更检测（版本号，不扫全表），变了给所有打开的页推 `changed`，网页只重取并重画变了的区域；组织根首屏不取执行者统计，画完再补。另每 30 秒刷新一次执行者的最近动作与时长。
 - **派活**：`map context` 的内容自动附进执行者提示词，与「章程要点」同一段、放在最前（任务有归属部分时取归属部分，否则取负责节点）；归属链之外再附「牵涉部分的要点」：任务 `--also` 牵涉的部分的要点，以及管方面的部分里适用于归属部分的要点（自动牵涉），每条注明来源（如「安全 · 适用于网页」）。全景这段不超过 1500 字，按「位置链 > 本块是什么 > 本块要点 > 上级要点与牵涉部分的要点 > 上一层是什么 > 现状 > 组成 > 更上层」保留，截了就在末尾给全文命令。提示词只附本任务用到的专员（干活的与请来看的）。
 - **管方面的部分**（#373）：除了管东西的部分（命令行、网页、派活），还有管方面的部分（安全，以后可能有性能、体验），它们的要点横跨多个部分。`map add … --kind aspect` 建，已有部分可用 `org edit … --kind aspect|module` 改类型（只切「管方面」标记，留节点修订；project/org 不能改成 aspect；改回 module 前要先清掉要点与部分的适用范围，否则报错并列出命令），`map edit … --applies` 写它的要点缺省适用于哪些部分，单条要点可用 `org point-add/point-edit --applies` 覆盖；都不写即适用于整个上级。`map --json` 给 `aspect`、`applies` 与本块适用的别处要点 `points_applied`。
+- **从仓库起草**（t186）：`map draft 仓库路径` 先由运行时只读地取 README 开头、两层目录（隐藏文件与 `.env`、密钥、证书、名字带 secret/credential 的文件不列）、最近 20 条提交和去掉内嵌凭据的 origin，排进详述，再按 `task run` 同一条路派一次性执行者（不交 PR、不建 worktree、只在本机跑）。执行者只读仓库、可用 `gh issue list` 看开着的 issue，在自己的工作目录写 `overview.json`（name、alias、analogy、what、uses、flow、parts）；任务完成时运行时读它、校验后存下，完成事件带 `draft: ready` 与下一步，读不到或不合格带 `draft_error`，不挡任务完成。`map apply tN --dry-run` 给你看初稿和写进节点会改哪些字段；确认后 `map apply tN --node 节点` 才写人话字段（没给的不动，组成部分留给建节点），同一份初稿只写一次，权限同 `map edit`。起草与写入只给用户令牌。
 - **权限与修订**：`map edit` 的人话字段（what、uses、flow、alias、analogy、now、next、when）直接覆盖当前值，不留修订、无需 `--rev`；`--detail` 是章程正文，仍留章程修订，`--rev` 仅用于此。`map add` 的节点创建仍留节点修订，人话字段不留修订。硬边界、份额等组织规矩仍按章程修订。负责部门 leader 或其上级可改（`--as aN`），根只有你能改。
 
 ## 组织树

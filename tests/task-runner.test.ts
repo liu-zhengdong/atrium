@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { getTask } from "../server/tasks/ledger.ts";
 import { spawnMark, spawnOwner } from "../server/tasks/orphans.ts";
-import { startApp } from "./task-fixture.ts";
+import { eventTrail, startApp } from "./task-fixture.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { nodeCommand } from "./portable-shell.ts";
 
@@ -51,7 +51,7 @@ test("交付关卡不跑全量检查：档案带 local_check 也不执行检查�
   const result = await call("GET", "/api/tasks/t1/wait?timeout=20");
   const task = result.body.task;
   // 没有 PR 只挡在 pr_exists；会失败的检查脚本没被执行。
-  assert.equal(task.status, "blocked");
+  assert.equal(task.status, "blocked", eventTrail(task));
   assert.equal(
     task.events.some((event: { kind: string }) =>
       event.kind.startsWith("local_check"),

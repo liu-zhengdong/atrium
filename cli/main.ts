@@ -20,6 +20,7 @@ import {
 import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
 import { mapCommands } from "./map.ts";
+import { draftCommands } from "./drafts.ts";
 import { reviewCommands } from "./reviews.ts";
 import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
@@ -112,6 +113,7 @@ export const commands: Record<string, Command> = {
   ...workerCommands,
   ...reviewCommands,
   ...mapCommands,
+  ...draftCommands,
   ...orgCommands,
   ...leaderCommands,
   ...patrolCommands,

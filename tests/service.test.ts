@@ -77,10 +77,13 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
         stdout: string;
         stderr: string;
         code: number;
+        killed?: boolean;
       };
       return {
         stdout: failure.stdout,
-        stderr: failure.stderr,
+        stderr: failure.killed
+          ? `${failure.stderr}\n（命令超过 25 秒被结束）`
+          : failure.stderr,
         code: failure.code,
       };
     }

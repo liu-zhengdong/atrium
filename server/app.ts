@@ -13,6 +13,7 @@ import { ensureScheduleTables } from "./schedules/model.ts";
 import { SchedulePump } from "./schedules/runtime.ts";
 import { registerScheduleRoutes } from "./schedules/routes.ts";
 import { registerProductRoutes } from "./products/routes.ts";
+import { registerDraftRoutes } from "./drafts/routes.ts";
 import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
@@ -276,6 +277,8 @@ export async function createApp(options: {
   migrateSpecialists(db);
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
   registerPatrolRoutes(app, db, taskRunner);
+  // 全景初稿（t186）：读本机仓库起草人话字段，执行者完成后登记初稿，用户确认才写进节点。
+  registerDraftRoutes(app, db, taskRunner, taskOptions.exec);
   // 周期任务（#404）：到点在节点下建普通任务并派发；等任务运行时接管完上次在跑的再判上一轮。
   const schedulePump = new SchedulePump(
     db,

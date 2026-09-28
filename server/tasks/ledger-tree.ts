@@ -14,6 +14,7 @@ import {
   type TaskRow,
 } from "./ledger-model.ts";
 import { childSummaries } from "./ledger-summary.ts";
+import { rollups } from "./rollup-ledger.ts";
 import { noteViews } from "./notes.ts";
 
 type TreeRow = Pick<
@@ -153,6 +154,7 @@ export function taskTree(
   if (truncated) rows.length = TREE_MAX;
   const ids = rows.map((found) => found.id);
   const summaries = childSummaries(db, ids);
+  const totals = rollups(db, [...summaries.keys()]);
   const notes = noteViews(db, rows);
   const roots = new Set(top.ids);
   const nodes = new Map<number, TaskNode>();
@@ -166,6 +168,7 @@ export function taskTree(
       ...notes.get(id)!,
       children: [],
       child_summary: summaries.get(id) ?? null,
+      rollup: totals.get(id) ?? null,
     };
     nodes.set(id, node);
     if (roots.has(id)) forest.push(node);

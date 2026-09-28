@@ -314,6 +314,8 @@ export function createCouncil(db: DatabaseSync, data: string, body: unknown) {
           ...(input.part ? { part: input.part } : {}),
         },
         now,
+        undefined,
+        { helper: true },
       );
       db.prepare(
         "UPDATE council_members SET opinion_id=? WHERE task_id=? AND node_id=?",

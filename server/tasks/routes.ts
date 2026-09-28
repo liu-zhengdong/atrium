@@ -1,4 +1,7 @@
 import { publishInvolved } from "./notice.ts";
+import { isTotal, openDescendants } from "./rollup-ledger.ts";
+import { Problem } from "../problem.ts";
+import { taskRef } from "./ledger-model.ts";
 import { involvedOf } from "./also.ts";
 import { specialistsForPart } from "./specialist-scope.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -213,8 +216,34 @@ export function registerTaskRoutes(
     const id = parseTaskRef(params(request.params).id);
     const exists = db.prepare("SELECT 1 FROM tasks WHERE id=?").get(id);
     const before = exists ? involvedOf(db, getTask(db, id)) : undefined;
-    const task = updateTask(db, params(request.params).id, request.body);
+    const { body, withChildren } = cascadeOf(request.body);
+    // 总任务取消（t190）：下面还有没结束的子孙时先问一句，带 --with-children 才连带取消。
+    const open =
+      exists &&
+      (body as { status?: unknown } | null)?.status === "cancelled" &&
+      isTotal(db, id)
+        ? openDescendants(db, id)
+        : [];
+    if (open.length && !withChildren)
+      throw new Problem(
+        409,
+        `${taskRef(id)} 是总任务，下面还有 ${open.length} 个没结束的子孙：${open
+          .slice(0, 10)
+          .map((child) => taskRef(child.id))
+          .join(
+            "、",
+          )}${open.length > 10 ? "…" : ""}；要连带取消加 --with-children（在跑的先停，已上线、已完成的不动）`,
+        "conflict",
+        undefined,
+        `atrium task set ${taskRef(id)} --status cancelled --with-children`,
+      );
+    const task = updateTask(db, params(request.params).id, body);
+    const cascade = open.length
+      ? await runner.cancelDescendants(id, leaderOf(request))
+      : null;
     if (task.status === "cancelled") await runner.cleanupCancelled(task.id);
+    if ((body as { status?: unknown } | null)?.status !== undefined)
+      runner.changedTotals(task.id);
     // 标了紧急或改了闲时 / 普通：排队中的立刻按新先后再排一轮。
     const reordered =
       !!request.body &&
@@ -229,7 +258,12 @@ export function registerTaskRoutes(
         [...before.also, ...before.auto],
         leaderOf(request),
       );
-    return getTask(db, task.id);
+    return {
+      ...getTask(db, task.id),
+      ...(cascade
+        ? { cancelled_children: cascade.cancelled, stopped: cascade.stopped }
+        : {}),
+    };
   });
   app.post("/api/tasks/:id/note", { bodyLimit: 4 * 1024 }, (request) =>
     addTaskNote(
@@ -314,4 +348,20 @@ export function registerTaskRoutes(
     runner.inbox.ack(ackIds(request.body)),
   );
   return runner;
+}
+
+/** task set 的 with_children（取消总任务时连带取消子孙）不是任务字段：先摘出来再交给 updateTask。 */
+function cascadeOf(body: unknown) {
+  if (!body || typeof body !== "object" || !("with_children" in body))
+    return { body, withChildren: false };
+  const { with_children, ...rest } = body as Record<string, unknown>;
+  if (with_children !== true && with_children !== false)
+    throw new Problem(400, "with_children: 应为 true 或 false", "usage");
+  if (with_children && rest.status !== "cancelled")
+    throw new Problem(
+      400,
+      "--with-children 只用于取消总任务：同时给 --status cancelled",
+      "usage",
+    );
+  return { body: rest, withChildren: with_children };
 }

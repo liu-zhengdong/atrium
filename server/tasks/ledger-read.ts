@@ -15,6 +15,7 @@ import {
 } from "./ledger-model.ts";
 import { parentOf, statusOf } from "./ledger-validate.ts";
 import { childSummaries } from "./ledger-summary.ts";
+import { rollupFor, rollups } from "./rollup-ledger.ts";
 import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
 import { idleWaits, queued, queueView } from "./queue.ts";
@@ -38,6 +39,8 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     EVENTS_SHOWN,
   );
   const child_summary = childSummaries(db, [found.id]).get(found.id) ?? null;
+  // 总任务（t190）：状态与进度按全部子孙汇总；球在子任务手里，不给持球人。
+  const rollup = child_summary ? rollupFor(db, found.id) : null;
   const concerns = concernsOf(db, found.id);
   const hints = lastHints(db, found.id);
   const queue = queueView(db, found.id);
@@ -45,13 +48,16 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     ...view(found),
     ...noteView(db, found.id, found.status),
     ...queue,
-    holder: holderFor(
-      db,
-      found,
-      queued(db, found.id) ? { reason: queue.queued_reason } : null,
-    ),
+    holder: rollup
+      ? null
+      : holderFor(
+          db,
+          found,
+          queued(db, found.id) ? { reason: queue.queued_reason } : null,
+        ),
     children: child_summary?.total ?? 0,
     child_summary,
+    rollup,
     events,
     ...conditions(db, found.id),
     ...(concerns.length ? { concerns } : {}),
@@ -112,10 +118,16 @@ export function listTasks(
   );
   const more = rows.length > limit;
   const ahead = once(() => idleWaits(db));
-  const tasks = rows.slice(0, limit).map((row) => ({
+  const page = rows.slice(0, limit);
+  const totals = rollups(
+    db,
+    page.map((row) => row.id),
+  );
+  const tasks = page.map((row) => ({
     ...listView(row),
     ...noteView(db, row.id, row.status),
     ...queueView(db, row.id, ahead),
+    rollup: totals.get(row.id) ?? null,
   }));
   return { tasks, next_after: more ? tasks.at(-1)!.ref : null };
 }

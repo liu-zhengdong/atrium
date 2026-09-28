@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { EventInbox } from "./events.ts";
-import { getTask } from "./ledger.ts";
+import { atomically, getTask, noteTask, type Task } from "./ledger.ts";
+import { one, taskRef } from "./ledger-model.ts";
+import { finishedLeaves, rollupFor, syncTotals } from "./rollup-ledger.ts";
+import { leafDelivery, progressOf, totalOnlineMessage } from "./rollup.ts";
+import { verificationSection } from "./online.ts";
 import { eventLevel } from "./event-level.ts";
 import { nodes } from "../org/model.ts";
 import { partRoute, taskRoute } from "../leaders/subscriber.ts";
@@ -21,9 +25,11 @@ export function publishTask(
   kind: string,
   detail: Record<string, unknown>,
   actor?: string,
-) {
+): number[] {
   if (db.prepare("SELECT 1 FROM tasks WHERE review_task=? LIMIT 1").get(id))
-    return;
+    return [];
+  // 总任务（t190）：先让上面每层总任务的状态跟上，再按「秘书只收总任务级的」分投。
+  const totals = atomically(db, () => syncTotals(db, id));
   const task = getTask(db, id);
   const route = taskRoute(db, task);
   const key =
@@ -34,7 +40,19 @@ export function publishTask(
         : kind.startsWith("ci")
           ? "ci"
           : "outcome";
-  for (const target of deliveryRoutes(kind, route))
+  let targets = deliveryRoutes(kind, route);
+  if (totals.root) {
+    const split = leafDelivery(
+      kind,
+      targets.map((target) => target.subscriber),
+      route.subscriber,
+      SECRETARY,
+    );
+    targets = targets.filter((target) => split.to.includes(target.subscriber));
+    if (split.stuck)
+      publishStuck(inbox, db, totals.root.id, task, kind, detail, actor);
+  }
+  for (const target of targets)
     inbox.publish({
       subscriber: target.subscriber,
       taskId: id,
@@ -52,6 +70,7 @@ export function publishTask(
         routed: { to: target.subscriber, why: target.why },
       },
     });
+  if (totals.root) publishTotalOnline(inbox, db, totals.root.id);
   if (
     kind === "blocked" &&
     detail.source === "budget" &&
@@ -70,6 +89,7 @@ export function publishTask(
         detail: { title: task.title, ...detail },
       });
   }
+  return totals.ancestors;
 }
 
 /**
@@ -117,4 +137,144 @@ export function publishInvolved(
     sent.push(ref(nodeId));
   }
   return sent;
+}
+
+/** 「tN 下的 tM 卡住要你」：总任务下的任务卡住、又没有 leader 管时，秘书收到的那一条（t190）。 */
+function publishStuck(
+  inbox: EventInbox,
+  db: DatabaseSync,
+  rootId: number,
+  task: Task,
+  kind: string,
+  detail: Record<string, unknown>,
+  actor?: string,
+) {
+  const root = getTask(db, rootId);
+  // 整个总任务已经取消（连带取消时停掉在跑的子孙）：不再报卡住。
+  if (root.status === "cancelled") return;
+  const rollup = rollupFor(db, rootId);
+  const reason = typeof detail.reason === "string" ? detail.reason : null;
+  inbox.publish({
+    subscriber: SECRETARY,
+    taskId: task.id,
+    source: detail.source === undefined ? "runner" : String(detail.source),
+    kind: "total_stuck",
+    key: `${root.ref}:stuck:${task.ref}`,
+    actor,
+    detail: {
+      title: task.title,
+      status: task.status,
+      total: root.ref,
+      total_title: root.title,
+      ...(rollup ? { progress: progressOf(rollup) } : {}),
+      leaf_kind: kind,
+      ...detail,
+      message: `${root.ref} 下的 ${task.ref} 卡住要你${reason ? `：${reason}` : ""}`,
+      next: `atrium task show ${task.ref}`,
+      routed: {
+        to: SECRETARY,
+        why: `${task.ref} 属于总任务 ${root.ref}，没有 leader 管；秘书只收总任务级的`,
+      },
+    },
+  });
+}
+
+/** 叶子端到端验证摘要：每个叶子至多这么多字，总共至多 SUMMARY_MAX 字。 */
+const LEAF_VERIFY_MAX = 600;
+const SUMMARY_MAX = 6000;
+
+/** 叶子的端到端验证：上线时记下的那一节，没有再从执行者汇报里取。 */
+function leafVerification(
+  db: DatabaseSync,
+  leaf: { id: number; result: string | null },
+) {
+  const row = one<{ detail: string | null }>(
+    db,
+    "SELECT detail FROM task_events WHERE task_id=? AND kind='online' ORDER BY id DESC LIMIT 1",
+    leaf.id,
+  );
+  let text: string | null = null;
+  try {
+    const value = row?.detail
+      ? (JSON.parse(row.detail) as { verification_text?: unknown })
+          .verification_text
+      : undefined;
+    if (typeof value === "string" && value.trim()) text = value;
+  } catch {
+    /* 写坏的历史事件按没记处理。 */
+  }
+  return text ?? verificationSection(leaf.result);
+}
+
+export function verificationSummary(db: DatabaseSync, rootId: number) {
+  const parts: string[] = [];
+  let size = 0;
+  for (const leaf of finishedLeaves(db, rootId)) {
+    const text = leafVerification(db, leaf);
+    const body = text
+      ? Array.from(text).slice(0, LEAF_VERIFY_MAX).join("")
+      : "（没写端到端验证）";
+    const part = `### ${taskRef(leaf.id)} ${leaf.title}\n${body}`;
+    if (size + part.length > SUMMARY_MAX) {
+      parts.push("……其余见各子任务：atrium task tree " + taskRef(rootId));
+      break;
+    }
+    parts.push(part);
+    size += part.length;
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * 总任务全部子孙都已上线或完成时，秘书（和总任务的 leader）收一条「tN 整体已上线（x/x）」，
+ * 带全部叶子的端到端验证摘要。同一进度只发一次：进度变了（后来又加了子任务并完成）再发。
+ */
+export function publishTotalOnline(
+  inbox: EventInbox,
+  db: DatabaseSync,
+  rootId: number,
+) {
+  const rollup = rollupFor(db, rootId);
+  if (!rollup || rollup.status !== "online" || rollup.truncated) return;
+  const progress = progressOf(rollup);
+  const last = one<{ detail: string | null }>(
+    db,
+    "SELECT detail FROM task_events WHERE task_id=? AND kind='total_online' ORDER BY id DESC LIMIT 1",
+    rootId,
+  );
+  if (last?.detail?.includes(`"progress":"${progress}"`)) return;
+  const root = getTask(db, rootId);
+  // 用户取消了的总任务不报上线。
+  if (root.status === "cancelled") return;
+  noteTask(db, rootId, "total_online", { progress });
+  const route = taskRoute(db, root);
+  const message = totalOnlineMessage(root.ref, rollup);
+  for (const target of deliveryRoutes("online", route))
+    inbox.publish({
+      subscriber: target.subscriber,
+      taskId: rootId,
+      source: "rollup",
+      kind: "total_online",
+      key: `${root.ref}:total_online`,
+      detail: {
+        title: root.title,
+        status: root.status,
+        progress,
+        message,
+        verification: verificationSummary(db, rootId),
+        next: `atrium task tree ${root.ref}`,
+        routed: { to: target.subscriber, why: target.why },
+      },
+    });
+}
+
+/** 人工改了状态（task set）后补一次总任务级通知：同步已在状态转移里做完，这里只看要不要报整体上线。 */
+export function publishTotals(
+  inbox: EventInbox,
+  db: DatabaseSync,
+  id: number,
+): number[] {
+  const totals = atomically(db, () => syncTotals(db, id));
+  if (totals.root) publishTotalOnline(inbox, db, totals.root.id);
+  return totals.ancestors;
 }

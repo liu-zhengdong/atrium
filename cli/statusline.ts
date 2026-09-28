@@ -8,6 +8,8 @@ import { printJson, oneLine } from "./format.ts";
 import type { Command } from "./main.ts";
 import type { Client } from "./service.ts";
 import { duration, hostBrief, type Snapshot, type TopRow } from "./top.ts";
+import type { TopTotal } from "../server/tasks/top.ts";
+import { planCounts } from "../server/tasks/plan-count.ts";
 import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
 
@@ -81,6 +83,65 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
   return `${paint(color, mark)} ${row.ref} ${title} ${text}`;
 }
 
+/** 总任务一行里各类子任务怎么称呼。 */
+const GROUP_LABEL: Record<HolderKind, string> = {
+  user: "等你",
+  worker: "在做",
+  leader: "leader 处理",
+  secretary: "秘书处理",
+  merge: "合入",
+  queue: "排队",
+};
+const MEMBER_TITLE = 8;
+const MEMBERS_SHOWN = 3;
+
+type Held = TopRow & { holder: Holder };
+type Item = { row: Held } | { total: TopTotal; rows: Held[] };
+
+/**
+ * 总任务下的子任务并成一行（t190）：「▸ t174「离开电脑也能拍板」5/12 · 在做 t181 xx…、t183 yy…」。
+ * 等你的照旧单列，不藏进总任务里；没有总任务的照旧单行。位置取组里第一个子任务的位置。
+ */
+export function groupRows(held: readonly Held[]): Item[] {
+  const items: Item[] = [];
+  const groups = new Map<string, { total: TopTotal; rows: Held[] }>();
+  for (const row of held) {
+    if (!row.total || row.holder.kind === "user") {
+      items.push({ row });
+      continue;
+    }
+    const group = groups.get(row.total.ref);
+    if (group) group.rows.push(row);
+    else {
+      const created = { total: row.total, rows: [row] };
+      groups.set(row.total.ref, created);
+      items.push(created);
+    }
+  }
+  return items;
+}
+
+function groupLine(
+  total: TopTotal,
+  rows: readonly Held[],
+  paint: Paint,
+): string {
+  const kinds = ORDER.filter((kind) =>
+    rows.some((row) => row.holder.kind === kind),
+  );
+  const [, color] = MARK[kinds[0] ?? "worker"];
+  const segments = kinds.map((kind) => {
+    const members = rows.filter((row) => row.holder.kind === kind);
+    const shown = members
+      .slice(0, MEMBERS_SHOWN)
+      .map((row) => `${row.ref} ${oneLine(row.title, MEMBER_TITLE)}`);
+    const more =
+      members.length > MEMBERS_SHOWN ? ` 等 ${members.length} 个` : "";
+    return `${GROUP_LABEL[kind]} ${shown.join("、")}${more}`;
+  });
+  return `${paint(color, "▸")} ${total.ref} 「${oneLine(total.title, TITLE_MAX)}」 ${total.progress} · ${segments.join(" · ")}`;
+}
+
 export type StatuslineInput = {
   snapshot: Snapshot & { rows: (TopRow & { holder?: Holder | null })[] };
   plan: PlanView | null;
@@ -105,8 +166,10 @@ export function renderStatusline(input: StatuslineInput): string {
     (l) => l.wake?.status === "running" || l.events > 0,
   );
   const events = snapshot.counts.events;
-  const ready = input.plan?.groups.ready.length ?? 0;
-  const waiting = input.plan?.groups.waiting.length ?? 0;
+  // 与 top 的排期段、task plan 同一个计数函数（plan-count.ts）。
+  const counts = input.plan ? planCounts(input.plan.groups) : null;
+  const ready = counts?.ready ?? 0;
+  const waiting = counts?.waiting ?? 0;
   const choice = snapshot.choices
     ? pendingLine(snapshot.choices.list, snapshot.choices.open, TITLE_MAX)
     : null;
@@ -141,12 +204,19 @@ export function renderStatusline(input: StatuslineInput): string {
   ].join(" · ");
   const lines = [head];
   if (choice) lines.push(paint(`${BOLD}${RED}`, `✱ ${choice}`));
-  for (const row of held.slice(0, TASK_LINES))
-    lines.push(taskLine(row, row.holder, now, paint));
-  if (held.length > TASK_LINES)
+  const items = groupRows(held);
+  for (const item of items.slice(0, TASK_LINES))
     lines.push(
-      paint(DIM, `  …还有 ${held.length - TASK_LINES} 个，atrium top 看全部`),
+      "row" in item
+        ? taskLine(item.row, item.row.holder, now, paint)
+        : groupLine(item.total, item.rows, paint),
     );
+  if (items.length > TASK_LINES) {
+    const rest = items
+      .slice(TASK_LINES)
+      .reduce((sum, item) => sum + ("row" in item ? 1 : item.rows.length), 0);
+    lines.push(paint(DIM, `  …还有 ${rest} 个，atrium top 看全部`));
+  }
   for (const leader of leaders) {
     const doing =
       leader.wake?.status === "running"

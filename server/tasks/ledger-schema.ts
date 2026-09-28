@@ -25,6 +25,14 @@ function backfillIdle(db: DatabaseSync) {
       WHERE status NOT IN ('done','cancelled') AND COALESCE(part_id,node_id) IN (SELECT id FROM idle)`);
 }
 
+/** 老库里的帮手子任务：专员审查（每轮的审查任务）与会审意见，按登记表与运行时起的标题认。 */
+function backfillHelpers(db: DatabaseSync) {
+  db.exec(`UPDATE tasks SET helper=1 WHERE parent_id IS NOT NULL AND (
+      title LIKE '专员审查：%' OR title LIKE '会审意见：%'
+      OR id IN (SELECT review_id FROM task_concerns WHERE review_id IS NOT NULL)
+      OR id IN (SELECT opinion_id FROM council_members))`);
+}
+
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
   ensureQueueTable(db);
@@ -214,6 +222,16 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureAlsoTable(db);
   // 全景图第 3 步（#322）：会审的议题、受邀专员与结论。
   ensureCouncilTables(db);
+  // 总任务（t190）：有子任务的任务不再派、状态按子孙汇总；运行时替父任务建的帮手（专员审查、会审意见）不算子任务。
+  if (!columns.some((column) => column.name === "helper")) {
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN helper INTEGER NOT NULL DEFAULT 0 CHECK(helper IN (0,1))",
+    );
+    backfillHelpers(db);
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS tasks_plan_children ON tasks(parent_id,id) WHERE helper=0",
+  );
   ensureDeliveryRecords(db);
   ensurePatrolTables(db);
   // 执行者档案（#355）：三层档案与修订历史。

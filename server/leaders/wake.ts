@@ -131,6 +131,8 @@ export function eventLine(event: PromptEvent) {
     event.kind,
     field(event.detail, "title", 60),
     event.count > 1 ? `（合并 ${event.count} 次）` : "",
+    // 总任务级通知（t190）：「t174 整体已上线（12/12）」「t174 下的 t183 卡住要你」。
+    event.kind.startsWith("total_") ? field(event.detail, "message", 200) : "",
     field(event.detail, "pr_url", 300),
     field(event.detail, "reason", 300) || field(event.detail, "note", 300)
       ? `· ${field(event.detail, "reason", 300) || field(event.detail, "note", 300)}`
@@ -153,6 +155,8 @@ export const EVENT_WORDS: Record<string, string> = {
   waiting: "在等",
   online: "上线",
   online_failed: "上线失败",
+  total_online: "整体已上线",
+  total_stuck: "下面有子任务卡住",
   release_overdue: "等发版超时",
   merged: "已合入",
   merge_returned: "合入被打回",

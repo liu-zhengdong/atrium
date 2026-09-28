@@ -16,6 +16,13 @@ import {
   TREE_ROOTS,
 } from "../server/tasks/ledger-model.ts";
 import { formatChildSummary } from "../server/tasks/ledger-summary.ts";
+import { planCounts } from "../server/tasks/plan-count.ts";
+import {
+  progressOf,
+  rollupLabel,
+  rollupText,
+  type Rollup,
+} from "../server/tasks/rollup.ts";
 import { recordNext } from "./contract.ts";
 import { defaultSubscriber, leaderSession } from "./worker-guard.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
@@ -49,25 +56,31 @@ const client = async () => (await import("./service.ts")).connect();
 const displayStatus = (
   task: Pick<Task, "status" | "delivery_stage" | "processing"> & {
     queued_reason?: string | null;
+    rollup?: Rollup | null;
   },
 ) =>
-  task.queued_reason
-    ? "排队"
-    : task.processing
-      ? "处理中"
-      : task.status === "blocked"
-        ? "卡住"
-        : task.delivery_stage === "reviewing"
-          ? "审阅中"
-          : task.delivery_stage === "merge_queued"
-            ? "排队合入"
-            : task.delivery_stage === "merging"
-              ? "合入中"
-              : task.delivery_stage === "merged"
-                ? "已合入"
-                : task.delivery_stage === "online"
-                  ? "已上线"
-                  : task.status;
+  // 总任务（t190）：状态与进度按全部子孙汇总，自己的交付记录只作历史。
+  task.rollup
+    ? task.status === "cancelled"
+      ? `取消 ${progressOf(task.rollup)}`
+      : `${rollupLabel(task.rollup)} ${progressOf(task.rollup)}`
+    : task.queued_reason
+      ? "排队"
+      : task.processing
+        ? "处理中"
+        : task.status === "blocked"
+          ? "卡住"
+          : task.delivery_stage === "reviewing"
+            ? "审阅中"
+            : task.delivery_stage === "merge_queued"
+              ? "排队合入"
+              : task.delivery_stage === "merging"
+                ? "合入中"
+                : task.delivery_stage === "merged"
+                  ? "已合入"
+                  : task.delivery_stage === "online"
+                    ? "已上线"
+                    : task.status;
 /** 排队中的任务说清在等什么。 */
 const queueLine = (task: Task) =>
   task.queued_reason ? `  排队原因：${task.queued_reason}` : null;
@@ -168,17 +181,41 @@ function queuedReason(events: TaskEventRow[]) {
 }
 
 const line = (task: TaskNode) =>
-  [
-    task.ref,
-    `[${displayStatus(task)}]`,
-    task.title,
-    `· ${task.deliver}${task.issue ? ` #${task.issue}` : ""}`,
-    task.child_summary ? `· ${formatChildSummary(task.child_summary)}` : "",
-    task.worker ? `· ${task.worker}` : "",
-    task.pr_url ? `· ${task.pr_url}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  task.rollup
+    ? [
+        task.ref,
+        `[${displayStatus(task)}]`,
+        task.title,
+        "· 总任务",
+        ...rollupDetail(task.rollup),
+      ].join(" ")
+    : [
+        task.ref,
+        `[${displayStatus(task)}]`,
+        task.title,
+        `· ${task.deliver}${task.issue ? ` #${task.issue}` : ""}`,
+        task.child_summary ? `· ${formatChildSummary(task.child_summary)}` : "",
+        task.worker ? `· ${task.worker}` : "",
+        task.pr_url ? `· ${task.pr_url}` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+/** 总任务一行后面的在做、卡住（带短号）；状态与进度已在方括号里。 */
+function rollupDetail(rollup: Rollup): string[] {
+  const refs = (list: string[], count: number) =>
+    list.length
+      ? `（${list.join("、")}${count > list.length ? "…" : ""}）`
+      : "";
+  return [
+    rollup.running
+      ? `· 在做 ${rollup.running}${refs(rollup.running_refs, rollup.running)}`
+      : "",
+    rollup.stuck
+      ? `· 卡住 ${rollup.stuck}${refs(rollup.stuck_refs, rollup.stuck)}`
+      : "",
+  ].filter(Boolean);
+}
 
 export function renderTree(nodes: TaskNode[], depth = 0): string[] {
   return nodes.flatMap((node) => [
@@ -320,6 +357,11 @@ const add: Command = {
       console.log(
         [
           `已建 ${task.ref}：${task.title}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}${alsoText(task) ? ` · 牵涉 ${alsoText(task)}` : ""}${task.concerns?.length ? ` · 请了 ${task.concerns.map((c) => c.name).join("、")}` : ""}`,
+          ...(task.parent_ref
+            ? [
+                `${task.parent_ref} 是总任务：不派给执行者，状态与进度按全部子孙汇总（atrium task tree ${task.parent_ref}）`,
+              ]
+            : []),
           ...urgentLines(task),
           ...roleHint(task),
           ...hintLines(task),
@@ -436,6 +478,12 @@ const show: Command = {
         ["备注作者", task.note ? noteAuthor(task) : null],
         ["备注时间", task.note_at ? when(task.note_at) : null],
         ["父任务", task.parent_ref],
+        [
+          "总任务",
+          task.rollup
+            ? `是：不派给执行者，派它下面的子任务；按全部子孙汇总 ${rollupText(task.rollup)}`
+            : null,
+        ],
         ["子任务", task.children || null],
         [
           "子任务汇总",
@@ -613,10 +661,11 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--priority 闲时|普通]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发、紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）`,
+  args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--priority 闲时|普通]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发、紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
   options: {
     status: { type: "string" },
+    "with-children": { type: "boolean" },
     title: { type: "string" },
     role: { type: "string" },
     job: { type: "string" },
@@ -654,6 +703,17 @@ const set: Command = {
     const body: Record<string, string | boolean> = {};
     const wanted = str(values, "status");
     if (wanted !== undefined) body.status = status(wanted);
+    if (values["with-children"] === true) {
+      if (body.status !== "cancelled")
+        throw new Problem(
+          400,
+          "--with-children 只用于取消总任务：同时给 --status cancelled",
+          "usage",
+          undefined,
+          `atrium task set ${ref(reference, "任务")} --status cancelled --with-children`,
+        );
+      body.with_children = true;
+    }
     const title = str(values, "title");
     if (title !== undefined) {
       if (!title.trim()) throw new Problem(400, "--title 不能为空", "usage");
@@ -703,12 +763,27 @@ const set: Command = {
         undefined,
         `atrium task set ${id} --status done`,
       );
-    const task = await (await client()).patch<Task>(`/tasks/${id}`, body);
+    const task = await (
+      await client()
+    ).patch<Task & { cancelled_children?: string[]; stopped?: string[] }>(
+      `/tasks/${id}`,
+      body,
+    );
     if (json) printJson(task);
     else
       console.log(
         [
           `${task.ref} 已更新 · [${task.status}] ${task.title}`,
+          ...(task.cancelled_children
+            ? [
+                task.cancelled_children.length
+                  ? `连带取消 ${task.cancelled_children.length} 个子孙：${task.cancelled_children.join("、")}`
+                  : "没有要连带取消的子孙",
+                ...(task.stopped?.length
+                  ? [`其中先停掉在跑的：${task.stopped.join("、")}`]
+                  : []),
+              ]
+            : []),
           ...(body.urgent === true ? urgentLines(task) : []),
           ...(body.urgent === false ? ["已取消紧急：照常受本机负载限制"] : []),
           ...(body.priority === "idle" && body.urgent !== true
@@ -821,13 +896,21 @@ const plan: Command = {
     ).get<Plan>(`/tasks/plan${after ? `?after=${ref(after, "--after")}` : ""}`);
     if (json) printJson(result);
     else {
+      // 就绪、等待中的件数与 top、statusline 同一个函数（plan-count.ts）。
+      const counts = planCounts(result.groups);
       for (const [group, label] of [
         ["running", "在跑"],
         ["ready", "就绪"],
         ["waiting", "等待中"],
         ["blocked", "卡住"],
       ] as const) {
-        console.log(`${label}（${result.groups[group].length}）`);
+        const count =
+          group === "ready"
+            ? counts.ready
+            : group === "waiting"
+              ? counts.waiting
+              : result.groups[group].length;
+        console.log(`${label}（${count}）`);
         for (const item of result.groups[group])
           console.log(
             `  ${item.task.ref} ${tagText(item.task)}${item.task.title}${item.task.queued_reason ? ` · ${queuedText(item.task.queued_reason)}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,

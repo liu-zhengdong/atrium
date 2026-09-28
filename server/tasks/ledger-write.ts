@@ -59,6 +59,7 @@ import {
   writeAlso,
 } from "./also.ts";
 import { checkSpecialists } from "./specialist-scope.ts";
+import { syncTotals } from "./rollup-ledger.ts";
 
 /** brief 给内容（brief_path 记来源）；只给 brief_path 时按路径读入，兼容旧调用方。 */
 function briefOf(input: Record<string, unknown>, repo: string | null) {
@@ -163,6 +164,8 @@ export function createTask(
   now = Date.now(),
   /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
   by?: string,
+  /** 运行时替父任务建的帮手（专员审查、会审意见）：不让父任务变成总任务（t190）。 */
+  internal: { helper?: boolean } = {},
 ): Task {
   const input = objectOf(body);
   onlyKeys(input, [
@@ -238,10 +241,11 @@ export function createTask(
     const level = priority ?? defaultPriority(aspectPart(db, part ?? node));
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
+        internal.helper && parent ? 1 : 0,
         values.title,
         values.brief,
         values.brief_path,
@@ -276,6 +280,8 @@ export function createTask(
       ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(by ? { by } : {}),
     });
+    // 父任务有了子任务就是总任务（t190）：撤出排队，已结束的按汇总改回待办。
+    if (parent && !internal.helper) syncTotals(db, id, now);
     const task = requireRow(db, id);
     return {
       ...view(task),

@@ -45,6 +45,7 @@ import { commands, help } from "../cli/main.ts";
 import { guide } from "../cli/guide.ts";
 import { startApp } from "./task-fixture.ts";
 import { HostLoad } from "../server/tasks/host-load.ts";
+import { ensureHostTables } from "../server/hosts/model.ts";
 
 /**
  * atrium top（#262）：最近动作的解析、看板的列宽与筛选规则。
@@ -602,6 +603,51 @@ function empty() {
   ensureQueueTable(db);
   return db;
 }
+
+test("看板数据与任务行：远程执行机器用名字，离线立即更新，本机省略", () => {
+  const db = empty();
+  ensureHostTables(db);
+  db.prepare(
+    "INSERT INTO hosts(id,name,kind,repos,joined_at,last_seen_at,created_at,updated_at) VALUES(3,'ggb','remote','[]',1,?,?,?)",
+  ).run(NOW, NOW, NOW);
+  const task = createTask(db, { title: "远程任务" });
+  advanceTask(
+    db,
+    task.ref,
+    { kind: "start" },
+    { worker: "claude+opus:high" },
+    undefined,
+    NOW - minute,
+  );
+  db.prepare("UPDATE tasks SET host_id=3 WHERE id=?").run(task.id);
+  const online = topRows(db, NOW).rows[0]!;
+  assert.equal(online.host_name, "ggb");
+  assert.equal(online.holder?.text, "claude+opus:high @ ggb 在做");
+  assert.match(
+    renderTop(snapshot([online as TopRow]), {
+      width: 100,
+      now: NOW,
+      footer: false,
+      color: false,
+    }),
+    /claude\+opus:high @ ggb/,
+  );
+  db.prepare("UPDATE hosts SET last_seen_at=? WHERE id=3").run(NOW - 60_001);
+  const offline = topRows(db, NOW).rows[0]!;
+  assert.equal(offline.host_name, "ggb（离线）");
+  assert.match(
+    renderTop(snapshot([offline as TopRow]), {
+      width: 100,
+      now: NOW,
+      footer: false,
+      color: false,
+    }),
+    /@ ggb（离线）/,
+  );
+  db.prepare("UPDATE tasks SET host_id=NULL WHERE id=?").run(task.id);
+  assert.equal(topRows(db, NOW).rows[0]!.host_name, null);
+  db.close();
+});
 
 test("筛选：只看在跑、受阻、排队与十分钟内结束的，不列历史", () => {
   const db = empty();

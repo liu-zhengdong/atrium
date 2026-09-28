@@ -34,6 +34,7 @@ import { width } from "../server/text-width.ts";
 import { renderMapTree } from "../cli/map.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
 import { removeTemp } from "./temp-dir.ts";
+import { ensureHostTables } from "../server/hosts/model.ts";
 
 const chars = (text: string) => Array.from(text).length;
 const node = (db: DatabaseSync, input: Record<string, unknown>) =>
@@ -245,6 +246,25 @@ test("全景树与节点：按归属部分汇总任务，专员单列，要点�
   const before = mapSignature(db);
   point(db, "o4", "新要点");
   assert.notEqual(mapSignature(db), before, "要点变了指纹就变");
+});
+
+test("全景任务行：远程执行机器带名字与离线标记", () => {
+  const db = memory();
+  ensureHostTables(db);
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO hosts(id,name,kind,repos,joined_at,last_seen_at,created_at,updated_at) VALUES(3,'ggb','remote','[]',1,?,?,?)",
+  ).run(now, now, now);
+  const task = createTask(db, { title: "远程任务", part: "o3" });
+  db.prepare(
+    "UPDATE tasks SET status='running',worker='claude+opus',host_id=3 WHERE id=?",
+  ).run(task.id);
+  assert.equal(mapNode(db, "o3").tasks.running[0]!.host_name, "ggb");
+  db.prepare("UPDATE hosts SET last_seen_at=? WHERE id=3").run(now - 61_000);
+  assert.equal(mapNode(db, "o3").tasks.running[0]!.host_name, "ggb（离线）");
+  db.prepare("UPDATE tasks SET host_id=NULL WHERE id=?").run(task.id);
+  assert.equal(mapNode(db, "o3").tasks.running[0]!.host_name, null);
+  db.close();
 });
 
 test("全景节点给网页页签用的字段：部分做什么与下面几块、专员何时请与在盯几件、下层要点、合入阶段", () => {

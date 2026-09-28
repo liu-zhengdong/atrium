@@ -352,6 +352,8 @@ function taskTable(all, { withRole, empty }) {
       const [tagLabel, tone] = TAG[t.tag];
       const label = t.total ? `${tagLabel} ${t.total.progress}` : tagLabel;
       const worker = workerLabel(t.worker);
+      const workerAt =
+        worker && t.host_name ? `${worker} @ ${t.host_name}` : worker;
       const doing = t.action || t.reason || "";
       // 最新备注只在任务没结时显示：作者用名字（Atrium 负责人、你）。
       const note = t.note && !ENDED.has(t.tag) ? t.note : null;
@@ -368,7 +370,7 @@ function taskTable(all, { withRole, empty }) {
         ${cell("任务", taskName(t.ref, t.title, t.by, taskParts(t) + (t.total ? totalChildren(t) : "")), " name plain task")}
         ${withRole ? cell("专员", role, t.job ? "" : " none") : ""}
         ${cell("状态", t.urgent ? `<span class="chips">${chip("紧急", "red")}${chip(label, tone)}</span>` : t.idle && !ENDED.has(t.tag) ? `<span class="chips">${chip("闲时", "gray")}${chip(label, tone)}</span>` : chip(label, tone))}
-        ${cell("谁在做", worker ? `<span class="chip chip-soft clip" title="${esc(worker)}">${esc(worker)}</span>` : none, worker ? "" : " none")}
+        ${cell("谁在做", workerAt ? `<span class="chip chip-soft clip" title="${esc(workerAt)}">${esc(workerAt)}</span>` : none, workerAt ? "" : " none")}
         ${cell("用时", spent(t) || "—", spent(t) ? " muted tagged" : " muted none")}
         ${cell("最近在做", recent || none, recent ? " note" : " note none")}
       </div>`;

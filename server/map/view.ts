@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { oneLine } from "../text-width.ts";
+import { runningHostNames } from "../hosts/model.ts";
 import {
   all,
   nodeByAddress,
@@ -75,6 +76,7 @@ export type MapTask = {
   /** 闲时（t136）：排在普通任务后面，有空闲执行者才派；标了紧急的不算。 */
   idle: boolean;
   worker: string | null;
+  host_name?: string | null;
   started_at: number | null;
   updated_at: number;
   reason: string | null;
@@ -361,6 +363,7 @@ export type TaskRow = {
   title: string;
   status: string;
   worker: string | null;
+  host_id?: number | null;
   started_at: number | null;
   updated_at: number;
   part: number | null;
@@ -457,6 +460,7 @@ export function taskView(
     also?: Involved[];
     home?: PartBrief | null;
     total?: MapTotal | null;
+    host?: string | null;
   } = {},
 ): MapTask {
   return {
@@ -469,6 +473,7 @@ export function taskView(
     urgent: row.urgent === 1,
     idle: row.priority === "idle" && row.urgent !== 1,
     worker: row.worker ?? live?.worker ?? null,
+    host_name: row.status === "running" ? (involved.host ?? null) : null,
     started_at: row.started_at,
     updated_at: row.updated_at,
     reason: live?.reason ? oneLine(live.reason, TASK_LINE_WIDTH) : null,
@@ -617,7 +622,7 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
   );
 }
 export const taskColumns = (db: DatabaseSync) =>
-  `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"},${hasColumn(db, "tasks", "priority") ? "priority" : "NULL AS priority"}`;
+  `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "host_id") ? "host_id" : "NULL AS host_id"},${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"},${hasColumn(db, "tasks", "priority") ? "priority" : "NULL AS priority"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
 /** 任务在部分页上的顺序：在跑、卡住与等合入、待办、其余。 */
 const TASK_ORDER = (db: DatabaseSync) =>
@@ -698,6 +703,10 @@ export function mapNode(
   const others = involvedRows(db, x, ids);
   const jobs = jobNames(db);
   const both = [...rows, ...others];
+  const hosts = runningHostNames(
+    db,
+    both.map((r) => (r.status === "running" ? r.host_id : null)),
+  );
   const who = taskPeople(
     db,
     both.map((r) => r.id),
@@ -716,6 +725,7 @@ export function mapNode(
       taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id), {
         also: involved.get(r.id),
         total: totals.get(r.id),
+        host: hosts.get(r.host_id ?? 0),
       }),
     ),
     ...others.map((r) =>
@@ -723,6 +733,7 @@ export function mapNode(
         also: involved.get(r.id),
         home: homeOf(r),
         total: totals.get(r.id),
+        host: hosts.get(r.host_id ?? 0),
       }),
     ),
   ];
@@ -907,6 +918,10 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
         )
       : [];
   const byRef = new Map(active.map((r) => [r.ref, r]));
+  const hosts = runningHostNames(
+    db,
+    rows.map((r) => (r.status === "running" ? r.host_id : null)),
+  );
   const jobs = jobNames(db);
   const who = taskPeople(
     db,
@@ -929,7 +944,9 @@ export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
       tasks: [],
     };
     group.tasks.push(
-      taskView(row, byRef.get(`t${row.id}`), jobs, who.get(row.id)),
+      taskView(row, byRef.get(`t${row.id}`), jobs, who.get(row.id), {
+        host: hosts.get(row.host_id ?? 0),
+      }),
     );
     groups.set(key, group);
   }

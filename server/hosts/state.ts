@@ -27,6 +27,28 @@ export function parseHostRef(value: unknown, field = "host"): number {
 
 /** 代理多久没来就算离线：长轮询每轮最多 25 秒，留足余量。 */
 export const ONLINE_MS = 60_000;
+
+/** 任务行只标远程执行机器；名字来自主机账，心跳过期时提示离线。 */
+export function runningHostLabel(
+  id: number | null | undefined,
+  host:
+    | { name: string; joined_at: number | null; last_seen_at: number | null }
+    | undefined,
+  now: number,
+): string | null {
+  if (id == null || id === LOCAL_HOST) return null;
+  if (!host) return hostRef(id);
+  return connection({
+    kind: "remote",
+    joined: host.joined_at !== null,
+    joinExpiresAt: null,
+    lastSeenAt: host.last_seen_at,
+    polling: false,
+    now,
+  }) === "offline"
+    ? `${host.name}（离线）`
+    : host.name;
+}
 /** 接入码有效期。 */
 export const JOIN_TTL_MS = 30 * 60_000;
 

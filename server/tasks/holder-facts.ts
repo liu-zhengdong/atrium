@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { taskRoute } from "../leaders/subscriber.ts";
+import { runningHostNames } from "../hosts/model.ts";
 import {
   all,
   one,
@@ -66,6 +67,7 @@ export function holderFacts(
   row: TaskRow,
   queued: { reason: string | null } | null,
   tables = { inbox: hasTable(db, "task_inbox") },
+  hosts?: ReadonlyMap<number, string>,
 ): HolderFacts {
   // 倒序取最近几十条相关事件，再按时间正序看。
   const events = all<TaskEventRow>(
@@ -143,6 +145,11 @@ export function holderFacts(
     delivery_stage: row.delivery_stage,
     online_wait: row.online_wait,
     worker: row.worker,
+    host:
+      row.status === "running" && row.host_id != null && row.host_id !== 1
+        ? ((hosts ?? runningHostNames(db, [row.host_id])).get(row.host_id) ??
+          null)
+        : null,
     queued,
     review_task: row.review_task ? taskRef(row.review_task) : null,
     schedule_state: row.schedule_state,

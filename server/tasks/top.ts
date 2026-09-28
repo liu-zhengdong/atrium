@@ -12,6 +12,7 @@ import { concernStates } from "./concerns.ts";
 import type { ConcernState } from "./concern-gate.ts";
 import { holderFacts } from "./holder-facts.ts";
 import { holderOf, type Holder } from "./holder.ts";
+import { runningHostNames } from "../hosts/model.ts";
 import { idleWaits } from "./queue.ts";
 import { idleWaitText, isIdle } from "./priority.ts";
 import { rollups } from "./rollup-ledger.ts";
@@ -37,6 +38,7 @@ export type TopRow = NoteView & {
   worker: string | null;
   /** 在远程主机上跑（#358，hN）；本机或没在跑为 null。 */
   host?: string | null;
+  host_name?: string | null;
   started_at: number | null;
   ended_at: number | null;
   /** 在队列里时的入队时刻；null 表示不在队列。 */
@@ -229,6 +231,11 @@ export function topRows(
     )
     .get();
   const totals = totalsOf(db, selected.rows);
+  const hosts = runningHostNames(
+    db,
+    selected.rows.map((row) => (row.status === "running" ? row.host_id : null)),
+    now,
+  );
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
@@ -248,6 +255,8 @@ export function topRows(
         row.status === "running" && row.host_id != null && row.host_id !== 1
           ? `h${row.host_id}`
           : null,
+      host_name:
+        row.status === "running" ? (hosts.get(row.host_id ?? 0) ?? null) : null,
       started_at: row.started_at,
       ended_at: row.ended_at,
       updated_at: row.updated_at,
@@ -273,6 +282,7 @@ export function topRows(
           row,
           waiting ? { reason: queuedReason } : null,
           { inbox },
+          hosts,
         );
         return { holder: holderOf(facts), checking: facts.checking ?? null };
       })(),

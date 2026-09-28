@@ -71,6 +71,35 @@ test("执行者标签：去掉强度与模型前缀", () => {
   assert.equal(workerLabel(null), "?");
 });
 
+test("状态栏：远程执行者后显示主机名与离线状态，本机不显示", () => {
+  const holder = {
+    kind: "worker",
+    who: "claude+opus:high",
+    text: "claude+opus:high 在做",
+  } as const;
+  const out = render({
+    snapshot: snapshot([
+      row("t1", holder),
+      row("t2", holder, { host_name: "ggb" }),
+      row(
+        "t3",
+        {
+          ...holder,
+          text: "claude+opus:high @ ggb（离线） · 本地检查没过 · 已交回执行者",
+        },
+        { host_name: "ggb（离线）" },
+      ),
+    ]),
+  });
+  assert.match(out, /t1 .*claude · opus 12m/);
+  assert.match(out, /t2 .*claude · opus @ ggb 12m/);
+  assert.match(
+    out,
+    /t3 .*claude · opus @ ggb（离线） 12m · 本地检查没过 · 已交回执行者/,
+  );
+  assert.doesNotMatch(out, /ggb（离线）.*ggb（离线）/);
+});
+
 test("状态栏：空闲；已结束的不列", () => {
   assert.equal(render({}), "Atrium 空闲");
   assert.equal(

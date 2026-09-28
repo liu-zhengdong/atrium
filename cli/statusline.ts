@@ -73,8 +73,14 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
   if (holder.kind === "worker") {
     const took = row.started_at ? ` ${duration(now - row.started_at)}` : "";
     // 在做就只写谁在做与用时；被挡回又交回的，把经过写上。
-    const story = holder.text.endsWith(" 在做") ? "" : ` · ${holder.text}`;
-    return `${paint(color, mark)} ${row.ref} ${title} ${workerLabel(row.worker)}${paint(DIM, took)}${story}`;
+    const prefix = `${row.worker ?? "执行者"} @ ${row.host_name} · `;
+    const detail =
+      row.host_name && holder.text.startsWith(prefix)
+        ? holder.text.slice(prefix.length)
+        : holder.text;
+    const story = detail.endsWith(" 在做") ? "" : ` · ${detail}`;
+    const host = row.host_name ? ` @ ${row.host_name}` : "";
+    return `${paint(color, mark)} ${row.ref} ${title} ${workerLabel(row.worker)}${host}${paint(DIM, took)}${story}`;
   }
   const text =
     holder.kind === "queue"

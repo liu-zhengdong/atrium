@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import { cloneLimits, ensureLeaderTables } from "../server/leaders/model.ts";
+import { closeStaleWakes, clonesOf } from "../server/leaders/wakes.ts";
+import { ensureMemoPartTables, readMemoParts } from "../server/memos/parts.ts";
 import {
   busyLine,
   claimVerdict,
@@ -297,4 +301,40 @@ test("备忘写到哪：用户与秘书写主备忘；有兄弟时写自己的�
     before: 5,
     part: "日常",
   });
+});
+
+test("旧库：org_leaders 没有分身上限列时补上（缺省 3），新表幂等；带旧运行时的表照常、不动", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT);
+    INSERT INTO agents VALUES ('x','旧');
+    CREATE TABLE org_leaders (id INTEGER PRIMARY KEY, name TEXT NOT NULL, worker TEXT NOT NULL,
+      memo TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      wake_at INTEGER, wake_ended_at INTEGER, wake_status TEXT, wake_summary TEXT, wake_note TEXT,
+      wake_failures INTEGER NOT NULL DEFAULT 0, wakes INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO org_leaders(id,name,worker,created_at,updated_at,wake_status,wake_at)
+      VALUES (1,'甲','codex',1,1,'running',5);`);
+  ensureLeaderTables(db);
+  ensureLeaderTables(db);
+  ensureMemoPartTables(db);
+  ensureMemoPartTables(db);
+  assert.deepEqual([...cloneLimits(db)], [["a1", CLONES_DEFAULT]]);
+  assert.deepEqual(clonesOf(db, "a1"), []);
+  // 旧的「处理中」：服务重启时记失败，分身表清空。
+  closeStaleWakes(db, 9);
+  assert.equal(
+    (
+      db.prepare("SELECT wake_status FROM org_leaders").get() as {
+        wake_status: string;
+      }
+    ).wake_status,
+    "failed",
+  );
+  assert.deepEqual(readMemoParts(db, "a1"), []);
+  assert.deepEqual(
+    db
+      .prepare("SELECT id,name FROM agents")
+      .all()
+      .map((r) => ({ ...r })),
+    [{ id: "x", name: "旧" }],
+  );
 });

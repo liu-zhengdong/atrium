@@ -274,7 +274,7 @@ function cloneSection(clone: PromptClone | undefined): string[] {
   return [
     "",
     "## 分身",
-    `你是 ${clone.label === ROUTINE_LABEL ? "处理日常的" : `处理 ${clone.label} 的`}分身，这次认领：${what}。同一位 leader 至多 ${clone.limit} 个分身同时在跑，同一件任务同一时刻只归一个分身。`,
+    `你是${clone.label === ROUTINE_LABEL ? "处理日常的" : `处理 ${clone.label} 的`}分身，这次认领：${what}。同一位 leader 至多 ${clone.limit} 个分身同时在跑，同一件任务同一时刻只归一个分身。`,
     ...(clone.siblings.length
       ? [
           `此刻另有分身在处理：${clone.siblings.map((s) => (s.label === ROUTINE_LABEL ? `日常${s.groups.length ? `（${s.groups.join("、")}）` : ""}` : s.label)).join("；")}。它们认领的任务你别碰（服务端会拒绝）；要交代的写进备忘。`,

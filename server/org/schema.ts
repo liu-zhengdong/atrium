@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { ensurePointTables } from "./points.ts";
-import { ensureAspectColumns } from "./aspects.ts";
+import { ensureLimitTable } from "./limits.ts";
 import { ensureMaterialTables } from "../materials/store.ts";
 
 /** All org tables are additive and safe to create on every service start. */
@@ -29,15 +29,7 @@ export function ensureOrgTables(db: DatabaseSync) {
     rev INTEGER NOT NULL, author TEXT NOT NULL, at INTEGER NOT NULL,
     reason TEXT NOT NULL, snapshot TEXT NOT NULL,
     UNIQUE(node_id,target,rev));
-  CREATE INDEX IF NOT EXISTS org_revisions_node ON org_revisions(node_id,id);
-  CREATE TABLE IF NOT EXISTS org_boundaries (
-    node_id INTEGER NOT NULL REFERENCES org_nodes(id),
-    bid TEXT NOT NULL, pos INTEGER NOT NULL,
-    summary TEXT NOT NULL, detail TEXT,
-    param_key TEXT CHECK(param_key IN ('quota_reserve_percent','disk_min_free_gb','money_yuan_max')),
-    param_value REAL,
-    CHECK((param_key IS NULL) = (param_value IS NULL)),
-    PRIMARY KEY(node_id,bid));`);
+  CREATE INDEX IF NOT EXISTS org_revisions_node ON org_revisions(node_id,id);`);
   db.exec(`CREATE TRIGGER IF NOT EXISTS org_revisions_no_update
     BEFORE UPDATE ON org_revisions BEGIN SELECT RAISE(ABORT,'org_revisions append only'); END;
   CREATE TRIGGER IF NOT EXISTS org_revisions_no_delete
@@ -45,7 +37,7 @@ export function ensureOrgTables(db: DatabaseSync) {
   CREATE TRIGGER IF NOT EXISTS org_nodes_no_delete
     BEFORE DELETE ON org_nodes BEGIN SELECT RAISE(ABORT,'org_nodes archive only'); END;`);
   ensurePointTables(db);
-  ensureAspectColumns(db);
+  ensureLimitTable(db);
   // 资料挂在节点上（t192）：随组织树一起建，派活附清单时表一定在。
   ensureMaterialTables(db);
 }

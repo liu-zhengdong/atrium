@@ -1,4 +1,3 @@
-import { involvedOf } from "../tasks/also.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
@@ -8,7 +7,6 @@ import { getTask } from "../tasks/ledger.ts";
 import { parentOf } from "../tasks/ledger-validate.ts";
 import { ackIds, type EventInbox } from "../tasks/events.ts";
 import { taskPartId } from "./subscriber.ts";
-import { findingNode } from "../tasks/patrol.ts";
 import { choiceNodeId } from "../choices/store.ts";
 import { getMaterial } from "../materials/store.ts";
 import { materialRef } from "../materials/model.ts";
@@ -24,11 +22,9 @@ import {
   ESCALATE_HINT,
   leaderEditVerdict,
   leaderRule,
-  mapEditVerdict,
   nodeEditVerdict,
   ownerVerdict,
   scopeOf,
-  remarkVerdict,
   scopeVerdict,
   type ScopeCheck,
 } from "./scope.ts";
@@ -153,19 +149,11 @@ export function registerLeaderGuard(
         break;
       }
       case "task":
+      case "task-remark":
         verdict = scopeVerdict(leader, scope, [
           taskCheck(db, idParam(request)),
         ]);
         break;
-      case "task-remark": {
-        const task = getTask(db, idParam(request));
-        const { also, auto } = involvedOf(db, task);
-        verdict = remarkVerdict(leader, scope, taskCheck(db, task.ref), [
-          ...also,
-          ...auto,
-        ]);
-        break;
-      }
       case "task-patch":
         verdict =
           ownerVerdict(leader, body.owner) ??
@@ -181,11 +169,6 @@ export function registerLeaderGuard(
             nodeCheck(db, idParam(request), "节点"),
           ]);
         break;
-      case "stages":
-        verdict = scopeVerdict(leader, scope, [
-          nodeCheck(db, idParam(request), "节点"),
-        ]);
-        break;
       case "node-edit":
         verdict = nodeEditVerdict({
           leader,
@@ -196,11 +179,9 @@ export function registerLeaderGuard(
         });
         break;
       case "map-edit":
-        verdict =
-          mapEditVerdict(leader, changed(body)) ??
-          scopeVerdict(leader, scope, [
-            nodeCheck(db, idParam(request), "节点"),
-          ]);
+        verdict = scopeVerdict(leader, scope, [
+          nodeCheck(db, idParam(request), "节点"),
+        ]);
         break;
       case "leader-edit":
         verdict = leaderEditVerdict(leader, idParam(request), changed(body));
@@ -217,15 +198,6 @@ export function registerLeaderGuard(
         verdict = ackVerdict(leader, [...found.values()]);
         break;
       }
-      case "patrol-decide":
-        verdict = scopeVerdict(leader, scope, [
-          {
-            what: `发现 ${idParam(request)}`,
-            node: findingNode(db, idParam(request)),
-          },
-          ...(given(body.task) ? [taskCheck(db, body.task)] : []),
-        ]);
-        break;
       case "choice-add":
       case "choice-comment": {
         const list = nodes(db);
@@ -261,9 +233,6 @@ export function registerLeaderGuard(
             },
           ]);
         }
-        break;
-      // 是不是这份选项单的拍板人由 choices/store.ts 按节点设置判，这里不重复。
-      case "choice-decide":
         break;
       // 资料：挂到负责的部分里；归档、恢复、留下看资料挂在哪。取资料不限。
       case "material-add":

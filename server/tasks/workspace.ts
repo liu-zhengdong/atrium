@@ -19,15 +19,12 @@ import { noteTask, type Task } from "./ledger.ts";
 import {
   DEFAULT_RULES,
   buildPrompt,
-  loadRoleDocs,
+  loadRootDoc,
   worktreePlan,
   type PaceEntry,
 } from "./prepare.ts";
 import type { ResolvedWorker, Risk } from "./profiles.ts";
-import { nodeDoc, taskNode } from "../org/task-node.ts";
-import { charterBrief, withContext } from "../org/brief.ts";
 import { taskContext } from "../map/context.ts";
-import { alsoOf } from "./also.ts";
 import { getJobRole } from "./job-roles.ts";
 import { skillsForTask, type TaskSkills } from "../skills/task-skills.ts";
 import { mountSkills } from "../skills/mount.ts";
@@ -37,8 +34,6 @@ import { listTells, unsent } from "./tell-ledger.ts";
 import { TELL_RULE, tellModeOf, tellSection } from "./tell.ts";
 import type { TellMode } from "./adapters/index.ts";
 import { patrolRun } from "./patrol.ts";
-import { VERIFY_ROLE, VERIFY_RULES } from "./verify.ts";
-import { isVerifyTask } from "./verify-runtime.ts";
 import { firstLine } from "./git.ts";
 import { remoteLayout } from "../hosts/state.ts";
 
@@ -267,23 +262,17 @@ export async function prepareRun(
     cwd = join(dir, "work");
     mkdirSync(cwd, { recursive: true });
   }
-  const node = options.db ? taskNode(options.db, task) : undefined;
-  const origin =
-    options.db && task.origin_node_id !== null
-      ? nodeDoc(options.db, task.origin_node_id)
-      : undefined;
   const job =
     options.db && task.job_id
       ? getJobRole(options.db, `r${task.job_id}`)
       : undefined;
   const patrol = options.db ? patrolRun(options.db, task.id) : undefined;
-  // 上线验证（t181）：只附验证步骤、岗位说明与硬规矩，不附章程、技能、组织说明与执行者叮嘱。
-  const verify = options.db ? isVerifyTask(options.db, task.id) : false;
-  const bare = !!patrol || verify;
+  // 体验巡检只附场景与硬规矩，不附规矩、技能、组织说明。
+  const bare = !!patrol;
   // 远程的工作树不在本机：说明文件读本机仓库的。
-  const docs = task.repo
-    ? await loadRoleDocs(site ? task.repo : (worktree ?? task.repo), node)
-    : { roleDoc: node?.body ?? "", rootDoc: "" };
+  const rootDoc = task.repo
+    ? await loadRootDoc(site ? task.repo : (worktree ?? task.repo))
+    : "";
   // 组织技能：节点链上绑定的 ∪ 档案指定的，拷进任务目录，只对这次运行生效。
   const picked =
     options.db && !bare
@@ -334,50 +323,30 @@ export async function prepareRun(
   const prompt = buildPrompt({
     title: task.title,
     brief: patrol
-      ? `节点：o${patrol.node_id}\n本轮场景：${patrol.scenario}\n一件事怎么走完：${(JSON.parse(patrol.flow) as string[]).map((step, i) => `${i + 1}. ${step}`).join("\n") || "按场景自行走通"}\n\n按场景实际操作；只读全景、帮助和命令回执。遇到问题用 atrium patrol report ${task.ref} --phenomenon 简短现象 --step 哪一步 --command '实际命令' --expected '预期' --actual '实际' --kind broken|awkward 记录。无发现也正常结束。`
+      ? `节点：o${patrol.node_id}\n本轮场景：${patrol.scenario}\n一件事怎么走完：${(JSON.parse(patrol.flow) as string[]).map((step, i) => `${i + 1}. ${step}`).join("\n") || "按场景自行走通"}\n\n按场景实际操作；只读全景、帮助和命令回执。每个问题直接建一件修复任务：atrium task add '修复：简短现象' --part o${patrol.node_id} --priority 修复 --brief -（详述写哪一步、实际命令、预期、实际）；同标题的修复任务还没结束时会被拒，说明已有人在修，不用再报。无发现也正常结束。`
       : brief,
     tells: tellSection(tells),
     secrets:
       options.db && !patrol
         ? secretSection(taskSecretList(options.db, task))
         : undefined,
-    roleDoc: [
-      verify ? VERIFY_ROLE : "",
-      patrol
-        ? "# 体验巡检\n\n把自己当用户使用 Atrium，找核心体验上的毛病。不读代码、不改代码、不查凭据或权限边界。不直接建改动任务；发现交给节点 leader。"
-        : "",
-      job
-        ? `# 干活的专员：${job.name}\n\n${job.body}\n\n交付要求：${job.checks.join("、") || "按任务与档案要求"}`
-        : "",
-      bare ? "" : docs.roleDoc,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-    charter:
-      options.db && !bare
-        ? withContext(
-            node ? charterBrief(options.db, node.id) : undefined,
-            taskContext(
-              options.db,
-              task.part_id ?? node?.id ?? null,
-              alsoOf(options.db, task.id),
-            ),
-          )
+    role: patrol
+      ? "体验巡检：把自己当用户使用 Atrium，找核心体验上的毛病。不读代码、不改代码、不查凭据或权限边界。发现的问题建成修复任务，交这一块的 leader 排。"
+      : job
+        ? `干活的专员：${job.name}——${job.description}${job.checks.length ? `；交付关卡：${job.checks.join("、")}` : ""}`
         : undefined,
-    originDoc: origin
-      ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
-      : undefined,
+    points:
+      options.db && !bare
+        ? taskContext(options.db, task.part_id ?? task.node_id)
+        : undefined,
     skills: bare ? undefined : carry ? SKILLS_SLOT : mount?.section,
-    rootDoc: bare ? undefined : docs.rootDoc,
-    profileBody: bare ? undefined : worker.profile.body,
-    rules: verify
-      ? [`工作目录：${cwd}。`, ...VERIFY_RULES]
-      : patrol
-        ? [
-            "直接使用当前服务与真实数据。只看 atrium map / org show 的人话字段、atrium --help、atrium guide 和命令回执；不读仓库代码。只运行与本轮场景有关的命令；有副作用的操作只按场景实际需要执行。",
-            "每个不同现象只报告一次；结束后报告你走过的步骤。",
-          ]
-        : [where, ...deliveryRules(task), TELL_RULE],
+    rootDoc: bare ? undefined : rootDoc,
+    rules: patrol
+      ? [
+          "直接使用当前服务与真实数据。只看 atrium map / org show 的人话字段、atrium --help、atrium guide 和命令回执；不读仓库代码。只运行与本轮场景有关的命令；有副作用的操作只按场景实际需要执行。",
+          "每个不同现象只报告一次；结束后报告你走过的步骤。",
+        ]
+      : [where, ...deliveryRules(task), TELL_RULE],
   });
   const promptFile = join(dir, "prompt.md");
   // 本机留的那份：技能段由代理在那台填，这里写明去哪看。

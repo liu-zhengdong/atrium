@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { appliesRefs, appliesText, resolveApplies } from "./aspects.ts";
 import {
   all,
   canEdit,
@@ -14,9 +13,10 @@ import {
 import { actsForUser } from "../../shared/user.ts";
 
 /**
- * 全景图的「要点」（#322，u1 09-27 定）：这一块必须守住的设计约束。每条写人话一句、为什么、谁定的，
- * 可选守护它的检查（测试文件与用例名，或 `$ ` 开头的命令）。单独成表、不留修订记录，可增删改；
- * 短号 kN 全局一致、不复用。`chainPoints` 给后续派活提示词附「本节点及上级的要点」用。
+ * 要点：规矩只放这里（用户的原则、口味、取舍，以及各部分必须守住的约束）。每条写人话一句、为什么、谁定的，
+ * 可选守护它的检查（测试文件与用例名，或 `$ ` 开头的命令）。要点挂在部分上，按树往下继承；
+ * 同一部分里按 pos 排序，靠前的更重要，冲突时靠前的优先（组织根上的几条就是全组织的原则排序）。
+ * 跨几块的规矩放在它们共同的上级。单独成表、不留修订记录；短号 kN 全局一致、不复用。
  */
 
 export const POINT_LIMITS = { text: 200, why: 300, by: 40, check: 300 };
@@ -32,8 +32,6 @@ export type PointRow = {
   check_ref: string | null;
   updated_by: string;
   updated_at: number;
-  applies?: string | null;
-  sources?: string | null;
 };
 export type Point = {
   ref: string;
@@ -42,10 +40,6 @@ export type Point = {
   why: string;
   by: string;
   check: string | null;
-  /** 管方面的部分的要点适用于哪些部分（oN）；null 为跟随节点（缺省整个上级）。 */
-  applies: string[] | null;
-  /** 从哪几条决定沉淀来的（dN，decision settle 写入）。 */
-  sources: string[];
   updated_by: string;
   updated_at: number;
 };
@@ -58,15 +52,7 @@ export function ensurePointTables(db: DatabaseSync) {
     text TEXT NOT NULL, why TEXT NOT NULL, decided_by TEXT NOT NULL,
     check_ref TEXT, updated_by TEXT NOT NULL, updated_at INTEGER NOT NULL);
   CREATE INDEX IF NOT EXISTS org_points_node ON org_points(node_id,pos,id);`);
-  const has = (
-    db.prepare("PRAGMA table_info(org_points)").all() as { name: string }[]
-  ).some((c) => c.name === "sources");
-  if (!has) db.exec("ALTER TABLE org_points ADD COLUMN sources TEXT");
 }
-
-/** 来源短号表（逗号分隔的 dN）；坏数据当没有。 */
-const sourcesOf = (value: string | null | undefined) =>
-  (value ?? "").split(",").filter((s) => /^d[1-9][0-9]*$/.test(s));
 
 export const pointRef = (id: number) => `k${id}`;
 const view = (row: PointRow): Point => ({
@@ -76,8 +62,6 @@ const view = (row: PointRow): Point => ({
   why: row.why,
   by: row.decided_by,
   check: row.check_ref,
-  applies: appliesRefs(row.applies),
-  sources: sourcesOf(row.sources),
   updated_by: row.updated_by,
   updated_at: row.updated_at,
 });
@@ -94,10 +78,10 @@ export function validatePoint(
   why?: string;
   by?: string;
   check?: string | null;
-  applies?: unknown;
+  pos?: number;
 } {
   for (const key of Object.keys(input))
-    if (!["text", "why", "by", "check", "applies"].includes(key))
+    if (!["text", "why", "by", "check", "pos"].includes(key))
       throw usage(`${key}: 是未知字段`);
   const out: ReturnType<typeof validatePoint> = {};
   const field = (key: "text" | "why" | "by", flag: string, label: string) => {
@@ -124,11 +108,22 @@ export function validatePoint(
       throw usage(`--check: 不能超过 ${POINT_LIMITS.check} 字`);
     else out.check = value.trim();
   }
-  // 适用范围要查库解析，这里原样带出（addPoint / editPoint 里解析）。
-  if ("applies" in input) out.applies = input.applies;
+  if ("pos" in input) {
+    const value = Number(input.pos);
+    if (!Number.isInteger(value) || value < 1 || value > POINTS_PER_NODE)
+      throw usage(`--pos: 应为 1–${POINTS_PER_NODE} 的整数（1 最重要）`);
+    out.pos = value;
+  }
   if (partial && !Object.keys(out).length)
-    throw usage("至少改一项：要点、--why、--by、--check、--applies");
+    throw usage("至少改一项：要点、--why、--by、--check、--pos");
   return out;
+}
+
+/** 把 id 挪到第 pos 位（1 起），其余按原先后顺延（纯函数）。 */
+export function reorder(ids: readonly number[], id: number, pos: number) {
+  const rest = ids.filter((x) => x !== id);
+  const at = Math.max(0, Math.min(rest.length, pos - 1));
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
 }
 
 function authorize(db: DatabaseSync, node: NodeRow, actor: string) {
@@ -171,18 +166,21 @@ export function nodePoints(db: DatabaseSync, nodeId: number): Point[] {
   ).map(view);
 }
 
-/** 根 → 本节点每层的要点（空层省略）；派活附「本节点及上级的要点」用。 */
+/** 根 → 本节点每层的要点（空层省略）：派活与 leader 唤醒附「本部分及上级的要点」用。 */
 export function chainPoints(
   db: DatabaseSync,
   nodeId: number,
 ): { node: string; name: string; points: Point[] }[] {
   const list = nodes(db);
   const chain: NodeRow[] = [];
-  let current = list.find((n) => n.id === nodeId);
-  while (current) {
+  const seen = new Set<number>();
+  for (
+    let current = list.find((n) => n.id === nodeId);
+    current && !seen.has(current.id);
+    current = list.find((n) => n.id === current!.parent_id)
+  ) {
+    seen.add(current.id);
     chain.unshift(current);
-    const parent: number | null = current.parent_id;
-    current = list.find((n) => n.id === parent);
   }
   return chain
     .map((n) => ({
@@ -193,6 +191,18 @@ export function chainPoints(
     .filter((level) => level.points.length);
 }
 
+/** 把本节点的要点按 ids 的先后重写 pos（1 起）。 */
+function writeOrder(db: DatabaseSync, ids: readonly number[]) {
+  const update = db.prepare("UPDATE org_points SET pos=? WHERE id=?");
+  ids.forEach((id, i) => update.run(i + 1, id));
+}
+const orderOf = (db: DatabaseSync, nodeId: number) =>
+  all<{ id: number }>(
+    db,
+    "SELECT id FROM org_points WHERE node_id=? ORDER BY pos,id LIMIT 100",
+    nodeId,
+  ).map((r) => r.id);
+
 export function addPoint(
   db: DatabaseSync,
   address: string,
@@ -200,18 +210,13 @@ export function addPoint(
   actor: string,
 ): Point {
   const input = validatePoint(objectOf(body)) as Required<
-    ReturnType<typeof validatePoint>
-  >;
+    Omit<ReturnType<typeof validatePoint>, "pos">
+  > & { pos?: number };
   return transaction(db, () => {
     const node = nodeByAddress(db, address);
     authorize(db, node, actor);
-    const applies = appliesOf(db, node, input.applies);
-    const count = one<{ n: number; pos: number | null }>(
-      db,
-      "SELECT count(*) AS n, max(pos) AS pos FROM org_points WHERE node_id=?",
-      node.id,
-    )!;
-    if (count.n >= POINTS_PER_NODE)
+    const order = orderOf(db, node.id);
+    if (order.length >= POINTS_PER_NODE)
       throw new Problem(
         409,
         `${ref(node.id)} 已有 ${POINTS_PER_NODE} 条要点，先删掉过时的`,
@@ -222,20 +227,21 @@ export function addPoint(
     const id = Number(
       db
         .prepare(
-          "INSERT INTO org_points(node_id,pos,text,why,decided_by,check_ref,applies,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO org_points(node_id,pos,text,why,decided_by,check_ref,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?)",
         )
         .run(
           node.id,
-          (count.pos ?? 0) + 1,
+          order.length + 1,
           input.text,
           input.why,
           input.by,
           input.check ?? null,
-          applies === undefined ? null : appliesText(applies),
           actor,
           Date.now(),
         ).lastInsertRowid,
     );
+    if (input.pos !== undefined)
+      writeOrder(db, reorder([...order, id], id, input.pos));
     return view(one<PointRow>(db, "SELECT * FROM org_points WHERE id=?", id)!);
   });
 }
@@ -249,46 +255,20 @@ export function editPoint(
   const input = validatePoint(objectOf(body), true);
   return transaction(db, () => {
     const row = requirePoint(db, reference);
-    const node = nodeByAddress(db, ref(row.node_id));
-    authorize(db, node, actor);
-    const applies = appliesOf(db, node, input.applies);
+    authorize(db, nodeByAddress(db, ref(row.node_id)), actor);
     db.prepare(
-      "UPDATE org_points SET text=?,why=?,decided_by=?,check_ref=?,applies=?,updated_by=?,updated_at=? WHERE id=?",
+      "UPDATE org_points SET text=?,why=?,decided_by=?,check_ref=?,updated_by=?,updated_at=? WHERE id=?",
     ).run(
       input.text ?? row.text,
       input.why ?? row.why,
       input.by ?? row.decided_by,
       input.check === undefined ? row.check_ref : input.check,
-      applies === undefined ? (row.applies ?? null) : appliesText(applies),
       actor,
       Date.now(),
       row.id,
     );
-    return view(
-      one<PointRow>(db, "SELECT * FROM org_points WHERE id=?", row.id)!,
-    );
-  });
-}
-
-/**
- * 决定沉淀到这条要点（decision settle）：记来源 dN，权限同改要点。已记过的不重复；
- * 来源至多留 20 条，满了不再追加（决定那边照样标已沉淀）。
- */
-export function addPointSource(
-  db: DatabaseSync,
-  reference: string,
-  decision: string,
-  actor: string,
-): Point {
-  return transaction(db, () => {
-    const row = requirePoint(db, reference);
-    authorize(db, nodeByAddress(db, ref(row.node_id)), actor);
-    const sources = sourcesOf(row.sources);
-    if (!sources.includes(decision) && sources.length < 20)
-      db.prepare("UPDATE org_points SET sources=? WHERE id=?").run(
-        [...sources, decision].join(","),
-        row.id,
-      );
+    if (input.pos !== undefined)
+      writeOrder(db, reorder(orderOf(db, row.node_id), row.id, input.pos));
     return view(
       one<PointRow>(db, "SELECT * FROM org_points WHERE id=?", row.id)!,
     );
@@ -306,17 +286,6 @@ export function removePoint(
     db.prepare("DELETE FROM org_points WHERE id=?").run(row.id);
     return view(row);
   });
-}
-
-/** 适用范围只给管方面的部分写；没给为 undefined，清掉为 null。 */
-function appliesOf(db: DatabaseSync, node: NodeRow, value: unknown) {
-  if (value === undefined) return undefined;
-  const ids = resolveApplies(db, value);
-  if (ids && !node.aspect)
-    throw usage(
-      `--applies: ${ref(node.id)} ${node.name} 不是管方面的部分；管东西的部分的要点只对本块及下层生效`,
-    );
-  return ids;
 }
 
 function objectOf(value: unknown): Record<string, unknown> {

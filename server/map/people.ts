@@ -11,9 +11,7 @@ import {
 } from "../tasks/profiles.ts";
 import { workerReport, workersReport } from "../tasks/workers-report.ts";
 import { runningHostNames } from "../hosts/model.ts";
-import { specialistsForPart } from "../tasks/specialist-scope.ts";
 import {
-  involvedOfTasks,
   jobNames,
   taskColumns,
   taskView,
@@ -46,7 +44,7 @@ type SkillBrief = {
   last: { at: number; author: string; reason: string } | null;
 };
 
-/** 节点 id → 人话名（章程 alias）；没写为空串。 */
+/** 节点 id → 人话名（alias）；没写为空串。 */
 function aliases(db: DatabaseSync) {
   if (!hasTable(db, "org_docs")) return new Map<number, string>();
   return new Map(
@@ -117,20 +115,7 @@ export function mapSkills(db: DatabaseSync): { skills: SkillBrief[] } {
 
 // ---- 专员 ----
 
-/** 专员属于哪一部分（#373）：短号、名称与人话名；全组织共用为 null。 */
-type RolePart = { ref: string; name: string; alias: string } | null;
-const partOf = (
-  r: Pick<JobRole, "part_id" | "part_name">,
-  alias: ReadonlyMap<number, string>,
-): RolePart =>
-  r.part_id === null
-    ? null
-    : {
-        ref: `o${r.part_id}`,
-        name: r.part_name ?? `o${r.part_id}`,
-        alias: alias.get(r.part_id) ?? "",
-      };
-const roleRow = (r: JobRole, alias: ReadonlyMap<number, string>) => ({
+const roleRow = (r: JobRole) => ({
   ref: r.ref,
   name: r.name,
   description: r.description,
@@ -138,27 +123,11 @@ const roleRow = (r: JobRole, alias: ReadonlyMap<number, string>) => ({
   checks: r.checks,
   skills: r.skills,
   running: r.running ?? 0,
-  part: partOf(r, alias),
 });
 
 export function mapRoles(db: DatabaseSync) {
   if (!hasTable(db, "job_roles")) return { roles: [] };
-  const alias = aliases(db);
-  return { roles: listJobRoles(db).map((r) => roleRow(r, alias)) };
-}
-
-/**
- * 某一部分能请的专员（#373，与 `specialist ls --part` 同一范围）：本部分的在前，其次上级的、
- * 牵涉部分（管方面的部分有要点适用于这里）的、全组织的；scope 说明是哪一档，网页据此分层披露。
- */
-export function mapPartRoles(db: DatabaseSync, address: string) {
-  if (!hasTable(db, "job_roles")) return { part: null, roles: [] };
-  const alias = aliases(db);
-  const { part, specialists } = specialistsForPart(db, address);
-  return {
-    part,
-    roles: specialists.map((r) => ({ ...roleRow(r, alias), scope: r.scope })),
-  };
+  return { roles: listJobRoles(db).map(roleRow) };
 }
 
 /** 专员页：专员本身、它名下的任务（与各部分任务表同一形状）、谁做得好、挂的技能。 */
@@ -187,10 +156,8 @@ export async function mapRole(
     db,
     rows.map((r) => (r.status === "running" ? r.host_id : null)),
   );
-  const involved = involvedOfTasks(db, rows);
   const tasks = rows.map((r) =>
     taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id), {
-      also: involved.get(r.id),
       host: hosts.get(r.host_id ?? 0),
     }),
   );
@@ -201,7 +168,6 @@ export async function mapRole(
   return {
     ref: role.ref,
     name: role.name,
-    part: partOf(role, aliases(db)),
     description: role.description,
     preferred: role.preferred,
     checks: role.checks,

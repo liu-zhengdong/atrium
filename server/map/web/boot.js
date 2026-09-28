@@ -12,13 +12,8 @@ export const emptyWorkers = () => ({
  * `get` 与网页里的同名函数一样，路径相对于 `/api/map`。
  */
 export async function fetchRootOrg(get, key) {
-  const team = () =>
-    get(`/specialists?part=${encodeURIComponent(key)}`).then(
-      (r) => r.specialists,
-    );
-  const [node, specialists, roles, skills, leaders] = await Promise.all([
+  const [node, roles, skills, leaders] = await Promise.all([
     get(`/nodes/${encodeURIComponent(key)}`),
-    team(),
     get("/specialists"),
     get("/skills"),
     get("/leaders"),
@@ -26,7 +21,7 @@ export async function fetchRootOrg(get, key) {
   return {
     page: "node",
     node,
-    team: specialists,
+    team: roles.specialists,
     org: {
       roles: roles.specialists,
       skills: skills.skills,

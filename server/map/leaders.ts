@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { all, nodeByAddress, nodes, one } from "../org/model.ts";
+import { all, one } from "../org/model.ts";
 import {
   listLeaders,
   showLeader,
@@ -8,12 +8,6 @@ import {
 } from "../leaders/model.ts";
 import { eventWord } from "../leaders/wake.ts";
 import { peopleNames, personOf, type Person } from "./who.ts";
-import {
-  nodeChain,
-  ownerDigest,
-  ownerScope,
-  type DecisionDigest,
-} from "../memos/digest.ts";
 import { listDecisions, parseLimit, searchTerms } from "../memos/decisions.ts";
 import { readMemo, MEMO_MAX } from "../memos/store.ts";
 
@@ -61,7 +55,7 @@ export type MapLeaderRow = {
  * 备忘与决定记录：用户页、秘书页与负责人页共用。决定只给摘要（原则 + 最近的，t211），
  * 全部与检索走 /api/map/decisions。
  */
-type MemoPart = DecisionDigest & {
+type MemoPart = {
   memo: string;
   memo_max: number;
   memo_updated_at: number | null;
@@ -282,7 +276,6 @@ function memoPart(db: DatabaseSync, owner: string): MemoPart {
     memo: memo.body,
     memo_max: MEMO_MAX,
     memo_updated_at: memo.updated_at,
-    ...ownerDigest(db, owner),
   };
 }
 
@@ -313,27 +306,22 @@ export function mapLeader(
 }
 
 /**
- * 网页的「展开」与「检索」：of 是 u1、secretary、aN（与摘要同一范围）或 oN（本块及上级）；
- * q 给了按关键词检索；all 连已推翻、已沉淀的一起列；before 接着上一页往下。
+ * 网页的决定记录：of 是 oN 时只列挂在本块及上级的，否则列全部（决定记录只有用户那一份）；
+ * q 给了按关键词检索；all 连已推翻的一起列；before 接着上一页往下。
  */
 export function mapDecisions(
   db: DatabaseSync,
   query: Record<string, string | undefined>,
 ) {
   const of = (query.of ?? "").trim();
-  let scope;
-  if (/^o[1-9][0-9]{0,8}$/.test(of))
-    scope = nodeChain(db, nodeByAddress(db, of).id);
-  else if (of === "u1" || of === "secretary") scope = ownerScope(of, nodes(db));
-  else scope = ownerScope(showLeader(db, of).ref, nodes(db));
-  const terms = query.q?.trim() ? searchTerms(query.q) : undefined;
   return {
     of,
-    ...listDecisions(db, scope, {
+    ...listDecisions(db, {
+      node: /^o[1-9][0-9]{0,8}$/.test(of) ? of : undefined,
       all: query.all === "1",
       before: query.before,
       limit: parseLimit(query.limit),
-      terms,
+      terms: searchTerms(query.q),
     }),
   };
 }

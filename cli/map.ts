@@ -74,7 +74,7 @@ export function renderMapTree(
   const walk = (node: MapTreeNode, level: number) => {
     if (node.archived) return;
     const indent = "  ".repeat(level);
-    const line = `${indent}${DOT[node.dot]} ${label(node)}${node.aspect ? " · 管方面" : ""}${counts(node.tasks)}`;
+    const line = `${indent}${DOT[node.dot]} ${label(node)}${counts(node.tasks)}`;
     lines.push(options.width ? fit(line, options.width) : line);
     if (options.what !== false && node.what && level <= 1)
       lines.push(
@@ -183,7 +183,7 @@ export const mapCommands: Record<string, Command> = {
             "还没有组织树",
             "not_found",
             undefined,
-            "atrium org import --repo 仓库",
+            "atrium org add org --kind org --name 组织 --reason 建树",
           );
         const result = await api.get<{ ref: string }>(
           `/map/nodes/${enc(root)}?depth=${depthOf(values, 1)}`,
@@ -199,7 +199,9 @@ export const mapCommands: Record<string, Command> = {
         ? renderMapTree(tree.tree, {
             width: process.stdout.isTTY ? process.stdout.columns : undefined,
           })
-        : ["还没有组织树：atrium org import --repo 仓库"];
+        : [
+            "还没有组织树：atrium org add org --kind org --name 组织 --reason 建树",
+          ];
       const login = await api.post<{ path: string; ttl_ms: number }>(
         "/map/login",
       );
@@ -225,15 +227,15 @@ export const mapCommands: Record<string, Command> = {
     },
   },
   "map context": {
-    args: "节点 [--also 部分[,部分]] [--max 字数]",
+    args: "节点 [--max 字数]",
     about:
-      "给出从根到该节点的人话链、组成、现状与本节点及上级的要点，再加适用于本节点的管方面要点与 --also 牵涉部分的要点（注明来源，有长度上限）；派活时自动附进执行者提示词",
-    options: { max: { type: "string" }, also: { type: "string" } },
+      "给出从根到这一部分链上的要点（按树从上到下、同一层按排序，冲突时靠前的优先）与用到的技能，有字数上限；派活与 leader 唤醒附的就是这一段",
+    options: { max: { type: "string" } },
     positionals: [1, 1],
     async run({ positionals: [node], values, json }) {
       const query = new URLSearchParams(
         Object.fromEntries(
-          (["max", "also"] as const)
+          (["max"] as const)
             .filter((k) => str(values, k) !== undefined)
             .map((k) => [k, str(values, k)!]),
         ),
@@ -245,18 +247,17 @@ export const mapCommands: Record<string, Command> = {
       else
         console.log(
           result.text ||
-            `${result.ref} 还没有人话字段：atrium map edit ${result.ref} --what 一句话`,
+            `${result.ref} 和它的上级都还没有要点：atrium org point-add ${result.ref} 要点 --why 为什么 --by 谁定的`,
         );
       recordNext(`动作：atrium task add 标题 --part ${result.ref}`);
       return 0;
     },
   },
   "map edit": {
-    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--applies 部分[,部分]] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]",
+    args: "节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--stages 文件] [--as aN]",
     about:
-      "改一块的人话字段，直接覆盖且不留修订；--applies 只用于管方面的部分，写它的要点缺省适用于哪些部分（空串改回整个上级）；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改",
+      "改一块的人话字段，直接覆盖且不留修订；给空串清掉；--stages 给 YAML 或 JSON 的阶段列表（也可写成 stages: 列表），整份替换；负责的 leader 或其上级可改，根只有你能改",
     options: {
-      applies: { type: "string" },
       what: { type: "string" },
       uses: { type: "string", multiple: true },
       flow: { type: "string", multiple: true },
@@ -264,59 +265,69 @@ export const mapCommands: Record<string, Command> = {
       analogy: { type: "string" },
       now: { type: "string" },
       next: { type: "string" },
-      detail: { type: "string" },
-      rev: { type: "string" },
-      reason: { type: "string" },
+      stages: { type: "string" },
       as: { type: "string" },
     },
     positionals: [1, 1],
     async run({ positionals: [node], values, json }) {
-      const detail = str(values, "detail");
-      let body: string | undefined;
-      if (detail !== undefined)
+      const file = str(values, "stages");
+      let stages: unknown;
+      if (file !== undefined) {
+        let text: string;
         try {
-          body = readFileSync(resolve(detail), "utf8");
+          text = readFileSync(resolve(file), "utf8");
         } catch (error) {
           throw new Problem(
             400,
-            `--detail: 读不了 ${detail}（${(error as NodeJS.ErrnoException).code ?? "未知错误"}）`,
+            `--stages: 读不了 ${file}（${(error as NodeJS.ErrnoException).code ?? "未知错误"}）`,
             "usage",
           );
         }
+        // yaml 只有这里用，按需加载，别的命令启动不付它的加载时间（t117）。
+        const { default: YAML } = await import("yaml");
+        let parsed: unknown;
+        try {
+          parsed = YAML.parse(text);
+        } catch (error) {
+          throw new Problem(
+            400,
+            `--stages 不是合法的 YAML/JSON：${(error as Error).message.split("\n")[0]}`,
+            "usage",
+          );
+        }
+        stages =
+          (parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as { stages?: unknown }).stages
+            : parsed) ?? [];
+      }
       const input = {
         ...Object.fromEntries(
-          (["what", "alias", "analogy", "now", "next", "applies"] as const)
+          (["what", "alias", "analogy", "now", "next"] as const)
             .filter((k) => str(values, k) !== undefined)
             .map((k) => [k, str(values, k)]),
         ),
         ...(list(values, "uses") ? { uses: list(values, "uses") } : {}),
         ...(list(values, "flow") ? { flow: list(values, "flow") } : {}),
-        ...(body === undefined ? {} : { detail: body }),
-        ...(str(values, "rev") ? { rev: str(values, "rev") } : {}),
-        ...(str(values, "reason") ? { reason: str(values, "reason") } : {}),
+        ...(stages === undefined ? {} : { stages }),
       };
       const result = await (
         await client()
-      ).patch<{ node: string; before?: string; rev?: string }>(
-        `/map/nodes/${enc(node!)}${as(values)}`,
-        input,
-      );
+      ).patch<{ node: string }>(`/map/nodes/${enc(node!)}${as(values)}`, input);
       if (json) printJson(result);
       else console.log(`已改 ${result.node} 的全景`);
-      recordNext(`动作：atrium map context ${result.node}`);
+      recordNext(`动作：atrium map ${result.node} --json`);
       return 0;
     },
   },
   "map add": {
-    args: "父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--kind aspect] [--reason 原因] [--as aN]",
+    args: "父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--reason 原因] [--as aN]",
     about:
-      "在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug；--kind aspect 建管方面的部分（如安全，要点横跨多个部分，用 map edit --applies 或 org point-add --applies 写适用范围）",
+      "在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug",
     options: {
       analogy: { type: "string" },
       alias: { type: "string" },
       what: { type: "string" },
       slug: { type: "string" },
-      kind: { type: "string" },
       reason: { type: "string" },
       as: { type: "string" },
     },
@@ -329,12 +340,11 @@ export const mapCommands: Record<string, Command> = {
         parent: string;
         name: string;
         kind: string;
-        aspect: boolean;
       }>(`/map/nodes${as(values)}`, {
         parent,
         name,
         ...Object.fromEntries(
-          (["analogy", "alias", "what", "slug", "kind", "reason"] as const)
+          (["analogy", "alias", "what", "slug", "reason"] as const)
             .filter((k) => str(values, k) !== undefined)
             .map((k) => [k, str(values, k)]),
         ),
@@ -342,12 +352,10 @@ export const mapCommands: Record<string, Command> = {
       if (json) printJson(result);
       else
         console.log(
-          `已在 ${result.parent} 下加了 ${result.node} ${result.name}（${result.aspect ? "管方面" : result.kind}）`,
+          `已在 ${result.parent} 下加了 ${result.node} ${result.name}（${result.kind}）`,
         );
       recordNext(
-        result.aspect
-          ? `动作：atrium org point-add ${result.node} 要点 --why 为什么 --by 谁定的 --applies 部分`
-          : `动作：atrium map edit ${result.node} --what 一句话 --uses 场景 --flow 步骤`,
+        `动作：atrium map edit ${result.node} --what 一句话 --uses 场景 --flow 步骤`,
       );
       return 0;
     },

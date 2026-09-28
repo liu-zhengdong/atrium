@@ -3,7 +3,7 @@ import { parseRemote, repoFlag } from "./gh-repo.ts";
 
 /**
  * 自动上线的判定（#325 第 3 步）：合入后等发版，运行时对自身 update + restart，
- * 新服务起来后把「已上线」通知负责人并附执行者写的端到端验证。这里只放纯函数，IO 在 online-runtime.ts。
+ * 新服务起来后跑一遍只读冒烟，把「已上线」通知负责人。这里只放纯函数，IO 在 online-runtime.ts。
  */
 
 /** 自升级的仓库：`github:owner/repo` 或远端地址 → `-R` 写法；解析不出返回 null（不自升级）。 */
@@ -50,41 +50,6 @@ export function firstRelease(tags: string): string | null {
 /** 只凭版本号大小不能证明提交在当前运行的版本分支里，须看当前版本的标签本身。 */
 export function includedInVersion(tags: string, current: string): boolean {
   return tags.split("\n").some((tag) => tag.trim() === `v${current}`);
-}
-
-/** 从 PR 正文或执行者汇报里取「端到端验证」一节（到下一个同级或更高标题为止）；没有返回 null。 */
-export function verificationSection(text: string | null | undefined) {
-  if (!text) return null;
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  let fence = false;
-  let start = -1;
-  let level = 0;
-  const out: string[] = [];
-  for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
-    const heading = fence ? null : /^(#{1,6})\s+(.*)$/.exec(line);
-    if (start < 0) {
-      if (heading && heading[2]!.includes("端到端验证")) {
-        start = out.length;
-        level = heading[1]!.length;
-      }
-      continue;
-    }
-    if (heading && heading[1]!.length <= level) break;
-    out.push(line);
-  }
-  if (start < 0) return null;
-  // 正文末尾的关联 issue 与署名行不属于验证步骤。
-  while (
-    out.length &&
-    (!out.at(-1)!.trim() ||
-      /^\s*((refs|closes|fixes|resolves)\s+#\d+|🤖 generated with)/i.test(
-        out.at(-1)!,
-      ))
-  )
-    out.pop();
-  const body = out.join("\n").trim();
-  return body ? body.slice(0, 4000) : null;
 }
 
 export type OnlineCandidate = {

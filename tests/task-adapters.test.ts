@@ -9,10 +9,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { taskNode } from "../server/org/task-node.ts";
-import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc } from "../server/org/write.ts";
 import {
   ADAPTERS,
   ARG_PROMPT_MAX_BYTES,
@@ -32,7 +28,7 @@ import {
 import {
   buildPrompt,
   DEFAULT_RULES,
-  loadRoleDocs,
+  loadRootDoc,
   parsePace,
   pickWorker,
   readPace,
@@ -415,14 +411,19 @@ test("buildPrompt：按段拼接，空段省略", () => {
   const prompt = buildPrompt({
     title: " 加登录 ",
     brief: "详述",
-    roleDoc: "",
+    role: "",
+    points: "规矩（…）：\n[组织]\n1. 不花钱",
     rootDoc: "组织",
-    profileBody: "叮嘱",
     rules: ["规则一"],
   });
   assert.equal(
     prompt,
-    "# 任务：加登录\n\n## 任务详述\n\n详述\n\n## 组织说明（.agents/README.md）\n\n组织\n\n## 给你的额外叮嘱\n\n叮嘱\n\n## 通用约束\n\n- 规则一\n",
+    "# 任务：加登录\n\n## 任务详述\n\n详述\n\n## 规矩\n\n规矩（…）：\n[组织]\n1. 不花钱\n\n## 组织说明（.agents/README.md）\n\n组织\n\n## 通用约束\n\n- 规则一\n",
+  );
+  // 端到端验证在交付前、在隔离环境里跑，输出贴进 PR。
+  assert.match(
+    buildPrompt({ title: "x" }),
+    /交付前做端到端验证：在隔离环境里.*原样贴进 PR 正文「## 端到端验证」一节/,
   );
   assert.ok(buildPrompt({ title: "x" }).includes(DEFAULT_RULES[1]));
   // 组合说明（t236）：执行者在 PR 正文写「碰到哪些已有能力」，没碰到写「无」。
@@ -433,71 +434,16 @@ test("buildPrompt：按段拼接，空段省略", () => {
   assert.throws(() => buildPrompt({ title: "  " }), /标题不能为空/);
 });
 
-test("loadRoleDocs：岗位说明只取节点章程，不读仓库部门文件", async () => {
+test("loadRootDoc：只读仓库根的 .agents/README.md，不读部门文件", async () => {
   const repo = temp("repo");
   try {
     mkdirSync(join(repo, ".agents/modules"), { recursive: true });
-    mkdirSync(join(repo, ".agents/concerns"), { recursive: true });
     writeFileSync(join(repo, ".agents/README.md"), "根说明");
     writeFileSync(join(repo, ".agents/modules/web.md"), "仓库里的旧 web 说明");
-    writeFileSync(join(repo, ".agents/concerns/安全.md"), "仓库里的旧安全说明");
-    const db = new DatabaseSync(":memory:");
-    ensureOrgTables(db);
-    addNode(
-      db,
-      { slug: "org", kind: "org", name: "组织", reason: "创建" },
-      "u1",
-    );
-    addNode(
-      db,
-      {
-        parent: "o1",
-        slug: "atrium",
-        kind: "project",
-        name: "Atrium",
-        repos: [repo],
-        reason: "创建",
-      },
-      "u1",
-    );
-    addNode(
-      db,
-      {
-        parent: "o2",
-        slug: "web",
-        kind: "module",
-        name: "web",
-        reason: "创建",
-      },
-      "u1",
-    );
-    editDoc(
-      db,
-      "o3",
-      "charter",
-      { fields: {}, body: "节点章程", reason: "导入" },
-      "u1",
-    );
-    const node = (node_id: number | null) => taskNode(db, { node_id });
-    assert.deepEqual(await loadRoleDocs(repo, node(3)), {
-      roleDoc: "节点章程",
-      rootDoc: "根说明",
-      rolePath: "o3",
-    });
-    assert.equal(node(null), undefined);
-    assert.deepEqual(
-      await loadRoleDocs(repo, node(null)),
-      { roleDoc: "", rootDoc: "根说明" },
-      "没有节点时不回退读仓库文件",
-    );
-    db.close();
-    assert.deepEqual(await loadRoleDocs(repo), {
-      roleDoc: "",
-      rootDoc: "根说明",
-    });
+    assert.equal(await loadRootDoc(repo), "根说明");
     rmSync(join(repo, ".agents"), { recursive: true });
-    assert.deepEqual(await loadRoleDocs(repo), { roleDoc: "", rootDoc: "" });
-    await assert.rejects(loadRoleDocs("relative"), /绝对路径/);
+    assert.equal(await loadRootDoc(repo), "");
+    await assert.rejects(loadRootDoc("relative"), /绝对路径/);
   } finally {
     removeTemp(repo);
   }

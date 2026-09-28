@@ -386,10 +386,21 @@ try {
     expect(ls.stdout, /t1/, "task ls");
   });
 
-  await step("org tree：导入根章程、加一个项目节点，组织树可读", async () => {
-    const charter = join(root, "charter.md");
-    writeFileSync(charter, "---\n---\n端到端验证用的根章程。\n");
-    ok(atrium("org", "import", charter, "--apply"), "org import --apply");
+  await step("org tree：建根、加一个项目节点，组织树可读", async () => {
+    ok(
+      atrium(
+        "org",
+        "add",
+        "org",
+        "--kind",
+        "org",
+        "--name",
+        "组织",
+        "--reason",
+        "e2e",
+      ),
+      "org add 根",
+    );
     const added = json(
       atrium(
         "org",

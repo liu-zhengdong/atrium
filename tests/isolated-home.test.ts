@@ -243,9 +243,10 @@ test(
     });
     for (let i = 0; i < 100 && !existsSync(mark); i++) await delay(200);
     assert.equal(existsSync(mark), true, "显式开唤醒后应拉起 leader");
+    // 旧章程文件不再导入（规矩与配置只在库里），显式给旧目录也不读它。
     assert.equal(
       inspect((db) => quotaReserve(db).percent),
-      37,
+      20,
     );
     assert.equal(
       profiles().some((p) => p.source.includes("SENTINEL-t128")),

@@ -26,11 +26,6 @@ import {
   type PriorityCounts,
 } from "../server/tasks/priority.ts";
 import { heldText } from "../server/tasks/overdue.ts";
-import {
-  verifyActionText,
-  verifyStateText,
-  type VerifyView,
-} from "../server/tasks/verify-view.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -71,10 +66,6 @@ export type TopRow = {
   action: { text: string; kind: string } | null;
   /** 最近的总任务（t190）；不在总任务下为 null，旧版服务没有这个字段。 */
   total?: TopTotal | null;
-  /** 上线后的端到端验证（t182）；没做验证为 null，旧版服务没有这个字段。 */
-  verify?: VerifyView | null;
-  /** 这是上线验证任务：验证的是哪个任务；旧版服务没有这个字段。 */
-  verify_of?: string | null;
 };
 
 /**
@@ -120,9 +111,6 @@ export type Snapshot = {
     merging?: number;
     merged?: number;
     online?: number;
-    verifying?: number;
-    verify_failed?: number;
-    unverifiable?: number;
     blocked: number;
     processing: number;
     done: number;
@@ -156,7 +144,7 @@ export type Snapshot = {
     wake: LeaderWake | null;
     events: number;
   }[];
-  /** 等用户拍板的选项单（产品部）；没有时不给，旧版服务也没有。 */
+  /** 等用户拍板的选项单；没有时不给，旧版服务也没有。 */
   choices?: { open: number; list: PendingChoice[] };
   /** 进行中的紧急任务（t215）与太多时的提示；没有紧急任务时不给。 */
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
@@ -235,19 +223,8 @@ const SYMBOL: Record<string, string> = {
 };
 const FINISHED = new Set(["done", "failed", "cancelled"]);
 
-/**
- * 行首符号：已上线的按验证状态（t182）画验证中 ●、验证没过 ✕；无法验证不是出了错，画中性的 ?（t255）。
- */
-const VERIFY_SYMBOL: Record<string, string> = {
-  running: "●",
-  failed: "✕",
-  unverifiable: "?",
-};
 function symbolOf(row: TopRow) {
   const kind = phase(row);
-  const verify =
-    kind === "online" && row.verify && VERIFY_SYMBOL[row.verify.state];
-  if (verify) return verify;
   return (
     SYMBOL[row.processing && kind === "blocked" ? "processing" : kind] ?? "·"
   );
@@ -274,9 +251,7 @@ function state(row: TopRow, now: number) {
   if (kind === "merge_queued") return "排队合入";
   if (kind === "merging") return "合入中";
   if (kind === "merged") return "已合入";
-  // 上线后的端到端验证（t182）：已上线 · 验证中／验证没过／无法验证／验证通过。
-  if (kind === "online")
-    return row.verify ? verifyStateText(row.verify) : "已上线";
+  if (kind === "online") return "已上线";
   // 受阻由服务说清卡在哪、谁在接手；旧版服务没有 holder 时退回原写法。
   if (kind === "blocked")
     return row.holder
@@ -294,7 +269,6 @@ function state(row: TopRow, now: number) {
 function action(row: TopRow, now: number) {
   const kind = phase(row);
   if (kind === "queued" || kind === "blocked") return "";
-  if (kind === "online" && row.verify) return verifyActionText(row.verify);
   // 检查进行中：执行者日志已经不动了。
   if (row.checking) return "本地检查中";
   if (row.action?.text)
@@ -442,15 +416,6 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
     (snapshot.counts.merging ? ` · 合入中 ${snapshot.counts.merging}` : "") +
     (snapshot.counts.merged ? ` · 已合入 ${snapshot.counts.merged}` : "") +
     (snapshot.counts.online ? ` · 已上线 ${snapshot.counts.online}` : "") +
-    (snapshot.counts.verifying
-      ? ` · 验证中 ${snapshot.counts.verifying}`
-      : "") +
-    (snapshot.counts.verify_failed
-      ? ` · 验证没过 ${snapshot.counts.verify_failed}`
-      : "") +
-    (snapshot.counts.unverifiable
-      ? ` · 无法验证 ${snapshot.counts.unverifiable}`
-      : "") +
     ` · 处理中 ${snapshot.counts.processing}` +
     ` · 卡住 ${snapshot.counts.blocked}` +
     // 秘书在不在听（t242）；旧版服务没有这个字段，照旧只说未处理事件。
@@ -484,10 +449,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       ]
         .join("  ")
         .trimEnd();
-      // 无法验证的和已结束的一样淡着画（t255）：不是出了错。
-      const quiet =
-        FINISHED.has(phase(row)) || row.verify?.state === "unverifiable";
-      const line = quiet && frame.color ? faint(text) : text;
+      const line = FINISHED.has(phase(row)) && frame.color ? faint(text) : text;
       const heading = headings.get(row);
       return [
         ...(heading ? [oneLine(heading, frame.width)] : []),

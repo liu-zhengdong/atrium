@@ -29,7 +29,6 @@ const role = (db: DatabaseSync) =>
   createJobRole(db, {
     name: "后端",
     description: "实现服务功能",
-    body: "本地检查通过",
     preferred: ["codex+gpt-6-sol:high"],
     checks: ["local_check"],
     skills: [],
@@ -59,7 +58,6 @@ test("专员短号、修订历史与任务 --by；破坏输入拒绝", () => {
       createJobRole(d, {
         name: "前端",
         description: "界面",
-        body: "要求",
         preferred: ["codex+gpt-6-sol:invalid"],
         checks: [],
       }),
@@ -133,30 +131,6 @@ test("交付事实、冲突不归责、未知强度、五次样本后数据够",
   d.close();
 });
 
-test("旧任务回填缺失强度不猜", () => {
-  const d = db();
-  const t = createTask(d, { title: "旧活" });
-  d.prepare(
-    "UPDATE tasks SET worker='claude+opus',status='done',started_at=10,ended_at=20 WHERE id=?",
-  ).run(t.id);
-  d.prepare(
-    "INSERT INTO task_events(task_id,at,kind,detail) VALUES (?,?,?,?)",
-  ).run(
-    t.id,
-    10,
-    "start",
-    JSON.stringify({ detail: { worker: "claude+opus" } }),
-  );
-  d.prepare(
-    "INSERT INTO task_events(task_id,at,kind,detail) VALUES (?,?,?,?)",
-  ).run(t.id, 20, "exit_ok", "{}");
-  ensureTaskTables(d);
-  const [row] = listDeliveries(d);
-  assert.equal(row?.historical, 1);
-  assert.equal(row?.effort, null);
-  d.close();
-});
-
 test("角色可配置 screenshots，未知关卡仍拒绝", async () => {
   const { evaluateGates } = await import("../server/tasks/gates.ts");
   const d = db();
@@ -220,22 +194,10 @@ test("执行中角色关卡用派活时修订；统计跨有界分页包含所�
   advanceTask(d, t.ref, { kind: "exit_ok" }, {}, undefined, 110);
   for (let i = 0; i < 205; i++) {
     const row = createTask(d, { title: `历史${i}`, by: r.ref });
-    d.prepare(
-      "UPDATE tasks SET worker='codex+gpt-6-sol',status='done' WHERE id=?",
-    ).run(row.id);
-    d.prepare(
-      "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
-    ).run(
-      row.id,
-      200 + i * 10,
-      "start",
-      JSON.stringify({ detail: { worker: "codex+gpt-6-sol" } }),
-    );
-    d.prepare(
-      "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
-    ).run(row.id, 205 + i * 10, "exit_ok", "{}");
+    const worker = { worker: "codex+gpt-6-sol" };
+    advanceTask(d, row.ref, { kind: "start" }, worker, worker, 200 + i * 10);
+    advanceTask(d, row.ref, { kind: "exit_ok" }, {}, undefined, 205 + i * 10);
   }
-  ensureTaskTables(d);
   assert.equal(listDeliveries(d).length, 206);
   const next = createTask(d, { title: "下一轮", by: r.ref });
   advanceTask(

@@ -25,7 +25,7 @@ const SECRETARY_TOO: ReadonlySet<string> = new Set([
 
 /**
  * 上线失败、总任务整体上线还要交秘书；已有秘书路由时只投一次。
- * 单个任务上线不再另投秘书（t182）：运行时派人照端到端验证跑，没通过或无法验证才投负责人。
+ * 单个任务上线不另投秘书：端到端验证在合入前做过，上线后只读冒烟没过才记上线失败。
  */
 export function deliveryRoutes(kind: string, route: Route): Route[] {
   if (!SECRETARY_TOO.has(kind)) return [route];
@@ -38,7 +38,7 @@ export function deliveryRoutes(kind: string, route: Route): Route[] {
           why:
             kind === "online_failed"
               ? "上线失败直接通知秘书"
-              : "总任务整体上线直接通知秘书，按端到端验证在线上复核",
+              : "总任务整体上线直接通知秘书",
           via: null,
         },
       ];

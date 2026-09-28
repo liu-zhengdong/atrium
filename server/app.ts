@@ -8,11 +8,9 @@ import { Problem } from "./problem.ts";
 import { UserAuth } from "./user-auth.ts";
 import { authPolicy } from "./auth-policy.ts";
 import { registerTaskRoutes, runnerEnvOptions } from "./tasks/routes.ts";
-import { registerPatrolRoutes } from "./tasks/patrol-routes.ts";
 import { ensureScheduleTables } from "./schedules/model.ts";
 import { SchedulePump } from "./schedules/runtime.ts";
 import { registerScheduleRoutes } from "./schedules/routes.ts";
-import { registerProductRoutes } from "./products/routes.ts";
 import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
@@ -29,7 +27,6 @@ import {
 import type { EventInbox } from "./tasks/events.ts";
 import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
-import { registerVerifierGuard } from "./tasks/verify-guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
 import { registerMaterialRoutes } from "./materials/routes.ts";
@@ -93,8 +90,6 @@ export async function createApp(options: {
   serviceUrl?: string;
   /** leader 唤醒的注入项：测试用来缩短攒批、替换 leader 进程。 */
   leaders?: Partial<Omit<LeaderWakerOptions, "data">>;
-  /** 旧的 ~/Atrium 目录（main.ts 给）：启动时导入一次根章程预算；不给就不读。 */
-  legacyDir?: string;
   /** 周期任务（#404）：测试缩短巡检间隔、注入时钟与时区。 */
   schedules?: { tickMs?: number; now?: () => number; offset?: Offset };
   /** 推送到手机（Telegram）：测试给假接口地址、显式环境（不读本机代理）与时钟。 */
@@ -209,9 +204,6 @@ export async function createApp(options: {
   const leaderTokens = new LeaderTokens();
   let inbox: (() => EventInbox) | undefined;
   registerLeaderGuard(app, db, leaderTokens, () => inbox!());
-  // 上线验证执行者（t239）：认出验证身份头就拒绝止损类写接口（停别人的活、改主机与服务状态）。
-  registerVerifierGuard(app);
-  // onRequest 拿得到匹配的路由，且在读请求体之前运行。
   const mapLogin = new MapLogin(db);
   app.addHook("onRequest", async (request, reply) => {
     if (options.auth === false || leaderOf(request)) return;
@@ -283,7 +275,6 @@ export async function createApp(options: {
     console.error("旧的暂停状态迁移失败，已跳过：", error);
   }
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
-  registerPatrolRoutes(app, db, taskRunner);
   // 周期任务（#404）：到点在节点下建普通任务并派发；等任务运行时接管完上次在跑的再判上一轮。
   const schedulePump = new SchedulePump(
     db,
@@ -298,17 +289,15 @@ export async function createApp(options: {
     },
   );
   registerScheduleRoutes(app, db, schedulePump);
-  // 产品部（#404 第 3 步）：建节点、leader 与 research 周期任务；研究收尾在任务运行时里登记选项单。
-  registerProductRoutes(app, db, schedulePump);
   schedulePump.start();
   app.addHook("preClose", async () => schedulePump.close());
   registerHostRoutes(app, db, taskRunner);
   inbox = () => taskRunner.inbox;
   registerOrgRoutes(app, db);
-  // 账本与组织树的表都建好后导入旧状态（#355）：详述回填、根章程预算；幂等，坏记录只记日志。
-  importLegacyState(db, { legacyDir: options.legacyDir });
   registerLeaderRoutes(app, db, taskRunner.inbox);
   registerMemoRoutes(app, db);
+  // 账本、组织树与决定记录的表都建好后导入旧状态（#355）：详述回填、规矩并进要点；幂等，坏记录只记日志。
+  importLegacyState(db);
   // 资料（t192）：文件在 <ATRIUM_DATA>/materials/；表要在全景变更检测挂触发器之前建好。
   registerMaterialRoutes(app, db, resolve(options.data));
   // 凭据（t194）：值在 <ATRIUM_DATA>/secrets/，只在派活时注入执行者。

@@ -13,7 +13,7 @@ import {
 
 /**
  * 总任务（t190）的取数与落账；判定在 rollup.ts。
- * 「子任务」只数 helper=0 的：审阅、上线验证是运行时替父任务建的帮手，不让父任务变成总任务。
+ * 「子任务」只数 helper=0 的：审阅是运行时替父任务建的帮手，不让父任务变成总任务。
  */
 
 /** 一次汇总最多读多少个子孙（k23：有界）；超出的标 truncated，进度写「+」。 */
@@ -188,20 +188,4 @@ export function openDescendants(db: DatabaseSync, id: number) {
     .filter((row) => row.status !== "done" && row.status !== "cancelled")
     .map((row) => ({ id: row.id, status: row.status }))
     .sort((a, b) => a.id - b.id);
-}
-
-/** 叶子的一行事实，给总任务上线摘要用。 */
-export function finishedLeaves(db: DatabaseSync, id: number, limit = 50) {
-  const { rows } = subtree(db, [id]);
-  const leaves = rows
-    .filter((row) => !row.has_children && row.status === "done")
-    .map((row) => row.id)
-    .sort((a, b) => a - b)
-    .slice(0, limit);
-  if (!leaves.length) return [];
-  return all<Pick<TaskRow, "id" | "title" | "result" | "pr_url">>(
-    db,
-    `SELECT id, title, result, pr_url FROM tasks WHERE id IN (${marks(leaves)}) ORDER BY id`,
-    ...leaves,
-  );
 }

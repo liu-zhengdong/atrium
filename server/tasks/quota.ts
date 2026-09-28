@@ -59,7 +59,7 @@ export type QuotaList = {
   accounts: QuotaAccount[];
   /** 整体提示（如 OpenQuota 装了但读失败）；没有为空数组。 */
   notes: string[];
-  /** 给用户留的份额（组织根章程，#355）；旧版服务没有这个字段。 */
+  /** 给用户留的份额（根节点配置 org limits）；旧版服务没有这个字段。 */
   reserve?: QuotaReserve;
 };
 

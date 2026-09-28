@@ -8,8 +8,8 @@ import { resolveActor } from "../server/actor.ts";
 import { createApp } from "../server/app.ts";
 import { asVerdict } from "../server/leaders/scope.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc } from "../server/org/write.ts";
-import { history } from "../server/org/read.ts";
+import { addNode } from "../server/org/write.ts";
+import { addPoint } from "../server/org/points.ts";
 import { actsForUser } from "../shared/user.ts";
 import { defaultActor } from "../cli/worker-guard.ts";
 import { removeTemp } from "./temp-dir.ts";
@@ -46,27 +46,18 @@ test("以谁的名义：u1、secretary（秘书）与 leader；权限上秘书�
   assert.equal(actsForUser("secretary"), true);
   assert.equal(actsForUser("a1"), false);
 
-  // 根章程：秘书改得动、修订记秘书；leader 仍改不动。
-  editDoc(
+  // 根上的要点：秘书改得动、记秘书；leader 仍改不动。
+  const point = addPoint(
     db,
     "o1",
-    "charter",
-    { fields: {}, body: "秘书起草", reason: "起草" },
+    { text: "不花钱", why: "底线", by: "u1 09-28" },
     "secretary",
   );
+  assert.equal(point.updated_by, "secretary");
   assert.throws(
-    () =>
-      editDoc(
-        db,
-        "o1",
-        "charter",
-        { fields: {}, body: "改", reason: "改" },
-        "a1",
-      ),
-    /无权限/,
+    () => addPoint(db, "o1", { text: "改", why: "改", by: "a1" }, "a1"),
+    /根节点的要点只有你能改/,
   );
-  const items = history(db, "o1", { target: "charter" }).items!;
-  assert.equal(items[0]!.author, "secretary");
   db.close();
 });
 
@@ -81,7 +72,7 @@ test("leader 令牌不能以秘书名义；命令行缺省名义只在秘书会�
   );
 });
 
-test("服务：?as=secretary 改档案、章程、专员，修订如实记秘书；不带仍记 u1", async (t) => {
+test("服务：?as=secretary 改档案、节点、配置，修订如实记秘书；不带仍记 u1", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-actor-"));
   t.after(() => removeTemp(data));
   const { app } = await createApp({
@@ -117,16 +108,15 @@ test("服务：?as=secretary 改档案、章程、专员，修订如实记秘书
     reason: "建",
   });
   assert.equal(root.status, 201, JSON.stringify(root.body));
-  const charter = await call(
-    "PUT",
-    "/api/org/nodes/o1/docs/charter?as=secretary",
-    {
-      source:
-        "---\nboundaries:\n  - id: quota-reserve\n    summary: 额度留给用户\n    param: { quota_reserve_percent: 20 }\n---\n根章程\n",
-      reason: "用户 09-28 确认",
-    },
-  );
-  assert.equal(charter.status, 200, JSON.stringify(charter.body));
+  const limits = await call("PUT", "/api/org/limits?as=secretary", {
+    quota_reserve_percent: 20,
+  });
+  assert.equal(limits.status, 200, JSON.stringify(limits.body));
+  const edited = await call("PATCH", "/api/org/nodes/o1?as=secretary", {
+    name: "我的组织",
+    reason: "改名",
+  });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
   const revisions = await call("GET", "/api/org/nodes/o1/history");
   assert.deepEqual(
     revisions.body.items.map((r: { author: string }) => r.author),

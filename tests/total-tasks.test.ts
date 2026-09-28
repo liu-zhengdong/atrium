@@ -195,16 +195,14 @@ test("帮手子任务（专员审查、会审意见）不让父任务变成总�
   assert.equal(getTask(db, "t1").status, "todo");
 });
 
-test("通知：秘书只收总任务级的——叶子完成不投，卡住转成「tN 下的 tM 卡住」，全部上线发一次「整体已上线」带端到端验证", () => {
+test("通知：秘书只收总任务级的——叶子完成不投，卡住转成「tN 下的 tM 卡住」，全部上线发一次「整体已上线」", () => {
   const db = memory();
   const inbox = new EventInbox(db);
   createTask(db, { title: "离开电脑也能拍板" }); // t1
   createTask(db, { title: "手机上看选项单", parent: "t1" }); // t2
   createTask(db, { title: "推送提醒", parent: "t1" }); // t3
   updateTask(db, "t2", { status: "done" });
-  noteTask(db, "t2", "online", {
-    verification_text: "atrium choice ls 在手机上能看到 c1",
-  });
+  noteTask(db, "t2", "online", {});
   publishTask(inbox, db, 2, "done", {});
   assert.deepEqual(inboxOf(db, "secretary"), []);
 
@@ -228,14 +226,6 @@ test("通知：秘书只收总任务级的——叶子完成不投，卡住转�
   assert.equal(online.length, 1);
   assert.equal(online[0]!.task, "t1");
   assert.equal(online[0]!.detail.message, "t1 整体已上线（2/2）");
-  assert.match(
-    String(online[0]!.detail.verification),
-    /### t2 手机上看选项单\natrium choice ls 在手机上能看到 c1/,
-  );
-  assert.match(
-    String(online[0]!.detail.verification),
-    /### t3 推送提醒\n（没写端到端验证）/,
-  );
   assert.equal(getTask(db, "t1").status, "done");
 });
 

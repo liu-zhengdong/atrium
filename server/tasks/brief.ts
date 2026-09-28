@@ -30,7 +30,7 @@ export function briefText(value: unknown, field = "brief"): string | null {
   return text;
 }
 
-/** 运行时自己生成的详述（审阅、上线验证）：超限截断并注明，不因原详述过长而建不出任务。 */
+/** 运行时自己生成的详述（审阅）：超限截断并注明，不因原详述过长而建不出任务。 */
 export function clipBrief(text: string): string {
   if (briefBytes(text) <= BRIEF_MAX_BYTES) return text;
   const note = "\n\n（详述过长，以下已截断）";

@@ -52,11 +52,9 @@ test("契约：只靠档案接入命令行工具，派活走通、提示词走�
     join(dir, "work"),
   ]);
   assert.equal(args[5], "--");
-  // 提示词整段是最后一个参数（多行，含档案正文叮嘱）。
-  assert.match(
-    args.slice(6).join("\n"),
-    /契约：fake-cli[\s\S]*假命令行工具：回一句话就行/,
-  );
+  // 提示词整段是最后一个参数（多行）；档案正文只写工具事实，不附进提示词。
+  assert.match(args.slice(6).join("\n"), /契约：fake-cli[\s\S]*按说明回一句话/);
+  assert.doesNotMatch(args.slice(6).join("\n"), /假命令行工具：回一句话就行/);
   const env = readFileSync(join(dir, "env-seen.txt"), "utf8");
   assert.match(env, /^ATRIUM_WORKER=1$/m);
   assert.match(task.result ?? "", /答复：好的/);

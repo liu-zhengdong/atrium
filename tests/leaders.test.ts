@@ -253,9 +253,8 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
       (await as("POST", "/api/tasks/t1/note", { text: "a1 看过" })).status,
       200,
     );
-    const stages = await as("PUT", "/api/org/nodes/o2/stages", {
+    const stages = await as("PATCH", "/api/map/nodes/o2", {
       stages: [{ id: "s1", result: "leader 层可用", status: "active" }],
-      reason: "a1 推进阶段",
     });
     assert.equal(stages.status, 200, JSON.stringify(stages.body));
     assert.equal(
@@ -294,16 +293,12 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
       ["PATCH", "/api/tasks/t1", { part: "o4" }, /归属部分 o4/],
       [
         "PUT",
-        "/api/org/nodes/o1/docs/charter",
-        { source: "x", reason: "改" },
-        /改章程、边界与预算/,
+        "/api/org/limits",
+        { quota_reserve_percent: 5 },
+        /改给用户留的额度与花费上限/,
       ],
-      [
-        "PUT",
-        "/api/org/nodes/o1/stages",
-        { stages: [], reason: "改" },
-        /节点 o1/,
-      ],
+      ["PATCH", "/api/map/nodes/o1", { stages: [] }, /节点 o1/],
+      ["POST", "/api/decisions", { text: "x", why: "y" }, /记决定/],
       [
         "PATCH",
         "/api/org/nodes/o2",
@@ -311,7 +306,6 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
         /自己负责的节点/,
       ],
       ["PATCH", "/api/org/nodes/o3", { name: "改名", reason: "改" }, /name/],
-      ["PATCH", "/api/map/nodes/o2", { detail: "正文" }, /章程正文/],
       [
         "POST",
         "/api/org/nodes",

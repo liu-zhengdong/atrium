@@ -1,11 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import {
-  all,
-  one,
-  atomically,
-  type TaskEventRow,
-  type TaskRow,
-} from "./ledger-model.ts";
+import { all, one, type TaskEventRow, type TaskRow } from "./ledger-model.ts";
 import { parseWorker } from "./profiles.ts";
 import { getJobRole } from "./job-roles.ts";
 
@@ -27,10 +21,8 @@ export type DeliveryRow = {
   historical: number;
   job_rev: number | null;
   job_checks: string | null;
-  /** 事件保留清理前固化的交付事实（JSON，#t126）；只在读交付明细时取。 */
-  facts?: string | null;
 };
-export type Delivery = Omit<DeliveryRow, "facts"> & {
+export type Delivery = DeliveryRow & {
   task_ref: string;
   task_title: string;
   final_result: string;
@@ -184,19 +176,6 @@ export type DeliveryMetric = {
   merge_return_count: number;
   incident_count: number;
 };
-/**
- * 每条交付的统计事实（#t123）：作为列存进 task_deliveries，统计时只做 SQL GROUP BY，
- * 不再逐条翻事件。与 deliveryFacts 同源，回填与实时更新结果一致。
- */
-type StoredFacts = {
-  first_pass: number | null;
-  gate_return_count: number;
-  merge_return_count: number;
-  incident_count: number;
-  duration_ms: number | null;
-  gate_passed: number;
-  incident_flags: number;
-};
 /** 五类事故各自占一位；用位图去重，避免同一类重复计数。 */
 const INCIDENT_BITS: Record<string, number> = {
   卡死: 1,
@@ -210,29 +189,6 @@ const popcount = (n: number) => {
   for (let x = n; x; x &= x - 1) count++;
   return count;
 };
-/** 从一条交付窗口的事实折成落库列（纯函数）。 */
-function storedFactsOf(row: DeliveryRow, w: WindowFacts): StoredFacts {
-  const ended = row.ended_at !== null;
-  return {
-    first_pass: ended
-      ? w.passed &&
-        w.failedGates.length === 0 &&
-        w.mergeReturns.length === w.conflicts
-        ? 1
-        : 0
-      : null,
-    gate_return_count: w.gateReturnCount,
-    // 统计里只算不归责的合入退回（与旧 Delivery.merge_returns 一致）。
-    merge_return_count: w.mergeReturns.length - w.conflicts,
-    incident_count: w.incidents.length,
-    duration_ms: ended ? Math.max(0, row.ended_at! - row.started_at) : null,
-    gate_passed: w.passed ? 1 : 0,
-    incident_flags: w.incidents.reduce(
-      (n, x) => n | (INCIDENT_BITS[x] ?? 0),
-      0,
-    ),
-  };
-}
 export function ensureDeliveryRecords(db: DatabaseSync) {
   db.exec(`CREATE TABLE IF NOT EXISTS task_deliveries(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,8 +214,7 @@ export function ensureDeliveryRecords(db: DatabaseSync) {
     incident_count INTEGER NOT NULL DEFAULT 0,
     incident_flags INTEGER NOT NULL DEFAULT 0,
     gate_passed INTEGER NOT NULL DEFAULT 0,
-    duration_ms INTEGER,
-    facts TEXT)`);
+    duration_ms INTEGER)`);
   const columns = new Set(
     all<{ name: string }>(db, "PRAGMA table_info(task_deliveries)").map(
       (x) => x.name,
@@ -272,14 +227,10 @@ export function ensureDeliveryRecords(db: DatabaseSync) {
       "final_outcome",
       "ALTER TABLE task_deliveries ADD COLUMN final_outcome TEXT",
     ],
-    // 事件保留清理会删掉旧交付窗口的事件（#t126）；清理前把从事件算出的展示事实固化到这里，
-    // 之后读固化结果，listDeliveries / summarizeDeliveries 与清理前完全一致。
-    ["facts", "ALTER TABLE task_deliveries ADD COLUMN facts TEXT"],
   ] as const)
     if (!columns.has(name)) db.exec(ddl);
-  // 统计事实（#t123）：旧库在这里补列，随后按事件回填一次。
-  const hadFacts = columns.has("first_pass");
-  if (!hadFacts)
+  // 统计事实（#t123）：旧库在这里补列；此后由 applyDeliveryEvent 增量维护。
+  if (!columns.has("first_pass"))
     db.exec(`ALTER TABLE task_deliveries ADD COLUMN first_pass INTEGER;
       ALTER TABLE task_deliveries ADD COLUMN gate_return_count INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE task_deliveries ADD COLUMN merge_return_count INTEGER NOT NULL DEFAULT 0;
@@ -305,195 +256,6 @@ export function ensureDeliveryRecords(db: DatabaseSync) {
   DROP INDEX IF EXISTS task_deliveries_med_worker;
   DROP INDEX IF EXISTS task_deliveries_med_model;
   DROP INDEX IF EXISTS task_deliveries_med_tool;`);
-  backfillDeliveries(db);
-  if (hadFacts) fillMissingFinishedDeliveryFacts(db);
-  else recomputeAllDeliveryFacts(db);
-}
-const END_KINDS = ["exit_ok", "exit_fail", "block", "manual_set", "cancel"];
-const marks = (n: number) => Array(n).fill("?").join(",");
-
-/**
- * 旧库启动时逐页回填；只用账本事件里的事实，不推测遗失的强度或风险。
- * 只看已记交付里最大的开工事件之后的 start（t154）：启动时的回填按 id 递增写入，
- * 运行中开工当场记交付，更早的都处理过；再次启动时这里只剩常数条查询。
- * 每页的已记交付、任务与后续事件各一条批量查询，循环里不查库（k23）。
- */
-export function backfillDeliveries(db: DatabaseSync) {
-  let after =
-    one<{ id: number | null }>(
-      db,
-      "SELECT MAX(start_event_id) AS id FROM task_deliveries",
-    )?.id ?? 0;
-  const insert = db.prepare(
-    "INSERT OR IGNORE INTO task_deliveries(task_id,start_event_id,worker,tool,model,effort,job_id,risk,part_id,started_at,ended_at,outcome,historical) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
-  );
-  for (;;) {
-    const starts = all<TaskEventRow>(
-      db,
-      "SELECT * FROM task_events WHERE kind='start' AND id>? ORDER BY id LIMIT 200",
-      after,
-    );
-    if (!starts.length) break;
-    after = starts.at(-1)!.id;
-    const ids = starts.map((start) => start.id);
-    const recorded = new Set(
-      all<{ start_event_id: number }>(
-        db,
-        `SELECT start_event_id FROM task_deliveries WHERE start_event_id IN (${marks(ids.length)})`,
-        ...ids,
-      ).map((row) => row.start_event_id),
-    );
-    const todo = starts.filter((start) => !recorded.has(start.id));
-    const taskIds = [...new Set(todo.map((start) => start.task_id))];
-    if (taskIds.length) {
-      const tasks = new Map(
-        all<Pick<TaskRow, "id" | "worker" | "job_id" | "part_id">>(
-          db,
-          `SELECT id,worker,job_id,part_id FROM tasks WHERE id IN (${marks(taskIds.length)})`,
-          ...taskIds,
-        ).map((task) => [task.id, task]),
-      );
-      // 每条 start 之后的下一次开工与其间第一个结束事件：按任务取回这页之后的事件，倒序走一遍配好。
-      const events = all<Pick<TaskEventRow, "id" | "task_id" | "at" | "kind">>(
-        db,
-        `SELECT id,task_id,at,kind FROM task_events WHERE task_id IN (${marks(taskIds.length)}) AND id>? AND kind IN ('start',${marks(END_KINDS.length)}) ORDER BY id DESC`,
-        ...taskIds,
-        todo[0]!.id - 1,
-        ...END_KINDS,
-      );
-      type Near = { at: number; kind: string } | undefined;
-      const later = new Map<number, { next: Near; end: Near }>();
-      const next = new Map<number, Near>();
-      const end = new Map<number, Near>();
-      for (const event of events)
-        if (event.kind === "start") {
-          later.set(event.id, {
-            next: next.get(event.task_id),
-            end: end.get(event.task_id),
-          });
-          next.set(event.task_id, event);
-          end.delete(event.task_id);
-        } else end.set(event.task_id, event);
-      atomically(db, () => {
-        for (const start of todo) {
-          const task = tasks.get(start.task_id);
-          if (!task) continue;
-          const d = inner(start),
-            raw = text(d.worker) ?? task.worker;
-          if (!raw) continue;
-          let spec;
-          try {
-            spec = parseWorker(raw);
-          } catch {
-            continue;
-          }
-          const near = later.get(start.id);
-          insert.run(
-            task.id,
-            start.id,
-            raw,
-            spec.tool,
-            spec.model ?? null,
-            null,
-            task.job_id,
-            text(d.risk),
-            task.part_id,
-            start.at,
-            near?.end?.at ?? near?.next?.at ?? null,
-            near?.end?.kind ?? (near?.next ? "switched" : null),
-          );
-        }
-      });
-    }
-    if (starts.length < 200) break;
-  }
-}
-const WRITE_FACTS =
-  "UPDATE task_deliveries SET first_pass=?,gate_return_count=?,merge_return_count=?,incident_count=?,duration_ms=?,gate_passed=?,incident_flags=? WHERE id=?";
-function writeFacts(
-  db: DatabaseSync,
-  pending: readonly { facts: StoredFacts; id: number }[],
-) {
-  if (!pending.length) return;
-  const update = db.prepare(WRITE_FACTS);
-  atomically(db, () => {
-    for (const { facts, id } of pending)
-      update.run(
-        facts.first_pass,
-        facts.gate_return_count,
-        facts.merge_return_count,
-        facts.incident_count,
-        facts.duration_ms,
-        facts.gate_passed,
-        facts.incident_flags,
-        id,
-      );
-  });
-}
-/** 一条交付窗口内的事件（用得上统计的那些，含下一轮 start 作边界）。 */
-function windowEventsFor(db: DatabaseSync, row: DeliveryRow): TaskEventRow[] {
-  return all<TaskEventRow>(
-    db,
-    `SELECT id,task_id,kind,detail FROM task_events WHERE task_id=? AND id>? AND (${METRIC_EVENTS}) ORDER BY id`,
-    row.task_id,
-    row.start_event_id,
-  );
-}
-/**
- * 启动迁移：按事件对全部旧交付重算一次统计事实（#t123）。交付与事件各一个游标，
- * 边读边算，峰值内存与交付数无关；结果写回列，之后由 applyDeliveryEvent 增量维护。
- */
-export function recomputeAllDeliveryFacts(db: DatabaseSync) {
-  const pending: { facts: StoredFacts; id: number }[] = [];
-  const deliveries = db
-    .prepare(
-      `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries ORDER BY task_id,start_event_id`,
-    )
-    .iterate();
-  const events = db
-    .prepare(
-      `SELECT id,task_id,kind,detail FROM task_events WHERE (${METRIC_EVENTS}) ORDER BY task_id,id`,
-    )
-    .iterate();
-  let e = events.next();
-  for (let d = deliveries.next(); !d.done; d = deliveries.next()) {
-    const row = d.value as DeliveryRow;
-    while (
-      !e.done &&
-      ((e.value as TaskEventRow).task_id < row.task_id ||
-        ((e.value as TaskEventRow).task_id === row.task_id &&
-          (e.value as TaskEventRow).id <= row.start_event_id))
-    )
-      e = events.next();
-    const window: TaskEventRow[] = [];
-    while (
-      !e.done &&
-      (e.value as TaskEventRow).task_id === row.task_id &&
-      (e.value as TaskEventRow).kind !== "start"
-    ) {
-      window.push(e.value as TaskEventRow);
-      e = events.next();
-    }
-    pending.push({
-      facts: storedFactsOf(row, windowOf(row, window)),
-      id: row.id,
-    });
-  }
-  writeFacts(db, pending);
-}
-/** 补算「已结束但没有事实」的少数交付（如启动时新回填的历史行）。 */
-export function fillMissingFinishedDeliveryFacts(db: DatabaseSync) {
-  const rows = all<DeliveryRow>(
-    db,
-    `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries WHERE ended_at IS NOT NULL AND duration_ms IS NULL`,
-  );
-  writeFacts(
-    db,
-    rows.map((row) => ({
-      facts: storedFactsOf(row, windowOf(row, windowEventsFor(db, row))),
-      id: row.id,
-    })),
-  );
 }
 /**
  * 写入一条任务事件后同步交付事实（#t123）：只碰最近一轮交付，只认统计相关的事件，
@@ -698,14 +460,14 @@ export type TaskLite = Pick<
   TaskRow,
   "id" | "title" | "status" | "delivery_stage"
 >;
-function factsFromEvents(
+/** 读一条交付：从事件现算（事件不清理，交付事实一直查得到）。 */
+export function deliveryFacts(
   row: DeliveryRow,
   task: TaskLite,
   events: TaskEventRow[],
   usage: { points: number; basis: string } | undefined,
   jobName: string | null,
 ): Delivery {
-  const { facts: _frozen, ...base } = row;
   const w = windowOf(row, events);
   const gateDiff = w.gates
     .map((d) => d.diff)
@@ -727,7 +489,7 @@ function factsFromEvents(
     ((task.delivery_stage === "merged" || task.delivery_stage === "online") &&
       !w.untilNext);
   return {
-    ...base,
+    ...row,
     task_ref: `t${row.task_id}`,
     task_title: task.title,
     final_result:
@@ -769,88 +531,6 @@ function factsFromEvents(
     verdict_note: text(lastNote?.text),
   };
 }
-/** 解析已固化的事实；坏 JSON 或非对象当作没固化，回退到从事件现算。 */
-function frozenFacts(row: DeliveryRow): Delivery | null {
-  if (!row.facts) return null;
-  try {
-    const x = JSON.parse(row.facts) as unknown;
-    return x && typeof x === "object" && !Array.isArray(x)
-      ? (x as Delivery)
-      : null;
-  } catch {
-    return null;
-  }
-}
-/** 读一条交付：优先用清理前固化的事实，没有才从事件现算。 */
-export function deliveryFacts(
-  row: DeliveryRow,
-  task: TaskLite,
-  events: TaskEventRow[],
-  usage: { points: number; basis: string } | undefined,
-  jobName: string | null,
-): Delivery {
-  return frozenFacts(row) ?? factsFromEvents(row, task, events, usage, jobName);
-}
-/**
- * 把一个任务名下还没固化的交付事实写进 task_deliveries.facts（返回固化条数）。
- * 事件保留清理删行前调用：此刻事件仍完整，固化后即便旧窗口的事件被清掉，
- * listDeliveries / summarizeDeliveries 读到的仍是清理前的结果。统计列（first_pass 等）
- * 由 applyDeliveryEvent 增量维护；这里顺手补齐该任务「已结束但没统计事实」的行，
- * 免得之后 fillMissingFinishedDeliveryFacts 对着被清过的事件重算。
- */
-export function freezeTaskDeliveries(db: DatabaseSync, taskId: number) {
-  const rows = all<DeliveryRow>(
-    db,
-    `SELECT ${DELIVERY_COLUMNS},facts FROM task_deliveries WHERE task_id=? AND (facts IS NULL OR facts='') ORDER BY id`,
-    taskId,
-  );
-  if (!rows.length) return 0;
-  const task = one<TaskLite>(
-    db,
-    "SELECT id,title,status,delivery_stage FROM tasks WHERE id=?",
-    taskId,
-  );
-  if (!task) return 0;
-  const events = taskEventsFor(db, [taskId], DISPLAY_EVENTS);
-  const usage = all<UsageLite>(
-    db,
-    "SELECT task_id,started_at,points,basis FROM task_usage WHERE task_id=?",
-    taskId,
-  );
-  const jobs = jobNamesOf(
-    db,
-    rows.map((r) => r.job_id).filter((x): x is number => x !== null),
-  );
-  const missing = all<DeliveryRow>(
-    db,
-    `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries WHERE task_id=? AND ended_at IS NOT NULL AND duration_ms IS NULL`,
-    taskId,
-  );
-  writeFacts(
-    db,
-    missing.map((row) => ({
-      facts: storedFactsOf(row, windowOf(row, windowEventsFor(db, row))),
-      id: row.id,
-    })),
-  );
-  const update = db.prepare("UPDATE task_deliveries SET facts=? WHERE id=?");
-  atomically(db, () => {
-    for (const row of rows)
-      update.run(
-        JSON.stringify(
-          factsFromEvents(
-            row,
-            task,
-            events,
-            pickUsage(usage, row),
-            row.job_id === null ? null : (jobs.get(row.job_id) ?? null),
-          ),
-        ),
-        row.id,
-      );
-  });
-  return rows.length;
-}
 function page<T>(items: readonly T[], size: number, fn: (slice: T[]) => void) {
   for (let i = 0; i < items.length; i += size) fn(items.slice(i, i + size));
 }
@@ -875,9 +555,6 @@ function deliveryWhere(filter: { worker?: string; job?: number }): {
     params,
   };
 }
-/** 统计只关心这些事件；窗口边界靠 start。 */
-const METRIC_EVENTS =
-  "kind IN ('start','gates','merge_returned','merge_blocked','stalled','thinking_retry') OR kind LIKE '%worker_guard%' OR kind LIKE '%worker-guard%' OR detail LIKE '%卡死%'";
 /** 展示交付事实要看的事件（比统计多 merged、note）。 */
 const DISPLAY_EVENTS =
   "kind IN ('start','gates','merge_returned','merge_blocked','stalled','thinking_retry','merged','note') OR kind LIKE '%worker_guard%' OR kind LIKE '%worker-guard%' OR detail LIKE '%卡死%'";
@@ -1159,7 +836,7 @@ export function listDeliveries(
     const clause = base ? `${base} AND id<?` : "WHERE id<?";
     const batch = all<DeliveryRow>(
       db,
-      `SELECT ${DELIVERY_COLUMNS},facts FROM task_deliveries ${clause} ORDER BY id DESC LIMIT ?`,
+      `SELECT ${DELIVERY_COLUMNS} FROM task_deliveries ${clause} ORDER BY id DESC LIMIT ?`,
       ...params,
       before,
       Math.min(200, limit - rows.length),
@@ -1169,13 +846,10 @@ export function listDeliveries(
     before = batch.at(-1)!.id;
   }
   if (!rows.length) return [];
-  // 已固化的交付直接读 facts，只给还没固化的任务读事件与用量。
-  const liveIds = [
-    ...new Set(rows.filter((r) => !frozenFacts(r)).map((r) => r.task_id)),
-  ].sort((a, b) => a - b);
   const taskIds = [...new Set(rows.map((r) => r.task_id))].sort(
     (a, b) => a - b,
   );
+  const liveIds = taskIds;
   const taskMap = new Map<number, TaskLite>();
   page(taskIds, 200, (slice) => {
     for (const t of all<TaskLite>(

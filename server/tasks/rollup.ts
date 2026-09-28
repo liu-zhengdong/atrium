@@ -4,7 +4,7 @@ import type { TaskStatus } from "./state.ts";
 /**
  * 汇总型总任务（t190）的判定，纯函数、穷举测试；取数在 rollup-ledger.ts。
  *
- * 一个任务一旦有子任务（运行时自己建的审阅、上线验证这类「帮手」子任务不算），就是总任务：
+ * 一个任务一旦有子任务（运行时自己建的审阅这类「帮手」子任务不算），就是总任务：
  * 不再派给执行者，状态与进度由全部子孙里的叶子推出。中间层的子任务同样是总任务，只数叶子。
  */
 
@@ -219,9 +219,6 @@ export const STUCK_KINDS: ReadonlySet<string> = new Set([
   "online_failed",
   // 到期（overdue.ts）：执行者卡死、等发版超时等。
   "overdue",
-  // 上线验证没通过、无法验证（t182）。
-  "verify_failed",
-  "verify_unverifiable",
 ]);
 
 /**

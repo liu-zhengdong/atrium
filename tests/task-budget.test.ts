@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc } from "../server/org/write.ts";
+import { addNode } from "../server/org/write.ts";
+import { writeLimits } from "../server/org/limits.ts";
 import {
   DEFAULT_QUOTA_RESERVE_PERCENT,
   quotaReserve,
@@ -16,7 +17,7 @@ import { chooseWorker } from "../server/tasks/worker-choice.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";
 
-/** 只有根节点的组织树（带空档案表），根章程写上保留份额（不写就不给 boundaries）。 */
+/** 只有根节点的组织树（带空档案表），根节点配置写上保留份额（不写就不设）。 */
 function rootWithReserve(reserve?: number) {
   const db = profileDb();
   ensureOrgTables(db);
@@ -28,28 +29,11 @@ function rootWithReserve(reserve?: number) {
   if (reserve !== undefined) setRootReserve(db, root.id, reserve);
   return { db, root };
 }
-function setRootReserve(db: DatabaseSync, id: number, reserve: number) {
-  editDoc(
-    db,
-    `o${id}`,
-    "charter",
-    {
-      fields: {},
-      body: "",
-      boundaries: [
-        {
-          id: "quota-reserve",
-          summary: "留给用户",
-          param: { quota_reserve_percent: reserve },
-        },
-      ],
-      reason: "改保留份额",
-    },
-    "u1",
-  );
+function setRootReserve(db: DatabaseSync, _id: number, reserve: number) {
+  writeLimits(db, { quota_reserve_percent: reserve }, "u1");
 }
 
-test("保留份额只读组织树：没有库、没有根、根章程没写都取缺省；写了就用根章程", (t) => {
+test("保留份额只读组织树：没有库、没有根、根节点没设都取缺省；设了就用它", (t) => {
   assert.equal(DEFAULT_QUOTA_RESERVE_PERCENT, 20);
   assert.deepEqual(quotaReserve(), { percent: 20, set_by: null });
   const empty = new DatabaseSync(":memory:");
@@ -68,7 +52,7 @@ test("保留份额只读组织树：没有库、没有根、根章程没写都�
   });
 });
 
-test("指定执行者触及章程预算时拒绝并给出可选执行者；自动派活避开该账号", async (t) => {
+test("指定执行者触及保留额时拒绝并给出可选执行者；自动派活避开该账号", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-budget-choice-"));
   t.after(() => removeTemp(dir));
   const bin = join(dir, "bin");
@@ -90,94 +74,11 @@ test("指定执行者触及章程预算时拒绝并给出可选执行者；自�
     /grok.*89%.*80%.*可选的其他执行者：kimi/,
   );
   assert.equal((await chooseWorker({}, options)).worker.tool, "kimi");
-  // 根章程把保留份额放宽到 10%：89% 还能派。
+  // 根节点把保留份额放宽到 10%：89% 还能派。
   const { db } = rootWithReserve(10);
   t.after(() => db.close());
   assert.equal(
     (await chooseWorker({ worker: "grok" }, { ...options, db })).worker.tool,
     "grok",
-  );
-});
-
-test("组织章程导入后按任务节点的最严保留额挑人", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "atrium-budget-org-"));
-  t.after(() => removeTemp(dir));
-  const db = profileDb(undefined, new DatabaseSync(":memory:"));
-  t.after(() => db.close());
-  ensureOrgTables(db);
-  const root = addNode(
-    db,
-    { slug: "org", kind: "org", name: "组织", reason: "建树" },
-    "u1",
-  );
-  const project = addNode(
-    db,
-    {
-      parent: `o${root.id}`,
-      slug: "project",
-      kind: "project",
-      name: "项目",
-      reason: "建项目",
-    },
-    "u1",
-  );
-  const boundary = (reserve: number) => [
-    {
-      id: "reserve",
-      summary: "留给用户",
-      param: { quota_reserve_percent: reserve },
-    },
-  ];
-  editDoc(
-    db,
-    `o${root.id}`,
-    "charter",
-    { fields: {}, body: "", boundaries: boundary(20), reason: "导入" },
-    "u1",
-  );
-  editDoc(
-    db,
-    `o${project.id}`,
-    "charter",
-    {
-      fields: {},
-      body: "",
-      boundaries: [{ id: "reserve", param: { quota_reserve_percent: 30 } }],
-      reason: "收紧",
-    },
-    "u1",
-  );
-  const bin = join(dir, "bin");
-  mkdirSync(bin);
-  for (const name of ["grok", "kimi"]) {
-    writeFakeBin(join(bin, name), "#!/bin/sh\nexit 0\n");
-  }
-  const options = {
-    db,
-    data: dir,
-    env: { PATH: bin },
-    pace: async () => [
-      { providerId: "grok", usedPercent: 75, sparePercent: 80 },
-      { providerId: "kimi", usedPercent: 5, sparePercent: 20 },
-    ],
-  };
-  assert.equal(
-    (
-      await chooseWorker({}, options, new Map(), {
-        chain: [{ id: root.id, ref: `o${root.id}`, path: "" }],
-      })
-    ).worker.tool,
-    "grok",
-  );
-  assert.equal(
-    (
-      await chooseWorker({}, options, new Map(), {
-        chain: [
-          { id: root.id, ref: `o${root.id}`, path: "" },
-          { id: project.id, ref: `o${project.id}`, path: "project" },
-        ],
-      })
-    ).worker.tool,
-    "kimi",
   );
 });

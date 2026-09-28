@@ -53,7 +53,7 @@ export const pauseCommands: Record<string, Command> = {
   pause: {
     args: "[--part 节点|--host hN] [--why 原因] [--stop]",
     about:
-      "一键停机：停下一切自主动作——不派活（自动派发、排队拉起、重试换人）、不生成周期任务、不叫醒 leader 与后台秘书、合入与上线验证不推进；事件照常落库但不投给等待的人。在跑的执行者缺省跑完不接新的，--stop 一并停掉。--part 只停那一块（派活、周期任务、合入、leader），--host 只是不往那台派活与检查",
+      "一键停机：停下一切自主动作——不派活（自动派发、排队拉起、重试换人）、不生成周期任务、不叫醒 leader 与后台秘书、合入与上线不推进；事件照常落库但不投给等待的人。在跑的执行者缺省跑完不接新的，--stop 一并停掉。--part 只停那一块（派活、周期任务、合入、leader），--host 只是不往那台派活与检查",
     options: {
       part: { type: "string" },
       host: { type: "string" },

@@ -13,7 +13,6 @@ import { statuslineCommand } from "./statusline.ts";
 import { quotaCommands } from "./quota.ts";
 import {
   leaderCommandGuard,
-  verifierCommandGuard,
   workerGuard,
   workerReadable,
 } from "./worker-guard.ts";
@@ -22,13 +21,11 @@ import { chatCommand } from "./chat.ts";
 import { secretaryCommands } from "./secretary.ts";
 import { mapCommands } from "./map.ts";
 import { leaderCommands } from "./leaders.ts";
-import { patrolCommands } from "./patrol.ts";
 import { scheduleCommands } from "./schedules.ts";
 import { memoCommands } from "./memos.ts";
 import { materialCommands } from "./materials.ts";
 import { secretCommands } from "./secrets.ts";
 import { choiceCommands } from "./choices.ts";
-import { productCommands } from "./products.ts";
 import { agentCommand, agentServiceCommands, hostCommands } from "./hosts.ts";
 import { notifyCommands } from "./notify.ts";
 import { closest, Problem } from "../server/problem.ts";
@@ -115,13 +112,11 @@ export const commands: Record<string, Command> = {
   ...mapCommands,
   ...orgCommands,
   ...leaderCommands,
-  ...patrolCommands,
   ...scheduleCommands,
   ...memoCommands,
   ...materialCommands,
   ...secretCommands,
   ...choiceCommands,
-  ...productCommands,
   ...skillCommands,
   ...quotaCommands,
   ...eventCommands,
@@ -234,7 +229,6 @@ export async function main(argv: string[]): Promise<number> {
       ) {
         if (!workerReadable(name, rest)) workerGuard();
         leaderCommandGuard(name);
-        verifierCommandGuard(name);
       }
       if (name === undefined || name === "--no-open" || name === "start") {
         if (rest.filter((part) => part !== "--json").length)

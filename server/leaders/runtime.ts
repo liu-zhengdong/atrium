@@ -26,7 +26,6 @@ import {
   showLeader,
   wakeFailures,
 } from "./model.ts";
-import { ownerDigest } from "../memos/digest.ts";
 import { upstreamRoute } from "./subscriber.ts";
 import type { LeaderTokens } from "./tokens.ts";
 import { afterWake, leaderPrompt, wakeSummary, type WakeExit } from "./wake.ts";
@@ -270,10 +269,10 @@ export class LeaderWaker {
         name: view.name,
         nodes: view.nodes.map((n) => ({
           ...n,
-          context: contextOf(this.db, Number(n.ref.slice(1))).text,
+          context: contextOf(this.db, Number(n.ref.slice(1)), undefined, [])
+            .text,
         })),
         memo: view.memo,
-        decisions: ownerDigest(this.db, leader),
         events: delivered,
         digest,
         upstream:

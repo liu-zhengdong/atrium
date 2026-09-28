@@ -8,8 +8,8 @@
 // 阈值也可用 ATRIUM_BENCH_LIMIT_MS 放宽（CI 机器慢）。先在临时数据目录与空闲端口上
 // 起一个隔离服务，读命令（status、task ls）连着它量，量完停掉服务、删掉目录。
 //
-// --decisions N：先造一棵小组织树（负责人 a1）和 N 条假决定（多份、多节点、部分原则／推翻／沉淀），
-// 缺省量 memo show（秘书、a1、用户）、decision ls --node、decision search（t221）。
+// --decisions N：先造一棵小组织树（负责人 a1）和 N 条假决定（多节点、部分推翻），
+// 缺省量 memo show、decision ls --node、decision ls 关键词（t221）。
 //
 //   node scripts/bench-cli.mjs --decisions 1500
 import { spawnSync } from "node:child_process";
@@ -54,10 +54,8 @@ const commands = positionals.length
   : decisions
     ? [
         ["memo", "show"],
-        ["memo", "show", "--as", "a1"],
-        ["memo", "show", "--as", "u1"],
         ["decision", "ls", "--node", "o3"],
-        ["decision", "search", "决定 稳"],
+        ["decision", "ls", "决定", "稳"],
       ]
     : [["--help"], ["status"], ["task", "ls"]];
 const port = await new Promise((resolvePort, reject) => {
@@ -132,7 +130,7 @@ async function seedDecisions(n) {
   db.exec("PRAGMA busy_timeout=5000");
   const owners = ["u1", "secretary", "a1", "a2", "a3"];
   const insert = db.prepare(
-    "INSERT INTO decisions(owner,decided_on,decided_by,text,why,principle,settled_point,superseded_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+    "INSERT INTO decisions(owner,decided_on,decided_by,text,why,superseded_by,created_at) VALUES(?,?,?,?,?,?,?)",
   );
   const link = db.prepare(
     "INSERT OR IGNORE INTO decision_nodes(decision_id,node_id) VALUES(?,?)",
@@ -148,8 +146,6 @@ async function seedDecisions(n) {
         owner,
         `决定第 ${i} 条：这里是一段不太长的决定内容`,
         `原因 ${i}：因为这样更稳`,
-        i % 37 === 0 ? 1 : 0,
-        i % 13 === 0 ? 1 : null,
         i % 11 === 0 ? i + 1 : null,
         Date.now(),
       ).lastInsertRowid,

@@ -4,37 +4,21 @@ import { resolveActor } from "../actor.ts";
 import { Problem } from "../problem.ts";
 import { ensureOrgTables } from "./schema.ts";
 import { history, show, tree } from "./read.ts";
-import {
-  addNode,
-  editDoc,
-  editNode,
-  editStages,
-  importOrg,
-  revertDoc,
-  type AddInput,
-  type ImportInput,
-} from "./write.ts";
-import type { Doc } from "./model.ts";
-import { parseDocument } from "./validate.ts";
+import { addNode, editNode, type AddInput } from "./write.ts";
 import { addPoint, editPoint, removePoint } from "./points.ts";
+import { readLimits, writeLimits } from "./limits.ts";
 import { isRegistered } from "../leaders/model.ts";
 
 type Query = {
   as?: string;
-  raw?: string;
   before?: string;
   after?: string;
   rev?: string;
-  target?: string;
   limit?: string;
 };
 const q = (value: unknown) => (value ?? {}) as Query;
 const p = (value: unknown) => (value ?? {}) as { id: string };
 const body = (value: unknown) => (value ?? {}) as Record<string, unknown>;
-const doc = (value: unknown): Doc => {
-  if (value !== "charter") throw new Problem(400, "doc 只能是 charter");
-  return value;
-};
 export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
   ensureOrgTables(db);
   const actor = (query: unknown) => resolveActor(db, q(query).as);
@@ -62,15 +46,7 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
         : input;
   };
   app.get("/api/org/tree", () => tree(db));
-  app.get("/api/org/nodes/:id", (request) =>
-    show(
-      db,
-      p(request.params).id,
-      q(request.query).raw === undefined
-        ? undefined
-        : doc(q(request.query).raw),
-    ),
-  );
+  app.get("/api/org/nodes/:id", (request) => show(db, p(request.params).id));
   app.get("/api/org/nodes/:id/history", (request) => {
     const query = q(request.query);
     return history(db, p(request.params).id, {
@@ -87,7 +63,7 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
           if (input.kind === "concern")
             throw new Problem(
               400,
-              "关注点节点已下线；请用 atrium specialist add 创建专员",
+              "关注点节点已下线；规矩写成要点，放在它们共同的上级",
               "usage",
             );
           return input as AddInput;
@@ -104,61 +80,7 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
       actor(request.query),
     ),
   );
-  app.put(
-    "/api/org/nodes/:id/docs/:doc",
-    { bodyLimit: 64 * 1024 },
-    (request) => {
-      const input = body(request.body),
-        target = doc((request.params as { doc: string }).doc);
-      const parsed: {
-        fields?: unknown;
-        body?: unknown;
-        boundaries?: unknown;
-      } =
-        typeof input.source === "string"
-          ? parseDocument(input.source, target)
-          : input;
-      return editDoc(
-        db,
-        p(request.params).id,
-        target,
-        {
-          fields: parsed.fields,
-          body: parsed.body,
-          boundaries: parsed.boundaries,
-          rev: input.rev as string | undefined,
-          reason: input.reason,
-        },
-        actor(request.query),
-      );
-    },
-  );
-  app.post("/api/org/nodes/:id/revert", { bodyLimit: 8 * 1024 }, (request) => {
-    const input = body(request.body);
-    return revertDoc(
-      db,
-      p(request.params).id,
-      doc(input.doc),
-      String(input.to ?? ""),
-      String(input.reason ?? ""),
-      actor(request.query),
-    );
-  });
-  // 阶段记录：只改章程的 stages，其余不动（leader 可改本节点及子节点的阶段）。
-  app.put("/api/org/nodes/:id/stages", { bodyLimit: 64 * 1024 }, (request) => {
-    const input = body(request.body);
-    for (const key of Object.keys(input))
-      if (key !== "stages" && key !== "reason")
-        throw new Problem(400, `${key}: 是未知字段`);
-    return editStages(
-      db,
-      p(request.params).id,
-      input.stages,
-      input.reason,
-      actor(request.query),
-    );
-  });
-  // 要点（#322）：不留修订记录，权限同章程（leader 链；根只有 u1）。
+  // 要点：不留修订记录（leader 链；根只有 u1）。
   app.post(
     "/api/org/nodes/:id/points",
     { bodyLimit: 8 * 1024 },
@@ -180,8 +102,9 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
   app.delete("/api/org/points/:id", (request) =>
     removePoint(db, p(request.params).id, actor(request.query)),
   );
-  // 最多 200 份各 16 KB 的岗位正文，另留请求字段与根章程空间。
-  app.post("/api/org/import", { bodyLimit: 4 * 1024 * 1024 }, (request) =>
-    importOrg(db, body(request.body) as ImportInput, actor(request.query)),
+  // 根节点的两项配置：给你留的额度、花费上限（只有用户能改）。
+  app.get("/api/org/limits", () => readLimits(db));
+  app.put("/api/org/limits", { bodyLimit: 1024 }, (request) =>
+    writeLimits(db, request.body, actor(request.query)),
   );
 }

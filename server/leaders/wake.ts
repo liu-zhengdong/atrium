@@ -1,10 +1,6 @@
 import { Problem } from "../problem.ts";
 import { MEMO_MAX } from "./model.ts";
-import { decisionLine } from "../memos/decisions.ts";
-import { omittedLine, type DecisionDigest } from "../memos/digest.ts";
 import { forwardedOf } from "./route.ts";
-import type { VerifyStep } from "../tasks/verify.ts";
-import { phenomenonLine } from "../tasks/verify-view.ts";
 import { CLOSING_ACTIONS } from "./actions.ts";
 import { DUE, spanText } from "../tasks/overdue.ts";
 
@@ -16,7 +12,7 @@ import { DUE, spanText } from "../tasks/overdue.ts";
 export const ESCALATE_KINDS = {
   shipped: "已上线",
   cross: "需要别的部分配合",
-  beyond: "越过权限／预算／硬边界",
+  beyond: "越过权限／额度／根上的原则",
   stuck: "搞不定",
 } as const;
 export type EscalateKind = keyof typeof ESCALATE_KINDS;
@@ -66,7 +62,7 @@ export function escalateInput(body: unknown): {
     event = Number(text);
   }
   if (input.kind === "shipped" && !task && event === null)
-    throw usage("--task: 上交「已上线」要给上线的任务，附端到端验证");
+    throw usage("--task: 上交「已上线」要给上线的任务");
   return { kind: input.kind as EscalateKind, note, task, event };
 }
 
@@ -135,19 +131,6 @@ export function eventLine(event: PromptEvent) {
       .map((m) => `${m.ref} ${m.name.slice(0, 40)}（${m.reason}）`)
       .join("；")}${detail?.more ? `；另有 ${detail.more} 份` : ""}`;
   }
-  // 上线验证没通过、无法验证（t182）：附现象（命令、期望、实际输出摘要）与怎么开修复任务。
-  if (event.kind === "verify_failed" || event.kind === "verify_unverifiable") {
-    const detail = (event.detail ?? {}) as {
-      phenomena?: Partial<VerifyStep>[];
-    };
-    return [
-      `- #${event.id} ${event.task ?? ""} ${eventWord(event.kind)} ${field(event.detail, "title", 60)}（验证任务 ${field(event.detail, "verifier", 20)}）${field(event.detail, "summary", 300) ? `：${field(event.detail, "summary", 300)}` : ""}`,
-      ...(Array.isArray(detail.phenomena) ? detail.phenomena : []).map(
-        (step) => `  - ${phenomenonLine(step).slice(0, 600)}`,
-      ),
-      `  - ${field(event.detail, "hint", 300)}`,
-    ].join("\n");
-  }
   if (event.kind === "secret_stale") {
     const detail = event.detail as {
       node?: string;
@@ -163,13 +146,6 @@ export function eventLine(event: PromptEvent) {
   // 到期（overdue.ts）：说明里写了挂多久、下一步。
   if (event.kind === "overdue")
     return `- #${event.id} ${event.task ?? ""} 到期没动 ${field(event.detail, "title", 60)}：${field(event.detail, "reason", 300)}；${field(event.detail, "next", 1200)}`;
-  if (event.kind === "patrol_findings") {
-    const detail = event.detail as {
-      node?: string;
-      findings?: { ref: string; phenomenon: string }[];
-    } | null;
-    return `- #${event.id} 巡检发现 ${detail?.node ?? ""}：${(detail?.findings ?? []).map((f) => `${f.ref} ${f.phenomenon}`).join("；")}`;
-  }
   if (event.kind === "choice_small") {
     const detail = event.detail as {
       choice?: string;
@@ -180,7 +156,7 @@ export function eventLine(event: PromptEvent) {
     const text = (value: unknown, max: number) =>
       typeof value === "string" ? value.slice(0, max) : "";
     return [
-      `- #${event.id} 产品部小改进 ${detail?.choice ?? ""} ${detail?.node ?? ""}（${items.length} 条，你自己定）：`,
+      `- #${event.id} 调研小改进 ${detail?.choice ?? ""} ${detail?.node ?? ""}（${items.length} 条，你自己定）：`,
       ...items.map((m, i) => {
         const basis = Array.isArray(m.basis)
           ? m.basis.filter((b) => typeof b === "string").slice(0, 10)
@@ -224,8 +200,6 @@ export const EVENT_WORDS: Record<string, string> = {
   online: "上线",
   online_failed: "上线失败",
   total_online: "整体已上线",
-  verify_failed: "上线验证没过",
-  verify_unverifiable: "上线后无法验证",
   total_stuck: "下面有子任务卡住",
   merged: "已合入",
   merge_returned: "合入被打回",
@@ -240,7 +214,7 @@ export const EVENT_WORDS: Record<string, string> = {
   material_stale: "资料疑似没用",
   material_purge: "资料可以真删",
   secret_stale: "凭据疑似没用",
-  choice_small: "产品部小改进",
+  choice_small: "调研小改进",
   overdue: "到期没动",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
@@ -258,8 +232,6 @@ export type PromptInput = {
   name: string;
   nodes: { ref: string; name: string; path: string; context: string }[];
   memo: string;
-  /** 决定摘要：自己的与挂在负责部分及上级的，原则 + 最近的（已按字数挑过）与没放下的条数。 */
-  decisions?: Pick<DecisionDigest, "decisions" | "omitted">;
   events: readonly PromptEvent[];
   /** 过程事件摘要（已自动确认）。 */
   digest: readonly string[];
@@ -272,22 +244,14 @@ export function leaderPrompt(input: PromptInput): string {
   const home = input.nodes[0]?.ref ?? "节点";
   return [
     `你是 Atrium 组织里的 leader ${input.leader}（${input.name}），负责：${input.nodes.map((n) => `${n.ref} ${n.name}（${n.path}）`).join("、") || "（暂无节点）"} 及其下属部分。`,
-    "你是一次性进程：处理完这批事件、确认后退出。你的连续性存在 Atrium（节点要点、阶段、交付记录、你的备忘），不靠这次的记忆。",
+    "你是一次性进程：处理完这批事件、确认后退出。你的连续性存在 Atrium（要点、阶段、任务备注、你的备忘），不靠这次的记忆。",
     "你不写代码、不改仓库；活派给执行者，你负责判断、派、盯、收。",
     "",
-    "## 你负责的部分",
-    ...input.nodes.map((n) => n.context),
+    "## 你负责的部分与要守的规矩",
+    ...input.nodes.map((n) => n.context || `${n.ref} ${n.name}：还没有要点`),
     "",
     `## 你的备忘（上次留给自己的，上限 ${MEMO_MAX} 字）`,
     input.memo || "（空）",
-    "",
-    "## 决定记录摘要（你的、用户与上级挂在你这几块及上级的；先原则，再最近的）",
-    ...(input.decisions?.decisions.length
-      ? input.decisions.decisions.map((d) => `- ${decisionLine(d)}`)
-      : ["（还没有）"]),
-    ...[omittedLine(input.decisions?.omitted ?? 0)].filter(
-      (line): line is string => line !== null,
-    ),
     "",
     `## 这批要处理的事件（${input.events.length} 条）`,
     ...input.events.map(eventLine),
@@ -303,31 +267,29 @@ export function leaderPrompt(input: PromptInput): string {
     "- 看：atrium task show tN；atrium task log tN；atrium task tree tN；atrium top --once；atrium map oN --json",
     "- 重派：atrium task run tN [--worker 工具+模型[:强度]]；捎话：atrium task tell tN 补充；停：atrium task stop tN；备注：atrium task note tN 文字",
     `- 新活：atrium task add 标题 --part ${home} [--priority 修复|普通|闲时] [--brief 文件] [--repo 路径] [--by 专员]；再 atrium task run tN（入队，按优先级拉起）`,
-    "- 优先级：巡检发现、上线验证没过、审阅打回或合入交回派生的写 --priority 修复（排在普通任务前面）；只有影响使用的才写 --priority 紧急（另跳过本机负载限制）",
-    "- 巡检发现：atrium patrol findings oN；开任务后 atrium patrol decide fN --task tN，合到已有任务用 --merge tN，忽略用 --ignore 原因；处理后确认事件",
-    "- 产品部的小改进（choice_small）：由你按节奏自行处理——逐条开任务、并入已有任务（atrium task note tN）或不做，记一条决定（atrium decision add）；性能等闲时活照旧排后，不必上交",
-    `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,
+    "- 优先级：审阅打回或合入交回派生的写 --priority 修复（巡检直接建修复任务，同标题没结束的会被拒）（排在普通任务前面）；只有影响使用的才写 --priority 紧急（另跳过本机负载限制）",
+    "- 调研的小改进（choice_small）：由你按节奏自行处理——逐条开任务、并入已有任务（atrium task note tN）或不做，在任务备注里写一句为什么；不必上交",
+    `- 规矩只写成要点（挂在部分上、往下继承；跨几块的放共同上级；同一层靠前的更重要）：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader} [--pos N]；阶段：atrium map edit ${home} --stages 阶段.yaml`,
     `- 子节点指派 leader：atrium org edit 子节点 --leader aM`,
     "- 资料：atrium material ls --node oN；疑似没用的（资料清理线索）你来定：用不上就 atrium material archive mN --note 原因（只归档不删，可恢复），要留就 atrium material keep mN --note 原因（之后不再提）；拿不准先 atrium material show mN 看谁读过",
     "- 凭据：atrium secret ls --node oN（只有名称与最近使用，没有值）；疑似没用的（90 天没用过）你来定：用不上就 atrium secret archive oN 名称 --note 原因（派活不再注入，可恢复），要留就 atrium secret keep oN 名称 --note 原因；任务要用就 task add/set --secret 名称，派活时按名称注入执行者",
     `- 周期任务（巡检、调研）：atrium schedule add ${home} --kind patrol --every 1d --at 09:30；atrium schedule run/rm sN`,
     "- 备忘：atrium memo edit 文本（覆盖写，超过上限会被拒，先精简）；看全：atrium memo show",
-    `- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--node ${home}] [--issue N] [--task tN] [--supersedes dN] [--principle]；推翻：atrium decision supersede dN --by dM；推翻错了：atrium decision unsupersede dN --why 原因；查：atrium decision ls --node ${home}、atrium decision search 关键词`,
-    `- 例行巡检（周期任务到点、资料清理线索）时顺带看本部分的决定（atrium decision ls --node ${home}）：能合并的合并，被取代的标推翻并指向新决定（decision supersede），已成规矩的沉淀为要点（atrium decision settle dN --new-point 节点 要点 或 --point kN）；只是整理，不必每次都做`,
+    "- 处理过程、取舍与原因写任务备注：atrium task note tN 文字；决定记录只记用户拍板的事（由秘书记），你不写",
     "",
     "## 新能力先试点再铺开（做法，不设关卡）",
     "- 新能力上线后先在小范围用：一台主机、一两个任务、一个部分；跑通再放开。",
     "- 放开前在那件任务上写一句试点结果：atrium task note tN 试点结果：在哪试、跑了什么、结果如何",
-    "- 挑试点时先看 PR「碰到哪些已有能力」一节，优先试它列出的组合（远程主机、Windows、合入队列……），问题多出在新旧能力的组合上；上线后运行时会照 PR「端到端验证」在真实环境跑一遍，没过才投给你。",
+    "- 挑试点时先看 PR「碰到哪些已有能力」一节，优先试它列出的组合（远程主机、Windows、合入队列……），问题多出在新旧能力的组合上；端到端验证由执行者合入前在隔离实例跑、输出贴在 PR 里。",
     "",
     "## 权限边界（服务端强制，越权会被拒）",
     "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料，设值、归档、恢复、留下这些节点的凭据；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",
-    "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、真删资料或凭据。",
+    "- 不可以：动别的部分的任务、改上层的要点与根上的原则、突破额度与花费上限、改仓库公开范围、花钱、真删资料或凭据。",
     "",
     `## 上交（投给 ${input.upstream}；只有这四类才上交，其余自己处理）`,
     "- shipped 已上线：只在里程碑／阶段达成时上交 → atrium leader escalate --kind shipped 说明 --task tN；单个任务上线运行时已自动通知秘书，不必再报",
     "- cross 需要别的部分配合 → atrium leader escalate --kind cross 说明 [--task tN]",
-    "- beyond 越过权限／预算／硬边界 → atrium leader escalate --kind beyond 说明 [--task tN]",
+    "- beyond 越过权限／额度／根上的原则 → atrium leader escalate --kind beyond 说明 [--task tN]",
     "- stuck 搞不定（同一件事卡住多次、拿不定）→ atrium leader escalate --kind stuck 说明 [--task tN]",
     "- 下层 leader 上交给你、你也要往上报的：转交那一条，atrium leader escalate --kind 同类型 你的意见 --event 编号 [--task tN]；上面只收一条，能看到原文和你的意见，原事件随之确认。不要另写一条内容相同的上交",
     "",
@@ -338,8 +300,8 @@ export function leaderPrompt(input: PromptInput): string {
     "- 确实要等（等用户、等别的部分）：上交写清在等什么，而不是留在自己手里。",
     "",
     "## 收尾",
-    "1. 把要记住的（在等什么、下次先看什么）写进备忘；这次做了取舍的，记一条决定。",
-    "   用户纠正了或要立新规矩，按 atrium guide「每类东西放哪」写到对应位置：做法与口味 → 技能，某一块的约束 → 要点，某个执行者 → 执行者档案，为什么这么定 → 决定记录；专员说明只写分工。技能、档案、章程你改不了，上交 beyond 写明放哪、改成什么。",
+    "1. 把要记住的（在等什么、下次先看什么）写进备忘；这次做了取舍的，写进那件任务的备注。",
+    "   用户纠正了或要立新规矩：规矩一律写成要点（你负责的部分上 atrium org point-add；该放在上层或根上的，上交 beyond 写明放哪、写什么）；做法写进技能，执行者档案只写工具与模型的事实。",
     `2. 处理完确认：atrium events ack ${ids.join(" ")}`,
     "3. 退出。没确认的事件会再次唤醒你，连续失败会转交上层。",
   ].join("\n");

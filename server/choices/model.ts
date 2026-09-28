@@ -2,10 +2,10 @@ import { Problem } from "../problem.ts";
 import { clip, oneLine } from "../text-width.ts";
 
 /**
- * 选项单（产品部第 2 步）的判定：字段校验、能不能拍板、拍板后生成的任务详述与决定记录、
+ * 选项单的判定：字段校验、能不能拍板、拍板后生成的任务详述与决定记录、
  * 状态栏一行。全是纯函数、穷举测试；读写在 store.ts。
  * 一份选项单挂在一个节点上（它要演进的那一块），3–5 个选项；用户选中的在该节点下建任务，
- * 没选的连同说明记成决定记录，下一轮产品部读得到。
+ * 没选的连同说明记成决定记录，下一轮调研读得到。
  */
 
 export const OPTIONS_MIN = 3;
@@ -65,7 +65,7 @@ export type OptionInput = {
   cost: string;
   /** 不做会怎样。 */
   skip: string;
-  /** 依据：巡检发现 fN、任务 tN、决定 dN、链接等。 */
+  /** 依据：任务 tN、决定 dN、链接等。 */
   basis: string[];
 };
 
@@ -229,7 +229,7 @@ export function smallHint(
   node: { ref: string; name: string },
   count: number,
 ) {
-  return `产品部随 ${ref} 给${node.name}（${node.ref}）提了 ${count} 条小改进，不进选项单、由你定：逐条开任务（atrium task add 标题 --part ${node.ref}）、并入已有任务（atrium task note tN 补充）或不做，并记决定（atrium decision add 决定 --why 原因）；按节奏处理，性能等闲时活照旧排后，不必上交`;
+  return `调研随 ${ref} 给${node.name}（${node.ref}）提了 ${count} 条小改进，不进选项单、由你定：逐条开任务（atrium task add 标题 --part ${node.ref}）、并入已有任务（atrium task note tN 补充）或不做，并记决定（atrium decision add 决定 --why 原因）；按节奏处理，性能等闲时活照旧排后，不必上交`;
 }
 
 /**
@@ -296,76 +296,10 @@ export function statusAfter(action: "pick" | "pass"): ChoiceStatus {
   return action === "pick" ? "picked" : "passed";
 }
 
-/** 谁拍板选项单：用户（缺省），或下放给选项单所在节点最近的 leader。 */
-export type DeciderMode = "u1" | "leader";
-export const DECIDER_MODES: readonly DeciderMode[] = ["u1", "leader"];
-
-export function parseDecider(value: unknown): DeciderMode {
-  if (value === "u1" || value === "leader") return value;
-  throw usage(
-    "--decider: 只能是 u1（用户拍板）或 leader（下放给该节点的 leader）",
-  );
-}
-
-/** 从选项单所在节点往上到根的一段：节点上的设置与 leader（已归档的节点 leader 记 null）。 */
-export type DeciderLink = {
-  id: number;
-  setting: DeciderMode | null;
-  leader: string | null;
-};
-export type Decider = {
-  /** 拍板人：u1 或 aN。 */
-  decider: string;
-  mode: DeciderMode;
-  /** 设置写在哪个节点上；缺省为 null。 */
-  set_at: number | null;
-  why: string;
-};
-
-/**
- * 拍板人（纯函数）：最近一个写了设置的节点说了算，都没写就是用户。下放给 leader 时找选项单所在节点
- * 往上最近的已登记 leader；找不到就仍由用户拍板，不让选项单没人管。
- */
-export function resolveDecider(
-  chain: readonly DeciderLink[],
-  registered: ReadonlySet<string>,
-): Decider {
-  const at = chain.find((link) => link.setting !== null);
-  if (!at || at.setting === "u1")
-    return {
-      decider: "u1",
-      mode: "u1",
-      set_at: at?.id ?? null,
-      why: at ? `o${at.id} 设为用户拍板` : "缺省由用户拍板",
-    };
-  const lead = chain.find(
-    (link) => link.leader !== null && registered.has(link.leader),
-  );
-  if (!lead)
-    return {
-      decider: "u1",
-      mode: "leader",
-      set_at: at.id,
-      why: `o${at.id} 设为 leader 拍板，但往上找不到已登记的 leader，仍由用户拍板`,
-    };
-  return {
-    decider: lead.leader!,
-    mode: "leader",
-    set_at: at.id,
-    why: `o${at.id} 设为 leader 拍板：${lead.leader}（负责 o${lead.id}）`,
-  };
-}
-
-/** 能不能拍板（纯函数）：用户始终可以；leader 只在拍板权下放给自己时可以。 */
-export function decideRight(
-  actor: string,
-  decider: string,
-  ref: string,
-): string | null {
-  if (actor === "u1" || actor === decider) return null;
-  return decider === "u1"
-    ? `${actor} 不能拍板 ${ref}：拍板人是用户（u1）；可以写意见：atrium choice comment ${ref} 意见 --prefer 选项号`
-    : `${actor} 不能拍板 ${ref}：拍板人是 ${decider}`;
+/** 能不能拍板（纯函数）：只有用户。 */
+export function decideRight(actor: string, ref: string): string | null {
+  if (actor === "u1") return null;
+  return `${actor} 不能拍板 ${ref}：拍板人是用户（u1）；可以写意见：atrium choice comment ${ref} 意见 --prefer 选项号`;
 }
 
 export const COMMENTS_MAX = 20;
@@ -466,7 +400,7 @@ export function pickedBrief(
     bullet("不做会怎样", option.skip),
     ...(option.basis.length ? [bullet("依据", option.basis.join("；"))] : []),
     "",
-    `产品部推荐：选项 ${choice.recommend.join("、")}——${choice.why}`,
+    `推荐：选项 ${choice.recommend.join("、")}——${choice.why}`,
     ...(comments.length
       ? [
           "",

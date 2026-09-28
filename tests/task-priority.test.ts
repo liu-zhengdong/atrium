@@ -4,18 +4,13 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  aspectPart,
-  defaultPriority,
   parsePriority,
   PRIORITIES,
-  priorityAfterMove,
   priorityCountsText,
   priorityTag,
   rank,
   tagTitle,
   titleTag,
-  underAspect,
-  type Priority,
 } from "../server/tasks/priority.ts";
 import {
   createTask,
@@ -38,8 +33,7 @@ import { startApp, until } from "./task-fixture.ts";
 
 /**
  * 优先级只留一列：紧急 / 修复 / 普通 / 闲时；想跑的任务进同一个队列，唯一的 drain 按优先级、入队先后取。
- * 管方面的部分开的任务缺省闲时。
- * 树：o1 组织 → o2 Atrium → o3 派活（管东西）、o4 性能（管方面）→ o5 启动速度（性能下的部分）。
+ * 缺省普通。树：o1 组织 → o2 Atrium → o3 派活、o4 性能 → o5 启动速度。
  */
 
 const orgDb = () => {
@@ -50,7 +44,7 @@ const orgDb = () => {
     [undefined, "org", "org", "组织"],
     ["o1", "atrium", "project", "Atrium"],
     ["o2", "runtime", "module", "派活"],
-    ["o2", "perf", "aspect", "性能"],
+    ["o2", "perf", "module", "性能"],
     ["o4", "startup", "module", "启动速度"],
   ] as const)
     addNode(db, { parent, slug, kind, name, reason: "测试" }, "u1");
@@ -76,48 +70,6 @@ test("档位写法：紧急 / 修复 / 普通 / 闲时与英文都认，其余�
         /priority: 只能是 紧急、修复、普通 或 闲时/.test(error.message),
       String(bad),
     );
-});
-
-test("缺省档位与换部分：管方面的缺省闲时；没被人改过的跟着新部分走，改过的保留", () => {
-  assert.equal(defaultPriority(true), "idle");
-  assert.equal(defaultPriority(false), "normal");
-  for (const current of PRIORITIES as readonly Priority[])
-    for (const before of [false, true])
-      for (const after of [false, true])
-        assert.equal(
-          priorityAfterMove(current, before, after),
-          current === defaultPriority(before)
-            ? defaultPriority(after)
-            : current,
-          `${current}/${before}/${after}`,
-        );
-});
-
-test("管方面判定：自己或父链上有管方面的算；环与断链不算", () => {
-  const nodes = new Map(
-    [
-      { id: 1, parent_id: null, aspect: 0 },
-      { id: 2, parent_id: 1, aspect: 1 },
-      { id: 3, parent_id: 2, aspect: 0 },
-      { id: 4, parent_id: 1, aspect: 0 },
-      { id: 5, parent_id: 6, aspect: 0 },
-      { id: 6, parent_id: 5, aspect: 0 },
-      { id: 7, parent_id: 99, aspect: 0 },
-    ].map((node) => [node.id, node]),
-  );
-  const want: Record<number, boolean> = {
-    1: false,
-    2: true,
-    3: true,
-    4: false,
-    5: false,
-    6: false,
-    7: false,
-    42: false,
-  };
-  for (const [id, expected] of Object.entries(want))
-    assert.equal(underAspect(nodes, Number(id)), expected, `o${id}`);
-  assert.equal(underAspect(nodes, null), false);
 });
 
 test("先后档位与标记：紧急 0、修复 1、普通 2、闲时 3；普通不标；头部计数只写不为 0 的", () => {
@@ -165,65 +117,41 @@ test("标题标记：标题已以同一标记开头的不重复（巡检 f6）",
   );
 });
 
-test("建任务：归属管方面的部分（或其下）缺省闲时，其余普通；--priority 覆盖；set 可改，换部分跟着走", () => {
+test("建任务：缺省普通；--priority 覆盖；set 可改，换部分不动档位", () => {
   const db = orgDb();
-  assert.equal(aspectPart(db, 4), true);
-  assert.equal(aspectPart(db, 5), true);
-  assert.equal(aspectPart(db, 3), false);
-  assert.equal(aspectPart(db, null), false);
   const perf = createTask(db, { title: "性能巡检", part: "o4" });
-  assert.equal(perf.priority, "idle");
-  assert.equal(createTask(db, { title: "启动", part: "o5" }).priority, "idle");
-  assert.equal(
-    createTask(db, { title: "功能", part: "o3" }).priority,
-    "normal",
-  );
+  assert.equal(perf.priority, "normal");
   assert.equal(createTask(db, { title: "没归属" }).priority, "normal");
-  // 显式写的优先于缺省。
-  const forced = createTask(db, {
-    title: "性能急事",
-    part: "o4",
-    priority: "普通",
-  });
-  assert.equal(forced.priority, "normal");
   assert.equal(
     createTask(db, { title: "功能慢慢来", part: "o3", priority: "闲时" })
       .priority,
     "idle",
   );
-  // 建任务事件记下闲时，全景「谁派的」同一处能看到。
-  const created = getTask(db, perf.ref).events.find(
+  const urgent = createTask(db, {
+    title: "急事",
+    part: "o4",
+    priority: "紧急",
+  });
+  // 建任务事件记下非普通的档位，全景「谁派的」同一处能看到。
+  const created = getTask(db, urgent.ref).events.find(
     (e) => e.kind === "created",
   );
-  assert.equal(JSON.parse(created!.detail!).priority, "idle");
+  assert.equal(JSON.parse(created!.detail!).priority, "urgent");
   // 改档位；写错的拒绝并说参数名。
-  assert.equal(
-    updateTask(db, perf.ref, { priority: "普通" }).priority,
-    "normal",
-  );
-  assert.equal(updateTask(db, perf.ref, { priority: "idle" }).priority, "idle");
+  assert.equal(updateTask(db, perf.ref, { priority: "闲时" }).priority, "idle");
   assert.throws(
     () => updateTask(db, perf.ref, { priority: "很急" }),
     /priority: 只能是 紧急、修复、普通 或 闲时/,
   );
-  // 旧写法（urgent、type、size、stopgap）一律不认。
-  for (const retired of ["urgent", "type", "size", "stopgap", "why"])
+  // 旧写法（urgent、type、size、stopgap、also）一律不认。
+  for (const retired of ["urgent", "type", "size", "stopgap", "why", "also"])
     assert.throws(
       () => createTask(db, { title: "旧写法", [retired]: "x" }),
       /不认识|unknown|字段/,
       retired,
     );
-  // 没被人改过的：从性能挪到派活变普通，挪回来变闲时。
-  assert.equal(updateTask(db, perf.ref, { part: "o3" }).priority, "normal");
-  assert.equal(updateTask(db, perf.ref, { part: "o4" }).priority, "idle");
-  // 被人改成普通的：挪到别处保留；挪到派活后与那里的缺省一样，再挪回管方面的部分就跟着变闲时（不另记改没改过）。
-  assert.equal(updateTask(db, forced.ref, { part: "o3" }).priority, "normal");
-  assert.equal(updateTask(db, forced.ref, { part: "o5" }).priority, "idle");
-  // 同时给了部分和档位：以给的档位为准。
-  assert.equal(
-    updateTask(db, forced.ref, { part: "o3", priority: "闲时" }).priority,
-    "idle",
-  );
+  // 换部分不动档位。
+  assert.equal(updateTask(db, perf.ref, { part: "o3" }).priority, "idle");
 });
 
 test("旧库补列：prio 按旧的 urgent、task_type、priority 折算一次，之后只认 prio；旧列留着不读不写，旧运行时表不动", () => {
@@ -292,7 +220,11 @@ test("旧库补列：prio 按旧的 urgent、task_type、priority 折算一次�
 
 test("队列与看板：一个队列按优先级、入队先后排；排期就绪组同样排；看板与状态栏标档位", () => {
   const db = orgDb();
-  const idle = createTask(db, { title: "性能巡检", part: "o4" });
+  const idle = createTask(db, {
+    title: "性能巡检",
+    part: "o4",
+    priority: "闲时",
+  });
   const normal = createTask(db, { title: "功能 A", part: "o3" });
   const fix = createTask(db, { title: "修 bug", part: "o3", priority: "修复" });
   const urgent = createTask(db, {
@@ -412,14 +344,17 @@ test("运行时：想跑的任务都进同一个队列，执行者满时按优�
     [undefined, "org", "org", "组织"],
     ["o1", "atrium", "project", "Atrium"],
     ["o2", "runtime", "module", "派活"],
-    ["o2", "perf", "aspect", "性能"],
+    ["o2", "perf", "module", "性能"],
   ] as const)
     addNode(db, { parent, slug, kind, name, reason: "测试" }, "u1");
   const add = async (title: string, part: string, extra = {}) =>
     (await call("POST", "/api/tasks", { title, repo: fx.repo, part, ...extra }))
       .body;
   assert.equal((await add("占位", "o3")).priority, "normal");
-  assert.equal((await add("性能巡检", "o4")).priority, "idle");
+  assert.equal(
+    (await add("性能巡检", "o4", { priority: "闲时" })).priority,
+    "idle",
+  );
   await add("功能 B", "o3");
   assert.equal(
     (await add("修 bug", "o3", { priority: "修复" })).priority,

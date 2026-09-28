@@ -22,10 +22,8 @@ import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
 import { alive, spawnWorker } from "./spawn.ts";
-import { finishPatrol, patrolRun } from "./patrol.ts";
-import { VERIFIER_FLAG } from "./verify.ts";
-import { isVerifyTask } from "./verify-runtime.ts";
-import { settleRound } from "../products/settle.ts";
+import { patrolRun } from "./patrol.ts";
+import { settleRound } from "../choices/settle.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
@@ -107,8 +105,6 @@ export type ExecutorContext = {
   onAccepted?: (
     id: number,
   ) => Promise<{ kind: string; detail?: Record<string, unknown> } | false>;
-  /** 上线验证（t181）：验证任务结束后立即把结论记进原任务（否则等下一轮巡检）。 */
-  verify?: { settle: () => void };
   /** 本机闸门（#358）；紧急任务传 urgent，跳过负载与执行者上限。 */
   hostGate?: (urgent: boolean) => HostGate;
   /** 远程主机的代理连接（#358 第 1 步）；没有时只在本机跑。 */
@@ -262,27 +258,18 @@ export class Executors {
 
   /**
    * 本机执行者的环境：白名单环境加上 Atrium 标记（t203，子孙继承；父进程退出后被收养的也认得出，
-   * 任务早已结束还活着的巡检时清掉）。巡检与上线验证要连回本机服务，去掉执行者防护标记、带上服务的
-   * 数据目录与端口；巡检会重启服务，另去掉 Atrium 标记。上线验证另带 ATRIUM_VERIFIER（命令行拒绝启停、
-   * 升级服务，给真实服务的请求带验证身份，服务端拒绝止损类操作）与真实服务的数据目录并关掉自带额度读取（t181）。
+   * 任务早已结束还活着的巡检时清掉）。体验巡检要连回本机服务，去掉执行者防护标记与 Atrium 标记、带上服务的
+   * 数据目录与端口。
    */
   private runEnv(id: number): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...this.ctx.launchOptions.env,
       [SPAWN_ENV]: spawnMark(spawnOwner(this.ctx.launchOptions.data), id),
     };
-    const verify = isVerifyTask(this.ctx.db, id);
-    const patrol = !verify && patrolRun(this.ctx.db, id);
-    if (verify || patrol) {
+    if (patrolRun(this.ctx.db, id)) {
       delete env.ATRIUM_WORKER;
+      delete env[SPAWN_ENV];
       Object.assign(env, this.ctx.launchOptions.patrolServiceEnv);
-    }
-    if (patrol) delete env[SPAWN_ENV];
-    if (verify) {
-      env[VERIFIER_FLAG] = "1";
-      // 真实服务的数据目录（t239）：命令行据此分辨验证执行者连的是真实服务还是自己起的隔离实例。
-      env.ATRIUM_VERIFIER_DATA = this.ctx.launchOptions.data;
-      env.ATRIUM_QUOTA_READERS = "off";
     }
     return env;
   }
@@ -802,14 +789,6 @@ export class Executors {
           decision,
           published,
         );
-      // 上线验证的结论记进原任务，验证任务自己的结局不单独投递。
-      else if (isVerifyTask(this.ctx.db, id)) {
-        /* 由 verify.settle 记结论。 */
-      } else if (patrolRun(this.ctx.db, id)) {
-        finishPatrol(this.ctx.db, this.ctx.inbox, id);
-        if (decision.publish !== "done")
-          this.publish(id, decision.publish, published);
-      }
       // 关卡都过了才去审阅或合入队列。
       else if (
         decision.publish === "done" &&
@@ -822,7 +801,7 @@ export class Executors {
           decision.publish,
           {
             ...published,
-            // 产品部的研究：把工作目录里的选项单登记上，结果（cN 或错误）随完成事件交给产品部 leader。
+            // 调研类周期任务：工作目录里写了选项单就登记上，结果（cN 或错误）随完成事件交给负责人。
             ...(decision.publish === "done"
               ? settleRound(
                   this.ctx.db,
@@ -834,7 +813,6 @@ export class Executors {
           },
           active.stop?.kind === "user" ? active.stop.by : undefined,
         );
-      if (isVerifyTask(this.ctx.db, id)) this.ctx.verify?.settle();
     } catch (error) {
       this.failAfterError(id, error);
     } finally {

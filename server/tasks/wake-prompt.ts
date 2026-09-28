@@ -32,6 +32,8 @@ export function wakePrompt(events: readonly InboxEvent[]): string {
     tasks.length
       ? `看详情：${tasks.map((task) => `atrium task show ${task}`).join("；")}`
       : "看详情：atrium events",
+    // 汇报与上交是通用规则（原先写在根章程里）；规矩本身看要点（atrium org show 根部分）。
+    "只把要用户拍板的事递给用户（选项单、目标冲突、越过底线或额度、下面搞不定的）；汇报先给结论，按组织树逐层汇总。",
     `处理完确认：atrium events ack ${ids.join(" ")}`,
   ].join("\n");
 }

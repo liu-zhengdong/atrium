@@ -14,7 +14,6 @@ import {
   includedInVersion,
   onlineMessage,
   planOnline,
-  verificationSection,
 } from "./online.ts";
 import { compareSemver } from "../releases.ts";
 
@@ -25,9 +24,8 @@ const RESTART_GRACE_MS = 10 * 60_000;
 
 /**
  * 自动上线（#325 第 3 步）：已合入、属于服务自身仓库的任务等发版；版本比运行中的新就
- * update + restart，新服务起来后再判一次，标记「已上线」并把执行者写的端到端验证附进通知；
- * 同一事务里建上线验证任务（t181，verify-runtime.ts），提交后派人照着跑；派了人的通知只是知会，
- * 没通过或无法验证才叫醒负责人（t182）。
+ * update + restart，新服务起来后再判一次，标记「已上线」。端到端验证已在合入前由执行者在隔离实例里跑过，
+ * 上线后只跑一遍只读冒烟（status、task ls、--help）：过了「已上线」只是知会，没过记 online_failed 交负责人。
  * 进度全在账本（release_version、online_attempt、online_wait），重启后照常续上。
  */
 export class OnlineWatch {
@@ -56,18 +54,8 @@ export class OnlineWatch {
         detail: Record<string, unknown>,
       ) => void;
       changed: (id: number) => void;
-      /**
-       * 上线后的端到端验证（t181）：open 在「已上线」同一事务里建验证任务（没有验证步骤记一笔、返回 null），
-       * dispatch 在提交后派人。
-       */
-      verify?: {
-        open: (
-          id: number,
-          steps: string | null,
-          version: string,
-        ) => string | null;
-        dispatch: (refs: string[]) => void;
-      };
+      /** 上线后的只读冒烟；缺省不跑（测试与隔离服务）。 */
+      smoke?: () => Promise<DeployResult>;
       now?: () => number;
     },
   ) {}
@@ -121,43 +109,36 @@ export class OnlineWatch {
           busy: this.options.busy(),
         },
       );
-      const published: {
-        id: number;
-        detail: Awaited<ReturnType<OnlineWatch["prepareOnline"]>>;
-      }[] = [];
-      for (const id of plan.online)
-        published.push({ id, detail: await this.prepareOnline(id, current) });
+      // 上线的这批先跑一遍只读冒烟；没过的照样标已上线，另记 online_failed 交负责人。
+      const smoke =
+        plan.online.length && this.options.smoke
+          ? await this.options.smoke()
+          : ({ ok: true } as const);
       // 状态和通知一同提交；同一版本连续入队，秘书的攒批唤醒只处理一批。
-      const verifiers: string[] = [];
       atomically(this.db, () => {
-        for (const item of published) {
+        for (const id of plan.online) {
+          const task = getTask(this.db, id);
           this.db
             .prepare(
               "UPDATE tasks SET delivery_stage='online',online_wait=0,updated_at=? WHERE id=?",
             )
-            .run(this.now(), item.id);
-          noteTask(this.db, item.id, "online", {
+            .run(this.now(), id);
+          noteTask(this.db, id, "online", {
             version: current,
-            release: item.detail.release,
-            verification: item.detail.steps !== null,
-            // 总任务整体上线时汇总各子任务的端到端验证（t190）。
-            ...(item.detail.steps !== null
-              ? { verification_text: item.detail.steps.slice(0, 1000) }
-              : {}),
+            release: task.release_version,
+            smoke: smoke.ok ? "passed" : "failed",
           });
-          const verifier =
-            this.options.verify?.open(item.id, item.detail.steps, current) ??
-            null;
-          if (verifier) verifiers.push(verifier);
-          const { steps: _, ...detail } = item.detail;
-          this.options.publish(item.id, "online", {
-            ...detail,
-            ...(verifier ? { verifier } : {}),
+          this.options.publish(id, "online", {
+            message: onlineMessage(task.ref, current),
+            version: current,
+            release: task.release_version,
           });
         }
       });
-      for (const item of published) this.options.changed(item.id);
-      if (verifiers.length) this.options.verify?.dispatch(verifiers);
+      for (const id of plan.online) {
+        this.options.changed(id);
+        if (!smoke.ok) this.fail(id, `上线冒烟没过：${smoke.reason}`);
+      }
       for (const id of plan.failed) {
         const task = getTask(this.db, id);
         this.fail(
@@ -284,44 +265,6 @@ export class OnlineWatch {
     }
   }
 
-  private async prepareOnline(id: number, current: string) {
-    const task = getTask(this.db, id);
-    let body: string | null = null;
-    if (task.pr_url && task.repo) {
-      const origin = await originRepo(task.repo, this.options.run);
-      if (!("error" in origin)) {
-        const view = await this.options.run("gh", [
-          "pr",
-          "view",
-          task.pr_url,
-          "-R",
-          repoFlag(origin.repo),
-          "--json",
-          "body",
-        ]);
-        if (view.ok)
-          try {
-            const value = (JSON.parse(view.stdout) as { body?: unknown }).body;
-            if (typeof value === "string") body = value;
-          } catch {
-            /* 读不到正文就退回执行者汇报。 */
-          }
-      }
-    }
-    const verification =
-      verificationSection(body) ?? verificationSection(task.result);
-    const message = onlineMessage(task.ref, current);
-    return {
-      message,
-      version: current,
-      release: task.release_version,
-      /** 原样的验证步骤；没写为 null（不随通知发出）。 */
-      steps: verification,
-      verification:
-        verification ?? "执行者没有写「端到端验证」一节；请按任务目标自行验证",
-    };
-  }
-
   private fail(id: number, why: string) {
     const reason = redact(why);
     atomically(this.db, () => {
@@ -391,6 +334,31 @@ export function cliDeploy(data: string, env: NodeJS.ProcessEnv = process.env) {
         ok: false,
         reason: `atrium restart：${redact(restart.output) || "执行失败"}`,
       };
+    return { ok: true };
+  };
+}
+
+/** 上线后的只读冒烟：用本包的命令行对本服务跑 status、task ls、--help，任何一条失败即不过。 */
+export function cliSmoke(data: string, env: NodeJS.ProcessEnv = process.env) {
+  const bin = join(packageRoot, "bin", "atrium.mjs");
+  return async (): Promise<DeployResult> => {
+    for (const args of [["status"], ["task", "ls"], ["--help"]]) {
+      const { error, stdout, stderr } = await runFile(
+        process.execPath,
+        [bin, ...args],
+        {
+          cwd: data,
+          timeout: 60_000,
+          maxBuffer: 4 * 1024 * 1024,
+          env: { ...env, ATRIUM_DATA: data },
+        },
+      );
+      if (error)
+        return {
+          ok: false,
+          reason: `atrium ${args.join(" ")}：${redact([stderr, stdout, error.message].filter(Boolean).join("\n").trim()).slice(0, 500) || "执行失败"}`,
+        };
+    }
     return { ok: true };
   };
 }

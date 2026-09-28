@@ -10,12 +10,11 @@ import { hasQuotaData } from "../quota-readers/merge.ts";
 import { clock } from "./quota-holds.ts";
 import { DEFAULT_QUOTA_RESERVE_PERCENT, overReserve } from "./budget.ts";
 import { idleFirst } from "./idle-first.ts";
-import type { Brief } from "../org/brief.ts";
 import { avoidReason, type ChainNode } from "../skills/model.ts";
 
 /**
  * 派活准备（#262 B 部分）：拼提示词、读岗位说明、按额度挑执行者、规划 worktree。
- * 除 loadRoleDocs / readPace 只读文件或调用只读命令外都是纯函数；不建 worktree、不拉起进程。
+ * 除 loadRootDoc / readPace 只读文件或调用只读命令外都是纯函数；不建 worktree、不拉起进程。
  */
 
 /** 派给任何执行者都附上的通用约束。 */
@@ -25,8 +24,8 @@ export const DEFAULT_RULES: readonly string[] = [
   "做完后依次：提交、推送、开 PR（正文写 Refs 对应 issue）；任何一步做不了，写清楚卡在哪一步再结束。全量检查由运行时在任务 worktree 跑。",
   "汇报里的 PR 号、提交号、CI 结果必须来自你刚执行过的命令输出；没做的步骤直接写「没做」。",
   "文档、提交说明和 PR 使用中文。",
-  "PR 正文写「## 端到端验证」一节：一两条用户上线后会实际运行的命令与期望结果；上线通知会原样附上，负责人照着在线上验证。会停掉在跑任务、改主机或服务状态的步骤（如 host clean、pause / resume、task stop、启停升级服务）在那一条后标注「只在隔离环境」或「需要人工」，上线验证据此不在真实环境跑。",
-  "PR 正文写「## 碰到哪些已有能力」一节：列出本次改动与哪些已有能力交叉（远程主机、Windows、总任务、技能挂载、合入队列、自升级……），各验了什么；没碰到写「无」。问题多出在新旧能力的组合上，写清楚好让试点和上线验证挑对地方。",
+  "交付前做端到端验证：在隔离环境里（临时数据目录、另一个端口，如 `ATRIUM_PORT=<空闲端口> ATRIUM_DATA=<临时目录> node bin/atrium.mjs …`，用完同变量 stop）实跑一两条能证明这次改动生效的命令，把命令与输出原样贴进 PR 正文「## 端到端验证」一节；合入前的审阅会核对。不碰用户在用的服务、数据与电脑。",
+  "PR 正文写「## 碰到哪些已有能力」一节：列出本次改动与哪些已有能力交叉（远程主机、Windows、总任务、技能挂载、合入队列、自升级……），各验了什么；没碰到写「无」。问题多出在新旧能力的组合上，写清楚好让试点挑对地方。",
   "每做一段较长的工作前，先用一句中文说明正在做什么（如「正在补单测」），看板会把这句显示为你的最近动作。",
   "gh 命令一律带 `-R <owner/repo>`（取自 origin 远端）：fork 仓库另有 upstream 时，不带 -R 会查到或开到上游；PR 开在 origin 上。",
 ];
@@ -38,30 +37,26 @@ export type PromptParts = {
   tells?: string;
   /** 本次注入的凭据名称与用法（secrets/model.ts secretSection），不含值。 */
   secrets?: string;
-  roleDoc?: string;
-  /** 章程要点（组织树节点的链路、目标与硬边界），紧跟岗位说明。 */
-  charter?: Brief;
-  /** 投任务的节点（关注点）的说明。 */
-  originDoc?: string;
+  /** 干活的专员（一句分工）或体验巡检的说明。 */
+  role?: string;
+  /** 归属部分链上的要点（map/context.ts taskContext）。 */
+  points?: string;
   /** 本次挂载的组织技能（server/skills/mount.ts 生成）。 */
   skills?: string;
   rootDoc?: string;
-  profileBody?: string;
   rules?: readonly string[];
 };
 
-/** 拼派活提示词：标题、详述、运行中收到的补充、可用的凭据（只有名称）、岗位说明、章程要点、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
+/** 拼派活提示词：标题、详述、运行中收到的补充、可用的凭据（只有名称）、分工、规矩、挂载的技能、组织说明、通用约束；空段省略。 */
 export function buildPrompt({
   title,
   brief,
   tells,
   secrets,
-  roleDoc,
-  charter,
-  originDoc,
+  role,
+  points,
   skills,
   rootDoc,
-  profileBody,
   rules = DEFAULT_RULES,
 }: PromptParts): string {
   const heading = title.trim();
@@ -70,12 +65,10 @@ export function buildPrompt({
     ["任务详述", brief],
     ["运行中收到的补充", tells],
     ["可用的凭据", secrets],
-    ["岗位说明", roleDoc],
-    ...(charter ? [[charter.heading, charter.text] as [string, string]] : []),
-    ["投任务的专员说明", originDoc],
+    ["分工", role],
+    ["规矩", points],
     ["本次挂载的技能", skills],
     ["组织说明（.agents/README.md）", rootDoc],
-    ["给你的额外叮嘱", profileBody],
     ["通用约束", rules.map((rule) => `- ${rule}`).join("\n")],
   ];
   const parts = [`# 任务：${heading}`];
@@ -83,8 +76,6 @@ export function buildPrompt({
     if (text?.trim()) parts.push(`## ${name}\n\n${text.trim()}`);
   return `${parts.join("\n\n")}\n`;
 }
-
-export type RoleDocs = { roleDoc: string; rootDoc: string; rolePath?: string };
 
 async function readIfExists(file: string): Promise<string | undefined> {
   try {
@@ -97,20 +88,10 @@ async function readIfExists(file: string): Promise<string | undefined> {
   }
 }
 
-/**
- * 读岗位说明：只取任务对应组织节点（node，由 org/task-node.ts 解析）的章程正文，仓库里不再有部门说明（#264 修订）；
- * 另读根 `.agents/README.md`。没有节点时岗位说明为空，文件不存在返回空串。
- */
-export async function loadRoleDocs(
-  repo: string,
-  node?: { body: string; ref: string },
-): Promise<RoleDocs> {
+/** 读仓库根的 `.agents/README.md`（跟着代码走的约定）；不存在返回空串。 */
+export async function loadRootDoc(repo: string): Promise<string> {
   if (!isAbsolute(repo)) throw invalid("仓库须为绝对路径");
-  const rootDoc =
-    (await readIfExists(join(repo, ".agents", "README.md"))) ?? "";
-  return node
-    ? { roleDoc: node.body, rootDoc, rolePath: node.ref }
-    : { roleDoc: "", rootDoc };
+  return (await readIfExists(join(repo, ".agents", "README.md"))) ?? "";
 }
 
 /** 额度 pace 行（自带读取器或 openquota pace --json）；只取用到的字段。 */
@@ -255,7 +236,7 @@ export type PickResult =
   | { ok: false; reason: string; skipped: Skip[] };
 
 /**
- * 挑执行者：跳过没装的、档案风险不允许的、档案 avoid_nodes 避开任务节点的、额度标记未到期的、触及章程保留额的；pace 可用时按账号富余从多到少，
+ * 挑执行者：跳过没装的、档案风险不允许的、档案 avoid_nodes 避开任务节点的、额度标记未到期的、触及给用户的保留额的；pace 可用时按账号富余从多到少，
  * 没有富余数据的工具排在有数据的之后并按固定顺序；pace 不可用时整体按固定顺序。
  * 最后把正忙的独占工具挪到空闲候选之后（idle-first.ts）。
  */
@@ -329,7 +310,7 @@ export function pickWorker({
     if (used) {
       skipped.push({
         tool,
-        reason: `已用额度 ${used.usedPercent}% 达到章程上限 ${100 - reservePercent}%（须留 ${reservePercent}% 给用户）`,
+        reason: `已用额度 ${used.usedPercent}% 达到上限 ${100 - reservePercent}%（须留 ${reservePercent}% 给用户）`,
       });
       continue;
     }
@@ -348,7 +329,7 @@ export function pickWorker({
     return {
       ok: false,
       reason:
-        "没有可用的执行者：都没装、档案不允许该风险、额度用尽或触及章程保留额",
+        "没有可用的执行者：都没装、档案不允许该风险、额度用尽或触及给用户的保留额",
       skipped,
     };
   if (!pace) {

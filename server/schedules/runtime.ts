@@ -9,10 +9,6 @@ import {
   type Task,
 } from "../tasks/ledger.ts";
 import { startPatrol } from "../tasks/patrol.ts";
-import { clipBrief } from "../tasks/brief.ts";
-import { productOfNode } from "../products/model.ts";
-import { researchFacts } from "../products/facts.ts";
-import { researchBrief } from "../products/brief.ts";
 import type { EventInbox } from "../tasks/events.ts";
 import { publishMaterialHints } from "../materials/hints.ts";
 import { publishSecretHints } from "../secrets/hints.ts";
@@ -38,8 +34,8 @@ export type Dispatch = {
 type Round = { task: Task; scenario?: string };
 
 /**
- * 建出本轮的任务（在调用方事务里）：patrol 与 `patrol run` 同一个入口，task / research 是节点下的普通任务，
- * research 只调研、不交 PR（挂在产品部上的按研究模板生成详述）。闲时 / 普通按节点缺省。
+ * 建出本轮的任务（在调用方事务里）：patrol 按节点的 uses 场景轮换，task / research 是节点下的普通任务，
+ * research 只调研、不交 PR（工作目录写了 choice.json 就登记成选项单，见 choices/settle.ts）。
  */
 export function createRound(
   db: DatabaseSync,
@@ -51,26 +47,13 @@ export function createRound(
   offset: Offset = localOffset,
 ): Round {
   if (row.kind === "patrol") return startPatrol(db, ref(row.node_id));
-  // 产品部的研究：详述按模板现取材料（全景、决定、选项单、巡检、失败与上线），登记时另写的详述附在后面。
-  const product =
-    row.kind === "research" ? productOfNode(db, row.node_id) : undefined;
-  const brief = product
-    ? clipBrief(
-        [
-          researchBrief(researchFacts(db, product, now, offset)),
-          row.brief ? `\n## 补充\n${row.brief}` : "",
-        ].join("\n"),
-      )
-    : row.brief;
   const task = createTask(
     db,
     {
       title: `${row.title} · ${dayLabel(now, offset)}`,
       part: ref(row.node_id),
-      ...(brief === null ? {} : { brief }),
-      ...(row.brief_path === null || product
-        ? {}
-        : { brief_path: row.brief_path }),
+      ...(row.brief === null ? {} : { brief: row.brief }),
+      ...(row.brief_path === null ? {} : { brief_path: row.brief_path }),
       ...(row.by === null ? {} : { by: row.by }),
       ...(row.kind === "research" ? { deliver: "none" } : {}),
     },

@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
  * 表名不与旧运行时遗留的表重名；旧表不读不写。
  */
 
-export type ImportName = "task_briefs" | "charter_budget";
+export type ImportName = "task_briefs" | "charter_budget" | "rules_into_points";
 
 export type ImportMark = { name: string; done_at: number; detail: string };
 

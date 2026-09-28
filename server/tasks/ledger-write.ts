@@ -3,6 +3,7 @@ import { Problem } from "../problem.ts";
 import {
   addEvent,
   atomically,
+  one,
   parseTaskRef,
   requireRow,
   taskRef,
@@ -32,29 +33,16 @@ import {
 } from "./deliver.ts";
 import { originNode } from "../org/task-node.ts";
 import { partForTask } from "../org/task-part.ts";
-import {
-  aspectPart,
-  defaultPriority,
-  parsePriority,
-  priorityAfterMove,
-} from "./priority.ts";
+import { parsePriority } from "./priority.ts";
 import { getJobRole } from "./job-roles.ts";
 import { ref as nodeRef } from "../org/model.ts";
 import { briefText, readBriefFile } from "./brief.ts";
-import {
-  alsoFor,
-  alsoOf,
-  involvedOf,
-  involvedView,
-  writeAlso,
-} from "./also.ts";
 import { parseSecretNames } from "../secrets/model.ts";
 import {
   checkTaskSecrets,
   taskSecretNames,
   writeTaskSecrets,
 } from "../secrets/store.ts";
-import { checkSpecialists } from "./specialist-scope.ts";
 import { syncTotals } from "./rollup-ledger.ts";
 import { avoidHostsOf } from "../hosts/state.ts";
 
@@ -99,7 +87,7 @@ export type NewTask = {
   after?: string;
   after_pr?: string;
   auto?: boolean;
-  /** 紧急 / 修复 / 普通 / 闲时；不写按归属部分：管方面的为闲时。 */
+  /** 紧急 / 修复 / 普通 / 闲时；不写为普通。 */
   priority?: string;
   /** 派活避开的主机（hN，逗号分隔）。 */
   avoid_host?: string;
@@ -107,28 +95,14 @@ export type NewTask = {
   from?: string | null;
   /** 归属哪一部分（组织节点）。 */
   part?: string | null;
-  /** 牵涉的部分（#373），逗号分隔。 */
-  also?: string | null;
   /** 要用的凭据名称（t194），逗号分隔；派活时按名称注入执行者环境。 */
   secret?: string | null;
 };
 
-/** 任务读回时带上牵涉的部分与凭据名称。 */
+/** 任务读回时带上凭据名称。 */
 function extrasOf(db: DatabaseSync, task: TaskRow) {
   const secrets = taskSecretNames(db, task.id);
-  return {
-    ...involvedView(involvedOf(db, task)),
-    ...(secrets.length ? { secrets } : {}),
-  };
-}
-
-/** 干活的专员（`--by`）须在任务范围里：归属链、牵涉部分与全组织的（#373）。 */
-function checkScope(
-  db: DatabaseSync,
-  task: { part: number | null; also: readonly number[] },
-  job: number | null,
-) {
-  checkSpecialists(db, task, [{ flag: "by", ids: job ? [job] : [] }]);
+  return secrets.length ? { secrets } : {};
 }
 
 /** `by`：专员名称或短号；null 与空串表示不指定。 */
@@ -138,13 +112,31 @@ function byOf(value: unknown) {
   return value || null;
 }
 
+/** 修复任务按标题去重（巡检直接建修复任务）：同一部分已有同标题、没结束的修复任务就拒绝。 */
+function duplicateFix(db: DatabaseSync, part: number, title: string) {
+  const same = one<{ id: number }>(
+    db,
+    "SELECT id FROM tasks WHERE part_id=? AND title=? AND prio='fix' AND status NOT IN ('done','failed','cancelled') LIMIT 1",
+    part,
+    title,
+  );
+  if (same)
+    throw new Problem(
+      409,
+      `${nodeRef(part)} 已有同标题的修复任务 t${same.id} 还没结束`,
+      "conflict",
+      undefined,
+      `atrium task note t${same.id} 补充`,
+    );
+}
+
 export function createTask(
   db: DatabaseSync,
   body: unknown,
   now = Date.now(),
   /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
   by?: string,
-  /** 运行时替父任务建的帮手（审阅、上线验证）：不让父任务变成总任务（t190）。 */
+  /** 运行时替父任务建的帮手（审阅）：不让父任务变成总任务（t190）。 */
   internal: { helper?: boolean } = {},
 ): Task {
   const input = objectOf(body);
@@ -165,7 +157,6 @@ export function createTask(
     "priority",
     "from",
     "part",
-    "also",
     "secret",
   ]);
   const by_ = byOf(input.by);
@@ -191,10 +182,9 @@ export function createTask(
     const job = by_ ? getJobRole(db, by_).id : null;
     const origin = fromNode(db, input.from);
     const part = partOf(db, input);
-    const also = alsoFor(db, input.also);
-    checkScope(db, { part, also }, job);
     checkTaskSecrets(db, part, secrets);
-    const level = priority ?? defaultPriority(aspectPart(db, part));
+    const level = priority ?? "normal";
+    if (level === "fix" && part !== null) duplicateFix(db, part, values.title);
     const { lastInsertRowid } = db
       .prepare(
         "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,repo,owner,deliver,issue,origin_node_id,part_id,job_id,prio,avoid_hosts,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
@@ -219,7 +209,6 @@ export function createTask(
       );
     const id = Number(lastInsertRowid);
     setConditions(db, id, input, now);
-    writeAlso(db, id, also);
     writeTaskSecrets(db, id, secrets);
     addEvent(db, id, now, "created", {
       title: values.title,
@@ -228,7 +217,6 @@ export function createTask(
       ...(part ? { part: `o${part}` } : {}),
       ...(job ? { job: `r${job}` } : {}),
       ...(level !== "normal" ? { priority: level } : {}),
-      ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(secrets.length ? { secrets } : {}),
       ...(by ? { by } : {}),
     });
@@ -268,7 +256,6 @@ export function updateTask(
     "pr_url",
     "from",
     "part",
-    "also",
     "secret",
   ]);
   if (!Object.keys(input).length)
@@ -320,23 +307,8 @@ export function updateTask(
         ? fields.part_id
         : (current.part_id ?? current.node_id)
     ) as number | null;
-    // 换了归属部分、又没同时指定档位：没被人改过的档位跟着新部分的缺省走。
-    if (!("prio" in fields) && "part_id" in fields)
-      fields.prio = priorityAfterMove(
-        current.prio,
-        aspectPart(db, current.part_id ?? current.node_id),
-        aspectPart(db, part),
-      );
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
-    const also = "also" in input ? alsoFor(db, input.also) : undefined;
-    if ("job_id" in fields || also || "part_id" in fields)
-      checkScope(
-        db,
-        { part, also: also ?? alsoOf(db, id) },
-        (("job_id" in fields ? fields.job_id : current.job_id) as
-          number | null) ?? null,
-      );
     setConditions(db, id, input, now);
     if (secrets) {
       // 执行中改也行：本轮环境已定，下一轮拉起按新的注入。
@@ -345,13 +317,6 @@ export function updateTask(
       writeTaskSecrets(db, id, secrets);
       if (before.join(",") !== secrets.join(","))
         addEvent(db, id, now, "secrets", { from: before, to: secrets });
-    }
-    if (also) {
-      const before = alsoOf(db, id).map(nodeRef);
-      writeAlso(db, id, also);
-      const after = also.map(nodeRef);
-      if (before.join(",") !== after.join(","))
-        addEvent(db, id, now, "also", { from: before, to: after });
     }
     if (
       current.status === "running" &&

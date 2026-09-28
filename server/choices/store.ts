@@ -10,19 +10,12 @@ import {
 } from "../org/model.ts";
 import { addDecision, decisionRef } from "../memos/decisions.ts";
 import { partRoute } from "../leaders/subscriber.ts";
-import { registeredLeaders } from "../leaders/model.ts";
 import { atomically, createTask, parseTaskRef } from "../tasks/ledger.ts";
 import {
   choiceRef,
   decideRight,
   decideVerdict,
-  DECIDER_MODES,
-  parseDecider,
-  resolveDecider,
   validateComment,
-  type Decider,
-  type DeciderLink,
-  type DeciderMode,
   noteOf,
   parseChoiceRef,
   parsePicks,
@@ -41,7 +34,7 @@ import {
 } from "./model.ts";
 
 /**
- * 选项单的存储（产品部第 2 步）：`choices` 一份一行，`choice_options` 每个选项一行、
+ * 选项单的存储：`choices` 一份一行，`choice_options` 每个选项一行、
  * 拍板后记下建的任务或记的决定；`choice_smalls` 是随单提的小改进，不进选项单，记下交给了谁。短号 cN 取 AUTOINCREMENT，全局持久不复用。
  * 判定都在 model.ts，这里只读写；拍板在一个事务里建任务、记决定、改状态。
  */
@@ -75,11 +68,6 @@ export function ensureChoiceTables(db: DatabaseSync) {
     task_id INTEGER,
     decision_id INTEGER,
     PRIMARY KEY(choice_id,seq));
-  CREATE TABLE IF NOT EXISTS choice_settings (
-    node_id INTEGER PRIMARY KEY,
-    decider TEXT NOT NULL CHECK(decider IN ('u1','leader')),
-    updated_by TEXT NOT NULL,
-    updated_at INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS choice_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     choice_id INTEGER NOT NULL REFERENCES choices(id),
@@ -97,46 +85,6 @@ export function ensureChoiceTables(db: DatabaseSync) {
     basis TEXT NOT NULL,
     handed_to TEXT NOT NULL,
     PRIMARY KEY(choice_id,seq));`);
-}
-
-function settingsOf(db: DatabaseSync): Map<number, DeciderMode> {
-  return new Map(
-    all<{ node_id: number; decider: string }>(
-      db,
-      "SELECT node_id,decider FROM choice_settings ORDER BY node_id LIMIT 500",
-    )
-      .filter((r) => DECIDER_MODES.includes(r.decider as DeciderMode))
-      .map((r) => [r.node_id, r.decider as DeciderMode]),
-  );
-}
-
-/** 几个节点上的选项单各由谁拍板：一次读节点、设置与已登记 leader，判定在 model.ts。 */
-export function decidersFor(
-  db: DatabaseSync,
-  ids: Iterable<number>,
-  list: readonly NodeRow[] = nodes(db),
-): Map<number, Decider> {
-  const byId = new Map(list.map((n) => [n.id, n]));
-  const settings = settingsOf(db);
-  const registered = registeredLeaders(db);
-  const out = new Map<number, Decider>();
-  for (const id of new Set(ids)) {
-    const chain: DeciderLink[] = [];
-    const seen = new Set<number>();
-    let current = byId.get(id);
-    while (current && !seen.has(current.id) && chain.length < 50) {
-      seen.add(current.id);
-      chain.push({
-        id: current.id,
-        setting: settings.get(current.id) ?? null,
-        leader: current.archived_at === null ? current.leader : null,
-      });
-      current =
-        current.parent_id === null ? undefined : byId.get(current.parent_id);
-    }
-    out.set(id, resolveDecider(chain, registered));
-  }
-  return out;
 }
 
 export const PAGE_DEFAULT = 20;
@@ -212,9 +160,6 @@ export type Choice = {
   decided_by: string | null;
   decided_at: number | null;
   created_at: number;
-  /** 拍板人：u1 或（下放后）aN，按节点设置实时判。 */
-  decider: string;
-  decider_why: string;
   options: ChoiceOption[];
   /** 拍板前各方（项目 leader、秘书）写的意见，先写的在前。 */
   comments: ChoiceComment[];
@@ -333,7 +278,6 @@ function views(db: DatabaseSync, rows: Row[], byId?: Map<number, NodeRow>) {
   const names = byId ?? new Map(nodes(db).map((n) => [n.id, n]));
   const nodeIds = [...new Set(rows.map((r) => r.node_id))];
   const aliases = aliasOf(db, nodeIds);
-  const deciders = decidersFor(db, nodeIds, [...names.values()]);
   return rows.map((r): Choice => ({
     ref: choiceRef(r.id),
     node: ref(r.node_id),
@@ -350,8 +294,6 @@ function views(db: DatabaseSync, rows: Row[], byId?: Map<number, NodeRow>) {
     decided_by: r.decided_by,
     decided_at: r.decided_at,
     created_at: r.created_at,
-    decider: deciders.get(r.node_id)?.decider ?? "u1",
-    decider_why: deciders.get(r.node_id)?.why ?? "缺省由用户拍板",
     options: options.get(r.id) ?? [],
     comments: comments.get(r.id) ?? [],
     small: smallOf(r.id),
@@ -406,59 +348,6 @@ export function addComment(
       now,
     );
     return getChoice(db, choiceRef(id));
-  });
-}
-
-export type DeciderSetting = {
-  node: string;
-  node_name: string;
-  /** 这个节点上写的设置；没写为 null（沿用上层或缺省）。 */
-  setting: DeciderMode | null;
-  /** 挂在这个节点上的选项单实际由谁拍板。 */
-  decider: string;
-  why: string;
-};
-
-export function deciderSetting(
-  db: DatabaseSync,
-  address: string,
-): DeciderSetting {
-  ensureChoiceTables(db);
-  const list = nodes(db);
-  const node = nodeByAddress(db, address);
-  const resolved = decidersFor(db, [node.id], list).get(node.id)!;
-  return {
-    node: ref(node.id),
-    node_name: node.name,
-    setting: settingsOf(db).get(node.id) ?? null,
-    decider: resolved.decider,
-    why: resolved.why,
-  };
-}
-
-/** 设谁拍板这个节点（及没另设的下层）上的选项单：只由用户改；写 u1 也记下，挡住上层的下放。 */
-export function setDecider(
-  db: DatabaseSync,
-  address: string,
-  body: unknown,
-  now = Date.now(),
-): DeciderSetting {
-  if (!body || typeof body !== "object" || Array.isArray(body))
-    throw new Problem(400, "请求体应为对象", "usage");
-  for (const key of Object.keys(body))
-    if (key !== "decider")
-      throw new Problem(400, `${key}: 是未知字段（只认 decider）`, "usage");
-  const mode = parseDecider((body as { decider?: unknown }).decider);
-  ensureChoiceTables(db);
-  return atomically(db, () => {
-    const node = nodeByAddress(db, address);
-    if (node.archived_at !== null)
-      throw new Problem(409, `${ref(node.id)} 已归档`, "conflict");
-    db.prepare(
-      `INSERT INTO choice_settings(node_id,decider,updated_by,updated_at) VALUES(?,?,'u1',?)
-       ON CONFLICT(node_id) DO UPDATE SET decider=excluded.decider,updated_by='u1',updated_at=excluded.updated_at`,
-    ).run(node.id, mode, now);
-    return deciderSetting(db, ref(node.id));
   });
 }
 
@@ -705,15 +594,8 @@ export function pendingChoices(
     PENDING_SCAN,
   );
   if (!scanned.length) return { open: 0, list: [] };
-  const deciders = decidersFor(
-    db,
-    scanned.map((r) => r.node_id),
-  );
-  const mine = scanned.filter(
-    (r) => (deciders.get(r.node_id)?.decider ?? "u1") === "u1",
-  );
-  const open = mine.length;
-  const rows = mine.slice(0, max);
+  const open = scanned.length;
+  const rows = scanned.slice(0, max);
   return {
     open,
     list: rows.map((r) => ({
@@ -729,13 +611,12 @@ export function pendingChoices(
 export type Decided = {
   choice: Choice;
   tasks: { ref: string; option: number; title: string }[];
-  decisions: { ref: string; option: number; owner: string }[];
+  decisions: { ref: string; option: number }[];
 };
 
 /**
  * 拍板（pick 选中几个 / pass 这轮都不要）：一个事务里给选中的在节点下建任务（带选项全文作详述，
- * 事件照常投给该节点最近的 leader 拆解），没选的连同说明记成决定记录（主人是该节点最近的 leader，
- * 没有就是秘书），再把选项单改成已定。
+ * 事件照常投给该节点最近的 leader 拆解），没选的连同说明记成用户的决定记录（挂在该节点上），再把选项单改成已定。
  */
 export function decideChoice(
   db: DatabaseSync,
@@ -760,7 +641,7 @@ export function decideChoice(
     const list = nodes(db);
     const node = list.find((n) => n.id === row.node_id);
     const choice = views(db, [row], new Map(list.map((n) => [n.id, n])))[0]!;
-    const right = decideRight(actor, choice.decider, choice.ref);
+    const right = decideRight(actor, choice.ref);
     if (right)
       throw new Problem(
         403,
@@ -796,7 +677,6 @@ export function decideChoice(
       recommend: choice.recommend,
       why: choice.why,
     };
-    const owner = partRoute(db, row.node_id).subscriber;
     const tasks: Decided["tasks"] = [];
     const decisions: Decided["decisions"] = [];
     const mark = db.prepare(
@@ -818,18 +698,9 @@ export function decideChoice(
         tasks.push({ ref: task.ref, option: option.seq, title: option.title });
       } else {
         const text = skippedDecision(facts, o, note, action, actor);
-        const decision = addDecision(
-          db,
-          owner,
-          { ...text, by: actor, node: choice.node },
-          now,
-        );
+        const decision = addDecision(db, { ...text, node: choice.node }, now);
         mark.run(0, null, parseInt(decision.ref.slice(1), 10), id, option.seq);
-        decisions.push({
-          ref: decision.ref,
-          option: option.seq,
-          owner: decision.owner,
-        });
+        decisions.push({ ref: decision.ref, option: option.seq });
       }
     }
     db.prepare(

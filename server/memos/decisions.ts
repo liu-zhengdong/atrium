@@ -1,15 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { all, nodeByAddress, one, ref as nodeRef } from "../org/model.ts";
+import {
+  all,
+  nodeByAddress,
+  nodes,
+  one,
+  ref as nodeRef,
+} from "../org/model.ts";
 import { LOCAL_USER, SECRETARY } from "../../shared/user.ts";
 import { atomically, parseTaskRef } from "../tasks/ledger-model.ts";
 
 /**
- * 决定记录（t97）：用户、秘书与 leader 各自追加的取舍与原因，给自己回看、换人接手用。
- * 和全景「要点」不同：要点是执行者要守的产品约束，决定记录是「为什么这么定」的账；已成规矩的可沉淀成要点（curate.ts）。
- * 每条：日期、谁拍板（u1／secretary／aN）、决定、原因、可选关联（issue、一个或多个节点、任务）、是否「原则」；
- * 用户拍板的记在用户那份（u1），秘书、leader 的记录只放各自的（t211，recordOf）。
- * 被推翻的记 superseded_by 指向新决定、沉淀成要点的记 settled_point，默认都不再列出。判定是纯函数，读写在下半部分。
+ * 决定记录：只记用户拍板的事与原因，给人回看的档案（不附进任何提示词）。要守的规矩写成要点（org/points.ts）；
+ * leader、秘书自己的处理过程写任务备注。每条：日期、决定、原因、可选关联（issue、一个或多个节点、任务）；
+ * 被推翻的记 superseded_by 指向新决定。早先 leader、秘书记的旧条目留在库里，不再列出也不再新增。
  */
 
 export const DECISION_LIMITS = { text: 300, why: 1000 };
@@ -19,7 +23,6 @@ export const PAGE_MAX = 200;
 export const PAGE_DEFAULT = 50;
 
 const DECISION_RE = /^d([1-9][0-9]{0,15})$/;
-const LEADER_RE = /^a[1-9][0-9]{0,8}$/;
 export const decisionRef = (id: number) => `d${id}`;
 
 const usage = (message: string, next?: string) =>
@@ -30,16 +33,6 @@ export function parseDecisionRef(value: unknown, field = "决定"): number {
     typeof value === "string" ? DECISION_RE.exec(value.trim()) : null;
   if (!match) throw usage(`${field}: 决定短号应为 d1 这样的格式`);
   return Number(match[1]);
-}
-
-/** 谁拍板：u1、secretary（也认「秘书」）或 aN；不给就是记录的主人。纯函数。 */
-export function deciderOf(value: unknown, owner: string): string {
-  if (value === undefined || value === null || value === "") return owner;
-  const text = typeof value === "string" ? value.trim() : "";
-  if (text === "秘书") return "secretary";
-  if (text === "u1" || text === "secretary" || LEADER_RE.test(text))
-    return text;
-  throw usage("--by: 谁拍板应为 u1、secretary 或 leader 短号 aN");
 }
 
 /** 日期 YYYY-MM-DD（补记旧决定用）；不给取本地今天。纯函数。 */
@@ -68,13 +61,11 @@ export function dateOf(value: unknown, now = Date.now()): string {
 export type DecisionInput = {
   text: string;
   why: string;
-  by: string;
   date: string;
   issue: number | null;
   nodes: string[];
   task: number | null;
   supersedes: number | null;
-  principle: boolean;
 };
 
 /** 节点地址：一个或多个（命令行 --node 可给多次），去重、去空白，至多 NODES_MAX 个。纯函数。 */
@@ -95,23 +86,12 @@ export function nodeAddresses(value: unknown, flag = "--node"): string[] {
 /** 新决定的字段校验（纯函数）：只认列出的字段，参数名用命令行的。 */
 export function validateDecision(
   body: unknown,
-  owner: string,
   now = Date.now(),
 ): DecisionInput {
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw usage("请求体应为对象");
   const input = body as Record<string, unknown>;
-  const keys = [
-    "text",
-    "why",
-    "by",
-    "date",
-    "issue",
-    "node",
-    "task",
-    "supersedes",
-    "principle",
-  ];
+  const keys = ["text", "why", "date", "issue", "node", "task", "supersedes"];
   for (const key of Object.keys(input))
     if (!keys.includes(key)) throw usage(`${key}: 是未知字段`);
   const field = (key: "text" | "why", flag: string, label: string) => {
@@ -132,12 +112,9 @@ export function validateDecision(
       throw usage("--issue: 应为 issue 号，如 355");
     issue = Number(text);
   }
-  if (given(input.principle) && typeof input.principle !== "boolean")
-    throw usage("--principle: 应为开关");
   return {
     text: field("text", "决定", "决定"),
     why: field("why", "--why", "原因"),
-    by: deciderOf(input.by, owner),
     date: dateOf(input.date, now),
     issue,
     nodes: nodeAddresses(input.node),
@@ -145,62 +122,14 @@ export function validateDecision(
     supersedes: given(input.supersedes)
       ? parseDecisionRef(input.supersedes, "--supersedes")
       : null,
-    principle: input.principle === true,
   };
 }
 
-/**
- * 记进谁那份（纯函数，t211）：用户拍板的（--by u1）进用户自己那份；其余进 --as 那份。
- * 用户那份只放用户定的：--as u1 却写别人拍板的，报错让去掉 --as。
- */
-export function recordOf(owner: string, by: string): string {
-  if (by === LOCAL_USER) return LOCAL_USER;
-  if (owner === LOCAL_USER)
-    throw usage(
-      `--as: 用户的决定记录只放 u1 定的；${who(by)}定的记进它自己那份（用 --as ${by}）`,
-    );
-  return owner;
-}
-
-/** 秘书与用户令牌能动的记录：秘书的与用户的；leader 只能动自己的。纯函数。 */
-export const recordsOf = (owner: string): string[] =>
-  owner === SECRETARY || owner === LOCAL_USER
-    ? [SECRETARY, LOCAL_USER]
-    : [owner];
-
-export type DecisionFacts = {
-  id: number;
-  owner: string;
-  superseded_by: number | null;
-};
-
-/**
- * 推翻判定（纯函数）：旧的在自己能动的记录里（秘书与用户的算一处，leader 只有自己的）、还有效；
- * 新的有效、不是同一条，在同一处或是用户那份（用户推翻秘书、leader 早先的定法）。
- */
-export function supersedeVerdict(
-  owner: string,
-  old: DecisionFacts,
-  next: DecisionFacts,
-): string | null {
-  if (old.id === next.id) return `${decisionRef(old.id)} 不能推翻自己`;
-  const records = recordsOf(owner);
-  for (const d of [old, next])
-    if (!records.includes(d.owner) && !(d === next && d.owner === LOCAL_USER))
-      return `${decisionRef(d.id)} 是 ${who(d.owner)} 的决定记录，不在 ${who(owner)} 的记录里（用 --as ${d.owner}）`;
-  if (old.superseded_by !== null)
-    return `${decisionRef(old.id)} 已被 ${decisionRef(old.superseded_by)} 推翻`;
-  if (next.superseded_by !== null)
-    return `${decisionRef(next.id)} 自己已被 ${decisionRef(next.superseded_by)} 推翻，改指向有效的决定`;
-  return null;
-}
-
-export const who = (owner: string) =>
-  owner === SECRETARY ? "秘书" : owner === LOCAL_USER ? "用户" : owner;
+export const who = (by: string) =>
+  by === SECRETARY ? "秘书" : by === LOCAL_USER ? "用户" : by;
 
 export type Decision = {
   ref: string;
-  owner: string;
   date: string;
   by: string;
   text: string;
@@ -209,19 +138,13 @@ export type Decision = {
   /** 挂在哪些节点上（名称网页显示用；节点已删时为 null）。 */
   nodes: { ref: string; name: string | null }[];
   task: string | null;
-  /** 标了「原则」：摘要里总是列出。 */
-  principle: boolean;
-  /** 已沉淀到哪条要点（kN）。 */
-  settled_to: string | null;
   superseded_by: string | null;
   /** 这条推翻了哪些旧决定。 */
   supersedes: string[];
-  /** 最近一次撤销推翻：谁、为什么、原先被哪条推翻。 */
-  restored: { by: string; why: string; at: number; from: string | null } | null;
   created_at: number;
 };
 
-/** 一行人话（提示词、命令行共用）。 */
+/** 一行人话（命令行、网页共用）。 */
 export function decisionLine(d: Decision): string {
   const links = [
     d.issue === null ? "" : `#${d.issue}`,
@@ -229,19 +152,18 @@ export function decisionLine(d: Decision): string {
     d.task ?? "",
   ].filter(Boolean);
   return [
-    `${d.ref} ${d.date.slice(5)} ${d.by === SECRETARY ? "秘书" : d.by} 定${d.principle ? "（原则）" : ""}：${d.text}`,
+    `${d.ref} ${d.date.slice(5)} ${who(d.by)}定：${d.text}`,
     `——${d.why}`,
     links.length ? `（${links.join(" ")}）` : "",
     d.supersedes.length ? `（推翻 ${d.supersedes.join("、")}）` : "",
     d.superseded_by ? `【已被 ${d.superseded_by} 推翻】` : "",
-    d.settled_to ? `【已沉淀到 ${d.settled_to}】` : "",
   ].join("");
 }
 
 /** 检索词（纯函数）：按空白拆，至多 5 个、每个至多 50 字；全部命中才算。 */
 export function searchTerms(value: unknown): string[] {
   const text = typeof value === "string" ? value.trim() : "";
-  if (!text) throw usage("关键词: 不能为空");
+  if (!text) return [];
   const terms = [...new Set(text.split(/\s+/))];
   if (terms.length > 5) throw usage("关键词: 至多 5 个");
   if (terms.some((t) => Array.from(t).length > 50))
@@ -264,8 +186,6 @@ export type Row = {
   why: string;
   issue: number | null;
   task_id: number | null;
-  principle: number;
-  settled_point: number | null;
   superseded_by: number | null;
   superseded_at: number | null;
   created_at: number;
@@ -275,7 +195,6 @@ export type Row = {
 export const marks = (list: readonly unknown[]) =>
   list.map(() => "?").join(",");
 
-/** Map 里按键追加（不拷贝数组）。 */
 function append<K, V>(map: Map<K, V[]>, key: K, value: V) {
   const list = map.get(key);
   if (list) list.push(value);
@@ -286,7 +205,6 @@ export function views(db: DatabaseSync, rows: readonly Row[]): Decision[] {
   const ids = rows.map((r) => r.id);
   const replaced = new Map<number, string[]>();
   const linked = new Map<number, number[]>();
-  const restored = new Map<number, Decision["restored"]>();
   if (ids.length) {
     for (const r of all<{ id: number; superseded_by: number }>(
       db,
@@ -300,23 +218,6 @@ export function views(db: DatabaseSync, rows: readonly Row[]): Decision[] {
       ...ids,
     ))
       append(linked, r.decision_id, r.node_id);
-    for (const r of all<{
-      decision_id: number;
-      actor: string;
-      why: string;
-      detail: string | null;
-      created_at: number;
-    }>(
-      db,
-      `SELECT decision_id,actor,why,detail,created_at FROM decision_changes WHERE kind='unsupersede' AND decision_id IN (${marks(ids)}) ORDER BY id LIMIT ${PAGE_MAX * 4}`,
-      ...ids,
-    ))
-      restored.set(r.decision_id, {
-        by: r.actor,
-        why: r.why,
-        at: r.created_at,
-        from: r.detail,
-      });
   }
   const nodeIds = [...new Set([...linked.values()].flat())];
   const names = new Map(
@@ -330,7 +231,6 @@ export function views(db: DatabaseSync, rows: readonly Row[]): Decision[] {
   );
   return rows.map((r) => ({
     ref: decisionRef(r.id),
-    owner: r.owner,
     date: r.decided_on,
     by: r.decided_by,
     text: r.text,
@@ -341,17 +241,14 @@ export function views(db: DatabaseSync, rows: readonly Row[]): Decision[] {
       name: names.get(id) ?? null,
     })),
     task: r.task_id === null ? null : `t${r.task_id}`,
-    principle: r.principle === 1,
-    settled_to: r.settled_point === null ? null : `k${r.settled_point}`,
     superseded_by:
       r.superseded_by === null ? null : decisionRef(r.superseded_by),
     supersedes: replaced.get(r.id) ?? [],
-    restored: restored.get(r.id) ?? null,
     created_at: r.created_at,
   }));
 }
 
-export function requireRow(db: DatabaseSync, id: number, owner?: string): Row {
+function requireRow(db: DatabaseSync, id: number): Row {
   const row = one<Row>(db, "SELECT * FROM decisions WHERE id=?", id);
   if (!row)
     throw new Problem(
@@ -359,7 +256,7 @@ export function requireRow(db: DatabaseSync, id: number, owner?: string): Row {
       `决定 ${decisionRef(id)} 不存在`,
       "not_found",
       undefined,
-      `atrium decision ls${owner && owner !== SECRETARY ? ` --as ${owner}` : ""} --all`,
+      "atrium decision ls --all",
     );
   return row;
 }
@@ -368,68 +265,15 @@ export function getDecision(db: DatabaseSync, id: number) {
   return views(db, [requireRow(db, id)])[0]!;
 }
 
-/** 给决定挂节点（已挂的不重复）；节点须存在。 */
-export function linkNodes(
-  db: DatabaseSync,
-  id: number,
-  addresses: readonly string[],
-) {
-  const insert = db.prepare(
-    "INSERT OR IGNORE INTO decision_nodes(decision_id,node_id) VALUES(?,?)",
-  );
-  const count = () =>
-    one<{ n: number }>(
-      db,
-      "SELECT count(*) AS n FROM decision_nodes WHERE decision_id=?",
-      id,
-    )!.n;
-  for (const address of addresses)
-    insert.run(id, nodeByAddress(db, address).id);
-  if (count() > NODES_MAX)
-    throw usage(`--node: 一条决定至多挂 ${NODES_MAX} 个节点`);
-}
-
-function supersede(
-  db: DatabaseSync,
-  owner: string,
-  oldId: number,
-  nextId: number,
-  now: number,
-) {
-  const old = requireRow(db, oldId, owner);
-  const next = requireRow(db, nextId, owner);
-  const problem = supersedeVerdict(owner, old, next);
-  if (problem)
-    throw new Problem(
-      409,
-      problem,
-      "conflict",
-      undefined,
-      `atrium decision ls --as ${owner} --all`,
-    );
-  db.prepare(
-    "UPDATE decisions SET superseded_by=?,superseded_at=? WHERE id=?",
-  ).run(nextId, now, oldId);
-}
-
-/** leader 负责的（未归档）节点：它转记用户拍板的决定没挂节点时挂这些，免得自己的摘要里看不到。 */
-function ledNodes(db: DatabaseSync, leader: string): string[] {
-  if (!LEADER_RE.test(leader)) return [];
-  return all<{ id: number }>(
-    db,
-    `SELECT id FROM org_nodes WHERE leader=? AND archived_at IS NULL ORDER BY id LIMIT ${NODES_MAX}`,
-    leader,
-  ).map((n) => nodeRef(n.id));
-}
-
+/**
+ * 记一条用户拍板的决定。choices 拍板时替用户记没选的选项（by 是拍板人，只会是 u1）。
+ */
 export function addDecision(
   db: DatabaseSync,
-  owner: string,
   body: unknown,
   now = Date.now(),
 ): Decision {
-  const input = validateDecision(body, owner, now);
-  const record = recordOf(owner, input.by);
+  const input = validateDecision(body, now);
   return atomically(db, () => {
     if (
       input.task !== null &&
@@ -445,49 +289,38 @@ export function addDecision(
     const id = Number(
       db
         .prepare(
-          "INSERT INTO decisions(owner,decided_on,decided_by,text,why,issue,task_id,principle,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO decisions(owner,decided_on,decided_by,text,why,issue,task_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
         )
         .run(
-          record,
+          LOCAL_USER,
           input.date,
-          input.by,
+          LOCAL_USER,
           input.text,
           input.why,
           input.issue,
           input.task,
-          input.principle ? 1 : 0,
           now,
         ).lastInsertRowid,
     );
-    linkNodes(
-      db,
-      id,
-      input.nodes.length || record === owner
-        ? input.nodes
-        : ledNodes(db, owner),
+    const insert = db.prepare(
+      "INSERT OR IGNORE INTO decision_nodes(decision_id,node_id) VALUES(?,?)",
     );
-    if (input.supersedes !== null)
-      supersede(db, owner, input.supersedes, id, now);
+    for (const address of input.nodes)
+      insert.run(id, nodeByAddress(db, address).id);
+    if (input.supersedes !== null) {
+      const old = requireRow(db, input.supersedes);
+      if (old.superseded_by !== null)
+        throw new Problem(
+          409,
+          `${decisionRef(old.id)} 已被 ${decisionRef(old.superseded_by)} 推翻`,
+          "conflict",
+        );
+      db.prepare(
+        "UPDATE decisions SET superseded_by=?,superseded_at=? WHERE id=?",
+      ).run(id, now, old.id);
+    }
     return getDecision(db, id);
   });
-}
-
-export function supersedeDecision(
-  db: DatabaseSync,
-  owner: string,
-  reference: unknown,
-  body: unknown,
-  now = Date.now(),
-): { old: Decision; next: Decision } {
-  const oldId = parseDecisionRef(reference);
-  const input = (body ?? {}) as Record<string, unknown>;
-  if (typeof input !== "object" || Array.isArray(input))
-    throw usage("请求体应为对象");
-  for (const key of Object.keys(input))
-    if (key !== "by") throw usage(`${key}: 是未知字段`);
-  const nextId = parseDecisionRef(input.by, "--by");
-  atomically(db, () => supersede(db, owner, oldId, nextId, now));
-  return { old: getDecision(db, oldId), next: getDecision(db, nextId) };
 }
 
 export function parseLimit(value: unknown, fallback = PAGE_DEFAULT): number {
@@ -498,42 +331,29 @@ export function parseLimit(value: unknown, fallback = PAGE_DEFAULT): number {
   return n;
 }
 
-/**
- * 按范围取决定：几份记录（owners）里的，或挂在几个节点（nodes）上的，两样都给取并集；都不给是全部。
- * 返回 SQL 片段与参数（参数化，节点至多 500 个）。
- */
-export type DecisionScope = {
-  owners?: readonly string[];
-  nodes?: readonly number[];
-};
-export function scopeWhere(scope: DecisionScope | null) {
-  if (!scope) return { sql: "1", args: [] as (string | number)[] };
-  const parts: string[] = [];
-  const args: (string | number)[] = [];
-  if (scope.owners?.length) {
-    parts.push(`owner IN (${marks(scope.owners)})`);
-    args.push(...scope.owners);
-  }
-  if (scope.nodes?.length) {
-    parts.push(
-      `id IN (SELECT decision_id FROM decision_nodes WHERE node_id IN (${marks(scope.nodes)}))`,
-    );
-    args.push(...scope.nodes);
-  }
-  return { sql: parts.length ? `(${parts.join(" OR ")})` : "0", args };
+/** 节点及其上级（纯函数）：挂在上级的决定也管到这一块。 */
+function upward(
+  list: readonly { id: number; parent_id: number | null }[],
+  start: number,
+) {
+  const out: number[] = [];
+  for (
+    let current = list.find((n) => n.id === start);
+    current && !out.includes(current.id);
+    current = list.find((n) => n.id === current!.parent_id)
+  )
+    out.push(current.id);
+  return out;
 }
 
-/** 有效：没被推翻、没沉淀成要点。 */
-export const ACTIVE_SQL = "superseded_by IS NULL AND settled_point IS NULL";
-
 /**
- * 按范围列决定，日期新的在前（同一天按记下的先后倒序）；all 为假时只列有效的；
- * terms 给了就是全文检索（决定与原因里全部命中）。分页用上一页最后一条的短号（before）。
+ * 列决定，日期新的在前（同一天按记下的先后倒序）；node 给了只列挂在它及上级的；all 为假时只列没被推翻的；
+ * terms 给了按关键词检索（决定与原因里全部命中）。分页用上一页最后一条的短号（before）。
  */
 export function listDecisions(
   db: DatabaseSync,
-  scope: DecisionScope | null,
   options: {
+    node?: string;
     all?: boolean;
     before?: unknown;
     limit?: number;
@@ -541,16 +361,23 @@ export function listDecisions(
   } = {},
 ) {
   const limit = options.limit ?? PAGE_DEFAULT;
-  const base = scopeWhere(scope);
-  const where = [base.sql];
-  const args = [...base.args];
+  // 只列用户拍板的：早先 leader、秘书记的运行流水留在库里，不再列出。
+  const where: string[] = ["decided_by=?"];
+  const args: (string | number)[] = [LOCAL_USER];
+  if (options.node) {
+    const ids = upward(nodes(db), nodeByAddress(db, options.node).id);
+    where.push(
+      `id IN (SELECT decision_id FROM decision_nodes WHERE node_id IN (${marks(ids)}))`,
+    );
+    args.push(...ids);
+  }
   for (const term of options.terms ?? []) {
     where.push("(text LIKE ? ESCAPE '\\' OR why LIKE ? ESCAPE '\\')");
     args.push(likePattern(term), likePattern(term));
   }
-  const counted = [...where];
+  const counted = where.join(" AND ");
   const countArgs = [...args];
-  if (!options.all) where.push(ACTIVE_SQL);
+  if (!options.all) where.push("superseded_by IS NULL");
   if (
     options.before !== undefined &&
     options.before !== null &&
@@ -567,19 +394,17 @@ export function listDecisions(
     limit + 1,
   );
   const page = rows.slice(0, limit);
-  const counts = one<{ active: number; superseded: number; settled: number }>(
+  const counts = one<{ active: number; superseded: number }>(
     db,
-    `SELECT coalesce(sum(superseded_by IS NULL AND settled_point IS NULL),0) AS active,
-      coalesce(sum(superseded_by IS NOT NULL),0) AS superseded,
-      coalesce(sum(superseded_by IS NULL AND settled_point IS NOT NULL),0) AS settled
-      FROM decisions WHERE ${counted.join(" AND ")}`,
+    `SELECT coalesce(sum(superseded_by IS NULL),0) AS active,
+      coalesce(sum(superseded_by IS NOT NULL),0) AS superseded
+      FROM decisions WHERE ${counted}`,
     ...countArgs,
   )!;
   return {
     decisions: views(db, page),
     active: counts.active,
     superseded: counts.superseded,
-    settled: counts.settled,
     next_before:
       rows.length > limit ? decisionRef(page[page.length - 1]!.id) : null,
   };

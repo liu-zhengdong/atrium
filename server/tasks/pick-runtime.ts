@@ -46,8 +46,7 @@ const recordOf = (
 export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
   const { db, launchOptions: options } = ctx;
   const chain = taskAvoidChain(db, task);
-  const nodeId = chain.at(-1)?.id;
-  const reservePercent = readQuotaReservePercent(db, nodeId);
+  const reservePercent = readQuotaReservePercent(db);
   const pace = ctx.pace ? [...ctx.pace] : undefined;
   const headroom = quotaHeadroom(pace, reservePercent);
   const installed = detectInstalled(options.env.PATH ?? "");

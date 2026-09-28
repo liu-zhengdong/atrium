@@ -1,4 +1,3 @@
-import { involvedOf, involvedView } from "./also.ts";
 import { taskSecretNames } from "../secrets/store.ts";
 import { holderFor } from "./holder-facts.ts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -21,8 +20,6 @@ import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
 import { queued, queueView } from "./queue.ts";
 import { CHECK_EVENT_KINDS, checkSummary } from "./check-outcome.ts";
-import { verifyViews } from "./verify-runtime.ts";
-import { verifyHolder } from "./verify-view.ts";
 
 const EVENTS_SHOWN = 50;
 
@@ -38,11 +35,6 @@ export function getTask(db: DatabaseSync, reference: unknown) {
   // 总任务（t190）：状态与进度按全部子孙汇总；球在子任务手里，不给持球人。
   const rollup = child_summary ? rollupFor(db, found.id) : null;
   const queue = queueView(db, found.id);
-  // 上线后的端到端验证（t182）：验证中、没通过、无法验证、通过。
-  const verify =
-    found.delivery_stage === "online"
-      ? (verifyViews(db, [found.id]).get(found.id) ?? null)
-      : null;
   const secrets = taskSecretNames(db, found.id);
   return {
     ...view(found),
@@ -54,15 +46,13 @@ export function getTask(db: DatabaseSync, reference: unknown) {
           db,
           found,
           queued(db, found.id) ? { reason: queue.queued_reason } : null,
-        ) ?? verifyHolder(verify)),
-    verify,
+        ) ?? null),
     children: child_summary?.total ?? 0,
     child_summary,
     rollup,
     last_check: lastCheck(db, found.id),
     events,
     ...conditions(db, found.id),
-    ...involvedView(involvedOf(db, found)),
     ...(secrets.length ? { secrets } : {}),
   };
 }

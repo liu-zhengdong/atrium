@@ -1,18 +1,14 @@
 import { readFileSync } from "node:fs";
 import { Problem } from "../server/problem.ts";
-import type {
-  Choice,
-  Decided,
-  DeciderSetting,
-} from "../server/choices/store.ts";
+import type { Choice, Decided } from "../server/choices/store.ts";
 import { commentLine } from "../server/choices/model.ts";
 import { recordNext } from "./contract.ts";
 import { oneLine, printJson, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 
 /**
- * 选项单（atrium choice …）：产品部提 3–5 个选项，用户拍板做哪些。
- * 选中的在该节点下建任务交 leader 拆解，没选的连同说明记成决定记录，下一轮产品部读得到。
+ * 选项单（atrium choice …）：调研提 3–5 个选项，用户拍板做哪些。
+ * 选中的在该节点下建任务交 leader 拆解，没选的连同说明记成决定记录。
  */
 
 const str = (values: Values, key: string) => {
@@ -54,9 +50,6 @@ export function choiceText(choice: Choice): string {
   return [
     `${choice.ref} ${choice.title} · ${choice.status_text} · ${choice.node_alias || choice.node_name}（${choice.node}）`,
     `${who(choice.created_by)}提于 ${when(choice.created_at)}${choice.task ? `，出自 ${choice.task}` : ""}${decided}`,
-    ...(choice.status === "open"
-      ? [`拍板人：${choice.decider}（${choice.decider_why}）`]
-      : []),
     ...(choice.note
       ? [`${deciderName(choice.decided_by)}说明：${choice.note}`]
       : []),
@@ -80,9 +73,6 @@ const line = (c: Choice) =>
           .join("、")}`
       : ""
   }`;
-
-const settingText = (s: DeciderSetting) =>
-  `${s.node_name}（${s.node}）的选项单由 ${s.decider === "u1" ? "用户（u1）" : s.decider} 拍板：${s.why}${s.setting === null ? "；本节点没单独设" : ""}`;
 
 function readChoiceFile(file: string): unknown {
   if (file === "-" && process.stdin.isTTY)
@@ -116,7 +106,7 @@ export const choiceCommands: Record<string, Command> = {
   "choice ls": {
     args: "[--node 节点] [--open] [--before cN] [--limit 份数]",
     about:
-      "列选项单，等拍板的在前、新的在前；--node 只看这一块及下层（产品部），--open 只看等拍板的",
+      "列选项单，等拍板的在前、新的在前；--node 只看这一块及下层，--open 只看等拍板的",
     options: {
       node: { type: "string" },
       open: { type: "boolean", default: false },
@@ -158,7 +148,7 @@ export const choiceCommands: Record<string, Command> = {
   "choice show": {
     args: "cN",
     about:
-      "看一份选项单全文：每个选项能多做到什么、为什么现在、代价、不做会怎样、依据，产品部的推荐与理由，拍过板的写明建了哪些任务、记了哪些决定",
+      "看一份选项单全文：每个选项能多做到什么、为什么现在、代价、不做会怎样、依据，推荐与理由，拍过板的写明建了哪些任务、记了哪些决定",
     positionals: [1, 1],
     async run({ positionals: [ref], json }) {
       const choice = await (
@@ -169,7 +159,7 @@ export const choiceCommands: Record<string, Command> = {
       recordNext(
         choice.status !== "open"
           ? `看节点：atrium map ${choice.node}`
-          : process.env.ATRIUM_LEADER_TOKEN && choice.decider === "u1"
+          : process.env.ATRIUM_LEADER_TOKEN
             ? `写意见：atrium choice comment ${choice.ref} 意见 --prefer ${choice.recommend.join(",")} --basis 依据`
             : `拍板：atrium choice pick ${choice.ref} ${choice.recommend.join(" ")} --note 说明（这轮都不要：atrium choice pass ${choice.ref} --note 原因）`,
       );
@@ -178,7 +168,7 @@ export const choiceCommands: Record<string, Command> = {
   "choice pick": {
     args: "cN 选项号… [--note 说明]",
     about:
-      "拍板要做哪几个：选中的在该节点下各建一个任务（带选项全文作详述，交该节点 leader 拆解），没选的连同说明记成该节点的决定记录（这轮不做 X：原因）；拍板人缺省是用户，atrium product set 下放后该节点的 leader 也能拍",
+      "拍板要做哪几个：选中的在该节点下各建一个任务（带选项全文作详述，交该节点 leader 拆解），没选的连同说明记成该节点的决定记录（这轮不做 X：原因）；只有用户能拍板",
     options: { note: { type: "string" } },
     positionals: [2, 6],
     async run({ positionals: [ref, ...picks], values, json }) {
@@ -199,8 +189,7 @@ export const choiceCommands: Record<string, Command> = {
               (t) => `- 选项 ${t.option}「${t.title}」→ 建了 ${t.ref}`,
             ),
             ...result.decisions.map(
-              (d) =>
-                `- 选项 ${d.option} 没选 → 记为 ${d.ref}（${who(d.owner)}的决定记录）`,
+              (d) => `- 选项 ${d.option} 没选 → 记为决定 ${d.ref}`,
             ),
           ].join("\n"),
         );
@@ -214,7 +203,7 @@ export const choiceCommands: Record<string, Command> = {
   "choice pass": {
     args: "cN [--note 原因]",
     about:
-      "这轮都不要：每个选项连同原因记成该节点的决定记录，下一轮产品部读得到，情况没变不重复提",
+      "这轮都不要：每个选项连同原因记成该节点的决定记录，下一轮调研情况没变不重复提",
     options: { note: { type: "string" } },
     positionals: [1, 1],
     async run({ positionals: [ref], values, json }) {
@@ -228,11 +217,9 @@ export const choiceCommands: Record<string, Command> = {
       if (json) printJson(result);
       else
         console.log(
-          `${result.choice.ref} 这轮都不要，记了 ${result.decisions.map((d) => d.ref).join("、")}（${who(result.decisions[0]?.owner ?? "secretary")}的决定记录）`,
+          `${result.choice.ref} 这轮都不要，记了决定 ${result.decisions.map((d) => d.ref).join("、")}`,
         );
-      recordNext(
-        `看决定记录：atrium decision ls${result.decisions[0] && result.decisions[0].owner !== "secretary" ? ` --as ${result.decisions[0].owner}` : ""}`,
-      );
+      recordNext(`看决定记录：atrium decision ls --node ${result.choice.node}`);
     },
   },
   "choice comment": {
@@ -258,53 +245,15 @@ export const choiceCommands: Record<string, Command> = {
       if (json) printJson(choice);
       else
         console.log(
-          `已给 ${choice.ref} 写意见（共 ${choice.comments.length} 条），拍板人 ${choice.decider}`,
+          `已给 ${choice.ref} 写意见（共 ${choice.comments.length} 条），等用户拍板`,
         );
       recordNext(`看全文：atrium choice show ${choice.ref}`);
-    },
-  },
-  "product set": {
-    args: "节点 --decider leader|u1",
-    about:
-      "设谁拍板这个节点（及没另设的下层）上的选项单：u1 用户拍板（缺省），leader 下放给该节点最近的 leader——之后 leader 能 choice pick/pass，用户只收知会；只有用户能改",
-    options: { decider: { type: "string" } },
-    positionals: [1, 1],
-    async run({ positionals: [node], values, json }) {
-      const decider = str(values, "decider");
-      if (!decider)
-        throw new Problem(
-          400,
-          "--decider: 必填，leader（下放给该节点的 leader）或 u1（用户拍板）",
-          "usage",
-        );
-      const result = await (
-        await client()
-      ).put<DeciderSetting>(`/product/nodes/${enc(node!)}`, { decider });
-      if (json) printJson(result);
-      else console.log(settingText(result));
-      recordNext(`看选项单：atrium choice ls --node ${result.node}`);
-    },
-  },
-  "product show": {
-    args: "节点",
-    about:
-      "看这个节点上的选项单由谁拍板：本节点的设置（没设就沿用上层，都没设是用户）与实际拍板人",
-    positionals: [1, 1],
-    async run({ positionals: [node], json }) {
-      const result = await (
-        await client()
-      ).get<DeciderSetting>(`/product/nodes/${enc(node!)}`);
-      if (json) printJson(result);
-      else console.log(settingText(result));
-      recordNext(
-        `改拍板人：atrium product set ${result.node} --decider ${result.decider === "u1" ? "leader" : "u1"}`,
-      );
     },
   },
   "choice add": {
     args: "节点 --file 选项单.json|- [--task tN]",
     about:
-      '产品部提一份选项单挂在节点上（它要演进的那一块），建好叫醒秘书递给用户；文件是 JSON：{"title":"标题","options":[{"title","gain":"能多做到什么","why_now":"为什么现在","cost":"代价：多少活、占哪些额度","skip":"不做会怎样","basis":["f3","t120","d4","链接"]}…3–5 个],"recommend":[选项号],"why":"推荐理由","small":[{"title":"小改进","why":"为什么","basis":["f5"]}…可不写，至多 10 条]}；选项只放大方向，small 是一天内能做完、不改用法的小改进，不进选项单，交该节点最近的 leader 自己定（收 choice_small）；--task 记产出它的研究任务',
+      '提一份选项单挂在节点上（它要演进的那一块），建好叫醒秘书递给用户；文件是 JSON：{"title":"标题","options":[{"title","gain":"能多做到什么","why_now":"为什么现在","cost":"代价：多少活、占哪些额度","skip":"不做会怎样","basis":["f3","t120","d4","链接"]}…3–5 个],"recommend":[选项号],"why":"推荐理由","small":[{"title":"小改进","why":"为什么","basis":["f5"]}…可不写，至多 10 条]}；选项只放大方向，small 是一天内能做完、不改用法的小改进，不进选项单，交该节点最近的 leader 自己定（收 choice_small）；--task 记产出它的研究任务',
     options: { file: { type: "string" }, task: { type: "string" } },
     positionals: [1, 1],
     async run({ positionals: [node], values, json }) {

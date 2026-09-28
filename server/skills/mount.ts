@@ -2,7 +2,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -10,7 +9,7 @@ import {
 import path, { dirname, join } from "node:path";
 import { linkPath } from "../platform/index.ts";
 import { ADAPTERS, type Tool } from "../tasks/adapters/index.ts";
-import { LIMITS, filesHash, type Files } from "./model.ts";
+import type { Files } from "./model.ts";
 import type { TaskSkill } from "./task-skills.ts";
 
 /**
@@ -21,7 +20,7 @@ import type { TaskSkill } from "./task-skills.ts";
  *   与用户自己的 ~/.codex/skills/* 软链回原处（同名以组织技能为准），登录、全局约定和用户技能照旧；
  * - opencode：`OPENCODE_CONFIG_DIR=<任务目录>/opencode`，技能在其 skills/ 下，与用户全局配置叠加；
  * - 其他：拷到 <任务目录>/skills/，提示词里给简介和绝对路径，按需读。
- * 同一任务再次拉起（重试、换人）时已挂的副本原样保留，执行者上一轮的改动不会被覆盖。
+ * 每次拉起都按当前修订重写副本。
  * 远程主机（t232）由那台的代理调同一个函数挂在它的任务目录里（server/agent/launch.ts），链接走平台层
  * （Windows 建不了软链时目录用 junction、文件用硬链接）。
  */
@@ -32,18 +31,12 @@ export type MountSkill = Pick<
   "id" | "slug" | "rev" | "description" | "via" | "files"
 >;
 
-export const MANIFEST = "skills.json";
-export const NOTES = "skill-notes.md";
-
 export type Mounted = {
   id: number;
   slug: string;
   rev: number;
   dir: string;
-  /** 挂载时文件的哈希（`filesHash`）：远程收尾据此只把改过的副本传回服务；旧清单没有。 */
-  sha?: string;
 };
-export type Manifest = { skills: Mounted[] };
 export type Mount = {
   env: Record<string, string>;
   args: string[];
@@ -116,17 +109,6 @@ export function skillLayout(
   }
 }
 
-export function readManifest(dir: string): Manifest | undefined {
-  try {
-    const data = JSON.parse(
-      readFileSync(join(dir, MANIFEST), "utf8"),
-    ) as Manifest;
-    return Array.isArray(data.skills) ? data : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function writeFiles(target: string, files: Files) {
   rmSync(target, { recursive: true, force: true });
   for (const [path, content] of Object.entries(files)) {
@@ -187,40 +169,11 @@ export function mountSkills(
   }
   if (ADAPTERS[tool].skillMount === "codex-home")
     linkCodexHome(place.root, home, skills);
-  const previous = new Map(
-    (readManifest(dir)?.skills ?? []).map((entry) => [entry.slug, entry]),
-  );
-  const mounted: Mounted[] = [];
-  for (const skill of skills) {
+  const mounted: Mounted[] = skills.map((skill) => {
     const target = join(place.skills, skill.slug);
-    const kept = previous.get(skill.slug);
-    if (kept && kept.dir === target && existsSync(join(target, "SKILL.md"))) {
-      mounted.push(kept);
-      continue;
-    }
     writeFiles(target, skill.files);
-    mounted.push({
-      id: skill.id,
-      slug: skill.slug,
-      rev: skill.rev,
-      dir: target,
-      sha: filesHash(skill.files),
-    });
-  }
-  // 上一轮挂过、这轮不再用的副本（不再带，或换了执行者、目录不同）也留在清单里，收尾照样比对，免得改动丢失。
-  const all = [
-    ...mounted,
-    ...(readManifest(dir)?.skills ?? []).filter(
-      (entry) => !mounted.some((m) => m.dir === entry.dir),
-    ),
-  ];
-  writeFileSync(
-    join(dir, MANIFEST),
-    `${JSON.stringify({ skills: all }, null, 2)}\n`,
-    {
-      mode: 0o600,
-    },
-  );
+    return { id: skill.id, slug: skill.slug, rev: skill.rev, dir: target };
+  });
   const byslug = new Map(skills.map((skill) => [skill.slug, skill]));
   const section = [
     `以下技能由组织维护，只对这次运行生效；${place.how}。`,
@@ -228,47 +181,7 @@ export function mountSkills(
       const skill = byslug.get(entry.slug)!;
       return `- ${entry.slug}（r${entry.rev}，来自 ${skill.via}）：${skill.description}\n  文件：${join(entry.dir, "SKILL.md")}`;
     }),
-    `技能内容有误或过时：可以直接改上面的副本（不要复制进仓库），并把原因写进 ${join(dir, NOTES)}；收尾时会生成修订提议，审核后采纳。`,
+    "技能内容有误或过时：不要改副本，在交付说明里写明哪条过时、为什么。",
   ].join("\n");
   return { env: place.env, args: place.args, section, skills: mounted };
-}
-
-/** 读回挂载副本：跳过隐藏文件和符号链接，超出上限就停下报告。 */
-export function readMounted(
-  root: string,
-): { files: Files } | { problem: string } {
-  const files: Files = {};
-  let bytes = 0;
-  const walk = (
-    dir: string,
-    prefix: string,
-    depth: number,
-  ): string | undefined => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return `读不到 ${dir}`;
-    }
-    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (depth >= LIMITS.depth) return `${rel} 目录层级超过 ${LIMITS.depth}`;
-        const problem = walk(full, rel, depth + 1);
-        if (problem) return problem;
-      } else if (entry.isFile()) {
-        if (Object.keys(files).length >= LIMITS.files)
-          return `文件超过 ${LIMITS.files} 个`;
-        const size = lstatSync(full).size;
-        bytes += size;
-        if (bytes > LIMITS.bytes) return `合计超过 ${LIMITS.bytes / 1024} KB`;
-        files[rel] = readFileSync(full, "utf8");
-      }
-    }
-    return undefined;
-  };
-  const problem = walk(root, "", 1);
-  return problem ? { problem } : { files };
 }

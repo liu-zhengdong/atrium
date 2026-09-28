@@ -19,28 +19,20 @@ import {
   LIMITS,
   avoidReason,
   effectiveSkills,
-  filesDiff,
-  merge3Text,
-  mergeFiles,
   skillMeta,
   validateFiles,
   validateSkillSlug,
   type ChainNode,
 } from "../server/skills/model.ts";
 import {
-  acceptProposal,
   addSkill,
   bindSkill,
   editSkill,
-  listProposals,
   listSkills,
-  rejectProposal,
   revertSkill,
-  showProposal,
   skillHistory,
 } from "../server/skills/store.ts";
 import { skillsForTask } from "../server/skills/task-skills.ts";
-import { collectSkillEdits } from "../server/skills/collect.ts";
 import {
   createTask,
   ensureTaskTables,
@@ -324,55 +316,6 @@ test("档案合并：skills、avoid_nodes 取并集，skills_for 按节点合并
   assert.deepEqual(merged.skills_for, { "atrium/web": ["x", "y"], o4: ["z"] });
 });
 
-test("三方合并：两边改不同处自动合并，改同一处算冲突", () => {
-  const base = "标题\n一\n二\n三\n四\n五";
-  const ours = "标题\n一（审核人改）\n二\n三\n四\n五";
-  const theirs = "标题\n一\n二\n三\n四\n五（执行者改）\n六";
-  assert.deepEqual(merge3Text(base, ours, theirs), {
-    text: "标题\n一（审核人改）\n二\n三\n四\n五（执行者改）\n六",
-    conflict: false,
-  });
-  assert.equal(merge3Text(base, ours, ours).conflict, false, "两边改得一样");
-  assert.equal(merge3Text(base, base, theirs).text, theirs);
-  assert.equal(merge3Text(base, ours, base).text, ours);
-  assert.equal(
-    merge3Text(base, "标题\n一甲\n二\n三\n四\n五", "标题\n一乙\n二\n三\n四\n五")
-      .conflict,
-    true,
-  );
-  assert.deepEqual(merge3Text("a\nb", "x\na\nb", "a\nb\ny"), {
-    text: "x\na\nb\ny",
-    conflict: false,
-  });
-  const files = mergeFiles(
-    { "SKILL.md": base, "old.md": "旧", "keep.md": "k" },
-    { "SKILL.md": ours, "old.md": "旧", "keep.md": "k2" },
-    { "SKILL.md": theirs, "new.md": "新", "keep.md": "k" },
-  );
-  assert.deepEqual(files, {
-    files: {
-      "SKILL.md": "标题\n一（审核人改）\n二\n三\n四\n五（执行者改）\n六",
-      "keep.md": "k2",
-      "new.md": "新",
-    },
-    conflicts: [],
-  });
-  assert.deepEqual(
-    mergeFiles({ "a.md": "1" }, { "a.md": "2" }, {}).conflicts,
-    ["a.md"],
-    "一边删一边改",
-  );
-  assert.deepEqual(
-    mergeFiles({}, { "a.md": "甲" }, { "a.md": "乙" }).conflicts,
-    ["a.md"],
-    "两边各自新增同名文件",
-  );
-  assert.deepEqual(
-    filesDiff({ "a.md": "x\ny" }, { "a.md": "x\nz", "b.md": "新" }),
-    ["修改 a.md", "  x", "- y", "+ z", "新增 b.md", "+ 新"],
-  );
-});
-
 test("技能读写：修订只追加、乐观并发、权限看 owner 节点、回退追加新修订", () => {
   const db = setup();
   const created = add(db, "web-design", { owner: "atrium/web" }, "a1");
@@ -530,7 +473,7 @@ const worker = (tool: Tool, rules: Record<string, unknown> = {}) => ({
   profile: { rules, body: "", layers: [], warnings: [] } as never,
 });
 
-test("派活挂载：按工具放进任务目录，不碰仓库与用户配置；重试保留改过的副本", async () => {
+test("派活挂载：按工具放进任务目录，不碰仓库与用户配置；重试按当前修订重写副本", async () => {
   const db = setup();
   add(db, "web-design", { owner: "atrium/web" });
   add(db, "org-wide");
@@ -601,17 +544,16 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
       ),
     );
     assert.ok(prompt.includes("- web-design（r1，来自 o3 atrium/web）"));
-    assert.ok(prompt.includes(join(dir, "skill-notes.md")));
     assert.deepEqual(mountedNote(t1), {
       worker: "claude",
       skills: ["org-wide@r1", "web-design@r1"],
     });
 
-    // 执行者改了副本，然后同一任务重试：副本原样保留
+    // 执行者改了副本，然后同一任务重试：按当前修订重写
     const copy = join(plugin, "skills", "web-design", "SKILL.md");
     writeFileSync(copy, md("web-design", "web-design 的简介", "按钮间距 12px"));
     await run(t1, "claude");
-    assert.match(readFileSync(copy, "utf8"), /12px/);
+    assert.doesNotMatch(readFileSync(copy, "utf8"), /12px/);
 
     // codex：CODEX_HOME 指到任务目录，登录与配置软链回用户目录；档案 skills_for 命中节点
     const t2 = createTask(db, { title: "codex 改前端", part: "o3" }).id;
@@ -704,172 +646,6 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
   }
 });
 
-test("回收：改了副本生成提议，采纳写成作者为任务号的新修订；期间有别的修订就三方合并，冲突留给审核人", async () => {
-  const db = setup();
-  const base = md("web-design", "前端设计约定", "一\n二\n三\n四");
-  add(db, "web-design", { owner: "atrium/web", files: { "SKILL.md": base } });
-  bindSkill(db, "web-design", "o3", "u1");
-  const data = mkdtempSync(join(tmpdir(), "atrium-skills-"));
-  try {
-    const launch = async (title: string) => {
-      const id = createTask(db, { title, part: "o3" }).id;
-      await prepareRun(
-        getTask(db, `t${id}`),
-        { worker: worker("codex"), risk: "low" },
-        {
-          db,
-          data,
-          env: { HOME: data },
-        },
-      );
-      const dir = join(data, "tasks", String(id));
-      return {
-        id,
-        dir,
-        file: join(dir, "codex-home", "skills", "web-design", "SKILL.md"),
-      };
-    };
-    const untouched = await launch("没改技能");
-    assert.deepEqual(collectSkillEdits(db, untouched.id, untouched.dir), {
-      proposals: [],
-      problems: [],
-    });
-
-    const a = await launch("改第一行");
-    writeFileSync(
-      a.file,
-      md("web-design", "前端设计约定", "一（执行者改）\n二\n三\n四"),
-    );
-    writeFileSync(join(a.dir, "skill-notes.md"), "第一行的说法已过时");
-    const first = collectSkillEdits(db, a.id, a.dir);
-    assert.deepEqual(first.proposals, [
-      {
-        proposal: "p1",
-        slug: "web-design",
-        base: "r1",
-        owner: { node: "o3 atrium/web", leader: "a1" },
-      },
-    ]);
-    assert.deepEqual(
-      collectSkillEdits(db, a.id, a.dir).proposals,
-      [],
-      "同样的内容不重复提",
-    );
-    assert.equal(showProposal(db, "p1").reason, "第一行的说法已过时");
-    assert.ok(showProposal(db, "p1").diff.includes("+ 一（执行者改）"));
-
-    const b = await launch("改最后一行");
-    writeFileSync(
-      b.file,
-      md("web-design", "前端设计约定", "一\n二\n三\n四（另一个执行者改）"),
-    );
-    const c = await launch("也改第一行");
-    writeFileSync(
-      c.file,
-      md("web-design", "前端设计约定", "一（冲突）\n二\n三\n四"),
-    );
-    const d = await launch("改坏了");
-    writeFileSync(d.file, "没有 frontmatter 了");
-    assert.equal(
-      collectSkillEdits(db, b.id, b.dir).proposals[0]!.proposal,
-      "p2",
-    );
-    assert.equal(
-      collectSkillEdits(db, c.id, c.dir).proposals[0]!.proposal,
-      "p3",
-    );
-    assert.match(
-      collectSkillEdits(db, d.id, d.dir).problems[0]!,
-      /web-design：改动不合规.*没生成提议/,
-    );
-
-    assert.throws(
-      () => acceptProposal(db, "p1", undefined, "a9"),
-      /--as|leader/,
-    );
-    assert.deepEqual(acceptProposal(db, "p1", undefined, "a1"), {
-      ref: "p1",
-      slug: "web-design",
-      before: "r1",
-      rev: "r2",
-      merged: false,
-    });
-    const r2 = skillHistory(db, "web-design").items![0]!;
-    assert.deepEqual(
-      [r2.author, r2.reviewer, r2.source],
-      [`t${a.id}`, "a1", "p1"],
-    );
-    assert.match(r2.reason, /^采纳 p1：第一行的说法已过时/);
-    assert.throws(() => acceptProposal(db, "p1", undefined, "u1"), /p1 已采纳/);
-
-    // p2 基于 r1，改的是别处：自动合并
-    assert.equal(acceptProposal(db, "p2", "顺手合并", "u1").merged, true);
-    assert.equal(
-      JSON.parse(
-        db.prepare("SELECT files FROM org_skills").get()!.files as string,
-      )["SKILL.md"],
-      md(
-        "web-design",
-        "前端设计约定",
-        "一（执行者改）\n二\n三\n四（另一个执行者改）",
-      ),
-    );
-    // p3 基于 r1，与 p1 改了同一行：冲突，留给审核人手工合并后写回
-    assert.throws(
-      () => acceptProposal(db, "p3", undefined, "u1"),
-      /p3 基于 r1，技能已是 r3，合并有冲突：SKILL.md/,
-    );
-    assert.deepEqual(
-      editSkill(
-        db,
-        "web-design",
-        {
-          files: {
-            "SKILL.md": md(
-              "web-design",
-              "前端设计约定",
-              "一（手工合并）\n二\n三\n四（另一个执行者改）",
-            ),
-          },
-          rev: "r3",
-          proposal: "p3",
-          reason: "手工合并 p3",
-        },
-        "u1",
-      ),
-      { slug: "web-design", before: "r3", rev: "r4", proposal: "p3" },
-    );
-    assert.equal(skillHistory(db, "web-design").items![0]!.author, `t${c.id}`);
-    assert.deepEqual(
-      listProposals(db, { status: "all" }).map((p) => [
-        p.ref,
-        p.status,
-        p.result,
-      ]),
-      [
-        ["p3", "accepted", "r4"],
-        ["p2", "accepted", "r3"],
-        ["p1", "accepted", "r2"],
-      ],
-    );
-
-    const e = await launch("再改");
-    writeFileSync(e.file, md("web-design", "前端设计约定", "胡改"));
-    collectSkillEdits(db, e.id, e.dir);
-    assert.throws(() => rejectProposal(db, "p4", "", "u1"), /reason 不能为空/);
-    assert.deepEqual(rejectProposal(db, "p4", "改错了", "a1"), {
-      ref: "p4",
-      slug: "web-design",
-      status: "rejected",
-    });
-    assert.deepEqual(listProposals(db), []);
-    assert.throws(() => showProposal(db, "x1"), /提议应写成 p1/);
-  } finally {
-    removeTemp(data);
-    db.close();
-  }
-});
-
 test("命令行读技能来源：目录跳过隐藏文件与符号链接，单个文件当作 SKILL.md", () => {
   const dir = mkdtempSync(join(tmpdir(), "atrium-skill-src-"));
   try {
@@ -891,10 +667,10 @@ test("命令行读技能来源：目录跳过隐藏文件与符号链接，单�
   }
 });
 
-test("运行时：派到节点的任务挂上技能，执行者改了副本，收尾生成提议并通知负责人，经接口采纳", async (t) => {
+test("运行时：派到节点的任务挂上技能，执行者读到副本，技能文件不进仓库", async (t) => {
   const { startApp } = await import("./task-fixture.ts");
   const { fx, call } = await startApp(t, (fx) => {
-    // 假 codex：按 CODEX_HOME 找到挂载的技能副本改一行、写原因，再在 worktree 里提交。
+    // 假 codex：确认 CODEX_HOME 下挂着技能副本，再在 worktree 里提交。
     const file = join(fx.root, "bin", "codex");
     writeFakeBin(
       file,
@@ -903,8 +679,7 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
         "set -e",
         "cat > /dev/null",
         'f="$CODEX_HOME/skills/web-design/SKILL.md"',
-        'printf -- "---\\nname: web-design\\ndescription: 前端设计约定\\n---\\n\\n按钮间距 12px\\n" > "$f"',
-        'echo "8px 在新设计稿里不对" > "$CODEX_HOME/../skill-notes.md"',
+        'test -f "$f"',
         'env > "$PWD/../codex-env.txt"',
         "echo hi > done.txt",
         "git add done.txt",
@@ -991,43 +766,6 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
   await ok("GET", "/api/tasks/t1/wait?timeout=20");
   const env = readFileSync(join(fx.root, "codex-env.txt"), "utf8");
   assert.match(env, /^CODEX_HOME=.*[\\/]tasks[\\/]1[\\/]codex-home$/m);
-  const proposals = await ok("GET", "/api/skill-proposals");
-  assert.deepEqual(
-    proposals.map(
-      (p: { ref: string; skill: string; task: string; reason: string }) => [
-        p.ref,
-        p.skill,
-        p.task,
-        p.reason,
-      ],
-    ),
-    [["p1", "web-design", "t1", "8px 在新设计稿里不对"]],
-  );
-  const events = await ok("GET", "/api/events/wait?as=secretary&timeout=0");
-  const event = events.events.find(
-    (e: { kind: string }) => e.kind === "skill_proposal",
-  );
-  assert.ok(event, JSON.stringify(events));
-  assert.deepEqual(
-    [event.task, event.detail.proposal, event.detail.owner, event.detail.next],
-    [
-      "t1",
-      "p1",
-      { node: "o3 atrium/web", leader: "u1" },
-      "atrium skill proposal p1",
-    ],
-  );
-  const accepted = await ok("POST", "/api/skill-proposals/p1/accept", {});
-  assert.deepEqual([accepted.before, accepted.rev], ["r1", "r2"]);
-  const history = await ok("GET", "/api/skills/web-design/history");
-  assert.deepEqual(
-    [
-      history.items[0].author,
-      history.items[0].reviewer,
-      history.items[0].source,
-    ],
-    ["t1", "u1", "p1"],
-  );
   // 技能文件没进仓库
   assert.equal(
     execGit(`${fx.repo}-t1-adjust-button`, "ls-files")

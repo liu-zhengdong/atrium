@@ -336,7 +336,7 @@ export async function createApp(options: {
     data: resolve(options.data),
     env: options.tasks?.env,
     url: () => options.serviceUrl,
-    // 全局暂停不叫醒任何 leader；部分暂停不叫醒负责那一块的 leader。
+    // 全局暂停不叫醒任何 leader；部门暂停不叫醒负责那一块的 leader。
     paused: (leader) =>
       !!globalPause(db) ||
       (leader !== undefined &&

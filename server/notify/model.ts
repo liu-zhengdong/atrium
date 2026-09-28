@@ -561,7 +561,7 @@ export function parseToken(value: unknown): string {
   const token = typeof value === "string" ? value.trim() : "";
   if (!token)
     throw usage(
-      "标准输入是空的：把 @BotFather 给的 bot token 从管道传进来，如 pbpaste | atrium notify token",
+      "标准输入是空的：把 @BotFather 给的 bot token 从管道传进来，如 pbpaste | atrium notify --token",
     );
   if (!TOKEN.test(token))
     throw usage(

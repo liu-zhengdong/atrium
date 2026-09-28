@@ -12,7 +12,7 @@ import type { LaunchOptions } from "./workspace.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 
 /**
- * 收集派活候选的事实（task pick 与 task run 自动挑人共用）：干活的专员与交付记录、已装工具、档案、
+ * 收集派活候选的事实（task run --dry-run 与 task run 自动挑人共用）：干活的专员与交付记录、已装工具、档案、
  * 额度与保留份额、正忙的独占工具；判定与排序在 pick.ts。
  */
 

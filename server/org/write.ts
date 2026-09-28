@@ -132,7 +132,7 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
     return nodeSnapshot(db, id);
   });
 }
-/** 读本部分的人话字段（是什么、怎么用、现状、阶段……）；没写为空对象，坏数据当没写。 */
+/** 读本部门的人话字段（是什么、怎么用、现状、阶段……）；没写为空对象，坏数据当没写。 */
 export function nodeFields(
   db: DatabaseSync,
   node: number,
@@ -199,10 +199,10 @@ export function editNode(
     if (input.rev !== undefined && input.rev !== `r${old}`)
       throw new Problem(
         409,
-        `节点已是 r${old}，你基于 ${String(input.rev)} 修改；先看变化：atrium org history ${ref(node.id)}`,
+        `节点已是 r${old}，你基于 ${String(input.rev)} 修改；先看变化：atrium org show ${ref(node.id)} --history`,
         "conflict",
         undefined,
-        `atrium org history ${ref(node.id)}`,
+        `atrium org show ${ref(node.id)} --history`,
       );
     const reason = validateReason(input.reason);
     let parent = node.parent_id;

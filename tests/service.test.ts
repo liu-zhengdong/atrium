@@ -497,7 +497,7 @@ test(
     assert.equal(addedRole.code, 0, addedRole.stderr);
     const addedTask = await f.cli("task", "add", "检查旧库兼容", "--by", "r1");
     assert.equal(addedTask.code, 0, addedTask.stderr);
-    assert.equal((await f.cli("specialist", "show", "r1")).code, 0);
+    assert.equal((await f.cli("specialist", "ls", "r1")).code, 0);
     assert.equal((await f.cli("workers")).code, 0);
     assert.equal((await f.cli("stop")).code, 0);
     const after = new DatabaseSync(join(f.data, "atrium.sqlite"), {

@@ -1127,7 +1127,7 @@ test("实时模式：服务暂时不可用就把原因留在屏上，不退出",
 
 test("命令表：help、guide 与参数校验都认 top", async () => {
   assert.match(help(), /atrium top \[--once\]/);
-  assert.match(guide(commands), /看谁在干什么：atrium top/);
+  assert.match(guide(), /看谁在干什么：atrium top/);
   assert.deepEqual(commands.top?.positionals, [0, 0]);
   // 参数校验在连服务之前就该拒绝，给出可执行的修正。
   const cases: [Record<string, string>, RegExp][] = [

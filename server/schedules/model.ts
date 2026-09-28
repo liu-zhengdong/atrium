@@ -123,7 +123,7 @@ function hasSchedules(db: DatabaseSync) {
   return ok;
 }
 
-/** 这件任务是不是某条调研类周期任务建出的一轮；是就给出它挂的部分（选项单挂在那里、只在本机跑）。 */
+/** 这件任务是不是某条调研类周期任务建出的一轮；是就给出它挂的部门（选项单挂在那里、只在本机跑）。 */
 export function researchRound(
   db: DatabaseSync,
   taskId: number,
@@ -331,7 +331,7 @@ const lastOf = (row: ScheduleRow, statuses: ReadonlyMap<number, string>) =>
 
 export const LIST_LIMIT = 200;
 
-/** 列表：缺省不列已删除的；按节点过滤时含下层部分；按 sN 游标分页。 */
+/** 列表：缺省不列已删除的；按节点过滤时含下层部门；按 sN 游标分页。 */
 export function listSchedules(
   db: DatabaseSync,
   query: { node?: string; all?: boolean; after?: number; limit?: number },

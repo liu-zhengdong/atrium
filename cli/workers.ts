@@ -68,77 +68,116 @@ async function showProfile(ref: string, json: boolean) {
   recordNext(`改档案：atrium workers edit ${ref} --file 文件`);
 }
 
+async function stats(values: Values, json: boolean) {
+  const role = str(values, "specialist");
+  const q = role ? `?role=${encodeURIComponent(role)}` : "";
+  const data = await (await client()).get<List>(`/workers${q}`);
+  if (json) printJson(data);
+  else {
+    console.log(
+      table([
+        [
+          "层级",
+          "执行者",
+          "专员",
+          "次数",
+          "一次通过",
+          "平均退回",
+          "中位用时",
+          "事故",
+          "信任",
+          "样本",
+        ],
+        ...data.stats.map((s) => [
+          s.scope,
+          s.worker,
+          s.role ?? "未指定",
+          String(s.deliveries),
+          percent(s.first_pass_rate),
+          s.average_returns.toFixed(1),
+          duration(s.median_ms),
+          String(s.incidents),
+          s.trust ?? "—",
+          s.low_data ? "数据少" : "足够",
+        ]),
+      ]),
+    );
+  }
+  recordNext("看执行者：atrium workers 工具+模型[:强度]");
+}
+async function profiles(json: boolean) {
+  const data = await (
+    await client()
+  ).get<{ profiles: ProfileRow[] }>("/workers/profiles");
+  if (json) printJson(data);
+  else if (!data.profiles.length)
+    console.log("库里还没有执行者档案，派活用内置缺省");
+  else
+    console.log(
+      table([
+        ["档案", "版本", "信任", "最高风险", "模型", "加查", "更新"],
+        ...data.profiles.map((p) => [
+          `${p.ref}${p.protocol ? `（${p.protocol} 接入）` : ""}`,
+          String(p.rev),
+          p.trust ?? "—",
+          p.max_risk ?? "—",
+          `${p.model ?? "—"}${p.endpoint ? ` @ ${p.endpoint}` : ""}`,
+          p.checks?.join(",") || "—",
+          `${p.updated_by} ${when(p.updated_at)}${p.warnings.length ? " · 有警告" : ""}`,
+        ]),
+      ]),
+    );
+  recordNext("看档案：atrium workers harness/codex");
+}
+async function workerDetail(worker: string, json: boolean) {
+  const data = await (
+    await client()
+  ).get<{
+    worker: string;
+    profile: {
+      body: string;
+      layers: { file: string; body: string }[];
+      warnings: string[];
+    };
+    deliveries: {
+      task_ref: string;
+      task_title: string;
+      job_name: string | null;
+      final_result: string;
+      duration_ms: number | null;
+      gate_returns: string[];
+      merge_returns: string[];
+      rebase_conflicts: number;
+      incidents: string[];
+      first_pass: boolean | null;
+    }[];
+  }>(`/workers/${encodeURIComponent(worker)}`);
+  if (json) printJson(data);
+  else {
+    console.log(
+      `${data.worker}\n${data.profile.body}\n\n交付：\n${data.deliveries.map((d) => `${d.task_ref} ${d.task_title} · ${d.job_name ?? "未指定"} · ${d.final_result} · ${duration(d.duration_ms)}${d.gate_returns.length ? ` · 关卡：${d.gate_returns.join("；")}` : ""}${d.merge_returns.length ? ` · 合入退回：${d.merge_returns.join("；")}` : ""}${d.rebase_conflicts ? ` · 变基冲突 ${d.rebase_conflicts} 次（不归责）` : ""}${d.incidents.length ? ` · 事故：${d.incidents.join("、")}` : ""}`).join("\n") || "暂无"}`,
+    );
+    for (const w of data.profile.warnings) console.log(`警告：${w}`);
+  }
+  recordNext("看全部：atrium workers");
+}
+
 export const workerCommands: Record<string, Command> = {
   workers: {
-    args: "[--specialist 专员] [--json]",
-    about: "按执行者组合、模型、工具与干活的专员查看交付事实",
-    options: { specialist: { type: "string" } },
-    positionals: [0, 0],
-    async run({ values, json }) {
-      const role = str(values, "specialist");
-      const q = role ? `?role=${encodeURIComponent(role)}` : "";
-      const data = await (await client()).get<List>(`/workers${q}`);
-      if (json) printJson(data);
-      else {
-        console.log(
-          table([
-            [
-              "层级",
-              "执行者",
-              "专员",
-              "次数",
-              "一次通过",
-              "平均退回",
-              "中位用时",
-              "事故",
-              "信任",
-              "样本",
-            ],
-            ...data.stats.map((s) => [
-              s.scope,
-              s.worker,
-              s.role ?? "未指定",
-              String(s.deliveries),
-              percent(s.first_pass_rate),
-              s.average_returns.toFixed(1),
-              duration(s.median_ms),
-              String(s.incidents),
-              s.trust ?? "—",
-              s.low_data ? "数据少" : "足够",
-            ]),
-          ]),
-        );
-      }
-      recordNext("看执行者：atrium workers show 工具+模型[:强度]");
+    args: "[工具+模型[:强度]|层/名] [--profiles] [--specialist 专员] [--json]",
+    about:
+      "不给参数按执行者组合、模型、工具与干活的专员列交付事实；给执行者看交付明细与三层叠加档案；给 层/名（如 harness/codex）看这份档案原文与修订；--profiles 列库里的执行者档案（工具 / 模型 / 组合三层）",
+    options: {
+      specialist: { type: "string" },
+      profiles: { type: "boolean" },
     },
-  },
-  "workers ls": {
-    args: "[--json]",
-    about: "列出库里的执行者档案（工具 / 模型 / 组合三层）",
-    positionals: [0, 0],
-    async run({ json }) {
-      const data = await (
-        await client()
-      ).get<{ profiles: ProfileRow[] }>("/workers/profiles");
-      if (json) printJson(data);
-      else if (!data.profiles.length)
-        console.log("库里还没有执行者档案，派活用内置缺省");
-      else
-        console.log(
-          table([
-            ["档案", "版本", "信任", "最高风险", "模型", "加查", "更新"],
-            ...data.profiles.map((p) => [
-              `${p.ref}${p.protocol ? `（${p.protocol} 接入）` : ""}`,
-              String(p.rev),
-              p.trust ?? "—",
-              p.max_risk ?? "—",
-              `${p.model ?? "—"}${p.endpoint ? ` @ ${p.endpoint}` : ""}`,
-              p.checks?.join(",") || "—",
-              `${p.updated_by} ${when(p.updated_at)}${p.warnings.length ? " · 有警告" : ""}`,
-            ]),
-          ]),
-        );
-      recordNext("看档案：atrium workers show harness/codex");
+    positionals: [0, 1],
+    async run({ positionals: [target], values, json }) {
+      if (target !== undefined)
+        return isProfileRef(target)
+          ? showProfile(target, json)
+          : workerDetail(target, json);
+      return values.profiles ? profiles(json) : stats(values, json);
     },
   },
   "workers edit": {
@@ -208,46 +247,7 @@ export const workerCommands: Record<string, Command> = {
             ? `${result.created ? "已新建" : "已改"} ${result.ref}，第 ${result.rev} 版`
             : `${result.ref} 内容没变，仍是第 ${result.rev} 版`,
         );
-      recordNext(`看档案：atrium workers show ${result.ref}`);
-    },
-  },
-  "workers show": {
-    args: "工具+模型[:强度]|层/名 [--json]",
-    about:
-      "查看执行者的交付明细与三层叠加档案；给 层/名（如 harness/codex）时看这份档案原文与修订",
-    positionals: [1, 1],
-    async run({ positionals: [worker], json }) {
-      if (isProfileRef(worker!)) return showProfile(worker!, json);
-      const data = await (
-        await client()
-      ).get<{
-        worker: string;
-        profile: {
-          body: string;
-          layers: { file: string; body: string }[];
-          warnings: string[];
-        };
-        deliveries: {
-          task_ref: string;
-          task_title: string;
-          job_name: string | null;
-          final_result: string;
-          duration_ms: number | null;
-          gate_returns: string[];
-          merge_returns: string[];
-          rebase_conflicts: number;
-          incidents: string[];
-          first_pass: boolean | null;
-        }[];
-      }>(`/workers/${encodeURIComponent(worker!)}`);
-      if (json) printJson(data);
-      else {
-        console.log(
-          `${data.worker}\n${data.profile.body}\n\n交付：\n${data.deliveries.map((d) => `${d.task_ref} ${d.task_title} · ${d.job_name ?? "未指定"} · ${d.final_result} · ${duration(d.duration_ms)}${d.gate_returns.length ? ` · 关卡：${d.gate_returns.join("；")}` : ""}${d.merge_returns.length ? ` · 合入退回：${d.merge_returns.join("；")}` : ""}${d.rebase_conflicts ? ` · 变基冲突 ${d.rebase_conflicts} 次（不归责）` : ""}${d.incidents.length ? ` · 事故：${d.incidents.join("、")}` : ""}`).join("\n") || "暂无"}`,
-        );
-        for (const w of data.profile.warnings) console.log(`警告：${w}`);
-      }
-      recordNext("看全部：atrium workers");
+      recordNext(`看档案：atrium workers ${result.ref}`);
     },
   },
 };

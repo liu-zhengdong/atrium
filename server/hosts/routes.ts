@@ -6,7 +6,6 @@ import type { TaskRunner } from "../tasks/runner.ts";
 import { TOOLS } from "../tasks/adapters/types.ts";
 import { authPolicy } from "../auth-policy.ts";
 import { resolveActor } from "../actor.ts";
-import { LIMITS, SLUG_RE } from "../skills/model.ts";
 import {
   joinCodeOf,
   joinCodeValid,
@@ -45,37 +44,6 @@ const load = z.object({
   busy: z.string().max(500).nullable(),
 });
 const id = z.number().int().min(1).max(1e12);
-/** 代理传回的技能副本（t232）：内容在生成提议时再按技能规则校验。 */
-const skillReport = z
-  .object({
-    edits: z
-      .array(
-        z.union([
-          z
-            .object({
-              id,
-              slug: z.string().regex(SLUG_RE).max(64),
-              rev: id,
-              files: z.record(
-                z.string().max(400),
-                z.string().max(LIMITS.bytes),
-              ),
-            })
-            .strict(),
-          z
-            .object({
-              id,
-              slug: z.string().regex(SLUG_RE).max(64),
-              rev: id,
-              problem: z.string().max(500),
-            })
-            .strict(),
-        ]),
-      )
-      .max(LIMITS.perTask * 4),
-    notes: z.string().max(LIMITS.proposalReason).optional(),
-  })
-  .strict();
 const run = z.object({
   task: id,
   run: id,
@@ -252,7 +220,8 @@ export function registerHostRoutes(
           .string()
           .max(512 * 1024)
           .optional(),
-        skills: skillReport.optional(),
+        // 旧版代理收尾还会带改过的技能副本（修订提议已删）：照收不用。
+        skills: z.unknown().optional(),
       })
       .strict()
       .parse(request.body ?? {});

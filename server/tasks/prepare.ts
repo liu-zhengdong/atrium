@@ -39,7 +39,7 @@ export type PromptParts = {
   secrets?: string;
   /** 干活的专员（一句分工）或体验巡检的说明。 */
   role?: string;
-  /** 归属部分链上的要点（map/context.ts taskContext）。 */
+  /** 归属部门链上的要点（map/context.ts taskContext）。 */
   points?: string;
   /** 本次挂载的组织技能（server/skills/mount.ts 生成）。 */
   skills?: string;

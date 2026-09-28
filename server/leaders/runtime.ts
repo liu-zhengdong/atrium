@@ -60,7 +60,7 @@ export type LeaderWakerOptions = {
   pollMs?: number;
   run?: LeaderRun;
   now?: () => number;
-  /** 一键停机（server/pause.ts）：不给 leader 为全局暂停；给了看这位 leader 负责的部分。 */
+  /** 一键停机（server/pause.ts）：不给 leader 为全局暂停；给了看这位 leader 负责的部门。 */
   paused?: (leader?: string) => boolean;
 };
 

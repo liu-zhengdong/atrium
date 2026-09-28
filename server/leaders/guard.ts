@@ -79,12 +79,12 @@ function nodeCheck(
   return { what: `${what} ${ref(node.id)}`, node: node.id };
 }
 
-/** 建任务、改任务时 body 里的归属部分、投任务的节点与父任务。 */
+/** 建任务、改任务时 body 里的归属部门、投任务的节点与父任务。 */
 function bodyChecks(db: DatabaseSync, body: Body): ScopeCheck[] {
   const checks: ScopeCheck[] = [];
   if (given(body.part)) {
     const id = partForTask(db, body.part);
-    checks.push({ what: `归属部分 ${ref(id!)}`, node: id });
+    checks.push({ what: `归属部门 ${ref(id!)}`, node: id });
   }
   if (given(body.from))
     checks.push(nodeCheck(db, String(body.from), "投任务的节点"));
@@ -142,7 +142,7 @@ export function registerLeaderGuard(
             verdict = denied(leader, "建任务：你还没有负责的节点");
             break;
           }
-          // 不写归属部分时记在自己负责的节点上，事件也就回到自己这里。
+          // 不写归属部门时记在自己负责的节点上，事件也就回到自己这里。
           body.part = ref(home);
         }
         verdict = scopeVerdict(leader, scope, bodyChecks(db, body));
@@ -234,7 +234,7 @@ export function registerLeaderGuard(
           ]);
         }
         break;
-      // 资料：挂到负责的部分里；归档、恢复、留下看资料挂在哪。取资料不限。
+      // 资料：挂到负责的部门里；归档、恢复、留下看资料挂在哪。取资料不限。
       case "material-add":
         if (typeof body.node === "string" && body.node.trim())
           verdict = scopeVerdict(leader, scope, [

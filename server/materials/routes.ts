@@ -19,7 +19,7 @@ import {
 } from "./store.ts";
 
 /**
- * 资料接口（atrium material …）。加、归档、恢复、留下：用户令牌，或 leader 在自己负责的部分里
+ * 资料接口（atrium material …）。加、归档、恢复、留下：用户令牌，或 leader 在自己负责的部门里
  * （leaders/scope.ts 登记、guard.ts 按节点判）；取资料谁都能取，读者记成 aN、任务 tN 或秘书；
  * 真删只认用户令牌（leader 规则表不登记，默认拒绝）。
  */

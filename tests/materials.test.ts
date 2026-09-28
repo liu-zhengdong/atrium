@@ -672,7 +672,7 @@ test("取代、归档、恢复、留下：归档的不进清单，可恢复；�
   assert.equal((await x.call("GET", "/api/materials/m4")).status, 404);
 });
 
-test("leader 令牌：负责的部分里能加、归档、留下，别处的不行；哪儿的资料都能取；不能真删", async (t) => {
+test("leader 令牌：负责的部门里能加、归档、留下，别处的不行；哪儿的资料都能取；不能真删", async (t) => {
   const x = await open(t);
   await x.ok("POST", "/api/materials", design());
   await x.ok("POST", "/api/materials", {
@@ -711,7 +711,7 @@ test("leader 令牌：负责的部分里能加、归档、留下，别处的不�
         token,
       );
       assert.equal(outside.status, 403);
-      assert.match(outside.body.error, /不在你负责的部分里/);
+      assert.match(outside.body.error, /不在你负责的部门里/);
       assert.equal(
         (
           await x.call(

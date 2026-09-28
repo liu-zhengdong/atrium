@@ -135,7 +135,7 @@ test("人话字段：合法输入照收，破坏输入按字段名中文拒绝",
     assert.throws(() => validateFields(fields), message);
 });
 
-test("org show 的人话视图：组成部分取子节点的人话名与类比", () => {
+test("org show 的人话视图：下属部门取子节点的人话名与类比", () => {
   const db = setup();
   charter(db, "o2", {
     what: "成为 AI 组织的运行底座",
@@ -206,7 +206,7 @@ test("formatOverview：按是什么 → 能做什么 → 流程 → 组成 → �
     "是什么：",
     "能用它做什么：",
     "一件事怎么走完：",
-    "由哪几部分组成：",
+    "下设哪些部门：",
     "现在做到哪：",
     "接下来：",
     "阶段（达成 1 · 进行中 1）：",
@@ -217,7 +217,7 @@ test("formatOverview：按是什么 → 能做什么 → 流程 → 组成 → �
   );
   assert.ok(lines.includes("  2. 派活"));
   assert.ok(lines.includes("  o8 账本（ledger）——流水账 · 在做 1 · 待办 2"));
-  assert.ok(!lines.some((l) => l.includes("o9")), "归档的部分默认不列");
+  assert.ok(!lines.some((l) => l.includes("o9")), "归档的部门默认不列");
   assert.ok(lines.includes("  g5 [达成] 节点可校验"));
   assert.ok(!lines.some((l) => l.includes("验收 1")), "验收条目折叠在细节里");
   const detail = formatOverview({ ref: "o3", name: "runtime" }, full, true);
@@ -231,7 +231,7 @@ test("formatOverview：按是什么 → 能做什么 → 流程 → 组成 → �
   );
   const blank = formatOverview({ ref: "o4", name: "cli" }, overview());
   assert.match(blank[0]!, /人话介绍还没写.*atrium map edit o4 --what/);
-  assert.equal(blank[1], "由哪几部分组成：没有下一层");
+  assert.equal(blank[1], "下设哪些部门：没有下一层");
   const partial = formatOverview(
     { ref: "o4", name: "cli" },
     overview({ what: "命令行" }),

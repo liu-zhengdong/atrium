@@ -14,7 +14,7 @@ import type { Headroom } from "./usage-budget.ts";
 import { signedPercent, staleLabel } from "./percent.ts";
 
 /**
- * 派活候选一览（task pick）：把候选执行者、账号额度、干活的专员与交付记录放在一张表里，
+ * 派活候选一览（task run --dry-run）：把候选执行者、账号额度、干活的专员与交付记录放在一张表里，
  * 给出推荐和理由；`task run` 自动挑人按同一份排序，写死执行者时据此提醒更富余的候选。
  * 纯函数：事实由 pick-runtime.ts 收集。
  */
@@ -439,5 +439,5 @@ export function writtenNotice(
     view.risk,
   );
   if (!better) return null;
-  return `提醒：${better.worker} 同样能接，${better.account} 富余 ${signedPercent(better.spare)}，比 ${written.worker} 的 ${account}（${signedPercent(mine!)}）多 ${better.gap} 个百分点；看候选：atrium task pick ${taskRef}`;
+  return `提醒：${better.worker} 同样能接，${better.account} 富余 ${signedPercent(better.spare)}，比 ${written.worker} 的 ${account}（${signedPercent(mine!)}）多 ${better.gap} 个百分点；看候选：atrium task run ${taskRef} --dry-run`;
 }

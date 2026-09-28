@@ -12,12 +12,9 @@ import {
   type NodeRow,
 } from "../org/model.ts";
 import { validateReason } from "../org/validate.ts";
-import { taskRef } from "../tasks/ledger-model.ts";
 import {
   LIMITS,
   filesDiff,
-  mergeFiles,
-  sameFiles,
   skillMeta,
   validateFiles,
   validateSkillSlug,
@@ -26,8 +23,7 @@ import {
 import { actsForUser } from "../../shared/user.ts";
 
 /**
- * 组织技能的读写（#264 第 3b 步）：技能是组织资产，带只追加的修订历史；绑定挂在节点上；
- * 执行者改了挂载副本时由收尾生成提议，审核通过才写成新修订。所有写入在一个 BEGIN IMMEDIATE 事务里完成。
+ * 组织技能的读写（#264 第 3b 步）：技能是组织资产，带只追加的修订历史；绑定挂在节点上。所有写入在一个 BEGIN IMMEDIATE 事务里完成。
  * 权限只看节点关系：你（u1）、技能 owner 节点或其祖先的 leader 能改；绑定看被绑节点。
  */
 
@@ -54,20 +50,6 @@ type RevisionRow = {
   source: string | null;
   snapshot: string;
 };
-export type ProposalRow = {
-  id: number;
-  skill_id: number;
-  task_id: number;
-  base_rev: number;
-  files: string;
-  reason: string;
-  status: "pending" | "accepted" | "rejected";
-  created_at: number;
-  decided_by: string | null;
-  decided_at: number | null;
-  decision_reason: string | null;
-  result_rev: number | null;
-};
 type Snapshot = {
   slug: string;
   name: string;
@@ -77,7 +59,6 @@ type Snapshot = {
   files: Files;
 };
 
-export const proposalRef = (id: number) => `p${id}`;
 const rev = (value: number) => `r${value}`;
 
 function parseRev(value: unknown, field: string): number {
@@ -99,25 +80,6 @@ export function skillBySlug(db: DatabaseSync, slug: string): SkillRow {
       "not_found",
       undefined,
       "atrium skill ls",
-    );
-  return row;
-}
-
-function proposalById(db: DatabaseSync, value: string): ProposalRow {
-  const match = /^p?([1-9][0-9]*)$/.exec(String(value ?? "").trim());
-  if (!match) throw new Problem(400, "提议应写成 p1 这样的短号", "usage");
-  const row = one<ProposalRow>(
-    db,
-    "SELECT * FROM org_skill_proposals WHERE id=?",
-    Number(match[1]),
-  );
-  if (!row)
-    throw new Problem(
-      404,
-      `提议 ${value} 不存在`,
-      "not_found",
-      undefined,
-      "atrium skill proposals",
     );
   return row;
 }
@@ -299,8 +261,6 @@ export type EditSkillInput = {
   rev?: unknown;
   reason: unknown;
   source?: unknown;
-  /** 手工合并某个提议后写回：该提议标为已采纳。 */
-  proposal?: unknown;
 };
 
 type Change = {
@@ -380,7 +340,7 @@ export function editSkill(
           `技能已是 ${rev(row.rev)}，你基于 ${rev(base)} 修改；先看变化`,
           "conflict",
           undefined,
-          `atrium skill history ${row.slug}`,
+          `atrium skill show ${row.slug} --history`,
         );
     }
     const change: Change = {};
@@ -406,42 +366,8 @@ export function editSkill(
       change.owner = owner.id;
     }
     if (input.archive !== undefined) change.archived = input.archive === true;
-    let proposal: ProposalRow | undefined;
-    if (
-      input.proposal !== undefined &&
-      input.proposal !== null &&
-      input.proposal !== ""
-    ) {
-      proposal = proposalById(db, String(input.proposal));
-      if (proposal.skill_id !== row.id)
-        throw new Problem(
-          400,
-          `proposal: ${proposalRef(proposal.id)} 不是 ${row.slug} 的提议`,
-          "usage",
-        );
-      if (proposal.status !== "pending")
-        throw new Problem(
-          409,
-          `proposal: ${proposalRef(proposal.id)} 已${proposal.status === "accepted" ? "采纳" : "驳回"}`,
-          "conflict",
-        );
-    }
-    const next = commit(
-      db,
-      row,
-      change,
-      proposal ? taskRef(proposal.task_id) : actor,
-      reason,
-      source(input.source) ?? (proposal ? proposalRef(proposal.id) : null),
-      proposal ? actor : null,
-    );
-    if (proposal) decide(db, proposal, "accepted", actor, reason, next.rev);
-    return {
-      slug: row.slug,
-      before: rev(row.rev),
-      rev: rev(next.rev),
-      ...(proposal ? { proposal: proposalRef(proposal.id) } : {}),
-    };
+    const next = commit(db, row, change, actor, reason, source(input.source));
+    return { slug: row.slug, before: rev(row.rev), rev: rev(next.rev) };
   });
 }
 
@@ -458,7 +384,7 @@ function revisionAt(db: DatabaseSync, skill: SkillRow, at: number): Snapshot {
       `技能 ${skill.slug} 没有修订 ${rev(at)}`,
       "not_found",
       undefined,
-      `atrium skill history ${skill.slug}`,
+      `atrium skill show ${skill.slug} --history`,
     );
   return JSON.parse(found.snapshot) as Snapshot;
 }
@@ -567,12 +493,6 @@ function bindingsOf(db: DatabaseSync, list: NodeRow[], skillId: number) {
 
 export function listSkills(db: DatabaseSync, includeArchived = false) {
   const list = nodes(db);
-  const pending = new Map(
-    all<{ skill_id: number; n: number }>(
-      db,
-      "SELECT skill_id, count(*) n FROM org_skill_proposals WHERE status='pending' GROUP BY skill_id",
-    ).map((r) => [r.skill_id, r.n]),
-  );
   return all<SkillRow>(
     db,
     `SELECT * FROM org_skills ${includeArchived ? "" : "WHERE archived_at IS NULL"} ORDER BY slug LIMIT ?`,
@@ -585,7 +505,6 @@ export function listSkills(db: DatabaseSync, includeArchived = false) {
     owner: ownerLabel(list, row.owner_node_id),
     bound: bindingsOf(db, list, row.id),
     files: Object.keys(filesOf(row)).length,
-    pending: pending.get(row.id) ?? 0,
     archived: row.archived_at !== null,
   }));
 }
@@ -609,15 +528,6 @@ export function showSkill(db: DatabaseSync, slug: string) {
         Buffer.byteLength(text),
       ]),
     ),
-    pending: all<ProposalRow>(
-      db,
-      "SELECT * FROM org_skill_proposals WHERE skill_id=? AND status='pending' ORDER BY id LIMIT 20",
-      row.id,
-    ).map((p) => ({
-      ref: proposalRef(p.id),
-      task: taskRef(p.task_id),
-      base: rev(p.base_rev),
-    })),
   };
 }
 
@@ -676,244 +586,4 @@ function revisionView(r: RevisionRow) {
     reason: r.reason,
     source: r.source,
   };
-}
-
-// ---- 修订提议 ----
-
-export function listProposals(
-  db: DatabaseSync,
-  query: { status?: string; limit?: number } = {},
-) {
-  const status = query.status ?? "pending";
-  if (!["pending", "accepted", "rejected", "all"].includes(status))
-    throw new Problem(
-      400,
-      "status 只能是 pending、accepted、rejected 或 all",
-      "usage",
-    );
-  const limit = Math.min(Math.max(Math.trunc(query.limit ?? 50) || 50, 1), 200);
-  return all<ProposalRow & { slug: string; current: number }>(
-    db,
-    `SELECT p.*, s.slug slug, s.rev current FROM org_skill_proposals p JOIN org_skills s ON s.id=p.skill_id
-     ${status === "all" ? "" : "WHERE p.status=?"} ORDER BY p.id DESC LIMIT ?`,
-    ...(status === "all" ? [limit] : [status, limit]),
-  ).map((p) => ({
-    ref: proposalRef(p.id),
-    skill: p.slug,
-    task: taskRef(p.task_id),
-    base: rev(p.base_rev),
-    current: rev(p.current),
-    status: p.status,
-    reason: p.reason,
-    created_at: p.created_at,
-    result: p.result_rev === null ? null : rev(p.result_rev),
-  }));
-}
-
-export function showProposal(db: DatabaseSync, value: string) {
-  const p = proposalById(db, value);
-  const skill = one<SkillRow>(
-    db,
-    "SELECT * FROM org_skills WHERE id=?",
-    p.skill_id,
-  )!;
-  const base = revisionAt(db, skill, p.base_rev);
-  return {
-    ref: proposalRef(p.id),
-    skill: skill.slug,
-    task: taskRef(p.task_id),
-    base: rev(p.base_rev),
-    current: rev(skill.rev),
-    status: p.status,
-    reason: p.reason,
-    decided_by: p.decided_by,
-    decision_reason: p.decision_reason,
-    result: p.result_rev === null ? null : rev(p.result_rev),
-    files: filesOf(p),
-    diff: filesDiff(base.files, filesOf(p)),
-  };
-}
-
-function decide(
-  db: DatabaseSync,
-  p: ProposalRow,
-  status: "accepted" | "rejected",
-  actor: string,
-  reason: string,
-  result: number | null,
-) {
-  db.prepare(
-    "UPDATE org_skill_proposals SET status=?,decided_by=?,decided_at=?,decision_reason=?,result_rev=? WHERE id=? AND status='pending'",
-  ).run(status, actor, Date.now(), reason, result, p.id);
-}
-
-/**
- * 采纳：基于的版本还是当前版就直接写；已被别的修订更新时按文件三方合并，冲突就拒绝并留给审核人手工合并
- * （改好后 `skill edit <slug> <目录> --proposal pN` 写回并标为采纳）。新修订的作者记任务号，审核人另记。
- */
-export function acceptProposal(
-  db: DatabaseSync,
-  value: string,
-  reasonText: unknown,
-  actor: string,
-) {
-  return transaction(db, () => {
-    const p = proposalById(db, value);
-    if (p.status !== "pending")
-      throw new Problem(
-        409,
-        `${proposalRef(p.id)} 已${p.status === "accepted" ? "采纳" : "驳回"}`,
-        "conflict",
-      );
-    const row = one<SkillRow>(
-      db,
-      "SELECT * FROM org_skills WHERE id=?",
-      p.skill_id,
-    )!;
-    authorize(nodes(db), row.owner_node_id, actor, "审核技能提议");
-    const reason =
-      reasonText === undefined || reasonText === null || reasonText === ""
-        ? `采纳 ${proposalRef(p.id)}：${p.reason}`.slice(0, 500)
-        : validateReason(reasonText);
-    const theirs = filesOf(p);
-    let files = theirs;
-    let merged = false;
-    if (p.base_rev !== row.rev) {
-      const base = revisionAt(db, row, p.base_rev).files;
-      const result = mergeFiles(base, filesOf(row), theirs);
-      if (result.conflicts.length)
-        throw new Problem(
-          409,
-          `${proposalRef(p.id)} 基于 ${rev(p.base_rev)}，技能已是 ${rev(row.rev)}，合并有冲突：${result.conflicts.join("、")}；手工合并后写回`,
-          "conflict",
-          undefined,
-          `atrium skill proposal ${proposalRef(p.id)}`,
-        );
-      files = result.files;
-      merged = true;
-    }
-    const meta = skillMeta(row.slug, validateFiles(files));
-    if (sameFiles(meta.files, filesOf(row)))
-      throw new Problem(
-        409,
-        `${proposalRef(p.id)} 的改动已在当前版里，直接驳回即可`,
-        "conflict",
-        undefined,
-        `atrium skill reject ${proposalRef(p.id)} --reason 已包含`,
-      );
-    const next = commit(
-      db,
-      row,
-      { files: meta.files, description: meta.description },
-      taskRef(p.task_id),
-      reason,
-      proposalRef(p.id),
-      actor,
-    );
-    decide(db, p, "accepted", actor, reason, next.rev);
-    return {
-      ref: proposalRef(p.id),
-      slug: row.slug,
-      before: rev(row.rev),
-      rev: rev(next.rev),
-      merged,
-    };
-  });
-}
-
-export function rejectProposal(
-  db: DatabaseSync,
-  value: string,
-  reasonText: unknown,
-  actor: string,
-) {
-  return transaction(db, () => {
-    const p = proposalById(db, value);
-    if (p.status !== "pending")
-      throw new Problem(
-        409,
-        `${proposalRef(p.id)} 已${p.status === "accepted" ? "采纳" : "驳回"}`,
-        "conflict",
-      );
-    const row = one<SkillRow>(
-      db,
-      "SELECT * FROM org_skills WHERE id=?",
-      p.skill_id,
-    )!;
-    authorize(nodes(db), row.owner_node_id, actor, "审核技能提议");
-    const reason = validateReason(reasonText);
-    decide(db, p, "rejected", actor, reason, null);
-    return { ref: proposalRef(p.id), slug: row.slug, status: "rejected" };
-  });
-}
-
-/** 收尾时记一条提议；同一任务对同一技能已有相同内容的提议就不重复记。 */
-export function recordProposal(
-  db: DatabaseSync,
-  input: {
-    skillId: number;
-    taskId: number;
-    baseRev: number;
-    files: Files;
-    reason: string;
-  },
-): { id: number; created: boolean } {
-  return transaction(db, () => {
-    const text = JSON.stringify(input.files);
-    const existing = one<{ id: number }>(
-      db,
-      "SELECT id FROM org_skill_proposals WHERE task_id=? AND skill_id=? AND files=? LIMIT 1",
-      input.taskId,
-      input.skillId,
-      text,
-    );
-    if (existing) return { id: existing.id, created: false };
-    const id = Number(
-      db
-        .prepare(
-          "INSERT INTO org_skill_proposals(skill_id,task_id,base_rev,files,reason,created_at) VALUES(?,?,?,?,?,?)",
-        )
-        .run(
-          input.skillId,
-          input.taskId,
-          input.baseRev,
-          text,
-          Array.from(input.reason).slice(0, LIMITS.proposalReason).join(""),
-          Date.now(),
-        ).lastInsertRowid,
-    );
-    return { id, created: true };
-  });
-}
-
-/** 某个修订的完整文件（挂载时记下的基准版本）。 */
-export function filesAt(
-  db: DatabaseSync,
-  skillId: number,
-  at: number,
-): Files | undefined {
-  const found = one<{ snapshot: string }>(
-    db,
-    "SELECT snapshot FROM org_skill_revisions WHERE skill_id=? AND rev=?",
-    skillId,
-    at,
-  );
-  return found ? (JSON.parse(found.snapshot) as Snapshot).files : undefined;
-}
-
-export type Owner = { node: string | null; leader: string | null };
-
-/** 技能 owner 节点及其 leader（没有 leader 就往上找），提议事件带上它。 */
-export function ownerOf(db: DatabaseSync, skillId: number): Owner {
-  const row = one<SkillRow>(db, "SELECT * FROM org_skills WHERE id=?", skillId);
-  if (!row || row.owner_node_id === null) return { node: null, leader: "u1" };
-  const list = nodes(db);
-  let current = list.find((n) => n.id === row.owner_node_id);
-  const node = ownerLabel(list, row.owner_node_id);
-  while (current) {
-    if (current.leader) return { node, leader: current.leader };
-    const parent: number | null = current.parent_id;
-    current = list.find((n) => n.id === parent);
-  }
-  return { node, leader: "u1" };
 }

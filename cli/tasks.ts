@@ -30,7 +30,7 @@ import {
 } from "./worker-guard.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command, Input, Values } from "./main.ts";
 import { signedPercent, staleLabel } from "../server/tasks/percent.ts";
 import type {
   PickAccount,
@@ -264,7 +264,7 @@ function partInput(values: Values): { part?: string } {
 const add: Command = {
   args: "标题 [--parent tN] [--part 节点] [--secret 名称[,名称]] [--by 专员] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--priority 紧急|修复|普通|闲时] [--avoid-host hN[,hM]] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡）；--part 写归属部分（负责与汇报只在这一处；派活附这一部分链上的要点），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--priority 紧急|修复|普通|闲时：派活与合入都按它排先后，紧急的另跳过本机负载限制（缺省普通）；--avoid-host 派活避开这些主机",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡）；--part 写归属部门（负责与汇报只在这一处；派活附这个部门链上的要点），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部门往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--priority 紧急|修复|普通|闲时：派活与合入都按它排先后，紧急的另跳过本机负载限制（缺省普通）；--avoid-host 派活避开这些主机",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
@@ -355,7 +355,7 @@ const add: Command = {
             values.auto === true
           ? "看排期：atrium task plan"
           : task.parent_ref
-            ? `看候选并派活：atrium task pick ${task.ref}`
+            ? `看候选并派活：atrium task run ${task.ref} --dry-run`
             : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
     );
   },
@@ -471,7 +471,7 @@ const show: Command = {
         ],
         ["记在", task.node_ref],
         ["投任务的节点", task.origin_ref],
-        ["归属部分", task.part_ref],
+        ["归属部门", task.part_ref],
         ["凭据", task.secrets?.length ? task.secrets.join("、") : null],
         ["仓库", task.repo],
         [
@@ -635,7 +635,7 @@ const tree: Command = {
 
 const set: Command = {
   args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--from 节点|''] [--part 节点|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--priority 紧急|修复|普通|闲时] [--avoid-host hN[,hM]|'']",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活的专员、归属部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、优先级（--priority，排队中的立刻按新先后重排，在跑的不打断）与避开的主机（--avoid-host）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活的专员、归属部门、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、优先级（--priority，排队中的立刻按新先后重排，在跑的不打断）与避开的主机（--avoid-host）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
   options: {
     status: { type: "string" },
     "with-children": { type: "boolean" },
@@ -867,32 +867,24 @@ const plan: Command = {
   },
 };
 
-const done: Command = {
-  args: "tN",
-  about: "人工完成任务；等同 task set tN --status done",
-  positionals: [1, 1],
-  async run({ positionals: [reference], json }) {
-    const id = ref(reference, "任务");
-    const task = await (
-      await client()
-    ).patch<Task>(`/tasks/${id}`, { status: "done" });
-    if (json) printJson(task);
-    else console.log(`${task.ref} 已完成 · ${task.title}`);
-    recordNext("看排期：atrium task plan");
-  },
-};
-
 const run: Command = {
-  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN]",
+  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--dry-run]",
   about:
-    "派给执行者：进派活队列，按优先级、入队先后拉起（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；已在排队的带 --worker 或 --host 改派执行者或主机，排队位置不变；要插到前面用 atrium task set tN --priority 紧急",
+    "派给执行者：进派活队列，按优先级、入队先后拉起（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；已在排队的带 --worker 或 --host 改派执行者或主机，排队位置不变；要插到前面用 atrium task set tN --priority 紧急；--dry-run 只看候选（能不能接、账号额度、是否正忙、交付记录、推荐与理由），不派",
   options: {
     worker: { type: "string" },
     risk: { type: "string" },
     host: { type: "string" },
+    "dry-run": { type: "boolean" },
   },
   positionals: [1, 1],
-  async run({ positionals: [reference], values, json }) {
+  async run(input) {
+    if (input.values["dry-run"]) return pickRun(input);
+    const {
+      positionals: [reference],
+      values,
+      json,
+    } = input;
     const id = ref(reference, "任务");
     const body: Record<string, string | boolean> = {};
     const worker = str(values, "worker");
@@ -1025,7 +1017,7 @@ type HostPick = {
   chosen: boolean;
 };
 
-/** task pick 的主机一栏（#358）：推荐的执行者在各台能不能跑、自动派会去哪台。 */
+/** task run --dry-run 的主机一栏（#358）：推荐的执行者在各台能不能跑、自动派会去哪台。 */
 function hostPickLines(hosts: HostPick[] | undefined, worker: string | null) {
   if (!hosts?.length || !worker) return [];
   return [
@@ -1080,36 +1072,30 @@ export function formatPick(
   ].join("\n");
 }
 
-const pick: Command = {
-  args: "tN [--risk low|medium|high]",
-  about:
-    "看派活候选（只读，不派）：候选执行者能不能接、账号额度、是否正忙、在干活的专员下的交付记录，给出推荐与理由；--risk 缺省 low",
-  options: { risk: { type: "string" } },
-  positionals: [1, 1],
-  async run({ positionals: [reference], values, json }) {
-    const id = ref(reference, "任务");
-    const risk = str(values, "risk");
-    if (risk !== undefined && !["low", "medium", "high"].includes(risk))
-      throw new Problem(
-        400,
-        `--risk 只能是 low、medium、high（收到：${risk}）`,
-        "usage",
-      );
-    const view = await (
-      await client()
-    ).get<PickView & { task: string }>(
-      `/tasks/${id}/pick${risk ? `?${new URLSearchParams({ risk })}` : ""}`,
+/** task run --dry-run：看派活候选（只读，不派）。 */
+async function pickRun({ positionals: [reference], values, json }: Input) {
+  const id = ref(reference, "任务");
+  const risk = str(values, "risk");
+  if (risk !== undefined && !["low", "medium", "high"].includes(risk))
+    throw new Problem(
+      400,
+      `--risk 只能是 low、medium、high（收到：${risk}）`,
+      "usage",
     );
-    if (json) printJson(view);
-    else console.log(formatPick(view));
-    const riskFlag = risk && risk !== "low" ? ` --risk ${risk}` : "";
-    recordNext(
-      view.recommended
-        ? `派活：atrium task run ${id} --worker ${view.recommended}${riskFlag}`
-        : "看额度：atrium quota",
-    );
-  },
-};
+  const view = await (
+    await client()
+  ).get<PickView & { task: string }>(
+    `/tasks/${id}/pick${risk ? `?${new URLSearchParams({ risk })}` : ""}`,
+  );
+  if (json) printJson(view);
+  else console.log(formatPick(view));
+  const riskFlag = risk && risk !== "low" ? ` --risk ${risk}` : "";
+  recordNext(
+    view.recommended
+      ? `派活：atrium task run ${id} --worker ${view.recommended}${riskFlag}`
+      : "看额度：atrium quota",
+  );
+}
 
 const stop: Command = {
   args: "tN [--as 订阅者]",
@@ -1304,8 +1290,6 @@ export const taskCommands: Record<string, Command> = {
   "task set": set,
   "task note": note,
   "task tell": tell,
-  "task done": done,
-  "task pick": pick,
   "task run": run,
   "task stop": stop,
   "task merge": merge,

@@ -132,7 +132,7 @@ test("推什么：只推等你拍板、上交到秘书的卡住／越界／里�
     true,
     "长标题截短",
   );
-  // 不推：投给 leader 的、需要别的部分配合、选项单知会、过程事件、格式不对的。
+  // 不推：投给 leader 的、需要别的部门配合、选项单知会、过程事件、格式不对的。
   for (const skipped of [
     event({ subscriber: "a1", detail: { kind: "stuck", task: "t171" } }),
     event({
@@ -350,7 +350,7 @@ test("权限：leader 令牌不能改推送设置，状态读不到 token", () =
       last_error: null,
       bind: null,
     }),
-    /@BotFather.*atrium notify token/,
+    /@BotFather.*atrium notify --token/,
   );
 });
 
@@ -768,7 +768,7 @@ test("绑定：token 从请求体存进 0600 凭据文件，状态与回执都�
   assert.doesNotMatch(readFileSync(file, "utf8"), /AAH-fake/);
   const test2 = await x.call("POST", "/api/notify/telegram/test");
   assert.equal(test2.status, 409);
-  assert.equal(test2.body.nextCommand, "pbpaste | atrium notify token");
+  assert.equal(test2.body.nextCommand, "pbpaste | atrium notify --token");
 });
 
 test("推送：上交攒成一条、选项单单发带按钮的卡片，过程事件不推，只带标题与短号", async (t) => {
@@ -798,7 +798,7 @@ test("推送：上交攒成一条、选项单单发带按钮的卡片，过程�
   });
   await x.ok("POST", "/api/leaders/a1/escalate", {
     kind: "cross",
-    note: "需要别的部分配合，不推",
+    note: "需要别的部门配合，不推",
   });
   const option = (n: number) => ({
     title: `选项${n}`,

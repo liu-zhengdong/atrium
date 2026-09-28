@@ -95,6 +95,45 @@ const out = (json: boolean, value: unknown, text: string, next: string) => {
   else console.log(text);
   recordNext(`动作：${next}`);
 };
+/** org show --history：节点的修订历史（名称、路径名、leader、上级、仓库、归档）与字段差异。 */
+async function history(id: string, values: Values, json: boolean) {
+  const query = new URLSearchParams();
+  for (const key of ["as", "rev", "before", "after", "limit"])
+    if (str(values, key)) query.set(key, str(values, key)!);
+  const result = await (
+    await client()
+  ).get<{
+    items?: {
+      rev: number;
+      target: string;
+      author: string;
+      reason: string;
+      at: number;
+    }[];
+    revision?: unknown;
+    changes?: Record<
+      string,
+      { before: unknown; after: unknown; diff?: string }
+    >;
+    has_more?: boolean;
+  }>(`/org/nodes/${path(id!)}/history?${query}`);
+  if (result.revision) {
+    out(
+      json,
+      result,
+      `${id} 修订详情\n${formatOrgChanges(result.changes ?? {})}`,
+      `atrium org show ${id} --history`,
+    );
+    return;
+  }
+  out(
+    json,
+    result,
+    `${id} 的修订（新→旧）\n${result.items?.map((r) => `r${r.rev} ${new Date(r.at).toLocaleString("zh-CN")} ${person(r.author)} —— ${r.reason}`).join("\n") ?? ""}`,
+    `atrium org show ${id}`,
+  );
+}
+
 export const orgCommands: Record<string, Command> = {
   "org tree": {
     args: "",
@@ -144,12 +183,22 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org show": {
-    args: "节点 [--detail]",
+    args: "节点 [--detail] [--history [--rev rN] [--before rN] [--after rN] [--limit N]]",
     about:
-      "看一部分：先讲人话（是什么、能做什么、怎么走完、由哪几部分组成、要点、现状与阶段）；--detail 另列仓库、上级的要点与手上的任务；根节点另给两项配置（给你留的额度、花费上限）",
-    options: { ...options, detail: { type: "boolean" } },
+      "看一个部门：先讲人话（是什么、能做什么、怎么走完、下设哪些部门、要点、现状与阶段）；--detail 另列仓库、上级的要点与手上的任务；根节点另给两项配置（给你留的额度、花费上限）；--history 看修订历史（名称、路径名、leader、上级、仓库、归档），--rev 看一版的字段差异",
+    options: {
+      ...options,
+      detail: { type: "boolean" },
+      history: { type: "boolean" },
+      rev: { type: "string" },
+      before: { type: "string" },
+      after: { type: "string" },
+      limit: { type: "string" },
+    },
     positionals: [1, 1],
     async run({ positionals: [id], values, json }) {
+      if (values.history === true || str(values, "rev"))
+        return history(id!, values, json);
       const node = await (
         await client()
       ).get<{
@@ -220,13 +269,16 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org add": {
-    args: "[父节点] slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--leader u1|aN]",
+    args: "[父节点] slug [--name 名称] [--kind 类型] [--what 一句话] [--alias 人话名] [--analogy 类比] [--reason 原因] [--repo 路径] [--leader u1|aN]",
     about:
-      "添加组织节点；只给 slug（不给父节点）建根：atrium org add org --kind org --name 组织 --reason 建树",
+      "在父节点下加一个部门（不写 --kind 按上级推断，可同时写一句是什么、人话名与类比）；slug 是路径名（小写英数、连字符或中文）；只给 slug（不给父节点）建根：atrium org add org --kind org --name 组织 --reason 建树",
     options: {
       ...options,
       kind: { type: "string" },
       name: { type: "string" },
+      what: { type: "string" },
+      alias: { type: "string" },
+      analogy: { type: "string" },
       repo: { type: "string", multiple: true },
       leader: { type: "string" },
       reason: { type: "string" },
@@ -241,6 +293,36 @@ export const orgCommands: Record<string, Command> = {
           : (Array.isArray(values.repo) ? values.repo : [values.repo]).map(
               (v) => resolve(String(v)),
             );
+      // 不写 --kind、不设仓库与 leader 的，按全景图加一块：类型由上级推断，可带人话字段。
+      if (
+        parent !== undefined &&
+        str(values, "kind") === undefined &&
+        !repos.length &&
+        str(values, "leader") === undefined
+      ) {
+        const result = await (
+          await client()
+        ).post<{ node: string; parent: string; name: string; kind: string }>(
+          `/map/nodes${as(values)}`,
+          {
+            parent,
+            name: str(values, "name") ?? slug,
+            slug,
+            ...Object.fromEntries(
+              (["analogy", "alias", "what", "reason"] as const)
+                .filter((k) => str(values, k) !== undefined)
+                .map((k) => [k, str(values, k)]),
+            ),
+          },
+        );
+        out(
+          json,
+          result,
+          `已在 ${result.parent} 下加了 ${result.node} ${result.name}（${result.kind}）`,
+          `atrium map edit ${result.node} --what 一句话 --uses 场景 --flow 步骤`,
+        );
+        return;
+      }
       const result = await (
         await client()
       ).post<{ id: number; name: string; kind: string }>(
@@ -310,7 +392,7 @@ export const orgCommands: Record<string, Command> = {
         json,
         result,
         `已更新 ${id} 节点 → ${result.rev}`,
-        `atrium org history ${id}`,
+        `atrium org show ${id} --history`,
       );
     },
   },
@@ -344,7 +426,7 @@ export const orgCommands: Record<string, Command> = {
   "org point-add": {
     args: "节点 要点 --why 为什么 --by 谁定的 [--check 检查] [--pos N] [--as aN]",
     about:
-      "给一部分加一条要点（规矩只写这里：用户的原则、口味、取舍与这一块必须守住的约束）：人话一句、为什么、谁定的（如 u1 09-27），可选守护它的检查（测试文件与用例名，或 $ 命令）；按树往下继承，跨几块的放共同上级；--pos 排在第几条（1 最重要，冲突时靠前的优先），不写排最后；不留修订记录",
+      "给一个部门加一条要点（规矩只写这里：用户的原则、口味、取舍与这一块必须守住的约束）：人话一句、为什么、谁定的（如 u1 09-27），可选守护它的检查（测试文件与用例名，或 $ 命令）；按树往下继承，跨几块的放共同上级；--pos 排在第几条（1 最重要，冲突时靠前的优先），不写排最后；不留修订记录",
     options: {
       ...options,
       why: { type: "string" },
@@ -378,11 +460,12 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org point-edit": {
-    args: "kN [--text 要点] [--why 为什么] [--by 谁定的] [--check 检查|''] [--pos N] [--as aN]",
+    args: "kN [--text 要点] [--why 为什么] [--by 谁定的] [--check 检查|''] [--pos N] [--rm] [--as aN]",
     about:
-      "改一条要点；--check '' 去掉检查；--pos 挪到本部分第几条（1 最重要，冲突时靠前的优先）",
+      "改一条要点；--check '' 去掉检查；--pos 挪到本部门第几条（1 最重要，冲突时靠前的优先）；--rm 删掉这条过时的要点（不留修订记录）",
     options: {
       ...options,
+      rm: { type: "boolean" },
       text: { type: "string" },
       why: { type: "string" },
       by: { type: "string" },
@@ -391,6 +474,18 @@ export const orgCommands: Record<string, Command> = {
     },
     positionals: [1, 1],
     async run({ positionals: [id], values, json }) {
+      if (values.rm === true) {
+        const result = await (
+          await client()
+        ).delete<Point>(`/org/points/${path(id!)}${as(values)}`);
+        out(
+          json,
+          result,
+          `已删 ${result.ref}（${result.node}）：${result.text}`,
+          `atrium org show ${result.node}`,
+        );
+        return;
+      }
       const body: Record<string, string> = {};
       for (const key of ["text", "why", "by", "check", "pos"])
         if (str(values, key) !== undefined) body[key] = str(values, key)!;
@@ -408,73 +503,6 @@ export const orgCommands: Record<string, Command> = {
         result,
         `已改 ${result.ref}（${result.node}）：${result.text}`,
         `atrium org show ${result.node}`,
-      );
-    },
-  },
-  "org point-rm": {
-    args: "kN [--as aN]",
-    about: "删掉一条过时的要点（不留修订记录）",
-    options,
-    positionals: [1, 1],
-    async run({ positionals: [id], values, json }) {
-      const result = await (
-        await client()
-      ).delete<Point>(`/org/points/${path(id!)}${as(values)}`);
-      out(
-        json,
-        result,
-        `已删 ${result.ref}（${result.node}）：${result.text}`,
-        `atrium org show ${result.node}`,
-      );
-    },
-  },
-  "org history": {
-    args: "节点 [--rev rN] [--before rN] [--after rN] [--limit N]",
-    about:
-      "查看节点的修订历史（名称、路径名、leader、上级、仓库、归档）与字段差异",
-    options: {
-      ...options,
-      rev: { type: "string" },
-      before: { type: "string" },
-      after: { type: "string" },
-      limit: { type: "string" },
-    },
-    positionals: [1, 1],
-    async run({ positionals: [id], values, json }) {
-      const query = new URLSearchParams();
-      for (const key of ["as", "rev", "before", "after", "limit"])
-        if (str(values, key)) query.set(key, str(values, key)!);
-      const result = await (
-        await client()
-      ).get<{
-        items?: {
-          rev: number;
-          target: string;
-          author: string;
-          reason: string;
-          at: number;
-        }[];
-        revision?: unknown;
-        changes?: Record<
-          string,
-          { before: unknown; after: unknown; diff?: string }
-        >;
-        has_more?: boolean;
-      }>(`/org/nodes/${path(id!)}/history?${query}`);
-      if (result.revision) {
-        out(
-          json,
-          result,
-          `${id} 修订详情\n${formatOrgChanges(result.changes ?? {})}`,
-          `atrium org history ${id}`,
-        );
-        return;
-      }
-      out(
-        json,
-        result,
-        `${id} 的修订（新→旧）\n${result.items?.map((r) => `r${r.rev} ${new Date(r.at).toLocaleString("zh-CN")} ${person(r.author)} —— ${r.reason}`).join("\n") ?? ""}`,
-        `atrium org show ${id}`,
       );
     },
   },

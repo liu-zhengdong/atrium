@@ -138,7 +138,7 @@ test("到点判定：没到、删除等着；上一轮没结束跳过；错过�
   assert.equal(dayLabel(D0 - HOUR, utc8), "09-27");
 });
 
-test("leader 给本节点及子节点排周期任务；别的部分只读，也不能冒名", async (t) => {
+test("leader 给本节点及子节点排周期任务；别的部门只读，也不能冒名", async (t) => {
   for (const route of ["/api/schedules", "/api/schedules/:id/run"])
     assert.equal(leaderRule("POST", route), "schedule", route);
   assert.equal(leaderRule("DELETE", "/api/schedules/:id"), "schedule");
@@ -233,7 +233,7 @@ test("leader 给本节点及子节点排周期任务；别的部分只读，也�
     every: "1d",
   });
   assert.equal(other.status, 403);
-  assert.match(other.body, /o4.*不在你负责的部分里/);
+  assert.match(other.body, /o4.*不在你负责的部门里/);
   assert.equal((await send("POST", "/api/schedules/s1/run")).status, 200);
   assert.equal((await send("POST", "/api/schedules/s2/run")).status, 403);
   assert.equal((await send("DELETE", "/api/schedules/s1")).status, 200);
@@ -378,7 +378,7 @@ test("隔离服务：周期巡检到点生成巡检任务，没结束跳过、�
     return row.status === "running";
   });
 
-  // s3 的节点没有场景了：到点建不出任务，记失败、挪到下一轮并投给该部分的 leader（这里没有，投秘书）。
+  // s3 的节点没有场景了：到点建不出任务，记失败、挪到下一轮并投给该部门的 leader（这里没有，投秘书）。
   await until(
     () =>
       count(
@@ -394,7 +394,7 @@ test("隔离服务：周期巡检到点生成巡检任务，没结束跳过、�
     ),
     1,
   );
-  // 暂停 s3 所在的部分：那一块不再生成，别的照常（一键停机，server/pause.ts）。
+  // 暂停 s3 所在的部门：那一块不再生成，别的照常（一键停机，server/pause.ts）。
   await call("POST", "/api/pause", { part: "o4" });
   // 上一轮还在跑：跳过本轮并记一笔。
   clock = start + 2 * DAY;

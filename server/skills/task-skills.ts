@@ -22,7 +22,7 @@ const hasSkills = (db: DatabaseSync) =>
     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_skills'",
   );
 
-/** 任务所在节点链（根 → 归属部分；旧任务看 node_id）；没关联节点返回空。 */
+/** 任务所在节点链（根 → 归属部门；旧任务看 node_id）；没关联节点返回空。 */
 export function taskChain(db: DatabaseSync, task: TaskLike): ChainNode[] {
   const id = task.part_id ?? task.node_id;
   if (id === null || !hasOrg(db)) return [];

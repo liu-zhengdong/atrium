@@ -1,7 +1,7 @@
 // Atrium 全景网页：只读，唯一能写的是拍板选项单（「选项」页签，POST /api/choices/cN/pick|pass）。
 // 数据来自与 `atrium map --json` 相同的接口，订阅 /api/map/stream 的失效通知，变了只重取并重画，不整页重载。
 // 一页一件东西：面包屑 → 小字类别、大标题、属性行与介绍 → 页签。三类页：
-// - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／选项／负责人／专员／技能／执行者／要点，执行者可按专员筛（#o1/workers/r1）；
+// - 块（组织节点）：#o2/tasks/all。组织根的页签是下属部门／选项／负责人／专员／技能／执行者／要点，执行者可按专员筛（#o1/workers/r1）；
 //   挂了资料的块多一个「资料」页签（只看，取与归档走命令行）；
 //   有选项单的块多一个「选项」页签（本块及下层的，等你拍板的在前）；组织根顶部有「等你拍板：N」入口；
 // - 专员：#r1/workers，页签是任务／谁做得好／技能；
@@ -702,7 +702,7 @@ function roleTable(list, empty) {
 const onChip = (o) =>
   o.kind === "role"
     ? chipLink(`专员：${o.name}`, "role", roleHref(o.ref))
-    : chipLink(`部分：${o.name}`, "soft", nodeHref(o.ref));
+    : chipLink(`部门：${o.name}`, "soft", nodeHref(o.ref));
 
 function skillTable(skills, empty) {
   return table(
@@ -889,11 +889,11 @@ function drawLeaders({ org }) {
         ${cell("", ICON.go, " go")}
       </a>`,
     ),
-    "还没有负责人。在终端用 atrium leader add 登记，再用 atrium org edit 部分 --leader aN 指派。",
+    "还没有负责人。在终端用 atrium leader add 登记，再用 atrium org edit 部门 --leader aN 指派。",
   );
 }
 
-// 秘书页与负责人页共用备忘与决定记录（秘书的 kind 是 secretary，没有负责的部分与事件）。
+// 秘书页与负责人页共用备忘与决定记录（秘书的 kind 是 secretary，没有负责的部门与事件）。
 const isSecretary = (l) => l.kind === "secretary";
 function drawMemo({ leader: l }) {
   const at = l.memo_updated_at ? `${day(l.memo_updated_at)} 更新 · ` : "";
@@ -982,7 +982,7 @@ function drawLeaderEvents({ leader: l }) {
         ${cell("结果", chip(label, tone))}
       </div>`;
     }),
-    "还没有事交给它。它负责的部分里任务有了结果（完成、失败、卡住、上线），会先交给它处理。",
+    "还没有事交给它。它负责的部门里任务有了结果（完成、失败、卡住、上线），会先交给它处理。",
   );
 }
 
@@ -1000,7 +1000,7 @@ function drawEscalations({ leader: l }) {
         ${cell("", e.seen ? `<span class="muted small">已看</span>` : chip("还没看", "amber"))}
       </div>`,
     ),
-    "还没上交过。只有已上线、要别的部分配合、越权、搞不定这四类事才交给上级。",
+    "还没上交过。只有已上线、要别的部门配合、越权、搞不定这四类事才交给上级。",
   );
 }
 
@@ -1008,7 +1008,7 @@ function drawEscalations({ leader: l }) {
 
 const TABS = {
   parts: {
-    label: "组成部分",
+    label: "下属部门",
     count: (d) => liveParts(d.node).length,
     draw: drawParts,
   },
@@ -1128,7 +1128,7 @@ const tabLabel = (d, id) =>
 
 // ---- 页头：小字类别、标题、属性行、介绍 ----
 
-const KIND = { org: "组织", project: "部分", module: "部分" };
+const KIND = { org: "组织", project: "部门", module: "部门" };
 const props = (rows) =>
   `<dl class="props">${rows
     .map(
@@ -1246,7 +1246,7 @@ function heading(d) {
         ["执行者", chip(workerLabel(l.worker), "soft")],
       ]),
       intro: [
-        "替你管上面这几块：这里的任务有了结果先交给它，它派活、盯进度、收结果；只有已上线、要别的部分配合、越权、搞不定这四类事才交给上级。",
+        "替你管上面这几块：这里的任务有了结果先交给它，它派活、盯进度、收结果；只有已上线、要别的部门配合、越权、搞不定这四类事才交给上级。",
       ],
     };
   }
@@ -1262,7 +1262,7 @@ function heading(d) {
     ...(n.lead ? [["负责人", leadProp(n.lead)]] : []),
   ];
   return {
-    kind: KIND[n.kind] ?? "部分",
+    kind: KIND[n.kind] ?? "部门",
     name: title(n),
     props: people.length ? props(people) : "",
     intro: (n.overview.what || "")
@@ -1332,7 +1332,7 @@ function drawLive() {
     live.textContent = "已断开，重连中";
   } else if (state.now) {
     const busy = state.now.leaders ?? [];
-    // 在跑数看当前部分（含子部分）；角色页与执行者页没有所属部分，退回全组织。
+    // 在跑数看当前部门（含下属部门）；角色页与执行者页没有所属部门，退回全组织。
     const text = liveText(state.route.page, state.data, state.now);
     live.dataset.state = text !== "都停着" || busy.length ? "on" : "idle";
     // 窄屏顶栏放不下名字，只说「负责人在处理」，不挤掉面包屑。

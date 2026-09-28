@@ -13,7 +13,7 @@ import {
 } from "./store.ts";
 
 /**
- * 凭据接口（atrium secret …）。设值、归档、恢复、留下：用户令牌，或 leader 在自己负责的部分里
+ * 凭据接口（atrium secret …）。设值、归档、恢复、留下：用户令牌，或 leader 在自己负责的部门里
  * （leaders/scope.ts 登记、guard.ts 按 body.node 判）；真删只认用户令牌。
  * 没有读值的接口：值只在派活那一刻由运行时读出注入执行者，回执、列表、报错都不带值。
  */

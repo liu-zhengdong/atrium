@@ -6,7 +6,7 @@ import { createTask, atomically } from "./ledger.ts";
 
 /**
  * 体验巡检（周期任务 kind=patrol）：按节点 uses 场景轮换，巡检进程连本机服务照场景用一遍；
- * 发现问题直接建修复任务（同一部分同标题没结束的修复任务会被拒，见 ledger-write.ts）。
+ * 发现问题直接建修复任务（同一部门同标题没结束的修复任务会被拒，见 ledger-write.ts）。
  * patrol_runs 只记哪件任务是巡检、这轮的场景。
  */
 export function ensurePatrolTables(db: DatabaseSync) {

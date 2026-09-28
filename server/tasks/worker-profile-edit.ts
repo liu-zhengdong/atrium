@@ -15,7 +15,7 @@ import {
 } from "./worker-profiles.ts";
 
 /**
- * `atrium workers ls / show / edit` 的服务端（#355）：列出库里的档案、看一份档案与修订、整份替换或按字段改。
+ * `atrium workers / workers edit` 的服务端（#355）：列出库里的档案、看一份档案与修订、整份替换或按字段改。
  * 存储在 worker-profiles.ts，解析在 profiles.ts；这里只做校验与视图。
  */
 
@@ -55,7 +55,7 @@ export function profileView(db: DatabaseSync, ref: string) {
       `档案 ${layer}/${name} 不存在`,
       "not_found",
       undefined,
-      "atrium workers ls",
+      "atrium workers --profiles",
     );
   const parsed = parseProfileSource(row.source);
   return {
@@ -119,7 +119,7 @@ export function editProfile(
       source = patchFront(source, key, undefined);
     }
   }
-  // 只拒这次新引入的问题；库里原有的（如已删掉的 ci 关卡）不挡改别的字段，`workers show` 照样提示。
+  // 只拒这次新引入的问题；库里原有的（如已删掉的 ci 关卡）不挡改别的字段，`atrium workers` 照样提示。
   const before = new Set(
     current ? parseProfileSource(current.source).warnings : [],
   );
@@ -142,7 +142,7 @@ export function editProfile(
         ? "整份替换"
         : `改字段 ${[...set.map(([k]) => k), ...unset].join("、")}`;
   const result = writeProfile(db, { layer, name, source, author, reason });
-  // 通用执行者（t271）：改完即登记，派活、task pick 马上认得这个名字。
+  // 通用执行者（t271）：改完即登记，派活、task run --dry-run 马上认得这个名字。
   if (layer === "harness") syncFromRules(name, parsed.rules);
   return { ref: `${layer}/${name}`, ...result };
 }

@@ -1,4 +1,3 @@
-import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { launched, type Active } from "./active.ts";
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
@@ -43,7 +42,6 @@ import { markDelivered, markEchoed } from "./tell-ledger.ts";
 import { followUpTells } from "./tell-runtime.ts";
 import { askConclusion } from "./conclusion-runtime.ts";
 import type { ChildProcess } from "node:child_process";
-import { collectSkillEdits } from "../skills/collect.ts";
 import { beginUsage, endUsage } from "./usage.ts";
 import { readPace, type PaceEntry } from "./prepare.ts";
 import { chooseWorker } from "./worker-choice.ts";
@@ -53,7 +51,6 @@ import { taskAvoidChain } from "../skills/task-skills.ts";
 import { BudgetProblem } from "./budget-problem.ts";
 import { withSecrets } from "../secrets/model.ts";
 import { markSecretsUsed, taskSecretValues } from "../secrets/store.ts";
-import { taskRoute } from "../leaders/subscriber.ts";
 import type { HostGate } from "./host-load.ts";
 import type { RemoteHosts } from "../hosts/remote.ts";
 import { nextRun } from "../hosts/model.ts";
@@ -722,7 +719,6 @@ export class Executors {
       }
       const outcome = await settle(active, exit, this.execFor(active));
       if (this.ctx.closed()) return;
-      this.collectSkills(active);
       if (getTask(this.ctx.db, id).status !== "running") return;
       const { verdict, facts, decision } = outcome;
       if (outcome.workerGuardRefused)
@@ -824,40 +820,6 @@ export class Executors {
       this.ctx.waits.changed(id);
       // 本机并发上限（#358）按所有工具算：谁结束都可能空出位置给别的工具的队首。
       if (!this.ctx.closed()) void this.drain();
-    }
-  }
-
-  /** 执行者改了挂载的技能副本：生成修订提议，通知任务负责人（事件里带技能 owner 与其 leader）。 */
-  private collectSkills(active: Active) {
-    try {
-      const { proposals, problems } = collectSkillEdits(
-        this.ctx.db,
-        active.id,
-        dirname(active.logFile),
-      );
-      if (problems.length)
-        noteTask(this.ctx.db, active.id, "skill_proposal_skipped", {
-          problems,
-        });
-      if (!proposals.length) return;
-      const task = getTask(this.ctx.db, active.id);
-      for (const p of proposals) {
-        noteTask(this.ctx.db, active.id, "skill_proposal", p);
-        this.ctx.inbox.publish({
-          subscriber: taskRoute(this.ctx.db, task).subscriber,
-          taskId: active.id,
-          source: "runner",
-          kind: "skill_proposal",
-          key: `${task.ref}:skill:${p.proposal}`,
-          detail: {
-            title: task.title,
-            ...p,
-            next: `atrium skill proposal ${p.proposal}`,
-          },
-        });
-      }
-    } catch (error) {
-      console.error(`任务 ${taskRef(active.id)} 回收技能改动失败：`, error);
     }
   }
 
@@ -984,7 +946,7 @@ export class Executors {
   /**
    * 唯一拉起任务的地方：整条队按「优先级、入队先后」（queue.ts pending）一件件按各主机此刻的空位挑主机（t229），
    * 钉了主机的（--host）只去那台、写了避开的不去；一件去不了（钉的那台满了、只能在本机跑而本机满了、
-   * 别台没装它的工具、独占工具正忙、额度标记没解除、所在部分暂停着）只跳过它，不挡后面的；
+   * 别台没装它的工具、独占工具正忙、额度标记没解除、所在部门暂停着）只跳过它，不挡后面的；
    * 哪台都没空位时不是紧急的整轮收手（紧急的排在最前，已经挑过），紧急的跳过本机负载限制。
    * 返回出队几个。几处（入队、退出收尾、巡检、额度解除、主机恢复）可能同时调用，出队以删到队列行为准。
    * owner：刚由 `task run` 入队、在等回执的那件；它拉起失败时不转受阻，照原样把错误抛回给派活的人。

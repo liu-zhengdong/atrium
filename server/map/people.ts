@@ -130,7 +130,7 @@ export function mapRoles(db: DatabaseSync) {
   return { roles: listJobRoles(db).map(roleRow) };
 }
 
-/** 专员页：专员本身、它名下的任务（与各部分任务表同一形状）、谁做得好、挂的技能。 */
+/** 专员页：专员本身、它名下的任务（与各部门任务表同一形状）、谁做得好、挂的技能。 */
 export async function mapRole(
   db: DatabaseSync,
   address: string,

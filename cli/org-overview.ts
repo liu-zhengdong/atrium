@@ -3,7 +3,7 @@ import { STAGE_LABEL } from "../server/org/overview.ts";
 import type { Point } from "../server/org/points.ts";
 
 /**
- * `org show` 的人话段（#322）：是什么 → 能用它做什么 → 一件事怎么走完 → 由哪几部分组成 → 要点 → 现在做到哪、接下来。
+ * `org show` 的人话段（#322）：是什么 → 能用它做什么 → 一件事怎么走完 → 下设哪些部门 → 要点 → 现在做到哪、接下来。
  * 没写的项标「未写」，一项都没写时只给一行怎么补。
  */
 
@@ -125,9 +125,9 @@ export function formatOverview(
 
 function partLines(overview: Overview, detail: boolean): string[] {
   const parts = overview.parts.filter((p) => detail || !p.archived);
-  if (!parts.length) return ["由哪几部分组成：没有下一层"];
+  if (!parts.length) return ["下设哪些部门：没有下一层"];
   return [
-    "由哪几部分组成：",
+    "下设哪些部门：",
     ...parts.map(
       (p) =>
         `  ${titleOf(p, p)}${counts(p.tasks)}${p.archived ? " · 已归档" : ""}`,

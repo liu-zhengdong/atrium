@@ -203,7 +203,7 @@ function claimsVerified(facts: Facts): GateResult {
       };
 }
 
-/** 按档案 checks 逐条判；不认识的关卡名（含已删掉的 ci）跳过，由 `workers show` 提示，不判不过。 */
+/** 按档案 checks 逐条判；不认识的关卡名（含已删掉的 ci）跳过，由 `atrium workers` 提示，不判不过。 */
 export function evaluateGates(
   checks: readonly string[],
   limits: Limits,

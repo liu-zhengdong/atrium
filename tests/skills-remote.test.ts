@@ -1,12 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,15 +8,8 @@ import { addNode } from "../server/org/write.ts";
 import { ensureSkillTables } from "../server/skills/schema.ts";
 import { addSkill, bindSkill } from "../server/skills/store.ts";
 import { skillsForTask } from "../server/skills/task-skills.ts";
-import { collectSkillEdits } from "../server/skills/collect.ts";
 import { mountSkills, skillLayout } from "../server/skills/mount.ts";
-import {
-  REMOTE_REPORT,
-  SKILLS_SLOT,
-  copyOf,
-  fillSkillSlot,
-  skillReport,
-} from "../server/skills/remote.ts";
+import { SKILLS_SLOT, copyOf, fillSkillSlot } from "../server/skills/remote.ts";
 import {
   createTask,
   ensureTaskTables,
@@ -171,7 +158,7 @@ test("Windows 上的挂载路径：按工具放在任务目录的哪、怎么交
   );
 });
 
-test("代理挂载填占位、收尾只回传改过的副本；服务落成报告后照常生成提议，读不出的写明原因", () => {
+test("代理挂载填占位；挂不上时写明原因", () => {
   const db = setup();
   const root = mkdtempSync(join(tmpdir(), "atrium-skills-remote-"));
   try {
@@ -186,54 +173,12 @@ test("代理挂载填占位、收尾只回传改过的副本；服务落成报�
     const filled = fillSkillSlot(prompt, { section: mount.section });
     assert.ok(!filled.includes(SKILLS_SLOT));
     assert.ok(filled.includes(`文件：${copy}`));
-    assert.ok(filled.includes(join(agentDir, "skill-notes.md")));
     assert.match(
       fillSkillSlot(prompt, { error: "挂技能失败：EPERM" }),
       /原本要带的组织技能没挂上（挂技能失败：EPERM）/,
     );
     assert.equal(fillSkillSlot(prompt, undefined).includes(SKILLS_SLOT), false);
     assert.equal(fillSkillSlot("没有占位", { section: "x" }), "没有占位");
-
-    // 没改：不回传，退出上报与以前一样。
-    assert.equal(skillReport(agentDir), undefined);
-    writeFileSync(copy, md("web-design", "前端设计约定", "按钮间距 12px"));
-    writeFileSync(join(agentDir, "skill-notes.md"), "8px 在新设计稿里不对\n");
-    const report = skillReport(agentDir)!;
-    assert.equal(report.notes, "8px 在新设计稿里不对");
-    assert.equal(report.edits.length, 1);
-    assert.match(
-      (report.edits[0] as { files: Record<string, string> }).files["SKILL.md"]!,
-      /12px/,
-    );
-
-    // 服务这边：本机任务目录里没有挂载清单，只有落下的报告。
-    const serverDir = join(root, "server", "tasks", String(id));
-    mkdirSync(serverDir, { recursive: true });
-    writeFileSync(join(serverDir, REMOTE_REPORT), JSON.stringify(report));
-    const collected = collectSkillEdits(db, id, serverDir);
-    assert.deepEqual(collected.problems, []);
-    assert.deepEqual(
-      collected.proposals.map((p) => [p.proposal, p.slug, p.base]),
-      [["p1", "web-design", "r1"]],
-    );
-    assert.deepEqual(collectSkillEdits(db, id, serverDir).proposals, []);
-
-    // 副本读不出来（被删、超限）：写明原因，不生成提议。
-    writeFileSync(
-      join(serverDir, REMOTE_REPORT),
-      JSON.stringify({
-        edits: [{ id: 1, slug: "web-design", rev: 1, problem: "读不到 x" }],
-      }),
-    );
-    assert.deepEqual(collectSkillEdits(db, id, serverDir).problems, [
-      "web-design：读不到 x，没生成提议",
-    ]);
-    // 坏报告当没有。
-    writeFileSync(join(serverDir, REMOTE_REPORT), "{坏");
-    assert.deepEqual(collectSkillEdits(db, id, serverDir), {
-      proposals: [],
-      problems: [],
-    });
   } finally {
     removeTemp(root);
     db.close();

@@ -254,7 +254,7 @@ test("通知：叶子归 leader 管时照旧投 leader，上线不再抄秘书�
   assert.ok(!inboxOf(db, "secretary").some((e) => e.task === "t4"));
 });
 
-test("派发拦截：task run、task pick 给人话提示；自动派发跳过总任务；排期不列总任务", async (t) => {
+test("派发拦截：task run、task run --dry-run 给人话提示；自动派发跳过总任务；排期不列总任务", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "atrium-total-run-"));
   t.after(() => removeTemp(root));
   const db = memory();

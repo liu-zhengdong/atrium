@@ -117,7 +117,7 @@ test("标题标记：标题已以同一标记开头的不重复（巡检 f6）",
   );
 });
 
-test("建任务：缺省普通；--priority 覆盖；set 可改，换部分不动档位", () => {
+test("建任务：缺省普通；--priority 覆盖；set 可改，换部门不动档位", () => {
   const db = orgDb();
   const perf = createTask(db, { title: "性能巡检", part: "o4" });
   assert.equal(perf.priority, "normal");
@@ -150,7 +150,7 @@ test("建任务：缺省普通；--priority 覆盖；set 可改，换部分不�
       /不认识|unknown|字段/,
       retired,
     );
-  // 换部分不动档位。
+  // 换部门不动档位。
   assert.equal(updateTask(db, perf.ref, { part: "o3" }).priority, "idle");
 });
 

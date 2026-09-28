@@ -46,10 +46,23 @@ const output = (
 };
 export const specialistCommands: Record<string, Command> = {
   "specialist ls": {
-    args: "[--json]",
-    about: "列出专员：名称、做什么、在做几件",
-    positionals: [0, 0],
-    async run({ json }) {
+    args: "[专员] [--json]",
+    about:
+      "列出专员：名称、做什么、在做几件；给专员看这一位：做什么、优先执行者、交付关卡与技能",
+    positionals: [0, 1],
+    async run({ positionals: [id], json }) {
+      if (id !== undefined) {
+        const role = await (
+          await client()
+        ).get<JobRole>(`/specialists/${path(id)}`);
+        output(
+          json,
+          role,
+          `${role.ref} ${role.name} · r${role.rev}\n${role.description}\n优先执行者：${role.preferred.join("、") || "无"}\n交付关卡：${role.checks.join("、") || "无"}\n技能：${role.skills.join("、") || "无"}`,
+          `建任务：atrium task add 标题 --by ${role.ref}`,
+        );
+        return;
+      }
       const rows = await (await client()).get<JobRole[]>("/specialists");
       output(
         json,
@@ -63,23 +76,7 @@ export const specialistCommands: Record<string, Command> = {
             String(r.running ?? 0),
           ]),
         ]),
-        "看专员：atrium specialist show r1",
-      );
-    },
-  },
-  "specialist show": {
-    args: "专员 [--json]",
-    about: "查看专员：做什么、优先执行者、交付关卡与技能",
-    positionals: [1, 1],
-    async run({ positionals: [id], json }) {
-      const role = await (
-        await client()
-      ).get<JobRole>(`/specialists/${path(id!)}`);
-      output(
-        json,
-        role,
-        `${role.ref} ${role.name} · r${role.rev}\n${role.description}\n优先执行者：${role.preferred.join("、") || "无"}\n交付关卡：${role.checks.join("、") || "无"}\n技能：${role.skills.join("、") || "无"}`,
-        `建任务：atrium task add 标题 --by ${role.ref}`,
+        "看专员：atrium specialist ls r1",
       );
     },
   },
@@ -103,7 +100,7 @@ export const specialistCommands: Record<string, Command> = {
         json,
         role,
         `已建 ${role.ref} ${role.name}`,
-        `看专员：atrium specialist show ${role.ref}`,
+        `看专员：atrium specialist ls ${role.ref}`,
       );
     },
   },
@@ -123,7 +120,7 @@ export const specialistCommands: Record<string, Command> = {
         json,
         role,
         `已修订 ${role.ref} ${role.name} · r${role.rev}`,
-        `看专员：atrium specialist show ${role.ref}`,
+        `看专员：atrium specialist ls ${role.ref}`,
       );
     },
   },

@@ -203,7 +203,7 @@ export function addLeader(db: DatabaseSync, body: unknown, now = Date.now()) {
           `${leaderRef(id)} 已登记`,
           "conflict",
           undefined,
-          `atrium leader show ${leaderRef(id)}`,
+          `atrium leader ls ${leaderRef(id)}`,
         );
     } else id = nextId(db);
     const memo =

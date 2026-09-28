@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseArgs } from "node:util";
 import { commands, help, main } from "../cli/main.ts";
-import { example, guide } from "../cli/guide.ts";
+import { example, groupOf, guide } from "../cli/guide.ts";
 import { correction, exitCodes, failure } from "../cli/contract.ts";
 import { cliErrorMessage, optionError } from "../cli/error-message.ts";
 import { dataDirectory } from "../server/service-state.ts";
@@ -10,23 +10,30 @@ import { join } from "node:path";
 import { when } from "../cli/format.ts";
 import { Problem, closest } from "../server/problem.ts";
 
-test("说明书从命令表与退出码表生成；示例均通过参数解析", () => {
-  const text = guide(commands);
+test("说明书只讲约定、放哪与主路径；--help 列全部命令，示例均通过参数解析", () => {
+  const text = guide();
   assert.match(help(), /atrium guide/);
   assert.match(help(), /^服务\n  atrium\s+启动/m);
   assert.match(
     text,
     /atrium task add 标题[\s\S]*atrium top[\s\S]*atrium events wait --as secretary/,
   );
-  // 规矩只放一处：要点；其余东西各有位置。
-  assert.match(
-    text,
-    /规矩（用户的判断）只放一处——要点[^\n]*--pos[^\n]*→ 技能[^\n]*→ 执行者档案[^\n]*→ 决定记录/,
-  );
+  // 规矩只放一处：要点；其余东西各有位置，一行一类。
+  assert.match(text, /^  规矩[^\n]*→ 要点[^\n]*--pos/m);
+  for (const where of ["→ 技能", "→ 专员", "→ 执行者档案", "→ 决定记录"])
+    assert.ok(text.includes(where), where);
   // 端到端验证挪到合入前、在隔离实例。
   assert.match(text, /交付前在隔离实例跑端到端验证[^\n]*只读冒烟/);
+  // 命令用法只在 --help，说明书不重复；说明书控制在一万字以内。
+  assert.ok(!text.includes("命令参考"));
+  assert.ok(Array.from(text).length < 10000);
   for (const [name, command] of Object.entries(commands)) {
-    assert(text.includes(`atrium ${name} ${command.args}`.trimEnd()), name);
+    // 服务组在 --help 里只列命令名（用法看 atrium <命令> --help）。
+    const usage =
+      groupOf(name) === "服务"
+        ? `atrium ${name}`
+        : `atrium ${name} ${command.args}`.trimEnd();
+    assert(help().includes(usage), name);
     const invocation = example(name, command);
     const tokens = invocation
       .slice(`atrium ${name}`.length)
@@ -104,7 +111,7 @@ test("全景组的 --help 先讲裸命令：atrium map 打开网页，并列出 
   assert.match(text, /--depth/);
   assert.match(text, /--no-open/);
   assert.match(text, /--json/);
-  for (const name of ["map", "map context", "map edit", "map add"])
+  for (const name of ["map", "map context", "map edit"])
     assert(text.includes(`atrium ${name} `), `全景组缺 ${name}`);
 });
 

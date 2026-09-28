@@ -304,7 +304,7 @@ const facts: ChoiceFacts = {
 const opt = (over: Partial<OptionFacts> = {}): OptionFacts => ({
   seq: 2,
   title: "看板加过滤",
-  gain: "只看自己关心的部分",
+  gain: "只看自己关心的部门",
   why_now: "任务多了",
   cost: "两个任务，claude 额度",
   skip: "每次都要翻很久",
@@ -321,7 +321,7 @@ test("选中的建任务：详述带选项全文、来源、用户说明与推�
   );
   assert.match(brief, /用户说明：这周就要/);
   for (const line of [
-    "- 能多做到什么：只看自己关心的部分",
+    "- 能多做到什么：只看自己关心的部门",
     "- 为什么现在：任务多了",
     "- 代价：两个任务，claude 额度",
     "- 不做会怎样：每次都要翻很久",
@@ -340,7 +340,7 @@ test("没选的记决定：写这轮不做 X，原因取说明，没写说明也
   assert.equal(picked.text, "这轮不做「看板加过滤」（c3 选项 2）");
   assert.match(
     picked.why,
-    /^等额度宽裕。当时的说法：能多做到「只看自己关心的部分」；不做会「每次都要翻很久」。情况没变就不再提。$/,
+    /^等额度宽裕。当时的说法：能多做到「只看自己关心的部门」；不做会「每次都要翻很久」。情况没变就不再提。$/,
   );
   assert.match(
     skippedDecision(facts, opt(), null, "pick").why,
@@ -443,7 +443,7 @@ test("状态栏一行：最早一份加还有几份，没有就是 null，标题
   assert.ok(width(long) < 60, long);
 });
 
-test("leader 提选项单、写意见：自己负责的部分、下层、上一层可以，别处与查不到的不行", () => {
+test("leader 提选项单、写意见：自己负责的部门、下层、上一层可以，别处与查不到的不行", () => {
   // o1 ─ o2 ─ o3（a1 负责）─ o4；o1 ─ o5
   const parents = new Map<number, number | null>([
     [1, null],
@@ -957,7 +957,7 @@ test("拍板权：leader 能提、能写意见，不能拍；网页会话同源�
       assert.equal(outside.status, 403);
       assert.match(
         outside.body.error,
-        /只能是你负责的部分、它的下层或它的上一层/,
+        /只能是你负责的部门、它的下层或它的上一层/,
       );
       const comment = await x.call(
         "POST",

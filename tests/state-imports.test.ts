@@ -184,7 +184,7 @@ test("规矩并进要点的纯函数：共同上级、判重的开头", () => {
   );
 });
 
-test("旧库启动：硬边界、原则决定、管方面的部分、产品部、章程目标一次并进要点与配置；再启动不重复", async (t) => {
+test("旧库启动：硬边界、原则决定、管方面的部门、产品部、章程目标一次并进要点与配置；再启动不重复", async (t) => {
   const data = temp(t, "rules");
   const old = new DatabaseSync(join(data, "atrium.sqlite"));
   old.exec(`CREATE TABLE org_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES org_nodes(id),

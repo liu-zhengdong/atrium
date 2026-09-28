@@ -97,7 +97,7 @@ export function show(db: DatabaseSync, address: string) {
     ...node,
     overview,
     points: nodePoints(db, n.id),
-    // 根 → 本节点每层的要点；派活按它附「本部分及上级的要点」
+    // 根 → 本节点每层的要点；派活按它附「本部门及上级的要点」
     points_chain: chainPoints(db, n.id),
     recent_tasks: nodeTasks(db, n.id),
     // 根节点的两项配置（给你留的额度、花费上限）

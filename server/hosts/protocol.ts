@@ -1,11 +1,7 @@
 import type { LaunchEndpoint, Tool } from "../tasks/adapters/types.ts";
 import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
-import type {
-  SkillCopy,
-  SkillMountAck,
-  SkillReport,
-} from "../skills/remote.ts";
+import type { SkillCopy, SkillMountAck } from "../skills/remote.ts";
 import type { AgentRun, HostInfo, HostLoadReport } from "./state.ts";
 
 /**
@@ -110,8 +106,6 @@ export type ExitBody = {
   size: number;
   /** codex 这类工具写的最后消息文件内容。 */
   last_message?: string;
-  /** 执行者改过的技能副本（t232）：服务落到本机任务目录，收尾时生成修订提议。 */
-  skills?: SkillReport;
 };
 
 /** 代理读到的额度（自带读取器，#352）：只有额度数字与账号指纹，不含令牌。 */

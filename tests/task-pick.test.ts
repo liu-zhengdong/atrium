@@ -18,7 +18,7 @@ import type { Tool } from "../server/tasks/adapters/index.ts";
 import type { PaceEntry } from "../server/tasks/prepare.ts";
 import { formatPick, pickLines } from "../cli/tasks.ts";
 
-/** 候选一览（task pick）的纯函数：判定、排序、理由与写死执行者的提醒。 */
+/** 候选一览（task run --dry-run）的纯函数：判定、排序、理由与写死执行者的提醒。 */
 
 const cand = (
   worker: string,
@@ -638,7 +638,7 @@ test("writtenNotice：另有能接的候选富余多出 30 个百分点以上才
   const codex = { worker: "codex+c", tool: "codex" as Tool };
   assert.equal(
     writtenNotice(view(-13, 54), codex, "t9"),
-    "提醒：claude+opus 同样能接，claude 富余 +54%，比 codex+c 的 codex（−13%）多 67 个百分点；看候选：atrium task pick t9",
+    "提醒：claude+opus 同样能接，claude 富余 +54%，比 codex+c 的 codex（−13%）多 67 个百分点；看候选：atrium task run t9 --dry-run",
   );
   assert.equal(NOTICE_SPARE_GAP, 30);
   assert.match(writtenNotice(view(0, 30), codex, "t9")!, /多 30 个百分点/);
@@ -733,7 +733,7 @@ test("命令行文本：推荐一句、表格一行一位候选；task run 回�
   assert.deepEqual(pickLines(undefined), []);
 });
 
-test("隔离服务：task pick 推荐富余的执行者；写死超速的回执带提醒；自动挑人带理由；专员优先", async (t) => {
+test("隔离服务：task run --dry-run 推荐富余的执行者；写死超速的回执带提醒；自动挑人带理由；专员优先", async (t) => {
   const { startApp } = await import("./task-fixture.ts");
   const { call } = await startApp(
     t,
@@ -798,7 +798,7 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   assert.equal(run.body.pick.auto, false);
   assert.match(
     run.body.pick.notice,
-    /^提醒：opencode\S* 同样能接，opencode 富余 \+54%，比 kimi\S* 的 kimi（−13%）多 67 个百分点；看候选：atrium task pick t1$/,
+    /^提醒：opencode\S* 同样能接，opencode 富余 \+54%，比 kimi\S* 的 kimi（−13%）多 67 个百分点；看候选：atrium task run t1 --dry-run$/,
   );
   // 不写 --worker：按同一份排序挑 opencode，回执写理由。
   const t2 = await add("自动挑");

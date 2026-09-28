@@ -156,7 +156,7 @@ function plist(layout: {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-    "<!-- Atrium 代理：atrium agent install 生成，卸载用 atrium agent uninstall -->",
+    "<!-- Atrium 代理：atrium agent install 生成，卸载用 atrium agent install --uninstall -->",
     '<plist version="1.0">',
     "<dict>",
     "  <key>Label</key>",
@@ -189,7 +189,7 @@ function plist(layout: {
 
 function systemdUnit(layout: { program: string[]; data: string; log: string }) {
   return [
-    "# Atrium 代理：atrium agent install 生成，卸载用 atrium agent uninstall",
+    "# Atrium 代理：atrium agent install 生成，卸载用 atrium agent install --uninstall",
     "[Unit]",
     "Description=Atrium agent",
     // 重起不设次数上限：服务那头长时间不在时代理自己在重连，这里只兜进程异常退出。
@@ -220,7 +220,7 @@ function windowsLauncher(layout: { program: string[]; log: string }) {
   const line = `${layout.program.map(cmdQuote).join(" ")} >> ${cmdQuote(layout.log)} 2>&1`;
   const command = `cmd.exe /d /s /c "${line}"`;
   return [
-    "// Atrium 代理：atrium agent install 生成，卸载用 atrium agent uninstall",
+    "// Atrium 代理：atrium agent install 生成，卸载用 atrium agent install --uninstall",
     "// 以隐藏窗口拉起代理；非 0 退出隔一会儿重来，令牌失效（以 0 退出）或本文件已删（卸载）就停。",
     'var shell = new ActiveXObject("WScript.Shell");',
     'var files = new ActiveXObject("Scripting.FileSystemObject");',
@@ -245,7 +245,7 @@ function windowsTask(layout: {
     '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
     "  <RegistrationInfo>",
-    "    <Description>Atrium 代理：atrium agent install 生成，卸载用 atrium agent uninstall</Description>",
+    "    <Description>Atrium 代理：atrium agent install 生成，卸载用 atrium agent install --uninstall</Description>",
     "  </RegistrationInfo>",
     "  <Triggers>",
     // 只在本人登录时：不需要管理员，也不需要存密码。

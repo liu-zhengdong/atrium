@@ -74,7 +74,7 @@ export async function runAgent(input: {
       `这台已有代理在跑（${what}，PID ${other!.pid}）；同一数据目录只跑一个`,
       "conflict",
       undefined,
-      other!.service ? "atrium agent status" : undefined,
+      other!.service ? "atrium agent install --status" : undefined,
     );
   }
   const url = new URL(server);

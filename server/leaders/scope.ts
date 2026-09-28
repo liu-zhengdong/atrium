@@ -2,11 +2,11 @@
  * leader 的权限边界（纯函数，穷举测试）。leader 进程拿的是服务签发的 leader 令牌，
  * 服务端按「路由 → 规则 → 作用范围」判定，不靠提示词自律；没列出的写接口一律拒绝。
  *
- * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、重新排队合入（task merge）；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
- * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交；在负责的部分或它的上一层提选项单、写意见；
+ * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、重新排队合入（task merge）；任务牵涉到自己负责的部门时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
+ * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交；在负责的部门或它的上一层提选项单、写意见；
  * 给本节点及子节点排周期任务（巡检、调研等），停、续、立即跑一轮、删掉；
  * 用户把节点的选项单拍板权下放给 leader 后拍板（是不是拍板人由 choices/store.ts 按节点设置判）；
- * 在负责的部分里加资料、归档、恢复、留下，取任何资料；在负责的部分里设凭据、归档、恢复、留下（没有读值的接口）。
+ * 在负责的部门里加资料、归档、恢复、留下，取任何资料；在负责的部门里设凭据、归档、恢复、留下（没有读值的接口）。
  * 不可以：动别的节点的任务、改根上的要点与配置、建删节点、拍板选项单、记决定、改技能、清额度、登记 leader、真删资料或凭据等。
  */
 
@@ -54,18 +54,18 @@ const RULES: Record<string, LeaderRule> = {
   // leader 提选项、写意见；拍板只有用户（leader 令牌默认拒绝）。
   "POST /api/choices": "choice-add",
   "POST /api/choices/:id/comment": "choice-comment",
-  // 资料（t192）：在负责的部分里加、归档、恢复、留下；取资料哪儿的都能取（记读者）。真删只有用户。
+  // 资料（t192）：在负责的部门里加、归档、恢复、留下；取资料哪儿的都能取（记读者）。真删只有用户。
   "POST /api/materials": "material-add",
   "POST /api/materials/:id/archive": "material",
   "POST /api/materials/:id/restore": "material",
   "POST /api/materials/:id/keep": "material",
   "POST /api/materials/:id/get": "material-read",
-  // 凭据（t194）：在负责的部分里设值、归档、恢复、留下，看 body.node；真删只有用户。
+  // 凭据（t194）：在负责的部门里设值、归档、恢复、留下，看 body.node；真删只有用户。
   "PUT /api/secrets": "secret",
   "POST /api/secrets/archive": "secret",
   "POST /api/secrets/restore": "secret",
   "POST /api/secrets/keep": "secret",
-  // 周期任务（sN）：节点在负责的部分里才行，新建看 body.node，其余看这条周期任务挂在哪。
+  // 周期任务（sN）：节点在负责的部门里才行，新建看 body.node，其余看这条周期任务挂在哪。
   "POST /api/schedules": "schedule",
   "POST /api/schedules/:id/run": "schedule",
   "DELETE /api/schedules/:id": "schedule",
@@ -153,7 +153,7 @@ export function scopeOf(list: readonly ScopeNode[], leader: string) {
   return { led, scope };
 }
 
-/** 一处要落在范围里的引用：what 是人话（如「任务 t5 的归属部分 o3」）。 */
+/** 一处要落在范围里的引用：what 是人话（如「任务 t5 的归属部门 o3」）。 */
 export type ScopeCheck = { what: string; node: number | null };
 
 /** 引用逐条落在范围里才放行；node 为 null 表示查不到归属，一律算范围外。 */
@@ -164,7 +164,7 @@ export function scopeVerdict(
 ) {
   for (const check of checks)
     if (check.node === null || !scope.has(check.node))
-      return denied(leader, `动${check.what}：不在你负责的部分里`);
+      return denied(leader, `动${check.what}：不在你负责的部门里`);
   return null;
 }
 
@@ -192,7 +192,7 @@ export function nodeEditVerdict(input: {
   if (input.led.has(input.node))
     return denied(input.leader, "改自己负责的节点的 leader");
   if (!input.scope.has(input.node))
-    return denied(input.leader, "给不在你负责部分里的节点指派 leader");
+    return denied(input.leader, "给不在你负责部门里的节点指派 leader");
   return null;
 }
 
@@ -214,7 +214,7 @@ export function escalateVerdict(leader: string, target: string) {
 }
 
 /**
- * 提选项单：挂在自己负责的部分及以下，或自己负责的部分的上一层（选项要挂在它要演进的那一块上）。node 为 null（查不到）算范围外。
+ * 提选项单：挂在自己负责的部门及以下，或自己负责的部门的上一层（选项要挂在它要演进的那一块上）。node 为 null（查不到）算范围外。
  */
 export function choiceAddVerdict(input: {
   leader: string;
@@ -233,7 +233,7 @@ export function choiceAddVerdict(input: {
     if (input.parents.get(id) === input.node) return null;
   return denied(
     input.leader,
-    `在 o${input.node} 上${what}：只能是你负责的部分、它的下层或它的上一层`,
+    `在 o${input.node} 上${what}：只能是你负责的部门、它的下层或它的上一层`,
   );
 }
 

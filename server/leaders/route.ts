@@ -1,7 +1,7 @@
 import { LEADER_RE } from "./model.ts";
 
 /**
- * 事件投给谁（纯函数，穷举测试）。任务没写负责人时，从任务所属部分向上找最近的、已登记的 leader；
+ * 事件投给谁（纯函数，穷举测试）。任务没写负责人时，从任务所属部门向上找最近的、已登记的 leader；
  * 找不到投秘书。上交与唤醒失败的转交从 leader 负责的节点的上一层开始找，找不到同样投秘书。
  */
 
@@ -66,9 +66,9 @@ const skipped = (list: string[]) =>
   list.length ? `；${list.join("、")} 没有登记为 leader，跳过` : "";
 
 export function routeTaskEvent(input: {
-  /** 任务的负责人；null 表示没写，按归属部分找 leader。 */
+  /** 任务的负责人；null 表示没写，按归属部门找 leader。 */
   owner: string | null;
-  /** 从任务所属部分向上到根。 */
+  /** 从任务所属部门向上到根。 */
   chain: readonly ChainNode[];
   registered: ReadonlySet<string>;
 }): Route {
@@ -82,7 +82,7 @@ export function routeTaskEvent(input: {
   if (!part)
     return {
       subscriber: SECRETARY,
-      why: "任务没有归属部分，投秘书",
+      why: "任务没有归属部门，投秘书",
       via: null,
     };
   const found = nearest(input.chain, input.registered);

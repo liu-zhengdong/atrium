@@ -19,7 +19,7 @@ import { downstreamHint } from "../leaders/actions.ts";
 /**
  * 把任务结果投递给负责人（#262）：完成、失败、受阻、卡死共用去重键 tN:outcome，CI 用 tN:ci。
  * 审阅任务（#325）不单独投递：结论与失败由审阅关卡记在原任务上再投。
- * 任务没写负责人时投给所属部分最近的 leader，找不到投秘书（leaders/route.ts）；投给谁、为什么写进事件 routed。
+ * 任务没写负责人时投给所属部门最近的 leader，找不到投秘书（leaders/route.ts）；投给谁、为什么写进事件 routed。
  */
 export function publishTask(
   inbox: EventInbox,

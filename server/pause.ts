@@ -1,10 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 
 /**
- * 一键停机（`atrium pause` / `resume`）：全局（all）、一部分（oN 及下层）或一台主机（hN）。
+ * 一键停机（`atrium pause` / `resume`）：全局（all）、一个部门（oN 及下层）或一台主机（hN）。
  * 全局暂停时运行时不做任何自主动作：不派活（自动派发、排队拉起、重试换人）、不生成周期任务、
  * 不叫醒 leader 与后台秘书、合入与上线不推进；事件照常落库，但不投给等待的人。
- * 部分暂停只停那一块的派活、周期任务、合入与 leader；主机暂停只是不往那台派活与检查。
+ * 部门暂停只停那一块的派活、周期任务、合入与 leader；主机暂停只是不往那台派活与检查。
  * 在跑的执行者缺省跑完（`pause --stop` 才一并停），跑完不接新的。
  */
 
@@ -60,7 +60,7 @@ export const globalPause = (db: DatabaseSync) => get(db, "all") ?? null;
 export const hostPaused = (db: DatabaseSync, host: number) =>
   !!get(db, `h${host}`);
 
-/** 这一部分（或它的任一上级）被暂停了没有；节点为空只看全局。 */
+/** 这个部门（或它的任一上级）被暂停了没有；节点为空只看全局。 */
 export function partPause(db: DatabaseSync, node: number | null): Pause | null {
   if (node === null) return null;
   const parts = new Map(
@@ -84,7 +84,7 @@ export function partPause(db: DatabaseSync, node: number | null): Pause | null {
   return null;
 }
 
-/** 这件任务此刻被什么暂停挡着：全局优先，其次它的归属部分（旧任务看 node_id）。 */
+/** 这件任务此刻被什么暂停挡着：全局优先，其次它的归属部门（旧任务看 node_id）。 */
 export function taskPause(db: DatabaseSync, taskId: number): Pause | null {
   const global = globalPause(db);
   if (global) return global;

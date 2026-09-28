@@ -135,7 +135,7 @@ test(
     assert.equal(child.code, 0, child.stderr);
     assert.match(
       child.stdout.trimEnd().split("\n").at(-1)!,
-      /^看候选并派活：atrium task pick t2$/,
+      /^看候选并派活：atrium task run t2 --dry-run$/,
     );
     const json = await f.cli(
       "task",
@@ -146,7 +146,7 @@ test(
       "--json",
     );
     assert.equal(json.code, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).next, "atrium task pick t3");
+    assert.equal(JSON.parse(json.stdout).next, "atrium task run t3 --dry-run");
   },
 );
 

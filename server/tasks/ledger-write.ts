@@ -93,7 +93,7 @@ export type NewTask = {
   avoid_host?: string;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
-  /** 归属哪一部分（组织节点）。 */
+  /** 归属哪个部门（组织节点）。 */
   part?: string | null;
   /** 要用的凭据名称（t194），逗号分隔；派活时按名称注入执行者环境。 */
   secret?: string | null;
@@ -112,7 +112,7 @@ function byOf(value: unknown) {
   return value || null;
 }
 
-/** 修复任务按标题去重（巡检直接建修复任务）：同一部分已有同标题、没结束的修复任务就拒绝。 */
+/** 修复任务按标题去重（巡检直接建修复任务）：同一部门已有同标题、没结束的修复任务就拒绝。 */
 function duplicateFix(db: DatabaseSync, part: number, title: string) {
   const same = one<{ id: number }>(
     db,

@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
 import YAML from "yaml";
 import { Problem } from "../problem.ts";
 
 /**
- * 组织技能（#264 第 3b 步）的纯函数：文件与元数据校验、派活时的生效集合、行级差异与三方合并。
- * 不读库、不碰文件系统；读写在 store.ts / mount.ts / collect.ts。
+ * 组织技能（#264 第 3b 步）的纯函数：文件与元数据校验、派活时的生效集合、行级差异。
+ * 不读库、不碰文件系统；读写在 store.ts / mount.ts。
  */
 
 export const LIMITS = {
@@ -18,8 +17,6 @@ export const LIMITS = {
   skills: 200,
   description: 1024,
   name: 100,
-  /** 提议里执行者自述原因的字数。 */
-  proposalReason: 2000,
   /** 附属文件的目录深度。 */
   depth: 4,
 } as const;
@@ -79,16 +76,6 @@ export function validateFiles(value: unknown): Files {
   if (total > LIMITS.bytes)
     return bad("files", `合计 ${total} 字节，超过 ${LIMITS.bytes / 1024} KB`);
   return out;
-}
-
-/** 一组文件的内容哈希（按路径排序），挂载副本改没改看它。 */
-export function filesHash(files: Files): string {
-  const hash = createHash("sha256");
-  for (const [path, content] of Object.entries(files).sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0,
-  ))
-    hash.update(`${path}\0${content}\0`);
-  return hash.digest("hex");
 }
 
 /** 读 SKILL.md 的 frontmatter；没有 frontmatter 返回 null，格式坏了报错。 */
@@ -164,12 +151,6 @@ export function skillMeta(
 function checkDescription(text: string) {
   if (Array.from(text).length > LIMITS.description)
     bad("description", `超过 ${LIMITS.description} 字`);
-}
-
-export function sameFiles(a: Files, b: Files): boolean {
-  const ka = Object.keys(a),
-    kb = Object.keys(b);
-  return ka.length === kb.length && ka.every((key) => a[key] === b[key]);
 }
 
 // ---- 生效集合 ----
@@ -338,96 +319,4 @@ export function filesDiff(before: Files, after: Files): string[] {
     else out.push(`修改 ${path}`, ...lineDiff(a, b));
   }
   return out;
-}
-
-const same = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((line, i) => line === b[i]);
-
-/**
- * 三方合并一段文本（diff3）：以 base 为准找两边都没动的稳定行，稳定行之间的块只有一边改了就取那一边，
- * 两边改得一样取任一边，否则算冲突（结果里不写冲突标记，冲突留给审核人）。
- */
-export function merge3Text(
-  base: string,
-  ours: string,
-  theirs: string,
-): { text: string; conflict: boolean } {
-  const b = lines(base),
-    o = lines(ours),
-    t = lines(theirs);
-  const mo = lcsPairs(b, o),
-    mt = lcsPairs(b, t);
-  if (!mo || !mt)
-    return ours === base
-      ? { text: theirs, conflict: false }
-      : theirs === base || theirs === ours
-        ? { text: ours, conflict: false }
-        : { text: ours, conflict: true };
-  const out: string[] = [];
-  let conflict = false;
-  let i = 0,
-    j = 0,
-    k = 0;
-  while (i < b.length || j < o.length || k < t.length) {
-    let next = i;
-    while (next < b.length && !(mo.has(next) && mt.has(next))) next++;
-    const oEnd = next < b.length ? mo.get(next)! : o.length;
-    const tEnd = next < b.length ? mt.get(next)! : t.length;
-    if (next === i && oEnd === j && tEnd === k) {
-      if (i >= b.length) break;
-      out.push(b[i]!);
-      i++;
-      j++;
-      k++;
-      continue;
-    }
-    const bs = b.slice(i, next),
-      os = o.slice(j, oEnd),
-      ts = t.slice(k, tEnd);
-    if (same(os, bs)) out.push(...ts);
-    else if (same(ts, bs) || same(os, ts)) out.push(...os);
-    else {
-      conflict = true;
-      out.push(...os);
-    }
-    i = next;
-    j = oEnd;
-    k = tEnd;
-  }
-  return { text: out.join("\n"), conflict };
-}
-
-/** 按文件三方合并；增删与修改冲突、两边各自新增同名文件且内容不同，都算冲突。 */
-export function mergeFiles(
-  base: Files,
-  ours: Files,
-  theirs: Files,
-): { files: Files; conflicts: string[] } {
-  const paths = [
-    ...new Set([
-      ...Object.keys(base),
-      ...Object.keys(ours),
-      ...Object.keys(theirs),
-    ]),
-  ].sort();
-  const files: Files = {};
-  const conflicts: string[] = [];
-  for (const path of paths) {
-    const b = base[path],
-      o = ours[path],
-      t = theirs[path];
-    let value: string | undefined;
-    if (o === t || t === b) value = o;
-    else if (o === b) value = t;
-    else if (b === undefined || o === undefined || t === undefined) {
-      conflicts.push(path);
-      value = o;
-    } else {
-      const merged = merge3Text(b, o, t);
-      if (merged.conflict) conflicts.push(path);
-      value = merged.text;
-    }
-    if (value !== undefined) files[path] = value;
-  }
-  return { files, conflicts };
 }

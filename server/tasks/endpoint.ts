@@ -13,7 +13,7 @@ import type { ResolvedWorker } from "./profiles.ts";
 /**
  * 自定义模型端点（t271）：执行者档案（任一层，常写在 models/<模型>）可写
  * `endpoint`（地址）、`endpoint_api`（openai / responses / anthropic，缺省 openai）、`endpoint_key`（凭据名）。
- * 密钥不写进档案：派活那一刻按凭据名在任务归属部分的节点链上找（与 `task add --secret` 同一套），
+ * 密钥不写进档案：派活那一刻按凭据名在任务归属部门的节点链上找（与 `task add --secret` 同一套），
  * 注入成工具要的环境变量。这里只放纯函数：规则校验、取端点、算交给适配器的端点与要注入的密钥。
  */
 

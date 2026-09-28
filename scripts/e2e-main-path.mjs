@@ -439,7 +439,7 @@ try {
       (await showTask("t1")).part?.ref !== node &&
       !JSON.stringify(await showTask("t1")).includes(node)
     )
-      fail(`t1 的归属部分不是 ${node}`);
+      fail(`t1 的归属部门不是 ${node}`);
   });
 
   await step(

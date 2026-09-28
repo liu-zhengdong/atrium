@@ -11,7 +11,7 @@ import {
 import { clock } from "./quota-holds.ts";
 import { avoidReason, type ChainNode } from "../skills/model.ts";
 import type { Headroom } from "./usage-budget.ts";
-import { signedPercent } from "./percent.ts";
+import { signedPercent, staleLabel } from "./percent.ts";
 import { urgentOrder } from "./urgent.ts";
 
 /**
@@ -72,6 +72,10 @@ export type PickAccount = {
   left_reason: string | null;
   /** 额度用尽标记的到期时刻；没有标记为 null。 */
   held_until: number | null;
+  /** 读数是旧数（超过 10 分钟没刷新）：不算富余，spare_percent 为 null。 */
+  stale: boolean;
+  /** 旧数是多少小时前刷新的；不是旧数或不知道为 null。 */
+  refreshed_hours_ago: number | null;
 };
 
 export type PickCandidate = {
@@ -116,7 +120,7 @@ export type RunPick = {
 
 export { signedPercent };
 
-/** 一个账号的额度：多个窗口时已用取最大、富余取最小，距重置取最紧窗口的。 */
+/** 一个账号的额度：多个窗口时已用取最大、富余取最小，距重置取最紧窗口的；旧数不给富余。 */
 export function accountOf(
   account: string,
   facts: Pick<PickFacts, "pace" | "held" | "headroom">,
@@ -136,6 +140,10 @@ export function accountOf(
       .filter((n): n is number => typeof n === "number")
       .sort((a, b) => a - b)[0];
   const room = facts.headroom.get(account);
+  const stale = (rows ?? []).filter((entry) => entry.stale);
+  const ago = stale
+    .map((entry) => entry.refreshedHoursAgo)
+    .filter((n): n is number => typeof n === "number");
   return {
     account,
     used_percent: used.length ? Math.max(...used) : null,
@@ -144,6 +152,8 @@ export function accountOf(
     left_percent: room ? Number(room.points.toFixed(2)) : null,
     left_reason: room?.reason ?? null,
     held_until: facts.held.get(account) ?? null,
+    stale: stale.length > 0,
+    refreshed_hours_ago: ago.length ? Math.max(...ago) : null,
   };
 }
 
@@ -388,9 +398,11 @@ const rivalOf = (c: PickCandidate): SpareRival => ({
 });
 
 const spareText = (quota: PickAccount) =>
-  quota.spare_percent === null
-    ? `${quota.account} 没有富余数据`
-    : `${quota.account} 富余 ${signedPercent(quota.spare_percent)}`;
+  quota.spare_percent !== null
+    ? `${quota.account} 富余 ${signedPercent(quota.spare_percent)}`
+    : quota.stale
+      ? `${quota.account} ${staleLabel(quota.refreshed_hours_ago)}，不按它排富余`
+      : `${quota.account} 没有富余数据`;
 
 /**
  * 推荐理由一句话：为什么是它，再对照最多两个相关账号或不能接的专员候选。

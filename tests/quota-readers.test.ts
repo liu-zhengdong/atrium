@@ -52,7 +52,11 @@ import type {
   Reader,
   ReaderDeps,
 } from "../server/quota-readers/types.ts";
-import { readPace } from "../server/tasks/prepare.ts";
+import {
+  parsePace,
+  readPace,
+  spareByProvider,
+} from "../server/tasks/prepare.ts";
 import { listQuota, type QuotaList } from "../server/tasks/quota.ts";
 import { removeTemp } from "./temp-dir.ts";
 import { writeFakeBin } from "./fake-bin.ts";
@@ -1040,6 +1044,50 @@ test("合并：自带优先，自带读不到时 OpenQuota 补并注明，两边
       now: NOW,
     }),
     [{ providerId: "claude", source: null, note: "没有额度数据" }],
+  );
+});
+
+test("旧数：自带读取器与 OpenQuota 的旧行一视同仁，带上 stale 与多久前，都不算富余", () => {
+  const rows = mergeQuotaRows({
+    builtin: new Map<string, ReaderOutcome>([
+      ["claude", { ok: true, result: good(NOW - 20 * 60_000), note: null }],
+      ["codex", { ok: true, result: good(NOW - 60_000), note: null }],
+    ]),
+    openquota: [
+      {
+        providerId: "cursor",
+        usedPercent: 10,
+        sparePercent: 50,
+        refreshedAt: "2026-09-27T08:30:00Z",
+        refreshedHoursAgo: 2.5,
+        stale: true,
+      },
+      {
+        providerId: "kimi",
+        usedPercent: 10,
+        sparePercent: 30,
+        refreshedAt: "2026-09-27T10:58:00Z",
+        refreshedHoursAgo: 0,
+        stale: false,
+      },
+    ],
+    now: NOW,
+  });
+  const pace = parsePace(JSON.stringify(rows))!;
+  const claude = pace.find((entry) => entry.providerId === "claude")!;
+  assert.equal(typeof claude.sparePercent, "number", "旧数仍带着读数");
+  assert.equal(claude.stale, true);
+  assert.equal(claude.refreshedHoursAgo, 0.3);
+  const cursor = pace.find((entry) => entry.providerId === "cursor")!;
+  assert.deepEqual([cursor.stale, cursor.refreshedHoursAgo], [true, 2.5]);
+  assert.equal(
+    pace.find((entry) => entry.providerId === "codex")!.stale,
+    undefined,
+  );
+  assert.deepEqual(
+    [...spareByProvider(pace).keys()].sort(),
+    ["codex", "kimi"],
+    "旧数不进富余，不拿它往后推算",
   );
 });
 

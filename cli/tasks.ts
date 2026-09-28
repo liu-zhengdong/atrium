@@ -38,7 +38,7 @@ import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 import { concernsText, hintLines } from "./task-concerns.ts";
-import { signedPercent } from "../server/tasks/percent.ts";
+import { signedPercent, staleLabel } from "../server/tasks/percent.ts";
 import type {
   PickAccount,
   PickCandidate,
@@ -1211,6 +1211,7 @@ export function pickLines(pick: RunPick | undefined): string[] {
 const accountCell = (q: PickAccount) => {
   if (q.held_until !== null) return `额度用尽至 ${when(q.held_until)}`;
   const parts = [
+    q.stale ? staleLabel(q.refreshed_hours_ago) : null,
     q.used_percent === null ? null : `已用 ${Math.round(q.used_percent)}%`,
     q.spare_percent === null ? null : `富余 ${signedPercent(q.spare_percent)}`,
     q.hours_to_reset === null

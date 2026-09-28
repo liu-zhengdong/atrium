@@ -124,6 +124,10 @@ export type PaceEntry = {
   usedPercent?: number | null;
   windowId?: string | null;
   hoursToReset?: number | null;
+  /** 读数已过 OpenQuota 面板的 10 分钟阈值（自带读取器同一口径）：不算富余。 */
+  stale?: boolean;
+  /** 读数是多少小时前刷新的；只用来展示。 */
+  refreshedHoursAgo?: number | null;
 };
 
 /**
@@ -149,8 +153,15 @@ function parsePaceRows(data: unknown[]): PaceEntry[] {
   const entries: PaceEntry[] = [];
   for (const item of data) {
     if (!item || typeof item !== "object") continue;
-    const { providerId, sparePercent, usedPercent, windowId, hoursToReset } =
-      item as Record<string, unknown>;
+    const {
+      providerId,
+      sparePercent,
+      usedPercent,
+      windowId,
+      hoursToReset,
+      stale,
+      refreshedHoursAgo,
+    } = item as Record<string, unknown>;
     if (typeof providerId !== "string") continue;
     entries.push({
       providerId,
@@ -168,18 +179,31 @@ function parsePaceRows(data: unknown[]): PaceEntry[] {
       hoursToReset > 0
         ? { hoursToReset }
         : {}),
+      ...(stale === true
+        ? {
+            stale: true,
+            refreshedHoursAgo:
+              typeof refreshedHoursAgo === "number" &&
+              Number.isFinite(refreshedHoursAgo)
+                ? refreshedHoursAgo
+                : null,
+          }
+        : {}),
     });
   }
   return entries;
 }
 
-/** 按账号汇总富余：同一 provider 多个窗口时取最小（最紧的那个窗口说了算）。 */
+/**
+ * 按账号汇总富余：同一 provider 多个窗口时取最小（最紧的那个窗口说了算）。
+ * 旧数（stale）不算富余，也不拿它往后推算：那个账号当作没有富余数据，排序退回档案与固定顺序。
+ */
 export function spareByProvider(
   pace: readonly PaceEntry[],
 ): Map<string, number> {
   const spare = new Map<string, number>();
-  for (const { providerId, sparePercent } of pace) {
-    if (sparePercent === null) continue;
+  for (const { providerId, sparePercent, stale } of pace) {
+    if (sparePercent === null || stale) continue;
     const prev = spare.get(providerId);
     spare.set(
       providerId,

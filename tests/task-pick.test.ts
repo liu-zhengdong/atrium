@@ -87,6 +87,8 @@ test("accountOf：多窗口已用取最大、富余取最小、距重置取最�
     left_percent: 10,
     left_reason: "保留 20%",
     held_until: 123,
+    stale: false,
+    refreshed_hours_ago: null,
   });
   const none = accountOf("kimi", {
     held: new Map(),
@@ -182,6 +184,72 @@ test("pickView：没有专员时按富余从多到少，没有富余数据的在
     view.reason,
     "claude 富余 +54%；opencode 富余 +20%；codex 富余 −13%",
   );
+});
+
+test("pickView：旧数不算富余，排在有新数的之后，理由与表格写「旧数（N 小时前）」", () => {
+  const view = pickView(
+    facts({
+      candidates: [cand("claude+opus"), cand("grok+g"), cand("kimi")],
+      pace: [
+        {
+          providerId: "grok",
+          sparePercent: 80,
+          usedPercent: 5,
+          stale: true,
+          refreshedHoursAgo: 2.5,
+        },
+        { providerId: "kimi", sparePercent: 10, usedPercent: 40 },
+        {
+          providerId: "claude",
+          sparePercent: 60,
+          usedPercent: 10,
+          stale: true,
+          refreshedHoursAgo: 0.2,
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(
+    view.candidates.map((c) => c.worker),
+    ["kimi", "claude+opus", "grok+g"],
+  );
+  const grok = view.candidates.find((c) => c.tool === "grok")!.quota;
+  assert.deepEqual(
+    [
+      grok.spare_percent,
+      grok.used_percent,
+      grok.stale,
+      grok.refreshed_hours_ago,
+    ],
+    [null, 5, true, 2.5],
+  );
+  assert.equal(view.reason, "kimi 富余 +10%");
+  assert.match(
+    formatPick({ ...view, task: "t1" }),
+    /grok 旧数（2\.5 小时前），已用 5%/,
+  );
+
+  const allStale = pickView(
+    facts({
+      candidates: [cand("grok+g"), cand("claude+opus")],
+      pace: [
+        {
+          providerId: "grok",
+          sparePercent: 80,
+          stale: true,
+          refreshedHoursAgo: 2.5,
+        },
+        {
+          providerId: "claude",
+          sparePercent: -60,
+          stale: true,
+          refreshedHoursAgo: 2,
+        },
+      ],
+    }),
+  );
+  assert.equal(allStale.recommended, "claude+opus", "旧数都不算，退回固定顺序");
+  assert.equal(allStale.reason, "claude 旧数（2 小时前），不按它排富余");
 });
 
 test("pickView：理由只对照两个相关账号，其余看表格", () => {

@@ -546,11 +546,11 @@ test("看板：检查在别的主机上跑时说在 hN 上；本机或旧记录�
   assert.equal(
     holderOf(facts({ delivery_stage: "merging", checking: { host: "h3" } }))
       ?.text,
-    "合入中：在 h3 上重跑本地检查",
+    "合入中：在 h3 上跑快检查",
   );
   assert.equal(
     holderOf(facts({ delivery_stage: "merging", checking: { host: null } }))
       ?.text,
-    "合入中：rebase 并重跑本地检查",
+    "合入中：rebase 并跑快检查",
   );
 });

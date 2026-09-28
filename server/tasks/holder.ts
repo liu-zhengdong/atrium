@@ -444,8 +444,8 @@ function judge(f: HolderFacts): Holder | null {
       kind: "merge",
       who: null,
       text: where(f.checking)
-        ? `合入中：${where(f.checking)}重跑本地检查`
-        : "合入中：rebase 并重跑本地检查",
+        ? `合入中：${where(f.checking)}跑快检查`
+        : "合入中：rebase 并跑快检查",
     };
   if (f.delivery_stage === "merged" && f.online_wait === 1)
     return { kind: "merge", who: null, text: "已合入，等发版上线" };

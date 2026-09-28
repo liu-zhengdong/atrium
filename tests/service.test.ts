@@ -194,6 +194,8 @@ test(
     // Explicitly different requested port still reuses this data directory's owner.
     f.env.ATRIUM_PORT = String(f.port + 1);
     assert((await f.cli()).stdout.includes(url));
+    // 改回来：后面停了再起要在自己的端口上监听，port + 1 没检查过，可能被别的程序或并行的用例占着。
+    f.env.ATRIUM_PORT = String(f.port);
     const added = await f.cli("task", "add", "入口验收", "--json");
     assert.equal(added.code, 0, added.stderr);
     assert.equal((await f.cli("stop")).code, 0);

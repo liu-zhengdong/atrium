@@ -71,6 +71,7 @@ import {
   type HostNeed,
 } from "../hosts/state.ts";
 import type { Assignment } from "../hosts/protocol.ts";
+import { SPAWN_ENV, spawnMark, spawnOwner } from "./orphans.ts";
 
 /**
  * 服务手里的执行者进程（#262）：拉起、退出收尾（查事实、过关卡、重试）、看门狗巡检、排队拉起。
@@ -273,6 +274,17 @@ export class Executors {
     return advanceTask(this.ctx.db, taskRef(id), event, fields, detail);
   }
 
+  /**
+   * 本机执行者的环境：白名单环境加上 Atrium 标记（t203，子孙继承；父进程退出后被收养的也认得出，
+   * 任务早已结束还活着的巡检时清掉）。巡检任务要连用户的服务，调用方去掉标记。
+   */
+  private spawnEnv(id: number): NodeJS.ProcessEnv {
+    return {
+      ...this.ctx.launchOptions.env,
+      [SPAWN_ENV]: spawnMark(spawnOwner(this.ctx.launchOptions.data), id),
+    };
+  }
+
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     if (this.remoteHost(chosen.host))
@@ -284,11 +296,12 @@ export class Executors {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     // 执行者 material get 时据此把读取记在这件任务上（t192）。
     const env: NodeJS.ProcessEnv = {
-      ...this.ctx.launchOptions.env,
+      ...this.spawnEnv(id),
       ATRIUM_TASK: task.ref,
     };
     if (patrolRun(this.ctx.db, id)) {
       delete env.ATRIUM_WORKER;
+      delete env[SPAWN_ENV];
       Object.assign(env, this.ctx.launchOptions.patrolServiceEnv);
     }
     const { child, offset } = await spawnWorker(prepared, env, task.ref);
@@ -364,7 +377,7 @@ export class Executors {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const { child, offset } = await spawnWorker(
       prepared,
-      this.ctx.launchOptions.env,
+      this.spawnEnv(id),
       task.ref,
       !!resume,
     );

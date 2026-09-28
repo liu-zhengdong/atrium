@@ -93,6 +93,7 @@ import { listLeaders } from "../leaders/model.ts";
 import { hasOrg } from "../org/task-node.ts";
 import { existsSync } from "node:fs";
 import { HostLoad, hostView } from "./host-load.ts";
+import { OrphanReaper, recognizer, spawnOwner } from "./orphans.ts";
 import { sharedLocalChecks } from "./local-check.ts";
 import { skipIfBusy } from "./reentry.ts";
 import { RemoteHosts } from "../hosts/remote.ts";
@@ -206,6 +207,8 @@ export class TaskRunner {
   private readonly review: ReviewGate;
   private readonly online: OnlineWatch;
   private readonly host: HostLoad;
+  /** 任务早已结束还活着的执行者子孙（t203）。 */
+  private readonly orphans: OrphanReaper;
   /** 远程主机的代理连接（#358 第 1 步）。 */
   readonly remote: RemoteHosts;
   private readonly tunnels: HostTunnels;
@@ -239,7 +242,10 @@ export class TaskRunner {
     ensureWorkerProfiles(db);
     importWorkerProfiles(db, options.workersDir);
     // 本机限额只看服务自己的环境（不是给执行者的 options.env）。
-    this.host = options.host ?? HostLoad.fromEnv(process.env);
+    const owner = spawnOwner(options.data);
+    this.host =
+      options.host ?? HostLoad.fromEnv(process.env, recognizer(db, owner));
+    this.orphans = new OrphanReaper(db, owner, killTree);
     sharedLocalChecks.limit = this.host.limits.maxChecks;
     sharedLocalChecks.timeoutMs = this.host.limits.checkTimeoutMs;
     // 执行机器（#358）：本机登记为 h1；远程主机由代理接入。
@@ -451,6 +457,7 @@ export class TaskRunner {
             )
             .map((active) => active.pid),
         );
+      if (!this.closed) this.orphans.sweep(this.host.orphans());
       if (!this.closed) await this.cleanup.finished();
       if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);

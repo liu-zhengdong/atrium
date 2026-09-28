@@ -1,5 +1,9 @@
 import { availableParallelism, loadavg } from "node:os";
-import { ProcessCpu } from "../platform/cpu.ts";
+import {
+  ProcessCpu,
+  type MarkedProc,
+  type SpawnMark,
+} from "../platform/cpu.ts";
 import { rank } from "./priority.ts";
 
 /**
@@ -242,6 +246,8 @@ export function hostView(input: {
 export type OwnCpu = {
   cores(): number | null;
   refresh(adopted?: readonly number[]): Promise<void>;
+  /** 认得出是本服务拉起、已不在服务与执行者名下的进程（t203）。 */
+  orphans?(): readonly MarkedProc[];
 };
 
 /** 采样：核数、1 分钟负载（Windows 上 loadavg 恒为 0，等于不看负载）与 Atrium 进程树 CPU。 */
@@ -252,14 +258,17 @@ export class HostLoad {
     private readonly cpu: OwnCpu | null = null,
   ) {}
 
-  static fromEnv(env: NodeJS.ProcessEnv = process.env) {
+  /** mark：怎么认本服务拉起的进程（orphans.ts recognizer），给了才认孤儿。 */
+  static fromEnv(env: NodeJS.ProcessEnv = process.env, mark?: SpawnMark) {
     const { limits, problems } = hostLimits(env, availableParallelism());
     for (const problem of problems) console.error(`本机减负配置：${problem}`);
     // 不看自己占用时不采样，省得每轮巡检列一遍进程。
     return new HostLoad(
       limits,
       undefined,
-      limits.busyCores === null ? null : new ProcessCpu(),
+      limits.busyCores === null
+        ? null
+        : new ProcessCpu(undefined, undefined, { mark }),
     );
   }
 
@@ -281,6 +290,15 @@ export class HostLoad {
         : null;
     } catch {
       return null;
+    }
+  }
+
+  /** 认得出是本服务拉起、已不在服务与执行者名下的进程；没采样为空。 */
+  orphans(): readonly MarkedProc[] {
+    try {
+      return this.cpu?.orphans?.() ?? [];
+    } catch {
+      return [];
     }
   }
 

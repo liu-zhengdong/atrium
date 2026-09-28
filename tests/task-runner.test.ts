@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { getTask } from "../server/tasks/ledger.ts";
+import { spawnMark, spawnOwner } from "../server/tasks/orphans.ts";
 import { startApp } from "./task-fixture.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { nodeCommand } from "./portable-shell.ts";
@@ -153,11 +154,15 @@ test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关�
   });
   assert.doesNotMatch(
     seen,
-    /HERDR_|CLAUDECODE|ATRIUM_(?!WORKER=1\n|TEST_CONCURRENCY=[1-9][0-9]*\n|TASK=t1\n)/,
+    /HERDR_|CLAUDECODE|ATRIUM_(?!WORKER=1\n|TEST_CONCURRENCY=[1-9][0-9]*\n|TASK=t1\n|SPAWN=[0-9a-f]{12}\/t1\n)/,
   );
   assert.match(seen, /^ATRIUM_WORKER=1$/m);
   // 执行者 material get 时把读取记在这件任务上（t192）。
   assert.match(seen, /^ATRIUM_TASK=t1$/m);
+  // 执行者带本服务的标记（t203），父进程退出后被收养的子孙也认得出。
+  assert.ok(
+    seen.split("\n").includes(`ATRIUM_SPAWN=${spawnMark(spawnOwner(data), 1)}`),
+  );
   assert.match(seen, /^ATRIUM_TEST_CONCURRENCY=[1-9][0-9]*$/m);
 
   const log = await call("GET", "/api/tasks/t1/log?after=0");

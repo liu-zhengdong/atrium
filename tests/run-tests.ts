@@ -1,14 +1,18 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sweepTestRun } from "./fixture-signal.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const tests = readdirSync(join(root, "tests"))
-  .filter((name) => name.endsWith(".test.ts"))
-  .map((name) => join(root, "tests", name));
+// `npm test -- tests/a.test.ts …` 只跑给定的文件（t203：改动过程中别反复跑全量），环境与清理照旧。
+const picked = process.argv.slice(2).map((file) => resolve(file));
+const tests = picked.length
+  ? picked
+  : readdirSync(join(root, "tests"))
+      .filter((name) => name.endsWith(".test.ts"))
+      .map((name) => join(root, "tests", name));
 const runId = randomUUID();
 // 运行时给执行者与本地检查注入测试并发上限（#358），免得每个 worktree 各占满全部核；没设按 node 缺省。
 const concurrency = process.env.ATRIUM_TEST_CONCURRENCY?.trim() ?? "";

@@ -9,22 +9,14 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
 
-// 上限表：会增长的东西都有上限。满了先合并、删最不值的、下沉或拆分，最后才提高上限。
+// 字段长度（按字）。会增长的东西的上限在 limits.go 的上限表。
 const (
-	MaxDepth     = 5   // 部门树深
-	MaxPoints    = 7   // 每部门要点
-	MaxRepos     = 20  // 每部门仓库
-	MaxDepts     = 500 // 全部部门（一次读全树的上限）
 	maxName      = 40
 	maxIntro     = 300 // what/uses/now/next 各自
 	maxPointText = 200
 	maxPointWhy  = 300
 	maxPointBy   = 40
 	maxCheck     = 300
-
-	MaxMemo          = 2000 // 每份备忘（秘书、每位负责人各一份）
-	MaxLeaders       = 200  // 全部负责人
-	MaxLeaderWorkers = 5    // 负责人的执行者组合
 )
 
 func checkText(field, v string, limit int, required bool) error {
@@ -101,9 +93,7 @@ func CheckRoom(dept string, count int) error {
 	if count < MaxPoints {
 		return nil
 	}
-	return api.Limit("atrium org show "+dept,
-		"部门 %s 已有 %d 条要点（上限 %d）：先合并相近的（atrium point edit kN --text …）、"+
-			"删掉最不值的（atrium point edit kN --delete），或下沉到子部门", dept, count, MaxPoints)
+	return Full("points", dept, count)
 }
 
 // ChainLine 是派活时附给执行者的一行：「k3（o1）规矩——为什么」。

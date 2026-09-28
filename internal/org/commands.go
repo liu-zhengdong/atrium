@@ -17,6 +17,7 @@ var introFlags = []cli.Flag{
 }
 
 func Commands(t *cli.Table) {
+	defer resourceCommands(t)
 	t.Group("org", "部门")
 	t.Add(cli.Command{Path: "org tree", Summary: "看部门树",
 		Run: func(c *cli.Ctx) error {
@@ -86,6 +87,13 @@ func Commands(t *cli.Table) {
 					fmt.Fprintf(&b, "  %s\n", ChainLine(p))
 				}
 			}
+			var used []string
+			for _, l := range s.Limits {
+				if l.Key != "points" {
+					used = append(used, fmt.Sprintf("%s %d/%d", strings.TrimPrefix(strings.TrimPrefix(l.What, "每部门"), "部门"), l.Used, l.Max))
+				}
+			}
+			fmt.Fprintf(&b, "\n用量：%s\n", strings.Join(used, "，"))
 			next := "atrium point add " + d.ID + " <一句话>"
 			if s.Room == 0 {
 				next = "atrium point edit <kN> --text <合并后的一句话>"

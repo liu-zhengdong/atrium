@@ -1,11 +1,14 @@
 package leaders
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
 // Module 是负责人运行时的接入点：负责人令牌认证与权限判定、上交接口与命令、唤醒循环。
@@ -15,6 +18,9 @@ func moduleFor(h *hub) app.Module {
 	return app.Module{Name: "leaders", Commands: commands, Run: h.run,
 		Routes: func(r *api.Router, env *app.Env) {
 			r.AddAuth(h.auth)
+			MaterialsOverview = func(ctx context.Context, q store.Querier, dept string) (string, error) {
+				return org.Overview(ctx, q, env.Paths.Data, dept)
+			}
 			r.AddGuard("leader", guard(env.DB))
 			r.Handle("POST /api/escalations", func(q *api.Req) (any, error) {
 				if q.Actor.Kind != "leader" {

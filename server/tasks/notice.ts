@@ -17,6 +17,57 @@ import { deliveryRoutes, SECRETARY } from "../leaders/route.ts";
 import { involvedOf } from "./also.ts";
 import { ref } from "../org/model.ts";
 import { hasOrg } from "../org/task-node.ts";
+import { urgentStage } from "./urgent.ts";
+
+/** 紧急任务各阶段推送给谁（t215）：秘书与用户（接推送前走事件）。 */
+export const URGENT_WATCHERS = [SECRETARY, "u1"] as const;
+
+/**
+ * 紧急任务的阶段推送（t215）：开始、止损、抢占、交付、检查、合入、上线（附验证）、失败、受阻、卡死重试、换人
+ * 各投一条 urgent_stage 给秘书与用户；同一任务未确认的合并成最新一条（去重键 tN:urgent）。
+ * 不是紧急任务或不是要推送的阶段不投；返回投了没有。
+ */
+export function publishUrgentStage(
+  inbox: EventInbox,
+  db: DatabaseSync,
+  id: number,
+  kind: string,
+  detail: Record<string, unknown> = {},
+  task?: Task,
+): boolean {
+  const stage = urgentStage(kind);
+  if (!stage) return false;
+  const row = task ?? getTask(db, id);
+  if (row.urgent !== 1) return false;
+  const reason =
+    typeof detail.reason === "string" && detail.reason
+      ? `：${detail.reason}`
+      : "";
+  for (const subscriber of URGENT_WATCHERS)
+    inbox.publish({
+      subscriber,
+      taskId: id,
+      source: "urgent",
+      kind: "urgent_stage",
+      key: `${row.ref}:urgent`,
+      detail: {
+        title: row.title,
+        status: row.status,
+        worker: row.worker,
+        pr_url: row.pr_url,
+        stage,
+        event: kind,
+        ...detail,
+        // 一句话放在 message：事件列表与秘书唤醒都先读它。
+        message: `紧急 ${row.ref}「${row.title}」${stage}${reason}`.slice(
+          0,
+          300,
+        ),
+        next: `atrium task show ${row.ref}`,
+      },
+    });
+  return true;
+}
 
 /**
  * 把任务结果投递给负责人（#262）：完成、失败、受阻、卡死共用去重键 tN:outcome，CI 用 tN:ci。
@@ -31,7 +82,14 @@ export function publishTask(
   detail: Record<string, unknown>,
   actor?: string,
 ): number[] {
-  if (db.prepare("SELECT 1 FROM tasks WHERE review_task=? LIMIT 1").get(id))
+  // 审阅任务（含紧急任务合入后并行的审阅，t215）的结论由原任务上记再投。
+  if (
+    db
+      .prepare(
+        "SELECT 1 FROM tasks WHERE review_task=? UNION ALL SELECT 1 FROM task_after_reviews WHERE review_task=? LIMIT 1",
+      )
+      .get(id, id)
+  )
     return [];
   // 总任务（t190）：先让上面每层总任务的状态跟上，再按「秘书只收总任务级的」分投。
   const totals = atomically(db, () => syncTotals(db, id));
@@ -76,6 +134,8 @@ export function publishTask(
       },
     });
   if (totals.root) publishTotalOnline(inbox, db, totals.root);
+  // 紧急任务（t215）：各阶段另外推给秘书与用户。
+  if (task.urgent === 1) publishUrgentStage(inbox, db, id, kind, detail, task);
   if (
     kind === "blocked" &&
     detail.source === "budget" &&

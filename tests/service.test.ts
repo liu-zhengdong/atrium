@@ -356,7 +356,7 @@ test(
       "--urgent",
     );
     assert.equal(b.code, 0, b.stderr);
-    assert.match(b.stdout, /紧急：跳过本机负载限制/);
+    assert.match(b.stdout, /紧急：没空位先暂停闲时/);
     const queued = await f.cli("task", "run", "t1", "--worker", "grok");
     assert.equal(queued.code, 0, queued.stderr);
     assert.match(
@@ -373,7 +373,7 @@ test(
     );
     assert.equal(urgent.code, 0, urgent.stderr);
     assert.match(urgent.stdout, /已派 t2 给 codex/);
-    assert.match(urgent.stdout, /紧急：跳过本机负载限制/);
+    assert.match(urgent.stdout, /紧急：没空位先暂停闲时/);
     const top = JSON.parse((await f.cli("top", "--json")).stdout).result as {
       rows: { ref: string; urgent: boolean }[];
       host: { paused_by: string };
@@ -382,7 +382,7 @@ test(
     assert.equal(top.host.paused_by, "load");
     const shown = await f.cli("task", "show", "t2");
     assert.match(shown.stdout, /t2 · 紧急 修全景网页/);
-    assert.match(shown.stdout, /紧急：是（跳过本机负载限制/);
+    assert.match(shown.stdout, /紧急：是（紧急通道）/);
     // 破坏输入：两个开关一起给。
     const both = await f.cli("task", "set", "t2", "--urgent", "--no-urgent");
     assert.notEqual(both.code, 0);
@@ -394,9 +394,20 @@ test(
     const on = await f.cli("task", "set", "t1", "--urgent");
     assert.equal(on.code, 0, on.stderr);
     assert.match(on.stdout, /t1 已更新 · \[running\]/);
-    assert.match(on.stdout, /紧急：跳过本机负载限制/);
-    for (const ref of ["t1", "t2"])
-      assert.equal((await f.cli("task", "stop", ref)).code, 0);
+    assert.match(on.stdout, /紧急：没空位先暂停闲时/);
+    // t2 已取消紧急、还在跑：t1 标上紧急时本机太忙，先暂停 t2 腾位置（t215 抢占）。
+    let paused = "";
+    for (const end = Date.now() + 20_000; Date.now() < end;) {
+      paused = (await f.cli("task", "show", "t2")).stdout;
+      if (/抢占暂停/.test(paused)) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    assert.match(paused, /被紧急 t1 抢占暂停/);
+    assert.equal(
+      (await f.cli("task", "set", "t2", "--status", "cancelled")).code,
+      0,
+    );
+    assert.equal((await f.cli("task", "stop", "t1")).code, 0);
   },
 );
 

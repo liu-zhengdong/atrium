@@ -138,6 +138,11 @@ import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
 import { publishTotals } from "./notice.ts";
 import { productRound } from "../products/model.ts";
 import { pendingChoices } from "../choices/store.ts";
+import { UrgentLane } from "./urgent-runtime.ts";
+import { storedHosts, urgentIdleMs } from "./urgent.ts";
+import { crowded } from "../hosts/state.ts";
+import { hasEvent } from "./ledger-model.ts";
+import type { Active } from "./active.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -193,6 +198,8 @@ export type RunnerOptions = {
   agentOnlineMs?: number;
   /** 远程检查进行中多久看一次那台在不在线（测试缩短）。 */
   agentCheckWatchMs?: number;
+  /** 紧急任务没有进展多久换执行者（毫秒，t215）；缺省读 ATRIUM_URGENT_IDLE_MINUTES，10 分钟。 */
+  urgentIdleMs?: number;
 };
 
 export class TaskRunner {
@@ -215,6 +222,10 @@ export class TaskRunner {
   private readonly tunnels: HostTunnels;
   /** 合入队列的重跑检查派到哪台跑（#358 第 2 步）。 */
   readonly checks: CheckDispatch;
+  /** 紧急通道（t215）：止损、抢占、续上。 */
+  readonly lane: UrgentLane;
+  /** 紧急任务等上线时，上次催上线观察的时刻。 */
+  private urgentOnlineAt = 0;
   /** 额度多主机合并的来源（quota-source 经 hosts/quota.ts 取）。 */
   private readonly quotaSource = () => this.hostQuota();
   /** 任务仓库路径 → owner/name（挑远程主机时对仓库白名单）；解析不出为 null。 */
@@ -334,6 +345,9 @@ export class TaskRunner {
         choose: (need, pinned) => this.chooseHostFor(need, pinned),
         installed: (host) => this.remoteInstalled(host),
       },
+      makeRoom: (id, tool, host) => this.lane.makeRoom(id, tool, host),
+      swapChoice: (active) => this.swapChoice(active),
+      urgentIdleMs: options.urgentIdleMs ?? urgentIdle(),
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
         settle: () => void this.settleReviews(),
@@ -347,6 +361,17 @@ export class TaskRunner {
             ),
           ),
       },
+    });
+    this.lane = new UrgentLane(db, {
+      x: this.x,
+      inbox: this.inbox,
+      exec: this.exec,
+      stop: (ref) => this.stop(ref),
+      pauseHost: (host) => void this.pauseHost(`h${host}`, true),
+      run: (ref, body) => this.run(ref, body),
+      crowded: (host, except) => this.crowdedHost(host, except),
+      changed: (id) => this.waits.changed(id),
+      closed: () => this.closed,
     });
     this.merge = new MergeQueue(db, {
       data: options.data,
@@ -407,6 +432,13 @@ export class TaskRunner {
         !!this.db
           .prepare("SELECT 1 FROM tasks WHERE delivery_stage='merging' LIMIT 1")
           .get() || !!restartInProgress(options.data),
+      // 紧急的（t215）只等别的紧急任务合入与正在进行的重启；普通任务的合入已让路。
+      urgentBusy: () =>
+        !!this.db
+          .prepare(
+            "SELECT 1 FROM tasks WHERE delivery_stage='merging' AND urgent=1 LIMIT 1",
+          )
+          .get() || !!restartInProgress(options.data),
       deploy: options.online?.deploy ?? cliDeploy(options.data),
       restartError: (version) => lastRestartError(options.data, version),
       publish: (id, kind, detail) => this.x.publish(id, kind, detail),
@@ -465,6 +497,9 @@ export class TaskRunner {
       if (!this.closed && this.recovered) await this.scheduler.tick();
       // 因本机满或太忙排队的，负载降下来后在这里拉起。
       if (!this.closed && this.recovered) await this.x.drain();
+      // 紧急通道清空后续上被抢占的任务（t215）。
+      if (!this.closed && this.recovered) await this.lane.resume();
+      if (!this.closed && this.recovered) this.kickUrgentOnline();
       if (!this.closed && this.recovered) await this.settleReviews();
       if (!this.closed && this.recovered) await this.settleCouncils();
       if (!this.closed && this.recovered) this.review.kick();
@@ -567,12 +602,13 @@ export class TaskRunner {
     };
   }
 
-  async run(reference: unknown, body: unknown) {
+  /** actor：以 leader 令牌派的（aN），标紧急时记下是谁。 */
+  async run(reference: unknown, body: unknown, actor?: string) {
     const request = runRequest(body);
     const id = parseTaskRef(reference);
     // --urgent 派的同时标上紧急（t113）；已经在排队的，标上后立刻按紧急再排一轮（带 --worker 的走下面的改派）。
     if (request.urgent && !request.worker && queued(this.db, id)) {
-      this.markUrgent(id);
+      this.markUrgent(id, request.why, actor);
       await this.urgentQueued(id);
       return { task: getTask(this.db, id), queued: !!queued(this.db, id) };
     }
@@ -626,10 +662,15 @@ export class TaskRunner {
           `atrium task run ${task.ref} --worker <工具+模型>`,
         );
       }
-      if (request.urgent && task.urgent !== 1) task = this.markUrgent(id);
+      if (request.urgent && task.urgent !== 1)
+        task = this.markUrgent(id, request.why, actor);
       return this.reassignQueued(task, request);
     }
-    if (request.urgent && task.urgent !== 1) task = this.markUrgent(id);
+    if (request.urgent && task.urgent !== 1)
+      task = this.markUrgent(id, request.why, actor);
+    // 先止损（t215）：紧急任务写了止损动作还没执行过的，派修复前先执行、记事件。
+    if (task.urgent === 1 && task.stopgap && !hasEvent(this.db, id, "stopgap"))
+      await this.lane.stopgap(id);
     // 指定的远程主机：按那台上报的已装工具挑执行者（#358）。
     const pinned =
       request.host === undefined ? null : this.pinnedHost(request.host);
@@ -751,6 +792,19 @@ export class TaskRunner {
       };
     }
     const host = choice.host;
+    // 紧急的（t215）：没空位就先暂停闲时（再普通）任务；独占工具被占着就暂停占着的，等它让出后由 drain 拉起。
+    if (task.urgent === 1 && this.lane.makeRoom(id, tool, host).wait) {
+      this.x.launching.delete(id);
+      return {
+        ...this.enqueue(
+          task,
+          chosen,
+          `紧急：等 ${tool} 让出来（占着它的已在暂停），让出后立刻拉起`,
+          pinned,
+        ),
+        pick,
+      };
+    }
     if (
       placement(ADAPTERS[tool].exclusive, this.x.busy(tool, id, host)) ===
       "queue"
@@ -865,7 +919,78 @@ export class TaskRunner {
       }
       repo = this.repoKeys.get(task.repo) ?? "?";
     }
-    return { tool, repo, urgent, localOnly };
+    return {
+      tool,
+      repo,
+      urgent,
+      localOnly,
+      avoid: storedHosts(task.avoid_hosts),
+    };
+  }
+
+  /** 某台主机此刻满了或太忙（不算 except 这件）：本机看闸门，远程看代理上报与上限。 */
+  private crowdedHost(host: number, except: number) {
+    if (host === LOCAL_HOST)
+      return !this.host.gate(this.x.inFlight(except), false).ok;
+    const candidate = this.hostCandidates(except).find((c) => c.id === host);
+    return !!candidate && crowded(candidate);
+  }
+
+  /**
+   * 紧急任务换人（t215）：按紧急的挑人顺序（一次通过率、速度、正忙）找一个不同工具、不正忙、能接的执行者；
+   * 额度用尽或都不能接的返回原因。
+   */
+  private async swapChoice(active: Active): Promise<Chosen | { note: string }> {
+    try {
+      const task = getTask(this.db, active.id);
+      const pace = await (this.launchOptions.pace ?? readPace)().catch(
+        () => undefined,
+      );
+      const held = this.quota.held();
+      const busy = this.x.busyTools(active.id);
+      const view = await pickFor(task, active.risk, {
+        db: this.db,
+        launchOptions: this.launchOptions,
+        pace,
+        held,
+        busy,
+      });
+      const next = view.candidates.find(
+        (c) => c.eligible && !c.busy && c.tool !== active.tool,
+      );
+      if (!next) return { note: "没有别的执行者能接" };
+      const choice = await chooseWorker(
+        { worker: next.worker, risk: active.risk },
+        { ...this.launchOptions, pace: async () => pace },
+        held,
+        {
+          busy,
+          exclude: new Set([active.tool]),
+          chain: taskAvoidChain(this.db, task),
+        },
+      );
+      if (choice.waitUntil !== undefined)
+        return { note: `${choice.worker.id} 额度用尽` };
+      return { worker: choice.worker, risk: active.risk };
+    } catch (error) {
+      return {
+        note: `挑不到能换的执行者：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  /** 紧急任务已合入在等上线（t215）：15 秒催一次上线观察，不等每分钟一轮。 */
+  private kickUrgentOnline() {
+    const now = Date.now();
+    if (now - this.urgentOnlineAt < 15_000) return;
+    const waiting = this.db
+      .prepare(
+        "SELECT 1 FROM tasks WHERE urgent=1 AND delivery_stage='merged' AND online_wait=1 LIMIT 1",
+      )
+      .get();
+    if (!waiting) return;
+    this.urgentOnlineAt = now;
+    this.online.kick();
   }
 
   /** 各主机此刻的情况（本机按闸门，远程按代理上报与服务手里在跑的）。 */
@@ -1116,14 +1241,28 @@ export class TaskRunner {
     return { host: this.viewOf(hostRow(this.db, id)) };
   }
 
+  /** 清理主机上 Atrium 拉起的残留进程（t215 `host clean`，止损动作同一实现）。 */
+  async cleanHost(reference: unknown) {
+    const id = parseHostRef(reference, "主机");
+    hostRow(this.db, id);
+    const detail = await this.lane.clean(id);
+    return { host: this.viewOf(hostRow(this.db, id)), detail };
+  }
+
   /** 排队中的任务刚标上紧急：立刻按紧急再排一轮，不等下次巡检。 */
   async urgentQueued(id: number) {
     if (!this.closed && this.recovered && queued(this.db, id))
       await this.x.drain();
   }
 
-  private markUrgent(id: number) {
-    const task = updateTask(this.db, id, { urgent: true });
+  private markUrgent(id: number, why?: string, by?: string) {
+    const task = updateTask(
+      this.db,
+      id,
+      { urgent: true, ...(why ? { why } : {}) },
+      Date.now(),
+      { by },
+    );
     this.waits.changed(id);
     return getTask(this.db, task.id);
   }
@@ -1659,6 +1798,11 @@ export class TaskRunner {
       },
       ...(leaders.length ? { leaders } : {}),
       host: this.hostView(),
+      // 紧急通道（t215）：进行中的紧急任务与「太多就等于没有紧急」的提示；没有时不给。
+      ...(() => {
+        const lane = this.lane.crowdView();
+        return lane.count ? { urgent: lane } : {};
+      })(),
       // 接入过远程主机才列主机一行（#358）。
       ...(this.hasRemoteHosts()
         ? {
@@ -1713,6 +1857,13 @@ export class TaskRunner {
       });
     return this.waits.wait(id, seconds, signal);
   }
+}
+
+/** 紧急任务没有进展多久换人：读服务环境，写错的照缺省并记日志。 */
+function urgentIdle() {
+  const { ms, problem } = urgentIdleMs(process.env);
+  if (problem) console.error(`紧急通道配置：${problem}`);
+  return ms;
 }
 
 const parseJson = <T>(text: string | null): T | null => {

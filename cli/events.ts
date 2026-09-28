@@ -26,7 +26,10 @@ export function eventLine(event: InboxEvent) {
   // 已上线通知把执行者写的端到端验证原样附在下面，秘书照着在线上跑。
   const verification =
     // 总任务整体上线（t190）附全部叶子的端到端验证摘要。
-    (event.kind === "online" || event.kind === "total_online") &&
+    // 紧急任务的「上线」阶段推送（t215）同样附上。
+    (event.kind === "online" ||
+      event.kind === "total_online" ||
+      event.kind === "urgent_stage") &&
     typeof detail.verification === "string"
       ? `\n  端到端验证：\n${detail.verification
           .split("\n")

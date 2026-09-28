@@ -337,5 +337,5 @@ export async function createApp(options: {
     db,
     readers: options.quotaReaders,
   });
-  return { app, db, taskRunner };
+  return { app, db, taskRunner, leaderTokens };
 }

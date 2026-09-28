@@ -30,7 +30,7 @@ import {
 /** 会话 id 在日志开头（claude 的 init 事件、codex 的抬头）；只读前 1 MiB。 */
 const HEAD_BYTES = 1024 * 1024;
 
-async function readHead(file: string) {
+export async function readHead(file: string) {
   try {
     const handle = await open(file, "r");
     try {

@@ -133,6 +133,8 @@ export type Snapshot = {
   }[];
   /** 等用户拍板的选项单（产品部）；没有时不给，旧版服务也没有。 */
   choices?: { open: number; list: PendingChoice[] };
+  /** 进行中的紧急任务（t215）与太多时的提示；没有紧急任务时不给。 */
+  urgent?: { count: number; refs: string[]; warning: string | null };
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
   plan?: PlanView | null;
   plan_error?: string;
@@ -402,6 +404,15 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const lines = [
     pad(oneLine(head, headRoom), headRoom) + clock,
     ...(choice ? [oneLine(choice, frame.width)] : []),
+    // 紧急任务太多（t215）：不拒绝，只提醒。
+    ...(snapshot.urgent?.warning
+      ? [
+          oneLine(
+            `注意：${snapshot.urgent.warning}（${snapshot.urgent.refs.join("、")}）`,
+            frame.width,
+          ),
+        ]
+      : []),
     ...rows.flatMap((row, index) => {
       // 原因再长也不能顶出屏幕：状态列的上限是它自己的宽度加最近动作那段的空位。
       const cell = oneLine(states[index]!, plan.stateW + 2 + plan.actionW);

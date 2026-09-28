@@ -28,6 +28,7 @@ import {
   reviewNeed,
   type DiffSummary,
 } from "./review.ts";
+import { openAfterReviews, type AfterReview } from "./urgent-ledger.ts";
 
 /** 最近一次派活记下的风险；旧事件或坏记录按 low。 */
 export function taskRisk(db: DatabaseSync, id: number): Risk {
@@ -123,6 +124,26 @@ export class ReviewGate {
       this.options.enqueue(id);
       return { kind: "merge_queued" };
     }
+    // 紧急任务（t215）：审阅不挡合入，先进合入队列，审阅并行；审出问题开跟进任务补。
+    if (task.urgent === 1) {
+      this.db
+        .prepare(
+          `INSERT INTO task_after_reviews(task_id,review_task,started_at,settled_at,verdict,followup_task)
+            VALUES (?,NULL,?,NULL,NULL,NULL)
+            ON CONFLICT(task_id) DO UPDATE SET review_task=NULL,started_at=excluded.started_at,settled_at=NULL,verdict=NULL,followup_task=NULL`,
+        )
+        .run(id, Date.now());
+      noteTask(this.db, id, "review_parallel", { reason: need.reason, risk });
+      this.options.enqueue(id);
+      this.kick();
+      return {
+        kind: "merge_queued",
+        detail: {
+          reason: `紧急：审阅与合入并行（${need.reason}），审出问题开跟进任务补`,
+          risk,
+        },
+      };
+    }
     const diff = await this.diff(task);
     atomically(this.db, () => {
       this.db
@@ -199,6 +220,18 @@ export class ReviewGate {
           });
         }
       }
+      for (const row of openAfterReviews(this.db)) {
+        if (this.closed) return;
+        try {
+          await this.stepAfter(row);
+        } catch (error) {
+          noteTask(this.db, row.task_id, "review_error", {
+            reason: redact(
+              error instanceof Error ? error.message : String(error),
+            ),
+          });
+        }
+      }
     } finally {
       this.sweeping = false;
     }
@@ -251,22 +284,32 @@ export class ReviewGate {
     );
   }
 
-  private async startReview(task: Task) {
+  /** 审阅者与审阅详述：挑人、写详述文件；缺东西或挑不到人返回原因。 */
+  private async prepareReview(task: Task): Promise<
+    | {
+        ok: true;
+        worker: string;
+        text: string;
+        file: string;
+        diff: DiffSummary;
+      }
+    | { ok: false; reason: string }
+  > {
     const { repo, worktree, pr_url: url } = task;
     if (!repo || !worktree || !url)
-      return this.block(task, "审阅缺少仓库、工作树或 PR");
+      return { ok: false, reason: "审阅缺少仓库、工作树或 PR" };
     const original = await this.worker(task);
     let worker: string;
     try {
       worker = await this.options.pickReviewer(original);
     } catch (error) {
-      return this.block(
-        task,
-        `找不到合格的审阅者：${error instanceof Error ? error.message : String(error)}`,
-      );
+      return {
+        ok: false,
+        reason: `找不到合格的审阅者：${error instanceof Error ? error.message : String(error)}`,
+      };
     }
     const origin = await originRepo(repo, this.options.run);
-    if ("error" in origin) return this.block(task, origin.error);
+    if ("error" in origin) return { ok: false, reason: origin.error };
     const base = await defaultBranch(repo, this.options.run);
     const diff = (await this.diff(task)) ?? diffSummary([]);
     const risk = taskRisk(this.db, task.id);
@@ -289,6 +332,13 @@ export class ReviewGate {
       }),
     );
     writeFileSync(file, text, { mode: 0o600 });
+    return { ok: true, worker, text, file, diff };
+  }
+
+  private async startReview(task: Task) {
+    const prepared = await this.prepareReview(task);
+    if (!prepared.ok) return this.block(task, prepared.reason);
+    const { worker, text, file, diff } = prepared;
     const reviewer = atomically(this.db, () => {
       const current = getTask(this.db, task.id);
       if (current.delivery_stage !== "reviewing" || current.review_task)
@@ -333,6 +383,144 @@ export class ReviewGate {
         reviewer.ref,
       );
     }
+  }
+
+  /**
+   * 紧急任务合入后并行的审阅（t215）：没开审阅任务的先开并派出；审阅者结束后按结论收尾——
+   * 通过记一笔；打回开一件跟进任务（附审阅意见）并投给负责人；没给结论也投给负责人。原任务的合入不受影响。
+   */
+  private async stepAfter(row: AfterReview) {
+    const task = getTask(this.db, row.task_id);
+    if (row.review_task === null) {
+      const prepared = await this.prepareReview(task);
+      if (!prepared.ok)
+        return this.settleAfter(task, "error", null, prepared.reason);
+      const reviewer = atomically(this.db, () => {
+        const created = createTask(this.db, {
+          title: `审阅 ${task.ref}（合入后）：${task.title}`.slice(0, 200),
+          brief: prepared.text,
+          brief_path: prepared.file,
+          deliver: "none",
+          ...(task.owner ? { owner: task.owner } : {}),
+        });
+        noteTask(this.db, created.id, "review_of", {
+          task: task.ref,
+          after_merge: true,
+        });
+        this.db
+          .prepare(
+            "UPDATE task_after_reviews SET review_task=? WHERE task_id=?",
+          )
+          .run(created.id, task.id);
+        noteTask(this.db, task.id, "review_started", {
+          reviewer: created.ref,
+          worker: prepared.worker,
+          diff: prepared.diff.text,
+          parallel: true,
+        });
+        return created;
+      });
+      this.options.changed(task.id);
+      try {
+        await this.options.launch(reviewer.ref, prepared.worker);
+      } catch (error) {
+        this.settleAfter(
+          task,
+          "error",
+          null,
+          `审阅任务 ${reviewer.ref} 派不出去：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      return;
+    }
+    const reviewer = getTask(this.db, row.review_task);
+    if (this.options.inFlight(reviewer.id) || reviewer.status === "running")
+      return;
+    if (
+      reviewer.status !== "done" &&
+      !(reviewer.status === "failed" && adoptedExit(this.db, reviewer.id))
+    )
+      return this.settleAfter(
+        task,
+        "error",
+        null,
+        `合入后审阅 ${reviewer.ref} ${reviewer.status}，没有给出结论`,
+      );
+    const verdict = parseReviewVerdict(reviewer.result);
+    if (!verdict)
+      return this.settleAfter(
+        task,
+        "error",
+        null,
+        `合入后审阅 ${reviewer.ref} 没有写「审阅结论：通过/打回」`,
+      );
+    const notes = redact(verdict.notes);
+    if (verdict.passed) {
+      noteTask(this.db, task.id, "review_passed", {
+        reviewer: reviewer.ref,
+        worker: reviewer.worker,
+        after_merge: true,
+        ...(notes ? { notes } : {}),
+      });
+      this.settleAfter(task, "passed", null, null);
+      this.options.publish(task.id, "review_passed", {
+        reviewer: reviewer.ref,
+        after_merge: true,
+      });
+      return;
+    }
+    const followup = atomically(this.db, () => {
+      const created = createTask(this.db, {
+        title: `跟进 ${task.ref} 的审阅意见：${task.title}`.slice(0, 200),
+        brief: clipBrief(
+          `紧急任务 ${task.ref}「${task.title}」为了尽快上线，审阅与合入并行，已合入（PR ${task.pr_url ?? "无"}）。\n` +
+            `审阅者 ${reviewer.ref}（${reviewer.worker ?? "审阅者"}）打回，意见如下；请在新分支上逐条修复并开 PR。\n\n${notes || "审阅者没写具体问题，先看审阅任务的结果"}`,
+        ),
+        ...(task.repo ? { repo: task.repo } : {}),
+        ...(task.owner ? { owner: task.owner } : {}),
+        ...(task.part_id !== null ? { part: `o${task.part_id}` } : {}),
+      });
+      noteTask(this.db, task.id, "review_rejected", {
+        reviewer: reviewer.ref,
+        worker: reviewer.worker,
+        notes,
+        after_merge: true,
+        followup: created.ref,
+      });
+      this.settleAfter(task, "rejected", created.id, null);
+      return created;
+    });
+    this.options.publish(task.id, "review_followup", {
+      reason: `合入后审阅打回（${reviewer.ref}）：${notes || "没写具体问题"}；已开跟进任务 ${followup.ref}`,
+      reviewer: reviewer.ref,
+      followup: followup.ref,
+      next: `atrium task run ${followup.ref}`,
+    });
+  }
+
+  /** 合入后审阅收尾：记结论；没给出结论的投给负责人看。 */
+  private settleAfter(
+    task: Task,
+    verdict: "passed" | "rejected" | "error",
+    followup: number | null,
+    reason: string | null,
+  ) {
+    this.db
+      .prepare(
+        "UPDATE task_after_reviews SET settled_at=?,verdict=?,followup_task=? WHERE task_id=? AND settled_at IS NULL",
+      )
+      .run(Date.now(), verdict, followup, task.id);
+    this.options.changed(task.id);
+    if (verdict !== "error" || !reason) return;
+    const safe = redact(reason);
+    noteTask(this.db, task.id, "review_error", {
+      reason: safe,
+      after_merge: true,
+    });
+    this.options.publish(task.id, "review_followup", {
+      reason: `${safe}；合入不受影响，要补审阅请另开任务`,
+      next: `atrium task show ${task.ref}`,
+    });
   }
 
   private block(task: Task, reason: string, reviewer?: string, by?: string) {

@@ -641,7 +641,7 @@ test("紧急任务：建任务时标上，全景任务行与排期就绪组都�
   );
 });
 
-test("合入队列：正在合入的先做完，再是紧急的，其余按入队先后", () => {
+test("合入队列：紧急的在前（连重启前没合完的普通任务也让它），同一档正在合入的先做完，其余按入队先后", () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const add = (
@@ -662,9 +662,14 @@ test("合入队列：正在合入的先做完，再是紧急的，其余按入�
   add(3, "merge_queued", 3, 1);
   add(4, "merge_queued", 0, 1, "blocked");
   assert.equal(next(), 3);
+  // 队列一次只跑一个：「正在合入」而没在跑的普通任务是重启前没合完或让路的，紧急的插到它前面（t215）。
   add(5, "merging", 9, 0);
-  assert.equal(next(), 5);
-  db.prepare("DELETE FROM tasks WHERE id IN (3,5)").run();
+  assert.equal(next(), 3);
+  add(6, "merging", 9, 1);
+  assert.equal(next(), 6, "紧急的里正在合入的先做完");
+  db.prepare("DELETE FROM tasks WHERE id IN (3,6)").run();
   assert.equal(next(), 2);
+  db.prepare("DELETE FROM tasks WHERE id=2").run();
+  assert.equal(next(), 5, "普通的里正在合入的先做完");
   db.close();
 });

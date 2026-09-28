@@ -33,6 +33,8 @@ export type CheckNeed = {
   urgent: boolean;
   /** 仓库的检查基准平台（checkBaseline）：把关检查只在这个平台上跑。 */
   platform: string;
+  /** 任务写了避开的主机（t215）：不派检查过去。 */
+  avoid?: readonly number[];
 };
 
 /** 仓库能写进 .agents/check-platform 的检查基准平台。 */
@@ -88,6 +90,7 @@ export function checkRefusal(
   if (candidate.kind !== "remote") return null;
   if (candidate.connection !== "online") return `${ref} 不在线`;
   if (candidate.paused) return `${ref} 已暂停接活`;
+  if (need.avoid?.includes(candidate.id)) return `任务写了避开 ${ref}`;
   const platform = platformRefusal(
     candidate.id,
     candidate.platform,
@@ -125,6 +128,9 @@ export function chooseCheckHost(
     .sort((a, b) => score(a) - score(b) || a.id - b.id);
   const best = remotes[0];
   if (!best) return { host: localId, kind: "local" };
+  // 紧急的（t215）：本机是检查基准平台就在本机，立刻跑、不占名额，不去远程传提交、装依赖。
+  if (need.urgent && local && !local.paused && local.platform === need.platform)
+    return { host: localId, kind: "local" };
   const localFree =
     !!local &&
     !local.paused &&

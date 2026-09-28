@@ -60,6 +60,13 @@ import {
 } from "./also.ts";
 import { checkSpecialists } from "./specialist-scope.ts";
 import { syncTotals } from "./rollup-ledger.ts";
+import {
+  avoidHostsOf,
+  parseStopgap,
+  stopgapJson,
+  whyOf,
+  type StopgapAction,
+} from "./urgent.ts";
 
 /** brief 给内容（brief_path 记来源）；只给 brief_path 时按路径读入，兼容旧调用方。 */
 function briefOf(input: Record<string, unknown>, repo: string | null) {
@@ -77,6 +84,30 @@ function urgentOf(value: unknown) {
   if (value === undefined) return false;
   if (typeof value !== "boolean") throw usage("urgent: 应为 true 或 false");
   return value;
+}
+
+/**
+ * 紧急通道的附加字段（t215）：原因（why）、避开的主机（avoid_host）、止损动作（stopgap）。
+ * 止损动作只给紧急任务写；返回要写进 tasks 的列（没给的不在里面）与解析后的止损动作。
+ */
+function urgentExtras(
+  input: Record<string, unknown>,
+  urgent: boolean,
+): { fields: Record<string, string | null>; stopgap: StopgapAction[] } {
+  const fields: Record<string, string | null> = {};
+  if ("why" in input) fields.urgent_why = whyOf(input.why);
+  if ("avoid_host" in input) {
+    const hosts = avoidHostsOf(input.avoid_host);
+    fields.avoid_hosts = hosts.length ? JSON.stringify(hosts) : null;
+  }
+  const stopgap = "stopgap" in input ? parseStopgap(input.stopgap) : [];
+  if (stopgap.length && !urgent)
+    throw usage("stopgap: 只有紧急任务能写止损动作，加上 --urgent");
+  if ("stopgap" in input)
+    fields.stopgap = stopgap.length
+      ? JSON.stringify(stopgapJson(stopgap))
+      : null;
+  return { fields, stopgap };
 }
 
 /** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
@@ -184,6 +215,9 @@ export function createTask(
     "after_pr",
     "auto",
     "urgent",
+    "why",
+    "avoid_host",
+    "stopgap",
     "priority",
     "from",
     "part",
@@ -194,6 +228,7 @@ export function createTask(
   ]);
   const specialist = specialistOptions(input);
   const urgent = urgentOf(input.urgent);
+  const extras = urgentExtras(input, urgent);
   const priority =
     input.priority === undefined ? undefined : parsePriority(input.priority);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
@@ -264,6 +299,16 @@ export function createTask(
         now,
       );
     const id = Number(lastInsertRowid);
+    const extra = {
+      ...extras.fields,
+      ...(urgent ? { urgent_by: by ?? null } : {}),
+    };
+    if (Object.keys(extra).length)
+      db.prepare(
+        `UPDATE tasks SET ${Object.keys(extra)
+          .map((key) => `${key}=?`)
+          .join(",")} WHERE id=?`,
+      ).run(...Object.values(extra), id);
     setConditions(db, id, input, now);
     writeConcerns(db, id, concerns);
     writeAlso(db, id, also);
@@ -276,6 +321,10 @@ export function createTask(
       ...(job ? { job: `r${job}` } : {}),
       ...(concerns.length ? { concerns: concerns.map(specialistRef) } : {}),
       ...(urgent ? { urgent: true } : {}),
+      ...(extras.fields.urgent_why ? { why: extras.fields.urgent_why } : {}),
+      ...(extras.stopgap.length
+        ? { stopgap: stopgapJson(extras.stopgap) }
+        : {}),
       ...(level === "idle" ? { priority: level } : {}),
       ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(by ? { by } : {}),
@@ -297,6 +346,8 @@ export function updateTask(
   reference: unknown,
   body: unknown,
   now = Date.now(),
+  /** 改任务的 leader（aN）；用户与秘书不给。 */
+  options: { by?: string } = {},
 ): Task {
   const id = parseTaskRef(reference);
   const input = objectOf(body);
@@ -314,6 +365,9 @@ export function updateTask(
     "after_pr",
     "auto",
     "urgent",
+    "why",
+    "avoid_host",
+    "stopgap",
     "priority",
     "pr_url",
     "from",
@@ -326,7 +380,7 @@ export function updateTask(
   const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、also、concern、status、deliver、issue、after、after_pr、auto、urgent、priority、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、also、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -350,6 +404,12 @@ export function updateTask(
   const target = "status" in input ? statusOf(input.status) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
+    const urgentNow =
+      "urgent" in fields ? fields.urgent === 1 : current.urgent === 1;
+    Object.assign(fields, urgentExtras(input, urgentNow).fields);
+    // 新标上紧急：记下谁标的（leader 为 aN，用户与秘书为 null）。
+    if (fields.urgent === 1 && current.urgent !== 1)
+      fields.urgent_by = options.by ?? null;
     if ("brief" in input || "brief_path" in input)
       Object.assign(fields, briefOf(input, current.repo));
     if (specialist.byPresent)

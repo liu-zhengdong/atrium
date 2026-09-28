@@ -318,6 +318,23 @@ export const hostCommands: Record<string, Command> = {
       recordNext(`恢复：atrium host resume ${result.host.ref}`);
     },
   },
+  "host clean": {
+    args: "hN",
+    about:
+      "止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，本机再结束最近一天已结束任务留下的执行者进程树；常和 host pause 一起写进紧急任务的 --stopgap",
+    positionals: [1, 1],
+    async run({ positionals: [reference], json }) {
+      const result = await (
+        await client()
+      ).post<{ host: HostView; detail: string }>(
+        `/hosts/${enc(hostRef(reference))}/clean`,
+        {},
+      );
+      if (json) printJson(result);
+      else console.log(result.detail);
+      recordNext(`看这台：atrium host show ${result.host.ref}`);
+    },
+  },
   "host resume": {
     args: "hN",
     about: "恢复往这台派活；排着的活会按顺序拉起",

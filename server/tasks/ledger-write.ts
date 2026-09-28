@@ -195,7 +195,7 @@ export function createTask(
   now = Date.now(),
   /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
   by?: string,
-  /** 运行时替父任务建的帮手（专员审查、会审意见）：不让父任务变成总任务（t190）。 */
+  /** 运行时替父任务建的帮手（专员审查、会审意见、上线验证）：不让父任务变成总任务（t190）。 */
   internal: { helper?: boolean } = {},
 ): Task {
   const input = objectOf(body);

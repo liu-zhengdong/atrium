@@ -625,9 +625,11 @@ const show: Command = {
                     `  ${when(event.at)}  ${event.kind}${
                       event.kind === "tell"
                         ? `  ${tellLine(event.detail)}`
-                        : event.detail
-                          ? `  ${clip(event.detail, 80)}`
-                          : ""
+                        : event.kind === "verified"
+                          ? `  ${verifiedLines(event.detail)}`
+                          : event.detail
+                            ? `  ${clip(event.detail, 80)}`
+                            : ""
                     }`,
                 ),
               ]
@@ -912,6 +914,35 @@ const TELL_STATE: Record<string, string> = {
   pending: "待送达",
   written: "已写入，待确认",
 };
+
+const MATCH_MARK = (matched: unknown) =>
+  matched === true ? "符合" : matched === false ? "不符合" : "无法验证";
+
+/** task show 里的上线验证结论（t181）：验证任务、结论、总结，下面逐条列命令与输出摘要。 */
+export function verifiedLines(detail: string | null) {
+  try {
+    const verify = JSON.parse(detail ?? "") as {
+      verifier?: string;
+      conclusion?: string;
+      summary?: string;
+      steps?: {
+        command?: string;
+        expected?: string;
+        output?: string;
+        matched?: unknown;
+      }[];
+    };
+    return [
+      `${verify.verifier ?? ""} ${verify.conclusion ?? ""}${verify.summary ? `：${clip(verify.summary.replace(/\s+/g, " "), 160)}` : ""}`.trim(),
+      ...(verify.steps ?? []).map(
+        (step) =>
+          `      [${MATCH_MARK(step.matched)}] ${clip((step.command ?? "").replace(/\s+/g, " "), 80)}${step.output ? ` → ${clip(step.output.replace(/\s+/g, " "), 120)}` : ""}`,
+      ),
+    ].join("\n");
+  } catch {
+    return clip(detail ?? "", 80);
+  }
+}
 
 /** task show 里一条捎话事件：作者、送达状态、原文。 */
 export function tellLine(detail: string | null) {

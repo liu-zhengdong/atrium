@@ -10,7 +10,12 @@ import { restartInProgress } from "../server/supervisor.ts";
 import { Problem } from "../server/problem.ts";
 import { localFetch, type LocalResponse } from "../server/local-http.ts";
 import { recordResult } from "./contract.ts";
-import { leaderSession, WORKER_FLAG, workerGuard } from "./worker-guard.ts";
+import {
+  isVerifier,
+  leaderSession,
+  WORKER_FLAG,
+  workerGuard,
+} from "./worker-guard.ts";
 import { requireUserAuthService, userBearer } from "./auth.ts";
 import { missingRoute, outdatedServiceAt } from "./version-check.ts";
 
@@ -27,6 +32,17 @@ export async function connect(quietStart = false): Promise<Client> {
   if (leader) return client(leader.url, "", undefined, leader.bearer);
   const data = dataDirectory();
   const before = readService(data);
+  // 上线验证执行者（t181）：只连在跑的服务，不拉起、断线也不重拉。
+  if (isVerifier()) {
+    if (!before || !alive(before.pid))
+      throw new Problem(
+        503,
+        "Atrium 服务没在跑；上线验证执行者不拉起服务，这一步记「无法验证：服务没在跑」",
+        "service_unavailable",
+      );
+    await requireUserAuthService(before);
+    return client(serviceUrl(before), data);
+  }
   const restarting = restartInProgress(data);
   const record = await startService(data).catch((error: unknown) => {
     // 端口被别的数据目录或程序占着（t71）：原样报，不附本数据目录的日志与 status 修正。

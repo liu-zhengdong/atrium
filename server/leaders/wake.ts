@@ -1,6 +1,7 @@
 import { Problem } from "../problem.ts";
 import { MEMO_MAX } from "./model.ts";
-import { decisionLine, type Decision } from "../memos/decisions.ts";
+import { decisionLine } from "../memos/decisions.ts";
+import { omittedLine, type DecisionDigest } from "../memos/digest.ts";
 import { forwardedOf } from "./route.ts";
 
 /**
@@ -199,8 +200,8 @@ export type PromptInput = {
   name: string;
   nodes: { ref: string; name: string; path: string; context: string }[];
   memo: string;
-  /** 最近的有效决定（已按条数与字数挑过）与没放下的条数。 */
-  decisions?: { shown: readonly Decision[]; omitted: number };
+  /** 决定摘要：自己的与挂在负责部分及上级的，原则 + 最近的（已按字数挑过）与没放下的条数。 */
+  decisions?: Pick<DecisionDigest, "decisions" | "omitted">;
   events: readonly PromptEvent[];
   /** 过程事件摘要（已自动确认）。 */
   digest: readonly string[];
@@ -222,15 +223,13 @@ export function leaderPrompt(input: PromptInput): string {
     `## 你的备忘（上次留给自己的，上限 ${MEMO_MAX} 字）`,
     input.memo || "（空）",
     "",
-    "## 你的决定记录（最近有效的，新的在前）",
-    ...(input.decisions?.shown.length
-      ? input.decisions.shown.map((d) => `- ${decisionLine(d)}`)
+    "## 决定记录摘要（你的、用户与上级挂在你这几块及上级的；先原则，再最近的）",
+    ...(input.decisions?.decisions.length
+      ? input.decisions.decisions.map((d) => `- ${decisionLine(d)}`)
       : ["（还没有）"]),
-    ...(input.decisions?.omitted
-      ? [
-          `还有 ${input.decisions.omitted} 条没列：atrium decision ls（看已推翻的加 --all）`,
-        ]
-      : []),
+    ...[omittedLine(input.decisions?.omitted ?? 0)].filter(
+      (line): line is string => line !== null,
+    ),
     "",
     `## 这批要处理的事件（${input.events.length} 条）`,
     ...input.events.map(eventLine),
@@ -254,7 +253,8 @@ export function leaderPrompt(input: PromptInput): string {
     "- 资料：atrium material ls --node oN；疑似没用的（资料清理线索）你来定：用不上就 atrium material archive mN --note 原因（只归档不删，可恢复），要留就 atrium material keep mN --note 原因（之后不再提）；拿不准先 atrium material show mN 看谁读过",
     `- 周期任务（巡检、调研）：atrium schedule add ${home} --kind patrol --every 1d --at 09:30；atrium schedule pause/resume/run/rm sN`,
     "- 备忘：atrium memo edit 文本（覆盖写，超过上限会被拒，先精简）；看全：atrium memo show",
-    "- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--issue N] [--task tN] [--supersedes dN]；推翻：atrium decision supersede dN --by dM",
+    `- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--node ${home}] [--issue N] [--task tN] [--supersedes dN] [--principle]；推翻：atrium decision supersede dN --by dM；推翻错了：atrium decision unsupersede dN --why 原因；查：atrium decision ls --node ${home}、atrium decision search 关键词`,
+    `- 例行巡检（周期任务到点、资料清理线索）时顺带看本部分的决定（atrium decision ls --node ${home}）：能合并的合并，被取代的标推翻并指向新决定（decision supersede），已成规矩的沉淀为要点（atrium decision settle dN --new-point 节点 要点 或 --point kN）；只是整理，不必每次都做`,
     "",
     "## 权限边界（服务端强制，越权会被拒）",
     "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审、判断专员否决；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",

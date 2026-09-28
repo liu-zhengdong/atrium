@@ -32,6 +32,7 @@ const mapReadRoutes = new Set([
   "GET /api/map/workers/:id",
   "GET /api/map/leaders",
   "GET /api/map/leaders/:id",
+  "GET /api/map/decisions",
 ]);
 
 // 拍板选项单：用户令牌，或本机全景网页会话（须带同源 Origin，cookie 为 SameSite=Strict）。

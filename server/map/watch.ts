@@ -22,6 +22,7 @@ const WATCHED = [
   "task_inbox",
   "memos",
   "decisions",
+  "decision_nodes",
   "choices",
   "choice_options",
   "choice_comments",

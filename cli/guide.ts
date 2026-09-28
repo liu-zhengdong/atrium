@@ -108,7 +108,12 @@ export const groups: Record<string, string[]> = {
     "memo edit",
     "decision add",
     "decision ls",
+    "decision search",
     "decision supersede",
+    "decision unsupersede",
+    "decision tag",
+    "decision mark",
+    "decision settle",
   ],
   资料: [
     "material add",
@@ -204,6 +209,16 @@ export function example(name: string, command: Command) {
     return "atrium decision add 额度读取不依赖OpenQuota --why 要迁到别的设备 --by u1 --issue 352";
   if (name === "decision supersede")
     return "atrium decision supersede d1 --by d3";
+  if (name === "decision unsupersede")
+    return "atrium decision unsupersede d1 --why 标错了，d3说的是另一件事";
+  if (name === "decision ls") return "atrium decision ls --node o2";
+  if (name === "decision search")
+    return "atrium decision search 额度 --node o2";
+  if (name === "decision tag")
+    return "atrium decision tag d3 --node o2 --node o5";
+  if (name === "decision mark") return "atrium decision mark d3 --principle";
+  if (name === "decision settle")
+    return "atrium decision settle d3 --new-point atrium 测试不依赖本机真实环境";
   if (name === "material add")
     return "atrium material add o4 docs/design/t120-tasks --note t120任务视图的设计稿与截图 --for t120";
   if (name === "material ls") return "atrium material ls --node o4";
@@ -263,7 +278,7 @@ export function guide(commands: Record<string, Command>) {
   return `Atrium 命令行说明书\n\n调用约定\n  任务用 t1，组织节点用 o1（旧目标与里程碑 g1 迁为节点阶段记录的 id），用户用 u1，组织节点 leader 用 a1。\n  task/events 的 --as 是事件订阅者名，memo/decision 的 --as 是记录的主人，都缺省 secretary（leader 进程里缺省是自己的 aN）；org/skill/goal/map、workers edit、specialist 的 --as 是改动记在谁名下：u1、secretary（秘书，权限同用户）或某个节点 leader 的 aN，缺省 u1，秘书会话（ATRIUM_AS=secretary）里缺省 secretary；技能修订提议用 p1。\n  所有命令支持 --json：成功 {"ok":true,"result":接口结果,"next":下一步命令或null}；失败 {"ok":false,"error":{"code","message","candidates"?},"next":修正命令或null}。只在 stdout 写一个 JSON 对象，提示在 stderr。\n  文本回执最后一行是「动作：atrium 命令」，没有下一步则省略。\n  退出码与 code：\n  0  成功\n${codes}\n\n常见任务\n  令牌失效：atrium auth rotate（使用当前 ATRIUM_DATA）。\n  数据目录与端口：默认数据 ~/.atrium，用 ATRIUM_DATA 改；前一代数据 ~/.pi/atrium/data 已归档不再使用。端口被另一份数据的 Atrium 占着时回执给出它的数据目录，要用它就设 ATRIUM_DATA=那个目录；被别的程序占着就换 ATRIUM_PORT\n  拆任务看全貌：atrium task add 目标；atrium task add 子任务 --parent t1；atrium task tree t1；人工收尾：atrium task set t2 --status done\n  总任务：有子任务的任务不派给执行者，派它下面的子任务；状态与进度按全部子孙汇总（task show/tree 显示「在做 5/12」）；秘书只收「tN 整体已上线」「tN 下的 tM 卡住」；取消连带子孙：atrium task set t1 --status cancelled --with-children\n  派活前看候选：atrium task pick t2（候选执行者、能不能接、账号额度、正忙、在干活的专员下的交付记录，最上面是推荐与理由）；只看额度：atrium quota；人工解除误判占用：atrium quota --clear claude
   leader 层：atrium leader add 名称 --worker claude+opus 登记，atrium org edit 节点 --leader a1 指派；任务没写 --owner 时事件投给归属部分最近的 leader（事件 routed 写明投给谁、为什么），找不到投秘书；leader 有要处理的事件时攒批 30 秒、起一次性进程处理并确认，连续失败或超时转交秘书；leader 只能动负责的节点及子节点（越权报 leader_scope），只把四类事上交：atrium leader escalate 说明 --kind shipped|cross|beyond|stuck [--task tN]，转交下层的上交加 --event 编号（上面只收一条）；看 leader：atrium leader ls、atrium top
   资料：设计稿、调研报告这类文件挂在节点上（短号 mN）：atrium material add o4 目录 --note 一句话 [--for t120]，存进数据目录（单版至多 20 MB，同一节点同名的再加是新版本，内容没变不加）；派活时提示词只附本节点及上级资料的清单，执行者按需 atrium material get mN（执行者环境也能用，读取记在任务上）；atrium material show mN 看版本与谁读过；清理只归档不删：各部分的周期任务到点时顺带把疑似没用的（被取代，或 90 天没读且关联都结束）投给 leader（material_stale），leader 用 atrium material archive mN --note 原因 或 atrium material keep mN --note 原因（之后不再提）；归档超过一年且大于 10 MB 的投给秘书问用户，用户点头才 atrium material rm mN
-  备忘与决定记录：秘书（secretary）与每位 leader 各有一份备忘（atrium memo edit 文本 [--as aN]，覆盖写、至多 2000 字，写在等什么、下次先看什么）和决定记录（atrium decision add 决定 --why 原因 [--by u1] [--issue N]，追加，短号 dN；推翻用 atrium decision supersede dN --by dM，decision ls 缺省只列有效的，--all 全列）；新会话或换人接手先跑 atrium memo show [--as aN]；leader 唤醒时自动附自己的备忘与最近的决定；和要点的区别：要点是执行者要守的约束，决定记录是给自己回看的取舍与原因
+  备忘与决定记录：秘书（secretary）与每位 leader 各有一份备忘（atrium memo edit 文本 [--as aN]，覆盖写、至多 2000 字，写在等什么、下次先看什么）；决定记录（atrium decision add 决定 --why 原因 [--by u1] [--node 节点]… [--principle]，追加，短号 dN）用户、秘书、每位 leader 各一份，--by u1 的记进用户那份（u1），秘书和 leader 的只放各自的；新会话或换人接手先跑 atrium memo show [--as aN]，只给摘要：标了原则的全列，再加最近 15 条，整段约 3000 字，放不下的只给一行「另有 N 条」；秘书的含用户的决定，leader 的是自己的加挂在负责部分及上级的（唤醒提示词同样）；全部用 atrium decision ls --node 节点（该节点及上级，谁记的都算）或 atrium decision search 关键词 [--all] 查；整理：补挂节点 decision tag dN --node oN，标原则 decision mark dN --principle，推翻 decision supersede dN --by dM，推翻标错了 decision unsupersede dN --why 原因，已成规矩的沉淀成要点 decision settle dN --point kN 或 --new-point 节点 要点（决定标已沉淀、缺省不再列，要点记来源 dN）；和要点的区别：要点是执行者要守的约束，决定记录是给自己回看的取舍与原因
   产品部：atrium product add atrium [--every 7d] [--worker claude+opus] 在节点下成立产品部（普通部分，管这一块的演进，可设在任意节点下、一个节点一个）：建好部分与人话字段、登记它的 leader、挂一条 research 周期任务；每轮研究的详述由模板现取材料（这一块的全景、决定记录含没选的、选项单、巡检发现、近 30 天失败与被打回的任务、完成与上线），研究者可上网看同类产品，只在工作目录写 choice.json、不写代码不开 PR；任务完成时运行时把它登记成挂在这一块上的选项单（提的人记产品部 leader），出错写进完成事件交产品部 leader 补；atrium schedule run sN 马上跑一轮，atrium product ls 看各产品部
   选项与拍板：产品部调研后提一份选项单（atrium choice add 节点 --file 选项单.json，3–5 个选项，每个写能多做到什么、为什么现在、代价、不做会怎样、依据，另写推荐与理由；短号 cN），建好先投给所属项目的 leader（choice_review），leader 可写意见、补依据、标倾向：atrium choice comment c3 意见 --prefer 1,3 --basis f3；拍板人缺省是用户：投 choice_ready 叫醒秘书，秘书可合并、去重后递给用户，但不删改方向；状态栏与 top 显示「等你拍板：cN 标题（N 个选项）」，全景网页节点页「选项」页签可看可选；用户拍板 atrium choice pick c3 1 3 --note 说明（选中的在该节点下各建一个任务交 leader 拆解），或 atrium choice pass c3 --note 原因（这轮都不要）；没选的连同说明记成该节点最近 leader（没有就是秘书）的决定记录，下一轮产品部读得到；用户可把某个节点的拍板权下放：atrium product set atrium --decider leader（改回 --decider u1，只有用户能改），之后该节点最近的 leader 收 choice_ready 并能 pick/pass，秘书只收知会、状态栏不再显示；atrium product show 节点 看当前拍板人
   看全景：人用网页，atrium map 打开本机全景网页（一次性登录链接、只读（只能拍板选项单）、实时刷新）；Agent 用命令行，atrium map o2 --json 读一块（人话字段、组成、阶段、在跑任务、巡检发现，与网页同一接口），atrium map context o2 是派活时自动附进提示词的全景位置与要点（有长度上限）；改只走命令行：atrium map edit o2 --what 一句话 --uses 场景 --flow 步骤 --now 现状，atrium map add o2 名称 --analogy 类比；专员清单：atrium specialist ls

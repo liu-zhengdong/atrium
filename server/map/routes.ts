@@ -10,7 +10,7 @@ import { mapContext, parseMax } from "./context.ts";
 import { LINK_TTL_MS, MapLogin, sessionCookie } from "./login.ts";
 import { mapNode, mapNow, mapTree, parseDepth, type LiveRow } from "./view.ts";
 import { ensureMapWatch, startMapWatch, type MapRepeat } from "./watch.ts";
-import { mapLeader, mapLeaders } from "./leaders.ts";
+import { mapDecisions, mapLeader, mapLeaders } from "./leaders.ts";
 import { addMap, editMap, type MapAdd, type MapEdit } from "./write.ts";
 import {
   mapPartRoles,
@@ -149,6 +149,10 @@ export function registerMapRoutes(
   // 负责人（leader）：组织根的页签与负责人页；/api/map/leaders/secretary 是秘书页。
   app.get("/api/map/leaders", () => mapLeaders(db));
   app.get("/api/map/leaders/:id", (request) => mapLeader(db, id(request)));
+  // 决定记录的展开与检索（t211）：人物页与块页都只给摘要，全部与关键词走这里。
+  app.get("/api/map/decisions", (request) =>
+    mapDecisions(db, q(request.query)),
+  );
   app.get("/api/map/workers", (request) =>
     mapWorkers(db, q(request.query).role),
   );

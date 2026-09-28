@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { decisionDigest, nodeScope } from "../memos/digest.ts";
 import { Problem } from "../problem.ts";
 import { oneLine } from "../text-width.ts";
 import { runningHostNames } from "../hosts/model.ts";
@@ -815,6 +816,10 @@ export function mapNode(
     choices: choicesForNodes(db, ids, x.byId),
     /** 本块挂的资料（没归档的在前，带清理线索）；网页「资料」页签。 */
     materials: materialsForNode(db, n.id),
+    /** 挂在本块及上级的决定摘要（原则 + 最近的，t211）；网页「决定」页签，全部与检索走 /api/map/decisions。 */
+    decisions: hasTable(db, "decision_nodes")
+      ? decisionDigest(db, { nodes: nodeScope(x.list, [n.id]) })
+      : null,
     tasks: {
       running: tasks.filter((t) => groupOf(t) === "running"),
       blocked: tasks.filter((t) => groupOf(t) === "blocked"),

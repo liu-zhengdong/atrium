@@ -5,7 +5,11 @@ import { overviewOf } from "../org/overview.ts";
 import { SECRETARY } from "../leaders/route.ts";
 import { partRoute } from "../leaders/subscriber.ts";
 import { choicesForNodes } from "../choices/store.ts";
-import { decisionLine, type Decision } from "../memos/decisions.ts";
+import {
+  decisionLine,
+  views,
+  type Row as DecisionRow,
+} from "../memos/decisions.ts";
 import { dayLabel, localOffset, type Offset } from "../schedules/plan.ts";
 import { oneLine } from "../text-width.ts";
 import type { ResearchFacts } from "./brief.ts";
@@ -48,57 +52,27 @@ function scopeOf(
 
 const marks = (ids: readonly unknown[]) => ids.map(() => "?").join(",");
 
-type DecisionRow = {
-  id: number;
-  owner: string;
-  decided_on: string;
-  decided_by: string;
-  text: string;
-  why: string;
-  issue: number | null;
-  node_id: number | null;
-  task_id: number | null;
-};
-
 /**
  * 这一块的有效决定：挂在范围内节点上的（含选项单没选的），加上这一块 leader 没挂节点的；
- * 这一块没有 leader 时不带秘书的全局决定。
+ * 这一块没有 leader 时不带秘书的全局决定。已沉淀成要点的不再列（要点另有）。
  */
 function decisionsOf(
   db: DatabaseSync,
   scope: readonly number[],
   leader: string | null,
-  names: ReadonlyMap<number, NodeRow>,
 ): string[] {
   if (!hasTable(db, "decisions")) return [];
-  return all<DecisionRow>(
+  const rows = all<DecisionRow>(
     db,
-    `SELECT id,owner,decided_on,decided_by,text,why,issue,node_id,task_id FROM decisions
-      WHERE superseded_by IS NULL
-        AND (node_id IN (${marks(scope)})${leader ? " OR (owner=? AND node_id IS NULL)" : ""})
+    `SELECT * FROM decisions
+      WHERE superseded_by IS NULL AND settled_point IS NULL
+        AND (id IN (SELECT decision_id FROM decision_nodes WHERE node_id IN (${marks(scope)}))${leader ? " OR (owner=? AND id NOT IN (SELECT decision_id FROM decision_nodes))" : ""})
       ORDER BY decided_on DESC,id DESC LIMIT ?`,
     ...scope,
     ...(leader ? [leader] : []),
     SHOWN,
-  ).map((r) => {
-    const d: Decision = {
-      ref: `d${r.id}`,
-      owner: r.owner,
-      date: r.decided_on,
-      by: r.decided_by,
-      text: r.text,
-      why: r.why,
-      issue: r.issue,
-      node: r.node_id === null ? null : ref(r.node_id),
-      node_name:
-        r.node_id === null ? null : (names.get(r.node_id)?.name ?? null),
-      task: r.task_id === null ? null : `t${r.task_id}`,
-      superseded_by: null,
-      supersedes: [],
-      created_at: 0,
-    };
-    return decisionLine(d);
-  });
+  );
+  return views(db, rows).map(decisionLine);
 }
 
 type TaskRow = {
@@ -313,7 +287,7 @@ export function researchFacts(
     parts,
     choices,
     decisions: scope.length
-      ? decisionsOf(db, scope, route === SECRETARY ? null : route, byId)
+      ? decisionsOf(db, scope, route === SECRETARY ? null : route)
       : [],
     findings: scope.length ? findingsOf(db, scope) : [],
     setbacks,

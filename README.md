@@ -264,21 +264,31 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 
 ## 备忘与决定记录
 
-秘书（`secretary`）和每位 leader 在 Atrium 里各有一份备忘和一份决定记录，换机器、换秘书都接得上。
+秘书（`secretary`）和每位 leader 在 Atrium 里各有一份备忘；决定记录用户（`u1`）、秘书、每位 leader 各一份。换机器、换秘书都接得上；记多了也不撑爆上下文：默认只给摘要，全部按节点或关键词查。
 
 ```bash
-atrium memo show                                   # 秘书的备忘与全部有效决定（新会话、换人接手先跑这一条）；--as a1 看 leader 的
+atrium memo show                                   # 备忘与决定摘要（新会话、换人接手先跑这一条）；--as a1 看 leader 的，--as u1 看用户的
 atrium memo edit "在等 t97 上线，先看合入队列"        # 覆盖写，上限 2000 字；--file 文件；--as a1 写 leader 的
-atrium decision add "额度读取不依赖 OpenQuota" --why "要迁到别的设备" --by u1 --issue 352   # 追加，得到 dN
-atrium decision add "…" --why "…" --by u1 --date 2026-09-26 --task t80 --node atrium    # 补记旧决定、关联任务与节点
+atrium decision add "额度读取不依赖 OpenQuota" --why "要迁到别的设备" --by u1 --issue 352   # 追加，得到 dN；--by u1 记进用户那份
+atrium decision add "…" --why "…" --by u1 --date 2026-09-26 --task t80 --node atrium --node o5   # 补记旧决定、关联任务与一个或多个节点
+atrium decision add "中文；汇报要短" --why "…" --by u1 --node o1 --principle   # 标为原则：摘要里总列出
+atrium decision ls --node o3 [--all]               # 挂在 o3 及其上级的决定（谁记的都算）；不给 --node 列 --as 那一份
+atrium decision search 额度 [--node o3] [--all]      # 按关键词查（决定与原因里，空格隔开的词须全部命中）
+atrium decision tag d7 --node o3                   # 给已有决定补挂节点（可多次 --node）
+atrium decision mark d7 --principle                # 标为原则；--normal 改回普通
 atrium decision supersede d1 --by d3               # d1 标为已推翻、指向 d3（也可在 add 时 --supersedes d1）
-atrium decision ls [--all] [--before dN] [--limit 条数]   # 日期新的在前；缺省只列有效的，--all 连已推翻的
+atrium decision unsupersede d1 --why "标错了"       # 推翻标错了：恢复为有效，记一笔谁撤销的、为什么
+atrium decision settle d7 --new-point o3 "测试不依赖本机真实环境"   # 已成规矩的沉淀成要点；或 --point k4 指向已有的
 ```
 
-- **备忘**写当前状态（在等什么、下次先看什么），每次覆盖；leader 的 `leader edit --memo` 与 `memo edit --as aN` 写同一份。**决定记录**写取舍与原因，只追加：每条有日期、谁拍板（`--by u1`／`secretary`／`aN`，缺省是记录的主人）、决定、原因，可选关联 issue、节点、任务；推翻时指向新决定，旧的留着可查。短号 `dN` 全局持久、不复用。
-- 和全景「要点」的区别：要点是执行者要守的产品约束，派活时附进提示词；决定记录是秘书、leader 给自己回看的「为什么这么定」，不附给执行者。
-- `--as` 是记录的主人，缺省秘书；leader 进程里缺省是自己，且服务端只许读写自己的（`?as=` 锁定）。leader 唤醒时提示词附自己的备忘和最近有效的决定（至多 10 条、约 2000 字，放不下的给 `decision ls` 命令）。
-- 全景网页：组织根属性行的「秘书」点进秘书页（`/map#secretary`），页签是备忘与决定记录；负责人页（`/map#a1`）在备忘旁多一个「决定记录」页签。决定记录可切有效／全部，只读。
+- **备忘**写当前状态（在等什么、下次先看什么），每次覆盖；leader 的 `leader edit --memo` 与 `memo edit --as aN` 写同一份。**决定记录**写取舍与原因，只追加：每条有日期、谁拍板（`--by u1`／`secretary`／`aN`，缺省是记录的主人）、决定、原因，可选关联 issue、一个或多个节点、任务；推翻时指向新决定，旧的留着可查。短号 `dN` 全局持久、不复用。
+- **记进谁那份**：用户拍板的（`--by u1`）进用户那份（`u1`），秘书和 leader 的记录只放各自的决定；早先记在秘书那份的「u1 定」启动时迁到用户那份，短号不变。leader 转记用户拍板的、没给 `--node` 时自动挂它负责的部分。
+- **摘要**（`memo show`、leader 唤醒提示词、全景网页）：标了原则的全列，再加最近 15 条，整段约 3000 字，放不下的只给一行「另有 N 条，用 decision ls --node / decision search 查」。秘书的摘要含用户的决定；leader 的是自己的，加挂在它负责的部分（含下级）及上级节点上的。已推翻、已沉淀成要点的不进摘要，`--all` 查得到。
+- **沉淀成要点**：已成规矩的决定用 `decision settle` 挂成要点（要点的权限照旧，根节点只有用户能改）；决定标「已沉淀到 kN」、缺省列表不再显示，要点记来源 `dN`。
+- **整理**：leader 例行巡检时提示词里有一条「顺带看本部分的决定：能合并的合并、被取代的标推翻、已成规矩的沉淀为要点」，只是提示，不是关卡。
+- 和全景「要点」的区别：要点是执行者要守的产品约束，派活时附进提示词；决定记录是用户、秘书、leader 回看的「为什么这么定」，不附给执行者。
+- `--as` 是记录的主人，缺省秘书；leader 进程里缺省是自己，且服务端只许读写自己的（`?as=` 锁定），整理（`tag`、`mark`、`settle`、`unsupersede`）也只能动自己那份。
+- 全景网页：组织根属性行的「秘书」「你的决定」点进秘书页（`/map#secretary`）与用户页（`/map#u1`）；负责人页（`/map#a1`）在备忘旁有「决定记录」页签；有决定挂在本块或上级的块页多一个「决定」页签。都只显示摘要，切「全部」可往下翻、按关键词查，只读。
 
 ## 资料
 

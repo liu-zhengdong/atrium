@@ -175,17 +175,18 @@ export const leaderCommands: Record<string, Command> = {
     },
   },
   "leader escalate": {
-    args: "说明 --kind shipped|cross|beyond|stuck [--task tN] [--as aN]",
+    args: "说明 --kind shipped|cross|beyond|stuck [--task tN] [--event 编号] [--as aN]",
     about: `leader 上交给上一层（秘书或上层 leader），生成一条「要处理」事件；只有四类：${Object.entries(
       ESCALATE_KINDS,
     )
       .map(([k, v]) => `${k} ${v}`)
       .join(
         "、",
-      )}；shipped 要带 --task 并在说明里附端到端验证。leader 进程里缺省以自己的身份上交`,
+      )}；shipped 要带 --task 并在说明里附端到端验证。转交下层 leader 的上交时用 --event 给那条事件的编号、说明写你的意见（同任务同类型的会自动认作转交），上面只收一条。leader 进程里缺省以自己的身份上交`,
     options: {
       kind: { type: "string" },
       task: { type: "string" },
+      event: { type: "string" },
       as: { type: "string" },
     },
     positionals: [1, 1],
@@ -212,17 +213,21 @@ export const leaderCommands: Record<string, Command> = {
         why: string;
         kind_label: string;
         task: string | null;
+        forwarded: number | null;
       }>(`/leaders/${enc(who)}/escalate`, {
         kind,
         note,
         ...(str(values, "task") === undefined
           ? {}
           : { task: str(values, "task") }),
+        ...(str(values, "event") === undefined
+          ? {}
+          : { event: str(values, "event") }),
       });
       if (json) printJson(result);
       else
         console.log(
-          `已上交「${result.kind_label}」给 ${result.to === "secretary" ? "秘书" : result.to}（事件 #${result.event}${result.task ? ` · ${result.task}` : ""}）\n${result.why}`,
+          `${result.forwarded === null ? "已上交" : `已转交 #${result.forwarded} `}「${result.kind_label}」给 ${result.to === "secretary" ? "秘书" : result.to}（事件 #${result.event}${result.task ? ` · ${result.task}` : ""}）\n${result.why}`,
         );
       recordNext(`处理完这批事件后确认：atrium events ack 编号`);
     },

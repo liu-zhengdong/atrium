@@ -1,6 +1,7 @@
 import { Problem } from "../problem.ts";
 import { MEMO_MAX } from "./model.ts";
 import { decisionLine, type Decision } from "../memos/decisions.ts";
+import { forwardedOf } from "./route.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、
@@ -23,12 +24,14 @@ export function escalateInput(body: unknown): {
   kind: EscalateKind;
   note: string;
   task: string | null;
+  /** 转交的下层上交事件编号；没给时按同任务同类型自动认。 */
+  event: number | null;
 } {
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw usage("请求体应为对象");
   const input = body as Record<string, unknown>;
   for (const key of Object.keys(input))
-    if (!["kind", "note", "task"].includes(key))
+    if (!["kind", "note", "task", "event"].includes(key))
       throw usage(`${key}: 是未知字段`);
   const kinds = Object.keys(ESCALATE_KINDS);
   if (typeof input.kind !== "string" || !kinds.includes(input.kind))
@@ -46,9 +49,20 @@ export function escalateInput(body: unknown): {
       throw usage("--task: 应为任务短号，如 t5");
     task = input.task;
   }
-  if (input.kind === "shipped" && !task)
+  let event: number | null = null;
+  if (input.event !== undefined && input.event !== null && input.event !== "") {
+    const text = String(input.event).replace(/^#/, "");
+    if (
+      !["number", "string"].includes(typeof input.event) ||
+      !/^[1-9][0-9]*$/.test(text) ||
+      !Number.isSafeInteger(Number(text))
+    )
+      throw usage("--event: 应为要转交的事件编号，如 589");
+    event = Number(text);
+  }
+  if (input.kind === "shipped" && !task && event === null)
     throw usage("--task: 上交「已上线」要给上线的任务，附端到端验证");
-  return { kind: input.kind as EscalateKind, note, task };
+  return { kind: input.kind as EscalateKind, note, task, event };
 }
 
 export type WakeExit = "ok" | "failed" | "timeout";
@@ -121,6 +135,9 @@ export function eventLine(event: PromptEvent) {
     field(event.detail, "reason", 300) || field(event.detail, "note", 300)
       ? `· ${field(event.detail, "reason", 300) || field(event.detail, "note", 300)}`
       : "",
+    ...forwardedOf(event.detail).map(
+      (f) => `· ${f.by} 转交：${f.note.slice(0, 300)}`,
+    ),
   ]
     .filter(Boolean)
     .join(" ")}`;
@@ -227,6 +244,7 @@ export function leaderPrompt(input: PromptInput): string {
     "- cross 需要别的部分配合 → atrium leader escalate --kind cross 说明 [--task tN]",
     "- beyond 越过权限／预算／硬边界 → atrium leader escalate --kind beyond 说明 [--task tN]",
     "- stuck 搞不定（同一件事卡住多次、拿不定）→ atrium leader escalate --kind stuck 说明 [--task tN]",
+    "- 下层 leader 上交给你、你也要往上报的：转交那一条，atrium leader escalate --kind 同类型 你的意见 --event 编号 [--task tN]；上面只收一条，能看到原文和你的意见，原事件随之确认。不要另写一条内容相同的上交",
     "",
     "## 收尾",
     "1. 把要记住的（在等什么、下次先看什么）写进备忘；这次做了取舍的，记一条决定。",

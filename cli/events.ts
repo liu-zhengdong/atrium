@@ -41,6 +41,13 @@ export function eventLine(event: InboxEvent) {
     event.acked_at !== null ? "已确认" : "未确认",
     typeof detail.pr_url === "string" ? detail.pr_url : "",
     reason ? `· ${clip(reason, 160)}` : "",
+    // 下层上交经上层转交：逐层附上「谁看过、一句意见」。
+    ...(Array.isArray(detail.forwarded) ? detail.forwarded : []).flatMap(
+      (f: { by?: unknown; note?: unknown }) =>
+        typeof f?.by === "string" && typeof f?.note === "string"
+          ? [`· ${f.by} 转交：${clip(f.note, 160)}`]
+          : [],
+    ),
     `· ${when(event.updated_at)}`,
   ]
     .filter(Boolean)

@@ -3,9 +3,14 @@ import { test } from "node:test";
 import { memoProblem, MEMO_MAX } from "../server/leaders/model.ts";
 import {
   deliveryRoutes,
+  escalationDetail,
   escalationRoute,
+  FORWARD_WINDOW_MS,
+  forwardedOf,
+  forwardOf,
   routeTaskEvent,
   type ChainNode,
+  type ForwardCandidate,
 } from "../server/leaders/route.ts";
 import {
   ackVerdict,
@@ -26,10 +31,12 @@ import {
   escalateInput,
   leaderPrompt,
   wakeSummary,
+  eventLine,
   eventWord,
   type WakeExit,
 } from "../server/leaders/wake.ts";
 import { eventState } from "../server/map/leaders.ts";
+import { eventLine as cliEventLine } from "../cli/events.ts";
 
 /** leader 层的纯判定：事件路由、上交目标、权限边界、唤醒收尾、上交输入。 */
 
@@ -181,6 +188,197 @@ test("上交：从负责节点的上一层找另一位 leader，跳过自己与�
   });
   assert.equal(route.subscriber, "a1");
   assert.match(route.why, /a2 上交，上一层的 leader 是 o2「Atrium」的 a1/);
+});
+
+const escalated = (
+  id: number,
+  over: Partial<ForwardCandidate> = {},
+): ForwardCandidate => ({
+  id,
+  subscriber: "a1",
+  kind: "escalated",
+  task: "t154",
+  actor: "a2",
+  key: "a2:escalate:shipped:t154",
+  acked_at: null,
+  detail: { from: "a2", kind: "shipped", reason: "t154 已上线，端到端通过" },
+  ...over,
+});
+
+test("转交判定：给了编号只认投给自己的下层上交；没给按同任务同类型认最近一条", () => {
+  const now = 10 * FORWARD_WINDOW_MS;
+  const base = {
+    leader: "a1",
+    kind: "shipped",
+    task: "t154" as string | null,
+    event: null as number | null,
+    now,
+  };
+  const pick = (over: Partial<typeof base>, candidates: ForwardCandidate[]) =>
+    forwardOf({ ...base, ...over, candidates });
+
+  // 自动认：同任务同类型、未确认的最近一条。
+  assert.equal(
+    pick({}, [escalated(3), escalated(7), escalated(5)]).forward?.id,
+    7,
+  );
+  // 确认不久的也认（leader 常先确认再上交），超过窗口的不认。
+  assert.equal(
+    pick({}, [escalated(4, { acked_at: now - FORWARD_WINDOW_MS })]).forward?.id,
+    4,
+  );
+  assert.equal(
+    pick({}, [escalated(4, { acked_at: now - FORWARD_WINDOW_MS - 1 })]).forward,
+    null,
+  );
+  // 不认：别的类型、别的任务、投给别人、不是上交、自己发的、没给任务。
+  const others = [
+    escalated(1, { detail: { from: "a2", kind: "cross" } }),
+    escalated(2, { task: "t9" }),
+    escalated(3, { subscriber: "a3" }),
+    escalated(4, { kind: "failed" }),
+    escalated(5, { actor: "a1" }),
+    escalated(6, { detail: null }),
+    escalated(8, { detail: "坏内容" }),
+  ];
+  assert.deepEqual(pick({}, others), { forward: null });
+  assert.deepEqual(pick({ task: null }, [escalated(9)]), { forward: null });
+
+  // 给了编号：只认那一条，任务可以不给；类型不同也照转（以这一层的判断为准）。
+  assert.equal(
+    pick({ event: 5, task: null, kind: "stuck" }, [escalated(5)]).forward?.id,
+    5,
+  );
+  assert.equal(
+    pick({ event: 5 }, [escalated(5, { acked_at: 0, task: null })]).forward?.id,
+    5,
+  );
+  const refused: [Partial<typeof base>, ForwardCandidate[], RegExp][] = [
+    [{ event: 5 }, [], /#5 不是下层投给 a1 的上交/],
+    [{ event: 5 }, [escalated(5, { subscriber: "secretary" })], /#5 不是/],
+    [{ event: 5 }, [escalated(5, { kind: "done" })], /#5 不是/],
+    [{ event: 5 }, [escalated(5, { actor: "a1" })], /#5 不是/],
+    [
+      { event: 5, task: "t2" },
+      [escalated(5)],
+      /#5 是 t154 的上交，和 t2 对不上/,
+    ],
+  ];
+  for (const [over, candidates, message] of refused) {
+    const result = pick(over, candidates);
+    assert.equal(result.forward, null);
+    assert.match(result.error ?? "", message, JSON.stringify(over));
+  }
+});
+
+test("上交内容：自己上交记自己的说明；转交保留下层原文，逐层追加意见", () => {
+  const route = { subscriber: "secretary", why: "a1 上交，投秘书", via: null };
+  const task = { ref: "t154", title: "预编译", pr_url: "https://x/pr/1" };
+  const own = escalationDetail({
+    leader: "a2",
+    kind: "shipped",
+    label: "已上线",
+    note: "t154 已上线",
+    task,
+    forward: null,
+    route,
+  });
+  assert.deepEqual(own, {
+    title: "a2 上交：已上线 · 预编译",
+    from: "a2",
+    kind: "shipped",
+    kind_label: "已上线",
+    task: "t154",
+    pr_url: "https://x/pr/1",
+    reason: "t154 已上线",
+    routed: { to: "secretary", why: "a1 上交，投秘书" },
+  });
+  assert.equal("forwarded" in own, false);
+
+  const once = escalationDetail({
+    leader: "a1",
+    kind: "shipped",
+    label: "已上线",
+    note: "看过，阶段达成",
+    task,
+    forward: escalated(589, { detail: own }),
+    route,
+  });
+  assert.equal(once.title, "a2 上交：已上线 · 预编译（经 a1 转交）");
+  assert.equal(once.from, "a2");
+  assert.equal(once.reason, "t154 已上线");
+  assert.deepEqual(once.forwarded, [{ by: "a1", note: "看过，阶段达成" }]);
+  assert.equal(once.forward_of, 589);
+
+  // 再往上一层：意见逐层追加，原文不变。
+  const twice = escalationDetail({
+    leader: "a0",
+    kind: "shipped",
+    label: "已上线",
+    note: "同意",
+    task: null,
+    forward: escalated(600, { detail: once, subscriber: "a0", actor: "a1" }),
+    route,
+  });
+  assert.equal(twice.title, "a2 上交：已上线（经 a1、a0 转交）");
+  assert.equal(twice.from, "a2");
+  assert.equal(twice.reason, "t154 已上线");
+  assert.deepEqual(forwardedOf(twice), [
+    { by: "a1", note: "看过，阶段达成" },
+    { by: "a0", note: "同意" },
+  ]);
+  // 原事件内容残缺：发起人取事件的 actor，原文留空，坏的意见项略过。
+  const broken = escalationDetail({
+    leader: "a1",
+    kind: "stuck",
+    label: "搞不定",
+    note: "我也拿不定",
+    task: null,
+    forward: escalated(7, {
+      detail: { forwarded: [{ by: 1 }, "x", { by: "a3", note: "先看" }] },
+    }),
+    route,
+  });
+  assert.equal(broken.from, "a2");
+  assert.equal(broken.reason, "");
+  assert.deepEqual(broken.forwarded, [
+    { by: "a3", note: "先看" },
+    { by: "a1", note: "我也拿不定" },
+  ]);
+  for (const bad of [null, "x", [], { forwarded: "x" }])
+    assert.deepEqual(forwardedOf(bad), []);
+
+  // 提示词里的事件行：原文和每一层的意见都在。
+  assert.equal(
+    eventLine({
+      id: 612,
+      task: "t154",
+      kind: "escalated",
+      count: 1,
+      detail: once,
+    }),
+    "- #612 t154 escalated a2 上交：已上线 · 预编译（经 a1 转交） https://x/pr/1 · t154 已上线 · a1 转交：看过，阶段达成",
+  );
+  // 秘书用的 events 命令行同样逐层列出意见。
+  assert.match(
+    cliEventLine({
+      id: 612,
+      subscriber: "secretary",
+      task: "t154",
+      source: "leader",
+      kind: "escalated",
+      level: "action",
+      key: "a2:escalate:shipped:t154",
+      actor: "a1",
+      count: 1,
+      detail: twice,
+      created_at: 0,
+      updated_at: 0,
+      delivered_at: null,
+      acked_at: null,
+    }),
+    /· t154 已上线 · a1 转交：看过，阶段达成 · a0 转交：同意 · /,
+  );
 });
 
 test("权限表：读接口放行，写接口只认列出的，其余一律拒绝并提示上交", () => {
@@ -358,12 +556,18 @@ test("唤醒收尾：处理完、失败累计重试、连续失败或超时转�
 test("上交输入：四类之一、说明必填有上限、任务短号；已上线须带任务", () => {
   assert.deepEqual(
     escalateInput({ kind: "cross", note: "  要 OpenQuota 配合 " }),
-    { kind: "cross", note: "要 OpenQuota 配合", task: null },
+    { kind: "cross", note: "要 OpenQuota 配合", task: null, event: null },
   );
   assert.deepEqual(
     escalateInput({ kind: "shipped", note: "已上线", task: "t5" }),
-    { kind: "shipped", note: "已上线", task: "t5" },
+    { kind: "shipped", note: "已上线", task: "t5", event: null },
   );
+  // 转交：事件编号可带 #、可为数字；已上线给了事件时任务可以从原事件带出。
+  for (const event of [589, "589", "#589"])
+    assert.equal(
+      escalateInput({ kind: "shipped", note: "同意", event }).event,
+      589,
+    );
   for (const kind of ["beyond", "stuck"])
     assert.equal(escalateInput({ kind, note: "x" }).kind, kind);
   const bad: [unknown, RegExp][] = [
@@ -378,6 +582,15 @@ test("上交输入：四类之一、说明必填有上限、任务短号；已�
     [{ kind: "cross", note: "x", task: 5 }, /--task/],
     [{ kind: "shipped", note: "x" }, /已上线」要给上线的任务/],
     [{ kind: "cross", note: "x", extra: 1 }, /extra: 是未知字段/],
+    [
+      { kind: "cross", note: "x", event: "abc" },
+      /--event: 应为要转交的事件编号/,
+    ],
+    [{ kind: "cross", note: "x", event: 0 }, /--event/],
+    [{ kind: "cross", note: "x", event: -3 }, /--event/],
+    [{ kind: "cross", note: "x", event: 1.5 }, /--event/],
+    [{ kind: "cross", note: "x", event: [1] }, /--event/],
+    [{ kind: "cross", note: "x", event: "9".repeat(20) }, /--event/],
   ];
   for (const [body, message] of bad)
     assert.throws(() => escalateInput(body), message, JSON.stringify(body));
@@ -439,6 +652,7 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
     "上交（投给 秘书",
     "atrium leader escalate --kind shipped",
     "单个任务上线运行时已自动通知秘书，不必再报",
+    "--event 编号",
     "atrium events ack 12 13",
   ])
     assert(prompt.includes(part), part);

@@ -114,3 +114,155 @@ export function escalationRoute(input: {
     via: null,
   };
 }
+
+/** 下层上交给这位 leader 的事件，转交判定只看这些字段。 */
+export type ForwardCandidate = {
+  id: number;
+  subscriber: string;
+  kind: string;
+  task: string | null;
+  actor: string | null;
+  key: string;
+  acked_at: number | null;
+  detail: unknown;
+};
+
+export type Forwarded = { by: string; note: string };
+
+/** 已确认的下层上交在这段时间内仍认作「正在转交」：leader 常先确认再上交。 */
+export const FORWARD_WINDOW_MS = 6 * 60 * 60_000;
+
+const record = (detail: unknown) =>
+  detail && typeof detail === "object" && !Array.isArray(detail)
+    ? (detail as Record<string, unknown>)
+    : {};
+
+/** 事件里记下的转交意见（逐层追加）；格式不对的项略过。 */
+export function forwardedOf(detail: unknown): Forwarded[] {
+  const list = record(detail).forwarded;
+  return Array.isArray(list)
+    ? list.filter(
+        (f): f is Forwarded =>
+          typeof f?.by === "string" && typeof f?.note === "string",
+      )
+    : [];
+}
+
+/**
+ * leader 上交时是不是在转交下层投给它的上交（纯函数，穷举测试）。
+ * 给了 event 就只认那一条，且须是投给它本人的上交；没给时按同任务、同上交类型认最近的一条
+ * （未确认的，或确认不久的），认不出就是它自己的新上交。
+ */
+export function forwardOf(input: {
+  leader: string;
+  kind: string;
+  task: string | null;
+  event: number | null;
+  now: number;
+  candidates: readonly ForwardCandidate[];
+}): { forward: ForwardCandidate | null; error?: string } {
+  const theirs = (c: ForwardCandidate) =>
+    c.subscriber === input.leader &&
+    c.kind === "escalated" &&
+    c.actor !== input.leader;
+  if (input.event !== null) {
+    const picked = input.candidates.find((c) => c.id === input.event);
+    if (!picked || !theirs(picked))
+      return {
+        forward: null,
+        error: `--event: #${input.event} 不是下层投给 ${input.leader} 的上交，不能转交`,
+      };
+    if (
+      input.task !== null &&
+      picked.task !== null &&
+      picked.task !== input.task
+    )
+      return {
+        forward: null,
+        error: `--task: #${input.event} 是 ${picked.task} 的上交，和 ${input.task} 对不上`,
+      };
+    return { forward: picked };
+  }
+  if (input.task === null) return { forward: null };
+  let best: ForwardCandidate | null = null;
+  for (const c of input.candidates)
+    if (
+      theirs(c) &&
+      c.task === input.task &&
+      record(c.detail).kind === input.kind &&
+      (c.acked_at === null || input.now - c.acked_at <= FORWARD_WINDOW_MS) &&
+      (!best || c.id > best.id)
+    )
+      best = c;
+  return { forward: best };
+}
+
+export type EscalationDetail = {
+  title: string;
+  /** 最初上交的 leader；转交时是下层，不是转交人。 */
+  from: string;
+  kind: string;
+  kind_label: string;
+  task: string | null;
+  pr_url: string | null;
+  /** 最初上交的说明（原文）。 */
+  reason: string;
+  /** 转交时逐层追加的意见。 */
+  forwarded?: Forwarded[];
+  /** 转交的是哪条事件。 */
+  forward_of?: number;
+  routed: { to: string; why: string };
+};
+
+/**
+ * 上交事件的内容（纯函数）。转交时保留下层原文（from、reason），把这一层的意见追加进 forwarded，
+ * 上面只收一条、能看到每一层说了什么。
+ */
+export function escalationDetail(input: {
+  leader: string;
+  kind: string;
+  label: string;
+  note: string;
+  task: { ref: string; title: string; pr_url: string | null } | null;
+  forward: ForwardCandidate | null;
+  route: Route;
+}): EscalationDetail {
+  const topic = `${input.label}${input.task ? ` · ${input.task.title}` : ""}`;
+  const routed = { to: input.route.subscriber, why: input.route.why };
+  const common = {
+    kind: input.kind,
+    kind_label: input.label,
+    task: input.task?.ref ?? null,
+    pr_url: input.task?.pr_url ?? null,
+  };
+  if (!input.forward)
+    return {
+      title: `${input.leader} 上交：${topic}`.slice(0, 200),
+      from: input.leader,
+      ...common,
+      reason: input.note,
+      routed,
+    };
+  const original = record(input.forward.detail);
+  const from =
+    typeof original.from === "string"
+      ? original.from
+      : (input.forward.actor ?? input.leader);
+  const forwarded = [
+    ...forwardedOf(original),
+    { by: input.leader, note: input.note },
+  ];
+  return {
+    title:
+      `${from} 上交：${topic}（经 ${forwarded.map((f) => f.by).join("、")} 转交）`.slice(
+        0,
+        200,
+      ),
+    from,
+    ...common,
+    reason: typeof original.reason === "string" ? original.reason : "",
+    forwarded,
+    forward_of: input.forward.id,
+    routed,
+  };
+}

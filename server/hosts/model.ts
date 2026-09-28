@@ -528,7 +528,7 @@ export type HostView = {
         agentServer: string;
       })
     | null;
-  /** 跑不跑把关检查（local_check、合入前重跑）：与检查基准不同平台的只接活（t201）。 */
+  /** 跑不跑把关检查（合入队列 rebase 后的检查）：与检查基准不同平台的只接活（t201）。 */
   checks?: string;
 };
 

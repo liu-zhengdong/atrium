@@ -358,7 +358,6 @@ test("隔离服务：map draft 读好材料派一次性执行者，完成后登�
       exec: fx.run,
       pace: async () => undefined,
       usagePace: async () => undefined,
-      diskFreeGb: async () => 1000,
       tickMs: 100,
     },
   });

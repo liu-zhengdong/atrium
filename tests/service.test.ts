@@ -69,8 +69,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       const output = await exec(
         process.execPath,
         [join(packageRoot, "bin/atrium.mjs"), ...args],
-        // Windows 检查机负载高时单条命令（如建 worktree 的 task run）可能超过 25 秒，放宽到 60 秒。
-        { env, cwd: root, timeout: 60000 },
+        { env, cwd: root, timeout: 25000 },
       );
       return { ...output, code: 0 };
     } catch (error) {
@@ -83,7 +82,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       return {
         stdout: failure.stdout,
         stderr: failure.killed
-          ? `${failure.stderr}\n（命令超过 60 秒被结束）`
+          ? `${failure.stderr}\n（命令超过 25 秒被结束）`
           : failure.stderr,
         code: failure.code,
       };

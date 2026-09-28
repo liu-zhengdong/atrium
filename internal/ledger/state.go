@@ -80,6 +80,7 @@ const (
 	Block      EventKind = "block"       // 缺条件、等决策
 	Cancel     EventKind = "cancel"      // 不做了
 	Set        EventKind = "set"         // 人工改状态（task set --status）
+	Deliver    EventKind = "deliver"     // 人工放进合入队列（task merge：登记亲手做的 PR，或放行受阻的交付）
 )
 
 // Transition 是状态机的唯一判定：纯函数，不碰库和时间。
@@ -158,6 +159,11 @@ func Transition(from State, e Event) (State, error) {
 			return reject("任务已%s，不能取消", map[Status]string{Done: "完成", Cancelled: "取消"}[s])
 		}
 		return State{Cancelled, st}, nil
+	case Deliver:
+		if s == Todo || s == Failed || s == Blocked {
+			return State{Running, StageMerge}, nil
+		}
+		return reject("任务当前 %s，不能放进合入队列（只有 todo、failed、blocked 能放）", s)
 	case Set:
 		switch e.To {
 		case Queued, Running:

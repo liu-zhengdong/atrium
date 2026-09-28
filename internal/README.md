@@ -36,9 +36,9 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
 | `dispatch` | 桩 | 派活队列、挑执行者与机器、拉起；`task run/stop/tell/log` | `queue` |
 | `workers` | 桩 | 适配器、档案三层叠加；`workers`、`workers edit` | `worker_profiles` |
-| `gates` | 桩 | 查事实、判关卡、审阅；`task deliver` | — |
-| `merge` | 桩 | 合入队列、快检查、回滚；`task merge` | — |
-| `release` | 桩 | 自升级、平滑重启、上线冒烟；`update` | — |
+| `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务）；与 dispatch 的经历约定见 `gates/records.go` | — |
+| `merge` | 完成 | 合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付）；快检查进程经 `watch.Track` 登记 | — |
+| `release` | 完成 | 等版本、自升级、平滑重启、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
 | `hosts` | 桩 | 机器登记、远程代理；`host add/ls/show/rm`、`agent install` | `hosts` |
 | `quota` | 桩 | 额度读取与缓存；`quota` | `quota_cache` |
@@ -103,6 +103,7 @@ type Module struct {
 | `Bounce` | gate/review/merge_queue → queued；第 3 次 → blocked | gates、merge（次数由 Apply 从经历里数） |
 | `Merged{NeedRelease}` | merge_queue → done/merged ／ running/merged | merge |
 | `Released` | merged → done/released | release |
+| `Deliver` | todo/failed/blocked → running/merge_queue（交回次数重算） | merge（`task merge`） |
 | `Block` / `Cancel` / `Set{To}` | 见 `state.go` | watch、命令行 |
 
 - 其他写入：`ledger.SetFacts`（执行者、机器、PR）、`ledger.Record(ctx, q, id, kind, actor, body)`（关卡结论、交回原因等经历）。

@@ -193,6 +193,56 @@ out=$(json schedule ls); has '.result[0].last_task != null'
 out=$(json schedule rm s1); has '.ok'
 out=$(json schedule add o2 x --every 30m || true); has '.error.code == "usage"'
 
+step "task merge：登记 PR → 合入队列 rebase、快检查、squash 合入（另起隔离服务，假 gh + 本地 bare 远端）"
+m="$work/merge"; mkdir -p "$m/bin"
+g() { git -c user.name=t -c user.email=t@t "$@"; }
+git init -q --bare -b main "$m/remote.git"
+git clone -q "$m/remote.git" "$m/seed" 2>/dev/null
+(
+  cd "$m/seed" && git checkout -q -b main
+  mkdir .agents && printf '#!/bin/sh\necho 快检查通过\n' >.agents/check && chmod +x .agents/check
+  echo hi >README.md && git add -A && g commit -qm init && git push -q origin main
+  git checkout -q -b feat && echo x >feat.txt && git add -A && g commit -qm feat && git push -q origin feat
+  git checkout -q main && echo y >other.txt && git add -A && g commit -qm other && git push -q origin main
+)
+echo OPEN >"$m/state"
+printf '#!/usr/bin/env bash\nremote=%q; state=%q\n' "$m/remote.git" "$m/state" >"$m/bin/gh"
+cat >>"$m/bin/gh" <<'EOF'
+set -euo pipefail
+head() { git --git-dir "$remote" rev-parse refs/heads/feat; }
+case "$1 $2" in
+  "repo view") echo main ;;
+  "repo clone") git clone -q "$remote" "$4" ;;
+  "pr view")
+    jq -n --arg s "$(cat "$state")" --arg h "$(head)" --arg mc "$(cat "$state.commit" 2>/dev/null || true)" \
+      '{number:1,url:"https://github.com/o/r/pull/1",state:$s,headRefName:"feat",headRefOid:$h,baseRefName:"main",body:"",
+        mergeCommit:(if $mc == "" then null else {oid:$mc} end)}' ;;
+  "pr merge")
+    want=""; args=("$@"); for i in "${!args[@]}"; do [ "${args[$i]}" = --match-head-commit ] && want=${args[$((i+1))]}; done
+    [ "$want" = "$(head)" ] || { echo "头提交 $(head) 与 --match-head-commit $want 不一致" >&2; exit 1; }
+    w=$(mktemp -d); git clone -q "$remote" "$w/c"; cd "$w/c"
+    git merge -q --squash origin/feat; git -c user.name=t -c user.email=t@t commit -qm "squash #1"; git push -q origin main
+    git rev-parse HEAD >"$state.commit"; echo MERGED >"$state"; rm -rf "$w" ;;
+  *) echo "假 gh 不支持：$*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$m/bin/gh"
+saved=("$ATRIUM_DATA" "$ATRIUM_PORT" "$PATH")
+export ATRIUM_DATA="$m/data" PATH="$m/bin:$PATH"
+export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+out=$(json start); has '.ok'
+pid="$pid $(jq -r .result.pid <<<"$out")"
+out=$(json task add 合入演练); has '.result.id == "t1"'
+out=$(json task merge t1 --pr 1 || true); has '.ok == false and .error.code == "usage"'   # 任务没仓库、PR 号没带仓库
+out=$(json task merge t1 --pr https://github.com/o/r/pull/1); has '.result.status == "running" and .result.stage == "merge_queue" and .result.repo == "o/r" and .next == "atrium task wait t1"'
+out=$(json task wait t1 --until done,blocked,queued --timeout 60); has '.result.task.status == "done" and .result.task.stage == "merged"'
+files=$(git --git-dir "$m/remote.git" ls-tree --name-only main)
+grep -q feat.txt <<<"$files" && grep -q other.txt <<<"$files" || fail "main 上应有 feat.txt 与 other.txt：$files"
+[ "$(git --git-dir "$m/remote.git" rev-parse refs/heads/feat~1)" = "$(git --git-dir "$m/remote.git" rev-parse 'refs/heads/main~1')" ] || fail "feat 应已 rebase 到 main 上再合入"
+out=$(json task show t1); has '(.result.history|map(.kind)) | index("merge_commit") != null'
+out=$(json stop); has '.result.stopped'
+export ATRIUM_DATA="${saved[0]}" ATRIUM_PORT="${saved[1]}" PATH="${saved[2]}"
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

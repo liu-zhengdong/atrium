@@ -13,6 +13,8 @@ import { recordResult } from "./contract.ts";
 import {
   isVerifier,
   leaderSession,
+  verifierHeaders,
+  verifierIsolated,
   WORKER_FLAG,
   workerGuard,
 } from "./worker-guard.ts";
@@ -32,8 +34,8 @@ export async function connect(quietStart = false): Promise<Client> {
   if (leader) return client(leader.url, "", undefined, leader.bearer);
   const data = dataDirectory();
   const before = readService(data);
-  // 上线验证执行者（t181）：只连在跑的服务，不拉起、断线也不重拉。
-  if (isVerifier()) {
+  // 上线验证执行者（t181）：真实服务只连在跑的，不拉起、断线也不重拉；自己起的隔离实例照常（t239）。
+  if (isVerifier() && !verifierIsolated()) {
     if (!before || !alive(before.pid))
       throw new Problem(
         503,
@@ -157,6 +159,7 @@ export function client(
       headers: {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
         authorization: bearer ?? userBearer(data),
+        ...verifierHeaders(),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });

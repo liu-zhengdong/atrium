@@ -5,6 +5,7 @@ import { Problem } from "../problem.ts";
 import type { TaskRunner } from "../tasks/runner.ts";
 import { TOOLS } from "../tasks/adapters/types.ts";
 import { authPolicy } from "../auth-policy.ts";
+import { resolveActor } from "../actor.ts";
 import {
   joinCodeOf,
   joinCodeValid,
@@ -116,8 +117,12 @@ export function registerHostRoutes(
     return runner.pauseHost(params(request).id, body.paused);
   });
   // 止损（t215）：停掉在那台跑的非紧急执行者，本机再结束已结束任务留下的执行者进程树。
+  // 停下的任务在停止事件里记发起者（t239）：?as= 给的 u1、secretary 或 aN，缺省 u1。
   app.post("/api/hosts/:id/clean", { bodyLimit: 1024 }, (request) =>
-    runner.cleanHost(params(request).id),
+    runner.cleanHost(
+      params(request).id,
+      resolveActor(db, (request.query as { as?: string } | undefined)?.as),
+    ),
   );
 
   // ---- 代理 ----

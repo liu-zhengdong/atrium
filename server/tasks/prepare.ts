@@ -22,7 +22,7 @@ import { avoidReason, type ChainNode } from "../skills/model.ts";
 export const DEFAULT_RULES: readonly string[] = [
   "只在给定的工作目录（任务 worktree）内改动，不要切换到其他分支或目录干活。",
   "不要使用 git stash；未完成的改动提交到当前分支。",
-  "做完后依次：运行项目检查、提交、推送、开 PR（正文写 Refs 对应 issue）；任何一步做不了，写清楚卡在哪一步再结束。运行时会在任务 worktree 再跑本地检查。",
+  "做完后依次：提交、推送、开 PR（正文写 Refs 对应 issue）；任何一步做不了，写清楚卡在哪一步再结束。全量检查由运行时在任务 worktree 跑。",
   "汇报里的 PR 号、提交号、CI 结果必须来自你刚执行过的命令输出；没做的步骤直接写「没做」。",
   "文档、提交说明和 PR 使用中文。",
   "PR 正文写「## 端到端验证」一节：一两条用户上线后会实际运行的命令与期望结果；上线通知会原样附上，负责人照着在线上验证。",

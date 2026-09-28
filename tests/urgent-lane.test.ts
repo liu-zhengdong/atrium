@@ -101,6 +101,7 @@ test("抢占与续上：本机满时紧急任务立刻派出、先暂停闲时�
       .events.filter((event) => event.kind === "urgent_stage");
     assert.equal(stages.length, 1, subscriber);
     assert.equal(stages[0]!.task, "t2");
+    assert.equal(stages[0]!.level, "info", "开始、抢占只作知会，不叫醒");
     assert.ok(
       ["开始", "抢占"].includes((stages[0]!.detail as { stage: string }).stage),
     );
@@ -179,6 +180,7 @@ test("先止损：紧急任务建好先执行止损动作并记事件；没标�
     .list("u1", { limit: 50 })
     .events.find((event) => event.kind === "urgent_stage");
   assert.equal((stage?.detail as { stage: string }).stage, "止损");
+  assert.equal(stage?.level, "action", "止损有一条没做成：要处理");
   // 派修复时止损已做过，不重复；本机被暂停、没有别的主机，排队等。
   const run = await call("POST", "/api/tasks/t2/run", { worker: "kimi" });
   assert.equal(run.body.queued, true);
@@ -552,6 +554,7 @@ test("审阅不挡合入：紧急任务要审阅的先合入，审阅并行；�
       .events.filter((event) => event.kind === "urgent_stage");
     assert.equal(stage.length, 1);
     assert.equal((stage[0]!.detail as { stage: string }).stage, "合入");
+    assert.equal(stage[0]!.level, "info");
   }
 });
 

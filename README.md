@@ -1171,7 +1171,7 @@ atrium choice comment cN 意见 [--prefer 选项号[,选项号]] [--basis 依据
   示例：atrium choice comment c3 先做看板过滤，合入提速等CI稳了 --prefer 1 --basis f3
 
 atrium choice add 节点 --file 选项单.json|- [--task tN]
-  产品部提一份选项单挂在节点上（它要演进的那一块），建好叫醒秘书递给用户；文件是 JSON：{"title":"标题","options":[{"title","gain":"能多做到什么","why_now":"为什么现在","cost":"代价：多少活、占哪些额度","skip":"不做会怎样","basis":["f3","t120","d4","链接"]}…3–5 个],"recommend":[选项号],"why":"推荐理由"}；--task 记产出它的研究任务
+  产品部提一份选项单挂在节点上（它要演进的那一块），建好叫醒秘书递给用户；文件是 JSON：{"title":"标题","options":[{"title","gain":"能多做到什么","why_now":"为什么现在","cost":"代价：多少活、占哪些额度","skip":"不做会怎样","basis":["f3","t120","d4","链接"]}…3–5 个],"recommend":[选项号],"why":"推荐理由","small":[{"title":"小改进","why":"为什么","basis":["f5"]}…可不写，至多 10 条]}；选项只放大方向，small 是一天内能做完、不改用法的小改进，不进选项单，交该节点最近的 leader 自己定（收 choice_small）；--task 记产出它的研究任务
   示例：atrium choice add atrium --file 选项单.json --task t42
 
 atrium product add 节点 [--name 名称] [--every 7d] [--at 时刻] [--worker 工具+模型[:强度]]

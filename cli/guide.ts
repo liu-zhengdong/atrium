@@ -298,6 +298,7 @@ export function guide(commands: Record<string, Command>) {
   干活与请看：atrium task add 标题 --by 前端 --ask 后端（派活附检查要点，交付后建审查子任务按清单审，全部通过才完成；否决或没出结论的交负责的 leader 判断，不认同用 atrium task merge tN 放行；专员的 invite_when 写提示规则，只提示不自动请）
   目标树迁移：atrium org migrate-goals 预览 gN 迁为所在节点的阶段记录、任务按目标回填归属部分，加 --apply 先整库备份再写入；写入后 goal 命令下线，旧写法 --goal gN 按映射落到节点
   看组织：atrium org tree；atrium org show o2；树为空时先 atrium org import --repo 仓库 预览、加 --apply 写入
+  新能力的做法（只是做法与默认值，不设关卡）：先试点再铺开——新能力上线后先在一台主机、一两个任务、一个部分上用，跑通再放开，leader 放开前写一句 atrium task note tN 试点结果：在哪试、跑了什么、结果如何；上线即验——合入发版后运行时照 PR「端到端验证」一节派人在真实环境跑（task show 看结论），没过才投给 leader；写清组合——执行者在 PR 正文写「碰到哪些已有能力」一节，列出与哪些已有能力交叉（远程主机、Windows、紧急通道、总任务、技能挂载、合入队列、自升级……）、各验了什么，没碰到写「无」，试点优先挑这些组合
   每类东西放哪（用户纠正了、要立新规矩，先对这张表写到对应位置）：怎么做好一类事的方法与口味（如「字要少、一行一件事」）→ 技能，atrium skill edit 留修订；这类活由谁干、交付什么、用哪些技能、优先执行者 → 专员说明，短、引用技能、不写做法，atrium specialist edit；某一块产品必须守住的（如「常用命令 150 毫秒内」）→ 挂在那一块的要点，atrium org point-add；某个执行者的毛病与叮嘱（如「grok 别往一个文件堆」）→ 执行者档案，atrium workers edit；用户定的目标、底线、预算 → 章程，atrium org edit --charter；当时为什么这么定 → 决定记录，atrium decision add；现在在等什么、下次先看什么 → 备忘，atrium memo edit；跟着代码走的约定 → 仓库 AGENTS.md，走 PR。判断顺序：先问是不是做法或口味（→ 技能），再问是不是某一块的约束（→ 要点），再问是不是某个执行者（→ 档案）；专员说明只写分工
   组织技能：atrium skill add web-design ./web-design --reason 原因；atrium skill bind web-design atrium/web；执行者改了挂载副本会生成提议：atrium skill proposals；atrium skill accept p1
   看谁在干什么：atrium top（默认每 2 秒全屏刷新，q 退出；只打一次用 --once，脚本用 --once --json）

@@ -22,6 +22,11 @@ test("说明书从命令表与退出码表生成；示例均通过参数解析",
     text,
     /每类东西放哪[^\n]*→ 技能[^\n]*的要点[^\n]*→ 执行者档案[^\n]*判断顺序/,
   );
+  // 新能力的做法（t236）：先试点再铺开、上线即验、PR 写组合说明。
+  assert.match(
+    text,
+    /先试点再铺开[^\n]*task note tN 试点结果[^\n]*端到端验证[^\n]*碰到哪些已有能力/,
+  );
   for (const [name, command] of Object.entries(commands)) {
     assert(text.includes(`atrium ${name} ${command.args}`.trimEnd()), name);
     const invocation = example(name, command);

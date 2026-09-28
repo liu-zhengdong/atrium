@@ -1,5 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { killTree, spawnCommand } from "../server/platform/index.ts";
+import { killTree, spawnCommand } from "../platform/index.ts";
 
 /**
  * 最小 ACP（Agent Client Protocol）客户端：换行分隔的 JSON-RPC 2.0，经 stdio 与 Agent 进程通信。

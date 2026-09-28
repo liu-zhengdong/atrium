@@ -113,7 +113,7 @@ export function prepareOpencodeHome(home: string, source: string): HomeReport {
 }
 
 /**
- * 拉起 serve 与 attach 的环境：在去掉 HERDR_* 等的基础上（见 acp.ts agentEnvironment）
+ * 拉起 serve 与 attach 的环境：在去掉 HERDR_* 等的基础上（见 server/acp/client.ts agentEnvironment）
  * 换成秘书的数据目录；有密码时服务端要求 basic 认证，attach 从同名环境变量读，不进命令行参数。
  */
 export function opencodeEnvironment(

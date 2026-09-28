@@ -14,7 +14,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { EventInbox } from "../server/tasks/events.ts";
 import { ensureTaskTables } from "../server/tasks/ledger.ts";
-import { agentEnvironment } from "../cli/acp.ts";
+import { agentEnvironment } from "../server/acp/client.ts";
 import {
   OpencodeClient,
   opencodeEnvironment,

@@ -17,7 +17,7 @@ import {
   agentEnvironment,
   type PermissionOutcome,
   type PermissionRequest,
-} from "./acp.ts";
+} from "../server/acp/client.ts";
 import { recordNext } from "./contract.ts";
 import { eventLine } from "./events.ts";
 import { mcpHint, oauthHint } from "./opencode-auth.ts";

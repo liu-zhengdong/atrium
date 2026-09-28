@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { EventInbox, type InboxEvent } from "../server/tasks/events.ts";
 import { ensureTaskTables } from "../server/tasks/ledger.ts";
-import { AcpConnection, agentEnvironment } from "../cli/acp.ts";
+import { AcpConnection, agentEnvironment } from "../server/acp/client.ts";
 import {
   SecretaryChat,
   wakePrompt,

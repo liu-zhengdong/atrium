@@ -7,7 +7,7 @@ import type {
   PermissionOutcome,
   PermissionRequest,
   StopReason,
-} from "./acp.ts";
+} from "../server/acp/client.ts";
 import { wakePrompt } from "../server/tasks/wake-prompt.ts";
 export { wakePrompt } from "../server/tasks/wake-prompt.ts";
 

@@ -16,11 +16,11 @@ import {
 import {
   listDeliveries,
   summarizeDeliveries,
-  adviceFor,
   activeJobChecks,
   markDeliveryFinal,
 } from "../server/tasks/delivery-records.ts";
 import { rankRoleWorkers } from "../server/tasks/role-ranking.ts";
+import { adviceFor } from "../server/tasks/worker-advice.ts";
 import { jobMismatch } from "../server/tasks/job-mismatch.ts";
 import { removeTemp } from "./temp-dir.ts";
 const db = () => {
@@ -323,6 +323,8 @@ test("组合样本少时按模型行排序，角色避让仍作用于默认挑�
       average_returns: 0,
       median_ms: 100,
       incidents: 0,
+      recent_deliveries: 8,
+      recent_incidents: 0,
       low_data: false,
       trust: "medium",
     },

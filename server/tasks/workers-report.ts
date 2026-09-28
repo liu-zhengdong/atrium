@@ -3,13 +3,13 @@ import { Problem } from "../problem.ts";
 import { atomically, one } from "./ledger-model.ts";
 import { getJobRole } from "./job-roles.ts";
 import {
-  adviceFor,
   latestDeliveryByWorkerJob,
   latestDeliveryTaskId,
   listDeliveries,
   workerStats,
   type WorkerStat,
 } from "./delivery-records.ts";
+import { adviceDue, adviceFor } from "./worker-advice.ts";
 import { modelKey, parseWorker, resolveWorker, TRUSTS } from "./profiles.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { patchFront, readProfile, writeProfile } from "./worker-profiles.ts";
@@ -119,11 +119,40 @@ export async function workerReport(db: DatabaseSync, worker: string) {
     ),
   };
 }
-/** 有充分样本才提醒秘书；按统计条件变化去重，确认前只生成建议。 */
+/**
+ * 同一组合、同一专员、同一建议上次投给秘书的时刻（没投过为 null）。
+ * 只翻这个组合在这个专员下交付过的任务上的事件（交付表与事件表都走索引）。
+ */
+function lastAdviceAt(
+  db: DatabaseSync,
+  worker: string,
+  jobId: number,
+  action: string,
+): number | null {
+  const row = one<{ at: number | null }>(
+    db,
+    `SELECT MAX(at) AS at FROM task_events
+     WHERE task_id IN (SELECT task_id FROM task_deliveries WHERE worker=? AND job_id=?)
+       AND kind='worker_advice' AND json_valid(detail)
+       AND json_extract(detail,'$.worker')=? AND json_extract(detail,'$.role')=?
+       AND json_extract(detail,'$.action')=?`,
+    worker,
+    jobId,
+    worker,
+    `r${jobId}`,
+    action,
+  );
+  return row?.at ?? null;
+}
+/**
+ * 有充分样本才提醒秘书；同一组合同一建议 7 天内只投一次（t277），确认前只生成建议。
+ * 建议是知会级（event-level.ts），进 digest，不叫醒秘书。
+ */
 export function publishWorkerAdvice(
   db: DatabaseSync,
   inbox: EventInbox,
   taskId: number,
+  now = Date.now(),
 ) {
   const task = one<{ job_id: number | null; worker: string | null }>(
     db,
@@ -148,13 +177,11 @@ export function publishWorkerAdvice(
   const roleRef = `r${task.job_id}`;
   for (const stat of stats) {
     const advice = adviceFor(stat);
-    if (!advice) return;
-    const event = db
-      .prepare(
-        "SELECT 1 FROM task_events WHERE task_id=? AND kind='worker_advice' AND detail LIKE ? LIMIT 1",
-      )
-      .get(taskId, `%${advice.action}%`);
-    if (event) return;
+    if (!advice) continue;
+    if (
+      !adviceDue(lastAdviceAt(db, stat.worker, task.job_id, advice.action), now)
+    )
+      continue;
     const data = {
       worker: stat.worker,
       role: roleRef,
@@ -163,7 +190,7 @@ export function publishWorkerAdvice(
     };
     db.prepare(
       "INSERT INTO task_events(task_id,at,kind,detail) VALUES(?,?,?,?)",
-    ).run(taskId, Date.now(), "worker_advice", JSON.stringify(data));
+    ).run(taskId, now, "worker_advice", JSON.stringify(data));
     inbox.publish({
       subscriber: "secretary",
       taskId,

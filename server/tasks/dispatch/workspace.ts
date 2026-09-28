@@ -41,23 +41,48 @@ import { remoteLayout } from "../../hosts/state.ts";
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
  */
 
+/** 不跑全量、只跑相关测试（t206）、测试并发照上限（t203）。交付物是什么都适用。 */
+const FULL_TEST_RULE =
+  "不要自己跑全量测试（如 `npm run check`），全量只由运行时跑；开发中和交付前只跑类型检查与改动相关的测试文件。测试并发照环境变量 ATRIUM_TEST_CONCURRENCY（运行时按本机核数给的上限），不要调大、不要换成不限。";
+/** 只交 PR 的执行者才停在 PR。 */
+const PR_ONLY_RULE = "停在 PR：不要合入、不要改默认分支、不要发版。";
+/** 不碰安装版服务（t203）。 */
+const SERVICE_RULE =
+  "不要启动、停止或更新 4310 端口上的 Atrium 服务，也不要执行没有隔离 ATRIUM_PORT / ATRIUM_DATA 的 atrium 命令。";
+
 /** 派给执行者的额外约束：不跑全量、只跑相关测试（t206）、测试并发照上限（t203），停在 PR，不碰安装版服务。 */
 const RUN_RULES: readonly string[] = [
   ...DEFAULT_RULES,
-  "不要自己跑全量测试（如 `npm run check`），全量只由运行时跑；开发中和交付前只跑类型检查与改动相关的测试文件。测试并发照环境变量 ATRIUM_TEST_CONCURRENCY（运行时按本机核数给的上限），不要调大、不要换成不限。",
-  "停在 PR：不要合入、不要改默认分支、不要发版。",
-  "不要启动、停止或更新 4310 端口上的 Atrium 服务，也不要执行没有隔离 ATRIUM_PORT / ATRIUM_DATA 的 atrium 命令。",
+  FULL_TEST_RULE,
+  PR_ONLY_RULE,
+  SERVICE_RULE,
 ];
 
-function deliveryRules(task: Task): readonly string[] {
-  if (task.deliver === "pr") return RUN_RULES;
-  const common = DEFAULT_RULES.filter((rule) => !rule.startsWith("做完后依次"));
+/** 和「开 PR」绑在一起的通用约束前缀：不交 PR、或任务没有仓库时附上去只会自相矛盾。 */
+const PR_RULE_PREFIXES: readonly string[] = [
+  "做完后依次",
+  "交付前做端到端验证",
+  "PR 正文写",
+  "gh 命令一律带",
+];
+
+/** 按交付物给约束：交 PR 且有仓库才要求提交、推送、开 PR 与写 PR 正文；其余说清交付什么。 */
+export function deliveryRules(
+  task: Pick<Task, "deliver" | "issue" | "repo">,
+): readonly string[] {
+  if (task.deliver === "pr" && task.repo) return RUN_RULES;
+  const common = DEFAULT_RULES.filter(
+    (rule) => !PR_RULE_PREFIXES.some((prefix) => rule.startsWith(prefix)),
+  );
   return [
     ...common,
     task.deliver === "comment"
       ? `交付物是在 issue #${task.issue} 发布一条评论；完成后附评论链接，不要求提交、推送或开 PR。`
-      : "交付物是最终摘要；完成后写明调查结果，不要求提交、推送或开 PR。",
-    RUN_RULES.at(-1)!,
+      : task.deliver === "pr"
+        ? "任务没有仓库，开不了 PR：结果写在最后的回复里，写清做到哪一步、卡在哪一步。"
+        : "交付物是最终摘要；完成后写明调查结果，不要求提交、推送或开 PR。",
+    FULL_TEST_RULE,
+    SERVICE_RULE,
   ];
 }
 

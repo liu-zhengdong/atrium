@@ -38,6 +38,7 @@ import {
 } from "../server/tasks/dispatch/prepare.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";
+import { deliveryRules } from "../server/tasks/dispatch/workspace.ts";
 
 const temp = (name: string) => mkdtempSync(join(tmpdir(), `atrium-${name}-`));
 /** codex 的最后消息文件放在提示词旁（按平台拼路径）。 */
@@ -432,6 +433,40 @@ test("buildPrompt：按段拼接，空段省略", () => {
     /PR 正文写「## 碰到哪些已有能力」一节.*没碰到写「无」/,
   );
   assert.throws(() => buildPrompt({ title: "  " }), /标题不能为空/);
+});
+
+test("deliveryRules：只有交 PR 且有仓库才要求提交、推送、开 PR", () => {
+  const rules = (task: Parameters<typeof deliveryRules>[0]) =>
+    deliveryRules(task).join("\n");
+  const prOnly = [
+    "做完后依次",
+    "交付前做端到端验证",
+    "PR 正文写",
+    "gh 命令一律带",
+    "停在 PR",
+  ];
+  const pr = rules({ deliver: "pr", issue: null, repo: "/w/repo" });
+  for (const rule of prOnly)
+    assert.ok(pr.includes(rule), `有仓库的 pr：${rule}`);
+  assert.ok(pr.includes("不要自己跑全量测试"));
+
+  // 没有仓库的 pr 交付开不了 PR：不再一边说「没有仓库」一边要开 PR（t8 巡检）。
+  const noRepo = rules({ deliver: "pr", issue: null, repo: null });
+  assert.match(noRepo, /任务没有仓库，开不了 PR/);
+  for (const rule of prOnly)
+    assert.ok(!noRepo.includes(rule), `无仓库的 pr：${rule}`);
+  assert.ok(noRepo.includes("不要自己跑全量测试"));
+
+  for (const [deliver, issue, statement] of [
+    ["none", null, "交付物是最终摘要"],
+    ["comment", 7, "交付物是在 issue #7 发布一条评论"],
+  ] as const) {
+    const text = rules({ deliver, issue, repo: "/w/repo" });
+    assert.ok(text.includes(statement), deliver);
+    for (const rule of prOnly)
+      assert.ok(!text.includes(rule), `${deliver}：${rule}`);
+    assert.ok(text.includes("不要自己跑全量测试"), deliver);
+  }
 });
 
 test("loadRootDoc：只读仓库根的 .agents/README.md，不读部门文件", async () => {

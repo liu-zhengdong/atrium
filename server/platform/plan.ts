@@ -19,6 +19,7 @@ export type Invocation = {
  * 结束整个进程树：Unix 给独立进程组发信号（拉起时 detached）；
  * Windows 没有进程组信号，用 `taskkill /T /F`。控制台程序收不到 taskkill 的温和关闭，
  * 所以 SIGTERM 与 SIGKILL 在 Windows 上都是强制结束。
+ * Windows 上这是列不出进程时的退路；平时先列全机进程圈出整棵树（`windowsTreePids`），再逐个结束。
  */
 export function killTreePlan(
   platform: Platform,
@@ -31,6 +32,85 @@ export function killTreePlan(
       args: ["/T", "/F", "/PID", String(pid)],
     };
   return { kind: "group", pid: -pid, signal };
+}
+
+/** Windows 上的一个进程：pid、父 pid、创建时间（WMI 的 yyyymmddHHMMSS.ffffff，按字面比先后；读不到为空）。 */
+export type WindowsProcess = { pid: number; ppid: number; created: string };
+
+/**
+ * Windows 列全机进程（结束进程树前圈出整棵树）：[wmisearcher] 是内置类型，不靠模块自动加载，白名单环境里也能用。
+ * 每行「pid 父pid 创建时间」。
+ */
+export const WINDOWS_PROCESS_LIST: Invocation = {
+  command: "powershell.exe",
+  args: [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "([wmisearcher]'SELECT ProcessId,ParentProcessId,CreationDate FROM Win32_Process').Get() | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate)\" }",
+  ],
+};
+
+/** `WINDOWS_PROCESS_LIST` 的输出；坏行跳过，创建时间去掉时区（同一台机器上比先后）。 */
+export function parseWindowsProcesses(text: string): WindowsProcess[] {
+  const procs: WindowsProcess[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [pidText, ppidText, createdText = ""] = line.trim().split(/\s+/);
+    const pid = Number(pidText);
+    const ppid = Number(ppidText);
+    if (
+      !Number.isSafeInteger(pid) ||
+      pid <= 0 ||
+      !Number.isSafeInteger(ppid) ||
+      ppid < 0
+    )
+      continue;
+    const created = /^\d{14}(?:\.\d+)?/.exec(createdText)?.[0] ?? "";
+    procs.push({ pid, ppid, created });
+  }
+  return procs;
+}
+
+/**
+ * Windows 上要结束的整棵树：根加上按父 pid 找到的全部后代，根排最前（t167）。
+ * `taskkill /T` 只在结束那一刻顺着活着的父子关系找；这里先圈好再结束，中途先死的父进程不会让子孙漏掉。
+ * 父 pid 被复用时不认：子进程比「父进程」创建得还早，说明原父进程已不在、这个 pid 换了人。
+ * 根不在列表里（已退出）照样按它的 pid 找子进程。父子成环不死循环。
+ */
+export function windowsTreePids(
+  procs: readonly WindowsProcess[],
+  root: number,
+): number[] {
+  const byPid = new Map<number, WindowsProcess>();
+  const children = new Map<number, WindowsProcess[]>();
+  for (const proc of procs) {
+    byPid.set(proc.pid, proc);
+    if (proc.pid === proc.ppid) continue;
+    const list = children.get(proc.ppid);
+    if (list) list.push(proc);
+    else children.set(proc.ppid, [proc]);
+  }
+  const tree = [root];
+  const seen = new Set(tree);
+  for (let i = 0; i < tree.length; i++) {
+    const parent = byPid.get(tree[i]!);
+    for (const child of children.get(tree[i]!) ?? []) {
+      if (seen.has(child.pid)) continue;
+      if (parent?.created && child.created && child.created < parent.created)
+        continue;
+      seen.add(child.pid);
+      tree.push(child.pid);
+    }
+  }
+  return tree;
+}
+
+/** 一次结束多个进程（连同各自仍在的子孙）：`taskkill /T /F /PID a /PID b ...`。 */
+export function windowsKillInvocation(pids: readonly number[]): Invocation {
+  return {
+    command: "taskkill",
+    args: ["/T", "/F", ...pids.flatMap((pid) => ["/PID", String(pid)])],
+  };
 }
 
 /** 跑一条 shell 命令：Unix `/bin/sh -c`；Windows `cmd.exe /d /s /c "命令"`（与 Node 的 shell:true 相同）。 */

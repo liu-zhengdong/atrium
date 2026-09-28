@@ -272,6 +272,8 @@ export class RemoteHosts {
       }
       const giveUp = (why: string) => {
         this.drop(id);
+        // 代理若已领走：叫醒它挂着的长轮询，下一轮就收到叫停，不用等满一轮。
+        this.wake(host);
         reject(new Problem(409, why, "conflict"));
       };
       if (extra.abandon) {
@@ -284,7 +286,7 @@ export class RemoteHosts {
       }
       if (extra.signal) {
         const signal = extra.signal;
-        const onAbort = () => giveUp("服务正在关闭");
+        const onAbort = () => giveUp("服务正在关闭或任务已停止");
         signal.addEventListener("abort", onAbort, { once: true });
         entry.unlisten = () => signal.removeEventListener("abort", onAbort);
       }

@@ -905,6 +905,11 @@ test("掉线超时改派（t184）：改派后这一轮在跑时写原因，不�
   });
   // 改派后的这一轮交付了、在跑检查：检查更要紧。
   assert.match(of({ moved, checking: { host: null } })!.text, /本地检查中$/);
+  // 改派后新主机上又没进展：说没进展，带新主机。
+  assert.equal(
+    of({ moved, host: "mac2", worker_quiet_ms: 300_000 })!.text,
+    `${base.worker} @ mac2 5 分钟没进展`,
+  );
 
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
@@ -919,6 +924,8 @@ test("掉线超时改派（t184）：改派后这一轮在跑时写原因，不�
   db.prepare("UPDATE tasks SET host_id=3 WHERE id=?").run(task.id);
   // 改派前的检查开始记录不算这一轮的。
   noteTask(db, task.ref, "local_check_started", { host: "h3" }, 3);
+  // 改派前那一轮的没进展提醒也不算。
+  noteTask(db, task.ref, "worker_quiet", { quiet_ms: 300_000 }, 3);
   const reason = "h3 掉线超过 10 分钟，已改派到 h1";
   patchRunFields(
     db,
@@ -933,7 +940,10 @@ test("掉线超时改派（t184）：改派后这一轮在跑时写原因，不�
   const facts = holderFacts(db, row(), null);
   assert.equal(facts.moved, reason);
   assert.equal(facts.checking, null);
+  assert.equal(facts.worker_quiet_ms, null);
   assert.equal(getTask(db, task.ref).holder?.text, reason);
+  noteTask(db, task.ref, "worker_quiet", { quiet_ms: 360_000 }, 5);
+  assert.equal(holderFacts(db, row(), null).worker_quiet_ms, 360_000);
   // 之后受阻、再派：回到平常的说法。
   advanceTask(db, task.ref, { kind: "block" }, {}, { reason: "等决定" }, 5);
   assert.equal(holderFacts(db, row(), null).moved, null);

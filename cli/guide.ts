@@ -166,6 +166,10 @@ export const groups: Record<string, string[]> = {
     "skill reject",
   ],
 };
+/** 不在 atrium --help 里列的组（命令仍可用、guide 命令参考里仍有）。 */
+export const hiddenGroups: ReadonlySet<string> = new Set([
+  "目标（迁移后下线）",
+]);
 export function groupOf(name: string) {
   return (
     Object.entries(groups).find(([, members]) => members.includes(name))?.[0] ??

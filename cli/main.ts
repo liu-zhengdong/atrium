@@ -35,7 +35,7 @@ import { agentCommand, agentServiceCommands, hostCommands } from "./hosts.ts";
 import { notifyCommands } from "./notify.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
-import { example, groupOf, guide } from "./guide.ts";
+import { example, groupOf, groups, guide, hiddenGroups } from "./guide.ts";
 import { cliErrorMessage, optionError } from "./error-message.ts";
 
 export type Values = Record<
@@ -187,23 +187,16 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...[
-      "任务",
-      "执行机器",
-      "专员",
-      "全景",
-      "目标",
-      "组织",
-      "备忘与决定",
-      "资料",
-      "选项与拍板",
-    ].flatMap((group) => [
-      "",
-      group,
-      ...Object.entries(commands)
-        .filter(([name]) => groupOf(name) === group)
-        .map(([name, command]) => entry(name, command)),
-    ]),
+    // 服务组由上面的 service 列出（含裸命令 atrium）。
+    ...Object.keys(groups)
+      .filter((group) => group !== "服务" && !hiddenGroups.has(group))
+      .flatMap((group) => [
+        "",
+        group,
+        ...Object.entries(commands)
+          .filter(([name]) => groupOf(name) === group)
+          .map(([name, command]) => entry(name, command)),
+      ]),
     "",
     "命令详情：atrium <命令> --help；调用约定：atrium guide",
   ].join("\n");

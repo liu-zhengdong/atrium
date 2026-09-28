@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseArgs } from "node:util";
 import { commands, help, main } from "../cli/main.ts";
-import { example, guide } from "../cli/guide.ts";
+import { example, groups, guide, hiddenGroups } from "../cli/guide.ts";
 import { correction, exitCodes, failure } from "../cli/contract.ts";
 import { cliErrorMessage, optionError } from "../cli/error-message.ts";
 import { dataDirectory } from "../server/service-state.ts";
@@ -49,6 +49,27 @@ test("说明书从命令表与退出码表生成；示例均通过参数解析",
   }
   for (const [code, exit] of Object.entries(exitCodes))
     assert(text.includes(`${exit}  ${code}`));
+});
+
+test("atrium --help 的分组取自 guide 的 groups：非隐藏组都列出，隐藏组不列", () => {
+  const text = help();
+  const lines = text.split("\n");
+  const entryLine = (name: string) =>
+    `  atrium ${name} ${commands[name]!.args}  ${commands[name]!.about}`;
+  for (const [group, members] of Object.entries(groups)) {
+    const listed = members.filter((name) => name in commands);
+    if (hiddenGroups.has(group)) {
+      assert(!lines.includes(group), `隐藏组 ${group} 不该出现`);
+      for (const name of listed)
+        assert(!text.includes(`  atrium ${name} `), `隐藏组命令 ${name}`);
+      continue;
+    }
+    assert(lines.includes(group), `缺组 ${group}`);
+    if (group === "服务") continue;
+    for (const name of listed)
+      assert(text.includes(entryLine(name)), `${group} 组缺 ${name}`);
+  }
+  assert.match(text, /^技能\n  atrium skill /m);
 });
 
 test("命令组的 --help 列出该组全部子命令，条目与 atrium --help 一致", async () => {

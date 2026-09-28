@@ -8,6 +8,7 @@ import {
 } from "./ledger-model.ts";
 import { parseWorker } from "./profiles.ts";
 import { getJobRole } from "./job-roles.ts";
+import { ADVICE_WINDOW } from "./worker-advice.ts";
 
 export type DeliveryRow = {
   id: number;
@@ -931,6 +932,8 @@ type StatCounts = {
   passes: number;
   returns_sum: number;
   incidents_sum: number;
+  recent_finished: number;
+  recent_incidents: number;
 };
 const SCOPE_KEYS: Record<StatScope, readonly string[]> = {
   combination: ["worker", "job_id"],
@@ -988,7 +991,10 @@ function statSource(
     params,
   };
 }
-/** 一组统计的次数：次数、一次通过、退回、事故全在库里按组算（#t123），不读交付明细。 */
+/**
+ * 一组统计的次数：次数、一次通过、退回、事故全在库里按组算（#t123），不读交付明细。
+ * 每组按结束先后编号（已结束的在前），最近 ADVICE_WINDOW 次的次数与事故另算一份给收紧建议。
+ */
 function countRows(
   db: DatabaseSync,
   scope: StatScope,
@@ -1004,8 +1010,15 @@ function countRows(
        SUM(CASE WHEN ended_at IS NOT NULL AND first_pass IS NOT NULL THEN 1 ELSE 0 END) AS rated,
        SUM(CASE WHEN ended_at IS NOT NULL AND first_pass=1 THEN 1 ELSE 0 END) AS passes,
        SUM(CASE WHEN ended_at IS NOT NULL THEN gate_return_count + merge_return_count ELSE 0 END) AS returns_sum,
-       SUM(CASE WHEN ended_at IS NOT NULL THEN incident_count ELSE 0 END) AS incidents_sum
-     FROM ${from} ${where} GROUP BY ${select}`,
+       SUM(CASE WHEN ended_at IS NOT NULL THEN incident_count ELSE 0 END) AS incidents_sum,
+       SUM(CASE WHEN ended_at IS NOT NULL AND seq<=? THEN 1 ELSE 0 END) AS recent_finished,
+       SUM(CASE WHEN ended_at IS NOT NULL AND seq<=? THEN incident_count ELSE 0 END) AS recent_incidents
+     FROM (SELECT ${select},ended_at,first_pass,gate_return_count,merge_return_count,incident_count,
+             ROW_NUMBER() OVER (PARTITION BY ${select} ORDER BY ended_at IS NULL, ended_at DESC, id DESC) AS seq
+           FROM ${from} ${where})
+     GROUP BY ${select}`,
+    ADVICE_WINDOW,
+    ADVICE_WINDOW,
     ...params,
   );
 }
@@ -1134,6 +1147,8 @@ export function workerStats(
         average_returns: finished ? Number(r.returns_sum) / finished : 0,
         median_ms: medians[scope].get(key) ?? null,
         incidents: Number(r.incidents_sum),
+        recent_deliveries: Number(r.recent_finished ?? 0),
+        recent_incidents: Number(r.recent_incidents ?? 0),
         low_data: finished < 5,
         trust: null,
       });
@@ -1296,6 +1311,9 @@ export type WorkerStat = {
   average_returns: number;
   median_ms: number | null;
   incidents: number;
+  /** 最近 ADVICE_WINDOW 次交付（按结束先后）与其中的事故，收紧建议只看这一段。 */
+  recent_deliveries: number;
+  recent_incidents: number;
   low_data: boolean;
   trust: string | null;
 };
@@ -1356,6 +1374,7 @@ export function summarizeMetrics(
           : 0,
         median_ms: mid,
         incidents: finished.reduce((n, r) => n + r.incident_count, 0),
+        ...recentIncidents(finished),
         low_data: finished.length < 5,
         trust: trust.get(g.worker) ?? null,
       };
@@ -1366,6 +1385,16 @@ export function summarizeMetrics(
         a.scope.localeCompare(b.scope) ||
         a.worker.localeCompare(b.worker),
     );
+}
+/** 最近 ADVICE_WINDOW 次已结束交付里的事故数。 */
+function recentIncidents(finished: readonly DeliveryMetric[]) {
+  const recent = [...finished]
+    .sort((a, b) => b.ended_at! - a.ended_at! || b.id - a.id)
+    .slice(0, ADVICE_WINDOW);
+  return {
+    recent_deliveries: recent.length,
+    recent_incidents: recent.reduce((n, r) => n + r.incident_count, 0),
+  };
 }
 /** 旧入口：用手上的整条交付折成统计事实，结果与 summarizeMetrics 一致。 */
 export function summarizeDeliveries(
@@ -1390,29 +1419,4 @@ export function summarizeDeliveries(
     })),
     trust,
   );
-}
-export function adviceFor(
-  stat: WorkerStat,
-): { action: "relax" | "tighten" | "avoid_role"; reason: string } | null {
-  if (stat.scope !== "combination" || stat.deliveries < 5) return null;
-  if (stat.incidents > 0)
-    return {
-      action: "tighten",
-      reason: `${stat.deliveries} 次交付有 ${stat.incidents} 起事故`,
-    };
-  if (stat.first_pass_rate !== null && stat.first_pass_rate < 0.5)
-    return {
-      action: "avoid_role",
-      reason: `${stat.role ?? "未指定专员"} ${stat.deliveries} 次交付一次通过率 ${Math.round(stat.first_pass_rate * 100)}%`,
-    };
-  if (
-    stat.first_pass_rate === 1 &&
-    stat.deliveries >= 5 &&
-    stat.trust !== "high"
-  )
-    return {
-      action: "relax",
-      reason: `${stat.deliveries} 次交付均一次通过且无事故`,
-    };
-  return null;
 }

@@ -205,16 +205,24 @@ test("检查派发：那台没跑成换一台，都不行回本机；有未提�
   assert.equal(result.status, "passed");
   assert.equal(locals.length, 1);
 
+  // 上一轮在 h2 没跑成（t204）：重跑先不派给它。
+  await dispatch.run({ ...request, avoid: [2] });
+  assert.deepEqual(
+    sent.slice(2).map((s) => s.host),
+    [3],
+  );
+  assert.equal(locals.length, 2);
+
   // 工作树有没提交的改动：只能在本机检查（远程拿不到这些改动）。
   writeFileSync(join(fx.repo, "dirty.txt"), "x\n");
   await dispatch.run(request);
-  assert.equal(sent.length, 2);
-  assert.equal(locals.length, 2);
+  assert.equal(sent.length, 3);
+  assert.equal(locals.length, 3);
 
   // 不知道基础分支：只在本机。
   await dispatch.run({ ...request, base: null });
-  assert.equal(sent.length, 2);
-  assert.equal(locals.length, 3);
+  assert.equal(sent.length, 3);
+  assert.equal(locals.length, 4);
 });
 
 test("检查派发：与检查基准不同平台的主机不接把关检查；仓库 .agents/check-platform 可另配基准", async (t) => {

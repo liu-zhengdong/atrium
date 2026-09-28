@@ -345,6 +345,88 @@ test("事实采集：受阻后事件投 a1，a1 捎话后重新拉起显示已�
   db.close();
 });
 
+test("事实采集：合入检查没跑成等重跑（t204）；下一轮开始跑就是检查中；重新排队后旧的重跑记录不算", () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  ensureEventTables(db);
+  const task = createTask(db, { title: "检查重跑" }, 1);
+  advanceTask(
+    db,
+    task.ref,
+    { kind: "start" },
+    { worker: "claude+opus:high" },
+    {},
+    2,
+  );
+  const row = () =>
+    db.prepare("SELECT * FROM tasks WHERE id=?").get(task.id) as never;
+  db.prepare(
+    "UPDATE tasks SET status='done',delivery_stage='merge_queued' WHERE id=?",
+  ).run(task.id);
+  // 合入队列跑检查时阶段是 merging；没跑成放回队尾（merge_queued）等重跑。
+  const stage = (value: string) =>
+    db
+      .prepare("UPDATE tasks SET delivery_stage=? WHERE id=?")
+      .run(value, task.id);
+  noteTask(db, task.ref, "merge_queued", {}, 3);
+  stage("merging");
+  noteTask(db, task.ref, "merge_check_started", { host: "h3" }, 4);
+  assert.deepEqual(holderFacts(db, row(), null).checking, { host: "h3" });
+  noteTask(
+    db,
+    task.ref,
+    "merge_check_rerun",
+    { attempt: 1, max: 3, reason: "h3 离线，检查没派过去", host: "h3" },
+    5,
+  );
+  stage("merge_queued");
+  let facts = holderFacts(db, row(), null);
+  assert.equal(facts.checking, null);
+  assert.deepEqual(facts.rerun, {
+    attempt: 1,
+    reason: "h3 离线，检查没派过去",
+  });
+  assert.deepEqual(holderFor(db, row(), null), {
+    kind: "merge",
+    who: null,
+    text: "合入前检查没跑成，等重跑（1/3）",
+    detail: "h3 离线，检查没派过去",
+  });
+  stage("merging");
+  noteTask(db, task.ref, "merge_check_started", { host: "h2" }, 6);
+  facts = holderFacts(db, row(), null);
+  assert.equal(facts.rerun, null);
+  assert.deepEqual(facts.checking, { host: "h2" });
+  stage("merge_queued");
+  noteTask(
+    db,
+    task.ref,
+    "merge_check_rerun",
+    { attempt: 2, reason: "超过 30 分钟" },
+    7,
+  );
+  assert.equal(
+    holderFor(db, row(), null)!.text,
+    "合入前检查没跑成，等重跑（2/3）",
+  );
+  noteTask(db, task.ref, "merge_queued", {}, 8);
+  assert.equal(holderFor(db, row(), null)!.text, "排队合入");
+
+  // 重跑用尽：合入队列转卡住，只记 merge_blocked，也算受阻。
+  db.prepare(
+    "UPDATE tasks SET status='blocked',delivery_stage=NULL WHERE id=?",
+  ).run(task.id);
+  noteTask(
+    db,
+    task.ref,
+    "merge_blocked",
+    { reason: "基础设施问题：检查没跑成（已自动重跑 3 次）：h3 离线" },
+    9,
+  );
+  assert.equal(holderFor(db, row(), null)!.text, "基础设施问题 · 等 秘书 处理");
+  db.close();
+});
+
 /** 审阅打回的原文形如 review-runtime 交回时写的：审阅者短号、执行者，再接整篇意见。 */
 const REJECTED = `审阅打回（t132，codex+gpt-6-sol:high）：## 必须改的问题
 

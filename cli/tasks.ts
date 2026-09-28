@@ -512,6 +512,7 @@ const show: Command = {
         children: number;
         child_summary: TaskNode["child_summary"];
         events: TaskEventRow[];
+        last_check?: string | null;
       }
     >(`/tasks/${ref(reference, "任务")}`);
     if (json) printJson(task);
@@ -580,6 +581,7 @@ const show: Command = {
         ["工作树", task.worktree],
         ["分支", task.branch],
         ["PR", task.pr_url],
+        ["本地检查", task.last_check ?? null],
         ["CI", task.ci],
         ["建于", when(task.created_at)],
         ["开始", task.started_at ? when(task.started_at) : null],

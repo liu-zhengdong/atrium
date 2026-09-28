@@ -21,6 +21,7 @@ import { noteView } from "./notes.ts";
 import { idleWaits, queued, queueView } from "./queue.ts";
 import { concernsOf } from "./concerns.ts";
 import type { InviteHint } from "./concern-gate.ts";
+import { CHECK_EVENT_KINDS, checkSummary } from "./check-outcome.ts";
 
 const EVENTS_SHOWN = 50;
 
@@ -58,12 +59,35 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     children: child_summary?.total ?? 0,
     child_summary,
     rollup,
+    last_check: lastCheck(db, found.id),
     events,
     ...conditions(db, found.id),
     ...(concerns.length ? { concerns } : {}),
     ...(hints.length ? { concern_hints: hints } : {}),
     ...involvedView(involvedOf(db, found)),
   };
+}
+
+/** 最近一次本地检查说成一句话（t204）：过、没过、没跑成（等重跑或基础设施问题）。 */
+function lastCheck(db: DatabaseSync, id: number): string | null {
+  const row = all<TaskEventRow>(
+    db,
+    `SELECT * FROM task_events WHERE task_id=? AND kind IN (${CHECK_EVENT_KINDS.map(() => "?").join(",")}) ORDER BY id DESC LIMIT 1`,
+    id,
+    ...CHECK_EVENT_KINDS,
+  )[0];
+  if (!row) return null;
+  try {
+    const detail: unknown = JSON.parse(row.detail ?? "null");
+    return detail && typeof detail === "object"
+      ? checkSummary({
+          kind: row.kind,
+          detail: detail as Record<string, unknown>,
+        })
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 最近一次交付后按改动范围给的「要不要请某专员」提示。 */

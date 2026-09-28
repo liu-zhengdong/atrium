@@ -24,12 +24,21 @@ export type LocalCheck = {
   host?: string;
   /** 检查的是哪个提交（按提交派到远程时有）。 */
   commit?: string;
+  /** 基础设施原因没跑成（主机离线、没派过去、代理没来领、检查进程被杀）；跑完了为空。 */
+  infra?: string;
+  /** 过／没过／没跑成（t204，check-outcome.ts）；旧记录没有。 */
+  outcome?: "passed" | "failed" | "not_run";
+  /** 没跑成的原因（分类给出）。 */
+  reason?: string;
+  /** 已自动重跑的次数。 */
+  reruns?: number;
 };
 
 /** 记进事件的检查结果：结论、在哪台、哪个提交排在前面（`task show` 一行里先看到）。 */
 export function checkDetail(check: LocalCheck) {
-  const { status, host, commit, ...rest } = check;
+  const { outcome, status, host, commit, ...rest } = check;
   return {
+    ...(outcome ? { outcome } : {}),
     status,
     ...(host ? { host } : {}),
     ...(commit ? { commit } : {}),
@@ -248,16 +257,36 @@ export async function runLocalCheck(input: {
         timedOut = true;
         abort();
       }, timeoutMs);
-      const result = await new Promise<{ code: number | null; error?: Error }>(
-        (resolve) => {
-          child.once("error", (error) => resolve({ code: null, error }));
-          child.once("close", (code) => resolve({ code }));
-        },
-      );
+      const result = await new Promise<{
+        code: number | null;
+        signal?: NodeJS.Signals | null;
+        error?: Error;
+      }>((resolve) => {
+        child.once("error", (error) => resolve({ code: null, error }));
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      });
       clearTimeout(timer);
       input.signal?.removeEventListener("abort", abort);
       const tail = logTail(log);
       const failedTests = failedTestNames(tail);
+      // 不是运行时自己超时结束的，却被信号结束：检查进程被别人杀了，算没跑成（t204）。
+      const killed =
+        !timedOut &&
+        !input.signal?.aborted &&
+        !result.error &&
+        result.code === null &&
+        result.signal
+          ? `检查进程被信号 ${result.signal} 结束`
+          : undefined;
+      if (killed)
+        return {
+          status: "error",
+          command,
+          log,
+          detail: killed,
+          failedTests,
+          infra: killed,
+        };
       const status = timedOut
         ? "timeout"
         : result.error

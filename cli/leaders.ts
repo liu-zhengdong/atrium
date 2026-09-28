@@ -25,10 +25,12 @@ const STATUS: Record<LeaderWake["status"], string> = {
   handed_off: "已转交",
 };
 
-/** 最近一次唤醒的一句话（org tree、top 共用）。 */
+/** 最近一次唤醒的一句话（org tree、top 共用）；几个分身同时在跑时是「正在处理 N 件：…」（t275）。 */
 export function wakeText(wake: LeaderWake | null | undefined): string {
   if (!wake) return "还没唤醒过";
   const what = wake.summary ? `：${wake.summary}` : "";
+  if (wake.status === "running" && (wake.clones ?? 1) > 1)
+    return `${when(wake.at)}起正在处理 ${wake.summary ?? `${wake.clones} 件`}`;
   return wake.status === "running"
     ? `${when(wake.at)}起处理中${what}`
     : `${when(wake.at)}唤醒 · ${STATUS[wake.status]}${what}${wake.note ? `（${wake.note}）` : ""}`;
@@ -39,7 +41,13 @@ function detail(view: LeaderView): string {
     `${view.ref} ${view.name} · 执行者 ${view.worker}`,
     `负责：${view.nodes.map((n) => `${n.ref} ${n.name}（${n.path}）`).join("、") || "（还没指派节点：atrium org edit 节点 --leader " + view.ref + "）"}`,
     `最近唤醒：${wakeText(view.wake)}${view.wake ? ` · 共 ${view.wake.count} 次` : ""}`,
+    `分身：至多 ${view.clone_limit} 个同时在跑${view.clones.length ? `，正在处理 ${view.clones.length} 件` : ""}`,
+    ...view.clones.map(
+      (c) =>
+        `  ${c.label}（${c.lane === "big" ? "大事" : "日常"}，${when(c.since)}起）：${c.summary}`,
+    ),
     `备忘（${Array.from(view.memo).length}/${view.memo_max} 字）：${view.memo ? `\n${view.memo}` : "（空）"}`,
+    ...(view.memo_parts ?? []).map((p) => `【分段 ${p.part}】${p.body}`),
   ].join("\n");
 }
 
@@ -96,13 +104,14 @@ export const leaderCommands: Record<string, Command> = {
     },
   },
   "leader add": {
-    args: "名称 --worker 工具+模型[:强度] [--memo 文本] [--id aN]",
+    args: "名称 --worker 工具+模型[:强度] [--memo 文本] [--id aN] [--clones N]",
     about:
-      "登记 leader（固定身份，按事唤醒时用 --worker 的执行者组合起一次性进程）；--id 认领节点上已引用但没登记的 aN；再用 org edit 节点 --leader aN 指派",
+      "登记 leader（固定身份，按事唤醒时用 --worker 的执行者组合起一次性进程）；--id 认领节点上已引用但没登记的 aN；--clones 是同时至多几个分身（缺省 3，1～8；日常事件一个分身，大事一件一个）；再用 org edit 节点 --leader aN 指派",
     options: {
       worker: { type: "string" },
       memo: { type: "string" },
       id: { type: "string" },
+      clones: { type: "string" },
     },
     positionals: [1, 1],
     async run({ positionals: [name], values, json }) {
@@ -121,6 +130,9 @@ export const leaderCommands: Record<string, Command> = {
           ? {}
           : { memo: str(values, "memo") }),
         ...(str(values, "id") === undefined ? {} : { id: str(values, "id") }),
+        ...(str(values, "clones") === undefined
+          ? {}
+          : { clones: str(values, "clones") }),
       });
       if (json) printJson(view);
       else
@@ -129,12 +141,13 @@ export const leaderCommands: Record<string, Command> = {
     },
   },
   "leader edit": {
-    args: "aN [--name 名称] [--worker 工具+模型[:强度]] [--memo 文本|--memo-file 文件]",
+    args: "aN [--name 名称] [--worker 工具+模型[:强度]] [--clones N] [--memo 文本|--memo-file 文件]",
     about:
-      "改 leader 的名称、执行者组合或备忘（覆盖写，有长度上限，超了先精简）；leader 自己只能改自己的备忘",
+      "改 leader 的名称、执行者组合、分身并发上限（--clones，1～8）或备忘（覆盖写，有长度上限，超了先精简）；leader 自己只能改自己的备忘",
     options: {
       name: { type: "string" },
       worker: { type: "string" },
+      clones: { type: "string" },
       memo: { type: "string" },
       "memo-file": { type: "string" },
     },
@@ -158,12 +171,15 @@ export const leaderCommands: Record<string, Command> = {
         ...(str(values, "worker") === undefined
           ? {}
           : { worker: str(values, "worker") }),
+        ...(str(values, "clones") === undefined
+          ? {}
+          : { clones: str(values, "clones") }),
         ...(memo === undefined ? {} : { memo }),
       };
       if (!Object.keys(body).length)
         throw new Problem(
           400,
-          "至少改一项：--name、--worker、--memo 或 --memo-file",
+          "至少改一项：--name、--worker、--clones、--memo 或 --memo-file",
           "usage",
         );
       const view = await (

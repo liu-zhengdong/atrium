@@ -60,6 +60,10 @@ type MemoView = {
   memo: string;
   memo_max: number;
   memo_updated_at: number | null;
+  /** 多个分身同时在跑时各自写的分段（t275）。 */
+  memo_parts?: { part: string; body: string; updated_at: number }[];
+  /** leader 分身这次写进了哪一段；合并或写主备忘时没有。 */
+  written_to?: string;
   decisions: Decision[];
   principles: number;
   total: number;
@@ -81,6 +85,14 @@ function memoText(view: MemoView) {
       : [
           `${whose(view.owner, view.name)}的备忘（${size}/${view.memo_max} 字${view.memo_updated_at ? ` · ${when(view.memo_updated_at)} 更新` : ""}）：`,
           view.memo || "（空）",
+          ...(view.memo_parts?.length
+            ? [
+                "各分身写的分段（还没合并；只剩一个分身时它写备忘即合并）：",
+                ...view.memo_parts.map(
+                  (p) => `【${p.part}】${when(p.updated_at)}：${p.body}`,
+                ),
+              ]
+            : []),
           "",
         ]),
     `决定摘要（${scope}，有效 ${view.total} 条；原则 ${view.principles} 条 + 最近 ${recent} 条）：`,
@@ -128,7 +140,7 @@ export const memoCommands: Record<string, Command> = {
   "memo edit": {
     args: "[文本] [--file 文件] [--as secretary|aN]",
     about:
-      "覆盖写备忘：在等什么、下次先看什么这类当前状态（有长度上限，超了先精简）；取舍与原因记进 decision add",
+      "覆盖写备忘：在等什么、下次先看什么这类当前状态（有长度上限，超了先精简）；取舍与原因记进 decision add。leader 有几个分身同时在跑时只写自己认领那件事的分段，不覆盖别的分身；只剩一个分身时它写的就是合并后的全文",
     options: { as: { type: "string" }, file: { type: "string" } },
     positionals: [0, 1],
     async run({ positionals: [text], values, json }) {
@@ -154,7 +166,9 @@ export const memoCommands: Record<string, Command> = {
       if (json) printJson(view);
       else
         console.log(
-          `已更新${afterVerb(view.owner, view.name)}的备忘（${Array.from(view.memo).length}/${view.memo_max} 字）`,
+          view.written_to
+            ? `别的分身还在跑，已写进${afterVerb(view.owner, view.name)}备忘的「${view.written_to}」分段（只剩一个分身时合并）`
+            : `已更新${afterVerb(view.owner, view.name)}的备忘（${Array.from(view.memo).length}/${view.memo_max} 字）`,
         );
       recordNext(`看：atrium memo show${asFlag(view.owner)}`);
     },

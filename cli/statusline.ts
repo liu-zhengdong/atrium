@@ -247,10 +247,13 @@ export function renderStatusline(input: StatuslineInput): string {
     lines.push(paint(DIM, `  …还有 ${rest} 个，atrium top 看全部`));
   }
   for (const leader of leaders) {
+    // 几个分身同时在跑（t275）：「正在处理 2 件：…」。
     const doing =
-      leader.wake?.status === "running"
-        ? `处理中${leader.wake.summary ? `：${oneLine(leader.wake.summary, 40)}` : ""}`
-        : "";
+      leader.wake?.status !== "running"
+        ? ""
+        : (leader.wake.clones ?? 1) > 1
+          ? `正在处理 ${oneLine(leader.wake.summary ?? `${leader.wake.clones} 件`, 48)}`
+          : `处理中${leader.wake.summary ? `：${oneLine(leader.wake.summary, 40)}` : ""}`;
     const pending = leader.events ? `待处理 ${leader.events} 件` : "";
     lines.push(
       `${paint(YELLOW, "◎")} ${leader.ref} ${leader.name} ${paint(DIM, [doing, pending].filter(Boolean).join(" · "))}`,

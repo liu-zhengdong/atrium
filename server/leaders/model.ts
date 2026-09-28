@@ -18,6 +18,14 @@ import {
   writeMemo,
   type Memo,
 } from "../memos/store.ts";
+import { readMemoParts, type MemoPart } from "../memos/parts.ts";
+import { cloneLimit, clonesProblem } from "./clones.ts";
+import {
+  clonesOf,
+  ensureWakeTables,
+  runningClones,
+  type CloneView,
+} from "./wakes.ts";
 
 export { MEMO_MAX, memoProblem } from "../memos/store.ts";
 
@@ -45,6 +53,8 @@ type Row = {
   wake_note: string | null;
   wake_failures: number;
   wakes: number;
+  /** 分身并发上限（t275）；null 为缺省。 */
+  max_clones: number | null;
 };
 
 export type LeaderWake = {
@@ -57,6 +67,8 @@ export type LeaderWake = {
   note: string | null;
   failures: number;
   count: number;
+  /** 在跑的分身数（t275）；没在跑为 0，老数据没有。 */
+  clones?: number;
 };
 
 export type LeaderView = {
@@ -65,8 +77,14 @@ export type LeaderView = {
   worker: string;
   memo: string;
   memo_max: number;
+  /** 多个分身同时在跑时各自写的备忘分段（t275），合并后清空；列表视图不带。 */
+  memo_parts?: MemoPart[];
   nodes: { ref: string; name: string; path: string }[];
   wake: LeaderWake | null;
+  /** 分身并发上限（t275）。 */
+  clone_limit: number;
+  /** 在跑的分身：各自认领的事与在处理什么。 */
+  clones: CloneView[];
   created_at: number;
   updated_at: number;
 };
@@ -82,7 +100,15 @@ export function ensureLeaderTables(db: DatabaseSync) {
     wake_summary TEXT, wake_note TEXT,
     wake_failures INTEGER NOT NULL DEFAULT 0,
     wakes INTEGER NOT NULL DEFAULT 0)`);
+  const columns = new Set(
+    (
+      db.prepare("PRAGMA table_info(org_leaders)").all() as { name: string }[]
+    ).map((c) => c.name),
+  );
+  if (!columns.has("max_clones"))
+    db.exec("ALTER TABLE org_leaders ADD COLUMN max_clones INTEGER");
   ensureMemoTables(db);
+  ensureWakeTables(db);
 }
 
 const hasTable = (db: DatabaseSync, name: string) =>
@@ -164,6 +190,12 @@ const workerOf = (value: unknown) => {
 const memoOf = (value: unknown, who: string) =>
   memoText(value, `atrium memo show --as ${who}`);
 
+const clonesOfInput = (value: unknown) => {
+  const problem = clonesProblem(value);
+  if (problem) throw usage(problem);
+  return Number(value);
+};
+
 const objectOf = (body: unknown) => {
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw usage("请求体应为对象");
@@ -190,9 +222,13 @@ function nextId(db: DatabaseSync) {
 
 export function addLeader(db: DatabaseSync, body: unknown, now = Date.now()) {
   const input = objectOf(body);
-  onlyKeys(input, ["name", "worker", "memo", "id"]);
+  onlyKeys(input, ["name", "worker", "memo", "id", "clones"]);
   const name = nameOf(input.name);
   const worker = workerOf(input.worker);
+  const clones =
+    input.clones === undefined || input.clones === null
+      ? null
+      : clonesOfInput(input.clones);
   return transaction(db, () => {
     let id: number;
     if (input.id !== undefined && input.id !== null && input.id !== "") {
@@ -209,8 +245,8 @@ export function addLeader(db: DatabaseSync, body: unknown, now = Date.now()) {
     const memo =
       input.memo === undefined ? "" : memoOf(input.memo, leaderRef(id));
     db.prepare(
-      "INSERT INTO org_leaders(id,name,worker,created_at,updated_at) VALUES (?,?,?,?,?)",
-    ).run(id, name, worker, now, now);
+      "INSERT INTO org_leaders(id,name,worker,max_clones,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+    ).run(id, name, worker, clones, now, now);
     if (memo) writeMemo(db, leaderRef(id), memo, now);
     return showLeader(db, leaderRef(id));
   });
@@ -224,26 +260,28 @@ export function editLeader(
 ) {
   const row = requireLeader(db, reference);
   const input = objectOf(body);
-  onlyKeys(input, ["name", "worker", "memo"]);
+  onlyKeys(input, ["name", "worker", "memo", "clones"]);
   if (!Object.keys(input).length)
-    throw usage("至少改一项：--name、--worker 或 --memo");
+    throw usage("至少改一项：--name、--worker、--clones 或 --memo");
   const name = input.name === undefined ? row.name : nameOf(input.name);
   const worker =
     input.worker === undefined ? row.worker : workerOf(input.worker);
+  const clones =
+    input.clones === undefined ? row.max_clones : clonesOfInput(input.clones);
   const memo =
     input.memo === undefined
       ? undefined
       : memoOf(input.memo, leaderRef(row.id));
   transaction(db, () => {
     db.prepare(
-      "UPDATE org_leaders SET name=?,worker=?,updated_at=? WHERE id=?",
-    ).run(name, worker, now, row.id);
+      "UPDATE org_leaders SET name=?,worker=?,max_clones=?,updated_at=? WHERE id=?",
+    ).run(name, worker, clones, now, row.id);
     if (memo !== undefined) writeMemo(db, leaderRef(row.id), memo, now);
   });
   return showLeader(db, leaderRef(row.id));
 }
 
-const wakeOf = (row: Row): LeaderWake | null =>
+const wakeOf = (row: Row, clones = 0): LeaderWake | null =>
   row.wake_at === null || row.wake_status === null
     ? null
     : {
@@ -254,6 +292,7 @@ const wakeOf = (row: Row): LeaderWake | null =>
         note: row.wake_note,
         failures: row.wake_failures,
         count: row.wakes,
+        clones: row.wake_status === "running" ? Math.max(1, clones) : 0,
       };
 
 /** 每位 leader 负责的节点（未归档），按节点号。 */
@@ -273,6 +312,7 @@ const viewOf = (
   row: Row,
   led: Map<string, LeaderView["nodes"]>,
   memo: Memo,
+  clones: CloneView[],
 ): LeaderView => ({
   ref: leaderRef(row.id),
   name: row.name,
@@ -280,14 +320,31 @@ const viewOf = (
   memo: memo.body,
   memo_max: MEMO_MAX,
   nodes: led.get(leaderRef(row.id)) ?? [],
-  wake: wakeOf(row),
+  wake: wakeOf(row, clones.length),
+  clone_limit: cloneLimit(row.max_clones),
+  clones,
   created_at: row.created_at,
   updated_at: row.updated_at,
 });
 
 export function showLeader(db: DatabaseSync, reference: unknown): LeaderView {
   const row = requireLeader(db, reference);
-  return viewOf(row, ledNodes(db), readMemo(db, leaderRef(row.id)));
+  const ref = leaderRef(row.id);
+  return {
+    ...viewOf(row, ledNodes(db), readMemo(db, ref), clonesOf(db, ref)),
+    memo_parts: readMemoParts(db, ref),
+  };
+}
+
+/** 每位已登记 leader 的分身并发上限（唤醒巡检用，一条查询）。 */
+export function cloneLimits(db: DatabaseSync): Map<string, number> {
+  if (!hasTable(db, "org_leaders")) return new Map();
+  return new Map(
+    all<{ id: number; max_clones: number | null }>(
+      db,
+      "SELECT id,max_clones FROM org_leaders ORDER BY id LIMIT 500",
+    ).map((r) => [leaderRef(r.id), cloneLimit(r.max_clones)]),
+  );
 }
 
 /**
@@ -301,10 +358,16 @@ export function listLeaders(db: DatabaseSync) {
     : [];
   const known = new Set(rows.map((r) => leaderRef(r.id)));
   const memos = readMemos(db);
+  const running = runningClones(db);
   const empty: Memo = { body: "", updated_at: null };
   return {
     leaders: rows.map((r) =>
-      viewOf(r, led, memos.get(leaderRef(r.id)) ?? empty),
+      viewOf(
+        r,
+        led,
+        memos.get(leaderRef(r.id)) ?? empty,
+        running.get(leaderRef(r.id)) ?? [],
+      ),
     ),
     busy: rows
       .filter((r) => r.wake_status === "running" && r.wake_at !== null)
@@ -312,6 +375,7 @@ export function listLeaders(db: DatabaseSync) {
         ref: leaderRef(r.id),
         name: r.name,
         doing: r.wake_summary ?? "",
+        clones: Math.max(1, running.get(leaderRef(r.id))?.length ?? 0),
         since: r.wake_at!,
       })),
     unregistered: [...led]
@@ -329,6 +393,7 @@ export type LeaderBrief = {
 export function leaderBriefs(db: DatabaseSync): Map<string, LeaderBrief> {
   const map = new Map<string, LeaderBrief>();
   if (!hasTable(db, "org_leaders")) return map;
+  const running = runningClones(db);
   for (const row of all<Row>(
     db,
     "SELECT * FROM org_leaders ORDER BY id LIMIT 500",
@@ -336,44 +401,7 @@ export function leaderBriefs(db: DatabaseSync): Map<string, LeaderBrief> {
     map.set(leaderRef(row.id), {
       ref: leaderRef(row.id),
       name: row.name,
-      wake: wakeOf(row),
+      wake: wakeOf(row, running.get(leaderRef(row.id))?.length ?? 0),
     });
   return map;
 }
-
-// ---- 唤醒记账（runtime 调用）----
-
-export function markWakeStart(
-  db: DatabaseSync,
-  leader: string,
-  summary: string,
-  now = Date.now(),
-) {
-  db.prepare(
-    "UPDATE org_leaders SET wake_at=?,wake_ended_at=NULL,wake_status='running',wake_summary=?,wake_note=NULL,wakes=wakes+1 WHERE id=?",
-  ).run(now, summary, leaderId(leader));
-}
-
-export function markWakeEnd(
-  db: DatabaseSync,
-  leader: string,
-  status: Exclude<WakeStatus, "running">,
-  failures: number,
-  note: string | null,
-  now = Date.now(),
-) {
-  db.prepare(
-    "UPDATE org_leaders SET wake_ended_at=?,wake_status=?,wake_failures=?,wake_note=? WHERE id=?",
-  ).run(now, status, failures, note, leaderId(leader));
-}
-
-/** 服务重启时把上次没收尾的唤醒记成失败（进程已随旧服务停掉）。 */
-export function closeStaleWakes(db: DatabaseSync, now = Date.now()) {
-  if (!hasTable(db, "org_leaders")) return;
-  db.prepare(
-    "UPDATE org_leaders SET wake_ended_at=?,wake_status='failed',wake_note='服务重启，本次唤醒中断，事件稍后重投' WHERE wake_status='running'",
-  ).run(now);
-}
-
-export const wakeFailures = (db: DatabaseSync, leader: string) =>
-  rowOf(db, leaderId(leader))?.wake_failures ?? 0;

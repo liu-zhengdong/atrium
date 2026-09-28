@@ -16,6 +16,7 @@ export type LeaderRule =
   | "task"
   | "task-remark"
   | "task-patch"
+  | "plan"
   | "review-create"
   | "point"
   | "stages"
@@ -45,6 +46,10 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/tasks/:id/stop": "task",
   // 专员否决交负责的 leader 判断（t209）：不认同时放行。
   "POST /api/tasks/:id/merge": "task",
+  // 规划任务（t275）：给负责的总任务派规划、采纳或驳回规划结果；看的是总任务或规划任务在不在范围里。
+  "POST /api/tasks/:id/plan": "plan",
+  "POST /api/plans/:id/adopt": "plan",
+  "POST /api/plans/:id/reject": "plan",
   "POST /api/reviews": "review-create",
   "POST /api/events/ack": "events-ack",
   "POST /api/org/nodes/:id/points": "point",

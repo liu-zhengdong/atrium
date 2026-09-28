@@ -14,7 +14,9 @@ import { choiceNodeId } from "../choices/store.ts";
 import { getMaterial } from "../materials/store.ts";
 import { materialRef } from "../materials/model.ts";
 import { scheduleRow } from "../schedules/model.ts";
-import { LeaderTokens } from "./tokens.ts";
+import { LeaderTokens, type CloneClaim } from "./tokens.ts";
+import { claimVerdict } from "./clones.ts";
+import { taskGroups } from "./clone-facts.ts";
 import {
   ackVerdict,
   asVerdict,
@@ -40,9 +42,37 @@ import {
  */
 
 const leaders = new WeakMap<FastifyRequest, string>();
+const clones = new WeakMap<
+  FastifyRequest,
+  { clone: CloneClaim; siblings: CloneClaim[] }
+>();
 
 /** 这次请求以哪位 leader 的令牌发来；用户令牌为 undefined。 */
 export const leaderOf = (request: FastifyRequest) => leaders.get(request);
+
+/** leader 令牌来自哪个分身、此刻另有哪些分身在跑（t275）；用户令牌为 undefined。 */
+export const cloneOf = (request: FastifyRequest) => clones.get(request);
+
+/** 动一件任务前：它的组被同一 leader 的另一个分身占着就拒绝（同一任务同一时刻只归一个分身）。 */
+function claimCheck(
+  db: DatabaseSync,
+  request: FastifyRequest,
+  leader: string,
+  reference: unknown,
+): string | null {
+  const mine = clones.get(request);
+  if (!mine?.siblings.length) return null;
+  const task = getTask(db, reference);
+  const group = taskGroups(db, [task.id]).get(task.id);
+  if (!group) return null;
+  return claimVerdict({
+    leader,
+    task: task.ref,
+    group,
+    mine: mine.clone.groups,
+    siblings: mine.siblings,
+  });
+}
 
 const forbid = (message: string) =>
   new Problem(403, message, "leader_scope", undefined, ESCALATE_HINT);
@@ -130,8 +160,9 @@ export function registerLeaderGuard(
   app.addHook("onRequest", async (request) => {
     const header = request.headers.authorization;
     if (!LeaderTokens.looksLike(header)) return;
-    const leader = tokens.verify(header);
-    if (!leader)
+    const found = tokens.identify(header);
+    const leader = found?.leader;
+    if (!found || !leader)
       throw new Problem(
         401,
         "leader 令牌无效或已过期（本次唤醒已结束）；这次唤醒没做完的事会随事件重投再唤醒你，现在直接退出",
@@ -148,6 +179,10 @@ export function registerLeaderGuard(
     if (as) throw forbid(as);
     query.as = leader;
     leaders.set(request, leader);
+    clones.set(request, {
+      clone: found.clone,
+      siblings: tokens.siblings(leader, found.clone.slot),
+    });
   });
 
   app.addHook("preHandler", async (request) => {
@@ -180,6 +215,7 @@ export function registerLeaderGuard(
         break;
       }
       case "task":
+      case "plan":
         verdict = scopeVerdict(leader, scope, [
           taskCheck(db, idParam(request)),
         ]);
@@ -320,5 +356,20 @@ export function registerLeaderGuard(
         break;
     }
     if (verdict) throw forbid(verdict);
+    const target = claimTarget(rule, request);
+    const claim =
+      target === null ? null : claimCheck(db, request, leader, target);
+    if (claim)
+      throw new Problem(409, claim, "conflict", undefined, "atrium memo show");
   });
+}
+
+/** 哪些规则动的是一件具体任务、要看分身认领（记备注不算，谁都可以记）。 */
+function claimTarget(rule: string, request: FastifyRequest): string | null {
+  const route = request.routeOptions.url ?? "";
+  if (rule === "task" || rule === "task-patch" || rule === "plan")
+    return idParam(request);
+  if (rule === "task-remark" && route.endsWith("/tell"))
+    return idParam(request);
+  return null;
 }

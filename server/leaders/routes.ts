@@ -15,6 +15,10 @@ import {
 import { escalationDetail, forwardOf, type ForwardCandidate } from "./route.ts";
 import { upstreamRoute } from "./subscriber.ts";
 import { ESCALATE_KINDS, escalateInput } from "./wake.ts";
+import { cloneOf } from "./guard.ts";
+import { memoTarget } from "./clones.ts";
+import { memoText } from "../memos/store.ts";
+import { writeMemoTo } from "../memos/parts.ts";
 
 const id = (params: unknown) => String((params as { id?: string }).id ?? "");
 
@@ -155,9 +159,25 @@ export function registerLeaderRoutes(
   app.post("/api/leaders", { bodyLimit: 16 * 1024 }, (request, reply) =>
     reply.code(201).send(addLeader(db, request.body)),
   );
-  app.patch("/api/leaders/:id", { bodyLimit: 16 * 1024 }, (request) =>
-    editLeader(db, id(request.params), request.body),
-  );
+  app.patch("/api/leaders/:id", { bodyLimit: 16 * 1024 }, (request) => {
+    // leader 自己改备忘（guard 已限定只改自己的备忘）：和 memo edit 一样按分身分段或合并（t275）。
+    const clone = cloneOf(request);
+    const body = request.body as { memo?: unknown } | null;
+    if (!clone || body?.memo === undefined)
+      return editLeader(db, id(request.params), request.body);
+    const who = leaderRef(requireLeader(db, id(request.params)).id);
+    writeMemoTo(
+      db,
+      who,
+      memoText(body.memo, `atrium memo show --as ${who}`),
+      memoTarget({
+        label: clone.clone.label,
+        started: clone.clone.started,
+        siblings: clone.siblings.length,
+      }),
+    );
+    return showLeader(db, who);
+  });
   app.post("/api/leaders/:id/escalate", { bodyLimit: 16 * 1024 }, (request) =>
     escalate(db, inbox, id(request.params), request.body),
   );

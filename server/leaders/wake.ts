@@ -5,6 +5,7 @@ import { omittedLine, type DecisionDigest } from "../memos/digest.ts";
 import { forwardedOf } from "./route.ts";
 import type { VerifyStep } from "../tasks/verify.ts";
 import { phenomenonLine } from "../tasks/verify-view.ts";
+import { ROUTINE_LABEL, type Lane } from "./clones.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、
@@ -202,6 +203,8 @@ export const EVENT_WORDS: Record<string, string> = {
   release_overdue: "等发版超时",
   merged: "已合入",
   merge_returned: "合入被打回",
+  plan_ready: "规划待采纳",
+  plan_failed: "规划没出清单",
   escalated: "上交",
   ci_failure: "远端检查失败",
   ci_success: "远端检查通过",
@@ -225,11 +228,24 @@ export function wakeSummary(events: readonly PromptEvent[]) {
   return `${parts.join("、")}${events.length > 3 ? ` 等 ${events.length} 件` : ""}`;
 }
 
+export type PromptClone = {
+  label: string;
+  lane: Lane;
+  groups: readonly string[];
+  /** 同一 leader 此刻另外在跑的分身。 */
+  siblings: readonly { label: string; groups: readonly string[] }[];
+  limit: number;
+};
+
 export type PromptInput = {
   leader: string;
   name: string;
   nodes: { ref: string; name: string; path: string; context: string }[];
   memo: string;
+  /** 各分身写的备忘分段（t275），还没合并进主备忘的。 */
+  memoParts?: readonly { part: string; body: string }[];
+  /** 这次是哪个分身、认领了什么（t275）；不给按只有一个唤醒。 */
+  clone?: PromptClone;
   /** 决定摘要：自己的与挂在负责部分及上级的，原则 + 最近的（已按字数挑过）与没放下的条数。 */
   decisions?: Pick<DecisionDigest, "decisions" | "omitted">;
   events: readonly PromptEvent[];
@@ -239,19 +255,47 @@ export type PromptInput = {
   upstream: string;
 };
 
+/** 分身一节（t275）：这次认领了什么、别的分身在处理什么、不要碰它们的任务。 */
+function cloneSection(clone: PromptClone | undefined): string[] {
+  if (!clone) return [];
+  const what =
+    clone.label === ROUTINE_LABEL
+      ? `日常事件${clone.groups.length ? `（涉及 ${clone.groups.join("、")}）` : ""}`
+      : `${clone.label} 这棵任务树的大事`;
+  return [
+    "",
+    "## 分身",
+    `你是 ${clone.label === ROUTINE_LABEL ? "处理日常的" : `处理 ${clone.label} 的`}分身，这次认领：${what}。同一位 leader 至多 ${clone.limit} 个分身同时在跑，同一件任务同一时刻只归一个分身。`,
+    ...(clone.siblings.length
+      ? [
+          `此刻另有分身在处理：${clone.siblings.map((s) => (s.label === ROUTINE_LABEL ? `日常${s.groups.length ? `（${s.groups.join("、")}）` : ""}` : s.label)).join("；")}。它们认领的任务你别碰（服务端会拒绝）；要交代的写进备忘。`,
+        ]
+      : ["此刻没有别的分身在跑。"]),
+  ];
+}
+
 export function leaderPrompt(input: PromptInput): string {
   const ids = input.events.map((e) => e.id);
   const home = input.nodes[0]?.ref ?? "节点";
+  const parts = input.memoParts ?? [];
   return [
     `你是 Atrium 组织里的 leader ${input.leader}（${input.name}），负责：${input.nodes.map((n) => `${n.ref} ${n.name}（${n.path}）`).join("、") || "（暂无节点）"} 及其下属部分。`,
     "你是一次性进程：处理完这批事件、确认后退出。你的连续性存在 Atrium（节点要点、阶段、交付记录、你的备忘），不靠这次的记忆。",
-    "你不写代码、不改仓库；活派给执行者，你负责判断、派、盯、收。",
+    "你不写代码、不改仓库；活派给执行者，你负责判断、派、盯、收。总任务不自己读代码拆：交给规划任务，你只看清单、拍板采纳。",
+    ...cloneSection(input.clone),
     "",
     "## 你负责的部分",
     ...input.nodes.map((n) => n.context),
     "",
     `## 你的备忘（上次留给自己的，上限 ${MEMO_MAX} 字）`,
     input.memo || "（空）",
+    ...(parts.length
+      ? [
+          "",
+          "### 各分身写的备忘分段（还没合并）",
+          ...parts.map((p) => `【${p.part}】${p.body}`),
+        ]
+      : []),
     "",
     "## 决定记录摘要（你的、用户与上级挂在你这几块及上级的；先原则，再最近的）",
     ...(input.decisions?.decisions.length
@@ -275,6 +319,8 @@ export function leaderPrompt(input: PromptInput): string {
     "- 看：atrium task show tN；atrium task log tN；atrium task tree tN；atrium top --once；atrium map oN --json",
     "- 重派：atrium task run tN [--worker 工具+模型[:强度]]；捎话：atrium task tell tN 补充；停：atrium task stop tN；备注：atrium task note tN 文字",
     `- 新活：atrium task add 标题 --part ${home} [--brief 文件] [--repo 路径] [--by 专员] [--ask 专员]；再 atrium task run tN`,
+    "- 总任务拆解交给规划任务：atrium task plan-for tN（派执行者读代码与详述，出子任务清单，不改代码；选项单拍板建的总任务运行时已自动派）；规划好了会来一条「规划待采纳」",
+    "- 采纳规划：先 atrium task adopt-plan tM --dry-run 看清单；合适就 atrium task adopt-plan tM（按清单批量建子任务、设依赖、就绪的自动派出）；要改就 --dry-run --json 存成文件改好后 atrium task adopt-plan tM --file 清单.json；不合适 atrium task reject-plan tM --note 原因（要重来再 plan-for，可先 task tell 捎话补充）",
     "- 巡检发现：atrium patrol findings oN；开任务后 atrium patrol decide fN --task tN，合到已有任务用 --merge tN，忽略用 --ignore 原因；处理后确认事件",
     `- 请专员：atrium task set tN --ask 前端；会审：atrium review add 议题 --concerns 前端,后端 --part ${home}`,
     "- 专员否决或没出结论（任务受阻）由你判断：atrium task show tN 看理由；认同就捎话写清要改什么再 atrium task run tN；不认同就 atrium task note tN 写明理由，再放行 atrium task merge tN（没有 PR 的 atrium task done tN）；和专员谈不拢才上交 stuck",
@@ -283,7 +329,9 @@ export function leaderPrompt(input: PromptInput): string {
     "- 资料：atrium material ls --node oN；疑似没用的（资料清理线索）你来定：用不上就 atrium material archive mN --note 原因（只归档不删，可恢复），要留就 atrium material keep mN --note 原因（之后不再提）；拿不准先 atrium material show mN 看谁读过",
     "- 凭据：atrium secret ls --node oN（只有名称与最近使用，没有值）；疑似没用的（90 天没用过）你来定：用不上就 atrium secret archive oN 名称 --note 原因（派活不再注入，可恢复），要留就 atrium secret keep oN 名称 --note 原因；任务要用就 task add/set --secret 名称，派活时按名称注入执行者",
     `- 周期任务（巡检、调研）：atrium schedule add ${home} --kind patrol --every 1d --at 09:30；atrium schedule pause/resume/run/rm sN`,
-    "- 备忘：atrium memo edit 文本（覆盖写，超过上限会被拒，先精简）；看全：atrium memo show",
+    input.clone?.siblings.length
+      ? `- 备忘：atrium memo edit 文本（有别的分身在跑，只写你「${input.clone.label}」这一段，不覆盖别人的；超过上限会被拒，先精简）；看全：atrium memo show`
+      : `- 备忘：atrium memo edit 文本（覆盖写${parts.length ? "；上面有各分身的分段，这次只有你在跑，写的是合并后的全文——把分段里还要记着的并进来" : ""}；超过上限会被拒，先精简）；看全：atrium memo show`,
     `- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--node ${home}] [--issue N] [--task tN] [--supersedes dN] [--principle]；推翻：atrium decision supersede dN --by dM；推翻错了：atrium decision unsupersede dN --why 原因；查：atrium decision ls --node ${home}、atrium decision search 关键词`,
     `- 例行巡检（周期任务到点、资料清理线索）时顺带看本部分的决定（atrium decision ls --node ${home}）：能合并的合并，被取代的标推翻并指向新决定（decision supersede），已成规矩的沉淀为要点（atrium decision settle dN --new-point 节点 要点 或 --point kN）；只是整理，不必每次都做`,
     "",
@@ -293,7 +341,7 @@ export function leaderPrompt(input: PromptInput): string {
     "- 挑试点时先看 PR「碰到哪些已有能力」一节，优先试它列出的组合（远程主机、Windows、紧急通道……），问题多出在新旧能力的组合上；上线后运行时会照 PR「端到端验证」在真实环境跑一遍，没过才投给你。",
     "",
     "## 权限边界（服务端强制，越权会被拒）",
-    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审、判断专员否决；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料，设值、归档、恢复、留下这些节点的凭据；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",
+    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审、判断专员否决、给总任务派规划并采纳或驳回；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料，设值、归档、恢复、留下这些节点的凭据；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",
     "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、拍板上交的会审、真删资料或凭据。",
     "",
     `## 上交（投给 ${input.upstream}；只有这四类才上交，其余自己处理）`,

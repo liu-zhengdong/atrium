@@ -16,16 +16,16 @@ import { ADAPTERS } from "../tasks/adapters/index.ts";
 import type { EventInbox, InboxEvent } from "../tasks/events.ts";
 import { parseTaskRef } from "../tasks/ledger.ts";
 import { parseWorker } from "../tasks/profiles.ts";
-import { decideWake } from "../tasks/wake-rule.ts";
 import { workerEnvironment } from "../tasks/worker-env.ts";
+import { cloneLimits, registeredLeaders, showLeader } from "./model.ts";
 import {
   closeStaleWakes,
   markWakeEnd,
   markWakeStart,
-  registeredLeaders,
-  showLeader,
   wakeFailures,
-} from "./model.ts";
+} from "./wakes.ts";
+import { CLONES_DEFAULT, planClones, type Lane } from "./clones.ts";
+import { taskGroups } from "./clone-facts.ts";
 import { ownerDigest } from "../memos/digest.ts";
 import { upstreamRoute } from "./subscriber.ts";
 import type { LeaderTokens } from "./tokens.ts";
@@ -33,16 +33,19 @@ import { afterWake, leaderPrompt, wakeSummary, type WakeExit } from "./wake.ts";
 
 /**
  * 按事唤醒 leader（服务内一个巡检循环）：某位 leader 有「要处理」事件就攒批（缺省 30 秒），
- * 然后用它登记的执行者组合起一个一次性进程（复用执行者适配器），同一 leader 同时只起一个。
+ * 然后用它登记的执行者组合起一次性进程（复用执行者适配器）。同一 leader 可同时有几个分身（t275，缺省至多 3 个）：
+ * 按事或任务树认领，同一组同一时刻只归一个分身，日常事件与大事分开认领（判定在 clones.ts）。
  * 进程带 leader 令牌（ATRIUM_LEADER_TOKEN），命令行据此以 aN 身份连服务，服务端按 guard.ts 判权限。
  * 结束后按 wake.ts 的 afterWake 收尾：处理完、释放稍后重试，或把没确认的事件转交上一层（秘书）。
  */
 
 export type LeaderRunSpec = {
   leader: string;
+  /** 分身号（t275）：1 号用 leaders/aN，其余 leaders/aN/clone-K。 */
+  slot: number;
   worker: string;
   prompt: string;
-  /** 进程工作目录与日志目录：<ATRIUM_DATA>/leaders/aN。 */
+  /** 进程工作目录与日志目录：<ATRIUM_DATA>/leaders/aN（分身另见 cloneDir）。 */
   dir: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -171,9 +174,26 @@ export const runLeaderProcess: LeaderRun = async (spec) => {
   });
 };
 
+type Clone = {
+  leader: string;
+  slot: number;
+  lane: Lane;
+  label: string;
+  groups: string[];
+  job: Promise<void>;
+};
+
+const cloneKey = (leader: string, slot: number) => `${leader}#${slot}`;
+
+/** 分身的工作目录：1 号沿用 leaders/aN，其余 leaders/aN/clone-K（各自的提示词与日志）。 */
+export const cloneDir = (data: string, leader: string, slot: number) =>
+  slot === 1
+    ? join(data, "leaders", leader)
+    : join(data, "leaders", leader, `clone-${slot}`);
+
 export class LeaderWaker {
   private readonly abort = new AbortController();
-  private readonly running = new Map<string, Promise<void>>();
+  private readonly running = new Map<string, Clone>();
   private loopDone: Promise<void> | undefined;
 
   constructor(
@@ -202,12 +222,12 @@ export class LeaderWaker {
   async close() {
     this.abort.abort();
     await this.loopDone;
-    await Promise.allSettled([...this.running.values()]);
+    await Promise.allSettled([...this.running.values()].map((c) => c.job));
   }
 
   /** 正在处理的 leader（看板用）。 */
   busy() {
-    return new Set(this.running.keys());
+    return new Set([...this.running.values()].map((c) => c.leader));
   }
 
   private async loop() {
@@ -226,34 +246,67 @@ export class LeaderWaker {
     }
   }
 
-  /** 巡检一轮：每位已登记、没在跑的 leader，攒批到点就唤醒。 */
+  /**
+   * 巡检一轮：每位已登记的 leader，按 clones.ts 的 planClones 判这一轮起哪些分身——
+   * 组被在跑的分身占着的事件等它结束，日常事件合成一个分身，大事一组一个，攒批到点才起。
+   */
   tick() {
+    const limits = cloneLimits(this.db);
     for (const leader of registeredLeaders(this.db)) {
-      if (this.running.has(leader) || this.abort.signal.aborted) continue;
+      if (this.abort.signal.aborted) return;
+      const mine = [...this.running.values()].filter(
+        (c) => c.leader === leader,
+      );
+      const max = limits.get(leader) ?? CLONES_DEFAULT;
+      if (mine.length >= max) continue;
       const events = this.inbox.pending(leader);
-      const decision = decideWake({
-        events: events.map((e) => ({ id: e.id, queuedAt: e.updated_at })),
+      if (!events.length) continue;
+      const groups = taskGroups(
+        this.db,
+        events.flatMap((e) => (e.task ? [parseTaskRef(e.task)] : [])),
+      );
+      const plan = planClones({
+        events: events.map((e) => ({
+          id: e.id,
+          kind: e.kind,
+          queuedAt: e.updated_at,
+          group: e.task ? (groups.get(parseTaskRef(e.task)) ?? null) : null,
+        })),
+        running: mine,
+        max,
         now: this.now,
         batchMs: this.options.batchMs ?? LEADER_BATCH_MS,
-        sessionReady: true,
-        turnRunning: false,
-        consecutiveWakeups: 0,
-        maxConsecutiveWakeups: Number.POSITIVE_INFINITY,
       });
-      if (decision.kind !== "send") continue;
-      const job = this.wake(leader, decision.eventIds)
-        .catch((error) =>
-          console.warn(`leader ${leader} 唤醒失败；稍后重试`, error),
-        )
-        .finally(() => this.running.delete(leader));
-      this.running.set(leader, job);
+      // 先把这一轮的分身都登记上，再逐个拉起：每个分身的提示词里看得到同一轮起的兄弟。
+      const started = plan.start.map((start) => {
+        const clone: Clone = {
+          leader,
+          slot: start.slot,
+          lane: start.lane,
+          label: start.label,
+          groups: start.groups,
+          job: Promise.resolve(),
+        };
+        this.running.set(cloneKey(leader, start.slot), clone);
+        return { clone, ids: start.eventIds };
+      });
+      for (const { clone, ids } of started)
+        clone.job = this.wake(clone, ids)
+          .catch((error) =>
+            console.warn(`leader ${leader} 唤醒失败；稍后重试`, error),
+          )
+          .finally(() => this.running.delete(cloneKey(leader, clone.slot)));
     }
   }
 
-  private async wake(leader: string, ids: number[]) {
+  private async wake(clone: Clone, ids: number[]) {
+    const { leader, slot } = clone;
     const delivered = this.inbox.deliver(leader, ids);
     if (!delivered.length) return;
     let exit: WakeExit = "failed";
+    const siblings = [...this.running.values()]
+      .filter((c) => c.leader === leader && c.slot !== slot)
+      .map((c) => ({ label: c.label, groups: c.groups }));
     try {
       const view = showLeader(this.db, leader);
       const upstream = upstreamRoute(this.db, leader);
@@ -266,21 +319,47 @@ export class LeaderWaker {
           context: contextOf(this.db, Number(n.ref.slice(1))).text,
         })),
         memo: view.memo,
+        memoParts: view.memo_parts ?? [],
         decisions: ownerDigest(this.db, leader),
         events: delivered,
         digest,
         upstream:
           upstream.subscriber === "secretary" ? "秘书" : upstream.subscriber,
+        clone: {
+          label: clone.label,
+          lane: clone.lane,
+          groups: clone.groups,
+          siblings,
+          limit: view.clone_limit,
+        },
       });
-      markWakeStart(this.db, leader, wakeSummary(delivered), this.now);
+      const started = this.now;
+      markWakeStart(
+        this.db,
+        leader,
+        {
+          slot,
+          lane: clone.lane,
+          label: clone.label,
+          groups: clone.groups,
+          summary: wakeSummary(delivered),
+        },
+        started,
+      );
       const timeoutMs = this.options.timeoutMs ?? LEADER_TIMEOUT_MS;
-      const token = this.tokens.issue(leader, timeoutMs + 60_000);
+      const token = this.tokens.issue(leader, timeoutMs + 60_000, {
+        slot,
+        label: clone.label,
+        groups: clone.groups,
+        started,
+      });
       try {
         exit = await (this.options.run ?? runLeaderProcess)({
           leader,
+          slot,
           worker: view.worker,
           prompt,
-          dir: join(this.options.data, "leaders", leader),
+          dir: cloneDir(this.options.data, leader, slot),
           env: leaderEnvironment(this.options.env ?? process.env, {
             leader,
             token,
@@ -290,7 +369,7 @@ export class LeaderWaker {
           signal: this.abort.signal,
         });
       } finally {
-        this.tokens.revoke(leader);
+        this.tokens.revoke(leader, slot);
       }
     } catch (error) {
       console.warn(`leader ${leader} 拉起失败`, error);
@@ -301,6 +380,7 @@ export class LeaderWaker {
       markWakeEnd(
         this.db,
         leader,
+        slot,
         "failed",
         wakeFailures(this.db, leader),
         "服务关闭，唤醒中断，事件稍后重投",
@@ -308,10 +388,11 @@ export class LeaderWaker {
       );
       return;
     }
-    this.settle(leader, delivered, exit);
+    this.settle(clone, delivered, exit);
   }
 
-  private settle(leader: string, delivered: InboxEvent[], exit: WakeExit) {
+  private settle(clone: Clone, delivered: InboxEvent[], exit: WakeExit) {
+    const { leader, slot } = clone;
     // 处理期间合并进来的新内容不算这次没处理完：重新打开，下次唤醒再送。
     const changed = new Set(this.inbox.reopenChanged(leader, delivered));
     const open = new Set(this.inbox.unacked(delivered.map((e) => e.id)));
@@ -325,7 +406,7 @@ export class LeaderWaker {
       maxFailures: this.options.maxFailures ?? LEADER_MAX_FAILURES,
     });
     if (decision.kind === "done") {
-      markWakeEnd(this.db, leader, "done", 0, null, this.now);
+      markWakeEnd(this.db, leader, slot, "done", 0, null, this.now);
       return;
     }
     if (decision.kind === "retry") {
@@ -333,6 +414,7 @@ export class LeaderWaker {
       markWakeEnd(
         this.db,
         leader,
+        slot,
         "failed",
         decision.failures,
         decision.note,
@@ -358,6 +440,14 @@ export class LeaderWaker {
         },
       });
     this.inbox.ack(pending.map((e) => e.id));
-    markWakeEnd(this.db, leader, "handed_off", 0, decision.note, this.now);
+    markWakeEnd(
+      this.db,
+      leader,
+      slot,
+      "handed_off",
+      0,
+      decision.note,
+      this.now,
+    );
   }
 }

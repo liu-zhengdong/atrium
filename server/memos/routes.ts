@@ -2,7 +2,9 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { leaderRef, requireLeader, showLeader } from "../leaders/model.ts";
-import { leaderOf } from "../leaders/guard.ts";
+import { cloneOf, leaderOf } from "../leaders/guard.ts";
+import { memoTarget } from "../leaders/clones.ts";
+import { ensureMemoPartTables, readMemoParts, writeMemoTo } from "./parts.ts";
 import { nodeByAddress } from "../org/model.ts";
 import { LOCAL_USER } from "../../shared/user.ts";
 import {
@@ -20,13 +22,7 @@ import {
   unsupersedeDecision,
 } from "./curate.ts";
 import { nodeChain, ownerDigest } from "./digest.ts";
-import {
-  ensureMemoTables,
-  MEMO_MAX,
-  memoText,
-  readMemo,
-  writeMemo,
-} from "./store.ts";
+import { ensureMemoTables, MEMO_MAX, memoText, readMemo } from "./store.ts";
 
 /**
  * 备忘与决定记录的接口（atrium memo …、atrium decision …）。记录的主人由 `?as=` 指定：
@@ -75,6 +71,8 @@ export function memoView(db: DatabaseSync, owner: string) {
     memo: memo.body,
     memo_max: MEMO_MAX,
     memo_updated_at: memo.updated_at,
+    // 多个分身同时在跑时各自写的分段（t275），只剩一个分身时合并进主备忘。
+    memo_parts: readMemoParts(db, owner),
     ...ownerDigest(db, owner),
   };
 }
@@ -96,6 +94,7 @@ function scopeOf(
 
 export function registerMemoRoutes(app: FastifyInstance, db: DatabaseSync) {
   ensureMemoTables(db);
+  ensureMemoPartTables(db);
   const actor = (request: FastifyRequest) =>
     leaderOf(request) ?? ownerOf(db, q(request.query).as);
   const id = (request: FastifyRequest) => (request.params as { id: string }).id;
@@ -109,8 +108,24 @@ export function registerMemoRoutes(app: FastifyInstance, db: DatabaseSync) {
       throw new Problem(400, "请求体应为对象", "usage");
     for (const key of Object.keys(body))
       if (key !== "memo") throw new Problem(400, `${key}: 是未知字段`, "usage");
-    writeMemo(db, owner, memoText(body.memo, `atrium memo show --as ${owner}`));
-    return memoView(db, owner);
+    // leader 分身（t275）：有别的分身在跑时只写自己这段，只剩自己时合并进主备忘。
+    const clone = cloneOf(request);
+    writeMemoTo(
+      db,
+      owner,
+      memoText(body.memo, `atrium memo show --as ${owner}`),
+      memoTarget(
+        clone && {
+          label: clone.clone.label,
+          started: clone.clone.started,
+          siblings: clone.siblings.length,
+        },
+      ),
+    );
+    return {
+      ...memoView(db, owner),
+      ...(clone?.siblings.length ? { written_to: clone.clone.label } : {}),
+    };
   });
   app.get("/api/decisions", (request) => {
     const query = q(request.query);

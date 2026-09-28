@@ -90,6 +90,21 @@ wait "$waiter" || fail "重启后 wait 失败：$(cat "$work/wait2.out")"
 out=$(cat "$work/wait2.out"); has '.result.reached and .result.task.status == "cancelled"'
 out=$(json task ls --status done,cancelled); has '(.result|length) == 2'   # 数据跨重启还在
 
+step "负责人、备忘、上交（org/leaders）"
+out=$(json leader add 运行时负责人 --workers claude,codex); has '.result.id == "a1" and .result.workers == ["claude","codex"] and .next == "atrium org edit <oN> --leader a1"'
+out=$(json leader add 没组合 || true); has '.error.code == "usage"'
+out=$(json org edit o2 --leader a1); has '.result.leader == "a1"'
+out=$(json leader ls); has '.result[0].depts == ["o2"]'
+out=$(json leader edit a1 --workers codex); has '.result.workers == ["codex"]'
+out=$(json memo edit "下次先看 t1" --as a1); has '.result.owner == "a1"'
+out=$(json leader ls a1); has '.result.memo.body == "下次先看 t1"'
+out=$(json memo edit "秘书备忘"); has '.result.owner == "secretary"'
+out=$(json memo show); has '.result.body == "秘书备忘"'
+out=$(json memo edit "$(python3 -c 'print("字"*2001)')" || true); has '.error.code == "limit"'
+out=$(json leader escalate 卡住 --kind stuck || true); has '.error.code == "forbidden"'   # 只有负责人令牌能上交
+code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer lt_fake' "http://127.0.0.1:$ATRIUM_PORT/api/org")
+[ "$code" = 401 ] || fail "没签发的负责人令牌应 401，得到 $code"
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

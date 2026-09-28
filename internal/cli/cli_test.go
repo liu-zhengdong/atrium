@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/liu-zhengdong/atrium/internal/config"
 )
 
 func testTable() (*Table, *Ctx) {
@@ -122,4 +127,27 @@ func TestRegistrationPanics(t *testing.T) {
 	mustPanic("重复命令", func() { tbl.Add(Command{Path: "task add"}) })
 	mustPanic("未声明的组", func() { tbl.Add(Command{Path: "ghost run"}) })
 	mustPanic("重复组", func() { tbl.Group("task", "x") })
+}
+
+// 负责人进程带 ATRIUM_LEADER_TOKEN：经服务的调用用它，不读用户令牌文件。
+func TestLeaderToken(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Authorization")
+		w.Write([]byte(`{"ok":true,"result":null}`))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	if err := config.WriteService(config.Paths{Data: dir}, config.ServiceInfo{PID: 1, Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	tb := NewTable("atrium", "测试")
+	tb.Add(Command{Path: "ping", Summary: "x", Run: func(c *Ctx) error { return c.Call("GET", "/api/x", nil, nil) }})
+	if code, _, e := run(tb, map[string]string{"ATRIUM_DATA": dir, "ATRIUM_LEADER_TOKEN": "lt_abc"}, "ping"); code != 0 || seen != "Bearer lt_abc" {
+		t.Fatalf("code=%d seen=%q %s", code, seen, e)
+	}
+	if code, _, _ := run(tb, map[string]string{"ATRIUM_DATA": dir}, "ping"); code == 0 {
+		t.Fatal("没有负责人令牌时读用户令牌文件，文件不存在应报错")
+	}
 }

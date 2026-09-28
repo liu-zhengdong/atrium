@@ -99,6 +99,7 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		return EditPoint(q.Context(), db, id, p, q.Actor.ID)
 	})
+	identityRoutes(r, db)
 }
 
 func find(nodes []*Node, id string) *Node {

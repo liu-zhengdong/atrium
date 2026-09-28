@@ -14,6 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/merge"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/org/leaders"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/release"
 	"github.com/liu-zhengdong/atrium/internal/secretary"
@@ -28,6 +29,7 @@ func modules() []app.Module {
 	return []app.Module{
 		ledger.Module(),
 		org.Module(),
+		leaders.Module(),
 		dispatch.Module(),
 		workers.Module(),
 		gates.Module(),

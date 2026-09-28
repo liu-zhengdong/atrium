@@ -229,9 +229,12 @@ func (c *Ctx) Call(method, path string, body, out any) error {
 		if err != nil {
 			return err
 		}
-		token, err := config.ReadToken(p)
-		if err != nil {
-			return err
+		// 负责人进程带本次唤醒签发的令牌，服务端按它判权限；其余用用户令牌。
+		token := c.Env.Getenv("ATRIUM_LEADER_TOKEN")
+		if token == "" {
+			if token, err = config.ReadToken(p); err != nil {
+				return err
+			}
 		}
 		c.client = &api.Client{Base: fmt.Sprintf("http://127.0.0.1:%d", info.Port), Token: token}
 	}

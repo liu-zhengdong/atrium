@@ -21,6 +21,10 @@ const (
 	maxPointWhy  = 300
 	maxPointBy   = 40
 	maxCheck     = 300
+
+	MaxMemo          = 2000 // 每份备忘（秘书、每位负责人各一份）
+	MaxLeaders       = 200  // 全部负责人
+	MaxLeaderWorkers = 5    // 负责人的执行者组合
 )
 
 func checkText(field, v string, limit int, required bool) error {

@@ -553,7 +553,7 @@ test("发版失败的事件：leader 唤醒附挂在哪、链接与日志尾部�
       () => null,
     ),
     {
-      key: "event:3:release_failed",
+      key: "urgent:t260:urgent_release",
       kind: "urgent_release",
       ref: "t260",
       title: "卡住 5 分钟就提醒",

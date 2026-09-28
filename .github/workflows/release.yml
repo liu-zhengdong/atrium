@@ -42,12 +42,43 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
           SUMMARY: ${{ steps.version.outputs.summary }}
+          ATRIUM_BENCH_LIMIT_MS: "300"
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package.json package-lock.json releases.json
-          git commit -m "发布 v${VERSION}"
-          git push origin HEAD:main
+          # 推 main 被拒（发版这几分钟里又合入了 PR，或排队的这一轮 checkout 的是旧提交）时，
+          # 不强推：取最新 main，在它上面重算版本号再提交。版本提交只改下面三个文件，
+          # 直接变基会和别的发版改同一行版本号冲突；重算与「变基后重跑 prepare-release」等价。
+          commit_version() {
+            git add package.json package-lock.json releases.json
+            git commit -q -m "发布 v${VERSION}"
+          }
+          built=$(git rev-parse HEAD) # dist/ 是在这个提交的源码上编译的
+          commit_version
+          attempt=1
+          until git push origin HEAD:main; do
+            if [ "$attempt" -ge 5 ]; then
+              echo "::error::推 main 连续 ${attempt} 次被拒，放弃本次发版；main 上下一次合入会再发版"
+              exit 1
+            fi
+            sleep $((attempt * 3))
+            attempt=$((attempt + 1))
+            git fetch origin +refs/heads/main:refs/remotes/origin/main
+            if ! git merge-base --is-ancestor "$built" origin/main; then
+              echo "::error::origin/main 已不包含 ${built}（历史被改写），放弃本次发版，不强推"
+              exit 1
+            fi
+            git reset -q --hard origin/main
+            VERSION=$(node scripts/prepare-release.mjs "$SUMMARY")
+            commit_version
+            # main 上多了别的提交：运行时按「标签是否包含合入提交」判定上线，
+            # 标签里的 dist/ 必须和这次推上去的源码一致，所以重装依赖、重新编译并量启动。
+            if [ "$(git rev-parse HEAD^)" != "$built" ]; then
+              npm ci
+              npm run bench:cli
+              built=$(git rev-parse HEAD^)
+            fi
+          done
           # dist/ 只进版本标签：标签指向版本提交之上再加一个带编译产物的提交，main 不含 dist/。
           # 从标签安装（atrium update、README）时 npm pack 直接沿用它，不需要 esbuild。
           git add -f dist

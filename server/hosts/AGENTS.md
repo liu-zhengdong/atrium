@@ -11,3 +11,4 @@
 - 任务声明的凭据（t194）随 `launch` 指令的 `secrets` 带给代理（`plan.ts assignmentRefusal` 逐个查名称），代理按名称合进执行者环境（`secrets/model.ts withSecrets`）；服务与代理都只放内存，不落运行记录与日志。
 - 组织技能（t232）：服务随 `launch` 指令带上技能内容与修订号（`Assignment.skills`，只发给 `HostInfo.skills` 为真的代理），提示词里技能段留 `skills/remote.ts` 的 `SKILLS_SLOT`；代理先按 `assignmentRefusal` 校验名字与文件路径，再用 `skills/mount.ts mountSkills` 挂在自己的任务目录、填占位，回执带挂载结果（挂不上照样拉起，服务记 `skills_skipped`）。收尾时 `skillReport` 按清单里的哈希只带改过的副本随 `exit` 上报，服务落成任务目录的 `remote-skills.json`，`collectSkillEdits` 一并比对。
 - 测试用同机起的代理（数据目录分开）与假执行者（`tests/hosts.test.ts`），不依赖真实远程机器。
+- 代理装成系统服务（t183）：写哪些文件、跑哪些 launchctl / systemctl / schtasks 命令、怎么读状态是 `server/agent/service-plan.ts` 的纯函数（三平台穷举），写文件与调命令在 `server/agent/service.ts`。服务定义里不放令牌与环境值，环境在数据目录 `service-env.json`（0600），`atrium agent --service` 起来时读。测试用假的系统命令（PATH 里只放假命令与 node），不往本机注册服务（`tests/agent-service.test.ts`）。

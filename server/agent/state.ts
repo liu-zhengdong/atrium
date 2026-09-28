@@ -68,6 +68,9 @@ function writeSecretFile(path: string, text: string) {
   restrictToOwner(path);
 }
 
+/** 这台正在跑的代理（agent.pid）：同一个数据目录只跑一个代理，装成服务后前台再起会被拦下。 */
+export type AgentPid = { pid: number; service: boolean; startedAt: number };
+
 export class AgentState {
   constructor(readonly dir: string) {
     mkdirSync(join(dir, "runs"), { recursive: true, mode: 0o700 });
@@ -99,6 +102,29 @@ export class AgentState {
 
   saveConfig(config: AgentConfig) {
     writeSecretFile(this.configFile, `${JSON.stringify(config)}\n`);
+  }
+
+  get pidFile() {
+    return join(this.dir, "agent.pid");
+  }
+
+  /** 上次登记的代理进程；没有或写坏了为 null。 */
+  pid(): AgentPid | null {
+    try {
+      const value = JSON.parse(readFileSync(this.pidFile, "utf8")) as AgentPid;
+      return Number.isSafeInteger(value.pid) && value.pid > 0 ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  savePid(value: AgentPid) {
+    writeFileSync(this.pidFile, `${JSON.stringify(value)}\n`);
+  }
+
+  /** 只删自己登记的那条（别的代理已接手时不动）。 */
+  clearPid(pid: number) {
+    if (this.pid()?.pid === pid) rmSync(this.pidFile, { force: true });
   }
 
   private runFile(task: number) {

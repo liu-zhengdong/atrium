@@ -146,7 +146,10 @@ cat grok.md | atrium workers edit models/grok-4.6 --file -
 atrium host add 书房台式机 --repo liu-zhengdong/atrium --max 4   # 登记并拿一次性接入码（30 分钟内有效）
 atrium host edit h3 --ssh cpcli@100.70.239.117 --tunnel 4310:14310  # ggb：服务自管反向 SSH 隧道
 # 在那台机器上（服务地址换成它连得到的：SSH 转发、内网穿透、VPN；OrbStack 虚拟机用 http://host.orb.internal:4310）：
-atrium agent --server http://127.0.0.1:4310 --token h2-接入码         # 前台常驻；之后重启只要 --server
+atrium agent install --server http://127.0.0.1:4310 --token h2-接入码 # 接入并装成系统服务：开机或登录自启、关终端不断
+atrium agent status                   # 那台上看：服务装没装、在不在跑、接入哪个服务、日志最后几行
+atrium agent uninstall                # 那台上卸载服务（执行者照跑，令牌留着，再装不用重新接入）
+atrium agent --server http://127.0.0.1:4310 --token h2-接入码         # 只想前台跑：Ctrl-C 停；之后重启只要 --server
 atrium host ls                        # 各台状态（在线、离线、待接入）、系统与核数、编码 CLI 及是否登录、在跑几件
 atrium host show h2                   # 一台的详情与在跑的任务
 atrium host show h3                   # SSH 隧道状态、最近错误、远端代理服务地址
@@ -158,6 +161,7 @@ atrium host remove h2                 # 令牌作废，那台的代理随即停�
 
 带 `--ssh` 的主机由 Atrium 服务拉起 `ssh -N -R`，隧道断开后自动重连，服务关闭时结束子进程；`--tunnel` 写本机服务端口:远端监听端口。接入命令里的 `--server` 自动使用远端监听端口。代理首次接入后记住服务地址，以后可直接运行 `atrium agent`。ggb（h3）上线后先用 `host show h3` 确认隧道与代理在线，再停用旧的 Mac launchd 隧道。
 
+- **装成系统服务**（t183）：`atrium agent install` 先用接入码换令牌，再按系统装服务——macOS 写 `~/Library/LaunchAgents/dev.atrium.agent.plist` 并 `launchctl bootstrap gui/<uid>`（登录时启动）；Linux 写 `~/.config/systemd/user/atrium-agent.service`（`systemctl --user enable` 建 `default.target.wants` 软链接），并尝试 `loginctl enable-linger` 让它开机就起、退出登录不停（要不到授权时回执给出 `sudo loginctl enable-linger 用户名`）；Windows 登记计划任务 `\AtriumAgent`（只在本人登录时启动，不需要管理员；经 `wscript` 跑数据目录里的 `agent-service.js` 以隐藏窗口拉起代理，任务定义 `agent-service.xml` 也放在数据目录；本人没登录时不跑，锁屏不影响）。异常退出 10 秒后重起；令牌失效时代理以 0 退出，不再重起。服务定义里只有 node、Atrium 入口和 `agent --service --data 数据目录`：令牌仍只在 `agent.json`（0600），PATH、语言、出网代理、并发上限这些环境写在数据目录的 `service-env.json`（0600），代理以服务身份起来时自己读。日志追加到数据目录的 `agent-service.log`。重复执行幂等：定义与环境没变又在跑就不动，变了按新定义重起；停服务只停代理，执行者照跑、新代理按运行记录接着看。同一数据目录只跑一个代理（`agent.pid`）：服务装好时前台还开着代理的，服务里的代理等它停下再接手；服务在跑时前台再起会被拒绝。一台机器一个服务（标签固定）。
 - **代理主动连服务**：`atrium agent` 用长轮询领指令，远程机器不用开入站端口；服务只听本机 `127.0.0.1`，跨机器可用 Atrium 自管 SSH 隧道，也可用已有的转发、穿透或 VPN（明文 HTTP 跨公网时代理会提示改用 HTTPS 或 SSH 转发）。接入码只能用一次，换成这台主机专用的令牌，存在那台机器的 `~/.atrium-agent/agent.json`（`0600`，`ATRIUM_AGENT_DATA` 可改目录）；令牌只能领派给这台的指令、上报这台的日志与结果，碰不到任务账本、组织和别的主机。
 - **在那台机器上干活**：服务写好提示词、算好路径，代理在自己的数据目录里克隆仓库（用那台机器上的 git 凭据）、按同一规则建工作树、按同一份适配器拉起执行者，环境同样走白名单并带 `ATRIUM_WORKER=1` 与按那台核数算的 `ATRIUM_TEST_CONCURRENCY`。编码 CLI 的登录留在那台机器上，不经服务传输。组织技能随拉起指令带过去（内容与修订号），代理在那台的任务目录里按同一套规则挂载（Windows 上建不了软链时目录用 junction、文件用硬链接），提示词里的技能路径是那台的；执行者改了副本，代理随退出把改过的传回，服务照常生成修订提议。代理版本旧或挂载出错时照样拉起，记 `skills_skipped` 并在 `task run` 回执写「组织技能没挂上：原因」；自动挑主机时要带技能的活优先派到能挂的主机。
 - **事实与关卡不变**：日志按字节偏移传回本机任务目录，`task log`、`top`、看门狗照旧读它；改动规模、提交在那台的工作树里查（经代理，git 只接受查询与清理用的子命令），PR 与 CI 仍由服务查 GitHub。合入队列在本机按 PR 头另建一个工作树来 rebase、重跑检查、合入，合入后连同那台上的工作树一起清掉。
@@ -834,9 +838,21 @@ atrium host clean hN
   止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树（远程由那台的代理核对并结束；按命令行与启动时刻核对，不碰你自己开的进程），逐条列出并记进任务事件；常和 host pause 一起写进紧急任务的 --stopgap
   示例：atrium host clean hN
 
-atrium agent [--server <服务地址>] [--token <接入码>]
-  在远程机器上运行：接入 Atrium 服务并领派给这台的活（前台常驻，Ctrl-C 停；执行者不随它退出，再起来接着看）；首次用 host add 给的接入码，之后只要 --server。数据在 ~/.atrium-agent（ATRIUM_AGENT_DATA 可改）
+atrium agent [--server <服务地址>] [--token <接入码>] [--data <目录>]
+  在远程机器上运行：接入 Atrium 服务并领派给这台的活（前台常驻，Ctrl-C 停；执行者不随它退出，再起来接着看）；首次用 host add 给的接入码，之后只要 --server。想开机自启、关终端不断用 atrium agent install。数据在 ~/.atrium-agent（--data 或 ATRIUM_AGENT_DATA 可改）；--service 由系统服务拉起时用
   示例：atrium agent --server http://host.orb.internal:4310 --token h2-接入码
+
+atrium agent install [--server <服务地址>] [--token <接入码>] [--data <目录>]
+  在远程机器上把代理装成系统服务，一条命令完成接入与自启：macOS launchd、Linux systemd 用户服务、Windows 计划任务（登录时启动、隐藏窗口）；异常退出 10 秒后自动重起，关终端不断。首次带 host add 给的接入码，已接入过可省略。重复执行幂等：没变就不动，变了按新定义重起。令牌只在数据目录的 agent.json（0600），服务配置里没有
+  示例：atrium agent install --server http://127.0.0.1:14310 --token h3-接入码
+
+atrium agent status [--data <目录>]
+  看这台代理的系统服务：装没装、在不在跑、是否自启、接入的服务与短号、服务定义是否过时、日志最后几行
+  示例：atrium agent status
+
+atrium agent uninstall [--data <目录>]
+  卸载代理的系统服务：停掉服务里的代理（执行者照跑）、删系统里的登记与服务文件；令牌留在数据目录，再装不用重新接入。没装时什么也不做
+  示例：atrium agent uninstall
 ```
 
 ### 专员
@@ -897,6 +913,14 @@ atrium map edit 节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… 
 atrium map add 父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--kind aspect] [--reason 原因] [--as aN]
   在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug；--kind aspect 建管方面的部分（如安全，要点横跨多个部分，用 map edit --applies 或 org point-add --applies 写适用范围）
   示例：atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板
+
+atrium map draft 仓库路径 [--node 节点] [--worker 工具+模型[:强度]]
+  从本机仓库起草一块的全景初稿：运行时先读 README、两层目录与最近提交（跳过隐藏与像凭据的文件），派一次性执行者只读仓库、看开着的 issue，写出是什么、能做什么、怎么走完、由哪几部分组成；不改仓库、不推送。初稿先给你看（map apply --dry-run），确认才写进组织树；--node 是要写到的节点
+  示例：atrium map draft ~/code/openquota --node openquota
+
+atrium map apply 起草任务 [--node 节点] [--dry-run]
+  看或确认全景初稿：--dry-run 只打出初稿和写进节点会改哪些字段；不带就把人话名、类比、是什么、能做什么、怎么走完写进 --node（缺省是起草时给的节点），没给的字段不动，组成部分留给建节点；同一份初稿只写一次
+  示例：atrium map apply t12 --dry-run
 ```
 
 ### 目标（迁移后下线）

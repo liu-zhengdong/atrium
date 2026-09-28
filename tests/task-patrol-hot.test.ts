@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
 import { CI_PENDING_SQL, pollCiOnce } from "../server/tasks/ci-poll.ts";
@@ -11,15 +8,11 @@ import { NEXT_MERGE } from "../server/tasks/merge-runtime.ts";
 import { LEGACY_ONLINE_SQL } from "../server/tasks/online-backfill.ts";
 import { OnlineWatch } from "../server/tasks/online-runtime.ts";
 import { skipIfBusy } from "../server/tasks/reentry.ts";
-import { TaskRunner } from "../server/tasks/runner.ts";
 import {
   CLEANUP_PAGE_SQL,
   cleanupBackoffMs,
   WorktreeCleanup,
 } from "../server/tasks/worktree-cleanup.ts";
-import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc } from "../server/org/write.ts";
-import { removeTemp } from "./temp-dir.ts";
 
 function planOf(db: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
   return (

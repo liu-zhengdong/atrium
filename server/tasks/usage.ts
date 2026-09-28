@@ -43,7 +43,7 @@ export function sameWindow(a: number, b: number): boolean {
   return Math.abs(a - b) <= WINDOW_BUCKET_MS;
 }
 
-export function usageSample(
+function usageSample(
   pace: readonly PaceEntry[] | undefined,
   provider: string,
   now: number,

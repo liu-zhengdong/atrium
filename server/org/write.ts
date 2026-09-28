@@ -23,10 +23,8 @@ import {
   validateSlug,
   validParent,
 } from "./validate.ts";
-import { effective, exportBoundaries, type Converted } from "./boundaries.ts";
+import { exportBoundaries, type Converted } from "./boundaries.ts";
 import {
-  allBoundaries,
-  chainLevels,
   ownBoundaries,
   planBoundaries,
   saveBoundaries,
@@ -789,26 +787,4 @@ export function charterFields(
 ): Record<string, unknown> {
   const old = current(db, node, "charter");
   return old ? (JSON.parse(old.fields) as Record<string, unknown>) : {};
-}
-/**
- * 只换章程字段，正文、边界与份额不动（目标树迁移用）；留一条章程修订。
- * 调用方负责事务与权限。
- */
-export function writeCharterFields(
-  db: DatabaseSync,
-  node: number,
-  fields: Record<string, unknown>,
-  reason: string,
-  actor: string,
-) {
-  const row = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", node);
-  if (!row) throw new Problem(404, `${ref(node)} 不存在`);
-  return editDocInner(
-    db,
-    row,
-    "charter",
-    { fields, body: current(db, node, "charter")?.body ?? "" },
-    validateReason(reason),
-    actor,
-  );
 }

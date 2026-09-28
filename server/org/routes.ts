@@ -16,10 +16,8 @@ import {
 } from "./write.ts";
 import type { Doc } from "./model.ts";
 import { parseDocument } from "./validate.ts";
-import { readPace } from "../tasks/prepare.ts";
 import { addPoint, editPoint, removePoint } from "./points.ts";
 import { isRegistered } from "../leaders/model.ts";
-import { actsForUser } from "../../shared/user.ts";
 
 type Query = {
   as?: string;
@@ -63,15 +61,14 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
         ? { ...input, leader }
         : input;
   };
-  app.get("/api/org/tree", async () => tree(db, await readPace()));
-  app.get("/api/org/nodes/:id", async (request) =>
+  app.get("/api/org/tree", () => tree(db));
+  app.get("/api/org/nodes/:id", (request) =>
     show(
       db,
       p(request.params).id,
       q(request.query).raw === undefined
         ? undefined
         : doc(q(request.query).raw),
-      await readPace(),
     ),
   );
   app.get("/api/org/nodes/:id/history", (request) => {

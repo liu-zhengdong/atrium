@@ -1,15 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import {
-  all,
-  nodeByAddress,
-  nodePath,
-  nodes,
-  one,
-  ref,
-  type DocRow,
-  type NodeRow,
-} from "./model.ts";
+import { nodeByAddress, one, ref, type DocRow, type NodeRow } from "./model.ts";
 
 /** 任务与组织节点的对应（#264 第 3 步）：任务记在哪个节点（node_id）、谁投的（--from）。 */
 

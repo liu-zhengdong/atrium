@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc, editNode } from "../server/org/write.ts";
+import { addNode, editDoc } from "../server/org/write.ts";
 import { show, tree } from "../server/org/read.ts";
 import { taskNode } from "../server/org/task-node.ts";
 import { BRIEF_MAX, charterBrief, formatBrief } from "../server/org/brief.ts";
@@ -14,7 +14,6 @@ import {
   createTask,
   ensureTaskTables,
   getTask,
-  updateTask,
 } from "../server/tasks/ledger.ts";
 import { buildPrompt } from "../server/tasks/prepare.ts";
 import { prepareRun } from "../server/tasks/workspace.ts";

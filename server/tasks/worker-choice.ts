@@ -81,7 +81,7 @@ export async function chooseWorker(
     const room = headroom.get(account);
     if (pace && room && room.points < 1)
       throw new BudgetProblem(
-        `执行者 ${worker.tool} 的账号 ${account} 份额不足：${room.reason}；等窗口重置或请上层调整份额`,
+        `执行者 ${worker.tool} 的账号 ${account} 额度不足：${room.reason}；等窗口重置`,
       );
     if (worker.profile.rules.billing === "metered")
       throw new BudgetProblem(
@@ -160,14 +160,11 @@ export async function chooseWorker(
       }
     }
     if (!picked.ok) {
-      const blocked = picked.skipped.some(
-        (skip) =>
-          skip.reason.includes("份额") ||
-          skip.reason.includes("billing=metered"),
+      const blocked = picked.skipped.some((skip) =>
+        skip.reason.includes("billing=metered"),
       );
       const message = `${picked.reason}（${picked.skipped.map((skip) => `${skip.tool}：${skip.reason}`).join("；")}）`;
-      if (blocked)
-        throw new BudgetProblem(`${message}；等窗口重置或请上层调整份额`);
+      if (blocked) throw new BudgetProblem(message);
       throw new Problem(409, message, "conflict");
     }
     worker = await resolveWorker(picked.tool, options.db);

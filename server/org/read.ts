@@ -18,10 +18,9 @@ import { goalChain, type GoalLevel } from "./goal-chain.ts";
 import { HUMAN_KEYS, overviewOf } from "./overview.ts";
 import { chainPoints, nodePoints } from "./points.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
-import type { PaceEntry } from "../tasks/prepare.ts";
 import { leaderBriefs } from "../leaders/model.ts";
 
-export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
+export function tree(db: DatabaseSync) {
   const list = nodes(db).filter((node) => node.kind !== "concern");
   if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
   const order: typeof list = [];
@@ -71,12 +70,7 @@ export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
     };
   });
 }
-export function show(
-  db: DatabaseSync,
-  address: string,
-  raw?: Doc,
-  pace?: readonly PaceEntry[],
-) {
+export function show(db: DatabaseSync, address: string, raw?: Doc) {
   const n = nodeByAddress(db, address);
   if (n.kind === "concern")
     throw new Problem(
@@ -84,7 +78,7 @@ export function show(
       `关注点 ${n.name} 已从组织树下线；请用 atrium specialist ls 查看专员`,
       "gone",
     );
-  const list = tree(db, pace);
+  const list = tree(db);
   const node = list.find((item) => item.id === n.id)!;
   const charter = one<DocRow>(
     db,

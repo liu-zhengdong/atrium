@@ -70,7 +70,7 @@ export type PickAccount = {
   used_percent: number | null;
   spare_percent: number | null;
   hours_to_reset: number | null;
-  /** 扣掉根章程保留份额（及节点份额）后还能用的百分点；没有数据为 null。 */
+  /** 扣掉根章程给用户保留的额度后还能用的百分点；没有数据为 null。 */
   left_percent: number | null;
   left_reason: string | null;
   /** 额度用尽标记的到期时刻；没有标记为 null。 */

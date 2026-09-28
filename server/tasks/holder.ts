@@ -7,7 +7,7 @@ import { hangLabel } from "../leaders/hang.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
- * 纯函数：事实由 holder-facts.ts 从账本、收件箱、会审表取来。
+ * 纯函数：事实由 holder-facts.ts 从账本、收件箱取来。
  *
  * - worker：执行者在做；
  * - merge：合入流水线（审阅、排队合入、合入中、等发版上线），运行时自己推进；

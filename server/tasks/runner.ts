@@ -1479,7 +1479,7 @@ export class TaskRunner {
     this.x.publish(task.id, "blocked", {
       reason,
       source: "budget",
-      next: "等窗口重置或请上层调整份额",
+      next: "等窗口重置",
     });
     this.waits.changed(task.id);
     return { task: getTask(this.db, task.id), queued: false };

@@ -17,7 +17,7 @@ import {
 import { scheduleOf } from "./schedule.ts";
 import { urgentInMergeFlow } from "./urgent-ledger.ts";
 
-/** 从账本、收件箱、会审表取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
+/** 从账本、收件箱取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
 
 const KINDS = [
   "block",

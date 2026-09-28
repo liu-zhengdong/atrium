@@ -13,7 +13,7 @@ import type { Size } from "./task-size.ts";
 export type TaskRow = {
   id: number;
   parent_id: number | null;
-  /** 1 表示运行时替父任务建的帮手（专员审查、会审意见），不让父任务变成总任务（t190）。 */
+  /** 1 表示运行时替父任务建的帮手（审阅、上线验证），不让父任务变成总任务（t190）。 */
   helper: number;
   title: string;
   /** 任务详述内容（#355）；列表类视图不带，单个任务才给。 */

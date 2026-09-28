@@ -277,7 +277,7 @@ test("全景节点给网页页签用的字段：部分做什么与下面几块�
   point(db, "o7", "gates 的要点");
   point(db, "o5", "安全的要点");
   const id = (t: { ref: string }) => Number(t.ref.slice(1));
-  const watched = createTask(db, { title: "改登录", part: "o4" });
+  createTask(db, { title: "改登录", part: "o4" });
   const merging = createTask(db, { title: "等合入", part: "o4" });
   const closed = createTask(db, { title: "已结", part: "o4" });
   db.prepare(

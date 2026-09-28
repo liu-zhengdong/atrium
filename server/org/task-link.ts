@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { all, one, ref } from "./model.ts";
+import { all, ref } from "./model.ts";
 
 /** 组织树读任务账本（#264 第 3 步）：按节点聚合在做／卡住的任务、节点手上的任务。 */
 

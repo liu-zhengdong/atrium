@@ -1,9 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
@@ -14,10 +13,10 @@ import {
   sameWindow,
   splitDelta,
 } from "../server/tasks/usage.ts";
+import { quotaHeadroom } from "../server/tasks/usage-budget.ts";
 import { pickWorker } from "../server/tasks/prepare.ts";
 import { WorktreeCleanup } from "../server/tasks/worktree-cleanup.ts";
-import { fixture, startApp } from "./task-fixture.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { fixture } from "./task-fixture.ts";
 
 const pace = (usedPercent: number, hoursToReset = 1) => [
   {
@@ -27,6 +26,45 @@ const pace = (usedPercent: number, hoursToReset = 1) => [
     hoursToReset,
   },
 ];
+
+test("用量快照按同窗口增量记账，并行时平分；重置时刻跨过取整边界仍算同窗口；富余取最紧的窗口", (t) => {
+  const db = new DatabaseSync(":memory:");
+  t.after(() => db.close());
+  ensureTaskTables(db);
+  const a = createTask(db, { title: "A" });
+  const b = createTask(db, { title: "B" });
+  // 开始时的重置时刻离取整半界差 500 毫秒，结束时已跨到下一个桶。
+  const now = 1_800_000_000_000 + 150_000 - 3_600_000 - 500;
+  assert.notEqual(resetAt(pace(10)[0], now), resetAt(pace(12)[0], now + 1001));
+  beginUsage(db, a.id, "kimi", pace(10), now);
+  beginUsage(db, b.id, "kimi", pace(10), now + 1);
+  endUsage(db, a.id, "kimi", pace(12), now + 1000);
+  endUsage(db, b.id, "kimi", pace(12), now + 1001);
+  const rows = db
+    .prepare("SELECT points,basis FROM task_usage ORDER BY task_id")
+    .all() as { points: number; basis: string }[];
+  assert.deepEqual(
+    rows.map((r) => [r.basis, r.points]),
+    [
+      ["split", 1],
+      ["split", 1],
+    ],
+  );
+  assert.equal(sameWindow(0, 300_000), true);
+  assert.equal(sameWindow(0, 300_001), false);
+  assert.equal(sameWindow(18_000_000, 0), false);
+  assert.deepEqual(splitDelta(15, 14, 2), { points: 0, basis: "unknown" });
+  const room = quotaHeadroom(
+    [
+      { providerId: "kimi", usedPercent: 79.5, sparePercent: 0 },
+      { providerId: "kimi", usedPercent: 78, sparePercent: 0 },
+    ],
+    20,
+  ).get("kimi")!;
+  assert.equal(room.points, 0.5);
+  assert.match(room.reason, /已用 79.5%，须给用户保留 20%/);
+  assert.equal(quotaHeadroom(undefined, 20).size, 0);
+});
 
 test("挑人：富余用尽跳过并换人；跳过 metered；pace 缺失不挡", () => {
   const inputs = {

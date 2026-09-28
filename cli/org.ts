@@ -398,7 +398,7 @@ export const orgCommands: Record<string, Command> = {
       out(
         json,
         result,
-        `已新建 o${result.id} [${result.kind}] ${result.name}，章程与能力卡为空（r0）`,
+        `已新建 o${result.id} [${result.kind}] ${result.name}，章程为空（r0）`,
         `atrium org edit o${result.id} --charter 章程.md --reason 原因`,
       );
     },

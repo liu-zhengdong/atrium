@@ -117,7 +117,7 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_state TEXT");
   if (!columns.some((column) => column.name === "schedule_reason"))
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_reason TEXT");
-  // 组织树第 3 步（#264）：谁来做（记在谁的账上）、谁投的；指向 org_nodes.id，旧任务留空，经 org link-roles 显式回填。
+  // 组织树第 3 步（#264）：记在哪个节点上（旧任务）、谁投的；指向 org_nodes.id。
   if (!columns.some((column) => column.name === "node_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN node_id INTEGER");
   if (!columns.some((column) => column.name === "origin_node_id"))

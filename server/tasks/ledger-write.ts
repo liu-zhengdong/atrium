@@ -202,7 +202,7 @@ export function createTask(
   /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
   by?: string,
   /**
-   * 运行时替父任务建的帮手（专员审查、会审意见、上线验证）：不让父任务变成总任务（t190）。
+   * 运行时替父任务建的帮手（审阅、上线验证）：不让父任务变成总任务（t190）。
    * source：运行时知道任务从哪来时给（选项单、巡检、上线验证、关卡交回），没写 type 时据此定类型（t237）。
    */
   internal: { helper?: boolean; source?: TypeSource } = {},

@@ -89,7 +89,7 @@ type Upstream = Pick<
 >;
 
 /** 只有交付 PR 且已记下链接的 done 任务才要等合入；comment、none 或没记 PR 的，done 即满足。 */
-export function watched(row: Upstream): row is Upstream & { pr_url: string } {
+function watched(row: Upstream): row is Upstream & { pr_url: string } {
   return (
     row.status === "done" &&
     row.deliver === "pr" &&

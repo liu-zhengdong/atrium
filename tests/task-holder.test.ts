@@ -16,7 +16,11 @@ import { holderFacts, holderFor } from "../server/tasks/holder-facts.ts";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import { ensureEventTables } from "../server/tasks/events.ts";
 import { createTask, getTask } from "../server/tasks/ledger.ts";
-import { advanceTask, noteTask } from "../server/tasks/ledger-transition.ts";
+import {
+  advanceTask,
+  noteTask,
+  patchRunFields,
+} from "../server/tasks/ledger-transition.ts";
 import { addTaskNote } from "../server/tasks/notes.ts";
 import type { TaskStatus } from "../server/tasks/state.ts";
 import { ensureHostTables } from "../server/hosts/model.ts";
@@ -890,4 +894,50 @@ test("clipWords 只在词或标点边界截断", () => {
     const next = line[kept.length] ?? "";
     assert.ok(!(id.test(last) && id.test(next)), `${max}: ${out}`);
   }
+});
+
+test("掉线超时改派（t184）：改派后这一轮在跑时写原因，不加「@ 主机」；之后受阻或重派就不再写", () => {
+  const moved = "h3 掉线超过 10 分钟，已改派到 h1";
+  assert.deepEqual(of({ moved, host: "mac2" }), {
+    kind: "worker",
+    who: base.worker,
+    text: moved,
+  });
+  // 改派后的这一轮交付了、在跑检查：检查更要紧。
+  assert.match(of({ moved, checking: { host: null } })!.text, /本地检查中$/);
+
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  ensureEventTables(db);
+  ensureHostTables(db);
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO hosts(id,name,kind,repos,joined_at,last_seen_at,created_at,updated_at) VALUES(3,'mac3','remote','[]',1,?,?,?)",
+  ).run(now, now, now);
+  const task = createTask(db, { title: "远程任务" }, 1);
+  advanceTask(db, task.ref, { kind: "start" }, { worker: "kimi" }, {}, 2);
+  db.prepare("UPDATE tasks SET host_id=3 WHERE id=?").run(task.id);
+  // 改派前的检查开始记录不算这一轮的。
+  noteTask(db, task.ref, "local_check_started", { host: "h3" }, 3);
+  const reason = "h3 掉线超过 10 分钟，已改派到 h1";
+  patchRunFields(
+    db,
+    task.ref,
+    { host_id: null, pid: 42 },
+    "host_moved",
+    { from: "h3", to: "h1", reason },
+    4,
+  );
+  const row = () =>
+    db.prepare("SELECT * FROM tasks WHERE id=?").get(task.id) as never;
+  const facts = holderFacts(db, row(), null);
+  assert.equal(facts.moved, reason);
+  assert.equal(facts.checking, null);
+  assert.equal(getTask(db, task.ref).holder?.text, reason);
+  // 之后受阻、再派：回到平常的说法。
+  advanceTask(db, task.ref, { kind: "block" }, {}, { reason: "等决定" }, 5);
+  assert.equal(holderFacts(db, row(), null).moved, null);
+  advanceTask(db, task.ref, { kind: "start" }, { worker: "kimi" }, {}, 6);
+  assert.equal(holderFacts(db, row(), null).moved, null);
+  db.close();
 });

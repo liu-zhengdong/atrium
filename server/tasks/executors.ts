@@ -86,7 +86,15 @@ import { isCouncilTask, isOpinionTask } from "./councils.ts";
 import { taskRoute } from "../leaders/subscriber.ts";
 import type { HostGate } from "./host-load.ts";
 import type { RemoteHosts } from "../hosts/remote.ts";
-import { nextRun } from "../hosts/model.ts";
+import { nextRun, voidRun } from "../hosts/model.ts";
+import {
+  moveDue,
+  movedNote,
+  movedText,
+  moveFailedText,
+  moveWaitText,
+  MOVE_RETRY_MS,
+} from "../hosts/move-plan.ts";
 import {
   hostRef,
   LOCAL_HOST,
@@ -111,6 +119,9 @@ export type Chosen = {
   host?: number;
   pausedOk?: boolean;
 };
+
+/** 掉线超时改派（t184）：从哪台（hN）、写给人看的原因。 */
+type Moved = { from: string; reason: string };
 
 /** 挑主机（#358）：need 要查仓库（异步），choose 在占位前同步判定，免得两轮拉起抢同一个空位。 */
 export type Placement = {
@@ -163,6 +174,10 @@ export type ExecutorContext = {
   urgentIdleMs?: number;
   /** 执行者没有进展多久提醒（毫秒，t260）；缺省不提醒。 */
   quietWarnMs?: number;
+  /** 远程主机掉线多久把上面在跑的执行者改派到别的主机（毫秒，t184）；缺省或 0 不改派。 */
+  hostLostMs?: number;
+  /** 改派到哪台（同一执行者，避开掉线那台）；没得挑给原因。 */
+  moveChoice?: (active: Active) => Promise<Chosen | { note: string }>;
 };
 
 export class Executors {
@@ -175,6 +190,8 @@ export class Executors {
   readonly launchHosts = new Map<number, number>();
   /** 紧急任务换人（t215）：停下后由谁接着做。 */
   private readonly swapTargets = new Map<number, Chosen>();
+  /** 正在判断或执行掉线改派的任务（t184）。 */
+  private readonly moving = new Set<number>();
   private ticking = false;
 
   constructor(private readonly ctx: ExecutorContext) {
@@ -457,7 +474,13 @@ export class Executors {
     });
   }
 
-  async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
+  /** moved：主机掉线超时改派（t184），任务保持在跑，只换主机与进程并记 host_moved。 */
+  async launch(
+    id: number,
+    chosen: Chosen,
+    retried = false,
+    moved?: Moved,
+  ): Promise<Task> {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const target = chosen.host ?? LOCAL_HOST;
     if (!chosen.pausedOk && this.ctx.placement?.paused?.(target))
@@ -484,6 +507,8 @@ export class Executors {
         id,
         { ...chosen, host: chosen.host },
         retried,
+        undefined,
+        moved,
       );
       if (paused) this.resumed(id, paused.by_task, false, chosen);
       return started;
@@ -513,40 +538,55 @@ export class Executors {
     }
     let started: Task;
     try {
-      started = this.advance(
-        id,
-        { kind: "start" },
-        {
-          worker: chosen.worker.id,
-          pid,
-          host_id: null,
-          worktree: prepared.worktree,
-          branch: prepared.branch,
-          pr_url: null,
-          ci: null,
-          result: null,
-        },
-        {
-          worker: chosen.worker.id,
-          risk: chosen.risk,
-          cwd: prepared.cwd,
-          ...(retried ? { retry: true } : {}),
-        },
-      );
+      started = moved
+        ? patchRunFields(
+            this.ctx.db,
+            id,
+            {
+              worker: chosen.worker.id,
+              pid,
+              host_id: null,
+              worktree: prepared.worktree,
+              branch: prepared.branch,
+            },
+            "host_moved",
+            { ...moved, to: hostRef(LOCAL_HOST), cwd: prepared.cwd },
+          )
+        : this.advance(
+            id,
+            { kind: "start" },
+            {
+              worker: chosen.worker.id,
+              pid,
+              host_id: null,
+              worktree: prepared.worktree,
+              branch: prepared.branch,
+              pr_url: null,
+              ci: null,
+              result: null,
+            },
+            {
+              worker: chosen.worker.id,
+              risk: chosen.risk,
+              cwd: prepared.cwd,
+              ...(retried ? { retry: true } : {}),
+            },
+          );
     } catch (error) {
       killTree(pid, "SIGKILL");
       throw error;
     }
     markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
     if (paused) this.resumed(id, paused.by_task, !!resume, chosen);
-    publishUrgentStage(
-      this.ctx.inbox,
-      this.ctx.db,
-      id,
-      "start",
-      { worker: chosen.worker.id },
-      started,
-    );
+    if (!moved)
+      publishUrgentStage(
+        this.ctx.inbox,
+        this.ctx.db,
+        id,
+        "start",
+        { worker: chosen.worker.id },
+        started,
+      );
     await this.track(
       started,
       chosen,
@@ -638,6 +678,7 @@ export class Executors {
     chosen: Chosen & { host: number },
     retried: boolean,
     retake?: { prev: Active; resume?: ResumeWith & { ids: number[] } },
+    moved?: Moved,
   ): Promise<Task> {
     const remote = this.ctx.remote;
     if (!remote) throw new Error("服务没有接上远程主机");
@@ -702,6 +743,21 @@ export class Executors {
           ids,
           retake.resume ? "resume" : "restart",
         );
+      } else if (moved) {
+        started = patchRunFields(
+          this.ctx.db,
+          id,
+          {
+            worker: chosen.worker.id,
+            pid: ack.pid,
+            host_id: host,
+            worktree: prepared.worktree,
+            branch: prepared.branch,
+          },
+          "host_moved",
+          { ...moved, to: hostRef(host), cwd: prepared.cwd },
+        );
+        markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
       } else {
         started = this.advance(
           id,
@@ -1262,12 +1318,30 @@ export class Executors {
       const urgent = this.ctx.urgentIdleMs
         ? this.urgentRunning()
         : new Map<number, number>();
+      // 各主机掉线多久（t184）：每台一轮只问一次，不按任务重复查。
+      const offline = new Map<number, number | null>();
       for (const active of [...this.active.values()]) {
         if (active.exited) continue;
         if (active.host !== undefined) {
-          // 远程：进程在那台机器上，退出由代理上报；断线期间不判卡死，从重连起重新计空闲。
-          if (!this.ctx.remote?.online(active.host)) {
+          // 远程：进程在那台机器上，退出由代理上报；断线期间不判卡死，从重连起重新计空闲；
+          // 掉线超过 hostLostMs 就改派到别的主机。
+          if (!offline.has(active.host))
+            offline.set(
+              active.host,
+              this.ctx.remote?.offlineFor(active.host) ?? null,
+            );
+          const offlineMs = offline.get(active.host)!;
+          if (offlineMs !== null || !this.ctx.remote) {
             active.state.lastProgressAt = Date.now();
+            // 改派要拉起新进程（远程可能要几分钟）：不挡这一轮巡检，同一任务同时只改派一次。
+            if (offlineMs !== null && !this.moving.has(active.id)) {
+              this.moving.add(active.id);
+              void this.moveIfLost(active, offlineMs)
+                .catch((error) =>
+                  console.error(`任务 ${taskRef(active.id)} 改派失败：`, error),
+                )
+                .finally(() => this.moving.delete(active.id));
+            }
             continue;
           }
         } else if (!active.child && !alive(active.pid)) {
@@ -1358,6 +1432,101 @@ export class Executors {
     });
     this.kill(active);
     return true;
+  }
+
+  /**
+   * 主机掉线超时改派（t184）：远程主机掉线超过 hostLostMs，把它上面这个执行者改派到别的主机，
+   * 执行者与风险不变。挑不到主机的记一笔、隔一阵再挑；那台回来了就不动。
+   */
+  private async moveIfLost(active: Active, offlineMs: number) {
+    const lostMs = this.ctx.hostLostMs ?? 0;
+    const from = active.host!;
+    const due = moveDue({
+      offlineMs,
+      lostMs,
+      stopping: !!active.stop || !!active.finalizing,
+      now: Date.now(),
+      retryAt: active.moveRetry?.at,
+    });
+    if (due.kind !== "move" || !this.ctx.moveChoice) return;
+    const choice = await this.ctx.moveChoice(active);
+    // 挑的时候那台回来了、执行者退出了或有人叫停了：不改派。
+    if (
+      active.exited ||
+      active.stop ||
+      this.ctx.closed() ||
+      this.ctx.remote?.offlineFor(from) === null
+    )
+      return;
+    if ("note" in choice) {
+      if (!active.moveRetry?.noted)
+        noteTask(this.ctx.db, active.id, "host_move_waiting", {
+          host: hostRef(from),
+          reason: moveWaitText(hostRef(from), lostMs, choice.note),
+        });
+      active.moveRetry = { at: Date.now() + MOVE_RETRY_MS, noted: true };
+      return;
+    }
+    await this.moveTo(active, choice, lostMs);
+  }
+
+  /**
+   * 改派：掉线那台的这一轮作废（轮号加一，晚到的日志与退出不收；重连对账时代理结束那个进程），
+   * 在挑好的主机上用同一执行者重新拉起，任务保持在跑。拉不起转受阻并投递。
+   */
+  private async moveTo(active: Active, to: Chosen, lostMs: number) {
+    const id = active.id;
+    const from = active.host!;
+    const target = to.host ?? LOCAL_HOST;
+    const reason = movedText(hostRef(from), hostRef(target), lostMs);
+    active.exited = true;
+    this.active.delete(id);
+    this.claim(id, to.worker.tool, target);
+    try {
+      endUsage(
+        this.ctx.db,
+        id,
+        ADAPTERS[active.tool].quotaProvider,
+        await this.pace(),
+      );
+      voidRun(this.ctx.db, id);
+      // 那台回来时代理先对账（不认这一轮）；这条叫停是再保险，连上就送到。
+      this.ctx.remote?.stop(from, id, active.run ?? 0, "SIGKILL");
+      addTell(this.ctx.db, id, {
+        text: movedNote(hostRef(from), active.branch),
+        by: "secretary",
+        uuid: randomUUID(),
+        route: "next_run",
+      });
+      await this.launch(id, to, active.retried, {
+        from: hostRef(from),
+        reason,
+      });
+      this.publish(id, "host_moved", {
+        reason,
+        from: hostRef(from),
+        to: hostRef(target),
+      });
+    } catch (error) {
+      if (this.ctx.closed()) return;
+      const why = moveFailedText(
+        hostRef(from),
+        hostRef(target),
+        lostMs,
+        error instanceof Error ? error.message : String(error),
+      );
+      try {
+        if (getTask(this.ctx.db, id).status === "running")
+          this.advance(id, { kind: "block" }, {}, { reason: why });
+        else noteTask(this.ctx.db, id, "launch_failed", { reason: why });
+        this.publish(id, "blocked", { reason: why });
+      } catch {
+        // 数据库已关闭（服务正在停），重启自愈会接手。
+      }
+    } finally {
+      this.release(id);
+      this.ctx.waits.changed(id);
+    }
   }
 
   private forceFinalExit(active: Active) {

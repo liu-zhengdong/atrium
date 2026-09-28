@@ -40,6 +40,7 @@ async function serve(
   extra: {
     agentOnlineMs?: number;
     agentCheckWatchMs?: number;
+    hostLostMs?: number;
     tunnelSpawn?: (connection: SshConnection) => ChildProcess;
     tunnelStop?: (child: ChildProcess) => void;
   } = {},
@@ -738,6 +739,120 @@ test("远程主机：离线时停下任务先在账本收尾，代理重启后�
   ).catch((error: Error) => {
     throw new Error(`${error.message}；代理日志：\n${second.lines.join("\n")}`);
   });
+});
+
+test("远程主机：掉线未超时不动；超时改派到 h1 接着做；回来后对账结束旧进程，晚到的日志不收", async (t) => {
+  const fx = fixture(t);
+  const agentData = join(fx.root, "remote-agent");
+  const release = join(fx.root, "release").replace(/\\/g, "/");
+  // 同一个假 opencode 按工作目录区分两台：代理那台一直跑、不停打点；本机等放行后给结果。
+  fx.script(
+    "opencode",
+    [
+      'echo \'{"type":"step_start","part":{}}\'',
+      'case "$PWD" in',
+      "  *remote-agent*) while true; do echo h2-tick; sleep 0.2; done ;;",
+      `  *) echo on-h1; while [ ! -f "${release}" ]; do sleep 0.1; done; echo '{"type":"text","part":{"text":"h1 接着做完"}}' ;;`,
+      "esac",
+    ].join("\n"),
+  );
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data, 0, {
+    agentOnlineMs: 1000,
+    hostLostMs: 8000,
+  });
+  t.after(() => server.close());
+  const { call, port } = server;
+  const { code } = (
+    await call("POST", "/api/hosts", { name: "远程", repos: ["*"] })
+  ).body;
+  // 断网：代理发出的请求一律失败（进行中的长轮询照旧收尾）。
+  let cut = false;
+  const flaky: typeof fetch = (input, init) =>
+    cut ? Promise.reject(new TypeError("fetch failed")) : fetch(input, init);
+  const { lines } = startAgent(t, {
+    port,
+    data: agentData,
+    env: fx.env,
+    code,
+    fetch: flaky,
+  });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  await call("POST", "/api/tasks", { title: "远程长活", deliver: "none" });
+  const run = await call("POST", "/api/tasks/t1/run", {
+    worker: "opencode",
+    host: "h2",
+  });
+  assert.equal(run.status, 200, JSON.stringify(run.body));
+  const remotePid: number = run.body.task.pid;
+  const readLog = () => readFileSync(join(data, "tasks", "1", "log"), "utf8");
+  await until(() => readLog().includes("h2-tick"), 10_000);
+  const show = async () => (await call("GET", "/api/tasks/t1")).body;
+  const moved = (task: { events: { kind: string }[] }) =>
+    task.events.some((e) => e.kind === "host_moved");
+
+  // 一、掉线未超时：h2 判为离线，但没到 4 秒，不动；恢复后照旧在 h2 上跑。
+  cut = true;
+  await until(
+    async () => (await hostOf(call, "h2")).connection === "offline",
+    10_000,
+  );
+  let task = await show();
+  assert.equal(task.status, "running");
+  assert.equal(task.host_id, 2);
+  assert.ok(!moved(task));
+  cut = false;
+  await until(
+    () => lines.filter((line) => line.includes("已连上")).length >= 2,
+    15_000,
+  );
+  task = await show();
+  assert.equal(task.host_id, 2);
+  assert.ok(!moved(task));
+  assert.equal(task.pid, remotePid);
+
+  // 二、掉线超时：改派到 h1，执行者不变，任务一直在跑；持球人写明原因。
+  cut = true;
+  await until(async () => moved(await show()), 20_000);
+  task = await show();
+  assert.equal(task.status, "running");
+  assert.equal(task.host_id, null);
+  assert.equal(task.worker, run.body.task.worker);
+  assert.notEqual(task.pid, remotePid);
+  assert.equal(task.holder?.text, "h2 掉线超过 8 秒，已改派到 h1");
+  const event = task.events.find(
+    (e: { kind: string }) => e.kind === "host_moved",
+  );
+  const detail = JSON.parse(event.detail);
+  assert.deepEqual(
+    { from: detail.from, to: detail.to },
+    { from: "h2", to: "h1" },
+  );
+  await until(() => readLog().includes("on-h1"), 10_000);
+  // 本机这一轮的提示词捎上了原因。
+  assert.match(
+    readFileSync(join(data, "tasks", "1", "prompt.md"), "utf8"),
+    /原来在 h2 上跑，那台掉线太久/,
+  );
+  assert.ok(
+    task.events.every((e: { kind: string }) => e.kind !== "block"),
+    "改派不经过受阻",
+  );
+
+  // 三、h2 回来：对账不认那一轮，代理结束旧进程；它晚到的日志不写进本机这一轮。
+  cut = false;
+  await until(
+    () => lines.some((line) => line.includes("服务已不认 t1")),
+    20_000,
+  );
+  await until(() => !processAlive(remotePid), 20_000);
+  await until(() => !existsSync(join(agentData, "runs", "1.json")), 20_000);
+  assert.doesNotMatch(readLog(), /h2-tick/);
+  writeFileSync(release, "");
+  task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
+  assert.equal(task.status, "done", JSON.stringify(task.events.slice(-4)));
+  assert.match(task.result, /h1 接着做完/);
+  assert.doesNotMatch(readLog(), /h2-tick/);
 });
 
 test("远程主机：代理停下后执行者才结束，停下的代理不再写运行记录", async (t) => {

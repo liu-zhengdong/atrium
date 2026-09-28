@@ -45,6 +45,7 @@ import {
   type PollReply,
   type QuotaBody,
 } from "./protocol.ts";
+import { offlineSpan } from "./move-plan.ts";
 import {
   hostRef,
   logAccept,
@@ -122,6 +123,8 @@ export class RemoteHosts {
   private readonly quotas = new Map<number, HostQuota>();
   private hooks: RemoteHooks | undefined;
   private closed = false;
+  /** 服务从什么时候起盯着各主机（掉线时长从这之后算，t184）。 */
+  private readonly watchingSince: number;
 
   constructor(
     private readonly db: DatabaseSync,
@@ -136,7 +139,9 @@ export class RemoteHosts {
       checkWatchMs?: number;
       now?: () => number;
     } = {},
-  ) {}
+  ) {
+    this.watchingSince = this.now();
+  }
 
   private get pickupMs() {
     return this.options.pickupMs ?? PICKUP_MS;
@@ -158,21 +163,32 @@ export class RemoteHosts {
     return (this.waiters.get(host)?.size ?? 0) > 0;
   }
 
+  /** 最后一次来的时刻：内存里的，没有再读主机账。 */
+  private lastSeen(host: number): number | null {
+    const seen = this.seen.get(host);
+    if (seen !== undefined) return seen;
+    try {
+      return hostRow(this.db, host).last_seen_at;
+    } catch {
+      return null;
+    }
+  }
+
   /** 长轮询挂着，或最近一分钟内来过。 */
   online(host: number) {
     if (this.polling(host)) return true;
-    const seen =
-      this.seen.get(host) ??
-      (() => {
-        try {
-          return hostRow(this.db, host).last_seen_at;
-        } catch {
-          return null;
-        }
-      })();
-    return (
-      seen !== null && seen !== undefined && this.now() - seen <= this.onlineMs
-    );
+    const seen = this.lastSeen(host);
+    return seen !== null && this.now() - seen <= this.onlineMs;
+  }
+
+  /** 掉线多久了（毫秒，t184）；在线为 null。服务启动前的心跳不算，从启动起计。 */
+  offlineFor(host: number): number | null {
+    if (this.online(host)) return null;
+    return offlineSpan({
+      lastSeenAt: this.lastSeen(host),
+      watchingSince: this.watchingSince,
+      now: this.now(),
+    });
   }
 
   /** 这台代理一次检查最多跑多久（它自己上报的）；旧版代理不报时按服务的缺省。 */

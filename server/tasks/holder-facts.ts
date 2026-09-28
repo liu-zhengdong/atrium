@@ -37,6 +37,7 @@ const KINDS = [
   "merge_check_quiet",
   "worker_quiet",
   "hang_nudged",
+  "host_moved",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -128,12 +129,23 @@ export function holderFacts(
       return null;
     return { host: text(parse(begin.detail).host) };
   };
+  // 掉线超时改派（t184）：任务一直在跑、没有新的 start，改派这一刻也算新一轮的开始。
+  const movedAt = last("host_moved");
+  const runStart = Math.max(last("start")?.id ?? 0, movedAt?.id ?? 0);
   const checking =
     row.delivery_stage === "merging"
       ? checkingOf("merge_check_started", "merge_check")
       : row.status === "running"
-        ? checkingOf("local_check_started", "local_check", last("start")?.id)
+        ? checkingOf("local_check_started", "local_check", runStart)
         : null;
+  // 改派后这一轮还在跑：之后没再受阻、没被交回、没重新派。
+  const moved =
+    row.status === "running" &&
+    movedAt &&
+    movedAt.id > since &&
+    !last("start", movedAt.id)
+      ? text(parse(movedAt.detail).reason)
+      : null;
   // 检查没跑成、在等重跑（t204）：记了重跑、之后还没开始下一轮检查。
   const rerunOf = (kind: string, started: string, after = 0) => {
     const mark = last(kind, after);
@@ -166,7 +178,7 @@ export function holderFacts(
       : null;
   const workerQuiet =
     row.status === "running" && !checking
-      ? quietOf("worker_quiet", last("start")?.id)?.quiet_ms
+      ? quietOf("worker_quiet", runStart)?.quiet_ms
       : null;
   const escalation = block ? last("escalated", block.id) : undefined;
   const escalated = escalation
@@ -243,6 +255,7 @@ export function holderFacts(
     route: taskRoute(db, row).subscriber,
     council_escalated: council?.stage === "escalated",
     checking,
+    moved,
     preempted,
     merge_held_by: heldBy,
     rerun,

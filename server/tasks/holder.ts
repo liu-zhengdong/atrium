@@ -66,6 +66,8 @@ export type HolderFacts = {
   council_escalated: boolean;
   /** 本地检查正在跑（交付后或合入队列重跑）：在哪台（hN，旧记录没有）；没在跑为 null。 */
   checking?: { host: string | null } | null;
+  /** 主机掉线超时改派后这一轮在跑（t184）：原因，如「h3 掉线超过 10 分钟，已改派到 h1」；没改派为 null。 */
+  moved?: string | null;
   /** 被紧急任务抢占暂停（t215）：被哪件（tN）；没被暂停为 null。 */
   preempted?: { by: string | null } | null;
   /** 排队合入时，其他任务的合入因这些紧急任务（tN）暂停（t215）；没暂停为空。 */
@@ -411,7 +413,8 @@ export function holderOf(f: HolderFacts): Holder | null {
           holder.kind === "worker" &&
             f.status === "running" &&
             f.host &&
-            !f.checking
+            !f.checking &&
+            holder.text !== f.moved
             ? onHost(holder.text, f.worker ?? "执行者", f.host)
             : holder.text,
           HOLDER_WIDTH,
@@ -494,6 +497,8 @@ function judge(f: HolderFacts): Holder | null {
         who: f.worker,
         text: `${worker} ${quietMinutes(f.worker_quiet_ms)}没进展`,
       };
+    // 改派的原因自己说清了在哪台（t184），不再加「@ 主机」。
+    if (f.moved) return { kind: "worker", who: f.worker, text: f.moved };
     if (f.returned?.via === "merge")
       return {
         kind: "worker",

@@ -555,6 +555,16 @@ export function endRun(db: DatabaseSync, task: number) {
   db.prepare("DELETE FROM host_runs WHERE task_id=?").run(task);
 }
 
+/**
+ * 掉线超时改派走的这一轮作废（t184）：轮号加一（下一轮接着往上数），掉线那台晚到的日志与退出对不上、不收；
+ * 它重连时对账不认这一轮，代理结束那个进程。
+ */
+export function voidRun(db: DatabaseSync, task: number) {
+  db.prepare("UPDATE host_runs SET run=run+1,pid=NULL WHERE task_id=?").run(
+    task,
+  );
+}
+
 /** 账本里在这台主机上跑着的任务与轮号（重连对账用）。 */
 export function runningOn(db: DatabaseSync, host: number) {
   return all<{ task: number; run: number }>(

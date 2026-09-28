@@ -52,6 +52,8 @@ export type Active = {
   swapSkipped?: boolean;
   /** 这段没进展已经提醒过（t260，worker-quiet.ts）；又有进展后清掉。 */
   quietWarned?: boolean;
+  /** 主机掉线超时该改派却挑不到主机（t184）：这之前不再挑；noted 表示已记过一笔。 */
+  moveRetry?: { at: number; noted: boolean };
 };
 
 export const taskDir = (data: string, id: number) =>

@@ -102,9 +102,12 @@ export function eventTrail(task: {
     .join("\n")}`;
 }
 
-export async function until(check: () => boolean, ms = 10_000) {
+export async function until(
+  check: () => boolean | Promise<boolean>,
+  ms = 10_000,
+) {
   const end = Date.now() + ms;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() > end) throw new Error("等待超时");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

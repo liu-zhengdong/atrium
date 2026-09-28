@@ -151,6 +151,7 @@ import { pendingChoices } from "../choices/store.ts";
 import { UrgentLane, type StopNote } from "./urgent-runtime.ts";
 import { storedHosts, urgentIdleMs } from "./urgent.ts";
 import { quietLimits, type QuietLimits } from "./check-quiet.ts";
+import { hostLostMs } from "../hosts/move-plan.ts";
 import { crowded } from "../hosts/state.ts";
 import { hasEvent } from "./ledger-model.ts";
 import type { Active } from "./active.ts";
@@ -218,6 +219,8 @@ export type RunnerOptions = {
   agentCheckWatchMs?: number;
   /** 紧急任务没有进展多久换执行者（毫秒，t215）；缺省读 ATRIUM_URGENT_IDLE_MINUTES，10 分钟。 */
   urgentIdleMs?: number;
+  /** 远程主机掉线多久改派上面在跑的执行者（毫秒，t184）；缺省读 ATRIUM_HOST_LOST_MINUTES，10 分钟；0 不改派。 */
+  hostLostMs?: number;
   /** 合入检查没跑成后第几次重跑前等多久（t204）；测试缩短。 */
   checkRerunDelayMs?: (attempt: number) => number;
   /**
@@ -396,6 +399,8 @@ export class TaskRunner {
       swapChoice: (active) => this.swapChoice(active),
       urgentIdleMs: options.urgentIdleMs ?? urgentIdle(),
       quietWarnMs: this.quiet.warnMs,
+      hostLostMs: options.hostLostMs ?? hostLost(),
+      moveChoice: (active) => this.moveChoice(active),
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
         settle: () => void this.settleReviews(),
@@ -1080,6 +1085,49 @@ export class TaskRunner {
       return {
         note: `挑不到能换的执行者：${error instanceof Error ? error.message : String(error)}`,
       };
+    }
+  }
+
+  /**
+   * 主机掉线超时改派（t184）：同一执行者，在别的能接的主机里挑最空的（避开掉线那台与任务写了避开的）；
+   * 执行者在那台没装、额度用尽、独占工具正忙或没有主机能接时给原因。
+   */
+  private async moveChoice(active: Active): Promise<Chosen | { note: string }> {
+    try {
+      const task = getTask(this.db, active.id);
+      const need = await this.hostNeed(
+        active.id,
+        active.tool,
+        task.urgent === 1,
+      );
+      const choice = this.chooseHostFor(
+        { ...need, avoid: [...(need.avoid ?? []), active.host ?? LOCAL_HOST] },
+        null,
+        active.id,
+      );
+      if (choice.kind !== "run") return { note: choice.reason };
+      const host = choice.host;
+      if (
+        ADAPTERS[active.tool].exclusive &&
+        this.x.busy(active.tool, active.id, host)
+      )
+        return { note: `${hostRef(host)} 上的 ${active.tool} 正忙` };
+      const picked = await chooseWorker(
+        { worker: active.worker.id, risk: active.risk },
+        this.launchOptions,
+        this.quota.held(),
+        {
+          chain: taskAvoidChain(this.db, task),
+          ...(host !== LOCAL_HOST
+            ? { installed: this.remoteInstalled(host) }
+            : {}),
+        },
+      );
+      if (picked.waitUntil !== undefined)
+        return { note: `${active.worker.id} 额度用尽` };
+      return { worker: active.worker, risk: active.risk, host };
+    } catch (error) {
+      return { note: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -2114,6 +2162,13 @@ function quietConfig() {
   const { limits, problems } = quietLimits(process.env);
   for (const problem of problems) console.error(`没进展提醒配置：${problem}`);
   return limits;
+}
+
+/** 主机掉线多久改派（t184）：读服务环境，写错的照缺省并记日志。 */
+function hostLost() {
+  const { ms, problem } = hostLostMs(process.env);
+  if (problem) console.error(`主机掉线改派配置：${problem}`);
+  return ms;
 }
 
 /** 紧急任务没有进展多久换人：读服务环境，写错的照缺省并记日志。 */

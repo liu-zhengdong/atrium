@@ -54,6 +54,8 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "worker_quiet",
   // 执行者升降建议（t277）：秘书看 digest 时顺带处理，不为它醒；库里旧行在 ensureEventTables 回写一次。
   "worker_advice",
+  // 主机掉线超时改派（t184）：运行时已接手，知会负责人。新增类型，不需要迁移。
+  "host_moved",
 ]);
 
 /**

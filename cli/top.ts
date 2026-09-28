@@ -224,11 +224,19 @@ const SYMBOL: Record<string, string> = {
 };
 const FINISHED = new Set(["done", "failed", "cancelled"]);
 
-/** 行首符号：已上线的按验证状态（t182）画验证中 ●、验证没过或无法验证 ✕。 */
+/**
+ * 行首符号：已上线的按验证状态（t182）画验证中 ●、验证没过 ✕；无法验证不是出了错，画中性的 ?（t255）。
+ */
+const VERIFY_SYMBOL: Record<string, string> = {
+  running: "●",
+  failed: "✕",
+  unverifiable: "?",
+};
 function symbolOf(row: TopRow) {
   const kind = phase(row);
-  if (kind === "online" && row.verify && row.verify.state !== "passed")
-    return row.verify.state === "running" ? "●" : "✕";
+  const verify =
+    kind === "online" && row.verify && VERIFY_SYMBOL[row.verify.state];
+  if (verify) return verify;
   return (
     SYMBOL[row.processing && kind === "blocked" ? "processing" : kind] ?? "·"
   );
@@ -464,7 +472,10 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       ]
         .join("  ")
         .trimEnd();
-      const line = FINISHED.has(phase(row)) && frame.color ? faint(text) : text;
+      // 无法验证的和已结束的一样淡着画（t255）：不是出了错。
+      const quiet =
+        FINISHED.has(phase(row)) || row.verify?.state === "unverifiable";
+      const line = quiet && frame.color ? faint(text) : text;
       const heading = headings.get(row);
       return [
         ...(heading ? [oneLine(heading, frame.width)] : []),

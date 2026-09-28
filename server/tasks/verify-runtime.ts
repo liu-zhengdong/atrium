@@ -15,6 +15,7 @@ import { all, one } from "./ledger-model.ts";
 import {
   scrub,
   VERIFY_EVENT,
+  UNVERIFIABLE_SHOWN_MS,
   VERIFY_SHOWN_MS,
   VERDICT_TEXT,
   VERIFY_FILE,
@@ -242,14 +243,18 @@ export function settleVerifications(
 }
 
 /**
- * 看板要列的原任务（t182）：验证还没出结论的，和 VERIFY_SHOWN_MS 内没通过、无法验证的。
- * 两段各走一个部分索引；参数是 since（now - VERIFY_SHOWN_MS）。
+ * 看板要列的原任务（t182）：验证还没出结论的，VERIFY_SHOWN_MS 内没通过的，和 UNVERIFIABLE_SHOWN_MS 内
+ * 无法验证的（t255）。两段各走一个部分索引；参数见 verifyTopParams。
  */
 export const VERIFY_TOP_SQL = `SELECT task_id FROM task_verifications WHERE decided_at IS NULL
    UNION SELECT task_id FROM task_verifications
-    WHERE decided_at IS NOT NULL AND decided_at >= ? AND verdict IN ('failed','unverifiable')`;
+    WHERE decided_at IS NOT NULL AND decided_at >= ?
+      AND (verdict='failed' OR (verdict='unverifiable' AND decided_at >= ?))`;
 
-export const verifyTopSince = (now: number) => now - VERIFY_SHOWN_MS;
+export const verifyTopParams = (now: number) => [
+  now - Math.max(VERIFY_SHOWN_MS, UNVERIFIABLE_SHOWN_MS),
+  now - UNVERIFIABLE_SHOWN_MS,
+];
 
 type ViewRow = {
   task_id: number;

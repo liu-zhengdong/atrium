@@ -349,7 +349,33 @@ test("看板与状态栏：验证中、没过的原任务列出来并计数，�
     version: "0.1.9",
     steps: "跑 d",
   })!;
-  for (const ref of [failedVerifier, oldVerifier, passedVerifier])
+  // 无法验证只挂 1 小时（t255）；没通过的两小时前照样列。
+  const unsure = shipped(db, "没法验的活");
+  const unsureVerifier = openVerify(db, {
+    taskId: unsure.id,
+    version: "0.1.9",
+    steps: "跑 e",
+  })!;
+  const staleUnsure = shipped(db, "早先没法验的");
+  const staleUnsureVerifier = openVerify(db, {
+    taskId: staleUnsure.id,
+    version: "0.1.8",
+    steps: "跑 f",
+  })!;
+  const lateFailed = shipped(db, "两小时前没过的");
+  const lateFailedVerifier = openVerify(db, {
+    taskId: lateFailed.id,
+    version: "0.1.8",
+    steps: "跑 g",
+  })!;
+  for (const ref of [
+    failedVerifier,
+    oldVerifier,
+    passedVerifier,
+    unsureVerifier,
+    staleUnsureVerifier,
+    lateFailedVerifier,
+  ])
     db.prepare(
       "UPDATE tasks SET status='done',updated_at=1,ended_at=1 WHERE id=?",
     ).run(Number(ref.slice(1)));
@@ -362,6 +388,9 @@ test("看板与状态栏：验证中、没过的原任务列出来并计数，�
   decide(failedVerifier, "failed", now - 60_000);
   decide(oldVerifier, "failed", now - 25 * 60 * 60_000);
   decide(passedVerifier, "passed", now - 60_000);
+  decide(unsureVerifier, "unverifiable", now - 30 * 60_000);
+  decide(staleUnsureVerifier, "unverifiable", now - 61 * 60_000);
+  decide(lateFailedVerifier, "failed", now - 2 * 60 * 60_000);
   // 没过的事件已投给 a2、还没处理。
   new EventInbox(db).publish({
     subscriber: "a2",
@@ -385,15 +414,18 @@ test("看板与状态栏：验证中、没过的原任务列出来并计数，�
   assert.equal(byRef.get(failed.ref)?.holder?.kind, "leader");
   assert.ok(!byRef.has(old.ref), "过了一天的没过不再列");
   assert.ok(!byRef.has(passed.ref), "通过的按普通已结束任务处理");
+  assert.equal(byRef.get(unsure.ref)?.verify?.state, "unverifiable");
+  assert.ok(!byRef.has(staleUnsure.ref), "过了 1 小时的无法验证不再列");
+  assert.equal(byRef.get(lateFailed.ref)?.verify?.state, "failed");
   const counts = countRows(rows);
   assert.equal(counts.verifying, 1);
-  assert.equal(counts.verify_failed, 1);
+  assert.equal(counts.verify_failed, 2);
+  assert.equal(counts.unverifiable, 1);
   assert.equal(counts.online, undefined);
-  // 验证没过和受阻排在一起，在刚结束的前面。
-  assert.ok(
-    rows.findIndex((row) => row.ref === failed.ref) <
-      rows.findIndex((row) => row.ref === running.ref),
-  );
+  // 验证没过和受阻排在一起，在刚结束的前面；无法验证不算出事，排在验证中的后面。
+  const at = (ref: string) => rows.findIndex((row) => row.ref === ref);
+  assert.ok(at(failed.ref) < at(running.ref));
+  assert.ok(at(running.ref) < at(unsure.ref));
 
   const snapshot: Snapshot = {
     now,
@@ -409,7 +441,18 @@ test("看板与状态栏：验证中、没过的原任务列出来并计数，�
     footer: false,
     color: false,
   });
-  assert.match(top, /验证中 1 · 验证没过 1/);
+  assert.match(top, /验证中 1 · 验证没过 2 · 无法验证 1/);
+  // 无法验证用中性的 ?，不画 ✕（t255）。
+  assert.match(top, new RegExp(`[?] ${unsure.ref} .*已上线 · 无法验证`));
+  // 带颜色时和已结束的一样淡着画；验证没过照常醒目。
+  const colored = renderTop(snapshot, {
+    width: 160,
+    now,
+    footer: false,
+    color: true,
+  });
+  assert.match(colored, new RegExp(`\\x1b\\[2m[?] ${unsure.ref} `));
+  assert.match(colored, new RegExp(`^✕ ${failed.ref} `, "m"));
   assert.match(top, new RegExp(`● ${running.ref} .*已上线 · 验证中`));
   assert.match(
     top,

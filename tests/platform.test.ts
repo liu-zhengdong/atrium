@@ -18,6 +18,8 @@ import {
   commandLineInvocation,
   commandInvocation,
   dmtfTime,
+  endpointGone,
+  messagingEndpoint,
   parseProcessProbe,
   processProbeInvocation,
   executableNames,
@@ -249,6 +251,37 @@ test("路径：绝对路径与 .. 段按平台判定", () => {
   assert.equal(hasParentSegment("linux", "C:\\a\\..\\b"), false);
   assert.equal(hasParentSegment("win32", "C:\\a\\..\\b"), true);
   assert.equal(hasParentSegment("win32", "C:/a/../b"), true);
+});
+
+test("Claude Code 会话收件地址：Unix socket 绝对路径、Windows 命名管道；哪些错误算会话没了", () => {
+  const cases: Array<[string | undefined, string | null, string | null]> = [
+    // 环境变量, Unix 认出的, Windows 认出的
+    ["/tmp/cc-socks-501/abc.sock", "/tmp/cc-socks-501/abc.sock", null],
+    ["uds:/tmp/cc.sock", "/tmp/cc.sock", null],
+    ["\\\\.\\pipe\\claude-abc", null, "\\\\.\\pipe\\claude-abc"],
+    ["uds:\\\\.\\pipe\\claude-abc", null, "\\\\.\\pipe\\claude-abc"],
+    ["\\\\?\\PIPE\\claude-abc", null, "\\\\?\\PIPE\\claude-abc"],
+    ["\\\\.\\pipe\\", null, null],
+    ["C:\\tmp\\cc.sock", null, null],
+    ["relative.sock", null, null],
+    ["/tmp/a\nb", null, null],
+    ["", null, null],
+    [undefined, null, null],
+  ];
+  for (const [raw, unix, win] of cases) {
+    assert.equal(messagingEndpoint("linux", raw), unix, String(raw));
+    assert.equal(messagingEndpoint("darwin", raw), unix, String(raw));
+    assert.equal(messagingEndpoint("win32", raw), win, String(raw));
+  }
+  for (const platform of ["linux", "darwin", "win32"] as const) {
+    assert.equal(endpointGone(platform, "ENOENT"), true, platform);
+    assert.equal(endpointGone(platform, "ETIMEDOUT"), false, platform);
+    assert.equal(endpointGone(platform, undefined), false, platform);
+  }
+  assert.equal(endpointGone("linux", "ECONNREFUSED"), true);
+  assert.equal(endpointGone("darwin", "ENOTSOCK"), true);
+  assert.equal(endpointGone("win32", "EBUSY"), false, "管道实例全忙：会话还在");
+  assert.equal(endpointGone("win32", "ECONNREFUSED"), false);
 });
 
 test("打开链接：macOS open、Windows explorer、Linux xdg-open", () => {

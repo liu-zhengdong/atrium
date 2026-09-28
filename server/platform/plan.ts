@@ -432,3 +432,29 @@ export function linkKinds(platform: Platform, directory: boolean): LinkKind[] {
   if (platform !== "win32") return ["symlink"];
   return directory ? ["symlink", "junction"] : ["symlink", "hardlink"];
 }
+
+/**
+ * Claude Code 会话收件地址（t243，`CLAUDE_CODE_MESSAGING_SOCKET`）：Unix 是 Unix socket 的绝对路径，
+ * Windows 是命名管道（`\\.\pipe\…`）；`/status` 里显示的 `uds:` 前缀去掉。认不出返回 null。
+ */
+export function messagingEndpoint(
+  platform: Platform,
+  raw: string | undefined,
+): string | null {
+  const path = raw?.trim().replace(/^uds:/, "") ?? "";
+  if (!path || /[\r\n\0]/.test(path)) return null;
+  if (platform === "win32")
+    return /^\\\\[.?]\\pipe\\[^\\]+/i.test(path) ? path : null;
+  return posix.isAbsolute(path) ? path : null;
+}
+
+/**
+ * 连会话收件地址失败时，是不是会话已经没了（socket 文件或命名管道不在、没人监听）；
+ * 其余错误（超时、被对端断开）当作暂时的，稍后再试。Windows 上管道不存在报 ENOENT，
+ * 管道实例全忙报 EBUSY（会话还在）。
+ */
+export function endpointGone(platform: Platform, code: string | undefined) {
+  if (code === "ENOENT") return true;
+  if (platform === "win32") return false;
+  return code === "ECONNREFUSED" || code === "ENOTSOCK";
+}

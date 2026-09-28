@@ -423,6 +423,7 @@ test("权限表：读接口放行，写接口只认列出的，其余一律拒�
     ["POST", "/api/leaders", /登记新的 leader/],
     ["POST", "/api/org/import", /调用 POST \/api\/org\/import/],
     ["POST", "/api/events/deliver", /调用/],
+    ["POST", "/api/events/listen", /调用/],
     ["POST", "/api/auth/rotate", /调用/],
     ["DELETE", "/api/tasks/:id", /调用/],
   ];

@@ -297,6 +297,7 @@ atrium events wait --timeout 5    # 只取要处理事件；首条后攒批最�
 atrium events wait --all           # 连同知会一起取
 atrium events digest --since 2026-09-27T00:00:00+08:00  # 按任务合并知会，读后自动确认
 atrium events ack 1               # 确认已处理（编号见 events wait）
+atrium secretary bridge --status  # Claude Code 秘书会话经注入在不在听（见「和秘书对话」）
 ```
 
 同一订阅者、同一去重键的未确认事件合并成一条；取走的事件 15 分钟内不重投（`ATRIUM_EVENT_LEASE_MINUTES` 可调），到点仍未确认才重投；自己 `task stop` 引出的事件不投给自己。
@@ -466,7 +467,46 @@ opencode 两种界面共用 `<ATRIUM_DATA>/secretary/opencode-session.json`，co
 
 界面关闭时，服务按相同规则恢复上次会话：codex 执行 `codex exec resume <会话> -`，opencode 执行 `opencode run --session <会话>`，每批处理完即退出。原生界面、ACP 界面与后台恢复共用一把会话锁；有界面时不会另起后台进程。后台恢复只在 `atrium chat` 建过会话后启用，失败会释放事件租约再重试。后台 codex 使用无提示审批与完整文件访问，opencode 使用 `--auto`；秘书仍按原有权限与章程行事。
 
-秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开界面或后台恢复前，从用户 opencode 数据目录的 `auth.json` 同步 API key 类条目（`api`、`wellknown`），OAuth 登录（如 openai、xai）不带——提供商的刷新令牌多是一次性的，秘书一刷新，用户自己的登录可能失效；`mcp-auth.json` 在 opencode 里只存 MCP 的 OAuth 状态，同样不带。所用模型的提供商只有 OAuth 登录时，打开界面会提示换用有 API key 的提供商，或在秘书目录里单独登录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home opencode auth login`，秘书自己的登录不会被同步覆盖）。用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。kimi、Claude Code 后续接入。
+秘书的 opencode 用独立数据目录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home`）：每次打开界面或后台恢复前，从用户 opencode 数据目录的 `auth.json` 同步 API key 类条目（`api`、`wellknown`），OAuth 登录（如 openai、xai）不带——提供商的刷新令牌多是一次性的，秘书一刷新，用户自己的登录可能失效；`mcp-auth.json` 在 opencode 里只存 MCP 的 OAuth 状态，同样不带。所用模型的提供商只有 OAuth 登录时，打开界面会提示换用有 API key 的提供商，或在秘书目录里单独登录（`XDG_DATA_HOME=<ATRIUM_DATA>/secretary/opencode-home opencode auth login`，秘书自己的登录不会被同步覆盖）。用户原目录只读不改；配置目录 `~/.config/opencode` 不变，模型、权限与插件设置照常生效。opencode 在同一数据目录并发会死锁，分开后秘书常开也不挡 opencode 执行者（不选互斥：秘书一开就是几个小时，互斥等于期间 opencode 执行者全停）。kimi 后续接入。
+
+### Claude Code 做秘书：原生界面 + bridge 注入
+
+Claude Code 秘书直接用它自己的界面（在秘书的工作目录里运行 `claude`），`atrium chat --tool claude` 只给出这段说明。事件由 `atrium secretary bridge` 送进会话：Claude Code（v2.1.224 及以上，Windows v2.1.234 及以上）给每个会话绑一个收件 socket（Windows 是命名管道），地址与口令在 `CLAUDE_CODE_MESSAGING_SOCKET`、`CLAUDE_CODE_MESSAGING_TOKEN`，只导出给该会话的 hook 与 Bash 子进程；bridge 连上后先发 `{"type":"auth","token":…}`，再发一条 `{"type":"user","message":{"role":"user","content":…}}`。会话空闲时开新的一轮，忙时在工具调用之间读到；带口令发的算本会话子进程，不需要逐条批准。
+
+```bash
+atrium secretary bridge --install-hook   # 在秘书目录跑一次：把 SessionStart hook 写进 .claude/settings.local.json（先打印要写的内容）
+atrium secretary bridge --detach         # hook 里跑的就是这条：后台起 bridge，本会话的已在跑就不再起
+atrium secretary bridge --status         # 秘书在不在听、bridge 的 pid
+atrium secretary bridge                  # 前台跑（调试用）；--remind 分钟 改再提醒间隔，缺省 30
+```
+
+不想用 `--install-hook` 也可以手写，放进秘书目录的 `.claude/settings.local.json`：
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "atrium secretary bridge --detach",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+hook 只写进秘书目录的项目设置，不写用户全局设置：全局 hook 会在你所有的 Claude Code 会话里起 bridge，包括 Atrium 派出去的执行者。
+
+- **送什么**：bridge 挂 `events wait --as secretary` 取要处理的事件（首条后攒批 30 秒），一批拼成一条消息：以「【Atrium 事件】」开头，每条一行摘要（编号、任务、类型、标题、原因），末尾写看详情的命令和 `atrium events ack <编号…>`。bridge 不确认事件，秘书处理完自己 ack。
+- **去重与再提醒**：同一事件（编号 + 更新时刻）送过就不再送；取走的事件 15 分钟租约到期会重投回来，送过满 30 分钟还没确认的再提醒一次（单列「送过 30 分钟还没确认」）；同一事件又发生了（合并次数变了）按新事件送。
+- **在听**：bridge 每 30 秒向服务报一次「秘书在听（claude-code 会话，经注入）」（`POST /api/events/listen`，90 秒内没再报就算不在听），退出时报不听了；有 bridge 在听时，服务端的后台恢复不另起秘书进程。
+- **只有一个 bridge**：数据目录 `secretary/bridge.json` 登记当前的 bridge；同一会话再起不重复，新开的秘书会话接手，旧的 bridge 在下一轮看到换了人就退出。日志在 `secretary/bridge.log`。
+- **退出**：会话关了（socket 文件或命名管道不在、没人监听）bridge 就退出；已取走没确认的事件租约到期后重投，由后台恢复或下一个 bridge 接着送。
 
 ## 全景图
 
@@ -825,8 +865,12 @@ atrium events ack 编号…
   示例：atrium events ack 12 13
 
 atrium chat [--tool opencode|codex] [--cwd 目录] [--new] [--acp] [--allow]
-  和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理
+  和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理；Claude Code 直接开原生界面，事件由 atrium secretary bridge 注入
   示例：atrium chat
+
+atrium secretary bridge [--detach] [--remind 分钟] | --install-hook [--cwd 目录] | --status
+  在 Claude Code 秘书会话里常驻：把要处理的事件经会话收件 socket 注入会话（不确认，秘书处理完自己 ack），按编号去重、没确认的隔 30 分钟再提醒；会话关了就退出；--install-hook 在秘书目录装 SessionStart hook 随会话自动起
+  示例：atrium secretary bridge
 ```
 
 ### 推送到手机

@@ -237,6 +237,8 @@ export class EventInbox {
   /** 此刻挂着 wait 的连接数（按订阅者）；唤醒通道自己的 peek 不算。 */
   private readonly waiting = new Map<string, number>();
   private readonly startedAt: number;
+  /** 经注入在听的（t243）：订阅者 → 来源与有效期；bridge 定时续报，过期即不在听。 */
+  private readonly heard = new Map<string, Listener>();
   private readonly observers: ((event: InboxEvent) => void)[] = [];
   private closed = false;
 
@@ -630,15 +632,46 @@ export class EventInbox {
   }
 
   /**
-   * 订阅者在不在听（t242）：此刻有没有连接挂着 wait，最近一次在听是什么时候；
+   * 订阅者在不在听（t242）：此刻有没有连接挂着 wait 或经注入在听（t243），最近一次在听是什么时候；
    * 服务重启后还没人来 wait 的，从服务起来算。后台唤醒与状态栏据此判断。
    */
   presence(subscriber: string): Presence {
     const who = ownerOf(subscriber, "as");
     return {
-      waiting: (this.waiting.get(who) ?? 0) > 0,
+      waiting:
+        (this.waiting.get(who) ?? 0) > 0 || this.listener(who) !== undefined,
       last_seen: this.lastWait.get(who) ?? this.startedAt,
     };
+  }
+
+  /**
+   * 订阅者经别的通道在听（t243 `atrium secretary bridge`：Claude Code 会话，经注入）：
+   * 有效期内算在听，后台兜底不另起秘书；续报即延期，stop 立即作废。
+   */
+  listen(subscriber: string, input: ListenInput): Listener | null {
+    const who = ownerOf(subscriber, "as");
+    if (input.stop) {
+      this.heard.delete(who);
+      return null;
+    }
+    const now = this.now();
+    const listener = {
+      via: input.via,
+      since: this.listener(who)?.since ?? now,
+      until: now + input.ttl_seconds * 1000,
+    };
+    this.heard.set(who, listener);
+    this.lastWait.set(who, now);
+    return listener;
+  }
+
+  /** 此刻经注入在听的；没有或已过期为 undefined。 */
+  listener(subscriber: string): Listener | undefined {
+    const who = ownerOf(subscriber, "as");
+    const listener = this.heard.get(who);
+    if (listener && listener.until > this.now()) return listener;
+    if (listener) this.heard.delete(who);
+    return undefined;
   }
 
   close() {
@@ -675,6 +708,33 @@ export function sinceTime(value: unknown): number | undefined {
   if (!Number.isFinite(parsed) || !/(Z|[+-]\d{2}:\d{2})$/.test(value))
     throw usage("since: 应为带时区的 ISO 时间，如 2026-09-27T10:00:00+08:00");
   return parsed;
+}
+
+export type ListenInput =
+  { stop: true } | { stop?: false; via: string; ttl_seconds: number };
+export type Listener = { via: string; since: number; until: number };
+
+/** 报「在听」的请求体：via 说明经什么在听（至多 80 字），ttl_seconds 10～600；stop 为 true 表示不听了。 */
+export function listenInput(body: unknown): ListenInput {
+  const fields =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {};
+  if (fields.stop === true) return { stop: true };
+  if (fields.stop !== undefined && fields.stop !== false)
+    throw usage("stop: 应为 true 或 false");
+  const via = typeof fields.via === "string" ? fields.via.trim() : "";
+  if (!via || via.length > 80 || /[\r\n]/.test(via))
+    throw usage("via: 写经什么在听，一行、至多 80 字");
+  const ttl = fields.ttl_seconds;
+  if (
+    typeof ttl !== "number" ||
+    !Number.isInteger(ttl) ||
+    ttl < 10 ||
+    ttl > 600
+  )
+    throw usage("ttl_seconds: 应为 10～600 的整数秒");
+  return { via, ttl_seconds: ttl };
 }
 
 export function ackIds(body: unknown): number[] {

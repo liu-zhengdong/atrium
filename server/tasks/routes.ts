@@ -9,6 +9,7 @@ import { leaderOf } from "../leaders/guard.ts";
 import type { DatabaseSync } from "node:sqlite";
 import {
   ackIds,
+  listenInput,
   listOptions,
   waitSeconds,
   settleSeconds,
@@ -436,6 +437,16 @@ export function registerTaskRoutes(
       actorOf(query(request.query)),
       ackIds(request.body),
     ),
+  }));
+  // 经注入在听（t243 `atrium secretary bridge`）：定时续报，后台兜底据此不另起秘书。
+  app.post("/api/events/listen", { bodyLimit: 4 * 1024 }, (request) => ({
+    listener: runner.inbox.listen(
+      actorOf(query(request.query)),
+      listenInput(request.body),
+    ),
+  }));
+  app.get("/api/events/listen", (request) => ({
+    listener: runner.inbox.listener(actorOf(query(request.query))) ?? null,
   }));
   app.get("/api/events", (request) => {
     const q = query(request.query);

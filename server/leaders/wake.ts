@@ -3,6 +3,8 @@ import { MEMO_MAX } from "./model.ts";
 import { decisionLine } from "../memos/decisions.ts";
 import { omittedLine, type DecisionDigest } from "../memos/digest.ts";
 import { forwardedOf } from "./route.ts";
+import type { VerifyStep } from "../tasks/verify.ts";
+import { phenomenonLine } from "../tasks/verify-view.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、
@@ -131,6 +133,19 @@ export function eventLine(event: PromptEvent) {
       .map((m) => `${m.ref} ${m.name.slice(0, 40)}（${m.reason}）`)
       .join("；")}${detail?.more ? `；另有 ${detail.more} 份` : ""}`;
   }
+  // 上线验证没通过、无法验证（t182）：附现象（命令、期望、实际输出摘要）与怎么开修复任务。
+  if (event.kind === "verify_failed" || event.kind === "verify_unverifiable") {
+    const detail = (event.detail ?? {}) as {
+      phenomena?: Partial<VerifyStep>[];
+    };
+    return [
+      `- #${event.id} ${event.task ?? ""} ${eventWord(event.kind)} ${field(event.detail, "title", 60)}（验证任务 ${field(event.detail, "verifier", 20)}）${field(event.detail, "summary", 300) ? `：${field(event.detail, "summary", 300)}` : ""}`,
+      ...(Array.isArray(detail.phenomena) ? detail.phenomena : []).map(
+        (step) => `  - ${phenomenonLine(step).slice(0, 600)}`,
+      ),
+      `  - ${field(event.detail, "hint", 300)}`,
+    ].join("\n");
+  }
   if (event.kind === "patrol_findings") {
     const detail = event.detail as {
       node?: string;
@@ -169,6 +184,8 @@ export const EVENT_WORDS: Record<string, string> = {
   online: "上线",
   online_failed: "上线失败",
   total_online: "整体已上线",
+  verify_failed: "上线验证没过",
+  verify_unverifiable: "上线后无法验证",
   total_stuck: "下面有子任务卡住",
   release_overdue: "等发版超时",
   merged: "已合入",

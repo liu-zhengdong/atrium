@@ -18,6 +18,13 @@ import { idleWaitText, isIdle } from "./priority.ts";
 import { rollups } from "./rollup-ledger.ts";
 import { progressOf } from "./rollup.ts";
 import { urgentInMergeFlow } from "./urgent-ledger.ts";
+import {
+  VERIFY_TOP_SQL,
+  verifyParents,
+  verifyTopSince,
+  verifyViews,
+} from "./verify-runtime.ts";
+import { verifyHolder, type VerifyView } from "./verify-view.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -61,6 +68,10 @@ export type TopRow = NoteView & {
   checking?: { host: string | null } | null;
   /** 最近的总任务（t190）：父任务的短号、标题与汇总进度；不在总任务下为 null，旧版服务不给。 */
   total?: TopTotal | null;
+  /** 上线后的端到端验证（t182）：验证中、没通过、无法验证、通过；没做验证为 null，旧版服务不给。 */
+  verify?: VerifyView | null;
+  /** 这是上线验证任务：验证的是哪个任务（tN）；不是为 null。 */
+  verify_of?: string | null;
 };
 
 export type TopTotal = {
@@ -107,7 +118,11 @@ export function selectRows(
   recentMs = RECENT_MS,
   limit = TOP_MAX,
 ) {
-  const params: SQLInputValue[] = [...FINISHED_STATUSES, now - recentMs];
+  const params: SQLInputValue[] = [
+    verifyTopSince(now),
+    ...FINISHED_STATUSES,
+    now - recentMs,
+  ];
   const rows = all<TaskRow>(
     db,
     `SELECT * FROM tasks
@@ -116,6 +131,7 @@ export function selectRows(
          OR (delivery_stage='merged' AND online_wait=1)
          OR id IN (SELECT task_id FROM task_councils WHERE stage='escalated')
          OR id IN (SELECT task_id FROM task_queue)
+         OR id IN (${VERIFY_TOP_SQL})
          OR (status IN (${FINISHED_STATUSES.map(() => "?").join(",")})
              AND updated_at >= ?)
       ORDER BY id
@@ -126,29 +142,37 @@ export function selectRows(
   return { rows: rows.slice(0, limit), truncated: rows.length > limit };
 }
 
-/** 视图里的次序：在跑（跑得久的在前）、排队（入队顺序）、受阻（新在前）、刚结束（新在前）。 */
+/** 上线验证没通过或无法验证（t182）：和受阻的排在一起。 */
+const verifyTrouble = (row: TopRow) =>
+  row.verify?.state === "failed" || row.verify?.state === "unverifiable";
+
+/** 视图里的次序：在跑（跑得久的在前）、排队（入队顺序）、受阻与验证没过（新在前）、刚结束（新在前）。 */
 export function sortRows(rows: TopRow[]): TopRow[] {
   const group = (row: TopRow) =>
-    row.queued_at !== null
-      ? 1
-      : row.delivery_stage === "merging" || row.delivery_stage === "reviewing"
-        ? 0
-        : row.status === "running"
+    verifyTrouble(row)
+      ? 2
+      : row.queued_at !== null
+        ? 1
+        : row.delivery_stage === "merging" || row.delivery_stage === "reviewing"
           ? 0
-          : row.delivery_stage === "merge_queued"
-            ? 1
-            : row.status === "blocked"
-              ? 2
-              : 3;
+          : row.status === "running"
+            ? 0
+            : row.delivery_stage === "merge_queued"
+              ? 1
+              : row.status === "blocked"
+                ? 2
+                : 3;
   const at = (row: TopRow) =>
-    group(row) === 3
-      ? -(row.delivery_stage === "merged" || row.delivery_stage === "online"
-          ? row.updated_at
-          : (row.ended_at ?? row.updated_at))
-      : (row.queued_at ??
-        row.merge_queued_at ??
-        row.started_at ??
-        row.updated_at);
+    verifyTrouble(row)
+      ? -(row.verify?.decided_at ?? row.updated_at)
+      : group(row) === 3
+        ? -(row.delivery_stage === "merged" || row.delivery_stage === "online"
+            ? row.updated_at
+            : (row.ended_at ?? row.updated_at))
+        : (row.queued_at ??
+          row.merge_queued_at ??
+          row.started_at ??
+          row.updated_at);
   return [...rows].sort((a, b) => group(a) - group(b) || at(a) - at(b));
 }
 
@@ -239,6 +263,17 @@ export function topRows(
   );
   // 紧急任务在合入流程里时普通任务的合入暂停（t215）：一次查出，各行共用。
   const urgentFlow = urgentInMergeFlow(db);
+  // 上线验证（t182）：已上线的原任务的验证状态、哪些行是验证任务，各一次查出。
+  const verifies = verifyViews(
+    db,
+    selected.rows
+      .filter((row) => row.delivery_stage === "online")
+      .map((row) => row.id),
+  );
+  const verifyOf = verifyParents(
+    db,
+    selected.rows.filter((row) => row.helper).map((row) => row.id),
+  );
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
@@ -279,6 +314,8 @@ export function topRows(
         row.parent_id !== null && !row.helper
           ? (totals.get(row.parent_id) ?? null)
           : null,
+      verify: verifies.get(row.id) ?? null,
+      verify_of: verifyOf.get(row.id) ?? null,
       ...(() => {
         const facts = holderFacts(
           db,
@@ -287,7 +324,11 @@ export function topRows(
           { inbox, urgentFlow },
           hosts,
         );
-        return { holder: holderOf(facts), checking: facts.checking ?? null };
+        return {
+          // 已上线的任务在验证上的持球人（验证执行者、收到没通过事件的负责人）。
+          holder: holderOf(facts) ?? verifyHolder(verifies.get(row.id) ?? null),
+          checking: facts.checking ?? null,
+        };
       })(),
       ...noteView(db, row.id, row.status),
     };
@@ -303,6 +344,10 @@ export type TopCounts = {
   merging?: number;
   merged?: number;
   online?: number;
+  /** 上线后的端到端验证（t182）：验证中、没通过、无法验证的原任务；不再算进 online。 */
+  verifying?: number;
+  verify_failed?: number;
+  unverifiable?: number;
   blocked: number;
   processing: number;
   done: number;
@@ -331,6 +376,12 @@ export function countRows(rows: TopRow[]): TopCounts {
       counts.merging = (counts.merging ?? 0) + 1;
     else if (row.delivery_stage === "merged")
       counts.merged = (counts.merged ?? 0) + 1;
+    else if (row.verify?.state === "running")
+      counts.verifying = (counts.verifying ?? 0) + 1;
+    else if (row.verify?.state === "failed")
+      counts.verify_failed = (counts.verify_failed ?? 0) + 1;
+    else if (row.verify?.state === "unverifiable")
+      counts.unverifiable = (counts.unverifiable ?? 0) + 1;
     else if (row.delivery_stage === "online")
       counts.online = (counts.online ?? 0) + 1;
     else if (row.status === "running") counts.running++;

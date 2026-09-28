@@ -1,5 +1,6 @@
 import { Problem } from "../server/problem.ts";
 import type { InboxEvent } from "../server/tasks/events.ts";
+import { phenomenonLine } from "../server/tasks/verify-view.ts";
 import { recordNext } from "./contract.ts";
 import { defaultSubscriber } from "./worker-guard.ts";
 import { clip, printJson, when } from "./format.ts";
@@ -57,12 +58,24 @@ export function eventLine(event: InboxEvent) {
   ]
     .filter(Boolean)
     .join(" ");
-  // 上线后运行时已派人照着验证（t181），结果记进原任务事件。
+  // 上线后运行时已派人照着验证（t181），结果记进原任务事件；没通过或无法验证另投负责人（t182）。
   const verifier =
     event.kind === "online" && typeof detail.verifier === "string"
-      ? `\n  验证任务：${detail.verifier}（运行时已派人照着跑，结论记进 ${event.task ?? "原任务"} 的事件：atrium task show ${event.task ?? detail.verifier}）`
+      ? `\n  验证任务：${detail.verifier}（运行时已派人照着跑，通过就结束；没通过或无法验证会另投负责人：atrium task show ${event.task ?? detail.verifier}）`
       : "";
-  return line + verification + verifier;
+  // 没通过、无法验证：逐条附现象与怎么开修复任务。
+  const phenomena =
+    (event.kind === "verify_failed" || event.kind === "verify_unverifiable") &&
+    Array.isArray(detail.phenomena)
+      ? [
+          "",
+          ...detail.phenomena.map(
+            (step) => `  ${clip(phenomenonLine(step as never), 300)}`,
+          ),
+          ...(typeof detail.hint === "string" ? [`  ${detail.hint}`] : []),
+        ].join("\n")
+      : "";
+  return line + verification + verifier + phenomena;
 }
 
 const list: Command = {

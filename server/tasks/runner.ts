@@ -84,12 +84,13 @@ import {
   type DeployResult,
 } from "./online-runtime.ts";
 import { selfRepoFlag, selfUpdateEnabled } from "./online.ts";
-import { verifyWorkers } from "./verify.ts";
+import { verifyEventDetail, verifyEventKind, verifyWorkers } from "./verify.ts";
 import {
   isVerifyTask,
   openVerify,
   settleVerifications,
   unsentVerify,
+  type VerifyOutcome,
 } from "./verify-runtime.ts";
 import {
   currentVersion,
@@ -1691,8 +1692,26 @@ export class TaskRunner {
         reasons.join("；") || "没有配置验证执行者（ATRIUM_VERIFY_WORKERS）",
       );
       this.waits.changed(getTask(this.db, ref).id);
-      if (outcome) this.waits.changed(outcome.task);
+      if (outcome) this.verified(outcome);
     }
+  }
+
+  /** 记下结论之后：通过就结束；没通过、无法验证投给原任务的负责人（按归属部分找 leader，找不到投秘书）。 */
+  private verified(outcome: VerifyOutcome) {
+    const kind = verifyEventKind(outcome.verdict);
+    if (kind) {
+      const task = getTask(this.db, outcome.task);
+      this.x.publish(
+        outcome.task,
+        kind,
+        verifyEventDetail({
+          task: { ref: task.ref, title: task.title, part_ref: task.part_ref },
+          verifier: outcome.verifier,
+          report: outcome,
+        }),
+      );
+    }
+    this.waits.changed(outcome.task);
   }
 
   /** 验证任务不再跑后把结论记进原任务；停在待办的（派发中途服务重启）重派。 */
@@ -1707,7 +1726,7 @@ export class TaskRunner {
       this.options.data,
       busy,
     );
-    for (const outcome of outcomes) this.waits.changed(outcome.task);
+    for (const outcome of outcomes) this.verified(outcome);
     if (stranded.length) await this.dispatchVerify(stranded);
   }
 

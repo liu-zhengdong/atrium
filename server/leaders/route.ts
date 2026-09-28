@@ -17,16 +17,28 @@ export type Route = {
   via: string | null;
 };
 
-/** 上线结论还须交秘书做线上验证；已有秘书路由时只投一次。 */
+/** 另外知会秘书的：上线失败（服务自升级出了问题）与总任务整体上线（秘书只收总任务级的）。 */
+const SECRETARY_TOO: ReadonlySet<string> = new Set([
+  "online_failed",
+  "total_online",
+]);
+
+/**
+ * 上线失败、总任务整体上线还要交秘书；已有秘书路由时只投一次。
+ * 单个任务上线不再另投秘书（t182）：运行时派人照端到端验证跑，没通过或无法验证才投负责人。
+ */
 export function deliveryRoutes(kind: string, route: Route): Route[] {
-  if (kind !== "online" && kind !== "online_failed") return [route];
+  if (!SECRETARY_TOO.has(kind)) return [route];
   return route.subscriber === SECRETARY
     ? [route]
     : [
         route,
         {
           subscriber: SECRETARY,
-          why: "上线结论直接通知秘书，按端到端验证在线上复核",
+          why:
+            kind === "online_failed"
+              ? "上线失败直接通知秘书"
+              : "总任务整体上线直接通知秘书，按端到端验证在线上复核",
           via: null,
         },
       ];

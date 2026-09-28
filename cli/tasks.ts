@@ -1,4 +1,9 @@
 import type { PickSpecialists } from "../server/tasks/specialist-scope.ts";
+import {
+  VERIFY_STATE_TEXT,
+  verifyActionText,
+  type VerifyView,
+} from "../server/tasks/verify-view.ts";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
@@ -512,6 +517,7 @@ const show: Command = {
         child_summary: TaskNode["child_summary"];
         events: TaskEventRow[];
         last_check?: string | null;
+        verify?: VerifyView | null;
       }
     >(`/tasks/${ref(reference, "任务")}`);
     if (json) printJson(task);
@@ -581,6 +587,7 @@ const show: Command = {
         ["分支", task.branch],
         ["PR", task.pr_url],
         ["本地检查", task.last_check ?? null],
+        ["上线验证", task.verify ? verifyLine(task.verify) : null],
         ["CI", task.ci],
         ["建于", when(task.created_at)],
         ["开始", task.started_at ? when(task.started_at) : null],
@@ -914,6 +921,16 @@ const TELL_STATE: Record<string, string> = {
   pending: "待送达",
   written: "已写入，待确认",
 };
+
+/** task show 的「上线验证」一行（t182）：验证没过（t9）：原因 · 等 a2 处理。 */
+export function verifyLine(view: VerifyView) {
+  const detail = verifyActionText(view);
+  return `${VERIFY_STATE_TEXT[view.state]}（${view.verifier}）${
+    view.state === "running" || view.state === "passed" || !detail
+      ? ""
+      : `：${detail}`
+  }`;
+}
 
 const MATCH_MARK = (matched: unknown) =>
   matched === true ? "符合" : matched === false ? "不符合" : "无法验证";

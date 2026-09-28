@@ -27,7 +27,8 @@ const RESTART_GRACE_MS = 10 * 60_000;
 /**
  * 自动上线（#325 第 3 步）：已合入、属于服务自身仓库的任务等发版；版本比运行中的新就
  * update + restart，新服务起来后再判一次，标记「已上线」并把执行者写的端到端验证附进通知；
- * 同一事务里建上线验证任务（t181，verify-runtime.ts），提交后派人照着跑。
+ * 同一事务里建上线验证任务（t181，verify-runtime.ts），提交后派人照着跑；派了人的通知只是知会，
+ * 没通过或无法验证才叫醒负责人（t182）。
  * 进度全在账本（release_version、online_attempt、online_wait），重启后照常续上。
  */
 export class OnlineWatch {

@@ -74,6 +74,16 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
   const title = `${tag}「${oneLine(row.title, TITLE_MAX)}」`;
   if (holder.kind === "user")
     return `${paint(color, mark)} ${row.ref} ${title} ${paint(color, `等你：${holder.text}`)}`;
+  // 已上线、正在做端到端验证（t182）：写验证中、谁在验证与用时，不写原任务的执行者。
+  if (holder.kind === "worker" && row.verify?.state === "running") {
+    const took = row.verify.started_at
+      ? ` ${duration(now - row.verify.started_at)}`
+      : "";
+    const who = row.verify.worker
+      ? ` · ${workerLabel(row.verify.worker)}`
+      : "（还在派人）";
+    return `${paint(color, mark)} ${row.ref} ${title} 验证中${who}${paint(DIM, took)}`;
+  }
   if (holder.kind === "worker") {
     const took = row.started_at ? ` ${duration(now - row.started_at)}` : "";
     // 在做就只写谁在做与用时；被挡回又交回的，把经过写上。
@@ -163,8 +173,13 @@ export function renderStatusline(input: StatuslineInput): string {
   const paint: Paint = (color, text) =>
     input.color && text ? `${color}${text}${RESET}` : text;
   const { snapshot, now } = input;
+  // 验证任务由它验证的原任务那一行代表（t182），原任务不在视图里时照常单列。
+  const refs = new Set(snapshot.rows.map((row) => row.ref));
   const held = snapshot.rows
-    .filter((row): row is TopRow & { holder: Holder } => !!row.holder)
+    .filter(
+      (row): row is TopRow & { holder: Holder } =>
+        !!row.holder && !(row.verify_of && refs.has(row.verify_of)),
+    )
     .sort(
       (a, b) =>
         ORDER.indexOf(a.holder.kind) - ORDER.indexOf(b.holder.kind) ||

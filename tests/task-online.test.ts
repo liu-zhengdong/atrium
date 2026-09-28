@@ -773,11 +773,15 @@ for (const scenario of ["online", "rolled_back"] as const)
       task = await get(`/api/tasks/${ref}`);
     }
     assert.deepEqual(deployed, ["0.1.1"], "重启后不重复升级同一版本");
-    const events = (await get("/api/events?as=secretary")).events as {
-      kind: string;
-      detail: Record<string, unknown>;
-    }[];
-    const last = events.find((event) =>
+    const inboxOf = async (as: string) =>
+      (await get(`/api/events?as=${as}`)).events as {
+        kind: string;
+        task: string | null;
+        level: string;
+        detail: Record<string, unknown>;
+      }[];
+    // 负责的 leader 总会收到；上线失败另投秘书，已派人验证的上线只是知会、不投秘书（t182）。
+    const last = (await inboxOf("a1")).find((event) =>
       ["online", "online_failed"].includes(event.kind),
     )!;
     const wait = async (as: string) => {
@@ -811,26 +815,31 @@ for (const scenario of ["online", "rolled_back"] as const)
         }
       ).result.events;
     };
-    const leaderEvents = await wait("a1");
-    const secretaryEvents = await wait("secretary");
-    assert.equal(
-      leaderEvents.find((event) => event.kind === last.kind)?.task,
-      ref,
-    );
-    assert.equal(
-      secretaryEvents.find((event) => event.kind === last.kind)?.task,
-      ref,
-    );
-    assert.equal(
-      secretaryEvents.find((event) => event.kind === last.kind)?.detail.pr_url,
-      "https://github.com/acme/demo/pull/1",
-    );
-    if (scenario === "online")
+    if (scenario === "rolled_back") {
+      const leaderEvents = await wait("a1");
+      const secretaryEvents = await wait("secretary");
       assert.equal(
-        secretaryEvents.find((event) => event.kind === "online")?.detail
-          .verification,
-        "atrium task show t1\n期望：[已上线]",
+        leaderEvents.find((event) => event.kind === last.kind)?.task,
+        ref,
       );
+      assert.equal(
+        secretaryEvents.find((event) => event.kind === last.kind)?.task,
+        ref,
+      );
+      assert.equal(
+        secretaryEvents.find((event) => event.kind === last.kind)?.detail
+          .pr_url,
+        "https://github.com/acme/demo/pull/1",
+      );
+    } else {
+      // 已派人验证：leader 那里是知会（不叫醒），秘书不收。
+      assert.equal(last.task, ref);
+      assert.equal(last.level, "info");
+      assert.equal(last.detail.pr_url, "https://github.com/acme/demo/pull/1");
+      assert.ok(
+        !(await inboxOf("secretary")).some((event) => event.kind === "online"),
+      );
+    }
     if (scenario === "online") {
       assert.equal(task.delivery_stage, "online");
       assert.equal(last.kind, "online");
@@ -883,11 +892,13 @@ for (const scenario of ["online", "rolled_back"] as const)
       );
       assert.match(prompt, /不读钥匙串/);
       assert.doesNotMatch(prompt, /开 PR（正文写 Refs/);
-      // 验证任务自己的结局不单独投递。
-      const inbox = (await get("/api/events?as=secretary")).events as {
-        task: string | null;
-      }[];
-      assert.ok(!inbox.some((event) => event.task === started.verifier));
+      // 验证任务自己的结局不单独投递；通过就结束，谁也不叫醒（t182）。
+      for (const as of ["secretary", "a1"]) {
+        const inbox = await inboxOf(as);
+        assert.ok(!inbox.some((event) => event.task === started.verifier));
+        assert.ok(!inbox.some((event) => event.kind.startsWith("verify_")));
+      }
+      assert.equal((await get(`/api/tasks/${ref}`)).verify.state, "passed");
     } else {
       assert.equal(task.delivery_stage, "merged");
       assert.equal(last.kind, "online_failed");

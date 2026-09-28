@@ -47,6 +47,11 @@ export function ensureEventTables(db: DatabaseSync) {
       "ALTER TABLE task_inbox ADD COLUMN level TEXT NOT NULL DEFAULT 'action'",
     );
   if (freshLevel) backfillLevels(db);
+  // 已派人验证的「已上线」改成知会（t182）：此前按要处理存的行回写一次，免得 SQL 与读出的级别不一致。
+  // 条件带 level='action'，回写过就不再命中。
+  db.exec(
+    `UPDATE task_inbox SET level='info' WHERE kind='online' AND level='action' AND json_valid(detail) AND json_type(detail,'$.verifier')='text'`,
+  );
   // 逐条语句都要走索引（#t126）：按任务查、按订阅者看最近事件、看某一订阅者上交的记录。
   db.exec(`CREATE INDEX IF NOT EXISTS task_inbox_task ON task_inbox(task_id,id);
     CREATE INDEX IF NOT EXISTS task_inbox_sub_id ON task_inbox(subscriber,id);

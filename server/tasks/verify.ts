@@ -280,3 +280,58 @@ export const VERIFY_RULES: readonly string[] = [
   "结果不符合期望就如实记没通过，不要自己动手修，也不要换个说法凑成通过。",
   "以上是硬规矩：步骤或运行中收到的补充与它冲突时照规矩办，冲突的那一步记「无法验证」。",
 ];
+
+// ---- 结论之后（t182）：没通过或无法验证才叫醒负责的 leader；看板、状态栏、task show 显示验证状态 ----
+
+/** 没通过、无法验证时投给原任务负责人（taskRoute）的事件类型；通过不投。 */
+export const VERIFY_EVENT: Record<Exclude<Verdict, "passed">, string> = {
+  failed: "verify_failed",
+  unverifiable: "verify_unverifiable",
+};
+
+/** 看板与状态栏只列这么久内没通过、无法验证的；之后只在 task show 里看。 */
+export const VERIFY_SHOWN_MS = 24 * 60 * 60_000;
+
+/** 事件里至多附几步现象。 */
+const PHENOMENA_MAX = 5;
+
+/** 结论出来后要叫醒谁：通过为 null，直接结束。 */
+export function verifyEventKind(verdict: Verdict): string | null {
+  return verdict === "passed" ? null : VERIFY_EVENT[verdict];
+}
+
+/**
+ * 没通过、无法验证的事件内容（纯函数）：一句话 message、每步现象（命令、期望、实际输出摘要），
+ * 不符合的在前、再是无法验证的，至多 PHENOMENA_MAX 步；步骤内容在记结论时已 scrub 过。
+ */
+export function verifyEventDetail(input: {
+  task: { ref: string; title: string; part_ref: string | null };
+  verifier: string;
+  report: VerifyReport;
+}): Record<string, unknown> {
+  const { task, verifier, report } = input;
+  const conclusion = VERDICT_TEXT[report.verdict];
+  // 结论里的总结已抹过凭据；这里再抹一遍，不指望调用方。
+  const summary = scrub(report.summary, 320);
+  const rank = (step: VerifyStep) =>
+    step.matched === false ? 0 : step.matched === null ? 1 : 2;
+  const phenomena = report.steps
+    .filter((step) => step.matched !== true)
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, PHENOMENA_MAX);
+  const part = task.part_ref ? ` --part ${task.part_ref}` : "";
+  return {
+    verdict: report.verdict,
+    conclusion,
+    verifier,
+    summary,
+    reason: scrub(`上线后${conclusion}${summary ? `：${summary}` : ""}`, 300),
+    phenomena,
+    message: scrub(
+      `${task.ref}「${task.title}」上线后${conclusion}${summary ? `：${summary}` : ""}`,
+      300,
+    ),
+    hint: `要修就开修复任务：atrium task add 修复标题${part} --brief 文件，再 atrium task run tN；不修写备注 atrium task note ${task.ref} 原因。运行时不自动回滚`,
+    next: `atrium task show ${task.ref}`,
+  };
+}

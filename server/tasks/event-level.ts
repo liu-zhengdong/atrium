@@ -48,7 +48,18 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "merge_yielded",
 ]);
 
+/**
+ * 已派人做上线验证的「已上线」只是知会（t182）：通过就结束，没通过、无法验证另投 verify_* 叫醒负责人。
+ * 没有验证任务的（PR 没写端到端验证、验证任务建不起来）仍要处理：负责人得自己验证。
+ * 这条按内容判，库里此前的行在 ensureEventTables 里补一次回写。
+ */
+export const isVerifiedOnline = (kind: string, detail?: unknown) =>
+  kind === "online" &&
+  typeof (detail as { verifier?: unknown } | null | undefined)?.verifier ===
+    "string";
+
 export function eventLevel(kind: string, detail?: unknown): EventLevel {
+  if (isVerifiedOnline(kind, detail)) return "info";
   if (kind === "ready") {
     const data = detail as { auto?: unknown; unassigned?: unknown } | null;
     return data?.auto === true && data.unassigned !== true ? "info" : "action";

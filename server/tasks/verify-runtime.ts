@@ -14,6 +14,8 @@ import {
 import { all, one } from "./ledger-model.ts";
 import {
   scrub,
+  VERIFY_EVENT,
+  VERIFY_SHOWN_MS,
   VERDICT_TEXT,
   VERIFY_FILE,
   VERIFY_FILE_MAX,
@@ -22,12 +24,14 @@ import {
   verifyTitle,
   type VerifyReport,
 } from "./verify.ts";
+import type { VerifyView } from "./verify-view.ts";
 
 /**
  * 上线后的端到端验证（t181）的账与执行：上线时在原任务下建一个验证任务（只交摘要、不开 PR），
  * 由调用方派给便宜执行者；验证任务不再跑后读它工作目录里的 verify.json，把结论记进原任务事件（kind=verified）。
  * PR 里没有「端到端验证」一节的只记 verify_none，不派人；验证任务建不起来记 verify_skipped。
- * 第一版没通过只记录，不回滚、不叫醒人。
+ * 通过就结束；没通过、无法验证由调用方投给原任务的负责人（t182，verify_failed / verify_unverifiable），不自动回滚。
+ * 看板、状态栏、task show 的验证状态由 verifyViews 一次取齐。
  */
 
 export function ensureVerifyTables(db: DatabaseSync) {
@@ -37,7 +41,15 @@ export function ensureVerifyTables(db: DatabaseSync) {
       verdict TEXT CHECK(verdict IS NULL OR verdict IN ('passed','failed','unverifiable')),
       created_at INTEGER NOT NULL, decided_at INTEGER);
     CREATE INDEX IF NOT EXISTS task_verifications_task ON task_verifications(task_id);
-    CREATE INDEX IF NOT EXISTS task_verifications_open ON task_verifications(verify_id) WHERE decided_at IS NULL;`);
+    CREATE INDEX IF NOT EXISTS task_verifications_open ON task_verifications(verify_id) WHERE decided_at IS NULL;
+    CREATE INDEX IF NOT EXISTS task_verifications_decided ON task_verifications(decided_at) WHERE decided_at IS NOT NULL;`);
+  // 看板上要显示没通过的原因（t182）：结论的一句总结也记在这一行。
+  const columns = all<{ name: string }>(
+    db,
+    "PRAGMA table_info(task_verifications)",
+  );
+  if (!columns.some((column) => column.name === "summary"))
+    db.exec("ALTER TABLE task_verifications ADD COLUMN summary TEXT");
 }
 
 export const isVerifyTask = (db: DatabaseSync, id: number) =>
@@ -121,9 +133,9 @@ function record(
   return atomically(db, () => {
     const changed = db
       .prepare(
-        "UPDATE task_verifications SET verdict=?,decided_at=? WHERE verify_id=? AND decided_at IS NULL",
+        "UPDATE task_verifications SET verdict=?,summary=?,decided_at=? WHERE verify_id=? AND decided_at IS NULL",
       )
-      .run(report.verdict, now, row.verify_id).changes;
+      .run(report.verdict, report.summary, now, row.verify_id).changes;
     if (!changed) return null;
     const verifier = taskRef(row.verify_id);
     noteTask(
@@ -227,4 +239,105 @@ export function settleVerifications(
     if (outcome) outcomes.push(outcome);
   }
   return { outcomes, stranded };
+}
+
+/**
+ * 看板要列的原任务（t182）：验证还没出结论的，和 VERIFY_SHOWN_MS 内没通过、无法验证的。
+ * 两段各走一个部分索引；参数是 since（now - VERIFY_SHOWN_MS）。
+ */
+export const VERIFY_TOP_SQL = `SELECT task_id FROM task_verifications WHERE decided_at IS NULL
+   UNION SELECT task_id FROM task_verifications
+    WHERE decided_at IS NOT NULL AND decided_at >= ? AND verdict IN ('failed','unverifiable')`;
+
+export const verifyTopSince = (now: number) => now - VERIFY_SHOWN_MS;
+
+type ViewRow = {
+  task_id: number;
+  verify_id: number;
+  verdict: VerifyView["state"] | null;
+  summary: string | null;
+  decided_at: number | null;
+  worker: string | null;
+  started_at: number | null;
+};
+
+/**
+ * 一批原任务各自最近一次上线验证的状态（t182）：一条 SQL 连验证任务取执行者与开始时刻，
+ * 没通过、无法验证的再一条 SQL 从收件箱取投给了谁、处理完没有；循环里不查库。
+ */
+export function verifyViews(
+  db: DatabaseSync,
+  ids: readonly number[],
+): Map<number, VerifyView> {
+  const views = new Map<number, VerifyView>();
+  if (!ids.length) return views;
+  const marks = ids.map(() => "?").join(",");
+  const latest = new Map<number, ViewRow>();
+  for (const row of all<ViewRow>(
+    db,
+    `SELECT v.task_id, v.verify_id, v.verdict, v.summary, v.decided_at, r.worker, r.started_at
+       FROM task_verifications v CROSS JOIN tasks r ON r.id=v.verify_id
+      WHERE v.task_id IN (${marks}) ORDER BY v.verify_id`,
+    ...ids,
+  ))
+    latest.set(row.task_id, row);
+  const told = [...latest.values()]
+    .filter((row) => row.verdict === "failed" || row.verdict === "unverifiable")
+    .map((row) => row.task_id);
+  const inbox = new Map<number, { subscriber: string; acked: boolean }>();
+  if (
+    told.length &&
+    one(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_inbox'",
+    )
+  ) {
+    const kinds = Object.values(VERIFY_EVENT);
+    for (const row of all<{
+      task_id: number;
+      subscriber: string;
+      acked_at: number | null;
+    }>(
+      db,
+      `SELECT task_id, subscriber, acked_at FROM task_inbox
+        WHERE task_id IN (${told.map(() => "?").join(",")}) AND kind IN (${kinds.map(() => "?").join(",")})
+        ORDER BY id`,
+      ...told,
+      ...kinds,
+    ))
+      inbox.set(row.task_id, {
+        subscriber: row.subscriber,
+        acked: row.acked_at !== null,
+      });
+  }
+  for (const [id, row] of latest) {
+    const sent = inbox.get(id);
+    views.set(id, {
+      state: row.decided_at === null ? "running" : (row.verdict ?? "running"),
+      verifier: taskRef(row.verify_id),
+      worker: row.worker,
+      started_at: row.started_at,
+      summary: row.summary,
+      decided_at: row.decided_at,
+      handler: sent?.subscriber ?? null,
+      pending: !!sent && !sent.acked,
+    });
+  }
+  return views;
+}
+
+/** 一批任务里哪些是上线验证任务：验证任务 id → 原任务短号。 */
+export function verifyParents(
+  db: DatabaseSync,
+  ids: readonly number[],
+): Map<number, string> {
+  const parents = new Map<number, string>();
+  if (!ids.length) return parents;
+  for (const row of all<{ verify_id: number; task_id: number }>(
+    db,
+    `SELECT verify_id, task_id FROM task_verifications WHERE verify_id IN (${ids.map(() => "?").join(",")})`,
+    ...ids,
+  ))
+    parents.set(row.verify_id, taskRef(row.task_id));
+  return parents;
 }

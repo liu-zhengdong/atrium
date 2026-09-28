@@ -22,6 +22,8 @@ import { idleWaits, queued, queueView } from "./queue.ts";
 import { concernsOf } from "./concerns.ts";
 import type { InviteHint } from "./concern-gate.ts";
 import { CHECK_EVENT_KINDS, checkSummary } from "./check-outcome.ts";
+import { verifyViews } from "./verify-runtime.ts";
+import { verifyHolder } from "./verify-view.ts";
 
 const EVENTS_SHOWN = 50;
 
@@ -45,17 +47,23 @@ export function getTask(db: DatabaseSync, reference: unknown) {
   const concerns = concernsOf(db, found.id);
   const hints = lastHints(db, found.id);
   const queue = queueView(db, found.id);
+  // 上线后的端到端验证（t182）：验证中、没通过、无法验证、通过。
+  const verify =
+    found.delivery_stage === "online"
+      ? (verifyViews(db, [found.id]).get(found.id) ?? null)
+      : null;
   return {
     ...view(found),
     ...noteView(db, found.id, found.status),
     ...queue,
     holder: rollup
       ? null
-      : holderFor(
+      : (holderFor(
           db,
           found,
           queued(db, found.id) ? { reason: queue.queued_reason } : null,
-        ),
+        ) ?? verifyHolder(verify)),
+    verify,
     children: child_summary?.total ?? 0,
     child_summary,
     rollup,

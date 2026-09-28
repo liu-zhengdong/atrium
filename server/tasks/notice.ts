@@ -98,11 +98,14 @@ export function publishTask(
   const key =
     kind === "online" || kind === "online_failed"
       ? kind
-      : eventLevel(kind, detail) === "info"
-        ? kind
-        : kind.startsWith("ci")
-          ? "ci"
-          : "outcome";
+      : // 上线验证没通过、无法验证（t182）：同一任务只留最新一条，不和完成、失败合并。
+        kind.startsWith("verify_")
+        ? "verify"
+        : eventLevel(kind, detail) === "info"
+          ? kind
+          : kind.startsWith("ci")
+            ? "ci"
+            : "outcome";
   let targets = deliveryRoutes(kind, route);
   if (totals.root) {
     const split = leafDelivery(
@@ -314,7 +317,7 @@ export function publishTotalOnline(
   noteTask(db, rootId, "total_online", { progress });
   const route = taskRoute(db, root);
   const message = totalOnlineMessage(root.ref, rollup);
-  for (const target of deliveryRoutes("online", route))
+  for (const target of deliveryRoutes("total_online", route))
     inbox.publish({
       subscriber: target.subscriber,
       taskId: rootId,

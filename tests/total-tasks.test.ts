@@ -239,7 +239,7 @@ test("通知：秘书只收总任务级的——叶子完成不投，卡住转�
   assert.equal(getTask(db, "t1").status, "done");
 });
 
-test("通知：叶子归 leader 管时照旧投 leader，上线不再抄秘书；没有总任务的任务照旧", () => {
+test("通知：叶子归 leader 管时照旧投 leader，上线不再抄秘书；单个任务上线也不抄秘书（t182）", () => {
   const db = memory();
   const inbox = new EventInbox(db);
   createTask(db, { title: "总" }); // t1
@@ -254,7 +254,7 @@ test("通知：叶子归 leader 管时照旧投 leader，上线不再抄秘书�
   );
   assert.deepEqual(
     inboxOf(db, "secretary").map((e) => `${e.task}:${e.kind}`),
-    ["t1:total_online", "t3:online"],
+    ["t1:total_online"],
   );
   // 叶子卡住：leader 收，秘书不收（有 leader 管）。
   createTask(db, { title: "又一个叶", parent: "t1", owner: "a1" }); // t4

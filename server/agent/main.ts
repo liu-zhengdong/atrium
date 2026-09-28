@@ -318,8 +318,11 @@ export class Agent {
     }
   }
 
-  /** 跑到 stop() 或令牌失效为止。 */
-  async start() {
+  /**
+   * 带接入码时先换成主机令牌（已用同一台的令牌接入过就跳过），返回这台的短号；
+   * 没接入过又没给接入码时拒绝。装成系统服务（t183）时先在前台做完这一步，服务里不带接入码。
+   */
+  async enroll(): Promise<string> {
     if (
       this.options.code &&
       (!this.token ||
@@ -327,12 +330,18 @@ export class Agent {
         !this.options.code.startsWith(`${this.config.host}-`))
     )
       await this.join();
-    if (!this.token)
+    if (!this.token || !this.config)
       throw new Problem(
         400,
         `这台机器还没接入 ${this.server}：在服务那台机器上运行 atrium host add 名称，拿到接入码后 atrium agent --server ${this.server} --token 接入码`,
         "usage",
       );
+    return this.config.host;
+  }
+
+  /** 跑到 stop() 或令牌失效为止。 */
+  async start() {
+    await this.enroll();
     await this.recover();
     this.timer = setInterval(
       () => void this.tick(),
@@ -389,6 +398,7 @@ export class Agent {
 
   private async loop() {
     let attempt = 0;
+    let lastFailure: string | null = null;
     while (!this.stopped) {
       try {
         const hello = await this.call<{
@@ -411,6 +421,7 @@ export class Agent {
         );
         this.connected = true;
         attempt = 0;
+        lastFailure = null;
         void this.tick();
         void this.reportQuota();
         while (!this.stopped) {
@@ -447,9 +458,13 @@ export class Agent {
           break;
         }
         const wait = backoffMs(attempt++);
-        this.log(
-          `${this.connected ? "与服务断开" : "连不上服务"}：${reason(error)}；${Math.round(wait / 1000)} 秒后重连`,
-        );
+        // 同一原因连续失败只记一次：装成系统服务后服务长时间不在，日志不该每 15 秒长一行。
+        const why = `${this.connected ? "与服务断开" : "连不上服务"}：${reason(error)}`;
+        if (why !== lastFailure)
+          this.log(
+            `${why}；${Math.round(wait / 1000)} 秒后重连（原因不变时不再重复记）`,
+          );
+        lastFailure = why;
         this.connected = false;
         await sleep(wait, this.abort.signal);
       }

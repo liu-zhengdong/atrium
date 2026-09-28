@@ -243,14 +243,15 @@ export const hostCommands: Record<string, Command> = {
           : {}),
       });
       const address = result.host.ssh?.agentServer ?? (await serviceAddress());
-      const command = `atrium agent --server ${address} --token ${result.code}`;
+      const command = `atrium agent install --server ${address} --token ${result.code}`;
       if (json) printJson({ ...result, command });
       else
         console.log(
           [
             `已登记 ${result.host.ref} ${result.host.name}（待接入；接入码 30 分钟内有效，只能用一次）`,
-            "在那台机器上装好 Node 24+ 与 Atrium 后运行：",
+            "在那台机器上装好 Node 24+ 与 Atrium 后运行（接入并装成系统服务，开机或登录自启、关终端不断）：",
             `  ${command}`,
+            "只想在终端前台跑：把 agent install 换成 agent",
             ...(result.host.ssh
               ? [
                   `Atrium 正在管理 ${result.host.ssh.target} 的 SSH 隧道；状态用 atrium host show ${result.host.ref} 查看`,
@@ -378,27 +379,190 @@ export const hostCommands: Record<string, Command> = {
   },
 };
 
+/** 代理数据目录：--data 优先，其次 ATRIUM_AGENT_DATA，缺省 ~/.atrium-agent。 */
+const agentData = async (values: Values) => {
+  const { agentDataDir } = await import("../server/agent/state.ts");
+  const { resolve } = await import("node:path");
+  const given = str(values, "data")?.trim();
+  return given ? resolve(given) : agentDataDir();
+};
+
 export const agentCommand: Command = {
-  args: "[--server <服务地址>] [--token <接入码>]",
+  args: "[--server <服务地址>] [--token <接入码>] [--data <目录>]",
   about:
-    "在远程机器上运行：接入 Atrium 服务并领派给这台的活（前台常驻，Ctrl-C 停；执行者不随它退出，再起来接着看）；首次用 host add 给的接入码，之后只要 --server。数据在 ~/.atrium-agent（ATRIUM_AGENT_DATA 可改）",
+    "在远程机器上运行：接入 Atrium 服务并领派给这台的活（前台常驻，Ctrl-C 停；执行者不随它退出，再起来接着看）；首次用 host add 给的接入码，之后只要 --server。想开机自启、关终端不断用 atrium agent install。数据在 ~/.atrium-agent（--data 或 ATRIUM_AGENT_DATA 可改）；--service 由系统服务拉起时用",
   options: {
     server: { type: "string" },
     token: { type: "string" },
+    data: { type: "string" },
+    service: { type: "boolean" },
   },
   positionals: [0, 0],
   async run({ values }) {
-    const { AgentState, agentDataDir } =
-      await import("../server/agent/state.ts");
-    const server =
-      str(values, "server") ?? new AgentState(agentDataDir()).config()?.server;
-    if (!server)
-      throw new Problem(
-        400,
-        "--server 必填：首次接入时使用 host add 回执里的地址；接入后可省略",
-        "usage",
-      );
     const { runAgent } = await import("../server/agent/run.ts");
-    return runAgent({ server, code: str(values, "token") });
+    return runAgent({
+      server: str(values, "server"),
+      code: str(values, "token"),
+      data: await agentData(values),
+      service: values.service === true,
+    });
+  },
+};
+
+const SERVICE_KIND: Record<string, string> = {
+  darwin: "launchd 用户代理",
+  linux: "systemd 用户服务",
+  win32: "计划任务",
+};
+const AUTOSTART: Record<string, string> = {
+  darwin: "登录时自启",
+  linux: "开机自启（linger）",
+  win32: "本人登录时自启",
+};
+
+export const agentServiceCommands: Record<string, Command> = {
+  "agent install": {
+    args: "[--server <服务地址>] [--token <接入码>] [--data <目录>]",
+    about:
+      "在远程机器上把代理装成系统服务，一条命令完成接入与自启：macOS launchd、Linux systemd 用户服务、Windows 计划任务（登录时启动、隐藏窗口）；异常退出 10 秒后自动重起，关终端不断。首次带 host add 给的接入码，已接入过可省略。重复执行幂等：没变就不动，变了按新定义重起。令牌只在数据目录的 agent.json（0600），服务配置里没有",
+    options: {
+      server: { type: "string" },
+      token: { type: "string" },
+      data: { type: "string" },
+    },
+    positionals: [0, 0],
+    async run({ values, json }) {
+      const data = await agentData(values);
+      const { AgentState } = await import("../server/agent/state.ts");
+      const server =
+        str(values, "server") ?? new AgentState(data).config()?.server;
+      if (!server)
+        throw new Problem(
+          400,
+          "--server 必填：首次接入时使用 host add 回执里的地址；接入后可省略",
+          "usage",
+        );
+      const { Agent } = await import("../server/agent/main.ts");
+      const { currentVersion } = await import("../server/service-state.ts");
+      // 先在前台用接入码换令牌（服务定义里不带接入码）；已接入过就只核对。
+      const agent = new Agent({
+        server,
+        data,
+        env: process.env,
+        code: str(values, "token")?.trim() || undefined,
+        version: currentVersion(),
+        quota: null,
+      });
+      const host = await agent.enroll();
+      const { installService } = await import("../server/agent/service.ts");
+      const result = await installService(data);
+      const config = new AgentState(data).config();
+      if (json)
+        printJson({ ...result, host, server: config?.server ?? server });
+      else
+        console.log(
+          [
+            `${result.unchanged ? "已装好，没有改动" : "已装成系统服务"}：${SERVICE_KIND[result.platform]} ${result.name}（${host} · 服务 ${config?.server ?? server}）`,
+            result.running
+              ? `在跑 · PID ${result.pid ?? "?"} · ${AUTOSTART[result.platform]}`
+              : `还没在跑：${result.foreground ? "等前台代理停下" : `看日志 ${result.log}`}`,
+            ...(result.foreground
+              ? [
+                  `这台还有前台运行的代理（PID ${result.foreground}）：在那个终端按 Ctrl-C 停掉，服务里的代理 10 秒内接手`,
+                ]
+              : []),
+            ...(result.lingerHint
+              ? [
+                  `linger 没开：现在只在登录期间运行，退出登录会停；要开机就起运行 ${result.lingerHint}`,
+                ]
+              : []),
+            ...(result.platform === "win32"
+              ? ["Windows 上本人登录后才起（锁屏不影响）；注销后不跑"]
+              : []),
+            "改动的系统位置：",
+            ...result.locations.map((location) => `  ${location}`),
+            `日志：${result.log}`,
+          ].join("\n"),
+        );
+      recordNext(
+        `看状态：atrium agent status${values.data ? ` --data ${data}` : ""}`,
+      );
+    },
+  },
+  "agent uninstall": {
+    args: "[--data <目录>]",
+    about:
+      "卸载代理的系统服务：停掉服务里的代理（执行者照跑）、删系统里的登记与服务文件；令牌留在数据目录，再装不用重新接入。没装时什么也不做",
+    options: { data: { type: "string" } },
+    positionals: [0, 0],
+    async run({ values, json }) {
+      const data = await agentData(values);
+      const { uninstallService } = await import("../server/agent/service.ts");
+      const result = await uninstallService(data);
+      if (json) printJson(result);
+      else
+        console.log(
+          result.absent
+            ? `没装系统服务（${SERVICE_KIND[result.platform]} ${result.name}），不用卸载`
+            : [
+                `已卸载 ${SERVICE_KIND[result.platform]} ${result.name}；在跑的执行者照跑`,
+                ...(result.removed.length
+                  ? [
+                      "删掉的文件：",
+                      ...result.removed.map((file) => `  ${file}`),
+                    ]
+                  : []),
+                `令牌仍在 ${data}；前台运行 atrium agent 或再装 atrium agent install 都不用重新接入`,
+              ].join("\n"),
+        );
+      recordNext(
+        `前台运行：atrium agent${values.data ? ` --data ${data}` : ""}`,
+      );
+    },
+  },
+  "agent status": {
+    args: "[--data <目录>]",
+    about:
+      "看这台代理的系统服务：装没装、在不在跑、是否自启、接入的服务与短号、服务定义是否过时、日志最后几行",
+    options: { data: { type: "string" } },
+    positionals: [0, 0],
+    async run({ values, json }) {
+      const data = await agentData(values);
+      const { serviceStatus } = await import("../server/agent/service.ts");
+      const result = await serviceStatus(data);
+      const suffix = values.data ? ` --data ${data}` : "";
+      if (json) printJson(result);
+      else
+        console.log(
+          [
+            `系统服务：${SERVICE_KIND[result.platform]} ${result.name} · ${
+              result.installed
+                ? `${result.running ? `在跑（PID ${result.pid ?? "?"}）` : "没在跑"} · ${result.enabled ? AUTOSTART[result.platform] : "不自启"}`
+                : "没装"
+            }`,
+            ...(result.linger === false && result.installed
+              ? ["linger 没开：退出登录会停、开机不会自己起"]
+              : []),
+            ...(result.stale
+              ? [
+                  "服务定义和现在的不一致（node 或 Atrium 换了位置）：重跑 atrium agent install",
+                ]
+              : []),
+            `接入：${result.host ? `${result.host} · 服务 ${result.server}` : "还没接入"}`,
+            ...(result.foreground
+              ? [`前台代理在跑：PID ${result.foreground}`]
+              : []),
+            `日志：${result.log}`,
+            ...result.tail.map((line) => `  ${line}`),
+          ].join("\n"),
+        );
+      recordNext(
+        !result.installed
+          ? `装成系统服务：atrium agent install${suffix}`
+          : result.stale || !result.running
+            ? `按现在的定义重装并重起：atrium agent install${suffix}`
+            : `卸载：atrium agent uninstall${suffix}`,
+      );
+    },
   },
 };

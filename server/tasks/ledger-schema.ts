@@ -7,6 +7,7 @@ import { ensureUsageTable } from "./usage.ts";
 import { ensureAlsoTable } from "./also.ts";
 import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
+import { ensurePauseTable } from "../pause.ts";
 import { ensurePatrolTables } from "./patrol.ts";
 import { ensureVerifyTables } from "./verify-runtime.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
@@ -54,6 +55,8 @@ function backfillHelpers(db: DatabaseSync) {
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
   ensureQueueTable(db);
+  // 一键停机（server/pause.ts）：派活、合入、看板都要读暂停，随账本建好。
+  ensurePauseTable(db);
   ensureJobRoles(db);
   db.exec(`CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -17,12 +17,7 @@ import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
 import { ensureTaskTables } from "./tasks/ledger-schema.ts";
-import {
-  ensurePauseTable,
-  globalPause,
-  migrateOldPauses,
-  partPause,
-} from "./pause.ts";
+import { globalPause, migrateOldPauses, partPause } from "./pause.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { QuotaReaders } from "./quota-readers/index.ts";
@@ -282,7 +277,6 @@ export async function createApp(options: {
   ensureOrgTables(db);
   ensureScheduleTables(db);
   // 一键停机（server/pause.ts）：旧的主机暂停、周期任务暂停在任务运行时起来前并进来，只迁一次。
-  ensurePauseTable(db);
   try {
     for (const note of migrateOldPauses(db)) console.log(note);
   } catch (error) {

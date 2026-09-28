@@ -20,6 +20,7 @@ export const groups: Record<string, string[]> = {
     "task done",
     "task stop",
     "task merge",
+    "task deliver",
     "task log",
     "task wait",
     "patrol run",
@@ -170,6 +171,8 @@ export function groupOf(name: string) {
 export function example(name: string, command: Command) {
   if (name === "task add") return "atrium task add 拆分登录模块 --parent t1";
   if (name === "task set") return "atrium task set t1 --status done";
+  if (name === "task deliver")
+    return "atrium task deliver t1 --pr https://github.com/acme/demo/pull/7";
   if (name === "task pick") return "atrium task pick t1 --risk medium";
   if (name === "task run")
     return "atrium task run t1 --worker codex+gpt-6-sol:high";

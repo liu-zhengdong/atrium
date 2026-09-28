@@ -1405,6 +1405,48 @@ const merge: Command = {
   },
 };
 
+const deliverTask: Command = {
+  args: "tN --pr URL [--worktree 路径] [--repo 路径] [--as 订阅者]",
+  about:
+    "秘书、leader 亲自做完的活登记交付：运行时核对 PR 与工作树后记成完成、进合入队列（紧急的走紧急通道）；--worktree 给 PR 分支所在的附属工作树，合入在那里 rebase、检查，合入后和执行者的一样清理；不给时合入队列按任务工作树规则另建一个；任务没记仓库时加 --repo",
+  options: {
+    pr: { type: "string" },
+    worktree: { type: "string" },
+    repo: { type: "string" },
+    as: { type: "string" },
+  },
+  positionals: [1, 1],
+  async run({ positionals: [reference], values, json }) {
+    const id = ref(reference, "任务");
+    const pr = str(values, "pr");
+    if (!pr) throw new Problem(400, "缺少 --pr：PR 链接", "usage");
+    const worktree = str(values, "worktree");
+    const repo = str(values, "repo");
+    const who = str(values, "as") ?? defaultSubscriber();
+    if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
+    const result = await (
+      await client()
+    ).post<{ task: Task }>(
+      `/tasks/${id}/deliver?${new URLSearchParams({ as: who })}`,
+      {
+        pr_url: pr,
+        ...(worktree === undefined
+          ? {}
+          : { worktree: existing(worktree, "--worktree", "directory") }),
+        ...(repo === undefined
+          ? {}
+          : { repo: existing(repo, "--repo", "directory") }),
+      },
+    );
+    if (json) printJson(result);
+    else
+      console.log(
+        `${id} 已登记交付、排队合入${result.task.urgent === 1 ? "（紧急）" : ""} · 工作树 ${result.task.worktree ?? "合入队列另建"}`,
+      );
+    recordNext(`等合入：atrium task wait ${id}`);
+  },
+};
+
 type LogChunk = {
   text: string;
   next: number;
@@ -1509,6 +1551,7 @@ export const taskCommands: Record<string, Command> = {
   "task run": run,
   "task stop": stop,
   "task merge": merge,
+  "task deliver": deliverTask,
   "task log": log,
   "task wait": wait,
 };

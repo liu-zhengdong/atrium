@@ -1,6 +1,7 @@
 import type { TaskRow } from "./ledger-model.ts";
 import type { TaskStatus } from "./state.ts";
 import { oneLine, width } from "../text-width.ts";
+import { MAX_CHECK_RERUNS } from "./check-outcome.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
@@ -67,11 +68,17 @@ export type HolderFacts = {
   preempted?: { by: string | null } | null;
   /** 排队合入时，其他任务的合入因这些紧急任务（tN）暂停（t215）；没暂停为空。 */
   merge_held_by?: string[];
+  /** 合入检查没跑成、在等自动重跑（t204）：第几次、没跑成的原因；不在等为 null。 */
+  rerun?: { attempt: number; reason: string | null } | null;
 };
 
 /** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
 const where = (checking: HolderFacts["checking"]) =>
   checking?.host && checking.host !== "h1" ? `在 ${checking.host} 上` : "";
+
+/** 合入检查没跑成、等重跑的一句话；原因全文给 `task show`（holderDetail）。 */
+const rerunShort = (attempt: number) =>
+  `检查没跑成，等重跑（${attempt}/${MAX_CHECK_RERUNS}）`;
 
 const FINISHED = new Set<TaskStatus>(["done", "failed", "cancelled"]);
 
@@ -405,6 +412,7 @@ export function holderOf(f: HolderFacts): Holder | null {
 
 /** 摘要背后的原因全文：合入交回看交回原因，受阻或受阻后交回看受阻原因；没有为 null。 */
 export function holderDetail(f: HolderFacts): string | null {
+  if (f.rerun) return f.rerun.reason;
   if (f.status === "running" && f.returned?.via === "merge")
     return f.merge_returned;
   if (f.status === "blocked" || (f.status === "running" && f.returned))
@@ -427,7 +435,9 @@ function judge(f: HolderFacts): Holder | null {
       who: null,
       text: f.merge_held_by?.length
         ? `合入暂停：等紧急 ${f.merge_held_by.join("、")} 先上线`
-        : "排队合入",
+        : f.rerun
+          ? `合入前${rerunShort(f.rerun.attempt)}`
+          : "排队合入",
     };
   if (f.delivery_stage === "merging")
     return {

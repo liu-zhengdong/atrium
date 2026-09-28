@@ -200,6 +200,8 @@ export type RunnerOptions = {
   agentCheckWatchMs?: number;
   /** 紧急任务没有进展多久换执行者（毫秒，t215）；缺省读 ATRIUM_URGENT_IDLE_MINUTES，10 分钟。 */
   urgentIdleMs?: number;
+  /** 合入检查没跑成后第几次重跑前等多久（t204）；测试缩短。 */
+  checkRerunDelayMs?: (attempt: number) => number;
 };
 
 export class TaskRunner {
@@ -379,6 +381,9 @@ export class TaskRunner {
       run: this.exec,
       prHeadWaitMs: options.mergeHeadWaitMs,
       checks: this.checks,
+      ...(options.checkRerunDelayMs
+        ? { rerunDelayMs: options.checkRerunDelayMs }
+        : {}),
       changed: (id) => this.waits.changed(id),
       cleaned: async (id) => {
         await this.cleanup.cleanup(id);

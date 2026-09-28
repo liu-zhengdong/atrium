@@ -34,7 +34,7 @@ export type CheckRequest = {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   urgent?: boolean;
-  /** 任务写了避开的主机（t215）：检查也不派过去。 */
+  /** 任务写了避开的主机（t215），及上一轮在上面没跑成的主机（t204）：检查不派过去。 */
   avoid?: readonly number[];
   onStatus?: (status: "queued" | "started", log: string, host: string) => void;
   /** 某台没跑成、换地方重跑时。 */
@@ -62,7 +62,7 @@ export class CheckDispatch {
   ) {}
 
   async run(request: CheckRequest): Promise<LocalCheck> {
-    const tried = new Set<number>();
+    const tried = new Set<number>(request.avoid);
     let prepared: Prepared | undefined;
     // 把关检查只派到与检查基准同平台的主机（t201）：缺省是本机的平台，仓库可另配。
     const platform = checkBaseline(
@@ -122,8 +122,7 @@ export class CheckDispatch {
         },
         signal: request.signal,
       });
-      if (request.signal?.aborted) return withoutInfra(result);
-      if (!result.infra) return withoutInfra(result);
+      if (request.signal?.aborted || !result.infra) return result;
       try {
         request.onMoved?.(ref, result.infra);
       } catch {
@@ -214,13 +213,4 @@ function readConfigured(worktree: string) {
   } catch {
     return null;
   }
-}
-
-/** 调用方只看关卡要的字段；infra 是这里换主机用的，不往外带。 */
-function withoutInfra(result: LocalCheck & { infra?: string }): LocalCheck {
-  const { infra: _infra, ...rest } = result as LocalCheck & {
-    infra?: string;
-    size?: number;
-  };
-  return rest;
 }

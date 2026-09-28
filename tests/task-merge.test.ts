@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -231,6 +231,8 @@ for (const scenario of [
   "head_changed",
   "stale_pr_head",
   "stale_pr_head_timeout",
+  "not_run_then_merge",
+  "not_run_blocked",
 ] as const) {
   test(`隔离服务与假 gh/执行者：${scenario}`, async (t) => {
     let merged = false;
@@ -266,15 +268,27 @@ for (const scenario of [
           JSON.stringify({
             scripts: {
               check:
-                scenario === "check_failed"
+                // 时长敏感用例（t204）：第一次（或每次）挂在登记过的慢用例上，算没跑成、自动重跑。
+                scenario === "not_run_then_merge" ||
+                scenario === "not_run_blocked"
                   ? nodeCommand(
-                      "console.log('not ok 1 - 故意失败'); process.exit(1)",
+                      `const fs=require('fs');const f=process.argv[1];const n=fs.existsSync(f)?Number(fs.readFileSync(f,'utf8')):0;fs.writeFileSync(f,String(n+1));if(n<${scenario === "not_run_then_merge" ? 1 : 99}){console.log('not ok 1 - 慢用例：等后台服务');process.exit(1)}`,
+                      join(fixture.root, "check-runs"),
                     )
-                  : scenario === "stopped" || scenario === "restart_check"
-                    ? sleepCommand(2)
-                    : TRUE_COMMAND,
+                  : scenario === "check_failed"
+                    ? nodeCommand(
+                        "console.log('not ok 1 - 故意失败'); process.exit(1)",
+                      )
+                    : scenario === "stopped" || scenario === "restart_check"
+                      ? sleepCommand(2)
+                      : TRUE_COMMAND,
             },
           }),
+        );
+        mkdirSync(join(fixture.repo, ".agents"), { recursive: true });
+        writeFileSync(
+          join(fixture.repo, ".agents", "timing-sensitive"),
+          "# 慢用例\n慢用例：\n",
         );
         git("add", ".");
         git("commit", "-qm", "检查夹具");
@@ -404,6 +418,7 @@ for (const scenario of [
           scenario === "stale_pr_head_timeout" || scenario === "head_changed"
             ? 150
             : undefined,
+        checkRerunDelayMs: () => 50,
       },
     );
     let call = firstCall;
@@ -467,6 +482,50 @@ for (const scenario of [
     assert.equal(waited.status, 200);
     assert.equal(waited.body.timed_out, false);
     const task = waited.body.task;
+    const count = (kind: string) =>
+      task.events.filter((event: { kind: string }) => event.kind === kind)
+        .length;
+    if (scenario === "not_run_then_merge") {
+      // 没跑成不交回执行者：放回队列重跑一次就合入了。
+      assert.equal(task.delivery_stage, "merged");
+      assert.equal(task.merge_returns, 0);
+      assert.equal(mergeCalls, 1);
+      assert.equal(count("merge_check_rerun"), 1);
+      assert.equal(count("merge_returned"), 0);
+      const checks = task.events
+        .filter((event: { kind: string }) => event.kind === "merge_check")
+        .map((event: { detail: string }) => JSON.parse(event.detail).outcome);
+      assert.deepEqual(checks, ["not_run", "passed"]);
+      const shown = (await call("GET", `/api/tasks/${ref}`)).body;
+      assert.match(shown.last_check, /^合入前过/);
+      return;
+    }
+    if (scenario === "not_run_blocked") {
+      // 重跑 3 次仍没跑成：转卡住、写明基础设施问题，不算执行者交回。
+      assert.equal(task.status, "blocked");
+      assert.equal(task.delivery_stage, null);
+      assert.equal(task.merge_returns, 0);
+      assert.equal(mergeCalls, 0);
+      assert.equal(count("merge_check_rerun"), 3);
+      assert.equal(count("merge_returned"), 0);
+      const shown = (await call("GET", `/api/tasks/${ref}`)).body;
+      assert.match(
+        JSON.stringify(
+          shown.events.filter(
+            (e: { kind: string }) => e.kind === "merge_blocked",
+          ),
+        ),
+        /基础设施问题：检查没跑成（已自动重跑 3 次）/,
+      );
+      assert.match(shown.last_check, /^合入前没跑成.*已自动重跑 3 次/);
+      assert.match(shown.holder.text, /^基础设施问题/);
+      const urgent = await call("GET", "/api/events/wait?timeout=0");
+      assert.deepEqual(
+        urgent.body.events.map((event: { kind: string }) => event.kind),
+        ["blocked"],
+      );
+      return;
+    }
     if (
       scenario === "success" ||
       scenario === "rebase_success" ||

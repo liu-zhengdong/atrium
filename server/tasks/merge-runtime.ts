@@ -7,7 +7,16 @@ import { taskDir } from "./active.ts";
 import { defaultBranch, firstLine, type Exec } from "./git.ts";
 import { originRepo, parsePrUrl, repoFlag } from "./gh-repo.ts";
 import { atomically, getTask, noteTask, type Task } from "./ledger.ts";
-import { checkDetail, runLocalCheck } from "./local-check.ts";
+import { checkDetail, runLocalCheck, type LocalCheck } from "./local-check.ts";
+import {
+  hostIdOf,
+  MAX_CHECK_RERUNS,
+  notRunText,
+  rerunDecision,
+  rerunDelayMs,
+  withOutcome,
+} from "./check-outcome.ts";
+import { timingSensitive } from "./check-rerun.ts";
 import type { CheckDispatch } from "../hosts/check-runtime.ts";
 import { mergeFailure } from "./merge-decision.ts";
 import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
@@ -92,6 +101,8 @@ export class MergeQueue {
       prHeadWaitMs?: number;
       /** 重跑检查派到哪台（#358 第 2 步）；缺省在本机跑。合入本身仍在本机。 */
       checks?: CheckDispatch;
+      /** 检查没跑成后第 attempt 次重跑前整条队列等多久（t204）；测试可缩短。 */
+      rerunDelayMs?: (attempt: number) => number;
     },
   ) {
     this.claim = new MergeClaim(db);
@@ -333,6 +344,8 @@ export class MergeQueue {
         this.yieldIfUrgent();
         try {
           await this.process(getTask(this.db, row.id));
+          // 检查没跑成、放回重跑的：整条队列先等一会儿。
+          if (Date.now() < this.retryAfter) return;
         } catch (error) {
           if (this.closed) return;
           if (this.halted(row.id)) continue;
@@ -604,11 +617,12 @@ export class MergeQueue {
           log,
         });
     };
+    const reruns = this.reruns(task.id);
     const checked = this.options.checks
       ? await this.options.checks.run({
           ...request,
           task: task.id,
-          avoid: storedHosts(task.avoid_hosts),
+          avoid: [...storedHosts(task.avoid_hosts), ...reruns.avoid],
           base,
           onStatus,
           onMoved: (from, reason) => {
@@ -619,10 +633,27 @@ export class MergeQueue {
       : await runLocalCheck({ ...request, onStatus });
     if (this.closed) return;
     if (this.halted(task.id)) return;
-    noteTask(this.db, task.id, "merge_check", checkDetail(checked));
+    const judged = withOutcome(
+      checked,
+      await timingSensitive(repo, base, this.options.run),
+      reruns.count,
+    );
+    noteTask(this.db, task.id, "merge_check", checkDetail(judged));
     // 派到别的主机时检查的是 rebase 后的这个提交；对不上就不算数。
     if (checked.commit && checked.commit !== checkedHead)
       throw new MergeHold("检查回来的提交与 rebase 后的提交不一致，拒绝合入");
+    // 没跑成（主机离线、超时且只挂时长敏感用例）不交回执行者：放回队尾等一会儿重跑，用尽才转卡住（t204）。
+    if (judged.outcome === "not_run") {
+      const next = rerunDecision({
+        outcome: "not_run",
+        reruns: reruns.count,
+      });
+      if (next === "final")
+        throw new MergeHold(
+          notRunText(judged.reason ?? judged.detail, reruns.count),
+        );
+      return this.rerunLater(task, reruns.count + 1, judged);
+    }
     if (checked.status !== "passed")
       return this.handBack(
         task,
@@ -762,6 +793,48 @@ export class MergeQueue {
     this.options.changed(task.id);
     this.options.publish(task.id, "merged", { pr_url: task.pr_url });
     if (online) this.options.onMerged?.(task.id);
+  }
+
+  /** 这次排队以来检查没跑成、放回重跑了几次，以及没跑成的那几台（重跑先换别的）。 */
+  private reruns(id: number) {
+    const rows = this.db
+      .prepare(
+        "SELECT detail FROM task_events WHERE task_id=? AND kind='merge_check_rerun' AND id>(SELECT COALESCE(MAX(id),0) FROM task_events WHERE task_id=? AND kind='merge_queued') ORDER BY id DESC LIMIT ?",
+      )
+      .all(id, id, MAX_CHECK_RERUNS + 1) as { detail: string | null }[];
+    const avoid = new Set<number>();
+    for (const row of rows) {
+      try {
+        const host = hostIdOf(
+          (JSON.parse(row.detail ?? "null") as { host?: string })?.host,
+        );
+        if (host !== null && host !== 1) avoid.add(host);
+      } catch {
+        /* 损坏记录只少避开一台。 */
+      }
+    }
+    return { count: rows.length, avoid };
+  }
+
+  /** 检查没跑成：放回队尾，整条队列等一会儿（负载降下来、离线主机连回来）再接着合入。 */
+  private rerunLater(task: Task, attempt: number, check: LocalCheck) {
+    const now = Date.now();
+    atomically(this.db, () => {
+      this.db
+        .prepare(
+          "UPDATE tasks SET delivery_stage='merge_queued',merge_queued_at=?,updated_at=? WHERE id=?",
+        )
+        .run(now, now, task.id);
+      noteTask(this.db, task.id, "merge_check_rerun", {
+        attempt,
+        max: MAX_CHECK_RERUNS,
+        reason: check.reason ?? check.detail,
+        ...checkDetail(check),
+      });
+    });
+    this.options.changed(task.id);
+    this.retryAfter =
+      now + (this.options.rerunDelayMs ?? rerunDelayMs)(attempt);
   }
 
   /** 交回原执行者在原分支续做；超过次数转卡住。审阅打回也走这里。 */

@@ -31,6 +31,9 @@ const KINDS = [
   "merge_check_started",
   "merge_check",
   "preempted",
+  "merge_check_rerun",
+  "merge_queued",
+  "merge_blocked",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -83,7 +86,13 @@ export function holderFacts(
   ).reverse();
   const last = (kind: string, after = 0) =>
     events.findLast((e) => e.kind === kind && e.id > after);
-  const block = last("block");
+  // 合入队列转卡住（MergeHold、检查没跑成用尽重跑）只记 merge_blocked，同样算受阻。
+  const block = [last("block"), last("merge_blocked")]
+    .filter((e) => e !== undefined)
+    .reduce<TaskEventRow | undefined>(
+      (latest, e) => (!latest || e.id > latest.id ? e : latest),
+      undefined,
+    );
   const mergeBack = last("merge_returned");
   // 最近一次「被挡回」：受阻或合入交回，之后的动作才算接手。
   const setback =
@@ -108,9 +117,11 @@ export function holderFacts(
     }
   }
   // 正在跑的检查（#358 第 2 步）：开始了、还没出结果；在哪台跑记在开始事件里。
+  // 出了结果或记了「没跑成，等重跑」都算这一轮结束。
   const checkingOf = (started: string, done: string, after = 0) => {
     const begin = last(started, after);
-    if (!begin || last(done, begin.id)) return null;
+    if (!begin || last(done, begin.id) || last(`${done}_rerun`, begin.id))
+      return null;
     return { host: text(parse(begin.detail).host) };
   };
   const checking =
@@ -119,6 +130,24 @@ export function holderFacts(
       : row.status === "running"
         ? checkingOf("local_check_started", "local_check", last("start")?.id)
         : null;
+  // 检查没跑成、在等重跑（t204）：记了重跑、之后还没开始下一轮检查。
+  const rerunOf = (kind: string, started: string, after = 0) => {
+    const mark = last(kind, after);
+    if (!mark || last(started, mark.id)) return null;
+    const detail = parse(mark.detail);
+    return {
+      attempt: typeof detail.attempt === "number" ? detail.attempt : 1,
+      reason: text(detail.reason),
+    };
+  };
+  const rerun =
+    !checking && row.delivery_stage === "merge_queued"
+      ? rerunOf(
+          "merge_check_rerun",
+          "merge_check_started",
+          last("merge_queued")?.id,
+        )
+      : null;
   const escalation = block ? last("escalated", block.id) : undefined;
   const escalated = escalation
     ? (() => {
@@ -192,6 +221,7 @@ export function holderFacts(
     checking,
     preempted,
     merge_held_by: heldBy,
+    rerun,
   };
 }
 

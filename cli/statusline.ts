@@ -12,6 +12,8 @@ import type { TopTotal } from "../server/tasks/top.ts";
 import { planCounts } from "../server/tasks/plan-count.ts";
 import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
+import { titleTag } from "../server/tasks/priority.ts";
+import { recordNext } from "./contract.ts";
 
 /**
  * `atrium statusline`（#355）：Claude Code 状态栏。数据经服务取（`/api/tasks/top` 与 `/api/tasks/plan`），
@@ -62,11 +64,13 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
   // 旧版服务给的一句话可能是整篇原因，这里再截一次。
   const holder = { ...full, text: oneLine(full.text, HOLDER_WIDTH) };
   const [mark, color] = MARK[holder.kind];
-  const tag = row.urgent
-    ? `${paint(`${BOLD}${RED}`, "紧急")} `
-    : row.idle
-      ? `${paint(DIM, "闲时")} `
-      : "";
+  const shown = titleTag(
+    row.urgent ? "紧急" : row.idle ? "闲时" : "",
+    row.title,
+  );
+  const tag = shown
+    ? `${paint(shown === "紧急" ? `${BOLD}${RED}` : DIM, shown)} `
+    : "";
   const title = `${tag}「${oneLine(row.title, TITLE_MAX)}」`;
   if (holder.kind === "user")
     return `${paint(color, mark)} ${row.ref} ${title} ${paint(color, `等你：${holder.text}`)}`;
@@ -198,7 +202,7 @@ export function renderStatusline(input: StatuslineInput): string {
   ];
   const head = [
     // 暂停派新活时写清是哪条线（t113）：Atrium 自己占的核、整机负载保护线，还是执行者满了。
-    `Atrium ${parts.join(" · ")}${hostBrief(snapshot.host)}`,
+    `Atrium ${parts.join(" · ")}${hostBrief(snapshot.host, snapshot.counts.queued)}`,
     ...(count("user") ? [paint(`${BOLD}${RED}`, `等你 ${count("user")}`)] : []),
     ...(events
       ? [
@@ -240,6 +244,16 @@ export function renderStatusline(input: StatuslineInput): string {
   if (ready || waiting)
     lines.push(paint(DIM, `接下来：就绪 ${ready} · 等待中 ${waiting}`));
   return lines.join("\n");
+}
+
+/** 回执末行的下一步：有等你的先看它，有就绪的看排期，其余看全部。 */
+export function statuslineNext(
+  input: Pick<StatuslineInput, "snapshot" | "plan">,
+): string {
+  const mine = input.snapshot.rows.find((row) => row.holder?.kind === "user");
+  if (mine) return `atrium task show ${mine.ref}`;
+  const counts = input.plan ? planCounts(input.plan.groups) : null;
+  return counts?.ready ? "atrium task plan" : "atrium top";
 }
 
 /** 两个接口一起取；排期取不到不影响任务与 leader 段。 */
@@ -296,6 +310,7 @@ export const statuslineCommand: Command = {
             color: !process.env.NO_COLOR,
           }),
         );
+      recordNext(`下一步：${statuslineNext(state)}`);
     } finally {
       done();
     }

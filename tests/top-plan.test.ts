@@ -187,6 +187,21 @@ test("排期段：就绪的按紧急 → 普通 → 闲时排，标题前标紧�
   assert.match(rows[3]!, /闲时 性能巡检/);
 });
 
+test("排期段：标题已以「紧急」开头的不再加前缀（巡检 f6）", () => {
+  const plan: PlanView = {
+    next_after: null,
+    groups: {
+      running: [],
+      ready: [entry("t5", "紧急：修合入队列", { task: { urgent: 1 } })],
+      waiting: [],
+      blocked: [],
+    },
+  };
+  const text = draw(plan, 120).lines.join("\n");
+  assert.doesNotMatch(text, /紧急 紧急/);
+  assert.match(text, /t5 +紧急：修合入队列/);
+});
+
 test("排期段：依赖链按先后缩进，标题给出关键路径；分组父任务只当标题", () => {
   const lines = draw(sample(), 120).lines;
   const at = (pattern: RegExp) => lines.findIndex((line) => pattern.test(line));

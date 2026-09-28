@@ -164,3 +164,13 @@ export const priorityTag = (task: {
   urgent: number | boolean;
   priority?: string | null;
 }) => (task.urgent ? "紧急" : isIdle(task) ? "闲时" : "");
+
+/** 标题本身已以这个标记开头（「紧急：…」「紧急 …」）就不再加，免得写成「紧急 紧急：…」。 */
+export const titleTag = (tag: string, title: string) =>
+  tag && !title.trimStart().startsWith(tag) ? tag : "";
+
+/** 标题前加上标记（紧急、闲时），已带的不重复。 */
+export const tagTitle = (tag: string, title: string) => {
+  const shown = titleTag(tag, title);
+  return shown ? `${shown} ${title}` : title;
+};

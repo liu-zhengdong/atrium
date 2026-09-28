@@ -104,6 +104,8 @@ import { HostLoad, hostView } from "./host-load.ts";
 import { OrphanReaper, recognizer, spawnOwner } from "./orphans.ts";
 import { reapLeftovers } from "./leftovers-reap.ts";
 import { sharedLocalChecks } from "./local-check.ts";
+import { precheckSlots } from "./merge-precheck-plan.ts";
+import { mergeQueueView } from "./merge-queue-view.ts";
 import { skipIfBusy } from "./reentry.ts";
 import { RemoteHosts } from "../hosts/remote.ts";
 import { HostTunnels } from "../hosts/tunnels.ts";
@@ -225,6 +227,8 @@ export type RunnerOptions = {
    * 缺省读 ATRIUM_QUIET_MINUTES（5）/ ATRIUM_CHECK_STALL_MINUTES（10）。
    */
   quiet?: QuietLimits & { pollMs?: number };
+  /** 合入队列同时提前检查几件（t254）；缺省读 ATRIUM_MERGE_PRECHECKS，没写按本机检查并发名额（merge-precheck-plan.ts）。 */
+  mergePrechecks?: number;
 };
 
 export class TaskRunner {
@@ -440,6 +444,7 @@ export class TaskRunner {
       ...(options.checkRerunDelayMs
         ? { rerunDelayMs: options.checkRerunDelayMs }
         : {}),
+      prechecks: this.mergePrechecks(options.mergePrechecks),
       changed: (id) => this.waits.changed(id),
       cleaned: async (id) => {
         await this.cleanup.cleanup(id);
@@ -2046,6 +2051,11 @@ export class TaskRunner {
       },
       // 秘书在不在听（t242）：看秘书的收件箱时给。
       ...(who === DEFAULT_OWNER ? { secretary: this.secretaryState(now) } : {}),
+      // 合入队列长度与预计还要多久（t254）；队列空时不给。
+      ...(() => {
+        const queue = mergeQueueView(this.db, now);
+        return queue ? { merge_queue: queue } : {};
+      })(),
       ...(leaders.length ? { leaders } : {}),
       host: this.hostView(),
       // 紧急通道（t215）：进行中的紧急任务与「太多就等于没有紧急」的提示；没有时不给。
@@ -2078,6 +2088,17 @@ export class TaskRunner {
       }),
       truncated,
     };
+  }
+
+  /** 合入队列此刻能提前检查几件（t254）：本机太忙时不提前检查。 */
+  private mergePrechecks(given?: number) {
+    const planned = precheckSlots({
+      maxChecks: this.host.limits.maxChecks,
+      env: process.env,
+    });
+    if (planned.problem) console.error(`合入提前检查配置：${planned.problem}`);
+    const slots = given ?? planned.slots;
+    return () => (slots > 0 && this.host.gate(0).ok ? slots : 0);
   }
 
   /** 本机负载与限额（#358）：`top` 抬头显示「本机太忙，排队中」用。 */

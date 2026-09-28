@@ -126,6 +126,8 @@ cat grok.md | atrium workers edit models/grok-4.6 --file -
 
 **自动合入**：PR 任务过交付关卡后进入持久化的串行合入队列。运行时从仓库 `origin` 核对 PR，rebase 到最新默认分支，在任务 worktree 重跑 `.agents/check`（没有则 `npm run check`），通过后用检查过的头提交执行 `gh pr merge --squash --match-head-commit`；gh 查询与合入都明确带 `-R`。rebase 冲突、本地检查失败或 gh 合入失败会把文件名、失败用例和日志位置写进事件及补充说明，在原工作树与原分支重派原执行者；第三次交回转卡住并通知负责人。合入中断后从账本续上，`atrium task show tN`、`atrium top --once` 和 `atrium org show oN --detail` 可看阶段。远端 CI 仍只供参考，不挡合入。
 
+**检查并行、合入串行**（t254）：队首在合入时，排在它后面的几件（缺省本机检查并发名额减一、至多 3 件，`ATRIUM_MERGE_PRECHECKS` 另配，0 关掉；本机太忙时不做）先在各自工作树里 rebase 到本机已取到的 main、提前跑检查，记下检查的提交与「基于哪个 main 提交」（`merge_prechecked`）。轮到它合入时 fetch 最新 main：main 没动，或只前进了与它不改同一批文件、也不改依赖与检查配置（`package.json`、锁文件、`tsconfig*.json`、`.agents/check` 等）的提交，就用这次检查的结果按检查过的提交合入（`merge_check` 带 `reused`）；否则照常 rebase 到最新 main 再跑一遍（`merge_precheck_unused` 写原因）。提前检查没过而 main 没动，直接按这个结果交回；用复用结果合入被 GitHub 拒了（如要求分支跟上 main），回头 rebase 重跑一遍再合，不算交回。轮到它时提前检查还在跑就接着等它跑完。合入仍一件一件来，`--match-head-commit` 始终是检查过的提交。判定在 `server/tasks/merge-precheck-plan.ts`。`atrium top` 抬头与状态栏写「排队合入 16 · 还要约 2 小时 10 分」：按最近 24 小时内最多 20 件合入的平均用时（每件从开始合入到已合入，单件按 1 小时封顶）估，`top --json` 的 `merge_queue` 给出件数、平均用时与预计毫秒数；排队中的任务写「排队合入：提前跑检查」「已提前检查过」。
+
 **合入前审阅**：任务 `--risk high`，或执行者档案 `trust` 低于 `medium`（没写按 `unknown`）时，PR 先进「审阅中」：运行时另建一个 `审阅 tN：…` 任务（`--deliver none`），自动挑一个与原执行者不同工具、不同模型且 `trust` 至少 `medium` 的执行者，按清单只读审代码，最后一行写 `审阅结论：通过` 或 `审阅结论：打回`。通过进合入队列；打回把意见交回原执行者，与冲突、检查失败共用交回次数，第三次转卡住；最后一行结论没按格式写时，运行时先请同一审阅者续上会话补答一次（专员审查、会审意见与汇总同样）；审阅者失败、补答后仍没结论、挑不到人或被停止才转卡住并通知负责人。审阅任务本身不单独投递事件；进审阅时在原任务上发 `review_queued` 事件，带改动规模摘要（文件数、增删行数、改动最多的文件），`atrium task show tN` 可看审阅任务与事件。
 
 **自动上线**：合入的是服务自身仓库（`ATRIUM_UPDATE_REPO`，缺省 `liu-zhengdong/atrium`）的 PR 时，运行时每分钟拉一次标签，等发版工作流打出含该合入提交的版本；版本比运行中的新就执行 `atrium update --to <版本>` 与 `atrium restart`（在跑的执行者由新服务接管），新服务起来后把任务标为「已上线」，给负责人发 `online` 事件「tN 已上线（vX）」并附执行者在 PR 正文里写的「端到端验证」一节（派活时的通用约束要求写这一节）。同一版本只自升级一次：升级或重启失败（含 supervisor 回滚）发 `online_failed`；合入 30 分钟仍未发版发一次 `release_overdue`。自升级缺省只在用默认数据目录（`~/.atrium`）的安装版上开；开发中的 git 检出、测试与另给 `ATRIUM_DATA` 的隔离服务不动全局安装，停在已合入（`ATRIUM_SELF_UPDATE=1` 强制开、`=0` 关）。其他仓库只到已合入。
@@ -1298,6 +1300,7 @@ atrium role edit 专员 [--name 名称] [--description 文字] [--body 文件] [
 | `ATRIUM_BUSY_CORES`             | Atrium 进程树占用超过几个核暂停派新活，默认核数的 3/4；`0` 不看                                         |
 | `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载                                        |
 | `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的一半（至少 1）                                                            |
+| `ATRIUM_MERGE_PRECHECKS`        | 合入队列同时提前检查几件，默认本机检查并发减一（至多 3）；0 或 off 关掉                                 |
 | `ATRIUM_CHECK_TIMEOUT_MINUTES`  | 一次本地检查最多跑几分钟，默认 30；远程主机由代理按它那台的环境设                                       |
 | `ATRIUM_QUIET_MINUTES`          | 执行者或检查日志多久没进展发提醒（知会负责的 leader、状态栏显示），默认 5                               |
 | `ATRIUM_CHECK_STALL_MINUTES`    | 检查日志多久没新输出就结束这次检查并分类，默认 10；`0` 不结束；远程主机由代理按它那台的环境设           |

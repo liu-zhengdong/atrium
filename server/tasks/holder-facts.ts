@@ -37,6 +37,8 @@ const KINDS = [
   "merge_check_quiet",
   "worker_quiet",
   "hang_nudged",
+  "merge_precheck_started",
+  "merge_prechecked",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -168,6 +170,20 @@ export function holderFacts(
     row.status === "running" && !checking
       ? quietOf("worker_quiet", last("start")?.id)?.quiet_ms
       : null;
+  // 排队合入时的提前检查（t254）：这次排队以来开始了、出了结果没有。
+  const precheckOf = (): HolderFacts["precheck"] => {
+    const queuedAt = last("merge_queued")?.id ?? 0;
+    const begin = last("merge_precheck_started", queuedAt);
+    const result = last("merge_prechecked", queuedAt);
+    if (begin && (!result || result.id < begin.id))
+      return { state: "running", host: text(parse(begin.detail).host) };
+    const outcome = result ? parse(result.detail).outcome : null;
+    return outcome === "passed" || outcome === "failed"
+      ? { state: outcome, host: null }
+      : null;
+  };
+  const precheck =
+    !rerun && row.delivery_stage === "merge_queued" ? precheckOf() : null;
   const escalation = block ? last("escalated", block.id) : undefined;
   const escalated = escalation
     ? (() => {
@@ -252,6 +268,7 @@ export function holderFacts(
     held_since: heldFrom?.at ?? null,
     hang_nudged: nudged?.at ?? null,
     now,
+    precheck,
   };
 }
 

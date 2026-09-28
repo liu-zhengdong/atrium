@@ -7,9 +7,15 @@
 //
 // 阈值也可用 ATRIUM_BENCH_LIMIT_MS 放宽（CI 机器慢）。先在临时数据目录与空闲端口上
 // 起一个隔离服务，读命令（status、task ls）连着它量，量完停掉服务、删掉目录。
+//
+// --decisions N：先造一棵小组织树（负责人 a1）和 N 条假决定（多份、多节点、部分原则／推翻／沉淀），
+// 缺省量 memo show（秘书、a1、用户）、decision ls --node、decision search（t221）。
+//
+//   node scripts/bench-cli.mjs --decisions 1500
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +30,7 @@ const { values, positionals } = parseArgs({
       type: "string",
       default: process.env.ATRIUM_BENCH_LIMIT_MS ?? "150",
     },
+    decisions: { type: "string", default: "0" },
   },
   allowPositionals: true,
 });
@@ -41,9 +48,18 @@ if (!existsSync(join(dirname(bin), "..", "dist", "cli.js"))) {
   process.exit(2);
 }
 
+const decisions = Math.max(0, Number(values.decisions));
 const commands = positionals.length
   ? [positionals]
-  : [["--help"], ["status"], ["task", "ls"]];
+  : decisions
+    ? [
+        ["memo", "show"],
+        ["memo", "show", "--as", "a1"],
+        ["memo", "show", "--as", "u1"],
+        ["decision", "ls", "--node", "o3"],
+        ["decision", "search", "决定 稳"],
+      ]
+    : [["--help"], ["status"], ["task", "ls"]];
 const port = await new Promise((resolvePort, reject) => {
   const server = createServer();
   server.once("error", reject);
@@ -79,6 +95,72 @@ function median(args) {
   return times[Math.floor(times.length / 2)];
 }
 
+/** 小组织树（o1 组织、o2–o4 项目、o5–o13 模块，a1 负责 o2）与 n 条假决定。 */
+async function seedDecisions(n) {
+  const token = readFileSync(join(data, "user-token"), "utf8").trim();
+  const api = async (method, path, body) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok)
+      throw new Error(`${method} ${path}：${await response.text()}`);
+  };
+  const node = (body) => api("POST", "/org/nodes", { reason: "基准", ...body });
+  await node({ slug: "org", kind: "org", name: "组织" });
+  for (let i = 2; i <= 4; i++)
+    await node({
+      parent: "o1",
+      slug: `p${i}`,
+      kind: "project",
+      name: `项目${i}`,
+    });
+  for (let i = 5; i <= 13; i++)
+    await node({
+      parent: `o${2 + Math.floor((i - 5) / 3)}`,
+      slug: `m${i}`,
+      kind: "module",
+      name: `模块${i}`,
+    });
+  await api("POST", "/leaders", { name: "负责人", worker: "codex" });
+  await api("PATCH", "/org/nodes/o2", { leader: "a1", reason: "基准" });
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  db.exec("PRAGMA busy_timeout=5000");
+  const owners = ["u1", "secretary", "a1", "a2", "a3"];
+  const insert = db.prepare(
+    "INSERT INTO decisions(owner,decided_on,decided_by,text,why,principle,settled_point,superseded_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+  );
+  const link = db.prepare(
+    "INSERT OR IGNORE INTO decision_nodes(decision_id,node_id) VALUES(?,?)",
+  );
+  db.exec("BEGIN");
+  for (let i = 1; i <= n; i++) {
+    const owner = owners[i % owners.length];
+    const day = `2026-${String(1 + ((i * 7) % 9)).padStart(2, "0")}-${String(1 + ((i * 5) % 28)).padStart(2, "0")}`;
+    const id = Number(
+      insert.run(
+        owner,
+        day,
+        owner,
+        `决定第 ${i} 条：这里是一段不太长的决定内容`,
+        `原因 ${i}：因为这样更稳`,
+        i % 37 === 0 ? 1 : 0,
+        i % 13 === 0 ? 1 : null,
+        i % 11 === 0 ? i + 1 : null,
+        Date.now(),
+      ).lastInsertRowid,
+    );
+    if (i % 4 !== 0) link.run(id, 1 + (i % 13));
+    if (i % 6 === 0) link.run(id, 1 + ((i * 3) % 13));
+  }
+  db.exec("COMMIT");
+  db.close();
+}
+
 let failed = false;
 try {
   const started = atrium("--no-open");
@@ -89,6 +171,10 @@ try {
     } catch {}
     process.exitCode = 2;
     throw new Error("start");
+  }
+  if (decisions) {
+    await seedDecisions(decisions);
+    console.log(`已造 ${decisions} 条假决定`);
   }
   const baseline = median(["-e", "0"]);
   console.log(`node -e 0  ${baseline.toFixed(0)} 毫秒（参照）`);

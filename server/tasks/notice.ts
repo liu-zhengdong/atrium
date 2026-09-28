@@ -2,8 +2,13 @@ import type { DatabaseSync } from "node:sqlite";
 import type { EventInbox } from "./events.ts";
 import { atomically, getTask, noteTask, type Task } from "./ledger.ts";
 import { one, taskRef } from "./ledger-model.ts";
-import { finishedLeaves, rollupFor, syncTotals } from "./rollup-ledger.ts";
-import { leafDelivery, progressOf, totalOnlineMessage } from "./rollup.ts";
+import { finishedLeaves, syncTotals } from "./rollup-ledger.ts";
+import {
+  leafDelivery,
+  progressOf,
+  totalOnlineMessage,
+  type Rollup,
+} from "./rollup.ts";
 import { verificationSection } from "./online.ts";
 import { eventLevel } from "./event-level.ts";
 import { nodes } from "../org/model.ts";
@@ -50,7 +55,7 @@ export function publishTask(
     );
     targets = targets.filter((target) => split.to.includes(target.subscriber));
     if (split.stuck)
-      publishStuck(inbox, db, totals.root.id, task, kind, detail, actor);
+      publishStuck(inbox, db, totals.root, task, kind, detail, actor);
   }
   for (const target of targets)
     inbox.publish({
@@ -70,7 +75,7 @@ export function publishTask(
         routed: { to: target.subscriber, why: target.why },
       },
     });
-  if (totals.root) publishTotalOnline(inbox, db, totals.root.id);
+  if (totals.root) publishTotalOnline(inbox, db, totals.root);
   if (
     kind === "blocked" &&
     detail.source === "budget" &&
@@ -143,16 +148,16 @@ export function publishInvolved(
 function publishStuck(
   inbox: EventInbox,
   db: DatabaseSync,
-  rootId: number,
+  total: { id: number; rollup: Rollup | null },
   task: Task,
   kind: string,
   detail: Record<string, unknown>,
   actor?: string,
 ) {
-  const root = getTask(db, rootId);
+  const root = getTask(db, total.id);
   // 整个总任务已经取消（连带取消时停掉在跑的子孙）：不再报卡住。
   if (root.status === "cancelled") return;
-  const rollup = rollupFor(db, rootId);
+  const rollup = total.rollup;
   const reason = typeof detail.reason === "string" ? detail.reason : null;
   inbox.publish({
     subscriber: SECRETARY,
@@ -232,9 +237,9 @@ export function verificationSummary(db: DatabaseSync, rootId: number) {
 export function publishTotalOnline(
   inbox: EventInbox,
   db: DatabaseSync,
-  rootId: number,
+  total: { id: number; rollup: Rollup | null },
 ) {
-  const rollup = rollupFor(db, rootId);
+  const { id: rootId, rollup } = total;
   if (!rollup || rollup.status !== "online" || rollup.truncated) return;
   const progress = progressOf(rollup);
   const last = one<{ detail: string | null }>(
@@ -275,6 +280,6 @@ export function publishTotals(
   id: number,
 ): number[] {
   const totals = atomically(db, () => syncTotals(db, id));
-  if (totals.root) publishTotalOnline(inbox, db, totals.root.id);
+  if (totals.root) publishTotalOnline(inbox, db, totals.root);
   return totals.ancestors;
 }

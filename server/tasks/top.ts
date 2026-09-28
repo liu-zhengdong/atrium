@@ -21,7 +21,7 @@ import { urgentInMergeFlow } from "./urgent-ledger.ts";
 import {
   VERIFY_TOP_SQL,
   verifyParents,
-  verifyTopSince,
+  verifyTopParams,
   verifyViews,
 } from "./verify-runtime.ts";
 import { verifyHolder, type VerifyView } from "./verify-view.ts";
@@ -119,7 +119,7 @@ export function selectRows(
   limit = TOP_MAX,
 ) {
   const params: SQLInputValue[] = [
-    verifyTopSince(now),
+    ...verifyTopParams(now),
     ...FINISHED_STATUSES,
     now - recentMs,
   ];
@@ -142,9 +142,8 @@ export function selectRows(
   return { rows: rows.slice(0, limit), truncated: rows.length > limit };
 }
 
-/** 上线验证没通过或无法验证（t182）：和受阻的排在一起。 */
-const verifyTrouble = (row: TopRow) =>
-  row.verify?.state === "failed" || row.verify?.state === "unverifiable";
+/** 上线验证没通过（t182）：和受阻的排在一起；无法验证不算出事（t255），和刚结束的排在一起。 */
+const verifyTrouble = (row: TopRow) => row.verify?.state === "failed";
 
 /** 视图里的次序：在跑（跑得久的在前）、排队（入队顺序）、受阻与验证没过（新在前）、刚结束（新在前）。 */
 export function sortRows(rows: TopRow[]): TopRow[] {

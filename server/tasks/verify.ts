@@ -204,11 +204,41 @@ export function verifyReport(input: {
   const summary =
     textOf(body.summary, SUMMARY_MAX) ||
     (!steps.length ? `${VERIFY_FILE} 里没有步骤` : "");
+  const note = verdict === "unverifiable" ? unverifiableNote(steps) : "";
   return {
     verdict,
-    summary: scrub(`${summary}${extra}`, SUMMARY_MAX + 20),
+    summary: scrub(
+      [note, `${summary}${extra}`].filter(Boolean).join("；"),
+      SUMMARY_MAX + 20,
+    ),
     steps,
   };
+}
+
+const NOTE_STEPS = 3;
+const NOTE_COMMAND_MAX = 40;
+const NOTE_REASON_MAX = 30;
+
+/**
+ * 无法验证时说清哪几步没法验、为什么（t255，纯函数）：「没法验的 2 步：atrium restart（需要操作服务）、…」。
+ * 原因取输出里「无法验证：原因」那段，没写就取输出开头；至多列 NOTE_STEPS 步。没有这样的步骤为空串。
+ */
+export function unverifiableNote(steps: readonly VerifyStep[]): string {
+  const open = steps.filter((step) => step.matched === null);
+  if (!open.length) return "";
+  const cut = (text: string, max: number) => {
+    const chars = Array.from(text.replace(/\s+/g, " ").trim());
+    return chars.length > max
+      ? `${chars.slice(0, max - 1).join("")}…`
+      : chars.join("");
+  };
+  const items = open.slice(0, NOTE_STEPS).map((step) => {
+    const said = /无法验证\s*[:：]\s*([^；;。\n]+)/.exec(step.output)?.[1];
+    const reason = cut(said ?? step.output, NOTE_REASON_MAX);
+    return `${cut(step.command, NOTE_COMMAND_MAX) || "（没写命令）"}（${reason || "没写原因"}）`;
+  });
+  const more = open.length > NOTE_STEPS ? ` 等 ${open.length} 步` : "";
+  return `没法验的 ${open.length} 步：${items.join("、")}${more}`;
 }
 
 const statusText = (status: string) =>
@@ -292,8 +322,14 @@ export const VERIFY_EVENT: Record<Exclude<Verdict, "passed">, string> = {
   unverifiable: "verify_unverifiable",
 };
 
-/** 看板与状态栏只列这么久内没通过、无法验证的；之后只在 task show 里看。 */
+/** 看板与状态栏只列这么久内没通过的；之后只在 task show 里看。 */
 export const VERIFY_SHOWN_MS = 24 * 60 * 60_000;
+
+/**
+ * 无法验证的只列这么久（t255）：多半是验证执行者跑不了某几步（要重启服务、要真实凭据），不是功能坏了，
+ * 过了就和普通已结束任务一样收走；事件照投负责人，task show 里照样看得到。
+ */
+export const UNVERIFIABLE_SHOWN_MS = 60 * 60_000;
 
 /** 事件里至多附几步现象。 */
 const PHENOMENA_MAX = 5;

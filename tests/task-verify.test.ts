@@ -11,6 +11,8 @@ import type { Exec } from "../server/tasks/git.ts";
 import {
   DEFAULT_VERIFY_WORKERS,
   scrub,
+  unverifiableNote,
+  type VerifyStep,
   verdictLine,
   verifyBrief,
   verifyReport,
@@ -175,6 +177,54 @@ test("验证结果合成：步骤决定结论，执行者自报只会更严", ()
   assert.ok(scrubbed.steps[1]!.output.startsWith("*** 长"));
   assert.equal(Array.from(scrubbed.steps[1]!.output).length, 500);
   assert.ok(!scrubbed.summary.includes("abcdefghijk"));
+});
+
+test("无法验证的摘要先说哪几步没法验、为什么（t255）", () => {
+  const open = (extra: Record<string, unknown>) =>
+    step(null, extra) as VerifyStep;
+  const restart = open({
+    command: "atrium restart",
+    output: "无法验证：需要操作服务。命令行拒绝",
+  });
+  const login = open({ command: "atrium quota", output: "要真实登录" });
+  const got = report({
+    verdict: "unverifiable",
+    summary: "其余都对",
+    steps: [step(true), restart, login],
+  });
+  assert.equal(got.verdict, "unverifiable");
+  assert.equal(
+    got.summary,
+    "没法验的 2 步：atrium restart（需要操作服务）、atrium quota（要真实登录）；其余都对",
+  );
+  // 没写原因、没写命令也说得出一句；超过 3 步只列前 3 步并给总数。
+  assert.equal(
+    unverifiableNote([
+      open({ command: "", output: "" }),
+      restart,
+      restart,
+      restart,
+    ]),
+    "没法验的 4 步：（没写命令）（没写原因）、atrium restart（需要操作服务）、atrium restart（需要操作服务） 等 4 步",
+  );
+  // 长命令、长原因截短。
+  const long = unverifiableNote([
+    open({ command: "x".repeat(80), output: "长".repeat(80) }),
+  ]);
+  assert.equal(
+    long,
+    `没法验的 1 步：${"x".repeat(39)}…（${"长".repeat(29)}…）`,
+  );
+  // 没有没法验的步骤（一步没有、全符合）不加这句；没通过的不加。
+  assert.equal(unverifiableNote([step(true) as VerifyStep]), "");
+  assert.equal(
+    report({ verdict: "passed", steps: [] }).summary,
+    "verify.json 里没有步骤",
+  );
+  assert.doesNotMatch(
+    report({ steps: [step(false), restart] }).summary,
+    /没法验的/,
+  );
 });
 
 test("没写结果文件或写坏：只认汇报里的没通过，其余无法验证", () => {

@@ -13,16 +13,23 @@ import { killProcessesUnder } from "./win-processes.ts";
 const deferred = new Set<string>();
 
 // 模块加载时登记在文件级（根测试）上：用例进行中调用 after 会挂到当前用例上。
+// 服务关闭时发出的结束进程树是异步的，机器忙时可能还没结束完：删不掉就再找一轮进程、再删，最多三轮。
 after(() => {
-  for (const dir of deferred) {
-    killProcessesUnder(dir);
-    rmSync(dir, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 100,
-    });
-  }
+  for (const dir of deferred)
+    for (let round = 1; ; round++) {
+      killProcessesUnder(dir);
+      try {
+        rmSync(dir, {
+          recursive: true,
+          force: true,
+          maxRetries: 20,
+          retryDelay: 100,
+        });
+        break;
+      } catch (error) {
+        if (round >= 3) throw error;
+      }
+    }
 });
 
 export function removeTemp(path: string) {

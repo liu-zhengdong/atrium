@@ -24,12 +24,8 @@ import {
   isBatchFile,
   killTreePlan,
   launchInvocation,
-  parseWindowsProcesses,
   pathDelimiter,
   shellInvocation,
-  WINDOWS_PROCESS_LIST,
-  windowsKillInvocation,
-  windowsTreePids,
   type Invocation,
   type StopSignal,
 } from "./plan.ts";
@@ -44,52 +40,43 @@ export * from "./plan.ts";
 
 /**
  * 结束整个进程树（拉起时须 detached，Unix 上才有独立进程组）；进程已不在时静默。
- * Windows：先列全机进程圈出整棵树，再一次 `taskkill /T /F` 结束（t167）——只靠 `taskkill /T`
- * 的话，结束时已先退出的中间进程（cmd、npm 包装、测试文件进程）下面的子孙会漏掉、一直占着 CPU。
- * 列不出进程时退回按根 `taskkill /T /F`。异步执行、不阻塞事件循环；返回的 Promise 在结束命令跑完时兑现，调用方可以不等。
+ * Windows 用 `taskkill /T /F`，异步执行、不阻塞事件循环。
  */
-export function killTree(
-  pid: number,
-  signal: StopSignal = "SIGTERM",
-): Promise<void> {
+export function killTree(pid: number, signal: StopSignal = "SIGTERM") {
   const plan = killTreePlan(process.platform, pid, signal);
   if ("kind" in plan) {
     try {
       process.kill(plan.pid, signal);
     } catch {
-      signalRoot(pid, signal);
+      try {
+        process.kill(pid, signal);
+      } catch {
+        // 已退出。
+      }
     }
-    return Promise.resolve();
+    return;
   }
-  return killWindowsTree(pid, plan, signal);
-}
-
-function signalRoot(pid: number, signal: StopSignal) {
   try {
-    process.kill(pid, signal);
+    const child = spawn(plan.command, plan.args, {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        // 已退出。
+      }
+    });
+    child.unref();
   } catch {
-    // 已退出。
+    // taskkill 拉不起来时至少结束根进程。
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // 已退出。
+    }
   }
-}
-
-async function killWindowsTree(
-  pid: number,
-  fallback: Invocation,
-  signal: StopSignal,
-) {
-  let kill = fallback;
-  const listed = await runFile(
-    WINDOWS_PROCESS_LIST.command,
-    WINDOWS_PROCESS_LIST.args,
-    { timeout: 20_000, maxBuffer: 16 * 1024 * 1024 },
-  );
-  if (!listed.error)
-    kill = windowsKillInvocation(
-      windowsTreePids(parseWindowsProcesses(listed.stdout), pid),
-    );
-  const done = await runFile(kill.command, kill.args, { timeout: 30_000 });
-  // taskkill 拉不起来时至少结束根进程（有的进程已不在时 taskkill 也返回非零，照样补一下无妨）。
-  if (done.error) signalRoot(pid, signal);
 }
 
 /** 进程是否还在：无权发信号（EPERM）也算在。 */

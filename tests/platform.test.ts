@@ -26,7 +26,6 @@ import {
   killTreePlan,
   launchInvocation,
   openUrlInvocation,
-  parseWindowsProcesses,
   pathDelimiter,
   pathExtensions,
   processAlive,
@@ -38,8 +37,6 @@ import {
   HIDDEN_LAUNCHER,
   spawnShell,
   trimTrailingSeparators,
-  windowsKillInvocation,
-  windowsTreePids,
   type Platform,
 } from "../server/platform/index.ts";
 import { serviceEnvironment } from "../server/service-env.ts";
@@ -63,68 +60,6 @@ test("结束进程树：Unix 给进程组发原信号，Windows 一律 taskkill 
         });
       else assert.deepEqual(plan, { kind: "group", pid: -4321, signal });
     }
-});
-
-test("Windows 进程列表：pid、父 pid、去掉时区的创建时间，坏行跳过", () => {
-  assert.deepEqual(
-    parseWindowsProcesses(
-      [
-        "4 0 ",
-        "100 4 20260928101530.123456+480",
-        "  200 100 20260928101531.000000+480  ",
-        "x 1 20260928101530.000000+480",
-        "0 0 ",
-        "300 -1 20260928101530.000000+480",
-        "",
-      ].join("\r\n"),
-    ),
-    [
-      { pid: 4, ppid: 0, created: "" },
-      { pid: 100, ppid: 4, created: "20260928101530.123456" },
-      { pid: 200, ppid: 100, created: "20260928101531.000000" },
-    ],
-  );
-});
-
-test("Windows 进程树：先圈出全部后代再结束，父 pid 被复用的不算，根已退出照样找", () => {
-  const at = (s: number) => `202609281015${String(s).padStart(2, "0")}.000000`;
-  const procs = [
-    { pid: 10, ppid: 1, created: at(0) },
-    // 中转 → 程序 → shell → 测试进程
-    { pid: 11, ppid: 10, created: at(1) },
-    { pid: 12, ppid: 11, created: at(2) },
-    { pid: 13, ppid: 12, created: at(3) },
-    { pid: 14, ppid: 12, created: at(3) },
-    // 比「父进程」创建得早：原父进程早退了、pid 10 换了人，不是这棵树的。
-    { pid: 20, ppid: 10, created: "20260928101459.000000" },
-    { pid: 21, ppid: 20, created: at(5) },
-    // 创建时间读不到的照父子关系算。
-    { pid: 15, ppid: 13, created: "" },
-    // 别的树。
-    { pid: 30, ppid: 1, created: at(0) },
-    { pid: 31, ppid: 30, created: at(1) },
-    // 自己是自己的父、成环都不死循环。
-    { pid: 40, ppid: 40, created: at(0) },
-    { pid: 41, ppid: 42, created: at(0) },
-    { pid: 42, ppid: 41, created: at(0) },
-  ];
-  assert.deepEqual(windowsTreePids(procs, 10), [10, 11, 12, 13, 14, 15]);
-  assert.deepEqual(windowsTreePids(procs, 12), [12, 13, 14, 15]);
-  assert.deepEqual(windowsTreePids(procs, 40), [40]);
-  assert.deepEqual(windowsTreePids(procs, 41), [41, 42]);
-  // 根已退出（不在列表里）：按它的 pid 找子进程。
-  assert.deepEqual(
-    windowsTreePids(
-      procs.filter((proc) => proc.pid !== 11),
-      11,
-    ),
-    [11, 12, 13, 14, 15],
-  );
-  assert.deepEqual(windowsTreePids([], 99), [99]);
-  assert.deepEqual(windowsKillInvocation([10, 11, 12]), {
-    command: "taskkill",
-    args: ["/T", "/F", "/PID", "10", "/PID", "11", "/PID", "12"],
-  });
 });
 
 test("shell 命令：Unix /bin/sh -c，Windows cmd.exe /d /s /c 整条加引号", () => {
@@ -455,7 +390,7 @@ test("本机：结束 detached 拉起的进程树后，它们用过的工作目�
       process.kill(grandchild, "SIGKILL");
   });
   grandchild = await readNumberLine(child, "孙进程 pid");
-  await killTree(child.pid!, "SIGKILL");
+  killTree(child.pid!, "SIGKILL");
   await waitExit(child, "killTree 后子进程没有退出");
   const deadline = Date.now() + 10_000;
   while (processAlive(grandchild) && Date.now() < deadline)

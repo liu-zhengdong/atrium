@@ -8,7 +8,7 @@ import { urgentAlert, type UrgentAlert } from "../tasks/urgent.ts";
  * 设置怎么校验。全是纯函数、穷举测试；凭据文件在 store.ts，发请求在 telegram.ts，调度在 runtime.ts。
  *
  * 只推三类事：选项单等你拍板、上交到用户这层的卡住／越界（含会审要用户拍板）、里程碑上线；
- * 另加紧急任务要处理的阶段（上线、卡住、止损失败，t219）。
+ * 另加紧急任务要处理的阶段（上线、卡住、止损失败，t219）；紧急的也照常攒批、守免打扰，不插队。
  * 推送只放标题和短号，不放正文（上交说明、选项内容都不带）。
  */
 
@@ -76,13 +76,14 @@ export function pushOf(
     if (!/^c[1-9]\d*$/.test(ref)) return null;
     return titled("choice", ref, text(detail.title));
   }
-  // 紧急任务要处理的阶段（t219）：同一任务的阶段合在一条事件里，按阶段各推一次。
+  // 紧急任务要处理的阶段（t219）：同一任务同一阶段只推一次（t218）。去重键不带事件编号：
+  // 秘书确认后再报一次（如换人后又卡住）会新起一条事件，不能因此再推。
   if (event.kind === "urgent_stage") {
     const alert = urgentAlert(text(detail.event), detail);
     if (!alert || !event.task) return null;
     return {
       ...titled(alert, event.task, text(detail.title)),
-      key: `${key}:${text(detail.event)}`,
+      key: `urgent:${event.task}:${alert}`,
     };
   }
   if (event.kind === "council_escalated") {

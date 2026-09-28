@@ -57,6 +57,11 @@ const RULES: Record<string, LeaderRule> = {
   "PUT /api/memo": "self",
   "POST /api/decisions": "self",
   "POST /api/decisions/:id/supersede": "self",
+  // 整理决定（t211）：按短号找，curate.ts 判 leader 只能整理自己那份；沉淀成要点另按要点权限判。
+  "POST /api/decisions/:id/tag": "self",
+  "POST /api/decisions/:id/mark": "self",
+  "POST /api/decisions/:id/settle": "self",
+  "POST /api/decisions/:id/unsupersede": "self",
   "POST /api/leaders/:id/escalate": "escalate",
   "POST /api/patrol/findings/:id/decide": "patrol-decide",
   // 产品部提选项、项目 leader 写意见；拍板缺省是用户的事，下放后才轮到 leader（store 判）。

@@ -784,5 +784,7 @@ test("全景看得到负责人：节点页、负责人页、状态栏字段，le
 
   // 破坏输入：没登记、格式不对。
   assert.equal((await x.call("GET", "/api/map/leaders/a9")).status, 404);
-  assert.equal((await x.call("GET", "/api/map/leaders/u1")).status, 400);
+  assert.equal((await x.call("GET", "/api/map/leaders/u2")).status, 400);
+  // u1 是用户页（只有决定记录，t211）。
+  assert.equal((await x.ok("GET", "/api/map/leaders/u1")).kind, "user");
 });

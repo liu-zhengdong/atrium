@@ -7,8 +7,10 @@
 //   其他块的「专员」页签只列属于这一块的，能请的其余专员折成一行，点开是 #o4/roles/all；
 // - 专员：#r1/workers，页签是任务／谁做得好／技能；
 // - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察；
-// - 负责人（leader）：#a1/events，页签是备忘／决定记录／处理过的事／上交，决定记录可看全部（#a1/decisions/all）；
-// - 秘书：#secretary，页签是备忘／决定记录。
+// - 负责人（leader）：#a1/events，页签是备忘／决定记录／处理过的事／上交；
+// - 秘书：#secretary，页签是备忘／决定记录；用户：#u1，只有决定记录（你拍板的）。
+// 决定记录只给摘要（原则 + 最近的，t211），「全部」（#a1/decisions/all、#o2/decisions/all）现取列表、可按关键词查；
+// 块页的「决定」页签是挂在本块及上级的。
 // 当前页、页签与筛选都写在 hash 里，刷新与前进后退都回到原处。
 
 import { escapeHtml as esc, linkify, liveText } from "./format.js";
@@ -71,6 +73,7 @@ const PAGE_TABS = {
     "findings",
     "choices",
     "materials",
+    "decisions",
   ],
   role: ["tasks", "workers", "skills"],
   worker: ["deliveries", "notes"],
@@ -79,7 +82,7 @@ const PAGE_TABS = {
 const REF = {
   node: /^o[1-9]\d{0,8}$/,
   role: /^r[1-9]\d{0,8}$/,
-  leader: /^(secretary|a[1-9]\d{0,8})$/,
+  leader: /^(secretary|u1|a[1-9]\d{0,8})$/,
 };
 
 function parseRoute() {
@@ -638,6 +641,12 @@ function drawChoices({ node: n }) {
 /** 重画会换掉整页 HTML：先记下正在填的勾选与说明，画完再放回去。 */
 function formState() {
   const saved = new Map();
+  const search = document.querySelector("form[data-decision-search]");
+  if (search)
+    saved.set("decision-search", {
+      value: search.elements.q.value,
+      focused: document.activeElement === search.elements.q,
+    });
   for (const form of document.querySelectorAll("form[data-choice]"))
     saved.set(form.dataset.choice, {
       picks: [...form.querySelectorAll("input[name=pick]:checked")].map(
@@ -649,6 +658,12 @@ function formState() {
   return saved;
 }
 function restoreForms(saved) {
+  const search = document.querySelector("form[data-decision-search]");
+  const typed = saved.get("decision-search");
+  if (search && typed) {
+    search.elements.q.value = typed.value;
+    if (typed.focused) search.elements.q.focus({ preventScroll: true });
+  }
   for (const form of document.querySelectorAll("form[data-choice]")) {
     const s = saved.get(form.dataset.choice);
     if (!s) continue;
@@ -711,7 +726,7 @@ function drawPoints({ node: n }) {
       (p) => `<div class="row" role="row">
         ${cell("原则", `${ICON.point}<span>${esc(p.text)}${p.scope ? `<span class="point-scope">${scopeText(p.scope)}</span>` : ""}</span>`, " name plain")}
         ${cell("为什么", esc(p.why), " note")}
-        ${cell("谁定的", chip(who(p.by), "amber"))}
+        ${cell("谁定的", `${chip(who(p.by), "amber")}${(p.sources ?? []).length ? `<span class="muted small">出自 ${esc(p.sources.join("、"))}</span>` : ""}`)}
         ${cell("来自", p.from ? `<a href="${esc(nodeHref(p.from.ref))}">${esc(p.from.name)}</a>` : "这一块", " muted tagged")}
       </div>`,
     ),
@@ -1030,38 +1045,88 @@ function drawMemo({ leader: l }) {
     <p class="foot">${esc(at)}它每次被叫醒先读这份备忘，处理完再改写。</p>`;
 }
 
-const liveDecisions = (l) => l.decisions.filter((d) => !d.superseded_by);
+/** 决定摘要：人物页的在 leader 上，块页的在 node.decisions（本块及上级）。 */
+const digestOf = (d) =>
+  d.page === "leader"
+    ? d.leader
+    : (d.node.decisions ?? {
+        decisions: [],
+        principles: 0,
+        total: 0,
+        omitted: 0,
+      });
+/** 展开与检索：每次多看 50 条，至多 200 条，再往前按关键词查。 */
+const decisionView = { q: "", limit: 50 };
 function decisionLinks(d) {
   const links = [
     d.issue === null ? "" : chip(`#${d.issue}`, "soft"),
-    d.node ? chipLink(d.node_name ?? d.node, "soft", nodeHref(d.node)) : "",
+    ...d.nodes.map((n) => chipLink(n.name ?? n.ref, "soft", nodeHref(n.ref))),
     d.task ? chip(d.task, "soft") : "",
   ].filter(Boolean);
   return links.length ? `<span class="chips">${links.join("")}</span>` : "";
 }
-function drawDecisions({ leader: l }) {
-  const list = state.route.extra === "all" ? l.decisions : liveDecisions(l);
-  return table(
-    "decisions",
-    ["日期", "决定与原因", "谁定的", "关联"],
-    list.map((d) => {
-      const links = decisionLinks(d);
-      const fate = d.superseded_by
-        ? chip(`已被 ${d.superseded_by} 推翻`, "gray")
-        : d.supersedes.length
-          ? chip(`推翻 ${d.supersedes.join("、")}`, "amber")
-          : "";
-      return `<div class="row${d.superseded_by ? " gone" : ""}" role="row">
+function decisionRow(d, l) {
+  const links = decisionLinks(d);
+  const fate = [
+    d.principle ? chip("原则", "green") : "",
+    d.superseded_by
+      ? chip(`已被 ${d.superseded_by} 推翻`, "gray")
+      : d.supersedes.length
+        ? chip(`推翻 ${d.supersedes.join("、")}`, "amber")
+        : "",
+    d.settled_to ? chip(`已沉淀到 ${d.settled_to}`, "gray") : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const gone = d.superseded_by || d.settled_to;
+  const by = l && d.by === l.ref && l.kind === "leader" ? l.name : who(d.by);
+  return `<div class="row${gone ? " gone" : ""}" role="row">
         ${cell("日期", `${esc(d.date.slice(5))}<span class="task-ref">${esc(d.ref)}</span>`, " muted date")}
         ${cell("决定与原因", `<span class="decision">${esc(d.text)}${fate ? ` ${fate}` : ""}</span><span class="why">${esc(d.why)}</span>`, " body")}
-        ${cell("谁定的", chip(d.by === l.ref && !isSecretary(l) ? l.name : who(d.by), "amber"))}
+        ${cell("谁定的", chip(by, "amber"))}
         ${cell("关联", links || none, links ? "" : " none")}
       </div>`;
-    }),
-    state.route.extra !== "all" && l.decisions.length
-      ? "有效的决定都没了（都被推翻了），切到「全部」看历史。"
-      : "还没有决定记录。在终端用 atrium decision add 记下取舍与原因。",
-  );
+}
+const DECISION_HEADS = ["日期", "决定与原因", "谁定的", "关联"];
+function drawDecisions(d) {
+  const l = d.page === "leader" ? d.leader : null;
+  const at = l ? l.ref : d.node.ref;
+  if (state.route.extra === "all") return drawDecisionPage(d, l);
+  const g = digestOf(d);
+  const all = href(d.page, at, "decisions", "all");
+  const foot = g.omitted
+    ? `<p class="foot">摘要只列标了原则的和最近的，另有 ${g.omitted} 条。<a href="${esc(all)}">看全部、按关键词查</a></p>`
+    : g.total
+      ? `<p class="foot">标了原则的全列，再加最近的；已推翻、已沉淀成原则的在<a href="${esc(all)}">全部</a>里。</p>`
+      : "";
+  return `${table(
+    "decisions",
+    DECISION_HEADS,
+    g.decisions.map((x) => decisionRow(x, l)),
+    l
+      ? "还没有有效的决定。在终端用 atrium decision add 记下取舍与原因。"
+      : "还没有挂在这一块或上级的决定。在终端用 atrium decision tag dN --node 节点 挂上来。",
+  )}${foot}`;
+}
+function drawDecisionPage(d, l) {
+  const p = d.decisionPage;
+  const q = decisionView.q;
+  const form = `<form class="decision-search" data-decision-search role="search">
+      <input name="q" type="search" placeholder="按关键词查（决定与原因，空格隔开须全部命中）" value="${esc(q)}" maxlength="200" aria-label="关键词">
+      <button type="submit">查</button>${q ? `<button type="button" data-decision-clear>清掉</button>` : ""}
+    </form>`;
+  if (!p) return `${form}<p class="empty">正在读取…</p>`;
+  const more = p.next_before
+    ? decisionView.limit < 200
+      ? `<p class="foot"><button type="button" class="more-button" data-decision-more>再看 50 条</button></p>`
+      : `<p class="foot">更早的请按关键词查。</p>`
+    : "";
+  return `${form}${table(
+    "decisions",
+    DECISION_HEADS,
+    p.decisions.map((x) => decisionRow(x, l)),
+    q ? `没有含「${q}」的决定。` : "还没有决定记录。",
+  )}${more}`;
 }
 
 const EVENT_STATE = {
@@ -1186,7 +1251,7 @@ const TABS = {
   memo: { label: "备忘", count: () => null, draw: drawMemo },
   decisions: {
     label: "决定记录",
-    count: (d) => liveDecisions(d.leader).length,
+    count: (d) => digestOf(d).total,
     draw: drawDecisions,
   },
   events: {
@@ -1205,9 +1270,13 @@ function tabsOf(d) {
   if (d.page === "role") return ["tasks", "workers", "skills"];
   if (d.page === "worker") return ["deliveries", "notes"];
   if (d.page === "leader")
-    return isSecretary(d.leader)
-      ? ["memo", "decisions"]
-      : ["memo", "decisions", "events", "escalations"];
+    return d.leader.kind === "user"
+      ? ["decisions"]
+      : isSecretary(d.leader)
+        ? ["memo", "decisions"]
+        : ["memo", "decisions", "events", "escalations"];
+  const decided =
+    digestOf(d).total || state.route.tab === "decisions" ? ["decisions"] : [];
   if (d.org)
     return [
       "parts",
@@ -1219,6 +1288,7 @@ function tabsOf(d) {
       "points",
       "findings",
       ...((d.node.materials ?? []).length ? ["materials"] : []),
+      ...decided,
     ];
   return [
     "parts",
@@ -1228,10 +1298,15 @@ function tabsOf(d) {
     "points",
     "findings",
     ...((d.node.materials ?? []).length ? ["materials"] : []),
+    ...decided,
   ];
 }
 const tabLabel = (d, id) =>
-  d.page === "role" && id === "workers" ? "谁做得好" : TABS[id].label;
+  d.page === "role" && id === "workers"
+    ? "谁做得好"
+    : d.page === "node" && id === "decisions"
+      ? "决定"
+      : TABS[id].label;
 
 // ---- 页头：小字类别、标题、属性行、介绍 ----
 
@@ -1262,6 +1337,15 @@ const chips = (list, empty) =>
     : `<span class="muted">${esc(empty)}</span>`;
 
 function heading(d) {
+  if (d.page === "leader" && d.leader.kind === "user")
+    return {
+      kind: "用户",
+      name: "你",
+      props: "",
+      intro: [
+        "你拍板的决定：秘书和负责人转记的「u1 定」都记在这里，和它们自己的取舍分开。标了原则的全列，再加最近的；全部可按关键词查。",
+      ],
+    };
   if (d.page === "leader" && isSecretary(d.leader))
     return {
       kind: "秘书",
@@ -1380,7 +1464,10 @@ function heading(d) {
   // 组织根另给「秘书」一行，点开是秘书的备忘与决定记录。
   const people = [
     ...(d.org
-      ? [["秘书", chipLink("秘书", "leader", leaderHref("secretary"))]]
+      ? [
+          ["秘书", chipLink("秘书", "leader", leaderHref("secretary"))],
+          ["你的决定", chipLink("你拍板的", "leader", leaderHref("u1"))],
+        ]
       : []),
     ...(n.lead ? [["负责人", leadProp(n.lead)]] : []),
     // 管方面的部分（安全、性能…）：它的要点缺省适用于哪几块。
@@ -1410,13 +1497,15 @@ function crumbsOf() {
     return d.node.chain.map((c) => ({ name: title(c), url: nodeHref(c.ref) }));
   const top = root ? [{ name: root.name, url: nodeHref(root.ref) }] : [];
   if (d.page === "leader")
-    return isSecretary(d.leader)
-      ? [...top, { name: "秘书" }]
-      : [
-          ...top,
-          { name: "负责人", url: nodeHref(root?.ref, "leaders") },
-          { name: d.leader.name },
-        ];
+    return d.leader.kind === "user"
+      ? [...top, { name: "你" }]
+      : isSecretary(d.leader)
+        ? [...top, { name: "秘书" }]
+        : [
+            ...top,
+            { name: "负责人", url: nodeHref(root?.ref, "leaders") },
+            { name: d.leader.name },
+          ];
   return d.page === "role"
     ? [
         ...top,
@@ -1546,7 +1635,7 @@ function pageHtml() {
         ]
       : tab === "decisions"
         ? [
-            ["", "有效"],
+            ["", "摘要"],
             ["all", "全部"],
           ]
         : tab === "workers" && d.org && d.org.roles.length
@@ -1615,8 +1704,21 @@ function fail(error) {
   draw();
 }
 
-/** 取一页的数据；组织根另带专员、技能、执行者。 */
+/** 取一页的数据；在看决定的「全部」时另取列表（关键词、条数在 decisionView）。 */
 async function fetchPage(route, key) {
+  const data = await fetchBase(route, key);
+  if (route.tab !== "decisions" || route.extra !== "all") return data;
+  const query = new URLSearchParams({
+    of: key,
+    all: "1",
+    limit: String(decisionView.limit),
+  });
+  if (decisionView.q) query.set("q", decisionView.q);
+  return { ...data, decisionPage: await get(`/decisions?${query}`) };
+}
+
+/** 取一页的数据；组织根另带专员、技能、执行者。 */
+async function fetchBase(route, key) {
   if (route.page === "role")
     return {
       page: "role",
@@ -1752,12 +1854,34 @@ function subscribe() {
   };
 }
 
-window.addEventListener("hashchange", () => load(true).catch(fail));
+window.addEventListener("hashchange", () => {
+  decisionView.q = "";
+  decisionView.limit = 50;
+  load(true).catch(fail);
+});
 $("page").addEventListener("submit", (event) => {
+  const search = event.target.closest("form[data-decision-search]");
+  if (search) {
+    event.preventDefault();
+    decisionView.q = search.elements.q.value.trim();
+    decisionView.limit = 50;
+    load().catch(fail);
+    return;
+  }
   const form = event.target.closest("form[data-choice]");
   if (!form) return;
   event.preventDefault();
   decide(form, event.submitter?.value === "pass" ? "pass" : "pick");
+});
+$("page").addEventListener("click", (event) => {
+  if (event.target.closest("[data-decision-more]")) {
+    decisionView.limit = Math.min(200, decisionView.limit + 50);
+    load().catch(fail);
+  } else if (event.target.closest("[data-decision-clear]")) {
+    decisionView.q = "";
+    decisionView.limit = 50;
+    load().catch(fail);
+  }
 });
 await refresh();
 if (state.mode !== "expired") subscribe();

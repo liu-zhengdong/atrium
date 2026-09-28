@@ -33,6 +33,7 @@ export type PointRow = {
   updated_by: string;
   updated_at: number;
   applies?: string | null;
+  sources?: string | null;
 };
 export type Point = {
   ref: string;
@@ -43,6 +44,8 @@ export type Point = {
   check: string | null;
   /** 管方面的部分的要点适用于哪些部分（oN）；null 为跟随节点（缺省整个上级）。 */
   applies: string[] | null;
+  /** 从哪几条决定沉淀来的（dN，decision settle 写入）。 */
+  sources: string[];
   updated_by: string;
   updated_at: number;
 };
@@ -55,7 +58,15 @@ export function ensurePointTables(db: DatabaseSync) {
     text TEXT NOT NULL, why TEXT NOT NULL, decided_by TEXT NOT NULL,
     check_ref TEXT, updated_by TEXT NOT NULL, updated_at INTEGER NOT NULL);
   CREATE INDEX IF NOT EXISTS org_points_node ON org_points(node_id,pos,id);`);
+  const has = (
+    db.prepare("PRAGMA table_info(org_points)").all() as { name: string }[]
+  ).some((c) => c.name === "sources");
+  if (!has) db.exec("ALTER TABLE org_points ADD COLUMN sources TEXT");
 }
+
+/** 来源短号表（逗号分隔的 dN）；坏数据当没有。 */
+const sourcesOf = (value: string | null | undefined) =>
+  (value ?? "").split(",").filter((s) => /^d[1-9][0-9]*$/.test(s));
 
 export const pointRef = (id: number) => `k${id}`;
 const view = (row: PointRow): Point => ({
@@ -66,6 +77,7 @@ const view = (row: PointRow): Point => ({
   by: row.decided_by,
   check: row.check_ref,
   applies: appliesRefs(row.applies),
+  sources: sourcesOf(row.sources),
   updated_by: row.updated_by,
   updated_at: row.updated_at,
 });
@@ -252,6 +264,31 @@ export function editPoint(
       Date.now(),
       row.id,
     );
+    return view(
+      one<PointRow>(db, "SELECT * FROM org_points WHERE id=?", row.id)!,
+    );
+  });
+}
+
+/**
+ * 决定沉淀到这条要点（decision settle）：记来源 dN，权限同改要点。已记过的不重复；
+ * 来源至多留 20 条，满了不再追加（决定那边照样标已沉淀）。
+ */
+export function addPointSource(
+  db: DatabaseSync,
+  reference: string,
+  decision: string,
+  actor: string,
+): Point {
+  return transaction(db, () => {
+    const row = requirePoint(db, reference);
+    authorize(db, nodeByAddress(db, ref(row.node_id)), actor);
+    const sources = sourcesOf(row.sources);
+    if (!sources.includes(decision) && sources.length < 20)
+      db.prepare("UPDATE org_points SET sources=? WHERE id=?").run(
+        [...sources, decision].join(","),
+        row.id,
+      );
     return view(
       one<PointRow>(db, "SELECT * FROM org_points WHERE id=?", row.id)!,
     );

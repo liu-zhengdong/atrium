@@ -1,13 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { all, one } from "../org/model.ts";
+import {
+  LOCAL_USER as USER,
+  SECRETARY as SECRETARY_OWNER,
+} from "../../shared/user.ts";
 
 /**
- * 固定身份（秘书 secretary、leader aN）的备忘与决定记录的存储（#355 状态统一，t97）。
+ * 固定身份（用户 u1、秘书 secretary、leader aN）的备忘与决定记录的存储（#355 状态统一，t97）。
  * - 备忘：每位一份，覆盖写、有上限，写「在等什么、下次先看什么」这类当前状态；
  *   leader 的 `leader edit --memo` 与 `memo edit --as aN` 写同一行。
  * - 决定记录：追加式，短号 dN 全局持久、不复用（AUTOINCREMENT），被推翻的指向新决定。
- * 这里只管建表与读写备忘；身份解析在 owner.ts，决定记录在 decisions.ts。
+ *   用户拍板的（decided_by='u1'）记在用户自己那份（owner='u1'），秘书、leader 的只放各自的（t211）。
+ *   可挂多个节点（decision_nodes）、标「原则」、沉淀成要点（settled_point）；撤销推翻等改动记在 decision_changes。
+ * 这里只管建表与读写备忘；决定记录的读写在 decisions.ts、curate.ts，摘要在 digest.ts。
  */
 
 /** 备忘是跨唤醒、跨会话的连续性；有上限，超了让写的人精简，不静默截断。 */
@@ -29,7 +35,42 @@ export function ensureMemoTables(db: DatabaseSync) {
     superseded_by INTEGER, superseded_at INTEGER,
     created_at INTEGER NOT NULL);
   CREATE INDEX IF NOT EXISTS decisions_owner ON decisions(owner,superseded_by,decided_on,id);
-  CREATE INDEX IF NOT EXISTS decisions_superseded ON decisions(superseded_by);`);
+  CREATE INDEX IF NOT EXISTS decisions_superseded ON decisions(superseded_by);
+  CREATE TABLE IF NOT EXISTS decision_nodes (
+    decision_id INTEGER NOT NULL,
+    node_id INTEGER NOT NULL,
+    PRIMARY KEY(decision_id,node_id));
+  CREATE INDEX IF NOT EXISTS decision_nodes_node ON decision_nodes(node_id,decision_id);
+  CREATE TABLE IF NOT EXISTS decision_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    why TEXT NOT NULL,
+    detail TEXT,
+    created_at INTEGER NOT NULL);
+  CREATE INDEX IF NOT EXISTS decision_changes_decision ON decision_changes(decision_id,id);`);
+  const columns = new Set(
+    (
+      db.prepare("PRAGMA table_info(decisions)").all() as { name: string }[]
+    ).map((c) => c.name),
+  );
+  if (!columns.has("principle"))
+    db.exec(
+      "ALTER TABLE decisions ADD COLUMN principle INTEGER NOT NULL DEFAULT 0",
+    );
+  if (!columns.has("settled_point"))
+    db.exec("ALTER TABLE decisions ADD COLUMN settled_point INTEGER");
+  if (!columns.has("settled_at"))
+    db.exec("ALTER TABLE decisions ADD COLUMN settled_at INTEGER");
+  // 早先一条决定只挂一个节点（node_id 列）：搬进 decision_nodes，之后只读写那张表（幂等）。
+  db.exec(
+    "INSERT OR IGNORE INTO decision_nodes(decision_id,node_id) SELECT id,node_id FROM decisions WHERE node_id IS NOT NULL",
+  );
+  // 用户拍板的早先记在秘书那份：迁到用户自己那份，短号不变（幂等；新记的由 recordOf 直接归到 u1）。
+  db.exec(
+    `UPDATE decisions SET owner='${USER}' WHERE owner='${SECRETARY_OWNER}' AND decided_by='${USER}'`,
+  );
   // 早先 leader 备忘存在 org_leaders.memo：没迁过的搬过来，之后以 memos 为准（幂等）。
   const legacy = one(
     db,

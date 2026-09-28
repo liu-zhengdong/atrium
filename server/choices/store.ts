@@ -767,7 +767,11 @@ export function decideChoice(
           now,
         );
         mark.run(0, null, parseInt(decision.ref.slice(1), 10), id, option.seq);
-        decisions.push({ ref: decision.ref, option: option.seq, owner });
+        decisions.push({
+          ref: decision.ref,
+          option: option.seq,
+          owner: decision.owner,
+        });
       }
     }
     db.prepare(

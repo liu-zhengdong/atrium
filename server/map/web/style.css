@@ -1014,6 +1014,34 @@ label.option-head {
   opacity: 0.5;
   cursor: default;
 }
+/* 决定记录「全部」页的检索框与「再看 50 条」（t211）。 */
+.decision-search {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 12px;
+}
+.decision-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--body);
+  font: inherit;
+  font-size: 14px;
+}
+.decision-search button,
+.more-button {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
 .choice-error {
   font-size: 13px;
   color: #b42318;

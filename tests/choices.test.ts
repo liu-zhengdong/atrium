@@ -845,8 +845,8 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
       d.owner,
     ]),
     [
-      [2, "a2"],
-      [4, "a2"],
+      [2, "u1"],
+      [4, "u1"],
     ],
   );
   const task = x.db
@@ -860,7 +860,13 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.match(task.brief, /用户说明：选项2等额度宽裕再说/);
   assert.match(task.brief, /- 能多做到什么：能多做到1/);
   assert.match(task.brief, /- 秘书：先做看板（倾向选项 1）；补依据：f3/);
-  const decisions = await x.ok("GET", "/api/decisions?as=a2");
+  // 用户拍板的记进用户那份（t211），挂在选项单的节点上，a2 的摘要里照样看得到。
+  const decisions = await x.ok("GET", "/api/decisions?as=u1");
+  assert.ok(
+    (await x.ok("GET", "/api/memo?as=a2")).decisions.some(
+      (d: { ref: string }) => d.ref === picked.decisions[0].ref,
+    ),
+  );
   const skipped = decisions.decisions.find(
     (d: { ref: string }) => d.ref === picked.decisions[0].ref,
   );
@@ -918,7 +924,7 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.equal(conflict.status, 409);
   assert.match(conflict.body.error, /c1 已经拍过板了/);
 
-  // 这轮都不要：OQ 没有 leader，决定记到秘书名下。
+  // 这轮都不要：用户拍板的，记进用户那份（t211）。
   const passed = await x.ok("POST", "/api/choices/c2/pass", {
     note: "这周先收尾",
   });
@@ -926,7 +932,7 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.equal(passed.tasks.length, 0);
   assert.deepEqual(
     passed.decisions.map((d: { owner: string }) => d.owner),
-    ["secretary", "secretary", "secretary"],
+    ["u1", "u1", "u1"],
   );
   assert.equal((await x.ok("GET", "/api/tasks/top")).choices, undefined);
   assert.equal((await x.ok("GET", "/api/map/now")).choices.open, 0);

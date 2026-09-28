@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { all, one } from "../org/model.ts";
+import { all, nodeByAddress, nodes, one } from "../org/model.ts";
 import {
   listLeaders,
   showLeader,
@@ -8,7 +8,13 @@ import {
 } from "../leaders/model.ts";
 import { eventWord } from "../leaders/wake.ts";
 import { peopleNames, personOf, type Person } from "./who.ts";
-import { listDecisions, PAGE_MAX, type Decision } from "../memos/decisions.ts";
+import {
+  nodeChain,
+  ownerDigest,
+  ownerScope,
+  type DecisionDigest,
+} from "../memos/digest.ts";
+import { listDecisions, parseLimit, searchTerms } from "../memos/decisions.ts";
 import { readMemo, MEMO_MAX } from "../memos/store.ts";
 
 /**
@@ -51,12 +57,14 @@ export type MapLeaderRow = {
   /** 投给它、还没处理的事（不含过程通知）。 */
   pending: number;
 };
-/** 备忘与决定记录：秘书页与负责人页共用；决定含已推翻的（网页自己筛有效／全部）。 */
-type MemoPart = {
+/**
+ * 备忘与决定记录：用户页、秘书页与负责人页共用。决定只给摘要（原则 + 最近的，t211），
+ * 全部与检索走 /api/map/decisions。
+ */
+type MemoPart = DecisionDigest & {
   memo: string;
   memo_max: number;
   memo_updated_at: number | null;
-  decisions: Decision[];
 };
 export type MapLeader = MapLeaderRow &
   MemoPart & {
@@ -65,8 +73,8 @@ export type MapLeader = MapLeaderRow &
     escalations: MapEscalation[];
   };
 export type MapSecretary = MemoPart & {
-  kind: "secretary";
-  ref: "secretary";
+  kind: "secretary" | "user";
+  ref: "secretary" | "u1";
   name: string;
 };
 
@@ -274,12 +282,11 @@ function memoPart(db: DatabaseSync, owner: string): MemoPart {
     memo: memo.body,
     memo_max: MEMO_MAX,
     memo_updated_at: memo.updated_at,
-    decisions: listDecisions(db, owner, { all: true, limit: PAGE_MAX })
-      .decisions,
+    ...ownerDigest(db, owner),
   };
 }
 
-/** 秘书页与负责人页：secretary 是秘书；aN 没登记时 404（与 leader show 同一个报错）。 */
+/** 用户页、秘书页与负责人页：u1 是用户，secretary 是秘书；aN 没登记时 404（与 leader show 同一个报错）。 */
 export function mapLeader(
   db: DatabaseSync,
   reference: string,
@@ -291,6 +298,8 @@ export function mapLeader(
       name: "秘书",
       ...memoPart(db, "secretary"),
     };
+  if (reference === "u1")
+    return { kind: "user", ref: "u1", name: "你", ...memoPart(db, "u1") };
   const view = showLeader(db, reference);
   const names = peopleNames(db);
   const inbox = hasInbox(db);
@@ -300,5 +309,31 @@ export function mapLeader(
     ...memoPart(db, view.ref),
     events: inbox ? events(db, view.ref, names) : [],
     escalations: inbox ? escalations(db, view.ref, names) : [],
+  };
+}
+
+/**
+ * 网页的「展开」与「检索」：of 是 u1、secretary、aN（与摘要同一范围）或 oN（本块及上级）；
+ * q 给了按关键词检索；all 连已推翻、已沉淀的一起列；before 接着上一页往下。
+ */
+export function mapDecisions(
+  db: DatabaseSync,
+  query: Record<string, string | undefined>,
+) {
+  const of = (query.of ?? "").trim();
+  let scope;
+  if (/^o[1-9][0-9]{0,8}$/.test(of))
+    scope = nodeChain(db, nodeByAddress(db, of).id);
+  else if (of === "u1" || of === "secretary") scope = ownerScope(of, nodes(db));
+  else scope = ownerScope(showLeader(db, of).ref, nodes(db));
+  const terms = query.q?.trim() ? searchTerms(query.q) : undefined;
+  return {
+    of,
+    ...listDecisions(db, scope, {
+      all: query.all === "1",
+      before: query.before,
+      limit: parseLimit(query.limit),
+      terms,
+    }),
   };
 }

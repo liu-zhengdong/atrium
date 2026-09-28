@@ -71,6 +71,7 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     )
     .map(({ method, url }) => `${method} ${url}`);
   assert.deepEqual(exceptions.sort(), [
+    "GET /api/map/decisions",
     "GET /api/map/leaders",
     "GET /api/map/leaders/:id",
     "GET /api/map/nodes/:id",

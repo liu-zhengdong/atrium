@@ -39,6 +39,7 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
   assert.deepEqual(prefixes.sort(), [
     "agent",
     "auth",
+    "choices",
     "decisions",
     "events",
     "goals",
@@ -48,6 +49,7 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "memo",
     "org",
     "patrol",
+    "product",
     "quota",
     "reviews",
     "roles",
@@ -58,7 +60,7 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "tasks",
     "workers",
   ]);
-  // 全景网页（#322）的页面与只读接口另认本机会话；远程主机的代理接口（#358）认接入码或主机令牌；其余一律要用户凭据。
+  // 全景网页（#322）的页面与只读接口另认本机会话，拍板选项单另认同源会话；远程主机的代理接口（#358）认接入码或主机令牌；其余一律要用户凭据。
   const exceptions = routes
     .filter(
       ({ method, url }) =>
@@ -94,6 +96,8 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "POST /api/agent/quota",
     "POST /api/agent/reply",
     "POST /api/auth/rotate",
+    "POST /api/choices/:id/pass",
+    "POST /api/choices/:id/pick",
   ]);
   for (const { method, url } of routes) {
     const response = await app.inject({

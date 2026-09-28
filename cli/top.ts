@@ -13,6 +13,7 @@ import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
 import type { HostView } from "../server/tasks/host-load.ts";
 import type { Holder } from "../server/tasks/holder.ts";
+import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -95,6 +96,8 @@ export type Snapshot = {
     wake: LeaderWake | null;
     events: number;
   }[];
+  /** 等用户拍板的选项单（产品部）；没有时不给，旧版服务也没有。 */
+  choices?: { open: number; list: PendingChoice[] };
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
   plan?: PlanView | null;
   plan_error?: string;
@@ -346,8 +349,12 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
     ` · 卡住 ${snapshot.counts.blocked}` +
     ` · 未处理事件 ${snapshot.counts.events}`;
   const headRoom = Math.max(10, frame.width - width(clock) - 1);
+  const choice = snapshot.choices
+    ? pendingLine(snapshot.choices.list, snapshot.choices.open)
+    : null;
   const lines = [
     pad(oneLine(head, headRoom), headRoom) + clock,
+    ...(choice ? [oneLine(choice, frame.width)] : []),
     ...rows.flatMap((row, index) => {
       // 原因再长也不能顶出屏幕：状态列的上限是它自己的宽度加最近动作那段的空位。
       const cell = oneLine(states[index]!, plan.stateW + 2 + plan.actionW);

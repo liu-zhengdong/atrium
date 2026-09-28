@@ -29,6 +29,7 @@ import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
+import { registerChoiceRoutes } from "./choices/routes.ts";
 import { registerHostRoutes } from "./hosts/routes.ts";
 import {
   LeaderWaker,
@@ -207,8 +208,17 @@ export async function createApp(options: {
       return;
     }
     const policy = authPolicy(request.method, route);
+    // 网页拍板选项单：本机会话也行，但必须是同源页面发起的（有 Origin，上面已核对与 Host 一致）。
+    if (policy === "map-write") {
+      if (
+        isLoopback(request.socket.remoteAddress) &&
+        request.headers.origin &&
+        mapLogin.valid(request.headers.cookie)
+      )
+        return;
+    }
     // 全景网页（#322）：只接受本机连接；页面认会话 cookie，只读接口令牌或会话都行，一次性链接由路由自己校验。
-    if (policy.startsWith("map-")) {
+    else if (policy.startsWith("map-")) {
       if (!isLoopback(request.socket.remoteAddress)) throw notLocal();
       if (policy === "map-login") return;
       if (mapLogin.valid(request.headers.cookie)) return;
@@ -282,6 +292,8 @@ export async function createApp(options: {
   importLegacyState(db, { legacyDir: options.legacyDir });
   registerLeaderRoutes(app, db, taskRunner.inbox);
   registerMemoRoutes(app, db);
+  // 选项单的表要在全景变更检测挂触发器（registerMapRoutes）之前建好。
+  registerChoiceRoutes(app, db, taskRunner.inbox);
   const leaderWaker = new LeaderWaker(db, taskRunner.inbox, leaderTokens, {
     data: resolve(options.data),
     env: options.tasks?.env,

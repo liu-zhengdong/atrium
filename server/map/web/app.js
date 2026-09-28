@@ -1,7 +1,8 @@
-// Atrium 全景网页：只读。数据来自与 `atrium map --json` 相同的接口，
-// 订阅 /api/map/stream 的失效通知，变了只重取并重画，不整页重载。
+// Atrium 全景网页：只读，唯一能写的是拍板选项单（「选项」页签，POST /api/choices/cN/pick|pass）。
+// 数据来自与 `atrium map --json` 相同的接口，订阅 /api/map/stream 的失效通知，变了只重取并重画，不整页重载。
 // 一页一件东西：面包屑 → 小字类别、大标题、属性行与介绍 → 页签。三类页：
-// - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／负责人／专员／技能／执行者／原则，执行者可按专员筛（#o1/workers/r1）；
+// - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／选项／负责人／专员／技能／执行者／原则，执行者可按专员筛（#o1/workers/r1）；
+//   有选项单的块多一个「选项」页签（本块及下层产品部的，等你拍板的在前）；组织根顶部有「等你拍板：N」入口；
 //   其他块的「专员」页签只列属于这一块的，能请的其余专员折成一行，点开是 #o4/roles/all；
 // - 专员：#r1/workers，页签是任务／谁做得好／技能；
 // - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察；
@@ -67,6 +68,7 @@ const PAGE_TABS = {
     "workers",
     "points",
     "findings",
+    "choices",
   ],
   role: ["tasks", "workers", "skills"],
   worker: ["deliveries", "notes"],
@@ -459,6 +461,180 @@ function drawFindings({ node: n }) {
     }),
     "还没有巡检发现。",
   );
+}
+
+// ---- 选项：产品部提的选项单，等你拍板的在前；拍板是网页唯一能写的地方 ----
+
+const CHOICE_STATUS = {
+  open: ["等你拍板", "amber"],
+  picked: ["已拍板", "blue"],
+  passed: ["这轮都不要", "gray"],
+};
+const OPTION_FACTS = [
+  ["gain", "能多做到"],
+  ["why_now", "为什么现在"],
+  ["cost", "代价"],
+  ["skip", "不做会怎样"],
+];
+const openChoices = (n) => (n.choices ?? []).filter((c) => c.status === "open");
+
+function optionHtml(c, o, open) {
+  const recommended = c.recommend.includes(o.seq);
+  const fate =
+    o.picked === true
+      ? chip(`已选 · ${o.task}`, "green")
+      : o.picked === false
+        ? chip(`没选 · 记为 ${o.decision}`, "gray")
+        : "";
+  const head = `<span class="option-seq">${o.seq}</span><span class="option-title">${esc(o.title)}</span>${recommended ? chip("推荐", "purple") : ""}${fate}`;
+  const facts = OPTION_FACTS.map(
+    ([key, label]) =>
+      `<div class="option-fact"><dt>${esc(label)}</dt><dd>${esc(o[key])}</dd></div>`,
+  ).join("");
+  const basis = o.basis.length
+    ? `<div class="option-fact"><dt>依据</dt><dd>${o.basis.map(linkify).join("；")}</dd></div>`
+    : "";
+  return `<li class="choice-option${o.picked === true ? " picked" : ""}">
+    ${
+      open
+        ? `<label class="option-head"><input type="checkbox" name="pick" value="${o.seq}">${head}</label>`
+        : `<div class="option-head">${head}</div>`
+    }
+    <dl class="option-facts">${facts}${basis}</dl>
+  </li>`;
+}
+
+function choiceHtml(c, here) {
+  const [label, tone] = CHOICE_STATUS[c.status] ?? [c.status, "gray"];
+  const open = c.status === "open";
+  const where =
+    c.node !== here
+      ? `<a href="${esc(nodeHref(c.node, "choices"))}">${esc(c.node_alias || c.node_name)}</a>`
+      : "";
+  const decider = (by) => (!by || by === "u1" ? "你" : esc(by));
+  const handed = open && c.decider && c.decider !== "u1";
+  const meta = [
+    `${who(c.created_by)}提于 ${clock(c.created_at)}`,
+    c.task ? `出自 ${esc(c.task)}` : "",
+    c.decided_at ? `${decider(c.decided_by)}拍板于 ${clock(c.decided_at)}` : "",
+    handed ? `拍板权已下放给 ${esc(c.decider)}，你也可以直接拍` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const options = `<ol class="choice-options">${c.options.map((o) => optionHtml(c, o, open)).join("")}</ol>`;
+  const comments = (c.comments ?? []).length
+    ? `<div class="choice-comments"><span class="choice-label">意见</span><ul>${c.comments
+        .map((m) => {
+          const prefer = m.prefer?.length
+            ? `（倾向选项 ${m.prefer.join("、")}）`
+            : "";
+          const basis = m.basis?.length
+            ? `；补依据：${m.basis.map(linkify).join("；")}`
+            : "";
+          return `<li><strong>${esc(who(m.by))}</strong>：${esc(m.text)}${prefer}${basis}</li>`;
+        })
+        .join("")}</ul></div>`
+    : "";
+  const recommend = `<p class="choice-recommend"><span class="choice-label">产品部推荐</span>选项 ${c.recommend.join("、")}——${esc(c.why)}</p>${comments}`;
+  const body = open
+    ? `<form class="choice-form" data-choice="${esc(c.ref)}">
+        ${options}
+        ${recommend}
+        <label class="choice-note"><span class="choice-label">说明（可不写）</span>
+          <textarea name="note" rows="2" maxlength="1000" placeholder="为什么选这些、为什么不要那些；没选的会连同这句记进决定记录，下一轮产品部读得到"></textarea>
+        </label>
+        <div class="choice-actions">
+          <button type="submit" value="pick">做勾选的</button>
+          <button type="submit" value="pass" class="secondary">这轮都不要</button>
+          <span class="choice-error" role="alert"></span>
+        </div>
+      </form>`
+    : `${options}${recommend}${c.note ? `<p class="choice-recommend"><span class="choice-label">${decider(c.decided_by)}的说明</span>${esc(c.note)}</p>` : ""}`;
+  return `<article class="choice" id="choice-${esc(c.ref)}" data-status="${esc(c.status)}">
+    <header class="choice-head">
+      <span class="task-ref">${esc(c.ref)}</span>
+      <h2>${esc(c.title)}</h2>
+      <span class="chips">${chip(label, tone)}</span>
+      ${where ? `<span class="choice-from">来自${where}</span>` : ""}
+    </header>
+    <p class="choice-meta muted small">${meta}</p>
+    ${body}
+  </article>`;
+}
+
+function drawChoices({ node: n }) {
+  const list = n.choices ?? [];
+  return list.length
+    ? `<div class="choices">${list.map((c) => choiceHtml(c, n.ref)).join("")}</div>`
+    : `<p class="empty">这一块还没有选项单。产品部调研后会把下一步的几个方向列在这里，等你拍板。</p>`;
+}
+
+/** 重画会换掉整页 HTML：先记下正在填的勾选与说明，画完再放回去。 */
+function formState() {
+  const saved = new Map();
+  for (const form of document.querySelectorAll("form[data-choice]"))
+    saved.set(form.dataset.choice, {
+      picks: [...form.querySelectorAll("input[name=pick]:checked")].map(
+        (i) => i.value,
+      ),
+      note: form.elements.note.value,
+      focused: document.activeElement === form.elements.note,
+    });
+  return saved;
+}
+function restoreForms(saved) {
+  for (const form of document.querySelectorAll("form[data-choice]")) {
+    const s = saved.get(form.dataset.choice);
+    if (!s) continue;
+    for (const input of form.querySelectorAll("input[name=pick]"))
+      input.checked = s.picks.includes(input.value);
+    form.elements.note.value = s.note;
+    if (s.focused) form.elements.note.focus({ preventScroll: true });
+  }
+}
+
+async function decide(form, action) {
+  const ref = form.dataset.choice;
+  const error = form.querySelector(".choice-error");
+  const picks = [...form.querySelectorAll("input[name=pick]:checked")].map(
+    (i) => Number(i.value),
+  );
+  if (action === "pick" && !picks.length) {
+    error.textContent = "先勾选要做的选项；都不要就点「这轮都不要」。";
+    return;
+  }
+  const note = form.elements.note.value.trim();
+  error.textContent = "";
+  for (const button of form.querySelectorAll("button")) button.disabled = true;
+  try {
+    const response = await fetch(
+      `/api/choices/${encodeURIComponent(ref)}/${action}`,
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(
+          action === "pick"
+            ? { picks, ...(note ? { note } : {}) }
+            : note
+              ? { note }
+              : {},
+        ),
+      },
+    );
+    if (response.status === 401) throw new Expired();
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    await refresh();
+  } catch (e) {
+    if (e instanceof Expired) return fail(e);
+    error.textContent = `没拍成：${e.message}`;
+    for (const button of form.querySelectorAll("button"))
+      button.disabled = false;
+  }
 }
 
 function drawPoints({ node: n }) {
@@ -916,6 +1092,11 @@ const TABS = {
     count: (d) => allFindings(d.node).length,
     draw: drawFindings,
   },
+  choices: {
+    label: "选项",
+    count: (d) => openChoices(d.node).length || null,
+    draw: drawChoices,
+  },
   deliveries: {
     label: "交付记录",
     count: (d) => d.worker.deliveries.length,
@@ -959,6 +1140,7 @@ function tabsOf(d) {
   if (d.org)
     return [
       "parts",
+      "choices",
       "leaders",
       "roles",
       "skills",
@@ -968,6 +1150,7 @@ function tabsOf(d) {
     ];
   return [
     "parts",
+    ...((d.node.choices ?? []).length ? ["choices"] : []),
     "tasks",
     ...((d.team ?? []).length ? ["roles"] : []),
     "points",
@@ -1312,7 +1495,13 @@ function pageHtml() {
     : head.noIntro
       ? `<p class="muted">${esc(head.noIntro)}</p>`
       : "";
-  return `<header class="intro">
+  // 组织根页顶部：还有选项单等你拍板就给一个入口，点进「选项」页签。
+  const waiting = d.org ? (state.now?.choices?.open ?? 0) : 0;
+  const decideLink =
+    waiting && tab !== "choices"
+      ? `<a class="decide-banner" href="${esc(href(page, at, "choices"))}"><span class="decide-mark" aria-hidden="true">✱</span>等你拍板：${waiting}<span class="decide-go">去看</span></a>`
+      : "";
+  return `${decideLink}<header class="intro">
       <span class="kind">${esc(head.kind)}</span>
       <h1>${esc(head.name)}</h1>
       ${head.props}
@@ -1330,7 +1519,9 @@ function draw() {
   const html = pageHtml();
   if (html !== state.drawn.page) {
     state.drawn.page = html;
+    const saved = formState();
     $("page").innerHTML = html;
+    restoreForms(saved);
   }
   const d = state.mode === "ok" ? state.data : null;
   document.title = d ? `${heading(d).name} · Atrium 全景` : "Atrium 全景";
@@ -1489,6 +1680,12 @@ function subscribe() {
 }
 
 window.addEventListener("hashchange", () => load(true).catch(fail));
+$("page").addEventListener("submit", (event) => {
+  const form = event.target.closest("form[data-choice]");
+  if (!form) return;
+  event.preventDefault();
+  decide(form, event.submitter?.value === "pass" ? "pass" : "pick");
+});
 await refresh();
 if (state.mode !== "expired") subscribe();
 // 执行者的最近动作与「用时」不改账本，隔一会儿重取一次。

@@ -157,19 +157,20 @@ func Claim(cur *Record, socket string, alive func(int) bool) string {
 // HookCommand 是 SessionStart hook 里跑的命令。
 const HookCommand = "atrium secretary bridge --detach"
 
-// WithHook 在 Claude Code 设置里加一条起 bridge 的 SessionStart hook；已有就不加。
-// 结构认不出（hooks 不是对象、SessionStart 不是数组）时报错，不覆盖用户的内容。
+// WithHook 在 Claude Code 设置里加一条起 bridge 的 SessionStart hook，并在 env 里写 ATRIUM_AS=secretary
+// （会话里发的命令署名秘书）；两样都有就不改，changed 为 false。
+// 结构认不出（hooks、env 不是对象，SessionStart 不是数组）或 env.ATRIUM_AS 已是别的值时报错，不覆盖用户的内容。
 func WithHook(settings map[string]any) (map[string]any, bool, error) {
 	if settings == nil {
 		settings = map[string]any{}
 	}
-	hooks := map[string]any{}
-	if raw, ok := settings["hooks"]; ok {
-		h, ok := raw.(map[string]any)
-		if !ok {
-			return nil, false, fmt.Errorf("设置里的 hooks 不是对象，没有改动")
-		}
-		hooks = h
+	hooks, err := object(settings, "hooks")
+	if err != nil {
+		return nil, false, err
+	}
+	env, err := object(settings, "env")
+	if err != nil {
+		return nil, false, err
 	}
 	var groups []any
 	if raw, ok := hooks["SessionStart"]; ok {
@@ -179,19 +180,49 @@ func WithHook(settings map[string]any) (map[string]any, bool, error) {
 		}
 		groups = g
 	}
+	changed := false
+	switch as, ok := env[AsEnv]; {
+	case !ok:
+		env[AsEnv] = events.Secretary
+		changed = true
+	case as != events.Secretary:
+		return nil, false, fmt.Errorf("设置里的 env.%s 是 %v，不是 %s，没有改动", AsEnv, as, events.Secretary)
+	}
+	if !hasBridgeHook(groups) {
+		hooks["SessionStart"] = append(groups, HookEntry())
+		changed = true
+	}
+	settings["hooks"], settings["env"] = hooks, env
+	return settings, changed, nil
+}
+
+// AsEnv 是命令行声明署名的环境变量（见 api.Sign）。
+const AsEnv = "ATRIUM_AS"
+
+func object(settings map[string]any, key string) (map[string]any, error) {
+	raw, ok := settings[key]
+	if !ok {
+		return map[string]any{}, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("设置里的 %s 不是对象，没有改动", key)
+	}
+	return m, nil
+}
+
+func hasBridgeHook(groups []any) bool {
 	for _, g := range groups {
 		gm, _ := g.(map[string]any)
 		list, _ := gm["hooks"].([]any)
 		for _, h := range list {
 			hm, _ := h.(map[string]any)
 			if cmd, _ := hm["command"].(string); strings.Contains(cmd, "atrium secretary bridge") {
-				return settings, false, nil
+				return true
 			}
 		}
 	}
-	hooks["SessionStart"] = append(groups, HookEntry())
-	settings["hooks"] = hooks
-	return settings, true, nil
+	return false
 }
 
 // HookEntry 是加进 hooks.SessionStart 的一组。

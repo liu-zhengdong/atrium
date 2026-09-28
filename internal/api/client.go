@@ -14,6 +14,7 @@ import (
 type Client struct {
 	Base  string // http://127.0.0.1:4320
 	Token string
+	As    string // 声明的署名（AsHeader），空则不带
 	HTTP  *http.Client
 }
 
@@ -38,6 +39,9 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.As != "" {
+		req.Header.Set(AsHeader, c.As)
 	}
 	hc := c.HTTP
 	if hc == nil {

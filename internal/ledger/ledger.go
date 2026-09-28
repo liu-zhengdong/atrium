@@ -464,7 +464,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if note != "" {
 			payload["note"] = clip(note, 500)
 		}
-		return events.EmitTask(ctx, tx, p.Owner, events.Event{Kind: events.TaskStatus, Task: id, Dept: t.Org, Body: payload})
+		return events.EmitTask(ctx, tx, p.Owner, events.Event{Kind: events.TaskStatus, Task: id, Dept: t.Org, Body: payload, By: actor})
 	})
 	if err != nil {
 		return Task{}, err

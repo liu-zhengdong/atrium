@@ -14,10 +14,26 @@ import (
 	"strings"
 )
 
-// Actor 是请求的发起身份：用户令牌得到 u1；第二波加负责人令牌（Kind "leader"，ID aN）。
+// Actor 是请求的发起身份：用户令牌得到 u1（带 AsHeader: secretary 时为 secretary）；负责人令牌得到 Kind "leader"，ID aN。
+// 权限按 Kind 判，署名（派活人、决定人、备注作者）用 ID。
 type Actor struct {
 	ID   string `json:"id"`
 	Kind string `json:"kind"`
+}
+
+// AsHeader 是调用方声明的署名（命令行取自环境变量 ATRIUM_AS，秘书会话的项目设置里写着 secretary）。
+const AsHeader = "X-Atrium-As"
+
+// Sign 纯函数：按声明的署名定最终身份。只改用户令牌的署名、只认 secretary，权限不变（Kind 仍是 user）；
+// 其他身份忽略它（负责人会话也可能读到秘书目录的项目设置）。
+func Sign(a Actor, as string) (Actor, error) {
+	if as == "" || a.Kind != "user" {
+		return a, nil
+	}
+	if as != "secretary" {
+		return a, Usage("ATRIUM_AS: 只能是 secretary，收到 %q", as)
+	}
+	return Actor{ID: "secretary", Kind: "user"}, nil
 }
 
 // Error 是对外的错误：Code 给程序判断，Message 给人看，Next 是明确可执行的修正命令（没有就空）。
@@ -160,7 +176,11 @@ func (r *Router) handle(pattern string, h Handler, auth bool) {
 				write(w, &Error{Status: 401, Code: "unauthorized", Message: "令牌无效或缺失"}, nil, r.Log)
 				return
 			}
-			req.Actor = actor
+			var err error
+			if req.Actor, err = Sign(actor, hr.Header.Get(AsHeader)); err != nil {
+				write(w, err, nil, r.Log)
+				return
+			}
 			if g := r.guards[actor.Kind]; g != nil {
 				if err := g(req); err != nil {
 					write(w, err, nil, r.Log)

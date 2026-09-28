@@ -44,7 +44,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、决定、负责人、备忘、技能、资料、档案、机器 | — |
-| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`、`statusline`（状态栏调用，不列在帮助里） | — |
+| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；执行者环境里 `--detach` 静默退出）、`statusline`（状态栏调用，不列在帮助里） | — |
 
 ## 共同约定
 
@@ -73,7 +73,7 @@ type Module struct {
 - 回执：`c.Done(result, 人读文字, 下一步命令)`。人读模式打印文字，最后一行「下一步：…」；`--json` 输出 `{"ok":true,"result":…,"next":…}`。每条命令都支持 `--json`。
 - 失败：返回 `*api.Error`（见下）；人读模式打印「错误：…」和可执行时的「修正：…」，`--json` 输出 `{"ok":false,"error":{"code","message","next"?}}`。用法错误退出码 2，其余 1。
 - 字段校验的报错以参数名开头：`--title: 不能为空`。
-- `ATRIUM_WORKER=1` 时命令一律拒绝，`WorkerOK: true` 的除外（第二波只给只读的 `material get` 开）。
+- `ATRIUM_WORKER=1` 时命令一律拒绝，`WorkerOK: true` 的除外（只读的 `material get`；`secretary bridge` 自己判：执行者里 `--detach` 静默退出、其余照样拒绝，用 `cli.IsWorker`／`cli.WorkerDenied`）。
 - 值以 `--` 开头时写成 `--名字=值`。
 
 ### HTTP（`internal/api`）
@@ -82,7 +82,7 @@ type Module struct {
 - 路由：`r.Handle("POST /api/tasks/{id}/notes", func(q *api.Req) (any, error))`，Go 1.22 写法。`r.Public` 只给 `/health` 与 hosts 自己认机器令牌的 `/api/agent/*`。
 - 路径里的短号用 `q.Ref("id", "t")` 取，自动拒绝前缀不对、`..`、`t0` 之类。请求体用 `q.Decode(&v)`（拒绝未知字段，上限 1MB）。
 - 错误：`api.Usage`（400）、`api.NotFound`（404）、`api.Conflict`（409）、`api.Limit(next, …)`（409，满了必须给怎么腾地方）、`api.Forbidden`（403）、`api.Unavailable`（503，code `restarting`）；`.WithNext("atrium …")` 附修正命令。其他 error 一律 500 `internal`。请求 context 取消（服务停下或重启）自动变成 `restarting`，客户端据此等新服务后重发。
-- 身份：`q.Actor{ID, Kind}`。某类身份的统一权限判定用 `r.AddGuard(kind, func(q) error)`（认证后、处理函数前；负责人的在 `org/leaders`，写接口默认拒绝）。用户令牌得到 `u1/user`。负责人令牌由 org 在自己的 `Routes` 里 `r.AddAuth(func(token) (api.Actor, bool))` 接入，按 `Actor.Kind` 在处理函数里判权限。机器令牌不进全局认证：hosts 把 `/api/agent/*` 用 `Public` 注册、在处理函数里自己认，机器令牌只在这组接口有效。
+- 身份：`q.Actor{ID, Kind}`。某类身份的统一权限判定用 `r.AddGuard(kind, func(q) error)`（认证后、处理函数前；负责人的在 `org/leaders`，写接口默认拒绝）。用户令牌得到 `u1/user`；带 `X-Atrium-As: secretary`（命令行取自 `ATRIUM_AS`，`secretary bridge --install-hook` 写进秘书目录的项目设置）得到 `secretary/user`：权限同用户，署名是秘书（纯函数 `api.Sign`，其他身份忽略这个头）。负责人令牌由 org 在自己的 `Routes` 里 `r.AddAuth(func(token) (api.Actor, bool))` 接入，按 `Actor.Kind` 在处理函数里判权限。机器令牌不进全局认证：hosts 把 `/api/agent/*` 用 `Public` 注册、在处理函数里自己认，机器令牌只在这组接口有效。
 
 ### 存储（`internal/store`）
 
@@ -114,7 +114,7 @@ type Module struct {
 
 ### 事件（`internal/events`）
 
-- `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body})`：在引起它的写事务里调用。种类常量写在 `events.go`（已有 `TaskStatus`、`Overdue`）。
+- `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body, By})`：在引起它的写事务里调用。`By` 是引起它的身份：投递对象就是它时不投（自己做的事不再告诉自己；ledger 的任务事件填操作人）。种类常量写在 `events.go`（已有 `TaskStatus`、`Overdue`）。
 - 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked 与 `overdue` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。
 - 任务事件：ledger 在状态变化与转入已合入时经 `events.EmitTask(ctx, q, owner, e)` 发 `task.status`，按处理人分发（纯函数 `events.Route`）。派活人是 `task add` 时的身份（周期任务记建周期任务的人），处理人是 `task add --owner`、缺省派活人，两者记在 `created` 经历里（`ledger.PartiesOf`，`task show` 显示）。结果（完成、已合入、上线、失败、受阻）要处理地投处理人：u1 与秘书投 `secretary`，aN 投自己；运行时建的（审阅任务）投部门负责人、没有投秘书，只有失败、受阻要处理。负责人不是收结果的那位时另收知会；过程（入队、拉起、交回一次、取消）只知会负责人。
 

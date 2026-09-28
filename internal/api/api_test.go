@@ -51,6 +51,13 @@ func TestRouterAuthAndEnvelope(t *testing.T) {
 	if err := good.Do(ctx, "GET", "/api/me", nil, &me); err != nil || me.ID != "u1" {
 		t.Fatalf("%+v %v", me, err)
 	}
+	if err := (&Client{Base: srv.URL, Token: "good", As: "secretary"}).Do(ctx, "GET", "/api/me", nil, &me); err != nil ||
+		me != (Actor{ID: "secretary", Kind: "user"}) {
+		t.Fatalf("带署名 secretary：%+v %v", me, err)
+	}
+	if err := (&Client{Base: srv.URL, Token: "good", As: "u2"}).Do(ctx, "GET", "/api/me", nil, nil); codeOf(err) != "usage" {
+		t.Fatalf("认不出的署名应拒绝：%v", err)
+	}
 	err := good.Do(ctx, "GET", "/api/t/t3", nil, nil)
 	var ae *Error
 	if !errors.As(err, &ae) || ae.Status != 404 || ae.Next != "atrium task ls" {
@@ -73,6 +80,28 @@ func TestRouterAuthAndEnvelope(t *testing.T) {
 	err = good.Do(ctx, "POST", "/api/small", map[string]string{"a": strings.Repeat("x", 64)}, nil)
 	if codeOf(err) != "usage" || !strings.Contains(err.Error(), "请求体超过") {
 		t.Fatalf("超了上限应说清，不报 JSON 不合法：%v", err)
+	}
+}
+
+func TestSign(t *testing.T) {
+	user, leader := Actor{ID: "u1", Kind: "user"}, Actor{ID: "a2", Kind: "leader"}
+	for _, c := range []struct {
+		actor Actor
+		as    string
+		want  Actor
+		err   bool
+	}{
+		{user, "", user, false},
+		{user, "secretary", Actor{ID: "secretary", Kind: "user"}, false},
+		{user, "u1", user, true},
+		{user, "a2", user, true},
+		{leader, "secretary", leader, false}, // 负责人会话读到秘书目录的设置：忽略，不借用秘书名义
+		{leader, "", leader, false},
+	} {
+		got, err := Sign(c.actor, c.as)
+		if got != c.want || (err != nil) != c.err {
+			t.Errorf("Sign(%+v, %q) = %+v, %v", c.actor, c.as, got, err)
+		}
 	}
 }
 

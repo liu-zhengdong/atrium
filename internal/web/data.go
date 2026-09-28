@@ -14,6 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
+	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
@@ -239,11 +240,12 @@ func lastReason(ctx context.Context, q store.Querier, id string) (string, error)
 
 // Today 是今天页。
 type Today struct {
-	Asks    []Ask  `json:"asks"`
-	Running []Row  `json:"running"`
-	Queued  int    `json:"queued"`
-	Shipped []Row  `json:"shipped"`
-	Groups  []Pair `json:"groups"` // 分组的一级部门 id 与名字
+	Asks    []Ask    `json:"asks"`
+	Running []Row    `json:"running"`
+	Queued  int      `json:"queued"`
+	Shipped []Row    `json:"shipped"`
+	Groups  []Pair   `json:"groups"` // 分组的一级部门 id 与名字
+	Paused  []string `json:"paused"` // 暂停范围（all、oN、hN）；空表示没暂停
 }
 
 // Pair 是 id 与名字。
@@ -273,7 +275,11 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
-	out := Today{Asks: nonNil(asks), Queued: queued, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}}
+	paused, err := pause.Active(ctx, q)
+	if err != nil {
+		return Today{}, err
+	}
+	out := Today{Asks: nonNil(asks), Queued: queued, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}, Paused: paused}
 	seen := map[string]bool{}
 	for _, t := range running {
 		r := toRow(t, ix.parents)

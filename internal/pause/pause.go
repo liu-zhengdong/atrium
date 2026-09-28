@@ -90,6 +90,19 @@ func list(ctx context.Context, q store.Querier) ([]Entry, error) {
 	return out, rows.Err()
 }
 
+// Active 读当前全部暂停范围（给只读视图：网页「今天」标暂停）。
+func Active(ctx context.Context, q store.Querier) ([]string, error) {
+	entries, err := list(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.Scope
+	}
+	return out, nil
+}
+
 // Paused 读当前暂停范围并判定。部门链由调用方给（org.Ancestors）。
 func (p *Store) Paused(ctx context.Context, s Scope) (bool, error) {
 	entries, err := list(ctx, p.DB)

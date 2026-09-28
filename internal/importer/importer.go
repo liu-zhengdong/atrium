@@ -14,8 +14,10 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // Item 是回执里的一类：导入多少、跳过多少、为什么。
@@ -531,17 +533,33 @@ func importProfiles(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) e
 	}
 	defer rows.Close()
 	it := Item{Kind: "执行者档案"}
+	dropped := map[string][]string{}
 	for rows.Next() {
 		var layer, name, source, by string
 		var at int64
 		if err := rows.Scan(&layer, &name, &source, &by, &at); err != nil {
 			return err
 		}
+		full := layer + "/" + name
+		source, gone, err := convertProfile(source, gates.Known)
+		if err != nil {
+			return fmt.Errorf("执行者档案 %s：%w", full, err)
+		}
+		keys, _, _ := workers.SplitSource(source)
+		if err := workers.CheckProfile(full, keys); err != nil {
+			return fmt.Errorf("执行者档案 %s 换成新写法后仍不合法：%w", full, err)
+		}
+		for _, g := range gone {
+			dropped[g] = append(dropped[g], full)
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO worker_profiles (name, spec, updated_by, updated_at) VALUES (?, ?, ?, ?)`,
-			layer+"/"+name, source, by, at); err != nil {
+			full, source, by, at); err != nil {
 			return err
 		}
 		it.Imported++
+	}
+	for _, g := range sortedKeys(dropped) {
+		it.Notes = append(it.Notes, fmt.Sprintf("去掉新版不认的 %s（%d 份：%s）", g, len(dropped[g]), strings.Join(dropped[g], "、")))
 	}
 	add(rep, it)
 	return rows.Err()

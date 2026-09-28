@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -15,7 +16,7 @@ import (
 func Command() cli.Command {
 	return cli.Command{
 		Path:    "import",
-		Summary: "一次性从旧版（TS）库只读导入部门、要点、决定、负责人、备忘、技能、资料、执行者档案、机器",
+		Summary: "一次性从旧版（TS）库只读导入部门、要点、决定、负责人、备忘、技能、资料、执行者档案、机器；导入后全局暂停",
 		Flags:   []cli.Flag{{Name: "from", Value: "旧库路径", Help: "缺省 ~/.atrium/atrium.sqlite；旧库只读打开，不改动"}},
 		Local:   true,
 		// 切换时跑一次，之后再没用：不列在帮助里（atrium import --help 照常可看）。
@@ -53,7 +54,11 @@ func run(c *cli.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.Done(rep, Text(rep, p.Data), "atrium map")
+	// 导入后先全局暂停：导入的负责人、机器在用户看过之前不自主干活、不耗额度。
+	if err := (&pause.Store{DB: db}).Set(c.Context, pause.All, "u1"); err != nil {
+		return err
+	}
+	return c.Done(rep, Text(rep, p.Data)+"已全局暂停：启动后看过没问题再 atrium resume\n", "atrium start")
 }
 
 // Text 是回执的人读版：每类一行，跳过与超限的原因逐条列出。

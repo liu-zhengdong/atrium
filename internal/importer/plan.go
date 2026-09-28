@@ -6,11 +6,13 @@ package importer
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 上限取 org 的上限表；超了照样导入，回执列出由用户整理。部门介绍的字数上限 org 没导出，这里照抄一份。
@@ -276,4 +278,39 @@ func safeRel(p string) bool {
 		}
 	}
 	return true
+}
+
+// 旧档案里新版不再认的键：调用写法（invoke）由内置适配器负责，cost、progress 不再用，
+// single_instance 由内置适配器的「同一时刻只跑一个」负责。
+var droppedProfileKeys = []string{"invoke", "cost", "progress", "single_instance"}
+
+// convertProfile 把旧档案原文换成新版认的写法（纯函数）：去掉 droppedProfileKeys；checks 里去掉新版没有的关卡
+// （local_check：合入队列总跑 .agents/check，不再是档案可选项）。没改动时原样返回（保留注释）。
+// 返回去掉的「键」与「关卡」，供回执汇总。
+func convertProfile(src string, known []string) (out string, dropped []string, err error) {
+	keys, body, err := workers.SplitSource(src)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, k := range droppedProfileKeys {
+		if _, ok := keys[k]; ok {
+			delete(keys, k)
+			dropped = append(dropped, k)
+		}
+	}
+	if raw, ok := keys["checks"].([]any); ok {
+		kept := []any{}
+		for _, c := range raw {
+			if s, _ := c.(string); slices.Contains(known, s) {
+				kept = append(kept, c)
+			} else {
+				dropped = append(dropped, fmt.Sprintf("checks:%v", c))
+			}
+		}
+		keys["checks"] = kept
+	}
+	if len(dropped) == 0 {
+		return src, nil, nil
+	}
+	return workers.JoinSource(keys, body), dropped, nil
 }

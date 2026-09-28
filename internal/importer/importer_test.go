@@ -270,3 +270,23 @@ func TestRunBrokenMaterial(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertProfile(t *testing.T) {
+	known := []string{"finished", "pr_exists"}
+	same := "---\ntrust: high   # 注释留着\n---\n正文\n"
+	if out, gone, err := convertProfile(same, known); err != nil || out != same || gone != nil {
+		t.Fatalf("没有旧键应原样返回：%q %v %v", out, gone, err)
+	}
+	old := "---\ninvoke: codex exec -\ncost: plan\ntrust: low\nchecks: [pr_exists, finished, local_check]\n---\n正文\n"
+	out, gone, err := convertProfile(old, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nchecks:\n    - pr_exists\n    - finished\ntrust: low\n---\n正文\n"
+	if out != want || !reflect.DeepEqual(gone, []string{"invoke", "cost", "checks:local_check"}) {
+		t.Fatalf("得到 %q %v", out, gone)
+	}
+	if _, _, err := convertProfile("---\nx: [\n---\n", known); err == nil {
+		t.Fatal("坏 YAML 应报错")
+	}
+}

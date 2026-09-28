@@ -134,3 +134,27 @@ func TestParseReview(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSlug(t *testing.T) {
+	for _, c := range []struct {
+		in, want string
+		ok       bool
+	}{
+		{"o/r", "o/r", true},
+		{"https://github.com/o/r.git", "o/r", true},
+		{"https://github.com/o/r", "o/r", true},
+		{"git@github.com:o/r.git", "o/r", true},
+		{"ssh://git@github.com/o/r", "o/r", true},
+		{"https://github.com/o/r/", "o/r", true},
+		{"o", "", false},
+		{"o/r/x", "", false},
+		{"../r", "", false},
+		{"-o/r", "", false},
+		{"https://github.com/o", "", false},
+	} {
+		got, ok := ParseSlug(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("ParseSlug(%q) = %q,%v，要 %q,%v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}

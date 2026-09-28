@@ -2,6 +2,8 @@ package release
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,7 +52,24 @@ func Contains(ctx context.Context, r gates.Runner, repo, tag, sha string) (bool,
 	return s == "identical" || s == "behind", nil
 }
 
-// Install 从 GitHub Release 下载本平台二进制替换 exe：旧文件留作 exe.old（手动退回用）。
+// SumsFile 是发版工作流随二进制发布的校验和文件（sha256sum 格式）。
+const SumsFile = "SHA256SUMS"
+
+// CheckSum 在 sha256sum 格式的 sums 里找 asset 那一行，与实际算出的 got 比对（纯函数）。
+func CheckSum(sums, asset, got string) error {
+	for _, line := range strings.Split(sums, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == asset {
+			if !strings.EqualFold(f[0], got) {
+				return fmt.Errorf("%s 校验和不符（%s 写 %s，下载的是 %s），没装", asset, SumsFile, f[0], got)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("%s 里没有 %s 这一行，没装", SumsFile, asset)
+}
+
+// Install 从 GitHub Release 下载本平台二进制与 SHA256SUMS，校验和对上才替换 exe：旧文件留作 exe.old（手动退回用）。
 // 下载放在 exe 同目录，改名不跨文件系统。
 func Install(ctx context.Context, r gates.Runner, repo, tag, exe string) error {
 	dir, err := os.MkdirTemp(filepath.Dir(exe), ".atrium-update-")
@@ -59,10 +78,22 @@ func Install(ctx context.Context, r gates.Runner, repo, tag, exe string) error {
 	}
 	defer os.RemoveAll(dir)
 	asset := Asset(runtime.GOOS, runtime.GOARCH)
-	if _, err := r.Run(ctx, "", "gh", "release", "download", tag, "-R", repo, "-p", asset, "-D", dir); err != nil {
+	if _, err := r.Run(ctx, "", "gh", "release", "download", tag, "-R", repo, "-p", asset, "-p", SumsFile, "-D", dir); err != nil {
 		return err
 	}
 	fresh := filepath.Join(dir, asset)
+	sums, err := os.ReadFile(filepath.Join(dir, SumsFile))
+	if err != nil {
+		return fmt.Errorf("%s 的 Release 没有 %s，不装没法校验的二进制：%w", tag, SumsFile, err)
+	}
+	bin, err := os.ReadFile(fresh)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(bin)
+	if err := CheckSum(string(sums), asset, hex.EncodeToString(sum[:])); err != nil {
+		return fmt.Errorf("%s：%w", tag, err)
+	}
 	if err := os.Chmod(fresh, 0o755); err != nil {
 		return err
 	}

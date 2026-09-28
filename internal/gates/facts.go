@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -28,6 +29,41 @@ func (p ghPR) pr() PR {
 
 // PRFields 是 gh --json 要的字段。
 const PRFields = "number,url,state,headRefName,headRefOid,baseRefName,body,mergeCommit"
+
+// ParseSlug 把任务的仓库写法换成 gh 认的 owner/name（纯函数）：owner/name 原样；
+// https://github.com/o/r(.git)、git@github.com:o/r(.git)、ssh://git@github.com/o/r 取出 o/r。认不出返回 false。
+func ParseSlug(repo string) (string, bool) {
+	s := strings.TrimSpace(repo)
+	switch {
+	case strings.HasPrefix(s, "git@"):
+		_, s, _ = strings.Cut(s, ":")
+	case strings.Contains(s, "://"):
+		_, s, _ = strings.Cut(s, "://")
+		_, s, _ = strings.Cut(s, "/")
+	}
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "/"), ".git")
+	owner, name, ok := strings.Cut(s, "/")
+	if !ok || owner == "" || name == "" || strings.ContainsAny(name, "/ ") || strings.Contains(s, "..") || strings.HasPrefix(owner, "-") {
+		return "", false
+	}
+	return owner + "/" + name, true
+}
+
+// Slug 取任务仓库在 GitHub 上的 owner/name：本机克隆的绝对路径读它的 origin 地址，其余按 ParseSlug。
+func Slug(ctx context.Context, r Runner, repo string) (string, error) {
+	if filepath.IsAbs(repo) {
+		url, err := r.Run(ctx, repo, "git", "remote", "get-url", "origin")
+		if err != nil {
+			return "", err
+		}
+		repo = strings.TrimSpace(url)
+	}
+	slug, ok := ParseSlug(repo)
+	if !ok {
+		return "", fmt.Errorf("仓库 %q 不是 GitHub 仓库（owner/name 或 GitHub 地址），查不了 PR", repo)
+	}
+	return slug, nil
+}
 
 // DefaultBranch 问 GitHub 仓库的默认分支。
 func DefaultBranch(ctx context.Context, r Runner, repo string) (string, error) {

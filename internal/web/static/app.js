@@ -83,7 +83,7 @@ async function renderToday() {
         <span class="meta">${esc(a.dept_name || "")}<br>${esc(ago(a.at))}前</span>
       </button>`).join("")}</div>` : `<div class="empty">没有等你的事</div>`;
   $("#page").innerHTML = `
-    <h1 class="hello">${d.asks.length ? `${d.asks.length} 件事等你` : "军团在自己运转"}</h1>
+    <h1 class="hello">${d.paused.includes("all") ? "已全部暂停" : d.asks.length ? `${d.asks.length} 件事等你` : d.paused.length ? `部分暂停：${esc(d.paused.join("、"))}` : "军团在自己运转"}</h1>
     <p class="pulse-line"><span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件</p>
     <section class="section"><h2>等你</h2>${asks}</section>
     <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode} ▾</button>` : ""}</h2><div class="rows">${live}</div>

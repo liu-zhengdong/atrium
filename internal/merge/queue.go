@@ -131,18 +131,22 @@ func (q *Queue) Merge(ctx context.Context, t ledger.Task) error {
 	if t.Repo == "" || t.PR == "" {
 		return fmt.Errorf("任务没有仓库或 PR（repo=%q pr=%q）", t.Repo, t.PR)
 	}
-	pr, err := gates.ViewPR(ctx, q.R, t.Repo, t.PR)
+	repo, err := gates.Slug(ctx, q.R, t.Repo)
+	if err != nil {
+		return err
+	}
+	pr, err := gates.ViewPR(ctx, q.R, repo, t.PR)
 	if err != nil {
 		return err
 	}
 	switch pr.State {
 	case "MERGED":
-		return q.merged(ctx, t, pr.URL, pr.MergeCommit, "PR 已在别处合入")
+		return q.merged(ctx, t, repo, pr.URL, pr.MergeCommit, "PR 已在别处合入")
 	case "OPEN":
 	default:
 		return fmt.Errorf("PR #%d 状态是 %s", pr.Number, pr.State)
 	}
-	dir, err := q.clone(ctx, t.Repo)
+	dir, err := q.clone(ctx, repo)
 	if err != nil {
 		return err
 	}
@@ -204,29 +208,29 @@ func (q *Queue) Merge(ctx context.Context, t ledger.Task) error {
 		if _, err := git("push", "--quiet", "--force-with-lease=refs/heads/"+pr.Head+":"+pr.HeadID, "origin", "HEAD:refs/heads/"+pr.Head); err != nil {
 			return err
 		}
-		if err := q.waitHead(ctx, t.Repo, t.PR, head); err != nil {
+		if err := q.waitHead(ctx, repo, t.PR, head); err != nil {
 			return err
 		}
 	}
-	if _, err := q.R.Run(ctx, "", "gh", "pr", "merge", fmt.Sprint(pr.Number), "-R", t.Repo, "--squash", "--match-head-commit", head); err != nil {
+	if _, err := q.R.Run(ctx, "", "gh", "pr", "merge", fmt.Sprint(pr.Number), "-R", repo, "--squash", "--match-head-commit", head); err != nil {
 		return err
 	}
-	after, err := gates.ViewPR(ctx, q.R, t.Repo, t.PR)
+	after, err := gates.ViewPR(ctx, q.R, repo, t.PR)
 	if err != nil {
 		return err
 	}
 	if after.State != "MERGED" {
 		return fmt.Errorf("gh pr merge 返回成功，但 PR #%d 状态是 %s", pr.Number, after.State)
 	}
-	return q.merged(ctx, t, after.URL, after.MergeCommit, "已合入")
+	return q.merged(ctx, t, repo, after.URL, after.MergeCommit, "已合入")
 }
 
-func (q *Queue) merged(ctx context.Context, t ledger.Task, url, commit, note string) error {
+func (q *Queue) merged(ctx context.Context, t ledger.Task, repo, url, commit, note string) error {
 	raw, _ := json.Marshal(map[string]string{"pr": url, "commit": commit})
 	if err := ledger.Record(ctx, q.DB, t.ID, gates.KindMergeCommit, Actor, string(raw)); err != nil {
 		return err
 	}
-	need := q.NeedRelease != nil && q.NeedRelease(t.Repo)
+	need := q.NeedRelease != nil && q.NeedRelease(repo)
 	if need {
 		note += "，等发版上线"
 	}

@@ -180,10 +180,10 @@ func (h *hub) paused(ctx context.Context, env *app.Env, leader string) (bool, er
 	return env.Pause.Paused(ctx, pause.Scope{Orgs: chain})
 }
 
-// pendingByLeader 读投给负责人的、没确认的事件（每位最多 MaxBatch 条）。
+// pendingByLeader 读投给负责人的、没确认的「要处理」事件（每位最多 MaxBatch 条）；知会不叫醒负责人。
 func pendingByLeader(ctx context.Context, q store.Querier) ([]Pending, error) {
 	rows, err := q.QueryContext(ctx, `SELECT target, id, at FROM events
-		WHERE acked_at IS NULL AND target LIKE 'a%' ORDER BY id LIMIT ?`, MaxBatch*org.MaxLeaders)
+		WHERE acked_at IS NULL AND level = 'act' AND target LIKE 'a%' ORDER BY id LIMIT ?`, MaxBatch*org.MaxLeaders)
 	if err != nil {
 		return nil, err
 	}

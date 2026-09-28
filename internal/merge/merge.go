@@ -103,6 +103,12 @@ func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Bo
 		return t, api.Conflict("%s：%v", id, err).WithNext("atrium task show " + id)
 	}
 	repo, ref := t.Repo, t.PR
+	if repo != "" {
+		if repo, err = gates.Slug(ctx, r, repo); err != nil {
+			return t, api.Usage("任务的仓库：%v", err).WithNext("atrium task merge " + id + " --repo owner/name")
+		}
+	}
+	own := repo
 	if in.PR != "" {
 		fromURL, n, err := ParsePR(in.PR)
 		if err != nil {
@@ -129,7 +135,7 @@ func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Bo
 	if pr.State != "OPEN" {
 		return t, api.Conflict("PR #%d 状态是 %s，不是开着的", pr.Number, pr.State)
 	}
-	if repo != t.Repo {
+	if repo != own {
 		if _, err := ledger.Edit(ctx, db, id, ledger.Patch{Repo: &repo}, actor); err != nil {
 			return t, err
 		}

@@ -163,3 +163,36 @@ func TestResultGoesToOwner(t *testing.T) {
 		t.Fatalf("事件 = %v，应为 %v", got, want)
 	}
 }
+
+func TestShowNext(t *testing.T) {
+	tk := func(s Status) Task { return Task{ID: "t7", Status: s} }
+	for _, c := range []struct {
+		name    string
+		t       Task
+		ready   bool
+		waiting []string
+		want    string
+	}{
+		{"可派的给再派", tk(Todo), true, nil, "atrium task run t7"},
+		{"等依赖给等依赖", tk(Todo), false, []string{"t3"}, "atrium task wait t3"},
+		{"没就绪给等", tk(Todo), false, nil, "atrium task wait t7"},
+		{"受阻给再派", tk(Blocked), false, nil, "atrium task run t7"},
+		{"失败给再派", tk(Failed), false, nil, "atrium task run t7"},
+		{"排队给等", tk(Queued), false, nil, "atrium task wait t7"},
+		{"在跑给等", tk(Running), false, nil, "atrium task wait t7"},
+		{"完成回列表", tk(Done), false, nil, "atrium task ls"},
+		{"取消回列表", tk(Cancelled), false, nil, "atrium task ls"},
+	} {
+		if got := showNext(c.t, c.ready, c.waiting); got != c.want {
+			t.Errorf("%s：showNext = %q，应为 %q", c.name, got, c.want)
+		}
+	}
+	// 能不能给「再派」，与状态机收不收 Enqueue 一致。
+	for _, s := range Statuses {
+		_, err := Transition(State{Status: s}, Event{Kind: Enqueue})
+		got := showNext(Task{ID: "t7", Status: s}, true, nil)
+		if (err == nil) != (got == "atrium task run t7") {
+			t.Errorf("%s：showNext = %q，Enqueue = %v", s, got, err)
+		}
+	}
+}

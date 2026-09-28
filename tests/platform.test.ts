@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
@@ -23,7 +31,8 @@ import {
   quoteCmdArg,
   shellInvocation,
   spawnInvocation,
-  spawnDetached,
+  hiddenLaunch,
+  HIDDEN_LAUNCHER,
   spawnShell,
   trimTrailingSeparators,
   type Platform,
@@ -376,15 +385,137 @@ test("去掉结尾分隔符：保留根路径，Windows 两种分隔符都去", 
     );
 });
 
-test("detached：Unix 照调用方；Windows 经 cmd.exe 的调用一律不 detached", () => {
-  const direct = { command: "node", args: [] };
+test("detached：Unix 与不 detached 的原样；Windows 要求 detached 的经隐藏控制台中转", () => {
+  const direct = {
+    command: "C:\\bin\\codex.exe",
+    args: ["exec", "多行\n提示"],
+  };
   const viaCmd = shellInvocation("win32", "npm run check");
-  for (const requested of [true, false, undefined]) {
-    assert.equal(spawnDetached("linux", viaCmd, requested), requested);
-    assert.equal(spawnDetached("darwin", direct, requested), requested);
-    assert.equal(spawnDetached("win32", direct, requested), requested);
-    assert.equal(spawnDetached("win32", viaCmd, requested), false);
+  const input = { nodePath: "C:\\node\\node.exe", stdin: false };
+  for (const requested of [false, undefined]) {
+    assert.deepEqual(hiddenLaunch("win32", direct, requested, input), {
+      invocation: direct,
+      detached: requested,
+    });
+    assert.deepEqual(hiddenLaunch("win32", viaCmd, requested, input), {
+      invocation: viaCmd,
+      detached: requested,
+    });
   }
+  for (const platform of ["darwin", "linux"] as const)
+    for (const requested of [true, false, undefined])
+      assert.deepEqual(hiddenLaunch(platform, direct, requested, input), {
+        invocation: direct,
+        detached: requested,
+      });
+  assert.deepEqual(
+    hiddenLaunch("win32", direct, true, { ...input, stdin: true }),
+    {
+      invocation: {
+        command: "C:\\node\\node.exe",
+        args: [
+          "-e",
+          HIDDEN_LAUNCHER,
+          "--",
+          '{"stdin":true,"verbatim":false}',
+          "C:\\bin\\codex.exe",
+          "exec",
+          "多行\n提示",
+        ],
+      },
+      detached: true,
+    },
+  );
+  // 经 cmd.exe 的也中转（中转下 cmd.exe 有控制台和管道，输出不丢），中转本身不再原样拼命令行。
+  const wrapped = hiddenLaunch("win32", viaCmd, true, input);
+  assert.equal(wrapped.detached, true);
+  assert.equal(wrapped.invocation.verbatim, undefined);
+  assert.deepEqual(wrapped.invocation.args.slice(3), [
+    '{"stdin":false,"verbatim":true}',
+    viaCmd.command,
+    ...viaCmd.args,
+  ]);
+});
+
+/** 在本机直接跑中转脚本（判定只在 Windows 上启用它，脚本本身三平台一样）。 */
+function runLauncher(
+  root: string,
+  options: { stdin: boolean; stdio: ("ignore" | "pipe" | number)[] },
+  command: string,
+  args: string[],
+) {
+  return spawn(
+    process.execPath,
+    [
+      "-e",
+      HIDDEN_LAUNCHER,
+      "--",
+      JSON.stringify({ stdin: options.stdin, verbatim: false }),
+      command,
+      ...args,
+    ],
+    { cwd: root, stdio: options.stdio, windowsHide: true },
+  );
+}
+
+test("本机：隐藏控制台中转把输出写进日志、转发标准输入、按程序退出码退出", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-launcher-"));
+  t.after(() => removeTemp(root));
+  const log = join(root, "worker.log");
+  writeFileSync(log, "[atrium] 抬头\n");
+  const out = openSync(log, "a");
+  const child = runLauncher(
+    root,
+    { stdin: true, stdio: ["pipe", out, out] },
+    process.execPath,
+    [
+      "-e",
+      `let s = "";
+       process.stdin.on("data", (c) => (s += c));
+       process.stdin.on("end", () => {
+         process.stdout.write("收到 " + s.trim() + "\\n");
+         process.stderr.write("错误输出\\n");
+         process.exit(7);
+       });`,
+    ],
+  );
+  closeSync(out);
+  child.stdin!.end("多行\n提示");
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  assert.equal(code, 7);
+  const text = readFileSync(log, "utf8");
+  assert.match(text, /^\[atrium\] 抬头\n/);
+  assert.match(text, /收到 多行\n提示/);
+  assert.match(text, /错误输出/);
+});
+
+test("本机：隐藏控制台中转不转发标准输入时照常退出，拉不起程序时记原因并退出 127", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-launcher-"));
+  t.after(() => removeTemp(root));
+  const ok = runLauncher(
+    root,
+    { stdin: false, stdio: ["ignore", "pipe", "pipe"] },
+    process.execPath,
+    ["-e", "process.stdout.write('pipe-ok')"],
+  );
+  let text = "";
+  ok.stdout!.on("data", (chunk) => (text += chunk));
+  assert.equal(await new Promise((resolve) => ok.on("close", resolve)), 0);
+  assert.equal(text, "pipe-ok");
+
+  const missing = runLauncher(
+    root,
+    { stdin: false, stdio: ["ignore", "ignore", "pipe"] },
+    join(root, "no-such-program"),
+    [],
+  );
+  let err = "";
+  missing.stderr!.on("data", (chunk) => (err += chunk));
+  assert.equal(
+    await new Promise((resolve) => missing.on("close", resolve)),
+    127,
+  );
+  assert.match(err, /拉起 .*no-such-program 失败/);
 });
 
 test("同一路径：Windows 不分大小写、两种分隔符等同；Unix 严格比较", () => {

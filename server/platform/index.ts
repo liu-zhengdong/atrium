@@ -1,6 +1,9 @@
 import {
+  execFile,
   spawn,
   type ChildProcess,
+  type ExecFileException,
+  type ExecFileOptions,
   type SpawnOptions,
 } from "node:child_process";
 import {
@@ -17,12 +20,12 @@ import { tunnelArgs } from "../hosts/tunnel-plan.ts";
 import { serviceEnvironment } from "../service-env.ts";
 import {
   executableNames,
+  hiddenLaunch,
   isBatchFile,
   killTreePlan,
   launchInvocation,
   pathDelimiter,
   shellInvocation,
-  spawnDetached,
   type Invocation,
   type StopSignal,
 } from "./plan.ts";
@@ -30,6 +33,7 @@ import {
 /**
  * 平台层的 IO（#t94）：结束进程树、判断进程存活、跑 shell 命令、按名字找并拉起可执行文件、收紧文件权限。
  * 判定在 `plan.ts`（纯函数、按平台穷举测试）；其余代码只调这里，不直接写 `process.kill(-pid)`、`/bin/sh`。
+ * 子进程一律从这里拉起（t167，`tests/child-process-imports.test.ts` 把关）：都带 windowsHide，Windows 上不弹控制台窗口。
  */
 
 export * from "./plan.ts";
@@ -134,16 +138,79 @@ export function commandInvocation(
   });
 }
 
-/** 拉起已解析好的调用；Windows 上不弹控制台窗口。 */
+/** 标准输入是否要交给子进程（管道、文件、继承）；只有明确 ignore 的不要。 */
+function takesStdin(stdio: SpawnOptions["stdio"]) {
+  const first = Array.isArray(stdio) ? stdio[0] : stdio;
+  return first !== "ignore";
+}
+
+/**
+ * 拉起已解析好的调用；Windows 上不弹控制台窗口。
+ * Windows 上要求 detached 的经隐藏控制台中转（`hiddenLaunch`），程序和它的子孙都在没有窗口的控制台里。
+ */
 export function spawnInvocation(
   invocation: Invocation,
   options: SpawnOptions = {},
 ): ChildProcess {
-  return spawn(invocation.command, invocation.args, {
+  const launch = hiddenLaunch(process.platform, invocation, options.detached, {
+    nodePath: process.execPath,
+    stdin: takesStdin(options.stdio),
+  });
+  return spawn(launch.invocation.command, launch.invocation.args, {
     ...options,
-    detached: spawnDetached(process.platform, invocation, options.detached),
+    detached: launch.detached,
     windowsHide: true,
-    windowsVerbatimArguments: invocation.verbatim,
+    windowsVerbatimArguments: launch.invocation.verbatim,
+  });
+}
+
+/**
+ * 拉起 Atrium 自己的 node 进程（服务、升级 supervisor）：不经中转，detached 照调用方。
+ * 这类进程没有控制台，它们再起的子进程都从本模块拉起、带 windowsHide，不会弹窗。
+ */
+export function spawnNode(
+  args: readonly string[],
+  options: SpawnOptions = {},
+): ChildProcess {
+  return spawn(process.execPath, args, { ...options, windowsHide: true });
+}
+
+export type FileRun = {
+  error: ExecFileException | null;
+  stdout: string;
+  stderr: string;
+};
+
+/**
+ * 跑一个程序并收集输出（git、gh、npm、PowerShell 等）：不经 shell、windowsHide；
+ * 管道收输出时 Windows 上带 CREATE_NO_WINDOW，程序与它的子孙都不开窗口。失败放在 error 里，不抛。
+ */
+export function runFile(
+  command: string,
+  args: readonly string[],
+  options: ExecFileOptions = {},
+): Promise<FileRun> {
+  return new Promise((resolve) => {
+    execFile(
+      command,
+      args,
+      { ...options, encoding: "utf8", windowsHide: true },
+      (error, stdout, stderr) =>
+        resolve({ error, stdout: String(stdout), stderr: String(stderr) }),
+    );
+  });
+}
+
+/** 按 `commandInvocation` 解析后再 `runFile`（Windows 上 npm 这类 .cmd 包装）。 */
+export function runCommand(
+  command: string,
+  args: readonly string[],
+  options: ExecFileOptions = {},
+): Promise<FileRun> {
+  const call = commandInvocation(command, args, options.env ?? process.env);
+  return runFile(call.command, call.args, {
+    ...options,
+    windowsVerbatimArguments: call.verbatim,
   });
 }
 

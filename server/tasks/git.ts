@@ -1,6 +1,6 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { runFile } from "../platform/index.ts";
 import { Problem } from "../problem.ts";
 import type { WorktreePlan } from "./prepare.ts";
 
@@ -16,29 +16,23 @@ export type Exec = (
   options?: { cwd?: string; timeoutMs?: number; signal?: AbortSignal },
 ) => Promise<Run>;
 
-export const exec: Exec = (command, args, options = {}) =>
-  new Promise((resolve) => {
-    execFile(
-      command,
-      args,
-      {
-        cwd: options.cwd ?? homedir(),
-        timeout: options.timeoutMs ?? 30_000,
-        maxBuffer: 8 * 1024 * 1024,
-        env: {
-          ...process.env,
-          GH_PROMPT_DISABLED: "1",
-          GIT_TERMINAL_PROMPT: "0",
-        },
-      },
-      (error, stdout, stderr) =>
-        resolve({
-          ok: !error,
-          stdout: String(stdout),
-          stderr: String(stderr || (error ? error.message : "")),
-        }),
-    );
+export const exec: Exec = async (command, args, options = {}) => {
+  const { error, stdout, stderr } = await runFile(command, args, {
+    cwd: options.cwd ?? homedir(),
+    timeout: options.timeoutMs ?? 30_000,
+    maxBuffer: 8 * 1024 * 1024,
+    env: {
+      ...process.env,
+      GH_PROMPT_DISABLED: "1",
+      GIT_TERMINAL_PROMPT: "0",
+    },
   });
+  return {
+    ok: !error,
+    stdout,
+    stderr: stderr || (error ? error.message : ""),
+  };
+};
 
 const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
 

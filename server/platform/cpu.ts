@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { cpus } from "node:os";
 import {
@@ -18,6 +17,7 @@ import {
   type ProcCpu,
   type SystemCpu,
 } from "./cpu-plan.ts";
+import { runFile } from "./index.ts";
 
 /**
  * Atrium 自己占了几个核的采样（t113）：判定在 `cpu-plan.ts`；这里列进程（跑命令或读 /proc）、
@@ -40,18 +40,13 @@ async function readProc(): Promise<ProcCpu[]> {
 }
 
 /** 跑命令取输出；partial 时退出码非 0 但有输出也收下（`lsof -p` 列的进程有的已退出）。 */
-function run(command: string, args: string[], partial = false) {
-  return new Promise<string>((resolve, reject) =>
-    execFile(
-      command,
-      args,
-      { timeout: 10_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
-      (error, stdout) =>
-        error && !(partial && typeof error.code === "number")
-          ? reject(error)
-          : resolve(stdout),
-    ),
-  );
+async function run(command: string, args: string[], partial = false) {
+  const { error, stdout } = await runFile(command, args, {
+    timeout: 10_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (error && !(partial && typeof error.code === "number")) throw error;
+  return stdout;
 }
 
 function systemCpu(): SystemCpu | undefined {

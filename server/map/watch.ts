@@ -17,7 +17,6 @@ const WATCHED = [
   "job_roles",
   "org_skills",
   "task_deliveries",
-  "patrol_findings",
   "org_leaders",
   "task_inbox",
   "memos",
@@ -26,7 +25,6 @@ const WATCHED = [
   "choices",
   "choice_options",
   "choice_comments",
-  "choice_settings",
   "materials",
 ] as const;
 

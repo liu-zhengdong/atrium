@@ -3,32 +3,31 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { one, ref } from "../org/model.ts";
-import { addChoice, ensureChoiceTables } from "../choices/store.ts";
-import { announceChoice } from "../choices/notify.ts";
-import { choiceRef } from "../choices/model.ts";
+import { partRoute } from "../leaders/subscriber.ts";
+import { researchRound } from "../schedules/model.ts";
 import { taskDir } from "../tasks/active.ts";
 import type { EventInbox } from "../tasks/events.ts";
-import { CHOICE_FILE } from "./brief.ts";
-import { productRound } from "./model.ts";
+import { addChoice, ensureChoiceTables } from "./store.ts";
+import { announceChoice } from "./notify.ts";
+import { choiceRef } from "./model.ts";
 
 /**
- * 产品部研究的收尾：研究任务完成（done）时读它工作目录里的 choice.json，登记成挂在父节点上的选项单
- * （提的人记产品部 leader，出自这件任务），按拍板人叫醒秘书或 leader。读不到或不合格不挡任务完成，
- * 错误写进完成事件交给产品部 leader 补。同一件任务只登记一次。
+ * 调研类周期任务的收尾：任务完成（done）时，工作目录里有 choice.json 就登记成挂在本部分上的选项单
+ * （提的人记这一部分的 leader，出自这件任务），叫醒秘书。没写文件的调研照常完成；写了但不合格不挡完成，
+ * 错误写进完成事件交负责人补。同一件任务只登记一次。调研执行者没有 Atrium 的访问，只能写文件。
  */
 
+export const CHOICE_FILE = "choice.json";
 export const CHOICE_FILE_MAX = 64 * 1024;
 
-/** 研究者写选项单的位置（没有仓库的任务在任务目录的 work 下干活）。 */
+/** 研究者写选项单的位置（调研任务没有仓库，在任务目录的 work 下干活）。 */
 export const choiceFileOf = (data: string, taskId: number) =>
   join(taskDir(data, taskId), "work", CHOICE_FILE);
 
-/** 文件内容 → 选项单对象（纯函数）；null 是没写文件。字段校验留给 addChoice。 */
+/** 文件内容 → 选项单对象（纯函数）；字段校验留给 addChoice。 */
 export function parseChoiceFile(
-  raw: string | null,
+  raw: string,
 ): { ok: true; value: unknown } | { ok: false; error: string } {
-  if (raw === null)
-    return { ok: false, error: `研究者没有在工作目录写 ${CHOICE_FILE}` };
   const text = raw.replace(/^﻿/, "").trim();
   if (!text) return { ok: false, error: `${CHOICE_FILE} 是空的` };
   try {
@@ -53,16 +52,18 @@ export type RoundResult =
   | { choice: string; next: string }
   | { choice_error: string; choice_file: string; next: string };
 
-/** 不是产品部的研究任务返回 undefined；是就登记选项单，结果并进任务完成事件。 */
+/** 不是调研任务、或没写选项单返回 undefined；写了就登记，结果并进任务完成事件。 */
 export function settleRound(
   db: DatabaseSync,
   inbox: EventInbox,
   data: string,
   taskId: number,
 ): RoundResult | undefined {
-  const product = productRound(db, taskId);
-  if (!product) return undefined;
+  const round = researchRound(db, taskId);
+  if (!round) return undefined;
   const file = choiceFileOf(data, taskId);
+  const raw = readFile(file);
+  if (raw === null) return undefined;
   ensureChoiceTables(db);
   const already = one<{ id: number }>(
     db,
@@ -74,30 +75,27 @@ export function settleRound(
       choice: choiceRef(already.id),
       next: `atrium choice show ${choiceRef(already.id)}`,
     };
-  const fix = `修好后：atrium choice add ${ref(product.parent_id)} --file ${file} --task t${taskId}`;
-  const raw = readFile(file);
+  const fix = `修好后：atrium choice add ${ref(round.node_id)} --file ${file} --task t${taskId}`;
   const parsed =
-    raw !== null && typeof raw === "object"
+    typeof raw === "object"
       ? { ok: false as const, error: raw.error }
       : parseChoiceFile(raw);
   if (!parsed.ok)
     return { choice_error: parsed.error, choice_file: file, next: fix };
+  const route = partRoute(db, round.node_id);
+  const creator = route.subscriber === "secretary" ? undefined : route.subscriber;
   try {
     const choice = addChoice(
       db,
-      {
-        node: ref(product.parent_id),
-        task: `t${taskId}`,
-        choice: parsed.value,
-      },
-      product.leader,
+      { node: ref(round.node_id), task: `t${taskId}`, choice: parsed.value },
+      route.subscriber,
     );
-    announceChoice(db, inbox, choice, product.leader);
+    announceChoice(db, inbox, choice, creator);
     return { choice: choice.ref, next: `atrium choice show ${choice.ref}` };
   } catch (error) {
-    // 登记不上不挡任务完成：校验错误原样给 leader，意外错误另记日志。
+    // 登记不上不挡任务完成：校验错误原样给负责人，意外错误另记日志。
     if (!(error instanceof Problem))
-      console.error(`产品部研究 t${taskId} 登记选项单失败：`, error);
+      console.error(`调研 t${taskId} 登记选项单失败：`, error);
     return {
       choice_error: error instanceof Error ? error.message : String(error),
       choice_file: file,

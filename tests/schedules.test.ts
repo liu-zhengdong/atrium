@@ -246,7 +246,7 @@ test("leader 给本节点及子节点排周期任务；别的部分只读，也�
   );
 });
 
-test("隔离服务：周期巡检到点生成与 patrol run 同样的任务，没结束跳过、停机只补一轮、失败投 leader；带旧表启动", async (t) => {
+test("隔离服务：周期巡检到点生成巡检任务，没结束跳过、停机只补一轮、失败投 leader；带旧表启动", async (t) => {
   const fx = fixture(t);
   const data = join(fx.root, "schedule-data");
   mkdirSync(data);
@@ -359,7 +359,7 @@ test("隔离服务：周期巡检到点生成与 patrol run 同样的任务，�
   assert.equal(failing.body.ref, "s3");
   editMap(db, "o4", { uses: [] }, "u1");
 
-  // 第一次到点：生成与 patrol run 同样的巡检任务并派发。
+  // 第一次到点：生成巡检任务并派发。
   clock = start + DAY;
   await until(
     () => count("SELECT count(*) n FROM patrol_runs WHERE node_id=2") === 1,

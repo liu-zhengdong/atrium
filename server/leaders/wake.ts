@@ -163,13 +163,6 @@ export function eventLine(event: PromptEvent) {
   // 到期（overdue.ts）：说明里写了挂多久、下一步。
   if (event.kind === "overdue")
     return `- #${event.id} ${event.task ?? ""} 到期没动 ${field(event.detail, "title", 60)}：${field(event.detail, "reason", 300)}；${field(event.detail, "next", 1200)}`;
-  if (event.kind === "patrol_findings") {
-    const detail = event.detail as {
-      node?: string;
-      findings?: { ref: string; phenomenon: string }[];
-    } | null;
-    return `- #${event.id} 巡检发现 ${detail?.node ?? ""}：${(detail?.findings ?? []).map((f) => `${f.ref} ${f.phenomenon}`).join("；")}`;
-  }
   if (event.kind === "choice_small") {
     const detail = event.detail as {
       choice?: string;
@@ -180,7 +173,7 @@ export function eventLine(event: PromptEvent) {
     const text = (value: unknown, max: number) =>
       typeof value === "string" ? value.slice(0, max) : "";
     return [
-      `- #${event.id} 产品部小改进 ${detail?.choice ?? ""} ${detail?.node ?? ""}（${items.length} 条，你自己定）：`,
+      `- #${event.id} 调研小改进 ${detail?.choice ?? ""} ${detail?.node ?? ""}（${items.length} 条，你自己定）：`,
       ...items.map((m, i) => {
         const basis = Array.isArray(m.basis)
           ? m.basis.filter((b) => typeof b === "string").slice(0, 10)
@@ -240,7 +233,7 @@ export const EVENT_WORDS: Record<string, string> = {
   material_stale: "资料疑似没用",
   material_purge: "资料可以真删",
   secret_stale: "凭据疑似没用",
-  choice_small: "产品部小改进",
+  choice_small: "调研小改进",
   overdue: "到期没动",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
@@ -303,9 +296,8 @@ export function leaderPrompt(input: PromptInput): string {
     "- 看：atrium task show tN；atrium task log tN；atrium task tree tN；atrium top --once；atrium map oN --json",
     "- 重派：atrium task run tN [--worker 工具+模型[:强度]]；捎话：atrium task tell tN 补充；停：atrium task stop tN；备注：atrium task note tN 文字",
     `- 新活：atrium task add 标题 --part ${home} [--priority 修复|普通|闲时] [--brief 文件] [--repo 路径] [--by 专员]；再 atrium task run tN（入队，按优先级拉起）`,
-    "- 优先级：巡检发现、上线验证没过、审阅打回或合入交回派生的写 --priority 修复（排在普通任务前面）；只有影响使用的才写 --priority 紧急（另跳过本机负载限制）",
-    "- 巡检发现：atrium patrol findings oN；开任务后 atrium patrol decide fN --task tN，合到已有任务用 --merge tN，忽略用 --ignore 原因；处理后确认事件",
-    "- 产品部的小改进（choice_small）：由你按节奏自行处理——逐条开任务、并入已有任务（atrium task note tN）或不做，记一条决定（atrium decision add）；性能等闲时活照旧排后，不必上交",
+    "- 优先级：审阅打回或合入交回派生的写 --priority 修复（巡检直接建修复任务，同标题没结束的会被拒）（排在普通任务前面）；只有影响使用的才写 --priority 紧急（另跳过本机负载限制）",
+    "- 调研的小改进（choice_small）：由你按节奏自行处理——逐条开任务、并入已有任务（atrium task note tN）或不做，记一条决定（atrium decision add）；性能等闲时活照旧排后，不必上交",
     `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,
     `- 子节点指派 leader：atrium org edit 子节点 --leader aM`,
     "- 资料：atrium material ls --node oN；疑似没用的（资料清理线索）你来定：用不上就 atrium material archive mN --note 原因（只归档不删，可恢复），要留就 atrium material keep mN --note 原因（之后不再提）；拿不准先 atrium material show mN 看谁读过",

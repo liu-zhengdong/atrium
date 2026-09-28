@@ -7,8 +7,7 @@ import { smallHint } from "./model.ts";
 import { decideChoice, type Choice, type Decided } from "./store.ts";
 
 /**
- * 选项单的事件投递（接口与产品部研究收尾共用）：建好后项目 leader 收 choice_review（写意见）；
- * 拍板人是用户时秘书收 choice_ready（叫醒），下放时 leader 收 choice_ready、秘书只收知会 choice_notice；
+ * 选项单的事件投递（接口与调研收尾共用）：建好后项目 leader 收 choice_review（写意见），秘书收 choice_ready（叫醒）；
  * 拍板（接口、Telegram 按钮共用）后同一去重键改投知会 choice_decided。
  * 随单的小改进另投 choice_small 给建单时记下的项目 leader（没有 leader 为秘书），由它自己定，不进选项单。
  */
@@ -20,7 +19,6 @@ export const choiceBrief = (choice: Choice) => ({
   node_name: choice.node_name,
   options: choice.options.length,
   status: choice.status,
-  decider: choice.decider,
 });
 
 /** 选项单所在节点最近的 leader；没有为 null。 */
@@ -50,7 +48,7 @@ export function publishChoice(
   });
 }
 
-/** 新选项单：按拍板人叫醒秘书或 leader，并请项目 leader 写意见；有小改进时交项目 leader 自己定。creator 是 leader 短号，秘书为 undefined。 */
+/** 新选项单：叫醒秘书，并请项目 leader 写意见；有小改进时交项目 leader 自己定。creator 是 leader 短号，秘书为 undefined。 */
 export function announceChoice(
   db: DatabaseSync,
   inbox: EventInbox,
@@ -79,29 +77,19 @@ export function announceChoice(
     });
   const leader = choiceLeader(db, choice);
   const show = `atrium choice show ${choice.ref}`;
-  if (choice.decider === "u1") {
-    publishChoice(inbox, SECRETARY, "choice_ready", choice, creator, {
-      task: choice.task,
-      hint: `${choice.node_name}有一份新的选项单等用户拍板：${show}；可以和别的产品部的选项合并、去重后一起递给用户，但不删改方向；用户在全景网页或 atrium choice pick ${choice.ref} 选项号 里拍板`,
-    });
-    if (leader && leader !== creator)
-      publishChoice(inbox, leader, "choice_review", choice, creator, {
-        hint: `${choice.node_name}有一份新的选项单，拍板人是用户；先看 ${show}，可以写意见、补依据、标倾向：atrium choice comment ${choice.ref} 意见 --prefer 选项号 --basis 依据；不能拍板`,
-      });
-    return;
-  }
-  if (choice.decider !== creator)
-    publishChoice(inbox, choice.decider, "choice_ready", choice, creator, {
-      hint: `${choice.node_name}的选项单由你拍板（${choice.decider_why}）：先看 ${show}，再 atrium choice pick ${choice.ref} 选项号 --note 说明，或 atrium choice pass ${choice.ref} --note 原因`,
-    });
-  publishChoice(inbox, SECRETARY, "choice_notice", choice, creator, {
-    hint: `${choice.node_name}有一份新的选项单，拍板权已下放给 ${choice.decider}，只需知会用户：${show}`,
+  publishChoice(inbox, SECRETARY, "choice_ready", choice, creator, {
+    task: choice.task,
+    hint: `${choice.node_name}有一份新的选项单等用户拍板：${show}；可以和别的选项单合并、去重后一起递给用户，但不删改方向；用户在全景网页或 atrium choice pick ${choice.ref} 选项号 里拍板`,
   });
+  if (leader && leader !== creator)
+    publishChoice(inbox, leader, "choice_review", choice, creator, {
+      hint: `${choice.node_name}有一份新的选项单，拍板人是用户；先看 ${show}，可以写意见、补依据、标倾向：atrium choice comment ${choice.ref} 意见 --prefer 选项号 --basis 依据；不能拍板`,
+    });
 }
 
 /**
  * 拍板并投知会：秘书与该节点 leader 那条待办（choice_review / choice_ready）改成知会 choice_decided。
- * actor 是 u1（用户：命令行、全景网页、Telegram）或拍板权下放给的 leader。
+ * actor 是 u1（用户：命令行、全景网页、Telegram）。
  */
 export function decideAndAnnounce(
   db: DatabaseSync,

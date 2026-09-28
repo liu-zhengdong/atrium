@@ -156,7 +156,7 @@ export type Snapshot = {
     wake: LeaderWake | null;
     events: number;
   }[];
-  /** 等用户拍板的选项单（产品部）；没有时不给，旧版服务也没有。 */
+  /** 等用户拍板的选项单；没有时不给，旧版服务也没有。 */
   choices?: { open: number; list: PendingChoice[] };
   /** 进行中的紧急任务（t215）与太多时的提示；没有紧急任务时不给。 */
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */

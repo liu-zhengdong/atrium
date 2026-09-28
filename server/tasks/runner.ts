@@ -131,7 +131,7 @@ import { originRepo } from "./gh-repo.ts";
 import { patrolRun } from "./patrol.ts";
 import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
 import { publishTotals } from "./notice.ts";
-import { productRound } from "../products/model.ts";
+import { researchRound } from "../schedules/model.ts";
 import { pendingChoices } from "../choices/store.ts";
 import { hasRoom } from "../hosts/state.ts";
 import { registerDelivery } from "./register-delivery-runtime.ts";
@@ -882,8 +882,8 @@ export class TaskRunner {
       ? "体验巡检要连回本机服务"
       : isVerifyTask(this.db, id)
         ? "上线验证要在本机真实环境跑"
-        : productRound(this.db, id)
-          ? "产品部研究的选项单文件要留在本机"
+        : researchRound(this.db, id)
+          ? "调研的选项单文件要留在本机"
           : null;
     let repo: string | null = null;
     if (task.repo) {
@@ -1675,7 +1675,7 @@ export class TaskRunner {
       now,
       recent_ms: RECENT_MS,
       subscriber: who,
-      // 等用户拍板的选项单（产品部）；没有时不给。
+      // 等用户拍板的选项单；没有时不给。
       ...(choices.open ? { choices } : {}),
       counts: {
         ...countRows(rows),

@@ -22,10 +22,10 @@ import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
 import { alive, spawnWorker } from "./spawn.ts";
-import { finishPatrol, patrolRun } from "./patrol.ts";
+import { patrolRun } from "./patrol.ts";
 import { VERIFIER_FLAG } from "./verify.ts";
 import { isVerifyTask } from "./verify-runtime.ts";
-import { settleRound } from "../products/settle.ts";
+import { settleRound } from "../choices/settle.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
@@ -805,10 +805,6 @@ export class Executors {
       // 上线验证的结论记进原任务，验证任务自己的结局不单独投递。
       else if (isVerifyTask(this.ctx.db, id)) {
         /* 由 verify.settle 记结论。 */
-      } else if (patrolRun(this.ctx.db, id)) {
-        finishPatrol(this.ctx.db, this.ctx.inbox, id);
-        if (decision.publish !== "done")
-          this.publish(id, decision.publish, published);
       }
       // 关卡都过了才去审阅或合入队列。
       else if (
@@ -822,7 +818,7 @@ export class Executors {
           decision.publish,
           {
             ...published,
-            // 产品部的研究：把工作目录里的选项单登记上，结果（cN 或错误）随完成事件交给产品部 leader。
+            // 调研类周期任务：工作目录里写了选项单就登记上，结果（cN 或错误）随完成事件交给负责人。
             ...(decision.publish === "done"
               ? settleRound(
                   this.ctx.db,

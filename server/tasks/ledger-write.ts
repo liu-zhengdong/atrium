@@ -3,6 +3,7 @@ import { Problem } from "../problem.ts";
 import {
   addEvent,
   atomically,
+  one,
   parseTaskRef,
   requireRow,
   taskRef,
@@ -138,6 +139,24 @@ function byOf(value: unknown) {
   return value || null;
 }
 
+/** 修复任务按标题去重（巡检直接建修复任务）：同一部分已有同标题、没结束的修复任务就拒绝。 */
+function duplicateFix(db: DatabaseSync, part: number, title: string) {
+  const same = one<{ id: number }>(
+    db,
+    "SELECT id FROM tasks WHERE part_id=? AND title=? AND prio='fix' AND status NOT IN ('done','failed','cancelled') LIMIT 1",
+    part,
+    title,
+  );
+  if (same)
+    throw new Problem(
+      409,
+      `${nodeRef(part)} 已有同标题的修复任务 t${same.id} 还没结束`,
+      "conflict",
+      undefined,
+      `atrium task note t${same.id} 补充`,
+    );
+}
+
 export function createTask(
   db: DatabaseSync,
   body: unknown,
@@ -195,6 +214,7 @@ export function createTask(
     checkScope(db, { part, also }, job);
     checkTaskSecrets(db, part, secrets);
     const level = priority ?? defaultPriority(aspectPart(db, part));
+    if (level === "fix" && part !== null) duplicateFix(db, part, values.title);
     const { lastInsertRowid } = db
       .prepare(
         "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,repo,owner,deliver,issue,origin_node_id,part_id,job_id,prio,avoid_hosts,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",

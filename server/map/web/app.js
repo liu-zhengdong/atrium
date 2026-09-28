@@ -3,7 +3,7 @@
 // 一页一件东西：面包屑 → 小字类别、大标题、属性行与介绍 → 页签。三类页：
 // - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／选项／负责人／专员／技能／执行者／要点，执行者可按专员筛（#o1/workers/r1）；
 //   挂了资料的块多一个「资料」页签（只看，取与归档走命令行）；
-//   有选项单的块多一个「选项」页签（本块及下层产品部的，等你拍板的在前）；组织根顶部有「等你拍板：N」入口；
+//   有选项单的块多一个「选项」页签（本块及下层的，等你拍板的在前）；组织根顶部有「等你拍板：N」入口；
 //   其他块的「专员」页签只列属于这一块的，能请的其余专员折成一行，点开是 #o4/roles/all；
 // - 专员：#r1/workers，页签是任务／谁做得好／技能；
 // - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察；
@@ -564,7 +564,7 @@ function drawMaterials({ node: n }) {
   );
 }
 
-// ---- 选项：产品部提的选项单，等你拍板的在前；拍板是网页唯一能写的地方 ----
+// ---- 选项：调研提的选项单，等你拍板的在前；拍板是网页唯一能写的地方 ----
 
 const CHOICE_STATUS = {
   open: ["等你拍板", "amber"],
@@ -639,13 +639,13 @@ function choiceHtml(c, here) {
   const small = c.small?.text
     ? `<p class="choice-small muted small">${esc(c.small.text)}</p>`
     : "";
-  const recommend = `<p class="choice-recommend"><span class="choice-label">产品部推荐</span>选项 ${c.recommend.join("、")}——${esc(c.why)}</p>${small}${comments}`;
+  const recommend = `<p class="choice-recommend"><span class="choice-label">推荐</span>选项 ${c.recommend.join("、")}——${esc(c.why)}</p>${small}${comments}`;
   const body = open
     ? `<form class="choice-form" data-choice="${esc(c.ref)}">
         ${options}
         ${recommend}
         <label class="choice-note"><span class="choice-label">说明（可不写）</span>
-          <textarea name="note" rows="2" maxlength="1000" placeholder="为什么选这些、为什么不要那些；没选的会连同这句记进决定记录，下一轮产品部读得到"></textarea>
+          <textarea name="note" rows="2" maxlength="1000" placeholder="为什么选这些、为什么不要那些；没选的会连同这句记进决定记录，下一轮调研读得到"></textarea>
         </label>
         <div class="choice-actions">
           <button type="submit" value="pick">做勾选的</button>
@@ -670,7 +670,7 @@ function drawChoices({ node: n }) {
   const list = n.choices ?? [];
   return list.length
     ? `<div class="choices">${list.map((c) => choiceHtml(c, n.ref)).join("")}</div>`
-    : `<p class="empty">这一块还没有选项单。产品部调研后会把下一步的几个方向列在这里，等你拍板。</p>`;
+    : `<p class="empty">这一块还没有选项单。调研后会把下一步的几个方向列在这里，等你拍板。</p>`;
 }
 
 /** 重画会换掉整页 HTML：先记下正在填的勾选与说明，画完再放回去。 */

@@ -111,6 +111,19 @@ export function openTask(db: DatabaseSync, row: ScheduleRow): string | null {
   return task && isOpen(task.status) ? `t${row.last_task_id}` : null;
 }
 
+/** 这件任务是不是某条调研类周期任务建出的一轮；是就给出它挂的部分（选项单挂在那里、只在本机跑）。 */
+export function researchRound(
+  db: DatabaseSync,
+  taskId: number,
+): { node_id: number } | undefined {
+  return one<{ node_id: number }>(
+    db,
+    `SELECT s.node_id FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id
+      WHERE r.task_id=? AND s.kind='research' LIMIT 1`,
+    taskId,
+  );
+}
+
 export function recordRun(
   db: DatabaseSync,
   scheduleId: number,

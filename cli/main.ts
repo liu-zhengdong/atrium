@@ -22,13 +22,11 @@ import { chatCommand } from "./chat.ts";
 import { secretaryCommands } from "./secretary.ts";
 import { mapCommands } from "./map.ts";
 import { leaderCommands } from "./leaders.ts";
-import { patrolCommands } from "./patrol.ts";
 import { scheduleCommands } from "./schedules.ts";
 import { memoCommands } from "./memos.ts";
 import { materialCommands } from "./materials.ts";
 import { secretCommands } from "./secrets.ts";
 import { choiceCommands } from "./choices.ts";
-import { productCommands } from "./products.ts";
 import { agentCommand, agentServiceCommands, hostCommands } from "./hosts.ts";
 import { notifyCommands } from "./notify.ts";
 import { closest, Problem } from "../server/problem.ts";
@@ -115,13 +113,11 @@ export const commands: Record<string, Command> = {
   ...mapCommands,
   ...orgCommands,
   ...leaderCommands,
-  ...patrolCommands,
   ...scheduleCommands,
   ...memoCommands,
   ...materialCommands,
   ...secretCommands,
   ...choiceCommands,
-  ...productCommands,
   ...skillCommands,
   ...quotaCommands,
   ...eventCommands,

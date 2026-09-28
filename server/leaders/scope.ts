@@ -24,10 +24,8 @@ export type LeaderRule =
   | "self"
   | "escalate"
   | "events-ack"
-  | "patrol-decide"
   | "choice-add"
   | "choice-comment"
-  | "choice-decide"
   | "material-add"
   | "material"
   | "material-read"
@@ -62,12 +60,9 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/decisions/:id/settle": "self",
   "POST /api/decisions/:id/unsupersede": "self",
   "POST /api/leaders/:id/escalate": "escalate",
-  "POST /api/patrol/findings/:id/decide": "patrol-decide",
-  // 产品部提选项、项目 leader 写意见；拍板缺省是用户的事，下放后才轮到 leader（store 判）。
+  // leader 提选项、写意见；拍板只有用户（leader 令牌默认拒绝）。
   "POST /api/choices": "choice-add",
   "POST /api/choices/:id/comment": "choice-comment",
-  "POST /api/choices/:id/pick": "choice-decide",
-  "POST /api/choices/:id/pass": "choice-decide",
   // 资料（t192）：在负责的部分里加、归档、恢复、留下；取资料哪儿的都能取（记读者）。真删只有用户。
   "POST /api/materials": "material-add",
   "POST /api/materials/:id/archive": "material",
@@ -115,12 +110,15 @@ export function denyReason(leader: string, method: string, route: string) {
   if (key === "POST /api/leaders") return denied(leader, "登记新的 leader");
   if (route.startsWith("/api/hosts"))
     return denied(leader, "登记、移除或暂停执行机器");
-  if (key === "POST /api/products")
-    return denied(leader, "成立产品部（那是用户的决定）");
   if (key === "DELETE /api/materials/:id")
     return denied(
       leader,
       "真删资料（那是用户的决定；用不上了就归档：atrium material archive mN --note 原因）",
+    );
+  if (route.endsWith("/pick") || route.endsWith("/pass"))
+    return denied(
+      leader,
+      "拍板选项单（只有用户能拍；可以写意见：atrium choice comment cN 意见 --prefer 选项号）",
     );
   if (route.startsWith("/api/notify"))
     return denied(leader, "改推送到手机的设置（那是用户的）");
@@ -129,8 +127,6 @@ export function denyReason(leader: string, method: string, route: string) {
       leader,
       "真删凭据（那是用户的决定；用不上了就归档：atrium secret archive 节点 名称 --note 原因）",
     );
-  if (route.startsWith("/api/product/"))
-    return denied(leader, "改谁拍板选项单（那是用户的决定）");
   return denied(leader, `调用 ${key}`);
 }
 
@@ -246,8 +242,7 @@ export function escalateVerdict(leader: string, target: string) {
 }
 
 /**
- * 提选项单：挂在自己负责的部分及以下，或自己负责的部分的上一层——产品部管的是父节点的演进，
- * 选项要挂在它要演进的那一块上。node 为 null（查不到）算范围外。
+ * 提选项单：挂在自己负责的部分及以下，或自己负责的部分的上一层（选项要挂在它要演进的那一块上）。node 为 null（查不到）算范围外。
  */
 export function choiceAddVerdict(input: {
   leader: string;

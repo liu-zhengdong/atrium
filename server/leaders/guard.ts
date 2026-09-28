@@ -8,7 +8,6 @@ import { getTask } from "../tasks/ledger.ts";
 import { parentOf } from "../tasks/ledger-validate.ts";
 import { ackIds, type EventInbox } from "../tasks/events.ts";
 import { taskPartId } from "./subscriber.ts";
-import { findingNode } from "../tasks/patrol.ts";
 import { choiceNodeId } from "../choices/store.ts";
 import { getMaterial } from "../materials/store.ts";
 import { materialRef } from "../materials/model.ts";
@@ -217,15 +216,6 @@ export function registerLeaderGuard(
         verdict = ackVerdict(leader, [...found.values()]);
         break;
       }
-      case "patrol-decide":
-        verdict = scopeVerdict(leader, scope, [
-          {
-            what: `发现 ${idParam(request)}`,
-            node: findingNode(db, idParam(request)),
-          },
-          ...(given(body.task) ? [taskCheck(db, body.task)] : []),
-        ]);
-        break;
       case "choice-add":
       case "choice-comment": {
         const list = nodes(db);
@@ -261,9 +251,6 @@ export function registerLeaderGuard(
             },
           ]);
         }
-        break;
-      // 是不是这份选项单的拍板人由 choices/store.ts 按节点设置判，这里不重复。
-      case "choice-decide":
         break;
       // 资料：挂到负责的部分里；归档、恢复、留下看资料挂在哪。取资料不限。
       case "material-add":

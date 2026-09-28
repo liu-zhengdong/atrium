@@ -7,21 +7,17 @@ import { announceChoice, choiceBrief, decideAndAnnounce } from "./notify.ts";
 import {
   addChoice,
   addComment,
-  deciderSetting,
   ensureChoiceTables,
   getChoice,
   listChoices,
   parseLimit,
-  setDecider,
 } from "./store.ts";
 
 /**
- * 选项单的接口（atrium choice …、atrium product set）。
- * 建：秘书、产品部（leader 令牌只能挂在自己负责的部分或它的上一层）；看：都能看；
- * 写意见：秘书与范围内的 leader；拍板（pick / pass）：用户始终可以（用户令牌或本机全景网页同源会话），
- * 节点设了下放时该节点的 leader 也可以（store 判）。谁拍板只由用户设（PUT /api/product/nodes/:id）。
- * 事件：建好后项目 leader 收 choice_review（写意见）；拍板人是用户时秘书收 choice_ready（叫醒），
- * 下放时 leader 收 choice_ready、秘书只收知会 choice_notice；拍板后同一去重键改投知会 choice_decided。
+ * 选项单的接口（atrium choice …）。
+ * 建：秘书、leader（leader 令牌只能挂在自己负责的部分或它的上一层）、调研类周期任务（settle.ts）；看：都能看；
+ * 写意见：秘书与范围内的 leader；拍板（pick / pass）只有用户（用户令牌或本机全景网页同源会话）。
+ * 事件：建好后项目 leader 收 choice_review（写意见），秘书收 choice_ready（叫醒）；拍板后同一去重键改投知会 choice_decided。
  */
 
 type Q = Record<string, string | undefined>;
@@ -84,10 +80,4 @@ export function registerChoiceRoutes(
     );
   app.post("/api/choices/:id/pick", { bodyLimit: 8 * 1024 }, decide("pick"));
   app.post("/api/choices/:id/pass", { bodyLimit: 8 * 1024 }, decide("pass"));
-  app.get("/api/product/nodes/:id", (request) =>
-    deciderSetting(db, id(request)),
-  );
-  app.put("/api/product/nodes/:id", { bodyLimit: 4 * 1024 }, (request) =>
-    setDecider(db, id(request), request.body),
-  );
 }

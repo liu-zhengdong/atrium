@@ -24,7 +24,6 @@ import {
   parseApplies,
 } from "../org/aspects.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
-import { findingsForNode, findingsForNodes } from "../tasks/patrol.ts";
 import { choicesForNodes, pendingChoices } from "../choices/store.ts";
 import { materialsForNode } from "../materials/store.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
@@ -806,10 +805,7 @@ export function mapNode(
     points_below: pointsBelow(db, x, n),
     /** 别处管方面的部分里适用于本块的要点，注明来源。 */
     points_applied: appliedPoints(db, n.id),
-    findings: findingsForNode(db, n.id),
-    /** 下层各块的巡检发现，注明来自哪一块；与本块的合起来就是网页「巡检发现」页签。 */
-    findings_below: findingsBelow(db, x, n),
-    /** 本块及下层（产品部）的选项单，开放中的在前；网页「选项」页签。 */
+    /** 本块及下层的选项单，开放中的在前；网页「选项」页签。 */
     choices: choicesForNodes(db, ids, x.byId),
     /** 本块挂的资料（没归档的在前，带清理线索）；网页「资料」页签。 */
     materials: materialsForNode(db, n.id),
@@ -885,23 +881,6 @@ function pointsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
   };
   walk(n);
   return levels;
-}
-
-/** 下层各块（与 pointsBelow 同一范围：深度优先、不含本块与已归档的，至多 200 块）的巡检发现，新的在前，至多 100 条。 */
-function findingsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
-  const below = new Map<number, NodeRow>();
-  const walk = (parent: NodeRow) => {
-    for (const c of x.children.get(parent.id) ?? []) {
-      if (c.archived_at !== null || below.size >= 200) continue;
-      below.set(c.id, c);
-      walk(c);
-    }
-  };
-  walk(n);
-  return findingsForNodes(db, [...below.keys()]).map((f) => {
-    const { ref: at, name, alias } = head(x, below.get(f.node_id)!);
-    return { ...f, from: { ref: at, name, alias } };
-  });
 }
 
 /** 在跑与排队的任务（`/api/map/now`，网页顶栏「在做 N 件」）：在跑与排队的任务按归属部分归组；没有归属的放「未归属」。 */

@@ -100,7 +100,7 @@ export const scheduleCommands: Record<string, Command> = {
   "schedule add": {
     args: "节点 [标题] --every 7d|1d|12h [--at 09:00] [--kind task|patrol|research] [--brief 文件|-] [--by 专员] [--worker 工具+模型[:强度]]",
     about:
-      "周期任务：到点在节点下生成一件普通任务并派发（闲时/普通按节点缺省）；上一轮没结束就跳过本轮并记一笔，服务停机错过的只补一轮；--at 本机钟点（只用于整天的周期）；--kind patrol 生成与 patrol run 同样的体验巡检（标题可省），research 只调研不交 PR",
+      "周期任务：到点在节点下生成一件普通任务并派发（闲时/普通按节点缺省）；上一轮没结束就跳过本轮并记一笔，服务停机错过的只补一轮；--at 本机钟点（只用于整天的周期）；--kind patrol 体验巡检（按节点 uses 场景轮换，发现直接建修复任务；标题可省），research 只调研不交 PR",
     options: {
       every: { type: "string" },
       at: { type: "string" },

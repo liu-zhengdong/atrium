@@ -1,7 +1,7 @@
 // Package dispatch 是派活：一个派活队列（状态 queued 的任务，按优先级、入队先后取）、挑执行者（档案能接 + 额度富余 +
 // 不正忙）、挑机器（本机优先、空位最多），在任务目录的 git worktree 里拉起执行者，退出后按信号重试、换人、续上或交关卡。
 //
-// 命令：task run、task log；捎话是 task note --tell（POST /api/tasks/{id}/tell），停下用 task set --status blocked（派活循环结束它的执行者）。
+// 命令：task run、task tell（POST /api/tasks/{id}/tell）、task log；停下是 ledger 的 task stop（转受阻，派活循环结束它的执行者）。
 // 状态只经 ledger.Apply：入队 Enqueue、拉起 Start、退出 ExitOK（进关卡，gates 接手）或 ExitFail、停下 Block。
 // 拉起记录以任务经历 kind "launch"（workers.Run）存，gates、watch 读它。每次自主动作前问 Pause。
 package dispatch
@@ -438,6 +438,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		for _, p := range chain {
 			in.Points = append(in.Points, org.ChainLine(p))
 		}
+		in.Points = append(in.Points, org.PointsOver(chain)...)
 	}
 	if t.Skill != "" {
 		s, err := skillOf(ctx, d.env, t.Skill)

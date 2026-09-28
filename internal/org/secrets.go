@@ -136,7 +136,7 @@ func Secrets(ctx context.Context, q store.Querier, dept string) ([]Secret, error
 	out := []Secret{}
 	for i := len(chain) - 1; i >= 0; i-- {
 		own, err := listSecrets(ctx, q, `SELECT department, name, updated_at, last_used_at FROM secrets WHERE department = ?
-			ORDER BY name LIMIT ?`, chain[i], MaxSecrets)
+			ORDER BY name LIMIT ?`, chain[i], ReadCap+1)
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +168,10 @@ func listSecrets(ctx context.Context, q store.Querier, query string, args ...any
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, capErr("凭据", len(out))
 }
 
 // SecretEnv 是派活时注入执行者的凭据：每个名称从任务部门往上找最近的一份，记下使用时间。

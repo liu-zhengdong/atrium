@@ -19,6 +19,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -61,7 +62,8 @@ func fixture(t *testing.T) (*app.Env, *hub, *httptest.Server) {
 	ledger.Routes(r, env)
 	org.Routes(r, env)
 	moduleFor(h).Routes(r, env)
-	r.Handle("POST /api/events/ack", func(q *api.Req) (any, error) { return "acked", nil }) // 代替 events 包的确认接口
+	events.Routes(r, env) // 真的事件接口：负责人令牌按真实路由形状过权限判定
+	agenda.Routes(r, env)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return env, h, srv
@@ -76,6 +78,12 @@ func code(err error) string {
 		return "ok"
 	}
 	return err.Error()
+}
+
+// choice 是一份最小的合法选项单。
+func choice(dept string) map[string]any {
+	opt := map[string]string{"title": "A", "gain": "g", "why_now": "w", "cost": "c", "if_not": "i", "evidence": "e"}
+	return map[string]any{"org": dept, "title": "下一步", "options": []any{opt, opt, opt}, "recommend": []int{1}, "reason": "r"}
 }
 
 func TestLeaderGuard(t *testing.T) {
@@ -114,6 +122,13 @@ func TestLeaderGuard(t *testing.T) {
 		{"写别人备忘", "PUT", "/api/memo?as=a1", map[string]string{"body": "x"}, "forbidden"},
 		{"确认投给自己的事件", "POST", "/api/events/ack", map[string]any{"ids": []int{1}}, "ok"},
 		{"确认投给秘书的事件", "POST", "/api/events/ack", map[string]any{"ids": []int{1, 2}}, "forbidden"},
+		{"取自己的事件", "GET", "/api/events/wait?timeout=0", nil, "ok"},
+		{"取别人的事件", "GET", "/api/events/wait?timeout=0&as=a1", nil, "forbidden"},
+		{"本部门递选项单", "POST", "/api/choices", choice("o2"), "ok"},
+		{"别处递选项单", "POST", "/api/choices", choice("o3"), "forbidden"},
+		{"拍板", "POST", "/api/choices/c1/decide", map[string]any{"picks": []int{1}}, "forbidden"},
+		{"本部门周期任务", "POST", "/api/schedules", map[string]any{"org": "o2", "title": "巡检", "every": "1d"}, "ok"},
+		{"别处周期任务", "POST", "/api/schedules", map[string]any{"org": "o3", "title": "巡检", "every": "1d"}, "forbidden"},
 		{"没注册的写接口", "POST", "/api/nothing", nil, "not_found"},
 	}
 	for _, c := range cases {

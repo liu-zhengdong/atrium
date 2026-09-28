@@ -3,11 +3,13 @@ package web
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
@@ -15,6 +17,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 本文件是网页的只读数据：任务与部门走 ledger、org 的读函数；决定、选项单、资料、身份、机器这些
@@ -143,9 +146,9 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 	return Nav{Depts: nonNil(ix.list), Asks: len(asks)}, nil
 }
 
-// Ask 是「等你」的一件：选项单等你挑，或卡住的任务递到了你这层（往上没有负责人）。
+// Ask 是「等你」的一件：选项单等你挑，卡住的任务递到了你这层（往上没有负责人），或负责人上交到秘书这层还没处理的事。
 type Ask struct {
-	Kind     string `json:"kind"` // choose | stuck
+	Kind     string `json:"kind"` // choose | stuck | escalate
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Sub      string `json:"sub"`
@@ -189,7 +192,35 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 		}
 		out = append(out, Ask{Kind: "stuck", ID: t.ID, Title: t.Title, Sub: sub, Dept: t.Org, DeptName: ix.name(t.Org), At: t.UpdatedAt})
 	}
-	return out, nil
+	ups, err := escalations(ctx, q, ix)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, ups...), nil
+}
+
+// escalations 是负责人上交到秘书这层（往上没有负责人）、要处理（已上线只知会，不算）、还没确认的事件。
+func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error) {
+	rows, err := q.QueryContext(ctx, `SELECT COALESCE(task, ''), COALESCE(department, ''), body, updated_at FROM events
+		WHERE kind = ? AND target = ? AND level = ? AND acked_at IS NULL ORDER BY id LIMIT 200`, events.LeaderEscalate, org.Secretary, events.Act)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Ask
+	for rows.Next() {
+		var task, dept, raw string
+		var at int64
+		if err := rows.Scan(&task, &dept, &raw, &at); err != nil {
+			return nil, err
+		}
+		var b struct{ From, Label, Note string }
+		if err := json.Unmarshal([]byte(raw), &b); err != nil {
+			return nil, fmt.Errorf("上交事件的内容坏了：%w", err)
+		}
+		out = append(out, Ask{Kind: "escalate", ID: task, Title: b.Note, Sub: b.From + " 上交：" + b.Label, Dept: dept, DeptName: ix.name(dept), At: at})
+	}
+	return out, rows.Err()
 }
 
 // lastReason 取任务最近一次状态变化或备注里写的原因。
@@ -366,7 +397,7 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 			page.Inherited = append(page.Inherited, Rule{ID: p.ID, Text: p.Text, Why: p.Why, By: p.By, Dept: p.Org, DeptName: ix.name(p.Org)})
 		}
 	}
-	// 本部门的要点自己查、不截在上限：导入的旧数据可能超过 7 条，网页要把超出的也摆出来让你整理。
+	// 本部门的要点不截在上限：导入的旧数据可能超过 7 条，网页全摆出来并标「超限 8/7」让你整理。
 	if page.Rules, err = ownRules(ctx, q, id, ix.name(id)); err != nil {
 		return DeptPage{}, err
 	}
@@ -377,20 +408,15 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 }
 
 func ownRules(ctx context.Context, q store.Querier, id, name string) ([]Rule, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, text, why, decided_by FROM points WHERE department = ? ORDER BY pos LIMIT 100`, id)
+	ps, err := org.Points(ctx, q, id)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []Rule{}
-	for rows.Next() {
-		r := Rule{Dept: id, DeptName: name}
-		if err := rows.Scan(&r.ID, &r.Text, &r.Why, &r.By); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
+	for _, p := range ps {
+		out = append(out, Rule{ID: p.ID, Text: p.Text, Why: p.Why, By: p.By, Dept: id, DeptName: name})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // deptTasks 是部门整棵子树里没结束的任务，加上 3 天内结束的（最多 100 件，最近的在前）。
@@ -554,21 +580,18 @@ type TaskDetail struct {
 	State    string      `json:"state"`
 	Holder   string      `json:"holder"`
 	HostName string      `json:"host_name"`
-	Log      []LogLine   `json:"log"`
+	Log      string      `json:"log"` // 最近一次拉起的执行者日志尾巴（人读的行，与 task log 同一份）
 }
 
-// LogLine 是任务经历的一行（抽屉里的日志尾巴）。
-type LogLine struct {
-	At   int64  `json:"at"`
-	Text string `json:"text"`
-}
+// logTail 是抽屉里日志尾巴的行数。
+const logTail = 40
 
 func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, error) {
 	t, err := ledger.Get(ctx, q, id)
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t), Log: []LogLine{}}
+	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t)}
 	if out.Holder, err = holderText(ctx, q, t); err != nil {
 		return out, err
 	}
@@ -592,14 +615,22 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 			out.Holder = reason
 		}
 	}
-	hist, err := ledger.History(ctx, q, id, 12)
+	out.Log, err = workerLog(ctx, q, id)
+	return out, err
+}
+
+// workerLog 读任务最近一次拉起的执行者日志末尾，翻成人读的行，留最后 logTail 行；还没拉起过为空。
+func workerLog(ctx context.Context, q store.Querier, id string) (string, error) {
+	run, err := workers.LastRun(ctx, q, id)
+	if err != nil || run == nil {
+		return "", err
+	}
+	text, _, err := workers.ReadLog(run.Log, -1)
 	if err != nil {
-		return out, err
+		return "", err
 	}
-	for _, e := range hist {
-		out.Log = append(out.Log, LogLine{At: e.At, Text: logLine(e)})
-	}
-	return out, nil
+	lines := strings.Split(strings.TrimRight(workers.ReadableLog(text), "\n"), "\n")
+	return strings.Join(lines[max(len(lines)-logTail, 0):], "\n"), nil
 }
 
 // holderText 是「现在谁拿着球」：没结束的任务用 watch 的持球判定（与 top、statusline 同一份），

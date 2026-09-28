@@ -2,7 +2,6 @@ package gates
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,7 +9,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
-	"gopkg.in/yaml.v3"
 )
 
 // 与 dispatch 的约定（都记在任务经历 task_events 里，取最近一条）：
@@ -85,64 +83,21 @@ type Profile struct {
 	Checks []string // nil 表示档案没写，按 DefaultChecks
 }
 
-// LoadProfile 读 worker_profiles 里这一个档案的顶层字段（tool、model、trust、checks）。
-// 三层叠加归 workers 包；第三波接上 workers 的解析后换掉这里。
-func LoadProfile(ctx context.Context, q store.Querier, name string) (Profile, error) {
-	var spec string
-	err := q.QueryRowContext(ctx, `SELECT spec FROM worker_profiles WHERE name = ?`, name).Scan(&spec)
-	if store.IsNotFound(err) {
-		// dispatch 记在任务上的是执行者标识（工具+模型[:强度]），档案按 workers 三层叠加解析。
-		// 第三波把上面按名字直读的旧写法（本包测试在用）统一到这里。
-		r, err := workers.Resolve(ctx, q, name)
-		if err != nil {
-			return Profile{}, err
-		}
-		return Profile{Name: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Trust: r.Rules.EffectiveTrust(), Checks: r.Rules.Checks}, nil
-	}
+// LoadProfile 按执行者标识（任务上记的「工具+模型[:强度]」）取三层叠加后的档案事实（workers.Resolve）。
+func LoadProfile(ctx context.Context, q store.Querier, worker string) (Profile, error) {
+	r, err := workers.Resolve(ctx, q, worker)
 	if err != nil {
 		return Profile{}, err
 	}
-	var y struct {
-		Tool   string    `yaml:"tool"`
-		Model  string    `yaml:"model"`
-		Trust  string    `yaml:"trust"`
-		Checks *[]string `yaml:"checks"`
-	}
-	if err := yaml.Unmarshal([]byte(spec), &y); err != nil {
-		return Profile{}, fmt.Errorf("执行者档案 %s 不是合法 YAML：%w", name, err)
-	}
-	p := Profile{Name: name, Tool: y.Tool, Model: y.Model, Trust: y.Trust}
-	if p.Tool == "" {
-		p.Tool = name
-	}
-	if y.Checks != nil {
-		p.Checks = append([]string{}, *y.Checks...)
-	}
-	return p, nil
+	return Profile{Name: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Trust: r.Rules.EffectiveTrust(), Checks: r.Rules.Checks}, nil
 }
 
-// Requeue 给已转成 queued 的任务写派活队列行。ledger.Apply(Bounce/Enqueue) 不写 queue 表，
-// 交回与建审阅任务之后由这里补上；第三波换成 dispatch 的入队函数。
-func Requeue(ctx context.Context, db *store.DB, id string) error {
-	return db.Tx(ctx, func(tx *sql.Tx) error {
-		t, err := ledger.Get(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if t.Status != ledger.Queued {
-			return nil
-		}
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO queue (task, priority, enqueued_at) VALUES (?, ?, ?)`,
-			id, t.Priority.Rank(), store.Now())
-		return err
-	})
-}
+// Enqueue 是派活入队（即 task run：dispatch.Enqueue），dispatch 装配时接上。建审阅任务后用它派出去。
+// 交回（Bounce）不用它：转 queued 的任务 dispatch 沿用上次拉起的执行者与选项。
+var Enqueue func(ctx context.Context, id, by string) error
 
-// Bounce 交回原执行者（同工作树同分支重派）：记原因、按次数转 queued 或 blocked，queued 时补队列行。
+// Bounce 交回原执行者（同工作树同分支重派）：记原因、按次数转 queued 或 blocked。
+// 转 queued 的由 dispatch 按上次拉起的执行者、风险与凭据重派，不另写队列行。
 func Bounce(ctx context.Context, db *store.DB, id, actor, reason string) (ledger.Task, error) {
-	t, err := ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Bounce}, actor, reason)
-	if err != nil {
-		return t, err
-	}
-	return t, Requeue(ctx, db, id)
+	return ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Bounce}, actor, reason)
 }

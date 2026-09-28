@@ -56,7 +56,7 @@ func Routes(r *api.Router, env *app.Env) {
 				s.Inherited = append(s.Inherited, p)
 			}
 		}
-		s.Room = MaxPoints - len(s.Points)
+		s.Room = max(MaxPoints-len(s.Points), 0) // 超限时为 0（Points 照样全给）
 		if s.Limits, err = Counts(q.Context(), db, id); err != nil {
 			return nil, err
 		}

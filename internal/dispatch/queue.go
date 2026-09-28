@@ -158,9 +158,9 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 	}
 	raw, _ := json.Marshal(o)
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO queue (task, priority, enqueued_at, opts, by) VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (task) DO UPDATE SET priority = excluded.priority, enqueued_at = excluded.enqueued_at,
-			opts = excluded.opts, by = excluded.by`, id, t.Priority.Rank(), store.Now(), string(raw), actor)
+		_, err := tx.ExecContext(ctx, `INSERT INTO queue (task, enqueued_at, opts, by) VALUES (?, ?, ?, ?)
+			ON CONFLICT (task) DO UPDATE SET enqueued_at = excluded.enqueued_at, opts = excluded.opts, by = excluded.by`,
+			id, store.Now(), string(raw), actor)
 		if err != nil {
 			return err
 		}

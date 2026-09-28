@@ -73,7 +73,7 @@ func Commands(t *cli.Table) {
 					fmt.Fprintf(&b, "  %s %s\n", ch.ID, ch.Name)
 				}
 			}
-			fmt.Fprintf(&b, "\n要点（%d/%d）：", len(s.Points), MaxPoints)
+			fmt.Fprintf(&b, "\n要点（%s）：", Tally("points", len(s.Points)))
 			if len(s.Points) == 0 {
 				b.WriteString("无")
 			}
@@ -90,12 +90,12 @@ func Commands(t *cli.Table) {
 			var used []string
 			for _, l := range s.Limits {
 				if l.Key != "points" {
-					used = append(used, fmt.Sprintf("%s %d/%d", strings.TrimPrefix(strings.TrimPrefix(l.What, "每部门"), "部门"), l.Used, l.Max))
+					used = append(used, strings.TrimPrefix(strings.TrimPrefix(l.What, "每部门"), "部门")+" "+Tally(l.Key, l.Used))
 				}
 			}
 			fmt.Fprintf(&b, "\n用量：%s\n", strings.Join(used, "，"))
 			next := "atrium point add " + d.ID + " <一句话>"
-			if s.Room == 0 {
+			if s.Room <= 0 {
 				next = "atrium point edit <kN> --text <合并后的一句话>"
 			}
 			return c.Done(s, b.String(), next)

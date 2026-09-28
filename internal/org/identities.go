@@ -37,9 +37,13 @@ type LeaderPatch struct {
 	Workers *[]string `json:"workers,omitempty"`
 }
 
-func checkWorkers(list []string) error {
+// CheckWorker 核对一个执行者标识能不能解析（workers.Resolve；org 不能引用 workers，由 workers 在服务进程里接上）。
+// 负责人的执行者组合与 task run --worker 是同一种写法，解析也走同一条路。
+var CheckWorker func(ctx context.Context, q store.Querier, id string) error
+
+func checkWorkers(ctx context.Context, q store.Querier, list []string) error {
 	if len(list) == 0 {
-		return api.Usage("--workers: 至少给一个执行者档案（唤醒负责人时用它起进程）")
+		return api.Usage("--workers: 至少给一个执行者（唤醒负责人时用它起进程）")
 	}
 	if len(list) > MaxLeaderWorkers {
 		return api.Usage("--workers: 最多 %d 个", MaxLeaderWorkers)
@@ -49,10 +53,15 @@ func checkWorkers(list []string) error {
 			return err
 		}
 		if strings.ContainsAny(w, ", \t\n") {
-			return api.Usage("--workers: 档案名不能含逗号或空白，收到 %q", w)
+			return api.Usage("--workers: 执行者不能含逗号或空白，收到 %q", w)
 		}
 		if slices.Contains(list[:i], w) {
 			return api.Usage("--workers: %s 重复了", w)
+		}
+		if CheckWorker != nil {
+			if err := CheckWorker(ctx, q, w); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -62,7 +71,7 @@ func AddLeader(ctx context.Context, db *store.DB, in NewLeader) (Identity, error
 	if err := checkText("name", in.Name, maxName, true); err != nil {
 		return Identity{}, err
 	}
-	if err := checkWorkers(in.Workers); err != nil {
+	if err := checkWorkers(ctx, db, in.Workers); err != nil {
 		return Identity{}, err
 	}
 	var id string
@@ -98,7 +107,7 @@ func EditLeader(ctx context.Context, db *store.DB, id string, p LeaderPatch) (Id
 		}
 	}
 	if p.Workers != nil {
-		if err := checkWorkers(*p.Workers); err != nil {
+		if err := checkWorkers(ctx, db, *p.Workers); err != nil {
 			return Identity{}, err
 		}
 	}
@@ -161,7 +170,7 @@ func GetIdentity(ctx context.Context, q store.Querier, id string) (Identity, err
 // Leaders 列全部负责人（按建立先后）。
 func Leaders(ctx context.Context, q store.Querier) ([]Identity, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, kind, name, workers, created_at FROM identities
-		WHERE kind = 'leader' ORDER BY created_at, id LIMIT ?`, MaxLeaders)
+		WHERE kind = 'leader' ORDER BY created_at, id LIMIT ?`, ReadCap+1)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +184,9 @@ func Leaders(ctx context.Context, q store.Querier) ([]Identity, error) {
 		out = append(out, i)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := capErr("负责人", len(out)); err != nil {
 		return nil, err
 	}
 	leaders, err := LeaderMap(ctx, q)
@@ -192,7 +204,7 @@ func Parents(ctx context.Context, q store.Querier) (map[string]string, error) { 
 
 // LeaderMap 读「部门 → 负责人」（只含有负责人的部门）。
 func LeaderMap(ctx context.Context, q store.Querier) (map[string]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, leader FROM departments WHERE leader IS NOT NULL LIMIT ?`, MaxDepts)
+	rows, err := q.QueryContext(ctx, `SELECT id, leader FROM departments WHERE leader IS NOT NULL LIMIT ?`, ReadCap+1)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +217,10 @@ func LeaderMap(ctx context.Context, q store.Querier) (map[string]string, error) 
 		}
 		m[d] = l
 	}
-	return m, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return m, capErr("有负责人的部门", len(m))
 }
 
 // Nearest 纯判定：从 dept 往上找最近的负责人，跳过 skip（上交时跳过自己）；都没有返回秘书。

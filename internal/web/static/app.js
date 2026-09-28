@@ -7,6 +7,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const icon = {
   choose: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
   stuck: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 4v5"/><circle cx="8" cy="11.8" r=".6" fill="currentColor"/></svg>',
+  escalate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>',
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
   x: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
@@ -131,7 +132,7 @@ async function renderDept(id, tab) {
         <button data-tab="tasks" class="${tab === "tasks" ? "on" : ""}">任务</button>
         <button data-tab="rules" class="${tab === "rules" ? "on" : ""}">规矩</button>
         <button data-tab="files" class="${tab === "files" ? "on" : ""}">资料</button>
-        ${tab === "rules" ? `<span class="${cap}">${d.rules.length}/${d.rule_max}</span>` : ""}
+        ${tab === "rules" ? `<span class="${cap}">${d.rules.length > d.rule_max ? "超限 " : ""}${d.rules.length}/${d.rule_max}</span>` : ""}
       </div>${body}</section>`;
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { location.hash = id + "/" + b.dataset.tab; });
 }
@@ -184,7 +185,7 @@ async function openTask(id) {
       <div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>
       <div class="holder"><b>${label}</b>　${esc(d.holder)} · ${esc(ago(t.updated_at))}</div>
       <dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd></dl>
-      ${d.log.length ? `<div class="log">${d.log.map(l => `${clock(l.at)}  ${esc(l.text)}`).join("\n")}</div>` : ""}
+      ${d.log ? `<div class="log">${esc(d.log)}</div>` : ""}
     </div>`;
 }
 async function openChoice(id) {

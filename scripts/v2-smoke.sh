@@ -107,7 +107,8 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer lt_fake'
 
 step "events wait / ack（任务受阻 → 要处理事件投秘书）"
 out=$(json task add 受阻的活); t_blk=$(jq -r .result.id <<<"$out")
-out=$(json task set "$t_blk" --status blocked); has '.result.status == "blocked"'
+out=$(json task set "$t_blk" --status blocked || true); has '.ok == false and .error.code == "usage"'   # 停下只有 task stop 一个说法
+out=$(json task stop "$t_blk" 等证书); has '.result.status == "blocked" and .next == "atrium task run '"$t_blk"'"'
 out=$(json events wait --timeout 5); has '(.result|length) >= 1 and (.result|map(select(.task == "'"$t_blk"'"))|.[0].level) == "act" and (.next|startswith("atrium events ack"))'
 ev=$(jq -r '.result|map(select(.task == "'"$t_blk"'"))|.[0].id' <<<"$out")
 out=$(json events wait --timeout 0); has '(.result|map(select(.id == '"$ev"'))|length) == 0'   # 租约内不重投
@@ -142,7 +143,7 @@ out=$(CLAUDE_CODE_MESSAGING_SOCKET="$sock" CLAUDE_CODE_MESSAGING_TOKEN=tok json 
 bridge=$(jq -r .result.pid <<<"$out"); pid="$pid $bridge"
 out=$(CLAUDE_CODE_MESSAGING_SOCKET="$sock" CLAUDE_CODE_MESSAGING_TOKEN=tok json secretary bridge --detach); has '.result.pid == '"$bridge"   # 同一会话不起第二个
 out=$(json task add 又卡住); t_blk2=$(jq -r .result.id <<<"$out")
-json task set "$t_blk2" --status blocked >/dev/null
+json task stop "$t_blk2" >/dev/null
 for _ in $(seq 100); do grep -q "$t_blk2" "$work/inbox.txt" 2>/dev/null && break; sleep 0.1; done
 head -1 "$work/inbox.txt" | grep -qx '{"type":"auth","token":"tok"}' || fail "没先认证：$(cat "$work/inbox.txt" 2>/dev/null)"
 grep -q "【Atrium 事件】" "$work/inbox.txt" && grep -q "$t_blk2" "$work/inbox.txt" || fail "事件没注入会话：$(cat "$work/inbox.txt" 2>/dev/null)"
@@ -292,7 +293,11 @@ out=$(json task run "$run_id" --worker fakesh); has '.result.queued and .result.
 out=$(json task wait "$run_id" --timeout 30); has '.result.task.status == "done"'   # 没有仓库：关卡过了直接完成
 out=$(json task log "$run_id"); has '(.result.text|contains("worker=1 task='"$run_id"'")) and (.result.text|contains("DONE")) and .result.running == false'
 out=$(json task show "$run_id"); has '.result.task.worker == "fakesh" and .result.task.host == "h1" and ((.result.history|map(.kind)) as $k | ["launch","worktree","result","exit_ok"] - $k == [])'
-out=$(json task note "$run_id" "补一句" --tell || true); has '.ok == false and .error.code == "conflict"'   # 已完成：捎话没人收
+out=$(json task tell "$run_id" "补一句" || true); has '.ok == false and .error.code == "conflict"'   # 已完成：捎话没人收
+
+step "第三波接缝：负责人组合按执行者解析；帮助末尾点名不列出的命令"
+out=$(json leader add 坏组合 --workers nosuch+x || true); has '.ok == false and .error.code == "usage"'
+"$bin" --help | grep -q "不列出的.*statusline" || fail "帮助末尾没点名隐藏命令"
 
 step "stop"
 out=$(json stop); has '.result.stopped'

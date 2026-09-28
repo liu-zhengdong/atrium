@@ -25,7 +25,6 @@ const (
 	maxMaterialNote  = 200
 	maxMaterialFiles = 50
 	maxMaterialDepth = 4
-	maxMaterialList  = 500
 )
 
 // Units 纯函数：资料的折算字数。文本（合法 UTF-8、无 NUL）按字（rune）数；二进制按 3 字节折一字
@@ -146,7 +145,7 @@ func Materials(ctx context.Context, q store.Querier, data string, f MaterialFilt
 		where, args = append(where, "department = ?"), append(args, f.Org)
 	}
 	rows, err := q.QueryContext(ctx, `SELECT `+materialCols+` FROM materials m WHERE `+strings.Join(where, " AND ")+
-		` ORDER BY department, kind = 'detail', title LIMIT ?`, append(args, maxMaterialList)...)
+		` ORDER BY department, kind = 'detail', title LIMIT ?`, append(args, ReadCap+1)...)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +158,10 @@ func Materials(ctx context.Context, q store.Querier, data string, f MaterialFilt
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, capErr("资料", len(out))
 }
 
 // GetMaterial 取一份资料的某一版（rev 为 0 取最新）。

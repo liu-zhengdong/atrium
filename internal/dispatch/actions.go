@@ -3,14 +3,13 @@ package dispatch
 import (
 	"context"
 	"database/sql"
-	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/watch"
@@ -93,8 +92,6 @@ type LogChunk struct {
 	Running bool   `json:"running"`
 }
 
-const logChunk = 256 * 1024
-
 // ReadLog 读最近一次拉起的日志：offset < 0 读末尾一段；否则从 offset 读，wait 时没有新内容就等（有新内容、执行者退出或超时）。
 func ReadLog(ctx context.Context, env *app.Env, id string, offset int64, wait time.Duration) (LogChunk, error) {
 	d := get(env)
@@ -113,12 +110,12 @@ func ReadLog(ctx context.Context, env *app.Env, id string, offset int64, wait ti
 	for {
 		p := d.procOf(id)
 		c.Running = p != nil && p.run.N == run.N
-		text, next, err := readFrom(run.Log, offset)
+		text, next, err := workers.ReadLog(run.Log, offset)
 		if err != nil {
 			return c, err
 		}
 		if text != "" || !c.Running || time.Now().After(deadline) {
-			c.Text, c.Offset = Readable(text), next
+			c.Text, c.Offset = workers.ReadableLog(text), next
 			return c, nil
 		}
 		select {
@@ -130,64 +127,16 @@ func ReadLog(ctx context.Context, env *app.Env, id string, offset int64, wait ti
 	}
 }
 
-// readFrom 读到最后一个完整行；offset < 0 表示读末尾一段（从下一行开头起）。
-func readFrom(path string, offset int64) (string, int64, error) {
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return "", max(offset, 0), nil
-	}
-	if err != nil {
-		return "", 0, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return "", 0, err
-	}
-	tail := offset < 0
-	if tail {
-		offset = max(st.Size()-64*1024, 0)
-	}
-	if offset > st.Size() {
-		offset = st.Size()
-	}
-	buf := make([]byte, min(st.Size()-offset, logChunk))
-	if _, err := f.ReadAt(buf, offset); err != nil && err != io.EOF {
-		return "", 0, err
-	}
-	s := string(buf)
-	if tail && offset > 0 {
-		if i := strings.IndexByte(s, '\n'); i >= 0 {
-			s, offset = s[i+1:], offset+int64(i+1)
-		}
-	}
-	end := strings.LastIndexByte(s, '\n')
-	if end < 0 {
-		return "", offset, nil
-	}
-	return s[:end+1], offset + int64(end+1), nil
-}
-
-// Readable 把日志一段变成人读的行（空行与不值得看的事件去掉）。
-func Readable(text string) string {
-	var out []string
-	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-		if r := workers.Readable(l); strings.TrimSpace(r) != "" {
-			out = append(out, r)
-		}
-	}
-	if len(out) == 0 {
-		return ""
-	}
-	return strings.Join(out, "\n") + "\n"
-}
-
-// hook 接上 watch 的重新入队与周期任务的派活（服务进程里，Routes 装配时调）。
+// hook 接上 watch 的重新入队、周期任务与审阅任务的派活（服务进程里，Routes 装配时调）。
 func hook(env *app.Env) {
 	watch.Use(watch.Hooks{Requeue: func(ctx context.Context, task string, why watch.Why) error {
 		return Requeue(ctx, env, task, why)
 	}})
 	agenda.Enqueue = func(ctx context.Context, env *app.Env, task, by string) error {
+		_, err := Enqueue(ctx, env, task, Options{}, by)
+		return err
+	}
+	gates.Enqueue = func(ctx context.Context, task, by string) error {
 		_, err := Enqueue(ctx, env, task, Options{}, by)
 		return err
 	}

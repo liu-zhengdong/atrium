@@ -84,8 +84,22 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			t := d.Task
+			// 没结束的任务问 watch「现在球在谁手里」（持球人判定只有一份，在 watch）。
+			var h struct {
+				Holder struct {
+					Text string `json:"text"`
+				} `json:"holder"`
+			}
+			if !t.Status.Finished() {
+				if err := c.Call("GET", "/api/tasks/"+url.PathEscape(id)+"/holder", nil, &h); err != nil {
+					return err
+				}
+			}
 			var b strings.Builder
 			fmt.Fprintf(&b, "%s「%s」\n状态：%s  优先级：%s\n", t.ID, t.Title, stateLabel(t), t.Priority)
+			if h.Holder.Text != "" {
+				fmt.Fprintf(&b, "现在：%s\n", h.Holder.Text)
+			}
 			for _, kv := range [][2]string{{"部门", t.Org}, {"父任务", t.Parent}} {
 				if kv[1] != "" {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
@@ -124,7 +138,11 @@ func Commands(t *cli.Table) {
 			case t.Status.Finished():
 				next = "atrium task ls"
 			}
-			return c.Done(d, b.String(), next)
+			out := struct {
+				Detail
+				Holder string `json:"holder,omitempty"` // 现在谁拿着球（没结束的任务）
+			}{d, h.Holder.Text}
+			return c.Done(out, b.String(), next)
 		}})
 	t.Add(cli.Command{Path: "task set", Args: "<tN>", Summary: "改任务的描述、依赖或状态",
 		Flags: []cli.Flag{
@@ -135,7 +153,7 @@ func Commands(t *cli.Table) {
 			{Name: "skill", Value: "名字", Help: "技能（给空串清掉）"},
 			{Name: "repo", Value: "仓库", Help: "仓库"},
 			{Name: "after", Value: "tN", Multi: true, Help: "整体替换依赖（给空串清空）"},
-			{Name: "status", Value: "状态", Help: "人工改状态：todo、done、failed、blocked、cancelled"},
+			{Name: "status", Value: "状态", Help: "人工改状态：todo、done、failed、cancelled（停下用 task stop）"},
 			{Name: "note", Value: "文字", Help: "改状态的原因，记进经历"},
 		},
 		Run: func(c *cli.Ctx) error {
@@ -157,6 +175,9 @@ func Commands(t *cli.Table) {
 				body.After = &after
 			}
 			if s := c.Opt("status"); s != nil {
+				if Status(*s) == Blocked {
+					return api.Usage("--status: 停下用 atrium task stop %s [原因]", id)
+				}
 				st := Status(*s)
 				body.Status = &st
 			}
@@ -165,6 +186,26 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			return c.Done(t, fmt.Sprintf("已改 %s「%s」：%s", t.ID, t.Title, stateLabel(t)), "atrium task show "+t.ID)
+		}})
+	t.Add(cli.Command{Path: "task stop", Args: "<tN> [原因]", Summary: "停下任务：结束在跑的执行者，转受阻（再派用 task run）",
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(2); err != nil {
+				return err
+			}
+			st := Blocked
+			body := SetBody{Status: &st, Note: "停下"}
+			if len(c.Args) == 2 {
+				body.Note = "停下：" + c.Args[1]
+			}
+			var t Task
+			if err := c.Call("PATCH", "/api/tasks/"+url.PathEscape(id), body, &t); err != nil {
+				return err
+			}
+			return c.Done(t, fmt.Sprintf("已停下 %s「%s」：%s；在跑的执行者由派活循环结束", t.ID, t.Title, stateLabel(t)), "atrium task run "+t.ID)
 		}})
 	t.Add(cli.Command{Path: "task tree", Args: "[tN]", Summary: "看任务树与各层汇总（不给 tN 看全部顶层没结束的）",
 		Run: func(c *cli.Ctx) error {
@@ -227,8 +268,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(rows, b.String(), next)
 		}})
-	t.Add(cli.Command{Path: "task note", Args: "<tN> <文字>", Summary: "给任务加一条备注（记进经历）；--tell 同时捎给执行者",
-		Flags: []cli.Flag{{Name: "tell", Bool: true, Help: "也捎给执行者：在跑的按工具即时或本轮后送到，没在跑的下次拉起时写进提示词（dispatch 送）"}},
+	t.Add(cli.Command{Path: "task note", Args: "<tN> <文字>", Summary: "给任务加一条备注（记进经历，执行者看不到；要捎给它用 task tell）",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -240,15 +280,6 @@ func Commands(t *cli.Table) {
 			}
 			if err := c.MaxArgs(2); err != nil {
 				return err
-			}
-			if c.Bool("tell") {
-				var r struct {
-					Note string `json:"note"`
-				}
-				if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/tell", map[string]string{"text": text}, &r); err != nil {
-					return err
-				}
-				return c.Done(r, "已记下并捎话："+r.Note, "atrium task log "+id+" --follow")
 			}
 			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/notes", map[string]string{"text": text}, nil); err != nil {
 				return err

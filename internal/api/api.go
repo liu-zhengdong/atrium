@@ -97,10 +97,11 @@ type Authenticator func(token string) (Actor, bool)
 type Guard func(q *Req) error
 
 type Router struct {
-	mux    *http.ServeMux
-	auths  []Authenticator
-	guards map[string]Guard
-	Log    *slog.Logger
+	mux      *http.ServeMux
+	patterns []string // 需认证的路由（Handle 注册的），权限表的测试核对用
+	auths    []Authenticator
+	guards   map[string]Guard
+	Log      *slog.Logger
 }
 
 func NewRouter(log *slog.Logger) *Router {
@@ -137,7 +138,13 @@ func WriteJSON(w http.ResponseWriter, err error, result any, log *slog.Logger) {
 	write(w, err, result, log)
 }
 
+// Patterns 列出 Handle 注册的全部路由模式（按注册顺序）。
+func (r *Router) Patterns() []string { return append([]string{}, r.patterns...) }
+
 func (r *Router) handle(pattern string, h Handler, auth bool) {
+	if auth {
+		r.patterns = append(r.patterns, pattern)
+	}
 	r.mux.HandleFunc(pattern, func(w http.ResponseWriter, hr *http.Request) {
 		req := &Req{Request: hr}
 		if auth {

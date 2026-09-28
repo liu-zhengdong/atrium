@@ -101,9 +101,11 @@ func (t *Table) Commands() []*Command {
 func (t *Table) writeHelp(w io.Writer) {
 	fmt.Fprintf(w, "%s\n\n用法：%s <命令> [参数] [--json]\n\n", t.Intro, t.Name)
 	var top []*Command
+	var hidden []string
 	byGroup := map[string][]*Command{}
 	for _, c := range t.Commands() {
 		if c.Hidden {
+			hidden = append(hidden, c.Path)
 			continue
 		}
 		if first := strings.Fields(c.Path)[0]; t.hasGroup(first) {
@@ -114,8 +116,14 @@ func (t *Table) writeHelp(w io.Writer) {
 	}
 	writeList(w, t.Name, top)
 	for _, g := range t.groups {
+		if len(byGroup[g.name]) == 0 {
+			continue // 整组都不列（如远程代理 agent）
+		}
 		fmt.Fprintf(w, "\n%s（%s）\n", g.summary, g.name)
 		writeList(w, t.Name, byGroup[g.name])
+	}
+	if len(hidden) > 0 {
+		fmt.Fprintf(w, "\n不列出的（程序调用或照回执抄）：%s\n", strings.Join(hidden, "、"))
 	}
 	fmt.Fprintf(w, "\n下一步：%s <命令> --help\n", t.Name)
 }

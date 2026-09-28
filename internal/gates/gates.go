@@ -20,6 +20,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
@@ -156,11 +157,11 @@ type gateRecord struct {
 	Facts Facts `json:"facts"`
 }
 
-// gate 查事实、判关卡。没有仓库的任务（调研、审阅）没有 PR 要合，直接完成。
+// gate 查事实、判关卡。没有仓库的任务（调研、审阅）没有 PR 要合：工作目录根有 choice.json 就登记成选项单
+// （agenda.Settle；不合法按关卡不过交回执行者改），然后完成。
 func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	if t.Repo == "" {
-		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NoMerge: true}, Actor, "没有仓库，无 PR 要合")
-		return err
+		return g.settle(ctx, t)
 	}
 	dir, err := Workspace(ctx, g.DB, t.ID)
 	if err != nil {
@@ -204,6 +205,28 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 		note += "；合入前审阅：" + why
 	}
 	_, err = ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NeedReview: need}, Actor, note)
+	return err
+}
+
+func (g *Gate) settle(ctx context.Context, t ledger.Task) error {
+	dir, err := Workspace(ctx, g.DB, t.ID)
+	if err != nil {
+		return err
+	}
+	c, err := agenda.Settle(ctx, g.DB, t.ID, dir)
+	var ae *api.Error
+	if errors.As(err, &ae) && ae.Code == "usage" {
+		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+ae.Message)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	note := "没有仓库，无 PR 要合"
+	if c != nil {
+		note += "；登记了选项单 " + c.ID
+	}
+	_, err = ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NoMerge: true}, Actor, note)
 	return err
 }
 
@@ -322,10 +345,10 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 	if err := ledger.Record(ctx, g.DB, t.ID, KindReviewer, Actor, rt.ID); err != nil {
 		return err
 	}
-	if _, err := ledger.Apply(ctx, g.DB, rt.ID, ledger.Event{Kind: ledger.Enqueue}, Actor, "审阅 "+t.ID); err != nil {
-		return err
+	if Enqueue == nil {
+		return errors.New("派活没接上（gates.Enqueue 由 dispatch 装配）")
 	}
-	return Requeue(ctx, g.DB, rt.ID)
+	return Enqueue(ctx, rt.ID, Actor)
 }
 
 // Clip 按字符截断。

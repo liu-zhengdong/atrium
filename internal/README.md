@@ -29,22 +29,22 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `platform` | 完成 | 进程树结束、存活、shell、PATH 查找、服务与执行者白名单环境 | — |
 | `pause` | 完成 | 一键停机的状态与判定 `Paused` | `pauses` |
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
-| `ledger` | 完成 | 任务、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/tree/plan/note/wait` | `tasks` `task_deps` `task_events` |
+| `ledger` | 完成 | 任务、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/stop/tree/plan/note/wait`（`task stop` 即转受阻，派活循环结束执行者；`task set --status` 不收 blocked） | `tasks` `task_deps` `task_events` |
 | `org` | 完成 | 部门、要点、要点链、身份、备忘、技能、资料、决定、凭据、上限表与计数 | `departments` `department_repos` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `decisions` `schedules` `secrets` |
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
-| `dispatch` | 完成（hosts、quota 接线待合入，见 `dispatch/deps.go`） | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task log`；捎话 `task note --tell`、停下 `task set --status blocked` | `queue` |
+| `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
 | `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`；`workers`（列、看、改档案） | `worker_profiles` |
-| `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务）；与 dispatch 的经历约定见 `gates/records.go` | — |
+| `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；档案经 `workers.Resolve`；没有仓库的任务判过时 `agenda.Settle` 登记 choice.json；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `merge` | 完成 | 合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | 等版本、自升级、平滑重启、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
-| `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、ssh 隧道、远程代理；`host add/ls [hN]/rm`、`agent install`（前台入口 `agent` 不列在帮助里） | `hosts` `host_runs` |
+| `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、ssh 隧道、远程代理；`host add/ls [hN]/rm`；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
-| `web` | 完成 | 只读网页与只读接口；`map`；代为注册一次性的 `import`（实现在 `importer`） | — |
+| `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的日志是执行者真日志尾巴（`workers.ReadLog`，与 `task log` 同一份）；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、决定、负责人、备忘、技能、资料、档案、机器 | — |
-| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`、`statusline` | — |
+| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`、`statusline`（状态栏调用，不列在帮助里） | — |
 
 ## 共同约定
 
@@ -128,10 +128,12 @@ type Module struct {
 
 - `org.Ancestors(ctx, q, "oN")` → 顶层到本部门的链；`org.Chain(ctx, q, "oN")` → 要点链（顶层在前，同部门按 pos）；`org.ChainLine(p)` → 派活附的一行「k3（o1）规矩——为什么」。
 - 上限表在 `org/limits.go`（`Limits`：会增长的东西 → 上限 → 满了找谁 → 怎么办）；满了一律 `org.Full(key, dept, used)`，计数 `org.Counts(ctx, q, dept)`（网页「6/7」，接口 `GET /api/limits?node=oN`）。
+- 上限只挡写入，不截读取：读路径按技术上限 `org.ReadCap`（1000）查，超了报错而不是少给；超了业务上限的（导入的旧数据）照样全部返回，给人看的地方用 `org.Tally`／`org.Over` 标「超限 8/7」，要点链用 `org.PointsOver` 在派活与负责人提示词里加一行。
 - 派活（dispatch）：`org.SkillPaths(ctx, q, data, task.Skill)` → 提示词附的 SKILL.md 路径；`org.GetSkill` 取优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单；`org.Decisions(…, DecisionFilter{Org})` 有效决定。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、决定、凭据只有用户）。
-- 关卡（gates）：判过后调 `agenda.Settle(ctx, db, task, workdir)`，工作目录根有 `choice.json` 就登记成选项单（不合法返回 usage 错误，按关卡不过交回）。
+- 关卡（gates）：没有仓库的任务判过时调 `agenda.Settle(ctx, db, task, workdir)`，工作目录根有 `choice.json` 就登记成选项单（不合法返回 usage 错误，按关卡不过交回）。
+- 负责人的执行者组合与 `task run --worker` 同一种写法；登记时经 `org.CheckWorker`（workers 接上的 `Resolve`）核对。
 - dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；周期任务每轮建任务后调它。
 
 ### 派活与执行者（`internal/dispatch`、`internal/workers`）
@@ -140,7 +142,7 @@ type Module struct {
 - 拉起记录：任务经历 kind `launch`（`workers.Run`：第几次、缘由、执行者、机器、pid、工作目录、日志、风险）；`workers.LastRun` 读。另按 gates 的约定记 `risk`（入队）、`worktree`（拉起）、`result`（退出，最后回复），并 `watch.Track`。
 - 日志信号：`workers.Classify(退出码, 日志尾, 现在)` → 额度用尽／临时错误／思考耗尽；`Adapter.Ended` 判收尾；`workers.WatchSignal` 给 watch。
 - 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；额度用尽、思考耗尽换人（至多 2 次）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
-- 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`，都已在 dispatch 的 Routes 里接上。只补队列行（`gates.Requeue`）也能派：没有 opts 时沿用上次拉起的执行者。
+- 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、风险与凭据。
 - 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`、`PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
 
 ### 子进程（`internal/platform`）
@@ -180,5 +182,6 @@ ledger   ─→ events.Emit
 
 - `task add` 的回执已给出下一步 `atrium task run tN`，`task show`/`task plan` 也会指向它：dispatch 必须提供 `task run`。
 - 状态变化只能经 `ledger.Apply`；需要新的事件种类就在 PR 里提，由 ledger 加进 `Transition` 与表驱动测试，不要直接 `UPDATE tasks SET status`。
-- 命令总数规格上限 60，`cmd/atrium/main_test.go` 会数。
+- 命令总数规格上限 60，`cmd/atrium/main_test.go` 会数；`Hidden` 的（serve、agent、agent install、import、statusline）不计数，由帮助末尾一行点名。
+- 负责人令牌的权限表按路由模式判（`leaders.RuleFor`）；`cmd/atrium/routes_test.go` 装上全部模块的真实路由逐条核对，新加写接口要在那张表里写明负责人能不能调。
 - 命令组名已占用：`task`、`org`、`point`、`auth`。其余按规格：`leader`、`memo`、`choice`、`decision`、`skill`、`material`、`schedule`、`secret`（org）、`events`（events）、`host`、`agent`（hosts）、`workers`（workers）、`secretary`（secretary）。单词命令：`top`（watch）、`statusline`（secretary）、`quota`、`map`、`update`。

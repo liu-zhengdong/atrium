@@ -46,7 +46,8 @@ func Commands(t *cli.Table) {
 			{Name: "batch", Value: "秒", Help: "首条事件到了之后攒多久再送（缺省 30）"},
 		},
 		Run: bridgeCommand})
-	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听",
+	// statusline 由 Claude Code 状态栏调用（settings.json 的 statusLine），不是人敲的：不列在帮助里。
+	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听", Hidden: true,
 		Run: func(c *cli.Ctx) error {
 			var v watch.View
 			err := c.Call("GET", "/api/top", nil, &v)

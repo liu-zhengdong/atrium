@@ -6,10 +6,16 @@ import (
 	"strings"
 )
 
-// LevelOf 是事件的缺省级别：任务失败、受阻与到期要处理；其余状态变化只知会。
+// LevelOf 是事件的缺省级别：任务失败、受阻、到期与负责人上交（已上线除外）要处理；其余只知会。
+// 上交必须是「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的。
 func LevelOf(kind string, body any) string {
 	switch kind {
 	case Overdue:
+		return Act
+	case LeaderEscalate:
+		if field(body, "kind") == "shipped" {
+			return Info
+		}
 		return Act
 	case TaskStatus:
 		switch field(body, "to") {
@@ -64,6 +70,8 @@ func Summary(r Row) string {
 			line += " · " + n
 		}
 		return line + title
+	case LeaderEscalate:
+		return fmt.Sprintf("%s 上交（%s）：%s", s("from"), s("label"), clip(s("note"), 80))
 	}
 	return r.Kind + title
 }

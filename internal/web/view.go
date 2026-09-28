@@ -193,37 +193,3 @@ func eventText(e ledger.TaskEvent) string {
 	}
 	return ""
 }
-
-var kindLabel = map[string]string{
-	"created": "建立", "edited": "改了任务", "facts": "记下事实", "note": "备注",
-	"enqueue": "进派活队列", "start": "执行者开工", "exit_ok": "执行者交付", "exit_fail": "执行者失败",
-	"gate_pass": "关卡通过", "review_pass": "审阅通过", "bounce": "交回执行者", "merged": "已合入",
-	"released": "已上线", "block": "卡住", "cancel": "取消", "set": "人工改状态",
-}
-
-// logLine 把一条经历写成一行人话：「动作（谁）：原因」。
-func logLine(e ledger.TaskEvent) string {
-	label, ok := kindLabel[e.Kind]
-	if !ok {
-		label = e.Kind
-		if e.Body != "" && !strings.HasPrefix(e.Body, "{") {
-			return label + "：" + oneLine(e.Body)
-		}
-	}
-	s := label
-	if e.Actor != "" && e.Actor != "u1" {
-		s += "（" + e.Actor + "）"
-	}
-	if t := eventText(e); t != "" {
-		s += "：" + oneLine(t)
-	}
-	return s
-}
-
-func oneLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > 120 {
-		return string(r[:120]) + "…"
-	}
-	return s
-}

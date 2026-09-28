@@ -151,3 +151,31 @@ func TestOrgStore(t *testing.T) {
 		t.Fatalf("森林 %d", len(forest))
 	}
 }
+
+// 超了上限的（导入的旧数据）读出来不截断：要点链全给，并标出「超限 8/7」。
+func TestOverLimitNotTruncated(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	root, _ := Add(ctx, db, NewDept{Name: "公司"})
+	sub, _ := Add(ctx, db, NewDept{Name: "运行时", Parent: root.ID})
+	for i := 1; i <= MaxPoints+1; i++ { // 绕过 CheckRoom，模拟导入
+		if _, err := db.ExecContext(ctx, `INSERT INTO points (id, department, pos, text, decided_by, updated_by, updated_at)
+			VALUES (?, ?, ?, ?, 'u1', 'import', 0)`, "k"+string(rune('0'+i)), root.ID, i, "规矩"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chain, err := Chain(ctx, db, sub.ID)
+	if err != nil || len(chain) != MaxPoints+1 {
+		t.Fatalf("要点链应全给 %d 条：%d %v", MaxPoints+1, len(chain), err)
+	}
+	if got := PointsOver(chain); !reflect.DeepEqual(got, []string{root.ID + " 要点超限 8/7（全部附上，待整理）"}) {
+		t.Fatalf("超限标注：%v", got)
+	}
+	if Tally("points", 7) != "7/7" || Tally("points", 8) != "超限 8/7" {
+		t.Fatal("Tally")
+	}
+}

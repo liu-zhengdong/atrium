@@ -81,6 +81,7 @@ a{color:inherit;text-decoration:none}
 .ask .kind svg{width:16px;height:16px}
 .ask.choose .kind{background:var(--wait-soft);color:var(--wait)}
 .ask.stuck .kind{background:var(--bad-soft);color:var(--bad)}
+.ask.escalate .kind{background:var(--wait-soft);color:var(--wait)}
 .ask .t{font-weight:500}
 .ask .s{color:var(--ink2);font-size:13px}
 .ask .meta{margin-left:auto;text-align:right;flex:none;color:var(--ink3);font-size:12px}

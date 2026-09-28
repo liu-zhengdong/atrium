@@ -121,12 +121,13 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(d, fmt.Sprintf("已建部门 %s %s", d.ID, d.Name), "atrium point add "+d.ID+" <一句话>")
 		}})
-	t.Add(cli.Command{Path: "org edit", Args: "<oN>", Summary: "改部门：名字、上级、介绍、负责人、仓库",
+	t.Add(cli.Command{Path: "org edit", Args: "<oN>", Summary: "改部门：名字、上级、介绍、负责人、仓库；--delete 删掉",
 		Flags: append([]cli.Flag{
 			{Name: "name", Value: "名字", Help: "改名"},
 			{Name: "parent", Value: "oN", Help: "挪到别的上级下（给 - 挪到顶层）"},
 			{Name: "repo-add", Value: "仓库", Multi: true, Help: "加仓库"},
 			{Name: "repo-rm", Value: "仓库", Multi: true, Help: "去掉仓库"},
+			{Name: "delete", Bool: true, Help: "删掉这个部门（连同要点与仓库清单）；还有下属、任务、资料等引用时拒绝并列出"},
 		}, introFlags...),
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<oN>")
@@ -135,10 +136,13 @@ func Commands(t *cli.Table) {
 			}
 			p := DeptPatch{Name: c.Opt("name"), Parent: c.Opt("parent"), What: c.Opt("what"), Uses: c.Opt("uses"),
 				Now: c.Opt("now"), Next: c.Opt("next"), Leader: c.Opt("leader"),
-				RepoAdd: c.List("repo-add"), RepoDrop: c.List("repo-rm")}
+				RepoAdd: c.List("repo-add"), RepoDrop: c.List("repo-rm"), Delete: c.Bool("delete")}
 			var d Dept
 			if err := c.Call("PATCH", "/api/org/"+url.PathEscape(id), p, &d); err != nil {
 				return err
+			}
+			if p.Delete {
+				return c.Done(d, fmt.Sprintf("已删部门 %s %s（连同要点与仓库清单）", d.ID, d.Name), "atrium org tree")
 			}
 			return c.Done(d, fmt.Sprintf("已改部门 %s %s", d.ID, d.Name), "atrium org show "+d.ID)
 		}})

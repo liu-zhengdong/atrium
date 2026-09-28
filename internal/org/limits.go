@@ -23,6 +23,8 @@ const (
 	MaxLeaderWorkers = 5    // 负责人的执行者组合
 	MaxSkills        = 50   // 全部技能
 	MaxSkillBody     = 6 << 10
+	MaxSkillFile     = 5     // 技能里单个文件（MB；截图等二进制也收）
+	MaxSkillTotal    = 10    // 一个技能全部文件合计（MB）
 	MaxOverview      = 3000  // 部门资料总览（字）
 	MaxMaterial      = 50000 // 部门资料文本总量（字；二进制不计，见 Units）
 	MaxMaterialFile  = 20    // 单个资料文件（MB）
@@ -57,6 +59,8 @@ var Limits = []Limit{
 	{"memo", "每份备忘", MaxMemo, "字", "备忘的主人", "删掉已经过时的、合并重复的，只留下次醒来必须知道的；定下的规矩提成要点", "atrium memo show"},
 	{"skills", "全部技能", MaxSkills, "个", "秘书", "合并相近的技能，删掉没人用的", "atrium skill ls"},
 	{"skill_body", "每份 SKILL.md", MaxSkillBody, "B", "技能作者", "细节挪进技能目录里的附属文件，SKILL.md 只留做法", "atrium skill ls"},
+	{"skill_file", "技能里单个文件", MaxSkillFile, "MB", "技能作者", "压缩或拆小；截图只留说明做法必需的", "atrium skill ls"},
+	{"skill_total", "每个技能文件合计", MaxSkillTotal, "MB", "技能作者", "删掉不必要的附属文件、压缩截图", "atrium skill ls"},
 	{"overview", "部门资料总览", MaxOverview, "字", "部门负责人", "总览只留每次都要知道的，细节挪进细节文件", "atrium material ls --node {dept}"},
 	{"materials", "部门资料文本总量", MaxMaterial, "字", "部门负责人",
 		"归档过时的（atrium material archive mN），或把一块知识下沉到子部门", "atrium material ls --node {dept}"},
@@ -124,6 +128,14 @@ func Full(key, dept string, used int) error {
 
 // MB 把字节数折成 MB，向上取整（上限表里文件大小的单位）。纯函数。
 func MB(bytes int) int { return (bytes + 1<<20 - 1) >> 20 }
+
+// TooBig 是按 MB 计的大小上限超了的报错：谁、多大、上限多少、超出多少、怎么办。key 是上限表里单位为 MB 的一项。
+func TooBig(key, name string, bytes int) error {
+	l := LimitOf(key)
+	mb := func(b int) float64 { return float64(b) / (1 << 20) }
+	return api.Limit(l.Next, "%s %s 有 %.1f MB，超过上限 %d MB（多 %.1f MB）：%s",
+		l.What, name, mb(bytes), l.Max, mb(bytes-l.Max<<20), l.Fix)
+}
 
 // Count 是一项计数，网页显示成「6/7」。
 type Count struct {

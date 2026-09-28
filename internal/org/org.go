@@ -264,6 +264,7 @@ func addRepos(ctx context.Context, tx *sql.Tx, id string, list []string) error {
 }
 
 // DeptPatch 是 org edit 的输入；nil 表示不改。Leader 给 "-" 表示清掉；Parent 给 "-" 表示挪到顶层。
+// Delete 为真时删掉这个部门（DeleteDept），不能与别的字段一起给。
 type DeptPatch struct {
 	Name     *string  `json:"name,omitempty"`
 	Parent   *string  `json:"parent,omitempty"`
@@ -274,11 +275,18 @@ type DeptPatch struct {
 	Leader   *string  `json:"leader,omitempty"`
 	RepoAdd  []string `json:"repo_add,omitempty"`
 	RepoDrop []string `json:"repo_rm,omitempty"`
+	Delete   bool     `json:"delete,omitempty"`
 }
 
 func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, error) {
-	if p.Name == nil && p.Parent == nil && p.What == nil && p.Uses == nil && p.Now == nil && p.Next == nil &&
-		p.Leader == nil && len(p.RepoAdd) == 0 && len(p.RepoDrop) == 0 {
+	none := p.Name == nil && p.Parent == nil && p.What == nil && p.Uses == nil && p.Now == nil && p.Next == nil &&
+		p.Leader == nil && len(p.RepoAdd) == 0 && len(p.RepoDrop) == 0
+	switch {
+	case p.Delete && !none:
+		return Dept{}, api.Usage("--delete: 不和别的字段一起给")
+	case p.Delete:
+		return DeleteDept(ctx, db, id)
+	case none:
 		return Dept{}, api.Usage("没有要改的字段").WithNext("atrium org edit --help")
 	}
 	if p.Name != nil {

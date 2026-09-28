@@ -114,22 +114,33 @@ func TestSkillPure(t *testing.T) {
 			t.Errorf("技能名 %q", name)
 		}
 	}
+	big := func(mb float64) string { return string(make([]byte, int(mb*(1<<20)))) }
 	cases := []struct {
+		name  string
 		files map[string]string
 		code  string
+		msg   string // 报错里要有的片段
 	}{
-		{map[string]string{"SKILL.md": "x", "refs/a.md": "y"}, ""},
-		{map[string]string{"README.md": "x"}, "usage"},
-		{map[string]string{"SKILL.md": strings.Repeat("x", MaxSkillBody+1)}, "limit"},
-		{map[string]string{"SKILL.md": "x", "../a": "y"}, "usage"},
-		{map[string]string{"SKILL.md": "x", ".hidden": "y"}, "usage"},
-		{map[string]string{"SKILL.md": "x", "/abs": "y"}, "usage"},
-		{map[string]string{"SKILL.md": "x", "a/b/c/d": "y"}, "usage"},
-		{map[string]string{"SKILL.md": "x", "bin": "\x00"}, "usage"},
+		{"做法加附属文件", map[string]string{"SKILL.md": "x", "refs/a.md": "y"}, "", ""},
+		{"缺 SKILL.md", map[string]string{"README.md": "x"}, "usage", ""},
+		{"SKILL.md 超长", map[string]string{"SKILL.md": strings.Repeat("x", MaxSkillBody+1)}, "limit", ""},
+		{"SKILL.md 不是文本", map[string]string{"SKILL.md": "\x00"}, "usage", ""},
+		{"路径越界", map[string]string{"SKILL.md": "x", "../a": "y"}, "usage", ""},
+		{"隐藏文件", map[string]string{"SKILL.md": "x", ".hidden": "y"}, "usage", ""},
+		{"绝对路径", map[string]string{"SKILL.md": "x", "/abs": "y"}, "usage", ""},
+		{"太深", map[string]string{"SKILL.md": "x", "a/b/c/d": "y"}, "usage", ""},
+		{"截图等二进制收", map[string]string{"SKILL.md": "x", "shots/a.png": big(1.2)}, "", ""},
+		{"单个文件超", map[string]string{"SKILL.md": "x", "a.png": big(MaxSkillFile + 0.5)}, "limit", "a.png 有 5.5 MB，超过上限 5 MB（多 0.5 MB）"},
+		{"合计超", map[string]string{"SKILL.md": "x", "a.png": big(4), "b.png": big(4), "c.png": big(2.5)}, "limit", "web 有 10.5 MB，超过上限 10 MB（多 0.5 MB）"},
 	}
 	for _, c := range cases {
-		if got := code(CheckSkillFiles(c.files)); got != c.code {
-			t.Errorf("%v：%s，想要 %s", c.files, got, c.code)
+		files := map[string][]byte{}
+		for p, v := range c.files {
+			files[p] = []byte(v)
+		}
+		err := CheckSkillFiles("web", files)
+		if got := code(err); got != c.code || (c.msg != "" && !strings.Contains(err.Error(), c.msg)) {
+			t.Errorf("%s：%s %v，想要 %s %q", c.name, got, err, c.code, c.msg)
 		}
 	}
 }
@@ -159,7 +170,7 @@ func TestResourcesStore(t *testing.T) {
 	other, _ := Add(ctx, db, NewDept{Name: "别的"})
 
 	// 技能：建、只改元数据沿用文件、超过保留版数时删最旧的。
-	k, err := SaveSkill(ctx, db, data, SkillInput{Name: "fix-bug", Files: map[string]string{"SKILL.md": "# 修 bug\n先复现", "refs/x.md": "附"}}, "u1")
+	k, err := SaveSkill(ctx, db, data, SkillInput{Name: "fix-bug", Files: map[string][]byte{"SKILL.md": []byte("# 修 bug\n先复现"), "refs/x.md": []byte("附")}}, "u1")
 	if err != nil || k.Rev != 1 || k.Summary != "修 bug" || k.Files != 2 {
 		t.Fatalf("%+v %v", k, err)
 	}
@@ -175,7 +186,7 @@ func TestResourcesStore(t *testing.T) {
 		t.Fatal("没有要改的应拒绝")
 	}
 	for i := 0; i < keepSkillRevs; i++ {
-		if _, err := SaveSkill(ctx, db, data, SkillInput{Name: "fix-bug", Files: map[string]string{"SKILL.md": "v"}}, "u1"); err != nil {
+		if _, err := SaveSkill(ctx, db, data, SkillInput{Name: "fix-bug", Files: map[string][]byte{"SKILL.md": []byte("v")}}, "u1"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -31,10 +31,11 @@ type NewLeader struct {
 	Workers []string `json:"workers"`
 }
 
-// LeaderPatch 是 leader edit 的输入；nil 表示不改。
+// LeaderPatch 是 leader edit 的输入；nil 表示不改。Delete 为真时删掉这位负责人（DeleteLeader），不能与别的字段一起给。
 type LeaderPatch struct {
 	Name    *string   `json:"name,omitempty"`
 	Workers *[]string `json:"workers,omitempty"`
+	Delete  bool      `json:"delete,omitempty"`
 }
 
 // CheckWorker 核对一个执行者标识能不能解析（workers.Resolve；org 不能引用 workers，由 workers 在服务进程里接上）。
@@ -98,7 +99,13 @@ func AddLeader(ctx context.Context, db *store.DB, in NewLeader) (Identity, error
 }
 
 func EditLeader(ctx context.Context, db *store.DB, id string, p LeaderPatch) (Identity, error) {
-	if p.Name == nil && p.Workers == nil {
+	none := p.Name == nil && p.Workers == nil
+	switch {
+	case p.Delete && !none:
+		return Identity{}, api.Usage("--delete: 不和别的字段一起给")
+	case p.Delete:
+		return DeleteLeader(ctx, db, id)
+	case none:
 		return Identity{}, api.Usage("没有要改的字段").WithNext("atrium leader edit --help")
 	}
 	if p.Name != nil {

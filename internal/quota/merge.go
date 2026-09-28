@@ -154,40 +154,32 @@ func Lines(builtin map[string]Line, oq []Pace, holds map[string]Hold, now int64)
 	return out
 }
 
-// Spare 是给派活的一个账号的富余。
+// Spare 是给派活的一个账号的额度判定。
 type Spare struct {
 	Account string `json:"account"`
-	// Known：有已用比例。没有数据时不猜，派活照常（Room 为 0，Reason 写明）。
-	Known bool `json:"known"`
-	// Room = 100 − 给用户留的份额 − 已用（周窗与短窗取紧的）；≤ 0 不该再派。
-	Room  float64 `json:"room"`
-	Stale bool    `json:"stale"` // 读数超过 10 分钟
-	// Held：额度用尽标记未到期，不派。
-	Held   bool   `json:"held"`
-	Reason string `json:"reason,omitempty"`
+	// Percent 是富余：周期已过 − 已用，就是 atrium quota 显示的那个数（PaceOf 算）；算不出为空。派活按它排先后。
+	Percent *float64 `json:"percent,omitempty"`
+	Stale   bool     `json:"stale"` // 读数超过 10 分钟
+	// Stop 是不该再派的原因：额度用尽标记没到期，或已用到给用户留的份额（周窗与短窗取紧的）；能派为空。
+	Stop string `json:"stop,omitempty"`
 }
 
-// SpareOf 判一个账号的富余（纯函数）。
+// SpareOf 判一个账号的富余与能不能派（纯函数）。富余不另算，直接取 quota 一览的同一行。
 func SpareOf(l Line, reserve int) Spare {
-	s := Spare{Account: l.Account, Stale: l.Stale}
+	s := Spare{Account: l.Account, Percent: l.SparePercent, Stale: l.Stale}
 	if l.Hold != nil {
-		s.Held = true
-		s.Reason = l.Hold.Reason
+		s.Stop = "额度用尽：" + l.Hold.Reason
+		return s
 	}
 	if l.UsedPercent == nil {
-		if s.Reason == "" {
-			s.Reason = "没有额度数据：" + l.Note
-		}
 		return s
 	}
 	used := *l.UsedPercent
 	if l.ShortUsedPct != nil && *l.ShortUsedPct >= 100 {
 		used = 100
 	}
-	s.Known = true
-	s.Room = round1(100 - float64(reserve) - used)
-	if s.Reason == "" && s.Room <= 0 {
-		s.Reason = fmt.Sprintf("账号 %s 已用 %.1f%%，须给用户留 %d%%", l.Account, used, reserve)
+	if used >= 100-float64(reserve) {
+		s.Stop = fmt.Sprintf("额度见底：账号 %s 已用 %.1f%%，须给用户留 %d%%", l.Account, used, reserve)
 	}
 	return s
 }

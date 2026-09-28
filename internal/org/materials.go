@@ -96,7 +96,7 @@ func PlanMaterials(dept string, existing []materialSlot, in MaterialInput) ([]ma
 		}
 		seen[f.Name] = true
 		if len(f.Content) > MaxMaterialFile<<20 {
-			return nil, Full("material_file", dept, MB(len(f.Content)))
+			return nil, TooBig("material_file", f.Name, len(f.Content))
 		}
 		units, binary := Units(f.Content)
 		kind := "detail"

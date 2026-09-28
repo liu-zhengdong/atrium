@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -67,10 +66,15 @@ type Req struct {
 func (r *Req) Decode(v any) error { return r.DecodeMax(v, 1<<20) }
 
 // DecodeMax 同 Decode，请求体上限 max 字节（只给确实要传大文件的接口放宽，如资料上传）。
+// 超了上限报「请求体超过 N MB」，不当成 JSON 不合法。
 func (r *Req) DecodeMax(v any, max int64) error {
-	dec := json.NewDecoder(io.LimitReader(r.Body, max))
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, max))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			return Usage("请求体超过这个接口的上限 %.1f MB：拆小或分几次", float64(max)/(1<<20))
+		}
 		return Usage("请求体不合法：%v", err)
 	}
 	return nil

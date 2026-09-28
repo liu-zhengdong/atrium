@@ -8,7 +8,11 @@ import type { CheckCandidate } from "../server/hosts/check-plan.ts";
 import type { CheckReply, CheckSource } from "../server/hosts/protocol.ts";
 import type { RemoteHosts } from "../server/hosts/remote.ts";
 import { exec } from "../server/tasks/git.ts";
-import type { LocalCheck } from "../server/tasks/local-check.ts";
+import {
+  LocalCheckQueue,
+  type LocalCheck,
+} from "../server/tasks/local-check.ts";
+import type { QuietEvent } from "../server/tasks/check-quiet-watch.ts";
 import { fixture } from "./task-fixture.ts";
 
 /**
@@ -265,4 +269,83 @@ test("检查派发：与检查基准不同平台的主机不接把关检查；�
     sent.map((s) => s.host),
     [3],
   );
+});
+
+test("检查派发：远程检查的日志在服务这边盯，太久没输出提醒并带主机；本机的交给 runLocalCheck", async (t) => {
+  const { fx, git, taskDir } = setup(t);
+  writeFileSync(join(fx.repo, "new.txt"), "x\n");
+  git("add", "new.txt");
+  git("commit", "-qm", "unpushed");
+  const hosts = {
+    site: () => ({ os: "linux", data_dir: "/srv/agent" }),
+    check: async (host: number, input: Sent) => {
+      // 真实的 remote.check 一开始就把日志清空；之后代理续传的内容写进来（这里一直没有）。
+      writeFileSync(input.logFile, "");
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return passed(host);
+    },
+  } as unknown as RemoteHosts;
+  const quietSeen: QuietEvent[] = [];
+  const localQuiet: unknown[] = [];
+  const dispatch = new CheckDispatch({
+    remote: hosts,
+    candidates: () => [local(), remote(2)],
+    run: exec,
+    queue: new LocalCheckQueue(1, 60_000, { warnMs: 200, stallMs: 400 }),
+    runLocal: async (input) => {
+      localQuiet.push(input.onQuiet);
+      return {
+        status: "passed",
+        command: "true",
+        log: join(taskDir, "local-check.log"),
+        detail: "检查通过",
+        failedTests: [],
+      };
+    },
+  });
+  const hostsSeen: string[] = [];
+  const result = await dispatch.run({
+    task: 1,
+    worktree: fx.repo,
+    taskDir,
+    base: "main",
+    quietPollMs: 30,
+    onQuiet: (event, host) => {
+      quietSeen.push(event);
+      hostsSeen.push(host);
+    },
+  });
+  // 服务这边只提醒不结束：结束由那台的代理按它的配置做。
+  assert.equal(result.status, "passed");
+  assert.equal(result.host, "h2");
+  assert.equal(quietSeen.length, 1);
+  assert.equal(quietSeen[0]!.kind, "quiet");
+  assert.deepEqual(hostsSeen, ["h2"]);
+
+  // 只有本机：提醒回调交给 runLocalCheck。
+  const alone = new CheckDispatch({
+    remote: hosts,
+    candidates: () => [local()],
+    run: exec,
+    runLocal: async (input) => {
+      localQuiet.push(input.onQuiet);
+      input.onQuiet?.({ kind: "quiet", quietMs: 1, at: null });
+      return {
+        status: "passed",
+        command: "true",
+        log: join(taskDir, "local-check.log"),
+        detail: "检查通过",
+        failedTests: [],
+      };
+    },
+  });
+  await alone.run({
+    task: 1,
+    worktree: fx.repo,
+    taskDir,
+    base: "main",
+    onQuiet: (_event, host) => hostsSeen.push(host),
+  });
+  assert.equal(typeof localQuiet.at(-1), "function");
+  assert.deepEqual(hostsSeen, ["h2", "h1"]);
 });

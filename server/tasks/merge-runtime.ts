@@ -17,6 +17,8 @@ import {
   withOutcome,
 } from "./check-outcome.ts";
 import { timingSensitive } from "./check-rerun.ts";
+import { quietText } from "./check-quiet.ts";
+import type { QuietEvent } from "./check-quiet-watch.ts";
 import type { CheckDispatch } from "../hosts/check-runtime.ts";
 import { mergeFailure } from "./merge-decision.ts";
 import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
@@ -103,6 +105,8 @@ export class MergeQueue {
       checks?: CheckDispatch;
       /** 检查没跑成后第 attempt 次重跑前整条队列等多久（t204）；测试可缩短。 */
       rerunDelayMs?: (attempt: number) => number;
+      /** 检查进行中多久看一次日志有没有新输出（t260）；测试可缩短。 */
+      quietPollMs?: number;
     },
   ) {
     this.claim = new MergeClaim(db);
@@ -622,6 +626,26 @@ export class MergeQueue {
           log,
         });
     };
+    // 检查日志太久没新输出（t260）：记一笔并知会负责的 leader；又有输出了记一笔，状态栏不再显示。
+    const onQuiet = (event: QuietEvent, host?: string) => {
+      if (this.closed) return;
+      if (event.kind === "resumed") {
+        noteTask(this.db, task.id, "merge_check_quiet", { resumed: true });
+        return;
+      }
+      const reason = quietText(event.quietMs, event.at);
+      noteTask(this.db, task.id, "merge_check_quiet", {
+        reason,
+        at: event.at,
+        quiet_ms: event.quietMs,
+        ...(host ? { host } : {}),
+      });
+      this.options.publish(task.id, "check_quiet", {
+        reason,
+        at: event.at,
+        ...(host ? { host } : {}),
+      });
+    };
     const reruns = this.reruns(task.id);
     const checked = this.options.checks
       ? await this.options.checks.run({
@@ -630,12 +654,19 @@ export class MergeQueue {
           avoid: [...storedHosts(task.avoid_hosts), ...reruns.avoid],
           base,
           onStatus,
+          onQuiet,
+          quietPollMs: this.options.quietPollMs,
           onMoved: (from, reason) => {
             if (!this.closed)
               noteTask(this.db, task.id, "merge_check_moved", { from, reason });
           },
         })
-      : await runLocalCheck({ ...request, onStatus });
+      : await runLocalCheck({
+          ...request,
+          onStatus,
+          onQuiet: (event) => onQuiet(event),
+          quietPollMs: this.options.quietPollMs,
+        });
     if (this.closed) return;
     if (this.halted(task.id)) return;
     const judged = withOutcome(
@@ -652,6 +683,8 @@ export class MergeQueue {
       const next = rerunDecision({
         outcome: "not_run",
         reruns: reruns.count,
+        stalled: !!judged.stalled,
+        stalledReruns: reruns.stalled,
       });
       if (next === "final")
         throw new MergeHold(
@@ -808,17 +841,21 @@ export class MergeQueue {
       )
       .all(id, id, MAX_CHECK_RERUNS + 1) as { detail: string | null }[];
     const avoid = new Set<number>();
+    let stalled = 0;
     for (const row of rows) {
       try {
-        const host = hostIdOf(
-          (JSON.parse(row.detail ?? "null") as { host?: string })?.host,
-        );
+        const detail = JSON.parse(row.detail ?? "null") as {
+          host?: string;
+          stalled?: unknown;
+        } | null;
+        if (detail?.stalled) stalled++;
+        const host = hostIdOf(detail?.host);
         if (host !== null && host !== 1) avoid.add(host);
       } catch {
         /* 损坏记录只少避开一台。 */
       }
     }
-    return { count: rows.length, avoid };
+    return { count: rows.length, avoid, stalled };
   }
 
   /** 检查没跑成：放回队尾，整条队列等一会儿（负载降下来、离线主机连回来）再接着合入。 */

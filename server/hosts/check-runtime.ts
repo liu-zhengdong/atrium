@@ -4,9 +4,11 @@ import { firstLine, type Exec } from "../tasks/git.ts";
 import { parseRemote } from "../tasks/gh-repo.ts";
 import {
   runLocalCheck,
+  sharedLocalChecks,
   type LocalCheck,
   type LocalCheckQueue,
 } from "../tasks/local-check.ts";
+import { QuietWatch, type QuietEvent } from "../tasks/check-quiet-watch.ts";
 import {
   checkBaseline,
   checkRefusal,
@@ -41,6 +43,10 @@ export type CheckRequest = {
   onStatus?: (status: "queued" | "started", log: string, host: string) => void;
   /** 某台没跑成、换地方重跑时。 */
   onMoved?: (from: string, reason: string) => void;
+  /** 检查日志太久没新输出（提醒）或之后又有输出了（t260）：在哪台跑的。 */
+  onQuiet?: (event: QuietEvent, host: string) => void;
+  /** 多久看一次日志有没有新输出；测试缩短。 */
+  quietPollMs?: number;
 };
 
 type Prepared =
@@ -114,7 +120,17 @@ export class CheckDispatch {
       } catch {
         // 进度事件记不上不影响检查。
       }
-      const result = await this.deps.remote.check(host, {
+      // 远程的日志续传到服务这边：提醒在这边盯（t260）；没输出到结束线由那台的代理结束检查。
+      const watch = new QuietWatch({
+        file: log,
+        limits: {
+          ...(this.deps.queue ?? sharedLocalChecks).quiet,
+          stallMs: null,
+        },
+        pollMs: request.quietPollMs,
+        onEvent: (event) => request.onQuiet?.(event, ref),
+      });
+      const checked = this.deps.remote.check(host, {
         task: request.task,
         urgent: request.urgent ?? false,
         logFile: log,
@@ -124,6 +140,8 @@ export class CheckDispatch {
         },
         signal: request.signal,
       });
+      await watch.start();
+      const result = await checked.finally(() => watch.stop());
       if (request.signal?.aborted || !result.infra) return result;
       try {
         request.onMoved?.(ref, result.infra);
@@ -143,6 +161,8 @@ export class CheckDispatch {
       install: request.install,
       ...(this.deps.queue ? { queue: this.deps.queue } : {}),
       onStatus: (status, log) => request.onStatus?.(status, log, localRef),
+      onQuiet: (event) => request.onQuiet?.(event, localRef),
+      quietPollMs: request.quietPollMs,
     });
     return { ...result, host: localRef };
   }

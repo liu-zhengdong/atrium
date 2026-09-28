@@ -34,6 +34,8 @@ const KINDS = [
   "merge_check_rerun",
   "merge_queued",
   "merge_blocked",
+  "merge_check_quiet",
+  "worker_quiet",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -148,6 +150,22 @@ export function holderFacts(
           last("merge_queued")?.id,
         )
       : null;
+  // 没进展提醒（t260）：这一轮检查或这一轮执行者最新一条提醒，之后没记「又有输出了」。
+  const quietOf = (kind: string, after: number | undefined) => {
+    const mark = after === undefined ? undefined : last(kind, after);
+    const detail = mark ? parse(mark.detail) : null;
+    return detail && detail.resumed !== true ? detail : null;
+  };
+  const checkQuiet =
+    row.delivery_stage === "merging" && checking
+      ? text(
+          quietOf("merge_check_quiet", last("merge_check_started")?.id)?.reason,
+        )
+      : null;
+  const workerQuiet =
+    row.status === "running" && !checking
+      ? quietOf("worker_quiet", last("start")?.id)?.quiet_ms
+      : null;
   const escalation = block ? last("escalated", block.id) : undefined;
   const escalated = escalation
     ? (() => {
@@ -222,6 +240,9 @@ export function holderFacts(
     preempted,
     merge_held_by: heldBy,
     rerun,
+    check_quiet: checkQuiet,
+    worker_quiet_ms:
+      typeof workerQuiet === "number" && workerQuiet > 0 ? workerQuiet : null,
   };
 }
 

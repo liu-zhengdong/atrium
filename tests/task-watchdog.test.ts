@@ -219,3 +219,46 @@ test("看门狗：假执行者零输出判卡死、按档案重试一次后失�
     400,
   );
 });
+
+test("看门狗：执行者一段时间没进展先提醒（知会、状态栏），不判卡死", async (t) => {
+  const { data, call } = await startApp(
+    t,
+    (fx) => fx.script("kimi", 'echo working\nsleep 2\necho "完成"'),
+    undefined,
+    undefined,
+    { quiet: { warnMs: 500, stallMs: null } },
+  );
+  const db = new DatabaseSync(join(data, "atrium.sqlite"));
+  t.after(() => db.close());
+  await call("POST", "/api/tasks", { title: "安静一会儿" });
+  await call("POST", "/api/tasks/t1/run", { worker: "kimi" });
+  await until(() =>
+    getTask(db, "t1").events.some((event) => event.kind === "worker_quiet"),
+  );
+  const shown = (await call("GET", "/api/tasks/t1")).body;
+  assert.match(shown.holder.text, /^kimi\S* \d+ 秒没进展$/);
+  const waited = await call("GET", "/api/tasks/t1/wait?timeout=20");
+  assert.notEqual(waited.body.task.status, "running");
+  const events = getTask(db, "t1").events;
+  assert.ok(!events.some((event) => event.kind === "stalled"));
+  const warned = events.filter(
+    (event) =>
+      event.kind === "worker_quiet" &&
+      !(JSON.parse(event.detail ?? "{}") as { resumed?: boolean }).resumed,
+  );
+  assert.equal(warned.length, 1, "同一段安静只提醒一次");
+  assert.match(
+    JSON.parse(warned[0]!.detail!).reason,
+    /^执行者 \d+ 秒没有进展（没有日志输出、没有工具调用、工作目录没变化）；到 20 分钟没进展会判卡死$/,
+  );
+  // 知会负责人（缺省秘书）：info 级，不叫醒。
+  const inbox = (await call("GET", "/api/events?as=secretary&limit=50")).body
+    .events as { kind: string; level: string }[];
+  assert.ok(
+    inbox.some((e) => e.kind === "worker_quiet" && e.level === "info"),
+    JSON.stringify(inbox.map((e) => e.kind)),
+  );
+  const woke = (await call("GET", "/api/events/wait?as=secretary&timeout=0"))
+    .body.events as { kind: string }[];
+  assert.ok(!woke.some((e) => e.kind === "worker_quiet"));
+});

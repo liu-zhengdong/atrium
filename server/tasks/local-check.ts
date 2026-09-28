@@ -14,6 +14,13 @@ import { workerEnvironment } from "./worker-env.ts";
 import { checkPlacement, CHECK_TIMEOUT_MINUTES } from "./host-load.ts";
 import { missingCommand } from "./check-outcome.ts";
 import { installDeps } from "./install-deps.ts";
+import {
+  QUIET_MINUTES,
+  STALL_MINUTES,
+  stalledCheck,
+  type QuietLimits,
+} from "./check-quiet.ts";
+import { QuietWatch, type QuietEvent } from "./check-quiet-watch.ts";
 
 /** 本地检查只由运行时执行；队列在同一服务进程的所有任务之间共享。超时按主机配置（ATRIUM_CHECK_TIMEOUT_MINUTES），这是缺省。 */
 export const LOCAL_CHECK_TIMEOUT_MS = CHECK_TIMEOUT_MINUTES * 60_000;
@@ -35,6 +42,8 @@ export type LocalCheck = {
   reason?: string;
   /** 已自动重跑的次数。 */
   reruns?: number;
+  /** 日志太久没新输出、被运行时结束的（t260，check-quiet.ts）：卡在哪个测试文件或哪一行。 */
+  stalled?: { at: string | null };
 };
 
 /** 记进事件的检查结果：结论、在哪台、哪个提交排在前面（`task show` 一行里先看到）。 */
@@ -62,6 +71,11 @@ export class LocalCheckQueue {
     private max = 1,
     /** 这台主机上一次检查最多跑多久；调用方没单独给时用它。 */
     public timeoutMs = LOCAL_CHECK_TIMEOUT_MS,
+    /** 这台主机上检查多久没输出提醒、多久没输出结束（t260，ATRIUM_QUIET_MINUTES / ATRIUM_CHECK_STALL_MINUTES）。 */
+    public quiet: QuietLimits = {
+      warnMs: QUIET_MINUTES * 60_000,
+      stallMs: STALL_MINUTES * 60_000,
+    },
   ) {}
 
   get limit() {
@@ -201,10 +215,17 @@ export async function runLocalCheck(input: {
   append?: boolean;
   /** 跑检查前按锁文件装依赖（install-deps.ts）：工作树不是执行者装好依赖的那份时用（代理的检查工作树、本机为远程任务另建的，t252）。 */
   install?: boolean;
+  /** 没输出多久提醒、多久结束（t260）；缺省按队列（主机配置）。 */
+  quiet?: QuietLimits;
+  /** 多久看一次日志有没有新输出；测试缩短。 */
+  quietPollMs?: number;
+  /** 检查跑着但日志太久没新输出（提醒），或之后又有输出了。 */
+  onQuiet?: (event: QuietEvent) => void;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
   const queue = input.queue ?? sharedLocalChecks;
   const timeoutMs = input.timeoutMs ?? queue.timeoutMs;
+  const quiet = input.quiet ?? queue.quiet;
   return queue.run(
     async () => {
       if (input.signal?.aborted) throw new Error("服务正在关闭");
@@ -276,6 +297,8 @@ export async function runLocalCheck(input: {
       }
       closeSync(fd);
       let timedOut = false;
+      // 日志太久没新输出被结束的（t260）：卡在哪。
+      const stalled: { at?: string | null } = {};
       const abort = () => {
         if (child.pid) killTree(child.pid, "SIGKILL");
       };
@@ -285,7 +308,7 @@ export async function runLocalCheck(input: {
         timedOut = true;
         abort();
       }, timeoutMs);
-      const result = await new Promise<{
+      const exited = new Promise<{
         code: number | null;
         signal?: NodeJS.Signals | null;
         error?: Error;
@@ -293,10 +316,33 @@ export async function runLocalCheck(input: {
         child.once("error", (error) => resolve({ code: null, error }));
         child.once("close", (code, signal) => resolve({ code, signal }));
       });
+      const watch = new QuietWatch({
+        file: log,
+        limits: quiet,
+        pollMs: input.quietPollMs,
+        onEvent: input.onQuiet,
+        onStall: (at) => {
+          if (timedOut || input.signal?.aborted) return;
+          stalled.at = at;
+          abort();
+        },
+      });
+      await watch.start();
+      const result = await exited;
+      watch.stop();
       clearTimeout(timer);
       input.signal?.removeEventListener("abort", abort);
       const tail = logTail(log);
       const failedTests = failedTestNames(tail);
+      if (stalled.at !== undefined && quiet.stallMs !== null) {
+        const judged = stalledCheck({
+          failedTests,
+          at: stalled.at,
+          stallMs: quiet.stallMs,
+        });
+        appendFileSync(log, `\n[atrium] ${judged.detail}\n`, { mode: 0o600 });
+        return { command, log, failedTests, ...judged };
+      }
       // 不是运行时自己超时结束的，却被信号结束：检查进程被别人杀了，算没跑成（t204）。
       const killed =
         !timedOut &&

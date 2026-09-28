@@ -32,6 +32,7 @@ import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
 import { retryAfterTransient } from "./transient-runtime.ts";
 import type { TaskWaits } from "./waits.ts";
 import { finalClaudeResult, judge } from "./watchdog.ts";
+import { watchQuiet } from "./worker-quiet-runtime.ts";
 import {
   prepareRun,
   type LaunchOptions,
@@ -149,6 +150,8 @@ export type ExecutorContext = {
   swapChoice?: (active: Active) => Promise<Chosen | { note: string }>;
   /** 紧急任务没有进展多久换人（毫秒）；缺省不换。 */
   urgentIdleMs?: number;
+  /** 执行者没有进展多久提醒（毫秒，t260）；缺省不提醒。 */
+  quietWarnMs?: number;
 };
 
 export class Executors {
@@ -1256,6 +1259,14 @@ export class Executors {
         if (active.stop || active.finalizing) continue;
         const { signals } = await active.probe.poll();
         if (signals.length) active.state.lastProgressAt = Date.now();
+        watchQuiet({
+          db: this.ctx.db,
+          active,
+          progressed: signals.length > 0,
+          warnMs: this.ctx.quietWarnMs,
+          now: Date.now(),
+          publish: (id, kind, detail) => this.publish(id, kind, detail),
+        });
         if (await this.swapIfIdle(active, urgent)) continue;
         const verdict = judge(active.state, active.limits, Date.now());
         if (verdict.kind === "ok") continue;

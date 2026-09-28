@@ -149,6 +149,7 @@ import { productRound } from "../products/model.ts";
 import { pendingChoices } from "../choices/store.ts";
 import { UrgentLane, type StopNote } from "./urgent-runtime.ts";
 import { storedHosts, urgentIdleMs } from "./urgent.ts";
+import { quietLimits, type QuietLimits } from "./check-quiet.ts";
 import { crowded } from "../hosts/state.ts";
 import { hasEvent } from "./ledger-model.ts";
 import type { Active } from "./active.ts";
@@ -216,6 +217,11 @@ export type RunnerOptions = {
   urgentIdleMs?: number;
   /** 合入检查没跑成后第几次重跑前等多久（t204）；测试缩短。 */
   checkRerunDelayMs?: (attempt: number) => number;
+  /**
+   * 没进展提醒（t260）：执行者与检查多久没输出提醒、检查多久没输出结束、检查进行中多久看一次日志；
+   * 缺省读 ATRIUM_QUIET_MINUTES（5）/ ATRIUM_CHECK_STALL_MINUTES（10）。
+   */
+  quiet?: QuietLimits & { pollMs?: number };
 };
 
 export class TaskRunner {
@@ -231,6 +237,7 @@ export class TaskRunner {
   private readonly review: ReviewGate;
   private readonly online: OnlineWatch;
   private readonly host: HostLoad;
+  private readonly quiet: QuietLimits & { pollMs?: number };
   /** 任务早已结束还活着的执行者子孙（t203）。 */
   private readonly orphans: OrphanReaper;
   /** 远程主机的代理连接（#358 第 1 步）。 */
@@ -278,6 +285,11 @@ export class TaskRunner {
     this.orphans = new OrphanReaper(db, owner, killTree);
     sharedLocalChecks.limit = this.host.limits.maxChecks;
     sharedLocalChecks.timeoutMs = this.host.limits.checkTimeoutMs;
+    this.quiet = options.quiet ?? quietConfig();
+    sharedLocalChecks.quiet = {
+      warnMs: this.quiet.warnMs,
+      stallMs: this.quiet.stallMs,
+    };
     // 执行机器（#358）：本机登记为 h1；远程主机由代理接入。
     ensureHostTables(db);
     ensureLocalHost(
@@ -375,6 +387,7 @@ export class TaskRunner {
       makeRoom: (id, tool, host) => this.lane.makeRoom(id, tool, host),
       swapChoice: (active) => this.swapChoice(active),
       urgentIdleMs: options.urgentIdleMs ?? urgentIdle(),
+      quietWarnMs: this.quiet.warnMs,
       reviews: {
         dispatch: (ref) => this.run(ref, {}),
         settle: () => void this.settleReviews(),
@@ -415,6 +428,7 @@ export class TaskRunner {
       run: this.exec,
       prHeadWaitMs: options.mergeHeadWaitMs,
       checks: this.checks,
+      quietPollMs: this.quiet.pollMs,
       ...(options.checkRerunDelayMs
         ? { rerunDelayMs: options.checkRerunDelayMs }
         : {}),
@@ -1993,6 +2007,13 @@ export class TaskRunner {
       });
     return this.waits.wait(id, seconds, signal);
   }
+}
+
+/** 没进展多久提醒、检查多久没输出结束（t260）：读服务环境，写错的照缺省并记日志。 */
+function quietConfig() {
+  const { limits, problems } = quietLimits(process.env);
+  for (const problem of problems) console.error(`没进展提醒配置：${problem}`);
+  return limits;
 }
 
 /** 紧急任务没有进展多久换人：读服务环境，写错的照缺省并记日志。 */

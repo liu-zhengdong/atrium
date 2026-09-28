@@ -12,6 +12,7 @@
  */
 
 import type { LocalCheck } from "./local-check.ts";
+import { MAX_STALL_RERUNS } from "./check-quiet.ts";
 
 export type CheckClass = "passed" | "failed" | "not_run";
 
@@ -131,13 +132,23 @@ export function rerunDelayMs(attempt: number) {
   return [60_000, 180_000, 300_000][Math.min(Math.max(attempt, 1), 3) - 1]!;
 }
 
-/** 没跑成之后怎么办：还没到上限就重跑，否则转卡住。 */
+/**
+ * 没跑成之后怎么办：还没到上限就重跑，否则转卡住。
+ * 卡住（没输出被结束、没有失败用例，t260）的另算：之前因卡住已重跑过 MAX_STALL_RERUNS 次就不再重跑，
+ * 同一处连着卡两次多半是测试自己挂住，再跑只是再等十分钟。
+ */
 export function rerunDecision(input: {
   outcome: CheckClass;
   reruns: number;
+  /** 这次是卡住被结束的。 */
+  stalled?: boolean;
+  /** 之前因卡住重跑过几次。 */
+  stalledReruns?: number;
 }): "rerun" | "final" {
   if (input.outcome !== "not_run") return "final";
   if (input.reruns >= MAX_CHECK_RERUNS) return "final";
+  if (input.stalled && (input.stalledReruns ?? 0) >= MAX_STALL_RERUNS)
+    return "final";
   return "rerun";
 }
 

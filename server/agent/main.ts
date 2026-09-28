@@ -17,6 +17,7 @@ import { ADAPTERS, isTool } from "../tasks/adapters/index.ts";
 import { exec as defaultExec, type Exec } from "../tasks/git.ts";
 import { hostGate, hostLimits } from "../tasks/host-load.ts";
 import { LocalCheckQueue, runLocalCheck } from "../tasks/local-check.ts";
+import { quietLimits } from "../tasks/check-quiet.ts";
 import { ownsPid } from "../tasks/recovery.ts";
 import { killLine, shiftTargets } from "../tasks/leftovers.ts";
 import { reapLeftovers } from "../tasks/leftovers-reap.ts";
@@ -177,7 +178,11 @@ export class Agent {
     this.config = this.state.config();
     this.exec = options.exec ?? defaultExec;
     const limits = hostLimits(options.env, availableParallelism()).limits;
-    this.checks = new LocalCheckQueue(limits.maxChecks, limits.checkTimeoutMs);
+    this.checks = new LocalCheckQueue(
+      limits.maxChecks,
+      limits.checkTimeoutMs,
+      quietLimits(options.env).limits,
+    );
     // 服务进程自己的开关也要看：测试（NODE_TEST_CONTEXT）或显式关掉时不读这台的登录。
     this.quota =
       options.quota !== undefined
@@ -573,6 +578,7 @@ export class Agent {
               withClone: (clone, work) => this.withClone(clone, work),
               slot: (clone) => this.slot(clone),
               timeoutMs: this.checks.timeoutMs,
+              quiet: this.checks.quiet,
             }),
           undefined,
           command.urgent,

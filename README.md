@@ -121,6 +121,8 @@ cat grok.md | atrium workers edit models/grok-4.6 --file -
 
 **检查没跑成不算执行者没过**（t204）：合入队列的全量检查结果分三类——**过**、**没过**（有失败用例且不是基础设施问题）、**没跑成**（主机离线、没派过去、代理没来领、检查进程被杀、检查命令找不到（退出码 127 或 command not found，多是工作树没装依赖）；或超时／失败但失败用例全是仓库登记的时长敏感用例）。时长敏感用例登记在仓库的 `.agents/timing-sensitive`（每行一段用例名或测试文件路径，`#` 开头是注释），运行时从 `origin/<基础分支>` 读，执行者在自己分支里改的不算数；只登记真起后台服务、按墙上时间等待的集成用例。没跑成的不交回执行者、不叫醒 leader：放回队尾，队列暂停一会儿（1、3、5 分钟）再重跑，上一轮没跑成的主机先不派。最多重跑 3 次，仍没跑成才转卡住，原因写「基础设施问题：检查没跑成（已自动重跑 3 次）：…」。等重跑期间状态栏与 `task show` 的「球在谁手里」写「检查没跑成，等重跑（1/3）」，`task show` 的「本地检查」一行写最近一次是过、没过还是没跑成；`merge_check` 事件带 `outcome`（`passed` / `failed` / `not_run`）与 `reruns`，每次重跑记 `merge_check_rerun`。判定在 `server/tasks/check-outcome.ts`。
 
+**卡住 5 分钟就提醒**（t260）：本地检查、合入检查、远程检查的日志 5 分钟（`ATRIUM_QUIET_MINUTES`）没有新输出，记 `merge_check_quiet` 并知会负责的 leader（`check_quiet`，不叫醒），状态栏写「检查 5 分钟没输出：卡在 tests/a.test.ts」；又有输出了状态栏恢复。10 分钟（`ATRIUM_CHECK_STALL_MINUTES`）没有新输出就结束这次检查并分类：日志里已经有失败用例的判**没过**，失败用例照旧交回；没有失败用例的判**没跑成（卡住）**，记下卡在哪个测试文件，按上面的规则自动重跑，卡住的只重跑一次，再卡住转卡住。「卡在哪」取测试运行器的心跳：`npm test`（`tests/run-tests.ts`）某个测试文件 1 分钟没有用例结束就往日志打一行「仍在跑：tests/a.test.ts（已 N 秒）」，之后每分钟再打；这行不算检查有输出。执行者 5 分钟没进展（日志不增长、没有工具调用、工作目录没变化）同样先记 `worker_quiet` 并知会、状态栏写「claude+opus 5 分钟没进展」；原来 20 分钟的卡死判定与紧急任务 10 分钟换人照旧。判定在 `server/tasks/check-quiet.ts`、`worker-quiet.ts`。
+
 **自动合入**：PR 任务过交付关卡后进入持久化的串行合入队列。运行时从仓库 `origin` 核对 PR，rebase 到最新默认分支，在任务 worktree 重跑 `.agents/check`（没有则 `npm run check`），通过后用检查过的头提交执行 `gh pr merge --squash --match-head-commit`；gh 查询与合入都明确带 `-R`。rebase 冲突、本地检查失败或 gh 合入失败会把文件名、失败用例和日志位置写进事件及补充说明，在原工作树与原分支重派原执行者；第三次交回转卡住并通知负责人。合入中断后从账本续上，`atrium task show tN`、`atrium top --once` 和 `atrium org show oN --detail` 可看阶段。远端 CI 仍只供参考，不挡合入。
 
 **合入前审阅**：任务 `--risk high`，或执行者档案 `trust` 低于 `medium`（没写按 `unknown`）时，PR 先进「审阅中」：运行时另建一个 `审阅 tN：…` 任务（`--deliver none`），自动挑一个与原执行者不同工具、不同模型且 `trust` 至少 `medium` 的执行者，按清单只读审代码，最后一行写 `审阅结论：通过` 或 `审阅结论：打回`。通过进合入队列；打回把意见交回原执行者，与冲突、检查失败共用交回次数，第三次转卡住；最后一行结论没按格式写时，运行时先请同一审阅者续上会话补答一次（专员审查、会审意见与汇总同样）；审阅者失败、补答后仍没结论、挑不到人或被停止才转卡住并通知负责人。审阅任务本身不单独投递事件；进审阅时在原任务上发 `review_queued` 事件，带改动规模摘要（文件数、增删行数、改动最多的文件），`atrium task show tN` 可看审阅任务与事件。
@@ -599,6 +601,8 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 | `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载                                        |
 | `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的一半（至少 1）                                                            |
 | `ATRIUM_CHECK_TIMEOUT_MINUTES`  | 一次本地检查最多跑几分钟，默认 30；远程主机由代理按它那台的环境设                                       |
+| `ATRIUM_QUIET_MINUTES`          | 执行者或检查日志多久没进展发提醒（知会负责的 leader、状态栏显示），默认 5                               |
+| `ATRIUM_CHECK_STALL_MINUTES`    | 检查日志多久没新输出就结束这次检查并分类，默认 10；`0` 不结束；远程主机由代理按它那台的环境设           |
 | `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数减 1（至少 1）                                                  |
 | `ATRIUM_AGENT_DATA`             | 远程主机上 `atrium agent` 的数据目录（令牌、仓库、工作树、日志），默认 `~/.atrium-agent`                |
 | `ATRIUM_TELEGRAM_API`           | 推送用的 Telegram 接口地址，默认 `https://api.telegram.org`（隔离验收时指向本地假接口）                 |

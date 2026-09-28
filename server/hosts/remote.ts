@@ -706,6 +706,17 @@ export class RemoteHosts {
         ...(typeof reply.infra === "string" && reply.infra
           ? { infra: reply.infra }
           : {}),
+        // 那台因日志太久没输出结束了检查（t260）。
+        ...(reply.stalled && typeof reply.stalled === "object"
+          ? {
+              stalled: {
+                at:
+                  typeof reply.stalled.at === "string"
+                    ? reply.stalled.at.slice(0, 200)
+                    : null,
+              },
+            }
+          : {}),
       };
     } catch (error) {
       return infra(error instanceof Error ? error.message : String(error));

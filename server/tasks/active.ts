@@ -50,6 +50,8 @@ export type Active = {
   live?: LiveInput;
   /** 紧急任务该换人时没得换（t215）：这一轮不再试，交给普通看门狗。 */
   swapSkipped?: boolean;
+  /** 这段没进展已经提醒过（t260，worker-quiet.ts）；又有进展后清掉。 */
+  quietWarned?: boolean;
 };
 
 export const taskDir = (data: string, id: number) =>

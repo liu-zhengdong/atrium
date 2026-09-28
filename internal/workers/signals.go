@@ -290,7 +290,7 @@ type Ending struct {
 }
 
 // Ended 按工具的日志结构判结局：stream-json 看最后的 result 事件；通用命令行按 done_match / error_match。
-func (a *Adapter) Ended(tail string) Ending {
+func (a *Driver) Ended(tail string) Ending {
 	if a.cli != nil {
 		lines := strings.Split(tail, "\n")
 		if a.cli.ErrorMatch != "" {
@@ -389,7 +389,7 @@ const maxReply = 8000
 
 // LastReply 取执行者最后一条回复（纯函数）：stream-json 取收尾事件的 result（agy 取 response），
 // opencode 取最后一段文字；文本日志取末尾若干行。gates 从这里读审阅结论。
-func (a *Adapter) LastReply(tail string) string {
+func (a *Driver) LastReply(tail string) string {
 	lines := strings.Split(strings.TrimRight(tail, "\n"), "\n")
 	if a.JSON {
 		for i := len(lines) - 1; i >= 0; i-- {

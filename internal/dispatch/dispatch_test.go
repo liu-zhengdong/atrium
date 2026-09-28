@@ -65,7 +65,6 @@ func TestRouteExit(t *testing.T) {
 		{"退出码非 0", ExitInput{Code: 2}, "fail"},
 		{"非 0 但日志正常收尾", ExitInput{Code: 1, Ending: workers.Ending{Known: true, OK: true}}, "gate"},
 		{"报错收尾", ExitInput{Code: 0, Ending: workers.Ending{Known: true, Reason: "x"}}, "fail"},
-		{"人停的", ExitInput{Code: -1, StopFor: "block", Signal: quota}, "block"},
 		{"捎话要重派", ExitInput{Code: -1, StopFor: "restart"}, "restart"},
 		{"额度用尽换人", ExitInput{Code: 1, Signal: quota}, "switch"},
 		{"额度用尽换够了", ExitInput{Code: 1, Signal: quota, Switches: 2}, "fail"},

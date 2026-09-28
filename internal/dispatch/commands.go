@@ -55,19 +55,6 @@ func Routes(r *api.Router, env *app.Env) {
 		get(env).wake()
 		return RunResult{Task: t, Queued: true, Position: pos}, nil
 	})
-	r.Handle("POST /api/tasks/{id}/stop", func(q *api.Req) (any, error) {
-		id, err := q.Ref("id", "t")
-		if err != nil {
-			return nil, err
-		}
-		var in struct {
-			Why string `json:"why"`
-		}
-		if err := q.Decode(&in); err != nil {
-			return nil, err
-		}
-		return Stop(q.Context(), env, id, in.Why, q.Actor.ID)
-	})
 	r.Handle("POST /api/tasks/{id}/tell", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "t")
 		if err != nil {
@@ -128,7 +115,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 	return res, nil
 }
 
-// Commands 注册 task run/stop/tell/log（task 组由 ledger 声明）。
+// Commands 注册 task run、task log（task 组由 ledger 声明）。捎话走 task note --tell（ledger 的命令调本包的 tell 接口）。停下用 task set --status blocked：派活循环会结束它的执行者。
 func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "派活：进派活队列，自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
 		Flags: []cli.Flag{
@@ -156,44 +143,6 @@ func Commands(t *cli.Table) {
 				return c.Done(res, dryText(res), dryNext(id, res, body.Risk))
 			}
 			return c.Done(res, fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow")
-		}})
-	t.Add(cli.Command{Path: "task stop", Args: "<tN>", Summary: "停下：撤出派活队列，或结束在跑的执行者；之后转受阻",
-		Flags: []cli.Flag{{Name: "why", Value: "文字", Help: "为什么停，记进经历"}},
-		Run: func(c *cli.Ctx) error {
-			id, err := c.Arg(0, "<tN>")
-			if err != nil {
-				return err
-			}
-			if err := c.MaxArgs(1); err != nil {
-				return err
-			}
-			var res StopResult
-			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/stop", map[string]string{"why": c.Str("why")}, &res); err != nil {
-				return err
-			}
-			if res.Stopping {
-				return c.Done(res, "已向 "+id+" 的执行者发停止信号，退出后转受阻", "atrium task wait "+id)
-			}
-			return c.Done(res, id+" 已停："+label(res.Task), "atrium task show "+id)
-		}})
-	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "给执行者捎话：在跑的按工具即时或本轮后送到，没在跑的下次拉起时带上",
-		Run: func(c *cli.Ctx) error {
-			id, err := c.Arg(0, "<tN>")
-			if err != nil {
-				return err
-			}
-			text, err := c.Arg(1, "<文字>")
-			if err != nil {
-				return err
-			}
-			if err := c.MaxArgs(2); err != nil {
-				return err
-			}
-			var res TellResult
-			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/tell", map[string]string{"text": text}, &res); err != nil {
-				return err
-			}
-			return c.Done(res, "已记下捎话："+res.Note, "atrium task log "+id+" --follow")
 		}})
 	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者日志（人读的：正文、工具调用、收尾）；--follow 跟到退出",
 		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"}},

@@ -63,6 +63,13 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 	t.Cleanup(func() { db.Close() })
 	env := &app.Env{DB: db, Paths: config.Paths{Data: filepath.Join(dir, "data")}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Pause: &pause.Store{DB: db}}
+	// 不读开发者本机的额度与机器：只用本机、没有额度数据。
+	oldPick, oldSpares := pickHost, spares
+	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
+		return HostChoice{Kind: "run", Host: LocalHost}, nil
+	}
+	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
+	t.Cleanup(func() { pickHost, spares = oldPick, oldSpares })
 	d := get(env)
 	t.Cleanup(func() {
 		d.mu.Lock()
@@ -236,13 +243,16 @@ func TestFlowStopAndTell(t *testing.T) {
 	if !strings.Contains(string(prompt), "改成 B") {
 		t.Errorf("重派的提示词没带补充：%s", prompt)
 	}
-	res, err := Stop(ctx, env, tk.ID, "不做了", "u1")
-	if err != nil || !res.Stopping {
-		t.Fatalf("%+v %v", res, err)
+	// 停下：人把任务改成受阻，派活循环结束它的执行者，退出后不再收尾。
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Set, To: ledger.Blocked}, "u1", "不做了"); err != nil {
+		t.Fatal(err)
 	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Blocked })
-	if _, err := Stop(ctx, env, tk.ID, "", "u1"); err == nil {
-		t.Error("受阻的没什么可停")
+	if err := d.reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(ledger.Task) bool { return d.procOf(tk.ID) == nil })
+	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Status != ledger.Blocked {
+		t.Fatalf("应保持受阻：%s", got.Status)
 	}
 	// 依赖没完成不能派；写死的执行者接不了高风险。
 	t2, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续", After: []string{tk.ID}}, "u1")
@@ -303,7 +313,7 @@ func must[T any](v T, err error) T {
 	return v
 }
 
-// 服务重启后接管：新的派活实例认出还活着的执行者，停它照样转受阻。
+// 服务重启后接管：新的派活实例认出还活着的执行者，任务取消后结束它。
 func TestFlowAdopt(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -331,9 +341,74 @@ func TestFlowAdopt(t *testing.T) {
 	if d2.procOf(tk.ID) == nil {
 		t.Fatal("没接管")
 	}
-	if res, err := Stop(ctx, &env2, tk.ID, "", "u1"); err != nil || !res.Stopping {
-		t.Fatalf("%+v %v", res, err)
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Cancel}, "u1", ""); err != nil {
+		t.Fatal(err)
 	}
-	waitFor(t, &env2, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Blocked })
+	if err := d2.reap(ctx); err != nil {
+		t.Fatal(err)
+	}
 	d2.wg.Wait()
+	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Status != ledger.Cancelled {
+		t.Fatalf("应保持取消：%s", got.Status)
+	}
+}
+
+// 远程机器：拉起指令交给 hosts（纯数据的请求），退出码由 hosts 报回后照常收尾；代理按同一份适配器算调用。
+func TestFlowRemote(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	var got Remote
+	exit := make(chan int, 1)
+	oldPick, oldLaunch, oldWait := pickHost, launchRemote, waitRemote
+	t.Cleanup(func() { pickHost, launchRemote, waitRemote = oldPick, oldLaunch, oldWait })
+	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
+		return HostChoice{Kind: "run", Host: "h2"}, nil
+	}
+	launchRemote = func(_ context.Context, _ *app.Env, host string, r Remote) (int, int, error) {
+		got = r
+		os.WriteFile(r.Log, []byte(`{"type":"result","is_error":false,"result":"远程做完了"}`+"\n"), 0o600)
+		return 1, 4242, nil
+	}
+	waitRemote = func(context.Context, *app.Env, string, int) (int, error) { return <-exit, nil }
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "远程活", Repo: "owner/name"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	if got.Tool != "claude" || got.Repo != "https://github.com/owner/name.git" || got.Branch != "task-"+tk.ID || got.Base != "main" ||
+		!strings.Contains(got.Request.Prompt, "远程活") || got.Request.Live || got.Request.Dir != "" {
+		t.Fatalf("拉起指令：%+v", got)
+	}
+	exit <- 0
+	x := waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
+	if x.Host != "h2" {
+		t.Fatalf("机器：%+v", x)
+	}
+	body, _, _ := gatesLast(ctx, env, tk.ID, "result")
+	if body != "远程做完了" {
+		t.Errorf("最后回复：%q", body)
+	}
+	// 代理那边：同一份适配器，提示词从内存走标准输入。
+	a, ok := adapterFor("claude")
+	if !ok {
+		t.Fatal("claude")
+	}
+	req := got.Request
+	req.Dir = t.TempDir()
+	spec, err := a.Spec(req, map[string]string{"PATH": os.Getenv("PATH")})
+	if err != nil || spec.Stdin == nil || !strings.HasSuffix(spec.Path, "claude") {
+		t.Fatalf("代理算的调用：%+v %v", spec, err)
+	}
+	if _, ok := adapterFor("../x"); ok {
+		t.Error("不合法的工具名应拒绝")
+	}
+}
+
+func gatesLast(ctx context.Context, env *app.Env, task, kind string) (string, bool, error) {
+	var body string
+	err := env.DB.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = ? ORDER BY id DESC LIMIT 1`, task, kind).Scan(&body)
+	return body, err == nil, err
 }

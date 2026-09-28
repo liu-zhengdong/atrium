@@ -63,7 +63,7 @@ var Limits = []Limit{
 	{"options", "每份选项单", MaxOptions, "项", "出选项单的人", "只留最值得的几项", "atrium choice ls"},
 	{"choices", "每部门待拍板的选项单", MaxChoices, "份", "用户", "先拍板或放弃已有的（atrium choice pick/pass cN）", "atrium choice ls"},
 	{"schedules", "每部门周期任务", MaxSchedules, "条", "部门负责人", "合并相近的、删掉不值的（atrium schedule rm sN）", "atrium schedule ls --node {dept}"},
-	{"secrets", "每部门凭据", MaxSecrets, "个", "用户", "删掉不用的（atrium secret rm {dept} 名称），或挪到上级部门共用", "atrium secret ls --node {dept}"},
+	{"secrets", "每部门凭据", MaxSecrets, "个", "用户", "删掉不用的（atrium secret set {dept} 名称 --rm），或挪到上级部门共用", "atrium secret ls --node {dept}"},
 }
 
 // LimitOf 取上限表的一行；键写错是编程错误。

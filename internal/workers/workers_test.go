@@ -295,7 +295,7 @@ func TestEnded(t *testing.T) {
 	agy, _ := Builtin("agy")
 	codex, _ := Builtin("codex")
 	cases := []struct {
-		a     *Adapter
+		a     *Driver
 		tail  string
 		known bool
 		ok    bool

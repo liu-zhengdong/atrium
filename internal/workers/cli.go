@@ -118,7 +118,7 @@ func (s CLISpec) Problems(name string) []string {
 }
 
 // cliAdapter 把写法变成适配器；调用前先看 Problems。
-func cliAdapter(name string, s CLISpec) *Adapter {
+func cliAdapter(name string, s CLISpec) *Driver {
 	all := strings.Join(append(append(append(append([]string{}, s.Args...), s.ModelArgs...), s.EffortArgs...), s.EndpointArgs...), " ")
 	for _, v := range s.Env {
 		all += " " + v
@@ -130,7 +130,7 @@ func cliAdapter(name string, s CLISpec) *Adapter {
 	if !strings.Contains(all, "{base_url}") && !strings.Contains(all, "{endpoint_args}") {
 		apis = nil
 	}
-	a := &Adapter{Tool: name, Exe: s.Command, Efforts: s.Efforts, Exclusive: s.Exclusive, Tell: TellRestart, JSON: s.JSON,
+	a := &Driver{Tool: name, Exe: s.Command, Efforts: s.Efforts, Exclusive: s.Exclusive, Tell: TellRestart, JSON: s.JSON,
 		Endpoints: apis, KeyEnv: s.KeyEnv, ArgPrompt: strings.Contains(all, "{prompt}"), cli: &s}
 	if len(s.Efforts) == 0 {
 		a.Efforts = nil

@@ -3,12 +3,15 @@ package workers
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/platform"
 )
 
 // 捎话（task tell）怎么送到：即时写标准输入、本轮结束后按会话续上、停掉带着补充重派。
@@ -67,8 +70,14 @@ type Launch struct {
 	Env       map[string]string `json:"env,omitempty"`        // 白名单环境之上额外设的变量（不放密钥）
 }
 
-// Adapter 是一个工具的数据与翻译函数。
-type Adapter struct {
+// Adapter 把一次请求翻成进程调用（经 platform.Start 拉起）。远程代理（hosts）按它拉起；*Driver 实现它。
+type Adapter interface {
+	Name() string
+	Spec(req Request, env map[string]string) (platform.Spec, error)
+}
+
+// Driver 是一个工具的数据与翻译函数（内置工具各一个，通用命令行执行者按档案现造）。
+type Driver struct {
 	Tool         string
 	Exe          string
 	DefaultModel string
@@ -84,8 +93,11 @@ type Adapter struct {
 	cli          *CLISpec
 }
 
+// Name 是工具名。
+func (a *Driver) Name() string { return a.Tool }
+
 // Build 把输入翻成进程调用（纯函数）。
-func (a *Adapter) Build(in Request) (Launch, error) {
+func (a *Driver) Build(in Request) (Launch, error) {
 	if err := a.check(in); err != nil {
 		return Launch{}, err
 	}
@@ -93,7 +105,7 @@ func (a *Adapter) Build(in Request) (Launch, error) {
 }
 
 // SessionOf 从日志开头取会话 id（续上时用）；取不到或工具不支持返回空。
-func (a *Adapter) SessionOf(log string) string {
+func (a *Driver) SessionOf(log string) string {
 	if a.session == nil {
 		return ""
 	}
@@ -104,7 +116,7 @@ func (a *Adapter) SessionOf(log string) string {
 }
 
 // CanResume：捎话本轮结束后能不能按会话续上。
-func (a *Adapter) CanResume() bool { return a.session != nil && a.Tell != TellRestart }
+func (a *Driver) CanResume() bool { return a.session != nil && a.Tell != TellRestart }
 
 const argPromptMax = 256 * 1024
 
@@ -115,7 +127,7 @@ var (
 	toolRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 )
 
-func (a *Adapter) check(in Request) error {
+func (a *Driver) check(in Request) error {
 	if !filepath.IsAbs(in.Dir) {
 		return api.Usage("工作目录须为绝对路径：%s", in.Dir)
 	}
@@ -151,19 +163,19 @@ func (a *Adapter) check(in Request) error {
 	return nil
 }
 
-var builtin = map[string]*Adapter{}
+var builtin = map[string]*Driver{}
 
 // Tools 是内置工具的固定顺序（没有额度数据时按它挑）。
 var Tools = []string{"claude", "codex", "opencode", "cursor", "agy", "kimi", "grok"}
 
 func init() {
-	for _, a := range []*Adapter{claudeAdapter(), codexAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter()} {
+	for _, a := range []*Driver{claudeAdapter(), codexAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter()} {
 		builtin[a.Tool] = a
 	}
 }
 
 // Builtin 取内置适配器。
-func Builtin(tool string) (*Adapter, bool) {
+func Builtin(tool string) (*Driver, bool) {
 	a, ok := builtin[tool]
 	return a, ok
 }
@@ -179,8 +191,8 @@ var initSession = regexp.MustCompile(`"type":"system","subtype":"init"[^\n]*?"se
 
 // claude -p：stream-json 逐轮输出事件（进展信号）；--input-format stream-json 让标准输入成为消息流，
 // 运行中写入的用户消息在工具调用边界读入，--replay-user-messages 把读入的消息带 isReplay 回显。
-func claudeAdapter() *Adapter {
-	a := &Adapter{Tool: "claude", Exe: "claude", DefaultModel: "opus", Efforts: []string{"low", "medium", "high", "xhigh", "max"},
+func claudeAdapter() *Driver {
+	a := &Driver{Tool: "claude", Exe: "claude", DefaultModel: "opus", Efforts: []string{"low", "medium", "high", "xhigh", "max"},
 		Tell: TellStdin, JSON: true, Endpoints: []string{"anthropic"}, KeyEnv: "ANTHROPIC_AUTH_TOKEN", session: initSession}
 	a.build = func(in Request) (Launch, error) {
 		args := []string{"-p"}
@@ -209,8 +221,8 @@ func claudeAdapter() *Adapter {
 
 // codex exec：-C 工作目录、-s 沙箱、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
 // 续上：codex exec resume <会话> -（没有 -C、-s，沙箱走配置覆盖）。
-func codexAdapter() *Adapter {
-	a := &Adapter{Tool: "codex", Exe: "codex", DefaultModel: "gpt-6-sol", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
+func codexAdapter() *Driver {
+	a := &Driver{Tool: "codex", Exe: "codex", DefaultModel: "gpt-6-sol", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
 		Tell: TellResume, Endpoints: []string{"responses"}, session: regexp.MustCompile(`(?m)^session id: ([0-9a-f-]{36})$`)}
 	a.build = func(in Request) (Launch, error) {
 		var args []string
@@ -245,8 +257,8 @@ func codexAdapter() *Adapter {
 }
 
 // opencode run：提示词是位置参数；--format json 逐步输出事件；--auto 全放行；同一数据目录并发会死锁，独占。
-func opencodeAdapter() *Adapter {
-	a := &Adapter{Tool: "opencode", Exe: "opencode", DefaultModel: "opencode-go/mimo-v2.6-flash",
+func opencodeAdapter() *Driver {
+	a := &Driver{Tool: "opencode", Exe: "opencode", DefaultModel: "opencode-go/mimo-v2.6-flash",
 		Efforts: []string{"minimal", "low", "medium", "high", "max"}, Exclusive: true, Tell: TellRestart, JSON: true,
 		Endpoints: []string{"openai", "anthropic"}, ArgPrompt: true}
 	a.build = func(in Request) (Launch, error) {
@@ -306,8 +318,8 @@ func CursorModel(model, effort string) (string, error) {
 }
 
 // cursor-agent -p：提示词读标准输入；stream-json 事件；--force --trust --sandbox disabled 全放行。续上 --resume。
-func cursorAdapter() *Adapter {
-	a := &Adapter{Tool: "cursor", Exe: "cursor-agent", DefaultModel: "auto", Efforts: cursorEfforts, Tell: TellResume, JSON: true,
+func cursorAdapter() *Driver {
+	a := &Driver{Tool: "cursor", Exe: "cursor-agent", DefaultModel: "auto", Efforts: cursorEfforts, Tell: TellResume, JSON: true,
 		session: initSession}
 	a.build = func(in Request) (Launch, error) {
 		model := in.Model
@@ -355,8 +367,8 @@ func AgyModelArgs(model, effort string) ([]string, error) {
 }
 
 // agy（Antigravity）：--print=<提示词>（等号形式）、stream-json 事件、全放行、不认斜杠命令。
-func agyAdapter() *Adapter {
-	a := &Adapter{Tool: "agy", Exe: "agy", DefaultModel: "claude-opus-4-6-thinking", Efforts: []string{"low", "medium", "high", "max"},
+func agyAdapter() *Driver {
+	a := &Driver{Tool: "agy", Exe: "agy", DefaultModel: "claude-opus-4-6-thinking", Efforts: []string{"low", "medium", "high", "max"},
 		Tell: TellRestart, JSON: true, ArgPrompt: true}
 	a.build = func(in Request) (Launch, error) {
 		m, err := AgyModelArgs(in.Model, in.Effort)
@@ -371,8 +383,8 @@ func agyAdapter() *Adapter {
 }
 
 // kimi -p：非交互单次运行；-m 模型别名；不接受强度；不能加 --yolo。
-func kimiAdapter() *Adapter {
-	a := &Adapter{Tool: "kimi", Exe: "kimi", Tell: TellRestart, ArgPrompt: true}
+func kimiAdapter() *Driver {
+	a := &Driver{Tool: "kimi", Exe: "kimi", Tell: TellRestart, ArgPrompt: true}
 	a.build = func(in Request) (Launch, error) {
 		args := []string{"-p", in.Prompt}
 		if in.Model != "" {
@@ -384,8 +396,8 @@ func kimiAdapter() *Adapter {
 }
 
 // grok -p：单轮提示词、--always-approve、--cwd、--reasoning-effort。
-func grokAdapter() *Adapter {
-	a := &Adapter{Tool: "grok", Exe: "grok", DefaultModel: "grok-4.6", Efforts: []string{"low", "medium", "high"},
+func grokAdapter() *Driver {
+	a := &Driver{Tool: "grok", Exe: "grok", DefaultModel: "grok-4.6", Efforts: []string{"low", "medium", "high"},
 		Tell: TellRestart, ArgPrompt: true}
 	a.build = func(in Request) (Launch, error) {
 		args := []string{"-p", in.Prompt}
@@ -399,4 +411,40 @@ func grokAdapter() *Adapter {
 		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir}, nil
 	}
 	return a
+}
+
+// Spec 给远程代理：按请求算出进程调用并按子进程环境找程序（代理那台没有档案库，通用命令行执行者的写法随 req.CLI 带来）。
+// 走标准输入的提示词直接从 req.Prompt 给，不要求那台有提示词文件。
+func (a *Driver) Spec(req Request, env map[string]string) (platform.Spec, error) {
+	if req.PromptFile == "" {
+		// 通用命令行执行者可能用 {prompt_file}：写在临时目录，不进工作树（免得被执行者提交）。
+		f, err := os.CreateTemp("", "atrium-prompt-*.md")
+		if err != nil {
+			return platform.Spec{}, err
+		}
+		_, err = f.WriteString(req.Prompt)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return platform.Spec{}, err
+		}
+		req.PromptFile = f.Name()
+	}
+	req.Live = false
+	l, err := Build(a.Tool, req)
+	if err != nil {
+		return platform.Spec{}, err
+	}
+	envs := maps.Clone(env)
+	maps.Copy(envs, l.Env)
+	exe, err := platform.LookPath(l.Exe, envs)
+	if err != nil {
+		return platform.Spec{}, err
+	}
+	s := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: envs}
+	if l.StdinFile != "" {
+		s.Stdin = strings.NewReader(req.Prompt)
+	}
+	return s, nil
 }

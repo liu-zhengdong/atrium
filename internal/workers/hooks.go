@@ -14,7 +14,7 @@ import (
 
 // WatchSignal 把日志尾巴翻成 watch 的信号（纯函数）。进程还活着时也会被问，所以只认收尾事件：
 // 正常收尾是 done；报错收尾再按额度用尽、临时错误分；思考耗尽单独认。收尾之前的中途报错（工具自己会重试）不算。
-func WatchSignal(a *Adapter, tail string) watch.Signal {
+func WatchSignal(a *Driver, tail string) watch.Signal {
 	if s := Classify(0, tail, timeNow()); s.Kind == SignalThinking {
 		return watch.SigThinking
 	}

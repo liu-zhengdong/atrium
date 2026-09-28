@@ -17,48 +17,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// StopResult 是 task stop 的结果：Stopping 为真表示已发停止信号，退出后转受阻。
-type StopResult struct {
-	Task     ledger.Task `json:"task"`
-	Stopping bool        `json:"stopping"`
-}
-
-// Stop 停下一件任务：排队的撤出队列转受阻；在跑的结束执行者进程树，退出后转受阻交负责人。
-// watch 也用它（why 写明原因）。
-func Stop(ctx context.Context, env *app.Env, id, why, by string) (StopResult, error) {
-	d := get(env)
-	t, err := ledger.Get(ctx, env.DB, id)
-	if err != nil {
-		return StopResult{}, err
-	}
-	note := "已停下（" + by + "）"
-	if why != "" {
-		note += "：" + why
-	}
-	switch {
-	case t.Status == ledger.Queued:
-		if err := d.block(ctx, id, note); err != nil {
-			return StopResult{}, err
-		}
-		t, err = ledger.Get(ctx, env.DB, id)
-		return StopResult{Task: t}, err
-	case t.Status == ledger.Running && t.Stage == ledger.StageNone:
-		p := d.procOf(id)
-		if p == nil {
-			// 没有在跑的进程（拉起失败或刚退出）：直接转受阻。
-			t, err = ledger.Apply(ctx, env.DB, id, ledger.Event{Kind: ledger.Block}, by, note+"；没有找到在跑的执行者进程")
-			return StopResult{Task: t}, err
-		}
-		p.setStop("block")
-		if err := ledger.Note(ctx, env.DB, id, by, note); err != nil {
-			return StopResult{}, err
-		}
-		d.kill(ctx, p)
-		return StopResult{Task: t, Stopping: true}, nil
-	}
-	return StopResult{}, api.Conflict("%s 当前 %s，没有排队或在跑的执行者可停", id, label(t)).WithNext("atrium task show " + id)
-}
-
 func label(t ledger.Task) string {
 	if t.Stage == ledger.StageNone {
 		return string(t.Status)

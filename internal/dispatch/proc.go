@@ -15,13 +15,13 @@ import (
 type proc struct {
 	task    string
 	run     workers.Run
-	adapter *workers.Adapter
+	adapter *workers.Driver
 	remote  bool
 
 	mu      sync.Mutex
 	stdin   *os.File        // 即时捎话的写端；nil 表示没有或已关
 	pending map[string]bool // 已写入、还没回显的捎话 uuid
-	stopFor string          // task stop / watch 停的：block、restart
+	stopFor string          // 运行时停的：restart（带着捎话重派）、gone（任务已不在跑）
 	done    chan struct{}
 }
 

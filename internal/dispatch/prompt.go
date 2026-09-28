@@ -86,7 +86,7 @@ type ExitInput struct {
 	Code      int // workers.ExitUnknown 表示拿不到
 	Signal    workers.Signal
 	Ending    workers.Ending
-	StopFor   string // task stop 或 watch 停的：block、restart；空表示自己退出
+	StopFor   string // 运行时停的：restart（带着捎话重派）；空表示自己退出
 	Same      int    // 这一轮已同一执行者重试几次
 	Switches  int    // 这一轮已换过几次执行者
 	Pending   int    // 没送到的捎话
@@ -95,7 +95,7 @@ type ExitInput struct {
 
 // Route 是去向。
 type Route struct {
-	Do     string // gate fail block same switch resume restart
+	Do     string // gate fail same switch resume restart
 	Reason string
 }
 
@@ -107,10 +107,7 @@ const (
 
 // RouteExit 判执行者退出后的去向（纯函数）。
 func RouteExit(in ExitInput) Route {
-	switch in.StopFor {
-	case "block":
-		return Route{"block", "已停下"}
-	case "restart":
+	if in.StopFor == "restart" {
 		return Route{"restart", "带着补充重派"}
 	}
 	s := in.Signal

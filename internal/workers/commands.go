@@ -64,7 +64,7 @@ func Catalog(ctx context.Context, q store.Querier) ([]string, error) {
 }
 
 // Installed：子进程环境的 PATH 上找得到这个工具。
-func Installed(a *Adapter) bool {
+func Installed(a *Driver) bool {
 	_, err := platform.LookPath(a.Exe, platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ())))
 	return err == nil
 }
@@ -169,7 +169,7 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 			return Detail{}, err
 		}
 		if p == nil {
-			return Detail{}, api.NotFound("档案 %s 不存在", name).WithNext("atrium workers edit " + name + " --file <档案>")
+			return Detail{}, api.NotFound("档案 %s 不存在", name).WithNext("atrium workers " + name + " --file <档案>")
 		}
 		return Detail{Profile: p}, nil
 	}
@@ -218,13 +218,27 @@ func Routes(r *api.Router, env *app.Env) {
 	})
 }
 
-// Commands 注册 workers、workers edit。
+// Commands 注册 workers：列、看、改档案是同一条命令（给了改档案的参数就是改）。
 func Commands(t *cli.Table) {
 	t.Group("workers", "执行者：可派的组合、档案与交付事实")
-	t.Add(cli.Command{Path: "workers", Args: "[执行者或档案名]", Summary: "列执行者（组合、信任、交付事实）；给名字看叠加后的档案或一层原文",
+	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
+		Summary: "列执行者（组合、信任、交付事实）；给名字看叠加后的档案或一层原文；给 层/名 加 --file/--set/--unset/--delete 改档案",
+		Flags: []cli.Flag{
+			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
+			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：trust=medium、checks=[pr_exists]）"},
+			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
+			{Name: "delete", Bool: true, Help: "删掉这层档案"},
+		},
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(1); err != nil {
 				return err
+			}
+			if c.Has("file") || c.Has("set") || c.Has("unset") || c.Bool("delete") {
+				name, err := c.Arg(0, "<层/名>")
+				if err != nil {
+					return err
+				}
+				return editCmd(c, name)
 			}
 			if len(c.Args) == 1 {
 				return showCmd(c, c.Args[0])
@@ -247,53 +261,40 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(rows, b.String(), "atrium workers <执行者>")
 		}})
-	t.Add(cli.Command{Path: "workers edit", Args: "<层/名>", Summary: "改执行者档案：harness/<工具>、models/<模型>、combos/<工具>+<模型>",
-		Flags: []cli.Flag{
-			{Name: "file", Value: "路径", Help: "整份替换：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
-			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：trust=medium、checks=[pr_exists]）"},
-			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
-			{Name: "delete", Bool: true, Help: "删掉这层档案"},
-		},
-		Run: func(c *cli.Ctx) error {
-			name, err := c.Arg(0, "<层/名>")
-			if err != nil {
-				return err
-			}
-			if err := c.MaxArgs(1); err != nil {
-				return err
-			}
-			e := Edit{Unset: c.List("unset"), Delete: c.Bool("delete")}
-			if f := c.Str("file"); f != "" {
-				raw, err := os.ReadFile(f)
-				if err != nil {
-					return api.Usage("--file: 读不了 %s：%v", f, err)
-				}
-				s := string(raw)
-				e.Source = &s
-			}
-			for _, kv := range c.Values("set") {
-				k, v, ok := strings.Cut(kv, "=")
-				if !ok || k == "" {
-					return api.Usage("--set: 写成 键=值，收到 %q", kv)
-				}
-				if e.Set == nil {
-					e.Set = map[string]string{}
-				}
-				e.Set[k] = v
-			}
-			var out struct {
-				Name    string   `json:"name"`
-				Profile *Profile `json:"profile"`
-			}
-			if err := c.Call("POST", "/api/workers/edit", map[string]any{"name": name, "source": e.Source, "set": e.Set,
-				"unset": e.Unset, "delete": e.Delete}, &out); err != nil {
-				return err
-			}
-			if e.Delete {
-				return c.Done(out, "已删档案 "+name, "atrium workers")
-			}
-			return c.Done(out, "已存档案 "+name, "atrium workers "+name)
-		}})
+}
+
+func editCmd(c *cli.Ctx, name string) error {
+	e := Edit{Unset: c.List("unset"), Delete: c.Bool("delete")}
+	if f := c.Str("file"); f != "" {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			return api.Usage("--file: 读不了 %s：%v", f, err)
+		}
+		s := string(raw)
+		e.Source = &s
+	}
+	for _, kv := range c.Values("set") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return api.Usage("--set: 写成 键=值，收到 %q", kv)
+		}
+		if e.Set == nil {
+			e.Set = map[string]string{}
+		}
+		e.Set[k] = v
+	}
+	var out struct {
+		Name    string   `json:"name"`
+		Profile *Profile `json:"profile"`
+	}
+	if err := c.Call("POST", "/api/workers/edit", map[string]any{"name": name, "source": e.Source, "set": e.Set,
+		"unset": e.Unset, "delete": e.Delete}, &out); err != nil {
+		return err
+	}
+	if e.Delete {
+		return c.Done(out, "已删档案 "+name, "atrium workers")
+	}
+	return c.Done(out, "已存档案 "+name, "atrium workers "+name)
 }
 
 func showCmd(c *cli.Ctx, name string) error {
@@ -303,7 +304,7 @@ func showCmd(c *cli.Ctx, name string) error {
 	}
 	if d.Profile != nil {
 		return c.Done(d, strings.TrimRight(d.Profile.Source, "\n")+fmt.Sprintf("\n\n（%s 改于 %s）", d.Profile.UpdatedBy,
-			fmtTime(d.Profile.UpdatedAt)), "atrium workers edit "+name+" --set 键=值")
+			fmtTime(d.Profile.UpdatedAt)), "atrium workers "+name+" --set 键=值")
 	}
 	r := d.Resolved
 	var b strings.Builder

@@ -227,7 +227,8 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(rows, b.String(), next)
 		}})
-	t.Add(cli.Command{Path: "task note", Args: "<tN> <文字>", Summary: "给任务加一条备注（记进经历）",
+	t.Add(cli.Command{Path: "task note", Args: "<tN> <文字>", Summary: "给任务加一条备注（记进经历）；--tell 同时捎给执行者",
+		Flags: []cli.Flag{{Name: "tell", Bool: true, Help: "也捎给执行者：在跑的按工具即时或本轮后送到，没在跑的下次拉起时写进提示词（dispatch 送）"}},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -239,6 +240,15 @@ func Commands(t *cli.Table) {
 			}
 			if err := c.MaxArgs(2); err != nil {
 				return err
+			}
+			if c.Bool("tell") {
+				var r struct {
+					Note string `json:"note"`
+				}
+				if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/tell", map[string]string{"text": text}, &r); err != nil {
+					return err
+				}
+				return c.Done(r, "已记下并捎话："+r.Note, "atrium task log "+id+" --follow")
 			}
 			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/notes", map[string]string{"text": text}, nil); err != nil {
 				return err

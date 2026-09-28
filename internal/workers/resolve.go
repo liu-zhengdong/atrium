@@ -69,7 +69,7 @@ type Resolved struct {
 	Rules    Rules    `json:"rules"`
 	Body     string   `json:"body,omitempty"` // 各层正文按 harness、models、combos 拼接，附进提示词
 	Layers   []string `json:"layers"`
-	Adapter  *Adapter `json:"-"`
+	Adapter  *Driver  `json:"-"`
 }
 
 // Account 是额度账号：同一工具的模型共享一份额度。
@@ -123,7 +123,7 @@ func Resolve(ctx context.Context, q store.Querier, id string) (Resolved, error) 
 	if !ok {
 		if harness == nil || harness.Keys["protocol"] != "cli" {
 			return Resolved{}, api.Usage("--worker: 未知的工具 %s，可选 %s，或先写 harness/%s 档案（protocol: cli）接进来",
-				s.Tool, strings.Join(Tools, "、"), s.Tool).WithNext("atrium workers edit harness/" + s.Tool + " --file <档案>")
+				s.Tool, strings.Join(Tools, "、"), s.Tool).WithNext("atrium workers harness/" + s.Tool + " --file <档案>")
 		}
 		r, err := decodeRules(harness.Keys)
 		if err != nil {

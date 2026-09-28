@@ -1,7 +1,7 @@
 // Package dispatch 是派活：一个派活队列（状态 queued 的任务，按优先级、入队先后取）、挑执行者（档案能接 + 额度富余 +
 // 不正忙）、挑机器（本机优先、空位最多），在任务目录的 git worktree 里拉起执行者，退出后按信号重试、换人、续上或交关卡。
 //
-// 命令：task run、task stop、task tell、task log。
+// 命令：task run、task log；捎话是 task note --tell（POST /api/tasks/{id}/tell），停下用 task set --status blocked（派活循环结束它的执行者）。
 // 状态只经 ledger.Apply：入队 Enqueue、拉起 Start、退出 ExitOK（进关卡，gates 接手）或 ExitFail、停下 Block。
 // 拉起记录以任务经历 kind "launch"（workers.Run）存，gates、watch 读它。每次自主动作前问 Pause。
 package dispatch
@@ -23,6 +23,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/gates"
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -34,6 +35,7 @@ import (
 
 // Module 是本包接入点。
 func Module() app.Module {
+	hosts.AdapterFor = adapterFor // 远程代理（atrium agent，同一个二进制）按工具名取适配器
 	return app.Module{Name: "dispatch", Commands: Commands, Routes: Routes, Run: Run}
 }
 
@@ -86,6 +88,12 @@ func Run(ctx context.Context, env *app.Env) error {
 	}
 	for {
 		ch := ledger.Changed()
+		if err := d.reap(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
 		if err := d.pump(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -105,6 +113,35 @@ func Run(ctx context.Context, env *app.Env) error {
 func isAPI(err error) bool {
 	var ae *api.Error
 	return errors.As(err, &ae)
+}
+
+// reap 结束已不该跑的执行者：任务被人改成受阻、取消、完成（task set），或被 watch 收了尾，进程还活着就结束它。
+func (d *dispatcher) reap(ctx context.Context) error {
+	d.mu.Lock()
+	list := make([]*proc, 0, len(d.procs))
+	for _, p := range d.procs {
+		list = append(list, p)
+	}
+	d.mu.Unlock()
+	for _, p := range list {
+		if p.stopReason() != "" {
+			continue
+		}
+		t, err := ledger.Get(ctx, d.env.DB, p.task)
+		if err != nil {
+			return err
+		}
+		last, err := workers.LastRun(ctx, d.env.DB, p.task)
+		if err != nil {
+			return err
+		}
+		if t.Status == ledger.Running && t.Stage == ledger.StageNone && last != nil && last.N == p.run.N {
+			continue
+		}
+		p.setStop("gone")
+		d.kill(ctx, p)
+	}
+	return nil
 }
 
 // pump 按队列顺序派一轮。单件任务派不出去的原因（没人能接、仓库不对……）转受阻交负责人，其余错误让服务停下。
@@ -447,8 +484,18 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	p := &proc{task: t.ID, adapter: o.W.Adapter, remote: remote, pending: map[string]bool{}, done: make(chan struct{})}
 	var wait func() int
 	if remote {
-		rr, pid, err := launchRemote(ctx, d.env, o.Host, Remote{Task: t.ID, Tool: o.W.Spec.Tool, Request: req, Repo: t.Repo,
-			Branch: branch, Env: extra, Log: run.Log})
+		clone := ""
+		if t.Repo != "" {
+			local, url, err := RepoSource(data, t.Repo)
+			if err != nil {
+				return err
+			}
+			if clone = url; clone == "" {
+				clone = local
+			}
+		}
+		rr, pid, err := launchRemote(ctx, d.env, o.Host, Remote{Task: t.ID, Tool: o.W.Spec.Tool, Request: req, Repo: clone,
+			Branch: branch, Base: "main", Env: extra, Log: run.Log})
 		if err != nil {
 			return err
 		}
@@ -639,7 +686,7 @@ func tries(runs []workers.Run) (same, switches int, tried map[string]bool) {
 	return
 }
 
-// exited 是执行者退出后的收尾：判信号与结局，交关卡、判失败、受阻，或重试、换人、续上、重派。
+// exited 是执行者退出后的收尾：判信号与结局，交关卡、判失败，或重试、换人、续上、重派。
 // 任务已不在跑（watch 或人先收了尾）、或已换了一轮拉起，就不动。
 func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	db := d.env.DB
@@ -710,8 +757,6 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.ExitOK, note)
 	case "fail":
 		return apply(ledger.ExitFail, note)
-	case "block":
-		return apply(ledger.Block, note)
 	}
 	if paused, err := d.paused(ctx, t, p.run.Host); err != nil || paused {
 		if err != nil {

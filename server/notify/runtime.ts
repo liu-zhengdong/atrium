@@ -411,7 +411,7 @@ export class TelegramNotifier {
     }).catch(() => undefined);
     await callTelegram(this.client(token), "sendMessage", {
       chat_id: chat,
-      text: "已绑定 Atrium。之后「等你拍板」「上交到你这层的卡住／越界」「里程碑上线」会推到这里，只带标题和短号。",
+      text: "已绑定 Atrium。之后「等你拍板」「上交到你这层的卡住／越界」「里程碑上线」和紧急任务的上线、卡住、止损没做成会推到这里，只带标题和短号。",
     }).catch((error: unknown) =>
       this.log(
         `Telegram 绑定回执没发出去：${scrub(error instanceof Error ? error.message : String(error), token)}`,

@@ -117,6 +117,8 @@ export function denyReason(leader: string, method: string, route: string) {
       leader,
       "真删资料（那是用户的决定；用不上了就归档：atrium material archive mN --note 原因）",
     );
+  if (route.startsWith("/api/notify"))
+    return denied(leader, "改推送到手机的设置（那是用户的）");
   if (route.startsWith("/api/product/"))
     return denied(leader, "改谁拍板选项单（那是用户的决定）");
   return denied(leader, `调用 ${key}`);

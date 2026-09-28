@@ -336,6 +336,25 @@ atrium product show atrium                         # 看这个节点上的选项
 - **谁能做什么**：秘书和 leader 能提（leader 令牌只能挂在自己负责的部分、下层或上一层——产品部管的是上一层的演进），也能在同样范围内写意见；拍板：用户令牌，或本机全景网页会话发起的同源请求（带 Origin），或拍板权已下放给的那位 leader，其他 leader 令牌拒绝。
 - **通知与展示**：提好后项目 leader（选项单所在节点最近的 leader）收 `choice_review`，去写意见、补依据、标倾向，但不能拍板。拍板人是用户时，秘书收 `choice_ready` 被叫醒；已下放时改由那位 leader 收 `choice_ready`，秘书只收知会 `choice_notice`，状态栏和网页入口不算这份。有人写意见时秘书收知会 `choice_comment`。拍板后，秘书和 leader 那条都改成知会 `choice_decided`，不再叫醒。`atrium top` 与状态栏在第一行下面单出一行「等你拍板：c3 Atrium 下一步（4 个选项）」；全景网页组织根页顶部有「等你拍板：N」入口，节点页有「选项」页签（本节点与下层产品部的，等拍板的在前），勾选后可直接在网页上拍板。
 
+## 推送到手机（Telegram）
+
+不在电脑前时，三类事推到手机上的 Telegram：选项单等你拍板、上交到你这层（秘书）的卡住或越界（含会审要你拍板）、里程碑上线。过程事件（派活、完成、失败、合入、CI）不推；推送只带类别、短号和标题（如「【等你拍板】c2 Atrium 下一步」），不带上交说明、选项内容等正文。
+
+```bash
+pbpaste | atrium notify token        # 先在 Telegram 找 @BotFather 建机器人；token 从标准输入给（Windows：Get-Clipboard | atrium notify token）
+atrium notify bind                   # 在手机上点回执里的链接或给机器人发绑定码，收到就绑定这个私聊；默认等 120 秒
+atrium notify test                   # 立刻发一条测试消息
+atrium notify set --quiet 23:00-08:00 --batch 60 --proxy http://127.0.0.1:7890
+atrium notify                        # 状态：机器人、是否绑定、免打扰、攒批、代理、待发与最近失败
+atrium notify set --off              # 关掉（清空待发）；--on 打开；atrium notify remove 删掉 token 与绑定
+```
+
+- **凭据**：token 只存在数据目录的 `telegram.json`（`0600`，代理密码也在这里），不进数据库、日志、事件、提示词，不碰钥匙串；状态与报错里都不显示。token 只从标准输入读，不收命令行参数（免得进 shell 历史）。
+- **攒批与免打扰**：同一窗口（缺省 60 秒）内的多件合成一条，一条最多列 15 件；免打扰时段（本机钟点，可跨午夜）里攒着，时段结束合成一条发。排队期间已拍板的选项单不再推。
+- **代理**：`--proxy` 单独配的 HTTP 代理优先（只支持 `http://`，走 CONNECT 隧道），没配就走服务环境里的 `HTTPS_PROXY`/`ALL_PROXY`（遵守 `NO_PROXY`）；改了系统代理要 `atrium restart` 才生效。
+- **失败**：网络、超时、429、5xx 退避重试（30 秒起翻倍，429 按 Telegram 给的等待时间），满 5 次放弃；token 错、机器人被拉黑这类不重试。失败写进服务日志，请求地址里的 token 抹掉。
+- 只有用户能改设置，leader 令牌只能读状态。
+
 ## 和秘书对话
 
 ```bash
@@ -544,6 +563,7 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 | `ATRIUM_CHECK_TIMEOUT_MINUTES`  | 一次本地检查最多跑几分钟，默认 30；远程主机由代理按它那台的环境设                        |
 | `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数减 1（至少 1）                                   |
 | `ATRIUM_AGENT_DATA`             | 远程主机上 `atrium agent` 的数据目录（令牌、仓库、工作树、日志），默认 `~/.atrium-agent` |
+| `ATRIUM_TELEGRAM_API`           | 推送用的 Telegram 接口地址，默认 `https://api.telegram.org`（隔离验收时指向本地假接口）  |
 
 Atrium 的状态都在数据目录的数据库里（任务详述、组织树与章程预算等），换机器带走数据目录即可；旧状态的导入每类只做一次，记在 `state_imports` 表，重复启动不重复导入。数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
 

@@ -28,6 +28,7 @@ import { materialCommands } from "./materials.ts";
 import { choiceCommands } from "./choices.ts";
 import { productCommands } from "./products.ts";
 import { agentCommand, hostCommands } from "./hosts.ts";
+import { notifyCommands } from "./notify.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
@@ -121,6 +122,7 @@ export const commands: Record<string, Command> = {
   ...skillCommands,
   ...quotaCommands,
   ...eventCommands,
+  ...notifyCommands,
   ...hostCommands,
   agent: agentCommand,
   chat: chatCommand,

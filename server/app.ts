@@ -33,6 +33,8 @@ import { registerMemoRoutes } from "./memos/routes.ts";
 import { registerMaterialRoutes } from "./materials/routes.ts";
 import { registerChoiceRoutes } from "./choices/routes.ts";
 import { registerHostRoutes } from "./hosts/routes.ts";
+import { TelegramNotifier, type NotifierOptions } from "./notify/runtime.ts";
+import { registerNotifyRoutes } from "./notify/routes.ts";
 import {
   LeaderWaker,
   leaderEnvOptions,
@@ -92,6 +94,8 @@ export async function createApp(options: {
   legacyDir?: string;
   /** 周期任务（#404）：测试缩短巡检间隔、注入时钟与时区。 */
   schedules?: { tickMs?: number; now?: () => number; offset?: Offset };
+  /** 推送到手机（Telegram）：测试给假接口地址、显式环境（不读本机代理）与时钟。 */
+  notify?: Partial<Omit<NotifierOptions, "data">>;
 }) {
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   const db = openDatabase(options.data);
@@ -300,6 +304,15 @@ export async function createApp(options: {
   registerMaterialRoutes(app, db, resolve(options.data));
   // 选项单的表要在全景变更检测挂触发器（registerMapRoutes）之前建好。
   registerChoiceRoutes(app, db, taskRunner.inbox);
+  // 推送到手机：等你拍板、上交到用户这层的卡住／越界、里程碑上线（t185）。
+  const notifier = new TelegramNotifier(db, {
+    data: resolve(options.data),
+    ...options.notify,
+  });
+  taskRunner.inbox.observe((event) => notifier.observe(event));
+  registerNotifyRoutes(app, notifier);
+  notifier.start();
+  app.addHook("preClose", async () => notifier.close());
   const leaderWaker = new LeaderWaker(db, taskRunner.inbox, leaderTokens, {
     data: resolve(options.data),
     env: options.tasks?.env,
@@ -337,5 +350,5 @@ export async function createApp(options: {
     db,
     readers: options.quotaReaders,
   });
-  return { app, db, taskRunner, leaderTokens };
+  return { app, db, taskRunner, leaderTokens, notifier };
 }

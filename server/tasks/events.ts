@@ -191,6 +191,7 @@ export function listOptions(query: { before?: string; limit?: string }) {
 export class EventInbox {
   private readonly emitter = new EventEmitter();
   private readonly lastWait = new Map<string, number>();
+  private readonly observers: ((event: InboxEvent) => void)[] = [];
   private closed = false;
 
   private readonly batchMs: number;
@@ -257,10 +258,22 @@ export class EventInbox {
       .prepare("SELECT * FROM task_inbox WHERE id=?")
       .get(id) as InboxRow;
     if (self) return view(row);
+    const published = view(row);
+    for (const observer of this.observers)
+      try {
+        observer(published);
+      } catch (error) {
+        console.warn(`事件观察者出错（不影响投递）：${String(error)}`);
+      }
     this.emitter.emit(subscriber);
     if (this.batchMs > 0)
       setTimeout(() => this.emitter.emit(subscriber), this.batchMs + 5).unref();
-    return view(row);
+    return published;
+  }
+
+  /** 事件落库（且不是订阅者自己发起的）后同步回调，如推送到手机（server/notify/）；回调出错只记日志。 */
+  observe(observer: (event: InboxEvent) => void) {
+    this.observers.push(observer);
   }
 
   /** 最近事件，含已送达与已确认记录；按编号倒序、有界分页。 */

@@ -391,7 +391,7 @@ const whereText = (chain: readonly number[]) =>
 const setHint = (chain: readonly number[], name: string) =>
   `atrium secret set ${chain.length ? nodeRef(chain[0]!) : "o1"} ${name}`;
 
-/** 建任务、改任务时查一遍：声明的凭据在归属部分的节点链上都要找得到。 */
+/** 建任务、改任务时查一遍：声明的凭据在归属部门的节点链上都要找得到。 */
 export function checkTaskSecrets(
   db: DatabaseSync,
   start: number | null,
@@ -410,7 +410,7 @@ export function checkTaskSecrets(
 }
 
 /**
- * 派活那一刻取值：按任务归属部分（没有取负责节点）的节点链找，读出值文件。
+ * 派活那一刻取值：按任务归属部门（没有取负责节点）的节点链找，读出值文件。
  * 缺了或读不到就报错不拉起（报错只带名称）；标记用过由拉起成功后的 markSecretsUsed 做。
  * extra 是执行者档案要的（t271 自定义端点的密钥）：同一套节点链找，值放进 as 这个环境变量。
  */

@@ -652,7 +652,7 @@ export class TaskRunner {
         ...(remoteTools ? { installed: remoteTools } : {}),
       };
       const held = this.quota.held();
-      // 与 task pick 同一份候选排序：专员优先、再按额度富余；写死执行者时据此提醒更富余的候选。
+      // 与 task run --dry-run 同一份候选排序：专员优先、再按额度富余；写死执行者时据此提醒更富余的候选。
       const view = await pickFor(task, request.risk ?? "low", {
         db: this.db,
         launchOptions: this.launchOptions,
@@ -776,7 +776,7 @@ export class TaskRunner {
 
   // ---- 执行机器（#358） ----
 
-  /** task pick 的主机一栏：推荐的执行者在各台能不能跑、为什么，自动派会去哪台。 */
+  /** task run --dry-run 的主机一栏：推荐的执行者在各台能不能跑、为什么，自动派会去哪台。 */
   private async hostPicks(task: Task, worker: string | null) {
     const tool = toolOf(worker);
     if (!tool) return [];
@@ -1133,7 +1133,7 @@ export class TaskRunner {
     return { resumed, pauses: listPauses(this.db) };
   }
 
-  /** 任务的归属部分（旧任务看 node_id）在不在 node 这一块里。 */
+  /** 任务的归属部门（旧任务看 node_id）在不在 node 这一块里。 */
   private inPart(id: number, node: number) {
     const task = getTask(this.db, id);
     const part = task.part_id ?? task.node_id;

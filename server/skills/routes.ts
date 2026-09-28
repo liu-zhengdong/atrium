@@ -3,15 +3,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveActor } from "../actor.ts";
 import { ensureSkillTables } from "./schema.ts";
 import {
-  acceptProposal,
   addSkill,
   bindSkill,
   editSkill,
-  listProposals,
   listSkills,
-  rejectProposal,
   revertSkill,
-  showProposal,
   showSkill,
   skillHistory,
   type AddSkillInput,
@@ -84,37 +80,5 @@ export function registerSkillRoutes(app: FastifyInstance, db: DatabaseSync) {
       actor(request.query),
       true,
     ),
-  );
-  app.get("/api/skill-proposals", (request) => {
-    const query = q(request.query);
-    return listProposals(db, {
-      status: query.status,
-      limit: query.limit === undefined ? undefined : Number(query.limit),
-    });
-  });
-  app.get("/api/skill-proposals/:id", (request) =>
-    showProposal(db, params(request.params).id!),
-  );
-  app.post(
-    "/api/skill-proposals/:id/accept",
-    { bodyLimit: 8 * 1024 },
-    (request) =>
-      acceptProposal(
-        db,
-        params(request.params).id!,
-        body(request.body).reason,
-        actor(request.query),
-      ),
-  );
-  app.post(
-    "/api/skill-proposals/:id/reject",
-    { bodyLimit: 8 * 1024 },
-    (request) =>
-      rejectProposal(
-        db,
-        params(request.params).id!,
-        body(request.body).reason,
-        actor(request.query),
-      ),
   );
 }

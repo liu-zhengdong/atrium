@@ -389,7 +389,7 @@ export type NewChoice = {
 };
 
 /**
- * 建一份选项单；node 须是未归档的部分，task（产出它的研究任务）须存在。
+ * 建一份选项单；node 须是未归档的部门，task（产出它的研究任务）须存在。
  * 小改进同一个事务记下，交给选项单所在节点最近的 leader（没有就是秘书），投事件在 notify.ts。
  */
 export function addChoice(

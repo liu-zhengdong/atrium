@@ -28,7 +28,7 @@ function hasTaskNodes(db: DatabaseSync) {
   );
 }
 
-/** 各节点名下（归属部分，旧任务看 node_id）与投出（origin_node_id）的未结任务数；最多 500 节点 × 3 状态。 */
+/** 各节点名下（归属部门，旧任务看 node_id）与投出（origin_node_id）的未结任务数；最多 500 节点 × 3 状态。 */
 export function taskCounts(db: DatabaseSync): {
   own: Map<number, TaskCounts>;
   sent: Map<number, TaskCounts>;

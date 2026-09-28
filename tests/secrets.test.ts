@@ -512,7 +512,7 @@ test("设值只存不显示：覆盖、归档后再设即恢复；破坏输入�
   );
 });
 
-test("任务声明：按归属部分往上找，找不到给设值命令；改声明记事件；归档后再声明被拒；事件与回执不带值", async (t) => {
+test("任务声明：按归属部门往上找，找不到给设值命令；改声明记事件；归档后再声明被拒；事件与回执不带值", async (t) => {
   const x = await open(t);
   await x.ok("PUT", "/api/secrets", { node: "o2", name: "BOT", value: VALUE });
   const missing = await x.call("POST", "/api/tasks", {
@@ -573,7 +573,7 @@ test("任务声明：按归属部分往上找，找不到给设值命令；改�
   assert.equal(dbHas(x.data, VALUE), false);
 });
 
-test("leader 令牌：负责的部分里能设值、归档、留下，别处的不行；不能真删", async (t) => {
+test("leader 令牌：负责的部门里能设值、归档、留下，别处的不行；不能真删", async (t) => {
   const x = await open(t);
   await x.ok("PUT", "/api/secrets", {
     node: "o4",
@@ -609,7 +609,7 @@ test("leader 令牌：负责的部分里能设值、归档、留下，别处的�
         token,
       );
       assert.equal(outside.status, 403);
-      assert.match(outside.body.error, /不在你负责的部分里/);
+      assert.match(outside.body.error, /不在你负责的部门里/);
       assert.equal(
         (
           await x.call(

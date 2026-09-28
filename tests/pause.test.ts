@@ -16,7 +16,7 @@ import { addNode } from "../server/org/write.ts";
 import { leaderRule } from "../server/leaders/scope.ts";
 import { startApp } from "./task-fixture.ts";
 
-test("暂停状态：全局、部分（含下层）、主机；重复暂停不改原来的谁与原因；破坏输入被表拒绝", () => {
+test("暂停状态：全局、部门（含下层）、主机；重复暂停不改原来的谁与原因；破坏输入被表拒绝", () => {
   const db = new DatabaseSync(":memory:");
   ensurePauseTable(db);
   ensureOrgTables(db);

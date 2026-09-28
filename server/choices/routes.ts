@@ -15,7 +15,7 @@ import {
 
 /**
  * 选项单的接口（atrium choice …）。
- * 建：秘书、leader（leader 令牌只能挂在自己负责的部分或它的上一层）、调研类周期任务（settle.ts）；看：都能看；
+ * 建：秘书、leader（leader 令牌只能挂在自己负责的部门或它的上一层）、调研类周期任务（settle.ts）；看：都能看；
  * 写意见：秘书与范围内的 leader；拍板（pick / pass）只有用户（用户令牌或本机全景网页同源会话）。
  * 事件：建好后项目 leader 收 choice_review（写意见），秘书收 choice_ready（叫醒）；拍板后同一去重键改投知会 choice_decided。
  */

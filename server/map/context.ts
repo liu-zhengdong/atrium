@@ -5,7 +5,7 @@ import { skillsForTask } from "../skills/task-skills.ts";
 import { Problem } from "../problem.ts";
 
 /**
- * `atrium map context <部分>`：派活与 leader 唤醒附带的一段——从根到这一部分链上的要点（规矩），按树从上到下、
+ * `atrium map context <部门>`：派活与 leader 唤醒附带的一段——从根到这个部门链上的要点（规矩），按树从上到下、
  * 同一层按排序（靠前的更重要，冲突时靠前的优先），再加用到的技能清单。只附这些，有字数上限；
  * 放不下时从链的末端往前截，末尾给全文命令。纯函数 formatContext 不读库。
  */
@@ -17,7 +17,7 @@ const WHY_MAX = 40;
 
 export type ContextPoint = { text: string; why: string; check: string | null };
 export type ContextInput = {
-  /** 根 → 本部分，每层的要点；空层可省略。 */
+  /** 根 → 本部门，每层的要点；空层可省略。 */
   points: { name: string; points: ContextPoint[] }[];
   /** 用到的技能（slug）。 */
   skills?: string[];
@@ -86,7 +86,7 @@ function fit(
   return { text: kept.join("\n"), truncated: true };
 }
 
-/** 读库拼 context；skills 给了就用（派活时是实际挂载的），没给按部分链上绑定的技能。 */
+/** 读库拼 context；skills 给了就用（派活时是实际挂载的），没给按部门链上绑定的技能。 */
 export function contextOf(
   db: DatabaseSync,
   id: number,
@@ -131,7 +131,7 @@ export function parseMax(value: unknown): number {
   return n;
 }
 
-/** 派活用：任务归属部分链上的要点（技能另有「本次挂载的技能」一段，这里不重复）；没有组织树返回 undefined。 */
+/** 派活用：任务归属部门链上的要点（技能另有「本次挂载的技能」一段，这里不重复）；没有组织树返回 undefined。 */
 export function taskContext(
   db: DatabaseSync,
   id: number | null,

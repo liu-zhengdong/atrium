@@ -19,7 +19,7 @@ import { defaultActor } from "./worker-guard.ts";
  * `atrium map`（#322 第 4 步）：人看全景用网页，Agent 用命令行。
  * - `atrium map` 在终端打一份全景树，并给一个一次性登录链接打开本机网页（交互终端里直接打开浏览器）；
  * - `atrium map 节点 --json` 与网页读同一个接口；`map context` 是派活时附进提示词的那段；
- * - `map edit` / `map add` 是唯一的改法，网页不提供编辑。
+ * - `map edit` 与 `org add` 是唯一的改法，网页不提供编辑。
  */
 
 const str = (values: Values, key: string) =>
@@ -122,7 +122,7 @@ export function renderTopMap(
   };
   walk(tree.children ?? [], 0);
   if (lines.length === 1)
-    lines.push("  还没有下一层：atrium map add 父节点 名称");
+    lines.push("  还没有下一层：atrium org add 父节点 路径名 --name 名称");
   if (lines.length <= maxLines) return lines;
   return [
     ...lines.slice(0, Math.max(1, maxLines - 1)),
@@ -229,7 +229,7 @@ export const mapCommands: Record<string, Command> = {
   "map context": {
     args: "节点 [--max 字数]",
     about:
-      "给出从根到这一部分链上的要点（按树从上到下、同一层按排序，冲突时靠前的优先）与用到的技能，有字数上限；派活与 leader 唤醒附的就是这一段",
+      "给出从根到这个部门链上的要点（按树从上到下、同一层按排序，冲突时靠前的优先）与用到的技能，有字数上限；派活与 leader 唤醒附的就是这一段",
     options: { max: { type: "string" } },
     positionals: [1, 1],
     async run({ positionals: [node], values, json }) {
@@ -316,47 +316,6 @@ export const mapCommands: Record<string, Command> = {
       if (json) printJson(result);
       else console.log(`已改 ${result.node} 的全景`);
       recordNext(`动作：atrium map ${result.node} --json`);
-      return 0;
-    },
-  },
-  "map add": {
-    args: "父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--reason 原因] [--as aN]",
-    about:
-      "在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug",
-    options: {
-      analogy: { type: "string" },
-      alias: { type: "string" },
-      what: { type: "string" },
-      slug: { type: "string" },
-      reason: { type: "string" },
-      as: { type: "string" },
-    },
-    positionals: [2, 2],
-    async run({ positionals: [parent, name], values, json }) {
-      const result = await (
-        await client()
-      ).post<{
-        node: string;
-        parent: string;
-        name: string;
-        kind: string;
-      }>(`/map/nodes${as(values)}`, {
-        parent,
-        name,
-        ...Object.fromEntries(
-          (["analogy", "alias", "what", "slug", "reason"] as const)
-            .filter((k) => str(values, k) !== undefined)
-            .map((k) => [k, str(values, k)]),
-        ),
-      });
-      if (json) printJson(result);
-      else
-        console.log(
-          `已在 ${result.parent} 下加了 ${result.node} ${result.name}（${result.kind}）`,
-        );
-      recordNext(
-        `动作：atrium map edit ${result.node} --what 一句话 --uses 场景 --flow 步骤`,
-      );
       return 0;
     },
   },

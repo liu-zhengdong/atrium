@@ -100,7 +100,7 @@ export class SchedulePump {
       offset?: Offset;
       /** 任务运行时接管完上次在跑的任务才开始（否则上一轮的状态还不准）。 */
       ready?: () => boolean;
-      /** 一键停机（server/pause.ts）：这个节点（全局或所在部分）暂停着就不生成，恢复后到点的只补一轮。 */
+      /** 一键停机（server/pause.ts）：这个节点（全局或所在部门）暂停着就不生成，恢复后到点的只补一轮。 */
       paused?: (node: number) => boolean;
     } = {},
   ) {
@@ -279,7 +279,7 @@ export class SchedulePump {
     }
   }
 
-  /** 没建出任务：到点的挪到下一轮，记一笔并告诉该部分的 leader。 */
+  /** 没建出任务：到点的挪到下一轮，记一笔并告诉该部门的 leader。 */
   private failed(
     row: ScheduleRow,
     taskId: number | null,

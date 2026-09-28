@@ -1000,16 +1000,14 @@ test("额度多主机合并：代理上报读数与账号指纹，atrium quota �
   assert.equal(anonymous.status, 401);
 });
 
-test("远程主机挂组织技能（t232）：代理在那台挂上、提示词给那台的路径；执行者改了副本，收尾在服务这边生成提议", async (t) => {
+test("远程主机挂组织技能（t232）：代理在那台挂上、提示词给那台的路径", async (t) => {
   const fx = fixture(t);
-  // 远程上的假 opencode：按 OPENCODE_CONFIG_DIR 找到挂载的副本改一行、写原因。
+  // 远程上的假 opencode：按 OPENCODE_CONFIG_DIR 找到挂载的副本。
   fx.script(
     "opencode",
     [
       'f="$OPENCODE_CONFIG_DIR/skills/web-design/SKILL.md"',
       'test -f "$f" || { echo "没挂上技能"; exit 3; }',
-      "printf -- '---\\nname: web-design\\ndescription: 前端设计约定\\n---\\n\\n按钮间距 12px\\n' > \"$f\"",
-      'echo "8px 在新设计稿里不对" > "$OPENCODE_CONFIG_DIR/../skill-notes.md"',
       'echo \'{"type":"text","part":{"text":"远程完成"}}\'',
     ].join("\n"),
   );
@@ -1096,25 +1094,6 @@ test("远程主机挂组织技能（t232）：代理在那台挂上、提示词�
   assert.match(
     readFileSync(join(data, "tasks", "1", "prompt.md"), "utf8"),
     /由 h2 上的代理挂载：web-design@r1/,
-  );
-  // 改过的副本随退出传回，服务照常生成提议、原因取执行者写的。
-  const proposals = await ok("GET", "/api/skill-proposals");
-  assert.deepEqual(
-    proposals.map(
-      (p: { ref: string; skill: string; task: string; reason: string }) => [
-        p.ref,
-        p.skill,
-        p.task,
-        p.reason,
-      ],
-    ),
-    [["p1", "web-design", "t1", "8px 在新设计稿里不对"]],
-  );
-  assert.ok(
-    task.events.some((e: { kind: string }) => e.kind === "skill_proposal") ||
-      (await ok("GET", "/api/tasks/t1")).task.events.some(
-        (e: { kind: string }) => e.kind === "skill_proposal",
-      ),
   );
 });
 

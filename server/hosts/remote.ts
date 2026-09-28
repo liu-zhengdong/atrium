@@ -14,7 +14,6 @@ import { exec as localExec, type Exec } from "../tasks/git.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { Exit } from "../tasks/outcome.ts";
 import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
-import { REMOTE_REPORT } from "../skills/remote.ts";
 import {
   beginRun,
   hostRow,
@@ -407,13 +406,6 @@ export class RemoteHosts {
       writeFileSync(
         join(taskDir(this.data, body.task), "last-message.md"),
         body.last_message,
-        { mode: 0o600 },
-      );
-    // 改过的技能副本（t232）：落到本机任务目录，收尾回收时生成修订提议。
-    if (body.skills)
-      writeFileSync(
-        join(taskDir(this.data, body.task), REMOTE_REPORT),
-        `${JSON.stringify(body.skills)}\n`,
         { mode: 0o600 },
       );
     const verdict = this.hooks.exited(

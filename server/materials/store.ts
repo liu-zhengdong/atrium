@@ -741,7 +741,7 @@ export function staleMaterials(
 
 /**
  * 可以真删的（归档超过一年且大于 10 MB，按全部版本加起来算）：缺省只要还没问过用户的（发线索用），
- * asked 为 true 时连问过的一起列（material stale 给人看）。
+ * asked 为 true 时连问过的一起列（material ls --stale 给人看）。
  */
 export function purgeMaterials(
   db: DatabaseSync,

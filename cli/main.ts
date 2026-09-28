@@ -30,7 +30,7 @@ import { agentCommand, agentServiceCommands, hostCommands } from "./hosts.ts";
 import { notifyCommands } from "./notify.ts";
 import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
-import { example, groupOf, guide } from "./guide.ts";
+import { example, groupOf, groups, guide } from "./guide.ts";
 import { cliErrorMessage, optionError } from "./error-message.ts";
 import type { Pause } from "../server/pause.ts";
 
@@ -187,22 +187,15 @@ export function help(): string {
     "",
     "服务",
     ...service.map(([line, about]) => `  ${pad(line, widest)}  ${about}`),
-    ...[
-      "任务",
-      "执行机器",
-      "专员",
-      "全景",
-      "组织",
-      "备忘与决定",
-      "资料",
-      "选项与拍板",
-    ].flatMap((group) => [
-      "",
-      group,
-      ...Object.entries(commands)
-        .filter(([name]) => groupOf(name) === group)
-        .map(([name, command]) => entry(name, command)),
-    ]),
+    ...Object.keys(groups)
+      .filter((group) => group !== "服务")
+      .flatMap((group) => [
+        "",
+        group,
+        ...Object.entries(commands)
+          .filter(([name]) => groupOf(name) === group)
+          .map(([name, command]) => entry(name, command)),
+      ]),
     "",
     "命令详情：atrium <命令> --help；调用约定：atrium guide",
   ].join("\n");
@@ -266,7 +259,7 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       if (name === "guide") {
-        console.log(guide(commands));
+        console.log(guide());
         return 0;
       }
       // 命令组可同时有同名命令（events 列表）；带位置参数时解析子命令。

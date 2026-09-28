@@ -70,7 +70,7 @@ const point = (db: DatabaseSync, at: string, text: string, check?: string) =>
     "u1",
   );
 
-test("map context：读库时只附本部分及上级的要点（按层、按排序）与技能，不附位置与人话字段", () => {
+test("map context：读库时只附本部门及上级的要点（按层、按排序）与技能，不附位置与人话字段", () => {
   const db = memory();
   editMap(db, "o2", { what: "AI 组织的运行底座", alias: "底座" }, "u1");
   editMap(db, "o4", { what: "命令行入口", analogy: "前台" }, "u1");
@@ -93,7 +93,7 @@ test("map context：读库时只附本部分及上级的要点（按层、按排
 
 // ---- 读视图 ----
 
-test("全景树与节点：按归属部分汇总任务，专员单列，要点与上级要点分开", () => {
+test("全景树与节点：按归属部门汇总任务，专员单列，要点与上级要点分开", () => {
   const db = memory();
   editMap(db, "o3", { alias: "派活员", analogy: "项目经理" }, "u1");
   point(db, "o2", "随时升级", "tests/upgrade.test.ts 接管");
@@ -172,7 +172,7 @@ test("全景任务行：远程执行机器带名字与离线标记", () => {
   db.close();
 });
 
-test("全景节点给网页页签用的字段：部分做什么与下面几块、下层要点、合入阶段", () => {
+test("全景节点给网页页签用的字段：部门做什么与下面几块、下层要点、合入阶段", () => {
   const db = memory();
   editMap(db, "o3", { what: "派活和验收" }, "u1");
   editMap(db, "o5", { what: "凭据与权限" }, "u1");
@@ -203,7 +203,7 @@ test("全景节点给网页页签用的字段：部分做什么与下面几块�
   assert.deepEqual(
     view.points_below.map((l) => [l.node, l.points.map((p) => p.text)]),
     [["o7", ["gates 的要点"]]],
-    "只列下层部分的要点，深度优先，空块省略",
+    "只列下层部门的要点，深度优先，空块省略",
   );
   assert.equal(view.points[0]!.text, "本块要点");
   const queued = view.tasks.recent.find((t) => t.title === "等合入")!;
@@ -279,7 +279,7 @@ test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；�
   );
   const added = addMap(
     db,
-    { parent: "o2", name: "新部分", slug: "new-part", what: "一句话" },
+    { parent: "o2", name: "新部门", slug: "new-part", what: "一句话" },
     "a1",
   );
   assert.equal(

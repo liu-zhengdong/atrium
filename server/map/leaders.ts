@@ -13,7 +13,7 @@ import { readMemo, MEMO_MAX } from "../memos/store.ts";
 
 /**
  * 全景里的负责人（leader）：组织根的「负责人」页签与负责人页（#a1），另有秘书页（#secretary）。
- * 只读：负责哪些部分、用什么执行者、现在在处理什么、备忘、决定记录、最近处理过的事与上交记录。
+ * 只读：负责哪些部门、用什么执行者、现在在处理什么、备忘、决定记录、最近处理过的事与上交记录。
  * 事件来自事件队列（task_inbox）：投给它的「要处理」事件，与它上交出去的事件。
  */
 
@@ -279,7 +279,7 @@ function memoPart(db: DatabaseSync, owner: string): MemoPart {
   };
 }
 
-/** 用户页、秘书页与负责人页：u1 是用户，secretary 是秘书；aN 没登记时 404（与 leader show 同一个报错）。 */
+/** 用户页、秘书页与负责人页：u1 是用户，secretary 是秘书；aN 没登记时 404（与 leader ls aN 同一个报错）。 */
 export function mapLeader(
   db: DatabaseSync,
   reference: string,

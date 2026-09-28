@@ -4,7 +4,7 @@ import { nodeByAddress, one, ref } from "./model.ts";
 import { hasOrg } from "./task-node.ts";
 
 /**
- * 任务的归属部分（#322 第 1 步）：`task add/set --part 节点`，指向组织树节点（全景图的一块）。
+ * 任务的归属部门（#322 第 1 步）：`task add/set --part 节点`，指向组织树节点（全景图的一块）。
  * 空值表示摘下。
  * 归属只是归类，不另设权限；与 role（谁来做、记谁的账、附谁的岗位说明）分开记。
  */

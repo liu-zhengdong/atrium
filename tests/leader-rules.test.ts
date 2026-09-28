@@ -69,7 +69,7 @@ test("上线失败与总任务整体上线同时投 leader 与秘书；单个任
     }
 });
 
-test("任务事件：写了负责人按负责人投；没写从归属部分向上找最近的已登记 leader，找不到投秘书", () => {
+test("任务事件：写了负责人按负责人投；没写从归属部门向上找最近的已登记 leader，找不到投秘书", () => {
   const registered = new Set(["a1", "a2"]);
   // 组织 o1（u1）→ Atrium o2（a1）→ 组织和规矩 o3（无）→ 专员 o4（a2）
   const o1 = node("o1", "u1", "组织");
@@ -98,7 +98,7 @@ test("任务事件：写了负责人按负责人投；没写从归属部分向�
       why: /指定了负责人 a2/,
     },
     { owner: "u1", chain: [], to: "u1", via: null, why: /指定了负责人/ },
-    { owner: null, chain: [], to: "secretary", via: null, why: /没有归属部分/ },
+    { owner: null, chain: [], to: "secretary", via: null, why: /没有归属部门/ },
     {
       owner: null,
       chain: [o3, o2, o1],
@@ -449,7 +449,7 @@ test("作用范围：负责的未归档节点及全部子节点；引用逐条�
   assert.equal(
     scopeVerdict("a1", a1.scope, [
       { what: "任务 t1", node: 3 },
-      { what: "归属部分 o4", node: 4 },
+      { what: "归属部门 o4", node: 4 },
     ]),
     null,
   );
@@ -458,7 +458,7 @@ test("作用范围：负责的未归档节点及全部子节点；引用逐条�
       { what: "任务 t1", node: 3 },
       { what: "任务 t2", node: 5 },
     ])!,
-    /a1 无权动任务 t2：不在你负责的部分里/,
+    /a1 无权动任务 t2：不在你负责的部门里/,
   );
   assert.match(
     scopeVerdict("a1", a1.scope, [{ what: "任务 t3", node: null }])!,
@@ -488,7 +488,7 @@ test("订阅者、负责人、改节点、改全景、改登记、上交、确�
   assert.equal(edit(["leader", "reason"], 3), null);
   assert.equal(edit(["leader"], 4), null);
   assert.match(edit(["leader"], 2)!, /自己负责的节点/);
-  assert.match(edit(["leader"], 5)!, /不在你负责部分/);
+  assert.match(edit(["leader"], 5)!, /不在你负责部门/);
   assert.match(edit(["name", "leader"], 3)!, /name/);
   assert.match(edit(["reason"], 3)!, /只能给子节点指派 leader/);
   assert.match(edit(["archive"], 3)!, /archive/);
@@ -664,7 +664,7 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
     "t7：退回 1 次后合入",
     "atrium task run tN",
     "--part o2",
-    "不可以：动别的部分的任务",
+    "不可以：动别的部门的任务",
     "上交（投给 秘书",
     "atrium leader escalate --kind shipped",
     "单个任务上线运行时已自动通知秘书，不必再报",

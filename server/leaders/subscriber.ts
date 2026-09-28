@@ -39,7 +39,7 @@ type TaskFacts = {
   node_id: number | null;
 };
 
-/** 任务所属部分：归属部分，其次记账节点，都没写就沿父任务往上找。 */
+/** 任务所属部门：归属部门，其次记账节点，都没写就沿父任务往上找。 */
 export function taskPartId(db: DatabaseSync, task: TaskFacts): number | null {
   let current: TaskFacts | undefined = task;
   for (let depth = 0; current && depth < PARENT_DEPTH; depth++) {
@@ -84,7 +84,7 @@ export function upstreamRoute(db: DatabaseSync, leader: string): Route {
   return escalationRoute({ leader, chains, registered: registeredLeaders(db) });
 }
 
-/** 某个部分的事件投给谁（牵涉知会用）：从这一部分往上找最近的已登记 leader。 */
+/** 某个部门的事件投给谁（牵涉知会用）：从这个部门往上找最近的已登记 leader。 */
 export function partRoute(db: DatabaseSync, nodeId: number): Route {
   return routeTaskEvent({
     owner: null,
@@ -93,7 +93,7 @@ export function partRoute(db: DatabaseSync, nodeId: number): Route {
   });
 }
 
-/** 一批部分各自投给谁：节点表与已登记的 leader 只读一次。 */
+/** 一批部门各自投给谁：节点表与已登记的 leader 只读一次。 */
 export function partRoutes(
   db: DatabaseSync,
   ids: readonly number[],

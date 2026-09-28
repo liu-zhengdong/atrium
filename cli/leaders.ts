@@ -50,11 +50,20 @@ const self = () =>
 
 export const leaderCommands: Record<string, Command> = {
   "leader ls": {
-    args: "",
+    args: "[aN]",
     about:
-      "列出 leader：负责的节点、执行者组合、最近一次唤醒在处理什么；节点上引用了但没登记的单列",
-    positionals: [0, 0],
-    async run({ json }) {
+      "列出 leader：负责的节点、执行者组合、最近一次唤醒在处理什么；节点上引用了但没登记的单列；给 aN 看这一位的详情与备忘",
+    positionals: [0, 1],
+    async run({ positionals: [who], json }) {
+      if (who !== undefined) {
+        const view = await (
+          await client()
+        ).get<LeaderView>(`/leaders/${enc(who)}`);
+        if (json) printJson(view);
+        else console.log(detail(view));
+        recordNext(`看它的事件：atrium events --as ${view.ref}`);
+        return;
+      }
       const result = await (
         await client()
       ).get<{
@@ -77,22 +86,9 @@ export const leaderCommands: Record<string, Command> = {
         );
       recordNext(
         result.leaders.length
-          ? `看一位：atrium leader show ${result.leaders[0]!.ref}`
+          ? `看一位：atrium leader ls ${result.leaders[0]!.ref}`
           : "登记：atrium leader add 名称 --worker claude+opus",
       );
-    },
-  },
-  "leader show": {
-    args: "aN",
-    about: "看一位 leader：负责的节点、执行者组合、最近一次唤醒与备忘",
-    positionals: [1, 1],
-    async run({ positionals: [who], json }) {
-      const view = await (
-        await client()
-      ).get<LeaderView>(`/leaders/${enc(who!)}`);
-      if (json) printJson(view);
-      else console.log(detail(view));
-      recordNext(`看它的事件：atrium events --as ${view.ref}`);
     },
   },
   "leader add": {
@@ -171,7 +167,7 @@ export const leaderCommands: Record<string, Command> = {
       ).patch<LeaderView>(`/leaders/${enc(who!)}`, body);
       if (json) printJson(view);
       else console.log(`已更新 ${view.ref}\n${detail(view)}`);
-      recordNext(`看：atrium leader show ${view.ref}`);
+      recordNext(`看：atrium leader ls ${view.ref}`);
     },
   },
   "leader escalate": {

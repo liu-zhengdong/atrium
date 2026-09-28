@@ -183,7 +183,7 @@ test("leader 命令行写备注和捎话均记 aN，服务拒绝伪造作者", a
   assert.equal(JSON.parse(tell.detail).by, "a1");
 });
 
-test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上交「已上线」，秘书只收到一条", async (t) => {
+test("leader：事件只投所属部门的 leader，唤醒后越权被拒、上交「已上线」，秘书只收到一条", async (t) => {
   const x = await open(t);
   // 破坏输入：指派没登记的 aN、登记时执行者不合法。
   const unregistered = await x.call("PATCH", "/api/org/nodes/o2", {
@@ -241,7 +241,7 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
       url: string,
       body?: unknown,
     ) => x.call(method, url, body, token);
-    // 可以：看、在自己负责的部分建任务（不写归属默认记到负责的节点）、备注、改阶段、给子节点指派 leader、写备忘。
+    // 可以：看、在自己负责的部门建任务（不写归属默认记到负责的节点）、备注、改阶段、给子节点指派 leader、写备忘。
     assert.equal((await as("GET", "/api/tasks/t1")).status, 200);
     const own = await as("POST", "/api/tasks", {
       title: "a1 拆的活",
@@ -281,7 +281,7 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
         "POST",
         "/api/tasks",
         { title: "越界", part: "o4" },
-        /动归属部分 o4：不在你负责的部分里/,
+        /动归属部门 o4：不在你负责的部门里/,
       ],
       [
         "POST",
@@ -290,7 +290,7 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
         /负责人设为 secretary/,
       ],
       ["POST", "/api/tasks/t2/stop", undefined, /动任务 t2/],
-      ["PATCH", "/api/tasks/t1", { part: "o4" }, /归属部分 o4/],
+      ["PATCH", "/api/tasks/t1", { part: "o4" }, /归属部门 o4/],
       [
         "PUT",
         "/api/org/limits",
@@ -748,7 +748,7 @@ test("全景看得到负责人：节点页、负责人页、状态栏字段，le
     [["t1", "done"]],
   );
   assert.equal(page.escalations.length, 1);
-  assert.equal(page.escalations[0].label, "需要别的部分配合");
+  assert.equal(page.escalations[0].label, "需要别的部门配合");
   assert.equal(page.escalations[0].to.name, "秘书");
   assert.equal(page.escalations[0].seen, false);
   assert.deepEqual((await x.ok("GET", "/api/leaders")).busy, []);

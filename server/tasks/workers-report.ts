@@ -3,7 +3,7 @@ import { getJobRole } from "./job-roles.ts";
 import { listDeliveries, workerStats } from "./delivery-records.ts";
 import { parseWorker, resolveWorker } from "./profiles.ts";
 
-/** `workers show` / 执行者页展示的交付明细上限；统计仍看全部交付。 */
+/** `atrium workers` / 执行者页展示的交付明细上限；统计仍看全部交付。 */
 const DELIVERY_DETAIL_LIMIT = 200;
 
 export async function workersReport(db: DatabaseSync, role?: string) {

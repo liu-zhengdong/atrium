@@ -1,40 +1,18 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Problem } from "../problem.ts";
-import {
-  LIMITS,
-  SLUG_RE,
-  filesHash,
-  validateFiles,
-  type Files,
-} from "./model.ts";
-import { NOTES, readManifest, readMounted, type MountSkill } from "./mount.ts";
+import { LIMITS, SLUG_RE, validateFiles } from "./model.ts";
+import type { MountSkill } from "./mount.ts";
 import type { TaskSkill } from "./task-skills.ts";
 
 /**
  * 远程主机上的组织技能（t232）：服务把这次要挂的技能（内容 + 修订号）随拉起指令交给代理，
- * 代理在那台的任务目录里用本机同一个 `mountSkills` 挂上，把「本次挂载的技能」段填进提示词的占位处；
- * 收尾时只把改过的副本（与挂载时的哈希不同）连同 skill-notes.md 随退出上报，服务落到本机任务目录，
- * 由 `collectSkillEdits` 照常生成修订提议。
+ * 代理在那台的任务目录里用本机同一个 `mountSkills` 挂上，把「本次挂载的技能」段填进提示词的占位处。
  */
 
 /** 提示词里「本次挂载的技能」段的占位：挂在哪、挂没挂上只有代理知道。 */
 export const SKILLS_SLOT = "<!-- atrium:skills -->";
 
-/** 服务落在本机任务目录里的远程回收报告。 */
-export const REMOTE_REPORT = "remote-skills.json";
-
 /** 随拉起指令下发的一个技能。 */
 export type SkillCopy = MountSkill;
-
-/** 远程收尾传回的一个副本：改过的给文件，读不出来的给原因。 */
-export type SkillEdit = {
-  id: number;
-  slug: string;
-  rev: number;
-} & ({ files: Files } | { problem: string });
-
-export type SkillReport = { edits: SkillEdit[]; notes?: string };
 
 /** 拉起回执里的挂载结果：挂上了哪些（slug@rN），或挂不上的原因。 */
 export type SkillMountAck = { mounted: string[]; error?: string };
@@ -93,43 +71,4 @@ export function skillCopiesRefusal(skills: unknown): string | null {
     }
   }
   return null;
-}
-
-/**
- * 代理收尾：读任务目录的挂载清单，把和挂载时不一样的副本读回来（旧清单没有哈希的一律带上）。
- * 没挂过技能返回 undefined，退出上报与以前一样。
- */
-export function skillReport(dir: string): SkillReport | undefined {
-  const manifest = readManifest(dir);
-  if (!manifest?.skills.length) return undefined;
-  const edits: SkillEdit[] = [];
-  for (const entry of manifest.skills) {
-    const read = readMounted(entry.dir);
-    const head = { id: entry.id, slug: entry.slug, rev: entry.rev };
-    if ("problem" in read) edits.push({ ...head, problem: read.problem });
-    else if (!entry.sha || filesHash(read.files) !== entry.sha)
-      edits.push({ ...head, files: read.files });
-  }
-  let notes: string | undefined;
-  try {
-    notes = Array.from(readFileSync(join(dir, NOTES), "utf8").trim())
-      .slice(0, LIMITS.proposalReason)
-      .join("");
-  } catch {
-    // 没写原因。
-  }
-  if (!edits.length) return undefined;
-  return { edits, ...(notes ? { notes } : {}) };
-}
-
-/** 服务这一侧：读本机任务目录里落下的远程回收报告；没有或坏了返回 undefined。 */
-export function readSkillReport(dir: string): SkillReport | undefined {
-  try {
-    const data = JSON.parse(
-      readFileSync(join(dir, REMOTE_REPORT), "utf8"),
-    ) as SkillReport;
-    return Array.isArray(data.edits) ? data : undefined;
-  } catch {
-    return undefined;
-  }
 }

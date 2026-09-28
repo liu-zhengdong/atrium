@@ -142,16 +142,30 @@ export const scheduleCommands: Record<string, Command> = {
     },
   },
   "schedule ls": {
-    args: "[--node 节点] [--all] [--after sN]",
+    args: "[sN] [--node 节点] [--all] [--after sN]",
     about:
-      "列周期任务：--node 只看该节点及下层，--all 连已删除的一起列；每页至多 200 条",
+      "列周期任务：--node 只看该节点及下层，--all 连已删除的一起列；每页至多 200 条；给 sN 看这一条：节奏、下次时间、详述与最近几轮（生成、跳过、失败）",
     options: {
       node: { type: "string" },
       all: { type: "boolean" },
       after: { type: "string" },
     },
-    positionals: [0, 0],
-    async run({ values, json }) {
+    positionals: [0, 1],
+    async run({ positionals: [ref], values, json }) {
+      if (ref !== undefined) {
+        const result = await (
+          await api()
+        ).get<Detail>(`/schedules/${enc(ref)}`);
+        output(
+          json,
+          result,
+          detailText(result),
+          result.last_task
+            ? `看上一轮：atrium task show ${result.last_task.ref}`
+            : `马上跑一轮：atrium schedule run ${result.ref}`,
+        );
+        return;
+      }
       const query = new URLSearchParams();
       if (str(values, "node")) query.set("node", str(values, "node")!);
       if (values.all === true) query.set("all", "1");
@@ -173,24 +187,8 @@ export const scheduleCommands: Record<string, Command> = {
             : []),
         ].join("\n"),
         result.schedules.length
-          ? `看一条：atrium schedule show ${result.schedules[0]!.ref}`
+          ? `看一条：atrium schedule ls ${result.schedules[0]!.ref}`
           : "建一条：atrium schedule add 节点 标题 --every 7d",
-      );
-    },
-  },
-  "schedule show": {
-    args: "sN",
-    about: "看周期任务：节奏、下次时间、详述与最近几轮（生成、跳过、失败）",
-    positionals: [1, 1],
-    async run({ positionals: [ref], json }) {
-      const result = await (await api()).get<Detail>(`/schedules/${enc(ref!)}`);
-      output(
-        json,
-        result,
-        detailText(result),
-        result.last_task
-          ? `看上一轮：atrium task show ${result.last_task.ref}`
-          : `马上跑一轮：atrium schedule run ${result.ref}`,
       );
     },
   },
@@ -227,7 +225,7 @@ export const scheduleCommands: Record<string, Command> = {
         json,
         result,
         `${result.ref} 已删除：${scheduleLine(result)}`,
-        `看周期任务：atrium schedule show ${result.ref}`,
+        `看周期任务：atrium schedule ls ${result.ref}`,
       );
     },
   },

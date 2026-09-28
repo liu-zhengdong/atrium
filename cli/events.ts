@@ -138,43 +138,6 @@ const wait: Command = {
   },
 };
 
-const digest: Command = {
-  args: "[--as 订阅者] [--since 时间]",
-  about:
-    "按任务合并尚未确认的知会事件；读取后自动确认；--since 使用带时区的 ISO 时间",
-  options: { as: { type: "string" }, since: { type: "string" } },
-  positionals: [0, 0],
-  async run({ values, json }) {
-    const who = str(values, "as") ?? defaultSubscriber();
-    const since = str(values, "since");
-    if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
-    if (
-      since !== undefined &&
-      (!/^\d{4}-\d{2}-\d{2}T/.test(since) ||
-        !Number.isFinite(Date.parse(since)) ||
-        !/(Z|[+-]\d{2}:\d{2})$/.test(since))
-    )
-      throw new Problem(400, "--since 应为带时区的 ISO 时间", "usage");
-    const query = new URLSearchParams({
-      as: who,
-      ...(since === undefined ? {} : { since }),
-    });
-    const result = await (
-      await client()
-    ).get<{ items: { summary: string }[]; acknowledged: number }>(
-      `/events/digest?${query}`,
-    );
-    if (json) printJson(result);
-    else
-      console.log(
-        result.items.length
-          ? result.items.map((item) => item.summary).join("\n")
-          : "没有新的知会事件",
-      );
-    recordNext(`等要处理的事：atrium events wait --as ${who}`);
-  },
-};
-
 const ack: Command = {
   args: "编号…",
   about:
@@ -217,6 +180,5 @@ const ack: Command = {
 export const eventCommands: Record<string, Command> = {
   events: list,
   "events wait": wait,
-  "events digest": digest,
   "events ack": ack,
 };

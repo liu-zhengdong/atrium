@@ -745,7 +745,7 @@ export class TelegramNotifier {
         "还没存 bot token",
         "conflict",
         undefined,
-        "pbpaste | atrium notify token",
+        "pbpaste | atrium notify --token",
       );
     if (this.binding)
       throw new Problem(409, "已经有一个绑定在等了", "conflict");
@@ -865,7 +865,7 @@ export class TelegramNotifier {
         c ? "还没绑定聊天" : "还没存 bot token",
         "conflict",
         undefined,
-        c ? "atrium notify bind" : "pbpaste | atrium notify token",
+        c ? "atrium notify --bind" : "pbpaste | atrium notify --token",
       );
     try {
       await callTelegram(this.client(c.token), "sendMessage", {
@@ -907,7 +907,7 @@ export class TelegramNotifier {
         `${what}失败：Telegram 不认这个 bot token，到 @BotFather 核对后重存`,
         "usage",
         undefined,
-        "pbpaste | atrium notify token",
+        "pbpaste | atrium notify --token",
       );
     if (failure.status === 409)
       return new Problem(

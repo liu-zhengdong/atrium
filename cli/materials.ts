@@ -212,6 +212,46 @@ function detailText(d: Detail) {
   ].join("\n");
 }
 
+/** material ls --stale：清理线索（疑似没用的，看全部时另列可以真删的）。 */
+async function stale(values: Values, json: boolean) {
+  const node = str(values, "node");
+  const result = await (
+    await client()
+  ).get<{
+    stale: (Material & { stale: Stale })[];
+    purge: (Material & { total_bytes: number })[];
+  }>(`/materials/stale${node ? `?node=${encodeURIComponent(node)}` : ""}`);
+  if (json) printJson(result);
+  else
+    console.log(
+      [
+        `疑似没用（${result.stale.length} 份）：`,
+        ...(result.stale.length
+          ? result.stale.map(
+              (m) => `- ${m.ref} ${m.name}（${m.node}）：${m.stale.reason}`,
+            )
+          : ["（没有）"]),
+        ...(node
+          ? []
+          : [
+              "",
+              `可以真删（归档超过一年且大于 10 MB，要用户点头；${result.purge.length} 份）：`,
+              ...(result.purge.length
+                ? result.purge.map(
+                    (m) =>
+                      `- ${m.ref} ${m.name}（${m.node}）：归档于 ${when(m.archived_at!)}，共 ${sizeText(m.total_bytes)}`,
+                  )
+                : ["（没有）"]),
+            ]),
+      ].join("\n"),
+    );
+  const first = result.stale[0];
+  if (first)
+    recordNext(
+      `用不上就归档：atrium material archive ${first.ref} --note 原因；要留：atrium material keep ${first.ref} --note 原因`,
+    );
+}
+
 export const materialCommands: Record<string, Command> = {
   "material add": {
     args: "节点 文件|目录 --note 一句话 [--name 名称] [--supersedes mN] [--for t1,k1,d1]",
@@ -263,17 +303,19 @@ export const materialCommands: Record<string, Command> = {
     },
   },
   "material ls": {
-    args: "[--node 节点] [--archived] [--before mN] [--limit 条数]",
+    args: "[--node 节点] [--archived] [--stale] [--before mN] [--limit 条数]",
     about:
-      "列资料（新的在前）：短号、名称、一句话、节点、版本、大小、最近谁读过；缺省不含归档的，--archived 只列归档的",
+      "列资料（新的在前）：短号、名称、一句话、节点、版本、大小、最近谁读过；缺省不含归档的，--archived 只列归档的；--stale 列清理线索：疑似没用的资料（被取代，或 90 天没读且关联都结束；由这一块的 leader 定归档还是留），看全部时另列归档超过一年且大于 10 MB、可以真删的（要用户点头）",
     options: {
       node: { type: "string" },
       archived: { type: "boolean", default: false },
+      stale: { type: "boolean" },
       before: { type: "string" },
       limit: { type: "string" },
     },
     positionals: [0, 0],
     async run({ values, json }) {
+      if (values.stale === true) return stale(values, json);
       const query = new URLSearchParams();
       for (const key of ["node", "before", "limit"])
         if (str(values, key) !== undefined) query.set(key, str(values, key)!);
@@ -378,12 +420,26 @@ export const materialCommands: Record<string, Command> = {
     },
   },
   "material archive": {
-    args: "mN [--note 原因]",
+    args: "mN [--note 原因] [--undo]",
     about:
-      "归档资料：不进清单和派活提示词、清理线索也不再提，文件留着可恢复（只归档不删）",
-    options: { note: { type: "string" } },
+      "归档资料：不进清单和派活提示词、清理线索也不再提，文件留着可恢复（只归档不删）；--undo 恢复归档的，重新进清单和派活提示词",
+    options: { note: { type: "string" }, undo: { type: "boolean" } },
     positionals: [1, 1],
     async run({ positionals: [reference], values, json }) {
+      if (values.undo === true) {
+        const m = await (
+          await client()
+        ).post<Material>(
+          `/materials/${encodeURIComponent(reference!)}/restore`,
+          str(values, "note") === undefined
+            ? {}
+            : { note: str(values, "note") },
+        );
+        if (json) printJson(m);
+        else console.log(`已恢复 ${m.ref} ${m.name} → ${m.node}`);
+        recordNext(`看：atrium material show ${m.ref}`);
+        return;
+      }
       const m = await (
         await client()
       ).post<Material>(
@@ -392,24 +448,7 @@ export const materialCommands: Record<string, Command> = {
       );
       if (json) printJson(m);
       else console.log(`已归档 ${m.ref} ${m.name}`);
-      recordNext(`恢复：atrium material restore ${m.ref}`);
-    },
-  },
-  "material restore": {
-    args: "mN [--note 原因]",
-    about: "恢复归档的资料，重新进清单和派活提示词",
-    options: { note: { type: "string" } },
-    positionals: [1, 1],
-    async run({ positionals: [reference], values, json }) {
-      const m = await (
-        await client()
-      ).post<Material>(
-        `/materials/${encodeURIComponent(reference!)}/restore`,
-        str(values, "note") === undefined ? {} : { note: str(values, "note") },
-      );
-      if (json) printJson(m);
-      else console.log(`已恢复 ${m.ref} ${m.name} → ${m.node}`);
-      recordNext(`看：atrium material show ${m.ref}`);
+      recordNext(`恢复：atrium material archive ${m.ref} --undo`);
     },
   },
   "material keep": {
@@ -427,52 +466,7 @@ export const materialCommands: Record<string, Command> = {
       });
       if (json) printJson(m);
       else console.log(`留下 ${m.ref} ${m.name}：${m.keep_note}`);
-      recordNext(`看其余线索：atrium material stale --node ${m.node}`);
-    },
-  },
-  "material stale": {
-    args: "[--node 节点]",
-    about:
-      "清理线索：疑似没用的资料（被取代，或 90 天没读且关联都结束；由这一块的 leader 定归档还是留）；看全部时另列归档超过一年且大于 10 MB、可以真删的（要用户点头）",
-    options: { node: { type: "string" } },
-    positionals: [0, 0],
-    async run({ values, json }) {
-      const node = str(values, "node");
-      const result = await (
-        await client()
-      ).get<{
-        stale: (Material & { stale: Stale })[];
-        purge: (Material & { total_bytes: number })[];
-      }>(`/materials/stale${node ? `?node=${encodeURIComponent(node)}` : ""}`);
-      if (json) printJson(result);
-      else
-        console.log(
-          [
-            `疑似没用（${result.stale.length} 份）：`,
-            ...(result.stale.length
-              ? result.stale.map(
-                  (m) => `- ${m.ref} ${m.name}（${m.node}）：${m.stale.reason}`,
-                )
-              : ["（没有）"]),
-            ...(node
-              ? []
-              : [
-                  "",
-                  `可以真删（归档超过一年且大于 10 MB，要用户点头；${result.purge.length} 份）：`,
-                  ...(result.purge.length
-                    ? result.purge.map(
-                        (m) =>
-                          `- ${m.ref} ${m.name}（${m.node}）：归档于 ${when(m.archived_at!)}，共 ${sizeText(m.total_bytes)}`,
-                      )
-                    : ["（没有）"]),
-                ]),
-          ].join("\n"),
-        );
-      const first = result.stale[0];
-      if (first)
-        recordNext(
-          `用不上就归档：atrium material archive ${first.ref} --note 原因；要留：atrium material keep ${first.ref} --note 原因`,
-        );
+      recordNext(`看其余线索：atrium material ls --stale --node ${m.node}`);
     },
   },
   "material rm": {

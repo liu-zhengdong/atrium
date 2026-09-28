@@ -7,14 +7,14 @@ import { hintDue, sizeText } from "./model.ts";
 import { markHinted, purgeMaterials, staleMaterials } from "./store.ts";
 
 /**
- * 清理线索（t192）：各部分的周期任务到点建出一轮时顺带看一眼这一块的资料，
+ * 清理线索（t192）：各部门的周期任务到点建出一轮时顺带看一眼这一块的资料，
  * 疑似没用的（被取代，或 90 天没读且关联都结束）列成一条 material_stale 投给这一块最近的 leader，
  * leader 决定归档还是留（留写原因，之后不再提）；没决定的隔 30 天再提。
  * 归档超过一年且大于 10 MB 的列成 material_purge 投给秘书，问过用户才真删，只问一次。
  * 只给线索、不自动归档或删除，不挡周期任务（出错只记日志）。
  */
 
-/** 一条事件里最多列几份，其余看 material stale。 */
+/** 一条事件里最多列几份，其余看 material ls --stale。 */
 const LISTED = 20;
 
 /**

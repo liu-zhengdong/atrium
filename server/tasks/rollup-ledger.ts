@@ -25,7 +25,7 @@ const marks = (list: readonly unknown[]) => list.map(() => "?").join(",");
 export const isTotal = (db: DatabaseSync, id: number) =>
   !!one(db, "SELECT 1 FROM tasks WHERE parent_id=? AND helper=0 LIMIT 1", id);
 
-/** 派总任务时的人话提示：task run、task pick、自动派发都用这一句。 */
+/** 派总任务时的人话提示：task run、task run --dry-run、自动派发都用这一句。 */
 export const totalRefusal = (ref: string) =>
   new Problem(
     409,

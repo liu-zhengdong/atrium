@@ -170,42 +170,28 @@ export const secretCommands: Record<string, Command> = {
     },
   },
   "secret archive": {
-    args: "节点 名称 [--note 原因]",
+    args: "节点 名称 [--note 原因] [--undo]",
     about:
-      "归档凭据：派活不再注入（声明了它的任务派不出去）、清理线索也不再提，值留着可恢复（只归档不删）",
-    options: { note: { type: "string" } },
+      "归档凭据：派活不再注入（声明了它的任务派不出去）、清理线索也不再提，值留着可恢复（只归档不删）；--undo 恢复归档的，派活时重新注入",
+    options: { note: { type: "string" }, undo: { type: "boolean" } },
     positionals: [2, 2],
     async run({ positionals: [node, name], values, json }) {
+      const undo = values.undo === true;
       const s = await (
         await client()
-      ).post<Secret>("/secrets/archive", {
+      ).post<Secret>(undo ? "/secrets/restore" : "/secrets/archive", {
         ...target(node!, name!),
         ...(str(values, "note") === undefined
           ? {}
           : { note: str(values, "note") }),
       });
       if (json) printJson(s);
-      else console.log(`已归档 ${s.node} 的 ${s.name}`);
-      recordNext(`恢复：atrium secret restore ${s.node} ${s.name}`);
-    },
-  },
-  "secret restore": {
-    args: "节点 名称 [--note 原因]",
-    about: "恢复归档的凭据，派活时重新注入",
-    options: { note: { type: "string" } },
-    positionals: [2, 2],
-    async run({ positionals: [node, name], values, json }) {
-      const s = await (
-        await client()
-      ).post<Secret>("/secrets/restore", {
-        ...target(node!, name!),
-        ...(str(values, "note") === undefined
-          ? {}
-          : { note: str(values, "note") }),
-      });
-      if (json) printJson(s);
-      else console.log(`已恢复 ${s.node} 的 ${s.name}`);
-      recordNext(`看：atrium secret ls --node ${s.node}`);
+      else console.log(`已${undo ? "恢复" : "归档"} ${s.node} 的 ${s.name}`);
+      recordNext(
+        undo
+          ? `看：atrium secret ls --node ${s.node}`
+          : `恢复：atrium secret archive ${s.node} ${s.name} --undo`,
+      );
     },
   },
   "secret keep": {

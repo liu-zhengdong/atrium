@@ -696,7 +696,7 @@ test("worktreePlan：路径、分支与 slug", () => {
   assert.equal(
     worktreePlan("/repo/atrium/", 6, "修复 登录", "concerns/安全").slug,
     "concerns",
-    "role 整体转 slug：滤掉的部分不留残渣",
+    "role 整体转 slug：滤掉的部门不留残渣",
   );
   assert.equal(
     worktreePlan("/repo/atrium/", 5, "Add 登录", "modules/cli").branch,

@@ -85,7 +85,7 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec("ALTER TABLE tasks ADD COLUMN node_id INTEGER");
   if (!columns.some((column) => column.name === "origin_node_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN origin_node_id INTEGER");
-  // 全景图（#322）：任务归属哪一部分，指向 org_nodes.id。
+  // 全景图（#322）：任务归属哪个部门，指向 org_nodes.id。
   if (!columns.some((column) => column.name === "part_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN part_id INTEGER");
   // 优先级只留一列（priority.ts）：紧急 / 修复 / 普通 / 闲时。旧库的 urgent、priority（只收 normal / idle）、

@@ -41,7 +41,7 @@ test("链接只认 http(s)：别的协议与 HTML 都当纯文本转义，不引
   assert.match(evil, /<a href="https:\/\/x\.test\/y\?a=1&amp;b=2"/);
 });
 
-test("顶栏在做数看当前部分（含子部分），角色与执行者页显示全组织", () => {
+test("顶栏在做数看当前部门（含下属部门），角色与执行者页显示全组织", () => {
   const node = {
     page: "node",
     node: { counts: { running: 2, blocked: 0, open: 5 } },

@@ -23,7 +23,7 @@ import { progressOf, rollupLabel, type RollupStatus } from "../tasks/rollup.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
- * 任务按「归属部分」计：part_id，没有归属时退回负责节点 node_id；计数按子树汇总。
+ * 任务按「归属部门」计：part_id，没有归属时退回负责节点 node_id；计数按子树汇总。
  * 执行者最近动作来自看板（runner.top）的日志解析，由路由注入，这里只按短号对上。
  */
 
@@ -104,7 +104,7 @@ export type MapTotal = {
   more: number;
 };
 const TOTAL_CHILDREN = 30;
-/** 组成部分的一行：在 Part 之外带一句「做什么」和下面还有几块。 */
+/** 下属部门的一行：在 Part 之外带一句「做什么」和下面还有几块。 */
 export type MapPart = Part & {
   kind: NodeRow["kind"];
   what: string;
@@ -131,7 +131,7 @@ function hasTasks(db: DatabaseSync) {
   );
 }
 
-/** 各部分的人话字段（org_docs 里 doc='charter' 那一行）。 */
+/** 各部门的人话字段（org_docs 里 doc='charter' 那一行）。 */
 function charters(db: DatabaseSync): Map<number, Record<string, unknown>> {
   const map = new Map<number, Record<string, unknown>>();
   for (const row of all<{ node_id: number; fields: string }>(
@@ -146,7 +146,7 @@ function charters(db: DatabaseSync): Map<number, Record<string, unknown>> {
   return map;
 }
 
-/** 每个节点自己名下（按归属部分）的在跑、卡住、未结数；不含子树。 */
+/** 每个节点自己名下（按归属部门）的在跑、卡住、未结数；不含子树。 */
 function ownCounts(db: DatabaseSync): Map<number, Counts> {
   const map = new Map<number, Counts>();
   if (!hasTasks(db)) return map;
@@ -357,7 +357,7 @@ export type TaskRow = {
   parent_id?: number | null;
 };
 
-/** 部分页上的总任务（t190）：汇总与直接子任务，按 id 集合批量取；旧库没有 helper 列时不算。 */
+/** 部门页上的总任务（t190）：汇总与直接子任务，按 id 集合批量取；旧库没有 helper 列时不算。 */
 export function mapTotals(
   db: DatabaseSync,
   ids: readonly number[],
@@ -481,7 +481,7 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
 export const taskColumns = (db: DatabaseSync) =>
   `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "host_id") ? "host_id" : "NULL AS host_id"},${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "prio") ? "prio" : "NULL AS prio"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
-/** 任务在部分页上的顺序：在跑、卡住与等合入、待办、其余。 */
+/** 任务在部门页上的顺序：在跑、卡住与等合入、待办、其余。 */
 const TASK_ORDER = (db: DatabaseSync) =>
   `CASE WHEN status='running' THEN 0 WHEN status='blocked' THEN 1
     WHEN ${hasColumn(db, "tasks", "delivery_stage") ? MERGING : "0"} THEN 1 WHEN status='todo' THEN 2 ELSE 3 END`;
@@ -654,7 +654,7 @@ export function mapNode(
 }
 export type MapNode = ReturnType<typeof mapNode>;
 
-/** 下层各块（组成部分与专员，深度优先、不含本块与已归档的）自己的要点；空块省略，至多 200 块。 */
+/** 下层各块（下属部门与专员，深度优先、不含本块与已归档的）自己的要点；空块省略，至多 200 块。 */
 function pointsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
   const levels: {
     node: string;
@@ -681,7 +681,7 @@ function pointsBelow(db: DatabaseSync, x: Index, n: NodeRow) {
   return levels;
 }
 
-/** 在跑与排队的任务（`/api/map/now`，网页顶栏「在做 N 件」）：在跑与排队的任务按归属部分归组；没有归属的放「未归属」。 */
+/** 在跑与排队的任务（`/api/map/now`，网页顶栏「在做 N 件」）：在跑与排队的任务按归属部门归组；没有归属的放「未归属」。 */
 export function mapNow(db: DatabaseSync, live: readonly LiveRow[] = []) {
   const active = live.filter(
     (r) => r.status === "running" || r.queued_at !== null,

@@ -124,9 +124,9 @@ test("命令表、帮助与说明书收录 atrium quota", () => {
   assert.equal(commands.quota.args, "[--clear <账号>] [--json]");
   assert.match(commands.quota.about, /额度/);
   assert.match(help(), /atrium quota \[--clear <账号>\] \[--json\]/);
-  assert.match(guide(commands), /派活前看候选：atrium task pick t2/);
-  assert.match(guide(commands), /只看额度：atrium quota/);
-  assert.match(guide(commands), /atrium quota --clear claude/);
+  assert.match(guide(), /派活前看候选：atrium task run t2 --dry-run/);
+  assert.match(guide(), /只看额度：atrium quota/);
+  assert.match(guide(), /atrium quota --clear claude/);
 });
 
 test("parseQuotaAccounts / sortBySpare：沿用字段、富余降序、无数据排最后", () => {

@@ -641,7 +641,7 @@ atrium top [--once] [--json] [--interval 秒] [--width 列] [--depth N] [--as �
   示例：atrium top
 
 atrium statusline [--json]
-  Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、未处理事件；服务不在只显示未运行，不拉起
+  Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、秘书在不在听与未处理事件；服务不在只显示未运行，不拉起
   示例：atrium statusline
 
 atrium task add 标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
@@ -681,7 +681,7 @@ atrium task pick tN [--risk low|medium|high]
   示例：atrium task pick t1 --risk medium
 
 atrium task run tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--urgent [--why 原因]]
-  派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）
+  派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的；那台暂停接活时用户与秘书仍可这样只派这一件，不必先恢复）；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）
   示例：atrium task run t1 --worker codex+gpt-6-sol:high
 
 atrium task done tN
@@ -695,6 +695,10 @@ atrium task stop tN [--as 订阅者]
 atrium task merge tN [--as 订阅者]
   将关卡已通过、带 PR 的受阻合入任务重新排队；受阻在专员否决或没出结论上的，负责的 leader 看过理由不认同时用它放行
   示例：atrium task merge t1
+
+atrium task deliver tN --pr URL [--worktree 路径] [--repo 路径] [--as 订阅者]
+  秘书、leader 亲自做完的活登记交付：运行时核对 PR 与工作树后记成完成、进合入队列（紧急的走紧急通道）；--worktree 给 PR 分支所在的附属工作树，合入在那里 rebase、检查，合入后和执行者的一样清理；不给时合入队列按任务工作树规则另建一个；任务没记仓库时加 --repo
+  示例：atrium task deliver t1 --pr https://github.com/acme/demo/pull/7
 
 atrium task log tN [--follow] [--after 字节]
   看执行者日志；--follow 跟到任务结束，--after 从上次的字节偏移续读
@@ -832,12 +836,12 @@ atrium host remove hN
   移除远程执行机器：令牌作废，短号保留不复用；上面还有在跑的任务时拒绝
   示例：atrium host remove hN
 
-atrium host pause hN
-  暂停往这台派新活（在跑的照跑）；本机 h1 也可以暂停，让活只去远程
+atrium host pause hN [--as u1|secretary]
+  暂停往这台派新活（在跑的照跑）：自动派、排队拉起、重试换人都不去这台；只想派一件过去用 task run tN --host hN，不要先恢复；本机 h1 也可以暂停，让活只去远程；谁、何时暂停记进 host show
   示例：atrium host pause hN
 
-atrium host resume hN
-  恢复往这台派活；排着的活会按顺序拉起
+atrium host resume hN [--as u1|secretary]
+  恢复往这台派活：排着的活会立刻按顺序拉起、可能派到这台（只想派一件过去用 task run tN --host hN）；谁、何时恢复记进 host show
   示例：atrium host resume hN
 
 atrium host clean hN

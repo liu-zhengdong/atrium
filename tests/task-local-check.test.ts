@@ -33,34 +33,10 @@ const facts: Facts = {
   claims: [],
 };
 
-test("local_check 只按运行时结果判定，失败原因包含用例名", () => {
-  const base: LocalCheck = {
-    status: "passed",
-    command: "npm run check",
-    log: "/tmp/local-check.log",
-    detail: "检查通过",
-    failedTests: [],
-  };
-  assert.equal(evaluateGates(["local_check"], {}, facts).passed, false);
-  assert.equal(
-    evaluateGates(["local_check"], {}, { ...facts, localCheck: base }).passed,
-    true,
-  );
-  const failed = evaluateGates(
-    ["local_check"],
-    {},
-    {
-      ...facts,
-      localCheck: {
-        ...base,
-        status: "failed",
-        detail: "退出码 1",
-        failedTests: ["边界用例"],
-      },
-    },
-  );
-  assert.match(failed.failed[0]!.evidence, /失败用例：边界用例/);
-  assert.equal(failed.awaitingCi, false);
+test("local_check 关卡交付时不跑全量检查，说明由合入队列在 rebase 后跑", () => {
+  const verdict = evaluateGates(["local_check"], {}, facts);
+  assert.equal(verdict.passed, true);
+  assert.match(verdict.results[0]!.evidence, /合入队列在 rebase 后跑一次/);
 });
 
 test("检查命令优先读取 .agents/check，缺失时读取 package.json", async () => {
@@ -129,6 +105,14 @@ test("本地检查输出落任务目录，超时杀进程组并记录失败用�
     });
     assert.equal(timed.status, "timeout");
     assert.match(timed.detail, /超过/);
+    // 没单独给时按队列（这台主机）配的时长。
+    const hostTimed = await runLocalCheck({
+      worktree,
+      taskDir: dir,
+      queue: new LocalCheckQueue(1, 30),
+    });
+    assert.equal(hostTimed.status, "timeout");
+    assert.equal(new LocalCheckQueue().timeoutMs, 30 * 60_000);
   } finally {
     removeTemp(root);
   }

@@ -42,6 +42,8 @@ export type CommitCheck = {
   withClone: <T>(clone: string, work: () => Promise<T>) => Promise<T>;
   /** 占一个检查工作树号，用完还回来。 */
   slot: (clone: string) => { index: number; release: () => void };
+  /** 这台主机上一次检查最多跑多久（ATRIUM_CHECK_TIMEOUT_MINUTES）。 */
+  timeoutMs: number;
 };
 
 export async function checkCommit(input: CommitCheck): Promise<CheckReply> {
@@ -128,6 +130,7 @@ export async function checkCommit(input: CommitCheck): Promise<CheckReply> {
       env: input.env,
       urgent: input.urgent,
       queue: UNLIMITED,
+      timeoutMs: input.timeoutMs,
       signal: input.signal,
       append: true,
     });

@@ -12,8 +12,9 @@ import { rank } from "./priority.ts";
  *
  * 配置（服务环境变量，缺省按核数）：
  * - ATRIUM_MAX_WORKERS：同时在跑的执行者上限，缺省核数的 3/4（至少 2）；0 或 off 不限。
- * - ATRIUM_MAX_CHECKS：本地检查同时跑几个，缺省核数的 1/4（至少 1）。
- * - ATRIUM_TEST_CONCURRENCY：注入执行者与本地检查的测试并发，缺省核数的 1/4（至少 1）。
+ * - ATRIUM_MAX_CHECKS：本地检查同时跑几个，缺省核数的一半（至少 1）。
+ * - ATRIUM_TEST_CONCURRENCY：注入执行者与本地检查的测试并发，缺省核数减 1（与 node --test 自己的缺省一致，至少 1）。
+ * - ATRIUM_CHECK_TIMEOUT_MINUTES：一次本地检查最多跑几分钟，缺省 30；按主机各自设（代理读它那台的环境）。
  * - ATRIUM_BUSY_CORES：Atrium 进程树占用超过几个核暂停派新活，缺省核数的 3/4；0 或 off 不看。
  * - ATRIUM_BUSY_LOAD：整机 1 分钟负载超过多少暂停派新活（保护线），缺省 4×核数；0 或 off 不看。
  */
@@ -24,6 +25,8 @@ export type HostLimits = {
   maxWorkers: number | null;
   maxChecks: number;
   testConcurrency: number;
+  /** 一次本地检查最多跑多久（毫秒）。 */
+  checkTimeoutMs: number;
   /** Atrium 进程树占用超过这么多核就暂停派新活；null 不看。 */
   busyCores: number | null;
   /** 整机 1 分钟负载超过它就暂停派新活（保护线）；null 不看负载。 */
@@ -34,6 +37,9 @@ export type HostLimits = {
 export type HostBlock = "own" | "load" | "full";
 export type HostGate =
   { ok: true } | { ok: false; busy: boolean; by: HostBlock; reason: string };
+
+/** 本地检查缺省最多跑几分钟。 */
+export const CHECK_TIMEOUT_MINUTES = 30;
 
 const OFF = new Set(["0", "off", "none", "false"]);
 
@@ -75,7 +81,6 @@ export function hostLimits(
       problems.push(`${name}=${env[name]} 看不懂，按缺省执行`);
     return fallback;
   };
-  const quarter = Math.max(1, Math.floor(n / 4));
   return {
     limits: {
       cores: n,
@@ -87,13 +92,19 @@ export function hostLimits(
       maxChecks: pick(
         "ATRIUM_MAX_CHECKS",
         parseCount(env.ATRIUM_MAX_CHECKS, false) ?? undefined,
-        quarter,
+        Math.max(1, Math.floor(n / 2)),
       ),
       testConcurrency: pick(
         "ATRIUM_TEST_CONCURRENCY",
         parseCount(env.ATRIUM_TEST_CONCURRENCY, false) ?? undefined,
-        quarter,
+        Math.max(1, n - 1),
       ),
+      checkTimeoutMs:
+        pick(
+          "ATRIUM_CHECK_TIMEOUT_MINUTES",
+          parseCount(env.ATRIUM_CHECK_TIMEOUT_MINUTES, false) ?? undefined,
+          CHECK_TIMEOUT_MINUTES,
+        ) * 60_000,
       busyCores: pick(
         "ATRIUM_BUSY_CORES",
         parseLoad(env.ATRIUM_BUSY_CORES),

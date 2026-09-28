@@ -5,7 +5,6 @@
 
 import type { Ci, Claim, FileStat, FunctionSpan, Pr } from "./gate-parse.ts";
 import { ciUnavailableReason } from "./ci-classify.ts";
-import type { LocalCheck } from "./local-check.ts";
 import type { ScreenshotFact } from "./screenshot-facts.ts";
 
 export * from "./gate-parse.ts";
@@ -35,7 +34,6 @@ export type Facts = {
   prError?: string;
   ci: Ci | null;
   ciDetail?: string;
-  localCheck?: LocalCheck;
   numstat: FileStat[];
   functions: FunctionSpan[];
   /** 未提交（含未跟踪）的路径。 */
@@ -124,18 +122,12 @@ function ci(facts: Facts): GateResult {
   };
 }
 
-function localCheck(facts: Facts): GateResult {
-  const result = facts.localCheck;
-  if (!result)
-    return {
-      gate: "local_check",
-      ok: false,
-      evidence: "运行时没有本地检查结果",
-    };
+/** 全量检查一次交付只跑一遍：合入队列按 rebase 后的提交跑，交付关卡不重复跑，这里只说明去向。 */
+function localCheck(): GateResult {
   return {
     gate: "local_check",
-    ok: result.status === "passed",
-    evidence: `本地检查${result.status === "passed" ? "通过" : "未通过"}：${result.detail}${result.failedTests.length ? `；失败用例：${result.failedTests.join("、")}` : ""}；日志：${result.log}`,
+    ok: true,
+    evidence: "全量检查由合入队列在 rebase 后跑一次，没过交回原执行者",
   };
 }
 
@@ -259,7 +251,7 @@ export function evaluateGates(
       case "pr_exists":
         return prExists(facts);
       case "local_check":
-        return localCheck(facts);
+        return localCheck();
       case "ci":
         return ci(facts);
       case "finished":

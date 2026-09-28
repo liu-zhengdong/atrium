@@ -13,6 +13,9 @@ import { startApp } from "./task-fixture.ts";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import { MergeQueue } from "../server/tasks/merge-runtime.ts";
 import { MergeClaim } from "../server/tasks/merge-claim.ts";
+import { getTask } from "../server/tasks/ledger.ts";
+import { listTells } from "../server/tasks/tell-ledger.ts";
+import { whoLabel } from "../server/tasks/holder.ts";
 import { createApp } from "../server/app.ts";
 import { nodeCommand, sleepCommand, TRUE_COMMAND } from "./portable-shell.ts";
 
@@ -160,6 +163,29 @@ test("重新排队拒绝无 PR 与交付关卡未通过", async () => {
   });
   assert.throws(() => queue.requeue(1), /没有可合入的 PR/);
   assert.throws(() => queue.requeue(2), /未通过交付关卡/);
+  await queue.close();
+  db.close();
+});
+
+test("合入队列交回执行者的捎话署名运行时，不冒用用户", async () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  db.prepare(
+    "INSERT INTO tasks(title,deliver,status,delivery_stage,repo,worktree,branch,pr_url,created_at,updated_at) VALUES ('交回','pr','done','merging','/repo','/worktree','task','https://github.com/acme/demo/pull/1',1,1)",
+  ).run();
+  const queue = new MergeQueue(db, {
+    data: "/unused",
+    env: {},
+    run: async () => ({ ok: false, stdout: "", stderr: "unused" }),
+    returned: async () => {},
+    publish: () => {},
+    changed: () => {},
+  });
+  await queue.handBack(getTask(db, 1), "rebase 冲突：a.ts");
+  const [tell] = listTells(db, 1);
+  assert.equal(tell?.by, "runtime");
+  assert.match(tell!.text, /合入队列交回（第 1 次）/);
+  assert.equal(whoLabel("runtime"), "运行时");
   await queue.close();
   db.close();
 });

@@ -684,7 +684,7 @@ export class MergeQueue {
       if (!decision.blocked)
         addTell(this.db, task.id, {
           text: `合入队列交回（第 ${decision.returns} 次）：${safeReason}\n请在原工作树和原分支修复、重新跑检查、推送原 PR。若分支已变基，请使用 --force-with-lease 推送。`,
-          by: "u1",
+          by: "runtime",
           uuid: randomUUID(),
           route: "next_run",
         });

@@ -18,7 +18,7 @@ import type { RemoteHosts } from "./remote.ts";
 import { hostRef, remoteClone } from "./state.ts";
 
 /**
- * 本地检查派到哪台跑（#358 第 2 步）：交付后的 local_check 与合入队列的重跑检查共用。
+ * 本地检查派到哪台跑（#358 第 2 步）：合入队列 rebase 后的检查用（交付关卡不再跑全量检查）。
  * 挑主机是 check-plan.ts 的纯函数；这里取候选、在本机工作树里取提交与 bundle、派给代理，
  * 那台没跑成（离线、超时、取不到提交）就换一台或回本机重跑。关卡怎么判不变，只是换地方跑命令。
  */

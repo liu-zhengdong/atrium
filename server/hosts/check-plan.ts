@@ -2,7 +2,7 @@ import { hostRef, repoAllowed, type Connection } from "./state.ts";
 
 /**
  * 本地检查派到哪台主机（#358 第 2 步）的判定：纯函数，穷举测试。
- * 交付后的 local_check 与合入队列 rebase 后的重跑检查都走这里：本机也是候选，按负载挑；
+ * 合入队列 rebase 后的检查走这里：本机也是候选，按负载挑；
  * 远程要在线、没暂停、能拿到这个仓库、检查没超并发、代理没报太忙，且与仓库检查基准同平台（t201）。
  * IO 在 check-runtime.ts。
  */
@@ -40,7 +40,7 @@ export const CHECK_PLATFORMS = ["darwin", "linux", "win32"] as const;
 
 /**
  * 仓库的检查基准平台：仓库 `.agents/check-platform` 写了认得的平台就用它，否则取本机 h1 的平台。
- * 把关检查（local_check、合入队列的重跑检查）只派到基准平台的主机：别的平台专有的偶发失败
+ * 把关检查（合入队列 rebase 后的检查）只派到基准平台的主机：别的平台专有的偶发失败
  * 不该把任务交回执行者；那些平台的全量结果由远端 CI 记录作参考（t201）。
  */
 export function checkBaseline(configured: string | null, local: string) {

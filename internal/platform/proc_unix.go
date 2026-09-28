@@ -8,8 +8,8 @@ import (
 	"syscall"
 )
 
-// Detached 用新会话（setsid）：脱离终端，进程组号 = pid，结束时给整个组发信号。
-func sysProcAttr(detached bool) *syscall.SysProcAttr {
+// Detached 用新会话（setsid）：脱离终端，进程组号 = pid，结束时给整个组发信号。cmdLine 只有 Windows 用。
+func sysProcAttr(detached bool, _ string) *syscall.SysProcAttr {
 	if detached {
 		return &syscall.SysProcAttr{Setsid: true}
 	}

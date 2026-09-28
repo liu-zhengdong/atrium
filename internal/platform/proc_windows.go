@@ -14,9 +14,9 @@ const (
 	stillActive             = 259
 )
 
-// 一律不弹窗；Detached 放进新进程组，结束时由 taskkill /T 连子进程一起结束。
-func sysProcAttr(detached bool) *syscall.SysProcAttr {
-	attr := &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+// 一律不弹窗；Detached 放进新进程组，结束时由 taskkill /T 连子进程一起结束。cmdLine 非空时原样作命令行（批处理）。
+func sysProcAttr(detached bool, cmdLine string) *syscall.SysProcAttr {
+	attr := &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow, CmdLine: cmdLine}
 	if detached {
 		attr.CreationFlags |= createNewProcessGroup
 	}

@@ -54,8 +54,10 @@ type ServiceInput struct {
 	Exe  string // atrium 可执行文件绝对路径
 	Data string // 代理数据目录
 	Home string
-	Env  map[string]string // 取 XDG_CONFIG_HOME、USERNAME、USERDOMAIN、SYSTEMROOT
-	UID  int               // macOS：launchctl 的 gui/<uid> 域
+	Env  map[string]string // 取 XDG_CONFIG_HOME、SYSTEMROOT
+	// UID 是当前用户（os/user 的 Uid）：macOS 是数字，作 launchctl 的 gui/<uid> 域；Windows 是 SID，作计划任务的 UserId
+	// （不用 USERDOMAIN\USERNAME：经 SSH 登录时 USERDOMAIN 是 WORKGROUP，schtasks 认不出）。
+	UID string
 }
 
 // ServiceFile 是要写的一个文件；UTF16 用于 Windows 计划任务 XML（schtasks /XML 认 UTF-16）。
@@ -126,10 +128,10 @@ func ServiceLayout(in ServiceInput) (Layout, error) {
 	l := Layout{GOOS: in.GOOS, Log: log, Program: prog}
 	switch in.GOOS {
 	case "darwin":
-		if in.UID <= 0 {
-			return Layout{}, fmt.Errorf("取不到当前用户 id，装不了 launchd 用户代理")
+		if uid, err := strconv.Atoi(in.UID); err != nil || uid <= 0 {
+			return Layout{}, fmt.Errorf("取不到当前用户 id（收到：%q），装不了 launchd 用户代理", in.UID)
 		}
-		l.Name, l.Target = launchdLabel, fmt.Sprintf("gui/%d/%s", in.UID, launchdLabel)
+		l.Name, l.Target = launchdLabel, "gui/"+in.UID+"/"+launchdLabel
 		l.Definition = joinOS(in.GOOS, in.Home, "Library", "LaunchAgents", launchdLabel+".plist")
 		var args strings.Builder
 		for _, a := range prog {
@@ -186,12 +188,8 @@ func ServiceLayout(in ServiceInput) (Layout, error) {
 			"StandardOutput=append:" + esc(log), "StandardError=append:" + esc(log), "",
 			"[Install]", "WantedBy=default.target", ""}, "\n")}}
 	case "windows":
-		user := strings.TrimSpace(in.Env["USERNAME"])
-		if user == "" {
-			return Layout{}, fmt.Errorf("取不到 USERNAME，装不了只在本人登录时启动的计划任务")
-		}
-		if d := strings.TrimSpace(in.Env["USERDOMAIN"]); d != "" {
-			user = d + `\` + user
+		if !strings.HasPrefix(in.UID, "S-1-") {
+			return Layout{}, fmt.Errorf("取不到当前用户的 SID（收到：%q），装不了只在本人登录时启动的计划任务", in.UID)
 		}
 		root := strings.TrimSpace(in.Env["SYSTEMROOT"])
 		if root == "" {
@@ -221,8 +219,8 @@ func ServiceLayout(in ServiceInput) (Layout, error) {
 			`<?xml version="1.0" encoding="UTF-16"?>`,
 			`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`,
 			`  <RegistrationInfo><Description>Atrium 代理：atrium agent install 生成</Description></RegistrationInfo>`,
-			`  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>` + xmlEsc(user) + `</UserId></LogonTrigger></Triggers>`,
-			`  <Principals><Principal id="Author"><UserId>` + xmlEsc(user) + `</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>`,
+			`  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>` + xmlEsc(in.UID) + `</UserId></LogonTrigger></Triggers>`,
+			`  <Principals><Principal id="Author"><UserId>` + xmlEsc(in.UID) + `</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>`,
 			`  <Settings>`,
 			`    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>`,
 			`    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>`,

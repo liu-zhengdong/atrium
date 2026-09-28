@@ -13,6 +13,7 @@ import { ensurePatrolTables } from "./patrol.ts";
 import { ensureVerifyTables } from "./verify-runtime.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
 import { ensureUrgentTables } from "./urgent-ledger.ts";
+import { ensureSecretTables } from "../secrets/store.ts";
 
 /** 在途任务归属管方面的部分（或在它下面）的补成闲时；旧库没有组织表或 aspect 列就不动。 */
 function backfillIdle(db: DatabaseSync) {
@@ -222,6 +223,8 @@ export function ensureTaskTables(db: DatabaseSync) {
   // 全景图第 2 步（#322）：任务请了哪些专员、本轮审查任务与结论。
   ensureConcernTable(db);
   ensureAlsoTable(db);
+  // 任务声明要用的凭据（t194）：task_secrets 随账本建，node_secrets 一起建好，建任务时要查。
+  ensureSecretTables(db);
   // 全景图第 3 步（#322）：会审的议题、受邀专员与结论。
   ensureCouncilTables(db);
   // 总任务（t190）：有子任务的任务不再派、状态按子孙汇总；运行时替父任务建的帮手（专员审查、会审意见）不算子任务。

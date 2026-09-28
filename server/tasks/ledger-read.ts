@@ -1,4 +1,5 @@
 import { involvedOf, involvedView } from "./also.ts";
+import { taskSecretNames } from "../secrets/store.ts";
 import { holderFor } from "./holder-facts.ts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
@@ -52,6 +53,7 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     found.delivery_stage === "online"
       ? (verifyViews(db, [found.id]).get(found.id) ?? null)
       : null;
+  const secrets = taskSecretNames(db, found.id);
   return {
     ...view(found),
     ...noteView(db, found.id, found.status),
@@ -73,6 +75,7 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     ...(concerns.length ? { concerns } : {}),
     ...(hints.length ? { concern_hints: hints } : {}),
     ...involvedView(involvedOf(db, found)),
+    ...(secrets.length ? { secrets } : {}),
   };
 }
 

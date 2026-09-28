@@ -7,6 +7,7 @@ import { spawnWorker } from "../tasks/spawn.ts";
 import { workerEnvironment } from "../tasks/worker-env.ts";
 import { buildLaunch } from "../tasks/workspace.ts";
 import type { Assignment } from "../hosts/protocol.ts";
+import { withSecrets } from "../secrets/model.ts";
 
 /**
  * 代理在自己机器上拉起一次运行（#358 第 1 步）：克隆或更新仓库、建工作树、写提示词，
@@ -83,7 +84,7 @@ export async function launchAssignment(
   const offset = append && existsSync(logFile) ? statSync(logFile).size : 0;
   const { child } = await spawnWorker(
     { launch, logFile, worker: { id: assignment.worker } },
-    workerEnvironment(ctx.env),
+    withSecrets(workerEnvironment(ctx.env), assignment.secrets),
     assignment.ref,
     append,
   );

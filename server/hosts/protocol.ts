@@ -32,6 +32,11 @@ export type Assignment = {
     branch: string;
     base: string;
   };
+  /**
+   * 任务声明的凭据（t194）：名称 → 值，代理按名称合进执行者环境（secrets/model.ts withSecrets）。
+   * 只在这条指令里（服务与代理都只放内存），代理不落盘、不写日志。
+   */
+  secrets?: Record<string, string>;
 };
 
 export type AgentCommand =

@@ -31,6 +31,7 @@ import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
 import { registerMaterialRoutes } from "./materials/routes.ts";
+import { registerSecretRoutes } from "./secrets/routes.ts";
 import { registerChoiceRoutes } from "./choices/routes.ts";
 import { registerHostRoutes } from "./hosts/routes.ts";
 import { TelegramNotifier, type NotifierOptions } from "./notify/runtime.ts";
@@ -302,6 +303,8 @@ export async function createApp(options: {
   registerMemoRoutes(app, db);
   // 资料（t192）：文件在 <ATRIUM_DATA>/materials/；表要在全景变更检测挂触发器之前建好。
   registerMaterialRoutes(app, db, resolve(options.data));
+  // 凭据（t194）：值在 <ATRIUM_DATA>/secrets/，只在派活时注入执行者。
+  registerSecretRoutes(app, db, resolve(options.data));
   // 选项单的表要在全景变更检测挂触发器（registerMapRoutes）之前建好。
   registerChoiceRoutes(app, db, taskRunner.inbox);
   // 推送到手机：等你拍板、上交到用户这层的卡住／越界、里程碑上线（t185）。

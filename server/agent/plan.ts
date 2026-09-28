@@ -1,3 +1,4 @@
+import { secretNameProblem } from "../secrets/model.ts";
 import {
   MAX_BUNDLE_BYTES,
   type AgentCommand,
@@ -102,6 +103,21 @@ export function assignmentRefusal(
       return "分支名不合法";
     if (!/^[A-Za-z0-9._/-]+$/.test(a.repo.base) || a.repo.base.startsWith("-"))
       return "基础分支名不合法";
+  }
+  if (a.secrets !== undefined) {
+    if (
+      typeof a.secrets !== "object" ||
+      a.secrets === null ||
+      Array.isArray(a.secrets)
+    )
+      return "凭据不合法";
+    for (const [name, value] of Object.entries(a.secrets)) {
+      // 只报名称的毛病，不带值。
+      const problem = secretNameProblem(name);
+      if (problem) return `凭据名称不合法：${problem}`;
+      if (typeof value !== "string" || !value || value.includes("\0"))
+        return `凭据 ${name} 的值不合法`;
+    }
   }
   return null;
 }

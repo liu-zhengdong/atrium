@@ -110,18 +110,18 @@ func TestEmitTask(t *testing.T) {
 	exec(t, db, `INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`)
 	exec(t, db, `INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES ('o1', NULL, '公司', 'a1', 0, 0)`)
 	exec(t, db, `INSERT INTO tasks (id, department, title, status, created_at, updated_at) VALUES ('t1', 'o1', 'x', 'running', 0, 0)`)
-	emitTask := func(by, to string) {
+	emitTask := func(owner, to, by string) {
 		t.Helper()
 		err := db.Tx(ctx, func(tx *sql.Tx) error {
-			return EmitTask(ctx, tx, by, Event{Kind: TaskStatus, Task: "t1", Dept: "o1", Body: map[string]any{"to": to}})
+			return EmitTask(ctx, tx, owner, Event{Kind: TaskStatus, Task: "t1", Dept: "o1", Body: map[string]any{"to": to}, By: by})
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	emitTask("u1", "queued")
-	emitTask("u1", "running")
-	emitTask("u1", "done")
+	emitTask("u1", "queued", "u1")
+	emitTask("u1", "running", "dispatch")
+	emitTask("u1", "done", "u1") // 用户本人做的，照样投秘书（按身份比对，u1 不是 secretary）
 	sec, _ := Pending(ctx, db, Secretary, true, 10)
 	lead, _ := Pending(ctx, db, "a1", true, 10)
 	if len(sec) != 1 || sec[0].Level != Act || !strings.Contains(string(sec[0].Body), "done") {
@@ -129,6 +129,20 @@ func TestEmitTask(t *testing.T) {
 	}
 	if len(lead) != 1 || lead[0].Level != Info || lead[0].Count != 3 {
 		t.Fatalf("负责人应收一条合并的知会：%+v", lead)
+	}
+	Ack(ctx, db, []int64{sec[0].ID, lead[0].ID}, "", "u1")
+	// 一次操作引出的事件不投给做这次操作的身份本人：秘书停下、负责人取消，各自不收。
+	for _, c := range []struct{ owner, to, by, self, other string }{
+		{Secretary, "blocked", Secretary, Secretary, "a1"},
+		{"a2", "failed", "a1", "a1", "a2"},
+	} {
+		emitTask(c.owner, c.to, c.by)
+		self, _ := Pending(ctx, db, c.self, true, 10)
+		other, _ := Pending(ctx, db, c.other, true, 10)
+		if len(self) != 0 || len(other) != 1 {
+			t.Fatalf("%s 做的 %s：本人收到 %+v，另一位收到 %+v", c.by, c.to, self, other)
+		}
+		Ack(ctx, db, []int64{other[0].ID}, "", "u1")
 	}
 }
 

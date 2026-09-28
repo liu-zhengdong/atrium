@@ -4,6 +4,8 @@
 // 攒 30 秒拼成一条「【Atrium 事件】」消息经会话收件 socket 注入；不替秘书确认；同一事件送过不重送，
 // 送过 30 分钟没确认再提醒一次；每 30 秒向服务报「秘书在听」；会话没了就退出。
 // statusline 给 Claude Code 状态栏一行字；服务不在只显示「未运行」，不拉起。
+// --install-hook 同时在项目设置 env 里写 ATRIUM_AS=secretary：秘书会话发的命令署名秘书（权限同用户）。
+// 执行者的工作树顺着读到秘书目录的项目设置，SessionStart hook 也会在执行者会话里跑：那里 --detach 静默退出。
 // 判定在 plan.go、statusline.go（纯函数）。
 package secretary
 
@@ -40,12 +42,12 @@ func Commands(t *cli.Table) {
 		Summary: "在 Claude Code 秘书会话里常驻，把要处理的事件注入会话；--install-hook 让它随会话自动起",
 		Flags: []cli.Flag{
 			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 用），起好就返回"},
-			{Name: "install-hook", Bool: true, Help: "在秘书目录的 .claude/settings.local.json 加 SessionStart hook"},
+			{Name: "install-hook", Bool: true, Help: "在秘书目录的 .claude/settings.local.json 加 SessionStart hook 与 env ATRIUM_AS=secretary（命令署名秘书）"},
 			{Name: "dir", Value: "目录", Help: "--install-hook 的秘书目录（缺省当前目录）"},
 			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
 			{Name: "batch", Value: "秒", Help: "首条事件到了之后攒多久再送（缺省 30）"},
 		},
-		Run: bridgeCommand})
+		WorkerOK: true, Run: bridgeCommand}) // 执行者里只放行 --detach 静默退出，见 bridgeCommand
 	// statusline 由 Claude Code 状态栏调用（settings.json 的 statusLine），不是人敲的：不列在帮助里。
 	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听", Hidden: true,
 		Run: func(c *cli.Ctx) error {
@@ -67,6 +69,12 @@ func Commands(t *cli.Table) {
 }
 
 func bridgeCommand(c *cli.Ctx) error {
+	if cli.IsWorker(c.Env.Getenv) {
+		if c.Bool("detach") {
+			return nil // 执行者会话里跑到了秘书目录的 SessionStart hook：不是秘书会话，安静退出
+		}
+		return cli.WorkerDenied()
+	}
 	if err := c.MaxArgs(0); err != nil {
 		return err
 	}
@@ -392,16 +400,16 @@ func installHook(c *cli.Ctx) error {
 	case len(raw) > 0:
 		if err := json.Unmarshal(raw, &settings); err != nil {
 			hook, _ := json.Marshal(HookEntry())
-			return api.Conflict("%s 不是 JSON 对象，没有改动；手动在 hooks.SessionStart 里加入：%s", file, hook)
+			return api.Conflict("%s 不是 JSON 对象，没有改动；手动在 hooks.SessionStart 里加入：%s，在 env 里加 %s=%s", file, hook, AsEnv, events.Secretary)
 		}
 	}
 	next, added, err := WithHook(settings)
 	if err != nil {
 		return api.Conflict("%s：%v", file, err)
 	}
-	res := map[string]any{"file": file, "added": added, "hook": HookEntry()}
+	res := map[string]any{"file": file, "added": added, "hook": HookEntry(), "env": map[string]string{AsEnv: events.Secretary}}
 	if !added {
-		return c.Done(res, file+" 里已有起 bridge 的 SessionStart hook，没有改动", "atrium secretary bridge --status")
+		return c.Done(res, file+" 里已有起 bridge 的 SessionStart hook 与 "+AsEnv+"，没有改动", "atrium secretary bridge --status")
 	}
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return err
@@ -410,6 +418,6 @@ func installHook(c *cli.Ctx) error {
 	if err := os.WriteFile(file, append(out, '\n'), 0o644); err != nil {
 		return err
 	}
-	return c.Done(res, fmt.Sprintf("已在 %s 加 SessionStart hook（%s）。之后在 %s 打开的 Claude Code 会话都会在后台起 bridge；当前会话要马上生效，在会话里运行 %s",
-		file, HookCommand, dir, HookCommand), "atrium secretary bridge --status")
+	return c.Done(res, fmt.Sprintf("已在 %s 加 SessionStart hook（%s）与 env %s=%s。之后在 %s 打开的 Claude Code 会话都会在后台起 bridge，会话里的命令署名秘书。当前会话：运行 %s 马上起 bridge，署名要重开会话才生效",
+		file, HookCommand, AsEnv, events.Secretary, dir, HookCommand), "atrium secretary bridge --status")
 }

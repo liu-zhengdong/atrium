@@ -25,7 +25,7 @@ atrium map                                    # 在浏览器里看全景：各�
 日常不用自己敲这些：让一个 Claude Code 会话当秘书，你跟它说目标就行。
 
 ```bash
-cd ~/秘书目录 && atrium secretary bridge --install-hook   # 装一次：事件自动送进这个会话
+cd ~/秘书目录 && atrium secretary bridge --install-hook   # 装一次：事件自动送进这个会话，会话里的命令署名秘书
 ```
 
 在 `~/.claude/settings.json` 配上状态栏，随时看见谁在干活、什么在等你：

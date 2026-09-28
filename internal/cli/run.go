@@ -67,14 +67,21 @@ func (t *Table) Main(ctx context.Context, args []string, env Env) int {
 	if err := c.parse(rest); err != nil {
 		return fail(env, jsonMode, err)
 	}
-	if !cmd.WorkerOK && env.Getenv("ATRIUM_WORKER") == "1" {
-		return fail(env, jsonMode, &api.Error{Code: "forbidden",
-			Message: "执行者（ATRIUM_WORKER=1）不能操作用户的 Atrium 服务"})
+	if !cmd.WorkerOK && IsWorker(env.Getenv) {
+		return fail(env, jsonMode, WorkerDenied())
 	}
 	if err := cmd.Run(c); err != nil {
 		return fail(env, jsonMode, err)
 	}
 	return 0
+}
+
+// IsWorker：在执行者环境里（ATRIUM_WORKER=1）。
+func IsWorker(getenv func(string) string) bool { return getenv("ATRIUM_WORKER") == "1" }
+
+// WorkerDenied 是执行者被拒的错误（WorkerOK 的命令自己判时也用它）。
+func WorkerDenied() error {
+	return &api.Error{Code: "forbidden", Message: "执行者（ATRIUM_WORKER=1）不能操作用户的 Atrium 服务"}
 }
 
 func isCommandWord(s string) bool { return !strings.HasPrefix(s, "-") }
@@ -233,13 +240,14 @@ func (c *Ctx) Call(method, path string, body, out any) error {
 			return err
 		}
 		// 负责人进程带本次唤醒签发的令牌，服务端按它判权限；其余用用户令牌。
+		// ATRIUM_AS（秘书会话的项目设置写 secretary）原样带给服务，由服务端 api.Sign 定署名。
 		token := c.Env.Getenv("ATRIUM_LEADER_TOKEN")
 		if token == "" {
 			if token, err = config.ReadToken(p); err != nil {
 				return err
 			}
 		}
-		c.client = &api.Client{Base: fmt.Sprintf("http://127.0.0.1:%d", info.Port), Token: token}
+		c.client = &api.Client{Base: fmt.Sprintf("http://127.0.0.1:%d", info.Port), Token: token, As: c.Env.Getenv("ATRIUM_AS")}
 	}
 	return c.client.Do(c.Context, method, path, body, out)
 }

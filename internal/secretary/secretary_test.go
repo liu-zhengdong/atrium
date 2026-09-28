@@ -1,12 +1,15 @@
 package secretary
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
@@ -105,12 +108,46 @@ func TestWithHook(t *testing.T) {
 		got["hooks"].(map[string]any)["Stop"] == nil {
 		t.Fatalf("保留原有：%s %v %v", mustJSON(got), added, err)
 	}
-	if _, added, _ := WithHook(got); added {
-		t.Fatal("已有 hook 不应再加")
+	if got["env"].(map[string]any)[AsEnv] != "secretary" {
+		t.Fatalf("应写 env.%s=secretary：%s", AsEnv, mustJSON(got))
 	}
-	for _, bad := range []string{`{"hooks":[]}`, `{"hooks":{"SessionStart":{}}}`} {
+	if _, added, _ := WithHook(got); added {
+		t.Fatal("已有 hook 与署名不应再改")
+	}
+	// 旧装法只有 hook：补上署名；env 里别的变量保留。
+	got, added, err = WithHook(parse(`{"env":{"X":"1"},"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"atrium secretary bridge --detach"}]}]}}`))
+	if err != nil || !added || got["env"].(map[string]any)["X"] != "1" || got["env"].(map[string]any)[AsEnv] != "secretary" ||
+		len(got["hooks"].(map[string]any)["SessionStart"].([]any)) != 1 {
+		t.Fatalf("补署名：%s %v %v", mustJSON(got), added, err)
+	}
+	for _, bad := range []string{`{"hooks":[]}`, `{"hooks":{"SessionStart":{}}}`, `{"env":[]}`, `{"env":{"ATRIUM_AS":"u1"}}`} {
 		if _, _, err := WithHook(parse(bad)); err == nil {
 			t.Errorf("认不出的结构应报错：%s", bad)
+		}
+	}
+}
+
+func TestBridgeInWorker(t *testing.T) {
+	tbl := cli.NewTable("atrium", "测试")
+	Commands(tbl)
+	worker := func(k string) string {
+		return map[string]string{"ATRIUM_WORKER": "1", "ATRIUM_AS": "secretary"}[k]
+	}
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"secretary", "bridge", "--detach"}, 0}, // SessionStart hook 在执行者会话里跑到：安静退出
+		{[]string{"secretary", "bridge", "--status"}, 1},
+		{[]string{"secretary", "bridge"}, 1},
+	} {
+		var out, errb bytes.Buffer
+		code := tbl.Main(context.Background(), c.args, cli.Env{Stdout: &out, Stderr: &errb, Getenv: worker})
+		if code != c.code || out.Len() != 0 || (code == 0) != (errb.Len() == 0) {
+			t.Errorf("%v：退出码 %d，stdout %q，stderr %q", c.args, code, out.String(), errb.String())
+		}
+		if code != 0 && !strings.Contains(errb.String(), "执行者") {
+			t.Errorf("%v 应按执行者拒绝：%q", c.args, errb.String())
 		}
 	}
 }

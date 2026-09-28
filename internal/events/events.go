@@ -4,6 +4,7 @@
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
 // 任务事件经 EmitTask 按处理人分发（Route）：结果投处理人（缺省派活的人），负责人另收知会。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一），免得刷屏。
+// 一次操作引出的事件不投给做这次操作的身份本人（Event.By 与投递对象相同就不投）。
 // 判定（级别、去重键、投递对象）是纯函数，在 model.go；本文件是落库与等待。
 package events
 
@@ -39,6 +40,7 @@ const Secretary = org.Secretary
 const Lease = 15 * time.Minute
 
 // Event 是一条待投递事件。Target 留空由本包按部门解析；Level、Key 留空按种类取缺省（model.go）。
+// By 是引起它的身份（u1、secretary、aN 或运行时）：投递对象就是它时不投，自己做的事不用再告诉自己。
 type Event struct {
 	Kind   string
 	Task   string
@@ -47,6 +49,7 @@ type Event struct {
 	Level  string
 	Key    string
 	Body   any
+	By     string
 }
 
 // Row 是库里的一条事件。
@@ -88,6 +91,9 @@ func Emit(ctx context.Context, q store.Querier, e Event) error {
 			return err
 		}
 		e.Target = t
+	}
+	if e.Target == e.By {
+		return nil
 	}
 	now := store.Now()
 	if e.Key != "" {

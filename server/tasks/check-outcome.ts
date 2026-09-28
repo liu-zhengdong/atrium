@@ -3,7 +3,7 @@
  *
  * - 过（passed）：检查通过。
  * - 没过（failed）：有失败用例且不是基础设施问题，照旧交回执行者。
- * - 没跑成（not_run）：主机离线、没派过去、代理没来领、检查进程被杀，
+ * - 没跑成（not_run）：主机离线、没派过去、代理没来领、检查进程被杀、检查命令找不到（退出码 127，没装依赖），
  *   或超时／失败但失败用例全是仓库登记的时长敏感用例。不算执行者没过：换一台或等负载降下来自动重跑，
  *   最多 MAX_CHECK_RERUNS 次，之后才转卡住并写明「基础设施问题」。
  *
@@ -58,6 +58,28 @@ export function isTimingSensitive(name: string, patterns: readonly string[]) {
   );
 }
 
+/** 找不到命令的退出码（POSIX shell）。 */
+export const COMMAND_NOT_FOUND = 127;
+
+const NOT_FOUND_LINE =
+  /^.*(?:command not found|is not recognized as an internal or external command).*$/m;
+
+/**
+ * 检查命令找不到（工作树没装依赖，如 `tsc: command not found`）：算没跑成，不算执行者没过。
+ * 退出码 127 一律算；输出里有 shell 的「找不到命令」只在没解析出失败用例时算，免得测试自己打印这句被误判。
+ * 返回写进 infra 的原因；不是为 null。
+ */
+export function missingCommand(input: {
+  code: number | null;
+  tail: string;
+  failedTests: readonly string[];
+}): string | null {
+  const line = input.tail.match(NOT_FOUND_LINE)?.[0]?.trim().slice(0, 200);
+  if (input.code === COMMAND_NOT_FOUND || (line && !input.failedTests.length))
+    return `检查命令找不到（工作树可能没装依赖）：${line ?? `退出码 ${COMMAND_NOT_FOUND}`}`;
+  return null;
+}
+
 export type Classified = { outcome: CheckClass; reason: string };
 
 export function classifyCheck(
@@ -67,6 +89,15 @@ export function classifyCheck(
   if (check.status === "passed")
     return { outcome: "passed", reason: "检查通过" };
   if (check.infra) return { outcome: "not_run", reason: check.infra };
+  // 旧版代理不报 infra：退出码 127 按检查命令找不到算。
+  if (
+    check.status === "failed" &&
+    check.detail === `退出码 ${COMMAND_NOT_FOUND}`
+  )
+    return {
+      outcome: "not_run",
+      reason: `检查命令找不到（工作树可能没装依赖）：${check.detail}`,
+    };
   const failed = check.failedTests;
   const allSensitive =
     failed.length < FAILED_TESTS_CAP &&

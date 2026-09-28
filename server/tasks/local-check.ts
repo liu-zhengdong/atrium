@@ -11,6 +11,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { killTree, spawnShell } from "../platform/index.ts";
 import { workerEnvironment } from "./worker-env.ts";
 import { checkPlacement, CHECK_TIMEOUT_MINUTES } from "./host-load.ts";
+import { missingCommand } from "./check-outcome.ts";
 
 /** 本地检查只由运行时执行；队列在同一服务进程的所有任务之间共享。超时按主机配置（ATRIUM_CHECK_TIMEOUT_MINUTES），这是缺省。 */
 export const LOCAL_CHECK_TIMEOUT_MS = CHECK_TIMEOUT_MINUTES * 60_000;
@@ -278,6 +279,20 @@ export async function runLocalCheck(input: {
         result.signal
           ? `检查进程被信号 ${result.signal} 结束`
           : undefined;
+      // 检查命令找不到（没装依赖）也算没跑成（t204）；代理照同一规则报 infra，服务换一台或回本机。
+      const missing =
+        !timedOut && !result.error && result.code !== 0
+          ? missingCommand({ code: result.code, tail, failedTests })
+          : null;
+      if (missing)
+        return {
+          status: "failed",
+          command,
+          log,
+          detail: `退出码 ${result.code}`,
+          failedTests,
+          infra: missing,
+        };
       if (killed)
         return {
           status: "error",

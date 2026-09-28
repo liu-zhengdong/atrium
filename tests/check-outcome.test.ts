@@ -1,12 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   checkSummary,
   classifyCheck,
   hostIdOf,
   isTimingSensitive,
   MAX_CHECK_RERUNS,
+  missingCommand,
   notRunText,
   parseTimingSensitive,
   rerunDecision,
@@ -15,7 +18,12 @@ import {
   withOutcome,
   type CheckClass,
 } from "../server/tasks/check-outcome.ts";
-import type { LocalCheck } from "../server/tasks/local-check.ts";
+import {
+  runLocalCheck,
+  LocalCheckQueue,
+  type LocalCheck,
+} from "../server/tasks/local-check.ts";
+import { removeTemp } from "./temp-dir.ts";
 import {
   holderDetail,
   holderOf,
@@ -339,4 +347,63 @@ test("持球人：合入前等重跑说「检查没跑成，等重跑」，原�
     }),
     "h3 离线",
   );
+});
+
+test("检查命令找不到（没装依赖）：退出码 127 或 shell 说找不到命令算没跑成；测试自己打印这句不算", () => {
+  const cases: [number | null, string, string[], boolean][] = [
+    [127, "sh: tsc: command not found\n", [], true],
+    [127, "", [], true],
+    [1, "sh: tsc: command not found\n", [], true],
+    [1, "sh: 1: tsc: not found\n", [], false],
+    [
+      9009,
+      "'tsc' is not recognized as an internal or external command,\n",
+      [],
+      true,
+    ],
+    [1, "sh: tsc: command not found\n", ["关键用例"], false],
+    [1, "not ok 1 - 关键用例\n", ["关键用例"], false],
+    [2, "", [], false],
+  ];
+  for (const [code, tail, failedTests, want] of cases)
+    assert.equal(
+      missingCommand({ code, tail, failedTests }) !== null,
+      want,
+      `${code} ${JSON.stringify(tail)}`,
+    );
+  assert.match(
+    missingCommand({
+      code: 127,
+      tail: "sh: tsc: command not found",
+      failedTests: [],
+    })!,
+    /^检查命令找不到（工作树可能没装依赖）：sh: tsc: command not found$/,
+  );
+  // 旧版代理回的结果没有 infra：只凭退出码 127 也算没跑成。
+  assert.equal(
+    classifyCheck(check({ detail: "退出码 127" }), []).outcome,
+    "not_run",
+  );
+  assert.equal(
+    classifyCheck(check({ detail: "退出码 1" }), []).outcome,
+    "failed",
+  );
+});
+
+test("本地检查真跑一个不存在的命令：记 infra，分类为没跑成", async (t) => {
+  const worktree = mkdtempSync(join(tmpdir(), "atrium-missing-"));
+  t.after(() => removeTemp(worktree));
+  mkdirSync(join(worktree, ".agents"));
+  writeFileSync(
+    join(worktree, ".agents", "check"),
+    "atrium-t204-no-such-command --noEmit",
+  );
+  const result = await runLocalCheck({
+    worktree,
+    taskDir: join(worktree, "task"),
+    queue: new LocalCheckQueue(),
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.infra ?? "", /^检查命令找不到/);
+  assert.equal(withOutcome(result, []).outcome, "not_run");
 });

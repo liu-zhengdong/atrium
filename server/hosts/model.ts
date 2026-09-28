@@ -528,6 +528,8 @@ export type HostView = {
         agentServer: string;
       })
     | null;
+  /** 跑不跑把关检查（local_check、合入前重跑）：与检查基准不同平台的只接活（t201）。 */
+  checks?: string;
 };
 
 const parse = <T>(text: string | null): T | null => {

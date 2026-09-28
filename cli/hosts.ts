@@ -56,6 +56,7 @@ type HostView = {
     error: string | null;
     agentServer: string;
   } | null;
+  checks?: string;
 };
 
 const HOST_REF = /^h[1-9][0-9]{0,8}$/;
@@ -145,6 +146,7 @@ function detail(view: HostView & { tasks?: { ref: string; title: string }[] }) {
           ...(view.ssh.error ? [`隧道最近错误：${view.ssh.error}`] : []),
         ]
       : []),
+    ...(view.checks ? [`把关检查：${view.checks}`] : []),
     ...(view.last_seen_at ? [`最近心跳：${when(view.last_seen_at)}`] : []),
     ...(view.tasks?.length
       ? [
@@ -184,7 +186,8 @@ export const hostCommands: Record<string, Command> = {
   },
   "host show": {
     args: "hN",
-    about: "看一台执行机器：系统、编码 CLI、负载、最近心跳、在跑的任务",
+    about:
+      "看一台执行机器：系统、编码 CLI、负载、跑不跑把关检查、最近心跳、在跑的任务",
     positionals: [1, 1],
     async run({ positionals: [reference], json }) {
       const view = await (

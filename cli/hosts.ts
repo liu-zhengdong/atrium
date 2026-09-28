@@ -3,7 +3,6 @@ import { recordNext } from "./contract.ts";
 import { defaultActor } from "./worker-guard.ts";
 import { oneLine, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
-import { defaultActor } from "./worker-guard.ts";
 
 /**
  * 执行机器（#358 第 1 步，atrium host …）：本机是 h1，别的机器装好 Atrium 后用 `atrium agent` 接入。

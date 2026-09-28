@@ -72,7 +72,7 @@ export const groups: Record<string, string[]> = {
     "workers edit",
     "workers confirm",
   ],
-  全景: ["map", "map context", "map edit", "map add"],
+  全景: ["map", "map context", "map edit", "map add", "map draft", "map apply"],
   "目标（迁移后下线）": [
     "goal tree",
     "goal show",
@@ -201,6 +201,9 @@ export function example(name: string, command: Command) {
     return "atrium map edit atrium/cli --what 一句话 --uses 场景一 --uses 场景二 --now 现状";
   if (name === "map add")
     return "atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板";
+  if (name === "map draft")
+    return "atrium map draft ~/code/openquota --node openquota";
+  if (name === "map apply") return "atrium map apply t12 --dry-run";
   if (name === "org point-add")
     return "atrium org point-add atrium/runtime 不采信执行者自述 --why 事实由运行时查 --by u1（09-27）";
   if (name === "org stages")

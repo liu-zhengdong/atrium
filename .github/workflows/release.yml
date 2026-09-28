@@ -1,13 +1,14 @@
 name: 发版
-# 在 main 上打 vX.Y.Z 的 tag 时：交叉编译 darwin/linux/windows × amd64/arm64，发到 GitHub Release。
+# 合入 main 自动打下一个补丁 tag 并发版；手动推 vX.Y.Z tag 仍可发版。
 # 资产名 atrium-<goos>-<goarch>[.exe] 与 internal/release/version.go 的 Asset 一致；运行时 update 按它下载。
 on:
   push:
+    branches: [main]
     tags: ["v*"]
 permissions:
   contents: write
 concurrency:
-  group: atrium-release-${{ github.ref_name }}
+  group: atrium-release-${{ github.sha }}
   cancel-in-progress: false
 jobs:
   build:
@@ -16,35 +17,55 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: tag 须为 vX.Y.Z 且在 main 上
+      - name: 确定发版 tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "tag 应为 vX.Y.Z：$GITHUB_REF_NAME"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = branch ]; then
+            bash scripts/release-tag.sh
+          else
+            echo "$GITHUB_REF_NAME" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || { echo "tag 应为 vX.Y.Z：$GITHUB_REF_NAME"; exit 1; }
+            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
           git fetch -q origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_REF_NAME 不在 main 上"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag 不在 main 上"; exit 1; }
+          version=$(sed -n 's/^version=//p' "$GITHUB_OUTPUT" | tail -1)
+          if grep -qx 'covered_by_newer=true' "$GITHUB_OUTPUT" || gh release view "$version" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-go@v5
+        if: steps.version.outputs.publish == 'true'
         with:
           go-version-file: go.mod
       - name: 交叉编译
+        if: steps.version.outputs.publish == 'true'
         env:
           CGO_ENABLED: "0"
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             goos=${target%/*}; goarch=${target#*/}
             out="dist/atrium-$goos-$goarch"; [ "$goos" = windows ] && out="$out.exe"
             GOOS=$goos GOARCH=$goarch go build -trimpath \
-              -ldflags "-s -w -X github.com/liu-zhengdong/atrium/internal/service.Version=$GITHUB_REF_NAME" \
+              -ldflags "-s -w -X github.com/liu-zhengdong/atrium/internal/service.Version=$VERSION" \
               -o "$out" ./cmd/atrium
           done
           ls -l dist
       - name: 本平台二进制能跑且版本对
+        if: steps.version.outputs.publish == 'true'
         run: |
           ./dist/atrium-linux-amd64 --help >/dev/null
           data=$(mktemp -d)
           ATRIUM_DATA="$data" ./dist/atrium-linux-amd64 status --json | tee /dev/stderr | grep -q '"ok":true'
       - name: 发 GitHub Release
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           (cd dist && sha256sum atrium-* > SHA256SUMS)
-          gh release create "$GITHUB_REF_NAME" dist/* --target "$GITHUB_SHA" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release create "$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" --generate-notes

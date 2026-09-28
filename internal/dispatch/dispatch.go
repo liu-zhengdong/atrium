@@ -22,11 +22,13 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/watch"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -245,7 +247,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			continue
 		}
 		seen[r.ID] = true
-		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
+		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk), Installed: workers.Installed(r.Adapter),
 			Exclusive: r.Adapter.Exclusive}
 		if i < len(preferred) {
@@ -255,6 +257,15 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			f.Problem = err.Error()
 		}
 		facts = append(facts, f)
+	}
+	req, err := requirement(ctx, db, t.ID)
+	if err != nil {
+		return PickView{}, err
+	}
+	for i := range facts {
+		if why := req.refusal(facts[i]); why != "" && facts[i].Refusal == "" {
+			facts[i].Refusal = why
+		}
 	}
 	sp, err := spares(ctx, d.env)
 	if err != nil {
@@ -552,7 +563,15 @@ func (d *dispatcher) record(ctx context.Context, t ledger.Task, run workers.Run)
 		return err
 	}
 	raw, _ := json.Marshal(run)
-	return ledger.Record(ctx, db, t.ID, workers.RunKind, actor, string(raw))
+	if err := ledger.Record(ctx, db, t.ID, workers.RunKind, actor, string(raw)); err != nil {
+		return err
+	}
+	// 关卡在工作树里查事实（gates.Workspace）；watch 按登记的进程看进展、判卡死（watch.Track）。
+	wt, _ := json.Marshal(map[string]string{"dir": run.Dir})
+	if err := ledger.Record(ctx, db, t.ID, gates.KindWorktree, actor, string(wt)); err != nil {
+		return err
+	}
+	return watch.Track(ctx, db, t.ID, watch.Proc{Role: "worker", PID: run.PID, Host: run.Host, Log: run.Log, Dir: run.Dir, At: run.At})
 }
 
 // track 登记进程并在后台等它退出。
@@ -667,6 +686,11 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 		raw, _ := json.Marshal(sig)
 		if err := ledger.Record(ctx, db, p.task, "quota_exhausted", actor, string(raw)); err != nil {
+			return err
+		}
+	}
+	if reply := p.adapter.LastReply(tail); reply != "" {
+		if err := ledger.Record(ctx, db, p.task, gates.KindResult, actor, reply); err != nil {
 			return err
 		}
 	}

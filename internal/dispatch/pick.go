@@ -11,6 +11,7 @@ import (
 type Fact struct {
 	ID        string
 	Tool      string
+	Model     string
 	Account   string
 	Trust     string
 	MaxRisk   string

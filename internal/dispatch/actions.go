@@ -12,6 +12,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org/agenda"
+	"github.com/liu-zhengdong/atrium/internal/watch"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -222,14 +224,35 @@ func Readable(text string) string {
 	return strings.Join(out, "\n") + "\n"
 }
 
-// Requeue 给 watch：卡住或临时错误转失败后重新入队。换人时避开原执行者；同一执行者重试就写死它。
-func Requeue(ctx context.Context, env *app.Env, id string, switchWorker bool, worker, risk string) error {
-	o := Options{Risk: risk}
-	if switchWorker {
-		o.Avoid = []string{worker}
-	} else {
-		o.Worker = worker
+// hook 接上 watch 的重新入队与周期任务的派活（服务进程里，Routes 装配时调）。
+func hook(env *app.Env) {
+	watch.Use(watch.Hooks{Requeue: func(ctx context.Context, task string, why watch.Why) error {
+		return Requeue(ctx, env, task, why)
+	}})
+	agenda.Enqueue = func(ctx context.Context, env *app.Env, task, by string) error {
+		_, err := Enqueue(ctx, env, task, Options{}, by)
+		return err
 	}
-	_, err := Enqueue(ctx, env, id, o, actor)
+}
+
+// Requeue 给 watch：卡住或读到信号转失败后重新入队。额度用尽、思考耗尽换人（避开原执行者），其余同一执行者再来。
+func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error {
+	run, err := workers.LastRun(ctx, env.DB, id)
+	if err != nil {
+		return err
+	}
+	o := Options{Risk: "low"}
+	if run != nil {
+		o.Risk, o.Secrets = run.Risk, run.Secrets
+	}
+	switch why.Signal {
+	case watch.SigQuota, watch.SigThinking:
+		if why.Worker != "" {
+			o.Avoid = []string{why.Worker}
+		}
+	default:
+		o.Worker = why.Worker
+	}
+	_, err = Enqueue(ctx, env, id, o, actor)
 	return err
 }

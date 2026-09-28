@@ -34,8 +34,8 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
-| `dispatch` | 桩 | 派活队列、挑执行者与机器、拉起；`task run/stop/tell/log` | `queue` |
-| `workers` | 桩 | 适配器、档案三层叠加；`workers`、`workers edit` | `worker_profiles` |
+| `dispatch` | 完成（hosts、quota 接线待合入，见 `dispatch/deps.go`） | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run/stop/tell/log` | `queue` |
+| `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`；`workers`、`workers edit` | `worker_profiles` |
 | `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务）；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `merge` | 完成 | 合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | 等版本、自升级、平滑重启、上线冒烟；`update` | — |
@@ -134,6 +134,15 @@ type Module struct {
 - 关卡（gates）：判过后调 `agenda.Settle(ctx, db, task, workdir)`，工作目录根有 `choice.json` 就登记成选项单（不合法返回 usage 错误，按关卡不过交回）。
 - dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；周期任务每轮建任务后调它。
 
+### 派活与执行者（`internal/dispatch`、`internal/workers`）
+
+- 执行者标识 `工具[+模型][:强度]`；`workers.Resolve(ctx, q, id)` → 三层叠加后的规则（trust、max_risk、checks、limits、model、端点）与正文。关卡、审阅判执行者用它，不直接读 `worker_profiles`。
+- 拉起记录：任务经历 kind `launch`（`workers.Run`：第几次、缘由、执行者、机器、pid、工作目录、日志、风险）；`workers.LastRun` 读。另按 gates 的约定记 `risk`（入队）、`worktree`（拉起）、`result`（退出，最后回复），并 `watch.Track`。
+- 日志信号：`workers.Classify(退出码, 日志尾, 现在)` → 额度用尽／临时错误／思考耗尽；`Adapter.Ended` 判收尾；`workers.WatchSignal` 给 watch。
+- 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；额度用尽、思考耗尽换人（至多 2 次）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
+- 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`，都已在 dispatch 的 Routes 里接上。只补队列行（`gates.Requeue`）也能派：没有 opts 时沿用上次拉起的执行者。
+- 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`、`PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
+
 ### 子进程（`internal/platform`）
 
 - 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()))`（带 `ATRIUM_WORKER=1`，不带 `ATRIUM_*` 与凭据），任务声明的凭据在其后逐个注入。
@@ -151,14 +160,14 @@ type Module struct {
 ```
 cmd/atrium ─→ service（serve 装载全部 Module）
 各包 Commands ─→ cli ─HTTP→ api.Router ─→ 各包 Routes
-dispatch ─→ ledger.Apply/SetFacts、org.Chain、workers、hosts、quota、pause、platform.Start
+dispatch ─→ ledger.Apply/SetFacts、org.Chain/GetSkill/SecretEnv、workers、gates（经历约定）、watch.Track、hosts、quota、pause、platform.Start
 gates    ─→ ledger.Apply/Record（查 PR 用 gh，经 platform）
 merge    ─→ ledger.Apply、platform（git、gh、快检查）
 release  ─→ service 的 restart 接口、ledger.Apply(Released)
 watch    ─→ ledger.Get/Apply、events.Emit(Overdue)、org、platform.KillTree
 dispatch、merge ─→ watch.Track（拉起执行者或检查后登记 pid、日志、工作树）
 dispatch ─→ watch.Use(Hooks{Requeue})：卡住或临时错误时重新入队（可换人、标额度）
-workers  ─→ watch.Use(Hooks{Signal})：从日志尾部读临时错误、思考耗尽、额度用尽
+workers  ─→ watch.Use(Hooks{Signal})：从日志尾部读临时错误、思考耗尽、额度用尽；leaders.SetLauncher：负责人唤醒按执行者组合拉起
 events   ─→ org（投递对象 org.Recipient）
 org/leaders ─→ org、events（Emit、Retarget）、ledger、platform；workers／dispatch 调 leaders.SetLauncher 接上拉起
 secretary、web ─→ 只读：ledger、org、events

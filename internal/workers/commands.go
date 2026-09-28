@@ -195,6 +195,7 @@ func asAPI(err error, target **api.Error) bool {
 
 // Routes 注册执行者接口。
 func Routes(r *api.Router, env *app.Env) {
+	hook(env)
 	r.Handle("GET /api/workers", func(q *api.Req) (any, error) {
 		if name := q.URL.Query().Get("name"); name != "" {
 			return Show(q.Context(), env.DB, name)

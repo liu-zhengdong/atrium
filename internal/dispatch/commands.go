@@ -30,6 +30,7 @@ type runBody struct {
 
 // Routes 注册派活接口。
 func Routes(r *api.Router, env *app.Env) {
+	hook(env)
 	r.Handle("POST /api/tasks/{id}/run", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "t")
 		if err != nil {

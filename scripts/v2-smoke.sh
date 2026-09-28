@@ -289,10 +289,10 @@ out=$(json task add 冒烟派活); run_id=$(jq -r .result.id <<<"$out")
 out=$(json task run "$run_id" --dry-run); has '(.result.pick.candidates|map(.id)|index("fakesh")) != null and .result.task.status == "todo"'
 out=$(json task run "$run_id" --worker fakesh --risk high || true); has '.ok == false and .error.code == "conflict"'
 out=$(json task run "$run_id" --worker fakesh); has '.result.queued and .result.position == 1 and .next == "atrium task log '"$run_id"' --follow"'
-out=$(json task wait "$run_id" --until running --timeout 20); has '.result.reached'
-out=$(json task log "$run_id" --follow); has '(.result.text|contains("worker=1 task='"$run_id"'")) and (.result.text|contains("DONE"))'
-out=$(json task show "$run_id"); has '.result.task.worker == "fakesh" and .result.task.host == "h1" and (.result.history|map(.kind)|index("launch")) != null'
-out=$(json task tell "$run_id" "补一句"); has '.ok'
+out=$(json task wait "$run_id" --timeout 30); has '.result.task.status == "done"'   # 没有仓库：关卡过了直接完成
+out=$(json task log "$run_id"); has '(.result.text|contains("worker=1 task='"$run_id"'")) and (.result.text|contains("DONE")) and .result.running == false'
+out=$(json task show "$run_id"); has '.result.task.worker == "fakesh" and .result.task.host == "h1" and ((.result.history|map(.kind)) as $k | ["launch","worktree","result","exit_ok"] - $k == [])'
+out=$(json task tell "$run_id" "补一句" || true); has '.ok == false and .error.code == "conflict"'
 out=$(json task stop "$run_id" || true); has '.ok == false and .error.code == "conflict"'
 
 step "stop"

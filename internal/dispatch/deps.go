@@ -5,12 +5,13 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 本文件是派活用到的别的包的能力，集中在一处接线：hosts（挑机器、远程拉起）、quota（富余、额度用尽标记）、
-// org（技能、凭据）。第二波并行开发时它们还没合入，先给只用本机、没有额度数据的缺省；合入后在这里换成真实调用。
+// org（技能、凭据）。hosts、quota 还没合入时先给只用本机、没有额度数据的缺省；合入后在这里换成真实调用。
 
 // HostNeed 是一件活对机器的要求（同 hosts.Need）。
 type HostNeed struct {
@@ -90,14 +91,12 @@ var (
 	}
 	// skillOf 是任务挂的技能：SKILL.md 路径、优先执行者、要的凭据。
 	skillOf = func(ctx context.Context, env *app.Env, name string) (Skill, error) {
-		return Skill{}, api.Conflict("任务挂了技能 %s，但技能库还没接上", name)
+		k, err := org.GetSkill(ctx, env.DB, env.Paths.Data, name)
+		return Skill{Path: k.Path, Workers: k.Workers, Secrets: k.Secrets}, err
 	}
-	// secretEnv 按名称从任务部门往上取凭据的值。
+	// secretEnv 按名称从任务部门往上取凭据的值（记下使用时间）。
 	secretEnv = func(ctx context.Context, env *app.Env, dept string, names []string) (map[string]string, error) {
-		if len(names) == 0 {
-			return map[string]string{}, nil
-		}
-		return nil, api.Conflict("任务要凭据，但凭据库还没接上")
+		return org.SecretEnv(ctx, env.DB, env.Paths.Data, dept, names)
 	}
 )
 

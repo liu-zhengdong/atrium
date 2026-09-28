@@ -10,6 +10,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -88,7 +89,7 @@ func queued(ctx context.Context, q store.Querier) ([]item, error) {
 			return nil, err
 		}
 		it := item{Task: t, Row: r.opts.Valid}
-		if r.opts.Valid {
+		if r.opts.Valid && r.opts.String != "" {
 			if err := json.Unmarshal([]byte(r.opts.String), &it.Opts); err != nil {
 				return nil, err
 			}
@@ -157,10 +158,14 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 	}
 	raw, _ := json.Marshal(o)
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO queue (task, enqueued_at, opts, by) VALUES (?, ?, ?, ?)
-			ON CONFLICT (task) DO UPDATE SET enqueued_at = excluded.enqueued_at, opts = excluded.opts, by = excluded.by`,
-			id, store.Now(), string(raw), actor)
-		return err
+		_, err := tx.ExecContext(ctx, `INSERT INTO queue (task, priority, enqueued_at, opts, by) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (task) DO UPDATE SET priority = excluded.priority, enqueued_at = excluded.enqueued_at,
+			opts = excluded.opts, by = excluded.by`, id, t.Priority.Rank(), store.Now(), string(raw), actor)
+		if err != nil {
+			return err
+		}
+		// 关卡按经历 risk 判要不要审阅（gates.Risk）。
+		return ledger.Record(ctx, tx, id, gates.KindRisk, actor, o.Risk)
 	}); err != nil {
 		return t, err
 	}
@@ -198,4 +203,33 @@ func union(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// require 是审阅任务对执行者的要求（gates 建审阅任务时记在经历 worker_require）：不同工具、不同模型、trust 够。
+type require struct {
+	NotTool  string `json:"not_tool"`
+	NotModel string `json:"not_model,omitempty"`
+	MinTrust string `json:"min_trust"`
+}
+
+func requirement(ctx context.Context, q store.Querier, task string) (require, error) {
+	var r require
+	body, ok, err := gates.Last(ctx, q, task, gates.KindRequire)
+	if err != nil || !ok {
+		return r, err
+	}
+	return r, json.Unmarshal([]byte(body), &r)
+}
+
+// refusal 判一位候选合不合审阅要求（纯函数）；合格返回空。
+func (r require) refusal(f Fact) string {
+	switch {
+	case r.NotTool != "" && f.Tool == r.NotTool:
+		return "审阅要换工具：与原执行者同是 " + f.Tool
+	case r.NotModel != "" && f.Model == r.NotModel:
+		return "审阅要换模型：与原执行者同是 " + f.Model
+	case r.MinTrust != "" && workers.TrustLevel(f.Trust) < workers.TrustLevel(r.MinTrust):
+		return "审阅者 trust 至少 " + r.MinTrust + "，它是 " + f.Trust
+	}
+	return ""
 }

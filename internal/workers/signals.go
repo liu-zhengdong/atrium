@@ -26,6 +26,8 @@ type Signal struct {
 	ResetAt  int64  `json:"reset_at,omitempty"` // 额度恢复时刻（Unix 毫秒）；0 表示报文没写
 }
 
+var timeNow = time.Now
+
 // ExitUnknown：接管的进程（服务重启后）拿不到退出码。
 const ExitUnknown = -1
 
@@ -381,3 +383,39 @@ func Readable(line string) string {
 }
 
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
+
+// maxReply 是记下的最后回复的上限（字符）。
+const maxReply = 8000
+
+// LastReply 取执行者最后一条回复（纯函数）：stream-json 取收尾事件的 result（agy 取 response），
+// opencode 取最后一段文字；文本日志取末尾若干行。gates 从这里读审阅结论。
+func (a *Adapter) LastReply(tail string) string {
+	lines := strings.Split(strings.TrimRight(tail, "\n"), "\n")
+	if a.JSON {
+		for i := len(lines) - 1; i >= 0; i-- {
+			e := parseEvent(lines[i])
+			switch {
+			case e == nil:
+			case e.str("type") == "result":
+				return clip(e.str("result"))
+			case e.str("event") == "result":
+				return clip(e.obj("result").str("response"))
+			case e.str("type") == "text":
+				return clip(e.obj("part").str("text"))
+			}
+		}
+		return ""
+	}
+	if len(lines) > 60 {
+		lines = lines[len(lines)-60:]
+	}
+	return clip(strings.Join(lines, "\n"))
+}
+
+func clip(s string) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > maxReply {
+		return "…" + string(r[len(r)-maxReply:])
+	}
+	return s
+}

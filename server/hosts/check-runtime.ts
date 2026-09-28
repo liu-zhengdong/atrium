@@ -34,6 +34,8 @@ export type CheckRequest = {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   urgent?: boolean;
+  /** 本机跑前先按锁文件装依赖（local-check.ts 的 install）。 */
+  install?: boolean;
   /** 任务写了避开的主机（t215），及上一轮在上面没跑成的主机（t204）：检查不派过去。 */
   avoid?: readonly number[];
   onStatus?: (status: "queued" | "started", log: string, host: string) => void;
@@ -138,6 +140,7 @@ export class CheckDispatch {
       env: request.env,
       signal: request.signal,
       urgent: request.urgent,
+      install: request.install,
       ...(this.deps.queue ? { queue: this.deps.queue } : {}),
       onStatus: (status, log) => request.onStatus?.(status, log, localRef),
     });

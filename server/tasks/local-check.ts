@@ -12,6 +12,7 @@ import { killTree, spawnShell } from "../platform/index.ts";
 import { workerEnvironment } from "./worker-env.ts";
 import { checkPlacement, CHECK_TIMEOUT_MINUTES } from "./host-load.ts";
 import { missingCommand } from "./check-outcome.ts";
+import { installDeps } from "./check-deps.ts";
 
 /** 本地检查只由运行时执行；队列在同一服务进程的所有任务之间共享。超时按主机配置（ATRIUM_CHECK_TIMEOUT_MINUTES），这是缺省。 */
 export const LOCAL_CHECK_TIMEOUT_MS = CHECK_TIMEOUT_MINUTES * 60_000;
@@ -197,6 +198,8 @@ export async function runLocalCheck(input: {
   urgent?: boolean;
   /** 接着日志已有内容写（代理先把取提交、装依赖的输出写在前面）。 */
   append?: boolean;
+  /** 先按锁文件装依赖（t251，合入检查用：远程做的任务在本机另建的工作树没装过）。 */
+  install?: boolean;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
   const queue = input.queue ?? sharedLocalChecks;
@@ -228,7 +231,27 @@ export async function runLocalCheck(input: {
       } catch {
         // 检查结果仍由关卡落库；进度事件失败不能中断检查。
       }
-      const fd = openSync(log, input.append ? "a" : "w", 0o600);
+      let append = input.append;
+      if (input.install) {
+        if (!append) writeFileSync(log, "", { mode: 0o600 });
+        append = true;
+        const failed = await installDeps(
+          input.worktree,
+          log,
+          input.env,
+          input.signal,
+        );
+        if (failed)
+          return {
+            status: "error",
+            command,
+            log,
+            detail: failed,
+            failedTests: [],
+            infra: failed,
+          };
+      }
+      const fd = openSync(log, append ? "a" : "w", 0o600);
       let child;
       try {
         child = spawnShell(command, {

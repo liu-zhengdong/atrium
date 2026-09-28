@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../../problem.ts";
 import type { TaskStatus } from "./state.ts";
 import type { ChildSummary } from "./ledger-summary.ts";
@@ -9,6 +9,8 @@ import type { Rollup } from "./rollup.ts";
 import { applyDeliveryEvent } from "../gates/delivery-records.ts";
 import { storedHosts } from "../../hosts/state.ts";
 import { priorityOf, type Priority } from "./priority.ts";
+import { all, one } from "../../sqlite.ts";
+export { all, one };
 
 export type TaskRow = {
   id: number;
@@ -184,20 +186,6 @@ export function parseTaskRef(value: unknown, field = "id"): number {
   return id;
 }
 
-export function one<T>(
-  db: DatabaseSync,
-  sql: string,
-  ...params: SQLInputValue[]
-) {
-  return db.prepare(sql).get(...params) as T | undefined;
-}
-export function all<T>(
-  db: DatabaseSync,
-  sql: string,
-  ...params: SQLInputValue[]
-) {
-  return db.prepare(sql).all(...params) as T[];
-}
 /** 任务有没有过某类事件：按 (task_id,kind) 索引直查，不受事件多少影响。 */
 export const hasEvent = (db: DatabaseSync, id: number, kind: string) =>
   !!one(

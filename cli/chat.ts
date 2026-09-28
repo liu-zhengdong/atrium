@@ -22,7 +22,8 @@ import { recordNext } from "./contract.ts";
 import { eventLine } from "./events.ts";
 import { mcpHint, oauthHint } from "./opencode-auth.ts";
 import { clip } from "./format.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 import {
   OpencodeClient,
   newPassword,
@@ -77,11 +78,6 @@ export const CHAT_TOOLS: Record<string, ChatMode> = {
 const SUBSCRIBER = "secretary";
 /** 新会话没有上次的上下文：提醒秘书先读自己在 Atrium 里的备忘与决定记录。 */
 const NEW_SESSION_HINT = "；新会话先让秘书读备忘与决定记录：atrium memo show";
-
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 
 /** 选工具：--tool，其次 ATRIUM_SECRETARY_TOOL，缺省 opencode。 */
 export function chatMode(tool: string) {

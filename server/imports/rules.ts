@@ -4,6 +4,7 @@ import { POINT_LIMITS } from "../org/points.ts";
 import { importMark, markImported } from "./marks.ts";
 import { updateTask } from "../tasks/ledger/ledger.ts";
 import { dequeue } from "../tasks/dispatch/queue.ts";
+import { hasColumn, hasTable } from "../sqlite.ts";
 
 /**
  * 规矩并进要点（一次性迁移）：此前规矩散在硬边界、原则决定、章程、管方面的部门、产品部里；
@@ -27,16 +28,6 @@ export const RESEARCH_BRIEF = [
   "最后的回复用几行说清楚提了哪几个选项、推荐哪个、为什么。",
 ].join("\n\n");
 
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
-const hasColumn = (db: DatabaseSync, table: string, column: string) =>
-  all<{ name: string }>(db, `PRAGMA table_info(${table})`).some(
-    (c) => c.name === column,
-  );
 const clip = (text: string, max: number) =>
   Array.from(text).length > max
     ? `${Array.from(text)

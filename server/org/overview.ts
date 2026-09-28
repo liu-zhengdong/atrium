@@ -163,7 +163,7 @@ export type Overview = {
   stages: Stage[];
 };
 
-const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+export const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 const list = (value: unknown) =>
   Array.isArray(value)
     ? value.filter((v): v is string => typeof v === "string" && !!v.trim())

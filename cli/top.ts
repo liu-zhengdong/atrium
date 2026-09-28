@@ -3,7 +3,8 @@ import { Problem } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
 import { oneLine, pad, printJson, width } from "./format.ts";
 import type { Client } from "./service.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
 import { renderTopMap } from "./map.ts";
 import { DEPTH_MAX, type MapTreeNode } from "../server/map/view.ts";
@@ -156,10 +157,6 @@ export type Snapshot = {
 };
 
 // 不从 main.ts 取值：测试先加载本模块，main.ts 再回头引入会撞上循环初始化。
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async (): Promise<Client> =>
   (await import("./service.ts")).connect();
 

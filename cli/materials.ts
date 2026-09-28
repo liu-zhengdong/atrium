@@ -19,6 +19,7 @@ import {
 import { recordNext } from "./contract.ts";
 import { oneLine, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 
 /**
  * 资料（t192）：挂在节点上的设计稿、调研报告这类文件或目录，短号 mN。
@@ -26,10 +27,6 @@ import type { Command, Values } from "./main.ts";
  * 执行者按需 get；清理只归档不删（archive / restore / keep），真删（rm）只有用户。
  */
 
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async () => (await import("./service.ts")).connect();
 
 type Material = {

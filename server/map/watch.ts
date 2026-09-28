@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { hasTable } from "../sqlite.ts";
 
 /**
  * 全景网页的变更检测：全服务一份。
@@ -32,11 +33,6 @@ const WATCHED = [
 export const MAP_REVISION_SQL = "SELECT n FROM map_revision WHERE k=1";
 
 const ready = new WeakSet<DatabaseSync>();
-
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?")
-    .get(name);
 
 function createRevisionTable(db: DatabaseSync) {
   db.exec(`CREATE TABLE IF NOT EXISTS map_revision (

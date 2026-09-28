@@ -9,6 +9,7 @@ import {
 } from "../org/model.ts";
 import { LOCAL_USER, SECRETARY } from "../../shared/user.ts";
 import { atomically, parseTaskRef } from "../tasks/ledger/ledger-model.ts";
+import { marks } from "../sqlite.ts";
 
 /**
  * 决定记录：只记用户拍板的事与原因，给人回看的档案（不附进任何提示词）。要守的规矩写成要点（org/points.ts）；
@@ -190,10 +191,6 @@ export type Row = {
   superseded_at: number | null;
   created_at: number;
 };
-
-/** 参数化 IN 列表的占位符。 */
-export const marks = (list: readonly unknown[]) =>
-  list.map(() => "?").join(",");
 
 function append<K, V>(map: Map<K, V[]>, key: K, value: V) {
   const list = map.get(key);

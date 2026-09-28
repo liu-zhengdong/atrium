@@ -1,6 +1,8 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { actsForUser } from "../../shared/user.ts";
+import { all, one } from "../sqlite.ts";
+export { all, one };
 
 /** 旧库里还有 concern（关注点，已下线）：读得出来，不再新建。 */
 export type Kind = "org" | "project" | "module" | "concern";
@@ -37,16 +39,6 @@ export type RevisionRow = {
   snapshot: string;
 };
 export const ref = (id: number) => `o${id}`;
-export const one = <T>(
-  db: DatabaseSync,
-  sql: string,
-  ...args: SQLInputValue[]
-) => db.prepare(sql).get(...args) as T | undefined;
-export const all = <T>(
-  db: DatabaseSync,
-  sql: string,
-  ...args: SQLInputValue[]
-) => db.prepare(sql).all(...args) as T[];
 /** 已在事务里就并进外层，不另开。 */
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
   if (db.isTransaction) return fn();

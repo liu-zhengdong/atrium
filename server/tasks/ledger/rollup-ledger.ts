@@ -10,6 +10,7 @@ import {
   type Rollup,
   type SubtreeRow,
 } from "./rollup.ts";
+import { marks } from "../../sqlite.ts";
 
 /**
  * 总任务（t190）的取数与落账；判定在 rollup.ts。
@@ -19,7 +20,6 @@ import {
 /** 一次汇总最多读多少个子孙（k23：有界）；超出的标 truncated，进度写「+」。 */
 export const ROLLUP_MAX = 5000;
 const BATCH = 400;
-const marks = (list: readonly unknown[]) => list.map(() => "?").join(",");
 
 /** 这个任务下面有没有（非帮手）子任务。 */
 export const isTotal = (db: DatabaseSync, id: number) =>

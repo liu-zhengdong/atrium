@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import type { Overview } from "../server/org/overview.ts";
@@ -16,8 +17,6 @@ import type { LeaderBrief } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
 import { defaultActor } from "./worker-guard.ts";
 
-const str = (values: Values, key: string) =>
-  typeof values[key] === "string" ? (values[key] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
 const path = (value: string) => encodeURIComponent(value);
 const as = (values: Values) => {

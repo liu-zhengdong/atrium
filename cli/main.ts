@@ -50,17 +50,6 @@ export type Command = {
   run(input: Input): Promise<number | void>;
 };
 
-export const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
-export const strs = (values: Values, key: string) => {
-  const value = values[key];
-  if (Array.isArray(value))
-    return value.filter((item): item is string => typeof item === "string");
-  return typeof value === "string" ? [value] : [];
-};
-
 const updateCommand: Command = {
   args: "[--to <版本>] [--repo <仓库>]",
   about: "检查并更新 Atrium 版本，安装新版本并展示改动摘要",

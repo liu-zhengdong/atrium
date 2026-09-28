@@ -25,19 +25,13 @@ import {
   type LiveRow,
   type TaskRow,
 } from "./view.ts";
+import { hasTable } from "../sqlite.ts";
 
 /**
  * 全景网页的专员、技能、执行者视图（只读）：组织根的三个页签与专员页、执行者页。
  * 数据来自专员表、组织技能、交付记录与执行者档案（`atrium specialist`、`atrium workers` 同一份），
  * 这里只挑网页要的字段并把事实翻成人话（结果标签、经过、观察），判定写成纯函数。
  */
-
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
 
 // ---- 技能 ----
 

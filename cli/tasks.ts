@@ -31,6 +31,7 @@ import {
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Input, Values } from "./main.ts";
+import { str } from "./args.ts";
 import { signedPercent, staleLabel } from "../server/tasks/quota/percent.ts";
 import type {
   PickAccount,
@@ -49,10 +50,6 @@ import {
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
 // 不从 main.ts 取值：测试会先加载本模块，main.ts 再回头引入时会撞上循环初始化。
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async () => (await import("./service.ts")).connect();
 const displayStatus = (
   task: Pick<Task, "status" | "delivery_stage" | "processing"> & {

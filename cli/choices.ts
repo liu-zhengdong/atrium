@@ -4,17 +4,14 @@ import type { Choice, Decided } from "../server/choices/store.ts";
 import { commentLine } from "../server/choices/model.ts";
 import { recordNext } from "./contract.ts";
 import { oneLine, printJson, when } from "./format.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 
 /**
  * 选项单（atrium choice …）：调研提 3–5 个选项，用户拍板做哪些。
  * 选中的在该节点下建任务交 leader 拆解，没选的连同说明记成决定记录。
  */
 
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async () => (await import("./service.ts")).connect();
 const enc = encodeURIComponent;
 

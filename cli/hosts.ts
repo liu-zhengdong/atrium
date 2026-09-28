@@ -3,6 +3,7 @@ import { recordNext } from "./contract.ts";
 import { defaultActor } from "./worker-guard.ts";
 import { oneLine, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { str, strs } from "./args.ts";
 
 /**
  * 执行机器（#358 第 1 步，atrium host …）：本机是 h1，别的机器装好 Atrium 后用 `atrium agent` 接入。
@@ -10,16 +11,6 @@ import type { Command, Values } from "./main.ts";
  */
 
 // 不从 main.ts 取值：测试会先加载本模块，main.ts 再回头引入时会撞上循环初始化。
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
-const strs = (values: Values, key: string) => {
-  const value = values[key];
-  if (Array.isArray(value))
-    return value.filter((item): item is string => typeof item === "string");
-  return typeof value === "string" ? [value] : [];
-};
 const client = async () => (await import("./service.ts")).connect();
 const enc = encodeURIComponent;
 /** 以谁的名义（秘书会话带 ATRIUM_AS=secretary），停下的任务在停止事件里记发起者（t239）。 */

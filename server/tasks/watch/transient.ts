@@ -1,4 +1,4 @@
-import { parseEvents, type JsonEvent } from "../logs/json-log.ts";
+import { object, parseEvents, type JsonEvent } from "../logs/json-log.ts";
 
 /**
  * 供应商或网络临时错误（#262）：从执行者日志识别证书校验、连接重置、fetch failed、过载、5xx，
@@ -41,11 +41,6 @@ const MARKS: readonly [RegExp, string][] = [
 /** 文本日志只看最后这么多行非空行：更早的是执行者读到的文件、命令输出，里面也会有这些词。 */
 const TAIL_LINES = 12;
 const EVIDENCE_MAX = 200;
-
-const object = (value: unknown) =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonEvent)
-    : undefined;
 
 const oneLine = (text: string) => {
   const line = text.replace(/\s+/g, " ").trim();

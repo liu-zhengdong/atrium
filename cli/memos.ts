@@ -4,6 +4,7 @@ import { decisionLine, type Decision } from "../server/memos/decisions.ts";
 import { recordNext } from "./contract.ts";
 import { printJson, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { str, strs } from "./args.ts";
 import { defaultSubscriber } from "./worker-guard.ts";
 
 /**
@@ -12,16 +13,6 @@ import { defaultSubscriber } from "./worker-guard.ts";
  * 决定记录：只记用户拍板的事与原因，给人回看；要守的规矩写成要点（org point-add），处理过程写任务备注。
  */
 
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
-const strs = (values: Values, key: string) => {
-  const value = values[key];
-  if (Array.isArray(value))
-    return value.filter((item): item is string => typeof item === "string");
-  return typeof value === "string" ? [value] : [];
-};
 const client = async () => (await import("./service.ts")).connect();
 const ownerOf = (values: Values) => {
   const who = (str(values, "as") ?? defaultSubscriber()).trim();

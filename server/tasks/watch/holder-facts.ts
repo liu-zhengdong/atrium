@@ -15,6 +15,7 @@ import {
   type HolderFacts,
 } from "./holder.ts";
 import { scheduleOf } from "../ledger/schedule.ts";
+import { hasTable } from "../../sqlite.ts";
 
 /** 从账本、收件箱取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
 
@@ -63,9 +64,6 @@ function blockOf(event: TaskEventRow) {
     gates: gates.filter((g): g is string => typeof g === "string"),
   };
 }
-
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", name);
 
 export function holderFacts(
   db: DatabaseSync,

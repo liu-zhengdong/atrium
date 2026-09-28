@@ -1,12 +1,11 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 import { printJson, when } from "./format.ts";
 import { recordNext } from "./contract.ts";
 
-const str = (values: Values, key: string) =>
-  typeof values[key] === "string" ? (values[key] as string) : undefined;
 const api = async () => (await import("./service.ts")).connect();
 const enc = encodeURIComponent;
 

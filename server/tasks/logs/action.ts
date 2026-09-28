@@ -7,6 +7,7 @@ import {
   parseEvents,
   textOf,
   type JsonEvent,
+  object,
 } from "./json-log.ts";
 
 /**
@@ -124,11 +125,6 @@ const FIXED: Record<string, string> = {
   search_web: "搜网页",
   command_status: "看后台输出",
 };
-
-const object = (value: unknown) =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonEvent)
-    : undefined;
 
 /** 工具入参里的文字；codex 的 shell 参数是数组（["bash","-lc","ls"]）。 */
 function textIn(input: JsonEvent | undefined, key: string) {

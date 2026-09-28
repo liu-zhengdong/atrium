@@ -28,7 +28,8 @@ export function parseEvents(text: string): JsonEvent[] {
   return events;
 }
 
-const object = (value: unknown) =>
+/** 是 JSON 对象就当事件用，否则 undefined。 */
+export const object = (value: unknown) =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonEvent)
     : undefined;

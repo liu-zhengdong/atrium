@@ -27,6 +27,7 @@ import {
   staleSecret,
   type SecretCandidate,
 } from "./model.ts";
+import { hasTable, marks } from "../sqlite.ts";
 
 /**
  * 凭据的存储：`node_secrets` 一个凭据一行（只有名称、时间、谁设的、清理线索，没有值），
@@ -78,14 +79,6 @@ export type SecretRow = {
 export const secretsRoot = (data: string) => join(data, "secrets");
 const valueFile = (data: string, id: number) =>
   join(secretsRoot(data), String(id));
-
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
-const marks = (n: number) => Array.from({ length: n }, () => "?").join(",");
 
 /** 给人看的一行：没有值，也不给值的长度。 */
 export function secretView(
@@ -308,7 +301,7 @@ export function staleSecrets(
   const list = byId(db);
   return all<SecretRow>(
     db,
-    `SELECT * FROM node_secrets WHERE archived_at IS NULL AND keep_at IS NULL AND node_id IN (${marks(nodeIds.length)}) ORDER BY id LIMIT 2000`,
+    `SELECT * FROM node_secrets WHERE archived_at IS NULL AND keep_at IS NULL AND node_id IN (${marks(nodeIds)}) ORDER BY id LIMIT 2000`,
     ...nodeIds,
   )
     .map((row) => ({ row, view: secretView(row, list, now) }))
@@ -322,7 +315,7 @@ export function markSecretsHinted(
 ) {
   if (!ids.length) return;
   db.prepare(
-    `UPDATE node_secrets SET hinted_at=? WHERE id IN (${marks(ids.length)})`,
+    `UPDATE node_secrets SET hinted_at=? WHERE id IN (${marks(ids)})`,
   ).run(now, ...ids);
 }
 
@@ -378,7 +371,7 @@ export function findSecrets(
     names.length && chain.length && hasTable(db, "node_secrets")
       ? all<SecretCandidate>(
           db,
-          `SELECT id,node_id,name FROM node_secrets WHERE archived_at IS NULL AND name IN (${marks(names.length)}) AND node_id IN (${marks(chain.length)})`,
+          `SELECT id,node_id,name FROM node_secrets WHERE archived_at IS NULL AND name IN (${marks(names)}) AND node_id IN (${marks(chain)})`,
           ...names,
           ...chain,
         )
@@ -489,6 +482,6 @@ export function markSecretsUsed(
 ) {
   if (!ids.length) return;
   db.prepare(
-    `UPDATE node_secrets SET last_used_at=?,last_used_task=? WHERE id IN (${marks(ids.length)})`,
+    `UPDATE node_secrets SET last_used_at=?,last_used_task=? WHERE id IN (${marks(ids)})`,
   ).run(now, taskId, ...ids);
 }

@@ -12,7 +12,7 @@ import {
   ref,
   type NodeRow,
 } from "../org/model.ts";
-import { overviewOf, type Overview, type Part } from "../org/overview.ts";
+import { overviewOf, str, type Overview, type Part } from "../org/overview.ts";
 import { chainPoints, nodePoints, type Point } from "../org/points.ts";
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { choicesForNodes, pendingChoices } from "../choices/store.ts";
@@ -24,6 +24,7 @@ import {
   rollupLabel,
   type RollupStatus,
 } from "../tasks/ledger/rollup.ts";
+import { hasColumn } from "../sqlite.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
@@ -116,7 +117,6 @@ export type MapPart = Part & {
 };
 export const DEPTH_MAX = 8;
 const OPEN = "('todo','running','blocked')";
-const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 
 /** 本块第一句：人话「是什么」；一行以内。 */
 export function firstLine(text: string, max = 80): string {
@@ -477,11 +477,6 @@ export function taskView(
   };
 }
 
-function hasColumn(db: DatabaseSync, table: string, column: string) {
-  return all<{ name: string }>(db, `PRAGMA table_info(${table})`).some(
-    (c) => c.name === column,
-  );
-}
 export const taskColumns = (db: DatabaseSync) =>
   `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "host_id") ? "host_id" : "NULL AS host_id"},${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "prio") ? "prio" : "NULL AS prio"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";

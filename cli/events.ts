@@ -4,14 +4,11 @@ import { recordNext } from "./contract.ts";
 import { defaultSubscriber } from "./worker-guard.ts";
 import { clip, printJson, when } from "./format.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
-import type { Command, Values } from "./main.ts";
+import type { Command } from "./main.ts";
+import { str } from "./args.ts";
 
 /** 事件投递的命令行（#262）：订阅者挂着 wait 取一批事件，处理完 ack；ack 前重启也不丢。 */
 
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 const client = async () => (await import("./service.ts")).connect();
 
 export function eventLine(event: InboxEvent) {

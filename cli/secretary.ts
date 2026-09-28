@@ -17,16 +17,12 @@ import type { Listener } from "../server/tasks/events/events.ts";
 import { recordNext } from "./contract.ts";
 import { printJson, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 
 /**
  * `atrium secretary bridge`（t243）：把秘书要处理的事件注入 Claude Code 秘书会话（原生界面不变）。
  * 常驻循环在 `secretary-bridge.ts`（按需加载），判定在 `server/tasks/secretary/bridge-plan.ts`。
  */
-
-const str = (values: Values, key: string) => {
-  const value = values[key];
-  return typeof value === "string" ? value : undefined;
-};
 
 /** SessionStart hook 里跑的命令：后台起 bridge 后立即返回。 */
 export const BRIDGE_HOOK_COMMAND = "atrium secretary bridge --detach";

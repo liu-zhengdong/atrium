@@ -1,6 +1,6 @@
 import { ADAPTERS, type Tool } from "../adapters/index.ts";
 import { cliAdopted } from "../adapters/cli-outcome.ts";
-import { parseEvents, type JsonEvent } from "../logs/json-log.ts";
+import { object, parseEvents, type JsonEvent } from "../logs/json-log.ts";
 
 /**
  * 接管后退出的执行者（#262）：服务重启后按 pid 接管的进程没有句柄，退出码不可得。
@@ -18,11 +18,6 @@ export type AdoptedEnd =
   | { end: "clean"; evidence: string }
   | { end: "error"; evidence: string }
   | { end: "unknown" };
-
-const object = (value: unknown) =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonEvent)
-    : undefined;
 
 function streamEnd(events: JsonEvent[], tool: "claude" | "cursor"): AdoptedEnd {
   const result = events.findLast((event) => event.type === "result");

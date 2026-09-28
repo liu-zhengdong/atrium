@@ -18,6 +18,7 @@ import {
   writeMemo,
   type Memo,
 } from "../memos/store.ts";
+import { hasTable } from "../sqlite.ts";
 
 export { MEMO_MAX, memoProblem } from "../memos/store.ts";
 
@@ -84,13 +85,6 @@ export function ensureLeaderTables(db: DatabaseSync) {
     wakes INTEGER NOT NULL DEFAULT 0)`);
   ensureMemoTables(db);
 }
-
-const hasTable = (db: DatabaseSync, name: string) =>
-  !!one(
-    db,
-    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?",
-    name,
-  );
 
 export const leaderRef = (id: number) => `a${id}`;
 

@@ -10,6 +10,7 @@ import {
 import type { MapTreeNode } from "../server/map/view.ts";
 import type { Context } from "../server/map/context.ts";
 import type { Command, Values } from "./main.ts";
+import { str } from "./args.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import { fit } from "./top-plan.ts";
@@ -22,8 +23,6 @@ import { defaultActor } from "./worker-guard.ts";
  * - `map edit` 与 `org add` 是唯一的改法，网页不提供编辑。
  */
 
-const str = (values: Values, key: string) =>
-  typeof values[key] === "string" ? (values[key] as string) : undefined;
 const list = (values: Values, key: string) => {
   const value = values[key];
   if (value === undefined) return undefined;

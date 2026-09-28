@@ -93,7 +93,7 @@ import { listLeaders } from "../leaders/model.ts";
 import { hasOrg } from "../org/task-node.ts";
 import { existsSync } from "node:fs";
 import { HostLoad, hostView } from "./host-load.ts";
-import { OrphanReaper, spawnOwner } from "./orphans.ts";
+import { OrphanReaper, recognizer, spawnOwner } from "./orphans.ts";
 import { sharedLocalChecks } from "./local-check.ts";
 import { skipIfBusy } from "./reentry.ts";
 import { RemoteHosts } from "../hosts/remote.ts";
@@ -243,7 +243,8 @@ export class TaskRunner {
     importWorkerProfiles(db, options.workersDir);
     // 本机限额只看服务自己的环境（不是给执行者的 options.env）。
     const owner = spawnOwner(options.data);
-    this.host = options.host ?? HostLoad.fromEnv(process.env, owner);
+    this.host =
+      options.host ?? HostLoad.fromEnv(process.env, recognizer(db, owner));
     this.orphans = new OrphanReaper(db, owner, killTree);
     sharedLocalChecks.limit = this.host.limits.maxChecks;
     sharedLocalChecks.timeoutMs = this.host.limits.checkTimeoutMs;

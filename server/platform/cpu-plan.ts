@@ -12,7 +12,8 @@
  *   Linux 上父进程收回子进程时内核把子进程的累计并进父进程（/proc 的 cutime+cstime），一起算上就不漏；
  *   macOS 的 `ps` 拿不到这一项，改用整机忙碌时间减去看得见的进程，差额按进出进程的多少分给 Atrium。
  * - 父进程先退出的子孙（执行者退出后留在后台的测试、执行者起的隔离服务）被 1 号进程收养，
- *   按父子关系就不在树里了：上次在树里的进程只要还活着就继续算，带 Atrium 标记环境变量的进程也算。
+ *   按父子关系就不在树里了：上次在树里的进程只要还活着就继续算，认得出是 Atrium 拉起的也算
+ *   （Linux 读标记环境变量；macOS 的 ps 读不到别的进程的环境，按工作目录落在哪个任务的工作树里认）。
  */
 
 import type { Invocation, Platform } from "./plan.ts";
@@ -21,13 +22,15 @@ export type { Invocation, Platform };
 
 /**
  * 一个进程的读数：cpu 在累计读数里是秒（只算它自己），在瞬时读数里是核数；
- * children 是它已收回的子进程的累计秒数（只有 Linux 有）。
+ * children 是它已收回的子进程的累计秒数（只有 Linux 有）；
+ * start 是启动时刻（毫秒，macOS 由 ps 的 etime 推算，精度到秒、不早于实际启动）。
  */
 export type ProcCpu = {
   pid: number;
   ppid: number;
   cpu: number;
   children?: number;
+  start?: number;
 };
 
 /** 整机累计 CPU 时间（os.cpus 各核相加，单位不论）：忙的、总的，与核数。 */
@@ -42,7 +45,7 @@ export type CpuSnapshot = {
 
 /**
  * 怎么列进程：Linux 直接读 /proc（不起进程，精度到时钟节拍）；
- * macOS 用 `ps`（time 是累计 CPU，分:秒.百分秒）；Windows 经 PowerShell 查性能计数器
+ * macOS 用 `ps`（time 是累计 CPU，分:秒.百分秒；etime 是已运行时长，推算启动时刻，lstart 随语言环境变不用）；Windows 经 PowerShell 查性能计数器
  * （[wmisearcher] 是内置类型，不靠模块自动加载，白名单环境里也能用）。
  */
 export function cpuSource(
@@ -67,40 +70,58 @@ export function cpuSource(
     kind: "command",
     read: "total",
     command: "ps",
-    args: ["-A", "-o", "pid=,ppid=,time="],
+    args: ["-A", "-o", "pid=,ppid=,time=,etime="],
   };
 }
 
 /**
- * 怎么读别的进程的环境变量（认 Atrium 标记用）：Linux 读 /proc/<pid>/environ；
- * macOS 等用 `ps -E`（环境接在命令行后面，只看得到自己用户的进程）；Windows 读不到，为 null。
+ * 怎么认 Atrium 拉起的进程（t203）：
+ * - Linux 读 /proc/<pid>/environ 里的标记环境变量（子孙继承，最准）；
+ * - macOS 等的 `ps` 读不到进程环境（新版连自己起的也读不到），改看被 1 号收养的进程的工作目录
+ *   落在哪个任务的工作树里（`lsof`，只看得到自己用户的进程），再按启动时刻对任务的起止；
+ * - Windows 读不到别的进程的环境，也没有现成的工作目录读法，不认（只靠进程树与上次的树）。
  */
-export function envSource(
-  platform: Platform,
-  pids: readonly number[],
-): { kind: "proc" } | ({ kind: "command" } & Invocation) | null {
+export function markSource(platform: Platform): "env" | "cwd" | null {
   if (platform === "win32") return null;
-  if (platform === "linux" || platform === "android") return { kind: "proc" };
+  if (platform === "linux" || platform === "android") return "env";
+  return "cwd";
+}
+
+/** 读这些进程的工作目录：`lsof -F` 输出 p<pid>、f<fd>、n<路径> 各一行。 */
+export function cwdInvocation(pids: readonly number[]): Invocation {
   return {
-    kind: "command",
-    command: "ps",
-    args: ["-E", "-ww", "-o", "pid=,command=", "-p", pids.join(",")],
+    command: "lsof",
+    args: ["-a", "-d", "cwd", "-p", pids.join(","), "-F", "n"],
   };
 }
 
-const envToken = (name: string) => new RegExp(`(?:^|\\s)${name}=(\\S+)`);
-
-/** `ps -E -o pid=,command=` 的输出里取出带 name 变量的进程：pid → 值。 */
-export function parsePsEnv(text: string, name: string): Map<number, string> {
+/** `lsof -a -d cwd -F n` 的输出：pid → 工作目录；坏行跳过。 */
+export function parseLsofCwd(text: string): Map<number, string> {
   const found = new Map<number, string>();
-  const token = envToken(name);
+  let pid: number | null = null;
   for (const line of text.split("\n")) {
-    const match = /^\s*(\d+)\s(.*)$/.exec(line);
-    const pid = pidOf(match?.[1]);
-    const value = match ? token.exec(match[2]!)?.[1] : undefined;
-    if (pid !== null && value !== undefined) found.set(pid, value);
+    if (line.startsWith("p")) pid = pidOf(line.slice(1));
+    else if (line.startsWith("n/") && pid !== null && !found.has(pid))
+      found.set(pid, line.slice(1));
   }
   return found;
+}
+
+/**
+ * 两次采样里同一个 pid 还是不是同一个进程：累计读数变小、启动时刻差出 2 秒以上就是 pid 被复用了。
+ * 瞬时读数不比较 CPU。
+ */
+export function sameProcess(
+  before: ProcCpu,
+  now: ProcCpu,
+  kind: CpuSnapshot["kind"],
+): boolean {
+  if (kind === "total" && now.cpu < before.cpu) return false;
+  return (
+    before.start === undefined ||
+    now.start === undefined ||
+    Math.abs(now.start - before.start) <= 2000
+  );
 }
 
 /** /proc/<pid>/environ（NUL 分隔）里 name 的值；没有为 null。 */
@@ -133,16 +154,24 @@ const pidOf = (text: string | undefined) => {
     : null;
 };
 
-/** `ps -A -o pid=,ppid=,time=` 的输出；坏行跳过。 */
-export function parsePs(text: string): ProcCpu[] {
+/**
+ * `ps -A -o pid=,ppid=,time=,etime=` 的输出；坏行跳过。etime（`[[天-]时:]分:秒`）给了且看得懂时，
+ * 按采样时刻 at 推算启动时刻。
+ */
+export function parsePs(text: string, at?: number): ProcCpu[] {
   const procs: ProcCpu[] = [];
   for (const line of text.split("\n")) {
-    const [pidText, ppidText, time] = line.trim().split(/\s+/);
+    const [pidText, ppidText, time, etime] = line.trim().split(/\s+/);
     const pid = pidOf(pidText);
     const ppid = pidOf(ppidText);
     const cpu = time === undefined ? null : cpuTimeSeconds(time);
-    if (pid !== null && ppid !== null && cpu !== null)
-      procs.push({ pid, ppid, cpu });
+    if (pid === null || ppid === null || cpu === null) continue;
+    const elapsed = etime === undefined ? null : cpuTimeSeconds(etime);
+    procs.push(
+      elapsed === null || at === undefined
+        ? { pid, ppid, cpu }
+        : { pid, ppid, cpu, start: at - elapsed * 1000 },
+    );
   }
   return procs;
 }
@@ -196,7 +225,7 @@ export function parseWindowsPerf(text: string): ProcCpu[] {
 /**
  * Atrium 的进程树：服务的全部后代（执行者、本地检查、合入检查，以及它们的子进程；不含服务本身），
  * 加上 extra 里还活着的进程及其后代（服务重启后接管来的执行者、上次在树里后来被 1 号进程收养的、
- * 带 Atrium 标记的孤儿）。父子关系成环也不死循环。
+ * 认得出是 Atrium 拉起的孤儿）。父子关系成环也不死循环。
  */
 export function atriumTree(
   procs: readonly ProcCpu[],

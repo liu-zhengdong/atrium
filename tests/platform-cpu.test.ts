@@ -5,12 +5,14 @@ import {
   atriumTree,
   cpuSource,
   cpuTimeSeconds,
+  cwdInvocation,
   environValue,
-  envSource,
-  parsePsEnv,
+  markSource,
+  parseLsofCwd,
   parseProcStat,
   parsePs,
   parseWindowsPerf,
+  sameProcess,
   treeCores,
   type CpuSnapshot,
 } from "../server/platform/cpu-plan.ts";
@@ -24,7 +26,7 @@ test("进程 CPU 来源按平台：Linux 读 /proc，macOS 等用 ps，Windows �
       kind: "command",
       read: "total",
       command: "ps",
-      args: ["-A", "-o", "pid=,ppid=,time="],
+      args: ["-A", "-o", "pid=,ppid=,time=,etime="],
     });
   const windows = cpuSource("win32");
   assert.equal(windows.kind, "command");
@@ -55,6 +57,44 @@ test("ps 累计 CPU：macOS 分:秒.百分秒（分可过 60）、procps 时:分
     if (seconds === null) assert.equal(value, null, text);
     else assert.ok(Math.abs(value! - seconds) < 1e-9, `${text} → ${value}`);
   }
+});
+
+test("解析 ps 输出：带 etime 时按采样时刻推算启动时刻，etime 看不懂或没给采样时刻就不给", () => {
+  const at = 1_000_000_000;
+  assert.deepEqual(
+    parsePs(
+      "  743     1 235:30.57 2-01:00:00\n 90 88 0:01.50 00:07\n 91 88 0:00.10 乱\n",
+      at,
+    ),
+    [
+      {
+        pid: 743,
+        ppid: 1,
+        cpu: 14130.57,
+        start: at - (2 * 86400 + 3600) * 1000,
+      },
+      { pid: 90, ppid: 88, cpu: 1.5, start: at - 7000 },
+      { pid: 91, ppid: 88, cpu: 0.1 },
+    ],
+  );
+  assert.deepEqual(parsePs(" 90 88 0:01.50 00:07\n"), [
+    { pid: 90, ppid: 88, cpu: 1.5 },
+  ]);
+});
+
+test("同一个 pid 还是不是同一个进程：累计变小或启动时刻差出 2 秒是复用了；瞬时读数不比 CPU", () => {
+  const proc = { pid: 1, ppid: 0, cpu: 5, start: 10_000 };
+  assert.equal(sameProcess(proc, { ...proc, cpu: 6 }, "total"), true);
+  assert.equal(sameProcess(proc, { ...proc, cpu: 4 }, "total"), false);
+  assert.equal(sameProcess(proc, { ...proc, cpu: 4 }, "rate"), true);
+  assert.equal(sameProcess(proc, { ...proc, start: 12_000 }, "total"), true);
+  assert.equal(sameProcess(proc, { ...proc, start: 12_001 }, "total"), false);
+  assert.equal(sameProcess(proc, { ...proc, start: 7_999 }, "total"), false);
+  assert.equal(
+    sameProcess({ pid: 1, ppid: 0, cpu: 5 }, { ...proc, cpu: 5 }, "total"),
+    true,
+    "没有启动时刻只比 CPU",
+  );
 });
 
 test("解析 ps 输出：坏行跳过", () => {
@@ -338,27 +378,27 @@ test("占了几个核（macOS）：拿不到收回的累计时，整机用掉的
   );
 });
 
-test("读别的进程的环境：Linux 读 /proc，macOS 等用 ps -E，Windows 读不到", () => {
-  assert.deepEqual(envSource("linux", [1, 2]), { kind: "proc" });
-  assert.equal(envSource("win32", [1]), null);
-  assert.deepEqual(envSource("darwin", [12, 34]), {
-    kind: "command",
-    command: "ps",
-    args: ["-E", "-ww", "-o", "pid=,command=", "-p", "12,34"],
+test("认 Atrium 拉起的进程按平台：Linux 读环境变量，macOS 等看工作目录（lsof），Windows 不认", () => {
+  assert.equal(markSource("linux"), "env");
+  assert.equal(markSource("android"), "env");
+  assert.equal(markSource("win32"), null);
+  for (const platform of ["darwin", "freebsd", "openbsd"] as const)
+    assert.equal(markSource(platform), "cwd");
+  assert.deepEqual(cwdInvocation([12, 34]), {
+    command: "lsof",
+    args: ["-a", "-d", "cwd", "-p", "12,34", "-F", "n"],
   });
   assert.deepEqual(
     [
-      ...parsePsEnv(
-        "  12 node server.js PATH=/bin ATRIUM_SPAWN=abc/t7 HOME=/u\n" +
-          "34 /bin/zsh PATH=/bin\n" +
-          "56 grep XATRIUM_SPAWN=nope\n" +
-          "78 node ATRIUM_SPAWN=def/t9\nbad line\n",
-        "ATRIUM_SPAWN",
+      ...parseLsofCwd(
+        "p12\nfcwd\nn/private/tmp/a b\np34\nfcwd\nn/\np56\nfcwd\n" +
+          "p78\nfcwd\nn/Users/u/wt\nn/second\nbad\npx\nn/nope\n",
       ),
     ],
     [
-      [12, "abc/t7"],
-      [78, "def/t9"],
+      [12, "/private/tmp/a b"],
+      [34, "/"],
+      [78, "/Users/u/wt"],
     ],
   );
   assert.equal(
@@ -381,10 +421,14 @@ test("ProcessCpu：父进程退出后被收养的子孙照算，带本服务标�
     async () => ({ kind: "total", at: now, procs }),
     100,
     {
-      mark: { name: "ATRIUM_SPAWN", prefix: "aaaaaaaaaaaa/" },
-      lookup: async (pids) => {
-        lookups.push([...pids]);
-        return marks;
+      mark: {
+        prefix: "aaaaaaaaaaaa/",
+        recognize: async (list) => {
+          lookups.push(list.map((proc) => proc.pid));
+          return new Map(
+            list.map((proc) => [proc.pid, marks.get(proc.pid) ?? null]),
+          );
+        },
       },
       lookupMs: 30_000,
       now: () => now,
@@ -429,6 +473,76 @@ test("ProcessCpu：父进程退出后被收养的子孙照算，带本服务标�
   );
   await cpu.refresh();
   assert.equal(cpu.cores(), 2);
+});
+
+test("ProcessCpu 认进程：服务的祖先与认法不看的不查；父进程变了、pid 被复用了重查；只收下查过的；查不了不影响读数", async () => {
+  let now = 0;
+  let procs: { pid: number; ppid: number; cpu: number; start?: number }[] = [];
+  const lookups: number[][] = [];
+  let fail = false;
+  const cpu = new ProcessCpu(
+    async () => ({ kind: "total", at: now, procs }),
+    100,
+    {
+      mark: {
+        prefix: "aaaaaaaaaaaa/",
+        wants: (proc) => proc.pid !== 400,
+        recognize: async (list) => {
+          lookups.push(list.map((proc) => proc.pid));
+          if (fail) throw new Error("lsof 不在");
+          // 只看被 1 号收养的（与 macOS 的认法相同），其余不给结果、下次再查。
+          return new Map(
+            list
+              .filter((proc) => proc.ppid === 1)
+              .map((proc) => [
+                proc.pid,
+                proc.pid === 300 ? "aaaaaaaaaaaa/t9" : null,
+              ]),
+          );
+        },
+      },
+      lookupMs: 0,
+      now: () => now,
+    },
+  );
+  // 守护进程 90 → 服务 100；300 还挂在 200 下面；400 认法不看。
+  procs = [
+    { pid: 90, ppid: 1, cpu: 0 },
+    { pid: 100, ppid: 90, cpu: 0 },
+    { pid: 200, ppid: 1, cpu: 0 },
+    { pid: 300, ppid: 200, cpu: 0, start: 1_000 },
+    { pid: 400, ppid: 1, cpu: 0 },
+  ];
+  await cpu.refresh();
+  assert.deepEqual(lookups, [[200, 300]], "服务与它的祖先、认法不看的不查");
+  assert.deepEqual(cpu.orphans(), []);
+  now = 5_000;
+  procs = [
+    { pid: 90, ppid: 1, cpu: 0 },
+    { pid: 100, ppid: 90, cpu: 0 },
+    { pid: 200, ppid: 1, cpu: 0 },
+    { pid: 300, ppid: 1, cpu: 5, start: 1_000 },
+    { pid: 400, ppid: 1, cpu: 0 },
+  ];
+  await cpu.refresh();
+  assert.deepEqual(lookups[1], [300], "200 查过了；300 被收养后重查");
+  assert.deepEqual(cpu.orphans(), [{ pid: 300, mark: "aaaaaaaaaaaa/t9" }]);
+  assert.equal(cpu.cores(), 1);
+  now = 10_000;
+  procs = procs.map((proc) => (proc.pid === 300 ? { ...proc, cpu: 10 } : proc));
+  await cpu.refresh();
+  assert.equal(lookups.length, 2, "认过的不再查");
+  assert.equal(cpu.cores(), 1);
+  // pid 300 被复用（启动时刻对不上）：不再是那个孤儿，重查；查不了就先不认。
+  now = 15_000;
+  fail = true;
+  procs = procs.map((proc) =>
+    proc.pid === 300 ? { ...proc, cpu: 12, start: 14_000 } : proc,
+  );
+  await cpu.refresh();
+  assert.deepEqual(lookups[2], [300]);
+  assert.deepEqual(cpu.orphans(), []);
+  assert.equal(cpu.cores(), 0);
 });
 
 test("ProcessCpu：第二次采样起给核数，采样失败回到不知道，同时来的几次合成一次", async () => {

@@ -4,12 +4,14 @@ import { cpus } from "node:os";
 import {
   atriumTree,
   cpuSource,
+  cwdInvocation,
   environValue,
-  envSource,
+  markSource,
+  parseLsofCwd,
   parsePs,
-  parsePsEnv,
   parseProcStat,
   parseWindowsPerf,
+  sameProcess,
   treeCores,
   type CpuSnapshot,
   type Platform,
@@ -37,7 +39,7 @@ async function readProc(): Promise<ProcCpu[]> {
   return procs;
 }
 
-/** 跑命令取输出；partial 时退出码非 0 但有输出也收下（`ps -p` 列的进程有的已退出）。 */
+/** 跑命令取输出；partial 时退出码非 0 但有输出也收下（`lsof -p` 列的进程有的已退出）。 */
 function run(command: string, args: string[], partial = false) {
   return new Promise<string>((resolve, reject) =>
     execFile(
@@ -78,25 +80,22 @@ export async function snapshot(
       system: systemCpu(),
     };
   const text = await run(source.command, source.args);
+  const at = now();
   return {
     kind: source.read,
-    at: now(),
-    procs: source.read === "rate" ? parseWindowsPerf(text) : parsePs(text),
+    at,
+    procs: source.read === "rate" ? parseWindowsPerf(text) : parsePs(text, at),
     system: systemCpu(),
   };
 }
 
-/** 读这些进程的环境变量 name：pid → 值（没有这个变量或读不到的不在结果里）；平台读不到时为 null。 */
+/** 读这些进程的环境变量 name（只有 Linux 读得到）：pid → 值（没有这个变量或读不到的不在结果里）；别的平台为 null。 */
 export async function readEnv(
   pids: readonly number[],
   name: string,
   platform: Platform = process.platform,
 ): Promise<Map<number, string> | null> {
-  const source = envSource(platform, pids);
-  if (!source) return null;
-  if (!pids.length) return new Map();
-  if (source.kind === "command")
-    return parsePsEnv(await run(source.command, source.args, true), name);
+  if (markSource(platform) !== "env") return null;
   const found = new Map<number, string>();
   for (const pid of pids) {
     try {
@@ -112,18 +111,40 @@ export async function readEnv(
   return found;
 }
 
-/** 认 Atrium 标记：环境变量名与值的前缀（本服务的标记）。 */
-export type SpawnMark = { name: string; prefix: string };
+/** 读这些进程的工作目录（macOS 等用 lsof）：pid → 路径（读不到的不在结果里）；Linux、Windows 为 null。 */
+export async function readCwd(
+  pids: readonly number[],
+  platform: Platform = process.platform,
+): Promise<Map<number, string> | null> {
+  if (markSource(platform) !== "cwd") return null;
+  if (!pids.length) return new Map();
+  const { command, args } = cwdInvocation(pids);
+  return parseLsofCwd(await run(command, args, true));
+}
+
+/**
+ * 认 Atrium 拉起的进程：prefix 是本服务标记的前缀；wants 给了时只查它挑中的进程，其余直接当不是
+ * （不起命令、不占每轮名额，父进程变了再看）；recognize 查一批进程，给查过的 pid → 标记
+ * （查过、不是 Atrium 的为 null；没查的不在结果里，下次再查）；整批查不了为 null。
+ */
+export type SpawnMark = {
+  prefix: string;
+  wants?: (proc: ProcCpu) => boolean;
+  recognize: (
+    procs: readonly ProcCpu[],
+  ) => Promise<ReadonlyMap<number, string | null> | null>;
+};
 export type MarkedProc = { pid: number; mark: string };
 
-/** 一次最多查多少个进程的环境（启动后第一次要查全机，分几轮查完）。 */
+/** 一次最多查多少个进程（启动后第一次要查全机，分几轮查完）。 */
 const LOOKUP_BATCH = 400;
 
 /**
  * Atrium 进程树的 CPU：每次 refresh 采一次样，cores() 给最近一次的结果。
  * 树 = 服务的后代 + 接管来的执行者 + 上次在树里、现在还活着的（父进程退出后被 1 号收养也照算）
- * + 带本服务标记的进程（mark；环境变量随子孙继承，服务重启后也认得出），各自连同后代。
- * 标记查环境要起命令或读文件，只查没查过的进程，且至少隔 lookupMs 查一次。
+ * + 认得出是本服务拉起的进程（mark；服务重启后也认得出），各自连同后代。
+ * 认进程要起命令或读文件，只查没查过的进程（父进程变了、pid 被复用了重查），且至少隔 lookupMs 查一次；
+ * 服务自己和它的祖先（守护进程）不查。
  * orphans() 给带标记、却已不在服务与执行者名下的进程，巡检据此清理任务早已结束的孤儿。
  */
 export class ProcessCpu {
@@ -131,8 +152,11 @@ export class ProcessCpu {
   private lastTree = new Set<number>();
   private value: number | null = null;
   private stray: MarkedProc[] = [];
-  /** 查过环境的进程：pid → 标记值（没有为 null）。 */
-  private readonly marks = new Map<number, string | null>();
+  /** 查过的进程：pid → 标记值（没有为 null）与查时的读数。 */
+  private readonly marks = new Map<
+    number,
+    { mark: string | null; proc: ProcCpu }
+  >();
   private lookedAt = -Infinity;
   private running: Promise<void> | null = null;
 
@@ -141,7 +165,6 @@ export class ProcessCpu {
     private readonly service = process.pid,
     private readonly options: {
       mark?: SpawnMark;
-      lookup?: typeof readEnv;
       lookupMs?: number;
       now?: () => number;
     } = {},
@@ -166,15 +189,16 @@ export class ProcessCpu {
           service: this.service,
           adopted,
         });
-        const marked = await this.marked(current.procs, owned, alive);
-        const lastCpu = new Map(
-          (this.last?.procs ?? []).map((proc) => [proc.pid, proc.cpu]),
+        const marked = await this.marked(current, owned, alive);
+        const lastProcs = new Map(
+          (this.last?.procs ?? []).map((proc) => [proc.pid, proc]),
         );
-        // 累计读数变小是 pid 被复用了，不再是上次那个进程。
+        // 累计读数变小、启动时刻对不上是 pid 被复用了，不再是上次那个进程。
         const kept = [...this.lastTree].filter((pid) => {
-          const cpu = alive.get(pid)?.cpu;
-          if (cpu === undefined) return false;
-          return current.kind === "rate" || cpu >= (lastCpu.get(pid) ?? 0);
+          const now = alive.get(pid);
+          const before = lastProcs.get(pid);
+          if (!now) return false;
+          return !before || sameProcess(before, now, current.kind);
         });
         const tree = atriumTree(current.procs, {
           service: this.service,
@@ -200,43 +224,57 @@ export class ProcessCpu {
     return this.running;
   }
 
-  /** 带本服务标记的活进程；到点时顺带查一批新进程的环境（查不了不影响 CPU 读数）。 */
+  /** 认得出是本服务拉起的活进程；到点时顺带查一批新进程（查不了不影响 CPU 读数）。 */
   private async marked(
-    procs: readonly ProcCpu[],
+    current: CpuSnapshot,
     owned: ReadonlySet<number>,
     alive: ReadonlyMap<number, ProcCpu>,
   ): Promise<MarkedProc[]> {
     const mark = this.options.mark;
-    // Windows 读不到别的进程的环境，不认标记（只靠进程树与上次的树）。
-    if (!mark || (!this.options.lookup && !envSource(process.platform, [])))
-      return [];
-    for (const pid of this.marks.keys())
-      if (!alive.has(pid)) this.marks.delete(pid);
+    if (!mark) return [];
+    for (const [pid, known] of this.marks) {
+      const now = alive.get(pid);
+      if (
+        !now ||
+        now.ppid !== known.proc.ppid ||
+        !sameProcess(known.proc, now, current.kind)
+      )
+        this.marks.delete(pid);
+    }
+    // 服务自己与祖先（守护进程、被 1 号收养前的启动器）不认。
+    const skip = new Set<number>();
+    for (
+      let pid: number | undefined = this.service;
+      pid !== undefined && pid > 1 && !skip.has(pid);
+      pid = alive.get(pid)?.ppid
+    )
+      skip.add(pid);
     const now = (this.options.now ?? Date.now)();
     if (now - this.lookedAt >= (this.options.lookupMs ?? 30_000)) {
-      const unknown = procs
-        .filter(
-          (proc) =>
-            proc.pid !== this.service &&
-            !owned.has(proc.pid) &&
-            !this.marks.has(proc.pid),
+      const unknown: ProcCpu[] = [];
+      for (const proc of current.procs) {
+        if (
+          skip.has(proc.pid) ||
+          owned.has(proc.pid) ||
+          this.marks.has(proc.pid)
         )
-        .slice(0, LOOKUP_BATCH)
-        .map((proc) => proc.pid);
+          continue;
+        if (mark.wants && !mark.wants(proc))
+          this.marks.set(proc.pid, { mark: null, proc });
+        else if (unknown.length < LOOKUP_BATCH) unknown.push(proc);
+      }
       if (unknown.length) {
         this.lookedAt = now;
-        const found = await (this.options.lookup ?? readEnv)(
-          unknown,
-          mark.name,
-        ).catch(() => null);
+        const found = await mark.recognize(unknown).catch(() => null);
         if (found)
-          for (const pid of unknown)
-            this.marks.set(pid, found.get(pid) ?? null);
+          for (const proc of unknown)
+            if (found.has(proc.pid))
+              this.marks.set(proc.pid, { mark: found.get(proc.pid)!, proc });
       }
     }
     const marked: MarkedProc[] = [];
-    for (const [pid, value] of this.marks)
-      if (value?.startsWith(mark.prefix) && pid !== this.service)
+    for (const [pid, { mark: value }] of this.marks)
+      if (value?.startsWith(mark.prefix) && !skip.has(pid))
         marked.push({ pid, mark: value });
     return marked;
   }

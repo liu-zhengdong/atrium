@@ -1,6 +1,9 @@
 import { availableParallelism, loadavg } from "node:os";
-import { ProcessCpu, type MarkedProc } from "../platform/cpu.ts";
-import { SPAWN_ENV } from "./orphans.ts";
+import {
+  ProcessCpu,
+  type MarkedProc,
+  type SpawnMark,
+} from "../platform/cpu.ts";
 import { rank } from "./priority.ts";
 
 /**
@@ -243,7 +246,7 @@ export function hostView(input: {
 export type OwnCpu = {
   cores(): number | null;
   refresh(adopted?: readonly number[]): Promise<void>;
-  /** 带本服务标记、已不在服务与执行者名下的进程（t203）。 */
+  /** 认得出是本服务拉起、已不在服务与执行者名下的进程（t203）。 */
   orphans?(): readonly MarkedProc[];
 };
 
@@ -255,8 +258,8 @@ export class HostLoad {
     private readonly cpu: OwnCpu | null = null,
   ) {}
 
-  /** owner：本服务标识（orphans.ts spawnOwner），给了才认带标记的孤儿。 */
-  static fromEnv(env: NodeJS.ProcessEnv = process.env, owner?: string) {
+  /** mark：怎么认本服务拉起的进程（orphans.ts recognizer），给了才认孤儿。 */
+  static fromEnv(env: NodeJS.ProcessEnv = process.env, mark?: SpawnMark) {
     const { limits, problems } = hostLimits(env, availableParallelism());
     for (const problem of problems) console.error(`本机减负配置：${problem}`);
     // 不看自己占用时不采样，省得每轮巡检列一遍进程。
@@ -265,9 +268,7 @@ export class HostLoad {
       undefined,
       limits.busyCores === null
         ? null
-        : new ProcessCpu(undefined, undefined, {
-            mark: owner ? { name: SPAWN_ENV, prefix: `${owner}/` } : undefined,
-          }),
+        : new ProcessCpu(undefined, undefined, { mark }),
     );
   }
 
@@ -292,7 +293,7 @@ export class HostLoad {
     }
   }
 
-  /** 带本服务标记、已不在服务与执行者名下的进程；没采样为空。 */
+  /** 认得出是本服务拉起、已不在服务与执行者名下的进程；没采样为空。 */
   orphans(): readonly MarkedProc[] {
     try {
       return this.cpu?.orphans?.() ?? [];

@@ -399,7 +399,6 @@ test("权限表：读接口放行，写接口只认列出的，其余一律拒�
     // 亲自做完的活登记交付（t257）
     ["POST", "/api/tasks/:id/deliver", "task"],
     ["POST", "/api/tasks/:id/note", "task-remark"],
-    ["POST", "/api/reviews", "review-create"],
     ["POST", "/api/events/ack", "events-ack"],
     ["POST", "/api/org/nodes/:id/points", "point"],
     ["PATCH", "/api/org/points/:id", "point"],
@@ -415,7 +414,6 @@ test("权限表：读接口放行，写接口只认列出的，其余一律拒�
   const deniedRoutes: [string, string, RegExp][] = [
     ["PUT", "/api/org/nodes/:id/docs/:doc", /改章程、边界与预算/],
     ["POST", "/api/org/nodes/:id/revert", /改章程/],
-    ["POST", "/api/reviews/:id/decide", /拍板/],
     ["POST", "/api/org/nodes", /新建组织节点/],
     ["POST", "/api/map/nodes", /新建组织节点/],
     ["POST", "/api/quota/:provider/clear", /额度/],

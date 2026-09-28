@@ -7,8 +7,6 @@ import type { Command, Values } from "./main.ts";
 import { PLAN_LINES, renderPlan, type PlanView } from "./top-plan.ts";
 import { renderTopMap } from "./map.ts";
 import { DEPTH_MAX, type MapTreeNode } from "../server/map/view.ts";
-import { concernsBrief } from "./task-concerns.ts";
-import type { ConcernState } from "../server/tasks/concern-gate.ts";
 import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
 import type { HostView } from "../server/tasks/host-load.ts";
@@ -16,10 +14,6 @@ import {
   secretaryText,
   type SecretaryView,
 } from "../server/tasks/secretary-watch.ts";
-import {
-  mergeQueueText,
-  type MergeQueueView,
-} from "../server/tasks/merge-eta.ts";
 import type { Holder } from "../server/tasks/holder.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
@@ -70,8 +64,6 @@ export type TopRow = {
   processing: boolean;
   /** 捎话条数与未送达条数；旧版服务没有这个字段。 */
   tells?: { total: number; pending: number } | null;
-  /** 请了的专员与本轮结论（#322）；旧版服务没有这个字段。 */
-  concerns?: ConcernState[] | null;
   /** 现在球在谁手里（服务端判定）；旧版服务没有这个字段。 */
   holder?: Holder | null;
   checking?: { host: string | null } | null;
@@ -148,7 +140,6 @@ export type Snapshot = {
   /** 秘书在不在听（t242）：看秘书的收件箱时给；旧版服务没有。 */
   secretary?: SecretaryView;
   /** 合入队列长度与预计还要多久（t254）；队列空或旧版服务不给。 */
-  merge_queue?: MergeQueueView;
   /** 接入的远程主机（#358 第 1 步）；没有远程主机时不给。 */
   hosts?: {
     ref: string;
@@ -216,12 +207,12 @@ function columns(value: string | undefined) {
   return number;
 }
 
-export function mapDepth(value: string | undefined, flag = "--depth") {
+export function mapDepth(value: string | undefined) {
   if (value === undefined) return 2;
   if (!/^[1-9][0-9]*$/.test(value) || Number(value) > DEPTH_MAX)
     throw new Problem(
       400,
-      `${flag} 应为 1～${DEPTH_MAX} 的整数（收到：${value}）`,
+      `--depth 应为 1～${DEPTH_MAX} 的整数（收到：${value}）`,
       "usage",
     );
   return Number(value);
@@ -450,11 +441,9 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
     (snapshot.counts.reviewing
       ? ` · 审阅中 ${snapshot.counts.reviewing}`
       : "") +
-    (mergeQueueText(snapshot.merge_queue)
-      ? ` · ${mergeQueueText(snapshot.merge_queue)}`
-      : snapshot.counts.merge_queued
-        ? ` · 排队合入 ${snapshot.counts.merge_queued}`
-        : "") +
+    (snapshot.counts.merge_queued
+      ? ` · 排队合入 ${snapshot.counts.merge_queued}`
+      : "") +
     (snapshot.counts.merging ? ` · 合入中 ${snapshot.counts.merging}` : "") +
     (snapshot.counts.merged ? ` · 已合入 ${snapshot.counts.merged}` : "") +
     (snapshot.counts.online ? ` · 已上线 ${snapshot.counts.online}` : "") +
@@ -520,9 +509,6 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
           ? [
               `  ${oneLine(`捎话 ${row.tells.total} 条${row.tells.pending ? `，${row.tells.pending} 条待送达` : "，都已送达"}`, frame.width - 2)}`,
             ]
-          : []),
-        ...(row.concerns?.length
-          ? [`  ${oneLine(concernsBrief(row.concerns)!, frame.width - 2)}`]
           : []),
       ];
     }),
@@ -773,8 +759,6 @@ export const topCommand: Command = {
     interval: { type: "string" },
     width: { type: "string" },
     depth: { type: "string" },
-    // 旧写法：目标树已并进全景图，照旧接受，等同 --depth。
-    "goals-depth": { type: "string" },
     as: { type: "string" },
   },
   positionals: [0, 0],
@@ -784,10 +768,7 @@ export const topCommand: Command = {
       throw new Problem(400, "--as 不能为空", "usage");
     const seconds = interval(str(values, "interval"));
     const width_ = columns(str(values, "width"));
-    const depth =
-      str(values, "depth") !== undefined
-        ? mapDepth(str(values, "depth"))
-        : mapDepth(str(values, "goals-depth"), "--goals-depth");
+    const depth = mapDepth(str(values, "depth"));
     // 非终端、--once 与 --json 都只打一次；实时模式要能接管按键与清屏。
     const once =
       values.once === true ||

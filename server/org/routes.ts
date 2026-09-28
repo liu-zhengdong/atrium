@@ -16,7 +16,6 @@ import {
 } from "./write.ts";
 import type { Doc } from "./model.ts";
 import { parseDocument } from "./validate.ts";
-import { linkRoles } from "./task-link.ts";
 import { readPace } from "../tasks/prepare.ts";
 import { addPoint, editPoint, removePoint } from "./points.ts";
 import { isRegistered } from "../leaders/model.ts";
@@ -35,8 +34,7 @@ const q = (value: unknown) => (value ?? {}) as Query;
 const p = (value: unknown) => (value ?? {}) as { id: string };
 const body = (value: unknown) => (value ?? {}) as Record<string, unknown>;
 const doc = (value: unknown): Doc => {
-  if (value !== "charter" && value !== "card")
-    throw new Problem(400, "doc 只能是 charter 或 card");
+  if (value !== "charter") throw new Problem(400, "doc 只能是 charter");
   return value;
 };
 export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
@@ -119,7 +117,6 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
         fields?: unknown;
         body?: unknown;
         boundaries?: unknown;
-        budget?: unknown;
       } =
         typeof input.source === "string"
           ? parseDocument(input.source, target)
@@ -132,7 +129,6 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
           fields: parsed.fields,
           body: parsed.body,
           boundaries: parsed.boundaries,
-          budget: parsed.budget,
           rev: input.rev as string | undefined,
           reason: input.reason,
         },
@@ -187,13 +183,6 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
   app.delete("/api/org/points/:id", (request) =>
     removePoint(db, p(request.params).id, actor(request.query)),
   );
-  // 旧 role 字符串回填 node_id：默认预览，apply 只有你能执行。
-  app.post("/api/org/link-roles", { bodyLimit: 1024 }, (request) => {
-    const apply = body(request.body).apply === true;
-    if (apply && !actsForUser(actor(request.query)))
-      throw new Problem(403, "org link-roles --apply 只有你能执行");
-    return linkRoles(db, apply);
-  });
   // 最多 200 份各 16 KB 的岗位正文，另留请求字段与根章程空间。
   app.post("/api/org/import", { bodyLimit: 4 * 1024 * 1024 }, (request) =>
     importOrg(db, body(request.body) as ImportInput, actor(request.query)),

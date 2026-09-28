@@ -3,10 +3,9 @@ import { dataDirectory, serviceUrl } from "../server/service-state.ts";
 import { pad, width } from "./format.ts";
 import { authCommands } from "./auth.ts";
 import { workerCommands } from "./workers.ts";
-import { roleCommands } from "./roles.ts";
+import { specialistCommands } from "./specialists.ts";
 import { taskCommands } from "./tasks.ts";
 import { orgCommands } from "./org.ts";
-import { goalCommands } from "./goals.ts";
 import { skillCommands } from "./skills.ts";
 import { topCommand } from "./top.ts";
 import { statuslineCommand } from "./statusline.ts";
@@ -21,8 +20,6 @@ import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
 import { secretaryCommands } from "./secretary.ts";
 import { mapCommands } from "./map.ts";
-import { draftCommands } from "./drafts.ts";
-import { reviewCommands } from "./reviews.ts";
 import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
 import { scheduleCommands } from "./schedules.ts";
@@ -110,11 +107,9 @@ export const commands: Record<string, Command> = {
   top: topCommand,
   statusline: statuslineCommand,
   ...taskCommands,
-  ...roleCommands,
+  ...specialistCommands,
   ...workerCommands,
-  ...reviewCommands,
   ...mapCommands,
-  ...draftCommands,
   ...orgCommands,
   ...leaderCommands,
   ...patrolCommands,
@@ -124,7 +119,6 @@ export const commands: Record<string, Command> = {
   ...secretCommands,
   ...choiceCommands,
   ...productCommands,
-  ...goalCommands,
   ...skillCommands,
   ...quotaCommands,
   ...eventCommands,

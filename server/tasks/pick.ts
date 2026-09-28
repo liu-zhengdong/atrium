@@ -198,7 +198,7 @@ export function refusalsOf(
   const room = facts.headroom.get(account);
   if (!over && facts.pace && room && room.points < 1) reasons.push(room.reason);
   if (rules.billing === "metered")
-    reasons.push("档案 billing=metered，当前钱份额为 0 元");
+    reasons.push("档案 billing=metered（按量计费），不派");
   return reasons;
 }
 

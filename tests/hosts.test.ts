@@ -1342,7 +1342,7 @@ test("远程主机挂组织技能（t232）：代理在那台挂上、提示词�
   await ok("POST", "/api/tasks", {
     title: "远程改按钮",
     deliver: "none",
-    role: "atrium/web",
+    part: "atrium/web",
   });
   const run = await ok("POST", "/api/tasks/t1/run", {
     worker: "opencode",
@@ -1457,7 +1457,7 @@ test("远程主机的代理太旧不会挂技能（t259）：照样拉起，派�
   await ok("POST", "/api/tasks", {
     title: "远程改按钮",
     deliver: "none",
-    role: "atrium/web",
+    part: "atrium/web",
   });
   const run = await ok("POST", "/api/tasks/t1/run", {
     worker: "opencode",

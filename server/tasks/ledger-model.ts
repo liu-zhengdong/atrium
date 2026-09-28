@@ -4,7 +4,6 @@ import type { TaskStatus } from "./state.ts";
 import type { ChildSummary } from "./ledger-summary.ts";
 import type { Deliver } from "./deliver.ts";
 import type { NoteView } from "./notes.ts";
-import type { ConcernState, InviteHint } from "./concern-gate.ts";
 import type { Holder } from "./holder.ts";
 import type { Rollup } from "./rollup.ts";
 import { applyDeliveryEvent } from "./delivery-records.ts";
@@ -76,7 +75,6 @@ export type TaskRow = {
   schedule_reason: string | null;
   node_id: number | null;
   origin_node_id: number | null;
-  goal_id: number | null;
   part_id: number | null;
   created_at: number;
   started_at: number | null;
@@ -88,7 +86,6 @@ export type Task = TaskRow & {
   parent_ref: string | null;
   node_ref: string | null;
   origin_ref: string | null;
-  goal_ref: string | null;
   part_ref: string | null;
   job_ref: string | null;
   /** 跑在哪台远程主机上（hN）；本机为 null。 */
@@ -97,10 +94,6 @@ export type Task = TaskRow & {
   avoid_host_refs: string[];
   /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
   queued_reason?: string | null;
-  /** 请了的专员与本轮结论（concerns.ts）；没请时不给。 */
-  concerns?: ConcernState[];
-  /** 「要不要请某专员」的提示（concern-gate.ts inviteHints）；没有时不给。 */
-  concern_hints?: InviteHint[];
   /** 显式牵涉的部分（#373，also.ts）；没有时不给。 */
   also?: string[];
   /** 自动牵涉的部分：管方面的要点适用于归属部分；没有时不给。 */
@@ -146,7 +139,6 @@ export const view = (
   parent_ref: string | null;
   node_ref: string | null;
   origin_ref: string | null;
-  goal_ref: string | null;
   part_ref: string | null;
   job_ref: string | null;
   host_ref: string | null;
@@ -157,7 +149,6 @@ export const view = (
   parent_ref: row.parent_id === null ? null : taskRef(row.parent_id),
   node_ref: row.node_id == null ? null : `o${row.node_id}`,
   origin_ref: row.origin_node_id == null ? null : `o${row.origin_node_id}`,
-  goal_ref: row.goal_id == null ? null : `g${row.goal_id}`,
   part_ref: row.part_id == null ? null : `o${row.part_id}`,
   job_ref: row.job_id == null ? null : `r${row.job_id}`,
   host_ref: row.host_id == null ? null : `h${row.host_id}`,

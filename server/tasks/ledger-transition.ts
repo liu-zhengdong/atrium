@@ -18,7 +18,6 @@ import {
   startDelivery,
 } from "./delivery-records.ts";
 import { noteView } from "./notes.ts";
-import { closeCouncil } from "./council-close.ts";
 import { syncTotals } from "./rollup-ledger.ts";
 
 /** 执行者这一侧可以随状态一起写入的运行字段。 */
@@ -145,9 +144,6 @@ export function applyTransition(
     endDelivery(db, current.id, event.kind, now);
     if (next.status === "cancelled" || next.status === "failed")
       markDeliveryFinal(db, current.id, next.status);
-    // 议题任务取消，会审随之关闭（t129）。
-    if (next.status === "cancelled")
-      closeCouncil(db, current.id, "议题任务已取消", now);
   }
   // 总任务（t190）：上面每层总任务的状态跟着子孙走，同一事务里改。
   if (next.changed) syncTotals(db, current.id, now);

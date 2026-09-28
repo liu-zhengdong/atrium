@@ -576,7 +576,7 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
           env: { HOME: home },
         },
       );
-    const t1 = createTask(db, { title: "改按钮", role: "atrium/web" }).id;
+    const t1 = createTask(db, { title: "改按钮", part: "atrium/web" }).id;
     const claude = await run(t1, "claude");
     const dir = join(data, "tasks", String(t1));
     const plugin = join(dir, "skills-plugin");
@@ -614,7 +614,7 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
     assert.match(readFileSync(copy, "utf8"), /12px/);
 
     // codex：CODEX_HOME 指到任务目录，登录与配置软链回用户目录；档案 skills_for 命中节点
-    const t2 = createTask(db, { title: "codex 改前端", role: "o3" }).id;
+    const t2 = createTask(db, { title: "codex 改前端", part: "o3" }).id;
     const codex = await run(t2, "codex", {
       skills_for: { "atrium/web": ["codex-front"] },
       skills: ["ghost"],
@@ -650,7 +650,7 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
     });
 
     // opencode：OPENCODE_CONFIG_DIR；grok 没有原生技能，只给路径
-    const t3 = createTask(db, { title: "别的", role: "atrium/runtime" }).id;
+    const t3 = createTask(db, { title: "别的", part: "atrium/runtime" }).id;
     const oc = await run(t3, "opencode");
     assert.deepEqual(oc.launch.env, {
       OPENCODE_CONFIG_DIR: join(data, "tasks", String(t3), "opencode"),
@@ -674,7 +674,7 @@ test("派活挂载：按工具放进任务目录，不碰仓库与用户配置�
       ),
       "runtime 不带 web 的技能",
     );
-    const t4 = createTask(db, { title: "grok 干活", role: "o2" }).id;
+    const t4 = createTask(db, { title: "grok 干活", part: "o2" }).id;
     const grok = await run(t4, "grok");
     assert.equal(grok.launch.env, undefined);
     assert.ok(
@@ -712,7 +712,7 @@ test("回收：改了副本生成提议，采纳写成作者为任务号的新�
   const data = mkdtempSync(join(tmpdir(), "atrium-skills-"));
   try {
     const launch = async (title: string) => {
-      const id = createTask(db, { title, role: "o3" }).id;
+      const id = createTask(db, { title, part: "o3" }).id;
       await prepareRun(
         getTask(db, `t${id}`),
         { worker: worker("codex"), risk: "low" },
@@ -979,7 +979,7 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
   await ok("POST", "/api/tasks", {
     title: "Adjust button",
     repo: fx.repo,
-    role: "atrium/web",
+    part: "atrium/web",
   });
   const run = await ok("POST", "/api/tasks/t1/run", { worker: "codex" });
   // 拉起的回执带事件（t232）：命令行据此判这次技能挂没挂上，挂上了不多写一行。

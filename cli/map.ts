@@ -264,7 +264,6 @@ export const mapCommands: Record<string, Command> = {
       analogy: { type: "string" },
       now: { type: "string" },
       next: { type: "string" },
-      when: { type: "string" },
       detail: { type: "string" },
       rev: { type: "string" },
       reason: { type: "string" },
@@ -272,10 +271,6 @@ export const mapCommands: Record<string, Command> = {
     },
     positionals: [1, 1],
     async run({ positionals: [node], values, json }) {
-      if (str(values, "when") !== undefined)
-        console.error(
-          "--when 已迁到专员的 --invite-when；请用 atrium specialist edit；旧写法暂可用",
-        );
       const detail = str(values, "detail");
       let body: string | undefined;
       if (detail !== undefined)
@@ -290,17 +285,7 @@ export const mapCommands: Record<string, Command> = {
         }
       const input = {
         ...Object.fromEntries(
-          (
-            [
-              "what",
-              "alias",
-              "analogy",
-              "now",
-              "next",
-              "when",
-              "applies",
-            ] as const
-          )
+          (["what", "alias", "analogy", "now", "next", "applies"] as const)
             .filter((k) => str(values, k) !== undefined)
             .map((k) => [k, str(values, k)]),
         ),

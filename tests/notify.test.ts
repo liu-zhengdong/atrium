@@ -133,14 +133,6 @@ test("推什么：只推等你拍板、上交到秘书的卡住／越界／里�
     true,
     "长标题截短",
   );
-  assert.deepEqual(
-    pushOf(
-      event({ kind: "council_escalated", task: "t171" }),
-      "secretary",
-      title,
-    ),
-    { key: "event:7", kind: "council", ref: "t171", title: "Telegram 推送" },
-  );
   // 不推：投给 leader 的、需要别的部分配合、选项单知会、过程事件、格式不对的。
   for (const skipped of [
     event({ subscriber: "a1", detail: { kind: "stuck", task: "t171" } }),
@@ -157,7 +149,7 @@ test("推什么：只推等你拍板、上交到秘书的卡住／越界／里�
     event({ kind: "merged", task: "t171" }),
     event({ kind: "choice_ready", detail: { choice: "x" } }),
     event({ detail: { kind: "stuck" }, actor: null }),
-    event({ kind: "council_escalated", task: null }),
+    event({ kind: "council_escalated", task: "t171" }),
   ])
     assert.equal(
       pushOf(skipped, "secretary", title),

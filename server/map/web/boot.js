@@ -4,7 +4,6 @@
 export const emptyWorkers = () => ({
   role: null,
   rows: [],
-  suggestions: [],
   pending: true,
 });
 

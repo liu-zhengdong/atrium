@@ -85,7 +85,7 @@ test("远程派活：能挂技能的代理随指令带上技能、提示词留�
   const db = setup();
   const data = mkdtempSync(join(tmpdir(), "atrium-skills-remote-"));
   try {
-    const t1 = createTask(db, { title: "改按钮", role: "atrium/web" }).id;
+    const t1 = createTask(db, { title: "改按钮", part: "atrium/web" }).id;
     const site = {
       host: 2,
       os: "win32",
@@ -119,7 +119,7 @@ test("远程派活：能挂技能的代理随指令带上技能、提示词留�
     assert.ok(!kinds(db, t1).includes("skills_skipped"));
 
     // 旧代理不报 skills：不带技能、不留占位，记一笔并说清怎么办。
-    const t2 = createTask(db, { title: "改表单", role: "atrium/web" }).id;
+    const t2 = createTask(db, { title: "改表单", part: "atrium/web" }).id;
     const old = await prepareRun(
       getTask(db, `t${t2}`),
       { worker: worker("codex"), risk: "low" },
@@ -175,7 +175,7 @@ test("代理挂载填占位、收尾只回传改过的副本；服务落成报�
   const db = setup();
   const root = mkdtempSync(join(tmpdir(), "atrium-skills-remote-"));
   try {
-    const id = createTask(db, { title: "改按钮", role: "atrium/web" }).id;
+    const id = createTask(db, { title: "改按钮", part: "atrium/web" }).id;
     const copies = skillsForTask(db, getTask(db, `t${id}`)).skills.map(copyOf);
     // 代理那台：同一个 mountSkills，路径是那台自己的。
     const agentDir = join(root, "agent", "tasks", String(id));

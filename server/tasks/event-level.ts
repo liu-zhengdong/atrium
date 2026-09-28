@@ -52,8 +52,6 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   // 新增类型，库里没有旧行要按新集合重算，不需要迁移。
   "check_quiet",
   "worker_quiet",
-  // 执行者升降建议（t277）：秘书看 digest 时顺带处理，不为它醒；库里旧行在 ensureEventTables 回写一次。
-  "worker_advice",
 ]);
 
 /**

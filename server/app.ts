@@ -13,14 +13,10 @@ import { ensureScheduleTables } from "./schedules/model.ts";
 import { SchedulePump } from "./schedules/runtime.ts";
 import { registerScheduleRoutes } from "./schedules/routes.ts";
 import { registerProductRoutes } from "./products/routes.ts";
-import { registerDraftRoutes } from "./drafts/routes.ts";
 import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
 import { ensureTaskTables } from "./tasks/ledger-schema.ts";
-import { migrateSpecialists } from "./tasks/specialist-migrate.ts";
-import { registerGoalRoutes } from "./goals/routes.ts";
-import type { GoalCheckOptions } from "./goals/check-runtime.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { QuotaReaders } from "./quota-readers/index.ts";
@@ -70,7 +66,7 @@ export function openDatabase(data: string) {
 }
 
 /**
- * 组织运行时的 HTTP 入口（#291）：只注册用户认证、任务账本与派活、组织树、目标树、全景图、额度和事件路由；
+ * 组织运行时的 HTTP 入口（#291）：只注册用户认证、任务账本与派活、组织树、全景图、额度和事件路由；
  * 服务控制（/api/service/*）由 main.ts 注册。
  */
 export async function createApp(options: {
@@ -82,8 +78,6 @@ export async function createApp(options: {
   onRoute?: (method: string, url: string) => void;
   /** 任务运行时（#262）的注入项：测试用来缩短看门狗间隔、替换 git/gh 调用。 */
   tasks?: Partial<RunnerOptions>;
-  /** 目标判定（#313）的注入项：测试用来缩短命令超时、替换 git 调用。 */
-  goals?: Partial<Omit<GoalCheckOptions, "data">>;
   /** 全景网页失效通知的检查间隔（毫秒），测试缩短。 */
   mapPollMs?: number;
   /** 全景变更检测（测试可注入计数）；缺省读 map_revision。 */
@@ -277,15 +271,12 @@ export async function createApp(options: {
     ...runnerEnvOptions(),
     ...options.tasks,
   };
-  // 旧关注点先迁完，任务运行时才接管与派发；避免短暂读到混合状态。
+  // 表先建好，任务运行时才接管与派发。
   ensureTaskTables(db);
   ensureOrgTables(db);
   ensureScheduleTables(db);
-  migrateSpecialists(db);
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
   registerPatrolRoutes(app, db, taskRunner);
-  // 全景初稿（t186）：读本机仓库起草人话字段，执行者完成后登记初稿，用户确认才写进节点。
-  registerDraftRoutes(app, db, taskRunner, taskOptions.exec);
   // 周期任务（#404）：到点在节点下建普通任务并派发；等任务运行时接管完上次在跑的再判上一轮。
   const schedulePump = new SchedulePump(
     db,
@@ -360,10 +351,6 @@ export async function createApp(options: {
       "隔离数据目录不唤醒 leader，事件留在收件箱；要唤醒请设 ATRIUM_LEADER_WAKE=1",
     );
   app.addHook("preClose", async () => leaderWaker.close());
-  registerGoalRoutes(app, db, {
-    data: resolve(options.data),
-    ...options.goals,
-  });
   registerSkillRoutes(app, db);
   registerMapRoutes(app, db, {
     login: mapLogin,

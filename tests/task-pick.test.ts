@@ -143,7 +143,7 @@ test("refusalsOf：逐项列出不能接的原因，能接为空", () => {
   assert.equal(kimi[1], "档案 avoid_jobs 避开专员 前端");
   assert.match(kimi[2]!, /^档案 avoid_nodes 避开 o1/);
   assert.match(kimi[3]!, /^额度用尽至 .*\d\d:\d\d$/);
-  assert.equal(kimi[4], "档案 billing=metered，当前钱份额为 0 元");
+  assert.equal(kimi[4], "档案 billing=metered（按量计费），不派");
   // 没有 pace 时份额（headroom）不拦。
   assert.deepEqual(
     refusalsOf(cand("claude+opus"), { ...f, pace: undefined }),
@@ -808,7 +808,7 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   assert.match(auto.body.pick.worker, /^opencode/);
   assert.match(auto.body.pick.reason, /(?:^|按额度挑、)opencode 富余 \+54%/);
   // 干活的专员第 1 选 kimi 超速、opencode 富余多出 30 点以上：改推荐 opencode，自动派也挑它。
-  const role = await call("POST", "/api/roles", {
+  const role = await call("POST", "/api/specialists", {
     name: "前端",
     description: "界面",
     body: "做界面",
@@ -817,7 +817,7 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   assert.equal(role.status, 201, JSON.stringify(role.body));
   // opencode 独占，等自动派的那个跑完，免得它正忙。
   await call("GET", `/api/tasks/${t2.ref}/wait?timeout=30`);
-  const t3 = await add("改页面", { job: "前端" });
+  const t3 = await add("改页面", { by: "前端" });
   const favoured = await call("GET", `/api/tasks/${t3.ref}/pick`);
   assert.match(favoured.body.recommended, /^opencode/);
   assert.match(
@@ -831,7 +831,7 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   assert.equal(dispatched.body.pick.reason, favoured.body.reason);
   // 按推荐写死不提醒。
   await call("GET", `/api/tasks/${t3.ref}/wait?timeout=30`);
-  const t4 = await add("照推荐写死", { job: "前端" });
+  const t4 = await add("照推荐写死", { by: "前端" });
   const same = await call("POST", `/api/tasks/${t4.ref}/run`, {
     worker: favoured.body.recommended,
   });

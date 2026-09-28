@@ -2,7 +2,6 @@
 export function emptyWorkers(): {
   role: null;
   rows: unknown[];
-  suggestions: unknown[];
   pending: true;
 };
 export function fetchRootOrg(

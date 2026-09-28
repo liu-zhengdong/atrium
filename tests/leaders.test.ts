@@ -326,7 +326,6 @@ test("leader：事件只投所属部分的 leader，唤醒后越权被拒、上�
       ],
       ["POST", "/api/quota/claude/clear", undefined, /额度/],
       ["GET", "/api/events?as=secretary", undefined, /以 secretary 的名义/],
-      ["POST", "/api/reviews/t1/decide", { conclusion: "x" }, /拍板/],
     ];
     for (const [method, url, body, message] of denied) {
       const result = await as(method, url, body);

@@ -82,7 +82,7 @@ export function formatOverview(
 ): string[] {
   if (isBlank(overview))
     return [
-      `人话介绍还没写（是什么、能做什么、怎么走完、由哪几部分组成、现状）：atrium org show ${node.ref} --charter --raw > 章程.md，补上 what、uses、flow、alias、analogy、now、next 后 atrium org edit ${node.ref} --charter 章程.md --reason 原因`,
+      `人话介绍还没写（是什么、能做什么、怎么走完、由哪几部分组成、现状）：atrium org show ${node.ref} --raw > 章程.md，补上 what、uses、flow、alias、analogy、now、next 后 atrium org edit ${node.ref} --charter 章程.md --reason 原因`,
       ...partLines(overview, detail),
       ...pointLines(points),
     ];

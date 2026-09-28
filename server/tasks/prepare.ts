@@ -41,8 +41,6 @@ export type PromptParts = {
   roleDoc?: string;
   /** 章程要点（组织树节点的链路、目标与硬边界），紧跟岗位说明。 */
   charter?: Brief;
-  /** 请了的专员与各自的检查要点、底线（concern-gate.ts concernSection）。 */
-  concerns?: string;
   /** 投任务的节点（关注点）的说明。 */
   originDoc?: string;
   /** 本次挂载的组织技能（server/skills/mount.ts 生成）。 */
@@ -52,7 +50,7 @@ export type PromptParts = {
   rules?: readonly string[];
 };
 
-/** 拼派活提示词：标题、详述、运行中收到的补充、可用的凭据（只有名称）、岗位说明、章程要点、请了的专员、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
+/** 拼派活提示词：标题、详述、运行中收到的补充、可用的凭据（只有名称）、岗位说明、章程要点、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
 export function buildPrompt({
   title,
   brief,
@@ -60,7 +58,6 @@ export function buildPrompt({
   secrets,
   roleDoc,
   charter,
-  concerns,
   originDoc,
   skills,
   rootDoc,
@@ -75,7 +72,6 @@ export function buildPrompt({
     ["可用的凭据", secrets],
     ["岗位说明", roleDoc],
     ...(charter ? [[charter.heading, charter.text] as [string, string]] : []),
-    ["请了的专员与检查要点", concerns],
     ["投任务的专员说明", originDoc],
     ["本次挂载的技能", skills],
     ["组织说明（.agents/README.md）", rootDoc],
@@ -343,7 +339,7 @@ export function pickWorker({
       continue;
     }
     if (profiles[tool]?.rules.billing === "metered") {
-      skipped.push({ tool, reason: "档案 billing=metered，当前钱份额为 0 元" });
+      skipped.push({ tool, reason: "档案 billing=metered（按量计费），不派" });
       continue;
     }
     eligible.push(tool);

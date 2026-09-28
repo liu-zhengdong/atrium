@@ -107,7 +107,7 @@ export function rejectBoundaries(
       .join("\n")}`,
     "usage",
     undefined,
-    `atrium org show ${ref(node.id)} --charter --raw`,
+    `atrium org show ${ref(node.id)} --raw`,
   );
 }
 export function saveBoundaries(

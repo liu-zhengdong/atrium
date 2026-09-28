@@ -164,8 +164,8 @@ test("校验错误展示选项名或参数名，不显示接口字段与英文�
     "标题：标题不能为空",
   );
   assert.equal(
-    cliErrorMessage("role: 岗位不存在", commands["task add"]),
-    "--role：岗位不存在",
+    cliErrorMessage("part: 节点不存在", commands["task add"]),
+    "--part：节点不存在",
   );
   assert.equal(
     cliErrorMessage("mystery_code: Invalid input", commands["task add"]),

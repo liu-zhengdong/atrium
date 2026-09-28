@@ -19,7 +19,6 @@ import {
   secretaryText,
   type SecretaryTone,
 } from "../server/tasks/secretary-watch.ts";
-import { mergeQueueText } from "../server/tasks/merge-eta.ts";
 
 /**
  * `atrium statusline`（#355）：Claude Code 状态栏。数据经服务取（`/api/tasks/top` 与 `/api/tasks/plan`），
@@ -240,12 +239,7 @@ export function renderStatusline(input: StatuslineInput): string {
     `在做 ${count("worker")}`,
     ...(count("leader") ? [`leader 处理 ${count("leader")}`] : []),
     ...(count("secretary") ? [`秘书处理 ${count("secretary")}`] : []),
-    // 合入队列长度与预计还要多久（t254）：「合入 18（排队合入 16 · 还要约 2 小时 10 分）」。
-    ...(count("merge")
-      ? [
-          `合入 ${count("merge")}${mergeQueueText(snapshot.merge_queue) ? `（${mergeQueueText(snapshot.merge_queue)}）` : ""}`,
-        ]
-      : []),
+    ...(count("merge") ? [`合入 ${count("merge")}`] : []),
     ...(count("queue") ? [`排队 ${count("queue")}`] : []),
   ];
   const head = [

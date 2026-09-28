@@ -5,7 +5,6 @@ import { legacyDir } from "../server/imports/dirs.ts";
 import type { Command, Values } from "./main.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
-import type { Doc } from "../server/org/model.ts";
 import { formatParam, type Param } from "../server/org/boundaries.ts";
 import { OVERVIEW_KEYS, type Overview } from "../server/org/overview.ts";
 import {
@@ -120,43 +119,6 @@ type TaskCounts = {
   merge_queued?: number;
   merging?: number;
 };
-type BudgetView = {
-  own: Record<string, unknown>;
-  quota: {
-    scope: string;
-    amount?: number;
-    used?: number | null;
-    shared: boolean;
-    relevant: boolean;
-  }[];
-  disk: { amount?: number; shared: boolean };
-  money: { amount?: number; shared: boolean };
-};
-export function formatBudget(view: BudgetView, detail = false): string {
-  const quota = view.quota.filter((q) =>
-    detail ? q.amount !== undefined : !q.shared || q.relevant,
-  );
-  const parts = quota.map(
-    (q) =>
-      `${q.scope} ${q.shared ? "共享池" : "份额"} ${q.amount}${q.used === null || q.used === undefined ? "（额度数据不可用）" : `（约用 ${q.used}）`}`,
-  );
-  if (detail && !parts.length) parts.push("共享池（暂无额度数据）");
-  const disk =
-    view.disk.amount === undefined
-      ? detail
-        ? "磁盘共享池（动态）"
-        : ""
-      : !detail && view.disk.shared
-        ? ""
-        : `磁盘 ${view.disk.shared ? "共享池" : "份额"} ${view.disk.amount} GB`;
-  const money =
-    !detail && view.money.shared
-      ? ""
-      : `钱 ${view.money.shared ? "共享池" : "份额"} ${view.money.amount ?? 0} 元`;
-  return [parts.length ? `额度 ${parts.join("、")}` : "", disk, money]
-    .filter(Boolean)
-    .join(" · ");
-}
 /** org tree 的任务计数；为零的项省略。 */
 export function formatCounts(own: TaskCounts, sent: TaskCounts): string {
   const parts = [
@@ -191,13 +153,8 @@ const FIELD_LABELS: Record<string, string> = {
   goal: "目标",
   report: "汇报",
   escalate: "找上层",
-  owns: "负责",
-  accepts: "能接",
-  status: "现状",
-  commitments: "承诺",
-  asks: "要上面定",
 };
-/** 章程／能力卡：逐个字段一行，空字段省略；什么都没写时只标「未填写」。 */
+/** 章程：逐个字段一行，空字段省略；什么都没写时只标「未填写」。 */
 export function formatDoc(
   label: string,
   doc: { rev: string; fields: Record<string, unknown>; body: string } | null,
@@ -232,25 +189,14 @@ const reason = (values: Values) => {
   if (!result?.trim()) throw new Problem(400, "--reason 不能为空");
   return result;
 };
-const doc = (values: Values): Doc | undefined =>
-  values.charter !== undefined
-    ? "charter"
-    : values.card !== undefined
-      ? "card"
-      : undefined;
-const file = (values: Values, key: "charter" | "card") => {
-  const name = str(values, key);
-  if (!name) throw new Problem(400, `--${key} 应指定文件`);
+const charterFile = (values: Values) => {
+  const name = str(values, "charter");
+  if (!name) throw new Problem(400, "--charter 应指定文件");
   try {
     return readFileSync(resolve(name), "utf8");
   } catch {
-    throw new Problem(400, `--${key} 文件无法读取：${name}`);
+    throw new Problem(400, `--charter 文件无法读取：${name}`);
   }
-};
-const common = {
-  ...options,
-  charter: { type: "string" as const },
-  card: { type: "string" as const },
 };
 const out = (json: boolean, value: unknown, text: string, next: string) => {
   if (json) printJson(value);
@@ -278,7 +224,6 @@ export const orgCommands: Record<string, Command> = {
           archived_at: number | null;
           tasks: TaskCounts;
           sent: TaskCounts;
-          budget: BudgetView;
           leader_state?: LeaderBrief;
         }>
       >(`/org/tree${as(values)}`);
@@ -298,38 +243,31 @@ export const orgCommands: Record<string, Command> = {
         rows
           .map(
             (n) =>
-              `${"  ".repeat(depth(n))}${n.ref} [${n.aspect ? "管方面" : labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}${n.leader_state ? `（${n.leader_state.name}，${wakeText(n.leader_state.wake)}）` : ""}` : ""}${formatCounts(n.tasks, n.sent)}${formatBudget(n.budget) ? ` · ${formatBudget(n.budget)}` : ""}${n.archived_at ? " · 已归档" : ""}`,
+              `${"  ".repeat(depth(n))}${n.ref} [${n.aspect ? "管方面" : labels[n.kind]}] ${n.name}${n.leader ? ` · leader ${person(n.leader)}${n.leader_state ? `（${n.leader_state.name}，${wakeText(n.leader_state.wake)}）` : ""}` : ""}${formatCounts(n.tasks, n.sent)}${n.archived_at ? " · 已归档" : ""}`,
           )
-          .join("\n") +
-          (rows.length ? "\n额度用量为估算；账号总览看 atrium quota" : "") ||
-          "组织树为空",
+          .join("\n") || "组织树为空",
         rows.length ? "atrium org show o1" : "atrium org import",
       );
     },
   },
   "org show": {
-    args: "节点 [--detail] [--charter|--card --raw]",
+    args: "节点 [--detail] [--raw]",
     about:
-      "看节点：先讲人话（是什么、能做什么、怎么走完、由哪几部分组成、现状与阶段），--detail 展开章程正文、硬边界、预算、能力卡等技术细节",
+      "看节点：先讲人话（是什么、能做什么、怎么走完、由哪几部分组成、现状与阶段），--detail 展开章程正文、硬边界等技术细节，--raw 导出章程原文（可改后 org edit --charter）",
     options: {
       ...options,
       detail: { type: "boolean" },
-      charter: { type: "boolean" },
-      card: { type: "boolean" },
       raw: { type: "boolean" },
     },
     positionals: [1, 1],
     async run({ positionals: [id], values, json }) {
-      const target = doc(values);
-      if (values.raw && !target)
-        throw new Problem(400, "--raw 需同时指定 --charter 或 --card");
       const query = new URLSearchParams();
       if (str(values, "as")) query.set("as", str(values, "as")!);
-      if (values.raw && target) query.set("raw", target);
+      if (values.raw) query.set("raw", "charter");
       const result = await (
         await client()
       ).get<Record<string, unknown>>(`/org/nodes/${path(id!)}?${query}`);
-      if (values.raw && target) {
+      if (values.raw) {
         if (json) printJson(result);
         else process.stdout.write(result.raw as string);
         return;
@@ -350,14 +288,8 @@ export const orgCommands: Record<string, Command> = {
           fields: Record<string, unknown>;
           body: string;
         } | null;
-        card: {
-          rev: string;
-          fields: Record<string, unknown>;
-          body: string;
-        } | null;
         chain: { name: string; goal: string }[];
         boundaries: BoundaryView;
-        budget: BudgetView;
         recent_tasks: {
           ref: string;
           title: string;
@@ -403,9 +335,7 @@ export const orgCommands: Record<string, Command> = {
                   ]
                 : ["目标链：无"]),
               ...formatBoundaries(node.boundaries),
-              `预算：${formatBudget(node.budget, true)}`,
               ...formatDoc("章程", technical),
-              ...formatDoc("能力卡", node.card),
               ...(node.recent_tasks.length
                 ? [
                     `手上的任务（最近 ${node.recent_tasks.length} 条）`,
@@ -417,7 +347,7 @@ export const orgCommands: Record<string, Command> = {
                 : []),
             ]
           : [
-              `细节已折叠（章程正文、硬边界、预算、能力卡、手上的任务）：atrium org show ${node.ref} --detail`,
+              `细节已折叠（章程正文、硬边界、手上的任务）：atrium org show ${node.ref} --detail`,
             ]),
       ];
       out(
@@ -425,7 +355,7 @@ export const orgCommands: Record<string, Command> = {
         result,
         lines.join("\n"),
         isBlank(node.overview)
-          ? `atrium org show ${node.ref} --charter --raw`
+          ? `atrium org show ${node.ref} --raw`
           : detail
             ? `atrium org history ${node.ref}`
             : `atrium org show ${node.ref} --detail`,
@@ -523,11 +453,12 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org edit": {
-    args: "节点 [--charter 文件|--card 文件|--name 名称] [--slug 路径名] [--leader aN|none] [--parent 节点] [--repo 路径] [--kind aspect|module] [--archive] [--rev rN] [--reason 原因]",
+    args: "节点 [--charter 文件|--name 名称] [--slug 路径名] [--leader aN|none] [--parent 节点] [--repo 路径] [--kind aspect|module] [--archive] [--rev rN] [--reason 原因]",
     about:
-      "编辑节点、章程或能力卡；--kind aspect 改成管方面的部分，--kind module 改回普通部分（改回前要先清掉要点与部分的适用范围）",
+      "编辑节点或章程；--kind aspect 改成管方面的部分，--kind module 改回普通部分（改回前要先清掉要点与部分的适用范围）",
     options: {
-      ...common,
+      ...options,
+      charter: { type: "string" },
       slug: { type: "string" },
       name: { type: "string" },
       leader: { type: "string" },
@@ -540,26 +471,23 @@ export const orgCommands: Record<string, Command> = {
     },
     positionals: [1, 1],
     async run({ positionals: [id], values, json }) {
-      const target = doc(values);
-      if (values.charter !== undefined && values.card !== undefined)
-        throw new Problem(400, "--charter 与 --card 只能选一个");
       const input: Record<string, unknown> = {
         reason: reason(values),
         rev: str(values, "rev"),
       };
       let result: unknown;
-      if (target) {
+      if (values.charter !== undefined) {
         if (
           ["slug", "name", "leader", "parent", "repo", "kind"].some(
             (key) => values[key] !== undefined,
           ) ||
           values.archive === true
         )
-          throw new Problem(400, "--charter/--card 不能与节点字段同时修改");
-        input.source = file(values, target);
+          throw new Problem(400, "--charter 不能与节点字段同时修改");
+        input.source = charterFile(values);
         result = await (
           await client()
-        ).put(`/org/nodes/${path(id!)}/docs/${target}${as(values)}`, input);
+        ).put(`/org/nodes/${path(id!)}/docs/charter${as(values)}`, input);
       } else {
         Object.assign(input, {
           slug: str(values, "slug"),
@@ -598,7 +526,7 @@ export const orgCommands: Record<string, Command> = {
         json,
         result,
         [
-          `已更新 ${id} ${target ?? "节点"} ${value.before ?? ""} → ${value.rev}`,
+          `已更新 ${id} ${values.charter !== undefined ? "charter" : "节点"} ${value.before ?? ""} → ${value.rev}`,
           ...(value.converted ?? []).map(
             (c) => `${c.node} 的 ${c.id} 不再覆盖上层，转为该节点自有条目`,
           ),
@@ -695,7 +623,7 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org history": {
-    args: "节点 [--target node|charter|card] [--rev rN] [--before rN] [--after rN] [--limit N]",
+    args: "节点 [--target node|charter] [--rev rN] [--before rN] [--after rN] [--limit N]",
     about: "查看修订历史与字段差异",
     options: {
       ...options,
@@ -745,120 +673,27 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org revert": {
-    args: "节点 [--charter|--card] [--to rN] [--reason 原因]",
-    about: "恢复旧内容并追加新修订",
+    args: "节点 --to rN --reason 原因",
+    about: "把章程恢复到旧修订并追加新修订",
     options: {
       ...options,
-      charter: { type: "boolean" },
-      card: { type: "boolean" },
       to: { type: "string" },
       reason: { type: "string" },
     },
     positionals: [1, 1],
     async run({ positionals: [id], values, json }) {
-      const target = doc(values);
-      if (!target) throw new Problem(400, "--charter 或 --card 必填");
       const result = await (
         await client()
       ).post<{ rev: string }>(`/org/nodes/${path(id!)}/revert${as(values)}`, {
-        doc: target,
+        doc: "charter",
         to: str(values, "to"),
         reason: reason(values),
       });
       out(
         json,
         result,
-        `已恢复 ${id} ${target}，新增 ${result.rev}`,
+        `已恢复 ${id} 章程，新增 ${result.rev}`,
         `atrium org history ${id}`,
-      );
-    },
-  },
-  "org link-roles": {
-    args: "[--apply]",
-    about: "把旧 role 字符串的任务关联到组织节点（默认只预览）",
-    options: { ...options, apply: { type: "boolean" } },
-    positionals: [0, 0],
-    async run({ values, json }) {
-      const apply = values.apply === true;
-      const result = await (
-        await client()
-      ).post<{
-        preview: boolean;
-        linked: number;
-        groups: {
-          node: string;
-          path: string;
-          roles: string[];
-          tasks: string[];
-        }[];
-        unmatched: {
-          task: string;
-          title: string;
-          role: string;
-          reason: string;
-        }[];
-        truncated: boolean;
-      }>(`/org/link-roles${as(values)}`, { apply });
-      const lines = [
-        result.preview
-          ? `将关联 ${result.linked} 个任务（预览，未写入）：`
-          : `已关联 ${result.linked} 个任务：`,
-        ...result.groups.map(
-          (g) =>
-            `  ${g.roles.join(" / ")} → ${g.node} ${g.path}  ${g.tasks.length} 个（${g.tasks.slice(0, 10).join("、")}${g.tasks.length > 10 ? "…" : ""}）`,
-        ),
-        ...(result.unmatched.length
-          ? [
-              `无法对应 ${result.unmatched.length} 个（保留原 role，node_id 留空）：`,
-              ...result.unmatched
-                .slice(0, 50)
-                .map(
-                  (u) => `  ${u.task}「${u.title}」role=${u.role}：${u.reason}`,
-                ),
-              ...(result.unmatched.length > 50
-                ? [
-                    `  …另有 ${result.unmatched.length - 50} 个，用 --json 看全部`,
-                  ]
-                : []),
-            ]
-          : []),
-        ...(result.truncated
-          ? ["一次最多处理 5000 个；apply 后再跑一次处理其余"]
-          : []),
-      ];
-      if (!result.linked && !result.unmatched.length)
-        lines.splice(0, lines.length, "没有待关联的旧 role 任务");
-      out(
-        json,
-        result,
-        lines.join("\n"),
-        result.preview && result.linked
-          ? "atrium org link-roles --apply"
-          : "atrium org tree",
-      );
-    },
-  },
-  "org migrate-goals": {
-    args: "[--apply]",
-    about:
-      "把目标树（gN）迁为所在节点的阶段记录、任务按目标回填归属部分；默认只预览，--apply 先备份再写入，之后 goal 命令下线",
-    options: { ...options, apply: { type: "boolean" } },
-    positionals: [0, 0],
-    async run({ values, json }) {
-      const result = await (
-        await client()
-      ).post<MigrationView>(`/goals/migrate${as(values)}`, {
-        apply: values.apply === true,
-      });
-      const pending =
-        result.stages > 0 || result.tasks.length > 0 || !result.retired;
-      out(
-        json,
-        result,
-        formatMigration(result),
-        result.preview && pending
-          ? "atrium org migrate-goals --apply"
-          : `atrium org show ${result.nodes[0]?.node ?? "o1"}`,
       );
     },
   },
@@ -988,72 +823,3 @@ export const orgCommands: Record<string, Command> = {
     },
   },
 };
-
-export type MigrationView = {
-  preview: boolean;
-  retired: boolean;
-  backup?: string | null;
-  stages: number;
-  nodes: {
-    node: string;
-    name: string;
-    path: string;
-    stages: {
-      id: string;
-      result: string;
-      status_label: string;
-      criteria: number;
-      evidence: number;
-    }[];
-    kept: string[];
-  }[];
-  tasks: { task: string; goal: string; part: string; part_name: string }[];
-  tasks_kept: {
-    task: string;
-    goal: string;
-    part: string;
-    part_name: string;
-  }[];
-  orphans: { goal: string; node: string }[];
-};
-/** 迁移回执：按节点列「迁入的阶段」与「已在章程里的」，再列任务的 goal → 归属部分对照。 */
-export function formatMigration(view: MigrationView): string {
-  const head = view.preview
-    ? view.retired
-      ? "目标树已迁移过；再迁会补上新出现的（预览，未写入）："
-      : "目标树迁为节点阶段记录（预览，未写入）："
-    : "已迁移：";
-  const lines = [head];
-  for (const node of view.nodes) {
-    if (!node.stages.length && !node.kept.length) continue;
-    lines.push(
-      `  ${node.node} ${node.name}（${node.path}）← ${node.stages.length} 条阶段${node.kept.length ? `，已在章程里 ${node.kept.join("、")}` : ""}`,
-      ...node.stages.map(
-        (s) =>
-          `    ${s.id} [${s.status_label}] ${s.result}${s.criteria ? ` · 验收 ${s.criteria} 条` : ""}${s.evidence ? ` · 证据 ${s.evidence} 条` : ""}`,
-      ),
-    );
-  }
-  if (view.tasks.length)
-    lines.push(
-      `  任务归属（按目标的负责节点回填 ${view.tasks.length} 个）：`,
-      ...view.tasks.map(
-        (t) => `    ${t.task} ${t.goal} → ${t.part} ${t.part_name}`,
-      ),
-    );
-  if (view.tasks_kept.length)
-    lines.push(
-      `  已有归属部分、不改 ${view.tasks_kept.length} 个：${view.tasks_kept.map((t) => `${t.task}（${t.part}）`).join("、")}`,
-    );
-  if (view.orphans.length)
-    lines.push(
-      `  负责节点不在组织树里、不能迁：${view.orphans.map((o) => `${o.goal}（${o.node}）`).join("、")}`,
-    );
-  if (lines.length === 1) lines.push("  没有要迁的目标或任务");
-  if (view.preview)
-    lines.push(
-      "写入时先整库备份；阶段写进各节点章程并留修订（可 atrium org revert），goals 表与任务原来的 goal 不改；写入后 goal 命令下线",
-    );
-  else if (view.backup) lines.push(`备份：${view.backup}`);
-  return lines.join("\n");
-}

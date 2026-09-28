@@ -339,20 +339,8 @@ test("状态栏：旧服务给的整篇原因与多行标题只出一行，按�
   assert.ok(story.endsWith("## 必须改的问题"), story);
 });
 
-test("状态栏：合入一段带上排队件数与预计还要多久（t254）", () => {
+test("状态栏：合入一段只写件数", () => {
   const merging = row("t81", { kind: "merge", who: null, text: "排队合入" });
-  const head = (extra: Partial<StatuslineInput["snapshot"]>) =>
-    render({ snapshot: snapshot([merging], extra) }).split("\n")[0]!;
-  assert.match(
-    head({
-      merge_queue: {
-        waiting: 16,
-        merging: 1,
-        per_ms: 8 * 60_000,
-        eta_ms: 25 * 60_000,
-      },
-    }),
-    /合入 1（排队合入 16 · 还要约 25 分钟）/,
-  );
-  assert.match(head({}), /合入 1(?!（)/);
+  const head = render({ snapshot: snapshot([merging], {}) }).split("\n")[0]!;
+  assert.match(head, /合入 1(?!（)/);
 });

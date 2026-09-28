@@ -9,8 +9,7 @@ import { readFileSync } from "node:fs";
 import { importMark, markImported } from "./marks.ts";
 
 /**
- * 旧任务的详述回填（#355）：账本以前只存 brief_path，启动时按路径读入 tasks.brief；
- * 会审议题原文同样回填 task_councils.topic_text。读不到的记日志、保留路径，其余照常；
+ * 旧任务的详述回填（#355）：账本以前只存 brief_path，启动时按路径读入 tasks.brief。读不到的记日志、保留路径，其余照常；
  * 整轮做完记号，之后不再读这些文件。
  */
 
@@ -78,33 +77,6 @@ export function backfillBriefs(
         log(
           `任务详述回填：t${row.id} 超过 ${BRIEF_MAX_BYTES / 1024} KB，已截断`,
         );
-    }
-  }
-  after = 0;
-  for (;;) {
-    const rows = db
-      .prepare(
-        `SELECT c.task_id,c.topic_brief,t.repo FROM task_councils c JOIN tasks t ON t.id=c.task_id
-          WHERE c.task_id>? AND c.topic_text IS NULL AND c.topic_brief IS NOT NULL ORDER BY c.task_id LIMIT ?`,
-      )
-      .all(after, PAGE) as {
-      task_id: number;
-      topic_brief: string;
-      repo: string | null;
-    }[];
-    if (!rows.length) break;
-    for (const row of rows) {
-      after = row.task_id;
-      const found = readLegacyBrief(row.topic_brief, row.repo, read);
-      if (!found.ok) {
-        result.missing++;
-        log(`会审议题回填：t${row.task_id} ${found.reason}，保留原路径`);
-        continue;
-      }
-      db.prepare(
-        "UPDATE task_councils SET topic_text=? WHERE task_id=? AND topic_text IS NULL",
-      ).run(found.text, row.task_id);
-      result.filled++;
     }
   }
   markImported(

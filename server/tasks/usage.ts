@@ -138,38 +138,3 @@ export function endUsage(
       ),
   );
 }
-
-export function subtreeUsage(
-  db: DatabaseSync,
-  nodeIds: readonly number[],
-  provider: string,
-  reset: number,
-): number {
-  if (!nodeIds.length) return 0;
-  let sum = 0;
-  for (let i = 0; i < nodeIds.length; i += 100) {
-    const page = nodeIds.slice(i, i + 100);
-    const marks = page.map(() => "?").join(",");
-    let cursor = 0;
-    for (;;) {
-      const rows = db
-        .prepare(
-          `SELECT u.rowid AS id,u.points FROM task_usage u JOIN tasks t ON t.id=u.task_id WHERE t.node_id IN (${marks}) AND u.provider=? AND u.window_reset_at BETWEEN ? AND ? AND u.rowid>? ORDER BY u.rowid LIMIT 200`,
-        )
-        .all(
-          ...page,
-          provider,
-          reset - WINDOW_BUCKET_MS,
-          reset + WINDOW_BUCKET_MS,
-          cursor,
-        ) as {
-        id: number;
-        points: number;
-      }[];
-      for (const row of rows) sum += row.points;
-      if (rows.length < 200) break;
-      cursor = rows.at(-1)!.id;
-    }
-  }
-  return sum;
-}

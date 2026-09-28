@@ -8,8 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import { addNode, editDoc, editNode } from "../server/org/write.ts";
 import { show, tree } from "../server/org/read.ts";
-import { matchRole, taskNode } from "../server/org/task-node.ts";
-import { linkRoles } from "../server/org/task-link.ts";
+import { taskNode } from "../server/org/task-node.ts";
 import { BRIEF_MAX, charterBrief, formatBrief } from "../server/org/brief.ts";
 import {
   createTask,
@@ -52,150 +51,6 @@ function setup() {
   node(db, { parent: "o5", slug: "runtime", kind: "module", name: "runtime" });
   return db;
 }
-
-test("旧 role 名按任务仓库匹配节点：同名模块分属不同仓库时各归各的", () => {
-  const db = setup();
-  const id = (role: string, repo: string | null) =>
-    matchRole(db, role, repo).node?.id ?? null;
-  assert.equal(id("runtime", ATRIUM), 3);
-  assert.equal(id("modules/runtime", ATRIUM), 3);
-  assert.equal(
-    id("runtime", OPENQUOTA),
-    6,
-    "OpenQuota 的任务不再取到 Atrium 的节点",
-  );
-  assert.equal(id("runtime", `${OPENQUOTA}/`), 6, "仓库路径尾部斜杠不影响");
-  assert.equal(id("concerns/安全", ATRIUM), 4);
-  assert.equal(id("安全", ATRIUM), 4);
-  assert.equal(id("concerns/runtime", ATRIUM), null, "前缀限定类型");
-  assert.equal(id("安全", OPENQUOTA), null, "别的仓库没有这个关注点");
-  assert.match(
-    (matchRole(db, "runtime", null) as { reason: string }).reason,
-    /多个同名节点：o3、o6/,
-  );
-  assert.match(
-    (matchRole(db, "runtime", "/repo/else") as { reason: string }).reason,
-    /都没有挂任务仓库/,
-  );
-  assert.equal(id("openquota/runtime", ATRIUM), 6, "节点路径不看仓库");
-  assert.equal(id("o6", null), 6);
-  assert.equal(
-    id("web/x", ATRIUM),
-    null,
-    "带斜杠又不是节点路径的，当旧 .agents 路径",
-  );
-  editNode(db, "o6", { archive: true, reason: "归档" } as never, "u1");
-  assert.equal(id("runtime", null), 3, "归档节点不参与旧名匹配");
-  assert.throws(
-    () => matchRole(db, "o6", null, true),
-    /role: 节点 o6 runtime 已归档/,
-  );
-  db.close();
-});
-
-test("task add --role 节点 --from 节点：写 node_id／origin_node_id；旧名对不上只存 role", () => {
-  const db = setup();
-  const byNode = createTask(db, {
-    title: "改派活",
-    role: "atrium/runtime",
-    from: "atrium/安全",
-    repo: ATRIUM,
-  });
-  assert.equal(byNode.node_id, 3);
-  assert.equal(byNode.node_ref, "o3");
-  assert.equal(byNode.origin_ref, "o4");
-  assert.equal(byNode.role, "atrium/runtime");
-  const legacy = createTask(db, {
-    title: "旧写法",
-    role: "runtime",
-    repo: OPENQUOTA,
-  });
-  assert.equal(legacy.node_ref, "o6");
-  const unknown = createTask(db, {
-    title: "没有节点",
-    role: "night",
-    repo: ATRIUM,
-  });
-  assert.equal(unknown.node_id, null);
-  assert.equal(unknown.role, "night");
-  // 破坏输入：写明节点却不存在、from 不存在都按字段名拒绝
-  assert.throws(
-    () => createTask(db, { title: "x", role: "o99" }),
-    /role: 节点 o99 不存在/,
-  );
-  assert.throws(
-    () => createTask(db, { title: "x", role: "runtime", from: "nope" }),
-    /from: 节点 nope 不存在/,
-  );
-  assert.throws(
-    () => createTask(db, { title: "x", role: "runtime", from: 3 }),
-    /from: 应为文本/,
-  );
-  const count = db.prepare("SELECT COUNT(*) AS n FROM tasks").get() as {
-    n: number;
-  };
-  assert.equal(count.n, 3, "被拒的请求不落账");
-  const created = getTask(db, byNode.ref).events.at(-1)!;
-  assert.deepEqual(JSON.parse(created.detail!), {
-    title: "改派活",
-    node: "o3",
-    from: "o4",
-  });
-  // 改 role 重新解析节点；from 可清空
-  const moved = updateTask(db, byNode.ref, { role: "o6", from: "" });
-  assert.equal(moved.node_ref, "o6");
-  assert.equal(moved.origin_ref, null);
-  const cleared = updateTask(db, byNode.ref, { role: "" });
-  assert.equal(cleared.node_ref, null);
-  db.close();
-});
-
-test("org link-roles：默认预览，apply 只写 node_id 并记事件，重复执行无事可做", () => {
-  const db = setup();
-  const t1 = createTask(db, { title: "a", repo: ATRIUM });
-  const t2 = createTask(db, { title: "b", repo: OPENQUOTA });
-  const t3 = createTask(db, { title: "c", repo: ATRIUM });
-  const t4 = createTask(db, { title: "d" });
-  const t5 = createTask(db, { title: "e", role: "o3" });
-  // 旧任务：直接写 role，模拟第 3 步之前的账本
-  const set = db.prepare("UPDATE tasks SET role=? WHERE id=?");
-  set.run("modules/runtime", t1.id);
-  set.run("runtime", t2.id);
-  set.run("demo", t3.id);
-  set.run("runtime", t4.id);
-  const preview = linkRoles(db, false);
-  assert.equal(preview.preview, true);
-  assert.equal(preview.linked, 2);
-  assert.deepEqual(
-    preview.groups.map((g) => [g.node, g.path, g.roles, g.tasks]),
-    [
-      ["o3", "atrium/runtime", ["modules/runtime"], ["t1"]],
-      ["o6", "openquota/runtime", ["runtime"], ["t2"]],
-    ],
-  );
-  assert.deepEqual(
-    preview.unmatched.map((u) => [u.task, u.role]),
-    [
-      ["t3", "demo"],
-      ["t4", "runtime"],
-    ],
-  );
-  assert.match(preview.unmatched[1]!.reason, /任务没有仓库/);
-  assert.equal(getTask(db, t1.ref).node_id, null, "预览不写入");
-  const applied = linkRoles(db, true, 5000);
-  assert.equal(applied.linked, 2);
-  assert.equal(getTask(db, t1.ref).node_ref, "o3");
-  assert.equal(getTask(db, t2.ref).node_ref, "o6");
-  assert.equal(getTask(db, t1.ref).role, "modules/runtime", "role 原值不动");
-  const event = getTask(db, t2.ref).events.at(-1)!;
-  assert.equal(event.kind, "org_link");
-  assert.deepEqual(JSON.parse(event.detail!), { node: "o6" });
-  assert.equal(getTask(db, t5.ref).node_ref, "o3");
-  const again = linkRoles(db, true);
-  assert.equal(again.linked, 0);
-  assert.equal(again.unmatched.length, 2);
-  db.close();
-});
 
 test("章程要点：边界完整附上，超长先截父节点目标再截本节点目标，整段不超过 2000 字", () => {
   const boundaries = Array.from({ length: 17 }, (_, i) => ({
@@ -312,10 +167,10 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
     { text: "随时升级", why: "不等空闲", by: "u1 09-27" },
     "u1",
   );
-  const task = getTask(
-    db,
-    createTask(db, { title: "修派活", role: "o3", from: "o4" }).ref,
-  );
+  const task = getTask(db, createTask(db, { title: "修派活", from: "o4" }).ref);
+  // 旧任务记在节点上（node_id）：派活附该节点的岗位正文与章程要点。
+  db.prepare("UPDATE tasks SET node_id=3 WHERE id=?").run(task.id);
+  Object.assign(task, { node_id: 3 });
   assert.equal(taskNode(db, task)?.body, "# runtime 岗位正文");
   const data = mkdtempSync(join(tmpdir(), "atrium-org-tasks-"));
   try {
@@ -366,8 +221,8 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
 test("org tree 按子树汇总在做／卡住，旧关注点不再列出；org show 列手上的任务", () => {
   const db = setup();
   const status = db.prepare("UPDATE tasks SET status=? WHERE id=?");
-  const add = (role: string, s: string, from?: string) =>
-    status.run(s, createTask(db, { title: `${role}-${s}`, role, from }).id);
+  const add = (part: string, s: string, from?: string) =>
+    status.run(s, createTask(db, { title: `${part}-${s}`, part, from }).id);
   add("o3", "running", "o4");
   add("o3", "running");
   add("o3", "blocked");
@@ -393,7 +248,7 @@ test("org tree 按子树汇总在做／卡住，旧关注点不再列出；org s
   db.close();
 });
 
-test("org show 章程／能力卡：空字段省略，不显示 {}", () => {
+test("org show 章程：空字段省略，不显示 {}", () => {
   assert.deepEqual(formatDoc("章程", null), ["章程 r0：未填写"]);
   assert.deepEqual(formatDoc("章程", { rev: "r2", fields: {}, body: "" }), [
     "章程 r2：未填写",
@@ -405,22 +260,6 @@ test("org show 章程／能力卡：空字段省略，不显示 {}", () => {
       body: "正文\n",
     }),
     ["章程 r3", "  目标：目标一句", "正文"],
-  );
-  assert.deepEqual(
-    formatDoc("能力卡", {
-      rev: "r1",
-      fields: {
-        owns: ["server/tasks", "server/org"],
-        asks: [],
-        commitments: [{ id: "c1", text: "合入 #280", due: "2026-09-30" }],
-      },
-      body: "",
-    }),
-    [
-      "能力卡 r1",
-      "  负责：server/tasks、server/org",
-      "  承诺：c1 合入 #280（2026-09-30）",
-    ],
   );
   for (const line of formatDoc("章程", { rev: "r1", fields: {}, body: "x" }))
     assert.ok(!line.includes("{}"));

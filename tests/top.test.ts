@@ -1198,7 +1198,7 @@ test("看板：有 leader 时单列一段，写负责的节点、最近一次唤
   );
 });
 
-test("看板抬头：合入队列长度与预计还要多久（t254），旧版服务只写件数", () => {
+test("看板抬头：合入队列只写件数", () => {
   const frame = (over: Partial<Snapshot>) =>
     renderTop(snapshot([], over), {
       width: 200,
@@ -1206,16 +1206,6 @@ test("看板抬头：合入队列长度与预计还要多久（t254），旧版�
       footer: false,
       color: false,
     }).split("\n")[0]!;
-  const head = frame({
-    counts: { merge_queued: 16, merging: 1 } as Snapshot["counts"],
-    merge_queue: {
-      waiting: 16,
-      merging: 1,
-      per_ms: 8 * 60_000,
-      eta_ms: 130 * 60_000,
-    },
-  });
-  assert.match(head, / · 排队合入 16 · 还要约 2 小时 10 分 · 合入中 1/);
   assert.match(
     frame({ counts: { merge_queued: 3 } as Snapshot["counts"] }),
     / · 排队合入 3 · /,

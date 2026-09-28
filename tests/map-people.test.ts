@@ -179,7 +179,7 @@ function seeded() {
   });
   const worker = "codex+gpt-6-sol:high";
   for (let i = 0; i < 5; i++) {
-    const task = createTask(db, { title: `交付${i}`, job: "后端", part: "o3" });
+    const task = createTask(db, { title: `交付${i}`, by: "后端", part: "o3" });
     const at = 1000 + i * 1000;
     advanceTask(db, task.ref, { kind: "start" }, { worker }, { worker }, at);
     if (i === 1)
@@ -194,7 +194,7 @@ function seeded() {
     advanceTask(db, task.ref, { kind: "exit_ok" }, {}, undefined, at + 600_000);
   }
   // 在做、还没结束的一件：不进统计行，但在角色任务里。
-  const running = createTask(db, { title: "在做的", job: "后端", part: "o3" });
+  const running = createTask(db, { title: "在做的", by: "后端", part: "o3" });
   advanceTask(db, running.ref, { kind: "start" }, { worker }, { worker }, 9000);
   return { db, workers, root };
 }
@@ -296,7 +296,7 @@ test("接口：网页会话能读角色、技能、执行者，不存在的给 4
     cookie: String(login.headers["set-cookie"]).split(";")[0]!,
   };
   for (const url of [
-    "/api/map/roles",
+    "/api/map/specialists",
     "/api/map/skills",
     "/api/map/workers",
     "/api/map/leaders",
@@ -306,11 +306,13 @@ test("接口：网页会话能读角色、技能、执行者，不存在的给 4
     assert.equal(res.statusCode, 200, `${url} ${res.body}`);
   }
   assert.deepEqual(
-    (await app.inject({ url: "/api/map/roles", headers: session })).json(),
-    { roles: [] },
+    (
+      await app.inject({ url: "/api/map/specialists", headers: session })
+    ).json(),
+    { specialists: [] },
   );
   for (const [url, code] of [
-    ["/api/map/roles/r9", 404],
+    ["/api/map/specialists/r9", 404],
     ["/api/map/workers/claude%2Bnope%3Ahigh", 404],
     ["/api/map/workers/foo%2Bbar", 400],
     ["/api/map/workers?role=r9", 404],

@@ -798,7 +798,6 @@ const holderBase: HolderFacts = {
   processing_by: null,
   inbox: null,
   route: "secretary",
-  council_escalated: false,
 };
 
 test("持球人：被抢占暂停的由运行时自己续上；暂停中的合入写明在等哪件紧急任务", () => {

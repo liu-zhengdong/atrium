@@ -23,8 +23,6 @@ const mapReadRoutes = new Set([
   "GET /api/map/nodes/:id",
   "GET /api/map/now",
   "GET /api/map/stream",
-  "GET /api/map/roles",
-  "GET /api/map/roles/:id",
   "GET /api/map/specialists",
   "GET /api/map/specialists/:id",
   "GET /api/map/skills",

@@ -44,43 +44,16 @@ export function validateFields(
   value: unknown,
 ): Record<string, unknown> {
   const fields = object(value, doc);
-  const rules: Record<string, number> =
-    doc === "charter"
-      ? { goal: 300, report: 200, escalate: 200 }
-      : { status: 300 };
-  // invite_when：关注点按改动范围提示「要不要请本专员」的规则（路径通配或关键词，#322）。
-  const lists: Record<string, number> =
-    doc === "card" ? { owns: 10, accepts: 10, asks: 5 } : { invite_when: 20 };
+  const rules: Record<string, number> = {
+    goal: 300,
+    report: 200,
+    escalate: 200,
+  };
   for (const [key, v] of Object.entries(fields)) {
     const field = `${doc}.${key}`;
-    if (doc === "charter" && validateOverviewField(key, v)) continue;
+    if (validateOverviewField(key, v)) continue;
     if (Object.hasOwn(rules, key)) text(v, field, rules[key]!);
-    else if (Object.hasOwn(lists, key)) {
-      if (!Array.isArray(v)) bad(field, "应为文本列表");
-      const entries = v as unknown[];
-      if (entries.length > lists[key]!) bad(field, `超过 ${lists[key]} 项`);
-      entries.forEach((item, i) => text(item, `${field}[${i}]`, 300));
-    } else if (doc === "card" && key === "commitments") {
-      if (!Array.isArray(v)) bad(field, "应为承诺列表");
-      const entries = v as unknown[];
-      if (entries.length > 10) bad(field, "超过 10 项");
-      entries.forEach((item, i) => {
-        const entry = object(item, `${field}[${i}]`);
-        for (const k of Object.keys(entry))
-          if (!["id", "text", "due"].includes(k))
-            bad(`${field}[${i}].${k}`, "是未知字段");
-        text(entry.id, `${field}[${i}].id`, 40);
-        text(entry.text, `${field}[${i}].text`, 300);
-        if (
-          entry.due !== undefined &&
-          (typeof entry.due !== "string" ||
-            !/^\d{4}-\d{2}-\d{2}$/.test(entry.due) ||
-            Number.isNaN(Date.parse(entry.due)) ||
-            new Date(entry.due).toISOString().slice(0, 10) !== entry.due)
-        )
-          bad(`${field}[${i}].due`, "应为 YYYY-MM-DD 日期");
-      });
-    } else bad(field, "是未知字段");
+    else bad(field, "是未知字段");
   }
   return fields;
 }
@@ -107,7 +80,6 @@ export function parseDocument(source: string, doc: Doc) {
   }
   // 章程的 boundaries 单独成表，不进 fields；不写表示不改
   let boundaries: unknown;
-  let budget: unknown;
   if (
     doc === "charter" &&
     fields &&
@@ -125,23 +97,21 @@ export function parseDocument(source: string, doc: Doc) {
     typeof fields === "object" &&
     !Array.isArray(fields) &&
     Object.hasOwn(fields, "budget")
-  ) {
-    const { budget: shares, ...rest } = fields as Record<string, unknown>;
-    budget = shares;
-    fields = rest;
-  }
+  )
+    return bad(
+      "charter.budget",
+      "预算份额已下线；给用户保留的额度与花费上限写在 boundaries 的 param（quota_reserve_percent、money_yuan_max）",
+    );
   return {
     fields: validateFields(doc, fields),
     body: validateBody(source.slice(end + 5)),
     ...(boundaries === undefined ? {} : { boundaries }),
-    ...(budget === undefined ? {} : { budget }),
   };
 }
 export function exportDocument(
   fields: Record<string, unknown>,
   body: string,
   boundaries?: unknown[],
-  budget?: Record<string, unknown>,
 ): string {
   // 阶段记录是对象列表，按 YAML 块写出好读好改；其余字段沿用单行 JSON 标量
   const lines = Object.entries(fields).map(([k, v]) =>
@@ -155,7 +125,5 @@ export function exportDocument(
         ? YAML.stringify({ boundaries }, { lineWidth: 0 }).trimEnd()
         : "boundaries: []",
     );
-  if (budget && Object.keys(budget).length)
-    lines.push(YAML.stringify({ budget }, { lineWidth: 0 }).trimEnd());
   return `---\n${lines.join("\n")}\n---\n${body}`;
 }

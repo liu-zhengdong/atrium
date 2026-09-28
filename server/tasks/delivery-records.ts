@@ -8,7 +8,6 @@ import {
 } from "./ledger-model.ts";
 import { parseWorker } from "./profiles.ts";
 import { getJobRole } from "./job-roles.ts";
-import { ADVICE_WINDOW } from "./worker-advice.ts";
 
 export type DeliveryRow = {
   id: number;
@@ -932,8 +931,6 @@ type StatCounts = {
   passes: number;
   returns_sum: number;
   incidents_sum: number;
-  recent_finished: number;
-  recent_incidents: number;
 };
 const SCOPE_KEYS: Record<StatScope, readonly string[]> = {
   combination: ["worker", "job_id"],
@@ -993,7 +990,6 @@ function statSource(
 }
 /**
  * 一组统计的次数：次数、一次通过、退回、事故全在库里按组算（#t123），不读交付明细。
- * 每组按结束先后编号（已结束的在前），最近 ADVICE_WINDOW 次的次数与事故另算一份给收紧建议。
  */
 function countRows(
   db: DatabaseSync,
@@ -1010,15 +1006,9 @@ function countRows(
        SUM(CASE WHEN ended_at IS NOT NULL AND first_pass IS NOT NULL THEN 1 ELSE 0 END) AS rated,
        SUM(CASE WHEN ended_at IS NOT NULL AND first_pass=1 THEN 1 ELSE 0 END) AS passes,
        SUM(CASE WHEN ended_at IS NOT NULL THEN gate_return_count + merge_return_count ELSE 0 END) AS returns_sum,
-       SUM(CASE WHEN ended_at IS NOT NULL THEN incident_count ELSE 0 END) AS incidents_sum,
-       SUM(CASE WHEN ended_at IS NOT NULL AND seq<=? THEN 1 ELSE 0 END) AS recent_finished,
-       SUM(CASE WHEN ended_at IS NOT NULL AND seq<=? THEN incident_count ELSE 0 END) AS recent_incidents
-     FROM (SELECT ${select},ended_at,first_pass,gate_return_count,merge_return_count,incident_count,
-             ROW_NUMBER() OVER (PARTITION BY ${select} ORDER BY ended_at IS NULL, ended_at DESC, id DESC) AS seq
-           FROM ${from} ${where})
+       SUM(CASE WHEN ended_at IS NOT NULL THEN incident_count ELSE 0 END) AS incidents_sum
+     FROM ${from} ${where}
      GROUP BY ${select}`,
-    ADVICE_WINDOW,
-    ADVICE_WINDOW,
     ...params,
   );
 }
@@ -1147,65 +1137,12 @@ export function workerStats(
         average_returns: finished ? Number(r.returns_sum) / finished : 0,
         median_ms: medians[scope].get(key) ?? null,
         incidents: Number(r.incidents_sum),
-        recent_deliveries: Number(r.recent_finished ?? 0),
-        recent_incidents: Number(r.recent_incidents ?? 0),
         low_data: finished < 5,
         trust: null,
       });
     }
   }
   return stats.sort(statSort);
-}
-/** 每位执行者×专员最近一条交付的任务短号与专员；确认建议时只读这一小张表。 */
-export function latestDeliveryByWorkerJob(
-  db: DatabaseSync,
-  filter: StatFilter = {},
-): {
-  worker: string;
-  job_id: number | null;
-  task_id: number;
-  role: string | null;
-}[] {
-  const conds: string[] = [];
-  const params: SQLInputValue[] = [];
-  if (filter.worker !== undefined) {
-    conds.push("worker=?");
-    params.push(filter.worker);
-  }
-  if (filter.job !== undefined && filter.job !== null) {
-    conds.push("job_id=?");
-    params.push(filter.job);
-  }
-  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  return all<{
-    worker: string;
-    job_id: number | null;
-    task_id: number;
-    role: string | null;
-  }>(
-    db,
-    `WITH latest AS (
-       SELECT MAX(id) AS id FROM task_deliveries ${where} GROUP BY worker,job_id
-     )
-     SELECT d.worker AS worker, d.job_id AS job_id, d.task_id AS task_id, j.name AS role
-     FROM task_deliveries d JOIN latest ON d.id=latest.id
-     LEFT JOIN job_roles j ON j.id=d.job_id`,
-    ...params,
-  );
-}
-/** 某位执行者、某个专员下最近一条交付的任务短号；确认建议时只读这一条。 */
-export function latestDeliveryTaskId(
-  db: DatabaseSync,
-  filter: { worker?: string; job?: number } = {},
-): number | null {
-  const { sql: where, params } = deliveryWhere(filter);
-  return (
-    one<{ task_id: number }>(
-      db,
-      `SELECT task_id FROM task_deliveries ${where} ORDER BY id DESC LIMIT 1`,
-      ...params,
-    )?.task_id ?? null
-  );
 }
 export function listDeliveries(
   db: DatabaseSync,
@@ -1311,9 +1248,6 @@ export type WorkerStat = {
   average_returns: number;
   median_ms: number | null;
   incidents: number;
-  /** 最近 ADVICE_WINDOW 次交付（按结束先后）与其中的事故，收紧建议只看这一段。 */
-  recent_deliveries: number;
-  recent_incidents: number;
   low_data: boolean;
   trust: string | null;
 };
@@ -1374,7 +1308,6 @@ export function summarizeMetrics(
           : 0,
         median_ms: mid,
         incidents: finished.reduce((n, r) => n + r.incident_count, 0),
-        ...recentIncidents(finished),
         low_data: finished.length < 5,
         trust: trust.get(g.worker) ?? null,
       };
@@ -1385,16 +1318,6 @@ export function summarizeMetrics(
         a.scope.localeCompare(b.scope) ||
         a.worker.localeCompare(b.worker),
     );
-}
-/** 最近 ADVICE_WINDOW 次已结束交付里的事故数。 */
-function recentIncidents(finished: readonly DeliveryMetric[]) {
-  const recent = [...finished]
-    .sort((a, b) => b.ended_at! - a.ended_at! || b.id - a.id)
-    .slice(0, ADVICE_WINDOW);
-  return {
-    recent_deliveries: recent.length,
-    recent_incidents: recent.reduce((n, r) => n + r.incident_count, 0),
-  };
 }
 /** 旧入口：用手上的整条交付折成统计事实，结果与 summarizeMetrics 一致。 */
 export function summarizeDeliveries(

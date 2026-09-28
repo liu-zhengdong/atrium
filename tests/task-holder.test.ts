@@ -39,7 +39,6 @@ const base: HolderFacts = {
   processing_by: null,
   inbox: null,
   route: "secretary",
-  council_escalated: false,
 };
 const localCheck = {
   reason: "关卡不过：local_check：本地检查未通过：退出码 1",
@@ -116,14 +115,9 @@ test("订阅者归类与受阻原因缩写", () => {
   );
 });
 
-test("持球人穷举：结束、会审、合入流水线、排队、在做与交回", () => {
+test("持球人穷举：结束、合入流水线、排队、在做与交回", () => {
   for (const status of ["done", "failed", "cancelled"] as TaskStatus[])
     assert.equal(of({ status }), null, status);
-  assert.deepEqual(of({ status: "done", council_escalated: true }), {
-    kind: "user",
-    who: "u1",
-    text: "会审上交，等你拍板",
-  });
   assert.deepEqual(
     of({ status: "done", delivery_stage: "reviewing", review_task: "t9" }),
     { kind: "merge", who: null, text: "合入前审阅中（t9）" },
@@ -890,83 +884,4 @@ test("clipWords 只在词或标点边界截断", () => {
     const next = line[kept.length] ?? "";
     assert.ok(!(id.test(last) && id.test(next)), `${max}: ${out}`);
   }
-});
-
-test("排队合入时的提前检查（t254）：在跑、过了、没过的一句话；等重跑与暂停优先", () => {
-  const queued = {
-    status: "done" as TaskStatus,
-    delivery_stage: "merge_queued" as const,
-  };
-  assert.equal(
-    of({ ...queued, precheck: { state: "running", host: "h1" } })!.text,
-    "排队合入：提前跑检查",
-  );
-  assert.equal(
-    of({ ...queued, precheck: { state: "running", host: "h3" } })!.text,
-    "排队合入：在 h3 上提前跑检查",
-  );
-  assert.equal(
-    of({ ...queued, precheck: { state: "passed", host: null } })!.text,
-    "排队合入：已提前检查过",
-  );
-  assert.equal(
-    of({ ...queued, precheck: { state: "failed", host: null } })!.text,
-    "排队合入：提前检查没过，轮到时确认",
-  );
-  assert.equal(of({ ...queued, precheck: null })!.text, "排队合入");
-  assert.match(
-    of({
-      ...queued,
-      precheck: { state: "passed", host: null },
-      rerun: { attempt: 1, reason: "离线" },
-    })!.text,
-    /等重跑/,
-  );
-  assert.match(
-    of({
-      ...queued,
-      precheck: { state: "passed", host: null },
-      merge_held_by: ["t9"],
-    })!.text,
-    /合入暂停/,
-  );
-  // 合入中不看提前检查。
-  assert.equal(
-    of({
-      status: "done",
-      delivery_stage: "merging",
-      precheck: { state: "passed", host: null },
-    })!.text,
-    "合入中：rebase 并跑快检查",
-  );
-});
-
-test("事实采集：提前检查只看这次排队以来的", () => {
-  const db = new DatabaseSync(":memory:");
-  ensureTaskTables(db);
-  ensureEventTables(db);
-  const task = createTask(db, { title: "提前检查" }, 1);
-  db.prepare(
-    "UPDATE tasks SET status='done',delivery_stage='merge_queued' WHERE id=?",
-  ).run(task.id);
-  const row = () =>
-    db.prepare("SELECT * FROM tasks WHERE id=?").get(task.id) as never;
-  const precheck = () => holderFacts(db, row(), null).precheck;
-  noteTask(db, task.ref, "merge_queued", {}, 2);
-  assert.equal(precheck(), null);
-  noteTask(db, task.ref, "merge_precheck_started", { host: "h2" }, 3);
-  assert.deepEqual(precheck(), { state: "running", host: "h2" });
-  noteTask(db, task.ref, "merge_prechecked", { outcome: "passed" }, 4);
-  assert.deepEqual(precheck(), { state: "passed", host: null });
-  // 没跑成不显示。
-  noteTask(db, task.ref, "merge_precheck_started", {}, 5);
-  noteTask(db, task.ref, "merge_prechecked", { outcome: "not_run" }, 6);
-  assert.equal(precheck(), null);
-  // 重新排队后旧的不算。
-  noteTask(db, task.ref, "merge_prechecked", { outcome: "failed" }, 7);
-  assert.deepEqual(precheck(), { state: "failed", host: null });
-  noteTask(db, task.ref, "merge_queued", {}, 8);
-  assert.equal(precheck(), null);
-  assert.equal(holderFor(db, row(), null)!.text, "排队合入");
-  db.close();
 });

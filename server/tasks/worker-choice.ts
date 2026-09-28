@@ -56,14 +56,7 @@ export async function chooseWorker(
     avoid.chain?.at(-1)?.id,
   );
   const pace = await (options.pace ?? (() => readPace()))();
-  const headroom = options.db
-    ? quotaHeadroom(
-        options.db,
-        avoid.chain?.at(-1)?.id ?? null,
-        pace,
-        reservePercent,
-      )
-    : new Map();
+  const headroom = options.db ? quotaHeadroom(pace, reservePercent) : new Map();
   if (request.worker) {
     worker = await resolveWorker(request.worker, options.db);
     // 写死的执行者：强度、模型搭配不合法当场报错，不等排到了才失败。
@@ -92,7 +85,7 @@ export async function chooseWorker(
       );
     if (worker.profile.rules.billing === "metered")
       throw new BudgetProblem(
-        `执行者 ${worker.tool} 的档案 billing=metered，当前钱份额为 0 元`,
+        `执行者 ${worker.tool} 的档案 billing=metered（按量计费），不派`,
       );
     const used = pace?.find(
       (entry) =>

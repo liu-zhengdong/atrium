@@ -122,7 +122,7 @@ test("服务：?as=secretary 改档案、章程、专员，修订如实记秘书
     "/api/org/nodes/o1/docs/charter?as=secretary",
     {
       source:
-        "---\nbudget:\n  quota_reserve_percent: 20\n  money: 0\n---\n根章程\n",
+        "---\nboundaries:\n  - id: quota-reserve\n    summary: 额度留给用户\n    param: { quota_reserve_percent: 20 }\n---\n根章程\n",
       reason: "用户 09-28 确认",
     },
   );

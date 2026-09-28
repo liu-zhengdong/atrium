@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { all, nodePath, nodes, one, ref, type NodeRow } from "../org/model.ts";
-import { hasOrg, taskNode } from "../org/task-node.ts";
+import { hasOrg } from "../org/task-node.ts";
 import {
   avoidReason,
   effectiveSkills,
@@ -14,11 +14,7 @@ import type { SkillRow } from "./store.ts";
  * 派活时一个任务该带哪些技能（#264 第 3b 步）：节点链上绑定的 ∪ 执行者档案指定的，去重、有上限。
  */
 
-type TaskLike = {
-  node_id: number | null;
-  role: string | null;
-  repo: string | null;
-};
+type TaskLike = { part_id: number | null; node_id: number | null };
 
 const hasSkills = (db: DatabaseSync) =>
   !!one(
@@ -26,14 +22,13 @@ const hasSkills = (db: DatabaseSync) =>
     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_skills'",
   );
 
-/** 任务所在节点链（根 → 本节点）；没关联节点返回空。 */
+/** 任务所在节点链（根 → 归属部分；旧任务看 node_id）；没关联节点返回空。 */
 export function taskChain(db: DatabaseSync, task: TaskLike): ChainNode[] {
-  if (!hasOrg(db)) return [];
-  const node = taskNode(db, task);
-  if (!node) return [];
+  const id = task.part_id ?? task.node_id;
+  if (id === null || !hasOrg(db)) return [];
   const list = nodes(db);
   const chain: ChainNode[] = [];
-  let current: NodeRow | undefined = list.find((n) => n.id === node.id);
+  let current: NodeRow | undefined = list.find((n) => n.id === id);
   while (current) {
     chain.unshift({
       id: current.id,

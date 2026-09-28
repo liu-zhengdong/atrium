@@ -205,14 +205,9 @@ export async function mapRole(
     description: role.description,
     preferred: role.preferred,
     checks: role.checks,
-    review_goal: role.review_goal,
-    review_points: role.review_points,
-    review_bottom: role.review_bottom,
-    invite_when: role.invite_when,
     skills,
     tasks,
     workers: combinations(report.stats),
-    suggestions: report.suggestions.map(adviceView),
   };
 }
 
@@ -222,23 +217,13 @@ export async function mapRole(
 const combinations = (stats: readonly WorkerStat[]) =>
   stats.filter((s) => s.scope === "combination" && s.deliveries > 0);
 
-type Advice = Awaited<ReturnType<typeof workersReport>>["suggestions"][number];
-const adviceView = ({ stat, advice }: Advice) => ({
-  worker: stat.worker,
-  role: stat.role,
-  action: advice.action,
-  reason: advice.reason,
-});
-
-/** 执行者页签：一行 = 组合 × 专员；按专员筛选时只留该专员。另给待秘书确认的升降建议。 */
+/** 执行者页签：一行 = 组合 × 专员；按专员筛选时只留该专员。 */
 export async function mapWorkers(db: DatabaseSync, role?: string) {
-  if (!hasTable(db, "task_deliveries"))
-    return { role: null, rows: [], suggestions: [] };
+  if (!hasTable(db, "task_deliveries")) return { role: null, rows: [] };
   const report = await workersReport(db, role || undefined);
   return {
     role: report.role ? { ref: report.role.ref, name: report.role.name } : null,
     rows: combinations(report.stats),
-    suggestions: report.suggestions.map(adviceView),
   };
 }
 
@@ -393,6 +378,5 @@ export async function mapWorker(db: DatabaseSync, id: string) {
       story: deliveryStory(d),
     })),
     notes: profileNotes(profile.layers),
-    suggestions: (report?.suggestions ?? []).map(adviceView),
   };
 }

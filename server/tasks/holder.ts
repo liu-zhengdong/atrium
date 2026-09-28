@@ -2,6 +2,7 @@ import type { TaskRow } from "./ledger-model.ts";
 import type { TaskStatus } from "./state.ts";
 import { oneLine, width } from "../text-width.ts";
 import { MAX_CHECK_RERUNS } from "./check-outcome.ts";
+import { quietMinutes } from "./check-quiet.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
@@ -70,6 +71,10 @@ export type HolderFacts = {
   merge_held_by?: string[];
   /** 合入检查没跑成、在等自动重跑（t204）：第几次、没跑成的原因；不在等为 null。 */
   rerun?: { attempt: number; reason: string | null } | null;
+  /** 正在跑的检查日志太久没新输出（t260）：提醒那一句（「检查 5 分钟没输出：卡在 …」）；之后又有输出或没在检查为 null。 */
+  check_quiet?: string | null;
+  /** 执行者这段多久没进展（t260，毫秒）；没提醒过或之后又有进展为 null。 */
+  worker_quiet_ms?: number | null;
 };
 
 /** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
@@ -400,14 +405,19 @@ export function holderOf(f: HolderFacts): Holder | null {
             f.status === "running" &&
             f.host &&
             !f.checking
-            ? holder.text.endsWith(" 在做")
-              ? `${f.worker ?? "执行者"} @ ${f.host} 在做`
-              : `${f.worker ?? "执行者"} @ ${f.host} · ${holder.text}`
+            ? onHost(holder.text, f.worker ?? "执行者", f.host)
             : holder.text,
           HOLDER_WIDTH,
         ),
       }
     : null;
+}
+
+/** 远程执行者：以执行者起头的一句（「在做」「5 分钟没进展」）把主机插在名字后，其余接在后面。 */
+function onHost(text: string, worker: string, host: string) {
+  return text.startsWith(`${worker} `)
+    ? `${worker} @ ${host} ${text.slice(worker.length + 1)}`
+    : `${worker} @ ${host} · ${text}`;
 }
 
 /** 摘要背后的原因全文：合入交回看交回原因，受阻或受阻后交回看受阻原因；没有为 null。 */
@@ -443,9 +453,11 @@ function judge(f: HolderFacts): Holder | null {
     return {
       kind: "merge",
       who: null,
-      text: where(f.checking)
-        ? `合入中：${where(f.checking)}跑快检查`
-        : "合入中：rebase 并跑快检查",
+      text: f.check_quiet
+        ? `${where(f.checking)}${f.check_quiet}`
+        : where(f.checking)
+          ? `合入中：${where(f.checking)}跑快检查`
+          : "合入中：rebase 并跑快检查",
     };
   if (f.delivery_stage === "merged" && f.online_wait === 1)
     return { kind: "merge", who: null, text: "已合入，等发版上线" };
@@ -468,6 +480,12 @@ function judge(f: HolderFacts): Holder | null {
         text: where(f.checking)
           ? `${worker} 交付了，${where(f.checking)}跑检查`
           : `${worker} 交付了，本地检查中`,
+      };
+    if (f.worker_quiet_ms)
+      return {
+        kind: "worker",
+        who: f.worker,
+        text: `${worker} ${quietMinutes(f.worker_quiet_ms)}没进展`,
       };
     if (f.returned?.via === "merge")
       return {

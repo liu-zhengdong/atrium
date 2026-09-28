@@ -48,6 +48,10 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "urgent_marked",
   "merge_paused",
   "merge_yielded",
+  // 没进展提醒（t260）：检查日志、执行者 5 分钟没输出，知会负责的 leader；卡死、没过另有事件叫醒。
+  // 新增类型，库里没有旧行要按新集合重算，不需要迁移。
+  "check_quiet",
+  "worker_quiet",
 ]);
 
 /**

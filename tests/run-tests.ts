@@ -33,6 +33,18 @@ const timeoutMs = process.env.ATRIUM_TEST_TIMEOUT_MS?.trim() ?? "";
 const timeout = [
   `--test-timeout=${/^[1-9][0-9]{0,7}$/.test(timeoutMs) ? timeoutMs : 120000}`,
 ];
+// 某个文件长时间没有用例结束时打印「仍在跑：<文件>（已 N 秒）」（t260，still-running-reporter.ts），
+// 方便从检查日志定位挂住的文件；原来的 spec 输出照旧写标准输出。调用方自己指定了 reporter 就不加。
+const reporters = args.passthrough.some((arg) =>
+  arg.startsWith("--test-reporter"),
+)
+  ? []
+  : [
+      "--test-reporter=spec",
+      "--test-reporter-destination=stdout",
+      `--test-reporter=${new URL("./still-running-reporter.ts", import.meta.url).href}`,
+      "--test-reporter-destination=stderr",
+    ];
 // 直接用 node 跑 tsx 的命令行：Windows 上 node_modules/.bin/tsx 是 .cmd，不能直接拉起。
 const tsx = fileURLToPath(import.meta.resolve("tsx/cli"));
 const child = spawn(
@@ -42,6 +54,7 @@ const child = spawn(
     "--test",
     ...limit,
     ...timeout,
+    ...reporters,
     ...args.passthrough,
     ...selected.map((file) => join(root, file)),
   ],

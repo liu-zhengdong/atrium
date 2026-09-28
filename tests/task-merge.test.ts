@@ -234,6 +234,7 @@ for (const scenario of [
   "stale_pr_head_timeout",
   "not_run_then_merge",
   "not_run_blocked",
+  "stalled_blocked",
 ] as const) {
   test(`隔离服务与假 gh/执行者：${scenario}`, async (t) => {
     let merged = false;
@@ -276,19 +277,24 @@ for (const scenario of [
                       `const fs=require('fs');const f=process.argv[1];const n=fs.existsSync(f)?Number(fs.readFileSync(f,'utf8')):0;fs.writeFileSync(f,String(n+1));if(n<${scenario === "not_run_then_merge" ? 1 : 99}){console.log('not ok 1 - 慢用例：等后台服务');process.exit(1)}`,
                       join(fixture.root, "check-runs"),
                     )
-                  : scenario === "check_failed"
-                    ? nodeCommand(
-                        "console.log('not ok 1 - 故意失败'); process.exit(1)",
+                  : scenario === "stalled_blocked"
+                    ? // 输出一行后挂住（t260）：没输出到结束线被结束，没有失败用例算没跑成（卡住）。
+                      nodeCommand(
+                        "console.log('✔ 前面的用例 (1ms)'); setTimeout(() => {}, 60000)",
                       )
-                    : scenario === "stopped"
-                      ? // 常驻不退、再起一个常驻的孙进程并记下 pid：停止合入时整棵树都得结束（t167）。
-                        nodeCommand(
-                          "const { spawn } = require('node:child_process'); const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }); require('node:fs').writeFileSync(process.argv[1], String(g.pid)); setInterval(() => {}, 1000)",
-                          join(fixture.root, "check-pid"),
+                    : scenario === "check_failed"
+                      ? nodeCommand(
+                          "console.log('not ok 1 - 故意失败'); process.exit(1)",
                         )
-                      : scenario === "restart_check"
-                        ? sleepCommand(2)
-                        : TRUE_COMMAND,
+                      : scenario === "stopped"
+                        ? // 常驻不退、再起一个常驻的孙进程并记下 pid：停止合入时整棵树都得结束（t167）。
+                          nodeCommand(
+                            "const { spawn } = require('node:child_process'); const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }); require('node:fs').writeFileSync(process.argv[1], String(g.pid)); setInterval(() => {}, 1000)",
+                            join(fixture.root, "check-pid"),
+                          )
+                        : scenario === "restart_check"
+                          ? sleepCommand(2)
+                          : TRUE_COMMAND,
             },
           }),
         );
@@ -426,6 +432,9 @@ for (const scenario of [
             ? 150
             : undefined,
         checkRerunDelayMs: () => 50,
+        ...(scenario === "stalled_blocked"
+          ? { quiet: { warnMs: 1_000, stallMs: 2_000, pollMs: 50 } }
+          : {}),
       },
     );
     let call = firstCall;
@@ -547,6 +556,50 @@ for (const scenario of [
       assert.deepEqual(
         urgent.body.events.map((event: { kind: string }) => event.kind),
         ["blocked"],
+      );
+      return;
+    }
+    if (scenario === "stalled_blocked") {
+      // 卡住的检查只自动重跑一次（t260），再卡住转卡住；每次卡住前先提醒并知会负责人。
+      assert.equal(task.status, "blocked");
+      assert.equal(task.merge_returns, 0);
+      assert.equal(mergeCalls, 0);
+      assert.equal(count("merge_check_rerun"), 1);
+      assert.equal(count("merge_returned"), 0);
+      const quiet = task.events.filter(
+        (event: { kind: string; detail: string }) =>
+          event.kind === "merge_check_quiet" &&
+          !JSON.parse(event.detail).resumed,
+      );
+      assert.equal(quiet.length, 2);
+      assert.match(
+        JSON.parse(quiet[0].detail).reason,
+        /^检查 1 秒没输出：卡在 ✔ 前面的用例/,
+      );
+      const checks = task.events
+        .filter((event: { kind: string }) => event.kind === "merge_check")
+        .map((event: { detail: string }) => JSON.parse(event.detail));
+      assert.deepEqual(
+        checks.map((check: { outcome: string }) => check.outcome),
+        ["not_run", "not_run"],
+      );
+      assert.deepEqual(checks[0].stalled, { at: "✔ 前面的用例 (1ms)" });
+      const shown = (await call("GET", `/api/tasks/${ref}`)).body;
+      assert.match(
+        JSON.stringify(
+          shown.events.filter(
+            (e: { kind: string }) => e.kind === "merge_blocked",
+          ),
+        ),
+        /基础设施问题：检查没跑成（已自动重跑 1 次）：检查卡住：日志 2 秒没有新输出，卡在 ✔ 前面的用例/,
+      );
+      const inbox = await call("GET", "/api/events?limit=100");
+      assert.ok(
+        inbox.body.events.some(
+          (event: { kind: string; level: string }) =>
+            event.kind === "check_quiet" && event.level === "info",
+        ),
+        JSON.stringify(inbox.body.events.map((e: { kind: string }) => e.kind)),
       );
       return;
     }

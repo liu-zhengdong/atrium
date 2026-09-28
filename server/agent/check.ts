@@ -10,6 +10,7 @@ import { checkTreeName } from "../hosts/check-plan.ts";
 import type { CheckReply, CheckSource } from "../hosts/protocol.ts";
 import { firstLine, type Exec } from "../tasks/git.ts";
 import { LocalCheckQueue, runLocalCheck } from "../tasks/local-check.ts";
+import type { QuietLimits } from "../tasks/check-quiet.ts";
 import { ensureClone } from "./launch.ts";
 
 /**
@@ -37,6 +38,8 @@ export type CommitCheck = {
   slot: (clone: string) => { index: number; release: () => void };
   /** 这台主机上一次检查最多跑多久（ATRIUM_CHECK_TIMEOUT_MINUTES）。 */
   timeoutMs: number;
+  /** 这台主机上检查多久没输出结束（t260，ATRIUM_CHECK_STALL_MINUTES）；缺省按 runLocalCheck 的。 */
+  quiet?: QuietLimits;
 };
 
 export async function checkCommit(input: CommitCheck): Promise<CheckReply> {
@@ -122,6 +125,7 @@ export async function checkCommit(input: CommitCheck): Promise<CheckReply> {
       urgent: input.urgent,
       queue: UNLIMITED,
       timeoutMs: input.timeoutMs,
+      ...(input.quiet ? { quiet: input.quiet } : {}),
       signal: input.signal,
       append: true,
       install: true,

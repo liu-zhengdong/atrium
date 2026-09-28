@@ -126,7 +126,7 @@ test("分身：日常与大事同时处理，互不越界，备忘分段后合�
   assert(big && routine, "一个大事分身、一个日常分身");
   assert.notEqual(big.spec.slot, routine.spec.slot);
   assert.notEqual(big.spec.dir, routine.spec.dir);
-  assert.match(big.spec.prompt, /t1 plan_ready/);
+  assert.match(big.spec.prompt, /大功能」规划待采纳/);
   assert.doesNotMatch(big.spec.prompt, /t3 blocked/);
   assert.match(routine.spec.prompt, /t3 blocked/);
   assert.match(big.spec.prompt, /此刻另有分身在处理：日常/);
@@ -271,7 +271,7 @@ test("分身上限改成 1：同一 leader 一次一个唤醒，事件一起送�
   await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(x.gates.length, 1, "上限 1 时不起第二个");
   const only = x.gates[0]!;
-  assert.match(only.spec.prompt, /t1 plan_ready/);
+  assert.match(only.spec.prompt, /大功能」规划待采纳/);
   assert.match(only.spec.prompt, /t3 blocked/);
   assert.match(only.spec.prompt, /此刻没有别的分身在跑/);
   only.release("ok");

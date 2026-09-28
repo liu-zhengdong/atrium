@@ -147,6 +147,15 @@ export function eventLine(event: PromptEvent) {
       `  - ${field(event.detail, "hint", 300)}`,
     ].join("\n");
   }
+  // 规划任务（t275）：清单好了请采纳，没出清单说原因；都带下一步命令。
+  if (event.kind === "plan_ready" || event.kind === "plan_failed") {
+    const detail = (event.detail ?? {}) as { tasks?: unknown };
+    const what =
+      event.kind === "plan_ready"
+        ? `规划 ${field(event.detail, "plan", 20)} 出了 ${typeof detail.tasks === "number" ? detail.tasks : "?"} 件子任务${field(event.detail, "summary", 300) ? `：${field(event.detail, "summary", 300)}` : ""}`
+        : `规划 ${field(event.detail, "plan", 20)} 没出清单：${field(event.detail, "plan_error", 300)}`;
+    return `- #${event.id} ${field(event.detail, "target", 20)}「${field(event.detail, "title", 60)}」${eventWord(event.kind)}，${what} → ${field(event.detail, "next", 200)}`;
+  }
   if (event.kind === "secret_stale") {
     const detail = event.detail as {
       node?: string;

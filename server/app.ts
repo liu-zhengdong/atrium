@@ -31,6 +31,8 @@ import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerVerifierGuard } from "./tasks/verify-guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
+import { registerPlanRoutes } from "./plans/routes.ts";
+import { autoPlanEnabled, startPlan } from "./plans/runtime.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
 import { registerMaterialRoutes } from "./materials/routes.ts";
 import { registerSecretRoutes } from "./secrets/routes.ts";
@@ -97,6 +99,8 @@ export async function createApp(options: {
   legacyDir?: string;
   /** 周期任务（#404）：测试缩短巡检间隔、注入时钟与时区。 */
   schedules?: { tickMs?: number; now?: () => number; offset?: Offset };
+  /** 规划任务（t275）：选项单拍板后是否自动派规划；缺省只在默认数据目录开（ATRIUM_AUTO_PLAN 显式开关）。 */
+  plans?: { auto?: boolean };
   /** 推送到手机（Telegram）：测试给假接口地址、显式环境（不读本机代理）与时钟。 */
   notify?: Partial<Omit<NotifierOptions, "data">>;
 }) {
@@ -312,7 +316,20 @@ export async function createApp(options: {
   // 凭据（t194）：值在 <ATRIUM_DATA>/secrets/，只在派活时注入执行者。
   registerSecretRoutes(app, db, resolve(options.data));
   // 选项单的表要在全景变更检测挂触发器（registerMapRoutes）之前建好。
-  registerChoiceRoutes(app, db, taskRunner.inbox);
+  // 选项单拍板建的是准备拆的总任务（t275）：先自动派规划任务，清单交 leader 采纳。
+  const autoPlan =
+    options.plans?.auto ??
+    autoPlanEnabled(process.env.ATRIUM_AUTO_PLAN, {
+      defaultData: isDefaultData(options.data),
+    });
+  registerChoiceRoutes(app, db, taskRunner.inbox, (tasks) => {
+    if (!autoPlan) return;
+    for (const task of tasks)
+      void startPlan(db, taskRunner, task, { auto: true }).catch((error) =>
+        console.warn(`${task} 自动派规划失败`, error),
+      );
+  });
+  registerPlanRoutes(app, db, taskRunner);
   // 推送到手机：等你拍板、上交到用户这层的卡住／越界、里程碑上线（t185）。
   const notifier = new TelegramNotifier(db, {
     data: resolve(options.data),

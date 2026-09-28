@@ -1,4 +1,5 @@
 import type { PickSpecialists } from "../server/tasks/specialist-scope.ts";
+import type { PlanStarted } from "../server/plans/runtime.ts";
 import {
   VERIFY_STATE_TEXT,
   verifyActionText,
@@ -338,9 +339,9 @@ function alsoText(task: Task) {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--plan] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用",
+    "建任务；--plan 表示这是准备拆的总任务：建好就先派一个规划任务读代码与详述、出子任务清单（不改代码），清单好了负责的 leader 用 task adopt-plan 采纳；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
@@ -366,6 +367,7 @@ const add: Command = {
     stopgap: { type: "string" },
     "avoid-host": { type: "string" },
     priority: { type: "string" },
+    plan: { type: "boolean" },
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
@@ -441,10 +443,11 @@ const add: Command = {
       ...(values.urgent === true ? { urgent: true } : {}),
       ...laneInput(values),
       ...priorityInput(values),
+      ...(values.plan === true ? { plan: true } : {}),
     };
     const task = await (
       await client()
-    ).post<Task & UrgentReceipt>("/tasks", body);
+    ).post<Task & UrgentReceipt & { planned?: PlanStarted }>("/tasks", body);
     if (json) printJson(task);
     else
       console.log(
@@ -458,19 +461,28 @@ const add: Command = {
           ...urgentLines(task),
           ...laneLines(task),
           ...roleHint(task),
+          ...(task.planned
+            ? [
+                task.planned.run_error
+                  ? `规划任务 ${task.planned.task.ref} 已建好，但没派出去：${task.planned.run_error}`
+                  : `规划任务 ${task.planned.task.ref} 已${task.planned.queued ? "排队" : "启动"}：读代码与详述出子任务清单，好了交负责的 leader 采纳`,
+              ]
+            : []),
           ...hintLines(task),
         ].join("\n"),
       );
     recordNext(
-      task.urgent === 1 && !task.parent_ref
-        ? `马上派：atrium task run ${task.ref}`
-        : str(values, "after") ||
-            str(values, "after-pr") ||
-            values.auto === true
-          ? "看排期：atrium task plan"
-          : task.parent_ref
-            ? `看候选并派活：atrium task pick ${task.ref}`
-            : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
+      task.planned
+        ? task.planned.next
+        : task.urgent === 1 && !task.parent_ref
+          ? `马上派：atrium task run ${task.ref}`
+          : str(values, "after") ||
+              str(values, "after-pr") ||
+              values.auto === true
+            ? "看排期：atrium task plan"
+            : task.parent_ref
+              ? `看候选并派活：atrium task pick ${task.ref}`
+              : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
     );
   },
 };

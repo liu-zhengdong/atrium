@@ -27,6 +27,7 @@ import { VERIFIER_FLAG } from "./verify.ts";
 import { isVerifyTask } from "./verify-runtime.ts";
 import { settleRound } from "../products/settle.ts";
 import { settleDraft } from "../drafts/store.ts";
+import { isPlanTask, settlePlan } from "../plans/store.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
@@ -1022,6 +1023,20 @@ export class Executors {
         (decision.publish === "done" && isCouncilTask(this.ctx.db, id))
       ) {
         /* 由 councils.settle 推进会审。 */
+      }
+      // 规划任务（t275）：完成时读清单，好了投「规划待采纳」给负责的 leader，读不到投 plan_failed。
+      else if (decision.publish === "done" && isPlanTask(this.ctx.db, id)) {
+        const settled = settlePlan(
+          this.ctx.db,
+          this.ctx.launchOptions.data,
+          id,
+        );
+        this.publish(
+          id,
+          settled?.kind ?? "done",
+          { ...published, ...settled?.detail },
+          active.stop?.kind === "user" ? active.stop.by : undefined,
+        );
       } else if (patrolRun(this.ctx.db, id)) {
         finishPatrol(this.ctx.db, this.ctx.inbox, id);
         if (decision.publish !== "done")

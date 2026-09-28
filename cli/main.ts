@@ -21,6 +21,7 @@ import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
 import { mapCommands } from "./map.ts";
 import { draftCommands } from "./drafts.ts";
+import { planCommands } from "./plans.ts";
 import { reviewCommands } from "./reviews.ts";
 import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
@@ -109,6 +110,7 @@ export const commands: Record<string, Command> = {
   top: topCommand,
   statusline: statuslineCommand,
   ...taskCommands,
+  ...planCommands,
   ...roleCommands,
   ...workerCommands,
   ...reviewCommands,

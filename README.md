@@ -52,6 +52,8 @@ atrium task done t3                                             # 人工完成�
 
 **总任务**（t190）：任务一旦有子任务就是总任务——不再派给执行者（`task run`、`task pick` 与自动派发都回「tN 是总任务，派它下面的子任务」，已在排队的撤出），交付物对它不生效；它的状态与进度由全部子孙里的叶子推出：有叶子在做（执行者在跑，或交付后在审阅、合入、等上线）→ 在做；否则有失败或卡住的 → 卡住（写出是哪几个）；全部取消 → 取消；其余全部已上线或完成 → 已上线；否则待办／等待中。进度是「已上线或完成的叶子 / 叶子数（不算取消的）」，多层递归按一条有界的递归查询算（至多 5000 个子孙，超出写「+」）。账本里总任务的状态跟着走：全部完成存 `done`、全部取消存 `cancelled`、其余存 `todo`（从不写 `running` / `blocked`），依赖它的下游、`task wait tN`、`task ls --status` 照常认；自己正在跑（拆活的执行者还没退出）的不动，用户取消的不改回来。运行时替父任务建的专员审查、会审意见不算子任务。`task show`、`task tree`、`task ls` 显示汇总状态与进度，如 `t174 [在做 5/12] 离开电脑也能拍板 · 总任务 · 在做 2（t181、t183） · 卡住 1（t185）`；`atrium top` 与状态栏把同一总任务下的行归到一起（状态栏并成一行「▸ t174「离开电脑也能拍板」 5/12 · 在做 t181 …、t183 …」，等你拍板的照旧单列）；全景任务行里总任务可展开看直接子任务。**通知**：叶子的完成、上线等事件照旧投给负责它的 leader；秘书只收总任务级的——没有 leader 管的叶子卡住时收「tN 下的 tM 卡住要你」（`total_stuck`），全部子孙上线或完成时收一条「tN 整体已上线（x/x）」（`total_online`，带各叶子的端到端验证摘要；同一进度只发一次），叶子本身的上线不再另抄秘书。取消总任务时下面还有没结束的子孙会先问一句，带 `--with-children` 才连带取消，回执列出取消了哪些。已有带子任务的父任务升级后按这条规则显示，自身已有的 PR 与交付记录保留作历史、不再派。
 
+**规划任务**（t275）：大总任务先交给一次性执行者规划，leader 只拍板。`atrium task plan-for t197`（或建任务时 `task add 标题 --plan`）在总任务下建一个规划任务（帮手子任务，不让总任务因它变成「有子任务」；不交 PR、不建 worktree、只在本机跑），执行者只读仓库与详述，在工作目录写 `plan.json`：整体思路和至多 20 件子任务（标题、详述要点、先后依赖、建议的专员与执行者、归属部分）。任务完成时运行时校验清单：合格的投「规划待采纳」（`plan_ready`）给负责的 leader，读不到或不合格投 `plan_failed` 写明原因。leader 用 `atrium task adopt-plan t305 --dry-run` 看清单，`atrium task adopt-plan t305` 一条命令采纳：按依赖先后在总任务下批量建子任务（详述带来源，开自动派，就绪的由排期派出；请不动的专员记进详述、不挡采纳；归属部分只能是总任务所在部分或其下），一件建不起来整批不建，同一份只采纳一次；要改就 `--dry-run --json` 存成文件改好后 `--file 清单.json`；不合适 `atrium task reject-plan t305 --note 原因`，再 `plan-for` 重来。选项单拍板建的总任务，运行时自动先派规划任务（只在默认数据目录的服务缺省开，`ATRIUM_AUTO_PLAN=1/0` 显式开关）；规划任务派不出去时投 `plan_failed`。分身里「规划待采纳」算大事，单独一个分身处理，不挡日常事件。
+
 状态：`todo` → `running` → `done` / `failed` / `blocked`，或 `cancelled`。PR 任务过交付关卡后另有 `（审阅中）→ 排队合入 → 合入中 → 已合入 → 已上线` 阶段（已上线只用于 Atrium 自身仓库）。任一上游失败或取消，整条下游链都不会就绪。上游合入的是会自动上线的仓库（Atrium 自身）时，下游等它「已上线」才就绪（新命令上线后才用得上），`task plan` 与状态栏写「等 tN 上线」，上线失败按上游卡住处理；不自动上线的仓库（如 OpenQuota）合入即满足。
 
 ## 派活与执行者
@@ -266,11 +268,12 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 ```
 
 - **投给谁**：任务没写 `--owner` 时，从任务的归属部分（`--part`，旧任务的归属节点次之，都没写沿父任务往上找）向上找最近的、已登记的 leader；找不到投秘书。事件的 `routed` 写明投给谁、为什么。写了 `--owner`（包括 `--owner secretary`）就按负责人投。过程事件（合入、退回等知会）也投给 leader，但只有「要处理」的才唤醒它。
-- **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。只有默认数据目录的服务缺省唤醒；另给 `ATRIUM_DATA` 的隔离服务（压测、验收）库里有 leader 也不起真进程、不耗额度，事件留在收件箱，要唤醒设 `ATRIUM_LEADER_WAKE=1`（`=0` 在默认目录也关）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
+- **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一次性进程（单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。只有默认数据目录的服务缺省唤醒；另给 `ATRIUM_DATA` 的隔离服务（压测、验收）库里有 leader 也不起真进程、不耗额度，事件留在收件箱，要唤醒设 `ATRIUM_LEADER_WAKE=1`（`=0` 在默认目录也关）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
+- **分身**（t275）：同一位 leader 可同时有几个唤醒（分身），缺省至多 3 个，`atrium leader edit a1 --clones N` 改（1～8，1 就是从前的一次一个）。每个分身认领一件事或一棵任务树：任务事件按所属的最近总任务分组（自己是总任务就是自己，否则是父任务；专员审查、规划这类帮手跟父任务走），同一组同一时刻只归一个分身，组被占着的新事件等它结束再送。日常事件（上线、交回、卡住……）合成一个分身；大事（规划待采纳、会审结论）一棵树一个分身；两边各给对方留一个位置，日常事件不再被大事挡住。分身动别的分身认领的任务（重派、停、改、捎话）服务端回冲突，记备注不拦。备忘多分身共用：有别的分身在跑时 `memo edit` 只写自己认领那件事的分段，不互相覆盖；只剩一个分身时它写的就是合并后的全文（清掉它开始时已看到的分段，之后别人新写的留着）。`leader show`、`atrium top`、状态栏显示「a1 正在处理 2 件：t197 规划待采纳；t84 上线」，`GET /api/leaders/a1` 的 `clones` 列出各分身认领了什么。
 - **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，给这些节点排周期任务（`schedule add/pause/resume/run/rm`），写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
 - **上交**只有四类：`shipped` 已上线（里程碑完成，须带 `--task`，说明里附端到端验证）、`cross` 需要别的部分配合、`beyond` 越过权限／预算／硬边界、`stuck` 搞不定（卡住多次、拿不定）。生成一条投给上一层 leader（没有就秘书）的「要处理」事件 `escalated`，带 `--task` 时任务上也记一笔。转交下层 leader 投给自己的上交时不另起一条：`--event` 给那条的编号（不给时按同任务、同类型认最近一条，未确认或确认不到 6 小时的），上一层收到的仍是一条，`from`、`reason` 是下层原文，`forwarded` 逐层记「谁看过、一句意见」；原事件替转交人确认掉，唤醒收尾时不会再转交一次。
 - **连续性**存在 Atrium：节点要点、阶段、交付记录与 leader 的备忘和决定记录，不靠进程上下文。`org tree`、`map --json`（`leader_state`；`lead` 是这一块归谁管，含从上级继承的）、`atrium top` 显示每个节点的 leader 与最近一次唤醒、在处理什么（人话，如「t84 上线」）。
-- **看得到**：全景网页每块标题下有「负责人」一行（名字与在处理什么，点开是负责人页），顶栏在它处理时写「Atrium 负责人在处理」；leader 建的任务在任务行注明「Atrium 负责人派的」，备注作者给名字（`task ls/show` 显示「Atrium 负责人（a1）」，接口字段 `note_by_name`）。状态栏读 `GET /api/leaders` 的 `busy`：`[{ref, name, doing, since}]`，只列正在处理的 leader，空闲为空数组。
+- **看得到**：全景网页每块标题下有「负责人」一行（名字与在处理什么，点开是负责人页），顶栏在它处理时写「Atrium 负责人在处理」；leader 建的任务在任务行注明「Atrium 负责人派的」，备注作者给名字（`task ls/show` 显示「Atrium 负责人（a1）」，接口字段 `note_by_name`）。状态栏读 `GET /api/leaders` 的 `busy`：`[{ref, name, doing, clones, since}]`，只列正在处理的 leader（`clones` 是同时在跑的分身数），空闲为空数组。
 
 ## 备忘与决定记录
 
@@ -278,7 +281,7 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 
 ```bash
 atrium memo show                                   # 备忘与决定摘要（新会话、换人接手先跑这一条）；--as a1 看 leader 的，--as u1 看用户的
-atrium memo edit "在等 t97 上线，先看合入队列"        # 覆盖写，上限 2000 字；--file 文件；--as a1 写 leader 的
+atrium memo edit "在等 t97 上线，先看合入队列"        # 覆盖写，上限 2000 字；--file 文件；--as a1 写 leader 的；leader 有别的分身在跑时只写自己那一段
 atrium decision add "额度读取不依赖 OpenQuota" --why "要迁到别的设备" --by u1 --issue 352   # 追加，得到 dN；--by u1 记进用户那份
 atrium decision add "…" --why "…" --by u1 --date 2026-09-26 --task t80 --node atrium --node o5   # 补记旧决定、关联任务与一个或多个节点
 atrium decision add "中文；汇报要短" --why "…" --by u1 --node o1 --principle   # 标为原则：摘要里总列出
@@ -631,9 +634,21 @@ atrium statusline [--json]
   Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、未处理事件；服务不在只显示未运行，不拉起
   示例：atrium statusline
 
-atrium task add 标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
-  建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用
+atrium task add 标题 [--parent tN] [--plan] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
+  建任务；--plan 表示这是准备拆的总任务：建好就先派一个规划任务读代码与详述、出子任务清单（不改代码），清单好了负责的 leader 用 task adopt-plan 采纳；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用
   示例：atrium task add 拆分登录模块 --parent t1
+
+atrium task plan-for tN [--worker 工具+模型[:强度]]
+  给总任务派规划任务：一次性执行者读代码与详述，写出子任务清单（标题、详述要点、先后依赖、建议的专员与执行者、归属部分），不改代码、不开 PR；清单好了负责的 leader 收到「规划待采纳」。选项单拍板建的总任务运行时已自动派；已有没了结的规划时报冲突
+  示例：atrium task plan-for t197
+
+atrium task adopt-plan tM [--dry-run] [--file 清单.json]
+  采纳规划：按清单在总任务下批量建子任务（详述带来源、建议的专员、先后依赖，开自动派），就绪的由排期自动派出；--dry-run 只看清单不建；--file 用改过的清单（格式同 --dry-run --json 的 content，整份回执也认）；tM 给总任务时取它最近的规划；一件建不起来整批不建；同一份只采纳一次
+  示例：atrium task adopt-plan t305 --dry-run
+
+atrium task reject-plan tM --note 原因
+  驳回规划：写明原因（下次规划照着改）；要重来再 task plan-for 总任务，可先 task tell 捎话补充
+  示例：atrium task reject-plan t305 --note 拆得太碎，按模块合成三件
 
 atrium task ls [--status S] [--parent tN] [--after tN]
   列任务，按短号升序，每页 200 条
@@ -894,6 +909,14 @@ atrium map edit 节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… 
 atrium map add 父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--kind aspect] [--reason 原因] [--as aN]
   在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug；--kind aspect 建管方面的部分（如安全，要点横跨多个部分，用 map edit --applies 或 org point-add --applies 写适用范围）
   示例：atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板
+
+atrium map draft 仓库路径 [--node 节点] [--worker 工具+模型[:强度]]
+  从本机仓库起草一块的全景初稿：运行时先读 README、两层目录与最近提交（跳过隐藏与像凭据的文件），派一次性执行者只读仓库、看开着的 issue，写出是什么、能做什么、怎么走完、由哪几部分组成；不改仓库、不推送。初稿先给你看（map apply --dry-run），确认才写进组织树；--node 是要写到的节点
+  示例：atrium map draft ~/code/openquota --node openquota
+
+atrium map apply 起草任务 [--node 节点] [--dry-run]
+  看或确认全景初稿：--dry-run 只打出初稿和写进节点会改哪些字段；不带就把人话名、类比、是什么、能做什么、怎么走完写进 --node（缺省是起草时给的节点），没给的字段不动，组成部分留给建节点；同一份初稿只写一次
+  示例：atrium map apply t12 --dry-run
 ```
 
 ### 目标（迁移后下线）
@@ -995,12 +1018,12 @@ atrium leader show aN
   看一位 leader：负责的节点、执行者组合、最近一次唤醒与备忘
   示例：atrium leader show aN
 
-atrium leader add 名称 --worker 工具+模型[:强度] [--memo 文本] [--id aN]
-  登记 leader（固定身份，按事唤醒时用 --worker 的执行者组合起一次性进程）；--id 认领节点上已引用但没登记的 aN；再用 org edit 节点 --leader aN 指派
+atrium leader add 名称 --worker 工具+模型[:强度] [--memo 文本] [--id aN] [--clones N]
+  登记 leader（固定身份，按事唤醒时用 --worker 的执行者组合起一次性进程）；--id 认领节点上已引用但没登记的 aN；--clones 是同时至多几个分身（缺省 3，1～8；日常事件一个分身，大事一件一个）；再用 org edit 节点 --leader aN 指派
   示例：atrium leader add Atrium负责人 --worker claude+opus:high
 
-atrium leader edit aN [--name 名称] [--worker 工具+模型[:强度]] [--memo 文本|--memo-file 文件]
-  改 leader 的名称、执行者组合或备忘（覆盖写，有长度上限，超了先精简）；leader 自己只能改自己的备忘
+atrium leader edit aN [--name 名称] [--worker 工具+模型[:强度]] [--clones N] [--memo 文本|--memo-file 文件]
+  改 leader 的名称、执行者组合、分身并发上限（--clones，1～8）或备忘（覆盖写，有长度上限，超了先精简）；leader 自己只能改自己的备忘
   示例：atrium leader edit a1 --memo 在等t5合入，合入后上交已上线
 
 atrium leader escalate 说明 --kind shipped|cross|beyond|stuck [--task tN] [--event 编号] [--as aN]
@@ -1016,7 +1039,7 @@ atrium memo show [--as secretary|u1|aN]
   示例：atrium memo show
 
 atrium memo edit [文本] [--file 文件] [--as secretary|aN]
-  覆盖写备忘：在等什么、下次先看什么这类当前状态（有长度上限，超了先精简）；取舍与原因记进 decision add
+  覆盖写备忘：在等什么、下次先看什么这类当前状态（有长度上限，超了先精简）；取舍与原因记进 decision add。leader 有几个分身同时在跑时只写自己认领那件事的分段，不覆盖别的分身；只剩一个分身时它写的就是合并后的全文
   示例：atrium memo edit 在等t5合入，合入后先看线上验证 --as a1
 
 atrium decision add 决定 --why 原因 [--by u1|secretary|aN] [--date 日期] [--issue 号] [--node 节点]… [--task tN] [--supersedes dN] [--principle] [--as secretary|aN]
@@ -1254,6 +1277,7 @@ atrium role edit 专员 [--name 名称] [--description 文字] [--body 文件] [
 | `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                                                                        |
 | `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                                                          |
 | `ATRIUM_LEADER_WAKE`            | `1` 让隔离服务也唤醒 leader，`0` 关掉；默认只在默认数据目录唤醒                                         |
+| `ATRIUM_AUTO_PLAN`              | `1` 让隔离服务也在选项单拍板后自动派规划任务，`0` 关掉；默认只在默认数据目录自动派                      |
 | `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`                                              |
 | `ATRIUM_VERIFY_WORKERS`         | 上线后验证的执行者组合，逗号分隔、按顺序试，默认 `opencode+opencode-go/deepseek-v4.1-flash,cursor+auto` |
 | `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限                                            |

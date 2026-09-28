@@ -407,6 +407,10 @@ test("权限表：读接口放行，写接口只认列出的，其余一律拒�
     ["PATCH", "/api/map/nodes/:id", "map-edit"],
     ["PATCH", "/api/leaders/:id", "leader-edit"],
     ["POST", "/api/leaders/:id/escalate", "escalate"],
+    // 规划任务（t275）：派规划、采纳、驳回都看总任务或规划任务在不在范围里。
+    ["POST", "/api/tasks/:id/plan", "plan"],
+    ["POST", "/api/plans/:id/adopt", "plan"],
+    ["POST", "/api/plans/:id/reject", "plan"],
   ];
   for (const [method, route, rule] of allowed)
     assert.equal(leaderRule(method, route), rule, `${method} ${route}`);

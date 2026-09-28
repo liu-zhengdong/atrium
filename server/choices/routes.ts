@@ -40,6 +40,8 @@ export function registerChoiceRoutes(
   app: FastifyInstance,
   db: DatabaseSync,
   inbox: EventInbox,
+  /** 拍板建了任务之后（t275）：运行时先给每件派规划任务，结果交 leader 采纳。 */
+  onPicked?: (tasks: string[]) => void,
 ) {
   ensureChoiceTables(db);
   const leaderFor = (choice: Choice) => choiceLeader(db, choice);
@@ -115,6 +117,7 @@ export function registerChoiceRoutes(
     const leader = leaderFor(result.choice);
     if (leader)
       publish(leader, "choice_decided", result.choice, undefined, detail);
+    if (result.tasks.length) onPicked?.(result.tasks.map((t) => t.ref));
     return result;
   };
   app.post("/api/choices/:id/pick", { bodyLimit: 8 * 1024 }, decide("pick"));

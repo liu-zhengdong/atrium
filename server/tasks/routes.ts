@@ -6,6 +6,7 @@ import { involvedOf } from "./also.ts";
 import { specialistsForPart } from "./specialist-scope.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { leaderOf } from "../leaders/guard.ts";
+import { startPlan } from "../plans/runtime.ts";
 import type { DatabaseSync } from "node:sqlite";
 import {
   ackIds,
@@ -215,7 +216,10 @@ export function registerTaskRoutes(
   }
   // 详述进库（#355）：内容至多 64 KB，JSON 转义后留足余量。
   app.post("/api/tasks", { bodyLimit: 256 * 1024 }, async (request, reply) => {
-    const input = bodyFields(request.body);
+    // --plan（t275）：准备拆的总任务，建好就先派规划任务；plan 不是任务字段，先摘出来。
+    const { plan, ...input } = bodyFields(request.body);
+    if (plan !== undefined && typeof plan !== "boolean")
+      throw new Problem(400, "plan: 应为 true 或 false", "usage");
     const leader = leaderOf(request);
     const notify = urgentGate(
       leader,
@@ -224,8 +228,17 @@ export function registerTaskRoutes(
       null,
       input.stopgap,
     );
-    const task = createTask(db, request.body, Date.now(), leader);
+    const task = createTask(
+      db,
+      plan === undefined ? request.body : input,
+      Date.now(),
+      leader,
+    );
     publishInvolved(runner.inbox, db, task.id, [], leader);
+    const planned =
+      plan === true
+        ? await startPlan(db, runner, task.ref, { by: leader })
+        : undefined;
     // 紧急通道（t215）：leader 标的知会用户；写了止损动作的建好就先执行。
     if (notify)
       runner.lane.notifyMarked(task.id, leader!, task.urgent_why ?? null);
@@ -235,6 +248,7 @@ export function registerTaskRoutes(
       ...(stopgap ? getTask(db, task.id) : task),
       ...(stopgap ? { stopgap_results: stopgap } : {}),
       ...(warning ? { urgent_warning: warning } : {}),
+      ...(planned ? { planned } : {}),
     });
   });
   app.get("/api/tasks", (request) => {

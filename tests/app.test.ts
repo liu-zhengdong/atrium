@@ -52,6 +52,7 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "notify",
     "org",
     "patrol",
+    "plans",
     "product",
     "products",
     "quota",

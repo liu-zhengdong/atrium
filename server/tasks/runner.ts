@@ -147,6 +147,7 @@ import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
 import { publishTotals } from "./notice.ts";
 import { productRound } from "../products/model.ts";
 import { isDraftTask } from "../drafts/store.ts";
+import { isPlanTask } from "../plans/store.ts";
 import { pendingChoices } from "../choices/store.ts";
 import { UrgentLane, type StopNote } from "./urgent-runtime.ts";
 import { storedHosts, urgentIdleMs } from "./urgent.ts";
@@ -979,7 +980,9 @@ export class TaskRunner {
           ? "产品部研究的选项单文件要留在本机"
           : isDraftTask(this.db, id)
             ? "全景初稿要读本机的仓库，初稿文件要留在本机"
-            : null;
+            : isPlanTask(this.db, id)
+              ? "规划要读本机的仓库，清单文件要留在本机"
+              : null;
     let repo: string | null = null;
     if (task.repo) {
       // 没有接入的远程主机时不查仓库，省一次 git。

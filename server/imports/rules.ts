@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { all, one } from "../org/model.ts";
 import { POINT_LIMITS } from "../org/points.ts";
 import { importMark, markImported } from "./marks.ts";
+import { updateTask } from "../tasks/ledger.ts";
+import { dequeue } from "../tasks/queue.ts";
 
 /**
  * 规矩并进要点（一次性迁移）：此前规矩散在硬边界、原则决定、章程、管方面的部分、产品部里；
@@ -11,6 +13,7 @@ import { importMark, markImported } from "./marks.ts";
  * - 管方面的部分：它的要点挪到适用范围的共同上级（缺省是它的上级），部分本身成为普通部分。
  * - 产品部：节点归档，它的周期调研改挂到它管的那一块，没写详述的补上调研详述。
  * - 章程字段：目标并进「是什么」（「是什么」已写就不动），汇报、上交、目标字段删掉（通用规则在 leader 与秘书的提示词里）。
+ * - 上线验证（端到端验证挪到合入前）：还没出结论的验证任务撤出队列、取消，不再派人去真实环境跑。
  * 单条出错记日志跳过，其余照常；整轮做完才记号。
  */
 
@@ -121,7 +124,13 @@ export function migrateRules(
   const update = db.prepare("UPDATE org_points SET pos=? WHERE id=?");
   const renumber = (ids: number[]) =>
     ids.forEach((id, i) => update.run(i + 1, id));
-  const counts = { boundaries: 0, limits: 0, principles: 0, moved: 0 };
+  const counts = {
+    boundaries: 0,
+    limits: 0,
+    principles: 0,
+    moved: 0,
+    verifies: 0,
+  };
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -317,6 +326,18 @@ export function migrateRules(
             "UPDATE org_docs SET fields=? WHERE node_id=? AND doc='charter'",
           ).run(JSON.stringify(fields), doc.node_id);
         });
+    // 上线验证任务：没出结论的撤出队列并取消。
+    if (hasTable(db, "task_verifications") && hasTable(db, "tasks"))
+      for (const v of all<{ id: number }>(
+        db,
+        `SELECT t.id FROM task_verifications v JOIN tasks t ON t.id=v.verify_id
+          WHERE v.decided_at IS NULL AND t.status NOT IN ('done','failed','cancelled','running') LIMIT 500`,
+      ))
+        step(`上线验证 t${v.id}`, () => {
+          dequeue(db, v.id);
+          updateTask(db, `t${v.id}`, { status: "cancelled" }, now);
+          counts.verifies++;
+        });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -325,7 +346,7 @@ export function migrateRules(
   markImported(
     db,
     MARK,
-    `硬边界 ${counts.boundaries} 条、配置 ${counts.limits} 项、原则 ${counts.principles} 条迁成要点，管方面的要点挪了 ${counts.moved} 条`,
+    `硬边界 ${counts.boundaries} 条、配置 ${counts.limits} 项、原则 ${counts.principles} 条迁成要点，管方面的要点挪了 ${counts.moved} 条，取消上线验证任务 ${counts.verifies} 件`,
     now,
   );
 }

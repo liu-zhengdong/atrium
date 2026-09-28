@@ -277,6 +277,12 @@ test("决定记录：追加、推翻，缺省只列有效的，--all 全列；�
     supersedes: "d1",
   });
   assert.deepEqual(d3.supersedes, ["d1"]);
+  // 早先 leader 记的运行流水留在库里，不再列出。
+  x.db
+    .prepare(
+      "INSERT INTO decisions(owner,decided_on,decided_by,text,why,created_at) VALUES('a1','2026-09-27','a1','旧流水','过程',1)",
+    )
+    .run();
 
   const active = await x.ok("GET", "/api/decisions");
   assert.deepEqual(

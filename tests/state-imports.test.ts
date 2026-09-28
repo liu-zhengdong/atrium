@@ -231,7 +231,16 @@ test("旧库启动：硬边界、原则决定、管方面的部分、产品部�
       kind TEXT NOT NULL CHECK(kind IN ('task','patrol','research')), every_ms INTEGER NOT NULL, at_minute INTEGER,
       brief TEXT, brief_path TEXT, by TEXT, worker TEXT, next_at INTEGER NOT NULL, removed_at INTEGER,
       last_task_id INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-    INSERT INTO schedules(node_id,title,kind,every_ms,next_at,created_at,updated_at) VALUES (5,'下一步调研','research',604800000,9e12,1,1);`);
+    INSERT INTO schedules(node_id,title,kind,every_ms,next_at,created_at,updated_at) VALUES (5,'下一步调研','research',604800000,9e12,1,1);
+    CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES tasks(id),
+      title TEXT NOT NULL, brief_path TEXT, role TEXT, repo TEXT,
+      status TEXT NOT NULL CHECK(status IN ('todo','running','done','failed','blocked','cancelled')),
+      worker TEXT, pid INTEGER, worktree TEXT, branch TEXT, pr_url TEXT, ci TEXT, result TEXT,
+      created_at INTEGER NOT NULL, started_at INTEGER, ended_at INTEGER, updated_at INTEGER NOT NULL);
+    INSERT INTO tasks(id,title,status,created_at,updated_at) VALUES (1,'原任务','done',1,1),(2,'上线验证：t1','todo',1,1);
+    CREATE TABLE task_verifications (verify_id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL, verdict TEXT,
+      created_at INTEGER NOT NULL, decided_at INTEGER, summary TEXT);
+    INSERT INTO task_verifications VALUES (2,1,NULL,1,NULL,NULL);`);
   old.close();
   const start = () =>
     createApp({ data, auth: false, tasks: { pace: async () => undefined } });
@@ -292,6 +301,15 @@ test("旧库启动：硬边界、原则决定、管方面的部分、产品部�
     assert.deepEqual(
       { ...db.prepare("SELECT node_id,brief FROM schedules WHERE id=1").get() },
       { node_id: 2, brief: RESEARCH_BRIEF },
+    );
+    assert.equal(
+      (
+        db.prepare("SELECT status FROM tasks WHERE id=2").get() as {
+          status: string;
+        }
+      ).status,
+      "cancelled",
+      "没出结论的上线验证任务取消",
     );
     const map = await app.inject({
       url: "/api/map/context/o3",

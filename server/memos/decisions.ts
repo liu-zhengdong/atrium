@@ -13,7 +13,7 @@ import { atomically, parseTaskRef } from "../tasks/ledger-model.ts";
 /**
  * 决定记录：只记用户拍板的事与原因，给人回看的档案（不附进任何提示词）。要守的规矩写成要点（org/points.ts）；
  * leader、秘书自己的处理过程写任务备注。每条：日期、决定、原因、可选关联（issue、一个或多个节点、任务）；
- * 被推翻的记 superseded_by 指向新决定。早先 leader、秘书记的旧条目照读照列，不再新增。
+ * 被推翻的记 superseded_by 指向新决定。早先 leader、秘书记的旧条目留在库里，不再列出也不再新增。
  */
 
 export const DECISION_LIMITS = { text: 300, why: 1000 };
@@ -361,8 +361,9 @@ export function listDecisions(
   } = {},
 ) {
   const limit = options.limit ?? PAGE_DEFAULT;
-  const where: string[] = [];
-  const args: (string | number)[] = [];
+  // 只列用户拍板的：早先 leader、秘书记的运行流水留在库里，不再列出。
+  const where: string[] = ["decided_by=?"];
+  const args: (string | number)[] = [LOCAL_USER];
   if (options.node) {
     const ids = upward(nodes(db), nodeByAddress(db, options.node).id);
     where.push(
@@ -374,7 +375,7 @@ export function listDecisions(
     where.push("(text LIKE ? ESCAPE '\\' OR why LIKE ? ESCAPE '\\')");
     args.push(likePattern(term), likePattern(term));
   }
-  const counted = where.length ? where.join(" AND ") : "1";
+  const counted = where.join(" AND ");
   const countArgs = [...args];
   if (!options.all) where.push("superseded_by IS NULL");
   if (
@@ -388,7 +389,7 @@ export function listDecisions(
   }
   const rows = all<Row>(
     db,
-    `SELECT * FROM decisions WHERE ${where.length ? where.join(" AND ") : "1"} ORDER BY decided_on DESC,id DESC LIMIT ?`,
+    `SELECT * FROM decisions WHERE ${where.join(" AND ")} ORDER BY decided_on DESC,id DESC LIMIT ?`,
     ...args,
     limit + 1,
   );

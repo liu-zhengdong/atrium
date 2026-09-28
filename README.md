@@ -940,7 +940,7 @@ atrium workers ls [--json]
   示例：atrium workers ls
 
 atrium workers edit 层/名 (--file 文件|- | --trust 等级 | --max-risk 风险 | --model 模型 | --checks a,b | --set 键=值 | --unset 键) [--reason 原因] [--as secretary]
-  改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）
+  改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）。harness/<新名字> 写 protocol: cli 与 command、args 即接入一个通用命令行执行者；任一层写 endpoint、endpoint_api、endpoint_key（凭据名）接自定义模型端点
   示例：atrium workers edit combos/codex+gpt-6-sol --trust medium --reason 连续五次一次通过
 
 atrium workers confirm 工具+模型[:强度] --specialist 专员 --action relax|tighten|avoid_specialist

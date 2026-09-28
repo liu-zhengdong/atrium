@@ -888,11 +888,9 @@ export class TaskRunner {
     }
     this.x.claim(id, tool, host);
     try {
-      return {
-        task: await this.x.launch(id, { ...chosen, host }),
-        queued: false,
-        pick,
-      };
+      await this.x.launch(id, { ...chosen, host });
+      // 回执要带事件（技能没挂上等，t232），与排队时一样回完整视图。
+      return { task: getTask(this.db, id), queued: false, pick };
     } catch (error) {
       if (error instanceof BudgetProblem)
         return this.blockBudget(task, error.message);

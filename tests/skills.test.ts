@@ -54,6 +54,7 @@ import {
 } from "../server/tasks/profiles.ts";
 import type { Tool } from "../server/tasks/adapters/index.ts";
 import { readSkillSource } from "../cli/skills.ts";
+import { skippedSkillsLine } from "../cli/tasks.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";
 
@@ -980,7 +981,13 @@ test("运行时：派到节点的任务挂上技能，执行者改了副本，�
     repo: fx.repo,
     role: "atrium/web",
   });
-  await ok("POST", "/api/tasks/t1/run", { worker: "codex" });
+  const run = await ok("POST", "/api/tasks/t1/run", { worker: "codex" });
+  // 拉起的回执带事件（t232）：命令行据此判这次技能挂没挂上，挂上了不多写一行。
+  assert.ok(
+    run.task.events.some((e: { kind: string }) => e.kind === "start"),
+    JSON.stringify(run.task),
+  );
+  assert.equal(skippedSkillsLine(run.task.events), null);
   await ok("GET", "/api/tasks/t1/wait?timeout=20");
   const env = readFileSync(join(fx.root, "codex-env.txt"), "utf8");
   assert.match(env, /^CODEX_HOME=.*[\\/]tasks[\\/]1[\\/]codex-home$/m);

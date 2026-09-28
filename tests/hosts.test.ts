@@ -21,6 +21,7 @@ import { killTree, processAlive } from "../server/platform/index.ts";
 import { fixture, until } from "./task-fixture.ts";
 import { nodeCommand } from "./portable-shell.ts";
 import { QuotaReaders } from "../server/quota-readers/index.ts";
+import { skippedSkillsLine } from "../cli/tasks.ts";
 
 /**
  * 远程执行者（#358 第 1 步）：真 HTTP 服务 + 同机起的代理（数据目录分开），假执行者。
@@ -1106,6 +1107,12 @@ test("远程主机挂组织技能（t232）：代理在那台挂上、提示词�
     host: "h2",
   });
   assert.equal(run.task.host_ref, "h2");
+  // 远程拉起的回执同样带事件（t259）；挂上了不多写一行。
+  assert.ok(
+    run.task.events.some((e: { kind: string }) => e.kind === "start"),
+    JSON.stringify(run.task),
+  );
+  assert.equal(skippedSkillsLine(run.task.events), null);
   const task = (await ok("GET", "/api/tasks/t1/wait?timeout=20")).task;
   assert.equal(task.status, "done", JSON.stringify(task.events.slice(-4)));
   const note = (kind: string) =>
@@ -1153,4 +1160,74 @@ test("远程主机挂组织技能（t232）：代理在那台挂上、提示词�
         (e: { kind: string }) => e.kind === "skill_proposal",
       ),
   );
+});
+
+test("远程主机的代理太旧不会挂技能（t259）：照样拉起，派活回执写明没挂上", async (t) => {
+  const fx = fixture(t);
+  fx.script("opencode", 'echo \'{"type":"text","part":{"text":"远程完成"}}\'');
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data);
+  t.after(() => server.close());
+  const { call, port } = server;
+  const ok = async (method: "GET" | "POST", url: string, payload?: object) => {
+    const response = await call(method, url, payload);
+    assert.ok(
+      response.status < 300,
+      `${url}: ${JSON.stringify(response.body)}`,
+    );
+    return response.body;
+  };
+  const added = await ok("POST", "/api/hosts", {
+    name: "虚拟机",
+    repos: ["*"],
+  });
+  // 旧代理：上报的主机信息里没有 skills 能力。
+  const old: typeof fetch = (input, init) => {
+    if (typeof init?.body !== "string") return fetch(input, init);
+    const body = JSON.parse(init.body) as { info?: { skills?: boolean } };
+    if (body.info) delete body.info.skills;
+    return fetch(input, { ...init, body: JSON.stringify(body) });
+  };
+  const { lines } = startAgent(t, {
+    port,
+    data: join(fx.root, "agent"),
+    env: fx.env,
+    code: added.code,
+    fetch: old,
+  });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  for (const node of [
+    { slug: "org", kind: "org", name: "组织" },
+    { parent: "o1", slug: "atrium", kind: "project", name: "Atrium" },
+    { parent: "o2", slug: "web", kind: "module", name: "web" },
+  ])
+    await ok("POST", "/api/org/nodes", { ...node, reason: "建" });
+  await ok("POST", "/api/skills", {
+    slug: "web-design",
+    files: {
+      "SKILL.md":
+        "---\nname: web-design\ndescription: 前端设计约定\n---\n\n按钮间距 8px\n",
+    },
+    owner: "atrium/web",
+    reason: "用户的前端口味",
+  });
+  await ok("POST", "/api/skills/web-design/bind", { node: "atrium/web" });
+  await ok("POST", "/api/tasks", {
+    title: "远程改按钮",
+    deliver: "none",
+    role: "atrium/web",
+  });
+  const run = await ok("POST", "/api/tasks/t1/run", {
+    worker: "opencode",
+    host: "h2",
+  });
+  assert.equal(run.task.host_ref, "h2");
+  assert.equal(run.queued, false);
+  assert.match(
+    skippedSkillsLine(run.task.events) ?? "",
+    /^组织技能没挂上（web-design）：h2 上的代理（test）版本旧，不会挂组织技能/,
+    JSON.stringify(run.task.events),
+  );
+  const task = (await ok("GET", "/api/tasks/t1/wait?timeout=20")).task;
+  assert.equal(task.status, "done", JSON.stringify(task.events.slice(-4)));
 });

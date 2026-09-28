@@ -383,6 +383,9 @@ test("隔离运行时：份额用尽转 blocked 通知 leader；pace 不可用�
   assert.equal(launched.status, 200);
   const read = await call("GET", "/api/tasks/t2");
   assert.match(JSON.stringify(read.body.events), /budget_unknown/);
+  // 等假执行者跑完再收尾：它还在工作树里写文件时删临时目录，macOS 上会 ENOTEMPTY。
+  const waited = await call("GET", "/api/tasks/t2/wait?timeout=20");
+  assert.notEqual(waited.body.task.status, "running");
 });
 
 test("真实执行者生命周期采样：OpenQuota 已用上升时节点约用同向上升", async (t) => {

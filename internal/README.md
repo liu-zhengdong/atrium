@@ -42,7 +42,8 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
 | `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、ssh 隧道、远程代理；`host add/ls/show/rm`、`agent`、`agent install` | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
-| `web` | 桩 | 只读网页与只读接口；`map` | — |
+| `web` | 完成 | 只读网页与只读接口；`map`；代为注册一次性的 `import`（实现在 `importer`） | — |
+| `importer` | 完成 | 从旧 TS 库只读导入部门、要点、决定、负责人、备忘、技能、资料、档案、机器 | — |
 | `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`、`statusline` | — |
 
 ## 共同约定
@@ -77,6 +78,7 @@ type Module struct {
 
 ### HTTP（`internal/api`）
 
+- 网页这类不走 JSON 信封的处理函数用 `r.Raw(pattern, http.HandlerFunc)`，自己认证、默认拒绝。
 - 路由：`r.Handle("POST /api/tasks/{id}/notes", func(q *api.Req) (any, error))`，Go 1.22 写法。`r.Public` 只给 `/health` 与 hosts 自己认机器令牌的 `/api/agent/*`。
 - 路径里的短号用 `q.Ref("id", "t")` 取，自动拒绝前缀不对、`..`、`t0` 之类。请求体用 `q.Decode(&v)`（拒绝未知字段，上限 1MB）。
 - 错误：`api.Usage`（400）、`api.NotFound`（404）、`api.Conflict`（409）、`api.Limit(next, …)`（409，满了必须给怎么腾地方）、`api.Forbidden`（403）、`api.Unavailable`（503，code `restarting`）；`.WithNext("atrium …")` 附修正命令。其他 error 一律 500 `internal`。请求 context 取消（服务停下或重启）自动变成 `restarting`，客户端据此等新服务后重发。

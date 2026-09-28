@@ -13,7 +13,7 @@ import {
   queueOrder,
   type HostLimits,
 } from "../server/tasks/host-load.ts";
-import { queueHeads } from "../server/tasks/queue.ts";
+import { queueWalk } from "../server/tasks/queue.ts";
 import { NEXT_MERGE } from "../server/tasks/merge-runtime.ts";
 import { ensureTaskTables } from "../server/tasks/ledger.ts";
 import {
@@ -266,29 +266,29 @@ test("排队先后：紧急的在前、闲时的在后，同一档按入队先�
     urgent,
     idle,
   });
-  // 每个工具一个队首：同一工具里紧急的顶到前面；各工具的队首之间也是紧急的在前。
+  // 整条队按拉起先后排（t229 起不再只取每个工具的队首）：紧急的顶到前面，同一档按入队先后。
   assert.deepEqual(
-    queueHeads([
+    queueWalk([
       q(1, "kimi", 1),
       q(2, "kimi", 2, true),
       q(3, "codex", 0),
       q(4, "claude", 5, true),
       q(5, "codex", 3),
     ]).map((entry) => entry.task_id),
-    [2, 4, 3],
+    [2, 4, 3, 1, 5],
   );
-  // 闲时的（t136）排在同一工具的普通任务后面，各工具队首之间也在普通后面；标了紧急的闲时任务按紧急算。
+  // 闲时的（t136）排在普通任务后面；标了紧急的闲时任务按紧急算。
   assert.deepEqual(
-    queueHeads([
+    queueWalk([
       q(1, "kimi", 0, false, true),
       q(2, "kimi", 5),
       q(3, "codex", 0, false, true),
       q(4, "claude", 9),
       q(5, "grok", 9, true, true),
     ]).map((entry) => entry.task_id),
-    [5, 2, 4, 3],
+    [5, 2, 4, 1, 3],
   );
-  assert.deepEqual(queueHeads([]), []);
+  assert.deepEqual(queueWalk([]), []);
 });
 
 test("本地检查排位：紧急的立刻跑，其余有空位才跑", () => {

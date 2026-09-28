@@ -6,6 +6,7 @@ import {
   cloneName,
   connection,
   connectionText,
+  hasRoom,
   hostFit,
   insideData,
   logAccept,
@@ -26,7 +27,11 @@ import {
   nextChunk,
 } from "../server/agent/plan.ts";
 import { loggedIn } from "../server/hosts/info.ts";
-import { queueHeads } from "../server/tasks/queue.ts";
+import { drainGate } from "../server/tasks/queue.ts";
+import { cloneLock } from "../server/agent/launch.ts";
+import { ensureWorktree, type Exec } from "../server/tasks/git.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Assignment } from "../server/hosts/protocol.ts";
 
 test("任务里的执行机器：本机省略，远程用名字，心跳过期标离线", () => {
@@ -507,52 +512,172 @@ test("是否登录：只看登录文件在不在；codex 没文件就是没登�
   assert.equal(loggedIn("opencode", "linux", none), null);
 });
 
-test("排队队首：指定了主机的另排一队，不挡自动挑主机的同一工具", () => {
-  const heads = queueHeads([
-    {
-      task_id: 1,
-      tool: "kimi",
-      worker: "kimi",
-      risk: "low",
-      queued_at: 1,
-      urgent: false,
-      idle: false,
-      host_id: 2,
-    },
-    {
-      task_id: 2,
-      tool: "kimi",
-      worker: "kimi",
-      risk: "low",
-      queued_at: 2,
-      urgent: false,
-      idle: false,
-      host_id: null,
-    },
-    {
-      task_id: 3,
-      tool: "kimi",
-      worker: "kimi",
-      risk: "low",
-      queued_at: 3,
-      urgent: false,
-      idle: false,
-      host_id: null,
-    },
-    {
-      task_id: 4,
-      tool: "kimi",
-      worker: "kimi",
-      risk: "low",
-      queued_at: 4,
-      urgent: false,
-      idle: false,
-      host_id: 2,
-    },
+test("还有空位：本机或在线的远程、没暂停、不满不忙才算（t229 drain 据此收手）", () => {
+  for (const kind of ["local", "remote"] as const)
+    for (const connection of ["online", "offline", "pending"] as const)
+      for (const paused of [false, true])
+        for (const full of [false, true])
+          for (const busy of [null, "这台太忙"]) {
+            const candidate = (kind === "local" ? local : remote)({
+              ...(kind === "remote" ? { connection } : {}),
+              paused,
+              max: 4,
+              running: full ? 4 : 1,
+              busy,
+            });
+            const expected =
+              !paused &&
+              (kind === "local" || connection === "online") &&
+              !full &&
+              busy === null;
+            assert.equal(
+              hasRoom([candidate]),
+              expected,
+              `${kind}/${connection}/${paused}/${full}/${busy}`,
+            );
+            // 多台里有一台有空位就算。
+            assert.equal(
+              hasRoom([local({ busy: "本机满" }), candidate]),
+              expected,
+            );
+            assert.equal(hasRoom([candidate, remote({ id: 3 })]), true);
+          }
+  assert.equal(hasRoom([]), false);
+});
+
+test("drain 走到一件排队任务：额度用尽跳过，没空位时普通与闲时整轮收手，闲时前面有普通的跳过", () => {
+  for (const urgent of [false, true])
+    for (const held of [false, true])
+      for (const room of [false, true])
+        for (const idleAhead of [0, 2]) {
+          const expected = held
+            ? "skip"
+            : !urgent && !room
+              ? "stop"
+              : idleAhead
+                ? "skip"
+                : "place";
+          assert.equal(
+            drainGate({ urgent, held, room, idleAhead }),
+            expected,
+            `${urgent}/${held}/${room}/${idleAhead}`,
+          );
+        }
+});
+
+test("主机恢复后排队的挪过去：本机满、h3 空着 12 个位置，自动挑的一件件都去 h3，钉在本机的只等本机", () => {
+  // 秘书 09-28 实测：t188、t194、t226、t227、t228 一直等 h1。drain 每件都按此刻的空位重挑。
+  let hosts = [
+    local({ busy: "本机同时最多跑 6 个执行者，有执行者结束后自动拉起" }),
+    remote({
+      id: 3,
+      max: 12,
+      repos: ["*"],
+      clis: { claude: { installed: true, logged_in: null } },
+    }),
+  ];
+  const placed: (number | string)[] = [];
+  const queue = [
+    { pinned: 1 },
+    { pinned: null },
+    { pinned: null },
+    { pinned: null, avoid: [3] },
+    { pinned: null },
+  ];
+  for (const entry of queue) {
+    const choice = chooseHost(
+      hosts,
+      need({ tool: "claude", avoid: entry.avoid ?? [] }),
+      entry.pinned ?? undefined,
+    );
+    if (choice.kind !== "run") {
+      placed.push(choice.kind);
+      continue;
+    }
+    placed.push(choice.host);
+    hosts = hosts.map((c) =>
+      c.id === choice.host ? { ...c, running: c.running + 1 } : c,
+    );
+  }
+  assert.deepEqual(placed, ["queue", 3, 3, "queue", 3]);
+  assert.equal(hasRoom(hosts), true);
+});
+
+test("代理的按克隆排队：同一克隆一件做完才做下一件，前一件失败不挡后面，不同克隆互不等", async () => {
+  const withClone = cloneLock();
+  const log: string[] = [];
+  let active = 0;
+  let most = 0;
+  const work =
+    (name: string, fail = false) =>
+    async () => {
+      active++;
+      most = Math.max(most, active);
+      log.push(`${name}+`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      log.push(`${name}-`);
+      active--;
+      if (fail) throw new Error(`${name} 失败`);
+      return name;
+    };
+  const results = await Promise.allSettled([
+    withClone("/a", work("a1", true)),
+    withClone("/a", work("a2")),
+    withClone("/a", work("a3")),
   ]);
   assert.deepEqual(
-    heads.map((head) => head.task_id),
-    [1, 2],
+    results.map((r) => r.status),
+    ["rejected", "fulfilled", "fulfilled"],
+  );
+  assert.equal(most, 1);
+  assert.deepEqual(log, ["a1+", "a1-", "a2+", "a2-", "a3+", "a3-"]);
+  // 不同克隆并行。
+  most = 0;
+  await Promise.all([withClone("/a", work("x")), withClone("/b", work("y"))]);
+  assert.equal(most, 2);
+});
+
+test("建工作树：拉取失败（同一克隆别的 fetch 占着引用锁）稍等重试一次；两次都失败才报错", async () => {
+  const path = join(tmpdir(), `atrium-missing-${process.pid}-${Date.now()}`);
+  const plan = { path, branch: "task-t1-x", slug: "x" };
+  const fake = (fetchFails: number) => {
+    const calls: string[] = [];
+    let fetches = 0;
+    const run: Exec = async (_command, args) => {
+      calls.push(args.slice(2).join(" "));
+      if (args.includes("fetch") && fetches++ < fetchFails)
+        return {
+          ok: false,
+          stdout: "",
+          stderr:
+            "error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2",
+        };
+      if (args.includes("rev-parse"))
+        return { ok: false, stdout: "", stderr: "" };
+      return { ok: true, stdout: "", stderr: "" };
+    };
+    return { run, calls };
+  };
+  const once = fake(1);
+  assert.deepEqual(await ensureWorktree("/repo", plan, "main", once.run), {
+    created: true,
+  });
+  assert.deepEqual(
+    once.calls.filter((call) => call.startsWith("fetch")),
+    ["fetch origin main", "fetch origin main"],
+  );
+  const twice = fake(2);
+  await assert.rejects(
+    ensureWorktree("/repo", plan, "main", twice.run),
+    /拉取 origin\/main 失败：error: cannot lock ref/,
+  );
+  assert.equal(
+    twice.calls.filter((call) => call.startsWith("fetch")).length,
+    2,
+  );
+  assert.equal(
+    twice.calls.some((call) => call.startsWith("worktree")),
+    false,
   );
 });
 

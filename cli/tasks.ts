@@ -1170,7 +1170,7 @@ const done: Command = {
 const run: Command = {
   args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--urgent [--why 原因]]",
   about:
-    "派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的；那台暂停接活时用户与秘书仍可这样只派这一件，不必先恢复）；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）",
+    "派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的；那台暂停接活时用户与秘书仍可这样只派这一件，不必先恢复）；已在排队的带 --worker 或 --host 改派执行者或主机，排队位置不变；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）",
   options: {
     worker: { type: "string" },
     risk: { type: "string" },
@@ -1224,19 +1224,28 @@ const run: Command = {
         task: Task & { events: TaskEventRow[] };
         queued: boolean;
         pick?: RunPick;
-        reassigned?: { worker: string; from: string; reason: string | null };
+        reassigned?: {
+          worker: string;
+          from: string;
+          host?: string | null;
+          reason: string | null;
+        };
         host_note?: string;
       } & UrgentReceipt
     >(`/tasks/${id}/run`, body);
     const { task } = result;
+    // 钉了主机的写成「h3 上的 claude+…」（t229）。
+    const target = result.reassigned
+      ? `${result.reassigned.host ? `${result.reassigned.host} 上的 ` : ""}${result.reassigned.worker}`
+      : "";
     if (json) printJson(result);
     else
       console.log(
         [
           result.reassigned && result.queued
-            ? `${task.ref} 已改派给 ${result.reassigned.worker}，仍在排队：${result.reassigned.reason ?? queuedReason(task.events)}`
+            ? `${task.ref} 已改派给 ${target}，仍在排队：${result.reassigned.reason ?? queuedReason(task.events)}`
             : result.reassigned && task.status !== "running"
-              ? `${task.ref} 已改派给 ${result.reassigned.worker}，现在 ${task.status}`
+              ? `${task.ref} 已改派给 ${target}，现在 ${task.status}`
               : result.queued
                 ? `${task.ref} 排队中：${queuedReason(task.events)}`
                 : `已${result.reassigned ? "改" : ""}派 ${task.ref} 给 ${task.worker}（${task.host_ref ? `${task.host_ref} 上 ` : ""}PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,

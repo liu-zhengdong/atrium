@@ -24,6 +24,9 @@ import { QuotaReaders } from "../server/quota-readers/index.ts";
 import { skippedSkillsLine } from "../cli/tasks.ts";
 import { resolveWorker } from "../server/tasks/profiles.ts";
 import type { Executors } from "../server/tasks/executors.ts";
+import { HostLoad } from "../server/tasks/host-load.ts";
+import { getTask } from "../server/tasks/ledger.ts";
+import { DatabaseSync } from "node:sqlite";
 
 /**
  * 远程执行者（#358 第 1 步）：真 HTTP 服务 + 同机起的代理（数据目录分开），假执行者。
@@ -42,6 +45,7 @@ async function serve(
     agentCheckWatchMs?: number;
     tunnelSpawn?: (connection: SshConnection) => ChildProcess;
     tunnelStop?: (child: ChildProcess) => void;
+    host?: HostLoad;
   } = {},
 ) {
   const created = await createApp({
@@ -590,6 +594,85 @@ test("远程主机：有仓库的活在代理机器上克隆、建工作树，�
     ),
     false,
   );
+});
+
+test("远程主机：主机接入后排队的按此刻空位挪过去，钉不了的不挡后面；排队中 task run --host 改派主机（t229）", async (t) => {
+  const fx = fixture(t);
+  // 假 kimi 等到 $HOME/go 出现才收工（本机与代理同一个 HOME）。
+  fx.script(
+    "kimi",
+    'while [ ! -f "$HOME/go" ]; do echo waiting; sleep 0.1; done\necho 完成',
+  );
+  const host = new HostLoad(
+    {
+      cores: 8,
+      maxWorkers: 1,
+      maxChecks: 1,
+      testConcurrency: 1,
+      checkTimeoutMs: 60_000,
+      busyCores: null,
+      busyLoad: null,
+    },
+    () => 0,
+  );
+  const server = await serve(fx, join(fx.root, "data"), 0, { host });
+  t.after(() => server.close());
+  t.after(() => writeFileSync(join(fx.root, "home", "go"), ""));
+  const { call, port } = server;
+  // h2 不登记仓库：只自动接没有仓库的活；有仓库的要 --host 指定。
+  const { code } = (await call("POST", "/api/hosts", { name: "ggb" })).body;
+  const add = async (body: object) =>
+    (await call("POST", "/api/tasks", body)).body.ref as string;
+  const t1 = await add({ title: "本机先跑", deliver: "none" });
+  const t2 = await add({ title: "避开 h2", deliver: "none", avoid_host: "h2" });
+  const t3 = await add({ title: "自动挑", deliver: "none" });
+  const t4 = await add({ title: "有仓库", repo: fx.repo });
+  const first = await call("POST", `/api/tasks/${t1}/run`, { worker: "kimi" });
+  assert.equal(first.body.queued, false, JSON.stringify(first.body));
+  for (const ref of [t2, t3, t4]) {
+    const queued = await call("POST", `/api/tasks/${ref}/run`, {
+      worker: "kimi",
+    });
+    assert.equal(queued.body.queued, true, JSON.stringify(queued.body));
+    assert.match(queued.body.task.queued_reason, /本机同时最多跑 1 个/);
+  }
+  // 排队中只带 --host：h2 还没接入，拒绝、排队不变。
+  const early = await call("POST", `/api/tasks/${t4}/run`, { host: "h2" });
+  assert.equal(early.status, 409);
+  assert.match(early.body.error, /派不到 h2：h2 还没接入，排队不变/);
+
+  const agentData = join(fx.root, "agent");
+  const { lines } = startAgent(t, { port, data: agentData, env: fx.env, code });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  // 队首 t2 写了避开 h2、只能等本机：不挡后面的 t3 去 h2。
+  const db = new DatabaseSync(join(fx.root, "data", "atrium.sqlite"));
+  t.after(() => db.close());
+  await until(() => getTask(db, t3).status === "running", 15_000);
+  const moved = (await call("GET", `/api/tasks/${t3}`)).body;
+  assert.equal(moved.host_ref, "h2");
+  assert.equal((await call("GET", `/api/tasks/${t2}`)).body.status, "todo");
+  // t4 有仓库、h2 没登记：自动挑不去，留在队里。
+  const stay = (await call("GET", `/api/tasks/${t4}`)).body;
+  assert.equal(stay.status, "todo");
+
+  // 排队中 task run --host h2（不带 --worker）：换主机，h2 空着立刻拉起。
+  const repinned = await call("POST", `/api/tasks/${t4}/run`, { host: "h2" });
+  assert.equal(repinned.status, 200, JSON.stringify(repinned.body));
+  assert.equal(repinned.body.reassigned.host, "h2");
+  assert.equal(repinned.body.reassigned.worker, repinned.body.reassigned.from);
+  assert.equal(repinned.body.queued, false);
+  const pinned = (await call("GET", `/api/tasks/${t4}`)).body;
+  assert.equal(pinned.status, "running");
+  assert.equal(pinned.host_ref, "h2");
+  assert.ok(pinned.worktree.startsWith(join(agentData, "repos")));
+
+  writeFileSync(join(fx.root, "home", "go"), "");
+  for (const ref of [t1, t2, t3, t4])
+    await call("GET", `/api/tasks/${ref}/wait?timeout=30`);
+  // t2 最后在本机跑完，从没去过 h2。
+  const avoided = (await call("GET", `/api/tasks/${t2}`)).body;
+  assert.notEqual(avoided.status, "todo");
+  assert.equal(avoided.host_ref ?? null, null);
 });
 
 test("远程主机：服务重启与断线期间执行者照跑，重连后补传日志与结果", async (t) => {

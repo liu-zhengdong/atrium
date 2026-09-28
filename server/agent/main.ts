@@ -44,7 +44,7 @@ import {
   type AgentRun,
   type HostLoadReport,
 } from "../hosts/state.ts";
-import { launchAssignment } from "./launch.ts";
+import { cloneLock, launchAssignment } from "./launch.ts";
 import { commandRefusal, nextChunk } from "./plan.ts";
 import { AgentState, type AgentConfig, type RunRecord } from "./state.ts";
 import { Problem } from "../problem.ts";
@@ -159,7 +159,8 @@ export class Agent {
   private readonly checkAborts = new Map<string, AbortController>();
   /** 服务已叫停、还在收尾的检查：不再报「手上在做」，免得服务一轮轮重复叫停。 */
   private readonly cancelled = new Set<string>();
-  private readonly cloneLocks = new Map<string, Promise<unknown>>();
+  /** 同一克隆上的 git 操作（派活的克隆与 fetch、按提交检查）排成一串。 */
+  private readonly withClone = cloneLock();
   private readonly slots = new Map<string, Set<number>>();
   private readonly quota: QuotaReaders | null;
   private quotaTimer: NodeJS.Timeout | undefined;
@@ -590,7 +591,7 @@ export class Agent {
               env: this.options.env,
               run: this.exec,
               signal: abort.signal,
-              withClone: (clone, work) => this.withClone(clone, work),
+              withClone: this.withClone,
               slot: (clone) => this.slot(clone),
               timeoutMs: this.checks.timeoutMs,
               quiet: this.checks.quiet,
@@ -620,18 +621,6 @@ export class Agent {
       force: true,
       maxRetries: 5,
     });
-  }
-
-  /** 同一克隆上的 git 操作排成一串。 */
-  private withClone<T>(clone: string, work: () => Promise<T>): Promise<T> {
-    const previous = this.cloneLocks.get(clone) ?? Promise.resolve();
-    const next = previous.then(work, work);
-    const settled = next.catch(() => undefined);
-    this.cloneLocks.set(clone, settled);
-    void settled.then(() => {
-      if (this.cloneLocks.get(clone) === settled) this.cloneLocks.delete(clone);
-    });
-    return next;
   }
 
   private slot(clone: string) {
@@ -776,6 +765,7 @@ export class Agent {
       const launched = await launchAssignment(assignment, {
         env: this.options.env,
         run: this.exec,
+        withClone: this.withClone,
       });
       const record: RunRecord = {
         task: assignment.task,

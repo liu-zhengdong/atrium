@@ -28,7 +28,7 @@ import {
 } from "../server/tasks/ledger.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import { addNode } from "../server/org/write.ts";
-import { enqueue, heads, idleWaits } from "../server/tasks/queue.ts";
+import { enqueue, idleWaits, pending } from "../server/tasks/queue.ts";
 import { EventInbox } from "../server/tasks/events.ts";
 import { Scheduler, taskPlan } from "../server/tasks/schedule.ts";
 import { topRows } from "../server/tasks/top.ts";
@@ -327,7 +327,7 @@ test("旧库补列：在途的管方面任务补成闲时，已结束的与别�
   );
 });
 
-test("队列与看板：队首紧急 → 普通 → 闲时；闲时任务写「等空闲：前面还有 N 件普通任务」，排期与状态栏标闲时", () => {
+test("队列与看板：排队紧急 → 普通 → 闲时；闲时任务写「等空闲：前面还有 N 件普通任务」，排期与状态栏标闲时", () => {
   const db = orgDb();
   const idle = createTask(db, { title: "性能巡检", part: "o4" });
   const normal = createTask(db, { title: "功能 A", part: "o3" });
@@ -351,12 +351,13 @@ test("队列与看板：队首紧急 → 普通 → 闲时；闲时任务写「�
   put(normal.id, "kimi", 5);
   put(other.id, "opencode", 6);
   put(lone.id, "codex", 2);
-  // kimi 的队首是后入队的普通任务；闲时的 codex 排在所有普通任务后面。
+  // 普通任务在前（入队先后），闲时的排在所有普通任务后面，哪怕入队更早。
   assert.deepEqual(
-    heads(db).map((head) => [head.task_id, head.idle]),
+    pending(db).map((entry) => [entry.task_id, entry.idle]),
     [
       [normal.id, false],
       [other.id, false],
+      [idle.id, true],
       [lone.id, true],
     ],
   );

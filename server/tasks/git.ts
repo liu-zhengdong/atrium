@@ -60,6 +60,9 @@ export async function defaultBranch(repo: string, run: Exec = exec) {
   );
 }
 
+/** fetch 失败后隔多久重试那一次。 */
+const FETCH_RETRY_MS = 500;
+
 /**
  * 从 origin/<默认分支> 建任务 worktree；已存在同路径的 worktree（重派）就沿用。
  * 分支已存在但 worktree 不在时，把分支检出到新 worktree。
@@ -84,9 +87,14 @@ export async function ensureWorktree(
       "conflict",
     );
   }
-  const fetched = await run("git", ["-C", repo, "fetch", "origin", base], {
-    timeoutMs: 120_000,
-  });
+  const fetch = () =>
+    run("git", ["-C", repo, "fetch", "origin", base], { timeoutMs: 120_000 });
+  let fetched = await fetch();
+  // 同一克隆上别的 fetch 正在改同一个引用（cannot lock ref …）多半一会儿就好：稍等重试一次（t229）。
+  if (!fetched.ok) {
+    await new Promise((resolve) => setTimeout(resolve, FETCH_RETRY_MS));
+    fetched = await fetch();
+  }
   if (!fetched.ok)
     throw new Problem(
       409,

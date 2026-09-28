@@ -7,7 +7,7 @@ import { hangLabel } from "../leaders/hang.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
- * 纯函数：事实由 holder-facts.ts 从账本、收件箱、会审表取来。
+ * 纯函数：事实由 holder-facts.ts 从账本、收件箱取来。
  *
  * - worker：执行者在做；
  * - merge：合入流水线（审阅、排队合入、合入中、等发版上线），运行时自己推进；
@@ -62,8 +62,6 @@ export type HolderFacts = {
   inbox: { subscriber: string; acked: boolean } | null;
   /** 任务事件缺省投给谁（taskRoute），没有收件箱记录时用它。 */
   route: string;
-  /** 这是一场会审，且已上交用户拍板、还没定。 */
-  council_escalated: boolean;
   /** 本地检查正在跑（交付后或合入队列重跑）：在哪台（hN，旧记录没有）；没在跑为 null。 */
   checking?: { host: string | null } | null;
   /** 被紧急任务抢占暂停（t215）：被哪件（tN）；没被暂停为 null。 */
@@ -82,26 +80,11 @@ export type HolderFacts = {
   hang_nudged?: number | null;
   /** 取事实的时刻：算 leader 手里挂了多久。 */
   now?: number;
-  /** 排队合入时的提前检查（t254）：在跑（在哪台）、过了、没过；没做为 null。 */
-  precheck?: {
-    state: "running" | "passed" | "failed";
-    host: string | null;
-  } | null;
 };
 
 /** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
 const where = (checking: HolderFacts["checking"]) =>
   checking?.host && checking.host !== "h1" ? `在 ${checking.host} 上` : "";
-
-/** 排队合入时提前检查（t254）的一句话。 */
-const PRECHECK_TEXT: Record<
-  NonNullable<HolderFacts["precheck"]>["state"],
-  (at: string) => string
-> = {
-  running: (at) => `排队合入：${at}提前跑检查`,
-  passed: () => "排队合入：已提前检查过",
-  failed: () => "排队合入：提前检查没过，轮到时确认",
-};
 
 /** 合入检查没跑成、等重跑的一句话；原因全文给 `task show`（holderDetail）。 */
 const rerunShort = (attempt: number) =>
@@ -453,8 +436,6 @@ export function holderDetail(f: HolderFacts): string | null {
 }
 
 function judge(f: HolderFacts): Holder | null {
-  if (f.council_escalated)
-    return { kind: "user", who: "u1", text: "会审上交，等你拍板" };
   if (f.delivery_stage === "reviewing")
     return {
       kind: "merge",
@@ -469,9 +450,7 @@ function judge(f: HolderFacts): Holder | null {
         ? `合入暂停：等紧急 ${f.merge_held_by.join("、")} 先上线`
         : f.rerun
           ? `合入前${rerunShort(f.rerun.attempt)}`
-          : f.precheck
-            ? PRECHECK_TEXT[f.precheck.state](where(f.precheck))
-            : "排队合入",
+          : "排队合入",
     };
   if (f.delivery_stage === "merging")
     return {

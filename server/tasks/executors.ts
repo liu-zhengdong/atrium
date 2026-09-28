@@ -20,6 +20,7 @@ import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import {
   dequeue,
   drainGate,
+  enqueue,
   pending,
   queuedFixes,
   queuedNormals,
@@ -33,7 +34,6 @@ import { finishPatrol, patrolRun } from "./patrol.ts";
 import { VERIFIER_FLAG } from "./verify.ts";
 import { isVerifyTask } from "./verify-runtime.ts";
 import { settleRound } from "../products/settle.ts";
-import { settleDraft } from "../drafts/store.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
 import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
@@ -71,25 +71,13 @@ import type { ChildProcess } from "node:child_process";
 import { collectSkillEdits } from "../skills/collect.ts";
 import { beginUsage, endUsage } from "./usage.ts";
 import { readPace, type PaceEntry } from "./prepare.ts";
-import { DiskBudget } from "./disk-budget.ts";
 import { chooseWorker } from "./worker-choice.ts";
-import { jobMismatch } from "./job-mismatch.ts";
 import { activeJobChecks } from "./delivery-records.ts";
-import { publishWorkerAdvice } from "./workers-report.ts";
 import { getJobRole } from "./job-roles.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { BudgetProblem } from "./budget-problem.ts";
 import { withSecrets } from "../secrets/model.ts";
 import { markSecretsUsed, taskSecretValues } from "../secrets/store.ts";
-import {
-  blockUnsent,
-  invitedFor,
-  isReviewTask,
-  openReviews,
-} from "./concern-runtime.ts";
-import { fileHints } from "./concerns.ts";
-import { hintText, needsReview } from "./concern-gate.ts";
-import { isCouncilTask, isOpinionTask } from "./councils.ts";
 import { taskRoute } from "../leaders/subscriber.ts";
 import type { HostGate } from "./host-load.ts";
 import type { RemoteHosts } from "../hosts/remote.ts";
@@ -138,20 +126,14 @@ export type ExecutorContext = {
   launchOptions: LaunchOptions;
   waits: TaskWaits;
   quota: QuotaGuard;
-  disk: DiskBudget;
   killGraceMs?: number;
   closed: () => boolean;
+  /** 一键停机（server/pause.ts）：这件此刻被暂停挡着时给原因，拉起改成排队。 */
+  paused?: (id: number) => string | null;
   /** 交付关卡通过后的去向（审阅或合入队列）；返回要发的事件，false 表示照常发 done。 */
   onAccepted?: (
     id: number,
   ) => Promise<{ kind: string; detail?: Record<string, unknown> } | false>;
-  /** 专员关卡（#322）：拉起审查任务；审查任务结束后立即补判父任务（否则等下一轮巡检）。 */
-  reviews?: {
-    dispatch: (ref: string) => Promise<unknown>;
-    settle: () => void;
-  };
-  /** 会审（#322）：专员意见或 leader 汇总结束后推进会审（否则等下一轮巡检）。 */
-  councils?: { settle: () => void };
   /** 上线验证（t181）：验证任务结束后立即把结论记进原任务（否则等下一轮巡检）。 */
   verify?: { settle: () => void };
   /** 本机还能不能再拉起一个执行者（#358 并发上限与负载）；缺省不限。 */
@@ -513,6 +495,9 @@ export class Executors {
     const target = chosen.host ?? LOCAL_HOST;
     if (!chosen.pausedOk && this.ctx.placement?.paused?.(target))
       throw new Error(`${hostRef(target)} 已暂停接活，不往那台拉起`);
+    // 重试、换人、续上也是新拉起：暂停着就排队，恢复后由 drain 拉起。
+    const hold = chosen.pausedOk ? null : this.ctx.paused?.(id);
+    if (hold) return this.hold(id, chosen, hold);
     // 被紧急任务抢占暂停过的（t215）：同一执行者且日志里有会话就续上，否则把说明写进提示词、在原工作树重派。
     const paused = openPreemption(this.ctx.db, id);
     const resume =
@@ -541,7 +526,6 @@ export class Executors {
     }
     const task = getTask(this.ctx.db, id);
     const secrets = this.secrets(task, chosen.worker);
-    await this.ctx.disk.check(task.node_id);
     const prepared = await prepareRun(
       task,
       chosen,
@@ -611,6 +595,23 @@ export class Executors {
   }
 
   /** 被抢占的任务续上了（t215）：关掉暂停记录、记事件并知会。 */
+  /** 暂停着：不拉起，落库排队（状态回到待办），恢复后按顺序拉起。 */
+  private hold(id: number, chosen: Chosen, reason: string): Task {
+    enqueue(this.ctx.db, {
+      task_id: id,
+      tool: chosen.worker.tool,
+      worker: chosen.worker.id,
+      risk: chosen.risk,
+      queued_at: Date.now(),
+      host_id: chosen.host ?? null,
+    });
+    if (getTask(this.ctx.db, id).status !== "todo")
+      this.advance(id, { kind: "manual_set", to: "todo" }, {}, "暂停中，排队");
+    noteTask(this.ctx.db, id, "queued", { worker: chosen.worker.id, reason });
+    this.ctx.waits.changed(id);
+    return getTask(this.ctx.db, id);
+  }
+
   private resumed(id: number, by: number, session: boolean, chosen: Chosen) {
     closePreemption(this.ctx.db, id, Date.now());
     const detail = {
@@ -947,7 +948,7 @@ export class Executors {
         return await this.paused(active, active.stop);
       if (active.stop?.kind === "swap")
         return await this.swapped(active, active.stop);
-      // 结论类任务（审阅、专员审查、会审）读不出结论：先登记补答，由捎话续上同一执行者。
+      // 审阅任务读不出结论：先登记补答，由捎话续上同一执行者。
       await askConclusion(this.ctx.db, active, exit);
       if (await followUpTells(this, this.ctx.db, active, exit)) return;
       const jobId = getTask(this.ctx.db, id).job_id;
@@ -964,8 +965,7 @@ export class Executors {
       if (this.ctx.closed()) return;
       this.collectSkills(active);
       if (getTask(this.ctx.db, id).status !== "running") return;
-      const { verdict, facts } = outcome;
-      let { decision } = outcome;
+      const { verdict, facts, decision } = outcome;
       if (outcome.workerGuardRefused)
         noteTask(this.ctx.db, id, "worker_guard_refused", {
           reason: "执行日志出现 Atrium 执行者防护的固定拒绝语句",
@@ -979,39 +979,6 @@ export class Executors {
           ...(facts ? { diff: diffSize(facts) } : {}),
           ...detail,
         });
-      if (facts && jobId) {
-        const mismatch = jobMismatch(
-          getJobRole(this.ctx.db, `r${jobId}`).name,
-          facts.numstat.map((s) => s.file),
-        );
-        if (mismatch)
-          noteTask(this.ctx.db, id, "job_mismatch", { reason: mismatch });
-      }
-      const hints = facts
-        ? fileHints(
-            this.ctx.db,
-            id,
-            facts.numstat.map((stat) => stat.file),
-          )
-        : [];
-      if (hints.length)
-        noteTask(this.ctx.db, id, "concern_hints", {
-          hints,
-          next: `atrium task set ${taskRef(id)} --concern ${hints.map((h) => h.ref).join(",")}`,
-        });
-      // 专员关卡：其余关卡通过才请专员审；审查结果由 settleReviews 补判。
-      const reviewing =
-        !outcome.quota &&
-        !!verdict &&
-        decision.event === "exit_ok" &&
-        needsReview(invitedFor(this.ctx.db, id).length);
-      if (reviewing)
-        decision = {
-          event: "block",
-          publish: "blocked",
-          retry: false,
-          reason: [decision.reason, "等专员审查"].filter(Boolean).join("；"),
-        };
       this.advance(id, { kind: decision.event }, outcome.fields, {
         ...(decision.reason ? { reason: decision.reason } : {}),
         ...(verdict && !verdict.passed
@@ -1019,10 +986,6 @@ export class Executors {
           : {}),
         ...detail,
       });
-      if (reviewing) {
-        await this.openReviews(id, facts);
-        return;
-      }
       const retryContext = {
         db: this.ctx.db,
         launchOptions: this.ctx.launchOptions,
@@ -1034,12 +997,6 @@ export class Executors {
           ? { diff: diffSize(facts) }
           : {}),
         ...(verdict && !verdict.passed ? { gates: verdict.failed } : {}),
-        ...(hints.length
-          ? {
-              concern_hints: hints.map(hintText),
-              next: `要请专员复审：atrium task set ${taskRef(id)} --concern ${hints.map((h) => h.ref).join(",")}，再 atrium task run ${taskRef(id)}`,
-            }
-          : {}),
       };
       let admitted: Awaited<
         ReturnType<NonNullable<ExecutorContext["onAccepted"]>>
@@ -1073,26 +1030,15 @@ export class Executors {
           decision,
           published,
         );
-      // 审查任务的结局经父任务的专员关卡汇报，不单独投给负责人。
-      else if (isReviewTask(this.ctx.db, id)) {
-        /* 由 reviews.settle 补判父任务。 */
-      }
       // 上线验证的结论记进原任务，验证任务自己的结局不单独投递。
       else if (isVerifyTask(this.ctx.db, id)) {
         /* 由 verify.settle 记结论。 */
-      }
-      // 会审：专员意见经 leader 汇总上报；汇总完成由 councils.settle 记结论后投递。
-      else if (
-        isOpinionTask(this.ctx.db, id) ||
-        (decision.publish === "done" && isCouncilTask(this.ctx.db, id))
-      ) {
-        /* 由 councils.settle 推进会审。 */
       } else if (patrolRun(this.ctx.db, id)) {
         finishPatrol(this.ctx.db, this.ctx.inbox, id);
         if (decision.publish !== "done")
           this.publish(id, decision.publish, published);
       }
-      // 关卡（含专员）都过了才去审阅或合入队列。
+      // 关卡都过了才去审阅或合入队列。
       else if (
         decision.publish === "done" &&
         (admitted = (await this.ctx.onAccepted?.(id)) ?? false)
@@ -1113,19 +1059,10 @@ export class Executors {
                   id,
                 )
               : {}),
-            // 全景初稿：读工作目录里的初稿存进账，完成事件带下一步（先看再确认写入）或错误。
-            ...(decision.publish === "done"
-              ? settleDraft(this.ctx.db, this.ctx.launchOptions.data, id)
-              : {}),
           },
           active.stop?.kind === "user" ? active.stop.by : undefined,
         );
-      if (!isReviewTask(this.ctx.db, id))
-        publishWorkerAdvice(this.ctx.db, this.ctx.inbox, id);
-      if (isReviewTask(this.ctx.db, id)) this.ctx.reviews?.settle();
       if (isVerifyTask(this.ctx.db, id)) this.ctx.verify?.settle();
-      if (isOpinionTask(this.ctx.db, id) || isCouncilTask(this.ctx.db, id))
-        this.ctx.councils?.settle();
     } catch (error) {
       this.failAfterError(id, error);
     } finally {
@@ -1211,32 +1148,6 @@ export class Executors {
     } finally {
       this.release(id);
     }
-  }
-
-  /** 建本轮专员审查任务并逐个拉起；拉不起的标受阻，由巡检判为没出结论。 */
-  private async openReviews(
-    id: number,
-    facts: Parameters<typeof openReviews>[3],
-  ) {
-    const refs = openReviews(
-      this.ctx.db,
-      this.ctx.launchOptions.data,
-      id,
-      facts,
-    );
-    for (const ref of refs) {
-      try {
-        if (!this.ctx.reviews) throw new Error("运行时没有接上专员审查");
-        await this.ctx.reviews.dispatch(ref);
-      } catch (error) {
-        blockUnsent(
-          this.ctx.db,
-          ref,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-    }
-    this.ctx.reviews?.settle();
   }
 
   /** 执行者改了挂载的技能副本：生成修订提议，通知任务负责人（事件里带技能 owner 与其 leader）。 */
@@ -1459,6 +1370,7 @@ export class Executors {
     for (const entry of entries) {
       const entryTool = entry.tool as Tool;
       if (this.ctx.closed()) return moved;
+      if (this.ctx.paused?.(entry.task_id)) continue;
       if (entry.idle)
         idleWait ??= idleAheadAll(
           entries.filter((other) => other.idle || waiting.has(other.task_id)),

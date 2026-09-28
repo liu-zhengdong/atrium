@@ -308,7 +308,7 @@ test("全景段：默认根下两层、可展开、折叠与窄屏", () => {
   assert.equal(mapDepth(undefined), 2);
   assert.equal(mapDepth("3"), 3);
   for (const invalid of ["0", "9", "abc", "2.5"])
-    assert.throws(() => mapDepth(invalid, "--goals-depth"), /--goals-depth/);
+    assert.throws(() => mapDepth(invalid), /--depth/);
 });
 
 test("排期段：超出行数折叠，提示 atrium task plan；不止一页也提示", () => {

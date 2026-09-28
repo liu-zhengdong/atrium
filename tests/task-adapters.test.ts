@@ -481,21 +481,15 @@ test("loadRoleDocs：岗位说明只取节点章程，不读仓库部门文件",
       { fields: {}, body: "节点章程", reason: "导入" },
       "u1",
     );
-    const node = (role: string) => taskNode(db, { node_id: null, role, repo });
-    assert.deepEqual(await loadRoleDocs(repo, node("atrium/web")), {
+    const node = (node_id: number | null) => taskNode(db, { node_id });
+    assert.deepEqual(await loadRoleDocs(repo, node(3)), {
       roleDoc: "节点章程",
       rootDoc: "根说明",
       rolePath: "o3",
     });
-    for (const role of ["web", "modules/web", "o3"])
-      assert.equal(
-        (await loadRoleDocs(repo, node(role))).roleDoc,
-        "节点章程",
-        `旧写法 ${role} 在节点存在时取节点章程`,
-      );
-    assert.equal(node("concerns/安全"), undefined);
+    assert.equal(node(null), undefined);
     assert.deepEqual(
-      await loadRoleDocs(repo, node("concerns/安全")),
+      await loadRoleDocs(repo, node(null)),
       { roleDoc: "", rootDoc: "根说明" },
       "没有节点时不回退读仓库文件",
     );

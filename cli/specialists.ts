@@ -21,13 +21,6 @@ const bodyFile = (file: string) => {
     throw new Problem(400, `--body 文件读不到：${file}`, "usage");
   }
 };
-const pointsFile = (file: string) => {
-  try {
-    return JSON.parse(bodyFile(file)) as unknown;
-  } catch {
-    throw new Problem(400, `--review-points 文件应为 JSON：${file}`, "usage");
-  }
-};
 const fields = (v: Values) => ({
   ...(str(v, "name") === undefined ? {} : { name: str(v, "name") }),
   ...(str(v, "description") === undefined
@@ -43,18 +36,6 @@ const fields = (v: Values) => ({
   ...(str(v, "skills") === undefined
     ? {}
     : { skills: str(v, "skills")!.split(",").filter(Boolean) }),
-  ...(str(v, "review-goal") === undefined
-    ? {}
-    : { review_goal: str(v, "review-goal") }),
-  ...(str(v, "review-points") === undefined
-    ? {}
-    : { review_points: pointsFile(str(v, "review-points")!) }),
-  ...(str(v, "review-bottom") === undefined
-    ? {}
-    : { review_bottom: str(v, "review-bottom")!.split(",").filter(Boolean) }),
-  ...(str(v, "invite-when") === undefined
-    ? {}
-    : { invite_when: str(v, "invite-when")!.split(",").filter(Boolean) }),
   ...(str(v, "part") === undefined ? {} : { part: str(v, "part") }),
   ...((str(v, "as") ?? defaultActor()) === undefined
     ? {}
@@ -67,10 +48,6 @@ const opts = {
   preferred: { type: "string" as const },
   checks: { type: "string" as const },
   skills: { type: "string" as const },
-  "review-goal": { type: "string" as const },
-  "review-points": { type: "string" as const },
-  "review-bottom": { type: "string" as const },
-  "invite-when": { type: "string" as const },
   part: { type: "string" as const },
   as: { type: "string" as const },
 };
@@ -130,7 +107,7 @@ export function foldedLines(
   ];
 }
 
-export const roleCommands: Record<string, Command> = {
+export const specialistCommands: Record<string, Command> = {
   "specialist ls": {
     args: "[--part 部分] [--all] [--json]",
     about:
@@ -208,15 +185,15 @@ export const roleCommands: Record<string, Command> = {
       output(
         json,
         role,
-        `${role.ref} ${role.name} · r${role.rev}\n${role.description}\n归属：${owner(role)}\n优先执行者：${role.preferred.join("、") || "无"}\n交付关卡：${role.checks.join("、") || "无"}\n技能：${role.skills.join("、") || "无"}\n审查目标：${role.review_goal || "无"}\n检查要点：${role.review_points.map((p) => p.text).join("、") || "无"}\n审查底线：${role.review_bottom.join("、") || "无"}\n请来看提示：${role.invite_when.join("、") || "无"}\n\n${role.body}`,
+        `${role.ref} ${role.name} · r${role.rev}\n${role.description}\n归属：${owner(role)}\n优先执行者：${role.preferred.join("、") || "无"}\n交付关卡：${role.checks.join("、") || "无"}\n技能：${role.skills.join("、") || "无"}\n\n${role.body}`,
         `建任务：atrium task add 标题 --by ${role.ref}`,
       );
     },
   },
   "specialist add": {
-    args: "名称 --description 文字 --body 文件 [--part 部分] [--preferred 列表] [--checks 列表] [--skills 列表] [--review-goal 目标] [--review-points JSON文件] [--review-bottom 列表] [--invite-when 列表]",
+    args: "名称 --description 文字 --body 文件 [--part 部分] [--preferred 列表] [--checks 列表] [--skills 列表]",
     about:
-      "创建专员；--part 写它属于哪一部分（如安全专员属于安全，只有归属链或牵涉到那一部分的任务能请），不写即全组织共用；列表用逗号分隔，正文从文件读取",
+      "创建专员；--part 写它属于哪一部分（如安全专员属于安全，只有归属链或牵涉到那一部分的任务能用 --by 指定），不写即全组织共用；列表用逗号分隔，正文从文件读取",
     options: opts,
     positionals: [1, 1],
     async run({ positionals: [name], values, json }) {
@@ -234,7 +211,7 @@ export const roleCommands: Record<string, Command> = {
     },
   },
   "specialist edit": {
-    args: "专员 [--name 名称] [--description 文字] [--body 文件] [--part 部分|''] [--preferred 列表] [--checks 列表] [--skills 列表] [--review-goal 目标] [--review-points JSON文件] [--review-bottom 列表] [--invite-when 列表]",
+    args: "专员 [--name 名称] [--description 文字] [--body 文件] [--part 部分|''] [--preferred 列表] [--checks 列表] [--skills 列表]",
     about: "修订专员，保留历史；--part '' 改回全组织共用",
     options: opts,
     positionals: [1, 1],
@@ -254,16 +231,3 @@ export const roleCommands: Record<string, Command> = {
     },
   },
 };
-
-/** 旧命令保留一段时间，并在执行时说明新写法。 */
-for (const [name, command] of Object.entries({ ...roleCommands })) {
-  const old = name.replace("specialist", "role");
-  roleCommands[old] = {
-    ...command,
-    about: `${command.about}（旧写法；改用 atrium ${name}）`,
-    async run(input) {
-      console.error(`atrium ${old} 已改为 atrium ${name}；旧写法暂可用`);
-      return command.run(input);
-    },
-  };
-}

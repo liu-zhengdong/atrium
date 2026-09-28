@@ -2,12 +2,12 @@
  * leader 的权限边界（纯函数，穷举测试）。leader 进程拿的是服务签发的 leader 令牌，
  * 服务端按「路由 → 规则 → 作用范围」判定，不靠提示词自律；没列出的写接口一律拒绝。
  *
- * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审、判断专员否决（放行用 task merge）；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
+ * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、重新排队合入（task merge）；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
  * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交；在负责的部分或它的上一层提选项单、写意见；
  * 给本节点及子节点排周期任务（巡检、调研等），停、续、立即跑一轮、删掉；
  * 用户把节点的选项单拍板权下放给 leader 后拍板（是不是拍板人由 choices/store.ts 按节点设置判）；
  * 在负责的部分里加资料、归档、恢复、留下，取任何资料；在负责的部分里设凭据、归档、恢复、留下（没有读值的接口）。
- * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改谁拍板选项单、改技能、清额度、登记 leader、真删资料或凭据等。
+ * 不可以：动别的节点的任务、改章程与边界预算、建删节点、改谁拍板选项单、改技能、清额度、登记 leader、真删资料或凭据等。
  */
 
 export type LeaderRule =
@@ -16,7 +16,6 @@ export type LeaderRule =
   | "task"
   | "task-remark"
   | "task-patch"
-  | "review-create"
   | "point"
   | "stages"
   | "node-edit"
@@ -43,10 +42,8 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/tasks/:id/tell": "task-remark",
   "POST /api/tasks/:id/run": "task",
   "POST /api/tasks/:id/stop": "task",
-  // 专员否决交负责的 leader 判断（t209）：不认同时放行。
   "POST /api/tasks/:id/merge": "task",
   "POST /api/tasks/:id/deliver": "task",
-  "POST /api/reviews": "review-create",
   "POST /api/events/ack": "events-ack",
   "POST /api/org/nodes/:id/points": "point",
   "PATCH /api/org/points/:id": "point",
@@ -84,8 +81,6 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/secrets/keep": "secret",
   // 周期任务（sN）：节点在负责的部分里才行，新建看 body.node，其余看这条周期任务挂在哪。
   "POST /api/schedules": "schedule",
-  "POST /api/schedules/:id/pause": "schedule",
-  "POST /api/schedules/:id/resume": "schedule",
   "POST /api/schedules/:id/run": "schedule",
   "DELETE /api/schedules/:id": "schedule",
 };
@@ -111,8 +106,6 @@ export function denyReason(leader: string, method: string, route: string) {
       leader,
       "改章程、边界与预算（改阶段用 atrium org stages 节点 --file 文件）",
     );
-  if (key === "POST /api/reviews/:id/decide")
-    return denied(leader, "拍板上交的会审（那是用户的决定）");
   if (key === "POST /api/org/nodes" || key === "POST /api/map/nodes")
     return denied(leader, "新建组织节点");
   if (route.startsWith("/api/quota")) return denied(leader, "改额度标记");

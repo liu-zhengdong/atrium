@@ -18,89 +18,9 @@ import { goalChain, type GoalLevel } from "./goal-chain.ts";
 import { HUMAN_KEYS, overviewOf } from "./overview.ts";
 import { chainPoints, nodePoints } from "./points.ts";
 import { nodeTasks, taskCounts, type TaskCounts } from "./task-link.ts";
-import { allShares, rootLimits } from "./share-store.ts";
-import { exportShares, shareCapacity, type ShareNode } from "./shares.ts";
-import type { PaceEntry } from "../tasks/prepare.ts";
-import { usageSample, subtreeUsage } from "../tasks/usage.ts";
 import { leaderBriefs } from "../leaders/model.ts";
 
-function budgetViews(db: DatabaseSync, pace?: readonly PaceEntry[]) {
-  const list = nodes(db);
-  const owned = allShares(db);
-  const tree: ShareNode[] = list.map((n) => ({
-    id: n.id,
-    parent: n.parent_id,
-    name: n.name,
-    shares: owned.get(n.id) ?? [],
-  }));
-  const limits = rootLimits(db, list);
-  const scopes = new Set([
-    "claude",
-    "codex",
-    "opencode",
-    "kimi",
-    "grok",
-    "antigravity",
-    "cursor",
-  ]);
-  const allocated = new Set<string>();
-  for (const shares of owned.values())
-    for (const s of shares)
-      if (s.dim === "quota") {
-        allocated.add(s.scope);
-        if (s.scope !== "*") scopes.add(s.scope);
-      }
-  const subtree = (id: number) => {
-    const ids = [id];
-    for (let i = 0; i < ids.length; i++)
-      for (const child of list.filter((n) => n.parent_id === ids[i]))
-        ids.push(child.id);
-    return ids;
-  };
-  const now = Date.now();
-  return new Map(
-    list.map((n) => [
-      n.id,
-      {
-        own: exportShares(owned.get(n.id) ?? []),
-        quota: [...scopes].sort().map((scope) => ({
-          scope,
-          amount: shareCapacity(tree, n.id, "quota", scope, limits),
-          used:
-            scope === "*"
-              ? null
-              : (() => {
-                  const sample = usageSample(pace, scope, now);
-                  return sample
-                    ? Number(
-                        subtreeUsage(
-                          db,
-                          subtree(n.id),
-                          scope,
-                          sample.reset,
-                        ).toFixed(2),
-                      )
-                    : null;
-                })(),
-          relevant: allocated.has(scope) || allocated.has("*"),
-          shared: !(owned.get(n.id) ?? []).some(
-            (s) => s.dim === "quota" && (s.scope === scope || s.scope === "*"),
-          ),
-        })),
-        disk: {
-          amount: shareCapacity(tree, n.id, "disk", "", limits),
-          shared: !(owned.get(n.id) ?? []).some((s) => s.dim === "disk"),
-        },
-        money: {
-          amount: shareCapacity(tree, n.id, "money", "", limits),
-          shared: !(owned.get(n.id) ?? []).some((s) => s.dim === "money"),
-        },
-      },
-    ]),
-  );
-}
-
-export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
+export function tree(db: DatabaseSync) {
   const list = nodes(db).filter((node) => node.kind !== "concern");
   if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
   const order: typeof list = [];
@@ -113,7 +33,6 @@ export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
   visit(null);
   // 名下任务按子树汇总（项目的「在做」含各模块）；投出的只算节点自己。
   const counts = taskCounts(db);
-  const budgets = budgetViews(db, pace);
   const leaders = leaderBriefs(db);
   const subtree = new Map<number, TaskCounts>();
   for (const n of [...order].reverse()) {
@@ -145,19 +64,13 @@ export function tree(db: DatabaseSync, pace?: readonly PaceEntry[]) {
       ).map((r) => r.repo),
       tasks: subtree.get(n.id)!,
       sent: counts.sent.get(n.id) ?? { todo: 0, running: 0, blocked: 0 },
-      budget: budgets.get(n.id),
       ...(n.leader && leaders.has(n.leader)
         ? { leader_state: leaders.get(n.leader) }
         : {}),
     };
   });
 }
-export function show(
-  db: DatabaseSync,
-  address: string,
-  raw?: Doc,
-  pace?: readonly PaceEntry[],
-) {
+export function show(db: DatabaseSync, address: string, raw?: Doc) {
   const n = nodeByAddress(db, address);
   if (n.kind === "concern")
     throw new Problem(
@@ -165,16 +78,11 @@ export function show(
       `关注点 ${n.name} 已从组织树下线；请用 atrium specialist ls 查看专员`,
       "gone",
     );
-  const list = tree(db, pace);
+  const list = tree(db);
   const node = list.find((item) => item.id === n.id)!;
   const charter = one<DocRow>(
     db,
     "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
-    n.id,
-  );
-  const card = one<DocRow>(
-    db,
-    "SELECT * FROM org_docs WHERE node_id=? AND doc='card'",
     n.id,
   );
   const view = (doc: DocRow | undefined) =>
@@ -189,15 +97,11 @@ export function show(
       : null;
   const owned = allBoundaries(db);
   if (raw) {
-    const found = raw === "charter" ? charter : card;
     return {
       raw: exportDocument(
-        found ? (JSON.parse(found.fields) as Record<string, unknown>) : {},
-        found?.body ?? "",
-        raw === "charter" ? exportBoundaries(owned.get(n.id) ?? []) : undefined,
-        raw === "charter"
-          ? exportShares(allShares(db).get(n.id) ?? [])
-          : undefined,
+        charter ? (JSON.parse(charter.fields) as Record<string, unknown>) : {},
+        charter?.body ?? "",
+        exportBoundaries(owned.get(n.id) ?? []),
       ),
       ref: ref(n.id),
       doc: raw,
@@ -302,7 +206,6 @@ export function show(
     recent_tasks: nodeTasks(db, n.id),
     boundaries,
     charter: view(charter),
-    card: view(card),
     chain: goalChain(levels),
   };
 }
@@ -347,8 +250,8 @@ export function history(
     after = parse(options.after, "--after"),
     wanted = parse(options.rev, "--rev");
   const target = options.target;
-  if (target !== undefined && !["node", "charter", "card"].includes(target))
-    throw new Problem(400, "--target 只能是 node、charter、card");
+  if (target !== undefined && !["node", "charter"].includes(target))
+    throw new Problem(400, "--target 只能是 node、charter");
   const limit = options.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     throw new Problem(400, "--limit 应为 1–100");

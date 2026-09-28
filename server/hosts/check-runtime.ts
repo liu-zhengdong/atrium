@@ -25,7 +25,7 @@ import { hostRef, remoteClone } from "./state.ts";
  * 那台没跑成（离线、超时、取不到提交）就换一台或回本机重跑。关卡怎么判不变，只是换地方跑命令。
  */
 
-export type CheckRequest = {
+type CheckRequest = {
   task: number;
   /** 本机的任务工作树（合入队列是 rebase 后的那份）。 */
   worktree: string;

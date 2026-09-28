@@ -66,24 +66,12 @@ import { writtenNotice, type RunPick } from "./pick.ts";
 import { isRisk } from "./profiles.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { tellTask } from "./tell-runtime.ts";
-import { DiskBudget } from "./disk-budget.ts";
 import { BudgetProblem } from "./budget-problem.ts";
 import { readPace } from "./prepare.ts";
 import { MergeQueue } from "./merge-runtime.ts";
-import { overruleConcerns, settleReviews } from "./concern-runtime.ts";
-import { concernNext } from "./concern-gate.ts";
-import { awaitingReview } from "./concerns.ts";
 import { WorktreeCleanup } from "./worktree-cleanup.ts";
 import { ReviewGate, taskRisk } from "./review-runtime.ts";
 import { reviewerRefusal } from "./review.ts";
-import { settleCouncils } from "./council-runtime.ts";
-import {
-  councilRow,
-  councilView,
-  createCouncil,
-  decideCouncil,
-  STAGE_LABEL,
-} from "./councils.ts";
 import {
   cliDeploy,
   lastRestartError,
@@ -112,8 +100,6 @@ import { HostLoad, hostView } from "./host-load.ts";
 import { OrphanReaper, recognizer, spawnOwner } from "./orphans.ts";
 import { reapLeftovers } from "./leftovers-reap.ts";
 import { sharedLocalChecks } from "./local-check.ts";
-import { precheckSlots } from "./merge-precheck-plan.ts";
-import { mergeQueueView } from "./merge-queue-view.ts";
 import { skipIfBusy } from "./reentry.ts";
 import { RemoteHosts } from "../hosts/remote.ts";
 import { HostTunnels } from "../hosts/tunnels.ts";
@@ -129,9 +115,7 @@ import {
   hostRow,
   hostRows,
   hostView as hostRowView,
-  pauseHistory,
   removeHost,
-  setPaused,
   type HostRow,
   type HostView,
 } from "../hosts/model.ts";
@@ -156,7 +140,6 @@ import { patrolRun } from "./patrol.ts";
 import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
 import { publishTotals } from "./notice.ts";
 import { productRound } from "../products/model.ts";
-import { isDraftTask } from "../drafts/store.ts";
 import { pendingChoices } from "../choices/store.ts";
 import { UrgentLane, type StopNote } from "./urgent-runtime.ts";
 import { storedHosts, urgentIdleMs } from "./urgent.ts";
@@ -166,6 +149,18 @@ import { hasEvent } from "./ledger-model.ts";
 import type { Active } from "./active.ts";
 import { registerDelivery } from "./register-delivery-runtime.ts";
 import { secretaryView, UNATTENDED_MS } from "./secretary-watch.ts";
+import {
+  clearPause,
+  globalPause,
+  hostPaused,
+  listPauses,
+  partPause,
+  pauseText,
+  resumeCommand,
+  setPause,
+  taskPause,
+} from "../pause.ts";
+import { nodeByAddress } from "../org/model.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -187,8 +182,6 @@ export type RunnerOptions = {
   exec?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
   usagePace?: () => Promise<PaceEntry[] | undefined>;
-  /** 测试注入：计数 du，不碰本机真实 du。 */
-  diskDu?: (path: string) => Promise<number>;
   tickMs?: number;
   ciPollMs?: number;
   ciBatch?: number;
@@ -235,8 +228,6 @@ export type RunnerOptions = {
    * 缺省读 ATRIUM_QUIET_MINUTES（5）/ ATRIUM_CHECK_STALL_MINUTES（10）。
    */
   quiet?: QuietLimits & { pollMs?: number };
-  /** 合入队列同时提前检查几件（t254）；缺省读 ATRIUM_MERGE_PRECHECKS，没写按本机检查并发名额（merge-precheck-plan.ts）。 */
-  mergePrechecks?: number;
 };
 
 export class TaskRunner {
@@ -246,7 +237,6 @@ export class TaskRunner {
   private readonly quota: QuotaGuard;
   private readonly scheduler: Scheduler;
   private readonly retention: Retention;
-  private readonly disk: DiskBudget;
   private readonly cleanup: WorktreeCleanup;
   private readonly merge: MergeQueue;
   private readonly review: ReviewGate;
@@ -278,9 +268,6 @@ export class TaskRunner {
   private readonly launchOptions: LaunchOptions;
   private closed = false;
   private polling = false;
-  /** 会审推进在跑时再来的请求只记一笔，跑完再补一轮，免得重复拉起汇总。 */
-  private councilSettling: Promise<void> | null = null;
-  private councilAgain = false;
   /** 上线验证的执行者，按顺序试。 */
   private readonly verifyWorkers: string[];
   /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
@@ -375,7 +362,6 @@ export class TaskRunner {
       Date.now,
       this.remote,
     );
-    this.disk = new DiskBudget(db, options.diskDu);
     this.waits = new TaskWaits(
       (id) => this.settled(id),
       (id) => getTask(this.db, id),
@@ -393,16 +379,19 @@ export class TaskRunner {
       launchOptions: this.launchOptions,
       waits: this.waits,
       quota: this.quota,
-      disk: this.disk,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
+      paused: (id) => {
+        const pause = taskPause(this.db, id);
+        return pause ? pauseText(pause) : null;
+      },
       onAccepted: (id) => this.review.admit(id),
       hostGate: (urgent) => this.host.gate(this.x.inFlight(), urgent),
       remote: this.remote,
       placement: {
         need: (id, tool, urgent) => this.hostNeed(id, tool, urgent),
         choose: (need, pinned) => this.chooseHostFor(need, pinned),
-        paused: (host) => this.hostPaused(host),
+        paused: (host) => hostPaused(this.db, host),
         room: () => hasRoom(this.hostCandidates()),
         installed: (host) => this.remoteInstalled(host),
       },
@@ -410,19 +399,6 @@ export class TaskRunner {
       swapChoice: (active) => this.swapChoice(active),
       urgentIdleMs: options.urgentIdleMs ?? urgentIdle(),
       quietWarnMs: this.quiet.warnMs,
-      reviews: {
-        dispatch: (ref) => this.run(ref, {}),
-        settle: () => void this.settleReviews(),
-      },
-      // 在收尾的 finally 之后再推进，免得刚结束的任务还算在收尾里。
-      councils: {
-        settle: () =>
-          setImmediate(() =>
-            this.settleCouncils().catch((error) =>
-              console.error("会审推进失败：", error),
-            ),
-          ),
-      },
       verify: {
         settle: () =>
           setImmediate(() =>
@@ -438,7 +414,8 @@ export class TaskRunner {
       reapLocal: (targets) => reapLeftovers(targets, { exec: this.exec }),
       remote: this.remote,
       stop: (ref, note) => this.stop(ref, undefined, note),
-      pauseHost: (host, by) => void this.pauseHost(`h${host}`, true, by),
+      pauseHost: (host, by) =>
+        void setPause(this.db, `h${host}`, by, "紧急止损"),
       run: (ref, body) => this.run(ref, body),
       crowded: (host, except) => this.crowdedHost(host, except),
       changed: (id) => this.waits.changed(id),
@@ -454,8 +431,8 @@ export class TaskRunner {
       ...(options.checkRerunDelayMs
         ? { rerunDelayMs: options.checkRerunDelayMs }
         : {}),
-      prechecks: this.mergePrechecks(options.mergePrechecks),
       changed: (id) => this.waits.changed(id),
+      paused: (id) => !!taskPause(this.db, id),
       cleaned: async (id) => {
         await this.cleanup.cleanup(id);
       },
@@ -484,6 +461,7 @@ export class TaskRunner {
       inFlight: (id) => this.pending(id, getTask(this.db, id)),
       stopTask: (ref, by) => void this.stop(ref, by),
       enqueue: (id) => this.merge.enqueue(id),
+      paused: (id) => !!taskPause(this.db, id),
       handBack: (task, reason) => this.merge.handBack(task, reason),
       changed: (id) => this.waits.changed(id),
       publish: (id, kind, detail, actor) =>
@@ -504,17 +482,22 @@ export class TaskRunner {
           : selfRepoFlag(
               process.env.ATRIUM_UPDATE_REPO ?? "github:liu-zhengdong/atrium",
             ),
+      // 全局暂停时不发版、不自升级。
       busy: () =>
+        !!globalPause(this.db) ||
         !!this.db
           .prepare("SELECT 1 FROM tasks WHERE delivery_stage='merging' LIMIT 1")
-          .get() || !!restartInProgress(options.data),
+          .get() ||
+        !!restartInProgress(options.data),
       // 紧急的（t215）只等别的紧急任务合入与正在进行的重启；普通任务的合入已让路。
       urgentBusy: () =>
+        !!globalPause(this.db) ||
         !!this.db
           .prepare(
             "SELECT 1 FROM tasks WHERE delivery_stage='merging' AND urgent=1 LIMIT 1",
           )
-          .get() || !!restartInProgress(options.data),
+          .get() ||
+        !!restartInProgress(options.data),
       deploy: options.online?.deploy ?? cliDeploy(options.data),
       restartError: (version) => lastRestartError(options.data, version),
       publish: (id, kind, detail) => this.x.publish(id, kind, detail),
@@ -576,9 +559,10 @@ export class TaskRunner {
             )
             .map((active) => active.pid),
         );
+      // 全局暂停（server/pause.ts）：只留看门狗，不清理、不派活、不推进合入与验证。
+      if (globalPause(this.db)) return;
       if (!this.closed) this.orphans.sweep(this.host.orphans());
       if (!this.closed) await this.cleanup.finished();
-      if (!this.closed) await this.disk.refresh();
       if (!this.closed) await this.quota.releaseExpired(this.x);
       if (!this.closed && this.recovered) await this.scheduler.tick();
       // 因本机满或太忙排队的，负载降下来后在这里拉起。
@@ -586,15 +570,14 @@ export class TaskRunner {
       // 紧急通道清空后续上被抢占的任务（t215）。
       if (!this.closed && this.recovered) await this.lane.resume();
       if (!this.closed && this.recovered) this.kickUrgentOnline();
-      if (!this.closed && this.recovered) await this.settleReviews();
-      if (!this.closed && this.recovered) await this.settleCouncils();
       if (!this.closed && this.recovered) await this.settleVerifications();
       if (!this.closed && this.recovered) this.review.kick();
       if (!this.closed && this.recovered) this.merge.kick();
     });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
     every(this.options.online?.pollMs ?? 60_000, async () => {
-      if (!this.closed && this.recovered) this.online.kick();
+      if (!this.closed && this.recovered && !globalPause(this.db))
+        this.online.kick();
     });
     // 保留上限（#t126）：低频清理收件箱已确认知会与过期任务事件，不占常用路径。
     every(RETENTION_SWEEP_MS, async () => {
@@ -603,10 +586,13 @@ export class TaskRunner {
     const recovery = this.recover()
       .then(async () => {
         this.recovered = true;
-        if (!this.closed) await this.scheduler.tick();
-        if (!this.closed) this.review.kick();
-        if (!this.closed) this.merge.kick();
-        if (!this.closed) this.online.kick();
+        // 全局暂停着（server/pause.ts）就先不派、不推进，恢复时再补。
+        if (!this.closed && !globalPause(this.db)) {
+          await this.scheduler.tick();
+          this.review.kick();
+          this.merge.kick();
+          this.online.kick();
+        }
         // 保留清理失败不该挡住自愈后的派活，单独兜住。
         if (!this.closed)
           try {
@@ -706,17 +692,6 @@ export class TaskRunner {
     }
     let task = getTask(this.db, id);
     if (isTotal(this.db, id)) throw totalRefusal(task.ref);
-    const council = councilRow(this.db, id);
-    if (council && council.stage !== "summarizing")
-      throw new Problem(
-        409,
-        council.stage === "opinions"
-          ? `${task.ref} 是会审议题，还在等专员意见；意见收齐后自动交 leader 汇总`
-          : `${task.ref} 会审${STAGE_LABEL[council.stage]}；要重议另发起会审`,
-        "conflict",
-        undefined,
-        `atrium review show ${task.ref}`,
-      );
     // 只看上游（t227）：任务自己失败或受阻不挡重派（能不能重派由下面的 admit 按状态判），
     // 免得失败后排期标了 blocked 的要先 task set --status todo。
     const schedule = scheduleOf(this.db, {
@@ -777,13 +752,12 @@ export class TaskRunner {
     let chosen: Choice;
     let pick: RunPick;
     try {
-      await this.disk.check(task.node_id);
       const pace = await (this.launchOptions.pace ?? readPace)().catch(
         () => undefined,
       );
       if (!pace)
         noteTask(this.db, id, "budget_unknown", {
-          reason: "额度数据不可用，份额不拦截",
+          reason: "额度数据不可用，不按额度拦截",
         });
       const chain = taskAvoidChain(this.db, task);
       const avoid = {
@@ -839,6 +813,20 @@ export class TaskRunner {
       throw error;
     }
     const tool = chosen.worker.tool;
+    // 一键停机：全局或这一部分暂停着就先排队，恢复后按顺序拉起。
+    const pause = taskPause(this.db, id);
+    if (pause) {
+      this.x.launching.delete(id);
+      return {
+        ...this.enqueue(
+          task,
+          chosen,
+          `${pauseText(pause)}；恢复：${resumeCommand(pause)}`,
+          pinned,
+        ),
+        pick,
+      };
+    }
     if (chosen.waitUntil !== undefined) {
       this.x.launching.delete(id);
       return {
@@ -916,7 +904,7 @@ export class TaskRunner {
         pick,
       };
     }
-    const pausedPin = pinned !== null && !actor && this.hostPaused(host);
+    const pausedPin = pinned !== null && !actor && hostPaused(this.db, host);
     this.x.claim(id, tool, host);
     try {
       await this.x.launch(id, {
@@ -1022,9 +1010,7 @@ export class TaskRunner {
         ? "上线验证要在本机真实环境跑"
         : productRound(this.db, id)
           ? "产品部研究的选项单文件要留在本机"
-          : isDraftTask(this.db, id)
-            ? "全景初稿要读本机的仓库，初稿文件要留在本机"
-            : null;
+          : null;
     let repo: string | null = null;
     if (task.repo) {
       // 没有接入的远程主机时不查仓库，省一次 git。
@@ -1136,7 +1122,7 @@ export class TaskRunner {
           id: row.id,
           kind: "local",
           connection: "local",
-          paused: row.paused === 1,
+          paused: hostPaused(this.db, row.id),
           clis: null,
           repos: ["*"],
           running,
@@ -1162,7 +1148,7 @@ export class TaskRunner {
           now,
           onlineMs: this.remote.onlineMs,
         }),
-        paused: row.paused === 1,
+        paused: hostPaused(this.db, row.id),
         clis: info?.clis ?? {},
         repos: parseJson<string[]>(row.repos) ?? [],
         running,
@@ -1186,7 +1172,7 @@ export class TaskRunner {
           id: row.id,
           kind: "local",
           connection: "local",
-          paused: row.paused === 1,
+          paused: hostPaused(this.db, row.id),
           platform: process.platform,
           repos: ["*"],
           cpus: this.host.limits.cores,
@@ -1210,7 +1196,7 @@ export class TaskRunner {
           now,
           onlineMs: this.remote.onlineMs,
         }),
-        paused: row.paused === 1,
+        paused: hostPaused(this.db, row.id),
         platform: info?.os ?? null,
         repos: parseJson<string[]>(row.repos) ?? [],
         cpus: info?.cpus ?? 1,
@@ -1241,7 +1227,7 @@ export class TaskRunner {
           now,
           onlineMs: this.remote.onlineMs,
         }) === "online";
-      if (!online || row.paused === 1) continue;
+      if (!online || hostPaused(this.db, row.id)) continue;
       const clis = parseJson<HostInfo>(row.info)?.clis ?? {};
       usable.push({
         host: hostRef(row.id),
@@ -1274,18 +1260,11 @@ export class TaskRunner {
     );
   }
 
-  /** 这台暂停接活了没（移除或查不到的按没暂停，由挑主机那边拒）。 */
-  private hostPaused(host: number) {
-    const row = this.db
-      .prepare("SELECT paused FROM hosts WHERE id=?")
-      .get(host) as { paused: number } | undefined;
-    return row?.paused === 1;
-  }
-
   private viewOf(row: HostRow): HostView {
     const running = this.x.inFlight(undefined, row.id);
     const view = hostRowView(row, {
       polling: this.remote.polling(row.id),
+      paused: hostPaused(this.db, row.id),
       onlineMs: this.remote.onlineMs,
       running,
       localMax: this.host.limits.maxWorkers,
@@ -1323,7 +1302,6 @@ export class TaskRunner {
       .all(id) as { id: number; title: string; status: string }[];
     return {
       ...view,
-      pauses: pauseHistory(this.db, id),
       tasks: tasks.map((task) => ({ ...task, ref: taskRef(task.id) })),
     };
   }
@@ -1386,18 +1364,85 @@ export class TaskRunner {
     return { host: this.viewOf(hostRow(this.db, id)) };
   }
 
-  /** 暂停或恢复接活；by 是谁（u1、secretary），真变了才记账并写服务日志（t227）。 */
-  pauseHost(reference: unknown, paused: boolean, by: string) {
-    const id = parseHostRef(reference, "主机");
-    const changed = setPaused(this.db, id, paused, by);
-    if (changed)
-      console.log(
-        `主机 ${hostRef(id)} ${paused ? "暂停接活" : "恢复接活"}（${by}）`,
-      );
-    // 恢复接活：排着的会按顺序拉起、可能派到这台（只想派一件就别恢复，用 task run --host 指定）。
-    if (changed && !paused && !this.closed && this.recovered)
-      void this.x.drain();
-    return { host: this.viewOf(hostRow(this.db, id)), changed };
+  // ---- 一键停机（server/pause.ts） ----
+
+  /** 请求里的范围：--part 节点、--host hN，都不给是全局。 */
+  private pauseScope(body: unknown) {
+    const input = (body ?? {}) as { part?: unknown; host?: unknown };
+    if (input.part !== undefined && input.host !== undefined)
+      throw new Problem(400, "--part 与 --host 只能给一个", "usage");
+    if (typeof input.part === "string" && input.part.trim()) {
+      const node = nodeByAddress(this.db, input.part.trim());
+      return { scope: `o${node.id}`, part: node.id, host: null };
+    }
+    if (typeof input.host === "string" && input.host.trim()) {
+      const host = parseHostRef(input.host.trim(), "--host");
+      if (hostRow(this.db, host).removed_at !== null)
+        throw new Problem(409, `${hostRef(host)} 已移除`, "conflict");
+      return { scope: hostRef(host), part: null, host };
+    }
+    return { scope: "all", part: null, host: null };
+  }
+
+  pauses() {
+    return { pauses: listPauses(this.db) };
+  }
+
+  /** 暂停；stop=true 时把范围里在跑的执行者一并停掉（缺省让它们跑完、不接新的）。 */
+  pause(body: unknown, by: string) {
+    const input = (body ?? {}) as { why?: unknown; stop?: unknown };
+    const why =
+      typeof input.why === "string" && input.why.trim()
+        ? input.why.trim().slice(0, 300)
+        : null;
+    const target = this.pauseScope(body);
+    const { pause, changed } = setPause(this.db, target.scope, by, why);
+    if (changed) console.log(`${pauseText(pause)} 由 ${by} 暂停`);
+    const stopped: string[] = [];
+    if (input.stop === true)
+      for (const [id, active] of [...this.x.active]) {
+        const inScope =
+          target.host !== null
+            ? (active.host ?? LOCAL_HOST) === target.host
+            : target.part !== null
+              ? this.inPart(id, target.part)
+              : true;
+        if (!inScope) continue;
+        this.stop(taskRef(id), by, {
+          by,
+          reason: `暂停时一并停掉：${pauseText(pause)}`,
+        });
+        stopped.push(taskRef(id));
+      }
+    return { pause, changed, stopped };
+  }
+
+  resume(body: unknown, by: string) {
+    const { scope } = this.pauseScope(body);
+    const resumed = clearPause(this.db, scope);
+    if (resumed) {
+      console.log(`${pauseText(resumed)} 由 ${by} 恢复`);
+      // 排着的按顺序拉起，合入、审阅、上线接着走。
+      if (!this.closed && this.recovered)
+        void this.x
+          .drain()
+          .then(() => {
+            this.review.kick();
+            this.merge.kick();
+            this.online.kick();
+          })
+          .catch((error) => console.error("恢复后拉起失败：", error));
+    }
+    return { resumed, pauses: listPauses(this.db) };
+  }
+
+  /** 任务的归属部分（旧任务看 node_id）在不在 node 这一块里。 */
+  private inPart(id: number, node: number) {
+    const task = getTask(this.db, id);
+    const part = task.part_id ?? task.node_id;
+    if (part === null) return false;
+    const found = partPause(this.db, part);
+    return found?.scope === `o${node}`;
   }
 
   /** 清理主机上 Atrium 拉起的残留进程（t215 `host clean`，止损动作同一实现；t217 远程也清）。 */
@@ -1439,7 +1484,7 @@ export class TaskRunner {
     this.x.publish(task.id, "blocked", {
       reason,
       source: "budget",
-      next: "等窗口重置或请上层调整份额",
+      next: "等窗口重置",
     });
     this.waits.changed(task.id);
     return { task: getTask(this.db, task.id), queued: false };
@@ -1656,25 +1701,9 @@ export class TaskRunner {
     return { task: getTask(this.db, task.id) };
   }
 
-  /** 重新排队合入；受阻在专员否决（或没出结论）上的，由负责的 leader 判断后放行，照专员通过后的路走审阅或合入。 */
-  async requeueMerge(reference: unknown, by = DEFAULT_OWNER) {
-    const id = parseTaskRef(reference);
-    const overruled = overruleConcerns(this.db, id, by);
-    if (!overruled) return { task: this.merge.requeue(id) };
-    const admitted = await this.review.admit(id);
-    this.x.publish(
-      id,
-      admitted ? admitted.kind : "done",
-      {
-        ...(admitted ? admitted.detail : {}),
-        reason: (admitted && admitted.detail?.reason) || overruled.reason,
-        concerns: overruled.concerns,
-        overruled: true,
-      },
-      by,
-    );
-    this.waits.changed(id);
-    return { task: getTask(this.db, id) };
+  /** 重新排队合入。 */
+  requeueMerge(reference: unknown) {
+    return { task: this.merge.requeue(parseTaskRef(reference)) };
   }
 
   /**
@@ -1780,41 +1809,6 @@ export class TaskRunner {
     return result;
   }
 
-  /** 专员关卡补判（#322）：审查任务不再跑后记结论，父任务全部出结论时补判通过或留在受阻并投递。 */
-  async settleReviews() {
-    if (this.closed) return;
-    const busy = (id: number) =>
-      this.x.active.has(id) ||
-      this.x.launching.has(id) ||
-      this.x.finishing.has(id) ||
-      !!queued(this.db, id);
-    for (const resolution of settleReviews(this.db, busy)) {
-      const { parent, outcome, concerns } = resolution;
-      // 专员关卡通过后再按风险去审阅或合入队列。
-      const admitted = resolution.accepted && (await this.review.admit(parent));
-      const kind = admitted
-        ? admitted.kind
-        : resolution.accepted
-          ? "done"
-          : "blocked";
-      this.x.publish(parent, kind, {
-        ...(admitted ? admitted.detail : {}),
-        reason: (admitted && admitted.detail?.reason) || outcome.reason,
-        concerns,
-        ...(outcome.kind === "vetoed" ? { vetoed: true } : {}),
-        ...(resolution.accepted
-          ? {}
-          : {
-              next: concernNext(
-                taskRef(parent),
-                getTask(this.db, parent).deliver === "pr",
-              ),
-            }),
-      });
-      this.waits.changed(parent);
-    }
-  }
-
   // ---- 上线后的端到端验证（t181） ----
 
   /** 派验证任务：按配置的顺序试执行者，没装或拉不起来换下一个；都不行记「无法验证」。 */
@@ -1880,121 +1874,6 @@ export class TaskRunner {
     if (stranded.length) await this.dispatchVerify(stranded);
   }
 
-  // ---- 会审（#322 第 3 步） ----
-
-  /** 发起会审：建议题与各专员的意见任务，并行拉起；拉不起的标受阻，汇总时算没出意见。 */
-  async addCouncil(body: unknown) {
-    const { council, opinions } = createCouncil(
-      this.db,
-      this.options.data,
-      body,
-    );
-    await Promise.all(opinions.map((ref) => this.dispatchCouncil(ref)));
-    // 全部拉不起时意见已齐，直接进汇总。
-    await this.settleCouncils();
-    return councilView(this.db, council.ref);
-  }
-
-  council(reference: unknown) {
-    return councilView(this.db, reference);
-  }
-
-  /** 用户对上交的会审拍板。 */
-  decideCouncil(reference: unknown, body: unknown, actor: string) {
-    const view = decideCouncil(this.db, reference, body, actor);
-    this.x.publish(
-      Number(view.ref.slice(1)),
-      "council_decided",
-      {
-        conclusion: view.conclusion,
-        by: actor,
-        next: `atrium review show ${view.ref}`,
-      },
-      actor,
-    );
-    this.waits.changed(Number(view.ref.slice(1)));
-    return view;
-  }
-
-  /** 拉起会审里的任务（专员意见或 leader 汇总）；拉不起的标受阻并写原因。 */
-  private async dispatchCouncil(ref: string) {
-    try {
-      await this.run(ref, {});
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      const task = getTask(this.db, ref);
-      if (task.status === "todo")
-        this.x.advance(
-          task.id,
-          { kind: "block" },
-          {},
-          { reason: `会审任务拉不起来：${reason}` },
-        );
-      this.waits.changed(task.id);
-    }
-  }
-
-  /** 推进会审：意见收齐交 leader 汇总；汇总完成记结论，已定或需用户拍板都投给负责人。 */
-  settleCouncils(): Promise<void> {
-    if (this.closed) return Promise.resolve();
-    if (this.councilSettling) {
-      this.councilAgain = true;
-      return this.councilSettling;
-    }
-    const run = async () => {
-      do {
-        this.councilAgain = false;
-        const busy = (id: number) =>
-          this.x.active.has(id) ||
-          this.x.launching.has(id) ||
-          this.x.finishing.has(id) ||
-          !!queued(this.db, id);
-        const progress = settleCouncils(this.db, this.options.data, busy);
-        for (const decision of progress.decided) {
-          const { id, outcome, opinions } = decision;
-          const ref = taskRef(id);
-          this.x.publish(id, `council_${outcome.kind}`, {
-            conclusion: outcome.conclusion,
-            opinions: opinions.map((o) => ({
-              concern: o.ref,
-              name: o.name,
-              stance: o.stance,
-            })),
-            ...(outcome.escalate.length ? { escalate: outcome.escalate } : {}),
-            next:
-              outcome.kind === "escalated"
-                ? `需用户拍板：atrium review show ${ref}；拍板后 atrium review decide ${ref} 结论`
-                : `atrium review show ${ref}`,
-          });
-          this.waits.changed(id);
-        }
-        for (const ref of progress.dispatch) {
-          if (this.closed) return;
-          await this.dispatchCouncil(ref);
-        }
-      } while (this.councilAgain && !this.closed);
-    };
-    // 在 finally 里清锁：没有要等的动作时 run() 同步跑完，不能在赋值前就清掉。
-    const settling = run().finally(() => {
-      if (this.councilSettling === settling) this.councilSettling = null;
-    });
-    this.councilSettling = settling;
-    return settling;
-  }
-
-  /** 会审议题在专员出意见、leader 汇总到记下结论之前都算没结束。 */
-  private councilPending(id: number, task: Task) {
-    const council = councilRow(this.db, id);
-    if (!council || task.status === "cancelled") return false;
-    if (council.stage === "opinions") return true;
-    return (
-      council.stage === "summarizing" &&
-      (task.status === "todo" ||
-        task.status === "running" ||
-        task.status === "done")
-    );
-  }
-
   private pending(id: number, task: Task) {
     return (
       task.status === "running" ||
@@ -2006,8 +1885,6 @@ export class TaskRunner {
       task.delivery_stage === "merge_queued" ||
       task.delivery_stage === "merging" ||
       this.merge.isReturning(id) ||
-      (task.status === "blocked" && awaitingReview(this.db, id)) ||
-      this.councilPending(id, task) ||
       !!queued(this.db, id) ||
       this.x.launching.has(id) ||
       this.x.finishing.has(id)
@@ -2082,11 +1959,8 @@ export class TaskRunner {
       },
       // 秘书在不在听（t242）：看秘书的收件箱时给。
       ...(who === DEFAULT_OWNER ? { secretary: this.secretaryState(now) } : {}),
-      // 合入队列长度与预计还要多久（t254）；队列空时不给。
-      ...(() => {
-        const queue = mergeQueueView(this.db, now);
-        return queue ? { merge_queue: queue } : {};
-      })(),
+      // 一键停机（server/pause.ts）：暂停着的逐条给，看板与状态栏醒目显示。
+      pauses: listPauses(this.db),
       // 在途任务按类型计数（t237）：头部「功能 N · 修复 M · 紧急 K」。
       types: typeCounts(this.db),
       ...(leaders.length ? { leaders } : {}),
@@ -2121,17 +1995,6 @@ export class TaskRunner {
       }),
       truncated,
     };
-  }
-
-  /** 合入队列此刻能提前检查几件（t254）：本机太忙时不提前检查。 */
-  private mergePrechecks(given?: number) {
-    const planned = precheckSlots({
-      maxChecks: this.host.limits.maxChecks,
-      env: process.env,
-    });
-    if (planned.problem) console.error(`合入提前检查配置：${planned.problem}`);
-    const slots = given ?? planned.slots;
-    return () => (slots > 0 && this.host.gate(0).ok ? slots : 0);
   }
 
   /** 本机负载与限额（#358）：`top` 抬头显示「本机太忙，排队中」用。 */

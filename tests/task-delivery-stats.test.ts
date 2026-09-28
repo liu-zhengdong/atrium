@@ -11,8 +11,6 @@ import { createJobRole } from "../server/tasks/job-roles.ts";
 import {
   backfillDeliveries,
   deliveryFacts,
-  latestDeliveryByWorkerJob,
-  latestDeliveryTaskId,
   listDeliveries,
   recomputeAllDeliveryFacts,
   summarizeDeliveries,
@@ -122,7 +120,7 @@ function richDb() {
   const codex = "codex+gpt-6-sol:high";
   const claude = "claude+opus:high";
   const run = (title: string, worker: string, job?: string) => {
-    const task = createTask(db, { title, ...(job ? { job } : {}) });
+    const task = createTask(db, { title, ...(job ? { by: job } : {}) });
     advanceTask(db, task.ref, { kind: "start" }, { worker }, { worker }, 1000);
     return task;
   };
@@ -267,23 +265,6 @@ test("旧库迁移：补出事实列并按事件回填，结果与旧实现一�
   db.close();
 });
 
-test("latestDeliveryByWorkerJob 与旧实现的最近一条一致", () => {
-  const { db } = richDb();
-  const latest = new Map<string, Delivery>();
-  for (const d of oldListDeliveries(db)) {
-    const key = `${d.worker}\u0000${d.job_name ?? ""}`;
-    if (!latest.has(key) || d.id > latest.get(key)!.id) latest.set(key, d);
-  }
-  const got = latestDeliveryByWorkerJob(db);
-  assert.equal(got.length, latest.size);
-  for (const row of got)
-    assert.equal(
-      row.task_id,
-      latest.get(`${row.worker}\u0000${row.role ?? ""}`)!.task_id,
-    );
-  db.close();
-});
-
 test("listDeliveries 仍按旧形状给全量明细", () => {
   const { db, running } = richDb();
   const old = oldListDeliveries(db);
@@ -300,15 +281,6 @@ test("listDeliveries 仍按旧形状给全量明细", () => {
       .map((d) => d.final_result),
   );
   assert.ok(now.some((d) => d.task_id === running.id && d.ended_at === null));
-  db.close();
-});
-
-test("latestDeliveryTaskId 取最近一条交付", () => {
-  const { db, role } = richDb();
-  const id = latestDeliveryTaskId(db, { job: role.id });
-  const rows = listDeliveries(db, { job: role.id });
-  assert.equal(id, rows[0]!.task_id);
-  assert.equal(latestDeliveryTaskId(db, { job: 999 }), null);
   db.close();
 });
 
@@ -418,17 +390,6 @@ test("统计的语句数与交付数无关，查询计划不扫整张交付表",
     }
   }
   assert.ok(covering, "无过滤统计应走覆盖索引");
-
-  // 最近一条交付：语句数同样与总数无关。
-  const l1 = counting(small);
-  latestDeliveryByWorkerJob(small);
-  const listSmall = l1.read();
-  l1.restore();
-  const l2 = counting(big);
-  latestDeliveryByWorkerJob(big);
-  const listBig = l2.read();
-  l2.restore();
-  assert.equal(listBig, listSmall, "最近一条交付的语句数应随交付数保持不变");
 
   small.close();
   big.close();

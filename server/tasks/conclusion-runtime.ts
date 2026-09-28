@@ -13,25 +13,13 @@ import { addTell } from "./tell-ledger.ts";
  * 随后由 followUpTells 续上原会话（不支持续上的带着补充重派），每轮至多一次。判定在 conclusion.ts。
  */
 
-/** 这个任务要不要交固定格式的结论：审阅者、专员审查、会审意见、会审汇总；都走索引。 */
+/** 这个任务要不要交固定格式的结论：合入前审阅者；走索引。 */
 export function conclusionKindOf(
   db: DatabaseSync,
   id: number,
 ): ConclusionKind | undefined {
   if (one(db, "SELECT 1 FROM tasks WHERE review_task=? LIMIT 1", id))
     return "review";
-  if (one(db, "SELECT 1 FROM task_concerns WHERE review_id=? LIMIT 1", id))
-    return "concern";
-  if (one(db, "SELECT 1 FROM council_members WHERE opinion_id=? LIMIT 1", id))
-    return "opinion";
-  if (
-    one(
-      db,
-      "SELECT 1 FROM task_councils WHERE task_id=? AND stage='summarizing'",
-      id,
-    )
-  )
-    return "summary";
   return undefined;
 }
 

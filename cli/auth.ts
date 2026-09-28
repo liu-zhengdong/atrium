@@ -125,7 +125,7 @@ export const authCommands: Record<string, Command> = {
     positionals: [0, 0],
     run: async () => {
       const data = dataDirectory();
-      const record = await startService(data);
+      const record = await startService(data, { launch: false });
       await requireUserAuthService(record);
       const url = `${serviceUrl(record)}/api/auth/rotate`;
       const rotate = (token: string) =>

@@ -217,7 +217,7 @@ export function publishInvolved(
         involved: ref(nodeId),
         involved_name: name,
         auto: auto.includes(nodeId),
-        hint: `${task.ref} 牵涉你负责的「${name}」${auto.includes(nodeId) ? "（它的要点适用于这个任务的归属部分）" : ""}：负责与汇报不在你这里；有话写备注 atrium task note ${task.ref} 文字，或捎话 atrium task tell ${task.ref} 文字；要否决发起会审 atrium review add`,
+        hint: `${task.ref} 牵涉你负责的「${name}」${auto.includes(nodeId) ? "（它的要点适用于这个任务的归属部分）" : ""}：负责与汇报不在你这里；有话写备注 atrium task note ${task.ref} 文字，或捎话 atrium task tell ${task.ref} 文字`,
         routed: { to: route.subscriber, why: route.why },
       },
     });

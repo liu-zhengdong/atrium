@@ -133,15 +133,11 @@ async function startOutsider(t: { after: (fn: () => Promise<void>) => void }) {
     ATRIUM_PI_TEMPLATE: template,
     PI_ACP_DIR: join(root, "acp"),
   });
-  await exec(
-    process.execPath,
-    [join(packageRoot, "bin/atrium.mjs"), "task", "ls"],
-    {
-      env,
-      cwd: root,
-      timeout: 60000,
-    },
-  );
+  await exec(process.execPath, [join(packageRoot, "bin/atrium.mjs"), "start"], {
+    env,
+    cwd: root,
+    timeout: 60000,
+  });
   const record = readService(data);
   assert.ok(record && alive(record.pid), "对照服务要活着");
   const pid = record.pid;

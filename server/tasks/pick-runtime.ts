@@ -7,7 +7,6 @@ import type { Task } from "./ledger.ts";
 import { pickView, type PickCandidateFact, type PickRecord } from "./pick.ts";
 import { FALLBACK_ORDER, type PaceEntry } from "./prepare.ts";
 import { parseWorker, resolveWorker, type Risk } from "./profiles.ts";
-import { rankRoleWorkers } from "./role-ranking.ts";
 import { quotaHeadroom } from "./usage-budget.ts";
 import type { LaunchOptions } from "./workspace.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
@@ -51,15 +50,16 @@ export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
   const nodeId = chain.at(-1)?.id;
   const reservePercent = readQuotaReservePercent(db, nodeId);
   const pace = ctx.pace ? [...ctx.pace] : undefined;
-  const headroom = quotaHeadroom(db, nodeId ?? null, pace, reservePercent);
+  const headroom = quotaHeadroom(pace, reservePercent);
   const installed = detectInstalled(options.env.PATH ?? "");
   const job = task.job_id ? getJobRole(db, `r${task.job_id}`) : null;
   const jobStats = job ? workerStats(db, { job: job.id }) : [];
   const size = effectiveSize(task);
   const names: { name: string; preferred: number | null }[] = [
-    ...(job ? rankRoleWorkers(job.preferred, jobStats, job.name) : []).map(
-      (name, index) => ({ name, preferred: index }),
-    ),
+    ...(job?.preferred ?? []).map((name, index) => ({
+      name,
+      preferred: index,
+    })),
     // 合这一档大小的组合（小：快且便宜的，中、大：高强度的），工具已装才放。
     ...sizeWorkers(size.size)
       .filter((name) => installed[parseWorker(name).tool])

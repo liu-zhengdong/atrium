@@ -169,7 +169,7 @@ export type ProductView = {
   schedule: string | null;
   every: string | null;
   next_at: number | null;
-  schedule_state: "active" | "paused" | "removed" | null;
+  schedule_state: "active" | "removed" | null;
   last_task: string | null;
   created_at: number;
 };
@@ -195,9 +195,7 @@ function viewsOf(db: DatabaseSync, rows: readonly ProductRow[]) {
       ? null
       : s.removed_at !== null
         ? ("removed" as const)
-        : s.paused_at !== null
-          ? ("paused" as const)
-          : ("active" as const);
+        : ("active" as const);
     return {
       node: ref(r.node_id),
       name: byId.get(r.node_id)?.name ?? ref(r.node_id),

@@ -267,30 +267,23 @@ test("全景任务行：远程执行机器带名字与离线标记", () => {
   db.close();
 });
 
-test("全景节点给网页页签用的字段：部分做什么与下面几块、专员何时请与在盯几件、下层要点、合入阶段", () => {
+test("全景节点给网页页签用的字段：部分做什么与下面几块、下层要点、合入阶段", () => {
   const db = memory();
   editMap(db, "o3", { what: "派活和验收" }, "u1");
   editMap(db, "o5", { what: "凭据与权限" }, "u1");
   node(db, { parent: "o3", slug: "gates", kind: "module", name: "gates" });
   node(db, { parent: "o3", slug: "质量", kind: "concern", name: "质量" });
-  db.prepare(
-    "UPDATE org_docs SET fields=json_set(fields,'$.invite_when',json(?)) WHERE doc='charter' AND node_id=5",
-  ).run(JSON.stringify(["凭据", "server/auth*", 3]));
   point(db, "o2", "本块要点");
   point(db, "o7", "gates 的要点");
   point(db, "o5", "安全的要点");
   const id = (t: { ref: string }) => Number(t.ref.slice(1));
-  const watched = createTask(db, { title: "改登录", part: "o4" });
+  createTask(db, { title: "改登录", part: "o4" });
   const merging = createTask(db, { title: "等合入", part: "o4" });
   const closed = createTask(db, { title: "已结", part: "o4" });
   db.prepare(
     "UPDATE tasks SET status='done',delivery_stage='merge_queued',started_at=1,ended_at=9 WHERE id=?",
   ).run(id(merging));
   db.prepare("UPDATE tasks SET status='done' WHERE id=?").run(id(closed));
-  for (const t of [watched, merging, closed])
-    db.prepare(
-      "INSERT INTO task_concerns(task_id,node_id,pos) VALUES(?,5,0)",
-    ).run(id(t));
 
   const view = mapNode(db, "o2");
   const runtime = view.overview.parts.find((p) => p.ref === "o3") as never as {
@@ -565,7 +558,6 @@ test("接口：令牌读写；网页登录链接只能用一次，会话只能�
     "/api/map/tree",
     "/api/map/nodes/o2",
     "/api/map/now",
-    "/api/map/roles",
     "/api/map/specialists",
   ])
     assert.equal(

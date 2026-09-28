@@ -4,11 +4,10 @@ import { ensureQueueTable } from "./queue.ts";
 import { repairScheduleRecords } from "./schedule-recovery.ts";
 import { ensureUpstreamPrTable } from "./schedule-upstream.ts";
 import { ensureUsageTable } from "./usage.ts";
-import { ensureConcernTable } from "./concerns.ts";
 import { ensureAlsoTable } from "./also.ts";
 import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
-import { ensureCouncilTables } from "./councils.ts";
+import { ensurePauseTable } from "../pause.ts";
 import { ensurePatrolTables } from "./patrol.ts";
 import { ensureVerifyTables } from "./verify-runtime.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
@@ -47,17 +46,17 @@ function backfillTypes(db: DatabaseSync) {
   }
 }
 
-/** 老库里的帮手子任务：专员审查（每轮的审查任务）与会审意见，按登记表与运行时起的标题认。 */
+/** 老库里的帮手子任务：专员审查与会审意见，按运行时起的标题认。 */
 function backfillHelpers(db: DatabaseSync) {
   db.exec(`UPDATE tasks SET helper=1 WHERE parent_id IS NOT NULL AND (
-      title LIKE '专员审查：%' OR title LIKE '会审意见：%'
-      OR id IN (SELECT review_id FROM task_concerns WHERE review_id IS NOT NULL)
-      OR id IN (SELECT opinion_id FROM council_members))`);
+      title LIKE '专员审查：%' OR title LIKE '会审意见：%')`);
 }
 
 export function ensureTaskTables(db: DatabaseSync) {
   // 排队表随账本建好：列表与排期要读排队原因，不能等任务运行时起来。
   ensureQueueTable(db);
+  // 一键停机（server/pause.ts）：派活、合入、看板都要读暂停，随账本建好。
+  ensurePauseTable(db);
   ensureJobRoles(db);
   db.exec(`CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,16 +120,12 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_state TEXT");
   if (!columns.some((column) => column.name === "schedule_reason"))
     db.exec("ALTER TABLE tasks ADD COLUMN schedule_reason TEXT");
-  // 组织树第 3 步（#264）：谁来做（记在谁的账上）、谁投的；指向 org_nodes.id，旧任务留空，经 org link-roles 显式回填。
+  // 组织树第 3 步（#264）：记在哪个节点上（旧任务）、谁投的；指向 org_nodes.id。
   if (!columns.some((column) => column.name === "node_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN node_id INTEGER");
   if (!columns.some((column) => column.name === "origin_node_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN origin_node_id INTEGER");
-  // 目标树（#313）：任务挂在哪个里程碑上，指向 goals.id；表与校验在 server/goals/。
-  if (!columns.some((column) => column.name === "goal_id"))
-    db.exec("ALTER TABLE tasks ADD COLUMN goal_id INTEGER");
-  db.exec("CREATE INDEX IF NOT EXISTS tasks_goal ON tasks(goal_id,status)");
-  // 全景图（#322）：任务归属哪一部分，指向 org_nodes.id；旧 goal_id 由目标树迁移按目标的负责节点回填。
+  // 全景图（#322）：任务归属哪一部分，指向 org_nodes.id。
   if (!columns.some((column) => column.name === "part_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN part_id INTEGER");
   // 闲时（t136）：管方面的部分开的任务缺省排在普通任务后面；加列时把在途的管方面任务补成闲时。
@@ -251,14 +246,10 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureUpstreamPrTable(db);
   repairScheduleRecords(db);
   ensureUsageTable(db);
-  // 全景图第 2 步（#322）：任务请了哪些专员、本轮审查任务与结论。
-  ensureConcernTable(db);
   ensureAlsoTable(db);
   // 任务声明要用的凭据（t194）：task_secrets 随账本建，node_secrets 一起建好，建任务时要查。
   ensureSecretTables(db);
-  // 全景图第 3 步（#322）：会审的议题、受邀专员与结论。
-  ensureCouncilTables(db);
-  // 总任务（t190）：有子任务的任务不再派、状态按子孙汇总；运行时替父任务建的帮手（专员审查、会审意见）不算子任务。
+  // 总任务（t190）：有子任务的任务不再派、状态按子孙汇总；运行时替父任务建的帮手（审阅、上线验证）不算子任务。
   if (!columns.some((column) => column.name === "helper")) {
     db.exec(
       "ALTER TABLE tasks ADD COLUMN helper INTEGER NOT NULL DEFAULT 0 CHECK(helper IN (0,1))",

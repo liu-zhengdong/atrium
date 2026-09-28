@@ -507,7 +507,7 @@ test("2.3 例子：放宽被拒、收紧通过、上层后收紧标覆盖、后�
         error.message,
         "拒绝修改 o3 OpenQuota 的章程：\n- boundaries.quota-reserve：只能收紧，上层 o1 组织 要求至少 20%，这里写的是 10%",
       );
-      assert.equal(error.nextCommand, "atrium org show o3 --charter --raw");
+      assert.equal(error.nextCommand, "atrium org show o3 --raw");
       return true;
     },
   );
@@ -623,22 +623,6 @@ test("章程往返、修订快照含边界、B6 转换写后代修订、回退�
   assert.equal(
     (show(db, "o4") as { boundaries: Shown }).boundaries.own.length,
     1,
-  );
-  // card 不收边界
-  assert.throws(
-    () =>
-      editDoc(
-        db,
-        "o4",
-        "card",
-        { fields: {}, body: "", boundaries: [], reason: "x" },
-        "a1",
-      ),
-    /card.boundaries 是未知字段/,
-  );
-  assert.throws(
-    () => parseDocument("---\nboundaries: []\n---\n", "card"),
-    /card.boundaries 是未知字段/,
   );
 
   // B6：Atrium 删除 atrium-quota，runtime 的覆盖转为自有条目并补上文字

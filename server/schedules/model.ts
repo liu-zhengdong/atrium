@@ -12,7 +12,6 @@ import {
   localOffset,
   parseAt,
   parseEvery,
-  resumeAt,
   type Offset,
   type ScheduleKind,
 } from "./plan.ts";
@@ -28,11 +27,11 @@ export function ensureScheduleTables(db: DatabaseSync) {
     kind TEXT NOT NULL CHECK(kind IN ('task','patrol','research')),
     every_ms INTEGER NOT NULL, at_minute INTEGER,
     brief TEXT, brief_path TEXT, by TEXT, worker TEXT,
-    next_at INTEGER NOT NULL, paused_at INTEGER, removed_at INTEGER,
+    next_at INTEGER NOT NULL, removed_at INTEGER,
     last_task_id INTEGER,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-    CREATE INDEX IF NOT EXISTS schedules_due ON schedules(next_at)
-      WHERE paused_at IS NULL AND removed_at IS NULL;
+    CREATE INDEX IF NOT EXISTS schedules_live ON schedules(next_at)
+      WHERE removed_at IS NULL;
     CREATE TABLE IF NOT EXISTS schedule_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, schedule_id INTEGER NOT NULL,
       at INTEGER NOT NULL,
@@ -56,7 +55,6 @@ export type ScheduleRow = {
   by: string | null;
   worker: string | null;
   next_at: number;
-  paused_at: number | null;
   removed_at: number | null;
   last_task_id: number | null;
   created_at: number;
@@ -242,31 +240,6 @@ export function insertSchedule(
   return Number(lastInsertRowid);
 }
 
-export function pauseSchedule(db: DatabaseSync, reference: unknown) {
-  const row = liveRow(db, reference);
-  if (row.paused_at === null)
-    db.prepare("UPDATE schedules SET paused_at=?,updated_at=? WHERE id=?").run(
-      Date.now(),
-      Date.now(),
-      row.id,
-    );
-  return row.id;
-}
-
-export function resumeSchedule(
-  db: DatabaseSync,
-  reference: unknown,
-  now = Date.now(),
-  offset: Offset = localOffset,
-) {
-  const row = liveRow(db, reference);
-  if (row.paused_at !== null)
-    db.prepare(
-      "UPDATE schedules SET paused_at=NULL,next_at=?,updated_at=? WHERE id=?",
-    ).run(resumeAt(row, now, offset), now, row.id);
-  return row.id;
-}
-
 /** 删掉只标记：sN 不复用，已生成的任务照常。 */
 export function removeSchedule(db: DatabaseSync, reference: unknown) {
   const row = liveRow(db, reference);
@@ -297,14 +270,8 @@ function scheduleView(
     by: row.by,
     worker: row.worker,
     has_brief: row.brief !== null,
-    state:
-      row.removed_at !== null
-        ? ("removed" as const)
-        : row.paused_at !== null
-          ? ("paused" as const)
-          : ("active" as const),
-    next_at:
-      row.removed_at !== null || row.paused_at !== null ? null : row.next_at,
+    state: row.removed_at !== null ? ("removed" as const) : ("active" as const),
+    next_at: row.removed_at !== null ? null : row.next_at,
     last_task: last,
     created_at: row.created_at,
   };
@@ -408,11 +375,11 @@ export function showSchedule(db: DatabaseSync, reference: unknown) {
   };
 }
 
-/** 到点的（没暂停、没删除），按到点先后，一次至多 limit 条。 */
+/** 到点的（没删除），按到点先后，一次至多 limit 条；暂停由调用方按 server/pause.ts 跳过。 */
 export function dueSchedules(db: DatabaseSync, now: number, limit = 50) {
   return all<ScheduleRow>(
     db,
-    "SELECT * FROM schedules WHERE paused_at IS NULL AND removed_at IS NULL AND next_at<=? ORDER BY next_at,id LIMIT ?",
+    "SELECT * FROM schedules WHERE removed_at IS NULL AND next_at<=? ORDER BY next_at,id LIMIT ?",
     now,
     limit,
   );

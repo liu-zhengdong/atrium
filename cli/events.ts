@@ -142,6 +142,8 @@ const wait: Command = {
       events: InboxEvent[];
       timed_out: boolean;
       restarting?: boolean;
+      /** 全局暂停着（server/pause.ts）：事件照常落库，但不投给等待的人。 */
+      paused?: string;
     }>(
       seconds,
       (timeout) => api.get(`/events/wait?${query(timeout)}`),
@@ -151,9 +153,13 @@ const wait: Command = {
     recordNext(
       ids.length
         ? `处理完确认：atrium events ack ${ids.join(" ")}`
-        : `继续等：atrium events wait --as ${who}`,
+        : result.paused
+          ? "恢复：atrium resume"
+          : `继续等：atrium events wait --as ${who}`,
     );
     if (json) printJson(result);
+    else if (result.paused)
+      console.log(`${result.paused}：事件照常落库，恢复后再取`);
     else if (!ids.length)
       console.log(
         `${seconds} 秒内 ${who} 没有新事件；atrium events wait --as ${who}`,

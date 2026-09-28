@@ -130,7 +130,7 @@ test("旧任务详述回填：读得到的进库，读不到的记日志留路�
   ensureTaskTables(db);
   ensureImportMarks(db);
   writeFileSync(join(dir, "one.md"), "第一份");
-  writeFileSync(join(dir, "topic.md"), "议题原文");
+  writeFileSync(join(dir, "topic.md"), "相对路径原文");
   const insert = db.prepare(
     "INSERT INTO tasks(title,brief_path,brief,repo,status,created_at,updated_at) VALUES(?,?,?,?,'todo',0,0)",
   );
@@ -139,13 +139,10 @@ test("旧任务详述回填：读得到的进库，读不到的记日志留路�
   insert.run("读不到", join(dir, "gone.md"), null, null);
   insert.run("已进库", join(dir, "gone.md"), "库里的", null);
   insert.run("没有详述", null, null, null);
-  db.prepare(
-    "INSERT INTO task_councils(task_id,topic,topic_brief,stage,created_at) VALUES(2,'议题',?, 'opinions',0)",
-  ).run("topic.md");
   const logs: string[] = [];
   assert.deepEqual(
     backfillBriefs(db, (line) => logs.push(line)),
-    { filled: 3, missing: 1 },
+    { filled: 2, missing: 1 },
   );
   const briefs = db
     .prepare("SELECT id,brief,brief_path FROM tasks ORDER BY id")
@@ -153,19 +150,11 @@ test("旧任务详述回填：读得到的进库，读不到的记日志留路�
     .map((row) => ({ ...row }));
   assert.deepEqual(
     briefs.map((row) => row.brief),
-    ["第一份", "议题原文", null, "库里的", null],
+    ["第一份", "相对路径原文", null, "库里的", null],
   );
   assert.equal(briefs[2]!.brief_path, join(dir, "gone.md"));
-  assert.equal(
-    (
-      db.prepare("SELECT topic_text FROM task_councils").get() as {
-        topic_text: string;
-      }
-    ).topic_text,
-    "议题原文",
-  );
   assert.ok(logs.some((line) => /t3 读不到 .*保留原路径/.test(line)));
-  assert.match(importMark(db, "task_briefs")!.detail, /回填 3 份，读不到 1 份/);
+  assert.match(importMark(db, "task_briefs")!.detail, /回填 2 份，读不到 1 份/);
   // 记号在：再启动不再读文件，补上文件也不会回填。
   writeFileSync(join(dir, "gone.md"), "后来补的");
   assert.equal(

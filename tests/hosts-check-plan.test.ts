@@ -529,7 +529,6 @@ const facts = (over: Partial<HolderFacts>): HolderFacts => ({
   processing_by: null,
   inbox: null,
   route: "secretary",
-  council_escalated: false,
   ...over,
 });
 

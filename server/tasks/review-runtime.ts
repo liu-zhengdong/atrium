@@ -89,6 +89,8 @@ export class ReviewGate {
       inFlight: (id: number) => boolean;
       stopTask: (ref: string, by?: string) => void;
       enqueue: (id: number) => void;
+      /** 一键停机（server/pause.ts）：这件被暂停挡着时先不推进审阅。 */
+      paused?: (id: number) => boolean;
       handBack: (task: Task, reason: string) => Promise<void>;
       publish: (
         id: number,
@@ -209,6 +211,7 @@ export class ReviewGate {
         .all() as { id: number }[];
       for (const { id } of rows) {
         if (this.closed) return;
+        if (this.options.paused?.(id)) continue;
         try {
           await this.step(getTask(this.db, id));
         } catch (error) {
@@ -222,6 +225,7 @@ export class ReviewGate {
       }
       for (const row of openAfterReviews(this.db)) {
         if (this.closed) return;
+        if (this.options.paused?.(row.task_id)) continue;
         try {
           await this.stepAfter(row);
         } catch (error) {

@@ -70,7 +70,7 @@ export type PickAccount = {
   used_percent: number | null;
   spare_percent: number | null;
   hours_to_reset: number | null;
-  /** 扣掉根章程保留份额（及节点份额）后还能用的百分点；没有数据为 null。 */
+  /** 扣掉根章程给用户保留的额度后还能用的百分点；没有数据为 null。 */
   left_percent: number | null;
   left_reason: string | null;
   /** 额度用尽标记的到期时刻；没有标记为 null。 */
@@ -198,7 +198,7 @@ export function refusalsOf(
   const room = facts.headroom.get(account);
   if (!over && facts.pace && room && room.points < 1) reasons.push(room.reason);
   if (rules.billing === "metered")
-    reasons.push("档案 billing=metered，当前钱份额为 0 元");
+    reasons.push("档案 billing=metered（按量计费），不派");
   return reasons;
 }
 

@@ -25,7 +25,6 @@ import { mergeFailure } from "./merge-decision.ts";
 import { isRebaseConflict, markDeliveryFinal } from "./delivery-records.ts";
 import { MergeClaim } from "./merge-claim.ts";
 import { lastRebased } from "./merge-ledger.ts";
-import { MergePrechecks } from "./merge-precheck.ts";
 import { addTell } from "./tell-ledger.ts";
 import { worktreePlan } from "./prepare.ts";
 import {
@@ -46,7 +45,7 @@ export const NEXT_MERGE = `SELECT id,urgent FROM (
   SELECT id,urgent,merge_queued_at,0 AS seq FROM tasks WHERE delivery_stage='merging' AND status='done'
   UNION ALL
   SELECT id,urgent,merge_queued_at,1 AS seq FROM tasks WHERE delivery_stage='merge_queued' AND status='done'
-) ORDER BY urgent DESC,seq,merge_queued_at,id LIMIT 1`;
+) ORDER BY urgent DESC,seq,merge_queued_at,id LIMIT 50`;
 
 /** 正在处理的合入：让路（t215）靠它。committed 表示已发出 gh 合入，不再让。 */
 type Current = {
@@ -71,7 +70,6 @@ export class MergeQueue {
   /** 因紧急任务暂停合入、已记过一笔的任务（t215）；暂停解除后清空。 */
   private readonly held = new Set<number>();
   private readonly git: MergeGit;
-  private readonly prechecks: MergePrechecks;
 
   isReturning(id: number) {
     return this.returning.has(id);
@@ -91,6 +89,8 @@ export class MergeQueue {
         actor?: string,
       ) => void;
       changed: (id: number) => void;
+      /** 一键停机（server/pause.ts）：这件被暂停挡着时跳过，别的照常合入。 */
+      paused?: (id: number) => boolean;
       cleaned?: (id: number) => Promise<void>;
       /** 服务自身仓库的 `-R` 写法；合入它的 PR 才等发版自动上线。 */
       selfRepo?: string | null;
@@ -100,8 +100,6 @@ export class MergeQueue {
       prHeadWaitMs?: number;
       /** 重跑检查派到哪台（#358 第 2 步）；缺省在本机跑。合入本身仍在本机。 */
       checks?: Pick<CheckDispatch, "run">;
-      /** 同时提前检查几件（t254，merge-precheck-plan.ts precheckSlots）；缺省不提前检查。 */
-      prechecks?: () => number;
       /** 检查没跑成后第 attempt 次重跑前整条队列等多久（t204）；测试可缩短。 */
       rerunDelayMs?: (attempt: number) => number;
       /** 检查进行中多久看一次日志有没有新输出（t260）；测试可缩短。 */
@@ -110,27 +108,12 @@ export class MergeQueue {
   ) {
     this.claim = new MergeClaim(db);
     this.git = new MergeGit(options.run, () => this.closed);
-    this.prechecks = new MergePrechecks(db, {
-      data: options.data,
-      env: options.env,
-      run: options.run,
-      git: this.git,
-      signal: this.abort.signal,
-      closed: () => this.closed,
-      slots: () => options.prechecks?.() ?? 0,
-      // 紧急任务在合入流程里、检查没跑成正在等重跑：先不开新的。
-      paused: () =>
-        Date.now() < this.retryAfter || urgentInMergeFlow(db).length > 0,
-      ...(options.checks ? { checks: options.checks } : {}),
-      changed: (id) => options.changed(id),
-    });
   }
 
   async close() {
     this.closed = true;
     this.abort.abort();
     await this.active;
-    await this.prechecks.close();
   }
 
   /** 用户停止排队或合入；已发出的 gh merge 仍以 PR 实际状态为准。 */
@@ -149,7 +132,6 @@ export class MergeQueue {
       noteTask(this.db, id, "merge_stop_requested", { reason: "用户停止合入" });
       return { stopping: true };
     }
-    this.prechecks.stop(id);
     this.finishStop(id, by);
     return { stopping: false };
   }
@@ -207,8 +189,9 @@ export class MergeQueue {
 
   /** 下一个做谁：紧急的照做；不是紧急的，有紧急任务还在合入流程里就先暂停（t215）。 */
   private next(): number | null {
-    const row = this.db.prepare(NEXT_MERGE).get() as
-      { id: number; urgent: number } | undefined;
+    const row = (
+      this.db.prepare(NEXT_MERGE).all() as { id: number; urgent: number }[]
+    ).find((candidate) => !this.options.paused?.(candidate.id));
     const decision = mergeDecision({
       next: row ? { id: row.id, urgent: row.urgent === 1 } : null,
       urgentFlow: row && row.urgent !== 1 ? urgentInMergeFlow(this.db) : [],
@@ -340,8 +323,6 @@ export class MergeQueue {
   kick() {
     if (this.closed) return;
     this.start();
-    // 先开始队首（它转成合入中），再看排在后面的要不要提前检查。
-    this.prechecks.kick();
   }
 
   private start() {
@@ -373,8 +354,6 @@ export class MergeQueue {
         this.stage(row.id, "merging", "merge_started");
         // 开始合入普通任务时紧急的已经在等：立刻让。
         this.yieldIfUrgent();
-        // 队首换了人：窗口往后挪，排在后面的接着提前检查。
-        this.prechecks.kick();
         try {
           await this.process(getTask(this.db, row.id));
           // 检查没跑成、放回重跑的：整条队列先等一会儿。
@@ -466,16 +445,12 @@ export class MergeQueue {
   }
 
   /**
-   * 合入队首：核对 PR 与工作树、fetch 最新 main，按提前检查（t254）能不能复用决定直接合入还是 rebase 重跑检查，
-   * 再推送、按检查过的提交合入。reuse=false 是复用的结果合入被拒后回头重跑的那一遍。
+   * 合入队首：核对 PR 与工作树、fetch 最新 main，rebase 重跑检查，再推送、按检查过的提交合入。
    */
-  private async process(task: Task, reuse = true): Promise<void> {
+  private async process(task: Task): Promise<void> {
     const { repo, branch, pr_url: url } = task;
     if (!repo || !branch || !url)
       throw new Error("合入任务缺少仓库、分支或 PR");
-    // 这件正在提前检查：等它把工作树放下（检查在跑的接着等，结果直接拿来用）。
-    await this.prechecks.settle(task.id, this.signal());
-    if (this.closed || this.halted(task.id)) return;
     const origin = await originRepo(repo, this.options.run);
     if ("error" in origin) throw new Error(redact(origin.error));
     const target = parsePrUrl(url);
@@ -521,69 +496,29 @@ export class MergeQueue {
         before.headRefOid,
       ]);
     const head = await this.git.head(worktree);
-    // 与 PR 头不一致时，只认合入队列自己 rebase 出的提交（含提前检查的 rebase）。
+    // 与 PR 头不一致时，只认合入队列自己 rebase 出的提交。
     if (head !== before.headRefOid && lastRebased(this.db, task.id) !== head)
       throw new MergeHold("PR 头提交与任务工作树不一致，等待人工核对");
     const dirty = await this.git.status(worktree);
     if (this.halted(task.id)) return;
     if (dirty) throw new MergeHold("任务工作树尚有未提交改动，拒绝合入");
     await this.git.command("git", ["-C", repo, "fetch", "origin", base]);
-    const main = await this.git.command("git", [
-      "-C",
+    const checkedHead = await this.rebaseAndCheck(
+      task,
+      worktree,
       repo,
-      "rev-parse",
-      `origin/${base}`,
-    ]);
-    const { decision, precheck } = reuse
-      ? await this.prechecks.reuse({
-          id: task.id,
-          repo,
-          worktree,
-          head,
-          main,
-        })
-      : { decision: null, precheck: null };
-    if (this.closed || this.halted(task.id)) return;
-    if (precheck && decision) {
-      // 用了提前检查的结果：记成这一轮的合入检查（task show 的「本地检查」一行照常显示）。
-      if (decision.kind !== "recheck")
-        noteTask(this.db, task.id, "merge_check", {
-          ...precheck.detail,
-          reused: decision.reason,
-          main,
-        });
-      else
-        noteTask(this.db, task.id, "merge_precheck_unused", {
-          reason: decision.reason,
-          base: precheck.base,
-          main,
-        });
-    }
-    if (decision?.kind === "hand_back") {
-      const d = precheck!.detail;
-      const failed = Array.isArray(d.failedTests) ? d.failedTests : [];
-      return this.handBack(
-        task,
-        `本地检查${String(d.status)}：${failed.join("、") || String(d.detail)}；日志 ${String(d.log)}`,
-      );
-    }
-    const checkedHead =
-      decision?.kind === "reuse"
-        ? head
-        : await this.rebaseAndCheck(task, worktree, repo, base, remote);
+      base,
+      remote,
+    );
     if (checkedHead === null) return;
-    const merged = await this.pushAndMerge(task, {
+    await this.pushAndMerge(task, {
       worktree,
       repo,
       branch,
       flag,
       prHead: before.headRefOid,
       checkedHead,
-      reused: decision?.kind === "reuse",
     });
-    // 用提前检查结果合入被 GitHub 拒了（如要求分支跟上 main）：rebase 到最新 main、重跑检查再合一次。
-    if (merged === "retry")
-      return this.process(getTask(this.db, task.id), false);
   }
 
   /** 队首的取消信号：服务关闭、用户停止或给紧急任务让路。 */
@@ -714,10 +649,7 @@ export class MergeQueue {
     return checkedHead;
   }
 
-  /**
-   * 把检查过的提交推到 PR 分支、等 PR 头追上、按这个提交 squash 合入。
-   * 返回 retry：用的是提前检查的结果、GitHub 拒绝合入而 PR 仍开着，调用方重跑一遍。
-   */
+  /** 把检查过的提交推到 PR 分支、等 PR 头追上、按这个提交 squash 合入。 */
   private async pushAndMerge(
     task: Task,
     at: {
@@ -728,9 +660,8 @@ export class MergeQueue {
       /** 这一轮开始时的 PR 头：推送时的 lease。 */
       prHead: string;
       checkedHead: string;
-      reused: boolean;
     },
-  ): Promise<"retry" | void> {
+  ): Promise<void> {
     const { worktree, repo, branch, flag, checkedHead } = at;
     const url = task.pr_url!;
     if (this.halted(task.id)) return;
@@ -810,11 +741,6 @@ export class MergeQueue {
       const reason = redact(
         `gh 合入失败：${firstLine(merge.stderr) || "未知原因"}`,
       );
-      if (at.reused && state.state === "OPEN") {
-        if (this.current?.id === task.id) this.current.committed = false;
-        noteTask(this.db, task.id, "merge_reuse_rejected", { reason });
-        return "retry";
-      }
       return this.handBack(task, reason);
     }
     const after = await this.git.pr(task, flag);

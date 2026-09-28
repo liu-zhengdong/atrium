@@ -13,8 +13,7 @@ const strs = (v: Values, k: string) =>
     ? (v[k] as unknown[]).filter((x): x is string => typeof x === "string")
     : [];
 const client = async () => (await import("./service.ts")).connect();
-type Advice = { stat: WorkerStat; advice: { action: string; reason: string } };
-type List = { stats: WorkerStat[]; suggestions: Advice[] };
+type List = { stats: WorkerStat[] };
 const percent = (n: number | null) =>
   n === null ? "—" : `${Math.round(n * 100)}%`;
 const duration = (n: number | null) =>
@@ -73,12 +72,10 @@ export const workerCommands: Record<string, Command> = {
   workers: {
     args: "[--specialist 专员] [--json]",
     about: "按执行者组合、模型、工具与干活的专员查看交付事实",
-    options: { role: { type: "string" }, specialist: { type: "string" } },
+    options: { specialist: { type: "string" } },
     positionals: [0, 0],
     async run({ values, json }) {
-      const role = str(values, "specialist") ?? str(values, "role");
-      if (str(values, "role") !== undefined)
-        console.error("--role 已改为 --specialist；旧写法暂可用");
+      const role = str(values, "specialist");
       const q = role ? `?role=${encodeURIComponent(role)}` : "";
       const data = await (await client()).get<List>(`/workers${q}`);
       if (json) printJson(data);
@@ -111,10 +108,6 @@ export const workerCommands: Record<string, Command> = {
             ]),
           ]),
         );
-        for (const x of data.suggestions)
-          console.log(
-            `建议 ${x.stat.worker} · ${x.stat.role}：${x.advice.action}，${x.advice.reason}`,
-          );
       }
       recordNext("看执行者：atrium workers show 工具+模型[:强度]");
     },
@@ -246,58 +239,15 @@ export const workerCommands: Record<string, Command> = {
           incidents: string[];
           first_pass: boolean | null;
         }[];
-        suggestions: Advice[];
       }>(`/workers/${encodeURIComponent(worker!)}`);
       if (json) printJson(data);
       else {
         console.log(
-          `${data.worker}\n${data.profile.body}\n\n交付：\n${data.deliveries.map((d) => `${d.task_ref} ${d.task_title} · ${d.job_name ?? "未指定"} · ${d.final_result} · ${duration(d.duration_ms)}${d.gate_returns.length ? ` · 关卡：${d.gate_returns.join("；")}` : ""}${d.merge_returns.length ? ` · 合入退回：${d.merge_returns.join("；")}` : ""}${d.rebase_conflicts ? ` · 变基冲突 ${d.rebase_conflicts} 次（不归责）` : ""}${d.incidents.length ? ` · 事故：${d.incidents.join("、")}` : ""}`).join("\n") || "暂无"}\n${data.suggestions.map((x) => `建议：${x.advice.action} · ${x.advice.reason}`).join("\n")}`,
+          `${data.worker}\n${data.profile.body}\n\n交付：\n${data.deliveries.map((d) => `${d.task_ref} ${d.task_title} · ${d.job_name ?? "未指定"} · ${d.final_result} · ${duration(d.duration_ms)}${d.gate_returns.length ? ` · 关卡：${d.gate_returns.join("；")}` : ""}${d.merge_returns.length ? ` · 合入退回：${d.merge_returns.join("；")}` : ""}${d.rebase_conflicts ? ` · 变基冲突 ${d.rebase_conflicts} 次（不归责）` : ""}${d.incidents.length ? ` · 事故：${d.incidents.join("、")}` : ""}`).join("\n") || "暂无"}`,
         );
         for (const w of data.profile.warnings) console.log(`警告：${w}`);
       }
       recordNext("看全部：atrium workers");
-    },
-  },
-  "workers confirm": {
-    args: "工具+模型[:强度] --specialist 专员 --action relax|tighten|avoid_specialist",
-    about: "秘书确认统计建议后写入组合档案",
-    options: {
-      role: { type: "string" },
-      specialist: { type: "string" },
-      action: { type: "string" },
-    },
-    positionals: [1, 1],
-    async run({ positionals: [worker], values, json }) {
-      const role = str(values, "specialist") ?? str(values, "role"),
-        suppliedAction = str(values, "action"),
-        action =
-          suppliedAction === "avoid_specialist" ? "avoid_role" : suppliedAction;
-      if (str(values, "role") !== undefined)
-        console.error("--role 已改为 --specialist；旧写法暂可用");
-      if (!role?.trim())
-        throw new Problem(400, "--specialist 不能为空", "usage");
-      if (suppliedAction === "avoid_role")
-        console.error(
-          "--action avoid_role 已改为 avoid_specialist；旧写法暂可用",
-        );
-      if (!action || !["relax", "tighten", "avoid_role"].includes(action))
-        throw new Problem(
-          400,
-          "--action 只能是 relax、tighten、avoid_specialist",
-          "usage",
-        );
-      const result = await (
-        await client()
-      ).post<{ worker: string; role: string; action: string; file: string }>(
-        "/workers/advice/confirm",
-        { worker, role, action },
-      );
-      if (json) printJson(result);
-      else
-        console.log(
-          `已确认 ${result.worker} · ${result.role}：${result.action}\n档案：${result.file}（已留修订）`,
-        );
-      recordNext(`看档案：atrium workers show ${worker}`);
     },
   },
 };

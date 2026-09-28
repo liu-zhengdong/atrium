@@ -20,13 +20,16 @@ atrium               # 启动或复用后台服务，输出地址、PID 与数�
 atrium status        # 服务状态、地址、数据与日志位置
 atrium auth status   # 本机用户认证状态（不启动服务）
 atrium stop          # 停止服务，保留数据；在跑的执行者不受影响，下次启动时接管
+atrium pause         # 一键停机：不再派活、不叫醒任何人（--part 节点 / --host hN 只停一块或一台）；atrium resume 恢复
 atrium --help        # 全部命令
 atrium guide         # 调用约定、退出码与命令参考（给 Agent 读）
 ```
 
-服务默认只监听本机 `127.0.0.1:4310`，同一数据目录只运行一份；除启动、`status`、`stop`、`auth status` 外，命令都经服务完成，服务不在就自动拉起。后台日志在数据目录的 `service.log`。
+服务默认只监听本机 `127.0.0.1:4310`，同一数据目录只运行一份；除启动、`status`、`stop`、`auth status` 外，命令都经服务完成；只有 `atrium`（或 `atrium start`）启动服务，别的命令在服务没在跑时报错并提示 `atrium start`，不自动拉起。后台日志在数据目录的 `service.log`。
 
 端口被占时不拉起服务、不建数据目录：占着的是另一份数据的 Atrium，回执给出它的数据目录（`端口 4310 已被另一份数据的 Atrium 占用：数据在 X；要用它请设 ATRIUM_DATA=X`）；是别的程序则提示换 `ATRIUM_PORT`。前一代聊天运行时的数据目录 `~/.pi/atrium/data` 已归档，新一代不读不写；只有它、还没有 `~/.atrium` 时，启动与 `atrium status` 会提示一句。
+
+**一键停机**：`atrium pause [--why 原因] [--stop]` 停下一切自主动作——不派活（自动派发、排队拉起、重试换人）、不生成周期任务、不叫醒 leader 与后台秘书、合入、审阅、上线验证与发版都不推进；事件照常落库，但不投给等待的人。在跑的执行者缺省跑完、不接新的，`--stop` 一并停掉。`--part 节点` 只停那一块（派活、周期任务、合入、leader），`--host hN` 只是不往那台派活与检查。`atrium status`、`top`、状态栏醒目显示谁、何时、为什么暂停；`atrium resume [同上]` 恢复，排着的按顺序拉起，到点的周期任务只补一轮。旧的 `host pause/resume`、`schedule pause/resume` 已并进来：启动时把暂停着的主机转成主机暂停，暂停着的周期任务转成一次全局暂停。
 
 ## 任务账本
 
@@ -108,7 +111,7 @@ atrium task add "回复一句话" --deliver none
 atrium task pick t4                         # 看候选（只读）：能不能接、账号额度、正忙、交付记录，最上面是推荐与理由
 atrium task run t4 --worker claude          # 派给执行者；不写 --worker 按额度挑，--risk 缺省 low
 atrium task run t5 --urgent                  # 紧急：走紧急通道（抢占、快车道、10 分钟没进展换人）
-atrium task add "修弹窗" --urgent --stopgap "atrium host pause h3; atrium task stop t1,t2" --avoid-host h3  # 先止损再派修复
+atrium task add "修弹窗" --urgent --stopgap "atrium pause --host h3; atrium task stop t1,t2" --avoid-host h3  # 先止损再派修复
 atrium task run t7 --worker agy             # 还在排队的任务：改派执行者（及 --risk），排队位置不变；新执行者空着就立刻拉起
 atrium task run t7 --host h3                # 还在排队的任务：改派到 h3（钉住只去那台），接不了拒绝、排队不变；h3 空着就立刻拉起
 atrium task set t6 --priority 普通           # 管方面的部分开的任务缺省「闲时」，改成普通照常排
@@ -128,7 +131,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 
 `atrium top` 的**全景**段（#322，取代原来的目标段）列出根下两层的各块：状态点（● 有任务在跑、✕ 有任务卡住、○ 空闲）、人话名、子树里在跑／卡住／待办的任务数（按任务的归属部分计，没有归属时按负责节点）和一句「是什么」；`--depth N` 展开至 N 层（1～8），超出行数折叠并提示 `atrium map`。`top --json` 带 `map` 字段（与 `/api/map/tree` 同形），供状态栏读取。
 
-下面是**排期**：就绪的（记账节点、是否 `--auto`、负责人）、依赖链（同一条链按先后缩进，标题给出最长路径）、等待中的（逐项列出在等谁：上游状态、在跑的执行者与已跑时长、上游交付 PR 的合入状态、外部 PR 条件）与因上游失败或取消卡住的；任务行标出归属部分 `oN`（迁移前的旧任务标里程碑 `gN`），总任务不进排期、只作分组标题。就绪、等待中与卡住的件数和状态栏、`task plan` 用同一个函数算（`server/tasks/plan-count.ts`，`/api/tasks/plan` 的 `counts`），口径一致。行数超出折叠并提示 `atrium task plan`，`--json` 带 `plan` 字段。
+下面是**排期**：就绪的（记账节点、是否 `--auto`、负责人）、依赖链（同一条链按先后缩进，标题给出最长路径）、等待中的（逐项列出在等谁：上游状态、在跑的执行者与已跑时长、上游交付 PR 的合入状态、外部 PR 条件）与因上游失败或取消卡住的；任务行标出归属部分 `oN`，总任务不进排期、只作分组标题。就绪、等待中与卡住的件数和状态栏、`task plan` 用同一个函数算（`server/tasks/plan-count.ts`，`/api/tasks/plan` 的 `counts`），口径一致。行数超出折叠并提示 `atrium task plan`，`--json` 带 `plan` 字段。
 
 派活时运行时建 worktree（没有仓库时用任务目录下的 `work/`），把标题、详述（`--brief`）、岗位章程、仓库 `.agents/README.md`、执行者档案正文和通用约束拼成提示词，以白名单环境在独立进程组拉起执行者；服务重启不带走执行者，重启后按 pid 接管或判失败。
 
@@ -137,7 +140,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 **紧急任务**（t113、t215 紧急通道）：`task add … --urgent`、`task set tN --urgent|--no-urgent`、`task run tN --urgent`（派的同时标上）。有紧急任务时全系统先保它：
 
 - **谁能标**：用户、秘书随时可标；leader 可标但必须写原因（`--why …`，建任务、改任务、派活时都认），并知会秘书与用户（`urgent_marked`）；不加审批。`task show` 写明谁标的、为什么。同时进行的紧急任务多于 2 个时，回执、`top` 与状态栏提示「紧急任务有 N 个，太多就等于没有紧急」，不拒绝。
-- **先止损**：`--stopgap "atrium host pause h3; atrium task stop t1,t2; atrium host clean h3"`（分号、换行或 && 隔开，atrium 可省；接口也收结构化数组 `[{kind:"host_pause",host:"h3"}]`）。只认这三种动作，不执行任意命令；只有紧急任务能写，leader 不能写（会越过它的权限）。建任务（或 `task set --stopgap` 改写）时立刻逐条执行，结果记进 `stopgap` 事件、回执逐条写 ✓/✗；派修复时还没执行过的先执行。`host clean hN`（也可单独 `atrium host clean hN`）停掉 Atrium 在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树：本机由服务、远程主机由那台的 `atrium agent` 核对（命令行里是那个工具、启动时刻落在任务建立与结束之间，用户自己开的同名工具不碰），整树结束（Unix 进程组，Windows `taskkill /T /F`）。回执逐条列出任务、pid 与工具，每条记进所属任务的 `leftover_killed` 事件；远程离线或代理太旧时写明没清成。
+- **先止损**：`--stopgap "atrium pause --host h3; atrium task stop t1,t2; atrium host clean h3"`（分号、换行或 && 隔开，atrium 可省；接口也收结构化数组 `[{kind:"host_pause",host:"h3"}]`）。只认这三种动作，不执行任意命令；只有紧急任务能写，leader 不能写（会越过它的权限）。建任务（或 `task set --stopgap` 改写）时立刻逐条执行，结果记进 `stopgap` 事件、回执逐条写 ✓/✗；派修复时还没执行过的先执行。`host clean hN`（也可单独 `atrium host clean hN`）停掉 Atrium 在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树：本机由服务、远程主机由那台的 `atrium agent` 核对（命令行里是那个工具、启动时刻落在任务建立与结束之间，用户自己开的同名工具不碰），整树结束（Unix 进程组，Windows `taskkill /T /F`）。回执逐条列出任务、pid 与工具，每条记进所属任务的 `leftover_killed` 事件；远程离线或代理太旧时写明没清成。
 - **立刻拿到资源（抢占）**：主机满了或太忙、独占工具被占着时，先暂停在跑的闲时任务，没有闲时的再暂停普通任务（同一档先停最晚拉起的），紧急的不暂停；独占工具被普通任务占着就暂停它、等它让出后立刻拉起。被暂停的任务转受阻，记下会话与工作树（`task_preemptions`），`top` 与状态栏写「被紧急 tN 抢占暂停，之后自动续上」；紧急任务都不在跑、启动或排队后自动续上：同一执行者且能续会话（claude）就续原会话，否则把说明写进提示词在原工作树重派。暂停与续上各记 `preempted` / `resumed` 事件（知会级）。
 - **挑最快最稳的执行者与主机**：不写 `--worker` 时不看额度富余，按交付记录的一次通过率（记录少的向 0.5 收拢）、通过率差不到 5 个点时看中位耗时、正忙的最后；额度保留、trust / `max_risk`、依赖照旧。主机先挑不用抢占的，同样时本机优先；任务写了 `--avoid-host hN[,hM]` 的主机（派活与本地检查）一律不去，被暂停的主机也不派。
 - **快车道**：合入前的检查插到最前立刻跑、不占并发名额，本机是检查基准平台就在本机跑（不去远程传提交、装依赖）；要合入前审阅的，先进合入队列、审阅并行，审阅打回就开一件跟进任务（附审阅意见）投给负责人，合入不受影响；有紧急任务在合入流程里（排队合入、合入中、已合入等上线）时，其他任务的合入先暂停（`merge_paused`，看板写「合入暂停：等紧急 tN 先上线」），正在合入的普通任务在发出 gh 合入前让路、回到排队合入的原位置（`merge_yielded`），紧急的上线后再继续；合入后每 15 秒催一次上线，发版了立即自升级，不等普通任务的合入。
@@ -173,9 +176,7 @@ cat grok.md | atrium workers edit models/grok-4.6 --file -
 
 **自动合入**：PR 任务过交付关卡后进入持久化的串行合入队列。运行时从仓库 `origin` 核对 PR，rebase 到最新默认分支，在任务 worktree 重跑 `.agents/check`（没有则 `npm run check`），通过后用检查过的头提交执行 `gh pr merge --squash --match-head-commit`；gh 查询与合入都明确带 `-R`。rebase 冲突、本地检查失败或 gh 合入失败会把文件名、失败用例和日志位置写进事件及补充说明，在原工作树与原分支重派原执行者；第三次交回转卡住并通知负责人。合入中断后从账本续上，`atrium task show tN`、`atrium top --once` 和 `atrium org show oN --detail` 可看阶段。远端 CI 仍只供参考，不挡合入。
 
-**检查并行、合入串行**（t254）：队首在合入时，排在它后面的几件（缺省本机检查并发名额减一、至多 3 件，`ATRIUM_MERGE_PRECHECKS` 另配，0 关掉；本机太忙时不做）先在各自工作树里 rebase 到本机已取到的 main、提前跑检查，记下检查的提交与「基于哪个 main 提交」（`merge_prechecked`）。轮到它合入时 fetch 最新 main：main 没动，或只前进了与它不改同一批文件、也不改依赖与检查配置（`package.json`、锁文件、`tsconfig*.json`、`.agents/check` 等）的提交，就用这次检查的结果按检查过的提交合入（`merge_check` 带 `reused`）；否则照常 rebase 到最新 main 再跑一遍（`merge_precheck_unused` 写原因）。提前检查没过而 main 没动，直接按这个结果交回；用复用结果合入被 GitHub 拒了（如要求分支跟上 main），回头 rebase 重跑一遍再合，不算交回。轮到它时提前检查还在跑就接着等它跑完。合入仍一件一件来，`--match-head-commit` 始终是检查过的提交。判定在 `server/tasks/merge-precheck-plan.ts`。`atrium top` 抬头与状态栏写「排队合入 16 · 还要约 2 小时 10 分」：按最近 24 小时内最多 20 件合入的平均用时（每件从开始合入到已合入，单件按 1 小时封顶）估，`top --json` 的 `merge_queue` 给出件数、平均用时与预计毫秒数；排队中的任务写「排队合入：提前跑检查」「已提前检查过」。
-
-**合入前审阅**：任务 `--risk high`，或执行者档案 `trust` 低于 `medium`（没写按 `unknown`）时，PR 先进「审阅中」：运行时另建一个 `审阅 tN：…` 任务（`--deliver none`），自动挑一个与原执行者不同工具、不同模型且 `trust` 至少 `medium` 的执行者，按清单只读审代码，最后一行写 `审阅结论：通过` 或 `审阅结论：打回`。通过进合入队列；打回把意见交回原执行者，与冲突、检查失败共用交回次数，第三次转卡住；最后一行结论没按格式写时，运行时先请同一审阅者续上会话补答一次（专员审查、会审意见与汇总同样）；审阅者失败、补答后仍没结论、挑不到人或被停止才转卡住并通知负责人。审阅任务本身不单独投递事件；进审阅时在原任务上发 `review_queued` 事件，带改动规模摘要（文件数、增删行数、改动最多的文件），`atrium task show tN` 可看审阅任务与事件。
+**合入前审阅**：任务 `--risk high`，或执行者档案 `trust` 低于 `medium`（没写按 `unknown`）时，PR 先进「审阅中」：运行时另建一个 `审阅 tN：…` 任务（`--deliver none`），自动挑一个与原执行者不同工具、不同模型且 `trust` 至少 `medium` 的执行者，按清单只读审代码，最后一行写 `审阅结论：通过` 或 `审阅结论：打回`。通过进合入队列；打回把意见交回原执行者，与冲突、检查失败共用交回次数，第三次转卡住；最后一行结论没按格式写时，运行时先请同一审阅者续上会话补答一次；审阅者失败、补答后仍没结论、挑不到人或被停止才转卡住并通知负责人。审阅任务本身不单独投递事件；进审阅时在原任务上发 `review_queued` 事件，带改动规模摘要（文件数、增删行数、改动最多的文件），`atrium task show tN` 可看审阅任务与事件。
 
 **自动上线**：合入的是服务自身仓库（`ATRIUM_UPDATE_REPO`，缺省 `liu-zhengdong/atrium`）的 PR 时，运行时每分钟拉一次标签，等发版工作流打出含该合入提交的版本；版本比运行中的新就执行 `atrium update --to <版本>` 与 `atrium restart`（在跑的执行者由新服务接管），新服务起来后把任务标为「已上线」，给负责人发 `online` 事件「tN 已上线（vX）」并附执行者在 PR 正文里写的「端到端验证」一节（派活时的通用约束要求写这一节）。同一版本只自升级一次：升级或重启失败（含 supervisor 回滚）发 `online_failed`；合入 30 分钟仍未发版发一次 `release_overdue`。自升级缺省只在用默认数据目录（`~/.atrium`）的安装版上开；开发中的 git 检出、测试与另给 `ATRIUM_DATA` 的隔离服务不动全局安装，停在已合入（`ATRIUM_SELF_UPDATE=1` 强制开、`=0` 关）。其他仓库只到已合入。
 
@@ -203,7 +204,7 @@ atrium host ls                        # 各台状态（在线、离线、待接�
 atrium host show h2                   # 一台的详情与在跑的任务
 atrium host show h3                   # SSH 隧道状态、最近错误、远端代理服务地址
 atrium task run t6 --host h2          # 派到 h2；atrium task wait / task log --follow 在本机照看
-atrium host pause h2                  # 暂停往 h2 派新活（在跑的照跑）；host resume h2 恢复；本机也可以 pause h1；谁、何时暂停与恢复见 host show
+atrium pause --host h2               # 暂停往 h2 派新活（在跑的照跑）；atrium resume --host h2 恢复；本机也可以 --host h1
 atrium host clean h2                  # 止损：停掉 Atrium 在 h2 跑的非紧急执行者，再结束那台上已结束任务留下的执行者进程树（逐条列出）
 atrium host remove h2                 # 令牌作废，那台的代理随即停下；有在跑的任务时拒绝
 ```
@@ -238,7 +239,7 @@ atrium host remove h2                 # 令牌作废，那台的代理随即停�
 
 ## 专员与执行者评价表
 
-专员不挂在组织树上，但有归属（#373）：不写 `--part` 是全组织共用的（前端、后端），写了就属于那一部分（安全专员属于安全）。一个任务能请的专员 = 归属链上各层的 + 牵涉部分的 + 全组织的；`--by`、`--ask` 与 `task pick` 都按这个范围，请不到时报错并列出能请的。`specialist ls` 缺省只列全组织的，`--part 部分` 列这一部分能请的（本部分的在前，上级与全组织的折成一行「另有 全组织的 前端、后端」），`--all` 展开。任务用 `--by` 指定一位干活的专员，派活会附专员说明与技能；用 `--ask` 请至多五位专员按清单审查。专员的优先执行者在额度、风险和档案约束内选择；评价表按执行者 × 干活的专员统计，已有 rN 短号与交付记录保留。
+专员不挂在组织树上，但有归属（#373）：不写 `--part` 是全组织共用的（前端、后端），写了就属于那一部分（安全专员属于安全）。一个任务能请的专员 = 归属链上各层的 + 牵涉部分的 + 全组织的；`--by` 与 `task pick` 都按这个范围，请不到时报错并列出能请的。`specialist ls` 缺省只列全组织的，`--part 部分` 列这一部分能请的（本部分的在前，上级与全组织的折成一行「另有 全组织的 前端、后端」），`--all` 展开。任务用 `--by` 指定一位干活的专员，派活会附专员说明与技能。专员的优先执行者在额度、风险和档案约束内选择；评价表按执行者 × 干活的专员统计，已有 rN 短号与交付记录保留。
 
 ```bash
 atrium specialist add 前端 --description "界面设计与实现" --body ./frontend-role.md --preferred claude+opus:high --checks screenshots --skills visual-design,design-dialogue
@@ -247,14 +248,13 @@ atrium specialist edit r1 --preferred claude+opus:high,codex+gpt-6-sol:high
 atrium specialist ls --json
 atrium specialist add 安全专员 --part atrium/security --description "查凭据与权限" --body ./security-role.md
 atrium specialist ls --part atrium/web     # 网页能请的：本部分的列表，继承的折成一行；--all 展开
-atrium task add "改页面" --by 前端 --ask 后端 --part atrium/runtime
+atrium task add "改页面" --by 前端 --part atrium/runtime
 atrium task set t1 --by 后端
 atrium workers --specialist 前端
 atrium workers show claude+opus:high
-atrium workers confirm claude+opus:high --specialist 前端 --action tighten
 ```
 
-`workers` 展示组合 × 干活的专员，并上卷到模型与工具；少于五次标「数据少」。建议只读，确认后才写组合档案（库里，留修订）。交付明细保留事实、缺失值与旧任务回填标记；`task note --verdict ok|fixed|rejected` 记录秘书的上线验证或用户纠正。
+`workers` 展示组合 × 干活的专员，并上卷到模型与工具；少于五次标「数据少」。要调信任度等用 `atrium workers edit` 改组合档案（库里，留修订）。交付明细保留事实、缺失值与旧任务回填标记；`task note --verdict ok|fixed|rejected` 记录秘书的上线验证或用户纠正。
 
 ## 额度
 
@@ -327,7 +327,7 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 - **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。只有默认数据目录的服务缺省唤醒；另给 `ATRIUM_DATA` 的隔离服务（压测、验收）库里有 leader 也不起真进程、不耗额度，事件留在收件箱，要唤醒设 `ATRIUM_LEADER_WAKE=1`（`=0` 在默认目录也关）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
 - **以动作收尾，挂久了再叫醒或上交**（t253）：提示词要求每件事落到一个动作上——重新派发、重新排进合入队列（`task merge`）、改依赖、取消、开修复任务或上交；只写备注不算处理完。运行时每分钟看一遍受阻任务：持球人是 aN（等它处理、它已接手或在处理、下层上交给它），从受阻或上交给它那一刻算起过了 30 分钟（`ATRIUM_LEADER_HANG_MINUTES` 可调，`0` 关闭），就再叫醒它一次（事件 `hanging`「挂着没动」，写挂了多久、可选动作；任务记 `hang_nudged`）；叫醒后再过 30 分钟仍在它手里，运行时代为上交上一层（没有就秘书，事件 `escalated`，`by: runtime`，任务记 `escalated` 且 `from: runtime`）。重派、改状态、上交都会让任务离开「受阻、在 aN 手里」或重新起算；备注不改状态，不算动作。持球的 aN 已不在登记里时到点直接上交。状态栏、`top`、`task show` 的「球在谁手里」在 leader 手里时句末写挂了多久，如「自动派发失败 · a3 在处理 · 挂 3 小时」。判定在 `server/leaders/hang.ts`，巡检在 `hang-runtime.ts`。
 - **上游失败时写清下游怎么办**（t253）：任务失败或上线失败时，给负责人的事件带 `downstream`（没结束的直接下游，至多列 10 件）与 `downstream_hint`：下游有哪些，可选重派上游、去掉依赖（`task set tM --after 其余上游`）或一起取消；下游因上游失败被排期卡住时，投给下游负责人的 `blocked` 事件同样带 `downstream_hint`。
-- **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，给这些节点排周期任务（`schedule add/pause/resume/run/rm`），写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
+- **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，给这些节点排周期任务（`schedule add/run/rm`），写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
 - **上交**只有四类：`shipped` 已上线（里程碑完成，须带 `--task`，说明里附端到端验证）、`cross` 需要别的部分配合、`beyond` 越过权限／预算／硬边界、`stuck` 搞不定（卡住多次、拿不定）。生成一条投给上一层 leader（没有就秘书）的「要处理」事件 `escalated`，带 `--task` 时任务上也记一笔。转交下层 leader 投给自己的上交时不另起一条：`--event` 给那条的编号（不给时按同任务、同类型认最近一条，未确认或确认不到 6 小时的），上一层收到的仍是一条，`from`、`reason` 是下层原文，`forwarded` 逐层记「谁看过、一句意见」；原事件替转交人确认掉，唤醒收尾时不会再转交一次。
 - **连续性**存在 Atrium：节点要点、阶段、交付记录与 leader 的备忘和决定记录，不靠进程上下文。`org tree`、`map --json`（`leader_state`；`lead` 是这一块归谁管，含从上级继承的）、`atrium top` 显示每个节点的 leader 与最近一次唤醒、在处理什么（人话，如「t84 上线」）。
 - **看得到**：全景网页每块标题下有「负责人」一行（名字与在处理什么，点开是负责人页），顶栏在它处理时写「Atrium 负责人在处理」；leader 建的任务在任务行注明「Atrium 负责人派的」，备注作者给名字（`task ls/show` 显示「Atrium 负责人（a1）」，接口字段 `note_by_name`）。状态栏读 `GET /api/leaders` 的 `busy`：`[{ref, name, doing, since}]`，只列正在处理的 leader，空闲为空数组。
@@ -411,7 +411,7 @@ atrium product ls                                  # 各产品部：管哪一块
 atrium schedule run s3                             # 不等到点，马上跑一轮研究
 ```
 
-- **一条命令建好**：在节点下建一块普通部分（人话字段写好它管的是这一块的演进）、登记它的 leader（`--worker` 不给时沿用往上最近的 leader 的执行者）、挂一条 `--kind research` 的周期任务（缺省每周，`--every`、`--at` 可改；以后用 `schedule pause/resume/rm` 管）。
+- **一条命令建好**：在节点下建一块普通部分（人话字段写好它管的是这一块的演进）、登记它的 leader（`--worker` 不给时沿用往上最近的 leader 的执行者）、挂一条 `--kind research` 的周期任务（缺省每周，`--every`、`--at` 可改；以后用 `schedule run/rm` 管，要停用 `atrium pause --part 节点`）。
 - **每轮研究**：任务详述按模板现取材料——这一块的全景（是什么、能做什么、怎么走完、组成、现状、接下来）、最近的选项单（还在等拍板的不重复提）、有效的决定记录（含上一轮没选的「这轮不做 X」）、巡检发现、近 30 天失败或被打回的任务、完成与上线的任务；研究者可以上网看同类产品与社区动向，只在工作目录写 `choice.json`，不写代码、不开 PR。研究任务只在本机跑。
 - **大方向与小改进分开**：选项单只放大方向——新的用户可感知能力、新概念或新工作方式、跨多个组成部分、或要做好几天的事，每份 3–5 个，按「能多做到什么」讲清楚，不拿细节修补凑数。一两个任务、一天内能做完、不改变用户用法的修补与优化写进 `small`，不进选项单，交这一块的 leader 自己定（见下面「小改进」）。
 - **收尾**：研究任务完成时运行时读 `choice.json`，登记成挂在这一块上的选项单（提的人记产品部 leader，出自这件任务），照下面「选项与拍板」的规则叫醒秘书或 leader；文件缺了或不合格不挡任务完成，错误和修补命令写进完成事件交给产品部 leader。
@@ -439,7 +439,7 @@ atrium product show atrium                         # 看这个节点上的选项
 
 ## 推送到手机（Telegram）
 
-不在电脑前时，三类事推到手机上的 Telegram：选项单等你拍板、上交到你这层（秘书）的卡住或越界（含会审要你拍板）、里程碑上线；另外紧急任务上线、卡住（换人也没进展）、止损没做成也推（如「【紧急任务卡住】t5 修线上」），同一任务同一阶段只推一次，开始、交付、检查、合入这些知会阶段不推。过程事件（派活、完成、失败、合入、CI）不推；推送只带类别、短号和标题（如「【等你拍板】c2 Atrium 下一步」），不带上交说明、选项内容等正文。
+不在电脑前时，三类事推到手机上的 Telegram：选项单等你拍板、上交到你这层（秘书）的卡住或越界、里程碑上线；另外紧急任务上线、卡住（换人也没进展）、止损没做成也推（如「【紧急任务卡住】t5 修线上」），同一任务同一阶段只推一次，开始、交付、检查、合入这些知会阶段不推。过程事件（派活、完成、失败、合入、CI）不推；推送只带类别、短号和标题（如「【等你拍板】c2 Atrium 下一步」），不带上交说明、选项内容等正文。
 
 ```bash
 pbpaste | atrium notify token        # 先在 Telegram 找 @BotFather 建机器人；token 从标准输入给（Windows：Get-Clipboard | atrium notify token）
@@ -528,15 +528,13 @@ atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板 --
 atrium map add atrium 安全 --slug security --kind aspect     # 管方面的部分：要点横跨多个部分
 atrium map edit atrium/security --applies atrium/web,atrium/cli  # 它的要点缺省适用于哪些部分；空串改回整个上级
 atrium org edit atrium/perf --kind aspect --reason 横向看性能   # 已有部分改成管方面；改回 module 前要先清掉适用范围
-atrium map draft ~/code/openquota --node openquota  # 从本机仓库起草这一块的全景初稿（一次性执行者只读仓库）
-atrium map apply t12 --dry-run                     # 看初稿和写进节点会改哪些字段；不带 --dry-run 才写进去
 atrium patrol run atrium/cli                       # 手动巡检一条 uses 场景；下一次轮换到下一条
 atrium patrol findings atrium/cli                  # 看发现及 leader 的处理结果
 atrium schedule add atrium/cli --kind patrol --every 1d --at 09:30  # 每天 09:30 巡检一次
 atrium schedule add atrium 周报 --every 7d --brief 周报.md          # 每周在节点下建一件普通任务
 atrium schedule run s1                             # 马上跑一轮，不改下次时间
 atrium schedule ls --node atrium                   # 列该节点及下层的周期任务；show s1 看最近几轮
-atrium schedule pause s1                           # 暂停；resume 续上（暂停期间不补），rm 删除（sN 不复用）
+atrium schedule rm s1                              # 删除（sN 不复用）；要停一块用 atrium pause --part 节点
 ```
 
 体验巡检以当前用户环境使用安装版服务与默认数据目录；隔离服务启动时显式设置的 `ATRIUM_DATA`、`ATRIUM_PORT` 会传给巡检进程。巡检只看全景人话字段、帮助与命令回执，不读代码。巡检进程用 `atrium patrol report tN --phenomenon 现象 --step 步骤 --command 命令 --expected 预期 --actual 实际 --kind broken|awkward` 记发现；同节点同现象去重，已忽略的也不再报。任务结束后新增发现投给节点 leader，leader 开任务后用 `atrium patrol decide fN --task tN` 关联，或用 `--merge tN` 并入已有任务，或用 `--ignore 原因` 记下忽略理由。全景节点的「巡检发现」页签与 `map --json` 都显示处理结果。
@@ -547,44 +545,38 @@ atrium schedule pause s1                           # 暂停；resume 续上（�
 - **布局**：一块一页。顶栏是面包屑（从根到当前块，可点回上层）和「在做 N 件」——数字是当前部分含其子部分的在跑数，专员页与执行者页显示全组织的「全组织在做 N 件」；下面是小字类别（组织／部分／管方面的部分／专员）、人话名与介绍。组织节点展示组成部分、任务、专员、要点与巡检发现（现象、步骤与命令、预期与实际、处理结果）。任务默认只看进行中，可切「全部」；「最近在做」一列里执行者写的 http(s) 链接（如 PR 地址）点得开，新标签页打开。
 - **横跨部分**（#373）：组成部分里管方面的部分（如安全）名字旁标「管方面」，它的页头类别写「管方面的部分」、属性行「适用于」列出缺省适用的部分（没写为「整个 Atrium」），要点下一行小字写各自的适用范围。其他部分的「要点」页签另列别处适用于这里的要点，来自写成「安全 · 适用于网页」。任务行标题下写「也牵涉安全、命令行」（自动牵涉的悬停说明）；牵涉某部分却归别处的任务也列在那一部分的任务页签里，标题下写「归网页」。
 - **专员按层**：部分页的「专员」页签只列属于这一块的专员，上级的、全组织的、牵涉部分的折成一行「还能请：全组织的 前端、后端」，点开（`/map#o4/roles/all`）一起列并在名字下注明属于哪儿；组织根列全组织共用的，属于各部分的折成末尾一行。专员页属性行多一项「属于」。
-- **组织根**：页签是 **组成部分／负责人／专员／技能／执行者／要点／巡检发现**。负责人（负责哪几块、现在在处理什么或空闲、执行者，整行点进负责人页）。专员是全组织共用的名单，记录工作说明、技能、优先执行者、交付要求、审查目标与清单；技能显示用途、挂在哪位专员或部分、最近一次修订。执行者按组合 × 干活的专员统计交付次数、一次通过率（80% 以上绿、50% 以上黄、更低橙，少于 5 次标「数据少」）、平均打回、一般用时、出事与信任；右上角可按专员筛选。上方浅黄条显示 `atrium workers` 的升降建议，写「等秘书确认」，网页不给按钮，确认走 `atrium workers confirm`。
+- **组织根**：页签是 **组成部分／负责人／专员／技能／执行者／要点／巡检发现**。负责人（负责哪几块、现在在处理什么或空闲、执行者，整行点进负责人页）。专员是全组织共用的名单，记录工作说明、技能、优先执行者、交付要求；技能显示用途、挂在哪位专员或部分、最近一次修订。执行者按组合 × 干活的专员统计交付次数、一次通过率（80% 以上绿、50% 以上黄、更低橙，少于 5 次标「数据少」）、平均打回、一般用时、出事与信任；右上角可按专员筛选。上方浅黄条显示 `atrium workers` 的升降建议，写「等秘书确认」，网页不给按钮，确认走 `atrium workers confirm`。
 - **专员页**（`/map#r1`）：面包屑「全部 / 专员 / 前端」，属性行是优先派给、交付要求、技能；页签是任务（带进行中／全部）、谁做得好、技能。**执行者页**（`/map#w/claude+opus:high`）：属性行是信任、交付次数与一次通过、接过的专员；页签是交付记录（任务、专员、结果、用时、经过——事故、验收没过的原因、合入退回，冲突注明不算它的）与观察（执行者档案里带日期的记录，如「（2026-09-27 你纠正：……）」；冒号前没写人的算秘书记的）。**负责人页**（`/map#a1`）：属性行是负责哪几块（可点）、现在（在处理什么、几点开始；空闲时给上次处理的事）、执行者；页签是备忘（它记着的在等什么、下次先看什么）、处理过的事（投给它的要处理事件：任务、什么事、说明、结果——等它处理／在处理／处理完／转交上级）与上交（类型、任务、说明、交给谁、对方看没看）。找不到专员、执行者或负责人时，页面说明原因并给回到最上层的链接。
 - **地址**：当前页、页签与筛选写在地址里（如 `/map#o2/tasks/all`、`/map#o1/workers/r1`、`/map#r1/workers`），刷新与前进后退回到原处；窄屏（≤ 720px）表格降为卡片式行，不横向滚动。
 - **实时**：网页订阅 `/api/map/stream`（Server-Sent Events）。全服务一份变更检测（版本号，不扫全表），变了给所有打开的页推 `changed`，网页只重取并重画变了的区域；组织根首屏不取执行者统计，画完再补。另每 30 秒刷新一次执行者的最近动作与时长。
 - **派活**：`map context` 的内容自动附进执行者提示词，与「章程要点」同一段、放在最前（任务有归属部分时取归属部分，否则取负责节点）；归属链之外再附「牵涉部分的要点」：任务 `--also` 牵涉的部分的要点，以及管方面的部分里适用于归属部分的要点（自动牵涉），每条注明来源（如「安全 · 适用于网页」）。全景这段不超过 1500 字，按「位置链 > 本块是什么 > 本块要点 > 上级要点与牵涉部分的要点 > 上一层是什么 > 现状 > 组成 > 更上层」保留，截了就在末尾给全文命令。提示词只附本任务用到的专员（干活的与请来看的）。
 - **管方面的部分**（#373）：除了管东西的部分（命令行、网页、派活），还有管方面的部分（安全，以后可能有性能、体验），它们的要点横跨多个部分。`map add … --kind aspect` 建，已有部分可用 `org edit … --kind aspect|module` 改类型（只切「管方面」标记，留节点修订；project/org 不能改成 aspect；改回 module 前要先清掉要点与部分的适用范围，否则报错并列出命令），`map edit … --applies` 写它的要点缺省适用于哪些部分，单条要点可用 `org point-add/point-edit --applies` 覆盖；都不写即适用于整个上级。`map --json` 给 `aspect`、`applies` 与本块适用的别处要点 `points_applied`。
-- **从仓库起草**（t186）：`map draft 仓库路径` 先由运行时只读地取 README 开头、两层目录（隐藏文件与 `.env`、密钥、证书、名字带 secret/credential 的文件不列）、最近 20 条提交和去掉内嵌凭据的 origin，排进详述，再按 `task run` 同一条路派一次性执行者（不交 PR、不建 worktree、只在本机跑）。执行者只读仓库、可用 `gh issue list` 看开着的 issue，在自己的工作目录写 `overview.json`（name、alias、analogy、what、uses、flow、parts）；任务完成时运行时读它、校验后存下，完成事件带 `draft: ready` 与下一步，读不到或不合格带 `draft_error`，不挡任务完成。`map apply tN --dry-run` 给你看初稿和写进节点会改哪些字段；确认后 `map apply tN --node 节点` 才写人话字段（没给的不动，组成部分留给建节点），同一份初稿只写一次，权限同 `map edit`。起草与写入只给用户令牌。
-- **权限与修订**：`map edit` 的人话字段（what、uses、flow、alias、analogy、now、next、when）直接覆盖当前值，不留修订、无需 `--rev`；`--detail` 是章程正文，仍留章程修订，`--rev` 仅用于此。`map add` 的节点创建仍留节点修订，人话字段不留修订。硬边界、份额等组织规矩仍按章程修订。负责部门 leader 或其上级可改（`--as aN`），根只有你能改。
+- **权限与修订**：`map edit` 的人话字段（what、uses、flow、alias、analogy、now、next）直接覆盖当前值，不留修订、无需 `--rev`；`--detail` 是章程正文，仍留章程修订，`--rev` 仅用于此。`map add` 的节点创建仍留节点修订，人话字段不留修订。硬边界等组织规矩仍按章程修订。负责部门 leader 或其上级可改（`--as aN`），根只有你能改。
 
 ## 组织树
 
-组织、项目、模块三类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严，显式分配给兄弟的份额之和不得超过父节点的可分配量。根章程只有用户 `u1` 能改（秘书拿用户令牌替用户改，`--as secretary`，修订如实记秘书），其余由节点 leader 维护（`--as aN`）。
+组织、项目、模块三类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader 与章程，每次修改存一版历史；子节点的硬边界只能比父节点更严。根章程只有用户 `u1` 能改（秘书拿用户令牌替用户改，`--as secretary`，修订如实记秘书），其余由节点 leader 维护（`--as aN`）。
 
 **修订署名**：章程、节点、要点、全景、技能、专员、执行者档案、任务备注与捎话的修订与事件记在 `--as` 名下：`u1` 是用户本人，`secretary` 是秘书（权限同用户，只是如实署名），`aN` 是节点 leader。`atrium chat` 起的秘书会话与服务后台恢复的秘书进程带 `ATRIUM_AS=secretary`，这些命令缺省就带 `--as secretary`；在别处当秘书（如 Claude Code 会话）时设同样的环境变量或显式写 `--as secretary`。只有用户本人操作才记 `u1`。
 
 ```bash
 atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md（隔离数据目录须给出路径）与仓库 .agents/modules 下待导入的模块（导入后仓库里删掉）
 atrium org import --repo . --apply                # 写入；重复执行不会重复建
-atrium org tree                                   # 节点层级、任务计数、预算份额与约用量
+atrium org tree                                   # 节点层级与任务计数
 atrium org show atrium/runtime                    # 先讲人话：是什么、能做什么、一件事怎么走完、由哪几部分组成、现状与阶段
-atrium org show atrium/runtime --detail           # 再展开细节：章程正文、目标链、硬边界、预算份额、能力卡、手上的任务
-atrium org show atrium/runtime --charter --raw > /tmp/章程.md
+atrium org show atrium/runtime --detail           # 再展开细节：章程正文、目标链、硬边界、手上的任务
+atrium org show atrium/runtime --raw > /tmp/章程.md
 atrium org edit atrium/runtime --charter /tmp/章程.md --reason 更新目标
 atrium org history atrium/runtime                 # 修订；--target charter --rev r2 看字段差异
 atrium org add atrium web --kind module --reason 拆模块
 atrium task add "改派活" --by 后端 --part atrium/runtime  # 干活的专员与归属部分
 atrium task add "接看板" --part atrium/runtime                      # 任务归属全景图上的哪一部分；task set --part '' 摘下
 atrium task add "改登录页" --part atrium/web --also atrium/cli      # 还牵涉命令行；task set --also '' 摘下
-atrium task add "改登录日志" --by 后端 --ask 前端         # 请前端来看；task set --ask '' 清空
-atrium review add "公开仓库" --concerns 前端,后端 --brief 议题.md   # 会审：专员并行出意见，leader 汇总一致与冲突、能定的定；--issue 号 --repo 仓库 --comment 同步为 issue 评论
-atrium review show t9                              # 各方意见（立场与原文）、一致与冲突、结论、需用户拍板的事
-atrium review decide t9 "先清理凭据，下周公开"          # 记下用户对上交事项的拍板（--as 缺省 u1）
-atrium org link-roles                             # 预览把旧 role 字符串的任务关联到节点；--apply 写入
 ```
 
-任务用 `--part 节点` 记录归属部分；旧 `--role` 组织节点写法暂时接受并提示改用 `--part`。旧 `--job` 与 `--concern` 也暂时接受，分别提示 `--by` 与 `--ask`。启动时旧关注点迁入专员清单；o6 安全、o7 质量是撤销的示例节点，原要点移到 o2 Atrium。
+任务用 `--part 节点` 记录归属部分、`--by 专员` 指定干活的专员；旧写法 `--role`、`--job`、`--concern`、`--ask`、`--goal` 已下线。
 
-章程 frontmatter 的 `budget` 分配份额，例如 `budget: { quota: { claude: 30, "*": 10 }, disk: 20, money: 0 }`。`quota` 数值是账号当前周期额度的百分点；具体账号覆盖 `*`。没有显式份额的节点使用父节点未分配给兄弟的共享池。`org show --charter --raw` 可导出并编辑。派活时按账号当前窗口用量估算节点子树的「约用」；份额不足 1 个百分点时换账号，全部不足则将任务置为受阻并通知节点 leader。OpenQuota 数据不可用时记录事件，不按份额拦截。节点 worktree 占满磁盘份额时也受阻（本机磁盘可用量不设下限，已合入或取消的任务工作树由运行时定期清掉）；档案 `billing: metered` 在钱份额为 0 时不可派。
+给用户保留的额度（`quota_reserve_percent`）与花费上限（`money_yuan_max`）写在根章程 `boundaries` 的 `param` 里；`org show --raw` 可导出并编辑。章程里的 `budget`（预算份额）已下线。
 
 ## 全景图（节点的人话介绍）
 
@@ -600,9 +592,9 @@ uses: ["提一句目标，等汇报", "看谁手上有什么"]
 flow: ["提目标", "秘书拆任务", "派给执行者", "关卡验收", "汇报"]
 now: "命令行跑通闭环"
 next: "全景图视图"
-stages: # 阶段记录；原目标树的 gN 迁来后 id 沿用 gN
+stages: # 阶段记录
   - id: g5
-    result: "节点、章程、边界、份额由机器校验"
+    result: "节点、章程、边界由机器校验"
     status: achieved # planned / active / achieved / blocked / dropped
     criteria: ["$ npm run check"]
     evidence: ["#287 已合入"]
@@ -617,34 +609,9 @@ atrium org point-edit k1 --check ''     # 改一条；--check '' 去掉检查，
 atrium org point-rm k1                  # 删掉过时的
 ```
 
-任务用 `--part 节点` 标归属哪一部分（谁负责），用 `--by 专员` 指定干活的专员（谁做、附什么技能），用 `--ask 专员[,专员]` 请专员来看。
+任务用 `--part 节点` 标归属哪一部分（谁负责），用 `--by 专员` 指定干活的专员（谁做、附什么技能）。
 
-任务**归**一个部分（负责与汇报只有一处），可以用 `--also 部分[,部分]` **牵涉**至多五个部分；管方面的部分有要点适用于归属部分时自动牵涉，不用写（`task show` 标「自动」）。牵涉带来三件事：派活附被牵涉部分的要点（注明来源）；能请被牵涉部分的专员；被牵涉部分最近的 leader 收到一条 `involved` 知会（不叫醒，下次唤醒时看到），它可以在任务上写备注或捎话，但不能派、停、改；要否决走会审。几位专员一起干默认是一个执行者兼带几方面的技能与检查清单，真要分头干再拆子任务。
-
-### 任务请专员
-
-`--ask` 至多请五位，执行中不能改，本轮交付后按各专员的 `review_goal`、`review_points` 与 `review_bottom` 派一次性审查任务；全部通过才完成；有否决或没出结论的留在受阻，交负责这件事的 leader（找不到交秘书）判断：认同就捎话重派，不认同就写明理由后 `atrium task merge tN` 放行（没有 PR 的用 `task done`），和专员谈不拢才上交。`task wait` 等到审查结论才返回。专员的 `invite_when` 可按关键词或路径提示是否该请，只提示、不自动请。`atrium specialist show rN` 可查看清单。
-
-### 会审
-
-影响面大、不可撤回的决定（公开仓库、归档旧代码、大版本）或疑难事故，由 leader 发起会审：`atrium review add 议题 --concerns 前端,后端 [--brief 议题.md] [--issue 号] [--leader 节点]`。
-
-1. **议题**：建一个议题任务「会审：议题」（记在 `--leader` 节点上，缺省由秘书主持），每位受邀专员一个意见子任务（按专员清单、只交摘要），详述写明议题原文、关联 issue、全部受邀专员，以及该专员的章程目标、要点与底线。
-2. **并行出意见**：意见任务同时派出，各是一个一次性执行者；摘要最后一行写立场：`意见：同意`、`意见：有条件同意：条件`、`意见：反对：原因` 或 `意见：否决：越过的底线`。失败、受阻或没写立场的算「没出意见」。
-3. **leader 汇总**：意见都不再跑后，运行时把各方意见原文写进议题任务的详述（`council-summary.md`），拉起议题任务本身做汇总：写「一致」「冲突」两段，能定的自己定，碰到用户定的边界或谈不拢的每条写一行 `需用户拍板：…`，最后一行 `结论：…`。
-4. **结局**：运行时读汇总记在议题上。专员否决由 leader 汇总时判断（认同就调整结论，不认同写明理由），谈不拢才标需用户拍板；汇总没写结论的先请 leader 补答一次。leader 标了需用户拍板、补答后仍没写结论、或专员都没出意见的转「需用户拍板」，投 `council_escalated`；其余转「已定」，投 `council_decided`。意见任务与汇总自己的完成不单独投递。`atrium task wait t9` 等到结局才返回。
-5. **记录与拍板**：`atrium review show t9` 看意见与结论；用户拍板后 `atrium review decide t9 结论` 记下（留拍板人，原上交事项保留）。`--comment`（需 `--issue` 与 `--repo`）让汇总任务把结论发成 issue 评论，由评论关卡查实。
-
-### 目标树迁移
-
-原目标树（`g1`……）迁为所在节点的阶段记录，保留结果、验收标准、状态和证据（达成说明与每条验收的最新判定），另记上级与前置：
-
-```bash
-atrium org migrate-goals            # 预览：各节点将迁入哪些阶段、哪些任务按目标回填归属部分
-atrium org migrate-goals --apply    # 只有你能执行：先整库备份到 <ATRIUM_DATA>/backups/，再一次写入
-```
-
-写入时阶段追加进负责节点的章程（留修订，可 `org revert`），挂在 `gN` 上的任务把归属部分填成该目标的负责节点（已有归属的不改），`goals` 表与任务原来的 `goal_id` 不改不删；重复执行只补新出现的，不重复写。写入后 `goal` 命令整组下线，回执指向该目标迁去的节点（`atrium org show oN`）。迁移前 `goal` 命令照旧可用，用法见 `atrium goal --help`。
+任务**归**一个部分（负责与汇报只有一处），可以用 `--also 部分[,部分]` **牵涉**至多五个部分；管方面的部分有要点适用于归属部分时自动牵涉，不用写（`task show` 标「自动」）。牵涉带来三件事：派活附被牵涉部分的要点（注明来源）；能用 `--by` 指定被牵涉部分的专员；被牵涉部分最近的 leader 收到一条 `involved` 知会（不叫醒，下次唤醒时看到），它可以在任务上写备注或捎话，但不能派、停、改；要否决走会审。几位专员一起干默认是一个执行者兼带几方面的技能与检查清单，真要分头干再拆子任务。
 
 ## 组织技能
 
@@ -712,7 +679,6 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 | `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载                                        |
 | `ATRIUM_FIX_RESERVE_PERCENT`    | 每台主机按执行者上限的百分之几给修复任务保底留位置（至少 1、至多 2），默认 25；`0` 不留                 |
 | `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的一半（至少 1）                                                            |
-| `ATRIUM_MERGE_PRECHECKS`        | 合入队列同时提前检查几件，默认本机检查并发减一（至多 3）；0 或 off 关掉                                 |
 | `ATRIUM_CHECK_TIMEOUT_MINUTES`  | 一次本地检查最多跑几分钟，默认 30；远程主机由代理按它那台的环境设                                       |
 | `ATRIUM_QUIET_MINUTES`          | 执行者或检查日志多久没进展发提醒（知会负责的 leader、状态栏显示），默认 5                               |
 | `ATRIUM_CHECK_STALL_MINUTES`    | 检查日志多久没新输出就结束这次检查并分类，默认 10；`0` 不结束；远程主机由代理按它那台的环境设           |
@@ -751,7 +717,7 @@ ATRIUM_PORT=4391 ATRIUM_DATA=$PWD/.atrium node bin/atrium.mjs stop
 | `bin/`、`cli/`    | 命令入口与各命令实现                                         |
 | `server/`         | 服务生命周期、单实例登记、用户认证、重启监督与升级           |
 | `server/tasks/`   | 任务账本、执行者适配器与档案、派活、关卡、看门狗、额度、事件 |
-| `server/org/`     | 组织树：节点、章程、能力卡、硬边界、修订                     |
+| `server/org/`     | 组织树：节点、章程、硬边界、修订                             |
 | `server/imports/` | 启动时把旧状态（任务详述、根章程预算）导入数据库，幂等       |
 | `server/skills/`  | 组织技能：修订、绑定、派活挂载、回收提议与三方合并           |
 | `tests/`          | 纯函数与接口测试；派活用假执行者和临时仓库                   |

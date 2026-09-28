@@ -36,7 +36,7 @@ import {
   specialistsForPart,
 } from "../server/tasks/specialist-scope.ts";
 import { remarkVerdict } from "../server/leaders/scope.ts";
-import { foldedLines } from "../cli/roles.ts";
+import { foldedLines } from "../cli/specialists.ts";
 import { specialistLine } from "../cli/tasks.ts";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
@@ -464,16 +464,6 @@ test("专员归属与任务牵涉：范围外报错并列出可选专员，--als
   ) as Problem;
   assert.equal(error.nextCommand, "atrium specialist ls --part o4");
   problem(
-    () =>
-      createTask(db, {
-        title: "请来看",
-        part: "o4",
-        ask: "安全专员",
-        deliver: "none",
-      }),
-    /ask: 安全专员/,
-  );
-  problem(
     () => createTask(db, { title: "没归属", by: "安全专员", deliver: "none" }),
     /本任务没有归属部分/,
   );
@@ -482,7 +472,6 @@ test("专员归属与任务牵涉：范围外报错并列出可选专员，--als
     part: "o4",
     also: "安全",
     by: "安全专员",
-    ask: "前端",
     deliver: "none",
   });
   assert.deepEqual(cli.also, ["o5"]);

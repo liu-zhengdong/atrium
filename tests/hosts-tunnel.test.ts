@@ -149,6 +149,7 @@ test("SSH 隧道：记录持久、退出重连、编辑重启、移除和关闭�
     });
     const view = hostView(hostRow(db, id), {
       polling: false,
+      paused: false,
       running: 0,
       tunnel: manager.status(id),
     });

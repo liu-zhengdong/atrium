@@ -3,10 +3,10 @@ import { dataDirectory, serviceUrl } from "../server/service-state.ts";
 import { pad, width } from "./format.ts";
 import { authCommands } from "./auth.ts";
 import { workerCommands } from "./workers.ts";
-import { roleCommands } from "./roles.ts";
+import { specialistCommands } from "./specialists.ts";
+import { pauseCommands, pauseLines } from "./pause.ts";
 import { taskCommands } from "./tasks.ts";
 import { orgCommands } from "./org.ts";
-import { goalCommands } from "./goals.ts";
 import { skillCommands } from "./skills.ts";
 import { topCommand } from "./top.ts";
 import { statuslineCommand } from "./statusline.ts";
@@ -21,8 +21,6 @@ import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
 import { secretaryCommands } from "./secretary.ts";
 import { mapCommands } from "./map.ts";
-import { draftCommands } from "./drafts.ts";
-import { reviewCommands } from "./reviews.ts";
 import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
 import { scheduleCommands } from "./schedules.ts";
@@ -37,6 +35,7 @@ import { closest, Problem } from "../server/problem.ts";
 import { commandOnly, failure, withContext, type Context } from "./contract.ts";
 import { example, groupOf, guide } from "./guide.ts";
 import { cliErrorMessage, optionError } from "./error-message.ts";
+import type { Pause } from "../server/pause.ts";
 
 export type Values = Record<
   string,
@@ -106,15 +105,14 @@ const restartCommand: Command = {
 
 export const commands: Record<string, Command> = {
   ...authCommands,
+  ...pauseCommands,
   // 看板放在任务组最前：先看谁在干活，再看单个任务。
   top: topCommand,
   statusline: statuslineCommand,
   ...taskCommands,
-  ...roleCommands,
+  ...specialistCommands,
   ...workerCommands,
-  ...reviewCommands,
   ...mapCommands,
-  ...draftCommands,
   ...orgCommands,
   ...leaderCommands,
   ...patrolCommands,
@@ -124,7 +122,6 @@ export const commands: Record<string, Command> = {
   ...secretCommands,
   ...choiceCommands,
   ...productCommands,
-  ...goalCommands,
   ...skillCommands,
   ...quotaCommands,
   ...eventCommands,
@@ -138,8 +135,16 @@ export const commands: Record<string, Command> = {
   restart: restartCommand,
 };
 export const service: [usage: string, about: string][] = [
-  ["atrium", "启动或复用后台服务，输出地址"],
-  ["atrium status", "查看服务状态、地址和数据目录"],
+  [
+    "atrium",
+    "启动或复用后台服务，输出地址（同 atrium start；只有这两个会启动服务）",
+  ],
+  ["atrium status", "查看服务状态、地址、数据目录与暂停"],
+  [
+    "atrium pause [--part 节点|--host hN] [--why 原因] [--stop]",
+    "一键停机：停下一切自主动作",
+  ],
+  ["atrium resume [--part 节点|--host hN]", "恢复 atrium pause 停下的"],
   ["atrium stop", "停止服务，保留数据；在跑的执行者由下次启动接管"],
   ["atrium restart", "平滑重启服务；在跑的执行者由新服务接管，不等空闲"],
   ["atrium update", "检查并更新 Atrium 版本；--to 指定目标版本"],
@@ -192,7 +197,6 @@ export function help(): string {
       "执行机器",
       "专员",
       "全景",
-      "目标",
       "组织",
       "备忘与决定",
       "资料",
@@ -232,7 +236,7 @@ export async function main(argv: string[]): Promise<number> {
         leaderCommandGuard(name);
         verifierCommandGuard(name);
       }
-      if (name === undefined || name === "--no-open") {
+      if (name === undefined || name === "--no-open" || name === "start") {
         if (rest.filter((part) => part !== "--json").length)
           throw new Problem(400, usage, "usage");
         // --no-open 是没有 Web 之前的写法，照旧接受，行为相同。
@@ -257,6 +261,14 @@ export async function main(argv: string[]): Promise<number> {
         await (name === "status" ? serviceStatus : stopService)(
           dataDirectory(),
         );
+        // 暂停着的醒目列出（谁、何时、原因）；服务没在跑或读不到就不列。
+        if (name === "status") {
+          const { connectRunning } = await import("./service.ts");
+          const pauses = await Promise.resolve()
+            .then(() => connectRunning()?.get<{ pauses: Pause[] }>("/pause"))
+            .catch(() => undefined);
+          for (const line of pauseLines(pauses?.pauses)) console.log(line);
+        }
         return 0;
       }
       if (name === "guide") {
@@ -403,7 +415,8 @@ export async function main(argv: string[]): Promise<number> {
   });
 }
 function defaultNext(name: string): string | null {
-  if (name === "" || name === "--no-open") return "停止：atrium stop";
+  if (name === "" || name === "--no-open" || name === "start")
+    return "停止：atrium stop";
   if (name === "update") return "生效：atrium restart";
   if (name === "restart") return "查看状态：atrium status";
   if (name === "status") return "看任务：atrium top";

@@ -54,10 +54,6 @@ export function ensureEventTables(db: DatabaseSync) {
   db.exec(
     `UPDATE task_inbox SET level='info' WHERE kind='online' AND level='action' AND json_valid(detail) AND json_type(detail,'$.verifier')='text'`,
   );
-  // 执行者升降建议改成知会（t277）：此前按要处理存的行回写一次；条件带 level='action'，回写过就不再命中。
-  db.exec(
-    "UPDATE task_inbox SET level='info' WHERE kind='worker_advice' AND level='action'",
-  );
   // 逐条语句都要走索引（#t126）：按任务查、按订阅者看最近事件、看某一订阅者上交的记录。
   db.exec(`CREATE INDEX IF NOT EXISTS task_inbox_task ON task_inbox(task_id,id);
     CREATE INDEX IF NOT EXISTS task_inbox_sub_id ON task_inbox(subscriber,id);

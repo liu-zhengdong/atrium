@@ -47,7 +47,9 @@ export function stopgapAction(request: VerifierRequest): string | null {
   if (route.startsWith("/api/service/") || route === "/api/auth/rotate")
     return "启停、重启、升级服务或轮换令牌";
   if (route === "/api/hosts" || route.startsWith("/api/hosts/"))
-    return "改执行机器的状态（host clean、pause、resume、登记、移除）";
+    return "改执行机器的状态（host clean、登记、移除）";
+  if (route === "/api/pause" || route === "/api/resume")
+    return "暂停或恢复（atrium pause / resume）";
   const body = fieldsOf(request.body);
   if (route === "/api/tasks/:id/stop") {
     const target = taskNumber(request.id);

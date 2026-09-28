@@ -10,6 +10,7 @@ import type { Client } from "./service.ts";
 import { duration, hostBrief, type Snapshot, type TopRow } from "./top.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { planCounts } from "../server/tasks/plan-count.ts";
+import { pauseText } from "../server/pause.ts";
 import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
 import { titleTag } from "../server/tasks/priority.ts";
@@ -19,7 +20,6 @@ import {
   secretaryText,
   type SecretaryTone,
 } from "../server/tasks/secretary-watch.ts";
-import { mergeQueueText } from "../server/tasks/merge-eta.ts";
 
 /**
  * `atrium statusline`（#355）：Claude Code 状态栏。数据经服务取（`/api/tasks/top` 与 `/api/tasks/plan`），
@@ -222,7 +222,12 @@ export function renderStatusline(input: StatuslineInput): string {
   const secretaryPart = secretary
     ? paint(TONE[secretary.tone], secretary.text)
     : null;
+  // 一键停机：暂停着就先说，谁、何时、原因。
+  const paused = (snapshot.pauses ?? []).map((pause) =>
+    paint(`${BOLD}${RED}`, `■ ${pauseText(pause)}`),
+  );
   if (
+    !paused.length &&
     !held.length &&
     !leaders.length &&
     !events &&
@@ -240,12 +245,7 @@ export function renderStatusline(input: StatuslineInput): string {
     `在做 ${count("worker")}`,
     ...(count("leader") ? [`leader 处理 ${count("leader")}`] : []),
     ...(count("secretary") ? [`秘书处理 ${count("secretary")}`] : []),
-    // 合入队列长度与预计还要多久（t254）：「合入 18（排队合入 16 · 还要约 2 小时 10 分）」。
-    ...(count("merge")
-      ? [
-          `合入 ${count("merge")}${mergeQueueText(snapshot.merge_queue) ? `（${mergeQueueText(snapshot.merge_queue)}）` : ""}`,
-        ]
-      : []),
+    ...(count("merge") ? [`合入 ${count("merge")}`] : []),
     ...(count("queue") ? [`排队 ${count("queue")}`] : []),
   ];
   const head = [
@@ -265,7 +265,7 @@ export function renderStatusline(input: StatuslineInput): string {
           ]
         : []),
   ].join(" · ");
-  const lines = [head];
+  const lines = [...paused, head];
   if (choice) lines.push(paint(`${BOLD}${RED}`, `✱ ${choice}`));
   // 紧急任务太多（t215）：「紧急任务有 N 个，太多就等于没有紧急」，不拒绝。
   if (snapshot.urgent?.warning)

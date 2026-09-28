@@ -13,8 +13,8 @@ import { freezeTaskDeliveries } from "./delivery-records.ts";
  *
  * task_events 的读者（grep 全仓）分两类：
  * - 只依赖「最近」语义，删旧历史不影响：ledger-read/notes/queue/top/holder-facts 取最近若干条，
- *   review-runtime/merge-runtime/online-runtime/schedule-upstream/ci-poll/concern-runtime/
- *   councils/workers-report/ledger-transition 取某类事件最近一条，map/view 取 max(id)。
+ *   review-runtime/merge-runtime/online-runtime/schedule-upstream/ci-poll/
+ *   ledger-transition 取某类事件最近一条，map/view 取 max(id)。
  * - 读的窗口会被清到、必须特殊处理的：
  *   delivery-records 按 start 切交付窗口，老窗口的事件会被清，所以删行前先把从这个窗口算出的
  *   事实固化进 task_deliveries.facts（freezeTaskDeliveries），之后交付统计读固化结果不变。

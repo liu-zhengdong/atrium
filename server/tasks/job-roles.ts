@@ -19,10 +19,6 @@ export type JobRole = {
   preferred: string[];
   checks: string[];
   skills: string[];
-  review_goal: string;
-  review_points: { ref: string; text: string; why: string }[];
-  review_bottom: string[];
-  invite_when: string[];
   rev: number;
   created_at: number;
   updated_at: number;
@@ -30,35 +26,28 @@ export type JobRole = {
 };
 type Row = Omit<
   JobRole,
-  | "ref"
-  | "part"
-  | "part_name"
-  | "preferred"
-  | "checks"
-  | "skills"
-  | "review_points"
-  | "review_bottom"
-  | "invite_when"
+  "ref" | "part" | "part_name" | "preferred" | "checks" | "skills"
 > & {
   preferred: string;
   checks: string;
   skills: string;
-  review_points: string;
-  review_bottom: string;
-  invite_when: string;
 };
+/** 只取现行字段：旧库里请专员审查用过的列（review_*、invite_when）不再读。 */
 const view = (r: Row & { part_name?: string | null }): JobRole => ({
-  ...r,
+  id: r.id,
   ref: `r${r.id}`,
+  name: r.name,
   part_id: r.part_id ?? null,
   part: r.part_id ? `o${r.part_id}` : null,
   part_name: r.part_name ?? null,
+  description: r.description,
+  body: r.body,
   preferred: JSON.parse(r.preferred) as string[],
   checks: JSON.parse(r.checks) as string[],
   skills: JSON.parse(r.skills) as string[],
-  review_points: JSON.parse(r.review_points) as JobRole["review_points"],
-  review_bottom: JSON.parse(r.review_bottom) as string[],
-  invite_when: JSON.parse(r.invite_when) as string[],
+  rev: r.rev,
+  created_at: r.created_at,
+  updated_at: r.updated_at,
 });
 const bad = (message: string): never => {
   throw new Problem(400, message, "usage");
@@ -72,16 +61,9 @@ export function ensureJobRoles(db: DatabaseSync) {
   const columns = db.prepare("PRAGMA table_info(job_roles)").all() as {
     name: string;
   }[];
-  for (const [name, definition] of [
-    ["review_goal", "TEXT NOT NULL DEFAULT ''"],
-    ["review_points", "TEXT NOT NULL DEFAULT '[]'"],
-    ["review_bottom", "TEXT NOT NULL DEFAULT '[]'"],
-    ["invite_when", "TEXT NOT NULL DEFAULT '[]'"],
-    // 专员归属（#373）：指向 org_nodes.id；旧专员留空，即全组织共用，行为不变。
-    ["part_id", "INTEGER"],
-  ])
-    if (!columns.some((column) => column.name === name))
-      db.exec(`ALTER TABLE job_roles ADD COLUMN ${name} ${definition}`);
+  // 专员归属（#373）：指向 org_nodes.id；旧专员留空，即全组织共用，行为不变。
+  if (!columns.some((column) => column.name === "part_id"))
+    db.exec("ALTER TABLE job_roles ADD COLUMN part_id INTEGER");
 }
 const required = (value: unknown, flag: string, max: number) => {
   if (typeof value !== "string" || !value.trim() || [...value].length > max)
@@ -147,35 +129,6 @@ function values(
     )
       bad(`skills: 技能 ${slug} 不存在`);
   }
-  const review_goal =
-    input.review_goal === undefined
-      ? (previous?.review_goal ?? "")
-      : typeof input.review_goal === "string" && input.review_goal.length <= 300
-        ? input.review_goal.trim()
-        : bad("review_goal 应为不超过 300 字的文字");
-  const review_points =
-    input.review_points === undefined
-      ? (previous?.review_points ?? [])
-      : Array.isArray(input.review_points) &&
-          input.review_points.length <= 30 &&
-          input.review_points.every(
-            (p) =>
-              p &&
-              typeof p === "object" &&
-              typeof p.ref === "string" &&
-              typeof p.text === "string" &&
-              typeof p.why === "string",
-          )
-        ? (input.review_points as JobRole["review_points"])
-        : bad("review_points 应为不超过 30 条检查要点");
-  const review_bottom =
-    input.review_bottom === undefined
-      ? (previous?.review_bottom ?? [])
-      : list(input.review_bottom, "review_bottom");
-  const invite_when =
-    input.invite_when === undefined
-      ? (previous?.invite_when ?? [])
-      : list(input.invite_when, "invite_when");
   const part_id =
     input.part === undefined
       ? (previous?.part_id ?? null)
@@ -188,10 +141,6 @@ function values(
     preferred,
     checks,
     skills,
-    review_goal,
-    review_points,
-    review_bottom,
-    invite_when,
   };
 }
 /** 专员归属的部分：节点地址，空为全组织。 */
@@ -237,10 +186,6 @@ function inputOf(body: unknown) {
           "preferred",
           "checks",
           "skills",
-          "review_goal",
-          "review_points",
-          "review_bottom",
-          "invite_when",
           "part",
           "author",
         ].includes(key),
@@ -300,7 +245,7 @@ export function createJobRole(
     const id = Number(
       db
         .prepare(
-          "INSERT INTO job_roles(name,part_id,description,body,preferred,checks,skills,review_goal,review_points,review_bottom,invite_when,rev,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+          "INSERT INTO job_roles(name,part_id,description,body,preferred,checks,skills,rev,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)",
         )
         .run(
           data.name,
@@ -310,10 +255,6 @@ export function createJobRole(
           JSON.stringify(data.preferred),
           JSON.stringify(data.checks),
           JSON.stringify(data.skills),
-          data.review_goal,
-          JSON.stringify(data.review_points),
-          JSON.stringify(data.review_bottom),
-          JSON.stringify(data.invite_when),
           now,
           now,
         ).lastInsertRowid,
@@ -345,7 +286,7 @@ export function editJobRole(
     )
       bad(`专员名称已存在：${data.name}`);
     db.prepare(
-      "UPDATE job_roles SET name=?,part_id=?,description=?,body=?,preferred=?,checks=?,skills=?,review_goal=?,review_points=?,review_bottom=?,invite_when=?,rev=rev+1,updated_at=? WHERE id=?",
+      "UPDATE job_roles SET name=?,part_id=?,description=?,body=?,preferred=?,checks=?,skills=?,rev=rev+1,updated_at=? WHERE id=?",
     ).run(
       data.name,
       data.part_id,
@@ -354,10 +295,6 @@ export function editJobRole(
       JSON.stringify(data.preferred),
       JSON.stringify(data.checks),
       JSON.stringify(data.skills),
-      data.review_goal,
-      JSON.stringify(data.review_points),
-      JSON.stringify(data.review_bottom),
-      JSON.stringify(data.invite_when),
       now,
       old.id,
     );

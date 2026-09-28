@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -22,11 +22,6 @@ import {
   removePoint,
   validatePoint,
 } from "../server/org/points.ts";
-import { formatMigration, type MigrationView } from "../cli/org.ts";
-import { evidenceOf, planMigration } from "../server/goals/migrate-rules.ts";
-import { ensureGoalTables } from "../server/goals/schema.ts";
-import { addGoal, settleGoal } from "../server/goals/write.ts";
-import { migrateGoals } from "../server/goals/migrate.ts";
 import {
   createTask,
   ensureTaskTables,
@@ -68,7 +63,6 @@ function setup() {
   const db = new DatabaseSync(":memory:");
   ensureOrgTables(db);
   ensureTaskTables(db);
-  ensureGoalTables(db);
   seed(db);
   return db;
 }
@@ -152,11 +146,6 @@ test("人话字段：合法输入写进章程，破坏输入按字段名中文�
   ];
   for (const [fields, message] of bad)
     assert.throws(() => validateFields("charter", fields), message);
-  assert.throws(
-    () => validateFields("card", { what: "x" }),
-    /card\.what 是未知字段/,
-    "人话字段只在章程里",
-  );
 });
 
 test("阶段记录导出为 YAML 块，读回来一致", () => {
@@ -184,7 +173,7 @@ test("org show 的人话视图：组成部分取子节点的人话名与类比�
   });
   charter(db, "o3", { alias: "派活员", analogy: "项目经理" }, "a1");
   editNode(db, "o4", { archive: true, reason: "并入" }, "u1");
-  createTask(db, { title: "x", role: "o3" });
+  createTask(db, { title: "x", part: "o3" });
   const shown = show(db, "o2");
   assert.equal(shown.overview.what, "成为 AI 组织的运行底座");
   assert.equal(shown.overview.what_from_goal, true);
@@ -272,7 +261,7 @@ test("formatOverview：按是什么 → 能做什么 → 流程 → 组成 → �
     "o3 待办本（runtime）——团队的任务白板",
   );
   const blank = formatOverview({ ref: "o4", name: "cli" }, overview());
-  assert.match(blank[0]!, /人话介绍还没写.*atrium org show o4 --charter --raw/);
+  assert.match(blank[0]!, /人话介绍还没写.*atrium org show o4 --raw/);
   assert.equal(blank[1], "由哪几部分组成：没有下一层");
   const partial = formatOverview(
     { ref: "o4", name: "cli" },
@@ -281,147 +270,10 @@ test("formatOverview：按是什么 → 能做什么 → 流程 → 组成 → �
   assert.ok(partial.includes("能用它做什么：（未写）"));
 });
 
-test("迁移判定：gN 变成负责节点的阶段，证据取说明与每条验收的最新判定；任务只回填没有归属的", () => {
-  const goals = [
-    {
-      id: 1,
-      parent_id: null,
-      result: "顶层",
-      criteria: [],
-      status: "active" as const,
-      note: null,
-      node_id: 2,
-      due: null,
-      repo: null,
-    },
-    {
-      id: 2,
-      parent_id: 1,
-      result: "看得见",
-      criteria: ["$ npm test", "秘书看过", "没判过的"],
-      status: "achieved" as const,
-      note: "t36 已合入",
-      node_id: 3,
-      due: "2026-10-01",
-      repo: "/r",
-    },
-    {
-      id: 3,
-      parent_id: 1,
-      result: "负责节点没了",
-      criteria: [],
-      status: "planned" as const,
-      note: null,
-      node_id: 99,
-      due: null,
-      repo: null,
-    },
-    {
-      id: 4,
-      parent_id: 1,
-      result: "已迁过",
-      criteria: [],
-      status: "achieved" as const,
-      note: null,
-      node_id: 3,
-      due: null,
-      repo: null,
-    },
-  ];
-  const at = Date.UTC(2026, 8, 27);
-  const checks = [
-    {
-      goal_id: 2,
-      criterion: "$ npm test",
-      kind: "command" as const,
-      result: "pass" as const,
-      exit_code: 0,
-      note: null,
-      actor: "u1",
-      started_at: at,
-    },
-    {
-      goal_id: 2,
-      criterion: "秘书看过",
-      kind: "manual" as const,
-      result: "pass" as const,
-      exit_code: null,
-      note: "线上已核",
-      actor: "a1",
-      started_at: at,
-    },
-    {
-      goal_id: 2,
-      criterion: "改措辞前的旧条目",
-      kind: "manual" as const,
-      result: "fail" as const,
-      exit_code: null,
-      note: "作废",
-      actor: "a1",
-      started_at: at,
-    },
-  ];
-  assert.deepEqual(evidenceOf(goals[1]!, checks), [
-    "t36 已合入",
-    "第 1 条通过（命令，退出码 0，u1，2026-09-27）",
-    "第 2 条通过（人工，a1，2026-09-27）：线上已核",
-  ]);
-  const plan = planMigration({
-    goals,
-    dependencies: [{ goal_id: 2, after_id: 4 }],
-    checks,
-    nodes: [
-      { id: 2, name: "Atrium", path: "atrium", stages: [] },
-      { id: 3, name: "runtime", path: "atrium/runtime", stages: ["g4"] },
-    ],
-    tasks: [
-      { id: 7, goal_id: 2, part_id: null },
-      { id: 8, goal_id: 2, part_id: 5 },
-      { id: 9, goal_id: 3, part_id: null },
-    ],
-  });
-  assert.deepEqual(
-    plan.nodes.map((n) => [n.node, n.stages.map((s) => s.id), n.kept]),
-    [
-      [2, ["g1"], []],
-      [3, ["g2"], ["g4"]],
-    ],
-  );
-  assert.deepEqual(plan.nodes[1]!.stages[0], {
-    id: "g2",
-    result: "看得见",
-    status: "achieved",
-    criteria: ["$ npm test", "秘书看过", "没判过的"],
-    evidence: [
-      "t36 已合入",
-      "第 1 条通过（命令，退出码 0，u1，2026-09-27）",
-      "第 2 条通过（人工，a1，2026-09-27）：线上已核",
-    ],
-    due: "2026-10-01",
-    after: ["g4"],
-    parent: "g1",
-    repo: "/r",
-  });
-  assert.deepEqual(plan.nodes[0]!.stages[0], {
-    id: "g1",
-    result: "顶层",
-    status: "active",
-  });
-  assert.deepEqual(plan.tasks, [{ task: 7, goal: 2, part: 3 }]);
-  assert.deepEqual(plan.tasks_kept, [{ task: 8, goal: 2, part: 5 }]);
-  assert.deepEqual(plan.orphans, [{ goal: 3, node: 99 }]);
-});
-
-test("task --part 与旧写法 --goal：落到节点、摘下、归档与二选一", () => {
+test("task --part：落到节点、摘下、归档；旧写法 --goal 拒绝", () => {
   const db = setup();
-  addGoal(db, { result: "顶层", node: "atrium" }, "u1");
-  addGoal(db, { result: "M", parent: "g1", node: "atrium/runtime" }, "u1");
   const a = createTask(db, { title: "a", part: "atrium/runtime" });
   assert.equal(a.part_ref, "o3");
-  assert.equal(a.goal_ref, null);
-  const b = createTask(db, { title: "b", goal: "g2" });
-  assert.equal(b.part_ref, "o3", "gN 按负责节点映射");
-  assert.equal(createTask(db, { title: "c", goal: "o4" }).part_ref, "o4");
   assert.equal(updateTask(db, a.ref, { part: "o2" }).part_ref, "o2");
   assert.equal(updateTask(db, a.ref, { part: "" }).part_ref, null);
   assert.match(JSON.stringify(getTask(db, a.ref).events.at(-1)), /part_id/);
@@ -429,119 +281,12 @@ test("task --part 与旧写法 --goal：落到节点、摘下、归档与二选�
   const bad: [Record<string, unknown>, RegExp][] = [
     [{ part: "o4" }, /part: 节点 o4 cli 已归档/],
     [{ part: "nope" }, /part: 节点 nope 不存在/],
-    [{ goal: "g9" }, /goal: 目标 g9 不存在；改用 --part 节点/],
-    [{ part: "o2", goal: "g1" }, /part: 与 goal 只能给一个/],
+    [{ goal: "g1" }, /不认识的字段：goal/],
     [{ part: 3 }, /part: 应为节点/],
   ];
   for (const [input, message] of bad)
     assert.throws(() => createTask(db, { title: "x", ...input }), message);
   db.close();
-});
-
-test("迁移接口：预览不写；只有 u1 能写；写入先备份，阶段进章程、任务回填、goal 接口下线并指路", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-migrate-"));
-  t.after(() => removeTemp(data));
-  const { app, db } = await createApp({ data, auth: false });
-  t.after(() => app.close());
-  seed(db);
-  addGoal(db, { result: "顶层", node: "atrium" }, "u1");
-  addGoal(
-    db,
-    {
-      result: "闭环",
-      parent: "g1",
-      node: "atrium/runtime",
-      criteria: ["看过"],
-    },
-    "u1",
-  );
-  settleGoal(db, "g2", { kind: "done" }, { note: "t9 已合入" }, "u1");
-  charter(db, "o3", { goal: "跑得稳", alias: "派活员" }, "a1");
-  const task = createTask(db, { title: "旧任务" });
-  db.prepare("UPDATE tasks SET goal_id=2 WHERE id=?").run(
-    Number(task.ref.slice(1)),
-  );
-  const call = async (method: "GET" | "POST", url: string, payload = {}) => {
-    const response = await app.inject({ method, url, payload });
-    return {
-      status: response.statusCode,
-      body: response.json() as Record<string, unknown>,
-    };
-  };
-  const preview = await call("POST", "/api/goals/migrate", {});
-  assert.equal(preview.status, 200);
-  const view = preview.body as unknown as MigrationView;
-  assert.equal(view.preview, true);
-  assert.equal(view.stages, 2);
-  assert.deepEqual(view.tasks, [
-    { task: task.ref, goal: "g2", part: "o3", part_name: "runtime" },
-  ]);
-  assert.equal(show(db, "o3").overview.stages.length, 0, "预览不写");
-  const text = formatMigration(view);
-  assert.match(text, /预览，未写入/);
-  assert.match(text, /o3 runtime（atrium\/runtime）← 1 条阶段/);
-  assert.match(text, /g2 \[达成\] 闭环 · 验收 1 条 · 证据 1 条/);
-  assert.match(text, new RegExp(`${task.ref} g2 → o3 runtime`));
-
-  const denied = await call("POST", "/api/goals/migrate?as=a1", {
-    apply: true,
-  });
-  assert.equal(denied.status, 403);
-
-  const applied = await call("POST", "/api/goals/migrate", { apply: true });
-  assert.equal(applied.status, 200, JSON.stringify(applied.body));
-  const backup = applied.body.backup as string;
-  assert.ok(backup.startsWith(join(data, "backups")) && existsSync(backup));
-  const copy = new DatabaseSync(backup, { readOnly: true });
-  assert.equal(
-    (copy.prepare("SELECT count(*) AS n FROM goals").get() as { n: number }).n,
-    2,
-    "备份是迁移前的整库",
-  );
-  copy.close();
-  const runtime = show(db, "o3");
-  assert.deepEqual(runtime.overview.stages, [
-    {
-      id: "g2",
-      result: "闭环",
-      status: "achieved",
-      criteria: ["看过"],
-      evidence: ["t9 已合入"],
-      parent: "g1",
-    },
-  ]);
-  assert.equal(runtime.charter?.fields.goal, "跑得稳", "原有字段保留");
-  assert.equal(runtime.charter?.body, "负责 server/tasks/", "正文保留");
-  assert.equal(runtime.overview.alias, "派活员");
-  assert.equal(show(db, "o2").overview.stages[0]!.id, "g1");
-  const migrated = getTask(db, task.ref);
-  assert.equal(migrated.part_ref, "o3");
-  assert.equal(migrated.goal_ref, "g2", "原来的 goal 不改");
-
-  const gone = await call("GET", "/api/goals/g2");
-  assert.equal(gone.status, 410);
-  assert.match(String(gone.body.error), /goal 命令已下线；g2 在 o3 runtime/);
-  assert.equal(gone.body.nextCommand, "atrium org show o3");
-  for (const [method, url] of [
-    ["GET", "/api/goals/tree"],
-    ["POST", "/api/goals"],
-    ["POST", "/api/goals/g1/done"],
-    ["POST", "/api/goals/adopt"],
-  ] as const)
-    assert.equal((await call(method, url)).status, 410, url);
-
-  const again = await call("POST", "/api/goals/migrate", { apply: true });
-  assert.equal(again.status, 200);
-  assert.equal(again.body.stages, 0);
-  assert.equal(again.body.backup, backup, "重复执行不再备份、不重复写");
-  assert.equal(show(db, "o3").overview.stages.length, 1);
-  assert.match(
-    formatMigration(again.body as unknown as MigrationView),
-    /已迁移：\n {2}o2 Atrium（atrium）← 0 条阶段，已在章程里 g1/,
-  );
-
-  const mapped = await call("POST", "/api/tasks", { title: "新", goal: "g1" });
-  assert.equal(mapped.body.part_ref, "o2", "迁移后 --goal gN 照映射落到节点");
 });
 
 test("top：目标段改读全景图；全景取不到不影响看板", async () => {

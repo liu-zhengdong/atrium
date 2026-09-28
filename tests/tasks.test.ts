@@ -150,7 +150,6 @@ test("账本：建树、列表、详情、人工修正与执行者事件", () =>
     {
       title: "表与状态机",
       parent: "t1",
-      role: "concerns/安全",
       repo: "/tmp/r",
     },
     1001,

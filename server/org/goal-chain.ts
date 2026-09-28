@@ -14,7 +14,7 @@ export type GoalLevel = {
   children: string[];
 };
 
-export type GoalLink = { ref: string; name: string; goal: string };
+type GoalLink = { ref: string; name: string; goal: string };
 
 const LABELED = /^\s*(?:[-*]\s*)?([^：:\n]{1,40})[：:]\s*(.*)$/;
 

@@ -310,7 +310,6 @@ test("持球人：合入前等重跑说「检查没跑成，等重跑」，原�
     processing_by: null,
     inbox: null,
     route: "a1",
-    council_escalated: false,
     checking: null,
     rerun: null,
   };

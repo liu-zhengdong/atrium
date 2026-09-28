@@ -26,11 +26,7 @@ import {
   taskTree,
   updateTask,
 } from "./ledger.ts";
-import {
-  confirmWorkerAdvice,
-  workerReport,
-  workersReport,
-} from "./workers-report.ts";
+import { workerReport, workersReport } from "./workers-report.ts";
 import {
   createJobRole,
   editJobRole,
@@ -49,6 +45,7 @@ import { taskPlan } from "./schedule.ts";
 import { parseTaskRef } from "./ledger.ts";
 import { verifierOf } from "./verify-guard.ts";
 import { markVerdict, whyOf } from "./urgent.ts";
+import { globalPause, pauseText } from "../pause.ts";
 
 type Query = Record<string, string | undefined>;
 const params = (value: unknown) => (value ?? {}) as { id?: string };
@@ -160,60 +157,54 @@ export function registerTaskRoutes(
         resolveActor(db, query(request.query).as),
       ),
   );
-  app.post("/api/workers/advice/confirm", { bodyLimit: 4096 }, (request) =>
-    confirmWorkerAdvice(db, request.body),
+  app.get("/api/specialists", (request) => {
+    const part = query(request.query).part;
+    return part ? specialistsForPart(db, part) : listJobRoles(db);
+  });
+  app.post("/api/specialists", { bodyLimit: 32 * 1024 }, (request, reply) =>
+    reply.code(201).send(createJobRole(db, request.body)),
   );
-  for (const path of ["/api/specialists", "/api/roles"]) {
-    app.get(path, (request) => {
-      const part = query(request.query).part;
-      return part ? specialistsForPart(db, part) : listJobRoles(db);
-    });
-    app.post(path, { bodyLimit: 32 * 1024 }, (request, reply) =>
-      reply.code(201).send(createJobRole(db, request.body)),
-    );
-    app.get(`${path}/:id`, async (request) => {
-      const role = getJobRole(db, params(request.params).id);
-      const tasks = (
+  app.get("/api/specialists/:id", async (request) => {
+    const role = getJobRole(db, params(request.params).id);
+    const tasks = (
+      db
+        .prepare(
+          "SELECT id,title,status,worker,created_at,started_at,ended_at,delivery_stage FROM tasks WHERE job_id=? ORDER BY id DESC LIMIT 200",
+        )
+        .all(role.id) as {
+        id: number;
+        title: string;
+        status: string;
+        worker: string | null;
+        created_at: number;
+        started_at: number | null;
+        ended_at: number | null;
+        delivery_stage: string | null;
+      }[]
+    ).map((task) => ({ ...task, ref: `t${task.id}` }));
+    const workers = await workersReport(db, role.ref);
+    const skillDetails = role.skills
+      .map((slug) =>
         db
           .prepare(
-            "SELECT id,title,status,worker,created_at,started_at,ended_at,delivery_stage FROM tasks WHERE job_id=? ORDER BY id DESC LIMIT 200",
+            "SELECT id,slug,name,description,rev FROM org_skills WHERE slug=? AND archived_at IS NULL",
           )
-          .all(role.id) as {
-          id: number;
-          title: string;
-          status: string;
-          worker: string | null;
-          created_at: number;
-          started_at: number | null;
-          ended_at: number | null;
-          delivery_stage: string | null;
-        }[]
-      ).map((task) => ({ ...task, ref: `t${task.id}` }));
-      const workers = await workersReport(db, role.ref);
-      const skillDetails = role.skills
-        .map((slug) =>
-          db
-            .prepare(
-              "SELECT id,slug,name,description,rev FROM org_skills WHERE slug=? AND archived_at IS NULL",
-            )
-            .get(slug),
-        )
-        .filter(Boolean);
-      return {
-        ...role,
-        tasks,
-        skill_details: skillDetails,
-        workers: workers.stats,
-        suggestions: workers.suggestions,
-      };
-    });
-    app.patch(`${path}/:id`, { bodyLimit: 32 * 1024 }, (request) =>
-      editJobRole(db, params(request.params).id, request.body),
-    );
-    app.get(`${path}/:id/history`, (request) =>
-      jobRoleHistory(db, params(request.params).id),
-    );
-  }
+          .get(slug),
+      )
+      .filter(Boolean);
+    return {
+      ...role,
+      tasks,
+      skill_details: skillDetails,
+      workers: workers.stats,
+    };
+  });
+  app.patch("/api/specialists/:id", { bodyLimit: 32 * 1024 }, (request) =>
+    editJobRole(db, params(request.params).id, request.body),
+  );
+  app.get("/api/specialists/:id/history", (request) =>
+    jobRoleHistory(db, params(request.params).id),
+  );
   // 详述进库（#355）：内容至多 64 KB，JSON 转义后留足余量。
   app.post("/api/tasks", { bodyLimit: 256 * 1024 }, async (request, reply) => {
     const input = bodyFields(request.body);
@@ -378,10 +369,7 @@ export function registerTaskRoutes(
     ),
   );
   app.post("/api/tasks/:id/merge", (request) =>
-    runner.requeueMerge(
-      params(request.params).id,
-      actorOf(query(request.query)),
-    ),
+    runner.requeueMerge(params(request.params).id),
   );
   // 秘书、leader 亲自做完的活登记 PR 与工作树，进合入队列（t257）；执行者经命令行防护拒绝。
   app.post("/api/tasks/:id/deliver", { bodyLimit: 8 * 1024 }, (request) =>
@@ -401,26 +389,29 @@ export function registerTaskRoutes(
       disconnect(request),
     ),
   );
-  // 会审（#322 第 3 步）：议题 → 并行专员意见 → leader 汇总 → 结论。
-  app.post("/api/reviews", { bodyLimit: 256 * 1024 }, async (request, reply) =>
-    reply.code(201).send(await runner.addCouncil(request.body)),
+  // 一键停机（server/pause.ts）：记在谁名下（?as=，缺省 u1；秘书会话带 secretary）；leader 令牌到不了这里。
+  app.get("/api/pause", () => runner.pauses());
+  app.post("/api/pause", { bodyLimit: 4 * 1024 }, (request) =>
+    runner.pause(request.body, resolveActor(db, query(request.query).as)),
   );
-  app.get("/api/reviews/:id", (request) =>
-    runner.council(params(request.params).id),
+  app.post("/api/resume", { bodyLimit: 4 * 1024 }, (request) =>
+    runner.resume(request.body, resolveActor(db, query(request.query).as)),
   );
-  app.post("/api/reviews/:id/decide", { bodyLimit: 16 * 1024 }, (request) => {
+  app.get("/api/events/wait", async (request) => {
     const q = query(request.query);
-    // 拍板人缺省是用户 u1；秘书代为转达时也记 u1 的决定。
-    const actor =
-      q.as === undefined || q.as === "" ? "u1" : ownerOf(q.as, "as");
-    return runner.decideCouncil(params(request.params).id, request.body, actor);
-  });
-  app.get("/api/events/wait", (request) => {
-    const q = query(request.query);
+    // 全局暂停时事件照常落库，但不投给等待的人；恢复后照常取走。
+    const seconds = waitSeconds(q.timeout);
+    const signal = disconnect(request);
+    const until = Date.now() + seconds * 1000;
+    while (globalPause(db) && Date.now() < until && !signal.aborted)
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    const paused = globalPause(db);
+    if (paused)
+      return { events: [], timed_out: true, paused: pauseText(paused) };
     return runner.inbox.wait(
       actorOf(q),
-      waitSeconds(q.timeout),
-      disconnect(request),
+      Math.max(0, Math.ceil((until - Date.now()) / 1000)),
+      signal,
       {
         peek: q.peek === "1" || q.peek === "true",
         all: q.all === "1",

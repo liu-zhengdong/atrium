@@ -19,7 +19,6 @@ import {
   isOpen,
   parseAt,
   parseEvery,
-  resumeAt,
 } from "../server/schedules/plan.ts";
 import Fastify from "fastify";
 import { leaderRule } from "../server/leaders/scope.ts";
@@ -102,13 +101,10 @@ test("补跑：停机错过好几轮只算到了几轮，下一轮在未来", ()
   assert.equal(weekly.next, due + 77 * DAY);
 });
 
-test("到点判定：没到、暂停、删除等着；上一轮没结束跳过；错过的只补一轮", () => {
+test("到点判定：没到、删除等着；上一轮没结束跳过；错过的只补一轮", () => {
   const clock = { next_at: D0, every_ms: DAY, at_minute: null };
-  const base = { ...clock, paused: false, removed: false };
+  const base = { ...clock, removed: false };
   assert.deepEqual(decide(base, null, D0 - 1, utc8), { kind: "wait" });
-  assert.deepEqual(decide({ ...base, paused: true }, null, D0, utc8), {
-    kind: "wait",
-  });
   assert.deepEqual(decide({ ...base, removed: true }, null, D0, utc8), {
     kind: "wait",
   });
@@ -134,9 +130,6 @@ test("到点判定：没到、暂停、删除等着；上一轮没结束跳过�
     missed: 2,
     open: "t3",
   });
-  // 恢复：暂停期间的不补。
-  assert.equal(resumeAt(clock, D0 + 5 * DAY + 1, utc8), D0 + 6 * DAY);
-  assert.equal(resumeAt(clock, D0 - 1, utc8), D0);
   for (const status of ["todo", "running", "blocked"])
     assert.equal(isOpen(status), true);
   for (const status of ["done", "failed", "cancelled"])
@@ -146,12 +139,7 @@ test("到点判定：没到、暂停、删除等着；上一轮没结束跳过�
 });
 
 test("leader 给本节点及子节点排周期任务；别的部分只读，也不能冒名", async (t) => {
-  for (const route of [
-    "/api/schedules",
-    "/api/schedules/:id/pause",
-    "/api/schedules/:id/resume",
-    "/api/schedules/:id/run",
-  ])
+  for (const route of ["/api/schedules", "/api/schedules/:id/run"])
     assert.equal(leaderRule("POST", route), "schedule", route);
   assert.equal(leaderRule("DELETE", "/api/schedules/:id"), "schedule");
   assert.equal(leaderRule("GET", "/api/schedules"), "read");
@@ -212,8 +200,7 @@ test("leader 给本节点及子节点排周期任务；别的部分只读，也�
   });
   const ok = async () => ({ ok: true });
   app.post("/api/schedules", ok);
-  for (const action of ["pause", "resume", "run"])
-    app.post(`/api/schedules/:id/${action}`, ok);
+  app.post("/api/schedules/:id/run", ok);
   app.delete("/api/schedules/:id", ok);
   const token = `Bearer ${tokens.issue("a1", 60_000)}`;
   const send = async (
@@ -247,16 +234,8 @@ test("leader 给本节点及子节点排周期任务；别的部分只读，也�
   });
   assert.equal(other.status, 403);
   assert.match(other.body, /o4.*不在你负责的部分里/);
-  for (const action of ["pause", "resume", "run"]) {
-    assert.equal(
-      (await send("POST", `/api/schedules/s1/${action}`)).status,
-      200,
-    );
-    assert.equal(
-      (await send("POST", `/api/schedules/s2/${action}`)).status,
-      403,
-    );
-  }
+  assert.equal((await send("POST", "/api/schedules/s1/run")).status, 200);
+  assert.equal((await send("POST", "/api/schedules/s2/run")).status, 403);
   assert.equal((await send("DELETE", "/api/schedules/s1")).status, 200);
   assert.equal((await send("DELETE", "/api/schedules/s2")).status, 403);
   assert.equal((await send("DELETE", "/api/schedules/s9")).status, 404);
@@ -415,7 +394,8 @@ test("隔离服务：周期巡检到点生成与 patrol run 同样的任务，�
     ),
     1,
   );
-  await call("POST", "/api/schedules/s3/pause");
+  // 暂停 s3 所在的部分：那一块不再生成，别的照常（一键停机，server/pause.ts）。
+  await call("POST", "/api/pause", { part: "o4" });
   // 上一轮还在跑：跳过本轮并记一笔。
   clock = start + 2 * DAY;
   await until(
@@ -464,16 +444,12 @@ test("隔离服务：周期巡检到点生成与 patrol run 同样的任务，�
   assert.equal(again.status, 409);
   assert.match(again.body.error, /还没结束/);
 
-  // 暂停、恢复、删除；列表按节点含下层，删掉的只在 all 里。
-  const paused = await call("POST", "/api/schedules/s1/pause");
-  assert.equal(paused.body.state, "paused");
-  assert.equal(paused.body.next_at, null);
+  // 全局暂停：到点也不生成；恢复后才照常。删除；列表按节点含下层，删掉的只在 all 里。
+  assert.equal((await call("POST", "/api/pause", {})).status, 200);
   clock = start + 9 * DAY;
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(count("SELECT count(*) n FROM patrol_runs WHERE node_id=2"), 2);
-  const resumed = await call("POST", "/api/schedules/s1/resume");
-  assert.equal(resumed.body.state, "active");
-  assert.equal(resumed.body.next_at, start + 10 * DAY);
+  assert.equal((await call("POST", "/api/resume", {})).status, 200);
   const removed = await call("DELETE", "/api/schedules/s1");
   assert.equal(removed.body.state, "removed");
   assert.equal((await call("POST", "/api/schedules/s1/run")).status, 409);

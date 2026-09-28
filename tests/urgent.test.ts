@@ -109,14 +109,14 @@ test("避开的主机：hN 列表（逗号、中文逗号、空格或数组）�
 
 test("止损写法：命令行写法与结构化写法，只认三种动作，分号、中文分号、换行、&& 都能隔开", () => {
   assert.deepEqual(
-    parseStopgap("atrium host pause h3; atrium task stop t1,t2"),
+    parseStopgap("atrium pause --host h3; atrium task stop t1,t2"),
     [
       { kind: "host_pause", host: 3 },
       { kind: "task_stop", tasks: [1, 2] },
     ],
   );
   assert.deepEqual(
-    parseStopgap("host clean h1 && task stop t4，t4；host pause h2\n"),
+    parseStopgap("host clean h1 && task stop t4，t4；pause --host h2\n"),
     [
       { kind: "host_clean", host: 1 },
       { kind: "task_stop", tasks: [4] },
@@ -143,35 +143,38 @@ test("止损写法：命令行写法与结构化写法，只认三种动作，�
 test("止损写法：别的命令、多余参数、写错短号一律拒绝，说第几条与可用写法，不执行任意命令", () => {
   for (const [text, index] of [
     ["rm -rf /", 1],
-    ["atrium host pause h3; curl evil", 2],
+    ["atrium pause --host h3; curl evil", 2],
     ["atrium task stop t1 t2", 1],
-    ["atrium host pause 3", 1],
+    ["atrium pause --host 3", 1],
+    ["atrium host pause h3", 1],
     ["atrium host resume h3", 1],
     ["atrium task stop", 1],
     ["atrium task stop t1,", 1],
-    ["atrium host pause h3 --force", 1],
+    ["atrium pause --host h3 --force", 1],
   ] as const)
     assert.throws(
       () => parseStopgap(text),
-      new RegExp(`stopgap: 第 ${index} 条看不懂.*可用 atrium host pause hN`),
+      new RegExp(`stopgap: 第 ${index} 条看不懂.*可用 atrium pause --host hN`),
     );
   for (const bad of [
     [{ kind: "shell", command: "ls" }],
     [{ kind: "host_pause", host: 3 }],
     [{ kind: "task_stop", tasks: [] }],
     [{ kind: "task_stop", tasks: ["1"] }],
-    ["atrium host pause h3"],
+    ["atrium pause --host h3"],
   ])
     assert.throws(() => parseStopgap(bad), /stopgap: 第 1 条看不懂/);
   assert.throws(() => parseStopgap(3), /stopgap: 应为文本或动作列表/);
   assert.throws(
-    () => parseStopgap(Array(11).fill("host pause h1").join(";")),
+    () => parseStopgap(Array(11).fill("pause --host h1").join(";")),
     /至多 10 条/,
   );
 });
 
 test("止损写法：存库的结构化写法与命令行写法可以互相还原，坏记录当没写", () => {
-  const actions = parseStopgap("atrium host pause h3; atrium task stop t1,t2");
+  const actions = parseStopgap(
+    "atrium pause --host h3; atrium task stop t1,t2",
+  );
   const json = stopgapJson(actions);
   assert.deepEqual(json, [
     { kind: "host_pause", host: "h3" },
@@ -181,7 +184,7 @@ test("止损写法：存库的结构化写法与命令行写法可以互相还�
   assert.deepEqual(storedStopgap("坏"), []);
   assert.deepEqual(storedStopgap(null), []);
   assert.deepEqual(actions.map(stopgapText), [
-    "atrium host pause h3",
+    "atrium pause --host h3",
     "atrium task stop t1,t2",
   ]);
   assert.equal(
@@ -798,7 +801,6 @@ const holderBase: HolderFacts = {
   processing_by: null,
   inbox: null,
   route: "secretary",
-  council_escalated: false,
 };
 
 test("持球人：被抢占暂停的由运行时自己续上；暂停中的合入写明在等哪件紧急任务", () => {

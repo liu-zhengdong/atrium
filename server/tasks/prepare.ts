@@ -25,7 +25,7 @@ export const DEFAULT_RULES: readonly string[] = [
   "做完后依次：提交、推送、开 PR（正文写 Refs 对应 issue）；任何一步做不了，写清楚卡在哪一步再结束。全量检查由运行时在任务 worktree 跑。",
   "汇报里的 PR 号、提交号、CI 结果必须来自你刚执行过的命令输出；没做的步骤直接写「没做」。",
   "文档、提交说明和 PR 使用中文。",
-  "PR 正文写「## 端到端验证」一节：一两条用户上线后会实际运行的命令与期望结果；上线通知会原样附上，负责人照着在线上验证。会停掉在跑任务、改主机或服务状态的步骤（如 host clean、host pause、task stop、启停升级服务）在那一条后标注「只在隔离环境」或「需要人工」，上线验证据此不在真实环境跑。",
+  "PR 正文写「## 端到端验证」一节：一两条用户上线后会实际运行的命令与期望结果；上线通知会原样附上，负责人照着在线上验证。会停掉在跑任务、改主机或服务状态的步骤（如 host clean、pause / resume、task stop、启停升级服务）在那一条后标注「只在隔离环境」或「需要人工」，上线验证据此不在真实环境跑。",
   "PR 正文写「## 碰到哪些已有能力」一节：列出本次改动与哪些已有能力交叉（远程主机、Windows、紧急通道、总任务、技能挂载、合入队列、自升级……），各验了什么；没碰到写「无」。问题多出在新旧能力的组合上，写清楚好让试点和上线验证挑对地方。",
   "每做一段较长的工作前，先用一句中文说明正在做什么（如「正在补单测」），看板会把这句显示为你的最近动作。",
   "gh 命令一律带 `-R <owner/repo>`（取自 origin 远端）：fork 仓库另有 upstream 时，不带 -R 会查到或开到上游；PR 开在 origin 上。",
@@ -41,8 +41,6 @@ export type PromptParts = {
   roleDoc?: string;
   /** 章程要点（组织树节点的链路、目标与硬边界），紧跟岗位说明。 */
   charter?: Brief;
-  /** 请了的专员与各自的检查要点、底线（concern-gate.ts concernSection）。 */
-  concerns?: string;
   /** 投任务的节点（关注点）的说明。 */
   originDoc?: string;
   /** 本次挂载的组织技能（server/skills/mount.ts 生成）。 */
@@ -52,7 +50,7 @@ export type PromptParts = {
   rules?: readonly string[];
 };
 
-/** 拼派活提示词：标题、详述、运行中收到的补充、可用的凭据（只有名称）、岗位说明、章程要点、请了的专员、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
+/** 拼派活提示词：标题、详述、运行中收到的补充、可用的凭据（只有名称）、岗位说明、章程要点、投任务的专员说明、挂载的技能、组织说明、执行者叮嘱、通用约束；空段省略。 */
 export function buildPrompt({
   title,
   brief,
@@ -60,7 +58,6 @@ export function buildPrompt({
   secrets,
   roleDoc,
   charter,
-  concerns,
   originDoc,
   skills,
   rootDoc,
@@ -75,7 +72,6 @@ export function buildPrompt({
     ["可用的凭据", secrets],
     ["岗位说明", roleDoc],
     ...(charter ? [[charter.heading, charter.text] as [string, string]] : []),
-    ["请了的专员与检查要点", concerns],
     ["投任务的专员说明", originDoc],
     ["本次挂载的技能", skills],
     ["组织说明（.agents/README.md）", rootDoc],
@@ -343,7 +339,7 @@ export function pickWorker({
       continue;
     }
     if (profiles[tool]?.rules.billing === "metered") {
-      skipped.push({ tool, reason: "档案 billing=metered，当前钱份额为 0 元" });
+      skipped.push({ tool, reason: "档案 billing=metered（按量计费），不派" });
       continue;
     }
     eligible.push(tool);

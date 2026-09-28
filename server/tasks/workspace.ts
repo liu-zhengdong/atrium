@@ -36,8 +36,6 @@ import { homedir } from "node:os";
 import { listTells, unsent } from "./tell-ledger.ts";
 import { TELL_RULE, tellModeOf, tellSection } from "./tell.ts";
 import type { TellMode } from "./adapters/index.ts";
-import { checklists } from "./concerns.ts";
-import { concernSection } from "./concern-gate.ts";
 import { patrolRun } from "./patrol.ts";
 import { VERIFY_ROLE, VERIFY_RULES } from "./verify.ts";
 import { isVerifyTask } from "./verify-runtime.ts";
@@ -366,9 +364,6 @@ export async function prepareRun(
             ),
           )
         : undefined,
-    concerns: options.db
-      ? concernSection(checklists(options.db, task.id))
-      : undefined,
     originDoc: origin
       ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
       : undefined,

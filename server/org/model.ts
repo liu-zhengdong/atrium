@@ -3,7 +3,7 @@ import { Problem } from "../problem.ts";
 import { actsForUser } from "../../shared/user.ts";
 
 export type Kind = "org" | "project" | "module" | "concern";
-export type Doc = "charter" | "card";
+export type Doc = "charter";
 export type Target = "node" | Doc;
 export type NodeRow = {
   id: number;

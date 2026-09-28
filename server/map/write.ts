@@ -19,7 +19,6 @@ const FIELDS: Record<string, "text" | "list"> = {
   analogy: "text",
   now: "text",
   next: "text",
-  when: "text",
   uses: "list",
   flow: "list",
 };
@@ -70,14 +69,6 @@ export function editMap(
   actor: string,
 ) {
   const node = nodeByAddress(db, address);
-  if (
-    node.kind !== "concern" &&
-    typeof input.when === "string" &&
-    input.when.trim()
-  )
-    throw usage(
-      `--when: 专员请用 atrium specialist edit <专员> --invite-when 修改；${ref(node.id)} ${node.name} 是组织节点`,
-    );
   const doc = one<DocRow>(
     db,
     "SELECT * FROM org_docs WHERE node_id=? AND doc='charter'",
@@ -103,7 +94,7 @@ export function editMap(
     (input.detail !== undefined && input.detail !== (doc?.body ?? ""));
   if (!changed)
     throw usage(
-      "没有要改的：给 --what、--uses、--flow、--alias、--analogy、--now、--next、--when、--applies 或 --detail 文件",
+      "没有要改的：给 --what、--uses、--flow、--alias、--analogy、--now、--next、--applies 或 --detail 文件",
     );
   if (input.rev !== undefined && input.detail === undefined)
     throw usage("--rev: 只用于 --detail 修改章程正文");

@@ -162,7 +162,6 @@ const base: HolderFacts = {
   processing_by: null,
   inbox: null,
   route: "a1",
-  council_escalated: false,
 };
 
 test("持球人：leader 手里的受阻任务句末写挂了多久，原因太长先截原因；秘书、用户手里的不写", () => {

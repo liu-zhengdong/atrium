@@ -222,7 +222,6 @@ const ICON = {
   leader: `<svg class="icon icon-leader" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><path d="M5 21v-1.5A5.5 5.5 0 0 1 10.5 14h3a5.5 5.5 0 0 1 5.5 5.5V21"/><path d="M12 14l-1.2 3.5L12 19l1.2-1.5z"/></svg>`,
   skill: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M8 7h6"/></svg>`,
   point: `<svg class="icon icon-point" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>`,
-  advice: `<svg class="icon icon-advice" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>`,
   go: `<svg class="icon icon-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`,
 };
 const chip = (text, tone) =>
@@ -865,25 +864,6 @@ function skillTable(skills, empty) {
 const drawSkills = ({ org }) =>
   skillTable(org.skills, "还没有组织技能。在终端用 atrium skill add 加一个。");
 
-const ADVICE = {
-  relax: () => "建议放宽一档信任",
-  tighten: () => "建议收紧一档信任",
-  avoid_role: (role) => `建议${role}的活先不派它`,
-};
-/** 待秘书确认的升降建议：浅黄条，只读。 */
-function adviceBars(list) {
-  return list
-    .map((s) => {
-      const role = s.role ?? "未指定专员";
-      const reason = s.reason.startsWith(role)
-        ? s.reason.slice(role.length).trim()
-        : s.reason;
-      const text = `${workerLabel(s.worker)} 做${role}：${reason}，${(ADVICE[s.action] ?? (() => "有调整建议"))(role)}。`;
-      return `<div class="advice">${ICON.advice}<span class="advice-text">${esc(text)}</span><span class="advice-wait">等秘书确认</span></div>`;
-    })
-    .join("");
-}
-
 const passTone = (rate) =>
   rate >= 0.8 ? "good" : rate >= 0.5 ? "fair" : "poor";
 
@@ -937,10 +917,7 @@ function drawWorkers({ org }) {
   const rows = filter
     ? org.workers.rows.filter((w) => w.role === filter.name)
     : org.workers.rows;
-  const advice = filter
-    ? org.workers.suggestions.filter((s) => s.role === filter.name)
-    : org.workers.suggestions;
-  return `${adviceBars(advice)}${workerTable(rows, {
+  return `${workerTable(rows, {
     withRole: true,
     empty: filter
       ? `${filter.name}还没有交付记录。`
@@ -960,7 +937,7 @@ function drawRoleTasks({ role }) {
   });
 }
 function drawRoleWorkers({ role }) {
-  return `${adviceBars(role.suggestions)}${workerTable(role.workers, {
+  return `${workerTable(role.workers, {
     withRole: false,
     empty: "还没有人做过这个专员的活。",
   })}${role.workers.length ? WORKERS_FOOT : ""}`;
@@ -1416,16 +1393,7 @@ function heading(d) {
           ),
         ],
       ]),
-      intro: [
-        r.description,
-        ...(r.review_goal ? [`请来看时：${r.review_goal}`] : []),
-        ...(r.review_points?.length
-          ? [`检查要点：${r.review_points.map((p) => p.text).join("；")}`]
-          : []),
-        ...(r.review_bottom?.length
-          ? [`审查底线：${r.review_bottom.join("；")}`]
-          : []),
-      ],
+      intro: [r.description],
     };
   }
   if (d.page === "worker") {

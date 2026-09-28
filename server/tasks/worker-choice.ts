@@ -56,14 +56,7 @@ export async function chooseWorker(
     avoid.chain?.at(-1)?.id,
   );
   const pace = await (options.pace ?? (() => readPace()))();
-  const headroom = options.db
-    ? quotaHeadroom(
-        options.db,
-        avoid.chain?.at(-1)?.id ?? null,
-        pace,
-        reservePercent,
-      )
-    : new Map();
+  const headroom = options.db ? quotaHeadroom(pace, reservePercent) : new Map();
   if (request.worker) {
     worker = await resolveWorker(request.worker, options.db);
     // 写死的执行者：强度、模型搭配不合法当场报错，不等排到了才失败。
@@ -88,11 +81,11 @@ export async function chooseWorker(
     const room = headroom.get(account);
     if (pace && room && room.points < 1)
       throw new BudgetProblem(
-        `执行者 ${worker.tool} 的账号 ${account} 份额不足：${room.reason}；等窗口重置或请上层调整份额`,
+        `执行者 ${worker.tool} 的账号 ${account} 额度不足：${room.reason}；等窗口重置`,
       );
     if (worker.profile.rules.billing === "metered")
       throw new BudgetProblem(
-        `执行者 ${worker.tool} 的档案 billing=metered，当前钱份额为 0 元`,
+        `执行者 ${worker.tool} 的档案 billing=metered（按量计费），不派`,
       );
     const used = pace?.find(
       (entry) =>
@@ -167,14 +160,11 @@ export async function chooseWorker(
       }
     }
     if (!picked.ok) {
-      const blocked = picked.skipped.some(
-        (skip) =>
-          skip.reason.includes("份额") ||
-          skip.reason.includes("billing=metered"),
+      const blocked = picked.skipped.some((skip) =>
+        skip.reason.includes("billing=metered"),
       );
       const message = `${picked.reason}（${picked.skipped.map((skip) => `${skip.tool}：${skip.reason}`).join("；")}）`;
-      if (blocked)
-        throw new BudgetProblem(`${message}；等窗口重置或请上层调整份额`);
+      if (blocked) throw new BudgetProblem(message);
       throw new Problem(409, message, "conflict");
     }
     worker = await resolveWorker(picked.tool, options.db);

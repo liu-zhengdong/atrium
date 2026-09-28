@@ -509,7 +509,7 @@ test(
     assert.equal((await f.cli("org", "tree")).code, 0);
     writeFileSync(join(f.root, "role.md"), "实现并检查服务功能");
     const addedRole = await f.cli(
-      "role",
+      "specialist",
       "add",
       "服务维护",
       "--description",
@@ -518,9 +518,9 @@ test(
       join(f.root, "role.md"),
     );
     assert.equal(addedRole.code, 0, addedRole.stderr);
-    const addedTask = await f.cli("task", "add", "检查旧库兼容", "--job", "r1");
+    const addedTask = await f.cli("task", "add", "检查旧库兼容", "--by", "r1");
     assert.equal(addedTask.code, 0, addedTask.stderr);
-    assert.equal((await f.cli("role", "show", "r1")).code, 0);
+    assert.equal((await f.cli("specialist", "show", "r1")).code, 0);
     assert.equal((await f.cli("workers")).code, 0);
     assert.equal((await f.cli("stop")).code, 0);
     const after = new DatabaseSync(join(f.data, "atrium.sqlite"), {
@@ -871,7 +871,7 @@ test(
     assert(viaCli.stderr.includes(expected), viaCli.stderr);
     assert.doesNotMatch(viaCli.stderr, /EADDRINUSE|\n\s+at /);
     assert(!existsSync(second), "命令行不建第二份数据目录");
-    // 经服务的命令（task ls）：同一句回执，不附第二份数据的日志与 status 修正。
+    // 经服务的命令（task ls）：不拉起服务，只说第二份数据的服务没在跑、给 atrium start。
     const viaCommand = await exec(
       process.execPath,
       [join(packageRoot, "bin/atrium.mjs"), "task", "ls"],
@@ -880,9 +880,9 @@ test(
       () => ({ code: 0, stderr: "" }),
       (error: { code: number; stderr: string }) => error,
     );
-    assert.equal(viaCommand.code, 4);
-    assert(viaCommand.stderr.includes(expected), viaCommand.stderr);
-    assert.doesNotMatch(viaCommand.stderr, /日志：|atrium status/);
+    assert.equal(viaCommand.code, 5);
+    assert.match(viaCommand.stderr, /Atrium 服务没在跑/);
+    assert.match(viaCommand.stderr, /修正：atrium start/);
     assert(!existsSync(second));
     // 服务入口直接启动（绕过命令行）：同样在建表前退出。
     const viaServer = await exec(

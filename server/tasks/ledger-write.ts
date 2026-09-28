@@ -30,7 +30,7 @@ import {
   validateDeliver,
   type Deliver,
 } from "./deliver.ts";
-import { matchRole, originNode } from "../org/task-node.ts";
+import { originNode } from "../org/task-node.ts";
 import { partForTask } from "../org/task-part.ts";
 import {
   aspectPart,
@@ -45,19 +45,9 @@ import {
   storedType,
   type TypeSource,
 } from "./task-type.ts";
-import {
-  concernRows,
-  concernsFor,
-  specialistsFor,
-  specialistRef,
-  concernsOf,
-  textHints,
-  writeConcerns,
-} from "./concerns.ts";
 import { getJobRole } from "./job-roles.ts";
 import { ref as nodeRef } from "../org/model.ts";
 import { briefText, readBriefFile } from "./brief.ts";
-import { specialistOptions } from "./specialist-options.ts";
 import {
   alsoFor,
   alsoOf,
@@ -130,31 +120,17 @@ function urgentExtras(
   return { fields, stopgap };
 }
 
-/** role → 节点；写成节点地址却解析不到时报错，旧岗位名对不上节点就只存 role。 */
-const roleNode = (
-  db: DatabaseSync,
-  role: string | null,
-  repo: string | null,
-) => (role ? (matchRole(db, role, repo, true).node?.id ?? null) : null);
 const fromNode = (db: DatabaseSync, value: unknown) => {
   const text = optionalText(value, "from", 200);
   return text ? originNode(db, text).id : null;
 };
 
-/** part 与旧写法 goal 二选一；goal 的 gN 按迁移映射到负责节点。 */
-function partOf(db: DatabaseSync, input: Record<string, unknown>) {
-  if ("part" in input && "goal" in input)
-    throw usage("part: 与 goal 只能给一个；goal 已改为归属部分，用 part");
-  return "goal" in input
-    ? partForTask(db, input.goal, "goal")
-    : partForTask(db, input.part);
-}
+const partOf = (db: DatabaseSync, input: Record<string, unknown>) =>
+  partForTask(db, input.part);
 
 export type NewTask = {
   title: string;
   parent?: string | number | null;
-  role?: string | null;
-  job?: string | null;
   by?: string | null;
   repo?: string | null;
   /** 任务详述内容（#355）。 */
@@ -179,42 +155,35 @@ export type NewTask = {
   from?: string | null;
   /** 归属哪一部分（组织节点）。 */
   part?: string | null;
-  /** 旧写法：gN 按目标树迁移映射到该目标的负责节点，等同 part。 */
-  goal?: string | null;
   /** 牵涉的部分（#373），逗号分隔。 */
   also?: string | null;
   /** 要用的凭据名称（t194），逗号分隔；派活时按名称注入执行者环境。 */
   secret?: string | null;
-  /** 请哪些专员：关注点节点，逗号分隔。 */
-  concern?: string | null;
-  ask?: string | null;
 };
 
-/** 任务读回时带上请的专员与牵涉的部分，改请专员或建任务时再带上按标题详述给的提示。 */
-function withConcerns(db: DatabaseSync, task: TaskRow, hints: boolean) {
-  const concerns = concernsOf(db, task.id);
-  const concern_hints = hints ? textHints(db, task) : [];
+/** 任务读回时带上牵涉的部分与凭据名称。 */
+function extrasOf(db: DatabaseSync, task: TaskRow) {
   const secrets = taskSecretNames(db, task.id);
   return {
-    ...(concerns.length ? { concerns } : {}),
-    ...(concern_hints.length ? { concern_hints } : {}),
     ...involvedView(involvedOf(db, task)),
     ...(secrets.length ? { secrets } : {}),
   };
 }
 
-/** 请的专员（`--by` 与 `--ask`）须在任务范围里：归属链、牵涉部分与全组织的（#373）。 */
+/** 干活的专员（`--by`）须在任务范围里：归属链、牵涉部分与全组织的（#373）。 */
 function checkScope(
   db: DatabaseSync,
   task: { part: number | null; also: readonly number[] },
   job: number | null,
-  concerns: readonly number[],
-  byFlag: string,
 ) {
-  checkSpecialists(db, task, [
-    { flag: byFlag, ids: job ? [job] : [] },
-    { flag: "ask", ids: concerns.filter((id) => id < 0).map((id) => -id) },
-  ]);
+  checkSpecialists(db, task, [{ flag: "by", ids: job ? [job] : [] }]);
+}
+
+/** `by`：专员名称或短号；null 与空串表示不指定。 */
+function byOf(value: unknown) {
+  if (value !== undefined && value !== null && typeof value !== "string")
+    throw usage("by: 应为专员名称或短号");
+  return value || null;
 }
 
 /** 父任务的类型：子任务不写类型、标题也看不出时跟它走（t237）。 */
@@ -233,7 +202,7 @@ export function createTask(
   /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
   by?: string,
   /**
-   * 运行时替父任务建的帮手（专员审查、会审意见、上线验证）：不让父任务变成总任务（t190）。
+   * 运行时替父任务建的帮手（审阅、上线验证）：不让父任务变成总任务（t190）。
    * source：运行时知道任务从哪来时给（选项单、巡检、上线验证、关卡交回），没写 type 时据此定类型（t237）。
    */
   internal: { helper?: boolean; source?: TypeSource } = {},
@@ -242,8 +211,6 @@ export function createTask(
   onlyKeys(input, [
     "title",
     "parent",
-    "role",
-    "job",
     "by",
     "repo",
     "brief",
@@ -263,13 +230,10 @@ export function createTask(
     "type",
     "from",
     "part",
-    "goal",
-    "concern",
-    "ask",
     "also",
     "secret",
   ]);
-  const specialist = specialistOptions(input);
+  const by_ = byOf(input.by);
   const size = sizeOf(input.size);
   const urgent = urgentOf(input.urgent);
   const type = input.type === undefined ? undefined : parseTaskType(input.type);
@@ -287,40 +251,18 @@ export function createTask(
         ? null
         : ownerOf(input.owner),
     title: title(input.title),
-    role: optionalText(input.role, "role", 200),
     repo,
     ...briefOf(input, repo),
   };
   return atomically(db, () => {
     const parent = parentOf(db, input.parent);
-    let oldRoleSpecialist: number | null = null;
-    if (values.role && !specialist.byPresent)
-      try {
-        oldRoleSpecialist = getJobRole(db, values.role).id;
-      } catch (error) {
-        if (!(error instanceof Problem) || error.statusCode !== 404)
-          throw error;
-      }
-    const role = oldRoleSpecialist ? null : values.role;
-    const node = roleNode(db, role, values.repo);
-    const job = specialist.by
-      ? getJobRole(db, specialist.by).id
-      : oldRoleSpecialist;
+    const job = by_ ? getJobRole(db, by_).id : null;
     const origin = fromNode(db, input.from);
     const part = partOf(db, input);
-    const concerns = specialist.modernAsk
-      ? specialistsFor(db, specialist.ask)
-      : concernsFor(db, specialist.ask);
     const also = alsoFor(db, input.also);
-    checkScope(
-      db,
-      { part: part ?? node, also },
-      job,
-      concerns,
-      oldRoleSpecialist ? "role" : "by",
-    );
-    checkTaskSecrets(db, part ?? node, secrets);
-    const level = priority ?? defaultPriority(aspectPart(db, part ?? node));
+    checkScope(db, { part, also }, job);
+    checkTaskSecrets(db, part, secrets);
+    const level = priority ?? defaultPriority(aspectPart(db, part));
     const kind =
       type ??
       inferType({
@@ -330,7 +272,7 @@ export function createTask(
       });
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,priority,task_type,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,repo,owner,deliver,issue,origin_node_id,part_id,job_id,urgent,priority,task_type,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -338,12 +280,10 @@ export function createTask(
         values.title,
         values.brief,
         values.brief_path,
-        role,
         values.repo,
         values.owner,
         deliver,
         issue,
-        node,
         origin,
         part,
         job,
@@ -366,17 +306,14 @@ export function createTask(
           .join(",")} WHERE id=?`,
       ).run(...Object.values(extra), id);
     setConditions(db, id, input, now);
-    writeConcerns(db, id, concerns);
     writeAlso(db, id, also);
     writeTaskSecrets(db, id, secrets);
     addEvent(db, id, now, "created", {
       title: values.title,
       ...(parent ? { parent: taskRef(parent) } : {}),
-      ...(node ? { node: `o${node}` } : {}),
       ...(origin ? { from: `o${origin}` } : {}),
       ...(part ? { part: `o${part}` } : {}),
       ...(job ? { job: `r${job}` } : {}),
-      ...(concerns.length ? { concerns: concerns.map(specialistRef) } : {}),
       ...(urgent ? { urgent: true } : {}),
       ...(extras.fields.urgent_why ? { why: extras.fields.urgent_why } : {}),
       ...(extras.stopgap.length
@@ -395,12 +332,12 @@ export function createTask(
     return {
       ...view(task),
       ...noteView(db, id, task.status),
-      ...withConcerns(db, task, true),
+      ...extrasOf(db, task),
     };
   });
 }
 
-/** 人工修正：title / brief / role / status；status 经状态机的 manual_set。 */
+/** 人工修正：title / brief / status 等；status 经状态机的 manual_set。 */
 export function updateTask(
   db: DatabaseSync,
   reference: unknown,
@@ -415,8 +352,6 @@ export function updateTask(
     "title",
     "brief",
     "brief_path",
-    "role",
-    "job",
     "by",
     "status",
     "deliver",
@@ -434,20 +369,15 @@ export function updateTask(
     "pr_url",
     "from",
     "part",
-    "goal",
-    "concern",
-    "ask",
     "also",
     "secret",
   ]);
-  const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、also、secret、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、size、type、pr_url",
+      "至少修改一项：title、brief、brief_path、by、from、part、also、secret、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、size、type、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
-  if ("role" in input) fields.role = optionalText(input.role, "role", 200);
   if ("deliver" in input) fields.deliver = deliverOf(input.deliver);
   if ("issue" in input) fields.issue = issueOf(input.issue);
   // 紧急随时可改（在跑、排队中也行）：排队中的下一轮巡检按新标记拉起。
@@ -481,27 +411,9 @@ export function updateTask(
       fields.urgent_by = options.by ?? null;
     if ("brief" in input || "brief_path" in input)
       Object.assign(fields, briefOf(input, current.repo));
-    if (specialist.byPresent)
-      fields.job_id = specialist.by ? getJobRole(db, specialist.by).id : null;
-    if ("role" in fields) {
-      let oldRoleSpecialist: number | null = null;
-      if (fields.role && !specialist.byPresent)
-        try {
-          oldRoleSpecialist = getJobRole(db, fields.role).id;
-        } catch (error) {
-          if (!(error instanceof Problem) || error.statusCode !== 404)
-            throw error;
-        }
-      if (oldRoleSpecialist) {
-        fields.job_id = oldRoleSpecialist;
-        fields.role = null;
-        fields.node_id = null;
-      } else
-        fields.node_id = roleNode(
-          db,
-          fields.role as string | null,
-          current.repo,
-        );
+    if ("by" in input) {
+      const by_ = byOf(input.by);
+      fields.job_id = by_ ? getJobRole(db, by_).id : null;
     }
     if (
       current.status === "running" &&
@@ -514,66 +426,33 @@ export function updateTask(
         "conflict",
       );
     if ("from" in input) fields.origin_node_id = fromNode(db, input.from);
-    if ("part" in input || "goal" in input) fields.part_id = partOf(db, input);
+    if ("part" in input) fields.part_id = partOf(db, input);
+    const part = (
+      "part_id" in fields
+        ? fields.part_id
+        : (current.part_id ?? current.node_id)
+    ) as number | null;
     // 换了归属部分、又没同时指定档位：没被人改过的档位跟着新部分的缺省走。
-    if (!("priority" in fields) && ("part_id" in fields || "node_id" in fields))
+    if (!("priority" in fields) && "part_id" in fields)
       fields.priority = priorityAfterMove(
         current.priority,
         aspectPart(db, current.part_id ?? current.node_id),
-        aspectPart(
-          db,
-          ((("part_id" in fields ? fields.part_id : current.part_id) ??
-            ("node_id" in fields ? fields.node_id : current.node_id)) as
-            number | null) ?? null,
-        ),
+        aspectPart(db, part),
       );
     if (fields.pr_url !== undefined && current.status === "running")
       throw new Problem(409, "执行中不能人工补登 PR", "conflict");
-    const concerns = specialist.askPresent
-      ? specialist.modernAsk
-        ? specialistsFor(db, specialist.ask)
-        : concernsFor(db, specialist.ask)
-      : undefined;
-    if (concerns && current.status === "running")
-      throw new Problem(
-        409,
-        "执行中不能改请的专员：提示词已经发出；等它结束再改，下一轮生效",
-        "conflict",
-        undefined,
-        `atrium task wait ${taskRef(id)}`,
-      );
     const also = "also" in input ? alsoFor(db, input.also) : undefined;
-    if (
-      "job_id" in fields ||
-      concerns ||
-      also ||
-      "part_id" in fields ||
-      "node_id" in fields
-    ) {
-      const job = "job_id" in fields ? fields.job_id : current.job_id;
+    if ("job_id" in fields || also || "part_id" in fields)
       checkScope(
         db,
-        {
-          part:
-            ("part_id" in fields ? fields.part_id : current.part_id) ??
-            ("node_id" in fields ? fields.node_id : current.node_id),
-          also: also ?? alsoOf(db, id),
-        } as { part: number | null; also: number[] },
-        (job as number | null) ?? null,
-        concerns ?? concernRows(db, id).map((row) => row.node_id),
-        "role" in input && !specialist.byPresent ? "role" : "by",
+        { part, also: also ?? alsoOf(db, id) },
+        (("job_id" in fields ? fields.job_id : current.job_id) as
+          number | null) ?? null,
       );
-    }
     setConditions(db, id, input, now);
     if (secrets) {
       // 执行中改也行：本轮环境已定，下一轮拉起按新的注入。
-      checkTaskSecrets(
-        db,
-        (("part_id" in fields ? fields.part_id : current.part_id) ??
-          ("node_id" in fields ? fields.node_id : current.node_id)) as
-          number | null,
-        secrets,
-      );
+      checkTaskSecrets(db, part, secrets);
       const before = taskSecretNames(db, id);
       writeTaskSecrets(db, id, secrets);
       if (before.join(",") !== secrets.join(","))
@@ -585,15 +464,6 @@ export function updateTask(
       const after = also.map(nodeRef);
       if (before.join(",") !== after.join(","))
         addEvent(db, id, now, "also", { from: before, to: after });
-    }
-    if (concerns) {
-      const before = concernRows(db, id).map((row) =>
-        specialistRef(row.node_id),
-      );
-      writeConcerns(db, id, concerns);
-      const after = concerns.map(specialistRef);
-      if (before.join(",") !== after.join(","))
-        addEvent(db, id, now, "concerns", { from: before, to: after });
     }
     if (
       current.status === "running" &&
@@ -640,7 +510,7 @@ export function updateTask(
     return {
       ...view(task),
       ...noteView(db, id, task.status),
-      ...withConcerns(db, task, concerns !== undefined || "title" in input),
+      ...extrasOf(db, task),
     };
   });
 }

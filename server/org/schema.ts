@@ -37,13 +37,7 @@ export function ensureOrgTables(db: DatabaseSync) {
     param_key TEXT CHECK(param_key IN ('quota_reserve_percent','disk_min_free_gb','money_yuan_max')),
     param_value REAL,
     CHECK((param_key IS NULL) = (param_value IS NULL)),
-    PRIMARY KEY(node_id,bid));
-  CREATE TABLE IF NOT EXISTS org_budgets (
-    node_id INTEGER NOT NULL REFERENCES org_nodes(id),
-    dim TEXT NOT NULL CHECK(dim IN ('quota','disk','money')),
-    scope TEXT NOT NULL DEFAULT '',
-    amount REAL NOT NULL CHECK(amount >= 0),
-    PRIMARY KEY(node_id,dim,scope));`);
+    PRIMARY KEY(node_id,bid));`);
   db.exec(`CREATE TRIGGER IF NOT EXISTS org_revisions_no_update
     BEFORE UPDATE ON org_revisions BEGIN SELECT RAISE(ABORT,'org_revisions append only'); END;
   CREATE TRIGGER IF NOT EXISTS org_revisions_no_delete

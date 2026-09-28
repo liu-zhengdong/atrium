@@ -34,8 +34,8 @@ test("验证身份的边界：止损类写接口拒绝，读接口、停自己�
   // 止损类：停别人的活、改主机或服务状态。
   for (const [method, route, extra] of [
     ["POST", "/api/hosts/:id/clean", { id: "h3" }],
-    ["POST", "/api/hosts/:id/pause", { id: "h1", body: { paused: true } }],
-    ["POST", "/api/hosts/:id/pause", { id: "h1", body: { paused: false } }],
+    ["POST", "/api/pause", { body: { host: "h1" } }],
+    ["POST", "/api/resume", { body: {} }],
     ["POST", "/api/hosts", { body: { name: "x" } }],
     ["PATCH", "/api/hosts/:id", { id: "h2", body: {} }],
     ["DELETE", "/api/hosts/:id", { id: "h2" }],
@@ -60,7 +60,7 @@ test("验证身份的边界：止损类写接口拒绝，读接口、停自己�
     [
       "POST",
       "/api/tasks",
-      { body: { title: "x", stopgap: "atrium host pause h1" } },
+      { body: { title: "x", stopgap: "atrium pause --host h1" } },
     ],
     ["POST", "/api/tasks/:id/run", { id: "t5", body: { urgent: true } }],
   ] as const)
@@ -219,10 +219,10 @@ test("隔离服务：验证身份调 host clean、停别的任务被拒，停自
     assert.equal(run.body.task.status, "running", ref);
   }
 
-  // 验证身份：host clean、host pause、停别的任务都被拒，回执写明记 unverifiable。
+  // 验证身份：host clean、pause、停别的任务都被拒，回执写明记 unverifiable。
   for (const [url, payload] of [
     ["/api/hosts/h1/clean", {}],
-    ["/api/hosts/h1/pause", { paused: true }],
+    ["/api/pause", { host: "h1" }],
     ["/api/tasks/t1/stop?as=secretary", undefined],
   ] as const) {
     const refused = await verifier("POST", url, payload);

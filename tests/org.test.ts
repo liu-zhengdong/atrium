@@ -11,7 +11,6 @@ import {
 } from "../server/org/write.ts";
 import { history, show, tree } from "../server/org/read.ts";
 import { formatOrgChanges } from "../cli/org.ts";
-import { matchRole } from "../server/org/task-node.ts";
 import {
   exportDocument,
   parseDocument,
@@ -108,31 +107,11 @@ test("validate 的每类拒绝规则与合法输入", () => {
     ["project", "project"],
   ] as const)
     assert.equal(validParent(parent, child), false);
-  const cases: ["charter" | "card", unknown, RegExp][] = [
+  const cases: ["charter", unknown, RegExp][] = [
     ["charter", { unknown: "x" }, /charter.unknown.*未知/],
     ["charter", { goal: "字".repeat(301) }, /charter.goal.*300/],
     ["charter", { report: 1 }, /charter.report.*文本/],
     ["charter", { escalate: "字".repeat(201) }, /charter.escalate.*200/],
-    ["card", { unknown: 1 }, /card.unknown.*未知/],
-    ["card", { status: "字".repeat(301) }, /card.status.*300/],
-    ["card", { owns: Array(11).fill("x") }, /card.owns.*10/],
-    ["card", { accepts: "x" }, /card.accepts.*列表/],
-    ["card", { asks: Array(6).fill("x") }, /card.asks.*5/],
-    [
-      "card",
-      { commitments: Array(11).fill({ id: "x", text: "x" }) },
-      /card.commitments.*10/,
-    ],
-    [
-      "card",
-      { commitments: [{ id: "x", text: "x", oops: 1 }] },
-      /card.commitments.*oops/,
-    ],
-    [
-      "card",
-      { commitments: [{ id: "x", text: "x", due: "today" }] },
-      /card.commitments.*due/,
-    ],
   ];
   for (const [doc, value, expected] of cases)
     assert.throws(() => validateFields(doc, value), expected);
@@ -141,37 +120,6 @@ test("validate 的每类拒绝规则与合法输入", () => {
   assert.throws(
     () => validateFields("charter", { toString: "x" }),
     /charter.toString.*未知/,
-  );
-  assert.throws(
-    () =>
-      validateFields("card", {
-        commitments: [{ id: "x", text: "x", due: "2026-02-30" }],
-      }),
-    /due/,
-  );
-  assert.deepEqual(
-    parseDocument(
-      "---\nowns:\n  - server/\naccepts:\n  - 运行时\ncommitments:\n  - id: c1\n    text: 验收\n---\n正文",
-      "card",
-    ),
-    {
-      fields: {
-        owns: ["server/"],
-        accepts: ["运行时"],
-        commitments: [{ id: "c1", text: "验收" }],
-      },
-      body: "正文",
-    },
-  );
-  assert.deepEqual(
-    validateFields("card", {
-      owns: ["server"],
-      commitments: [{ id: "c1", text: "完成", due: "2026-09-30" }],
-    }),
-    {
-      owns: ["server"],
-      commitments: [{ id: "c1", text: "完成", due: "2026-09-30" }],
-    },
   );
   for (const bad of [
     "goal: x\n正文",
@@ -223,17 +171,6 @@ test("权限、层级、乐观并发、修订追加与导出写回", () => {
         "charter",
         { fields: { goal: "x" }, body: "", reason: "越权" },
         "a1",
-      ),
-    /无权限/,
-  );
-  assert.throws(
-    () =>
-      editDoc(
-        db,
-        "atrium/runtime",
-        "card",
-        { fields: { status: "x" }, body: "", reason: "越权" },
-        "a3",
       ),
     /无权限/,
   );
@@ -335,15 +272,6 @@ test("导入仅预览、重复 apply 不重复建", () => {
     (show(db, "atrium/runtime") as { charter: { body: string } }).charter.body,
     "# runtime\n岗位正文",
   );
-  const matched = (role: string, repo: string | null = "/tmp/repo") =>
-    matchRole(db, role, repo).node?.id ?? null;
-  assert.equal(matched("atrium/runtime"), 4);
-  assert.equal(matched("modules/runtime"), 4);
-  assert.equal(matched("runtime.md"), 4);
-  assert.equal(matched("o4"), 4);
-  assert.equal(matched("runtime", "/tmp/other"), null);
-  assert.equal(matched("concerns/runtime"), null);
-  assert.equal(matched("modules/other"), null);
   const changed = importOrg(
     db,
     { ...input, docs: [{ ...input.docs[0]!, body: "更新正文" }], apply: true },
@@ -443,7 +371,7 @@ test("节点只归档、移动有层级与深度限制", () => {
       editDoc(
         db,
         `o${module.id}`,
-        "card",
+        "charter",
         { fields: {}, body: "", reason: "越过归档" },
         "a2",
       ),

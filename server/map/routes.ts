@@ -130,12 +130,7 @@ export function registerMapRoutes(
       : { ...node, tree: mapTree(db, node.ref, parseDepth(query.depth)).tree };
   });
   app.get("/api/map/now", async () => mapNow(db, await live()));
-  // 组织共用的专员、技能、执行者（组织根与专员页）。旧 roles 路径暂留兼容。
-  app.get("/api/map/roles", () => mapRoles(db));
-  app.get("/api/map/roles/:id", async (request) =>
-    mapRole(db, id(request), await live()),
-  );
-  // 带 part 时只列这一部分能请的（本部分、上级、牵涉部分、全组织，各注明哪一档）。
+  // 组织共用的专员、技能、执行者（组织根与专员页）；带 part 时只列这一部分能请的（本部分、上级、牵涉部分、全组织，各注明哪一档）。
   app.get("/api/map/specialists", (request) => {
     const part = q(request.query).part;
     return part

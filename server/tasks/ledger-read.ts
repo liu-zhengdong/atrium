@@ -20,8 +20,6 @@ import { rollupFor, rollups } from "./rollup-ledger.ts";
 import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
 import { idleWaits, queued, queueView } from "./queue.ts";
-import { concernsOf } from "./concerns.ts";
-import type { InviteHint } from "./concern-gate.ts";
 import { CHECK_EVENT_KINDS, checkSummary } from "./check-outcome.ts";
 import { verifyViews } from "./verify-runtime.ts";
 import { verifyHolder } from "./verify-view.ts";
@@ -45,8 +43,6 @@ export function getTask(db: DatabaseSync, reference: unknown) {
   const child_summary = childSummaries(db, [found.id]).get(found.id) ?? null;
   // 总任务（t190）：状态与进度按全部子孙汇总；球在子任务手里，不给持球人。
   const rollup = child_summary ? rollupFor(db, found.id) : null;
-  const concerns = concernsOf(db, found.id);
-  const hints = lastHints(db, found.id);
   const queue = queueView(db, found.id);
   // 上线后的端到端验证（t182）：验证中、没通过、无法验证、通过。
   const verify =
@@ -72,8 +68,6 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     last_check: lastCheck(db, found.id),
     events,
     ...conditions(db, found.id),
-    ...(concerns.length ? { concerns } : {}),
-    ...(hints.length ? { concern_hints: hints } : {}),
     ...involvedView(involvedOf(db, found)),
     ...(secrets.length ? { secrets } : {}),
   };
@@ -98,21 +92,6 @@ function lastCheck(db: DatabaseSync, id: number): string | null {
       : null;
   } catch {
     return null;
-  }
-}
-
-/** 最近一次交付后按改动范围给的「要不要请某专员」提示。 */
-function lastHints(db: DatabaseSync, id: number): InviteHint[] {
-  const row = all<TaskEventRow>(
-    db,
-    "SELECT * FROM task_events WHERE task_id=? AND kind='concern_hints' ORDER BY id DESC LIMIT 1",
-    id,
-  )[0];
-  try {
-    const hints = row?.detail ? JSON.parse(row.detail).hints : undefined;
-    return Array.isArray(hints) ? hints : [];
-  } catch {
-    return [];
   }
 }
 

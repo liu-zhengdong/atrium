@@ -4,7 +4,6 @@ import { Problem } from "../problem.ts";
 import {
   listSchedules,
   parseScheduleRef,
-  pauseSchedule,
   removeSchedule,
   showSchedule,
 } from "./model.ts";
@@ -37,12 +36,6 @@ export function registerScheduleRoutes(
   });
   app.get("/api/schedules/:id", (request) =>
     showSchedule(db, id(request.params)),
-  );
-  app.post("/api/schedules/:id/pause", { bodyLimit: 1024 }, (request) =>
-    showSchedule(db, `s${pauseSchedule(db, id(request.params))}`),
-  );
-  app.post("/api/schedules/:id/resume", { bodyLimit: 1024 }, (request) =>
-    showSchedule(db, `s${pump.resume(id(request.params))}`),
   );
   app.post(
     "/api/schedules/:id/run",

@@ -1,28 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
 import { CI_PENDING_SQL, pollCiOnce } from "../server/tasks/ci-poll.ts";
-import { SETTLE_REVIEWS_SQL } from "../server/tasks/concern-runtime.ts";
-import { CLOSE_STALE_SQL } from "../server/tasks/council-runtime.ts";
-import { DiskBudget } from "../server/tasks/disk-budget.ts";
 import type { Exec } from "../server/tasks/git.ts";
 import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
 import { NEXT_MERGE } from "../server/tasks/merge-runtime.ts";
 import { LEGACY_ONLINE_SQL } from "../server/tasks/online-backfill.ts";
 import { OnlineWatch } from "../server/tasks/online-runtime.ts";
 import { skipIfBusy } from "../server/tasks/reentry.ts";
-import { TaskRunner } from "../server/tasks/runner.ts";
 import {
   CLEANUP_PAGE_SQL,
   cleanupBackoffMs,
   WorktreeCleanup,
 } from "../server/tasks/worktree-cleanup.ts";
-import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc } from "../server/org/write.ts";
-import { removeTemp } from "./temp-dir.ts";
 
 function planOf(db: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
   return (
@@ -42,7 +32,7 @@ function fillDone(db: DatabaseSync, n: number) {
   for (let i = 0; i < n; i++) insert.run(now, now);
 }
 
-test("合入队、清理、上线回填、CI、专员：查询计划不按状态扫全部已完成任务", () => {
+test("合入队、清理、上线回填、CI：查询计划不按状态扫全部已完成任务", () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   fillDone(db, 80);
@@ -59,8 +49,6 @@ test("合入队、清理、上线回填、CI、专员：查询计划不按状态
     ["清理", planOf(db, CLEANUP_PAGE_SQL, 0, 0)],
     ["上线回填", planOf(db, LEGACY_ONLINE_SQL, 0)],
     ["CI", planOf(db, CI_PENDING_SQL, 10)],
-    ["专员", planOf(db, SETTLE_REVIEWS_SQL, 50)],
-    ["会审", planOf(db, CLOSE_STALE_SQL, 50)],
   ] as const) {
     assert.doesNotMatch(
       plan,
@@ -76,44 +64,7 @@ test("合入队、清理、上线回填、CI、专员：查询计划不按状态
   assert.match(planOf(db, CLEANUP_PAGE_SQL, 0, 0), /tasks_cleanup_done/);
   assert.match(planOf(db, LEGACY_ONLINE_SQL, 0), /tasks_online_legacy/);
   assert.match(planOf(db, CI_PENDING_SQL, 10), /tasks_ci_pending/);
-  assert.match(planOf(db, CLOSE_STALE_SQL, 50), /task_councils_stage/);
-  assert.match(
-    planOf(db, SETTLE_REVIEWS_SQL, 50),
-    /task_concerns|INTEGER PRIMARY KEY/,
-  );
   db.close();
-});
-
-test("没配磁盘份额不起 du；有份额才巡 worktree", async (t) => {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  ensureTaskTables(db);
-  ensureOrgTables(db);
-  const dir = mkdtempSync(join(tmpdir(), "atrium-du-"));
-  t.after(() => removeTemp(dir));
-  const task = createTask(db, { title: "盘" });
-  db.prepare("UPDATE tasks SET worktree=? WHERE id=?").run(dir, task.id);
-  const du: string[] = [];
-  const disk = new DiskBudget(db, async (path) => {
-    du.push(path);
-    return 0.01;
-  });
-  await disk.refresh();
-  assert.equal(du.length, 0);
-  const root = addNode(
-    db,
-    { slug: "org", kind: "org", name: "组织", reason: "建树" },
-    "u1",
-  );
-  editDoc(
-    db,
-    `o${root.id}`,
-    "charter",
-    { fields: {}, body: "", budget: { disk: 10 }, reason: "磁盘限额" },
-    "u1",
-  );
-  await disk.refresh();
-  assert.equal(du.length, 1);
 });
 
 test("别的仓库合入任务回填一次即记下，第二轮不再起 git", async () => {
@@ -241,53 +192,4 @@ test("skipIfBusy：上一轮没完不叠下一轮", async () => {
   assert.equal(max, 1);
   await fn();
   assert.equal(entered, 2);
-});
-
-test("定时巡检不重入：慢一轮不叠 du", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-reentry-"));
-  t.after(() => removeTemp(root));
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  ensureTaskTables(db);
-  ensureOrgTables(db);
-  const org = addNode(
-    db,
-    { slug: "org", kind: "org", name: "组织", reason: "建树" },
-    "u1",
-  );
-  editDoc(
-    db,
-    `o${org.id}`,
-    "charter",
-    { fields: {}, body: "", budget: { disk: 10 }, reason: "磁盘限额" },
-    "u1",
-  );
-  for (let i = 0; i < 5; i++) {
-    const task = createTask(db, { title: `w${i}` });
-    db.prepare("UPDATE tasks SET worktree=? WHERE id=?").run(
-      `/tree/${i}`,
-      task.id,
-    );
-  }
-  let inflight = 0;
-  let max = 0;
-  const runner = new TaskRunner(db, {
-    data: root,
-    env: { PATH: "/usr/bin:/bin" },
-    tickMs: 20,
-    ciPollMs: 60_000,
-    diskDu: async () => {
-      inflight++;
-      max = Math.max(max, inflight);
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      inflight--;
-      return 0.01;
-    },
-    exec: async () => ({ ok: true, stdout: "", stderr: "" }),
-    online: { pollMs: 60_000, selfRepo: null },
-  });
-  t.after(() => runner.close());
-  runner.start();
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(max, 5, "同一轮五个 du 并行，不叠下一轮");
 });

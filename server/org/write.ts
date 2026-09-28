@@ -23,25 +23,15 @@ import {
   validateSlug,
   validParent,
 } from "./validate.ts";
-import { effective, exportBoundaries, type Converted } from "./boundaries.ts";
+import { exportBoundaries, type Converted } from "./boundaries.ts";
 import {
-  allBoundaries,
-  chainLevels,
   ownBoundaries,
   planBoundaries,
   saveBoundaries,
 } from "./boundary-store.ts";
-import {
-  checkStoredShares,
-  ownShares,
-  planShares,
-  saveShares,
-} from "./share-store.ts";
-import { exportShares } from "./shares.ts";
 import { HUMAN_KEYS } from "./overview.ts";
 import { aspectClearance } from "./aspects.ts";
 import { pointRef } from "./points.ts";
-import { isLegacyBudget, liftLegacyBudget } from "./legacy-budget.ts";
 import { actsForUser } from "../../shared/user.ts";
 
 function authorized(
@@ -202,7 +192,6 @@ export function editDoc(
     fields: unknown;
     body: unknown;
     boundaries?: unknown;
-    budget?: unknown;
     rev?: string;
     reason: unknown;
   },
@@ -225,8 +214,8 @@ export function editDoc(
   });
 }
 /**
- * 只改章程里的阶段记录（stages），其余字段、正文、边界与预算原样保留；留章程修订。
- * leader 改本节点的阶段走这里，不经整份章程（那会连带边界与预算）。
+ * 只改章程里的阶段记录（stages），其余字段、正文与边界原样保留；留章程修订。
+ * leader 改本节点的阶段走这里，不经整份章程（那会连带边界）。
  */
 export function editStages(
   db: DatabaseSync,
@@ -334,10 +323,11 @@ export function revertDoc(
       boundaries?: unknown;
       budget?: unknown;
     };
+    // 旧修订里的预算份额（budget）已下线，不再恢复。
+    delete snapshot.budget;
     // 第 2 步之前的章程修订没有 boundaries：当时本节点没有边界
     if (doc === "charter") {
       snapshot.boundaries ??= [];
-      snapshot.budget ??= {};
       const latest = current(db, node.id, "charter");
       const fields = snapshot.fields as Record<string, unknown>;
       const currentFields = latest
@@ -373,10 +363,7 @@ function writeDoc(
         : fields,
     body,
     ...(doc === "charter"
-      ? {
-          boundaries: exportBoundaries(ownBoundaries(db, node)),
-          budget: exportShares(ownShares(db, node)),
-        }
+      ? { boundaries: exportBoundaries(ownBoundaries(db, node)) }
       : {}),
   });
   return next;
@@ -419,43 +406,19 @@ function editDocInner(
     fields: unknown;
     body: unknown;
     boundaries?: unknown;
-    budget?: unknown;
   },
   reason: string,
   actor: string,
 ) {
   const before = current(db, node.id, doc)?.rev ?? 0;
-  if (doc === "charter" && isLegacyBudget(snapshot.budget)) {
-    const above = effective(
-      chainLevels(nodes(db), allBoundaries(db), node.parent_id),
-    );
-    snapshot = {
-      ...snapshot,
-      ...liftLegacyBudget(
-        snapshot.budget,
-        snapshot.boundaries ?? exportBoundaries(ownBoundaries(db, node.id)),
-        new Set(above.map((e) => e.id)),
-      ),
-    };
-  }
   const fields = validateFields(doc, snapshot.fields),
     body = validateBody(snapshot.body);
   let converted: Converted[] = [];
-  if (doc === "card") {
-    if (snapshot.boundaries !== undefined)
-      throw new Problem(400, "card.boundaries 是未知字段，边界写在章程里");
-    if (snapshot.budget !== undefined)
-      throw new Problem(400, "card.budget 是未知字段，份额写在章程里");
-  } else if (snapshot.boundaries !== undefined) {
+  if (snapshot.boundaries !== undefined) {
     const plan = planBoundaries(db, nodes(db), node, snapshot.boundaries);
     saveBoundaries(db, node.id, plan.entries);
     converted = plan.converted;
   }
-  if (doc === "charter" && snapshot.budget !== undefined)
-    saveShares(db, node.id, planShares(db, node, snapshot.budget));
-  // 根保留或花费边界变严时，已有下级份额也必须满足新上限。
-  if (doc === "charter" && snapshot.boundaries !== undefined)
-    checkStoredShares(db, node);
   const next = writeDoc(db, node.id, doc, fields, body, reason, actor);
   return {
     node: ref(node.id),
@@ -467,7 +430,6 @@ function editDocInner(
     ...(doc === "charter"
       ? {
           boundaries: exportBoundaries(ownBoundaries(db, node.id)),
-          budget: exportShares(ownShares(db, node.id)),
           converted: applyConverted(db, node, converted, reason, actor),
         }
       : {}),
@@ -575,7 +537,6 @@ export function editNode(
           newParent: target.id,
           what: "位置",
         }).converted;
-      if (target.id !== node.parent_id) checkStoredShares(db, node, target.id);
       parent = target.id;
     }
     const slug =
@@ -826,26 +787,4 @@ export function charterFields(
 ): Record<string, unknown> {
   const old = current(db, node, "charter");
   return old ? (JSON.parse(old.fields) as Record<string, unknown>) : {};
-}
-/**
- * 只换章程字段，正文、边界与份额不动（目标树迁移用）；留一条章程修订。
- * 调用方负责事务与权限。
- */
-export function writeCharterFields(
-  db: DatabaseSync,
-  node: number,
-  fields: Record<string, unknown>,
-  reason: string,
-  actor: string,
-) {
-  const row = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", node);
-  if (!row) throw new Problem(404, `${ref(node)} 不存在`);
-  return editDocInner(
-    db,
-    row,
-    "charter",
-    { fields, body: current(db, node, "charter")?.body ?? "" },
-    validateReason(reason),
-    actor,
-  );
 }

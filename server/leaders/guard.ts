@@ -3,7 +3,6 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, nodes, ref } from "../org/model.ts";
-import { matchRole } from "../org/task-node.ts";
 import { partForTask } from "../org/task-part.ts";
 import { getTask } from "../tasks/ledger.ts";
 import { parentOf } from "../tasks/ledger-validate.ts";
@@ -84,36 +83,15 @@ function nodeCheck(
   return { what: `${what} ${ref(node.id)}`, node: node.id };
 }
 
-/** 建任务、改任务、发会审时 body 里的归属部分、记账节点与父任务。 */
-function bodyChecks(
-  db: DatabaseSync,
-  body: Body,
-  roleKey: "role" | "leader",
-): ScopeCheck[] {
+/** 建任务、改任务时 body 里的归属部分、投任务的节点与父任务。 */
+function bodyChecks(db: DatabaseSync, body: Body): ScopeCheck[] {
   const checks: ScopeCheck[] = [];
   if (given(body.part)) {
     const id = partForTask(db, body.part);
     checks.push({ what: `归属部分 ${ref(id!)}`, node: id });
   }
-  if (given(body.goal)) {
-    const id = partForTask(db, body.goal, "goal");
-    checks.push({ what: `归属部分 ${ref(id!)}`, node: id });
-  }
   if (given(body.from))
     checks.push(nodeCheck(db, String(body.from), "投任务的节点"));
-  const role = body[roleKey];
-  if (typeof role === "string" && role.trim()) {
-    const node =
-      roleKey === "leader"
-        ? nodeByAddress(db, role.trim())
-        : matchRole(
-            db,
-            role.trim(),
-            typeof body.repo === "string" ? body.repo : null,
-            true,
-          ).node;
-    if (node) checks.push({ what: `记账节点 ${ref(node.id)}`, node: node.id });
-  }
   if (given(body.parent)) {
     const parent = parentOf(db, body.parent);
     if (parent !== null) checks.push(taskCheck(db, parent, "父任务"));
@@ -159,11 +137,10 @@ export function registerLeaderGuard(
     const body = bodyOf(request);
     let verdict: string | null = null;
     switch (rule) {
-      case "task-create":
-      case "review-create": {
+      case "task-create": {
         verdict = ownerVerdict(leader, body.owner);
         if (verdict) break;
-        if (!given(body.part) && !given(body.goal)) {
+        if (!given(body.part)) {
           const home = [...led].sort((a, b) => a - b)[0];
           if (home === undefined) {
             verdict = denied(leader, "建任务：你还没有负责的节点");
@@ -172,11 +149,7 @@ export function registerLeaderGuard(
           // 不写归属部分时记在自己负责的节点上，事件也就回到自己这里。
           body.part = ref(home);
         }
-        verdict = scopeVerdict(
-          leader,
-          scope,
-          bodyChecks(db, body, rule === "task-create" ? "role" : "leader"),
-        );
+        verdict = scopeVerdict(leader, scope, bodyChecks(db, body));
         break;
       }
       case "task":
@@ -198,7 +171,7 @@ export function registerLeaderGuard(
           ownerVerdict(leader, body.owner) ??
           scopeVerdict(leader, scope, [
             taskCheck(db, idParam(request)),
-            ...bodyChecks(db, body, "role"),
+            ...bodyChecks(db, body),
           ]);
         break;
       case "point":

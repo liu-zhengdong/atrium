@@ -40,7 +40,7 @@ const cli = (...args: string[]) =>
     cwd: root,
     timeout: 60000,
   });
-await cli("task", "ls"); // 第一条经服务的命令把 detached 服务拉起来
+await cli("start"); // 显式启动 detached 服务（别的命令不再自动拉起）
 const record = readService(data);
 if (!record || !alive(record.pid)) throw new Error("服务没有起来");
 // 组织运行时空闲时不开子进程；有就一并报告，收尾时整棵树都要带走。

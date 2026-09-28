@@ -14,7 +14,7 @@ export type PrView = {
 };
 
 /**
- * 合入队列（与提前检查）用到的 git / gh 调用：失败抛错、错误里抹掉凭据；服务关闭中不再发命令。
+ * 合入队列用到的 git / gh 调用：失败抛错、错误里抹掉凭据；服务关闭中不再发命令。
  * 只管怎么调命令，合入怎么走在 merge-runtime.ts。
  */
 export class MergeGit {

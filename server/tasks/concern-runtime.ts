@@ -95,18 +95,24 @@ export function openReviews(
       }),
     );
     writeFileSync(brief, text, { mode: 0o600 });
-    const review = createTask(db, {
-      title: clipTitle(
-        `专员审查：${checklist.name} · ${parent.ref} ${parent.title}`,
-      ),
-      parent: parent.ref,
-      ...(row.node_id < 0 ? { job: checklist.ref } : { role: checklist.ref }),
-      deliver: "none",
-      brief: text,
-      brief_path: brief,
-      ...(parent.owner ? { owner: parent.owner } : {}),
-      ...(parent.part_ref ? { part: parent.part_ref } : {}),
-    });
+    const review = createTask(
+      db,
+      {
+        title: clipTitle(
+          `专员审查：${checklist.name} · ${parent.ref} ${parent.title}`,
+        ),
+        parent: parent.ref,
+        ...(row.node_id < 0 ? { job: checklist.ref } : { role: checklist.ref }),
+        deliver: "none",
+        brief: text,
+        brief_path: brief,
+        ...(parent.owner ? { owner: parent.owner } : {}),
+        ...(parent.part_ref ? { part: parent.part_ref } : {}),
+      },
+      undefined,
+      undefined,
+      { helper: true },
+    );
     db.prepare(
       "UPDATE task_concerns SET review_id=?,verdict=NULL,reason=NULL,decided_at=NULL WHERE task_id=? AND node_id=?",
     ).run(review.id, parentId, row.node_id);

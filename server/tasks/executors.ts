@@ -256,7 +256,16 @@ export class Executors {
     detail: Record<string, unknown>,
     actor?: string,
   ) {
-    publishTask(this.ctx.inbox, this.ctx.db, id, kind, detail, actor);
+    // 上面的总任务状态可能跟着变了（t190）：等它们的 task wait 也醒一下。
+    for (const total of publishTask(
+      this.ctx.inbox,
+      this.ctx.db,
+      id,
+      kind,
+      detail,
+      actor,
+    ))
+      this.ctx.waits.changed(total);
   }
 
   advance(

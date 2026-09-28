@@ -6,11 +6,14 @@ import type { Deliver } from "./deliver.ts";
 import type { NoteView } from "./notes.ts";
 import type { ConcernState, InviteHint } from "./concern-gate.ts";
 import type { Holder } from "./holder.ts";
+import type { Rollup } from "./rollup.ts";
 import { applyDeliveryEvent } from "./delivery-records.ts";
 
 export type TaskRow = {
   id: number;
   parent_id: number | null;
+  /** 1 表示运行时替父任务建的帮手（专员审查、会审意见），不让父任务变成总任务（t190）。 */
+  helper: number;
   title: string;
   /** 任务详述内容（#355）；列表类视图不带，单个任务才给。 */
   brief?: string | null;
@@ -88,6 +91,8 @@ export type Task = TaskRow & {
   also_auto?: string[];
   /** 现在球在谁手里（holder.ts）；只有单个任务视图给，已结束为 null。 */
   holder?: Holder | null;
+  /** 总任务（t190）按全部子孙汇总的状态与进度；不是总任务为 null，旧接口不给为 undefined。 */
+  rollup?: Rollup | null;
 } & NoteView;
 /** 树只带画树要的列（t155）；详述、结果摘要等大字段要看用 task show。 */
 export type TaskNode = Pick<
@@ -104,6 +109,8 @@ export type TaskNode = Pick<
   parent_ref: string | null;
   children: TaskNode[];
   child_summary: ChildSummary | null;
+  /** 总任务（t190）按全部子孙汇总的状态与进度；不是总任务为 null。 */
+  rollup: Rollup | null;
 } & NoteView;
 export type TaskEventRow = {
   id: number;

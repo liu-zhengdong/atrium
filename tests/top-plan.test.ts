@@ -61,10 +61,14 @@ const up = (
   over: Partial<NonNullable<PlanEntry["upstream"]>[number]> = {},
 ) => ({ ref, status, worker: null, started_at: null, pr: null, ...over });
 
-/** A→B→C 链（A 在跑）、一个带外部 PR 条件的等待、一个就绪、一个分组父任务、一个因上游失败卡住的。 */
+/** A→B→C 链（A 在跑）、一个带外部 PR 条件的等待、一个就绪、一个总任务（只作分组标题）、一个因上游失败卡住的。 */
 function sample(): PlanView {
   return {
     next_after: null,
+    // 总任务（t190）不进排期，服务端只给分组标题。
+    totals: [
+      { ref: "t40", title: "发布 v0.2", parent_ref: null, part_ref: null },
+    ],
     groups: {
       running: [
         entry("t32", "实现排期接口", {
@@ -81,7 +85,6 @@ function sample(): PlanView {
           node_path: "atrium/cli",
           task: { auto: 1, owner: "secretary" },
         }),
-        entry("t40", "发布 v0.2", { open_children: 1 }),
       ],
       waiting: [
         entry("t33", "top 加排期视图", {
@@ -440,7 +443,7 @@ test("top 屏：排期段接在看板下面；取不到排期不影响看板；�
     "/tasks/plan",
     "/tasks/top",
   ]);
-  assert.equal(got.plan?.groups.ready.length, 2);
+  assert.equal(got.plan?.groups.ready.length, 1);
   const failing = {
     get: async (path: string) => {
       if (path === "/tasks/plan") throw new Error("404 不认识的路径");
@@ -498,7 +501,8 @@ test("排期接口：记账节点路径、未结束子任务数与逐项上游�
   assert.deepEqual(find("t3").after_pr, [
     { repo: "OpenQuota/core", number: 6, merged: false, error: null },
   ]);
-  assert.equal(find("t4").open_children, 1);
+  // t4 有了子任务就是总任务（t190）：不派、不进排期。
+  assert.equal(find("t4"), undefined);
   assert.equal(find("t5").open_children, 0);
   // 上游 done 且交付 PR：带 PR 号与缓存的合入状态。
   db.prepare(

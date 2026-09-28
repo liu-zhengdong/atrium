@@ -14,6 +14,8 @@ import { holderFacts } from "./holder-facts.ts";
 import { holderOf, type Holder } from "./holder.ts";
 import { idleWaits } from "./queue.ts";
 import { idleWaitText, isIdle } from "./priority.ts";
+import { rollups } from "./rollup-ledger.ts";
+import { progressOf } from "./rollup.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -54,7 +56,44 @@ export type TopRow = NoteView & {
   holder?: Holder | null;
   /** 本地检查正在跑（交付后或合入重跑，#358 第 2 步）：在哪台；没在跑为 null。 */
   checking?: { host: string | null } | null;
+  /** 最近的总任务（t190）：父任务的短号、标题与汇总进度；不在总任务下为 null，旧版服务不给。 */
+  total?: TopTotal | null;
 };
+
+export type TopTotal = {
+  ref: string;
+  title: string;
+  /** 已上线或完成的叶子 / 叶子数（不算取消的），如「5/12」。 */
+  progress: string;
+};
+
+/** 在看板上的行按最近的总任务（父任务）分组：一次取父任务标题、一次算汇总。 */
+function totalsOf(db: DatabaseSync, rows: readonly TaskRow[]) {
+  const parents = [
+    ...new Set(
+      rows.flatMap((row) =>
+        row.parent_id !== null && !row.helper ? [row.parent_id] : [],
+      ),
+    ),
+  ];
+  const result = new Map<number, TopTotal>();
+  if (!parents.length) return result;
+  const summaries = rollups(db, parents);
+  for (const parent of all<{ id: number; title: string }>(
+    db,
+    `SELECT id,title FROM tasks WHERE id IN (${parents.map(() => "?").join(",")})`,
+    ...parents,
+  )) {
+    const rollup = summaries.get(parent.id);
+    if (rollup)
+      result.set(parent.id, {
+        ref: taskRef(parent.id),
+        title: parent.title,
+        progress: progressOf(rollup),
+      });
+  }
+  return result;
+}
 
 const FINISHED_STATUSES = [...FINISHED] as TaskStatus[];
 
@@ -189,6 +228,7 @@ export function topRows(
       "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_inbox'",
     )
     .get();
+  const totals = totalsOf(db, selected.rows);
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
@@ -223,6 +263,10 @@ export function topRows(
           : reasonOf(history, "block")),
       tells: tells.get(row.id) ?? null,
       concerns: concerns.get(row.id) ?? null,
+      total:
+        row.parent_id !== null && !row.helper
+          ? (totals.get(row.parent_id) ?? null)
+          : null,
       ...(() => {
         const facts = holderFacts(
           db,

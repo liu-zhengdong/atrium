@@ -476,6 +476,25 @@ a.crumb:hover {
 .point-scope a:hover {
   color: var(--ink);
 }
+/* 总任务（t190）：标题下一行「在做 5/12 · 展开 12 个子任务」，点开列直接子任务。 */
+.total-children {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.total-children summary {
+  cursor: pointer;
+}
+.total-children ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+.total-children li {
+  margin: 2px 0;
+  color: var(--ink);
+}
 /* 管方面的部分的要点适用于哪几块：原则下一行小字。 */
 .point-scope {
   display: block;

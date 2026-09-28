@@ -289,7 +289,19 @@ const TAG = {
 const ACTIVE = new Set(["doing", "merge", "blocked", "queued"]);
 const ENDED = new Set(["merged", "online", "done", "cancelled"]);
 const ORDER = Object.keys(TAG);
+/** 总任务（t190）的汇总状态对应的标签：它自己从不在跑，状态由子孙推出。 */
+const TOTAL_TAG = {
+  running: "doing",
+  blocked: "blocked",
+  online: "online",
+  cancelled: "cancelled",
+  todo: "todo",
+};
 function tagOf(t) {
+  if (t.total)
+    return t.status === "cancelled"
+      ? "cancelled"
+      : (TOTAL_TAG[t.total.status] ?? "todo");
   if (t.delivery_stage === "merge_queued" || t.delivery_stage === "merging")
     return "merge";
   if (t.delivery_stage === "online") return "online";
@@ -304,7 +316,18 @@ const sortTasks = (list) =>
     .sort((a, b) => ORDER.indexOf(a.tag) - ORDER.indexOf(b.tag));
 function taskList(n) {
   const { running, blocked, todo, recent } = n.tasks;
-  return sortTasks([...running, ...blocked, ...todo, ...recent]);
+  const all = [...running, ...blocked, ...todo, ...recent];
+  // 总任务的子任务收进总任务那一行，展开才看（t190）。
+  const totals = new Set(all.filter((t) => t.total).map((t) => t.ref));
+  return sortTasks(all.filter((t) => !t.parent || !totals.has(t.parent)));
+}
+/** 总任务那一行下面的展开：直接子任务各一行（编号、标题、状态），更多的写个数。 */
+function totalChildren(t) {
+  const rows = t.total.children.map((c) => {
+    const [label] = TAG[c.total ? "todo" : tagOf(c)] ?? TAG.todo;
+    return `<li><span class="task-ref">${esc(c.ref)}</span> ${esc(c.title)} <span class="muted">${esc(c.total ? "总任务" : label)}</span></li>`;
+  });
+  return `<details class="total-children"><summary>${esc(`${t.total.label} ${t.total.progress} · 展开 ${t.total.children.length + t.total.more} 个子任务`)}</summary><ul>${rows.join("")}${t.total.more ? `<li class="muted">${esc(`还有 ${t.total.more} 个：atrium task tree ${t.ref}`)}</li>` : ""}</ul></details>`;
 }
 function spent(t) {
   if (!t.started_at) return "";
@@ -324,7 +347,8 @@ function taskTable(all, { withRole, empty }) {
     withRole ? "tasks" : "tasks-plain",
     heads,
     list.map((t) => {
-      const [label, tone] = TAG[t.tag];
+      const [tagLabel, tone] = TAG[t.tag];
+      const label = t.total ? `${tagLabel} ${t.total.progress}` : tagLabel;
       const worker = workerLabel(t.worker);
       const doing = t.action || t.reason || "";
       // 最新备注只在任务没结时显示：作者用名字（Atrium 负责人、你）。
@@ -339,7 +363,7 @@ function taskTable(all, { withRole, empty }) {
         ? chipLink(t.job.name, "role", roleHref(t.job.ref))
         : none;
       return `<div class="row" role="row">
-        ${cell("任务", taskName(t.ref, t.title, t.by, taskParts(t)), " name plain task")}
+        ${cell("任务", taskName(t.ref, t.title, t.by, taskParts(t) + (t.total ? totalChildren(t) : "")), " name plain task")}
         ${withRole ? cell("专员", role, t.job ? "" : " none") : ""}
         ${cell("状态", t.urgent ? `<span class="chips">${chip("紧急", "red")}${chip(label, tone)}</span>` : t.idle && !ENDED.has(t.tag) ? `<span class="chips">${chip("闲时", "gray")}${chip(label, tone)}</span>` : chip(label, tone))}
         ${cell("谁在做", worker ? `<span class="chip chip-soft clip" title="${esc(worker)}">${esc(worker)}</span>` : none, worker ? "" : " none")}

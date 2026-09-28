@@ -16,6 +16,9 @@ import {
 import { refreshDueSchedulePrs } from "./schedule-refresh.ts";
 import { planDetails, type PlanDetail } from "./plan-view.ts";
 import { taskRoute } from "../leaders/subscriber.ts";
+import { SECRETARY } from "../leaders/route.ts";
+import { ancestorsOf, isTotal, totalsAmong } from "./rollup-ledger.ts";
+import { planCounts } from "./plan-count.ts";
 
 export type ScheduleGroup = "running" | "ready" | "waiting" | "blocked";
 export type PlanItem = {
@@ -197,7 +200,22 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
   )
     throw usage("plan: after 应为非负整数，limit 应为 1～500");
   const rows = all<TaskRow>(db, PLAN_PAGE_SQL, after, limit + 1);
-  const page = rows.slice(0, limit);
+  // 总任务（t190）不派，不进排期；要看它的进度用 task tree。
+  const totals = totalsAmong(
+    db,
+    rows.slice(0, limit).map((row) => row.id),
+  );
+  const page = rows.slice(0, limit).filter((row) => !totals.has(row.id));
+  // 总任务只给分组标题用（top 的排期段把同一总任务下的待办排在一起）。
+  const headings = rows
+    .slice(0, limit)
+    .filter((row) => totals.has(row.id))
+    .map((row) => ({
+      ref: taskRef(row.id),
+      title: row.title,
+      parent_ref: row.parent_id === null ? null : taskRef(row.parent_id),
+      part_ref: row.part_id == null ? null : `o${row.part_id}`,
+    }));
   const details = planDetails(db, page);
   const ahead = once(() => idleWaits(db));
   // 细节是只读附加字段（top 的排期段用）；分组判定仍只看 planItem。
@@ -205,16 +223,19 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
     ...planItem(db, row, ahead),
     ...details.get(row.id)!,
   }));
+  const groups = {
+    running: items.filter((item) => item.group === "running"),
+    // 紧急的排最前（t113），闲时的排最后（t136），同一档照短号。
+    ready: items
+      .filter((item) => item.group === "ready")
+      .sort((a, b) => planRank(a.task) - planRank(b.task)),
+    waiting: items.filter((item) => item.group === "waiting"),
+    blocked: items.filter((item) => item.group === "blocked"),
+  };
   return {
-    groups: {
-      running: items.filter((item) => item.group === "running"),
-      // 紧急的排最前（t113），闲时的排最后（t136），同一档照短号。
-      ready: items
-        .filter((item) => item.group === "ready")
-        .sort((a, b) => planRank(a.task) - planRank(b.task)),
-      waiting: items.filter((item) => item.group === "waiting"),
-      blocked: items.filter((item) => item.group === "blocked"),
-    },
+    groups,
+    counts: planCounts(groups),
+    totals: headings,
     next_after: rows.length > limit ? taskRef(rows[limit - 1]!.id) : null,
   };
 }
@@ -320,8 +341,14 @@ export class Scheduler {
           row.schedule_reason = current.schedule_reason;
         }
         const page = pagePlan(this.db, rows);
+        // 总任务（t190）不派、不排期：状态跟着子孙走。一页一条查询。
+        const totals = totalsAmong(
+          this.db,
+          rows.map((row) => row.id),
+        );
         for (const row of rows) {
           if (this.stopped) return;
+          if (totals.has(row.id)) continue;
           const item = page.classify(row);
           const state =
             item.group === "waiting"
@@ -424,7 +451,7 @@ export class Scheduler {
       TaskRow,
       "status" | "auto" | "auto_dispatched" | "owner" | "deliver"
     >;
-    if (!canAutoDispatch(fresh)) return true;
+    if (!canAutoDispatch(fresh) || isTotal(this.db, id)) return true;
     if (queued(this.db, id)) {
       this.db.prepare("UPDATE tasks SET auto_dispatched=1 WHERE id=?").run(id);
       return true;
@@ -454,6 +481,9 @@ export class Scheduler {
   ) {
     const task = getTask(this.db, id);
     const route = taskRoute(this.db, task);
+    // 总任务下面的任务（t190）：秘书只收总任务级的，排期的就绪与受阻不投给秘书（卡住由上游自己的结局报）。
+    if (route.subscriber === SECRETARY && ancestorsOf(this.db, id).length)
+      return;
     this.inbox.publish({
       subscriber: route.subscriber,
       taskId: id,

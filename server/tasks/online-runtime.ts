@@ -120,6 +120,15 @@ export class OnlineWatch {
             version: current,
             release: item.detail.release,
             verification: item.detail.hasVerification,
+            // 总任务整体上线时汇总各子任务的端到端验证（t190）。
+            ...(item.detail.hasVerification
+              ? {
+                  verification_text: String(item.detail.verification).slice(
+                    0,
+                    1000,
+                  ),
+                }
+              : {}),
           });
           const { hasVerification: _, ...detail } = item.detail;
           this.options.publish(item.id, "online", detail);

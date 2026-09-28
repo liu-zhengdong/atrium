@@ -126,6 +126,8 @@ import { setHostQuotaSource, type HostQuotaSnapshot } from "../hosts/quota.ts";
 import { machineInfo } from "../hosts/info.ts";
 import { originRepo } from "./gh-repo.ts";
 import { patrolRun } from "./patrol.ts";
+import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
+import { publishTotals } from "./notice.ts";
 import { productRound } from "../products/model.ts";
 import { pendingChoices } from "../choices/store.ts";
 
@@ -529,6 +531,7 @@ export class TaskRunner {
   /** 派活候选一览（只读）：候选执行者、额度、专员与交付记录，推荐与理由；与 run 自动挑人同一份排序。 */
   async pick(reference: unknown, risk: unknown) {
     const task = getTask(this.db, parseTaskRef(reference));
+    if (isTotal(this.db, task.id)) throw totalRefusal(task.ref);
     if (risk !== undefined && risk !== "" && !isRisk(risk))
       throw new Problem(400, "risk: 只能是 low、medium、high", "usage");
     const pace = await (this.launchOptions.pace ?? readPace)().catch(
@@ -561,6 +564,7 @@ export class TaskRunner {
       return { task: getTask(this.db, id), queued: !!queued(this.db, id) };
     }
     let task = getTask(this.db, id);
+    if (isTotal(this.db, id)) throw totalRefusal(task.ref);
     const council = councilRow(this.db, id);
     if (council && council.stage !== "summarizing")
       throw new Problem(
@@ -1319,6 +1323,43 @@ export class TaskRunner {
     return { task: stopped, stopping: false };
   }
 
+  /**
+   * 总任务连带取消（t190）：总任务已先标取消，这里把未结束的子孙逐个取消；在跑的先停再取消，已上线、已完成的不动。
+   * 返回取消了哪些、其中哪些是停掉在跑的。
+   */
+  async cancelDescendants(id: number, actor?: string) {
+    const cancelled: string[] = [];
+    const stopped: string[] = [];
+    for (const child of openDescendants(this.db, id)) {
+      const ref = taskRef(child.id);
+      if (child.status === "running") {
+        try {
+          const stop = await this.stop(ref, actor);
+          if (stop.stopping) await this.wait(ref, 15);
+          stopped.push(ref);
+        } catch (error) {
+          if (!(error instanceof Problem)) throw error;
+        }
+      }
+      if (queued(this.db, child.id)) dequeue(this.db, child.id);
+      const now = getTask(this.db, child.id);
+      if (now.status === "done" || now.status === "cancelled") continue;
+      updateTask(this.db, ref, { status: "cancelled" });
+      await this.cleanupCancelled(child.id);
+      this.waits.changed(child.id);
+      cancelled.push(ref);
+    }
+    this.changedTotals(id);
+    return { cancelled, stopped };
+  }
+
+  /** 人工改了某个任务之后：上面的总任务补一次整体上线判断，并叫醒等它们的 task wait。 */
+  changedTotals(id: number) {
+    for (const total of publishTotals(this.inbox, this.db, id))
+      this.waits.changed(total);
+    this.waits.changed(id);
+  }
+
   /** 给在跑的执行者捎话（#307）；不在跑的留到下次拉起时写进提示词。 */
   tell(reference: unknown, body: unknown, actor?: string) {
     const result = tellTask(this.x, this.db, reference, body, actor);
@@ -1474,6 +1515,10 @@ export class TaskRunner {
   private pending(id: number, task: Task) {
     return (
       task.status === "running" ||
+      // 总任务（t190）：等到子孙全部结束（账本里跟着汇总改成 done / cancelled）。
+      (task.status !== "done" &&
+        task.status !== "cancelled" &&
+        isTotal(this.db, id)) ||
       task.delivery_stage === "reviewing" ||
       task.delivery_stage === "merge_queued" ||
       task.delivery_stage === "merging" ||

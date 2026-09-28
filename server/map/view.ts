@@ -24,6 +24,8 @@ import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { findingsForNode, findingsForNodes } from "../tasks/patrol.ts";
 import { choicesForNodes, pendingChoices } from "../choices/store.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
+import { rollups } from "../tasks/rollup-ledger.ts";
+import { progressOf, rollupLabel, type RollupStatus } from "../tasks/rollup.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。
@@ -93,7 +95,28 @@ export type MapTask = {
   also: Involved[];
   /** 因为牵涉某一块而列在那一块页上时，任务归哪一块；列在自己归属的部分页上为 null。 */
   home: PartBrief | null;
+  /** 父任务（t190）；顶层为 null。网页据此把总任务的子任务收进总任务那一行。 */
+  parent?: string | null;
+  /** 总任务（t190）：按全部子孙汇总的状态、进度与直接子任务；不是总任务为 null。 */
+  total?: MapTotal | null;
 };
+export type MapTotal = {
+  status: RollupStatus;
+  label: string;
+  progress: string;
+  running: number;
+  stuck: number;
+  /** 直接子任务（至多 TOTAL_CHILDREN 个）；更多的在 more 里计数。 */
+  children: {
+    ref: string;
+    title: string;
+    status: string;
+    delivery_stage: string | null;
+    total: boolean;
+  }[];
+  more: number;
+};
+const TOTAL_CHILDREN = 30;
 export type PartBrief = { ref: string; name: string; alias: string };
 export type Involved = PartBrief & { auto: boolean };
 /** 组成部分的一行：在 Part 之外带一句「做什么」和下面还有几块。 */
@@ -307,7 +330,61 @@ export type TaskRow = {
   job_id: number | null;
   urgent?: number | null;
   priority?: string | null;
+  parent_id?: number | null;
 };
+
+/** 部分页上的总任务（t190）：汇总与直接子任务，按 id 集合批量取；旧库没有 helper 列时不算。 */
+export function mapTotals(
+  db: DatabaseSync,
+  ids: readonly number[],
+): Map<number, MapTotal> {
+  const result = new Map<number, MapTotal>();
+  if (!ids.length || !hasColumn(db, "tasks", "helper")) return result;
+  const summaries = rollups(db, ids);
+  if (!summaries.size) return result;
+  const totals = [...summaries.keys()];
+  const children = all<{
+    id: number;
+    parent_id: number;
+    title: string;
+    status: string;
+    delivery_stage: string | null;
+    total: number;
+  }>(
+    db,
+    `SELECT id,parent_id,title,status,delivery_stage,
+       EXISTS(SELECT 1 FROM tasks c WHERE c.parent_id=tasks.id AND c.helper=0) AS total
+     FROM tasks WHERE helper=0 AND parent_id IN (${totals.map(() => "?").join(",")})
+     ORDER BY id LIMIT ?`,
+    ...totals,
+    totals.length * TOTAL_CHILDREN,
+  );
+  const byParent = new Map<number, typeof children>();
+  for (const c of children) {
+    const list = byParent.get(c.parent_id) ?? [];
+    list.push(c);
+    byParent.set(c.parent_id, list);
+  }
+  for (const [id, rollup] of summaries) {
+    const mine = byParent.get(id) ?? [];
+    result.set(id, {
+      status: rollup.status,
+      label: rollupLabel(rollup),
+      progress: progressOf(rollup),
+      running: rollup.running,
+      stuck: rollup.stuck,
+      children: mine.slice(0, TOTAL_CHILDREN).map((c) => ({
+        ref: `t${c.id}`,
+        title: oneLine(c.title, TASK_LINE_WIDTH),
+        status: c.status,
+        delivery_stage: c.delivery_stage,
+        total: !!c.total,
+      })),
+      more: Math.max(0, mine.length - TOTAL_CHILDREN),
+    });
+  }
+  return result;
+}
 
 /** 角色短号 → 名称；旧库没有角色表时为空。 */
 export function jobNames(db: DatabaseSync): Map<number, string> {
@@ -334,9 +411,15 @@ export function taskView(
   live?: LiveRow,
   jobs: ReadonlyMap<number, string> = new Map(),
   people?: TaskPeople,
-  involved: { also?: Involved[]; home?: PartBrief | null } = {},
+  involved: {
+    also?: Involved[];
+    home?: PartBrief | null;
+    total?: MapTotal | null;
+  } = {},
 ): MapTask {
   return {
+    parent: row.parent_id == null ? null : `t${row.parent_id}`,
+    total: involved.total ?? null,
     ref: `t${row.id}`,
     title: row.title,
     status: row.status,
@@ -492,7 +575,7 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
   );
 }
 export const taskColumns = (db: DatabaseSync) =>
-  `id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"},${hasColumn(db, "tasks", "priority") ? "priority" : "NULL AS priority"}`;
+  `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"},${hasColumn(db, "tasks", "priority") ? "priority" : "NULL AS priority"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
 /** 任务在部分页上的顺序：在跑、卡住与等合入、待办、其余。 */
 const TASK_ORDER = (db: DatabaseSync) =>
@@ -578,6 +661,10 @@ export function mapNode(
     both.map((r) => r.id),
   );
   const involved = involvedOfTasks(db, both, x);
+  const totals = mapTotals(
+    db,
+    both.map((r) => r.id),
+  );
   const homeOf = (r: TaskRow) => {
     const h = r.part === null ? undefined : x.byId.get(r.part);
     return h ? brief(x, h) : null;
@@ -586,15 +673,30 @@ export function mapNode(
     ...rows.map((r) =>
       taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id), {
         also: involved.get(r.id),
+        total: totals.get(r.id),
       }),
     ),
     ...others.map((r) =>
       taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id), {
         also: involved.get(r.id),
         home: homeOf(r),
+        total: totals.get(r.id),
       }),
     ),
   ];
+  // 总任务按汇总归到在做、卡住、待办或已结束那一组（账本里它从不是 running / blocked）。
+  const groupOf = (t: MapTask) =>
+    t.total
+      ? t.total.status === "running"
+        ? "running"
+        : t.total.status === "blocked"
+          ? "blocked"
+          : t.total.status === "todo"
+            ? "todo"
+            : "recent"
+      : ["running", "blocked", "todo"].includes(t.status)
+        ? t.status
+        : "recent";
   const urls = repoUrls(db);
   const prs = rows
     .filter((r) => r.pr_url)
@@ -659,12 +761,10 @@ export function mapNode(
     /** 本块及下层（产品部）的选项单，开放中的在前；网页「选项」页签。 */
     choices: choicesForNodes(db, ids, x.byId),
     tasks: {
-      running: tasks.filter((t) => t.status === "running"),
-      blocked: tasks.filter((t) => t.status === "blocked"),
-      todo: tasks.filter((t) => t.status === "todo").slice(0, 10),
-      recent: tasks
-        .filter((t) => !["running", "blocked", "todo"].includes(t.status))
-        .slice(0, 20),
+      running: tasks.filter((t) => groupOf(t) === "running"),
+      blocked: tasks.filter((t) => groupOf(t) === "blocked"),
+      todo: tasks.filter((t) => groupOf(t) === "todo").slice(0, 10),
+      recent: tasks.filter((t) => groupOf(t) === "recent").slice(0, 20),
     },
     links: { prs, issues: [...issues.values()] },
     detail: {

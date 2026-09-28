@@ -1,4 +1,5 @@
 import { oneLine, pad, width } from "./format.ts";
+import { planCounts, scheduleBlocked } from "../server/tasks/plan-count.ts";
 
 /**
  * `atrium top` 的排期段（#262）：就绪、依赖链、等待中与因上游卡住的待办，数据来自 `/api/tasks/plan`。
@@ -49,7 +50,15 @@ export type PlanEntry = {
 export type PlanGroup = "running" | "ready" | "waiting" | "blocked";
 export type PlanView = {
   groups: Record<PlanGroup, PlanEntry[]>;
+  /** 本页里的总任务（t190），只作分组标题；旧版服务没有，退回按 open_children 认父任务。 */
+  totals?: PlanTotal[];
   next_after: string | null;
+};
+export type PlanTotal = {
+  ref: string;
+  title: string;
+  parent_ref: string | null;
+  part_ref: string | null;
 };
 
 export type PlanFrame = {
@@ -207,11 +216,6 @@ const upstreamRefs = (entry: PlanEntry) =>
         .map((text) => /^(t[1-9][0-9]*)\b/.exec(text)?.[1])
         .filter((ref): ref is string => !!ref);
 
-/** 因排期卡住（上游失败、取消或 PR 关闭）；执行失败、关卡不过的已在上面的卡住里。 */
-const scheduleBlocked = (item: Item) =>
-  item.task.schedule_state === "blocked" ||
-  (item.reason ?? "").startsWith("上游 ");
-
 type Line = { text: string; item?: string };
 
 export type PlanLayout = {
@@ -236,16 +240,38 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
   const childParents = new Set(
     all.map((item) => item.task.parent_ref).filter(Boolean),
   );
-  const parents = new Map(
-    all
-      .filter(
-        (item) =>
-          item.group !== "running" &&
-          (item.open_children !== undefined
-            ? item.open_children > 0
-            : childParents.has(item.ref)),
-      )
-      .map((item) => [item.ref, item]),
+  // 总任务（t190）服务端已不放进排期，只在 totals 里给标题；旧版服务按有未结束子任务认父任务。
+  const parents = new Map<string, Item>(
+    plan.totals
+      ? plan.totals.map((total) => [
+          total.ref,
+          {
+            task: {
+              ref: total.ref,
+              title: total.title,
+              status: "todo",
+              worker: null,
+              started_at: null,
+              parent_ref: total.parent_ref,
+              owner: null,
+              auto: 0,
+              part_ref: total.part_ref,
+            },
+            waiting_for: [],
+            reason: null,
+            group: "waiting",
+            ref: total.ref,
+          },
+        ])
+      : all
+          .filter(
+            (item) =>
+              item.group !== "running" &&
+              (item.open_children !== undefined
+                ? item.open_children > 0
+                : childParents.has(item.ref)),
+          )
+          .map((item) => [item.ref, item]),
   );
   const items = new Map(
     all
@@ -289,14 +315,12 @@ export function renderPlan(plan: PlanView, frame: PlanFrame): PlanLayout {
   const blocked = alone.filter(
     (item) => item.group === "blocked" && scheduleBlocked(item),
   );
-  const chained = chains.flat().map((ref) => items.get(ref)!);
+  // 计数与状态栏、task plan 同一个函数（plan-count.ts），不按画出来的行另算。
+  const shared = planCounts(plan.groups);
   const counts = {
-    ready: ready.length + chained.filter((i) => i.group === "ready").length,
-    waiting:
-      waiting.length + chained.filter((i) => i.group === "waiting").length,
-    blocked:
-      blocked.length +
-      chained.filter((i) => i.group === "blocked" && scheduleBlocked(i)).length,
+    ready: shared.ready,
+    waiting: shared.waiting,
+    blocked: shared.schedule_blocked,
   };
 
   // 列宽：前缀（缩进 + 符号 + 短号）对齐，标题最多占剩下的 45%（窄屏 35%），其余给说明。

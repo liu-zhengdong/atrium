@@ -13,6 +13,7 @@ import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
 import type { HostView } from "../server/tasks/host-load.ts";
 import type { Holder } from "../server/tasks/holder.ts";
+import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
 
 /**
@@ -55,7 +56,40 @@ export type TopRow = {
   /** 日志最后写入时刻；没有日志为 0。 */
   log_at: number;
   action: { text: string; kind: string } | null;
+  /** 最近的总任务（t190）；不在总任务下为 null，旧版服务没有这个字段。 */
+  total?: TopTotal | null;
 };
+
+/**
+ * 按最近的总任务分组（t190）：组里的行挪到组里第一行的位置、前面加一行总任务；
+ * 没有总任务的照旧单行。返回画的次序，heading 为 null 的是普通行。
+ */
+export function groupByTotal(
+  rows: readonly TopRow[],
+): { heading: TopTotal | null; rows: TopRow[] }[] {
+  const out: { heading: TopTotal | null; rows: TopRow[] }[] = [];
+  const groups = new Map<string, TopRow[]>();
+  for (const row of rows) {
+    if (!row.total) {
+      out.push({ heading: null, rows: [row] });
+      continue;
+    }
+    const group = groups.get(row.total.ref);
+    if (group) group.push(row);
+    else {
+      const created = [row];
+      groups.set(row.total.ref, created);
+      out.push({ heading: row.total, rows: created });
+    }
+  }
+  return out;
+}
+
+/** 「▸ t174 离开电脑也能拍板 5/12 · 在做 t181、t183」 */
+export function totalHeading(total: TopTotal, rows: readonly TopRow[]) {
+  const live = rows.filter((row) => !FINISHED.has(phase(row)));
+  return `▸ ${total.ref} ${total.title} ${total.progress}${live.length ? ` · 在做 ${live.map((row) => row.ref).join("、")}` : ""}`;
+}
 
 export type Snapshot = {
   now: number;
@@ -322,7 +356,13 @@ export function hostBrief(host: HostView | undefined): string {
 
 /** 画一屏。排队与受阻那两列本来就是空的，所以原因长一点也不会顶掉别的列。 */
 export function renderTop(snapshot: Snapshot, frame: Frame): string {
-  const rows = snapshot.rows;
+  // 同一总任务下的行排在一起，前面加一行总任务（t190）。
+  const groups = groupByTotal(snapshot.rows);
+  const rows = groups.flatMap((group) => group.rows);
+  const headings = new Map<TopRow, string>();
+  for (const group of groups)
+    if (group.heading)
+      headings.set(group.rows[0]!, totalHeading(group.heading, group.rows));
   // 原因可能是整篇（审阅意见、检查输出）：只取第一行，定宽和截断都按这一行算。
   const states = rows.map((row) => oneLine(state(row, frame.now), Infinity));
   // 状态列按时长那一类对齐；排队/受阻的原因是整段话，不参与定宽，借最近动作的空位展开。
@@ -370,7 +410,9 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
         .join("  ")
         .trimEnd();
       const line = FINISHED.has(phase(row)) && frame.color ? faint(text) : text;
+      const heading = headings.get(row);
       return [
+        ...(heading ? [oneLine(heading, frame.width)] : []),
         line,
         ...(row.note
           ? [

@@ -372,11 +372,14 @@ test("建任务时按标题关键词提示要不要请专员，只提示不请",
 test("专员结论补判：人工改过状态的父任务不动；重跑审查后结论跟着更新", () => {
   const db = ledger();
   const parent = createTask(db, { title: "父", concern: "安全" });
-  const review = createTask(db, {
-    title: "审",
-    parent: parent.ref,
-    deliver: "none",
-  });
+  // 运行时建的专员审查是帮手子任务（t190），不让父任务变成总任务。
+  const review = createTask(
+    db,
+    { title: "审", parent: parent.ref, deliver: "none" },
+    undefined,
+    undefined,
+    { helper: true },
+  );
   db.prepare("UPDATE task_concerns SET review_id=? WHERE task_id=?").run(
     review.id,
     parent.id,
@@ -414,11 +417,13 @@ test("专员结论补判：人工改过状态的父任务不动；重跑审查�
   assert.equal(getTask(db, parent.ref).concerns?.[0]?.verdict, "pass");
   // 父任务人工取消后，审查结论只记账不补判
   const other = createTask(db, { title: "父2", concern: "安全" });
-  const review2 = createTask(db, {
-    title: "审2",
-    parent: other.ref,
-    deliver: "none",
-  });
+  const review2 = createTask(
+    db,
+    { title: "审2", parent: other.ref, deliver: "none" },
+    undefined,
+    undefined,
+    { helper: true },
+  );
   db.prepare("UPDATE task_concerns SET review_id=? WHERE task_id=?").run(
     review2.id,
     other.id,
@@ -446,11 +451,13 @@ for (const trusted of [true, false])
       concern: "安全",
       repo: "/repo/atrium",
     });
-    const review = createTask(db, {
-      title: "审",
-      parent: parent.ref,
-      deliver: "none",
-    });
+    const review = createTask(
+      db,
+      { title: "审", parent: parent.ref, deliver: "none" },
+      undefined,
+      undefined,
+      { helper: true },
+    );
     db.prepare("UPDATE task_concerns SET review_id=? WHERE task_id=?").run(
       review.id,
       parent.id,

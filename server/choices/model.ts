@@ -409,6 +409,7 @@ export function pickedBrief(
     "## 怎么接",
     "",
     `交 ${choice.node.ref} 的 leader 拆解：按上面的「能多做到什么」拆成可交付的子任务（atrium task add 标题 --parent 本任务），不另行扩大范围。`,
+    "本任务是准备拆的总任务：先拆，不要直接派它。建了子任务后它自动成为总任务——不再派给执行者，状态与进度按全部子孙汇总（atrium task tree 本任务），整体上线时秘书收一条「整体已上线」。",
   ].join("\n");
 }
 

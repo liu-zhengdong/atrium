@@ -242,7 +242,7 @@ test("账本：建树、列表、详情、人工修正与执行者事件", () =>
   assert.equal(getTask(db, "t2").events.length, 5);
 });
 
-test("父任务汇总只计直接子任务，且不改变父任务状态", () => {
+test("总任务：子任务汇总只计直接子任务，状态与进度按全部叶子汇总（t190）", () => {
   const db = memory();
   const parent = createTask(db, { title: "目标" });
   const statuses = TASK_STATUSES;
@@ -263,18 +263,29 @@ test("父任务汇总只计直接子任务，且不改变父任务状态", () =>
     blocked: 1,
     cancelled: 1,
   };
-  assert.equal(getTask(db, parent.ref).status, "todo");
   assert.deepEqual(getTask(db, parent.ref).child_summary, summary);
   assert.deepEqual(taskTree(db, parent.ref).tasks[0]!.child_summary, summary);
   assert.equal(getTask(db, "t2").child_summary?.total, 1);
   assert.equal(getTask(db, "t3").child_summary, null);
-  assert.match(
-    renderTree(taskTree(db, parent.ref).tasks)[0]!,
-    /待办 1\/6.*进行中 1\/6.*完成 1\/6.*失败 1\/6.*受阻 1\/6.*取消 1\/6/,
+  // 叶子：t3 在跑、t4 完成、t5 失败、t6 受阻、t7 取消、t8（t2 的子任务）待办；t2 有子任务，不算叶子。
+  const rollup = getTask(db, parent.ref).rollup!;
+  assert.equal(rollup.status, "running");
+  assert.equal(rollup.leaves, 6);
+  assert.equal(rollup.finished, 1);
+  assert.deepEqual(rollup.stuck_refs, ["t5", "t6"]);
+  assert.equal(getTask(db, "t2").rollup?.status, "todo");
+  assert.equal(getTask(db, "t3").rollup, null);
+  // 总任务在账本里从不写成 running：有在做的叶子也存 todo。
+  assert.equal(getTask(db, parent.ref).status, "todo");
+  assert.equal(getTask(db, parent.ref).holder, null);
+  assert.equal(
+    renderTree(taskTree(db, parent.ref).tasks)[0],
+    "t1 [在做 1/5] 目标 · 总任务 · 在做 1（t3） · 卡住 2（t5、t6）",
   );
-  updateTask(db, parent.ref, { status: "done" });
-  assert.equal(getTask(db, parent.ref).status, "done");
-  assert.deepEqual(getTask(db, parent.ref).child_summary, summary);
+  assert.equal(
+    listTasks(db, {}).tasks.find((task) => task.ref === "t2")!.rollup?.status,
+    "todo",
+  );
 });
 
 test("树被截断时，父任务汇总仍包含未显示的子任务", () => {

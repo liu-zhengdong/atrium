@@ -250,7 +250,8 @@ ${codes}
   服务：只由 atrium（或 atrium start）启动，别的命令在服务没在跑时报错；atrium restart 随时可做（在跑的执行者由新服务接管）；数据默认 ~/.atrium（ATRIUM_DATA 改），端口 ATRIUM_PORT；令牌失效 atrium auth rotate。
   一键停机：atrium pause [--part 部分|--host hN] [--why 原因] [--stop] 停下一切自主动作（派活、周期任务、leader 与后台秘书唤醒、合入、发版）；atrium resume 恢复。
   规矩（用户的判断）只放一处——要点：atrium org point-add 部分 要点 --why 为什么 --by 'u1 09-28' [--pos N]；挂在部分上、按树往下继承，跨几块的放共同上级；同一部分按 --pos 排序，越靠前越重要、冲突时靠前的优先（组织根上的几条就是全组织的原则）。派活与 leader 唤醒只附归属部分链上的要点（atrium map context 部分 看到的那一段）。其余地方各管各的：做法与口味 → 技能（atrium skill edit）；谁干、交付什么、挂哪些技能 → 专员（只记分工）；工具与模型本身的事实 → 执行者档案；给你留的额度、花费上限 → atrium org limits；用户拍板的事与原因 → 决定记录（atrium decision add，给人回看，不附进提示词）；处理过程 → 任务备注（atrium task note）；当前在等什么 → 备忘（atrium memo edit）；跟着代码走的约定 → 仓库 AGENTS.md。
-  拆任务派活：atrium task add 标题 [--parent t1] [--part 部分] [--by 专员] [--priority 紧急|修复|普通|闲时]；atrium task pick t2 看候选；atrium task run t2 [--worker 工具+模型[:强度]] 入队（一个队列，按优先级与入队先后拉起）；atrium task wait t2；atrium task log t2 --follow；atrium task tree t1。有子任务的是总任务，状态按子孙汇总。
+  拆任务派活：atrium task add 标题 [--parent t1] [--part 部分] [--by 专员] [--priority 紧急|修复|普通|闲时]；atrium task run t2 [--worker 工具+模型[:强度]] 入队（一个队列，按优先级与入队先后拉起）；atrium task wait t2；atrium task log t2 --follow；atrium task tree t1。有子任务的是总任务，状态按子孙汇总。
+  额度：派活前看候选：atrium task pick t2（能不能接、额度、正忙，最上面是推荐）；只看额度：atrium quota；人工解除误判占用：atrium quota --clear claude；给你留的份额：atrium org limits。
   交付：执行者停在 PR；交付前在隔离实例跑端到端验证，把命令与输出贴进 PR「端到端验证」一节，高风险或低信任的 PR 合入前由另一个模型审阅核对；关卡过了进合入队列串行合入；自升级上线后只跑只读冒烟（status、task ls、--help），没过记上线失败。
   看谁在干什么：atrium top（每 2 秒刷新，q 退出；--once 只打一次，脚本用 --once --json）；Claude Code 状态栏用 atrium statusline。
   等事件：atrium events wait --as secretary 只取要处理的事（攒批 30 秒）；处理完 atrium events ack 12；atrium events digest 读知会摘要。

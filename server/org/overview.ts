@@ -192,10 +192,3 @@ export function overviewOf(
     stages,
   };
 }
-
-/** 人话字段名。 */
-export const OVERVIEW_KEYS = new Set([
-  ...Object.keys(OVERVIEW_TEXT),
-  ...Object.keys(OVERVIEW_LISTS),
-  "stages",
-]);

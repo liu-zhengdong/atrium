@@ -12,6 +12,7 @@ import {
   assertNoFixtureLeaks,
   finishFixture,
   trackFixture,
+  trackLauncher,
 } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 
@@ -88,11 +89,13 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   });
   const cliWith = async (extra: NodeJS.ProcessEnv, ...args: string[]) => {
     try {
-      const output = await exec(
+      const running = exec(
         process.execPath,
         [join(packageRoot, "bin/atrium.mjs"), ...args],
         { env: { ...env, ...extra }, cwd: root, timeout: commandBudget },
       );
+      trackLauncher(signal, running.child);
+      const output = await running;
       return { ...output, code: 0 };
     } catch (error) {
       const failure = error as Error & {

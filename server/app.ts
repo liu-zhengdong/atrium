@@ -94,6 +94,15 @@ export async function createApp(options: {
 }) {
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   const db = openDatabase(options.data);
+  // 启动时建表、迁移、导入不逐条刷盘（t198）：这些语句都是自动提交，缺省 synchronous=FULL
+  // 下每条刷一次盘。新数据目录要建上百张表和触发器，Windows 磁盘忙时刷盘慢，光建表就要
+  // 10 秒以上，冷启动超过命令行的等待。WAL 下 NORMAL 断电只丢最近几次提交、不会写坏，
+  // 这些语句下次启动会重跑；createApp 返回前恢复原设置，运行期的写照旧逐次刷盘。
+  const synchronous = Number(
+    (db.prepare("PRAGMA synchronous").get() as { synchronous: number })
+      .synchronous,
+  );
+  db.exec("PRAGMA synchronous=NORMAL");
   const auth = new UserAuth(db, options.data);
   const app = Fastify({
     logger: { level: "warn" },
@@ -334,5 +343,6 @@ export async function createApp(options: {
     db,
     readers: options.quotaReaders,
   });
+  db.exec(`PRAGMA synchronous=${synchronous}`);
   return { app, db, taskRunner };
 }

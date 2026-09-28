@@ -270,8 +270,9 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
     });
     return child.pid!;
   };
-  const ok = running("claude", start("1.5"), CLAUDE_OK);
-  const bad = running("claude", start("1.5"), CLAUDE_ERROR);
+  // 要活过接管：机器忙时从拉起到接管完成会超过 1.5 秒，进程先退了就断言不到「接管时还在跑」。
+  const ok = running("claude", start("4"), CLAUDE_OK);
+  const bad = running("claude", start("4"), CLAUDE_ERROR);
   runner.start();
   await until(
     () =>

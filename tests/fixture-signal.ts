@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { alive, readService } from "../server/service-state.ts";
 import { stopService } from "../server/service.ts";
-import { killProcessesUnder } from "./win-processes.ts";
+import { killProcessesUnder, type Launcher } from "./win-processes.ts";
 
 /**
  * 测试被中断（Ctrl-C、超时强杀）时的收尾：夹具起的后台服务、它的子进程
@@ -27,6 +27,8 @@ export type OpenFixture = {
   root: string;
   children: Set<ChildProcess>;
   pids: Set<number>;
+  /** 夹具拉起的命令行进程：Windows 收尾时按父进程号找它们拉起、尚未登记的服务。 */
+  launchers: Launcher[];
 };
 
 const openFixtures = new Set<OpenFixture>();
@@ -103,6 +105,10 @@ function fixtureProcesses(root: string): number[] {
   }
 }
 
+/** 收尾是同步的（信号处理器里也要用），等待只能阻塞。 */
+const sleepSync = (ms: number) =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
 function stopFixture(fixture: OpenFixture): void {
   const roots = new Set(fixtureProcesses(fixture.root));
   for (const child of fixture.children) {
@@ -144,14 +150,19 @@ function stopFixture(fixture: OpenFixture): void {
       /* 已退出 */
     }
   }
-  // Windows 读不到进程的工作目录：按服务登记的 pid 与命令行结束目录下的进程；
+  // Windows 读不到进程的工作目录：按服务登记的 pid、命令行带着夹具目录、
+  // 以及夹具拉起的命令行进程的子进程（服务还没写登记时只能这样找到）结束进程；
   // 刚退出的进程还占着目录时带重试。
   if (process.platform === "win32") {
     let pid: number | undefined;
-    try {
-      pid = readService(fixture.data)?.pid;
-    } catch {
-      /* 没有登记 */
+    // 服务正在写登记时读会撞上锁：稍等重读，读不到 pid 就会漏掉服务。
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        pid = readService(fixture.data)?.pid;
+        break;
+      } catch {
+        sleepSync(200);
+      }
     }
     if (pid && pid !== process.pid && alive(pid)) {
       fixture.pids.add(pid);
@@ -164,7 +175,16 @@ function stopFixture(fixture: OpenFixture): void {
         /* 已退出 */
       }
     }
-    killProcessesUnder(fixture.root);
+    const killed = killProcessesUnder(fixture.root, fixture.launchers);
+    for (const killedPid of killed) fixture.pids.add(killedPid);
+    // taskkill /F 只是发出结束；机器忙时进程要过一阵才真正退出、放开目录里的文件，
+    // 下面删目录的重试只有两秒左右，先等这些进程没了再删。
+    const gone = Date.now() + 10_000;
+    const victims = [...fixture.pids].filter(
+      (victim) => victim !== process.pid,
+    );
+    while (Date.now() < gone && victims.some((victim) => alive(victim)))
+      sleepSync(100);
   }
   rmSync(fixture.root, {
     recursive: true,
@@ -181,6 +201,7 @@ export function trackFixture(data: string, root: string): OpenFixture {
     root,
     children: new Set<ChildProcess>(),
     pids: new Set<number>(),
+    launchers: [],
   };
   openFixtures.add(fixture);
   allFixtures.add(fixture);
@@ -257,6 +278,7 @@ export function sweepTestRun(runId: string): string[] {
       data: join(root, "data"),
       children: new Set(),
       pids: new Set(),
+      launchers: [],
     });
   }
   return leaked;
@@ -266,4 +288,18 @@ export function sweepTestRun(runId: string): string[] {
 export function trackChild(fixture: OpenFixture, child: ChildProcess): void {
   fixture.children.add(child);
   child.on("exit", () => fixture.children.delete(child));
+}
+
+/**
+ * 夹具拉起的命令行进程（会按需拉起服务）：中断时一并结束；Windows 收尾时
+ * 连它拉起、还没写登记的服务一起结束（t198），它自己退出后也照样找得到。
+ */
+export function trackLauncher(fixture: OpenFixture, child: ChildProcess): void {
+  if (!child.pid) return;
+  const launcher: Launcher = { pid: child.pid, from: Date.now() };
+  fixture.launchers.push(launcher);
+  trackChild(fixture, child);
+  child.on("exit", () => {
+    launcher.until = Date.now();
+  });
 }

@@ -11,6 +11,7 @@ import {
   assertNoFixtureLeaks,
   finishFixture,
   trackFixture,
+  trackLauncher,
 } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 import { writeFakeBin } from "./fake-bin.ts";
@@ -49,11 +50,13 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   });
   const cli = async (...args: string[]) => {
     try {
-      const output = await exec(
+      const running = exec(
         process.execPath,
         [join(packageRoot, "bin/atrium.mjs"), ...args],
         { env, cwd: root, timeout: 30000 },
       );
+      trackLauncher(signal, running.child);
+      const output = await running;
       return { ...output, code: 0 };
     } catch (error) {
       const failure = error as Error & {

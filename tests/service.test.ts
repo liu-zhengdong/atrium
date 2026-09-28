@@ -32,6 +32,7 @@ import {
   finishFixture,
   trackChild,
   trackFixture,
+  trackLauncher,
 } from "./fixture-signal.ts";
 import { childEnv } from "./child-env.ts";
 import { fixture as workerFixture, until } from "./task-fixture.ts";
@@ -66,11 +67,13 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   });
   const cli = async (...args: string[]) => {
     try {
-      const output = await exec(
+      const running = exec(
         process.execPath,
         [join(packageRoot, "bin/atrium.mjs"), ...args],
         { env, cwd: root, timeout: 25000 },
       );
+      trackLauncher(signal, running.child);
+      const output = await running;
       return { ...output, code: 0 };
     } catch (error) {
       const failure = error as Error & {

@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  checkBaseline,
   checkRefusal,
+  checkRoleText,
   chooseCheckHost,
   LOCAL_MARGIN,
   type CheckCandidate,
@@ -27,6 +29,7 @@ const local = (over: Partial<CheckCandidate> = {}): CheckCandidate => ({
   kind: "local",
   connection: "local",
   paused: false,
+  platform: "darwin",
   repos: ["*"],
   cpus: 8,
   load: 0,
@@ -43,6 +46,7 @@ const remote = (
   kind: "remote",
   connection: "online",
   paused: false,
+  platform: "darwin",
   repos: ["*"],
   cpus: 4,
   load: 0,
@@ -51,7 +55,7 @@ const remote = (
   busy: null,
   ...over,
 });
-const need = { repo: "o/r", urgent: false };
+const need = { repo: "o/r", urgent: false, platform: "darwin" };
 
 test("检查派到哪台：本机不比远程忙太多就在本机；本机忙或满去最空的远程；远程都接不了回本机", () => {
   // 只有本机：本机。
@@ -136,6 +140,9 @@ test("远程能不能接检查：不在线、暂停、仓库没登记、太忙�
     [{ repos: ["x/y"] }, /没登记能接仓库 o\/r/],
     [{ busy: "这台太忙" }, /这台太忙/],
     [{ running: 1 }, /最多跑 1 个检查/],
+    [{ platform: "win32" }, /h2 是 win32，与检查基准 darwin 平台不同/],
+    [{ platform: "linux" }, /接活、不跑把关检查/],
+    [{ platform: null }, /h2 还没上报平台/],
   ] as const)
     assert.match(
       checkRefusal(remote(2, over as Partial<CheckCandidate>), need) ?? "",
@@ -147,6 +154,70 @@ test("远程能不能接检查：不在线、暂停、仓库没登记、太忙�
     checkRefusal(remote(2, { repos: ["o/r"] }), { ...need, repo: "?" }) ?? "",
     /没登记/,
   );
+});
+
+test("检查基准平台（t201）：缺省本机平台、仓库可另配；别的平台的主机接活不跑把关检查", () => {
+  assert.equal(checkBaseline(null, "darwin"), "darwin");
+  assert.equal(checkBaseline("", "darwin"), "darwin");
+  assert.equal(checkBaseline("linux\n", "darwin"), "linux");
+  assert.equal(checkBaseline(" win32 ", "linux"), "win32");
+  assert.equal(checkBaseline("windows", "darwin"), "darwin");
+  assert.equal(checkBaseline("freebsd", "linux"), "linux");
+
+  // 本机忙到必须外派，唯一空着的远程是 Windows：不派过去，回本机排队。
+  const overloaded = local({ load: 175 });
+  assert.deepEqual(
+    chooseCheckHost([overloaded, remote(3, { platform: "win32" })], need),
+    {
+      host: 1,
+      kind: "local",
+    },
+  );
+  // 同平台与别的平台都有：只挑同平台的，哪怕别的平台更空。
+  assert.deepEqual(
+    chooseCheckHost(
+      [
+        overloaded,
+        remote(2, { load: 3 }),
+        remote(3, { platform: "win32" }),
+        remote(4, { platform: "linux", load: 0 }),
+      ],
+      need,
+    ),
+    { host: 2, kind: "remote" },
+  );
+  // 仓库配了别的基准（linux），本机 darwin 空着也不优先，去 linux 那台；没有 linux 的回本机。
+  const linuxNeed = { ...need, platform: "linux" };
+  assert.deepEqual(
+    chooseCheckHost(
+      [local(), remote(4, { platform: "linux", load: 2 })],
+      linuxNeed,
+    ),
+    { host: 4, kind: "remote" },
+  );
+  assert.deepEqual(chooseCheckHost([local(), remote(2)], linuxNeed), {
+    host: 1,
+    kind: "local",
+  });
+
+  // host show 的「把关检查」一行。
+  assert.equal(
+    checkRoleText("local", "darwin", "darwin"),
+    "跑（检查基准平台 darwin）",
+  );
+  assert.equal(
+    checkRoleText("remote", "darwin", "darwin"),
+    "接活，也跑把关检查（与检查基准同为 darwin）",
+  );
+  assert.equal(
+    checkRoleText("remote", "win32", "darwin"),
+    "接活、不跑把关检查（平台不同：win32，检查基准 darwin）",
+  );
+  assert.equal(
+    checkRoleText("remote", null, "darwin"),
+    "接活、不跑把关检查（还没上报平台）",
+  );
+  assert.match(checkRoleText("local", "linux", "darwin"), /仍在本机跑/);
 });
 
 test("代理照不照做按提交检查：克隆在数据目录里、地址与分支合法、提交是完整哈希、bundle 不超限", () => {

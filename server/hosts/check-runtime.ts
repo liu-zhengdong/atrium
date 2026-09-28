@@ -8,6 +8,7 @@ import {
   type LocalCheckQueue,
 } from "../tasks/local-check.ts";
 import {
+  checkBaseline,
   checkRefusal,
   chooseCheckHost,
   type CheckCandidate,
@@ -61,15 +62,21 @@ export class CheckDispatch {
   async run(request: CheckRequest): Promise<LocalCheck> {
     const tried = new Set<number>();
     let prepared: Prepared | undefined;
+    // 把关检查只派到与检查基准同平台的主机（t201）：缺省是本机的平台，仓库可另配。
+    const platform = checkBaseline(
+      readConfigured(request.worktree),
+      this.deps.candidates().find((c) => c.kind === "local")?.platform ??
+        process.platform,
+    );
     for (let attempt = 0; attempt < MAX_REMOTE_TRIES; attempt++) {
       const candidates = this.deps.candidates();
-      // 没有能接的远程主机时不碰 git：只有本机的服务照旧直接跑。
+      // 没有能接的远程主机时不碰 git：只有本机（或只有别的平台的主机）照旧在本机跑。
       if (
         !candidates.some(
           (c) =>
             c.kind === "remote" &&
             !tried.has(c.id) &&
-            !checkRefusal(c, { repo: "*", urgent: false }),
+            !checkRefusal(c, { repo: "*", urgent: false, platform }),
         )
       )
         break;
@@ -77,7 +84,7 @@ export class CheckDispatch {
       if (!prepared.ok) break;
       const choice = chooseCheckHost(
         candidates,
-        { repo: prepared.repo, urgent: request.urgent ?? false },
+        { repo: prepared.repo, urgent: request.urgent ?? false, platform },
         tried,
       );
       if (choice.kind === "local") break;
@@ -190,6 +197,15 @@ export class CheckDispatch {
     } finally {
       rmSync(file, { force: true });
     }
+  }
+}
+
+/** 仓库配的检查基准平台（`.agents/check-platform`）；没有或读不了为 null。 */
+function readConfigured(worktree: string) {
+  try {
+    return readFileSync(join(worktree, ".agents", "check-platform"), "utf8");
+  } catch {
+    return null;
   }
 }
 

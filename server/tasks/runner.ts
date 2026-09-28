@@ -126,7 +126,7 @@ import {
   type HostLoadReport,
   type HostNeed,
 } from "../hosts/state.ts";
-import type { CheckCandidate } from "../hosts/check-plan.ts";
+import { checkRoleText, type CheckCandidate } from "../hosts/check-plan.ts";
 import { CheckDispatch } from "../hosts/check-runtime.ts";
 import { setHostQuotaSource, type HostQuotaSnapshot } from "../hosts/quota.ts";
 import { machineInfo } from "../hosts/info.ts";
@@ -923,6 +923,7 @@ export class TaskRunner {
           kind: "local",
           connection: "local",
           paused: row.paused === 1,
+          platform: process.platform,
           repos: ["*"],
           cpus: this.host.limits.cores,
           load: this.host.load(),
@@ -946,6 +947,7 @@ export class TaskRunner {
           onlineMs: this.remote.onlineMs,
         }),
         paused: row.paused === 1,
+        platform: info?.os ?? null,
         repos: parseJson<string[]>(row.repos) ?? [],
         cpus: info?.cpus ?? 1,
         load: load?.load ?? 0,
@@ -1011,6 +1013,12 @@ export class TaskRunner {
       localMax: this.host.limits.maxWorkers,
       tunnel: this.tunnels.status(row.id),
     });
+    // 把关检查只在本机平台（缺省的检查基准）的主机上跑（t201）；仓库另配基准的按仓库判。
+    view.checks = checkRoleText(
+      row.kind,
+      row.kind === "local" ? process.platform : (view.info?.os ?? null),
+      process.platform,
+    );
     if (row.kind !== "local") return view;
     const gate = this.host.gate(running, false);
     return {

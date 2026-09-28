@@ -14,7 +14,7 @@ import { fixture } from "./task-fixture.ts";
 /**
  * 检查派到哪台的运行时（#358 第 2 步，交付后与合入队列共用）：真 git 仓库 + 假的远程连接。
  * 覆盖：只有本机不碰 git、没推送的提交带 bundle、已在远端的不带、有未提交改动只在本机、
- * 那台没跑成换一台再回本机、不知道基础分支只在本机。
+ * 那台没跑成换一台再回本机、不知道基础分支只在本机、别的平台的主机不接把关检查（t201）。
  */
 
 const local = (over: Partial<CheckCandidate> = {}): CheckCandidate => ({
@@ -22,6 +22,7 @@ const local = (over: Partial<CheckCandidate> = {}): CheckCandidate => ({
   kind: "local",
   connection: "local",
   paused: false,
+  platform: "darwin",
   repos: ["*"],
   cpus: 8,
   load: 100,
@@ -30,11 +31,12 @@ const local = (over: Partial<CheckCandidate> = {}): CheckCandidate => ({
   busy: null,
   ...over,
 });
-const remote = (id: number): CheckCandidate => ({
+const remote = (id: number, platform = "darwin"): CheckCandidate => ({
   id,
   kind: "remote",
   connection: "online",
   paused: false,
+  platform,
   repos: ["*"],
   cpus: 4,
   load: 0,
@@ -213,4 +215,40 @@ test("检查派发：那台没跑成换一台，都不行回本机；有未提�
   await dispatch.run({ ...request, base: null });
   assert.equal(sent.length, 2);
   assert.equal(locals.length, 3);
+});
+
+test("检查派发：与检查基准不同平台的主机不接把关检查；仓库 .agents/check-platform 可另配基准", async (t) => {
+  const { fx, git, taskDir, locals, runLocal } = setup(t);
+  const calls: string[][] = [];
+  const counting: typeof exec = (command, args, options) => {
+    calls.push([command, ...args]);
+    return exec(command, args, options);
+  };
+  const { hosts, sent } = fakeRemote(passed);
+  const dispatch = new CheckDispatch({
+    remote: hosts,
+    // 本机（darwin）很忙，唯一空着的远程是 Windows。
+    candidates: () => [local(), remote(3, "win32")],
+    run: counting,
+    runLocal,
+  });
+  const request = { task: 1, worktree: fx.repo, taskDir, base: "main" };
+  // 基准缺省取本机平台：Windows 那台不接，也不碰 git，回本机排队。
+  const result = await dispatch.run(request);
+  assert.equal(result.host, "h1");
+  assert.equal(sent.length, 0);
+  assert.deepEqual(calls, []);
+  assert.equal(locals.length, 1);
+
+  // 仓库把检查基准配成 win32：派到 Windows 那台，本机不同平台不优先。
+  mkdirSync(join(fx.repo, ".agents"), { recursive: true });
+  writeFileSync(join(fx.repo, ".agents", "check-platform"), "win32\n");
+  git("add", ".agents/check-platform");
+  git("commit", "-qm", "check platform");
+  const moved = await dispatch.run(request);
+  assert.equal(moved.host, "h3");
+  assert.deepEqual(
+    sent.map((s) => s.host),
+    [3],
+  );
 });

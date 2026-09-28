@@ -165,6 +165,25 @@ export function eventLine(event: PromptEvent) {
     } | null;
     return `- #${event.id} 巡检发现 ${detail?.node ?? ""}：${(detail?.findings ?? []).map((f) => `${f.ref} ${f.phenomenon}`).join("；")}`;
   }
+  if (event.kind === "choice_small") {
+    const detail = event.detail as {
+      choice?: string;
+      node?: string;
+      small?: { title?: unknown; why?: unknown; basis?: unknown }[];
+    } | null;
+    const items = Array.isArray(detail?.small) ? detail.small.slice(0, 10) : [];
+    const text = (value: unknown, max: number) =>
+      typeof value === "string" ? value.slice(0, max) : "";
+    return [
+      `- #${event.id} 产品部小改进 ${detail?.choice ?? ""} ${detail?.node ?? ""}（${items.length} 条，你自己定）：`,
+      ...items.map((m, i) => {
+        const basis = Array.isArray(m.basis)
+          ? m.basis.filter((b) => typeof b === "string").slice(0, 10)
+          : [];
+        return `  ${i + 1}. ${text(m.title, 80)}——${text(m.why, 400)}${basis.length ? `（依据：${basis.join("；")}）` : ""}`;
+      }),
+    ].join("\n");
+  }
   return `- ${[
     `#${event.id}`,
     event.task,
@@ -214,6 +233,7 @@ export const EVENT_WORDS: Record<string, string> = {
   material_stale: "资料疑似没用",
   material_purge: "资料可以真删",
   secret_stale: "凭据疑似没用",
+  choice_small: "产品部小改进",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
 
@@ -276,6 +296,7 @@ export function leaderPrompt(input: PromptInput): string {
     "- 重派：atrium task run tN [--worker 工具+模型[:强度]]；捎话：atrium task tell tN 补充；停：atrium task stop tN；备注：atrium task note tN 文字",
     `- 新活：atrium task add 标题 --part ${home} [--brief 文件] [--repo 路径] [--by 专员] [--ask 专员]；再 atrium task run tN`,
     "- 巡检发现：atrium patrol findings oN；开任务后 atrium patrol decide fN --task tN，合到已有任务用 --merge tN，忽略用 --ignore 原因；处理后确认事件",
+    "- 产品部的小改进（choice_small）：由你按节奏自行处理——逐条开任务、并入已有任务（atrium task note tN）或不做，记一条决定（atrium decision add）；性能等闲时活照旧排后，不必上交",
     `- 请专员：atrium task set tN --ask 前端；会审：atrium review add 议题 --concerns 前端,后端 --part ${home}`,
     "- 专员否决或没出结论（任务受阻）由你判断：atrium task show tN 看理由；认同就捎话写清要改什么再 atrium task run tN；不认同就 atrium task note tN 写明理由，再放行 atrium task merge tN（没有 PR 的 atrium task done tN）；和专员谈不拢才上交 stuck",
     `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,

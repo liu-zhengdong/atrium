@@ -25,8 +25,11 @@ import {
   pendingLine,
   pickedBrief,
   skippedDecision,
+  smallHint,
+  smallLine,
   statusAfter,
   validateChoice,
+  validateSmall,
   type ChoiceFacts,
   type OptionFacts,
 } from "../server/choices/model.ts";
@@ -172,6 +175,71 @@ test("选项单校验：字段、个数、长度、重复、推荐逐项报到�
   ];
   for (const [body, pattern] of cases)
     usage(() => validateChoice(body), pattern);
+});
+
+test("小改进：可不写；每条做什么、为什么、依据，条数与长度、重复、未知字段都报到第几条", () => {
+  assert.deepEqual(validateChoice(sheet()).small, []);
+  assert.deepEqual(validateSmall(null), []);
+  assert.deepEqual(
+    validateChoice(
+      sheet({
+        small: [
+          { title: " 帮助缩短 ", why: "太长", basis: ["f3"] },
+          { title: "报错带下一步", why: "少问一次" },
+        ],
+      }),
+    ).small,
+    [
+      { title: "帮助缩短", why: "太长", basis: ["f3"] },
+      { title: "报错带下一步", why: "少问一次", basis: [] },
+    ],
+  );
+  const item = (over: Record<string, unknown> = {}) => ({
+    title: "修一处",
+    why: "别扭",
+    ...over,
+  });
+  const cases: [unknown, RegExp][] = [
+    ["x", /small: 小改进应为列表/],
+    [{ title: "x" }, /small: 小改进应为列表/],
+    [
+      Array.from({ length: CHOICE_LIMITS.small_count + 1 }, (_, i) =>
+        item({ title: `修${i}` }),
+      ),
+      /small: 小改进至多 10 条，现在是 11 条/,
+    ],
+    [[item(), "x"], /小改进 2: 应为对象/],
+    [[item({ gain: "多" })], /小改进 1: gain 是未知字段/],
+    [[item({ title: "" })], /小改进 1的「做什么」（title）不能为空/],
+    [[item({ title: "长".repeat(81) })], /「做什么」（title）不能超过 80 字/],
+    [[item({ why: undefined })], /小改进 1的「为什么」（why）不能为空/],
+    [[item({ why: "长".repeat(401) })], /「为什么」（why）不能超过 400 字/],
+    [[item({ basis: "f1" })], /小改进 1的「依据」（basis）应为列表/],
+    [
+      [item({ basis: Array.from({ length: 11 }, (_, i) => `t${i}`) })],
+      /「依据」（basis）至多 10 条/,
+    ],
+    [[item({ basis: ["f1", " "] })], /小改进 1的「依据」第 2 条不能为空/],
+    [
+      [item({ title: "修Ａ" }), item({ title: "修a" })],
+      /小改进 2: 标题「修a」和前面的重复/,
+    ],
+  ];
+  for (const [small, pattern] of cases) {
+    usage(() => validateSmall(small), pattern);
+    usage(() => validateChoice(sheet({ small })), pattern);
+  }
+
+  // 选项单上只占一行；交给秘书时不加空格。
+  assert.equal(smallLine(0, "a1"), null);
+  assert.equal(smallLine(2, "a1"), "另有 2 条小改进已交 a1 处理");
+  assert.equal(smallLine(1, "secretary"), "另有 1 条小改进已交秘书处理");
+  const hint = smallHint("c3", { ref: "o2", name: "Atrium" }, 2);
+  assert.match(hint, /随 c3 给Atrium（o2）提了 2 条小改进，不进选项单、由你定/);
+  assert.match(hint, /atrium task add 标题 --part o2/);
+  assert.match(hint, /atrium task note tN/);
+  assert.match(hint, /atrium decision add/);
+  assert.match(hint, /性能等闲时活照旧排后，不必上交/);
 });
 
 test("选项号：数字、字符串、逗号混写，范围与重复都报清楚，结果排好序", () => {
@@ -727,6 +795,8 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
     ],
   );
   assert.equal(c1.decider, "u1");
+  assert.equal(c1.small, null);
+  assert.deepEqual(inboxOf(x.db, "choice-small:c1"), []);
   // 拍板人是用户：秘书被叫醒；项目 leader（o2 的 a2）收到去写意见，不能拍板。
   assert.deepEqual(
     inboxOf(x.db, "choice:c1").map((e) => [e.subscriber, e.kind, e.level]),
@@ -761,9 +831,26 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
     choice: sheet({
       title: "OQ 下一步",
       options: [option(1), option(2), option(3)],
+      small: [{ title: "额度表头对齐", why: "看着乱", basis: ["f2"] }],
     }),
   });
   assert.equal(c2.ref, "c2");
+  // 小改进不进选项单：oq 没有 leader，交秘书自己定；选项单上只剩一行，看不到条目。
+  assert.deepEqual(
+    [c2.options.length, c2.small.count, c2.small.to, c2.small.text],
+    [3, 1, "secretary", "另有 1 条小改进已交秘书处理"],
+  );
+  assert.deepEqual(
+    inboxOf(x.db, "choice-small:c2").map((e) => [
+      e.subscriber,
+      e.kind,
+      e.level,
+    ]),
+    [["secretary", "choice_small", "action"]],
+  );
+  const c2Text = choiceText(c2 as never);
+  assert.match(c2Text, /\n另有 1 条小改进已交秘书处理(\n|$)/);
+  assert.doesNotMatch(c2Text, /额度表头对齐/);
 
   const top = await x.ok("GET", "/api/tasks/top");
   assert.equal(top.choices.open, 2);
@@ -969,9 +1056,15 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.equal((await x.ok("GET", "/api/product/nodes/o1")).decider, "u1");
   const c3 = await x.ok("POST", "/api/choices", {
     node: "o2",
-    choice: sheet(),
+    choice: sheet({ small: [{ title: "修一处", why: "别扭" }] }),
   });
   assert.equal(c3.decider, "a2");
+  // 拍板权下放不影响小改进：照样交 o2 的项目 leader。
+  assert.equal(c3.small.to, "a2");
+  assert.deepEqual(
+    inboxOf(x.db, "choice-small:c3").map((e) => [e.subscriber, e.kind]),
+    [["a2", "choice_small"]],
+  );
   assert.deepEqual(
     inboxOf(x.db, "choice:c3").map((e) => [e.subscriber, e.kind, e.level]),
     [

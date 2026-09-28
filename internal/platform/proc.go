@@ -1,0 +1,91 @@
+package platform
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
+
+// Spec 描述一个要拉起的子进程。Env 必须显式给（来自 ServiceEnv 或 WorkerEnv），不继承当前进程环境。
+type Spec struct {
+	Path   string   // 可执行文件的绝对路径（先 LookPath）
+	Args   []string // 不含程序名
+	Dir    string
+	Env    map[string]string
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+	// Detached：放进独立会话/进程组，父进程退出或重启不影响它，结束时按整棵树结束。
+	Detached bool
+}
+
+// Start 拉起子进程。调用方负责 Wait（Unix 上不 Wait 会留下僵尸，Alive 会一直报活着）。
+func Start(s Spec) (*exec.Cmd, error) {
+	if s.Env == nil {
+		return nil, errors.New("platform.Start：必须显式给 Env（白名单环境）")
+	}
+	cmd := exec.Command(s.Path, s.Args...)
+	cmd.Dir = s.Dir
+	cmd.Env = EnvList(s.Env)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.Stdin, s.Stdout, s.Stderr
+	cmd.SysProcAttr = sysProcAttr(s.Detached)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+// Shell 生成跑一条 shell 命令的 Spec（其余字段调用方补）。
+func Shell(command string) Spec {
+	inv := ShellInvocation(runtime.GOOS, command, os.Getenv("COMSPEC"))
+	return Spec{Path: inv.Command, Args: inv.Args}
+}
+
+// LookPath 在给定的 PATH（通常取自子进程的白名单环境）里找可执行文件。
+func LookPath(name string, env map[string]string) (string, error) {
+	if strings.ContainsRune(name, filepath.Separator) || strings.ContainsRune(name, '/') {
+		if isExecutable(name) {
+			return name, nil
+		}
+		return "", fmt.Errorf("%s 不存在或不可执行", name)
+	}
+	pathEnv := env[EnvKey(runtime.GOOS, "PATH")]
+	names := ExecutableNames(runtime.GOOS, name, env[EnvKey(runtime.GOOS, "PATHEXT")])
+	for _, dir := range strings.Split(pathEnv, PathListSeparator(runtime.GOOS)) {
+		if dir == "" {
+			continue
+		}
+		for _, n := range names {
+			p := filepath.Join(dir, n)
+			if isExecutable(p) {
+				return p, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("在 PATH 里找不到 %s", name)
+}
+
+// KillTree 强制结束 pid 及其整棵子进程树（进程须以 Detached 拉起）。
+func KillTree(pid int) error {
+	if inv, ok := KillTreeInvocation(runtime.GOOS, pid); ok {
+		out, err := exec.Command(inv.Command, inv.Args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s：%w：%s", inv.Command, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	return killGroup(pid)
+}
+
+// Alive 判断进程是否还在。
+func Alive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return alive(pid)
+}

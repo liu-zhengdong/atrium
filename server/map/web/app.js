@@ -1,7 +1,7 @@
 // Atrium 全景网页：只读，唯一能写的是拍板选项单（「选项」页签，POST /api/choices/cN/pick|pass）。
 // 数据来自与 `atrium map --json` 相同的接口，订阅 /api/map/stream 的失效通知，变了只重取并重画，不整页重载。
 // 一页一件东西：面包屑 → 小字类别、大标题、属性行与介绍 → 页签。三类页：
-// - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／选项／负责人／专员／技能／执行者／原则，执行者可按专员筛（#o1/workers/r1）；
+// - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／选项／负责人／专员／技能／执行者／要点，执行者可按专员筛（#o1/workers/r1）；
 //   挂了资料的块多一个「资料」页签（只看，取与归档走命令行）；
 //   有选项单的块多一个「选项」页签（本块及下层产品部的，等你拍板的在前）；组织根顶部有「等你拍板：N」入口；
 //   其他块的「专员」页签只列属于这一块的，能请的其余专员折成一行，点开是 #o4/roles/all；
@@ -386,7 +386,7 @@ function taskTable(all, { withRole, empty }) {
 
 const liveParts = (n) => n.overview.parts.filter((p) => !p.archived);
 /**
- * 原则页签：本块的、下层各块的，再加别处管方面的部分里适用于这一块的（来自写成「安全 · 适用于网页」）。
+ * 要点页签：本块的、下层各块的，再加别处管方面的部分里适用于这一块的（来自写成「安全 · 适用于网页」）。
  * 下层已列过的不重复。
  */
 function allPoints(n) {
@@ -721,16 +721,16 @@ async function decide(form, action) {
 function drawPoints({ node: n }) {
   return table(
     "points",
-    ["原则", "为什么", "谁定的", "来自"],
+    ["要点", "为什么", "谁定的", "来自"],
     allPoints(n).map(
       (p) => `<div class="row" role="row">
-        ${cell("原则", `${ICON.point}<span>${esc(p.text)}${p.scope ? `<span class="point-scope">${scopeText(p.scope)}</span>` : ""}</span>`, " name plain")}
+        ${cell("要点", `${ICON.point}<span>${esc(p.text)}${p.scope ? `<span class="point-scope">${scopeText(p.scope)}</span>` : ""}</span>`, " name plain")}
         ${cell("为什么", esc(p.why), " note")}
         ${cell("谁定的", `${chip(who(p.by), "amber")}${(p.sources ?? []).length ? `<span class="muted small">出自 ${esc(p.sources.join("、"))}</span>` : ""}`)}
         ${cell("来自", p.from ? `<a href="${esc(nodeHref(p.from.ref))}">${esc(p.from.name)}</a>` : "这一块", " muted tagged")}
       </div>`,
     ),
-    "这一块还没写原则。",
+    "这一块还没写要点。",
   );
 }
 
@@ -1097,7 +1097,7 @@ function drawDecisions(d) {
   const foot = g.omitted
     ? `<p class="foot">摘要只列标了原则的和最近的，另有 ${g.omitted} 条。<a href="${esc(all)}">看全部、按关键词查</a></p>`
     : g.total
-      ? `<p class="foot">标了原则的全列，再加最近的；已推翻、已沉淀成原则的在<a href="${esc(all)}">全部</a>里。</p>`
+      ? `<p class="foot">标了原则的全列，再加最近的；已推翻、已沉淀成要点的在<a href="${esc(all)}">全部</a>里。</p>`
       : "";
   return `${table(
     "decisions",
@@ -1214,7 +1214,7 @@ const TABS = {
     draw: (d) => (d.page === "role" ? drawRoleWorkers(d) : drawWorkers(d)),
   },
   points: {
-    label: "原则",
+    label: "要点",
     count: (d) => allPoints(d.node).length,
     draw: drawPoints,
   },

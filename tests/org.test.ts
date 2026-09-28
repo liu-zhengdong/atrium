@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editFields, editNode } from "../server/org/write.ts";
+import {
+  addNode,
+  editFields,
+  editNode,
+  nodeFields,
+} from "../server/org/write.ts";
 import { history, show, tree } from "../server/org/read.ts";
 import { formatOrgChanges } from "../cli/org.ts";
 import {
@@ -277,6 +282,52 @@ test("节点只归档、移动有层级与深度限制", () => {
   assert.throws(
     () => editNode(db, `o${project.id}`, { parent, reason: "环" }, "u1"),
     /parent/,
+  );
+  db.close();
+});
+
+test("建节点：不写 kind 按上级推断，建根要写；人话字段与仓库随建一起落库", () => {
+  const db = setup();
+  const { root, project } = seed(db);
+  assert.equal(
+    addNode(
+      db,
+      { parent: `o${root.id}`, slug: "biz", name: "业务", reason: "建" },
+      "u1",
+    ).kind,
+    "project",
+  );
+  assert.equal(
+    addNode(
+      db,
+      { parent: `o${project.id}`, slug: "api", name: "API", reason: "建" },
+      "u1",
+    ).kind,
+    "module",
+  );
+  const created = addNode(
+    db,
+    {
+      parent: `o${root.id}`,
+      slug: "web",
+      name: "Web",
+      leader: "a1",
+      repos: ["/tmp/t8-repo"],
+      fields: { what: "做业务的一块", alias: "业务部" },
+      reason: "建",
+    },
+    "u1",
+  );
+  assert.equal(created.kind, "project");
+  assert.equal(created.leader, "a1");
+  assert.deepEqual(created.repos, ["/tmp/t8-repo"]);
+  assert.deepEqual(nodeFields(db, created.id), {
+    what: "做业务的一块",
+    alias: "业务部",
+  });
+  assert.throws(
+    () => addNode(db, { slug: "solo", name: "独根", reason: "建" }, "u1"),
+    /kind: 建根时必填/,
   );
   db.close();
 });

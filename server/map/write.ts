@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, ref, type Kind } from "../org/model.ts";
 import { addNode, editFields, nodeFields } from "../org/write.ts";
+import { childKind } from "../org/validate.ts";
 import { validateOverviewField } from "../org/overview.ts";
 
 /**
@@ -74,13 +75,6 @@ export function editMap(
   return editFields(db, ref(node.id), fields, actor);
 }
 
-const CHILD: Record<Kind, Kind | null> = {
-  org: "project",
-  project: "module",
-  module: "module",
-  concern: null,
-};
-
 export type MapAdd = {
   parent: string;
   name: string;
@@ -96,7 +90,7 @@ export function addMap(db: DatabaseSync, input: MapAdd, actor: string) {
   const parent = nodeByAddress(db, String(input.parent ?? ""));
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (!name) throw usage("名称不能为空");
-  const kind = CHILD[parent.kind];
+  const kind = childKind(parent.kind);
   if (!kind) throw usage(`${ref(parent.id)} 是关注点，下面不能再加部门`);
   const slug = (input.slug ?? name).trim().toLowerCase();
   if (!/^(?:[a-z0-9-]|[㐀-鿿])+$/.test(slug))

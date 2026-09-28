@@ -293,6 +293,7 @@ export const orgCommands: Record<string, Command> = {
               (v) => resolve(String(v)),
             );
       // 不写 --kind、不设仓库与 leader 的，按全景图加一块：类型由上级推断，可带人话字段。
+      // 另一条路（给了 --kind/--repo/--leader）同样带人话字段：服务端按上级推断类型并一起写入。
       if (
         parent !== undefined &&
         str(values, "kind") === undefined &&
@@ -333,14 +334,24 @@ export const orgCommands: Record<string, Command> = {
           name: str(values, "name") ?? slug,
           leader: str(values, "leader"),
           repos,
+          fields: Object.fromEntries(
+            (["what", "alias", "analogy"] as const)
+              .filter((k) => str(values, k) !== undefined)
+              .map((k) => [k, str(values, k)]),
+          ),
           reason: reason(values),
         },
+      );
+      const human = ["what", "alias", "analogy"].some(
+        (key) => str(values, key) !== undefined,
       );
       out(
         json,
         result,
         `已新建 o${result.id} [${result.kind}] ${result.name}`,
-        `atrium map edit o${result.id} --what 一句话`,
+        human
+          ? `atrium org show o${result.id} --detail`
+          : `atrium map edit o${result.id} --what 一句话`,
       );
     },
   },

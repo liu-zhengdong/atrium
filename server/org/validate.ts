@@ -37,6 +37,12 @@ export function validParent(parent: Kind, child: Kind): boolean {
     ((parent === "project" || parent === "module") && child === "module")
   );
 }
+/** 上级类型决定下面能建什么类型（`org add` 不写 --kind 时的推断）；关注点已下线，下面不能再建。 */
+export function childKind(parent: Kind): Kind | null {
+  if (parent === "org") return "project";
+  if (parent === "project" || parent === "module") return "module";
+  return null;
+}
 /** 人话字段（是什么、怎么用、现状、阶段……）：只认 overview.ts 里的字段，逐项校验。 */
 export function validateFields(value: unknown): Record<string, unknown> {
   const fields = object(value, "fields");

@@ -14,6 +14,7 @@ import {
   type NodeRow,
 } from "./model.ts";
 import {
+  childKind,
   validateFields,
   validateKind,
   validateReason,
@@ -77,10 +78,13 @@ function repoPaths(value: unknown): string[] {
 export type AddInput = {
   parent?: string;
   slug: string;
-  kind: Kind;
+  /** 不写按上级推断（`org add` 的承诺）；建根必须写。 */
+  kind?: Kind;
   name: string;
   leader?: string | null;
   repos?: string[];
+  /** 建节点时一起写入的人话字段（是什么、人话名与类比……），省得建完再改一遍。 */
+  fields?: Record<string, unknown>;
   reason: string;
 };
 export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
@@ -88,7 +92,21 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
     const list = nodes(db);
     if (list.length >= 500) throw new Problem(400, "组织树已达 500 个节点");
     const parent = input.parent ? nodeByAddress(db, input.parent) : null;
-    const kind = validateKind(input.kind),
+    const inferred = parent ? childKind(parent.kind) : null;
+    if (input.kind === undefined && !parent)
+      throw new Problem(
+        400,
+        "kind: 建根时必填，如 atrium org add org --kind org --name 组织 --reason 建树",
+        "usage",
+      );
+    if (input.kind === undefined && !inferred)
+      throw new Problem(
+        400,
+        `${ref(parent!.id)} 是关注点，下面不能再加部门`,
+        "usage",
+      );
+    const kind =
+        input.kind === undefined ? inferred! : validateKind(input.kind),
       slug = validateSlug(input.slug),
       reason = validateReason(input.reason);
     const name = input.name?.trim();
@@ -129,6 +147,8 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
         repo,
       );
     revision(db, id, "node", 1, actor, reason, nodeSnapshot(db, id));
+    if (input.fields && Object.keys(input.fields).length)
+      writeFields(db, id, validateFields(input.fields), actor, now);
     return nodeSnapshot(db, id);
   });
 }
@@ -152,6 +172,18 @@ export function nodeFields(
   }
 }
 
+/** 写人话字段（当前值，不留修订）：建节点与改字段共用同一份 upsert。 */
+function writeFields(
+  db: DatabaseSync,
+  id: number,
+  fields: Record<string, unknown>,
+  actor: string,
+  at: number,
+) {
+  db.prepare(
+    "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,'charter',0,?,'',?,?) ON CONFLICT(node_id,doc) DO UPDATE SET fields=excluded.fields,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+  ).run(id, JSON.stringify(fields), actor, at);
+}
 /** 改人话字段：整份覆盖当前值，不留修订（全景图只要当前版本）。根只有用户能改，其余按 leader 链。 */
 export function editFields(
   db: DatabaseSync,
@@ -164,10 +196,7 @@ export function editFields(
     authorized(db, node, actor, "fields");
     if (node.archived_at !== null)
       throw new Problem(400, `${ref(node.id)} 已归档`);
-    const validated = validateFields(fields);
-    db.prepare(
-      "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,'charter',0,?,'',?,?) ON CONFLICT(node_id,doc) DO UPDATE SET fields=excluded.fields,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
-    ).run(node.id, JSON.stringify(validated), actor, Date.now());
+    writeFields(db, node.id, validateFields(fields), actor, Date.now());
     return { node: ref(node.id) };
   });
 }

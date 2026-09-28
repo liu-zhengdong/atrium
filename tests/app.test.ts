@@ -280,3 +280,39 @@ test("旧运行时留下的表原样保留，精简入口照常启动且不读�
     await app.close();
   }
 });
+
+test("org/nodes：不写 kind 按上级推断，fields 与仓库随建一起写；建根不写 kind 给提示", async (t) => {
+  const { app } = await open(t, false);
+  const post = (url: string, payload: object) =>
+    app.inject({ method: "POST", url, headers: host, payload });
+  const root = await post("/api/org/nodes", {
+    slug: "org",
+    kind: "org",
+    name: "组织",
+    reason: "创建",
+  });
+  assert.equal(root.statusCode, 201, root.body);
+  const created = await post("/api/org/nodes", {
+    parent: "o1",
+    slug: "biz",
+    name: "业务",
+    repos: ["/tmp/t8-repo"],
+    fields: { what: "做业务的一块", alias: "业务部" },
+    reason: "建",
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.json().kind, "project");
+  const map = await app.inject({ url: "/api/map/nodes/o2", headers: host });
+  assert.equal(map.statusCode, 200, map.body);
+  assert.equal(map.json().overview.what, "做业务的一块");
+  assert.equal(map.json().overview.alias, "业务部");
+  const org = await app.inject({ url: "/api/org/nodes/o2", headers: host });
+  assert.deepEqual(org.json().repos, ["/tmp/t8-repo"]);
+  const noKind = await post("/api/org/nodes", {
+    slug: "solo",
+    name: "独根",
+    reason: "建",
+  });
+  assert.equal(noKind.statusCode, 400);
+  assert.match(noKind.json().error, /建根时必填/);
+});

@@ -26,6 +26,8 @@ type ProfileRow = {
   max_risk: string | null;
   model: string | null;
   checks: string[] | null;
+  protocol: string | null;
+  endpoint: string | null;
   updated_by: string;
   updated_at: number;
   warnings: string[];
@@ -133,11 +135,11 @@ export const workerCommands: Record<string, Command> = {
           table([
             ["档案", "版本", "信任", "最高风险", "模型", "加查", "更新"],
             ...data.profiles.map((p) => [
-              p.ref,
+              `${p.ref}${p.protocol ? `（${p.protocol} 接入）` : ""}`,
               String(p.rev),
               p.trust ?? "—",
               p.max_risk ?? "—",
-              p.model ?? "—",
+              `${p.model ?? "—"}${p.endpoint ? ` @ ${p.endpoint}` : ""}`,
               p.checks?.join(",") || "—",
               `${p.updated_by} ${when(p.updated_at)}${p.warnings.length ? " · 有警告" : ""}`,
             ]),
@@ -149,7 +151,7 @@ export const workerCommands: Record<string, Command> = {
   "workers edit": {
     args: "层/名 (--file 文件|- | --trust 等级 | --max-risk 风险 | --model 模型 | --checks a,b | --set 键=值 | --unset 键) [--reason 原因] [--as secretary]",
     about:
-      "改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）",
+      "改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）。harness/<新名字> 写 protocol: cli 与 command、args 即接入一个通用命令行执行者；任一层写 endpoint、endpoint_api、endpoint_key（凭据名）接自定义模型端点",
     options: {
       file: { type: "string" },
       trust: { type: "string" },

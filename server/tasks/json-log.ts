@@ -118,7 +118,8 @@ export function lastAssistantText(events: JsonEvent[]): string | undefined {
 }
 
 export type AbnormalEnd = {
-  kind: "length" | "thinking" | "permission" | "midway";
+  /** error：通用命令行执行者的日志命中档案里的出错标记（adapters/cli-outcome.ts）。 */
+  kind: "length" | "thinking" | "permission" | "midway" | "error";
   reason: string;
 };
 

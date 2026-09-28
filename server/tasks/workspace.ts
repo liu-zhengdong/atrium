@@ -6,10 +6,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import {
   ADAPTERS,
+  checkEndpoint,
   type Adapter,
   type Launch,
+  type LaunchEndpoint,
   type LaunchInput,
 } from "./adapters/index.ts";
+import { endpointOf, launchEndpoint } from "./endpoint.ts";
 import { taskDir } from "./active.ts";
 import { defaultBranch, ensureWorktree, exec, type Exec } from "./git.ts";
 import { noteTask, type Task } from "./ledger.ts";
@@ -95,6 +98,8 @@ export type Prepared = {
   tellIds: number[];
   /** 派到远程主机（#358）：cwd、worktree 是那台机器上的路径，launch 在代理回执后换成它实际的调用。 */
   remote?: RemotePlan;
+  /** 档案写的自定义模型端点（t271）；远程派活随指令交给代理。 */
+  endpoint?: LaunchEndpoint;
 };
 
 /** 远程主机（#358）：系统与代理数据目录决定那台机器上的路径；skills：那台的代理能挂组织技能（t232）。 */
@@ -199,8 +204,12 @@ export async function prepareRun(
 ): Promise<Prepared> {
   const run = options.run ?? exec;
   const { worker } = chosen;
-  const adapter = ADAPTERS[worker.tool];
+  const adapter = ADAPTERS[worker.tool]!;
   const tellMode = tellModeOf(adapter, worker.profile.rules.tell);
+  // 自定义模型端点（t271）：接不了的工具当场报错，不建工作树、不写提示词。
+  const declared = endpointOf(worker.profile.rules);
+  const endpoint = declared && launchEndpoint(adapter, declared).launch;
+  if (endpoint) checkEndpoint(adapter, endpoint.api);
   const tells = options.db ? listTells(options.db, task.id) : [];
   const dir = taskDir(options.data, task.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -405,6 +414,7 @@ export async function prepareRun(
       tellMode,
       tellIds: resume ? [] : unsent(tells).map((tell) => tell.id),
       remote: { ...remote, prompt, ...(resume ? { resume } : {}) },
+      ...(endpoint ? { endpoint } : {}),
     };
   const launch = buildLaunch(
     adapter,
@@ -416,6 +426,7 @@ export async function prepareRun(
       effort: worker.effort,
       resultFile: join(dir, "last-message.md"),
       live: tellMode === "stdin",
+      ...(endpoint ? { endpoint } : {}),
     },
     resume ? { ...resume, file: join(dir, "tell.md") } : undefined,
   );

@@ -4,7 +4,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { recentAction } from "./action.ts";
 import { taskDir } from "./active.ts";
-import { ADAPTERS, isTool, TOOLS, type Tool } from "./adapters/index.ts";
+import {
+  ADAPTERS,
+  isTool,
+  toolNames,
+  TOOLS,
+  type Tool,
+} from "./adapters/index.ts";
 import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
 import { EventInbox } from "./events.ts";
 import { Retention } from "./retention.ts";
@@ -30,6 +36,7 @@ import {
 } from "./plan.ts";
 import type { PaceEntry } from "./prepare.ts";
 import { resolveWorker, type ResolvedWorker } from "./profiles.ts";
+import { loadCustomTools } from "./custom-tools.ts";
 import {
   ensureWorkerProfiles,
   importWorkerProfiles,
@@ -289,6 +296,7 @@ export class TaskRunner {
     ensureQueueTable(db);
     ensureWorkerProfiles(db);
     importWorkerProfiles(db, options.workersDir);
+    loadCustomTools(db);
     // 本机限额只看服务自己的环境（不是给执行者的 options.env）。
     const owner = spawnOwner(options.data);
     this.host =
@@ -1573,7 +1581,7 @@ export class TaskRunner {
   private async pickReviewer(original: ResolvedWorker | undefined) {
     const exclude = new Set<Tool>(original ? [original.tool] : []);
     const refusals: string[] = [];
-    while (exclude.size <= TOOLS.length) {
+    while (exclude.size <= toolNames().length) {
       let choice: Choice;
       try {
         choice = await chooseWorker(

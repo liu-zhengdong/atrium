@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
+import { syncFromRules } from "./adapters/custom.ts";
 import { parseProfileSource } from "./profiles.ts";
+import { toolProblems } from "./profile-tool-check.ts";
 import {
   listProfiles,
   parseProfileRef,
@@ -30,6 +32,11 @@ function summary(row: StoredProfile) {
     max_risk: parsed.rules.max_risk ?? null,
     model: parsed.rules.model ?? null,
     checks: parsed.rules.checks ?? null,
+    // 通用执行者（t271）与自定义端点：地址不是密钥，照常显示。
+    protocol:
+      typeof parsed.rules.protocol === "string" ? parsed.rules.protocol : null,
+    endpoint:
+      typeof parsed.rules.endpoint === "string" ? parsed.rules.endpoint : null,
     updated_by: row.updated_by,
     updated_at: row.updated_at,
     warnings: parsed.warnings,
@@ -116,9 +123,11 @@ export function editProfile(
   const before = new Set(
     current ? parseProfileSource(current.source).warnings : [],
   );
+  const parsed = parseProfileSource(source);
   const problems = [
     ...sourceProblems(source),
-    ...parseProfileSource(source).warnings.filter((w) => !before.has(w)),
+    ...parsed.warnings.filter((w) => !before.has(w)),
+    ...toolProblems(layer, name, parsed.rules),
   ];
   if (problems.length)
     throw new Problem(
@@ -133,5 +142,7 @@ export function editProfile(
         ? "整份替换"
         : `改字段 ${[...set.map(([k]) => k), ...unset].join("、")}`;
   const result = writeProfile(db, { layer, name, source, author, reason });
+  // 通用执行者（t271）：改完即登记，派活、task pick 马上认得这个名字。
+  if (layer === "harness") syncFromRules(name, parsed.rules);
   return { ref: `${layer}/${name}`, ...result };
 }

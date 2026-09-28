@@ -2,7 +2,9 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { isTool, TOOLS } from "./adapters/index.ts";
+import { isBuiltinTool, TOOLS } from "./adapters/index.ts";
+import { TOOL_NAME_RE } from "./adapters/cli-spec.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
 import { all, atomically, one } from "./ledger-model.ts";
 
 /**
@@ -58,6 +60,10 @@ export function ensureWorkerProfiles(db: DatabaseSync) {
       BEFORE DELETE ON worker_profile_revisions BEGIN SELECT RAISE(ABORT,'worker_profile_revisions append only'); END;`);
 }
 
+/** 工具名：内置工具，或通用执行者的名字（t271，harness 档案里写 protocol 才登记成执行者）。 */
+const toolName = (name: string) =>
+  isBuiltinTool(name) || TOOL_NAME_RE.test(name);
+
 /**
  * 档案名是否合法（纯函数）：harness 是工具名，models 是模型名最后一段，combos 是 `工具+模型名`。
  * 合法返回 null，否则返回原因。
@@ -67,7 +73,9 @@ export function profileNameProblem(
   name: string,
 ): string | null {
   if (layer === "harness")
-    return isTool(name) ? null : `工具层档案名须是 ${TOOLS.join("、")} 之一`;
+    return toolName(name)
+      ? null
+      : `工具层档案名须是内置工具（${TOOLS.join("、")}）或通用执行者名（小写字母开头，只含小写字母、数字、连字符）`;
   if (layer === "models")
     return NAME_RE.test(name) && !name.startsWith(".")
       ? null
@@ -76,7 +84,7 @@ export function profileNameProblem(
   const tool = name.slice(0, plus);
   const model = name.slice(plus + 1);
   return plus > 0 &&
-    isTool(tool) &&
+    toolName(tool) &&
     NAME_RE.test(model) &&
     !model.startsWith(".")
     ? null
@@ -281,6 +289,15 @@ export function importWorkerProfiles(
       const problems = sourceProblems(source);
       if (problems.length) {
         skip(file, problems.join("；"));
+        continue;
+      }
+      // 不是内置工具的工具层档案只有写了 protocol 才是通用执行者（t271）；旧目录里的其余名字照旧跳过。
+      if (
+        layer === "harness" &&
+        !isBuiltinTool(name) &&
+        parseFrontmatter(source).data.protocol === undefined
+      ) {
+        skip(file, `不是内置工具（${TOOLS.join("、")}），也没写 protocol`);
         continue;
       }
       if (readProfile(db, layer, name)) continue;

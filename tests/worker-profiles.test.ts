@@ -63,7 +63,10 @@ function legacyDir(t: { after: (fn: () => void) => void }) {
 
 test("档案名与 层/名（纯函数）：合法的放行，破坏输入给原因", () => {
   assert.equal(profileNameProblem("harness", "codex"), null);
-  assert.match(profileNameProblem("harness", "gemini")!, /工具层/);
+  // 不是内置工具的小写名是通用执行者名（t271），写了 protocol 才登记；大写、空白拒绝。
+  assert.equal(profileNameProblem("harness", "gemini"), null);
+  assert.match(profileNameProblem("harness", "Gemini")!, /工具层/);
+  assert.match(profileNameProblem("harness", "a b")!, /工具层/);
   assert.equal(profileNameProblem("models", "gpt-6-sol"), null);
   assert.equal(profileNameProblem("models", "mimo-v2.6-flash"), null);
   assert.match(profileNameProblem("models", ".hidden")!, /模型层/);
@@ -71,7 +74,8 @@ test("档案名与 层/名（纯函数）：合法的放行，破坏输入给原
   assert.match(profileNameProblem("models", "")!, /模型层/);
   assert.equal(profileNameProblem("combos", "codex+gpt-6-sol"), null);
   assert.match(profileNameProblem("combos", "codex")!, /组合层/);
-  assert.match(profileNameProblem("combos", "nope+x")!, /组合层/);
+  assert.equal(profileNameProblem("combos", "nope+x"), null);
+  assert.match(profileNameProblem("combos", "Nope+x")!, /组合层/);
   assert.match(profileNameProblem("combos", "codex+../x")!, /组合层/);
   assert.match(profileNameProblem("combos", "codex+.x")!, /组合层/);
   assert.deepEqual(parseProfileRef("combos/codex+gpt-6-sol"), {
@@ -313,7 +317,12 @@ test("改档案：整份替换或按字段改，校验不过不写，留修订",
       { set: { trust: "low\nmax_risk: high" } },
       /一行/,
     ],
-    ["harness/gemini", { set: { trust: "low" } }, /工具层/],
+    [
+      "harness/gemini",
+      { set: { trust: "low" } },
+      /不是内置工具：写 protocol: cli/,
+    ],
+    ["harness/Gemini", { set: { trust: "low" } }, /工具层/],
     ["harness/../../etc", { set: { trust: "low" } }, /工具层/],
   ];
   for (const [ref, body, pattern] of bad)

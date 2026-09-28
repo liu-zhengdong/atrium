@@ -62,6 +62,47 @@ atrium task done t3                                             # 人工完成�
 
 `cursor` 缺省模型 `auto`（Cursor 自己挑），额度账号 `cursor`（经 OpenQuota 读）；强度写进模型名后缀，`cursor+gpt-5.3-codex:high` 交给 `--model gpt-5.3-codex-high`，`auto` 不能指定强度。新接入没有交付记录，档案没写时按 `trust: unknown`、`max_risk: low`（只接低风险、合入前另派审阅），交付记录攒够后用 `atrium workers edit harness/cursor` 升。
 
+**通用命令行执行者**（t271）：不在上面七个里的工具（公司自己的、Pi 等）不用写代码，写一份 `harness/<名字>` 档案就能派活——`protocol: cli`、`command`（PATH 上的命令名）与 `args` 参数模板。模板里的占位要加引号：`{prompt}`（提示词正文作参数）、`{prompt_file}`（提示词文件路径）、`{cwd}`、`{model}`、`{effort}`、`{base_url}`；两者都没用时提示词从标准输入给。可选参数写成参数组 `model_args`、`effort_args`、`endpoint_args`，在 `args` 里用 `"{model_args}"` 这样单独占一项标出位置，这次没给模型、强度、端点就整组省掉。`efforts` 列接受的强度；`output: text|jsonl`；`done_match`、`error_match` 是逐行匹配的正则：退出码非 0 照旧判失败，退出码 0 但命中出错标记、或写了结束标记却没见到，也算没做成（有 PR 交付的仍以关卡查到的事实为准）；服务重启后接管的也按这两个标记判。没有进度流，看门狗按「有输出即活着」与工作树变化判卡死；捎话停下带着补充重派。`env` 可加环境变量模板（值可用 `{model}`、`{base_url}`，会写进日志抬头，不放密钥）；`exclusive`、`quota_provider` 同内置工具。档案写坏了 `workers edit` 当场拒绝并逐条说明；写对了立即登记，`task run --worker <名字>+模型` 就能派。新接入的档案没写时按 `trust: unknown`、`max_risk: low`。通用执行者目前只在本机跑（远程主机只上报内置工具）；不写 `--worker` 的自动挑人只在内置工具里挑，要用它就用 `--worker` 写明。契约测试 `tests/worker-contract.test.ts` 供新工具照着跑。
+
+```bash
+# 公司自己的工具：提示词作最后一个参数，模型可选
+cat <<'EOF' | atrium workers edit harness/corp-agent --file -
+---
+protocol: cli
+command: corp-agent
+args: [exec, "{model_args}", --cwd, "{cwd}", --, "{prompt}"]
+model_args: [--model, "{model}"]
+output: jsonl
+done_match: '"type":"done"'
+error_match: '"type":"error"'
+---
+公司的编码工具，提交前先跑 make lint。
+EOF
+atrium task run t4 --worker corp-agent+glm-4.6
+
+# Pi：provider 与地址配在 Pi 自己的 models.json（apiKey 写成环境变量名 GLM_API_KEY），这里只传模型与强度；
+# 密钥在模型层只写 endpoint_key（不写 endpoint），派活时照样按名注入：atrium workers edit models/glm-4.6 --set endpoint_key=GLM_API_KEY
+cat <<'EOF' | atrium workers edit harness/pi-cli --file -
+---
+protocol: cli
+command: pi
+args: [-p, --no-session, "{model_args}", "{effort_args}", --, "{prompt}"]
+model_args: [--model, "{model}"]
+effort_args: [--thinking, "{effort}"]
+efforts: [off, minimal, low, medium, high, xhigh, max]
+---
+EOF
+```
+
+**自定义模型端点**（t271）：内网部署、OpenAI 兼容的模型，在执行者档案（常写在 `models/<模型>`，也可写在工具层或组合层）写 `endpoint`（地址，不带用户名、密码、查询参数）、`endpoint_api`（`openai` 即 Chat Completions，缺省；`responses`；`anthropic`）、`endpoint_key`（凭据名）。密钥不进档案：先 `atrium secret set <节点> <凭据名>` 挂在节点上，派活那一刻按任务归属部分的节点链找（与 `task add --secret` 同一套，缺了拒绝派活并说明是哪个执行者的端点密钥），只注入这次拉起的执行者环境，不进参数、日志、事件与提示词。各工具怎么接：`opencode` 经 `OPENCODE_CONFIG_CONTENT` 加一个 `atrium` provider（`openai` / `anthropic`），模型交给 `-m atrium/<模型>`，密钥写成 `{env:凭据名}`；`codex` 用配置覆盖加一个 `model_provider`（只接 `responses`：codex 已去掉 Chat Completions），密钥按 `env_key` 读；`claude` 接 Anthropic 兼容网关（`anthropic`），地址走 `ANTHROPIC_BASE_URL`，密钥注入成 `ANTHROPIC_AUTH_TOKEN`；通用命令行执行者用 `{base_url}` 与 `endpoint_apis` 声明，`key_env` 写工具从哪个变量读密钥（不写就用凭据名本身）；`kimi`、`grok`、`agy`、`cursor` 接不了。地址配在工具自己配置里的（如 Pi 的 models.json），档案只写 `endpoint_key`，派活时照样按名注入同名变量。接不了的在 `workers edit` 写工具层、组合层时当场拒绝，写在模型层的在派活前拒绝，都说明能用哪些工具。远程主机随指令收到端点，代理照本机一样传入（代理要与服务同版本）。
+
+```bash
+atrium secret set o1 GLM_API_KEY                                   # 从标准输入读值，不回显
+atrium workers edit models/glm-4.6 --set endpoint=http://llm.corp:8000/v1 --set endpoint_key=GLM_API_KEY
+atrium task run t4 --worker opencode+glm-4.6                        # 交给 opencode -m atrium/glm-4.6
+atrium workers ls                                                  # 模型一列带「@ 地址」，通用执行者标「（cli 接入）」
+```
+
 ```bash
 atrium task add "回复一句话" --deliver none
 atrium task pick t4                         # 看候选（只读）：能不能接、账号额度、正忙、交付记录，最上面是推荐与理由
@@ -899,7 +940,7 @@ atrium workers ls [--json]
   示例：atrium workers ls
 
 atrium workers edit 层/名 (--file 文件|- | --trust 等级 | --max-risk 风险 | --model 模型 | --checks a,b | --set 键=值 | --unset 键) [--reason 原因] [--as secretary]
-  改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）
+  改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）。harness/<新名字> 写 protocol: cli 与 command、args 即接入一个通用命令行执行者；任一层写 endpoint、endpoint_api、endpoint_key（凭据名）接自定义模型端点
   示例：atrium workers edit combos/codex+gpt-6-sol --trust medium --reason 连续五次一次通过
 
 atrium workers confirm 工具+模型[:强度] --specialist 专员 --action relax|tighten|avoid_specialist

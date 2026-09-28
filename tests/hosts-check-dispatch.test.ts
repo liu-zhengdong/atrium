@@ -74,11 +74,14 @@ function setup(t: { after: (fn: () => void) => void }) {
   const taskDir = join(fx.root, "data", "tasks", "1");
   mkdirSync(taskDir, { recursive: true });
   const locals: string[] = [];
+  const installs: (boolean | undefined)[] = [];
   const runLocal = async (input: {
     worktree: string;
+    install?: boolean;
     onStatus?: (status: "queued" | "started", log: string) => void;
   }): Promise<LocalCheck> => {
     locals.push(input.worktree);
+    installs.push(input.install);
     input.onStatus?.("started", join(taskDir, "local-check.log"));
     return {
       status: "passed",
@@ -88,7 +91,7 @@ function setup(t: { after: (fn: () => void) => void }) {
       failedTests: [],
     };
   };
-  return { fx, git, taskDir, locals, runLocal };
+  return { fx, git, taskDir, locals, installs, runLocal };
 }
 
 const passed = (host: number): CheckReply => ({
@@ -102,7 +105,7 @@ const passed = (host: number): CheckReply => ({
 });
 
 test("检查派发：只有本机时不碰 git 直接在本机跑；远程有空时带上没推送的提交派过去", async (t) => {
-  const { fx, git, taskDir, locals, runLocal } = setup(t);
+  const { fx, git, taskDir, locals, installs, runLocal } = setup(t);
   const calls: string[][] = [];
   const counting: typeof exec = (command, args, options) => {
     calls.push([command, ...args]);
@@ -130,6 +133,9 @@ test("检查派发：只有本机时不碰 git 直接在本机跑；远程有空
   assert.deepEqual(locals, [fx.repo]);
   assert.deepEqual(calls, []);
   assert.deepEqual(statuses, ["started@h1"]);
+  // 远程任务在本机另建的工作树（t252）：本机跑时要先装依赖。
+  await dispatch.run({ ...request, install: true });
+  assert.deepEqual(installs, [undefined, true]);
 
   // 本机一个没推送的提交：派到 h2，bundle 带过去，克隆路径按那台的数据目录算。
   writeFileSync(join(fx.repo, "new.txt"), "x\n");
@@ -226,7 +232,7 @@ test("检查派发：那台没跑成换一台，都不行回本机；有未提�
 });
 
 test("检查派发：与检查基准不同平台的主机不接把关检查；仓库 .agents/check-platform 可另配基准", async (t) => {
-  const { fx, git, taskDir, locals, runLocal } = setup(t);
+  const { fx, git, taskDir, locals, installs, runLocal } = setup(t);
   const calls: string[][] = [];
   const counting: typeof exec = (command, args, options) => {
     calls.push([command, ...args]);

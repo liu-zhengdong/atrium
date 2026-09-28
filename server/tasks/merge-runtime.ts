@@ -608,6 +608,8 @@ export class MergeQueue {
         ? AbortSignal.any([this.abort.signal, this.current.abort.signal])
         : this.abort.signal,
       urgent: task.urgent === 1,
+      // 远程任务在本机另建的工作树没装依赖：本机跑检查前先装（t252）。
+      install: remote,
     };
     const onStatus = (
       status: "queued" | "started",

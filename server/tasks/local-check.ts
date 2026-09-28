@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   closeSync,
   fstatSync,
   mkdirSync,
@@ -12,6 +13,7 @@ import { killTree, spawnShell } from "../platform/index.ts";
 import { workerEnvironment } from "./worker-env.ts";
 import { checkPlacement, CHECK_TIMEOUT_MINUTES } from "./host-load.ts";
 import { missingCommand } from "./check-outcome.ts";
+import { installDeps } from "./install-deps.ts";
 
 /** 本地检查只由运行时执行；队列在同一服务进程的所有任务之间共享。超时按主机配置（ATRIUM_CHECK_TIMEOUT_MINUTES），这是缺省。 */
 export const LOCAL_CHECK_TIMEOUT_MS = CHECK_TIMEOUT_MINUTES * 60_000;
@@ -195,8 +197,10 @@ export async function runLocalCheck(input: {
   onStatus?: (status: "queued" | "started", log: string) => void;
   /** 紧急任务（t113）：立刻跑，不占并发名额。 */
   urgent?: boolean;
-  /** 接着日志已有内容写（代理先把取提交、装依赖的输出写在前面）。 */
+  /** 接着日志已有内容写（代理先把取提交的输出写在前面）。 */
   append?: boolean;
+  /** 跑检查前按锁文件装依赖（install-deps.ts）：工作树不是执行者装好依赖的那份时用（代理的检查工作树、本机为远程任务另建的，t252）。 */
+  install?: boolean;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
   const queue = input.queue ?? sharedLocalChecks;
@@ -228,7 +232,30 @@ export async function runLocalCheck(input: {
       } catch {
         // 检查结果仍由关卡落库；进度事件失败不能中断检查。
       }
-      const fd = openSync(log, input.append ? "a" : "w", 0o600);
+      let append = input.append ?? false;
+      if (input.install) {
+        if (!append) writeFileSync(log, "", { mode: 0o600 });
+        append = true;
+        // 装不上依赖检查就没法跑：算没跑成（t252），不交回执行者。
+        const failed = await installDeps({
+          tree: input.worktree,
+          log,
+          env: input.env,
+          signal: input.signal,
+        });
+        if (failed) {
+          appendFileSync(log, `[atrium] ${failed}\n`, { mode: 0o600 });
+          return {
+            status: "error",
+            command,
+            log,
+            detail: failed,
+            failedTests: [],
+            infra: failed,
+          };
+        }
+      }
+      const fd = openSync(log, append ? "a" : "w", 0o600);
       let child;
       try {
         child = spawnShell(command, {

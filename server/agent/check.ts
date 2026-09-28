@@ -1,31 +1,24 @@
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { killTree, spawnShell } from "../platform/index.ts";
 import { checkTreeName } from "../hosts/check-plan.ts";
 import type { CheckReply, CheckSource } from "../hosts/protocol.ts";
 import { firstLine, type Exec } from "../tasks/git.ts";
 import { LocalCheckQueue, runLocalCheck } from "../tasks/local-check.ts";
-import { workerEnvironment } from "../tasks/worker-env.ts";
 import { ensureClone } from "./launch.ts";
 
 /**
  * 代理按提交跑检查（#358 第 2 步）：在自己的克隆里 fetch 基础分支、装上服务带来的 bundle，
- * 把检查工作树（每个克隆几份，依赖装在里面下次沿用）切到这个提交，有 package-lock.json 且变了就 npm ci，
- * 再用与本机同一份 runLocalCheck 跑。取不到提交、装不上依赖记为 infra（这台没跑成），服务换一台或回本机。
+ * 把检查工作树（每个克隆几份，依赖装在里面下次沿用）切到这个提交，
+ * 再用与本机同一份 runLocalCheck 跑（有 package-lock.json 且变了先 npm ci，tasks/install-deps.ts）。
+ * 取不到提交、装不上依赖记为 infra（这台没跑成），服务换一台或回本机。
  */
 
-/** 装依赖最多等多久。 */
-const INSTALL_TIMEOUT_MS = 10 * 60_000;
 /** 外层已按本机检查并发排过队：里面不再排。 */
 const UNLIMITED = new LocalCheckQueue(1_000_000);
 
@@ -121,8 +114,6 @@ export async function checkCommit(input: CommitCheck): Promise<CheckReply> {
     );
     if (placed) return infra(placed);
     if (input.signal.aborted) return infra("服务不再等这次检查");
-    const installed = await installDeps(tree, log, input.env, input.signal);
-    if (installed) return infra(installed);
     note(`在 ${tree} 跑检查`);
     const result = await runLocalCheck({
       worktree: tree,
@@ -133,6 +124,7 @@ export async function checkCommit(input: CommitCheck): Promise<CheckReply> {
       timeoutMs: input.timeoutMs,
       signal: input.signal,
       append: true,
+      install: true,
     });
     return { ...result, commit: source.commit };
   } finally {
@@ -189,54 +181,4 @@ async function placeTree(
   return added.ok
     ? null
     : `建检查工作树失败：${firstLine(added.stderr) || "git worktree add 失败"}`;
-}
-
-/**
- * 有 package-lock.json 的仓库：锁文件和上次装的不一样（或还没装）就 npm ci，输出写进检查日志。
- * 别的生态由仓库自己的 .agents/check 负责准备。
- */
-async function installDeps(
-  tree: string,
-  log: string,
-  env: NodeJS.ProcessEnv,
-  signal: AbortSignal,
-): Promise<string | null> {
-  const lock = join(tree, "package-lock.json");
-  if (!existsSync(lock) || !existsSync(join(tree, "package.json"))) return null;
-  const hash = createHash("sha256").update(readFileSync(lock)).digest("hex");
-  const stamp = join(tree, "node_modules", ".atrium-lock");
-  try {
-    if (readFileSync(stamp, "utf8").trim() === hash) return null;
-  } catch {
-    // 还没装过。
-  }
-  appendFileSync(log, "[atrium] 装依赖：npm ci\n");
-  const fd = openSync(log, "a", 0o600);
-  let child;
-  try {
-    child = spawnShell("npm ci --no-audit --no-fund", {
-      cwd: tree,
-      env: workerEnvironment(env),
-      detached: true,
-      stdio: ["ignore", fd, fd],
-    });
-  } catch (error) {
-    return `装依赖失败：${String(error)}`;
-  } finally {
-    closeSync(fd);
-  }
-  const kill = () => {
-    if (child.pid) killTree(child.pid, "SIGKILL");
-  };
-  signal.addEventListener("abort", kill, { once: true });
-  const timer = setTimeout(kill, INSTALL_TIMEOUT_MS);
-  const code = await new Promise<number | null>((resolve) => {
-    child.once("error", () => resolve(null));
-    child.once("close", (value) => resolve(value));
-  });
-  clearTimeout(timer);
-  signal.removeEventListener("abort", kill);
-  if (code !== 0) return `装依赖失败（npm ci 退出码 ${code ?? "未知"}）`;
-  writeFileSync(stamp, `${hash}\n`);
-  return null;
 }

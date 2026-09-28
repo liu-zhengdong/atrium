@@ -53,7 +53,7 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/hosts", AddInput{Name: name, Repos: c.List("repo"), Max: max, SSH: c.Str("ssh"), Tunnel: c.Str("tunnel")}, &r); err != nil {
 				return err
 			}
-			text := fmt.Sprintf("已登记 %s（%s）。接入码 30 分钟内有效、只能用一次。\n在那台机器上运行：\n  %s", r.Host.ID, r.Host.Name, r.Command)
+			text := fmt.Sprintf("已登记 %s（%s）。接入码 30 分钟内有效、只能用一次。\n在那台机器上运行：\n  %s\n接入后装成开机自启：atrium agent install", r.Host.ID, r.Host.Name, r.Command)
 			if r.Host.SSH == "" {
 				text += "\n那台连不到本机 127.0.0.1 时，改用 --ssh 让服务建反向隧道，或把 --server 换成能连到的地址。"
 			}
@@ -98,7 +98,7 @@ func Commands(t *cli.Table) {
 		}})
 	t.Group("agent", "远程代理")
 	dataFlag := cli.Flag{Name: "data", Value: "目录", Help: "代理数据目录（缺省 ATRIUM_AGENT_DATA 或 ~/.atrium-agent）"}
-	// 代理入口与 serve 一样不列在帮助里：host add 的回执给出完整命令，装成服务后由 agent install 拉起。
+	// 代理的两条命令在远程机器上跑，照 host add 的回执抄，不列在帮助里（帮助末尾一行点名）。
 	t.Add(cli.Command{Path: "agent", Summary: "在远程机器上跑代理（前台）：第一次用 --server 与 --token 接入", Local: true, Hidden: true,
 		Flags: []cli.Flag{
 			{Name: "server", Value: "URL", Help: "服务地址，如 http://127.0.0.1:4320"},
@@ -106,7 +106,7 @@ func Commands(t *cli.Table) {
 			dataFlag,
 		},
 		Run: runAgent})
-	t.Add(cli.Command{Path: "agent install", Summary: "把代理装成系统服务（登录自启、异常 10 秒后重起）", Local: true,
+	t.Add(cli.Command{Path: "agent install", Summary: "把代理装成系统服务（登录自启、异常 10 秒后重起）", Local: true, Hidden: true,
 		Flags: []cli.Flag{
 			{Name: "status", Bool: true, Help: "只看服务状态"},
 			{Name: "uninstall", Bool: true, Help: "卸载服务（agent.json 保留）"},

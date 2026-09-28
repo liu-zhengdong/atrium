@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/liu-zhengdong/atrium/internal/cli"
 )
 
 // 命令表能搭起来（没有重复注册、组都声明了），每条命令都有说明与 Run，数量守住规格的上限。
@@ -22,5 +25,13 @@ func TestTable(t *testing.T) {
 	}
 	if visible > 60 {
 		t.Errorf("命令 %d 条，超过规格上限 60", visible)
+	}
+	// 不列出的命令在帮助末尾点名，免得找不到。
+	var out strings.Builder
+	Table().Main(context.Background(), []string{"--help"}, cli.Env{Stdout: &out, Stderr: &out, Getenv: func(string) string { return "" }})
+	for _, c := range cmds {
+		if c.Hidden && !strings.Contains(out.String(), c.Path) {
+			t.Errorf("隐藏命令 %s 没在帮助末尾点名", c.Path)
+		}
 	}
 }

@@ -115,7 +115,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 	return res, nil
 }
 
-// Commands 注册 task run、task log（task 组由 ledger 声明）。捎话走 task note --tell（ledger 的命令调本包的 tell 接口）。停下用 task set --status blocked：派活循环会结束它的执行者。
+// Commands 注册 task run、task tell、task log（task 组由 ledger 声明）。停下是 ledger 的 task stop（转受阻），派活循环结束它的执行者。
 func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "派活：进派活队列，自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
 		Flags: []cli.Flag{
@@ -143,6 +143,25 @@ func Commands(t *cli.Table) {
 				return c.Done(res, dryText(res), dryNext(id, res, body.Risk))
 			}
 			return c.Done(res, fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow")
+		}})
+	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "捎话给执行者：在跑的按工具即时或本轮后送到，没在跑的下次拉起时写进提示词",
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			text, err := c.Arg(1, "<文字>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(2); err != nil {
+				return err
+			}
+			var r TellResult
+			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/tell", map[string]string{"text": text}, &r); err != nil {
+				return err
+			}
+			return c.Done(r, "已捎话："+r.Note, "atrium task log "+id+" --follow")
 		}})
 	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者日志（人读的：正文、工具调用、收尾）；--follow 跟到退出",
 		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"}},

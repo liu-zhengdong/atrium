@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
@@ -67,4 +70,58 @@ func LastRun(ctx context.Context, q store.Querier, task string) (*Run, error) {
 		return nil, err
 	}
 	return &rs[0], nil
+}
+
+const logChunk = 256 * 1024
+
+// ReadLog 读执行者日志到最后一个完整行；offset < 0 表示读末尾一段（从下一行开头起）。task log 与网页任务抽屉共用。
+func ReadLog(path string, offset int64) (string, int64, error) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return "", max(offset, 0), nil
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	tail := offset < 0
+	if tail {
+		offset = max(st.Size()-64*1024, 0)
+	}
+	if offset > st.Size() {
+		offset = st.Size()
+	}
+	buf := make([]byte, min(st.Size()-offset, logChunk))
+	if _, err := f.ReadAt(buf, offset); err != nil && err != io.EOF {
+		return "", 0, err
+	}
+	s := string(buf)
+	if tail && offset > 0 {
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s, offset = s[i+1:], offset+int64(i+1)
+		}
+	}
+	end := strings.LastIndexByte(s, '\n')
+	if end < 0 {
+		return "", offset, nil
+	}
+	return s[:end+1], offset + int64(end+1), nil
+}
+
+// ReadableLog 把日志一段变成人读的行（空行与不值得看的事件去掉）。
+func ReadableLog(text string) string {
+	var out []string
+	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if r := Readable(l); strings.TrimSpace(r) != "" {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, "\n") + "\n"
 }

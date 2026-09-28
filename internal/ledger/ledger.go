@@ -113,6 +113,18 @@ func mustExist(ctx context.Context, q store.Querier, table, prefix, field, id st
 	return nil
 }
 
+// mustSkill：挂的技能要已登记（skills 表归 org；这里只查有没有，与 mustExist 查部门一样）。
+func mustSkill(ctx context.Context, q store.Querier, name string) error {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM skills WHERE name = ?`, name).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return api.NotFound("--skill: 技能 %s 不存在", name).WithNext("atrium skill ls")
+	}
+	return nil
+}
+
 // Add 建一件 todo 任务。没给部门时沿用父任务的部门。
 func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, error) {
 	if in.Priority == "" {
@@ -146,6 +158,11 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 		}
 		if in.Org != "" {
 			if err := mustExist(ctx, tx, "departments", "o", "org", in.Org); err != nil {
+				return err
+			}
+		}
+		if in.Skill != "" {
+			if err := mustSkill(ctx, tx, in.Skill); err != nil {
 				return err
 			}
 		}
@@ -304,6 +321,11 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 			add("department", store.Null(*p.Org))
 		}
 		if p.Skill != nil {
+			if *p.Skill != "" {
+				if err := mustSkill(ctx, tx, *p.Skill); err != nil {
+					return err
+				}
+			}
 			add("skill", store.Null(*p.Skill))
 		}
 		if p.Repo != nil {

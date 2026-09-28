@@ -141,11 +141,12 @@ type Event struct {
 	Body string `json:"body,omitempty"`
 }
 
-// DeptBrief 是提示词里负责的一个部门：人话字段、路径、要点链、资料总览。
+// DeptBrief 是提示词里负责的一个部门：人话字段、路径、要点链、用户的有效决定、资料总览。
 type DeptBrief struct {
 	Dept      org.Dept
 	Path      []string
 	Chain     []org.Point
+	Decisions []org.Decision
 	Materials string
 }
 
@@ -186,6 +187,15 @@ func Prompt(in PromptInput) string {
 			for _, p := range d.Chain {
 				w("- %s", org.ChainLine(p))
 			}
+			for _, o := range org.PointsOver(d.Chain) {
+				w("- （%s）", o)
+			}
+		}
+		if len(d.Decisions) > 0 {
+			w("用户拍板的决定（有效 %s，照着办；要推翻先上交）：", org.Tally("decisions", len(d.Decisions)))
+			for _, x := range d.Decisions {
+				w("- %s %s", x.ID, x.Text)
+			}
 		}
 		if d.Materials != "" {
 			w("资料总览：")
@@ -193,7 +203,7 @@ func Prompt(in PromptInput) string {
 		}
 	}
 	w("")
-	w("## 你的备忘（上次留给自己的，上限 %d 字）", org.MaxMemo)
+	w("## 你的备忘（上次留给自己的，%s 字）", org.Tally("memo", utf8.RuneCountInString(in.Memo)))
 	if in.Memo == "" {
 		w("（空）")
 	} else {
@@ -285,6 +295,8 @@ func RuleFor(pattern string) Rule {
 	case seg[0] == "schedules" && len(seg) >= 2 && seg[1] == "{id}":
 		return RuleScheduleRef
 	case seg[0] == "schedules" && len(seg) == 1:
+		return RuleBodyDept
+	case path == "/api/choices" && method == "POST": // 负责人给用户递选项单（拍板只有用户）
 		return RuleBodyDept
 	case path == "/api/memo" && method == "PUT":
 		return RuleMemo

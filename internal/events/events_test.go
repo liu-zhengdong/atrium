@@ -50,6 +50,9 @@ func TestLevelAndKey(t *testing.T) {
 		{TaskStatus, map[string]any{"to": "running"}, Info},
 		{TaskStatus, nil, Info},
 		{Overdue, nil, Act},
+		{LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
+		{LeaderEscalate, map[string]any{"kind": "cross"}, Act},
+		{LeaderEscalate, map[string]any{"kind": "shipped"}, Info},
 		{"other", map[string]any{"to": "failed"}, Info},
 	}
 	for _, c := range cases {
@@ -66,6 +69,9 @@ func TestLevelAndKey(t *testing.T) {
 }
 
 func TestSummary(t *testing.T) {
+	if s := Summary(Row{Kind: LeaderEscalate, Body: []byte(`{"from":"a1","label":"搞不定","note":"证书要用户签"}`)}); s != "a1 上交（搞不定）：证书要用户签" {
+		t.Errorf("上交 Summary = %q", s)
+	}
 	body, _ := json.Marshal(map[string]any{"from": "running", "to": "blocked", "title": "修登录"})
 	if s := Summary(Row{Kind: TaskStatus, Body: body}); s != "running → blocked「修登录」" {
 		t.Errorf("Summary = %q", s)

@@ -127,11 +127,9 @@ CREATE TABLE IF NOT EXISTS task_events (
 CREATE INDEX IF NOT EXISTS task_events_task ON task_events (task, id);
 
 -- 派活队列：task run 的入队选项（opts：执行者、风险、机器、凭据名，JSON）。队列本身是状态 queued 的任务，
--- 按任务优先级、入队先后取；没有这一行或 opts 为空（交回）时沿用上次拉起的执行者。
--- priority 是入队时的优先级序号，只给 gates.Requeue 这类只补行的写入方用；派活排序看 tasks.priority。
+-- 按任务优先级（tasks.priority）、入队先后取；没有这一行（交回）时沿用上次拉起的执行者。
 CREATE TABLE IF NOT EXISTS queue (
   task        TEXT PRIMARY KEY REFERENCES tasks (id),
-  priority    INTEGER NOT NULL DEFAULT 2,
   enqueued_at INTEGER NOT NULL,
   opts        TEXT NOT NULL DEFAULT '',
   by          TEXT NOT NULL DEFAULT ''

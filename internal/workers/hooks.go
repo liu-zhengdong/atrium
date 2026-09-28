@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/leaders"
 	"github.com/liu-zhengdong/atrium/internal/platform"
+	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
 
@@ -34,7 +36,7 @@ func WatchSignal(a *Driver, tail string) watch.Signal {
 	return watch.SigError
 }
 
-// hook 接上 watch 读信号与负责人唤醒的拉起（服务进程里，Routes 装配时调）。
+// hook 接上 watch 读信号、负责人执行者组合的核对与唤醒的拉起（服务进程里，Routes 装配时调）。
 func hook(env *app.Env) {
 	watch.Use(watch.Hooks{Signal: func(worker string, tail []byte) watch.Signal {
 		r, err := Resolve(context.Background(), env.DB, worker)
@@ -43,6 +45,10 @@ func hook(env *app.Env) {
 		}
 		return WatchSignal(r.Adapter, string(tail))
 	}})
+	org.CheckWorker = func(ctx context.Context, q store.Querier, id string) error {
+		_, err := Resolve(ctx, q, id)
+		return err
+	}
 	leaders.SetLauncher(func(ctx context.Context, l leaders.Launch) (platform.Spec, error) {
 		return LeaderSpec(ctx, env, l)
 	})

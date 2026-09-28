@@ -33,7 +33,7 @@ func leaderLine(i Identity) string {
 func identityCommands(t *cli.Table) {
 	t.Group("leader", "负责人")
 	t.Add(cli.Command{Path: "leader add", Args: "<名字>", Summary: "登记负责人（aN）",
-		Flags: []cli.Flag{{Name: "workers", Value: "档案", Multi: true, Help: "执行者组合：唤醒时按顺序轮换的档案名（必填）"}},
+		Flags: []cli.Flag{{Name: "workers", Value: "执行者", Multi: true, Help: "执行者组合：唤醒时按顺序轮换，写法同 task run --worker（工具+模型[:强度]，必填）"}},
 		Run: func(c *cli.Ctx) error {
 			name, err := c.Arg(0, "<名字>")
 			if err != nil {
@@ -51,7 +51,7 @@ func identityCommands(t *cli.Table) {
 	t.Add(cli.Command{Path: "leader edit", Args: "<aN>", Summary: "改负责人的名字或执行者组合",
 		Flags: []cli.Flag{
 			{Name: "name", Value: "名字", Help: "改名"},
-			{Name: "workers", Value: "档案", Multi: true, Help: "换执行者组合（整组替换）"},
+			{Name: "workers", Value: "执行者", Multi: true, Help: "换执行者组合（整组替换，写法同 task run --worker）"},
 		},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<aN>")
@@ -92,7 +92,7 @@ func identityCommands(t *cli.Table) {
 				return err
 			}
 			if len(list) == 0 {
-				return c.Done(list, "还没有负责人", "atrium leader add <名字> --workers <档案>")
+				return c.Done(list, "还没有负责人", "atrium leader add <名字> --workers claude+opus:high")
 			}
 			lines := make([]string, len(list))
 			for k, i := range list {
@@ -115,7 +115,7 @@ func identityCommands(t *cli.Table) {
 			if body == "" {
 				body = "（空）"
 			}
-			return c.Done(m, fmt.Sprintf("%s 的备忘（%d/%d 字）：\n%s", m.Owner, utf8.RuneCountInString(m.Body), MaxMemo, body),
+			return c.Done(m, fmt.Sprintf("%s 的备忘（%s 字）：\n%s", m.Owner, Tally("memo", utf8.RuneCountInString(m.Body)), body),
 				"atrium memo edit <文本>"+asSuffix(c))
 		}})
 	t.Add(cli.Command{Path: "memo edit", Args: "[文本]", Summary: fmt.Sprintf("覆盖写备忘（上限 %d 字，超了先精简）", MaxMemo),

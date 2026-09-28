@@ -191,7 +191,7 @@ func SkillPaths(ctx context.Context, q store.Querier, data, skill string) ([]str
 // Skills 列全部技能的最新版（按名字）。
 func Skills(ctx context.Context, q store.Querier, data string) ([]Skill, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+skillCols+` FROM skills s WHERE rev = (SELECT max(rev) FROM skills WHERE name = s.name)
-		ORDER BY name LIMIT ?`, MaxSkills)
+		ORDER BY name LIMIT ?`, ReadCap+1)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,10 @@ func Skills(ctx context.Context, q store.Querier, data string) ([]Skill, error) 
 		}
 		out = append(out, k)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, capErr("技能", len(out))
 }
 
 // ReadSkillFiles 读某一版的全部文件（相对路径 → 内容）。
@@ -402,7 +405,7 @@ func skillCommands(t *cli.Table) {
 	t.Add(cli.Command{Path: "skill add", Args: "<名字> [SKILL.md 或技能目录]",
 		Summary: "建技能或改出新一版（不给文件就沿用上一版的文件）",
 		Flags: []cli.Flag{
-			{Name: "workers", Value: "档案", Multi: true, Help: "优先的执行者（给空串清掉）"},
+			{Name: "workers", Value: "执行者", Multi: true, Help: "优先的执行者，写法同 task run --worker（给空串清掉）"},
 			{Name: "checks", Value: "检查", Multi: true, Help: "交付要查什么，如 pr_exists,local_check（给空串清掉）"},
 			{Name: "secrets", Value: "名称", Multi: true, Help: "这类活要的凭据名，派活时按任务部门往上找（给空串清掉）"},
 		},
@@ -457,6 +460,9 @@ func skillCommands(t *cli.Table) {
 						fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 					}
 				}
+				if o := Over("skill_body", len(k.Body)); o != "" {
+					fmt.Fprintf(&b, "SKILL.md %s B：%s\n", o, LimitOf("skill_body").Fix)
+				}
 				b.WriteString("\n" + k.Body)
 				return c.Done(k, b.String(), "atrium skill add "+k.Name+" <新的 SKILL.md 或目录>")
 			}
@@ -468,7 +474,7 @@ func skillCommands(t *cli.Table) {
 				return c.Done(list, "还没有技能", "atrium skill add <名字> <SKILL.md 或技能目录>")
 			}
 			var b strings.Builder
-			fmt.Fprintf(&b, "技能 %d/%d：\n", len(list), MaxSkills)
+			fmt.Fprintf(&b, "技能 %s：\n", Tally("skills", len(list)))
 			for _, k := range list {
 				fmt.Fprintf(&b, "  %s  %s（第 %d 版）\n", k.Name, k.Summary, k.Rev)
 			}

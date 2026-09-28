@@ -66,6 +66,35 @@ var Limits = []Limit{
 	{"secrets", "每部门凭据", MaxSecrets, "个", "用户", "删掉不用的（atrium secret set {dept} 名称 --rm），或挪到上级部门共用", "atrium secret ls --node {dept}"},
 }
 
+// ReadCap 是读路径的技术上限，不是业务上限：读东西不按上表截断（导入的旧数据、调低过的上限都可能超），
+// 超了照样全部读出，由调用方标「超限 8/7」（Over）让人整理。查询仍有界：读到 ReadCap 条以上报错，不静默少给。
+const ReadCap = 1000
+
+// capErr：读到的条数超过 ReadCap 时报错。
+func capErr(what string, n int) error {
+	if n > ReadCap {
+		return fmt.Errorf("%s超过 %d 条（读取上限），先整理", what, ReadCap)
+	}
+	return nil
+}
+
+// Over 是超了业务上限时的标注「超限 8/7」；没超返回空串。纯函数。
+func Over(key string, used int) string {
+	l := LimitOf(key)
+	if used <= l.Max {
+		return ""
+	}
+	return fmt.Sprintf("超限 %d/%d", used, l.Max)
+}
+
+// Tally 是用量的写法：「6/7」，超了写「超限 8/7」。纯函数。
+func Tally(key string, used int) string {
+	if o := Over(key, used); o != "" {
+		return o
+	}
+	return fmt.Sprintf("%d/%d", used, LimitOf(key).Max)
+}
+
 // LimitOf 取上限表的一行；键写错是编程错误。
 func LimitOf(key string) Limit {
 	for _, l := range Limits {

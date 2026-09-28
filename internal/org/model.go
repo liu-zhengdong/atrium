@@ -96,6 +96,26 @@ func CheckRoom(dept string, count int) error {
 	return Full("points", dept, count)
 }
 
+// PointsOver 纯函数：要点链里超了每部门上限的部门，各一行「o2 要点超限 8/7」（按链上先后）。
+// 超限的要点照样全附；这一行提醒读的人：这个部门的要点待负责人整理。
+func PointsOver(chain []Point) []string {
+	n := map[string]int{}
+	var order []string
+	for _, p := range chain {
+		if n[p.Org] == 0 {
+			order = append(order, p.Org)
+		}
+		n[p.Org]++
+	}
+	var out []string
+	for _, d := range order {
+		if o := Over("points", n[d]); o != "" {
+			out = append(out, d+" 要点"+o+"（全部附上，待整理）")
+		}
+	}
+	return out
+}
+
 // ChainLine 是派活时附给执行者的一行：「k3（o1）规矩——为什么」。
 func ChainLine(p Point) string {
 	s := fmt.Sprintf("%s（%s）%s", p.ID, p.Org, p.Text)

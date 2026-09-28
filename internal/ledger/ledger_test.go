@@ -42,6 +42,9 @@ func TestLedgerLifecycle(t *testing.T) {
 	if _, err := Add(ctx, db, NewTask{Title: "x", After: []string{"t99"}}, "u1"); code(err) != "not_found" {
 		t.Fatalf("不存在的依赖应 404，got %v", err)
 	}
+	if _, err := Add(ctx, db, NewTask{Title: "x", Skill: "nosuch"}, "u1"); code(err) != "not_found" {
+		t.Fatalf("没登记的技能应 404，got %v", err)
+	}
 	if _, err := Add(ctx, db, NewTask{Title: "x", Org: "o1"}, "u1"); code(err) != "not_found" {
 		t.Fatalf("不存在的部门应 404，got %v", err)
 	}

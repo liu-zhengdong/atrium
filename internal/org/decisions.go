@@ -19,7 +19,6 @@ import (
 const (
 	maxDecisionText = 300
 	maxDecisionWhy  = 1000
-	maxDecisionList = 200
 )
 
 type Decision struct {
@@ -132,8 +131,10 @@ func Decisions(ctx context.Context, q store.Querier, f DecisionFilter) ([]Decisi
 		like := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(f.Keyword) + "%"
 		where, args = append(where, `(text LIKE ? ESCAPE '\' OR why LIKE ? ESCAPE '\')`), append(args, like, like)
 	}
-	if f.Limit <= 0 || f.Limit > maxDecisionList {
-		f.Limit = maxDecisionList
+	// 没给 Limit 就全给（超了每部门上限的也给，由调用方标「超限」），读到 ReadCap 以上报错；给了按调用方要的条数。
+	explicit := f.Limit > 0
+	if !explicit || f.Limit > ReadCap {
+		f.Limit = ReadCap + 1
 	}
 	rows, err := q.QueryContext(ctx, `SELECT `+decisionCols+` FROM decisions WHERE `+strings.Join(where, " AND ")+
 		` ORDER BY created_at DESC, id DESC LIMIT ?`, append(args, f.Limit)...)
@@ -149,7 +150,13 @@ func Decisions(ctx context.Context, q store.Querier, f DecisionFilter) ([]Decisi
 		}
 		out = append(out, d)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !explicit {
+		return out, capErr("决定", len(out))
+	}
+	return out[:min(len(out), ReadCap)], nil
 }
 
 func decisionRoutes(r *api.Router, env *app.Env) {

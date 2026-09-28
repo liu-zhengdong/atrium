@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -17,11 +18,13 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 func TestSessions(t *testing.T) {
@@ -126,21 +129,6 @@ func TestTopGroup(t *testing.T) {
 	for id, want := range map[string]string{"o1": "o1", "o2": "o2", "o5": "o2", "o8": "o2", "o9": "o9"} {
 		if got := topGroup(parents, id); got != want {
 			t.Errorf("%s：得到 %s 想要 %s", id, got, want)
-		}
-	}
-}
-
-func TestLogLine(t *testing.T) {
-	cases := map[string]ledger.TaskEvent{
-		"建立":           {Kind: "created", Actor: "u1"},
-		"卡住（a1）：等签名证书": {Kind: "block", Actor: "a1", Body: `{"from":{},"to":{},"note":"等签名证书"}`},
-		"备注：在跑 第 1 次":  {Kind: "note", Actor: "u1", Body: "在跑\n第 1 次"},
-		"gate：PR 不存在":  {Kind: "gate", Actor: "gates", Body: "PR 不存在"},
-		"交回执行者（merge）": {Kind: "bounce", Actor: "merge", Body: `{"note":""}`},
-	}
-	for want, e := range cases {
-		if got := logLine(e); got != want {
-			t.Errorf("得到 %q 想要 %q", got, want)
 		}
 	}
 }
@@ -259,8 +247,17 @@ func TestRoutes(t *testing.T) {
 	}
 	var detail TaskDetail
 	read("task/"+task.ID, &detail)
-	if detail.State != "bad" || len(detail.Log) != 2 {
-		t.Errorf("任务：%+v", detail)
+	if detail.State != "bad" || detail.Log != "" {
+		t.Errorf("没拉起过执行者，日志应为空：%+v", detail)
+	}
+	// 抽屉的日志是执行者进程的真日志尾巴（与 task log 同一份），不是任务经历。
+	logFile := filepath.Join(t.TempDir(), "run-1.log")
+	os.WriteFile(logFile, []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"改好了"}]}}`+"\n"), 0o600)
+	run, _ := json.Marshal(workers.Run{N: 1, Worker: "claude", Log: logFile})
+	ledger.Record(ctx, db, task.ID, workers.RunKind, "dispatch", string(run))
+	read("task/"+task.ID, &detail)
+	if detail.Log != "改好了" {
+		t.Errorf("日志尾巴：%q", detail.Log)
 	}
 	var legion Legion
 	read("legion", &legion)
@@ -278,6 +275,13 @@ func TestRoutes(t *testing.T) {
 	read("today", &today)
 	if len(today.Asks) != 0 {
 		t.Errorf("有负责人时不该递到等你：%+v", today.Asks)
+	}
+	// 负责人上交到秘书这层、还没确认的，进「等你」。
+	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: sub.ID, Target: org.Secretary,
+		Body: map[string]any{"from": a.ID, "label": "搞不定", "note": "证书要你签"}})
+	read("today", &today)
+	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" || today.Asks[0].Title != "证书要你签" || today.Asks[0].ID != task.ID {
+		t.Errorf("上交应进等你：%+v", today.Asks)
 	}
 	read("dept/"+sub.ID, &page)
 	if page.Leader == nil || page.Leader.Name != "运行时负责人" {

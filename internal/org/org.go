@@ -58,7 +58,7 @@ func Get(ctx context.Context, q store.Querier, id string) (Dept, error) {
 }
 
 func repos(ctx context.Context, q store.Querier, id string) ([]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT repo FROM department_repos WHERE department = ? ORDER BY repo LIMIT ?`, id, MaxRepos)
+	rows, err := q.QueryContext(ctx, `SELECT repo FROM department_repos WHERE department = ? ORDER BY repo LIMIT ?`, id, ReadCap+1)
 	if err != nil {
 		return nil, err
 	}
@@ -71,12 +71,15 @@ func repos(ctx context.Context, q store.Querier, id string) ([]string, error) {
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, capErr("部门 "+id+" 的仓库", len(out))
 }
 
 // parents 读全部部门的上级关系。
 func parents(ctx context.Context, q store.Querier) (map[string]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, COALESCE(parent, '') FROM departments LIMIT ?`, MaxDepts+1)
+	rows, err := q.QueryContext(ctx, `SELECT id, COALESCE(parent, '') FROM departments LIMIT ?`, ReadCap+1)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +92,10 @@ func parents(ctx context.Context, q store.Querier) (map[string]string, error) {
 		}
 		m[id] = p
 	}
-	return m, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return m, capErr("部门", len(m))
 }
 
 // Ancestors 返回从顶层到 id 的部门链（含 id 自己）。暂停判定与要点链都用它。
@@ -126,10 +132,10 @@ func Chain(ctx context.Context, q store.Querier, id string) ([]Point, error) {
 	return out, nil
 }
 
-// Points 取一个部门自己的要点（按 pos）。
+// Points 取一个部门自己的要点（按 pos）。超了上限（导入的旧数据）照样全给，调用方用 PointsOver 标出来。
 func Points(ctx context.Context, q store.Querier, dept string) ([]Point, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, department, pos, text, why, decided_by, check_ref, updated_by, updated_at
-		FROM points WHERE department = ? ORDER BY pos LIMIT ?`, dept, MaxPoints)
+		FROM points WHERE department = ? ORDER BY pos LIMIT ?`, dept, ReadCap+1)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +148,10 @@ func Points(ctx context.Context, q store.Querier, dept string) ([]Point, error) 
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, capErr("部门 "+dept+" 的要点", len(out))
 }
 
 // NewDept 是 org add 的输入。
@@ -352,7 +361,7 @@ type Node struct {
 func Tree(ctx context.Context, q store.Querier) ([]*Node, error) {
 	rows, err := q.QueryContext(ctx, `SELECT d.id, COALESCE(d.parent, ''), d.name, d.what, d.uses, d.now, d.next,
 		COALESCE(d.leader, ''), d.created_at, d.updated_at, (SELECT count(*) FROM points p WHERE p.department = d.id)
-		FROM departments d ORDER BY d.created_at, d.id LIMIT ?`, MaxDepts)
+		FROM departments d ORDER BY d.created_at, d.id LIMIT ?`, ReadCap+1)
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +376,9 @@ func Tree(ctx context.Context, q store.Querier) ([]*Node, error) {
 		list = append(list, n)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := capErr("部门", len(list)); err != nil {
 		return nil, err
 	}
 	return buildForest(list), nil

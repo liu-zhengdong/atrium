@@ -33,6 +33,7 @@ export type TopRow = {
   worker: string | null;
   /** 在远程主机上跑（#358，hN）；本机或旧版服务没有。 */
   host?: string | null;
+  host_name?: string | null;
   started_at: number | null;
   ended_at: number | null;
   queued_at: number | null;
@@ -154,7 +155,7 @@ const REFRESH_MAX = 60;
 export const WORKER_MIN_WIDTH = 80;
 const MIN_TITLE = 12;
 const MIN_ACTION = 10;
-const MAX_WORKER = 20;
+const MAX_WORKER = 32;
 
 function interval(value: string | undefined) {
   if (value === undefined) return REFRESH_SECONDS;
@@ -289,9 +290,11 @@ export type Layout = {
   stateW: number;
 };
 
-/** 执行者列：跑在远程主机上的前面带主机短号（#358）。 */
+/** 执行者列：远程运行时在执行者后标机器名。 */
 const workerCell = (row: TopRow) =>
-  row.host ? `${row.host} ${row.worker ?? ""}` : (row.worker ?? "");
+  row.host_name
+    ? `${row.worker ?? "执行者"} @ ${row.host_name}`
+    : (row.worker ?? "");
 
 /** 标题最多占剩下的 55%，免得它在窄屏上把最近动作挤没。 */
 const TITLE_SHARE = 0.55;
@@ -306,6 +309,10 @@ export function layoutOf(
   const workerW = Math.min(
     MAX_WORKER,
     Math.max(0, ...rows.map((row) => width(workerCell(row)))),
+    Math.max(
+      0,
+      width_ - (1 + 2 + refW + 2 + 2 + 2 + stateW + 2 + MIN_TITLE + MIN_ACTION),
+    ),
   );
   const showWorker = width_ >= WORKER_MIN_WIDTH && workerW > 0;
   const overhead =

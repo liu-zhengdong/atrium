@@ -10,6 +10,7 @@ import {
   hostRef,
   JOIN_TTL_MS,
   LOCAL_HOST,
+  runningHostLabel,
   type Connection,
   type HostInfo,
   type HostLoadReport,
@@ -175,6 +176,29 @@ export function tunnelHostRows(db: DatabaseSync, after: number): HostRow[] {
       (ssh_target IS NOT NULL OR ssh_key IS NOT NULL OR tunnel_local_port IS NOT NULL OR tunnel_remote_port IS NOT NULL)
       ORDER BY id LIMIT 100`,
     after,
+  );
+}
+
+/** 为一页任务批量读取执行机器名字，避免逐行查库；已移除的主机仍可解释在跑记录。 */
+export function runningHostNames(
+  db: DatabaseSync,
+  ids: readonly (number | null | undefined)[],
+  now = Date.now(),
+): Map<number, string> {
+  const remote = [
+    ...new Set(
+      ids.filter((id): id is number => id != null && id !== LOCAL_HOST),
+    ),
+  ];
+  if (!remote.length) return new Map();
+  const rows = all<Pick<HostRow, "id" | "name" | "joined_at" | "last_seen_at">>(
+    db,
+    `SELECT id,name,joined_at,last_seen_at FROM hosts WHERE id IN (${remote.map(() => "?").join(",")}) LIMIT 500`,
+    ...remote,
+  );
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return new Map(
+    remote.map((id) => [id, runningHostLabel(id, byId.get(id), now)!]),
   );
 }
 

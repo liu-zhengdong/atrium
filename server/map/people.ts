@@ -10,6 +10,7 @@ import {
   type ProfileLayer,
 } from "../tasks/profiles.ts";
 import { workerReport, workersReport } from "../tasks/workers-report.ts";
+import { runningHostNames } from "../hosts/model.ts";
 import { specialistsForPart } from "../tasks/specialist-scope.ts";
 import {
   involvedOfTasks,
@@ -182,10 +183,15 @@ export async function mapRole(
     db,
     rows.map((r) => r.id),
   );
+  const hosts = runningHostNames(
+    db,
+    rows.map((r) => (r.status === "running" ? r.host_id : null)),
+  );
   const involved = involvedOfTasks(db, rows);
   const tasks = rows.map((r) =>
     taskView(r, liveBy.get(`t${r.id}`), jobs, who.get(r.id), {
       also: involved.get(r.id),
+      host: hosts.get(r.host_id ?? 0),
     }),
   );
   const report = await workersReport(db, role.ref);

@@ -270,8 +270,11 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
     });
     return child.pid!;
   };
-  const ok = running("claude", start("1.5"), CLAUDE_OK);
-  const bad = running("claude", start("1.5"), CLAUDE_ERROR);
+  // 等接管完成后主动结束进程，避免机器忙时自然退出抢在状态断言前。
+  const okPid = start("30");
+  const badPid = start("30");
+  const ok = running("claude", okPid, CLAUDE_OK);
+  const bad = running("claude", badPid, CLAUDE_ERROR);
   runner.start();
   await until(
     () =>
@@ -285,6 +288,8 @@ test("接管的执行者后来退出：看门狗发现后按日志收尾（正�
     getTask(db, ok.ref).events.at(-1)!.detail!,
     /服务重启后按 pid 接管/,
   );
+  process.kill(okPid, "SIGKILL");
+  process.kill(badPid, "SIGKILL");
   await until(
     () =>
       getTask(db, ok.ref).status !== "running" &&

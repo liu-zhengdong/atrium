@@ -34,6 +34,8 @@ export type HolderFacts = {
   delivery_stage: TaskRow["delivery_stage"];
   online_wait: number;
   worker: string | null;
+  /** 正在执行的远程主机名；本机或没有执行者为 null。 */
+  host?: string | null;
   /** 在排队时的原因；不在排队为 null。 */
   queued: { reason: string | null } | null;
   /** 审阅关卡派出的审阅任务短号。 */
@@ -380,7 +382,20 @@ function mergeBack(reason: string | null): string {
 export function holderOf(f: HolderFacts): Holder | null {
   const holder = judge(f);
   return holder
-    ? { ...holder, text: oneLine(holder.text, HOLDER_WIDTH) }
+    ? {
+        ...holder,
+        text: oneLine(
+          holder.kind === "worker" &&
+            f.status === "running" &&
+            f.host &&
+            !f.checking
+            ? holder.text.endsWith(" 在做")
+              ? `${f.worker ?? "执行者"} @ ${f.host} 在做`
+              : `${f.worker ?? "执行者"} @ ${f.host} · ${holder.text}`
+            : holder.text,
+          HOLDER_WIDTH,
+        ),
+      }
     : null;
 }
 

@@ -19,6 +19,7 @@ import { createTask, getTask } from "../server/tasks/ledger.ts";
 import { advanceTask, noteTask } from "../server/tasks/ledger-transition.ts";
 import { addTaskNote } from "../server/tasks/notes.ts";
 import type { TaskStatus } from "../server/tasks/state.ts";
+import { ensureHostTables } from "../server/hosts/model.ts";
 
 const base: HolderFacts = {
   status: "running",
@@ -45,6 +46,45 @@ const localCheck = {
   gates: ["local_check"],
 };
 const of = (patch: Partial<HolderFacts>) => holderOf({ ...base, ...patch });
+
+test("持球人远程主机优先留在句首，长原因也不挤掉", () => {
+  const returned = of({
+    host: "ggb（离线）",
+    returned: { by: "a1", via: "rerun" },
+    block: { reason: "原因".repeat(60), gates: [] },
+  })!;
+  assert.match(returned.text, /^codex\+gpt-6-sol:high @ ggb（离线） · /);
+  assert.ok(width(returned.text) <= HOLDER_WIDTH);
+});
+
+test("task show 的持球人：远程用主机名，离线有标记", () => {
+  const db = new DatabaseSync(":memory:");
+  ensureTaskTables(db);
+  ensureHostTables(db);
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO hosts(id,name,kind,repos,joined_at,last_seen_at,created_at,updated_at) VALUES(3,'ggb','remote','[]',1,?,?,?)",
+  ).run(now, now, now);
+  const task = createTask(db, { title: "远程任务" });
+  advanceTask(
+    db,
+    task.ref,
+    { kind: "start" },
+    { worker: "claude+opus" },
+    undefined,
+    now,
+  );
+  db.prepare("UPDATE tasks SET host_id=3 WHERE id=?").run(task.id);
+  assert.equal(getTask(db, task.ref).holder?.text, "claude+opus @ ggb 在做");
+  db.prepare("UPDATE hosts SET last_seen_at=? WHERE id=3").run(now - 61_000);
+  assert.equal(
+    getTask(db, task.ref).holder?.text,
+    "claude+opus @ ggb（离线） 在做",
+  );
+  db.prepare("UPDATE tasks SET host_id=NULL WHERE id=?").run(task.id);
+  assert.equal(getTask(db, task.ref).holder?.text, "claude+opus 在做");
+  db.close();
+});
 
 test("订阅者归类与受阻原因缩写", () => {
   assert.equal(kindOf("u1"), "user");

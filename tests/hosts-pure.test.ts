@@ -13,10 +13,12 @@ import {
   parseHostRef,
   reconcile,
   remoteLayout,
+  runningHostLabel,
   repoAllowed,
   type HostCandidate,
   type HostNeed,
 } from "../server/hosts/state.ts";
+
 import {
   assignmentRefusal,
   commandRefusal,
@@ -26,6 +28,22 @@ import {
 import { loggedIn } from "../server/hosts/info.ts";
 import { queueHeads } from "../server/tasks/queue.ts";
 import type { Assignment } from "../server/hosts/protocol.ts";
+
+test("任务里的执行机器：本机省略，远程用名字，心跳过期标离线", () => {
+  const now = 100_000;
+  const host = { name: "ggb", joined_at: 1, last_seen_at: now };
+  assert.equal(runningHostLabel(null, host, now), null);
+  assert.equal(runningHostLabel(1, host, now), null);
+  assert.equal(runningHostLabel(3, host, now), "ggb");
+  assert.equal(
+    runningHostLabel(3, { ...host, last_seen_at: now - ONLINE_MS }, now),
+    "ggb",
+  );
+  assert.equal(
+    runningHostLabel(3, { ...host, last_seen_at: now - ONLINE_MS - 1 }, now),
+    "ggb（离线）",
+  );
+});
 
 const local = (over: Partial<HostCandidate> = {}): HostCandidate => ({
   id: 1,

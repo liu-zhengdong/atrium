@@ -180,6 +180,8 @@ test("隔离服务手动巡检：真实环境标记、发现去重、leader 收�
   assert.match(env, /ATRIUM_DATA=/);
   assert.match(env, /ATRIUM_PORT=4999/);
   assert.doesNotMatch(env, /ATRIUM_WORKER=1/);
+  // 巡检要连用户的服务，不带执行者标记（t203），免得那边起的进程被当成孤儿。
+  assert.doesNotMatch(env, /ATRIUM_SPAWN=/);
   const map = await call("GET", "/api/map/nodes/o2");
   assert.equal(map.body.findings[0].status, "ignored");
   assert.equal(map.body.findings[0].reason, "已有改进计划");

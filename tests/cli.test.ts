@@ -198,6 +198,7 @@ test(
     const line = await f.cli("statusline");
     assert.equal(line.code, 0, line.stderr);
     // 待派的任务不在看板行里，只进「接下来」；末行是下一步命令（有就绪的看排期）。
+    // 隔离服务没有秘书挂着 events wait，首行带「秘书没在听」（t242）。
     assert.equal(
       line.stdout,
       "Atrium 在做 0 · 秘书没在听\n接下来：就绪 1 · 等待中 0\n下一步：atrium task plan\n",

@@ -8,8 +8,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 )
 
-// 本文件是网页的纯判定：任务在五步里走到哪、现在谁拿着球、行尾写什么。
-// watch 包的持球表做好后，holder 改读它；这里先按状态与阶段推。
+// 本文件是网页的纯判定：任务在五步里走到哪、行尾写什么。持球人用 watch.HolderOf，不在这里另判。
 
 // Steps 是任务详情的五步。
 var Steps = []string{"派活", "执行", "验收", "合入", "上线"}
@@ -58,39 +57,17 @@ func state(t ledger.Task) string {
 	return "idle"
 }
 
-// holder 是「现在谁拿着球、在干什么」的一句话。
-func holder(t ledger.Task) string {
-	switch t.Status {
-	case ledger.Todo:
-		return "还没派出去"
-	case ledger.Queued:
-		return "排队等执行者和机器空出来"
-	case ledger.Blocked:
-		return "等负责人或你处理"
-	case ledger.Failed:
-		return "重试用完了"
-	case ledger.Cancelled:
+// finishedText 是已结束任务在详情里的一句话（没结束的由 watch.HolderOf 判）。
+func finishedText(t ledger.Task) string {
+	switch {
+	case t.Status == ledger.Cancelled:
 		return "已取消"
-	case ledger.Done:
-		switch t.Stage {
-		case ledger.StageReleased:
-			return "已上线"
-		case ledger.StageMerged:
-			return "已合入"
-		}
-		return "已完成"
+	case t.Stage == ledger.StageReleased:
+		return "已上线"
+	case t.Stage == ledger.StageMerged:
+		return "已合入"
 	}
-	switch t.Stage {
-	case ledger.StageGate:
-		return "运行时在查 PR、提交和改动规模"
-	case ledger.StageReview:
-		return "另一个模型在审阅"
-	case ledger.StageMerge:
-		return "合入队列：变基、快检查、合入"
-	case ledger.StageMerged:
-		return "已合入，等发版上线"
-	}
-	return "执行者在干活"
+	return "已完成"
 }
 
 // who 是列表行尾的短标签：交付阶段优先，否则是执行者与机器。

@@ -11,6 +11,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/watch"
 )
 
 // 本文件是网页的只读数据：任务与部门走 ledger、org 的读函数；决定、选项单、资料、身份、机器这些
@@ -139,7 +140,7 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 	return Nav{Depts: nonNil(ix.list), Asks: len(asks)}, nil
 }
 
-// Ask 是「等你」的一件：选项单等你挑，或任务卡住。
+// Ask 是「等你」的一件：选项单等你挑，或卡住的任务递到了你这层（往上没有负责人）。
 type Ask struct {
 	Kind     string `json:"kind"` // choose | stuck
 	ID       string `json:"id"`
@@ -177,12 +178,20 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 		return nil, err
 	}
 	for _, t := range blocked {
+		// 有负责人的部门里卡住的先归负责人；往上都没有负责人的才递到你这层。
+		owner, err := org.Recipient(ctx, q, t.Org)
+		if err != nil {
+			return nil, err
+		}
+		if owner != org.Secretary {
+			continue
+		}
 		sub, err := lastReason(ctx, q, t.ID)
 		if err != nil {
 			return nil, err
 		}
 		if sub == "" {
-			sub = holder(t)
+			sub = "卡住，等处理"
 		}
 		out = append(out, Ask{Kind: "stuck", ID: t.ID, Title: t.Title, Sub: sub, Dept: t.Org, DeptName: ix.name(t.Org), At: t.UpdatedAt})
 	}
@@ -352,12 +361,11 @@ func loadDept(ctx context.Context, q store.Querier, id string) (DeptPage, error)
 		page.Path = append(page.Path, Pair{a, ix.name(a)})
 	}
 	if d.Leader != "" {
-		var l Leader
-		err := q.QueryRowContext(ctx, `SELECT id, name, workers FROM identities WHERE id = ?`, d.Leader).Scan(&l.ID, &l.Name, &l.Workers)
+		l, err := org.GetIdentity(ctx, q, d.Leader)
 		if err != nil {
 			return DeptPage{}, err
 		}
-		page.Leader = &l
+		page.Leader = &Leader{ID: l.ID, Name: l.Name, Workers: strings.Join(l.Workers, "、")}
 	}
 	for _, s := range ix.children[id] {
 		page.Subs = append(page.Subs, *ix.byID[s])
@@ -581,7 +589,10 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t), Holder: holder(t), Log: []LogLine{}}
+	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t), Log: []LogLine{}}
+	if out.Holder, err = holderText(ctx, q, t); err != nil {
+		return out, err
+	}
 	if t.Org != "" {
 		if err := q.QueryRowContext(ctx, `SELECT name FROM departments WHERE id = ?`, t.Org).Scan(&out.DeptName); err != nil {
 			return out, err
@@ -610,6 +621,32 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 		out.Log = append(out.Log, LogLine{At: e.At, Text: logLine(e)})
 	}
 	return out, nil
+}
+
+// holderText 是「现在谁拿着球」：没结束的任务用 watch 的持球判定（与 top、statusline 同一份），
+// 结束了的按结果说。
+func holderText(ctx context.Context, q store.Querier, t ledger.Task) (string, error) {
+	if t.Status.Finished() && t.Status != ledger.Failed {
+		return finishedText(t), nil
+	}
+	owner, err := org.Recipient(ctx, q, t.Org)
+	if err != nil {
+		return "", err
+	}
+	deps, err := ledger.Deps(ctx, q, t.ID)
+	if err != nil {
+		return "", err
+	}
+	_, waiting := ledger.Ready(t.Status, deps)
+	h := watch.HolderOf(watch.Facts{Task: t, Owner: owner, WaitingOn: waiting})
+	if h.Who == "" {
+		return h.Text, nil
+	}
+	who := h.Who
+	if who == org.Secretary {
+		who = "秘书"
+	}
+	return who + "：" + h.Text, nil
 }
 
 // ChoiceDetail 是选项单抽屉。

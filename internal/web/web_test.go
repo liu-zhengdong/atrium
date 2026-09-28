@@ -92,7 +92,7 @@ func TestStepHolder(t *testing.T) {
 		{ledger.Task{Status: ledger.Cancelled}, 0, "off", "取消"},
 	}
 	for _, c := range cases {
-		if step(c.t) != c.step || state(c.t) != c.state || who(c.t) != c.who || holder(c.t) == "" {
+		if step(c.t) != c.step || state(c.t) != c.state || who(c.t) != c.who {
 			t.Errorf("%s/%s：step %d state %s who %s", c.t.Status, c.t.Stage, step(c.t), state(c.t), who(c.t))
 		}
 	}
@@ -240,6 +240,22 @@ func TestRoutes(t *testing.T) {
 	read("legion", &legion)
 	if legion.Accounts == nil || legion.Hosts == nil {
 		t.Error("空的额度与机器应是空数组，不是 null")
+	}
+	// 部门有了负责人，卡住的活先归负责人，不再递到「等你」；详情里持球人是负责人。
+	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "运行时负责人", Workers: []string{"claude"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := org.Edit(ctx, db, sub.ID, org.DeptPatch{Leader: &a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	read("today", &today)
+	if len(today.Asks) != 0 {
+		t.Errorf("有负责人时不该递到等你：%+v", today.Asks)
+	}
+	read("dept/"+sub.ID, &page)
+	if page.Leader == nil || page.Leader.Name != "运行时负责人" {
+		t.Errorf("负责人：%+v", page.Leader)
 	}
 	if res := get("/", "", ""); res.StatusCode != 200 || !strings.Contains(res.Header.Get("Content-Security-Policy"), "script-src") && !strings.Contains(res.Header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Errorf("首页：%d", res.StatusCode)

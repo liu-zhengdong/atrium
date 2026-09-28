@@ -581,7 +581,9 @@ export class TelegramNotifier {
     try {
       note = noteOf(text);
     } catch (error) {
-      return say(error instanceof Error ? error.message : String(error));
+      // 校验说明沿用命令行的（--note: …），手机上去掉参数名。
+      const reason = error instanceof Error ? error.message : String(error);
+      return say(reason.replace(/^--note:\s*/, ""));
     }
     const card = saveCard(this.db, choice.ref, { note }, this.now());
     await this.editCard(
@@ -749,13 +751,13 @@ export class TelegramNotifier {
       throw new Problem(409, "已经有一个绑定在等了", "conflict");
     // 同一个机器人同时只能有一处 getUpdates：先停掉常驻收消息，绑定完再接着收。
     this.binding = true;
-    await this.stopListening();
-    let bind = c.bind;
-    if (!bind || bind.expires_at <= this.now()) {
-      bind = { code: bindCode(), expires_at: this.now() + BIND_TTL_MS };
-      this.save({ ...this.file, credential: { ...c, bind } });
-    }
     try {
+      await this.stopListening();
+      let bind = c.bind;
+      if (!bind || bind.expires_at <= this.now()) {
+        bind = { code: bindCode(), expires_at: this.now() + BIND_TTL_MS };
+        this.save({ ...this.file, credential: { ...c, bind } });
+      }
       const deadline = this.now() + timeoutSeconds * 1000;
       let offset: number | undefined;
       while (!this.closed) {

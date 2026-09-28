@@ -13,6 +13,7 @@ import { avoidReason, type ChainNode } from "../skills/model.ts";
 import type { Headroom } from "./usage-budget.ts";
 import { signedPercent, staleLabel } from "./percent.ts";
 import { urgentOrder } from "./urgent.ts";
+import { sizeFits, sizeReason, type Size } from "./task-size.ts";
 
 /**
  * 派活候选一览（task pick）：把候选执行者、账号额度、干活的专员与交付记录放在一张表里，
@@ -60,6 +61,8 @@ export type PickFacts = {
   records: ReadonlyMap<string, PickRecord>;
   /** 紧急任务（t215）：不按额度富余，按一次通过率与速度、正忙与否挑。 */
   urgent?: boolean;
+  /** 任务大小（t276）：合这一档的组合排在前面；不给不按大小排。estimated 表示没写、是估的。 */
+  size?: { size: Size; estimated: boolean };
 };
 
 export type PickAccount = {
@@ -100,6 +103,10 @@ export type PickCandidate = {
 
 export type PickView = {
   risk: Risk;
+  /** 按哪一档大小挑（t276）；不按大小排为 null。 */
+  size: Size | null;
+  /** 大小是没写、粗估的。 */
+  size_estimated: boolean;
   job: { ref: string; name: string } | null;
   reserve_percent: number;
   /** OpenQuota 数据是否可用。 */
@@ -204,9 +211,10 @@ function notesOf(candidate: PickCandidateFact): string[] {
 }
 
 /**
- * 排序：专员候选里能接、不正忙的按专员顺序在前；其余能接的按账号富余从多到少（没有富余数据的在后、按固定顺序），
- * 正忙的独占工具排到最后（只剩它时仍推荐它，派了会排队）；专员第 1 选超速且 richerAlternative 找到更富余的，
- * 那一位提到最前。与 task run 自动挑人（含 --auto 自动派）一致。
+ * 排序：专员候选里能接、不正忙的按专员顺序在前（小活时其中快的先）；其余能接的先按大小（合这一档、富余不为负的在前，
+ * task-size.ts），再按账号富余从多到少（没有富余数据的在后、按固定顺序），正忙的独占工具排到最后
+ * （只剩它时仍推荐它，派了会排队）；专员第 1 选超速且 richerAlternative 找到更富余的，那一位提到最前。
+ * 与 task run 自动挑人（含 --auto 自动派）一致。
  */
 export function pickView(facts: PickFacts): PickView {
   const spare = facts.pace ? spareByProvider(facts.pace) : new Map();
@@ -224,15 +232,28 @@ export function pickView(facts: PickFacts): PickView {
     };
   });
   const eligible = rows.filter((row) => !row.refusals.length);
+  const fits = (row: (typeof rows)[number]) =>
+    !!facts.size && sizeFits(facts.size.size, row.candidate.worker);
+  // 小活：专员候选里快的先（专员顺序只在同快慢里比）；中、大按专员原顺序。
+  const quickFirst = (row: (typeof rows)[number]) =>
+    facts.size?.size === "small" && fits(row) ? 0 : 1;
   const favoured = eligible
     .filter((row) => row.candidate.preferred !== null && !row.busy)
-    .sort((a, b) => a.candidate.preferred! - b.candidate.preferred!);
+    .sort(
+      (a, b) =>
+        quickFirst(a) - quickFirst(b) ||
+        a.candidate.preferred! - b.candidate.preferred!,
+    );
+  // 合这一档的组合排在其余能接的前面；有额度数据时只算富余已知且不为负的（超速、旧数、没读数的照富余排）。
+  const sized = (row: (typeof rows)[number]) =>
+    fits(row) && (!facts.pace || (row.spare !== undefined && row.spare >= 0));
   const byOrder = (row: (typeof rows)[number]) =>
     FALLBACK_ORDER.indexOf(row.candidate.tool);
   const rest = eligible
     .filter((row) => !favoured.includes(row))
     .sort((a, b) => {
       if (a.busy !== b.busy) return a.busy ? 1 : -1;
+      if (sized(a) !== sized(b)) return sized(a) ? -1 : 1;
       if (a.spare === undefined || b.spare === undefined)
         return a.spare === b.spare
           ? byOrder(a) - byOrder(b) || a.index - b.index
@@ -298,6 +319,8 @@ export function pickView(facts: PickFacts): PickView {
   const top = candidates[0]?.eligible ? candidates[0] : undefined;
   return {
     risk: facts.risk,
+    size: facts.size?.size ?? null,
+    size_estimated: facts.size?.estimated ?? false,
     job: facts.job,
     reserve_percent: facts.reservePercent,
     quota_known: !!facts.pace,
@@ -410,7 +433,7 @@ const spareText = (quota: PickAccount) =>
  */
 export function pickReason(
   candidates: readonly PickCandidate[],
-  facts: Pick<PickFacts, "job" | "pace">,
+  facts: Pick<PickFacts, "job" | "pace" | "size">,
   overSpeed?: PickCandidate,
 ): string {
   const top = candidates[0]?.eligible ? candidates[0] : undefined;
@@ -432,6 +455,17 @@ export function pickReason(
     return `${job}第 ${overSpeed.preferred} 选 ${overSpeed.worker} 超速（${overSpeed.quota.account} ${signedPercent(overSpeed.quota.spare_percent!)}），改用${to}（${top.quota.account} ${signedPercent(top.quota.spare_percent!)}）`;
   }
   const why: string[] = [];
+  const size =
+    facts.size &&
+    sizeReason(
+      facts.size,
+      {
+        fits: sizeFits(facts.size.size, top.worker),
+        preferred: top.preferred !== null,
+      },
+      candidates.some((c) => sizeFits(facts.size!.size, c.worker)),
+    );
+  if (size) why.push(size);
   if (facts.job && top.preferred !== null)
     why.push(`${facts.job.name}专员优先`);
   else if (facts.job)

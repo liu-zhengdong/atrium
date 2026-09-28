@@ -121,6 +121,11 @@ export function ensureTaskTables(db: DatabaseSync) {
     );
     backfillIdle(db);
   }
+  // 任务大小（t276）：没写为 NULL，挑人时按详述与牵涉范围粗估。
+  if (!columns.some((column) => column.name === "size"))
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN size TEXT CHECK(size IS NULL OR size IN ('small','medium','large'))",
+    );
   // PR 交付后的合入阶段单独记录；旧任务不自动合入。
   if (!columns.some((column) => column.name === "delivery_stage"))
     db.exec("ALTER TABLE tasks ADD COLUMN delivery_stage TEXT");

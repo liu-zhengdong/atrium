@@ -54,6 +54,7 @@ import {
   priorityTag,
   tagTitle,
 } from "../server/tasks/priority.ts";
+import { parseSize, SIZE_LABEL } from "../server/tasks/task-size.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 
@@ -168,6 +169,22 @@ function priorityInput(values: Values) {
     return { priority: parsePriority(text) };
   } catch {
     throw new Problem(400, "--priority 只能是 闲时 或 普通", "usage");
+  }
+}
+
+/** --size 小|中|大（也认 small、medium、large）；task set 给空清掉、回到粗估。 */
+function sizeInput(values: Values, clear = false) {
+  const text = str(values, "size");
+  if (text === undefined) return {};
+  if (clear && text === "") return { size: "" };
+  try {
+    return { size: parseSize(text) };
+  } catch {
+    throw new Problem(
+      400,
+      `--size 只能是 小、中 或 大${clear ? "（给空清掉）" : ""}`,
+      "usage",
+    );
   }
 }
 
@@ -338,9 +355,9 @@ function alsoText(task: Task) {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--size 小|中|大] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；--size 小|中|大 定自动挑人的偏好（小优先 cursor+auto、codex 低强度、opencode deepseek 这类快且便宜的，中、大优先 claude/codex 高强度；不写按详述长度与牵涉部分粗估为中或大，拆活时写上）；旧 --job、--concern、--role 暂可用",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
@@ -366,6 +383,7 @@ const add: Command = {
     stopgap: { type: "string" },
     "avoid-host": { type: "string" },
     priority: { type: "string" },
+    size: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [title], values, json }) {
@@ -441,6 +459,7 @@ const add: Command = {
       ...(values.urgent === true ? { urgent: true } : {}),
       ...laneInput(values),
       ...priorityInput(values),
+      ...sizeInput(values),
     };
     const task = await (
       await client()
@@ -571,6 +590,7 @@ const show: Command = {
           "避开主机",
           task.avoid_host_refs?.length ? task.avoid_host_refs.join("、") : null,
         ],
+        ["大小", task.size ? SIZE_LABEL[task.size] : null],
         [
           "优先级",
           task.priority === "idle"
@@ -773,8 +793,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
+  args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通] [--size 小|中|大|'']",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）、大小（--size 小|中|大，只影响之后的自动挑人，给空回到粗估）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
   options: {
     status: { type: "string" },
     "with-children": { type: "boolean" },
@@ -802,6 +822,7 @@ const set: Command = {
     stopgap: { type: "string" },
     "avoid-host": { type: "string" },
     priority: { type: "string" },
+    size: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
@@ -874,10 +895,11 @@ const set: Command = {
     if (values["no-urgent"] === true) body.urgent = false;
     Object.assign(body, laneInput(values));
     Object.assign(body, priorityInput(values));
+    Object.assign(body, sizeInput(values, true));
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--also、--secret、--brief、--deliver、--issue、--after、--after-pr、--auto、--urgent/--no-urgent、--why、--stopgap、--avoid-host 或 --priority",
+        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--also、--secret、--brief、--deliver、--issue、--after、--after-pr、--auto、--urgent/--no-urgent、--why、--stopgap、--avoid-host、--priority 或 --size",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -913,6 +935,13 @@ const set: Command = {
             : []),
           ...(body.priority === "normal"
             ? ["优先级：普通，照常排（紧急的仍在前）"]
+            : []),
+          ...(body.size !== undefined
+            ? [
+                task.size
+                  ? `大小：${SIZE_LABEL[task.size]}，之后自动挑人按它排`
+                  : "大小：已清掉，自动挑人按详述粗估",
+              ]
             : []),
           ...(role !== undefined ? roleHint(task) : []),
           ...(concern !== undefined || ask !== undefined
@@ -1203,7 +1232,9 @@ export function pickLines(pick: RunPick | undefined): string[] {
       ? [
           pick.reason.startsWith("紧急：")
             ? `挑了 ${pick.worker}（${pick.reason}）`
-            : `按额度挑了 ${pick.worker}，因为${pick.reason}`,
+            : /^[小中大]活/.test(pick.reason)
+              ? `挑了 ${pick.worker}，因为${pick.reason}`
+              : `按额度挑了 ${pick.worker}，因为${pick.reason}`,
         ]
       : []),
     ...(pick.notice ? [pick.notice] : []),
@@ -1296,7 +1327,10 @@ export function formatPick(
   const head = view.recommended
     ? `推荐 ${view.recommended}：${view.reason}`
     : `暂无推荐：${view.reason}`;
-  const meta = `${view.task} · risk=${view.risk}${view.job ? ` · 干活的专员 ${view.job.name}（${view.job.ref}）` : " · 没指定干活的专员"} · 根章程给用户保留 ${view.reserve_percent}%${view.quota_known ? "" : " · 额度数据不可用"}`;
+  const size = view.size
+    ? ` · 大小 ${SIZE_LABEL[view.size]}${view.size_estimated ? "（没写，粗估）" : ""}`
+    : "";
+  const meta = `${view.task} · risk=${view.risk}${size}${view.job ? ` · 干活的专员 ${view.job.name}（${view.job.ref}）` : " · 没指定干活的专员"} · 根章程给用户保留 ${view.reserve_percent}%${view.quota_known ? "" : " · 额度数据不可用"}`;
   const scope = view.specialists
     ? [
         ...(view.specialists.job_outside ? [view.specialists.job_outside] : []),

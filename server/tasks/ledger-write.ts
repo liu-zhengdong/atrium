@@ -38,6 +38,7 @@ import {
   parsePriority,
   priorityAfterMove,
 } from "./priority.ts";
+import { parseSize, type Size } from "./task-size.ts";
 import {
   concernRows,
   concernsFor,
@@ -86,6 +87,13 @@ function briefOf(input: Record<string, unknown>, repo: string | null) {
 }
 
 /** 紧急标记（t113）：只认布尔值；只按这个字段判断，标题写「紧急：」不算。 */
+/** 大小：小 / 中 / 大（或英文）；null 与空串表示不写。 */
+function sizeOf(value: unknown): Size | null {
+  return value === undefined || value === null || value === ""
+    ? null
+    : parseSize(value);
+}
+
 function urgentOf(value: unknown) {
   if (value === undefined) return false;
   if (typeof value !== "boolean") throw usage("urgent: 应为 true 或 false");
@@ -157,6 +165,8 @@ export type NewTask = {
   urgent?: boolean;
   /** 闲时 / 普通（t136）；不写按归属部分：管方面的为闲时。 */
   priority?: string;
+  /** 小 / 中 / 大（t276）；不写挑人时粗估。 */
+  size?: string;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
   /** 归属哪一部分（组织节点）。 */
@@ -229,6 +239,7 @@ export function createTask(
     "avoid_host",
     "stopgap",
     "priority",
+    "size",
     "from",
     "part",
     "goal",
@@ -238,6 +249,7 @@ export function createTask(
     "secret",
   ]);
   const specialist = specialistOptions(input);
+  const size = sizeOf(input.size);
   const urgent = urgentOf(input.urgent);
   const extras = urgentExtras(input, urgent);
   const priority =
@@ -315,6 +327,7 @@ export function createTask(
     const extra = {
       ...extras.fields,
       ...(urgent ? { urgent_by: by ?? null } : {}),
+      ...(size ? { size } : {}),
     };
     if (Object.keys(extra).length)
       db.prepare(
@@ -340,6 +353,7 @@ export function createTask(
         ? { stopgap: stopgapJson(extras.stopgap) }
         : {}),
       ...(level === "idle" ? { priority: level } : {}),
+      ...(size ? { size } : {}),
       ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(secrets.length ? { secrets } : {}),
       ...(by ? { by } : {}),
@@ -384,6 +398,7 @@ export function updateTask(
     "avoid_host",
     "stopgap",
     "priority",
+    "size",
     "pr_url",
     "from",
     "part",
@@ -396,7 +411,7 @@ export function updateTask(
   const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、also、secret、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、also、secret、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、size、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -407,6 +422,8 @@ export function updateTask(
   if ("urgent" in input) fields.urgent = urgentOf(input.urgent) ? 1 : 0;
   // 闲时随时可改：排队中的下一轮拉起按新档位排；已在跑的不打断。
   if ("priority" in input) fields.priority = parsePriority(input.priority);
+  // 大小随时可改（给空清掉、回到粗估）：只影响之后的自动挑人。
+  if ("size" in input) fields.size = sizeOf(input.size);
   if ("pr_url" in input) {
     if (
       typeof input.pr_url !== "string" ||

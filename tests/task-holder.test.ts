@@ -310,19 +310,35 @@ test("事实采集：受阻后事件投 a1，a1 捎话后重新拉起显示已�
   ).run(task.id);
   const row = () =>
     db.prepare("SELECT * FROM tasks WHERE id=?").get(task.id) as never;
-  assert.deepEqual(holderFor(db, row(), null), {
+  assert.deepEqual(holderFor(db, row(), null, 10), {
     kind: "leader",
     who: "a1",
     text: "本地检查没过 · 等 a1 处理",
     detail: localCheck.reason,
   });
   db.prepare("UPDATE task_inbox SET acked_at=4").run();
-  assert.equal(holderFor(db, row(), null)!.text, "本地检查没过 · a1 已接手");
+  assert.equal(
+    holderFor(db, row(), null, 10)!.text,
+    "本地检查没过 · a1 已接手",
+  );
   addTaskNote(db, task.ref, { text: "看日志" }, 5, "a1");
-  assert.equal(holderFor(db, row(), null)!.text, "本地检查没过 · a1 在处理");
+  assert.equal(
+    holderFor(db, row(), null, 10)!.text,
+    "本地检查没过 · a1 在处理",
+  );
+  // 在 leader 手里挂了多久（t253）：从受阻那一刻（3）算，备注不重新起算。
+  assert.equal(
+    holderFor(db, row(), null, 3 + 45 * 60_000)!.text,
+    "本地检查没过 · a1 在处理 · 挂 45 分钟",
+  );
   noteTask(db, task.ref, "escalated", { from: "a1", to: "secretary" }, 6);
   assert.equal(
-    holderFor(db, row(), null)!.text,
+    holderFor(db, row(), null, 10)!.text,
+    "本地检查没过 · a1 上交给秘书",
+  );
+  // 上交给秘书后不再显示挂了多久（只盯 leader 手里的）。
+  assert.equal(
+    holderFor(db, row(), null, 3 + 45 * 60_000)!.text,
     "本地检查没过 · a1 上交给秘书",
   );
   noteTask(db, task.ref, "tell", { text: "rebase 再跑", by: "a1" }, 7);

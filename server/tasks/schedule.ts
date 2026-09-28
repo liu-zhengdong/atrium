@@ -19,6 +19,7 @@ import { taskRoute } from "../leaders/subscriber.ts";
 import { SECRETARY } from "../leaders/route.ts";
 import { ancestorsOf, isTotal, totalsAmong } from "./rollup-ledger.ts";
 import { planCounts } from "./plan-count.ts";
+import { downstreamHint } from "../leaders/hang.ts";
 
 export type ScheduleGroup = "running" | "ready" | "waiting" | "blocked";
 export type PlanItem = {
@@ -484,6 +485,11 @@ export class Scheduler {
     // 总任务下面的任务（t190）：秘书只收总任务级的，排期的就绪与受阻不投给秘书（卡住由上游自己的结局报）。
     if (route.subscriber === SECRETARY && ancestorsOf(this.db, id).length)
       return;
+    // 上游失败卡住的（t253）：写清是哪几件上游、可以怎么办，别直接挂死。
+    const failedUpstream =
+      kind === "blocked" && reason?.startsWith("上游 ")
+        ? [...new Set(reason.match(/\bt[1-9][0-9]*\b/g) ?? [])]
+        : [];
     this.inbox.publish({
       subscriber: route.subscriber,
       taskId: id,
@@ -498,6 +504,14 @@ export class Scheduler {
         unassigned:
           (task.owner ?? "secretary") === "secretary" &&
           task.deliver === "none",
+        ...(failedUpstream.length
+          ? {
+              downstream_hint: downstreamHint({
+                upstream: failedUpstream,
+                downstream: [task.ref],
+              }),
+            }
+          : {}),
         routed: { to: route.subscriber, why: route.why },
       },
     });

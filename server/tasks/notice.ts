@@ -18,6 +18,8 @@ import { involvedOf } from "./also.ts";
 import { ref } from "../org/model.ts";
 import { hasOrg } from "../org/task-node.ts";
 import { URGENT_WATCHERS, urgentAlert, urgentStage } from "./urgent.ts";
+import { downstreamOf } from "./schedule-ledger.ts";
+import { downstreamHint } from "../leaders/hang.ts";
 
 /**
  * 紧急任务的阶段推送（t215）：开始、止损、抢占、交付、检查、合入、上线（附验证）、失败、受阻、卡死重试、换人
@@ -107,6 +109,21 @@ export function publishTask(
           : kind.startsWith("ci")
             ? "ci"
             : "outcome";
+  // 上游失败（t253）：告诉负责人下游有哪些在等它、可以怎么办，别让下游一直挂着。
+  const downstream =
+    kind === "failed" || kind === "online_failed"
+      ? downstreamOf(db, id)
+      : { refs: [], more: 0 };
+  const downstreamDetail = downstream.refs.length
+    ? {
+        downstream: downstream.refs,
+        downstream_hint: downstreamHint({
+          upstream: [task.ref],
+          downstream: downstream.refs,
+          more: downstream.more,
+        }),
+      }
+    : {};
   let targets = deliveryRoutes(kind, route);
   if (totals.root) {
     const split = leafDelivery(
@@ -134,6 +151,7 @@ export function publishTask(
         pr_url: task.pr_url,
         ci: task.ci,
         ...detail,
+        ...downstreamDetail,
         routed: { to: target.subscriber, why: target.why },
       },
     });

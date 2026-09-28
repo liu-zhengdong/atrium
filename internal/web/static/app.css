@@ -156,6 +156,41 @@ a{color:inherit;text-decoration:none}
 .facts a{color:var(--accent)}
 .log{background:var(--raise);border-radius:10px;padding:12px 14px;font:12px/1.7 var(--mono);color:var(--ink2);white-space:pre-wrap;overflow-x:auto}
 
+/* 经过：按执行者说的话分段，每段下面是命令原文 */
+.jh{display:flex;align-items:baseline;gap:8px;margin:26px 0 12px}
+.jh b{font-size:13px;font-weight:500;color:var(--ink3)}
+.jh span{font-size:12px;color:var(--ink3);margin-left:auto}
+.phase{display:grid;grid-template-columns:14px 1fr;column-gap:12px;padding-bottom:18px}
+.phase>div{min-width:0}
+.pd{width:8px;height:8px;border-radius:50%;background:var(--ink3);margin-top:8px;justify-self:center}
+.phase.run .pd{background:var(--accent);animation:pulse 2.4s infinite}
+.say{word-break:break-word;white-space:pre-line}
+.say.quiet{color:var(--ink2)}
+.say a,.result a{color:var(--accent)}
+.say code,.result code,.nowrun code{font:12.5px var(--mono);background:var(--raise);padding:1px 5px;border-radius:5px}
+.grp{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px;color:var(--ink3);padding:3px 8px;margin-left:-8px;border-radius:7px;width:max-content;max-width:100%}
+.grp:hover{background:var(--raise);color:var(--ink2)}
+.grp .chev{transition:transform .15s;display:inline-block}
+.grp[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.fold{margin:0 0 14px -8px}
+.pips{display:flex;gap:3px;flex-wrap:wrap}
+.pips i{width:6px;height:6px;border-radius:2px;background:color-mix(in srgb,var(--ok) 55%,transparent)}
+.pips i.err{background:var(--bad)}.pips i.none{background:var(--ink3);opacity:.5}.pips i.run{background:var(--accent);animation:pulse 2.4s infinite}
+.nowrun{margin-top:6px;font-size:13px;color:var(--accent)}
+.cmds{margin-top:4px;display:flex;flex-direction:column}
+.cmd>button{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;width:100%;padding:5px 8px;margin-left:-8px;border-radius:8px;text-align:left}
+.cmd>button:hover{background:var(--raise)}
+.cmd .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2);font:12.5px/1.6 var(--mono)}
+.cmd .lbl,.cmd .detail,.nowrun code{font-variant-ligatures:none} /* 命令是原文：不把 >= == 连写成符号 */
+.cmd .st{font-size:12px;color:var(--ink3)}
+.cmd.err .lbl,.cmd.err .st{color:var(--bad)}
+.cmd.run .lbl{color:var(--accent)}
+.cmd .detail{margin:4px 0 8px;background:var(--raise);border-radius:10px;padding:10px 12px;font:12px/1.65 var(--mono);color:var(--ink2);white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
+.detail .c{color:var(--ink)}
+.detail .o{margin-top:8px;color:var(--ink3)}
+.result{word-break:break-word;white-space:pre-line}
+@media (prefers-reduced-motion:reduce){.phase.run .pd,.pips i.run{animation:none}}
+
 .opts{display:flex;flex-direction:column;gap:8px;margin:20px 0}
 .opt{display:grid;grid-template-columns:20px 1fr;gap:12px;padding:14px;border-radius:12px;background:var(--raise);text-align:left;border:1.5px solid transparent}
 .opt:hover{background:var(--hover)}

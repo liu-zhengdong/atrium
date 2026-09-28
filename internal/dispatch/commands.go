@@ -12,6 +12,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // RunResult 是 task run 的结果：入队了给队列位置；--dry-run 给候选与推荐。
@@ -163,8 +164,9 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(r, "已捎话："+r.Note, "atrium task log "+id+" --follow")
 		}})
-	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者日志（人读的：正文、工具调用、收尾）；--follow 跟到退出",
-		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"}},
+	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者的经过：按它说的话分段，每条命令原文一行（✓ 成功 ✗ 出错 · 没搜到 … 在跑）；--raw 原始日志；--follow 跟到退出",
+		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"},
+			{Name: "raw", Bool: true, Help: "原始日志（从末尾一段起）；claude、codex 以外的工具解析不了，本来就给原文"}},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -175,37 +177,100 @@ func Commands(t *cli.Table) {
 			}
 			path := "/api/tasks/" + url.PathEscape(id) + "/log"
 			var ch LogChunk
+			if err := c.Call("GET", path+"?offset=0", nil, &ch); err != nil {
+				return err
+			}
+			if !c.Bool("raw") && workers.Traceable(ch.Worker) {
+				return traceLog(c, id, path, ch)
+			}
 			if err := c.Call("GET", path, nil, &ch); err != nil {
 				return err
 			}
-			if !c.Bool("follow") {
-				return c.Done(ch, fmt.Sprintf("== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text), logNext(id, ch))
-			}
-			var all strings.Builder
-			all.WriteString(ch.Text)
-			if !c.JSON {
-				fmt.Fprintf(c.Env.Stdout, "== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text)
-			}
-			for ch.Running {
-				next, err := followOnce(c, path, ch.Offset)
-				if err != nil {
-					return err
-				}
-				if next.Run != ch.Run {
-					break // 换了一轮拉起：从新的一轮再看
-				}
-				ch = next
-				all.WriteString(ch.Text)
-				if !c.JSON {
-					fmt.Fprint(c.Env.Stdout, ch.Text)
-				}
-			}
-			ch.Text = all.String()
-			if c.JSON {
-				return c.Done(ch, "", logNext(id, ch))
-			}
-			return c.Done(nil, "== 执行者已退出", logNext(id, ch))
+			return rawLog(c, id, path, ch)
 		}})
+}
+
+// TraceView 是 task log 按段看时的结果。
+type TraceView struct {
+	Task    string        `json:"task"`
+	Run     int           `json:"run"`
+	Worker  string        `json:"worker"`
+	Running bool          `json:"running"`
+	Trace   workers.Trace `json:"trace"`
+}
+
+// traceLog 从头读完日志按段打出；--follow 时接着等新内容，只打新定下来的部分。
+func traceLog(c *cli.Ctx, id, path string, ch LogChunk) error {
+	p, pr, follow := workers.NewParser(ch.Worker), &tracePrinter{}, c.Bool("follow")
+	show := func(final bool) {
+		if !c.JSON {
+			fmt.Fprint(c.Env.Stdout, pr.next(p.Trace(), final))
+		}
+	}
+	if !c.JSON {
+		fmt.Fprintf(c.Env.Stdout, "== %s 第 %d 次拉起（%s）\n", id, ch.Run, ch.Worker)
+	}
+	for {
+		p.Feed(ch.Text)
+		show(false)
+		more := ch.Text != ""
+		if !more && !(follow && ch.Running) {
+			break
+		}
+		var next LogChunk
+		var err error
+		if more {
+			err = c.Call("GET", path+"?offset="+strconv.FormatInt(ch.Offset, 10), nil, &next)
+		} else {
+			next, err = followOnce(c, path, ch.Offset)
+		}
+		if err != nil {
+			return err
+		}
+		if next.Run != ch.Run {
+			break // 换了一轮拉起：从新的一轮再看
+		}
+		ch = next
+	}
+	show(true)
+	if c.JSON {
+		return c.Done(TraceView{Task: id, Run: ch.Run, Worker: ch.Worker, Running: ch.Running, Trace: p.Trace()}, "", logNext(id, ch))
+	}
+	if follow {
+		return c.Done(nil, "== 执行者已退出", logNext(id, ch))
+	}
+	return c.Done(nil, "", logNext(id, ch))
+}
+
+// rawLog 给日志原文（末尾一段起）；--follow 跟到退出。
+func rawLog(c *cli.Ctx, id, path string, ch LogChunk) error {
+	if !c.Bool("follow") {
+		return c.Done(ch, fmt.Sprintf("== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text), logNext(id, ch))
+	}
+	var all strings.Builder
+	all.WriteString(ch.Text)
+	if !c.JSON {
+		fmt.Fprintf(c.Env.Stdout, "== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text)
+	}
+	for ch.Running {
+		next, err := followOnce(c, path, ch.Offset)
+		if err != nil {
+			return err
+		}
+		if next.Run != ch.Run {
+			break // 换了一轮拉起：从新的一轮再看
+		}
+		ch = next
+		all.WriteString(ch.Text)
+		if !c.JSON {
+			fmt.Fprint(c.Env.Stdout, ch.Text)
+		}
+	}
+	ch.Text = all.String()
+	if c.JSON {
+		return c.Done(ch, "", logNext(id, ch))
+	}
+	return c.Done(nil, "== 执行者已退出", logNext(id, ch))
 }
 
 // followOnce 等下一段日志；服务平滑重启时等新服务起来再接着读。

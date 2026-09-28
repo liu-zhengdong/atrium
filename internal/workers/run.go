@@ -76,7 +76,7 @@ func LastRun(ctx context.Context, q store.Querier, task string) (*Run, error) {
 
 const logChunk = 256 * 1024
 
-// ReadLog 读执行者日志到最后一个完整行；offset < 0 表示读末尾一段（从下一行开头起）。task log 与网页任务抽屉共用。
+// ReadLog 读执行者日志到最后一个完整行；offset < 0 表示读末尾一段（从下一行开头起）。task log 用它按偏移读原文。
 func ReadLog(path string, offset int64) (string, int64, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -112,18 +112,4 @@ func ReadLog(path string, offset int64) (string, int64, error) {
 		return "", offset, nil
 	}
 	return s[:end+1], offset + int64(end+1), nil
-}
-
-// ReadableLog 把日志一段变成人读的行（空行与不值得看的事件去掉）。
-func ReadableLog(text string) string {
-	var out []string
-	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-		if r := Readable(l); strings.TrimSpace(r) != "" {
-			out = append(out, r)
-		}
-	}
-	if len(out) == 0 {
-		return ""
-	}
-	return strings.Join(out, "\n") + "\n"
 }

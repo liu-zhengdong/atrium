@@ -82,7 +82,7 @@ func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, e
 	return r, nil
 }
 
-// LogChunk 是 task log 的一段：人读的行与下一次从哪读。
+// LogChunk 是 task log 的一段：日志原文（到最后一个完整行）与下一次从哪读。
 type LogChunk struct {
 	Task    string `json:"task"`
 	Run     int    `json:"run"`
@@ -115,7 +115,7 @@ func ReadLog(ctx context.Context, env *app.Env, id string, offset int64, wait ti
 			return c, err
 		}
 		if text != "" || !c.Running || time.Now().After(deadline) {
-			c.Text, c.Offset = workers.ReadableLog(text), next
+			c.Text, c.Offset = text, next
 			return c, nil
 		}
 		select {

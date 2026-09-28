@@ -54,8 +54,8 @@ func TestBuild(t *testing.T) {
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, want: []string{"--input-format", "stream-json", "--replay-user-messages"}},
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"-p", "--resume", "0123abcd-0123-0123-0123-0123456789ab"}},
 		{tool: "claude", in: in("", "ultra"), bad: "思考强度只能是"},
-		{tool: "codex", in: in("gpt-6", "high"), want: []string{"exec", "-C", dir, "-m", "gpt-6", `model_reasoning_effort="high"`, "-"}},
-		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
+		{tool: "codex", in: in("gpt-6", "high"), want: []string{"exec", "--json", "-C", dir, "-m", "gpt-6", `model_reasoning_effort="high"`, "-"}},
+		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "--json", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
 		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low", "--", "做事"}},
 		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "做事", "-m", "k2"}},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
@@ -267,6 +267,7 @@ func TestClassify(t *testing.T) {
 		reset time.Time
 	}{
 		{"codex 额度", 1, "working\nERROR: You've hit your usage limit. Try again in ~90 min.\n", SignalQuota, now.Add(90 * time.Minute)},
+		{"codex --json 额度", 1, `{"type":"turn.started"}` + "\n" + `{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again in ~5 min."}}`, SignalQuota, now.Add(5 * time.Minute)},
 		{"claude 额度", 1, `{"type":"result","is_error":true,"result":"Claude AI usage limit reached|resets 3pm (UTC)"}`, SignalQuota, time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)},
 		{"429", 1, "Error: HTTP/1.1 429 Too Many Requests\nretry-after: 30\n", SignalQuota, now.Add(30 * time.Second)},
 		{"正文提到额度不算", 1, `{"type":"assistant","message":{"content":[{"type":"text","text":"usage limit reached"}]}}`, SignalNone, time.Time{}},
@@ -305,6 +306,8 @@ func TestEnded(t *testing.T) {
 		{claude, `{"type":"assistant"}`, false, false},
 		{agy, `{"event":"result","result":{"status":"ERROR","error":"boom"}}`, true, false},
 		{codex, "anything", false, false},
+		{codex, `{"type":"item.completed","item":{"type":"agent_message","text":"好了"}}` + "\n" + `{"type":"turn.completed","usage":{}}`, true, true},
+		{codex, `{"type":"turn.failed","error":{"message":"boom"}}`, true, false},
 	}
 	for _, c := range cases {
 		e := c.a.Ended(c.tail)
@@ -315,7 +318,10 @@ func TestEnded(t *testing.T) {
 	if s := claude.SessionOf(`{"type":"system","subtype":"init","cwd":"/x","session_id":"0123abcd-0123-0123-0123-0123456789ab"}`); s != "0123abcd-0123-0123-0123-0123456789ab" {
 		t.Errorf("会话 id：%q", s)
 	}
-	if got := Readable(`{"type":"assistant","message":{"content":[{"type":"text","text":"你好"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}`); got != "你好\n→ Bash {\"command\":\"ls\"}" {
-		t.Errorf("Readable：%q", got)
+	if s := codex.SessionOf(`{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}`); s != "0199a213-81c0-7800-8aa1-bbab2a035a53" {
+		t.Errorf("codex 会话 id：%q", s)
+	}
+	if r := codex.LastReply(`{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"审阅结论：通过"}}` + "\n" + `{"type":"turn.completed"}`); r != "审阅结论：通过" {
+		t.Errorf("codex 最后回复：%q", r)
 	}
 }

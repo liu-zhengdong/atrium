@@ -247,17 +247,17 @@ func TestRoutes(t *testing.T) {
 	}
 	var detail TaskDetail
 	read("task/"+task.ID, &detail)
-	if detail.State != "bad" || detail.Log != "" {
+	if detail.State != "bad" || detail.Trace != nil {
 		t.Errorf("没拉起过执行者，日志应为空：%+v", detail)
 	}
-	// 抽屉的日志是执行者进程的真日志尾巴（与 task log 同一份），不是任务经历。
+	// 抽屉的经过来自执行者进程的真日志（与 task log 同一份解析），不是任务经历。
 	logFile := filepath.Join(t.TempDir(), "run-1.log")
 	os.WriteFile(logFile, []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"改好了"}]}}`+"\n"), 0o600)
 	run, _ := json.Marshal(workers.Run{N: 1, Worker: "claude", Log: logFile})
 	ledger.Record(ctx, db, task.ID, workers.RunKind, "dispatch", string(run))
 	read("task/"+task.ID, &detail)
-	if detail.Log != "改好了" {
-		t.Errorf("日志尾巴：%q", detail.Log)
+	if detail.Trace == nil || len(detail.Trace.Segments) != 1 || detail.Trace.Segments[0].Say != "改好了" || detail.Live {
+		t.Errorf("经过：%+v", detail.Trace)
 	}
 	var legion Legion
 	read("legion", &legion)

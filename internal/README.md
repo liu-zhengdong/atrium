@@ -115,8 +115,8 @@ type Module struct {
 ### 事件（`internal/events`）
 
 - `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body})`：在引起它的写事务里调用。种类常量写在 `events.go`（已有 `TaskStatus`、`Overdue`）。
-- 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked 与 `overdue` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。
-- ledger 在任务状态变化时已发 `task.status`。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。
+- 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked 与 `overdue` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。
+- 任务事件：ledger 在状态变化与转入已合入时经 `events.EmitTask(ctx, q, by, e)` 发 `task.status`，按派活人分发（纯函数 `events.Route`）。派活人是 `task add` 时的身份（`ledger.By`，记在 `created` 经历里；周期任务记建周期任务的人）。结果（完成、已合入、上线、失败、受阻）要处理地投派活人：u1 与秘书投 `secretary`，aN 投自己；运行时建的（审阅任务）投部门负责人、没有投秘书，只有失败、受阻要处理。负责人不是收结果的那位时另收知会；过程（入队、拉起、交回一次、取消）只知会负责人。
 
 ### 一键停机（`internal/pause`）
 

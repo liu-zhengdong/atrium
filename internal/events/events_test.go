@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,12 +70,78 @@ func TestLevelAndKey(t *testing.T) {
 	}
 }
 
+func TestRoute(t *testing.T) {
+	st := func(to, stage string) map[string]any { return map[string]any{"to": to, "stage": stage} }
+	type d = Delivery
+	cases := []struct {
+		name, by, leader string
+		body             map[string]any
+		want             []Delivery
+	}{
+		// 结果：派活人要处理，负责人（不是派活人时）知会。
+		{"用户派·合入·有负责人", "u1", "a1", st("done", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"用户派·合入·无负责人", "u1", "", st("done", "merged"), []d{{Secretary, Act}}},
+		{"秘书派·等上线的已合入", Secretary, "a1", st("running", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"秘书派·上线", Secretary, "a1", st("done", "released"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"秘书派·失败·无负责人", Secretary, "", st("failed", ""), []d{{Secretary, Act}}},
+		{"负责人派·受阻·本部门", "a1", "a1", st("blocked", "merge_queue"), []d{{"a1", Act}}},
+		{"负责人派·完成·下属部门", "a1", "a3", st("done", "gate"), []d{{"a1", Act}, {"a3", Info}}},
+		{"负责人派·失败·无负责人", "a2", "", st("failed", ""), []d{{"a2", Act}}},
+		// 运行时建的：按部门找负责人，成功只知会，失败、受阻要处理。
+		{"运行时·完成·有负责人", "gates", "a1", st("done", "review"), []d{{"a1", Info}}},
+		{"运行时·受阻·有负责人", "gates", "a1", st("blocked", "gate"), []d{{"a1", Act}}},
+		{"运行时·失败·无负责人", "", "", st("failed", ""), []d{{Secretary, Act}}},
+		// 过程：只知会负责人，不投秘书。
+		{"用户派·入队·有负责人", "u1", "a1", st("queued", ""), []d{{"a1", Info}}},
+		{"用户派·拉起·无负责人", "u1", "", st("running", ""), nil},
+		{"秘书派·交回一次", Secretary, "a1", st("queued", ""), []d{{"a1", Info}}},
+		{"负责人派·取消·本部门", "a1", "a1", st("cancelled", ""), []d{{"a1", Info}}},
+		{"运行时·入队·无负责人", "gates", "", st("queued", ""), nil},
+	}
+	for _, c := range cases {
+		if got := Route(c.by, c.leader, TaskStatus, c.body); !slices.Equal(got, c.want) {
+			t.Errorf("%s：Route = %v，应为 %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestEmitTask(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	exec(t, db, `INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`)
+	exec(t, db, `INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES ('o1', NULL, '公司', 'a1', 0, 0)`)
+	exec(t, db, `INSERT INTO tasks (id, department, title, status, created_at, updated_at) VALUES ('t1', 'o1', 'x', 'running', 0, 0)`)
+	emitTask := func(by, to string) {
+		t.Helper()
+		err := db.Tx(ctx, func(tx *sql.Tx) error {
+			return EmitTask(ctx, tx, by, Event{Kind: TaskStatus, Task: "t1", Dept: "o1", Body: map[string]any{"to": to}})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	emitTask("u1", "queued")
+	emitTask("u1", "running")
+	emitTask("u1", "done")
+	sec, _ := Pending(ctx, db, Secretary, true, 10)
+	lead, _ := Pending(ctx, db, "a1", true, 10)
+	if len(sec) != 1 || sec[0].Level != Act || !strings.Contains(string(sec[0].Body), "done") {
+		t.Fatalf("秘书应只收一条要处理的结果：%+v", sec)
+	}
+	if len(lead) != 1 || lead[0].Level != Info || lead[0].Count != 3 {
+		t.Fatalf("负责人应收一条合并的知会：%+v", lead)
+	}
+}
+
 func TestSummary(t *testing.T) {
 	if s := Summary(Row{Kind: LeaderEscalate, Body: []byte(`{"from":"a1","label":"搞不定","note":"证书要用户签"}`)}); s != "a1 上交（搞不定）：证书要用户签" {
 		t.Errorf("上交 Summary = %q", s)
 	}
 	body, _ := json.Marshal(map[string]any{"from": "running", "to": "blocked", "title": "修登录"})
 	if s := Summary(Row{Kind: TaskStatus, Body: body}); s != "running → blocked「修登录」" {
+		t.Errorf("Summary = %q", s)
+	}
+	body, _ = json.Marshal(map[string]any{"from": "running", "to": "done", "stage": "released", "title": "修登录", "note": "已上线（v1.2.3）"})
+	if s := Summary(Row{Kind: TaskStatus, Body: body}); s != "running → done（released）「修登录」 · 已上线（v1.2.3）" {
 		t.Errorf("Summary = %q", s)
 	}
 	body, _ = json.Marshal(map[string]any{"text": "卡住，等处理", "held_ms": 31 * 60000, "next": "atrium task show t1"})

@@ -1,5 +1,5 @@
 // Package release 是上线：Atrium 自己的仓库合入后等含它的版本，版本比当前新就下载本平台二进制替换自身、
-// 平滑重启；新服务起来后跑只读冒烟（status、task ls、--help），通过记「已上线」并发 online 事件，没过转受阻。
+// 平滑重启；新服务起来后跑只读冒烟（status、task ls、--help），通过记「已上线」（task.status 事件带版本），没过转受阻。
 //
 // 命令：update [--to 版本]。自升级只在默认数据目录、发版版本上开；隔离实例与开发版不动。
 // 开发期不做失败自动装回旧版：旧二进制留在 <exe>.old，要退回手动换。
@@ -8,7 +8,6 @@ package release
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -22,7 +21,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/config"
-	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -187,7 +185,7 @@ func (r *Releaser) upgrade(ctx context.Context, t ledger.Task, tag string) error
 	return c.Do(ctx, "POST", "/api/service/restart", nil, nil)
 }
 
-// online 跑只读冒烟（本进程只跑一次），通过记已上线、发 online 事件；没过转受阻。
+// online 跑只读冒烟（本进程只跑一次），通过记已上线（task.status 事件带版本）；没过转受阻。
 func (r *Releaser) online(ctx context.Context, t ledger.Task) error {
 	if r.smoked == nil {
 		why := ""
@@ -203,13 +201,7 @@ func (r *Releaser) online(ctx context.Context, t ledger.Task) error {
 	if _, err := ledger.Apply(ctx, r.DB, t.ID, ledger.Event{Kind: ledger.Released}, Actor, "已上线（"+r.Current+"）"); err != nil {
 		return err
 	}
-	return r.DB.Tx(ctx, func(tx *sql.Tx) error {
-		if err := ledger.Record(ctx, tx, t.ID, "online", Actor, r.Current); err != nil {
-			return err
-		}
-		return events.Emit(ctx, tx, events.Event{Kind: events.Online, Task: t.ID, Dept: t.Org,
-			Body: map[string]any{"version": r.Current, "title": t.Title, "pr": t.PR}})
-	})
+	return ledger.Record(ctx, r.DB, t.ID, "online", Actor, r.Current)
 }
 
 // Smoke 是上线后的只读冒烟：status、task ls（都要 ok:true）、--help。

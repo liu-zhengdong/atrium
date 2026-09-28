@@ -111,3 +111,39 @@ func TestLedgerLifecycle(t *testing.T) {
 		t.Fatalf("ls 缺省只列没结束的：%d", len(list))
 	}
 }
+
+// 结果投派活的人：秘书派的完成要处理地投秘书，过程不投秘书；周期任务记建周期任务的人。
+func TestResultGoesToDispatcher(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO departments (id, name, leader, created_at, updated_at) VALUES ('o1', '公司', 'a1', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	x, _ := Add(ctx, db, NewTask{Title: "秘书派的", Org: "o1"}, "u1")
+	y, _ := Add(ctx, db, NewTask{Title: "周期", Org: "o1", By: "a1"}, "s1")
+	for _, c := range []struct{ id, want string }{{x.ID, "u1"}, {y.ID, "a1"}} {
+		if by, err := By(ctx, db, c.id); err != nil || by != c.want {
+			t.Fatalf("By(%s) = %q %v，应为 %s", c.id, by, err, c.want)
+		}
+	}
+	for _, k := range []EventKind{Enqueue, Start} {
+		if _, err := Apply(ctx, db, x.ID, Event{Kind: k}, "dispatch", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Apply(ctx, db, x.ID, Event{Kind: ExitFail}, "dispatch", "额度用尽"); err != nil {
+		t.Fatal(err)
+	}
+	var target, level, body string
+	if err := db.QueryRow(`SELECT target, level, body FROM events WHERE task = ? AND target = 'secretary'`, x.ID).
+		Scan(&target, &level, &body); err != nil || level != "act" {
+		t.Fatalf("秘书应收一条要处理的失败：%s %s %v", level, body, err)
+	}
+	var n int
+	db.QueryRow(`SELECT count(*) FROM events WHERE task = ? AND target = 'a1' AND level = 'info'`, x.ID).Scan(&n)
+	if n != 1 {
+		t.Fatalf("负责人应收一条合并的知会，得到 %d", n)
+	}
+}

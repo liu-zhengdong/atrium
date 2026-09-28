@@ -10,7 +10,7 @@ import {
   MAX_MERGE_RETURNS,
   mergeFailure,
 } from "../server/tasks/merge-decision.ts";
-import { startApp } from "./task-fixture.ts";
+import { eventTrail, startApp } from "./task-fixture.ts";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import { MergeQueue } from "../server/tasks/merge-runtime.ts";
 import { MergeClaim } from "../server/tasks/merge-claim.ts";
@@ -653,7 +653,7 @@ for (const scenario of [
       scenario === "head_changed" ||
       scenario === "stale_pr_head_timeout"
     ) {
-      assert.equal(task.status, "blocked");
+      assert.equal(task.status, "blocked", eventTrail(task));
       assert.equal(task.delivery_stage, null);
       assert.equal(task.merge_returns, 0);
       assert.equal(mergeCalls, 0);

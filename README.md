@@ -272,6 +272,8 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 
 - **投给谁**：任务没写 `--owner` 时，从任务的归属部分（`--part`，旧任务的归属节点次之，都没写沿父任务往上找）向上找最近的、已登记的 leader；找不到投秘书。事件的 `routed` 写明投给谁、为什么。写了 `--owner`（包括 `--owner secretary`）就按负责人投。过程事件（合入、退回等知会）也投给 leader，但只有「要处理」的才唤醒它。
 - **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。只有默认数据目录的服务缺省唤醒；另给 `ATRIUM_DATA` 的隔离服务（压测、验收）库里有 leader 也不起真进程、不耗额度，事件留在收件箱，要唤醒设 `ATRIUM_LEADER_WAKE=1`（`=0` 在默认目录也关）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
+- **以动作收尾，挂久了再叫醒或上交**（t253）：提示词要求每件事落到一个动作上——重新派发、重新排进合入队列（`task merge`）、改依赖、取消、开修复任务或上交；只写备注不算处理完。运行时每分钟看一遍受阻任务：持球人是 aN（等它处理、它已接手或在处理、下层上交给它），从受阻或上交给它那一刻算起过了 30 分钟（`ATRIUM_LEADER_HANG_MINUTES` 可调，`0` 关闭），就再叫醒它一次（事件 `hanging`「挂着没动」，写挂了多久、可选动作；任务记 `hang_nudged`）；叫醒后再过 30 分钟仍在它手里，运行时代为上交上一层（没有就秘书，事件 `escalated`，`by: runtime`，任务记 `escalated` 且 `from: runtime`）。重派、改状态、上交都会让任务离开「受阻、在 aN 手里」或重新起算；备注不改状态，不算动作。持球的 aN 已不在登记里时到点直接上交。状态栏、`top`、`task show` 的「球在谁手里」在 leader 手里时句末写挂了多久，如「自动派发失败 · a3 在处理 · 挂 3 小时」。判定在 `server/leaders/hang.ts`，巡检在 `hang-runtime.ts`。
+- **上游失败时写清下游怎么办**（t253）：任务失败或上线失败时，给负责人的事件带 `downstream`（没结束的直接下游，至多列 10 件）与 `downstream_hint`：下游有哪些，可选重派上游、去掉依赖（`task set tM --after 其余上游`）或一起取消；下游因上游失败被排期卡住时，投给下游负责人的 `blocked` 事件同样带 `downstream_hint`。
 - **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，给这些节点排周期任务（`schedule add/pause/resume/run/rm`），写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
 - **上交**只有四类：`shipped` 已上线（里程碑完成，须带 `--task`，说明里附端到端验证）、`cross` 需要别的部分配合、`beyond` 越过权限／预算／硬边界、`stuck` 搞不定（卡住多次、拿不定）。生成一条投给上一层 leader（没有就秘书）的「要处理」事件 `escalated`，带 `--task` 时任务上也记一笔。转交下层 leader 投给自己的上交时不另起一条：`--event` 给那条的编号（不给时按同任务、同类型认最近一条，未确认或确认不到 6 小时的），上一层收到的仍是一条，`from`、`reason` 是下层原文，`forwarded` 逐层记「谁看过、一句意见」；原事件替转交人确认掉，唤醒收尾时不会再转交一次。
 - **连续性**存在 Atrium：节点要点、阶段、交付记录与 leader 的备忘和决定记录，不靠进程上下文。`org tree`、`map --json`（`leader_state`；`lead` 是这一块归谁管，含从上级继承的）、`atrium top` 显示每个节点的 leader 与最近一次唤醒、在处理什么（人话，如「t84 上线」）。
@@ -1280,6 +1282,7 @@ atrium role edit 专员 [--name 名称] [--description 文字] [--body 文件] [
 | `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60                                                       |
 | `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                                                                        |
 | `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                                                          |
+| `ATRIUM_LEADER_HANG_MINUTES`    | 受阻任务挂在 leader 手里多久再叫醒一次、叫醒后多久上交上一层，默认 30；`0` 关闭                         |
 | `ATRIUM_LEADER_WAKE`            | `1` 让隔离服务也唤醒 leader，`0` 关掉；默认只在默认数据目录唤醒                                         |
 | `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`                                              |
 | `ATRIUM_VERIFY_WORKERS`         | 上线后验证的执行者组合，逗号分隔、按顺序试，默认 `opencode+opencode-go/deepseek-v4.1-flash,cursor+auto` |

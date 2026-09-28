@@ -36,6 +36,7 @@ const KINDS = [
   "merge_blocked",
   "merge_check_quiet",
   "worker_quiet",
+  "hang_nudged",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -77,6 +78,7 @@ export function holderFacts(
     inbox: hasTable(db, "task_inbox"),
   },
   hosts?: ReadonlyMap<number, string>,
+  now = Date.now(),
 ): HolderFacts {
   // 倒序取最近几十条相关事件，再按时间正序看。
   const events = all<TaskEventRow>(
@@ -175,6 +177,10 @@ export function holderFacts(
       })()
     : null;
   const note = block ? last("note", block.id) : undefined;
+  // 球到现在这位手里的时刻（t253）：被上交给它的算上交那一刻，否则算受阻那一刻；叫醒记录只认这一段里的。
+  const heldFrom =
+    row.status === "blocked" ? (escalated ? escalation : block) : undefined;
+  const nudged = heldFrom ? last("hang_nudged", heldFrom.id) : undefined;
   // 取「任务受阻后最新一条收件箱记录」；若它正好是被保留清理清掉的已确认知会（#t126），
   // 会退回去读更早的一条，只影响「这次由谁接手」的展示，不影响判定。
   const inbox =
@@ -243,6 +249,9 @@ export function holderFacts(
     check_quiet: checkQuiet,
     worker_quiet_ms:
       typeof workerQuiet === "number" && workerQuiet > 0 ? workerQuiet : null,
+    held_since: heldFrom?.at ?? null,
+    hang_nudged: nudged?.at ?? null,
+    now,
   };
 }
 
@@ -251,8 +260,16 @@ export function holderFor(
   db: DatabaseSync,
   row: TaskRow,
   queued: { reason: string | null } | null,
+  now = Date.now(),
 ): Holder | null {
-  const facts = holderFacts(db, row, queued);
+  const facts = holderFacts(
+    db,
+    row,
+    queued,
+    { inbox: hasTable(db, "task_inbox") },
+    undefined,
+    now,
+  );
   const holder = holderOf(facts);
   return holder ? { ...holder, detail: holderDetail(facts) } : null;
 }

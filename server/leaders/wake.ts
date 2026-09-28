@@ -5,6 +5,7 @@ import { omittedLine, type DecisionDigest } from "../memos/digest.ts";
 import { forwardedOf } from "./route.ts";
 import type { VerifyStep } from "../tasks/verify.ts";
 import { phenomenonLine } from "../tasks/verify-view.ts";
+import { CLOSING_ACTIONS, HANG_MINUTES } from "./hang.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、
@@ -158,6 +159,9 @@ export function eventLine(event: PromptEvent) {
       .map((s) => `${s.node} ${s.name.slice(0, 64)}（${s.reason}）`)
       .join("；")}${detail?.more ? `；另有 ${detail.more} 个` : ""}`;
   }
+  // 挂着没动（t253）：说明里写了挂多久、再不动会怎样、可选动作。
+  if (event.kind === "hanging")
+    return `- #${event.id} ${event.task ?? ""} 在你手里挂着没动 ${field(event.detail, "title", 60)}：${field(event.detail, "note", 1200)}`;
   if (event.kind === "patrol_findings") {
     const detail = event.detail as {
       node?: string;
@@ -199,6 +203,10 @@ export function eventLine(event: PromptEvent) {
     ...forwardedOf(event.detail).map(
       (f) => `· ${f.by} 转交：${f.note.slice(0, 300)}`,
     ),
+    // 上游失败（t253）：下游有哪些、可选动作。
+    field(event.detail, "downstream_hint", 800)
+      ? `· ${field(event.detail, "downstream_hint", 800)}`
+      : "",
   ]
     .filter(Boolean)
     .join(" ")}`;
@@ -234,6 +242,7 @@ export const EVENT_WORDS: Record<string, string> = {
   material_purge: "资料可以真删",
   secret_stale: "凭据疑似没用",
   choice_small: "产品部小改进",
+  hanging: "挂着没动",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
 
@@ -257,6 +266,8 @@ export type PromptInput = {
   digest: readonly string[];
   /** 上交投给谁（上一层 leader 或秘书）。 */
   upstream: string;
+  /** 受阻任务挂在手里多少分钟再叫醒、再上交（t253）；缺省 HANG_MINUTES，0 表示关闭。 */
+  hangMinutes?: number;
 };
 
 export function leaderPrompt(input: PromptInput): string {
@@ -323,6 +334,16 @@ export function leaderPrompt(input: PromptInput): string {
     "- beyond 越过权限／预算／硬边界 → atrium leader escalate --kind beyond 说明 [--task tN]",
     "- stuck 搞不定（同一件事卡住多次、拿不定）→ atrium leader escalate --kind stuck 说明 [--task tN]",
     "- 下层 leader 上交给你、你也要往上报的：转交那一条，atrium leader escalate --kind 同类型 你的意见 --event 编号 [--task tN]；上面只收一条，能看到原文和你的意见，原事件随之确认。不要另写一条内容相同的上交",
+    "",
+    "## 每件事以一个动作收尾",
+    "处理一件事要落到一个动作上，让任务状态变或者球离开你手里；只写备注、只看不动不算处理完，任务会一直挂在「等你处理」。可选动作：",
+    ...CLOSING_ACTIONS.map((a) => `- ${a}`),
+    ...((input.hangMinutes ?? HANG_MINUTES) > 0
+      ? [
+          `- 运行时盯着：受阻任务在你手里 ${input.hangMinutes ?? HANG_MINUTES} 分钟没有上面这些动作，会再叫醒你一次（事件「挂着没动」）；再过 ${input.hangMinutes ?? HANG_MINUTES} 分钟仍没动，运行时替你上交上一层。备注不算动作。`,
+        ]
+      : []),
+    "- 确实要等（等用户、等别的部分）：上交写清在等什么，而不是留在自己手里。",
     "",
     "## 收尾",
     "1. 把要记住的（在等什么、下次先看什么）写进备忘；这次做了取舍的，记一条决定。",

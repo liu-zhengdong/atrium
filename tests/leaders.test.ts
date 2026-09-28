@@ -22,7 +22,10 @@ import { removeTemp } from "./temp-dir.ts";
 
 type Behave = (spec: LeaderRunSpec) => Promise<WakeExit>;
 
-async function open(t: { after: (fn: () => unknown) => void }) {
+async function open(
+  t: { after: (fn: () => unknown) => void },
+  extra: { now?: () => number; hangMs?: number; hangCheckMs?: number } = {},
+) {
   const data = mkdtempSync(join(tmpdir(), "atrium-leaders-"));
   t.after(() => removeTemp(data));
   const runs: LeaderRunSpec[] = [];
@@ -36,6 +39,7 @@ async function open(t: { after: (fn: () => unknown) => void }) {
       batchMs: 0,
       pollMs: 20,
       maxFailures: 2,
+      ...extra,
       run: async (spec) => {
         runs.push(spec);
         return behave(spec);
@@ -787,4 +791,115 @@ test("全景看得到负责人：节点页、负责人页、状态栏字段，le
   assert.equal((await x.call("GET", "/api/map/leaders/u2")).status, 400);
   // u1 是用户页（只有决定记录，t211）。
   assert.equal((await x.ok("GET", "/api/map/leaders/u1")).kind, "user");
+});
+
+test("leader：受阻任务挂在 leader 手里没动，到点再叫醒一次，再不动运行时上交秘书；上游失败的事件列出下游与可选动作（t253）", async (t) => {
+  // 时钟跟着真实时间走（攒批按事件入箱时刻判），再往前拨出挂着的时长。
+  let skew = 0;
+  const x = await open(t, {
+    now: () => Date.now() + skew,
+    hangMs: 30 * 60_000,
+    hangCheckMs: 0,
+  });
+  await x.ok("POST", "/api/leaders", { name: "负责人", worker: "codex" });
+  await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
+  await x.ok("POST", "/api/tasks", {
+    title: "上游",
+    part: "o3",
+    deliver: "none",
+  });
+  await x.ok("POST", "/api/tasks", {
+    title: "下游",
+    part: "o3",
+    deliver: "none",
+    after: "t1",
+  });
+  const inbox = x.taskRunner.inbox;
+  const prompts: string[] = [];
+  // a1 每次只写一句备注就确认退出：不重派、不改状态、不上交。
+  x.set(async (spec) => {
+    prompts.push(spec.prompt);
+    const token = `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`;
+    await x.call("POST", "/api/tasks/t2/note", { text: "是残留" }, token);
+    const acked = await x.call(
+      "POST",
+      "/api/events/ack",
+      { ids: idsIn(spec.prompt) },
+      token,
+    );
+    assert.equal(acked.status, 200);
+    return "ok";
+  });
+
+  // 上游失败：给 a1 的事件写清下游与三种动作。
+  publishTask(inbox, x.db, 1, "failed", { reason: "测试没过" });
+  await until(() => prompts.length === 1 && wakeStatus(x.db) === "done", 5000);
+  assert.match(prompts[0]!, /上游 t1 没成，下游 t2 在等它/);
+  assert.match(prompts[0]!, /atrium task run t1/);
+  assert.match(prompts[0]!, /atrium task set t2 --after/);
+  assert.match(prompts[0]!, /atrium task set t2 --status cancelled/);
+  // 提示词：以动作收尾，备注不算。
+  assert.match(prompts[0]!, /每件事以一个动作收尾/);
+  assert.match(prompts[0]!, /只写备注、只看不动不算处理完/);
+  assert.match(prompts[0]!, /30 分钟没有上面这些动作/);
+
+  // 下游被上游卡住，投给 a1；a1 只写备注。
+  x.db
+    .prepare(
+      "UPDATE tasks SET status='blocked',schedule_state='blocked',schedule_reason='上游 t1 [failed]' WHERE id=2",
+    )
+    .run();
+  x.db
+    .prepare(
+      "INSERT INTO task_events(task_id,at,kind,detail) VALUES (2,?,'block',?)",
+    )
+    .run(Date.now(), JSON.stringify({ reason: "上游 t1 [failed]" }));
+  publishTask(inbox, x.db, 2, "blocked", { reason: "上游 t1 [failed]" });
+  await until(() => prompts.length === 2 && wakeStatus(x.db) === "done", 5000);
+  const holder = async () => (await x.ok("GET", "/api/tasks/t2")).holder;
+  assert.equal((await holder()).kind, "leader");
+  assert.match((await holder()).text, /a1 在处理$/);
+
+  // 挂了 31 分钟：再叫醒 a1 一次，事件写挂了多久；状态栏的一句话带时长。
+  skew += 31 * 60_000;
+  await until(() => prompts.length === 3 && wakeStatus(x.db) === "done", 5000);
+  assert.match(prompts[2]!, /t2 在你手里挂着没动/);
+  assert.match(prompts[2]!, /已挂 31 分钟/);
+  assert.match(prompts[2]!, /atrium task run t2/);
+  assert(
+    !inbox
+      .list("secretary", { limit: 10 })
+      .events.some((e) => e.kind === "escalated"),
+  );
+
+  // 叫醒后又只写了备注，再过 30 分钟：运行时上交秘书，持球人变成秘书。
+  skew += 30 * 60_000;
+  await until(
+    () =>
+      inbox
+        .list("secretary", { limit: 10 })
+        .events.some((e) => e.kind === "escalated"),
+    5000,
+  );
+  const up = inbox
+    .list("secretary", { limit: 10 })
+    .events.find((e) => e.kind === "escalated")!;
+  const detail = up.detail as { title: string; reason: string; by: string };
+  assert.equal(up.task, "t2");
+  assert.equal(detail.by, "runtime");
+  assert.match(detail.title, /t2 在 a1 手里挂了 61 分钟，运行时上交/);
+  assert.match(detail.reason, /叫醒过一次仍没有动作/);
+  const after = await holder();
+  assert.equal(after.kind, "secretary");
+  assert.match(after.text, /运行时 上交给秘书$/);
+  // 上交之后不再叫醒 a1、不再重复上交。
+  skew += 120 * 60_000;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(prompts.length, 3);
+  assert.equal(
+    inbox
+      .list("secretary", { limit: 10 })
+      .events.filter((e) => e.kind === "escalated").length,
+    1,
+  );
 });

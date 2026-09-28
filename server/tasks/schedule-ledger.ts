@@ -47,6 +47,35 @@ export function parseAfterPr(
   return prs;
 }
 
+export const DOWNSTREAM_MAX = 10;
+
+/** 没结束的直接下游（依赖这件的任务，t253）：至多列 DOWNSTREAM_MAX 件，more 是没列出的件数。走 task_dependencies_after 索引。 */
+export function downstreamOf(
+  db: DatabaseSync,
+  id: number,
+): { refs: string[]; more: number } {
+  const rows = all<{ task_id: number }>(
+    db,
+    `SELECT d.task_id FROM task_dependencies d JOIN tasks t ON t.id=d.task_id
+      WHERE d.after_id=? AND t.status NOT IN ('done','cancelled') ORDER BY d.task_id LIMIT ${DOWNSTREAM_MAX + 1}`,
+    id,
+  );
+  const more =
+    rows.length > DOWNSTREAM_MAX
+      ? (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM task_dependencies d JOIN tasks t ON t.id=d.task_id WHERE d.after_id=? AND t.status NOT IN ('done','cancelled')",
+            )
+            .get(id) as { n: number }
+        ).n - DOWNSTREAM_MAX
+      : 0;
+  return {
+    refs: rows.slice(0, DOWNSTREAM_MAX).map((row) => taskRef(row.task_id)),
+    more,
+  };
+}
+
 export function conditions(db: DatabaseSync, id: number): Conditions {
   return {
     after: all<{ after_id: number }>(

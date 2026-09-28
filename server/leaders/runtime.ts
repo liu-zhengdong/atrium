@@ -30,6 +30,8 @@ import { ownerDigest } from "../memos/digest.ts";
 import { upstreamRoute } from "./subscriber.ts";
 import type { LeaderTokens } from "./tokens.ts";
 import { afterWake, leaderPrompt, wakeSummary, type WakeExit } from "./wake.ts";
+import { HANG_MINUTES } from "./hang.ts";
+import { patrolHanging } from "./hang-runtime.ts";
 
 /**
  * 按事唤醒 leader（服务内一个巡检循环）：某位 leader 有「要处理」事件就攒批（缺省 30 秒），
@@ -61,13 +63,21 @@ export type LeaderWakerOptions = {
   pollMs?: number;
   run?: LeaderRun;
   now?: () => number;
+  /** 受阻任务挂在 leader 手里多久再叫醒、叫醒后多久上交（t253）；0 关闭。 */
+  hangMs?: number;
+  /** 多久巡检一次挂着的任务。 */
+  hangCheckMs?: number;
 };
 
 export const LEADER_BATCH_MS = 30_000;
 export const LEADER_TIMEOUT_MS = 20 * 60_000;
 export const LEADER_MAX_FAILURES = 2;
+export const LEADER_HANG_CHECK_MS = 60_000;
 
-/** 从环境读：ATRIUM_LEADER_BATCH_SECONDS（攒批）、ATRIUM_LEADER_TIMEOUT_MINUTES（单次唤醒上限）。 */
+/**
+ * 从环境读：ATRIUM_LEADER_BATCH_SECONDS（攒批）、ATRIUM_LEADER_TIMEOUT_MINUTES（单次唤醒上限）、
+ * ATRIUM_LEADER_HANG_MINUTES（任务挂在 leader 手里多久再叫醒、再过多久上交，缺省 30，0 关闭）。
+ */
 export function leaderEnvOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): Partial<LeaderWakerOptions> {
@@ -78,6 +88,9 @@ export function leaderEnvOptions(
   const timeout = Number(env.ATRIUM_LEADER_TIMEOUT_MINUTES);
   if (Number.isFinite(timeout) && timeout > 0)
     options.timeoutMs = timeout * 60_000;
+  const hang = Number(env.ATRIUM_LEADER_HANG_MINUTES);
+  if (env.ATRIUM_LEADER_HANG_MINUTES && Number.isFinite(hang) && hang >= 0)
+    options.hangMs = hang * 60_000;
   return options;
 }
 
@@ -171,10 +184,15 @@ export const runLeaderProcess: LeaderRun = async (spec) => {
   });
 };
 
+/** 提示词里写的时限（分钟）：没配用缺省，配了 0 表示关闭，不足 1 分钟按 1 分钟说。 */
+const hangMinutes = (ms = HANG_MINUTES * 60_000) =>
+  ms > 0 ? Math.max(1, Math.round(ms / 60_000)) : 0;
+
 export class LeaderWaker {
   private readonly abort = new AbortController();
   private readonly running = new Map<string, Promise<void>>();
   private loopDone: Promise<void> | undefined;
+  private hangCheckedAt = Number.NEGATIVE_INFINITY;
 
   constructor(
     private readonly db: DatabaseSync,
@@ -226,8 +244,23 @@ export class LeaderWaker {
     }
   }
 
-  /** 巡检一轮：每位已登记、没在跑的 leader，攒批到点就唤醒。 */
+  /** 巡检一轮：先看有没有挂在 leader 手里太久的任务（低频），再给每位已登记、没在跑的 leader 攒批到点就唤醒。 */
   tick() {
+    const now = this.now;
+    if (
+      now - this.hangCheckedAt >=
+      (this.options.hangCheckMs ?? LEADER_HANG_CHECK_MS)
+    ) {
+      this.hangCheckedAt = now;
+      try {
+        patrolHanging(this.db, this.inbox, {
+          now,
+          afterMs: this.options.hangMs ?? HANG_MINUTES * 60_000,
+        });
+      } catch (error) {
+        console.warn("挂着的任务巡检失败；稍后重试", error);
+      }
+    }
     for (const leader of registeredLeaders(this.db)) {
       if (this.running.has(leader) || this.abort.signal.aborted) continue;
       const events = this.inbox.pending(leader);
@@ -271,6 +304,7 @@ export class LeaderWaker {
         digest,
         upstream:
           upstream.subscriber === "secretary" ? "秘书" : upstream.subscriber,
+        hangMinutes: hangMinutes(this.options.hangMs),
       });
       markWakeStart(this.db, leader, wakeSummary(delivered), this.now);
       const timeoutMs = this.options.timeoutMs ?? LEADER_TIMEOUT_MS;

@@ -3,6 +3,7 @@ import type { TaskStatus } from "./state.ts";
 import { oneLine, width } from "../text-width.ts";
 import { MAX_CHECK_RERUNS } from "./check-outcome.ts";
 import { quietMinutes } from "./check-quiet.ts";
+import { hangLabel } from "../leaders/hang.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
@@ -75,6 +76,12 @@ export type HolderFacts = {
   check_quiet?: string | null;
   /** 执行者这段多久没进展（t260，毫秒）；没提醒过或之后又有进展为 null。 */
   worker_quiet_ms?: number | null;
+  /** 受阻任务的球什么时候到现在这位手里（受阻或被上交给它的时刻，t253）；不在受阻为 null。 */
+  held_since?: number | null;
+  /** 这一段里运行时叫醒过持球 leader 的时刻（t253）；没叫醒过为 null。 */
+  hang_nudged?: number | null;
+  /** 取事实的时刻：算 leader 手里挂了多久。 */
+  now?: number;
 };
 
 /** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
@@ -510,17 +517,35 @@ function judge(f: HolderFacts): Holder | null {
     };
   if (f.status === "blocked") {
     const why = blockShort(f.block);
+    // 在 leader 手里的（t253）句末写挂了多久；原因放不下时先截原因，不截时长。
+    const held = (who: string, tail: string) => {
+      const hang =
+        kindOf(who) === "leader" && f.held_since != null && f.now != null
+          ? hangLabel(f.now - f.held_since)
+          : "";
+      const rest = ` · ${tail}${hang ? ` · ${hang}` : ""}`;
+      const room = HOLDER_WIDTH - width(rest);
+      return `${width(why) <= room ? why : clipWords(why, room) || why}${rest}`;
+    };
     if (f.escalated)
       return {
         kind: kindOf(f.escalated.to),
         who: f.escalated.to,
-        text: `${why} · ${whoLabel(f.escalated.from)} 上交${f.escalated.to === "u1" ? "，等你" : `给${whoLabel(f.escalated.to)}`}`,
+        text: held(
+          f.escalated.to,
+          `${whoLabel(f.escalated.from)} 上交${f.escalated.to === "u1" ? "，等你" : `给${whoLabel(f.escalated.to)}`}`,
+        ),
       };
     if (f.processing_by)
       return {
         kind: kindOf(f.processing_by),
         who: f.processing_by,
-        text: `${why} · ${f.processing_by === "u1" ? "你在处理" : `${whoLabel(f.processing_by)} 在处理`}`,
+        text: held(
+          f.processing_by,
+          f.processing_by === "u1"
+            ? "你在处理"
+            : `${whoLabel(f.processing_by)} 在处理`,
+        ),
       };
     const who = f.inbox?.subscriber ?? f.route;
     return {
@@ -529,7 +554,12 @@ function judge(f: HolderFacts): Holder | null {
       text:
         who === "u1"
           ? `${why} · 等你处理`
-          : `${why} · ${f.inbox?.acked ? `${whoLabel(who)} 已接手` : `等 ${whoLabel(who)} 处理`}`,
+          : held(
+              who,
+              f.inbox?.acked
+                ? `${whoLabel(who)} 已接手`
+                : `等 ${whoLabel(who)} 处理`,
+            ),
     };
   }
   // todo：等上游或自动派发的由运行时派；手动的等负责的 leader 或秘书派。

@@ -30,7 +30,7 @@ command -v go >/dev/null || die "没有 go，装好 Go 再来"
 command -v sqlite3 >/dev/null || die "没有 sqlite3（取旧库只读副本要用）"
 [ -f "$old_data/atrium.sqlite" ] || die "找不到旧库 $old_data/atrium.sqlite"
 [ ! -e "$v2_data/atrium.sqlite" ] || die "$v2_data 已有 v2 库；import 只往空库导。确认不要了再手动挪开"
-echo "仓库：$repo（当前分支 $(git -C "$repo" rev-parse --abbrev-ref HEAD)）"
+echo "仓库：${repo}（当前分支 $(git -C "$repo" rev-parse --abbrev-ref HEAD)）"
 echo "旧数据：$old_data   v2 数据：$v2_data   装到：$bin_dir"
 
 step "1. 确认旧服务（4310）已停"
@@ -77,7 +77,7 @@ now_bin=$(command -v atrium || true)
 [ "$now_bin" = "$bin_dir/atrium" ] || die "PATH 上的 atrium 是 ${now_bin:-（没有）}，不是 $bin_dir/atrium；把 $bin_dir 放到 PATH 前面或删掉挡在前面的那个"
 echo "atrium → $now_bin"
 
-step "4. 导入旧库副本 → $v2_data（导入后自动全局暂停）"
+step "4. 导入旧库副本 → ${v2_data}（导入后自动全局暂停）"
 export ATRIUM_DATA="$v2_data"   # 端口沿用 ATRIUM_PORT，没设就是缺省 4320
 run atrium import --from "$backup/atrium.sqlite"
 
@@ -97,8 +97,8 @@ run atrium map   # 非交互终端里打印一次性链接
 
 step "完成"
 cat <<EOF
-v2 已在 ${ATRIUM_PORT:-4320} 上运行，数据目录 $v2_data，仍处于全局暂停：派活、负责人唤醒、周期任务、合入、发版都不会动。
-旧库副本：$backup（原库 $old_data 没动过）。
+v2 已在 ${ATRIUM_PORT:-4320} 上运行，数据目录 ${v2_data}，仍处于全局暂停：派活、负责人唤醒、周期任务、合入、发版都不会动。
+旧库副本：${backup}（原库 $old_data 没动过）。
 还要手动做的（见 docs/v2-cutover.md）：
   - 负责人没挂部门的，按秘书备忘恢复：atrium org edit oN --leader aN
   - 远程机器 ggb：atrium host edit h3 --join，照回执在那台上接入（隧道目标与私钥已导入）

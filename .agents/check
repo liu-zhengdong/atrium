@@ -1,1 +1,1 @@
-npm run build && npm test -- --changed && npm test -- tests/service.test.ts && node bin/atrium.mjs --help
+npm run build && npm run docs:check && npm test -- --changed && npm test -- tests/service.test.ts && node bin/atrium.mjs --help

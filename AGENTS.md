@@ -39,14 +39,14 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 - SQLite 一律参数化查询、事务、有界分页。事实（PR、CI、改动规模）由运行时查，不从执行者输出里采信。
 - 执行者与服务子进程用白名单环境启动（`server/service-env.ts`、`server/tasks/worker-env.ts`），不继承凭据类（`*_API_KEY`、`*_TOKEN`）、身份类（`CLAUDE_CODE_*`、`PI_*`）与 `HERDR_*`；任务声明的凭据（`task add --secret`，`server/secrets/`）是唯一例外：派活那一刻按名称逐个注入，名称不许盖系统变量与运行时标记。执行者固定带 `ATRIUM_WORKER=1`，命令行据此拒绝操作用户的服务（唯一例外是只读的 `material get`，读取记在 `ATRIUM_TASK` 那件任务上）。leader 进程同样走执行者白名单，不带 `ATRIUM_WORKER`，只加本次唤醒签发的 `ATRIUM_LEADER_TOKEN`（服务端按它判权限，唤醒结束即作废）。
 - 凭据不进日志、提交、PR、issue 或模型提示词；报错回显的令牌要抹掉。认证放在路由匹配后的统一入口，默认拒绝；路径参数拒绝 `..`、绝对路径、隐藏段和指向目录外的软链接。
-- 命令行的主要调用者是 Agent：成功回执最后一行给下一步命令，只有修正明确可执行时才提示修正，字段校验用参数名和中文；读命令支持 `--json`；异步状态提供等待与增量读取（`task wait`、`task log --follow`、`events wait`），不让调用方轮询。新命令接入 `cli/main.ts` 的命令表，`atrium --help`、`atrium guide` 与 README「命令参考」段都由命令表生成：改了命令（增删、用法、说明、分组、示例）跑 `npm run docs` 重新生成，不要手改 README 起止标记之间的内容，也不必为列用法去改 README 其他小节；`npm run check` 核对生成段与命令表一致，不一致时失败并提示 `npm run docs`。两个分支都改了命令、README 生成段冲突时，先解 `cli/` 的冲突，再跑 `npm run docs` 覆盖生成段。
+- 命令行的主要调用者是 Agent：成功回执最后一行给下一步命令，只有修正明确可执行时才提示修正，字段校验用参数名和中文；读命令支持 `--json`；异步状态提供等待与增量读取（`task wait`、`task log --follow`、`events wait`），不让调用方轮询。新命令接入 `cli/main.ts` 的命令表，`atrium --help`、`atrium guide` 与 README「命令参考」段都由命令表生成：改了命令（增删、用法、说明、分组、示例）跑 `npm run docs` 重新生成，不要手改 README 起止标记之间的内容，也不必为列用法去改 README 其他小节；`npm run check` 与合入快检查 `.agents/check` 都核对生成段与命令表一致，不一致时失败并提示 `npm run docs`。两个分支都改了命令、README 生成段冲突时，先解 `cli/` 的冲突，再跑 `npm run docs` 覆盖生成段。
 - 用户短号 `u1`，任务 `t1`，目标与里程碑 `g1`（迁移后作节点阶段记录的 id），组织节点 `o1`，要点 `k1`，节点 leader `a1`；短号全局一致、持久、不复用。
 - 组织（部门、专员、章程、能力卡）存在 Atrium，改动留修订历史；仓库只留跟着代码走的约定：本文件、`.agents/README.md`（派活时附给执行者）和代码目录旁的 `AGENTS.md`。
 - 用户纠正或新规矩写到哪（技能、专员说明、要点、执行者档案、章程、决定记录、备忘、AGENTS.md）：见 `atrium guide`「每类东西放哪」与 README 同名一节。
 
 ## 验证与协作
 
-- `npm run check` 执行类型检查与全部测试（全量），只由每小时一次的周期任务在 main 上跑；合入队列只跑 `.agents/check` 的快检查（类型检查、改动相关测试、启动冒烟）。`npm run format:check` 检查格式。远端 CI 在 macOS、Linux、Windows 三平台各跑一遍。
+- `npm run check` 执行类型检查与全部测试（全量），只由每小时一次的周期任务在 main 上跑；合入队列只跑 `.agents/check` 的快检查（类型检查、README 命令参考段 `docs:check`、改动相关测试、启动冒烟）。`npm run format:check` 检查格式。远端 CI 在 macOS、Linux、Windows 三平台各跑一遍。
 - 执行者不跑全量测试，全量只由运行时跑。开发中和交付前只跑 `npm run build`（类型检查）、相关测试与 `npm run format:check`：`npm test -- tests/a.test.ts` 只跑列出的文件，`npm test -- --changed` 跑与 `origin/main` 相比改动文件相关的测试。只解 rebase 冲突时跑类型检查加冲突文件相关测试即可。测试超时先看是不是机器太忙，单独重跑超时的文件。
 - 执行者交付停在 PR；运行时关卡按执行者档案的 `checks` 判定（`finished`、`pr_exists`、`local_check`、`file_growth`、`claims_verified`），结论写进任务事件。远端 CI 结果记入账本供参考，不挡合入；通过关卡的 PR 在运行时合入队列串行 rebase、重跑本地检查并按检查过的提交合入，冲突或检查失败交回原执行者，超过两次转卡住；高风险（`--risk high`）或执行者档案 trust 低于 medium 的，入队前另派不同模型、trust 至少 medium 的一次性审阅者按清单给出通过或打回，打回同样计入交回次数。Atrium 自身仓库合入后等发版，运行时对自身 update + restart，通知「tN 已上线（vX）」并附 PR 里的「端到端验证」一节。「端到端验证」里会停掉在跑任务、改主机或服务状态的步骤（`host clean`、`host pause`、`task stop`、启停升级服务等）标注「只在隔离环境」或「需要人工」：上线验证在真实环境跑，这类步骤服务端会拒绝，验证任务据此跳过或去隔离环境跑。PR 正文另写「碰到哪些已有能力」一节（与哪些已有能力交叉、各验了什么，没有写「无」），只要求写、不设关卡；leader 按它挑试点，先小范围用、跑通再放开。
 - 主路径的整体验收由发版前的 `npm run e2e` 与上线后验证负责，不是每个任务的交付要求。校验与权限至少实测一份破坏输入。

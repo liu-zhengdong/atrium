@@ -1,28 +1,16 @@
-// Package workers（桩，第二波实现）：执行者适配器：claude、codex、opencode、kimi、grok、agy、cursor、通用命令行；把「工具 + 模型 + 强度」翻成进程调用。档案（worker_profiles 表，spec 为 YAML）三层叠加。
+// Package workers 是执行者：适配器（claude、codex、opencode、kimi、grok、agy、cursor、通用命令行）把
+// 「工具 + 模型[:强度]」翻成进程调用（Launch，可序列化，远程代理也照它拉起）；档案（worker_profiles 表）
+// 三层叠加 harness/<工具> ← models/<模型> ← combos/<工具>+<模型>，最具体的一层为准；
+// 日志信号（额度用尽、供应商临时错误、思考耗尽、收尾）的判定是纯函数，dispatch 与 watch 共用。
 //
-// 命令（第二波）：workers、workers edit。
-// 契约见 internal/README.md。
+// 命令：workers（列、看、改档案）。拉起记录（Run）以任务经历 kind "launch" 存，gates、watch 用 LastRun 读。
 package workers
 
 import (
 	"github.com/liu-zhengdong/atrium/internal/app"
-	"github.com/liu-zhengdong/atrium/internal/platform"
 )
 
-// Module 是本包接入点。第二波在这里填 Commands、Routes、Run；cmd/atrium 已把它排进模块列表。
-func Module() app.Module { return app.Module{Name: "workers"} }
-
-// Request 是一次拉起执行者需要的全部输入（dispatch 组装）。
-type Request struct {
-	Task   string // tN
-	Prompt string // 标题 + 详述 + 要点链（org.Chain → org.ChainLine）+ 技能路径 + 通用约束
-	Dir    string // 独立 worktree
-	Model  string
-	Effort string
-}
-
-// Adapter 把一次请求翻成进程调用（经 platform.Start 拉起），并从退出码与日志判出结果。
-type Adapter interface {
-	Name() string
-	Spec(req Request, env map[string]string) (platform.Spec, error)
+// Module 是本包接入点。
+func Module() app.Module {
+	return app.Module{Name: "workers", Commands: Commands, Routes: Routes}
 }

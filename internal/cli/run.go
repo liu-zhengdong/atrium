@@ -184,6 +184,9 @@ func (c *Ctx) List(name string) []string {
 	return out
 }
 
+// Values 是可重复参数的原值（不按逗号拆），给值里本身带逗号的参数用（如 --set checks=[a,b]）。
+func (c *Ctx) Values(name string) []string { return c.values[name] }
+
 func (c *Ctx) Int(name string, def int) (int, error) {
 	v := c.Str(name)
 	if v == "" {

@@ -179,14 +179,14 @@ printf 'sekrit\n' | "$bin" secret set o1 BOT_TOKEN --json >/dev/null || fail "se
 out=$(json secret ls --node o2); has '.result[0].name == "BOT_TOKEN" and (tostring|test("sekrit")|not)'
 [ "$(stat -f %Lp "$ATRIUM_DATA/secrets/o1/BOT_TOKEN" 2>/dev/null || stat -c %a "$ATRIUM_DATA/secrets/o1/BOT_TOKEN")" = 600 ] || fail "凭据文件权限不是 600"
 grep -q sekrit "$ATRIUM_DATA/service.log" && fail "凭据值进了日志"
-out=$(json secret rm o1 BOT_TOKEN); has '.ok'
+out=$(json secret set o1 BOT_TOKEN --rm); has '.ok'
 opt='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}'
 echo "{\"title\":\"下一步\",\"options\":[$opt,$opt,$opt],\"recommend\":[1],\"reason\":\"快\"}" >"$work/choice.json"
 out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c1" and .result.status == "open"'
 out=$(json choice ls); has '(.result|length) == 1'
 out=$(json choice pick c1 1,3 --note 先快); has '.result.status == "picked" and .result.options[0].task != null and .result.decision == "d3"'
 out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c2"'
-out=$(json choice pass c2); has '.result.status == "passed"'
+out=$(json choice pick c2 --none); has '.result.status == "passed"'
 out=$(json schedule add o2 巡检 --every 1d --at 09:00 --kind patrol); has '.result.id == "s1" and .result.at == "09:00"'
 out=$(json schedule run s1 || true); has '(.ok and .result.task.id != null) or (.error.code == "conflict" and (.error.message|test("已生成")))'
 out=$(json schedule ls); has '.result[0].last_task != null'
@@ -254,13 +254,13 @@ out=$(json stop); has '.result.stopped'
 export ATRIUM_DATA="${saved[0]}" ATRIUM_PORT="${saved[1]}" PATH="${saved[2]}"
 
 step "host add / ls / 代理接入 / show / rm（hosts）"
-out=$(json host add 远程一号 --repo liu-zhengdong/atrium --max 2); has '.result.host.id == "h2" and (.result.code|test("^h2-[0-9a-f]{64}$")) and .next == "atrium host show h2"'
+out=$(json host add 远程一号 --repo liu-zhengdong/atrium --max 2); has '.result.host.id == "h2" and (.result.code|test("^h2-[0-9a-f]{64}$")) and .next == "atrium host ls h2"'
 code=$(jq -r .result.code <<<"$out")
 out=$(json host ls); has '.result[0].id == "h1" and .result[0].kind == "local" and .result[1].conn == "pending"'
 out=$(json host add 坏 --repo bad || true); has '.ok == false and .error.code == "usage"'
 HOME="$work/agenthome" ATRIUM_QUOTA_READERS=off "$bin" agent --data "$work/agent" --server "http://127.0.0.1:$ATRIUM_PORT" --token "$code" >"$work/agent.out" 2>&1 &
 agentpid=$!; pid="$pid $agentpid"
-for _ in $(seq 50); do out=$(json host show h2); jq -e '.result.conn == "online"' >/dev/null <<<"$out" && break; sleep 0.2; done
+for _ in $(seq 50); do out=$(json host ls h2); jq -e '.result.conn == "online"' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.conn == "online" and .result.info.cpus > 0 and .result.max == 2'
 [ "$(stat -f %Lp "$work/agent/agent.json" 2>/dev/null || stat -c %a "$work/agent/agent.json")" = 600 ] || fail "agent.json 权限不是 600"
 code2=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(jq -r .token "$work/agent/agent.json")" "http://127.0.0.1:$ATRIUM_PORT/api/tasks")
@@ -270,6 +270,29 @@ out=$(json host rm h2); has '.ok'
 wait "$agentpid" || fail "移除后代理应以 0 退出：$(cat "$work/agent.out")"
 grep -q "令牌已失效" "$work/agent.out" || fail "代理没报令牌失效：$(cat "$work/agent.out")"
 out=$(json quota --clear kimi || true); has '.error.code == "not_found"'
+
+step "workers / task run / log（通用命令行执行者：sh 当假执行者）"
+cat >"$work/fakesh.md" <<'MD'
+---
+protocol: cli
+command: sh
+args: ["-c", "echo worker=$ATRIUM_WORKER task=$ATRIUM_TASK; echo DONE", "{prompt}"]
+done_match: "^DONE$"
+---
+只回 DONE。
+MD
+out=$(json workers harness/fakesh --file "$work/fakesh.md"); has '.ok and .next == "atrium workers harness/fakesh"'
+out=$(json workers harness/fakesh --set trust=super || true); has '.ok == false and .error.code == "usage"'
+out=$(json workers fakesh); has '.result.resolved.id == "fakesh" and .result.resolved.layers == ["harness/fakesh"]'
+out=$(json workers); has '(.result|map(.id)|index("fakesh")) != null'
+out=$(json task add 冒烟派活); run_id=$(jq -r .result.id <<<"$out")
+out=$(json task run "$run_id" --dry-run); has '(.result.pick.candidates|map(.id)|index("fakesh")) != null and .result.task.status == "todo"'
+out=$(json task run "$run_id" --worker fakesh --risk high || true); has '.ok == false and .error.code == "conflict"'
+out=$(json task run "$run_id" --worker fakesh); has '.result.queued and .result.position == 1 and .next == "atrium task log '"$run_id"' --follow"'
+out=$(json task wait "$run_id" --timeout 30); has '.result.task.status == "done"'   # 没有仓库：关卡过了直接完成
+out=$(json task log "$run_id"); has '(.result.text|contains("worker=1 task='"$run_id"'")) and (.result.text|contains("DONE")) and .result.running == false'
+out=$(json task show "$run_id"); has '.result.task.worker == "fakesh" and .result.task.host == "h1" and ((.result.history|map(.kind)) as $k | ["launch","worktree","result","exit_ok"] - $k == [])'
+out=$(json task note "$run_id" "补一句" --tell || true); has '.ok == false and .error.code == "conflict"'   # 已完成：捎话没人收
 
 step "stop"
 out=$(json stop); has '.result.stopped'

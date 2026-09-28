@@ -258,7 +258,8 @@ func secretRoutes(r *api.Router, env *app.Env) {
 
 func secretCommands(t *cli.Table) {
 	t.Group("secret", "凭据")
-	t.Add(cli.Command{Path: "secret set", Args: "<oN> <名称>", Summary: "设部门的凭据：值从标准输入读（不写在命令行上）",
+	t.Add(cli.Command{Path: "secret set", Args: "<oN> <名称>", Summary: "设部门的凭据：值从标准输入读（不写在命令行上）；--rm 删掉（只有用户）",
+		Flags: []cli.Flag{{Name: "rm", Bool: true, Help: "删掉这个凭据"}},
 		Run: func(c *cli.Ctx) error {
 			dept, err := c.Arg(0, "<oN>")
 			if err != nil {
@@ -270,6 +271,13 @@ func secretCommands(t *cli.Table) {
 			}
 			if err := c.MaxArgs(2); err != nil {
 				return err
+			}
+			if c.Bool("rm") {
+				var s Secret
+				if err := c.Call("DELETE", "/api/org/"+url.PathEscape(dept)+"/secrets/"+url.PathEscape(name), nil, &s); err != nil {
+					return err
+				}
+				return c.Done(s, fmt.Sprintf("已删凭据 %s（%s）", s.Name, s.Org), "atrium secret ls --node "+s.Org)
 			}
 			raw, err := io.ReadAll(io.LimitReader(os.Stdin, maxSecretValue+1))
 			if err != nil {
@@ -300,22 +308,6 @@ func secretCommands(t *cli.Table) {
 				}
 				fmt.Fprintf(&b, "  %s  %s  %s\n", s.Org, s.Name, used)
 			}
-			return c.Done(list, b.String(), "atrium secret rm <oN> <名称>")
-		}})
-	t.Add(cli.Command{Path: "secret rm", Args: "<oN> <名称>", Summary: "删凭据（只有用户）",
-		Run: func(c *cli.Ctx) error {
-			dept, err := c.Arg(0, "<oN>")
-			if err != nil {
-				return err
-			}
-			name, err := c.Arg(1, "<名称>")
-			if err != nil {
-				return err
-			}
-			var s Secret
-			if err := c.Call("DELETE", "/api/org/"+url.PathEscape(dept)+"/secrets/"+url.PathEscape(name), nil, &s); err != nil {
-				return err
-			}
-			return c.Done(s, fmt.Sprintf("已删凭据 %s（%s）", s.Name, s.Org), "atrium secret ls --node "+s.Org)
+			return c.Done(list, b.String(), "atrium secret set <oN> <名称> --rm")
 		}})
 }

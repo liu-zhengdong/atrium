@@ -236,12 +236,23 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(ch, fmt.Sprintf("已登记选项单 %s「%s」（%d 项），等用户拍板", ch.ID, ch.Title, len(ch.Options)), "atrium choice ls "+ch.ID)
 		}})
-	t.Add(cli.Command{Path: "choice pick", Args: "<cN> <第几项,…>", Summary: "拍板：选中的各建一件任务，没选的记「这轮不做」（只有用户）",
-		Flags: []cli.Flag{{Name: "note", Value: "文字", Help: "原因或补充要求（记进决定、附进任务）"}},
+	t.Add(cli.Command{Path: "choice pick", Args: "<cN> <第几项,…>", Summary: "拍板：选中的各建一件任务，没选的记「这轮不做」；--none 整份这轮都不做（只有用户）",
+		Flags: []cli.Flag{{Name: "note", Value: "文字", Help: "原因或补充要求（记进决定、附进任务）"},
+			{Name: "none", Bool: true, Help: "这轮整份都不做，记一条决定"}},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<cN>")
 			if err != nil {
 				return err
+			}
+			if c.Bool("none") {
+				if err := c.MaxArgs(1); err != nil {
+					return err
+				}
+				var ch Choice
+				if err := c.Call("POST", "/api/choices/"+url.PathEscape(id)+"/decide", pickBody{nil, c.Str("note")}, &ch); err != nil {
+					return err
+				}
+				return c.Done(ch, fmt.Sprintf("%s 这轮不做，记为决定 %s", ch.ID, ch.Decision), "atrium choice ls")
 			}
 			if _, err := c.Arg(1, "<第几项,…>"); err != nil {
 				return err
@@ -267,20 +278,6 @@ func Commands(t *cli.Table) {
 			return c.Done(ch, fmt.Sprintf("已拍板 %s，记为决定 %s\n建了任务：%s", ch.ID, ch.Decision, strings.Join(made, "、")),
 				"atrium task run "+ch.Options[picks[0]-1].Task)
 		}})
-	t.Add(cli.Command{Path: "choice pass", Args: "<cN>", Summary: "这轮整份都不做，记一条决定（只有用户）",
-		Flags: []cli.Flag{{Name: "note", Value: "文字", Help: "为什么不做"}},
-		Run: func(c *cli.Ctx) error {
-			id, err := c.Arg(0, "<cN>")
-			if err != nil {
-				return err
-			}
-			var ch Choice
-			if err := c.Call("POST", "/api/choices/"+url.PathEscape(id)+"/decide", pickBody{nil, c.Str("note")}, &ch); err != nil {
-				return err
-			}
-			return c.Done(ch, fmt.Sprintf("%s 这轮不做，记为决定 %s", ch.ID, ch.Decision), "atrium choice ls")
-		}})
-
 	t.Group("schedule", "周期任务")
 	t.Add(cli.Command{Path: "schedule add", Args: "<oN> <标题>", Summary: fmt.Sprintf("到点在部门下生成一件任务并派发（每部门上限 %d 条）", org.MaxSchedules),
 		Flags: []cli.Flag{

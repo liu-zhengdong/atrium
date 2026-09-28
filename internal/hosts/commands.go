@@ -57,10 +57,20 @@ func Commands(t *cli.Table) {
 			if r.Host.SSH == "" {
 				text += "\n那台连不到本机 127.0.0.1 时，改用 --ssh 让服务建反向隧道，或把 --server 换成能连到的地址。"
 			}
-			return c.Done(r, text, "atrium host show "+r.Host.ID)
+			return c.Done(r, text, "atrium host ls "+r.Host.ID)
 		}})
-	t.Add(cli.Command{Path: "host ls", Summary: "列出机器：连接、暂停、在跑、上限",
+	t.Add(cli.Command{Path: "host ls", Args: "[hN]", Summary: "列出机器：连接、暂停、在跑、上限；给 hN 看一台：系统、编码 CLI、仓库、隧道",
 		Run: func(c *cli.Ctx) error {
+			if err := c.MaxArgs(1); err != nil {
+				return err
+			}
+			if len(c.Args) == 1 {
+				var v View
+				if err := c.Call("GET", "/api/hosts/"+c.Args[0], nil, &v); err != nil {
+					return err
+				}
+				return c.Done(v, formatView(v), "atrium host ls")
+			}
 			var vs []View
 			if err := c.Call("GET", "/api/hosts", nil, &vs); err != nil {
 				return err
@@ -73,19 +83,7 @@ func Commands(t *cli.Table) {
 				}
 				fmt.Fprintf(&b, "%-4s %s  %s  在跑 %d / %s\n", v.ID, v.Name, v.Status, v.Running, max)
 			}
-			return c.Done(vs, b.String(), "atrium host show <hN>")
-		}})
-	t.Add(cli.Command{Path: "host show", Args: "<hN>", Summary: "看一台机器：系统、编码 CLI、仓库、隧道",
-		Run: func(c *cli.Ctx) error {
-			id, err := c.Arg(0, "<hN>")
-			if err != nil {
-				return err
-			}
-			var v View
-			if err := c.Call("GET", "/api/hosts/"+id, nil, &v); err != nil {
-				return err
-			}
-			return c.Done(v, formatView(v), "atrium host ls")
+			return c.Done(vs, b.String(), "atrium host ls <hN>")
 		}})
 	t.Add(cli.Command{Path: "host rm", Args: "<hN>", Summary: "移除远程机器（令牌作废，短号不复用）",
 		Run: func(c *cli.Ctx) error {

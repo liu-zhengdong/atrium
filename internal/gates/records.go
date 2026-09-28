@@ -9,6 +9,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 	"gopkg.in/yaml.v3"
 )
 
@@ -90,7 +91,13 @@ func LoadProfile(ctx context.Context, q store.Querier, name string) (Profile, er
 	var spec string
 	err := q.QueryRowContext(ctx, `SELECT spec FROM worker_profiles WHERE name = ?`, name).Scan(&spec)
 	if store.IsNotFound(err) {
-		return Profile{}, fmt.Errorf("执行者档案 %s 不存在", name)
+		// dispatch 记在任务上的是执行者标识（工具+模型[:强度]），档案按 workers 三层叠加解析。
+		// 第三波把上面按名字直读的旧写法（本包测试在用）统一到这里。
+		r, err := workers.Resolve(ctx, q, name)
+		if err != nil {
+			return Profile{}, err
+		}
+		return Profile{Name: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Trust: r.Rules.EffectiveTrust(), Checks: r.Rules.Checks}, nil
 	}
 	if err != nil {
 		return Profile{}, err

@@ -4,15 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -55,27 +57,23 @@ func Run(ctx context.Context, from string, db *store.DB, dataDir string) (Report
 		return rep, err
 	}
 	defer os.RemoveAll(stage)
-	var moves [][2]string
 	err = db.Tx(ctx, func(tx *sql.Tx) error {
 		depts, root, err := importDepts(ctx, old, tx, &rep)
 		if err != nil {
 			return err
 		}
+		// 计数器先接上旧库：目录资料拆出来的文件要发新短号，不能撞旧号。
 		steps := []func() error{
+			func() error { return setCounters(ctx, old, tx, &rep) },
 			func() error { return importRepos(ctx, old, tx, depts, &rep) },
 			func() error { return importPoints(ctx, old, tx, depts, &rep) },
 			func() error { return importLeaders(ctx, old, tx, &rep) },
 			func() error { return importMemos(ctx, old, tx, &rep) },
 			func() error { return importDecisions(ctx, old, tx, depts, root, &rep) },
-			func() error { return importSkills(ctx, old, tx, &rep) },
-			func() error {
-				m, err := importMaterials(ctx, old, tx, depts, filepath.Dir(from), stage, dataDir, &rep)
-				moves = m
-				return err
-			},
+			func() error { return importSkills(ctx, old, tx, stage, &rep) },
+			func() error { return importMaterials(ctx, old, tx, depts, filepath.Dir(from), stage, &rep) },
 			func() error { return importProfiles(ctx, old, tx, &rep) },
 			func() error { return importHosts(ctx, old, tx, &rep) },
-			func() error { return setCounters(ctx, old, tx, &rep) },
 		}
 		for _, s := range steps {
 			if err := s(); err != nil {
@@ -87,12 +85,22 @@ func Run(ctx context.Context, from string, db *store.DB, dataDir string) (Report
 	if err != nil {
 		return rep, err
 	}
-	for _, m := range moves {
-		if err := os.MkdirAll(filepath.Dir(m[1]), 0o700); err != nil {
+	// 文件落位：stage/<skills|materials>/<名字> → 数据目录同名处（新库是空的，目标不该已存在）。
+	for _, kind := range []string{"skills", "materials"} {
+		entries, err := os.ReadDir(filepath.Join(stage, kind))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
 			return rep, err
 		}
-		if err := os.Rename(m[0], m[1]); err != nil {
-			return rep, fmt.Errorf("资料文件落位失败（库已写入，请删掉新库重来）：%w", err)
+		if err := os.MkdirAll(filepath.Join(dataDir, kind), 0o700); err != nil {
+			return rep, err
+		}
+		for _, e := range entries {
+			if err := os.Rename(filepath.Join(stage, kind, e.Name()), filepath.Join(dataDir, kind, e.Name())); err != nil {
+				return rep, fmt.Errorf("文件落位失败（库已写入，请删掉新数据目录重来）：%w", err)
+			}
 		}
 	}
 	return rep, nil
@@ -286,8 +294,8 @@ func importMemos(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 			it.Notes = append(it.Notes, owner+" 不是已导入的身份")
 			continue
 		}
-		if l := len([]rune(body)); l > maxMemo {
-			rep.Over = append(rep.Over, fmt.Sprintf("备忘超过 %d 字：%s %d 字", maxMemo, owner, l))
+		if l := len([]rune(body)); l > org.MaxMemo {
+			rep.Over = append(rep.Over, fmt.Sprintf("备忘超过 %d 字：%s %d 字", org.MaxMemo, owner, l))
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO memos (identity, body, updated_by, updated_at) VALUES (?, ?, ?, ?)`,
 			owner, body, owner, at); err != nil {
@@ -344,7 +352,9 @@ func importDecisions(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 	return nil
 }
 
-func importSkills(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) error {
+// importSkills 搬每个技能的当前版：全部文件（SKILL.md 与附属文件）写到 stage/skills/<名字>/r<rev>/，
+// 与 org 的技能目录同一布局；提交后整目录挪到数据目录。
+func importSkills(ctx context.Context, old *sql.DB, tx *sql.Tx, stage string, rep *Report) error {
 	rows, err := old.QueryContext(ctx, `SELECT slug, rev, files, archived_at IS NOT NULL, updated_at FROM org_skills ORDER BY id LIMIT 10000`)
 	if err != nil {
 		return err
@@ -352,10 +362,10 @@ func importSkills(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) err
 	defer rows.Close()
 	it := Item{Kind: "技能"}
 	for rows.Next() {
-		var slug, files string
+		var slug, raw string
 		var rev, at int64
 		var archived bool
-		if err := rows.Scan(&slug, &rev, &files, &archived, &at); err != nil {
+		if err := rows.Scan(&slug, &rev, &raw, &archived, &at); err != nil {
 			return err
 		}
 		if archived {
@@ -363,18 +373,24 @@ func importSkills(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) err
 			it.Notes = append(it.Notes, slug+" 已归档")
 			continue
 		}
-		body, dropped, err := skillBody(files)
+		files, err := skillFiles(raw)
 		if err != nil {
 			return fmt.Errorf("技能 %s：%w", slug, err)
 		}
-		if len(dropped) > 0 {
-			it.Notes = append(it.Notes, fmt.Sprintf("%s 只搬 SKILL.md，附带文件没搬：%s", slug, strings.Join(dropped, "、")))
+		if !safeRel(slug) || strings.Contains(slug, "/") {
+			return fmt.Errorf("技能名 %q 不能当目录名", slug)
 		}
-		if len(body) > maxSkill {
-			rep.Over = append(rep.Over, fmt.Sprintf("技能 SKILL.md 超过 6KB：%s %d 字节", slug, len(body)))
+		dir := filepath.Join(stage, "skills", slug, fmt.Sprintf("r%d", rev))
+		for p, body := range files {
+			if err := writeNew(filepath.Join(dir, filepath.FromSlash(p)), []byte(body)); err != nil {
+				return fmt.Errorf("技能 %s：%w", slug, err)
+			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO skills (name, rev, body, created_by, created_at) VALUES (?, ?, ?, 'u1', ?)`,
-			slug, rev, body, at); err != nil {
+		if n := len(files["SKILL.md"]); n > org.MaxSkillBody {
+			rep.Over = append(rep.Over, fmt.Sprintf("技能 SKILL.md 超过 6KB：%s %d 字节", slug, n))
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO skills (name, rev, summary, files, created_by, created_at) VALUES (?, ?, ?, ?, 'u1', ?)`,
+			slug, rev, org.SkillSummary(files["SKILL.md"]), len(files), at); err != nil {
 			return err
 		}
 		it.Imported++
@@ -383,32 +399,46 @@ func importSkills(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) err
 	return rows.Err()
 }
 
-// importMaterials 搬当前版本（没被新版本取代、没归档）；文件先拷到 stage，事务提交后再改名到位。
-func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[string]bool, oldData, stage, dataDir string, rep *Report) ([][2]string, error) {
-	rows, err := old.QueryContext(ctx, `SELECT m.id, m.node_id, m.kind, m.name, m.version, m.bytes, m.created_by, m.created_at,
+// importMaterials 搬当前版本（没被新版本取代、没归档）。新版一份资料只有一个文件：
+// 单文件资料保留原短号；目录资料第一个文件保留原短号，其余每个文件发新短号（标题是目录内相对路径，与 material add 目录时一致）。
+// 文件写到 stage/materials/<mN>/r<rev>/<文件名>，提交后挪到数据目录。
+func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[string]bool, oldData, stage string, rep *Report) error {
+	rows, err := old.QueryContext(ctx, `SELECT m.id, m.node_id, m.name, m.note, m.version, m.created_by, m.created_at,
 		m.archived_at IS NOT NULL, m.superseded_by IS NOT NULL, COALESCE(v.manifest, '')
 		FROM materials m LEFT JOIN material_versions v ON v.material_id = m.id AND v.version = m.version
 		ORDER BY m.id LIMIT 10000`)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-	it := Item{Kind: "资料"}
-	var moves [][2]string
+	type oldMat struct {
+		id, node, version, at    int64
+		name, note, by, manifest string
+		archived, superseded     bool
+	}
+	var list []oldMat
 	for rows.Next() {
-		var id, node, version, bytes, at int64
-		var kind, name, by, manifest string
-		var archived, superseded bool
-		if err := rows.Scan(&id, &node, &kind, &name, &version, &bytes, &by, &at, &archived, &superseded, &manifest); err != nil {
-			return nil, err
+		var m oldMat
+		if err := rows.Scan(&m.id, &m.node, &m.name, &m.note, &m.version, &m.by, &m.at, &m.archived, &m.superseded, &m.manifest); err != nil {
+			rows.Close()
+			return err
 		}
-		ref, dept := fmt.Sprintf("m%d", id), fmt.Sprintf("o%d", node)
+		list = append(list, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	it := Item{Kind: "资料"}
+	units := map[string]int{}
+	var order []string
+	for _, m := range list {
+		ref, dept := fmt.Sprintf("m%d", m.id), fmt.Sprintf("o%d", m.node)
 		switch {
-		case archived:
+		case m.archived:
 			it.Skipped++
 			it.Notes = append(it.Notes, ref+" 已归档")
 			continue
-		case superseded:
+		case m.superseded:
 			it.Skipped++
 			it.Notes = append(it.Notes, ref+" 已被新版本取代")
 			continue
@@ -421,64 +451,76 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 			Path string `json:"path"`
 			Size int64  `json:"size"`
 		}
-		if err := json.Unmarshal([]byte(manifest), &entries); err != nil {
-			return nil, fmt.Errorf("资料 %s 的版本清单读不出：%w", ref, err)
+		if err := json.Unmarshal([]byte(m.manifest), &entries); err != nil {
+			return fmt.Errorf("资料 %s 的版本清单读不出：%w", ref, err)
 		}
-		var paths []string
-		src := filepath.Join(oldData, "materials", ref, fmt.Sprintf("v%d", version))
-		dst := filepath.Join(stage, ref, fmt.Sprintf("v%d", version))
-		for _, e := range entries {
+		note := m.note
+		if note == "" {
+			note = m.name
+		}
+		src := filepath.Join(oldData, "materials", ref, fmt.Sprintf("v%d", m.version))
+		var made []string
+		for i, e := range entries {
 			if !safeRel(e.Path) {
-				return nil, fmt.Errorf("资料 %s 清单里有不安全的路径 %q", ref, e.Path)
+				return fmt.Errorf("资料 %s 清单里有不安全的路径 %q", ref, e.Path)
 			}
-			if err := copyFile(filepath.Join(src, filepath.FromSlash(e.Path)), filepath.Join(dst, filepath.FromSlash(e.Path)), e.Size); err != nil {
-				return nil, fmt.Errorf("资料 %s：%w", ref, err)
+			content, err := readSized(filepath.Join(src, filepath.FromSlash(e.Path)), e.Size)
+			if err != nil {
+				return fmt.Errorf("资料 %s：%w", ref, err)
 			}
-			paths = append(paths, e.Path)
+			id := ref
+			if i > 0 {
+				if id, err = store.NextID(ctx, tx, "m"); err != nil {
+					return err
+				}
+			}
+			base := path.Base(e.Path)
+			n, binary := org.Units(content)
+			if err := writeNew(filepath.Join(stage, "materials", id, fmt.Sprintf("r%d", m.version), base), content); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO materials (id, rev, department, kind, title, note, file, size, units, binary, created_by, created_at)
+				VALUES (?, ?, ?, 'detail', ?, ?, ?, ?, ?, ?, ?, ?)`, id, m.version, dept, e.Path, note, base, len(content), n, binary, m.by, m.at); err != nil {
+				return err
+			}
+			if units[dept] == 0 {
+				order = append(order, dept)
+			}
+			units[dept] += n
+			made = append(made, id)
+			it.Imported++
 		}
-		file, err := materialFile(id, version, kind, paths)
-		if err != nil {
-			return nil, err
+		if len(entries) > 1 {
+			it.Notes = append(it.Notes, fmt.Sprintf("%s 是 %d 个文件的目录资料，拆成 %s…%s 各一份（标题是目录内路径）",
+				ref, len(entries), made[0], made[len(made)-1]))
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO materials (id, rev, department, kind, title, file, size, created_by, created_at)
-			VALUES (?, ?, ?, 'detail', ?, ?, ?, ?, ?)`, ref, version, dept, name, file, bytes, by, at); err != nil {
-			return nil, err
-		}
-		moves = append(moves, [2]string{filepath.Join(stage, ref), filepath.Join(dataDir, "materials", ref)})
-		it.Imported++
-		if kind == "dir" {
-			it.Notes = append(it.Notes, fmt.Sprintf("%s 是目录资料（%d 个文件），整目录搬到 %s", ref, len(paths), file))
+	}
+	for _, d := range order {
+		if units[d] > org.MaxMaterial {
+			rep.Over = append(rep.Over, fmt.Sprintf("资料总量超过每部门 %d 折算字：%s %d", org.MaxMaterial, d, units[d]))
 		}
 	}
 	add(rep, it)
-	return moves, rows.Err()
+	return nil
 }
 
-// copyFile 拷一个文件并核对大小（清单与实际不符就停下）。
-func copyFile(src, dst string, size int64) error {
-	in, err := os.Open(src)
+// readSized 读一个文件并核对大小（清单与实际不符就停下）。
+func readSized(p string, size int64) ([]byte, error) {
+	b, err := os.ReadFile(p)
 	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) != size {
+		return nil, fmt.Errorf("%s 实际 %d 字节，清单写 %d", p, len(b), size)
+	}
+	return b, nil
+}
+
+func writeNew(p string, b []byte) error {
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	n, err := io.Copy(out, in)
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	if n != size {
-		return fmt.Errorf("%s 实际 %d 字节，清单写 %d", src, n, size)
-	}
-	return nil
+	return os.WriteFile(p, b, 0o600)
 }
 
 // importProfiles：旧档案分三层（harness/models/combos），名字带上层名，与旧版文件路径一致（如 harness/claude）。

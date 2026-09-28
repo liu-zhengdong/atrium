@@ -115,7 +115,7 @@ async function renderDept(id, tab) {
   }
   if (tab === "files") body = d.materials.length ? `<div class="rows">${d.materials.map(m => `
     <div class="row"><span class="dot idle"></span><div class="title"><span class="id">${esc(m.id)}</span>${esc(m.title)}</div>
-    <div class="who">${m.kind === "overview" ? "总览 · " : ""}v${m.rev} · ${size(m.size)}</div><div class="time num">${date(m.at)}</div></div>`).join("")}</div>`
+    <div class="who">${m.kind === "overview" ? "总览 · " : ""}v${m.rev} · ${size(m.size)}</div><div class="time num">${date(m.created_at)}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有资料</div>`;
   const cap = d.rules.length > d.rule_max ? "cap over" : "cap";
   $("#page").innerHTML = `
@@ -187,15 +187,19 @@ async function openTask(id) {
 }
 async function openChoice(id) {
   const c = await api("choice/" + id);
-  const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : "没选";
+  const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : "这轮都不做";
+  const rec = new Set(c.recommend || []);
   $("#drawer").innerHTML = `
     <div class="dhead"><span class="id">${esc(c.id)}${c.dept_name ? " · " + esc(c.dept_name) : ""}</span><button class="x" data-close aria-label="关闭">${icon.x}</button></div>
-    <div class="dbody"><h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.at))}前${status ? " · " + status : ""}</p>
+    <div class="dbody"><h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
+      ${c.reason ? `<p class="status-line">${esc(c.reason)}</p>` : ""}
       <div class="opts">${c.options.map(o => `
-        <div class="opt ${o.picked ? "on" : ""}">
+        <div class="opt ${o.task ? "on" : ""}">
           <span class="num" style="color:var(--ink3);font-size:13px;line-height:22px">${o.pos}</span>
-          <div><div class="t">${esc(o.title)}${o.picked ? '<span class="pick">已选</span>' : ""}</div><div class="g">${esc(o.gain)}</div>
-          <div class="cost">${esc(o.cost)}</div></div></div>`).join("")}</div>
+          <div><div class="t">${esc(o.title)}${rec.has(o.pos) ? '<span class="rec">推荐</span>' : ""}${o.task ? `<span class="pick">已选 · ${esc(o.task)}</span>` : ""}</div>
+          <div class="g">${esc(o.gain)}</div>
+          <div class="cost">${esc(o.cost)}</div>
+          ${o.why_now || o.if_not ? `<details><summary>为什么现在</summary><div class="whyt">${esc(o.why_now)}${o.if_not ? `<br>不做：${esc(o.if_not)}` : ""}</div></details>` : ""}</div></div>`).join("")}</div>
       ${c.note ? `<p class="status-line">${esc(c.note)}</p>` : ""}
       ${c.status === "open" ? `<p class="status-line">选哪几个，在终端里告诉秘书。</p>` : ""}
     </div>`;

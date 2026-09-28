@@ -216,3 +216,9 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
 .drawer{box-shadow:none;visibility:hidden;transition:transform .22s ease,visibility 0s .22s}
 .open .drawer{box-shadow:var(--drawer-shadow);visibility:visible;transition:transform .22s ease}
 @media (prefers-reduced-motion:reduce){.drawer,.open .drawer{transition:none}}
+.opt .rec{font-size:11px;color:var(--accent);font-weight:500}
+.opt details{margin-top:6px}
+.opt summary{color:var(--ink3);font-size:12px;cursor:pointer;list-style:none}
+.opt summary::-webkit-details-marker{display:none}
+.opt summary:hover{color:var(--accent)}
+.opt .whyt{margin-top:6px;font-size:13px;color:var(--ink2)}

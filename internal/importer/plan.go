@@ -9,16 +9,12 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
-// 上限（与 org 的上限表一致；超了照样导入，回执列出由用户整理）。
-const (
-	maxPoints    = 7    // 每部门要点
-	maxDecisions = 30   // 每部门有效决定
-	maxIntro     = 300  // 部门介绍各字段
-	maxMemo      = 2000 // 备忘
-	maxSkill     = 6 << 10
-)
+// 上限取 org 的上限表；超了照样导入，回执列出由用户整理。部门介绍的字数上限 org 没导出，这里照抄一份。
+const maxIntro = 300
 
 type oldNode struct {
 	ID       int64
@@ -174,8 +170,8 @@ func planPoints(points []oldPoint, depts map[string]bool) (out []Point, skipped,
 			Text: p.Text, Why: p.Why, By: p.By, Check: p.Check, UBy: p.UpdateBy, UpdatedAt: p.UpdatedAt})
 	}
 	for _, d := range order {
-		if count[d] > maxPoints {
-			over = append(over, fmt.Sprintf("%s %d/%d", d, count[d], maxPoints))
+		if count[d] > org.MaxPoints {
+			over = append(over, fmt.Sprintf("%s %d/%d", d, count[d], org.MaxPoints))
 		}
 	}
 	return out, skipped, over
@@ -230,30 +226,28 @@ func planDecisions(list []oldDecision, depts map[string]bool, root string) (out 
 		out = append(out, Decision{ID: fmt.Sprintf("d%d", d.ID), Dept: dept, Text: d.Text, Why: d.Why, CreatedAt: d.CreatedAt})
 	}
 	for _, d := range order {
-		if count[d] > maxDecisions {
-			over = append(over, fmt.Sprintf("%s %d/%d", d, count[d], maxDecisions))
+		if count[d] > org.MaxDecisions {
+			over = append(over, fmt.Sprintf("%s %d/%d", d, count[d], org.MaxDecisions))
 		}
 	}
 	return out, skipped, over
 }
 
-// skillBody 从旧技能的 files JSON 取 SKILL.md；其余附带文件返回名字（新版技能只有 SKILL.md）。
-func skillBody(files string) (body string, dropped []string, err error) {
+// skillFiles 解出旧技能的 files JSON（相对路径 → 内容）；必须有 SKILL.md，路径不许越界。
+func skillFiles(raw string) (map[string]string, error) {
 	var m map[string]string
-	if err := json.Unmarshal([]byte(files), &m); err != nil {
-		return "", nil, err
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, err
 	}
-	body, ok := m["SKILL.md"]
-	if !ok {
-		return "", nil, fmt.Errorf("没有 SKILL.md")
+	if _, ok := m["SKILL.md"]; !ok {
+		return nil, fmt.Errorf("没有 SKILL.md")
 	}
-	for k := range m {
-		if k != "SKILL.md" {
-			dropped = append(dropped, k)
+	for p := range m {
+		if !safeRel(p) {
+			return nil, fmt.Errorf("附属文件路径 %q 不安全", p)
 		}
 	}
-	sort.Strings(dropped)
-	return body, dropped, nil
+	return m, nil
 }
 
 // hostSlots：并发空位取旧 info.max_workers，其次 max_running，都没有为 1。
@@ -273,21 +267,6 @@ func hostSlots(info string, maxRunning *int64) (int, error) {
 		return int(*maxRunning), nil
 	}
 	return 1, nil
-}
-
-// materialFile 是资料在新数据目录里的相对路径：目录资料指向版本目录，单文件资料指向那个文件。
-func materialFile(id int64, version int64, kind string, manifest []string) (string, error) {
-	base := fmt.Sprintf("materials/m%d/v%d", id, version)
-	switch kind {
-	case "dir":
-		return base, nil
-	case "file":
-		if len(manifest) != 1 {
-			return "", fmt.Errorf("m%d 是单文件资料，清单却有 %d 个文件", id, len(manifest))
-		}
-		return base + "/" + manifest[0], nil
-	}
-	return "", fmt.Errorf("m%d 的种类 %q 不认识", id, kind)
 }
 
 // safeRel 判定清单里的相对路径可以落盘：不许绝对路径、..、隐藏段。

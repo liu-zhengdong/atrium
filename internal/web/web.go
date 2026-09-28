@@ -83,7 +83,7 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		return loadDept(req.Context(), env.DB, id)
+		return loadDept(req.Context(), env.DB, env.Paths.Data, id)
 	})
 	w.data(r, "GET /ui/api/task/{id}", func(req *http.Request) (any, error) {
 		id, err := ref(req, "t")

@@ -98,15 +98,15 @@ func TestSmallRules(t *testing.T) {
 			t.Errorf("safeRel(%q) 应为 %v", p, ok)
 		}
 	}
-	if f, _ := materialFile(1, 2, "file", []string{"a.md"}); f != "materials/m1/v2/a.md" {
-		t.Errorf("单文件：%s", f)
+	files, err := skillFiles(`{"SKILL.md":"做法","references/a.md":"x"}`)
+	if err != nil || len(files) != 2 {
+		t.Errorf("技能文件：%v %v", files, err)
 	}
-	if _, err := materialFile(1, 2, "file", []string{"a", "b"}); err == nil {
-		t.Error("单文件清单两个文件应报错")
+	if _, err := skillFiles(`{"SKILL.md":"x","../../evil":"x"}`); err == nil {
+		t.Error("越界的附属文件路径应报错")
 	}
-	body, dropped, err := skillBody(`{"SKILL.md":"做法","references/a.md":"x"}`)
-	if err != nil || body != "做法" || !reflect.DeepEqual(dropped, []string{"references/a.md"}) {
-		t.Errorf("技能：%q %v %v", body, dropped, err)
+	if _, err := skillFiles(`{"README.md":"x"}`); err == nil {
+		t.Error("没有 SKILL.md 应报错")
 	}
 }
 
@@ -120,7 +120,7 @@ CREATE TABLE org_leaders (id INTEGER PRIMARY KEY, name TEXT, worker TEXT, create
 CREATE TABLE memos (owner TEXT PRIMARY KEY, body TEXT, updated_at INTEGER);
 CREATE TABLE decisions (id INTEGER PRIMARY KEY, decided_by TEXT, text TEXT, why TEXT, node_id INTEGER, superseded_by INTEGER, settled_point INTEGER, created_at INTEGER);
 CREATE TABLE org_skills (id INTEGER PRIMARY KEY, slug TEXT, rev INTEGER, files TEXT, archived_at INTEGER, updated_at INTEGER);
-CREATE TABLE materials (id INTEGER PRIMARY KEY, node_id INTEGER, kind TEXT, name TEXT, version INTEGER, bytes INTEGER, created_by TEXT, created_at INTEGER, archived_at INTEGER, superseded_by INTEGER);
+CREATE TABLE materials (id INTEGER PRIMARY KEY, node_id INTEGER, kind TEXT, name TEXT, note TEXT DEFAULT '', version INTEGER, bytes INTEGER, created_by TEXT, created_at INTEGER, archived_at INTEGER, superseded_by INTEGER);
 CREATE TABLE material_versions (material_id INTEGER, version INTEGER, manifest TEXT);
 CREATE TABLE worker_profiles (layer TEXT, name TEXT, source TEXT, updated_by TEXT, updated_at INTEGER);
 CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, info TEXT, max_running INTEGER, removed_at INTEGER, last_seen_at INTEGER, created_at INTEGER);
@@ -134,8 +134,8 @@ INSERT INTO org_points VALUES (5, 2, -1, '先减后加', '简单', 'u1 09-27', N
 INSERT INTO org_leaders VALUES (1, 'Atrium 负责人', 'claude+opus:high', 1);
 INSERT INTO memos VALUES ('a1', '备忘', 3), ('secretary', '秘书备忘', 4), ('a9', '没这个人', 5);
 INSERT INTO decisions VALUES (10, 'u1', '用 Go', '快', NULL, NULL, NULL, 7), (11, 'a1', '自己定的', '', NULL, NULL, NULL, 8), (12, 'u1', '旧的', '', 2, 13, NULL, 9);
-INSERT INTO org_skills VALUES (1, 'visual-design', 2, '{"SKILL.md":"做法"}', NULL, 10);
-INSERT INTO materials VALUES (1, 2, 'dir', '设计稿', 1, 5, 'u1', 11, NULL, NULL);
+INSERT INTO org_skills VALUES (1, 'visual-design', 2, '{"SKILL.md":"---\ndescription: 视觉设计\n---\n做法","references/a.md":"细节"}', NULL, 10);
+INSERT INTO materials VALUES (1, 2, 'dir', '设计稿', '原型与截图', 1, 5, 'u1', 11, NULL, NULL);
 INSERT INTO material_versions VALUES (1, 1, '[{"path":"README.md","size":2},{"path":"shots/a.png","size":3}]');
 INSERT INTO worker_profiles VALUES ('harness', 'claude', '---\ntrust: high\n---\n', 'u1', 12);
 INSERT INTO hosts VALUES (1, '本机', 'local', '{"max_workers":6}', NULL, NULL, NULL, 13), (2, '旧', 'remote', NULL, NULL, 99, NULL, 14), (3, 'ggb', 'remote', NULL, 4, NULL, 15, 16);
@@ -197,7 +197,7 @@ func TestRun(t *testing.T) {
 		got[it.Kind] = [2]int{it.Imported, it.Skipped}
 	}
 	want := map[string][2]int{"部门": {2, 1}, "部门仓库": {1, 0}, "要点": {2, 0}, "负责人": {1, 0}, "备忘": {2, 1},
-		"决定": {1, 2}, "技能": {1, 0}, "资料": {1, 0}, "执行者档案": {1, 0}, "机器": {2, 1}}
+		"决定": {1, 2}, "技能": {1, 0}, "资料": {2, 0}, "执行者档案": {1, 0}, "机器": {2, 1}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("回执：\n得到 %v\n想要 %v", got, want)
 	}
@@ -215,8 +215,22 @@ func TestRun(t *testing.T) {
 	if n := count(t, db, `SELECT count(*) FROM worker_profiles WHERE name = 'harness/claude'`); n != 1 {
 		t.Error("档案名应带层名")
 	}
-	if b, err := os.ReadFile(filepath.Join(data, "materials", "m1", "v1", "shots", "a.png")); err != nil || string(b) != "png" {
+	// 目录资料拆成每个文件一份：第一个保留 m1，其余接着旧库的号发（旧库最大 m1）。
+	if b, err := os.ReadFile(filepath.Join(data, "materials", "m2", "r1", "a.png")); err != nil || string(b) != "png" {
 		t.Errorf("资料文件：%q %v", b, err)
+	}
+	var title, note string
+	db.QueryRow(`SELECT title, note FROM materials WHERE id = 'm2'`).Scan(&title, &note)
+	if title != "shots/a.png" || note != "原型与截图" {
+		t.Errorf("资料 m2：%q %q", title, note)
+	}
+	if b, err := os.ReadFile(filepath.Join(data, "skills", "visual-design", "r2", "references", "a.md")); err != nil || string(b) != "细节" {
+		t.Errorf("技能附属文件：%q %v", b, err)
+	}
+	var summary string
+	db.QueryRow(`SELECT summary FROM skills WHERE name = 'visual-design'`).Scan(&summary)
+	if summary != "视觉设计" {
+		t.Errorf("技能一行说明：%q", summary)
 	}
 	// 短号接着旧库往后：任务虽没搬，下一个也是 t307。
 	next, err := store.NextID(ctx, db, "t")

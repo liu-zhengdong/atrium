@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
@@ -153,25 +154,16 @@ type Ask struct {
 
 func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error) {
 	var out []Ask
-	rows, err := q.QueryContext(ctx, `SELECT c.id, c.title, c.department, c.created_at,
-		(SELECT count(*) FROM choice_options o WHERE o.choice = c.id)
-		FROM choices c WHERE c.status = 'open' ORDER BY c.created_at DESC LIMIT 50`)
+	open, err := agenda.Choices(ctx, q, "", false)
 	if err != nil {
 		return nil, err
 	}
-	for rows.Next() {
-		var a Ask
-		var n int
-		if err := rows.Scan(&a.ID, &a.Title, &a.Dept, &a.At, &n); err != nil {
-			rows.Close()
-			return nil, err
+	for _, c := range open {
+		sub := fmt.Sprintf("%d 个方向，挑哪几个", len(c.Options))
+		if len(c.Recommend) > 0 {
+			sub = fmt.Sprintf("%d 个方向，推荐 %s", len(c.Options), joinInts(c.Recommend))
 		}
-		a.Kind, a.Sub, a.DeptName = "choose", fmt.Sprintf("%d 个方向，挑哪几个", n), ix.name(a.Dept)
-		out = append(out, a)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+		out = append(out, Ask{Kind: "choose", ID: c.ID, Title: c.Title, Sub: sub, Dept: c.Org, DeptName: ix.name(c.Org), At: c.CreatedAt})
 	}
 	blocked, err := ledger.List(ctx, q, ledger.Filter{Status: []ledger.Status{ledger.Blocked}, Limit: 50})
 	if err != nil {
@@ -305,15 +297,15 @@ func getTasks(ctx context.Context, q store.Querier, ids []string) ([]ledger.Task
 
 // DeptPage 是部门页。
 type DeptPage struct {
-	Dept      org.Dept    `json:"dept"`
-	Path      []Pair      `json:"path"`
-	Leader    *Leader     `json:"leader"`
-	Subs      []DeptBrief `json:"subs"`
-	Tasks     []Row       `json:"tasks"`
-	Rules     []Rule      `json:"rules"`
-	Inherited []Rule      `json:"inherited"`
-	RuleMax   int         `json:"rule_max"`
-	Materials []Material  `json:"materials"`
+	Dept      org.Dept       `json:"dept"`
+	Path      []Pair         `json:"path"`
+	Leader    *Leader        `json:"leader"`
+	Subs      []DeptBrief    `json:"subs"`
+	Tasks     []Row          `json:"tasks"`
+	Rules     []Rule         `json:"rules"`
+	Inherited []Rule         `json:"inherited"`
+	RuleMax   int            `json:"rule_max"`
+	Materials []org.Material `json:"materials"`
 }
 
 // Leader 是部门负责人。
@@ -333,17 +325,7 @@ type Rule struct {
 	DeptName string `json:"dept_name"`
 }
 
-// Material 是一份资料的当前版本。
-type Material struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Kind  string `json:"kind"`
-	Rev   int    `json:"rev"`
-	Size  int64  `json:"size"`
-	At    int64  `json:"at"`
-}
-
-func loadDept(ctx context.Context, q store.Querier, id string) (DeptPage, error) {
+func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, error) {
 	d, err := org.Get(ctx, q, id)
 	if err != nil {
 		return DeptPage{}, err
@@ -386,7 +368,7 @@ func loadDept(ctx context.Context, q store.Querier, id string) (DeptPage, error)
 	if page.Rules, err = ownRules(ctx, q, id, ix.name(id)); err != nil {
 		return DeptPage{}, err
 	}
-	if page.Materials, err = deptMaterials(ctx, q, id); err != nil {
+	if page.Materials, err = org.Materials(ctx, q, data, org.MaterialFilter{Org: id}); err != nil {
 		return DeptPage{}, err
 	}
 	return page, nil
@@ -438,27 +420,6 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	return out, nil
 }
 
-// deptMaterials 是部门没归档的资料，每份取最新一版。
-func deptMaterials(ctx context.Context, q store.Querier, id string) ([]Material, error) {
-	rows, err := q.QueryContext(ctx, `SELECT m.id, m.title, m.kind, m.rev, m.size, m.created_at FROM materials m
-		WHERE m.department = ? AND m.archived_at IS NULL
-		AND m.rev = (SELECT max(rev) FROM materials x WHERE x.id = m.id)
-		ORDER BY m.kind DESC, m.created_at DESC LIMIT 200`, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Material{}
-	for rows.Next() {
-		var m Material
-		if err := rows.Scan(&m.ID, &m.Title, &m.Kind, &m.Rev, &m.Size, &m.At); err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
 // DecisionRow 是一条有效决定（没被后来的推翻）。
 type DecisionRow struct {
 	ID       string `json:"id"`
@@ -470,23 +431,19 @@ type DecisionRow struct {
 }
 
 func loadDecisions(ctx context.Context, q store.Querier) ([]DecisionRow, error) {
-	rows, err := q.QueryContext(ctx, `SELECT d.id, d.text, d.why, d.department, COALESCE(p.name, ''), d.created_at
-		FROM decisions d LEFT JOIN departments p ON p.id = d.department
-		WHERE NOT EXISTS (SELECT 1 FROM decisions n WHERE n.supersedes = d.id)
-		ORDER BY d.created_at DESC, d.rowid DESC LIMIT 500`)
+	list, err := org.Decisions(ctx, q, org.DecisionFilter{})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []DecisionRow{}
-	for rows.Next() {
-		var d DecisionRow
-		if err := rows.Scan(&d.ID, &d.Text, &d.Why, &d.Dept, &d.DeptName, &d.At); err != nil {
-			return nil, err
-		}
-		out = append(out, d)
+	ix, err := loadOrg(ctx, q)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	out := make([]DecisionRow, 0, len(list))
+	for _, d := range list {
+		out = append(out, DecisionRow{ID: d.ID, Text: d.Text, Why: d.Why, Dept: d.Org, DeptName: ix.name(d.Org), At: d.CreatedAt})
+	}
+	return out, nil
 }
 
 // Legion 是执行者页：额度、机器、组合表现。
@@ -649,55 +606,31 @@ func holderText(ctx context.Context, q store.Querier, t ledger.Task) (string, er
 	return who + "：" + h.Text, nil
 }
 
-// ChoiceDetail 是选项单抽屉。
+// ChoiceDetail 是选项单抽屉：agenda 的选项单加上部门名。
 type ChoiceDetail struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Status   string   `json:"status"`
-	Note     string   `json:"note"`
-	Dept     string   `json:"dept"`
-	DeptName string   `json:"dept_name"`
-	Task     string   `json:"task,omitempty"`
-	At       int64    `json:"at"`
-	Options  []Option `json:"options"`
-}
-
-// Option 是选项单的一项。
-type Option struct {
-	Pos    int    `json:"pos"`
-	Title  string `json:"title"`
-	Gain   string `json:"gain"`
-	Cost   string `json:"cost"`
-	Picked bool   `json:"picked"`
+	agenda.Choice
+	DeptName string `json:"dept_name"`
 }
 
 func loadChoice(ctx context.Context, q store.Querier, id string) (ChoiceDetail, error) {
-	var c ChoiceDetail
-	var task sql.NullString
-	err := q.QueryRowContext(ctx, `SELECT c.id, c.title, c.status, c.note, c.department, COALESCE(d.name, ''), c.task, c.created_at
-		FROM choices c LEFT JOIN departments d ON d.id = c.department WHERE c.id = ?`, id).
-		Scan(&c.ID, &c.Title, &c.Status, &c.Note, &c.Dept, &c.DeptName, &task, &c.At)
-	if store.IsNotFound(err) {
-		return c, api.NotFound("选项单 %s 不存在", id)
-	}
+	c, err := agenda.GetChoice(ctx, q, id)
 	if err != nil {
-		return c, err
+		return ChoiceDetail{}, err
 	}
-	c.Task = task.String
-	rows, err := q.QueryContext(ctx, `SELECT pos, title, gain, cost, picked FROM choice_options WHERE choice = ? ORDER BY pos LIMIT 20`, id)
-	if err != nil {
-		return c, err
+	out := ChoiceDetail{Choice: c}
+	if c.Options == nil {
+		out.Options = []agenda.Option{}
 	}
-	defer rows.Close()
-	c.Options = []Option{}
-	for rows.Next() {
-		var o Option
-		if err := rows.Scan(&o.Pos, &o.Title, &o.Gain, &o.Cost, &o.Picked); err != nil {
-			return c, err
-		}
-		c.Options = append(c.Options, o)
+	err = q.QueryRowContext(ctx, `SELECT name FROM departments WHERE id = ?`, c.Org).Scan(&out.DeptName)
+	return out, err
+}
+
+func joinInts(list []int) string {
+	parts := make([]string, len(list))
+	for i, n := range list {
+		parts[i] = strconv.Itoa(n)
 	}
-	return c, rows.Err()
+	return strings.Join(parts, "、")
 }
 
 func nonNil[T any](s []T) []T {

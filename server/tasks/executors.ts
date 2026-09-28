@@ -36,6 +36,7 @@ import {
   prepareRun,
   type LaunchOptions,
   type Prepared,
+  type RemotePlan,
   type ResumeWith,
 } from "./workspace.ts";
 import { LiveInput } from "./live-input.ts";
@@ -90,7 +91,7 @@ import {
   type HostChoice,
   type HostNeed,
 } from "../hosts/state.ts";
-import type { Assignment } from "../hosts/protocol.ts";
+import type { Assignment, LaunchAck } from "../hosts/protocol.ts";
 import { SPAWN_ENV, spawnMark, spawnOwner } from "./orphans.ts";
 
 /**
@@ -651,10 +652,12 @@ export class Executors {
       cwd: prepared.cwd,
       ...(plan.repo ? { repo: plan.repo } : {}),
       ...(secrets ? { secrets: secrets.env } : {}),
+      ...(plan.skills ? { skills: plan.skills.copies } : {}),
     };
     const ack = await remote.launch(host, assignment);
     this.secretsUsed(id, secrets, host);
     prepared.launch = { ...ack.launch };
+    if (plan.skills) this.noteRemoteSkills(id, host, chosen, plan.skills, ack);
     const stop = () => remote.stop(host, id, run, "SIGKILL");
     if (this.ctx.closed()) {
       stop();
@@ -729,6 +732,34 @@ export class Executors {
       { host, run, pid: ack.pid },
     );
     return started;
+  }
+
+  /** 交给代理挂的技能（t232）：挂上了记 skills_mounted，挂不上记 skills_skipped（派活回执据此写明）。 */
+  private noteRemoteSkills(
+    id: number,
+    host: number,
+    chosen: Chosen,
+    skills: NonNullable<RemotePlan["skills"]>,
+    ack: Extract<LaunchAck, { ok: true }>,
+  ) {
+    const extra = {
+      ...(skills.dropped.length ? { dropped: skills.dropped } : {}),
+      ...(skills.unknown.length ? { unknown: skills.unknown } : {}),
+    };
+    if (ack.skills && !ack.skills.error)
+      noteTask(this.ctx.db, id, "skills_mounted", {
+        worker: chosen.worker.id,
+        host: hostRef(host),
+        skills: ack.skills.mounted,
+        ...extra,
+      });
+    else
+      noteTask(this.ctx.db, id, "skills_skipped", {
+        host: hostRef(host),
+        reason: ack.skills?.error ?? `${hostRef(host)} 上的代理没回挂载结果`,
+        skills: skills.copies.map((skill) => skill.slug),
+        ...extra,
+      });
   }
 
   /** 代理报告远程某一轮退出。 */

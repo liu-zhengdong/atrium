@@ -75,5 +75,6 @@ export function machineInfo(input: {
     max_workers: limits.maxWorkers,
     max_checks: limits.maxChecks,
     check_timeout_ms: limits.checkTimeoutMs,
+    skills: true,
   };
 }

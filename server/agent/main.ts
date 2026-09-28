@@ -10,8 +10,9 @@ import {
   statSync,
 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { killTree, processAlive } from "../platform/index.ts";
+import { skillReport } from "../skills/remote.ts";
 import { ADAPTERS, isTool } from "../tasks/adapters/index.ts";
 import { exec as defaultExec, type Exec } from "../tasks/git.ts";
 import { hostGate, hostLimits } from "../tasks/host-load.ts";
@@ -790,11 +791,14 @@ export class Agent {
       this.log(
         `领到 ${assignment.ref}（${assignment.worker}），PID ${launched.pid}`,
       );
+      if (launched.skills?.error)
+        this.log(`${assignment.ref} ${launched.skills.error}`);
       return {
         ok: true,
         pid: launched.pid,
         offset: launched.offset,
         launch: launched.launch,
+        ...(launched.skills ? { skills: launched.skills } : {}),
       };
     } catch (error) {
       this.log(`${assignment.ref} 拉起失败：${reason(error)}`);
@@ -925,6 +929,13 @@ export class Agent {
     const size = this.size(record.logFile);
     if (record.uploaded < size) return;
     const message = this.lastMessage(record);
+    // 执行者改过的技能副本（t232）：随退出一起交给服务，由它生成修订提议。
+    let skills: ReturnType<typeof skillReport>;
+    try {
+      skills = skillReport(dirname(record.logFile));
+    } catch (error) {
+      this.log(`${record.ref} 的技能副本没读出来：${reason(error)}`);
+    }
     const answer = await this.call<{
       ok: boolean;
       offset?: number;
@@ -938,6 +949,7 @@ export class Agent {
         exit: record.exit ?? null,
         size,
         ...(message !== undefined ? { last_message: message } : {}),
+        ...(skills ? { skills } : {}),
       },
       30_000,
     );

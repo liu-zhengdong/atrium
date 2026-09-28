@@ -26,8 +26,9 @@ import { charterBrief, withContext } from "../org/brief.ts";
 import { taskContext } from "../map/context.ts";
 import { alsoOf } from "./also.ts";
 import { getJobRole } from "./job-roles.ts";
-import { skillsForTask } from "../skills/task-skills.ts";
+import { skillsForTask, type TaskSkills } from "../skills/task-skills.ts";
 import { mountSkills } from "../skills/mount.ts";
+import { SKILLS_SLOT, copyOf, type SkillCopy } from "../skills/remote.ts";
 import { homedir } from "node:os";
 import { listTells, unsent } from "./tell-ledger.ts";
 import { TELL_RULE, tellModeOf, tellSection } from "./tell.ts";
@@ -96,8 +97,14 @@ export type Prepared = {
   remote?: RemotePlan;
 };
 
-/** 远程主机（#358）：系统与代理数据目录决定那台机器上的路径。 */
-export type RemoteSite = { host: number; os: string; data_dir: string };
+/** 远程主机（#358）：系统与代理数据目录决定那台机器上的路径；skills：那台的代理能挂组织技能（t232）。 */
+export type RemoteSite = {
+  host: number;
+  os: string;
+  data_dir: string;
+  skills?: boolean;
+  version?: string;
+};
 
 /** 交给代理的：提示词、那台机器上的任务目录，有仓库时怎么克隆、在哪建工作树。 */
 export type RemotePlan = {
@@ -111,6 +118,12 @@ export type RemotePlan = {
     worktree: string;
     branch: string;
     base: string;
+  };
+  /** 交给代理挂的组织技能（t232）；提示词里留着 SKILLS_SLOT 等代理填。 */
+  skills?: {
+    copies: SkillCopy[];
+    dropped: string[];
+    unknown: string[];
   };
 };
 
@@ -128,6 +141,27 @@ function briefOf(task: Task) {
     undefined,
     `atrium task set ${task.ref} --brief 文件`,
   );
+}
+
+/**
+ * 这件活要带的组织技能：节点链上绑定的 ∪ 执行者档案指定的 ∪ 干活专员的技能。
+ * 不给 rules 时只算任务本身的（挑主机时还没定执行者，t232）。
+ */
+export function pickSkills(
+  db: DatabaseSync,
+  task: Task,
+  rules: Record<string, unknown> = {},
+): TaskSkills {
+  const job = task.job_id ? getJobRole(db, `r${task.job_id}`) : undefined;
+  return skillsForTask(db, task, {
+    ...rules,
+    skills: [
+      ...new Set([
+        ...(Array.isArray(rules.skills) ? rules.skills : []),
+        ...(job?.skills ?? []),
+      ]),
+    ],
+  });
 }
 
 /**
@@ -153,7 +187,8 @@ export function buildLaunch(
 
 /**
  * 建工作目录、写提示词、算出进程调用；不拉起。
- * 给了 site（远程主机）时不在本机建工作树、不挂技能：只算那台机器上的路径、写好提示词，交给代理去建和拉起。
+ * 给了 site（远程主机）时不在本机建工作树、不挂技能：只算那台机器上的路径、写好提示词，交给代理去建和拉起；
+ * 要带的技能随指令交给能挂的代理（t232），提示词里「本次挂载的技能」段留占位由它填；代理太旧挂不了的记 skills_skipped。
  */
 export async function prepareRun(
   task: Task,
@@ -245,25 +280,23 @@ export async function prepareRun(
   // 组织技能：节点链上绑定的 ∪ 档案指定的，拷进任务目录，只对这次运行生效。
   const picked =
     options.db && !bare
-      ? skillsForTask(options.db, task, {
-          ...worker.profile.rules,
-          skills: [
-            ...new Set([
-              ...(Array.isArray(worker.profile.rules.skills)
-                ? worker.profile.rules.skills
-                : []),
-              ...(job?.skills ?? []),
-            ]),
-          ],
-        })
+      ? pickSkills(options.db, task, worker.profile.rules)
       : undefined;
-  // 远程主机上暂不挂载组织技能（技能副本在本机任务目录），记一笔。
-  if (site && options.db && picked?.skills.length)
+  // 远程主机（t232）：交给那台的代理挂；代理太旧不认技能的，记一笔、派活回执写明。
+  const carry =
+    site?.skills && picked?.skills.length ? picked.skills : undefined;
+  if (site && !site.skills && options.db && picked?.skills.length)
     noteTask(options.db, task.id, "skills_skipped", {
       host: `h${site.host}`,
-      reason: "远程主机上暂不挂载组织技能",
+      reason: `h${site.host} 上的代理${site.version ? `（${site.version}）` : ""}版本旧，不会挂组织技能；在那台 atrium update 并重启 atrium agent 后再派`,
       skills: picked.skills.map((skill) => skill.slug),
     });
+  if (carry && remote)
+    remote.skills = {
+      copies: carry.map(copyOf),
+      dropped: picked!.dropped.map((d) => d.slug),
+      unknown: picked!.unknown,
+    };
   const mount =
     picked && !site
       ? mountSkills(
@@ -273,9 +306,11 @@ export async function prepareRun(
           options.env.HOME ?? homedir(),
         )
       : undefined;
+  // 交给代理挂的，挂上没有等回执再记（executors.ts launchRemote）。
   if (
     options.db &&
     picked &&
+    !carry &&
     (mount || picked.dropped.length || picked.unknown.length)
   )
     noteTask(options.db, task.id, "skills_mounted", {
@@ -328,7 +363,7 @@ export async function prepareRun(
     originDoc: origin
       ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
       : undefined,
-    skills: bare ? undefined : mount?.section,
+    skills: bare ? undefined : carry ? SKILLS_SLOT : mount?.section,
     rootDoc: bare ? undefined : docs.rootDoc,
     profileBody: bare ? undefined : worker.profile.body,
     rules: verify
@@ -341,7 +376,18 @@ export async function prepareRun(
         : [where, ...deliveryRules(task), TELL_RULE],
   });
   const promptFile = join(dir, "prompt.md");
-  writeFileSync(promptFile, prompt, { mode: 0o600 });
+  // 本机留的那份：技能段由代理在那台填，这里写明去哪看。
+  writeFileSync(
+    promptFile,
+    carry && site
+      ? prompt.replace(
+          SKILLS_SLOT,
+          () =>
+            `（由 h${site.host} 上的代理挂载：${carry.map((s) => `${s.slug}@r${s.rev}`).join("、")}；实际段落见那台任务目录的 prompt.md）`,
+        )
+      : prompt,
+    { mode: 0o600 },
+  );
   const logFile = join(dir, "log");
   if (remote)
     return {

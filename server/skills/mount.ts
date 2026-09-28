@@ -5,12 +5,12 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import path, { dirname, join } from "node:path";
+import { linkPath } from "../platform/index.ts";
 import { ADAPTERS, type Tool } from "../tasks/adapters/index.ts";
-import { LIMITS, type Files } from "./model.ts";
+import { LIMITS, filesHash, type Files } from "./model.ts";
 import type { TaskSkill } from "./task-skills.ts";
 
 /**
@@ -22,12 +22,27 @@ import type { TaskSkill } from "./task-skills.ts";
  * - opencode：`OPENCODE_CONFIG_DIR=<任务目录>/opencode`，技能在其 skills/ 下，与用户全局配置叠加；
  * - 其他：拷到 <任务目录>/skills/，提示词里给简介和绝对路径，按需读。
  * 同一任务再次拉起（重试、换人）时已挂的副本原样保留，执行者上一轮的改动不会被覆盖。
+ * 远程主机（t232）由那台的代理调同一个函数挂在它的任务目录里（server/agent/launch.ts），链接走平台层
+ * （Windows 建不了软链时目录用 junction、文件用硬链接）。
  */
+
+/** 挂载要用到的技能字段（远程派活随指令下发的也是这些，t232）。 */
+export type MountSkill = Pick<
+  TaskSkill,
+  "id" | "slug" | "rev" | "description" | "via" | "files"
+>;
 
 export const MANIFEST = "skills.json";
 export const NOTES = "skill-notes.md";
 
-export type Mounted = { id: number; slug: string; rev: number; dir: string };
+export type Mounted = {
+  id: number;
+  slug: string;
+  rev: number;
+  dir: string;
+  /** 挂载时文件的哈希（`filesHash`）：远程收尾据此只把改过的副本传回服务；旧清单没有。 */
+  sha?: string;
+};
 export type Manifest = { skills: Mounted[] };
 export type Mount = {
   env: Record<string, string>;
@@ -45,7 +60,7 @@ const CODEX_LINKS = [
   "plugins",
 ];
 
-type Layout = {
+export type Layout = {
   root: string;
   skills: string;
   args: string[];
@@ -53,7 +68,12 @@ type Layout = {
   how: string;
 };
 
-function layout(dir: string, tool: Tool): Layout {
+/** 按工具放在任务目录的哪里、怎么交给执行者；join 缺省按本机平台（测试可传 path.win32 看 Windows 上的路径）。 */
+export function skillLayout(
+  dir: string,
+  tool: Tool,
+  join: (...parts: string[]) => string = path.join,
+): Layout {
   switch (ADAPTERS[tool].skillMount) {
     case "claude-plugin": {
       const root = join(dir, "skills-plugin");
@@ -121,14 +141,14 @@ function linkIfAbsent(source: string, target: string) {
   try {
     lstatSync(target);
   } catch {
-    symlinkSync(source, target);
+    linkPath(source, target);
   }
 }
 
 function linkCodexHome(
   root: string,
   home: string,
-  skills: readonly TaskSkill[],
+  skills: readonly MountSkill[],
 ) {
   const user = join(home, ".codex");
   for (const name of CODEX_LINKS)
@@ -148,11 +168,11 @@ function linkCodexHome(
 export function mountSkills(
   dir: string,
   tool: Tool,
-  skills: readonly TaskSkill[],
+  skills: readonly MountSkill[],
   home: string,
 ): Mount | undefined {
   if (!skills.length) return undefined;
-  const place = layout(dir, tool);
+  const place = skillLayout(dir, tool);
   mkdirSync(place.skills, { recursive: true, mode: 0o700 });
   if (ADAPTERS[tool].skillMount === "claude-plugin") {
     mkdirSync(join(place.root, ".claude-plugin"), {
@@ -184,6 +204,7 @@ export function mountSkills(
       slug: skill.slug,
       rev: skill.rev,
       dir: target,
+      sha: filesHash(skill.files),
     });
   }
   // 上一轮挂过、这轮不再用的副本（不再带，或换了执行者、目录不同）也留在清单里，收尾照样比对，免得改动丢失。

@@ -1,6 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { mountSkills, type Mount } from "../skills/mount.ts";
+import { fillSkillSlot, type SkillMountAck } from "../skills/remote.ts";
 import { ADAPTERS } from "../tasks/adapters/index.ts";
 import { ensureWorktree, firstLine, type Exec } from "../tasks/git.ts";
 import { spawnWorker } from "../tasks/spawn.ts";
@@ -13,6 +16,7 @@ import { withSecrets } from "../secrets/model.ts";
  * 代理在自己机器上拉起一次运行（#358 第 1 步）：克隆或更新仓库、建工作树、写提示词，
  * 按适配器算出进程调用，用白名单环境拉起。建工作树、算调用、拉起与本机派活是同一份代码
  * （git.ts ensureWorktree、workspace.ts buildLaunch、spawn.ts spawnWorker、worker-env.ts）。
+ * 带了组织技能的（t232）用本机派活同一个 skills/mount.ts 挂在这台的任务目录里，挂不上照样拉起，回执写明原因。
  */
 
 export type Launched = {
@@ -28,6 +32,8 @@ export type Launched = {
     cwd: string;
     input?: "stream-json";
   };
+  /** 带了技能时的挂载结果。 */
+  skills?: SkillMountAck;
 };
 
 /** 仓库还没克隆就克隆（大仓库可能要几分钟）；已克隆的交给 ensureWorktree 去 fetch。 */
@@ -60,15 +66,44 @@ export async function launchAssignment(
       ctx.run,
     );
   } else mkdirSync(assignment.cwd, { recursive: true });
+  // 组织技能（t232）：与本机同一套挂载；挂不上不拦拉起，提示词与回执写明。
+  let mount: Mount | undefined;
+  let skills: SkillMountAck | undefined;
+  if (assignment.skills?.length) {
+    try {
+      mount = mountSkills(
+        assignment.dir,
+        assignment.tool,
+        assignment.skills,
+        ctx.env.HOME || homedir(),
+      );
+      skills = {
+        mounted: (mount?.skills ?? []).map((s) => `${s.slug}@r${s.rev}`),
+      };
+    } catch (error) {
+      skills = {
+        mounted: [],
+        error: `挂技能失败：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+  const prompt = fillSkillSlot(
+    assignment.prompt,
+    mount
+      ? { section: mount.section }
+      : skills?.error
+        ? { error: skills.error }
+        : undefined,
+  );
   const promptFile = join(assignment.dir, "prompt.md");
-  writeFileSync(promptFile, assignment.prompt, { mode: 0o600 });
+  writeFileSync(promptFile, prompt, { mode: 0o600 });
   const resultFile = join(assignment.dir, "last-message.md");
   // 远程运行的捎话按轮次续上（after_turn），不开标准输入流。
   const launch = buildLaunch(
     adapter,
     {
       promptFile,
-      prompt: assignment.prompt,
+      prompt,
       cwd: assignment.cwd,
       model: assignment.model,
       effort: assignment.effort,
@@ -79,6 +114,11 @@ export async function launchAssignment(
       ? { ...assignment.resume, file: join(assignment.dir, "tell.md") }
       : undefined,
   );
+  if (mount) {
+    launch.args.push(...mount.args);
+    if (Object.keys(mount.env).length)
+      launch.env = { ...launch.env, ...mount.env };
+  }
   const logFile = join(assignment.dir, "log");
   const append = !!assignment.resume;
   const offset = append && existsSync(logFile) ? statSync(logFile).size : 0;
@@ -102,5 +142,6 @@ export async function launchAssignment(
       cwd: launch.cwd,
       ...(launch.input ? { input: launch.input } : {}),
     },
+    ...(skills ? { skills } : {}),
   };
 }

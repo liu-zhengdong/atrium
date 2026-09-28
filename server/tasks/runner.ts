@@ -53,7 +53,7 @@ import { workerEnvironment } from "./worker-env.ts";
 import { Scheduler, planItem } from "./schedule.ts";
 import { requireRow } from "./ledger-model.ts";
 import { schedulePrExec } from "./schedule-pr.ts";
-import type { LaunchOptions } from "./workspace.ts";
+import { pickSkills, type LaunchOptions } from "./workspace.ts";
 import { pickFor } from "./pick-runtime.ts";
 import { writtenNotice, type RunPick } from "./pick.ts";
 import { isRisk } from "./profiles.ts";
@@ -906,7 +906,11 @@ export class TaskRunner {
         running: candidate.running,
         max: view?.max ?? candidate.max,
         fit: fit.ok ? "ok" : fit.kind,
-        reason: fit.ok ? null : fit.reason,
+        reason: !fit.ok
+          ? fit.reason
+          : need.skills && candidate.skills === false
+            ? "代理版本旧，挂不了组织技能（优先派到别的主机）"
+            : null,
         chosen: choice.kind === "run" && choice.host === candidate.id,
       };
     });
@@ -977,6 +981,12 @@ export class TaskRunner {
       urgent,
       localOnly,
       avoid: storedHosts(task.avoid_hosts),
+      // 要带组织技能的优先派到能挂的主机（t232）；只有本机时不用算。
+      ...(localOnly === null &&
+      this.hasRemoteHosts() &&
+      pickSkills(this.db, task).skills.length
+        ? { skills: true }
+        : {}),
     };
   }
 
@@ -1085,6 +1095,7 @@ export class TaskRunner {
         running,
         max: row.max_running ?? info?.max_workers ?? null,
         busy: load?.busy ?? null,
+        skills: info?.skills === true,
       };
     });
   }

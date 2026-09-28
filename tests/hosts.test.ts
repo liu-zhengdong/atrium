@@ -1042,3 +1042,115 @@ test("额度多主机合并：代理上报读数与账号指纹，atrium quota �
   });
   assert.equal(anonymous.status, 401);
 });
+
+test("远程主机挂组织技能（t232）：代理在那台挂上、提示词给那台的路径；执行者改了副本，收尾在服务这边生成提议", async (t) => {
+  const fx = fixture(t);
+  // 远程上的假 opencode：按 OPENCODE_CONFIG_DIR 找到挂载的副本改一行、写原因。
+  fx.script(
+    "opencode",
+    [
+      'f="$OPENCODE_CONFIG_DIR/skills/web-design/SKILL.md"',
+      'test -f "$f" || { echo "没挂上技能"; exit 3; }',
+      "printf -- '---\\nname: web-design\\ndescription: 前端设计约定\\n---\\n\\n按钮间距 12px\\n' > \"$f\"",
+      'echo "8px 在新设计稿里不对" > "$OPENCODE_CONFIG_DIR/../skill-notes.md"',
+      'echo \'{"type":"text","part":{"text":"远程完成"}}\'',
+    ].join("\n"),
+  );
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data);
+  t.after(() => server.close());
+  const { call, port } = server;
+  const ok = async (method: "GET" | "POST", url: string, payload?: object) => {
+    const response = await call(method, url, payload);
+    assert.ok(
+      response.status < 300,
+      `${url}: ${JSON.stringify(response.body)}`,
+    );
+    return response.body;
+  };
+  const added = await ok("POST", "/api/hosts", {
+    name: "虚拟机",
+    repos: ["*"],
+  });
+  const agentData = join(fx.root, "agent");
+  const { lines } = startAgent(t, {
+    port,
+    data: agentData,
+    env: fx.env,
+    code: added.code,
+  });
+  await until(() => lines.some((line) => line.includes("已连上")), 10_000);
+  for (const node of [
+    { slug: "org", kind: "org", name: "组织" },
+    { parent: "o1", slug: "atrium", kind: "project", name: "Atrium" },
+    { parent: "o2", slug: "web", kind: "module", name: "web" },
+  ])
+    await ok("POST", "/api/org/nodes", { ...node, reason: "建" });
+  await ok("POST", "/api/skills", {
+    slug: "web-design",
+    files: {
+      "SKILL.md":
+        "---\nname: web-design\ndescription: 前端设计约定\n---\n\n按钮间距 8px\n",
+    },
+    owner: "atrium/web",
+    reason: "用户的前端口味",
+  });
+  await ok("POST", "/api/skills/web-design/bind", { node: "atrium/web" });
+  await ok("POST", "/api/tasks", {
+    title: "远程改按钮",
+    deliver: "none",
+    role: "atrium/web",
+  });
+  const run = await ok("POST", "/api/tasks/t1/run", {
+    worker: "opencode",
+    host: "h2",
+  });
+  assert.equal(run.task.host_ref, "h2");
+  const task = (await ok("GET", "/api/tasks/t1/wait?timeout=20")).task;
+  assert.equal(task.status, "done", JSON.stringify(task.events.slice(-4)));
+  const note = (kind: string) =>
+    task.events
+      .filter((e: { kind: string }) => e.kind === kind)
+      .map((e: { detail: string }) => JSON.parse(e.detail));
+  const mounted = note("skills_mounted");
+  assert.equal(mounted.length, 1);
+  assert.match(mounted[0].worker, /^opencode/);
+  assert.deepEqual(
+    [mounted[0].host, mounted[0].skills],
+    ["h2", ["web-design@r1"]],
+  );
+  assert.deepEqual(note("skills_skipped"), []);
+  // 那台的提示词里是那台的路径；本机留的那份写明由代理挂载。
+  const remoteDir = join(agentData, "tasks", "1");
+  const remotePrompt = readFileSync(join(remoteDir, "prompt.md"), "utf8");
+  assert.ok(
+    remotePrompt.includes(
+      join(remoteDir, "opencode", "skills", "web-design", "SKILL.md"),
+    ),
+    remotePrompt,
+  );
+  assert.ok(!remotePrompt.includes("atrium:skills"));
+  assert.match(
+    readFileSync(join(data, "tasks", "1", "prompt.md"), "utf8"),
+    /由 h2 上的代理挂载：web-design@r1/,
+  );
+  // 改过的副本随退出传回，服务照常生成提议、原因取执行者写的。
+  const proposals = await ok("GET", "/api/skill-proposals");
+  assert.deepEqual(
+    proposals.map(
+      (p: { ref: string; skill: string; task: string; reason: string }) => [
+        p.ref,
+        p.skill,
+        p.task,
+        p.reason,
+      ],
+    ),
+    [["p1", "web-design", "t1", "8px 在新设计稿里不对"]],
+  );
+  assert.ok(
+    task.events.some((e: { kind: string }) => e.kind === "skill_proposal") ||
+      (await ok("GET", "/api/tasks/t1")).task.events.some(
+        (e: { kind: string }) => e.kind === "skill_proposal",
+      ),
+  );
+});

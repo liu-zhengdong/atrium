@@ -497,3 +497,104 @@ test("排队队首：指定了主机的另排一队，不挡自动挑主机的�
     [1, 2],
   );
 });
+
+test("挑主机（t232）：要带技能的优先能挂技能的主机，挂不了的仍能接、只排在后面", () => {
+  const old = remote({ id: 2, skills: false });
+  const fresh = remote({ id: 3, skills: true });
+  // 本机有活、两台远程一样空：带技能的挑能挂的 h3，不带技能的照旧按短号挑 h2。
+  const busyLocal = local({ running: 1 });
+  assert.deepEqual(
+    chooseHost([busyLocal, old, fresh], need({ skills: true })),
+    {
+      kind: "run",
+      host: 3,
+    },
+  );
+  assert.deepEqual(chooseHost([busyLocal, old, fresh], need()), {
+    kind: "run",
+    host: 2,
+  });
+  // 能挂技能比更空更要紧：h3 有一个在跑也先派 h3；本机（总能挂）一样空时仍本机优先。
+  assert.deepEqual(
+    chooseHost(
+      [
+        local({ running: 2, max: 4 }),
+        old,
+        remote({ id: 3, skills: true, running: 1 }),
+      ],
+      need({ skills: true }),
+    ),
+    { kind: "run", host: 3 },
+  );
+  assert.deepEqual(chooseHost([local(), old], need({ skills: true })), {
+    kind: "run",
+    host: 1,
+  });
+  // 只有挂不了的能接：照样派过去（派活时记 skills_skipped、回执写明），不无限排队。
+  assert.deepEqual(
+    chooseHost([local({ busy: "本机太忙" }), old], need({ skills: true })),
+    { kind: "run", host: 2 },
+  );
+  // 指定主机不受影响。
+  assert.deepEqual(
+    chooseHost([local(), old, fresh], need({ skills: true }), 2),
+    { kind: "run", host: 2 },
+  );
+});
+
+test("代理收到的技能（t232）：名字、编号、文件路径不合法就拒绝整条拉起指令，Windows 数据目录同样", () => {
+  const skill = {
+    id: 1,
+    slug: "web-design",
+    rev: 2,
+    description: "前端设计约定",
+    via: "o3 atrium/web",
+    files: {
+      "SKILL.md": "---\nname: web-design\ndescription: 前端设计约定\n---\n",
+      "ref/grid.md": "8px",
+    },
+  };
+  for (const [os, data, sep] of [
+    ["linux", "/home/u/.atrium-agent", "/"],
+    ["win32", "C:\\Users\\u\\.atrium-agent", "\\"],
+  ] as const) {
+    const assignment: Assignment = {
+      task: 3,
+      ref: "t3",
+      run: 1,
+      worker: "claude",
+      tool: "claude",
+      prompt: "做事",
+      dir: [data, "tasks", "3"].join(sep),
+      cwd: [data, "tasks", "3", "work"].join(sep),
+      skills: [skill],
+    };
+    assert.equal(assignmentRefusal(assignment, os, data), null, os);
+    const bad: [unknown, RegExp][] = [
+      ["x", /技能清单不合法/],
+      [[{ ...skill, slug: "../evil" }], /技能名不合法/],
+      [[{ ...skill, slug: "Web" }], /技能名不合法/],
+      [[skill, skill], /重复/],
+      [[{ ...skill, rev: 0 }], /修订号不合法/],
+      [[{ ...skill, description: undefined }], /缺少简介/],
+      [[{ ...skill, files: { "..\\x": "y", "SKILL.md": "x" } }], /路径不合法/],
+      [[{ ...skill, files: { "../x": "y", "SKILL.md": "x" } }], /路径不合法/],
+      [[{ ...skill, files: { "C:/x": "y", "SKILL.md": "x" } }], /路径不合法/],
+      [[{ ...skill, files: { "ref/grid.md": "8px" } }], /缺少 SKILL\.md/],
+      [
+        Array.from({ length: 9 }, (_, i) => ({ ...skill, slug: `s${i}` })),
+        /超过 8 个/,
+      ],
+    ];
+    for (const [skills, reason] of bad)
+      assert.match(
+        assignmentRefusal(
+          { ...assignment, skills: skills as Assignment["skills"] },
+          os,
+          data,
+        )!,
+        reason,
+        `${os} ${JSON.stringify(skills).slice(0, 80)}`,
+      );
+  }
+});

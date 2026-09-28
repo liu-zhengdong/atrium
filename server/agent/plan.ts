@@ -7,6 +7,7 @@ import {
 } from "../hosts/protocol.ts";
 import { insideData, isKnownTool } from "../hosts/state.ts";
 import { targetsRefusal } from "../tasks/leftovers.ts";
+import { skillCopiesRefusal } from "../skills/remote.ts";
 
 /**
  * 代理这一侧的判定（#358 第 1 步）：服务派来的指令能不能照做。纯函数，穷举测试。
@@ -74,7 +75,7 @@ const same = (os: string, a: string, b: string) =>
   (os === "win32" ? a.toLowerCase() : a) ===
   (os === "win32" ? b.toLowerCase() : b);
 
-/** 拉起指令：工具认识、路径都在代理数据目录里、克隆地址像个地址。 */
+/** 拉起指令：工具认识、路径都在代理数据目录里、克隆地址像个地址、带的技能名与文件路径合法（t232）。 */
 export function assignmentRefusal(
   a: Assignment,
   os: string,
@@ -119,7 +120,7 @@ export function assignmentRefusal(
         return `凭据 ${name} 的值不合法`;
     }
   }
-  return null;
+  return skillCopiesRefusal(a.skills);
 }
 
 const REF_NAME = /^[A-Za-z0-9._/-]+$/;

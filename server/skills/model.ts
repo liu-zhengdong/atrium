@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import YAML from "yaml";
 import { Problem } from "../problem.ts";
 
@@ -78,6 +79,16 @@ export function validateFiles(value: unknown): Files {
   if (total > LIMITS.bytes)
     return bad("files", `合计 ${total} 字节，超过 ${LIMITS.bytes / 1024} KB`);
   return out;
+}
+
+/** 一组文件的内容哈希（按路径排序），挂载副本改没改看它。 */
+export function filesHash(files: Files): string {
+  const hash = createHash("sha256");
+  for (const [path, content] of Object.entries(files).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  ))
+    hash.update(`${path}\0${content}\0`);
+  return hash.digest("hex");
 }
 
 /** 读 SKILL.md 的 frontmatter；没有 frontmatter 返回 null，格式坏了报错。 */

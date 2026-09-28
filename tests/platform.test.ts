@@ -28,6 +28,8 @@ import {
   killTree,
   killTreePlan,
   launchInvocation,
+  linkKinds,
+  linkPath,
   openUrlInvocation,
   pathDelimiter,
   pathExtensions,
@@ -655,4 +657,31 @@ test("读进程命令行：Unix ps -ww，Windows 经 PowerShell 查 Win32_Proces
   assert.match(win.args.at(-1)!, /ProcessId=42\b/);
   for (const bad of [0, -1, 1.5, Number.NaN])
     assert.throws(() => commandLineInvocation("linux", bad), /进程号不合法/);
+});
+
+test("建链接（t232）：Unix 只用软链；Windows 软链建不了时目录退到 junction、文件退到硬链接", () => {
+  for (const platform of ["linux", "darwin"] as Platform[]) {
+    assert.deepEqual(linkKinds(platform, true), ["symlink"]);
+    assert.deepEqual(linkKinds(platform, false), ["symlink"]);
+  }
+  assert.deepEqual(linkKinds("win32", true), ["symlink", "junction"]);
+  assert.deepEqual(linkKinds("win32", false), ["symlink", "hardlink"]);
+});
+
+test("本机：链接文件与目录后读得到原内容；源不存在时报错", () => {
+  const root = mkdtempSync(join(tmpdir(), "atrium-link-"));
+  try {
+    mkdirSync(join(root, "dir"));
+    writeFileSync(join(root, "dir", "a.md"), "甲");
+    writeFileSync(join(root, "auth.json"), "{}");
+    const dirKind = linkPath(join(root, "dir"), join(root, "dir-link"));
+    const fileKind = linkPath(join(root, "auth.json"), join(root, "auth-link"));
+    assert.ok(linkKinds(process.platform, true).includes(dirKind));
+    assert.ok(linkKinds(process.platform, false).includes(fileKind));
+    assert.equal(readFileSync(join(root, "dir-link", "a.md"), "utf8"), "甲");
+    assert.equal(readFileSync(join(root, "auth-link"), "utf8"), "{}");
+    assert.throws(() => linkPath(join(root, "nope"), join(root, "x")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -420,3 +420,15 @@ export const WINDOWS_SYSTEM_ENV = [
  */
 export const envKey = (platform: Platform, key: string) =>
   platform === "win32" ? key.toUpperCase() : key;
+
+/** 一次建链接的方式：软链、目录联接（Windows junction）、硬链接。 */
+export type LinkKind = "symlink" | "junction" | "hardlink";
+
+/**
+ * 把一个已有的文件或目录链到别处，依次试哪几种方式：Unix 只用软链；Windows 没开开发者模式时普通用户建不了软链，
+ * 目录退到 junction（不要权限），文件退到硬链接（同一卷上不要权限，内容与原文件同一份）。
+ */
+export function linkKinds(platform: Platform, directory: boolean): LinkKind[] {
+  if (platform !== "win32") return ["symlink"];
+  return directory ? ["symlink", "junction"] : ["symlink", "hardlink"];
+}

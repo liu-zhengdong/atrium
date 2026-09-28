@@ -1,4 +1,5 @@
-import type { Tool } from "./adapters/index.ts";
+import { ADAPTERS, type Tool } from "./adapters/index.ts";
+import { cliAdopted } from "./adapters/cli-outcome.ts";
 import { parseEvents, type JsonEvent } from "./json-log.ts";
 
 /**
@@ -10,6 +11,7 @@ import { parseEvents, type JsonEvent } from "./json-log.ts";
  * - agy stream-json：最后的 result 事件 status=SUCCESS 为正常；其余 status 或没有 result 为出错。
  * - codex：本轮写出了最后消息文件（-o）为正常；没有则判不了。
  * - kimi、grok 是纯文本日志，判不了。
+ * - 通用命令行执行者按档案的 error_match、done_match 判（adapters/cli-outcome.ts）。
  */
 
 export type AdoptedEnd =
@@ -113,7 +115,9 @@ export function adoptedEnd(input: {
       return input.lastMessage?.trim()
         ? { end: "clean", evidence: "写出了最终消息" }
         : { end: "unknown" };
-    default:
-      return { end: "unknown" };
+    default: {
+      const rules = ADAPTERS[input.tool]?.outputRules;
+      return rules ? cliAdopted(rules, input.log) : { end: "unknown" };
+    }
   }
 }

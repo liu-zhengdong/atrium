@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { launched, type Active } from "./active.ts";
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
+import { endpointKey } from "./endpoint.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
 import {
@@ -436,11 +437,17 @@ export class Executors {
   }
 
   /**
-   * 任务声明的凭据（t194）：拉起前按名称取值，缺了就报错不拉起；没声明为 null。
+   * 任务声明的凭据（t194）与执行者档案里自定义端点的密钥（t271）：拉起前按名称取值，缺了就报错不拉起；都没有为 null。
    * 值只进这一次拉起的环境（本机）或指令（远程，只在内存里），不落日志与事件。
    */
-  private secrets(task: Task) {
-    return taskSecretValues(this.ctx.db, this.ctx.launchOptions.data, task);
+  private secrets(task: Task, worker: ResolvedWorker) {
+    const key = endpointKey(worker);
+    return taskSecretValues(
+      this.ctx.db,
+      this.ctx.launchOptions.data,
+      task,
+      key ? [{ ...key, why: `执行者 ${worker.id} 的端点密钥（endpoint_key）` }] : [],
+    );
   }
 
   /** 拉起成功后记下用过（清理线索看最后使用时间），事件里只有名称。 */
@@ -489,7 +496,7 @@ export class Executors {
       return started;
     }
     const task = getTask(this.ctx.db, id);
-    const secrets = this.secrets(task);
+    const secrets = this.secrets(task, chosen.worker);
     await this.ctx.disk.check(task.node_id);
     const prepared = await prepareRun(
       task,
@@ -591,7 +598,7 @@ export class Executors {
     }
     const id = prev.id;
     const task = getTask(this.ctx.db, id);
-    const secrets = this.secrets(task);
+    const secrets = this.secrets(task, prev.worker);
     const chosen = { worker: prev.worker, risk: prev.risk };
     const prepared = await prepareRun(
       task,
@@ -643,7 +650,7 @@ export class Executors {
     if (!remote) throw new Error("服务没有接上远程主机");
     const { host } = chosen;
     const task = getTask(this.ctx.db, id);
-    const secrets = this.secrets(task);
+    const secrets = this.secrets(task, chosen.worker);
     const prepared = await prepareRun(
       task,
       chosen,
@@ -670,6 +677,7 @@ export class Executors {
       ...(plan.repo ? { repo: plan.repo } : {}),
       ...(secrets ? { secrets: secrets.env } : {}),
       ...(plan.skills ? { skills: plan.skills.copies } : {}),
+      ...(prepared.endpoint ? { endpoint: prepared.endpoint } : {}),
     };
     const ack = await remote.launch(host, assignment);
     this.secretsUsed(id, secrets, host);

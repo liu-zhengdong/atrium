@@ -412,6 +412,7 @@ export function checkTaskSecrets(
 /**
  * 派活那一刻取值：按任务归属部分（没有取负责节点）的节点链找，读出值文件。
  * 缺了或读不到就报错不拉起（报错只带名称）；标记用过由拉起成功后的 markSecretsUsed 做。
+ * extra 是执行者档案要的（t271 自定义端点的密钥）：同一套节点链找，值放进 as 这个环境变量。
  */
 export function taskSecretValues(
   db: DatabaseSync,
@@ -422,22 +423,30 @@ export function taskSecretValues(
     part_id: number | null;
     node_id: number | null;
   },
+  extra: readonly { name: string; as: string; why: string }[] = [],
 ) {
-  const names = taskSecretNames(db, task.id);
+  const declared = taskSecretNames(db, task.id);
+  const names = [
+    ...new Set([...declared, ...extra.map((e) => e.name)]),
+  ];
   if (!names.length) return null;
   const { chain, found, missing } = findSecrets(
     db,
     task.part_id ?? task.node_id,
     names,
   );
-  if (missing.length)
+  if (missing.length) {
+    const why = extra
+      .filter((e) => missing.includes(e.name))
+      .map((e) => `${e.name} 是${e.why}`);
     throw new Problem(
       409,
-      `${task.ref} 要用的凭据 ${missing.join("、")} 在 ${whereText(chain)}上都没有（或已归档）；设好后再派`,
+      `${task.ref} 要用的凭据 ${missing.join("、")} 在 ${whereText(chain)}上都没有（或已归档）${why.length ? `（${why.join("；")}）` : ""}；设好后再派`,
       "conflict",
       undefined,
       setHint(chain, missing[0]!),
     );
+  }
   const env: Record<string, string> = {};
   for (const secret of found) {
     let value: string;
@@ -452,7 +461,8 @@ export function taskSecretValues(
         `atrium secret set ${nodeRef(secret.node_id)} ${secret.name}`,
       );
     }
-    env[secret.name] = value;
+    if (declared.includes(secret.name)) env[secret.name] = value;
+    for (const e of extra) if (e.name === secret.name) env[e.as] = value;
   }
   return {
     env,

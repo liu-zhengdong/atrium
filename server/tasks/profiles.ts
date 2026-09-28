@@ -2,11 +2,15 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   ADAPTERS,
   invalid,
+  isBuiltinTool,
   isTool,
   TELL_MODES,
-  TOOLS,
+  toolNames,
   type Tool,
 } from "./adapters/index.ts";
+import { syncFromRules } from "./adapters/custom.ts";
+import { TOOL_NAME_RE } from "./adapters/cli-spec.ts";
+import { ENDPOINT_KEYS, endpointRuleProblem } from "./endpoint.ts";
 import { parseFrontmatter, type FrontValue } from "./frontmatter.ts";
 import { GATES, isGate } from "./gates.ts";
 import { readProfile } from "./worker-profiles.ts";
@@ -89,7 +93,7 @@ export function parseWorker(value: string): WorkerSpec {
   }
   if (!isTool(tool))
     throw invalid(
-      `未知的执行者工具：${tool || "（空）"}，可选 ${TOOLS.join("、")}`,
+      `未知的执行者工具：${tool || "（空）"}，可选 ${toolNames().join("、")}`,
     );
   if (plus >= 0 && !MODEL_RE.test(rest))
     throw invalid(`执行者模型不合法：${rest || "（空）"}`);
@@ -204,6 +208,11 @@ function normalizeRules(data: Record<string, FrontValue>) {
       if ((TELL_MODES as readonly FrontValue[]).includes(value))
         rules.tell = value;
       else warnings.push(`tell 只能是 ${TELL_MODES.join("、")}`);
+    } else if (ENDPOINT_KEYS.includes(key)) {
+      // 自定义模型端点（t271）：写错的不生效，免得把活派到半对的地址上。
+      const problem = endpointRuleProblem(key, value);
+      if (problem) warnings.push(problem);
+      else rules[key] = value;
     } else rules[key] = value;
   }
   return { rules, warnings };
@@ -272,11 +281,23 @@ export async function resolveWorker(
   value: string | WorkerSpec,
   db: DatabaseSync | undefined,
 ): Promise<ResolvedWorker> {
+  // 档案登记的通用执行者（t271）：按库里的 harness 档案重登，改了档案的这里就生效，删了 protocol 的撤下。
+  const head =
+    typeof value === "string" ? /^[^+:]*/.exec(value.trim())![0] : value.tool;
+  const custom = !isBuiltinTool(head) && TOOL_NAME_RE.test(head);
+  const own = custom ? readLayer(db, "harness", head) : undefined;
+  if (custom && db) {
+    const problems = syncFromRules(head, own?.rules);
+    if (problems.length)
+      throw invalid(
+        `执行者档案 harness/${head} 写得不对，没登记成执行者：${problems.join("；")}`,
+      );
+  }
   const spec = typeof value === "string" ? parseWorker(value) : value;
-  const harness = readLayer(db, "harness", spec.tool);
+  const toolLayer = custom ? own : readLayer(db, "harness", spec.tool);
   const model =
-    spec.model ?? harness?.rules.model ?? ADAPTERS[spec.tool].defaultModel;
-  const layers: ProfileLayer[] = harness ? [harness] : [];
+    spec.model ?? toolLayer?.rules.model ?? ADAPTERS[spec.tool]!.defaultModel;
+  const layers: ProfileLayer[] = toolLayer ? [toolLayer] : [];
   if (model) {
     const key = modelKey(model);
     const models = readLayer(db, "models", key);

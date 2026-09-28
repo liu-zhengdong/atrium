@@ -4,7 +4,27 @@ import {
   checkCommon,
   invalid,
   type Adapter,
+  type LaunchEndpoint,
 } from "./types.ts";
+
+/**
+ * 自定义端点（t271）：用配置覆盖加一个 model_provider。codex 已去掉 `wire_api = "chat"`（0.157 实测报
+ * 「no longer supported」），只能接 Responses 接口；密钥由 codex 按 env_key 自己读环境。
+ */
+export function codexEndpoint(endpoint: LaunchEndpoint): string[] {
+  const set = (key: string, value: string) => [
+    "-c",
+    `model_providers.atrium.${key}=${JSON.stringify(value)}`,
+  ];
+  return [
+    "-c",
+    'model_provider="atrium"',
+    ...set("name", "Atrium 自定义端点"),
+    ...set("base_url", endpoint.base_url),
+    ...set("wire_api", "responses"),
+    ...(endpoint.keyEnv ? set("env_key", endpoint.keyEnv) : []),
+  ];
+}
 
 /**
  * codex exec（`codex exec --help` 核对）：-C 工作根目录、-s 沙箱、-m 模型、
@@ -28,6 +48,7 @@ export const codex: Adapter = {
   progressSignals: ["log_growth", "worktree_change"],
   notes: ["提示词走 stdin（PROMPT 写 -），避免参数长度上限"],
   tell: "resume",
+  endpoints: { apis: ["responses"] },
   build(input) {
     checkCommon(codex, input);
     const resultFile =
@@ -36,6 +57,7 @@ export const codex: Adapter = {
     if (input.model) args.push("-m", input.model);
     if (input.effort)
       args.push("-c", `model_reasoning_effort="${input.effort}"`);
+    if (input.endpoint) args.push(...codexEndpoint(input.endpoint));
     args.push("-o", resultFile, "-");
     return {
       command: codex.executable,
@@ -55,6 +77,7 @@ export const codex: Adapter = {
     if (input.model) args.push("-m", input.model);
     if (input.effort)
       args.push("-c", `model_reasoning_effort="${input.effort}"`);
+    if (input.endpoint) args.push(...codexEndpoint(input.endpoint));
     args.push("-o", resultFile, input.session, "-");
     return {
       command: codex.executable,

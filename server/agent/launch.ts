@@ -109,6 +109,7 @@ export async function launchAssignment(
       effort: assignment.effort,
       resultFile,
       live: false,
+      ...(assignment.endpoint ? { endpoint: assignment.endpoint } : {}),
     },
     assignment.resume
       ? { ...assignment.resume, file: join(assignment.dir, "tell.md") }

@@ -8,6 +8,7 @@ import {
 } from "./adapters/index.ts";
 import { riskRefusal, trustRefusal, type RunRequest } from "./plan.ts";
 import { pickWorker, readPace, type PickInput } from "./prepare.ts";
+import { endpointFit } from "./endpoint.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import type { LaunchOptions } from "./workspace.ts";
 import { readQuotaReservePercent, overReserve } from "./budget.ts";
@@ -68,6 +69,9 @@ export async function chooseWorker(
     // 写死的执行者：强度、模型搭配不合法当场报错，不等排到了才失败。
     checkEffort(ADAPTERS[worker.tool], worker.effort);
     ADAPTERS[worker.tool].checkModel?.(worker.cliModel, worker.effort);
+    // 档案写的自定义端点这个工具接不了（t271）：当场说清楚，不等排到了才失败。
+    const fit = endpointFit(ADAPTERS[worker.tool]!, worker.profile.rules);
+    if (fit) throw new Problem(400, `执行者 ${worker.id}：${fit}`, "usage");
     if (
       avoid.installed
         ? !avoid.installed[worker.tool]

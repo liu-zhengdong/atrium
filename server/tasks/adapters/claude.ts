@@ -28,6 +28,11 @@ function args(input: LaunchInput) {
   return list;
 }
 
+const endpointEnv = (input: LaunchInput) =>
+  input.endpoint
+    ? { env: { ANTHROPIC_BASE_URL: input.endpoint.base_url } }
+    : {};
+
 export const claude: Adapter = {
   tool: "claude",
   executable: "claude",
@@ -42,6 +47,8 @@ export const claude: Adapter = {
   progressSignals: ["json_events", "worktree_change"],
   notes: ["工作目录由进程 cwd 决定，没有 --cwd 参数"],
   tell: "stdin",
+  // Anthropic 兼容网关（t271）：地址走 ANTHROPIC_BASE_URL，密钥由运行时注入成 ANTHROPIC_AUTH_TOKEN。
+  endpoints: { apis: ["anthropic"], keyEnv: "ANTHROPIC_AUTH_TOKEN" },
   build(input) {
     checkCommon(claude, input);
     return {
@@ -50,6 +57,7 @@ export const claude: Adapter = {
       cwd: input.cwd,
       stdin: input.promptFile,
       ...(input.live ? { input: "stream-json" as const } : {}),
+      ...endpointEnv(input),
     };
   },
   resume(input) {
@@ -64,6 +72,7 @@ export const claude: Adapter = {
       cwd: input.cwd,
       stdin: input.promptFile,
       ...(input.live ? { input: "stream-json" as const } : {}),
+      ...endpointEnv(input),
     };
   },
   sessionOf: (log) => SESSION_RE.exec(log)?.[1],

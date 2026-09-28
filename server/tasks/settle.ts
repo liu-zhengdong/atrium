@@ -19,6 +19,7 @@ import {
   type ExitDecision,
 } from "./outcome.ts";
 import { abnormalEnding, parseEvents, type AbnormalEnd } from "./json-log.ts";
+import { cliEnding } from "./adapters/cli-outcome.ts";
 import { quotaReason } from "./quota-holds.ts";
 import { detectQuotaExhausted } from "./quota-signal.ts";
 import { summarize } from "./summary.ts";
@@ -59,6 +60,18 @@ async function readLog(active: Active) {
 const jsonEvents = (active: Active) =>
   ADAPTERS[active.tool].progressSignals.includes("json_events");
 
+/** 摘要按结构化日志取：手写适配器看进展信号，通用命令行执行者看档案 output。 */
+const jsonSummary = (active: Active) =>
+  jsonEvents(active) || ADAPTERS[active.tool].outputRules?.output === "jsonl";
+
+/** 正常退出后的异常结局：通用命令行执行者按档案标记判，其余按结构化日志判。 */
+function endingOf(active: Active, log: string | undefined) {
+  if (log === undefined) return undefined;
+  const rules = ADAPTERS[active.tool].outputRules;
+  if (rules) return cliEnding(rules, log);
+  return jsonEvents(active) ? abnormalEnding(parseEvents(log)) : undefined;
+}
+
 /** codex 本轮写出的最后消息（-o）；接管的进程按任务目录里的固定位置找，早于本轮开始的是上一轮留下的。 */
 function readLastMessage(active: Active) {
   // 远程的最后消息由代理传回本机任务目录（active.resultFile）。
@@ -81,7 +94,7 @@ function readSummary(
   lastMessage: string | undefined,
 ) {
   if (lastMessage) return summarize(lastMessage);
-  return log === undefined ? "" : summarize(log, jsonEvents(active));
+  return log === undefined ? "" : summarize(log, jsonSummary(active));
 }
 
 /** 本轮的收尾摘要，取法与收尾时相同；结论补答前看一眼用（conclusion-runtime.ts）。 */
@@ -259,13 +272,12 @@ export async function settle(
     if (link)
       fields.result = [summary, `评论：${link}`].filter(Boolean).join("\n");
   }
-  const ending =
-    log !== undefined && jsonEvents(active)
-      ? abnormalEnding(parseEvents(log))
-      : undefined;
+  const ending = endingOf(active, log);
   // 长度用尽、权限被拒是执行者自己的结局，重试也一样；被停下的也不判。
   const transient =
-    active.stop || log === undefined || (ending && ending.kind !== "midway")
+    active.stop ||
+    log === undefined ||
+    (ending && ending.kind !== "midway" && ending.kind !== "error")
       ? undefined
       : detectTransient({
           exitCode: exit === "unknown" ? null : exit.code,

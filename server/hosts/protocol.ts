@@ -1,4 +1,4 @@
-import type { Tool } from "../tasks/adapters/types.ts";
+import type { LaunchEndpoint, Tool } from "../tasks/adapters/types.ts";
 import type { LocalCheck } from "../tasks/local-check.ts";
 import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
@@ -47,6 +47,8 @@ export type Assignment = {
    * 只发给上报了 `skills` 能力的代理。
    */
   skills?: SkillCopy[];
+  /** 执行者档案写的自定义模型端点（t271）：代理照本机一样交给适配器；密钥随 secrets 按变量名给。 */
+  endpoint?: LaunchEndpoint;
 };
 
 export type AgentCommand =

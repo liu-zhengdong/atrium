@@ -1,4 +1,39 @@
-import { DEFAULT_WATCHDOG, checkCommon, type Adapter } from "./types.ts";
+import {
+  DEFAULT_WATCHDOG,
+  checkCommon,
+  invalid,
+  type Adapter,
+  type LaunchEndpoint,
+} from "./types.ts";
+
+/** 自定义端点在 opencode 里的 provider 名：模型写成 `atrium/<模型>`。 */
+export const ENDPOINT_PROVIDER = "atrium";
+
+/**
+ * 自定义端点（t271）：经 OPENCODE_CONFIG_CONTENT 加一个 provider（与用户配置、技能目录合并），
+ * 密钥写成 `{env:变量名}` 由 opencode 自己读环境，值不进参数与日志抬头。
+ */
+export function opencodeEndpoint(endpoint: LaunchEndpoint, model: string) {
+  const options: Record<string, string> = { baseURL: endpoint.base_url };
+  if (endpoint.keyEnv) options.apiKey = `{env:${endpoint.keyEnv}}`;
+  const config = {
+    provider: {
+      [ENDPOINT_PROVIDER]: {
+        npm:
+          endpoint.api === "anthropic"
+            ? "@ai-sdk/anthropic"
+            : "@ai-sdk/openai-compatible",
+        name: "Atrium 自定义端点",
+        options,
+        models: { [model]: { name: model } },
+      },
+    },
+  };
+  return {
+    model: `${ENDPOINT_PROVIDER}/${model}`,
+    env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
+  };
+}
 
 /**
  * opencode run（`opencode run --help` 核对）：message 为位置参数、-m provider/model、
@@ -29,13 +64,24 @@ export const opencode: Adapter = {
     "常停在提交前，验收查 finished",
   ],
   tell: "restart",
+  endpoints: { apis: ["openai", "anthropic"] },
   build(input) {
     checkCommon(opencode, input);
+    if (input.endpoint && !input.model)
+      throw invalid("opencode 接自定义端点要写模型名（执行者标识 opencode+模型，或档案 model）");
+    const custom =
+      input.endpoint && opencodeEndpoint(input.endpoint, input.model!);
+    const model = custom ? custom.model : input.model;
     const args = ["run", "--format", "json", "--auto"];
-    if (input.model) args.push("-m", input.model);
+    if (model) args.push("-m", model);
     if (input.effort) args.push("--variant", input.effort);
     // 以 -- 结束选项，防止以 - 开头的提示词被当成参数。
     args.push("--", input.prompt);
-    return { command: opencode.executable, args, cwd: input.cwd };
+    return {
+      command: opencode.executable,
+      args,
+      cwd: input.cwd,
+      ...(custom ? { env: custom.env } : {}),
+    };
   },
 };

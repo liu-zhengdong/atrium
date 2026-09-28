@@ -7,6 +7,7 @@ import type { Risk, Trust } from "../profiles.ts";
  * 变成进程调用的纯函数。这里不拉起进程；拉起、日志、看门狗在「派活与等待」部分实现。
  */
 
+/** 内置工具（手写适配器）；档案登记的通用执行者（harness/<名字> 写 protocol）另见 index.ts 的登记表。 */
 export const TOOLS = [
   "codex",
   "opencode",
@@ -16,9 +17,11 @@ export const TOOLS = [
   "agy",
   "cursor",
 ] as const;
-export type Tool = (typeof TOOLS)[number];
-export const isTool = (value: unknown): value is Tool =>
+export type BuiltinTool = (typeof TOOLS)[number];
+export const isBuiltinTool = (value: unknown): value is BuiltinTool =>
   typeof value === "string" && (TOOLS as readonly string[]).includes(value);
+/** 执行者工具名：内置工具，或档案登记的通用执行者名（t271）。 */
+export type Tool = string;
 
 export type LaunchInput = {
   /** 提示词文件的绝对路径；走 stdin 的工具由拉起方把它接到标准输入。 */
@@ -35,6 +38,36 @@ export type LaunchInput = {
   resultFile?: string;
   /** 运行中能即时送入捎话（tell: "stdin"）时，标准输入改成保持打开的消息流。 */
   live?: boolean;
+  /** 档案写了自定义模型端点（t271）：按工具各自的方式交给它；工具不支持时报错。 */
+  endpoint?: LaunchEndpoint;
+};
+
+/**
+ * 自定义模型端点的接口种类（t271）：openai 为 OpenAI 兼容的 Chat Completions（/chat/completions），
+ * responses 为 OpenAI Responses（/responses），anthropic 为 Anthropic Messages 兼容网关。
+ */
+export const ENDPOINT_APIS = ["openai", "responses", "anthropic"] as const;
+export type EndpointApi = (typeof ENDPOINT_APIS)[number];
+
+/** 交给适配器的端点：地址、接口种类、密钥在哪个环境变量（值由运行时按凭据名注入，不经参数与日志）。 */
+export type LaunchEndpoint = {
+  base_url: string;
+  api: EndpointApi;
+  /** 密钥所在的环境变量名；端点不要密钥时为 undefined。 */
+  keyEnv?: string;
+};
+
+/** 工具怎么接自定义端点：支持哪些接口种类，密钥要放进哪个环境变量（不写就用凭据名本身）。 */
+export type EndpointSupport = {
+  apis: readonly EndpointApi[];
+  keyEnv?: string;
+};
+
+/** 通用命令行执行者按档案判结局的规则（t271）：输出格式、结束标记、出错标记（逐行匹配的正则原文）。 */
+export type OutputRules = {
+  output: "text" | "jsonl";
+  done?: string;
+  error?: string;
 };
 
 /** 按会话续上：提示词文件与正文是这次要补充的话。 */
@@ -100,6 +133,10 @@ export type Adapter = {
   notes: readonly string[];
   /** 捎话的缺省送达方式；档案 `tell` 可改成本工具支持的其他方式。 */
   tell: TellMode;
+  /** 能接的自定义模型端点；undefined 表示不支持（档案写了端点时报错说明）。 */
+  endpoints?: EndpointSupport;
+  /** 通用命令行执行者的结局规则；手写适配器按各自日志结构判（adopted-exit.ts、json-log.ts）。 */
+  outputRules?: OutputRules;
   /** 模型与思考强度搭不搭（派活前、排队前先查，免得排到时才报错）；不合法抛 400。 */
   checkModel?(model: string | undefined, effort: string | undefined): void;
   /** 档案（三层叠加后）没写时的规则缺省：新接入、还没有交付记录的工具先压低，按交付记录再在档案里升。 */
@@ -146,4 +183,22 @@ export function checkCommon(adapter: Adapter, input: LaunchInput) {
     throw invalid(`模型 id 不合法：${input.model}`);
   checkEffort(adapter, input.effort);
   if (adapter.promptVia === "arg") checkArgPrompt(adapter, input.prompt);
+  if (input.endpoint) checkEndpoint(adapter, input.endpoint.api);
+}
+
+/** 工具能不能接这种端点；不能就说清楚能接的有哪些（纯函数，档案校验与拉起共用）。 */
+export function endpointProblem(
+  adapter: Adapter,
+  api: EndpointApi,
+): string | null {
+  const apis = adapter.endpoints?.apis ?? [];
+  if (apis.includes(api)) return null;
+  if (!apis.length)
+    return `${adapter.tool} 不支持自定义模型端点；能接的内置工具：opencode（openai、anthropic）、codex（responses）、claude（anthropic），其他工具用通用命令行执行者（protocol: cli）接`;
+  return `${adapter.tool} 只能接 ${apis.join("、")} 接口的端点，这个端点是 ${api}${adapter.tool === "codex" && api === "openai" ? "（codex 已不支持 Chat Completions，OpenAI 兼容端点请用 opencode 或通用命令行执行者）" : ""}`;
+}
+
+export function checkEndpoint(adapter: Adapter, api: EndpointApi) {
+  const problem = endpointProblem(adapter, api);
+  if (problem) throw invalid(problem);
 }

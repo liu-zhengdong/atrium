@@ -271,6 +271,30 @@ wait "$agentpid" || fail "移除后代理应以 0 退出：$(cat "$work/agent.ou
 grep -q "令牌已失效" "$work/agent.out" || fail "代理没报令牌失效：$(cat "$work/agent.out")"
 out=$(json quota --clear kimi || true); has '.error.code == "not_found"'
 
+step "workers / task run / log（通用命令行执行者：sh 当假执行者）"
+cat >"$work/fakesh.md" <<'MD'
+---
+protocol: cli
+command: sh
+args: ["-c", "echo worker=$ATRIUM_WORKER task=$ATRIUM_TASK; echo DONE", "{prompt}"]
+done_match: "^DONE$"
+---
+只回 DONE。
+MD
+out=$(json workers edit harness/fakesh --file "$work/fakesh.md"); has '.ok and .next == "atrium workers harness/fakesh"'
+out=$(json workers edit harness/fakesh --set trust=super || true); has '.ok == false and .error.code == "usage"'
+out=$(json workers fakesh); has '.result.resolved.id == "fakesh" and .result.resolved.layers == ["harness/fakesh"]'
+out=$(json workers); has '(.result|map(.id)|index("fakesh")) != null'
+out=$(json task add 冒烟派活); run_id=$(jq -r .result.id <<<"$out")
+out=$(json task run "$run_id" --dry-run); has '(.result.pick.candidates|map(.id)|index("fakesh")) != null and .result.task.status == "todo"'
+out=$(json task run "$run_id" --worker fakesh --risk high || true); has '.ok == false and .error.code == "conflict"'
+out=$(json task run "$run_id" --worker fakesh); has '.result.queued and .result.position == 1 and .next == "atrium task log '"$run_id"' --follow"'
+out=$(json task wait "$run_id" --until running --timeout 20); has '.result.reached'
+out=$(json task log "$run_id" --follow); has '(.result.text|contains("worker=1 task='"$run_id"'")) and (.result.text|contains("DONE"))'
+out=$(json task show "$run_id"); has '.result.task.worker == "fakesh" and .result.task.host == "h1" and (.result.history|map(.kind)|index("launch")) != null'
+out=$(json task tell "$run_id" "补一句"); has '.ok'
+out=$(json task stop "$run_id" || true); has '.ok == false and .error.code == "conflict"'
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

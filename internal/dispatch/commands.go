@@ -1,0 +1,302 @@
+package dispatch
+
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/ledger"
+)
+
+// RunResult 是 task run 的结果：入队了给队列位置；--dry-run 给候选与推荐。
+type RunResult struct {
+	Task     ledger.Task `json:"task"`
+	Queued   bool        `json:"queued"`
+	Position int         `json:"position,omitempty"`
+	Pick     *PickView   `json:"pick,omitempty"`
+	Host     *HostChoice `json:"host,omitempty"`
+}
+
+type runBody struct {
+	Options
+	DryRun bool `json:"dry_run"`
+}
+
+// Routes 注册派活接口。
+func Routes(r *api.Router, env *app.Env) {
+	r.Handle("POST /api/tasks/{id}/run", func(q *api.Req) (any, error) {
+		id, err := q.Ref("id", "t")
+		if err != nil {
+			return nil, err
+		}
+		var in runBody
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		ctx := q.Context()
+		if in.DryRun {
+			return dryRun(q, env, id, in.Options)
+		}
+		t, err := Enqueue(ctx, env, id, in.Options, q.Actor.ID)
+		if err != nil {
+			return nil, err
+		}
+		pos, err := Position(ctx, env.DB, id)
+		if err != nil {
+			return nil, err
+		}
+		get(env).wake()
+		return RunResult{Task: t, Queued: true, Position: pos}, nil
+	})
+	r.Handle("POST /api/tasks/{id}/stop", func(q *api.Req) (any, error) {
+		id, err := q.Ref("id", "t")
+		if err != nil {
+			return nil, err
+		}
+		var in struct {
+			Why string `json:"why"`
+		}
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		return Stop(q.Context(), env, id, in.Why, q.Actor.ID)
+	})
+	r.Handle("POST /api/tasks/{id}/tell", func(q *api.Req) (any, error) {
+		id, err := q.Ref("id", "t")
+		if err != nil {
+			return nil, err
+		}
+		var in struct {
+			Text string `json:"text"`
+		}
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		return Tell(q.Context(), env, id, in.Text, q.Actor.ID)
+	})
+	r.Handle("GET /api/tasks/{id}/log", func(q *api.Req) (any, error) {
+		id, err := q.Ref("id", "t")
+		if err != nil {
+			return nil, err
+		}
+		offset := int64(-1)
+		if v := q.URL.Query().Get("offset"); v != "" {
+			if offset, err = strconv.ParseInt(v, 10, 64); err != nil || offset < 0 {
+				return nil, api.Usage("offset: 应为非负整数")
+			}
+		}
+		wait := time.Duration(0)
+		if q.URL.Query().Get("wait") == "1" {
+			wait = 25 * time.Second
+		}
+		return ReadLog(q.Context(), env, id, offset, wait)
+	})
+}
+
+func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
+	ctx := q.Context()
+	if err := o.check(); err != nil {
+		return RunResult{}, err
+	}
+	t, err := ledger.Get(ctx, env.DB, id)
+	if err != nil {
+		return RunResult{}, err
+	}
+	v, err := get(env).view(ctx, t, o.Risk, map[string]bool{})
+	if err != nil {
+		return RunResult{}, err
+	}
+	res := RunResult{Task: t, Pick: &v}
+	tool := ""
+	if v.Recommended != "" {
+		tool = strings.SplitN(strings.SplitN(v.Recommended, "+", 2)[0], ":", 2)[0]
+	}
+	if tool != "" {
+		c, err := pickHost(ctx, env, HostNeed{Tool: tool, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}, o.Host)
+		if err != nil {
+			return RunResult{}, err
+		}
+		res.Host = &c
+	}
+	return res, nil
+}
+
+// Commands 注册 task run/stop/tell/log（task 组由 ledger 声明）。
+func Commands(t *cli.Table) {
+	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "派活：进派活队列，自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
+		Flags: []cli.Flag{
+			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：档案能接、额度富余、不正忙）"},
+			{Name: "risk", Value: "级别", Help: "low（缺省）/ medium / high：执行者档案 max_risk 要够；high 合入前另派审阅"},
+			{Name: "host", Value: "hN", Help: "写死机器（缺省本机优先、空位最多）"},
+			{Name: "secret", Value: "名称", Multi: true, Help: "派活时按名称注入的凭据（从任务部门往上找）"},
+			{Name: "dry-run", Bool: true, Help: "不入队，只列候选、不能接的原因与推荐"},
+		},
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(1); err != nil {
+				return err
+			}
+			body := runBody{Options: Options{Worker: c.Str("worker"), Risk: c.Str("risk"), Host: c.Str("host"), Secrets: c.List("secret")},
+				DryRun: c.Bool("dry-run")}
+			var res RunResult
+			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/run", body, &res); err != nil {
+				return err
+			}
+			if body.DryRun {
+				return c.Done(res, dryText(res), dryNext(id, res, body.Risk))
+			}
+			return c.Done(res, fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow")
+		}})
+	t.Add(cli.Command{Path: "task stop", Args: "<tN>", Summary: "停下：撤出派活队列，或结束在跑的执行者；之后转受阻",
+		Flags: []cli.Flag{{Name: "why", Value: "文字", Help: "为什么停，记进经历"}},
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(1); err != nil {
+				return err
+			}
+			var res StopResult
+			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/stop", map[string]string{"why": c.Str("why")}, &res); err != nil {
+				return err
+			}
+			if res.Stopping {
+				return c.Done(res, "已向 "+id+" 的执行者发停止信号，退出后转受阻", "atrium task wait "+id)
+			}
+			return c.Done(res, id+" 已停："+label(res.Task), "atrium task show "+id)
+		}})
+	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "给执行者捎话：在跑的按工具即时或本轮后送到，没在跑的下次拉起时带上",
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			text, err := c.Arg(1, "<文字>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(2); err != nil {
+				return err
+			}
+			var res TellResult
+			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/tell", map[string]string{"text": text}, &res); err != nil {
+				return err
+			}
+			return c.Done(res, "已记下捎话："+res.Note, "atrium task log "+id+" --follow")
+		}})
+	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者日志（人读的：正文、工具调用、收尾）；--follow 跟到退出",
+		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"}},
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(1); err != nil {
+				return err
+			}
+			path := "/api/tasks/" + url.PathEscape(id) + "/log"
+			var ch LogChunk
+			if err := c.Call("GET", path, nil, &ch); err != nil {
+				return err
+			}
+			if !c.Bool("follow") {
+				return c.Done(ch, fmt.Sprintf("== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text), logNext(id, ch))
+			}
+			var all strings.Builder
+			all.WriteString(ch.Text)
+			if !c.JSON {
+				fmt.Fprintf(c.Env.Stdout, "== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text)
+			}
+			for ch.Running {
+				next, err := followOnce(c, path, ch.Offset)
+				if err != nil {
+					return err
+				}
+				if next.Run != ch.Run {
+					break // 换了一轮拉起：从新的一轮再看
+				}
+				ch = next
+				all.WriteString(ch.Text)
+				if !c.JSON {
+					fmt.Fprint(c.Env.Stdout, ch.Text)
+				}
+			}
+			ch.Text = all.String()
+			if c.JSON {
+				return c.Done(ch, "", logNext(id, ch))
+			}
+			return c.Done(nil, "== 执行者已退出", logNext(id, ch))
+		}})
+}
+
+// followOnce 等下一段日志；服务平滑重启时等新服务起来再接着读。
+func followOnce(c *cli.Ctx, path string, offset int64) (LogChunk, error) {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var ch LogChunk
+		err := c.Call("GET", path+"?wait=1&offset="+strconv.FormatInt(offset, 10), nil, &ch)
+		var ae *api.Error
+		if err == nil || !errors.As(err, &ae) || (ae.Code != "restarting" && ae.Code != "not_running") || time.Now().After(deadline) {
+			return ch, err
+		}
+		time.Sleep(300 * time.Millisecond)
+		c.ResetClient()
+	}
+}
+
+func logNext(id string, ch LogChunk) string {
+	if ch.Running {
+		return "atrium task log " + id + " --follow"
+	}
+	return "atrium task show " + id
+}
+
+func dryText(r RunResult) string {
+	var b strings.Builder
+	v := r.Pick
+	fmt.Fprintf(&b, "%s（risk %s）\n", r.Task.ID, v.Risk)
+	for _, c := range v.Candidates {
+		mark := "  "
+		if c.ID == v.Recommended {
+			mark = "→ "
+		}
+		extra := ""
+		if c.Spare != nil {
+			extra = fmt.Sprintf("  富余 %.1f", *c.Spare)
+		}
+		if c.Busy {
+			extra += "  正忙"
+		}
+		if c.Eligible {
+			fmt.Fprintf(&b, "%s%d. %s  trust=%s  max_risk=%s%s\n", mark, c.Rank, c.ID, c.Trust, c.MaxRisk, extra)
+		} else {
+			fmt.Fprintf(&b, "%s×  %s：%s\n", mark, c.ID, strings.Join(c.Refusals, "；"))
+		}
+	}
+	fmt.Fprintf(&b, "推荐：%s\n", v.Reason)
+	if r.Host != nil {
+		fmt.Fprintf(&b, "机器：%s %s（%s）\n", r.Host.Kind, r.Host.Host, r.Host.Reason)
+	}
+	return b.String()
+}
+
+func dryNext(id string, r RunResult, risk string) string {
+	if r.Pick.Recommended == "" {
+		return "atrium workers"
+	}
+	next := "atrium task run " + id + " --worker " + r.Pick.Recommended
+	if risk != "" {
+		next += " --risk " + risk
+	}
+	return next
+}

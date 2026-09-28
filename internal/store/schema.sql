@@ -126,13 +126,14 @@ CREATE TABLE IF NOT EXISTS task_events (
 );
 CREATE INDEX IF NOT EXISTS task_events_task ON task_events (task, id);
 
--- 派活队列：按优先级（数小先）、入队先后取。
+-- 派活队列：task run 的入队选项（opts：执行者、风险、机器、凭据名，JSON）。队列本身是状态 queued 的任务，
+-- 按任务优先级、入队先后取；交回的任务没有这一行，沿用上次拉起的执行者。
 CREATE TABLE IF NOT EXISTS queue (
   task        TEXT PRIMARY KEY REFERENCES tasks (id),
-  priority    INTEGER NOT NULL,
-  enqueued_at INTEGER NOT NULL
+  enqueued_at INTEGER NOT NULL,
+  opts        TEXT NOT NULL,
+  by          TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS queue_order ON queue (priority, enqueued_at);
 
 -- 周期任务：到点在部门下生成一件普通任务（kind：task patrol research）。
 -- every_ms 周期；at_minute 本机钟点（当天第几分钟，只给整天的周期）；skips 累计跳过轮数，last_note 最近一笔。

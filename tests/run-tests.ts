@@ -27,6 +27,12 @@ const concurrency = process.env.ATRIUM_TEST_CONCURRENCY?.trim() ?? "";
 const limit = /^[1-9][0-9]{0,5}$/.test(concurrency)
   ? [`--test-concurrency=${concurrency}`]
   : [];
+// 每个用例的时限：等一个永远不来的事件、没关掉的服务或子进程会让用例一直挂着；超时判为失败并带用例名，
+// 不再让整套测试卡住。ATRIUM_TEST_TIMEOUT_MS 可改（毫秒），缺省 2 分钟。
+const timeoutMs = process.env.ATRIUM_TEST_TIMEOUT_MS?.trim() ?? "";
+const timeout = [
+  `--test-timeout=${/^[1-9][0-9]{0,7}$/.test(timeoutMs) ? timeoutMs : 120000}`,
+];
 // 直接用 node 跑 tsx 的命令行：Windows 上 node_modules/.bin/tsx 是 .cmd，不能直接拉起。
 const tsx = fileURLToPath(import.meta.resolve("tsx/cli"));
 const child = spawn(
@@ -35,6 +41,7 @@ const child = spawn(
     tsx,
     "--test",
     ...limit,
+    ...timeout,
     ...args.passthrough,
     ...selected.map((file) => join(root, file)),
   ],

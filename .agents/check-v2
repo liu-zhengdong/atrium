@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# v2（Go）快检查：格式、vet（含 Windows、Linux 交叉）、构建、全部测试、--help 冒烟。
+# 单包测试超过 30 秒要在 PR 里说明。端到端冒烟另跑 scripts/v2-smoke.sh。
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+unformatted=$(gofmt -l cmd internal)
+if [ -n "$unformatted" ]; then
+  echo "gofmt 未格式化：" >&2
+  echo "$unformatted" >&2
+  exit 1
+fi
+go vet ./...
+GOOS=windows go vet ./...
+GOOS=linux go vet ./...
+go build ./...
+go test ./...
+bin=$(mktemp -d "${TMPDIR:-/tmp}/atrium-v2-check.XXXXXX")
+trap 'rm -rf "$bin"' EXIT
+go build -o "$bin/atrium" ./cmd/atrium
+"$bin/atrium" --help >/dev/null
+echo "快检查通过"

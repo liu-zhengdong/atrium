@@ -1,0 +1,244 @@
+-- Atrium v2 全部表。开发期不做迁移：改表就改这里，删掉开发库重建。
+-- 时间一律 Unix 毫秒；短号（t1、o1……）由 ids 表发，全局持久、不复用。
+
+CREATE TABLE IF NOT EXISTS ids (
+  prefix TEXT PRIMARY KEY,
+  last   INTEGER NOT NULL
+);
+
+-- 暂停范围：all、部门 oN、机器 hN。
+CREATE TABLE IF NOT EXISTS pauses (
+  scope TEXT PRIMARY KEY,
+  by    TEXT NOT NULL,
+  at    INTEGER NOT NULL
+);
+
+-- 身份：用户 u1、秘书 secretary、负责人 aN。workers 是负责人的执行者组合（逗号分隔档案名）。
+CREATE TABLE IF NOT EXISTS identities (
+  id         TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('user', 'secretary', 'leader')),
+  name       TEXT NOT NULL,
+  workers    TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO identities (id, kind, name, created_at) VALUES ('u1', 'user', '用户', 0);
+INSERT OR IGNORE INTO identities (id, kind, name, created_at) VALUES ('secretary', 'secretary', '秘书', 0);
+
+-- 备忘：每个身份一份，覆盖写。
+CREATE TABLE IF NOT EXISTS memos (
+  identity   TEXT PRIMARY KEY REFERENCES identities (id),
+  body       TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- 部门：树；what/uses/now/next 是给人看的介绍（是什么、怎么用、现状、下一步）。
+CREATE TABLE IF NOT EXISTS departments (
+  id         TEXT PRIMARY KEY,
+  parent     TEXT REFERENCES departments (id),
+  name       TEXT NOT NULL,
+  what       TEXT NOT NULL DEFAULT '',
+  uses       TEXT NOT NULL DEFAULT '',
+  now        TEXT NOT NULL DEFAULT '',
+  next       TEXT NOT NULL DEFAULT '',
+  leader     TEXT REFERENCES identities (id),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS departments_parent ON departments (parent);
+
+CREATE TABLE IF NOT EXISTS department_repos (
+  department TEXT NOT NULL REFERENCES departments (id),
+  repo       TEXT NOT NULL,
+  PRIMARY KEY (department, repo)
+);
+
+-- 要点：一句规矩；同部门按 pos（1 起）排序，靠前的优先。
+CREATE TABLE IF NOT EXISTS points (
+  id         TEXT PRIMARY KEY,
+  department TEXT NOT NULL REFERENCES departments (id),
+  pos        INTEGER NOT NULL,
+  text       TEXT NOT NULL,
+  why        TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL,
+  check_ref  TEXT NOT NULL DEFAULT '',
+  updated_by TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS points_department ON points (department, pos);
+
+-- 技能：按名字，每次修改追加一版（rev 递增），读取取最大 rev。
+CREATE TABLE IF NOT EXISTS skills (
+  name       TEXT NOT NULL,
+  rev        INTEGER NOT NULL,
+  body       TEXT NOT NULL,
+  workers    TEXT NOT NULL DEFAULT '',
+  checks     TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (name, rev)
+);
+
+-- 任务：只留必要列；其余事实查 task_events。
+-- status：todo queued running done failed blocked cancelled
+-- stage：'' gate review merge_queue merged released（交付阶段）
+-- priority：urgent fix normal idle
+CREATE TABLE IF NOT EXISTS tasks (
+  id          TEXT PRIMARY KEY,
+  parent      TEXT REFERENCES tasks (id),
+  department  TEXT REFERENCES departments (id),
+  skill       TEXT,
+  title       TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL,
+  stage       TEXT NOT NULL DEFAULT '',
+  priority    TEXT NOT NULL DEFAULT 'normal',
+  repo        TEXT NOT NULL DEFAULT '',
+  worker      TEXT NOT NULL DEFAULT '',
+  host        TEXT NOT NULL DEFAULT '',
+  pr          TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent);
+CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status);
+CREATE INDEX IF NOT EXISTS tasks_department ON tasks (department);
+
+CREATE TABLE IF NOT EXISTS task_deps (
+  task       TEXT NOT NULL REFERENCES tasks (id),
+  depends_on TEXT NOT NULL REFERENCES tasks (id),
+  PRIMARY KEY (task, depends_on)
+);
+CREATE INDEX IF NOT EXISTS task_deps_on ON task_deps (depends_on);
+
+-- 任务的全部经历：状态变化、备注、关卡结论、交回……body 是 JSON 或纯文本。
+CREATE TABLE IF NOT EXISTS task_events (
+  id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  task  TEXT NOT NULL REFERENCES tasks (id),
+  at    INTEGER NOT NULL,
+  kind  TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  body  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS task_events_task ON task_events (task, id);
+
+-- 派活队列：按优先级（数小先）、入队先后取。
+CREATE TABLE IF NOT EXISTS queue (
+  task        TEXT PRIMARY KEY REFERENCES tasks (id),
+  priority    INTEGER NOT NULL,
+  enqueued_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS queue_order ON queue (priority, enqueued_at);
+
+-- 周期任务：到点在部门下生成一件普通任务。
+CREATE TABLE IF NOT EXISTS schedules (
+  id          TEXT PRIMARY KEY,
+  department  TEXT NOT NULL REFERENCES departments (id),
+  kind        TEXT NOT NULL,
+  every       TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT '',
+  last_run_at INTEGER,
+  last_task   TEXT REFERENCES tasks (id),
+  created_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+
+-- 选项单：调研后提给用户的 3–5 个方向。
+CREATE TABLE IF NOT EXISTS choices (
+  id         TEXT PRIMARY KEY,
+  department TEXT NOT NULL REFERENCES departments (id),
+  task       TEXT REFERENCES tasks (id),
+  title      TEXT NOT NULL,
+  status     TEXT NOT NULL CHECK (status IN ('open', 'picked', 'passed')),
+  note       TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS choice_options (
+  choice TEXT NOT NULL REFERENCES choices (id),
+  pos    INTEGER NOT NULL,
+  title  TEXT NOT NULL,
+  gain   TEXT NOT NULL,
+  cost   TEXT NOT NULL,
+  picked INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (choice, pos)
+);
+
+-- 决定：只追加；推翻写新的一条并指向旧的（supersedes）。
+CREATE TABLE IF NOT EXISTS decisions (
+  id         TEXT PRIMARY KEY,
+  department TEXT NOT NULL REFERENCES departments (id),
+  text       TEXT NOT NULL,
+  why        TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL,
+  supersedes TEXT REFERENCES decisions (id),
+  created_at INTEGER NOT NULL
+);
+
+-- 资料：内容存数据目录文件，这里记元数据；每改一次追加一版。
+CREATE TABLE IF NOT EXISTS materials (
+  id          TEXT NOT NULL,
+  rev         INTEGER NOT NULL,
+  department  TEXT NOT NULL REFERENCES departments (id),
+  kind        TEXT NOT NULL CHECK (kind IN ('overview', 'detail')),
+  title       TEXT NOT NULL,
+  file        TEXT NOT NULL,
+  size        INTEGER NOT NULL,
+  archived_at INTEGER,
+  created_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (id, rev)
+);
+
+-- 机器：本机 h1，远程 hN；token_hash 是代理令牌的哈希。
+CREATE TABLE IF NOT EXISTS hosts (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('local', 'remote')),
+  token_hash   TEXT NOT NULL DEFAULT '',
+  slots        INTEGER NOT NULL DEFAULT 1,
+  last_seen_at INTEGER,
+  created_at   INTEGER NOT NULL
+);
+
+-- 凭据：只存名称，值在数据目录凭据区文件里。
+CREATE TABLE IF NOT EXISTS secrets (
+  department   TEXT NOT NULL REFERENCES departments (id),
+  name         TEXT NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  last_used_at INTEGER,
+  PRIMARY KEY (department, name)
+);
+
+-- 执行者档案：spec 是 YAML（工具、模型、强度、能接什么活、checks、trust……），由 workers 包解析。
+CREATE TABLE IF NOT EXISTS worker_profiles (
+  name       TEXT PRIMARY KEY,
+  spec       TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- 待投递事件：订阅者 wait 取、ack 确认；租约内不重投。target 是投递对象（aN 或 secretary）。
+CREATE TABLE IF NOT EXISTS events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           INTEGER NOT NULL,
+  kind         TEXT NOT NULL,
+  task         TEXT REFERENCES tasks (id),
+  department   TEXT REFERENCES departments (id),
+  target       TEXT NOT NULL DEFAULT '',
+  body         TEXT NOT NULL DEFAULT '',
+  leased_until INTEGER,
+  acked_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS events_pending ON events (target, acked_at, id);
+
+-- 额度读数缓存：每个账号一行。
+CREATE TABLE IF NOT EXISTS quota_cache (
+  account TEXT PRIMARY KEY,
+  tool    TEXT NOT NULL,
+  body    TEXT NOT NULL,
+  read_at INTEGER NOT NULL
+);

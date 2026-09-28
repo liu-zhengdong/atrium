@@ -4,7 +4,7 @@ import { all, taskRef, type TaskRow } from "../tasks/ledger-model.ts";
 import { noteTask } from "../tasks/ledger.ts";
 import { holderFacts } from "../tasks/holder-facts.ts";
 import { holderOf } from "../tasks/holder.ts";
-import { urgentInMergeFlow } from "../tasks/urgent-ledger.ts";
+import { urgentFlowStages } from "../tasks/urgent-ledger.ts";
 import { registeredLeaders } from "./model.ts";
 import { escalationDetail } from "./route.ts";
 import { upstreamRoute } from "./subscriber.ts";
@@ -29,7 +29,7 @@ export function patrolHanging(
   const result = { nudged: [] as string[], escalated: [] as string[] };
   if (!(options.afterMs > 0)) return result;
   const registered = registeredLeaders(db);
-  const urgentFlow = urgentInMergeFlow(db);
+  const urgentFlow = urgentFlowStages(db, options.now);
   const afterMinutes = Math.round(options.afterMs / 60_000);
   let after = 0;
   for (;;) {

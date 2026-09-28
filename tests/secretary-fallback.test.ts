@@ -212,7 +212,7 @@ test("无界面恢复会话处理事件；界面持锁时不另起；失败不�
   const calls: string[] = [];
   let success = false;
   const fallback = new SecretaryFallback(inbox, data, {
-    batchMs: 10,
+    graceMs: 10,
     runTurn: async (session, prompt) => {
       calls.push(`${session.tool}:${prompt}`);
       return success;
@@ -287,7 +287,12 @@ test("服务真实拉起一次性 codex 恢复进程并登记送达", async () =
       sessionId: "019c6e27-e55b-73d1-87d8-4e01f1f75043",
       cwd: data,
     });
-    app = await createApp({ data, auth: false, tasks: { batchMs: 10 } });
+    app = await createApp({
+      data,
+      auth: false,
+      tasks: { batchMs: 10 },
+      secretary: { graceMs: 10 },
+    });
     app.taskRunner.inbox.publish({
       subscriber: "secretary",
       source: "runner",

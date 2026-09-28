@@ -155,6 +155,7 @@ import { crowded } from "../hosts/state.ts";
 import { hasEvent } from "./ledger-model.ts";
 import type { Active } from "./active.ts";
 import { registerDelivery } from "./register-delivery-runtime.ts";
+import { secretaryView, UNATTENDED_MS } from "./secretary-watch.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -251,6 +252,10 @@ export class TaskRunner {
   readonly lane: UrgentLane;
   /** 紧急任务等上线时，上次催上线观察的时刻。 */
   private urgentOnlineAt = 0;
+  /** 秘书后台兜底的状态（t242，app.ts 接上）：top 与状态栏据此说秘书在不在听。 */
+  secretaryWatch:
+    | (() => { graceMs: number; waking: boolean; unreachable: string | null })
+    | undefined;
   /** 额度多主机合并的来源（quota-source 经 hosts/quota.ts 取）。 */
   private readonly quotaSource = () => this.hostQuota();
   /** 任务仓库路径 → owner/name（挑远程主机时对仓库白名单）；解析不出为 null。 */
@@ -1927,6 +1932,23 @@ export class TaskRunner {
     return { ...chunk, running: this.pending(id, task), status: task.status };
   }
 
+  /** 秘书在不在听、未处理几件、后台是否在叫醒或叫不起来（t242）。 */
+  private secretaryState(now: number) {
+    const events = this.inbox.pending(DEFAULT_OWNER);
+    const watch = this.secretaryWatch?.();
+    return secretaryView({
+      now,
+      presence: this.inbox.presence(DEFAULT_OWNER),
+      pending: events.length,
+      oldest: events.length
+        ? Math.min(...events.map((event) => event.updated_at))
+        : null,
+      graceMs: watch?.graceMs ?? UNATTENDED_MS,
+      waking: watch?.waking ?? false,
+      unreachable: watch?.unreachable ?? null,
+    });
+  }
+
   /**
    * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻与刚结束的，
    * 每行带日志尾部解析出的最近一个动作与日志最后写入时刻。只读，日志最多读尾部固定字节数。
@@ -1963,6 +1985,8 @@ export class TaskRunner {
         ...countRows(rows),
         events: this.inbox.countPending(who),
       },
+      // 秘书在不在听（t242）：看秘书的收件箱时给。
+      ...(who === DEFAULT_OWNER ? { secretary: this.secretaryState(now) } : {}),
       ...(leaders.length ? { leaders } : {}),
       host: this.hostView(),
       // 紧急通道（t215）：进行中的紧急任务与「太多就等于没有紧急」的提示；没有时不给。

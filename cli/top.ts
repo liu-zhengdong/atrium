@@ -12,6 +12,10 @@ import type { ConcernState } from "../server/tasks/concern-gate.ts";
 import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
 import type { HostView } from "../server/tasks/host-load.ts";
+import {
+  secretaryText,
+  type SecretaryView,
+} from "../server/tasks/secretary-watch.ts";
 import type { Holder } from "../server/tasks/holder.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
@@ -128,6 +132,8 @@ export type Snapshot = {
   truncated: boolean;
   /** 本机负载与限额（#358）；旧版服务没有这个字段。 */
   host?: HostView;
+  /** 秘书在不在听（t242）：看秘书的收件箱时给；旧版服务没有。 */
+  secretary?: SecretaryView;
   /** 接入的远程主机（#358 第 1 步）；没有远程主机时不给。 */
   hosts?: {
     ref: string;
@@ -441,7 +447,10 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       : "") +
     ` · 处理中 ${snapshot.counts.processing}` +
     ` · 卡住 ${snapshot.counts.blocked}` +
-    ` · 未处理事件 ${snapshot.counts.events}`;
+    // 秘书在不在听（t242）；旧版服务没有这个字段，照旧只说未处理事件。
+    (snapshot.secretary
+      ? ` · ${secretaryText(snapshot.secretary).text}`
+      : ` · 未处理事件 ${snapshot.counts.events}`);
   const headRoom = Math.max(10, frame.width - width(clock) - 1);
   const choice = snapshot.choices
     ? pendingLine(snapshot.choices.list, snapshot.choices.open)

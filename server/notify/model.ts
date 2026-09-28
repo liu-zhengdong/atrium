@@ -8,12 +8,12 @@ import { urgentAlert, type UrgentAlert } from "../tasks/urgent.ts";
  * 设置怎么校验。全是纯函数、穷举测试；凭据文件在 store.ts，发请求在 telegram.ts，调度在 runtime.ts。
  *
  * 只推三类事：选项单等你拍板、上交到用户这层的卡住／越界（含会审要用户拍板）、里程碑上线；
- * 另加紧急任务要处理的阶段（上线、卡住、止损失败，t219）；紧急的也照常攒批、守免打扰，不插队。
+ * 另加紧急任务要处理的阶段（上线、卡住、止损失败，t219），以及秘书没在听、后台又叫不起来时要处理的事没人管（t242）；紧急的也照常攒批、守免打扰，不插队。
  * 推送只放标题和短号，不放正文（上交说明、选项内容都不带）。
  */
 
 export type PushKind =
-  "choice" | "stuck" | "beyond" | "council" | "shipped" | UrgentAlert;
+  "choice" | "stuck" | "beyond" | "council" | "shipped" | "away" | UrgentAlert;
 
 export const PUSH_LABEL: Record<PushKind, string> = {
   choice: "等你拍板",
@@ -24,13 +24,14 @@ export const PUSH_LABEL: Record<PushKind, string> = {
   urgent_online: "紧急任务上线",
   urgent_stuck: "紧急任务卡住",
   urgent_stopgap: "紧急止损没做成",
+  away: "秘书没在听",
 };
 
 export type Push = {
   /** 去重键：同一条事件只推一次。 */
   key: string;
   kind: PushKind;
-  /** 短号：c2、t171、a3。 */
+  /** 短号：c2、t171、a3；秘书没在听不挂短号，为空串。 */
   ref: string;
   /** 标题（已压成一行、截短）；没有为空串。 */
   title: string;
@@ -102,14 +103,32 @@ export function pushOf(
   return titled(kind, from, "");
 }
 
+/** 秘书没在听、后台叫不起来（t242）：只说几件没人管，不带事件内容。 */
+export function awayPush(input: {
+  key: string;
+  pending: number;
+  reason: string;
+}): Push {
+  return {
+    key: input.key,
+    kind: "away",
+    ref: "",
+    title: oneLine(
+      `${input.pending} 件要处理的事没人管，${input.reason}`,
+      TITLE_MAX * 2,
+    ),
+  };
+}
+
 /** 一条消息最多列几件，余下的写「还有 N 件」。 */
 export const MESSAGE_ITEMS = 15;
 
 /** 攒成一条消息：第一行说几件事，每件一行「【类别】短号 标题」。 */
 export function messageText(items: readonly Omit<Push, "key">[]): string {
   const shown = items.slice(0, MESSAGE_ITEMS);
-  const lines = shown.map((item) =>
-    `【${PUSH_LABEL[item.kind]}】${item.ref}${item.title ? ` ${item.title}` : ""}`.trimEnd(),
+  const lines = shown.map(
+    (item) =>
+      `【${PUSH_LABEL[item.kind]}】${[item.ref, item.title].filter(Boolean).join(" ")}`,
   );
   const rest = items.length - shown.length;
   return [

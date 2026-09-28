@@ -892,8 +892,11 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.match(text, /意见：\n- 秘书：先做看板/);
 
   // 秘书与 leader 那条都被同一去重键改成知会，不再叫醒。
+  // 机器慢时 a2 可能在拍板前就被唤醒并确认了 choice_review，知会另起一行，两种都对。
   assert.deepEqual(
-    inboxOf(x.db, "choice:c1").map((e) => [e.subscriber, e.kind, e.level]),
+    inboxOf(x.db, "choice:c1")
+      .filter((e) => !(e.kind === "choice_review" && e.acked_at !== null))
+      .map((e) => [e.subscriber, e.kind, e.level]),
     [
       ["secretary", "choice_decided", "info"],
       ["a2", "choice_decided", "info"],
@@ -1002,7 +1005,13 @@ test("拍板权：leader 能提、能写意见，下放给自己的才能拍，�
   let checked = false;
   let failure: unknown;
   x.set(async (spec) => {
-    if (checked || failure || !spec.env.ATRIUM_LEADER_TOKEN) return "ok";
+    if (
+      checked ||
+      failure ||
+      spec.env.ATRIUM_LEADER !== "a1" ||
+      !spec.env.ATRIUM_LEADER_TOKEN
+    )
+      return "ok";
     try {
       const token = { authorization: `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}` };
       const upper = await x.call(

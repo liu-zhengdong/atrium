@@ -146,7 +146,8 @@ test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关�
     encoding: "utf8",
   });
   assert.match(prompt, /# 任务：Add done file/);
-  assert.match(prompt, /假 kimi 的叮嘱/);
+  // 执行者档案只写工具与模型的事实，正文不再附进提示词。
+  assert.doesNotMatch(prompt, /假 kimi 的叮嘱/);
   assert.match(prompt, /停在 PR/);
   assert.match(prompt, /4310/);
   const seen = execFileSync("cat", [join(fx.root, "env-seen.txt")], {

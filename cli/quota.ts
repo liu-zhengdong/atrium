@@ -73,12 +73,12 @@ export function formatQuotaTable(
   return `${body}${tail}`;
 }
 
-/** 保留份额一行：来自哪份章程；根章程没写时说明用的缺省与怎么改。 */
+/** 保留份额一行：你设过的，或缺省与怎么改。 */
 export function reserveLine(reserve: QuotaReserve | undefined): string | null {
   if (!reserve) return null;
   return reserve.set_by
-    ? `给你留的份额：每个账号至少 ${reserve.percent}%（${reserve.set_by} 章程）`
-    : `给你留的份额：每个账号至少 ${reserve.percent}%（缺省；在根章程 boundaries 里写 quota_reserve_percent 可改）`;
+    ? `给你留的份额：每个账号至少 ${reserve.percent}%（atrium org limits 可改）`
+    : `给你留的份额：每个账号至少 ${reserve.percent}%（缺省；atrium org limits --quota-reserve N 可改）`;
 }
 
 const quota: Command = {

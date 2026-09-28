@@ -19,15 +19,12 @@ import { noteTask, type Task } from "./ledger.ts";
 import {
   DEFAULT_RULES,
   buildPrompt,
-  loadRoleDocs,
+  loadRootDoc,
   worktreePlan,
   type PaceEntry,
 } from "./prepare.ts";
 import type { ResolvedWorker, Risk } from "./profiles.ts";
-import { nodeDoc, taskNode } from "../org/task-node.ts";
-import { charterBrief, withContext } from "../org/brief.ts";
 import { taskContext } from "../map/context.ts";
-import { alsoOf } from "./also.ts";
 import { getJobRole } from "./job-roles.ts";
 import { skillsForTask, type TaskSkills } from "../skills/task-skills.ts";
 import { mountSkills } from "../skills/mount.ts";
@@ -265,11 +262,6 @@ export async function prepareRun(
     cwd = join(dir, "work");
     mkdirSync(cwd, { recursive: true });
   }
-  const node = options.db ? taskNode(options.db, task) : undefined;
-  const origin =
-    options.db && task.origin_node_id !== null
-      ? nodeDoc(options.db, task.origin_node_id)
-      : undefined;
   const job =
     options.db && task.job_id
       ? getJobRole(options.db, `r${task.job_id}`)
@@ -278,9 +270,9 @@ export async function prepareRun(
   // 体验巡检只附场景与硬规矩，不附规矩、技能、组织说明。
   const bare = !!patrol;
   // 远程的工作树不在本机：说明文件读本机仓库的。
-  const docs = task.repo
-    ? await loadRoleDocs(site ? task.repo : (worktree ?? task.repo), node)
-    : { roleDoc: node?.body ?? "", rootDoc: "" };
+  const rootDoc = task.repo
+    ? await loadRootDoc(site ? task.repo : (worktree ?? task.repo))
+    : "";
   // 组织技能：节点链上绑定的 ∪ 档案指定的，拷进任务目录，只对这次运行生效。
   const picked =
     options.db && !bare
@@ -338,34 +330,17 @@ export async function prepareRun(
       options.db && !patrol
         ? secretSection(taskSecretList(options.db, task))
         : undefined,
-    roleDoc: [
-      patrol
-        ? "# 体验巡检\n\n把自己当用户使用 Atrium，找核心体验上的毛病。不读代码、不改代码、不查凭据或权限边界。发现的问题建成修复任务，交这一块的 leader 排。"
-        : "",
-      job
-        ? `# 干活的专员：${job.name}\n\n${job.body}\n\n交付要求：${job.checks.join("、") || "按任务与档案要求"}`
-        : "",
-      bare ? "" : docs.roleDoc,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-    charter:
-      options.db && !bare
-        ? withContext(
-            node ? charterBrief(options.db, node.id) : undefined,
-            taskContext(
-              options.db,
-              task.part_id ?? node?.id ?? null,
-              alsoOf(options.db, task.id),
-            ),
-          )
+    role: patrol
+      ? "体验巡检：把自己当用户使用 Atrium，找核心体验上的毛病。不读代码、不改代码、不查凭据或权限边界。发现的问题建成修复任务，交这一块的 leader 排。"
+      : job
+        ? `干活的专员：${job.name}——${job.description}${job.checks.length ? `；交付关卡：${job.checks.join("、")}` : ""}`
         : undefined,
-    originDoc: origin
-      ? `本任务由 ${origin.ref} ${origin.name} 投来。\n\n${origin.body}`
-      : undefined,
+    points:
+      options.db && !bare
+        ? taskContext(options.db, task.part_id ?? task.node_id)
+        : undefined,
     skills: bare ? undefined : carry ? SKILLS_SLOT : mount?.section,
-    rootDoc: bare ? undefined : docs.rootDoc,
-    profileBody: bare ? undefined : worker.profile.body,
+    rootDoc: bare ? undefined : rootDoc,
     rules: patrol
       ? [
           "直接使用当前服务与真实数据。只看 atrium map / org show 的人话字段、atrium --help、atrium guide 和命令回执；不读仓库代码。只运行与本轮场景有关的命令；有副作用的操作只按场景实际需要执行。",

@@ -6,18 +6,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc } from "../server/org/write.ts";
+import { addNode } from "../server/org/write.ts";
 import { show, tree } from "../server/org/read.ts";
-import { taskNode } from "../server/org/task-node.ts";
-import { BRIEF_MAX, charterBrief, formatBrief } from "../server/org/brief.ts";
+import { formatContext } from "../server/map/context.ts";
+import { createJobRole } from "../server/tasks/job-roles.ts";
 import {
   createTask,
   ensureTaskTables,
   getTask,
 } from "../server/tasks/ledger.ts";
-import { buildPrompt } from "../server/tasks/prepare.ts";
 import { prepareRun } from "../server/tasks/workspace.ts";
-import { formatCounts, formatDoc } from "../cli/org.ts";
+import { formatCounts } from "../cli/org.ts";
 import { removeTemp } from "./temp-dir.ts";
 
 const ATRIUM = "/repo/atrium";
@@ -39,7 +38,10 @@ function setup() {
     repos: [ATRIUM],
   });
   node(db, { parent: "o2", slug: "runtime", kind: "module", name: "runtime" });
-  node(db, { parent: "o2", slug: "安全", kind: "concern", name: "安全" });
+  // 旧库里的关注点（已下线，不能再建）：直接写进表。
+  db.prepare(
+    "INSERT INTO org_nodes(parent_id,kind,slug,name,created_at,updated_at) VALUES(2,'concern','安全','安全',1,1)",
+  ).run();
   node(db, {
     parent: "o1",
     slug: "openquota",
@@ -51,126 +53,76 @@ function setup() {
   return db;
 }
 
-test("章程要点：边界完整附上，超长先截父节点目标再截本节点目标，整段不超过 2000 字", () => {
-  const boundaries = Array.from({ length: 17 }, (_, i) => ({
-    summary: `${i}`.padEnd(80, "边"),
-    param:
-      i === 0 ? { key: "quota_reserve_percent" as const, value: 20 } : null,
-  }));
-  const input = {
-    chain: ["组织", "Atrium", "runtime"],
-    node: { ref: "o3", name: "runtime", goal: "本".repeat(300) },
-    parent: { name: "Atrium", goal: "父".repeat(300) },
-    boundaries,
-  };
-  const brief = formatBrief(input);
-  const size = Array.from(brief.heading + brief.text).length;
-  assert.equal(brief.heading, "章程要点（组织 → Atrium → runtime）");
-  assert.ok(size <= BRIEF_MAX, `${size}`);
-  for (const b of boundaries) assert.ok(brief.text.includes(b.summary));
-  assert.ok(brief.text.includes("：至少 20%"));
-  assert.ok(brief.text.includes("…（全文：atrium org show o3）"));
-  assert.ok(
-    brief.text.includes("本".repeat(300)),
-    "只截父节点就够时本节点目标完整",
-  );
-  // 写入校验允许的上限（链上 summary 合计 1200 字）加两段 300 字目标仍放得下，不截
-  const full = formatBrief({ ...input, boundaries: boundaries.slice(0, 15) });
-  assert.ok(Array.from(full.heading + full.text).length <= BRIEF_MAX);
-  assert.ok(full.text.includes("父".repeat(300)));
-  const short = formatBrief({ ...input, boundaries: boundaries.slice(0, 2) });
-  assert.ok(short.text.includes("父".repeat(300)), "不超长不截");
-  assert.ok(short.text.startsWith("目标：Atrium——父"));
-  // 边界已占满时两段目标都会被截掉
-  const many = Array.from({ length: 22 }, () => ({
-    summary: "边".repeat(80),
-    param: null,
-  }));
-  const tight = formatBrief({ ...input, boundaries: many });
-  assert.ok(Array.from(tight.heading + tight.text).length <= BRIEF_MAX);
-  assert.ok(!tight.text.includes("父父"));
-  assert.equal(tight.text.match(/边{80}/g)?.length, 22);
-  const none = formatBrief({
-    chain: ["组织"],
-    node: { ref: "o1", name: "组织", goal: "" },
-    boundaries: [],
-  });
-  assert.ok(!none.text.includes("目标"));
-  assert.ok(none.text.includes("硬边界：无"));
-});
-
-test("派活提示词：节点任务附岗位正文、章程要点与投任务的专员说明", async () => {
-  const db = setup();
-  editDoc(
-    db,
-    "o1",
-    "charter",
+test("规矩段：根到本部分按层、同层按排序；有字数上限，放不下先去掉「为什么」再从末尾截", () => {
+  const points = [
     {
-      fields: { goal: "组织目标" },
-      body: "",
-      boundaries: [
-        { id: "no-spend", summary: "不花钱" },
+      name: "组织",
+      points: [
+        { text: "不花钱", why: "底线", check: null },
+        { text: "先求简洁", why: "用户原则第一条", check: null },
+      ],
+    },
+    { name: "Atrium", points: [] },
+    {
+      name: "runtime",
+      points: [
         {
-          id: "quota-reserve",
-          summary: "账号额度留给用户",
-          param: { quota_reserve_percent: 20 },
+          text: "重启不丢执行者",
+          why: "升级随时可做",
+          check: "tests/recovery.test.ts",
         },
       ],
-      reason: "根",
-    } as never,
-    "u1",
-  );
-  editDoc(
-    db,
-    "o2",
-    "charter",
-    { fields: { goal: "运行底座" }, body: "", reason: "目标" } as never,
-    "u1",
-  );
-  editDoc(
-    db,
-    "o3",
-    "charter",
-    {
-      fields: { goal: "派活不用人盯" },
-      body: "# runtime 岗位正文",
-      boundaries: [{ id: "no-stash", summary: "不用 git stash" }],
-      reason: "正文",
-    } as never,
-    "u1",
-  );
-  editDoc(
-    db,
-    "o4",
-    "charter",
-    { fields: {}, body: "安全专员：查凭据", reason: "正文" } as never,
-    "u1",
-  );
-  const brief = charterBrief(db, 3)!;
-  assert.equal(brief.heading, "章程要点（组织 → Atrium → runtime）");
+    },
+  ];
+  const full = formatContext({ points, skills: ["code-structure"] }, "o3");
+  assert.equal(full.truncated, false);
   assert.equal(
-    brief.text,
+    full.text,
     [
-      "目标：Atrium——运行底座；runtime——派活不用人盯",
-      "硬边界（任何情况都不能放开）：",
-      "- 不花钱",
-      "- 账号额度留给用户：至少 20%",
-      "- 不用 git stash",
-      "预算：本任务记在 runtime（o3）账上。",
-      "碰到边界或预算不够：停下，在结果里写「需要上层决定：……」，不要绕过。",
+      "规矩（从上到下越靠前越重要，冲突时靠前的优先）：",
+      "[组织]",
+      "1. 不花钱（底线）",
+      "2. 先求简洁（用户原则第一条）",
+      "[runtime]",
+      "1. 重启不丢执行者（升级随时可做）（检查：tests/recovery.test.ts）",
+      "技能：code-structure（派活时已挂载）",
     ].join("\n"),
   );
+  // 放不下「为什么」时先去掉它，规矩本身一条不少。
+  const tight = formatContext({ points }, "o3", 110);
+  assert.equal(tight.truncated, false);
+  assert.ok(tight.text.includes("1. 不花钱\n"));
+  assert.ok(tight.text.includes("重启不丢执行者（检查"));
+  // 再放不下就从末尾截，给全文命令。
+  const cut = formatContext({ points }, "o3", 60);
+  assert.equal(cut.truncated, true);
+  assert.ok(cut.text.endsWith("…（全文：atrium map context o3）"));
+  assert.ok(Array.from(cut.text).length <= 60);
+  assert.deepEqual(formatContext({ points: [] }, "o1"), {
+    text: "",
+    truncated: false,
+  });
+});
+
+test("派活提示词：只附分工、归属部分链上的规矩与挂载的技能；不再附章程、岗位正文与叮嘱", async () => {
+  const db = setup();
+  addPoint(db, "o1", { text: "不花钱", why: "底线", by: "u1" }, "u1");
   addPoint(
     db,
     "o2",
     { text: "随时升级", why: "不等空闲", by: "u1 09-27" },
     "u1",
   );
-  const task = getTask(db, createTask(db, { title: "修派活", from: "o4" }).ref);
-  // 旧任务记在节点上（node_id）：派活附该节点的岗位正文与章程要点。
-  db.prepare("UPDATE tasks SET node_id=3 WHERE id=?").run(task.id);
-  Object.assign(task, { node_id: 3 });
-  assert.equal(taskNode(db, task)?.body, "# runtime 岗位正文");
+  addPoint(db, "o5", { text: "别处的规矩", why: "w", by: "u1" }, "u1");
+  createJobRole(db, {
+    name: "后端",
+    description: "负责服务与命令行",
+    checks: ["pr_exists"],
+  });
+  const task = getTask(
+    db,
+    createTask(db, { title: "修派活", part: "o3", by: "后端" }).ref,
+  );
   const data = mkdtempSync(join(tmpdir(), "atrium-org-tasks-"));
   try {
     const prepared = await prepareRun(
@@ -179,7 +131,7 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
         worker: {
           tool: "claude",
           id: "claude",
-          profile: { rules: {}, body: "" } as never,
+          profile: { rules: {}, body: "旧叮嘱" } as never,
         },
         risk: "low",
       },
@@ -192,29 +144,19 @@ test("派活提示词：节点任务附岗位正文、章程要点与投任务�
       return index;
     };
     assert.ok(
-      at("## 岗位说明\n\n# runtime 岗位正文") <
-        at("## 章程要点（组织 → Atrium → runtime）"),
+      at("## 分工\n\n干活的专员：后端——负责服务与命令行；交付关卡：pr_exists") <
+        at("## 规矩\n\n规矩（从上到下越靠前越重要"),
     );
     assert.ok(
-      at("## 章程要点") <
-        at(
-          "## 投任务的专员说明\n\n本任务由 o4 安全 投来。\n\n安全专员：查凭据",
-        ),
+      at("[组织]\n1. 不花钱（底线）\n[Atrium]\n1. 随时升级（不等空闲）") <
+        at("## 通用约束"),
     );
-    assert.ok(prompt.includes("- 不用 git stash"));
-    // 全景位置与本节点及上级的要点（map context）附在章程要点同一段、硬边界之前（#322）。
-    assert.ok(
-      at(
-        "## 章程要点（组织 → Atrium → runtime）\n\n全景位置：组织 → Atrium → runtime",
-      ) < at("- [Atrium] 随时升级（为什么：不等空闲；u1 09-27 定）") &&
-        at("- [Atrium] 随时升级") < at("硬边界（任何情况都不能放开）"),
-    );
+    for (const gone of ["别处的规矩", "章程", "岗位说明", "旧叮嘱", "全景位置"])
+      assert.ok(!prompt.includes(gone), gone);
   } finally {
     removeTemp(data);
     db.close();
   }
-  const plain = buildPrompt({ title: "旧任务", roleDoc: "旧岗位" });
-  assert.ok(!plain.includes("章程要点"), "没有节点的任务照旧");
 });
 
 test("org tree 按子树汇总在做／卡住，旧关注点不再列出；org show 列手上的任务", () => {
@@ -245,21 +187,4 @@ test("org tree 按子树汇总在做／卡住，旧关注点不再列出；org s
     "未结的在前",
   );
   db.close();
-});
-
-test("org show 章程：空字段省略，不显示 {}", () => {
-  assert.deepEqual(formatDoc("章程", null), ["章程 r0：未填写"]);
-  assert.deepEqual(formatDoc("章程", { rev: "r2", fields: {}, body: "" }), [
-    "章程 r2：未填写",
-  ]);
-  assert.deepEqual(
-    formatDoc("章程", {
-      rev: "r3",
-      fields: { goal: "目标一句", report: "", escalate: " " },
-      body: "正文\n",
-    }),
-    ["章程 r3", "  目标：目标一句", "正文"],
-  );
-  for (const line of formatDoc("章程", { rev: "r1", fields: {}, body: "x" }))
-    assert.ok(!line.includes("{}"));
 });

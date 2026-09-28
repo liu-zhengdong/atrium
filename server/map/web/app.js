@@ -4,13 +4,11 @@
 // - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／选项／负责人／专员／技能／执行者／要点，执行者可按专员筛（#o1/workers/r1）；
 //   挂了资料的块多一个「资料」页签（只看，取与归档走命令行）；
 //   有选项单的块多一个「选项」页签（本块及下层的，等你拍板的在前）；组织根顶部有「等你拍板：N」入口；
-//   其他块的「专员」页签只列属于这一块的，能请的其余专员折成一行，点开是 #o4/roles/all；
 // - 专员：#r1/workers，页签是任务／谁做得好／技能；
 // - 执行者：#w/claude+opus:high/notes，页签是交付记录／观察；
-// - 负责人（leader）：#a1/events，页签是备忘／决定记录／处理过的事／上交；
-// - 秘书：#secretary，页签是备忘／决定记录；用户：#u1，只有决定记录（你拍板的）。
-// 决定记录只给摘要（原则 + 最近的，t211），「全部」（#a1/decisions/all、#o2/decisions/all）现取列表、可按关键词查；
-// 块页的「决定」页签是挂在本块及上级的。
+// - 负责人（leader）：#a1/events，页签是备忘／处理过的事／上交；
+// - 秘书：#secretary，只有备忘；用户：#u1，只有决定记录（你拍板的）。
+// 决定记录现取列表、可按关键词查；块页的「决定」页签是挂在本块及上级的。
 // 当前页、页签与筛选都写在 hash 里，刷新与前进后退都回到原处。
 
 import { escapeHtml as esc, linkify, liveText } from "./format.js";
@@ -70,14 +68,13 @@ const PAGE_TABS = {
     "skills",
     "workers",
     "points",
-    "findings",
     "choices",
     "materials",
     "decisions",
   ],
   role: ["tasks", "workers", "skills"],
   worker: ["deliveries", "notes"],
-  leader: ["memo", "decisions", "events", "escalations"],
+  leader: ["memo", "events", "escalations", "decisions"],
 };
 const REF = {
   node: /^o[1-9]\d{0,8}$/,
@@ -238,33 +235,6 @@ const taskName = (ref, title, by, more = "") =>
   `<span class="task-ref">${esc(ref)}</span><span class="task-title">${esc(title)}${by ? `<span class="task-by">${esc(by.name)}派的</span>` : ""}${more}</span>`;
 const partLink = (p) =>
   `<a href="${esc(nodeHref(p.ref))}">${esc(title(p))}</a>`;
-/**
- * 任务和别的部分的关系（#373）：因为牵涉这一块才列在这里的，写「归」哪一块；
- * 还牵涉别的部分的，写「也牵涉」。当前这一块不再写一遍；自动牵涉的（管方面的要点适用于归属部分）悬停说明。
- */
-function taskParts(t) {
-  const here = state.data?.page === "node" ? state.data.node.ref : null;
-  const also = (t.also ?? []).filter((p) => p.ref !== here);
-  const bits = [
-    t.home ? `归${partLink(t.home)}` : "",
-    also.length
-      ? `也牵涉${also
-          .map((p) =>
-            p.auto
-              ? `<span title="${esc(`${title(p)}有要点适用于这项任务的归属部分，自动牵涉`)}">${partLink(p)}</span>`
-              : partLink(p),
-          )
-          .join("、")}`
-      : "",
-  ].filter(Boolean);
-  return bits.length
-    ? `<span class="task-parts">${bits.join(" · ")}</span>`
-    : "";
-}
-/**
- * 表格的一格。extra 里的类：name/text/note 窄屏占满一行，none 窄屏隐藏（空格），
- * tagged 窄屏在值前带上列名（数字列单看不知道是什么）。
- */
 const cell = (label, body, extra = "") =>
   `<span class="cell${extra}" role="cell" data-label="${esc(label)}">${body}</span>`;
 /** 表格；没有行时只说一句空状态，不出表头。 */
@@ -401,7 +371,7 @@ function taskTable(all, { withRole, empty }) {
           ? chipLink(t.job.name, "role", roleHref(t.job.ref))
           : none;
         return `<div class="row" role="row">
-        ${cell("任务", taskName(t.ref, t.title, t.by, taskParts(t) + (t.total ? totalChildren(t) : "")), " name plain task")}
+        ${cell("任务", taskName(t.ref, t.title, t.by, t.total ? totalChildren(t) : ""), " name plain task")}
         ${withRole ? cell("专员", role, t.job ? "" : " none") : ""}
         ${cell("状态", statusChips(t, label, tone))}
         ${cell("谁在做", workerAt ? `<span class="chip chip-soft clip" title="${esc(workerAt)}">${esc(workerAt)}</span>` : none, workerAt ? "" : " none")}
@@ -417,34 +387,13 @@ function taskTable(all, { withRole, empty }) {
 // ---- 块的页签 ----
 
 const liveParts = (n) => n.overview.parts.filter((p) => !p.archived);
-/**
- * 要点页签：本块的、下层各块的，再加别处管方面的部分里适用于这一块的（来自写成「安全 · 适用于网页」）。
- * 下层已列过的不重复。
- */
-function allPoints(n) {
-  const list = [
-    ...n.points.map((p) => ({ ...p, from: null })),
-    ...n.points_below.flatMap((l) =>
-      l.points.map((p) => ({ ...p, from: { ref: l.node, name: title(l) } })),
-    ),
-  ];
-  const seen = new Set(list.map((p) => p.ref));
-  return [
-    ...list,
-    ...(n.points_applied ?? []).flatMap((l) =>
-      l.points
-        .filter((p) => !seen.has(p.ref))
-        .map((p) => ({ ...p, from: { ref: l.node, name: l.source } })),
-    ),
-  ];
-}
-/** 适用范围的人话：写了具体部分的列出来，没写的是「整个上级」。 */
-const scopeText = (scope) =>
-  scope.parts.length
-    ? scope.explicit
-      ? `适用于${scope.parts.map(partLink).join("、")}`
-      : `适用于整个${partLink(scope.parts[0])}`
-    : "适用范围指向的部分都不在了";
+/** 要点页签：本块的，再加下层各块的（注明来自哪一块）。 */
+const allPoints = (n) => [
+  ...n.points.map((p) => ({ ...p, from: null })),
+  ...n.points_below.flatMap((l) =>
+    l.points.map((p) => ({ ...p, from: { ref: l.node, name: title(l) } })),
+  ),
+];
 
 function partState(p) {
   const chips = [
@@ -462,7 +411,7 @@ function drawParts({ node: n }) {
     ["名称", "做什么", "状态", "下面", ""],
     liveParts(n).map(
       (p) => `<a class="row link" role="row" href="${esc(nodeHref(p.ref))}">
-        ${cell("名称", `${ICON.part}<span>${esc(title(p))}</span>${p.aspect ? chip("管方面", "purple") : ""}`, " name")}
+        ${cell("名称", `${ICON.part}<span>${esc(title(p))}</span>`, " name")}
         ${cell("做什么", p.what ? esc(p.what) : `<span class="muted">还没写</span>`, " text")}
         ${cell("状态", partState(p))}
         ${cell("下面", p.parts ? `${p.parts} 块` : "—", p.parts ? " muted tagged" : " muted none")}
@@ -478,52 +427,6 @@ function drawNodeTasks({ node: n }) {
     withRole: true,
     empty: { all: "这一块还没有任务。", active: "现在没有进行中的任务。" },
   });
-}
-
-/** 本块与下层各块的巡检发现：待处理的在前，其余新的在前；下层的注明来自哪一块。 */
-const allFindings = (n) =>
-  [
-    ...n.findings.map((f) => ({ ...f, from: null })),
-    ...n.findings_below.map((f) => ({
-      ...f,
-      from: { ref: f.from.ref, name: title(f.from) },
-    })),
-  ].sort((a, b) => (b.status === "new") - (a.status === "new") || b.id - a.id);
-
-const FINDING_STATUS = {
-  new: ["待处理", "amber"],
-  task: ["已开任务", "blue"],
-  merged: ["并入任务", "gray"],
-  ignored: ["已忽略", "gray"],
-};
-const FINDING_KIND = {
-  broken: ["坏了", "orange"],
-  awkward: ["不顺手", "soft"],
-};
-
-function drawFindings({ node: n }) {
-  const list = allFindings(n);
-  const below = list.some((f) => f.from);
-  return table(
-    below ? "findings" : "findings-plain",
-    ["发现", "步骤与命令", "预期与实际", "处理", ...(below ? ["来自"] : [])],
-    list.map((f) => {
-      const [kind, kindTone] = FINDING_KIND[f.kind] ?? ["", "gray"];
-      const [label, tone] = FINDING_STATUS[f.status] ?? [f.status, "gray"];
-      const fate = [
-        chip(label, tone),
-        f.linked_task ? chip(f.linked_task, "soft") : "",
-      ].join("");
-      return `<div class="row" role="row">
-        ${cell("发现", `<span class="task-ref">${esc(f.ref)}</span><span class="task-title">${esc(f.phenomenon)}${kind ? `<span class="finding-kind">${chip(kind, kindTone)}</span>` : ""}</span>`, " name plain task")}
-        ${cell("步骤与命令", `<span class="finding-step">${esc(f.step)}</span><code class="finding-command">${esc(f.command)}</code>`, " text")}
-        ${cell("预期与实际", `<span class="finding-line"><span class="finding-label">预期</span>${esc(f.expected)}</span><span class="finding-line"><span class="finding-label">实际</span>${esc(f.actual)}</span>`, " text")}
-        ${cell("处理", `<span class="chips">${fate}</span>${f.reason ? `<span class="finding-reason">${esc(f.reason)}</span>` : ""}`, " fate")}
-        ${below ? cell("来自", f.from ? `<a href="${esc(nodeHref(f.from.ref, "findings"))}">${esc(f.from.name)}</a>` : "这一块", " muted tagged") : ""}
-      </div>`;
-    }),
-    "还没有巡检发现。",
-  );
 }
 
 // ---- 资料：挂在这一块上的设计稿、调研报告；网页只看，取与归档走命令行 ----
@@ -759,9 +662,9 @@ function drawPoints({ node: n }) {
     ["要点", "为什么", "谁定的", "来自"],
     allPoints(n).map(
       (p) => `<div class="row" role="row">
-        ${cell("要点", `${ICON.point}<span>${esc(p.text)}${p.scope ? `<span class="point-scope">${scopeText(p.scope)}</span>` : ""}</span>`, " name plain")}
+        ${cell("要点", `${ICON.point}<span>${esc(p.text)}</span>`, " name plain")}
         ${cell("为什么", esc(p.why), " note")}
-        ${cell("谁定的", `${chip(who(p.by), "amber")}${(p.sources ?? []).length ? `<span class="muted small">出自 ${esc(p.sources.join("、"))}</span>` : ""}`)}
+        ${cell("谁定的", chip(who(p.by), "amber"))}
         ${cell("来自", p.from ? `<a href="${esc(nodeHref(p.from.ref))}">${esc(p.from.name)}</a>` : "这一块", " muted tagged")}
       </div>`,
     ),
@@ -771,73 +674,20 @@ function drawPoints({ node: n }) {
 
 // ---- 组织根：专员、技能、执行者 ----
 
-/**
- * 专员页签按层披露（#373）：
- * - 组织根列全组织共用的（与挂在根上的），属于各部分的折成末尾一行；
- * - 部分页只列属于这一块的，上级的、全组织的、牵涉部分的折成「还能请：…」一行，点开（#o4/roles/all）一起列。
- */
-function drawRoles(d) {
-  const team = d.team ?? [];
-  if (d.org) {
-    const here = new Set(team.map((r) => r.ref));
-    const elsewhere = d.org.roles.filter((r) => r.part && !here.has(r.ref));
-    const foot = elsewhere.length
-      ? `<p class="foot">另有属于各部分的专员：${elsewhere
-          .map(
-            (r) =>
-              `${esc(r.name)}（<a href="${esc(nodeHref(r.part.ref, "roles"))}">${esc(title(r.part))}</a>）`,
-          )
-          .join("、")}，在那一块的「专员」页签里。</p>`
-      : "";
-    return `${roleTable(team, false, "还没有专员。在终端用 atrium specialist add 建一个。")}${foot}`;
-  }
-  const own = team.filter((r) => r.scope === "own");
-  const more = team.filter((r) => r.scope !== "own");
-  const open = state.route.extra === "all";
-  const at = d.node.ref;
-  const line = more.length
-    ? open
-      ? `<a class="more" href="${esc(nodeHref(at, "roles"))}">只看这一块自己的</a>`
-      : `<a class="more" href="${esc(nodeHref(at, "roles", "all"))}"><span>还能请：${esc(canAlsoAsk(more))}</span><span class="more-go">展开</span></a>`
-    : "";
-  return `${roleTable(
-    open ? [...own, ...more] : own,
-    open,
-    "这一块没有自己的专员。",
-  )}${line}`;
-}
+/** 组织根的专员页签：专员只记分工（做什么、优先派给、交付要求、挂的技能）。 */
+const drawRoles = (d) =>
+  roleTable(
+    d.team ?? [],
+    "还没有专员。在终端用 atrium specialist add 建一个。",
+  );
 
-/** 可以请、但不属于这一块的专员，按来处归成一句：「全组织的 前端、后端；安全的 安全专员」。 */
-function canAlsoAsk(list) {
-  const groups = new Map();
-  for (const r of list) {
-    const key = r.scope === "org" ? "全组织" : title(r.part);
-    groups.set(key, [...(groups.get(key) ?? []), r.name]);
-  }
-  return [...groups]
-    .map(([from, names]) => `${from}的 ${names.join("、")}`)
-    .join("；");
-}
-
-/** 专员属于哪儿（展开后与本块的混排时标在名字下）。 */
-const roleFrom = (r) =>
-  r.scope === "own"
-    ? ""
-    : `<span class="role-from">${esc(
-        r.scope === "org"
-          ? "全组织共用"
-          : r.scope === "also"
-            ? `属于${title(r.part)}（牵涉这一块）`
-            : `属于${title(r.part)}`,
-      )}</span>`;
-
-function roleTable(list, withFrom, empty) {
+function roleTable(list, empty) {
   return table(
     "roles",
     ["专员", "干什么活", "优先派给", "交付要求", "在做", ""],
     list.map(
       (r) => `<a class="row link" role="row" href="${esc(roleHref(r.ref))}">
-        ${cell("专员", `${ICON.role}<span>${esc(r.name)}${withFrom ? roleFrom(r) : ""}</span>`, " name")}
+        ${cell("专员", `${ICON.role}<span>${esc(r.name)}</span>`, " name")}
         ${cell("干什么活", esc(r.description), " text")}
         ${cell("优先派给", r.preferred.length ? `<span class="chip chip-soft clip" title="${esc(r.preferred.map(workerLabel).join("、"))}">${esc(workerLabel(r.preferred[0]))}</span>` : `<span class="muted">没指定</span>`, r.preferred.length ? "" : " none")}
         ${cell("交付要求", r.checks.length ? esc(r.checks.map(checkLabel).join("、")) : "—", r.checks.length ? " note tagged" : " note none")}
@@ -1058,16 +908,6 @@ function drawMemo({ leader: l }) {
     <p class="foot">${esc(at)}它每次被叫醒先读这份备忘，处理完再改写。</p>`;
 }
 
-/** 决定摘要：人物页的在 leader 上，块页的在 node.decisions（本块及上级）。 */
-const digestOf = (d) =>
-  d.page === "leader"
-    ? d.leader
-    : (d.node.decisions ?? {
-        decisions: [],
-        principles: 0,
-        total: 0,
-        omitted: 0,
-      });
 /** 展开与检索：每次多看 50 条，至多 200 条，再往前按关键词查。 */
 const decisionView = { q: "", limit: 50 };
 function decisionLinks(d) {
@@ -1080,19 +920,13 @@ function decisionLinks(d) {
 }
 function decisionRow(d, l) {
   const links = decisionLinks(d);
-  const fate = [
-    d.principle ? chip("原则", "green") : "",
-    d.superseded_by
-      ? chip(`已被 ${d.superseded_by} 推翻`, "gray")
-      : d.supersedes.length
-        ? chip(`推翻 ${d.supersedes.join("、")}`, "amber")
-        : "",
-    d.settled_to ? chip(`已沉淀到 ${d.settled_to}`, "gray") : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const gone = d.superseded_by || d.settled_to;
-  const by = l && d.by === l.ref && l.kind === "leader" ? l.name : who(d.by);
+  const fate = d.superseded_by
+    ? chip(`已被 ${d.superseded_by} 推翻`, "gray")
+    : d.supersedes.length
+      ? chip(`推翻 ${d.supersedes.join("、")}`, "amber")
+      : "";
+  const gone = d.superseded_by;
+  const by = who(d.by);
   return `<div class="row${gone ? " gone" : ""}" role="row">
         ${cell("日期", `${esc(d.date.slice(5))}<span class="task-ref">${esc(d.ref)}</span>`, " muted date")}
         ${cell("决定与原因", `<span class="decision">${esc(d.text)}${fate ? ` ${fate}` : ""}</span><span class="why">${esc(d.why)}</span>`, " body")}
@@ -1101,26 +935,7 @@ function decisionRow(d, l) {
       </div>`;
 }
 const DECISION_HEADS = ["日期", "决定与原因", "谁定的", "关联"];
-function drawDecisions(d) {
-  const l = d.page === "leader" ? d.leader : null;
-  const at = l ? l.ref : d.node.ref;
-  if (state.route.extra === "all") return drawDecisionPage(d, l);
-  const g = digestOf(d);
-  const all = href(d.page, at, "decisions", "all");
-  const foot = g.omitted
-    ? `<p class="foot">摘要只列标了原则的和最近的，另有 ${g.omitted} 条。<a href="${esc(all)}">看全部、按关键词查</a></p>`
-    : g.total
-      ? `<p class="foot">标了原则的全列，再加最近的；已推翻、已沉淀成要点的在<a href="${esc(all)}">全部</a>里。</p>`
-      : "";
-  return `${table(
-    "decisions",
-    DECISION_HEADS,
-    g.decisions.map((x) => decisionRow(x, l)),
-    l
-      ? "还没有有效的决定。在终端用 atrium decision add 记下取舍与原因。"
-      : "还没有挂在这一块或上级的决定。在终端用 atrium decision tag dN --node 节点 挂上来。",
-  )}${foot}`;
-}
+const drawDecisions = (d) => drawDecisionPage(d, null);
 function drawDecisionPage(d, l) {
   const p = d.decisionPage;
   const q = decisionView.q;
@@ -1138,7 +953,9 @@ function drawDecisionPage(d, l) {
     "decisions",
     DECISION_HEADS,
     p.decisions.map((x) => decisionRow(x, l)),
-    q ? `没有含「${q}」的决定。` : "还没有决定记录。",
+    q
+      ? `没有含「${q}」的决定。`
+      : "还没有决定记录。你拍板的事由秘书在终端用 atrium decision add 记下。",
   )}${more}`;
 }
 
@@ -1205,10 +1022,7 @@ const TABS = {
   },
   roles: {
     label: "专员",
-    count: (d) =>
-      d.org
-        ? (d.team ?? []).length
-        : (d.team ?? []).filter((r) => r.scope === "own").length,
+    count: (d) => (d.team ?? []).length,
     draw: drawRoles,
   },
   skills: {
@@ -1230,11 +1044,6 @@ const TABS = {
     label: "要点",
     count: (d) => allPoints(d.node).length,
     draw: drawPoints,
-  },
-  findings: {
-    label: "巡检发现",
-    count: (d) => allFindings(d.node).length,
-    draw: drawFindings,
   },
   choices: {
     label: "选项",
@@ -1264,7 +1073,7 @@ const TABS = {
   memo: { label: "备忘", count: () => null, draw: drawMemo },
   decisions: {
     label: "决定记录",
-    count: (d) => digestOf(d).total,
+    count: (d) => d.decisionPage?.active ?? null,
     draw: drawDecisions,
   },
   events: {
@@ -1286,10 +1095,9 @@ function tabsOf(d) {
     return d.leader.kind === "user"
       ? ["decisions"]
       : isSecretary(d.leader)
-        ? ["memo", "decisions"]
-        : ["memo", "decisions", "events", "escalations"];
-  const decided =
-    digestOf(d).total || state.route.tab === "decisions" ? ["decisions"] : [];
+        ? ["memo"]
+        : ["memo", "events", "escalations"];
+  const decided = ["decisions"];
   if (d.org)
     return [
       "parts",
@@ -1299,7 +1107,6 @@ function tabsOf(d) {
       "skills",
       "workers",
       "points",
-      "findings",
       ...((d.node.materials ?? []).length ? ["materials"] : []),
       ...decided,
     ];
@@ -1307,9 +1114,7 @@ function tabsOf(d) {
     "parts",
     ...((d.node.choices ?? []).length ? ["choices"] : []),
     "tasks",
-    ...((d.team ?? []).length ? ["roles"] : []),
     "points",
-    "findings",
     ...((d.node.materials ?? []).length ? ["materials"] : []),
     ...decided,
   ];
@@ -1331,19 +1136,6 @@ const props = (rows) =>
         `<div class="prop"><dt>${esc(label)}</dt><dd>${body}</dd></div>`,
     )
     .join("")}</dl>`;
-/** 部分页属性行「适用于」：写了具体部分的逐个列，没写的是「整个上级」。 */
-const scopeChips = (scope) =>
-  scope.parts.length
-    ? `<span class="chips">${scope.parts
-        .map((p) =>
-          chipLink(
-            scope.explicit ? title(p) : `整个${title(p)}`,
-            "soft",
-            nodeHref(p.ref),
-          ),
-        )
-        .join("")}</span>`
-    : `<span class="muted">指向的部分都不在了</span>`;
 const chips = (list, empty) =>
   list.length
     ? `<span class="chips">${list.join("")}</span>`
@@ -1356,7 +1148,7 @@ function heading(d) {
       name: "你",
       props: "",
       intro: [
-        "你拍板的决定：秘书和负责人转记的「u1 定」都记在这里，和它们自己的取舍分开。标了原则的全列，再加最近的；全部可按关键词查。",
+        "你拍板的事与原因：只给人回看，不附进任何提示词；要大家守的规矩在各块的「要点」里。可按关键词查。",
       ],
     };
   if (d.page === "leader" && isSecretary(d.leader))
@@ -1365,7 +1157,7 @@ function heading(d) {
       name: "秘书",
       props: "",
       intro: [
-        "替你把目标补成简报、拆活、派给负责人和执行者，只把要你拍板的事递上来。这里是它留给自己的备忘和做过的取舍，换机器、换秘书都接得上。",
+        "替你把目标补成简报、拆活、派给负责人和执行者，只把要你拍板的事递上来。这里是它留给自己的备忘，换机器、换秘书都接得上。",
       ],
     };
   if (d.page === "role") {
@@ -1374,12 +1166,6 @@ function heading(d) {
       kind: "专员",
       name: r.name,
       props: props([
-        [
-          "属于",
-          r.part
-            ? chipLink(title(r.part), "soft", nodeHref(r.part.ref, "roles"))
-            : `<span class="muted">全组织共用</span>`,
-        ],
         [
           "优先派给",
           chips(
@@ -1474,11 +1260,9 @@ function heading(d) {
         ]
       : []),
     ...(n.lead ? [["负责人", leadProp(n.lead)]] : []),
-    // 管方面的部分（安全、性能…）：它的要点缺省适用于哪几块。
-    ...(n.scope ? [["适用于", scopeChips(n.scope)]] : []),
   ];
   return {
-    kind: n.aspect ? "管方面的部分" : (KIND[n.kind] ?? "部分"),
+    kind: KIND[n.kind] ?? "部分",
     name: title(n),
     props: people.length ? props(people) : "",
     intro: (n.overview.what || "")
@@ -1637,14 +1421,9 @@ function pageHtml() {
           ["", "进行中"],
           ["all", "全部"],
         ]
-      : tab === "decisions"
-        ? [
-            ["", "摘要"],
-            ["all", "全部"],
-          ]
-        : tab === "workers" && d.org && d.org.roles.length
-          ? [["", "全部"], ...d.org.roles.map((r) => [r.ref, r.name])]
-          : [];
+      : tab === "workers" && d.org && d.org.roles.length
+        ? [["", "全部"], ...d.org.roles.map((r) => [r.ref, r.name])]
+        : [];
   const current = pills.some(([id]) => id === state.route.extra)
     ? state.route.extra
     : "";
@@ -1708,10 +1487,13 @@ function fail(error) {
   draw();
 }
 
-/** 取一页的数据；在看决定的「全部」时另取列表（关键词、条数在 decisionView）。 */
+/** 取一页的数据；在看决定时另取列表（关键词、条数在 decisionView）。 */
 async function fetchPage(route, key) {
   const data = await fetchBase(route, key);
-  if (route.tab !== "decisions" || route.extra !== "all") return data;
+  // 用户页（#u1）只有「决定记录」一个页签，缺省就是它。
+  const decisions =
+    route.tab === "decisions" || (route.page === "leader" && key === "u1");
+  if (!decisions) return data;
   const query = new URLSearchParams({
     of: key,
     all: "1",
@@ -1738,18 +1520,11 @@ async function fetchBase(route, key) {
       page: "leader",
       leader: await get(`/leaders/${encodeURIComponent(key)}`),
     };
-  // 专员按层取：这一块能请的（本块、上级、牵涉部分、全组织，各注明哪一档）。
-  const team = () =>
-    get(`/specialists?part=${encodeURIComponent(key)}`).then(
-      (r) => r.specialists,
-    );
-  if (key !== state.root.ref) {
-    const [node, specialists] = await Promise.all([
-      get(`/nodes/${encodeURIComponent(key)}`),
-      team(),
-    ]);
-    return { page: "node", node, team: specialists };
-  }
+  if (key !== state.root.ref)
+    return {
+      page: "node",
+      node: await get(`/nodes/${encodeURIComponent(key)}`),
+    };
   return keepWorkers(await fetchRootOrg(get, key), state.cache.get(key));
 }
 

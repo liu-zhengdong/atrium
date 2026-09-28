@@ -16,17 +16,15 @@ test("说明书从命令表与退出码表生成；示例均通过参数解析",
   assert.match(help(), /^服务\n  atrium\s+启动/m);
   assert.match(
     text,
-    /atrium task add 目标[\s\S]*atrium org tree[\s\S]*atrium events wait --as secretary/,
+    /atrium task add 标题[\s\S]*atrium top[\s\S]*atrium events wait --as secretary/,
   );
+  // 规矩只放一处：要点；其余东西各有位置。
   assert.match(
     text,
-    /每类东西放哪[^\n]*→ 技能[^\n]*的要点[^\n]*→ 执行者档案[^\n]*判断顺序/,
+    /规矩（用户的判断）只放一处——要点[^\n]*--pos[^\n]*→ 技能[^\n]*→ 执行者档案[^\n]*→ 决定记录/,
   );
-  // 新能力的做法（t236）：先试点再铺开、上线即验、PR 写组合说明。
-  assert.match(
-    text,
-    /先试点再铺开[^\n]*task note tN 试点结果[^\n]*端到端验证[^\n]*碰到哪些已有能力/,
-  );
+  // 端到端验证挪到合入前、在隔离实例。
+  assert.match(text, /交付前在隔离实例跑端到端验证[^\n]*只读冒烟/);
   for (const [name, command] of Object.entries(commands)) {
     assert(text.includes(`atrium ${name} ${command.args}`.trimEnd()), name);
     const invocation = example(name, command);

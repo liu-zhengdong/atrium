@@ -431,6 +431,8 @@ test("事件分级、攒批与摘要：过程不叫醒，第三次退回转卡�
     "quota_switched",
     "done",
     "ci_success",
+    // 已上线：端到端验证在合入前做过，上线后只读冒烟没过另记 online_failed。
+    "online",
   ];
   for (const kind of info)
     assert.equal(eventLevel(kind), kind === "done" ? "action" : "info", kind);
@@ -439,7 +441,7 @@ test("事件分级、攒批与摘要：过程不叫醒，第三次退回转卡�
     "blocked",
     "stalled",
     "skill_proposal",
-    "online",
+    "online_failed",
     "review_needed",
     "hard_boundary",
     "ci_failure",

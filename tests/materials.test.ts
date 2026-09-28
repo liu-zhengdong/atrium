@@ -14,7 +14,6 @@ import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import {
-  contextMaterialLines,
   HINT_AGAIN_MS,
   hintDue,
   MATERIAL_MAX_BYTES,
@@ -34,7 +33,6 @@ import {
 } from "../server/materials/model.ts";
 import { versionDir } from "../server/materials/store.ts";
 import { publishMaterialHints } from "../server/materials/hints.ts";
-import { formatContext } from "../server/map/context.ts";
 import { leaderRule } from "../server/leaders/scope.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import { collect } from "../cli/materials.ts";
@@ -249,49 +247,6 @@ test("线索间隔与真删：没发过马上提、发过隔 30 天；归档一�
     { archived_at: old, bytes: big, purge_asked_at: NOW - DAY },
   ])
     assert.equal(purgeVerdict(facts, NOW), false, JSON.stringify(facts));
-});
-
-test("派活清单：近的节点在前、同层新的在前，至多 8 条其余给命令；进 context 时比要点低，挤掉时标题一起去掉", () => {
-  const list = Array.from({ length: 10 }, (_, i) => ({
-    ref: `m${i + 1}`,
-    name: `资料${i + 1}`,
-    note: i === 0 ? "" : `说明${i + 1}`,
-    node: i < 5 ? "o4" : "o1",
-    distance: i < 5 ? 0 : 2,
-    updated_at: i,
-  }));
-  const lines = contextMaterialLines(list, "o4");
-  assert.equal(lines.length, 9);
-  assert.equal(lines[0], "- m5 资料5：说明5（o4）");
-  assert.equal(lines[4], "- m1 资料1：（没写说明）（o4）");
-  assert.equal(lines[5], "- m10 资料10：说明10（o1）");
-  assert.match(lines[8]!, /还有 2 份：atrium material ls --node o4/);
-  assert.deepEqual(contextMaterialLines([], "o4"), []);
-  const chain = [
-    { ref: "o1", name: "组织", alias: "", analogy: "", what: "" },
-    { ref: "o4", name: "规矩", alias: "", analogy: "", what: "有哪些部分" },
-  ];
-  const input = {
-    chain,
-    parts: [],
-    now: "",
-    next: "",
-    points: [
-      {
-        name: "规矩",
-        points: [{ text: "要点甲", why: "原因", by: "u1", check: null }],
-      },
-    ],
-    materials: list.slice(0, 2),
-  };
-  const full = formatContext(input, "o4").text;
-  assert.match(full, /资料（本节点及上级挂的；要看就 atrium material get mN/);
-  assert.match(full, /- m2 资料2：说明2（o4）/);
-  assert.ok(full.indexOf("要点甲") < full.indexOf("资料（"));
-  // 很紧时先丢资料清单、留要点，资料标题不单独留下。
-  const tight = formatContext(input, "o4", 140).text;
-  assert.match(tight, /要点甲/);
-  assert.doesNotMatch(tight, /资料（/);
 });
 
 test("命令行收集：目录下文件按 / 分段，隐藏文件跳过；目录外的软链接报错、目录里的照收；执行者只放行 material get", () => {
@@ -623,7 +578,7 @@ test("加资料、再加是新版本（内容没变不加）、取文件记读�
   );
 });
 
-test("取代、归档、恢复、留下：归档的不进清单与派活附带，可恢复；全景节点页有资料；真删只有用户", async (t) => {
+test("取代、归档、恢复、留下：归档的不进清单，可恢复；全景节点页有资料；真删只有用户", async (t) => {
   const x = await open(t);
   await x.ok("POST", "/api/materials", design());
   await x.ok("POST", "/api/materials", {
@@ -633,20 +588,6 @@ test("取代、归档、恢复、留下：归档的不进清单与派活附带�
     note: "竞品调研",
     files: [{ path: "调研.md", data: b64("调研内容") }],
   });
-  // 派活附带：本节点（o3）与上级（o2）的都列，近的在前。
-  const context = (await x.ok("GET", "/api/map/context/o3")) as {
-    text: string;
-  };
-  assert.match(
-    context.text,
-    /资料（本节点及上级[^\n]*\n- m1 t120-tasks：t120 任务视图设计稿（o3）\n- m2 调研\.md：竞品调研（o2）/,
-  );
-  // 另一个不在链上的节点看不到。
-  assert.doesNotMatch(
-    ((await x.ok("GET", "/api/map/context/o4")) as { text: string }).text,
-    /资料（/,
-  );
-
   // m3 取代 m2：m2 进清理线索、不再进派活附带。
   await x.ok("POST", "/api/materials", {
     node: "o2",
@@ -664,10 +605,6 @@ test("取代、归档、恢复、留下：归档的不进清单与派活附带�
   assert.deepEqual(
     stale.stale.map((m: { ref: string }) => m.ref),
     ["m2"],
-  );
-  assert.doesNotMatch(
-    ((await x.ok("GET", "/api/map/context/o3")) as { text: string }).text,
-    /m2 /,
   );
 
   // 归档：不进 ls 与派活附带，--archived 能看到，可恢复。
@@ -690,10 +627,6 @@ test("取代、归档、恢复、留下：归档的不进清单与派活附带�
       (m: { ref: string }) => m.ref,
     ),
     ["m1"],
-  );
-  assert.doesNotMatch(
-    ((await x.ok("GET", "/api/map/context/o3")) as { text: string }).text,
-    /m1 /,
   );
   // 归档的仍可取。
   assert.equal((await x.ok("POST", "/api/materials/m1/get", {})).ref, "m1");

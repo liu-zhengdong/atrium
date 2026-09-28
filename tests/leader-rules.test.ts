@@ -19,7 +19,6 @@ import {
   escalateVerdict,
   leaderEditVerdict,
   leaderRule,
-  mapEditVerdict,
   nodeEditVerdict,
   ownerVerdict,
   scopeOf,
@@ -401,7 +400,6 @@ test("权限表：读接口放行，写接口只认列出的，其余一律拒�
     ["POST", "/api/org/nodes/:id/points", "point"],
     ["PATCH", "/api/org/points/:id", "point"],
     ["DELETE", "/api/org/points/:id", "point"],
-    ["PUT", "/api/org/nodes/:id/stages", "stages"],
     ["PATCH", "/api/org/nodes/:id", "node-edit"],
     ["PATCH", "/api/map/nodes/:id", "map-edit"],
     ["PATCH", "/api/leaders/:id", "leader-edit"],
@@ -410,8 +408,8 @@ test("权限表：读接口放行，写接口只认列出的，其余一律拒�
   for (const [method, route, rule] of allowed)
     assert.equal(leaderRule(method, route), rule, `${method} ${route}`);
   const deniedRoutes: [string, string, RegExp][] = [
-    ["PUT", "/api/org/nodes/:id/docs/:doc", /改章程、边界与预算/],
-    ["POST", "/api/org/nodes/:id/revert", /改章程/],
+    ["PUT", "/api/org/limits", /改给用户留的额度与花费上限/],
+    ["POST", "/api/decisions", /记决定（决定记录只记用户拍板的事/],
     ["POST", "/api/org/nodes", /新建组织节点/],
     ["POST", "/api/map/nodes", /新建组织节点/],
     ["POST", "/api/quota/:provider/clear", /额度/],
@@ -494,10 +492,6 @@ test("订阅者、负责人、改节点、改全景、改登记、上交、确�
   assert.match(edit(["name", "leader"], 3)!, /name/);
   assert.match(edit(["reason"], 3)!, /只能给子节点指派 leader/);
   assert.match(edit(["archive"], 3)!, /archive/);
-
-  assert.equal(mapEditVerdict("a1", ["what", "now", "next"]), null);
-  assert.match(mapEditVerdict("a1", ["what", "detail"])!, /章程正文/);
-  assert.match(mapEditVerdict("a1", ["rev"])!, /章程正文/);
 
   assert.equal(leaderEditVerdict("a1", "a1", ["memo"]), null);
   assert.equal(leaderEditVerdict("a1", "a1", []), null);
@@ -666,7 +660,7 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
     // 调研的小改进逐条列出、带依据，由 leader 自己定，不上交。
     "- #14 调研小改进 c3 o2（2 条，你自己定）：\n  1. 帮助缩短——太长没人看（依据：f3）\n  2. 报错带下一步——少问一次",
     "调研的小改进（choice_small）：由你按节奏自行处理",
-    "性能等闲时活照旧排后，不必上交",
+    "在任务备注里写一句为什么；不必上交",
     "t7：退回 1 次后合入",
     "atrium task run tN",
     "--part o2",
@@ -676,7 +670,7 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
     "单个任务上线运行时已自动通知秘书，不必再报",
     "--event 编号",
     "atrium events ack 12 13 14",
-    "「每类东西放哪」",
+    "规矩一律写成要点",
     "新能力先试点再铺开",
     "atrium task note tN 试点结果",
     "「碰到哪些已有能力」",

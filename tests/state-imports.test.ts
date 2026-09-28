@@ -1,23 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
-import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc } from "../server/org/write.ts";
-import { ownBoundaries } from "../server/org/boundary-store.ts";
-import { history } from "../server/org/read.ts";
 import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
 import { BRIEF_MAX_BYTES } from "../server/tasks/brief.ts";
 import { quotaReserve } from "../server/tasks/budget.ts";
 import { backfillBriefs, readLegacyBrief } from "../server/imports/briefs.ts";
 import {
-  importCharterBudget,
-  missingBudget,
-  parseCharterBudget,
-} from "../server/imports/charter.ts";
+  commonAncestor,
+  headOf,
+  RESEARCH_BRIEF,
+} from "../server/imports/rules.ts";
 import { legacyDir } from "../server/imports/index.ts";
 import { ensureImportMarks, importMark } from "../server/imports/marks.ts";
 import { removeTemp } from "./temp-dir.ts";
@@ -27,70 +23,6 @@ const temp = (t: { after: (fn: () => unknown) => void }, name: string) => {
   t.after(() => removeTemp(dir));
   return dir;
 };
-
-test("旧章程预算解析：嵌套字段与注释、money 旧写法、磁盘下限不再导入、坏值与未知键逐项报", () => {
-  const parsed = parseCharterBudget(
-    "﻿---\r\nstatus: 草稿\r\nbudget:\r\n  quota_reserve_percent: 25 # 给用户\r\n  disk_min_free_gb: 15\r\n  money: 0\r\n---\r\n# 正文",
-  );
-  assert.deepEqual(parsed.problems, []);
-  assert.deepEqual(
-    parsed.entries.map((e) => [e.id, e.param]),
-    [
-      ["quota-reserve", { key: "quota_reserve_percent", value: 25 }],
-      ["money", { key: "money_yuan_max", value: 0 }],
-    ],
-  );
-  assert.deepEqual(parseCharterBudget("# 没有 frontmatter"), {
-    entries: [],
-    problems: [],
-  });
-  assert.deepEqual(parseCharterBudget("---\nstatus: 草稿\n---\n"), {
-    entries: [],
-    problems: [],
-  });
-  for (const value of ["-1", "101", "abc", "''"]) {
-    const bad = parseCharterBudget(
-      `---\nbudget:\n  quota_reserve_percent: ${value}\n  money: 10\n---\n`,
-    );
-    assert.equal(bad.entries.length, 1, value);
-    assert.equal(bad.entries[0]!.param!.key, "money_yuan_max");
-    assert.match(bad.problems[0]!, /quota_reserve_percent.*跳过/);
-  }
-  assert.match(
-    parseCharterBudget("---\nbudget:\n  tokens: 3\n---\n").problems[0]!,
-    /budget\.tokens 不认识/,
-  );
-  assert.match(
-    parseCharterBudget("---\nbudget: [1\n---\n").problems[0]!,
-    /frontmatter 解析失败/,
-  );
-  assert.match(
-    parseCharterBudget("---\nbudget: 3\n---\n").problems[0]!,
-    /budget 应为键值/,
-  );
-});
-
-test("根章程缺哪几项预算：已有同参数跳过，id 撞上无参数条目报跳过，其余补上", () => {
-  const imported = parseCharterBudget(
-    "---\nbudget:\n  quota_reserve_percent: 20\n  disk_min_free_gb: 15\n  money: 0\n---\n",
-  ).entries;
-  assert.equal(missingBudget([], imported).add.length, 2);
-  const own = [
-    {
-      id: "reserve",
-      summary: "留给用户",
-      detail: null,
-      param: { key: "quota_reserve_percent" as const, value: 30 },
-    },
-    { id: "money", summary: "不花钱", detail: null, param: null },
-  ];
-  const result = missingBudget(own, imported);
-  assert.deepEqual(
-    result.add.map((e) => e.id),
-    [],
-  );
-  assert.deepEqual(result.skipped, ["money_yuan_max（根章程已有条目 money）"]);
-});
 
 test("旧详述读取：绝对与相对路径、没有仓库、读不到、超限截断", (t) => {
   const dir = temp(t, "brief-read");
@@ -168,135 +100,18 @@ test("旧任务详述回填：读得到的进库，读不到的记日志留路�
   );
 });
 
-function orgDb(t: { after: (fn: () => unknown) => void }) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  ensureOrgTables(db);
-  ensureImportMarks(db);
-  return db;
-}
-const addRoot = (db: DatabaseSync) =>
-  addNode(db, { slug: "org", kind: "org", name: "组织", reason: "建树" }, "u1");
-
-test("根章程预算导入：没有根等下次；导入一次留修订；再启动不读文件", (t) => {
-  const dir = temp(t, "charter");
-  const file = join(dir, "charter.md");
-  writeFileSync(
-    file,
-    "---\nbudget:\n  quota_reserve_percent: 30\n  disk_min_free_gb: 12\n  money: 0\n---\n# 章程",
-  );
-  const db = orgDb(t);
-  const logs: string[] = [];
-  const log = (line: string) => logs.push(line);
-  assert.deepEqual(importCharterBudget(db, file, log), { status: "no_root" });
-  assert.equal(importMark(db, "charter_budget"), undefined);
-  const root = addRoot(db);
-  editDoc(
-    db,
-    `o${root.id}`,
-    "charter",
-    {
-      fields: { goal: "目标" },
-      body: "正文",
-      boundaries: [{ id: "no-spend", summary: "不花钱" }],
-      reason: "建章程",
-    },
-    "u1",
-  );
-  assert.deepEqual(importCharterBudget(db, file, log), {
-    status: "imported",
-    keys: ["quota_reserve_percent", "money_yuan_max"],
-  });
-  assert.deepEqual(
-    ownBoundaries(db, root.id).map((e) => [e.id, e.param?.value ?? null]),
-    [
-      ["no-spend", null],
-      ["quota-reserve", 30],
-      ["money", 0],
-    ],
-  );
-  assert.deepEqual(quotaReserve(db), { percent: 30, set_by: `o${root.id}` });
-  const listed = history(db, `o${root.id}`, { target: "charter" });
-  assert.ok(
-    listed.items?.some((r) => r.reason === `从 ${file} 导入预算`),
-    JSON.stringify(listed),
-  );
-  // 删掉旧文件、再启动：记号在，不读文件，预算照旧来自根章程。
-  rmSync(file);
-  assert.equal(
-    importCharterBudget(db, file, log, () => assert.fail("不该再读")).status,
-    "done",
-  );
-  assert.equal(quotaReserve(db).percent, 30);
-});
-
-test("根章程预算导入：只补缺的项；没有旧文件、没有缺项、坏值都记号且不挡启动", (t) => {
-  const dir = temp(t, "charter-partial");
-  const file = join(dir, "charter.md");
-  const logs: string[] = [];
-  const log = (line: string) => logs.push(line);
-
-  const partial = orgDb(t);
-  const root = addRoot(partial);
-  editDoc(
-    partial,
-    `o${root.id}`,
-    "charter",
-    {
-      fields: {},
-      body: "",
-      boundaries: [
-        { id: "reserve", summary: "留", param: { quota_reserve_percent: 40 } },
-      ],
-      reason: "建",
-    },
-    "u1",
-  );
-  writeFileSync(
-    file,
-    "---\nbudget:\n  quota_reserve_percent: 10\n  disk_min_free_gb: 999999\n  money: 0\n---\n",
-  );
-  assert.deepEqual(importCharterBudget(partial, file, log), {
-    status: "imported",
-    keys: ["money_yuan_max"],
-  });
-  assert.equal(quotaReserve(partial).percent, 40);
-  assert.ok(!logs.some((line) => /disk_min_free_gb/.test(line)));
-
-  const noFile = orgDb(t);
-  addRoot(noFile);
-  assert.deepEqual(importCharterBudget(noFile, join(dir, "missing.md"), log), {
-    status: "no_file",
-  });
-  assert.match(importMark(noFile, "charter_budget")!.detail, /没有旧章程/);
-
-  // 根节点只建了节点、还没写章程：导入时连带建出章程。
-  const bare = orgDb(t);
-  const bareRoot = addRoot(bare);
-  writeFileSync(file, "---\nbudget:\n  quota_reserve_percent: 15\n---\n");
-  assert.equal(importCharterBudget(bare, file, log).status, "imported");
-  assert.deepEqual(quotaReserve(bare), {
-    percent: 15,
-    set_by: `o${bareRoot.id}`,
-  });
-});
-
 test("旧目录：ATRIUM_LEGACY_DIR 优先；测试进程不给就不读主目录", () => {
   assert.equal(legacyDir({ ATRIUM_LEGACY_DIR: "/x/Atrium" }), "/x/Atrium");
   assert.equal(legacyDir({ NODE_TEST_CONTEXT: "child" }), undefined);
   assert.match(legacyDir({})!, /Atrium$/);
 });
 
-test("带旧表与旧式任务表的库启动：详述回填、根章程预算导入；删掉旧目录再启动一切照常", async (t) => {
+test("带旧表与旧式任务表的库启动：详述回填；删掉旧目录再启动一切照常", async (t) => {
   const data = temp(t, "imports-app");
   const legacy = join(data, "legacy");
   mkdirSync(join(legacy, "briefs"), { recursive: true });
   const briefFile = join(legacy, "briefs", "t1.md");
   writeFileSync(briefFile, "# 旧任务详述\n按这里做");
-  writeFileSync(
-    join(legacy, "charter.md"),
-    "---\nbudget:\n  quota_reserve_percent: 35\n---\n# 章程",
-  );
   // 旧运行时的表与升级前的任务表（没有 brief 列）。
   const old = new DatabaseSync(join(data, "atrium.sqlite"));
   old.exec(`CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT);
@@ -317,28 +132,16 @@ test("带旧表与旧式任务表的库启动：详述回填、根章程预算�
     createApp({
       data,
       auth: false,
-      legacyDir: legacy,
       tasks: { pace: async () => undefined },
     });
   let { app, db } = await start();
-  // 第一次启动还没有组织树：详述先回填，根章程等根节点建好。
-  const created = await app.inject({
-    method: "POST",
-    url: "/api/org/nodes",
-    headers: host,
-    payload: { slug: "org", kind: "org", name: "组织", reason: "建树" },
-  });
-  assert.equal(created.statusCode, 201, created.body);
-  await app.close();
-  ({ app, db } = await start());
   const show = async () => {
     const task = await app.inject({ url: "/api/tasks/t1", headers: host });
     assert.equal(task.statusCode, 200, task.body);
     return task.json() as { brief: string; brief_path: string };
   };
   assert.equal((await show()).brief, "# 旧任务详述\n按这里做");
-  const quota = (db: DatabaseSync) => quotaReserve(db).percent;
-  assert.equal(quota(db), 35);
+  assert.equal(quotaReserve(db).percent, 20);
   await app.close();
   removeTemp(legacy);
   ({ app, db } = await start());
@@ -346,7 +149,6 @@ test("带旧表与旧式任务表的库启动：详述回填、根章程预算�
     const task = await show();
     assert.equal(task.brief, "# 旧任务详述\n按这里做");
     assert.equal(task.brief_path, briefFile);
-    assert.equal(quota(db), 35);
     const list = await app.inject({ url: "/api/tasks", headers: host });
     assert.equal(
       (list.json() as { tasks: { brief?: string }[] }).tasks[0]!.brief,
@@ -359,6 +161,149 @@ test("带旧表与旧式任务表的库启动：详述回填、根章程预算�
         .map((row) => ({ ...row })),
       [{ id: "x", name: "旧身份" }],
     );
+  } finally {
+    await app.close();
+  }
+});
+
+test("规矩并进要点的纯函数：共同上级、判重的开头", () => {
+  const list = [
+    { id: 1, parent_id: null },
+    { id: 2, parent_id: 1 },
+    { id: 3, parent_id: 2 },
+    { id: 4, parent_id: 2 },
+    { id: 5, parent_id: 1 },
+  ];
+  assert.equal(commonAncestor(list, [3, 4]), 2);
+  assert.equal(commonAncestor(list, [3, 5]), 1);
+  assert.equal(commonAncestor(list, [3]), 3);
+  assert.equal(commonAncestor(list, [99]), 1, "找不到的退回根");
+  assert.equal(
+    headOf("每项任务的首要目标是让系统更简洁，哪怕…"),
+    headOf("每项任务的首要目标是让系统更简洁：先找…"),
+  );
+});
+
+test("旧库启动：硬边界、原则决定、管方面的部分、产品部、章程目标一次并进要点与配置；再启动不重复", async (t) => {
+  const data = temp(t, "rules");
+  const old = new DatabaseSync(join(data, "atrium.sqlite"));
+  old.exec(`CREATE TABLE org_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES org_nodes(id),
+      kind TEXT NOT NULL CHECK(kind IN ('org','project','module','concern')), slug TEXT NOT NULL, name TEXT NOT NULL,
+      leader TEXT, doc_path TEXT, archived_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      aspect INTEGER NOT NULL DEFAULT 0, applies TEXT, UNIQUE(parent_id,slug));
+    INSERT INTO org_nodes(id,parent_id,kind,slug,name,created_at,updated_at,aspect,applies) VALUES
+      (1,NULL,'org','org','组织',1,1,0,NULL),(2,1,'project','atrium','Atrium',1,1,0,NULL),
+      (3,2,'module','cli','命令行',1,1,0,NULL),(4,2,'module','perf','性能',1,1,1,NULL),
+      (5,2,'module','product','产品部',1,1,0,NULL);
+    CREATE TABLE org_points (id INTEGER PRIMARY KEY AUTOINCREMENT, node_id INTEGER NOT NULL, pos INTEGER NOT NULL,
+      text TEXT NOT NULL, why TEXT NOT NULL, decided_by TEXT NOT NULL, check_ref TEXT, updated_by TEXT NOT NULL,
+      updated_at INTEGER NOT NULL, applies TEXT, sources TEXT);
+    INSERT INTO org_points(node_id,pos,text,why,decided_by,updated_by,updated_at,applies) VALUES
+      (1,1,'每项任务的首要目标是让系统更简洁：先找最简单的做法','越来越复杂','u1 09-28','u1',1,NULL),
+      (4,1,'命令秒回','天天用','u1 09-27','u1',1,NULL),
+      (4,2,'命令行不做 n²','会变慢','u1 09-27','u1',1,'[3]');
+    CREATE TABLE org_boundaries (node_id INTEGER NOT NULL, bid TEXT NOT NULL, pos INTEGER NOT NULL,
+      summary TEXT NOT NULL, detail TEXT, param_key TEXT, param_value REAL, PRIMARY KEY(node_id,bid));
+    INSERT INTO org_boundaries VALUES (1,'no-spend',0,'不花钱',NULL,NULL,NULL),
+      (1,'quota-reserve',1,'额度留给用户',NULL,'quota_reserve_percent',25),
+      (1,'money',2,'花费上限（元）',NULL,'money_yuan_max',0);
+    CREATE TABLE org_docs (node_id INTEGER NOT NULL, doc TEXT NOT NULL CHECK(doc IN ('charter','card')), rev INTEGER NOT NULL,
+      fields TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY(node_id,doc));
+    INSERT INTO org_docs VALUES (2,'charter',3,'{"goal":"成为运行底座","report":"每周","now":"跑通了"}','旧正文','u1',1),
+      (3,'charter',1,'{"goal":"命令秒回","what":"命令行入口"}','','u1',1);
+    CREATE TABLE decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, decided_on TEXT NOT NULL,
+      decided_by TEXT NOT NULL, text TEXT NOT NULL, why TEXT NOT NULL, issue INTEGER, node_id INTEGER, task_id INTEGER,
+      superseded_by INTEGER, superseded_at INTEGER, created_at INTEGER NOT NULL, principle INTEGER NOT NULL DEFAULT 0,
+      settled_point INTEGER, settled_at INTEGER);
+    INSERT INTO decisions(id,owner,decided_on,decided_by,text,why,created_at,principle,settled_point,superseded_by) VALUES
+      (1,'u1','2026-09-26','u1','Atrium 定位','转为 AI 组织的运行底座',1,1,NULL,NULL),
+      (2,'u1','2026-09-28','u1','每项任务的首要目标是让系统更简洁，哪怕要上交','不为绕过去再加补丁',1,1,NULL,NULL),
+      (3,'u1','2026-09-27','u1','外部系统做成可插拔','公司不在 GitHub 上',1,1,NULL,NULL),
+      (4,'a1','2026-09-27','a1','普通决定','不迁',1,0,NULL,NULL),
+      (5,'u1','2026-09-27','u1','已沉淀的原则','不再迁',1,1,9,NULL);
+    CREATE TABLE decision_nodes (decision_id INTEGER NOT NULL, node_id INTEGER NOT NULL, PRIMARY KEY(decision_id,node_id));
+    INSERT INTO decision_nodes VALUES (3,2);
+    CREATE TABLE products (node_id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL, leader TEXT NOT NULL,
+      schedule_id INTEGER, created_at INTEGER NOT NULL);
+    INSERT INTO products VALUES (5,2,'a3',1,1);
+    CREATE TABLE schedules (id INTEGER PRIMARY KEY AUTOINCREMENT, node_id INTEGER NOT NULL, title TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('task','patrol','research')), every_ms INTEGER NOT NULL, at_minute INTEGER,
+      brief TEXT, brief_path TEXT, by TEXT, worker TEXT, next_at INTEGER NOT NULL, removed_at INTEGER,
+      last_task_id INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+    INSERT INTO schedules(node_id,title,kind,every_ms,next_at,created_at,updated_at) VALUES (5,'下一步调研','research',604800000,9e12,1,1);`);
+  old.close();
+  const start = () =>
+    createApp({ data, auth: false, tasks: { pace: async () => undefined } });
+  let { app, db } = await start();
+  const points = () =>
+    db
+      .prepare(
+        "SELECT node_id,pos,text,why,decided_by FROM org_points ORDER BY node_id,pos",
+      )
+      .all()
+      .map((r) => ({ ...r }));
+  const before = points();
+  try {
+    assert.deepEqual(
+      before.map((p) => [p.node_id, p.pos, p.text]),
+      [
+        [1, 1, "不花钱"],
+        [1, 2, "每项任务的首要目标是让系统更简洁：先找最简单的做法"],
+        [1, 3, "Atrium 定位：转为 AI 组织的运行底座"],
+        [2, 1, "外部系统做成可插拔：公司不在 GitHub 上"],
+        [2, 2, "命令秒回"],
+        [3, 1, "命令行不做 n²"],
+      ],
+      "硬边界排在根最前；和 k 重复的原则（开头相同）不迁；只写了标题的原则并进原因；管方面的要点挪到适用范围的共同上级",
+    );
+    assert.equal(before[0]!.why, "底线");
+    assert.equal(before[3]!.decided_by, "u1 09-27");
+    assert.equal(before[3]!.why, "原则决定 d3");
+    assert.deepEqual(
+      db
+        .prepare("SELECT key,value FROM org_limits ORDER BY key")
+        .all()
+        .map((r) => ({ ...r })),
+      [
+        { key: "money_yuan_max", value: 0 },
+        { key: "quota_reserve_percent", value: 25 },
+      ],
+    );
+    assert.equal(quotaReserve(db).percent, 25);
+    const fields = (id: number) =>
+      JSON.parse(
+        (
+          db.prepare("SELECT fields FROM org_docs WHERE node_id=?").get(id) as {
+            fields: string;
+          }
+        ).fields,
+      );
+    assert.deepEqual(fields(2), { now: "跑通了", what: "成为运行底座" });
+    assert.deepEqual(fields(3), { what: "命令行入口" }, "已写的是什么不动");
+    assert.ok(
+      (
+        db.prepare("SELECT archived_at FROM org_nodes WHERE id=5").get() as {
+          archived_at: number | null;
+        }
+      ).archived_at,
+      "产品部归档",
+    );
+    assert.deepEqual(
+      { ...db.prepare("SELECT node_id,brief FROM schedules WHERE id=1").get() },
+      { node_id: 2, brief: RESEARCH_BRIEF },
+    );
+    const map = await app.inject({
+      url: "/api/map/context/o3",
+      headers: { host: "127.0.0.1" },
+    });
+    assert.match(map.json().text, /\[组织\]\n1\. 不花钱（底线）/);
+  } finally {
+    await app.close();
+  }
+  ({ app, db } = await start());
+  try {
+    assert.deepEqual(points(), before, "只迁一次");
   } finally {
     await app.close();
   }

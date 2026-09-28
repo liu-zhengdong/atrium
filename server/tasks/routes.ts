@@ -1,9 +1,6 @@
-import { publishInvolved } from "./notice.ts";
 import { isTotal, openDescendants } from "./rollup-ledger.ts";
 import { Problem } from "../problem.ts";
 import { taskRef } from "./ledger-model.ts";
-import { involvedOf } from "./also.ts";
-import { specialistsForPart } from "./specialist-scope.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { leaderOf } from "../leaders/guard.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -128,10 +125,7 @@ export function registerTaskRoutes(
         resolveActor(db, query(request.query).as),
       ),
   );
-  app.get("/api/specialists", (request) => {
-    const part = query(request.query).part;
-    return part ? specialistsForPart(db, part) : listJobRoles(db);
-  });
+  app.get("/api/specialists", () => listJobRoles(db));
   app.post("/api/specialists", { bodyLimit: 32 * 1024 }, (request, reply) =>
     reply.code(201).send(createJobRole(db, request.body)),
   );
@@ -179,9 +173,9 @@ export function registerTaskRoutes(
   // 详述进库（#355）：内容至多 64 KB，JSON 转义后留足余量。
   app.post("/api/tasks", { bodyLimit: 256 * 1024 }, async (request, reply) => {
     const leader = leaderOf(request);
-    const task = createTask(db, request.body, Date.now(), leader);
-    publishInvolved(runner.inbox, db, task.id, [], leader);
-    return reply.code(201).send(task);
+    return reply
+      .code(201)
+      .send(createTask(db, request.body, Date.now(), leader));
   });
   app.get("/api/tasks", (request) => {
     const { parent, status, after, limit } = query(request.query);
@@ -209,7 +203,6 @@ export function registerTaskRoutes(
   app.patch("/api/tasks/:id", { bodyLimit: 256 * 1024 }, async (request) => {
     const id = parseTaskRef(params(request.params).id);
     const exists = db.prepare("SELECT 1 FROM tasks WHERE id=?").get(id);
-    const before = exists ? involvedOf(db, getTask(db, id)) : undefined;
     const { body, withChildren } = cascadeOf(request.body);
     // 总任务取消（t190）：下面还有没结束的子孙时先问一句，带 --with-children 才连带取消。
     const open =
@@ -240,14 +233,6 @@ export function registerTaskRoutes(
       runner.changedTotals(task.id);
     // 改了优先级：排队中的立刻按新先后再排一轮。
     if ("priority" in bodyFields(body)) await runner.drainQueued(task.id);
-    if (task.status !== "cancelled" && before)
-      publishInvolved(
-        runner.inbox,
-        db,
-        task.id,
-        [...before.also, ...before.auto],
-        leaderOf(request),
-      );
     return {
       ...getTask(db, task.id),
       ...(cascade

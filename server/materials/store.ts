@@ -30,7 +30,6 @@ import {
   purgeVerdict,
   READS_KEPT,
   staleVerdict,
-  type ContextMaterial,
   type Link,
   type LinkKind,
   type Stale,
@@ -307,7 +306,7 @@ export function addMaterial(
     if (upload.note === null && !existing)
       throw new Problem(
         400,
-        "--note: 新资料要写一句话说明是什么（派活时执行者靠它判断要不要取）",
+        "--note: 新资料要写一句话说明是什么（清单里靠它判断要不要取）",
         "usage",
       );
     let id: number;
@@ -779,27 +778,6 @@ export function markHinted(
   db.prepare(
     `UPDATE materials SET ${column}=? WHERE id IN (${marks(ids.length)})`,
   ).run(now, ...ids);
-}
-
-/** 派活附带的清单：这条链上（本节点及上级）没归档、没被取代的资料。 */
-export function contextMaterials(
-  db: DatabaseSync,
-  chain: readonly { id: number; ref: string; distance: number }[],
-): ContextMaterial[] {
-  if (!chain.length || !hasTable(db, "materials")) return [];
-  const byId = new Map(chain.map((c) => [c.id, c]));
-  return all<MaterialRow>(
-    db,
-    `SELECT * FROM materials WHERE archived_at IS NULL AND superseded_by IS NULL AND node_id IN (${marks(chain.length)}) ORDER BY id DESC LIMIT 200`,
-    ...chain.map((c) => c.id),
-  ).map((row) => ({
-    ref: materialRef(row.id),
-    name: row.name,
-    note: row.note,
-    node: byId.get(row.node_id)!.ref,
-    distance: byId.get(row.node_id)!.distance,
-    updated_at: row.updated_at,
-  }));
 }
 
 /** 全景节点页「资料」页签：本块的资料（没归档的在前），带清理线索。 */

@@ -2,10 +2,10 @@ import { hasParentSegment, isAbsolutePath } from "../platform/plan.ts";
 import { Problem } from "../problem.ts";
 
 /**
- * 全景图的人话字段（#322 第 1 步）：写在节点章程当前字段里，不留修订历史，按章程权限改。
+ * 全景图的人话字段（#322 第 1 步）：每块一份，只存当前值、不留修订历史；根只有用户能改，其余按 leader 链。
  * 顺序即 `org show` 的讲法：是什么 → 能用它做什么 → 一件事怎么走完 → 由哪几部分组成 → 现在做到哪、接下来做什么。
- * 组成部分不单写：取子节点，各自章程里的 alias（人话名）与 analogy（类比）。技术细节是章程正文，默认折叠。
- * 阶段记录（stages）在章程里直接改（旧的 g 短号留作 id）。纯函数，不读库。
+ * 组成部分不单写：取子节点各自的 alias（人话名）与 analogy（类比）。
+ * 阶段记录（stages）用 `map edit --stages` 整份替换（旧的 g 短号留作 id）。纯函数，不读库。
  */
 
 export const STAGE_STATUSES = [
@@ -65,8 +65,8 @@ const texts = (value: unknown, field: string, count: number, max: number) => {
 };
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** 校验 charter.stages；返回原值（字段顺序由写入方决定）。 */
-export function validateStages(value: unknown, field = "charter.stages") {
+/** 校验 stages；返回原值（字段顺序由写入方决定）。 */
+export function validateStages(value: unknown, field = "fields.stages") {
   if (!Array.isArray(value)) return bad(field, "应为阶段列表");
   if (value.length > STAGES_MAX) bad(field, `超过 ${STAGES_MAX} 项`);
   const ids = new Set<string>();
@@ -124,9 +124,9 @@ export function validateStages(value: unknown, field = "charter.stages") {
   return value as Stage[];
 }
 
-/** 章程字段里的一项若是人话字段就校验并返回 true；不是返回 false，交给原有规则。 */
+/** 一项若是人话字段就校验并返回 true；不是返回 false。 */
 export function validateOverviewField(key: string, value: unknown): boolean {
-  const field = `charter.${key}`;
+  const field = `fields.${key}`;
   if (Object.hasOwn(OVERVIEW_TEXT, key))
     text(value, field, OVERVIEW_TEXT[key]!);
   else if (Object.hasOwn(OVERVIEW_LISTS, key))
@@ -155,8 +155,6 @@ export type Overview = {
   alias: string;
   analogy: string;
   what: string;
-  /** what 没写时取章程目标兜底。 */
-  what_from_goal: boolean;
   uses: string[];
   flow: string[];
   parts: Part[];
@@ -171,13 +169,11 @@ const list = (value: unknown) =>
     ? value.filter((v): v is string => typeof v === "string" && !!v.trim())
     : [];
 
-/** 读章程字段拼人话视图；字段坏了（旧数据）按没写处理，不挡读取。 */
+/** 读人话字段拼视图；字段坏了（旧数据）按没写处理，不挡读取。 */
 export function overviewOf(
   fields: Record<string, unknown>,
   parts: Part[],
 ): Overview {
-  const what = str(fields.what);
-  const goal = str(fields.goal);
   let stages: Stage[] = [];
   try {
     stages = fields.stages === undefined ? [] : validateStages(fields.stages);
@@ -187,8 +183,7 @@ export function overviewOf(
   return {
     alias: str(fields.alias),
     analogy: str(fields.analogy),
-    what: what || goal,
-    what_from_goal: !what && !!goal,
+    what: str(fields.what),
     uses: list(fields.uses),
     flow: list(fields.flow),
     parts,
@@ -198,9 +193,9 @@ export function overviewOf(
   };
 }
 
-/** 章程里的人话字段名（`--detail` 展示章程时不重复列出）。 */
-export const HUMAN_KEYS = new Set([
+/** 人话字段名。 */
+export const OVERVIEW_KEYS = new Set([
   ...Object.keys(OVERVIEW_TEXT),
   ...Object.keys(OVERVIEW_LISTS),
+  "stages",
 ]);
-export const OVERVIEW_KEYS = new Set([...HUMAN_KEYS, "stages"]);

@@ -111,11 +111,24 @@ export function openTask(db: DatabaseSync, row: ScheduleRow): string | null {
   return task && isOpen(task.status) ? `t${row.last_task_id}` : null;
 }
 
+const ready = new WeakSet<DatabaseSync>();
+/** 周期任务的表在不在（任务运行时单测不建）；建过就记住。 */
+function hasSchedules(db: DatabaseSync) {
+  if (ready.has(db)) return true;
+  const ok = !!one(
+    db,
+    "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='schedule_runs'",
+  );
+  if (ok) ready.add(db);
+  return ok;
+}
+
 /** 这件任务是不是某条调研类周期任务建出的一轮；是就给出它挂的部分（选项单挂在那里、只在本机跑）。 */
 export function researchRound(
   db: DatabaseSync,
   taskId: number,
 ): { node_id: number } | undefined {
+  if (!hasSchedules(db)) return undefined;
   return one<{ node_id: number }>(
     db,
     `SELECT s.node_id FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id

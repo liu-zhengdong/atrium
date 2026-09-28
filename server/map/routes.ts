@@ -13,7 +13,6 @@ import { ensureMapWatch, startMapWatch, type MapRepeat } from "./watch.ts";
 import { mapDecisions, mapLeader, mapLeaders } from "./leaders.ts";
 import { addMap, editMap, type MapAdd, type MapEdit } from "./write.ts";
 import {
-  mapPartRoles,
   mapRole,
   mapRoles,
   mapSkills,
@@ -130,13 +129,10 @@ export function registerMapRoutes(
       : { ...node, tree: mapTree(db, node.ref, parseDepth(query.depth)).tree };
   });
   app.get("/api/map/now", async () => mapNow(db, await live()));
-  // 组织共用的专员、技能、执行者（组织根与专员页）；带 part 时只列这一部分能请的（本部分、上级、牵涉部分、全组织，各注明哪一档）。
-  app.get("/api/map/specialists", (request) => {
-    const part = q(request.query).part;
-    return part
-      ? { specialists: mapPartRoles(db, part).roles }
-      : { specialists: mapRoles(db).roles };
-  });
+  // 专员、技能、执行者（组织根与专员页）。
+  app.get("/api/map/specialists", () => ({
+    specialists: mapRoles(db).roles,
+  }));
   app.get("/api/map/specialists/:id", async (request) =>
     mapRole(db, id(request), await live()),
   );
@@ -153,12 +149,7 @@ export function registerMapRoutes(
   );
   app.get("/api/map/workers/:id", (request) => mapWorker(db, id(request)));
   app.get("/api/map/context/:id", (request) =>
-    mapContext(
-      db,
-      id(request),
-      parseMax(q(request.query).max),
-      q(request.query).also,
-    ),
+    mapContext(db, id(request), parseMax(q(request.query).max)),
   );
   app.patch("/api/map/nodes/:id", { bodyLimit: 64 * 1024 }, (request) =>
     editMap(

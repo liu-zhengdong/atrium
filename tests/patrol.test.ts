@@ -42,7 +42,11 @@ test("隔离服务巡检：连回本机服务、不带执行者标记；发现�
   });
   const app = created.app;
   t.after(() => app.close());
-  const call = async (method: "GET" | "POST", url: string, payload?: object) => {
+  const call = async (
+    method: "GET" | "POST",
+    url: string,
+    payload?: object,
+  ) => {
     const response = await app.inject({
       method,
       url,
@@ -61,7 +65,13 @@ test("隔离服务巡检：连回本机服务、不带执行者标记；发现�
   );
   addNode(
     created.db,
-    { parent: "o1", slug: "cli", kind: "project", name: "命令行", reason: "建" },
+    {
+      parent: "o1",
+      slug: "cli",
+      kind: "project",
+      name: "命令行",
+      reason: "建",
+    },
     "u1",
   );
   editMap(
@@ -103,7 +113,10 @@ test("隔离服务巡检：连回本机服务、不带执行者标记；发现�
     join(data, "tasks", String(id), "prompt.md"),
     "utf8",
   );
-  assert.match(prompt, /atrium task add '修复：简短现象' --part o2 --priority 修复/);
+  assert.match(
+    prompt,
+    /atrium task add '修复：简短现象' --part o2 --priority 修复/,
+  );
 
   const fix = { title: "修复：帮助缺示例", part: "o2", priority: "修复" };
   assert.equal((await call("POST", "/api/tasks", fix)).status, 201);

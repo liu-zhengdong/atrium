@@ -51,10 +51,7 @@ export async function chooseWorker(
   const path = options.env.PATH ?? "";
   let worker: ResolvedWorker;
   let waitUntil: number | undefined;
-  const reservePercent = readQuotaReservePercent(
-    options.db,
-    avoid.chain?.at(-1)?.id,
-  );
+  const reservePercent = readQuotaReservePercent(options.db);
   const pace = await (options.pace ?? (() => readPace()))();
   const headroom = options.db ? quotaHeadroom(pace, reservePercent) : new Map();
   if (request.worker) {
@@ -117,7 +114,7 @@ export async function chooseWorker(
         : [];
       throw new Problem(
         409,
-        `执行者 ${worker.tool} 的账号 ${account} 已用额度 ${used.usedPercent}%，达到章程上限 ${100 - reservePercent}%（须留 ${reservePercent}% 给用户）；${available.length ? `可选的其他执行者：${available.join("、")}` : "目前没有可选的其他执行者"}`,
+        `执行者 ${worker.tool} 的账号 ${account} 已用额度 ${used.usedPercent}%，达到上限 ${100 - reservePercent}%（须留 ${reservePercent}% 给用户）；${available.length ? `可选的其他执行者：${available.join("、")}` : "目前没有可选的其他执行者"}`,
         "conflict",
       );
     }

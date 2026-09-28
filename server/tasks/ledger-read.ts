@@ -1,4 +1,3 @@
-import { involvedOf, involvedView } from "./also.ts";
 import { taskSecretNames } from "../secrets/store.ts";
 import { holderFor } from "./holder-facts.ts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -54,7 +53,6 @@ export function getTask(db: DatabaseSync, reference: unknown) {
     last_check: lastCheck(db, found.id),
     events,
     ...conditions(db, found.id),
-    ...involvedView(involvedOf(db, found)),
     ...(secrets.length ? { secrets } : {}),
   };
 }

@@ -2,9 +2,8 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { actsForUser } from "../../shared/user.ts";
 
+/** 旧库里还有 concern（关注点，已下线）：读得出来，不再新建。 */
 export type Kind = "org" | "project" | "module" | "concern";
-export type Doc = "charter";
-export type Target = "node" | Doc;
 export type NodeRow = {
   id: number;
   parent_id: number | null;
@@ -16,14 +15,11 @@ export type NodeRow = {
   archived_at: number | null;
   created_at: number;
   updated_at: number;
-  /** 1 表示「管方面」的部分（#373，aspects.ts）；旧库补列前的行可能没有。 */
-  aspect?: number;
-  /** 管方面的部分缺省适用于哪些部分：节点 id 的 JSON 数组；NULL 为整个上级。 */
-  applies?: string | null;
 };
+/** 人话字段的存储：org_docs 里 doc='charter' 那一行的 fields（表与取值沿用旧名，章程这个概念已下线）。 */
 export type DocRow = {
   node_id: number;
-  doc: Doc;
+  doc: "charter";
   rev: number;
   fields: string;
   body: string;
@@ -33,7 +29,7 @@ export type DocRow = {
 export type RevisionRow = {
   id: number;
   node_id: number;
-  target: Target;
+  target: string;
   rev: number;
   author: string;
   at: number;
@@ -51,7 +47,7 @@ export const all = <T>(
   sql: string,
   ...args: SQLInputValue[]
 ) => db.prepare(sql).all(...args) as T[];
-/** 已在事务里（如 product add 一次建节点、leader 与周期任务）就并进外层，不另开。 */
+/** 已在事务里就并进外层，不另开。 */
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
   if (db.isTransaction) return fn();
   db.exec("BEGIN IMMEDIATE");

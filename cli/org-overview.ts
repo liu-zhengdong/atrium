@@ -4,7 +4,7 @@ import type { Point } from "../server/org/points.ts";
 
 /**
  * `org show` 的人话段（#322）：是什么 → 能用它做什么 → 一件事怎么走完 → 由哪几部分组成 → 要点 → 现在做到哪、接下来。
- * 没写的项标「未写」，一项都没写时只给一行怎么补。技术细节不在这里，由 `--detail` 另外展开。
+ * 没写的项标「未写」，一项都没写时只给一行怎么补。
  */
 
 const counts = (t: {
@@ -66,9 +66,9 @@ function stageDetail(stage: Stage): string[] {
 export function pointLines(points: readonly Point[]): string[] {
   if (!points.length) return [];
   return [
-    "要点（必须守住）：",
-    ...points.flatMap((p) => [
-      `  ${p.ref} ${p.text}${p.applies?.length ? `（适用于 ${p.applies.join("、")}）` : ""}`,
+    "要点（必须守住；越靠前越重要，冲突时靠前的优先）：",
+    ...points.flatMap((p, i) => [
+      `  ${i + 1}. ${p.ref} ${p.text}`,
       `     为什么：${p.why} · ${p.by} 定${p.check ? ` · 检查：${p.check}` : ""}`,
     ]),
   ];
@@ -82,7 +82,7 @@ export function formatOverview(
 ): string[] {
   if (isBlank(overview))
     return [
-      `人话介绍还没写（是什么、能做什么、怎么走完、由哪几部分组成、现状）：atrium org show ${node.ref} --raw > 章程.md，补上 what、uses、flow、alias、analogy、now、next 后 atrium org edit ${node.ref} --charter 章程.md --reason 原因`,
+      `人话介绍还没写（是什么、能做什么、怎么走完、现状）：atrium map edit ${node.ref} --what 一句话 --uses 场景 --flow 步骤 --now 现状 --next 接下来`,
       ...partLines(overview, detail),
       ...pointLines(points),
     ];
@@ -97,7 +97,7 @@ export function formatOverview(
     .map(([label, n]) => `${label} ${n}`)
     .join(" · ");
   return [
-    `是什么：${overview.what ? `${overview.what}${overview.what_from_goal ? "（取自章程目标）" : ""}` : none}`,
+    `是什么：${overview.what || none}`,
     ...(overview.uses.length
       ? ["能用它做什么：", ...overview.uses.map((u) => `  · ${u}`)]
       : [`能用它做什么：${none}`]),

@@ -7,7 +7,7 @@
  * 给本节点及子节点排周期任务（巡检、调研等），停、续、立即跑一轮、删掉；
  * 用户把节点的选项单拍板权下放给 leader 后拍板（是不是拍板人由 choices/store.ts 按节点设置判）；
  * 在负责的部分里加资料、归档、恢复、留下，取任何资料；在负责的部分里设凭据、归档、恢复、留下（没有读值的接口）。
- * 不可以：动别的节点的任务、改章程与边界预算、建删节点、改谁拍板选项单、改技能、清额度、登记 leader、真删资料或凭据等。
+ * 不可以：动别的节点的任务、改根上的要点与配置、建删节点、拍板选项单、记决定、改技能、清额度、登记 leader、真删资料或凭据等。
  */
 
 export type LeaderRule =
@@ -17,7 +17,6 @@ export type LeaderRule =
   | "task-remark"
   | "task-patch"
   | "point"
-  | "stages"
   | "node-edit"
   | "map-edit"
   | "leader-edit"
@@ -46,19 +45,11 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/org/nodes/:id/points": "point",
   "PATCH /api/org/points/:id": "point",
   "DELETE /api/org/points/:id": "point",
-  "PUT /api/org/nodes/:id/stages": "stages",
   "PATCH /api/org/nodes/:id": "node-edit",
   "PATCH /api/map/nodes/:id": "map-edit",
   "PATCH /api/leaders/:id": "leader-edit",
-  // 备忘与决定记录按 ?as= 定主人，guard 已把它锁成自己，不必再判。
+  // 备忘按 ?as= 定主人，guard 已把它锁成自己，不必再判。决定记录只记用户拍板的，leader 不写（默认拒绝）。
   "PUT /api/memo": "self",
-  "POST /api/decisions": "self",
-  "POST /api/decisions/:id/supersede": "self",
-  // 整理决定（t211）：按短号找，curate.ts 判 leader 只能整理自己那份；沉淀成要点另按要点权限判。
-  "POST /api/decisions/:id/tag": "self",
-  "POST /api/decisions/:id/mark": "self",
-  "POST /api/decisions/:id/settle": "self",
-  "POST /api/decisions/:id/unsupersede": "self",
   "POST /api/leaders/:id/escalate": "escalate",
   // leader 提选项、写意见；拍板只有用户（leader 令牌默认拒绝）。
   "POST /api/choices": "choice-add",
@@ -96,10 +87,12 @@ export const denied = (leader: string, what: string) =>
 /** 拒绝写接口时的说明：常见几类给具体原因。 */
 export function denyReason(leader: string, method: string, route: string) {
   const key = `${method.toUpperCase()} ${route}`;
-  if (key === "PUT /api/org/nodes/:id/docs/:doc" || route.endsWith("/revert"))
+  if (route.startsWith("/api/org/limits"))
+    return denied(leader, "改给用户留的额度与花费上限（那是用户的）");
+  if (route.startsWith("/api/decisions"))
     return denied(
       leader,
-      "改章程、边界与预算（改阶段用 atrium org stages 节点 --file 文件）",
+      "记决定（决定记录只记用户拍板的事；你的取舍写任务备注：atrium task note tN 文字）",
     );
   if (key === "POST /api/org/nodes" || key === "POST /api/map/nodes")
     return denied(leader, "新建组织节点");
@@ -175,20 +168,6 @@ export function scopeVerdict(
   return null;
 }
 
-/**
- * 记备注、捎话（#373）：任务在范围里照常；不在时，任务牵涉的部分（显式或自动）有一个在范围里也行——
- * 被牵涉部分的 leader 可以说话，但不能派、停、改。
- */
-export function remarkVerdict(
-  leader: string,
-  scope: ReadonlySet<number>,
-  check: ScopeCheck,
-  involved: readonly number[],
-) {
-  if (involved.some((id) => scope.has(id))) return null;
-  return scopeVerdict(leader, scope, [check]);
-}
-
 /** 负责人（owner）：不写或写自己；不能把事件改投给别人。 */
 export function ownerVerdict(leader: string, owner: unknown) {
   if (owner === undefined || owner === null || owner === "" || owner === leader)
@@ -214,13 +193,6 @@ export function nodeEditVerdict(input: {
     return denied(input.leader, "改自己负责的节点的 leader");
   if (!input.scope.has(input.node))
     return denied(input.leader, "给不在你负责部分里的节点指派 leader");
-  return null;
-}
-
-/** 全景人话字段可改；--detail 会改章程正文，不行。 */
-export function mapEditVerdict(leader: string, keys: readonly string[]) {
-  if (keys.includes("detail") || keys.includes("rev"))
-    return denied(leader, "改章程正文（--detail）");
   return null;
 }
 

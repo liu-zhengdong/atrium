@@ -6,13 +6,9 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Problem } from "../server/problem.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, editDoc, editNode } from "../server/org/write.ts";
+import { addNode, editFields, editNode } from "../server/org/write.ts";
 import { show as showNode } from "../server/org/read.ts";
-import {
-  exportDocument,
-  parseDocument,
-  validateFields,
-} from "../server/org/validate.ts";
+import { validateFields } from "../server/org/validate.ts";
 import { overviewOf, type Overview } from "../server/org/overview.ts";
 import { formatOverview, titleOf } from "../cli/org-overview.ts";
 import {
@@ -20,6 +16,7 @@ import {
   chainPoints,
   editPoint,
   removePoint,
+  reorder,
   validatePoint,
 } from "../server/org/points.ts";
 import {
@@ -33,9 +30,7 @@ import { renderTop, snapshotOf } from "../cli/top.ts";
 import type { Client } from "../cli/service.ts";
 import { removeTemp } from "./temp-dir.ts";
 
-/** 不带 raw 的 org show。 */
-const show = (db: DatabaseSync, at: string) =>
-  showNode(db, at) as Exclude<ReturnType<typeof showNode>, { raw: string }>;
+const show = (db: DatabaseSync, at: string) => showNode(db, at);
 const node = (db: DatabaseSync, input: Record<string, unknown>) =>
   addNode(db, { reason: "创建", ...input } as never, "u1");
 
@@ -71,18 +66,10 @@ const charter = (
   at: string,
   fields: Record<string, unknown>,
   actor = "u1",
-) =>
-  editDoc(
-    db,
-    at,
-    "charter",
-    { fields, body: "负责 server/tasks/", reason: "写人话" },
-    actor,
-  );
+) => editFields(db, at, fields, actor);
 
-test("人话字段：合法输入写进章程，破坏输入按字段名中文拒绝", () => {
-  const ok = validateFields("charter", {
-    goal: "底座",
+test("人话字段：合法输入照收，破坏输入按字段名中文拒绝", () => {
+  const ok = validateFields({
     what: "帮用户把目标变成有人做完的事",
     alias: "派活员",
     analogy: "项目经理",
@@ -106,15 +93,15 @@ test("人话字段：合法输入写进章程，破坏输入按字段名中文�
   });
   assert.equal(ok.alias, "派活员");
   const bad: [Record<string, unknown>, RegExp][] = [
-    [{ what: 1 }, /charter\.what 应为文本/],
-    [{ alias: "名".repeat(41) }, /charter\.alias 超过 40 字/],
-    [{ uses: "一条" }, /charter\.uses 应为文本列表/],
-    [{ uses: Array(11).fill("x") }, /charter\.uses 超过 10 项/],
-    [{ flow: [1] }, /charter\.flow\[0\] 应为文本/],
-    [{ stages: {} }, /charter\.stages 应为阶段列表/],
+    [{ what: 1 }, /fields\.what 应为文本/],
+    [{ alias: "名".repeat(41) }, /fields\.alias 超过 40 字/],
+    [{ uses: "一条" }, /fields\.uses 应为文本列表/],
+    [{ uses: Array(11).fill("x") }, /fields\.uses 超过 10 项/],
+    [{ flow: [1] }, /fields\.flow\[0\] 应为文本/],
+    [{ stages: {} }, /fields\.stages 应为阶段列表/],
     [
       { stages: [{ id: "g1", result: "x", status: "done" }] },
-      /charter\.stages\[0\]\.status 只能是/,
+      /fields\.stages\[0\]\.status 只能是/,
     ],
     [
       {
@@ -123,15 +110,15 @@ test("人话字段：合法输入写进章程，破坏输入按字段名中文�
           { id: "g1", result: "y", status: "active" },
         ],
       },
-      /charter\.stages\[1\]\.id 与前面的阶段重复：g1/,
+      /fields\.stages\[1\]\.id 与前面的阶段重复：g1/,
     ],
     [
       { stages: [{ id: "g1", result: " ", status: "active" }] },
-      /charter\.stages\[0\]\.result 不能为空/,
+      /fields\.stages\[0\]\.result 不能为空/,
     ],
     [
       { stages: [{ id: "g1", result: "x", status: "active", who: 1 }] },
-      /charter\.stages\[0\]\.who 是未知字段/,
+      /fields\.stages\[0\]\.who 是未知字段/,
     ],
     [
       { stages: [{ id: "g1", result: "x", status: "active", due: "10-01" }] },
@@ -145,30 +132,13 @@ test("人话字段：合法输入写进章程，破坏输入按字段名中文�
     ],
   ];
   for (const [fields, message] of bad)
-    assert.throws(() => validateFields("charter", fields), message);
+    assert.throws(() => validateFields(fields), message);
 });
 
-test("阶段记录导出为 YAML 块，读回来一致", () => {
-  const stages = [
-    {
-      id: "g13",
-      result: "看得见",
-      status: "achieved",
-      criteria: ["$ npx tsx --test tests/top.test.ts", "秘书看过"],
-      evidence: ["第 1 条通过（命令，退出码 0，u1，2026-09-27）"],
-    },
-  ];
-  const source = exportDocument({ goal: "g", stages }, "正文", []);
-  assert.match(source, /\nstages:\n {2}- id: g13\n/);
-  const parsed = parseDocument(source, "charter");
-  assert.deepEqual(parsed.fields, { goal: "g", stages });
-  assert.equal(parsed.body, "正文");
-});
-
-test("org show 的人话视图：组成部分取子节点的人话名与类比，是什么缺省取目标", () => {
+test("org show 的人话视图：组成部分取子节点的人话名与类比", () => {
   const db = setup();
   charter(db, "o2", {
-    goal: "成为 AI 组织的运行底座",
+    what: "成为 AI 组织的运行底座",
     uses: ["提一句目标，等汇报"],
   });
   charter(db, "o3", { alias: "派活员", analogy: "项目经理" }, "a1");
@@ -176,7 +146,6 @@ test("org show 的人话视图：组成部分取子节点的人话名与类比�
   createTask(db, { title: "x", part: "o3" });
   const shown = show(db, "o2");
   assert.equal(shown.overview.what, "成为 AI 组织的运行底座");
-  assert.equal(shown.overview.what_from_goal, true);
   assert.deepEqual(
     shown.overview.parts.map((p) => [p.ref, p.alias, p.analogy, p.archived]),
     [
@@ -261,7 +230,7 @@ test("formatOverview：按是什么 → 能做什么 → 流程 → 组成 → �
     "o3 待办本（runtime）——团队的任务白板",
   );
   const blank = formatOverview({ ref: "o4", name: "cli" }, overview());
-  assert.match(blank[0]!, /人话介绍还没写.*atrium org show o4 --raw/);
+  assert.match(blank[0]!, /人话介绍还没写.*atrium map edit o4 --what/);
   assert.equal(blank[1], "由哪几部分组成：没有下一层");
   const partial = formatOverview(
     { ref: "o4", name: "cli" },
@@ -377,7 +346,7 @@ test("top：目标段改读全景图；全景取不到不影响看板", async ()
   );
 });
 
-test("要点：增改删、权限同章程、不留修订；show 带本节点与上级链，排在现状前", async (t) => {
+test("要点：增改删与排序、权限按 leader 链、不留修订；show 带本节点与上级链，排在现状前", async (t) => {
   const db = setup();
   const k1 = addPoint(
     db,
@@ -446,11 +415,25 @@ test("要点：增改删、权限同章程、不留修订；show 带本节点与
   assert.equal(shown.points_chain.length, 3);
   assert.equal(
     db
-      .prepare("SELECT count(*) AS n FROM org_revisions WHERE target='charter'")
+      .prepare("SELECT count(*) AS n FROM org_revisions WHERE target<>'node'")
       .get()!.n,
     0,
     "要点不留修订",
   );
+  // 排序：靠前的更重要；--pos 挪到第几条，其余顺延。
+  assert.deepEqual(reorder([1, 2, 3], 3, 1), [3, 1, 2]);
+  assert.deepEqual(reorder([1, 2, 3], 1, 9), [2, 3, 1]);
+  addPoint(db, "o1", { text: "根二", why: "w", by: "u1", pos: 1 }, "u1");
+  assert.deepEqual(
+    chainPoints(db, 1)[0]!.points.map((p) => p.text),
+    ["根二", "根要点"],
+  );
+  editPoint(db, "k4", { pos: 2 }, "u1");
+  assert.deepEqual(
+    chainPoints(db, 1)[0]!.points.map((p) => p.text),
+    ["根要点", "根二"],
+  );
+  assert.throws(() => validatePoint({ pos: 0 }, true), /--pos: 应为 1–30/);
   charter(db, "o3", { what: "派活" }, "a2");
   const lines = formatOverview(
     { ref: "o3", name: "runtime" },
@@ -458,14 +441,16 @@ test("要点：增改删、权限同章程、不留修订；show 带本节点与
     false,
     shown.points,
   );
-  const at = lines.indexOf("要点（必须守住）：");
+  const at = lines.indexOf(
+    "要点（必须守住；越靠前越重要，冲突时靠前的优先）：",
+  );
   assert.ok(at > 0 && at < lines.findIndex((l) => l.startsWith("现在做到哪")));
-  assert.equal(lines[at + 1], "  k2 重启不丢执行者");
+  assert.equal(lines[at + 1], "  1. k2 重启不丢执行者");
   assert.equal(lines[at + 2], "     为什么：升级随时可做 · u1 09-26 定");
   assert.equal(removePoint(db, "k2", "a2").ref, "k2");
   assert.equal(show(db, "o3").points.length, 0);
-  const k4 = addPoint(db, "o3", { text: "新", why: "w", by: "u1" }, "a2");
-  assert.equal(k4.ref, "k4", "短号不复用");
+  const k5 = addPoint(db, "o3", { text: "新", why: "w", by: "u1" }, "a2");
+  assert.equal(k5.ref, "k5", "短号不复用");
   db.close();
 
   const data = mkdtempSync(join(tmpdir(), "atrium-points-"));

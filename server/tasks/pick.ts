@@ -64,7 +64,7 @@ export type PickAccount = {
   used_percent: number | null;
   spare_percent: number | null;
   hours_to_reset: number | null;
-  /** 扣掉根章程给用户保留的额度后还能用的百分点；没有数据为 null。 */
+  /** 扣掉给用户保留的额度后还能用的百分点；没有数据为 null。 */
   left_percent: number | null;
   left_reason: string | null;
   /** 额度用尽标记的到期时刻；没有标记为 null。 */
@@ -183,7 +183,7 @@ export function refusalsOf(
     .find((entry) => overReserve(entry.usedPercent, facts.reservePercent));
   if (over)
     reasons.push(
-      `已用额度 ${over.usedPercent}% 达到章程上限 ${100 - facts.reservePercent}%（须留 ${facts.reservePercent}% 给用户）`,
+      `已用额度 ${over.usedPercent}% 达到上限 ${100 - facts.reservePercent}%（须留 ${facts.reservePercent}% 给用户）`,
     );
   const room = facts.headroom.get(account);
   if (!over && facts.pace && room && room.points < 1) reasons.push(room.reason);

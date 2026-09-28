@@ -1,4 +1,3 @@
-import { involvedOf } from "../tasks/also.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
@@ -23,11 +22,9 @@ import {
   ESCALATE_HINT,
   leaderEditVerdict,
   leaderRule,
-  mapEditVerdict,
   nodeEditVerdict,
   ownerVerdict,
   scopeOf,
-  remarkVerdict,
   scopeVerdict,
   type ScopeCheck,
 } from "./scope.ts";
@@ -152,19 +149,11 @@ export function registerLeaderGuard(
         break;
       }
       case "task":
+      case "task-remark":
         verdict = scopeVerdict(leader, scope, [
           taskCheck(db, idParam(request)),
         ]);
         break;
-      case "task-remark": {
-        const task = getTask(db, idParam(request));
-        const { also, auto } = involvedOf(db, task);
-        verdict = remarkVerdict(leader, scope, taskCheck(db, task.ref), [
-          ...also,
-          ...auto,
-        ]);
-        break;
-      }
       case "task-patch":
         verdict =
           ownerVerdict(leader, body.owner) ??
@@ -180,11 +169,6 @@ export function registerLeaderGuard(
             nodeCheck(db, idParam(request), "节点"),
           ]);
         break;
-      case "stages":
-        verdict = scopeVerdict(leader, scope, [
-          nodeCheck(db, idParam(request), "节点"),
-        ]);
-        break;
       case "node-edit":
         verdict = nodeEditVerdict({
           leader,
@@ -195,11 +179,9 @@ export function registerLeaderGuard(
         });
         break;
       case "map-edit":
-        verdict =
-          mapEditVerdict(leader, changed(body)) ??
-          scopeVerdict(leader, scope, [
-            nodeCheck(db, idParam(request), "节点"),
-          ]);
+        verdict = scopeVerdict(leader, scope, [
+          nodeCheck(db, idParam(request), "节点"),
+        ]);
         break;
       case "leader-edit":
         verdict = leaderEditVerdict(leader, idParam(request), changed(body));

@@ -144,7 +144,10 @@ function seeded() {
   node({ slug: "org", kind: "org", name: "组织" });
   node({ parent: "o1", slug: "atrium", kind: "project", name: "Atrium" });
   node({ parent: "o2", slug: "cli", kind: "module", name: "cli" });
-  node({ parent: "o2", slug: "安全", kind: "concern", name: "安全" });
+  // 旧库里的关注点（已下线，不能再建）：直接写进表。
+  db.prepare(
+    "INSERT INTO org_nodes(parent_id,kind,slug,name,created_at,updated_at) VALUES(2,'concern','安全','安全',1,1)",
+  ).run();
   editMap(db, "o3", { alias: "命令行和网页" }, "u1");
   addSkill(
     db,
@@ -164,7 +167,6 @@ function seeded() {
   createJobRole(db, {
     name: "后端",
     description: "服务和数据",
-    body: "测试要过",
     preferred: ["codex+gpt-6-sol:high"],
     checks: ["local_check"],
     skills: ["atrium-cli"],
@@ -172,7 +174,6 @@ function seeded() {
   createJobRole(db, {
     name: "前端",
     description: "网页",
-    body: "附截图",
     preferred: [],
     checks: ["screenshot"],
     skills: [],
@@ -316,10 +317,6 @@ test("接口：网页会话能读角色、技能、执行者，不存在的给 4
     ["/api/map/leaders/a9", 404],
     ["/api/map/leaders/o1", 400],
     ["/api/map/leaders/..%2Fa1", 400],
-    // 按部分列专员：部分不存在或名字不合法都不给。
-    ["/api/map/specialists?part=o99", 404],
-    ["/api/map/specialists?part=..%2Fo1", 404],
-    ["/api/map/specialists?part=", 200],
   ] as const)
     assert.equal(
       (await app.inject({ url, headers: session })).statusCode,

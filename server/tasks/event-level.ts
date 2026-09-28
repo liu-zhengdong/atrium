@@ -33,8 +33,6 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "thinking_retry",
   "ci_success",
   "ci_pending",
-  // 牵涉知会（#373）：让被牵涉部分的 leader 知道，不叫醒。
-  "involved",
   // 选项单拍板了（合并掉还没处理的 choice_ready / choice_review，不必再为它醒）；
   // 拍板权已下放给 leader 时秘书收到的新选项单；有人给选项单写了意见。
   // 新增类型，库里没有旧行要按新集合重算，不需要迁移。

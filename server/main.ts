@@ -1,6 +1,6 @@
 import { sameSecret } from "../shared/secret.ts";
 import { createApp } from "./app.ts";
-import { legacyDir, legacyWorkersDir } from "./imports/dirs.ts";
+import { legacyWorkersDir } from "./imports/dirs.ts";
 import { portTakenMessage, probePort } from "./port-owner.ts";
 import {
   alive,
@@ -92,9 +92,8 @@ try {
     data,
     controlToken: lease.record.token,
     serviceUrl: `http://127.0.0.1:${servicePort()}`,
-    // 旧版执行者档案与根章程只在首次启动导入一次（#355）；隔离服务不读主目录（t128）。
+    // 旧版执行者档案只在首次启动导入一次（#355）；隔离服务不读主目录（t128）。
     tasks: { workersDir: legacyWorkersDir() },
-    legacyDir: legacyDir(),
   }));
   const authorize = (value: string | undefined) => {
     const actual = /^Bearer (.+)$/i.exec(value ?? "")?.[1] ?? "";

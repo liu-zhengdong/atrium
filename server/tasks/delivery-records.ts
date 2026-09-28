@@ -1,10 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import {
-  all,
-  one,
-  type TaskEventRow,
-  type TaskRow,
-} from "./ledger-model.ts";
+import { all, one, type TaskEventRow, type TaskRow } from "./ledger-model.ts";
 import { parseWorker } from "./profiles.ts";
 import { getJobRole } from "./job-roles.ts";
 

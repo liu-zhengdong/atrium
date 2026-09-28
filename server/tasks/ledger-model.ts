@@ -83,10 +83,6 @@ export type Task = Omit<TaskRow, "prio"> & {
   priority: Priority;
   /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
   queued_reason?: string | null;
-  /** 显式牵涉的部分（#373，also.ts）；没有时不给。 */
-  also?: string[];
-  /** 自动牵涉的部分：管方面的要点适用于归属部分；没有时不给。 */
-  also_auto?: string[];
   /** 要用的凭据名称（t194，secrets/）：派活时按名称注入执行者环境；没有时不给。 */
   secrets?: string[];
   /** 现在球在谁手里（holder.ts）；只有单个任务视图给，已结束为 null。 */

@@ -1,4 +1,3 @@
-import type { PickSpecialists } from "../server/tasks/specialist-scope.ts";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
@@ -262,22 +261,13 @@ function partInput(values: Values): { part?: string } {
   return part !== undefined ? { part } : {};
 }
 
-/** 牵涉的部分：显式的照写，自动的标「自动」。 */
-function alsoText(task: Task) {
-  return [
-    ...(task.also ?? []),
-    ...(task.also_auto ?? []).map((r) => `${r}（自动）`),
-  ].join("、");
-}
-
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--priority 紧急|修复|普通|闲时] [--avoid-host hN[,hM]] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--secret 名称[,名称]] [--by 专员] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--priority 紧急|修复|普通|闲时] [--avoid-host hN[,hM]] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--priority 紧急|修复|普通|闲时：派活与合入都按它排先后，紧急的另跳过本机负载限制（不写按归属部分：管方面的部分缺省闲时，其余普通）；--avoid-host 派活避开这些主机",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡）；--part 写归属部分（负责与汇报只在这一处；派活附这一部分链上的要点），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--priority 紧急|修复|普通|闲时：派活与合入都按它排先后，紧急的另跳过本机负载限制（缺省普通）；--avoid-host 派活避开这些主机",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
-    also: { type: "string" },
     secret: { type: "string" },
     by: { type: "string" },
     from: { type: "string" },
@@ -321,9 +311,6 @@ const add: Command = {
         ? {}
         : { from: str(values, "from") }),
       ...partInput(values),
-      ...(str(values, "also") === undefined
-        ? {}
-        : { also: str(values, "also") }),
       ...(str(values, "secret") === undefined
         ? {}
         : { secret: str(values, "secret") }),
@@ -352,7 +339,7 @@ const add: Command = {
     else
       console.log(
         [
-          `已建 ${task.ref}：${task.title} · ${PRIORITY_LABEL[task.priority]}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}${alsoText(task) ? ` · 牵涉 ${alsoText(task)}` : ""}${task.secrets?.length ? ` · 凭据 ${task.secrets.join("、")}` : ""}`,
+          `已建 ${task.ref}：${task.title} · ${PRIORITY_LABEL[task.priority]}${task.parent_ref ? `（父任务 ${task.parent_ref}）` : ""}${task.node_ref ? ` · 记在 ${task.node_ref}` : ""}${task.origin_ref ? ` · ${task.origin_ref} 投来` : ""}${task.part_ref ? ` · 归属 ${task.part_ref}` : ""}${task.secrets?.length ? ` · 凭据 ${task.secrets.join("、")}` : ""}`,
           ...(task.parent_ref
             ? [
                 `${task.parent_ref} 是总任务：不派给执行者，状态与进度按全部子孙汇总（atrium task tree ${task.parent_ref}）`,
@@ -485,7 +472,6 @@ const show: Command = {
         ["记在", task.node_ref],
         ["投任务的节点", task.origin_ref],
         ["归属部分", task.part_ref],
-        ["牵涉部分", alsoText(task) || null],
         ["凭据", task.secrets?.length ? task.secrets.join("、") : null],
         ["仓库", task.repo],
         [
@@ -648,8 +634,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--priority 紧急|修复|普通|闲时] [--avoid-host hN[,hM]|'']",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活的专员、归属部分、牵涉部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、优先级（--priority，排队中的立刻按新先后重排，在跑的不打断）与避开的主机（--avoid-host）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
+  args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--from 节点|''] [--part 节点|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--priority 紧急|修复|普通|闲时] [--avoid-host hN[,hM]|'']",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活的专员、归属部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、优先级（--priority，排队中的立刻按新先后重排，在跑的不打断）与避开的主机（--avoid-host）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
   options: {
     status: { type: "string" },
     "with-children": { type: "boolean" },
@@ -657,7 +643,6 @@ const set: Command = {
     by: { type: "string" },
     from: { type: "string" },
     part: { type: "string" },
-    also: { type: "string" },
     secret: { type: "string" },
     brief: { type: "string" },
     deliver: { type: "string" },
@@ -696,7 +681,6 @@ const set: Command = {
     const from = str(values, "from");
     if (from !== undefined) body.from = from;
     Object.assign(body, partInput(values));
-    if (str(values, "also") !== undefined) body.also = str(values, "also")!;
     if (str(values, "secret") !== undefined)
       body.secret = str(values, "secret")!;
     const brief = str(values, "brief");
@@ -720,7 +704,7 @@ const set: Command = {
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--by、--from、--part、--also、--secret、--brief、--deliver、--issue、--after、--after-pr、--auto、--avoid-host 或 --priority",
+        "至少给一项：--status、--pr、--title、--by、--from、--part、--secret、--brief、--deliver、--issue、--after、--after-pr、--auto、--avoid-host 或 --priority",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
@@ -1029,15 +1013,6 @@ const takeCell = (c: PickCandidate, job: PickView["job"]) =>
     .filter(Boolean)
     .join(" · ");
 
-/** 能请的专员一行：本部分、上级与牵涉部分的逐位写出，全组织的折在最后（#373）。 */
-export function specialistLine(list: PickSpecialists["available"]): string {
-  const near = list
-    .filter((s) => s.scope !== "org")
-    .map((s) => `${s.name}（${s.part_name ?? s.part}）`);
-  const org = list.filter((s) => s.scope === "org").map((s) => s.name);
-  return `能请的专员：${[...near, ...(org.length ? [`全组织的 ${org.join("、")}`] : [])].join("；") || "无"}`;
-}
-
 /** 候选一览的文本：推荐一句、表格；表格一行一位候选。 */
 type HostPick = {
   ref: string;
@@ -1078,25 +1053,17 @@ function hostPickLines(hosts: HostPick[] | undefined, worker: string | null) {
 export function formatPick(
   view: PickView & {
     task: string;
-    specialists?: PickSpecialists;
     hosts?: HostPick[];
   },
 ): string {
   const head = view.recommended
     ? `推荐 ${view.recommended}：${view.reason}`
     : `暂无推荐：${view.reason}`;
-  const meta = `${view.task} · risk=${view.risk}${view.job ? ` · 干活的专员 ${view.job.name}（${view.job.ref}）` : " · 没指定干活的专员"} · 根章程给用户保留 ${view.reserve_percent}%${view.quota_known ? "" : " · 额度数据不可用"}`;
-  const scope = view.specialists
-    ? [
-        ...(view.specialists.job_outside ? [view.specialists.job_outside] : []),
-        specialistLine(view.specialists.available),
-      ]
-    : [];
-  if (!view.candidates.length) return [head, meta, ...scope].join("\n");
+  const meta = `${view.task} · risk=${view.risk}${view.job ? ` · 干活的专员 ${view.job.name}（${view.job.ref}）` : " · 没指定干活的专员"} · 给你保留 ${view.reserve_percent}%${view.quota_known ? "" : " · 额度数据不可用"}`;
+  if (!view.candidates.length) return [head, meta].join("\n");
   return [
     head,
     meta,
-    ...scope,
     ...hostPickLines(view.hosts, view.recommended),
     "",
     table([
@@ -1130,7 +1097,7 @@ const pick: Command = {
       );
     const view = await (
       await client()
-    ).get<PickView & { task: string; specialists?: PickSpecialists }>(
+    ).get<PickView & { task: string }>(
       `/tasks/${id}/pick${risk ? `?${new URLSearchParams({ risk })}` : ""}`,
     );
     if (json) printJson(view);

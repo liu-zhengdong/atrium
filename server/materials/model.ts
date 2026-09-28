@@ -2,7 +2,7 @@ import { Problem } from "../problem.ts";
 
 /**
  * 资料（t192 第 1 步）：挂在组织节点上的设计稿、调研报告这类文件或目录，短号 mN 全局持久、不复用。
- * 这里只放纯函数（穷举测试）：短号、路径与名称校验、上传校验、关联、清理线索与真删判定、派活清单。
+ * 这里只放纯函数（穷举测试）：短号、路径与名称校验、上传校验、关联、清理线索与真删判定。
  * 落库与读写文件在 store.ts，周期任务顺带发线索在 hints.ts，接口在 routes.ts。
  */
 
@@ -15,8 +15,6 @@ export const NOTE_MAX = 200;
 export const LINKS_MAX = 20;
 /** 每份资料留最近几条读取记录。 */
 export const READS_KEPT = 50;
-/** 派活时附进提示词的资料清单最多几条（近的节点在前）。 */
-export const CONTEXT_MATERIALS = 8;
 export const PAGE_DEFAULT = 50;
 export const PAGE_MAX = 200;
 
@@ -281,36 +279,4 @@ export function purgeVerdict(
     now - facts.archived_at >= PURGE_ARCHIVED_MS &&
     facts.bytes > PURGE_MIN_BYTES
   );
-}
-
-export type ContextMaterial = {
-  ref: string;
-  name: string;
-  note: string;
-  node: string;
-  /** 离本节点几层（0 = 本节点）。 */
-  distance: number;
-  updated_at: number;
-};
-
-/** 派活附带的资料清单（纯函数）：近的节点在前、同层新的在前，至多 max 条，其余给看全的命令。 */
-export function contextMaterialLines(
-  list: readonly ContextMaterial[],
-  self: string,
-  max = CONTEXT_MATERIALS,
-): string[] {
-  if (!list.length) return [];
-  const sorted = [...list].sort(
-    (a, b) => a.distance - b.distance || b.updated_at - a.updated_at,
-  );
-  const lines = sorted
-    .slice(0, max)
-    .map(
-      (m) => `- ${m.ref} ${m.name}：${m.note || "（没写说明）"}（${m.node}）`,
-    );
-  if (sorted.length > max)
-    lines.push(
-      `- 还有 ${sorted.length - max} 份：atrium material ls --node ${self} 及上级节点`,
-    );
-  return lines;
 }

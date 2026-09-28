@@ -1,10 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
 import { Problem } from "../server/problem.ts";
 import type { JobRole } from "../server/tasks/job-roles.ts";
-import type {
-  ScopedSpecialist,
-  SpecialistScope,
-} from "../server/tasks/specialist-scope.ts";
 import { recordNext } from "./contract.ts";
 import { printJson, table } from "./format.ts";
 import type { Command, Values } from "./main.ts";
@@ -13,20 +8,11 @@ const str = (v: Values, k: string) =>
   typeof v[k] === "string" ? (v[k] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
 const path = (s: string) => encodeURIComponent(s);
-const bodyFile = (file: string) => {
-  try {
-    if (!statSync(file).isFile()) throw new Error("not file");
-    return readFileSync(file, "utf8");
-  } catch {
-    throw new Problem(400, `--body 文件读不到：${file}`, "usage");
-  }
-};
 const fields = (v: Values) => ({
   ...(str(v, "name") === undefined ? {} : { name: str(v, "name") }),
   ...(str(v, "description") === undefined
     ? {}
     : { description: str(v, "description") }),
-  ...(str(v, "body") === undefined ? {} : { body: bodyFile(str(v, "body")!) }),
   ...(str(v, "preferred") === undefined
     ? {}
     : { preferred: str(v, "preferred")!.split(",").filter(Boolean) }),
@@ -36,7 +22,6 @@ const fields = (v: Values) => ({
   ...(str(v, "skills") === undefined
     ? {}
     : { skills: str(v, "skills")!.split(",").filter(Boolean) }),
-  ...(str(v, "part") === undefined ? {} : { part: str(v, "part") }),
   ...((str(v, "as") ?? defaultActor()) === undefined
     ? {}
     : { author: str(v, "as") ?? defaultActor() }),
@@ -44,11 +29,9 @@ const fields = (v: Values) => ({
 const opts = {
   name: { type: "string" as const },
   description: { type: "string" as const },
-  body: { type: "string" as const },
   preferred: { type: "string" as const },
   checks: { type: "string" as const },
   skills: { type: "string" as const },
-  part: { type: "string" as const },
   as: { type: "string" as const },
 };
 const output = (
@@ -61,122 +44,32 @@ const output = (
   else console.log(message);
   recordNext(next);
 };
-const owner = (r: JobRole) =>
-  r.part ? `${r.part_name ?? r.part}（${r.part}）` : "全组织";
-const rowsTable = (rows: readonly JobRole[], withOwner: boolean) =>
-  table([
-    ["短号", "名称", ...(withOwner ? ["归属"] : []), "做什么", "在做"],
-    ...rows.map((r) => [
-      r.ref,
-      r.name,
-      ...(withOwner ? [owner(r)] : []),
-      r.description,
-      String(r.running ?? 0),
-    ]),
-  ]);
-const SCOPE_WORD: Record<SpecialistScope, string> = {
-  own: "本部分",
-  chain: "上级",
-  also: "牵涉部分",
-  org: "全组织",
-};
-
-/**
- * 渐进式披露（#373）：只列这一层的专员，往上继承的折成一句「另有 全组织的 前端、后端」。
- * 纯函数，测试直接调。
- */
-export function foldedLines(
-  rows: readonly ScopedSpecialist[],
-  part: string,
-): string[] {
-  const own = rows.filter((r) => r.scope === "own");
-  const groups = new Map<string, string[]>();
-  for (const r of rows) {
-    if (r.scope === "own") continue;
-    const key = r.scope === "org" ? "全组织的" : `${r.part_name ?? r.part}的`;
-    groups.set(key, [...(groups.get(key) ?? []), r.name]);
-  }
-  const rest = [...groups].map(([k, v]) => `${k} ${v.join("、")}`);
-  return [
-    ...(own.length ? [rowsTable(own, false)] : [`${part} 没有自己的专员`]),
-    ...(rest.length
-      ? [
-          `另有 ${rest.join("；")}（展开：atrium specialist ls --part ${part} --all）`,
-        ]
-      : []),
-  ];
-}
-
 export const specialistCommands: Record<string, Command> = {
   "specialist ls": {
-    args: "[--part 部分] [--all] [--json]",
-    about:
-      "列出专员：缺省只列全组织共用的；--part 列这一部分能请的（本部分的在前，上级、牵涉部分与全组织的折成一行）；--all 展开全部",
-    options: {
-      part: { type: "string" },
-      all: { type: "boolean", default: false },
-    },
+    args: "[--json]",
+    about: "列出专员：名称、做什么、在做几件",
     positionals: [0, 0],
-    async run({ values, json }) {
-      const api = await client();
-      const part = str(values, "part");
-      const all = values.all === true;
-      if (part !== undefined) {
-        const view = await api.get<{
-          part: string;
-          name: string;
-          specialists: ScopedSpecialist[];
-        }>(`/specialists?${new URLSearchParams({ part })}`);
-        output(
-          json,
-          view,
-          [
-            `${view.part} ${view.name} 能请的专员`,
-            ...(all
-              ? [
-                  table([
-                    ["短号", "名称", "来自", "做什么", "在做"],
-                    ...view.specialists.map((r) => [
-                      r.ref,
-                      r.name,
-                      r.scope === "org"
-                        ? SCOPE_WORD.org
-                        : `${SCOPE_WORD[r.scope]} ${owner(r)}`,
-                      r.description,
-                      String(r.running ?? 0),
-                    ]),
-                  ]),
-                ]
-              : foldedLines(view.specialists, view.part)),
-          ].join("\n"),
-          `建任务：atrium task add 标题 --part ${view.part} --by 专员`,
-        );
-        return;
-      }
-      const rows = await api.get<JobRole[]>("/specialists");
-      const shown = all ? rows : rows.filter((r) => !r.part);
-      const hidden = rows.length - shown.length;
+    async run({ json }) {
+      const rows = await (await client()).get<JobRole[]>("/specialists");
       output(
         json,
-        shown,
-        [
-          rowsTable(shown, all),
-          ...(hidden
-            ? [
-                `另有 ${hidden} 位属于某个部分：${rows
-                  .filter((r) => r.part)
-                  .map((r) => `${r.name}（${r.part_name ?? r.part}）`)
-                  .join("、")}（展开：atrium specialist ls --all）`,
-              ]
-            : []),
-        ].join("\n"),
+        rows,
+        table([
+          ["短号", "名称", "做什么", "在做"],
+          ...rows.map((r) => [
+            r.ref,
+            r.name,
+            r.description,
+            String(r.running ?? 0),
+          ]),
+        ]),
         "看专员：atrium specialist show r1",
       );
     },
   },
   "specialist show": {
     args: "专员 [--json]",
-    about: "查看专员、岗位说明、优先执行者、交付关卡与技能",
+    about: "查看专员：做什么、优先执行者、交付关卡与技能",
     positionals: [1, 1],
     async run({ positionals: [id], json }) {
       const role = await (
@@ -185,20 +78,24 @@ export const specialistCommands: Record<string, Command> = {
       output(
         json,
         role,
-        `${role.ref} ${role.name} · r${role.rev}\n${role.description}\n归属：${owner(role)}\n优先执行者：${role.preferred.join("、") || "无"}\n交付关卡：${role.checks.join("、") || "无"}\n技能：${role.skills.join("、") || "无"}\n\n${role.body}`,
+        `${role.ref} ${role.name} · r${role.rev}\n${role.description}\n优先执行者：${role.preferred.join("、") || "无"}\n交付关卡：${role.checks.join("、") || "无"}\n技能：${role.skills.join("、") || "无"}`,
         `建任务：atrium task add 标题 --by ${role.ref}`,
       );
     },
   },
   "specialist add": {
-    args: "名称 --description 文字 --body 文件 [--part 部分] [--preferred 列表] [--checks 列表] [--skills 列表]",
+    args: "名称 --description 文字 [--preferred 列表] [--checks 列表] [--skills 列表]",
     about:
-      "创建专员；--part 写它属于哪一部分（如安全专员属于安全，只有归属链或牵涉到那一部分的任务能用 --by 指定），不写即全组织共用；列表用逗号分隔，正文从文件读取",
+      "创建专员（只记分工：一句做什么、优先执行者、验收关卡、挂哪些技能；做法写进技能，规矩写成要点）；列表用逗号分隔",
     options: opts,
     positionals: [1, 1],
     async run({ positionals: [name], values, json }) {
-      if (!str(values, "description") || !str(values, "body"))
-        throw new Problem(400, "--description 和 --body 必填", "usage");
+      if (!str(values, "description"))
+        throw new Problem(
+          400,
+          "--description: 必填，一句话写这位专员做什么",
+          "usage",
+        );
       const role = await (
         await client()
       ).post<JobRole>("/specialists", { ...fields(values), name });
@@ -211,8 +108,8 @@ export const specialistCommands: Record<string, Command> = {
     },
   },
   "specialist edit": {
-    args: "专员 [--name 名称] [--description 文字] [--body 文件] [--part 部分|''] [--preferred 列表] [--checks 列表] [--skills 列表]",
-    about: "修订专员，保留历史；--part '' 改回全组织共用",
+    args: "专员 [--name 名称] [--description 文字] [--preferred 列表] [--checks 列表] [--skills 列表]",
+    about: "修订专员，保留历史",
     options: opts,
     positionals: [1, 1],
     async run({ positionals: [id], values, json }) {

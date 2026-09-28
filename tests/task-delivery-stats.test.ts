@@ -111,7 +111,6 @@ function richDb() {
   const role = createJobRole(db, {
     name: "后端",
     description: "服务与数据",
-    body: "测试要过",
     preferred: [],
     checks: ["local_check"],
   });

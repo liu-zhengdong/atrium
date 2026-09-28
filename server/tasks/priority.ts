@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 
 /**
@@ -7,9 +6,9 @@ import { Problem } from "../problem.ts";
  *
  * - 想跑的任务一律进同一个队列（queue.ts），唯一的 drain 按「优先级、入队先后」取；合入队列按同一个优先级排。
  * - 紧急只多一条：跳过本机负载限制（host-load.ts hostGate 的 urgent）。
- * - 缺省按归属部分定：归属部分（没写时按干活的节点）是管方面的部分或在它下面为闲时，其余普通；`--priority` 可覆盖。
+ * - 缺省普通；`--priority` 可改。
  *
- * 判定是纯函数，读库拼事实在 `aspectPart`（这里）与 `queue.ts`、`merge-runtime.ts`。
+ * 判定是纯函数，读库拼事实在 `queue.ts`、`merge-runtime.ts`。
  */
 
 export const PRIORITIES = ["urgent", "fix", "normal", "idle"] as const;
@@ -54,60 +53,6 @@ export const rank = (priority: Priority) => PRIORITIES.indexOf(priority);
 /** SQL 里的同一个档位（排队、合入队列的 ORDER BY 用）。 */
 export const rankSql = (column: string) =>
   `CASE ${column} WHEN 'urgent' THEN 0 WHEN 'fix' THEN 1 WHEN 'idle' THEN 3 ELSE 2 END`;
-
-/** 缺省优先级：归属部分是管方面的（或在它下面）为闲时，其余普通。 */
-export const defaultPriority = (aspect: boolean): Priority =>
-  aspect ? "idle" : "normal";
-
-/**
- * 改归属部分后的优先级：没被人改过（等于旧部分的缺省）就跟着新部分的缺省走，改过的保留。纯函数。
- */
-export function priorityAfterMove(
-  current: Priority,
-  before: boolean,
-  after: boolean,
-): Priority {
-  return current === defaultPriority(before) ? defaultPriority(after) : current;
-}
-
-type OrgNode = { id: number; parent_id: number | null; aspect?: number };
-
-/** 某节点是不是管方面的部分或在它下面（沿父链往上找；环与断链当不是）。纯函数。 */
-export function underAspect(
-  nodes: ReadonlyMap<number, OrgNode>,
-  id: number | null,
-): boolean {
-  const seen = new Set<number>();
-  for (
-    let node = id === null ? undefined : nodes.get(id);
-    node && !seen.has(node.id);
-    node = node.parent_id === null ? undefined : nodes.get(node.parent_id)
-  ) {
-    if (node.aspect === 1) return true;
-    seen.add(node.id);
-  }
-  return false;
-}
-
-/** 读组织树判断节点是否在管方面的部分下；旧库没有组织表或 aspect 列时一律不是。 */
-export function aspectPart(db: DatabaseSync, id: number | null): boolean {
-  if (id === null) return false;
-  const columns = db.prepare("PRAGMA table_info(org_nodes)").all() as {
-    name: string;
-  }[];
-  if (!columns.some((column) => column.name === "aspect")) return false;
-  // 一条递归查询取整条父链（至多 64 级），不在循环里逐级查。
-  const chain = db
-    .prepare(
-      `WITH RECURSIVE up(id,parent_id,aspect,depth) AS (
-        SELECT id,parent_id,aspect,0 FROM org_nodes WHERE id=?
-        UNION ALL SELECT n.id,n.parent_id,n.aspect,up.depth+1 FROM org_nodes n JOIN up ON n.id=up.parent_id WHERE up.depth<64)
-      SELECT id,parent_id,aspect FROM up LIMIT 65`,
-    )
-    .all(id) as OrgNode[];
-  const nodes = new Map(chain.map((node) => [node.id, node]));
-  return underAspect(nodes, id);
-}
 
 /** 标题前的标记：普通的不标。 */
 export const priorityTag = (priority: Priority | undefined) =>

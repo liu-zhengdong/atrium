@@ -9,29 +9,17 @@ import {
   one,
   ref,
   transaction,
-  type Doc,
   type DocRow,
   type Kind,
   type NodeRow,
-  type RevisionRow,
 } from "./model.ts";
 import {
-  validateBody,
   validateFields,
   validateKind,
   validateReason,
   validateSlug,
   validParent,
 } from "./validate.ts";
-import { exportBoundaries, type Converted } from "./boundaries.ts";
-import {
-  ownBoundaries,
-  planBoundaries,
-  saveBoundaries,
-} from "./boundary-store.ts";
-import { HUMAN_KEYS } from "./overview.ts";
-import { aspectClearance } from "./aspects.ts";
-import { pointRef } from "./points.ts";
 import { actsForUser } from "../../shared/user.ts";
 
 function authorized(
@@ -41,7 +29,7 @@ function authorized(
   target: string,
 ) {
   if (
-    (node.parent_id === null && target === "charter" && !actsForUser(actor)) ||
+    (node.parent_id === null && target === "fields" && !actsForUser(actor)) ||
     !canEdit(nodes(db), node, actor)
   )
     throw new Problem(
@@ -89,8 +77,7 @@ function repoPaths(value: unknown): string[] {
 export type AddInput = {
   parent?: string;
   slug: string;
-  /** "aspect" 建管方面的部分（#373）：按父节点取 project / module，另记 aspect=1。 */
-  kind: Kind | "aspect";
+  kind: Kind;
   name: string;
   leader?: string | null;
   repos?: string[];
@@ -98,19 +85,10 @@ export type AddInput = {
 };
 export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
   return transaction(db, () => {
-    if ("doc_path" in input)
-      throw new Problem(400, "doc_path 已停用，请编辑节点章程正文");
     const list = nodes(db);
     if (list.length >= 500) throw new Problem(400, "组织树已达 500 个节点");
     const parent = input.parent ? nodeByAddress(db, input.parent) : null;
-    const aspect = input.kind === "aspect";
-    if (aspect && !parent)
-      throw new Problem(400, "管方面的部分要挂在某个部分下面");
-    const kind = aspect
-        ? parent!.kind === "org"
-          ? "project"
-          : "module"
-        : validateKind(input.kind),
+    const kind = validateKind(input.kind),
       slug = validateSlug(input.slug),
       reason = validateReason(input.reason);
     const name = input.name?.trim();
@@ -141,18 +119,9 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
     const now = Date.now();
     const result = db
       .prepare(
-        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,aspect,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
       )
-      .run(
-        parent?.id ?? null,
-        kind,
-        slug,
-        name,
-        leader,
-        aspect ? 1 : 0,
-        now,
-        now,
-      );
+      .run(parent?.id ?? null, kind, slug, name, leader, now, now);
     const id = Number(result.lastInsertRowid);
     for (const repo of repos)
       db.prepare("INSERT INTO org_node_repos(node_id,repo) VALUES(?,?)").run(
@@ -163,318 +132,44 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
     return nodeSnapshot(db, id);
   });
 }
-function current(db: DatabaseSync, id: number, doc: Doc): DocRow | undefined {
-  return one<DocRow>(
-    db,
-    "SELECT * FROM org_docs WHERE node_id=? AND doc=?",
-    id,
-    doc,
-  );
-}
-function expectedRev(value: unknown, actual: number, id: number, doc: string) {
-  if (value === undefined) return;
-  if (typeof value !== "string" || !/^r(0|[1-9][0-9]*)$/.test(value))
-    throw new Problem(400, "--rev 应为 rN");
-  if (Number(value.slice(1)) !== actual)
-    throw new Problem(
-      409,
-      `${doc} 已是 r${actual}，你基于 ${value} 修改；先看变化：atrium org history ${ref(id)} --after ${value}`,
-      "conflict",
-      undefined,
-      `atrium org history ${ref(id)}`,
-    );
-}
-export function editDoc(
-  db: DatabaseSync,
-  address: string,
-  doc: Doc,
-  input: {
-    fields: unknown;
-    body: unknown;
-    boundaries?: unknown;
-    rev?: string;
-    reason: unknown;
-  },
-  actor: string,
-) {
-  return transaction(db, () => {
-    const node = nodeByAddress(db, address);
-    authorized(db, node, actor, doc);
-    if (node.archived_at !== null)
-      throw new Problem(400, `${ref(node.id)} 已归档`);
-    expectedRev(input.rev, current(db, node.id, doc)?.rev ?? 0, node.id, doc);
-    return editDocInner(
-      db,
-      node,
-      doc,
-      input,
-      validateReason(input.reason),
-      actor,
-    );
-  });
-}
-/**
- * 只改章程里的阶段记录（stages），其余字段、正文与边界原样保留；留章程修订。
- * leader 改本节点的阶段走这里，不经整份章程（那会连带边界）。
- */
-export function editStages(
-  db: DatabaseSync,
-  address: string,
-  stages: unknown,
-  reason: unknown,
-  actor: string,
-) {
-  return transaction(db, () => {
-    const node = nodeByAddress(db, address);
-    authorized(db, node, actor, "charter");
-    if (node.archived_at !== null)
-      throw new Problem(400, `${ref(node.id)} 已归档`);
-    const old = current(db, node.id, "charter");
-    const fields = old
-      ? (JSON.parse(old.fields) as Record<string, unknown>)
-      : {};
-    return editDocInner(
-      db,
-      node,
-      "charter",
-      { fields: { ...fields, stages }, body: old?.body ?? "" },
-      validateReason(reason),
-      actor,
-    );
-  });
-}
-/** 全景人话字段只改当前章程；正文若同时修改，仍单独留章程修订。 */
-export function editOverviewFields(
-  db: DatabaseSync,
-  address: string,
-  fields: Record<string, unknown>,
-  actor: string,
-  detail?: { body: unknown; rev?: string; reason: unknown },
-) {
-  return transaction(db, () => {
-    const node = nodeByAddress(db, address);
-    authorized(db, node, actor, "charter");
-    if (node.archived_at !== null)
-      throw new Problem(400, `${ref(node.id)} 已归档`);
-    const old = current(db, node.id, "charter");
-    const validated = validateFields("charter", fields);
-    const previousFields = old
-      ? (JSON.parse(old.fields) as Record<string, unknown>)
-      : {};
-    for (const key of new Set([
-      ...Object.keys(previousFields),
-      ...Object.keys(validated),
-    ]))
-      if (
-        !HUMAN_KEYS.has(key) &&
-        JSON.stringify(previousFields[key]) !== JSON.stringify(validated[key])
-      )
-        throw new Problem(400, `${key} 应走章程修订`);
-    let revisionResult: ReturnType<typeof editDocInner> | undefined;
-    if (detail) {
-      expectedRev(detail.rev, old?.rev ?? 0, node.id, "charter");
-      revisionResult = editDocInner(
-        db,
-        node,
-        "charter",
-        { fields: previousFields, body: detail.body },
-        validateReason(detail.reason),
-        actor,
-      );
-    }
-    if (JSON.stringify(validated) !== (old?.fields ?? "{}")) {
-      const previous = current(db, node.id, "charter");
-      const at = Math.max(Date.now(), (previous?.updated_at ?? 0) + 1);
-      db.prepare(
-        "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,'charter',0,?,'',?,?) ON CONFLICT(node_id,doc) DO UPDATE SET fields=excluded.fields,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
-      ).run(node.id, JSON.stringify(validated), actor, at);
-    }
-    return {
-      node: ref(node.id),
-      ...(revisionResult
-        ? { before: revisionResult.before, rev: revisionResult.rev }
-        : {}),
-    };
-  });
-}
-export function revertDoc(
-  db: DatabaseSync,
-  address: string,
-  doc: Doc,
-  to: string,
-  reason: string,
-  actor: string,
-) {
-  return transaction(db, () => {
-    const node = nodeByAddress(db, address);
-    authorized(db, node, actor, doc);
-    if (!/^r[1-9][0-9]*$/.test(to)) throw new Problem(400, "--to 应为 rN");
-    const found = one<RevisionRow>(
-      db,
-      "SELECT * FROM org_revisions WHERE node_id=? AND target=? AND rev=?",
-      node.id,
-      doc,
-      Number(to.slice(1)),
-    );
-    if (!found) throw new Problem(404, `${doc} ${to} 不存在`);
-    const snapshot = JSON.parse(found.snapshot) as {
-      fields: unknown;
-      body: unknown;
-      boundaries?: unknown;
-      budget?: unknown;
-    };
-    // 旧修订里的预算份额（budget）已下线，不再恢复。
-    delete snapshot.budget;
-    // 第 2 步之前的章程修订没有 boundaries：当时本节点没有边界
-    if (doc === "charter") {
-      snapshot.boundaries ??= [];
-      const latest = current(db, node.id, "charter");
-      const fields = snapshot.fields as Record<string, unknown>;
-      const currentFields = latest
-        ? (JSON.parse(latest.fields) as Record<string, unknown>)
-        : {};
-      for (const key of HUMAN_KEYS) {
-        if (Object.hasOwn(currentFields, key)) fields[key] = currentFields[key];
-        else delete fields[key];
-      }
-    }
-    return editDocInner(db, node, doc, snapshot, validateReason(reason), actor);
-  });
-}
-function writeDoc(
+/** 读本部分的人话字段（是什么、怎么用、现状、阶段……）；没写为空对象，坏数据当没写。 */
+export function nodeFields(
   db: DatabaseSync,
   node: number,
-  doc: Doc,
-  fields: Record<string, unknown>,
-  body: string,
-  reason: string,
-  actor: string,
-) {
-  const next = (current(db, node, doc)?.rev ?? 0) + 1;
-  db.prepare(
-    "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(node_id,doc) DO UPDATE SET rev=excluded.rev,fields=excluded.fields,body=excluded.body,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
-  ).run(node, doc, next, JSON.stringify(fields), body, actor, Date.now());
-  revision(db, node, doc, next, actor, reason, {
-    fields:
-      doc === "charter"
-        ? Object.fromEntries(
-            Object.entries(fields).filter(([key]) => !HUMAN_KEYS.has(key)),
-          )
-        : fields,
-    body,
-    ...(doc === "charter"
-      ? { boundaries: exportBoundaries(ownBoundaries(db, node)) }
-      : {}),
-  });
-  return next;
-}
-/** 上层删除或移走条目后，后代的覆盖条目转为自有条目：补上文字并给后代章程追加修订。 */
-function applyConverted(
-  db: DatabaseSync,
-  from: NodeRow,
-  converted: Converted[],
-  reason: string,
-  actor: string,
-) {
-  const touched = [...new Set(converted.map((c) => c.node))];
-  const update = db.prepare(
-    "UPDATE org_boundaries SET summary=? WHERE node_id=? AND bid=?",
-  );
-  for (const c of converted) update.run(c.summary, c.node, c.id);
-  for (const id of touched) {
-    const old = current(db, id, "charter");
-    writeDoc(
-      db,
-      id,
-      "charter",
-      old ? (JSON.parse(old.fields) as Record<string, unknown>) : {},
-      old?.body ?? "",
-      `因 ${ref(from.id)} ${from.name} 的修改，${converted
-        .filter((c) => c.node === id)
-        .map((c) => c.id)
-        .join("、")} 转为本节点自有条目：${reason}`,
-      actor,
-    );
-  }
-  return converted.map((c) => ({ node: ref(c.node), id: c.id }));
-}
-function editDocInner(
-  db: DatabaseSync,
-  node: NodeRow,
-  doc: Doc,
-  snapshot: {
-    fields: unknown;
-    body: unknown;
-    boundaries?: unknown;
-  },
-  reason: string,
-  actor: string,
-) {
-  const before = current(db, node.id, doc)?.rev ?? 0;
-  const fields = validateFields(doc, snapshot.fields),
-    body = validateBody(snapshot.body);
-  let converted: Converted[] = [];
-  if (snapshot.boundaries !== undefined) {
-    const plan = planBoundaries(db, nodes(db), node, snapshot.boundaries);
-    saveBoundaries(db, node.id, plan.entries);
-    converted = plan.converted;
-  }
-  const next = writeDoc(db, node.id, doc, fields, body, reason, actor);
-  return {
-    node: ref(node.id),
-    doc,
-    before: `r${before}`,
-    rev: `r${next}`,
-    fields,
-    body,
-    ...(doc === "charter"
-      ? {
-          boundaries: exportBoundaries(ownBoundaries(db, node.id)),
-          converted: applyConverted(db, node, converted, reason, actor),
-        }
-      : {}),
-  };
-}
-/**
- * `org edit --kind aspect|module`：只切「管方面」标记，不动节点 kind。
- * project / org 等不能改成 aspect；改回 module 前把还带适用范围的地方列出来，不静默丢。
- */
-function switchAspect(db: DatabaseSync, node: NodeRow, value: unknown): number {
-  if (value !== "aspect" && value !== "module")
-    throw new Problem(400, "kind 只能是 aspect 或 module", "usage");
-  if (value === "aspect") {
-    if (node.kind !== "module")
-      throw new Problem(
-        400,
-        `kind: 只有 module 部分能改成 aspect（${ref(node.id)} ${node.name} 是 ${node.kind}）`,
-        "usage",
-      );
-    return 1;
-  }
-  const points = all<{ id: number; applies: string | null }>(
+): Record<string, unknown> {
+  const row = one<Pick<DocRow, "fields">>(
     db,
-    "SELECT id,applies FROM org_points WHERE node_id=?",
-    node.id,
-  ).map((row) => ({ ref: pointRef(row.id), applies: row.applies }));
-  const blockers = aspectClearance(node.applies, points);
-  if (blockers.points.length || blockers.node) {
-    const steps = [
-      ...blockers.points.map(
-        (r) => `要点 ${r}（atrium org point-edit ${r} --applies ''）`,
-      ),
-      ...(blockers.node
-        ? [
-            `本部分的缺省适用范围（atrium map edit ${ref(node.id)} --applies ''）`,
-          ]
-        : []),
-    ];
-    throw new Problem(
-      400,
-      `${ref(node.id)} ${node.name} 还有适用范围，改回 module 前先清掉：${steps.join("、")}`,
-      "usage",
-    );
+    "SELECT fields FROM org_docs WHERE node_id=? AND doc='charter'",
+    node,
+  );
+  try {
+    const fields = row ? (JSON.parse(row.fields) as unknown) : {};
+    return fields && typeof fields === "object" && !Array.isArray(fields)
+      ? (fields as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
   }
-  return 0;
+}
+
+/** 改人话字段：整份覆盖当前值，不留修订（全景图只要当前版本）。根只有用户能改，其余按 leader 链。 */
+export function editFields(
+  db: DatabaseSync,
+  address: string,
+  fields: Record<string, unknown>,
+  actor: string,
+) {
+  return transaction(db, () => {
+    const node = nodeByAddress(db, address);
+    authorized(db, node, actor, "fields");
+    if (node.archived_at !== null)
+      throw new Problem(400, `${ref(node.id)} 已归档`);
+    const validated = validateFields(fields);
+    db.prepare(
+      "INSERT INTO org_docs(node_id,doc,rev,fields,body,updated_by,updated_at) VALUES(?,'charter',0,?,'',?,?) ON CONFLICT(node_id,doc) DO UPDATE SET fields=excluded.fields,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+    ).run(node.id, JSON.stringify(validated), actor, Date.now());
+    return { node: ref(node.id) };
+  });
 }
 export function editNode(
   db: DatabaseSync,
@@ -486,16 +181,12 @@ export function editNode(
     parent?: string;
     repos?: string[];
     archive?: boolean;
-    /** "aspect" 改为管方面的部分，"module" 改回普通部分（#373）；只切 aspect 标记，不动 kind。 */
-    kind?: unknown;
     rev?: string;
     reason: unknown;
   },
   actor: string,
 ) {
   return transaction(db, () => {
-    if ("doc_path" in input)
-      throw new Problem(400, "doc_path 已停用，请编辑节点章程正文");
     const node = nodeByAddress(db, address);
     authorized(db, node, actor, "node");
     if (node.parent_id === null && !actsForUser(actor))
@@ -505,10 +196,16 @@ export function editNode(
       "SELECT rev FROM org_revisions WHERE node_id=? AND target='node' ORDER BY rev DESC LIMIT 1",
       node.id,
     )!.rev;
-    expectedRev(input.rev, old, node.id, "node");
+    if (input.rev !== undefined && input.rev !== `r${old}`)
+      throw new Problem(
+        409,
+        `节点已是 r${old}，你基于 ${String(input.rev)} 修改；先看变化：atrium org history ${ref(node.id)}`,
+        "conflict",
+        undefined,
+        `atrium org history ${ref(node.id)}`,
+      );
     const reason = validateReason(input.reason);
     let parent = node.parent_id;
-    let moved: Converted[] = [];
     if (input.parent !== undefined) {
       const target = nodeByAddress(db, input.parent);
       authorized(db, target, actor, "node");
@@ -532,11 +229,6 @@ export function editNode(
         );
       if (depth + height(node.id) - 1 > 8)
         throw new Problem(400, "parent 层级超过深度 8");
-      if (target.id !== node.parent_id)
-        moved = planBoundaries(db, list, node, undefined, {
-          newParent: target.id,
-          what: "位置",
-        }).converted;
       parent = target.id;
     }
     const slug =
@@ -555,16 +247,10 @@ export function editNode(
       throw new Problem(400, "leader 应为 u1 或 aN");
     const repos =
       input.repos === undefined ? undefined : repoPaths(input.repos);
-    const aspect =
-      input.kind === undefined
-        ? node.aspect
-          ? 1
-          : 0
-        : switchAspect(db, node, input.kind);
     const archived = input.archive === true ? Date.now() : node.archived_at;
     db.prepare(
-      "UPDATE org_nodes SET parent_id=?,slug=?,name=?,leader=?,archived_at=?,aspect=?,updated_at=? WHERE id=?",
-    ).run(parent, slug, name, leader, archived, aspect, Date.now(), node.id);
+      "UPDATE org_nodes SET parent_id=?,slug=?,name=?,leader=?,archived_at=?,updated_at=? WHERE id=?",
+    ).run(parent, slug, name, leader, archived, Date.now(), node.id);
     if (repos !== undefined) {
       db.prepare("DELETE FROM org_node_repos WHERE node_id=?").run(node.id);
       for (const repo of repos)
@@ -582,209 +268,6 @@ export function editNode(
       reason,
       nodeSnapshot(db, node.id),
     );
-    const converted = applyConverted(db, node, moved, reason, actor);
-    return {
-      ...nodeSnapshot(db, node.id),
-      rev: `r${old + 1}`,
-      ...(converted.length ? { converted } : {}),
-    };
+    return { ...nodeSnapshot(db, node.id), rev: `r${old + 1}` };
   });
-}
-export type ImportInput = {
-  charter: { fields: unknown; body: unknown };
-  repo: string;
-  atrium_goal?: string;
-  openquota_goal?: string;
-  docs: {
-    kind: "module";
-    slug: string;
-    name: string;
-    source: string;
-    body: string;
-  }[];
-  apply: boolean;
-};
-export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
-  if (!actsForUser(actor)) throw new Problem(403, "org import 只有你能执行");
-  const fields = validateFields("charter", input.charter?.fields),
-    body = validateBody(input.charter?.body);
-  repoPaths([input.repo]);
-  if (!Array.isArray(input.docs) || input.docs.length > 200)
-    throw new Problem(400, "docs 超过 200 项");
-  const seen = new Set<string>();
-  for (const doc of input.docs) {
-    validateSlug(doc.slug);
-    if (
-      doc.kind !== "module" ||
-      !/^\.agents\/modules\/(?:[a-z0-9-]|[\u3400-\u9fff]){1,40}\.md$/.test(
-        doc.source,
-      ) ||
-      doc.source.includes("..") ||
-      !doc.source.startsWith(".agents/modules/")
-    )
-      throw new Problem(400, "docs 格式错误");
-    try {
-      validateBody(doc.body);
-    } catch {
-      throw new Problem(400, `${doc.source} 正文超过 16 KB 或格式错误`);
-    }
-    if (seen.has(doc.slug)) throw new Problem(400, `docs.${doc.slug} 重复`);
-    seen.add(doc.slug);
-  }
-  const plan = [
-    "组织",
-    "Atrium 项目",
-    "OpenQuota 项目",
-    ...input.docs.map((d) => `${d.kind} ${d.name}`),
-  ];
-  if (!input.apply) return { preview: true, plan };
-  return transaction(db, () => {
-    const changes: string[] = [];
-    let root = nodes(db).find((n) => n.parent_id === null);
-    if (!root) {
-      const id = addNodeInnerRoot(db, actor);
-      changes.push(`新建 ${ref(id)} 组织`);
-      root = nodes(db).find((n) => n.parent_id === null)!;
-    }
-    if (!current(db, root.id, "charter")) {
-      const edit = editDocInner(
-        db,
-        root,
-        "charter",
-        { fields, body },
-        "导入根章程",
-        actor,
-      );
-      changes.push(`更新 ${ref(root.id)} 组织章程 ${edit.rev}`);
-    }
-    const project = (
-      slug: string,
-      name: string,
-      goal: string,
-      repos: string[],
-    ) => {
-      let found = nodes(db).find(
-        (n) => n.parent_id === root!.id && n.slug === slug,
-      );
-      if (!found) {
-        const id = insertNode(
-          db,
-          root!.id,
-          "project",
-          slug,
-          name,
-          actor,
-          repos,
-          "组织树初始化",
-        );
-        changes.push(`新建 ${ref(id)} ${name}`);
-        found = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", id)!;
-      }
-      if (!current(db, found.id, "charter")) {
-        const edit = editDocInner(
-          db,
-          found,
-          "charter",
-          { fields: { goal }, body: "" },
-          "导入项目目标",
-          actor,
-        );
-        changes.push(`更新 ${ref(found.id)} ${name} 章程 ${edit.rev}`);
-      }
-      return found;
-    };
-    const atrium = project(
-      "atrium",
-      "Atrium",
-      String(input.atrium_goal ?? fields.goal ?? ""),
-      [input.repo],
-    );
-    project(
-      "openquota",
-      "OpenQuota",
-      String(
-        input.openquota_goal ??
-          "各家订阅额度看得清、查得到，供组织按富余调度。",
-      ),
-      [],
-    );
-    for (const doc of input.docs) {
-      let found = nodes(db).find(
-        (n) => n.parent_id === atrium.id && n.slug === doc.slug,
-      );
-      if (!found) {
-        const id = insertNode(
-          db,
-          atrium.id,
-          doc.kind,
-          doc.slug,
-          doc.name,
-          actor,
-          [input.repo],
-          "导入岗位说明",
-        );
-        changes.push(`新建 ${ref(id)} atrium/${doc.slug}`);
-        found = one<NodeRow>(db, "SELECT * FROM org_nodes WHERE id=?", id)!;
-      }
-      if (found.kind !== doc.kind)
-        throw new Problem(409, `atrium/${doc.slug} 类型不是 ${doc.kind}`);
-      const previous = current(db, found.id, "charter");
-      if (!previous || previous.body !== doc.body) {
-        const edit = editDocInner(
-          db,
-          found,
-          "charter",
-          {
-            fields: previous ? JSON.parse(previous.fields) : {},
-            body: doc.body,
-          },
-          "从 .agents 导入",
-          actor,
-        );
-        changes.push(
-          `更新 ${ref(found.id)} atrium/${doc.slug} 章程 ${edit.rev}`,
-        );
-      }
-    }
-    return { preview: false, plan: changes, created: changes.length };
-  });
-}
-function insertNode(
-  db: DatabaseSync,
-  parent: number | null,
-  kind: Kind,
-  slug: string,
-  name: string,
-  actor: string,
-  repos: string[],
-  reason: string,
-) {
-  if (nodes(db).length >= 500) throw new Problem(400, "组织树已达 500 个节点");
-  const now = Date.now();
-  const id = Number(
-    db
-      .prepare(
-        "INSERT INTO org_nodes(parent_id,kind,slug,name,leader,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-      )
-      .run(parent, kind, slug, name, kind === "org" ? "u1" : null, now, now)
-      .lastInsertRowid,
-  );
-  for (const repo of repos)
-    db.prepare("INSERT INTO org_node_repos(node_id,repo) VALUES(?,?)").run(
-      id,
-      repo,
-    );
-  revision(db, id, "node", 1, actor, reason, nodeSnapshot(db, id));
-  return id;
-}
-function addNodeInnerRoot(db: DatabaseSync, actor: string) {
-  return insertNode(db, null, "org", "org", "组织", actor, [], "组织树初始化");
-}
-/** 读本节点章程字段；没有章程为空对象。 */
-export function charterFields(
-  db: DatabaseSync,
-  node: number,
-): Record<string, unknown> {
-  const old = current(db, node, "charter");
-  return old ? (JSON.parse(old.fields) as Record<string, unknown>) : {};
 }

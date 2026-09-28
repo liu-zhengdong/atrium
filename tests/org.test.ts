@@ -2,19 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import {
-  addNode,
-  editDoc,
-  editNode,
-  importOrg,
-  revertDoc,
-} from "../server/org/write.ts";
+import { addNode, editFields, editNode } from "../server/org/write.ts";
 import { history, show, tree } from "../server/org/read.ts";
 import { formatOrgChanges } from "../cli/org.ts";
 import {
-  exportDocument,
-  parseDocument,
-  validateBody,
   validateFields,
   validateReason,
   validateSlug,
@@ -107,30 +98,21 @@ test("validate 的每类拒绝规则与合法输入", () => {
     ["project", "project"],
   ] as const)
     assert.equal(validParent(parent, child), false);
-  const cases: ["charter", unknown, RegExp][] = [
-    ["charter", { unknown: "x" }, /charter.unknown.*未知/],
-    ["charter", { goal: "字".repeat(301) }, /charter.goal.*300/],
-    ["charter", { report: 1 }, /charter.report.*文本/],
-    ["charter", { escalate: "字".repeat(201) }, /charter.escalate.*200/],
+  const cases: [unknown, RegExp][] = [
+    [{ unknown: "x" }, /fields.unknown.*未知/],
+    [{ goal: "x" }, /fields.goal.*未知/],
+    [{ what: "字".repeat(301) }, /fields.what.*300/],
+    [{ now: 1 }, /fields.now.*文本/],
+    [{ toString: "x" }, /fields.toString.*未知/],
   ];
-  for (const [doc, value, expected] of cases)
-    assert.throws(() => validateFields(doc, value), expected);
-  assert.throws(() => validateBody("字".repeat(6000)), /body.*16 KB/);
-  assert.throws(() => validateBody(42), /body.*文本/);
-  assert.throws(
-    () => validateFields("charter", { toString: "x" }),
-    /charter.toString.*未知/,
-  );
-  for (const bad of [
-    "goal: x\n正文",
-    "---\ngoal: x\n正文",
-    "---\ngoal: [bad\n---\n正文",
-    "---\ngoal: x\ngoal: y\n---\n正文",
-    "---\nfoo: x\n---\n正文",
-  ])
-    assert.throws(() => parseDocument(bad, "charter"));
+  for (const [value, expected] of cases)
+    assert.throws(() => validateFields(value), expected);
+  assert.deepEqual(validateFields({ what: "是什么", uses: ["看"] }), {
+    what: "是什么",
+    uses: ["看"],
+  });
 });
-test("权限、层级、乐观并发、修订追加与导出写回", () => {
+test("权限、层级、人话字段不留修订、节点修订的乐观并发与差异", () => {
   const db = setup();
   const { root, project, module } = seed(db);
   assert.throws(
@@ -163,72 +145,40 @@ test("权限、层级、乐观并发、修订追加与导出写回", () => {
       ),
     /slug/,
   );
-  assert.throws(
-    () =>
-      editDoc(
-        db,
-        "org",
-        "charter",
-        { fields: { goal: "x" }, body: "", reason: "越权" },
-        "a1",
-      ),
-    /无权限/,
+  // 人话字段：根只有用户能改；leader 链可改下层，只存当前值、不留修订。
+  assert.throws(() => editFields(db, "org", { what: "x" }, "a1"), /无权限/);
+  editFields(db, "atrium/runtime", { what: "跑通" }, "a1");
+  assert.equal(
+    (show(db, "o3") as { overview: { what: string } }).overview.what,
+    "跑通",
   );
-  const first = editDoc(
+  assert.equal(
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM org_revisions WHERE node_id=? AND target<>'node'",
+      )
+      .get(module.id)!.n,
+    0,
+  );
+  // 节点修订：乐观并发与差异。
+  const renamed = editNode(
     db,
-    "atrium/runtime",
-    "charter",
-    {
-      fields: { goal: "跑通", report: "每周" },
-      body: "# 正文\n",
-      rev: "r0",
-      reason: "初稿",
-    },
+    "o3",
+    { name: "运行时", rev: "r1", reason: "改名" },
     "a1",
   );
-  assert.equal(first.rev, "r1");
+  assert.equal(renamed.rev, "r2");
   assert.throws(
-    () =>
-      editDoc(
-        db,
-        "o3",
-        "charter",
-        { fields: { goal: "覆盖" }, body: "", rev: "r0", reason: "旧版" },
-        "a2",
-      ),
+    () => editNode(db, "o3", { name: "旧", rev: "r1", reason: "旧版" }, "a2"),
     /history/,
   );
-  assert.equal(
-    (show(db, "o3") as { charter: { rev: string } }).charter.rev,
-    "r1",
-  );
-  const exported = (show(db, "o3", "charter") as { raw: string }).raw;
-  assert.deepEqual(parseDocument(exported, "charter"), {
-    fields: { goal: "跑通", report: "每周" },
-    body: "# 正文\n",
-    boundaries: [],
-  });
-  const parsed = parseDocument(exported, "charter");
-  editDoc(db, "o3", "charter", { ...parsed, rev: "r1", reason: "写回" }, "a2");
-  const reverted = revertDoc(db, "o3", "charter", "r1", "回退", "a1");
-  assert.equal(reverted.rev, "r3");
-  assert.equal((show(db, "o3", "charter") as { raw: string }).raw, exported);
-  const rows = db
-    .prepare(
-      "SELECT rev FROM org_revisions WHERE node_id=? AND target='charter' ORDER BY rev",
-    )
-    .all(module.id);
   assert.deepEqual(
-    rows.map((r) => r.rev),
-    [1, 2, 3],
-  );
-  assert.equal(
     (
-      history(db, "o3", { target: "charter", rev: "r1" }) as {
+      history(db, "o3", { rev: "r2" }) as {
         changes: Record<string, unknown>;
       }
-    ).changes["fields.goal"] !== undefined,
-    true,
+    ).changes.name,
+    { before: "runtime", after: "运行时" },
   );
   assert.equal(
     (history(db, "o3", { limit: 1 }) as { has_more: boolean }).has_more,
@@ -237,88 +187,10 @@ test("权限、层级、乐观并发、修订追加与导出写回", () => {
   assert.equal(tree(db).length, 3);
   db.close();
 });
-test("导入仅预览、重复 apply 不重复建", () => {
-  const db = setup();
-  const input = {
-    charter: { fields: { goal: "Atrium 目标" }, body: "## 硬边界\n不花钱" },
-    repo: "/tmp/repo",
-    atrium_goal: "项目目标",
-    docs: [
-      {
-        kind: "module" as const,
-        slug: "runtime",
-        name: "runtime",
-        source: ".agents/modules/runtime.md",
-        body: "# runtime\n岗位正文",
-      },
-    ],
-    apply: false,
-  };
-  assert.equal(importOrg(db, input, "u1").preview, true);
-  assert.equal(tree(db).length, 0);
-  const applied = importOrg(db, { ...input, apply: true }, "u1");
-  assert.ok("created" in applied && applied.created);
-  const count = tree(db).length;
-  const repeated = importOrg(db, { ...input, apply: true }, "u1");
-  assert.equal("created" in repeated ? repeated.created : null, 0);
-  assert.equal(tree(db).length, count);
-  assert.deepEqual(repeated.plan, []);
-  assert.equal(
-    (history(db, "o4", { target: "charter" }) as { items: unknown[] }).items
-      .length,
-    1,
-  );
-  assert.equal(
-    (show(db, "atrium/runtime") as { charter: { body: string } }).charter.body,
-    "# runtime\n岗位正文",
-  );
-  const changed = importOrg(
-    db,
-    { ...input, docs: [{ ...input.docs[0]!, body: "更新正文" }], apply: true },
-    "u1",
-  );
-  assert.deepEqual(changed.plan, ["更新 o4 atrium/runtime 章程 r2"]);
-  assert.equal(
-    (
-      history(db, "o4", { target: "charter", rev: "r2" }) as {
-        revision: { reason: string };
-      }
-    ).revision.reason,
-    "从 .agents 导入",
-  );
-  assert.throws(
-    () =>
-      importOrg(
-        db,
-        { ...input, docs: [{ ...input.docs[0]!, body: "字".repeat(6000) }] },
-        "u1",
-      ),
-    /runtime\.md.*16 KB/,
-  );
-  const project = show(db, "atrium");
-  assert.equal(
-    "charter" in project ? project.charter?.fields.goal : null,
-    "项目目标",
-  );
-  assert.equal(
-    (show(db, "o1") as { charter: { body: string } }).charter.body,
-    "## 硬边界\n不花钱",
-  );
-  db.close();
-});
-
 test("修订差异的人读格式与边界", () => {
   assert.equal(
-    formatOrgChanges({
-      "fields.goal": { before: null, after: "派活闭环不需要人盯" },
-      body: { before: "旧", after: "新", diff: "- 旧\n+ 新" },
-    }),
-    "goal：（空）→ 派活闭环不需要人盯\n正文：\n- 旧\n+ 新",
-  );
-  const long = Array.from({ length: 90 }, (_, i) => `+ ${i}`).join("\n");
-  assert.match(
-    formatOrgChanges({ body: { before: "", after: "", diff: long } }),
-    /省略 10 行/,
+    formatOrgChanges({ name: { before: "旧名", after: "新名" } }),
+    "name：旧名→ 新名",
   );
   assert.equal(
     formatOrgChanges({
@@ -346,19 +218,6 @@ test("节点只归档、移动有层级与深度限制", () => {
   assert.equal(renamed.slug, "engine");
   assert.deepEqual(renamed.repos, ["/tmp/atrium"]);
   assert.equal("doc_path" in show(db, "atrium/engine"), false);
-  assert.throws(
-    () =>
-      editNode(
-        db,
-        `o${module.id}`,
-        {
-          doc_path: ".agents/modules/runtime.md",
-          reason: "旧字段",
-        } as Parameters<typeof editNode>[2],
-        "a1",
-      ),
-    /doc_path 已停用/,
-  );
   const archived = editNode(
     db,
     `o${module.id}`,
@@ -367,14 +226,7 @@ test("节点只归档、移动有层级与深度限制", () => {
   );
   assert.ok(archived.archived_at);
   assert.throws(
-    () =>
-      editDoc(
-        db,
-        `o${module.id}`,
-        "charter",
-        { fields: {}, body: "", reason: "越过归档" },
-        "a2",
-      ),
+    () => editFields(db, `o${module.id}`, { what: "越过归档" }, "a2"),
     /已归档/,
   );
   assert.throws(

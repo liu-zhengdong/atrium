@@ -1,4 +1,3 @@
-import { pickSpecialists } from "./specialist-scope.ts";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
@@ -571,7 +570,6 @@ export class TaskRunner {
     return {
       task: task.ref,
       ...view,
-      specialists: pickSpecialists(this.db, task),
       ...(this.hasRemoteHosts()
         ? { hosts: await this.hostPicks(task, view.recommended) }
         : {}),

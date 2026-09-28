@@ -189,8 +189,7 @@ export const choiceCommands: Record<string, Command> = {
               (t) => `- 选项 ${t.option}「${t.title}」→ 建了 ${t.ref}`,
             ),
             ...result.decisions.map(
-              (d) =>
-                `- 选项 ${d.option} 没选 → 记为 ${d.ref}（${who(d.owner)}的决定记录）`,
+              (d) => `- 选项 ${d.option} 没选 → 记为决定 ${d.ref}`,
             ),
           ].join("\n"),
         );
@@ -218,11 +217,9 @@ export const choiceCommands: Record<string, Command> = {
       if (json) printJson(result);
       else
         console.log(
-          `${result.choice.ref} 这轮都不要，记了 ${result.decisions.map((d) => d.ref).join("、")}（${who(result.decisions[0]?.owner ?? "secretary")}的决定记录）`,
+          `${result.choice.ref} 这轮都不要，记了决定 ${result.decisions.map((d) => d.ref).join("、")}`,
         );
-      recordNext(
-        `看决定记录：atrium decision ls${result.decisions[0] && result.decisions[0].owner !== "secretary" ? ` --as ${result.decisions[0].owner}` : ""}`,
-      );
+      recordNext(`看决定记录：atrium decision ls --node ${result.choice.node}`);
     },
   },
   "choice comment": {

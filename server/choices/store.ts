@@ -611,13 +611,12 @@ export function pendingChoices(
 export type Decided = {
   choice: Choice;
   tasks: { ref: string; option: number; title: string }[];
-  decisions: { ref: string; option: number; owner: string }[];
+  decisions: { ref: string; option: number }[];
 };
 
 /**
  * 拍板（pick 选中几个 / pass 这轮都不要）：一个事务里给选中的在节点下建任务（带选项全文作详述，
- * 事件照常投给该节点最近的 leader 拆解），没选的连同说明记成决定记录（主人是该节点最近的 leader，
- * 没有就是秘书），再把选项单改成已定。
+ * 事件照常投给该节点最近的 leader 拆解），没选的连同说明记成用户的决定记录（挂在该节点上），再把选项单改成已定。
  */
 export function decideChoice(
   db: DatabaseSync,
@@ -678,7 +677,6 @@ export function decideChoice(
       recommend: choice.recommend,
       why: choice.why,
     };
-    const owner = partRoute(db, row.node_id).subscriber;
     const tasks: Decided["tasks"] = [];
     const decisions: Decided["decisions"] = [];
     const mark = db.prepare(
@@ -700,18 +698,9 @@ export function decideChoice(
         tasks.push({ ref: task.ref, option: option.seq, title: option.title });
       } else {
         const text = skippedDecision(facts, o, note, action, actor);
-        const decision = addDecision(
-          db,
-          owner,
-          { ...text, by: actor, node: choice.node },
-          now,
-        );
+        const decision = addDecision(db, { ...text, node: choice.node }, now);
         mark.run(0, null, parseInt(decision.ref.slice(1), 10), id, option.seq);
-        decisions.push({
-          ref: decision.ref,
-          option: option.seq,
-          owner: decision.owner,
-        });
+        decisions.push({ ref: decision.ref, option: option.seq });
       }
     }
     db.prepare(

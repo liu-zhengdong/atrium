@@ -35,7 +35,6 @@ test("隔离服务：--by 前端派活附前端技能，全景树不挂专员", 
   await ok("/api/specialists", {
     name: "前端",
     description: "实现页面",
-    body: "按设计稿完成页面",
     skills: ["frontend-skill"],
   });
   const task = await ok("/api/tasks", {
@@ -47,7 +46,7 @@ test("隔离服务：--by 前端派活附前端技能，全景树不挂专员", 
   assert.equal(task.job_ref, "r1");
   await ok("/api/tasks/t1/run", { worker: "opencode" });
   const prompt = readFileSync(join(data, "tasks", "1", "prompt.md"), "utf8");
-  assert.match(prompt, /# 干活的专员：前端/);
+  assert.match(prompt, /## 分工\n\n干活的专员：前端——实现页面/);
   assert.match(prompt, /frontend-skill/);
   const specialists = (await call("GET", "/api/map/specialists")).body;
   assert.deepEqual(

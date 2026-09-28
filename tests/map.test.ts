@@ -9,17 +9,9 @@ import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { authPolicy } from "../server/auth-policy.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { addNode, revertDoc } from "../server/org/write.ts";
-import { history } from "../server/org/read.ts";
+import { addNode } from "../server/org/write.ts";
 import { addPoint } from "../server/org/points.ts";
-import { withContext } from "../server/org/brief.ts";
-import {
-  CONTEXT_MAX,
-  formatContext,
-  mapContext,
-  taskContext,
-  type ContextInput,
-} from "../server/map/context.ts";
+import { CONTEXT_MAX, mapContext, taskContext } from "../server/map/context.ts";
 import { MapLogin, LINK_TTL_MS, cookieOf } from "../server/map/login.ts";
 import { addMap, editMap, mergeFields } from "../server/map/write.ts";
 import {
@@ -36,7 +28,6 @@ import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
 import { removeTemp } from "./temp-dir.ts";
 import { ensureHostTables } from "../server/hosts/model.ts";
 
-const chars = (text: string) => Array.from(text).length;
 const node = (db: DatabaseSync, input: Record<string, unknown>) =>
   addNode(db, { reason: "创建", ...input } as never, "u1");
 
@@ -58,7 +49,10 @@ function seed(db: DatabaseSync) {
     leader: "a2",
   });
   node(db, { parent: "o2", slug: "cli", kind: "module", name: "cli" });
-  node(db, { parent: "o2", slug: "安全", kind: "concern", name: "安全" });
+  // 旧库里的关注点（已下线，不能再建）：直接写进表。
+  db.prepare(
+    "INSERT INTO org_nodes(parent_id,kind,slug,name,created_at,updated_at) VALUES(2,'concern','安全','安全',1,1)",
+  ).run();
   node(db, { parent: "o1", slug: "openquota", kind: "project", name: "OQ" });
 }
 function memory() {
@@ -76,90 +70,7 @@ const point = (db: DatabaseSync, at: string, text: string, check?: string) =>
     "u1",
   );
 
-// ---- context：纯函数截断 ----
-
-const level = (ref: string, name: string, what: string) => ({
-  ref,
-  name,
-  alias: "",
-  analogy: "",
-  what,
-});
-function sample(): ContextInput {
-  return {
-    chain: [
-      level("o1", "组织", "你的 AI 组织".repeat(20)),
-      level("o2", "Atrium", "AI 组织的运行底座".repeat(10)),
-      { ...level("o4", "cli", "命令行入口"), alias: "命令行", analogy: "前台" },
-    ],
-    parts: [{ name: "map", alias: "全景", analogy: "地图" }],
-    now: "网页开发中",
-    next: "接看板",
-    points: [
-      {
-        name: "Atrium",
-        points: [
-          { text: "随时升级", why: "不等空闲", by: "u1 09-27", check: null },
-        ],
-      },
-      {
-        name: "cli",
-        points: [
-          {
-            text: "网页只读",
-            why: "两处改会冲突",
-            by: "u1 09-27",
-            check: "$ npm run check",
-          },
-        ],
-      },
-    ],
-  };
-}
-
-test("map context：够长时全给，位置链、本块、要点（本节点与上级）都在，不给全文提示", () => {
-  const { text, truncated } = formatContext(sample(), "o4", 8000);
-  assert.equal(truncated, false);
-  const lines = text.split("\n");
-  assert.equal(lines[0], "全景位置：组织 → Atrium → 命令行（cli）（前台）");
-  assert.match(text, /- 命令行（cli）：命令行入口/);
-  assert.match(text, /本块由这几部分组成：全景（map）——地图/);
-  assert.match(text, /现在：网页开发中\n接下来：接看板/);
-  assert.match(
-    text,
-    /要点（本节点及上级，必须守住）：\n- \[Atrium\] 随时升级（为什么：不等空闲；u1 09-27 定）\n- \[cli\] 网页只读（为什么：两处改会冲突；u1 09-27 定；检查：\$ npm run check）/,
-  );
-  assert.doesNotMatch(text, /全文/);
-});
-
-test("map context：任何上限下都不超长；先丢远的上层，要点与本块优先保留，截了就给全文命令", () => {
-  const full = formatContext(sample(), "o4", 8000).text;
-  for (let max = 200; max <= chars(full) + 20; max += 7) {
-    const { text, truncated } = formatContext(sample(), "o4", max);
-    assert.ok(chars(text) <= max, `max=${max} 实得 ${chars(text)}`);
-    assert.match(text, /^全景位置：/);
-    assert.equal(truncated, text.endsWith("（全文：atrium map context o4）"));
-    // 本块是什么与本块要点比上层介绍先留下。
-    if (text.includes("你的 AI 组织")) {
-      assert.match(text, /命令行入口/, `max=${max}`);
-      assert.match(text, /网页只读/, `max=${max}`);
-      assert.match(text, /随时升级/, `max=${max}`);
-    }
-    if (text.includes("随时升级")) assert.match(text, /网页只读/);
-  }
-  const tight = formatContext(sample(), "o4", 260).text;
-  assert.match(tight, /命令行入口/);
-  assert.match(tight, /网页只读/);
-  assert.doesNotMatch(tight, /你的 AI 组织/);
-  // 极端长的一条被截到单条上限，不挤掉其余。
-  const long = sample();
-  long.points[1]!.points[0]!.text = "很长".repeat(400);
-  const cut = formatContext(long, "o4", 8000);
-  assert.equal(cut.truncated, true);
-  assert.match(cut.text, /随时升级/);
-});
-
-test("map context：读库时附本节点及上级的要点；派活提示词里与章程要点同一段", () => {
+test("map context：读库时只附本部分及上级的要点（按层、按排序）与技能，不附位置与人话字段", () => {
   const db = memory();
   editMap(db, "o2", { what: "AI 组织的运行底座", alias: "底座" }, "u1");
   editMap(db, "o4", { what: "命令行入口", analogy: "前台" }, "u1");
@@ -169,21 +80,15 @@ test("map context：读库时附本节点及上级的要点；派活提示词里
   const context = mapContext(db, "atrium/cli");
   assert.equal(context.ref, "o4");
   assert.equal(context.max, CONTEXT_MAX);
-  assert.match(context.text, /全景位置：组织 → 底座（Atrium） → cli（前台）/);
-  assert.match(context.text, /\[Atrium\] 随时升级[\s\S]*\[cli\] 网页只读/);
-  assert.doesNotMatch(context.text, /别处的要点/);
+  assert.match(
+    context.text,
+    /\[Atrium\]\n1\. 随时升级（随时升级的理由）\n\[cli\]\n1\. 网页只读/,
+  );
+  for (const gone of ["别处的要点", "全景位置", "命令行入口", "底座"])
+    assert.doesNotMatch(context.text, new RegExp(gone));
   assert.equal(taskContext(db, 4), context.text);
   assert.equal(taskContext(db, null), undefined);
   assert.equal(taskContext(db, 99), undefined);
-  const merged = withContext(
-    { heading: "章程要点（组织 → Atrium → cli）", text: "硬边界：无" },
-    context.text,
-  )!;
-  assert.equal(merged.heading, "章程要点（组织 → Atrium → cli）");
-  assert.ok(merged.text.startsWith("全景位置："));
-  assert.ok(merged.text.endsWith("硬边界：无"));
-  assert.equal(withContext(undefined, "x")!.heading, "全景位置与要点");
-  assert.equal(withContext(undefined, undefined), undefined);
 });
 
 // ---- 读视图 ----
@@ -272,7 +177,9 @@ test("全景节点给网页页签用的字段：部分做什么与下面几块�
   editMap(db, "o3", { what: "派活和验收" }, "u1");
   editMap(db, "o5", { what: "凭据与权限" }, "u1");
   node(db, { parent: "o3", slug: "gates", kind: "module", name: "gates" });
-  node(db, { parent: "o3", slug: "质量", kind: "concern", name: "质量" });
+  db.prepare(
+    "INSERT INTO org_nodes(parent_id,kind,slug,name,created_at,updated_at) VALUES(3,'concern','质量','质量',1,1)",
+  ).run();
   point(db, "o2", "本块要点");
   point(db, "o7", "gates 的要点");
   point(db, "o5", "安全的要点");
@@ -310,10 +217,10 @@ test("全景节点给网页页签用的字段：部分做什么与下面几块�
 test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；坏输入用参数名报错", () => {
   assert.deepEqual(
     mergeFields(
-      { what: "旧", uses: ["a"], goal: "留着" },
+      { what: "旧", uses: ["a"], goal: "已下线的字段丢掉" },
       { what: "", uses: ["x", " ", "y"], now: " 现状 " },
     ),
-    { uses: ["x", "y"], goal: "留着", now: "现状" },
+    { uses: ["x", "y"], now: "现状" },
   );
   assert.throws(() => mergeFields({}, { owner: "x" }), /--owner: 不是全景字段/);
   const db = memory();
@@ -321,30 +228,23 @@ test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；�
   assert.deepEqual(editMap(db, "o3", { next: "下一步" }, "a1"), {
     node: "o3",
   });
-  const charter = () =>
-    db
-      .prepare("SELECT * FROM org_docs WHERE node_id=3 AND doc='charter'")
-      .get() as {
-      rev: number;
-      fields: string;
-      body: string;
-    };
-  const revisions = () =>
-    db
-      .prepare(
-        "SELECT rev,snapshot FROM org_revisions WHERE node_id=3 AND target='charter' ORDER BY rev",
-      )
-      .all();
-  assert.equal(charter().rev, 0);
-  assert.deepEqual(JSON.parse(charter().fields), {
-    now: "在做",
-    next: "下一步",
-  });
-  assert.deepEqual(revisions(), []);
+  const stored = () =>
+    JSON.parse(
+      (
+        db
+          .prepare(
+            "SELECT fields FROM org_docs WHERE node_id=3 AND doc='charter'",
+          )
+          .get() as { fields: string }
+      ).fields,
+    );
+  assert.deepEqual(stored(), { now: "在做", next: "下一步" });
   assert.equal(
-    (history(db, "o3", { target: "charter" }) as { items: unknown[] }).items
-      .length,
+    db
+      .prepare("SELECT count(*) AS n FROM org_revisions WHERE target<>'node'")
+      .get()!.n,
     0,
+    "人话字段不留修订",
   );
   assert.throws(
     () => editMap(db, "o2", { now: "越权" }, "a2"),
@@ -357,35 +257,26 @@ test("map edit/add：并字段、空串清掉；越权与根节点只有 u1；�
   assert.throws(() => editMap(db, "o3", { now: "在做" }, "a2"), /没有要改的/);
   assert.throws(
     () => editMap(db, "o3", { what: "长".repeat(301) }, "a2"),
-    /charter.what 超过 300 字/,
+    /fields.what 超过 300 字/,
   );
+  // 阶段记录并进 map edit：整份替换，按字段名校验。
+  editMap(
+    db,
+    "o3",
+    { stages: [{ id: "g1", result: "跑通", status: "active" }] },
+    "a2",
+  );
+  assert.equal(stored().stages[0].id, "g1");
   assert.throws(
-    () => editMap(db, "o3", { now: "x", rev: "r1" }, "a2"),
-    /--rev: 只用于 --detail/,
+    () =>
+      editMap(
+        db,
+        "o3",
+        { stages: [{ id: "g1", result: "x", status: "x" }] },
+        "a2",
+      ),
+    /fields.stages\[0\]\.status 只能是/,
   );
-  assert.deepEqual(
-    editMap(db, "o3", { now: "新现状", detail: "正文一", rev: "r0" }, "a2"),
-    { node: "o3", before: "r0", rev: "r1" },
-  );
-  assert.equal(charter().body, "正文一");
-  assert.equal(charter().rev, 1);
-  assert.deepEqual(JSON.parse(revisions()[0]!.snapshot as string).fields, {});
-  editMap(db, "o3", { now: "再更新" }, "a2");
-  assert.equal(charter().rev, 1);
-  assert.equal(revisions().length, 1);
-  assert.throws(
-    () => editMap(db, "o3", { detail: "正文二", rev: "r0" }, "a2"),
-    /已是 r1/,
-  );
-  editMap(db, "o3", { detail: "正文二", rev: "r1" }, "a2");
-  assert.equal(revisions().length, 2);
-  const diff = history(db, "o3", { target: "charter", rev: "r2" }) as {
-    changes: Record<string, unknown>;
-  };
-  assert.equal(diff.changes["fields.now"], undefined);
-  revertDoc(db, "o3", "charter", "r1", "回退正文", "a2");
-  assert.equal(JSON.parse(charter().fields).now, "再更新");
-  assert.equal(charter().body, "正文一");
   const added = addMap(
     db,
     { parent: "o2", name: "新部分", slug: "new-part", what: "一句话" },
@@ -459,7 +350,8 @@ test("接口：令牌读写；网页登录链接只能用一次，会话只能�
     url: "/api/map/context/o7?max=300",
     headers: auth,
   });
-  assert.match(context.json().text, /Atrium → runtime → 待办本（白板）/);
+  assert.equal(context.statusCode, 200, context.body);
+  assert.equal(context.json().ref, "o7");
   assert.equal(
     (await app.inject({ url: "/api/map/context/o7?max=9", headers: auth }))
       .statusCode,

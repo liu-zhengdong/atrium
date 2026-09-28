@@ -4,7 +4,6 @@ import { ensureQueueTable } from "./queue.ts";
 import { repairScheduleRecords } from "./schedule-recovery.ts";
 import { ensureUpstreamPrTable } from "./schedule-upstream.ts";
 import { ensureUsageTable } from "./usage.ts";
-import { ensureAlsoTable } from "./also.ts";
 import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
 import { ensurePauseTable } from "../pause.ts";
@@ -208,7 +207,6 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureUpstreamPrTable(db);
   repairScheduleRecords(db);
   ensureUsageTable(db);
-  ensureAlsoTable(db);
   // 任务声明要用的凭据（t194）：task_secrets 随账本建，node_secrets 一起建好，建任务时要查。
   ensureSecretTables(db);
   // 总任务（t190）：有子任务的任务不再派、状态按子孙汇总；运行时替父任务建的帮手（审阅）不算子任务。

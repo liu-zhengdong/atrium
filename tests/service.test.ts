@@ -487,15 +487,12 @@ test(
       200,
     );
     assert.equal((await f.cli("org", "tree")).code, 0);
-    writeFileSync(join(f.root, "role.md"), "实现并检查服务功能");
     const addedRole = await f.cli(
       "specialist",
       "add",
       "服务维护",
       "--description",
       "维护服务",
-      "--body",
-      join(f.root, "role.md"),
     );
     assert.equal(addedRole.code, 0, addedRole.stderr);
     const addedTask = await f.cli("task", "add", "检查旧库兼容", "--by", "r1");

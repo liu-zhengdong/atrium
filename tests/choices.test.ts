@@ -813,13 +813,13 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
     ],
   );
   assert.deepEqual(
-    picked.decisions.map((d: { option: number; owner: string }) => [
+    picked.decisions.map((d: { option: number; ref: string }) => [
       d.option,
-      d.owner,
+      d.ref,
     ]),
     [
-      [2, "u1"],
-      [4, "u1"],
+      [2, "d1"],
+      [4, "d2"],
     ],
   );
   const task = x.db
@@ -833,13 +833,8 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.match(task.brief, /用户说明：选项2等额度宽裕再说/);
   assert.match(task.brief, /- 能多做到什么：能多做到1/);
   assert.match(task.brief, /- 秘书：先做看板（倾向选项 1）；补依据：f3/);
-  // 用户拍板的记进用户那份（t211），挂在选项单的节点上，a2 的摘要里照样看得到。
-  const decisions = await x.ok("GET", "/api/decisions?as=u1");
-  assert.ok(
-    (await x.ok("GET", "/api/memo?as=a2")).decisions.some(
-      (d: { ref: string }) => d.ref === picked.decisions[0].ref,
-    ),
-  );
+  // 没选的记成用户的决定，挂在选项单的节点上。
+  const decisions = await x.ok("GET", "/api/decisions?node=o2");
   const skipped = decisions.decisions.find(
     (d: { ref: string }) => d.ref === picked.decisions[0].ref,
   );
@@ -897,15 +892,15 @@ test("隔离服务：提选项单叫醒秘书，拍板建任务、记决定，�
   assert.equal(conflict.status, 409);
   assert.match(conflict.body.error, /c1 已经拍过板了/);
 
-  // 这轮都不要：用户拍板的，记进用户那份（t211）。
+  // 这轮都不要：每个选项记成用户的决定。
   const passed = await x.ok("POST", "/api/choices/c2/pass", {
     note: "这周先收尾",
   });
   assert.equal(passed.choice.status, "passed");
   assert.equal(passed.tasks.length, 0);
   assert.deepEqual(
-    passed.decisions.map((d: { owner: string }) => d.owner),
-    ["u1", "u1", "u1"],
+    passed.decisions.map((d: { option: number }) => d.option),
+    [1, 2, 3],
   );
   assert.equal((await x.ok("GET", "/api/tasks/top")).choices, undefined);
   assert.equal((await x.ok("GET", "/api/map/now")).choices.open, 0);
@@ -1098,7 +1093,10 @@ test("调研类周期任务：写了 choice.json 就登记成选项单，没写�
   const broken = await round("坏文件");
   write(broken, "{");
   const error = settleRound(x.db, inbox, x.data, broken);
-  assert.match((error as { choice_error: string }).choice_error, /不是合法的 JSON/);
+  assert.match(
+    (error as { choice_error: string }).choice_error,
+    /不是合法的 JSON/,
+  );
   const good = await round("好文件");
   write(good, JSON.stringify(sheet()));
   const made = settleRound(x.db, inbox, x.data, good) as { choice: string };

@@ -125,7 +125,7 @@ test("refusalsOf：逐项列出不能接的原因，能接为空", () => {
     refusalsOf(cand("codex+gpt-6-sol", { rules: { max_risk: "medium" } }), f),
     [
       "档案 max_risk=medium，低于任务 risk=high",
-      "已用额度 85% 达到章程上限 80%（须留 20% 给用户）",
+      "已用额度 85% 达到上限 80%（须留 20% 给用户）",
     ],
   );
   const kimi = refusalsOf(
@@ -541,7 +541,7 @@ test("pickView：专员候选都不能接时按额度挑并写明", () => {
   assert.equal(view.recommended, "claude+opus");
   assert.equal(
     view.reason,
-    "后端专员的优先执行者都不能接或正忙，按额度挑、claude 富余 +54%；codex+gpt-6-sol 不能接：已用额度 85% 达到章程上限 80%（须留 20% 给用户）",
+    "后端专员的优先执行者都不能接或正忙，按额度挑、claude 富余 +54%；codex+gpt-6-sol 不能接：已用额度 85% 达到上限 80%（须留 20% 给用户）",
   );
 });
 
@@ -701,7 +701,7 @@ test("命令行文本：推荐一句、表格一行一位候选；task run 回�
   assert.equal(lines[0], "推荐 claude+opus：前端专员优先、claude 富余 +54%");
   assert.match(
     lines[1]!,
-    /^t5 · risk=low · 干活的专员 前端（r1） · 根章程给用户保留 20%$/,
+    /^t5 · risk=low · 干活的专员 前端（r1） · 给你保留 20%$/,
   );
   assert.match(lines[3]!, /执行者\s+能不能接\s+账号额度\s+正忙\s+交付记录/);
   assert.match(
@@ -811,7 +811,6 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   const role = await call("POST", "/api/specialists", {
     name: "前端",
     description: "界面",
-    body: "做界面",
     preferred: ["kimi"],
   });
   assert.equal(role.status, 201, JSON.stringify(role.body));

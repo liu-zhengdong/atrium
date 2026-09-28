@@ -42,6 +42,7 @@ export const claude: Adapter = {
   progressSignals: ["json_events", "worktree_change"],
   notes: ["工作目录由进程 cwd 决定，没有 --cwd 参数"],
   tell: "stdin",
+  logFormat: "claude-stream",
   build(input) {
     checkCommon(claude, input);
     return {

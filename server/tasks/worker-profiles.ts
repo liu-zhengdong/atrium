@@ -2,7 +2,9 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
+import { CUSTOM_TOOL_RE, parseToolSpec } from "./adapters/acp-spec.ts";
 import { isTool, TOOLS } from "./adapters/index.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
 import { all, atomically, one } from "./ledger-model.ts";
 
 /**
@@ -59,7 +61,7 @@ export function ensureWorkerProfiles(db: DatabaseSync) {
 }
 
 /**
- * 档案名是否合法（纯函数）：harness 是工具名，models 是模型名最后一段，combos 是 `工具+模型名`。
+ * 档案名是否合法（纯函数）：harness 是工具名（内置的，或用 protocol 接入的新工具，#418），models 是模型名最后一段，combos 是 `工具+模型名`。
  * 合法返回 null，否则返回原因。
  */
 export function profileNameProblem(
@@ -67,7 +69,9 @@ export function profileNameProblem(
   name: string,
 ): string | null {
   if (layer === "harness")
-    return isTool(name) ? null : `工具层档案名须是 ${TOOLS.join("、")} 之一`;
+    return isTool(name) || CUSTOM_TOOL_RE.test(name)
+      ? null
+      : `工具层档案名须是内置工具（${TOOLS.join("、")}）或新工具名（小写字母开头，只含小写字母、数字与 -）`;
   if (layer === "models")
     return NAME_RE.test(name) && !name.startsWith(".")
       ? null
@@ -279,6 +283,11 @@ export function importWorkerProfiles(
         continue;
       }
       const problems = sourceProblems(source);
+      // 旧目录里不是内置工具的工具层档案：写了接入字段才算新工具（#418），否则照旧跳过。
+      if (layer === "harness" && !problems.length)
+        problems.push(
+          ...parseToolSpec(name, parseFrontmatter(source).data).problems,
+        );
       if (problems.length) {
         skip(file, problems.join("；"));
         continue;

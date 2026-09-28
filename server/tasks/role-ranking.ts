@@ -12,7 +12,13 @@ export function rankRoleWorkers(
       .map((s) => [`${s.scope}:${s.worker}`, s.first_pass_rate ?? 0]),
   );
   const score = (worker: string) => {
-    const spec = parseWorker(worker);
+    let spec;
+    try {
+      spec = parseWorker(worker);
+    } catch {
+      // 档案接入的工具后来撤掉了（#418）：不影响排序，派到它时再报。
+      return rate.get(`combination:${worker}`) ?? 0.5;
+    }
     return (
       rate.get(`combination:${worker}`) ??
       rate.get(`model:${spec.tool}${spec.model ? `+${spec.model}` : ""}`) ??

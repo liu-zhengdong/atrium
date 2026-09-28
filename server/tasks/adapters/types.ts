@@ -16,8 +16,10 @@ export const TOOLS = [
   "agy",
   "cursor",
 ] as const;
-export type Tool = (typeof TOOLS)[number];
-export const isTool = (value: unknown): value is Tool =>
+export type BuiltinTool = (typeof TOOLS)[number];
+/** 工具名：内置的七个，或档案里用 protocol 接入的新工具（adapters/custom.ts 登记）。 */
+export type Tool = string;
+export const isBuiltinTool = (value: unknown): value is BuiltinTool =>
   typeof value === "string" && (TOOLS as readonly string[]).includes(value);
 
 export type LaunchInput = {
@@ -100,6 +102,8 @@ export type Adapter = {
   notes: readonly string[];
   /** 捎话的缺省送达方式；档案 `tell` 可改成本工具支持的其他方式。 */
   tell: TellMode;
+  /** 即时写入的捎话不在工具调用边界读入，而是排到本轮之后另起一轮（agy 的消息流、ACP 的追加消息）。 */
+  tellAfterTurn?: true;
   /** 模型与思考强度搭不搭（派活前、排队前先查，免得排到时才报错）；不合法抛 400。 */
   checkModel?(model: string | undefined, effort: string | undefined): void;
   /** 档案（三层叠加后）没写时的规则缺省：新接入、还没有交付记录的工具先压低，按交付记录再在档案里升。 */
@@ -109,6 +113,8 @@ export type Adapter = {
   resume?(input: ResumeInput): Launch;
   /** 从日志开头取会话 id（续上时用）；取不到返回 undefined。 */
   sessionOf?(log: string): string | undefined;
+  /** 日志是 claude stream-json 格式（claude 与 ACP 桥接）：接管后退出、最终 result 催收尾按 claude 的规则判。 */
+  logFormat?: "claude-stream";
 };
 
 /** macOS ARG_MAX 为 1 MiB（getconf ARG_MAX），argv 与环境共用；单个参数保守取 256 KiB。 */

@@ -4,7 +4,7 @@ import {
   invalid,
   isTool,
   TELL_MODES,
-  TOOLS,
+  toolNames,
   type Tool,
 } from "./adapters/index.ts";
 import { parseFrontmatter, type FrontValue } from "./frontmatter.ts";
@@ -89,7 +89,7 @@ export function parseWorker(value: string): WorkerSpec {
   }
   if (!isTool(tool))
     throw invalid(
-      `未知的执行者工具：${tool || "（空）"}，可选 ${TOOLS.join("、")}`,
+      `未知的执行者工具：${tool || "（空）"}，可选 ${toolNames().join("、")}`,
     );
   if (plus >= 0 && !MODEL_RE.test(rest))
     throw invalid(`执行者模型不合法：${rest || "（空）"}`);

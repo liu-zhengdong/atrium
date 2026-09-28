@@ -3,9 +3,9 @@ import { killTree, spawnCommand } from "../platform/index.ts";
 
 /**
  * 最小 ACP（Agent Client Protocol）客户端：换行分隔的 JSON-RPC 2.0，经 stdio 与 Agent 进程通信。
- * 只实现秘书会话用到的部分：initialize、session/new、session/load、session/prompt、session/cancel，
- * 接收 session/update 通知与 session/request_permission 请求。客户端不声明 fs、terminal 能力，
- * 读写文件与跑命令由 Agent 用自己的工具完成。
+ * 秘书会话（cli/chat.ts）与 ACP 执行者的桥（bridge.ts）共用。只实现用到的部分：initialize、session/new、
+ * session/load、session/prompt、session/cancel 与会话配置，接收 session/update 通知与 session/request_permission 请求。
+ * 客户端不声明 fs、terminal 能力，读写文件与跑命令由 Agent 用自己的工具完成。
  */
 
 export type AcpUpdate = { sessionUpdate: string; [key: string]: unknown };
@@ -29,6 +29,8 @@ export type AcpHandlers = {
   permission(request: PermissionRequest): Promise<PermissionOutcome>;
   /** Agent 进程退出（含启动失败）。 */
   exit(reason: string): void;
+  /** Agent 的标准错误输出（执行者的桥原样转进执行日志）。 */
+  stderr?(chunk: string): void;
 };
 
 type Pending = {
@@ -69,7 +71,12 @@ export class AcpConnection {
   constructor(
     command: string,
     args: string[],
-    options: { cwd: string; env: NodeJS.ProcessEnv },
+    options: {
+      cwd: string;
+      env: NodeJS.ProcessEnv;
+      /** 缺省独立进程组；执行者的桥不开（运行时结束桥的进程树时连工具一起结束）。 */
+      detached?: boolean;
+    },
     private readonly handlers: AcpHandlers,
   ) {
     // 独立进程组：终端的 Ctrl-C 由聊天界面处理（取消本轮），退出时整组结束。
@@ -77,13 +84,14 @@ export class AcpConnection {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
+      detached: options.detached ?? true,
     }) as ChildProcessWithoutNullStreams;
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => this.read(chunk));
     this.child.stderr.setEncoding("utf8");
     this.child.stderr.on("data", (chunk: string) => {
       this.stderr = (this.stderr + chunk).slice(-4000);
+      this.handlers.stderr?.(chunk);
     });
     this.child.stdin.on("error", () => {});
     this.child.on("error", (error) => this.finish(error.message));

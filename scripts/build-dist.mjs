@@ -3,7 +3,7 @@
 // 不在每次启动时用 tsx 现场编译。第三方包不打进来，照旧从 node_modules 加载。
 //
 // - dist/cli.js：命令行入口，按 import() 拆块，读命令不加载服务端大模块；
-// - dist/server.js、dist/supervisor.js：服务与重启 supervisor，各自一个完整文件、不拆块——
+// - dist/server.js、dist/supervisor.js、dist/acp-bridge.js：服务、重启 supervisor 与 ACP 执行者的桥，各自一个完整文件、不拆块——
 //   长跑进程在 update 换掉磁盘上的包之后仍可能执行到延迟加载的代码，拆块会找不到旧块。
 //
 // 所有产物平铺在 dist/ 下：源码里 `new URL("../", import.meta.url)` 取包根目录，
@@ -31,7 +31,7 @@ const { values } = parseArgs({
 });
 const outdir = resolve(values.outdir);
 
-const entries = ["cli", "server", "supervisor"];
+const entries = ["cli", "server", "supervisor", "acp-bridge"];
 let build;
 try {
   ({ build } = await import("esbuild"));
@@ -69,7 +69,11 @@ await build({
 });
 await build({
   ...common,
-  entryPoints: { server: "server/main.ts", supervisor: "server/supervisor.ts" },
+  entryPoints: {
+    server: "server/main.ts",
+    supervisor: "server/supervisor.ts",
+    "acp-bridge": "server/acp/bridge-main.ts",
+  },
   splitting: false,
 });
 console.error(`已编译到 ${outdir}`);

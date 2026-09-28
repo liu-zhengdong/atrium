@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { launched, type Active } from "./active.ts";
-import { ADAPTERS, type Tool } from "./adapters/index.ts";
+import { ADAPTERS, claudeStream, type Tool } from "./adapters/index.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec } from "./git.ts";
 import {
@@ -1288,7 +1288,7 @@ export class Executors {
         if (await this.swapIfIdle(active, urgent)) continue;
         const verdict = judge(active.state, active.limits, Date.now());
         if (verdict.kind === "ok") continue;
-        if (active.tool === "claude") {
+        if (claudeStream(active.tool)) {
           const result = await logTail(active.logFile, 1024 * 1024)
             .then(finalClaudeResult)
             .catch(() => undefined);

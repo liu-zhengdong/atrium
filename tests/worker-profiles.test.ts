@@ -63,7 +63,10 @@ function legacyDir(t: { after: (fn: () => void) => void }) {
 
 test("档案名与 层/名（纯函数）：合法的放行，破坏输入给原因", () => {
   assert.equal(profileNameProblem("harness", "codex"), null);
-  assert.match(profileNameProblem("harness", "gemini")!, /工具层/);
+  // 不是内置工具的名字也可以（档案接入的新工具，#418），名字写法不对才拒。
+  assert.equal(profileNameProblem("harness", "gemini"), null);
+  assert.match(profileNameProblem("harness", "Gemini")!, /工具层/);
+  assert.match(profileNameProblem("harness", "gemini+x")!, /工具层/);
   assert.equal(profileNameProblem("models", "gpt-6-sol"), null);
   assert.equal(profileNameProblem("models", "mimo-v2.6-flash"), null);
   assert.match(profileNameProblem("models", ".hidden")!, /模型层/);

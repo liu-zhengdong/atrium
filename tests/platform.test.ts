@@ -319,6 +319,10 @@ test("本机：按名字找可执行文件、拉起 shell 命令、判断进程�
   const path = [join(root, "missing"), bin].join(delimiter);
   assert.equal(findExecutable("tool", path), join(bin, name));
   assert.equal(findExecutable("absent", path), undefined);
+  // 绝对路径（档案接入的工具可写，#418）只查那一个文件，不在 PATH 里拼。
+  assert.equal(findExecutable(join(bin, name), ""), join(bin, name));
+  assert.equal(findExecutable(join(bin, "absent"), path), undefined);
+  assert.equal(findExecutable(bin, path), undefined, "目录不算");
   const call = commandInvocation("tool", ["x"], { PATH: path });
   if (process.platform === "win32") assert.equal(call.verbatim, true);
   else assert.deepEqual(call, { command: join(bin, name), args: ["x"] });

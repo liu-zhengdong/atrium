@@ -5,6 +5,7 @@ import { Problem } from "../problem.ts";
 import { recentAction } from "./action.ts";
 import { taskDir } from "./active.ts";
 import { ADAPTERS, isTool, TOOLS, type Tool } from "./adapters/index.ts";
+import { syncCustomTools } from "./adapters/custom.ts";
 import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
 import { EventInbox } from "./events.ts";
 import { Retention } from "./retention.ts";
@@ -289,6 +290,7 @@ export class TaskRunner {
     ensureQueueTable(db);
     ensureWorkerProfiles(db);
     importWorkerProfiles(db, options.workersDir);
+    syncCustomTools(db);
     // 本机限额只看服务自己的环境（不是给执行者的 options.env）。
     const owner = spawnOwner(options.data);
     this.host =

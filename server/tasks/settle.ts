@@ -2,7 +2,7 @@ import { readFileSync, statSync, appendFileSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import type { Active } from "./active.ts";
 import { adoptedEnd } from "./adopted-exit.ts";
-import { ADAPTERS } from "./adapters/index.ts";
+import { ADAPTERS, claudeStream } from "./adapters/index.ts";
 import { collectFacts } from "./facts.ts";
 import { type Facts, type Verdict } from "./gates.ts";
 import { collectComments } from "./comment-facts.ts";
@@ -157,7 +157,11 @@ export async function settle(
   // 接管后退出没有退出码：按日志收尾结构判正常结束还是出错。
   const adopted =
     exit === "unknown"
-      ? adoptedEnd({ tool: active.tool, log, lastMessage })
+      ? adoptedEnd({
+          tool: claudeStream(active.tool) ? "claude" : active.tool,
+          log,
+          lastMessage,
+        })
       : undefined;
   try {
     appendFileSync(

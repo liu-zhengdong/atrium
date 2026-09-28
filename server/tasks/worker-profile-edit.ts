@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
+import { parseToolSpec, SPEC_KEYS } from "./adapters/acp-spec.ts";
+import { syncCustomTools } from "./adapters/custom.ts";
 import { parseProfileSource } from "./profiles.ts";
 import {
   listProfiles,
@@ -30,6 +32,7 @@ function summary(row: StoredProfile) {
     max_risk: parsed.rules.max_risk ?? null,
     model: parsed.rules.model ?? null,
     checks: parsed.rules.checks ?? null,
+    protocol: parsed.rules.protocol ?? null,
     updated_by: row.updated_by,
     updated_at: row.updated_at,
     warnings: parsed.warnings,
@@ -116,9 +119,11 @@ export function editProfile(
   const before = new Set(
     current ? parseProfileSource(current.source).warnings : [],
   );
+  const parsed = parseProfileSource(source);
   const problems = [
     ...sourceProblems(source),
-    ...parseProfileSource(source).warnings.filter((w) => !before.has(w)),
+    ...parsed.warnings.filter((w) => !before.has(w)),
+    ...accessProblems(layer, name, parsed.rules),
   ];
   if (problems.length)
     throw new Problem(
@@ -133,5 +138,23 @@ export function editProfile(
         ? "整份替换"
         : `改字段 ${[...set.map(([k]) => k), ...unset].join("、")}`;
   const result = writeProfile(db, { layer, name, source, author, reason });
+  // 工具层档案决定接入了哪些新工具（#418）：改了就重新登记。
+  if (layer === "harness" && result.changed) syncCustomTools(db);
   return { ref: `${layer}/${name}`, ...result };
+}
+
+/**
+ * 接入字段（protocol、command 等，#418）的问题：工具层按 acp-spec.ts 校验；模型层、组合层不许写，
+ * 免得以为能按模型换启动命令。
+ */
+function accessProblems(
+  layer: string,
+  name: string,
+  rules: ReturnType<typeof parseProfileSource>["rules"],
+) {
+  if (layer === "harness") return parseToolSpec(name, rules).problems;
+  const written = SPEC_KEYS.filter((key) => rules[key] !== undefined);
+  return written.length
+    ? [`${written.join("、")} 只能写在工具层档案（harness/<工具>）`]
+    : [];
 }

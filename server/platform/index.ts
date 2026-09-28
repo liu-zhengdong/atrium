@@ -15,7 +15,7 @@ import {
   statSync,
   symlinkSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import type { SshConnection } from "../hosts/tunnel-plan.ts";
 import { tunnelArgs } from "../hosts/tunnel-plan.ts";
@@ -92,17 +92,19 @@ export function processAlive(pid: number) {
   }
 }
 
-/** 在 PATH 上找可执行文件（Windows 按 PATHEXT 补扩展名）；只读检查，不执行。 */
+/** 在 PATH 上找可执行文件（Windows 按 PATHEXT 补扩展名）；给的是绝对路径就只查那一个。只读检查，不执行。 */
 export function findExecutable(
   name: string,
   path = process.env.PATH ?? "",
   pathext = process.env.PATHEXT,
 ): string | undefined {
   const names = executableNames(process.platform, name, pathext);
-  for (const dir of path.split(pathDelimiter(process.platform))) {
-    if (!dir) continue;
+  const dirs = isAbsolute(name)
+    ? [""]
+    : path.split(pathDelimiter(process.platform)).filter(Boolean);
+  for (const dir of dirs)
     for (const candidate of names) {
-      const file = join(dir, candidate);
+      const file = dir ? join(dir, candidate) : candidate;
       try {
         if (!statSync(file).isFile()) continue;
         if (process.platform !== "win32") accessSync(file, constants.X_OK);
@@ -111,7 +113,6 @@ export function findExecutable(
         // 不存在或不可执行，继续找。
       }
     }
-  }
   return undefined;
 }
 

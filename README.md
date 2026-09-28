@@ -56,7 +56,7 @@ atrium task done t3                                             # 人工完成�
 
 ## 派活与执行者
 
-执行者 = 工具 + 模型（+ 思考强度），写作 `工具+模型[:强度]`。支持的工具：`claude`、`codex`、`opencode`、`kimi`、`grok`、`agy`、`cursor`（须已装在 PATH 上）。
+执行者 = 工具 + 模型（+ 思考强度），写作 `工具+模型[:强度]`。支持的工具：`claude`、`codex`、`opencode`、`kimi`、`grok`、`agy`、`cursor`（须已装在 PATH 上）；说 ACP 的其他工具可只靠档案接入（见下文「只靠档案接入 ACP 工具」）。
 
 `agy` 是 Antigravity CLI，一个账号（额度账号 `antigravity`）下有 Gemini、Claude、GPT-OSS 几族模型，`agy models` 列出可选的。缺省模型 `claude-opus-4-6-thinking`。强度按 agy 自己的规矩：gemini 模型名自带强度的直接用（`agy+gemini-3.8-flash-high`），也可写基名加强度（`agy+gemini-3.8-flash:high`，与 `--effort high` 等价）；模型名已带强度再写不同的 `:强度`、或给 `claude-*`、`gpt-oss-*` 写强度（它们不接受 `--effort`），派活时直接报错，不静默丢弃。agy 支持运行中捎话（`--input-format stream-json`，补充排在本轮之后另起一轮）与按会话续上（`--conversation`）。
 
@@ -117,6 +117,31 @@ atrium workers edit combos/codex+gpt-6-sol --trust medium --checks pr_exists,fin
 atrium workers edit models/grok-4.6 --file grok.md
 cat grok.md | atrium workers edit models/grok-4.6 --file -
 ```
+
+**只靠档案接入 ACP 工具**（#418）：说 ACP（Agent Client Protocol）的工具不用写代码，写一份工具层档案 `harness/<名字>` 就能当执行者，派活时写明 `--worker <名字>[+模型][:强度]`（新工具不参与自动挑选）。运行时拉起的是 Atrium 的 ACP 桥（`server/acp/`），由它经 ACP 建会话、发提示词、收进度（工具调用、消息写进执行日志，格式与 claude stream-json 相同，摘要、最近动作、看门狗照常）、判结束（本轮 `end_turn` 为正常）；`task tell` 捎话即时写给桥，排到本轮之后作为追加消息送进会话；服务重启后接管的按会话 id 续上（工具须声明 `loadSession`）；权限请求按档案自动批准或拒绝。字段：
+
+| 字段                     | 必填 | 说明                                                                                        |
+| ------------------------ | ---- | ------------------------------------------------------------------------------------------- |
+| `protocol: acp`          | 是   | 接入方式（命令行方式后续接入）                                                              |
+| `command`                | 是   | 可执行文件名（PATH 上找）或绝对路径；参数写进 `args`                                        |
+| `args`                   |      | 启动参数，可含 `{cwd}`                                                                      |
+| `model_args`             |      | 有模型时追加的参数，须含 `{model}`；不写就经 ACP 会话配置选模型，工具没报可选模型时派活报错 |
+| `efforts`、`effort_args` |      | 支持的思考强度；`effort_args` 须含 `{effort}`，不写就经 ACP 会话配置（`thought_level`）设   |
+| `permissions`            |      | `allow`（缺省）或 `reject`                                                                  |
+| `exclusive`              |      | `true` 时同一时刻只跑一个                                                                   |
+| `quota`                  |      | 额度账号 id，缺省是工具名                                                                   |
+
+内置工具（`claude`、`opencode` 等）的档案不能写这些字段；想经 ACP 用同一个工具就另起名字。档案没写 `trust`、`max_risk` 时按 `unknown`、`low`（只接低风险、合入前另派审阅）。等价配置样本（与手写适配器并存，不强制迁移）：
+
+```bash
+# opencode（实测：tests/acp-contract.test.ts 的基本用例通过）
+printf -- '---\nprotocol: acp\ncommand: opencode\nargs: [acp]\nexclusive: true\nquota: opencode\n---\n' | atrium workers edit harness/opencode-acp --file -
+# kimi（kimi --help 列有 acp 子命令，未实测）
+printf -- '---\nprotocol: acp\ncommand: kimi\nargs: [acp]\nquota: kimi\n---\n' | atrium workers edit harness/kimi-acp --file -
+atrium task run t1 --worker opencode-acp+opencode-go/deepseek-v4-flash
+```
+
+接入新工具前先跑契约测试：`ATRIUM_ACP_CONTRACT='["<命令>","<参数>"]' npm test -- tests/acp-contract.test.ts`（另给 `ATRIUM_ACP_CONTRACT_MODEL=<模型>` 验经会话配置选模型；会用真实模型）。
 
 **验收关卡**：执行者退出后，运行时自己查事实（PR、提交、改动规模、CI、issue 评论），按档案 `checks`（`finished`、`pr_exists`、`local_check`、`file_growth`、`claims_verified`、`screenshots`）判定 `done` 或 `blocked`，原因写进任务事件，不采信执行者自述。全量检查一次交付只跑一遍：`local_check` 交给合入队列在 rebase 后跑，交付关卡不重复跑。远端 CI 不挡合入，没有 `ci` 关卡；档案里写了不认识的关卡名（含旧的 `ci`）派活时忽略，`atrium workers show` 给警告。`screenshots` 要求 PR 正文附 Markdown 图片或 GitHub 图片附件链接，所有截图的 HEAD 请求均返回 200。
 

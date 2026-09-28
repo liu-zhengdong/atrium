@@ -3,7 +3,7 @@
 任务账本与执行者运行时。总体规范见根目录 `AGENTS.md`。
 
 - 判定与 IO 分开：状态转移（`state.ts`）、就绪（`schedule.ts`）、关卡（`gates.ts`、`delivery-gates.ts`）、看门狗（`watchdog.ts`）、临时错误与思考耗尽（`transient.ts`、`thinking.ts`）、额度信号（`quota-signal.ts`）都是纯函数，穷举测试；落库、拉进程、查 git/gh 放在各自的 `*-runtime.ts`、`facts.ts`、`spawn.ts`、`runner.ts`。
-- 新执行者工具：在 `adapters/` 加一份 `Adapter`（数据 + 把提示词、工作目录、模型、强度变成进程调用的纯函数 `build`），登记到 `adapters/index.ts` 与 `TOOLS`；工具不支持的参数报错，不静默丢弃。
+- 新执行者工具：在 `adapters/` 加一份 `Adapter`（数据 + 把提示词、工作目录、模型、强度变成进程调用的纯函数 `build`），登记到 `adapters/index.ts` 与 `TOOLS`；工具不支持的参数报错，不静默丢弃。说 ACP 的工具不写代码（#418）：工具层档案写 `protocol: acp` 等字段（解析与校验在 `adapters/acp-spec.ts`），`adapters/custom.ts` 在服务启动与 `workers edit` 改工具层档案后按库重建 `ADAPTERS` 里的新工具（`isTool` / `toolNames` 认它们，`TOOLS` 只列内置的；新工具只在写明执行者时派、只在本机跑）；`adapters/acp.ts` 拉起 `server/acp/bridge-main.ts` 这个桥，桥经 ACP 驱动工具并把进度按 claude stream-json 写进日志（`server/acp/stream.ts`），所以按日志判定的地方用 `claudeStream(tool)` 而不是比工具名。
 - 新关卡：在 `gates.ts` 加判定分支，只吃 `facts.ts` 收集的事实；档案 `checks` 引用它的名字。关卡结论与原因写进任务事件，不采信执行者自述。
 - 执行者档案存数据库（`worker-profiles.ts`：`worker_profiles` 当前版、`worker_profile_revisions` 只增修订），`resolveWorker(标识, db)` 读库；三层叠加时以最具体的一层为准：`trust`、`max_risk`、`limits`、`checks` 写了就整项取这一层（能放宽，写空即撤销），`billing` 任一层 metered 即 metered；`checks` 里不认识的关卡名派活时忽略，解析档案时给警告。改档案走 `atrium workers edit`（`worker-profile-edit.ts` 校验），不直接写表。旧目录（`ATRIUM_WORKERS_DIR`，默认数据目录时缺省 `~/Atrium/workers`，隔离服务不读主目录）只在首次启动导入一次；测试用 `tests/profile-fixture.ts`。
 - 执行者进程：经平台层拉起与结束（`server/platform/`：Unix 独立进程组，Windows 按进程树结束）、白名单环境（`worker-env.ts`，Windows 另放行系统变量）、输出直接写日志文件；服务重启不带走执行者，由 `recovery.ts` 按 pid 接管或判失败。

@@ -6,16 +6,11 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { taskDir } from "../tasks/active.ts";
 import { exec as localExec, type Exec } from "../tasks/git.ts";
-import {
-  LOCAL_CHECK_TIMEOUT_MS,
-  type LocalCheck,
-} from "../tasks/local-check.ts";
-import { parseDepsInstall } from "../tasks/install-deps.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { Exit } from "../tasks/outcome.ts";
 import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
@@ -33,9 +28,6 @@ import {
   POLL_WAIT_MS,
   type AgentCommand,
   type Assignment,
-  type CheckLogBody,
-  type CheckReply,
-  type CheckSource,
   type CleanReply,
   type ExecReply,
   type ExitBody,
@@ -69,10 +61,6 @@ type CommandInput = AgentCommand extends infer C
 
 /** 拉起、查事实、本地检查这类要等结果的指令：代理这么久没来领就先报错。 */
 export const PICKUP_MS = 45_000;
-/** 远程检查进行中多久看一次那台还在不在线。 */
-export const CHECK_WATCH_MS = 5_000;
-/** 按提交检查要先取提交、可能装依赖：比本机检查多给这么久。 */
-export const CHECK_PREPARE_MS = 15 * 60_000;
 
 /** 某台代理上报的额度读数（按 provider 一份，内存里留最近一次）。 */
 export type HostQuota = {
@@ -93,12 +81,7 @@ type Pending = {
    */
   received: boolean;
   pickup?: NodeJS.Timeout;
-  watch?: NodeJS.Timeout;
-  unlisten?: () => void;
 };
-
-/** 远程检查日志收到哪儿：按指令 id 对上，写进服务这边任务目录里的检查日志。 */
-type CheckLog = { host: number; file: string; offset: number };
 
 /** 执行者运行时对远程运行的处理（由 Executors 实现）。 */
 export type RemoteHooks = {
@@ -117,9 +100,6 @@ export class RemoteHosts {
   private readonly waiters = new Map<number, Set<() => void>>();
   private readonly pending = new Map<string, Pending>();
   private readonly seen = new Map<number, number>();
-  private readonly checkLogs = new Map<string, CheckLog>();
-  /** 各主机上服务派过去、还没回来的检查数。 */
-  private readonly checking = new Map<number, number>();
   private readonly quotas = new Map<number, HostQuota>();
   private hooks: RemoteHooks | undefined;
   private closed = false;
@@ -133,8 +113,6 @@ export class RemoteHosts {
       pickupMs?: number;
       /** 多久没来算离线；缺省 ONLINE_MS。 */
       onlineMs?: number;
-      /** 远程检查进行中多久看一次在不在线；缺省 CHECK_WATCH_MS。 */
-      checkWatchMs?: number;
       now?: () => number;
     } = {},
   ) {}
@@ -174,20 +152,6 @@ export class RemoteHosts {
     return (
       seen !== null && seen !== undefined && this.now() - seen <= this.onlineMs
     );
-  }
-
-  /** 这台代理一次检查最多跑多久（它自己上报的）；旧版代理不报时按服务的缺省。 */
-  private checkTimeoutMs(host: number) {
-    try {
-      const info = JSON.parse(
-        hostRow(this.db, host).info ?? "null",
-      ) as HostInfo | null;
-      const reported = info?.check_timeout_ms;
-      if (typeof reported === "number" && reported > 0) return reported;
-    } catch {
-      // 坏记录按缺省。
-    }
-    return LOCAL_CHECK_TIMEOUT_MS;
   }
 
   /** 这台主机的系统与数据目录；没接入或离线时报错。 */
@@ -237,16 +201,9 @@ export class RemoteHosts {
     command: CommandInput,
     timeoutMs: number,
     pickupMs?: number,
-    extra: {
-      id?: string;
-      /** 等回执期间定时看一眼：返回原因就不再等（如主机离线太久）。 */
-      abandon?: () => string | null;
-      signal?: AbortSignal;
-    } = {},
   ): Promise<T> {
-    if (this.closed || extra.signal?.aborted)
-      return Promise.reject(new Error("服务已关闭"));
-    const id = extra.id ?? randomUUID();
+    if (this.closed) return Promise.reject(new Error("服务已关闭"));
+    const id = randomUUID();
     return new Promise<T>((resolve, reject) => {
       const entry: Pending = {
         host,
@@ -284,26 +241,6 @@ export class RemoteHosts {
         }, pickupMs);
         entry.pickup.unref();
       }
-      const giveUp = (why: string) => {
-        this.drop(id);
-        // 代理若已领走：叫醒它挂着的长轮询，下一轮就收到叫停，不用等满一轮。
-        this.wake(host);
-        reject(new Problem(409, why, "conflict"));
-      };
-      if (extra.abandon) {
-        const abandon = extra.abandon;
-        entry.watch = setInterval(() => {
-          const why = abandon();
-          if (why) giveUp(why);
-        }, this.options.checkWatchMs ?? CHECK_WATCH_MS);
-        entry.watch.unref();
-      }
-      if (extra.signal) {
-        const signal = extra.signal;
-        const onAbort = () => giveUp("服务正在关闭或任务已停止");
-        signal.addEventListener("abort", onAbort, { once: true });
-        entry.unlisten = () => signal.removeEventListener("abort", onAbort);
-      }
       this.pending.set(id, entry);
       const queue = this.queues.get(host) ?? [];
       queue.push(entry);
@@ -317,8 +254,6 @@ export class RemoteHosts {
     if (!entry) return;
     clearTimeout(entry.timer);
     if (entry.pickup) clearTimeout(entry.pickup);
-    if (entry.watch) clearInterval(entry.watch);
-    entry.unlisten?.();
     this.pending.delete(id);
     const queue = this.queues.get(entry.host);
     if (queue) {
@@ -345,23 +280,12 @@ export class RemoteHosts {
     const busy = new Set(body.busy);
     for (const entry of this.queues.get(host) ?? [])
       if (busy.has(entry.command.id)) entry.received = true;
-    // 代理手上、服务已不再等的（检查退回本机、服务重启过）：让代理停下，别白占那台的 CPU。
-    const cancel = body.busy.filter((id) => {
-      const entry = this.pending.get(id);
-      return !entry || entry.host !== host;
-    });
     const take = () =>
       (this.queues.get(host) ?? [])
         .filter((entry) => !busy.has(entry.command.id))
         .map((entry) => entry.command);
     let commands = take();
-    // 有要叫停的就立刻回答，不挂满一轮。
-    if (
-      !commands.length &&
-      !cancel.length &&
-      !this.closed &&
-      !signal?.aborted
-    ) {
+    if (!commands.length && !this.closed && !signal?.aborted) {
       await new Promise<void>((resolve) => {
         const waiters = this.waiters.get(host) ?? new Set();
         this.waiters.set(host, waiters);
@@ -380,20 +304,13 @@ export class RemoteHosts {
       commands = this.closed ? [] : take();
     }
     this.seen.set(host, this.now());
-    return cancel.length ? { commands, cancel } : { commands };
+    return { commands };
   }
 
   /** 代理交回执。对不上（超时丢掉、服务重启过）的拉起回执让代理结束刚起的进程。 */
   reply(host: number, id: string, result: unknown) {
     const entry = this.pending.get(id);
     if (!entry || entry.host !== host) return { ok: true, cancel: true };
-    // 检查：日志还没收全就让代理先补传，结果与日志一起落定。
-    if (entry.command.kind === "check") {
-      const size = (result as CheckReply | null)?.size;
-      const log = this.checkLogs.get(id);
-      if (log && typeof size === "number" && log.offset < size)
-        return { ok: false, offset: log.offset };
-    }
     // 拉起成功：先记下这一轮与日志起点，代理随后来传的日志才对得上。
     if (entry.command.kind === "launch") {
       const ack = result as LaunchAck;
@@ -514,23 +431,6 @@ export class RemoteHosts {
       : { ok: true, ...(verdict === "ignored" ? { ignored: true } : {}) };
   }
 
-  /** 代理传来一段检查日志：按指令 id 对上；服务已不再等这次检查时让代理别传了。 */
-  checkLog(host: number, body: CheckLogBody) {
-    this.seen.set(host, this.now());
-    const log = this.checkLogs.get(body.id);
-    if (!log || log.host !== host) return { done: true };
-    const data = Buffer.from(body.data, "base64");
-    const accepted = logAccept(log.offset, {
-      offset: body.offset,
-      length: data.length,
-    });
-    if (accepted.kind !== "append") return { offset: log.offset };
-    const bytes = data.subarray(accepted.skip);
-    appendFileSync(log.file, bytes, { mode: 0o600 });
-    log.offset += bytes.length;
-    return { offset: log.offset };
-  }
-
   /** 代理上报额度读数：只留最近一次，按账号合并在 quota-source 里做。 */
   quota(host: number, body: QuotaBody) {
     this.seen.set(host, this.now());
@@ -541,11 +441,6 @@ export class RemoteHosts {
   /** 各主机最近一次上报的额度读数。 */
   quotaReports(): HostQuota[] {
     return [...this.quotas.values()];
-  }
-
-  /** 这台上服务派过去、还在跑的检查数。 */
-  checksOn(host: number) {
-    return this.checking.get(host) ?? 0;
   }
 
   // ---- 服务调用的 ----
@@ -640,95 +535,6 @@ export class RemoteHosts {
         };
       }
     };
-  }
-
-  /**
-   * 在远程主机上跑本地检查：按提交派过去（source），代理在自己的检查工作树里跑。
-   * 日志续传到服务这边的 logFile；那台离线超过 onlineMs、超时或服务关闭时不再等，回执 infra 写明原因，
-   * 由调用方换一台或回本机重跑。晚到的回执对不上已丢掉的指令，不会算第二次结果。
-   */
-  async check(
-    host: number,
-    input: {
-      task: number;
-      urgent: boolean;
-      logFile: string;
-      source?: CheckSource;
-      signal?: AbortSignal;
-    },
-  ): Promise<CheckReply> {
-    const ref = hostRef(host);
-    const infra = (why: string): CheckReply => ({
-      status: "error",
-      command: "",
-      log: input.logFile,
-      detail: why,
-      failedTests: [],
-      host: ref,
-      infra: why,
-    });
-    if (!this.online(host)) return infra(`${ref} 离线，检查没派过去`);
-    const id = randomUUID();
-    mkdirSync(dirname(input.logFile), { recursive: true, mode: 0o700 });
-    writeFileSync(input.logFile, "", { mode: 0o600 });
-    this.checkLogs.set(id, { host, file: input.logFile, offset: 0 });
-    this.checking.set(host, this.checksOn(host) + 1);
-    try {
-      const result = await this.send<CheckReply>(
-        host,
-        {
-          kind: "check",
-          task: input.task,
-          urgent: input.urgent,
-          ...(input.source ? { source: input.source } : {}),
-        },
-        this.checkTimeoutMs(host) + CHECK_PREPARE_MS,
-        this.pickupMs,
-        {
-          id,
-          signal: input.signal,
-          abandon: () =>
-            this.online(host)
-              ? null
-              : `${ref} 离线超过 ${Math.round(this.onlineMs / 1000)} 秒，检查没跑完`,
-        },
-      );
-      const reply = (result ?? {}) as CheckReply;
-      const install = parseDepsInstall(reply.install);
-      return {
-        status: reply.status ?? "error",
-        command: typeof reply.command === "string" ? reply.command : "",
-        log: input.logFile,
-        detail: typeof reply.detail === "string" ? reply.detail : "回执无效",
-        failedTests: Array.isArray(reply.failedTests)
-          ? reply.failedTests.filter((t) => typeof t === "string").slice(0, 10)
-          : [],
-        host: ref,
-        ...(typeof reply.commit === "string" ? { commit: reply.commit } : {}),
-        ...(typeof reply.infra === "string" && reply.infra
-          ? { infra: reply.infra }
-          : {}),
-        ...(install ? { install } : {}),
-        // 那台因日志太久没输出结束了检查（t260）。
-        ...(reply.stalled && typeof reply.stalled === "object"
-          ? {
-              stalled: {
-                at:
-                  typeof reply.stalled.at === "string"
-                    ? reply.stalled.at.slice(0, 200)
-                    : null,
-              },
-            }
-          : {}),
-      };
-    } catch (error) {
-      return infra(error instanceof Error ? error.message : String(error));
-    } finally {
-      this.checkLogs.delete(id);
-      const left = this.checksOn(host) - 1;
-      if (left > 0) this.checking.set(host, left);
-      else this.checking.delete(host);
-    }
   }
 
   close() {

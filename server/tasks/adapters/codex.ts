@@ -1,6 +1,5 @@
 import { dirname, join } from "node:path";
 import {
-  DEFAULT_WATCHDOG,
   checkCommon,
   invalid,
   type Adapter,
@@ -44,7 +43,6 @@ export const codex: Adapter = {
   quotaProvider: "codex",
   skillMount: "codex-home",
   resumeArgs: ["exec", "resume", "--last"],
-  watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["log_growth", "worktree_change"],
   notes: ["提示词走 stdin（PROMPT 写 -），避免参数长度上限"],
   tell: "resume",

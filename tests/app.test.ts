@@ -89,7 +89,6 @@ test("精简入口只注册新运行时路由，除令牌轮换外一律要求�
     "GET /map/format.js",
     "GET /map/login",
     "GET /map/style.css",
-    "POST /api/agent/check-log",
     "POST /api/agent/exit",
     "POST /api/agent/hello",
     "POST /api/agent/join",
@@ -279,10 +278,10 @@ test("旧运行时留下的表原样保留，精简入口照常启动且不读�
         .map((row) => ({ ...row })),
       [{ id: 1, kind: "local" }],
     );
-    // 旧版账本补上紧急列（t113）：标题写「紧急：」的旧任务不自动转换。
+    // 旧版账本补上优先级列：标题写「紧急：」的旧任务不自动转换。
     assert.deepEqual(
-      { ...db.prepare("SELECT title,urgent FROM tasks WHERE id=1").get() },
-      { title: "紧急：旧任务", urgent: 0 },
+      { ...db.prepare("SELECT title,prio FROM tasks WHERE id=1").get() },
+      { title: "紧急：旧任务", prio: "normal" },
     );
   } finally {
     await app.close();

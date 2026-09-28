@@ -6,7 +6,6 @@ import { join } from "node:path";
 import {
   checkSummary,
   classifyCheck,
-  hostIdOf,
   isTimingSensitive,
   MAX_CHECK_RERUNS,
   missingCommand,
@@ -18,11 +17,7 @@ import {
   withOutcome,
   type CheckClass,
 } from "../server/tasks/check-outcome.ts";
-import {
-  runLocalCheck,
-  LocalCheckQueue,
-  type LocalCheck,
-} from "../server/tasks/local-check.ts";
+import { runLocalCheck, type LocalCheck } from "../server/tasks/local-check.ts";
 import { removeTemp } from "./temp-dir.ts";
 import {
   holderDetail,
@@ -232,10 +227,6 @@ test("没跑成之后：没到上限就重跑，用尽转卡住；过和没过�
     [0, 1, 2, 3, 4].map(rerunDelayMs),
     [60_000, 60_000, 180_000, 300_000, 300_000],
   );
-  assert.equal(hostIdOf("h3"), 3);
-  assert.equal(hostIdOf("h0"), null);
-  assert.equal(hostIdOf(undefined), null);
-  assert.equal(hostIdOf("x3"), null);
 });
 
 test("一句话：没跑成写明基础设施问题，task show 分清过、没过、没跑成", () => {
@@ -244,7 +235,6 @@ test("一句话：没跑成写明基础设施问题，task show 分清过、没�
       status: "error",
       detail: "h3 离线",
       infra: "h3 离线",
-      host: "h3",
     }),
     [],
     3,
@@ -310,7 +300,7 @@ test("持球人：合入前等重跑说「检查没跑成，等重跑」，原�
     processing_by: null,
     inbox: null,
     route: "a1",
-    checking: null,
+    checking: false,
     rerun: null,
   };
   assert.equal(
@@ -321,17 +311,6 @@ test("持球人：合入前等重跑说「检查没跑成，等重跑」，原�
       rerun: { attempt: 2, reason: "超时" },
     })?.text,
     "合入前检查没跑成，等重跑（2/3）",
-  );
-  // 同时在给紧急任务让路（t215）：先说暂停，等紧急的上线后才轮到重跑。
-  assert.equal(
-    holderOf({
-      ...base,
-      status: "done",
-      delivery_stage: "merge_queued",
-      rerun: { attempt: 2, reason: "超时" },
-      merge_held_by: ["t7"],
-    })?.text,
-    "合入暂停：等紧急 t7 先上线",
   );
   assert.equal(
     holderOf({ ...base, status: "done", delivery_stage: "merge_queued" })?.text,
@@ -400,7 +379,6 @@ test("本地检查真跑一个不存在的命令：记 infra，分类为没跑�
   const result = await runLocalCheck({
     worktree,
     taskDir: join(worktree, "task"),
-    queue: new LocalCheckQueue(),
   });
   assert.equal(result.status, "failed");
   assert.match(result.infra ?? "", /^检查命令找不到/);

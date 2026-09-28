@@ -177,12 +177,6 @@ export function withOutcome(
   };
 }
 
-/** 从检查记录的 host（hN）取主机号；不是 hN 为 null。 */
-export function hostIdOf(ref: string | undefined): number | null {
-  const match = ref?.match(/^h([1-9][0-9]*)$/);
-  return match ? Number(match[1]) : null;
-}
-
 /**
  * `task show` 的「本地检查」一行：最近一次检查事件（交付后 local_check*、合入前 merge_check*）说成人话。
  * 旧记录没有分类时按结论推：通过为过，其余为没过。

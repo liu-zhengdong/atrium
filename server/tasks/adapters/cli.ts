@@ -1,6 +1,5 @@
 import { GROUPS, tokensOf, type CliSpec, type Group } from "./cli-spec.ts";
 import {
-  DEFAULT_WATCHDOG,
   checkCommon,
   invalid,
   type Adapter,
@@ -72,7 +71,6 @@ export function cliAdapter(name: string, spec: CliSpec): Adapter {
     exclusive: spec.exclusive,
     ...(spec.efforts ? { efforts: spec.efforts } : {}),
     quotaProvider: spec.quotaProvider,
-    watchdog: DEFAULT_WATCHDOG,
     progressSignals: ["log_growth", "worktree_change"],
     notes: [`通用命令行执行者（档案 harness/${name}）`],
     tell: "restart",

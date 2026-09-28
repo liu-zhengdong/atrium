@@ -1,5 +1,4 @@
 import {
-  DEFAULT_WATCHDOG,
   checkCommon,
   invalid,
   type Adapter,
@@ -78,7 +77,6 @@ export const agy: Adapter = {
   efforts: ["low", "medium", "high", "max"],
   quotaProvider: "antigravity",
   resumeArgs: ["--continue"],
-  watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["json_events", "worktree_change"],
   notes: [
     "claude-* 与 gpt-oss-* 模型不接受思考强度；gemini 用带强度的模型名或基名加 :强度",

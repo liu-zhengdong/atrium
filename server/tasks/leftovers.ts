@@ -2,7 +2,7 @@ import type { Platform } from "../platform/plan.ts";
 import { ADAPTERS, isTool, type Tool } from "./adapters/index.ts";
 
 /**
- * 残留执行者进程（t215 `host clean` 与止损，t217 远程也清）：哪些算、认没认准。纯函数，穷举测试；
+ * 残留执行者进程（`host clean`，t217 远程也清）：哪些算、认没认准。纯函数，穷举测试；
  * 查库、读进程、结束进程树在 leftovers-reap.ts 与 UrgentLane.clean，远程的由那台的代理照同一判定做。
  *
  * 算残留：账本里记着 pid、任务已不在跑（最近一天内结束或停下）、服务手上也没有这个进程，

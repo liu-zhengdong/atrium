@@ -48,21 +48,8 @@ test("验证身份的边界：止损类写接口拒绝，读接口、停自己�
     [
       "PATCH",
       "/api/tasks/:id",
-      { id: "t5", body: { stopgap: "atrium host clean h1" } },
-    ],
-    ["PATCH", "/api/tasks/:id", { id: "t5", body: { urgent: true } }],
-    [
-      "PATCH",
-      "/api/tasks/:id",
       { id: "t5", body: { status: "cancelled", with_children: true } },
     ],
-    ["POST", "/api/tasks", { body: { title: "x", urgent: true } }],
-    [
-      "POST",
-      "/api/tasks",
-      { body: { title: "x", stopgap: "atrium pause --host h1" } },
-    ],
-    ["POST", "/api/tasks/:id/run", { id: "t5", body: { urgent: true } }],
   ] as const)
     assert.ok(
       check(method, route, extra),
@@ -76,13 +63,9 @@ test("验证身份的边界：止损类写接口拒绝，读接口、停自己�
     ["GET", "/api/tasks/:id/wait", { id: "t5" }],
     ["POST", "/api/tasks/:id/stop", { id: "t9" }],
     ["POST", "/api/tasks/:id/stop", { id: "9" }],
-    ["POST", "/api/tasks", { body: { title: "验证用", urgent: false } }],
     ["PATCH", "/api/tasks/:id", { id: "t5", body: { status: "cancelled" } }],
-    [
-      "PATCH",
-      "/api/tasks/:id",
-      { id: "t5", body: { urgent: false, stopgap: "" } },
-    ],
+    ["PATCH", "/api/tasks/:id", { id: "t5", body: { priority: "紧急" } }],
+    ["POST", "/api/tasks", { body: { title: "验证用" } }],
     ["POST", "/api/tasks/:id/run", { id: "t5", body: { worker: "kimi" } }],
     ["POST", "/api/tasks/:id/note", { id: "t5", body: { text: "x" } }],
     ["POST", "/api/events/ack", { body: { ids: [1] } }],
@@ -257,5 +240,5 @@ test("隔离服务：验证身份调 host clean、停别的任务被拒，停自
   await until(() => getTask(db, "t1").status !== "running");
   const [stop] = stopDetails(db, "t1");
   assert.equal(stop.by, "u1");
-  assert.equal(stop.reason, "host clean h1 止损");
+  assert.equal(stop.reason, "host clean h1");
 });

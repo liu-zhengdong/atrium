@@ -229,7 +229,7 @@ export function smallHint(
   node: { ref: string; name: string },
   count: number,
 ) {
-  return `产品部随 ${ref} 给${node.name}（${node.ref}）提了 ${count} 条小改进，不进选项单、由你定：逐条开任务（atrium task add 标题 --part ${node.ref} --size 小）、并入已有任务（atrium task note tN 补充）或不做，并记决定（atrium decision add 决定 --why 原因）；按节奏处理，性能等闲时活照旧排后，不必上交`;
+  return `产品部随 ${ref} 给${node.name}（${node.ref}）提了 ${count} 条小改进，不进选项单、由你定：逐条开任务（atrium task add 标题 --part ${node.ref}）、并入已有任务（atrium task note tN 补充）或不做，并记决定（atrium decision add 决定 --why 原因）；按节奏处理，性能等闲时活照旧排后，不必上交`;
 }
 
 /**
@@ -478,7 +478,7 @@ export function pickedBrief(
     "",
     "## 怎么接",
     "",
-    `交 ${choice.node.ref} 的 leader 拆解：按上面的「能多做到什么」拆成可交付的子任务（atrium task add 标题 --parent 本任务 --size 小|中|大，写上大小：小活自动挑快且便宜的执行者，中、大挑高强度的），不另行扩大范围。`,
+    `交 ${choice.node.ref} 的 leader 拆解：按上面的「能多做到什么」拆成可交付的子任务（atrium task add 标题 --parent 本任务），不另行扩大范围。`,
     "本任务是准备拆的总任务：先拆，不要直接派它。建了子任务后它自动成为总任务——不再派给执行者，状态与进度按全部子孙汇总（atrium task tree 本任务），整体上线时秘书收一条「整体已上线」。",
   ].join("\n");
 }

@@ -11,11 +11,14 @@ import { tellCounts } from "./tell-ledger.ts";
 import { holderFacts } from "./holder-facts.ts";
 import { holderOf, type Holder } from "./holder.ts";
 import { runningHostNames } from "../hosts/model.ts";
-import { idleWaits } from "./queue.ts";
-import { idleWaitText, isIdle } from "./priority.ts";
+import {
+  PRIORITIES,
+  priorityOf,
+  type Priority,
+  type PriorityCounts,
+} from "./priority.ts";
 import { rollups } from "./rollup-ledger.ts";
 import { progressOf } from "./rollup.ts";
-import { urgentInMergeFlow } from "./urgent-ledger.ts";
 import {
   VERIFY_TOP_SQL,
   verifyParents,
@@ -23,30 +26,26 @@ import {
   verifyViews,
 } from "./verify-runtime.ts";
 import { verifyHolder, type VerifyView } from "./verify-view.ts";
-import {
-  countTypes,
-  storedType,
-  type TaskType,
-  type TypeCounts,
-} from "./task-type.ts";
-
 /**
- * 各类型在途任务数（t237，头部「功能 N · 修复 M · 紧急 K」）：待办、在跑、受阻，加上已交付还在审阅或合入的；
- * 不算帮手子任务与总任务（总任务按子任务算）。按类型分组计数，不取整行；已交付的一支走 delivery_stage 索引
+ * 各优先级在途任务数（头部「紧急 K · 修复 M · 普通 N · 闲时 I」）：待办、在跑、受阻，加上已交付还在审阅或合入的；
+ * 不算帮手子任务与总任务（总任务按子任务算）。按优先级分组计数，不取整行；已交付的一支走 delivery_stage 索引
  * （`+status` 不让它改走 status 索引扫全部已完成），不随历史任务数变慢。
  */
-export function typeCounts(db: DatabaseSync): TypeCounts {
-  return countTypes(
-    all<{ urgent: number; task_type: string; n: number }>(
-      db,
-      `SELECT urgent,task_type,COUNT(*) AS n FROM tasks t
+export function priorityCounts(db: DatabaseSync): PriorityCounts {
+  const counts = Object.fromEntries(
+    PRIORITIES.map((p) => [p, 0]),
+  ) as PriorityCounts;
+  for (const row of all<{ prio: string; n: number }>(
+    db,
+    `SELECT prio,COUNT(*) AS n FROM tasks t
         WHERE (status IN ('todo','running','blocked')
                OR (delivery_stage IN ('reviewing','merge_queued','merging') AND +status='done'))
           AND helper=0
           AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id=t.id AND c.helper=0)
-        GROUP BY urgent,task_type`,
-    ),
-  );
+        GROUP BY prio`,
+  ))
+    counts[priorityOf(row.prio)] += row.n;
+  return counts;
 }
 
 /**
@@ -76,19 +75,15 @@ export type TopRow = NoteView & {
   queued_at: number | null;
   /** 排队或受阻的原因。 */
   reason: string | null;
-  /** 标了紧急（t113）。 */
-  urgent: boolean;
-  /** 闲时（t136）：排在普通任务后面，有空闲执行者才派；标了紧急的不算。 */
-  idle: boolean;
-  /** 任务类型（t237）：功能或修复；紧急看 urgent。旧版服务不给。 */
-  type?: TaskType;
+  /** 优先级（priority.ts）：紧急、修复、普通、闲时。 */
+  priority: Priority;
   updated_at: number;
   /** 捎话条数与其中还没送达的（#307）；没有捎话为 null。 */
   tells: { total: number; pending: number } | null;
   /** 现在球在谁手里（holder.ts）；已结束的为 null。 */
   holder?: Holder | null;
-  /** 本地检查正在跑（交付后或合入重跑，#358 第 2 步）：在哪台；没在跑为 null。 */
-  checking?: { host: string | null } | null;
+  /** 本地检查正在跑（交付后或合入重跑）。 */
+  checking?: boolean;
   /** 最近的总任务（t190）：父任务的短号、标题与汇总进度；不在总任务下为 null，旧版服务不给。 */
   total?: TopTotal | null;
   /** 上线后的端到端验证（t182）：验证中、没通过、无法验证、通过；没做验证为 null，旧版服务不给。 */
@@ -230,6 +225,8 @@ export function topRows(
   now: number,
   recentMs = RECENT_MS,
   limit = TOP_MAX,
+  /** 在跑的执行者最近一次有进展的时刻（服务内存里的，overdue.ts 执行者一行的起算点）。 */
+  progress: (id: number) => number | null | undefined = () => undefined,
 ) {
   const selected = selectRows(db, now, recentMs, limit);
   const queue = new Map<number, { queued_at: number; worker: string | null }>();
@@ -259,8 +256,6 @@ export function topRows(
       events.set(event.task_id, history);
     }
   }
-  // 闲时任务在等什么按当下的队列现算（一次查询）；没有排队的就不读。
-  const ahead = queue.size ? idleWaits(db) : new Map<number, number>();
   const tells = tellCounts(db, ids);
   const inbox = !!db
     .prepare(
@@ -273,8 +268,6 @@ export function topRows(
     selected.rows.map((row) => (row.status === "running" ? row.host_id : null)),
     now,
   );
-  // 紧急任务在合入流程里时普通任务的合入暂停（t215）：一次查出，各行共用。
-  const urgentFlow = urgentInMergeFlow(db);
   // 上线验证（t182）：已上线的原任务的验证状态、哪些行是验证任务，各一次查出。
   const verifies = verifyViews(
     db,
@@ -289,10 +282,7 @@ export function topRows(
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
-    const idleAhead = waiting ? ahead.get(row.id) : undefined;
-    const queuedReason = idleAhead
-      ? idleWaitText(idleAhead)
-      : reasonOf(history, "queued");
+    const queuedReason = reasonOf(history, "queued");
     return {
       ref: taskRef(row.id),
       title: row.title,
@@ -311,9 +301,7 @@ export function topRows(
       ended_at: row.ended_at,
       updated_at: row.updated_at,
       queued_at: waiting?.queued_at ?? null,
-      urgent: row.urgent === 1,
-      idle: isIdle(row),
-      type: storedType(row.task_type),
+      priority: priorityOf(row.prio),
       reason: queuedReason ?? reasonOf(history, "block"),
       tells: tells.get(row.id) ?? null,
       total:
@@ -327,13 +315,15 @@ export function topRows(
           db,
           row,
           waiting ? { reason: queuedReason } : null,
-          { inbox, urgentFlow },
+          { inbox },
           hosts,
+          now,
+          progress(row.id),
         );
         return {
           // 已上线的任务在验证上的持球人（验证执行者、收到没通过事件的负责人）。
           holder: holderOf(facts) ?? verifyHolder(verifies.get(row.id) ?? null),
-          checking: facts.checking ?? null,
+          checking: !!facts.checking,
         };
       })(),
       ...noteView(db, row.id, row.status),
@@ -393,8 +383,6 @@ export function countRows(rows: TopRow[]): TopCounts {
     else if (row.status === "running") counts.running++;
     else if (row.status === "blocked") {
       if (row.processing) counts.processing++;
-      // 被紧急任务抢占暂停的（t215）运行时会自己续上，算排队，不算卡住。
-      else if (row.holder?.kind === "queue") counts.queued++;
       else counts.blocked++;
     } else if (row.status !== "todo") counts[row.status]++;
   return counts;

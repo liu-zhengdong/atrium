@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { launched, type Active } from "./active.ts";
 import { ADAPTERS, type Tool } from "./adapters/index.ts";
@@ -14,18 +14,10 @@ import {
   type RunFields,
   type Task,
 } from "./ledger.ts";
-import { publishTask, publishUrgentStage } from "./notice.ts";
+import { publishTask } from "./notice.ts";
 import { exitDetail, type Exit } from "./outcome.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
-import {
-  dequeue,
-  drainGate,
-  enqueue,
-  pending,
-  queuedFixes,
-  queuedNormals,
-} from "./queue.ts";
-import { idleAhead, idleAheadAll } from "./priority.ts";
+import { dequeue, enqueue, pending } from "./queue.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
@@ -40,7 +32,7 @@ import { attemptsOf, retryAfterThinking } from "./thinking-runtime.ts";
 import { retryAfterTransient } from "./transient-runtime.ts";
 import type { TaskWaits } from "./waits.ts";
 import { finalClaudeResult, judge } from "./watchdog.ts";
-import { watchQuiet } from "./worker-quiet-runtime.ts";
+import { overdueDetail } from "./overdue.ts";
 import {
   prepareRun,
   type LaunchOptions,
@@ -49,24 +41,9 @@ import {
   type ResumeWith,
 } from "./workspace.ts";
 import { LiveInput } from "./live-input.ts";
-import { addTell, markDelivered, markEchoed } from "./tell-ledger.ts";
-import { followUpTells, readHead } from "./tell-runtime.ts";
+import { markDelivered, markEchoed } from "./tell-ledger.ts";
+import { followUpTells } from "./tell-runtime.ts";
 import { askConclusion } from "./conclusion-runtime.ts";
-import { randomUUID } from "node:crypto";
-import { all, atomically } from "./ledger-model.ts";
-import {
-  pausedText,
-  resumeNote,
-  swapDue,
-  swapNote,
-  type RunningSlot,
-} from "./urgent.ts";
-import {
-  closePreemption,
-  openPreemption,
-  recordPreemption,
-} from "./urgent-ledger.ts";
-import type { Stop } from "./outcome.ts";
 import type { ChildProcess } from "node:child_process";
 import { collectSkillEdits } from "../skills/collect.ts";
 import { beginUsage, endUsage } from "./usage.ts";
@@ -96,20 +73,16 @@ import { SPAWN_ENV, spawnMark, spawnOwner } from "./orphans.ts";
  * 收尾与看门狗的判定在 outcome.ts / watchdog.ts 的纯函数里，这里只执行并落库。
  */
 
-/**
- * host：派到哪台远程主机（#358）；不给或是本机就在本机跑。
- * pausedOk：用户或秘书用 --host 把这一件指定到了暂停接活的主机（t227），拉起时不拦。
- */
+/** host：派到哪台远程主机（#358）；不给或是本机就在本机跑。 */
 export type Chosen = {
   worker: ResolvedWorker;
   risk: Risk;
   host?: number;
-  pausedOk?: boolean;
 };
 
 /** 挑主机（#358）：need 要查仓库（异步），choose 在占位前同步判定，免得两轮拉起抢同一个空位。 */
 export type Placement = {
-  need(taskId: number, tool: Tool, urgent: boolean): Promise<HostNeed>;
+  need(taskId: number, tool: Tool): Promise<HostNeed>;
   choose(need: HostNeed, pinned: number | null): HostChoice;
   /** 还有没有哪台能再接一件普通任务（都满或太忙时 drain 提前收手，不再一件件挑）。 */
   room(): boolean;
@@ -136,24 +109,12 @@ export type ExecutorContext = {
   ) => Promise<{ kind: string; detail?: Record<string, unknown> } | false>;
   /** 上线验证（t181）：验证任务结束后立即把结论记进原任务（否则等下一轮巡检）。 */
   verify?: { settle: () => void };
-  /** 本机还能不能再拉起一个执行者（#358 并发上限与负载）；缺省不限。 */
   /** 本机闸门（#358）；紧急任务传 urgent，跳过负载与执行者上限。 */
   hostGate?: (urgent: boolean) => HostGate;
   /** 远程主机的代理连接（#358 第 1 步）；没有时只在本机跑。 */
   remote?: RemoteHosts;
   /** 排队拉起时挑主机；没有时只看本机闸门。 */
   placement?: Placement;
-  /**
-   * 紧急通道（t215）：紧急任务要在 host 上用 tool 时腾位置（按 urgent.ts preemptPlan 暂停别的任务）；
-   * wait 为 true 表示要等被暂停的让出独占工具，先别拉起。
-   */
-  makeRoom?: (id: number, tool: Tool, host: number) => { wait: boolean };
-  /** 紧急任务没有进展时换谁（t215）；没得换给原因。 */
-  swapChoice?: (active: Active) => Promise<Chosen | { note: string }>;
-  /** 紧急任务没有进展多久换人（毫秒）；缺省不换。 */
-  urgentIdleMs?: number;
-  /** 执行者没有进展多久提醒（毫秒，t260）；缺省不提醒。 */
-  quietWarnMs?: number;
 };
 
 export class Executors {
@@ -164,8 +125,6 @@ export class Executors {
   readonly finishing = new Map<number, number>();
   /** 正在往远程主机拉起的任务与主机号；不在这里的按本机算。 */
   readonly launchHosts = new Map<number, number>();
-  /** 紧急任务换人（t215）：停下后由谁接着做。 */
-  private readonly swapTargets = new Map<number, Chosen>();
   private ticking = false;
 
   constructor(private readonly ctx: ExecutorContext) {
@@ -274,127 +233,6 @@ export class Executors {
     return tools;
   }
 
-  /**
-   * 闲时任务（t136）要用 tool 时，前面还有几件普通任务在等同一类执行者：同一工具的，或只在等本机空位的；
-   * 在等自己那个工具（独占工具正忙、额度用尽）的不算。0 表示可以派。
-   */
-  idleAhead(tool: Tool, except?: number) {
-    const held = this.ctx.quota.held();
-    return idleAhead(tool, queuedNormals(this.ctx.db, except), (other) =>
-      this.ownWait(other, held),
-    );
-  }
-
-  /** 这个工具的任务在等的是工具自己（独占工具正忙、账号额度用尽），不是本机空位。 */
-  private ownWait(tool: string, held = this.ctx.quota.held()) {
-    const adapter = ADAPTERS[tool as Tool];
-    if (!adapter) return false;
-    return (
-      held.has(adapter.quotaProvider) ||
-      (!!adapter.exclusive && this.busy(tool as Tool))
-    );
-  }
-
-  /**
-   * 紧急通道的抢占（t215）：停下这个执行者，收尾时记下会话、转受阻，紧急通道清空后续上。
-   * 已在停、正在收尾或还在启动的不动；返回是否发出了暂停。
-   */
-  pause(id: number, by: number, why: "exclusive" | "slot") {
-    const active = this.active.get(id);
-    if (!active || active.exited || active.stop || active.finalizing)
-      return false;
-    active.stop = { kind: "preempt", by, why };
-    noteTask(this.ctx.db, id, "stop_requested", {
-      pid: active.pid,
-      ...(active.host !== undefined ? { host: hostRef(active.host) } : {}),
-      by: `t${by}`,
-      reason: pausedText(by, why),
-    });
-    this.kill(active);
-    this.ctx.waits.changed(id);
-    return true;
-  }
-
-  /** 各主机上在跑与正在启动的执行者（抢占判定用）：一次查询取紧急、闲时与拉起时刻。 */
-  slots(): RunningSlot[] {
-    const entries = new Map<
-      number,
-      { tool: string; host: number; stopping: boolean; startedAt: number }
-    >();
-    for (const active of this.active.values())
-      if (!active.exited)
-        entries.set(active.id, {
-          tool: active.tool,
-          host: this.hostOf(active),
-          stopping: !!active.stop || !!active.finalizing,
-          startedAt: active.startedAt,
-        });
-    for (const [id, tool] of this.launching)
-      if (!entries.has(id))
-        entries.set(id, {
-          tool: tool ?? "",
-          host: this.launchHosts.get(id) ?? LOCAL_HOST,
-          // 还在启动的停不下来：不选它，但照样占位。
-          stopping: true,
-          startedAt: Date.now(),
-        });
-    if (!entries.size) return [];
-    const ids = [...entries.keys()];
-    const flags = new Map(
-      all<{
-        id: number;
-        urgent: number;
-        priority: string | null;
-        task_type: string | null;
-      }>(
-        this.ctx.db,
-        `SELECT id,urgent,priority,task_type FROM tasks WHERE id IN (${ids.map(() => "?").join(",")})`,
-        ...ids,
-      ).map((row) => [row.id, row]),
-    );
-    return ids.map((id) => {
-      const entry = entries.get(id)!;
-      const row = flags.get(id);
-      return {
-        id,
-        ...entry,
-        urgent: row?.urgent === 1,
-        idle: row?.priority === "idle" && row.urgent !== 1,
-        fix: row?.task_type === "fix" && row.urgent !== 1,
-      };
-    });
-  }
-
-  /** 各主机上在跑与正在启动的修复任务个数（t237，不算紧急的），except 除外；修复保底名额按它算。 */
-  fixInFlight(except?: number): Map<number, number> {
-    const counts = new Map<number, number>();
-    for (const slot of this.slots())
-      if (slot.fix && slot.id !== except)
-        counts.set(slot.host, (counts.get(slot.host) ?? 0) + 1);
-    return counts;
-  }
-
-  /**
-   * 有没有别的修复任务在排队、只差位置（t237）：在等自己那个工具（独占工具正忙、额度用尽）的不算，
-   * 它们拿到位置也拉不起来，保底位置照常给功能用。
-   */
-  fixWaiting(except?: number) {
-    return queuedFixes(this.ctx.db, except).some(
-      (entry) => !this.ownWait(entry.tool),
-    );
-  }
-
-  /** 在跑的紧急任务与各自换过几次执行者（一次查询，巡检用）。 */
-  private urgentRunning() {
-    return new Map(
-      all<{ id: number; swaps: number }>(
-        this.ctx.db,
-        `SELECT t.id,(SELECT COUNT(*) FROM task_events e WHERE e.task_id=t.id AND e.kind='urgent_swap') AS swaps
-          FROM tasks t WHERE t.urgent=1 AND t.status='running' LIMIT 50`,
-      ).map((row) => [row.id, row.swaps]),
-    );
-  }
-
   publish(
     id: number,
     kind: string,
@@ -493,45 +331,16 @@ export class Executors {
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const target = chosen.host ?? LOCAL_HOST;
-    if (!chosen.pausedOk && this.ctx.placement?.paused?.(target))
+    if (this.ctx.placement?.paused?.(target))
       throw new Error(`${hostRef(target)} 已暂停接活，不往那台拉起`);
-    // 重试、换人、续上也是新拉起：暂停着就排队，恢复后由 drain 拉起。
-    const hold = chosen.pausedOk ? null : this.ctx.paused?.(id);
+    // 重试也是新拉起：暂停着就排队，恢复后由 drain 拉起。
+    const hold = this.ctx.paused?.(id);
     if (hold) return this.hold(id, chosen, hold);
-    // 被紧急任务抢占暂停过的（t215）：同一执行者且日志里有会话就续上，否则把说明写进提示词、在原工作树重派。
-    const paused = openPreemption(this.ctx.db, id);
-    const resume =
-      paused &&
-      paused.session &&
-      paused.worker === chosen.worker.id &&
-      !this.remoteHost(chosen.host) &&
-      ADAPTERS[chosen.worker.tool].resume
-        ? { session: paused.session, text: resumeNote(paused.by_task, true) }
-        : undefined;
-    if (paused && !resume)
-      addTell(this.ctx.db, id, {
-        text: resumeNote(paused.by_task, false),
-        by: "secretary",
-        uuid: randomUUID(),
-        route: "next_run",
-      });
-    if (this.remoteHost(chosen.host)) {
-      const started = await this.launchRemote(
-        id,
-        { ...chosen, host: chosen.host },
-        retried,
-      );
-      if (paused) this.resumed(id, paused.by_task, false, chosen);
-      return started;
-    }
+    if (this.remoteHost(chosen.host))
+      return this.launchRemote(id, { ...chosen, host: chosen.host }, retried);
     const task = getTask(this.ctx.db, id);
     const secrets = this.secrets(task, chosen.worker);
-    const prepared = await prepareRun(
-      task,
-      chosen,
-      this.ctx.launchOptions,
-      resume,
-    );
+    const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
     const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");
     // 执行者 material get 时据 ATRIUM_TASK 把读取记在这件任务上（t192）。
@@ -573,15 +382,6 @@ export class Executors {
       throw error;
     }
     markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
-    if (paused) this.resumed(id, paused.by_task, !!resume, chosen);
-    publishUrgentStage(
-      this.ctx.inbox,
-      this.ctx.db,
-      id,
-      "start",
-      { worker: chosen.worker.id },
-      started,
-    );
     await this.track(
       started,
       chosen,
@@ -594,7 +394,6 @@ export class Executors {
     return started;
   }
 
-  /** 被抢占的任务续上了（t215）：关掉暂停记录、记事件并知会。 */
   /** 暂停着：不拉起，落库排队（状态回到待办），恢复后按顺序拉起。 */
   private hold(id: number, chosen: Chosen, reason: string): Task {
     enqueue(this.ctx.db, {
@@ -610,20 +409,6 @@ export class Executors {
     noteTask(this.ctx.db, id, "queued", { worker: chosen.worker.id, reason });
     this.ctx.waits.changed(id);
     return getTask(this.ctx.db, id);
-  }
-
-  private resumed(id: number, by: number, session: boolean, chosen: Chosen) {
-    closePreemption(this.ctx.db, id, Date.now());
-    const detail = {
-      by: `t${by}`,
-      worker: chosen.worker.id,
-      how: session ? "续上原会话" : "在原工作树重派",
-    };
-    noteTask(this.ctx.db, id, "resumed", detail);
-    this.publish(id, "resumed", {
-      ...detail,
-      reason: `紧急通道清空，${detail.how}（${chosen.worker.id}）`,
-    });
   }
 
   /**
@@ -778,14 +563,6 @@ export class Executors {
           },
         );
         markDelivered(this.ctx.db, id, prepared.tellIds, "prompt");
-        publishUrgentStage(
-          this.ctx.inbox,
-          this.ctx.db,
-          id,
-          "start",
-          { worker: chosen.worker.id, host: hostRef(host) },
-          started,
-        );
       }
     } catch (error) {
       stop();
@@ -943,11 +720,6 @@ export class Executors {
         ADAPTERS[active.tool].quotaProvider,
         await this.pace(),
       );
-      // 紧急通道（t215）：抢占暂停与换人不收尾、不过关卡，由这里接手。
-      if (active.stop?.kind === "preempt")
-        return await this.paused(active, active.stop);
-      if (active.stop?.kind === "swap")
-        return await this.swapped(active, active.stop);
       // 审阅任务读不出结论：先登记补答，由捎话续上同一执行者。
       await askConclusion(this.ctx.db, active, exit);
       if (await followUpTells(this, this.ctx.db, active, exit)) return;
@@ -1012,7 +784,7 @@ export class Executors {
       });
       if (outcome.quota)
         await this.ctx.quota.exhausted(this, active, outcome.quota);
-      else if (decision.retry) await this.retry(active, decision.reason!);
+      else if (decision.retry) await this.retry(active);
       else if (outcome.transient)
         await retryAfterTransient(
           this,
@@ -1077,79 +849,6 @@ export class Executors {
     }
   }
 
-  /** 抢占暂停后（t215）：记下会话与执行者、转受阻并知会；紧急通道清空后由运行时续上。 */
-  private async paused(
-    active: Active,
-    stop: Extract<Stop, { kind: "preempt" }>,
-  ) {
-    await active.live?.finish();
-    const id = active.id;
-    if (getTask(this.ctx.db, id).status !== "running") return;
-    const adapter = ADAPTERS[active.tool];
-    const session =
-      adapter.resume && adapter.sessionOf && active.host === undefined
-        ? (adapter.sessionOf(await readHead(active.logFile)) ?? null)
-        : null;
-    const reason = pausedText(stop.by, stop.why);
-    atomically(this.ctx.db, () => {
-      recordPreemption(this.ctx.db, {
-        task_id: id,
-        by_task: stop.by,
-        why: stop.why,
-        worker: active.worker.id,
-        risk: active.risk,
-        host_id: active.host ?? null,
-        session,
-        paused_at: Date.now(),
-      });
-      this.advance(id, { kind: "block" }, {}, { reason, preempted: true });
-      noteTask(this.ctx.db, id, "preempted", {
-        by: `t${stop.by}`,
-        why: stop.why,
-        worker: active.worker.id,
-        session: !!session,
-      });
-    });
-    this.publish(id, "preempted", { reason, by: `t${stop.by}` });
-  }
-
-  /** 紧急任务换人（t215）：前一位停下后，换上的执行者在原工作树接着做；拉不起就按受阻知会。 */
-  private async swapped(active: Active, stop: Extract<Stop, { kind: "swap" }>) {
-    await active.live?.finish();
-    const id = active.id;
-    const to = this.swapTargets.get(id);
-    this.swapTargets.delete(id);
-    if (getTask(this.ctx.db, id).status !== "running") return;
-    const detail = { from: active.worker.id, to: stop.to, reason: stop.reason };
-    this.advance(id, { kind: "block" }, {}, { reason: stop.reason });
-    noteTask(this.ctx.db, id, "urgent_swap", detail);
-    if (!to) {
-      this.publish(id, "blocked", {
-        reason: `${stop.reason}，但换上的执行者丢了`,
-      });
-      return;
-    }
-    addTell(this.ctx.db, id, {
-      text: swapNote(active.worker.id, stop.reason),
-      by: "secretary",
-      uuid: randomUUID(),
-      route: "next_run",
-    });
-    this.active.delete(id);
-    this.claim(id, to.worker.tool, to.host);
-    try {
-      await this.launch(id, to);
-      this.publish(id, "urgent_swap", detail);
-    } catch (error) {
-      if (this.ctx.closed()) return;
-      const why = `换 ${to.worker.id} 拉起失败：${error instanceof Error ? error.message : String(error)}`;
-      noteTask(this.ctx.db, id, "retry_failed", { reason: why });
-      this.publish(id, "blocked", { reason: `${stop.reason}；${why}` });
-    } finally {
-      this.release(id);
-    }
-  }
-
   /** 执行者改了挂载的技能副本：生成修订提议，通知任务负责人（事件里带技能 owner 与其 leader）。 */
   private collectSkills(active: Active) {
     try {
@@ -1184,9 +883,8 @@ export class Executors {
     }
   }
 
-  private async retry(active: Active, reason: string) {
+  private async retry(active: Active) {
     if (this.ctx.closed()) return;
-    this.publish(active.id, "stalled", { reason, retry: true });
     this.active.delete(active.id);
     try {
       // 卡死重试留在原来那台主机上。
@@ -1222,9 +920,6 @@ export class Executors {
     if (this.ticking || this.ctx.closed()) return;
     this.ticking = true;
     try {
-      const urgent = this.ctx.urgentIdleMs
-        ? this.urgentRunning()
-        : new Map<number, number>();
       for (const active of [...this.active.values()]) {
         if (active.exited) continue;
         if (active.host !== undefined) {
@@ -1240,15 +935,6 @@ export class Executors {
         if (active.stop || active.finalizing) continue;
         const { signals } = await active.probe.poll();
         if (signals.length) active.state.lastProgressAt = Date.now();
-        watchQuiet({
-          db: this.ctx.db,
-          active,
-          progressed: signals.length > 0,
-          warnMs: this.ctx.quietWarnMs,
-          now: Date.now(),
-          publish: (id, kind, detail) => this.publish(id, kind, detail),
-        });
-        if (await this.swapIfIdle(active, urgent)) continue;
         const verdict = judge(active.state, active.limits, Date.now());
         if (verdict.kind === "ok") continue;
         if (active.tool === "claude") {
@@ -1271,56 +957,27 @@ export class Executors {
             continue;
           }
         }
+        // 到期（overdue.ts 的执行者一行）：判卡死、结束进程树，收尾按 outcome 重试或转受阻。
         active.stop = verdict;
         noteTask(this.ctx.db, active.id, verdict.kind, {
           reason: verdict.reason,
         });
+        const since = active.state.lastProgressAt ?? active.state.startedAt;
+        this.publish(
+          active.id,
+          "overdue",
+          overdueDetail({
+            kind: verdict.kind === "stalled" ? "starting" : "worker",
+            step: "wake",
+            who: active.worker.id,
+            heldMs: Date.now() - since,
+          }),
+        );
         this.kill(active);
       }
     } finally {
       this.ticking = false;
     }
-  }
-
-  /**
-   * 紧急任务盯到底（t215）：执行者超过 urgentIdleMs 没有进展就换人（不等 20 分钟卡死判定）；
-   * 没得换就记一笔、这一轮交给普通看门狗。返回 true 表示已发出换人。
-   */
-  private async swapIfIdle(
-    active: Active,
-    urgent: ReadonlyMap<number, number>,
-  ) {
-    const limitMs = this.ctx.urgentIdleMs;
-    if (!limitMs || !this.ctx.swapChoice || active.swapSkipped) return false;
-    const swaps = urgent.get(active.id);
-    if (swaps === undefined) return false;
-    const due = swapDue({
-      urgent: true,
-      stopping: !!active.stop || !!active.finalizing,
-      startedAt: active.state.startedAt,
-      lastProgressAt: active.state.lastProgressAt,
-      now: Date.now(),
-      limitMs,
-      swaps,
-    });
-    if (due.kind === "ok") return false;
-    const choice = await this.ctx.swapChoice(active);
-    if (active.exited || active.stop) return false;
-    if ("note" in choice) {
-      active.swapSkipped = true;
-      noteTask(this.ctx.db, active.id, "urgent_swap_skipped", {
-        reason: `${due.reason}，但${choice.note}`,
-      });
-      return false;
-    }
-    this.swapTargets.set(active.id, choice);
-    active.stop = { kind: "swap", reason: due.reason, to: choice.worker.id };
-    noteTask(this.ctx.db, active.id, "stop_requested", {
-      pid: active.pid,
-      reason: `${due.reason}：换 ${choice.worker.id}`,
-    });
-    this.kill(active);
-    return true;
   }
 
   private forceFinalExit(active: Active) {
@@ -1347,82 +1004,51 @@ export class Executors {
   }
 
   /**
-   * 拉起排队中的任务：整条队按紧急 → 普通 → 闲时、入队先后一件件按各主机此刻的空位挑主机（t229），
+   * 唯一拉起任务的地方：整条队按「优先级、入队先后」（queue.ts pending）一件件按各主机此刻的空位挑主机（t229），
    * 钉了主机的（--host）只去那台、写了避开的不去；一件去不了（钉的那台满了、只能在本机跑而本机满了、
-   * 别台没装它的工具、独占工具正忙、功能任务只被修复保底名额挡着 t237）只跳过它，不挡后面能去别台的或排在后面的修复；
-   * 哪台都没空位时普通任务整轮收手。
-   * 闲时的还要前面没有普通任务在等同一类执行者；额度标记没解除的不派。
-   * 返回出队几个。几处（退出收尾、巡检、额度解除、主机恢复）可能同时调用，出队以删到队列行为准。
+   * 别台没装它的工具、独占工具正忙、额度标记没解除、所在部分暂停着）只跳过它，不挡后面的；
+   * 哪台都没空位时不是紧急的整轮收手（紧急的排在最前，已经挑过），紧急的跳过本机负载限制。
+   * 返回出队几个。几处（入队、退出收尾、巡检、额度解除、主机恢复）可能同时调用，出队以删到队列行为准。
+   * owner：刚由 `task run` 入队、在等回执的那件；它拉起失败时不转受阻，照原样把错误抛回给派活的人。
    */
-  async drain(tool?: Tool) {
+  async drain(owner?: number) {
     if (this.ctx.closed()) return 0;
+    let ownerError: unknown;
     const held = this.ctx.quota.held();
     const placement = this.ctx.placement;
-    const entries = pending(this.ctx.db, tool);
-    // 这一轮没拉起的普通任务：闲时任务让不让，按它们算（普通的都排在闲时前面，走到闲时时已定）。
-    const waiting = new Set(
-      entries.filter((entry) => !entry.idle).map((entry) => entry.task_id),
-    );
-    let idleWait: Map<number, number> | undefined;
     // 还有没有哪台有空位：本轮拉起一件后重算（别处同时腾出的位置下一轮再用）。
     let room: boolean | undefined;
     let moved = 0;
-    for (const entry of entries) {
-      const entryTool = entry.tool as Tool;
+    for (const entry of pending(this.ctx.db)) {
+      const tool = entry.tool as Tool;
+      const urgent = entry.priority === "urgent";
       if (this.ctx.closed()) return moved;
       if (this.ctx.paused?.(entry.task_id)) continue;
-      if (entry.idle)
-        idleWait ??= idleAheadAll(
-          entries.filter((other) => other.idle || waiting.has(other.task_id)),
-          (other) => this.ownWait(other, held),
-        );
-      const gate = drainGate({
-        urgent: entry.urgent,
-        held: held.has(ADAPTERS[entryTool].quotaProvider),
-        room: (room ??= placement
-          ? placement.room()
-          : (this.ctx.hostGate?.(false).ok ?? true)),
-        idleAhead: entry.idle ? (idleWait?.get(entry.task_id) ?? 0) : 0,
-      });
-      if (gate === "stop") break;
-      if (gate === "skip") continue;
+      if (held.has(ADAPTERS[tool].quotaProvider)) continue;
+      room ??= placement
+        ? placement.room()
+        : (this.ctx.hostGate?.(false).ok ?? true);
+      if (!urgent && !room) break;
       let host: number | undefined;
       const need = placement
-        ? await placement
-            .need(entry.task_id, entryTool, entry.urgent)
-            .catch(() => undefined)
+        ? await placement.need(entry.task_id, tool).catch(() => undefined)
         : undefined;
       if (this.ctx.closed()) return moved;
       // 判定与占位之间没有 await：同时进来的另一轮 drain 看得到这里的 launching。
       if (placement && need) {
         const choice = placement.choose(need, entry.host_id ?? null);
-        // 这件此刻去不了（钉的主机离线、暂停或满了，能接的都满了）：只跳过它，后面的照样挑。
         if (choice.kind !== "run") continue;
         host = choice.host;
-      } else {
-        const local = this.ctx.hostGate?.(entry.urgent);
-        if (local && !local.ok) continue;
-      }
+      } else if (this.ctx.hostGate && !this.ctx.hostGate(urgent).ok) continue;
       if (
-        ADAPTERS[entryTool].exclusive &&
-        this.busy(entryTool, undefined, host ?? LOCAL_HOST)
-      ) {
-        // 紧急的（t215）：独占工具被普通任务占着就暂停它，它一退出这里再拉起。
-        if (entry.urgent)
-          this.ctx.makeRoom?.(entry.task_id, entryTool, host ?? LOCAL_HOST);
-        continue;
-      }
-      // 紧急的在满或太忙的主机上拉起前，先暂停一个闲时（再普通）任务腾位置。
-      if (
-        entry.urgent &&
-        this.ctx.makeRoom?.(entry.task_id, entryTool, host ?? LOCAL_HOST).wait
+        ADAPTERS[tool].exclusive &&
+        this.busy(tool, undefined, host ?? LOCAL_HOST)
       )
         continue;
       if (!dequeue(this.ctx.db, entry.task_id)) continue;
-      waiting.delete(entry.task_id);
       room = undefined;
       moved++;
-      this.claim(entry.task_id, entryTool, host);
+      this.claim(entry.task_id, tool, host);
       try {
         const worker = await resolveWorker(
           entry.worker,
@@ -1430,17 +1056,19 @@ export class Executors {
         );
         if (this.ctx.closed()) return moved;
         const task = getTask(this.ctx.db, entry.task_id);
-        await chooseWorker(
-          { worker: worker.id, risk: entry.risk as Risk },
-          this.ctx.launchOptions,
-          held,
-          {
-            chain: taskAvoidChain(this.ctx.db, task),
-            ...(this.remoteHost(host) && placement
-              ? { installed: placement.installed(host) }
-              : {}),
-          },
-        );
+        // 刚由 task run 挑好的（owner）不再核一遍额度；排过一阵的再核对执行者还能不能接。
+        if (entry.task_id !== owner)
+          await chooseWorker(
+            { worker: worker.id, risk: entry.risk as Risk },
+            this.ctx.launchOptions,
+            held,
+            {
+              chain: taskAvoidChain(this.ctx.db, task),
+              ...(this.remoteHost(host) && placement
+                ? { installed: placement.installed(host) }
+                : {}),
+            },
+          );
         await this.launch(entry.task_id, {
           worker,
           risk: entry.risk as Risk,
@@ -1448,6 +1076,10 @@ export class Executors {
         });
       } catch (error) {
         if (this.ctx.closed()) return moved;
+        if (entry.task_id === owner) {
+          ownerError = error;
+          continue;
+        }
         const reason = `排队后拉起失败：${error instanceof Error ? error.message : String(error)}`;
         try {
           // 因额度排队的任务本来就受阻，转移会被拒；照样记下并投递。
@@ -1467,6 +1099,7 @@ export class Executors {
         this.ctx.waits.changed(entry.task_id);
       }
     }
+    if (ownerError !== undefined) throw ownerError;
     return moved;
   }
 }

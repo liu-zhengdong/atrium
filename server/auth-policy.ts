@@ -49,7 +49,6 @@ const agentRoutes = new Set([
   "POST /api/agent/reply",
   "POST /api/agent/log",
   "POST /api/agent/exit",
-  "POST /api/agent/check-log",
   "POST /api/agent/quota",
 ]);
 

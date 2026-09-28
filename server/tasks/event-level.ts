@@ -1,4 +1,4 @@
-import { urgentAlert } from "./urgent.ts";
+import { overdueInfo } from "./overdue.ts";
 
 /** 事件分级只依赖事件内容；未知类型保持要处理，避免新事件被静默吞掉。 */
 export type EventLevel = "action" | "info";
@@ -40,18 +40,6 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "choice_decided",
   "choice_notice",
   "choice_comment",
-  // 紧急通道（t215）：被抢占暂停、续上、换人、合入让路与暂停、标了紧急的知会；紧急任务自己的阶段另投 urgent_stage（级别见 eventLevel）。
-  // 新增类型，库里没有旧行要按新集合重算，不需要迁移。
-  "preempted",
-  "resumed",
-  "urgent_swap",
-  "urgent_marked",
-  "merge_paused",
-  "merge_yielded",
-  // 没进展提醒（t260）：检查日志、执行者 5 分钟没输出，知会负责的 leader；卡死、没过另有事件叫醒。
-  // 新增类型，库里没有旧行要按新集合重算，不需要迁移。
-  "check_quiet",
-  "worker_quiet",
 ]);
 
 /**
@@ -66,14 +54,8 @@ export const isVerifiedOnline = (kind: string, detail?: unknown) =>
 
 export function eventLevel(kind: string, detail?: unknown): EventLevel {
   if (isVerifiedOnline(kind, detail)) return "info";
-  // 紧急任务的阶段（t219）：只有上线、卡住、止损失败要处理，其余是知会。
-  // 已存的 urgent_stage 行由 events.ts 的 relevelUrgent 按这条规则重算。
-  if (kind === "urgent_stage") {
-    const data = (detail ?? {}) as Record<string, unknown>;
-    return typeof data.event === "string" && urgentAlert(data.event, data)
-      ? "action"
-      : "info";
-  }
+  // 到期（overdue.ts）：执行者、检查到期由运行时自己处理，只作知会；叫醒 leader、上交、发版超时要处理。
+  if (kind === "overdue") return overdueInfo(detail) ? "info" : "action";
   if (kind === "ready") {
     const data = detail as { auto?: unknown; unassigned?: unknown } | null;
     return data?.auto === true && data.unassigned !== true ? "info" : "action";
@@ -112,12 +94,6 @@ export function summarizeEvents(
     if (kinds.has("merge_rebased")) progress.push("已 rebase");
     if (kinds.has("merge_check") || kinds.has("local_check_started"))
       progress.push("本地检查");
-    // 紧急任务的知会阶段（t219）：说到了哪一步。
-    const stage = rows
-      .filter((row) => row.kind === "urgent_stage")
-      .map((row) => (row.detail as { stage?: unknown } | null)?.stage)
-      .findLast((value) => typeof value === "string");
-    if (stage) progress.push(`紧急·${stage}`);
     const summary = kinds.has("merged")
       ? `${returns ? `退回 ${returns} 次后` : ""}合入`
       : [returns ? `退回 ${returns} 次` : "", ...progress]

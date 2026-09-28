@@ -10,8 +10,6 @@ import {
 import type { AgentCommand } from "../server/hosts/protocol.ts";
 import type { HostInfo } from "../server/hosts/state.ts";
 import { RemoteHosts } from "../server/hosts/remote.ts";
-import type { EventInbox } from "../server/tasks/events.ts";
-import type { Executors } from "../server/tasks/executors.ts";
 import type { Exec } from "../server/tasks/git.ts";
 import {
   createTask,
@@ -32,8 +30,7 @@ import {
   type LeftoverRow,
   type LeftoverTarget,
 } from "../server/tasks/leftovers.ts";
-import { reapLeftovers } from "../server/tasks/leftovers-reap.ts";
-import { UrgentLane } from "../server/tasks/urgent-runtime.ts";
+import { cleanHost, reapLeftovers } from "../server/tasks/leftovers-reap.ts";
 
 /**
  * host clean 清残留执行者进程（t217）：哪些算残留（纯函数穷举）、本机与代理共用的核对结束（假进程读数）、
@@ -451,7 +448,7 @@ test("远程清理经主机连接：下发清单与服务时钟，只收清单�
 function lane(
   store: DatabaseSync,
   over: {
-    slots?: { id: number; host: number; urgent: boolean; stopping: boolean }[];
+    running?: { id: number; host: number }[];
     reapLocal?: (targets: readonly LeftoverTarget[]) => Promise<LeftoverKill[]>;
     remote?: (
       host: number,
@@ -462,31 +459,22 @@ function lane(
   const stops: string[] = [];
   const seen: { host: number | "local"; targets: readonly LeftoverTarget[] }[] =
     [];
-  const x = {
-    slots: () => over.slots ?? [],
-    active: new Map(),
-  } as unknown as Executors;
-  const urgent = new UrgentLane(store, {
-    x,
-    inbox: {} as EventInbox,
-    stop: (ref) => void stops.push(ref),
-    reapLocal: async (targets) => {
-      seen.push({ host: "local", targets });
-      return over.reapLocal ? over.reapLocal(targets) : [];
-    },
-    remote: {
-      clean: async (host, targets) => {
+  const clean = (host: number, by?: string) =>
+    cleanHost(store, host, {
+      running: over.running ?? [],
+      active: new Set(),
+      stop: (ref) => void stops.push(ref),
+      reapLocal: async (targets) => {
+        seen.push({ host: "local", targets });
+        return over.reapLocal ? over.reapLocal(targets) : [];
+      },
+      remote: async (host, targets) => {
         seen.push({ host, targets });
         return over.remote ? over.remote(host, targets) : [];
       },
-    },
-    pauseHost: () => undefined,
-    run: async () => undefined,
-    crowded: () => false,
-    changed: () => undefined,
-    closed: () => false,
-  });
-  return { urgent, stops, seen };
+      by,
+    });
+  return { clean, stops, seen };
 }
 
 /** 建一件在 host 上跑过、已结束的任务（pid 与执行者照账本写法）。 */
@@ -513,7 +501,7 @@ function endedTask(
   return task.id;
 }
 
-test("host clean：停掉那台在跑的非紧急执行者；远程按那台的账本交代理清、本机自己清；逐条回执并记任务事件", async () => {
+test("host clean：停掉那台在跑的执行者；远程按那台的账本交代理清、本机自己清；逐条回执并记任务事件", async () => {
   const store = db();
   const { id: h } = addHost(store, { name: "ggb" });
   const local1 = endedTask(store, { host: null, pid: 111, worker: "codex" });
@@ -525,10 +513,9 @@ test("host clean：停掉那台在跑的非紧急执行者；远程按那台的�
   const remote2 = endedTask(store, { host: h, pid: 5000, worker: "kimi" });
   endedTask(store, { host: h, pid: 6000, worker: "claude", status: "running" });
   const fixture = lane(store, {
-    slots: [
-      { id: 50, host: h, urgent: false, stopping: false },
-      { id: 51, host: h, urgent: true, stopping: false },
-      { id: 52, host: 1, urgent: false, stopping: false },
+    running: [
+      { id: 50, host: h },
+      { id: 52, host: 1 },
     ],
     remote: async (_host, targets) => [
       {
@@ -538,8 +525,8 @@ test("host clean：停掉那台在跑的非紧急执行者；远程按那台的�
       },
     ],
   });
-  const result = await fixture.urgent.clean(h, 9);
-  assert.deepEqual(fixture.stops, ["t50"], "只停这台的非紧急执行者");
+  const result = await fixture.clean(h, "t9");
+  assert.deepEqual(fixture.stops, ["t50"], "只停这台的执行者");
   assert.equal(fixture.seen.length, 1);
   assert.equal(fixture.seen[0]!.host, h);
   assert.deepEqual(
@@ -578,7 +565,7 @@ test("host clean：停掉那台在跑的非紧急执行者；远程按那台的�
   const localLane = lane(store, {
     reapLocal: async () => [{ task: local1, pid: 111, tool: "codex" }],
   });
-  const local = await localLane.urgent.clean(1);
+  const local = await localLane.clean(1);
   assert.deepEqual(
     localLane.seen.map((s) => s.host),
     ["local"],
@@ -613,7 +600,7 @@ test("host clean：远程离线或代理没清成时写明原因、不记事件�
       throw new Error(`h${h} 离线：那台的残留进程没清，代理连上后再清`);
     },
   });
-  const result = await fixture.urgent.clean(h);
+  const result = await fixture.clean(h);
   assert.equal(
     result.unreached,
     `h${h} 离线：那台的残留进程没清，代理连上后再清`,
@@ -626,7 +613,7 @@ test("host clean：远程离线或代理没清成时写明原因、不记事件�
   );
   // 没有候选：不找代理。
   const none = lane(db(), {});
-  const empty = await none.urgent.clean(h);
+  const empty = await none.clean(h);
   assert.deepEqual(none.seen, []);
   assert.equal(empty.checked, 0);
   assert.equal(

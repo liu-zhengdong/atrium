@@ -1,4 +1,4 @@
-import { DEFAULT_WATCHDOG, checkCommon, type Adapter } from "./types.ts";
+import { checkCommon, type Adapter } from "./types.ts";
 
 /**
  * kimi（`kimi --help` 核对）：-p/--prompt 非交互单次运行、-m 模型别名（缺省用 config.toml 的
@@ -13,7 +13,6 @@ export const kimi: Adapter = {
   efforts: undefined,
   quotaProvider: "kimi",
   resumeArgs: ["--continue"],
-  watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["log_growth", "worktree_change"],
   notes: [
     "只用 -p，不加 -y/--auto",

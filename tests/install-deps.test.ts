@@ -20,11 +20,7 @@ import {
   parseDepsInstall,
   type DepsFacts,
 } from "../server/tasks/install-deps.ts";
-import {
-  checkDetail,
-  runLocalCheck,
-  LocalCheckQueue,
-} from "../server/tasks/local-check.ts";
+import { checkDetail, runLocalCheck } from "../server/tasks/local-check.ts";
 import { checkSummary, classifyCheck } from "../server/tasks/check-outcome.ts";
 import { redact } from "../server/secret-redact.ts";
 import { isolatedPath, writeFakeBin } from "./fake-bin.ts";
@@ -210,7 +206,6 @@ test("本机检查：装不上依赖算没跑成、写清原因，不跑检查�
     worktree: tree,
     taskDir,
     env,
-    queue: new LocalCheckQueue(1),
   });
   assert.equal(failed.status, "error");
   assert.equal(
@@ -234,7 +229,6 @@ test("本机检查：装不上依赖算没跑成、写清原因，不跑检查�
     worktree: tree,
     taskDir,
     env,
-    queue: new LocalCheckQueue(1),
   });
   assert.equal(passed.status, "passed");
   assert.equal(passed.infra, undefined);
@@ -249,7 +243,6 @@ test("本机检查：装不上依赖算没跑成、写清原因，不跑检查�
     worktree: tree,
     taskDir,
     env,
-    queue: new LocalCheckQueue(1),
   });
   assert.equal(plain.status, "passed");
   assert.equal(count().length, 2);
@@ -304,7 +297,6 @@ function fixture() {
       worktree: work,
       taskDir: join(root, "task"),
       env,
-      queue: new LocalCheckQueue(),
     });
   return { root, work, env, calls, run };
 }

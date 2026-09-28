@@ -13,7 +13,6 @@ import {
   includedInVersion,
   onlineMessage,
   planOnline,
-  RELEASE_OVERDUE_MS,
   selfRepoFlag,
   selfUpdateEnabled,
   verificationSection,
@@ -464,7 +463,7 @@ test("合入进行中先不重启；不自升级的服务停在已合入", async
   assert.equal(second.published.length, 0);
 });
 
-test("缺合入提交时向 gh 补查；长时间没发版提醒一次；拉标签失败不误判", async () => {
+test("缺合入提交时向 gh 补查；拉标签失败不误判（发版超时见 overdue.test.ts）", async () => {
   const db = memory();
   let now = Date.now();
   const id = merged(db, { commit: null, at: now });
@@ -472,13 +471,7 @@ test("缺合入提交时向 gh 补查；长时间没发版提醒一次；拉标�
   await watch.tick();
   assert.equal(row(db, id).merge_commit, "def5678");
   assert.equal(published.length, 0);
-  now += RELEASE_OVERDUE_MS + 1;
   await watch.tick();
-  await watch.tick();
-  assert.deepEqual(
-    published.map((event) => event.kind),
-    ["release_overdue"],
-  );
   assert.equal(
     calls.filter((call) => call[0] === "gh" && call.includes("mergeCommit"))
       .length,

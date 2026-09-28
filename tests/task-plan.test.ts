@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   admit,
-  placement,
   riskRefusal,
   trustRefusal,
   runRequest,
@@ -53,10 +52,6 @@ test("派活计划穷举：状态 × 在跑 × 排队 → 受理或拒绝", () =
         }
       }
   assert.equal(cases, 6 * 2 * 2);
-  assert.equal(placement(true, true), "queue");
-  assert.equal(placement(true, false), "launch");
-  assert.equal(placement(false, true), "launch");
-  assert.equal(placement(false, false), "launch");
 });
 
 test("风险上限穷举：max_risk × 任务 risk", () => {

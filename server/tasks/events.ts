@@ -8,7 +8,6 @@ import {
   summarizeEvents,
 } from "./event-level.ts";
 import { atomically, ownerOf, taskRef } from "./ledger.ts";
-import { URGENT_WATCHERS } from "./urgent.ts";
 import type { Presence } from "./secretary-watch.ts";
 
 /**
@@ -72,38 +71,6 @@ export function ensureEventTables(db: DatabaseSync) {
   db.exec(
     "CREATE INDEX IF NOT EXISTS task_inbox_pending ON task_inbox(subscriber,acked_at,level,id)",
   );
-  relevelUrgent(db);
-}
-
-/**
- * 紧急阶段改分级（t219）：t215 时 urgent_stage 一律要处理，之后只有上线、卡住、止损失败要处理。
- * 还没确认的旧行按现在的规则重算回写，免得存的级别与读出的不一致、知会仍叫醒秘书。
- * 只看紧急阶段的订阅者、未确认、要处理的行（走 task_inbox_pending 索引），重算过的不会再被选中。
- */
-function relevelUrgent(db: DatabaseSync) {
-  const marks = URGENT_WATCHERS.map(() => "?").join(",");
-  const page = db.prepare(
-    `SELECT id,detail FROM task_inbox WHERE subscriber IN (${marks}) AND acked_at IS NULL AND level='action' AND kind='urgent_stage' AND id>? ORDER BY id LIMIT 200`,
-  );
-  const mark = db.prepare("UPDATE task_inbox SET level='info' WHERE id=?");
-  let after = 0;
-  while (true) {
-    const rows = page.all(...URGENT_WATCHERS, after) as {
-      id: number;
-      detail: string | null;
-    }[];
-    for (const row of rows) {
-      after = row.id;
-      let detail: unknown = null;
-      try {
-        detail = row.detail === null ? null : JSON.parse(row.detail);
-      } catch {
-        /* 写坏的按没有内容判：知会。 */
-      }
-      if (eventLevel("urgent_stage", detail) === "info") mark.run(row.id);
-    }
-    if (rows.length < 200) break;
-  }
 }
 
 /** 老库补级别：知会类型直接按集合标 info；ready 的自愈知会要看 detail。 */

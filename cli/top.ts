@@ -18,12 +18,14 @@ import type { Holder } from "../server/tasks/holder.ts";
 import { pauseText, resumeCommand, type Pause } from "../server/pause.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
-import { tagTitle } from "../server/tasks/priority.ts";
 import {
-  typeCountsText,
-  typeTag,
-  type TypeCounts,
-} from "../server/tasks/task-type.ts";
+  priorityCountsText,
+  priorityTag,
+  tagTitle,
+  type Priority,
+  type PriorityCounts,
+} from "../server/tasks/priority.ts";
+import { heldText } from "../server/tasks/overdue.ts";
 import {
   verifyActionText,
   verifyStateText,
@@ -52,12 +54,8 @@ export type TopRow = {
   ended_at: number | null;
   queued_at: number | null;
   reason: string | null;
-  /** 标了紧急（t113）；旧版服务没有这个字段。 */
-  urgent?: boolean;
-  /** 闲时（t136）：排在普通任务后面；旧版服务没有这个字段。 */
-  idle?: boolean;
-  /** 任务类型（t237）：feature 功能、fix 修复；旧版服务没有这个字段。 */
-  type?: string;
+  /** 优先级：紧急、修复、普通、闲时；旧版服务没有这个字段。 */
+  priority?: Priority;
   updated_at: number;
   note: string | null;
   note_by: string | null;
@@ -67,7 +65,7 @@ export type TopRow = {
   tells?: { total: number; pending: number } | null;
   /** 现在球在谁手里（服务端判定）；旧版服务没有这个字段。 */
   holder?: Holder | null;
-  checking?: { host: string | null } | null;
+  checking?: boolean;
   /** 日志最后写入时刻；没有日志为 0。 */
   log_at: number;
   action: { text: string; kind: string } | null;
@@ -133,7 +131,7 @@ export type Snapshot = {
     events: number;
   };
   /** 在途任务按类型计数（t237）；旧版服务不给。 */
-  types?: TypeCounts;
+  priorities?: PriorityCounts;
   rows: TopRow[];
   truncated: boolean;
   /** 本机负载与限额（#358）；旧版服务没有这个字段。 */
@@ -161,7 +159,6 @@ export type Snapshot = {
   /** 等用户拍板的选项单（产品部）；没有时不给，旧版服务也没有。 */
   choices?: { open: number; list: PendingChoice[] };
   /** 进行中的紧急任务（t215）与太多时的提示；没有紧急任务时不给。 */
-  urgent?: { count: number; refs: string[]; warning: string | null };
   /** 排期（`/api/tasks/plan` 第一页）；取不到为 null，原因在 plan_error。 */
   plan?: PlanView | null;
   plan_error?: string;
@@ -265,13 +262,9 @@ export const phase = (row: TopRow) =>
         ? row.status
         : row.status));
 
-/** 任务行的标题：标了紧急的前面写「紧急」（t113），闲时的写「闲时」（t136）。 */
-/** 标题前写「紧急」「闲时」「修复」（t237：功能不标，头部分开计数）；标题已带的不重复。 */
+/** 标题前写「紧急」「修复」「闲时」（普通不标，头部分开计数）；标题已带的不重复。 */
 export const titleOf = (row: TopRow) =>
-  tagTitle(
-    row.urgent ? "紧急" : row.idle ? "闲时" : "",
-    tagTitle(typeTag({ urgent: !!row.urgent, task_type: row.type }), row.title),
-  );
+  tagTitle(priorityTag(row.priority), row.title);
 
 /** 排队与受阻没有时长可言，直接说清在等什么。 */
 function state(row: TopRow, now: number) {
@@ -291,7 +284,10 @@ function state(row: TopRow, now: number) {
       : `${row.processing ? "处理中" : "卡住"}${row.reason ? `：${row.reason}` : ""}`;
   const from = row.started_at;
   const to = FINISHED.has(kind) ? (row.ended_at ?? now) : now;
-  return from ? duration(to - from) : "—";
+  // 算期限的（overdue.ts）接同一种写法「N 分钟没动」。
+  const due = row.holder?.due;
+  const held = due ? heldText(due.kind, now - due.since) : "";
+  return `${from ? duration(to - from) : "—"}${held ? ` · ${held}` : ""}`;
 }
 
 /** 最近动作加它距今多久；解析不出就说日志多久没动静，不猜。 */
@@ -299,11 +295,8 @@ function action(row: TopRow, now: number) {
   const kind = phase(row);
   if (kind === "queued" || kind === "blocked") return "";
   if (kind === "online" && row.verify) return verifyActionText(row.verify);
-  // 检查进行中（#358 第 2 步）：说在哪台跑，执行者日志已经不动了。
-  if (row.checking)
-    return row.checking.host && row.checking.host !== "h1"
-      ? `在 ${row.checking.host} 上跑检查`
-      : "本地检查中";
+  // 检查进行中：执行者日志已经不动了。
+  if (row.checking) return "本地检查中";
   if (row.action?.text)
     return `${row.action.text} · ${ago(row.log_at, now)} 前`;
   if (row.log_at) return `日志 ${ago(row.log_at, now)} 前有输出`;
@@ -437,7 +430,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const clock = `${new Date(frame.now).toTimeString().slice(0, 5)} 刷新`;
   const head =
     // 在途任务按类型分开计数（t237）放最前：头部太长时截掉的是后面的细项。
-    `Atrium · ${typeCountsText(snapshot.types) ? `${typeCountsText(snapshot.types)} · ` : ""}在跑 ${snapshot.counts.running}` +
+    `Atrium · ${priorityCountsText(snapshot.priorities) ? `${priorityCountsText(snapshot.priorities)} · ` : ""}在跑 ${snapshot.counts.running}` +
     ` · 排队 ${snapshot.counts.queued}` +
     hostBrief(snapshot.host, snapshot.counts.queued) +
     (snapshot.counts.reviewing
@@ -477,15 +470,6 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
       ),
     ),
     ...(choice ? [oneLine(choice, frame.width)] : []),
-    // 紧急任务太多（t215）：不拒绝，只提醒。
-    ...(snapshot.urgent?.warning
-      ? [
-          oneLine(
-            `注意：${snapshot.urgent.warning}（${snapshot.urgent.refs.join("、")}）`,
-            frame.width,
-          ),
-        ]
-      : []),
     ...rows.flatMap((row, index) => {
       // 原因再长也不能顶出屏幕：状态列的上限是它自己的宽度加最近动作那段的空位。
       const cell = oneLine(states[index]!, plan.stateW + 2 + plan.actionW);

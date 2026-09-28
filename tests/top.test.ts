@@ -459,7 +459,7 @@ test("看板：受阻原因是整篇多行文字时只出第一行，状态列�
 test("看板：紧急任务的标题前写「紧急」，照样受终端宽度约束", () => {
   const frame = renderTop(
     snapshot([
-      row({ ref: "t112", title: "修全景网页打不开", urgent: true }),
+      row({ ref: "t112", title: "修全景网页打不开", priority: "urgent" }),
       row({ ref: "t9", title: "普通任务" }),
     ]),
     { width: 80, now: NOW, footer: false, color: false },
@@ -473,8 +473,8 @@ test("看板：紧急任务的标题前写「紧急」，照样受终端宽度�
 test("看板：标题已以「紧急」开头的不再加前缀（巡检 f6）", () => {
   const frame = renderTop(
     snapshot([
-      row({ ref: "t1", title: "紧急：合入队列卡住", urgent: true }),
-      row({ ref: "t2", title: "紧急 恢复服务", urgent: true }),
+      row({ ref: "t1", title: "紧急：合入队列卡住", priority: "urgent" }),
+      row({ ref: "t2", title: "紧急 恢复服务", priority: "urgent" }),
     ]),
     { width: 100, now: NOW, footer: false, color: false },
   );
@@ -492,7 +492,6 @@ test("看板抬头：本机满时没有排队只说满，有排队写几件（�
     busy_cores: 6,
     running: 6,
     max_workers: 6,
-    checks: { running: 0, waiting: 0, max: 2 },
     test_concurrency: 2,
     paused: "本机满",
     paused_by: "full" as const,
@@ -822,8 +821,7 @@ test("次序：在跑的按跑了多久、排队按入队顺序、受阻与刚�
     ended_at: null,
     queued_at: null,
     reason: null,
-    urgent: false,
-    idle: false,
+    priority: "normal",
     updated_at: NOW,
     note: null,
     note_by: null,
@@ -904,7 +902,6 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
     {
       cores: 8,
       maxWorkers: null,
-      maxChecks: 1,
       testConcurrency: 1,
       checkTimeoutMs: 30 * 60_000,
       busyCores: null,

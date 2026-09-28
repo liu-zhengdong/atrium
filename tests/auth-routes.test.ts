@@ -85,7 +85,6 @@ test("anonymous requests are rejected before their declared body is read", async
     )
     .map(({ url }) => url);
   assert.deepEqual(exceptions.sort(), [
-    "/api/agent/check-log",
     "/api/agent/exit",
     "/api/agent/hello",
     "/api/agent/join",

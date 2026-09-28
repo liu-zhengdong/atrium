@@ -11,10 +11,7 @@ import { transition, type TaskStatus } from "./state.ts";
 export type RunRequest = {
   worker?: string;
   risk?: Risk;
-  urgent?: boolean;
   host?: string;
-  /** 标紧急的原因（t215，leader 标紧急必填）。 */
-  why?: string;
 };
 
 export function runRequest(body: unknown): RunRequest {
@@ -23,21 +20,14 @@ export function runRequest(body: unknown): RunRequest {
     throw new Problem(400, "请求体应为 JSON 对象", "usage");
   const input = body as Record<string, unknown>;
   const extra = Object.keys(input).filter(
-    (key) =>
-      key !== "worker" &&
-      key !== "risk" &&
-      key !== "urgent" &&
-      key !== "host" &&
-      key !== "why",
+    (key) => key !== "worker" && key !== "risk" && key !== "host",
   );
   if (extra.length)
     throw new Problem(
       400,
-      `不认识的字段：${extra.join("、")}；可用 worker、risk、urgent、host、why`,
+      `不认识的字段：${extra.join("、")}；可用 worker、risk、host`,
       "usage",
     );
-  if (input.urgent !== undefined && typeof input.urgent !== "boolean")
-    throw new Problem(400, "urgent: 应为 true 或 false", "usage");
   const text = (key: string) => {
     const value = input[key];
     if (value === undefined || value === null || value === "") return undefined;
@@ -51,15 +41,10 @@ export function runRequest(body: unknown): RunRequest {
   const host = text("host");
   if (host !== undefined && !/^h[1-9][0-9]{0,8}$/.test(host))
     throw new Problem(400, "host: 应为主机短号，如 h2", "usage");
-  const why = text("why");
-  if (why !== undefined && why.length > 300)
-    throw new Problem(400, "why: 不能超过 300 字", "usage");
   return {
     worker: text("worker"),
     risk,
     ...(host !== undefined ? { host } : {}),
-    ...(input.urgent === true ? { urgent: true } : {}),
-    ...(why ? { why } : {}),
   };
 }
 
@@ -104,12 +89,4 @@ export function trustRefusal(
   const actual = trust ?? "unknown";
   if (TRUSTS.indexOf(actual) > RISKS.indexOf(risk)) return undefined;
   return `执行者 ${workerId} 的档案 trust=${actual}，接不了 risk=${risk} 的额度重派任务`;
-}
-
-/** 独占工具正忙就排队，否则立即拉起。 */
-export function placement(
-  exclusive: boolean,
-  busy: boolean,
-): "queue" | "launch" {
-  return exclusive && busy ? "queue" : "launch";
 }

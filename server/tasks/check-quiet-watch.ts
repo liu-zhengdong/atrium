@@ -1,28 +1,18 @@
 import { stat } from "node:fs/promises";
 import { LOG_CHUNK, readLogChunk, readLogTail } from "./log-view.ts";
-import {
-  quietStep,
-  scanOutput,
-  stuckAt,
-  type QuietLimits,
-  type QuietState,
-} from "./check-quiet.ts";
+import { scanOutput, stuckAt } from "./check-quiet.ts";
 
 /** 检查进行中多久看一次日志。 */
 export const QUIET_POLL_MS = 15_000;
 
-/** 提醒与恢复：提醒带没输出多久、卡在哪；恢复表示这段安静之后又有输出了。 */
-export type QuietEvent =
-  { kind: "quiet"; quietMs: number; at: string | null } | { kind: "resumed" };
-
 /**
- * 盯一份检查日志有没有新输出（t260）：定时读新增部分，判定交给 check-quiet.ts。
- * 提醒与恢复经 onEvent 报出；到结束线调 onStall（只报一次，之后停止）。读不到日志按没输出算。
+ * 盯一份检查日志有没有新输出（overdue.ts 表里检查那一行）：定时读新增部分，
+ * 从最近一次输出起满 stallMs 就调 onStall（带卡在哪，只报一次，之后停止）。读不到日志按没输出算。
  */
 export class QuietWatch {
   private offset = 0;
   private carry = "";
-  private state: QuietState;
+  private lastOutputAt: number;
   private timer?: NodeJS.Timeout;
   private polling = false;
   private stopped = false;
@@ -30,14 +20,13 @@ export class QuietWatch {
   constructor(
     private readonly options: {
       file: string;
-      limits: QuietLimits;
+      stallMs: number;
       pollMs?: number;
       now?: () => number;
-      onEvent?: (event: QuietEvent) => void;
       onStall?: (at: string | null) => void;
     },
   ) {
-    this.state = { lastOutputAt: this.now(), warned: false };
+    this.lastOutputAt = this.now();
   }
 
   private now() {
@@ -49,7 +38,7 @@ export class QuietWatch {
     this.offset = await stat(this.options.file)
       .then((info) => info.size)
       .catch(() => 0);
-    this.state = { lastOutputAt: this.now(), warned: false };
+    this.lastOutputAt = this.now();
     if (this.stopped) return;
     this.timer = setInterval(
       () => void this.poll(),
@@ -67,42 +56,17 @@ export class QuietWatch {
     if (this.polling || this.stopped) return;
     this.polling = true;
     try {
-      const output = await this.read();
-      if (this.stopped) return;
-      if (output) {
-        this.state.lastOutputAt = this.now();
-        if (this.state.warned) {
-          this.state.warned = false;
-          this.emit({ kind: "resumed" });
-        }
-      }
-      const step = quietStep(this.state, this.options.limits, this.now());
-      if (step === "ok") return;
+      if (await this.read()) this.lastOutputAt = this.now();
+      if (this.stopped || this.now() - this.lastOutputAt < this.options.stallMs)
+        return;
       const at = stuckAt((await readLogTail(this.options.file)).text);
       if (this.stopped) return;
-      if (step === "warn") {
-        this.state.warned = true;
-        this.emit({
-          kind: "quiet",
-          quietMs: this.now() - this.state.lastOutputAt,
-          at,
-        });
-        return;
-      }
       this.stop();
       this.options.onStall?.(at);
     } catch {
       // 读日志出错按这一轮没输出算，下一轮再看。
     } finally {
       this.polling = false;
-    }
-  }
-
-  private emit(event: QuietEvent) {
-    try {
-      this.options.onEvent?.(event);
-    } catch {
-      // 提醒记不上不影响检查。
     }
   }
 

@@ -813,8 +813,6 @@ export function decideChoice(
             brief: pickedBrief(facts, o, note, actor, choice.comments),
           },
           now,
-          undefined,
-          { source: "choice" },
         );
         mark.run(1, task.id, null, id, option.seq);
         tasks.push({ ref: task.ref, option: option.seq, title: option.title });

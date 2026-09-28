@@ -5,7 +5,8 @@ import { omittedLine, type DecisionDigest } from "../memos/digest.ts";
 import { forwardedOf } from "./route.ts";
 import type { VerifyStep } from "../tasks/verify.ts";
 import { phenomenonLine } from "../tasks/verify-view.ts";
-import { CLOSING_ACTIONS, HANG_MINUTES } from "./hang.ts";
+import { CLOSING_ACTIONS } from "./actions.ts";
+import { DUE, spanText } from "../tasks/overdue.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、
@@ -159,9 +160,9 @@ export function eventLine(event: PromptEvent) {
       .map((s) => `${s.node} ${s.name.slice(0, 64)}（${s.reason}）`)
       .join("；")}${detail?.more ? `；另有 ${detail.more} 个` : ""}`;
   }
-  // 挂着没动（t253）：说明里写了挂多久、再不动会怎样、可选动作。
-  if (event.kind === "hanging")
-    return `- #${event.id} ${event.task ?? ""} 在你手里挂着没动 ${field(event.detail, "title", 60)}：${field(event.detail, "note", 1200)}`;
+  // 到期（overdue.ts）：说明里写了挂多久、下一步。
+  if (event.kind === "overdue")
+    return `- #${event.id} ${event.task ?? ""} 到期没动 ${field(event.detail, "title", 60)}：${field(event.detail, "reason", 300)}；${field(event.detail, "next", 1200)}`;
   if (event.kind === "patrol_findings") {
     const detail = event.detail as {
       node?: string;
@@ -226,7 +227,6 @@ export const EVENT_WORDS: Record<string, string> = {
   verify_failed: "上线验证没过",
   verify_unverifiable: "上线后无法验证",
   total_stuck: "下面有子任务卡住",
-  release_overdue: "等发版超时",
   merged: "已合入",
   merge_returned: "合入被打回",
   escalated: "上交",
@@ -241,7 +241,7 @@ export const EVENT_WORDS: Record<string, string> = {
   material_purge: "资料可以真删",
   secret_stale: "凭据疑似没用",
   choice_small: "产品部小改进",
-  hanging: "挂着没动",
+  overdue: "到期没动",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
 
@@ -265,8 +265,6 @@ export type PromptInput = {
   digest: readonly string[];
   /** 上交投给谁（上一层 leader 或秘书）。 */
   upstream: string;
-  /** 受阻任务挂在手里多少分钟再叫醒、再上交（t253）；缺省 HANG_MINUTES，0 表示关闭。 */
-  hangMinutes?: number;
 };
 
 export function leaderPrompt(input: PromptInput): string {
@@ -304,8 +302,8 @@ export function leaderPrompt(input: PromptInput): string {
     "## 可用命令（都是 atrium，已按你的身份连到服务）",
     "- 看：atrium task show tN；atrium task log tN；atrium task tree tN；atrium top --once；atrium map oN --json",
     "- 重派：atrium task run tN [--worker 工具+模型[:强度]]；捎话：atrium task tell tN 补充；停：atrium task stop tN；备注：atrium task note tN 文字",
-    `- 新活：atrium task add 标题 --part ${home} --size 小|中|大 [--type 功能|修复] [--brief 文件] [--repo 路径] [--by 专员]；再 atrium task run tN（小活自动挑快且便宜的执行者，中、大挑高强度的）`,
-    "- 功能与修复分开排：巡检发现、上线验证没过、审阅打回或合入交回派生的写 --type 修复（修复攒成一批派，调度给修复保底留了位置），新能力写 --type 功能；只有影响使用的才走 --urgent",
+    `- 新活：atrium task add 标题 --part ${home} [--priority 修复|普通|闲时] [--brief 文件] [--repo 路径] [--by 专员]；再 atrium task run tN（入队，按优先级拉起）`,
+    "- 优先级：巡检发现、上线验证没过、审阅打回或合入交回派生的写 --priority 修复（排在普通任务前面）；只有影响使用的才写 --priority 紧急（另跳过本机负载限制）",
     "- 巡检发现：atrium patrol findings oN；开任务后 atrium patrol decide fN --task tN，合到已有任务用 --merge tN，忽略用 --ignore 原因；处理后确认事件",
     "- 产品部的小改进（choice_small）：由你按节奏自行处理——逐条开任务、并入已有任务（atrium task note tN）或不做，记一条决定（atrium decision add）；性能等闲时活照旧排后，不必上交",
     `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,
@@ -320,7 +318,7 @@ export function leaderPrompt(input: PromptInput): string {
     "## 新能力先试点再铺开（做法，不设关卡）",
     "- 新能力上线后先在小范围用：一台主机、一两个任务、一个部分；跑通再放开。",
     "- 放开前在那件任务上写一句试点结果：atrium task note tN 试点结果：在哪试、跑了什么、结果如何",
-    "- 挑试点时先看 PR「碰到哪些已有能力」一节，优先试它列出的组合（远程主机、Windows、紧急通道……），问题多出在新旧能力的组合上；上线后运行时会照 PR「端到端验证」在真实环境跑一遍，没过才投给你。",
+    "- 挑试点时先看 PR「碰到哪些已有能力」一节，优先试它列出的组合（远程主机、Windows、合入队列……），问题多出在新旧能力的组合上；上线后运行时会照 PR「端到端验证」在真实环境跑一遍，没过才投给你。",
     "",
     "## 权限边界（服务端强制，越权会被拒）",
     "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料，设值、归档、恢复、留下这些节点的凭据；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",
@@ -336,11 +334,7 @@ export function leaderPrompt(input: PromptInput): string {
     "## 每件事以一个动作收尾",
     "处理一件事要落到一个动作上，让任务状态变或者球离开你手里；只写备注、只看不动不算处理完，任务会一直挂在「等你处理」。可选动作：",
     ...CLOSING_ACTIONS.map((a) => `- ${a}`),
-    ...((input.hangMinutes ?? HANG_MINUTES) > 0
-      ? [
-          `- 运行时盯着：受阻任务在你手里 ${input.hangMinutes ?? HANG_MINUTES} 分钟没有上面这些动作，会再叫醒你一次（事件「挂着没动」）；再过 ${input.hangMinutes ?? HANG_MINUTES} 分钟仍没动，运行时替你上交上一层。备注不算动作。`,
-        ]
-      : []),
+    `- 运行时盯着：受阻任务在你手里 ${spanText(DUE.leader.ms)}没有上面这些动作，会再叫醒你一次（事件「到期没动」）；再过 ${spanText(DUE.leader.ms)}仍没动，运行时替你上交上一层。备注不算动作。`,
     "- 确实要等（等用户、等别的部分）：上交写清在等什么，而不是留在自己手里。",
     "",
     "## 收尾",

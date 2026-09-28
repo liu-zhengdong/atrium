@@ -201,7 +201,7 @@ test(
     // 隔离服务没有秘书挂着 events wait，首行带「秘书没在听」（t242）。
     assert.equal(
       line.stdout,
-      "Atrium 在做 0 · 功能 1 · 修复 0 · 紧急 0 · 秘书没在听\n接下来：就绪 1 · 等待中 0\n下一步：atrium task plan\n",
+      "Atrium 在做 0 · 普通 1 · 秘书没在听\n接下来：就绪 1 · 等待中 0\n下一步：atrium task plan\n",
     );
     const json = await f.cli("statusline", "--json");
     assert.equal(json.code, 0, json.stderr);
@@ -214,7 +214,7 @@ test(
     assert.equal(colored.code, 0, colored.stderr);
     assert.equal(
       colored.stdout,
-      "Atrium 在做 0 · 功能 1 · 修复 0 · 紧急 0 · \x1b[2m秘书没在听\x1b[0m\n\x1b[2m接下来：就绪 1 · 等待中 0\x1b[0m\n下一步：atrium task plan\n",
+      "Atrium 在做 0 · 普通 1 · \x1b[2m秘书没在听\x1b[0m\n\x1b[2m接下来：就绪 1 · 等待中 0\x1b[0m\n下一步：atrium task plan\n",
     );
   },
 );

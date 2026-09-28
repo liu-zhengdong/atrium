@@ -284,7 +284,8 @@ function patchTarget(body: string[]) {
  * 找到头也没有，才用最后一段 exec / apply patch 的概括。
  */
 export function codexAction(tail: string): Action | undefined {
-  const lines = tail.split("\n");
+  // Windows 上的日志可能是 CRLF：行尾的 \r 会让「 in /目录」收尾认不出来。
+  const lines = tail.split(/\r?\n/);
   let lastTool: Action | undefined;
   for (let i = lines.length - 1; i >= 0; i--) {
     const head = lines[i]!.trim();

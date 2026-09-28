@@ -93,6 +93,16 @@ test("最近动作 · codex：助手说的话优先，没有才概括 exec 与 a
     recentAction({ tool: "codex", tail: sample("codex-patch.txt") }),
     { kind: "tool", text: "改 edit.txt" },
   );
+  // CRLF 的日志（Windows）概括不变。
+  const crlf = (name: string) => sample(name).replace(/\r?\n/g, "\r\n");
+  assert.deepEqual(
+    recentAction({ tool: "codex", tail: crlf("codex-heredoc.txt") }),
+    { kind: "tool", text: "跑 node 脚本" },
+  );
+  assert.deepEqual(
+    recentAction({ tool: "codex", tail: crlf("codex-pipeline.txt") }),
+    { kind: "tool", text: "搜代码" },
+  );
 });
 
 test("最近动作 · claude：文本块优先，工具调用概括成人话（跳过 user 的工具结果）", () => {

@@ -1,0 +1,2 @@
+# 不论本机 core.autocrlf 怎么设，检出一律 LF：测试夹具按字节比对，Windows 上转成 CRLF 会让用例误判。
+* text=auto eol=lf

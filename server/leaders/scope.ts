@@ -45,6 +45,7 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/tasks/:id/stop": "task",
   // 专员否决交负责的 leader 判断（t209）：不认同时放行。
   "POST /api/tasks/:id/merge": "task",
+  "POST /api/tasks/:id/deliver": "task",
   "POST /api/reviews": "review-create",
   "POST /api/events/ack": "events-ack",
   "POST /api/org/nodes/:id/points": "point",

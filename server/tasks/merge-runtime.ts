@@ -260,17 +260,19 @@ export class MergeQueue {
     this.kick();
   }
 
-  /** 仅重新排入已通过交付关卡、曾进入合入队列的受阻 PR。 */
+  /** 仅重新排入已通过交付关卡（或秘书、leader 登记交付的，t257）、曾进入合入队列的受阻 PR。 */
   requeue(id: number): Task {
     const task = getTask(this.db, id);
     const gate = this.db
       .prepare(
-        "SELECT detail FROM task_events WHERE task_id=? AND kind='gates' ORDER BY id DESC LIMIT 1",
+        "SELECT kind,detail FROM task_events WHERE task_id=? AND kind IN ('gates','delivery_registered') ORDER BY id DESC LIMIT 1",
       )
-      .get(id) as { detail: string | null } | undefined;
-    let passed = false;
+      .get(id) as { kind: string; detail: string | null } | undefined;
+    // 登记交付的没有执行者关卡；工作树没给、合入队列还没来得及另建的，重新排队时再建。
+    const registered = gate?.kind === "delivery_registered";
+    let passed = registered;
     try {
-      passed =
+      passed ||=
         (JSON.parse(gate?.detail ?? "null") as { passed?: unknown })?.passed ===
         true;
     } catch {
@@ -285,12 +287,12 @@ export class MergeQueue {
       task.deliver !== "pr" ||
       !task.pr_url ||
       !task.repo ||
-      !task.worktree ||
+      (!task.worktree && !registered) ||
       !task.branch
     )
       throw new Problem(
         409,
-        `${task.ref} 没有可合入的 PR、仓库或工作树`,
+        `${task.ref} 没有可合入的 PR、仓库或工作树（不是执行者交付的，用 atrium task deliver ${task.ref} --pr 链接 登记）`,
         "conflict",
       );
     if (
@@ -481,9 +483,8 @@ export class MergeQueue {
 
   private async process(task: Task) {
     const { repo, branch, pr_url: url } = task;
-    let worktree = task.worktree;
-    if (!repo || !worktree || !branch || !url)
-      throw new Error("合入任务缺少仓库、工作树、分支或 PR");
+    if (!repo || !branch || !url)
+      throw new Error("合入任务缺少仓库、分支或 PR");
     const origin = await originRepo(repo, this.options.run);
     if ("error" in origin) throw new Error(redact(origin.error));
     const target = parsePrUrl(url);
@@ -502,14 +503,21 @@ export class MergeQueue {
       before.baseRefName !== base
     )
       throw new MergeHold("PR 状态、源分支或目标分支与任务不符");
+    // 本机没有现成的工作树：远程主机上做的（#358），或秘书、leader 登记交付时没给的（t257），都在本机另建一个。
     const remote = task.host_id != null && task.host_id !== 1;
-    if (remote)
-      worktree = await this.localWorktree(
-        task,
-        repo,
-        branch,
-        before.headRefOid,
-      );
+    const copy = remote || !task.worktree;
+    const worktree =
+      !remote && task.worktree
+        ? task.worktree
+        : await this.localWorktree(task, repo, branch, before.headRefOid);
+    if (copy && !remote) {
+      // 登记交付另建的记进账本：之后照本机任务核对、重新排队，合入后照常清理。
+      this.db
+        .prepare(
+          "UPDATE tasks SET worktree=?,updated_at=? WHERE id=? AND worktree IS NULL",
+        )
+        .run(worktree, Date.now(), task.id);
+    }
     if (task.delivery_stage === "merging") {
       for (const kind of ["rebase-merge", "rebase-apply"]) {
         const path = await this.command("git", [
@@ -525,8 +533,8 @@ export class MergeQueue {
         }
       }
     }
-    // 远程任务：本机这份只是合入用的副本，每次都对齐到 PR 头提交（上次没推成的 rebase 重做即可）。
-    if (remote)
+    // 另建的副本每次都对齐到 PR 头提交（上次没推成的 rebase 重做即可）。
+    if (copy)
       await this.command("git", [
         "-C",
         worktree,

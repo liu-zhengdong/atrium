@@ -154,6 +154,7 @@ import { quietLimits, type QuietLimits } from "./check-quiet.ts";
 import { crowded } from "../hosts/state.ts";
 import { hasEvent } from "./ledger-model.ts";
 import type { Active } from "./active.ts";
+import { registerDelivery } from "./register-delivery-runtime.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -1541,6 +1542,21 @@ export class TaskRunner {
   }
 
   // ---- 停止、日志、等待 ----
+
+  /** 秘书、leader 亲自做完的活登记 PR 与工作树（t257），直接进合入队列（紧急的照样插到最前）。 */
+  async deliver(reference: unknown, body: unknown, by = DEFAULT_OWNER) {
+    const task = await registerDelivery(this.db, reference, body, {
+      run: this.exec,
+      busy: (id) =>
+        this.x.active.has(id) ||
+        this.x.launching.has(id) ||
+        this.x.finishing.has(id),
+      by,
+    });
+    this.merge.enqueue(task.id);
+    this.changedTotals(task.id);
+    return { task: getTask(this.db, task.id) };
+  }
 
   /** 重新排队合入；受阻在专员否决（或没出结论）上的，由负责的 leader 判断后放行，照专员通过后的路走审阅或合入。 */
   async requeueMerge(reference: unknown, by = DEFAULT_OWNER) {

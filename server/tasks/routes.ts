@@ -382,6 +382,14 @@ export function registerTaskRoutes(
       actorOf(query(request.query)),
     ),
   );
+  // 秘书、leader 亲自做完的活登记 PR 与工作树，进合入队列（t257）；执行者经命令行防护拒绝。
+  app.post("/api/tasks/:id/deliver", { bodyLimit: 8 * 1024 }, (request) =>
+    runner.deliver(
+      params(request.params).id,
+      request.body,
+      leaderOf(request) ?? actorOf(query(request.query)),
+    ),
+  );
   app.get("/api/tasks/:id/log", (request) =>
     runner.log(params(request.params).id, query(request.query).after),
   );

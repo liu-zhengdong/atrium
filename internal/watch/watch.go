@@ -1,10 +1,154 @@
-// Package watch（桩，第二波实现）：持球与期限：一张表（持球人、期限、到期动作）、一个巡检循环、卡死判定；到期统一发 events.Overdue。
+// Package watch：持球与期限。一张表（rules.go 的 Rules）、一个巡检循环（一分钟一轮，全局暂停时不做），
+// 到期统一发 events.Overdue。「球在谁手里」的判定 HolderOf 是纯函数，top、statusline、task show 共用。
 //
-// 无命令；后台循环 Run。判定写纯函数：输入（持球人种类、最后进展时间、现在）→ 动作。
-// 契约见 internal/README.md。
+// 接入（别的包调）：
+//   - dispatch、merge 拉起执行者或检查后，在同一事务里 watch.Track(ctx, tx, 任务, Proc{…}) 登记进程；
+//   - dispatch 在 Routes 里 watch.Use(Hooks{Requeue: …})：卡住或临时错误时重新入队（可换人、标记额度）；
+//   - workers 在 Routes 里 watch.Use(Hooks{Signal: …})：从日志尾部读出临时错误、思考耗尽、额度用尽。
+//
+// watch 自己改状态（ExitOK、ExitFail、Block）一律先 ledger.Apply 再结束进程树；拉起者在进程退出后
+// 再 Apply 会得到 conflict（任务已不在 running），按「已由 watch 收尾」忽略即可。
 package watch
 
-import "github.com/liu-zhengdong/atrium/internal/app"
+import (
+	"context"
+	"encoding/json"
+	"sync"
 
-// Module 是本包接入点。第二波在这里填 Commands、Routes、Run；cmd/atrium 已把它排进模块列表。
-func Module() app.Module { return app.Module{Name: "watch"} }
+	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/store"
+)
+
+// Module 是本包接入点：巡检循环、top 命令与只读接口。
+func Module() app.Module {
+	return app.Module{Name: "watch", Commands: Commands, Routes: Routes, Run: Run}
+}
+
+// Why 是交给派活重新入队的原因。
+type Why struct {
+	Reason string `json:"reason"`
+	Signal Signal `json:"signal,omitempty"`
+	Worker string `json:"worker,omitempty"`
+}
+
+// Hooks 是 watch 要别的包提供的判定与动作；没接上的留 nil。
+type Hooks struct {
+	// Signal（workers）：按执行者组合从日志尾部读信号。
+	Signal func(worker string, tail []byte) Signal
+	// Requeue（dispatch）：任务已被 watch 转为 failed，重新入队；可据 Why 换人、标记额度用尽。
+	Requeue func(ctx context.Context, task string, why Why) error
+}
+
+var hooks struct {
+	sync.Mutex
+	h Hooks
+}
+
+// Use 接上钩子：只覆盖给了的字段。
+func Use(h Hooks) {
+	hooks.Lock()
+	defer hooks.Unlock()
+	if h.Signal != nil {
+		hooks.h.Signal = h.Signal
+	}
+	if h.Requeue != nil {
+		hooks.h.Requeue = h.Requeue
+	}
+}
+
+func current() Hooks {
+	hooks.Lock()
+	defer hooks.Unlock()
+	return hooks.h
+}
+
+// Track 登记一个刚拉起的进程（记进任务经历，kind "proc"）；服务重启后 watch 据此接管。
+func Track(ctx context.Context, q store.Querier, task string, p Proc) error {
+	if p.At == 0 {
+		p.At = store.Now()
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	return ledger.Record(ctx, q, task, "proc", "runtime", string(raw))
+}
+
+// latestProc 读任务最近登记的进程；没有为 nil。
+func latestProc(ctx context.Context, q store.Querier, task string) (*Proc, error) {
+	var body string
+	err := q.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'proc' ORDER BY id DESC LIMIT 1`, task).Scan(&body)
+	if store.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var p Proc
+	if err := json.Unmarshal([]byte(body), &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// startStucks 数这件任务因启动卡住被重试过几次。
+func startStucks(ctx context.Context, q store.Querier, task string) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `SELECT count(*) FROM task_events WHERE task = ? AND kind = 'watch' AND body LIKE ?`,
+		task, `%"role":"`+string(RoleWorkerStart)+`"%`).Scan(&n)
+	return n, err
+}
+
+// procFor：当前阶段对应的进程（执行者对应 running/""，检查对应 merge_queue）。
+func procFor(t ledger.Task, p *Proc) *Proc {
+	if p == nil || t.Status != ledger.Running {
+		return nil
+	}
+	if (t.Stage == ledger.StageNone && p.Role == "worker") || (t.Stage == ledger.StageMerge && p.Role == "check") {
+		return p
+	}
+	return nil
+}
+
+// FactsOf 从账本、组织与巡检内存里取一件任务的事实。
+func FactsOf(ctx context.Context, q store.Querier, t ledger.Task) (Facts, error) {
+	f := Facts{Task: t}
+	var err error
+	if f.Owner, err = org.Recipient(ctx, q, t.Org); err != nil {
+		return f, err
+	}
+	if t.Status == ledger.Todo {
+		deps, err := ledger.Deps(ctx, q, t.ID)
+		if err != nil {
+			return f, err
+		}
+		_, f.WaitingOn = ledger.Ready(t.Status, deps)
+	}
+	p, err := latestProc(ctx, q, t.ID)
+	if err != nil {
+		return f, err
+	}
+	if f.Proc = procFor(t, p); f.Proc != nil {
+		f.ProgressAt = progressOf(t.ID, f.Proc.PID)
+	}
+	return f, nil
+}
+
+// upOf 是任务所属部门的负责人的上一层（部门往上跳过这位负责人的下一位）；没有更上一层返回空。
+func upOf(ctx context.Context, q store.Querier, dept string) (string, error) {
+	ps, err := org.Parents(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	lm, err := org.LeaderMap(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	owner := org.Nearest(ps, lm, dept, "")
+	if up := org.Nearest(ps, lm, dept, owner); up != owner {
+		return up, nil
+	}
+	return "", nil
+}

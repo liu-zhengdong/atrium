@@ -105,6 +105,58 @@ out=$(json leader escalate 卡住 --kind stuck || true); has '.error.code == "fo
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer lt_fake' "http://127.0.0.1:$ATRIUM_PORT/api/org")
 [ "$code" = 401 ] || fail "没签发的负责人令牌应 401，得到 $code"
 
+step "events wait / ack（任务受阻 → 要处理事件投秘书）"
+out=$(json task add 受阻的活); t_blk=$(jq -r .result.id <<<"$out")
+out=$(json task set "$t_blk" --status blocked); has '.result.status == "blocked"'
+out=$(json events wait --timeout 5); has '(.result|length) >= 1 and (.result|map(select(.task == "'"$t_blk"'"))|.[0].level) == "act" and (.next|startswith("atrium events ack"))'
+ev=$(jq -r '.result|map(select(.task == "'"$t_blk"'"))|.[0].id' <<<"$out")
+out=$(json events wait --timeout 0); has '(.result|map(select(.id == '"$ev"'))|length) == 0'   # 租约内不重投
+out=$(json events ack "$ev" 99999); has '.result.acked == ['"$ev"'] and .result.missing == [99999]'
+
+step "top / statusline"
+out=$(json top); has '.ok and (.result.tasks|map(select(.id == "'"$t_blk"'"))|.[0].holder.who) == "secretary" and .result.secretary.listening == null'
+line=$("$bin" statusline); grep -q "$t_blk 秘书 卡住" <<<"$line" || fail "statusline 没有受阻任务：$line"
+line=$(ATRIUM_DATA="$work/none" "$bin" statusline); [ "$line" = "Atrium 未运行" ] || fail "服务不在时应显示未运行：$line"
+[ ! -d "$work/none" ] || fail "statusline 不该建数据目录"
+
+step "secretary bridge（假会话收件 socket）"
+sock="$work/cc.sock"
+python3 - "$sock" "$work/inbox.txt" <<'PY' &
+import os, socket, sys
+path, out = sys.argv[1], sys.argv[2]
+s = socket.socket(socket.AF_UNIX); s.bind(path); s.listen(8)
+while True:
+    c, _ = s.accept()
+    data = b""
+    while True:
+        chunk = c.recv(65536)
+        if not chunk: break
+        data += chunk
+    c.close()
+    if data:
+        with open(out, "ab") as f: f.write(data)
+PY
+inbox=$!; pid="$pid $inbox"
+for _ in $(seq 50); do [ -S "$sock" ] && break; sleep 0.1; done
+out=$(CLAUDE_CODE_MESSAGING_SOCKET="$sock" CLAUDE_CODE_MESSAGING_TOKEN=tok json secretary bridge --detach --batch 1); has '.ok and .result.pid > 0'
+bridge=$(jq -r .result.pid <<<"$out"); pid="$pid $bridge"
+out=$(CLAUDE_CODE_MESSAGING_SOCKET="$sock" CLAUDE_CODE_MESSAGING_TOKEN=tok json secretary bridge --detach); has '.result.pid == '"$bridge"   # 同一会话不起第二个
+out=$(json task add 又卡住); t_blk2=$(jq -r .result.id <<<"$out")
+json task set "$t_blk2" --status blocked >/dev/null
+for _ in $(seq 100); do grep -q "$t_blk2" "$work/inbox.txt" 2>/dev/null && break; sleep 0.1; done
+head -1 "$work/inbox.txt" | grep -qx '{"type":"auth","token":"tok"}' || fail "没先认证：$(cat "$work/inbox.txt" 2>/dev/null)"
+grep -q "【Atrium 事件】" "$work/inbox.txt" && grep -q "$t_blk2" "$work/inbox.txt" || fail "事件没注入会话：$(cat "$work/inbox.txt" 2>/dev/null)"
+grep -q "atrium events ack" "$work/inbox.txt" || fail "注入消息末尾没有 ack 命令"
+out=$(json secretary bridge --status); has '.result.listener != null and .result.bridge.pid == '"$bridge"
+out=$(json top); has '.result.secretary.listening != null'
+kill "$bridge"; kill "$inbox"; wait "$inbox" 2>/dev/null || true
+for _ in $(seq 50); do kill -0 "$bridge" 2>/dev/null || break; sleep 0.1; done
+[ ! -f "$ATRIUM_DATA/secretary/bridge.json" ] || fail "bridge 退出后登记还在"
+dir="$work/sec"; mkdir -p "$dir/.claude"; echo '{"model":"x"}' >"$dir/.claude/settings.local.json"
+out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added'
+out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added == false'
+jq -e '.model == "x" and (.hooks.SessionStart[0].hooks[0].command == "atrium secretary bridge --detach")' "$dir/.claude/settings.local.json" >/dev/null || fail "hook 写得不对"
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

@@ -1,0 +1,200 @@
+package secretary
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/liu-zhengdong/atrium/internal/events"
+)
+
+// 桥的节奏。
+const (
+	BatchWindow = 30 * time.Second // 首条到了之后攒多久再送
+	RemindAfter = 30 * time.Minute // 送过这么久没确认、又被重投回来的再提醒一次
+	ListenEvery = 30 * time.Second // 多久向服务报一次「在听」
+	ListenTTL   = 90               // 「在听」的有效秒数
+	sentLimit   = 1000             // 送过的记录上限
+)
+
+// Sent 是送过的事件：编号 → 送出时的更新时刻与送出时刻。
+type Sent map[int64]SentMark
+
+type SentMark struct{ UpdatedAt, SentAt int64 }
+
+// Batch 是这一批要送的：新的（或合并了新情况的）与再提醒的。
+type Batch struct {
+	Fresh  []events.Row
+	Remind []events.Row
+}
+
+func (b Batch) Empty() bool { return len(b.Fresh)+len(b.Remind) == 0 }
+
+// PlanBatch：同一事件（编号 + 更新时刻）送过就不再送；送过满 remind 还没确认、又被重投回来的再提醒一次。
+func PlanBatch(sent Sent, rows []events.Row, now int64, remind time.Duration) Batch {
+	var b Batch
+	for _, r := range rows {
+		if r.AckedAt != nil {
+			continue
+		}
+		before, ok := sent[r.ID]
+		switch {
+		case !ok || before.UpdatedAt != r.UpdatedAt:
+			b.Fresh = append(b.Fresh, r)
+		case now-before.SentAt >= remind.Milliseconds():
+			b.Remind = append(b.Remind, r)
+		}
+	}
+	return b
+}
+
+// Record 记下送过的；超过上限丢编号最小的。
+func (s Sent) Record(rows []events.Row, now int64) {
+	for _, r := range rows {
+		s[r.ID] = SentMark{UpdatedAt: r.UpdatedAt, SentAt: now}
+	}
+	for len(s) > sentLimit {
+		var oldest int64 = -1
+		for id := range s {
+			if oldest < 0 || id < oldest {
+				oldest = id
+			}
+		}
+		delete(s, oldest)
+	}
+}
+
+// Merge 把新取到的并进待送的（同一编号取更新的那条）。
+func Merge(pending, rows []events.Row) []events.Row {
+	idx := map[int64]int{}
+	for i, r := range pending {
+		idx[r.ID] = i
+	}
+	for _, r := range rows {
+		if i, ok := idx[r.ID]; ok {
+			pending[i] = r
+			continue
+		}
+		idx[r.ID] = len(pending)
+		pending = append(pending, r)
+	}
+	return pending
+}
+
+// Prompt 是送进会话的一条消息：「【Atrium 事件】」开头，每条一行摘要，末尾给看详情与确认的命令。
+func Prompt(b Batch, remind time.Duration) string {
+	all := append(append([]events.Row{}, b.Fresh...), b.Remind...)
+	minutes := int(remind.Minutes())
+	var lines []string
+	if len(b.Fresh) > 0 {
+		lines = append(lines, fmt.Sprintf("【Atrium 事件】%d 条要处理：", len(b.Fresh)))
+	} else {
+		lines = append(lines, fmt.Sprintf("【Atrium 事件】提醒：%d 条送过 %d 分钟还没确认：", len(b.Remind), minutes))
+	}
+	for _, r := range b.Fresh {
+		lines = append(lines, "- "+events.Line(r))
+	}
+	if len(b.Fresh) > 0 && len(b.Remind) > 0 {
+		lines = append(lines, fmt.Sprintf("送过 %d 分钟还没确认：", minutes))
+	}
+	for _, r := range b.Remind {
+		lines = append(lines, "- "+events.Line(r))
+	}
+	var ids, tasks []string
+	seen := map[string]bool{}
+	for _, r := range all {
+		ids = append(ids, strconv.FormatInt(r.ID, 10))
+		if r.Task != "" && !seen[r.Task] {
+			seen[r.Task] = true
+			tasks = append(tasks, "atrium task show "+r.Task)
+		}
+	}
+	lines = append(lines, "")
+	if len(tasks) > 0 {
+		lines = append(lines, "看详情："+strings.Join(tasks, "；"))
+	}
+	lines = append(lines, "处理完确认：atrium events ack "+strings.Join(ids, " "))
+	return strings.Join(lines, "\n")
+}
+
+// InboxLines 是收件 socket 的两行：先认证，再一条用户消息。
+func InboxLines(token, text string) []string {
+	type message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	auth, _ := json.Marshal(struct {
+		Type  string `json:"type"`
+		Token string `json:"token"`
+	}{"auth", token})
+	msg, _ := json.Marshal(struct {
+		Type    string  `json:"type"`
+		Message message `json:"message"`
+	}{"user", message{"user", text}})
+	return []string{string(auth), string(msg)}
+}
+
+// Record 是数据目录里登记的 bridge：同一时刻只有一个 bridge 往秘书会话送。
+type Record struct {
+	PID       int    `json:"pid"`
+	Socket    string `json:"socket"`
+	StartedAt int64  `json:"started_at"`
+}
+
+// Claim 判定起 bridge 前怎么办：同一会话的已在跑就不再起；别的会话的在跑，新的接手（旧的看到登记换了人就退出）。
+func Claim(cur *Record, socket string, alive func(int) bool) string {
+	if cur == nil || !alive(cur.PID) {
+		return "start"
+	}
+	if cur.Socket == socket {
+		return "running"
+	}
+	return "takeover"
+}
+
+// HookCommand 是 SessionStart hook 里跑的命令。
+const HookCommand = "atrium secretary bridge --detach"
+
+// WithHook 在 Claude Code 设置里加一条起 bridge 的 SessionStart hook；已有就不加。
+// 结构认不出（hooks 不是对象、SessionStart 不是数组）时报错，不覆盖用户的内容。
+func WithHook(settings map[string]any) (map[string]any, bool, error) {
+	if settings == nil {
+		settings = map[string]any{}
+	}
+	hooks := map[string]any{}
+	if raw, ok := settings["hooks"]; ok {
+		h, ok := raw.(map[string]any)
+		if !ok {
+			return nil, false, fmt.Errorf("设置里的 hooks 不是对象，没有改动")
+		}
+		hooks = h
+	}
+	var groups []any
+	if raw, ok := hooks["SessionStart"]; ok {
+		g, ok := raw.([]any)
+		if !ok {
+			return nil, false, fmt.Errorf("设置里的 hooks.SessionStart 不是数组，没有改动")
+		}
+		groups = g
+	}
+	for _, g := range groups {
+		gm, _ := g.(map[string]any)
+		list, _ := gm["hooks"].([]any)
+		for _, h := range list {
+			hm, _ := h.(map[string]any)
+			if cmd, _ := hm["command"].(string); strings.Contains(cmd, "atrium secretary bridge") {
+				return settings, false, nil
+			}
+		}
+	}
+	hooks["SessionStart"] = append(groups, HookEntry())
+	settings["hooks"] = hooks
+	return settings, true, nil
+}
+
+// HookEntry 是加进 hooks.SessionStart 的一组。
+func HookEntry() map[string]any {
+	return map[string]any{"hooks": []any{map[string]any{"type": "command", "command": HookCommand, "timeout": 30}}}
+}

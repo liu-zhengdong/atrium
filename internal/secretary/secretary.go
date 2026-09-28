@@ -1,10 +1,414 @@
-// Package secretary（桩，第二波实现）：秘书桥：atrium secretary bridge 把事件注入 Claude Code 会话，并向服务报「在听」。
+// Package secretary：秘书桥与状态栏。
 //
-// 命令（第二波）：secretary bridge、statusline。事件取用走 events 包。
-// 契约见 internal/README.md。
+// secretary bridge 在 Claude Code 秘书会话里常驻：挂 events wait --as secretary 取要处理的事件，
+// 攒 30 秒拼成一条「【Atrium 事件】」消息经会话收件 socket 注入；不替秘书确认；同一事件送过不重送，
+// 送过 30 分钟没确认再提醒一次；每 30 秒向服务报「秘书在听」；会话没了就退出。
+// statusline 给 Claude Code 状态栏一行字；服务不在只显示「未运行」，不拉起。
+// 判定在 plan.go、statusline.go（纯函数）。
 package secretary
 
-import "github.com/liu-zhengdong/atrium/internal/app"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"syscall"
+	"time"
 
-// Module 是本包接入点。第二波在这里填 Commands、Routes、Run；cmd/atrium 已把它排进模块列表。
-func Module() app.Module { return app.Module{Name: "secretary"} }
+	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/config"
+	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/platform"
+	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/watch"
+)
+
+// Module 是本包接入点：只有命令（在听状态、事件都在 events 包的接口里）。
+func Module() app.Module { return app.Module{Name: "secretary", Commands: Commands} }
+
+func Commands(t *cli.Table) {
+	t.Group("secretary", "秘书")
+	t.Add(cli.Command{Path: "secretary bridge",
+		Summary: "在 Claude Code 秘书会话里常驻，把要处理的事件注入会话；--install-hook 让它随会话自动起",
+		Flags: []cli.Flag{
+			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 用），起好就返回"},
+			{Name: "install-hook", Bool: true, Help: "在秘书目录的 .claude/settings.local.json 加 SessionStart hook"},
+			{Name: "dir", Value: "目录", Help: "--install-hook 的秘书目录（缺省当前目录）"},
+			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
+			{Name: "batch", Value: "秒", Help: "首条事件到了之后攒多久再送（缺省 30）"},
+		},
+		Run: bridgeCommand})
+	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听",
+		Run: func(c *cli.Ctx) error {
+			var v watch.View
+			err := c.Call("GET", "/api/top", nil, &v)
+			var ae *api.Error
+			if errors.As(err, &ae) && ae.Code == "not_running" {
+				return c.Done(map[string]any{"running": false}, "Atrium 未运行", "")
+			}
+			if err != nil {
+				return err
+			}
+			if c.JSON {
+				return c.Done(v, "", "atrium top")
+			}
+			fmt.Fprintln(c.Env.Stdout, StatusLine(v))
+			return nil
+		}})
+}
+
+func bridgeCommand(c *cli.Ctx) error {
+	if err := c.MaxArgs(0); err != nil {
+		return err
+	}
+	modes := 0
+	for _, m := range []string{"detach", "install-hook", "status"} {
+		if c.Bool(m) {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return api.Usage("--detach、--install-hook、--status 只能给一个")
+	}
+	if c.Has("dir") && !c.Bool("install-hook") {
+		return api.Usage("--dir: 只和 --install-hook 一起用")
+	}
+	batch, err := c.Int("batch", int(BatchWindow.Seconds()))
+	if err != nil {
+		return err
+	}
+	if batch < 0 || batch > 600 {
+		return api.Usage("--batch: 应为 0–600 的秒数")
+	}
+	switch {
+	case c.Bool("install-hook"):
+		return installHook(c)
+	case c.Bool("status"):
+		return status(c)
+	}
+	endpoint, token, err := sessionInbox(c.Env.Getenv)
+	if err != nil {
+		return err
+	}
+	p, err := c.Paths()
+	if err != nil {
+		return err
+	}
+	if c.Bool("detach") {
+		return detach(c, p, endpoint, batch)
+	}
+	return foreground(c, p, endpoint, token, time.Duration(batch)*time.Second)
+}
+
+// sessionInbox 读本会话的收件地址与口令：只在 Claude Code 会话的 hook 与 Bash 子进程里有。
+func sessionInbox(getenv func(string) string) (string, string, error) {
+	raw, token := getenv("CLAUDE_CODE_MESSAGING_SOCKET"), getenv("CLAUDE_CODE_MESSAGING_TOKEN")
+	if raw == "" || token == "" {
+		return "", "", api.Usage("不在 Claude Code 会话里：没有 CLAUDE_CODE_MESSAGING_SOCKET 与 CLAUDE_CODE_MESSAGING_TOKEN（在秘书会话的 Bash 或 SessionStart hook 里运行）")
+	}
+	endpoint := platform.MessagingEndpoint(runtime.GOOS, raw)
+	if endpoint == "" {
+		return "", "", api.Usage("CLAUDE_CODE_MESSAGING_SOCKET 认不出：%q", raw)
+	}
+	return endpoint, token, nil
+}
+
+// ---- 登记（数据目录 secretary/bridge.json）----
+
+func recordPath(p config.Paths) string { return filepath.Join(p.Data, "secretary", "bridge.json") }
+func logPath(p config.Paths) string    { return filepath.Join(p.Data, "secretary", "bridge.log") }
+
+func readRecord(p config.Paths) (*Record, error) {
+	raw, err := os.ReadFile(recordPath(p))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r Record
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, fmt.Errorf("%s 不是合法 JSON：%w", recordPath(p), err)
+	}
+	return &r, nil
+}
+
+func writeRecord(p config.Paths, r Record) error {
+	if err := os.MkdirAll(filepath.Dir(recordPath(p)), 0o700); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(r)
+	tmp := recordPath(p) + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, recordPath(p))
+}
+
+// releaseRecord：登记还是自己时才删，别的会话接手后留给它。
+func releaseRecord(p config.Paths, pid int) {
+	if r, err := readRecord(p); err == nil && r != nil && r.PID == pid {
+		os.Remove(recordPath(p))
+	}
+}
+
+// ---- 前台常驻 ----
+
+func foreground(c *cli.Ctx, p config.Paths, endpoint, token string, batch time.Duration) error {
+	cur, err := readRecord(p)
+	if err != nil {
+		return err
+	}
+	if cur != nil && cur.PID != os.Getpid() && Claim(cur, endpoint, platform.Alive) == "running" {
+		return api.Conflict("本会话的 bridge 已在跑（pid %d）", cur.PID).WithNext("atrium secretary bridge --status")
+	}
+	me := os.Getpid()
+	if err := writeRecord(p, Record{PID: me, Socket: endpoint, StartedAt: store.Now()}); err != nil {
+		return err
+	}
+	defer releaseRecord(p, me)
+	ctx, stop := signal.NotifyContext(c.Context, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	c.Context = ctx // 收到结束信号时打断挂着的 events wait
+	lg := log.New(c.Env.Stderr, "", log.LstdFlags)
+	lg.Printf("bridge 开始（pid %d，会话收件地址 %s）", me, endpoint)
+	b := &bridge{c: c, p: p, endpoint: endpoint, token: token, me: me, log: lg, sent: Sent{}, batch: batch}
+	reason := b.run(ctx)
+	lg.Printf("bridge 退出：%s", reason)
+	return c.Done(map[string]any{"reason": reason}, "bridge 已退出："+reason, "atrium secretary bridge --status")
+}
+
+type bridge struct {
+	c        *cli.Ctx
+	p        config.Paths
+	endpoint string
+	token    string
+	me       int
+	log      *log.Logger
+	sent     Sent
+	batch    time.Duration
+}
+
+func (b *bridge) listen(stop bool) error {
+	return b.c.Call("POST", "/api/events/listen",
+		events.ListenBody{As: events.Secretary, Via: "claude-code 会话，经注入", TTLSeconds: ListenTTL, Stop: stop}, nil)
+}
+
+func (b *bridge) run(ctx context.Context) string {
+	go func() {
+		t := time.NewTicker(ListenEvery)
+		defer t.Stop()
+		failed := false
+		for {
+			if err := b.listen(false); err != nil {
+				if !failed {
+					b.log.Printf("向服务报「在听」失败：%v", err)
+				}
+				failed = true
+				b.c.ResetClient()
+			} else if failed {
+				b.log.Printf("已重新向服务报「在听」")
+				failed = false
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		b.c.Context = ctx
+		b.listen(true)
+	}()
+	var pending []events.Row
+	var first time.Time
+	for {
+		if ctx.Err() != nil {
+			return "已停止"
+		}
+		if r, err := readRecord(b.p); err == nil && r != nil && r.PID != b.me {
+			return "另一个秘书会话的 bridge 已接手"
+		}
+		if err := platform.ProbeEndpoint(b.endpoint, 3*time.Second); errors.Is(err, platform.ErrEndpointGone) {
+			return "会话已关闭（收件地址不在了）"
+		}
+		wait := 60 * time.Second
+		if len(pending) > 0 {
+			wait = max(time.Until(first.Add(b.batch)), 0)
+		}
+		var rows []events.Row
+		q := url.Values{"as": {events.Secretary}, "timeout": {fmt.Sprint(int(wait.Seconds()))}}
+		if err := b.c.Call("GET", "/api/events/wait?"+q.Encode(), nil, &rows); err != nil {
+			if ctx.Err() != nil {
+				return "已停止"
+			}
+			b.log.Printf("取事件失败，5 秒后重试：%v", err)
+			b.c.ResetClient()
+			sleep(ctx, 5*time.Second)
+			continue
+		}
+		if len(rows) > 0 && len(pending) == 0 {
+			first = time.Now()
+		}
+		pending = Merge(pending, rows)
+		if len(pending) == 0 || time.Since(first) < b.batch {
+			continue
+		}
+		batch := PlanBatch(b.sent, pending, store.Now(), RemindAfter)
+		pending = nil
+		if batch.Empty() {
+			continue
+		}
+		err := platform.SendLines(b.endpoint, InboxLines(b.token, Prompt(batch, RemindAfter)), 5*time.Second)
+		if errors.Is(err, platform.ErrEndpointGone) {
+			return "会话已关闭（收件地址不在了）"
+		}
+		if err != nil {
+			// 没送进去：事件已取走，租约到期后会重投，那时按新事件再送。
+			b.log.Printf("送入会话失败：%v", err)
+			continue
+		}
+		all := append(append([]events.Row{}, batch.Fresh...), batch.Remind...)
+		b.sent.Record(all, store.Now())
+		b.log.Printf("送入 %d 条（其中再提醒 %d 条）", len(all), len(batch.Remind))
+	}
+}
+
+func sleep(ctx context.Context, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
+	}
+}
+
+// ---- 后台起（SessionStart hook）----
+
+func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
+	cur, err := readRecord(p)
+	if err != nil {
+		return err
+	}
+	if Claim(cur, endpoint, platform.Alive) == "running" {
+		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>", cur.PID),
+			"atrium secretary bridge --status")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath(p)), 0o700); err != nil {
+		return err
+	}
+	lf, err := os.OpenFile(logPath(p), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	// bridge 要会话收件地址与数据目录，环境原样带上（它不是执行者）。
+	cmd, err := platform.Start(platform.Spec{Path: self, Args: []string{"secretary", "bridge", "--batch", fmt.Sprint(batch)},
+		Env: platform.EnvMap(os.Environ()), Stdout: lf, Stderr: lf, Detached: true})
+	if err != nil {
+		return err
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-exited:
+			return fmt.Errorf("bridge 没起来（%v）；看日志：%s", err, logPath(p))
+		case <-time.After(100 * time.Millisecond):
+		}
+		if r, _ := readRecord(p); r != nil && r.PID == cmd.Process.Pid {
+			return c.Done(r, fmt.Sprintf("Atrium bridge 已在后台运行（pid %d）：秘书要处理的事件会以「【Atrium 事件】」开头的消息送进本会话，处理完用 atrium events ack <编号> 确认。日志：%s", r.PID, logPath(p)),
+				"atrium secretary bridge --status")
+		}
+	}
+	return fmt.Errorf("bridge 10 秒内没登记上；看日志：%s", logPath(p))
+}
+
+// ---- --status 与 --install-hook ----
+
+func status(c *cli.Ctx) error {
+	p, err := c.Paths()
+	if err != nil {
+		return err
+	}
+	cur, err := readRecord(p)
+	if err != nil {
+		return err
+	}
+	if cur != nil && !platform.Alive(cur.PID) {
+		cur = nil
+	}
+	var out struct {
+		Listener *events.Listener `json:"listener"`
+	}
+	if err := c.Call("GET", "/api/events/listen?as=secretary", nil, &out); err != nil {
+		return err
+	}
+	res := map[string]any{"listener": out.Listener, "bridge": cur}
+	switch {
+	case out.Listener != nil:
+		text := fmt.Sprintf("秘书在听（%s）", out.Listener.Via)
+		if cur != nil {
+			text += fmt.Sprintf(" · bridge pid %d", cur.PID)
+		}
+		return c.Done(res, text, "atrium events wait --timeout 0")
+	case cur != nil:
+		return c.Done(res, fmt.Sprintf("bridge 在跑（pid %d），但还没向服务报「在听」；看日志：%s", cur.PID, logPath(p)), "atrium secretary bridge --status")
+	}
+	return c.Done(res, "没有 bridge 在听：秘书会话收不到注入的事件", "atrium secretary bridge --install-hook")
+}
+
+func installHook(c *cli.Ctx) error {
+	dir := c.Str("dir")
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		dir = wd
+	}
+	file := filepath.Join(dir, ".claude", "settings.local.json")
+	var settings map[string]any
+	raw, err := os.ReadFile(file)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return err
+	case len(raw) > 0:
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			hook, _ := json.Marshal(HookEntry())
+			return api.Conflict("%s 不是 JSON 对象，没有改动；手动在 hooks.SessionStart 里加入：%s", file, hook)
+		}
+	}
+	next, added, err := WithHook(settings)
+	if err != nil {
+		return api.Conflict("%s：%v", file, err)
+	}
+	res := map[string]any{"file": file, "added": added, "hook": HookEntry()}
+	if !added {
+		return c.Done(res, file+" 里已有起 bridge 的 SessionStart hook，没有改动", "atrium secretary bridge --status")
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
+	}
+	out, _ := json.MarshalIndent(next, "", "  ")
+	if err := os.WriteFile(file, append(out, '\n'), 0o644); err != nil {
+		return err
+	}
+	return c.Done(res, fmt.Sprintf("已在 %s 加 SessionStart hook（%s）。之后在 %s 打开的 Claude Code 会话都会在后台起 bridge；当前会话要马上生效，在会话里运行 %s",
+		file, HookCommand, dir, HookCommand), "atrium secretary bridge --status")
+}

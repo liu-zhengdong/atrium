@@ -32,17 +32,17 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `ledger` | 完成 | 任务、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/tree/plan/note/wait` | `tasks` `task_deps` `task_events` |
 | `org` | 部门与要点完成 | 部门、要点、要点链；第二波补身份、备忘、技能、资料、选项单、决定、周期任务、凭据 | `departments` `department_repos` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `decisions` `schedules` `secrets` |
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
-| `events` | `Emit` 完成，其余桩 | 事件落库、投递对象解析、`events wait/ack`、租约 | `events` |
-| `dispatch` | 桩 | 派活队列、挑执行者与机器、拉起；`task run/stop/tell/log`、`top` | `queue` |
+| `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
+| `dispatch` | 桩 | 派活队列、挑执行者与机器、拉起；`task run/stop/tell/log` | `queue` |
 | `workers` | 桩 | 适配器、档案三层叠加；`workers`、`workers edit` | `worker_profiles` |
 | `gates` | 桩 | 查事实、判关卡、审阅；`task deliver` | — |
 | `merge` | 桩 | 合入队列、快检查、回滚；`task merge` | — |
 | `release` | 桩 | 自升级、平滑重启、上线冒烟；`update` | — |
-| `watch` | 桩 | 持球与期限表、巡检循环、卡死判定 | — |
+| `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
 | `hosts` | 桩 | 机器登记、远程代理；`host add/ls/show/rm`、`agent install` | `hosts` |
 | `quota` | 桩 | 额度读取与缓存；`quota` | `quota_cache` |
 | `web` | 桩 | 只读网页与只读接口；`map` | — |
-| `secretary` | 桩 | 把事件注入 Claude Code 会话；`secretary bridge`、`statusline` | — |
+| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`、`statusline` | — |
 
 ## 共同约定
 
@@ -111,6 +111,7 @@ type Module struct {
 ### 事件（`internal/events`）
 
 - `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body})`：在引起它的写事务里调用。种类常量写在 `events.go`（已有 `TaskStatus`、`Overdue`）。
+- 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked 与 `overdue` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。
 - ledger 在任务状态变化时已发 `task.status`。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。
 
 ### 一键停机（`internal/pause`）
@@ -145,7 +146,10 @@ dispatch ─→ ledger.Apply/SetFacts、org.Chain、workers、hosts、quota、pa
 gates    ─→ ledger.Apply/Record（查 PR 用 gh，经 platform）
 merge    ─→ ledger.Apply、platform（git、gh、快检查）
 release  ─→ service 的 restart 接口、ledger.Apply(Released)
-watch    ─→ ledger.Get/Apply、events.Emit(Overdue)、platform.KillTree
+watch    ─→ ledger.Get/Apply、events.Emit(Overdue)、org、platform.KillTree
+dispatch、merge ─→ watch.Track（拉起执行者或检查后登记 pid、日志、工作树）
+dispatch ─→ watch.Use(Hooks{Requeue})：卡住或临时错误时重新入队（可换人、标额度）
+workers  ─→ watch.Use(Hooks{Signal})：从日志尾部读临时错误、思考耗尽、额度用尽
 events   ─→ org（投递对象 org.Recipient）
 org/leaders ─→ org、events（Emit、Retarget）、ledger、platform；workers／dispatch 调 leaders.SetLauncher 接上拉起
 secretary、web ─→ 只读：ledger、org、events
@@ -159,4 +163,4 @@ ledger   ─→ events.Emit
 - `task add` 的回执已给出下一步 `atrium task run tN`，`task show`/`task plan` 也会指向它：dispatch 必须提供 `task run`。
 - 状态变化只能经 `ledger.Apply`；需要新的事件种类就在 PR 里提，由 ledger 加进 `Transition` 与表驱动测试，不要直接 `UPDATE tasks SET status`。
 - 命令总数规格上限 60，`cmd/atrium/main_test.go` 会数。
-- 命令组名已占用：`task`、`org`、`point`、`auth`。其余按规格：`leader`、`memo`、`choice`、`decision`、`skill`、`material`、`schedule`、`secret`（org）、`events`（events）、`host`、`agent`（hosts）、`workers`（workers）、`secretary`（secretary）。单词命令：`top`（dispatch）、`statusline`（secretary）、`quota`、`map`、`update`。
+- 命令组名已占用：`task`、`org`、`point`、`auth`。其余按规格：`leader`、`memo`、`choice`、`decision`、`skill`、`material`、`schedule`、`secret`（org）、`events`（events）、`host`、`agent`（hosts）、`workers`（workers）、`secretary`（secretary）。单词命令：`top`（watch）、`statusline`（secretary）、`quota`、`map`、`update`。

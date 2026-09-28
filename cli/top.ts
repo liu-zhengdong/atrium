@@ -25,6 +25,11 @@ import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
 import { tagTitle } from "../server/tasks/priority.ts";
 import {
+  typeCountsText,
+  typeTag,
+  type TypeCounts,
+} from "../server/tasks/task-type.ts";
+import {
   verifyActionText,
   verifyStateText,
   type VerifyView,
@@ -56,6 +61,8 @@ export type TopRow = {
   urgent?: boolean;
   /** 闲时（t136）：排在普通任务后面；旧版服务没有这个字段。 */
   idle?: boolean;
+  /** 任务类型（t237）：feature 功能、fix 修复；旧版服务没有这个字段。 */
+  type?: string;
   updated_at: number;
   note: string | null;
   note_by: string | null;
@@ -132,6 +139,8 @@ export type Snapshot = {
     cancelled: number;
     events: number;
   };
+  /** 在途任务按类型计数（t237）；旧版服务不给。 */
+  types?: TypeCounts;
   rows: TopRow[];
   truncated: boolean;
   /** 本机负载与限额（#358）；旧版服务没有这个字段。 */
@@ -264,8 +273,12 @@ export const phase = (row: TopRow) =>
         : row.status));
 
 /** 任务行的标题：标了紧急的前面写「紧急」（t113），闲时的写「闲时」（t136）。 */
+/** 标题前写「紧急」「闲时」「修复」（t237：功能不标，头部分开计数）；标题已带的不重复。 */
 export const titleOf = (row: TopRow) =>
-  tagTitle(row.urgent ? "紧急" : row.idle ? "闲时" : "", row.title);
+  tagTitle(
+    row.urgent ? "紧急" : row.idle ? "闲时" : "",
+    tagTitle(typeTag({ urgent: !!row.urgent, task_type: row.type }), row.title),
+  );
 
 /** 排队与受阻没有时长可言，直接说清在等什么。 */
 function state(row: TopRow, now: number) {
@@ -430,7 +443,8 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const plan = layoutOf(rows, frame.width, stateW);
   const clock = `${new Date(frame.now).toTimeString().slice(0, 5)} 刷新`;
   const head =
-    `Atrium · 在跑 ${snapshot.counts.running}` +
+    // 在途任务按类型分开计数（t237）放最前：头部太长时截掉的是后面的细项。
+    `Atrium · ${typeCountsText(snapshot.types) ? `${typeCountsText(snapshot.types)} · ` : ""}在跑 ${snapshot.counts.running}` +
     ` · 排队 ${snapshot.counts.queued}` +
     hostBrief(snapshot.host, snapshot.counts.queued) +
     (snapshot.counts.reviewing

@@ -14,6 +14,7 @@ import { ensureVerifyTables } from "./verify-runtime.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
 import { ensureUrgentTables } from "./urgent-ledger.ts";
 import { ensureSecretTables } from "../secrets/store.ts";
+import { fixLikeTitle } from "./task-type.ts";
 
 /** 在途任务归属管方面的部分（或在它下面）的补成闲时；旧库没有组织表或 aspect 列就不动。 */
 function backfillIdle(db: DatabaseSync) {
@@ -26,6 +27,24 @@ function backfillIdle(db: DatabaseSync) {
       UNION SELECT n.id FROM org_nodes n JOIN idle ON n.parent_id=idle.id)
     UPDATE tasks SET priority='idle'
       WHERE status NOT IN ('done','cancelled') AND COALESCE(part_id,node_id) IN (SELECT id FROM idle)`);
+}
+
+/** 没结束的任务按标题推断类型（t237）：像修 bug 的补成修复，其余保持功能；按 id 翻页，每页一次读、一条批量更新。 */
+function backfillTypes(db: DatabaseSync) {
+  const PAGE = 500;
+  const read = db.prepare(
+    "SELECT id,title FROM tasks WHERE status NOT IN ('done','cancelled') AND id>? ORDER BY id LIMIT ?",
+  );
+  for (let after = 0; ;) {
+    const rows = read.all(after, PAGE) as { id: number; title: string }[];
+    const fixes = rows.filter((row) => fixLikeTitle(row.title));
+    if (fixes.length)
+      db.prepare(
+        `UPDATE tasks SET task_type='fix' WHERE id IN (${fixes.map(() => "?").join(",")})`,
+      ).run(...fixes.map((row) => row.id));
+    if (rows.length < PAGE) return;
+    after = rows.at(-1)!.id;
+  }
 }
 
 /** 老库里的帮手子任务：专员审查（每轮的审查任务）与会审意见，按登记表与运行时起的标题认。 */
@@ -126,6 +145,13 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec(
       "ALTER TABLE tasks ADD COLUMN size TEXT CHECK(size IS NULL OR size IN ('small','medium','large'))",
     );
+  // 任务类型（t237）：功能 / 修复；加列时把没结束的按标题补成修复。
+  if (!columns.some((column) => column.name === "task_type")) {
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'feature' CHECK(task_type IN ('feature','fix'))",
+    );
+    backfillTypes(db);
+  }
   // PR 交付后的合入阶段单独记录；旧任务不自动合入。
   if (!columns.some((column) => column.name === "delivery_stage"))
     db.exec("ALTER TABLE tasks ADD COLUMN delivery_stage TEXT");

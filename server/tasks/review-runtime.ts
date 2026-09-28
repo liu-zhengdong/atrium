@@ -348,6 +348,8 @@ export class ReviewGate {
         brief: text,
         brief_path: file,
         deliver: "none",
+        // 审阅与被审的任务同一类型（t237）：修复的审阅也算修复，占修复的保底名额。
+        type: task.task_type,
         ...(task.owner ? { owner: task.owner } : {}),
       });
       noteTask(this.db, created.id, "review_of", { task: task.ref });
@@ -401,6 +403,7 @@ export class ReviewGate {
           brief: prepared.text,
           brief_path: prepared.file,
           deliver: "none",
+          type: task.task_type,
           ...(task.owner ? { owner: task.owner } : {}),
         });
         noteTask(this.db, created.id, "review_of", {
@@ -479,6 +482,8 @@ export class ReviewGate {
         ...(task.repo ? { repo: task.repo } : {}),
         ...(task.owner ? { owner: task.owner } : {}),
         ...(task.part_id !== null ? { part: `o${task.part_id}` } : {}),
+        // 审阅打回派生的跟进算修复（t237）。
+        type: "fix",
       });
       noteTask(this.db, task.id, "review_rejected", {
         reviewer: reviewer.ref,

@@ -25,6 +25,31 @@ import {
   verifyViews,
 } from "./verify-runtime.ts";
 import { verifyHolder, type VerifyView } from "./verify-view.ts";
+import {
+  countTypes,
+  storedType,
+  type TaskType,
+  type TypeCounts,
+} from "./task-type.ts";
+
+/**
+ * 各类型在途任务数（t237，头部「功能 N · 修复 M · 紧急 K」）：待办、在跑、受阻，加上已交付还在审阅或合入的；
+ * 不算帮手子任务与总任务（总任务按子任务算）。按类型分组计数，不取整行；已交付的一支走 delivery_stage 索引
+ * （`+status` 不让它改走 status 索引扫全部已完成），不随历史任务数变慢。
+ */
+export function typeCounts(db: DatabaseSync): TypeCounts {
+  return countTypes(
+    all<{ urgent: number; task_type: string; n: number }>(
+      db,
+      `SELECT urgent,task_type,COUNT(*) AS n FROM tasks t
+        WHERE (status IN ('todo','running','blocked')
+               OR (delivery_stage IN ('reviewing','merge_queued','merging') AND +status='done'))
+          AND helper=0
+          AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id=t.id AND c.helper=0)
+        GROUP BY urgent,task_type`,
+    ),
+  );
+}
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -57,6 +82,8 @@ export type TopRow = NoteView & {
   urgent: boolean;
   /** 闲时（t136）：排在普通任务后面，有空闲执行者才派；标了紧急的不算。 */
   idle: boolean;
+  /** 任务类型（t237）：功能或修复；紧急看 urgent。旧版服务不给。 */
+  type?: TaskType;
   updated_at: number;
   /** 捎话条数与其中还没送达的（#307）；没有捎话为 null。 */
   tells: { total: number; pending: number } | null;
@@ -300,6 +327,7 @@ export function topRows(
       queued_at: waiting?.queued_at ?? null,
       urgent: row.urgent === 1,
       idle: isIdle(row),
+      type: storedType(row.task_type),
       reason:
         queuedReason ??
         // 专员关卡的结论晚于受阻事件：否决或没出结论的原因以它为准。

@@ -5,6 +5,7 @@ import {
   type SpawnMark,
 } from "../platform/cpu.ts";
 import { rank } from "./priority.ts";
+import { FIX_RESERVE_PERCENT, parseReservePercent } from "./task-type.ts";
 
 /**
  * 本机减负（#358 第 0 步）：同时在跑的执行者上限、本地检查并发上限、注入给执行者与检查的测试并发，
@@ -21,6 +22,8 @@ import { rank } from "./priority.ts";
  * - ATRIUM_CHECK_TIMEOUT_MINUTES：一次本地检查最多跑几分钟，缺省 30；按主机各自设（代理读它那台的环境）。
  * - ATRIUM_BUSY_CORES：Atrium 进程树占用超过几个核暂停派新活，缺省核数的 3/4；0 或 off 不看。
  * - ATRIUM_BUSY_LOAD：整机 1 分钟负载超过多少暂停派新活（保护线），缺省 4×核数；0 或 off 不看。
+ * - ATRIUM_FIX_RESERVE_PERCENT：每台主机按执行者上限的百分之几给修复任务保底留位置（t237，task-type.ts fixReserve：
+ *   至少 1、至多 2，并至少给功能留 1 个），缺省 25；0 或 off 不留。只在有修复任务在等时生效。
  */
 
 export type HostLimits = {
@@ -35,6 +38,8 @@ export type HostLimits = {
   busyCores: number | null;
   /** 整机 1 分钟负载超过它就暂停派新活（保护线）；null 不看负载。 */
   busyLoad: number | null;
+  /** 按执行者上限的百分之几给修复保底留位置（t237）；0 或不给不留。 */
+  fixReservePercent?: number;
 };
 
 /** 为什么不能派：own Atrium 自己占得多、load 整机负载过保护线、full 执行者满了。 */
@@ -118,6 +123,12 @@ export function hostLimits(
         "ATRIUM_BUSY_LOAD",
         parseLoad(env.ATRIUM_BUSY_LOAD),
         testing ? null : 4 * n,
+      ),
+      // 测试里没显式设置时不留，免得标题像修复的用例改了排队先后；显式设置照样生效。
+      fixReservePercent: pick(
+        "ATRIUM_FIX_RESERVE_PERCENT",
+        parseReservePercent(env.ATRIUM_FIX_RESERVE_PERCENT),
+        testing ? 0 : FIX_RESERVE_PERCENT,
       ),
     },
     problems,

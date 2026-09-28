@@ -40,6 +40,12 @@ import {
 } from "./priority.ts";
 import { parseSize, type Size } from "./task-size.ts";
 import {
+  inferType,
+  parseTaskType,
+  storedType,
+  type TypeSource,
+} from "./task-type.ts";
+import {
   concernRows,
   concernsFor,
   specialistsFor,
@@ -167,6 +173,8 @@ export type NewTask = {
   priority?: string;
   /** 小 / 中 / 大（t276）；不写挑人时粗估。 */
   size?: string;
+  /** 功能 / 修复（t237）；不写按来源、标题、父任务推断。 */
+  type?: string;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
   /** 归属哪一部分（组织节点）。 */
@@ -209,14 +217,26 @@ function checkScope(
   ]);
 }
 
+/** 父任务的类型：子任务不写类型、标题也看不出时跟它走（t237）。 */
+const parentType = (db: DatabaseSync, parent: number) =>
+  storedType(
+    (
+      db.prepare("SELECT task_type FROM tasks WHERE id=?").get(parent) as
+        { task_type: string } | undefined
+    )?.task_type,
+  );
+
 export function createTask(
   db: DatabaseSync,
   body: unknown,
   now = Date.now(),
   /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
   by?: string,
-  /** 运行时替父任务建的帮手（专员审查、会审意见、上线验证）：不让父任务变成总任务（t190）。 */
-  internal: { helper?: boolean } = {},
+  /**
+   * 运行时替父任务建的帮手（专员审查、会审意见、上线验证）：不让父任务变成总任务（t190）。
+   * source：运行时知道任务从哪来时给（选项单、巡检、上线验证、关卡交回），没写 type 时据此定类型（t237）。
+   */
+  internal: { helper?: boolean; source?: TypeSource } = {},
 ): Task {
   const input = objectOf(body);
   onlyKeys(input, [
@@ -240,6 +260,7 @@ export function createTask(
     "stopgap",
     "priority",
     "size",
+    "type",
     "from",
     "part",
     "goal",
@@ -251,6 +272,7 @@ export function createTask(
   const specialist = specialistOptions(input);
   const size = sizeOf(input.size);
   const urgent = urgentOf(input.urgent);
+  const type = input.type === undefined ? undefined : parseTaskType(input.type);
   const extras = urgentExtras(input, urgent);
   const priority =
     input.priority === undefined ? undefined : parsePriority(input.priority);
@@ -299,9 +321,16 @@ export function createTask(
     );
     checkTaskSecrets(db, part ?? node, secrets);
     const level = priority ?? defaultPriority(aspectPart(db, part ?? node));
+    const kind =
+      type ??
+      inferType({
+        title: values.title,
+        source: internal.source ?? null,
+        parent: parent ? parentType(db, parent) : null,
+      });
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,role,repo,owner,deliver,issue,node_id,origin_node_id,part_id,job_id,urgent,priority,task_type,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -320,6 +349,7 @@ export function createTask(
         job,
         urgent ? 1 : 0,
         level,
+        kind,
         now,
         now,
       );
@@ -354,6 +384,7 @@ export function createTask(
         : {}),
       ...(level === "idle" ? { priority: level } : {}),
       ...(size ? { size } : {}),
+      type: kind,
       ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(secrets.length ? { secrets } : {}),
       ...(by ? { by } : {}),
@@ -399,6 +430,7 @@ export function updateTask(
     "stopgap",
     "priority",
     "size",
+    "type",
     "pr_url",
     "from",
     "part",
@@ -411,7 +443,7 @@ export function updateTask(
   const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、also、secret、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、size、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、also、secret、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、size、type、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -424,6 +456,8 @@ export function updateTask(
   if ("priority" in input) fields.priority = parsePriority(input.priority);
   // 大小随时可改（给空清掉、回到粗估）：只影响之后的自动挑人。
   if ("size" in input) fields.size = sizeOf(input.size);
+  // 类型随时可改：排队中的下一轮按新类型算修复保底名额。
+  if ("type" in input) fields.task_type = parseTaskType(input.type);
   if ("pr_url" in input) {
     if (
       typeof input.pr_url !== "string" ||

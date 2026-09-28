@@ -1,6 +1,7 @@
 import { oneLine, pad, width } from "./format.ts";
 import { planCounts, scheduleBlocked } from "../server/tasks/plan-count.ts";
 import { tagTitle } from "../server/tasks/priority.ts";
+import { typeTag } from "../server/tasks/task-type.ts";
 
 /**
  * `atrium top` 的排期段（#262）：就绪、依赖链、等待中与因上游卡住的待办，数据来自 `/api/tasks/plan`。
@@ -23,6 +24,8 @@ export type PlanTask = {
   /** 旧版服务没有这两项。 */
   urgent?: number;
   priority?: string;
+  /** 任务类型（t237）；旧版服务不给。 */
+  task_type?: string;
 };
 export type PlanUpstream = {
   ref: string;
@@ -96,11 +99,14 @@ const readable = (text: string) =>
     (_, status: string) => ` ${STATUS[status] ?? status}`,
   );
 
-/** 标题前写「紧急」（t113）或「闲时」（t136）。 */
+/** 标题前写「紧急」（t113）或「闲时」（t136），修复的再写「修复」（t237）。 */
 const labelOf = (task: PlanTask) =>
   tagTitle(
     task.urgent === 1 ? "紧急" : task.priority === "idle" ? "闲时" : "",
-    task.title,
+    tagTitle(
+      typeTag({ urgent: task.urgent ?? 0, task_type: task.task_type }),
+      task.title,
+    ),
   );
 
 const tier = (task: PlanTask) =>

@@ -2,12 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   existsSync,
-  mkdtempSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   statSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
@@ -31,8 +30,7 @@ import { assignmentRefusal } from "../server/agent/plan.ts";
 import type { Assignment } from "../server/hosts/protocol.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import { workerGuard, workerReadable } from "../cli/worker-guard.ts";
-import { startApp, until } from "./task-fixture.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { fixture, startApp, until } from "./task-fixture.ts";
 
 /**
  * 凭据（t194 第 3 步）：纯函数（名称、值、按节点链找、合进环境、清理线索、提示词段落、代理收指令）穷举；
@@ -293,8 +291,12 @@ test("leader 权限表与事件行：设值、归档、恢复、留下按节点�
 // ---- 集成 ----
 
 async function open(t: { after: (fn: () => unknown) => void }) {
-  const data = mkdtempSync(join(tmpdir(), "atrium-secrets-"));
-  t.after(() => removeTemp(data));
+  // 周期任务到点会按 task run 真派发：用假执行者与临时档案，不拉起本机真实的执行者 CLI。
+  // 数据目录放在夹具根下，收尾时按命令行里的夹具路径结束还没退出的假执行者（Windows 上它占着工作目录）。
+  const fx = fixture(t);
+  for (const name of ["kimi", "grok", "opencode"]) fx.script(name, "echo 完成");
+  const data = join(fx.root, "data");
+  mkdirSync(data);
   // 旧运行时留下的凭据表：不读不写，也不妨碍启动。
   const legacy = new DatabaseSync(join(data, "atrium.sqlite"));
   legacy.exec(
@@ -308,7 +310,13 @@ async function open(t: { after: (fn: () => unknown) => void }) {
     data,
     auth: true,
     controlToken: "c".repeat(64),
-    tasks: { pace: async () => undefined },
+    tasks: {
+      env: fx.env,
+      workersDir: fx.workers,
+      exec: fx.run,
+      pace: async () => undefined,
+      usagePace: async () => undefined,
+    },
     leaders: { batchMs: 0, pollMs: 20, run: async (spec) => behave(spec) },
     schedules: { tickMs: 3_600_000, now: () => clock },
   });
@@ -671,8 +679,17 @@ test("清理线索：周期任务到点时把 90 天没用过的凭据投给这�
     node: "o3",
     title: "例行巡检",
     every: "1d",
+    // 指定夹具里的假执行者：不指定会挑到本机 PATH 上真实的执行者 CLI。
+    worker: "kimi",
   });
-  await x.call("POST", `/api/schedules/${schedule.ref}/run`, {});
+  const round = await x.ok("POST", `/api/schedules/${schedule.ref}/run`, {});
+  // 派出的任务收完尾再结束用例：假执行者还占着工作目录时 Windows 上删不掉临时目录。
+  const waited = await x.ok(
+    "GET",
+    `/api/tasks/${round.task.ref}/wait?timeout=20`,
+  );
+  assert.equal(waited.timed_out, false);
+  assert.equal(waited.task.worker, "kimi");
   const list = events();
   assert.equal(list.length, 1);
   assert.equal(list[0]!.subscriber, "secretary");

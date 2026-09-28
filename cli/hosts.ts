@@ -321,18 +321,38 @@ export const hostCommands: Record<string, Command> = {
   "host clean": {
     args: "hN",
     about:
-      "止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，本机再结束最近一天已结束任务留下的执行者进程树；常和 host pause 一起写进紧急任务的 --stopgap",
+      "止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树（远程由那台的代理核对并结束；按命令行与启动时刻核对，不碰你自己开的进程），逐条列出并记进任务事件；常和 host pause 一起写进紧急任务的 --stopgap",
     positionals: [1, 1],
     async run({ positionals: [reference], json }) {
       const result = await (
         await client()
-      ).post<{ host: HostView; detail: string }>(
-        `/hosts/${enc(hostRef(reference))}/clean`,
-        {},
-      );
+      ).post<{
+        host: HostView;
+        detail: string;
+        stopped: string[];
+        killed: { task: string; pid: number; tool: string }[];
+        unreached?: string;
+      }>(`/hosts/${enc(hostRef(reference))}/clean`, {});
       if (json) printJson(result);
-      else console.log(result.detail);
-      recordNext(`看这台：atrium host show ${result.host.ref}`);
+      else {
+        const lines = [
+          `${result.host.ref} 停掉 ${result.stopped.length} 个在跑的执行者${result.stopped.length ? `：${result.stopped.join("、")}` : ""}`,
+        ];
+        if (result.unreached) lines.push(`残留进程没清：${result.unreached}`);
+        else {
+          lines.push(`结束 ${result.killed.length} 个残留进程树`);
+          for (const kill of result.killed)
+            lines.push(`  ${kill.task}  pid ${kill.pid}  ${kill.tool}`);
+        }
+        console.log(lines.join("\n"));
+      }
+      recordNext(
+        result.unreached
+          ? `代理连上后再清：atrium host clean ${result.host.ref}`
+          : result.killed.length
+            ? `看任务事件：atrium task show ${result.killed[0]!.task}`
+            : `看这台：atrium host show ${result.host.ref}`,
+      );
     },
   },
   "host resume": {

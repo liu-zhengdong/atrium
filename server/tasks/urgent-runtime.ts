@@ -2,13 +2,19 @@ import type { DatabaseSync } from "node:sqlite";
 import { ADAPTERS, isTool } from "./adapters/index.ts";
 import type { EventInbox } from "./events.ts";
 import type { Executors } from "./executors.ts";
-import type { Exec } from "./git.ts";
 import { getTask, noteTask } from "./ledger.ts";
 import { all, taskRef } from "./ledger-model.ts";
 import { publishTask, publishUrgentStage } from "./notice.ts";
 import { queued } from "./queue.ts";
-import { ownsPid } from "./recovery.ts";
-import { killTree } from "../platform/index.ts";
+import {
+  killLine,
+  LEFTOVER_LIMIT,
+  LEFTOVER_MS,
+  leftoverTargets,
+  type LeftoverKill,
+  type LeftoverRow,
+  type LeftoverTarget,
+} from "./leftovers.ts";
 import { LOCAL_HOST } from "../hosts/state.ts";
 import {
   crowdWarning,
@@ -30,15 +36,31 @@ import { SECRETARY } from "../leaders/route.ts";
  * 这里只取事实、调运行时的动作（停任务、暂停主机、派活）并落账。
  */
 
-/** 清理残留进程只看最近这么久结束的任务。 */
-const LEFTOVER_MS = 24 * 60 * 60_000;
+/** host clean 的结果（t217）：停掉了哪些在跑的、结束了哪些残留进程树；远程没清成时 unreached 写原因。 */
+export type CleanResult = {
+  host: string;
+  stopped: string[];
+  killed: { task: string; pid: number; tool: string }[];
+  /** 核对了几个候选进程。 */
+  checked: number;
+  unreached?: string;
+  detail: string;
+};
 
 export type LaneDeps = {
   x: Executors;
   inbox: EventInbox;
-  exec: Exec;
   /** 停一个任务（在跑的结束进程树，排队的移出队列）。 */
   stop: (ref: string) => unknown;
+  /** 本机的残留进程：核对并结束（reapLeftovers）。 */
+  reapLocal: (targets: readonly LeftoverTarget[]) => Promise<LeftoverKill[]>;
+  /** 远程主机上的残留进程由那台的代理核对并结束（RemoteHosts.clean）。 */
+  remote: {
+    clean(
+      host: number,
+      targets: readonly LeftoverTarget[],
+    ): Promise<LeftoverKill[]>;
+  };
   /** 暂停往某台主机派活。 */
   pauseHost: (host: number) => void;
   /** 派一个任务（续上被暂停的）。 */
@@ -218,16 +240,22 @@ export class UrgentLane {
         if (!done.length) throw new Error(skipped.join("；") || "没有要停的");
         return `已停 ${done.join("、")}${skipped.length ? `；${skipped.join("；")}` : ""}`;
       }
-      case "host_clean":
-        return this.clean(action.host, self);
+      case "host_clean": {
+        const result = await this.clean(action.host, self);
+        // 远程没清成、也没停掉什么：这一步算没做成。
+        if (result.unreached && !result.stopped.length)
+          throw new Error(result.detail);
+        return result.detail;
+      }
     }
   }
 
   /**
-   * 清理某台主机上 Atrium 拉起的残留进程：停掉在那台跑的非紧急执行者；本机再结束最近一天里已结束任务
-   * 仍活着的执行者进程树（按命令行核对确是那个工具，防 pid 复用误杀）。
+   * 清理某台主机上 Atrium 拉起的残留进程：停掉在那台跑的非紧急执行者；再结束最近一天里已结束任务
+   * 仍活着的执行者进程树（t217：本机由服务、远程由那台的代理按 leftovers.ts 同一判定核对工具与启动时刻，
+   * 平台层 killTree 整树结束）。结束的逐条记进所属任务的 leftover_killed 事件。
    */
-  async clean(host: number, self = 0): Promise<string> {
+  async clean(host: number, self = 0): Promise<CleanResult> {
     const { x } = this.deps;
     const stopped: string[] = [];
     for (const slot of x.slots())
@@ -244,26 +272,53 @@ export class UrgentLane {
           // 刚结束或正在启动：下一条照做。
         }
       }
-    let killed = 0;
-    if (host === LOCAL_HOST) {
-      const rows = all<{ id: number; pid: number; worker: string | null }>(
-        this.db,
-        `SELECT id,pid,worker FROM tasks WHERE pid IS NOT NULL AND status<>'running'
-           AND (host_id IS NULL OR host_id=?) AND updated_at>=? ORDER BY updated_at DESC LIMIT 50`,
-        LOCAL_HOST,
-        Date.now() - LEFTOVER_MS,
-      );
-      for (const row of rows) {
-        if (x.active.has(row.id)) continue;
-        const tool = row.worker?.split(/[+:]/, 1)[0];
-        if (!isTool(tool)) continue;
-        if (await ownsPid(row.pid, tool, this.deps.exec)) {
-          killTree(row.pid, "SIGKILL");
-          killed++;
-        }
+    const rows = all<LeftoverRow>(
+      this.db,
+      `SELECT id,pid,worker,status,created_at,ended_at,updated_at FROM tasks
+         WHERE pid IS NOT NULL AND status<>'running'
+           AND ${host === LOCAL_HOST ? "(host_id IS NULL OR host_id=?)" : "host_id=?"}
+           AND updated_at>=? ORDER BY updated_at DESC LIMIT ?`,
+      host,
+      Date.now() - LEFTOVER_MS,
+      LEFTOVER_LIMIT * 2,
+    );
+    const targets = leftoverTargets(rows, {
+      now: Date.now(),
+      active: new Set(x.active.keys()),
+    });
+    let killed: LeftoverKill[] = [];
+    let unreached: string | undefined;
+    if (targets.length)
+      try {
+        killed =
+          host === LOCAL_HOST
+            ? await this.deps.reapLocal(targets)
+            : await this.deps.remote.clean(host, targets);
+      } catch (error) {
+        unreached = message(error);
       }
-    }
-    return `h${host}：停掉 ${stopped.length} 个在跑的执行者${stopped.length ? `（${stopped.join("、")}）` : ""}${host === LOCAL_HOST ? `，结束 ${killed} 个残留进程树` : ""}`;
+    const ref = `h${host}`;
+    for (const kill of killed)
+      noteTask(this.db, kill.task, "leftover_killed", {
+        host: ref,
+        pid: kill.pid,
+        tool: kill.tool,
+        ...(self ? { by: taskRef(self) } : {}),
+      });
+    const parts = [
+      `停掉 ${stopped.length} 个在跑的执行者${stopped.length ? `（${stopped.join("、")}）` : ""}`,
+      unreached
+        ? `残留进程没清：${unreached}`
+        : `结束 ${killed.length} 个残留进程树${killed.length ? `：${killed.map(killLine).join("；")}` : ""}`,
+    ];
+    return {
+      host: ref,
+      stopped,
+      killed: killed.map((kill) => ({ ...kill, task: taskRef(kill.task) })),
+      checked: targets.length,
+      ...(unreached ? { unreached } : {}),
+      detail: `${ref}：${parts.join("，")}`,
+    };
   }
 
   /** leader 标了紧急（t215）：知会秘书与用户，写明谁标的、为什么。 */

@@ -17,6 +17,7 @@ import {
 } from "../tasks/local-check.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { Exit } from "../tasks/outcome.ts";
+import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
 import {
   beginRun,
   hostRow,
@@ -33,6 +34,7 @@ import {
   type CheckLogBody,
   type CheckReply,
   type CheckSource,
+  type CleanReply,
   type ExecReply,
   type ExitBody,
   type HelloBody,
@@ -554,6 +556,47 @@ export class RemoteHosts {
     this.send(host, { kind: "stop", task, run, signal }, 5 * 60_000).catch(
       () => undefined,
     );
+  }
+
+  /**
+   * 让那台的代理核对并结束残留执行者进程（t217）：离线、没来领、超时或代理太旧（不认这条指令）时报错写明原因。
+   * 回执里只收清单里有的任务与 pid。
+   */
+  async clean(
+    host: number,
+    targets: readonly LeftoverTarget[],
+  ): Promise<LeftoverKill[]> {
+    const ref = hostRef(host);
+    if (!this.online(host))
+      throw new Problem(
+        409,
+        `${ref} 离线：那台的残留进程没清，代理连上后再清`,
+        "conflict",
+        undefined,
+        `atrium host show ${ref}`,
+      );
+    const reply = await this.send<CleanReply | { ok: false; error?: string }>(
+      host,
+      { kind: "clean", now: this.now(), targets: [...targets] },
+      2 * 60_000,
+      this.pickupMs,
+    );
+    const killed = (reply as Partial<CleanReply> | null)?.killed;
+    if (!Array.isArray(killed))
+      throw new Problem(
+        409,
+        `${ref} 的代理没清：${(reply as { error?: string } | null)?.error ?? "回执无效"}（代理版本太旧时先在那台升级 Atrium）`,
+        "conflict",
+      );
+    const wanted = new Map(
+      targets.map((target) => [`${target.task}:${target.pid}`, target]),
+    );
+    return killed.flatMap((kill) => {
+      const target = wanted.get(`${kill?.task}:${kill?.pid}`);
+      return target
+        ? [{ task: target.task, pid: target.pid, tool: target.tool }]
+        : [];
+    });
   }
 
   /** 在远程跑 git（只读查询与清理），其余命令仍在本机跑（gh 查 GitHub 由服务自己来）。 */

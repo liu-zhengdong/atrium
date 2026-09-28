@@ -181,6 +181,90 @@ export function commandLineInvocation(
   };
 }
 
+/**
+ * 读一个进程的启动时刻与命令行（t217 清残留进程核对用）：Unix `ps -o etime=,command=`（etime 已运行时长，
+ * 不随语言环境变）；Windows 经 PowerShell 查 Win32_Process，第一行 CreationDate（DMTF 格式）、第二行命令行。
+ */
+export function processProbeInvocation(
+  platform: Platform,
+  pid: number,
+): Invocation {
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    throw new Error(`进程号不合法：${pid}`);
+  if (platform === "win32")
+    return {
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$p = ([wmisearcher]'SELECT CreationDate,CommandLine FROM Win32_Process WHERE ProcessId=${pid}').Get() | Select-Object -First 1; if ($p) { [string]$p.CreationDate; [string]$p.CommandLine }`,
+      ],
+    };
+  return {
+    command: "ps",
+    args: ["-ww", "-o", "etime=,command=", "-p", String(pid)],
+  };
+}
+
+/** `[[天-]时:]分:秒` 的秒数；看不懂为 null。 */
+function elapsedSeconds(text: string): number | null {
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(text);
+  if (!match) return null;
+  const [, days, hours, minutes, seconds] = match;
+  return (
+    Number(days ?? 0) * 86400 +
+    Number(hours ?? 0) * 3600 +
+    Number(minutes) * 60 +
+    Number(seconds)
+  );
+}
+
+/** WMI 的 DMTF 时刻 `yyyymmddHHMMSS.ffffff±UUU`（UUU 是相对 UTC 的分钟数）；看不懂为 null。 */
+export function dmtfTime(text: string): number | null {
+  const match =
+    /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/.exec(
+      text,
+    );
+  if (!match) return null;
+  const [, y, mo, d, h, mi, s, micro, sign, offset] = match;
+  const utc = Date.UTC(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    Number(h),
+    Number(mi),
+    Number(s),
+    Math.floor(Number(micro) / 1000),
+  );
+  return utc - (sign === "-" ? -1 : 1) * Number(offset) * 60_000;
+}
+
+/**
+ * processProbeInvocation 的输出：启动时刻（毫秒；看不懂为 null，Unix 按采样时刻 at 推算、精度到秒）与命令行；
+ * 没有输出（进程已不在）为 null。
+ */
+export function parseProcessProbe(
+  platform: Platform,
+  text: string,
+  at: number,
+): { start: number | null; command: string } | null {
+  if (platform === "win32") {
+    const [created = "", ...rest] = text.replace(/\r/g, "").split("\n");
+    const command = rest.join(" ").trim();
+    if (!created.trim() && !command) return null;
+    return { start: dmtfTime(created.trim()), command };
+  }
+  const line = text.split("\n").find((item) => item.trim());
+  if (!line) return null;
+  const match = /^\s*(\S+)\s*(.*)$/.exec(line)!;
+  const elapsed = elapsedSeconds(match[1]!);
+  return {
+    start: elapsed === null ? null : at - elapsed * 1000,
+    command: match[2]!.trim(),
+  };
+}
+
 /** 用系统默认程序打开链接：macOS `open`，Windows `explorer`，其余 `xdg-open`。 */
 export function openUrlInvocation(platform: Platform, url: string): Invocation {
   const command =

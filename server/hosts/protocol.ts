@@ -1,11 +1,12 @@
 import type { Tool } from "../tasks/adapters/types.ts";
 import type { LocalCheck } from "../tasks/local-check.ts";
+import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { AgentRun, HostInfo, HostLoadReport } from "./state.ts";
 
 /**
  * 服务与代理（`atrium agent`）之间的往来（#358 第 1、2 步）。代理主动连服务：长轮询领指令、另发请求上报日志、退出与额度；
- * 服务只下发四种指令：拉起执行者、停下、在代理机器上跑只读 git、跑本地检查。
+ * 服务只下发五种指令：拉起执行者、停下、在代理机器上跑只读 git、跑本地检查、清残留执行者进程（t217）。
  */
 
 /** 派到代理的一次运行：提示词由服务写好，代理在自己机器上建工作树、按适配器拉起。 */
@@ -52,6 +53,14 @@ export type AgentCommand =
       worktree?: string;
       /** 按提交检查（#358 第 2 步）：代理取到这个提交、在自己的检查工作树里跑。与 worktree 二选一。 */
       source?: CheckSource;
+    }
+  | {
+      id: string;
+      kind: "clean";
+      /** 服务下发时的时钟：代理据此把 targets 里的时刻换成自己的。 */
+      now: number;
+      /** 所属任务已结束的执行者：代理核对还活着、命令行与启动时刻对得上的才结束（leftovers.ts）。 */
+      targets: LeftoverTarget[];
     };
 
 /**
@@ -85,6 +94,8 @@ export type LaunchAck =
   | { ok: false; error: string };
 
 export type ExecReply = { ok: boolean; stdout: string; stderr: string };
+/** 清理回执：结束了哪些进程树。旧版代理不认这条指令时回 `{ ok: false, error }`。 */
+export type CleanReply = { killed: LeftoverKill[] };
 /**
  * 检查回执：infra 表示这台没跑成（取不到提交、装不上依赖、拒绝），服务换一台或回本机重跑；
  * size 是代理这边检查日志的总字节数，服务还没收全时让代理先补传。

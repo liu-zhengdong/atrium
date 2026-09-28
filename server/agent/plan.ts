@@ -5,10 +5,12 @@ import {
   type CheckSource,
 } from "../hosts/protocol.ts";
 import { insideData, isKnownTool } from "../hosts/state.ts";
+import { targetsRefusal } from "../tasks/leftovers.ts";
 
 /**
  * 代理这一侧的判定（#358 第 1 步）：服务派来的指令能不能照做。纯函数，穷举测试。
- * 服务是用户自己的，但代理仍只照做四种指令，路径必须落在代理数据目录里，git 只跑查询与清理用的子命令。
+ * 服务是用户自己的，但代理仍只照做五种指令，路径必须落在代理数据目录里，git 只跑查询与清理用的子命令，
+ * 清残留进程只结束清单里核对得上的执行者（leftovers.ts）。
  */
 
 /** 服务查事实、探进展、清理工作树用到的 git 子命令。 */
@@ -168,6 +170,10 @@ export function commandRefusal(
       return command.signal === "SIGTERM" || command.signal === "SIGKILL"
         ? null
         : "不认识的信号";
+    case "clean":
+      return Number.isFinite(command.now)
+        ? targetsRefusal(command.targets)
+        : "下发时刻不合法";
     default:
       return "不认识的指令";
   }

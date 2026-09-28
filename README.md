@@ -93,7 +93,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 **紧急任务**（t113、t215 紧急通道）：`task add … --urgent`、`task set tN --urgent|--no-urgent`、`task run tN --urgent`（派的同时标上）。有紧急任务时全系统先保它：
 
 - **谁能标**：用户、秘书随时可标；leader 可标但必须写原因（`--why …`，建任务、改任务、派活时都认），并知会秘书与用户（`urgent_marked`）；不加审批。`task show` 写明谁标的、为什么。同时进行的紧急任务多于 2 个时，回执、`top` 与状态栏提示「紧急任务有 N 个，太多就等于没有紧急」，不拒绝。
-- **先止损**：`--stopgap "atrium host pause h3; atrium task stop t1,t2; atrium host clean h3"`（分号、换行或 && 隔开，atrium 可省；接口也收结构化数组 `[{kind:"host_pause",host:"h3"}]`）。只认这三种动作，不执行任意命令；只有紧急任务能写，leader 不能写（会越过它的权限）。建任务（或 `task set --stopgap` 改写）时立刻逐条执行，结果记进 `stopgap` 事件、回执逐条写 ✓/✗；派修复时还没执行过的先执行。`host clean hN`（也可单独 `atrium host clean hN`）停掉 Atrium 在那台跑的非紧急执行者，本机再结束最近一天已结束任务仍活着的执行者进程树（按命令行核对确是那个工具）。
+- **先止损**：`--stopgap "atrium host pause h3; atrium task stop t1,t2; atrium host clean h3"`（分号、换行或 && 隔开，atrium 可省；接口也收结构化数组 `[{kind:"host_pause",host:"h3"}]`）。只认这三种动作，不执行任意命令；只有紧急任务能写，leader 不能写（会越过它的权限）。建任务（或 `task set --stopgap` 改写）时立刻逐条执行，结果记进 `stopgap` 事件、回执逐条写 ✓/✗；派修复时还没执行过的先执行。`host clean hN`（也可单独 `atrium host clean hN`）停掉 Atrium 在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树：本机由服务、远程主机由那台的 `atrium agent` 核对（命令行里是那个工具、启动时刻落在任务建立与结束之间，用户自己开的同名工具不碰），整树结束（Unix 进程组，Windows `taskkill /T /F`）。回执逐条列出任务、pid 与工具，每条记进所属任务的 `leftover_killed` 事件；远程离线或代理太旧时写明没清成。
 - **立刻拿到资源（抢占）**：主机满了或太忙、独占工具被占着时，先暂停在跑的闲时任务，没有闲时的再暂停普通任务（同一档先停最晚拉起的），紧急的不暂停；独占工具被普通任务占着就暂停它、等它让出后立刻拉起。被暂停的任务转受阻，记下会话与工作树（`task_preemptions`），`top` 与状态栏写「被紧急 tN 抢占暂停，之后自动续上」；紧急任务都不在跑、启动或排队后自动续上：同一执行者且能续会话（claude）就续原会话，否则把说明写进提示词在原工作树重派。暂停与续上各记 `preempted` / `resumed` 事件（知会级）。
 - **挑最快最稳的执行者与主机**：不写 `--worker` 时不看额度富余，按交付记录的一次通过率（记录少的向 0.5 收拢）、通过率差不到 5 个点时看中位耗时、正忙的最后；额度保留、trust / `max_risk`、依赖照旧。主机先挑不用抢占的，同样时本机优先；任务写了 `--avoid-host hN[,hM]` 的主机（派活与本地检查）一律不去，被暂停的主机也不派。
 - **快车道**：合入前的检查插到最前立刻跑、不占并发名额，本机是检查基准平台就在本机跑（不去远程传提交、装依赖）；要合入前审阅的，先进合入队列、审阅并行，审阅打回就开一件跟进任务（附审阅意见）投给负责人，合入不受影响；有紧急任务在合入流程里（排队合入、合入中、已合入等上线）时，其他任务的合入先暂停（`merge_paused`，看板写「合入暂停：等紧急 tN 先上线」），正在合入的普通任务在发出 gh 合入前让路、回到排队合入的原位置（`merge_yielded`），紧急的上线后再继续；合入后每 15 秒催一次上线，发版了立即自升级，不等普通任务的合入。
@@ -145,7 +145,7 @@ atrium host show h2                   # 一台的详情与在跑的任务
 atrium host show h3                   # SSH 隧道状态、最近错误、远端代理服务地址
 atrium task run t6 --host h2          # 派到 h2；atrium task wait / task log --follow 在本机照看
 atrium host pause h2                  # 暂停往 h2 派新活（在跑的照跑）；host resume h2 恢复；本机也可以 pause h1
-atrium host clean h2                  # 止损：停掉 Atrium 在 h2 跑的非紧急执行者（本机再结束已结束任务留下的执行者进程）
+atrium host clean h2                  # 止损：停掉 Atrium 在 h2 跑的非紧急执行者，再结束那台上已结束任务留下的执行者进程树（逐条列出）
 atrium host remove h2                 # 令牌作废，那台的代理随即停下；有在跑的任务时拒绝
 ```
 

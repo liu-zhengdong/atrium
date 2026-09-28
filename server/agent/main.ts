@@ -17,6 +17,8 @@ import { exec as defaultExec, type Exec } from "../tasks/git.ts";
 import { hostGate, hostLimits } from "../tasks/host-load.ts";
 import { LocalCheckQueue, runLocalCheck } from "../tasks/local-check.ts";
 import { ownsPid } from "../tasks/recovery.ts";
+import { killLine, shiftTargets } from "../tasks/leftovers.ts";
+import { reapLeftovers } from "../tasks/leftovers-reap.ts";
 import { machineInfo } from "../hosts/info.ts";
 import {
   LOG_CHUNK,
@@ -24,6 +26,7 @@ import {
   type AgentCommand,
   type Assignment,
   type CheckReply,
+  type CleanReply,
   type LaunchAck,
   type PollReply,
 } from "../hosts/protocol.ts";
@@ -497,6 +500,9 @@ export class Agent {
           case "check":
             result = await this.check(command);
             break;
+          case "clean":
+            result = await this.clean(command);
+            break;
         }
       await this.reply(command, result);
     } catch (error) {
@@ -507,6 +513,21 @@ export class Agent {
       this.busy.delete(command.id);
       if (command.kind === "check") this.endCheck(command.id);
     }
+  }
+
+  /**
+   * 清残留执行者进程（t217 `host clean`）：服务给的是所属任务已结束的执行者；时刻按下发时的时钟平移成这台的，
+   * 核对还活着、启动时刻与命令行对得上才整树结束。
+   */
+  private async clean(
+    command: Extract<AgentCommand, { kind: "clean" }>,
+  ): Promise<CleanReply> {
+    const killed = await reapLeftovers(
+      shiftTargets(command.targets, Date.now() - command.now),
+      { exec: this.exec },
+    );
+    for (const kill of killed) this.log(`清理残留进程：${killLine(kill)}`);
+    return { killed };
   }
 
   private checkDir(id: string) {

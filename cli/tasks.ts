@@ -98,9 +98,53 @@ const noteLine = (task: Task) =>
     ? `  备注（${noteAuthor(task)} · ${when(task.note_at!)}）：${task.note.replace(/\s+/g, " ")}`
     : null;
 
-/** 标了紧急的回执说清跳过了什么（t113）；闲时的说清怎么排（t136）。 */
+/** 标了紧急的回执说清紧急通道做什么（t113、t215）；闲时的说清怎么排（t136）。 */
 const urgentLines = (task: Task) =>
   task.urgent === 1 ? [URGENT_NOTE] : priorityTag(task) ? [IDLE_NOTE] : [];
+
+/** 紧急通道的回执附加（t215）：止损结果、紧急任务太多的提示。 */
+type UrgentReceipt = {
+  stopgap_results?: { action: string; ok: boolean; detail: string }[];
+  urgent_warning?: string;
+};
+const laneLines = (result: UrgentReceipt) => [
+  ...(result.stopgap_results ?? []).map(
+    (item) => `止损 ${item.ok ? "✓" : "✗"} ${item.action}：${item.detail}`,
+  ),
+  ...(result.urgent_warning ? [`注意：${result.urgent_warning}`] : []),
+];
+
+/** 库里存的止损动作（JSON）写成命令行的样子；读不懂原样给。 */
+function stopgapLine(text: string) {
+  try {
+    const actions = JSON.parse(text) as {
+      kind: string;
+      host?: string;
+      tasks?: string[];
+    }[];
+    return actions
+      .map((a) =>
+        a.kind === "task_stop"
+          ? `atrium task stop ${(a.tasks ?? []).join(",")}`
+          : `atrium host ${a.kind === "host_pause" ? "pause" : "clean"} ${a.host}`,
+      )
+      .join("; ");
+  } catch {
+    return text;
+  }
+}
+
+/** --why、--avoid-host、--stopgap（t215）：原样交给服务校验。 */
+function laneInput(values: Values) {
+  const body: Record<string, string> = {};
+  const why = str(values, "why");
+  if (why !== undefined) body.why = why;
+  const avoid = str(values, "avoid-host");
+  if (avoid !== undefined) body.avoid_host = avoid;
+  const stopgap = str(values, "stopgap");
+  if (stopgap !== undefined) body.stopgap = stopgap;
+  return body;
+}
 
 /** 标题前的「紧急 」「闲时 」。 */
 const tagText = (task: Pick<Task, "urgent" | "priority">) => {
@@ -259,9 +303,9 @@ function alsoText(task: Task) {
 }
 
 const add: Command = {
-  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
+  args: "标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]",
   about:
-    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急（跳过本机负载限制、排队插到最前）；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用",
+    "建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用",
   options: {
     parent: { type: "string" },
     part: { type: "string" },
@@ -282,6 +326,9 @@ const add: Command = {
     "after-pr": { type: "string" },
     auto: { type: "boolean" },
     urgent: { type: "boolean" },
+    why: { type: "string" },
+    stopgap: { type: "string" },
+    "avoid-host": { type: "string" },
     priority: { type: "string" },
   },
   positionals: [1, 1],
@@ -353,9 +400,12 @@ const add: Command = {
         : { after_pr: str(values, "after-pr") }),
       ...(values.auto === true ? { auto: true } : {}),
       ...(values.urgent === true ? { urgent: true } : {}),
+      ...laneInput(values),
       ...priorityInput(values),
     };
-    const task = await (await client()).post<Task>("/tasks", body);
+    const task = await (
+      await client()
+    ).post<Task & UrgentReceipt>("/tasks", body);
     if (json) printJson(task);
     else
       console.log(
@@ -367,16 +417,21 @@ const add: Command = {
               ]
             : []),
           ...urgentLines(task),
+          ...laneLines(task),
           ...roleHint(task),
           ...hintLines(task),
         ].join("\n"),
       );
     recordNext(
-      str(values, "after") || str(values, "after-pr") || values.auto === true
-        ? "看排期：atrium task plan"
-        : task.parent_ref
-          ? `看候选并派活：atrium task pick ${task.ref}`
-          : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
+      task.urgent === 1 && !task.parent_ref
+        ? `马上派：atrium task run ${task.ref}`
+        : str(values, "after") ||
+            str(values, "after-pr") ||
+            values.auto === true
+          ? "看排期：atrium task plan"
+          : task.parent_ref
+            ? `看候选并派活：atrium task pick ${task.ref}`
+            : `拆子任务：atrium task add 标题 --parent ${task.ref}`,
     );
   },
 };
@@ -466,7 +521,14 @@ const show: Command = {
         ["状态", displayStatus(task)],
         [
           "紧急",
-          task.urgent === 1 ? "是（跳过本机负载限制，排队插到最前）" : null,
+          task.urgent === 1
+            ? `是（紧急通道）${task.urgent_by ? `，${task.urgent_by} 标的` : ""}${task.urgent_why ? `：${task.urgent_why}` : ""}`
+            : null,
+        ],
+        ["止损动作", task.stopgap ? stopgapLine(task.stopgap) : null],
+        [
+          "避开主机",
+          task.avoid_host_refs?.length ? task.avoid_host_refs.join("、") : null,
         ],
         [
           "优先级",
@@ -665,8 +727,8 @@ const tree: Command = {
 };
 
 const set: Command = {
-  args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--priority 闲时|普通]",
-  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发、紧急（--urgent 跳过本机负载限制，排队中的立刻按紧急重排）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
+  args: "tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通]",
+  about: `人工修正状态（${TASK_STATUSES.filter((s) => s !== "running").join("、")}）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）`,
   options: {
     status: { type: "string" },
     "with-children": { type: "boolean" },
@@ -689,6 +751,9 @@ const set: Command = {
     auto: { type: "boolean" },
     urgent: { type: "boolean" },
     "no-urgent": { type: "boolean" },
+    why: { type: "string" },
+    stopgap: { type: "string" },
+    "avoid-host": { type: "string" },
     priority: { type: "string" },
   },
   positionals: [1, 1],
@@ -758,21 +823,22 @@ const set: Command = {
       throw new Problem(400, "--urgent 与 --no-urgent 只能给一个", "usage");
     if (values.urgent === true) body.urgent = true;
     if (values["no-urgent"] === true) body.urgent = false;
+    Object.assign(body, laneInput(values));
     Object.assign(body, priorityInput(values));
     if (!Object.keys(body).length)
       throw new Problem(
         400,
-        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--also、--brief、--deliver、--issue、--after、--after-pr、--auto、--urgent/--no-urgent 或 --priority",
+        "至少给一项：--status、--pr、--title、--by、--ask、--from、--part、--also、--brief、--deliver、--issue、--after、--after-pr、--auto、--urgent/--no-urgent、--why、--stopgap、--avoid-host 或 --priority",
         "usage",
         undefined,
         `atrium task set ${id} --status done`,
       );
     const task = await (
       await client()
-    ).patch<Task & { cancelled_children?: string[]; stopped?: string[] }>(
-      `/tasks/${id}`,
-      body,
-    );
+    ).patch<
+      Task &
+        UrgentReceipt & { cancelled_children?: string[]; stopped?: string[] }
+    >(`/tasks/${id}`, body);
     if (json) printJson(task);
     else
       console.log(
@@ -789,7 +855,10 @@ const set: Command = {
               ]
             : []),
           ...(body.urgent === true ? urgentLines(task) : []),
-          ...(body.urgent === false ? ["已取消紧急：照常受本机负载限制"] : []),
+          ...laneLines(task),
+          ...(body.urgent === false
+            ? ["已取消紧急：照常排队、照常受本机负载限制"]
+            : []),
           ...(body.priority === "idle" && body.urgent !== true
             ? urgentLines(task)
             : []),
@@ -953,20 +1022,23 @@ const done: Command = {
 };
 
 const run: Command = {
-  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--urgent]",
+  args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--urgent [--why 原因]]",
   about:
-    "派给执行者（服务持有进程）；不写 --worker 按额度挑，--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；--urgent 同时标紧急，跳过负载限制（额度保留、trust、依赖照旧）",
+    "派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）",
   options: {
     worker: { type: "string" },
     risk: { type: "string" },
     host: { type: "string" },
     urgent: { type: "boolean" },
+    why: { type: "string" },
   },
   positionals: [1, 1],
   async run({ positionals: [reference], values, json }) {
     const id = ref(reference, "任务");
     const body: Record<string, string | boolean> = {};
     if (values.urgent === true) body.urgent = true;
+    const why = str(values, "why");
+    if (why !== undefined) body.why = why;
     const worker = str(values, "worker");
     if (worker !== undefined) {
       if (!worker.trim())
@@ -1001,12 +1073,14 @@ const run: Command = {
     }
     const result = await (
       await client()
-    ).post<{
-      task: Task & { events: TaskEventRow[] };
-      queued: boolean;
-      pick?: RunPick;
-      reassigned?: { worker: string; from: string; reason: string | null };
-    }>(`/tasks/${id}/run`, body);
+    ).post<
+      {
+        task: Task & { events: TaskEventRow[] };
+        queued: boolean;
+        pick?: RunPick;
+        reassigned?: { worker: string; from: string; reason: string | null };
+      } & UrgentReceipt
+    >(`/tasks/${id}/run`, body);
     const { task } = result;
     if (json) printJson(result);
     else
@@ -1020,6 +1094,7 @@ const run: Command = {
                 ? `${task.ref} 排队中：${queuedReason(task.events)}`
                 : `已${result.reassigned ? "改" : ""}派 ${task.ref} 给 ${task.worker}（${task.host_ref ? `${task.host_ref} 上 ` : ""}PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
           ...urgentLines(task),
+          ...laneLines(result),
           ...pickLines(result.pick),
         ].join("\n"),
       );
@@ -1032,7 +1107,11 @@ export function pickLines(pick: RunPick | undefined): string[] {
   if (!pick) return [];
   return [
     ...(pick.auto && pick.reason
-      ? [`按额度挑了 ${pick.worker}，因为${pick.reason}`]
+      ? [
+          pick.reason.startsWith("紧急：")
+            ? `挑了 ${pick.worker}（${pick.reason}）`
+            : `按额度挑了 ${pick.worker}，因为${pick.reason}`,
+        ]
       : []),
     ...(pick.notice ? [pick.notice] : []),
   ];

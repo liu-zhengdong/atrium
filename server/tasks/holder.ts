@@ -63,6 +63,10 @@ export type HolderFacts = {
   council_escalated: boolean;
   /** 本地检查正在跑（交付后或合入队列重跑）：在哪台（hN，旧记录没有）；没在跑为 null。 */
   checking?: { host: string | null } | null;
+  /** 被紧急任务抢占暂停（t215）：被哪件（tN）；没被暂停为 null。 */
+  preempted?: { by: string | null } | null;
+  /** 排队合入时，其他任务的合入因这些紧急任务（tN）暂停（t215）；没暂停为空。 */
+  merge_held_by?: string[];
 };
 
 /** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
@@ -418,7 +422,13 @@ function judge(f: HolderFacts): Holder | null {
       text: `合入前审阅中${f.review_task ? `（${f.review_task}）` : ""}`,
     };
   if (f.delivery_stage === "merge_queued")
-    return { kind: "merge", who: null, text: "排队合入" };
+    return {
+      kind: "merge",
+      who: null,
+      text: f.merge_held_by?.length
+        ? `合入暂停：等紧急 ${f.merge_held_by.join("、")} 先上线`
+        : "排队合入",
+    };
   if (f.delivery_stage === "merging")
     return {
       kind: "merge",
@@ -463,6 +473,13 @@ function judge(f: HolderFacts): Holder | null {
       };
     return { kind: "worker", who: f.worker, text: `${worker} 在做` };
   }
+  // 被紧急任务抢占暂停的（t215）：运行时会在紧急通道清空后自己续上，不是等谁处理。
+  if (f.status === "blocked" && f.preempted)
+    return {
+      kind: "queue",
+      who: null,
+      text: `被紧急 ${f.preempted.by ?? "任务"} 抢占暂停，之后自动续上`,
+    };
   if (f.status === "blocked") {
     const why = blockShort(f.block);
     if (f.escalated)

@@ -39,6 +39,7 @@ const recordOf = (
         deliveries: stat.deliveries,
         first_pass_rate: stat.first_pass_rate,
         low_data: stat.low_data,
+        median_ms: stat.median_ms,
       }
     : undefined;
 };
@@ -111,6 +112,7 @@ export async function pickFacts(task: Task, risk: Risk, ctx: PickContext) {
     busy: ctx.busy,
     chain,
     records,
+    urgent: task.urgent === 1,
   };
 }
 

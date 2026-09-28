@@ -46,6 +46,8 @@ export class OnlineWatch {
       selfRepo?: string | null;
       /** 合入进行中或别处正在重启时先不重启。 */
       busy: () => boolean;
+      /** 有紧急任务要上线时（t215）只看这个：别的紧急任务在合入、或别处正在重启；缺省同 busy。 */
+      urgentBusy?: () => boolean;
       deploy: (version: string) => Promise<DeployResult>;
       /** 上次重启失败或回滚的原因（读 restart-state.json）；没有返回 null。 */
       restartError?: (version: string) => string | null;
@@ -101,9 +103,14 @@ export class OnlineWatch {
           id: row.id,
           release: row.release_version,
           attempted: row.online_attempt,
+          urgent: row.urgent === 1,
         })),
         current,
-        { selfUpdate: this.options.selfUpdate, busy: this.options.busy() },
+        {
+          selfUpdate: this.options.selfUpdate,
+          busy: this.options.busy(),
+          urgentBusy: (this.options.urgentBusy ?? this.options.busy)(),
+        },
       );
       const published: { id: number; detail: Record<string, unknown> }[] = [];
       for (const id of plan.online)

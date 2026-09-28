@@ -8,6 +8,7 @@ import type { ConcernState, InviteHint } from "./concern-gate.ts";
 import type { Holder } from "./holder.ts";
 import type { Rollup } from "./rollup.ts";
 import { applyDeliveryEvent } from "./delivery-records.ts";
+import { storedHosts } from "./urgent.ts";
 
 export type TaskRow = {
   id: number;
@@ -56,6 +57,14 @@ export type TaskRow = {
   auto_dispatched: number;
   /** 1 表示紧急（t113）：跳过本机负载限制，排队插到最前。 */
   urgent: number;
+  /** 紧急的原因（t215，leader 标紧急必填）；没写为 null，旧库没有列。 */
+  urgent_why?: string | null;
+  /** 谁标的紧急（u1、secretary 或 aN）。 */
+  urgent_by?: string | null;
+  /** 派活避开的主机（JSON 数组，主机 id）；没写为 null。 */
+  avoid_hosts?: string | null;
+  /** 止损动作（JSON，urgent.ts 的结构化写法）；没写为 null。 */
+  stopgap?: string | null;
   /** 闲时（t136）：idle 排在普通任务后面，有空闲执行者才派；缺省按归属部分是否管方面。 */
   priority: "normal" | "idle";
   schedule_state: string | null;
@@ -79,6 +88,8 @@ export type Task = TaskRow & {
   job_ref: string | null;
   /** 跑在哪台远程主机上（hN）；本机为 null。 */
   host_ref: string | null;
+  /** 派活避开的主机（t215，hN）；没写为空。 */
+  avoid_host_refs: string[];
   /** 在排队时的原因（queue.ts queueView）；不在排队为 null，旧接口不给为 undefined。 */
   queued_reason?: string | null;
   /** 请了的专员与本轮结论（concerns.ts）；没请时不给。 */
@@ -132,6 +143,7 @@ export const view = (
   part_ref: string | null;
   job_ref: string | null;
   host_ref: string | null;
+  avoid_host_refs: string[];
 } => ({
   ...row,
   ref: taskRef(row.id),
@@ -142,6 +154,7 @@ export const view = (
   part_ref: row.part_id == null ? null : `o${row.part_id}`,
   job_ref: row.job_id == null ? null : `r${row.job_id}`,
   host_ref: row.host_id == null ? null : `h${row.host_id}`,
+  avoid_host_refs: storedHosts(row.avoid_hosts).map((id) => `h${id}`),
 });
 
 /** 列表、树、排期不带详述内容（至多 64 KB 一条），要看用 task show。 */

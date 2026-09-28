@@ -17,6 +17,7 @@ import { idleWaits } from "./queue.ts";
 import { idleWaitText, isIdle } from "./priority.ts";
 import { rollups } from "./rollup-ledger.ts";
 import { progressOf } from "./rollup.ts";
+import { urgentInMergeFlow } from "./urgent-ledger.ts";
 
 /**
  * 进行中任务的实时视图（#262 `atrium top`）：在跑、排队、受阻，加上最近 RECENT_MS 内结束的，
@@ -236,6 +237,8 @@ export function topRows(
     selected.rows.map((row) => (row.status === "running" ? row.host_id : null)),
     now,
   );
+  // 紧急任务在合入流程里时普通任务的合入暂停（t215）：一次查出，各行共用。
+  const urgentFlow = urgentInMergeFlow(db);
   const rows: TopRow[] = selected.rows.map((row) => {
     const history = events.get(row.id) ?? [];
     const waiting = queue.get(row.id);
@@ -281,7 +284,7 @@ export function topRows(
           db,
           row,
           waiting ? { reason: queuedReason } : null,
-          { inbox },
+          { inbox, urgentFlow },
           hosts,
         );
         return { holder: holderOf(facts), checking: facts.checking ?? null };
@@ -333,6 +336,8 @@ export function countRows(rows: TopRow[]): TopCounts {
     else if (row.status === "running") counts.running++;
     else if (row.status === "blocked") {
       if (row.processing) counts.processing++;
+      // 被紧急任务抢占暂停的（t215）运行时会自己续上，算排队，不算卡住。
+      else if (row.holder?.kind === "queue") counts.queued++;
       else counts.blocked++;
     } else if (row.status !== "todo") counts[row.status]++;
   return counts;

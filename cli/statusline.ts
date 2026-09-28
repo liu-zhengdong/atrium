@@ -185,7 +185,8 @@ export function renderStatusline(input: StatuslineInput): string {
     !events &&
     !ready &&
     !waiting &&
-    !choice
+    !choice &&
+    !snapshot.urgent?.warning
   )
     return paint(DIM, "Atrium 空闲");
   const parts = [
@@ -210,6 +211,9 @@ export function renderStatusline(input: StatuslineInput): string {
   ].join(" · ");
   const lines = [head];
   if (choice) lines.push(paint(`${BOLD}${RED}`, `✱ ${choice}`));
+  // 紧急任务太多（t215）：「紧急任务有 N 个，太多就等于没有紧急」，不拒绝。
+  if (snapshot.urgent?.warning)
+    lines.push(paint(`${BOLD}${RED}`, `! ${snapshot.urgent.warning}`));
   const items = groupRows(held);
   for (const item of items.slice(0, TASK_LINES))
     lines.push(

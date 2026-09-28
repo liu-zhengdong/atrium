@@ -115,6 +115,10 @@ export function registerHostRoutes(
       .parse(request.body ?? {});
     return runner.pauseHost(params(request).id, body.paused);
   });
+  // 止损（t215）：停掉在那台跑的非紧急执行者，本机再结束已结束任务留下的执行者进程树。
+  app.post("/api/hosts/:id/clean", { bodyLimit: 1024 }, (request) =>
+    runner.cleanHost(params(request).id),
+  );
 
   // ---- 代理 ----
   // 认证在路由匹配后、读请求体之前：接入认一次性接入码，其余认主机令牌，都放在 Authorization 头里。

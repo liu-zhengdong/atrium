@@ -11,7 +11,11 @@ export type Stop =
   | { kind: "stalled"; reason: string }
   | { kind: "idle"; reason: string }
   /** 为送捎话停下、随后带着补充重派（#307 tell 兜底）；只有重派失败才会走到收尾。 */
-  | { kind: "tell" };
+  | { kind: "tell" }
+  /** 被紧急任务抢占暂停（t215）：收尾时记下会话、转受阻，紧急通道清空后续上。 */
+  | { kind: "preempt"; by: number; why: "exclusive" | "slot" }
+  /** 紧急任务没有进展、换执行者（t215）：停下后由 to 在原工作树接着做。 */
+  | { kind: "swap"; reason: string; to: string };
 
 export type Exit =
   { code: number | null; signal: NodeJS.Signals | null } | "unknown";
@@ -111,6 +115,21 @@ export function decideExit(input: {
       event: "exit_fail",
       publish: "failed",
       reason: "为送捎话停下后重派失败",
+      retry: false,
+    };
+  // 抢占与换人在收尾前由运行时接手；走到这里说明接手出错，按受阻留给人看。
+  if (stop?.kind === "preempt")
+    return {
+      event: "block",
+      publish: "blocked",
+      reason: `被紧急任务 t${stop.by} 抢占暂停`,
+      retry: false,
+    };
+  if (stop?.kind === "swap")
+    return {
+      event: "block",
+      publish: "blocked",
+      reason: stop.reason,
       retry: false,
     };
   if (stop?.kind === "stalled")

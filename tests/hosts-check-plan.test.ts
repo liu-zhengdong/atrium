@@ -113,9 +113,16 @@ test("检查派到哪台：本机不比远程忙太多就在本机；本机忙�
     chooseCheckHost([overloaded, remote(2)], need, new Set([2])),
     { host: 1, kind: "local" },
   );
-  // 紧急：本机再忙也算有空位，但远程明显更空仍去远程。
+  // 紧急（t215）：本机能跑就在本机，立刻跑、不占名额，不去远程传提交、装依赖；本机暂停接活才去远程。
   assert.equal(
     chooseCheckHost([local({ running: 2, busy: "忙" }), remote(2)], {
+      ...need,
+      urgent: true,
+    }).kind,
+    "local",
+  );
+  assert.equal(
+    chooseCheckHost([local({ paused: true }), remote(2)], {
       ...need,
       urgent: true,
     }).kind,

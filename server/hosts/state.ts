@@ -155,6 +155,8 @@ export type HostNeed = {
   urgent: boolean;
   /** 只能在本机跑的原因（如体验巡检要连回本机服务）；能去远程为 null。 */
   localOnly: string | null;
+  /** 任务写了避开的主机（t215 `--avoid-host`）；自动挑与指定都不派过去。 */
+  avoid?: readonly number[];
 };
 
 export type HostFit =
@@ -192,6 +194,8 @@ export function hostFit(
     if (candidate.connection === "offline") return never(`${ref} 离线`);
   }
   if (candidate.paused) return never(`${ref} 已暂停接活`);
+  if (need.avoid?.includes(candidate.id))
+    return never(`任务写了避开 ${ref}（--avoid-host）`);
   if (candidate.clis) {
     const cli = candidate.clis[need.tool];
     if (!cli?.installed) return never(`${ref} 上没装 ${need.tool}`);
@@ -229,8 +233,13 @@ export type HostChoice =
 const utilization = (c: HostCandidate) =>
   c.max === null ? c.running / 1000 : c.running / Math.max(1, c.max);
 
+/** 满了或太忙（紧急任务照样能派，但要抢占别人）。 */
+export const crowded = (c: HostCandidate) =>
+  !!c.busy || (c.max !== null && c.running >= c.max);
+
 /**
  * 挑主机：指定了就只看那台（接不了拒绝，满了排队）；没指定在能接的里挑最空的，一样空时本机优先；
+ * 紧急的先挑不满不忙的（不用抢占），同样时本机优先；任务写了避开的主机一律不派（t215）；
  * 都满或太忙时排队，本机的原因优先（和只有本机时的回执一致）。
  */
 export function chooseHost(
@@ -252,11 +261,16 @@ export function chooseHost(
     candidate,
     fit: hostFit(candidate, need, false),
   }));
+  // 紧急的（t215）：先挑不满不忙、不用抢占的，再挑本机（最稳），再比谁空。
   const ready = fits
     .filter((entry) => entry.fit.ok)
     .map((entry) => entry.candidate)
     .sort(
       (a, b) =>
+        (need.urgent ? Number(crowded(a)) - Number(crowded(b)) : 0) ||
+        (need.urgent
+          ? Number(b.kind === "local") - Number(a.kind === "local")
+          : 0) ||
         utilization(a) - utilization(b) ||
         Number(b.kind === "local") - Number(a.kind === "local") ||
         a.id - b.id,

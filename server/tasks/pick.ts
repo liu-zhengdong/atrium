@@ -12,6 +12,7 @@ import { clock } from "./quota-holds.ts";
 import { avoidReason, type ChainNode } from "../skills/model.ts";
 import type { Headroom } from "./usage-budget.ts";
 import { signedPercent } from "./percent.ts";
+import { urgentOrder } from "./urgent.ts";
 
 /**
  * 派活候选一览（task pick）：把候选执行者、账号额度、干活的专员与交付记录放在一张表里，
@@ -29,6 +30,8 @@ export type PickRecord = {
   deliveries: number;
   first_pass_rate: number | null;
   low_data: boolean;
+  /** 交付耗时中位数（毫秒）；没有为 null。紧急任务挑人时看谁快（t215）。 */
+  median_ms?: number | null;
 };
 
 export type PickCandidateFact = {
@@ -55,6 +58,8 @@ export type PickFacts = {
   busy: ReadonlySet<Tool>;
   chain: readonly ChainNode[];
   records: ReadonlyMap<string, PickRecord>;
+  /** 紧急任务（t215）：不按额度富余，按一次通过率与速度、正忙与否挑。 */
+  urgent?: boolean;
 };
 
 export type PickAccount = {
@@ -226,11 +231,22 @@ export function pickView(facts: PickFacts): PickView {
             : -1;
       return b.spare - a.spare || byOrder(a) - byOrder(b) || a.index - b.index;
     });
-  const ordered = [...favoured, ...rest];
+  // 紧急任务（t215）：能接的全部按正忙、一次通过率、速度排，专员顺序与固定顺序只作最后的比较。
+  const ordered = facts.urgent
+    ? [...favoured, ...rest]
+        .map((row, index) => ({ row, index }))
+        .sort((a, b) =>
+          urgentOrder(
+            rivalRecord(a.row, a.index, facts),
+            rivalRecord(b.row, b.index, facts),
+          ),
+        )
+        .map((item) => item.row)
+    : [...favoured, ...rest];
   // 专员第 1 选超速（富余为负）、另有信任度够的候选富余多出 NOTICE_SPARE_GAP 以上：改推荐那一位。
   const first = favoured[0];
   const swap =
-    first && first.spare !== undefined && first.spare < 0
+    !facts.urgent && first && first.spare !== undefined && first.spare < 0
       ? richerAlternative(
           ordered.map((row) => ({
             worker: row.candidate.worker,
@@ -277,14 +293,47 @@ export function pickView(facts: PickFacts): PickView {
     quota_known: !!facts.pace,
     candidates,
     recommended: top?.worker ?? null,
-    reason: pickReason(
-      candidates,
-      facts,
-      swap
-        ? candidates.find((c) => c.worker === first!.candidate.worker)
-        : undefined,
-    ),
+    reason:
+      facts.urgent && top
+        ? urgentReason(top)
+        : pickReason(
+            candidates,
+            facts,
+            swap
+              ? candidates.find((c) => c.worker === first!.candidate.worker)
+              : undefined,
+          ),
   };
+}
+
+/** 紧急任务排序用的候选事实：正忙、交付记录。 */
+function rivalRecord(
+  row: { candidate: PickCandidateFact; busy: boolean },
+  index: number,
+  facts: PickFacts,
+) {
+  const record = facts.records.get(row.candidate.worker);
+  return {
+    busy: row.busy,
+    firstPass: record?.first_pass_rate ?? null,
+    lowData: record?.low_data ?? true,
+    medianMs: record?.median_ms ?? null,
+    index,
+  };
+}
+
+/** 紧急任务的推荐理由：一次通过率、速度与正忙。 */
+function urgentReason(top: PickCandidate): string {
+  const record = top.record;
+  const pass =
+    record?.first_pass_rate === null || record?.first_pass_rate === undefined
+      ? "没有交付记录"
+      : `一次通过率 ${Math.round(record.first_pass_rate * 100)}%${record.low_data ? "（记录少）" : ""}`;
+  const speed =
+    record?.median_ms === null || record?.median_ms === undefined
+      ? ""
+      : `、中位 ${Math.max(1, Math.round(record.median_ms / 60_000))} 分钟`;
+  return `紧急：不看额度富余，按一次通过率与速度挑；${top.worker} ${pass}${speed}${top.busy ? `；${top.tool} 正忙，派了要腾位置` : ""}`;
 }
 
 /** richerAlternative 比较用的候选：PickCandidate 与排序中间结果都能转成它。 */

@@ -34,6 +34,8 @@ export type CheckRequest = {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   urgent?: boolean;
+  /** 任务写了避开的主机（t215）：检查也不派过去。 */
+  avoid?: readonly number[];
   onStatus?: (status: "queued" | "started", log: string, host: string) => void;
   /** 某台没跑成、换地方重跑时。 */
   onMoved?: (from: string, reason: string) => void;
@@ -84,7 +86,12 @@ export class CheckDispatch {
       if (!prepared.ok) break;
       const choice = chooseCheckHost(
         candidates,
-        { repo: prepared.repo, urgent: request.urgent ?? false, platform },
+        {
+          repo: prepared.repo,
+          urgent: request.urgent ?? false,
+          platform,
+          avoid: request.avoid ?? [],
+        },
         tried,
       );
       if (choice.kind === "local") break;

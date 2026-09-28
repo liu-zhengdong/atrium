@@ -48,6 +48,8 @@ export type Active = {
   finalizing?: { result: "clean" | "error"; forced: boolean };
   /** 即时捎话的标准输入写端（#307）；没有表示这一轮不能即时写入（不支持、已结束或是接管来的进程）。 */
   live?: LiveInput;
+  /** 紧急任务该换人时没得换（t215）：这一轮不再试，交给普通看门狗。 */
+  swapSkipped?: boolean;
 };
 
 export const taskDir = (data: string, id: number) =>

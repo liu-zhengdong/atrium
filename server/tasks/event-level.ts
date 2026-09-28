@@ -38,6 +38,14 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "choice_decided",
   "choice_notice",
   "choice_comment",
+  // 紧急通道（t215）：被抢占暂停、续上、换人、合入让路与暂停、标了紧急的知会；紧急任务自己的阶段另投 urgent_stage（要处理）。
+  // 新增类型，库里没有旧行要按新集合重算，不需要迁移。
+  "preempted",
+  "resumed",
+  "urgent_swap",
+  "urgent_marked",
+  "merge_paused",
+  "merge_yielded",
 ]);
 
 export function eventLevel(kind: string, detail?: unknown): EventLevel {

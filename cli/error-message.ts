@@ -10,6 +10,7 @@ const fieldNames: Record<string, string> = {
   by: "--as",
   topic: "议题",
   conclusion: "结论",
+  avoid_host: "--avoid-host",
 };
 
 export function cliErrorMessage(message: string, command?: Command): string {

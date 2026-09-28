@@ -96,6 +96,8 @@ export type OnlineCandidate = {
   release: string | null;
   /** 已为哪个版本发起过自升级；没发起过为 null。 */
   attempted: string | null;
+  /** 紧急任务（t215）：发版了就立刻自升级，不等普通任务的合入。 */
+  urgent?: boolean;
 };
 
 export type OnlinePlan = {
@@ -113,12 +115,13 @@ export type OnlinePlan = {
 
 /**
  * 一轮上线判定：已发版且运行版本不旧于它的算上线；否则取最高版本自升级一次，
- * 升级过仍没到的判失败（不反复升级同一版本）；合入进行中时先不重启，避免打断本地检查。
+ * 升级过仍没到的判失败（不反复升级同一版本）；合入进行中时先不重启，避免打断本地检查；
+ * 有紧急任务要上线时只等别的紧急任务合入（普通任务的合入已让路，t215）。
  */
 export function planOnline(
   candidates: OnlineCandidate[],
   current: string,
-  options: { selfUpdate: boolean; busy: boolean },
+  options: { selfUpdate: boolean; busy: boolean; urgentBusy?: boolean },
 ): OnlinePlan {
   const plan: OnlinePlan = {
     online: [],
@@ -143,7 +146,9 @@ export function planOnline(
     plan.skipped = behind.map((task) => task.id);
     return plan;
   }
-  if (options.busy) return plan;
+  // 有紧急任务要上线（t215）：只等别的紧急任务合入与正在进行的重启，普通任务的合入不挡。
+  const urgent = behind.some((task) => task.urgent);
+  if (urgent ? (options.urgentBusy ?? options.busy) : options.busy) return plan;
   plan.deploy = behind
     .map((task) => task.release!)
     .sort(compareSemver)

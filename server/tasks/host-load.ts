@@ -130,8 +130,9 @@ const loadText = (load: number) =>
 const coreText = (cores: number) =>
   Number.isInteger(cores) ? String(cores) : cores.toFixed(1);
 
-/** 紧急任务的回执与事件里说明跳过了什么。 */
-export const URGENT_NOTE = "紧急：跳过本机负载限制";
+/** 紧急任务的回执与事件里说明紧急通道做什么（t113、t215）。 */
+export const URGENT_NOTE =
+  "紧急：没空位先暂停闲时（再普通）任务腾位置，检查与合入插到最前、审阅不挡合入，没进展 10 分钟换人";
 
 /**
  * 能不能再拉起一个执行者。running 是除本任务外在跑与正在启动的；own 是 Atrium 进程树占的核数（不知道为 null，不挡）。

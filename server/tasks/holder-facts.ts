@@ -15,6 +15,7 @@ import {
   type HolderFacts,
 } from "./holder.ts";
 import { scheduleOf } from "./schedule.ts";
+import { urgentInMergeFlow } from "./urgent-ledger.ts";
 
 /** 从账本、收件箱、会审表取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
 
@@ -29,6 +30,7 @@ const KINDS = [
   "local_check",
   "merge_check_started",
   "merge_check",
+  "preempted",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -66,7 +68,9 @@ export function holderFacts(
   db: DatabaseSync,
   row: TaskRow,
   queued: { reason: string | null } | null,
-  tables = { inbox: hasTable(db, "task_inbox") },
+  tables: { inbox: boolean; urgentFlow?: readonly number[] } = {
+    inbox: hasTable(db, "task_inbox"),
+  },
   hosts?: ReadonlyMap<number, string>,
 ): HolderFacts {
   // 倒序取最近几十条相关事件，再按时间正序看。
@@ -135,6 +139,22 @@ export function holderFacts(
           block.at,
         )
       : undefined;
+  // 被紧急任务抢占暂停（t215）：受阻就是因为它、之后还没再拉起。
+  const preemptedAt = last("preempted");
+  const preempted =
+    row.status === "blocked" &&
+    preemptedAt &&
+    preemptedAt.id >= since &&
+    !last("start", preemptedAt.id)
+      ? { by: text(parse(preemptedAt.detail).by) }
+      : null;
+  // 普通任务排队合入时，有紧急任务在合入流程里就暂停（merge-runtime 同一判定）。
+  const heldBy =
+    row.delivery_stage === "merge_queued" && row.urgent !== 1
+      ? (tables.urgentFlow ?? urgentInMergeFlow(db))
+          .filter((id) => id !== row.id)
+          .map(taskRef)
+      : [];
   const council = one<{ stage: string }>(
     db,
     "SELECT stage FROM task_councils WHERE task_id=?",
@@ -170,6 +190,8 @@ export function holderFacts(
     route: taskRoute(db, row).subscriber,
     council_escalated: council?.stage === "escalated",
     checking,
+    preempted,
+    merge_held_by: heldBy,
   };
 }
 

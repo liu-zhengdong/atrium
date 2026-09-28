@@ -11,6 +11,7 @@ import { ensureJobRoles } from "./job-roles.ts";
 import { ensureCouncilTables } from "./councils.ts";
 import { ensurePatrolTables } from "./patrol.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
+import { ensureUrgentTables } from "./urgent-ledger.ts";
 
 /** 在途任务归属管方面的部分（或在它下面）的补成闲时；旧库没有组织表或 aspect 列就不动。 */
 function backfillIdle(db: DatabaseSync) {
@@ -236,4 +237,6 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensurePatrolTables(db);
   // 执行者档案（#355）：三层档案与修订历史。
   ensureWorkerProfiles(db);
+  // 紧急通道（t215）：原因、避开的主机、止损动作，被抢占的任务与合入后并行的审阅。
+  ensureUrgentTables(db);
 }

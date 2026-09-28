@@ -46,6 +46,7 @@ import {
 import { resolveActor } from "../actor.ts";
 import { taskPlan } from "./schedule.ts";
 import { parseTaskRef } from "./ledger.ts";
+import { markVerdict, whyOf } from "./urgent.ts";
 
 type Query = Record<string, string | undefined>;
 const params = (value: unknown) => (value ?? {}) as { id?: string };
@@ -53,6 +54,39 @@ const query = (value: unknown) => (value ?? {}) as Query;
 /** 调用方以谁的名义（?as=），缺省 secretary。 */
 const actorOf = (q: Query) =>
   q.as === undefined || q.as === "" ? DEFAULT_OWNER : ownerOf(q.as, "as");
+
+/** 请求体里的对象字段（不是对象时为空）。 */
+const bodyFields = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+/**
+ * 标紧急的权限（t215）：leader 标紧急须写原因，写了就知会用户；用户与秘书随时可标。
+ * becoming 为这次请求是否新标上紧急；why 取请求里的，没给就用任务上已有的。
+ */
+function urgentGate(
+  leader: string | undefined,
+  becoming: boolean,
+  why: unknown,
+  existing?: string | null,
+  stopgap?: unknown,
+) {
+  // 止损动作会停别处的任务、暂停主机，越过 leader 令牌的范围：只让用户与秘书写。
+  if (leader && stopgap !== undefined && stopgap !== null && stopgap !== "")
+    throw new Problem(
+      403,
+      `stopgap: ${leader} 不能写止损动作（会停别处的任务、暂停主机）；需要止损请上交`,
+      "leader_scope",
+    );
+  const verdict = markVerdict({
+    leader,
+    urgent: becoming,
+    why: whyOf(why) ?? existing ?? null,
+  });
+  if (!verdict.ok) throw new Problem(400, verdict.reason, "usage");
+  return verdict.notify;
+}
 
 /** 客户端断开时中止长轮询。 */
 function disconnect(request: FastifyRequest) {
@@ -180,9 +214,27 @@ export function registerTaskRoutes(
   }
   // 详述进库（#355）：内容至多 64 KB，JSON 转义后留足余量。
   app.post("/api/tasks", { bodyLimit: 256 * 1024 }, async (request, reply) => {
-    const task = createTask(db, request.body, Date.now(), leaderOf(request));
-    publishInvolved(runner.inbox, db, task.id, [], leaderOf(request));
-    return reply.code(201).send(task);
+    const input = bodyFields(request.body);
+    const leader = leaderOf(request);
+    const notify = urgentGate(
+      leader,
+      input.urgent === true,
+      input.why,
+      null,
+      input.stopgap,
+    );
+    const task = createTask(db, request.body, Date.now(), leader);
+    publishInvolved(runner.inbox, db, task.id, [], leader);
+    // 紧急通道（t215）：leader 标的知会用户；写了止损动作的建好就先执行。
+    if (notify)
+      runner.lane.notifyMarked(task.id, leader!, task.urgent_why ?? null);
+    const stopgap = task.stopgap ? await runner.lane.stopgap(task.id) : null;
+    const warning = task.urgent === 1 ? runner.lane.crowd() : null;
+    return reply.code(201).send({
+      ...(stopgap ? getTask(db, task.id) : task),
+      ...(stopgap ? { stopgap_results: stopgap } : {}),
+      ...(warning ? { urgent_warning: warning } : {}),
+    });
   });
   app.get("/api/tasks", (request) => {
     const { parent, status, after, limit } = query(request.query);
@@ -212,6 +264,16 @@ export function registerTaskRoutes(
     const exists = db.prepare("SELECT 1 FROM tasks WHERE id=?").get(id);
     const before = exists ? involvedOf(db, getTask(db, id)) : undefined;
     const { body, withChildren } = cascadeOf(request.body);
+    const input = bodyFields(body);
+    const leader = leaderOf(request);
+    const current = exists ? getTask(db, id) : undefined;
+    const notify = urgentGate(
+      leader,
+      input.urgent === true && current?.urgent !== 1,
+      input.why,
+      current?.urgent_why,
+      input.stopgap,
+    );
     // 总任务取消（t190）：下面还有没结束的子孙时先问一句，带 --with-children 才连带取消。
     const open =
       exists &&
@@ -232,7 +294,16 @@ export function registerTaskRoutes(
         undefined,
         `atrium task set ${taskRef(id)} --status cancelled --with-children`,
       );
-    const task = updateTask(db, params(request.params).id, body);
+    const task = updateTask(db, params(request.params).id, body, Date.now(), {
+      by: leader,
+    });
+    if (notify)
+      runner.lane.notifyMarked(task.id, leader!, task.urgent_why ?? null);
+    // 新写的止损动作立刻执行（t215）。
+    const stopgap =
+      "stopgap" in input && task.urgent === 1 && task.stopgap
+        ? await runner.lane.stopgap(task.id)
+        : null;
     const cascade = open.length
       ? await runner.cancelDescendants(id, leaderOf(request))
       : null;
@@ -253,11 +324,15 @@ export function registerTaskRoutes(
         [...before.also, ...before.auto],
         leaderOf(request),
       );
+    const warning =
+      input.urgent === true && task.urgent === 1 ? runner.lane.crowd() : null;
     return {
       ...getTask(db, task.id),
       ...(cascade
         ? { cancelled_children: cascade.cancelled, stopped: cascade.stopped }
         : {}),
+      ...(stopgap ? { stopgap_results: stopgap } : {}),
+      ...(warning ? { urgent_warning: warning } : {}),
     };
   });
   app.post("/api/tasks/:id/note", { bodyLimit: 4 * 1024 }, (request) =>
@@ -279,9 +354,20 @@ export function registerTaskRoutes(
   app.get("/api/tasks/:id/pick", (request) =>
     runner.pick(params(request.params).id, query(request.query).risk),
   );
-  app.post("/api/tasks/:id/run", { bodyLimit: 16 * 1024 }, (request) =>
-    runner.run(params(request.params).id, request.body),
-  );
+  app.post("/api/tasks/:id/run", { bodyLimit: 16 * 1024 }, async (request) => {
+    const input = bodyFields(request.body);
+    const leader = leaderOf(request);
+    const current = getTask(db, params(request.params).id);
+    const becoming = input.urgent === true && current.urgent !== 1;
+    const notify = urgentGate(leader, becoming, input.why, current.urgent_why);
+    const result = await runner.run(current.ref, request.body, leader);
+    if (notify) {
+      const task = getTask(db, current.id);
+      runner.lane.notifyMarked(task.id, leader!, task.urgent_why ?? null);
+    }
+    const warning = becoming ? runner.lane.crowd() : null;
+    return warning ? { ...result, urgent_warning: warning } : result;
+  });
   app.post("/api/tasks/:id/stop", (request) =>
     runner.stop(params(request.params).id, actorOf(query(request.query))),
   );

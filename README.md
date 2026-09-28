@@ -123,16 +123,20 @@ cat grok.md | atrium workers edit models/grok-4.6 --file -
 
 ```bash
 atrium host add 书房台式机 --repo liu-zhengdong/atrium --max 4   # 登记并拿一次性接入码（30 分钟内有效）
+atrium host edit h3 --ssh cpcli@100.70.239.117 --tunnel 4310:14310  # ggb：服务自管反向 SSH 隧道
 # 在那台机器上（服务地址换成它连得到的：SSH 转发、内网穿透、VPN；OrbStack 虚拟机用 http://host.orb.internal:4310）：
 atrium agent --server http://127.0.0.1:4310 --token h2-接入码         # 前台常驻；之后重启只要 --server
 atrium host ls                        # 各台状态（在线、离线、待接入）、系统与核数、编码 CLI 及是否登录、在跑几件
 atrium host show h2                   # 一台的详情与在跑的任务
+atrium host show h3                   # SSH 隧道状态、最近错误、远端代理服务地址
 atrium task run t6 --host h2          # 派到 h2；atrium task wait / task log --follow 在本机照看
 atrium host pause h2                  # 暂停往 h2 派新活（在跑的照跑）；host resume h2 恢复；本机也可以 pause h1
 atrium host remove h2                 # 令牌作废，那台的代理随即停下；有在跑的任务时拒绝
 ```
 
-- **代理主动连服务**：`atrium agent` 用长轮询领指令，远程机器不用开入站端口；服务只听本机 `127.0.0.1`，跨机器怎么通由用户自己的转发、穿透或 VPN 解决（明文 HTTP 跨公网时代理会提示改用 HTTPS 或 SSH 转发）。接入码只能用一次，换成这台主机专用的令牌，存在那台机器的 `~/.atrium-agent/agent.json`（`0600`，`ATRIUM_AGENT_DATA` 可改目录）；令牌只能领派给这台的指令、上报这台的日志与结果，碰不到任务账本、组织和别的主机。
+带 `--ssh` 的主机由 Atrium 服务拉起 `ssh -N -R`，隧道断开后自动重连，服务关闭时结束子进程；`--tunnel` 写本机服务端口:远端监听端口。接入命令里的 `--server` 自动使用远端监听端口。代理首次接入后记住服务地址，以后可直接运行 `atrium agent`。ggb（h3）上线后先用 `host show h3` 确认隧道与代理在线，再停用旧的 Mac launchd 隧道。
+
+- **代理主动连服务**：`atrium agent` 用长轮询领指令，远程机器不用开入站端口；服务只听本机 `127.0.0.1`，跨机器可用 Atrium 自管 SSH 隧道，也可用已有的转发、穿透或 VPN（明文 HTTP 跨公网时代理会提示改用 HTTPS 或 SSH 转发）。接入码只能用一次，换成这台主机专用的令牌，存在那台机器的 `~/.atrium-agent/agent.json`（`0600`，`ATRIUM_AGENT_DATA` 可改目录）；令牌只能领派给这台的指令、上报这台的日志与结果，碰不到任务账本、组织和别的主机。
 - **在那台机器上干活**：服务写好提示词、算好路径，代理在自己的数据目录里克隆仓库（用那台机器上的 git 凭据）、按同一规则建工作树、按同一份适配器拉起执行者，环境同样走白名单并带 `ATRIUM_WORKER=1` 与按那台核数算的 `ATRIUM_TEST_CONCURRENCY`。编码 CLI 的登录留在那台机器上，不经服务传输；组织技能暂不挂载到远程（事件 `skills_skipped`）。
 - **事实与关卡不变**：日志按字节偏移传回本机任务目录，`task log`、`top`、看门狗照旧读它；改动规模、提交、本地检查在那台的工作树里查与跑（经代理，git 只接受查询与清理用的子命令），PR 与 CI 仍由服务查 GitHub。合入队列在本机按 PR 头另建一个工作树来 rebase、重跑检查、合入，合入后连同那台上的工作树一起清掉。
 - **断线与重启**：断线期间执行者照跑，日志与退出记在那台机器上，重连后补传；服务重启后先按账本接管远程的这一轮，代理自动重连，对账时补报重启期间的结束、结束账本已不认的进程。代理自己重启也不带走执行者，按运行记录接着看。主机离线时不判卡死；这时 `task stop` 先在账本收尾，重连后代理结束那个进程。

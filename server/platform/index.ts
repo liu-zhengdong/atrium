@@ -11,6 +11,10 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import type { SshConnection } from "../hosts/tunnel-plan.ts";
+import { tunnelArgs } from "../hosts/tunnel-plan.ts";
+import { serviceEnvironment } from "../service-env.ts";
 import {
   executableNames,
   isBatchFile,
@@ -173,4 +177,21 @@ export function spawnShell(
 /** 凭据文件只留给本人：Unix 设 0600；Windows 没有这套权限位，数据目录在用户目录下，由 ACL 继承保护。 */
 export function restrictToOwner(path: string) {
   if (process.platform !== "win32") chmodSync(path, 0o600);
+}
+
+/** 只把私钥路径交给 SSH；环境仍按服务白名单过滤，绝不读取私钥内容。 */
+export function spawnSshTunnel(connection: SshConnection): ChildProcess {
+  const key = connection.key?.startsWith("~/")
+    ? join(homedir(), connection.key.slice(2))
+    : connection.key;
+  return spawnCommand("ssh", tunnelArgs(connection, key ?? null), {
+    env: serviceEnvironment().env,
+    stdio: ["ignore", "ignore", "pipe"],
+    detached: process.platform !== "win32",
+    windowsHide: true,
+  });
+}
+
+export function stopSshTunnel(child: ChildProcess) {
+  if (child.pid) killTree(child.pid);
 }

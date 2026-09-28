@@ -102,6 +102,9 @@ export function registerHostRoutes(
   app.post("/api/hosts", { bodyLimit: 16 * 1024 }, (request) =>
     runner.addHost(request.body),
   );
+  app.patch("/api/hosts/:id", { bodyLimit: 16 * 1024 }, (request) =>
+    runner.editHost(params(request).id, request.body),
+  );
   app.delete("/api/hosts/:id", (request) =>
     runner.removeHost(params(request).id),
   );

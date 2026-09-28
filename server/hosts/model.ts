@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { sameSecret } from "../../shared/secret.ts";
+import type { SshConnection } from "./tunnel-plan.ts";
 import { Problem } from "../problem.ts";
 import { all, atomically, one } from "../tasks/ledger-model.ts";
 import {
@@ -37,6 +38,10 @@ export type HostRow = {
   created_at: number;
   updated_at: number;
   removed_at: number | null;
+  ssh_target: string | null;
+  ssh_key: string | null;
+  tunnel_local_port: number | null;
+  tunnel_remote_port: number | null;
 };
 
 export type HostRun = {
@@ -73,7 +78,25 @@ export function ensureHostTables(db: DatabaseSync) {
       clone TEXT, worktree TEXT, dir TEXT NOT NULL,
       log_offset INTEGER NOT NULL DEFAULT 0,
       started_at INTEGER NOT NULL);
-    CREATE INDEX IF NOT EXISTS host_runs_host ON host_runs(host_id,task_id);`);
+    CREATE INDEX IF NOT EXISTS host_runs_host ON host_runs(host_id,task_id);
+    CREATE TABLE IF NOT EXISTS host_tunnel_invalid (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      host_id INTEGER NOT NULL,
+      connection_json TEXT NOT NULL,
+      archived_at INTEGER NOT NULL);`);
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(hosts)").all() as { name: string }[]).map(
+      (column) => column.name,
+    ),
+  );
+  for (const [name, type] of Object.entries({
+    ssh_target: "TEXT",
+    ssh_key: "TEXT",
+    tunnel_local_port: "INTEGER",
+    tunnel_remote_port: "INTEGER",
+  }))
+    if (!columns.has(name))
+      db.exec(`ALTER TABLE hosts ADD COLUMN ${name} ${type}`);
 }
 
 const digest = (value: string) =>
@@ -144,6 +167,17 @@ export function hostRows(db: DatabaseSync, withRemoved = false) {
   );
 }
 
+/** 启动隧道按短号分页读，不因主机列表视图的 500 条上限漏掉连接。 */
+export function tunnelHostRows(db: DatabaseSync, after: number): HostRow[] {
+  return all<HostRow>(
+    db,
+    `SELECT * FROM hosts WHERE removed_at IS NULL AND id>? AND
+      (ssh_target IS NOT NULL OR ssh_key IS NOT NULL OR tunnel_local_port IS NOT NULL OR tunnel_remote_port IS NOT NULL)
+      ORDER BY id LIMIT 100`,
+    after,
+  );
+}
+
 const NAME = /^[^\s\u0000-\u001f][^\u0000-\u001f]{0,39}$/;
 const REPO = /^(\*|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/;
 
@@ -177,7 +211,12 @@ export function validMax(value: unknown) {
 /** 登记一台远程主机并签发一次性接入码（`h<N>-<64 位十六进制>`，30 分钟内有效）。 */
 export function addHost(
   db: DatabaseSync,
-  input: { name: string; max?: number | null; repos?: readonly string[] },
+  input: {
+    name: string;
+    max?: number | null;
+    repos?: readonly string[];
+    ssh?: SshConnection | null;
+  },
   now = Date.now(),
 ) {
   const name = input.name.trim();
@@ -189,9 +228,21 @@ export function addHost(
   const id = atomically(db, () => {
     const result = db
       .prepare(
-        "INSERT INTO hosts(name,kind,repos,max_running,join_hash,join_expires_at,created_at,updated_at) VALUES (?,'remote',?,?,?,?,?,?)",
+        "INSERT INTO hosts(name,kind,repos,max_running,join_hash,join_expires_at,created_at,updated_at,ssh_target,ssh_key,tunnel_local_port,tunnel_remote_port) VALUES (?,'remote',?,?,?,?,?,?,?,?,?,?)",
       )
-      .run(name, JSON.stringify(repos), max, "", now + JOIN_TTL_MS, now, now);
+      .run(
+        name,
+        JSON.stringify(repos),
+        max,
+        "",
+        now + JOIN_TTL_MS,
+        now,
+        now,
+        input.ssh?.target ?? null,
+        input.ssh?.key ?? null,
+        input.ssh?.localPort ?? null,
+        input.ssh?.remotePort ?? null,
+      );
     const id = Number(result.lastInsertRowid);
     db.prepare("UPDATE hosts SET join_hash=? WHERE id=?").run(
       digest(`${hostRef(id)}-${secret}`),
@@ -200,6 +251,45 @@ export function addHost(
     return id;
   });
   return { id, code: `${hostRef(id)}-${secret}` };
+}
+
+export function editHostConnection(
+  db: DatabaseSync,
+  id: number,
+  ssh: SshConnection,
+  now = Date.now(),
+) {
+  const row = hostRow(db, id);
+  if (row.kind !== "remote" || row.removed_at !== null)
+    throw new Problem(409, `${hostRef(id)} 不能编辑 SSH 连接`, "conflict");
+  db.prepare(
+    "UPDATE hosts SET ssh_target=?,ssh_key=?,tunnel_local_port=?,tunnel_remote_port=?,updated_at=? WHERE id=?",
+  ).run(ssh.target, ssh.key, ssh.localPort, ssh.remotePort, now, id);
+}
+
+/** 损坏的单条 SSH 配置挪开留档，不阻碍其余主机或服务启动。 */
+export function quarantineHostConnection(
+  db: DatabaseSync,
+  row: HostRow,
+  now = Date.now(),
+) {
+  atomically(db, () => {
+    db.prepare(
+      "INSERT INTO host_tunnel_invalid(host_id,connection_json,archived_at) VALUES (?,?,?)",
+    ).run(
+      row.id,
+      JSON.stringify({
+        target: row.ssh_target,
+        key: row.ssh_key,
+        localPort: row.tunnel_local_port,
+        remotePort: row.tunnel_remote_port,
+      }),
+      now,
+    );
+    db.prepare(
+      "UPDATE hosts SET ssh_target=NULL,ssh_key=NULL,tunnel_local_port=NULL,tunnel_remote_port=NULL,updated_at=? WHERE id=?",
+    ).run(now, row.id);
+  });
 }
 
 const JOIN = /^h([1-9][0-9]{0,8})-([a-f0-9]{64})$/;
@@ -430,6 +520,14 @@ export type HostView = {
   running: number;
   joined_at: number | null;
   last_seen_at: number | null;
+  ssh:
+    | (SshConnection & {
+        tunnel: string;
+        status: string;
+        error: string | null;
+        agentServer: string;
+      })
+    | null;
 };
 
 const parse = <T>(text: string | null): T | null => {
@@ -449,6 +547,7 @@ export function hostView(
     localMax?: number | null;
     /** 多久没来算离线；缺省 ONLINE_MS。 */
     onlineMs?: number;
+    tunnel?: { status: string; error: string | null } | null;
   },
   now = Date.now(),
 ): HostView {
@@ -489,5 +588,20 @@ export function hostView(
     running: runtime.running,
     joined_at: row.joined_at,
     last_seen_at: row.last_seen_at,
+    ssh:
+      row.ssh_target &&
+      row.tunnel_local_port !== null &&
+      row.tunnel_remote_port !== null
+        ? {
+            target: row.ssh_target,
+            key: row.ssh_key,
+            localPort: row.tunnel_local_port,
+            remotePort: row.tunnel_remote_port,
+            tunnel: `${row.tunnel_local_port}:${row.tunnel_remote_port}`,
+            status: runtime.tunnel?.status ?? "未启动",
+            error: runtime.tunnel?.error ?? null,
+            agentServer: `http://127.0.0.1:${row.tunnel_remote_port}`,
+          }
+        : null,
   };
 }

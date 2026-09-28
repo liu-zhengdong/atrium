@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { SshConnection } from "../server/hosts/tunnel-plan.ts";
 import {
   existsSync,
   mkdirSync,
@@ -30,11 +34,17 @@ async function serve(
   fx: Fx,
   data: string,
   port = 0,
-  extra: { agentOnlineMs?: number; agentCheckWatchMs?: number } = {},
+  extra: {
+    agentOnlineMs?: number;
+    agentCheckWatchMs?: number;
+    tunnelSpawn?: (connection: SshConnection) => ChildProcess;
+    tunnelStop?: (child: ChildProcess) => void;
+  } = {},
 ) {
   const created = await createApp({
     data,
     auth: false,
+    quotaReaders: null,
     tasks: {
       env: fx.env,
       workersDir: fx.workers,
@@ -53,7 +63,7 @@ async function serve(
   const address = created.app.server.address();
   const actual = typeof address === "object" && address ? address.port : port;
   const call = async (
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     url: string,
     payload?: object,
   ) => {
@@ -117,6 +127,68 @@ const hostOf = async (
     running: number;
     info: { data_dir: string; clis: Record<string, unknown> } | null;
   };
+
+test("主机 API：SSH 连接随 hN 保存，编辑后重启隧道，列表和详情给出状态", async (t) => {
+  const fx = fixture(t);
+  const spawned: {
+    connection: SshConnection;
+    child: EventEmitter & { stderr: PassThrough; pid: number };
+  }[] = [];
+  const stopped: ChildProcess[] = [];
+  const server = await serve(fx, join(fx.root, "ssh-data"), 0, {
+    tunnelSpawn: (connection) => {
+      const child = Object.assign(new EventEmitter(), {
+        stderr: new PassThrough(),
+        pid: 101,
+      });
+      spawned.push({ connection, child });
+      return child as unknown as ChildProcess;
+    },
+    tunnelStop: (child) => stopped.push(child),
+  });
+  let closed = false;
+  t.after(() => (closed ? undefined : server.close()));
+  const added = await server.call("POST", "/api/hosts", {
+    name: "ggb",
+    ssh: "cpcli@100.70.239.117",
+    tunnel: "4310:14310",
+    key: "~/.ssh/id_ed25519",
+  });
+  assert.equal(added.status, 200);
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0]!.connection.remotePort, 14310);
+  spawned[0]!.child.emit("spawn");
+  const shown = await server.call("GET", "/api/hosts/h2");
+  assert.equal(shown.body.ssh.status, "运行中");
+  assert.equal(shown.body.ssh.agentServer, "http://127.0.0.1:14310");
+  const edited = await server.call("PATCH", "/api/hosts/h2", {
+    tunnel: "4310:14311",
+  });
+  assert.equal(edited.status, 200);
+  assert.equal(spawned.length, 2);
+  assert.equal(stopped.length, 1);
+  assert.equal(
+    (await server.call("GET", "/api/hosts")).body.hosts[1].ssh.tunnel,
+    "4310:14311",
+  );
+  assert.equal(
+    (await server.call("PATCH", "/api/hosts/h1", { ssh: "u@host" })).status,
+    409,
+  );
+  assert.equal(
+    (
+      await server.call("POST", "/api/hosts", {
+        name: "bad",
+        ssh: "-oBad",
+        tunnel: "4310:14310",
+      })
+    ).status,
+    400,
+  );
+  await server.close();
+  closed = true;
+  assert.equal(stopped.length, 2);
+});
 
 test("远程主机：接入、派到 h2、日志与结果传回本机；令牌只管代理接口", async (t) => {
   const fx = fixture(t);

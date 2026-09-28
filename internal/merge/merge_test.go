@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -29,6 +30,81 @@ func TestOrder(t *testing.T) {
 	}
 	if want := []string{"t4", "t2", "t3", "t1"}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("%v", ids)
+	}
+}
+
+func TestCleanupWorktree(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	want := filepath.Join(data, "tasks", "t1", "repo")
+	for _, tc := range []struct {
+		name, dir string
+		want      bool
+	}{
+		{"本任务", want, true},
+		{"其他任务", filepath.Join(data, "tasks", "t2", "repo"), false},
+		{"其他目录", filepath.Join(data, "tasks", "t1", "work"), false},
+		{"远程代理", filepath.Join(t.TempDir(), "remote", "repo"), false},
+		{"空登记", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := merge.CleanupWorktree(data, "t1", tc.dir); got != tc.want {
+				t.Fatalf("CleanupWorktree(%q) = %v", tc.dir, got)
+			}
+		})
+	}
+}
+
+func recordWorktree(e *env, task ledger.Task) string {
+	e.t.Helper()
+	dir := filepath.Join(filepath.Dir(e.q.Dir), "tasks", task.ID, "repo")
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		e.t.Fatal(err)
+	}
+	e.gh.Must(e.gh.Work, "worktree", "add", "--quiet", "-b", "task-"+task.ID, dir, "main")
+	if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", fmt.Sprintf(`{"dir":%q}`, dir)); err != nil {
+		e.t.Fatal(err)
+	}
+	return dir
+}
+
+func TestMergeCleansWorktreeAndBranch(t *testing.T) {
+	e := setup(t, nil)
+	task := e.deliver("t1-a", map[string]string{"a.go": "package a\n"})
+	dir := recordWorktree(e, task)
+	e.drain()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("合入后工作树仍在：%v", err)
+	}
+	if _, err := e.gh.Git.Run(e.ctx, e.gh.Work, "git", "show-ref", "--verify", "refs/heads/task-"+task.ID); err == nil {
+		t.Fatal("合入后本地任务分支仍在")
+	}
+}
+
+func TestBounceKeepsWorktree(t *testing.T) {
+	e := setup(t, nil)
+	task := e.deliver("t1-a", map[string]string{"README.md": "mine\n"})
+	dir := recordWorktree(e, task)
+	e.gh.Commit(map[string]string{"README.md": "theirs\n"})
+	e.drain()
+	if got := e.get(task.ID); got.Status != ledger.Queued {
+		t.Fatalf("应交回：%+v", got)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("交回后工作树丢失：%v", err)
+	}
+}
+
+func TestBlockedKeepsWorktree(t *testing.T) {
+	e := setup(t, nil)
+	task := e.deliver("t1-a", map[string]string{"a.go": "package a\n"})
+	dir := recordWorktree(e, task)
+	e.gh.PRs[0].State = "CLOSED"
+	e.drain()
+	if got := e.get(task.ID); got.Status != ledger.Blocked {
+		t.Fatalf("PR 关闭应受阻：%+v", got)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("受阻后工作树丢失：%v", err)
 	}
 }
 

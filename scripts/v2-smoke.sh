@@ -243,6 +243,24 @@ out=$(json task show t1); has '(.result.history|map(.kind)) | index("merge_commi
 out=$(json stop); has '.result.stopped'
 export ATRIUM_DATA="${saved[0]}" ATRIUM_PORT="${saved[1]}" PATH="${saved[2]}"
 
+step "host add / ls / 代理接入 / show / rm（hosts）"
+out=$(json host add 远程一号 --repo liu-zhengdong/atrium --max 2); has '.result.host.id == "h2" and (.result.code|test("^h2-[0-9a-f]{64}$")) and .next == "atrium host show h2"'
+code=$(jq -r .result.code <<<"$out")
+out=$(json host ls); has '.result[0].id == "h1" and .result[0].kind == "local" and .result[1].conn == "pending"'
+out=$(json host add 坏 --repo bad || true); has '.ok == false and .error.code == "usage"'
+HOME="$work/agenthome" ATRIUM_QUOTA_READERS=off "$bin" agent --data "$work/agent" --server "http://127.0.0.1:$ATRIUM_PORT" --token "$code" >"$work/agent.out" 2>&1 &
+agentpid=$!; pid="$pid $agentpid"
+for _ in $(seq 50); do out=$(json host show h2); jq -e '.result.conn == "online"' >/dev/null <<<"$out" && break; sleep 0.2; done
+has '.result.conn == "online" and .result.info.cpus > 0 and .result.max == 2'
+[ "$(stat -f %Lp "$work/agent/agent.json" 2>/dev/null || stat -c %a "$work/agent/agent.json")" = 600 ] || fail "agent.json 权限不是 600"
+code2=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(jq -r .token "$work/agent/agent.json")" "http://127.0.0.1:$ATRIUM_PORT/api/tasks")
+[ "$code2" = 401 ] || fail "机器令牌调用户接口应 401，得到 $code2"
+out=$(json host rm h1 || true); has '.error.code == "conflict"'
+out=$(json host rm h2); has '.ok'
+wait "$agentpid" || fail "移除后代理应以 0 退出：$(cat "$work/agent.out")"
+grep -q "令牌已失效" "$work/agent.out" || fail "代理没报令牌失效：$(cat "$work/agent.out")"
+out=$(json quota --clear kimi || true); has '.error.code == "not_found"'
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

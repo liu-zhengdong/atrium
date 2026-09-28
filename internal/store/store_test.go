@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,8 +24,9 @@ func TestOpenCreatesAllTablesAndIsIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 22 {
-		t.Fatalf("表数 = %d，想要 22", n)
+	// 表数按 schema.sql 数，各包加表不用改这里。
+	if want := strings.Count(schema, "CREATE TABLE IF NOT EXISTS"); n != want {
+		t.Fatalf("表数 = %d，想要 %d", n, want)
 	}
 	var fk int
 	db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk)

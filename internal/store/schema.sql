@@ -218,16 +218,39 @@ CREATE TABLE IF NOT EXISTS materials (
 );
 CREATE INDEX IF NOT EXISTS materials_department ON materials (department, title);
 
--- 机器：本机 h1，远程 hN；token_hash 是代理令牌的哈希。
+-- 机器：本机 h1，远程 hN。接入码与机器令牌只存哈希；info、load 是代理上报的 JSON；repos 是自动派活能接的仓库（JSON 数组，"*" 为全部）。
 CREATE TABLE IF NOT EXISTS hosts (
-  id           TEXT PRIMARY KEY,
-  name         TEXT NOT NULL,
-  kind         TEXT NOT NULL CHECK (kind IN ('local', 'remote')),
-  token_hash   TEXT NOT NULL DEFAULT '',
-  slots        INTEGER NOT NULL DEFAULT 1,
-  last_seen_at INTEGER,
-  created_at   INTEGER NOT NULL
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  kind            TEXT NOT NULL CHECK (kind IN ('local', 'remote')),
+  repos           TEXT NOT NULL DEFAULT '[]',
+  max_running     INTEGER,
+  join_hash       TEXT NOT NULL DEFAULT '',
+  join_expires_at INTEGER,
+  token_hash      TEXT NOT NULL DEFAULT '',
+  info            TEXT NOT NULL DEFAULT '',
+  load            TEXT NOT NULL DEFAULT '',
+  ssh_target      TEXT NOT NULL DEFAULT '',
+  tunnel_local    INTEGER,
+  tunnel_remote   INTEGER,
+  last_seen_at    INTEGER,
+  created_at      INTEGER NOT NULL
 );
+
+-- 远程运行：每个任务在远程的当前这一轮（第几轮、哪台、pid、日志收到哪个字节、退出）。
+CREATE TABLE IF NOT EXISTS host_runs (
+  task       TEXT PRIMARY KEY REFERENCES tasks (id),
+  host       TEXT NOT NULL,
+  run        INTEGER NOT NULL,
+  pid        INTEGER NOT NULL DEFAULT 0,
+  log_file   TEXT NOT NULL,
+  log_offset INTEGER NOT NULL DEFAULT 0,
+  exit_code  INTEGER,
+  exit_lost  INTEGER NOT NULL DEFAULT 0,
+  exited_at  INTEGER,
+  started_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS host_runs_host ON host_runs (host, exited_at);
 
 -- 凭据：只存名称，值在数据目录凭据区文件里。
 CREATE TABLE IF NOT EXISTS secrets (
@@ -267,10 +290,24 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_pending ON events (target, acked_at, id);
 CREATE INDEX IF NOT EXISTS events_key ON events (key, target);
 
--- 额度读数缓存：每个账号一行。
+-- 额度读数：account 是账号指纹（认不出为 hN:工具，读失败为 hN:工具:fail）；body 是读数 JSON（机器、套餐、窗口或失败原因）。
 CREATE TABLE IF NOT EXISTS quota_cache (
   account TEXT PRIMARY KEY,
   tool    TEXT NOT NULL,
   body    TEXT NOT NULL,
   read_at INTEGER NOT NULL
+);
+
+-- 额度用尽标记：到期前派活避开这个账号；quota --clear 人工解除。
+CREATE TABLE IF NOT EXISTS quota_holds (
+  account TEXT PRIMARY KEY,
+  until   INTEGER NOT NULL,
+  reason  TEXT NOT NULL,
+  since   INTEGER NOT NULL
+);
+
+-- 额度设置：reserve_percent 是给用户留的份额（缺省 20）。
+CREATE TABLE IF NOT EXISTS quota_settings (
+  name  TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
 );

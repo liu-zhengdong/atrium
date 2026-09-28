@@ -131,20 +131,11 @@ func Commands(t *cli.Table) {
 					fmt.Fprintf(&b, "  %s  %s  %s  %s\n", time.UnixMilli(e.At).Format("01-02 15:04"), e.Actor, e.Kind, oneLine(e.Body))
 				}
 			}
-			next := "atrium task wait " + t.ID
-			switch {
-			case t.Status == Todo && d.Ready:
-				next = "atrium task run " + t.ID
-			case t.Status == Todo && len(d.WaitingOn) > 0:
-				next = "atrium task wait " + d.WaitingOn[0]
-			case t.Status.Finished():
-				next = "atrium task ls"
-			}
 			out := struct {
 				Detail
 				Holder string `json:"holder,omitempty"` // 现在谁拿着球（没结束的任务）
 			}{d, h.Holder.Text}
-			return c.Done(out, b.String(), next)
+			return c.Done(out, b.String(), showNext(t, d.Ready, d.WaitingOn))
 		}})
 	t.Add(cli.Command{Path: "task set", Args: "<tN>", Summary: "改任务的描述、依赖或状态",
 		Flags: []cli.Flag{
@@ -327,6 +318,22 @@ func callSurvivingRestart(c *cli.Ctx, path string, out any) error {
 		time.Sleep(300 * time.Millisecond)
 		c.ResetClient()
 	}
+}
+
+// showNext：task show 之后该敲哪一条。能再派的状态（与 Enqueue 接受的一致：可派的
+// todo、blocked、failed）给再派——受阻或失败后再看一遍状态是空转；其余维持原样。
+func showNext(t Task, ready bool, waitingOn []string) string {
+	switch {
+	case t.Status == Todo && ready:
+		return "atrium task run " + t.ID
+	case t.Status == Todo && len(waitingOn) > 0:
+		return "atrium task wait " + waitingOn[0]
+	case t.Status == Blocked || t.Status == Failed:
+		return "atrium task run " + t.ID
+	case t.Status.Finished():
+		return "atrium task ls"
+	}
+	return "atrium task wait " + t.ID
 }
 
 func stateLabel(t Task) string {

@@ -23,6 +23,7 @@ import {
 import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { findingsForNode, findingsForNodes } from "../tasks/patrol.ts";
 import { choicesForNodes, pendingChoices } from "../choices/store.ts";
+import { materialsForNode } from "../materials/store.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
 import { rollups } from "../tasks/rollup-ledger.ts";
 import { progressOf, rollupLabel, type RollupStatus } from "../tasks/rollup.ts";
@@ -760,6 +761,8 @@ export function mapNode(
     findings_below: findingsBelow(db, x, n),
     /** 本块及下层（产品部）的选项单，开放中的在前；网页「选项」页签。 */
     choices: choicesForNodes(db, ids, x.byId),
+    /** 本块挂的资料（没归档的在前，带清理线索）；网页「资料」页签。 */
+    materials: materialsForNode(db, n.id),
     tasks: {
       running: tasks.filter((t) => groupOf(t) === "running"),
       blocked: tasks.filter((t) => groupOf(t) === "blocked"),

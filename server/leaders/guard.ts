@@ -11,6 +11,8 @@ import { ackIds, type EventInbox } from "../tasks/events.ts";
 import { taskPartId } from "./subscriber.ts";
 import { findingNode } from "../tasks/patrol.ts";
 import { choiceNodeId } from "../choices/store.ts";
+import { getMaterial } from "../materials/store.ts";
+import { materialRef } from "../materials/model.ts";
 import { LeaderTokens } from "./tokens.ts";
 import {
   ackVerdict,
@@ -271,6 +273,25 @@ export function registerLeaderGuard(
       }
       // 是不是这份选项单的拍板人由 choices/store.ts 按节点设置判，这里不重复。
       case "choice-decide":
+        break;
+      // 资料：挂到负责的部分里；归档、恢复、留下看资料挂在哪。取资料不限。
+      case "material-add":
+        if (typeof body.node === "string" && body.node.trim())
+          verdict = scopeVerdict(leader, scope, [
+            nodeCheck(db, body.node.trim(), "节点"),
+          ]);
+        break;
+      case "material": {
+        const material = getMaterial(db, idParam(request));
+        verdict = scopeVerdict(leader, scope, [
+          {
+            what: `资料 ${materialRef(material.id)}（挂在 ${ref(material.node_id)}）`,
+            node: material.node_id,
+          },
+        ]);
+        break;
+      }
+      case "material-read":
         break;
     }
     if (verdict) throw forbid(verdict);

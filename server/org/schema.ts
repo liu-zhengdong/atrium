@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { ensurePointTables } from "./points.ts";
 import { ensureAspectColumns } from "./aspects.ts";
+import { ensureMaterialTables } from "../materials/store.ts";
 
 /** All org tables are additive and safe to create on every service start. */
 export function ensureOrgTables(db: DatabaseSync) {
@@ -51,4 +52,6 @@ export function ensureOrgTables(db: DatabaseSync) {
     BEFORE DELETE ON org_nodes BEGIN SELECT RAISE(ABORT,'org_nodes archive only'); END;`);
   ensurePointTables(db);
   ensureAspectColumns(db);
+  // 资料挂在节点上（t192）：随组织树一起建，派活附清单时表一定在。
+  ensureMaterialTables(db);
 }

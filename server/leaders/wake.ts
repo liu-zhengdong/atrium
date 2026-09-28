@@ -118,6 +118,18 @@ const field = (detail: unknown, key: string, max: number) => {
 };
 
 export function eventLine(event: PromptEvent) {
+  if (event.kind === "material_stale" || event.kind === "material_purge") {
+    const detail = event.detail as {
+      node?: string;
+      materials?: { ref: string; name: string; reason: string }[];
+      more?: number;
+    } | null;
+    return `- #${event.id} ${event.kind === "material_stale" ? `疑似没用的资料 ${detail?.node ?? ""}` : "可以真删的资料（问用户）"}：${(
+      detail?.materials ?? []
+    )
+      .map((m) => `${m.ref} ${m.name.slice(0, 40)}（${m.reason}）`)
+      .join("；")}${detail?.more ? `；另有 ${detail.more} 份` : ""}`;
+  }
   if (event.kind === "patrol_findings") {
     const detail = event.detail as {
       node?: string;
@@ -169,6 +181,8 @@ export const EVENT_WORDS: Record<string, string> = {
   worker_advice: "执行者升降建议",
   skill_proposal: "技能修订提议",
   schedule_failed: "周期任务没建成",
+  material_stale: "资料疑似没用",
+  material_purge: "资料可以真删",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
 
@@ -236,12 +250,13 @@ export function leaderPrompt(input: PromptInput): string {
     `- 请专员：atrium task set tN --ask 前端；会审：atrium review add 议题 --concerns 前端,后端 --part ${home}`,
     `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,
     `- 子节点指派 leader：atrium org edit 子节点 --leader aM`,
+    "- 资料：atrium material ls --node oN；疑似没用的（资料清理线索）你来定：用不上就 atrium material archive mN --note 原因（只归档不删，可恢复），要留就 atrium material keep mN --note 原因（之后不再提）；拿不准先 atrium material show mN 看谁读过",
     "- 备忘：atrium memo edit 文本（覆盖写，超过上限会被拒，先精简）；看全：atrium memo show",
     "- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--issue N] [--task tN] [--supersedes dN]；推翻：atrium decision supersede dN --by dM",
     "",
     "## 权限边界（服务端强制，越权会被拒）",
-    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审；改这些节点的要点、阶段与全景人话字段；写自己的备忘与决定记录；给子节点指派下层 leader。",
-    "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、拍板上交的会审。",
+    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料；写自己的备忘与决定记录；给子节点指派下层 leader。",
+    "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、拍板上交的会审、真删资料。",
     "",
     `## 上交（投给 ${input.upstream}；只有这四类才上交，其余自己处理）`,
     "- shipped 已上线：只在里程碑／阶段达成时上交 → atrium leader escalate --kind shipped 说明 --task tN；单个任务上线运行时已自动通知秘书，不必再报",

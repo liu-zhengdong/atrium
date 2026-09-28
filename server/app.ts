@@ -30,6 +30,7 @@ import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
+import { registerMaterialRoutes } from "./materials/routes.ts";
 import { registerChoiceRoutes } from "./choices/routes.ts";
 import { registerHostRoutes } from "./hosts/routes.ts";
 import {
@@ -295,6 +296,8 @@ export async function createApp(options: {
   importLegacyState(db, { legacyDir: options.legacyDir });
   registerLeaderRoutes(app, db, taskRunner.inbox);
   registerMemoRoutes(app, db);
+  // 资料（t192）：文件在 <ATRIUM_DATA>/materials/；表要在全景变更检测挂触发器之前建好。
+  registerMaterialRoutes(app, db, resolve(options.data));
   // 选项单的表要在全景变更检测挂触发器（registerMapRoutes）之前建好。
   registerChoiceRoutes(app, db, taskRunner.inbox);
   const leaderWaker = new LeaderWaker(db, taskRunner.inbox, leaderTokens, {

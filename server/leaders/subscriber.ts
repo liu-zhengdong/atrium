@@ -92,3 +92,18 @@ export function partRoute(db: DatabaseSync, nodeId: number): Route {
     registered: registeredLeaders(db),
   });
 }
+
+/** 一批部分各自投给谁：节点表与已登记的 leader 只读一次。 */
+export function partRoutes(
+  db: DatabaseSync,
+  ids: readonly number[],
+): Map<number, Route> {
+  const list = nodes(db);
+  const registered = registeredLeaders(db);
+  return new Map(
+    ids.map((id) => [
+      id,
+      routeTaskEvent({ owner: null, chain: chainFrom(list, id), registered }),
+    ]),
+  );
+}

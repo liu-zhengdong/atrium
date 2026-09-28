@@ -194,9 +194,11 @@ test("派活闭环：建 worktree、白名单环境拉起、日志落盘、关�
   });
   assert.doesNotMatch(
     seen,
-    /HERDR_|CLAUDECODE|ATRIUM_(?!WORKER=1\n|TEST_CONCURRENCY=[1-9][0-9]*\n)/,
+    /HERDR_|CLAUDECODE|ATRIUM_(?!WORKER=1\n|TEST_CONCURRENCY=[1-9][0-9]*\n|TASK=t1\n)/,
   );
   assert.match(seen, /^ATRIUM_WORKER=1$/m);
+  // 执行者 material get 时把读取记在这件任务上（t192）。
+  assert.match(seen, /^ATRIUM_TASK=t1$/m);
   assert.match(seen, /^ATRIUM_TEST_CONCURRENCY=[1-9][0-9]*$/m);
 
   const log = await call("GET", "/api/tasks/t1/log?after=0");

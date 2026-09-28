@@ -3,6 +3,11 @@ import { nodeByAddress, nodes, one, ref, type DocRow } from "../org/model.ts";
 import { chainPoints } from "../org/points.ts";
 import { appliedPoints, resolveApplies } from "../org/aspects.ts";
 import { Problem } from "../problem.ts";
+import {
+  contextMaterialLines,
+  type ContextMaterial,
+} from "../materials/model.ts";
+import { contextMaterials } from "../materials/store.ts";
 
 /**
  * `atrium map context <节点>`（#322 第 4 步）：从根到本节点的人话链、本块组成、现状与要点，压成一段短文，
@@ -11,8 +16,11 @@ import { Problem } from "../problem.ts";
  * 归属链之外（#373）再附两类别处的要点，各注明来源（「安全 · 适用于网页」）：管方面的部分里适用于本节点的
  * （自动牵涉），以及任务 `--also` 显式牵涉的部分的要点。
  *
+ * 本节点及上级挂的资料（t192）只附清单（短号、名称、一句话），执行者按需 `atrium material get mN`；
+ * 归档的、被新资料取代的不列。
+ *
  * 有长度上限（缺省 CONTEXT_MAX 字）。超长时按重要程度保留：位置链 > 本块是什么 > 本块要点 > 上级要点（近的先）
- * 与牵涉部分的要点 > 上一层是什么 > 现状与接下来 > 组成 > 更上层是什么；丢掉或截短了就在末尾给全文命令。
+ * 与牵涉部分的要点 > 资料清单 > 上一层是什么 > 现状与接下来 > 组成 > 更上层是什么；丢掉或截短了就在末尾给全文命令。
  * 纯函数 formatContext 不读库。
  */
 
@@ -44,6 +52,8 @@ export type ContextInput = {
   points: { name: string; points: ContextPoint[] }[];
   /** 归属链之外附进来的要点：来源（「安全 · 适用于网页」）与条目。 */
   applied?: { source: string; points: ContextPoint[] }[];
+  /** 本节点及上级挂的资料（没归档、没被取代的）。 */
+  materials?: ContextMaterial[];
 };
 export type Context = {
   ref: string;
@@ -136,6 +146,16 @@ export function formatContext(
       ),
     );
   }
+  const materials = contextMaterialLines(input.materials ?? [], self);
+  if (materials.length) {
+    add(
+      1500,
+      0,
+      "资料（本节点及上级挂的；要看就 atrium material get mN，取到当前目录）：",
+    );
+    // 比要点低、比上一层是什么高。
+    materials.forEach((line, i) => add(1501 + i, 4 + i / 100, line));
+  }
   const budget = max - chars(more) - 1;
   const kept: typeof items = [];
   let used = 0;
@@ -151,10 +171,14 @@ export function formatContext(
   }
   // 只剩「要点」标题没有条目时去掉标题。
   const hasPoint = kept.some((k) => k.order > 60 && k.order < 1000);
-  const hasApplied = kept.some((k) => k.order > 1000);
+  const hasApplied = kept.some((k) => k.order > 1000 && k.order < 1500);
+  const hasMaterial = kept.some((k) => k.order > 1500);
   const lines = kept
     .filter(
-      (k) => (k.order !== 60 || hasPoint) && (k.order !== 1000 || hasApplied),
+      (k) =>
+        (k.order !== 60 || hasPoint) &&
+        (k.order !== 1000 || hasApplied) &&
+        (k.order !== 1500 || hasMaterial),
     )
     .sort((a, b) => a.order - b.order)
     .map((k) => k.text);
@@ -202,8 +226,10 @@ export function contextOf(
     }
   };
   const chain: ContextLevel[] = [];
+  const chainIds: number[] = [];
   for (let c = list.find((n) => n.id === id); c;) {
     const f = fieldsOf(c.id);
+    chainIds.unshift(c.id);
     chain.unshift({
       ref: ref(c.id),
       name: c.name,
@@ -232,6 +258,14 @@ export function contextOf(
         points: level.points,
       })),
       applied: appliedPoints(db, id, also),
+      materials: contextMaterials(
+        db,
+        chainIds.map((nodeId, i) => ({
+          id: nodeId,
+          ref: ref(nodeId),
+          distance: chainIds.length - 1 - i,
+        })),
+      ),
     },
     ref(id),
     max,

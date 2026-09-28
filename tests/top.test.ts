@@ -1197,3 +1197,46 @@ test("看板：有 leader 时单列一段，写负责的节点、最近一次唤
     /\nleader\n/,
   );
 });
+
+test("看板：发版失败醒目一行，合入让路一行写在等谁、等了多久；状态列写发版失败与让路（t265）", () => {
+  const frame = renderTop(
+    snapshot([
+      row({
+        ref: "t260",
+        status: "done",
+        delivery_stage: "merged",
+        urgent: true,
+        release_failed: "发版工作流挂在 npm run check",
+        action: null,
+        log_at: 0,
+      }),
+      row({
+        ref: "t261",
+        status: "done",
+        delivery_stage: "merge_queued",
+        merge_held: { by: "t260（等发版）", waited_ms: 15 * minute },
+        action: null,
+        log_at: 0,
+      }),
+    ]),
+    { width: 120, now: NOW, footer: false, color: false },
+  );
+  const lines = frame.split("\n");
+  assert.equal(lines[1], "! t260 发版失败：发版工作流挂在 npm run check");
+  assert.equal(lines[2], "合入让路：1 件等紧急 t260（等发版） · 已等 15 分钟");
+  assert.match(frame, /t260 .*发版失败/);
+  assert.match(frame, /t261 .*让路/);
+  // 着色时发版失败标红。
+  const colored = renderTop(
+    snapshot([
+      row({
+        ref: "t260",
+        status: "done",
+        delivery_stage: "merged",
+        release_failed: "x",
+      }),
+    ]),
+    { width: 120, now: NOW, footer: false, color: true },
+  );
+  assert.ok(colored.includes("\x1b[1m\x1b[31m! t260 发版失败：x\x1b[0m"));
+});

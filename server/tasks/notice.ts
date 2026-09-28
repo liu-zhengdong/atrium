@@ -101,14 +101,17 @@ export function publishTask(
   const key =
     kind === "online" || kind === "online_failed"
       ? kind
-      : // 上线验证没通过、无法验证（t182）：同一任务只留最新一条，不和完成、失败合并。
-        kind.startsWith("verify_")
-        ? "verify"
-        : eventLevel(kind, detail) === "info"
-          ? kind
-          : kind.startsWith("ci")
-            ? "ci"
-            : "outcome";
+      : // 发版失败与超时（t265）同一任务只留最新一条，不和完成、失败合并。
+        kind === "release_failed" || kind === "release_overdue"
+        ? "release"
+        : // 上线验证没通过、无法验证（t182）：同一任务只留最新一条，不和完成、失败合并。
+          kind.startsWith("verify_")
+          ? "verify"
+          : eventLevel(kind, detail) === "info"
+            ? kind
+            : kind.startsWith("ci")
+              ? "ci"
+              : "outcome";
   // 上游失败（t253）：告诉负责人下游有哪些在等它、可以怎么办，别让下游一直挂着。
   const downstream =
     kind === "failed" || kind === "online_failed"

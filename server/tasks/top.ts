@@ -11,13 +11,13 @@ import { tellCounts } from "./tell-ledger.ts";
 import { concernStates } from "./concerns.ts";
 import type { ConcernState } from "./concern-gate.ts";
 import { holderFacts } from "./holder-facts.ts";
-import { holderOf, type Holder } from "./holder.ts";
+import { heldWho, holderOf, type Holder } from "./holder.ts";
 import { runningHostNames } from "../hosts/model.ts";
 import { idleWaits } from "./queue.ts";
 import { idleWaitText, isIdle } from "./priority.ts";
 import { rollups } from "./rollup-ledger.ts";
 import { progressOf } from "./rollup.ts";
-import { urgentInMergeFlow } from "./urgent-ledger.ts";
+import { urgentFlowStages } from "./urgent-ledger.ts";
 import {
   VERIFY_TOP_SQL,
   verifyParents,
@@ -72,6 +72,10 @@ export type TopRow = NoteView & {
   verify?: VerifyView | null;
   /** 这是上线验证任务：验证的是哪个任务（tN）；不是为 null。 */
   verify_of?: string | null;
+  /** 排队合入、在给紧急任务让路（t265）：在等谁（「t260（等发版）」）、已等多久；没让路为 null，旧版服务不给。 */
+  merge_held?: { by: string; waited_ms: number | null } | null;
+  /** 已合入等上线，但发版失败或太久没出版本（t265）：挂在哪的短句；没有为 null，旧版服务不给。 */
+  release_failed?: string | null;
 };
 
 export type TopTotal = {
@@ -261,7 +265,7 @@ export function topRows(
     now,
   );
   // 紧急任务在合入流程里时普通任务的合入暂停（t215）：一次查出，各行共用。
-  const urgentFlow = urgentInMergeFlow(db);
+  const urgentFlow = urgentFlowStages(db, now);
   // 上线验证（t182）：已上线的原任务的验证状态、哪些行是验证任务，各一次查出。
   const verifies = verifyViews(
     db,
@@ -320,13 +324,20 @@ export function topRows(
           db,
           row,
           waiting ? { reason: queuedReason } : null,
-          { inbox, urgentFlow },
+          { inbox, urgentFlow, now },
           hosts,
         );
         return {
           // 已上线的任务在验证上的持球人（验证执行者、收到没通过事件的负责人）。
           holder: holderOf(facts) ?? verifyHolder(verifies.get(row.id) ?? null),
           checking: facts.checking ?? null,
+          merge_held: facts.merge_held_by?.length
+            ? {
+                by: heldWho(facts.merge_held_by, facts.merge_held_stages),
+                waited_ms: facts.merge_held_ms ?? null,
+              }
+            : null,
+          release_failed: facts.release_failed ?? null,
         };
       })(),
       ...noteView(db, row.id, row.status),

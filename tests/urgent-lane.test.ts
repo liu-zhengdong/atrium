@@ -379,8 +379,16 @@ test("合入暂停：有紧急任务已合入等上线时，其他任务的合�
   queue.kick();
   assert.deepEqual(kinds(2), ["merge_paused"], "同一段暂停只记一次");
   assert.deepEqual(published, [[2, "merge_paused"]]);
-  const row = topRows(db, Date.now()).rows.find((item) => item.ref === "t2")!;
-  assert.equal(row.holder?.text, "合入暂停：等紧急 t1 先上线");
+  // 写清在等谁（在哪一段）、已等多久（t265）。
+  const row = topRows(db, Date.now() + 5 * 60_000).rows.find(
+    (item) => item.ref === "t2",
+  )!;
+  assert.equal(row.holder?.text, "合入让路：等紧急 t1（等发版） · 已等 5 分钟");
+  assert.equal(row.merge_held?.by, "t1（等发版）");
+  // 发版失败记下后（t265）立刻不再让路，不等超时。
+  db.prepare("UPDATE tasks SET release_failed_at=? WHERE id=1").run(Date.now());
+  assert.deepEqual(urgentInMergeFlow(db), []);
+  db.prepare("UPDATE tasks SET release_failed_at=NULL WHERE id=1").run();
   // 发版迟迟不来（超过发版超时提醒）就不再挡别的合入。
   assert.deepEqual(urgentInMergeFlow(db), [1]);
   assert.deepEqual(urgentInMergeFlow(db, Date.now() + 31 * 60_000), []);

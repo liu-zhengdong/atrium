@@ -20,6 +20,7 @@ import type { Holder } from "../server/tasks/holder.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
 import { tagTitle } from "../server/tasks/priority.ts";
+import { laneAlerts } from "../server/tasks/lane-view.ts";
 import {
   verifyActionText,
   verifyStateText,
@@ -73,6 +74,10 @@ export type TopRow = {
   verify?: VerifyView | null;
   /** 这是上线验证任务：验证的是哪个任务；旧版服务没有这个字段。 */
   verify_of?: string | null;
+  /** 在给紧急任务让路（t265）：在等谁、已等多久；旧版服务没有这个字段。 */
+  merge_held?: { by: string; waited_ms: number | null } | null;
+  /** 发版失败或太久没出版本（t265）：挂在哪；旧版服务没有这个字段。 */
+  release_failed?: string | null;
 };
 
 /**
@@ -266,9 +271,10 @@ function state(row: TopRow, now: number) {
   const kind = phase(row);
   if (kind === "queued") return `排队${row.reason ? `（${row.reason}）` : ""}`;
   if (kind === "reviewing") return "审阅中";
-  if (kind === "merge_queued") return "排队合入";
+  // 让路与发版失败（t265）的详情在抬头下的提示行里。
+  if (kind === "merge_queued") return row.merge_held ? "让路" : "排队合入";
   if (kind === "merging") return "合入中";
-  if (kind === "merged") return "已合入";
+  if (kind === "merged") return row.release_failed ? "发版失败" : "已合入";
   // 上线后的端到端验证（t182）：已上线 · 验证中／验证没过／无法验证／验证通过。
   if (kind === "online")
     return row.verify ? verifyStateText(row.verify) : "已上线";
@@ -320,6 +326,7 @@ export type Frame = {
 };
 
 const DIM = "\x1b[2m";
+const RED = "\x1b[1m\x1b[31m";
 const RESET = "\x1b[0m";
 const faint = (text: string) => (text ? `${DIM}${text}${RESET}` : text);
 
@@ -455,6 +462,10 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const choice = snapshot.choices
     ? pendingLine(snapshot.choices.list, snapshot.choices.open)
     : null;
+  // 发版失败（醒目）与合入让路在等谁、等了多久（t265）。
+  const lane = laneAlerts(snapshot.rows);
+  const alarm = (text: string) =>
+    frame.color ? `${RED}${text}${RESET}` : text;
   const lines = [
     pad(oneLine(head, headRoom), headRoom) + clock,
     ...(choice ? [oneLine(choice, frame.width)] : []),
@@ -467,6 +478,8 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
           ),
         ]
       : []),
+    ...lane.release.map((line) => alarm(oneLine(`! ${line}`, frame.width))),
+    ...(lane.held ? [oneLine(lane.held, frame.width)] : []),
     ...rows.flatMap((row, index) => {
       // 原因再长也不能顶出屏幕：状态列的上限是它自己的宽度加最近动作那段的空位。
       const cell = oneLine(states[index]!, plan.stateW + 2 + plan.actionW);

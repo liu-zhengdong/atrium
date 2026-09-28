@@ -332,7 +332,7 @@ test("持球人：合入前等重跑说「检查没跑成，等重跑」，原�
       rerun: { attempt: 2, reason: "超时" },
       merge_held_by: ["t7"],
     })?.text,
-    "合入暂停：等紧急 t7 先上线",
+    "合入让路：等紧急 t7",
   );
   assert.equal(
     holderOf({ ...base, status: "done", delivery_stage: "merge_queued" })?.text,

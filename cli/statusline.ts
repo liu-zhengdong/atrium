@@ -18,6 +18,7 @@ import {
   secretaryText,
   type SecretaryTone,
 } from "../server/tasks/secretary-watch.ts";
+import { laneAlerts } from "../server/tasks/lane-view.ts";
 
 /**
  * `atrium statusline`（#355）：Claude Code 状态栏。数据经服务取（`/api/tasks/top` 与 `/api/tasks/plan`），
@@ -184,6 +185,8 @@ export function renderStatusline(input: StatuslineInput): string {
   const { snapshot, now } = input;
   // 验证任务由它验证的原任务那一行代表（t182），原任务不在视图里时照常单列。
   const refs = new Set(snapshot.rows.map((row) => row.ref));
+  // 发版失败醒目单列，给紧急任务让路的合入并成一行（t265）。
+  const lane = laneAlerts(snapshot.rows);
   const held = snapshot.rows
     .filter(
       (row): row is TopRow & { holder: Holder } =>
@@ -196,6 +199,8 @@ export function renderStatusline(input: StatuslineInput): string {
     );
   const count = (kind: HolderKind) =>
     held.filter((row) => row.holder.kind === kind).length;
+  // 已在上面的提示行里说过的不再逐件列。
+  const listed = held.filter((row) => !row.merge_held && !row.release_failed);
   const leaders = (snapshot.leaders ?? []).filter(
     (l) => l.wake?.status === "running" || l.events > 0,
   );
@@ -255,7 +260,10 @@ export function renderStatusline(input: StatuslineInput): string {
   // 紧急任务太多（t215）：「紧急任务有 N 个，太多就等于没有紧急」，不拒绝。
   if (snapshot.urgent?.warning)
     lines.push(paint(`${BOLD}${RED}`, `! ${snapshot.urgent.warning}`));
-  const items = groupRows(held);
+  for (const line of lane.release)
+    lines.push(paint(`${BOLD}${RED}`, `! ${oneLine(line, 80)}`));
+  if (lane.held) lines.push(`${paint(CYAN, MARK.merge[0])} ${lane.held}`);
+  const items = groupRows(listed);
   for (const item of items.slice(0, TASK_LINES))
     lines.push(
       "row" in item

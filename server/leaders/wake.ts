@@ -147,6 +147,16 @@ export function eventLine(event: PromptEvent) {
       `  - ${field(event.detail, "hint", 300)}`,
     ].join("\n");
   }
+  // 发版失败（t265）：挂在哪、日志链接与失败日志尾部，照着开修复任务（紧急的修复同样标紧急）。
+  if (event.kind === "release_failed") {
+    const log = field(event.detail, "log", 1500);
+    return [
+      `- #${event.id} ${event.task ?? ""} ${eventWord(event.kind)} ${field(event.detail, "title", 60)}：${field(event.detail, "reason", 400)}`,
+      ...(log
+        ? ["  失败日志尾部：", ...log.split("\n").map((line) => `    ${line}`)]
+        : []),
+    ].join("\n");
+  }
   if (event.kind === "secret_stale") {
     const detail = event.detail as {
       node?: string;
@@ -226,6 +236,7 @@ export const EVENT_WORDS: Record<string, string> = {
   verify_failed: "上线验证没过",
   verify_unverifiable: "上线后无法验证",
   total_stuck: "下面有子任务卡住",
+  release_failed: "发版失败",
   release_overdue: "等发版超时",
   merged: "已合入",
   merge_returned: "合入被打回",

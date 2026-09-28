@@ -482,13 +482,15 @@ export function urgentOrder(a: UrgentRival, b: UrgentRival): number {
 /** 紧急任务各阶段推送给谁（t215）：秘书（leaders/route.ts 的 SECRETARY）与用户（接推送前走事件）。 */
 export const URGENT_WATCHERS = ["secretary", "u1"] as const;
 
-/** 紧急阶段里要处理的三种（t219）：上线、卡住（换人也没进展）、止损动作失败。 */
-export type UrgentAlert = "urgent_online" | "urgent_stuck" | "urgent_stopgap";
+/** 紧急阶段里要处理的（t219）：上线、卡住（换人也没进展）、止损动作失败；发版失败或太久没出版本（t265）。 */
+export type UrgentAlert =
+  "urgent_online" | "urgent_stuck" | "urgent_stopgap" | "urgent_release";
 
 /**
  * 紧急任务的这个阶段要不要叫醒秘书、推给用户（t219）；其余阶段只作知会（进 events digest，不叫醒）。
  * 卡死判定（20 分钟）比换人（10 分钟没进展）晚，紧急任务报卡死就是换人也没进展。
- * 失败、受阻、上线失败另有普通结果事件按负责人投递，这里不重复叫醒。
+ * 发版失败或太久没出版本（t265）：负责的 leader 另收结果事件，紧急的同时叫醒秘书——整条合入队列刚为它让过路。
+ * 失败、受阻、自升级失败另有普通结果事件按负责人投递，这里不重复叫醒。
  */
 export function urgentAlert(
   kind: string,
@@ -496,6 +498,8 @@ export function urgentAlert(
 ): UrgentAlert | null {
   if (kind === "online") return "urgent_online";
   if (kind === "stalled") return "urgent_stuck";
+  if (kind === "release_failed" || kind === "release_overdue")
+    return "urgent_release";
   if (
     kind === "stopgap" &&
     typeof detail.failed === "number" &&
@@ -522,6 +526,8 @@ export function urgentStage(kind: string): string | null {
     case "online":
       return "上线";
     case "online_failed":
+    case "release_failed":
+    case "release_overdue":
       return "上线失败";
     case "failed":
       return "失败";

@@ -15,7 +15,7 @@ import {
   type HolderFacts,
 } from "./holder.ts";
 import { scheduleOf } from "./schedule.ts";
-import { urgentInMergeFlow } from "./urgent-ledger.ts";
+import { urgentFlowStages, type UrgentFlowStage } from "./urgent-ledger.ts";
 
 /** 从账本、收件箱、会审表取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
 
@@ -37,6 +37,9 @@ const KINDS = [
   "merge_check_quiet",
   "worker_quiet",
   "hang_nudged",
+  "merge_paused",
+  "release_failed",
+  "release_overdue",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -74,7 +77,11 @@ export function holderFacts(
   db: DatabaseSync,
   row: TaskRow,
   queued: { reason: string | null } | null,
-  tables: { inbox: boolean; urgentFlow?: readonly number[] } = {
+  tables: {
+    inbox: boolean;
+    urgentFlow?: readonly { id: number; stage: UrgentFlowStage }[];
+    now?: number;
+  } = {
     inbox: hasTable(db, "task_inbox"),
   },
   hosts?: ReadonlyMap<number, string>,
@@ -202,12 +209,35 @@ export function holderFacts(
       ? { by: text(parse(preemptedAt.detail).by) }
       : null;
   // 普通任务排队合入时，有紧急任务在合入流程里就暂停（merge-runtime 同一判定）。
-  const heldBy =
+  const held =
     row.delivery_stage === "merge_queued" && row.urgent !== 1
-      ? (tables.urgentFlow ?? urgentInMergeFlow(db))
-          .filter((id) => id !== row.id)
-          .map(taskRef)
+      ? (tables.urgentFlow ?? urgentFlowStages(db)).filter(
+          (item) => item.id !== row.id,
+        )
       : [];
+  // 这一段让路从哪时起（t265）：这次排队合入之后最早记的那条暂停。
+  const pausedAt = held.length
+    ? events.find(
+        (e) =>
+          e.kind === "merge_paused" && e.id > (last("merge_queued")?.id ?? 0),
+      )?.at
+    : undefined;
+  // 发版失败或太久没出版本（t265）：已合入等上线、记了 release_failed_at 的，取最近那条的短句。
+  const releaseDown =
+    row.delivery_stage === "merged" &&
+    row.online_wait === 1 &&
+    row.release_failed_at != null;
+  const releaseEvent = releaseDown
+    ? events.findLast(
+        (e) => e.kind === "release_failed" || e.kind === "release_overdue",
+      )
+    : undefined;
+  const releaseDetail = releaseEvent ? parse(releaseEvent.detail) : {};
+  const releaseFailed = releaseDown
+    ? (text(releaseDetail.short) ??
+      text(releaseDetail.reason)?.replace(/^上线失败：/, "") ??
+      "发版没出来")
+    : null;
   const council = one<{ stage: string }>(
     db,
     "SELECT stage FROM task_councils WHERE task_id=?",
@@ -244,7 +274,13 @@ export function holderFacts(
     council_escalated: council?.stage === "escalated",
     checking,
     preempted,
-    merge_held_by: heldBy,
+    merge_held_by: held.map((item) => taskRef(item.id)),
+    merge_held_stages: held.map((item) => item.stage),
+    merge_held_ms:
+      pausedAt === undefined
+        ? null
+        : Math.max(0, (tables.now ?? Date.now()) - pausedAt),
+    release_failed: releaseFailed,
     rerun,
     check_quiet: checkQuiet,
     worker_quiet_ms:

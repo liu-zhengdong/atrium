@@ -70,6 +70,12 @@ export type HolderFacts = {
   preempted?: { by: string | null } | null;
   /** 排队合入时，其他任务的合入因这些紧急任务（tN）暂停（t215）；没暂停为空。 */
   merge_held_by?: string[];
+  /** 与 merge_held_by 一一对应：那件紧急任务在合入流程里的哪一段（排队合入、合入中、等发版、升级上线中，t265）。 */
+  merge_held_stages?: string[];
+  /** 这一段让路已等了多久（毫秒，t265）；还没记暂停为 null。 */
+  merge_held_ms?: number | null;
+  /** 已合入等上线，但发版工作流失败或太久没出版本（t265）：挂在哪的短句；没有为 null。 */
+  release_failed?: string | null;
   /** 合入检查没跑成、在等自动重跑（t204）：第几次、没跑成的原因；不在等为 null。 */
   rerun?: { attempt: number; reason: string | null } | null;
   /** 正在跑的检查日志太久没新输出（t260）：提醒那一句（「检查 5 分钟没输出：卡在 …」）；之后又有输出或没在检查为 null。 */
@@ -437,6 +443,27 @@ export function holderDetail(f: HolderFacts): string | null {
   return null;
 }
 
+/** 发版失败的持球人一句话以它起头（状态栏、top 据此标红）。 */
+export const RELEASE_FAILED = "发版失败：";
+
+/** 让路在等的紧急任务：「t260（等发版）、t261（合入中）」。 */
+export function heldWho(
+  by: readonly string[],
+  stages: readonly string[] = [],
+): string {
+  return by
+    .map((ref, index) => (stages[index] ? `${ref}（${stages[index]}）` : ref))
+    .join("、");
+}
+
+/** 合入让路的一句：在等哪件紧急任务、它在哪一段、已等多久（t265）。 */
+function mergeHeldText(f: HolderFacts) {
+  const waited = f.merge_held_ms
+    ? ` · 已等 ${quietMinutes(f.merge_held_ms)}`
+    : "";
+  return `合入让路：等紧急 ${heldWho(f.merge_held_by ?? [], f.merge_held_stages)}${waited}`;
+}
+
 function judge(f: HolderFacts): Holder | null {
   if (f.council_escalated)
     return { kind: "user", who: "u1", text: "会审上交，等你拍板" };
@@ -451,7 +478,7 @@ function judge(f: HolderFacts): Holder | null {
       kind: "merge",
       who: null,
       text: f.merge_held_by?.length
-        ? `合入暂停：等紧急 ${f.merge_held_by.join("、")} 先上线`
+        ? mergeHeldText(f)
         : f.rerun
           ? `合入前${rerunShort(f.rerun.attempt)}`
           : "排队合入",
@@ -467,7 +494,14 @@ function judge(f: HolderFacts): Holder | null {
           : "合入中：rebase 并跑快检查",
     };
   if (f.delivery_stage === "merged" && f.online_wait === 1)
-    return { kind: "merge", who: null, text: "已合入，等发版上线" };
+    // 发版失败已投给负责人（t265）：球在他手里，看板醒目写出来。
+    return f.release_failed
+      ? {
+          kind: kindOf(f.route),
+          who: f.route,
+          text: `${RELEASE_FAILED}${f.release_failed}`,
+        }
+      : { kind: "merge", who: null, text: "已合入，等发版上线" };
   if (FINISHED.has(f.status)) return null;
   if (f.queued)
     return {

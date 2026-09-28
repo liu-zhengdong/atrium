@@ -26,6 +26,7 @@ export const PUSH_LABEL: Record<PushKind, string> = {
   urgent_stuck: "紧急任务卡住",
   urgent_stopgap: "紧急止损没做成",
   away: "秘书没在听",
+  urgent_release: "紧急任务发版失败",
 };
 
 export type Push = {

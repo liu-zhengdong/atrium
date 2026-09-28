@@ -338,3 +338,40 @@ test("状态栏：旧服务给的整篇原因与多行标题只出一行，按�
   assert.ok(width(story) <= HOLDER_WIDTH + 12, story);
   assert.ok(story.endsWith("## 必须改的问题"), story);
 });
+
+test("状态栏：发版失败醒目单列，给紧急任务让路的合入并成一行写在等谁、等了多久（t265）", () => {
+  const heldHolder = {
+    kind: "merge",
+    who: null,
+    text: "合入让路：等紧急 t1（等发版） · 已等 15 分钟",
+  } as const;
+  const held = (ref: string) =>
+    row(ref, heldHolder, {
+      status: "done",
+      delivery_stage: "merge_queued",
+      merge_held: { by: "t1（等发版）", waited_ms: 15 * 60_000 },
+    });
+  const text = render({
+    snapshot: snapshot([
+      row(
+        "t1",
+        { kind: "leader", who: "a1", text: "发版失败：发版工作流挂在 x" },
+        {
+          status: "done",
+          delivery_stage: "merged",
+          urgent: true,
+          release_failed: "发版工作流挂在 x",
+        },
+      ),
+      held("t2"),
+      held("t3"),
+      row("t4", { kind: "worker", who: "claude+opus:high", text: "在做" }),
+    ]),
+  });
+  assert.deepEqual(text.split("\n"), [
+    "Atrium 在做 1 · leader 处理 1 · 合入 2",
+    "! t1 发版失败：发版工作流挂在 x",
+    "◆ 合入让路：2 件等紧急 t1（等发版） · 已等 15 分钟",
+    "● t4 「任务t4」 claude · opus 12m · 在做",
+  ]);
+});

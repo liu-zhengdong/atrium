@@ -18,6 +18,13 @@ import {
   verificationSection,
 } from "./online.ts";
 import { compareSemver } from "../releases.ts";
+import {
+  overdueFailure,
+  releaseFailure,
+  releaseVerdict,
+  type ReleaseVerdict,
+} from "./release-run.ts";
+import { markReleaseFailed, ReleaseRuns } from "./release-watch.ts";
 
 export type DeployResult = { ok: true } | { ok: false; reason: string };
 
@@ -207,9 +214,13 @@ export class OnlineWatch {
     this.legacyCursor = page.more ? page.lastId : 0;
   }
 
-  /** 按仓库拉一次标签，找含合入提交的最早版本；超时没发版提醒一次。 */
+  /**
+   * 按仓库拉一次标签，找含合入提交的最早版本；还没有的看发版工作流（t265）：
+   * 失败或合入很久没跑起来立刻记上线失败，超时没发版同样记一次。
+   */
   private async findReleases(rows: TaskRow[]) {
     const fetched = new Map<string, boolean>();
+    const runs = new ReleaseRuns(this.options.run);
     for (const row of rows) {
       if (this.closed || !row.repo) return;
       let commit = row.merge_commit;
@@ -253,8 +264,69 @@ export class OnlineWatch {
           }
         }
       }
-      this.overdue(row);
+      const mergedAt = this.mergedAt(row.id);
+      if (mergedAt === null) continue;
+      const verdict = commit
+        ? await this.watchRelease(row, commit, mergedAt, runs)
+        : null;
+      this.overdue(row, mergedAt, verdict);
     }
+  }
+
+  /** 合入时刻（最近一次 merged 事件）；没有为 null。 */
+  private mergedAt(id: number) {
+    const merged = this.db
+      .prepare(
+        "SELECT at FROM task_events WHERE task_id=? AND kind='merged' ORDER BY id DESC LIMIT 1",
+      )
+      .get(id) as { at: number } | undefined;
+    return merged?.at ?? null;
+  }
+
+  /** 看含它的发版跑到哪了；失败或没跑起来就记上线失败并投给负责人（紧急的另叫醒秘书）。 */
+  private async watchRelease(
+    row: TaskRow,
+    commit: string,
+    mergedAt: number,
+    runs: ReleaseRuns,
+  ): Promise<ReleaseVerdict | null> {
+    // 已记过的不再查：发版修好后含它的新版本照样由标签认出来。
+    if (row.release_failed_at != null || !row.repo) return null;
+    const listed = await runs.list(row.repo);
+    if (!listed || this.closed) return null;
+    const verdict = releaseVerdict({
+      runs: listed.runs,
+      commit,
+      mergedAt,
+      now: this.now(),
+    });
+    if (verdict.kind !== "failed" && verdict.kind !== "missing") return verdict;
+    const failure =
+      verdict.kind === "failed"
+        ? await runs.failure(listed.flag, verdict.run.id)
+        : { step: null, tests: [], log: "" };
+    if (this.closed) return verdict;
+    const { reason, short } = releaseFailure({
+      verdict,
+      step: failure.step,
+      tests: failure.tests,
+    });
+    const url = verdict.kind === "failed" ? verdict.run.url : null;
+    const detail = {
+      reason: url ? `${reason}；日志 ${url}` : reason,
+      short,
+      ...(url ? { run_url: url } : {}),
+      ...(failure.step ? { step: failure.step } : {}),
+      ...(failure.tests.length ? { failed_tests: failure.tests } : {}),
+      ...(failure.log ? { log: failure.log } : {}),
+    };
+    if (
+      markReleaseFailed(this.db, row.id, "release_failed", detail, this.now())
+    ) {
+      this.options.changed(row.id);
+      this.options.publish(row.id, "release_failed", detail);
+    }
+    return verdict;
   }
 
   private async mergeCommit(row: {
@@ -290,22 +362,42 @@ export class OnlineWatch {
     }
   }
 
-  private overdue(row: TaskRow) {
-    const merged = this.db
-      .prepare(
-        "SELECT at FROM task_events WHERE task_id=? AND kind='merged' ORDER BY id DESC LIMIT 1",
-      )
-      .get(row.id) as { at: number } | undefined;
-    if (!merged || this.now() - merged.at < RELEASE_OVERDUE_MS) return;
+  /** 合入太久没出版本：同样按上线失败记一次（已因发版失败记过的不重复）。 */
+  private overdue(
+    row: TaskRow,
+    mergedAt: number,
+    verdict: ReleaseVerdict | null,
+  ) {
+    if (
+      row.release_failed_at != null ||
+      this.now() - mergedAt < RELEASE_OVERDUE_MS
+    )
+      return;
+    // 升级前已提醒过的老任务：只补上标记，不再提醒。
     const told = this.db
       .prepare(
         "SELECT 1 FROM task_events WHERE task_id=? AND kind='release_overdue' AND id>(SELECT MAX(id) FROM task_events WHERE task_id=? AND kind='merged') LIMIT 1",
       )
       .get(row.id, row.id);
-    if (told) return;
-    const reason = `合入 ${Math.round(RELEASE_OVERDUE_MS / 60_000)} 分钟仍没有含它的版本；查看仓库的发版工作流`;
-    noteTask(this.db, row.id, "release_overdue", { reason });
-    this.options.publish(row.id, "release_overdue", { reason });
+    if (told) {
+      this.db
+        .prepare(
+          "UPDATE tasks SET release_failed_at=? WHERE id=? AND release_failed_at IS NULL",
+        )
+        .run(this.now(), row.id);
+      return;
+    }
+    const { reason, short } = overdueFailure(
+      Math.round(RELEASE_OVERDUE_MS / 60_000),
+      verdict,
+    );
+    const detail = { reason, short };
+    if (
+      markReleaseFailed(this.db, row.id, "release_overdue", detail, this.now())
+    ) {
+      this.options.changed(row.id);
+      this.options.publish(row.id, "release_overdue", detail);
+    }
   }
 
   private async prepareOnline(id: number, current: string) {

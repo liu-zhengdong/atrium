@@ -52,6 +52,8 @@ export type TaskRow = {
   online_wait: number;
   /** 已为哪个版本发起过自升级；同一版本不重复升级。 */
   online_attempt: string | null;
+  /** 发版工作流失败或太久没出版本、已记上线失败的时刻（t265）；旧库没有列。 */
+  release_failed_at?: number | null;
   owner: string | null;
   auto: number;
   auto_dispatched: number;

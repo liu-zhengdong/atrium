@@ -163,22 +163,46 @@ export function openUrgent(db: DatabaseSync): number[] {
   ).map((row) => row.id);
 }
 
+const MERGE_FLOW_SQL = `SELECT id,delivery_stage,release_version FROM tasks WHERE urgent=1 AND (
+       (delivery_stage IN ('merge_queued','merging') AND status='done')
+       OR (delivery_stage='merged' AND online_wait=1 AND release_failed_at IS NULL AND updated_at>=?))
+     ORDER BY id LIMIT 50`;
+
 /**
- * 在合入流程里的紧急任务：排队合入、合入中，或已合入还在等上线。等上线只算发版超时提醒之前的那段
- * （RELEASE_OVERDUE_MS）：发版迟迟不来时不再挡别的合入，免得整条合入队列一直停着。
+ * 在合入流程里的紧急任务：排队合入、合入中，或已合入还在等上线。等上线只算发版真在进行的那段（t265）：
+ * 发版工作流失败或合入太久没出版本（记了 release_failed_at）就不再挡别的合入，修发版的任务自己再走紧急；
+ * 另留发版超时提醒之前（RELEASE_OVERDUE_MS）的兜底，免得整条合入队列一直停着。
  */
 export function urgentInMergeFlow(
   db: DatabaseSync,
   now = Date.now(),
 ): number[] {
-  return all<{ id: number }>(
-    db,
-    `SELECT id FROM tasks WHERE urgent=1 AND (
-       (delivery_stage IN ('merge_queued','merging') AND status='done')
-       OR (delivery_stage='merged' AND online_wait=1 AND updated_at>=?))
-     ORDER BY id LIMIT 50`,
-    now - RELEASE_OVERDUE_MS,
-  ).map((row) => row.id);
+  return urgentFlowStages(db, now).map((item) => item.id);
+}
+
+/** 紧急任务在合入流程里的哪一段（看板写「在等谁」）。 */
+export type UrgentFlowStage = "排队合入" | "合入中" | "等发版" | "升级上线中";
+
+/** 在合入流程里的紧急任务与各自在哪一段；判定同 urgentInMergeFlow。 */
+export function urgentFlowStages(
+  db: DatabaseSync,
+  now = Date.now(),
+): { id: number; stage: UrgentFlowStage }[] {
+  return all<{
+    id: number;
+    delivery_stage: string;
+    release_version: string | null;
+  }>(db, MERGE_FLOW_SQL, now - RELEASE_OVERDUE_MS).map((row) => ({
+    id: row.id,
+    stage:
+      row.delivery_stage === "merge_queued"
+        ? "排队合入"
+        : row.delivery_stage === "merging"
+          ? "合入中"
+          : row.release_version
+            ? "升级上线中"
+            : "等发版",
+  }));
 }
 
 /** 排队合入中的紧急任务（正在合入的普通任务据此让路）。 */

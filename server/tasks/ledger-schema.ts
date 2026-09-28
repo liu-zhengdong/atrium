@@ -144,6 +144,9 @@ export function ensureTaskTables(db: DatabaseSync) {
     );
   if (!columns.some((column) => column.name === "online_attempt"))
     db.exec("ALTER TABLE tasks ADD COLUMN online_attempt TEXT");
+  // 盯发版（t265）：发版工作流失败或太久没出版本时记下；紧急通道据此不再让路，同一件只报一次。
+  if (!columns.some((column) => column.name === "release_failed_at"))
+    db.exec("ALTER TABLE tasks ADD COLUMN release_failed_at INTEGER");
   // 旧任务回填查过即记下（t125）：别的仓库不再每分钟起 git。
   if (!columns.some((column) => column.name === "online_checked_at"))
     db.exec("ALTER TABLE tasks ADD COLUMN online_checked_at INTEGER");

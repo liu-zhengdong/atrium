@@ -217,6 +217,7 @@ export const STUCK_KINDS: ReadonlySet<string> = new Set([
   "blocked",
   "stalled",
   "online_failed",
+  "release_failed",
   "release_overdue",
   // 上线验证没通过、无法验证（t182）。
   "verify_failed",

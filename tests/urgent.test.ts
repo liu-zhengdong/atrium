@@ -775,6 +775,11 @@ test("阶段推送：开始、止损、抢占、交付、检查、合入、上�
   for (const [kind] of stages)
     assert.equal(urgentAlert(kind), alerts[kind] ?? null, kind);
   assert.equal(urgentAlert("stopgap", { failed: 1 }), "urgent_stopgap");
+  // 发版失败或太久没出版本（t265）：紧急的同时叫醒秘书。
+  assert.equal(urgentAlert("release_failed"), "urgent_release");
+  assert.equal(urgentAlert("release_overdue"), "urgent_release");
+  assert.equal(urgentStage("release_failed"), "上线失败");
+  assert.equal(urgentStage("release_overdue"), "上线失败");
   assert.equal(urgentAlert("stopgap", { failed: 0 }), null);
   assert.equal(urgentAlert("stopgap", { failed: "1" }), null);
   assert.equal(urgentAlert("start", { failed: 1 }), null);
@@ -817,7 +822,46 @@ test("持球人：被抢占暂停的由运行时自己续上；暂停中的合�
   assert.equal(holderOf(queued)?.text, "排队合入");
   assert.equal(
     holderOf({ ...queued, merge_held_by: ["t7", "t8"] })?.text,
-    "合入暂停：等紧急 t7、t8 先上线",
+    "合入让路：等紧急 t7、t8",
+  );
+  // 写清在等谁、它在哪一段、已等多久（t265）。
+  assert.equal(
+    holderOf({
+      ...queued,
+      merge_held_by: ["t7", "t8"],
+      merge_held_stages: ["等发版", "合入中"],
+      merge_held_ms: 15 * 60_000 + 5_000,
+    })?.text,
+    "合入让路：等紧急 t7（等发版）、t8（合入中） · 已等 15 分钟",
+  );
+  // 已合入等上线：发版失败（t265）球在负责人手里，没失败的照旧是合入流水线。
+  const waiting = {
+    ...holderBase,
+    status: "done" as const,
+    delivery_stage: "merged" as const,
+    online_wait: 1,
+    block: null,
+  };
+  assert.deepEqual(holderOf(waiting), {
+    kind: "merge",
+    who: null,
+    text: "已合入，等发版上线",
+  });
+  assert.deepEqual(
+    holderOf({
+      ...waiting,
+      route: "a1",
+      release_failed: "发版工作流挂在 npm run check",
+    }),
+    {
+      kind: "leader",
+      who: "a1",
+      text: "发版失败：发版工作流挂在 npm run check",
+    },
+  );
+  assert.equal(
+    holderOf({ ...waiting, route: "secretary", release_failed: "x" })?.kind,
+    "secretary",
   );
 });
 

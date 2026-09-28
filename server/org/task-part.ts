@@ -17,7 +17,11 @@ export function partForTask(
   if (typeof value !== "string")
     throw usage(`${field}: 应为节点（o4 或 atrium/runtime）`);
   const text = value.trim();
-  if (!hasOrg(db)) throw usage(`${field}: 还没有组织树`, "atrium org import");
+  if (!hasOrg(db))
+    throw usage(
+      `${field}: 还没有组织树`,
+      "atrium org add org --kind org --name 组织 --reason 建树",
+    );
   let id: number;
   try {
     id = nodeByAddress(db, text).id;

@@ -104,7 +104,11 @@ export function renderTopMap(
   maxLines = 20,
 ): string[] {
   const lines = ["全景"];
-  if (!tree) return [...lines, "  还没有组织树：atrium org import --repo 仓库"];
+  if (!tree)
+    return [
+      ...lines,
+      "  还没有组织树：atrium org add org --kind org --name 组织 --reason 建树",
+    ];
   const walk = (nodes: MapTreeNode[], level: number) => {
     for (const node of nodes) {
       if (node.archived) continue;

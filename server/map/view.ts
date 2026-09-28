@@ -320,7 +320,7 @@ export function mapTree(db: DatabaseSync, root?: string, depth = DEPTH_MAX) {
     return {
       root: null,
       tree: null,
-      next: "atrium org import --repo 仓库",
+      next: "atrium org add org --kind org --name 组织 --reason 建树",
     };
   if (start.kind === "concern")
     throw new Problem(

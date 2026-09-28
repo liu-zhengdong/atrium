@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseArgs } from "node:util";
+import { readFileSync } from "node:fs";
+import { renderTopMap } from "../cli/map.ts";
 import { commands, help, main } from "../cli/main.ts";
 import { example, groupOf, guide } from "../cli/guide.ts";
 import { correction, exitCodes, failure } from "../cli/contract.ts";
@@ -199,4 +201,43 @@ test("时间按本地时区显示：UTC 12:07 在 Asia/Shanghai 为 20:07", () =
     if (original === undefined) delete process.env.TZ;
     else process.env.TZ = original;
   }
+});
+
+test("空态提示的下一步是命令表里真实存在的命令，不指已删除的 org import", () => {
+  const commandIn = (text: string) => {
+    const matched = /atrium ([a-z]+)(?: ([a-z]+))?/.exec(text);
+    assert.ok(matched, `没有下一步：${text}`);
+    const one = matched[1]!;
+    const name =
+      matched[2] && commands[`${one} ${matched[2]}`]
+        ? `${one} ${matched[2]}`
+        : one;
+    assert.ok(commands[name], `不认识的命令：${name}`);
+    return name;
+  };
+  assert.equal(commandIn(renderTopMap(null, 80).join("\n")), "org add");
+  for (const file of [
+    "cli/map.ts",
+    "server/map/view.ts",
+    "server/org/task-node.ts",
+    "server/org/task-part.ts",
+  ]) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.ok(
+      !text.includes("atrium org import"),
+      `${file} 还在指已删除的 org import`,
+    );
+    for (const [, suggestion] of text.matchAll(/"(atrium [a-z][^"\n]*)"/g))
+      commandIn(suggestion);
+  }
+  const web = readFileSync(
+    new URL("../server/map/web/app.js", import.meta.url),
+    "utf8",
+  );
+  assert.ok(!web.includes("atrium org import"), "网页空态还在指 org import");
+  const empty = /还没有组织树[\s\S]{0,120}?<code>(atrium [^<]+)<\/code>/.exec(
+    web,
+  );
+  assert.ok(empty, "网页空态没有给下一步");
+  assert.equal(commandIn(empty[1]!), "org add");
 });

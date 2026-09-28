@@ -1389,7 +1389,7 @@ function pageHtml() {
   if (state.mode === "empty")
     return notice(
       "还没有组织树",
-      "在终端运行 <code>atrium org import --repo 仓库</code> 建一份。",
+      "在终端运行 <code>atrium org add org --kind org --name 组织 --reason 建树</code> 建一份。",
     );
   if (state.mode === "missing") {
     const { page, ref, why } = state.missing;

@@ -105,9 +105,10 @@ async function profiles(json: boolean) {
     await client()
   ).get<{ profiles: ProfileRow[] }>("/workers/profiles");
   if (json) printJson(data);
-  else if (!data.profiles.length)
+  else if (!data.profiles.length) {
     console.log("库里还没有执行者档案，派活用内置缺省");
-  else
+    recordNext("接入一份档案：atrium workers edit harness/名字 --file -");
+  } else {
     console.log(
       table([
         ["档案", "版本", "信任", "最高风险", "模型", "加查", "更新"],
@@ -122,7 +123,8 @@ async function profiles(json: boolean) {
         ]),
       ]),
     );
-  recordNext("看档案：atrium workers harness/codex");
+    recordNext(`看档案：atrium workers ${data.profiles[0]!.ref}`);
+  }
 }
 async function workerDetail(worker: string, json: boolean) {
   const data = await (

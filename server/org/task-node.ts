@@ -20,7 +20,7 @@ export function originNode(db: DatabaseSync, address: string): NodeRow {
       "from: 还没有组织树",
       "usage",
       undefined,
-      "atrium org import",
+      "atrium org add org --kind org --name 组织 --reason 建树",
     );
   let node: NodeRow;
   try {

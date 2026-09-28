@@ -46,7 +46,9 @@ import { ServeWaker } from "./secretary-serve.ts";
 
 type ChatMode =
   | { kind: "acp"; command: string; args: string[]; native?: "opencode" }
-  | { kind: "planned"; note: string };
+  | { kind: "planned"; note: string }
+  /** 用工具自己的界面，事件由 atrium secretary bridge 注入会话（t243）。 */
+  | { kind: "bridge"; note: string; next: string };
 
 export const CHAT_TOOLS: Record<string, ChatMode> = {
   opencode: {
@@ -65,7 +67,11 @@ export const CHAT_TOOLS: Record<string, ChatMode> = {
       ),
     ],
   },
-  claude: { kind: "planned", note: "经 claude-code-acp 适配器，后续接入" },
+  claude: {
+    kind: "bridge",
+    note: "Claude Code 走原生界面：在秘书的工作目录直接打开 claude，要处理的事件由 atrium secretary bridge 经会话收件 socket 注入（需要 Claude Code v2.1.224 及以上）；先在那个目录装一次 SessionStart hook，之后每次打开秘书会话自动起 bridge",
+    next: "atrium secretary bridge --install-hook",
+  },
 };
 
 const SUBSCRIBER = "secretary";
@@ -93,6 +99,8 @@ export function chatMode(tool: string) {
       candidate ? `atrium chat --tool ${candidate.ref}` : undefined,
     );
   }
+  if (mode.kind === "bridge")
+    throw new Problem(409, mode.note, "conflict", undefined, mode.next);
   if (mode.kind === "planned")
     throw new Problem(
       409,
@@ -359,7 +367,7 @@ async function runNative(options: {
 export const chatCommand: Command = {
   args: "[--tool opencode|codex] [--cwd 目录] [--new] [--acp] [--allow]",
   about:
-    "和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理",
+    "和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理；Claude Code 直接开原生界面，事件由 atrium secretary bridge 注入",
   options: {
     tool: { type: "string" },
     cwd: { type: "string" },

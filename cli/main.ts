@@ -19,6 +19,7 @@ import {
 } from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
+import { secretaryCommands } from "./secretary.ts";
 import { mapCommands } from "./map.ts";
 import { draftCommands } from "./drafts.ts";
 import { reviewCommands } from "./reviews.ts";
@@ -132,6 +133,7 @@ export const commands: Record<string, Command> = {
   agent: agentCommand,
   ...agentServiceCommands,
   chat: chatCommand,
+  ...secretaryCommands,
   update: updateCommand,
   restart: restartCommand,
 };

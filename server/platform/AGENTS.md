@@ -10,3 +10,4 @@
 - 按名字拉起程序用 `spawnCommand` / `commandInvocation`：Windows 按 PATHEXT 找文件；npm 的 `.cmd` 包装直接用 node 跑目标脚本（参数可带换行），认不出的批处理经 `cmd.exe` 并逐个转义参数、拒绝换行。
 - 跑 shell 命令用 `spawnShell`：Unix `/bin/sh -c`，Windows `cmd.exe /d /s /c`；仓库里的 `.agents/check` 与验收命令按所在平台的 shell 写。
 - 已知限制：执行者日志在 Windows 上以「只追加」句柄交给子进程，MSYS 程序（Git 自带的 sh 等）直接写会失败；真实执行者是 node 或原生程序，不受影响。
+- Claude Code 会话收件地址（t243）：地址认不认、哪些连接错误算会话没了在 `plan.ts`（`messagingEndpoint`、`endpointGone`），连接与写入在 `endpoint.ts`（`net.connect` 同时支持 Unix socket 与 Windows 命名管道；单独成文件，只有 `secretary bridge` 按需加载）。

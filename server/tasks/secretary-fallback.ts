@@ -140,7 +140,8 @@ export type SecretaryAlert = { key: string; pending: number; reason: string };
 
 /**
  * 服务端后台兜底（t242）：有要处理的事件、没有秘书挂着 wait 满 graceMs，就接着 atrium chat 开过的秘书会话
- * 在后台跑一轮；界面持锁时让界面处理。叫不起来（没有会话、连续叫醒到上限、跑失败）就推给用户，
+ * 在后台跑一轮；界面持锁时让界面处理；Claude Code 会话经 bridge 注入在听（t243）也算在听，不另起。
+ * 叫不起来（没有会话、连续叫醒到上限、跑失败）就推给用户，
  * 状态栏按 status() 标红。判定在 secretary-watch.ts。
  */
 export class SecretaryFallback {

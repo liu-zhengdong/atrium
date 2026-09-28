@@ -104,7 +104,18 @@ try {
   if (error.message !== "start") throw error;
 } finally {
   atrium("stop");
-  rmSync(data, { recursive: true, force: true });
+  // stop 在服务放开登记后就返回，进程退出前工作目录（数据目录）还占着：Windows 上删不掉，带重试。
+  // 清理失败不算测速失败，只提示。
+  try {
+    rmSync(data, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+  } catch (error) {
+    console.error(`临时目录没删掉：${data}（${error.code ?? error.message}）`);
+  }
 }
 if (process.exitCode) process.exit();
 if (failed) {

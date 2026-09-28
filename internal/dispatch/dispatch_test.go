@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -16,7 +17,7 @@ func TestPick(t *testing.T) {
 		return []Fact{
 			{ID: "claude+opus", Tool: "claude", Account: "claude", Trust: "medium", MaxRisk: "medium", Installed: true},
 			{ID: "codex+gpt", Tool: "codex", Account: "codex", Trust: "medium", MaxRisk: "medium", Installed: true},
-			{ID: "opencode+m", Tool: "opencode", Account: "opencode", Installed: true, Exclusive: true},
+			{ID: "opencode+m", Tool: "opencode", Account: "opencode", Trust: "unknown", MaxRisk: "low", Installed: true, Exclusive: true},
 			{ID: "kimi", Tool: "kimi", Account: "kimi", Installed: false},
 			{ID: "grok", Tool: "grok", Account: "grok", Installed: true, Refusal: "档案 max_risk=low，低于任务 risk=medium"},
 		}
@@ -30,15 +31,21 @@ func TestPick(t *testing.T) {
 	}{
 		{name: "没数据按档案顺序", in: PickInput{Risk: "low", Facts: base()}, want: "claude+opus", reason: "没有额度数据"},
 		{name: "富余多的在前", in: PickInput{Risk: "low", Facts: base(), Spares: map[string]Spare{
-			"claude": {Known: true, Room: 10}, "codex": {Known: true, Room: 50}}}, want: "codex+gpt", reason: "富余最多"},
+			"claude": {Percent: f(10)}, "codex": {Percent: f(50)}}}, want: "codex+gpt", reason: "富余最多（50.0"},
+		{name: "富余为负也比没数据的靠前", in: PickInput{Risk: "low", Facts: base()[1:3], Spares: map[string]Spare{
+			"codex": {Percent: f(-3.1)}}}, want: "codex+gpt", reason: "富余最多（-3.1"},
 		{name: "见底与用尽不派", in: PickInput{Risk: "low", Facts: base(), Spares: map[string]Spare{
-			"claude": {Known: true, Room: 0, Reason: "已用满"}, "codex": {Held: true, Reason: "用尽"}}}, want: "opencode+m"},
+			"claude": {Percent: f(40), Stop: "额度见底"}, "codex": {Stop: "额度用尽"}}}, want: "opencode+m"},
+		{name: "紧急的活只给 trust≥medium，额度排序在这之后", in: PickInput{Risk: "low", Priority: ledger.Urgent, Facts: base(), Spares: map[string]Spare{
+			"opencode": {Percent: f(90)}, "claude": {Percent: f(5)}, "codex": {Percent: f(1)}}}, want: "claude+opus", reason: "紧急的活只在 trust≥medium 的里挑"},
+		{name: "修复的活同样", in: PickInput{Risk: "low", Priority: ledger.Fix, Facts: base()[2:3]}, reason: "修复的活要 trust≥medium，它是 unknown"},
+		{name: "普通的活不限 trust", in: PickInput{Risk: "low", Priority: ledger.Normal, Facts: base()[2:3]}, want: "opencode+m"},
 		{name: "独占正忙跳过", in: PickInput{Risk: "low", Facts: base()[2:3], Busy: map[string]bool{"opencode": true}}, waiting: true},
 		{name: "试过的不再挑", in: PickInput{Risk: "low", Facts: base(), Exclude: map[string]bool{"claude+opus": true}}, want: "codex+gpt"},
 		{name: "技能优先", in: func() PickInput {
 			fs := base()
 			fs[1].Preferred = 1
-			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"claude": {Known: true, Room: 90}}}
+			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"claude": {Percent: f(90)}}}
 		}(), want: "codex+gpt", reason: "技能指定"},
 		{name: "没人能接", in: PickInput{Risk: "medium", Facts: base()[3:]}, reason: "没有能接的执行者（kimi：没装"},
 	}
@@ -51,6 +58,27 @@ func TestPick(t *testing.T) {
 	v := Pick(PickInput{Risk: "medium", Facts: base()})
 	if v.Candidates[0].Rank != 1 || v.Candidates[len(v.Candidates)-1].Eligible {
 		t.Errorf("能接的在前、不能接的在后：%+v", v.Candidates)
+	}
+}
+
+func TestNeedTrust(t *testing.T) {
+	cases := []struct {
+		priority ledger.Priority
+		risk     string
+		want     string
+	}{
+		{ledger.Urgent, "low", "medium"},
+		{ledger.Fix, "low", "medium"},
+		{ledger.Normal, "low", ""},
+		{ledger.Idle, "low", ""},
+		{ledger.Normal, "medium", "medium"},
+		{ledger.Idle, "high", "medium"},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		if got, why := NeedTrust(c.priority, c.risk); got != c.want || (got != "") != (why != "") {
+			t.Errorf("NeedTrust(%s, %s) = %s %q，应为 %s", c.priority, c.risk, got, why, c.want)
+		}
 	}
 }
 

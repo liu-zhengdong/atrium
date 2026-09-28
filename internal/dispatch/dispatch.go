@@ -357,7 +357,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	if err != nil {
 		return PickView{}, err
 	}
-	return Pick(PickInput{Risk: risk, Facts: facts, Spares: sp, Busy: busy, Exclude: exclude}), nil
+	return Pick(PickInput{Risk: risk, Priority: t.Priority, Facts: facts, Spares: sp, Busy: busy, Exclude: exclude}), nil
 }
 
 // busyTools 是在跑的执行者用到的工具。

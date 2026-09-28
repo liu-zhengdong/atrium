@@ -329,21 +329,31 @@ func TestLinesAndSpare(t *testing.T) {
 	if byAcct["grok"].Hold != nil || byAcct["kimi"].Hold == nil || byAcct["cursor"].Note != "没有额度数据" {
 		t.Error("标记或缺数据行不对")
 	}
+	// 富余就是 quota 一览里那一行的富余（同一个数）；能不能派另看用尽标记与给用户留的份额。
 	cases := []struct {
 		acct  string
-		known bool
-		room  float64
-		held  bool
-	}{{"claude", true, 30, false}, {"codex", true, -10, false}, {"kimi", true, 70, true}, {"cursor", false, 0, false}}
+		spare *float64
+		stop  string
+	}{{"claude", f(10), ""}, {"codex", f(-5), "额度见底：账号 codex 已用 90.0%，须给用户留 20%"},
+		{"kimi", f(30), "额度用尽：额度用尽"}, {"cursor", nil, ""}}
 	for _, c := range cases {
 		s := SpareOf(byAcct[c.acct], 20)
-		if s.Known != c.known || s.Room != c.room || s.Held != c.held || (s.Room <= 0 || s.Held || !s.Known) != (s.Reason != "") {
+		if !reflect.DeepEqual(s.Percent, c.spare) || s.Percent != byAcct[c.acct].SparePercent || s.Stop != c.stop {
 			t.Errorf("%s: %+v", c.acct, s)
 		}
 	}
-	short := Line{Pace: Pace{Account: "claude", UsedPercent: f(10), ShortUsedPct: f(100)}}
-	if s := SpareOf(short, 20); s.Room != -20 {
-		t.Errorf("短窗用光应不能派：%+v", s)
+	for _, c := range []struct {
+		name string
+		l    Line
+		stop bool
+	}{
+		{"已用正好到留给用户的线", Line{Pace: Pace{Account: "claude", UsedPercent: f(80)}}, true},
+		{"差一点", Line{Pace: Pace{Account: "claude", UsedPercent: f(79.9)}}, false},
+		{"短窗用光", Line{Pace: Pace{Account: "claude", UsedPercent: f(10), ShortUsedPct: f(100)}}, true},
+	} {
+		if s := SpareOf(c.l, 20); (s.Stop != "") != c.stop {
+			t.Errorf("%s：%+v", c.name, s)
+		}
 	}
 }
 
@@ -395,7 +405,7 @@ func TestRecordAndRead(t *testing.T) {
 	for _, l := range ov.Lines {
 		spares[l.Account] = SpareOf(l, ov.Reserve)
 	}
-	if ov.Reserve != 50 || spares["claude"].Room != 10 || !spares["codex"].Held || spares["claude"].Stale {
+	if ov.Reserve != 50 || spares["claude"].Stop != "" || spares["codex"].Stop == "" || spares["claude"].Stale {
 		t.Fatalf("%+v %+v", ov, spares)
 	}
 	if !strings.Contains(Format(ov, now), "claude") {

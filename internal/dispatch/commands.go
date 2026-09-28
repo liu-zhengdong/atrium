@@ -119,7 +119,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "派活：进派活队列，自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
 		Flags: []cli.Flag{
-			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：档案能接、额度富余、不正忙）"},
+			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：档案能接、紧急／修复或 risk 高于 low 只挑 trust≥medium、额度富余、不正忙）"},
 			{Name: "risk", Value: "级别", Help: "low（缺省）/ medium / high：执行者档案 max_risk 要够；high 合入前另派审阅"},
 			{Name: "host", Value: "hN", Help: "写死机器（缺省本机优先、空位最多）"},
 			{Name: "secret", Value: "名称", Multi: true, Help: "派活时按名称注入的凭据（从任务部门往上找）"},
@@ -241,7 +241,7 @@ func dryText(r RunResult) string {
 		}
 		extra := ""
 		if c.Spare != nil {
-			extra = fmt.Sprintf("  富余 %.1f", *c.Spare)
+			extra = fmt.Sprintf("  富余 %.1f%%", *c.Spare)
 		}
 		if c.Busy {
 			extra += "  正忙"

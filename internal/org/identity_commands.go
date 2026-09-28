@@ -48,17 +48,18 @@ func identityCommands(t *cli.Table) {
 			}
 			return c.Done(i, "已登记负责人 "+leaderLine(i), "atrium org edit <oN> --leader "+i.ID)
 		}})
-	t.Add(cli.Command{Path: "leader edit", Args: "<aN>", Summary: "改负责人的名字或执行者组合",
+	t.Add(cli.Command{Path: "leader edit", Args: "<aN>", Summary: "改负责人的名字或执行者组合；--delete 删掉",
 		Flags: []cli.Flag{
 			{Name: "name", Value: "名字", Help: "改名"},
 			{Name: "workers", Value: "执行者", Multi: true, Help: "换执行者组合（整组替换，写法同 task run --worker）"},
+			{Name: "delete", Bool: true, Help: "删掉这位负责人（连同备忘）；还负责部门或有没确认的事件时拒绝并列出"},
 		},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<aN>")
 			if err != nil {
 				return err
 			}
-			p := LeaderPatch{Name: c.Opt("name")}
+			p := LeaderPatch{Name: c.Opt("name"), Delete: c.Bool("delete")}
 			if c.Has("workers") {
 				w := c.List("workers")
 				p.Workers = &w
@@ -66,6 +67,9 @@ func identityCommands(t *cli.Table) {
 			var i Identity
 			if err := c.Call("PATCH", "/api/leaders/"+url.PathEscape(id), p, &i); err != nil {
 				return err
+			}
+			if p.Delete {
+				return c.Done(i, fmt.Sprintf("已删负责人 %s %s（连同备忘）", i.ID, i.Name), "atrium leader ls")
 			}
 			return c.Done(i, "已改负责人 "+leaderLine(i), "atrium leader ls "+i.ID)
 		}})

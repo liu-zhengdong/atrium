@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // Fact 是一位候选执行者的事实（运行时收集）。
@@ -24,11 +27,12 @@ type Fact struct {
 
 // PickInput 是挑执行者的全部输入。
 type PickInput struct {
-	Risk    string
-	Facts   []Fact
-	Spares  map[string]Spare // 账号 → 富余；没有的账号表示没数据
-	Busy    map[string]bool  // 在跑的独占工具
-	Exclude map[string]bool  // 这一轮已试过的执行者（换人时不再挑）
+	Risk     string
+	Priority ledger.Priority // 活的分量：紧急、修复只交给够 trust 的（NeedTrust）
+	Facts    []Fact
+	Spares   map[string]Spare // 账号 → 富余与能不能派；没有的账号表示没数据
+	Busy     map[string]bool  // 在跑的独占工具
+	Exclude  map[string]bool  // 这一轮已试过的执行者（换人时不再挑）
 }
 
 // Candidate 是 --dry-run 列出的一位候选。
@@ -39,7 +43,7 @@ type Candidate struct {
 	Eligible bool     `json:"eligible"`
 	Refusals []string `json:"refusals,omitempty"`
 	Busy     bool     `json:"busy,omitempty"`
-	Spare    *float64 `json:"spare,omitempty"` // 富余百分点；没数据为空
+	Spare    *float64 `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
 	Rank     int      `json:"rank,omitempty"`  // 能接的里排第几（1 起）
 }
 
@@ -53,9 +57,24 @@ type PickView struct {
 	Waiting bool `json:"waiting,omitempty"`
 }
 
-// Pick 挑执行者（纯函数）：档案能接、装了、额度没见底、没被标用尽；能接的按技能优先、额度富余排，
-// 没有额度数据按档案顺序；正忙的跳过。
+// NeedTrust 纯判定：活的分量要求的最低 trust。紧急、修复，或 risk 高于 low 的活只交给 trust≥medium 的；其余不限（空）。
+// 返回要求与缘由（给候选的拒绝理由用）。
+func NeedTrust(priority ledger.Priority, risk string) (min, why string) {
+	switch {
+	case priority == ledger.Urgent:
+		return "medium", "紧急的活"
+	case priority == ledger.Fix:
+		return "medium", "修复的活"
+	case workers.RiskLevel(risk) > workers.RiskLevel("low"):
+		return "medium", "risk=" + risk + " 的活"
+	}
+	return "", ""
+}
+
+// Pick 挑执行者（纯函数）：档案能接、装了、trust 够活的分量（NeedTrust）、额度没见底、没被标用尽；
+// 能接的按技能优先、额度富余排（没有富余数据的排在有的后面，之间按档案顺序）；正忙的跳过。
 func Pick(in PickInput) PickView {
+	minTrust, heavy := NeedTrust(in.Priority, in.Risk)
 	v := PickView{Risk: in.Risk, Candidates: []Candidate{}}
 	type row struct {
 		c     Candidate
@@ -75,19 +94,18 @@ func Pick(in PickInput) PickView {
 		if f.Refusal != "" {
 			c.Refusals = append(c.Refusals, f.Refusal)
 		}
+		if minTrust != "" && workers.TrustLevel(f.Trust) < workers.TrustLevel(minTrust) {
+			c.Refusals = append(c.Refusals, fmt.Sprintf("%s要 trust≥%s，它是 %s", heavy, minTrust, f.Trust))
+		}
 		if in.Exclude[f.ID] {
 			c.Refusals = append(c.Refusals, "这一轮已试过")
 		}
 		if s, has := in.Spares[f.Account]; has {
-			switch {
-			case s.Held:
-				c.Refusals = append(c.Refusals, "额度用尽："+s.Reason)
-			case s.Known && s.Room <= 0:
-				c.Refusals = append(c.Refusals, "额度见底："+s.Reason)
+			if s.Stop != "" {
+				c.Refusals = append(c.Refusals, s.Stop)
 			}
-			if s.Known {
-				room := s.Room
-				c.Spare = &room
+			if s.Percent != nil {
+				c.Spare = s.Percent
 				anyData = true
 			}
 		}
@@ -108,11 +126,11 @@ func Pick(in PickInput) PickView {
 		if a.pref != b.pref {
 			return a.pref < b.pref
 		}
-		if anyData {
-			as, bs := spareOr(a.c.Spare), spareOr(b.c.Spare)
-			if as != bs {
-				return as > bs
-			}
+		if (a.c.Spare == nil) != (b.c.Spare == nil) {
+			return a.c.Spare != nil
+		}
+		if a.c.Spare != nil && *a.c.Spare != *b.c.Spare {
+			return *a.c.Spare > *b.c.Spare
 		}
 		return a.order < b.order
 	})
@@ -138,6 +156,9 @@ func Pick(in PickInput) PickView {
 		default:
 			v.Reason = "没有额度数据，按档案顺序取第一个能接的"
 		}
+		if minTrust != "" {
+			v.Reason = heavy + "只在 trust≥" + minTrust + " 的里挑；" + v.Reason
+		}
 		return v
 	}
 	if len(ok) > 0 {
@@ -154,13 +175,6 @@ func Pick(in PickInput) PickView {
 		v.Reason += "（" + strings.Join(why, "；") + "）"
 	}
 	return v
-}
-
-func spareOr(p *float64) float64 {
-	if p == nil {
-		return -1
-	}
-	return *p
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

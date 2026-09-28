@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -12,6 +13,10 @@ func TestRouterAuthAndEnvelope(t *testing.T) {
 	r.AddAuth(func(tok string) (Actor, bool) { return Actor{ID: "u1", Kind: "user"}, tok == "good" })
 	r.Public("GET /health", func(q *Req) (any, error) { return "ok", nil })
 	r.Handle("GET /api/me", func(q *Req) (any, error) { return q.Actor, nil })
+	r.Handle("POST /api/small", func(q *Req) (any, error) {
+		var v map[string]string
+		return v, q.DecodeMax(&v, 32)
+	})
 	r.Handle("GET /api/t/{id}", func(q *Req) (any, error) {
 		id, err := q.Ref("id", "t")
 		if err != nil {
@@ -61,6 +66,13 @@ func TestRouterAuthAndEnvelope(t *testing.T) {
 	}
 	if err := anon.Do(ctx, "GET", "/api/nothing", nil, nil); codeOf(err) != "not_found" {
 		t.Fatalf("未知路由：%v", err)
+	}
+	if err := good.Do(ctx, "POST", "/api/small", map[string]string{"a": "b"}, nil); err != nil {
+		t.Fatalf("上限内：%v", err)
+	}
+	err = good.Do(ctx, "POST", "/api/small", map[string]string{"a": strings.Repeat("x", 64)}, nil)
+	if codeOf(err) != "usage" || !strings.Contains(err.Error(), "请求体超过") {
+		t.Fatalf("超了上限应说清，不报 JSON 不合法：%v", err)
 	}
 }
 

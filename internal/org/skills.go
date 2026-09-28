@@ -19,14 +19,16 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 技能：一类活怎么干——SKILL.md（做法）、附属文件、优先执行者、交付要查什么、要的凭据。
+// 技能：一类活怎么干——SKILL.md（做法）、附属文件（文本或截图等二进制）、优先执行者、交付要查什么、要的凭据。
 // 每次修改追加一版，文件在 skills/<名字>/r<rev>/；派活只在提示词里附 SKILL.md 的路径（SkillPaths）。
+// 大小上限（单个文件 MaxSkillFile、合计 MaxSkillTotal）在上限表。
 const (
 	maxSkillFiles = 16
-	maxSkillBytes = 128 << 10 // 一个技能全部文件合计
 	maxSkillDepth = 3
 	keepSkillRevs = 10 // 每个技能留最近几版
 	maxSummary    = 120
+	// 请求体上限：文件合计上限经 base64 涨 1/3，再留 1MB 给其余字段。
+	maxSkillRequest = MaxSkillTotal<<20/3*4 + 1<<20
 )
 
 type Skill struct {
@@ -44,10 +46,10 @@ type Skill struct {
 	Others    []string `json:"others,omitempty"`
 }
 
-// SkillInput 是 skill add 的输入：Files 为 nil 时沿用上一版的文件；各列表为 nil 时沿用上一版。
+// SkillInput 是 skill add 的输入：Files 为 nil 时沿用上一版的文件（JSON 里内容是 base64）；各列表为 nil 时沿用上一版。
 type SkillInput struct {
 	Name    string            `json:"name"`
-	Files   map[string]string `json:"files,omitempty"`
+	Files   map[string][]byte `json:"files,omitempty"`
 	Workers *[]string         `json:"workers,omitempty"`
 	Checks  *[]string         `json:"checks,omitempty"`
 	Secrets *[]string         `json:"secrets,omitempty"`
@@ -66,11 +68,14 @@ func CheckSkillName(name string) error {
 	return nil
 }
 
-// CheckSkillFiles 纯判定：必须有 SKILL.md（≤6KB），文件数、总大小、路径深度有限，都是文本。
-func CheckSkillFiles(files map[string]string) error {
+// CheckSkillFiles 纯判定：必须有 SKILL.md（文本，≤6KB）；文件数、路径深度、单个文件与合计大小有限。附属文件可以是二进制。
+func CheckSkillFiles(name string, files map[string][]byte) error {
 	body, ok := files["SKILL.md"]
 	if !ok {
 		return api.Usage("技能缺少 SKILL.md")
+	}
+	if !IsText(body) {
+		return api.Usage("files: SKILL.md 不是文本文件")
 	}
 	if len(body) > MaxSkillBody {
 		return Full("skill_body", "", len(body))
@@ -83,13 +88,13 @@ func CheckSkillFiles(files map[string]string) error {
 		if err := CheckRelPath("files", p, maxSkillDepth); err != nil {
 			return err
 		}
-		if !IsText([]byte(c)) {
-			return api.Usage("files: %s 不是文本文件（技能只收文本）", p)
+		if len(c) > MaxSkillFile<<20 {
+			return TooBig("skill_file", p, len(c))
 		}
 		total += len(c)
 	}
-	if total > maxSkillBytes {
-		return api.Usage("技能文件合计 %d 字节，超过 %d KB：删掉不必要的附属文件", total, maxSkillBytes>>10)
+	if total > MaxSkillTotal<<20 {
+		return TooBig("skill_total", name, total)
 	}
 	return nil
 }
@@ -211,8 +216,8 @@ func Skills(ctx context.Context, q store.Querier, data string) ([]Skill, error) 
 }
 
 // ReadSkillFiles 读某一版的全部文件（相对路径 → 内容）。
-func ReadSkillFiles(dir string) (map[string]string, error) {
-	files := map[string]string{}
+func ReadSkillFiles(dir string) (map[string][]byte, error) {
+	files := map[string][]byte{}
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -222,7 +227,7 @@ func ReadSkillFiles(dir string) (map[string]string, error) {
 			return err
 		}
 		rel, _ := filepath.Rel(dir, p)
-		files[filepath.ToSlash(rel)] = string(raw)
+		files[filepath.ToSlash(rel)] = raw
 		return nil
 	})
 	return files, err
@@ -245,7 +250,7 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 		}
 	}
 	if in.Files != nil {
-		if err := CheckSkillFiles(in.Files); err != nil {
+		if err := CheckSkillFiles(in.Name, in.Files); err != nil {
 			return Skill{}, err
 		}
 	}
@@ -288,7 +293,7 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 		}
 		rev := prev.Rev + 1
 		if _, err := tx.ExecContext(ctx, `INSERT INTO skills (`+skillCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.Name, rev, SkillSummary(files["SKILL.md"]), len(files), pick(in.Workers, prev.Workers),
+			in.Name, rev, SkillSummary(string(files["SKILL.md"])), len(files), pick(in.Workers, prev.Workers),
 			pick(in.Checks, prev.Checks), pick(in.Secrets, prev.Secrets), actor, store.Now()); err != nil {
 			return err
 		}
@@ -300,7 +305,7 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 		}
 		dir := skillDir(data, in.Name, rev)
 		for p, c := range files {
-			if err := writeFile(filepath.Join(dir, filepath.FromSlash(p)), []byte(c), 0o600); err != nil {
+			if err := writeFile(filepath.Join(dir, filepath.FromSlash(p)), c, 0o600); err != nil {
 				return err
 			}
 		}
@@ -331,7 +336,7 @@ func ShowSkill(ctx context.Context, q store.Querier, data, name string) (Skill, 
 	if err != nil {
 		return Skill{}, err
 	}
-	k.Body = files["SKILL.md"]
+	k.Body = string(files["SKILL.md"])
 	for p := range files {
 		if p != "SKILL.md" {
 			k.Others = append(k.Others, p)
@@ -352,7 +357,7 @@ func skillRoutes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		var in SkillInput
-		if err := q.Decode(&in); err != nil {
+		if err := q.DecodeMax(&in, maxSkillRequest); err != nil {
 			return nil, err
 		}
 		return SaveSkill(q.Context(), db, data, in, q.Actor.ID)
@@ -360,7 +365,7 @@ func skillRoutes(r *api.Router, env *app.Env) {
 }
 
 // readLocalSkill 把命令行给的 SKILL.md 文件或技能目录读成「相对路径 → 内容」（跳过隐藏文件与目录）。
-func readLocalSkill(path string) (map[string]string, error) {
+func readLocalSkill(path string) (map[string][]byte, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, api.Usage("读不到 %s：%v", path, err)
@@ -370,9 +375,9 @@ func readLocalSkill(path string) (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]string{"SKILL.md": string(raw)}, nil
+		return map[string][]byte{"SKILL.md": raw}, nil
 	}
-	files := map[string]string{}
+	files := map[string][]byte{}
 	err = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -394,7 +399,7 @@ func readLocalSkill(path string) (map[string]string, error) {
 			return err
 		}
 		rel, _ := filepath.Rel(path, p)
-		files[filepath.ToSlash(rel)] = string(raw)
+		files[filepath.ToSlash(rel)] = raw
 		return nil
 	})
 	return files, err
@@ -420,6 +425,9 @@ func skillCommands(t *cli.Table) {
 			in := SkillInput{Name: name}
 			if len(c.Args) > 1 {
 				if in.Files, err = readLocalSkill(c.Args[1]); err != nil {
+					return err
+				}
+				if err := CheckSkillFiles(name, in.Files); err != nil { // 先在本地判，超了不必上传
 					return err
 				}
 			}

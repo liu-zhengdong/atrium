@@ -48,6 +48,8 @@ export type HostInfo = {
   max_workers: number | null;
   /** 代理这台同时最多跑几个本地检查（#358 第 2 步）；旧版代理不报，也不认按提交检查，不派给它。 */
   max_checks?: number;
+  /** 代理这台一次检查最多跑多久（毫秒，ATRIUM_CHECK_TIMEOUT_MINUTES）；旧版代理不报，按服务的缺省。 */
+  check_timeout_ms?: number;
 };
 
 /** 代理每轮长轮询带上的负载。 */

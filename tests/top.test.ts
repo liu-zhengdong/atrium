@@ -820,6 +820,7 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
       maxWorkers: null,
       maxChecks: 1,
       testConcurrency: 1,
+      checkTimeoutMs: 30 * 60_000,
       busyCores: null,
       busyLoad: 16,
     },

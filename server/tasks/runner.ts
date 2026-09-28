@@ -210,8 +210,8 @@ export class TaskRunner {
   /** 远程主机的代理连接（#358 第 1 步）。 */
   readonly remote: RemoteHosts;
   private readonly tunnels: HostTunnels;
-  /** 本地检查派到哪台跑（#358 第 2 步）。 */
-  private readonly checks: CheckDispatch;
+  /** 合入队列的重跑检查派到哪台跑（#358 第 2 步）。 */
+  readonly checks: CheckDispatch;
   /** 额度多主机合并的来源（quota-source 经 hosts/quota.ts 取）。 */
   private readonly quotaSource = () => this.hostQuota();
   /** 任务仓库路径 → owner/name（挑远程主机时对仓库白名单）；解析不出为 null。 */
@@ -242,6 +242,7 @@ export class TaskRunner {
     // 本机限额只看服务自己的环境（不是给执行者的 options.env）。
     this.host = options.host ?? HostLoad.fromEnv(process.env);
     sharedLocalChecks.limit = this.host.limits.maxChecks;
+    sharedLocalChecks.timeoutMs = this.host.limits.checkTimeoutMs;
     // 执行机器（#358）：本机登记为 h1；远程主机由代理接入。
     ensureHostTables(db);
     ensureLocalHost(
@@ -328,7 +329,6 @@ export class TaskRunner {
       onAccepted: (id) => this.review.admit(id),
       hostGate: (urgent) => this.host.gate(this.x.inFlight(), urgent),
       remote: this.remote,
-      checks: this.checks,
       placement: {
         need: (id, tool, urgent) => this.hostNeed(id, tool, urgent),
         choose: (need, pinned) => this.chooseHostFor(need, pinned),

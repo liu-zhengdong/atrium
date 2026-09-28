@@ -23,8 +23,6 @@ import { quotaReason } from "./quota-holds.ts";
 import { detectQuotaExhausted } from "./quota-signal.ts";
 import { summarize } from "./summary.ts";
 import { detectTransient, type TransientHit } from "./transient.ts";
-import { runLocalCheck, type LocalCheck } from "./local-check.ts";
-import { dirname } from "node:path";
 
 /**
  * 退出后的事实收集与关卡（#262）：读摘要、在日志末尾记退出情况、查事实、过关卡，
@@ -135,36 +133,16 @@ export type Settlement = {
   transient?: TransientHit;
   /** 从结构化日志识别出的异常结束；思考耗尽时收尾后按 thinking.ts 换执行者重跑。 */
   ending?: AbnormalEnd;
-  localCheck?: LocalCheck;
   /** 运行时在执行日志里看见命令行防护的固定拒绝语句。 */
   workerGuardRefused?: boolean;
   /** 退出情况与判定依据，写进 gates 与状态转移事件。 */
   exitDetail: Record<string, unknown>;
 };
 
-/** 跑一次本地检查（本机、派到别的主机，或远程任务所在那台）；host 是在哪台跑的（hN）。 */
-export type CheckFn = (input: {
-  worktree: string;
-  taskDir: string;
-  env?: NodeJS.ProcessEnv;
-  onStatus?: (status: "queued" | "started", log: string, host?: string) => void;
-  urgent?: boolean;
-}) => Promise<LocalCheck>;
-
 export async function settle(
   active: Active,
   exit: Exit,
   exec: Exec,
-  onLocalCheckStatus?: (
-    status: "queued" | "started",
-    log: string,
-    host?: string,
-  ) => void,
-  env?: NodeJS.ProcessEnv,
-  /** 紧急任务（t113）：本地检查插到最前、不占并发名额。 */
-  urgent = false,
-  /** 本地检查在哪跑：缺省本机；派到空闲主机或远程任务所在那台由调用方给（#358）。 */
-  check: CheckFn = runLocalCheck,
 ): Promise<Settlement> {
   const log = await readLog(active);
   const workerGuardRefused =
@@ -229,7 +207,6 @@ export async function settle(
     };
   }
   let verdict: Verdict | undefined;
-  let localCheck: LocalCheck | undefined;
   if (!facts && active.deliver === "pr" && needsFacts(active.stop)) {
     facts = await collectFacts(
       {
@@ -250,16 +227,7 @@ export async function settle(
   }
   if (needsGates(active.stop, exit)) {
     const rules = active.worker.profile.rules;
-    if (active.deliver === "pr" && rules.checks?.includes("local_check")) {
-      localCheck = await check({
-        worktree: active.worktree ?? "",
-        taskDir: dirname(active.logFile),
-        env,
-        onStatus: onLocalCheckStatus,
-        urgent,
-      });
-      if (facts) facts.localCheck = localCheck;
-    }
+    // 全量检查只在合入队列 rebase 后跑一次（local_check 关卡见 gates.ts），交付时不跑。
     const comments =
       active.deliver === "comment" && active.issue
         ? await collectComments(
@@ -320,7 +288,6 @@ export async function settle(
     facts,
     transient,
     ending,
-    localCheck,
     workerGuardRefused,
     exitDetail: exitDetail(exit, adopted, delivered),
   };

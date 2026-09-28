@@ -410,6 +410,7 @@ const limits = (over: Partial<HostLimits>): HostLimits => ({
   maxWorkers: null,
   maxChecks: 2,
   testConcurrency: 2,
+  checkTimeoutMs: 30 * 60_000,
   busyCores: null,
   busyLoad: null,
   ...over,

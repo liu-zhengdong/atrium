@@ -368,28 +368,8 @@ test("远程主机：接入、派到 h2、日志与结果传回本机；令牌�
   );
 });
 
-test("远程主机：有仓库的活在代理机器上克隆、建工作树，事实与本地检查在那台上查", async (t) => {
+test("远程主机：有仓库的活在代理机器上克隆、建工作树，事实在那台上查", async (t) => {
   const fx = fixture(t);
-  mkdirSync(join(fx.repo, ".agents"));
-  writeFileSync(
-    join(fx.repo, ".agents", "check"),
-    nodeCommand(
-      "console.log('remote-checked-' + process.cwd()); process.exit(0)",
-    ),
-  );
-  execFileSync("git", ["-C", fx.repo, "add", ".agents/check"]);
-  execFileSync("git", [
-    "-C",
-    fx.repo,
-    "-c",
-    "user.name=t",
-    "-c",
-    "user.email=t@e",
-    "commit",
-    "-qm",
-    "check",
-  ]);
-  execFileSync("git", ["-C", fx.repo, "push", "-q", "origin", "main"]);
   writeFileSync(
     join(fx.workers, "harness", "kimi.md"),
     "---\nchecks: [local_check, claims_verified]\n---\n",
@@ -416,24 +396,12 @@ test("远程主机：有仓库的活在代理机器上克隆、建工作树，�
   const gates = JSON.parse(
     task.events.find((e: { kind: string }) => e.kind === "gates").detail,
   );
-  // 改动规模经代理在那台的工作树里查到；本地检查在那台上跑、工作目录是远程工作树。
+  // 改动规模经代理在那台的工作树里查到；全量检查留给合入队列，交付时不跑。
   assert.deepEqual(gates.diff, { files: 1, added: 1, removed: 0 });
-  const local = JSON.parse(
-    task.events.find((e: { kind: string }) => e.kind === "local_check").detail,
-  );
-  assert.equal(local.status, "passed", JSON.stringify(local));
-  // 检查在 h2 上跑，日志续传回服务这边的任务目录；代理那边跑完即清。
-  assert.equal(local.host, "h2");
   assert.equal(
-    local.log,
-    join(fx.root, "data", "tasks", "1", "local-check.log"),
+    task.events.some((e: { kind: string }) => e.kind.startsWith("local_check")),
+    false,
   );
-  assert.match(readFileSync(local.log, "utf8"), /remote-checked-.*repos/);
-  const started = JSON.parse(
-    task.events.find((e: { kind: string }) => e.kind === "local_check_started")
-      .detail,
-  );
-  assert.equal(started.host, "h2");
   assert.equal(task.status, "done", JSON.stringify(gates));
   // 执行者环境是代理机器上的白名单环境。
   const seen = readFileSync(join(agentData, "repos", "env-seen.txt"), "utf8");
@@ -653,7 +621,7 @@ test("远程主机：拉起回执晚到时，执行者已经结束也照样补�
 });
 
 /**
- * 本机任务的本地检查派到远程（#358 第 2 步）用的仓库：检查脚本写出工作目录与交付文件，
+ * 本机任务的检查派到远程（#358 第 2 步）用的仓库：检查脚本写出工作目录与交付文件，
  * 在代理的检查工作树（路径带 -check-）里多睡 sleepMs，便于在检查进行中看状态、断网。
  * 假 kimi 等 marker 出现才提交（不推送），测试在这之前把本机暂停接活，检查就只能派到 h2。
  */
@@ -688,7 +656,7 @@ function checkRepo(fx: Fx, sleepMs: number) {
   execFileSync("git", ["-C", fx.repo, "push", "-q", "origin", "main"]);
   writeFileSync(
     join(fx.workers, "harness", "kimi.md"),
-    "---\nchecks: [local_check, claims_verified]\n---\n",
+    "---\nchecks: [claims_verified]\n---\n",
   );
   const marker = join(fx.root, "deliver");
   fx.script(
@@ -708,13 +676,34 @@ async function eventually(check: () => Promise<boolean>, ms = 10_000) {
   throw new Error("等待超时");
 }
 
-type Event = { kind: string; detail: string | null };
-const eventsOf = (task: { events: Event[] }, kind: string) =>
-  task.events
-    .filter((e) => e.kind === kind)
-    .map((e) => JSON.parse(e.detail ?? "{}"));
+/**
+ * 合入队列重跑检查用的派发（#358 第 2 步）：交付关卡不再跑全量检查，测试直接调它，
+ * 记下开始在哪台跑、换过哪台。
+ */
+function dispatchCheck(
+  server: Awaited<ReturnType<typeof serve>>,
+  fx: Fx,
+  data: string,
+  task: number,
+  worktree: string,
+) {
+  const started: { host: string; log: string }[] = [];
+  const moved: { from: string; reason: string }[] = [];
+  const result = server.taskRunner.checks.run({
+    task,
+    worktree,
+    taskDir: join(data, "tasks", String(task)),
+    base: "main",
+    env: fx.env,
+    onStatus: (status, log, host) => {
+      if (status === "started") started.push({ host, log });
+    },
+    onMoved: (from, reason) => moved.push({ from, reason }),
+  });
+  return { result, started, moved };
+}
 
-/** 本机暂停接活后放假 kimi 交付：本地检查只能派到远程。 */
+/** 本机暂停接活后放假 kimi 交付：检查只能派到远程。 */
 async function deliverWithLocalPaused(
   call: Awaited<ReturnType<typeof serve>>["call"],
   marker: string,
@@ -724,7 +713,7 @@ async function deliverWithLocalPaused(
   writeFileSync(marker, "");
 }
 
-test("远程检查：本机任务交付后，检查带着没推送的提交派到 h2 跑完，结果与日志回到本机，看板说在 h2 上跑检查", async (t) => {
+test("远程检查：本机任务交付后，检查带着没推送的提交派到 h2 跑完，结果与日志回到本机", async (t) => {
   const fx = fixture(t);
   const { marker } = checkRepo(fx, 1500);
   const data = join(fx.root, "data");
@@ -743,16 +732,10 @@ test("远程检查：本机任务交付后，检查带着没推送的提交派�
   assert.equal(run.body.task.host ?? null, null);
   const worktree: string = run.body.task.worktree;
   await deliverWithLocalPaused(call, marker);
-  // 检查进行中：task show 与 top 都说在 h2 上跑检查。
-  await eventually(async () => {
-    const shown = (await call("GET", "/api/tasks/t1")).body;
-    return (shown.task ?? shown).holder?.text?.includes("在 h2 上跑检查");
-  }, 20_000);
-  const top = (await call("GET", "/api/tasks/top")).body;
-  const row = top.rows.find((r: { ref: string }) => r.ref === "t1");
-  assert.match(row.holder.text, /在 h2 上跑检查/);
   const task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
-  const [check] = eventsOf(task, "local_check");
+  assert.equal(task.status, "done", JSON.stringify(task.events.slice(-4)));
+  const dispatched = dispatchCheck(server, fx, data, 1, worktree);
+  const check = await dispatched.result;
   assert.equal(check.status, "passed", JSON.stringify(check));
   assert.equal(check.host, "h2");
   // 检查的就是本机工作树里没推送的交付提交。
@@ -765,8 +748,7 @@ test("远程检查：本机任务交付后，检查带着没推送的提交派�
   assert.match(log, /checked-in:.*-check-0/);
   assert.match(log, /delivered:hi/);
   assert.match(log, /check-finished/);
-  assert.equal(eventsOf(task, "local_check_started")[0].host, "h2");
-  assert.equal(task.status, "done", JSON.stringify(task.events.slice(-4)));
+  assert.equal(dispatched.started[0]?.host, "h2");
   // 代理那边的检查目录跑完即清；检查工作树留着下次沿用。
   await until(
     () =>
@@ -814,23 +796,21 @@ test("远程检查：进行中断网再恢复，结果与日志补齐；断线�
 
   // 一、短断网（比离线判定短）：检查在 h2 跑完，恢复后日志补齐、结果照常。
   await call("POST", "/api/tasks", { title: "Short cut", repo: fx.repo });
-  assert.equal(
-    (await call("POST", "/api/tasks/t1/run", { worker: "kimi" })).status,
-    200,
-  );
+  const first = await call("POST", "/api/tasks/t1/run", { worker: "kimi" });
+  assert.equal(first.status, 200);
   await deliverWithLocalPaused(call, marker);
+  let task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
+  assert.equal(task.status, "done");
+  let dispatched = dispatchCheck(server, fx, data, 1, first.body.task.worktree);
   await until(() => readLog(1).includes("checked-in:"), 20_000);
   cut = true;
   await new Promise((resolve) => setTimeout(resolve, 1200));
   cut = false;
-  let task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
-  let checks = eventsOf(task, "local_check");
-  assert.equal(checks.length, 1);
-  assert.equal(checks[0].host, "h2", JSON.stringify(checks[0]));
-  assert.equal(checks[0].status, "passed");
+  let check = await dispatched.result;
+  assert.equal(check.host, "h2", JSON.stringify(check));
+  assert.equal(check.status, "passed");
   assert.match(readLog(1), /checked-in:[\s\S]*check-finished/);
-  assert.equal(eventsOf(task, "local_check_moved").length, 0);
-  assert.equal(task.status, "done");
+  assert.equal(dispatched.moved.length, 0);
 
   // 二、长断网（超过离线判定）：服务不再等 h2，退回本机重跑；恢复后 h2 晚到的结果不算。
   // 等代理重连上（断网时它在退避重试）。
@@ -843,23 +823,22 @@ test("远程检查：进行中断网再恢复，结果与日志补齐；断线�
   // 本机恢复接活，t2 才在本机跑；交付前再暂停，检查才派到 h2。
   await call("POST", "/api/hosts/h1/pause", { paused: false });
   await call("POST", "/api/tasks", { title: "Long cut", repo: fx.repo });
-  assert.equal(
-    (await call("POST", "/api/tasks/t2/run", { worker: "kimi" })).status,
-    200,
-  );
+  const second = await call("POST", "/api/tasks/t2/run", { worker: "kimi" });
+  assert.equal(second.status, 200);
   await deliverWithLocalPaused(call, marker);
+  task = (await call("GET", "/api/tasks/t2/wait?timeout=30")).body.task;
+  assert.equal(task.status, "done");
+  dispatched = dispatchCheck(server, fx, data, 2, second.body.task.worktree);
   await until(() => readLog(2).includes("checked-in:"), 20_000);
   cut = true;
-  task = (await call("GET", "/api/tasks/t2/wait?timeout=30")).body.task;
+  check = await dispatched.result;
   cut = false;
-  checks = eventsOf(task, "local_check");
-  assert.equal(checks.length, 1);
-  assert.equal(checks[0].host, "h1", JSON.stringify(checks[0]));
-  assert.equal(checks[0].status, "passed");
-  const [moved] = eventsOf(task, "local_check_moved");
-  assert.equal(moved.from, "h2");
-  assert.match(moved.reason, /离线/);
-  assert.equal(task.status, "done");
+  assert.equal(check.host, "h1", JSON.stringify(check));
+  assert.equal(check.status, "passed");
+  assert.equal(dispatched.moved.length, 1);
+  const [moved] = dispatched.moved;
+  assert.equal(moved!.from, "h2");
+  assert.match(moved!.reason, /离线/);
   // 本机重跑的日志：本机工作树，不是 h2 的检查工作树。
   assert.doesNotMatch(readLog(2), /-check-/);
   // 恢复后代理重连，服务在长轮询的回答里叫停这次检查（远程还要睡 10 秒，叫停在那之前）；
@@ -875,8 +854,6 @@ test("远程检查：进行中断网再恢复，结果与日志补齐；断线�
       readdirSync(join(agentData, "checks")).length === 0,
     15_000,
   );
-  const again = (await call("GET", "/api/tasks/t2")).body;
-  assert.equal(eventsOf(again.task ?? again, "local_check").length, 1);
 });
 
 test("远程检查：没有在线的远程主机时照旧在本机跑", async (t) => {
@@ -903,16 +880,16 @@ test("远程检查：没有在线的远程主机时照旧在本机跑", async (t
       (await call("GET", "/api/hosts/h2")).body.connection === "offline",
   );
   await call("POST", "/api/tasks", { title: "Offline", repo: fx.repo });
-  assert.equal(
-    (await call("POST", "/api/tasks/t1/run", { worker: "kimi" })).status,
-    200,
-  );
+  const run = await call("POST", "/api/tasks/t1/run", { worker: "kimi" });
+  assert.equal(run.status, 200);
   await deliverWithLocalPaused(call, marker);
   const task = (await call("GET", "/api/tasks/t1/wait?timeout=30")).body.task;
-  const [check] = eventsOf(task, "local_check");
+  assert.equal(task.status, "done");
+  const dispatched = dispatchCheck(server, fx, data, 1, run.body.task.worktree);
+  const check = await dispatched.result;
   assert.equal(check.host, "h1", JSON.stringify(check));
   assert.equal(check.status, "passed");
-  assert.equal(eventsOf(task, "local_check_moved").length, 0);
+  assert.equal(dispatched.moved.length, 0);
 });
 
 test("额度多主机合并：代理上报读数与账号指纹，atrium quota 合并后给出读自哪台与 CLI 在哪几台可用", async (t) => {

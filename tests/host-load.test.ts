@@ -32,28 +32,31 @@ import { nodeCommand } from "./portable-shell.ts";
 const limits = (over: Partial<HostLimits> = {}): HostLimits => ({
   cores: 8,
   maxWorkers: 6,
-  maxChecks: 2,
-  testConcurrency: 2,
+  maxChecks: 4,
+  testConcurrency: 7,
+  checkTimeoutMs: 30 * 60_000,
   busyCores: 6,
   busyLoad: 32,
   ...over,
 });
 
-test("本机限额：缺省按核数，8 核同时 6 个执行者、2 个检查、测试并发 2、Atrium 占 6 核或整机负载 32 暂停", () => {
+test("本机限额：缺省按核数，8 核同时 6 个执行者、4 个检查、测试并发 7、检查 30 分钟、Atrium 占 6 核或整机负载 32 暂停", () => {
   assert.deepEqual(hostLimits({}, 8), { limits: limits(), problems: [] });
   assert.deepEqual(hostLimits({}, 1).limits, {
     cores: 1,
     maxWorkers: 2,
     maxChecks: 1,
     testConcurrency: 1,
+    checkTimeoutMs: 30 * 60_000,
     busyCores: 0.75,
     busyLoad: 4,
   });
   assert.deepEqual(hostLimits({}, 16).limits, {
     cores: 16,
     maxWorkers: 12,
-    maxChecks: 4,
-    testConcurrency: 4,
+    maxChecks: 8,
+    testConcurrency: 15,
+    checkTimeoutMs: 30 * 60_000,
     busyCores: 12,
     busyLoad: 64,
   });
@@ -68,6 +71,7 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
         ATRIUM_MAX_WORKERS: "3",
         ATRIUM_MAX_CHECKS: "1",
         ATRIUM_TEST_CONCURRENCY: "4",
+        ATRIUM_CHECK_TIMEOUT_MINUTES: "45",
         ATRIUM_BUSY_CORES: "3.5",
         ATRIUM_BUSY_LOAD: "12.5",
       },
@@ -77,6 +81,7 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
       maxWorkers: 3,
       maxChecks: 1,
       testConcurrency: 4,
+      checkTimeoutMs: 45 * 60_000,
       busyCores: 3.5,
       busyLoad: 12.5,
     }),
@@ -97,13 +102,14 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
       ATRIUM_MAX_WORKERS: "-1",
       ATRIUM_MAX_CHECKS: "0",
       ATRIUM_TEST_CONCURRENCY: "两个",
+      ATRIUM_CHECK_TIMEOUT_MINUTES: "0",
       ATRIUM_BUSY_CORES: "-2",
       ATRIUM_BUSY_LOAD: "Infinity",
     },
     8,
   );
   assert.deepEqual(bad.limits, limits());
-  assert.equal(bad.problems.length, 5);
+  assert.equal(bad.problems.length, 6);
   assert.match(bad.problems[0]!, /ATRIUM_MAX_WORKERS=-1 看不懂/);
   // 空字符串当没设，不报。
   assert.deepEqual(hostLimits({ ATRIUM_MAX_WORKERS: " " }, 8).problems, []);
@@ -282,7 +288,7 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
     checks: { running: 2, waiting: 1 },
   });
   assert.equal(busy.load, 170.46);
-  assert.deepEqual(busy.checks, { running: 2, waiting: 1, max: 2 });
+  assert.deepEqual(busy.checks, { running: 2, waiting: 1, max: 4 });
   assert.match(busy.paused!, /本机太忙/);
   assert.equal(busy.paused_by, "load");
   assert.equal(busy.own_cores, null);

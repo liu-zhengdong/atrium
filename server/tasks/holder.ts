@@ -88,9 +88,15 @@ export function kindOf(who: string): HolderKind {
   return "secretary";
 }
 
-/** 人话名字：u1 → 你，secretary → 秘书，其余原样。 */
+/** 人话名字：u1 → 你，secretary → 秘书，runtime → 运行时，其余原样。 */
 export function whoLabel(who: string): string {
-  return who === "u1" ? "你" : who === "secretary" ? "秘书" : who;
+  return who === "u1"
+    ? "你"
+    : who === "secretary"
+      ? "秘书"
+      : who === "runtime"
+        ? "运行时"
+        : who;
 }
 
 const GATE_LABEL: Record<string, string> = {

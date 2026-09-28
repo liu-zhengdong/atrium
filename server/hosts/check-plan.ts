@@ -2,7 +2,7 @@ import { hostRef, repoAllowed, type Connection } from "./state.ts";
 
 /**
  * 本地检查派到哪台主机（#358 第 2 步）的判定：纯函数，穷举测试。
- * 交付后的 local_check 与合入队列 rebase 后的重跑检查都走这里：本机也是候选，按负载挑；
+ * 合入队列 rebase 后的检查走这里：本机也是候选，按负载挑；
  * 远程要在线、没暂停、能拿到这个仓库、检查没超并发、代理没报太忙，且与仓库检查基准同平台（t201）。
  * IO 在 check-runtime.ts。
  */

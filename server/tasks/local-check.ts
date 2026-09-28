@@ -10,10 +10,10 @@ import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { killTree, spawnShell } from "../platform/index.ts";
 import { workerEnvironment } from "./worker-env.ts";
-import { checkPlacement } from "./host-load.ts";
+import { checkPlacement, CHECK_TIMEOUT_MINUTES } from "./host-load.ts";
 
-/** 本地检查只由运行时执行；队列在同一服务进程的所有任务之间共享。 */
-export const LOCAL_CHECK_TIMEOUT_MS = 15 * 60_000;
+/** 本地检查只由运行时执行；队列在同一服务进程的所有任务之间共享。超时按主机配置（ATRIUM_CHECK_TIMEOUT_MINUTES），这是缺省。 */
+export const LOCAL_CHECK_TIMEOUT_MS = CHECK_TIMEOUT_MINUTES * 60_000;
 export type LocalCheck = {
   status: "passed" | "failed" | "timeout" | "error";
   command: string;
@@ -46,7 +46,11 @@ export class LocalCheckQueue {
   private urgentActive = 0;
   private readonly waiters: (() => void)[] = [];
 
-  constructor(private max = 1) {}
+  constructor(
+    private max = 1,
+    /** 这台主机上一次检查最多跑多久；调用方没单独给时用它。 */
+    public timeoutMs = LOCAL_CHECK_TIMEOUT_MS,
+  ) {}
 
   get limit() {
     return this.max;
@@ -185,7 +189,9 @@ export async function runLocalCheck(input: {
   append?: boolean;
 }): Promise<LocalCheck> {
   const log = join(input.taskDir, "local-check.log");
-  return (input.queue ?? sharedLocalChecks).run(
+  const queue = input.queue ?? sharedLocalChecks;
+  const timeoutMs = input.timeoutMs ?? queue.timeoutMs;
+  return queue.run(
     async () => {
       if (input.signal?.aborted) throw new Error("服务正在关闭");
       mkdirSync(input.taskDir, { recursive: true, mode: 0o700 });
@@ -241,7 +247,7 @@ export async function runLocalCheck(input: {
       const timer = setTimeout(() => {
         timedOut = true;
         abort();
-      }, input.timeoutMs ?? LOCAL_CHECK_TIMEOUT_MS);
+      }, timeoutMs);
       const result = await new Promise<{ code: number | null; error?: Error }>(
         (resolve) => {
           child.once("error", (error) => resolve({ code: null, error }));
@@ -260,7 +266,7 @@ export async function runLocalCheck(input: {
             ? "passed"
             : "failed";
       const detail = timedOut
-        ? `超过 ${Math.ceil((input.timeoutMs ?? LOCAL_CHECK_TIMEOUT_MS) / 60_000)} 分钟`
+        ? `超过 ${Math.ceil(timeoutMs / 60_000)} 分钟`
         : (result.error?.message ??
           (result.code === 0 ? "检查通过" : `退出码 ${result.code}`));
       return { status, command, log, detail, failedTests };

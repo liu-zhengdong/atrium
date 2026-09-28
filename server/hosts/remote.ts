@@ -172,6 +172,20 @@ export class RemoteHosts {
     );
   }
 
+  /** 这台代理一次检查最多跑多久（它自己上报的）；旧版代理不报时按服务的缺省。 */
+  private checkTimeoutMs(host: number) {
+    try {
+      const info = JSON.parse(
+        hostRow(this.db, host).info ?? "null",
+      ) as HostInfo | null;
+      const reported = info?.check_timeout_ms;
+      if (typeof reported === "number" && reported > 0) return reported;
+    } catch {
+      // 坏记录按缺省。
+    }
+    return LOCAL_CHECK_TIMEOUT_MS;
+  }
+
   /** 这台主机的系统与数据目录；没接入或离线时报错。 */
   site(host: number): { os: string; data_dir: string } {
     const row = hostRow(this.db, host);
@@ -565,7 +579,7 @@ export class RemoteHosts {
   }
 
   /**
-   * 在远程主机上跑本地检查：远程任务在它那台的工作树里跑（worktree），其余按提交派过去（source）。
+   * 在远程主机上跑本地检查：按提交派过去（source），代理在自己的检查工作树里跑。
    * 日志续传到服务这边的 logFile；那台离线超过 onlineMs、超时或服务关闭时不再等，回执 infra 写明原因，
    * 由调用方换一台或回本机重跑。晚到的回执对不上已丢掉的指令，不会算第二次结果。
    */
@@ -575,7 +589,6 @@ export class RemoteHosts {
       task: number;
       urgent: boolean;
       logFile: string;
-      worktree?: string;
       source?: CheckSource;
       signal?: AbortSignal;
     },
@@ -603,10 +616,9 @@ export class RemoteHosts {
           kind: "check",
           task: input.task,
           urgent: input.urgent,
-          ...(input.worktree !== undefined ? { worktree: input.worktree } : {}),
           ...(input.source ? { source: input.source } : {}),
         },
-        LOCAL_CHECK_TIMEOUT_MS + CHECK_PREPARE_MS,
+        this.checkTimeoutMs(host) + CHECK_PREPARE_MS,
         this.pickupMs,
         {
           id,

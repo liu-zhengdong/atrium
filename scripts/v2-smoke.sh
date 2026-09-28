@@ -192,6 +192,16 @@ out=$(json schedule run s1 || true); has '(.ok and .result.task.id != null) or (
 out=$(json schedule ls); has '.result[0].last_task != null'
 out=$(json schedule rm s1); has '.ok'
 out=$(json schedule add o2 x --every 30m || true); has '.error.code == "usage"'
+step "map：一次性链接换只读会话；import：新库有数据时拒绝"
+out=$(json map); has '.ok and (.result.url|test("/login\\?code="))'
+url=$(jq -r .result.url <<<"$out")
+jar="$work/cookies"
+loc=$(curl -s -o /dev/null -w '%{redirect_url}' -c "$jar" "$url"); [ "$loc" = "http://127.0.0.1:$ATRIUM_PORT/" ] || fail "登录应转到首页，得到 $loc"
+loc=$(curl -s -o /dev/null -w '%{redirect_url}' "$url"); [ "$loc" = "http://127.0.0.1:$ATRIUM_PORT/#expired" ] || fail "链接第二次用应作废，得到 $loc"
+out=$(curl -s -b "$jar" "http://127.0.0.1:$ATRIUM_PORT/ui/api/dept/o2"); has '.ok and .result.dept.id == "o2" and (.result.inherited|length) == 7'
+code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$ATRIUM_PORT/ui/api/today"); [ "$code" = 401 ] || fail "不带会话应 401，得到 $code"
+touch "$work/old.sqlite"
+out=$(json import --from "$work/old.sqlite" || true); has '.ok == false and .error.code == "conflict"'
 
 step "task merge：登记 PR → 合入队列 rebase、快检查、squash 合入（另起隔离服务，假 gh + 本地 bare 远端）"
 m="$work/merge"; mkdir -p "$m/bin"

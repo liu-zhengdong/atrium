@@ -660,6 +660,9 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
     "--event 编号",
     "atrium events ack 12 13",
     "「每类东西放哪」",
+    "新能力先试点再铺开",
+    "atrium task note tN 试点结果",
+    "「碰到哪些已有能力」",
   ])
     assert(prompt.includes(part), part);
   assert.equal(wakeSummary([]), "");

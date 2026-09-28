@@ -428,6 +428,11 @@ test("buildPrompt：按段拼接，空段省略", () => {
     "# 任务：加登录\n\n## 任务详述\n\n详述\n\n## 组织说明（.agents/README.md）\n\n组织\n\n## 给你的额外叮嘱\n\n叮嘱\n\n## 通用约束\n\n- 规则一\n",
   );
   assert.ok(buildPrompt({ title: "x" }).includes(DEFAULT_RULES[1]));
+  // 组合说明（t236）：执行者在 PR 正文写「碰到哪些已有能力」，没碰到写「无」。
+  assert.match(
+    buildPrompt({ title: "x" }),
+    /PR 正文写「## 碰到哪些已有能力」一节.*没碰到写「无」/,
+  );
   assert.throws(() => buildPrompt({ title: "  " }), /标题不能为空/);
 });
 

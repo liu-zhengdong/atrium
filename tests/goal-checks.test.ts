@@ -1,9 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { ensureOrgTables } from "../server/org/schema.ts";
@@ -31,6 +37,7 @@ import {
 } from "../server/goals/checks.ts";
 import { GoalChecker } from "../server/goals/check-runtime.ts";
 import { GOAL_STATUSES } from "../server/goals/rules.ts";
+import type { Exec } from "../server/tasks/git.ts";
 import { createApp } from "../server/app.ts";
 import { checkLine, itemLines } from "../cli/goals.ts";
 import { removeTemp } from "./temp-dir.ts";
@@ -505,15 +512,47 @@ test("运行时跑命令：在仓库的临时 worktree 里跑（不碰原工作�
   assert.equal(slow!.result, "timeout");
 });
 
+/**
+ * git 往上找仓库时停在 ceiling：临时目录的上层本身是 git 仓库时（如 Windows 上
+ * `C:/Users/<名>` 是个仓库），不把它认成里程碑的仓库，更不在里面建 worktree。
+ */
+const ceiledExec =
+  (ceiling: string): Exec =>
+  (command, args, options = {}) =>
+    new Promise((resolve) => {
+      execFile(
+        command,
+        args,
+        {
+          cwd: options.cwd ?? ceiling,
+          timeout: options.timeoutMs ?? 30_000,
+          env: {
+            ...process.env,
+            GIT_TERMINAL_PROMPT: "0",
+            GIT_CEILING_DIRECTORIES: ceiling,
+          },
+        },
+        (error, stdout, stderr) =>
+          resolve({
+            ok: !error,
+            stdout: String(stdout),
+            stderr: String(stderr || (error ? error.message : "")),
+          }),
+      );
+    });
+
 test("运行时跑命令：仓库不是 git 时判没跑成；关服务时在跑的判中断", async (t) => {
   const data = mkdtempSync(join(tmpdir(), "atrium-goal-check-"));
-  const plain = mkdtempSync(join(tmpdir(), "atrium-goal-plain-"));
+  const plain = realpathSync(mkdtempSync(join(tmpdir(), "atrium-goal-plain-")));
   t.after(() => {
     removeTemp(data);
     removeTemp(plain);
   });
   const db = setup();
-  const checker = new GoalChecker(db, { data });
+  const checker = new GoalChecker(db, {
+    data,
+    run: ceiledExec(dirname(plain)),
+  });
   addGoal(
     db,
     { result: "顶层", repo: plain, criteria: [`$ ${TRUE_COMMAND}`] },

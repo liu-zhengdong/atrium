@@ -19,8 +19,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      # Windows 上保持 LF：格式检查与按行解析的测试都以仓库内容为准。
-      - run: git config --global core.autocrlf false
+      # 不改 core.autocrlf：检出一律 LF 由 .gitattributes 保证，Windows 上与开发机默认设置一致。
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -45,7 +44,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

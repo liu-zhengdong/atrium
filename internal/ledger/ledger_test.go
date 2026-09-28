@@ -3,7 +3,9 @@ package ledger
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
@@ -109,5 +111,55 @@ func TestLedgerLifecycle(t *testing.T) {
 	list, _ := List(ctx, db, Filter{})
 	if len(list) != 2 { // b 完成了，列 a、c
 		t.Fatalf("ls 缺省只列没结束的：%d", len(list))
+	}
+}
+
+// 结果投处理人（缺省派活的人）：秘书派的失败要处理地投秘书，过程不投秘书；--owner 改投指定的人；周期任务记建周期任务的人。
+func TestResultGoesToOwner(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0), ('a2', 'leader', '乙', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO departments (id, name, leader, created_at, updated_at) VALUES ('o1', '公司', 'a1', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	x, _ := Add(ctx, db, NewTask{Title: "秘书派的", Org: "o1"}, "u1")
+	y, _ := Add(ctx, db, NewTask{Title: "周期", Org: "o1", By: "a1"}, "s1")
+	z, err := Add(ctx, db, NewTask{Title: "交给乙", Org: "o1", Owner: "a2"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(ctx, db, NewTask{Title: "坏", Owner: "a9"}, "u1"); code(err) != "not_found" || !strings.HasPrefix(err.Error(), "--owner") {
+		t.Fatalf("处理人不存在应报 --owner：%v", err)
+	}
+	for _, c := range []struct {
+		id   string
+		want Parties
+	}{{x.ID, Parties{"u1", "u1"}}, {y.ID, Parties{"a1", "a1"}}, {z.ID, Parties{"u1", "a2"}}} {
+		if p, err := PartiesOf(ctx, db, c.id); err != nil || p != c.want {
+			t.Fatalf("PartiesOf(%s) = %+v %v，应为 %+v", c.id, p, err, c.want)
+		}
+	}
+	for _, id := range []string{x.ID, z.ID} {
+		for _, k := range []EventKind{Enqueue, Start, ExitFail} {
+			if _, err := Apply(ctx, db, id, Event{Kind: k}, "dispatch", "额度用尽"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	got := map[string]string{}
+	rows, _ := db.Query(`SELECT task || ' ' || target, level || ' ' || count FROM events ORDER BY id`)
+	for rows.Next() {
+		var k, v string
+		rows.Scan(&k, &v)
+		got[k] = v
+	}
+	rows.Close()
+	want := map[string]string{
+		x.ID + " secretary": "act 1", x.ID + " a1": "info 3", // 秘书收失败，负责人收合并的知会
+		z.ID + " a2": "act 1", z.ID + " a1": "info 3", // 处理人乙收失败，秘书不收
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("事件 = %v，应为 %v", got, want)
 	}
 }

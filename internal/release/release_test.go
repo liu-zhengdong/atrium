@@ -167,10 +167,10 @@ func TestOnline(t *testing.T) {
 	if got := e.get(id); got.Status != ledger.Done || got.Stage != ledger.StageReleased {
 		t.Fatalf("当前版本已含合入，冒烟过应已上线：%+v", got)
 	}
-	var n int
-	e.db.QueryRow(`SELECT count(*) FROM events WHERE kind = 'task.online' AND task = ?`, id).Scan(&n)
-	if n != 1 {
-		t.Fatalf("应发一条 online 事件，得到 %d", n)
+	var body string
+	e.db.QueryRow(`SELECT body FROM events WHERE kind = 'task.status' AND task = ? ORDER BY id DESC LIMIT 1`, id).Scan(&body)
+	if !strings.Contains(body, "已上线") {
+		t.Fatalf("上线的状态事件应带版本：%q", body)
 	}
 }
 

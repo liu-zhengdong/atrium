@@ -224,7 +224,7 @@ func RoundTask(x Schedule, now int64, loc *time.Location) (title, detail string)
 // runRound 生成一轮：建任务、送进派活队列、记在周期任务上。next 为 0 表示不改下一轮（手动 run）。
 func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note string, now int64, loc *time.Location) (ledger.Task, error) {
 	title, detail := RoundTask(x, now, loc)
-	t, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: title, Detail: detail, Org: x.Org, Skill: x.Skill}, x.ID)
+	t, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: title, Detail: detail, Org: x.Org, Skill: x.Skill, By: x.CreatedBy}, x.ID)
 	if err != nil {
 		return ledger.Task{}, err
 	}

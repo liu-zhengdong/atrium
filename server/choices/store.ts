@@ -28,7 +28,9 @@ import {
   parsePicks,
   pickedBrief,
   skippedDecision,
+  smallLine,
   statusAfter,
+  CHOICE_LIMITS,
   COMMENTS_MAX,
   STATUS_TEXT,
   validateChoice,
@@ -40,7 +42,7 @@ import {
 
 /**
  * 选项单的存储（产品部第 2 步）：`choices` 一份一行，`choice_options` 每个选项一行、
- * 拍板后记下建的任务或记的决定。短号 cN 取 AUTOINCREMENT，全局持久不复用。
+ * 拍板后记下建的任务或记的决定；`choice_smalls` 是随单提的小改进，不进选项单，记下交给了谁。短号 cN 取 AUTOINCREMENT，全局持久不复用。
  * 判定都在 model.ts，这里只读写；拍板在一个事务里建任务、记决定、改状态。
  */
 
@@ -86,7 +88,15 @@ export function ensureChoiceTables(db: DatabaseSync) {
     prefer TEXT NOT NULL,
     basis TEXT NOT NULL,
     created_at INTEGER NOT NULL);
-  CREATE INDEX IF NOT EXISTS choice_comments_choice ON choice_comments(choice_id,id);`);
+  CREATE INDEX IF NOT EXISTS choice_comments_choice ON choice_comments(choice_id,id);
+  CREATE TABLE IF NOT EXISTS choice_smalls (
+    choice_id INTEGER NOT NULL REFERENCES choices(id),
+    seq INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    why TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    handed_to TEXT NOT NULL,
+    PRIMARY KEY(choice_id,seq));`);
 }
 
 function settingsOf(db: DatabaseSync): Map<number, DeciderMode> {
@@ -208,6 +218,16 @@ export type Choice = {
   options: ChoiceOption[];
   /** 拍板前各方（项目 leader、秘书）写的意见，先写的在前。 */
   comments: ChoiceComment[];
+  /** 随单提的小改进：不给拍板人看，建单时交项目 leader（没有 leader 交秘书）；没有为 null。 */
+  small: ChoiceSmall | null;
+};
+export type ChoiceSmall = {
+  count: number;
+  /** 交给谁：aN 或 secretary。 */
+  to: string;
+  /** 展示用的一行：另有 N 条小改进已交 aK 处理。 */
+  text: string;
+  items: { title: string; why: string; basis: string[] }[];
 };
 export type ChoiceComment = {
   by: string;
@@ -284,6 +304,32 @@ function views(db: DatabaseSync, rows: Row[], byId?: Map<number, NodeRow>) {
         created_at: c.created_at,
       },
     ]);
+  const smalls = new Map<number, Omit<ChoiceSmall, "count" | "text">>();
+  for (const m of all<{
+    choice_id: number;
+    title: string;
+    why: string;
+    basis: string;
+    handed_to: string;
+  }>(
+    db,
+    `SELECT choice_id,title,why,basis,handed_to FROM choice_smalls WHERE choice_id IN (${ids.map(() => "?").join(",")}) ORDER BY choice_id,seq LIMIT ${ids.length * CHOICE_LIMITS.small_count}`,
+    ...ids,
+  )) {
+    const had = smalls.get(m.choice_id) ?? { to: m.handed_to, items: [] };
+    had.items.push({
+      title: m.title,
+      why: m.why,
+      basis: list(m.basis, isString),
+    });
+    smalls.set(m.choice_id, had);
+  }
+  const smallOf = (id: number): ChoiceSmall | null => {
+    const m = smalls.get(id);
+    return m
+      ? { ...m, count: m.items.length, text: smallLine(m.items.length, m.to)! }
+      : null;
+  };
   const names = byId ?? new Map(nodes(db).map((n) => [n.id, n]));
   const nodeIds = [...new Set(rows.map((r) => r.node_id))];
   const aliases = aliasOf(db, nodeIds);
@@ -308,6 +354,7 @@ function views(db: DatabaseSync, rows: Row[], byId?: Map<number, NodeRow>) {
     decider_why: deciders.get(r.node_id)?.why ?? "缺省由用户拍板",
     options: options.get(r.id) ?? [],
     comments: comments.get(r.id) ?? [],
+    small: smallOf(r.id),
   }));
 }
 
@@ -448,11 +495,14 @@ function subtreeIds(list: readonly NodeRow[], rootId: number): number[] {
 export type NewChoice = {
   node: string;
   task?: string;
-  /** 选项单内容：title、options、recommend、why。 */
+  /** 选项单内容：title、options、recommend、why，可带 small（小改进）。 */
   choice: unknown;
 };
 
-/** 建一份选项单；node 须是未归档的部分，task（产出它的研究任务）须存在。 */
+/**
+ * 建一份选项单；node 须是未归档的部分，task（产出它的研究任务）须存在。
+ * 小改进同一个事务记下，交给选项单所在节点最近的 leader（没有就是秘书），投事件在 notify.ts。
+ */
 export function addChoice(
   db: DatabaseSync,
   body: unknown,
@@ -520,6 +570,14 @@ export function addChoice(
         o.skip,
         JSON.stringify(o.basis),
       );
+    if (choice.small.length) {
+      const to = partRoute(db, node.id).subscriber;
+      const small = db.prepare(
+        "INSERT INTO choice_smalls(choice_id,seq,title,why,basis,handed_to) VALUES(?,?,?,?,?,?)",
+      );
+      for (const [index, m] of choice.small.entries())
+        small.run(id, index + 1, m.title, m.why, JSON.stringify(m.basis), to);
+    }
     return getChoice(db, choiceRef(id));
   });
 }

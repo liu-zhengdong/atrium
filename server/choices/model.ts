@@ -21,6 +21,9 @@ export const CHOICE_LIMITS = {
   basis_count: 10,
   why: 1000,
   note: 1000,
+  small_count: 10,
+  small_title: 80,
+  small_why: 400,
 };
 /** 决定记录的上限（memos/decisions.ts 的 DECISION_LIMITS）。 */
 const DECISION_TEXT = 300;
@@ -66,6 +69,15 @@ export type OptionInput = {
   basis: string[];
 };
 
+/** 小改进：一两个任务、一天内能做完、不改变用户用法的修补与优化。不进选项单，交项目 leader 自己定。 */
+export type SmallInput = {
+  title: string;
+  /** 为什么值得做、做了好在哪。 */
+  why: string;
+  /** 依据：fN、tN、dN、链接等。 */
+  basis: string[];
+};
+
 export type ChoiceInput = {
   title: string;
   options: OptionInput[];
@@ -73,6 +85,8 @@ export type ChoiceInput = {
   recommend: number[];
   /** 推荐理由。 */
   why: string;
+  /** 小改进（可没有）：不给拍板人看，建单时投给项目 leader。 */
+  small: SmallInput[];
 };
 
 /** 选项字段的人话名，报错时用。 */
@@ -103,9 +117,9 @@ function text(value: unknown, where: string, max: number): string {
 export function validateChoice(body: unknown): ChoiceInput {
   if (!isObject(body)) throw usage("选项单应为对象");
   for (const key of Object.keys(body))
-    if (!["title", "options", "recommend", "why"].includes(key))
+    if (!["title", "options", "recommend", "why", "small"].includes(key))
       throw usage(
-        `${key}: 是未知字段（选项单只认 title、options、recommend、why）`,
+        `${key}: 是未知字段（选项单只认 title、options、recommend、why、small）`,
       );
   const title = text(body.title, "title（选项单标题）", CHOICE_LIMITS.title);
   if (!Array.isArray(body.options))
@@ -159,7 +173,63 @@ export function validateChoice(body: unknown): ChoiceInput {
     options,
     recommend: picks,
     why: text(body.why, "why（推荐理由）", CHOICE_LIMITS.why),
+    small: validateSmall(body.small),
   };
+}
+
+/** 小改进列表（纯函数）：可不写；写了每条要有做什么（title）、为什么（why），依据可选。 */
+export function validateSmall(value: unknown): SmallInput[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value))
+    throw usage("small: 小改进应为列表，每条写 title、why，可带 basis");
+  if (value.length > CHOICE_LIMITS.small_count)
+    throw usage(
+      `small: 小改进至多 ${CHOICE_LIMITS.small_count} 条，现在是 ${value.length} 条；挑最值得做的`,
+    );
+  const seen = new Set<string>();
+  return value.map((raw, index): SmallInput => {
+    const at = `小改进 ${index + 1}`;
+    if (!isObject(raw)) throw usage(`${at}: 应为对象`);
+    for (const key of Object.keys(raw))
+      if (!["title", "why", "basis"].includes(key))
+        throw usage(`${at}: ${key} 是未知字段（只认 title、why、basis）`);
+    const title = text(
+      raw.title,
+      `${at}的「做什么」（title）`,
+      CHOICE_LIMITS.small_title,
+    );
+    const key = title.normalize("NFKC").toLowerCase();
+    if (seen.has(key)) throw usage(`${at}: 标题「${title}」和前面的重复`);
+    seen.add(key);
+    const basis = raw.basis === undefined ? [] : raw.basis;
+    if (!Array.isArray(basis)) throw usage(`${at}的「依据」（basis）应为列表`);
+    if (basis.length > CHOICE_LIMITS.basis_count)
+      throw usage(
+        `${at}的「依据」（basis）至多 ${CHOICE_LIMITS.basis_count} 条`,
+      );
+    return {
+      title,
+      why: text(raw.why, `${at}的「为什么」（why）`, CHOICE_LIMITS.small_why),
+      basis: basis.map((item, i) =>
+        text(item, `${at}的「依据」第 ${i + 1} 条`, CHOICE_LIMITS.basis_item),
+      ),
+    };
+  });
+}
+
+/** 选项单展示里小改进只占一行（纯函数）；没有小改进为 null。 */
+export function smallLine(count: number, to: string): string | null {
+  if (count <= 0) return null;
+  return `另有 ${count} 条小改进已交${to === "secretary" ? "秘书" : ` ${to} `}处理`;
+}
+
+/** 投给项目 leader 的小改进提示（纯函数）：自己定开任务、并入已有任务或不做，记决定，不必上交。 */
+export function smallHint(
+  ref: string,
+  node: { ref: string; name: string },
+  count: number,
+) {
+  return `产品部随 ${ref} 给${node.name}（${node.ref}）提了 ${count} 条小改进，不进选项单、由你定：逐条开任务（atrium task add 标题 --part ${node.ref}）、并入已有任务（atrium task note tN 补充）或不做，并记决定（atrium decision add 决定 --why 原因）；按节奏处理，性能等闲时活照旧排后，不必上交`;
 }
 
 /**

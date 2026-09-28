@@ -3,11 +3,13 @@ import { SECRETARY } from "../leaders/route.ts";
 import { partRoute } from "../leaders/subscriber.ts";
 import { nodeByAddress } from "../org/model.ts";
 import type { EventInbox } from "../tasks/events.ts";
+import { smallHint } from "./model.ts";
 import type { Choice } from "./store.ts";
 
 /**
  * 选项单的事件投递（接口与产品部研究收尾共用）：建好后项目 leader 收 choice_review（写意见）；
  * 拍板人是用户时秘书收 choice_ready（叫醒），下放时 leader 收 choice_ready、秘书只收知会 choice_notice。
+ * 随单的小改进另投 choice_small 给建单时记下的项目 leader（没有 leader 为秘书），由它自己定，不进选项单。
  */
 
 export const choiceBrief = (choice: Choice) => ({
@@ -47,13 +49,33 @@ export function publishChoice(
   });
 }
 
-/** 新选项单：按拍板人叫醒秘书或 leader，并请项目 leader 写意见。creator 是 leader 短号，秘书为 undefined。 */
+/** 新选项单：按拍板人叫醒秘书或 leader，并请项目 leader 写意见；有小改进时交项目 leader 自己定。creator 是 leader 短号，秘书为 undefined。 */
 export function announceChoice(
   db: DatabaseSync,
   inbox: EventInbox,
   choice: Choice,
   creator: string | undefined,
 ) {
+  if (choice.small)
+    inbox.publish({
+      subscriber: choice.small.to,
+      source: "choice",
+      kind: "choice_small",
+      key: `choice-small:${choice.ref}`,
+      actor: creator,
+      detail: {
+        choice: choice.ref,
+        node: choice.node,
+        node_name: choice.node_name,
+        task: choice.task,
+        small: choice.small.items,
+        hint: smallHint(
+          choice.ref,
+          { ref: choice.node, name: choice.node_name },
+          choice.small.count,
+        ),
+      },
+    });
   const leader = choiceLeader(db, choice);
   const show = `atrium choice show ${choice.ref}`;
   if (choice.decider === "u1") {

@@ -59,6 +59,10 @@ test("人话字段与 leader 备忘：管父节点的演进，只调研不立项
   assert.match(fields.what, /不自己立项、不写代码/);
   assert.equal(fields.flow.length, 4);
   assert.match(fields.flow[3]!, /没选的记成决定记录/);
+  assert.match(
+    fields.flow[2]!,
+    /只放大方向，一天内能做完的小改进交「让一群 AI 替你干活」的 leader 自己定/,
+  );
   // 没有人话名用名称。
   assert.equal(productFields(names("OpenQuota")).alias, "OpenQuota 的产品部");
   assert.equal(productFields(names("运行时")).alias, "运行时的产品部");
@@ -74,6 +78,7 @@ test("人话字段与 leader 备忘：管父节点的演进，只调研不立项
     assert.match(memo, /s4/);
     assert.match(memo, /atrium choice add o2 --file 文件 --task tN/);
     assert.match(memo, /不立项/);
+    assert.match(memo, /小改进（small）不进选项单，运行时直接交 o2 的 leader/);
   }
 });
 
@@ -100,6 +105,26 @@ test("研究模板：交付格式与规矩在前，材料在后；空的一节�
   assert.match(empty, new RegExp(`在当前工作目录写 ${CHOICE_FILE}`));
   assert.match(empty, /"title": "Atrium 下一步（09-28）"/);
   assert.match(empty, /options 写 3–5 个/);
+  // 大方向进选项单，小改进另列交 leader，不拿来凑数。
+  assert.match(
+    empty,
+    /3 到 5 个大方向，交给用户拍板；顺手看到的小改进另列，交「Atrium」的 leader 自己定/,
+  );
+  assert.match(
+    empty,
+    /大方向（写进 options，给用户拍板）：新的用户可感知能力、新概念或新工作方式、跨多个组成部分/,
+  );
+  assert.match(
+    empty,
+    /小改进（写进 small，不给用户看）：一两个任务、一天内能做完、不改变用户用法/,
+  );
+  assert.match(empty, /不要把细节修补塞进 options 凑数/);
+  assert.match(
+    empty,
+    /"small": \[\{"title": "…", "why": "…", "basis": \["f5"\]\}\]/,
+  );
+  assert.match(empty, /small 小改进，可不写，至多 10 条/);
+  assert.ok(empty.indexOf("## 大方向和小改进分开") < empty.indexOf("## 交付"));
   assert.match(empty, /可以上网查同类产品/);
   assert.match(empty, /情况没变不要再提/);
   assert.ok(empty.indexOf("## 交付") < empty.indexOf("## 材料"));
@@ -137,6 +162,7 @@ test("研究模板：交付格式与规矩在前，材料在后；空的一节�
           picked: ["看板过滤"],
           skipped: ["合入提速"],
           note: "等 CI 稳了",
+          small: ["帮助缩短", "报错带下一步"],
         },
         {
           ref: "c3",
@@ -168,7 +194,7 @@ test("研究模板：交付格式与规矩在前，材料在后；空的一节�
   assert.match(full, /现在做到哪：能派活\n接下来：做产品部/);
   assert.match(
     full,
-    /- c2 下一步 · 已拍板；选了「看板过滤」；没选「合入提速」；说明：等 CI 稳了/,
+    /- c2 下一步 · 已拍板；选了「看板过滤」；没选「合入提速」；说明：等 CI 稳了；另交 leader 的小改进「帮助缩短」「报错带下一步」/,
   );
   assert.match(full, /- c3 再下一步 · 还在等用户拍板，里面的方向不要重复\n/);
   assert.match(full, /- d4 09-27 u1 定：这轮不做「合入提速」/);
@@ -220,6 +246,10 @@ const sheet = JSON.stringify({
   options: [option(1), option(2), option(3)],
   recommend: [1],
   why: "先做 1",
+  small: [
+    { title: "帮助缩短", why: "太长没人看", basis: ["f3"] },
+    { title: "报错带下一步", why: "少问一次" },
+  ],
 });
 
 test("隔离服务：product add 一次建好部分、leader 与周期研究；研究按模板取材料，完成后把 choice.json 登记成选项单叫醒秘书；带旧表启动", async (t) => {
@@ -477,12 +507,38 @@ test("隔离服务：product add 一次建好部分、leader 与周期研究；�
   );
   const done = inbox.find((e) => e.kind === "done")!;
   assert.equal(done.subscriber, "a2");
+  // 小改进不进选项单：交 o2 的 leader a1 自己定（带依据、要处理），选项单上只留一行。
+  assert.equal(choice.small.count, 2);
+  assert.equal(choice.small.to, "a1");
+  assert.equal(choice.small.text, "另有 2 条小改进已交 a1 处理");
+  const small = db
+    .prepare(
+      "SELECT subscriber,kind,level,detail FROM task_inbox WHERE dedupe_key='choice-small:c1'",
+    )
+    .all() as {
+    subscriber: string;
+    kind: string;
+    level: string;
+    detail: string;
+  }[];
+  assert.deepEqual(
+    small.map((e) => [e.subscriber, e.kind, e.level]),
+    [["a1", "choice_small", "action"]],
+  );
+  assert.deepEqual(JSON.parse(small[0]!.detail).small, [
+    { title: "帮助缩短", why: "太长没人看", basis: ["f3"] },
+    { title: "报错带下一步", why: "少问一次", basis: [] },
+  ]);
   assert.equal(JSON.parse(done.detail).choice, "c1");
 
   // 第二轮：研究者没写文件，任务照常完成，错误写进完成事件交给产品部 leader。
   fx.script("opencode", `echo '{"type":"text","part":{"text":"没写"}}'`);
   const second = (await call("POST", "/api/schedules/s1/run")).body.task;
   assert.match(second.brief, /- c1 Atrium 下一步 · 还在等用户拍板/);
+  assert.match(
+    second.brief,
+    /另交 leader 的小改进「帮助缩短」「报错带下一步」/,
+  );
   await until(
     () =>
       count(

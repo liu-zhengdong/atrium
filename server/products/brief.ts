@@ -55,7 +55,7 @@ export function productFields(
     flow: [
       `${everyHuman(names.every_ms)}到点生成一轮研究任务`,
       `研究者读「${parent}」的全景、决定记录、巡检发现、失败与上线记录，上网看同类产品`,
-      `写成选项单挂在「${parent}」上，秘书递给你`,
+      `写成选项单挂在「${parent}」上，秘书递给你；只放大方向，一天内能做完的小改进交「${parent}」的 leader 自己定`,
       `你拍板：选中的交「${parent}」的 leader 拆解，没选的记成决定记录，下一轮情况没变不重复提`,
     ].map((step) => cut(step, 300)),
   };
@@ -66,7 +66,7 @@ export function leaderMemo(names: ProductNames): string {
   const parent = parentName(names);
   return [
     `我是「${parent}」（${names.parent.ref}）的产品部 leader，负责 ${names.product.ref}。只调研和提选项：不立项、不派开发任务，用户拍板的才开工。`,
-    `周期研究 ${names.schedule} ${everyHuman(names.every_ms)}一轮（atrium schedule show ${names.schedule}）。研究任务结束时运行时读它工作目录里的 ${CHOICE_FILE}，登记成挂在 ${names.parent.ref} 上的选项单，任务完成事件里带 choice: cN。`,
+    `周期研究 ${names.schedule} ${everyHuman(names.every_ms)}一轮（atrium schedule show ${names.schedule}）。研究任务结束时运行时读它工作目录里的 ${CHOICE_FILE}，登记成挂在 ${names.parent.ref} 上的选项单，任务完成事件里带 choice: cN；里面的小改进（small）不进选项单，运行时直接交 ${names.parent.ref} 的 leader。`,
     `完成事件带 choice_error 时：看 atrium task show tN 与错误，修好文件后 atrium choice add ${names.parent.ref} --file 文件 --task tN；修不好就 atrium schedule run ${names.schedule} 重跑一轮。`,
     "选项单拍板后的知会只需确认；选中的活归上一层的 leader 拆解，不归我。",
   ].join("\n");
@@ -92,6 +92,8 @@ export type ResearchFacts = {
     picked: string[];
     skipped: string[];
     note: string | null;
+    /** 随单交给 leader 的小改进标题。 */
+    small?: string[];
   }[];
   decisions: string[];
   findings: {
@@ -124,24 +126,31 @@ export function researchBrief(facts: ResearchFacts): string {
   const o = facts.overview;
   const lim = CHOICE_LIMITS;
   return [
-    `你是「${parent}」（${facts.names.parent.ref}）的产品部（${facts.names.product.ref}）。这一轮的活：看清「${parent}」现在的样子和外面的动向，提一份选项单——${OPTIONS_MIN} 到 ${OPTIONS_MAX} 个「下一步可以做什么」，交给用户拍板。`,
+    `你是「${parent}」（${facts.names.parent.ref}）的产品部（${facts.names.product.ref}）。这一轮的活：看清「${parent}」现在的样子和外面的动向，提一份选项单——${OPTIONS_MIN} 到 ${OPTIONS_MAX} 个大方向，交给用户拍板；顺手看到的小改进另列，交「${parent}」的 leader 自己定。`,
     "你只调研和提选项：不写代码、不改仓库、不开 PR、不建任务，不读凭据。",
+    "",
+    "## 大方向和小改进分开",
+    "- 大方向（写进 options，给用户拍板）：新的用户可感知能力、新概念或新工作方式、跨多个组成部分、或要做好几天的事。按「用户能多做到什么」讲清楚。",
+    `- 小改进（写进 small，不给用户看）：一两个任务、一天内能做完、不改变用户用法的修补与优化（修个别扭、提点性能、补个提示）。交「${parent}」的 leader 自己决定开任务、并入已有任务或不做。`,
+    "- 拿不准的按「用户会不会因此换一种用法」判断：会就是大方向，不会就是小改进。不要把细节修补塞进 options 凑数。",
     "",
     "## 交付",
     `在当前工作目录写 ${CHOICE_FILE}（UTF-8 的 JSON 对象）：`,
     "```json",
-    `{"title": "${cut(parent, 20)} 下一步（${facts.date}）", "options": [{"title": "…", "gain": "…", "why_now": "…", "cost": "…", "skip": "…", "basis": ["f3", "t120", "d4", "https://…"]}], "recommend": [1], "why": "…"}`,
+    `{"title": "${cut(parent, 20)} 下一步（${facts.date}）", "options": [{"title": "…", "gain": "…", "why_now": "…", "cost": "…", "skip": "…", "basis": ["f3", "t120", "d4", "https://…"]}], "recommend": [1], "why": "…", "small": [{"title": "…", "why": "…", "basis": ["f5"]}]}`,
     "```",
     `- options 写 ${OPTIONS_MIN}–${OPTIONS_MAX} 个，每个：title 一句话说做什么（${lim.option_title} 字内）；gain 做了用户能多做到什么；why_now 为什么是现在；cost 代价——大概多少活、占哪些额度；skip 不做会怎样；basis 依据，写下面材料里的短号（fN 巡检发现、tN 任务、dN 决定、cN 选项单）或外部链接，至多 ${lim.basis_count} 条。gain、why_now、cost、skip 各 ${lim.gain} 字内，说人话、写具体。`,
     `- recommend 推荐做哪几个（选项号从 1 起），why 推荐理由（${lim.why} 字内）。title 是这份选项单的标题（${lim.title} 字内）。`,
+    `- small 小改进，可不写，至多 ${lim.small_count} 条，每条：title 做什么（${lim.small_title} 字内）；why 为什么值得做、做了好在哪（${lim.small_why} 字内）；basis 依据，写法同上。选项单上只显示「另有 N 条小改进已交 leader 处理」一行。`,
     `- 你结束后运行时读这个文件，挂到「${parent}」上等用户拍板；文件缺了或格式不对，这一轮就白做了。写完用 node -e 'JSON.parse(require("fs").readFileSync("${CHOICE_FILE}","utf8"))' 之类的办法自查一次。`,
-    "- 最后的回复用几行说清楚提了哪几个选项、推荐哪个、为什么。",
+    "- 最后的回复用几行说清楚提了哪几个选项、推荐哪个、为什么，另交了几条小改进。",
     "",
     "## 规矩",
     "- 决定记录里「这轮不做」的方向，情况没变不要再提；要再提，在 why_now 写明什么变了。",
     "- 还在等拍板的选项单里已有的方向不重复。",
     "- 可以上网查同类产品、社区讨论与动向，外部材料写链接；需要看代码只读。",
     "- 选项要是用户能拍板的方向（能多做到什么），不是实现细节；代价写实，不夸大收益。",
+    "- 以前交过的小改进（材料里「另交 leader」的）不重复提。",
     "",
     "## 材料",
     section(`「${parent}」全景`, [
@@ -167,6 +176,9 @@ export function researchBrief(facts: ResearchFacts): string {
           c.picked.length ? `；选了「${c.picked.join("」「")}」` : "",
           c.skipped.length ? `；没选「${c.skipped.join("」「")}」` : "",
           c.note ? `；说明：${c.note}` : "",
+          c.small?.length
+            ? `；另交 leader 的小改进「${c.small.join("」「")}」`
+            : "",
         ].join(""),
       ),
     ),

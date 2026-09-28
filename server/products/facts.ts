@@ -258,6 +258,7 @@ export function researchFacts(
           .filter((o) => o.picked === false)
           .map((o) => o.title),
         note: c.note ? oneLine(c.note, 120) : null,
+        small: (c.small?.items ?? []).map((m) => oneLine(m.title, 60)),
       }))
     : [];
   const route = parent ? partRoute(db, parent.id).subscriber : SECRETARY;

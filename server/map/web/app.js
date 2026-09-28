@@ -604,7 +604,10 @@ function choiceHtml(c, here) {
         })
         .join("")}</ul></div>`
     : "";
-  const recommend = `<p class="choice-recommend"><span class="choice-label">产品部推荐</span>选项 ${c.recommend.join("、")}——${esc(c.why)}</p>${comments}`;
+  const small = c.small?.text
+    ? `<p class="choice-small muted small">${esc(c.small.text)}</p>`
+    : "";
+  const recommend = `<p class="choice-recommend"><span class="choice-label">产品部推荐</span>选项 ${c.recommend.join("、")}——${esc(c.why)}</p>${small}${comments}`;
   const body = open
     ? `<form class="choice-form" data-choice="${esc(c.ref)}">
         ${options}

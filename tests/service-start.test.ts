@@ -216,6 +216,17 @@ test("连接被拒（旧服务刚关）：等服务就绪后重发一次；其�
     true,
     "服务已换人：旧服务关闭时断开的复用连接可重发",
   );
+  const aborted = new Error("连接服务失败：write ECONNABORTED", {
+    cause: Object.assign(new Error("write ECONNABORTED"), {
+      code: "ECONNABORTED",
+    }),
+  });
+  assert.equal(resendable(aborted, data, record), false);
+  assert.equal(
+    resendable(aborted, data, { ...record, instance: "gone" }),
+    true,
+    "Windows 上写到被对端重置的连接报 ECONNABORTED，同样算连接被断开",
+  );
   assert.equal(
     resendable(new TypeError("fetch failed"), data, {
       ...record,
@@ -265,7 +276,7 @@ test("请求进行中服务端强制断开连接：命令行不崩溃，按连�
   }
   for (const code of codes)
     assert.ok(
-      ["ECONNRESET", "EPIPE", "EINVAL"].includes(String(code)),
+      ["ECONNRESET", "ECONNABORTED", "EPIPE", "EINVAL"].includes(String(code)),
       `未归为连接被断开：${String(code)}`,
     );
   await assert.rejects(client(closingUrl, data).get("/nothing"), {

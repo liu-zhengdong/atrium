@@ -67,8 +67,10 @@ const causeCode = (error: unknown) =>
   (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
 
 // 连接被断开的底层套接字错误：对端重置、写到已关的连接、套接字已失效（socket hang up 的 code 也是 ECONNRESET）。
+// Windows 上往已被对端重置的连接写，报的是 ECONNABORTED（WSAECONNABORTED，t165）。
 const DISCONNECTED = new Set([
   "ECONNRESET",
+  "ECONNABORTED",
   "EPIPE",
   "EINVAL",
   "ENOTCONN",

@@ -7,6 +7,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -106,6 +107,14 @@ function decode(value: unknown): ServiceRecord | null {
   if (!value) return null;
   return parseServiceRecord(JSON.parse((value as { record: string }).record));
 }
+/**
+ * 登记文件坏了（SQLITE_CORRUPT / SQLITE_NOTADB）：登记只在服务进程活着时有意义，
+ * 写登记又不刷盘（见 claimService），断电时可能写坏。读当作没有，登记时挪开重建。
+ */
+function damaged(error: unknown) {
+  const code = (error as { errcode?: unknown }).errcode;
+  return typeof code === "number" && [11, 26].includes(code & 0xff);
+}
 export function readService(data: string): ServiceRecord | null {
   const path = join(data, "service.sqlite");
   if (!existsSync(path)) return null;
@@ -116,6 +125,9 @@ export function readService(data: string): ServiceRecord | null {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='service'").get())
       return null;
     return decode(db.prepare("SELECT record FROM service WHERE id=1").get());
+  } catch (error) {
+    if (damaged(error)) return null;
+    throw error;
   } finally {
     db.close();
   }
@@ -127,6 +139,18 @@ export function readService(data: string): ServiceRecord | null {
 export function claimService(data: string, port: number) {
   mkdirSync(data, { recursive: true, mode: 0o700 });
   const path = join(data, "service.sqlite");
+  try {
+    return claim(path, port);
+  } catch (error) {
+    if (!damaged(error)) throw error;
+    // 残留的回滚日志在读写打开时已由 SQLite 回放或丢弃，只挪库文件。
+    const aside = `${path}.damaged-${Date.now()}`;
+    renameSync(path, aside);
+    console.error(`服务登记文件损坏，已挪到 ${aside} 并重建`);
+    return claim(path, port);
+  }
+}
+function claim(path: string, port: number) {
   closeSync(openSync(path, "a", 0o600));
   restrictToOwner(path);
   const db = new DatabaseSync(path);
@@ -137,8 +161,12 @@ export function claimService(data: string, port: number) {
     token: randomBytes(32).toString("hex"),
   };
   try {
+    // 写登记不刷盘（t165）：回滚日志模式下写方从写库、刷盘到删日志都持排他锁，读登记的
+    // 命令只能干等。Windows 磁盘忙时每次提交刷盘要几百毫秒，建表加登记连着几次提交能把
+    // 读方连续挡住三秒以上，等满 busy_timeout 就报 database is locked。登记只在进程
+    // 活着时有意义，断电丢了或写坏都无妨（见 damaged）。
     db.exec(
-      "PRAGMA busy_timeout=3000; CREATE TABLE IF NOT EXISTS service (id INTEGER PRIMARY KEY CHECK(id=1), record TEXT NOT NULL); BEGIN IMMEDIATE",
+      "PRAGMA busy_timeout=3000; PRAGMA synchronous=OFF; CREATE TABLE IF NOT EXISTS service (id INTEGER PRIMARY KEY CHECK(id=1), record TEXT NOT NULL); BEGIN IMMEDIATE",
     );
     const previous = decode(
       db.prepare("SELECT record FROM service WHERE id=1").get(),

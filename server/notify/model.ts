@@ -1,16 +1,19 @@
 import { Problem } from "../problem.ts";
 import type { Offset } from "../schedules/plan.ts";
 import { oneLine } from "../text-width.ts";
+import { urgentAlert, type UrgentAlert } from "../tasks/urgent.ts";
 
 /**
  * 推送到手机（Telegram）的判定：哪些事件要推、推什么字、什么时候发、失败怎么重试、走哪个代理、
  * 设置怎么校验。全是纯函数、穷举测试；凭据文件在 store.ts，发请求在 telegram.ts，调度在 runtime.ts。
  *
- * 只推三类事：选项单等你拍板、上交到用户这层的卡住／越界（含会审要用户拍板）、里程碑上线。
+ * 只推三类事：选项单等你拍板、上交到用户这层的卡住／越界（含会审要用户拍板）、里程碑上线；
+ * 另加紧急任务要处理的阶段（上线、卡住、止损失败，t219）。
  * 推送只放标题和短号，不放正文（上交说明、选项内容都不带）。
  */
 
-export type PushKind = "choice" | "stuck" | "beyond" | "council" | "shipped";
+export type PushKind =
+  "choice" | "stuck" | "beyond" | "council" | "shipped" | UrgentAlert;
 
 export const PUSH_LABEL: Record<PushKind, string> = {
   choice: "等你拍板",
@@ -18,6 +21,9 @@ export const PUSH_LABEL: Record<PushKind, string> = {
   beyond: "越界要你定",
   council: "会审要你拍板",
   shipped: "里程碑上线",
+  urgent_online: "紧急任务上线",
+  urgent_stuck: "紧急任务卡住",
+  urgent_stopgap: "紧急止损没做成",
 };
 
 export type Push = {
@@ -69,6 +75,15 @@ export function pushOf(
     const ref = text(detail.choice);
     if (!/^c[1-9]\d*$/.test(ref)) return null;
     return titled("choice", ref, text(detail.title));
+  }
+  // 紧急任务要处理的阶段（t219）：同一任务的阶段合在一条事件里，按阶段各推一次。
+  if (event.kind === "urgent_stage") {
+    const alert = urgentAlert(text(detail.event), detail);
+    if (!alert || !event.task) return null;
+    return {
+      ...titled(alert, event.task, text(detail.title)),
+      key: `${key}:${text(detail.event)}`,
+    };
   }
   if (event.kind === "council_escalated") {
     if (!event.task) return null;

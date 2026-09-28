@@ -479,6 +479,32 @@ export function urgentOrder(a: UrgentRival, b: UrgentRival): number {
 
 // ---- 各阶段推送 ----
 
+/** 紧急任务各阶段推送给谁（t215）：秘书（leaders/route.ts 的 SECRETARY）与用户（接推送前走事件）。 */
+export const URGENT_WATCHERS = ["secretary", "u1"] as const;
+
+/** 紧急阶段里要处理的三种（t219）：上线、卡住（换人也没进展）、止损动作失败。 */
+export type UrgentAlert = "urgent_online" | "urgent_stuck" | "urgent_stopgap";
+
+/**
+ * 紧急任务的这个阶段要不要叫醒秘书、推给用户（t219）；其余阶段只作知会（进 events digest，不叫醒）。
+ * 卡死判定（20 分钟）比换人（10 分钟没进展）晚，紧急任务报卡死就是换人也没进展。
+ * 失败、受阻、上线失败另有普通结果事件按负责人投递，这里不重复叫醒。
+ */
+export function urgentAlert(
+  kind: string,
+  detail: Record<string, unknown> = {},
+): UrgentAlert | null {
+  if (kind === "online") return "urgent_online";
+  if (kind === "stalled") return "urgent_stuck";
+  if (
+    kind === "stopgap" &&
+    typeof detail.failed === "number" &&
+    detail.failed > 0
+  )
+    return "urgent_stopgap";
+  return null;
+}
+
 /** 紧急任务的阶段（推送给秘书与用户）；不是要推送的事件为 null。 */
 export function urgentStage(kind: string): string | null {
   switch (kind) {

@@ -20,6 +20,7 @@ import {
   swapNote,
   urgentIdleMs,
   urgentOrder,
+  urgentAlert,
   urgentStage,
   whyOf,
   URGENT_MAX_SWAPS,
@@ -766,6 +767,17 @@ test("阶段推送：开始、止损、抢占、交付、检查、合入、上�
   ];
   for (const [kind, stage] of stages)
     assert.equal(urgentStage(kind), stage, kind);
+  // 要处理的只有上线、卡住（换人也没进展）、止损失败（t219），其余阶段只作知会。
+  const alerts: Record<string, string> = {
+    online: "urgent_online",
+    stalled: "urgent_stuck",
+  };
+  for (const [kind] of stages)
+    assert.equal(urgentAlert(kind), alerts[kind] ?? null, kind);
+  assert.equal(urgentAlert("stopgap", { failed: 1 }), "urgent_stopgap");
+  assert.equal(urgentAlert("stopgap", { failed: 0 }), null);
+  assert.equal(urgentAlert("stopgap", { failed: "1" }), null);
+  assert.equal(urgentAlert("start", { failed: 1 }), null);
 });
 
 const holderBase: HolderFacts = {

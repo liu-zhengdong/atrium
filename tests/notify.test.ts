@@ -154,6 +154,58 @@ test("推什么：只推等你拍板、上交到秘书的卡住／越界／里�
     );
 });
 
+test("紧急任务（t219）：只推上线、卡住、止损失败，按阶段各推一次；其余阶段不推", () => {
+  const urgent = (stage: string, detail: Record<string, unknown> = {}) =>
+    event({
+      kind: "urgent_stage",
+      task: "t171",
+      detail: { title: "修线上", event: stage, ...detail },
+    });
+  const cases: [PushEvent, string | null][] = [
+    [urgent("online"), "urgent_online"],
+    [urgent("stalled"), "urgent_stuck"],
+    [urgent("stopgap", { failed: 1 }), "urgent_stopgap"],
+    [urgent("stopgap"), null],
+    [urgent("stopgap", { failed: 0 }), null],
+    [urgent("start"), null],
+    [urgent("merged"), null],
+    [urgent("done"), null],
+    [urgent("local_check_started"), null],
+    [urgent("urgent_swap"), null],
+    [urgent("preempting"), null],
+    [urgent("failed"), null],
+    [urgent("blocked"), null],
+    [urgent("online_failed"), null],
+    [event({ kind: "urgent_stage", task: "t171", detail: {} }), null],
+    [
+      event({ kind: "urgent_stage", task: null, detail: { event: "online" } }),
+      null,
+    ],
+    [{ ...urgent("online"), subscriber: "u1" }, null],
+  ];
+  for (const [input, kind] of cases)
+    assert.equal(
+      pushOf(input, "secretary", title)?.kind ?? null,
+      kind,
+      JSON.stringify(input.detail),
+    );
+  // 同一任务的阶段合在一条事件里：卡住推过，后来上线还要再推一次。
+  assert.deepEqual(pushOf(urgent("online"), "secretary", title), {
+    key: "event:7:online",
+    kind: "urgent_online",
+    ref: "t171",
+    title: "修线上",
+  });
+  assert.equal(
+    pushOf(urgent("stalled"), "secretary", title)?.key,
+    "event:7:stalled",
+  );
+  assert.equal(
+    messageText([{ kind: "urgent_stuck", ref: "t171", title: "修线上" }]),
+    "Atrium：1 件事\n【紧急任务卡住】t171 修线上",
+  );
+});
+
 test("消息：一条列多件，超过上限写还有几件", () => {
   assert.equal(
     messageText([{ kind: "choice", ref: "c2", title: "下一步" }]),

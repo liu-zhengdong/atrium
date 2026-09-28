@@ -17,14 +17,13 @@ import { deliveryRoutes, SECRETARY } from "../leaders/route.ts";
 import { involvedOf } from "./also.ts";
 import { ref } from "../org/model.ts";
 import { hasOrg } from "../org/task-node.ts";
-import { urgentStage } from "./urgent.ts";
-
-/** 紧急任务各阶段推送给谁（t215）：秘书与用户（接推送前走事件）。 */
-export const URGENT_WATCHERS = [SECRETARY, "u1"] as const;
+import { URGENT_WATCHERS, urgentAlert, urgentStage } from "./urgent.ts";
 
 /**
  * 紧急任务的阶段推送（t215）：开始、止损、抢占、交付、检查、合入、上线（附验证）、失败、受阻、卡死重试、换人
- * 各投一条 urgent_stage 给秘书与用户；同一任务未确认的合并成最新一条（去重键 tN:urgent）。
+ * 各投一条 urgent_stage 给秘书与用户。只有上线、卡住、止损失败要处理（叫醒秘书、推到手机，t219），
+ * 其余是知会（进 events digest 与状态栏）；同一任务未确认的按级别各合并成最新一条
+ * （去重键 tN:urgent 与 tN:urgent_info，知会不会盖掉还没处理的要处理）。
  * 不是紧急任务或不是要推送的阶段不投；返回投了没有。
  */
 export function publishUrgentStage(
@@ -43,21 +42,23 @@ export function publishUrgentStage(
     typeof detail.reason === "string" && detail.reason
       ? `：${detail.reason}`
       : "";
+  const alert = urgentAlert(kind, detail);
   for (const subscriber of URGENT_WATCHERS)
     inbox.publish({
       subscriber,
       taskId: id,
       source: "urgent",
       kind: "urgent_stage",
-      key: `${row.ref}:urgent`,
+      key: `${row.ref}:${alert ? "urgent" : "urgent_info"}`,
       detail: {
         title: row.title,
         status: row.status,
         worker: row.worker,
         pr_url: row.pr_url,
+        ...detail,
+        // 分级按 event 判（eventLevel），放在展开之后免得被原事件的同名字段盖掉。
         stage,
         event: kind,
-        ...detail,
         // 一句话放在 message：事件列表与秘书唤醒都先读它。
         message: `紧急 ${row.ref}「${row.title}」${stage}${reason}`.slice(
           0,

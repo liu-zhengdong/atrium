@@ -2,6 +2,7 @@
 // 数据来自与 `atrium map --json` 相同的接口，订阅 /api/map/stream 的失效通知，变了只重取并重画，不整页重载。
 // 一页一件东西：面包屑 → 小字类别、大标题、属性行与介绍 → 页签。三类页：
 // - 块（组织节点）：#o2/tasks/all。组织根的页签是组成部分／选项／负责人／专员／技能／执行者／原则，执行者可按专员筛（#o1/workers/r1）；
+//   挂了资料的块多一个「资料」页签（只看，取与归档走命令行）；
 //   有选项单的块多一个「选项」页签（本块及下层产品部的，等你拍板的在前）；组织根顶部有「等你拍板：N」入口；
 //   其他块的「专员」页签只列属于这一块的，能请的其余专员折成一行，点开是 #o4/roles/all；
 // - 专员：#r1/workers，页签是任务／谁做得好／技能；
@@ -69,6 +70,7 @@ const PAGE_TABS = {
     "points",
     "findings",
     "choices",
+    "materials",
   ],
   role: ["tasks", "workers", "skills"],
   worker: ["deliveries", "notes"],
@@ -484,6 +486,44 @@ function drawFindings({ node: n }) {
       </div>`;
     }),
     "还没有巡检发现。",
+  );
+}
+
+// ---- 资料：挂在这一块上的设计稿、调研报告；网页只看，取与归档走命令行 ----
+
+const materialSize = (bytes) =>
+  bytes < 1024
+    ? `${bytes} B`
+    : bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(1)} KB`
+      : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const liveMaterials = (n) => (n.materials ?? []).filter((m) => !m.archived);
+
+function drawMaterials({ node: n }) {
+  return table(
+    "materials",
+    ["资料", "版本", "最近读取", "状态"],
+    (n.materials ?? []).map((m) => {
+      const state = m.archived
+        ? chip("已归档", "gray")
+        : m.superseded_by
+          ? chip(`被 ${m.superseded_by} 取代`, "orange")
+          : chip("在用", "green");
+      // 被取代的状态标签已说明白，不再重复「疑似没用」。
+      const hint =
+        m.stale && m.stale.kind !== "superseded"
+          ? `<span class="finding-reason" title="${esc(m.stale.reason)}">${chip("疑似没用", "amber")} ${esc(m.stale.reason)}</span>`
+          : m.keep_note
+            ? `<span class="finding-reason muted">留下：${esc(m.keep_note)}</span>`
+            : "";
+      return `<div class="row" role="row">
+        ${cell("资料", `<span class="task-ref">${esc(m.ref)}</span><span class="task-title">${esc(m.name)}<span class="task-parts">${esc(m.note || "（没写说明）")}</span></span>`, " name plain task")}
+        ${cell("版本", `<span class="finding-step">v${esc(m.version)} · ${esc(m.kind === "dir" ? `${m.files} 个文件` : "文件")} · ${esc(materialSize(m.bytes))}</span><code class="finding-command">atrium material get ${esc(m.ref)}</code>`, " text")}
+        ${cell("最近读取", m.last_read_at ? esc(`${clock(m.last_read_at)} ${who(m.last_read_by)}`) : `<span class="muted">还没人读过</span>`, " muted tagged")}
+        ${cell("状态", `<span class="chips">${state}</span>${hint}`, " fate")}
+      </div>`;
+    }),
+    "这一块还没挂资料。在终端用 atrium material add 节点 文件或目录 --note 一句话 挂上，派活时执行者会看到清单。",
   );
 }
 
@@ -1121,6 +1161,11 @@ const TABS = {
     count: (d) => openChoices(d.node).length || null,
     draw: drawChoices,
   },
+  materials: {
+    label: "资料",
+    count: (d) => liveMaterials(d.node).length,
+    draw: drawMaterials,
+  },
   deliveries: {
     label: "交付记录",
     count: (d) => d.worker.deliveries.length,
@@ -1171,6 +1216,7 @@ function tabsOf(d) {
       "workers",
       "points",
       "findings",
+      ...((d.node.materials ?? []).length ? ["materials"] : []),
     ];
   return [
     "parts",
@@ -1179,6 +1225,7 @@ function tabsOf(d) {
     ...((d.team ?? []).length ? ["roles"] : []),
     "points",
     "findings",
+    ...((d.node.materials ?? []).length ? ["materials"] : []),
   ];
 }
 const tabLabel = (d, id) =>

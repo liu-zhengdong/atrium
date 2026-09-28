@@ -11,7 +11,11 @@ import { skillCommands } from "./skills.ts";
 import { topCommand } from "./top.ts";
 import { statuslineCommand } from "./statusline.ts";
 import { quotaCommands } from "./quota.ts";
-import { leaderCommandGuard, workerGuard } from "./worker-guard.ts";
+import {
+  leaderCommandGuard,
+  workerGuard,
+  workerReadable,
+} from "./worker-guard.ts";
 import { eventCommands } from "./events.ts";
 import { chatCommand } from "./chat.ts";
 import { mapCommands } from "./map.ts";
@@ -20,6 +24,7 @@ import { leaderCommands } from "./leaders.ts";
 import { patrolCommands } from "./patrol.ts";
 import { scheduleCommands } from "./schedules.ts";
 import { memoCommands } from "./memos.ts";
+import { materialCommands } from "./materials.ts";
 import { choiceCommands } from "./choices.ts";
 import { productCommands } from "./products.ts";
 import { agentCommand, hostCommands } from "./hosts.ts";
@@ -109,6 +114,7 @@ export const commands: Record<string, Command> = {
   ...patrolCommands,
   ...scheduleCommands,
   ...memoCommands,
+  ...materialCommands,
   ...choiceCommands,
   ...productCommands,
   ...goalCommands,
@@ -179,6 +185,7 @@ export function help(): string {
       "目标",
       "组织",
       "备忘与决定",
+      "资料",
       "选项与拍板",
     ].flatMap((group) => [
       "",
@@ -211,7 +218,7 @@ export async function main(argv: string[]): Promise<number> {
         !["--help", "-h", "help", "guide"].includes(name ?? "") &&
         !rest.includes("--help")
       ) {
-        workerGuard();
+        if (!workerReadable(name, rest)) workerGuard();
         leaderCommandGuard(name);
       }
       if (name === undefined || name === "--no-open") {

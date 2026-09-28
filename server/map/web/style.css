@@ -342,6 +342,14 @@ a.crumb:hover {
     minmax(0, 1.3fr) minmax(0, 1.1fr) minmax(0, 1.2fr)
     150px;
 }
+/* 资料：名称与说明最宽，版本带取的命令，状态带清理线索。 */
+.table-materials .row {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px 170px;
+  align-items: start;
+}
+.table-materials .row.head {
+  align-items: center;
+}
 .table-findings .row.head,
 .table-findings-plain .row.head {
   align-items: center;

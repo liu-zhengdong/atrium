@@ -14,6 +14,7 @@ import { productOfNode } from "../products/model.ts";
 import { researchFacts } from "../products/facts.ts";
 import { researchBrief } from "../products/brief.ts";
 import type { EventInbox } from "../tasks/events.ts";
+import { publishMaterialHints } from "../materials/hints.ts";
 import { catchUp, dayLabel, decide, localOffset, type Offset } from "./plan.ts";
 import {
   dueSchedules,
@@ -254,6 +255,12 @@ export class SchedulePump {
       );
       if (!scheduled) throw error;
       return undefined;
+    }
+    // 例行巡检顺带看这一块的资料（t192）：只给 leader 线索，出错不挡本轮。
+    try {
+      publishMaterialHints(this.db, this.dispatch.inbox, row.node_id, now);
+    } catch (error) {
+      console.error(`周期任务 ${scheduleRef(row.id)} 的资料清理线索：`, error);
     }
     try {
       const launched = await this.dispatch.run(

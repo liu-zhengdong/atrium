@@ -286,7 +286,11 @@ export class Executors {
     const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
     const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");
-    const env = { ...this.ctx.launchOptions.env };
+    // 执行者 material get 时据此把读取记在这件任务上（t192）。
+    const env: NodeJS.ProcessEnv = {
+      ...this.ctx.launchOptions.env,
+      ATRIUM_TASK: task.ref,
+    };
     if (patrolRun(this.ctx.db, id)) {
       delete env.ATRIUM_WORKER;
       Object.assign(env, this.ctx.launchOptions.patrolServiceEnv);

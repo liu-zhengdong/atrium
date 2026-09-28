@@ -10,7 +10,7 @@ import { restartInProgress } from "../server/supervisor.ts";
 import { Problem } from "../server/problem.ts";
 import { localFetch, type LocalResponse } from "../server/local-http.ts";
 import { recordResult } from "./contract.ts";
-import { leaderSession, workerGuard } from "./worker-guard.ts";
+import { leaderSession, WORKER_FLAG, workerGuard } from "./worker-guard.ts";
 import { requireUserAuthService, userBearer } from "./auth.ts";
 import { missingRoute, outdatedServiceAt } from "./version-check.ts";
 
@@ -61,6 +61,28 @@ export function connectRunning(): Client | null {
   const record = readService(data);
   if (!record || !alive(record.pid)) return null;
   return client(serviceUrl(record), data);
+}
+
+/**
+ * 取资料（material get）用：执行者环境里没有隔离实例时，连用户正在跑的服务（只读、不拉起）；
+ * 其余照常 connect。见 worker-guard.ts 的 workerReadable。
+ */
+export async function connectForRead(): Promise<Client> {
+  try {
+    workerGuard();
+  } catch (error) {
+    if (process.env[WORKER_FLAG] !== "1") throw error;
+    const data = dataDirectory();
+    const record = readService(data);
+    if (!record || !alive(record.pid))
+      throw new Problem(
+        503,
+        "Atrium 服务没在跑，取不到资料；这台机器上没有 Atrium 服务时请在任务汇报里说明缺这份资料",
+        "service_unavailable",
+      );
+    return client(serviceUrl(record), data);
+  }
+  return connect();
 }
 
 const causeCode = (error: unknown) =>

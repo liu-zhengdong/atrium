@@ -4,8 +4,9 @@
  *
  * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
  * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交；在负责的部分或它的上一层提选项单、写意见；
- * 用户把节点的选项单拍板权下放给 leader 后拍板（是不是拍板人由 choices/store.ts 按节点设置判）。
- * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改谁拍板选项单、改技能、清额度、登记 leader 等。
+ * 用户把节点的选项单拍板权下放给 leader 后拍板（是不是拍板人由 choices/store.ts 按节点设置判）；
+ * 在负责的部分里加资料、归档、恢复、留下，取任何资料。
+ * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改谁拍板选项单、改技能、清额度、登记 leader、真删资料等。
  */
 
 export type LeaderRule =
@@ -27,6 +28,9 @@ export type LeaderRule =
   | "choice-add"
   | "choice-comment"
   | "choice-decide"
+  | "material-add"
+  | "material"
+  | "material-read"
   | "deny";
 
 const RULES: Record<string, LeaderRule> = {
@@ -56,6 +60,12 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/choices/:id/comment": "choice-comment",
   "POST /api/choices/:id/pick": "choice-decide",
   "POST /api/choices/:id/pass": "choice-decide",
+  // 资料（t192）：在负责的部分里加、归档、恢复、留下；取资料哪儿的都能取（记读者）。真删只有用户。
+  "POST /api/materials": "material-add",
+  "POST /api/materials/:id/archive": "material",
+  "POST /api/materials/:id/restore": "material",
+  "POST /api/materials/:id/keep": "material",
+  "POST /api/materials/:id/get": "material-read",
 };
 
 /** 读接口都放行（订阅者名另由 asVerdict 锁定为自己）；写接口只认表里列出的。 */
@@ -92,6 +102,11 @@ export function denyReason(leader: string, method: string, route: string) {
     return denied(leader, "登记、移除或暂停执行机器");
   if (key === "POST /api/products")
     return denied(leader, "成立产品部（那是用户的决定）");
+  if (key === "DELETE /api/materials/:id")
+    return denied(
+      leader,
+      "真删资料（那是用户的决定；用不上了就归档：atrium material archive mN --note 原因）",
+    );
   if (route.startsWith("/api/product/"))
     return denied(leader, "改谁拍板选项单（那是用户的决定）");
   return denied(leader, `调用 ${key}`);

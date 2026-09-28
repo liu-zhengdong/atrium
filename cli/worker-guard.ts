@@ -13,6 +13,15 @@ export const WORKER_REFUSAL =
 
 const USER_PORT = "4310";
 
+/**
+ * 执行者能对用户服务用的只读命令：取资料（t192，u1 定的「派活只附清单，执行者按需 material get」）。
+ * 只读、不拉起服务；读取记在 ATRIUM_TASK 那件任务上。
+ */
+export const workerReadable = (
+  name: string | undefined,
+  rest: readonly string[],
+) => name === "material" && rest[0] === "get";
+
 export function workerGuard(env: NodeJS.ProcessEnv = process.env) {
   if (env[WORKER_FLAG] !== "1") return;
   const data = env.ATRIUM_DATA?.trim();

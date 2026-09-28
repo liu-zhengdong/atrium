@@ -17,6 +17,9 @@ import {
   cmdShimTarget,
   commandLineInvocation,
   commandInvocation,
+  dmtfTime,
+  parseProcessProbe,
+  processProbeInvocation,
   executableNames,
   findExecutable,
   hasParentSegment,
@@ -565,6 +568,80 @@ test("同一路径：Windows 不分大小写、两种分隔符等同；Unix 严�
   assert.equal(samePath("linux", "/a/B", "/a/b"), false);
   assert.equal(samePath("darwin", "/a/b/", "/a/b"), true);
   assert.equal(samePath("linux", "/a\\b", "/a/b"), false);
+});
+
+test("读进程启动时刻与命令行（t217）：Unix ps 的 etime 与命令行，Windows 经 PowerShell 查 CreationDate 与 CommandLine", () => {
+  for (const platform of ["linux", "darwin"] as const)
+    assert.deepEqual(processProbeInvocation(platform, 42), {
+      command: "ps",
+      args: ["-ww", "-o", "etime=,command=", "-p", "42"],
+    });
+  const win = processProbeInvocation("win32", 42);
+  assert.equal(win.command, "powershell.exe");
+  assert.match(win.args.at(-1)!, /CreationDate,CommandLine/);
+  assert.match(win.args.at(-1)!, /ProcessId=42\b/);
+  for (const bad of [0, -1, 1.5, Number.NaN])
+    for (const platform of ["linux", "win32"] as const)
+      assert.throws(
+        () => processProbeInvocation(platform, bad),
+        /进程号不合法/,
+      );
+
+  const at = Date.UTC(2026, 8, 28, 12, 0, 0);
+  // etime 各种写法：分:秒、时:分:秒、天-时:分:秒；命令行带空格原样保留。
+  assert.deepEqual(
+    parseProcessProbe("linux", "   01:05 /usr/bin/claude -p hi there\n", at),
+    { start: at - 65_000, command: "/usr/bin/claude -p hi there" },
+  );
+  assert.deepEqual(
+    parseProcessProbe("darwin", "02:00:00 node /x/codex.js exec\n", at),
+    { start: at - 7_200_000, command: "node /x/codex.js exec" },
+  );
+  assert.deepEqual(
+    parseProcessProbe("linux", "1-00:00:01 kimi", at)?.start,
+    at - 86_401_000,
+  );
+  // 看不懂的时长：启动时刻 null（调用方据此不认）。
+  assert.deepEqual(parseProcessProbe("linux", "garbage claude", at), {
+    start: null,
+    command: "claude",
+  });
+  // 进程已不在：ps 没有输出。
+  assert.equal(parseProcessProbe("linux", "", at), null);
+  assert.equal(parseProcessProbe("darwin", "\n  \n", at), null);
+
+  // Windows：CreationDate 是本地时间加相对 UTC 的分钟数。
+  assert.equal(
+    dmtfTime("20260928200000.500000+480"),
+    Date.UTC(2026, 8, 28, 12, 0, 0, 500),
+  );
+  assert.equal(
+    dmtfTime("20260928070000.000000-300"),
+    Date.UTC(2026, 8, 28, 12, 0, 0),
+  );
+  for (const bad of ["", "2026-09-28", "20260928200000+480", "abc"])
+    assert.equal(dmtfTime(bad), null, bad);
+  assert.deepEqual(
+    parseProcessProbe(
+      "win32",
+      '20260928200000.000000+480\r\n"C:\\node.exe" C:\\npm\\claude-code\\cli.js -p\r\n',
+      at,
+    ),
+    {
+      start: Date.UTC(2026, 8, 28, 12, 0, 0),
+      command: '"C:\\node.exe" C:\\npm\\claude-code\\cli.js -p',
+    },
+  );
+  // 读不到命令行（别的用户的进程）：命令行为空，时刻照读。
+  assert.deepEqual(
+    parseProcessProbe("win32", "20260928200000.000000+480\r\n\r\n", at),
+    {
+      start: Date.UTC(2026, 8, 28, 12, 0, 0),
+      command: "",
+    },
+  );
+  assert.equal(parseProcessProbe("win32", "", at), null);
+  assert.equal(parseProcessProbe("win32", "\r\n", at), null);
 });
 
 test("读进程命令行：Unix ps -ww，Windows 经 PowerShell 查 Win32_Process；进程号须为正整数", () => {

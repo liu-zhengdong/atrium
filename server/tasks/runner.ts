@@ -102,6 +102,7 @@ import { hasOrg } from "../org/task-node.ts";
 import { existsSync } from "node:fs";
 import { HostLoad, hostView } from "./host-load.ts";
 import { OrphanReaper, recognizer, spawnOwner } from "./orphans.ts";
+import { reapLeftovers } from "./leftovers-reap.ts";
 import { sharedLocalChecks } from "./local-check.ts";
 import { skipIfBusy } from "./reentry.ts";
 import { RemoteHosts } from "../hosts/remote.ts";
@@ -398,7 +399,8 @@ export class TaskRunner {
     this.lane = new UrgentLane(db, {
       x: this.x,
       inbox: this.inbox,
-      exec: this.exec,
+      reapLocal: (targets) => reapLeftovers(targets, { exec: this.exec }),
+      remote: this.remote,
       stop: (ref) => this.stop(ref),
       pauseHost: (host) => void this.pauseHost(`h${host}`, true),
       run: (ref, body) => this.run(ref, body),
@@ -1290,12 +1292,12 @@ export class TaskRunner {
     return { host: this.viewOf(hostRow(this.db, id)) };
   }
 
-  /** 清理主机上 Atrium 拉起的残留进程（t215 `host clean`，止损动作同一实现）。 */
+  /** 清理主机上 Atrium 拉起的残留进程（t215 `host clean`，止损动作同一实现；t217 远程也清）。 */
   async cleanHost(reference: unknown) {
     const id = parseHostRef(reference, "主机");
     hostRow(this.db, id);
-    const detail = await this.lane.clean(id);
-    return { host: this.viewOf(hostRow(this.db, id)), detail };
+    const result = await this.lane.clean(id);
+    return { ...result, host: this.viewOf(hostRow(this.db, id)) };
   }
 
   /** 排队中的任务刚标上紧急：立刻按紧急再排一轮，不等下次巡检。 */

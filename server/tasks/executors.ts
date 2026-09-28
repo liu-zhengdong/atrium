@@ -20,6 +20,7 @@ import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
 import {
   dequeue,
   drainGate,
+  enqueue,
   pending,
   queuedFixes,
   queuedNormals,
@@ -127,6 +128,8 @@ export type ExecutorContext = {
   quota: QuotaGuard;
   killGraceMs?: number;
   closed: () => boolean;
+  /** 一键停机（server/pause.ts）：这件此刻被暂停挡着时给原因，拉起改成排队。 */
+  paused?: (id: number) => string | null;
   /** 交付关卡通过后的去向（审阅或合入队列）；返回要发的事件，false 表示照常发 done。 */
   onAccepted?: (
     id: number,
@@ -492,6 +495,9 @@ export class Executors {
     const target = chosen.host ?? LOCAL_HOST;
     if (!chosen.pausedOk && this.ctx.placement?.paused?.(target))
       throw new Error(`${hostRef(target)} 已暂停接活，不往那台拉起`);
+    // 重试、换人、续上也是新拉起：暂停着就排队，恢复后由 drain 拉起。
+    const hold = chosen.pausedOk ? null : this.ctx.paused?.(id);
+    if (hold) return this.hold(id, chosen, hold);
     // 被紧急任务抢占暂停过的（t215）：同一执行者且日志里有会话就续上，否则把说明写进提示词、在原工作树重派。
     const paused = openPreemption(this.ctx.db, id);
     const resume =
@@ -589,6 +595,23 @@ export class Executors {
   }
 
   /** 被抢占的任务续上了（t215）：关掉暂停记录、记事件并知会。 */
+  /** 暂停着：不拉起，落库排队（状态回到待办），恢复后按顺序拉起。 */
+  private hold(id: number, chosen: Chosen, reason: string): Task {
+    enqueue(this.ctx.db, {
+      task_id: id,
+      tool: chosen.worker.tool,
+      worker: chosen.worker.id,
+      risk: chosen.risk,
+      queued_at: Date.now(),
+      host_id: chosen.host ?? null,
+    });
+    if (getTask(this.ctx.db, id).status !== "todo")
+      this.advance(id, { kind: "manual_set", to: "todo" }, {}, "暂停中，排队");
+    noteTask(this.ctx.db, id, "queued", { worker: chosen.worker.id, reason });
+    this.ctx.waits.changed(id);
+    return getTask(this.ctx.db, id);
+  }
+
   private resumed(id: number, by: number, session: boolean, chosen: Chosen) {
     closePreemption(this.ctx.db, id, Date.now());
     const detail = {
@@ -1347,6 +1370,7 @@ export class Executors {
     for (const entry of entries) {
       const entryTool = entry.tool as Tool;
       if (this.ctx.closed()) return moved;
+      if (this.ctx.paused?.(entry.task_id)) continue;
       if (entry.idle)
         idleWait ??= idleAheadAll(
           entries.filter((other) => other.idle || waiting.has(other.task_id)),

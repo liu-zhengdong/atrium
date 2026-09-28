@@ -119,7 +119,7 @@ export type StopgapAction =
 
 const STOPGAP_MAX = 10;
 const STOPGAP_HINT =
-  "可用 atrium host pause hN、atrium task stop tN[,tM]、atrium host clean hN，用分号隔开";
+  "可用 atrium pause --host hN、atrium task stop tN[,tM]、atrium host clean hN，用分号隔开";
 
 const TASK_LIST_RE = /^t[1-9][0-9]{0,8}(,t[1-9][0-9]{0,8})*$/;
 
@@ -131,14 +131,17 @@ function parseStopgapLine(line: string, index: number): StopgapAction {
     usage(
       `stopgap: 第 ${index + 1} 条看不懂「${line.trim()}」；${STOPGAP_HINT}`,
     );
-  if (rest.length || !target) throw bad();
-  if (group === "host" && (verb === "pause" || verb === "clean")) {
+  // 暂停主机走一键停机：atrium pause --host hN。
+  if (group === "pause" && verb === "--host" && target && !rest.length) {
     const match = HOST_RE.exec(target);
     if (!match) throw bad();
-    return {
-      kind: verb === "pause" ? "host_pause" : "host_clean",
-      host: Number(match[1]),
-    };
+    return { kind: "host_pause", host: Number(match[1]) };
+  }
+  if (rest.length || !target) throw bad();
+  if (group === "host" && verb === "clean") {
+    const match = HOST_RE.exec(target);
+    if (!match) throw bad();
+    return { kind: "host_clean", host: Number(match[1]) };
   }
   if (group === "task" && verb === "stop") {
     const list = target.replace(/，/g, ",");
@@ -180,7 +183,7 @@ function parseStopgapObject(value: unknown, index: number): StopgapAction {
 }
 
 /**
- * 止损动作：命令行写法（`atrium host pause h3; atrium task stop t1,t2`，分号、换行或 && 隔开，atrium 可省）
+ * 止损动作：命令行写法（`atrium pause --host h3; atrium task stop t1,t2`，分号、换行或 && 隔开，atrium 可省）
  * 或结构化数组（`[{kind:"host_pause",host:"h3"}]`）。只认三种动作，不执行任意命令；至多 STOPGAP_MAX 条。
  */
 export function parseStopgap(value: unknown): StopgapAction[] {
@@ -224,7 +227,9 @@ export function stopgapJson(actions: readonly StopgapAction[]) {
 export function stopgapText(action: StopgapAction): string {
   if (action.kind === "task_stop")
     return `atrium task stop ${action.tasks.map((id) => `t${id}`).join(",")}`;
-  return `atrium host ${action.kind === "host_pause" ? "pause" : "clean"} h${action.host}`;
+  return action.kind === "host_pause"
+    ? `atrium pause --host h${action.host}`
+    : `atrium host clean h${action.host}`;
 }
 
 // ---- 抢占 ----

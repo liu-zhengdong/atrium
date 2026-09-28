@@ -45,7 +45,7 @@ export const NEXT_MERGE = `SELECT id,urgent FROM (
   SELECT id,urgent,merge_queued_at,0 AS seq FROM tasks WHERE delivery_stage='merging' AND status='done'
   UNION ALL
   SELECT id,urgent,merge_queued_at,1 AS seq FROM tasks WHERE delivery_stage='merge_queued' AND status='done'
-) ORDER BY urgent DESC,seq,merge_queued_at,id LIMIT 1`;
+) ORDER BY urgent DESC,seq,merge_queued_at,id LIMIT 50`;
 
 /** 正在处理的合入：让路（t215）靠它。committed 表示已发出 gh 合入，不再让。 */
 type Current = {
@@ -89,6 +89,8 @@ export class MergeQueue {
         actor?: string,
       ) => void;
       changed: (id: number) => void;
+      /** 一键停机（server/pause.ts）：这件被暂停挡着时跳过，别的照常合入。 */
+      paused?: (id: number) => boolean;
       cleaned?: (id: number) => Promise<void>;
       /** 服务自身仓库的 `-R` 写法；合入它的 PR 才等发版自动上线。 */
       selfRepo?: string | null;
@@ -187,8 +189,9 @@ export class MergeQueue {
 
   /** 下一个做谁：紧急的照做；不是紧急的，有紧急任务还在合入流程里就先暂停（t215）。 */
   private next(): number | null {
-    const row = this.db.prepare(NEXT_MERGE).get() as
-      { id: number; urgent: number } | undefined;
+    const row = (
+      this.db.prepare(NEXT_MERGE).all() as { id: number; urgent: number }[]
+    ).find((candidate) => !this.options.paused?.(candidate.id));
     const decision = mergeDecision({
       next: row ? { id: row.id, urgent: row.urgent === 1 } : null,
       urgentFlow: row && row.urgent !== 1 ? urgentInMergeFlow(this.db) : [],

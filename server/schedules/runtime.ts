@@ -23,7 +23,6 @@ import {
   liveRow,
   openTask,
   recordRun,
-  resumeSchedule,
   scheduleInput,
   scheduleRef,
   type ScheduleInput,
@@ -118,6 +117,8 @@ export class SchedulePump {
       offset?: Offset;
       /** 任务运行时接管完上次在跑的任务才开始（否则上一轮的状态还不准）。 */
       ready?: () => boolean;
+      /** 一键停机（server/pause.ts）：这个节点（全局或所在部分）暂停着就不生成，恢复后到点的只补一轮。 */
+      paused?: (node: number) => boolean;
     } = {},
   ) {
     this.offset = options.offset ?? localOffset;
@@ -144,6 +145,7 @@ export class SchedulePump {
       const now = this.now();
       for (const row of dueSchedules(this.db, now)) {
         if (this.closed) return;
+        if (this.options.paused?.(row.node_id)) continue;
         try {
           await this.fire(row, now);
         } catch (error) {
@@ -166,7 +168,7 @@ export class SchedulePump {
 
   private async fire(row: ScheduleRow, now: number) {
     const decision = decide(
-      { ...row, paused: false, removed: false },
+      { ...row, removed: false },
       openTask(this.db, row),
       now,
       this.offset,
@@ -197,9 +199,6 @@ export class SchedulePump {
   /** 登记与恢复用同一个时钟与时区（测试注入）。 */
   add(raw: unknown) {
     return addSchedule(this.db, raw, this.now(), this.offset);
-  }
-  resume(reference: unknown) {
-    return resumeSchedule(this.db, reference, this.now(), this.offset);
   }
 
   /** 手动触发一轮（`schedule run`）：不动下一轮的时间；上一轮没结束就不起。 */

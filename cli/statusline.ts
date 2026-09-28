@@ -10,6 +10,7 @@ import type { Client } from "./service.ts";
 import { duration, hostBrief, type Snapshot, type TopRow } from "./top.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { planCounts } from "../server/tasks/plan-count.ts";
+import { pauseText } from "../server/pause.ts";
 import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
 import { titleTag } from "../server/tasks/priority.ts";
@@ -221,7 +222,12 @@ export function renderStatusline(input: StatuslineInput): string {
   const secretaryPart = secretary
     ? paint(TONE[secretary.tone], secretary.text)
     : null;
+  // 一键停机：暂停着就先说，谁、何时、原因。
+  const paused = (snapshot.pauses ?? []).map((pause) =>
+    paint(`${BOLD}${RED}`, `■ ${pauseText(pause)}`),
+  );
   if (
+    !paused.length &&
     !held.length &&
     !leaders.length &&
     !events &&
@@ -259,7 +265,7 @@ export function renderStatusline(input: StatuslineInput): string {
           ]
         : []),
   ].join(" · ");
-  const lines = [head];
+  const lines = [...paused, head];
   if (choice) lines.push(paint(`${BOLD}${RED}`, `✱ ${choice}`));
   // 紧急任务太多（t215）：「紧急任务有 N 个，太多就等于没有紧急」，不拒绝。
   if (snapshot.urgent?.warning)

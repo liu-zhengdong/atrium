@@ -144,7 +144,7 @@ test("先止损：紧急任务建好先执行止损动作并记事件；没标�
     title: "修 Windows 弹窗",
     repo: fx.repo,
     urgent: true,
-    stopgap: "atrium task stop t1; atrium host pause h1; atrium task stop t9",
+    stopgap: "atrium task stop t1; atrium pause --host h1; atrium task stop t9",
     avoid_host: "h3",
   });
   assert.equal(made.status, 201, JSON.stringify(made.body));
@@ -155,7 +155,7 @@ test("先止损：紧急任务建好先执行止损动作并记事件；没标�
     ]),
     [
       ["atrium task stop t1", true],
-      ["atrium host pause h1", true],
+      ["atrium pause --host h1", true],
       ["atrium task stop t9", false],
     ],
   );
@@ -167,14 +167,7 @@ test("先止损：紧急任务建好先执行止损动作并记事件；没标�
   const [stop] = detailsOf(db, "t1", "stop_requested");
   assert.equal(stop.by, "t2");
   assert.equal(stop.reason, "紧急任务 t2 止损");
-  assert.equal(
-    (
-      db.prepare("SELECT paused FROM hosts WHERE id=1").get() as {
-        paused: number;
-      }
-    ).paused,
-    1,
-  );
+  assert.ok(db.prepare("SELECT 1 FROM pauses WHERE scope='h1'").get());
   assert.equal(detailsOf(db, "t2", "stopgap").length, 1);
   const stage = taskRunner.inbox
     .list("u1", { limit: 50 })
@@ -192,7 +185,7 @@ test("先止损：紧急任务建好先执行止损动作并记事件；没标�
   const before = count();
   for (const [body, message] of [
     [
-      { title: "x", stopgap: "atrium host pause h1" },
+      { title: "x", stopgap: "atrium pause --host h1" },
       /只有紧急任务能写止损动作/,
     ],
     [
@@ -200,7 +193,7 @@ test("先止损：紧急任务建好先执行止损动作并记事件；没标�
       /stopgap: 第 1 条看不懂/,
     ],
     [
-      { title: "x", urgent: true, stopgap: "atrium host pause h1; curl x" },
+      { title: "x", urgent: true, stopgap: "atrium pause --host h1; curl x" },
       /stopgap: 第 2 条看不懂/,
     ],
     [{ title: "x", avoid_host: "h0" }, /avoid_host: 应为主机短号/],
@@ -296,7 +289,7 @@ test("谁能标：leader 标紧急须写原因并知会秘书与用户；leader 
   const stopgap = await call(
     "POST",
     "/api/tasks",
-    { ...task, urgent: true, why: "挂了", stopgap: "atrium host pause h1" },
+    { ...task, urgent: true, why: "挂了", stopgap: "atrium pause --host h1" },
     leader,
   );
   assert.equal(stopgap.status, 403);

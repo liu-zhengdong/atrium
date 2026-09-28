@@ -15,6 +15,7 @@ import {
   type SecretaryView,
 } from "../server/tasks/secretary-watch.ts";
 import type { Holder } from "../server/tasks/holder.ts";
+import { pauseText, type Pause } from "../server/pause.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
 import { tagTitle } from "../server/tasks/priority.ts";
@@ -139,7 +140,8 @@ export type Snapshot = {
   host?: HostView;
   /** 秘书在不在听（t242）：看秘书的收件箱时给；旧版服务没有。 */
   secretary?: SecretaryView;
-  /** 合入队列长度与预计还要多久（t254）；队列空或旧版服务不给。 */
+  /** 一键停机：暂停着的（谁、何时、原因）；没有暂停或旧版服务不给。 */
+  pauses?: Pause[];
   /** 接入的远程主机（#358 第 1 步）；没有远程主机时不给。 */
   hosts?: {
     ref: string;
@@ -468,6 +470,9 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
     : null;
   const lines = [
     pad(oneLine(head, headRoom), headRoom) + clock,
+    ...(snapshot.pauses ?? []).map((pause) =>
+      oneLine(`■ ${pauseText(pause)}；恢复：atrium resume`, frame.width),
+    ),
     ...(choice ? [oneLine(choice, frame.width)] : []),
     // 紧急任务太多（t215）：不拒绝，只提醒。
     ...(snapshot.urgent?.warning

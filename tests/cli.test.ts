@@ -108,10 +108,10 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     }
   };
   const cli = (...args: string[]) => cliWith({}, ...args);
-  // 冷启动慢过命令行 12 秒窗口时那条命令会以 503 收场，但它已经把服务拉起来了：
+  // 冷启动慢过命令行等待窗口时 start 会以失败收场，但服务已经在起：
   // 回执不等，只等服务真的能应答，之后每条命令都打在热服务上，命令的成败只反映命令本身。
   const warm = async () => {
-    const started = cli("task", "ls");
+    const started = cli("start");
     await waitService(data);
     await started;
   };

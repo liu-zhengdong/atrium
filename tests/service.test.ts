@@ -871,7 +871,7 @@ test(
     assert(viaCli.stderr.includes(expected), viaCli.stderr);
     assert.doesNotMatch(viaCli.stderr, /EADDRINUSE|\n\s+at /);
     assert(!existsSync(second), "命令行不建第二份数据目录");
-    // 经服务的命令（task ls）：同一句回执，不附第二份数据的日志与 status 修正。
+    // 经服务的命令（task ls）：不拉起服务，只说第二份数据的服务没在跑、给 atrium start。
     const viaCommand = await exec(
       process.execPath,
       [join(packageRoot, "bin/atrium.mjs"), "task", "ls"],
@@ -880,9 +880,9 @@ test(
       () => ({ code: 0, stderr: "" }),
       (error: { code: number; stderr: string }) => error,
     );
-    assert.equal(viaCommand.code, 4);
-    assert(viaCommand.stderr.includes(expected), viaCommand.stderr);
-    assert.doesNotMatch(viaCommand.stderr, /日志：|atrium status/);
+    assert.equal(viaCommand.code, 5);
+    assert.match(viaCommand.stderr, /Atrium 服务没在跑/);
+    assert.match(viaCommand.stderr, /修正：atrium start/);
     assert(!existsSync(second));
     // 服务入口直接启动（绕过命令行）：同样在建表前退出。
     const viaServer = await exec(

@@ -17,6 +17,12 @@ import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
 import { ensureTaskTables } from "./tasks/ledger-schema.ts";
+import {
+  ensurePauseTable,
+  globalPause,
+  migrateOldPauses,
+  partPause,
+} from "./pause.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { QuotaReaders } from "./quota-readers/index.ts";
@@ -275,6 +281,13 @@ export async function createApp(options: {
   ensureTaskTables(db);
   ensureOrgTables(db);
   ensureScheduleTables(db);
+  // 一键停机（server/pause.ts）：旧的主机暂停、周期任务暂停在任务运行时起来前并进来，只迁一次。
+  ensurePauseTable(db);
+  try {
+    for (const note of migrateOldPauses(db)) console.log(note);
+  } catch (error) {
+    console.error("旧的暂停状态迁移失败，已跳过：", error);
+  }
   const taskRunner = registerTaskRoutes(app, db, taskOptions);
   registerPatrolRoutes(app, db, taskRunner);
   // 周期任务（#404）：到点在节点下建普通任务并派发；等任务运行时接管完上次在跑的再判上一轮。
@@ -284,7 +297,11 @@ export async function createApp(options: {
       run: (reference, body) => taskRunner.run(reference, body),
       inbox: taskRunner.inbox,
     },
-    { ready: () => taskRunner.ready, ...options.schedules },
+    {
+      ready: () => taskRunner.ready,
+      paused: (node) => !!globalPause(db) || !!partPause(db, node),
+      ...options.schedules,
+    },
   );
   registerScheduleRoutes(app, db, schedulePump);
   // 产品部（#404 第 3 步）：建节点、leader 与 research 周期任务；研究收尾在任务运行时里登记选项单。
@@ -322,6 +339,7 @@ export async function createApp(options: {
     resolve(options.data),
     {
       ...options.secretary,
+      paused: () => !!globalPause(db),
       alert: (alert) => notifier.push(awayPush(alert)),
     },
   );
@@ -335,6 +353,17 @@ export async function createApp(options: {
     data: resolve(options.data),
     env: options.tasks?.env,
     url: () => options.serviceUrl,
+    // 全局暂停不叫醒任何 leader；部分暂停不叫醒负责那一块的 leader。
+    paused: (leader) =>
+      !!globalPause(db) ||
+      (leader !== undefined &&
+        (
+          db
+            .prepare(
+              "SELECT id FROM org_nodes WHERE leader=? AND archived_at IS NULL LIMIT 100",
+            )
+            .all(leader) as { id: number }[]
+        ).some((node) => !!partPause(db, node.id))),
     ...leaderEnvOptions(),
     ...options.leaders,
   });

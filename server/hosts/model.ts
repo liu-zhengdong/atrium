@@ -30,7 +30,6 @@ export type HostRow = {
   load: string | null;
   max_running: number | null;
   repos: string;
-  paused: number;
   join_hash: string | null;
   join_expires_at: number | null;
   token_hash: string | null;
@@ -65,7 +64,6 @@ export function ensureHostTables(db: DatabaseSync) {
       info TEXT, load TEXT,
       max_running INTEGER,
       repos TEXT NOT NULL DEFAULT '[]',
-      paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),
       join_hash TEXT, join_expires_at INTEGER,
       token_hash TEXT,
       joined_at INTEGER, last_seen_at INTEGER,
@@ -84,14 +82,7 @@ export function ensureHostTables(db: DatabaseSync) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       host_id INTEGER NOT NULL,
       connection_json TEXT NOT NULL,
-      archived_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS host_pauses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      host_id INTEGER NOT NULL,
-      paused INTEGER NOT NULL CHECK(paused IN (0,1)),
-      by TEXT NOT NULL,
-      at INTEGER NOT NULL);
-    CREATE INDEX IF NOT EXISTS host_pauses_host ON host_pauses(host_id,id);`);
+      archived_at INTEGER NOT NULL);`);
   const columns = new Set(
     (db.prepare("PRAGMA table_info(hosts)").all() as { name: string }[]).map(
       (column) => column.name,
@@ -439,57 +430,13 @@ export function touchHost(
   else db.prepare("UPDATE hosts SET last_seen_at=? WHERE id=?").run(now, id);
 }
 
-/**
- * 暂停或恢复接活（t227）：状态真变了才改并记一笔谁、何时（host_pauses），返回是否变了。
- * 只有这里改 paused；代理接入、心跳、上报都不碰它。
- */
-export function setPaused(
-  db: DatabaseSync,
-  id: number,
-  paused: boolean,
-  by: string,
-  now = Date.now(),
-) {
-  const row = hostRow(db, id);
-  if (row.removed_at !== null)
-    throw new Problem(409, `${hostRef(id)} 已移除`, "conflict");
-  if ((row.paused === 1) === paused) return false;
-  atomically(db, () => {
-    db.prepare("UPDATE hosts SET paused=?,updated_at=? WHERE id=?").run(
-      paused ? 1 : 0,
-      now,
-      id,
-    );
-    db.prepare(
-      "INSERT INTO host_pauses(host_id,paused,by,at) VALUES (?,?,?,?)",
-    ).run(id, paused ? 1 : 0, by, now);
-  });
-  return true;
-}
-
-export type HostPause = { paused: boolean; by: string; at: number };
-
-/** 这台最近几次暂停与恢复，新的在前。 */
-export function pauseHistory(
-  db: DatabaseSync,
-  id: number,
-  limit = 10,
-): HostPause[] {
-  return all<{ paused: number; by: string; at: number }>(
-    db,
-    "SELECT paused,by,at FROM host_pauses WHERE host_id=? ORDER BY id DESC LIMIT ?",
-    id,
-    limit,
-  ).map((row) => ({ paused: row.paused === 1, by: row.by, at: row.at }));
-}
-
 /** 移除远程主机：令牌作废、短号保留不复用；上面还有在跑的任务时拒绝。 */
 export function removeHost(db: DatabaseSync, id: number, now = Date.now()) {
   const row = hostRow(db, id);
   if (row.kind === "local")
     throw new Problem(
       409,
-      "本机（h1）不能移除；不想在本机跑可以 atrium host pause h1",
+      "本机（h1）不能移除；不想在本机跑可以 atrium pause --host h1",
       "conflict",
     );
   if (row.removed_at !== null)
@@ -609,6 +556,8 @@ export function hostView(
   row: HostRow,
   runtime: {
     polling: boolean;
+    /** 一键停机里这台暂停了没有（server/pause.ts）。 */
+    paused: boolean;
     running: number;
     localMax?: number | null;
     /** 多久没来算离线；缺省 ONLINE_MS。 */
@@ -636,12 +585,12 @@ export function hostView(
       row.removed_at !== null
         ? "已移除"
         : connectionText(state, {
-            paused: row.paused === 1,
+            paused: runtime.paused,
             lastSeenAt: row.last_seen_at,
             joinExpiresAt: row.join_expires_at,
             now,
           }),
-    paused: row.paused === 1,
+    paused: runtime.paused,
     removed: row.removed_at !== null,
     info,
     load: parse<HostLoadReport>(row.load),

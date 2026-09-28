@@ -67,6 +67,8 @@ export type LeaderWakerOptions = {
   hangMs?: number;
   /** 多久巡检一次挂着的任务。 */
   hangCheckMs?: number;
+  /** 一键停机（server/pause.ts）：不给 leader 为全局暂停；给了看这位 leader 负责的部分。 */
+  paused?: (leader?: string) => boolean;
 };
 
 export const LEADER_BATCH_MS = 30_000;
@@ -247,6 +249,8 @@ export class LeaderWaker {
   /** 巡检一轮：先看有没有挂在 leader 手里太久的任务（低频），再给每位已登记、没在跑的 leader 攒批到点就唤醒。 */
   tick() {
     const now = this.now;
+    // 全局暂停：不巡检挂着的、不叫醒任何人；事件留在收件箱，恢复后照常攒批唤醒。
+    if (this.options.paused?.()) return;
     if (
       now - this.hangCheckedAt >=
       (this.options.hangCheckMs ?? LEADER_HANG_CHECK_MS)
@@ -263,6 +267,7 @@ export class LeaderWaker {
     }
     for (const leader of registeredLeaders(this.db)) {
       if (this.running.has(leader) || this.abort.signal.aborted) continue;
+      if (this.options.paused?.(leader)) continue;
       const events = this.inbox.pending(leader);
       const decision = decideWake({
         events: events.map((e) => ({ id: e.id, queuedAt: e.updated_at })),

@@ -13,7 +13,7 @@ const str = (values: Values, key: string) =>
   typeof values[key] === "string" ? (values[key] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
 
-const STATE = { active: "", paused: "研究已暂停", removed: "研究已删除" };
+const STATE = { active: "", removed: "研究已删除" };
 
 export function productLine(p: ProductView) {
   return [

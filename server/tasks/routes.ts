@@ -45,6 +45,7 @@ import { taskPlan } from "./schedule.ts";
 import { parseTaskRef } from "./ledger.ts";
 import { verifierOf } from "./verify-guard.ts";
 import { markVerdict, whyOf } from "./urgent.ts";
+import { globalPause, pauseText } from "../pause.ts";
 
 type Query = Record<string, string | undefined>;
 const params = (value: unknown) => (value ?? {}) as { id?: string };
@@ -388,12 +389,29 @@ export function registerTaskRoutes(
       disconnect(request),
     ),
   );
-  app.get("/api/events/wait", (request) => {
+  // 一键停机（server/pause.ts）：记在谁名下（?as=，缺省 u1；秘书会话带 secretary）；leader 令牌到不了这里。
+  app.get("/api/pause", () => runner.pauses());
+  app.post("/api/pause", { bodyLimit: 4 * 1024 }, (request) =>
+    runner.pause(request.body, resolveActor(db, query(request.query).as)),
+  );
+  app.post("/api/resume", { bodyLimit: 4 * 1024 }, (request) =>
+    runner.resume(request.body, resolveActor(db, query(request.query).as)),
+  );
+  app.get("/api/events/wait", async (request) => {
     const q = query(request.query);
+    // 全局暂停时事件照常落库，但不投给等待的人；恢复后照常取走。
+    const seconds = waitSeconds(q.timeout);
+    const signal = disconnect(request);
+    const until = Date.now() + seconds * 1000;
+    while (globalPause(db) && Date.now() < until && !signal.aborted)
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    const paused = globalPause(db);
+    if (paused)
+      return { events: [], timed_out: true, paused: pauseText(paused) };
     return runner.inbox.wait(
       actorOf(q),
-      waitSeconds(q.timeout),
-      disconnect(request),
+      Math.max(0, Math.ceil((until - Date.now()) / 1000)),
+      signal,
       {
         peek: q.peek === "1" || q.peek === "true",
         all: q.all === "1",

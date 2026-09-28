@@ -139,7 +139,9 @@ function stopgapLine(text: string) {
       .map((a) =>
         a.kind === "task_stop"
           ? `atrium task stop ${(a.tasks ?? []).join(",")}`
-          : `atrium host ${a.kind === "host_pause" ? "pause" : "clean"} ${a.host}`,
+          : a.kind === "host_pause"
+            ? `atrium pause --host ${a.host}`
+            : `atrium host clean ${a.host}`,
       )
       .join("; ");
   } catch {

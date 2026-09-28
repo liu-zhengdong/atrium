@@ -81,8 +81,6 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/secrets/keep": "secret",
   // 周期任务（sN）：节点在负责的部分里才行，新建看 body.node，其余看这条周期任务挂在哪。
   "POST /api/schedules": "schedule",
-  "POST /api/schedules/:id/pause": "schedule",
-  "POST /api/schedules/:id/resume": "schedule",
   "POST /api/schedules/:id/run": "schedule",
   "DELETE /api/schedules/:id": "schedule",
 };

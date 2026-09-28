@@ -20,7 +20,7 @@ type Schedule = {
   at: string | null;
   by: string | null;
   worker: string | null;
-  state: "active" | "paused" | "removed";
+  state: "active" | "removed";
   next_at: number | null;
   last_task: { ref: string; status: string } | null;
 };
@@ -35,7 +35,7 @@ type Detail = Schedule & {
 };
 
 const kindText = { task: "任务", patrol: "体验巡检", research: "调研" };
-const stateText = { active: "", paused: "已暂停", removed: "已删除" };
+const stateText = { active: "", removed: "已删除" };
 const outcomeText = { created: "生成", skipped: "跳过", failed: "失败" };
 
 /** 周期的人话：每天、每 7 天、每 12 小时。 */
@@ -95,28 +95,6 @@ function file(value: string) {
     throw new Problem(400, `--brief 指向的文件不存在：${path}`, "usage");
   return path;
 }
-
-const one = (verb: string, about: string, done: string): Command => ({
-  args: "sN",
-  about,
-  positionals: [1, 1],
-  async run({ positionals: [ref], json }) {
-    const client = await api();
-    const path = `/schedules/${enc(ref!)}${verb === "rm" ? "" : `/${verb}`}`;
-    const result =
-      verb === "rm"
-        ? await client.delete<Detail>(path)
-        : await client.post<Detail>(path, {});
-    output(
-      json,
-      result,
-      `${result.ref} ${done}：${scheduleLine(result)}`,
-      verb === "pause"
-        ? `恢复：atrium schedule resume ${result.ref}`
-        : `看周期任务：atrium schedule show ${result.ref}`,
-    );
-  },
-});
 
 export const scheduleCommands: Record<string, Command> = {
   "schedule add": {
@@ -237,15 +215,20 @@ export const scheduleCommands: Record<string, Command> = {
       );
     },
   },
-  "schedule pause": one("pause", "暂停周期任务：到点不再生成", "已暂停"),
-  "schedule resume": one(
-    "resume",
-    "恢复周期任务：暂停期间的轮次不补，从下一个到点开始",
-    "已恢复",
-  ),
-  "schedule rm": one(
-    "rm",
-    "删除周期任务：不再生成，已生成的任务照常；sN 不复用",
-    "已删除",
-  ),
+  "schedule rm": {
+    args: "sN",
+    about: "删除周期任务：不再生成，已生成的任务照常；sN 不复用",
+    positionals: [1, 1],
+    async run({ positionals: [ref], json }) {
+      const result = await (
+        await api()
+      ).delete<Detail>(`/schedules/${enc(ref!)}`);
+      output(
+        json,
+        result,
+        `${result.ref} 已删除：${scheduleLine(result)}`,
+        `看周期任务：atrium schedule show ${result.ref}`,
+      );
+    },
+  },
 };

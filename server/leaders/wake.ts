@@ -312,7 +312,7 @@ export function leaderPrompt(input: PromptInput): string {
     `- 子节点指派 leader：atrium org edit 子节点 --leader aM`,
     "- 资料：atrium material ls --node oN；疑似没用的（资料清理线索）你来定：用不上就 atrium material archive mN --note 原因（只归档不删，可恢复），要留就 atrium material keep mN --note 原因（之后不再提）；拿不准先 atrium material show mN 看谁读过",
     "- 凭据：atrium secret ls --node oN（只有名称与最近使用，没有值）；疑似没用的（90 天没用过）你来定：用不上就 atrium secret archive oN 名称 --note 原因（派活不再注入，可恢复），要留就 atrium secret keep oN 名称 --note 原因；任务要用就 task add/set --secret 名称，派活时按名称注入执行者",
-    `- 周期任务（巡检、调研）：atrium schedule add ${home} --kind patrol --every 1d --at 09:30；atrium schedule pause/resume/run/rm sN`,
+    `- 周期任务（巡检、调研）：atrium schedule add ${home} --kind patrol --every 1d --at 09:30；atrium schedule run/rm sN`,
     "- 备忘：atrium memo edit 文本（覆盖写，超过上限会被拒，先精简）；看全：atrium memo show",
     `- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--node ${home}] [--issue N] [--task tN] [--supersedes dN] [--principle]；推翻：atrium decision supersede dN --by dM；推翻错了：atrium decision unsupersede dN --why 原因；查：atrium decision ls --node ${home}、atrium decision search 关键词`,
     `- 例行巡检（周期任务到点、资料清理线索）时顺带看本部分的决定（atrium decision ls --node ${home}）：能合并的合并，被取代的标推翻并指向新决定（decision supersede），已成规矩的沉淀为要点（atrium decision settle dN --new-point 节点 要点 或 --point kN）；只是整理，不必每次都做`,

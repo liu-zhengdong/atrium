@@ -176,6 +176,8 @@ export type StartWaitOptions = {
   notice?: (message: string) => void;
   /** 测试用：替换服务入口脚本（相对 packageRoot 或绝对路径）。 */
   entry?: string;
+  /** false：服务没在跑就报错、不拉起（只有 atrium 与 atrium start 启动服务）；重启中照样等新服务。 */
+  launch?: boolean;
 };
 export async function startService(
   data: string,
@@ -185,6 +187,7 @@ export async function startService(
     noticeMs = 5000,
     notice = (message: string) => console.error(message),
     entry,
+    launch = true,
   }: StartWaitOptions = {},
 ) {
   // 重启进行中：旧服务在关、新服务由 supervisor 拉起。这里不抢着自己拉，等新服务
@@ -215,6 +218,14 @@ export async function startService(
   let child: ReturnType<typeof spawnNode> | undefined;
   let launchError: Error | undefined;
   let logStart = 0;
+  if ((!record || !alive(record.pid)) && !launch)
+    throw new Problem(
+      503,
+      `Atrium 服务没在跑（数据：${data}）`,
+      "service_unavailable",
+      undefined,
+      "atrium start",
+    );
   if (!record || !alive(record.pid)) {
     const port = servicePort();
     // t71：端口已被别的程序或另一份数据的 Atrium 占着，就不拉起服务、不建数据目录。

@@ -141,7 +141,7 @@ export type Clock = {
 };
 
 export type Decision =
-  /** 没到点、已暂停或已删除。 */
+  /** 没到点或已删除。 */
   | { kind: "wait" }
   /** 到点：生成一轮；missed 是停机错过、不再补的轮数。 */
   | { kind: "run"; next_at: number; missed: number }
@@ -152,14 +152,13 @@ export type Decision =
  * 巡检时一条周期任务该做什么。停机错过好几轮只补一轮；上一轮（todo / running / blocked）没结束就跳过。
  */
 export function decide(
-  schedule: Clock & { paused: boolean; removed: boolean },
+  schedule: Clock & { removed: boolean },
   /** 上一轮还没结束的任务短号；没有或已结束为 null。 */
   open: string | null,
   now: number,
   offset: Offset = localOffset,
 ): Decision {
-  if (schedule.paused || schedule.removed || schedule.next_at > now)
-    return { kind: "wait" };
+  if (schedule.removed || schedule.next_at > now) return { kind: "wait" };
   const { slots, next } = catchUp(
     schedule.next_at,
     schedule.every_ms,
@@ -171,16 +170,6 @@ export function decide(
   return open
     ? { kind: "skip", next_at: next, missed, open }
     : { kind: "run", next_at: next, missed };
-}
-
-/** 恢复：暂停期间的轮次不补，从现在往后的下一轮开始。 */
-export function resumeAt(
-  clock: Clock,
-  now: number,
-  offset: Offset = localOffset,
-): number {
-  return catchUp(clock.next_at, clock.every_ms, clock.at_minute, now, offset)
-    .next;
 }
 
 /** 上一轮算没结束的状态。 */

@@ -45,6 +45,7 @@ export const VERIFIER_FLAG = "ATRIUM_VERIFIER";
 const VERIFIER_REFUSED = new Set([
   "",
   "--no-open",
+  "start",
   "stop",
   "restart",
   "update",
@@ -132,6 +133,7 @@ export function leaderSession(
 const LEADER_REFUSED = new Set([
   "",
   "--no-open",
+  "start",
   "stop",
   "restart",
   "update",

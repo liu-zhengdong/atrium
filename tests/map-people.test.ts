@@ -258,16 +258,13 @@ test("全景的角色、技能、执行者视图：挂在哪、谁做得好、�
     /没有交付记录，也没有档案/,
   );
 
-  // 各部分的任务带角色；专员带人话「什么时候请来」。
+  // 各部分的任务带角色。
   const node = mapNode(db, "o3");
   assert.deepEqual(node.tasks.running[0]!.job, { ref: "r1", name: "后端" });
-  editMap(db, "o4", { when: "动到凭据、权限时" }, "u1");
-  assert.equal("concerns" in mapNode(db, "o2"), false);
   assert.throws(
-    () => editMap(db, "o3", { when: "随时" }, "u1"),
-    /--when: 专员请用 atrium specialist edit/,
+    () => editMap(db, "o3", { when: "随时" } as never, "u1"),
+    /--when: 不是全景字段/,
   );
-  editMap(db, "o4", { when: "" }, "u1");
   assert.equal("concerns" in mapNode(db, "o2"), false);
   db.close();
 });

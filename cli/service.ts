@@ -24,7 +24,7 @@ import { missingRoute, outdatedServiceAt } from "./version-check.ts";
 export type Client = ReturnType<typeof client>;
 
 /**
- * 连上 Atrium 服务；没在跑就在后台拉起，不开浏览器。
+ * 连上在跑的 Atrium 服务；没在跑就报错并给出 atrium start，不自动拉起（重启中等新服务就绪）。
  * 能力定义只在服务这一份，命令行不直接开数据库，改动才会经过投递与唤醒。
  */
 export async function connect(quietStart = false): Promise<Client> {
@@ -46,26 +46,25 @@ export async function connect(quietStart = false): Promise<Client> {
     return client(serviceUrl(before), data);
   }
   const restarting = restartInProgress(data);
-  const record = await startService(data).catch((error: unknown) => {
-    // 端口被别的数据目录或程序占着（t71）：原样报，不附本数据目录的日志与 status 修正。
-    if (error instanceof Problem) throw error;
-    throw new Problem(
-      503,
-      error instanceof Error ? error.message : String(error),
-      "service_unavailable",
-    );
-  });
+  const record = await startService(data, { launch: false }).catch(
+    (error: unknown) => {
+      // 端口被别的数据目录或程序占着（t71）：原样报，不附本数据目录的日志与 status 修正。
+      if (error instanceof Problem) throw error;
+      throw new Problem(
+        503,
+        error instanceof Error ? error.message : String(error),
+        "service_unavailable",
+      );
+    },
+  );
   await requireUserAuthService(record);
   if (!quietStart && restarting)
     console.error(`Atrium 已重启，命令发往新服务 · PID ${record.pid}`);
-  else if (!quietStart && (!before || before.pid !== record.pid))
-    console.error(
-      `Atrium 服务已在后台启动 · PID ${record.pid} · ${serviceUrl(record)} · 停止：atrium stop`,
-    );
   let current = record;
   return client(serviceUrl(record), data, async (error) => {
+    // 服务停了就不重发：只有重启中才等新服务。
     if (!resendable(error, data, current)) return null;
-    current = await startService(data);
+    current = await startService(data, { launch: false });
     return serviceUrl(current);
   });
 }

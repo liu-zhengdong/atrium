@@ -65,8 +65,6 @@ type HostView = {
   checks?: string;
 };
 
-type HostPause = { paused: boolean; by: string; at: number };
-
 const HOST_REF = /^h[1-9][0-9]{0,8}$/;
 function hostRef(value: string | undefined) {
   if (!value || !HOST_REF.test(value))
@@ -139,7 +137,6 @@ export function hostTable(hosts: HostView[]) {
 function detail(
   view: HostView & {
     tasks?: { ref: string; title: string }[];
-    pauses?: HostPause[];
   },
 ) {
   return [
@@ -161,14 +158,6 @@ function detail(
       : []),
     ...(view.checks ? [`把关检查：${view.checks}`] : []),
     ...(view.last_seen_at ? [`最近心跳：${when(view.last_seen_at)}`] : []),
-    ...(view.pauses?.length
-      ? [
-          `暂停与恢复：${view.pauses
-            .slice(0, 5)
-            .map((p) => `${when(p.at)} ${p.by} ${p.paused ? "暂停" : "恢复"}`)
-            .join("；")}`,
-        ]
-      : []),
     ...(view.tasks?.length
       ? [
           "在跑的任务：",
@@ -182,21 +171,6 @@ const serviceAddress = async () => {
   const { servicePort } = await import("../server/service-state.ts");
   return `http://127.0.0.1:${servicePort()}`;
 };
-
-/** 暂停或恢复接活，记在 --as 名下（缺省秘书会话记 secretary，否则 u1）。 */
-async function pauseRequest(
-  reference: string,
-  paused: boolean,
-  values: Values,
-) {
-  const who = str(values, "as") ?? defaultActor();
-  if (who !== undefined && !who.trim())
-    throw new Problem(400, "--as 不能为空", "usage");
-  return (await client()).post<{ host: HostView; changed: boolean }>(
-    `/hosts/${enc(hostRef(reference))}/pause${who ? `?${new URLSearchParams({ as: who.trim() })}` : ""}`,
-    { paused },
-  );
-}
 
 export const hostCommands: Record<string, Command> = {
   "host ls": {
@@ -231,7 +205,6 @@ export const hostCommands: Record<string, Command> = {
       ).get<
         HostView & {
           tasks: { ref: string; title: string }[];
-          pauses: HostPause[];
         }
       >(`/hosts/${enc(hostRef(reference))}`);
       if (json) printJson(view);
@@ -340,28 +313,10 @@ export const hostCommands: Record<string, Command> = {
       recordNext("看剩下的：atrium host ls");
     },
   },
-  "host pause": {
-    args: "hN [--as u1|secretary]",
-    about:
-      "暂停往这台派新活（在跑的照跑）：自动派、排队拉起、重试换人都不去这台；只想派一件过去用 task run tN --host hN，不要先恢复；本机 h1 也可以暂停，让活只去远程；谁、何时暂停记进 host show",
-    options: { as: { type: "string" } },
-    positionals: [1, 1],
-    async run({ positionals: [reference], values, json }) {
-      const result = await pauseRequest(reference, true, values);
-      if (json) printJson(result);
-      else
-        console.log(
-          result.changed
-            ? `${result.host.ref} ${result.host.name} 已暂停接活；在跑的照跑`
-            : `${result.host.ref} ${result.host.name} 本来就暂停着，没变`,
-        );
-      recordNext(`恢复：atrium host resume ${result.host.ref}`);
-    },
-  },
   "host clean": {
     args: "hN",
     about:
-      "止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树（远程由那台的代理核对并结束；按命令行与启动时刻核对，不碰你自己开的进程），逐条列出并记进任务事件；常和 host pause 一起写进紧急任务的 --stopgap",
+      "止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树（远程由那台的代理核对并结束；按命令行与启动时刻核对，不碰你自己开的进程），逐条列出并记进任务事件；常和 pause --host 一起写进紧急任务的 --stopgap",
     positionals: [1, 1],
     async run({ positionals: [reference], json }) {
       const result = await (
@@ -393,24 +348,6 @@ export const hostCommands: Record<string, Command> = {
             ? `看任务事件：atrium task show ${result.killed[0]!.task}`
             : `看这台：atrium host show ${result.host.ref}`,
       );
-    },
-  },
-  "host resume": {
-    args: "hN [--as u1|secretary]",
-    about:
-      "恢复往这台派活：排着的活会立刻按顺序拉起、可能派到这台（只想派一件过去用 task run tN --host hN）；谁、何时恢复记进 host show",
-    options: { as: { type: "string" } },
-    positionals: [1, 1],
-    async run({ positionals: [reference], values, json }) {
-      const result = await pauseRequest(reference, false, values);
-      if (json) printJson(result);
-      else
-        console.log(
-          result.changed
-            ? `${result.host.ref} ${result.host.name} 已恢复接活`
-            : `${result.host.ref} ${result.host.name} 本来就在接活，没变`,
-        );
-      recordNext("看主机：atrium host ls");
     },
   },
 };

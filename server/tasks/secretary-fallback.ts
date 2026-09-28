@@ -163,6 +163,8 @@ export class SecretaryFallback {
       alert?: (alert: SecretaryAlert) => void;
       /** 有事时多久再看一眼在不在听（毫秒），测试缩短。 */
       checkMs?: number;
+      /** 一键停机（server/pause.ts）：全局暂停时不在后台叫醒秘书。 */
+      paused?: () => boolean;
     } = {},
   ) {}
 
@@ -213,6 +215,10 @@ export class SecretaryFallback {
     const checkMs = this.options.checkMs ?? CHECK_MS;
     while (!signal.aborted) {
       try {
+        if (this.options.paused?.()) {
+          await this.pause(checkMs);
+          continue;
+        }
         const events = this.inbox.pending(SUBSCRIBER);
         const decision = watchDecision({
           now: now(),

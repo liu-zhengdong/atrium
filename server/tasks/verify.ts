@@ -306,7 +306,7 @@ export const VERIFY_RULES: readonly string[] = [
   "凭据不进输出：不打印、不复制、不转述任何令牌、密钥、密码、Cookie 或登录文件内容；命令输出里出现疑似凭据的，写进结果前换成 ***。",
   "不读钥匙串或系统凭据库（security、secret-tool、cmdkey、凭据管理器等），不读 ~/.claude、~/.codex、~/.config 等登录与配置文件，不做真实登录，不启真实额度读取（不另起服务或代理；确需隔离服务时带 ATRIUM_QUOTA_READERS=off 与临时 ATRIUM_DATA）。步骤要这些才能做的，这一步记「无法验证：需要真实凭据」，不要设法绕过。",
   "不启动、停止、重启、升级 Atrium 服务，不轮换令牌（命令行会拒绝）；步骤里有这些的，这一步记「无法验证：需要操作服务」。",
-  "会停掉在跑任务、改主机或服务状态的步骤（host clean、host pause / resume / remove、停别的任务、标紧急、写止损动作、连带取消）不在真实环境跑：服务端会拒绝，回执「验证任务不能做止损操作」。这一步记 matched=null，output 写明「止损类操作，没在真实环境跑」。能在隔离环境验证的去隔离环境跑：临时目录作 ATRIUM_DATA、另给一个 ATRIUM_PORT（不是 4310），带 ATRIUM_QUOTA_READERS=off，用假执行者造在跑的任务，跑完以同样变量 atrium stop 并删掉临时目录；隔离环境里跑通的写 matched=true 并在 output 注明「隔离环境」。",
+  "会停掉在跑任务、改主机或服务状态的步骤（host clean、host remove、pause / resume、停别的任务、标紧急、写止损动作、连带取消）不在真实环境跑：服务端会拒绝，回执「验证任务不能做止损操作」。这一步记 matched=null，output 写明「止损类操作，没在真实环境跑」。能在隔离环境验证的去隔离环境跑：临时目录作 ATRIUM_DATA、另给一个 ATRIUM_PORT（不是 4310），带 ATRIUM_QUOTA_READERS=off，用假执行者造在跑的任务，跑完以同样变量 atrium stop 并删掉临时目录；隔离环境里跑通的写 matched=true 并在 output 注明「隔离环境」。",
   "步骤标了「只在隔离环境」的照上一条去隔离环境跑，跑不了记 null；标了「需要人工」的不跑，直接记 null 并写明。",
   "不改仓库公开范围（如 gh repo edit --visibility），不花钱（不买额度、不开付费服务），不动用户个人资料（主目录下的文件只读，能不碰就不碰）。",
   "有副作用的操作只按步骤实际需要执行；步骤造出的测试数据按步骤说的收尾，没说的在 summary 里写明留下了什么。",

@@ -115,9 +115,7 @@ import {
   hostRow,
   hostRows,
   hostView as hostRowView,
-  pauseHistory,
   removeHost,
-  setPaused,
   type HostRow,
   type HostView,
 } from "../hosts/model.ts";
@@ -151,6 +149,17 @@ import { hasEvent } from "./ledger-model.ts";
 import type { Active } from "./active.ts";
 import { registerDelivery } from "./register-delivery-runtime.ts";
 import { secretaryView, UNATTENDED_MS } from "./secretary-watch.ts";
+import {
+  clearPause,
+  globalPause,
+  hostPaused,
+  listPauses,
+  partPause,
+  pauseText,
+  setPause,
+  taskPause,
+} from "../pause.ts";
+import { nodeByAddress } from "../org/model.ts";
 
 /**
  * 派活与等待的运行时（#262）：只做编排与落库。计划、收尾、关卡、看门狗的判定都在各自的纯函数里；
@@ -371,13 +380,17 @@ export class TaskRunner {
       quota: this.quota,
       killGraceMs: options.killGraceMs,
       closed: () => this.closed,
+      paused: (id) => {
+        const pause = taskPause(this.db, id);
+        return pause ? pauseText(pause) : null;
+      },
       onAccepted: (id) => this.review.admit(id),
       hostGate: (urgent) => this.host.gate(this.x.inFlight(), urgent),
       remote: this.remote,
       placement: {
         need: (id, tool, urgent) => this.hostNeed(id, tool, urgent),
         choose: (need, pinned) => this.chooseHostFor(need, pinned),
-        paused: (host) => this.hostPaused(host),
+        paused: (host) => hostPaused(this.db, host),
         room: () => hasRoom(this.hostCandidates()),
         installed: (host) => this.remoteInstalled(host),
       },
@@ -400,7 +413,8 @@ export class TaskRunner {
       reapLocal: (targets) => reapLeftovers(targets, { exec: this.exec }),
       remote: this.remote,
       stop: (ref, note) => this.stop(ref, undefined, note),
-      pauseHost: (host, by) => void this.pauseHost(`h${host}`, true, by),
+      pauseHost: (host, by) =>
+        void setPause(this.db, `h${host}`, by, "紧急止损"),
       run: (ref, body) => this.run(ref, body),
       crowded: (host, except) => this.crowdedHost(host, except),
       changed: (id) => this.waits.changed(id),
@@ -417,6 +431,7 @@ export class TaskRunner {
         ? { rerunDelayMs: options.checkRerunDelayMs }
         : {}),
       changed: (id) => this.waits.changed(id),
+      paused: (id) => !!taskPause(this.db, id),
       cleaned: async (id) => {
         await this.cleanup.cleanup(id);
       },
@@ -445,6 +460,7 @@ export class TaskRunner {
       inFlight: (id) => this.pending(id, getTask(this.db, id)),
       stopTask: (ref, by) => void this.stop(ref, by),
       enqueue: (id) => this.merge.enqueue(id),
+      paused: (id) => !!taskPause(this.db, id),
       handBack: (task, reason) => this.merge.handBack(task, reason),
       changed: (id) => this.waits.changed(id),
       publish: (id, kind, detail, actor) =>
@@ -465,17 +481,22 @@ export class TaskRunner {
           : selfRepoFlag(
               process.env.ATRIUM_UPDATE_REPO ?? "github:liu-zhengdong/atrium",
             ),
+      // 全局暂停时不发版、不自升级。
       busy: () =>
+        !!globalPause(this.db) ||
         !!this.db
           .prepare("SELECT 1 FROM tasks WHERE delivery_stage='merging' LIMIT 1")
-          .get() || !!restartInProgress(options.data),
+          .get() ||
+        !!restartInProgress(options.data),
       // 紧急的（t215）只等别的紧急任务合入与正在进行的重启；普通任务的合入已让路。
       urgentBusy: () =>
+        !!globalPause(this.db) ||
         !!this.db
           .prepare(
             "SELECT 1 FROM tasks WHERE delivery_stage='merging' AND urgent=1 LIMIT 1",
           )
-          .get() || !!restartInProgress(options.data),
+          .get() ||
+        !!restartInProgress(options.data),
       deploy: options.online?.deploy ?? cliDeploy(options.data),
       restartError: (version) => lastRestartError(options.data, version),
       publish: (id, kind, detail) => this.x.publish(id, kind, detail),
@@ -540,6 +561,8 @@ export class TaskRunner {
       if (!this.closed) this.orphans.sweep(this.host.orphans());
       if (!this.closed) await this.cleanup.finished();
       if (!this.closed) await this.quota.releaseExpired(this.x);
+      // 全局暂停（server/pause.ts）：不做任何自主动作，只看门狗与清理照常。
+      if (globalPause(this.db)) return;
       if (!this.closed && this.recovered) await this.scheduler.tick();
       // 因本机满或太忙排队的，负载降下来后在这里拉起。
       if (!this.closed && this.recovered) await this.x.drain();
@@ -552,7 +575,8 @@ export class TaskRunner {
     });
     every(this.options.ciPollMs ?? CI_POLL_MS, () => this.pollCi());
     every(this.options.online?.pollMs ?? 60_000, async () => {
-      if (!this.closed && this.recovered) this.online.kick();
+      if (!this.closed && this.recovered && !globalPause(this.db))
+        this.online.kick();
     });
     // 保留上限（#t126）：低频清理收件箱已确认知会与过期任务事件，不占常用路径。
     every(RETENTION_SWEEP_MS, async () => {
@@ -862,7 +886,21 @@ export class TaskRunner {
         pick,
       };
     }
-    const pausedPin = pinned !== null && !actor && this.hostPaused(host);
+    // 一键停机：全局或这一部分暂停着就先排队，恢复后按顺序拉起。
+    const pause = taskPause(this.db, id);
+    if (pause) {
+      this.x.launching.delete(id);
+      return {
+        ...this.enqueue(
+          task,
+          chosen,
+          `${pauseText(pause)}；恢复：atrium resume`,
+          pinned,
+        ),
+        pick,
+      };
+    }
+    const pausedPin = pinned !== null && !actor && hostPaused(this.db, host);
     this.x.claim(id, tool, host);
     try {
       await this.x.launch(id, {
@@ -1080,7 +1118,7 @@ export class TaskRunner {
           id: row.id,
           kind: "local",
           connection: "local",
-          paused: row.paused === 1,
+          paused: hostPaused(this.db, row.id),
           clis: null,
           repos: ["*"],
           running,
@@ -1106,7 +1144,7 @@ export class TaskRunner {
           now,
           onlineMs: this.remote.onlineMs,
         }),
-        paused: row.paused === 1,
+        paused: hostPaused(this.db, row.id),
         clis: info?.clis ?? {},
         repos: parseJson<string[]>(row.repos) ?? [],
         running,
@@ -1130,7 +1168,7 @@ export class TaskRunner {
           id: row.id,
           kind: "local",
           connection: "local",
-          paused: row.paused === 1,
+          paused: hostPaused(this.db, row.id),
           platform: process.platform,
           repos: ["*"],
           cpus: this.host.limits.cores,
@@ -1154,7 +1192,7 @@ export class TaskRunner {
           now,
           onlineMs: this.remote.onlineMs,
         }),
-        paused: row.paused === 1,
+        paused: hostPaused(this.db, row.id),
         platform: info?.os ?? null,
         repos: parseJson<string[]>(row.repos) ?? [],
         cpus: info?.cpus ?? 1,
@@ -1185,7 +1223,7 @@ export class TaskRunner {
           now,
           onlineMs: this.remote.onlineMs,
         }) === "online";
-      if (!online || row.paused === 1) continue;
+      if (!online || hostPaused(this.db, row.id)) continue;
       const clis = parseJson<HostInfo>(row.info)?.clis ?? {};
       usable.push({
         host: hostRef(row.id),
@@ -1218,18 +1256,11 @@ export class TaskRunner {
     );
   }
 
-  /** 这台暂停接活了没（移除或查不到的按没暂停，由挑主机那边拒）。 */
-  private hostPaused(host: number) {
-    const row = this.db
-      .prepare("SELECT paused FROM hosts WHERE id=?")
-      .get(host) as { paused: number } | undefined;
-    return row?.paused === 1;
-  }
-
   private viewOf(row: HostRow): HostView {
     const running = this.x.inFlight(undefined, row.id);
     const view = hostRowView(row, {
       polling: this.remote.polling(row.id),
+      paused: hostPaused(this.db, row.id),
       onlineMs: this.remote.onlineMs,
       running,
       localMax: this.host.limits.maxWorkers,
@@ -1267,7 +1298,6 @@ export class TaskRunner {
       .all(id) as { id: number; title: string; status: string }[];
     return {
       ...view,
-      pauses: pauseHistory(this.db, id),
       tasks: tasks.map((task) => ({ ...task, ref: taskRef(task.id) })),
     };
   }
@@ -1330,18 +1360,84 @@ export class TaskRunner {
     return { host: this.viewOf(hostRow(this.db, id)) };
   }
 
-  /** 暂停或恢复接活；by 是谁（u1、secretary），真变了才记账并写服务日志（t227）。 */
-  pauseHost(reference: unknown, paused: boolean, by: string) {
-    const id = parseHostRef(reference, "主机");
-    const changed = setPaused(this.db, id, paused, by);
-    if (changed)
-      console.log(
-        `主机 ${hostRef(id)} ${paused ? "暂停接活" : "恢复接活"}（${by}）`,
-      );
-    // 恢复接活：排着的会按顺序拉起、可能派到这台（只想派一件就别恢复，用 task run --host 指定）。
-    if (changed && !paused && !this.closed && this.recovered)
-      void this.x.drain();
-    return { host: this.viewOf(hostRow(this.db, id)), changed };
+  // ---- 一键停机（server/pause.ts） ----
+
+  /** 请求里的范围：--part 节点、--host hN，都不给是全局。 */
+  private pauseScope(body: unknown) {
+    const input = (body ?? {}) as { part?: unknown; host?: unknown };
+    if (input.part !== undefined && input.host !== undefined)
+      throw new Problem(400, "--part 与 --host 只能给一个", "usage");
+    if (typeof input.part === "string" && input.part.trim()) {
+      const node = nodeByAddress(this.db, input.part.trim());
+      return { scope: `o${node.id}`, part: node.id, host: null };
+    }
+    if (typeof input.host === "string" && input.host.trim()) {
+      const host = parseHostRef(input.host.trim(), "--host");
+      if (hostRow(this.db, host).removed_at !== null)
+        throw new Problem(409, `${hostRef(host)} 已移除`, "conflict");
+      return { scope: hostRef(host), part: null, host };
+    }
+    return { scope: "all", part: null, host: null };
+  }
+
+  pauses() {
+    return { pauses: listPauses(this.db) };
+  }
+
+  /** 暂停；stop=true 时把范围里在跑的执行者一并停掉（缺省让它们跑完、不接新的）。 */
+  pause(body: unknown, by: string) {
+    const input = (body ?? {}) as { why?: unknown; stop?: unknown };
+    const why =
+      typeof input.why === "string" && input.why.trim()
+        ? input.why.trim().slice(0, 300)
+        : null;
+    const target = this.pauseScope(body);
+    const { pause, changed } = setPause(this.db, target.scope, by, why);
+    if (changed) console.log(`${pauseText(pause)} 由 ${by} 暂停`);
+    const stopped: string[] = [];
+    if (input.stop === true)
+      for (const [id, active] of [...this.x.active]) {
+        const inScope =
+          target.host !== null
+            ? (active.host ?? LOCAL_HOST) === target.host
+            : target.part !== null
+              ? this.inPart(id, target.part)
+              : true;
+        if (!inScope) continue;
+        this.stop(taskRef(id), by, {
+          by,
+          reason: `暂停时一并停掉：${pauseText(pause)}`,
+        });
+        stopped.push(taskRef(id));
+      }
+    return { pause, changed, stopped };
+  }
+
+  resume(body: unknown, by: string) {
+    const { scope } = this.pauseScope(body);
+    const resumed = clearPause(this.db, scope);
+    if (resumed) {
+      console.log(`${pauseText(resumed)} 由 ${by} 恢复`);
+      // 排着的按顺序拉起，合入、审阅接着走。
+      if (!this.closed && this.recovered)
+        void this.x
+          .drain()
+          .then(() => {
+            this.review.kick();
+            this.merge.kick();
+          })
+          .catch((error) => console.error("恢复后拉起失败：", error));
+    }
+    return { resumed, pauses: listPauses(this.db) };
+  }
+
+  /** 任务的归属部分（旧任务看 node_id）在不在 node 这一块里。 */
+  private inPart(id: number, node: number) {
+    const task = getTask(this.db, id);
+    const part = task.part_id ?? task.node_id;
+    if (part === null) return false;
+    const found = partPause(this.db, part);
+    return found?.scope === `o${node}`;
   }
 
   /** 清理主机上 Atrium 拉起的残留进程（t215 `host clean`，止损动作同一实现；t217 远程也清）。 */
@@ -1858,6 +1954,8 @@ export class TaskRunner {
       },
       // 秘书在不在听（t242）：看秘书的收件箱时给。
       ...(who === DEFAULT_OWNER ? { secretary: this.secretaryState(now) } : {}),
+      // 一键停机（server/pause.ts）：暂停着的逐条给，看板与状态栏醒目显示。
+      pauses: listPauses(this.db),
       // 在途任务按类型计数（t237）：头部「功能 N · 修复 M · 紧急 K」。
       types: typeCounts(this.db),
       ...(leaders.length ? { leaders } : {}),

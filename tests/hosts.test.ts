@@ -344,10 +344,7 @@ test("远程主机：接入、派到 h2、日志与结果传回本机；令牌�
   assert.match(bad.body.error, /host: 应为主机短号/);
 
   // 暂停：leader 指定它也派不过去；用户或秘书指定照派这一件（t227）；移除后代理因令牌失效停下。
-  assert.equal(
-    (await call("POST", "/api/hosts/h2/pause", { paused: true })).status,
-    200,
-  );
+  assert.equal((await call("POST", "/api/pause", { host: "h2" })).status, 200);
   await assert.rejects(
     server.taskRunner!.run("t2", { worker: "opencode", host: "h2" }, "a1"),
     /h2 已暂停接活/,
@@ -367,10 +364,7 @@ test("远程主机：接入、派到 h2、日志与结果传回本机；令牌�
     ),
   );
   assert.equal((await hostOf(call, "h2")).connection, "online");
-  assert.equal(
-    (await call("POST", "/api/hosts/h1/pause", { paused: false })).status,
-    200,
-  );
+  assert.equal((await call("POST", "/api/resume", { host: "h1" })).status, 200);
   assert.equal((await call("DELETE", "/api/hosts/h1")).status, 409);
   assert.equal((await call("DELETE", "/api/hosts/h2")).status, 200);
   await until(
@@ -413,19 +407,17 @@ test("暂停接活的主机重新上线：排着的活不派过去、改派与�
     10_000,
   );
   // 秘书暂停 h2（线上 d97），本机也暂停，排着的活只能等。
-  const paused = await call("POST", "/api/hosts/h2/pause?as=secretary", {
-    paused: true,
-  });
+  const paused = await call("POST", "/api/pause?as=secretary", { host: "h2" });
   assert.equal(paused.status, 200);
   assert.equal(paused.body.changed, true);
   assert.equal(
-    (await call("POST", "/api/hosts/h1/pause", { paused: true })).body.changed,
+    (await call("POST", "/api/pause", { host: "h1" })).body.changed,
     true,
   );
   // 再暂停一次：没变，不记账。
   assert.equal(
-    (await call("POST", "/api/hosts/h2/pause?as=secretary", { paused: true }))
-      .body.changed,
+    (await call("POST", "/api/pause?as=secretary", { host: "h2" })).body
+      .changed,
     false,
   );
   for (const title of ["排着的一", "排着的二"]) {
@@ -481,37 +473,30 @@ test("暂停接活的主机重新上线：排着的活不派过去、改派与�
     x.launch(1, { worker, risk: "low" }),
     /h1 已暂停接活，不往那台拉起/,
   );
-  // 谁、何时暂停：host show 带最近几次。
-  const history = (await call("GET", "/api/hosts/h2")).body.pauses;
+  // 谁、何时暂停：atrium status / top 读 /api/pause。
   assert.deepEqual(
-    history.map((p: { paused: boolean; by: string }) => [p.paused, p.by]),
-    [[true, "secretary"]],
+    (await call("GET", "/api/pause")).body.pauses
+      .map((p: { scope: string; by: string }) => [p.scope, p.by])
+      .sort(),
+    [
+      ["h1", "u1"],
+      ["h2", "secretary"],
+    ],
   );
-  assert.equal((await call("GET", "/api/hosts/h1")).body.pauses[0].by, "u1");
   // 恢复 h2：排着的这才拉起、派到 h2。
-  const resumed = await call("POST", "/api/hosts/h2/pause?as=secretary", {
-    paused: false,
+  const resumed = await call("POST", "/api/resume?as=secretary", {
+    host: "h2",
   });
-  assert.equal(resumed.body.changed, true);
+  assert.equal(resumed.body.resumed.scope, "h2");
   for (const ref of ["t1", "t2"]) {
     const task = (await call("GET", `/api/tasks/${ref}/wait?timeout=20`)).body
       .task;
     assert.equal(task.status, "done", JSON.stringify(task.events.slice(-3)));
     assert.equal(task.host_ref, "h2");
   }
-  assert.deepEqual(
-    (await call("GET", "/api/hosts/h2")).body.pauses.map(
-      (p: { paused: boolean; by: string }) => [p.paused, p.by],
-    ),
-    [
-      [false, "secretary"],
-      [true, "secretary"],
-    ],
-  );
   // --as 只认 u1、secretary 与节点 leader。
   assert.equal(
-    (await call("POST", "/api/hosts/h2/pause?as=someone", { paused: true }))
-      .status,
+    (await call("POST", "/api/pause?as=someone", { host: "h2" })).status,
     400,
   );
 });
@@ -989,7 +974,7 @@ async function deliverWithLocalPaused(
   call: Awaited<ReturnType<typeof serve>>["call"],
   marker: string,
 ) {
-  const paused = await call("POST", "/api/hosts/h1/pause", { paused: true });
+  const paused = await call("POST", "/api/pause", { host: "h1" });
   assert.equal(paused.status, 200, JSON.stringify(paused.body));
   writeFileSync(marker, "");
 }
@@ -1102,7 +1087,7 @@ test("远程检查：进行中断网再恢复，结果与日志补齐；断线�
   rmSync(marker, { force: true });
   writeFileSync(slow, "");
   // 本机恢复接活，t2 才在本机跑；交付前再暂停，检查才派到 h2。
-  await call("POST", "/api/hosts/h1/pause", { paused: false });
+  await call("POST", "/api/resume", { host: "h1" });
   await call("POST", "/api/tasks", { title: "Long cut", repo: fx.repo });
   const second = await call("POST", "/api/tasks/t2/run", { worker: "kimi" });
   assert.equal(second.status, 200);

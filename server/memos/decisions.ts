@@ -271,7 +271,16 @@ export type Row = {
   created_at: number;
 };
 
-const marks = (list: readonly unknown[]) => list.map(() => "?").join(",");
+/** 参数化 IN 列表的占位符。 */
+export const marks = (list: readonly unknown[]) =>
+  list.map(() => "?").join(",");
+
+/** Map 里按键追加（不拷贝数组）。 */
+function append<K, V>(map: Map<K, V[]>, key: K, value: V) {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
 
 export function views(db: DatabaseSync, rows: readonly Row[]): Decision[] {
   const ids = rows.map((r) => r.id);
@@ -284,19 +293,13 @@ export function views(db: DatabaseSync, rows: readonly Row[]): Decision[] {
       `SELECT id,superseded_by FROM decisions WHERE superseded_by IN (${marks(ids)}) ORDER BY id LIMIT ${PAGE_MAX * 4}`,
       ...ids,
     ))
-      replaced.set(r.superseded_by, [
-        ...(replaced.get(r.superseded_by) ?? []),
-        decisionRef(r.id),
-      ]);
+      append(replaced, r.superseded_by, decisionRef(r.id));
     for (const r of all<{ decision_id: number; node_id: number }>(
       db,
       `SELECT decision_id,node_id FROM decision_nodes WHERE decision_id IN (${marks(ids)}) ORDER BY decision_id,node_id LIMIT ${PAGE_MAX * NODES_MAX}`,
       ...ids,
     ))
-      linked.set(r.decision_id, [
-        ...(linked.get(r.decision_id) ?? []),
-        r.node_id,
-      ]);
+      append(linked, r.decision_id, r.node_id);
     for (const r of all<{
       decision_id: number;
       actor: string;

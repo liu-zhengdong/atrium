@@ -4,7 +4,7 @@ import { LOCAL_USER, SECRETARY } from "../../shared/user.ts";
 import {
   ACTIVE_SQL,
   decisionLine,
-  scopeWhere,
+  marks,
   views,
   type Decision,
   type DecisionScope,
@@ -70,9 +70,12 @@ export function nodeScope(
 ): number[] {
   const byId = new Map(list.map((n) => [n.id, n]));
   const children = new Map<number, number[]>();
-  for (const n of list)
-    if (n.parent_id !== null)
-      children.set(n.parent_id, [...(children.get(n.parent_id) ?? []), n.id]);
+  for (const n of list) {
+    if (n.parent_id === null) continue;
+    const siblings = children.get(n.parent_id);
+    if (siblings) siblings.push(n.id);
+    else children.set(n.parent_id, [n.id]);
+  }
   const out = new Set<number>();
   for (const start of starts) {
     if (!byId.has(start)) continue;
@@ -123,30 +126,78 @@ export type DecisionDigest = {
   omitted: number;
 };
 
+/**
+ * 摘要选取的 SQL（纯函数）：按范围取有效决定里最近的 limit 条（principle 指定原则或非原则）。
+ * 每份记录各走部分索引 decisions_active 取前 limit 条，挂节点的一路只读挂在范围节点上的；
+ * 库里 UNION 去重后再取前 limit 条。读的行数是（份数 + 1）× limit 加范围节点上的条数，不随总条数增长。
+ * 范围为空时返回 null（不用查）。
+ */
+export function pickSql(
+  scope: DecisionScope,
+  principle: 0 | 1,
+  limit: number,
+): { sql: string; args: (string | number)[] } | null {
+  const parts: string[] = [];
+  const args: (string | number)[] = [];
+  const tail = `AND ${ACTIVE_SQL} AND principle=? ORDER BY decided_on DESC,id DESC LIMIT ?`;
+  for (const owner of scope.owners ?? []) {
+    parts.push(
+      `SELECT * FROM (SELECT * FROM decisions INDEXED BY decisions_active WHERE owner=? ${tail})`,
+    );
+    args.push(owner, principle, limit);
+  }
+  if (scope.nodes?.length) {
+    parts.push(
+      `SELECT * FROM (SELECT * FROM decisions WHERE id IN (SELECT decision_id FROM decision_nodes WHERE node_id IN (${marks(scope.nodes)})) ${tail})`,
+    );
+    args.push(...scope.nodes, principle, limit);
+  }
+  if (!parts.length) return null;
+  return {
+    sql: `${parts.join(" UNION ")} ORDER BY decided_on DESC,id DESC LIMIT ?`,
+    args: [...args, limit],
+  };
+}
+
+/**
+ * 范围内有效决定的条数（纯函数给 SQL）：几份记录里的（只数索引）加挂在范围节点上、不在这几份里的，不重复计。
+ */
+export function totalSql(scope: DecisionScope): {
+  sql: string;
+  args: (string | number)[];
+} {
+  const owners = scope.owners ?? [];
+  const nodes = scope.nodes ?? [];
+  const parts: string[] = [];
+  const args: (string | number)[] = [];
+  if (owners.length) {
+    parts.push(
+      `(SELECT count(*) FROM decisions INDEXED BY decisions_active WHERE owner IN (${marks(owners)}) AND ${ACTIVE_SQL})`,
+    );
+    args.push(...owners);
+  }
+  if (nodes.length) {
+    parts.push(
+      `(SELECT count(*) FROM decisions WHERE id IN (SELECT decision_id FROM decision_nodes WHERE node_id IN (${marks(nodes)})) AND ${ACTIVE_SQL}${owners.length ? ` AND owner NOT IN (${marks(owners)})` : ""})`,
+    );
+    args.push(...nodes, ...owners);
+  }
+  return { sql: `SELECT ${parts.join("+") || "0"} AS n`, args };
+}
+
 export function decisionDigest(
   db: DatabaseSync,
   scope: DecisionScope,
   limits = DIGEST_LIMITS,
 ): DecisionDigest {
-  const where = scopeWhere(scope);
-  const pick = (principle: 0 | 1, limit: number) =>
-    views(
-      db,
-      all<Row>(
-        db,
-        `SELECT * FROM decisions WHERE ${where.sql} AND ${ACTIVE_SQL} AND principle=? ORDER BY decided_on DESC,id DESC LIMIT ?`,
-        ...where.args,
-        principle,
-        limit,
-      ),
-    );
+  const pick = (principle: 0 | 1, limit: number) => {
+    const q = pickSql(scope, principle, limit);
+    return q ? views(db, all<Row>(db, q.sql, ...q.args)) : [];
+  };
   const principles = pick(1, limits.principles);
   const recent = pick(0, limits.recent);
-  const total = one<{ n: number }>(
-    db,
-    `SELECT count(*) AS n FROM decisions WHERE ${where.sql} AND ${ACTIVE_SQL}`,
-    ...where.args,
-  )!.n;
+  const count = totalSql(scope);
+  const total = one<{ n: number }>(db, count.sql, ...count.args)!.n;
   const { shown, omitted } = digestDecisions(
     principles,
     recent,

@@ -63,6 +63,10 @@ export function ensureMemoTables(db: DatabaseSync) {
     db.exec("ALTER TABLE decisions ADD COLUMN settled_point INTEGER");
   if (!columns.has("settled_at"))
     db.exec("ALTER TABLE decisions ADD COLUMN settled_at INTEGER");
+  // 摘要（digest.ts）按份取最近的有效决定、数有效条数：只走这个部分索引，不随总条数扫全表（t221）。
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS decisions_active ON decisions(owner,principle,decided_on,id) WHERE superseded_by IS NULL AND settled_point IS NULL",
+  );
   // 早先一条决定只挂一个节点（node_id 列）：搬进 decision_nodes，之后只读写那张表（幂等）。
   db.exec(
     "INSERT OR IGNORE INTO decision_nodes(decision_id,node_id) SELECT id,node_id FROM decisions WHERE node_id IS NOT NULL",

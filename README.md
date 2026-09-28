@@ -595,7 +595,7 @@ npm run format:check
 
 执行者开发中和交付前都只跑类型检查和相关测试；全量（`npm run check`）只由运行时跑。`--changed` 按文件名（`ledger.ts` → `ledger.test.ts`、`ledger-*.test.ts`）和测试文件的直接 import 粗匹配，改了测试辅助文件（如 `tests/fake-bin.ts`）会带上所有引用它的测试；没匹配到测试的代码文件会列出来，按需补上文件名。其余 `-` 开头的参数（如 `--test-name-pattern=…`）原样交给 `node --test`。
 
-装好的包直接加载发版时编译的 `dist/`（esbuild 把 `cli/`、`server/`、`shared/` 编成 JS，发版流程把它提交到版本标签上，`main` 不含 `dist/`），不在每次启动时编译 TypeScript，服务也没有常驻的 esbuild 子进程；仓库里（有 `.git`）照旧用 tsx 跑源码。`npm run dist` 在本地编译，`npm pack` 前会自动编译；`npm run bench:cli` 编译后起隔离服务，量 `atrium --help`、`status`、`task ls` 的启动耗时（中位数超过 150 毫秒失败，`ATRIUM_BENCH_LIMIT_MS` 可放宽）。
+装好的包直接加载发版时编译的 `dist/`（esbuild 把 `cli/`、`server/`、`shared/` 编成 JS，发版流程把它提交到版本标签上，`main` 不含 `dist/`），不在每次启动时编译 TypeScript，服务也没有常驻的 esbuild 子进程；仓库里（有 `.git`）照旧用 tsx 跑源码。`npm run dist` 在本地编译，`npm pack` 前会自动编译；`npm run bench:cli` 编译后起隔离服务，量 `atrium --help`、`status`、`task ls` 的启动耗时（中位数超过 150 毫秒失败，`ATRIUM_BENCH_LIMIT_MS` 可放宽）；`npm run bench:cli -- --decisions 1500` 先造 1500 条假决定，量 `memo show`、`decision ls --node`、`decision search`。量启动耗时要用编译产物：仓库里直接 `node bin/atrium.mjs` 走 tsx 现场编译，光 `--help` 就要 140 毫秒上下。
 
 `npm run e2e` 走一遍主路径端到端（`scripts/e2e-main-path.mjs`，macOS、Linux、Windows 共用，CI 三平台各跑一遍）：`npm pack` 后装进临时 prefix，在临时 HOME、隔离数据目录与空闲端口上，用假 Claude Code 走 `atrium` → `task add/run/wait` → `org tree` → `quota` → `events wait` → `restart`（在跑的执行者由新服务按 pid 接管、收尾按日志判完成）→ `stop`，每步有断言，失败时打印哪一步、命令输出、服务日志与执行日志末尾，并保留临时目录。`--tarball 包.tgz` 装已打好的包（如拷进 Linux 虚拟机跑），`--bin` 用已装好的包。派活要求工作仓库所在磁盘至少空 15 GB，`/tmp` 是小 tmpfs 的机器设 `TMPDIR` 指向大盘。
 

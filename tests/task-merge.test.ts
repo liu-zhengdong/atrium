@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { processAlive } from "../server/platform/index.ts";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -279,9 +280,15 @@ for (const scenario of [
                     ? nodeCommand(
                         "console.log('not ok 1 - 故意失败'); process.exit(1)",
                       )
-                    : scenario === "stopped" || scenario === "restart_check"
-                      ? sleepCommand(2)
-                      : TRUE_COMMAND,
+                    : scenario === "stopped"
+                      ? // 常驻不退、再起一个常驻的孙进程并记下 pid：停止合入时整棵树都得结束（t167）。
+                        nodeCommand(
+                          "const { spawn } = require('node:child_process'); const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }); require('node:fs').writeFileSync(process.argv[1], String(g.pid)); setInterval(() => {}, 1000)",
+                          join(fixture.root, "check-pid"),
+                        )
+                      : scenario === "restart_check"
+                        ? sleepCommand(2)
+                        : TRUE_COMMAND,
             },
           }),
         );
@@ -449,12 +456,29 @@ for (const scenario of [
         assert.ok(Date.now() < until, "等待合入检查启动超时");
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      if (scenario === "stopped")
+      if (scenario === "stopped") {
+        const pidFile = join(fx.root, "check-pid");
+        while (!existsSync(pidFile)) {
+          assert.ok(Date.now() < until, "检查没起孙进程");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        const grandchild = Number(readFileSync(pidFile, "utf8"));
+        t.after(() => {
+          if (processAlive(grandchild)) process.kill(grandchild, "SIGKILL");
+        });
         assert.equal(
           (await call("POST", `/api/tasks/${ref}/stop`)).status,
           200,
         );
-      else {
+        const gone = Date.now() + 15_000;
+        while (processAlive(grandchild) && Date.now() < gone)
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(
+          processAlive(grandchild),
+          false,
+          "停止合入后检查的孙进程还在",
+        );
+      } else {
         await app.close();
         const resumed = await createApp({
           data,

@@ -828,7 +828,7 @@ atrium host resume hN
   示例：atrium host resume hN
 
 atrium host clean hN
-  止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，本机再结束最近一天已结束任务留下的执行者进程树；常和 host pause 一起写进紧急任务的 --stopgap
+  止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，再结束最近一天已结束任务仍活着的执行者进程树（远程由那台的代理核对并结束；按命令行与启动时刻核对，不碰你自己开的进程），逐条列出并记进任务事件；常和 host pause 一起写进紧急任务的 --stopgap
   示例：atrium host clean hN
 
 atrium agent [--server <服务地址>] [--token <接入码>]

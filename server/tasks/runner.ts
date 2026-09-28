@@ -147,7 +147,7 @@ import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
 import { publishTotals } from "./notice.ts";
 import { productRound } from "../products/model.ts";
 import { isDraftTask } from "../drafts/store.ts";
-import { isPlanTask } from "../plans/store.ts";
+import { isPlanTask, plannedWorker } from "../plans/store.ts";
 import { pendingChoices } from "../choices/store.ts";
 import { UrgentLane, type StopNote } from "./urgent-runtime.ts";
 import { storedHosts, urgentIdleMs } from "./urgent.ts";
@@ -512,9 +512,24 @@ export class TaskRunner {
     this.scheduler = new Scheduler(
       db,
       this.inbox,
-      (ref) => this.run(ref, {}),
+      (ref) => this.runPlanned(ref),
       options.exec ?? schedulePrExec,
     );
+  }
+
+  /**
+   * 排期自动派：按规划建的子任务先用规划建议的执行者（小的用快的、中大的用强的，t275），
+   * 派不出去（没装、额度用尽、档案不收）再按候选挑；其余照常按候选挑。
+   */
+  private async runPlanned(ref: string) {
+    const worker = plannedWorker(this.db, parseTaskRef(ref));
+    if (!worker) return this.run(ref, {});
+    try {
+      return await this.run(ref, { worker });
+    } catch (error) {
+      if (!(error instanceof Problem)) throw error;
+      return this.run(ref, {});
+    }
   }
 
   async cleanupCancelled(id: number) {

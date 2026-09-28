@@ -9,7 +9,7 @@
 /** 执行者在工作目录写的清单文件名；运行时在任务完成后读它。 */
 export const PLAN_FILE = "plan.json";
 export const PLAN_FILE_MAX = 64 * 1024;
-export const PLAN_TASKS_MAX = 20;
+export const PLAN_TASKS_MAX = 30;
 export const SUMMARY_MAX = 1000;
 export const TITLE_MAX = 100;
 export const ITEM_BRIEF_MAX = 4000;
@@ -17,6 +17,31 @@ export const ASK_MAX = 5;
 export const NAME_MAX = 40;
 
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+
+/**
+ * 子任务大小（u1 09-28 提速）：目标是一个执行者半小时左右交付，超过的继续拆。
+ * 小：十来分钟，改一两处；中：半小时左右；大：半小时以上又拆不开的（少用，详述里写明为什么拆不开）。
+ */
+export const SIZES = ["小", "中", "大"] as const;
+export type Size = (typeof SIZES)[number];
+const SIZE_ALIASES: Record<string, Size> = {
+  小: "小",
+  中: "中",
+  大: "大",
+  s: "小",
+  small: "小",
+  m: "中",
+  medium: "中",
+  l: "大",
+  large: "大",
+};
+
+/** 没写执行者时按大小建议：小的用快的，中大的用强的（只是建议，派不出去就按候选挑）。 */
+export const SIZE_WORKERS: Record<Size, string> = {
+  小: "cursor+auto",
+  中: "claude+opus:high",
+  大: "claude+opus:high",
+};
 
 export type PlanItem = {
   /** 清单里的代号（字母数字），只用来写先后依赖。 */
@@ -30,7 +55,9 @@ export type PlanItem = {
   by: string | null;
   /** 建议请来审的专员。 */
   ask: string[];
-  /** 建议执行者（工具+模型[:强度]），只写进详述，派活时仍按候选挑。 */
+  /** 大小：小 / 中 / 大。 */
+  size: Size;
+  /** 建议执行者（工具+模型[:强度]）；没写按大小建议（suggestedWorker）。 */
   worker: string | null;
   /** 归属部分（节点短号或路径）；不写就是总任务所在的部分。 */
   part: string | null;
@@ -50,6 +77,7 @@ const ITEM_KEYS = [
   "after",
   "by",
   "ask",
+  "size",
   "worker",
   "part",
 ];
@@ -190,6 +218,15 @@ export function validatePlan(raw: unknown): Result<Plan> {
     if (!by.ok) return by;
     const ask = names(item.ask, `${where}.ask`, ASK_MAX, NAME_MAX);
     if (!ask.ok) return ask;
+    const size =
+      typeof item.size === "string"
+        ? SIZE_ALIASES[item.size.trim().toLowerCase()]
+        : undefined;
+    if (!size)
+      return {
+        ok: false,
+        error: `${where}.size: 大小必填，只能是 ${SIZES.join("、")}（一个执行者半小时左右交付的是中；超过的继续拆）`,
+      };
     const worker = text(item.worker, `${where}.worker`, 60, false);
     if (!worker.ok) return worker;
     const part = text(item.part, `${where}.part`, 200, false);
@@ -201,6 +238,7 @@ export function validatePlan(raw: unknown): Result<Plan> {
       after: after.value,
       by: by.value,
       ask: ask.value,
+      size,
       worker: worker.value,
       part: part.value,
     });
@@ -235,6 +273,10 @@ export function parsePlan(raw: string | null): Result<Plan> {
   const plan = validatePlan(value);
   return plan.ok ? plan : { ok: false, error: `${PLAN_FILE}：${plan.error}` };
 }
+
+/** 建议执行者：清单写了用清单的，没写按大小。 */
+export const suggestedWorker = (item: Pick<PlanItem, "size" | "worker">) =>
+  item.worker ?? SIZE_WORKERS[item.size];
 
 /** 按依赖排好先后的清单。 */
 export function orderedItems(plan: Plan): PlanItem[] {
@@ -290,6 +332,7 @@ const EXAMPLE = JSON.stringify(
         brief:
           "做什么：…；改哪里：server/plans/store.ts …；怎么验收：相关测试 …",
         by: "后端",
+        size: "中",
       },
       {
         key: "cli",
@@ -298,7 +341,13 @@ const EXAMPLE = JSON.stringify(
         after: ["store"],
         by: "后端",
         ask: ["前端"],
-        worker: "claude+opus",
+        size: "中",
+      },
+      {
+        key: "readme",
+        title: "README 补一段用法",
+        brief: "做什么：…；怎么验收：…",
+        size: "小",
       },
     ],
   },
@@ -325,11 +374,12 @@ export function planBrief(f: PlanFacts): string {
     "  - key：代号（字母、数字、- 和 _），只用来写依赖；",
     `  - title：标题，一句话说清交付什么（${TITLE_MAX} 字内）；`,
     `  - brief：详述要点——做什么、改哪些文件或模块、怎么验收（跑哪些测试、看到什么结果），给接活的执行者看（${ITEM_BRIEF_MAX} 字内）；`,
-    "  - after：要等哪几件先做完（代号数组）；真有先后才写，能并行的别串起来；",
+    "  - after：要等哪几件先做完（代号数组）；只有真依赖（要用到它的代码或结果）才写，能并行的不要硬串；",
     "  - by：建议干活的专员（从下面的名单里挑，拿不准就不写）；ask：建议请来审的专员（可省）；",
-    "  - worker：建议执行者，写成 工具+模型[:强度]（可省，只作参考）；",
+    `  - size：大小，必填，${SIZES.join("、")}——小：十来分钟，改一两处；中：一个执行者半小时左右；大：半小时以上又拆不开的（少用，brief 里写明为什么拆不开）；`,
+    `  - worker：建议执行者，写成 工具+模型[:强度]（可省）；不写按大小：小的用快的 ${SIZE_WORKERS.小}（或 codex:low），中大的用 ${SIZE_WORKERS.中}（或 codex:high）；自动派时先试它，派不出去再按候选挑；`,
     `  - part：归属部分（可省，缺省是总任务所在的${f.part ? ` ${f.part.ref}` : "部分"}；只能写它或它下面的部分）。`,
-    "- 每件是一个人一次能交付的量（一个 PR、半天到一天、改动几百行以内）；太大的再拆，太碎的合并。",
+    "- 切小：每件只做一件事，目标是一个执行者半小时左右交付（一个 PR）；超过的继续拆，拆到中或小为止。",
     "- 已经有的子任务（下面列出）不要重复建；要改它们的写进 summary。",
     `- 写完用 node -e 'JSON.parse(require("fs").readFileSync("${PLAN_FILE}","utf8"))' 之类的办法自查一次；文件缺了或格式不对，这一轮就白做了。`,
     "- 最后的回复用几行说清楚拆成了几件、先后怎么排、哪里拿不准。",
@@ -384,7 +434,7 @@ export function itemBrief(
     "",
     "---",
     `来源：总任务 ${source.target}「${source.title}」的规划 ${source.plan}，由 ${source.by} 采纳。`,
-    ...(item.worker ? [`规划建议的执行者：${item.worker}（仅供参考）`] : []),
+    `大小：${item.size}；规划建议的执行者：${suggestedWorker(item)}（自动派时先试它）`,
     ...(dropped.length
       ? [
           `规划建议的专员 ${dropped.join("、")} 不在这一部分可选的范围里，没有请；要请用 atrium task set 本任务 --by 或 --ask。`,

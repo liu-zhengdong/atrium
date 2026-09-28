@@ -329,7 +329,7 @@ export function leaderPrompt(input: PromptInput): string {
     "- 重派：atrium task run tN [--worker 工具+模型[:强度]]；捎话：atrium task tell tN 补充；停：atrium task stop tN；备注：atrium task note tN 文字",
     `- 新活：atrium task add 标题 --part ${home} [--brief 文件] [--repo 路径] [--by 专员] [--ask 专员]；再 atrium task run tN`,
     "- 总任务拆解交给规划任务：atrium task plan-for tN（派执行者读代码与详述，出子任务清单，不改代码；选项单拍板建的总任务运行时已自动派）；规划好了会来一条「规划待采纳」",
-    "- 采纳规划：先 atrium task adopt-plan tM --dry-run 看清单；合适就 atrium task adopt-plan tM（按清单批量建子任务、设依赖、就绪的自动派出）；要改就 --dry-run --json 存成文件改好后 atrium task adopt-plan tM --file 清单.json；不合适 atrium task reject-plan tM --note 原因（要重来再 plan-for，可先 task tell 捎话补充）",
+    "- 采纳规划：先 atrium task adopt-plan tM --dry-run 看清单；合适就 atrium task adopt-plan tM（按清单批量建子任务、设依赖、就绪的自动派出，先试按大小建议的执行者）；看清单时留意：每件该只做一件事、约半小时交付，太大的让它再拆，没有真依赖的别串；要改就 --dry-run --json 存成文件改好后 atrium task adopt-plan tM --file 清单.json；不合适 atrium task reject-plan tM --note 原因（要重来再 plan-for，可先 task tell 捎话补充）",
     "- 巡检发现：atrium patrol findings oN；开任务后 atrium patrol decide fN --task tN，合到已有任务用 --merge tN，忽略用 --ignore 原因；处理后确认事件",
     `- 请专员：atrium task set tN --ask 前端；会审：atrium review add 议题 --concerns 前端,后端 --part ${home}`,
     "- 专员否决或没出结论（任务受阻）由你判断：atrium task show tN 看理由；认同就捎话写清要改什么再 atrium task run tN；不认同就 atrium task note tN 写明理由，再放行 atrium task merge tN（没有 PR 的 atrium task done tN）；和专员谈不拢才上交 stuck",

@@ -19,6 +19,7 @@ import {
   PLAN_FILE,
   PLAN_FILE_MAX,
   planBrief,
+  suggestedWorker,
   validatePlan,
   type Plan,
 } from "./model.ts";
@@ -34,7 +35,10 @@ export function ensurePlanTables(db: DatabaseSync) {
     plan TEXT, error TEXT, settled_at INTEGER,
     decision TEXT, decided_at INTEGER, decided_by TEXT, note TEXT,
     adopted TEXT, created_by TEXT, created_at INTEGER NOT NULL);
-    CREATE INDEX IF NOT EXISTS task_plans_target ON task_plans(target_id,task_id);`);
+    CREATE INDEX IF NOT EXISTS task_plans_target ON task_plans(target_id,task_id);
+    CREATE TABLE IF NOT EXISTS plan_children (
+      task_id INTEGER PRIMARY KEY, plan_id INTEGER NOT NULL,
+      size TEXT NOT NULL, worker TEXT NOT NULL);`);
   ready.add(db);
 }
 
@@ -289,7 +293,14 @@ export type PlanView = {
   decided_by: string | null;
   note: string | null;
   /** 采纳时建的子任务（代号 → 任务）。 */
-  adopted: { key: string; ref: string; title: string; after: string[] }[];
+  adopted: {
+    key: string;
+    ref: string;
+    title: string;
+    after: string[];
+    size?: string;
+    worker?: string;
+  }[];
   dry_run: boolean;
 };
 
@@ -459,6 +470,9 @@ export function adoptPlan(
     return scopes.get(part)!;
   };
   atomically(db, () => {
+    const mark = db.prepare(
+      "INSERT OR REPLACE INTO plan_children(task_id,plan_id,size,worker) VALUES (?,?,?,?)",
+    );
     const refs = new Map<string, string>();
     const out: PlanView["adopted"] = [];
     for (const item of orderedItems(plan)) {
@@ -494,7 +508,16 @@ export function adoptPlan(
         throw error;
       }
       refs.set(item.key, task.ref);
-      out.push({ key: item.key, ref: task.ref, title: item.title, after });
+      const worker = suggestedWorker(item);
+      mark.run(task.id, row.task_id, item.size, worker);
+      out.push({
+        key: item.key,
+        ref: task.ref,
+        title: item.title,
+        after,
+        size: item.size,
+        worker,
+      });
     }
     db.prepare(
       "UPDATE task_plans SET decision='adopted',decided_at=?,decided_by=?,plan=?,adopted=? WHERE task_id=? AND decision IS NULL",
@@ -525,4 +548,17 @@ export function rejectPlan(
     "UPDATE task_plans SET decision='rejected',decided_at=?,decided_by=?,note=? WHERE task_id=? AND decision IS NULL",
   ).run(now, actor, note, row.task_id);
   return viewOf(db, rowOf(db, row.task_id)!, stored(row), false);
+}
+
+/** 按规划建的子任务建议用哪个执行者（排期自动派时先试它）；不是规划建的为 undefined。 */
+export function plannedWorker(
+  db: DatabaseSync,
+  taskId: number,
+): string | undefined {
+  if (!hasPlans(db)) return undefined;
+  return one<{ worker: string }>(
+    db,
+    "SELECT worker FROM plan_children WHERE task_id=?",
+    taskId,
+  )?.worker;
 }

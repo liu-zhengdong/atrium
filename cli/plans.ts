@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { Problem } from "../server/problem.ts";
 import type { PlanView } from "../server/plans/store.ts";
 import type { PlanStarted } from "../server/plans/runtime.ts";
+import { suggestedWorker } from "../server/plans/model.ts";
 import { recordNext } from "./contract.ts";
 import { printJson } from "./format.ts";
 import type { Command, Values } from "./main.ts";
@@ -37,12 +38,13 @@ export function renderPlan(view: PlanView): string[] {
   const made = new Map(view.adopted.map((a) => [a.key, a.ref]));
   for (const [index, item] of plan.tasks.entries()) {
     const extra = [
+      `${item.size}`,
       item.after.length
         ? `等 ${item.after.map((k) => made.get(k) ?? k).join("、")}`
         : "",
       item.by ? `专员 ${item.by}` : "",
       item.ask.length ? `请审 ${item.ask.join("、")}` : "",
-      item.worker ? `建议 ${item.worker}` : "",
+      `建议 ${suggestedWorker(item)}`,
       item.part ? `归属 ${item.part}` : "",
     ].filter(Boolean);
     lines.push(
@@ -85,7 +87,7 @@ export const planCommands: Record<string, Command> = {
   "task plan-for": {
     args: "tN [--worker 工具+模型[:强度]]",
     about:
-      "给总任务派规划任务：一次性执行者读代码与详述，写出子任务清单（标题、详述要点、先后依赖、建议的专员与执行者、归属部分），不改代码、不开 PR；清单好了负责的 leader 收到「规划待采纳」。选项单拍板建的总任务运行时已自动派；已有没了结的规划时报冲突",
+      "给总任务派规划任务：一次性执行者读代码与详述，写出子任务清单（标题、详述要点、先后依赖、大小、建议的专员与执行者、归属部分；每件约半小时交付，小的建议快的执行者、中大的建议强的），不改代码、不开 PR；清单好了负责的 leader 收到「规划待采纳」。选项单拍板建的总任务运行时已自动派；已有没了结的规划时报冲突",
     options: { worker: { type: "string" } },
     positionals: [1, 1],
     async run({ positionals: [task], values, json }) {
@@ -107,7 +109,7 @@ export const planCommands: Record<string, Command> = {
   "task adopt-plan": {
     args: "tM [--dry-run] [--file 清单.json]",
     about:
-      "采纳规划：按清单在总任务下批量建子任务（详述带来源、建议的专员、先后依赖，开自动派），就绪的由排期自动派出；--dry-run 只看清单不建；--file 用改过的清单（格式同 --dry-run --json 的 content，整份回执也认）；tM 给总任务时取它最近的规划；一件建不起来整批不建；同一份只采纳一次",
+      "采纳规划：按清单在总任务下批量建子任务（详述带来源、大小、建议的专员、先后依赖，开自动派），就绪的由排期自动派出、先试规划建议的执行者；--dry-run 只看清单不建；--file 用改过的清单（格式同 --dry-run --json 的 content，整份回执也认）；tM 给总任务时取它最近的规划；一件建不起来整批不建；同一份只采纳一次",
     options: { "dry-run": { type: "boolean" }, file: { type: "string" } },
     positionals: [1, 1],
     async run({ positionals: [task], values, json }) {
@@ -129,7 +131,7 @@ export const planCommands: Record<string, Command> = {
             `已采纳 ${view.plan}：在 ${view.target} 下建了 ${view.adopted.length} 件子任务（就绪的由排期自动派出）`,
             ...view.adopted.map(
               (a) =>
-                `- ${a.ref} ${a.title}${a.after.length ? `（等 ${a.after.join("、")}）` : ""}`,
+                `- ${a.ref} ${a.title}（${[a.size, a.worker ? `先试 ${a.worker}` : "", a.after.length ? `等 ${a.after.join("、")}` : ""].filter(Boolean).join("；")}）`,
             ),
           ].join("\n"),
         );

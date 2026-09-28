@@ -8,6 +8,7 @@ import {
   parsePlan,
   partVerdict,
   pickSpecialists,
+  suggestedWorker,
   PLAN_FILE,
   PLAN_TASKS_MAX,
   planBrief,
@@ -16,6 +17,7 @@ import {
   type Plan,
 } from "../server/plans/model.ts";
 import { autoPlanEnabled } from "../server/plans/runtime.ts";
+import { plannedWorker } from "../server/plans/store.ts";
 import { renderPlan } from "../cli/plans.ts";
 import { eventLine } from "../server/leaders/wake.ts";
 import { fixture, until } from "./task-fixture.ts";
@@ -26,6 +28,7 @@ const item = (key: string, extra: Record<string, unknown> = {}) => ({
   key,
   title: `做 ${key}`,
   brief: `${key} 的要点`,
+  size: "中",
   ...extra,
 });
 
@@ -34,7 +37,7 @@ const good = {
   tasks: [
     item("store"),
     item("cli", { after: ["store"], ask: ["前端"], worker: "claude+opus" }),
-    item("docs", { after: ["cli", "store"] }),
+    item("docs", { after: ["cli", "store"], size: "小" }),
   ],
 };
 
@@ -49,22 +52,23 @@ test("清单校验：合格的规整出来，缺省值补齐", () => {
     after: ["store"],
     by: null,
     ask: ["前端"],
+    size: "中",
     worker: "claude+opus",
     part: null,
   });
   // 没写代号按序号；ask 写成逗号分隔也认；summary 可省。
   const loose = validatePlan({
     tasks: [
-      { title: "一", brief: "要点" },
-      { title: "二", brief: "要点", after: ["1"], ask: "前端,后端" },
+      { title: "一", brief: "要点", size: "small" },
+      { title: "二", brief: "要点", after: ["1"], ask: "前端,后端", size: "L" },
     ],
   });
   assert(loose.ok);
   assert.deepEqual(
-    loose.value.tasks.map((t) => [t.key, t.after, t.ask]),
+    loose.value.tasks.map((t) => [t.key, t.after, t.ask, t.size]),
     [
-      ["1", [], []],
-      ["2", ["1"], ["前端", "后端"]],
+      ["1", [], [], "小"],
+      ["2", ["1"], ["前端", "后端"], "大"],
     ],
   );
   assert.equal(loose.value.summary, "");
@@ -82,11 +86,17 @@ test("清单校验：破坏输入逐条报出位置", () => {
           item(`k${i}`),
         ),
       },
-      /至多 20 件/,
+      /至多 30 件/,
     ],
     [{ ...good, extra: 1 }, /extra: 是未知字段/],
     [{ tasks: [item("a", { owner: "u1" })] }, /tasks\[0\]\.owner: 是未知字段/],
     [{ tasks: ["x"] }, /tasks\[0\] 应为对象/],
+    [
+      { tasks: [item("a", { size: undefined })] },
+      /tasks\[0\]（a）\.size: 大小必填，只能是 小、中、大/,
+    ],
+    [{ tasks: [item("a", { size: "特大" })] }, /size: 大小必填/],
+    [{ tasks: [item("a", { size: 2 })] }, /size: 大小必填/],
     [{ tasks: [item("a b")] }, /代号只用字母/],
     [{ tasks: [item("a"), item("a")] }, /代号 a 重复/],
     [{ tasks: [item("a", { title: "" })] }, /tasks\[0\]（a）\.title 不能为空/],
@@ -226,15 +236,19 @@ test("规划详述：交付格式与规矩在前，带总任务详述、已有�
   });
   assert.match(text, /^cli 的要点/);
   assert.match(text, /来源：总任务 t197「大功能」的规划 t300，由 a1 采纳/);
-  assert.match(text, /规划建议的执行者：claude\+opus/);
-  assert.doesNotMatch(
-    itemBrief(plan.value.tasks[0]!, {
+  assert.match(
+    text,
+    /大小：中；规划建议的执行者：claude\+opus（自动派时先试它）/,
+  );
+  // 没写执行者按大小建议：小的用快的，中大的用强的。
+  assert.match(
+    itemBrief(plan.value.tasks[2]!, {
       target: "t1",
       title: "x",
       plan: "t2",
       by: "u1",
     }),
-    /建议的执行者/,
+    /大小：小；规划建议的执行者：cursor\+auto/,
   );
 });
 
@@ -257,6 +271,34 @@ test("建议的专员：只请可选范围里的（名称或 rN），请不动�
     ask: [],
     dropped: [],
   });
+});
+
+test("大小：按大小建议执行者，清单写了的优先；详述要求切小、只有真依赖才串", () => {
+  assert.equal(suggestedWorker({ size: "小", worker: null }), "cursor+auto");
+  assert.equal(
+    suggestedWorker({ size: "中", worker: null }),
+    "claude+opus:high",
+  );
+  assert.equal(
+    suggestedWorker({ size: "大", worker: null }),
+    "claude+opus:high",
+  );
+  assert.equal(
+    suggestedWorker({ size: "小", worker: "codex:low" }),
+    "codex:low",
+  );
+  const brief = planBrief({
+    target: { ref: "t1", title: "x", brief: null, repo: null },
+    part: null,
+    context: "",
+    children: [],
+    specialists: [],
+  });
+  assert.match(brief, /半小时左右交付/);
+  assert.match(brief, /超过的继续拆/);
+  assert.match(brief, /size：大小，必填/);
+  assert.match(brief, /能并行的不要硬串/);
+  assert.match(brief, /小的用快的 cursor\+auto/);
 });
 
 test("自动派规划的开关：显式 0/1，缺省只在默认数据目录开", () => {
@@ -323,7 +365,7 @@ test("清单文字版：状态、思路、先后与建议；采纳后给建出�
   assert.match(text, /思路：先存储后命令行/);
   assert.match(
     text,
-    /2\. \[cli\] 做 cli（等 store；请审 前端；建议 claude\+opus）/,
+    /2\. \[cli\] 做 cli（中；等 store；请审 前端；建议 claude\+opus）/,
   );
   const adopted = renderPlan({
     ...view,
@@ -335,7 +377,7 @@ test("清单文字版：状态、思路、先后与建议；采纳后给建出�
     ],
   }).join("\n");
   assert.match(adopted, /已采纳（a1）/);
-  assert.match(adopted, /2\. \[t302\] 做 cli（等 t301/);
+  assert.match(adopted, /2\. \[t302\] 做 cli（中；等 t301/);
   assert.match(
     renderPlan({
       ...view,
@@ -575,6 +617,16 @@ test("派规划 → 待采纳投给 leader → 看清单 → 采纳建子任务�
     /来源：总任务 t1「大功能」的规划 t2，由 u1 采纳/,
   );
   assert.match(children[1]!.brief, /规划建议的执行者：claude\+opus/);
+  // 大小与建议执行者记下来，排期自动派时先试它；没写的按大小。
+  assert.deepEqual(
+    [3, 4, 5].map((id) => plannedWorker(db, id)),
+    ["claude+opus:high", "claude+opus", "cursor+auto"],
+  );
+  assert.equal(plannedWorker(db, 1), undefined);
+  assert.deepEqual(
+    adopted.adopted.map((a: { size: string }) => a.size),
+    ["中", "中", "小"],
+  );
   // 规划建议的专员请不动（这一部分没有「前端」）：不挡采纳，记进详述。
   assert.match(
     children[1]!.brief,

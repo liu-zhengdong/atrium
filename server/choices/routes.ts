@@ -3,24 +3,16 @@ import type { DatabaseSync } from "node:sqlite";
 import { leaderOf } from "../leaders/guard.ts";
 import { SECRETARY } from "../leaders/route.ts";
 import type { EventInbox } from "../tasks/events.ts";
-import {
-  announceChoice,
-  choiceBrief,
-  choiceLeader,
-  publishChoice,
-} from "./notify.ts";
+import { announceChoice, choiceBrief, decideAndAnnounce } from "./notify.ts";
 import {
   addChoice,
   addComment,
-  decideChoice,
   deciderSetting,
   ensureChoiceTables,
   getChoice,
   listChoices,
   parseLimit,
   setDecider,
-  type Choice,
-  type Decided,
 } from "./store.ts";
 
 /**
@@ -42,14 +34,6 @@ export function registerChoiceRoutes(
   inbox: EventInbox,
 ) {
   ensureChoiceTables(db);
-  const leaderFor = (choice: Choice) => choiceLeader(db, choice);
-  const publish = (
-    subscriber: string,
-    kind: string,
-    choice: Choice,
-    actor: string | undefined,
-    detail: Record<string, unknown>,
-  ) => publishChoice(inbox, subscriber, kind, choice, actor, detail);
 
   app.get("/api/choices", (request) => {
     const query = q(request.query);
@@ -89,34 +73,15 @@ export function registerChoiceRoutes(
       return reply.code(201).send(choice);
     },
   );
-  const decide = (action: "pick" | "pass") => (request: FastifyRequest) => {
-    const actor = leaderOf(request) ?? "u1";
-    const result: Decided = decideChoice(
+  const decide = (action: "pick" | "pass") => (request: FastifyRequest) =>
+    decideAndAnnounce(
       db,
+      inbox,
       id(request),
       action,
       request.body,
-      actor,
+      leaderOf(request) ?? "u1",
     );
-    const detail = {
-      decided_by: actor,
-      tasks: result.tasks.map((t) => t.ref),
-      decisions: result.decisions.map((d) => d.ref),
-      note: result.choice.note,
-    };
-    publish(
-      SECRETARY,
-      "choice_decided",
-      result.choice,
-      actor === "u1" ? undefined : actor,
-      detail,
-    );
-    // 拍板人自己也收：把它那条待办（choice_review / choice_ready）改成知会。
-    const leader = leaderFor(result.choice);
-    if (leader)
-      publish(leader, "choice_decided", result.choice, undefined, detail);
-    return result;
-  };
   app.post("/api/choices/:id/pick", { bodyLimit: 8 * 1024 }, decide("pick"));
   app.post("/api/choices/:id/pass", { bodyLimit: 8 * 1024 }, decide("pass"));
   app.get("/api/product/nodes/:id", (request) =>

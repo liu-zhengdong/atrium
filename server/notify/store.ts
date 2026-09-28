@@ -22,7 +22,8 @@ import {
 
 /**
  * 推送的持久化：凭据文件 `<ATRIUM_DATA>/telegram.json`（0600；bot token、绑定的 chat、绑定码、
- * 代理与免打扰设置——代理可能带密码，一并放这里），和库里的待发队列 notify_outbox。
+ * 代理与免打扰设置——代理可能带密码，一并放这里），库里的待发队列 notify_outbox，
+ * 和选项单卡片 notify_choice_cards（卡片是哪条消息、点过哪些选项、回复的说明）。
  * token 只在这个文件里，不进库、日志、事件与提示词；不碰用户钥匙串。
  */
 
@@ -140,7 +141,15 @@ export function ensureNotifyTables(db: DatabaseSync) {
       failed_at INTEGER,
       error TEXT);
     CREATE INDEX IF NOT EXISTS notify_outbox_pending ON notify_outbox(id) WHERE sent_at IS NULL AND failed_at IS NULL;
-    CREATE INDEX IF NOT EXISTS notify_outbox_done ON notify_outbox(created_at) WHERE sent_at IS NOT NULL OR failed_at IS NOT NULL;`);
+    CREATE INDEX IF NOT EXISTS notify_outbox_done ON notify_outbox(created_at) WHERE sent_at IS NOT NULL OR failed_at IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS notify_choice_cards (
+      choice_id INTEGER PRIMARY KEY,
+      message_id INTEGER,
+      picks TEXT NOT NULL DEFAULT '',
+      note TEXT,
+      updated_at INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS notify_choice_cards_message ON notify_choice_cards(message_id);
+    CREATE INDEX IF NOT EXISTS notify_choice_cards_updated ON notify_choice_cards(updated_at);`);
 }
 
 export type Queued = Push & {
@@ -230,6 +239,106 @@ export function prune(db: DatabaseSync, now: number) {
   db.prepare(
     "DELETE FROM notify_outbox WHERE (sent_at IS NOT NULL OR failed_at IS NOT NULL) AND created_at<?",
   ).run(now - 7 * 24 * 3600_000);
+}
+
+// ---- 选项单卡片 ----
+
+export type Card = {
+  choice: string;
+  message_id: number | null;
+  picks: number[];
+  note: string | null;
+};
+
+type CardRow = {
+  choice_id: number;
+  message_id: number | null;
+  picks: string;
+  note: string | null;
+};
+
+const cardOf = (row: CardRow): Card => ({
+  choice: `c${row.choice_id}`,
+  message_id: row.message_id,
+  picks: row.picks ? row.picks.split(",").map(Number) : [],
+  note: row.note,
+});
+
+export function getCard(db: DatabaseSync, choice: string): Card | null {
+  const row = db
+    .prepare(
+      "SELECT choice_id,message_id,picks,note FROM notify_choice_cards WHERE choice_id=?",
+    )
+    .get(Number(choice.slice(1))) as CardRow | undefined;
+  return row ? cardOf(row) : null;
+}
+
+/** 按消息找卡片（用户回复的是哪张）。 */
+export function cardByMessage(db: DatabaseSync, message: number): Card | null {
+  const row = db
+    .prepare(
+      "SELECT choice_id,message_id,picks,note FROM notify_choice_cards WHERE message_id=? ORDER BY updated_at DESC LIMIT 1",
+    )
+    .get(message) as CardRow | undefined;
+  return row ? cardOf(row) : null;
+}
+
+/** 记卡片：给了的字段才改，没有就新建。 */
+export function saveCard(
+  db: DatabaseSync,
+  choice: string,
+  patch: Partial<Omit<Card, "choice">>,
+  now: number,
+) {
+  const card = getCard(db, choice) ?? {
+    choice,
+    message_id: null,
+    picks: [],
+    note: null,
+  };
+  const next = { ...card, ...patch };
+  db.prepare(
+    `INSERT INTO notify_choice_cards(choice_id,message_id,picks,note,updated_at) VALUES (?,?,?,?,?)
+     ON CONFLICT(choice_id) DO UPDATE SET message_id=excluded.message_id,picks=excluded.picks,note=excluded.note,updated_at=excluded.updated_at`,
+  ).run(
+    Number(choice.slice(1)),
+    next.message_id,
+    next.picks.join(","),
+    next.note,
+    now,
+  );
+  return next;
+}
+
+/** 还没拍板的选项单里、推过卡片的（最多 limit 份，新的在前）；给「没用回复的说明归谁」判定。 */
+export function openCards(db: DatabaseSync, limit = 10): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT k.choice_id AS id FROM notify_choice_cards k JOIN choices c ON c.id=k.choice_id
+         WHERE k.message_id IS NOT NULL AND c.status='open' ORDER BY k.updated_at DESC LIMIT ?`,
+      )
+      .all(limit) as { id: number }[]
+  ).map((row) => `c${row.id}`);
+}
+
+/** 拍过板、卡片已改成结果：不再记（之后点旧按钮按选项单状态回「已拍板」）。 */
+export function deleteCard(db: DatabaseSync, choice: string) {
+  db.prepare("DELETE FROM notify_choice_cards WHERE choice_id=?").run(
+    Number(choice.slice(1)),
+  );
+}
+
+/** 换了机器人或聊天：旧消息的卡片作废。 */
+export function clearCards(db: DatabaseSync) {
+  db.exec("DELETE FROM notify_choice_cards");
+}
+
+/** 30 天没动过的卡片清掉，表不随时间增长。 */
+export function pruneCards(db: DatabaseSync, now: number) {
+  db.prepare("DELETE FROM notify_choice_cards WHERE updated_at<?").run(
+    now - 30 * 24 * 3600_000,
+  );
 }
 
 /** 最近一次发出与最近一次失败，给 notify 状态看。 */

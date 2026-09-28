@@ -10,6 +10,7 @@ import { urgentAlert, type UrgentAlert } from "../tasks/urgent.ts";
  * 只推三类事：选项单等你拍板、上交到用户这层的卡住／越界（含会审要用户拍板）、里程碑上线；
  * 另加紧急任务要处理的阶段（上线、卡住、止损失败，t219），以及秘书没在听、后台又叫不起来时要处理的事没人管（t242）；紧急的也照常攒批、守免打扰，不插队。
  * 推送只放标题和短号，不放正文（上交说明、选项内容都不带）。
+ * 选项单单独成一条「卡片」，带按钮在手机上拍板（选项号 + 选项标题、拍板、都不选），回复卡片附一句说明。
  */
 
 export type PushKind =
@@ -137,6 +138,184 @@ export function messageText(items: readonly Omit<Push, "key">[]): string {
     ...(rest > 0 ? [`还有 ${rest} 件，atrium top 查看`] : []),
   ].join("\n");
 }
+
+// ---- 在 Telegram 里拍板选项单 ----
+
+/** 卡片上用得到的选项单字段（只有标题和选项标题，不带选项正文）。 */
+export type CardChoice = {
+  ref: string;
+  title: string;
+  status: "open" | "picked" | "passed";
+  options: readonly { seq: number; title: string; task: string | null }[];
+};
+
+/** 草稿：点过的选项和回复的说明，拍板时一起带上。 */
+export type CardDraft = { picks: readonly number[]; note: string | null };
+
+export const BUTTON_TITLE_MAX = 28;
+const NOTE_SHOWN = 60;
+
+export type Button = { text: string; callback_data: string };
+
+const choiceId = (ref: string) => ref.slice(1);
+
+/**
+ * 卡片的按钮：每个选项一行（点过的前面打勾），最后一行「拍板」「都不选」。
+ * 回调数据 c:<选项单号>:<选项号|ok|no>，不超过 Telegram 的 64 字节。
+ */
+export function cardKeyboard(choice: CardChoice, draft: CardDraft): Button[][] {
+  const id = choiceId(choice.ref);
+  const picked = [...draft.picks].sort((a, b) => a - b);
+  return [
+    ...choice.options.map((o) => [
+      {
+        text: `${picked.includes(o.seq) ? "✅ " : ""}${o.seq}. ${oneLine(o.title, BUTTON_TITLE_MAX)}`,
+        callback_data: `c:${id}:${o.seq}`,
+      },
+    ]),
+    [
+      {
+        text: picked.length ? `拍板（选 ${picked.join("、")}）` : "拍板",
+        callback_data: `c:${id}:ok`,
+      },
+      { text: "都不选", callback_data: `c:${id}:no` },
+    ],
+  ];
+}
+
+/** 等拍板的卡片文字：类别、短号、标题，怎么操作，看全文去哪；不放选项正文。 */
+export function cardText(choice: CardChoice, draft: CardDraft): string {
+  return [
+    `【${PUSH_LABEL.choice}】${choice.ref} ${oneLine(choice.title, TITLE_MAX)}`.trimEnd(),
+    "点要做的选项（可多选），再点「拍板」；这轮都不要点「都不选」。",
+    draft.note
+      ? `说明：${oneLine(draft.note, NOTE_SHOWN)}（再回复一条可改）`
+      : "回复这条消息写一句说明，拍板时一起带上。",
+    `全文：电脑上 atrium choice show ${choice.ref}，或 atrium map 打开全景网页`,
+  ].join("\n");
+}
+
+/** 拍过板的卡片文字（按钮撤掉）：选了哪些、建了哪些任务，或这轮都不要。 */
+export function decidedCardText(choice: CardChoice, note: string | null) {
+  const picked = choice.options.filter((o) => o.task !== null);
+  return [
+    `【已拍板】${choice.ref} ${oneLine(choice.title, TITLE_MAX)}`.trimEnd(),
+    choice.status === "picked"
+      ? `选了 ${picked.map((o) => o.seq).join("、")}，建了 ${picked.map((o) => o.task).join("、")}`
+      : "这轮都不要",
+    ...(note ? [`说明：${oneLine(note, NOTE_SHOWN)}`] : []),
+  ].join("\n");
+}
+
+export type CardAction =
+  | { kind: "toggle"; choice: string; seq: number }
+  | { kind: "pick"; choice: string }
+  | { kind: "pass"; choice: string };
+
+/** 按钮的回调数据 → 动作；不是卡片按钮的（伪造、别的版本）为 null。 */
+export function parseCallback(data: unknown): CardAction | null {
+  const match =
+    typeof data === "string"
+      ? /^c:([1-9]\d{0,15}):([1-9]\d?|ok|no)$/.exec(data)
+      : null;
+  if (!match) return null;
+  const choice = `c${match[1]}`;
+  if (match[2] === "ok") return { kind: "pick", choice };
+  if (match[2] === "no") return { kind: "pass", choice };
+  return { kind: "toggle", choice, seq: Number(match[2]) };
+}
+
+/** 点一下选项：没选的选上、选了的取消，结果从小到大。 */
+export function togglePick(picks: readonly number[], seq: number): number[] {
+  return picks.includes(seq)
+    ? picks.filter((n) => n !== seq)
+    : [...picks, seq].sort((a, b) => a - b);
+}
+
+/** 收到的更新里判定用得到的字段。 */
+export type Incoming = {
+  update_id: number;
+  message?: {
+    message_id?: number;
+    text?: string;
+    chat?: { id?: number; type?: string };
+    from?: { id?: number };
+    reply_to_message?: { message_id?: number };
+  };
+  callback_query?: {
+    id?: string;
+    data?: string;
+    from?: { id?: number };
+    message?: { message_id?: number; chat?: { id?: number } };
+  };
+};
+
+/**
+ * 更新从哪来：只认绑定的那个私聊（聊天 id 与发送人都是它）；其他来源一律忽略。
+ * 返回 bound（可以处理）、foreign（别人发的，记日志）、skip（与操作无关的更新，如频道、编辑）。
+ */
+export function sourceOf(
+  update: Incoming,
+  chat: number,
+): { kind: "bound" | "skip" } | { kind: "foreign"; chat: number | null } {
+  const query = update.callback_query;
+  if (query) {
+    const from = query.from?.id;
+    const at = query.message?.chat?.id;
+    return from === chat && at === chat
+      ? { kind: "bound" }
+      : { kind: "foreign", chat: typeof at === "number" ? at : (from ?? null) };
+  }
+  const message = update.message;
+  if (!message) return { kind: "skip" };
+  const at = message.chat?.id;
+  if (
+    at === chat &&
+    message.chat?.type === "private" &&
+    message.from?.id === chat
+  )
+    return { kind: "bound" };
+  return { kind: "foreign", chat: typeof at === "number" ? at : null };
+}
+
+/**
+ * 一句回复附给哪份选项单：回复了某张卡片就是那份；回复了别的消息（含已拍板撤掉的卡片）不猜；
+ * 没用回复时只有一份等拍板的卡片才归它，多份让用户用回复指明，没有就说没有。
+ * reply：没回复为 null，回复了卡片为 { card: 选项单 }，回复了别的为 { card: null }。
+ */
+export function noteTarget(
+  reply: { card: string | null } | null,
+  open: readonly string[],
+):
+  | { kind: "choice"; choice: string }
+  | { kind: "not_card" }
+  | { kind: "ambiguous"; count: number }
+  | { kind: "none" } {
+  if (reply)
+    return reply.card
+      ? { kind: "choice", choice: reply.card }
+      : { kind: "not_card" };
+  if (open.length === 1) return { kind: "choice", choice: open[0]! };
+  return open.length
+    ? { kind: "ambiguous", count: open.length }
+    : { kind: "none" };
+}
+
+/** 回给用户的话：说明记在哪、为什么没记。 */
+export function noteReply(
+  target: ReturnType<typeof noteTarget>,
+): string | null {
+  if (target.kind === "choice") return null;
+  if (target.kind === "not_card")
+    return "这条不是等你拍板的卡片（或已经拍过板），说明没记下；回复要附说明的那张卡片。";
+  if (target.kind === "ambiguous")
+    return `有 ${target.count} 份等你拍板，说明没记下；回复要附说明的那张卡片。`;
+  return "现在没有等你拍板的选项单，说明没记下。";
+}
+
+/** 发来的不是说明（命令、贴图等）时回的提示。 */
+export const CHAT_HELP =
+  "这里只收拍板：在「等你拍板」的卡片上点选项再点「拍板」，或点「都不选」；回复卡片写一句说明。看全文用电脑上的 atrium。";
 
 // ---- 免打扰与攒批 ----
 

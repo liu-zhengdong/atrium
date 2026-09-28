@@ -37,6 +37,7 @@ import { registerLeaderRoutes } from "./leaders/routes.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
 import { registerMaterialRoutes } from "./materials/routes.ts";
 import { registerSecretRoutes } from "./secrets/routes.ts";
+import { decideAndAnnounce } from "./choices/notify.ts";
 import { registerChoiceRoutes } from "./choices/routes.ts";
 import { registerHostRoutes } from "./hosts/routes.ts";
 import { TelegramNotifier, type NotifierOptions } from "./notify/runtime.ts";
@@ -313,8 +314,11 @@ export async function createApp(options: {
   // 选项单的表要在全景变更检测挂触发器（registerMapRoutes）之前建好。
   registerChoiceRoutes(app, db, taskRunner.inbox);
   // 推送到手机：等你拍板、上交到用户这层的卡住／越界、里程碑上线（t185）。
+  // 在 Telegram 里拍板（t188）：按钮等同 atrium choice pick / pass，拍板人是用户。
   const notifier = new TelegramNotifier(db, {
     data: resolve(options.data),
+    decide: (ref, action, body) =>
+      decideAndAnnounce(db, taskRunner.inbox, ref, action, body, "u1"),
     ...options.notify,
   });
   taskRunner.inbox.observe((event) => notifier.observe(event));

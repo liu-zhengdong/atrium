@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>设计稿对照：现在 / 第一版 / 第二版（截图用）</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #f1efea;
+        font:
+          15px/1.5 system-ui,
+          "Microsoft YaHei",
+          sans-serif;
+        color: #1f1e1b;
+      }
+      .row {
+        display: flex;
+        gap: 20px;
+      }
+      figure {
+        margin: 0;
+      }
+      figcaption {
+        margin-bottom: 8px;
+      }
+      figcaption b {
+        font-size: 17px;
+        margin-right: 8px;
+      }
+      figcaption span {
+        color: #6b6860;
+      }
+      /* 每列是一屏 1440×1100 缩到 0.45。 */
+      .screen {
+        width: 648px;
+        height: 495px;
+        overflow: hidden;
+        border: 1px solid #d9d6cf;
+        background: #fff;
+      }
+      .screen > * {
+        display: block;
+        width: 1440px;
+        height: 1100px;
+        border: 0;
+        transform: scale(0.45);
+        transform-origin: 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 同一份 c2，宽屏 1440×1100 一屏能看到什么。字数是默认状态下选项页签里看得到的字（不算空白），由 mockup.js 的 data-chars 量得。 -->
+    <div class="row">
+      <figure>
+        <figcaption>
+          <b>现在（线上）</b><span>默认 2031 字，一屏放不下 5 个选项</span>
+        </figcaption>
+        <div class="screen"><iframe src="./index.html?v=before"></iframe></div>
+      </figure>
+      <figure>
+        <figcaption><b>第一版设计稿</b><span>默认 453 字</span></figcaption>
+        <div class="screen"><img src="./00-v1-wide-light.png" alt="" /></div>
+      </figure>
+      <figure>
+        <figcaption>
+          <b>第二版设计稿</b><span>默认 158 字，约为第一版的 1/3</span>
+        </figcaption>
+        <div class="screen"><iframe src="./index.html"></iframe></div>
+      </figure>
+    </div>
+  </body>
+</html>

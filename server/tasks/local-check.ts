@@ -13,7 +13,7 @@ import { killTree, spawnShell } from "../platform/index.ts";
 import { workerEnvironment } from "./worker-env.ts";
 import { checkPlacement, CHECK_TIMEOUT_MINUTES } from "./host-load.ts";
 import { missingCommand } from "./check-outcome.ts";
-import { installDeps } from "./install-deps.ts";
+import { depsLine, installDeps, type DepsInstall } from "./install-deps.ts";
 import {
   QUIET_MINUTES,
   STALL_MINUTES,
@@ -44,14 +44,23 @@ export type LocalCheck = {
   reruns?: number;
   /** 日志太久没新输出、被运行时结束的（t260，check-quiet.ts）：卡在哪个测试文件或哪一行。 */
   stalled?: { at: string | null };
+  /** 检查前装了依赖（t216）；依赖本来就绪时没有。装失败时检查不跑，status 为 error 并记 infra（没跑成）。 */
+  install?: DepsInstall;
 };
 
-/** 记进事件的检查结果：结论、在哪台、哪个提交排在前面（`task show` 一行里先看到）。 */
+/** 记进事件的检查结果：结论、装没装依赖、在哪台、哪个提交排在前面（`task show` 一行里先看到）。 */
 export function checkDetail(check: LocalCheck) {
-  const { outcome, status, host, commit, ...rest } = check;
+  const { outcome, status, host, commit, install, ...rest } = check;
   return {
     ...(outcome ? { outcome } : {}),
     status,
+    // 装依赖的输出末尾已在 detail 里，这里只留结论与用时。
+    ...(install
+      ? {
+          deps: depsLine(install),
+          install: { status: install.status, ms: install.ms, why: install.why },
+        }
+      : {}),
     ...(host ? { host } : {}),
     ...(commit ? { commit } : {}),
     ...rest,
@@ -213,8 +222,6 @@ export async function runLocalCheck(input: {
   urgent?: boolean;
   /** 接着日志已有内容写（代理先把取提交的输出写在前面）。 */
   append?: boolean;
-  /** 跑检查前按锁文件装依赖（install-deps.ts）：工作树不是执行者装好依赖的那份时用（代理的检查工作树、本机为远程任务另建的，t252）。 */
-  install?: boolean;
   /** 没输出多久提醒、多久结束（t260）；缺省按队列（主机配置）。 */
   quiet?: QuietLimits;
   /** 多久看一次日志有没有新输出；测试缩短。 */
@@ -253,30 +260,28 @@ export async function runLocalCheck(input: {
       } catch {
         // 检查结果仍由关卡落库；进度事件失败不能中断检查。
       }
-      let append = input.append ?? false;
-      if (input.install) {
-        if (!append) writeFileSync(log, "", { mode: 0o600 });
-        append = true;
-        // 装不上依赖检查就没法跑：算没跑成（t252），不交回执行者。
-        const failed = await installDeps({
-          tree: input.worktree,
+      if (!input.append) writeFileSync(log, "", { mode: 0o600 });
+      // 依赖没就绪（没装、锁文件变了）先 npm ci；就绪时只看几个文件，不拖慢检查（t252、t216）。
+      const install = await installDeps({
+        tree: input.worktree,
+        log,
+        env: input.env,
+        signal: input.signal,
+      });
+      // 装不上依赖检查就没法跑：算没跑成，不交回执行者；远程的换一台，合入队列放回队尾重跑。
+      if (install?.status === "failed")
+        return {
+          status: "error",
+          command,
           log,
-          env: input.env,
-          signal: input.signal,
-        });
-        if (failed) {
-          appendFileSync(log, `[atrium] ${failed}\n`, { mode: 0o600 });
-          return {
-            status: "error",
-            command,
-            log,
-            detail: failed,
-            failedTests: [],
-            infra: failed,
-          };
-        }
-      }
-      const fd = openSync(log, append ? "a" : "w", 0o600);
+          detail: install.detail ?? install.error ?? "装依赖失败",
+          failedTests: [],
+          infra: install.error ?? "装依赖失败",
+          install,
+        };
+      const withInstall = install ? { install } : {};
+      if (input.signal?.aborted) throw new Error("服务正在关闭");
+      const fd = openSync(log, "a", 0o600);
       let child;
       try {
         child = spawnShell(command, {
@@ -293,6 +298,7 @@ export async function runLocalCheck(input: {
           log,
           detail: String(error),
           failedTests: [],
+          ...withInstall,
         };
       }
       closeSync(fd);
@@ -341,7 +347,7 @@ export async function runLocalCheck(input: {
           stallMs: quiet.stallMs,
         });
         appendFileSync(log, `\n[atrium] ${judged.detail}\n`, { mode: 0o600 });
-        return { command, log, failedTests, ...judged };
+        return { command, log, failedTests, ...judged, ...withInstall };
       }
       // 不是运行时自己超时结束的，却被信号结束：检查进程被别人杀了，算没跑成（t204）。
       const killed =
@@ -365,6 +371,7 @@ export async function runLocalCheck(input: {
           detail: `退出码 ${result.code}`,
           failedTests,
           infra: missing,
+          ...withInstall,
         };
       if (killed)
         return {
@@ -374,6 +381,7 @@ export async function runLocalCheck(input: {
           detail: killed,
           failedTests,
           infra: killed,
+          ...withInstall,
         };
       const status = timedOut
         ? "timeout"
@@ -386,7 +394,7 @@ export async function runLocalCheck(input: {
         ? `超过 ${Math.ceil(timeoutMs / 60_000)} 分钟`
         : (result.error?.message ??
           (result.code === 0 ? "检查通过" : `退出码 ${result.code}`));
-      return { status, command, log, detail, failedTests };
+      return { status, command, log, detail, failedTests, ...withInstall };
     },
     () => input.onStatus?.("queued", log),
     input.urgent,

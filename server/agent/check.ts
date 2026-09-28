@@ -16,7 +16,7 @@ import { ensureClone } from "./launch.ts";
 /**
  * 代理按提交跑检查（#358 第 2 步）：在自己的克隆里 fetch 基础分支、装上服务带来的 bundle，
  * 把检查工作树（每个克隆几份，依赖装在里面下次沿用）切到这个提交，
- * 再用与本机同一份 runLocalCheck 跑（有 package-lock.json 且变了先 npm ci，tasks/install-deps.ts）。
+ * 再用与本机同一份 runLocalCheck 跑（有 package-lock.json 且没装或变了先 npm ci，tasks/install-deps.ts）。
  * 取不到提交、装不上依赖记为 infra（这台没跑成），服务换一台或回本机。
  */
 
@@ -128,7 +128,6 @@ export async function checkCommit(input: CommitCheck): Promise<CheckReply> {
       ...(input.quiet ? { quiet: input.quiet } : {}),
       signal: input.signal,
       append: true,
-      install: true,
     });
     return { ...result, commit: source.commit };
   } finally {

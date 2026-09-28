@@ -360,8 +360,10 @@ func readClaude(ctx context.Context, d Deps) Reading {
 	switch {
 	case kind != "":
 		return fail(transport(kind, "Claude"))
-	case r.status == 401 || r.status == 403:
+	case r.status == 401:
 		return fail("Claude 用量接口拒绝了登录（令牌失效），运行 claude 重新登录")
+	case r.status == 403:
+		return fail("Claude 用量接口拒绝了请求（HTTP 403）；登录没过期，重新登录多半没用，额度走 OpenQuota")
 	case r.status == 429:
 		out := fail("Claude 用量接口限流")
 		out.retryAt = retryAfter(r.header.Get("Retry-After"), now)

@@ -171,7 +171,11 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	if err != nil {
 		return err
 	}
-	facts, err := Collect(ctx, g.R, dir, t.Repo)
+	repo, err := Slug(ctx, g.R, t.Repo)
+	if err != nil {
+		return err
+	}
+	facts, err := Collect(ctx, g.R, dir, repo)
 	if err != nil {
 		return err
 	}
@@ -314,7 +318,11 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 	if err != nil {
 		return err
 	}
-	pr, err := ViewPR(ctx, g.R, t.Repo, t.PR)
+	repo, err := Slug(ctx, g.R, t.Repo)
+	if err != nil {
+		return err
+	}
+	pr, err := ViewPR(ctx, g.R, repo, t.PR)
 	if err != nil {
 		return err
 	}
@@ -329,7 +337,7 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 	} else if ok {
 		json.Unmarshal([]byte(body), &last)
 	}
-	brief := ReviewBrief(t.ID, t.Title, t.Repo, pr.PR, dir, pr.Base, why, last.Facts.Diff, t.Detail)
+	brief := ReviewBrief(t.ID, t.Title, repo, pr.PR, dir, pr.Base, why, last.Facts.Diff, t.Detail)
 	rt, err := ledger.Add(ctx, g.DB, ledger.NewTask{Title: Clip("审阅 "+t.ID+"："+t.Title, 200), Detail: brief,
 		Parent: t.ID, Org: t.Org, Priority: t.Priority}, Actor)
 	if err != nil {

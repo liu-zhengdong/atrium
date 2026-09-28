@@ -246,7 +246,7 @@ func TestWake(t *testing.T) {
 	}
 
 	// 成功：处理完确认，令牌随即作废；提示词带部门、要点链、事件。
-	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2"})
+	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act})
 	round()
 	if f.calls.Load() != 1 || h.fails["a2"] != 0 {
 		t.Fatalf("应唤醒一次且成功：calls=%d fails=%d", f.calls.Load(), h.fails["a2"])
@@ -266,7 +266,7 @@ func TestWake(t *testing.T) {
 
 	// 没处理完：第一次记失败，第二次转交上一层（a1）。
 	f.ack = false
-	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2"}) // #2
+	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act}) // #2
 	round()
 	if h.fails["a2"] != 1 || targetOf(2) != "a2" {
 		t.Fatalf("第一次失败：fails=%d target=%s", h.fails["a2"], targetOf(2))
@@ -304,7 +304,16 @@ func TestWakeTimeout(t *testing.T) {
 	f := &fakeLauncher{h: h, db: env.DB, cmd: "sleep 30"}
 	SetLauncher(f.launch)
 	t.Cleanup(func() { SetLauncher(nil) })
-	events.Emit(ctx, env.DB, events.Event{Kind: "x", Target: "a2"})
+	// 知会不叫醒负责人。
+	events.Emit(ctx, env.DB, events.Event{Kind: "x", Target: "a2", Level: events.Info})
+	if err := h.round(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	h.wg.Wait()
+	if h.fails["a2"] != 0 || f.calls.Load() != 0 {
+		t.Fatalf("知会不该唤醒：fails=%d", h.fails["a2"])
+	}
+	events.Emit(ctx, env.DB, events.Event{Kind: "y", Target: "a2", Level: events.Act})
 	start := time.Now()
 	if err := h.round(ctx, env); err != nil {
 		t.Fatal(err)

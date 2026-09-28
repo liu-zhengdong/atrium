@@ -2,6 +2,8 @@ package release
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,6 +28,7 @@ type fakeGH struct {
 	tags     []string
 	contains map[string][]string
 	calls    []string
+	badSum   bool // SHA256SUMS 写错：Install 应拒绝
 }
 
 func (f *fakeGH) Run(ctx context.Context, dir, name string, args ...string) (string, error) {
@@ -49,7 +52,15 @@ func (f *fakeGH) Run(ctx context.Context, dir, name string, args ...string) (str
 		return "ahead\n", nil
 	case args[0] == "release" && args[1] == "download":
 		dir := args[len(args)-1]
-		return "", os.WriteFile(filepath.Join(dir, Asset(runtime.GOOS, runtime.GOARCH)), []byte("new binary "+args[2]), 0o644)
+		asset, bin := Asset(runtime.GOOS, runtime.GOARCH), []byte("new binary "+args[2])
+		sum := sha256.Sum256(bin)
+		if f.badSum {
+			sum[0]++
+		}
+		if err := os.WriteFile(filepath.Join(dir, SumsFile), []byte(hex.EncodeToString(sum[:])+"  "+asset+"\n"), 0o644); err != nil {
+			return "", err
+		}
+		return "", os.WriteFile(filepath.Join(dir, asset), bin, 0o644)
 	}
 	return "", fmt.Errorf("fakeGH 不支持 %v", args)
 }
@@ -69,6 +80,30 @@ func TestInstall(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 2 {
 		t.Fatalf("临时目录没清掉：%v", entries)
+	}
+	// 校验和不符：不替换。
+	if err := Install(context.Background(), &fakeGH{badSum: true}, "o/r", "v2.0.2", exe); err == nil || !strings.Contains(err.Error(), "校验和不符") {
+		t.Fatalf("校验和不符应拒绝：%v", err)
+	}
+	if now, _ := os.ReadFile(exe); string(now) != "new binary v2.0.1" {
+		t.Fatalf("校验失败不该替换：%q", now)
+	}
+}
+
+func TestCheckSum(t *testing.T) {
+	sums := "aa  atrium-linux-amd64\nBB *atrium-darwin-arm64\n"
+	for _, c := range []struct {
+		asset, got string
+		ok         bool
+	}{
+		{"atrium-linux-amd64", "aa", true},
+		{"atrium-darwin-arm64", "bb", true},
+		{"atrium-linux-amd64", "ab", false},
+		{"atrium-windows-amd64.exe", "aa", false},
+	} {
+		if err := CheckSum(sums, c.asset, c.got); (err == nil) != c.ok {
+			t.Errorf("%s %s：%v", c.asset, c.got, err)
+		}
 	}
 }
 

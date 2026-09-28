@@ -39,6 +39,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 - 命令行的主要调用者是 Agent：成功回执最后一行给下一步命令，只有修正明确可执行时才提示修正，字段校验用参数名和中文；读命令支持 `--json`；异步状态提供等待与增量读取（`task wait`、`task log --follow`、`events wait`），不让调用方轮询。新命令接入 `cli/main.ts` 的命令表，`atrium --help` 与 `atrium guide` 由命令表生成，README 同步。
 - 用户短号 `u1`，任务 `t1`，目标与里程碑 `g1`（迁移后作节点阶段记录的 id），组织节点 `o1`，要点 `k1`，节点 leader `a1`；短号全局一致、持久、不复用。
 - 组织（部门、专员、章程、能力卡）存在 Atrium，改动留修订历史；仓库只留跟着代码走的约定：本文件、`.agents/README.md`（派活时附给执行者）和代码目录旁的 `AGENTS.md`。
+- 用户纠正或新规矩写到哪（技能、专员说明、要点、执行者档案、章程、决定记录、备忘、AGENTS.md）：见 `atrium guide`「每类东西放哪」与 README 同名一节。
 
 ## 验证与协作
 

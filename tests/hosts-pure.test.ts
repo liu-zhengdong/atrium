@@ -170,6 +170,64 @@ test("能不能接：离线、没接入、暂停、没装、没登录、仓库�
   assert.ok(!repoAllowed([], "o/r"));
 });
 
+test("暂停接活（t227）：自动挑永不选；只有指定且放行时照派这一件，满了不排队，其余条件照判", () => {
+  const paused = remote({ paused: true, repos: ["*"] });
+  // 自动挑、排队拉起（不钉）：暂停的一律不选，就算它最空、本机满。
+  for (const urgent of [false, true])
+    assert.deepEqual(
+      chooseHost([local({ busy: "本机太忙" }), paused], need({ urgent })),
+      urgent
+        ? { kind: "run", host: 1 }
+        : { kind: "queue", host: null, reason: "本机太忙" },
+    );
+  // 放行只对指定的那台有效：自动挑时传了也不选暂停的。
+  assert.deepEqual(
+    chooseHost([local({ busy: "本机太忙" }), paused], need(), undefined, true),
+    { kind: "queue", host: null, reason: "本机太忙" },
+  );
+  assert.deepEqual(hostFit(paused, need(), false, true), {
+    ok: false,
+    kind: "never",
+    reason: "h2 已暂停接活",
+  });
+  // 指定、不放行（leader、排队行、改派）：拒绝，不排队。
+  assert.deepEqual(chooseHost([local(), paused], need(), 2), {
+    kind: "refuse",
+    reason: "h2 已暂停接活",
+  });
+  // 指定且放行（用户或秘书 task run --host）：派这一件。
+  assert.deepEqual(chooseHost([local(), paused], need(), 2, true), {
+    kind: "run",
+    host: 2,
+  });
+  assert.deepEqual(chooseHost([local({ paused: true })], need(), 1, true), {
+    kind: "run",
+    host: 1,
+  });
+  // 放行也不越过别的条件：离线、避开、没装照样拒。
+  for (const [candidate, over, reason] of [
+    [remote({ paused: true, connection: "offline" }), {}, "h2 离线"],
+    [paused, { avoid: [2] }, "任务写了避开 h2（--avoid-host）"],
+    [paused, { tool: "codex" as const }, "h2 上没装 codex"],
+  ] as const)
+    assert.deepEqual(chooseHost([local(), candidate], need(over), 2, true), {
+      kind: "refuse",
+      reason,
+    });
+  // 满了：暂停的主机上不排队（排着的只等不暂停的主机），直接说清。
+  const full = chooseHost(
+    [local(), remote({ paused: true, running: 4 })],
+    need(),
+    2,
+    true,
+  );
+  assert.equal(full.kind, "refuse");
+  assert.match(
+    (full as { reason: string }).reason,
+    /h2 同时最多跑 4 个.*h2 暂停接活中，指定过去的不排队/,
+  );
+});
+
 test("挑主机：指定的只看那台；自动挑最空的、一样空本机优先；都满排队且本机原因优先", () => {
   const two = [local(), remote()];
   assert.deepEqual(chooseHost(two, need(), 2), { kind: "run", host: 2 });

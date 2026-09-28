@@ -65,7 +65,8 @@ export type LaneDeps = {
     ): Promise<LeftoverKill[]>;
   };
   /** 暂停往某台主机派活。 */
-  pauseHost: (host: number) => void;
+  /** by：记在谁名下（止损写的是哪件任务）。 */
+  pauseHost: (host: number, by: string) => void;
   /** 派一个任务（续上被暂停的）。 */
   run: (ref: string, body: Record<string, unknown>) => Promise<unknown>;
   /** 某台主机此刻是不是满了或太忙（不算 except 这件）。 */
@@ -223,7 +224,7 @@ export class UrgentLane {
   private async apply(action: StopgapAction, self: number): Promise<string> {
     switch (action.kind) {
       case "host_pause":
-        this.deps.pauseHost(action.host);
+        this.deps.pauseHost(action.host, `${taskRef(self)} 止损`);
         return `已暂停往 h${action.host} 派活`;
       case "task_stop": {
         const done: string[] = [];

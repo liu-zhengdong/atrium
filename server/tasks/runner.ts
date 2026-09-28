@@ -50,8 +50,7 @@ import { countRows, RECENT_MS, topRows } from "./top.ts";
 import { TaskWaits } from "./waits.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import { workerEnvironment } from "./worker-env.ts";
-import { Scheduler, planItem } from "./schedule.ts";
-import { requireRow } from "./ledger-model.ts";
+import { Scheduler, scheduleOf } from "./schedule.ts";
 import { schedulePrExec } from "./schedule-pr.ts";
 import { pickSkills, type LaunchOptions } from "./workspace.ts";
 import { pickFor } from "./pick-runtime.ts";
@@ -120,6 +119,7 @@ import {
   hostRow,
   hostRows,
   hostView as hostRowView,
+  pauseHistory,
   removeHost,
   setPaused,
   type HostRow,
@@ -389,6 +389,7 @@ export class TaskRunner {
       placement: {
         need: (id, tool, urgent) => this.hostNeed(id, tool, urgent),
         choose: (need, pinned) => this.chooseHostFor(need, pinned),
+        paused: (host) => this.hostPaused(host),
         installed: (host) => this.remoteInstalled(host),
       },
       makeRoom: (id, tool, host) => this.lane.makeRoom(id, tool, host),
@@ -423,7 +424,7 @@ export class TaskRunner {
       reapLocal: (targets) => reapLeftovers(targets, { exec: this.exec }),
       remote: this.remote,
       stop: (ref, note) => this.stop(ref, undefined, note),
-      pauseHost: (host) => void this.pauseHost(`h${host}`, true),
+      pauseHost: (host, by) => void this.pauseHost(`h${host}`, true, by),
       run: (ref, body) => this.run(ref, body),
       crowded: (host, except) => this.crowdedHost(host, except),
       changed: (id) => this.waits.changed(id),
@@ -696,11 +697,14 @@ export class TaskRunner {
         undefined,
         `atrium review show ${task.ref}`,
       );
-    const schedule = planItem(this.db, requireRow(this.db, id));
-    if (
-      schedule.group === "waiting" ||
-      (schedule.group === "blocked" && task.schedule_state === "blocked")
-    )
+    // 只看上游（t227）：任务自己失败或受阻不挡重派（能不能重派由下面的 admit 按状态判），
+    // 免得失败后排期标了 blocked 的要先 task set --status todo。
+    const schedule = scheduleOf(this.db, {
+      id,
+      status: "todo",
+      schedule_reason: null,
+    });
+    if (schedule.group === "waiting" || schedule.group === "blocked")
       throw new Problem(
         409,
         `${task.ref} 依赖未就绪：${schedule.reason ?? schedule.waiting_for.join("、")}`,
@@ -842,7 +846,8 @@ export class TaskRunner {
       this.x.launching.delete(id);
       throw error;
     }
-    const choice = this.chooseHostFor(need, pinned, id);
+    // 用户或秘书用 --host 指定到暂停接活的主机：只派这一件，别的活照样不去（t227）；leader 不行。
+    const choice = this.chooseHostFor(need, pinned, id, !actor);
     if (choice.kind === "refuse") {
       this.x.launching.delete(id);
       throw new Problem(
@@ -891,11 +896,27 @@ export class TaskRunner {
         pick,
       };
     }
+    const pausedPin = pinned !== null && !actor && this.hostPaused(host);
     this.x.claim(id, tool, host);
     try {
-      await this.x.launch(id, { ...chosen, host });
+      await this.x.launch(id, {
+        ...chosen,
+        host,
+        ...(pausedPin ? { pausedOk: true } : {}),
+      });
+      if (pausedPin)
+        noteTask(this.db, id, "paused_host_pinned", { host: hostRef(host) });
       // 回执要带事件（技能没挂上等，t232），与排队时一样回完整视图。
-      return { task: getTask(this.db, id), queued: false, pick };
+      return {
+        task: getTask(this.db, id),
+        queued: false,
+        pick,
+        ...(pausedPin
+          ? {
+              host_note: `${hostRef(host)} 暂停接活中，按 --host 只派了这一件；别的活仍不会派过去`,
+            }
+          : {}),
+      };
     } catch (error) {
       if (error instanceof BudgetProblem)
         return this.blockBudget(task, error.message);
@@ -1210,8 +1231,22 @@ export class TaskRunner {
     need: HostNeed,
     pinned: number | null,
     except?: number,
+    allowPaused = false,
   ) {
-    return chooseHost(this.hostCandidates(except), need, pinned ?? undefined);
+    return chooseHost(
+      this.hostCandidates(except),
+      need,
+      pinned ?? undefined,
+      allowPaused,
+    );
+  }
+
+  /** 这台暂停接活了没（移除或查不到的按没暂停，由挑主机那边拒）。 */
+  private hostPaused(host: number) {
+    const row = this.db
+      .prepare("SELECT paused FROM hosts WHERE id=?")
+      .get(host) as { paused: number } | undefined;
+    return row?.paused === 1;
   }
 
   private viewOf(row: HostRow): HostView {
@@ -1255,6 +1290,7 @@ export class TaskRunner {
       .all(id) as { id: number; title: string; status: string }[];
     return {
       ...view,
+      pauses: pauseHistory(this.db, id),
       tasks: tasks.map((task) => ({ ...task, ref: taskRef(task.id) })),
     };
   }
@@ -1317,12 +1353,18 @@ export class TaskRunner {
     return { host: this.viewOf(hostRow(this.db, id)) };
   }
 
-  pauseHost(reference: unknown, paused: boolean) {
+  /** 暂停或恢复接活；by 是谁（u1、secretary），真变了才记账并写服务日志（t227）。 */
+  pauseHost(reference: unknown, paused: boolean, by: string) {
     const id = parseHostRef(reference, "主机");
-    setPaused(this.db, id, paused);
-    // 恢复接活：排着的可能能拉起了。
-    if (!paused && !this.closed && this.recovered) void this.x.drain();
-    return { host: this.viewOf(hostRow(this.db, id)) };
+    const changed = setPaused(this.db, id, paused, by);
+    if (changed)
+      console.log(
+        `主机 ${hostRef(id)} ${paused ? "暂停接活" : "恢复接活"}（${by}）`,
+      );
+    // 恢复接活：排着的会按顺序拉起、可能派到这台（只想派一件就别恢复，用 task run --host 指定）。
+    if (changed && !paused && !this.closed && this.recovered)
+      void this.x.drain();
+    return { host: this.viewOf(hostRow(this.db, id)), changed };
   }
 
   /** 清理主机上 Atrium 拉起的残留进程（t215 `host clean`，止损动作同一实现；t217 远程也清）。 */
@@ -1431,6 +1473,21 @@ export class TaskRunner {
       request.host === undefined
         ? (prev.host_id ?? null)
         : this.pinnedHost(request.host);
+    // 钉在某台上排：和首派一样判那台能不能接（暂停、避开、离线的拒绝，t227），原因按那台说。
+    let hostWait: string | null = null;
+    if (host !== null) {
+      const need = await this.hostNeed(task.id, worker.tool, task.urgent === 1);
+      const choice = this.chooseHostFor(need, host, task.id);
+      if (choice.kind === "refuse")
+        throw new Problem(
+          409,
+          `${task.ref} 改派不到 ${hostRef(host)}：${choice.reason}，排队不变`,
+          "conflict",
+          undefined,
+          `atrium host show ${hostRef(host)}`,
+        );
+      if (choice.kind === "queue") hostWait = choice.reason;
+    }
     const adapter = ADAPTERS[worker.tool];
     const gate = this.host.gate(this.x.inFlight(task.id), task.urgent === 1);
     const reason = this.quota.held().has(adapter.quotaProvider)
@@ -1438,9 +1495,11 @@ export class TaskRunner {
       : adapter.exclusive &&
           this.x.busy(worker.tool, task.id, host ?? LOCAL_HOST)
         ? `${worker.tool} 同一时刻只跑一个，前一个结束后自动拉起`
-        : gate.ok
-          ? "等待执行者可用后自动拉起"
-          : gate.reason;
+        : host !== null
+          ? (hostWait ?? "等待执行者可用后自动拉起")
+          : gate.ok
+            ? "等待执行者可用后自动拉起"
+            : gate.reason;
     enqueue(this.db, {
       task_id: task.id,
       tool: worker.tool,

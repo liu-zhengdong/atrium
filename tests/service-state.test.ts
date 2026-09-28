@@ -1,17 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { claimService, readService } from "../server/service-state.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 /**
  * 造热日志文件：写一个包含合法 SQLite 日志头的 -journal 文件，并把数据库头的
@@ -54,8 +47,7 @@ function createHotJournal(dbPath: string) {
 }
 
 test("崩溃留下热日志（-journal）：读登记不报错，当作没有服务", (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-registry-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-registry-");
   const path = join(data, "service.sqlite");
 
   // 先造一个合法的登记库，写入一条记录。
@@ -84,8 +76,7 @@ test("崩溃留下热日志（-journal）：读登记不报错，当作没有服
 });
 
 test("崩溃留下热日志后 claimService 正常回滚并登记", (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-registry-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-registry-");
   const path = join(data, "service.sqlite");
 
   // 造合法库并留下热日志。
@@ -128,8 +119,7 @@ test("崩溃留下热日志后 claimService 正常回滚并登记", (t) => {
 test("登记文件写坏（断电等）：读当作没有服务，登记时挪开重建", (t) => {
   const errors: string[] = [];
   t.mock.method(console, "error", (message: string) => errors.push(message));
-  const data = mkdtempSync(join(tmpdir(), "atrium-registry-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-registry-");
   const path = join(data, "service.sqlite");
   writeFileSync(path, "不是数据库".repeat(200));
   assert.equal(readService(data), null);
@@ -149,8 +139,7 @@ test("登记文件写坏（断电等）：读当作没有服务，登记时挪�
 });
 
 test("登记文件完好时照常读写，不挪文件", (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-registry-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-registry-");
   const lease = claimService(data, 4999);
   lease.release();
   const again = claimService(data, 4998);

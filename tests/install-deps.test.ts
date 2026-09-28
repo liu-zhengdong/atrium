@@ -31,7 +31,7 @@ import {
 import { redact } from "../server/secret-redact.ts";
 import { isolatedPath, writeFakeBin } from "./fake-bin.ts";
 import { nodeCommand } from "./portable-shell.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { removeTemp, tempDir } from "./temp-dir.ts";
 
 /**
  * 检查前装依赖（t252、t216）：每次跑检查前判一次依赖是否就绪——没装、锁文件变了、执行者装的比锁文件旧
@@ -140,8 +140,7 @@ test("装依赖没成的原因：退出码、超时、起不来，带 npm 最后
 
 /** 假 npm：参数记进 calls，mode 文件写 fail 时照 npm 的样子报错退出，否则建 node_modules。 */
 function setup(t: { after: (fn: () => void) => void }) {
-  const root = mkdtempSync(join(tmpdir(), "atrium-install-deps-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-install-deps-");
   const bin = join(root, "bin");
   const tree = join(root, "tree");
   const calls = join(root, "calls");

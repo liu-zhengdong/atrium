@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync } from "node:fs";
 import { createConnection } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { authPolicy } from "../server/auth-policy.ts";
 import { declaredBodyWithoutBytes } from "./raw-http.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 function rawRequest(
   port: number,
@@ -39,8 +36,7 @@ async function listen(
   t: { after: (fn: () => unknown) => void },
   onRoute?: (method: string, url: string) => void,
 ) {
-  const data = mkdtempSync(join(tmpdir(), "atrium-auth-routes-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-auth-routes-");
   const { app } = await createApp({
     data,
     onRoute,

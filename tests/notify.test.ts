@@ -49,7 +49,7 @@ import { telegramFile } from "../server/notify/store.ts";
 import { redact } from "../server/secret-redact.ts";
 import { denyReason, leaderRule } from "../server/leaders/scope.ts";
 import { statusText } from "../cli/notify.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { removeTemp, tempDir } from "./temp-dir.ts";
 
 const TOKEN = "123456789:AAH-fakeTokenForTestsOnly_abcdefghijk";
 const OTHER = "987654321:BBx-anotherFakeTokenForTests_zyxwvuts";
@@ -1021,8 +1021,7 @@ test("代理：单独配的走 CONNECT 隧道，其次系统代理，NO_PROXY �
 });
 
 test("启动自愈：凭据文件写坏了挪开留档，按没配处理；重启后接着发没发完的", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-notify-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-notify-");
   writeFileSync(telegramFile(data), "{not json");
   const broken = await open(t, { data });
   const status = await broken.ok("GET", "/api/notify/telegram");

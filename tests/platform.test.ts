@@ -52,7 +52,7 @@ import {
   workerEnvironment,
 } from "../server/tasks/dispatch/worker-env.ts";
 import { readNumberLine, waitExit } from "./child-output.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 const PLATFORMS: Platform[] = ["darwin", "linux", "win32"];
 
@@ -337,8 +337,7 @@ test("环境白名单：Windows 变量名不分大小写并放行系统变量，
 });
 
 test("本机：按名字找可执行文件、拉起 shell 命令、判断进程存活", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-platform-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-platform-");
   const bin = join(root, "bin");
   mkdirSync(bin);
   const name = process.platform === "win32" ? "tool.cmd" : "tool";
@@ -405,8 +404,7 @@ test("本机：结束进程树连孙进程一起结束", async (t) => {
 
 test("本机：结束 detached 拉起的进程树后，它们用过的工作目录删得掉", async (t) => {
   // Windows 上 detached 经隐藏中转：中转、程序、孙进程都以这个目录为工作目录，结束后都得放手。
-  const root = mkdtempSync(join(tmpdir(), "atrium-platform-kill-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-platform-kill-");
   const cwd = join(root, "work");
   mkdirSync(cwd);
   const script = `
@@ -534,8 +532,7 @@ function runLauncher(
 }
 
 test("本机：隐藏控制台中转把输出写进日志、转发标准输入、按程序退出码退出", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-launcher-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-launcher-");
   const log = join(root, "worker.log");
   writeFileSync(log, "[atrium] 抬头\n");
   const out = openSync(log, "a");
@@ -565,8 +562,7 @@ test("本机：隐藏控制台中转把输出写进日志、转发标准输入�
 });
 
 test("本机：隐藏控制台中转不转发标准输入时照常退出，拉不起程序时记原因并退出 127", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-launcher-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-launcher-");
   const ok = runLauncher(
     root,
     { stdin: false, stdio: ["ignore", "pipe", "pipe"] },

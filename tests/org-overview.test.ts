@@ -1,8 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Problem } from "../server/problem.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
@@ -28,7 +25,7 @@ import {
 import { createApp } from "../server/app.ts";
 import { renderTop, snapshotOf } from "../cli/top.ts";
 import type { Client } from "../cli/service.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 const show = (db: DatabaseSync, at: string) => showNode(db, at);
 const node = (db: DatabaseSync, input: Record<string, unknown>) =>
@@ -453,8 +450,7 @@ test("要点：增改删与排序、权限按 leader 链、不留修订；show �
   assert.equal(k5.ref, "k5", "短号不复用");
   db.close();
 
-  const data = mkdtempSync(join(tmpdir(), "atrium-points-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-points-");
   const { app, db: live } = await createApp({ data, auth: false });
   t.after(() => app.close());
   seed(live);

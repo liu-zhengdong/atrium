@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -17,7 +16,7 @@ import { leaderEnvironment } from "../server/leaders/runtime.ts";
 import { workerEnvironment } from "../server/tasks/dispatch/worker-env.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import { childEnv } from "./child-env.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 const run = promisify(execFile);
 const bin = join(import.meta.dirname, "..", "bin", "atrium.mjs");
@@ -75,8 +74,7 @@ test(
   "执行者防护实测：需要服务的命令一律拒绝，不拉起服务、不建数据目录；显式隔离实例照常",
   { timeout: 60000 },
   async (t) => {
-    const home = mkdtempSync(join(tmpdir(), "atrium-worker-home-"));
-    t.after(() => removeTemp(home));
+    const home = tempDir(t, "atrium-worker-home-");
     const env = {
       PATH: process.env.PATH,
       HOME: home,

@@ -1,9 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   addTaskNote,
   createTask,
@@ -16,7 +13,7 @@ import { noteView, noteViews } from "../server/tasks/ledger/notes.ts";
 import { ensureLeaderTables } from "../server/leaders/model.ts";
 import { createApp } from "../server/app.ts";
 import { treeMore } from "../cli/tasks.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 function memory() {
   const db = new DatabaseSync(":memory:");
@@ -218,8 +215,7 @@ test("task tree 语句数不随任务数增长，查询计划不扫 tasks 与事
 });
 
 test("HTTP：/api/tasks/tree 接受翻页参数，校验报中文 400", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-tree-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-tree-");
   const { app } = await createApp({ data, auth: false });
   const headers = { host: "127.0.0.1" };
   try {

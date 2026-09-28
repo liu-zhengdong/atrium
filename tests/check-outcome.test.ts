@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   checkSummary,
@@ -21,7 +20,7 @@ import {
   runLocalCheck,
   type LocalCheck,
 } from "../server/tasks/merge/local-check.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 import {
   holderDetail,
   holderOf,
@@ -372,8 +371,7 @@ test("检查命令找不到（没装依赖）：退出码 127 或 shell 说找�
 });
 
 test("本地检查真跑一个不存在的命令：记 infra，分类为没跑成", async (t) => {
-  const worktree = mkdtempSync(join(tmpdir(), "atrium-missing-"));
-  t.after(() => removeTemp(worktree));
+  const worktree = tempDir(t, "atrium-missing-");
   mkdirSync(join(worktree, ".agents"));
   writeFileSync(
     join(worktree, ".agents", "check"),

@@ -1,9 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { request } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
@@ -18,7 +16,7 @@ import {
   mapRevision,
   startMapWatch,
 } from "../server/map/watch.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 function memory() {
   const db = new DatabaseSync(":memory:");
@@ -124,8 +122,7 @@ test("空闲保活：连续未变到次数就 ping", () => {
 });
 
 test("开 N 个 SSE 时检测函数调用次数与 N 无关", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-map-watch-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-map-watch-");
   let detects = 0;
   let tick = () => {};
   const created = await createApp({

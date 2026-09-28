@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   TASK_EVENT_KINDS,
@@ -29,7 +27,7 @@ import { renderTree } from "../cli/tasks.ts";
 import { isProcessing } from "../server/tasks/ledger/notes.ts";
 import { cliErrorMessage } from "../cli/error-message.ts";
 import { commands } from "../cli/main.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 const S = TASK_STATUSES;
 /** 期望表：事件 → 当前状态 → 新状态（null 表示拒绝）。 */
@@ -469,8 +467,7 @@ test("处理备注：多次追加、最新一条、卡住前后判定与人工�
 });
 
 test("HTTP：任务备注需认证，列表和详情含当前备注", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-task-note-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-task-note-");
   const guarded = await createApp({
     data: join(data, "guarded"),
   });
@@ -524,8 +521,7 @@ test("HTTP：任务备注需认证，列表和详情含当前备注", async (t) 
 });
 
 test("HTTP：五个接口走用户认证，校验报中文 400", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-tasks-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-tasks-");
   const guarded = await createApp({
     data: join(data, "guarded"),
   });

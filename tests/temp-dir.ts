@@ -1,4 +1,6 @@
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after } from "node:test";
 import { killProcessesUnder } from "./win-processes.ts";
 
@@ -41,4 +43,14 @@ export function removeTemp(path: string) {
       throw error;
     deferred.add(path);
   }
+}
+
+/** 建一个测试临时目录，用例结束时删掉。 */
+export function tempDir(
+  t: { after: (fn: () => void) => void },
+  prefix: string,
+) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  t.after(() => removeTemp(dir));
+  return dir;
 }

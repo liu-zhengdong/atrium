@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   advanceTask,
@@ -33,7 +31,7 @@ import { renderPlan, type PlanView } from "../cli/top-plan.ts";
 import { planCounts } from "../server/tasks/ledger/plan-count.ts";
 import type { Holder } from "../server/tasks/watch/holder.ts";
 import { createApp } from "../server/app.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 /** 汇总型总任务（t190）：账本跟随、派发拦截、通知分投、取消连带与各处展示。 */
 
@@ -255,8 +253,7 @@ test("通知：叶子归 leader 管时照旧投 leader，上线不再抄秘书�
 });
 
 test("派发拦截：task run、task run --dry-run 给人话提示；自动派发跳过总任务；排期不列总任务", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-total-run-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-total-run-");
   const db = memory();
   createTask(db, { title: "总", auto: true }); // t1
   createTask(db, { title: "叶甲", parent: "t1" }); // t2
@@ -502,8 +499,7 @@ test("全景任务视图：总任务一行带汇总与可展开的直接子任�
 });
 
 test("取消总任务：先问一句，带 with_children 连带取消没结束的子孙，已完成的不动；破坏输入报错", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-total-cancel-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-total-cancel-");
   const { app, db } = await createApp({
     data,
     auth: false,

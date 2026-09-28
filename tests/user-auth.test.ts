@@ -1,22 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  mkdtempSync,
   readFileSync,
   readdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 async function fixture(t: { after: (fn: () => unknown) => void }) {
-  const data = mkdtempSync(join(tmpdir(), "atrium-auth-test-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-auth-test-");
   const { app } = await createApp({
     data,
     controlToken: "fixture-control",
@@ -28,8 +24,7 @@ async function fixture(t: { after: (fn: () => unknown) => void }) {
 }
 
 test("interrupted first boot preserves an invalid token file and starts with a new one", async (t) => {
-  const data = mkdtempSync(join(tmpdir(), "atrium-auth-recover-"));
-  t.after(() => removeTemp(data));
+  const data = tempDir(t, "atrium-auth-recover-");
   writeFileSync(userTokenPath(data), "broken", { mode: 0o600 });
   const { app } = await createApp({
     data,

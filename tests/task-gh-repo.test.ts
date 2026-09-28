@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   apiArgs,
@@ -15,7 +14,7 @@ import { collectFacts, readCi } from "../server/tasks/gates/facts.ts";
 import { collectComments } from "../server/tasks/gates/comment-facts.ts";
 import { evaluateGates } from "../server/tasks/gates/gates.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
-import { removeTemp } from "./temp-dir.ts";
+import { tempDir } from "./temp-dir.ts";
 
 test("origin 远端解析：https 与 ssh 写法都得到 owner/repo", () => {
   const fork = {
@@ -99,8 +98,7 @@ function git(cwd: string, ...args: string[]) {
 
 /** fork 形态的假仓库：origin 指向 fork、另有 upstream；远端地址都不可达，只读 git 配置。 */
 function forkRepo(t: { after: (fn: () => void) => void }) {
-  const root = mkdtempSync(join(tmpdir(), "atrium-fork-"));
-  t.after(() => removeTemp(root));
+  const root = tempDir(t, "atrium-fork-");
   const repo = join(root, "openquota-fork");
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   git(repo, "config", "user.email", "t@example.com");

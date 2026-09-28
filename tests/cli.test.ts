@@ -200,7 +200,7 @@ test(
     // 待派的任务不在看板行里，只进「接下来」；末行是下一步命令（有就绪的看排期）。
     assert.equal(
       line.stdout,
-      "Atrium 在做 0\n接下来：就绪 1 · 等待中 0\n下一步：atrium task plan\n",
+      "Atrium 在做 0 · 秘书没在听\n接下来：就绪 1 · 等待中 0\n下一步：atrium task plan\n",
     );
     const json = await f.cli("statusline", "--json");
     assert.equal(json.code, 0, json.stderr);
@@ -213,7 +213,7 @@ test(
     assert.equal(colored.code, 0, colored.stderr);
     assert.equal(
       colored.stdout,
-      "Atrium 在做 0\n\x1b[2m接下来：就绪 1 · 等待中 0\x1b[0m\n下一步：atrium task plan\n",
+      "Atrium 在做 0 · \x1b[2m秘书没在听\x1b[0m\n\x1b[2m接下来：就绪 1 · 等待中 0\x1b[0m\n下一步：atrium task plan\n",
     );
   },
 );

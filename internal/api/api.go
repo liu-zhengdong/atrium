@@ -92,10 +92,15 @@ type Handler func(r *Req) (any, error)
 // Authenticator 由令牌认出身份；认不出返回 false。
 type Authenticator func(token string) (Actor, bool)
 
+// Guard 在认证之后、处理函数之前对某类身份做统一的权限判定（路由已匹配，q.Pattern 可用）；
+// 返回错误即拒绝。可以读请求体，但读完要放回（q.Body）。
+type Guard func(q *Req) error
+
 type Router struct {
-	mux   *http.ServeMux
-	auths []Authenticator
-	Log   *slog.Logger
+	mux    *http.ServeMux
+	auths  []Authenticator
+	guards map[string]Guard
+	Log    *slog.Logger
 }
 
 func NewRouter(log *slog.Logger) *Router {
@@ -108,6 +113,14 @@ func NewRouter(log *slog.Logger) *Router {
 
 // AddAuth 追加一种令牌认证（用户令牌、第二波的负责人令牌、机器令牌）。
 func (r *Router) AddAuth(a Authenticator) { r.auths = append(r.auths, a) }
+
+// AddGuard 给某类身份（Actor.Kind，如 "leader"）装统一的权限判定：这类身份的每个请求都先过它。
+func (r *Router) AddGuard(kind string, g Guard) {
+	if r.guards == nil {
+		r.guards = map[string]Guard{}
+	}
+	r.guards[kind] = g
+}
 
 // Handle 注册需认证的路由，pattern 用 Go 1.22 写法，如 "POST /api/tasks/{id}/notes"。
 func (r *Router) Handle(pattern string, h Handler) { r.handle(pattern, h, true) }
@@ -125,6 +138,12 @@ func (r *Router) handle(pattern string, h Handler, auth bool) {
 				return
 			}
 			req.Actor = actor
+			if g := r.guards[actor.Kind]; g != nil {
+				if err := g(req); err != nil {
+					write(w, err, nil, r.Log)
+					return
+				}
+			}
 		}
 		result, err := h(req)
 		write(w, err, result, r.Log)

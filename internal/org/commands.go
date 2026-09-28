@@ -198,4 +198,5 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(pt, msg, "atrium org show "+pt.Org)
 		}})
+	identityCommands(t)
 }

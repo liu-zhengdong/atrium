@@ -31,6 +31,7 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
 | `ledger` | 完成 | 任务、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/tree/plan/note/wait` | `tasks` `task_deps` `task_events` |
 | `org` | 部门与要点完成 | 部门、要点、要点链；第二波补身份、备忘、技能、资料、选项单、决定、周期任务、凭据 | `departments` `department_repos` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `decisions` `schedules` `secrets` |
+| `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
 | `events` | `Emit` 完成，其余桩 | 事件落库、投递对象解析、`events wait/ack`、租约 | `events` |
 | `dispatch` | 桩 | 派活队列、挑执行者与机器、拉起；`task run/stop/tell/log`、`top` | `queue` |
 | `workers` | 桩 | 适配器、档案三层叠加；`workers`、`workers edit` | `worker_profiles` |
@@ -78,7 +79,7 @@ type Module struct {
 - 路由：`r.Handle("POST /api/tasks/{id}/notes", func(q *api.Req) (any, error))`，Go 1.22 写法。`r.Public` 只给 `/health`。
 - 路径里的短号用 `q.Ref("id", "t")` 取，自动拒绝前缀不对、`..`、`t0` 之类。请求体用 `q.Decode(&v)`（拒绝未知字段，上限 1MB）。
 - 错误：`api.Usage`（400）、`api.NotFound`（404）、`api.Conflict`（409）、`api.Limit(next, …)`（409，满了必须给怎么腾地方）、`api.Forbidden`（403）、`api.Unavailable`（503，code `restarting`）；`.WithNext("atrium …")` 附修正命令。其他 error 一律 500 `internal`。请求 context 取消（服务停下或重启）自动变成 `restarting`，客户端据此等新服务后重发。
-- 身份：`q.Actor{ID, Kind}`。用户令牌得到 `u1/user`。负责人令牌、机器令牌由 org、hosts 在自己的 `Routes` 里 `r.AddAuth(func(token) (api.Actor, bool))` 接入，按 `Actor.Kind` 在处理函数里判权限。
+- 身份：`q.Actor{ID, Kind}`。某类身份的统一权限判定用 `r.AddGuard(kind, func(q) error)`（认证后、处理函数前；负责人的在 `org/leaders`，写接口默认拒绝）。用户令牌得到 `u1/user`。负责人令牌、机器令牌由 org、hosts 在自己的 `Routes` 里 `r.AddAuth(func(token) (api.Actor, bool))` 接入，按 `Actor.Kind` 在处理函数里判权限。
 
 ### 存储（`internal/store`）
 
@@ -110,7 +111,7 @@ type Module struct {
 ### 事件（`internal/events`）
 
 - `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body})`：在引起它的写事务里调用。种类常量写在 `events.go`（已有 `TaskStatus`、`Overdue`）。
-- ledger 在任务状态变化时已发 `task.status`。`Target` 留空由 events 包按部门往上找最近负责人、没有投 `secretary`（第二波实现）。
+- ledger 在任务状态变化时已发 `task.status`。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。
 
 ### 一键停机（`internal/pause`）
 
@@ -145,7 +146,8 @@ gates    ─→ ledger.Apply/Record（查 PR 用 gh，经 platform）
 merge    ─→ ledger.Apply、platform（git、gh、快检查）
 release  ─→ service 的 restart 接口、ledger.Apply(Released)
 watch    ─→ ledger.Get/Apply、events.Emit(Overdue)、platform.KillTree
-events   ─→ org（投递对象）
+events   ─→ org（投递对象 org.Recipient）
+org/leaders ─→ org、events（Emit、Retarget）、ledger、platform；workers／dispatch 调 leaders.SetLauncher 接上拉起
 secretary、web ─→ 只读：ledger、org、events
 ledger   ─→ events.Emit
 ```

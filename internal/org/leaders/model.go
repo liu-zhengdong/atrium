@@ -1,0 +1,321 @@
+// Package leaders 是负责人的运行时：按事唤醒一次性负责人进程、签发与作废负责人令牌、
+// 服务端按令牌判权限、上交。身份、备忘与投递对象（Recipient）在 org 包里；
+// 本包单独成包是因为它要调 events 与 ledger，而 events 调 org（放在 org 里会成环）。
+//
+// 判定都在本文件（纯函数，表驱动测试）；IO 在 wake.go、guard.go、escalate.go。
+package leaders
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/org"
+)
+
+const (
+	BatchDelay  = 30 * time.Second // 攒批：最早一条等满 30 秒才唤醒
+	WakeTimeout = 20 * time.Minute // 单次唤醒上限
+	MaxFails    = 2                // 连续失败几次就把没确认的事件转交上一层
+	MaxBatch    = 50               // 一次唤醒最多带几条事件
+	maxNote     = 2000
+)
+
+// Kinds 是上交的四类。
+var Kinds = []struct{ Key, Label string }{
+	{"shipped", "已上线（里程碑）"},
+	{"cross", "需要别的部门配合"},
+	{"beyond", "越过权限或底线"},
+	{"stuck", "搞不定"},
+}
+
+func kindLabel(k string) string {
+	for _, x := range Kinds {
+		if x.Key == k {
+			return x.Label
+		}
+	}
+	return ""
+}
+
+// EscalateIn 是 leader escalate 的输入。
+type EscalateIn struct {
+	Kind  string `json:"kind"`
+	Note  string `json:"note"`
+	Task  string `json:"task,omitempty"`
+	Event int64  `json:"event,omitempty"` // 转交下层上交给我的那一条
+}
+
+// CheckEscalate 纯校验上交输入。
+func CheckEscalate(in EscalateIn) error {
+	if kindLabel(in.Kind) == "" {
+		keys := make([]string, len(Kinds))
+		for i, k := range Kinds {
+			keys[i] = k.Key + "（" + k.Label + "）"
+		}
+		return api.Usage("--kind: 只能是 %s", strings.Join(keys, "、"))
+	}
+	if strings.TrimSpace(in.Note) == "" {
+		return api.Usage("<说明>: 不能为空：写清要上面做什么")
+	}
+	if n := utf8.RuneCountInString(in.Note); n > maxNote {
+		return api.Usage("<说明>: 最多 %d 字，收到 %d 字", maxNote, n)
+	}
+	if in.Task != "" && !api.IsRef(in.Task, "t") {
+		return api.Usage("--task: 应为 tN，收到 %q", in.Task)
+	}
+	if in.Kind == "shipped" && in.Task == "" && in.Event == 0 {
+		return api.Usage("--task: 上交「已上线」要给上线的任务")
+	}
+	return nil
+}
+
+// Pending 是一位负责人手上没确认的事件。
+type Pending struct {
+	Leader string
+	Oldest int64 // 最早一条的时间（毫秒）
+	IDs    []int64
+}
+
+// Due 纯判定：哪些负责人该唤醒——最早一条已等满攒批时长，且这位没有在跑的唤醒。
+func Due(pending []Pending, running map[string]bool, now int64, batch time.Duration) []Pending {
+	var out []Pending
+	for _, p := range pending {
+		if !running[p.Leader] && len(p.IDs) > 0 && now-p.Oldest >= batch.Milliseconds() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// Outcome 纯判定：一次唤醒结束后怎么收尾。left 是这批里仍没确认的条数。
+// 全确认了算成功（清零失败次数）；否则失败次数 +1，到 MaxFails 就转交上一层并清零。
+func Outcome(left, fails int) (next int, forward bool) {
+	if left == 0 {
+		return 0, false
+	}
+	if fails+1 >= MaxFails {
+		return 0, true
+	}
+	return fails + 1, false
+}
+
+// PickWorker 纯函数：第 fails 次重试用组合里的第几个（轮换）；组合为空返回空串。
+func PickWorker(workers []string, fails int) string {
+	if len(workers) == 0 {
+		return ""
+	}
+	return workers[fails%len(workers)]
+}
+
+// Upstream 纯判定：负责人 who 上交（或转交）投给谁。从 dept 往上找到 who 负责的那一层
+// （dept 不在 who 的链上或没给时，用 who 负责的第一个部门），再往上找最近的另一位负责人；没有投秘书。
+func Upstream(parents, leaders map[string]string, who, dept string) string {
+	start := ""
+	for cur, n := dept, 0; cur != "" && n <= org.MaxDepth; cur, n = parents[cur], n+1 {
+		if leaders[cur] == who {
+			start = cur
+			break
+		}
+	}
+	if start == "" {
+		led := org.Led(leaders, who)
+		if len(led) == 0 {
+			return org.Secretary
+		}
+		start = led[0]
+	}
+	return org.Nearest(parents, leaders, start, who)
+}
+
+// Event 是提示词里的一条事件。
+type Event struct {
+	ID   int64  `json:"id"`
+	At   int64  `json:"at"`
+	Kind string `json:"kind"`
+	Task string `json:"task,omitempty"`
+	Dept string `json:"dept,omitempty"`
+	Body string `json:"body,omitempty"`
+}
+
+// DeptBrief 是提示词里负责的一个部门：人话字段、路径、要点链、资料总览。
+type DeptBrief struct {
+	Dept      org.Dept
+	Path      []string
+	Chain     []org.Point
+	Materials string
+}
+
+// PromptInput 是一次唤醒提示词的全部材料。
+type PromptInput struct {
+	Leader   org.Identity
+	Depts    []DeptBrief
+	Memo     string
+	Events   []Event
+	Upstream string
+}
+
+// Prompt 纯函数：唤醒负责人的提示词。
+func Prompt(in PromptInput) string {
+	var b strings.Builder
+	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
+	home := "oN"
+	if len(in.Depts) > 0 {
+		home = in.Depts[0].Dept.ID
+	}
+	w("你是 Atrium 组织里的负责人 %s（%s）。你是一次性进程：处理完下面这批事件、确认后退出。", in.Leader.ID, in.Leader.Name)
+	w("你的连续性存在 Atrium（要点、任务备注、你的备忘），不靠这次的记忆。你不写代码、不改仓库：活派给执行者，你负责判断、派、盯、收。")
+	w("")
+	w("## 你负责的部门")
+	if len(in.Depts) == 0 {
+		w("（还没有部门指派给你）")
+	}
+	for _, d := range in.Depts {
+		w("### %s %s（%s）", d.Dept.ID, d.Dept.Name, strings.Join(d.Path, " / "))
+		for _, kv := range [][2]string{{"是什么", d.Dept.What}, {"怎么用", d.Dept.Uses}, {"现状", d.Dept.Now}, {"下一步", d.Dept.Next},
+			{"仓库", strings.Join(d.Dept.Repos, "、")}} {
+			if kv[1] != "" {
+				w("%s：%s", kv[0], kv[1])
+			}
+		}
+		if len(d.Chain) > 0 {
+			w("要点（靠前的优先）：")
+			for _, p := range d.Chain {
+				w("- %s", org.ChainLine(p))
+			}
+		}
+		if d.Materials != "" {
+			w("资料总览：")
+			w("%s", d.Materials)
+		}
+	}
+	w("")
+	w("## 你的备忘（上次留给自己的，上限 %d 字）", org.MaxMemo)
+	if in.Memo == "" {
+		w("（空）")
+	} else {
+		w("%s", in.Memo)
+	}
+	w("")
+	w("## 这批要处理的事件（%d 条）", len(in.Events))
+	ids := make([]string, len(in.Events))
+	for i, e := range in.Events {
+		ids[i] = fmt.Sprint(e.ID)
+		line := fmt.Sprintf("- #%d %s %s", e.ID, time.UnixMilli(e.At).Format("01-02 15:04"), e.Kind)
+		if e.Task != "" {
+			line += " " + e.Task
+		}
+		if e.Dept != "" {
+			line += "（" + e.Dept + "）"
+		}
+		if e.Body != "" {
+			line += " " + e.Body
+		}
+		w("%s", line)
+	}
+	w("")
+	w("## 可用命令（都是 atrium，已按你的身份连到服务；加 --json 得结构化结果）")
+	w("- 看：task show tN；task log tN；task ls --org %s；org show oN", home)
+	w("- 派与管：task add 标题 --org %s；task run tN；task tell tN 补充；task stop tN；task set tN --status …；task note tN 取舍与原因", home)
+	w("- 规矩写成要点：point add oN 一句话 --why 为什么；point edit kN …")
+	w("- 资料：material ls / material get mN / material add；周期任务：schedule add/ls/rm/run")
+	w("- 备忘：memo edit 文本（覆盖写，超过 %d 字会被拒，先精简）", org.MaxMemo)
+	w("")
+	w("## 权限边界（服务端按你的令牌强制，越权会被拒）")
+	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务；写自己的备忘；确认投给你的事件；上交。")
+	w("- 不可以：动别的部门的东西、改部门本身（负责人、上级、介绍）、登记负责人、停机与服务操作。需要时上交。")
+	w("")
+	w("## 上交（投给 %s；只有这四类才上交，其余自己处理）", in.Upstream)
+	for _, k := range Kinds {
+		w("- %s %s → atrium leader escalate 说明 --kind %s [--task tN]", k.Key, k.Label, k.Key)
+	}
+	w("- 下层上交给你、你也要往上报的：atrium leader escalate 你的意见 --kind 同类 --event 编号（上面能看到原文），再确认原事件")
+	w("")
+	w("## 收尾")
+	w("1. 要记住的（在等什么、下次先看什么）写进备忘；做了取舍的写进那件任务的备注。")
+	w("2. 处理完确认：atrium events ack %s", strings.Join(ids, " "))
+	w("3. 退出。没确认的事件会再次唤醒你；连续 %d 次没处理完，会转交 %s。", MaxFails, in.Upstream)
+	return b.String()
+}
+
+// Rule 是负责人令牌碰到一个写接口时要查什么。
+type Rule int
+
+const (
+	RuleDeny        Rule = iota // 不许
+	RuleRead                    // 只读，放行
+	RuleTaskRef                 // 路径 {id} 是任务：任务的部门在管辖内；请求体里的 org、parent 也要在
+	RuleTaskCreate              // 建任务：请求体里的 org 或 parent 必须给且在管辖内
+	RuleDeptRef                 // 路径 {id} 是部门（部门下的要点、资料、周期任务）
+	RulePointRef                // 路径 {id} 是要点
+	RuleMaterialRef             // 路径 {id} 是资料
+	RuleScheduleRef             // 路径 {id} 是周期任务
+	RuleBodyDept                // 建资料、周期任务：请求体里的 org／department 必须给且在管辖内
+	RuleMemo                    // 自己的备忘（由 memo 路由按身份判）
+	RuleEventsAck               // 确认事件：只能是投给自己的
+	RuleEscalate                // 上交
+)
+
+// RuleFor 纯判定：负责人令牌碰到这条路由（Go 路由模式，如 "POST /api/tasks/{id}/notes"）时的规则。默认拒绝。
+func RuleFor(pattern string) Rule {
+	method, path, _ := strings.Cut(pattern, " ")
+	if !strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/api/service") || strings.HasPrefix(path, "/api/auth") {
+		return RuleDeny
+	}
+	if method == "GET" || method == "HEAD" {
+		return RuleRead
+	}
+	seg := strings.Split(strings.TrimPrefix(path, "/api/"), "/")
+	switch {
+	case path == "/api/tasks" && method == "POST":
+		return RuleTaskCreate
+	case seg[0] == "tasks" && len(seg) >= 2 && seg[1] == "{id}":
+		return RuleTaskRef
+	case seg[0] == "org" && len(seg) >= 3 && seg[1] == "{id}" && slices.Contains([]string{"points", "materials", "schedules"}, seg[2]):
+		return RuleDeptRef
+	case seg[0] == "points" && len(seg) >= 2 && seg[1] == "{id}":
+		return RulePointRef
+	case seg[0] == "materials" && len(seg) >= 2 && seg[1] == "{id}":
+		return RuleMaterialRef
+	case seg[0] == "materials" && len(seg) == 1:
+		return RuleBodyDept
+	case seg[0] == "schedules" && len(seg) >= 2 && seg[1] == "{id}":
+		return RuleScheduleRef
+	case seg[0] == "schedules" && len(seg) == 1:
+		return RuleBodyDept
+	case path == "/api/memo" && method == "PUT":
+		return RuleMemo
+	case seg[0] == "events" && slices.Contains(seg, "ack"):
+		return RuleEventsAck
+	case path == "/api/escalations" && method == "POST":
+		return RuleEscalate
+	}
+	return RuleDeny
+}
+
+// Check 是一项要落在管辖内的东西。Dept 为空表示它不属于任何部门（一律不在管辖内）。
+type Check struct {
+	What string
+	Dept string
+}
+
+// InScope 纯判定：每项都在 scope 里才放行；否则返回给负责人看的中文说明（附上交提示）。
+func InScope(leader string, scope map[string]bool, checks []Check) error {
+	for _, c := range checks {
+		if c.Dept == "" {
+			return Forbid("%s 不属于任何部门，负责人 %s 动不了", c.What, leader)
+		}
+		if !scope[c.Dept] {
+			return Forbid("%s 属于 %s，不在负责人 %s 管辖的部门里", c.What, c.Dept, leader)
+		}
+	}
+	return nil
+}
+
+// Forbid 是越权：中文说明 + 上交提示。
+func Forbid(format string, a ...any) *api.Error {
+	return api.Forbidden(format+"；需要就上交", a...).WithNext("atrium leader escalate <说明> --kind beyond|cross")
+}

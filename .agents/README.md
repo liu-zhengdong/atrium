@@ -8,7 +8,7 @@
   - 开发中和交付前都只跑 `npm run build`（类型检查）、改动相关的测试与 `npm run format:check`。相关测试：`npm test -- tests/a.test.ts tests/b.test.ts` 只跑列出的文件，`npm test -- --changed` 跑与 `origin/main` 相比改动文件相关的测试（按文件名与直接 import 粗匹配，没匹配到的会列出来，自己补上文件名）。
   - 只解 rebase 冲突：跑类型检查和冲突文件相关的测试即可。
   - 测试超时：先看是不是机器太忙，单独重跑超时的那个文件确认。
-- 全量检查由合入队列在 rebase 后跑一次：优先执行任务 worktree 的 `.agents/check`，没有时执行 `package.json` 的 `check` 脚本；交付关卡不再跑。主机离线、检查命令找不到（退出码 127，没装依赖）、超时或只挂在 `.agents/timing-sensitive` 登记的时长敏感用例上算「检查没跑成」，运行时自动重跑，不交回你；这个文件从基础分支读，不要为了过关卡往里加用例。
+- 合入检查由合入队列在 rebase 后跑一次，只跑快检查：`.agents/check`（类型检查 + `npm test -- --changed` 改动相关的测试 + `atrium --help` 启动冒烟）；全量测试不在合入时跑，改由每小时一次的周期任务在最新 main 上跑，挂了就找出是哪次合入弄坏的并开紧急修复（用户 09-28 定，d128）。交付关卡不再跑。主机离线、检查命令找不到（退出码 127，没装依赖）、超时或只挂在 `.agents/timing-sensitive` 登记的时长敏感用例上算「检查没跑成」，运行时自动重跑，不交回你；这个文件从基础分支读，不要为了过关卡往里加用例。
 - 执行者环境带 `ATRIUM_TEST_CONCURRENCY`（测试并发上限），`npm run check` / `npm test`（`tests/run-tests.ts`）会照它限并发；不要换成 `--test-concurrency=0`，也不要绕开脚本直接 `node --test` 跑全部文件。
 - 交付停在 PR：提交、推送、开 PR（正文 `Closes #号` 或 `Refs #号`）；不要合入。运行时会在任务 worktree 排队重跑本地检查，远端 CI 不挡合入。
 - 只在远端 CI 失败的偶发用例：当场修复，或标记 skip 并开后续任务；不得让它阻挡合入。

@@ -865,8 +865,12 @@ atrium events ack 编号…
   示例：atrium events ack 12 13
 
 atrium chat [--tool opencode|codex] [--cwd 目录] [--new] [--acp] [--allow]
-  和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理
+  和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理；Claude Code 直接开原生界面，事件由 atrium secretary bridge 注入
   示例：atrium chat
+
+atrium secretary bridge [--detach] [--remind 分钟] | --install-hook [--cwd 目录] | --status
+  在 Claude Code 秘书会话里常驻：把要处理的事件经会话收件 socket 注入会话（不确认，秘书处理完自己 ack），按编号去重、没确认的隔 30 分钟再提醒；会话关了就退出；--install-hook 在秘书目录装 SessionStart hook 随会话自动起
+  示例：atrium secretary bridge
 ```
 
 ### 推送到手机

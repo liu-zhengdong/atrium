@@ -214,7 +214,7 @@ ${codes}
   跟着代码走的约定 → 仓库 AGENTS.md。
 
 主路径
-  服务：只由 atrium（或 atrium start）启动，别的命令在服务没在跑时报错；atrium restart 随时可做（在跑的执行者由新服务接管）；数据默认 ~/.atrium（ATRIUM_DATA 改），端口 ATRIUM_PORT；令牌失效 atrium auth rotate。
+  服务：只由 atrium（或 atrium start）启动，别的命令在服务没在跑时报错；例外：status 只报未运行、stop 幂等、restart 照样执行（没在跑就直接拉起，在跑的执行者由新服务接管）；数据默认 ~/.atrium（ATRIUM_DATA 改），端口 ATRIUM_PORT；令牌失效 atrium auth rotate。
   一键停机：atrium pause [--part 部门|--host hN] [--why 原因] 停下一切自主动作（派活、周期任务、唤醒、合入、发版）；atrium resume 恢复。
   拆任务派活：atrium task add 标题 [--parent t1] [--part 部门] [--by 专员] [--priority 紧急|修复|普通|闲时]；atrium task run t2 入队（一个队列，按优先级与入队先后拉起）；atrium task wait t2。有子任务的是总任务，状态按子孙汇总。
   额度：派活前看候选：atrium task run t2 --dry-run；只看额度：atrium quota；人工解除误判占用：atrium quota --clear claude。

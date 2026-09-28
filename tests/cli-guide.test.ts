@@ -9,6 +9,7 @@ import { dataDirectory } from "../server/service-state.ts";
 import { join } from "node:path";
 import { when } from "../cli/format.ts";
 import { Problem, closest } from "../server/problem.ts";
+import { tempDir } from "./temp-dir.ts";
 
 test("说明书只讲约定、放哪与主路径；--help 列全部命令，示例均通过参数解析", () => {
   const text = guide();
@@ -198,5 +199,37 @@ test("时间按本地时区显示：UTC 12:07 在 Asia/Shanghai 为 20:07", () =
   } finally {
     if (original === undefined) delete process.env.TZ;
     else process.env.TZ = original;
+  }
+});
+
+test("status 服务没在跑时下一步给启动命令，不指向会报错的 top", async (t) => {
+  const data = tempDir(t, "atrium-status-hint-");
+  const saved = {
+    ATRIUM_DATA: process.env.ATRIUM_DATA,
+    ATRIUM_PORT: process.env.ATRIUM_PORT,
+  };
+  process.env.ATRIUM_DATA = data;
+  process.env.ATRIUM_PORT = "4499";
+  const captured: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    assert.equal(await main(["status"]), 0);
+    assert.match(captured[0] ?? "", /^Atrium 未运行/);
+    assert.equal(captured.at(-1), "启动：atrium start");
+    captured.length = 0;
+    assert.equal(await main(["status", "--json"]), 0);
+    const payload = JSON.parse(captured.at(-1) ?? "{}") as {
+      ok?: boolean;
+      next?: string | null;
+    };
+    assert.equal(payload.ok, true);
+    assert.equal(payload.next, "atrium start");
+  } finally {
+    console.log = original;
+    if (saved.ATRIUM_DATA === undefined) delete process.env.ATRIUM_DATA;
+    else process.env.ATRIUM_DATA = saved.ATRIUM_DATA;
+    if (saved.ATRIUM_PORT === undefined) delete process.env.ATRIUM_PORT;
+    else process.env.ATRIUM_PORT = saved.ATRIUM_PORT;
   }
 });

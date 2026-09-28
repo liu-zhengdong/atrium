@@ -29,7 +29,13 @@ import { choiceCommands } from "./choices.ts";
 import { agentCommand, agentServiceCommands, hostCommands } from "./hosts.ts";
 import { notifyCommands } from "./notify.ts";
 import { closest, Problem } from "../server/problem.ts";
-import { commandOnly, failure, withContext, type Context } from "./contract.ts";
+import {
+  commandOnly,
+  failure,
+  recordNext,
+  withContext,
+  type Context,
+} from "./contract.ts";
 import { example, groupOf, groups, guide } from "./guide.ts";
 import { cliErrorMessage, optionError } from "./error-message.ts";
 import type { Pause } from "../server/pause.ts";
@@ -240,10 +246,16 @@ export async function main(argv: string[]): Promise<number> {
         // 暂停着的醒目列出（谁、何时、原因）；服务没在跑或读不到就不列。
         if (name === "status") {
           const { connectRunning } = await import("./service.ts");
-          const pauses = await Promise.resolve()
-            .then(() => connectRunning()?.get<{ pauses: Pause[] }>("/pause"))
-            .catch(() => undefined);
+          const running = await Promise.resolve()
+            .then(() => connectRunning())
+            .catch(() => null);
+          const pauses = running
+            ? await running
+                .get<{ pauses: Pause[] }>("/pause")
+                .catch(() => undefined)
+            : undefined;
           for (const line of pauseLines(pauses?.pauses)) console.log(line);
+          if (!running) recordNext("启动：atrium start");
         }
         return 0;
       }

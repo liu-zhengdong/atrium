@@ -112,9 +112,13 @@ export function editProfile(
       source = patchFront(source, key, undefined);
     }
   }
+  // 只拒这次新引入的问题；库里原有的（如已删掉的 ci 关卡）不挡改别的字段，`workers show` 照样提示。
+  const before = new Set(
+    current ? parseProfileSource(current.source).warnings : [],
+  );
   const problems = [
     ...sourceProblems(source),
-    ...parseProfileSource(source).warnings,
+    ...parseProfileSource(source).warnings.filter((w) => !before.has(w)),
   ];
   if (problems.length)
     throw new Problem(

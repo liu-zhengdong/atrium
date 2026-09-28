@@ -71,7 +71,7 @@ export function finalClaudeResult(log: string): "clean" | "error" | undefined {
   return result;
 }
 
-/** 适配器缺省值，档案 limits.startup_minutes / idle_minutes 可收紧（合并时取较小）。 */
+/** 适配器缺省值，档案 limits.startup_minutes / idle_minutes 写了就用档案的。 */
 export function watchLimits(
   defaults: { startupMinutes: number; idleMinutes: number },
   limits: Record<string, number> = {},

@@ -1211,16 +1211,23 @@ const stop: Command = {
 };
 
 const merge: Command = {
-  args: "tN",
-  about: "将关卡已通过、带 PR 的受阻合入任务重新排队",
+  args: "tN [--as 订阅者]",
+  about:
+    "将关卡已通过、带 PR 的受阻合入任务重新排队；受阻在专员否决或没出结论上的，负责的 leader 看过理由不认同时用它放行",
+  options: { as: { type: "string" } },
   positionals: [1, 1],
-  async run({ positionals: [reference], json }) {
+  async run({ positionals: [reference], values, json }) {
     const id = ref(reference, "任务");
+    const who = str(values, "as") ?? defaultSubscriber();
+    if (!who.trim()) throw new Problem(400, "--as 不能为空", "usage");
     const result = await (
       await client()
-    ).post<{ task: Task }>(`/tasks/${id}/merge`, {});
+    ).post<{ task: Task }>(
+      `/tasks/${id}/merge?${new URLSearchParams({ as: who })}`,
+      {},
+    );
     if (json) printJson(result);
-    else console.log(`${id} 已重新排队合入`);
+    else console.log(`${id} 已排队合入 · [${result.task.status}]`);
     recordNext(`等合入：atrium task wait ${id}`);
   },
 };

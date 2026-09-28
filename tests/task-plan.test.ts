@@ -100,19 +100,10 @@ test("run 请求校验：只认 worker、risk", () => {
 });
 
 const verdicts: Record<string, Verdict> = {
-  passed: { results: [], passed: true, awaitingCi: false, failed: [] },
-  awaiting: {
-    results: [],
-    passed: false,
-    awaitingCi: true,
-    failed: [
-      { gate: "ci", ok: false, pending: true, evidence: "CI 还没出结果" },
-    ],
-  },
+  passed: { results: [], passed: true, failed: [] },
   failed: {
     results: [],
     passed: false,
-    awaitingCi: false,
     failed: [{ gate: "pr_exists", ok: false, evidence: "没找到 PR" }],
   },
 };
@@ -193,15 +184,10 @@ test("退出收尾穷举：停止原因 × 退出情况 × 重试 × 关卡结�
               );
             else {
               assert.equal(got.event, "block", label);
-              assert.match(
-                got.reason!,
-                name === "awaiting"
-                  ? /^等 CI：ci：/
-                  : /^关卡不过：pr_exists：没找到 PR/,
-              );
+              assert.match(got.reason!, /^关卡不过：pr_exists：没找到 PR/);
             }
           }
-  assert.equal(cases, 4 * 4 * 2 * 2 * 3);
+  assert.equal(cases, 4 * 4 * 2 * 2 * 2);
   assert.throws(
     () =>
       decideExit({

@@ -99,7 +99,6 @@ test("收尾原因：思考耗尽写在关卡原因前面；非 PR 交付转受�
     thinking: true,
     verdict: {
       passed: false,
-      awaitingCi: false,
       results: [],
       failed: [{ gate: "pr_exists", ok: false, evidence: "没找到 PR" }],
     },
@@ -156,20 +155,6 @@ test("换执行者重跑的去向：第一次换人，换过一次就放弃；�
     routeAfterThinking({
       ...base,
       decision: { event: "exit_ok", publish: "done", retry: false },
-    }),
-    none,
-  );
-  assert.deepEqual(
-    routeAfterThinking({
-      ...base,
-      decision: { ...blocked, publish: "ci_unavailable" },
-    }),
-    none,
-  );
-  assert.deepEqual(
-    routeAfterThinking({
-      ...base,
-      verdict: { passed: false, awaitingCi: true, results: [], failed: [] },
     }),
     none,
   );

@@ -63,7 +63,8 @@ import { DiskBudget } from "./disk-budget.ts";
 import { BudgetProblem } from "./budget-problem.ts";
 import { readPace } from "./prepare.ts";
 import { MergeQueue } from "./merge-runtime.ts";
-import { settleReviews } from "./concern-runtime.ts";
+import { overruleConcerns, settleReviews } from "./concern-runtime.ts";
+import { concernNext } from "./concern-gate.ts";
 import { awaitingReview } from "./concerns.ts";
 import { WorktreeCleanup } from "./worktree-cleanup.ts";
 import { ReviewGate, taskRisk } from "./review-runtime.ts";
@@ -1322,8 +1323,25 @@ export class TaskRunner {
 
   // ---- 停止、日志、等待 ----
 
-  requeueMerge(reference: unknown) {
-    return { task: this.merge.requeue(parseTaskRef(reference)) };
+  /** 重新排队合入；受阻在专员否决（或没出结论）上的，由负责的 leader 判断后放行，照专员通过后的路走审阅或合入。 */
+  async requeueMerge(reference: unknown, by = DEFAULT_OWNER) {
+    const id = parseTaskRef(reference);
+    const overruled = overruleConcerns(this.db, id, by);
+    if (!overruled) return { task: this.merge.requeue(id) };
+    const admitted = await this.review.admit(id);
+    this.x.publish(
+      id,
+      admitted ? admitted.kind : "done",
+      {
+        ...(admitted ? admitted.detail : {}),
+        reason: (admitted && admitted.detail?.reason) || overruled.reason,
+        concerns: overruled.concerns,
+        overruled: true,
+      },
+      by,
+    );
+    this.waits.changed(id);
+    return { task: getTask(this.db, id) };
   }
 
   /** by：发起停止的订阅者，由此产生的事件不投给他本人。 */
@@ -1445,7 +1463,12 @@ export class TaskRunner {
         ...(outcome.kind === "vetoed" ? { vetoed: true } : {}),
         ...(resolution.accepted
           ? {}
-          : { next: `atrium task show ${taskRef(parent)}` }),
+          : {
+              next: concernNext(
+                taskRef(parent),
+                getTask(this.db, parent).deliver === "pr",
+              ),
+            }),
       });
       this.waits.changed(parent);
     }

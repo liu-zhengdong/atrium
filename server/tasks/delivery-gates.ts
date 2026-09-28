@@ -9,7 +9,7 @@ import {
 
 function verdict(results: GateResult[]): Verdict {
   const failed = results.filter((result) => !result.ok);
-  return { results, failed, passed: failed.length === 0, awaitingCi: false };
+  return { results, failed, passed: failed.length === 0 };
 }
 
 /** 交付物关卡只吃已收集的事实，不调用 git/gh。 */

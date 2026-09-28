@@ -28,7 +28,8 @@ import type { TaskEventRow } from "./ledger-model.ts";
 /**
  * 专员关卡的执行（#322 第 2 步）：父任务的其余关卡通过后，给每位被请的专员建一个一次性的审查任务（子任务，
  * 记在关注点节点上，只交摘要），父任务转受阻「等专员审查」；审查任务不再跑后读它的结论记账，
- * 全部出结论时按 concern-gate.ts 合成：全通过补判通过，任一否决或没出结论则留在受阻并写原因。
+ * 全部出结论时按 concern-gate.ts 合成：全通过补判通过，任一否决或没出结论则留在受阻、交负责的 leader 判断；
+ * leader 不认同时用 `task merge` 放行（overruleConcerns），认同就捎话重派。
  */
 
 const TITLE_MAX = 200;
@@ -237,6 +238,32 @@ export function settleReviews(
     }
   }
   return resolved;
+}
+
+/**
+ * 负责的 leader 看过专员否决（或没出结论）后放行：父任务正受阻在专员关卡上（最近一次判定是没通过的专员关卡）
+ * 时补判通过并记下谁放行；不是这种情况返回 null，由调用方照原来的合入重排处理。
+ */
+export function overruleConcerns(
+  db: DatabaseSync,
+  id: number,
+  by: string,
+): { reason: string; concerns: ConcernState[] } | null {
+  const parent = getTask(db, id);
+  if (parent.status !== "blocked") return null;
+  const last = one<{ kind: string; detail: string | null }>(
+    db,
+    "SELECT kind, detail FROM task_events WHERE task_id=? AND kind IN ('gates','concern_gate') ORDER BY id DESC LIMIT 1",
+    id,
+  );
+  if (last?.kind !== "concern_gate") return null;
+  const concerns = concernsOf(db, id);
+  const outcome = concernOutcome(concerns);
+  if (outcome.kind !== "vetoed" && outcome.kind !== "incomplete") return null;
+  const reason = `${by} 看过专员结论后放行（${outcome.reason}）`;
+  noteTask(db, id, "concern_overruled", { by, reason: outcome.reason });
+  advanceTask(db, id, { kind: "accept" }, {}, { reason });
+  return { reason, concerns };
 }
 
 function lastReason(db: DatabaseSync, id: number, kind: string) {

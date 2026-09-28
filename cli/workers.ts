@@ -227,7 +227,11 @@ export const workerCommands: Record<string, Command> = {
         await client()
       ).get<{
         worker: string;
-        profile: { body: string; layers: { file: string; body: string }[] };
+        profile: {
+          body: string;
+          layers: { file: string; body: string }[];
+          warnings: string[];
+        };
         deliveries: {
           task_ref: string;
           task_title: string;
@@ -243,10 +247,12 @@ export const workerCommands: Record<string, Command> = {
         suggestions: Advice[];
       }>(`/workers/${encodeURIComponent(worker!)}`);
       if (json) printJson(data);
-      else
+      else {
         console.log(
           `${data.worker}\n${data.profile.body}\n\n交付：\n${data.deliveries.map((d) => `${d.task_ref} ${d.task_title} · ${d.job_name ?? "未指定"} · ${d.final_result} · ${duration(d.duration_ms)}${d.gate_returns.length ? ` · 关卡：${d.gate_returns.join("；")}` : ""}${d.merge_returns.length ? ` · 合入退回：${d.merge_returns.join("；")}` : ""}${d.rebase_conflicts ? ` · 变基冲突 ${d.rebase_conflicts} 次（不归责）` : ""}${d.incidents.length ? ` · 事故：${d.incidents.join("、")}` : ""}`).join("\n") || "暂无"}\n${data.suggestions.map((x) => `建议：${x.advice.action} · ${x.advice.reason}`).join("\n")}`,
         );
+        for (const w of data.profile.warnings) console.log(`警告：${w}`);
+      }
       recordNext("看全部：atrium workers");
     },
   },

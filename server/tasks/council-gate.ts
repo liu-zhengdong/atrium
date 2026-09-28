@@ -5,7 +5,8 @@ import type { Checklist } from "./concern-gate.ts";
  * - 专员意见：意见任务摘要的最后一行「意见：同意／有条件同意：条件／反对：原因／否决：越过的底线」；
  * - 进度：专员意见都不再跑才交 leader 汇总；
  * - 汇总：leader 的摘要里「一致」「冲突」两段、「需用户拍板：…」行与最后一行「结论：…」；
- * - 结局：leader 标了需用户拍板、没写结论、或有专员以底线否决而 leader 没上交的，一律上交用户；其余由 leader 定。
+ * - 结局：leader 定。leader 标了需用户拍板的上交；专员否决交 leader 判断，不强制上交；
+ *   汇总没写结论的先请 leader 补答一次（conclusion.ts），补答后仍没有，或专员都没出意见，才上交。
  * - 提示词：专员意见任务与 leader 汇总任务的详述。
  */
 
@@ -151,22 +152,18 @@ export type CouncilOutcome = {
 };
 
 /**
- * 合成会审结局：leader 标的需用户拍板原样上交；没写结论、专员都没出意见、有专员以底线否决而 leader 没上交的，
- * 由运行时补一条上交理由（专员否决不能由 leader 自行推翻）。
+ * 合成会审结局：leader 标的需用户拍板原样上交；专员否决由 leader 汇总时判断（认同就调整结论，不认同写明理由），
+ * 不另行上交。leader 补答后仍没写结论、或专员都没出意见的，运行时补一条上交理由。
  */
 export function councilOutcome(
   summary: Summary,
   opinions: readonly MemberOpinion[],
 ): CouncilOutcome {
   const escalate = [...summary.escalate];
-  if (!summary.conclusion) escalate.push("leader 汇总没写「结论：」，请上层定");
+  if (!summary.conclusion)
+    escalate.push("leader 汇总补答后仍没写「结论：」，请上层定");
   if (opinions.length && opinions.every((o) => o.stance === "none"))
     escalate.push("受邀专员都没出意见，结论缺依据");
-  if (!summary.escalate.length)
-    for (const o of opinions.filter((o) => o.stance === "veto"))
-      escalate.push(
-        `${o.name}（${o.ref} · ${o.task}）以底线否决：${o.reason}；专员否决不能由 leader 自行推翻`,
-      );
   return {
     kind: escalate.length ? "escalated" : "decided",
     conclusion: summary.conclusion,
@@ -253,7 +250,7 @@ export function opinionBrief(topic: Topic, checklist: Checklist): string {
     "- `意见：同意`（可在后面加一句说明）",
     "- `意见：有条件同意：<条件>`",
     "- `意见：反对：<原因>`",
-    "- `意见：否决：<越过了哪条底线>`（只有越过底线才用；否决须上交用户，leader 不能自行推翻）",
+    "- `意见：否决：<越过了哪条底线>`（只有越过底线才用；由 leader 汇总时判断，谈不拢再上交）",
     "",
   ].join("\n");
 }
@@ -289,7 +286,7 @@ export function summaryBrief(
     "- 一致：各方都认可的做法或风险。",
     "- 冲突：专员之间意见不同的地方，写清各方主张；能按组织目标与要点定的，给出取舍和理由。",
     "- 只有两类事上交用户：碰到用户定的边界（硬边界、预算、对外公开、不可撤回的数据操作等），或专员之间谈不拢、你也定不了。每条写一行 `需用户拍板：<要用户定什么、有哪几个选项、各自代价>`。",
-    "- 有专员以底线否决的，不能自行推翻：要么按否决调整结论，要么写 `需用户拍板：`。",
+    "- 有专员否决的，由你判断：认同就按否决调整结论；不认同就在冲突里写清理由后自己定；和专员谈不拢、你也定不了才写 `需用户拍板：`。",
     "- 没出意见的专员，在冲突或结论里说明缺了谁、影响多大。",
     ...(comment
       ? [

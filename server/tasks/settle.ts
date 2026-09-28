@@ -84,6 +84,11 @@ function readSummary(
   return log === undefined ? "" : summarize(log, jsonEvents(active));
 }
 
+/** 本轮的收尾摘要，取法与收尾时相同；结论补答前看一眼用（conclusion-runtime.ts）。 */
+export async function finalSummary(active: Active) {
+  return readSummary(active, await readLog(active), readLastMessage(active));
+}
+
 /** 额度判定只看日志最后这么多字符：更早的部分可能是执行者回显的提示词，里面也会有「额度」字样。 */
 const QUOTA_TAIL_CHARS = 4096;
 
@@ -179,7 +184,8 @@ export async function settle(
         summary,
       },
       exec,
-      active.worker.profile.rules.checks?.includes("ci") ?? false,
+      // 没有 ci 关卡了；只在接管后退出时查 CI，作「交付已在」的依据（deliveredDespiteUnknownExit）。
+      true,
       active.worker.profile.rules.checks?.some((gate) =>
         ["screenshot", "screenshots"].includes(gate),
       ) ?? false,
@@ -217,7 +223,7 @@ export async function settle(
         summary,
       },
       exec,
-      active.worker.profile.rules.checks?.includes("ci") ?? false,
+      false,
       active.worker.profile.rules.checks?.some((gate) =>
         ["screenshot", "screenshots"].includes(gate),
       ) ?? false,

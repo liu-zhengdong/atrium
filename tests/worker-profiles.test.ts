@@ -260,7 +260,10 @@ test("改档案：整份替换或按字段改，校验不过不写，留修订",
   const created = editProfile(
     db,
     "combos/codex+gpt-6-sol",
-    { set: { trust: "medium", checks: "[pr_exists, ci]" }, reason: "试用" },
+    {
+      set: { trust: "medium", checks: "[pr_exists, finished]" },
+      reason: "试用",
+    },
     "u1",
   );
   assert.deepEqual(created, {
@@ -271,7 +274,7 @@ test("改档案：整份替换或按字段改，校验不过不写，留修订",
   });
   const view = profileView(db, "combos/codex+gpt-6-sol");
   assert.equal(view.trust, "medium");
-  assert.deepEqual(view.checks, ["pr_exists", "ci"]);
+  assert.deepEqual(view.checks, ["pr_exists", "finished"]);
   assert.equal(view.history[0]!.reason, "试用");
   editProfile(db, "combos/codex+gpt-6-sol", { unset: ["checks"] }, "u1");
   assert.equal(profileView(db, "combos/codex+gpt-6-sol").checks, null);
@@ -317,6 +320,28 @@ test("改档案：整份替换或按字段改，校验不过不写，留修订",
     assert.throws(() => editProfile(db, ref, body, "u1"), pattern);
   assert.equal(profileView(db, "combos/codex+gpt-6-sol").rev, 3);
   assert.throws(() => profileView(db, "models/nope"), /不存在/);
+  // 新写不认识的关卡名（含已删掉的 ci）拒绝；库里原有的不挡改别的字段，视图照样提示。
+  assert.throws(
+    () =>
+      editProfile(
+        db,
+        "combos/codex+gpt-6-sol",
+        { set: { checks: "[pr_exists, ci]" } },
+        "u1",
+      ),
+    /checks 里的 ci 不是关卡，派活时忽略/,
+  );
+  writeProfile(db, {
+    layer: "harness",
+    name: "codex",
+    source: "---\ntrust: low\nchecks: [pr_exists, ci]\n---\n",
+    author: "u1",
+    reason: "旧档案",
+  });
+  editProfile(db, "harness/codex", { set: { trust: "medium" } }, "u1");
+  const legacy = profileView(db, "harness/codex");
+  assert.equal(legacy.trust, "medium");
+  assert.match(legacy.warnings.join("\n"), /checks 里的 ci 不是关卡/);
 });
 
 test("接口：带旧运行时表的库启动时导入档案，ls/show/edit 走库，leader 不能改档案", async (t) => {

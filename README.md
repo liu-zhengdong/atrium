@@ -73,7 +73,7 @@ atrium task run t6 --host h2                 # 派到指定的执行机器；不
 atrium task wait t4 --timeout 600           # PR 任务等到合入或卡住；其他任务等到离开 running
 atrium task log t4                          # 执行者日志；--follow 跟到结束，--after 字节偏移续读
 atrium task stop t4                         # 停执行者或合入队列；合入中会在安全点停下
-atrium task merge t4                        # 关卡已通过且带 PR 的受阻任务重新排队合入
+atrium task merge t4                        # 关卡已通过且带 PR 的受阻任务重新排队合入；专员否决的由负责的 leader 判断后放行
 atrium task tell t4 "接口改用 v2"            # 给在跑的执行者捎话；作者按认证身份记为 u1 或 aN
 atrium top --once                           # 谁在干活、全景图上两层各块的状态与在跑数，下接排期
 atrium top --once --depth 3                 # 全景展开三层（旧写法 --goals-depth 照旧接受）
@@ -97,7 +97,7 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 
 **派活候选**（`task pick tN [--risk …]`，只读）：一行一位候选执行者——能不能接（没装、档案 `max_risk` 低于任务风险、`avoid_jobs` / `avoid_nodes` 避开、额度用尽标记、触及根章程保留份额、`billing=metered`；trust 低于 medium 的注明合入前另派审阅）、账号额度（已用、富余、距重置、扣掉保留份额后还剩多少）、是否正忙（独占工具，派了会排队）、此组合在干活的专员下的交付记录（次数、一次通过率）。最上面是推荐与一句理由（如「推荐 claude+opus：前端专员优先、claude 富余 +54%；codex 富余 −13%」），最后一行是 `atrium task run tN --worker <推荐>`；`--json` 给全部字段。候选顺序：干活的专员的优先执行者（按交付记录调整后的顺序）里能接、不正忙的在前，其余能接的按账号富余从多到少，正忙的独占工具最后；专员第 1 选超速（富余为负）而另有能接、不正忙、trust 至少 medium（且够接任务 risk）的候选富余为正且多出 30 个百分点以上时，改推荐那一位（专员候选优先），理由写「后端专员第 1 选 codex+gpt-6-sol:high 超速（codex −17%），改用第 2 选 claude+opus:high（claude +52%）」。理由只对照最多两个相关账号。`task run` 不写 `--worker`（含 `--auto` 自动派）时按同一份顺序挑，回执写「按额度挑了 X，因为…」；写死 `--worker` 且不是推荐的那位时，若另有候选按同一判定（同一个 30 点阈值）更富余，回执加一行提醒（不拦），按推荐写死不提醒。`task add --parent` 建出的子任务回执下一步是 `atrium task pick tN`（顶层任务仍提示拆子任务）。
 
-**执行者档案**存在数据目录的数据库里，每次改动留修订。三层叠加：`harness/<工具>` ← `models/<模型>` ← `combos/<工具>+<模型>`。每份档案是 frontmatter + 正文：frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时取更严；正文原样附进提示词，其中 `## 交付记录` 一段作备注保留、不附进提示词（交付事实以交付记录表为准）。库里没有档案时用内置缺省（适配器的默认模型）。首次启动若 `ATRIUM_WORKERS_DIR`（缺省 `~/Atrium/workers/`，只有默认数据目录才有缺省；另给 `ATRIUM_DATA` 的隔离服务不读主目录，要导入须显式设置）存在，把其中的 `*.md` 导入一次；读不了、名字不合法或超过 64 KB 的单个文件跳过并记日志，其余照常；导入后不再读这个目录。
+**执行者档案**存在数据目录的数据库里，每次改动留修订。三层叠加：`harness/<工具>` ← `models/<模型>` ← `combos/<工具>+<模型>`。每份档案是 frontmatter + 正文：frontmatter 是规则（`trust`、`max_risk`、`checks`、`limits`、`model`），叠加时以最具体的一层为准（写了就整项取这一层，能放宽，`checks: []`、`limits: {}` 表示撤销上层的加查与上限；`billing` 任一层是 `metered` 就按 `metered`）；正文原样附进提示词，其中 `## 交付记录` 一段作备注保留、不附进提示词（交付事实以交付记录表为准）。库里没有档案时用内置缺省（适配器的默认模型）。首次启动若 `ATRIUM_WORKERS_DIR`（缺省 `~/Atrium/workers/`，只有默认数据目录才有缺省；另给 `ATRIUM_DATA` 的隔离服务不读主目录，要导入须显式设置）存在，把其中的 `*.md` 导入一次；读不了、名字不合法或超过 64 KB 的单个文件跳过并记日志，其余照常；导入后不再读这个目录。
 
 ```bash
 atrium workers ls
@@ -107,11 +107,11 @@ atrium workers edit models/grok-4.6 --file grok.md
 cat grok.md | atrium workers edit models/grok-4.6 --file -
 ```
 
-**验收关卡**：执行者退出后，运行时自己查事实（PR、提交、改动规模、CI、issue 评论），按档案 `checks`（`finished`、`pr_exists`、`local_check`、`ci`、`file_growth`、`claims_verified`、`screenshots`）判定 `done` 或 `blocked`，原因写进任务事件，不采信执行者自述。全量检查一次交付只跑一遍：`local_check` 交给合入队列在 rebase 后跑，交付关卡不重复跑。`screenshots` 要求 PR 正文附 Markdown 图片或 GitHub 图片附件链接，所有截图的 HEAD 请求均返回 200。
+**验收关卡**：执行者退出后，运行时自己查事实（PR、提交、改动规模、CI、issue 评论），按档案 `checks`（`finished`、`pr_exists`、`local_check`、`file_growth`、`claims_verified`、`screenshots`）判定 `done` 或 `blocked`，原因写进任务事件，不采信执行者自述。全量检查一次交付只跑一遍：`local_check` 交给合入队列在 rebase 后跑，交付关卡不重复跑。远端 CI 不挡合入，没有 `ci` 关卡；档案里写了不认识的关卡名（含旧的 `ci`）派活时忽略，`atrium workers show` 给警告。`screenshots` 要求 PR 正文附 Markdown 图片或 GitHub 图片附件链接，所有截图的 HEAD 请求均返回 200。
 
 **自动合入**：PR 任务过交付关卡后进入持久化的串行合入队列。运行时从仓库 `origin` 核对 PR，rebase 到最新默认分支，在任务 worktree 重跑 `.agents/check`（没有则 `npm run check`），通过后用检查过的头提交执行 `gh pr merge --squash --match-head-commit`；gh 查询与合入都明确带 `-R`。rebase 冲突、本地检查失败或 gh 合入失败会把文件名、失败用例和日志位置写进事件及补充说明，在原工作树与原分支重派原执行者；第三次交回转卡住并通知负责人。合入中断后从账本续上，`atrium task show tN`、`atrium top --once` 和 `atrium org show oN --detail` 可看阶段。远端 CI 仍只供参考，不挡合入。
 
-**合入前审阅**：任务 `--risk high`，或执行者档案 `trust` 低于 `medium`（没写按 `unknown`）时，PR 先进「审阅中」：运行时另建一个 `审阅 tN：…` 任务（`--deliver none`），自动挑一个与原执行者不同工具、不同模型且 `trust` 至少 `medium` 的执行者，按清单只读审代码，最后一行写 `审阅结论：通过` 或 `审阅结论：打回`。通过进合入队列；打回把意见交回原执行者，与冲突、检查失败共用交回次数，第三次转卡住；审阅者失败、没写结论、挑不到人或被停止都转卡住并通知负责人。审阅任务本身不单独投递事件；进审阅时在原任务上发 `review_queued` 事件，带改动规模摘要（文件数、增删行数、改动最多的文件），`atrium task show tN` 可看审阅任务与事件。
+**合入前审阅**：任务 `--risk high`，或执行者档案 `trust` 低于 `medium`（没写按 `unknown`）时，PR 先进「审阅中」：运行时另建一个 `审阅 tN：…` 任务（`--deliver none`），自动挑一个与原执行者不同工具、不同模型且 `trust` 至少 `medium` 的执行者，按清单只读审代码，最后一行写 `审阅结论：通过` 或 `审阅结论：打回`。通过进合入队列；打回把意见交回原执行者，与冲突、检查失败共用交回次数，第三次转卡住；最后一行结论没按格式写时，运行时先请同一审阅者续上会话补答一次（专员审查、会审意见与汇总同样）；审阅者失败、补答后仍没结论、挑不到人或被停止才转卡住并通知负责人。审阅任务本身不单独投递事件；进审阅时在原任务上发 `review_queued` 事件，带改动规模摘要（文件数、增删行数、改动最多的文件），`atrium task show tN` 可看审阅任务与事件。
 
 **自动上线**：合入的是服务自身仓库（`ATRIUM_UPDATE_REPO`，缺省 `liu-zhengdong/atrium`）的 PR 时，运行时每分钟拉一次标签，等发版工作流打出含该合入提交的版本；版本比运行中的新就执行 `atrium update --to <版本>` 与 `atrium restart`（在跑的执行者由新服务接管），新服务起来后把任务标为「已上线」，给负责人发 `online` 事件「tN 已上线（vX）」并附执行者在 PR 正文里写的「端到端验证」一节（派活时的通用约束要求写这一节）。同一版本只自升级一次：升级或重启失败（含 supervisor 回滚）发 `online_failed`；合入 30 分钟仍未发版发一次 `release_overdue`。自升级缺省只在用默认数据目录（`~/.atrium`）的安装版上开；开发中的 git 检出、测试与另给 `ATRIUM_DATA` 的隔离服务不动全局安装，停在已合入（`ATRIUM_SELF_UPDATE=1` 强制开、`=0` 关）。其他仓库只到已合入。
 
@@ -446,7 +446,7 @@ atrium org point-rm k1                  # 删掉过时的
 
 ### 任务请专员
 
-`--ask` 至多请五位，执行中不能改，本轮交付后按各专员的 `review_goal`、`review_points` 与 `review_bottom` 派一次性审查任务；全部通过才完成，任一否决或没出结论会卡住并通知负责人。`task wait` 等到审查结论才返回。专员的 `invite_when` 可按关键词或路径提示是否该请，只提示、不自动请。`atrium specialist show rN` 可查看清单。
+`--ask` 至多请五位，执行中不能改，本轮交付后按各专员的 `review_goal`、`review_points` 与 `review_bottom` 派一次性审查任务；全部通过才完成；有否决或没出结论的留在受阻，交负责这件事的 leader（找不到交秘书）判断：认同就捎话重派，不认同就写明理由后 `atrium task merge tN` 放行（没有 PR 的用 `task done`），和专员谈不拢才上交。`task wait` 等到审查结论才返回。专员的 `invite_when` 可按关键词或路径提示是否该请，只提示、不自动请。`atrium specialist show rN` 可查看清单。
 
 ### 会审
 
@@ -455,7 +455,7 @@ atrium org point-rm k1                  # 删掉过时的
 1. **议题**：建一个议题任务「会审：议题」（记在 `--leader` 节点上，缺省由秘书主持），每位受邀专员一个意见子任务（按专员清单、只交摘要），详述写明议题原文、关联 issue、全部受邀专员，以及该专员的章程目标、要点与底线。
 2. **并行出意见**：意见任务同时派出，各是一个一次性执行者；摘要最后一行写立场：`意见：同意`、`意见：有条件同意：条件`、`意见：反对：原因` 或 `意见：否决：越过的底线`。失败、受阻或没写立场的算「没出意见」。
 3. **leader 汇总**：意见都不再跑后，运行时把各方意见原文写进议题任务的详述（`council-summary.md`），拉起议题任务本身做汇总：写「一致」「冲突」两段，能定的自己定，碰到用户定的边界或谈不拢的每条写一行 `需用户拍板：…`，最后一行 `结论：…`。
-4. **结局**：运行时读汇总记在议题上。leader 标了需用户拍板、没写结论、专员都没出意见、或有专员以底线否决而 leader 没上交的，一律转「需用户拍板」（专员否决不能由 leader 自行推翻），投 `council_escalated`；其余转「已定」，投 `council_decided`。意见任务与汇总自己的完成不单独投递。`atrium task wait t9` 等到结局才返回。
+4. **结局**：运行时读汇总记在议题上。专员否决由 leader 汇总时判断（认同就调整结论，不认同写明理由），谈不拢才标需用户拍板；汇总没写结论的先请 leader 补答一次。leader 标了需用户拍板、补答后仍没写结论、或专员都没出意见的转「需用户拍板」，投 `council_escalated`；其余转「已定」，投 `council_decided`。意见任务与汇总自己的完成不单独投递。`atrium task wait t9` 等到结局才返回。
 5. **记录与拍板**：`atrium review show t9` 看意见与结论；用户拍板后 `atrium review decide t9 结论` 记下（留拍板人，原上交事项保留）。`--comment`（需 `--issue` 与 `--repo`）让汇总任务把结论发成 issue 评论，由评论关卡查实。
 
 ### 目标树迁移

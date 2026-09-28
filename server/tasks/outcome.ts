@@ -18,7 +18,7 @@ export type Exit =
 
 export type ExitDecision = {
   event: "exit_ok" | "exit_fail" | "block";
-  publish: "done" | "failed" | "blocked" | "ci_unavailable";
+  publish: "done" | "failed" | "blocked";
   reason?: string;
   /** 卡死后按档案重试一次。 */
   retry: boolean;
@@ -182,24 +182,10 @@ export function decideExit(input: {
   const failed = verdict.failed
     .map((result) => `${result.gate}：${result.evidence}`)
     .join("；");
-  const unavailable = verdict.failed.find((result) => result.unavailable);
   return {
     event: "block",
-    publish: unavailable ? "ci_unavailable" : "blocked",
-    reason: lead(
-      unavailable
-        ? `${unavailable.evidence}${
-            verdict.failed.length > 1
-              ? `；其余关卡不过：${verdict.failed
-                  .filter((result) => result !== unavailable)
-                  .map((result) => `${result.gate}：${result.evidence}`)
-                  .join("；")}`
-              : ""
-          }`
-        : verdict.awaitingCi
-          ? `等 CI：${failed}`
-          : `关卡不过：${failed}`,
-    ),
+    publish: "blocked",
+    reason: lead(`关卡不过：${failed}`),
     retry: false,
   };
 }

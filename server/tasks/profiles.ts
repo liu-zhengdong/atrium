@@ -8,12 +8,14 @@ import {
   type Tool,
 } from "./adapters/index.ts";
 import { parseFrontmatter, type FrontValue } from "./frontmatter.ts";
+import { GATES, isGate } from "./gates.ts";
 import { readProfile } from "./worker-profiles.ts";
 
 /**
  * 执行者档案（#262）：执行者 = 工具 + 模型（+ 思考强度）。档案三层叠加：
  * harness/<工具>.md ← models/<模型>.md ← combos/<工具>+<模型>.md。
- * 后层覆盖前层，但规则取更严：trust / max_risk 取较低、limits 逐项取较小、checks 取并集。
+ * 后层覆盖前层，以最具体的一层为准：trust、max_risk、limits、checks 写了就整项取这一层（checks 写空表示不加查），
+ * 限制能放宽也能撤销；只有 billing 任一层是 metered 就按 metered。
  * 组织技能相关的 skills、avoid_nodes 取并集，skills_for 按节点合并（#264 第 3b 步）。
  * 档案存数据库（worker-profiles.ts，#355），由用户或秘书用 `atrium workers edit` 维护并留修订。
  */
@@ -179,6 +181,12 @@ function normalizeRules(data: Record<string, FrontValue>) {
       rules.checks = list.filter(
         (item): item is string => typeof item === "string",
       );
+      // 不认识的关卡名（含已删掉的 ci）派活时忽略，只在这里提示。
+      const unknown = rules.checks.filter((gate) => !isGate(gate));
+      if (unknown.length)
+        warnings.push(
+          `checks 里的 ${unknown.join("、")} 不是关卡，派活时忽略；可用 ${GATES.join("、")}`,
+        );
     } else if (key === "limits") {
       if (value && typeof value === "object" && !Array.isArray(value)) {
         rules.limits = {};
@@ -201,15 +209,6 @@ function normalizeRules(data: Record<string, FrontValue>) {
   return { rules, warnings };
 }
 
-const lower = <T extends string>(order: readonly T[], a?: T, b?: T) =>
-  a === undefined
-    ? b
-    : b === undefined
-      ? a
-      : order.indexOf(a) <= order.indexOf(b)
-        ? a
-        : b;
-
 const strings = (value: FrontValue | undefined): string[] =>
   (Array.isArray(value) ? value : value === undefined ? [] : [value]).filter(
     (item): item is string => typeof item === "string",
@@ -220,25 +219,16 @@ const union = (a: FrontValue | undefined, b: FrontValue | undefined) => [
 const mapOf = (value: FrontValue | undefined) =>
   value && typeof value === "object" && !Array.isArray(value) ? value : {};
 
-/** 三层合并：后层覆盖前层；trust、max_risk、limits 取更严，checks、skills、avoid_nodes 取并集，skills_for 按节点合并。 */
+/**
+ * 三层合并：后层覆盖前层，trust、max_risk、limits、checks 取最具体一层写的值（可放宽、可写空撤销）；
+ * skills、avoid_nodes 取并集，skills_for 按节点合并。
+ */
 export function mergeLayers(layers: ProfileLayer[]): EffectiveProfile {
   let rules: ProfileRules = {};
   for (const { rules: next } of layers) {
     const merged: ProfileRules = { ...rules, ...next };
-    merged.trust = lower(TRUSTS, rules.trust, next.trust);
-    merged.max_risk = lower(RISKS, rules.max_risk, next.max_risk);
     if (rules.billing === "metered" || next.billing === "metered")
       merged.billing = "metered";
-    if (rules.checks || next.checks)
-      merged.checks = [
-        ...new Set([...(rules.checks ?? []), ...(next.checks ?? [])]),
-      ];
-    if (rules.limits || next.limits) {
-      const limits = { ...rules.limits };
-      for (const [name, n] of Object.entries(next.limits ?? {}))
-        limits[name] = name in limits ? Math.min(limits[name], n) : n;
-      merged.limits = limits;
-    }
     for (const key of ["skills", "avoid_nodes"])
       if (rules[key] !== undefined || next[key] !== undefined)
         merged[key] = union(rules[key], next[key]);

@@ -7,7 +7,7 @@ import { concernsOf } from "./concerns.ts";
 
 /**
  * CI 轮询（#262 外部事件源第一版）：只查账本里 ci=pending、有 PR 且未完成或取消的任务，每轮有上限。
- * 出结果就写回 ci 并记事件；任务因「只差 CI」受阻时，CI 通过即补判验收通过（blocked → done）。
+ * 出结果就写回 ci 并记事件，只供参考。已删掉的 ci 关卡（t209）留下的「只差 CI」受阻任务，CI 通过仍补判验收通过（blocked → done）。
  */
 
 export const CI_POLL_MS = 60_000;

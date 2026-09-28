@@ -15,13 +15,11 @@ import {
   planOnline,
   selfRepoFlag,
   selfUpdateEnabled,
-  verificationSection,
 } from "../server/tasks/online.ts";
 import {
   OnlineWatch,
   type DeployResult,
 } from "../server/tasks/online-runtime.ts";
-import { eventLine } from "../cli/events.ts";
 import { claimService } from "../server/service-state.ts";
 import { topRows, countRows } from "../server/tasks/top.ts";
 import { startApp } from "./task-fixture.ts";
@@ -71,32 +69,6 @@ test("含合入提交的最早版本", () => {
   assert.equal(firstRelease("v1.0.0\nv1.0.0-rc.1"), "1.0.0-rc.1");
   assert.equal(includedInVersion("v0.1.1\nv0.1.2", "0.1.2"), true);
   assert.equal(includedInVersion("v0.1.1\nv0.1.3", "0.1.2"), false);
-});
-
-test("端到端验证一节的提取", () => {
-  assert.equal(verificationSection(null), null);
-  assert.equal(verificationSection("## 实现\n\n改了"), null);
-  assert.equal(verificationSection("## 端到端验证\n\n"), null);
-  assert.equal(
-    verificationSection(
-      "## 实现\nx\n\n## 端到端验证（上线后）\n\n```bash\n# 注释不是标题\natrium task wait t1\n```\n\n### 预期\n显示 [已上线]\n\n## 其他\n不要",
-    ),
-    "```bash\n# 注释不是标题\natrium task wait t1\n```\n\n### 预期\n显示 [已上线]",
-  );
-  assert.equal(
-    verificationSection("### 端到端验证\r\n跑 a\r\n## 下一节\r\nb"),
-    "跑 a",
-  );
-  assert.equal(
-    verificationSection(
-      "## 端到端验证\n跑 a\n\nRefs #325\n\n🤖 Generated with [Claude Code](x)\n",
-    ),
-    "跑 a",
-  );
-  assert.equal(
-    verificationSection(`## 端到端验证\n${"x".repeat(5000)}`)!.length,
-    4000,
-  );
 });
 
 test("上线判定：已发版、需升级、升级过仍旧、不自升级、合入中", () => {
@@ -186,7 +158,7 @@ function watcher(
     selfUpdate?: boolean;
     busy?: boolean;
     deploy?: (version: string) => Promise<DeployResult>;
-    body?: string;
+    smoke?: () => Promise<DeployResult>;
     now?: () => number;
     fetchFails?: boolean;
     tagsForCommit?: Record<string, string>;
@@ -229,14 +201,6 @@ function watcher(
         stdout: JSON.stringify({ mergeCommit: { oid: "def5678" } }),
         stderr: "",
       };
-    if (command === "gh" && args.includes("body"))
-      return options.body === undefined
-        ? { ok: false, stdout: "", stderr: "gh down" }
-        : {
-            ok: true,
-            stdout: JSON.stringify({ body: options.body }),
-            stderr: "",
-          };
     return { ok: false, stdout: "", stderr: `unexpected ${command}` };
   };
   const watch = new OnlineWatch(db, {
@@ -256,6 +220,7 @@ function watcher(
     publish: (id, kind, detail) => published.push({ id, kind, detail }),
     changed: () => {},
     now: options.now,
+    smoke: options.smoke,
   });
   return { watch, calls, published, deployed };
 }
@@ -278,13 +243,17 @@ const kinds = (db: DatabaseSync, id: number) =>
       .all(id) as { kind: string }[]
   ).map((event) => event.kind);
 
-test("已发版且版本已在运行：标记上线并附 PR 里的端到端验证", async () => {
+test("已发版且版本已在运行：跑过只读冒烟后标记上线", async () => {
   const db = memory();
   const id = merged(db);
+  let smoked = 0;
   const { watch, calls, published } = watcher(db, {
     tags: "v0.1.0\n",
     version: "0.1.2",
-    body: "## 实现\nx\n## 端到端验证\natrium task show t1\n期望：已上线",
+    smoke: async () => {
+      smoked++;
+      return { ok: true };
+    },
   });
   await watch.tick();
   assert.equal(row(db, id).delivery_stage, "online");
@@ -294,10 +263,7 @@ test("已发版且版本已在运行：标记上线并附 PR 里的端到端验�
   assert.equal(published.length, 1);
   assert.equal(published[0]!.kind, "online");
   assert.equal(published[0]!.detail.message, "t1 已上线（v0.1.2）");
-  assert.equal(
-    published[0]!.detail.verification,
-    "atrium task show t1\n期望：已上线",
-  );
+  assert.equal(smoked, 1);
   assert.ok(
     calls.some(
       (call) =>
@@ -312,6 +278,7 @@ test("已发版且版本已在运行：标记上线并附 PR 里的端到端验�
   // 已上线的不再处理。
   await watch.tick();
   assert.equal(published.length, 1);
+  assert.equal(smoked, 1);
 });
 
 test("历史合入任务只在提交属于运行版本时补已上线状态，不补通知", async () => {
@@ -345,29 +312,29 @@ test("历史合入任务只在提交属于运行版本时补已上线状态，�
   assert.deepEqual(published, []);
 });
 
-test("PR 正文读不到时退回执行者汇报；都没有写明请自行验证", async () => {
+test("上线冒烟没过：照样标已上线，另记上线失败交负责人", async () => {
   const db = memory();
-  const a = merged(db, { result: "完成。\n\n## 端到端验证\n运行 atrium top" });
+  const a = merged(db);
   const b = merged(db);
   const { watch, published } = watcher(db, {
     tags: "v0.1.0",
     version: "0.1.0",
+    smoke: async () => ({ ok: false, reason: "atrium task ls：连不上服务" }),
   });
   await watch.tick();
+  assert.equal(row(db, a).delivery_stage, "online");
   assert.deepEqual(
-    published.map((event) => [event.id, event.kind, event.detail.version]),
+    published.map((event) => [event.id, event.kind]),
     [
-      [a, "online", "0.1.0"],
-      [b, "online", "0.1.0"],
+      [a, "online"],
+      [b, "online"],
+      [a, "online_failed"],
+      [b, "online_failed"],
     ],
   );
-  assert.equal(
-    published.find((event) => event.id === a)!.detail.verification,
-    "运行 atrium top",
-  );
   assert.match(
-    String(published.find((event) => event.id === b)!.detail.verification),
-    /没有写「端到端验证」/,
+    String(published[2]!.detail.reason),
+    /上线冒烟没过：atrium task ls：连不上服务/,
   );
 });
 
@@ -490,28 +457,6 @@ test("缺合入提交时向 gh 补查；拉标签失败不误判（发版超时�
   );
 });
 
-test("已上线事件行附端到端验证", () => {
-  const line = eventLine({
-    id: 3,
-    task: "t5",
-    kind: "online",
-    count: 1,
-    delivered_at: 1,
-    acked_at: null,
-    updated_at: Date.now(),
-    detail: {
-      title: "自动上线",
-      message: "t5 已上线（v0.1.64）",
-      verification: "atrium top --once\n期望：已上线 1",
-    },
-  } as never);
-  assert.match(line, /t5 online 自动上线 .*t5 已上线（v0\.1\.64）/);
-  assert.match(
-    line,
-    /\n {2}端到端验证：\n {4}atrium top --once\n {4}期望：已上线 1$/,
-  );
-});
-
 for (const scenario of ["online", "rolled_back"] as const)
   test(`隔离服务与假 gh/执行者：合入 → 发版 → 自升级 → 重启后${scenario === "online" ? "已上线" : "判上线失败"}`, async (t) => {
     let merged = false;
@@ -554,27 +499,6 @@ for (const scenario of ["online", "rolled_back"] as const)
           "kimi",
           "set -e\necho change >> done.txt\ngit add done.txt\ngit commit -qm 修复\ngit push -q -u origin HEAD\necho 完成",
         );
-        // 假验证执行者（t181）：记下环境，照格式写 verify.json（输出里夹一个令牌，看写进事件前有没有抹掉）。
-        fixture.script(
-          "opencode",
-          [
-            'env > "$PWD/../verify-env.txt"',
-            `printf '%s' '${JSON.stringify({
-              verdict: "passed",
-              summary: "照着跑通",
-              steps: [
-                {
-                  command: "atrium task show t1",
-                  expected: "[已上线]",
-                  output:
-                    "t1 [已上线] GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123",
-                  matched: true,
-                },
-              ],
-            })}' > verify.json`,
-            `echo '{"type":"text","part":{"text":"验证结论：通过"}}'`,
-          ].join("\n"),
-        );
         const origin = join(fixture.root, "origin.git");
         const remoteHead = () =>
           execFileSync(
@@ -615,7 +539,6 @@ for (const scenario of ["online", "rolled_back"] as const)
                 baseRefName: "main",
                 isCrossRepository: false,
                 mergeCommit: merged ? { oid: mergeCommit } : null,
-                body: "## 端到端验证\natrium task show t1\n期望：[已上线]",
               }),
               stderr: "",
             };
@@ -728,8 +651,6 @@ for (const scenario of ["online", "rolled_back"] as const)
           ...online,
           version: () => (scenario === "online" ? "0.1.1" : "0.1.0"),
         },
-        // 第一个写错，换下一个。
-        verify: { workers: ["opencode+.bad", "opencode"] },
       },
     });
     t.after(() => next.app.close());
@@ -825,7 +746,7 @@ for (const scenario of ["online", "rolled_back"] as const)
         "https://github.com/acme/demo/pull/1",
       );
     } else {
-      // 已派人验证：leader 那里是知会（不叫醒），秘书不收。
+      // 已上线只是知会（不叫醒），秘书不收。
       assert.equal(last.task, ref);
       assert.equal(last.level, "info");
       assert.equal(last.detail.pr_url, "https://github.com/acme/demo/pull/1");
@@ -837,61 +758,6 @@ for (const scenario of ["online", "rolled_back"] as const)
       assert.equal(task.delivery_stage, "online");
       assert.equal(last.kind, "online");
       assert.equal(last.detail.message, `${ref} 已上线（v0.1.1）`);
-      assert.equal(
-        last.detail.verification,
-        "atrium task show t1\n期望：[已上线]",
-      );
-      // 上线后运行时派假验证执行者照着跑，结论记进原任务事件（t181）。
-      // 任务视图里事件的 detail 是 JSON 文本。
-      const detailOf = (kind: string) =>
-        JSON.parse(
-          task.events.find((event: { kind: string }) => event.kind === kind)
-            .detail,
-        ) as Record<string, unknown>;
-      const started = detailOf("verify_started") as { verifier: string };
-      assert.equal(last.detail.verifier, started.verifier);
-      const verifyUntil = Date.now() + 15_000;
-      while (
-        !task.events.some(
-          (event: { kind: string }) => event.kind === "verified",
-        )
-      ) {
-        assert.ok(Date.now() < verifyUntil, "等待验证结论超时");
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        task = await get(`/api/tasks/${ref}`);
-      }
-      const verified = detailOf("verified");
-      assert.equal(verified.verifier, started.verifier);
-      assert.equal(verified.verdict, "passed");
-      assert.equal(verified.conclusion, "通过");
-      assert.equal(verified.summary, "照着跑通");
-      assert.equal(
-        (verified.steps as { output: string }[])[0]!.output,
-        "t1 [已上线] GH_TOKEN=***",
-      );
-      const verifyTask = await get(`/api/tasks/${started.verifier}`);
-      assert.equal(verifyTask.parent_ref, ref);
-      assert.equal(verifyTask.status, "done");
-      assert.match(verifyTask.worker, /^opencode/);
-      const dir = join(data, "tasks", started.verifier.slice(1));
-      const seen = readFileSync(join(dir, "verify-env.txt"), "utf8");
-      assert.match(seen, /^ATRIUM_VERIFIER=1\r?$/m);
-      assert.match(seen, /^ATRIUM_QUOTA_READERS=off\r?$/m);
-      assert.doesNotMatch(seen, /^ATRIUM_WORKER=/m);
-      const prompt = readFileSync(join(dir, "prompt.md"), "utf8");
-      assert.match(
-        prompt,
-        /## 验证步骤（原样摘自 PR）\n\natrium task show t1\n期望：\[已上线\]/,
-      );
-      assert.match(prompt, /不读钥匙串/);
-      assert.doesNotMatch(prompt, /开 PR（正文写 Refs/);
-      // 验证任务自己的结局不单独投递；通过就结束，谁也不叫醒（t182）。
-      for (const as of ["secretary", "a1"]) {
-        const inbox = await inboxOf(as);
-        assert.ok(!inbox.some((event) => event.task === started.verifier));
-        assert.ok(!inbox.some((event) => event.kind.startsWith("verify_")));
-      }
-      assert.equal((await get(`/api/tasks/${ref}`)).verify.state, "passed");
     } else {
       assert.equal(task.delivery_stage, "merged");
       assert.equal(last.kind, "online_failed");

@@ -1,9 +1,4 @@
 import type { PickSpecialists } from "../server/tasks/specialist-scope.ts";
-import {
-  VERIFY_STATE_TEXT,
-  verifyActionText,
-  type VerifyView,
-} from "../server/tasks/verify-view.ts";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
@@ -456,7 +451,6 @@ const show: Command = {
         child_summary: TaskNode["child_summary"];
         events: TaskEventRow[];
         last_check?: string | null;
-        verify?: VerifyView | null;
       }
     >(`/tasks/${ref(reference, "任务")}`);
     if (json) printJson(task);
@@ -508,7 +502,6 @@ const show: Command = {
         ["分支", task.branch],
         ["PR", task.pr_url],
         ["本地检查", task.last_check ?? null],
-        ["上线验证", task.verify ? verifyLine(task.verify) : null],
         ["CI", task.ci],
         ["建于", when(task.created_at)],
         ["开始", task.started_at ? when(task.started_at) : null],
@@ -552,11 +545,9 @@ const show: Command = {
                     `  ${when(event.at)}  ${event.kind}${
                       event.kind === "tell"
                         ? `  ${tellLine(event.detail)}`
-                        : event.kind === "verified"
-                          ? `  ${verifiedLines(event.detail)}`
-                          : event.detail
-                            ? `  ${clip(event.detail, 80)}`
-                            : ""
+                        : event.detail
+                          ? `  ${clip(event.detail, 80)}`
+                          : ""
                     }`,
                 ),
               ]
@@ -797,45 +788,6 @@ const TELL_STATE: Record<string, string> = {
   pending: "待送达",
   written: "已写入，待确认",
 };
-
-/** task show 的「上线验证」一行（t182）：验证没过（t9）：原因 · 等 a2 处理。 */
-export function verifyLine(view: VerifyView) {
-  const detail = verifyActionText(view);
-  return `${VERIFY_STATE_TEXT[view.state]}（${view.verifier}）${
-    view.state === "running" || view.state === "passed" || !detail
-      ? ""
-      : `：${detail}`
-  }`;
-}
-
-const MATCH_MARK = (matched: unknown) =>
-  matched === true ? "符合" : matched === false ? "不符合" : "无法验证";
-
-/** task show 里的上线验证结论（t181）：验证任务、结论、总结，下面逐条列命令与输出摘要。 */
-export function verifiedLines(detail: string | null) {
-  try {
-    const verify = JSON.parse(detail ?? "") as {
-      verifier?: string;
-      conclusion?: string;
-      summary?: string;
-      steps?: {
-        command?: string;
-        expected?: string;
-        output?: string;
-        matched?: unknown;
-      }[];
-    };
-    return [
-      `${verify.verifier ?? ""} ${verify.conclusion ?? ""}${verify.summary ? `：${clip(verify.summary.replace(/\s+/g, " "), 160)}` : ""}`.trim(),
-      ...(verify.steps ?? []).map(
-        (step) =>
-          `      [${MATCH_MARK(step.matched)}] ${clip((step.command ?? "").replace(/\s+/g, " "), 80)}${step.output ? ` → ${clip(step.output.replace(/\s+/g, " "), 120)}` : ""}`,
-      ),
-    ].join("\n");
-  } catch {
-    return clip(detail ?? "", 80);
-  }
-}
 
 /** task show 里一条捎话事件：作者、送达状态、原文。 */
 export function tellLine(detail: string | null) {

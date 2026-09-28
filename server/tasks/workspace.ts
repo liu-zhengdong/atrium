@@ -37,8 +37,6 @@ import { listTells, unsent } from "./tell-ledger.ts";
 import { TELL_RULE, tellModeOf, tellSection } from "./tell.ts";
 import type { TellMode } from "./adapters/index.ts";
 import { patrolRun } from "./patrol.ts";
-import { VERIFY_ROLE, VERIFY_RULES } from "./verify.ts";
-import { isVerifyTask } from "./verify-runtime.ts";
 import { firstLine } from "./git.ts";
 import { remoteLayout } from "../hosts/state.ts";
 
@@ -277,9 +275,8 @@ export async function prepareRun(
       ? getJobRole(options.db, `r${task.job_id}`)
       : undefined;
   const patrol = options.db ? patrolRun(options.db, task.id) : undefined;
-  // 上线验证（t181）：只附验证步骤、岗位说明与硬规矩，不附章程、技能、组织说明与执行者叮嘱。
-  const verify = options.db ? isVerifyTask(options.db, task.id) : false;
-  const bare = !!patrol || verify;
+  // 体验巡检只附场景与硬规矩，不附规矩、技能、组织说明。
+  const bare = !!patrol;
   // 远程的工作树不在本机：说明文件读本机仓库的。
   const docs = task.repo
     ? await loadRoleDocs(site ? task.repo : (worktree ?? task.repo), node)
@@ -342,7 +339,6 @@ export async function prepareRun(
         ? secretSection(taskSecretList(options.db, task))
         : undefined,
     roleDoc: [
-      verify ? VERIFY_ROLE : "",
       patrol
         ? "# 体验巡检\n\n把自己当用户使用 Atrium，找核心体验上的毛病。不读代码、不改代码、不查凭据或权限边界。发现的问题建成修复任务，交这一块的 leader 排。"
         : "",
@@ -370,14 +366,12 @@ export async function prepareRun(
     skills: bare ? undefined : carry ? SKILLS_SLOT : mount?.section,
     rootDoc: bare ? undefined : docs.rootDoc,
     profileBody: bare ? undefined : worker.profile.body,
-    rules: verify
-      ? [`工作目录：${cwd}。`, ...VERIFY_RULES]
-      : patrol
-        ? [
-            "直接使用当前服务与真实数据。只看 atrium map / org show 的人话字段、atrium --help、atrium guide 和命令回执；不读仓库代码。只运行与本轮场景有关的命令；有副作用的操作只按场景实际需要执行。",
-            "每个不同现象只报告一次；结束后报告你走过的步骤。",
-          ]
-        : [where, ...deliveryRules(task), TELL_RULE],
+    rules: patrol
+      ? [
+          "直接使用当前服务与真实数据。只看 atrium map / org show 的人话字段、atrium --help、atrium guide 和命令回执；不读仓库代码。只运行与本轮场景有关的命令；有副作用的操作只按场景实际需要执行。",
+          "每个不同现象只报告一次；结束后报告你走过的步骤。",
+        ]
+      : [where, ...deliveryRules(task), TELL_RULE],
   });
   const promptFile = join(dir, "prompt.md");
   // 本机留的那份：技能段由代理在那台填，这里写明去哪看。

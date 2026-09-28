@@ -13,7 +13,6 @@ import { statuslineCommand } from "./statusline.ts";
 import { quotaCommands } from "./quota.ts";
 import {
   leaderCommandGuard,
-  verifierCommandGuard,
   workerGuard,
   workerReadable,
 } from "./worker-guard.ts";
@@ -230,7 +229,6 @@ export async function main(argv: string[]): Promise<number> {
       ) {
         if (!workerReadable(name, rest)) workerGuard();
         leaderCommandGuard(name);
-        verifierCommandGuard(name);
       }
       if (name === undefined || name === "--no-open" || name === "start") {
         if (rest.filter((part) => part !== "--json").length)

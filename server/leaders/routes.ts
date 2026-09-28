@@ -93,11 +93,7 @@ export function escalate(
   if (error) throw new Problem(400, error, "usage");
   const task = given ?? (forward?.task ? getTask(db, forward.task) : null);
   if (input.kind === "shipped" && !task)
-    throw new Problem(
-      400,
-      "--task: 上交「已上线」要给上线的任务，附端到端验证",
-      "usage",
-    );
+    throw new Problem(400, "--task: 上交「已上线」要给上线的任务", "usage");
   const route = upstreamRoute(db, leader);
   const label = ESCALATE_KINDS[input.kind];
   const detail = escalationDetail({

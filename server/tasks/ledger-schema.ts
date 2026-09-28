@@ -9,7 +9,6 @@ import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
 import { ensurePauseTable } from "../pause.ts";
 import { ensurePatrolTables } from "./patrol.ts";
-import { ensureVerifyTables } from "./verify-runtime.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
 import { ensureSecretTables } from "../secrets/store.ts";
 
@@ -212,7 +211,7 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureAlsoTable(db);
   // 任务声明要用的凭据（t194）：task_secrets 随账本建，node_secrets 一起建好，建任务时要查。
   ensureSecretTables(db);
-  // 总任务（t190）：有子任务的任务不再派、状态按子孙汇总；运行时替父任务建的帮手（审阅、上线验证）不算子任务。
+  // 总任务（t190）：有子任务的任务不再派、状态按子孙汇总；运行时替父任务建的帮手（审阅）不算子任务。
   if (!columns.some((column) => column.name === "helper")) {
     db.exec(
       "ALTER TABLE tasks ADD COLUMN helper INTEGER NOT NULL DEFAULT 0 CHECK(helper IN (0,1))",
@@ -224,8 +223,6 @@ export function ensureTaskTables(db: DatabaseSync) {
   );
   ensureDeliveryRecords(db);
   ensurePatrolTables(db);
-  // 上线后的端到端验证（t181）：验证任务与结论。
-  ensureVerifyTables(db);
   // 执行者档案（#355）：三层档案与修订历史。
   ensureWorkerProfiles(db);
 }

@@ -43,7 +43,6 @@ import {
 import { resolveActor } from "../actor.ts";
 import { taskPlan } from "./schedule.ts";
 import { parseTaskRef } from "./ledger.ts";
-import { verifierOf } from "./verify-guard.ts";
 import { globalPause, pauseText } from "../pause.ts";
 
 type Query = Record<string, string | undefined>;
@@ -278,12 +277,9 @@ export function registerTaskRoutes(
   app.post("/api/tasks/:id/run", { bodyLimit: 16 * 1024 }, (request) =>
     runner.run(params(request.params).id, request.body),
   );
-  // 停止事件记发起者（t239）：上线验证执行者停自己记它的 tN，其余记 ?as=。
+  // 停止事件记发起者（?as=）。
   app.post("/api/tasks/:id/stop", (request) =>
-    runner.stop(
-      params(request.params).id,
-      verifierOf(request) || actorOf(query(request.query)),
-    ),
+    runner.stop(params(request.params).id, actorOf(query(request.query))),
   );
   app.post("/api/tasks/:id/merge", (request) =>
     runner.requeueMerge(params(request.params).id),

@@ -182,7 +182,7 @@ export const leaderCommands: Record<string, Command> = {
       .map(([k, v]) => `${k} ${v}`)
       .join(
         "、",
-      )}；shipped 要带 --task 并在说明里附端到端验证。转交下层 leader 的上交时用 --event 给那条事件的编号、说明写你的意见（同任务同类型的会自动认作转交），上面只收一条。leader 进程里缺省以自己的身份上交`,
+      )}；shipped 要带 --task。转交下层 leader 的上交时用 --event 给那条事件的编号、说明写你的意见（同任务同类型的会自动认作转交），上面只收一条。leader 进程里缺省以自己的身份上交`,
     options: {
       kind: { type: "string" },
       task: { type: "string" },

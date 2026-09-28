@@ -83,7 +83,8 @@ export function settleRound(
   if (!parsed.ok)
     return { choice_error: parsed.error, choice_file: file, next: fix };
   const route = partRoute(db, round.node_id);
-  const creator = route.subscriber === "secretary" ? undefined : route.subscriber;
+  const creator =
+    route.subscriber === "secretary" ? undefined : route.subscriber;
   try {
     const choice = addChoice(
       db,

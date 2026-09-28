@@ -23,6 +23,8 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "merged",
   "review_queued",
   "review_passed",
+  // 已上线：端到端验证在合入前做过，上线后只读冒烟没过另记 online_failed；库里旧行在 ensureEventTables 回写。
+  "online",
   "quota_switched",
   "quota_queued",
   "quota_cleared",
@@ -40,18 +42,7 @@ export const INFORMATION_KINDS: ReadonlySet<string> = new Set([
   "choice_comment",
 ]);
 
-/**
- * 已派人做上线验证的「已上线」只是知会（t182）：通过就结束，没通过、无法验证另投 verify_* 叫醒负责人。
- * 没有验证任务的（PR 没写端到端验证、验证任务建不起来）仍要处理：负责人得自己验证。
- * 这条按内容判，库里此前的行在 ensureEventTables 里补一次回写。
- */
-export const isVerifiedOnline = (kind: string, detail?: unknown) =>
-  kind === "online" &&
-  typeof (detail as { verifier?: unknown } | null | undefined)?.verifier ===
-    "string";
-
 export function eventLevel(kind: string, detail?: unknown): EventLevel {
-  if (isVerifiedOnline(kind, detail)) return "info";
   // 到期（overdue.ts）：执行者、检查到期由运行时自己处理，只作知会；叫醒 leader、上交、发版超时要处理。
   if (kind === "overdue") return overdueInfo(detail) ? "info" : "action";
   if (kind === "ready") {

@@ -3,8 +3,6 @@ import { MEMO_MAX } from "./model.ts";
 import { decisionLine } from "../memos/decisions.ts";
 import { omittedLine, type DecisionDigest } from "../memos/digest.ts";
 import { forwardedOf } from "./route.ts";
-import type { VerifyStep } from "../tasks/verify.ts";
-import { phenomenonLine } from "../tasks/verify-view.ts";
 import { CLOSING_ACTIONS } from "./actions.ts";
 import { DUE, spanText } from "../tasks/overdue.ts";
 
@@ -66,7 +64,7 @@ export function escalateInput(body: unknown): {
     event = Number(text);
   }
   if (input.kind === "shipped" && !task && event === null)
-    throw usage("--task: 上交「已上线」要给上线的任务，附端到端验证");
+    throw usage("--task: 上交「已上线」要给上线的任务");
   return { kind: input.kind as EscalateKind, note, task, event };
 }
 
@@ -134,19 +132,6 @@ export function eventLine(event: PromptEvent) {
     )
       .map((m) => `${m.ref} ${m.name.slice(0, 40)}（${m.reason}）`)
       .join("；")}${detail?.more ? `；另有 ${detail.more} 份` : ""}`;
-  }
-  // 上线验证没通过、无法验证（t182）：附现象（命令、期望、实际输出摘要）与怎么开修复任务。
-  if (event.kind === "verify_failed" || event.kind === "verify_unverifiable") {
-    const detail = (event.detail ?? {}) as {
-      phenomena?: Partial<VerifyStep>[];
-    };
-    return [
-      `- #${event.id} ${event.task ?? ""} ${eventWord(event.kind)} ${field(event.detail, "title", 60)}（验证任务 ${field(event.detail, "verifier", 20)}）${field(event.detail, "summary", 300) ? `：${field(event.detail, "summary", 300)}` : ""}`,
-      ...(Array.isArray(detail.phenomena) ? detail.phenomena : []).map(
-        (step) => `  - ${phenomenonLine(step).slice(0, 600)}`,
-      ),
-      `  - ${field(event.detail, "hint", 300)}`,
-    ].join("\n");
   }
   if (event.kind === "secret_stale") {
     const detail = event.detail as {
@@ -217,8 +202,6 @@ export const EVENT_WORDS: Record<string, string> = {
   online: "上线",
   online_failed: "上线失败",
   total_online: "整体已上线",
-  verify_failed: "上线验证没过",
-  verify_unverifiable: "上线后无法验证",
   total_stuck: "下面有子任务卡住",
   merged: "已合入",
   merge_returned: "合入被打回",
@@ -310,7 +293,7 @@ export function leaderPrompt(input: PromptInput): string {
     "## 新能力先试点再铺开（做法，不设关卡）",
     "- 新能力上线后先在小范围用：一台主机、一两个任务、一个部分；跑通再放开。",
     "- 放开前在那件任务上写一句试点结果：atrium task note tN 试点结果：在哪试、跑了什么、结果如何",
-    "- 挑试点时先看 PR「碰到哪些已有能力」一节，优先试它列出的组合（远程主机、Windows、合入队列……），问题多出在新旧能力的组合上；上线后运行时会照 PR「端到端验证」在真实环境跑一遍，没过才投给你。",
+    "- 挑试点时先看 PR「碰到哪些已有能力」一节，优先试它列出的组合（远程主机、Windows、合入队列……），问题多出在新旧能力的组合上；端到端验证由执行者合入前在隔离实例跑、输出贴在 PR 里。",
     "",
     "## 权限边界（服务端强制，越权会被拒）",
     "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料，设值、归档、恢复、留下这些节点的凭据；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",

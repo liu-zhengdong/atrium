@@ -66,19 +66,12 @@ import { ReviewGate, taskRisk } from "./review-runtime.ts";
 import { reviewerRefusal } from "./review.ts";
 import {
   cliDeploy,
+  cliSmoke,
   lastRestartError,
   OnlineWatch,
   type DeployResult,
 } from "./online-runtime.ts";
 import { selfRepoFlag, selfUpdateEnabled } from "./online.ts";
-import { verifyEventDetail, verifyEventKind, verifyWorkers } from "./verify.ts";
-import {
-  isVerifyTask,
-  openVerify,
-  settleVerifications,
-  unsentVerify,
-  type VerifyOutcome,
-} from "./verify-runtime.ts";
 import {
   currentVersion,
   isDefaultData,
@@ -189,13 +182,9 @@ export type RunnerOptions = {
     selfUpdate?: boolean;
     version?: () => string;
     deploy?: (version: string) => Promise<DeployResult>;
+    smoke?: () => Promise<DeployResult>;
     pollMs?: number;
   };
-  /**
-   * 上线后的端到端验证（t181）：按顺序试的验证执行者组合；缺省读 ATRIUM_VERIFY_WORKERS（逗号分隔），
-   * 没写用 opencode+deepseek、cursor+auto。给空数组不派人，只记「无法验证」。
-   */
-  verify?: { workers?: string[] };
   /** 本机减负（#358）：执行者并发上限、本地检查并发、负载阈值；缺省按服务环境与核数（host-load.ts）。 */
   host?: HostLoad;
   /** 代理长轮询每轮最多挂多久（毫秒）；测试缩短。 */
@@ -243,8 +232,6 @@ export class TaskRunner {
   private readonly launchOptions: LaunchOptions;
   private closed = false;
   private polling = false;
-  /** 上线验证的执行者，按顺序试。 */
-  private readonly verifyWorkers: string[];
   /** 看板上把日志里的绝对路径缩成相对路径用的工作目录，按任务记一份。 */
   private recovered = false;
   /** 重启自愈（接管在跑的执行者）；派活回执前先等它，免得还没接管就按空的在跑数超额拉起。 */
@@ -291,15 +278,6 @@ export class TaskRunner {
     this.retention = new Retention(db);
     this.exec = options.exec ?? defaultExec;
     const sourceEnv = options.env ?? process.env;
-    if (options.verify?.workers) this.verifyWorkers = options.verify.workers;
-    else {
-      const parsed = verifyWorkers(process.env.ATRIUM_VERIFY_WORKERS);
-      if (parsed.invalid.length)
-        console.error(
-          `ATRIUM_VERIFY_WORKERS 里有写错的执行者组合，已跳过：${parsed.invalid.join("、")}`,
-        );
-      this.verifyWorkers = parsed.workers;
-    }
     this.launchOptions = {
       db,
       data: options.data,
@@ -359,14 +337,6 @@ export class TaskRunner {
         room: () => hasRoom(this.hostCandidates()),
         installed: (host) => this.remoteInstalled(host),
       },
-      verify: {
-        settle: () =>
-          setImmediate(() =>
-            this.settleVerifications().catch((error) =>
-              console.error("上线验证记结论失败：", error),
-            ),
-          ),
-      },
     });
     this.merge = new MergeQueue(db, {
       data: options.data,
@@ -415,15 +385,16 @@ export class TaskRunner {
       publish: (id, kind, detail, actor) =>
         this.x.publish(id, kind, detail, actor),
     });
+    const selfUpdate =
+      options.online?.selfUpdate ??
+      selfUpdateEnabled(process.env.ATRIUM_SELF_UPDATE, {
+        gitCheckout: existsSync(join(packageRoot, ".git")),
+        defaultData: isDefaultData(options.data),
+      });
     this.online = new OnlineWatch(db, {
       run: this.exec,
       version: options.online?.version ?? currentVersion,
-      selfUpdate:
-        options.online?.selfUpdate ??
-        selfUpdateEnabled(process.env.ATRIUM_SELF_UPDATE, {
-          gitCheckout: existsSync(join(packageRoot, ".git")),
-          defaultData: isDefaultData(options.data),
-        }),
+      selfUpdate,
       selfRepo:
         options.online?.selfRepo !== undefined
           ? options.online.selfRepo
@@ -438,19 +409,13 @@ export class TaskRunner {
           .get() ||
         !!restartInProgress(options.data),
       deploy: options.online?.deploy ?? cliDeploy(options.data),
+      // 上线后的只读冒烟只在自升级的安装版上跑；测试与隔离服务注入或不跑。
+      smoke:
+        options.online?.smoke ??
+        (selfUpdate ? cliSmoke(options.data) : undefined),
       restartError: (version) => lastRestartError(options.data, version),
       publish: (id, kind, detail) => this.x.publish(id, kind, detail),
       changed: (id) => this.waits.changed(id),
-      verify: {
-        open: (id, steps, version) =>
-          openVerify(this.db, { taskId: id, version, steps }),
-        dispatch: (refs) => {
-          const job = this.dispatchVerify(refs)
-            .catch((error) => console.error("上线验证派发失败：", error))
-            .finally(() => this.background.delete(job));
-          this.background.add(job);
-        },
-      },
     });
     this.scheduler = new Scheduler(
       db,
@@ -508,7 +473,6 @@ export class TaskRunner {
       if (!this.closed && this.recovered) await this.x.drain();
       // 持球与期限（overdue.ts）：leader 手里与等发版的，一分钟巡检一次。
       if (!this.closed && this.recovered) this.patrolOverdue();
-      if (!this.closed && this.recovered) await this.settleVerifications();
       if (!this.closed && this.recovered) this.review.kick();
       if (!this.closed && this.recovered) this.merge.kick();
     });
@@ -880,11 +844,9 @@ export class TaskRunner {
     const task = getTask(this.db, id);
     const localOnly = patrolRun(this.db, id)
       ? "体验巡检要连回本机服务"
-      : isVerifyTask(this.db, id)
-        ? "上线验证要在本机真实环境跑"
-        : researchRound(this.db, id)
-          ? "调研的选项单文件要留在本机"
-          : null;
+      : researchRound(this.db, id)
+        ? "调研的选项单文件要留在本机"
+        : null;
     let repo: string | null = null;
     if (task.repo) {
       // 没有接入的远程主机时不查仓库，省一次 git。
@@ -1519,71 +1481,6 @@ export class TaskRunner {
     const result = tellTask(this.x, this.db, reference, body, actor);
     this.waits.changed(result.task.id);
     return result;
-  }
-
-  // ---- 上线后的端到端验证（t181） ----
-
-  /** 派验证任务：按配置的顺序试执行者，没装或拉不起来换下一个；都不行记「无法验证」。 */
-  private async dispatchVerify(refs: string[]) {
-    for (const ref of refs) {
-      if (this.closed) return;
-      const reasons: string[] = [];
-      let sent = false;
-      for (const worker of this.verifyWorkers) {
-        if (this.closed) return;
-        try {
-          await this.run(ref, { worker, risk: "low" });
-          sent = true;
-          break;
-        } catch (error) {
-          reasons.push(
-            `${worker}：${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-      if (sent) continue;
-      const outcome = unsentVerify(
-        this.db,
-        ref,
-        reasons.join("；") || "没有配置验证执行者（ATRIUM_VERIFY_WORKERS）",
-      );
-      this.waits.changed(getTask(this.db, ref).id);
-      if (outcome) this.verified(outcome);
-    }
-  }
-
-  /** 记下结论之后：通过就结束；没通过、无法验证投给原任务的负责人（按归属部分找 leader，找不到投秘书）。 */
-  private verified(outcome: VerifyOutcome) {
-    const kind = verifyEventKind(outcome.verdict);
-    if (kind) {
-      const task = getTask(this.db, outcome.task);
-      this.x.publish(
-        outcome.task,
-        kind,
-        verifyEventDetail({
-          task: { ref: task.ref, title: task.title, part_ref: task.part_ref },
-          verifier: outcome.verifier,
-          report: outcome,
-        }),
-      );
-    }
-    this.waits.changed(outcome.task);
-  }
-
-  /** 验证任务不再跑后把结论记进原任务；停在待办的（派发中途服务重启）重派。 */
-  async settleVerifications() {
-    if (this.closed) return;
-    const busy = (id: number) =>
-      this.x.active.has(id) ||
-      this.x.launching.has(id) ||
-      this.x.finishing.has(id);
-    const { outcomes, stranded } = settleVerifications(
-      this.db,
-      this.options.data,
-      busy,
-    );
-    for (const outcome of outcomes) this.verified(outcome);
-    if (stranded.length) await this.dispatchVerify(stranded);
   }
 
   private pending(id: number, task: Task) {

@@ -46,14 +46,12 @@ const node = (ref: string, leader: string | null, name = ref): ChainNode => ({
   leader,
 });
 
-test("上线失败与总任务整体上线同时投 leader 与秘书；单个任务上线、验证没过与普通完成只投原路由", () => {
+test("上线失败与总任务整体上线同时投 leader 与秘书；单个任务上线与普通完成只投原路由", () => {
   for (const subscriber of ["a1", "secretary", "u1"])
     for (const kind of [
       "online",
       "online_failed",
       "total_online",
-      "verify_failed",
-      "verify_unverifiable",
       "done",
       "failed",
       "merged",

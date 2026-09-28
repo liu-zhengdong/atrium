@@ -219,7 +219,7 @@ func TestInfoHelpers(t *testing.T) {
 }
 
 func TestServiceLayout(t *testing.T) {
-	mac, err := ServiceLayout(ServiceInput{GOOS: "darwin", Exe: "/usr/local/bin/atrium", Data: "/Users/a/.atrium-agent", Home: "/Users/a", UID: 501})
+	mac, err := ServiceLayout(ServiceInput{GOOS: "darwin", Exe: "/usr/local/bin/atrium", Data: "/Users/a/.atrium-agent", Home: "/Users/a", UID: "501"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,11 +244,11 @@ func TestServiceLayout(t *testing.T) {
 		t.Errorf("unit：%s", unit)
 	}
 	win, err := ServiceLayout(ServiceInput{GOOS: "windows", Exe: `C:\atrium\atrium.exe`, Data: `C:\Users\a\.atrium-agent`,
-		Env: map[string]string{"USERNAME": "a", "USERDOMAIN": "PC"}})
+		UID: "S-1-5-21-1-2-3-1001", Env: map[string]string{"USERNAME": "cpcli", "USERDOMAIN": "WORKGROUP"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(win.Files) != 2 || !win.Files[1].UTF16 || !strings.Contains(win.Files[1].Content, `<UserId>PC\a</UserId>`) ||
+	if len(win.Files) != 2 || !win.Files[1].UTF16 || !strings.Contains(win.Files[1].Content, `<UserId>S-1-5-21-1-2-3-1001</UserId>`) ||
 		!strings.Contains(win.Files[0].Content, "shell.Run(command, 0, true)") || !strings.Contains(win.Files[1].Content, `C:\Windows\System32\wscript.exe`) {
 		t.Errorf("windows：%+v", win.Files)
 	}
@@ -256,10 +256,12 @@ func TestServiceLayout(t *testing.T) {
 		t.Errorf("schtasks：%+v", s)
 	}
 	for _, in := range []ServiceInput{
-		{GOOS: "darwin", Exe: "atrium", Data: "/d", UID: 1},
+		{GOOS: "darwin", Exe: "atrium", Data: "/d", UID: "1"},
 		{GOOS: "darwin", Exe: "/a", Data: "/d"},
-		{GOOS: "windows", Exe: `C:\a%b\x.exe`, Data: `C:\d`, Env: map[string]string{"USERNAME": "a"}},
+		{GOOS: "darwin", Exe: "/a", Data: "/d", UID: "0"},
+		{GOOS: "windows", Exe: `C:\a%b\x.exe`, Data: `C:\d`, UID: "S-1-5-21-1"},
 		{GOOS: "windows", Exe: `C:\x.exe`, Data: `C:\d`},
+		{GOOS: "windows", Exe: `C:\x.exe`, Data: `C:\d`, UID: `WORKGROUP\cpcli`},
 		{GOOS: "linux", Exe: "/a\nb", Data: "/d"},
 		{GOOS: "plan9", Exe: "/a", Data: "/d"},
 	} {

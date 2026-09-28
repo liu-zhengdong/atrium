@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -326,10 +327,7 @@ func installAgent(c *cli.Ctx) error {
 	case c.Bool("uninstall"):
 		action = "uninstall"
 	}
-	env := map[string]string{}
-	for k, v := range platform.EnvMap(os.Environ()) {
-		env[platform.EnvKey(runtime.GOOS, k)] = v
-	}
+	env := platform.EnvMap(os.Environ())
 	if action == "install" {
 		cfg, err := ReadAgentConfig(dir)
 		if err != nil {
@@ -348,7 +346,11 @@ func installAgent(c *cli.Ctx) error {
 		exe = resolved
 	}
 	home, _ := os.UserHomeDir()
-	rep, err := ManageService(ServiceInput{GOOS: runtime.GOOS, Exe: exe, Data: dir, Home: home, Env: env, UID: os.Getuid()}, action)
+	uid := ""
+	if u, err := user.Current(); err == nil {
+		uid = u.Uid
+	}
+	rep, err := ManageService(ServiceInput{GOOS: runtime.GOOS, Exe: exe, Data: dir, Home: home, Env: env, UID: uid}, action)
 	if err != nil {
 		return err
 	}

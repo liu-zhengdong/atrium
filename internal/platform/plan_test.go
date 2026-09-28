@@ -84,10 +84,15 @@ func TestWorkerEnv(t *testing.T) {
 }
 
 func TestEnvRoundTrip(t *testing.T) {
-	m := EnvMap([]string{"A=1", "B=x=y", "bad", "=skip"})
-	if !reflect.DeepEqual(m, map[string]string{"A": "1", "B": "x=y"}) {
+	m := envMap("linux", []string{"A=1", "B=x=y", "bad", "=skip", "Path=p"})
+	if !reflect.DeepEqual(m, map[string]string{"A": "1", "B": "x=y", "Path": "p"}) {
 		t.Errorf("got %v", m)
 	}
+	// Windows 的 os.Environ() 里是 Path、SystemRoot：落成大写，LookPath 按 PATH 才找得到。
+	if w := envMap("windows", []string{"Path=C:\\npm", "SystemRoot=C:\\W"}); !reflect.DeepEqual(w, map[string]string{"PATH": "C:\\npm", "SYSTEMROOT": "C:\\W"}) {
+		t.Errorf("windows got %v", w)
+	}
+	m = envMap("linux", []string{"A=1", "B=x=y"})
 	if got := EnvList(m); !reflect.DeepEqual(got, []string{"A=1", "B=x=y"}) {
 		t.Errorf("got %v", got)
 	}
@@ -120,5 +125,57 @@ func TestScriptInvocation(t *testing.T) {
 	}
 	if ScriptShells("darwin") != nil || !reflect.DeepEqual(ScriptShells("windows"), []string{"sh", "bash"}) {
 		t.Error("ScriptShells")
+	}
+}
+
+func TestIsBatch(t *testing.T) {
+	cases := []struct {
+		goos, path string
+		want       bool
+	}{
+		{"windows", `C:\Users\a\AppData\Roaming\npm\claude.cmd`, true},
+		{"windows", `C:\x\run.BAT`, true},
+		{"windows", `C:\x\codex.exe`, false},
+		{"windows", `C:\x\cmd`, false},
+		{"linux", "/usr/bin/claude.cmd", false},
+		{"darwin", "/x/run.bat", false},
+	}
+	for _, c := range cases {
+		if got := IsBatch(c.goos, c.path); got != c.want {
+			t.Errorf("IsBatch(%s, %s) = %v", c.goos, c.path, got)
+		}
+	}
+}
+
+func TestBatchCommandLine(t *testing.T) {
+	const script = `C:\Users\a b\npm\claude.cmd`
+	cases := []struct {
+		comspec string
+		args    []string
+		want    string
+	}{
+		{"", nil, `"cmd.exe" /d /e:on /v:off /s /c ""C:\Users\a b\npm\claude.cmd""`},
+		{`C:\W\cmd.exe`, []string{"-p", "--model", "opus", "C:\\d\\x.txt"},
+			`"C:\W\cmd.exe" /d /e:on /v:off /s /c ""C:\Users\a b\npm\claude.cmd" -p --model opus C:\d\x.txt"`},
+		// 空参数、空白、cmd 元字符一律加引号。
+		{"", []string{"", "a b", "x&y|z<w>v^u"}, `"cmd.exe" /d /e:on /v:off /s /c ""C:\Users\a b\npm\claude.cmd" "" "a b" "x&y|z<w>v^u""`},
+		// 引号写两遍、之前的反斜杠加倍；结尾反斜杠加倍。
+		{"", []string{`model_reasoning_effort="high"`, `a\"b`, `C:\dir\`},
+			`"cmd.exe" /d /e:on /v:off /s /c ""C:\Users\a b\npm\claude.cmd" "model_reasoning_effort=""high""" "a\\""b" "C:\dir\\""`},
+		// % 前插空子串，挡住 %PATH% 展开。
+		{"", []string{"%PATH%"}, `"cmd.exe" /d /e:on /v:off /s /c ""C:\Users\a b\npm\claude.cmd" "%%cd:~,%PATH%%cd:~,%""`},
+		// 非 ASCII 原样。
+		{"", []string{"你好"}, `"cmd.exe" /d /e:on /v:off /s /c ""C:\Users\a b\npm\claude.cmd" 你好"`},
+	}
+	for _, c := range cases {
+		got, err := BatchCommandLine(c.comspec, script, c.args)
+		if err != nil || got != c.want {
+			t.Errorf("%q:\n got %s %v\nwant %s", c.args, got, err, c.want)
+		}
+	}
+	for _, bad := range []string{"line1\nline2", "a\rb", "a\x00b"} {
+		if _, err := BatchCommandLine("", script, []string{"-p", bad}); err == nil {
+			t.Errorf("%q 应拒绝", bad)
+		}
 	}
 }

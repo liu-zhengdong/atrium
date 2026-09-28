@@ -4,6 +4,7 @@
 package platform
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -50,6 +51,71 @@ func KillTreeInvocation(goos string, pid int) (Invocation, bool) {
 		return Invocation{}, false
 	}
 	return Invocation{Command: "taskkill", Args: []string{"/T", "/F", "/PID", strconv.Itoa(pid)}}, true
+}
+
+// IsBatch：Windows 上 .cmd/.bat 不能直接带参数拉起（cmd.exe 拆参数的规则与常规程序不同），要经 BatchCommandLine。
+func IsBatch(goos, path string) bool {
+	if goos != "windows" {
+		return false
+	}
+	p := strings.ToLower(path)
+	return strings.HasSuffix(p, ".cmd") || strings.HasSuffix(p, ".bat")
+}
+
+// BatchCommandLine 是经 cmd.exe 跑 .cmd/.bat 的整条命令行（给 SysProcAttr.CmdLine）：
+// `cmd.exe /d /e:on /v:off /s /c ""脚本" 参数…"`。含空白或符号的参数加引号；`"` 写两遍；
+// `%` 前插 `%%cd:~,`（与后面的 `%` 合成空子串 `%cd:~,%`）挡住变量展开。换行与空字符进不了批处理的命令行，报错。
+func BatchCommandLine(comspec, script string, args []string) (string, error) {
+	if comspec == "" {
+		comspec = "cmd.exe"
+	}
+	var b strings.Builder
+	b.WriteString(`"` + comspec + `" /d /e:on /v:off /s /c "`)
+	for i, a := range append([]string{script}, args...) {
+		if strings.ContainsAny(a, "\r\n\x00") {
+			return "", fmt.Errorf("经 cmd.exe 拉起 %s 时参数里不能有换行或空字符（第 %d 个参数）", script, i)
+		}
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		batchArg(&b, a, i == 0)
+	}
+	b.WriteByte('"')
+	return b.String(), nil
+}
+
+// batchArg 写一个参数：只含字母数字与 #$*+-./:?@\_（及非 ASCII）时原样，否则加引号；
+// 引号内 `"` 前的反斜杠加倍再写两个 `"`，结尾反斜杠加倍。
+func batchArg(b *strings.Builder, a string, quote bool) {
+	if a == "" || strings.HasSuffix(a, `\`) {
+		quote = true
+	}
+	for _, r := range a {
+		if r < 0x80 && !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(`#$*+-./:?@\_`, r)) {
+			quote = true
+		}
+	}
+	if quote {
+		b.WriteByte('"')
+	}
+	slashes := 0
+	for _, r := range a {
+		switch r {
+		case '\\':
+			slashes++
+			b.WriteRune(r)
+			continue
+		case '"':
+			b.WriteString(strings.Repeat(`\`, slashes) + `"`)
+		case '%':
+			b.WriteString(`%%cd:~,`)
+		}
+		slashes = 0
+		b.WriteRune(r)
+	}
+	if quote {
+		b.WriteString(strings.Repeat(`\`, slashes) + `"`)
+	}
 }
 
 const defaultPathExt = ".COM;.EXE;.BAT;.CMD"
@@ -149,12 +215,13 @@ func WorkerEnv(goos string, base map[string]string) map[string]string {
 	return env
 }
 
-// EnvMap 把 os.Environ() 形式转成 map；EnvList 反过来并按名字排序（结果稳定）。
-func EnvMap(list []string) map[string]string {
+// envMap 把 os.Environ() 形式转成 map，变量名经 EnvKey（Windows 上的 Path 落成 PATH）；
+// EnvList 反过来并按名字排序（结果稳定）。
+func envMap(goos string, list []string) map[string]string {
 	m := make(map[string]string, len(list))
 	for _, kv := range list {
 		if i := strings.IndexByte(kv, '='); i > 0 {
-			m[kv[:i]] = kv[i+1:]
+			m[EnvKey(goos, kv[:i])] = kv[i+1:]
 		}
 	}
 	return m

@@ -24,16 +24,27 @@ type Spec struct {
 	Detached bool
 }
 
-// Start 拉起子进程。调用方负责 Wait（Unix 上不 Wait 会留下僵尸，Alive 会一直报活着）。
+// EnvMap 把 os.Environ() 形式转成 map（Windows 上变量名按大写）。
+func EnvMap(list []string) map[string]string { return envMap(runtime.GOOS, list) }
+
+// Start 拉起子进程；Windows 上 .cmd/.bat（如 npm 装的 claude.cmd）经 cmd.exe 拉起。调用方负责 Wait（Unix 上不 Wait 会留下僵尸，Alive 会一直报活着）。
 func Start(s Spec) (*exec.Cmd, error) {
 	if s.Env == nil {
 		return nil, errors.New("platform.Start：必须显式给 Env（白名单环境）")
 	}
-	cmd := exec.Command(s.Path, s.Args...)
+	cmd, cmdLine := exec.Command(s.Path, s.Args...), ""
+	if IsBatch(runtime.GOOS, s.Path) {
+		comspec := s.Env[EnvKey(runtime.GOOS, "COMSPEC")]
+		line, err := BatchCommandLine(comspec, s.Path, s.Args)
+		if err != nil {
+			return nil, err
+		}
+		cmd, cmdLine = exec.Command(ShellInvocation(runtime.GOOS, "", comspec).Command), line
+	}
 	cmd.Dir = s.Dir
 	cmd.Env = EnvList(s.Env)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.Stdin, s.Stdout, s.Stderr
-	cmd.SysProcAttr = sysProcAttr(s.Detached)
+	cmd.SysProcAttr = sysProcAttr(s.Detached, cmdLine)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

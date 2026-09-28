@@ -18,6 +18,10 @@ test("说明书从命令表与退出码表生成；示例均通过参数解析",
     text,
     /atrium task add 目标[\s\S]*atrium org tree[\s\S]*atrium events wait --as secretary/,
   );
+  assert.match(
+    text,
+    /每类东西放哪[^\n]*→ 技能[^\n]*的要点[^\n]*→ 执行者档案[^\n]*判断顺序/,
+  );
   for (const [name, command] of Object.entries(commands)) {
     assert(text.includes(`atrium ${name} ${command.args}`.trimEnd()), name);
     const invocation = example(name, command);

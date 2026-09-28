@@ -654,6 +654,7 @@ test("唤醒提示词带全景上下文、备忘、事件、可用命令、权�
     "单个任务上线运行时已自动通知秘书，不必再报",
     "--event 编号",
     "atrium events ack 12 13",
+    "「每类东西放哪」",
   ])
     assert(prompt.includes(part), part);
   assert.equal(wakeSummary([]), "");

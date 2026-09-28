@@ -70,6 +70,8 @@ export type TaskRow = {
   priority: "normal" | "idle";
   /** 任务大小（t276）：自动挑人时小活优先快且便宜的组合，中、大优先高强度；没写为 null（挑人时粗估）。 */
   size?: Size | null;
+  /** 任务类型（t237）：功能 feature 或修复 fix；紧急另看 urgent。不写时按来源、标题、父任务推断。 */
+  task_type: "feature" | "fix";
   schedule_state: string | null;
   schedule_reason: string | null;
   node_id: number | null;

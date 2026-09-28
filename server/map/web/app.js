@@ -341,6 +341,27 @@ function spent(t) {
   return duration(end - t.started_at);
 }
 
+/** 状态格：紧急、闲时、修复（t237，功能不标）的标记在前，状态在后。 */
+function statusChips(t, label, tone) {
+  const marks = [
+    t.urgent ? chip("紧急", "red") : "",
+    !t.urgent && t.idle && !ENDED.has(t.tag) ? chip("闲时", "gray") : "",
+    !t.urgent && t.type === "fix" ? chip("修复", "orange") : "",
+  ].join("");
+  return marks
+    ? `<span class="chips">${marks}${chip(label, tone)}</span>`
+    : chip(label, tone);
+}
+
+/** 表里任务按类型计数（t237）：功能 N · 修复 M · 紧急 K；没有任务为空。 */
+function typeCounts(list) {
+  if (!list.length) return "";
+  const urgent = list.filter((t) => t.urgent).length;
+  const fix = list.filter((t) => !t.urgent && t.type === "fix").length;
+  const text = `功能 ${list.length - urgent - fix} · 修复 ${fix} · 紧急 ${urgent}`;
+  return `<p class="muted type-counts">${esc(text)}</p>`;
+}
+
 /** 任务表：各块与专员页共用；专员页不再列「专员」。 */
 function taskTable(all, { withRole, empty }) {
   const list =
@@ -348,37 +369,40 @@ function taskTable(all, { withRole, empty }) {
   const heads = withRole
     ? ["任务", "专员", "状态", "谁在做", "用时", "最近在做"]
     : ["任务", "状态", "谁在做", "用时", "最近在做"];
-  return table(
-    withRole ? "tasks" : "tasks-plain",
-    heads,
-    list.map((t) => {
-      const [tagLabel, tone] = TAG[t.tag];
-      const label = t.total ? `${tagLabel} ${t.total.progress}` : tagLabel;
-      const worker = workerLabel(t.worker);
-      const workerAt =
-        worker && t.host_name ? `${worker} @ ${t.host_name}` : worker;
-      const doing = t.action || t.reason || "";
-      // 最新备注只在任务没结时显示：作者用名字（Atrium 负责人、你）。
-      const note = t.note && !ENDED.has(t.tag) ? t.note : null;
-      const noteLine = note
-        ? `<span class="clamp note-line" title="${esc(`${note.by.name}：${note.text}`)}"><span class="note-by">${esc(note.by.name)}：</span>${esc(note.text)}</span>`
-        : "";
-      const recent = doing
-        ? `<span class="clamp" title="${esc(doing)}">${linkify(doing)}</span>${noteLine}`
-        : noteLine;
-      const role = t.job
-        ? chipLink(t.job.name, "role", roleHref(t.job.ref))
-        : none;
-      return `<div class="row" role="row">
+  return (
+    typeCounts(list) +
+    table(
+      withRole ? "tasks" : "tasks-plain",
+      heads,
+      list.map((t) => {
+        const [tagLabel, tone] = TAG[t.tag];
+        const label = t.total ? `${tagLabel} ${t.total.progress}` : tagLabel;
+        const worker = workerLabel(t.worker);
+        const workerAt =
+          worker && t.host_name ? `${worker} @ ${t.host_name}` : worker;
+        const doing = t.action || t.reason || "";
+        // 最新备注只在任务没结时显示：作者用名字（Atrium 负责人、你）。
+        const note = t.note && !ENDED.has(t.tag) ? t.note : null;
+        const noteLine = note
+          ? `<span class="clamp note-line" title="${esc(`${note.by.name}：${note.text}`)}"><span class="note-by">${esc(note.by.name)}：</span>${esc(note.text)}</span>`
+          : "";
+        const recent = doing
+          ? `<span class="clamp" title="${esc(doing)}">${linkify(doing)}</span>${noteLine}`
+          : noteLine;
+        const role = t.job
+          ? chipLink(t.job.name, "role", roleHref(t.job.ref))
+          : none;
+        return `<div class="row" role="row">
         ${cell("任务", taskName(t.ref, t.title, t.by, taskParts(t) + (t.total ? totalChildren(t) : "")), " name plain task")}
         ${withRole ? cell("专员", role, t.job ? "" : " none") : ""}
-        ${cell("状态", t.urgent ? `<span class="chips">${chip("紧急", "red")}${chip(label, tone)}</span>` : t.idle && !ENDED.has(t.tag) ? `<span class="chips">${chip("闲时", "gray")}${chip(label, tone)}</span>` : chip(label, tone))}
+        ${cell("状态", statusChips(t, label, tone))}
         ${cell("谁在做", workerAt ? `<span class="chip chip-soft clip" title="${esc(workerAt)}">${esc(workerAt)}</span>` : none, workerAt ? "" : " none")}
         ${cell("用时", spent(t) || "—", spent(t) ? " muted tagged" : " muted none")}
         ${cell("最近在做", recent || none, recent ? " note" : " note none")}
       </div>`;
-    }),
-    state.route.extra === "all" ? empty.all : empty.active,
+      }),
+      state.route.extra === "all" ? empty.all : empty.active,
+    )
   );
 }
 

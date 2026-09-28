@@ -1,6 +1,11 @@
 import { posix, win32 } from "node:path";
 import { Problem } from "../problem.ts";
 import { TOOLS, type Tool } from "../tasks/adapters/types.ts";
+import {
+  reserveHolds,
+  reserveText,
+  type TaskType,
+} from "../tasks/task-type.ts";
 
 /**
  * 执行机器（#358 第 1 步）的判定：连接状态、能不能接这件活、挑哪台、日志续传与重连对账。
@@ -150,6 +155,10 @@ export type HostCandidate = {
   busy: string | null;
   /** 能挂组织技能（t232）：本机总能；远程看代理上报。缺省按能。 */
   skills?: boolean;
+  /** 在跑的里面有几件修复（t237，不算紧急的）；不给按 0。 */
+  fixRunning?: number;
+  /** 这台给修复保底留几个位置（task-type.ts fixReserve）；不给按 0。 */
+  reserve?: number;
 };
 
 export type HostNeed = {
@@ -163,12 +172,16 @@ export type HostNeed = {
   avoid?: readonly number[];
   /** 要带组织技能（t232）：自动挑时优先能挂技能的主机。 */
   skills?: boolean;
+  /** 任务类型（t237）：功能的要给修复的保底位置让路；不给按修复（不受保底名额挡）。 */
+  type?: TaskType;
+  /** 有没有别的修复任务在等（能拉起、只差位置的）；没有时保底位置照常给功能用。 */
+  fixWaiting?: boolean;
 };
 
 export type HostFit =
   | { ok: true }
-  /** never：这台接不了；later：接得了但现在满或太忙，排队等。 */
-  | { ok: false; kind: "never" | "later"; reason: string };
+  /** never：这台接不了；later：接得了但现在满或太忙，排队等；reserve 表示只是被修复保底名额挡着（t237）。 */
+  | { ok: false; kind: "never" | "later"; reason: string; reserve?: true };
 
 export function repoAllowed(repos: readonly string[], repo: string | null) {
   if (repo === null) return true;
@@ -232,13 +245,35 @@ export function hostFit(
       kind: "later",
       reason: `${ref} 同时最多跑 ${candidate.max} 个执行者，有执行者结束后自动拉起`,
     };
+  // 修复保底名额（t237）：有修复在等时，功能任务不占还没被修复用上的保底位置。
+  const reserve = candidate.reserve ?? 0;
+  if (
+    reserveHolds({
+      max: candidate.max,
+      running: candidate.running,
+      fixRunning: candidate.fixRunning ?? 0,
+      reserve,
+      fixWaiting: !!need.fixWaiting,
+      type: need.type ?? "fix",
+      urgent: need.urgent,
+    })
+  )
+    return {
+      ok: false,
+      kind: "later",
+      reason: reserveText(ref, reserve),
+      reserve: true,
+    };
   return { ok: true };
 }
 
 export type HostChoice =
   | { kind: "run"; host: number }
-  /** host：排队时钉在哪台（用户指定的）；自动挑的不钉，空出来时再挑。 */
-  | { kind: "queue"; host: number | null; reason: string }
+  /**
+   * host：排队时钉在哪台（用户指定的）；自动挑的不钉，空出来时再挑。
+   * reserve：能接的主机都只是被修复保底名额挡着（t237）：排在后面的修复任务照样能派，drain 不就此停下。
+   */
+  | { kind: "queue"; host: number | null; reason: string; reserve?: true }
   | { kind: "refuse"; reason: string };
 
 const utilization = (c: HostCandidate) =>
@@ -274,7 +309,12 @@ export function chooseHost(
           kind: "refuse",
           reason: `${fit.reason}；${hostRef(candidate.id)} 暂停接活中，指定过去的不排队，有空位时再派`,
         }
-      : { kind: "queue", host: candidate.id, reason: fit.reason };
+      : {
+          kind: "queue",
+          host: candidate.id,
+          reason: fit.reason,
+          ...(fit.reserve ? { reserve: true as const } : {}),
+        };
   }
   const fits = candidates.map((candidate) => ({
     candidate,
@@ -308,7 +348,15 @@ export function chooseHost(
   );
   const local = later.find((entry) => entry.candidate.kind === "local");
   const first = local ?? later[0];
-  if (first) return { kind: "queue", host: null, reason: first.fit.reason };
+  if (first)
+    return {
+      kind: "queue",
+      host: null,
+      reason: first.fit.reason,
+      ...(later.some((entry) => entry.fit.reserve)
+        ? { reserve: true as const }
+        : {}),
+    };
   const localNever = fits.find(
     (entry) => entry.candidate.kind === "local" && !entry.fit.ok,
   );

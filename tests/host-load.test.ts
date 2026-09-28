@@ -41,7 +41,11 @@ const limits = (over: Partial<HostLimits> = {}): HostLimits => ({
 });
 
 test("本机限额：缺省按核数，8 核同时 6 个执行者、4 个检查、测试并发 7、检查 30 分钟、Atrium 占 6 核或整机负载 32 暂停", () => {
-  assert.deepEqual(hostLimits({}, 8), { limits: limits(), problems: [] });
+  // 修复保底名额（t237）缺省按上限的 25%。
+  assert.deepEqual(hostLimits({}, 8), {
+    limits: limits({ fixReservePercent: 25 }),
+    problems: [],
+  });
   assert.deepEqual(hostLimits({}, 1).limits, {
     cores: 1,
     maxWorkers: 2,
@@ -50,6 +54,7 @@ test("本机限额：缺省按核数，8 核同时 6 个执行者、4 个检查�
     checkTimeoutMs: 30 * 60_000,
     busyCores: 0.75,
     busyLoad: 4,
+    fixReservePercent: 25,
   });
   assert.deepEqual(hostLimits({}, 16).limits, {
     cores: 16,
@@ -59,6 +64,7 @@ test("本机限额：缺省按核数，8 核同时 6 个执行者、4 个检查�
     checkTimeoutMs: 30 * 60_000,
     busyCores: 12,
     busyLoad: 64,
+    fixReservePercent: 25,
   });
   // 核数读成 0 或小数也不出 0 上限。
   assert.equal(hostLimits({}, 0).limits.cores, 1);
@@ -84,6 +90,7 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
       checkTimeoutMs: 45 * 60_000,
       busyCores: 3.5,
       busyLoad: 12.5,
+      fixReservePercent: 25,
     }),
   );
   assert.deepEqual(
@@ -95,7 +102,12 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
       },
       8,
     ).limits,
-    limits({ maxWorkers: null, busyCores: null, busyLoad: null }),
+    limits({
+      maxWorkers: null,
+      busyCores: null,
+      busyLoad: null,
+      fixReservePercent: 25,
+    }),
   );
   const bad = hostLimits(
     {
@@ -108,7 +120,7 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
     },
     8,
   );
-  assert.deepEqual(bad.limits, limits());
+  assert.deepEqual(bad.limits, limits({ fixReservePercent: 25 }));
   assert.equal(bad.problems.length, 6);
   assert.match(bad.problems[0]!, /ATRIUM_MAX_WORKERS=-1 看不懂/);
   // 空字符串当没设，不报。
@@ -118,7 +130,12 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
 test("本机限额：node:test 派生的进程缺省不限执行者、不看负载，显式设置照样生效", () => {
   assert.deepEqual(
     hostLimits({ NODE_TEST_CONTEXT: "child" }, 8).limits,
-    limits({ maxWorkers: null, busyCores: null, busyLoad: null }),
+    limits({
+      maxWorkers: null,
+      busyCores: null,
+      busyLoad: null,
+      fixReservePercent: 0,
+    }),
   );
   assert.deepEqual(
     hostLimits(
@@ -129,7 +146,12 @@ test("本机限额：node:test 派生的进程缺省不限执行者、不看负�
       },
       8,
     ).limits,
-    limits({ maxWorkers: 2, busyCores: null, busyLoad: 4 }),
+    limits({
+      maxWorkers: 2,
+      busyCores: null,
+      busyLoad: 4,
+      fixReservePercent: 0,
+    }),
   );
 });
 

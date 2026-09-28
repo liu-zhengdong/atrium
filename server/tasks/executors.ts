@@ -17,7 +17,7 @@ import {
 import { publishTask, publishUrgentStage } from "./notice.ts";
 import { exitDetail, type Exit } from "./outcome.ts";
 import { resolveWorker, type ResolvedWorker, type Risk } from "./profiles.ts";
-import { dequeue, heads, queuedNormals } from "./queue.ts";
+import { dequeue, heads, queuedFixes, queuedNormals } from "./queue.ts";
 import { idleAhead } from "./priority.ts";
 import type { QuotaGuard } from "./quota-runtime.ts";
 import { diffSize, logTail, settle } from "./settle.ts";
@@ -286,14 +286,19 @@ export class Executors {
    */
   idleAhead(tool: Tool, except?: number) {
     const held = this.ctx.quota.held();
-    return idleAhead(tool, queuedNormals(this.ctx.db, except), (other) => {
-      const adapter = ADAPTERS[other as Tool];
-      if (!adapter) return false;
-      return (
-        held.has(adapter.quotaProvider) ||
-        (!!adapter.exclusive && this.busy(other as Tool))
-      );
-    });
+    return idleAhead(tool, queuedNormals(this.ctx.db, except), (other) =>
+      this.ownWait(other, held),
+    );
+  }
+
+  /** 这个工具的任务在等的是工具自己（独占工具正忙、账号额度用尽），不是本机空位。 */
+  private ownWait(tool: string, held = this.ctx.quota.held()) {
+    const adapter = ADAPTERS[tool as Tool];
+    if (!adapter) return false;
+    return (
+      held.has(adapter.quotaProvider) ||
+      (!!adapter.exclusive && this.busy(tool as Tool))
+    );
   }
 
   /**
@@ -342,9 +347,14 @@ export class Executors {
     if (!entries.size) return [];
     const ids = [...entries.keys()];
     const flags = new Map(
-      all<{ id: number; urgent: number; priority: string | null }>(
+      all<{
+        id: number;
+        urgent: number;
+        priority: string | null;
+        task_type: string | null;
+      }>(
         this.ctx.db,
-        `SELECT id,urgent,priority FROM tasks WHERE id IN (${ids.map(() => "?").join(",")})`,
+        `SELECT id,urgent,priority,task_type FROM tasks WHERE id IN (${ids.map(() => "?").join(",")})`,
         ...ids,
       ).map((row) => [row.id, row]),
     );
@@ -356,8 +366,28 @@ export class Executors {
         ...entry,
         urgent: row?.urgent === 1,
         idle: row?.priority === "idle" && row.urgent !== 1,
+        fix: row?.task_type === "fix" && row.urgent !== 1,
       };
     });
+  }
+
+  /** 各主机上在跑与正在启动的修复任务个数（t237，不算紧急的），except 除外；修复保底名额按它算。 */
+  fixInFlight(except?: number): Map<number, number> {
+    const counts = new Map<number, number>();
+    for (const slot of this.slots())
+      if (slot.fix && slot.id !== except)
+        counts.set(slot.host, (counts.get(slot.host) ?? 0) + 1);
+    return counts;
+  }
+
+  /**
+   * 有没有别的修复任务在排队、只差位置（t237）：在等自己那个工具（独占工具正忙、额度用尽）的不算，
+   * 它们拿到位置也拉不起来，保底位置照常给功能用。
+   */
+  fixWaiting(except?: number) {
+    return queuedFixes(this.ctx.db, except).some(
+      (entry) => !this.ownWait(entry.tool),
+    );
   }
 
   /** 在跑的紧急任务与各自换过几次执行者（一次查询，巡检用）。 */
@@ -1420,8 +1450,10 @@ export class Executors {
       if (placement && need) {
         const choice = placement.choose(need, entry.host_id ?? null);
         // 指定的主机离线、暂停或满了：只等它，不挡别的队。
+        // 只是被修复保底名额挡着的功能任务（t237）：后面的修复任务照样能派，不就此停下。
         if (choice.kind !== "run") {
-          if (entry.host_id) continue;
+          if (entry.host_id || (choice.kind === "queue" && choice.reserve))
+            continue;
           break;
         }
         host = choice.host;

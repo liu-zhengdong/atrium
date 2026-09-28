@@ -370,7 +370,7 @@ export function verifyEventDetail(input: {
       `${task.ref}「${task.title}」上线后${conclusion}${summary ? `：${summary}` : ""}`,
       300,
     ),
-    hint: `要修就开修复任务：atrium task add 修复标题${part} --brief 文件，再 atrium task run tN；不修写备注 atrium task note ${task.ref} 原因。运行时不自动回滚`,
+    hint: `要修就开修复任务：atrium task add 修复标题${part} --type 修复 --brief 文件，再 atrium task run tN；不修写备注 atrium task note ${task.ref} 原因。运行时不自动回滚`,
     next: `atrium task show ${task.ref}`,
   };
 }

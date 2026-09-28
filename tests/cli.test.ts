@@ -197,11 +197,11 @@ test(
     assert.match(shown.stdout, /球在谁手里：待派：等 秘书 派活/);
     const line = await f.cli("statusline");
     assert.equal(line.code, 0, line.stderr);
-    // 待派的任务不在看板行里，只进「接下来」；末行是下一步命令（有就绪的看排期）。
+    // 待派的任务不在看板行里，只进「接下来」与头部的类型计数（t237）；末行是下一步命令（有就绪的看排期）。
     // 隔离服务没有秘书挂着 events wait，首行带「秘书没在听」（t242）。
     assert.equal(
       line.stdout,
-      "Atrium 在做 0 · 秘书没在听\n接下来：就绪 1 · 等待中 0\n下一步：atrium task plan\n",
+      "Atrium 在做 0 · 功能 1 · 修复 0 · 紧急 0 · 秘书没在听\n接下来：就绪 1 · 等待中 0\n下一步：atrium task plan\n",
     );
     const json = await f.cli("statusline", "--json");
     assert.equal(json.code, 0, json.stderr);
@@ -214,7 +214,7 @@ test(
     assert.equal(colored.code, 0, colored.stderr);
     assert.equal(
       colored.stdout,
-      "Atrium 在做 0 · \x1b[2m秘书没在听\x1b[0m\n\x1b[2m接下来：就绪 1 · 等待中 0\x1b[0m\n下一步：atrium task plan\n",
+      "Atrium 在做 0 · 功能 1 · 修复 0 · 紧急 0 · \x1b[2m秘书没在听\x1b[0m\n\x1b[2m接下来：就绪 1 · 等待中 0\x1b[0m\n下一步：atrium task plan\n",
     );
   },
 );

@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { decisionDigest, nodeScope } from "../memos/digest.ts";
 import { Problem } from "../problem.ts";
 import { oneLine } from "../text-width.ts";
+import { storedType, type TaskType } from "../tasks/task-type.ts";
 import { runningHostNames } from "../hosts/model.ts";
 import {
   all,
@@ -76,6 +77,8 @@ export type MapTask = {
   urgent: boolean;
   /** 闲时（t136）：排在普通任务后面，有空闲执行者才派；标了紧急的不算。 */
   idle: boolean;
+  /** 任务类型（t237）：feature 功能、fix 修复；紧急看 urgent。 */
+  type: TaskType;
   worker: string | null;
   host_name?: string | null;
   started_at: number | null;
@@ -376,6 +379,7 @@ export type TaskRow = {
   job_id: number | null;
   urgent?: number | null;
   priority?: string | null;
+  task_type?: string | null;
   parent_id?: number | null;
 };
 
@@ -473,6 +477,7 @@ export function taskView(
     queued: live?.queued_at != null,
     urgent: row.urgent === 1,
     idle: row.priority === "idle" && row.urgent !== 1,
+    type: storedType(row.task_type),
     worker: row.worker ?? live?.worker ?? null,
     host_name: row.status === "running" ? (involved.host ?? null) : null,
     started_at: row.started_at,
@@ -623,7 +628,7 @@ function hasColumn(db: DatabaseSync, table: string, column: string) {
   );
 }
 export const taskColumns = (db: DatabaseSync) =>
-  `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "host_id") ? "host_id" : "NULL AS host_id"},${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"},${hasColumn(db, "tasks", "priority") ? "priority" : "NULL AS priority"}`;
+  `id,parent_id,title,status,worker,started_at,updated_at,COALESCE(part_id,node_id) AS part,pr_url,issue,repo,ended_at,${hasColumn(db, "tasks", "host_id") ? "host_id" : "NULL AS host_id"},${hasColumn(db, "tasks", "delivery_stage") ? "delivery_stage" : "NULL AS delivery_stage"},${hasColumn(db, "tasks", "job_id") ? "job_id" : "NULL AS job_id"},${hasColumn(db, "tasks", "urgent") ? "urgent" : "0 AS urgent"},${hasColumn(db, "tasks", "priority") ? "priority" : "NULL AS priority"},${hasColumn(db, "tasks", "task_type") ? "task_type" : "NULL AS task_type"}`;
 const MERGING = "delivery_stage IN ('merge_queued','merging')";
 /** 任务在部分页上的顺序：在跑、卡住与等合入、待办、其余。 */
 const TASK_ORDER = (db: DatabaseSync) =>

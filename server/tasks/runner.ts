@@ -49,11 +49,12 @@ import {
   queueView,
 } from "./queue.ts";
 import { idleWaitText, isIdle } from "./priority.ts";
+import { fixReserve, storedType } from "./task-type.ts";
 import { clock } from "./quota-holds.ts";
 import { QuotaGuard } from "./quota-runtime.ts";
 import { recoverRunning } from "./recovery.ts";
 import { killTree } from "../platform/index.ts";
-import { countRows, RECENT_MS, topRows } from "./top.ts";
+import { countRows, RECENT_MS, topRows, typeCounts } from "./top.ts";
 import { TaskWaits } from "./waits.ts";
 import { chooseWorker, type Choice } from "./worker-choice.ts";
 import { workerEnvironment } from "./worker-env.ts";
@@ -1030,6 +1031,7 @@ export class TaskRunner {
       }
       repo = this.repoKeys.get(task.repo) ?? "?";
     }
+    const type = storedType(task.task_type);
     return {
       tool,
       repo,
@@ -1042,6 +1044,9 @@ export class TaskRunner {
       pickSkills(this.db, task).skills.length
         ? { skills: true }
         : {}),
+      type,
+      // 修复保底名额（t237）只挡功能任务：别的修复在排队、只差位置时才让。
+      fixWaiting: !urgent && type === "feature" && this.x.fixWaiting(id),
     };
   }
 
@@ -1113,8 +1118,12 @@ export class TaskRunner {
   /** 各主机此刻的情况（本机按闸门，远程按代理上报与服务手里在跑的）。 */
   private hostCandidates(except?: number): HostCandidate[] {
     const now = Date.now();
+    // 修复保底名额（t237）：各台在跑的修复一次数出，保底位置按各台上限算。
+    const fixes = this.x.fixInFlight(except);
+    const percent = this.host.limits.fixReservePercent ?? 0;
     return hostRows(this.db).map((row): HostCandidate => {
       const running = this.x.inFlight(except, row.id);
+      const fixRunning = fixes.get(row.id) ?? 0;
       if (row.kind === "local") {
         const gate = this.host.gate(running, false);
         return {
@@ -1128,10 +1137,13 @@ export class TaskRunner {
           // 上限已在闸门里判过（满了就是 busy）；这里只用来比谁更空。
           max: this.host.limits.maxWorkers,
           busy: gate.ok ? null : gate.reason,
+          fixRunning,
+          reserve: fixReserve(this.host.limits.maxWorkers, percent),
         };
       }
       const info = parseJson<HostInfo>(row.info);
       const load = parseJson<HostLoadReport>(row.load);
+      const max = row.max_running ?? info?.max_workers ?? null;
       return {
         id: row.id,
         kind: "remote",
@@ -1148,9 +1160,11 @@ export class TaskRunner {
         clis: info?.clis ?? {},
         repos: parseJson<string[]>(row.repos) ?? [],
         running,
-        max: row.max_running ?? info?.max_workers ?? null,
+        max,
         busy: load?.busy ?? null,
         skills: info?.skills === true,
+        fixRunning,
+        reserve: fixReserve(max, percent),
       };
     });
   }
@@ -2064,6 +2078,8 @@ export class TaskRunner {
         const queue = mergeQueueView(this.db, now);
         return queue ? { merge_queue: queue } : {};
       })(),
+      // 在途任务按类型计数（t237）：头部「功能 N · 修复 M · 紧急 K」。
+      types: typeCounts(this.db),
       ...(leaders.length ? { leaders } : {}),
       host: this.hostView(),
       // 紧急通道（t215）：进行中的紧急任务与「太多就等于没有紧急」的提示；没有时不给。

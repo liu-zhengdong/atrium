@@ -111,6 +111,7 @@ atrium task run t5 --urgent                  # 紧急：走紧急通道（抢占
 atrium task add "修弹窗" --urgent --stopgap "atrium host pause h3; atrium task stop t1,t2" --avoid-host h3  # 先止损再派修复
 atrium task run t7 --worker agy             # 还在排队的任务：改派执行者（及 --risk），排队位置不变；新执行者空着就立刻拉起
 atrium task set t6 --priority 普通           # 管方面的部分开的任务缺省「闲时」，改成普通照常排
+atrium task add "修复弹窗重复" --type 修复     # 任务类型：功能 / 修复 / 紧急（紧急等于 --urgent）；不写时推断
 atrium task run t6 --host h2                 # 派到指定的执行机器；不写在能接的主机里挑最空的
 atrium task wait t4 --timeout 600           # PR 任务等到合入或卡住；其他任务等到离开 running
 atrium task log t4                          # 执行者日志；--follow 跟到结束，--after 字节偏移续读
@@ -144,6 +145,10 @@ atrium top --once --depth 3                 # 全景展开三层（旧写法 --g
 只认 `tasks.urgent` 字段，标题以「紧急：」开头的旧任务不自动转换；`task show`、`top`、状态栏与全景任务行显示「紧急」。
 
 **闲时任务**（t136）：归属部分是管方面的部分（安全、性能、体验…，`org_nodes.aspect`）或在它下面的任务，建时缺省「闲时」，其余「普通」；`task add … --priority 闲时|普通` 覆盖，`task set tN --priority …` 随时改（换归属部分时，没被人改过的档位跟着新部分的缺省走）。派发先后是紧急 → 普通 → 闲时：闲时任务只有在没有普通任务在等同一类执行者时才派——同一工具的普通任务在排队，或别的普通任务只是在等本机空位（执行者满或太忙），都让它们先；普通任务在等的是自己那个工具（独占工具正忙、额度用尽）不挡别的工具。巡检自动派发同一轮里先派普通任务、闲时的最后派。已在跑的闲时任务不打断。这只是排序，不是配额，也不加关卡；紧急的闲时任务按紧急算。回执写「闲时：排在普通任务后面，有空闲执行者才派」；`task plan`、`top`、状态栏与全景任务行标「闲时」，排队中的写「等空闲：前面还有 N 件普通任务」（按当下的队列现算）。升级时在途的管方面任务补成闲时。
+
+**任务类型**（t237）：每件任务是「功能」「修复」或「紧急」，让功能推进和修 bug 分开计数、分开排节奏；不加关卡。账本 `tasks.task_type` 只存功能 / 修复，紧急只认 `tasks.urgent`（显示时标了紧急的算紧急）。`task add … --type 功能|修复|紧急`、`task set tN --type …` 随时改；`--type 紧急` 等于 `--urgent`（leader 照样要写 `--why`）。不写时推断：选项单拍板建的算功能；体验巡检、上线验证没过（`verify_failed` 的开任务提示带 `--type 修复`）、审阅打回派生的跟进算修复；标题像修 bug 的（修复、修掉、修好、修正、bug、fix、报错、崩溃、回归、不生效、以「修」开头）算修复；再否则跟父任务，都没有算功能；审阅任务跟被审的任务同一类型。升级时没结束的任务按标题补成修复。`task add` 回执与 `task show` 写类型；`top`、状态栏头部写「功能 N · 修复 M · 紧急 K」（待办、在跑、受阻与已交付还在审阅或合入的，不算帮手子任务和总任务），任务行标「修复」；全景任务表上方同样计数、状态格标「修复」；`top --json` 的 `types` 与行的 `type`、`map --json` 任务的 `type` 给出原值。
+
+**修复保底名额**（t237）：每台主机按执行者上限的 25%（`ATRIUM_FIX_RESERVE_PERCENT`）给修复任务留位置，四舍五入后至少 1、至多 2，并至少给功能留 1 个（上限不到 2 或不限时不留）。只在有修复任务在排队、只差位置时生效（在等自己那个工具——独占工具正忙、额度用尽——的不算）：这时功能任务不占还没被修复用上的保底位置，排队原因写「hN 给修复留了 N 个位置……」；没有修复在等时这些位置照常给功能用。排队中修复与功能各出一个队首，功能被保底挡着时，排在它后面的修复照样拉起。紧急的照旧不看名额、可以抢占；判定是 `server/tasks/task-type.ts` 的纯函数（`fixReserve`、`reserveHolds`），挑主机时在 `hostFit` 里用。
 
 **捎话**（`task tell`）按工具能力分三档：Claude Code 以 `--input-format stream-json` 拉起、标准输入保持打开，补充作为新的用户消息即时写入，在工具调用边界读入，回显后记为已送达；codex 与 cursor 不能运行中追加，本轮结束后用 `codex exec resume <会话>` / `cursor-agent --resume <会话>` 带着补充续上原会话，关卡按续上后的结果判；其余工具停掉、保留工作树、把补充写进提示词重派。档案 `tell: stdin|resume|restart` 可改成工具支持的其他方式。每条捎话记一条 `tell` 事件（作者、时间、送达方式、是否送达），`task show` 与 `top` 可见；任务不在跑时留到下次拉起写进提示词。
 
@@ -728,8 +733,8 @@ atrium statusline [--json]
   Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、秘书在不在听与未处理事件；服务不在只显示未运行，不拉起
   示例：atrium statusline
 
-atrium task add 标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--size 小|中|大] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
-  建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；--size 小|中|大 定自动挑人的偏好（小优先 cursor+auto、codex 低强度、opencode deepseek 这类快且便宜的，中、大优先 claude/codex 高强度；不写按详述长度与牵涉部分粗估为中或大，拆活时写上）；旧 --job、--concern、--role 暂可用
+atrium task add 标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--size 小|中|大] [--type 功能|修复|紧急] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
+  建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；--size 小|中|大 定自动挑人的偏好（小优先 cursor+auto、codex 低强度、opencode deepseek 这类快且便宜的，中、大优先 claude/codex 高强度；不写按详述长度与牵涉部分粗估为中或大，拆活时写上）；--type 功能|修复|紧急（不写时推断：选项单来的算功能，巡检、上线验证没过、关卡交回派生的与标题像修 bug 的算修复，--urgent 算紧急；状态栏、top、全景分开计数，调度给修复保底留名额；紧急等于 --urgent）；旧 --job、--concern、--role 暂可用
   示例：atrium task add 拆分登录模块 --parent t1
 
 atrium task ls [--status S] [--parent tN] [--after tN]
@@ -748,8 +753,8 @@ atrium task tree [tN] [--all] [--after tN] [--limit N]
   缩进树：短号、状态、标题、交付物、执行者、PR；不写 tN 列未完成的顶层任务（每页 30 个）与最近 10 个已结束的，--all 按短号翻全部顶层
   示例：atrium task tree
 
-atrium task set tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通] [--size 小|中|大|'']
-  人工修正状态（todo、done、failed、blocked、cancelled）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）、大小（--size 小|中|大，只影响之后的自动挑人，给空回到粗估）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）
+atrium task set tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通] [--size 小|中|大|''] [--type 功能|修复|紧急]
+  人工修正状态（todo、done、failed、blocked、cancelled）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）、大小（--size 小|中|大，只影响之后的自动挑人，给空回到粗估）和类型（--type 功能|修复，排队中的下一轮按新类型算修复保底名额；紧急等于 --urgent）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）
   示例：atrium task set t1 --status done
 
 atrium task note tN 文字 [--as 身份] [--verdict ok|fixed|rejected]
@@ -1385,6 +1390,7 @@ atrium role edit 专员 [--name 名称] [--description 文字] [--body 文件] [
 | `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限                                            |
 | `ATRIUM_BUSY_CORES`             | Atrium 进程树占用超过几个核暂停派新活，默认核数的 3/4；`0` 不看                                         |
 | `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载                                        |
+| `ATRIUM_FIX_RESERVE_PERCENT`    | 每台主机按执行者上限的百分之几给修复任务保底留位置（至少 1、至多 2），默认 25；`0` 不留                 |
 | `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的一半（至少 1）                                                            |
 | `ATRIUM_MERGE_PRECHECKS`        | 合入队列同时提前检查几件，默认本机检查并发减一（至多 3）；0 或 off 关掉                                 |
 | `ATRIUM_CHECK_TIMEOUT_MINUTES`  | 一次本地检查最多跑几分钟，默认 30；远程主机由代理按它那台的环境设                                       |

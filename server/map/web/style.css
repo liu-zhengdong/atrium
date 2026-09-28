@@ -1297,3 +1297,9 @@ label.option-head {
     order: 5;
   }
 }
+
+/* 任务表上方的类型计数（t237）：功能 N · 修复 M · 紧急 K。 */
+.type-counts {
+  margin: 0 0 8px;
+  font-size: 13px;
+}

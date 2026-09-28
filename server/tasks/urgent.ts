@@ -236,6 +236,8 @@ export type RunningSlot = {
   host: number;
   urgent: boolean;
   idle: boolean;
+  /** 修复任务（t237，不算紧急的）；修复保底名额按它数；旧调用方不给。 */
+  fix?: boolean;
   startedAt: number;
   /** 已在停（人工停、卡死、已被抢占、换人）：不再选它，也不指望它腾出更多。 */
   stopping: boolean;

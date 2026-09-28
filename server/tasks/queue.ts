@@ -85,11 +85,17 @@ export function queueView(
   return { queued_reason: "等待执行者可用后自动拉起" };
 }
 
-export type QueueHead = QueueEntry & { urgent: boolean; idle: boolean };
+/** fix：修复任务（t237，不算紧急的）；旧调用方不给按功能。 */
+export type QueueHead = QueueEntry & {
+  urgent: boolean;
+  idle: boolean;
+  fix?: boolean;
+};
 
 /**
  * 每个工具（指定了主机的按工具与主机）的队首，按拉起先后排好：紧急 → 普通 → 闲时，同一档按入队先后（host-load.ts queueOrder）。
  * 纯函数；drain 按这个顺序过闸门，普通任务被挡住时后面不会还有紧急的，闲时的排在最后。
+ * 修复与功能各出一个队首（t237）：功能队首只被修复保底名额挡着时，排在它后面的修复照样轮得到。
  */
 export function queueHeads(entries: readonly QueueHead[]): QueueHead[] {
   const order = (a: QueueHead, b: QueueHead) =>
@@ -100,7 +106,7 @@ export function queueHeads(entries: readonly QueueHead[]): QueueHead[] {
   // 指定了主机的另排一队：那台离线或满了，不挡自动挑主机的同一工具。
   const first = new Map<string, QueueHead>();
   for (const entry of [...entries].sort(order)) {
-    const key = `${entry.tool}@${entry.host_id ?? ""}`;
+    const key = `${entry.tool}@${entry.host_id ?? ""}@${entry.fix ? "fix" : ""}`;
     if (!first.has(key)) first.set(key, entry);
   }
   return [...first.values()].sort(order);
@@ -109,12 +115,16 @@ export function queueHeads(entries: readonly QueueHead[]): QueueHead[] {
 /** 一轮最多看多少条排队（按紧急、普通、闲时与入队先后取，队首一定在里面）。 */
 const QUEUE_SCAN = 1000;
 
-type ScanRow = QueueEntry & { urgent: number; priority: string | null };
+type ScanRow = QueueEntry & {
+  urgent: number;
+  priority: string | null;
+  task_type: string | null;
+};
 
 function scan(db: DatabaseSync, tool?: string) {
   const rows = db
     .prepare(
-      `SELECT q.*,COALESCE(t.urgent,0) AS urgent,t.priority AS priority FROM task_queue q LEFT JOIN tasks t ON t.id=q.task_id${tool ? " WHERE q.tool=?" : ""}
+      `SELECT q.*,COALESCE(t.urgent,0) AS urgent,t.priority AS priority,t.task_type AS task_type FROM task_queue q LEFT JOIN tasks t ON t.id=q.task_id${tool ? " WHERE q.tool=?" : ""}
         ORDER BY COALESCE(t.urgent,0) DESC,(t.priority='idle' AND COALESCE(t.urgent,0)=0),q.queued_at,q.task_id LIMIT ${QUEUE_SCAN}`,
     )
     .all(...(tool ? [tool] : [])) as ScanRow[];
@@ -126,6 +136,7 @@ function scan(db: DatabaseSync, tool?: string) {
     queued_at: row.queued_at,
     urgent: row.urgent === 1,
     idle: isIdle(row),
+    fix: row.task_type === "fix" && row.urgent !== 1,
   }));
 }
 
@@ -137,6 +148,11 @@ export function heads(db: DatabaseSync, tool?: string): QueueHead[] {
 /** 在排队的普通（含紧急）任务各用哪个工具；闲时任务派不派据此判断（priority.ts idleAhead）。 */
 export function queuedNormals(db: DatabaseSync, except?: number) {
   return scan(db).filter((row) => !row.idle && row.task_id !== except);
+}
+
+/** 在排队的修复任务（t237，不算紧急的）各用哪个工具；功能任务让不让保底位置据此判断。 */
+export function queuedFixes(db: DatabaseSync, except?: number) {
+  return scan(db).filter((row) => row.fix && row.task_id !== except);
 }
 
 /** 独占工具的普通任务多半在等那个工具空出来，看板上不算挡着别的工具（运行时按真实忙闲判断）。 */

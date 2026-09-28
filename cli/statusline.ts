@@ -13,6 +13,7 @@ import { planCounts } from "../server/tasks/plan-count.ts";
 import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
 import { titleTag } from "../server/tasks/priority.ts";
+import { typeCountsText, typeTag } from "../server/tasks/task-type.ts";
 import { recordNext } from "./contract.ts";
 import {
   secretaryText,
@@ -78,9 +79,15 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
     row.urgent ? "紧急" : row.idle ? "闲时" : "",
     row.title,
   );
-  const tag = shown
-    ? `${paint(shown === "紧急" ? `${BOLD}${RED}` : DIM, shown)} `
-    : "";
+  // 修复的另标「修复」（t237）；功能不标，头部分开计数。
+  const fix = titleTag(
+    typeTag({ urgent: !!row.urgent, task_type: row.type }),
+    row.title,
+  );
+  const tag =
+    (shown
+      ? `${paint(shown === "紧急" ? `${BOLD}${RED}` : DIM, shown)} `
+      : "") + (fix ? `${paint(YELLOW, fix)} ` : "");
   const title = `${tag}「${oneLine(row.title, TITLE_MAX)}」`;
   if (holder.kind === "user")
     return `${paint(color, mark)} ${row.ref} ${title} ${paint(color, `等你：${holder.text}`)}`;
@@ -244,6 +251,8 @@ export function renderStatusline(input: StatuslineInput): string {
   const head = [
     // 暂停派新活时写清是哪条线（t113）：Atrium 自己占的核、整机负载保护线，还是执行者满了。
     `Atrium ${parts.join(" · ")}${hostBrief(snapshot.host, snapshot.counts.queued)}`,
+    // 在途任务按类型分开计数（t237）：功能 N · 修复 M · 紧急 K。
+    ...(typeCountsText(snapshot.types) ? [typeCountsText(snapshot.types)] : []),
     ...(count("user") ? [paint(`${BOLD}${RED}`, `等你 ${count("user")}`)] : []),
     ...(secretaryPart
       ? [secretaryPart]

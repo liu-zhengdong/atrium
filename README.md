@@ -127,6 +127,8 @@ cat grok.md | atrium workers edit models/grok-4.6 --file -
 
 **自动上线**：合入的是服务自身仓库（`ATRIUM_UPDATE_REPO`，缺省 `liu-zhengdong/atrium`）的 PR 时，运行时每分钟拉一次标签，等发版工作流打出含该合入提交的版本；版本比运行中的新就执行 `atrium update --to <版本>` 与 `atrium restart`（在跑的执行者由新服务接管），新服务起来后把任务标为「已上线」，给负责人发 `online` 事件「tN 已上线（vX）」并附执行者在 PR 正文里写的「端到端验证」一节（派活时的通用约束要求写这一节）。同一版本只自升级一次：升级或重启失败（含 supervisor 回滚）发 `online_failed`；合入 30 分钟仍未发版发一次 `release_overdue`。自升级缺省只在用默认数据目录（`~/.atrium`）的安装版上开；开发中的 git 检出、测试与另给 `ATRIUM_DATA` 的隔离服务不动全局安装，停在已合入（`ATRIUM_SELF_UPDATE=1` 强制开、`=0` 关）。其他仓库只到已合入。
 
+**上线后验证**（t181）：标记已上线的同时，PR 里有「端到端验证」一节就在原任务下建一个验证子任务（只交摘要、不开 PR、只在本机跑），按 `ATRIUM_VERIFY_WORKERS` 的顺序派便宜执行者（缺省 `opencode+opencode-go/deepseek-v4.1-flash`，没装或拉不起来换 `cursor+auto`），在真实环境照着逐条跑，结果写进工作目录的 `verify.json`。验证任务结束后运行时把结论记进原任务事件 `verified`：每条命令、输出摘要（截断并抹掉疑似令牌、密钥）、是否符合期望、总结论（通过／没通过／无法验证），`task show` 里逐条列出；有一步不符合即没通过，有做不了的步骤即无法验证。PR 里没有这一节只记 `verify_none`，不派人；都派不出去记无法验证。验证执行者的提示词写明硬规矩（凭据不进输出、不读钥匙串与登录文件、不做真实登录、不启真实额度读取、不改仓库公开范围、不花钱、不动个人资料），进程另带 `ATRIUM_VERIFIER=1` 与 `ATRIUM_QUOTA_READERS=off`：命令行只连在跑的服务、不拉起，拒绝启停、重启、升级、`auth`、`chat` 与 `agent`。第一版没通过只记录，不回滚、不另发通知；`online` 事件照旧附验证步骤，并注明验证任务 `verifier`。
+
 **看门狗与自愈**：日志、工作区、结构化事件长时间没有进展判卡死；供应商或网络临时错误先同一执行者重试、再换人重派；思考耗尽单次输出直接换人；额度用尽的账号打标记，到点前不再派。
 
 ## 执行机器（远程执行者）
@@ -553,29 +555,30 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 
 ## 配置与数据
 
-| 环境变量                        | 用途                                                                                     |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口                                        |
-| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                                              |
-| `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers`（隔离服务无默认）          |
-| `ATRIUM_LEGACY_DIR`             | 旧状态目录，默认 `~/Atrium`（隔离服务无默认）；启动时从这里导入一次根章程预算            |
-| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`                               |
-| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                                              |
-| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                                                      |
-| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                                                           |
-| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60                                        |
-| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                                                         |
-| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                                           |
-| `ATRIUM_LEADER_WAKE`            | `1` 让隔离服务也唤醒 leader，`0` 关掉；默认只在默认数据目录唤醒                          |
-| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`                               |
-| `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限                             |
-| `ATRIUM_BUSY_CORES`             | Atrium 进程树占用超过几个核暂停派新活，默认核数的 3/4；`0` 不看                          |
-| `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载                         |
-| `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的一半（至少 1）                                             |
-| `ATRIUM_CHECK_TIMEOUT_MINUTES`  | 一次本地检查最多跑几分钟，默认 30；远程主机由代理按它那台的环境设                        |
-| `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数减 1（至少 1）                                   |
-| `ATRIUM_AGENT_DATA`             | 远程主机上 `atrium agent` 的数据目录（令牌、仓库、工作树、日志），默认 `~/.atrium-agent` |
-| `ATRIUM_TELEGRAM_API`           | 推送用的 Telegram 接口地址，默认 `https://api.telegram.org`（隔离验收时指向本地假接口）  |
+| 环境变量                        | 用途                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `ATRIUM_PORT`                   | 新启动服务的端口，默认 `4310`；已有服务沿用原端口                                                       |
+| `ATRIUM_DATA`                   | 数据目录，默认 `~/.atrium/`                                                                             |
+| `ATRIUM_WORKERS_DIR`            | 旧版执行者档案目录，首次启动导入一次，默认 `~/Atrium/workers`（隔离服务无默认）                         |
+| `ATRIUM_LEGACY_DIR`             | 旧状态目录，默认 `~/Atrium`（隔离服务无默认）；启动时从这里导入一次根章程预算                           |
+| `ATRIUM_OPENQUOTA_BIN`          | OpenQuota 可执行文件，默认 `/Applications/OpenQuota.app/…`                                              |
+| `ATRIUM_QUOTA_READERS`          | 设为 `off` 关掉自带额度读取，只用 OpenQuota                                                             |
+| `ATRIUM_EVENT_LEASE_MINUTES`    | 取走的事件多久未确认就重投，默认 15                                                                     |
+| `ATRIUM_EVENT_BATCH_SECONDS`    | 事件攒批窗口，默认 0（到即取）                                                                          |
+| `ATRIUM_QUOTA_UNKNOWN_MINUTES`  | 额度用尽但不知道何时恢复时，标记多少分钟，默认 60                                                       |
+| `ATRIUM_LEADER_BATCH_SECONDS`   | leader 唤醒前的攒批窗口，默认 30                                                                        |
+| `ATRIUM_LEADER_TIMEOUT_MINUTES` | leader 单次唤醒的上限，超时转交上一层，默认 20                                                          |
+| `ATRIUM_LEADER_WAKE`            | `1` 让隔离服务也唤醒 leader，`0` 关掉；默认只在默认数据目录唤醒                                         |
+| `ATRIUM_UPDATE_REPO`            | `atrium update` 的来源，默认 `github:liu-zhengdong/atrium`                                              |
+| `ATRIUM_VERIFY_WORKERS`         | 上线后验证的执行者组合，逗号分隔、按顺序试，默认 `opencode+opencode-go/deepseek-v4.1-flash,cursor+auto` |
+| `ATRIUM_MAX_WORKERS`            | 本机同时在跑的执行者上限，默认核数的 3/4（至少 2）；`0` 不限                                            |
+| `ATRIUM_BUSY_CORES`             | Atrium 进程树占用超过几个核暂停派新活，默认核数的 3/4；`0` 不看                                         |
+| `ATRIUM_BUSY_LOAD`              | 整机 1 分钟负载保护线，超过暂停派新活，默认 4×核数；`0` 不看负载                                        |
+| `ATRIUM_MAX_CHECKS`             | 本地检查同时跑几个，默认核数的一半（至少 1）                                                            |
+| `ATRIUM_CHECK_TIMEOUT_MINUTES`  | 一次本地检查最多跑几分钟，默认 30；远程主机由代理按它那台的环境设                                       |
+| `ATRIUM_TEST_CONCURRENCY`       | 注入执行者与本地检查的测试并发，默认核数减 1（至少 1）                                                  |
+| `ATRIUM_AGENT_DATA`             | 远程主机上 `atrium agent` 的数据目录（令牌、仓库、工作树、日志），默认 `~/.atrium-agent`                |
+| `ATRIUM_TELEGRAM_API`           | 推送用的 Telegram 接口地址，默认 `https://api.telegram.org`（隔离验收时指向本地假接口）                 |
 
 Atrium 的状态都在数据目录的数据库里（任务详述、组织树与章程预算等），换机器带走数据目录即可；旧状态的导入每类只做一次，记在 `state_imports` 表，重复启动不重复导入。数据目录保存业务数据库、任务目录（worktree 之外的提示词与日志）、用户令牌 `user-token` 与服务登记 `service.sqlite`（均为 `0600`）。服务与执行者只继承白名单环境变量，不继承 `*_API_KEY`、`*_TOKEN` 等凭据；执行者的模型凭据走各 CLI 自己的配置目录。令牌丢失或需要作废时运行 `atrium auth rotate`。凭据、数据库与登记文件不要提交或分享。
 

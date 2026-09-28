@@ -26,7 +26,8 @@ const RESTART_GRACE_MS = 10 * 60_000;
 
 /**
  * 自动上线（#325 第 3 步）：已合入、属于服务自身仓库的任务等发版；版本比运行中的新就
- * update + restart，新服务起来后再判一次，标记「已上线」并把执行者写的端到端验证附进通知。
+ * update + restart，新服务起来后再判一次，标记「已上线」并把执行者写的端到端验证附进通知；
+ * 同一事务里建上线验证任务（t181，verify-runtime.ts），提交后派人照着跑。
  * 进度全在账本（release_version、online_attempt、online_wait），重启后照常续上。
  */
 export class OnlineWatch {
@@ -57,6 +58,18 @@ export class OnlineWatch {
         detail: Record<string, unknown>,
       ) => void;
       changed: (id: number) => void;
+      /**
+       * 上线后的端到端验证（t181）：open 在「已上线」同一事务里建验证任务（没有验证步骤记一笔、返回 null），
+       * dispatch 在提交后派人。
+       */
+      verify?: {
+        open: (
+          id: number,
+          steps: string | null,
+          version: string,
+        ) => string | null;
+        dispatch: (refs: string[]) => void;
+      };
       now?: () => number;
     },
   ) {}
@@ -112,10 +125,14 @@ export class OnlineWatch {
           urgentBusy: (this.options.urgentBusy ?? this.options.busy)(),
         },
       );
-      const published: { id: number; detail: Record<string, unknown> }[] = [];
+      const published: {
+        id: number;
+        detail: Awaited<ReturnType<OnlineWatch["prepareOnline"]>>;
+      }[] = [];
       for (const id of plan.online)
         published.push({ id, detail: await this.prepareOnline(id, current) });
       // 状态和通知一同提交；同一版本连续入队，秘书的攒批唤醒只处理一批。
+      const verifiers: string[] = [];
       atomically(this.db, () => {
         for (const item of published) {
           this.db
@@ -126,22 +143,25 @@ export class OnlineWatch {
           noteTask(this.db, item.id, "online", {
             version: current,
             release: item.detail.release,
-            verification: item.detail.hasVerification,
+            verification: item.detail.steps !== null,
             // 总任务整体上线时汇总各子任务的端到端验证（t190）。
-            ...(item.detail.hasVerification
-              ? {
-                  verification_text: String(item.detail.verification).slice(
-                    0,
-                    1000,
-                  ),
-                }
+            ...(item.detail.steps !== null
+              ? { verification_text: item.detail.steps.slice(0, 1000) }
               : {}),
           });
-          const { hasVerification: _, ...detail } = item.detail;
-          this.options.publish(item.id, "online", detail);
+          const verifier =
+            this.options.verify?.open(item.id, item.detail.steps, current) ??
+            null;
+          if (verifier) verifiers.push(verifier);
+          const { steps: _, ...detail } = item.detail;
+          this.options.publish(item.id, "online", {
+            ...detail,
+            ...(verifier ? { verifier } : {}),
+          });
         }
       });
       for (const item of published) this.options.changed(item.id);
+      if (verifiers.length) this.options.verify?.dispatch(verifiers);
       for (const id of plan.failed) {
         const task = getTask(this.db, id);
         this.fail(
@@ -318,7 +338,8 @@ export class OnlineWatch {
       message,
       version: current,
       release: task.release_version,
-      hasVerification: verification !== null,
+      /** 原样的验证步骤；没写为 null（不随通知发出）。 */
+      steps: verification,
       verification:
         verification ?? "执行者没有写「端到端验证」一节；请按任务目标自行验证",
     };

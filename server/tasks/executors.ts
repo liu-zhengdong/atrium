@@ -23,6 +23,8 @@ import { diffSize, logTail, settle } from "./settle.ts";
 import { killTree } from "../platform/index.ts";
 import { alive, spawnWorker } from "./spawn.ts";
 import { finishPatrol, patrolRun } from "./patrol.ts";
+import { VERIFIER_FLAG } from "./verify.ts";
+import { isVerifyTask } from "./verify-runtime.ts";
 import { settleRound } from "../products/settle.ts";
 import type { TaskEvent } from "./state.ts";
 import { routeAfterThinking } from "./thinking.ts";
@@ -126,6 +128,8 @@ export type ExecutorContext = {
   };
   /** 会审（#322）：专员意见或 leader 汇总结束后推进会审（否则等下一轮巡检）。 */
   councils?: { settle: () => void };
+  /** 上线验证（t181）：验证任务结束后立即把结论记进原任务（否则等下一轮巡检）。 */
+  verify?: { settle: () => void };
   /** 本机还能不能再拉起一个执行者（#358 并发上限与负载）；缺省不限。 */
   /** 本机闸门（#358）；紧急任务传 urgent，跳过负载与执行者上限。 */
   hostGate?: (urgent: boolean) => HostGate;
@@ -378,13 +382,27 @@ export class Executors {
 
   /**
    * 本机执行者的环境：白名单环境加上 Atrium 标记（t203，子孙继承；父进程退出后被收养的也认得出，
-   * 任务早已结束还活着的巡检时清掉）。巡检任务要连用户的服务，调用方去掉标记。
+   * 任务早已结束还活着的巡检时清掉）。巡检与上线验证要连回本机服务，去掉执行者防护标记、带上服务的
+   * 数据目录与端口；巡检会重启服务，另去掉 Atrium 标记。上线验证另带 ATRIUM_VERIFIER（命令行拒绝启停、
+   * 升级服务）并关掉自带额度读取（t181）。
    */
-  private spawnEnv(id: number): NodeJS.ProcessEnv {
-    return {
+  private runEnv(id: number): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {
       ...this.ctx.launchOptions.env,
       [SPAWN_ENV]: spawnMark(spawnOwner(this.ctx.launchOptions.data), id),
     };
+    const verify = isVerifyTask(this.ctx.db, id);
+    const patrol = !verify && patrolRun(this.ctx.db, id);
+    if (verify || patrol) {
+      delete env.ATRIUM_WORKER;
+      Object.assign(env, this.ctx.launchOptions.patrolServiceEnv);
+    }
+    if (patrol) delete env[SPAWN_ENV];
+    if (verify) {
+      env[VERIFIER_FLAG] = "1";
+      env.ATRIUM_QUOTA_READERS = "off";
+    }
+    return env;
   }
 
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
@@ -426,16 +444,11 @@ export class Executors {
     const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");
     // 执行者 material get 时据此把读取记在这件任务上（t192）。
-    const env: NodeJS.ProcessEnv = {
-      ...this.spawnEnv(id),
-      ATRIUM_TASK: task.ref,
-    };
-    if (patrolRun(this.ctx.db, id)) {
-      delete env.ATRIUM_WORKER;
-      delete env[SPAWN_ENV];
-      Object.assign(env, this.ctx.launchOptions.patrolServiceEnv);
-    }
-    const { child, offset } = await spawnWorker(prepared, env, task.ref);
+    const { child, offset } = await spawnWorker(
+      prepared,
+      { ...this.runEnv(id), ATRIUM_TASK: task.ref },
+      task.ref,
+    );
     const pid = child.pid!;
     if (this.ctx.closed()) {
       killTree(pid, "SIGKILL");
@@ -532,7 +545,7 @@ export class Executors {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const { child, offset } = await spawnWorker(
       prepared,
-      this.spawnEnv(id),
+      this.runEnv(id),
       task.ref,
       !!resume,
     );
@@ -920,6 +933,10 @@ export class Executors {
       else if (isReviewTask(this.ctx.db, id)) {
         /* 由 reviews.settle 补判父任务。 */
       }
+      // 上线验证的结论记进原任务，验证任务自己的结局不单独投递。
+      else if (isVerifyTask(this.ctx.db, id)) {
+        /* 由 verify.settle 记结论。 */
+      }
       // 会审：专员意见经 leader 汇总上报；汇总完成由 councils.settle 记结论后投递。
       else if (
         isOpinionTask(this.ctx.db, id) ||
@@ -958,6 +975,7 @@ export class Executors {
       if (!isReviewTask(this.ctx.db, id))
         publishWorkerAdvice(this.ctx.db, this.ctx.inbox, id);
       if (isReviewTask(this.ctx.db, id)) this.ctx.reviews?.settle();
+      if (isVerifyTask(this.ctx.db, id)) this.ctx.verify?.settle();
       if (isOpinionTask(this.ctx.db, id) || isCouncilTask(this.ctx.db, id))
         this.ctx.councils?.settle();
     } catch (error) {

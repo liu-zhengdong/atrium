@@ -10,6 +10,7 @@ import { ensureDeliveryRecords } from "./delivery-records.ts";
 import { ensureJobRoles } from "./job-roles.ts";
 import { ensureCouncilTables } from "./councils.ts";
 import { ensurePatrolTables } from "./patrol.ts";
+import { ensureVerifyTables } from "./verify-runtime.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
 import { ensureUrgentTables } from "./urgent-ledger.ts";
 
@@ -235,6 +236,8 @@ export function ensureTaskTables(db: DatabaseSync) {
   );
   ensureDeliveryRecords(db);
   ensurePatrolTables(db);
+  // 上线后的端到端验证（t181）：验证任务与结论。
+  ensureVerifyTables(db);
   // 执行者档案（#355）：三层档案与修订历史。
   ensureWorkerProfiles(db);
   // 紧急通道（t215）：原因、避开的主机、止损动作，被抢占的任务与合入后并行的审阅。

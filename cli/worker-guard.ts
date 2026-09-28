@@ -36,6 +36,39 @@ export function workerGuard(env: NodeJS.ProcessEnv = process.env) {
 }
 
 /**
+ * 上线验证执行者的防护（t181）：运行时拉起验证执行者时带 ATRIUM_VERIFIER=1（与 server/tasks/verify.ts 同名）。
+ * 它要连本机真实服务照着验证步骤跑，所以不带 ATRIUM_WORKER；但不能拉起、停止、重启、升级服务，
+ * 不能轮换令牌、开秘书会话或起代理。机制兜底，不靠提示词。
+ */
+export const VERIFIER_FLAG = "ATRIUM_VERIFIER";
+
+const VERIFIER_REFUSED = new Set([
+  "",
+  "--no-open",
+  "stop",
+  "restart",
+  "update",
+  "auth",
+  "chat",
+  "agent",
+]);
+
+export const VERIFIER_REFUSAL =
+  "上线验证执行者不能启动、停止、重启、升级服务，也不能轮换令牌、开秘书会话或起代理；这一步记「无法验证：需要操作服务」";
+
+export const isVerifier = (env: NodeJS.ProcessEnv = process.env) =>
+  env[VERIFIER_FLAG] === "1";
+
+export function verifierCommandGuard(
+  name: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (!isVerifier(env)) return;
+  if (VERIFIER_REFUSED.has(name ?? ""))
+    throw new Problem(403, VERIFIER_REFUSAL, "verifier_scope");
+}
+
+/**
  * leader 进程的环境：Atrium 唤醒 leader 时带 ATRIUM_LEADER（aN）、ATRIUM_LEADER_TOKEN（本次唤醒的令牌）
  * 与 ATRIUM_LEADER_URL（服务地址）。命令行据此以 aN 身份直连服务，不读用户令牌、不拉起服务；
  * 服务控制类命令一律拒绝。权限由服务端按令牌判定，这里只是早一步给出人话。

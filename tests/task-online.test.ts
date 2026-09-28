@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
@@ -561,6 +561,27 @@ for (const scenario of ["online", "rolled_back"] as const)
           "kimi",
           "set -e\necho change >> done.txt\ngit add done.txt\ngit commit -qm 修复\ngit push -q -u origin HEAD\necho 完成",
         );
+        // 假验证执行者（t181）：记下环境，照格式写 verify.json（输出里夹一个令牌，看写进事件前有没有抹掉）。
+        fixture.script(
+          "opencode",
+          [
+            'env > "$PWD/../verify-env.txt"',
+            `printf '%s' '${JSON.stringify({
+              verdict: "passed",
+              summary: "照着跑通",
+              steps: [
+                {
+                  command: "atrium task show t1",
+                  expected: "[已上线]",
+                  output:
+                    "t1 [已上线] GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123",
+                  matched: true,
+                },
+              ],
+            })}' > verify.json`,
+            `echo '{"type":"text","part":{"text":"验证结论：通过"}}'`,
+          ].join("\n"),
+        );
         const origin = join(fixture.root, "origin.git");
         const remoteHead = () =>
           execFileSync(
@@ -714,6 +735,8 @@ for (const scenario of ["online", "rolled_back"] as const)
           ...online,
           version: () => (scenario === "online" ? "0.1.1" : "0.1.0"),
         },
+        // 第一个写错，换下一个。
+        verify: { workers: ["opencode+.bad", "opencode"] },
       },
     });
     t.after(() => next.app.close());
@@ -816,6 +839,55 @@ for (const scenario of ["online", "rolled_back"] as const)
         last.detail.verification,
         "atrium task show t1\n期望：[已上线]",
       );
+      // 上线后运行时派假验证执行者照着跑，结论记进原任务事件（t181）。
+      // 任务视图里事件的 detail 是 JSON 文本。
+      const detailOf = (kind: string) =>
+        JSON.parse(
+          task.events.find((event: { kind: string }) => event.kind === kind)
+            .detail,
+        ) as Record<string, unknown>;
+      const started = detailOf("verify_started") as { verifier: string };
+      assert.equal(last.detail.verifier, started.verifier);
+      const verifyUntil = Date.now() + 15_000;
+      while (
+        !task.events.some(
+          (event: { kind: string }) => event.kind === "verified",
+        )
+      ) {
+        assert.ok(Date.now() < verifyUntil, "等待验证结论超时");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        task = await get(`/api/tasks/${ref}`);
+      }
+      const verified = detailOf("verified");
+      assert.equal(verified.verifier, started.verifier);
+      assert.equal(verified.verdict, "passed");
+      assert.equal(verified.conclusion, "通过");
+      assert.equal(verified.summary, "照着跑通");
+      assert.equal(
+        (verified.steps as { output: string }[])[0]!.output,
+        "t1 [已上线] GH_TOKEN=***",
+      );
+      const verifyTask = await get(`/api/tasks/${started.verifier}`);
+      assert.equal(verifyTask.parent_ref, ref);
+      assert.equal(verifyTask.status, "done");
+      assert.match(verifyTask.worker, /^opencode/);
+      const dir = join(data, "tasks", started.verifier.slice(1));
+      const seen = readFileSync(join(dir, "verify-env.txt"), "utf8");
+      assert.match(seen, /^ATRIUM_VERIFIER=1\r?$/m);
+      assert.match(seen, /^ATRIUM_QUOTA_READERS=off\r?$/m);
+      assert.doesNotMatch(seen, /^ATRIUM_WORKER=/m);
+      const prompt = readFileSync(join(dir, "prompt.md"), "utf8");
+      assert.match(
+        prompt,
+        /## 验证步骤（原样摘自 PR）\n\natrium task show t1\n期望：\[已上线\]/,
+      );
+      assert.match(prompt, /不读钥匙串/);
+      assert.doesNotMatch(prompt, /开 PR（正文写 Refs/);
+      // 验证任务自己的结局不单独投递。
+      const inbox = (await get("/api/events?as=secretary")).events as {
+        task: string | null;
+      }[];
+      assert.ok(!inbox.some((event) => event.task === started.verifier));
     } else {
       assert.equal(task.delivery_stage, "merged");
       assert.equal(last.kind, "online_failed");

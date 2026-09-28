@@ -768,6 +768,34 @@ atrium chat [--tool opencode|codex] [--cwd 目录] [--new] [--acp] [--allow]
   示例：atrium chat
 ```
 
+### 推送到手机
+
+```text
+atrium notify
+  看推送到手机（Telegram）的状态：机器人、是否绑定、免打扰、攒批、代理、待发与最近一次失败；不显示 token
+  示例：atrium notify
+
+atrium notify token
+  从标准输入读 @BotFather 给的 bot token（如 pbpaste | atrium notify token），核对后存进 Atrium 自己的凭据文件（0600，不进钥匙串），给出绑定码；换 token 要重新绑定
+  示例：atrium notify token
+
+atrium notify bind [--timeout 秒]
+  等你给机器人发绑定码（缺省等 120 秒，最多 3600），收到就绑定这个私聊并回一条「已绑定」；没收到退出码 124，可再跑一次
+  示例：atrium notify bind
+
+atrium notify set [--quiet 23:00-08:00|off] [--batch 秒] [--proxy http://主机:端口|off] [--on|--off]
+  改推送设置：免打扰时段（本机钟点，期间攒着、结束后合成一条发）、攒批窗口（缺省 60 秒内多条合一条）、单独的 HTTP 代理（不配就走系统 HTTPS_PROXY）、开关（关掉清空待发）
+  示例：atrium notify set --quiet 23:00-08:00 --proxy http://127.0.0.1:7890
+
+atrium notify test
+  立刻发一条测试消息（不攒批、不看免打扰），看推送通不通
+  示例：atrium notify test
+
+atrium notify remove
+  删掉存的 bot token 与绑定（免打扰等设置保留），待发的清空；机器人本身到 @BotFather 删
+  示例：atrium notify remove
+```
+
 ### 执行机器
 
 ```text
@@ -983,25 +1011,45 @@ atrium leader escalate 说明 --kind shipped|cross|beyond|stuck [--task tN] [--e
 ### 备忘与决定
 
 ```text
-atrium memo show [--as secretary|aN]
-  看秘书或 leader 的备忘与全部有效的决定（新会话、换人接手先跑这一条）；缺省秘书，leader 进程里缺省自己
+atrium memo show [--as secretary|u1|aN]
+  看备忘与决定摘要（新会话、换人接手先跑这一条）：标了原则的全列，再加最近 15 条，超过字数上限的只给一行「另有 N 条」；秘书的含用户的决定，leader 的只取自己部分及上级的；缺省秘书，leader 进程里缺省自己
   示例：atrium memo show
 
 atrium memo edit [文本] [--file 文件] [--as secretary|aN]
   覆盖写备忘：在等什么、下次先看什么这类当前状态（有长度上限，超了先精简）；取舍与原因记进 decision add
   示例：atrium memo edit 在等t5合入，合入后先看线上验证 --as a1
 
-atrium decision add 决定 --why 原因 [--by u1|secretary|aN] [--date 日期] [--issue 号] [--node 节点] [--task tN] [--supersedes dN] [--as secretary|aN]
-  追加一条决定记录（谁拍板、决定、原因，可关联 issue、节点、任务）；--by 缺省是记录的主人，补记旧决定用 --date；--supersedes 同时把旧决定标为已推翻
+atrium decision add 决定 --why 原因 [--by u1|secretary|aN] [--date 日期] [--issue 号] [--node 节点]… [--task tN] [--supersedes dN] [--principle] [--as secretary|aN]
+  追加一条决定记录（谁拍板、决定、原因，可关联 issue、一个或多个节点、任务）；--by 缺省是记录的主人，--by u1 的记进用户那份；补记旧决定用 --date；--supersedes 同时把旧决定标为已推翻；--principle 标为原则（摘要里总列出）
   示例：atrium decision add 额度读取不依赖OpenQuota --why 要迁到别的设备 --by u1 --issue 352
 
-atrium decision ls [--as secretary|aN] [--all] [--before dN] [--limit 条数]
-  列决定记录，日期新的在前；缺省只列有效的，--all 连已推翻的一起列；--before 接着上一页往下
-  示例：atrium decision ls
+atrium decision ls [--as secretary|u1|aN] [--node 节点] [--all] [--before dN] [--limit 条数]
+  列决定记录，日期新的在前；缺省列 --as 那一份，--node 列挂在该节点及其上级的（谁记的都算）；缺省只列有效的，--all 连已推翻、已沉淀的一起列；--before 接着上一页往下
+  示例：atrium decision ls --node o2
+
+atrium decision search 关键词 [--node 节点] [--as secretary|u1|aN] [--all] [--before dN] [--limit 条数]
+  按关键词查决定（决定与原因里都算，空格隔开的几个词须全部命中）；缺省查所有人的有效决定，--node 只查挂在该节点及其上级的，--as 只查那一份，--all 连已推翻、已沉淀的
+  示例：atrium decision search 额度 --node o2
 
 atrium decision supersede dN --by dM [--as secretary|aN]
   把旧决定 dN 标为已推翻、指向新决定 dM（两条须在同一份记录里且都还有效）；之后 decision ls 缺省不再列 dN
   示例：atrium decision supersede d1 --by d3
+
+atrium decision unsupersede dN --why 原因 [--as secretary|u1|aN]
+  推翻标错了时撤销：dN 恢复为有效，记一笔谁撤销的、为什么、原先被哪条推翻
+  示例：atrium decision unsupersede d1 --why 标错了，d3说的是另一件事
+
+atrium decision tag dN --node 节点… [--as secretary|aN]
+  给已有决定补挂节点（--node 可给多次，已挂的不重复）；挂上后 decision ls --node 与该部分 leader 的摘要里都能看到
+  示例：atrium decision tag d3 --node o2 --node o5
+
+atrium decision mark dN --principle|--normal [--as secretary|aN]
+  标为原则（--principle，摘要里总列出）或改回普通决定（--normal）
+  示例：atrium decision mark d3 --principle
+
+atrium decision settle dN (--point kN | --new-point 节点 要点) [--why 为什么] [--by 谁定的] [--as secretary|aN]
+  已成规矩的决定沉淀成要点：--point 指向已有的要点，或 --new-point 在节点上新建一条（为什么缺省用决定的原因，谁定的缺省拍板人与日期）；决定标「已沉淀到 kN」、缺省列表与摘要不再显示，要点记来源 dN
+  示例：atrium decision settle d3 --new-point atrium 测试不依赖本机真实环境
 ```
 
 ### 资料

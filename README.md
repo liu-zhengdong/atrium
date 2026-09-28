@@ -586,10 +586,14 @@ Atrium 的状态都在数据目录的数据库里（任务详述、组织树与�
 
 ```bash
 npm ci
-npm run check          # 类型检查与全部测试
-npm test -- tests/host-load.test.ts   # 只跑给定的测试文件（同样限并发）
+npm run build                               # 类型检查
+npm test -- tests/a.test.ts tests/b.test.ts # 只跑列出的测试文件（同样限并发）
+npm test -- --changed                       # 只跑与 origin/main 相比改动文件相关的测试
+npm run check                               # 类型检查与全部测试（运行时的本地检查跑这个）
 npm run format:check
 ```
+
+执行者开发中和交付前都只跑类型检查和相关测试；全量（`npm run check`）只由运行时跑。`--changed` 按文件名（`ledger.ts` → `ledger.test.ts`、`ledger-*.test.ts`）和测试文件的直接 import 粗匹配，改了测试辅助文件（如 `tests/fake-bin.ts`）会带上所有引用它的测试；没匹配到测试的代码文件会列出来，按需补上文件名。其余 `-` 开头的参数（如 `--test-name-pattern=…`）原样交给 `node --test`。
 
 装好的包直接加载发版时编译的 `dist/`（esbuild 把 `cli/`、`server/`、`shared/` 编成 JS，发版流程把它提交到版本标签上，`main` 不含 `dist/`），不在每次启动时编译 TypeScript，服务也没有常驻的 esbuild 子进程；仓库里（有 `.git`）照旧用 tsx 跑源码。`npm run dist` 在本地编译，`npm pack` 前会自动编译；`npm run bench:cli` 编译后起隔离服务，量 `atrium --help`、`status`、`task ls` 的启动耗时（中位数超过 150 毫秒失败，`ATRIUM_BENCH_LIMIT_MS` 可放宽）。
 

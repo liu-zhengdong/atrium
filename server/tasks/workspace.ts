@@ -42,10 +42,10 @@ import { remoteLayout } from "../hosts/state.ts";
  * 派活的工作区（#262）：建 worktree（无仓库时用任务目录下的 work/）、写提示词、算出进程调用；不拉起。
  */
 
-/** 派给执行者的额外约束：全量检查只跑一次、测试并发照上限（t203），停在 PR，不碰安装版服务。 */
+/** 派给执行者的额外约束：不跑全量、只跑相关测试（t206）、测试并发照上限（t203），停在 PR，不碰安装版服务。 */
 export const RUN_RULES: readonly string[] = [
   ...DEFAULT_RULES,
-  "全量检查（如 `npm run check`）交付前跑一次即可，别反复跑；改动过程中只跑相关的测试文件。测试并发照环境变量 ATRIUM_TEST_CONCURRENCY（运行时按本机核数给的上限），不要调大、不要换成不限。",
+  "不要自己跑全量测试（如 `npm run check`），全量只由运行时跑；开发中和交付前只跑类型检查与改动相关的测试文件。测试并发照环境变量 ATRIUM_TEST_CONCURRENCY（运行时按本机核数给的上限），不要调大、不要换成不限。",
   "停在 PR：不要合入、不要改默认分支、不要发版。",
   "不要启动、停止或更新 4310 端口上的 Atrium 服务，也不要执行没有隔离 ATRIUM_PORT / ATRIUM_DATA 的 atrium 命令。",
 ];

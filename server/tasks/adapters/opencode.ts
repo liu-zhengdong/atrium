@@ -68,7 +68,9 @@ export const opencode: Adapter = {
   build(input) {
     checkCommon(opencode, input);
     if (input.endpoint && !input.model)
-      throw invalid("opencode 接自定义端点要写模型名（执行者标识 opencode+模型，或档案 model）");
+      throw invalid(
+        "opencode 接自定义端点要写模型名（执行者标识 opencode+模型，或档案 model）",
+      );
     const custom =
       input.endpoint && opencodeEndpoint(input.endpoint, input.model!);
     const model = custom ? custom.model : input.model;

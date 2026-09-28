@@ -317,7 +317,11 @@ test("改档案：整份替换或按字段改，校验不过不写，留修订",
       { set: { trust: "low\nmax_risk: high" } },
       /一行/,
     ],
-    ["harness/gemini", { set: { trust: "low" } }, /不是内置工具：写 protocol: cli/],
+    [
+      "harness/gemini",
+      { set: { trust: "low" } },
+      /不是内置工具：写 protocol: cli/,
+    ],
     ["harness/Gemini", { set: { trust: "low" } }, /工具层/],
     ["harness/../../etc", { set: { trust: "low" } }, /工具层/],
   ];

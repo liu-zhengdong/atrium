@@ -446,7 +446,9 @@ export class Executors {
       this.ctx.db,
       this.ctx.launchOptions.data,
       task,
-      key ? [{ ...key, why: `执行者 ${worker.id} 的端点密钥（endpoint_key）` }] : [],
+      key
+        ? [{ ...key, why: `执行者 ${worker.id} 的端点密钥（endpoint_key）` }]
+        : [],
     );
   }
 

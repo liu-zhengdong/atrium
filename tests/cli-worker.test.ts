@@ -1,8 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cliAdapter, expandArgs, expandEnv } from "../server/tasks/adapters/cli.ts";
+import { ADAPTERS } from "../server/tasks/adapters/index.ts";
+import {
+  cliAdapter,
+  expandArgs,
+  expandEnv,
+} from "../server/tasks/adapters/cli.ts";
 import { cliAdopted, cliEnding } from "../server/tasks/adapters/cli-outcome.ts";
-import { parseCliSpec, type CliSpec } from "../server/tasks/adapters/cli-spec.ts";
+import {
+  parseCliSpec,
+  type CliSpec,
+} from "../server/tasks/adapters/cli-spec.ts";
 import { parseProfileSource } from "../server/tasks/profiles.ts";
 
 /**
@@ -26,7 +34,9 @@ const input = {
 };
 
 test("档案写法：最小一份与各键的缺省", () => {
-  const spec = specOf('protocol: cli\ncommand: mytool\nargs: [run, "{prompt}"]');
+  const spec = specOf(
+    'protocol: cli\ncommand: mytool\nargs: [run, "{prompt}"]',
+  );
   assert.deepEqual(spec, {
     command: "mytool",
     args: ["run", "{prompt}"],
@@ -105,7 +115,7 @@ test("档案写法：每种毛病都说清楚、不登记", () => {
     ["protocol: cli\ncommand: 'my tool'", /不带路径、空白/],
     ["protocol: cli\ncommand: -x", /不带路径/],
     ["protocol: cli\ncommand: t\nargs: [{prompt}]", /占位要加引号/],
-    ["protocol: cli\ncommand: t\nargs: [\"{foo}\"]", /\{foo\} 不是占位/],
+    ['protocol: cli\ncommand: t\nargs: ["{foo}"]', /\{foo\} 不是占位/],
     [
       'protocol: cli\ncommand: t\nargs: ["--m={model_args}"]',
       /\{model_args\} 只能在 args 里单独占一项/,
@@ -118,7 +128,10 @@ test("档案写法：每种毛病都说清楚、不登记", () => {
       'protocol: cli\ncommand: t\nargs: ["{model_args}"]\nmodel_args: ["{effort_args}"]',
       /只能在 args 里单独占一项/,
     ],
-    ["protocol: cli\ncommand: t\nefforts: [low]", /写了 efforts，但 args 里没用/],
+    [
+      "protocol: cli\ncommand: t\nefforts: [low]",
+      /写了 efforts，但 args 里没用/,
+    ],
     ['protocol: cli\ncommand: t\nargs: ["{effort}"]', /没写 efforts/],
     [
       'protocol: cli\ncommand: t\nargs: ["{effort}"]\nefforts: [Low]',
@@ -203,7 +216,10 @@ test("参数展开：整组在缺值时省掉，缺值的单个占位报错", ()
       "p",
     ],
   );
-  const direct = specOf('protocol: cli\ncommand: t\nargs: [-m, "{model}"]', "t");
+  const direct = specOf(
+    'protocol: cli\ncommand: t\nargs: [-m, "{model}"]',
+    "t",
+  );
   assert.throws(
     () => expandArgs("t", direct, {}),
     /t 的档案 args 用了 \{model\}，但这次没有模型.*model_args/,
@@ -276,7 +292,10 @@ test("适配器：提示词走参数、文件或标准输入；强度与端点�
     cwd: input.cwd,
     stdin: input.promptFile,
   });
-  assert.throws(() => stdin.build({ ...input, effort: "low" }), /不支持指定思考强度/);
+  assert.throws(
+    () => stdin.build({ ...input, effort: "low" }),
+    /不支持指定思考强度/,
+  );
   assert.throws(
     () =>
       stdin.build({
@@ -325,4 +344,44 @@ test("结局：出错标记、结束标记、接管后按日志判", () => {
     end: "unknown",
   });
   assert.deepEqual(cliAdopted(rules, undefined), { end: "unknown" });
+});
+
+test("等价档案（验收样本）：kimi、grok 用通用命令行写出来，调用与手写适配器一致", () => {
+  const samples = {
+    kimi: [
+      "protocol: cli",
+      "command: kimi",
+      'args: [-p, "{prompt}", "{model_args}"]',
+      'model_args: [-m, "{model}"]',
+    ],
+    grok: [
+      "protocol: cli",
+      "command: grok",
+      'args: [-p, "{prompt}", "{model_args}", "{effort_args}", --always-approve, --cwd, "{cwd}"]',
+      'model_args: [-m, "{model}"]',
+      'effort_args: [--reasoning-effort, "{effort}"]',
+      "efforts: [low, medium, high]",
+    ],
+  };
+  for (const [tool, lines] of Object.entries(samples)) {
+    const generic = cliAdapter(
+      `${tool}-cli`,
+      specOf(lines.join("\n"), `${tool}-cli`),
+    );
+    const builtin = ADAPTERS[tool]!;
+    for (const extra of [
+      {},
+      { model: "m-1" },
+      ...(builtin.efforts ? [{ model: "m-1", effort: "high" }] : []),
+    ]) {
+      const call = { ...input, ...extra };
+      const a = builtin.build(call);
+      const b = generic.build(call);
+      assert.deepEqual(
+        [b.command, b.args, b.stdin],
+        [a.command, a.args, a.stdin],
+        `${tool} ${JSON.stringify(extra)}`,
+      );
+    }
+  }
 });

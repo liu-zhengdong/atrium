@@ -32,6 +32,11 @@ function summary(row: StoredProfile) {
     max_risk: parsed.rules.max_risk ?? null,
     model: parsed.rules.model ?? null,
     checks: parsed.rules.checks ?? null,
+    // 通用执行者（t271）与自定义端点：地址不是密钥，照常显示。
+    protocol:
+      typeof parsed.rules.protocol === "string" ? parsed.rules.protocol : null,
+    endpoint:
+      typeof parsed.rules.endpoint === "string" ? parsed.rules.endpoint : null,
     updated_by: row.updated_by,
     updated_at: row.updated_at,
     warnings: parsed.warnings,

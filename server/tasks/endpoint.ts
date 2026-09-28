@@ -27,7 +27,8 @@ export function endpointRuleProblem(
   value: FrontValue,
 ): string | null {
   if (key === "endpoint") {
-    if (typeof value !== "string") return "endpoint 须是地址，如 http://llm.corp/v1";
+    if (typeof value !== "string")
+      return "endpoint 须是地址，如 http://llm.corp/v1";
     let url: URL;
     try {
       url = new URL(value);
@@ -97,8 +98,15 @@ export function launchEndpoint(
   };
 }
 
-/** 这个执行者这次要注入的端点密钥：凭据名与放进哪个环境变量；档案没写端点或不要密钥为 undefined。 */
+/**
+ * 这个执行者这次要注入的端点密钥：凭据名与放进哪个环境变量；没写 endpoint_key 为 undefined。
+ * 只写了 endpoint_key 没写 endpoint 的（地址配在工具自己的配置里，如 Pi 的 models.json）照样按名注入同名变量。
+ */
 export function endpointKey(worker: ResolvedWorker) {
-  const endpoint = endpointOf(worker.profile.rules);
-  return endpoint && launchEndpoint(ADAPTERS[worker.tool]!, endpoint).key;
+  const rules = worker.profile.rules;
+  const endpoint = endpointOf(rules);
+  if (endpoint) return launchEndpoint(ADAPTERS[worker.tool]!, endpoint).key;
+  return typeof rules.endpoint_key === "string"
+    ? { name: rules.endpoint_key, as: rules.endpoint_key }
+    : undefined;
 }

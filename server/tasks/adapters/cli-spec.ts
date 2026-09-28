@@ -74,10 +74,10 @@ function strings(
 ): string[] | undefined {
   const items = list(value);
   if (!items) return undefined;
-  if (items.some((item) => typeof item !== "string" && typeof item !== "number"))
-    problems.push(
-      `${key} 须是文字数组，占位要加引号，如 [-m, "{model}"]`,
-    );
+  if (
+    items.some((item) => typeof item !== "string" && typeof item !== "number")
+  )
+    problems.push(`${key} 须是文字数组，占位要加引号，如 [-m, "{model}"]`);
   return items
     .filter((item) => typeof item === "string" || typeof item === "number")
     .map(String);

@@ -426,9 +426,7 @@ export function taskSecretValues(
   extra: readonly { name: string; as: string; why: string }[] = [],
 ) {
   const declared = taskSecretNames(db, task.id);
-  const names = [
-    ...new Set([...declared, ...extra.map((e) => e.name)]),
-  ];
+  const names = [...new Set([...declared, ...extra.map((e) => e.name)])];
   if (!names.length) return null;
   const { chain, found, missing } = findSecrets(
     db,

@@ -4,6 +4,8 @@
 
 - 判定与 IO 分开：状态转移（`state.ts`）、就绪（`schedule.ts`）、关卡（`gates.ts`、`delivery-gates.ts`）、看门狗（`watchdog.ts`）、临时错误与思考耗尽（`transient.ts`、`thinking.ts`）、额度信号（`quota-signal.ts`）都是纯函数，穷举测试；落库、拉进程、查 git/gh 放在各自的 `*-runtime.ts`、`facts.ts`、`spawn.ts`、`runner.ts`。
 - 新执行者工具：在 `adapters/` 加一份 `Adapter`（数据 + 把提示词、工作目录、模型、强度变成进程调用的纯函数 `build`），登记到 `adapters/index.ts` 与 `TOOLS`；工具不支持的参数报错，不静默丢弃。
+- 通用命令行执行者（t271）：`harness/<名字>` 写 `protocol: cli` 的不用写代码。档案写法解析在 `adapters/cli-spec.ts`（纯函数，毛病用档案键名说清楚），按模板拉起在 `adapters/cli.ts`，结局（`error_match`、`done_match`）在 `adapters/cli-outcome.ts`；登记表是 `adapters/index.ts` 的 `ADAPTERS`（内置不可盖），服务启动整批登记在 `custom-tools.ts`，改档案（`worker-profile-edit.ts`）与 `resolveWorker` 按名重登或撤下。`Tool` 因此是字符串：要列全部工具用 `toolNames()`，只认内置的用 `TOOLS` / `isBuiltinTool`。远程主机只上报内置工具，通用执行者只在本机跑。契约测试 `tests/worker-contract.ts`。
+- 自定义模型端点（t271）：规则校验、取端点、密钥注入成哪个变量在 `endpoint.ts`（纯函数）；工具怎么接写在各自适配器（`endpoints` 声明能接的接口种类，`build` 按 `LaunchInput.endpoint` 传入），改档案时的工具检查在 `profile-tool-check.ts`；密钥与任务凭据同一条路注入（`taskSecretValues` 的 `extra`），不进 `Launch.env`（它会写进日志抬头）。
 - 新关卡：在 `gates.ts` 加判定分支，只吃 `facts.ts` 收集的事实；档案 `checks` 引用它的名字。关卡结论与原因写进任务事件，不采信执行者自述。
 - 执行者档案存数据库（`worker-profiles.ts`：`worker_profiles` 当前版、`worker_profile_revisions` 只增修订），`resolveWorker(标识, db)` 读库；三层叠加时以最具体的一层为准：`trust`、`max_risk`、`limits`、`checks` 写了就整项取这一层（能放宽，写空即撤销），`billing` 任一层 metered 即 metered；`checks` 里不认识的关卡名派活时忽略，解析档案时给警告。改档案走 `atrium workers edit`（`worker-profile-edit.ts` 校验），不直接写表。旧目录（`ATRIUM_WORKERS_DIR`，默认数据目录时缺省 `~/Atrium/workers`，隔离服务不读主目录）只在首次启动导入一次；测试用 `tests/profile-fixture.ts`。
 - 执行者进程：经平台层拉起与结束（`server/platform/`：Unix 独立进程组，Windows 按进程树结束）、白名单环境（`worker-env.ts`，Windows 另放行系统变量）、输出直接写日志文件；服务重启不带走执行者，由 `recovery.ts` 按 pid 接管或判失败。

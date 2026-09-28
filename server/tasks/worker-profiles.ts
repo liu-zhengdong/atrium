@@ -61,7 +61,8 @@ export function ensureWorkerProfiles(db: DatabaseSync) {
 }
 
 /** 工具名：内置工具，或通用执行者的名字（t271，harness 档案里写 protocol 才登记成执行者）。 */
-const toolName = (name: string) => isBuiltinTool(name) || TOOL_NAME_RE.test(name);
+const toolName = (name: string) =>
+  isBuiltinTool(name) || TOOL_NAME_RE.test(name);
 
 /**
  * 档案名是否合法（纯函数）：harness 是工具名，models 是模型名最后一段，combos 是 `工具+模型名`。

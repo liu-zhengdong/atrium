@@ -41,12 +41,22 @@ test("端点规则：地址、接口种类、凭据名逐条校验；写错的�
     ["http://u:p@x/v1", /不要带用户名、密码或查询参数/],
     ["http://x/v1?key=abc", /不要带用户名、密码或查询参数/],
   ] as const)
-    assert.match(endpointRuleProblem("endpoint", value)!, pattern, String(value));
+    assert.match(
+      endpointRuleProblem("endpoint", value)!,
+      pattern,
+      String(value),
+    );
   for (const api of ["openai", "responses", "anthropic"])
     assert.equal(endpointRuleProblem("endpoint_api", api), null);
-  assert.match(endpointRuleProblem("endpoint_api", "grpc")!, /只能是 openai、responses、anthropic/);
+  assert.match(
+    endpointRuleProblem("endpoint_api", "grpc")!,
+    /只能是 openai、responses、anthropic/,
+  );
   assert.equal(endpointRuleProblem("endpoint_key", "GLM_API_KEY"), null);
-  assert.match(endpointRuleProblem("endpoint_key", "glm")!, /endpoint_key：.*大写字母开头/);
+  assert.match(
+    endpointRuleProblem("endpoint_key", "glm")!,
+    /endpoint_key：.*大写字母开头/,
+  );
   assert.match(endpointRuleProblem("endpoint_key", "PATH")!, /本来就有/);
   assert.match(endpointRuleProblem("endpoint_key", "ATRIUM_KEY")!, /ATRIUM_\*/);
   const parsed = parseProfileSource(
@@ -65,7 +75,11 @@ test("取端点：没写地址不算；接口缺省 openai；密钥可不写", (
     api: "openai",
   });
   assert.deepEqual(
-    endpointOf({ endpoint: URL_, endpoint_api: "anthropic", endpoint_key: "K" }),
+    endpointOf({
+      endpoint: URL_,
+      endpoint_api: "anthropic",
+      endpoint_key: "K",
+    }),
     { base_url: URL_, api: "anthropic", key: "K" },
   );
 });
@@ -99,7 +113,11 @@ test("各工具能不能接：内置三个各接各的，其余说清楚换谁",
 test("密钥注入成哪个变量：claude 固定 ANTHROPIC_AUTH_TOKEN，其余用凭据名本身", () => {
   const endpoint = { base_url: URL_, api: "anthropic" as const, key: "GW_KEY" };
   assert.deepEqual(launchEndpoint(ADAPTERS.claude!, endpoint), {
-    launch: { base_url: URL_, api: "anthropic", keyEnv: "ANTHROPIC_AUTH_TOKEN" },
+    launch: {
+      base_url: URL_,
+      api: "anthropic",
+      keyEnv: "ANTHROPIC_AUTH_TOKEN",
+    },
     key: { name: "GW_KEY", as: "ANTHROPIC_AUTH_TOKEN" },
   });
   assert.deepEqual(launchEndpoint(ADAPTERS.opencode!, endpoint), {
@@ -199,7 +217,11 @@ test("claude：Anthropic 兼容网关走 ANTHROPIC_BASE_URL，密钥不进参数
   const built = ADAPTERS.claude!.build({
     ...input,
     model: "glm-4.6",
-    endpoint: { base_url: URL_, api: "anthropic", keyEnv: "ANTHROPIC_AUTH_TOKEN" },
+    endpoint: {
+      base_url: URL_,
+      api: "anthropic",
+      keyEnv: "ANTHROPIC_AUTH_TOKEN",
+    },
   });
   assert.deepEqual(built.env, { ANTHROPIC_BASE_URL: URL_ });
   assert.ok(built.args.includes("glm-4.6"));
@@ -222,9 +244,21 @@ test("改档案：接不了端点的工具、内置工具改协议、没写协�
       { set: { endpoint: URL_, endpoint_api: "openai" } },
       /codex 只能接 responses/,
     ],
-    ["models/glm-4.6", { set: { endpoint: "http://u:p@x/v1" } }, /不要带用户名/],
-    ["harness/opencode", { set: { protocol: "cli" } }, /内置工具.*harness\/opencode-cli/],
-    ["harness/corp-agent", { set: { trust: "low" } }, /不是内置工具：写 protocol: cli/],
+    [
+      "models/glm-4.6",
+      { set: { endpoint: "http://u:p@x/v1" } },
+      /不要带用户名/,
+    ],
+    [
+      "harness/opencode",
+      { set: { protocol: "cli" } },
+      /内置工具.*harness\/opencode-cli/,
+    ],
+    [
+      "harness/corp-agent",
+      { set: { trust: "low" } },
+      /不是内置工具：写 protocol: cli/,
+    ],
     [
       "harness/corp-agent",
       { set: { protocol: "cli", command: "/opt/agent" } },
@@ -265,6 +299,18 @@ test("改档案：接不了端点的工具、内置工具改协议、没写协�
     name: "GLM_API_KEY",
     as: "GLM_API_KEY",
   });
+  // 只写密钥不写地址（地址配在工具自己的配置里）：照样按名注入同名变量。
+  editProfile(
+    db,
+    "models/kimi-k3",
+    { set: { endpoint_key: "KIMI_KEY" } },
+    "u1",
+  );
+  assert.deepEqual(endpointKey(await resolveWorker("kimi+kimi-k3", db)), {
+    name: "KIMI_KEY",
+    as: "KIMI_KEY",
+  });
+  assert.equal(endpointKey(await resolveWorker("kimi", db)), undefined);
   const grok = await resolveWorker("grok+glm-4.6", db);
   assert.match(endpointFit(ADAPTERS.grok!, grok.profile.rules)!, /grok 不支持/);
   // 删掉协议：新名字又不是执行者了，改档案拒绝；库里被写坏的解析时撤下并说清楚。
@@ -289,7 +335,13 @@ test("改档案：接不了端点的工具、内置工具改协议、没写协�
 test("服务启动整批登记：坏的记日志跳过，其余照常；内置工具不受影响", () => {
   const db = profileDb();
   const put = (name: string, source: string) =>
-    writeProfile(db, { layer: "harness", name, source, author: "u1", reason: "建" });
+    writeProfile(db, {
+      layer: "harness",
+      name,
+      source,
+      author: "u1",
+      reason: "建",
+    });
   put("good-a", "---\nprotocol: cli\ncommand: good-a\n---\n");
   put("broken", "---\nprotocol: cli\nargs: [x]\n---\n");
   put("codex", "---\ntrust: high\n---\n");

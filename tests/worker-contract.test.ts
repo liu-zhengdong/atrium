@@ -53,7 +53,10 @@ test("契约：只靠档案接入命令行工具，派活走通、提示词走�
   ]);
   assert.equal(args[5], "--");
   // 提示词整段是最后一个参数（多行，含档案正文叮嘱）。
-  assert.match(args.slice(6).join("\n"), /契约：fake-cli[\s\S]*假命令行工具：回一句话就行/);
+  assert.match(
+    args.slice(6).join("\n"),
+    /契约：fake-cli[\s\S]*假命令行工具：回一句话就行/,
+  );
   const env = readFileSync(join(dir, "env-seen.txt"), "utf8");
   assert.match(env, /^ATRIUM_WORKER=1$/m);
   assert.match(task.result ?? "", /答复：好的/);
@@ -63,8 +66,11 @@ test("契约：只靠档案接入命令行工具，派活走通、提示词走�
 
 test("契约：命中出错标记、没见到结束标记都判失败；提示词走标准输入", async (t) => {
   for (const [body, pattern] of [
-    ['echo \'{"type":"step"}\'\necho \'{"type":"error","message":"模型超时"}\'', /出错标记.*模型超时/],
-    ["echo '{\"type\":\"step\"}'", /没见到结束标记/],
+    [
+      'echo \'{"type":"step"}\'\necho \'{"type":"error","message":"模型超时"}\'',
+      /出错标记.*模型超时/,
+    ],
+    ['echo \'{"type":"step"}\'', /没见到结束标记/],
   ] as const) {
     const { call, data, ref, run } = await runContract(t, {
       name: "fake-jsonl",
@@ -104,7 +110,9 @@ test("契约：写坏的档案经接口写不进去，派活认不得这个名�
     method: "PUT",
     url: "/api/workers/profiles/harness/fake-bad",
     headers: { host: "127.0.0.1" },
-    payload: { source: '---\nprotocol: cli\ncommand: fake-bad\nargs: ["{nope}"]\n---\n' },
+    payload: {
+      source: '---\nprotocol: cli\ncommand: fake-bad\nargs: ["{nope}"]\n---\n',
+    },
   });
   assert.equal(response.statusCode, 400);
   assert.match(response.body, /\{nope\} 不是占位/);

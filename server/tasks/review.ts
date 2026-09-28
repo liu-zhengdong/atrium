@@ -52,7 +52,7 @@ export const NOTES_MAX = 1500;
 
 /**
  * 从审阅者的收尾摘要读结论：取最后一个「审阅结论：通过/打回」，之前的文字作意见。
- * 没有结论返回 null，由调用方转卡住，不猜。
+ * 没有结论返回 null，不猜：退出时先请同一审阅者补答一次（conclusion.ts），补答后仍没有才由调用方转卡住。
  */
 export function parseReviewVerdict(text: string | null): ReviewVerdict | null {
   if (!text) return null;
@@ -132,7 +132,7 @@ export function reviewBrief(input: {
     "## 结论格式",
     "",
     "打回时先逐条写问题（文件:行、现象、怎么改），只写必须改的；小建议不打回。",
-    "最后一行必须单独写 `审阅结论：通过` 或 `审阅结论：打回`，不写视为没有结论。",
+    "最后一行单独写 `审阅结论：通过` 或 `审阅结论：打回`；没按格式写，运行时会请你补答一次。",
     "",
   ].join("\n");
 }

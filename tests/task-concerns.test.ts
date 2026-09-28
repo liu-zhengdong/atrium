@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -514,14 +520,17 @@ const FAKE_REVIEWER = `IFS= read -r first
 case "$first" in
   *专员审查*)
     echo "逐条看过要点 k1 与底线。"
+    if [ -f "$HOME/sloppy" ]; then rm -f "$HOME/sloppy"; echo "看起来没问题"; exit 0; fi
     if [ -f "$HOME/veto" ]; then echo "结论：否决：server/log.ts 把令牌写进日志"; else echo "结论：通过"; fi ;;
   *) echo "普通任务完成" ;;
 esac`;
 
-test("隔离服务：请了安全专员的任务交付后派审查任务，通过即完成、否决即卡住并写原因", async (t) => {
+test("隔离服务：请了安全专员的任务交付后派审查任务，通过即完成；否决交 leader 判断、可放行；没写结论先补答", async (t) => {
   let veto = "";
+  let sloppy = "";
   const { fx, data, call } = await startApp(t, (fx) => {
     veto = join(fx.env.HOME, "veto");
+    sloppy = join(fx.env.HOME, "sloppy");
     writeFakeBin(
       join(fx.root, "bin", "claude"),
       `#!/bin/sh\n${FAKE_REVIEWER}\n`,
@@ -625,4 +634,53 @@ test("隔离服务：请了安全专员的任务交付后派审查任务，通�
     ],
   );
   assert.match(events[1]!.detail, /"vetoed":true/);
+  // 否决交负责的 leader 判断：下一步给出打回与放行两条路
+  assert.match(events[1]!.detail, /交你判断[^"]*atrium task merge t3/);
+
+  // leader 不认同否决：task merge 放行，照专员通过后的路走审阅或合入
+  const merged = await call("POST", "/api/tasks/t3/merge?as=a1");
+  assert.equal(merged.status, 200, JSON.stringify(merged.body));
+  const overruled = (await call("GET", "/api/tasks/t3")).body;
+  const overruledKinds = overruled.events.map((e: { kind: string }) => e.kind);
+  assert.ok(
+    overruledKinds.includes("concern_overruled"),
+    overruledKinds.join(),
+  );
+  assert.ok(overruledKinds.includes("accept"), overruledKinds.join());
+  // 与专员通过后同一条路：这里的假仓库没有 PR，直接完成
+  assert.equal(overruled.status, "done");
+  // 不在专员关卡上受阻的（比如已放行的）不能再借 task merge 放行
+  const again = await call("POST", "/api/tasks/t3/merge?as=a1");
+  assert.equal(again.status, 409, JSON.stringify(again.body));
+
+  // 专员最后一行没按格式写结论：同一审查任务补答一次，不当没结论卡住
+  rmSync(veto);
+  writeFileSync(sloppy, "1");
+  await call("POST", "/api/tasks", {
+    title: "三改登录日志",
+    repo: fx.repo,
+    ask: "安全",
+  });
+  await call("POST", "/api/tasks/t5/run", { worker: "opencode" });
+  const redone = await call("GET", "/api/tasks/t5/wait?timeout=30");
+  assert.equal(redone.body.task.status, "done", JSON.stringify(redone.body));
+  const review = (await call("GET", "/api/tasks/t6")).body;
+  const reviewKinds = review.events.map((e: { kind: string }) => e.kind);
+  assert.ok(reviewKinds.includes("conclusion_asked"), reviewKinds.join());
+  assert.equal(
+    reviewKinds.filter((kind: string) => kind === "exit_ok").length,
+    1,
+    "补答后只收尾一次",
+  );
+  const asked = review.events
+    .filter((e: { kind: string }) => e.kind === "tell")
+    .map((e: { detail: string }) => JSON.parse(e.detail));
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].by, "运行时");
+  assert.equal(asked[0].state, "delivered");
+  assert.match(asked[0].text, /`结论：通过` 或 `结论：否决：/);
+  assert.equal(
+    (await call("GET", "/api/tasks/t5")).body.concerns[0].verdict,
+    "pass",
+  );
 });

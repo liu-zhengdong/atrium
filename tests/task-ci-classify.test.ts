@@ -24,7 +24,7 @@ const sample = JSON.parse(
   annotations: Annotation[];
 };
 
-test("真实 Actions 样本：零步骤与计费注解归入 CI 未运行", async () => {
+test("真实 Actions 样本：零步骤与计费注解归入 CI 未运行，不挡交付", async () => {
   const calls: string[] = [];
   const run: Exec = async (command, args) => {
     assert.equal(command, "gh");
@@ -69,21 +69,16 @@ test("真实 Actions 样本：零步骤与计费注解归入 CI 未运行", asyn
     pushed: true,
     claims: [],
   };
+  // 远端 CI 不挡合入：没有 ci 关卡，档案里留着的 ci 忽略，CI 跑不了也不判不过。
   const verdict = evaluateGates(["ci"], {}, facts);
-  assert.equal(verdict.passed, false);
-  assert.equal(verdict.awaitingCi, false);
+  assert.deepEqual(verdict, { results: [], passed: true, failed: [] });
   const decision = decideExit({
     exit: { code: 0, signal: null },
     retried: false,
     retryAllowed: true,
     verdict,
   });
-  assert.equal(decision.event, "block");
-  assert.equal(decision.publish, "ci_unavailable");
-  assert.match(
-    decision.reason!,
-    /^CI 未运行：The job was not started.*需人工处理或本地验证$/,
-  );
+  assert.equal(decision.publish, "done");
 });
 
 test("CI 判定：执行失败优先；仅零步骤或基础设施注解才算未运行", () => {

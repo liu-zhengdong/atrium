@@ -226,21 +226,8 @@ export async function confirmWorkerAdvice(db: DatabaseSync, body: unknown) {
       b.action === "relax"
         ? Math.min(TRUSTS.length - 1, index + 1)
         : Math.max(0, index - 1);
+    // 组合档案是最具体的一层，写了就以它为准，上层更严也能放宽。
     value = TRUSTS[next]!;
-    if (
-      b.action === "relax" &&
-      profile.profile.layers.some(
-        (layer) =>
-          layer.layer !== "combos" &&
-          layer.rules.trust !== undefined &&
-          TRUSTS.indexOf(layer.rules.trust) < next,
-      )
-    )
-      throw new Problem(
-        409,
-        "上层档案的 trust 更严，组合档案无法放宽；请先审查上层档案",
-        "conflict",
-      );
   }
   atomically(db, () => {
     writeProfile(db, {

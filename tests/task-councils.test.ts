@@ -132,7 +132,7 @@ const member = (
   reason = "",
 ): MemberOpinion => ({ ref: "o4", name, task: "t2", stance, reason });
 
-test("会审结局：leader 能定的定；没写结论、都没出意见、底线否决没上交的，运行时补上交", () => {
+test("会审结局：leader 能定的定；专员否决交 leader 判断不强制上交；补答后仍没结论、都没出意见的补上交", () => {
   const summary = (conclusion: string | null, escalate: string[] = []) => ({
     agreed: [],
     conflicts: [],
@@ -157,15 +157,14 @@ test("会审结局：leader 能定的定；没写结论、都没出意见、底�
     councilOutcome(summary("照做"), [member("安全", "none")]).escalate.join(),
     /都没出意见/,
   );
-  const vetoed = councilOutcome(summary("照做"), [
-    member("安全", "veto", "凭据进公开历史"),
-  ]);
-  assert.equal(vetoed.kind, "escalated");
-  assert.match(
-    vetoed.escalate[0]!,
-    /安全（o4 · t2）以底线否决：凭据进公开历史；专员否决不能由 leader 自行推翻/,
+  // 专员否决由 leader 判断：leader 定了就是定了，不另行上交
+  assert.deepEqual(
+    councilOutcome(summary("先清凭据再公开"), [
+      member("安全", "veto", "凭据进公开历史"),
+    ]),
+    { kind: "decided", conclusion: "先清凭据再公开", escalate: [] },
   );
-  // leader 已经把否决上交了，不再重复补
+  // leader 谈不拢、自己上交的照交
   assert.deepEqual(
     councilOutcome(summary("先不公开", ["安全否决：是否仍要公开"]), [
       member("安全", "veto", "凭据"),
@@ -361,7 +360,7 @@ test("review add：校验议题与专员；建议题任务与每位专员的意�
   assert.ok(getTask(db, "t1").events.some((e) => e.kind === "council_opened"));
 });
 
-test("会审推进：意见收齐才交汇总；汇总完成记结论；底线否决上交用户，拍板后转已定", (t) => {
+test("会审推进：意见收齐才交汇总；汇总完成记结论；leader 上交的拍板后转已定", (t) => {
   const { db, data } = ledger(t);
   createCouncil(db, data, { topic: "归档旧代码", concerns: "安全,质量" });
   const finish = (ref: string, result: string) => {
@@ -389,7 +388,7 @@ test("会审推进：意见收齐才交汇总；汇总完成记结论；底线�
   assert.deepEqual(settleCouncils(db, data, (id) => id === 1).dispatch, []);
   finish(
     "t1",
-    "## 一致\n- 旧代码可以归档\n## 冲突\n- 质量没出意见\n结论：归档到 legacy 分支",
+    "## 一致\n- 旧代码可以归档\n## 冲突\n- 质量没出意见\n需用户拍板：安全说旧分支里有令牌，先清令牌还是直接归档\n结论：归档到 legacy 分支",
   );
   const done = settleCouncils(db, data);
   assert.equal(done.decided.length, 1);
@@ -398,7 +397,9 @@ test("会审推进：意见收齐才交汇总；汇总完成记结论；底线�
   assert.equal(view.stage, "escalated");
   assert.equal(view.conclusion, "归档到 legacy 分支");
   assert.deepEqual(view.agreed, ["旧代码可以归档"]);
-  assert.match(view.escalate[0]!, /安全（o4 · t2）以底线否决：旧分支里有令牌/);
+  assert.deepEqual(view.escalate, [
+    "安全说旧分支里有令牌，先清令牌还是直接归档",
+  ]);
   assert.deepEqual(
     view.opinions.map((o) => [o.name, o.stance]),
     [

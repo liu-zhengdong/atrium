@@ -39,6 +39,7 @@ import {
 import { LiveInput } from "./live-input.ts";
 import { markDelivered, markEchoed } from "./tell-ledger.ts";
 import { followUpTells } from "./tell-runtime.ts";
+import { askConclusion } from "./conclusion-runtime.ts";
 import type { ChildProcess } from "node:child_process";
 import { collectSkillEdits } from "../skills/collect.ts";
 import { beginUsage, endUsage } from "./usage.ts";
@@ -622,6 +623,8 @@ export class Executors {
         ADAPTERS[active.tool].quotaProvider,
         await this.pace(),
       );
+      // 结论类任务（审阅、专员审查、会审）读不出结论：先登记补答，由捎话续上同一执行者。
+      await askConclusion(this.ctx.db, active, exit);
       if (await followUpTells(this, this.ctx.db, active, exit)) return;
       const jobId = getTask(this.ctx.db, id).job_id;
       if (jobId) {
@@ -648,7 +651,6 @@ export class Executors {
         noteTask(this.ctx.db, id, "gates", {
           worker: active.worker.id,
           passed: verdict.passed,
-          awaiting_ci: verdict.awaitingCi,
           results: verdict.results,
           ...(facts ? { diff: diffSize(facts) } : {}),
           ...detail,
@@ -673,12 +675,11 @@ export class Executors {
           hints,
           next: `atrium task set ${taskRef(id)} --concern ${hints.map((h) => h.ref).join(",")}`,
         });
-      // 专员关卡：其余关卡通过（或只差 CI）才请专员审；审查结果由 settleReviews 补判。
+      // 专员关卡：其余关卡通过才请专员审；审查结果由 settleReviews 补判。
       const reviewing =
         !outcome.quota &&
         !!verdict &&
-        (decision.event === "exit_ok" ||
-          (decision.event === "block" && verdict.awaitingCi)) &&
+        decision.event === "exit_ok" &&
         needsReview(invitedFor(this.ctx.db, id).length);
       if (reviewing)
         decision = {
@@ -723,7 +724,6 @@ export class Executors {
         thinking: outcome.ending?.kind === "thinking",
         stop: active.stop,
         decision,
-        verdict,
         attempts:
           outcome.ending?.kind === "thinking"
             ? attemptsOf(retryContext, id)

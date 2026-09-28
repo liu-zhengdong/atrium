@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { all, atomically, one } from "./ledger-model.ts";
-import { GATES } from "./gates.ts";
+import { GATES, isGate } from "./gates.ts";
 import { ADAPTERS, checkEffort } from "./adapters/index.ts";
 import { parseWorker } from "./profiles.ts";
 import { nodeByAddress } from "../org/model.ts";
@@ -118,13 +118,15 @@ function values(
     const spec = parseWorker(worker);
     checkEffort(ADAPTERS[spec.tool], spec.effort);
   }
+  // 只校验这次写的；库里旧的（如已删掉的 ci）改别的字段时照留，派活时忽略。
   const checks =
     input.checks === undefined
       ? (previous?.checks ?? [])
       : list(input.checks, "checks");
-  for (const check of checks)
-    if (!(GATES as readonly string[]).includes(check))
-      bad(`checks: 未知验收关卡 ${check}`);
+  if (input.checks !== undefined)
+    for (const check of checks)
+      if (!isGate(check))
+        bad(`checks: 未知验收关卡 ${check}，可用 ${GATES.join("、")}`);
   const skills =
     input.skills === undefined
       ? (previous?.skills ?? [])

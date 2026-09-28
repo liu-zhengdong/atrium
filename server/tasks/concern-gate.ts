@@ -1,7 +1,8 @@
 /**
  * 任务请专员（#322 第 2 步）的判定：纯函数，不碰数据库与进程。
  * - 审查结论：专员审查任务的摘要里最后一行「结论：通过」或「结论：否决：原因」；
- * - 专员关卡：各专员的结论合成父任务的去向（全部通过才补判通过，任一否决即卡住并写原因）；
+ * - 专员关卡：各专员的结论合成父任务的去向（全部通过才补判通过；有否决或没出结论的留在受阻，
+ *   交负责这件事的 leader 判断——认同就打回重做，不认同就放行，谈不拢才上交）；
  * - 提示：按关注点章程 `invite_when` 的规则对照改动范围，提示「要不要请某专员」，只提示不自动请；
  * - 提示词：派活时附的「请了的专员与检查要点」、专员审查任务的详述。
  */
@@ -101,6 +102,10 @@ export function concernOutcome(list: readonly ConcernState[]): ConcernOutcome {
     reason: `专员审查通过：${list.map(label).join("、")}`,
   };
 }
+
+/** 专员没通过时给负责的 leader 的下一步：看理由，认同就打回，不认同就放行。 */
+export const concernNext = (ref: string, pr: boolean) =>
+  `专员没通过，交你判断：atrium task show ${ref} 看理由；认同就 atrium task tell ${ref} 要改什么 再 atrium task run ${ref}；不认同就写明理由后放行 atrium task ${pr ? "merge" : "done"} ${ref}`;
 
 /** 父任务在关卡通过后要不要等专员：请了专员才等。 */
 export const needsReview = (invited: number) => invited > 0;
@@ -204,7 +209,7 @@ function checklistLines(c: Checklist): string[] {
 export function concernSection(list: readonly Checklist[]): string | undefined {
   if (!list.length) return undefined;
   const text = [
-    "这个任务请了下列专员。开工前按他们的要点自查；交付后运行时会请他们逐条审一遍，越过底线会被否决、任务转卡住。",
+    "这个任务请了下列专员。开工前按他们的要点自查；交付后运行时会请他们逐条审一遍，否决的交负责的 leader 判断要不要打回。",
     "",
     ...list.flatMap((c) => [...checklistLines(c), ""]),
   ]

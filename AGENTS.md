@@ -45,7 +45,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 ## 验证与协作
 
 - `npm run check` 执行类型检查与全部测试；`npm run format:check` 检查格式。远端 CI 在 macOS、Linux、Windows 三平台各跑一遍。本机负载高时测试超时先串行重跑再判断。
-- 执行者交付停在 PR；运行时关卡按执行者档案的 `checks` 判定（`finished`、`pr_exists`、`ci`、`file_growth`、`claims_verified`），结论写进任务事件。远端 CI 结果记入账本供参考，不挡合入；通过关卡的 PR 在运行时合入队列串行 rebase、重跑本地检查并按检查过的提交合入，冲突或检查失败交回原执行者，超过两次转卡住；高风险（`--risk high`）或执行者档案 trust 低于 medium 的，入队前另派不同模型、trust 至少 medium 的一次性审阅者按清单给出通过或打回，打回同样计入交回次数。Atrium 自身仓库合入后等发版，运行时对自身 update + restart，通知「tN 已上线（vX）」并附 PR 里的「端到端验证」一节。
+- 执行者交付停在 PR；运行时关卡按执行者档案的 `checks` 判定（`finished`、`pr_exists`、`local_check`、`file_growth`、`claims_verified`），结论写进任务事件。远端 CI 结果记入账本供参考，不挡合入；通过关卡的 PR 在运行时合入队列串行 rebase、重跑本地检查并按检查过的提交合入，冲突或检查失败交回原执行者，超过两次转卡住；高风险（`--risk high`）或执行者档案 trust 低于 medium 的，入队前另派不同模型、trust 至少 medium 的一次性审阅者按清单给出通过或打回，打回同样计入交回次数。Atrium 自身仓库合入后等发版，运行时对自身 update + restart，通知「tN 已上线（vX）」并附 PR 里的「端到端验证」一节。
 - 主路径的整体验收由发版前的 `npm run e2e` 与上线后验证负责，不是每个任务的交付要求。校验与权限至少实测一份破坏输入。
 - 开发中的改动在自己的 worktree 验收：4310 上跑的是安装版服务，不要启动、停止或重启它，也不要把全局 `atrium` npm link 到仓库。隔离服务用 `ATRIUM_PORT=<端口> ATRIUM_DATA=<worktree>/.atrium node bin/atrium.mjs`，用完以同样变量 `stop`。合入并发版后用 `atrium update` 走安装后路径。
 - 多个执行者共用同一个仓库，`git stash` 在所有 worktree 间共用；不要用 stash，未完成的改动提交到自己的分支。

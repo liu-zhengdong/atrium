@@ -4,7 +4,6 @@
  */
 
 import type { Ci, Claim, FileStat, FunctionSpan, Pr } from "./gate-parse.ts";
-import { ciUnavailableReason } from "./ci-classify.ts";
 import type { ScreenshotFact } from "./screenshot-facts.ts";
 
 export * from "./gate-parse.ts";
@@ -12,7 +11,6 @@ export * from "./gate-parse.ts";
 export const GATES = [
   "pr_exists",
   "local_check",
-  "ci",
   "finished",
   "file_growth",
   "claims_verified",
@@ -20,6 +18,8 @@ export const GATES = [
   "screenshots",
 ] as const;
 export type Gate = (typeof GATES)[number];
+export const isGate = (name: string): name is Gate =>
+  (GATES as readonly string[]).includes(name);
 
 export type CheckedClaim = Claim & { ok: boolean; detail?: string };
 
@@ -50,10 +50,6 @@ export type Facts = {
 export type GateResult = {
   gate: string;
   ok: boolean;
-  /** 只有 ci 关卡会处于「还没出结果」。 */
-  pending?: boolean;
-  /** CI 基础设施没运行，需人工处理。 */
-  unavailable?: boolean;
   evidence: string;
 };
 
@@ -61,8 +57,6 @@ export type Verdict = {
   results: GateResult[];
   /** 全部通过。 */
   passed: boolean;
-  /** 除了 CI 还没出结果外全部通过：先受阻，由 CI 轮询补判。 */
-  awaitingCi: boolean;
   failed: GateResult[];
 };
 
@@ -87,38 +81,6 @@ function prExists(facts: Facts): GateResult {
     gate: "pr_exists",
     ok: false,
     evidence: `gh pr list${facts.ghRepo ? ` -R ${facts.ghRepo}` : ""} --head ${facts.branch} 没找到 PR${facts.prError ? `：${facts.prError}` : ""}`,
-  };
-}
-
-function ci(facts: Facts): GateResult {
-  if (!facts.pr)
-    return { gate: "ci", ok: false, evidence: "没有 PR，也就没有 CI 结果" };
-  if (facts.ci === "success")
-    return { gate: "ci", ok: true, evidence: `CI 通过（${facts.pr.url}）` };
-  if (facts.ci === "pending")
-    return {
-      gate: "ci",
-      ok: false,
-      pending: true,
-      evidence: `CI 还没出结果（${facts.pr.url}），由 CI 轮询补判`,
-    };
-  if (facts.ci === "unavailable")
-    return {
-      gate: "ci",
-      ok: false,
-      unavailable: true,
-      evidence: ciUnavailableReason(facts.ciDetail),
-    };
-  if (facts.ci === "failure")
-    return {
-      gate: "ci",
-      ok: false,
-      evidence: `CI 失败（${facts.pr.url}）${facts.ciDetail ? `：${facts.ciDetail}` : ""}`,
-    };
-  return {
-    gate: "ci",
-    ok: false,
-    evidence: `PR 上没有 CI 检查${facts.ciDetail ? `：${facts.ciDetail}` : ""}`,
   };
 }
 
@@ -241,19 +203,18 @@ function claimsVerified(facts: Facts): GateResult {
       };
 }
 
+/** 按档案 checks 逐条判；不认识的关卡名（含已删掉的 ci）跳过，由 `workers show` 提示，不判不过。 */
 export function evaluateGates(
   checks: readonly string[],
   limits: Limits,
   facts: Facts,
 ): Verdict {
-  const results = [...new Set(checks)].map((gate): GateResult => {
+  const results = [...new Set(checks)].filter(isGate).map((gate) => {
     switch (gate) {
       case "pr_exists":
         return prExists(facts);
       case "local_check":
         return localCheck();
-      case "ci":
-        return ci(facts);
       case "finished":
         return finished(facts);
       case "file_growth":
@@ -263,19 +224,8 @@ export function evaluateGates(
       case "screenshot":
       case "screenshots":
         return screenshots(facts, gate);
-      default:
-        return {
-          gate,
-          ok: false,
-          evidence: `档案里的关卡 ${gate} 不认识；可用 ${GATES.join("、")}`,
-        };
     }
   });
   const failed = results.filter((result) => !result.ok);
-  return {
-    results,
-    passed: failed.length === 0,
-    awaitingCi: failed.length > 0 && failed.every((result) => result.pending),
-    failed,
-  };
+  return { results, passed: failed.length === 0, failed };
 }

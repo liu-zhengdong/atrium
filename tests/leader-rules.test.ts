@@ -391,6 +391,8 @@ test("权限表：读接口放行，写接口只认列出的，其余一律拒�
     ["POST", "/api/tasks/:id/run", "task"],
     ["POST", "/api/tasks/:id/tell", "task-remark"],
     ["POST", "/api/tasks/:id/stop", "task"],
+    // 专员否决交 leader 判断，不认同时放行
+    ["POST", "/api/tasks/:id/merge", "task"],
     ["POST", "/api/tasks/:id/note", "task-remark"],
     ["POST", "/api/reviews", "review-create"],
     ["POST", "/api/events/ack", "events-ack"],

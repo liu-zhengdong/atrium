@@ -2,7 +2,7 @@
  * leader 的权限边界（纯函数，穷举测试）。leader 进程拿的是服务签发的 leader 令牌，
  * 服务端按「路由 → 规则 → 作用范围」判定，不靠提示词自律；没列出的写接口一律拒绝。
  *
- * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
+ * 可以：在本节点及子节点建任务、派活、重派、捎话、停、记备注、请专员与会审、判断专员否决（放行用 task merge）；任务牵涉到自己负责的部分时，记备注与捎话；改本节点及子节点的要点、阶段与全景人话字段；
  * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交；在负责的部分或它的上一层提选项单、写意见；
  * 给本节点及子节点排周期任务（巡检、调研等），停、续、立即跑一轮、删掉；
  * 用户把节点的选项单拍板权下放给 leader 后拍板（是不是拍板人由 choices/store.ts 按节点设置判）；
@@ -42,6 +42,8 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/tasks/:id/tell": "task-remark",
   "POST /api/tasks/:id/run": "task",
   "POST /api/tasks/:id/stop": "task",
+  // 专员否决交负责的 leader 判断（t209）：不认同时放行。
+  "POST /api/tasks/:id/merge": "task",
   "POST /api/reviews": "review-create",
   "POST /api/events/ack": "events-ack",
   "POST /api/org/nodes/:id/points": "point",

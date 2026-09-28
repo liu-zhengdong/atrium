@@ -280,7 +280,7 @@ const layer = (
   warnings: [],
 });
 
-test("档案合并：后层覆盖，数值规则取更严", () => {
+test("档案合并：后层覆盖，trust、max_risk、checks、limits 以最具体一层为准", () => {
   const merged = mergeLayers([
     layer(
       "harness",
@@ -316,29 +316,44 @@ test("档案合并：后层覆盖，数值规则取更严", () => {
       "组合层",
     ),
   ]);
-  assert.equal(merged.rules.trust, "medium");
-  assert.equal(merged.rules.max_risk, "low");
-  assert.deepEqual(merged.rules.checks, [
-    "pr_exists",
-    "ci",
-    "file_growth",
-    "finished",
-  ]);
-  assert.deepEqual(merged.rules.limits, {
-    max_function_lines: 60,
-    max_file_added_lines: 300,
-  });
+  // 组合层放宽了模型层的 trust、max_risk，checks、limits 整项取组合层。
+  assert.equal(merged.rules.trust, "high");
+  assert.equal(merged.rules.max_risk, "medium");
+  assert.deepEqual(merged.rules.checks, ["finished"]);
+  assert.deepEqual(merged.rules.limits, { max_file_added_lines: 500 });
   assert.equal(merged.rules.invoke, "b");
   assert.equal(merged.rules.cost, "free");
   assert.equal(merged.body, "工具层\n\n模型层\n\n组合层");
   assert.deepEqual(mergeLayers([]).rules, {});
-  // unknown 最低。
   assert.equal(
     mergeLayers([
       layer("harness", { trust: "high" }),
       layer("models", { trust: "unknown" }),
     ]).rules.trust,
     "unknown",
+  );
+  // 后层没写的沿用前层；写空的 checks、limits 表示撤销前层的加查与上限。
+  const relaxed = mergeLayers([
+    layer("harness", {
+      trust: "low",
+      max_risk: "low",
+      checks: ["pr_exists", "file_growth"],
+      limits: { max_file_added_lines: 300 },
+    }),
+    layer("models", { trust: "medium" }),
+    layer("combos", { checks: [], limits: {} }),
+  ]).rules;
+  assert.equal(relaxed.trust, "medium");
+  assert.equal(relaxed.max_risk, "low");
+  assert.deepEqual(relaxed.checks, []);
+  assert.deepEqual(relaxed.limits, {});
+  // billing 任一层是 metered 就按 metered（花钱与否是事实，不随层放宽）。
+  assert.equal(
+    mergeLayers([
+      layer("harness", { billing: "metered" }),
+      layer("combos", { billing: "subscription" }),
+    ]).rules.billing,
+    "metered",
   );
 });
 
@@ -369,12 +384,13 @@ test("resolveWorker：三层读取、默认模型与档案 model", async () => {
     assert.equal(oc.model, "opencode-go/mimo-v2.6-flash");
     assert.equal(oc.cliModel, "opencode-go/mimo-v2.6-flash");
     assert.equal(oc.id, "opencode+opencode-go/mimo-v2.6-flash");
-    assert.deepEqual(oc.profile.rules.checks, [
-      "pr_exists",
-      "ci",
-      "finished",
-      "screenshots",
-    ]);
+    // checks 取最具体的组合层；工具层的 ci 不再是关卡，解析时提示。
+    assert.deepEqual(oc.profile.rules.checks, ["finished", "screenshots"]);
+    assert.equal(oc.profile.warnings.length, 1);
+    assert.match(
+      oc.profile.warnings[0]!,
+      /harness\/opencode：checks 里的 ci 不是关卡，派活时忽略/,
+    );
     assert.equal(oc.profile.rules.max_risk, "medium");
     assert.equal(oc.profile.body, "工具的坑\n\n记得提交");
 

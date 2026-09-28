@@ -75,7 +75,7 @@ test("关卡解析：numstat、CI 汇总、新增函数长度、摘要里的声�
   );
 });
 
-test("关卡判定：没 PR 写明原因、只差 CI 标等待、上帝文件与虚报打回", () => {
+test("关卡判定：没 PR 写明原因、不认识的关卡（含 ci）忽略、上帝文件与虚报打回", () => {
   const noPr = evaluateGates(
     ["pr_exists", "ci"],
     {},
@@ -85,35 +85,33 @@ test("关卡判定：没 PR 写明原因、只差 CI 标等待、上帝文件与
     },
   );
   assert.equal(noPr.passed, false);
-  assert.equal(noPr.awaitingCi, false);
+  assert.deepEqual(
+    noPr.results.map((r) => r.gate),
+    ["pr_exists"],
+  );
   assert.match(
     noPr.failed[0]!.evidence,
     /gh pr list --head task-t1-x 没找到 PR.*GitHub host/,
   );
 
+  // 远端 CI 不挡合入：CI 还在跑或失败都不影响关卡，写错的关卡名也不判不过。
   const pr = { number: 7, url: "https://x/pull/7", state: "OPEN" };
-  const waiting = evaluateGates(
-    ["pr_exists", "ci", "finished"],
-    {},
-    {
-      ...baseFacts,
-      pr,
-      ci: "pending",
-    },
-  );
-  assert.equal(waiting.passed, false);
-  assert.equal(waiting.awaitingCi, true);
-
-  const done = evaluateGates(
-    ["pr_exists", "ci", "finished"],
-    {},
-    {
-      ...baseFacts,
-      pr,
-      ci: "success",
-    },
-  );
-  assert.equal(done.passed, true);
+  for (const ci of ["pending", "failure", "unavailable"] as const) {
+    const done = evaluateGates(
+      ["pr_exists", "ci", "finished", "no_such_gate"],
+      {},
+      {
+        ...baseFacts,
+        pr,
+        ci,
+      },
+    );
+    assert.equal(done.passed, true, ci);
+    assert.deepEqual(
+      done.results.map((r) => r.gate),
+      ["pr_exists", "finished"],
+    );
+  }
 
   const unfinished = evaluateGates(
     ["finished"],
@@ -160,7 +158,6 @@ test("关卡判定：没 PR 写明原因、只差 CI 标等待、上帝文件与
       ],
     },
   );
-  assert.equal(lies.failed.length, 2);
+  assert.equal(lies.failed.length, 1);
   assert.match(lies.failed[0]!.evidence, /PR #99/);
-  assert.match(lies.failed[1]!.evidence, /不认识/);
 });

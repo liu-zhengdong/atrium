@@ -1,4 +1,3 @@
-import type { Verdict } from "./gates.ts";
 import type { ExitDecision, Stop } from "./outcome.ts";
 import { retryAttempts, type EventLike } from "./transient.ts";
 
@@ -15,16 +14,13 @@ export function routeAfterThinking(input: {
   thinking: boolean;
   stop?: Stop;
   decision: ExitDecision;
-  verdict?: Verdict;
   /** 这一轮派活里已因思考耗尽换过几次执行者。 */
   attempts: number;
 }): ThinkingRoute {
-  const { decision, verdict } = input;
+  const { decision } = input;
   if (!input.thinking || input.stop) return { kind: "none" };
-  // 关卡过了，或 PR 已开只等 CI：交付已在，最后一步耗尽不影响。
-  if (decision.publish === "done" || decision.publish === "ci_unavailable")
-    return { kind: "none" };
-  if (verdict?.awaitingCi) return { kind: "none" };
+  // 关卡过了：交付已在，最后一步耗尽不影响。
+  if (decision.publish === "done") return { kind: "none" };
   if (input.attempts >= 1)
     return { kind: "give_up", why: "思考耗尽后已换过一次执行者" };
   return { kind: "switch" };

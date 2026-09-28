@@ -16,7 +16,7 @@ import {
 
 export * from "./types.ts";
 
-export const BUILTIN_ADAPTERS: Readonly<Record<BuiltinTool, Adapter>> = {
+const BUILTIN_ADAPTERS: Readonly<Record<BuiltinTool, Adapter>> = {
   codex,
   opencode,
   claude,

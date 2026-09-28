@@ -361,7 +361,7 @@ const spareText = (quota: PickAccount) =>
  * 推荐理由一句话：为什么是它，再对照最多两个相关账号或不能接的专员候选。
  * overSpeed：专员第 1 选超速、改推荐了更富余的候选时，被换下的那位。
  */
-export function pickReason(
+function pickReason(
   candidates: readonly PickCandidate[],
   facts: Pick<PickFacts, "job" | "pace">,
   overSpeed?: PickCandidate,

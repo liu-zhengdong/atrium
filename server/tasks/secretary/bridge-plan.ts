@@ -14,7 +14,7 @@ export const LISTEN_TTL_SECONDS = 90;
 /** 报「在听」时写的来源。 */
 export const BRIDGE_VIA = "claude-code 会话，经注入";
 /** 送过的记录上限：超出丢最早的（被丢的再回来按新事件送一次）。 */
-export const SENT_LIMIT = 1000;
+const SENT_LIMIT = 1000;
 
 /** 送过的事件：编号 → 送出时的更新时刻与送出时刻。 */
 export type Sent = Map<number, { updated_at: number; sent_at: number }>;

@@ -53,11 +53,11 @@ export type Active = {
 export const taskDir = (data: string, id: number) =>
   join(data, "tasks", String(id));
 
-export function limitsFor(worker: ResolvedWorker): WatchLimits {
+function limitsFor(worker: ResolvedWorker): WatchLimits {
   return watchLimits(worker.profile.rules.limits);
 }
 
-export function probeFor(
+function probeFor(
   logFile: string,
   cwd: string,
   git: boolean,

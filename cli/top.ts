@@ -73,7 +73,7 @@ export type TopRow = {
  * 按最近的总任务分组（t190）：组里的行挪到组里第一行的位置、前面加一行总任务；
  * 没有总任务的照旧单行。返回画的次序，heading 为 null 的是普通行。
  */
-export function groupByTotal(
+function groupByTotal(
   rows: readonly TopRow[],
 ): { heading: TopTotal | null; rows: TopRow[] }[] {
   const out: { heading: TopTotal | null; rows: TopRow[] }[] = [];
@@ -95,7 +95,7 @@ export function groupByTotal(
 }
 
 /** 「▸ t174 离开电脑也能拍板 5/12 · 在做 t181、t183」 */
-export function totalHeading(total: TopTotal, rows: readonly TopRow[]) {
+function totalHeading(total: TopTotal, rows: readonly TopRow[]) {
   const live = rows.filter((row) => !FINISHED.has(phase(row)));
   return `▸ ${total.ref} ${total.title} ${total.progress}${live.length ? ` · 在做 ${live.map((row) => row.ref).join("、")}` : ""}`;
 }
@@ -539,7 +539,7 @@ const rowTakesStateWidth = (row: TopRow) => {
 };
 
 /** 下一步：先看在跑的，没有就看列表里第一个；一个都没有就叫建任务。 */
-export const nextOf = (rows: TopRow[]) => {
+const nextOf = (rows: TopRow[]) => {
   const live = rows.find((row) => phase(row) === "running") ?? rows[0];
   return live ? `atrium task show ${live.ref}` : "atrium task add 标题";
 };
@@ -606,7 +606,7 @@ export type Terminal = {
 };
 
 /** 真的终端才接管按键与清屏；q、Q、Ctrl-C、Ctrl-D 退出，其余按键忽略。 */
-export function liveTerminal(): Terminal {
+function liveTerminal(): Terminal {
   let release: (() => void) | undefined;
   return {
     columns: () => process.stdout.columns || 80,

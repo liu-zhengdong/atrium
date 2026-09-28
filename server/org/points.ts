@@ -20,7 +20,7 @@ import { actsForUser } from "../../shared/user.ts";
  */
 
 export const POINT_LIMITS = { text: 200, why: 300, by: 40, check: 300 };
-export const POINTS_PER_NODE = 30;
+const POINTS_PER_NODE = 30;
 
 export type PointRow = {
   id: number;
@@ -54,7 +54,7 @@ export function ensurePointTables(db: DatabaseSync) {
   CREATE INDEX IF NOT EXISTS org_points_node ON org_points(node_id,pos,id);`);
 }
 
-export const pointRef = (id: number) => `k${id}`;
+const pointRef = (id: number) => `k${id}`;
 const view = (row: PointRow): Point => ({
   ref: pointRef(row.id),
   node: ref(row.node_id),

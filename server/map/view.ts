@@ -125,7 +125,7 @@ export function firstLine(text: string, max = 80): string {
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : line;
 }
 
-export function dotOf(counts: Counts): Dot {
+function dotOf(counts: Counts): Dot {
   return counts.running ? "running" : counts.blocked ? "blocked" : "idle";
 }
 
@@ -248,7 +248,7 @@ function leadOf(x: Index, n: NodeRow): NodeLead | null {
 }
 
 /** 一次返回最多展开这么多块；组织再大也不拒绝，超出的层只给下层个数，按需再取（`atrium map oN`、网页点开）。 */
-export const TREE_NODES_MAX = 1000;
+const TREE_NODES_MAX = 1000;
 
 /**
  * 广度优先分名额：浅层先展开，名额用完的块不再往下；一块的下层多于剩余名额时只给前几块。

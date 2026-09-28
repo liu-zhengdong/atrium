@@ -42,14 +42,14 @@ import { remoteLayout } from "../../hosts/state.ts";
  */
 
 /** 派给执行者的额外约束：不跑全量、只跑相关测试（t206）、测试并发照上限（t203），停在 PR，不碰安装版服务。 */
-export const RUN_RULES: readonly string[] = [
+const RUN_RULES: readonly string[] = [
   ...DEFAULT_RULES,
   "不要自己跑全量测试（如 `npm run check`），全量只由运行时跑；开发中和交付前只跑类型检查与改动相关的测试文件。测试并发照环境变量 ATRIUM_TEST_CONCURRENCY（运行时按本机核数给的上限），不要调大、不要换成不限。",
   "停在 PR：不要合入、不要改默认分支、不要发版。",
   "不要启动、停止或更新 4310 端口上的 Atrium 服务，也不要执行没有隔离 ATRIUM_PORT / ATRIUM_DATA 的 atrium 命令。",
 ];
 
-export function deliveryRules(task: Task): readonly string[] {
+function deliveryRules(task: Task): readonly string[] {
   if (task.deliver === "pr") return RUN_RULES;
   const common = DEFAULT_RULES.filter((rule) => !rule.startsWith("做完后依次"));
   return [

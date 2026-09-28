@@ -9,8 +9,8 @@ import { Problem } from "../problem.ts";
 export const MINUTE = 60_000;
 export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
-export const EVERY_MIN = HOUR;
-export const EVERY_MAX = 366 * DAY;
+const EVERY_MIN = HOUR;
+const EVERY_MAX = 366 * DAY;
 
 /** 本机时区偏移（分钟，东正西负）；与 Date#getTimezoneOffset 符号相反。 */
 export type Offset = (ms: number) => number;
@@ -173,7 +173,7 @@ export function decide(
 }
 
 /** 上一轮算没结束的状态。 */
-export const OPEN_STATUSES = ["todo", "running", "blocked"] as const;
+const OPEN_STATUSES = ["todo", "running", "blocked"] as const;
 export const isOpen = (status: string) =>
   (OPEN_STATUSES as readonly string[]).includes(status);
 

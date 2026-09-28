@@ -8,7 +8,7 @@ import { Problem } from "../problem.ts";
  * 阶段记录（stages）用 `map edit --stages` 整份替换（旧的 g 短号留作 id）。纯函数，不读库。
  */
 
-export const STAGE_STATUSES = [
+const STAGE_STATUSES = [
   "planned",
   "active",
   "achieved",
@@ -38,7 +38,7 @@ export type Stage = {
 };
 
 /** 人话字段：文本上限（字）。 */
-export const OVERVIEW_TEXT: Record<string, number> = {
+const OVERVIEW_TEXT: Record<string, number> = {
   what: 300,
   alias: 40,
   analogy: 100,
@@ -46,8 +46,8 @@ export const OVERVIEW_TEXT: Record<string, number> = {
   next: 500,
 };
 /** 人话字段：列表上限（项）与每项上限 300 字。 */
-export const OVERVIEW_LISTS: Record<string, number> = { uses: 10, flow: 12 };
-export const STAGES_MAX = 60;
+const OVERVIEW_LISTS: Record<string, number> = { uses: 10, flow: 12 };
+const STAGES_MAX = 60;
 
 const bad = (field: string, message: string): never => {
   throw new Problem(400, `${field} ${message}`, "usage");
@@ -66,7 +66,7 @@ const texts = (value: unknown, field: string, count: number, max: number) => {
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** 校验 stages；返回原值（字段顺序由写入方决定）。 */
-export function validateStages(value: unknown, field = "fields.stages") {
+function validateStages(value: unknown, field = "fields.stages") {
   if (!Array.isArray(value)) return bad(field, "应为阶段列表");
   if (value.length > STAGES_MAX) bad(field, `超过 ${STAGES_MAX} 项`);
   const ids = new Set<string>();
@@ -163,7 +163,8 @@ export type Overview = {
   stages: Stage[];
 };
 
-export const str = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+export const str = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
 const list = (value: unknown) =>
   Array.isArray(value)
     ? value.filter((v): v is string => typeof v === "string" && !!v.trim())

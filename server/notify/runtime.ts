@@ -100,7 +100,7 @@ const LISTEN_RETRY_MAX_MS = 5 * 60_000;
 const FOREIGN_LOG_MS = 10 * 60_000;
 export const BIND_WAIT_MAX = 240;
 
-export function telegramApi(value: string | undefined) {
+function telegramApi(value: string | undefined) {
   const api = value?.trim() || TELEGRAM_API;
   try {
     const url = new URL(api);

@@ -19,7 +19,7 @@ import { marks } from "../sqlite.ts";
 
 export const DECISION_LIMITS = { text: 300, why: 1000 };
 /** 一条决定至多挂几个节点。 */
-export const NODES_MAX = 10;
+const NODES_MAX = 10;
 export const PAGE_MAX = 200;
 export const PAGE_DEFAULT = 50;
 
@@ -29,7 +29,7 @@ export const decisionRef = (id: number) => `d${id}`;
 const usage = (message: string, next?: string) =>
   new Problem(400, message, "usage", undefined, next);
 
-export function parseDecisionRef(value: unknown, field = "决定"): number {
+function parseDecisionRef(value: unknown, field = "决定"): number {
   const match =
     typeof value === "string" ? DECISION_RE.exec(value.trim()) : null;
   if (!match) throw usage(`${field}: 决定短号应为 d1 这样的格式`);
@@ -258,7 +258,7 @@ function requireRow(db: DatabaseSync, id: number): Row {
   return row;
 }
 
-export function getDecision(db: DatabaseSync, id: number) {
+function getDecision(db: DatabaseSync, id: number) {
   return views(db, [requireRow(db, id)])[0]!;
 }
 

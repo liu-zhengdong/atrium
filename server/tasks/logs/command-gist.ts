@@ -11,7 +11,7 @@ type Segment = { words: string[]; heredoc: boolean; piped: boolean };
  * 按 shell 的引号规则把命令拆成段：未加引号的 `&&`、`||`、`;`、`|`、`&` 与换行是分隔；
  * `<<` 之后的 heredoc 正文整段跳过。不求完整，只求不把引号里的 `|`、`;` 当成分隔。
  */
-export function segmentsOf(command: string): Segment[] {
+function segmentsOf(command: string): Segment[] {
   const segments: Segment[] = [];
   let words: string[] = [];
   let word = "";

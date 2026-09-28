@@ -66,7 +66,7 @@ function allowed(key: string, platform: Platform) {
 }
 
 /** 被丢弃的凭据/身份类变量名（只匹配名字，不读取值）。 */
-export function droppedSensitiveNames(keys: Iterable<string>): string[] {
+function droppedSensitiveNames(keys: Iterable<string>): string[] {
   return [...keys]
     .filter(
       (key) =>

@@ -42,7 +42,7 @@ export function actionJob(link: string | undefined) {
   }
 }
 
-export function annotationSummary(annotation: Annotation): string {
+function annotationSummary(annotation: Annotation): string {
   const message = (annotation.message || annotation.title || "")
     .replace(/\s+/g, " ")
     .trim();

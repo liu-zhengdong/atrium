@@ -133,7 +133,7 @@ function textIn(input: JsonEvent | undefined, key: string) {
   return typeof text === "string" && text.trim() ? text.trim() : undefined;
 }
 
-export function describe(name: string, input: JsonEvent | undefined): Action {
+function describe(name: string, input: JsonEvent | undefined): Action {
   const key = name.toLowerCase();
   const tool = (text: string): Action => ({ kind: "tool", text: cap(text) });
   if (COMMAND_TOOLS.has(key)) {

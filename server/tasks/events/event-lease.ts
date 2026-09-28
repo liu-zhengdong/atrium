@@ -26,10 +26,3 @@ export function deliverable(row: DeliveryState, now: number, leaseMs: number) {
   if (row.ready_at > now) return false;
   return row.delivered_at === null || row.delivered_at + leaseMs <= now;
 }
-
-/** 租约到期时间：已交出、未 ack、不是自己发起的才有；wait 据此定时醒来检查。 */
-export function leaseExpiry(row: DeliveryState, leaseMs: number) {
-  if (row.acked_at !== null || row.delivered_at === null) return undefined;
-  if (selfInitiated(row.subscriber, row.actor)) return undefined;
-  return row.delivered_at + leaseMs;
-}

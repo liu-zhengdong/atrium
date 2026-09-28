@@ -134,7 +134,7 @@ export function scheduleOf(
   return classify(row.status, tasks, prs, row.schedule_reason);
 }
 
-export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
+function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
   return {
     task: {
       ...listView(row),
@@ -149,7 +149,7 @@ export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
  * 巡检一页的排期判定：依赖条件按页批量取（k23），判定不碰库。
  * 判定后某条任务状态变了（受阻/恢复），用 setStatus 同步给同为上游的后续候选。
  */
-export function pagePlan(
+function pagePlan(
   db: DatabaseSync,
   rows: Pick<TaskRow, "id" | "status" | "schedule_reason">[],
 ) {

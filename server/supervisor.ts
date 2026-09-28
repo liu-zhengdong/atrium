@@ -62,7 +62,7 @@ export type RestartState = {
   finishedAt?: number;
 };
 
-export function restartStatePath(data: string): string {
+function restartStatePath(data: string): string {
   return join(data, "restart-state.json");
 }
 

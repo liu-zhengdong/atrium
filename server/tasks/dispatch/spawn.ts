@@ -20,7 +20,7 @@ import type { Prepared } from "./workspace.ts";
  */
 
 /** 日志抬头里的参数：压成一行（抬头每行以 [atrium] 开头，摘要据此剔除），过长截断。 */
-export const shortArg = (arg: string) => {
+const shortArg = (arg: string) => {
   const flat = arg.replace(/\s+/g, " ");
   return flat.length > 80 ? `${flat.slice(0, 77)}…` : flat;
 };

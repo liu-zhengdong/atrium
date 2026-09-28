@@ -12,7 +12,7 @@ import type { CliState, HostInfo } from "./state.ts";
  */
 
 /** 各工具登录后会留下的文件（相对主目录）；看不出来的给空表，判为「未知」。 */
-export const LOGIN_FILES: Readonly<Record<Tool, readonly string[]>> = {
+const LOGIN_FILES: Readonly<Record<Tool, readonly string[]>> = {
   claude: [".claude/.credentials.json", ".claude.json"],
   codex: [".codex/auth.json"],
   opencode: [".local/share/opencode/auth.json"],
@@ -37,7 +37,7 @@ export function loggedIn(
   return null;
 }
 
-export function detectClis(
+function detectClis(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
 ): Partial<Record<Tool, CliState>> {

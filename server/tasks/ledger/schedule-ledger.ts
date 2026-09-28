@@ -17,7 +17,7 @@ export type PrCondition = {
 };
 export type Conditions = { after: string[]; after_pr: PrCondition[] };
 
-export function parseAfter(value: unknown): number[] {
+function parseAfter(value: unknown): number[] {
   if (value === undefined || value === null || value === "") return [];
   if (typeof value !== "string")
     throw usage("--after 用逗号分隔任务短号，如 t1,t2");
@@ -27,9 +27,7 @@ export function parseAfter(value: unknown): number[] {
   return ids;
 }
 
-export function parseAfterPr(
-  value: unknown,
-): { repo: string; number: number }[] {
+function parseAfterPr(value: unknown): { repo: string; number: number }[] {
   if (value === undefined || value === null || value === "") return [];
   if (typeof value !== "string")
     throw usage("--after-pr 用逗号分隔 owner/repo#号");
@@ -47,7 +45,7 @@ export function parseAfterPr(
   return prs;
 }
 
-export const DOWNSTREAM_MAX = 10;
+const DOWNSTREAM_MAX = 10;
 
 /** 没结束的直接下游（依赖这件的任务，t253）：至多列 DOWNSTREAM_MAX 件，more 是没列出的件数。走 task_dependencies_after 索引。 */
 export function downstreamOf(

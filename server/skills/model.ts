@@ -39,7 +39,7 @@ export function validateSkillSlug(value: unknown): string {
 const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
 /** 技能内的相对路径：不许绝对路径、`..`、隐藏段、反斜杠，深度有限。 */
-export function validateFilePath(path: string): string {
+function validateFilePath(path: string): string {
   const segments = path.split("/");
   if (
     !path ||
@@ -79,9 +79,7 @@ export function validateFiles(value: unknown): Files {
 }
 
 /** 读 SKILL.md 的 frontmatter；没有 frontmatter 返回 null，格式坏了报错。 */
-export function readFrontmatter(
-  skillMd: string,
-): Record<string, unknown> | null {
+function readFrontmatter(skillMd: string): Record<string, unknown> | null {
   const source = skillMd.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
   if (!source.startsWith("---\n")) return null;
   const end = source.indexOf("\n---", 4);
@@ -173,7 +171,7 @@ const listOf = (value: unknown): string[] =>
     .filter(Boolean);
 
 /** 地址（o7 或 atrium/web）命中节点链上的某一环：写父节点也覆盖子节点的活。 */
-export function chainHit(
+function chainHit(
   chain: readonly ChainNode[],
   address: string,
 ): ChainNode | undefined {
@@ -268,7 +266,7 @@ function lcsPairs(a: string[], b: string[]): Map<number, number> | undefined {
 const lines = (text: string) => text.split("\n");
 
 /** 逐行差异：`  ` 不变、`- ` 删除、`+ ` 新增；只留改动附近 context 行，其余折成「…」。 */
-export function lineDiff(before: string, after: string, context = 2): string[] {
+function lineDiff(before: string, after: string, context = 2): string[] {
   const a = lines(before),
     b = lines(after);
   const pairs = lcsPairs(a, b);

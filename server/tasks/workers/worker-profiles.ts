@@ -13,9 +13,9 @@ import { all, atomically, one } from "../ledger/ledger-model.ts";
  * 首次启动从旧目录（ATRIUM_WORKERS_DIR 或 ~/Atrium/workers）导入一次，导入后不再读目录。
  */
 
-export const PROFILE_LAYERS = ["harness", "models", "combos"] as const;
+const PROFILE_LAYERS = ["harness", "models", "combos"] as const;
 export type ProfileLayerName = (typeof PROFILE_LAYERS)[number];
-export const isProfileLayer = (value: unknown): value is ProfileLayerName =>
+const isProfileLayer = (value: unknown): value is ProfileLayerName =>
   typeof value === "string" &&
   (PROFILE_LAYERS as readonly string[]).includes(value);
 
@@ -225,7 +225,7 @@ export type ImportResult = {
 };
 
 /** 是否已经导入过：导入过（不管来自哪个目录）就不再读旧目录。 */
-export const profilesImported = (db: DatabaseSync) =>
+const profilesImported = (db: DatabaseSync) =>
   !!one(db, "SELECT 1 AS ok FROM worker_profile_imports LIMIT 1");
 
 /**

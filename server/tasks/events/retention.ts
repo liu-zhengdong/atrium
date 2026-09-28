@@ -9,9 +9,9 @@ import { one } from "../ledger/ledger-model.ts";
  */
 
 /** 已确认知会的保留时间：14 天。 */
-export const INBOX_INFO_RETENTION_MS = 14 * 86400_000;
+const INBOX_INFO_RETENTION_MS = 14 * 86400_000;
 /** 已确认知会的条数上限：最多留最近 2 万条。 */
-export const INBOX_INFO_MAX = 20_000;
+const INBOX_INFO_MAX = 20_000;
 
 export type RetentionOptions = {
   now?: () => number;

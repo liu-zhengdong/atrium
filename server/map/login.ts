@@ -9,8 +9,8 @@ import type { DatabaseSync } from "node:sqlite";
  */
 
 export const LINK_TTL_MS = 2 * 60_000;
-export const SESSION_TTL_MS = 7 * 24 * 3600_000;
-export const COOKIE = "atrium_map";
+const SESSION_TTL_MS = 7 * 24 * 3600_000;
+const COOKIE = "atrium_map";
 const KEEP = 20;
 
 const digest = (value: string) =>

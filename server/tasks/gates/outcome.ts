@@ -28,7 +28,7 @@ export type ExitDecision = {
 export const ADOPTED_EXIT = "接管后退出，退出码不可得";
 
 /** 接管后退出按日志判出的结局与依据；判不了为 undefined。 */
-export function adoptedText(adopted?: AdoptedEnd) {
+function adoptedText(adopted?: AdoptedEnd) {
   if (!adopted || adopted.end === "unknown") return undefined;
   return `按日志判为${adopted.end === "clean" ? "正常结束" : "异常结束"}（${adopted.evidence}）`;
 }

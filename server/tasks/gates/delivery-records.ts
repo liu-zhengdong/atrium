@@ -931,7 +931,7 @@ export type WorkerStat = {
   trust: string | null;
 };
 /** 与 summarizeDeliveries 同一算法，但吃的是 SQL 取好的小事实，不用整条交付。 */
-export function summarizeMetrics(
+function summarizeMetrics(
   rows: readonly DeliveryMetric[],
   trust: ReadonlyMap<string, string> = new Map(),
 ): WorkerStat[] {

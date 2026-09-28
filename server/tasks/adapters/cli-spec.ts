@@ -20,12 +20,12 @@ import { ENDPOINT_APIS, type EndpointApi } from "./types.ts";
  * - exclusive：同一时刻只跑一个；quota_provider：额度账号名（缺省用工具名）。
  */
 
-export const CLI_PROTOCOL = "cli";
+const CLI_PROTOCOL = "cli";
 
 /** 工具名：小写字母开头，只含小写字母、数字、连字符；也是 harness 档案名与执行者标识的头。 */
 export const TOOL_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
 
-export const PLACEHOLDERS = [
+const PLACEHOLDERS = [
   "prompt",
   "prompt_file",
   "cwd",

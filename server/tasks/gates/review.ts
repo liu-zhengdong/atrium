@@ -48,7 +48,7 @@ export function reviewerRefusal(
 export type ReviewVerdict = { passed: boolean; notes: string };
 
 const VERDICT_RE = /审阅结论\s*[:：]\s*\**\s*(通过|打回)/g;
-export const NOTES_MAX = 1500;
+const NOTES_MAX = 1500;
 
 /**
  * 从审阅者的收尾摘要读结论：取最后一个「审阅结论：通过/打回」，之前的文字作意见。

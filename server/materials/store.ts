@@ -126,15 +126,11 @@ type VersionRow = {
   created_at: number;
 };
 
-export const materialsRoot = (data: string) => join(data, "materials");
+const materialsRoot = (data: string) => join(data, "materials");
 export const versionDir = (data: string, id: number, version: number) =>
   join(materialsRoot(data), materialRef(id), `v${version}`);
 
-/** 读者的叫法：秘书、aN，或任务 tN（执行者 material get）。 */
-export const readerWord = (reader: string) =>
-  reader === "secretary" ? "秘书" : reader;
-
-export function materialView(row: MaterialRow, list?: readonly NodeRow[]) {
+function materialView(row: MaterialRow, list?: readonly NodeRow[]) {
   const node = list?.find((n) => n.id === row.node_id);
   return {
     ref: materialRef(row.id),
@@ -370,7 +366,7 @@ function linkAll(db: DatabaseSync, id: number, links: readonly Link[]) {
 }
 
 /** 关联是否都已结束：按类别各查一次；任务结束、要点删了、决定被推翻或不在了都算结束。 */
-export function linkFacts(
+function linkFacts(
   db: DatabaseSync,
   ids: readonly number[],
 ): Map<number, { ref: string; ended: boolean }[]> {

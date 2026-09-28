@@ -74,7 +74,7 @@ export function formatQuotaTable(
 }
 
 /** 保留份额一行：你设过的，或缺省与怎么改。 */
-export function reserveLine(reserve: QuotaReserve | undefined): string | null {
+function reserveLine(reserve: QuotaReserve | undefined): string | null {
   if (!reserve) return null;
   return reserve.set_by
     ? `给你留的份额：每个账号至少 ${reserve.percent}%（atrium org limits 可改）`

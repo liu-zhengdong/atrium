@@ -32,7 +32,7 @@ export type ServeSession = {
 
 export const WAKE_PREFIX = "【Atrium 事件】";
 /** 送出后等服务端报 busy 的最长时间：prompt_async 立即返回，一轮要稍后才开始。 */
-export const TURN_START_MS = 5000;
+const TURN_START_MS = 5000;
 
 /** 自 since 以来有没有用户自己发的消息（送入的事件消息不算）。 */
 export function userTurnSince(

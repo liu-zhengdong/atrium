@@ -155,8 +155,7 @@ const message = (error: unknown) =>
 
 // ---- 登记（数据目录 secretary/bridge.json）----
 
-export const bridgeFile = (data: string) =>
-  join(data, "secretary", "bridge.json");
+const bridgeFile = (data: string) => join(data, "secretary", "bridge.json");
 export const bridgeLog = (data: string) =>
   join(data, "secretary", "bridge.log");
 

@@ -19,11 +19,7 @@ import type {
  * - `ATRIUM_QUOTA_READERS=off` 关掉自带读取；node:test 进程里默认也关（测试不读开发者主目录）。
  */
 
-export const READERS: readonly Reader[] = [
-  claudeReader,
-  codexReader,
-  opencodeReader,
-];
+const READERS: readonly Reader[] = [claudeReader, codexReader, opencodeReader];
 
 export const OK_TTL_MS = 5 * 60_000;
 export const FAILED_TTL_MS = 60_000;
@@ -63,7 +59,7 @@ export function outcomeOf(
 }
 
 /** 下次什么时候再真去请求（纯函数）。 */
-export function nextReadAt(result: ReadResult, now: number): number {
+function nextReadAt(result: ReadResult, now: number): number {
   if (result.ok) return now + OK_TTL_MS;
   return Math.max(now + FAILED_TTL_MS, result.retryAt ?? 0);
 }
@@ -144,7 +140,7 @@ async function readTextFile(path: string): Promise<string | undefined> {
 }
 
 /** macOS 钥匙串：经 /usr/bin/security 读（Claude Code 自己也是这样写的，读时不弹授权框）。 */
-export function readKeychain(
+function readKeychain(
   service: string,
   account: string,
   env: NodeJS.ProcessEnv = process.env,

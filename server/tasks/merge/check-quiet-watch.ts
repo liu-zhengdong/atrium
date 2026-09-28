@@ -3,7 +3,7 @@ import { LOG_CHUNK, readLogChunk, readLogTail } from "../logs/log-view.ts";
 import { scanOutput, stuckAt } from "./check-quiet.ts";
 
 /** 检查进行中多久看一次日志。 */
-export const QUIET_POLL_MS = 15_000;
+const QUIET_POLL_MS = 15_000;
 
 /**
  * 盯一份检查日志有没有新输出（overdue.ts 表里检查那一行）：定时读新增部分，

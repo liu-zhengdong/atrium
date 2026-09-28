@@ -14,7 +14,7 @@ import { addTell } from "../dispatch/tell-ledger.ts";
  */
 
 /** 这个任务要不要交固定格式的结论：合入前审阅者；走索引。 */
-export function conclusionKindOf(
+function conclusionKindOf(
   db: DatabaseSync,
   id: number,
 ): ConclusionKind | undefined {

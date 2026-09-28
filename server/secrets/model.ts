@@ -8,7 +8,7 @@ import { workerAllowed } from "../tasks/dispatch/worker-env.ts";
  * 这里只放纯函数（穷举测试）：名称与值校验、按节点链找、合进环境、清理线索、提示词段落。
  */
 
-export const SECRET_NAME_MAX = 64;
+const SECRET_NAME_MAX = 64;
 /** 单个值的上限：令牌、密码、私钥片段都够用；更大的东西放资料。 */
 export const SECRET_VALUE_MAX = 16 * 1024;
 /** 一件任务最多声明几个凭据。 */

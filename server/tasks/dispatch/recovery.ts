@@ -38,7 +38,7 @@ export type Survivor =
       run: HostRun;
     };
 
-export async function surveyRunning(
+async function surveyRunning(
   db: DatabaseSync,
   skip: (id: number) => boolean,
   exec: Exec,

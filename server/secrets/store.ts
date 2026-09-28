@@ -76,12 +76,12 @@ export type SecretRow = {
   hinted_at: number | null;
 };
 
-export const secretsRoot = (data: string) => join(data, "secrets");
+const secretsRoot = (data: string) => join(data, "secrets");
 const valueFile = (data: string, id: number) =>
   join(secretsRoot(data), String(id));
 
 /** 给人看的一行：没有值，也不给值的长度。 */
-export function secretView(
+function secretView(
   row: SecretRow,
   list?: ReadonlyMap<number, NodeRow>,
   now = Date.now(),
@@ -118,7 +118,7 @@ function findRow(db: DatabaseSync, node: number, name: string) {
   );
 }
 
-export function getSecret(db: DatabaseSync, address: unknown, name: unknown) {
+function getSecret(db: DatabaseSync, address: unknown, name: unknown) {
   if (typeof address !== "string" || !address.trim())
     throw new Problem(400, "节点: 要写凭据挂在哪个节点上，如 o4", "usage");
   const node = nodeByAddress(db, address.trim());
@@ -344,7 +344,7 @@ export function writeTaskSecrets(
 }
 
 /** 本节点在前、逐级往上的节点链；没有节点时是各个根节点；没有组织树时为空。 */
-export function secretChain(db: DatabaseSync, start: number | null) {
+function secretChain(db: DatabaseSync, start: number | null) {
   if (!hasTable(db, "org_nodes")) return [];
   const list = nodes(db);
   if (start === null)
@@ -361,7 +361,7 @@ export function secretChain(db: DatabaseSync, start: number | null) {
 }
 
 /** 在节点链上按名称找（只看没归档的，一次查询）。 */
-export function findSecrets(
+function findSecrets(
   db: DatabaseSync,
   start: number | null,
   names: readonly string[],

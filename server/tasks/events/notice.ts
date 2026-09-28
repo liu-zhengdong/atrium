@@ -156,7 +156,7 @@ function publishStuck(
  * 总任务全部子孙都已上线或完成时，秘书（和总任务的 leader）收一条「tN 整体已上线（x/x）」，
  * 同一进度只发一次：进度变了（后来又加了子任务并完成）再发。
  */
-export function publishTotalOnline(
+function publishTotalOnline(
   inbox: EventInbox,
   db: DatabaseSync,
   total: { id: number; rollup: Rollup | null },

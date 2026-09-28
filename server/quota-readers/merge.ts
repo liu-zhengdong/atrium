@@ -115,7 +115,7 @@ export function mergeHostReadings(input: {
   return merged;
 }
 
-export const NO_DATA = "没有额度数据";
+const NO_DATA = "没有额度数据";
 
 function providerOf(row: unknown): string | undefined {
   if (!row || typeof row !== "object") return undefined;

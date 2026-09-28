@@ -75,7 +75,7 @@ function readHidden(stdin: NodeJS.ReadStream, prompt: string): Promise<string> {
   });
 }
 
-export async function readSecretInput(
+async function readSecretInput(
   name: string,
   stdin: NodeJS.ReadStream = process.stdin,
 ) {

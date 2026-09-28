@@ -38,7 +38,7 @@ const stateText = { active: "", removed: "已删除" };
 const outcomeText = { created: "生成", skipped: "跳过", failed: "失败" };
 
 /** 周期的人话：每天、每 7 天、每 12 小时。 */
-export function everyWords(every: string, at: string | null) {
+function everyWords(every: string, at: string | null) {
   const match = /^(\d+)([mhd])$/.exec(every);
   const unit = { m: "分钟", h: "小时", d: "天" }[match?.[2] ?? "d"]!;
   const n = Number(match?.[1] ?? 0);
@@ -53,7 +53,7 @@ export function everyWords(every: string, at: string | null) {
 }
 
 /** 一行：s1 体验巡检 · 每天 09:30 · 命令行（o2）· 下次 09:30 · 上一轮 t12 done */
-export function scheduleLine(s: Schedule) {
+function scheduleLine(s: Schedule) {
   return [
     `${s.ref} ${s.title}`,
     everyWords(s.every, s.at),

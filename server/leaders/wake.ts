@@ -190,7 +190,7 @@ export function eventLine(event: PromptEvent) {
 }
 
 /** 事件类型的人话（看板、全景、状态栏）；没列的原样给类型名。 */
-export const EVENT_WORDS: Record<string, string> = {
+const EVENT_WORDS: Record<string, string> = {
   done: "完成",
   failed: "失败",
   blocked: "受阻",

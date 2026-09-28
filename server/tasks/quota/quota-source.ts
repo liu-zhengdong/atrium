@@ -41,7 +41,7 @@ const OPENQUOTA_FAILURE = {
 } as const;
 
 /** 各执行者对应的账号，去重保序。 */
-export const EXPECTED_PROVIDERS: readonly string[] = [
+const EXPECTED_PROVIDERS: readonly string[] = [
   ...new Set(Object.values(ADAPTERS).map((adapter) => adapter.quotaProvider)),
 ];
 

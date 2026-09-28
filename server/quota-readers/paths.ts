@@ -36,7 +36,7 @@ export function expandHome(
   return rest === undefined ? value : pathFor(platform).join(home, rest);
 }
 
-export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 /** Claude Code 按 CLAUDE_CONFIG_DIR 派生的钥匙串服务名：原服务名 + 目录字面量 sha256 前 8 位。 */
 export function scopedClaudeService(configDir: string): string {

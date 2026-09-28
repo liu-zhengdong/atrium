@@ -25,7 +25,7 @@ import { str } from "./args.ts";
  */
 
 /** SessionStart hook 里跑的命令：后台起 bridge 后立即返回。 */
-export const BRIDGE_HOOK_COMMAND = "atrium secretary bridge --detach";
+const BRIDGE_HOOK_COMMAND = "atrium secretary bridge --detach";
 
 const hookEntry = () => ({
   hooks: [{ type: "command", command: BRIDGE_HOOK_COMMAND, timeout: 30 }],

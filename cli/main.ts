@@ -154,7 +154,7 @@ function membersOf(group: string): [string, Command][] {
  * 组名本身也是一个命令时（`atrium map`、`atrium events`），先讲这个裸命令怎么用、有哪些选项，
  * 再列子命令——否则「atrium map --help」只看到子命令，不知道直接敲 `atrium map o4` 会打开全景网页。
  */
-export function groupHelp(group: string): string {
+function groupHelp(group: string): string {
   const bare = commands[group];
   const usage = bare
     ? [`用法：atrium ${group} ${bare.args}`, `      atrium ${group} <子命令> …`]

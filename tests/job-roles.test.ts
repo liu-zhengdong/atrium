@@ -19,7 +19,6 @@ import {
   activeJobChecks,
   markDeliveryFinal,
 } from "../server/tasks/gates/delivery-records.ts";
-import { removeTemp } from "./temp-dir.ts";
 const db = () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);

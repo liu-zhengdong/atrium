@@ -138,13 +138,6 @@ export function ensureLocalHost(
   return Number(result.lastInsertRowid);
 }
 
-export function localHostId(db: DatabaseSync) {
-  return (
-    one<{ id: number }>(db, "SELECT id FROM hosts WHERE kind='local'")?.id ??
-    LOCAL_HOST
-  );
-}
-
 export function hostRow(db: DatabaseSync, id: number): HostRow {
   const row = one<HostRow>(db, "SELECT * FROM hosts WHERE id=?", id);
   if (!row)
@@ -203,7 +196,7 @@ export function runningHostNames(
 const NAME = /^[^\s\u0000-\u001f][^\u0000-\u001f]{0,39}$/;
 const REPO = /^(\*|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/;
 
-export function validRepos(repos: readonly string[]) {
+function validRepos(repos: readonly string[]) {
   const cleaned = [
     ...new Set(repos.map((repo) => repo.trim()).filter(Boolean)),
   ];
@@ -219,7 +212,7 @@ export function validRepos(repos: readonly string[]) {
   return cleaned;
 }
 
-export function validMax(value: unknown) {
+function validMax(value: unknown) {
   if (value === undefined || value === null) return null;
   if (
     !Number.isInteger(value) ||
@@ -344,9 +337,6 @@ export function joinCodeValid(
   );
 }
 const TOKEN = /^Bearer h([1-9][0-9]{0,8})\.([a-f0-9]{64})$/;
-
-export const looksLikeHostToken = (authorization: string | undefined) =>
-  TOKEN.test(authorization ?? "");
 
 /** 接入：接入码换成这台主机专用的令牌（只回这一次）；码用过即作废。 */
 export function joinHost(
@@ -496,10 +486,6 @@ export function setLogOffset(db: DatabaseSync, task: number, offset: number) {
     offset,
     task,
   );
-}
-
-export function endRun(db: DatabaseSync, task: number) {
-  db.prepare("DELETE FROM host_runs WHERE task_id=?").run(task);
 }
 
 /** 账本里在这台主机上跑着的任务与轮号（重连对账用）。 */

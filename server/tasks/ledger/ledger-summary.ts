@@ -5,7 +5,7 @@ import { all } from "./ledger-model.ts";
 /** Counts of immediate children; the parent's own status is independent. */
 export type ChildSummary = { total: number } & Record<TaskStatus, number>;
 
-export function emptyChildSummary(): ChildSummary {
+function emptyChildSummary(): ChildSummary {
   return {
     total: 0,
     todo: 0,
@@ -41,7 +41,7 @@ export function childSummaries(db: DatabaseSync, parentIds: number[]) {
   return summaries;
 }
 
-export const CHILD_STATUS_LABELS: Record<TaskStatus, string> = {
+const CHILD_STATUS_LABELS: Record<TaskStatus, string> = {
   todo: "待办",
   running: "进行中",
   done: "完成",

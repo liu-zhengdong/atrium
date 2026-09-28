@@ -81,7 +81,7 @@ type Track = {
   failure?: string;
 };
 
-export class AgentHttpError extends Error {
+class AgentHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,

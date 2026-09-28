@@ -279,7 +279,7 @@ const utilization = (c: HostCandidate) =>
   c.max === null ? c.running / 1000 : c.running / Math.max(1, c.max);
 
 /** 满了或太忙（紧急任务照样能派）。 */
-export const crowded = (c: HostCandidate) =>
+const crowded = (c: HostCandidate) =>
   !!c.busy || (c.max !== null && c.running >= c.max);
 
 /**
@@ -401,10 +401,7 @@ export function remoteLayout(
 }
 
 /** 代理数据目录下这个仓库的克隆（派活与按提交检查共用一份）。 */
-export function remoteClone(
-  host: { os: string; data_dir: string },
-  url: string,
-) {
+function remoteClone(host: { os: string; data_dir: string }, url: string) {
   return flavor(host.os).join(host.data_dir, "repos", cloneName(url));
 }
 

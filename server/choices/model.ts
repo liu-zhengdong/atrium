@@ -8,8 +8,8 @@ import { clip, oneLine } from "../text-width.ts";
  * 没选的连同说明记成决定记录，下一轮调研读得到。
  */
 
-export const OPTIONS_MIN = 3;
-export const OPTIONS_MAX = 5;
+const OPTIONS_MIN = 3;
+const OPTIONS_MAX = 5;
 export const CHOICE_LIMITS = {
   title: 80,
   option_title: 80,
@@ -30,11 +30,6 @@ const DECISION_TEXT = 300;
 const DECISION_WHY = 1000;
 
 export type ChoiceStatus = "open" | "picked" | "passed";
-export const CHOICE_STATUSES: readonly ChoiceStatus[] = [
-  "open",
-  "picked",
-  "passed",
-];
 export const STATUS_TEXT: Record<ChoiceStatus, string> = {
   open: "等你拍板",
   picked: "已拍板",

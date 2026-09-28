@@ -162,7 +162,7 @@ export function thinkingExhausted(
   return { reasoning, output, limit: reasoning + output };
 }
 
-export const thinkingReason = (hit: ThinkingExhausted) =>
+const thinkingReason = (hit: ThinkingExhausted) =>
   `思考耗尽单次输出（reasoning ${hit.reasoning} / 上限 ${hit.limit}，正文 ${hit.output}）`;
 
 const TARGET_MAX = 200;

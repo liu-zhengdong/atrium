@@ -19,7 +19,7 @@ import { QuietWatch } from "./check-quiet-watch.ts";
 import { DUE } from "../watch/overdue.ts";
 
 /** 本地检查只由运行时在服务那台执行（合入队列串行跑）。超时按本机配置（ATRIUM_CHECK_TIMEOUT_MINUTES），这是缺省。 */
-export const LOCAL_CHECK_TIMEOUT_MS = CHECK_TIMEOUT_MINUTES * 60_000;
+const LOCAL_CHECK_TIMEOUT_MS = CHECK_TIMEOUT_MINUTES * 60_000;
 export type LocalCheck = {
   status: "passed" | "failed" | "timeout" | "error";
   command: string;

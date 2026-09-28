@@ -380,7 +380,7 @@ export function pickWorker({
   };
 }
 
-export const SLUG_MAX = 40;
+const SLUG_MAX = 40;
 
 /** 规范化成 slug，可能为空串（如纯中文标题）；只留小写字母、数字和连字符，截断到 40。 */
 function slugBase(text: string): string {

@@ -27,7 +27,7 @@ export type PaceRow = {
 
 const SHORT_WINDOW_MAX_PERIOD_SECONDS = 6 * 60 * 60;
 /** OpenQuota 面板把超过 10 分钟的读数标为旧数据。 */
-export const STALE_AFTER_MS = 10 * 60_000;
+const STALE_AFTER_MS = 10 * 60_000;
 
 const clampPercent = (value: number) => Math.min(100, Math.max(0, value));
 
@@ -105,7 +105,7 @@ function hoursBetween(start: number, end: number): number {
 }
 
 /** 与 OpenQuota 相同的秒级 UTC 时间串。 */
-export function isoSeconds(at: number): string {
+function isoSeconds(at: number): string {
   return new Date(Math.floor(at / 1000) * 1000)
     .toISOString()
     .replace(".000Z", "Z");

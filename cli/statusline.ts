@@ -127,7 +127,7 @@ type Item = { row: Held } | { total: TopTotal; rows: Held[] };
  * 总任务下的子任务并成一行（t190）：「▸ t174「离开电脑也能拍板」5/12 · 在做 t181 xx…、t183 yy…」。
  * 等你的照旧单列，不藏进总任务里；没有总任务的照旧单行。位置取组里第一个子任务的位置。
  */
-export function groupRows(held: readonly Held[]): Item[] {
+function groupRows(held: readonly Held[]): Item[] {
   const items: Item[] = [];
   const groups = new Map<string, { total: TopTotal; rows: Held[] }>();
   for (const row of held) {

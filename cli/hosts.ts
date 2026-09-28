@@ -70,7 +70,7 @@ function hostRef(value: string | undefined) {
 }
 
 /** 编码 CLI 一栏：没判断出是否登录的带问号，确定没登录的写出来。 */
-export function clisText(clis: Record<string, Cli> | undefined) {
+function clisText(clis: Record<string, Cli> | undefined) {
   const names = Object.entries(clis ?? {})
     .filter(([, cli]) => cli.installed)
     .map(([tool, cli]) =>
@@ -95,7 +95,7 @@ const reposText = (view: HostView) =>
       ? "全部"
       : view.repos.join(" ") || "只接没有仓库的活（用 --repo 登记）";
 
-export function hostTable(hosts: HostView[]) {
+function hostTable(hosts: HostView[]) {
   return table([
     [
       "短号",

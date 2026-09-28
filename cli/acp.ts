@@ -36,7 +36,7 @@ type Pending = {
   reject: (error: Error) => void;
 };
 
-export class AcpError extends Error {}
+class AcpError extends Error {}
 
 /** 非交互拉起：去掉 HERDR_*（opencode 的 herdr 插件会连继承来的窗格、卡在 init）与嵌套会话标记。 */
 export function agentEnvironment(

@@ -32,7 +32,7 @@ export function readLimits(db: DatabaseSync): Limits {
 }
 
 /** 校验（纯函数）：只认两项，数值在范围里；至少给一项。 */
-export function validateLimits(body: unknown): Limits {
+function validateLimits(body: unknown): Limits {
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw new Problem(400, "请求体应为对象", "usage");
   const out: Limits = {};

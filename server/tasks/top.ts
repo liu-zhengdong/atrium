@@ -49,7 +49,7 @@ export function priorityCounts(db: DatabaseSync): PriorityCounts {
 /** 结束后还在视图里停留多久：10 分钟。 */
 export const RECENT_MS = 10 * 60_000;
 /** 一次最多多少行（连同日志尾部读取都是有界的）。 */
-export const TOP_MAX = 50;
+const TOP_MAX = 50;
 
 export type TopRow = NoteView & {
   ref: string;

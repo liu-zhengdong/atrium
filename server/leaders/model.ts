@@ -92,7 +92,7 @@ const usage = (message: string, next?: string) =>
   new Problem(400, message, "usage", undefined, next);
 
 /** 解析 aN；格式不对是用法错误。 */
-export function leaderId(value: unknown, field = "leader"): number {
+function leaderId(value: unknown, field = "leader"): number {
   const text = typeof value === "string" ? value.trim() : "";
   const match = LEADER_RE.exec(text);
   if (!match)

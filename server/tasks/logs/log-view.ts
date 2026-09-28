@@ -4,7 +4,7 @@ import { open, stat } from "node:fs/promises";
 
 export const LOG_CHUNK = 64 * 1024;
 /** 看板取「最近一个动作」时读日志尾部的字节数：固定有界，不整份读。 */
-export const LOG_TAIL = 64 * 1024;
+const LOG_TAIL = 64 * 1024;
 
 export async function readLogChunk(file: string, offset: number) {
   let size = 0;

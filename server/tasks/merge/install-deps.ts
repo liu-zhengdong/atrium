@@ -24,7 +24,7 @@ import { workerEnvironment } from "../dispatch/worker-env.ts";
  */
 
 /** 装依赖最多等多久。 */
-export const INSTALL_TIMEOUT_MS = 10 * 60_000;
+const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
 export const INSTALL_COMMAND = "npm ci --prefer-offline --no-audit --no-fund";
 
@@ -101,7 +101,7 @@ function lockHash(tree: string) {
     .digest("hex");
 }
 
-export function depsFacts(tree: string): DepsFacts {
+function depsFacts(tree: string): DepsFacts {
   const lock = join(tree, "package-lock.json");
   const npm = existsSync(lock) && existsSync(join(tree, "package.json"));
   const modules = npm && existsSync(join(tree, "node_modules"));

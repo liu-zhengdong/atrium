@@ -771,7 +771,7 @@ const TELL_STATE: Record<string, string> = {
 };
 
 /** task show 里一条捎话事件：作者、送达状态、原文。 */
-export function tellLine(detail: string | null) {
+function tellLine(detail: string | null) {
   try {
     const tell = JSON.parse(detail ?? "") as {
       by?: string;

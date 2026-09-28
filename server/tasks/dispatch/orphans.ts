@@ -25,9 +25,9 @@ import { FINISHED } from "../ledger/state.ts";
 
 export const SPAWN_ENV = "ATRIUM_SPAWN";
 /** 任务结束多久后还活着才算孤儿（执行者收尾、合入检查前后可能还有进程在退）。 */
-export const ORPHAN_GRACE_MS = 30 * 60_000;
+const ORPHAN_GRACE_MS = 30 * 60_000;
 /** 温和结束后多久还在就强制结束。 */
-export const ORPHAN_KILL_AFTER_MS = 60_000;
+const ORPHAN_KILL_AFTER_MS = 60_000;
 
 /** 服务标识：数据目录绝对路径的摘要前 12 位。 */
 export const spawnOwner = (data: string) =>

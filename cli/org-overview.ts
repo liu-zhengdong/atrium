@@ -45,7 +45,7 @@ export const isBlank = (o: Overview) =>
   !o.stages.length &&
   !o.parts.some((p) => p.alias || p.analogy);
 
-export function stageLine(stage: Stage): string {
+function stageLine(stage: Stage): string {
   return `${stage.id} [${STAGE_LABEL[stage.status]}] ${stage.result}`;
 }
 

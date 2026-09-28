@@ -9,13 +9,7 @@ import { originRepo, repoFlag } from "../gh-repo.ts";
 import { atomically, getTask, noteTask } from "../ledger/ledger.ts";
 import type { TaskRow } from "../ledger/ledger-model.ts";
 import { backfillLegacyPage } from "./online-backfill.ts";
-import {
-  firstRelease,
-  includedInVersion,
-  onlineMessage,
-  planOnline,
-} from "./online.ts";
-import { compareSemver } from "../../releases.ts";
+import { firstRelease, onlineMessage, planOnline } from "./online.ts";
 
 export type DeployResult = { ok: true } | { ok: false; reason: string };
 

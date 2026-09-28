@@ -55,7 +55,7 @@ import {
 } from "./map/routes.ts";
 
 /** 打开数据库。旧运行时留下的表（身份、聊天、账号等）不读不写，也不因它们存在而报错。 */
-export function openDatabase(data: string) {
+function openDatabase(data: string) {
   const db = new DatabaseSync(join(data, "atrium.sqlite"));
   db.exec(
     "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;",

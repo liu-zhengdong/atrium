@@ -32,7 +32,7 @@ export type Tell = TellEntry & {
 };
 
 /** 同一任务一次最多带多少条（提示词与续上消息都有界）。 */
-export const TELLS_MAX = 50;
+const TELLS_MAX = 50;
 
 type Detail = Omit<Tell, "id" | "at">;
 

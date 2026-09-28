@@ -16,7 +16,7 @@ import { MAX_STALL_RERUNS } from "./check-quiet.ts";
 
 export type CheckClass = "passed" | "failed" | "not_run";
 
-export const CHECK_CLASS_TEXT: Record<CheckClass, string> = {
+const CHECK_CLASS_TEXT: Record<CheckClass, string> = {
   passed: "过",
   failed: "没过",
   not_run: "没跑成",
@@ -60,7 +60,7 @@ export function isTimingSensitive(name: string, patterns: readonly string[]) {
 }
 
 /** 找不到命令的退出码（POSIX shell）。 */
-export const COMMAND_NOT_FOUND = 127;
+const COMMAND_NOT_FOUND = 127;
 
 const NOT_FOUND_LINE =
   /^.*(?:command not found|is not recognized as an internal or external command).*$/m;
@@ -155,11 +155,6 @@ export function rerunDecision(input: {
 /** 重跑用尽仍没跑成：关卡与受阻原因里的写法。 */
 export function notRunText(reason: string, reruns: number) {
   return `基础设施问题：检查没跑成${reruns ? `（已自动重跑 ${reruns} 次）` : ""}：${reason}`;
-}
-
-/** 等重跑时的一句话（状态栏、task show）。 */
-export function rerunText(attempt: number, reason: string) {
-  return `检查没跑成，等重跑（第 ${attempt}/${MAX_CHECK_RERUNS} 次）：${reason}`;
 }
 
 /** 检查结果带上分类与已重跑次数（写进事件，`task show` 一眼看到是哪一类）。 */

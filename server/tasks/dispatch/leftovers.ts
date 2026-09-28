@@ -15,7 +15,7 @@ export const LEFTOVER_MS = 24 * 60 * 60_000;
 /** 一次最多核对这么多个。 */
 export const LEFTOVER_LIMIT = 50;
 /** 启动时刻的容差：ps 的 etime 精度到秒，远程按指令下发时刻换算时钟还有传递延迟。 */
-export const START_SLACK_MS = 5_000;
+const START_SLACK_MS = 5_000;
 
 export type LeftoverRow = {
   id: number;

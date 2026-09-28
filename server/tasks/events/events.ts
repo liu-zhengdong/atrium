@@ -171,9 +171,9 @@ export type Publish = {
   detail?: unknown;
 };
 
-export const BATCH_LIMIT = 50;
+const BATCH_LIMIT = 50;
 export const WAIT_MAX_SECONDS = 3600;
-export const ACK_MAX = 500;
+const ACK_MAX = 500;
 export const LIST_LIMIT = 50;
 export const LIST_MAX = 200;
 

@@ -51,7 +51,7 @@ type ChatMode =
   /** 用工具自己的界面，事件由 atrium secretary bridge 注入会话（t243）。 */
   | { kind: "bridge"; note: string; next: string };
 
-export const CHAT_TOOLS: Record<string, ChatMode> = {
+const CHAT_TOOLS: Record<string, ChatMode> = {
   opencode: {
     kind: "acp",
     command: "opencode",

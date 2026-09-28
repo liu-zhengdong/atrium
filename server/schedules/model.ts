@@ -41,7 +41,7 @@ export function ensureScheduleTables(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS schedule_runs_task ON schedule_runs(task_id);`);
 }
 
-export const RUNS_KEPT = 20;
+const RUNS_KEPT = 20;
 
 export type ScheduleRow = {
   id: number;

@@ -37,7 +37,7 @@ export type Launched = {
 };
 
 /** 仓库还没克隆就克隆（大仓库可能要几分钟）；已克隆的交给 ensureWorktree 去 fetch。 */
-export async function ensureClone(url: string, clone: string, run: Exec) {
+async function ensureClone(url: string, clone: string, run: Exec) {
   if (existsSync(join(clone, ".git")) || existsSync(join(clone, "HEAD")))
     return;
   mkdirSync(dirname(clone), { recursive: true, mode: 0o700 });

@@ -56,7 +56,7 @@ function classify(text: string) {
  * claude stream-json `{type:"result",is_error:true,result}`；
  * agy stream-json `{event:"result",result:{status:"ERROR",error}}`。其他事件返回 undefined。
  */
-export function errorText(event: JsonEvent): string | undefined {
+function errorText(event: JsonEvent): string | undefined {
   if (event.event === "result") {
     const result = object(event.result);
     if (!result || result.status === "SUCCESS") return undefined;

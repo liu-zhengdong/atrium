@@ -39,7 +39,7 @@ export type FactInput = {
   summary: string;
 };
 
-export async function findPr(
+async function findPr(
   target: GhRepo,
   branch: string,
   run: Exec = defaultExec,

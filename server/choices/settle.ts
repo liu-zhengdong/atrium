@@ -17,15 +17,15 @@ import { choiceRef } from "./model.ts";
  * 错误写进完成事件交负责人补。同一件任务只登记一次。调研执行者没有 Atrium 的访问，只能写文件。
  */
 
-export const CHOICE_FILE = "choice.json";
-export const CHOICE_FILE_MAX = 64 * 1024;
+const CHOICE_FILE = "choice.json";
+const CHOICE_FILE_MAX = 64 * 1024;
 
 /** 研究者写选项单的位置（调研任务没有仓库，在任务目录的 work 下干活）。 */
 export const choiceFileOf = (data: string, taskId: number) =>
   join(taskDir(data, taskId), "work", CHOICE_FILE);
 
 /** 文件内容 → 选项单对象（纯函数）；字段校验留给 addChoice。 */
-export function parseChoiceFile(
+function parseChoiceFile(
   raw: string,
 ): { ok: true; value: unknown } | { ok: false; error: string } {
   const text = raw.replace(/^﻿/, "").trim();

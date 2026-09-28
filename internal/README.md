@@ -35,14 +35,14 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
 | `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
-| `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`；`workers`（列、看、改档案） | `worker_profiles` |
+| `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（claude、codex 按执行者的话分段，其余逐行原文）；`workers`（列、看、改档案） | `worker_profiles` |
 | `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；档案经 `workers.Resolve`；没有仓库的任务判过时 `agenda.Settle` 登记 choice.json；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `merge` | 完成 | 合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | 等版本、自升级、平滑重启、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
 | `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
-| `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的日志是执行者真日志尾巴（`workers.ReadLog`，与 `task log` 同一份）；代为注册一次性的 `import`（实现在 `importer`） | — |
+| `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、决定、负责人、备忘、技能、资料、档案、机器 | — |
 | `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`、`statusline`（状态栏调用，不列在帮助里） | — |
 

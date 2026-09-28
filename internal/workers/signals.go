@@ -114,7 +114,7 @@ func errorReport(tail string) string {
 		}
 		typ := e.str("type")
 		switch {
-		case typ == "result" && e["is_error"] == false:
+		case typ == "result" && e["is_error"] == false, typ == "turn.completed":
 			last = ""
 		case e.str("event") == "result":
 			r := e.obj("result")
@@ -127,7 +127,7 @@ func errorReport(tail string) string {
 			if s := e.obj("rate_limit_info").str("status"); rateStatusRE.MatchString(s) {
 				last = "rate limit exceeded: " + s
 			}
-		case typ == "error" || (typ == "result" && e["is_error"] == true):
+		case typ == "error" || typ == "turn.failed" || (typ == "result" && e["is_error"] == true):
 			var parts []string
 			for _, k := range []string{"error", "message", "result", "subtype"} {
 				switch v := e[k].(type) {
@@ -201,6 +201,8 @@ func endedOK(tail string) bool {
 			return e["is_error"] == false
 		case e.str("event") == "result":
 			return e.obj("result").str("status") == "SUCCESS"
+		case e.str("type") == "turn.completed", e.str("type") == "turn.failed":
+			return e.str("type") == "turn.completed"
 		}
 	}
 	return false
@@ -289,7 +291,7 @@ type Ending struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// Ended 按工具的日志结构判结局：stream-json 看最后的 result 事件；通用命令行按 done_match / error_match。
+// Ended 按工具的日志结构判结局：stream-json 看最后的 result 事件（codex 看 turn.completed／turn.failed）；通用命令行按 done_match / error_match。
 func (a *Driver) Ended(tail string) Ending {
 	if a.cli != nil {
 		lines := strings.Split(tail, "\n")
@@ -331,6 +333,10 @@ func (a *Driver) Ended(tail string) Ending {
 				return Ending{Known: true, OK: true}
 			}
 			return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(r.str("status")+" "+r.str("error"))}
+		case e.str("type") == "turn.completed":
+			return Ending{Known: true, OK: true}
+		case e.str("type") == "turn.failed":
+			return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.obj("error").str("message"))}
 		case e.str("type") == "step_finish":
 			if r := e.obj("part").str("reason"); r == "length" {
 				return Ending{Known: true, Reason: "上下文或输出长度用尽"}
@@ -341,54 +347,13 @@ func (a *Driver) Ended(tail string) Ending {
 	return Ending{}
 }
 
-// Readable 把一行日志变成人读的一行（纯函数）：JSON 事件取助手正文、工具调用、收尾；别的原样。空串表示不值得显示。
-func Readable(line string) string {
-	e := parseEvent(line)
-	if e == nil {
-		return strings.TrimRight(line, "\r")
-	}
-	switch e.str("type") {
-	case "assistant":
-		var out []string
-		content, _ := e.obj("message")["content"].([]any)
-		for _, c := range content {
-			m := event(asMap(c))
-			switch m.str("type") {
-			case "text":
-				out = append(out, m.str("text"))
-			case "tool_use":
-				in, _ := json.Marshal(m["input"])
-				out = append(out, "→ "+m.str("name")+" "+oneLine(string(in)))
-			}
-		}
-		return strings.Join(out, "\n")
-	case "result":
-		return "== 收尾：" + oneLine(e.str("subtype")+" "+e.str("result"))
-	case "user":
-		if e["isReplay"] == true {
-			return "== 捎话已读入"
-		}
-		return ""
-	case "text":
-		return e.obj("part").str("text")
-	case "tool_use":
-		return "→ " + e.obj("part").str("tool")
-	case "error":
-		return "!! " + oneLine(errorReport(line))
-	}
-	if e.str("event") == "result" {
-		return "== 收尾：" + e.obj("result").str("status")
-	}
-	return ""
-}
-
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
 
 // maxReply 是记下的最后回复的上限（字符）。
 const maxReply = 8000
 
 // LastReply 取执行者最后一条回复（纯函数）：stream-json 取收尾事件的 result（agy 取 response），
-// opencode 取最后一段文字；文本日志取末尾若干行。gates 从这里读审阅结论。
+// opencode 取最后一段文字，codex 取最后一条 agent_message；文本日志取末尾若干行。gates 从这里读审阅结论。
 func (a *Driver) LastReply(tail string) string {
 	lines := strings.Split(strings.TrimRight(tail, "\n"), "\n")
 	if a.JSON {
@@ -402,6 +367,8 @@ func (a *Driver) LastReply(tail string) string {
 				return clip(e.obj("result").str("response"))
 			case e.str("type") == "text":
 				return clip(e.obj("part").str("text"))
+			case e.str("type") == "item.completed" && e.obj("item").str("type") == "agent_message":
+				return clip(e.obj("item").str("text"))
 			}
 		}
 		return ""

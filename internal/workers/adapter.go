@@ -219,17 +219,17 @@ func claudeAdapter() *Driver {
 	return a
 }
 
-// codex exec：-C 工作目录、-s 沙箱、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
-// 续上：codex exec resume <会话> -（没有 -C、-s，沙箱走配置覆盖）。
+// codex exec：--json 逐行输出事件；-C 工作目录、-s 沙箱、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
+// 续上：codex exec resume --json <会话> -（没有 -C、-s，沙箱走配置覆盖）；会话 id 是 thread.started 的 thread_id。
 func codexAdapter() *Driver {
 	a := &Driver{Tool: "codex", Exe: "codex", DefaultModel: "gpt-6-sol", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
-		Tell: TellResume, Endpoints: []string{"responses"}, session: regexp.MustCompile(`(?m)^session id: ([0-9a-f-]{36})$`)}
+		Tell: TellResume, JSON: true, Endpoints: []string{"responses"}, session: regexp.MustCompile(`"type":"thread.started","thread_id":"([0-9a-f-]{36})"`)}
 	a.build = func(in Request) (Launch, error) {
 		var args []string
 		if in.Session != "" {
-			args = []string{"exec", "resume", "-c", `sandbox_mode="danger-full-access"`}
+			args = []string{"exec", "resume", "--json", "-c", `sandbox_mode="danger-full-access"`}
 		} else {
-			args = []string{"exec", "-C", in.Dir, "-s", "danger-full-access"}
+			args = []string{"exec", "--json", "-C", in.Dir, "-s", "danger-full-access"}
 		}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)

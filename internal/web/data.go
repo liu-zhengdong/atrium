@@ -579,18 +579,17 @@ func runningByHost(ctx context.Context, q store.Querier) (map[string]int, error)
 
 // TaskDetail 是任务抽屉。
 type TaskDetail struct {
-	Task     ledger.Task `json:"task"`
-	DeptName string      `json:"dept_name"`
-	Steps    []string    `json:"steps"`
-	Step     int         `json:"step"`
-	State    string      `json:"state"`
-	Holder   string      `json:"holder"`
-	HostName string      `json:"host_name"`
-	Log      string      `json:"log"` // 最近一次拉起的执行者日志尾巴（人读的行，与 task log 同一份）
+	Task     ledger.Task    `json:"task"`
+	DeptName string         `json:"dept_name"`
+	Steps    []string       `json:"steps"`
+	Step     int            `json:"step"`
+	State    string         `json:"state"`
+	Holder   string         `json:"holder"`
+	HostName string         `json:"host_name"`
+	Trace    *workers.Trace `json:"trace"`  // 最近一次拉起的经过（与 task log 同一份解析）；还没拉起过为空
+	Live     bool           `json:"live"`   // 执行者正在干（执行这一步）
+	RunAt    int64          `json:"run_at"` // 最近一次拉起的时刻
 }
-
-// logTail 是抽屉里日志尾巴的行数。
-const logTail = 40
 
 func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, error) {
 	t, err := ledger.Get(ctx, q, id)
@@ -621,22 +620,13 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 			out.Holder = reason
 		}
 	}
-	out.Log, err = workerLog(ctx, q, id)
-	return out, err
-}
-
-// workerLog 读任务最近一次拉起的执行者日志末尾，翻成人读的行，留最后 logTail 行；还没拉起过为空。
-func workerLog(ctx context.Context, q store.Querier, id string) (string, error) {
 	run, err := workers.LastRun(ctx, q, id)
 	if err != nil || run == nil {
-		return "", err
+		return out, err
 	}
-	text, _, err := workers.ReadLog(run.Log, -1)
-	if err != nil {
-		return "", err
-	}
-	lines := strings.Split(strings.TrimRight(workers.ReadableLog(text), "\n"), "\n")
-	return strings.Join(lines[max(len(lines)-logTail, 0):], "\n"), nil
+	tr, err := workers.ReadTrace(run.Worker, run.Log)
+	out.Trace, out.RunAt, out.Live = &tr, run.At, t.Status == ledger.Running && t.Stage == ledger.StageNone
+	return out, err
 }
 
 // holderText 是「现在谁拿着球」：没结束的任务用 watch 的持球判定（与 top、statusline 同一份），

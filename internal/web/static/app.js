@@ -171,9 +171,72 @@ async function renderLegion() {
   <section class="section"><h2>表现</h2>${perf}</section>`;
 }
 
+/* 经过：按执行者说的话分段；命令显示原文，点开看完整命令与输出最后 30 行。展开状态跨刷新保留。 */
+const unfolded = new Set();
+const md = s => esc(s).replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+  .replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+const firstPara = s => s.trim().split(/\n\s*\n/)[0];
+const oneLine = s => s.trim().replace(/\s*\n\s*/g, " ↵ ");
+const cmdNote = { run: "在跑", err: "出错", none: "没搜到", ok: "" };
+const cmdsOf = segs => segs.flatMap(s => s.cmds || []);
+const pips = cmds => `<span class="pips">${cmds.map(c => `<i class="${c.state}"></i>`).join("")}</span>`;
+function since(ms) {
+  const m = Math.max(1, Math.round((Date.now() - ms) / 60e3));
+  return m < 60 ? m + " 分钟" : Math.floor(m / 60) + " 小时 " + (m % 60) + " 分钟";
+}
+function segHTML(tid, s, i, running) {
+  const cmds = s.cmds || [], key = tid + ":" + i;
+  const exp = unfolded.has(key) || (running && !unfolded.has(key + ":closed"));
+  const last = cmds[cmds.length - 1];
+  const list = exp ? `<div class="cmds">${cmds.map((c, j) => {
+    const k = key + ":" + j, o = unfolded.has(k);
+    return `<div class="cmd ${c.state}"><button data-c="${k}" aria-expanded="${o}"><span class="lbl">${esc(oneLine(c.cmd))}</span><span class="st">${cmdNote[c.state]}</span></button>
+      ${o ? `<div class="detail"><div class="c">$ ${esc(c.cmd)}</div>${c.state === "run" ? "" : `<div class="o">${esc(c.out) || "（没有输出）"}</div>`}</div>` : ""}</div>`;
+  }).join("")}</div>` : "";
+  return `<div class="phase ${running ? "run" : ""}"><span class="pd"></span><div>
+    ${s.say ? `<div class="say">${md(s.say)}</div>` : `<div class="say quiet">先看代码</div>`}
+    ${cmds.length ? `<button class="grp" data-g="${key}" aria-expanded="${exp}"><span class="chev">›</span>${cmds.length} 条命令${pips(cmds)}</button>` : ""}
+    ${running && !exp && last?.state === "run" ? `<div class="nowrun">正在跑：<code>${esc(oneLine(last.cmd).slice(0, 60))}</code></div>` : ""}${list}</div></div>`;
+}
+function traceHTML(d) {
+  const tr = d.trace;
+  if (!tr) return "";
+  const tid = d.task.id, segs = tr.segments, n = cmdsOf(segs).length;
+  const lines = tr.lines?.length ? `<div class="log">${esc(tr.lines.join("\n"))}</div>` : "";
+  const fold = (key, label, open) => `<button class="grp fold" data-g="${tid}:${key}" aria-expanded="${open}"><span class="chev">›</span>${label}</button>`;
+  if (!segs.length && !tr.ended) return lines ? `<div class="jh"><b>日志</b></div>${lines}` : "";
+  if (d.live) { // 进行中：只留最近两段，当前段展开，更早的折起
+    const older = segs.slice(0, Math.max(0, segs.length - 2)), showOld = unfolded.has(tid + ":old");
+    return `<div class="jh"><b>经过</b><span>${n} 条命令 · 已跑 ${since(d.run_at)}</span></div>`
+      + (older.length ? fold("old", `前面还有 ${older.length} 段 · ${cmdsOf(older).length} 条命令`, showOld) : "")
+      + (showOld ? older.map((s, i) => segHTML(tid, s, i, false)).join("") : "")
+      + segs.slice(older.length).map((s, k) => segHTML(tid, s, older.length + k, older.length + k === segs.length - 1)).join("") + lines;
+  }
+  let out = "";
+  if (tr.ended && tr.result) { // 已完成：先给结果第一段，其余折进「全文」；经过整体折起
+    const full = unfolded.has(tid + ":full"), more = firstPara(tr.result) !== tr.result.trim();
+    out += `<div class="jh"><b>结果</b>${tr.ms ? `<span>用时 ${Math.max(1, Math.round(tr.ms / 60e3))} 分钟</span>` : ""}</div>
+      <div class="result">${md(full ? tr.result.trim() : firstPara(tr.result))}</div>${more ? fold("full", full ? "收起" : "全文", full).replace(" fold", "") : ""}`;
+  }
+  if (segs.length) {
+    const showAll = unfolded.has(tid + ":all");
+    out += `<div class="jh"><b>经过</b></div>` + fold("all", `${segs.length} 段 · ${n} 条命令${pips(cmdsOf(segs))}`, showAll)
+      + (showAll ? segs.map((s, i) => segHTML(tid, s, i, false)).join("") : "");
+  }
+  return out + lines;
+}
+
 /* 抽屉 */
+let drawerTask = null, liveTimer = null;
 async function openTask(id) {
   const d = await api("task/" + id);
+  clearTimeout(liveTimer);
+  if (d.live) liveTimer = setTimeout(refresh, 5000); // 执行者在干时日志一直在长，抽屉每 5 秒重取
+  renderTask(d);
+}
+function renderTask(d) {
+  const body = $("#drawer .dbody"), keep = body && drawerTask?.task.id === d.task.id ? body.scrollTop : 0;
+  drawerTask = d;
   const t = d.task;
   const stuck = d.state === "bad";
   const pr = !t.pr ? "还没有" : /^https?:\/\//.test(t.pr) ? `<a href="${esc(t.pr)}" target="_blank" rel="noreferrer">${esc(t.pr.replace(/^.*\/pull\//, "#"))}</a>` : esc(t.pr);
@@ -185,8 +248,9 @@ async function openTask(id) {
       <div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>
       <div class="holder"><b>${label}</b>　${esc(d.holder)} · ${esc(ago(t.updated_at))}</div>
       <dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd></dl>
-      ${d.log ? `<div class="log">${esc(d.log)}</div>` : ""}
+      ${traceHTML(d)}
     </div>`;
+  $("#drawer .dbody").scrollTop = keep;
 }
 async function openChoice(id) {
   const c = await api("choice/" + id);
@@ -264,6 +328,15 @@ function refresh() {
 addEventListener("hashchange", () => route(false));
 $("#mnav").onchange = e => { location.hash = e.target.value; };
 document.addEventListener("click", e => {
+  const fold = e.target.closest("#drawer [data-g]");
+  if (fold) {
+    const k = fold.dataset.g;
+    if (fold.getAttribute("aria-expanded") === "true") { unfolded.delete(k); unfolded.add(k + ":closed"); }
+    else { unfolded.add(k); unfolded.delete(k + ":closed"); }
+    return renderTask(drawerTask);
+  }
+  const cmd = e.target.closest("#drawer [data-c]");
+  if (cmd) { const k = cmd.dataset.c; unfolded.has(k) ? unfolded.delete(k) : unfolded.add(k); return renderTask(drawerTask); }
   const t = e.target.closest("[data-task]"); if (t) { location.hash = hashWith(t.dataset.task); return; }
   const a = e.target.closest("[data-open]"); if (a) { location.hash = hashWith(a.dataset.open); return; }
   const g = e.target.closest("[data-go]"); if (g) { location.hash = g.dataset.go; return; }

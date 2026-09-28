@@ -167,7 +167,7 @@ func TestFlowClaudeToGate(t *testing.T) {
 		t.Errorf("提示词：%s", prompt)
 	}
 	c, err := ReadLog(ctx, env, tk.ID, -1, 0)
-	if err != nil || !strings.Contains(c.Text, "== 收尾") || c.Running {
+	if err != nil || !strings.Contains(c.Text, `"type":"result"`) || c.Running {
 		t.Errorf("task log：%+v %v", c, err)
 	}
 	// 交回：Bounce 回队列（没有队列行）→ 沿用原执行者、原工作树，提示词带交回原因。

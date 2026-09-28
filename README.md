@@ -631,8 +631,8 @@ atrium statusline [--json]
   Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、未处理事件；服务不在只显示未运行，不拉起
   示例：atrium statusline
 
-atrium task add 标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
-  建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用
+atrium task add 标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--secret 名称[,名称]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
+  建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--secret 写要用的凭据名称（先 atrium secret set 节点 名称；派活那一刻按归属部分往上找、以同名环境变量注入执行者，提示词只写名称），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用
   示例：atrium task add 拆分登录模块 --parent t1
 
 atrium task ls [--status S] [--parent tN] [--after tN]
@@ -651,8 +651,8 @@ atrium task tree [tN] [--all] [--after tN] [--limit N]
   缩进树：短号、状态、标题、交付物、执行者、PR；不写 tN 列未完成的顶层任务（每页 30 个）与最近 10 个已结束的，--all 按短号翻全部顶层
   示例：atrium task tree
 
-atrium task set tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通]
-  人工修正状态（todo、done、failed、blocked、cancelled）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）
+atrium task set tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--secret 名称[,名称]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通]
+  人工修正状态（todo、done、failed、blocked、cancelled）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、要用的凭据（--secret，下一轮拉起按新的注入）、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）
   示例：atrium task set t1 --status done
 
 atrium task note tN 文字 [--as 身份] [--verdict ok|fixed|rejected]
@@ -1090,6 +1090,34 @@ atrium material stale [--node 节点]
 atrium material rm mN
   真删资料（库里的记录与全部版本的文件，删了找不回来）；只有用户能删，平时用不上就 archive
   示例：atrium material rm m1
+```
+
+### 凭据
+
+```text
+atrium secret set 节点 名称
+  设凭据（令牌、密码）：值从标准输入读（终端里不回显；也可 < 文件 或管道），名称就是注入执行者的环境变量名（如 TELEGRAM_BOT_TOKEN）；同一节点同名的覆盖，已归档的顺带恢复；只存不显示
+  示例：atrium secret set 节点 名称
+
+atrium secret ls [--node 节点] [--archived] [--before 号] [--limit 条数]
+  列凭据（新设的在前）：名称、节点、设于、最近使用（时间与任务）、清理线索；不显示值；缺省不含归档的，--archived 只列归档的
+  示例：atrium secret ls
+
+atrium secret archive 节点 名称 [--note 原因]
+  归档凭据：派活不再注入（声明了它的任务派不出去）、清理线索也不再提，值留着可恢复（只归档不删）
+  示例：atrium secret archive 节点 名称
+
+atrium secret restore 节点 名称 [--note 原因]
+  恢复归档的凭据，派活时重新注入
+  示例：atrium secret restore 节点 名称
+
+atrium secret keep 节点 名称 --note 原因
+  清理线索说疑似没用（90 天没用过）、但决定留下：写一句原因，之后清理线索不再提它
+  示例：atrium secret keep 节点 名称 --note 原因
+
+atrium secret rm 节点 名称
+  真删凭据（记录与值一起删，找不回来）；只有用户能删，平时用不上就 archive
+  示例：atrium secret rm 节点 名称
 ```
 
 ### 选项与拍板

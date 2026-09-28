@@ -17,14 +17,12 @@ import { markHinted, purgeMaterials, staleMaterials } from "./store.ts";
 /** 一条事件里最多列几份，其余看 material stale。 */
 const LISTED = 20;
 
-export function publishMaterialHints(
-  db: DatabaseSync,
-  inbox: EventInbox,
-  nodeId: number,
-  now = Date.now(),
-) {
+/**
+ * 线索投给谁、看哪些节点：这一块最近的 leader（没有就秘书），范围是这一块及其下层里事件同样投给他的节点
+ * （下层另有 leader 的由它自己的周期任务管）。凭据的清理线索（secrets/hints.ts）用同一个范围。
+ */
+export function hintScope(db: DatabaseSync, nodeId: number) {
   const list = nodes(db);
-  // 这一块及其下层里，事件同样投给这位 leader 的节点（下层另有 leader 的由它自己的周期任务管）。
   const below = new Set<number>([nodeId]);
   for (let grew = true; grew;) {
     grew = false;
@@ -39,6 +37,16 @@ export function publishMaterialHints(
   const ids = [...below].filter(
     (id) => routes.get(id)?.subscriber === route.subscriber,
   );
+  return { route, ids };
+}
+
+export function publishMaterialHints(
+  db: DatabaseSync,
+  inbox: EventInbox,
+  nodeId: number,
+  now = Date.now(),
+) {
+  const { route, ids } = hintScope(db, nodeId);
   const due = staleMaterials(db, ids, now).filter((m) =>
     hintDue(m.hinted_at, now),
   );

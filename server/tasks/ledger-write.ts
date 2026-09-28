@@ -58,6 +58,12 @@ import {
   involvedView,
   writeAlso,
 } from "./also.ts";
+import { parseSecretNames } from "../secrets/model.ts";
+import {
+  checkTaskSecrets,
+  taskSecretNames,
+  writeTaskSecrets,
+} from "../secrets/store.ts";
 import { checkSpecialists } from "./specialist-scope.ts";
 import { syncTotals } from "./rollup-ledger.ts";
 import {
@@ -159,6 +165,8 @@ export type NewTask = {
   goal?: string | null;
   /** 牵涉的部分（#373），逗号分隔。 */
   also?: string | null;
+  /** 要用的凭据名称（t194），逗号分隔；派活时按名称注入执行者环境。 */
+  secret?: string | null;
   /** 请哪些专员：关注点节点，逗号分隔。 */
   concern?: string | null;
   ask?: string | null;
@@ -168,10 +176,12 @@ export type NewTask = {
 function withConcerns(db: DatabaseSync, task: TaskRow, hints: boolean) {
   const concerns = concernsOf(db, task.id);
   const concern_hints = hints ? textHints(db, task) : [];
+  const secrets = taskSecretNames(db, task.id);
   return {
     ...(concerns.length ? { concerns } : {}),
     ...(concern_hints.length ? { concern_hints } : {}),
     ...involvedView(involvedOf(db, task)),
+    ...(secrets.length ? { secrets } : {}),
   };
 }
 
@@ -225,6 +235,7 @@ export function createTask(
     "concern",
     "ask",
     "also",
+    "secret",
   ]);
   const specialist = specialistOptions(input);
   const urgent = urgentOf(input.urgent);
@@ -235,6 +246,7 @@ export function createTask(
   const issue = issueOf(input.issue);
   validateDeliver(deliver, issue);
   const repo = repoOf(input.repo);
+  const secrets = parseSecretNames(input.secret);
   const values = {
     owner:
       input.owner === undefined || input.owner === null || input.owner === ""
@@ -273,6 +285,7 @@ export function createTask(
       concerns,
       oldRoleSpecialist ? "role" : "by",
     );
+    checkTaskSecrets(db, part ?? node, secrets);
     const level = priority ?? defaultPriority(aspectPart(db, part ?? node));
     const { lastInsertRowid } = db
       .prepare(
@@ -312,6 +325,7 @@ export function createTask(
     setConditions(db, id, input, now);
     writeConcerns(db, id, concerns);
     writeAlso(db, id, also);
+    writeTaskSecrets(db, id, secrets);
     addEvent(db, id, now, "created", {
       title: values.title,
       ...(parent ? { parent: taskRef(parent) } : {}),
@@ -327,6 +341,7 @@ export function createTask(
         : {}),
       ...(level === "idle" ? { priority: level } : {}),
       ...(also.length ? { also: also.map(nodeRef) } : {}),
+      ...(secrets.length ? { secrets } : {}),
       ...(by ? { by } : {}),
     });
     // 父任务有了子任务就是总任务（t190）：撤出排队，已结束的按汇总改回待办。
@@ -376,11 +391,12 @@ export function updateTask(
     "concern",
     "ask",
     "also",
+    "secret",
   ]);
   const specialist = specialistOptions(input);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、role、job、from、part、also、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、pr_url",
+      "至少修改一项：title、brief、brief_path、role、job、from、part、also、secret、concern、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
@@ -402,6 +418,8 @@ export function updateTask(
     fields.pr_url = input.pr_url;
   }
   const target = "status" in input ? statusOf(input.status) : undefined;
+  const secrets =
+    "secret" in input ? parseSecretNames(input.secret) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
     const urgentNow =
@@ -496,6 +514,20 @@ export function updateTask(
       );
     }
     setConditions(db, id, input, now);
+    if (secrets) {
+      // 执行中改也行：本轮环境已定，下一轮拉起按新的注入。
+      checkTaskSecrets(
+        db,
+        (("part_id" in fields ? fields.part_id : current.part_id) ??
+          ("node_id" in fields ? fields.node_id : current.node_id)) as
+          number | null,
+        secrets,
+      );
+      const before = taskSecretNames(db, id);
+      writeTaskSecrets(db, id, secrets);
+      if (before.join(",") !== secrets.join(","))
+        addEvent(db, id, now, "secrets", { from: before, to: secrets });
+    }
     if (also) {
       const before = alsoOf(db, id).map(nodeRef);
       writeAlso(db, id, also);

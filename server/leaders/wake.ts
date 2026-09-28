@@ -146,6 +146,18 @@ export function eventLine(event: PromptEvent) {
       `  - ${field(event.detail, "hint", 300)}`,
     ].join("\n");
   }
+  if (event.kind === "secret_stale") {
+    const detail = event.detail as {
+      node?: string;
+      secrets?: { name: string; node: string; reason: string }[];
+      more?: number;
+    } | null;
+    return `- #${event.id} 疑似没用的凭据 ${detail?.node ?? ""}：${(
+      detail?.secrets ?? []
+    )
+      .map((s) => `${s.node} ${s.name.slice(0, 64)}（${s.reason}）`)
+      .join("；")}${detail?.more ? `；另有 ${detail.more} 个` : ""}`;
+  }
   if (event.kind === "patrol_findings") {
     const detail = event.detail as {
       node?: string;
@@ -201,6 +213,7 @@ export const EVENT_WORDS: Record<string, string> = {
   schedule_failed: "周期任务没建成",
   material_stale: "资料疑似没用",
   material_purge: "资料可以真删",
+  secret_stale: "凭据疑似没用",
 };
 export const eventWord = (kind: string) => EVENT_WORDS[kind] ?? kind;
 
@@ -268,14 +281,15 @@ export function leaderPrompt(input: PromptInput): string {
     `- 要点：atrium org point-add ${home} 要点 --why 为什么 --by ${input.leader}；阶段：atrium org stages ${home} --file 阶段.yaml`,
     `- 子节点指派 leader：atrium org edit 子节点 --leader aM`,
     "- 资料：atrium material ls --node oN；疑似没用的（资料清理线索）你来定：用不上就 atrium material archive mN --note 原因（只归档不删，可恢复），要留就 atrium material keep mN --note 原因（之后不再提）；拿不准先 atrium material show mN 看谁读过",
+    "- 凭据：atrium secret ls --node oN（只有名称与最近使用，没有值）；疑似没用的（90 天没用过）你来定：用不上就 atrium secret archive oN 名称 --note 原因（派活不再注入，可恢复），要留就 atrium secret keep oN 名称 --note 原因；任务要用就 task add/set --secret 名称，派活时按名称注入执行者",
     `- 周期任务（巡检、调研）：atrium schedule add ${home} --kind patrol --every 1d --at 09:30；atrium schedule pause/resume/run/rm sN`,
     "- 备忘：atrium memo edit 文本（覆盖写，超过上限会被拒，先精简）；看全：atrium memo show",
     `- 决定记录（取舍与原因，给自己以后回看；不是执行者要守的要点）：atrium decision add 决定 --why 原因 [--by u1] [--node ${home}] [--issue N] [--task tN] [--supersedes dN] [--principle]；推翻：atrium decision supersede dN --by dM；推翻错了：atrium decision unsupersede dN --why 原因；查：atrium decision ls --node ${home}、atrium decision search 关键词`,
     `- 例行巡检（周期任务到点、资料清理线索）时顺带看本部分的决定（atrium decision ls --node ${home}）：能合并的合并，被取代的标推翻并指向新决定（decision supersede），已成规矩的沉淀为要点（atrium decision settle dN --new-point 节点 要点 或 --point kN）；只是整理，不必每次都做`,
     "",
     "## 权限边界（服务端强制，越权会被拒）",
-    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审、判断专员否决；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",
-    "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、拍板上交的会审、真删资料。",
+    "- 可以：在你负责的节点及子节点建任务、派活、重派、捎话、停、请专员与会审、判断专员否决；改这些节点的要点、阶段与全景人话字段；加、归档、恢复、留下这些节点的资料，设值、归档、恢复、留下这些节点的凭据；给这些节点排周期任务；写自己的备忘与决定记录；给子节点指派下层 leader。",
+    "- 不可以：动别的部分的任务、改章程与上层规矩、突破预算与硬边界、改仓库公开范围、花钱、拍板上交的会审、真删资料或凭据。",
     "",
     `## 上交（投给 ${input.upstream}；只有这四类才上交，其余自己处理）`,
     "- shipped 已上线：只在里程碑／阶段达成时上交 → atrium leader escalate --kind shipped 说明 --task tN；单个任务上线运行时已自动通知秘书，不必再报",

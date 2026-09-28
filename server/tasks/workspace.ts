@@ -1,3 +1,5 @@
+import { secretSection } from "../secrets/model.ts";
+import { taskSecretList } from "../secrets/store.ts";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -293,6 +295,10 @@ export async function prepareRun(
       ? `节点：o${patrol.node_id}\n本轮场景：${patrol.scenario}\n一件事怎么走完：${(JSON.parse(patrol.flow) as string[]).map((step, i) => `${i + 1}. ${step}`).join("\n") || "按场景自行走通"}\n\n按场景实际操作；只读全景、帮助和命令回执。遇到问题用 atrium patrol report ${task.ref} --phenomenon 简短现象 --step 哪一步 --command '实际命令' --expected '预期' --actual '实际' --kind broken|awkward 记录。无发现也正常结束。`
       : brief,
     tells: tellSection(tells),
+    secrets:
+      options.db && !patrol
+        ? secretSection(taskSecretList(options.db, task))
+        : undefined,
     roleDoc: [
       verify ? VERIFY_ROLE : "",
       patrol

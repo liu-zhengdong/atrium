@@ -6,8 +6,8 @@
  * 写自己的备忘与决定记录；给子节点指派下层 leader；确认投给自己的事件；上交；在负责的部分或它的上一层提选项单、写意见；
  * 给本节点及子节点排周期任务（巡检、调研等），停、续、立即跑一轮、删掉；
  * 用户把节点的选项单拍板权下放给 leader 后拍板（是不是拍板人由 choices/store.ts 按节点设置判）；
- * 在负责的部分里加资料、归档、恢复、留下，取任何资料。
- * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改谁拍板选项单、改技能、清额度、登记 leader、真删资料等。
+ * 在负责的部分里加资料、归档、恢复、留下，取任何资料；在负责的部分里设凭据、归档、恢复、留下（没有读值的接口）。
+ * 不可以：动别的节点的任务、改章程与边界预算、建删节点、拍板会审、改谁拍板选项单、改技能、清额度、登记 leader、真删资料或凭据等。
  */
 
 export type LeaderRule =
@@ -32,6 +32,7 @@ export type LeaderRule =
   | "material-add"
   | "material"
   | "material-read"
+  | "secret"
   | "schedule"
   | "deny";
 
@@ -75,6 +76,11 @@ const RULES: Record<string, LeaderRule> = {
   "POST /api/materials/:id/restore": "material",
   "POST /api/materials/:id/keep": "material",
   "POST /api/materials/:id/get": "material-read",
+  // 凭据（t194）：在负责的部分里设值、归档、恢复、留下，看 body.node；真删只有用户。
+  "PUT /api/secrets": "secret",
+  "POST /api/secrets/archive": "secret",
+  "POST /api/secrets/restore": "secret",
+  "POST /api/secrets/keep": "secret",
   // 周期任务（sN）：节点在负责的部分里才行，新建看 body.node，其余看这条周期任务挂在哪。
   "POST /api/schedules": "schedule",
   "POST /api/schedules/:id/pause": "schedule",
@@ -124,6 +130,11 @@ export function denyReason(leader: string, method: string, route: string) {
     );
   if (route.startsWith("/api/notify"))
     return denied(leader, "改推送到手机的设置（那是用户的）");
+  if (key === "DELETE /api/secrets")
+    return denied(
+      leader,
+      "真删凭据（那是用户的决定；用不上了就归档：atrium secret archive 节点 名称 --note 原因）",
+    );
   if (route.startsWith("/api/product/"))
     return denied(leader, "改谁拍板选项单（那是用户的决定）");
   return denied(leader, `调用 ${key}`);

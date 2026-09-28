@@ -62,7 +62,7 @@ async function serve(
   const address = created.app.server.address();
   const actual = typeof address === "object" && address ? address.port : port;
   const call = async (
-    method: "GET" | "POST" | "PATCH" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
     url: string,
     payload?: object,
   ) => {
@@ -382,7 +382,28 @@ test("远程主机：有仓库的活在代理机器上克隆、建工作树，�
   const agentData = join(fx.root, "agent");
   const { lines } = startAgent(t, { port, data: agentData, env: fx.env, code });
   await until(() => lines.some((line) => line.includes("已连上")), 10_000);
-  await call("POST", "/api/tasks", { title: "Remote change", repo: fx.repo });
+  // 任务声明的凭据（t194）：随拉起指令带给代理，按名称注入那台的执行者。
+  await call("POST", "/api/org/nodes", {
+    slug: "org",
+    kind: "org",
+    name: "组织",
+    reason: "建",
+  });
+  assert.equal(
+    (
+      await call("PUT", "/api/secrets", {
+        node: "o1",
+        name: "REMOTE_TOKEN",
+        value: "remote-secret-5b1d",
+      })
+    ).status,
+    200,
+  );
+  await call("POST", "/api/tasks", {
+    title: "Remote change",
+    repo: fx.repo,
+    secret: "REMOTE_TOKEN",
+  });
   const run = await call("POST", "/api/tasks/t1/run", {
     worker: "kimi",
     host: "h2",
@@ -406,6 +427,24 @@ test("远程主机：有仓库的活在代理机器上克隆、建工作树，�
   const seen = readFileSync(join(agentData, "repos", "env-seen.txt"), "utf8");
   assert.match(seen, /ATRIUM_WORKER=1/);
   assert.doesNotMatch(seen, /HERDR_PANE|CLAUDECODE/);
+  assert.ok(seen.split("\n").includes("REMOTE_TOKEN=remote-secret-5b1d"));
+  // 代理那边的运行记录与日志里没有值。
+  for (const file of readdirSync(agentData, { recursive: true }))
+    if (!String(file).endsWith("env-seen.txt")) {
+      const path = join(agentData, String(file));
+      if (statSync(path).isFile())
+        assert.equal(
+          readFileSync(path).includes("remote-secret-5b1d"),
+          false,
+          String(file),
+        );
+    }
+  assert.equal(
+    task.events.some((e: { detail: string | null }) =>
+      e.detail?.includes("remote-secret-5b1d"),
+    ),
+    false,
+  );
 });
 
 test("远程主机：服务重启与断线期间执行者照跑，重连后补传日志与结果", async (t) => {

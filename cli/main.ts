@@ -26,6 +26,7 @@ import { patrolCommands } from "./patrol.ts";
 import { scheduleCommands } from "./schedules.ts";
 import { memoCommands } from "./memos.ts";
 import { materialCommands } from "./materials.ts";
+import { secretCommands } from "./secrets.ts";
 import { choiceCommands } from "./choices.ts";
 import { productCommands } from "./products.ts";
 import { agentCommand, hostCommands } from "./hosts.ts";
@@ -117,6 +118,7 @@ export const commands: Record<string, Command> = {
   ...scheduleCommands,
   ...memoCommands,
   ...materialCommands,
+  ...secretCommands,
   ...choiceCommands,
   ...productCommands,
   ...goalCommands,

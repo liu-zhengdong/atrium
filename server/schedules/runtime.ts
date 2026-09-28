@@ -15,6 +15,7 @@ import { researchFacts } from "../products/facts.ts";
 import { researchBrief } from "../products/brief.ts";
 import type { EventInbox } from "../tasks/events.ts";
 import { publishMaterialHints } from "../materials/hints.ts";
+import { publishSecretHints } from "../secrets/hints.ts";
 import { catchUp, dayLabel, decide, localOffset, type Offset } from "./plan.ts";
 import {
   dueSchedules,
@@ -261,6 +262,11 @@ export class SchedulePump {
       publishMaterialHints(this.db, this.dispatch.inbox, row.node_id, now);
     } catch (error) {
       console.error(`周期任务 ${scheduleRef(row.id)} 的资料清理线索：`, error);
+    }
+    try {
+      publishSecretHints(this.db, this.dispatch.inbox, row.node_id, now);
+    } catch (error) {
+      console.error(`周期任务 ${scheduleRef(row.id)} 的凭据清理线索：`, error);
     }
     try {
       const launched = await this.dispatch.run(

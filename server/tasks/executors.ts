@@ -69,6 +69,8 @@ import { publishWorkerAdvice } from "./workers-report.ts";
 import { getJobRole } from "./job-roles.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
 import { BudgetProblem } from "./budget-problem.ts";
+import { withSecrets } from "../secrets/model.ts";
+import { markSecretsUsed, taskSecretValues } from "../secrets/store.ts";
 import {
   blockUnsent,
   invitedFor,
@@ -405,6 +407,39 @@ export class Executors {
     return env;
   }
 
+  /** 本机执行者这一轮的环境：执行者 material get 时据 ATRIUM_TASK 把读取记在这件任务上（t192），另按名称加上声明的凭据（t194）。 */
+  private taskEnv(
+    task: Task,
+    secrets: ReturnType<Executors["secrets"]>,
+  ): NodeJS.ProcessEnv {
+    return withSecrets(
+      { ...this.runEnv(task.id), ATRIUM_TASK: task.ref },
+      secrets?.env,
+    );
+  }
+
+  /**
+   * 任务声明的凭据（t194）：拉起前按名称取值，缺了就报错不拉起；没声明为 null。
+   * 值只进这一次拉起的环境（本机）或指令（远程，只在内存里），不落日志与事件。
+   */
+  private secrets(task: Task) {
+    return taskSecretValues(this.ctx.db, this.ctx.launchOptions.data, task);
+  }
+
+  /** 拉起成功后记下用过（清理线索看最后使用时间），事件里只有名称。 */
+  private secretsUsed(
+    id: number,
+    secrets: ReturnType<Executors["secrets"]>,
+    host?: number,
+  ) {
+    if (!secrets) return;
+    markSecretsUsed(this.ctx.db, secrets.ids, id);
+    noteTask(this.ctx.db, id, "secrets_injected", {
+      names: secrets.used.map((s) => s.name),
+      ...(host !== undefined ? { host: hostRef(host) } : {}),
+    });
+  }
+
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     // 被紧急任务抢占暂停过的（t215）：同一执行者且日志里有会话就续上，否则把说明写进提示词、在原工作树重派。
@@ -434,6 +469,7 @@ export class Executors {
       return started;
     }
     const task = getTask(this.ctx.db, id);
+    const secrets = this.secrets(task);
     await this.ctx.disk.check(task.node_id);
     const prepared = await prepareRun(
       task,
@@ -443,13 +479,14 @@ export class Executors {
     );
     const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");
-    // 执行者 material get 时据此把读取记在这件任务上（t192）。
+    // 执行者 material get 时据 ATRIUM_TASK 把读取记在这件任务上（t192）。
     const { child, offset } = await spawnWorker(
       prepared,
-      { ...this.runEnv(id), ATRIUM_TASK: task.ref },
+      this.taskEnv(task, secrets),
       task.ref,
     );
     const pid = child.pid!;
+    this.secretsUsed(id, secrets);
     if (this.ctx.closed()) {
       killTree(pid, "SIGKILL");
       throw new Error("服务已关闭");
@@ -534,6 +571,7 @@ export class Executors {
     }
     const id = prev.id;
     const task = getTask(this.ctx.db, id);
+    const secrets = this.secrets(task);
     const chosen = { worker: prev.worker, risk: prev.risk };
     const prepared = await prepareRun(
       task,
@@ -545,11 +583,12 @@ export class Executors {
     if (this.ctx.closed()) throw new Error("服务已关闭");
     const { child, offset } = await spawnWorker(
       prepared,
-      this.runEnv(id),
+      this.taskEnv(task, secrets),
       task.ref,
       !!resume,
     );
     const pid = child.pid!;
+    this.secretsUsed(id, secrets);
     const ids = resume ? resume.ids : prepared.tellIds;
     const updated = patchRunFields(
       this.ctx.db,
@@ -584,6 +623,7 @@ export class Executors {
     if (!remote) throw new Error("服务没有接上远程主机");
     const { host } = chosen;
     const task = getTask(this.ctx.db, id);
+    const secrets = this.secrets(task);
     const prepared = await prepareRun(
       task,
       chosen,
@@ -608,8 +648,10 @@ export class Executors {
       dir: plan.dir,
       cwd: prepared.cwd,
       ...(plan.repo ? { repo: plan.repo } : {}),
+      ...(secrets ? { secrets: secrets.env } : {}),
     };
     const ack = await remote.launch(host, assignment);
+    this.secretsUsed(id, secrets, host);
     prepared.launch = { ...ack.launch };
     const stop = () => remote.stop(host, id, run, "SIGKILL");
     if (this.ctx.closed()) {

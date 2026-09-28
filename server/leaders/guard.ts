@@ -311,6 +311,13 @@ export function registerLeaderGuard(
       }
       case "material-read":
         break;
+      // 凭据：看挂在哪个节点（没写节点由接口报缺字段）。
+      case "secret":
+        if (typeof body.node === "string" && body.node.trim())
+          verdict = scopeVerdict(leader, scope, [
+            nodeCheck(db, body.node.trim(), "凭据的节点"),
+          ]);
+        break;
     }
     if (verdict) throw forbid(verdict);
   });

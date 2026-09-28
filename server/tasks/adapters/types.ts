@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 import { Problem } from "../../problem.ts";
-import type { Risk, Trust } from "../profiles.ts";
+import type { Risk, Trust } from "../workers/profiles.ts";
 
 /**
  * 执行者适配器（#262 B 部分）：每个工具一份数据 + 一个把「提示词、工作目录、模型、思考强度」

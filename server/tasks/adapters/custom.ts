@@ -1,4 +1,4 @@
-import type { FrontValue } from "../frontmatter.ts";
+import type { FrontValue } from "../workers/frontmatter.ts";
 import { cliAdapter } from "./cli.ts";
 import { parseCliSpec } from "./cli-spec.ts";
 import { dropAdapter, isBuiltinTool, registerAdapter } from "./index.ts";

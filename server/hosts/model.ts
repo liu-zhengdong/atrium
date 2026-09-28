@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { sameSecret } from "../../shared/secret.ts";
 import type { SshConnection } from "./tunnel-plan.ts";
 import { Problem } from "../problem.ts";
-import { all, atomically, one } from "../tasks/ledger-model.ts";
+import { all, atomically, one } from "../tasks/ledger/ledger-model.ts";
 import {
   connection,
   connectionText,

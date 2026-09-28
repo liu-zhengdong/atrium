@@ -10,17 +10,17 @@ import {
   hostLimits,
   hostView,
   type HostLimits,
-} from "../server/tasks/host-load.ts";
-import { NEXT_MERGE } from "../server/tasks/merge-runtime.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+} from "../server/tasks/dispatch/host-load.ts";
+import { NEXT_MERGE } from "../server/tasks/merge/merge-runtime.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import {
   taskColumns,
   taskView,
   type TaskRow as MapTaskRow,
 } from "../server/map/view.ts";
-import { runLocalCheck } from "../server/tasks/local-check.ts";
-import { workerEnvironment } from "../server/tasks/worker-env.ts";
-import { getTask } from "../server/tasks/ledger.ts";
+import { runLocalCheck } from "../server/tasks/merge/local-check.ts";
+import { workerEnvironment } from "../server/tasks/dispatch/worker-env.ts";
+import { getTask } from "../server/tasks/ledger/ledger.ts";
 import { hostBrief } from "../cli/top.ts";
 import { startApp, until } from "./task-fixture.ts";
 import { removeTemp } from "./temp-dir.ts";

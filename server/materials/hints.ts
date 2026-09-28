@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { nodes, ref } from "../org/model.ts";
 import { partRoutes } from "../leaders/subscriber.ts";
 import { SECRETARY } from "../leaders/route.ts";
-import type { EventInbox } from "../tasks/events.ts";
+import type { EventInbox } from "../tasks/events/events.ts";
 import { hintDue, sizeText } from "./model.ts";
 import { markHinted, purgeMaterials, staleMaterials } from "./store.ts";
 

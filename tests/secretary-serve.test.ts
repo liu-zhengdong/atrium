@@ -12,8 +12,8 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { EventInbox } from "../server/tasks/events.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+import { EventInbox } from "../server/tasks/events/events.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import { agentEnvironment } from "../cli/acp.ts";
 import {
   OpencodeClient,

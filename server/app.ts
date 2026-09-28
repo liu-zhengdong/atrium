@@ -14,17 +14,17 @@ import { registerScheduleRoutes } from "./schedules/routes.ts";
 import type { Offset } from "./schedules/plan.ts";
 import { registerOrgRoutes } from "./org/routes.ts";
 import { ensureOrgTables } from "./org/schema.ts";
-import { ensureTaskTables } from "./tasks/ledger-schema.ts";
+import { ensureTaskTables } from "./tasks/ledger/ledger-schema.ts";
 import { globalPause, migrateOldPauses, partPause } from "./pause.ts";
 import { registerSkillRoutes } from "./skills/routes.ts";
-import { registerQuotaRoute } from "./tasks/quota.ts";
+import { registerQuotaRoute } from "./tasks/quota/quota.ts";
 import type { QuotaReaders } from "./quota-readers/index.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
 import {
   SecretaryFallback,
   type ResumeRun,
-} from "./tasks/secretary-fallback.ts";
-import type { EventInbox } from "./tasks/events.ts";
+} from "./tasks/secretary/secretary-fallback.ts";
+import type { EventInbox } from "./tasks/events/events.ts";
 import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";

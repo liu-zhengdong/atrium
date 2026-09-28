@@ -13,9 +13,9 @@ import {
   writtenNotice,
   type PickCandidateFact,
   type PickFacts,
-} from "../server/tasks/pick.ts";
+} from "../server/tasks/dispatch/pick.ts";
 import type { Tool } from "../server/tasks/adapters/index.ts";
-import type { PaceEntry } from "../server/tasks/prepare.ts";
+import type { PaceEntry } from "../server/tasks/dispatch/prepare.ts";
 import { formatPick, pickLines } from "../cli/tasks.ts";
 
 /** 候选一览（task run --dry-run）的纯函数：判定、排序、理由与写死执行者的提醒。 */

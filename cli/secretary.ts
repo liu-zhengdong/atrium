@@ -9,15 +9,18 @@ import { dirname, join, resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
 import { dataDirectory, alive } from "../server/service-state.ts";
 import { messagingEndpoint } from "../server/platform/plan.ts";
-import { bridgeClaim, REMIND_MS } from "../server/tasks/bridge-plan.ts";
-import type { Listener } from "../server/tasks/events.ts";
+import {
+  bridgeClaim,
+  REMIND_MS,
+} from "../server/tasks/secretary/bridge-plan.ts";
+import type { Listener } from "../server/tasks/events/events.ts";
 import { recordNext } from "./contract.ts";
 import { printJson, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 
 /**
  * `atrium secretary bridge`（t243）：把秘书要处理的事件注入 Claude Code 秘书会话（原生界面不变）。
- * 常驻循环在 `secretary-bridge.ts`（按需加载），判定在 `server/tasks/bridge-plan.ts`。
+ * 常驻循环在 `secretary-bridge.ts`（按需加载），判定在 `server/tasks/secretary/bridge-plan.ts`。
  */
 
 const str = (values: Values, key: string) => {

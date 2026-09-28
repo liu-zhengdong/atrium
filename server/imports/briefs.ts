@@ -4,7 +4,7 @@ import {
   briefBytes,
   briefFile,
   clipBrief,
-} from "../tasks/brief.ts";
+} from "../tasks/ledger/brief.ts";
 import { readFileSync } from "node:fs";
 import { importMark, markImported } from "./marks.ts";
 

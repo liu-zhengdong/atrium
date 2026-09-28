@@ -2,7 +2,7 @@ import { Problem } from "../problem.ts";
 import { MEMO_MAX } from "./model.ts";
 import { forwardedOf } from "./route.ts";
 import { CLOSING_ACTIONS } from "./actions.ts";
-import { DUE, spanText } from "../tasks/overdue.ts";
+import { DUE, spanText } from "../tasks/watch/overdue.ts";
 
 /**
  * leader 唤醒与上交的判定（纯函数，穷举测试）：上交类型与输入校验、一次唤醒结束后怎么收尾、

@@ -9,11 +9,14 @@ import {
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { taskDir } from "../tasks/active.ts";
+import { taskDir } from "../tasks/dispatch/active.ts";
 import { exec as localExec, type Exec } from "../tasks/git.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
-import type { Exit } from "../tasks/outcome.ts";
-import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
+import type { Exit } from "../tasks/gates/outcome.ts";
+import type {
+  LeftoverKill,
+  LeftoverTarget,
+} from "../tasks/dispatch/leftovers.ts";
 import {
   beginRun,
   hostRow,

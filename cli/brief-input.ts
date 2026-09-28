@@ -4,7 +4,7 @@ import {
   BRIEF_MAX_BYTES,
   briefBytes,
   briefTooLong,
-} from "../server/tasks/brief.ts";
+} from "../server/tasks/ledger/brief.ts";
 
 /**
  * `--brief 文件` 与 `--brief -`（标准输入）读成详述内容（#355）：命令行读、服务存库，

@@ -11,9 +11,9 @@ import {
   parseRemote,
   repoFlag,
 } from "../server/tasks/gh-repo.ts";
-import { collectFacts, readCi } from "../server/tasks/facts.ts";
-import { collectComments } from "../server/tasks/comment-facts.ts";
-import { evaluateGates } from "../server/tasks/gates.ts";
+import { collectFacts, readCi } from "../server/tasks/gates/facts.ts";
+import { collectComments } from "../server/tasks/gates/comment-facts.ts";
+import { evaluateGates } from "../server/tasks/gates/gates.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
 import { removeTemp } from "./temp-dir.ts";
 

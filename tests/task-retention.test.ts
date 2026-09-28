@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { EventInbox } from "../server/tasks/events.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
-import { Retention, RETENTION_SQL } from "../server/tasks/retention.ts";
+import { EventInbox } from "../server/tasks/events/events.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
+import { Retention, RETENTION_SQL } from "../server/tasks/events/retention.ts";
 
 /**
  * 收件箱的保留上限（#t126）：清理只动该动的行，且每条语句都有索引可走；任务事件不清理。

@@ -5,16 +5,16 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { exec, type Exec } from "../server/tasks/git.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
-import { MergeQueue } from "../server/tasks/merge-runtime.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
+import { MergeQueue } from "../server/tasks/merge/merge-runtime.ts";
 import {
   parseWorktrees,
   prRefusal,
   registerRefusal,
   worktreeChoice,
   type WorktreeEntry,
-} from "../server/tasks/register-delivery.ts";
-import { TASK_STATUSES } from "../server/tasks/state.ts";
+} from "../server/tasks/gates/register-delivery.ts";
+import { TASK_STATUSES } from "../server/tasks/ledger/state.ts";
 import { startApp } from "./task-fixture.ts";
 import { TRUE_COMMAND } from "./portable-shell.ts";
 

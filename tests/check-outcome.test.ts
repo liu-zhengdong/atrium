@@ -16,14 +16,17 @@ import {
   testName,
   withOutcome,
   type CheckClass,
-} from "../server/tasks/check-outcome.ts";
-import { runLocalCheck, type LocalCheck } from "../server/tasks/local-check.ts";
+} from "../server/tasks/merge/check-outcome.ts";
+import {
+  runLocalCheck,
+  type LocalCheck,
+} from "../server/tasks/merge/local-check.ts";
 import { removeTemp } from "./temp-dir.ts";
 import {
   holderDetail,
   holderOf,
   type HolderFacts,
-} from "../server/tasks/holder.ts";
+} from "../server/tasks/watch/holder.ts";
 
 const check = (over: Partial<LocalCheck>): LocalCheck => ({
   status: "failed",

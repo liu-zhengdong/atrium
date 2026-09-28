@@ -14,9 +14,9 @@ import {
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
-import { prepareRun } from "../server/tasks/workspace.ts";
-import type { TaskEventRow } from "../server/tasks/ledger-model.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { prepareRun } from "../server/tasks/dispatch/workspace.ts";
+import type { TaskEventRow } from "../server/tasks/ledger/ledger-model.ts";
 import type { Tool } from "../server/tasks/adapters/index.ts";
 import { skippedSkillsLine } from "../cli/tasks.ts";
 import { removeTemp } from "./temp-dir.ts";

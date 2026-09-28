@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
-import type { PaceEntry } from "../server/tasks/prepare.ts";
+import type { PaceEntry } from "../server/tasks/dispatch/prepare.ts";
 import type { RunnerOptions } from "../server/tasks/runner.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";

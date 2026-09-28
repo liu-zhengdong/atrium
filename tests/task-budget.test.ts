@@ -12,8 +12,8 @@ import {
   DEFAULT_QUOTA_RESERVE_PERCENT,
   quotaReserve,
   readQuotaReservePercent,
-} from "../server/tasks/budget.ts";
-import { chooseWorker } from "../server/tasks/worker-choice.ts";
+} from "../server/tasks/quota/budget.ts";
+import { chooseWorker } from "../server/tasks/dispatch/worker-choice.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";
 

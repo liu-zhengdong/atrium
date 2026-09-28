@@ -8,7 +8,7 @@ import {
   ref as nodeRef,
 } from "../org/model.ts";
 import { LOCAL_USER, SECRETARY } from "../../shared/user.ts";
-import { atomically, parseTaskRef } from "../tasks/ledger-model.ts";
+import { atomically, parseTaskRef } from "../tasks/ledger/ledger-model.ts";
 
 /**
  * 决定记录：只记用户拍板的事与原因，给人回看的档案（不附进任何提示词）。要守的规矩写成要点（org/points.ts）；

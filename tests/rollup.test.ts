@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TASK_STATUSES, type TaskStatus } from "../server/tasks/state.ts";
+import {
+  TASK_STATUSES,
+  type TaskStatus,
+} from "../server/tasks/ledger/state.ts";
 import {
   leafDelivery,
   leafPhase,
@@ -17,8 +20,11 @@ import {
   type LeafPhase,
   type Rollup,
   type RollupStatus,
-} from "../server/tasks/rollup.ts";
-import { planCounts, scheduleBlocked } from "../server/tasks/plan-count.ts";
+} from "../server/tasks/ledger/rollup.ts";
+import {
+  planCounts,
+  scheduleBlocked,
+} from "../server/tasks/ledger/plan-count.ts";
 
 /** 总任务（t190）的判定：叶子分类、汇总、账本状态跟随、通知分投、排期计数，全部穷举。 */
 

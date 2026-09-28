@@ -50,7 +50,7 @@ import { serviceEnvironment } from "../server/service-env.ts";
 import {
   workerAllowed,
   workerEnvironment,
-} from "../server/tasks/worker-env.ts";
+} from "../server/tasks/dispatch/worker-env.ts";
 import { readNumberLine, waitExit } from "./child-output.ts";
 import { removeTemp } from "./temp-dir.ts";
 

@@ -9,12 +9,12 @@ import { renderTopMap } from "./map.ts";
 import { DEPTH_MAX, type MapTreeNode } from "../server/map/view.ts";
 import type { LeaderWake } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
-import type { HostView } from "../server/tasks/host-load.ts";
+import type { HostView } from "../server/tasks/dispatch/host-load.ts";
 import {
   secretaryText,
   type SecretaryView,
-} from "../server/tasks/secretary-watch.ts";
-import type { Holder } from "../server/tasks/holder.ts";
+} from "../server/tasks/secretary/secretary-watch.ts";
+import type { Holder } from "../server/tasks/watch/holder.ts";
 import { pauseText, resumeCommand, type Pause } from "../server/pause.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
@@ -24,8 +24,8 @@ import {
   tagTitle,
   type Priority,
   type PriorityCounts,
-} from "../server/tasks/priority.ts";
-import { heldText } from "../server/tasks/overdue.ts";
+} from "../server/tasks/ledger/priority.ts";
+import { heldText } from "../server/tasks/watch/overdue.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。

@@ -1,5 +1,5 @@
 import { Problem } from "../server/problem.ts";
-import type { InboxEvent } from "../server/tasks/events.ts";
+import type { InboxEvent } from "../server/tasks/events/events.ts";
 import { recordNext } from "./contract.ts";
 import { defaultSubscriber } from "./worker-guard.ts";
 import { clip, printJson, when } from "./format.ts";

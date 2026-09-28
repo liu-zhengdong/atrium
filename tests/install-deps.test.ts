@@ -19,9 +19,15 @@ import {
   installFailure,
   parseDepsInstall,
   type DepsFacts,
-} from "../server/tasks/install-deps.ts";
-import { checkDetail, runLocalCheck } from "../server/tasks/local-check.ts";
-import { checkSummary, classifyCheck } from "../server/tasks/check-outcome.ts";
+} from "../server/tasks/merge/install-deps.ts";
+import {
+  checkDetail,
+  runLocalCheck,
+} from "../server/tasks/merge/local-check.ts";
+import {
+  checkSummary,
+  classifyCheck,
+} from "../server/tasks/merge/check-outcome.ts";
 import { redact } from "../server/secret-redact.ts";
 import { isolatedPath, writeFakeBin } from "./fake-bin.ts";
 import { nodeCommand } from "./portable-shell.ts";

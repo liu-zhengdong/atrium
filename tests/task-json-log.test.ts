@@ -7,16 +7,16 @@ import {
   abnormalEnding,
   lastAssistantText,
   parseEvents,
-} from "../server/tasks/json-log.ts";
-import { pollCiOnce } from "../server/tasks/ci-poll.ts";
-import { decideExit } from "../server/tasks/outcome.ts";
-import { summarize } from "../server/tasks/summary.ts";
+} from "../server/tasks/logs/json-log.ts";
+import { pollCiOnce } from "../server/tasks/gates/ci-poll.ts";
+import { decideExit } from "../server/tasks/gates/outcome.ts";
+import { summarize } from "../server/tasks/logs/summary.ts";
 import {
   advanceTask,
   createTask,
   getTask,
   ensureTaskTables,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import type { Exec } from "../server/tasks/git.ts";
 import { startApp } from "./task-fixture.ts";
 

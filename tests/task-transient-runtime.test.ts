@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
-import { getTask } from "../server/tasks/ledger.ts";
+import { getTask } from "../server/tasks/ledger/ledger.ts";
 import { startApp, until } from "./task-fixture.ts";
 import { isolatedPath, removeFakeBin, writeFakeBin } from "./fake-bin.ts";
 import { fileURLToPath } from "node:url";

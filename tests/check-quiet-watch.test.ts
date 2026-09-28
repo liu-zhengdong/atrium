@@ -9,9 +9,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QuietWatch } from "../server/tasks/check-quiet-watch.ts";
-import { runLocalCheck } from "../server/tasks/local-check.ts";
-import { classifyCheck } from "../server/tasks/check-outcome.ts";
+import { QuietWatch } from "../server/tasks/merge/check-quiet-watch.ts";
+import { runLocalCheck } from "../server/tasks/merge/local-check.ts";
+import { classifyCheck } from "../server/tasks/merge/check-outcome.ts";
 import { stillRunningLine } from "./still-running.ts";
 import { nodeCommand } from "./portable-shell.ts";
 import { removeTemp } from "./temp-dir.ts";

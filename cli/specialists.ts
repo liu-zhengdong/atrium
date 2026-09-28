@@ -1,5 +1,5 @@
 import { Problem } from "../server/problem.ts";
-import type { JobRole } from "../server/tasks/job-roles.ts";
+import type { JobRole } from "../server/tasks/workers/job-roles.ts";
 import { recordNext } from "./contract.ts";
 import { printJson, table } from "./format.ts";
 import type { Command, Values } from "./main.ts";

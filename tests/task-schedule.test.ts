@@ -8,8 +8,8 @@ import {
   getTask,
   noteTask,
   updateTask,
-} from "../server/tasks/ledger.ts";
-import { EventInbox } from "../server/tasks/events.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { EventInbox } from "../server/tasks/events/events.ts";
 import {
   CANDIDATES_SQL,
   classify,
@@ -17,18 +17,18 @@ import {
   Scheduler,
   taskPlan,
   upstreamCondition,
-} from "../server/tasks/schedule.ts";
+} from "../server/tasks/ledger/schedule.ts";
 import {
   releaseOf,
   type Dependency,
   type PrState,
   type Release,
-} from "../server/tasks/schedule-upstream.ts";
-import { holderFor } from "../server/tasks/holder-facts.ts";
+} from "../server/tasks/ledger/schedule-upstream.ts";
+import { holderFor } from "../server/tasks/watch/holder-facts.ts";
 import {
   backoffMs,
   upstreamDueQuery,
-} from "../server/tasks/schedule-refresh.ts";
+} from "../server/tasks/ledger/schedule-refresh.ts";
 import { startApp } from "./task-fixture.ts";
 
 async function eventually(check: () => Promise<boolean>) {

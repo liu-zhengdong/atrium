@@ -6,8 +6,8 @@ import {
   createTask,
   ensureTaskTables,
   noteTask,
-} from "../server/tasks/ledger.ts";
-import { createJobRole } from "../server/tasks/job-roles.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { createJobRole } from "../server/tasks/workers/job-roles.ts";
 import {
   applyDeliveryEvent,
   deliveryFacts,
@@ -16,13 +16,13 @@ import {
   workerStats,
   type Delivery,
   type DeliveryRow,
-} from "../server/tasks/delivery-records.ts";
+} from "../server/tasks/gates/delivery-records.ts";
 import {
   all,
   one,
   type TaskEventRow,
   type TaskRow,
-} from "../server/tasks/ledger-model.ts";
+} from "../server/tasks/ledger/ledger-model.ts";
 
 /**
  * 交付统计改 SQL 聚合（t123）的守护检查：事实落库并在事件写入时增量维护、启动迁移回填；

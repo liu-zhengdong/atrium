@@ -5,8 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { EventInbox, type InboxEvent } from "../server/tasks/events.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+import { EventInbox, type InboxEvent } from "../server/tasks/events/events.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import { AcpConnection, agentEnvironment } from "../cli/acp.ts";
 import {
   SecretaryChat,

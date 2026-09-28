@@ -1,7 +1,7 @@
 import { secretNameProblem } from "../secrets/model.ts";
 import type { AgentCommand, Assignment } from "../hosts/protocol.ts";
 import { insideData, isKnownTool } from "../hosts/state.ts";
-import { targetsRefusal } from "../tasks/leftovers.ts";
+import { targetsRefusal } from "../tasks/dispatch/leftovers.ts";
 import { skillCopiesRefusal } from "../skills/remote.ts";
 
 /**

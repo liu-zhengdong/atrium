@@ -7,9 +7,9 @@ import {
   atomically,
   createTask,
   type Task,
-} from "../tasks/ledger.ts";
+} from "../tasks/ledger/ledger.ts";
 import { startPatrol } from "../tasks/patrol.ts";
-import type { EventInbox } from "../tasks/events.ts";
+import type { EventInbox } from "../tasks/events/events.ts";
 import { publishMaterialHints } from "../materials/hints.ts";
 import { publishSecretHints } from "../secrets/hints.ts";
 import { catchUp, dayLabel, decide, localOffset, type Offset } from "./plan.ts";

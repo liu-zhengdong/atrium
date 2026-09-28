@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { atomically, getTask, noteTask } from "../tasks/ledger.ts";
-import type { EventInbox } from "../tasks/events.ts";
+import { atomically, getTask, noteTask } from "../tasks/ledger/ledger.ts";
+import type { EventInbox } from "../tasks/events/events.ts";
 import {
   addLeader,
   editLeader,

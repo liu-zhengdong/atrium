@@ -7,7 +7,7 @@ import { Problem } from "../problem.ts";
 import { localOffset, type Offset } from "../schedules/plan.ts";
 import { oneLine } from "../text-width.ts";
 import { SECRETARY } from "../leaders/route.ts";
-import type { InboxEvent } from "../tasks/events.ts";
+import type { InboxEvent } from "../tasks/events/events.ts";
 import {
   afterFailure,
   BIND_TTL_MS,

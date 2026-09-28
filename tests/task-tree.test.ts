@@ -10,9 +10,9 @@ import {
   ensureTaskTables,
   taskTree,
   updateTask,
-} from "../server/tasks/ledger.ts";
-import { addEvent } from "../server/tasks/ledger-model.ts";
-import { noteView, noteViews } from "../server/tasks/notes.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { addEvent } from "../server/tasks/ledger/ledger-model.ts";
+import { noteView, noteViews } from "../server/tasks/ledger/notes.ts";
 import { ensureLeaderTables } from "../server/leaders/model.ts";
 import { createApp } from "../server/app.ts";
 import { treeMore } from "../cli/tasks.ts";

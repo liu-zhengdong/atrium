@@ -1,11 +1,14 @@
 import { oneLine, pad, width } from "./format.ts";
-import { planCounts, scheduleBlocked } from "../server/tasks/plan-count.ts";
+import {
+  planCounts,
+  scheduleBlocked,
+} from "../server/tasks/ledger/plan-count.ts";
 import {
   priorityTag,
   rank,
   tagTitle,
   type Priority,
-} from "../server/tasks/priority.ts";
+} from "../server/tasks/ledger/priority.ts";
 
 /**
  * `atrium top` 的排期段（#262）：就绪、依赖链、等待中与因上游卡住的待办，数据来自 `/api/tasks/plan`。

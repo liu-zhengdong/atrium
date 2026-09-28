@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { authPolicy } from "../server/auth-policy.ts";
-import { publishTask } from "../server/tasks/notice.ts";
+import { publishTask } from "../server/tasks/events/notice.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import { choiceAddVerdict, leaderRule } from "../server/leaders/scope.ts";
 import {

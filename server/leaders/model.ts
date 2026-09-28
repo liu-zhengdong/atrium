@@ -8,7 +8,7 @@ import {
   ref as nodeRef,
   transaction,
 } from "../org/model.ts";
-import { parseWorker, workerId } from "../tasks/profiles.ts";
+import { parseWorker, workerId } from "../tasks/workers/profiles.ts";
 import {
   ensureMemoTables,
   MEMO_MAX,

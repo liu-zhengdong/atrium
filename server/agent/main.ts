@@ -11,10 +11,10 @@ import { availableParallelism, loadavg } from "node:os";
 import { killTree, processAlive } from "../platform/index.ts";
 import { ADAPTERS, isTool } from "../tasks/adapters/index.ts";
 import { exec as defaultExec, type Exec } from "../tasks/git.ts";
-import { hostGate, hostLimits } from "../tasks/host-load.ts";
-import { ownsPid } from "../tasks/recovery.ts";
-import { killLine, shiftTargets } from "../tasks/leftovers.ts";
-import { reapLeftovers } from "../tasks/leftovers-reap.ts";
+import { hostGate, hostLimits } from "../tasks/dispatch/host-load.ts";
+import { ownsPid } from "../tasks/dispatch/recovery.ts";
+import { killLine, shiftTargets } from "../tasks/dispatch/leftovers.ts";
+import { reapLeftovers } from "../tasks/dispatch/leftovers-reap.ts";
 import { machineInfo } from "../hosts/info.ts";
 import {
   LOG_CHUNK,

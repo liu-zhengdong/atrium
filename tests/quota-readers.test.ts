@@ -56,8 +56,8 @@ import {
   parsePace,
   readPace,
   spareByProvider,
-} from "../server/tasks/prepare.ts";
-import { listQuota, type QuotaList } from "../server/tasks/quota.ts";
+} from "../server/tasks/dispatch/prepare.ts";
+import { listQuota, type QuotaList } from "../server/tasks/quota/quota.ts";
 import { removeTemp } from "./temp-dir.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 

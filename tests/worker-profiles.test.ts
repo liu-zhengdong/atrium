@@ -13,11 +13,14 @@ import test from "node:test";
 import { createApp } from "../server/app.ts";
 import { leaderRule } from "../server/leaders/scope.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { resolveWorker, splitDeliveryNotes } from "../server/tasks/profiles.ts";
+import {
+  resolveWorker,
+  splitDeliveryNotes,
+} from "../server/tasks/workers/profiles.ts";
 import {
   editProfile,
   profileView,
-} from "../server/tasks/worker-profile-edit.ts";
+} from "../server/tasks/workers/worker-profile-edit.ts";
 import {
   importWorkerProfiles,
   listProfiles,
@@ -28,7 +31,7 @@ import {
   PROFILE_MAX_BYTES,
   readProfile,
   writeProfile,
-} from "../server/tasks/worker-profiles.ts";
+} from "../server/tasks/workers/worker-profiles.ts";
 import { profileDb } from "./profile-fixture.ts";
 import { removeTemp } from "./temp-dir.ts";
 

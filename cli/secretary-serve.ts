@@ -1,6 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { InboxEvent } from "../server/tasks/events.ts";
-import { decideWake, nextWakeCount } from "../server/tasks/wake-rule.ts";
+import type { InboxEvent } from "../server/tasks/events/events.ts";
+import {
+  decideWake,
+  nextWakeCount,
+} from "../server/tasks/secretary/wake-rule.ts";
 import type { OpencodeMessage } from "./opencode-serve.ts";
 import {
   DEFAULT_BATCH_MS,

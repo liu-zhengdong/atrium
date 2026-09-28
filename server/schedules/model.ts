@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { all, nodeByAddress, nodes, one, ref } from "../org/model.ts";
-import { briefText } from "../tasks/brief.ts";
-import { parseWorker, workerId } from "../tasks/profiles.ts";
+import { briefText } from "../tasks/ledger/brief.ts";
+import { parseWorker, workerId } from "../tasks/workers/profiles.ts";
 import {
   atText,
   everyText,

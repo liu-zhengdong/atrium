@@ -8,12 +8,12 @@ import { promisify } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { publishTask } from "../server/tasks/notice.ts";
+import { publishTask } from "../server/tasks/events/notice.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import type { WakeExit } from "../server/leaders/wake.ts";
 import { until } from "./task-fixture.ts";
 import { removeTemp } from "./temp-dir.ts";
-import { patrolOverdue } from "../server/tasks/overdue-runtime.ts";
+import { patrolOverdue } from "../server/tasks/watch/overdue-runtime.ts";
 
 /**
  * leader 层的集成：内存服务 + 假 leader 进程（直接用服务签发的令牌调接口）。

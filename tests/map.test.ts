@@ -24,7 +24,7 @@ import {
 } from "../server/map/view.ts";
 import { width } from "../server/text-width.ts";
 import { renderMapTree } from "../cli/map.ts";
-import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
+import { createTask, ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import { removeTemp } from "./temp-dir.ts";
 import { ensureHostTables } from "../server/hosts/model.ts";
 

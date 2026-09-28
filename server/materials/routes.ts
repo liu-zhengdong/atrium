@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { nodeByAddress, nodes } from "../org/model.ts";
 import { leaderOf } from "../leaders/guard.ts";
-import { parseTaskRef } from "../tasks/ledger-model.ts";
+import { parseTaskRef } from "../tasks/ledger/ledger-model.ts";
 import { MATERIAL_MAX_BYTES, noteOf, validateUpload } from "./model.ts";
 import {
   addMaterial,

@@ -10,7 +10,7 @@ import {
   reviewBrief,
   reviewNeed,
   reviewerRefusal,
-} from "../server/tasks/review.ts";
+} from "../server/tasks/gates/review.ts";
 import { startApp } from "./task-fixture.ts";
 
 test("是否审阅：风险 high 或 trust 低于 medium", () => {
@@ -394,8 +394,10 @@ for (const scenario of [
 
 test("审阅关卡从账本续上：结论、失败、仍在排队、派不出去", async () => {
   const { DatabaseSync } = await import("node:sqlite");
-  const { ensureTaskTables } = await import("../server/tasks/ledger-schema.ts");
-  const { ReviewGate } = await import("../server/tasks/review-runtime.ts");
+  const { ensureTaskTables } =
+    await import("../server/tasks/ledger/ledger-schema.ts");
+  const { ReviewGate } =
+    await import("../server/tasks/gates/review-runtime.ts");
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const insert = db.prepare(

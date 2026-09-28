@@ -6,9 +6,9 @@ import { mountSkills, type Mount } from "../skills/mount.ts";
 import { fillSkillSlot, type SkillMountAck } from "../skills/remote.ts";
 import { ADAPTERS } from "../tasks/adapters/index.ts";
 import { ensureWorktree, firstLine, type Exec } from "../tasks/git.ts";
-import { spawnWorker } from "../tasks/spawn.ts";
-import { workerEnvironment } from "../tasks/worker-env.ts";
-import { buildLaunch } from "../tasks/workspace.ts";
+import { spawnWorker } from "../tasks/dispatch/spawn.ts";
+import { workerEnvironment } from "../tasks/dispatch/worker-env.ts";
+import { buildLaunch } from "../tasks/dispatch/workspace.ts";
 import type { Assignment } from "../hosts/protocol.ts";
 import { withSecrets } from "../secrets/model.ts";
 

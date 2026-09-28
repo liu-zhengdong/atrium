@@ -11,20 +11,20 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { EventInbox } from "../server/tasks/events.ts";
+import { EventInbox } from "../server/tasks/events/events.ts";
 import { createApp } from "../server/app.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import {
   SecretaryFallback,
   resumeCommand,
   resumeTurn,
-} from "../server/tasks/secretary-fallback.ts";
-import { claimSecretary } from "../server/tasks/secretary-lock.ts";
+} from "../server/tasks/secretary/secretary-fallback.ts";
+import { claimSecretary } from "../server/tasks/secretary/secretary-lock.ts";
 import {
   loadSecretarySession,
   saveSecretarySession,
   wakeCount,
-} from "../server/tasks/secretary-session.ts";
+} from "../server/tasks/secretary/secretary-session.ts";
 import { sessionStore } from "../cli/chat.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";

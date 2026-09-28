@@ -16,7 +16,7 @@ import {
   TOOLS,
   type Tool,
 } from "../server/tasks/adapters/index.ts";
-import { parseFrontmatter } from "../server/tasks/frontmatter.ts";
+import { parseFrontmatter } from "../server/tasks/workers/frontmatter.ts";
 import { profileDb } from "./profile-fixture.ts";
 import {
   mergeLayers,
@@ -24,7 +24,7 @@ import {
   resolveWorker,
   type EffectiveProfile,
   type ProfileLayer,
-} from "../server/tasks/profiles.ts";
+} from "../server/tasks/workers/profiles.ts";
 import {
   buildPrompt,
   DEFAULT_RULES,
@@ -35,7 +35,7 @@ import {
   slugify,
   spareByProvider,
   worktreePlan,
-} from "../server/tasks/prepare.ts";
+} from "../server/tasks/dispatch/prepare.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";
 

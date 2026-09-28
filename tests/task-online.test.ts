@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { createApp } from "../server/app.ts";
 import { exec, type Exec } from "../server/tasks/git.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
 import {
   firstRelease,
   includedInVersion,
@@ -15,11 +15,11 @@ import {
   planOnline,
   selfRepoFlag,
   selfUpdateEnabled,
-} from "../server/tasks/online.ts";
+} from "../server/tasks/merge/online.ts";
 import {
   OnlineWatch,
   type DeployResult,
-} from "../server/tasks/online-runtime.ts";
+} from "../server/tasks/merge/online-runtime.ts";
 import { claimService } from "../server/service-state.ts";
 import { topRows, countRows } from "../server/tasks/top.ts";
 import { startApp } from "./task-fixture.ts";

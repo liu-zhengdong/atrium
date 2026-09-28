@@ -4,7 +4,7 @@ import type { Command, Values } from "./main.ts";
 import { printJson, table, when } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
-import type { WorkerStat } from "../server/tasks/delivery-records.ts";
+import type { WorkerStat } from "../server/tasks/gates/delivery-records.ts";
 import { defaultActor } from "./worker-guard.ts";
 const str = (v: Values, k: string) =>
   typeof v[k] === "string" ? (v[k] as string) : undefined;

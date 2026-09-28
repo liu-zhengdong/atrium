@@ -10,7 +10,7 @@ import {
   transition,
   type TaskEvent,
   type TaskStatus,
-} from "../server/tasks/state.ts";
+} from "../server/tasks/ledger/state.ts";
 import {
   advanceTask,
   addTaskNote,
@@ -23,10 +23,10 @@ import {
   RESULT_MAX_BYTES,
   taskTree,
   updateTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import { createApp } from "../server/app.ts";
 import { renderTree } from "../cli/tasks.ts";
-import { isProcessing } from "../server/tasks/notes.ts";
+import { isProcessing } from "../server/tasks/ledger/notes.ts";
 import { cliErrorMessage } from "../cli/error-message.ts";
 import { commands } from "../cli/main.ts";
 import { removeTemp } from "./temp-dir.ts";

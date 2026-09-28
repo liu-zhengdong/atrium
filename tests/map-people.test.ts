@@ -1,4 +1,4 @@
-import { importWorkerProfiles } from "../server/tasks/worker-profiles.ts";
+import { importWorkerProfiles } from "../server/tasks/workers/worker-profiles.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,8 +17,8 @@ import {
   createTask,
   ensureTaskTables,
   noteTask,
-} from "../server/tasks/ledger.ts";
-import { createJobRole } from "../server/tasks/job-roles.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { createJobRole } from "../server/tasks/workers/job-roles.ts";
 import { editMap } from "../server/map/write.ts";
 import { mapNode } from "../server/map/view.ts";
 import {

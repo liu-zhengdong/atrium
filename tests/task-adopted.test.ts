@@ -10,14 +10,14 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adoptedEnd } from "../server/tasks/adopted-exit.ts";
-import { decideExit, exitDetail } from "../server/tasks/outcome.ts";
+import { adoptedEnd } from "../server/tasks/dispatch/adopted-exit.ts";
+import { decideExit, exitDetail } from "../server/tasks/gates/outcome.ts";
 import {
   advanceTask,
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import { TaskRunner } from "../server/tasks/runner.ts";
 import {
   discardLegacyIdleRestart,

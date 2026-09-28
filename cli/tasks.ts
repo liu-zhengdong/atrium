@@ -1,27 +1,27 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { Problem } from "../server/problem.ts";
-import { TASK_STATUSES, isTaskStatus } from "../server/tasks/state.ts";
-import { DELIVERS, type Deliver } from "../server/tasks/deliver.ts";
+import { TASK_STATUSES, isTaskStatus } from "../server/tasks/ledger/state.ts";
+import { DELIVERS, type Deliver } from "../server/tasks/ledger/deliver.ts";
 import type {
   Task,
   TaskEventRow,
   TaskNode,
   TaskTree,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import {
   TREE_MAX,
   TREE_RECENT,
   TREE_ROOTS,
-} from "../server/tasks/ledger-model.ts";
-import { formatChildSummary } from "../server/tasks/ledger-summary.ts";
-import { planCounts } from "../server/tasks/plan-count.ts";
+} from "../server/tasks/ledger/ledger-model.ts";
+import { formatChildSummary } from "../server/tasks/ledger/ledger-summary.ts";
+import { planCounts } from "../server/tasks/ledger/plan-count.ts";
 import {
   progressOf,
   rollupLabel,
   rollupText,
   type Rollup,
-} from "../server/tasks/rollup.ts";
+} from "../server/tasks/ledger/rollup.ts";
 import { recordNext } from "./contract.ts";
 import {
   defaultActor,
@@ -31,20 +31,20 @@ import {
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Input, Values } from "./main.ts";
-import { signedPercent, staleLabel } from "../server/tasks/percent.ts";
+import { signedPercent, staleLabel } from "../server/tasks/quota/percent.ts";
 import type {
   PickAccount,
   PickCandidate,
   PickView,
   RunPick,
-} from "../server/tasks/pick.ts";
+} from "../server/tasks/dispatch/pick.ts";
 import { briefInput } from "./brief-input.ts";
 import {
   PRIORITY_LABEL,
   parsePriority,
   priorityTag,
   tagTitle,
-} from "../server/tasks/priority.ts";
+} from "../server/tasks/ledger/priority.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
 

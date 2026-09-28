@@ -5,14 +5,14 @@ import {
   scanOutput,
   stalledCheck,
   stuckAt,
-} from "../server/tasks/check-quiet.ts";
+} from "../server/tasks/merge/check-quiet.ts";
 import {
   classifyCheck,
   MAX_CHECK_RERUNS,
   rerunDecision,
   type CheckClass,
-} from "../server/tasks/check-outcome.ts";
-import { failedTestNames } from "../server/tasks/local-check.ts";
+} from "../server/tasks/merge/check-outcome.ts";
+import { failedTestNames } from "../server/tasks/merge/local-check.ts";
 import { stillRunningLine } from "./still-running.ts";
 
 const MIN = 60_000;

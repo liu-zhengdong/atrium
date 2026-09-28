@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 import { oneLine } from "../text-width.ts";
-import { priorityOf, type Priority } from "../tasks/priority.ts";
+import { priorityOf, type Priority } from "../tasks/ledger/priority.ts";
 import { runningHostNames } from "../hosts/model.ts";
 import {
   all,
@@ -18,8 +18,12 @@ import { leaderBriefs, type LeaderBrief } from "../leaders/model.ts";
 import { choicesForNodes, pendingChoices } from "../choices/store.ts";
 import { materialsForNode } from "../materials/store.ts";
 import { taskPeople, type Person, type TaskPeople } from "./who.ts";
-import { rollups } from "../tasks/rollup-ledger.ts";
-import { progressOf, rollupLabel, type RollupStatus } from "../tasks/rollup.ts";
+import { rollups } from "../tasks/ledger/rollup-ledger.ts";
+import {
+  progressOf,
+  rollupLabel,
+  type RollupStatus,
+} from "../tasks/ledger/rollup.ts";
 
 /**
  * 全景图的只读视图（#322 第 4 步）：网页与 `atrium map --json` 共用同一份。

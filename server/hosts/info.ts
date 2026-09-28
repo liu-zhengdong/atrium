@@ -3,7 +3,7 @@ import { availableParallelism, homedir, hostname, totalmem } from "node:os";
 import { join } from "node:path";
 import { ADAPTERS, findExecutable } from "../tasks/adapters/index.ts";
 import { TOOLS, type Tool } from "../tasks/adapters/types.ts";
-import { hostLimits } from "../tasks/host-load.ts";
+import { hostLimits } from "../tasks/dispatch/host-load.ts";
 import type { CliState, HostInfo } from "./state.ts";
 
 /**

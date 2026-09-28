@@ -11,21 +11,24 @@ import {
   rank,
   tagTitle,
   titleTag,
-} from "../server/tasks/priority.ts";
+} from "../server/tasks/ledger/priority.ts";
 import {
   createTask,
   ensureTaskTables,
   getTask,
   listTasks,
   updateTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import { addNode } from "../server/org/write.ts";
-import { enqueue, pending } from "../server/tasks/queue.ts";
-import { EventInbox } from "../server/tasks/events.ts";
-import { Scheduler, taskPlan } from "../server/tasks/schedule.ts";
+import { enqueue, pending } from "../server/tasks/dispatch/queue.ts";
+import { EventInbox } from "../server/tasks/events/events.ts";
+import { Scheduler, taskPlan } from "../server/tasks/ledger/schedule.ts";
 import { topRows } from "../server/tasks/top.ts";
-import { HostLoad, type HostLimits } from "../server/tasks/host-load.ts";
+import {
+  HostLoad,
+  type HostLimits,
+} from "../server/tasks/dispatch/host-load.ts";
 import { renderStatusline } from "../cli/statusline.ts";
 import { titleOf } from "../cli/top.ts";
 import { Problem } from "../server/problem.ts";

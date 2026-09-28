@@ -10,10 +10,14 @@ import {
   BRIEF_MAX_BYTES,
   briefText,
   clipBrief,
-} from "../server/tasks/brief.ts";
-import { ensureTaskTables } from "../server/tasks/ledger-schema.ts";
-import { createTask, getTask, updateTask } from "../server/tasks/ledger.ts";
-import { prepareRun } from "../server/tasks/workspace.ts";
+} from "../server/tasks/ledger/brief.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger-schema.ts";
+import {
+  createTask,
+  getTask,
+  updateTask,
+} from "../server/tasks/ledger/ledger.ts";
+import { prepareRun } from "../server/tasks/dispatch/workspace.ts";
 import { removeTemp } from "./temp-dir.ts";
 
 const stdin = (text: string, tty = false) =>

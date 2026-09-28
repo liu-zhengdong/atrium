@@ -13,11 +13,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { contextOf } from "../map/context.ts";
 import { killTree, spawnCommand } from "../platform/index.ts";
 import { ADAPTERS } from "../tasks/adapters/index.ts";
-import type { EventInbox, InboxEvent } from "../tasks/events.ts";
-import { parseTaskRef } from "../tasks/ledger.ts";
-import { parseWorker } from "../tasks/profiles.ts";
-import { decideWake } from "../tasks/wake-rule.ts";
-import { workerEnvironment } from "../tasks/worker-env.ts";
+import type { EventInbox, InboxEvent } from "../tasks/events/events.ts";
+import { parseTaskRef } from "../tasks/ledger/ledger.ts";
+import { parseWorker } from "../tasks/workers/profiles.ts";
+import { decideWake } from "../tasks/secretary/wake-rule.ts";
+import { workerEnvironment } from "../tasks/dispatch/worker-env.ts";
 import {
   closeStaleWakes,
   markWakeEnd,

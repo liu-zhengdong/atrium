@@ -14,7 +14,7 @@ import {
   workerGuard,
 } from "../cli/worker-guard.ts";
 import { leaderEnvironment } from "../server/leaders/runtime.ts";
-import { workerEnvironment } from "../server/tasks/worker-env.ts";
+import { workerEnvironment } from "../server/tasks/dispatch/worker-env.ts";
 import { dataDirectory } from "../server/service-state.ts";
 import { childEnv } from "./child-env.ts";
 import { removeTemp } from "./temp-dir.ts";

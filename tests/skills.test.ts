@@ -37,13 +37,13 @@ import {
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
-import { pickWorker } from "../server/tasks/prepare.ts";
-import { prepareRun } from "../server/tasks/workspace.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { pickWorker } from "../server/tasks/dispatch/prepare.ts";
+import { prepareRun } from "../server/tasks/dispatch/workspace.ts";
 import {
   mergeLayers,
   type EffectiveProfile,
-} from "../server/tasks/profiles.ts";
+} from "../server/tasks/workers/profiles.ts";
 import type { Tool } from "../server/tasks/adapters/index.ts";
 import { readSkillSource } from "../cli/skills.ts";
 import { skippedSkillsLine } from "../cli/tasks.ts";

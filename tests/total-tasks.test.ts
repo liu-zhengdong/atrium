@@ -12,17 +12,17 @@ import {
   noteTask,
   taskTree,
   updateTask,
-} from "../server/tasks/ledger.ts";
-import { enqueue, queued } from "../server/tasks/queue.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { enqueue, queued } from "../server/tasks/dispatch/queue.ts";
 import {
   isTotal,
   openDescendants,
   rollupFor,
   syncTotals,
-} from "../server/tasks/rollup-ledger.ts";
-import { EventInbox } from "../server/tasks/events.ts";
-import { publishTask } from "../server/tasks/notice.ts";
-import { Scheduler, taskPlan } from "../server/tasks/schedule.ts";
+} from "../server/tasks/ledger/rollup-ledger.ts";
+import { EventInbox } from "../server/tasks/events/events.ts";
+import { publishTask } from "../server/tasks/events/notice.ts";
+import { Scheduler, taskPlan } from "../server/tasks/ledger/schedule.ts";
 import { TaskRunner } from "../server/tasks/runner.ts";
 import { topRows } from "../server/tasks/top.ts";
 import { mapTotals } from "../server/map/view.ts";
@@ -30,8 +30,8 @@ import { renderTree } from "../cli/tasks.ts";
 import { renderStatusline, type StatuslineInput } from "../cli/statusline.ts";
 import { renderTop, type Snapshot, type TopRow } from "../cli/top.ts";
 import { renderPlan, type PlanView } from "../cli/top-plan.ts";
-import { planCounts } from "../server/tasks/plan-count.ts";
-import type { Holder } from "../server/tasks/holder.ts";
+import { planCounts } from "../server/tasks/ledger/plan-count.ts";
+import type { Holder } from "../server/tasks/watch/holder.ts";
 import { createApp } from "../server/app.ts";
 import { removeTemp } from "./temp-dir.ts";
 

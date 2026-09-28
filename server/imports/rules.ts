@@ -2,8 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { all, one } from "../org/model.ts";
 import { POINT_LIMITS } from "../org/points.ts";
 import { importMark, markImported } from "./marks.ts";
-import { updateTask } from "../tasks/ledger.ts";
-import { dequeue } from "../tasks/queue.ts";
+import { updateTask } from "../tasks/ledger/ledger.ts";
+import { dequeue } from "../tasks/dispatch/queue.ts";
 
 /**
  * 规矩并进要点（一次性迁移）：此前规矩散在硬边界、原则决定、章程、管方面的部门、产品部里；

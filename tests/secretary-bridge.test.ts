@@ -10,8 +10,8 @@ import {
   EventInbox,
   listenInput,
   type InboxEvent,
-} from "../server/tasks/events.ts";
-import { ensureTaskTables } from "../server/tasks/ledger.ts";
+} from "../server/tasks/events/events.ts";
+import { ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
 import {
   bridgeClaim,
   bridgeLine,
@@ -21,12 +21,12 @@ import {
   planBatch,
   recordSent,
   type Sent,
-} from "../server/tasks/bridge-plan.ts";
+} from "../server/tasks/secretary/bridge-plan.ts";
 import { SecretaryBridge, type BridgeSource } from "../cli/secretary-bridge.ts";
 import { sessionInbox, withBridgeHook } from "../cli/secretary.ts";
 import { chatMode } from "../cli/chat.ts";
-import { SecretaryFallback } from "../server/tasks/secretary-fallback.ts";
-import { saveSecretarySession } from "../server/tasks/secretary-session.ts";
+import { SecretaryFallback } from "../server/tasks/secretary/secretary-fallback.ts";
+import { saveSecretarySession } from "../server/tasks/secretary/secretary-session.ts";
 import { createApp } from "../server/app.ts";
 import { main } from "../cli/main.ts";
 import { Problem } from "../server/problem.ts";

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { judge, watchLimits } from "../server/tasks/watchdog.ts";
-import { countSteps, summarize } from "../server/tasks/summary.ts";
-import { workerEnvironment } from "../server/tasks/worker-env.ts";
+import { judge, watchLimits } from "../server/tasks/watch/watchdog.ts";
+import { countSteps, summarize } from "../server/tasks/logs/summary.ts";
+import { workerEnvironment } from "../server/tasks/dispatch/worker-env.ts";
 
 test("看门狗判定：启动无进展判卡死，运行中空闲判受阻；档案 limits 可收紧", () => {
   const limits = { startupMs: 180_000, idleMs: 1_200_000 };

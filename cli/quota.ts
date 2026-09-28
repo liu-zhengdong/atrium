@@ -2,9 +2,9 @@ import { recordNext, recordResult } from "./contract.ts";
 import { printJson, table, when } from "./format.ts";
 import type { Command } from "./main.ts";
 import { Problem } from "../server/problem.ts";
-import type { QuotaAccount, QuotaList } from "../server/tasks/quota.ts";
-import type { QuotaReserve } from "../server/tasks/budget.ts";
-import { staleLabel } from "../server/tasks/percent.ts";
+import type { QuotaAccount, QuotaList } from "../server/tasks/quota/quota.ts";
+import type { QuotaReserve } from "../server/tasks/quota/budget.ts";
+import { staleLabel } from "../server/tasks/quota/percent.ts";
 
 /**
  * 账号额度一览的命令行（#267、#352）：只经 HTTP 调服务，不直接读凭据或跑 OpenQuota。

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { ref } from "../org/model.ts";
-import type { EventInbox } from "../tasks/events.ts";
+import type { EventInbox } from "../tasks/events/events.ts";
 import { hintScope } from "../materials/hints.ts";
 import { hintDue } from "../materials/model.ts";
 import { markSecretsHinted, staleSecrets } from "./store.ts";

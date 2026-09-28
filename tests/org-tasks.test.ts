@@ -9,13 +9,13 @@ import { ensureOrgTables } from "../server/org/schema.ts";
 import { addNode } from "../server/org/write.ts";
 import { show, tree } from "../server/org/read.ts";
 import { formatContext } from "../server/map/context.ts";
-import { createJobRole } from "../server/tasks/job-roles.ts";
+import { createJobRole } from "../server/tasks/workers/job-roles.ts";
 import {
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
-import { prepareRun } from "../server/tasks/workspace.ts";
+} from "../server/tasks/ledger/ledger.ts";
+import { prepareRun } from "../server/tasks/dispatch/workspace.ts";
 import { formatCounts } from "../cli/org.ts";
 import { removeTemp } from "./temp-dir.ts";
 

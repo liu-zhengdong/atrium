@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
-import { recentAction } from "./action.ts";
-import { taskDir } from "./active.ts";
+import { recentAction } from "./logs/action.ts";
+import { taskDir } from "./dispatch/active.ts";
 import {
   ADAPTERS,
   isTool,
@@ -10,10 +10,10 @@ import {
   TOOLS,
   type Tool,
 } from "./adapters/index.ts";
-import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./ci-poll.ts";
-import { EventInbox } from "./events.ts";
-import { Retention } from "./retention.ts";
-import { Executors, type Chosen } from "./executors.ts";
+import { CI_BATCH, CI_POLL_MS, pollCiOnce } from "./gates/ci-poll.ts";
+import { EventInbox } from "./events/events.ts";
+import { Retention } from "./events/retention.ts";
+import { Executors, type Chosen } from "./dispatch/executors.ts";
 import { exec as defaultExec, type Exec } from "./git.ts";
 import {
   DEFAULT_OWNER,
@@ -24,53 +24,58 @@ import {
   taskRef,
   updateTask,
   type Task,
-} from "./ledger.ts";
-import { readLogChunk, readLogTail } from "./log-view.ts";
-import { admit, riskRefusal, runRequest, type RunRequest } from "./plan.ts";
-import type { PaceEntry } from "./prepare.ts";
-import { resolveWorker, type ResolvedWorker } from "./profiles.ts";
-import { loadCustomTools } from "./custom-tools.ts";
+} from "./ledger/ledger.ts";
+import { readLogChunk, readLogTail } from "./logs/log-view.ts";
+import {
+  admit,
+  riskRefusal,
+  runRequest,
+  type RunRequest,
+} from "./dispatch/plan.ts";
+import type { PaceEntry } from "./dispatch/prepare.ts";
+import { resolveWorker, type ResolvedWorker } from "./workers/profiles.ts";
+import { loadCustomTools } from "./workers/custom-tools.ts";
 import {
   ensureWorkerProfiles,
   importWorkerProfiles,
-} from "./worker-profiles.ts";
+} from "./workers/worker-profiles.ts";
 import {
   dequeue,
   enqueue,
   ensureQueueTable,
   queued,
   queueView,
-} from "./queue.ts";
-import { clock } from "./quota-holds.ts";
-import { QuotaGuard } from "./quota-runtime.ts";
-import { recoverRunning } from "./recovery.ts";
+} from "./dispatch/queue.ts";
+import { clock } from "./quota/quota-holds.ts";
+import { QuotaGuard } from "./quota/quota-runtime.ts";
+import { recoverRunning } from "./dispatch/recovery.ts";
 import { killTree } from "../platform/index.ts";
 import { countRows, priorityCounts, RECENT_MS, topRows } from "./top.ts";
-import { TaskWaits } from "./waits.ts";
-import { chooseWorker, type Choice } from "./worker-choice.ts";
-import { workerEnvironment } from "./worker-env.ts";
-import { Scheduler, scheduleOf } from "./schedule.ts";
-import { schedulePrExec } from "./schedule-pr.ts";
-import { pickSkills, type LaunchOptions } from "./workspace.ts";
-import { pickFor } from "./pick-runtime.ts";
-import { writtenNotice, type RunPick } from "./pick.ts";
-import { isRisk } from "./profiles.ts";
+import { TaskWaits } from "./dispatch/waits.ts";
+import { chooseWorker, type Choice } from "./dispatch/worker-choice.ts";
+import { workerEnvironment } from "./dispatch/worker-env.ts";
+import { Scheduler, scheduleOf } from "./ledger/schedule.ts";
+import { schedulePrExec } from "./ledger/schedule-pr.ts";
+import { pickSkills, type LaunchOptions } from "./dispatch/workspace.ts";
+import { pickFor } from "./dispatch/pick-runtime.ts";
+import { writtenNotice, type RunPick } from "./dispatch/pick.ts";
+import { isRisk } from "./workers/profiles.ts";
 import { taskAvoidChain } from "../skills/task-skills.ts";
-import { tellTask } from "./tell-runtime.ts";
-import { BudgetProblem } from "./budget-problem.ts";
-import { readPace } from "./prepare.ts";
-import { MergeQueue } from "./merge-runtime.ts";
-import { WorktreeCleanup } from "./worktree-cleanup.ts";
-import { ReviewGate, taskRisk } from "./review-runtime.ts";
-import { reviewerRefusal } from "./review.ts";
+import { tellTask } from "./dispatch/tell-runtime.ts";
+import { BudgetProblem } from "./quota/budget-problem.ts";
+import { readPace } from "./dispatch/prepare.ts";
+import { MergeQueue } from "./merge/merge-runtime.ts";
+import { WorktreeCleanup } from "./merge/worktree-cleanup.ts";
+import { ReviewGate, taskRisk } from "./gates/review-runtime.ts";
+import { reviewerRefusal } from "./gates/review.ts";
 import {
   cliDeploy,
   cliSmoke,
   lastRestartError,
   OnlineWatch,
   type DeployResult,
-} from "./online-runtime.ts";
-import { selfRepoFlag, selfUpdateEnabled } from "./online.ts";
+} from "./merge/online-runtime.ts";
+import { selfRepoFlag, selfUpdateEnabled } from "./merge/online.ts";
 import {
   currentVersion,
   isDefaultData,
@@ -80,11 +85,11 @@ import { restartInProgress } from "../supervisor.ts";
 import { listLeaders } from "../leaders/model.ts";
 import { hasOrg } from "../org/task-node.ts";
 import { existsSync } from "node:fs";
-import { HostLoad, hostView } from "./host-load.ts";
-import { OrphanReaper, recognizer, spawnOwner } from "./orphans.ts";
-import { cleanHost, reapLeftovers } from "./leftovers-reap.ts";
-import { patrolOverdue } from "./overdue-runtime.ts";
-import type { StopNote } from "./leftovers-reap.ts";
+import { HostLoad, hostView } from "./dispatch/host-load.ts";
+import { OrphanReaper, recognizer, spawnOwner } from "./dispatch/orphans.ts";
+import { cleanHost, reapLeftovers } from "./dispatch/leftovers-reap.ts";
+import { patrolOverdue } from "./watch/overdue-runtime.ts";
+import type { StopNote } from "./dispatch/leftovers-reap.ts";
 import { storedHosts } from "../hosts/state.ts";
 import { skipIfBusy } from "./reentry.ts";
 import { RemoteHosts } from "../hosts/remote.ts";
@@ -121,13 +126,17 @@ import { setHostQuotaSource, type HostQuotaSnapshot } from "../hosts/quota.ts";
 import { machineInfo } from "../hosts/info.ts";
 import { originRepo } from "./gh-repo.ts";
 import { patrolRun } from "./patrol.ts";
-import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
-import { publishTotals } from "./notice.ts";
+import {
+  isTotal,
+  openDescendants,
+  totalRefusal,
+} from "./ledger/rollup-ledger.ts";
+import { publishTotals } from "./events/notice.ts";
 import { researchRound } from "../schedules/model.ts";
 import { pendingChoices } from "../choices/store.ts";
 import { hasRoom } from "../hosts/state.ts";
-import { registerDelivery } from "./register-delivery-runtime.ts";
-import { secretaryView, UNATTENDED_MS } from "./secretary-watch.ts";
+import { registerDelivery } from "./gates/register-delivery-runtime.ts";
+import { secretaryView, UNATTENDED_MS } from "./secretary/secretary-watch.ts";
 import {
   clearPause,
   globalPause,

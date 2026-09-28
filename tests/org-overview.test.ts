@@ -24,7 +24,7 @@ import {
   ensureTaskTables,
   getTask,
   updateTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import { createApp } from "../server/app.ts";
 import { renderTop, snapshotOf } from "../cli/top.ts";
 import type { Client } from "../cli/service.ts";

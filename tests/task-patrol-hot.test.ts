@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
-import { CI_PENDING_SQL, pollCiOnce } from "../server/tasks/ci-poll.ts";
+import { CI_PENDING_SQL, pollCiOnce } from "../server/tasks/gates/ci-poll.ts";
 import type { Exec } from "../server/tasks/git.ts";
-import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
-import { NEXT_MERGE } from "../server/tasks/merge-runtime.ts";
-import { LEGACY_ONLINE_SQL } from "../server/tasks/online-backfill.ts";
-import { OnlineWatch } from "../server/tasks/online-runtime.ts";
+import { createTask, ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
+import { NEXT_MERGE } from "../server/tasks/merge/merge-runtime.ts";
+import { LEGACY_ONLINE_SQL } from "../server/tasks/merge/online-backfill.ts";
+import { OnlineWatch } from "../server/tasks/merge/online-runtime.ts";
 import { skipIfBusy } from "../server/tasks/reentry.ts";
 import {
   CLEANUP_PAGE_SQL,
   cleanupBackoffMs,
   WorktreeCleanup,
-} from "../server/tasks/worktree-cleanup.ts";
+} from "../server/tasks/merge/worktree-cleanup.ts";
 
 function planOf(db: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
   return (

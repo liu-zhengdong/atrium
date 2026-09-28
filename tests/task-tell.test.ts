@@ -5,15 +5,19 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { ADAPTERS } from "../server/tasks/adapters/index.ts";
-import { ensureTaskTables, createTask } from "../server/tasks/ledger.ts";
-import { LiveInput, lineSignal, userLine } from "../server/tasks/live-input.ts";
+import { ensureTaskTables, createTask } from "../server/tasks/ledger/ledger.ts";
+import {
+  LiveInput,
+  lineSignal,
+  userLine,
+} from "../server/tasks/dispatch/live-input.ts";
 import {
   afterExit,
   resumeMessage,
   routeTell,
   tellModeOf,
   tellSection,
-} from "../server/tasks/tell.ts";
+} from "../server/tasks/dispatch/tell.ts";
 import {
   addTell,
   listTells,
@@ -23,7 +27,7 @@ import {
   tellCounts,
   tellInput,
   unsent,
-} from "../server/tasks/tell-ledger.ts";
+} from "../server/tasks/dispatch/tell-ledger.ts";
 import { startApp, until } from "./task-fixture.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 

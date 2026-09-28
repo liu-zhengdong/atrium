@@ -9,12 +9,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { getTask } from "../server/tasks/ledger.ts";
+import { getTask } from "../server/tasks/ledger/ledger.ts";
 import {
   finalClaudeResult,
   ProgressProbe,
   STEP_CHUNK,
-} from "../server/tasks/watchdog.ts";
+} from "../server/tasks/watch/watchdog.ts";
 import { startApp, until } from "./task-fixture.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { removeTemp } from "./temp-dir.ts";

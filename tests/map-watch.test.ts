@@ -8,8 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
-import { createTask, ensureTaskTables } from "../server/tasks/ledger.ts";
-import { ensureEventTables } from "../server/tasks/events.ts";
+import { createTask, ensureTaskTables } from "../server/tasks/ledger/ledger.ts";
+import { ensureEventTables } from "../server/tasks/events/events.ts";
 import { addPoint } from "../server/org/points.ts";
 import { addNode } from "../server/org/write.ts";
 import {

@@ -1,5 +1,5 @@
 import { Problem } from "../problem.ts";
-import { workerAllowed } from "../tasks/worker-env.ts";
+import { workerAllowed } from "../tasks/dispatch/worker-env.ts";
 
 /**
  * 凭据（t194 第 3 步）：挂在组织节点上的令牌、密码这类值（如机器人 token），按「节点 + 名称」找，名称就是注入执行者时的环境变量名。

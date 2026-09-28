@@ -4,19 +4,23 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventInbox, ackIds, listOptions } from "../server/tasks/events.ts";
+import {
+  EventInbox,
+  ackIds,
+  listOptions,
+} from "../server/tasks/events/events.ts";
 import {
   LEASE_MS,
   deliverable,
   selfInitiated,
   type DeliveryState,
-} from "../server/tasks/event-lease.ts";
+} from "../server/tasks/events/event-lease.ts";
 import {
   advanceTask,
   createTask,
   ensureTaskTables,
   getTask,
-} from "../server/tasks/ledger.ts";
+} from "../server/tasks/ledger/ledger.ts";
 import { TaskRunner } from "../server/tasks/runner.ts";
 import type { Exec } from "../server/tasks/git.ts";
 import { removeTemp } from "./temp-dir.ts";
@@ -416,9 +420,9 @@ test("CI 轮询：通过后补判完成；未运行保持受阻并投递独立�
 });
 
 test("事件分级、攒批与摘要：过程不叫醒，第三次退回转卡住", async () => {
-  const { eventLevel } = await import("../server/tasks/event-level.ts");
+  const { eventLevel } = await import("../server/tasks/events/event-level.ts");
   const { settleSeconds, sinceTime } =
-    await import("../server/tasks/events.ts");
+    await import("../server/tasks/events/events.ts");
   const info = [
     "merge_queued",
     "merge_returned",

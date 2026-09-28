@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../server/app.ts";
 import { userTokenPath } from "../server/user-auth.ts";
-import { publishTask } from "../server/tasks/notice.ts";
+import { publishTask } from "../server/tasks/events/notice.ts";
 import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import {
   dateOf,

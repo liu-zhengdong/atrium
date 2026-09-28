@@ -2,6 +2,7 @@
 
 任务账本与执行者运行时。总体规范见根目录 `AGENTS.md`。
 
+- 子目录：`ledger/` 账本、状态机与排期；`dispatch/` 派发（队列、挑执行者、工作区、拉起、捎话、接管与残留进程），工具适配器在 `adapters/`；`workers/` 执行者档案与专员；`logs/` 执行者日志读取与概括；`gates/` 验收关卡、交付事实与合入前审阅；`merge/` 合入队列、本地检查与上线；`watch/` 看门狗、持球与期限、临时错误与思考耗尽；`quota/` 额度；`events/` 事件与投递；`secretary/` 秘书会话与唤醒。顶层只留编排（`runner.ts`、`routes.ts`）与共用的 git / gh 调用。
 - 判定与 IO 分开：状态转移（`state.ts`）、就绪（`schedule.ts`）、关卡（`gates.ts`、`delivery-gates.ts`）、看门狗（`watchdog.ts`）、临时错误与思考耗尽（`transient.ts`、`thinking.ts`）、额度信号（`quota-signal.ts`）都是纯函数，穷举测试；落库、拉进程、查 git/gh 放在各自的 `*-runtime.ts`、`facts.ts`、`spawn.ts`、`runner.ts`。
 - 新执行者工具：在 `adapters/` 加一份 `Adapter`（数据 + 把提示词、工作目录、模型、强度变成进程调用的纯函数 `build`），登记到 `adapters/index.ts` 与 `TOOLS`；工具不支持的参数报错，不静默丢弃。
 - 通用命令行执行者（t271）：`harness/<名字>` 写 `protocol: cli` 的不用写代码。档案写法解析在 `adapters/cli-spec.ts`（纯函数，毛病用档案键名说清楚），按模板拉起在 `adapters/cli.ts`，结局（`error_match`、`done_match`）在 `adapters/cli-outcome.ts`；登记表是 `adapters/index.ts` 的 `ADAPTERS`（内置不可盖），服务启动整批登记在 `custom-tools.ts`，改档案（`worker-profile-edit.ts`）与 `resolveWorker` 按名重登或撤下。`Tool` 因此是字符串：要列全部工具用 `toolNames()`，只认内置的用 `TOOLS` / `isBuiltinTool`。远程主机只上报内置工具，通用执行者只在本机跑。契约测试 `tests/worker-contract.ts`。

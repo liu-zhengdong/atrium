@@ -1,4 +1,4 @@
-import { STILL_RUNNING } from "../server/tasks/check-quiet.ts";
+import { STILL_RUNNING } from "../server/tasks/merge/check-quiet.ts";
 
 /**
  * 测试运行器的「仍在跑」心跳（t260）：纯函数，穷举测试；接 node --test 事件的 reporter 在 still-running-reporter.ts。

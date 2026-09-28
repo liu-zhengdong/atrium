@@ -2,14 +2,21 @@ import type { DatabaseSync } from "node:sqlite";
 import { taskPeople } from "./who.ts";
 import { Problem } from "../problem.ts";
 import { all, nodes, one } from "../org/model.ts";
-import { getJobRole, listJobRoles, type JobRole } from "../tasks/job-roles.ts";
-import type { Delivery, WorkerStat } from "../tasks/delivery-records.ts";
+import {
+  getJobRole,
+  listJobRoles,
+  type JobRole,
+} from "../tasks/workers/job-roles.ts";
+import type { Delivery, WorkerStat } from "../tasks/gates/delivery-records.ts";
 import {
   parseWorker,
   resolveWorker,
   type ProfileLayer,
-} from "../tasks/profiles.ts";
-import { workerReport, workersReport } from "../tasks/workers-report.ts";
+} from "../tasks/workers/profiles.ts";
+import {
+  workerReport,
+  workersReport,
+} from "../tasks/workers/workers-report.ts";
 import { runningHostNames } from "../hosts/model.ts";
 import {
   jobNames,

@@ -5,13 +5,13 @@ import { createInterface, type Interface } from "node:readline";
 import { Problem, closest } from "../server/problem.ts";
 import { spawnCommand } from "../server/platform/index.ts";
 import { dataDirectory } from "../server/service-state.ts";
-import type { InboxEvent } from "../server/tasks/events.ts";
+import type { InboxEvent } from "../server/tasks/events/events.ts";
 import {
   saveSecretarySession,
   saveWakeCount,
   secretarySessionFile,
   wakeCount,
-} from "../server/tasks/secretary-session.ts";
+} from "../server/tasks/secretary/secretary-session.ts";
 import {
   AcpConnection,
   agentEnvironment,
@@ -384,7 +384,7 @@ export const chatCommand: Command = {
     const data = dataDirectory();
     // 秘书锁要开 SQLite：只有 chat 用，按需加载（t117）。
     const { claimSecretary } =
-      await import("../server/tasks/secretary-lock.ts");
+      await import("../server/tasks/secretary/secretary-lock.ts");
     const lock = claimSecretary(data);
     if (!lock)
       throw new Problem(

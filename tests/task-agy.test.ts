@@ -4,18 +4,25 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { recentAction } from "../server/tasks/action.ts";
-import { adoptedEnd } from "../server/tasks/adopted-exit.ts";
+import { recentAction } from "../server/tasks/logs/action.ts";
+import { adoptedEnd } from "../server/tasks/dispatch/adopted-exit.ts";
 import { ADAPTERS } from "../server/tasks/adapters/index.ts";
 import { agyModelArgs } from "../server/tasks/adapters/agy.ts";
-import { lastAssistantText, parseEvents } from "../server/tasks/json-log.ts";
-import { LiveInput, lineSignal, userLine } from "../server/tasks/live-input.ts";
-import { pickWorker } from "../server/tasks/prepare.ts";
-import { parseWorker } from "../server/tasks/profiles.ts";
-import { detectQuotaExhausted } from "../server/tasks/quota-signal.ts";
-import { countSteps, summarize } from "../server/tasks/summary.ts";
-import { tellModeOf } from "../server/tasks/tell.ts";
-import { detectTransient } from "../server/tasks/transient.ts";
+import {
+  lastAssistantText,
+  parseEvents,
+} from "../server/tasks/logs/json-log.ts";
+import {
+  LiveInput,
+  lineSignal,
+  userLine,
+} from "../server/tasks/dispatch/live-input.ts";
+import { pickWorker } from "../server/tasks/dispatch/prepare.ts";
+import { parseWorker } from "../server/tasks/workers/profiles.ts";
+import { detectQuotaExhausted } from "../server/tasks/quota/quota-signal.ts";
+import { countSteps, summarize } from "../server/tasks/logs/summary.ts";
+import { tellModeOf } from "../server/tasks/dispatch/tell.ts";
+import { detectTransient } from "../server/tasks/watch/transient.ts";
 import { writeFakeBin } from "./fake-bin.ts";
 import { startApp, until } from "./task-fixture.ts";
 import { removeTemp } from "./temp-dir.ts";

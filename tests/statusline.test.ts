@@ -8,7 +8,7 @@ import {
   type StatuslineInput,
 } from "../cli/statusline.ts";
 import type { TopRow } from "../cli/top.ts";
-import { HOLDER_WIDTH, type Holder } from "../server/tasks/holder.ts";
+import { HOLDER_WIDTH, type Holder } from "../server/tasks/watch/holder.ts";
 import { width } from "../server/text-width.ts";
 
 const now = 10 * 60 * 60_000;

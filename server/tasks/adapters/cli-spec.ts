@@ -1,4 +1,4 @@
-import type { FrontValue } from "../frontmatter.ts";
+import type { FrontValue } from "../workers/frontmatter.ts";
 import { secretNameProblem } from "../../secrets/model.ts";
 import { ENDPOINT_APIS, type EndpointApi } from "./types.ts";
 

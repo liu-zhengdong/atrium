@@ -12,11 +12,14 @@ import {
   endpointOf,
   endpointRuleProblem,
   launchEndpoint,
-} from "../server/tasks/endpoint.ts";
-import { parseProfileSource, resolveWorker } from "../server/tasks/profiles.ts";
-import { editProfile } from "../server/tasks/worker-profile-edit.ts";
-import { writeProfile } from "../server/tasks/worker-profiles.ts";
-import { loadCustomTools } from "../server/tasks/custom-tools.ts";
+} from "../server/tasks/workers/endpoint.ts";
+import {
+  parseProfileSource,
+  resolveWorker,
+} from "../server/tasks/workers/profiles.ts";
+import { editProfile } from "../server/tasks/workers/worker-profile-edit.ts";
+import { writeProfile } from "../server/tasks/workers/worker-profiles.ts";
+import { loadCustomTools } from "../server/tasks/workers/custom-tools.ts";
 import { profileDb } from "./profile-fixture.ts";
 
 /**

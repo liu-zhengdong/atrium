@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { leaderOf } from "../leaders/guard.ts";
 import { SECRETARY } from "../leaders/route.ts";
-import type { EventInbox } from "../tasks/events.ts";
+import type { EventInbox } from "../tasks/events/events.ts";
 import { announceChoice, choiceBrief, decideAndAnnounce } from "./notify.ts";
 import {
   addChoice,

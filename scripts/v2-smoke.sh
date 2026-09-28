@@ -157,6 +157,42 @@ out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added'
 out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added == false'
 jq -e '.model == "x" and (.hooks.SessionStart[0].hooks[0].command == "atrium secretary bridge --detach")' "$dir/.claude/settings.local.json" >/dev/null || fail "hook 写得不对"
 
+step "技能、资料、决定、凭据、选项单、周期任务（第二波 D）"
+mkdir -p "$work/skill/refs"; printf -- '---\ndescription: 修 bug 的做法\n---\n先复现再修\n' >"$work/skill/SKILL.md"; echo 附 >"$work/skill/refs/a.md"
+out=$(json skill add fix-bug "$work/skill" --checks pr_exists); has '.result.rev == 1 and .result.summary == "修 bug 的做法" and .result.files == 2'
+[ -f "$(jq -r .result.path <<<"$out")" ] || fail "技能文件不在数据目录"
+out=$(json skill add fix-bug --workers claude); has '.result.rev == 2 and .result.workers == ["claude"] and .result.checks == ["pr_exists"]'
+out=$(json skill ls fix-bug); has '.result.others == ["refs/a.md"] and (.result.body|test("先复现"))'
+printf '部门是什么' >"$work/overview.md"; printf 'abc' >"$work/detail.md"
+out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result[0].id == "m1" and .result[0].kind == "overview"'
+out=$(json material add o2 "$work/detail.md" --note 细节); has '.result[0].id == "m2"'
+out=$(json material add o2 "$work/detail.md" --note 改了); has '.result[0].id == "m2" and .result[0].rev == 2'
+out=$(json material get m1); has '(.result.content|@base64d) == "部门是什么"'
+[ "$(ATRIUM_WORKER=1 "$bin" material get m2)" = abc ] || fail "执行者应能 material get"
+out=$(json material archive m2); has '.result.archived_at != null'
+out=$(json material ls --node o2); has '(.result|length) == 1'
+out=$(json org show o2); has '(.result.limits|map(select(.key == "overview"))[0].used) == 5'
+out=$(json decision add o2 "先做 A" --why 快); has '.result.id == "d1"'
+out=$(json decision add o2 "改做 B" --replaces d1); has '.result.id == "d2"'
+out=$(json decision ls --node o2); has '(.result|map(.id)) == ["d2"]'
+printf 'sekrit\n' | "$bin" secret set o1 BOT_TOKEN --json >/dev/null || fail "secret set 失败"
+out=$(json secret ls --node o2); has '.result[0].name == "BOT_TOKEN" and (tostring|test("sekrit")|not)'
+[ "$(stat -f %Lp "$ATRIUM_DATA/secrets/o1/BOT_TOKEN" 2>/dev/null || stat -c %a "$ATRIUM_DATA/secrets/o1/BOT_TOKEN")" = 600 ] || fail "凭据文件权限不是 600"
+grep -q sekrit "$ATRIUM_DATA/service.log" && fail "凭据值进了日志"
+out=$(json secret rm o1 BOT_TOKEN); has '.ok'
+opt='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}'
+echo "{\"title\":\"下一步\",\"options\":[$opt,$opt,$opt],\"recommend\":[1],\"reason\":\"快\"}" >"$work/choice.json"
+out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c1" and .result.status == "open"'
+out=$(json choice ls); has '(.result|length) == 1'
+out=$(json choice pick c1 1,3 --note 先快); has '.result.status == "picked" and .result.options[0].task != null and .result.decision == "d3"'
+out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c2"'
+out=$(json choice pass c2); has '.result.status == "passed"'
+out=$(json schedule add o2 巡检 --every 1d --at 09:00 --kind patrol); has '.result.id == "s1" and .result.at == "09:00"'
+out=$(json schedule run s1 || true); has '(.ok and .result.task.id != null) or (.error.code == "conflict" and (.error.message|test("已生成")))'
+out=$(json schedule ls); has '.result[0].last_task != null'
+out=$(json schedule rm s1); has '.ok'
+out=$(json schedule add o2 x --every 30m || true); has '.error.code == "usage"'
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

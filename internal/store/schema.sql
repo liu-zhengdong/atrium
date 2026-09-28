@@ -67,13 +67,16 @@ CREATE TABLE IF NOT EXISTS points (
 );
 CREATE INDEX IF NOT EXISTS points_department ON points (department, pos);
 
--- 技能：按名字，每次修改追加一版（rev 递增），读取取最大 rev。
+-- 技能：按名字，每次修改追加一版（rev 递增），读取取最大 rev；文件在数据目录 skills/<名字>/r<rev>/。
+-- workers：优先执行者（逗号分隔档案名）；checks：交付要查什么（逗号分隔）；secrets：这类活要的凭据名（逗号分隔）。
 CREATE TABLE IF NOT EXISTS skills (
   name       TEXT NOT NULL,
   rev        INTEGER NOT NULL,
-  body       TEXT NOT NULL,
+  summary    TEXT NOT NULL,
+  files      INTEGER NOT NULL,
   workers    TEXT NOT NULL DEFAULT '',
   checks     TEXT NOT NULL DEFAULT '',
+  secrets    TEXT NOT NULL DEFAULT '',
   created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (name, rev)
@@ -131,67 +134,89 @@ CREATE TABLE IF NOT EXISTS queue (
 );
 CREATE INDEX IF NOT EXISTS queue_order ON queue (priority, enqueued_at);
 
--- 周期任务：到点在部门下生成一件普通任务。
+-- 周期任务：到点在部门下生成一件普通任务（kind：task patrol research）。
+-- every_ms 周期；at_minute 本机钟点（当天第几分钟，只给整天的周期）；skips 累计跳过轮数，last_note 最近一笔。
 CREATE TABLE IF NOT EXISTS schedules (
   id          TEXT PRIMARY KEY,
   department  TEXT NOT NULL REFERENCES departments (id),
-  kind        TEXT NOT NULL,
-  every       TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('task', 'patrol', 'research')),
+  every_ms    INTEGER NOT NULL,
+  at_minute   INTEGER,
   title       TEXT NOT NULL,
   detail      TEXT NOT NULL DEFAULT '',
+  skill       TEXT NOT NULL DEFAULT '',
+  next_at     INTEGER NOT NULL,
   last_run_at INTEGER,
   last_task   TEXT REFERENCES tasks (id),
+  skips       INTEGER NOT NULL DEFAULT 0,
+  last_note   TEXT NOT NULL DEFAULT '',
   created_by  TEXT NOT NULL,
   created_at  INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS schedules_due ON schedules (next_at);
 
--- 选项单：调研后提给用户的 3–5 个方向。
+-- 选项单：调研后提给用户的 3–5 个方向；recommend 是推荐的项（逗号分隔 pos）。
 CREATE TABLE IF NOT EXISTS choices (
   id         TEXT PRIMARY KEY,
   department TEXT NOT NULL REFERENCES departments (id),
-  task       TEXT REFERENCES tasks (id),
+  task       TEXT UNIQUE REFERENCES tasks (id),
   title      TEXT NOT NULL,
+  recommend  TEXT NOT NULL,
+  reason     TEXT NOT NULL,
   status     TEXT NOT NULL CHECK (status IN ('open', 'picked', 'passed')),
   note       TEXT NOT NULL DEFAULT '',
+  decision   TEXT REFERENCES decisions (id),
+  created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   decided_at INTEGER
 );
+CREATE INDEX IF NOT EXISTS choices_department ON choices (department, status);
 
+-- 选项：能多做到什么（gain）、为什么现在（why_now）、代价（cost）、不做会怎样（if_not）、依据（evidence）。
 CREATE TABLE IF NOT EXISTS choice_options (
-  choice TEXT NOT NULL REFERENCES choices (id),
-  pos    INTEGER NOT NULL,
-  title  TEXT NOT NULL,
-  gain   TEXT NOT NULL,
-  cost   TEXT NOT NULL,
-  picked INTEGER NOT NULL DEFAULT 0,
+  choice   TEXT NOT NULL REFERENCES choices (id),
+  pos      INTEGER NOT NULL,
+  title    TEXT NOT NULL,
+  gain     TEXT NOT NULL,
+  why_now  TEXT NOT NULL,
+  cost     TEXT NOT NULL,
+  if_not   TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  task     TEXT REFERENCES tasks (id),
   PRIMARY KEY (choice, pos)
 );
 
--- 决定：只追加；推翻写新的一条并指向旧的（supersedes）。
+-- 决定：用户拍板的事与原因，只追加；推翻或合并时写新的一条，旧的记 superseded_by 指向它。
 CREATE TABLE IF NOT EXISTS decisions (
-  id         TEXT PRIMARY KEY,
-  department TEXT NOT NULL REFERENCES departments (id),
-  text       TEXT NOT NULL,
-  why        TEXT NOT NULL DEFAULT '',
-  decided_by TEXT NOT NULL,
-  supersedes TEXT REFERENCES decisions (id),
-  created_at INTEGER NOT NULL
+  id            TEXT PRIMARY KEY,
+  department    TEXT NOT NULL REFERENCES departments (id),
+  text          TEXT NOT NULL,
+  why           TEXT NOT NULL DEFAULT '',
+  decided_by    TEXT NOT NULL,
+  superseded_by TEXT REFERENCES decisions (id),
+  created_at    INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS decisions_department ON decisions (department, superseded_by);
 
--- 资料：内容存数据目录文件，这里记元数据；每改一次追加一版。
+-- 资料：内容存数据目录 materials/<mN>/r<rev>/<文件名>，这里记元数据；每改一次追加一版，读取取最大 rev。
+-- units 是折算字数（文本按字、二进制按 3 字节一字），部门总量按它算；归档只标 archived_at（整条资料，记在最新版上）。
 CREATE TABLE IF NOT EXISTS materials (
   id          TEXT NOT NULL,
   rev         INTEGER NOT NULL,
   department  TEXT NOT NULL REFERENCES departments (id),
   kind        TEXT NOT NULL CHECK (kind IN ('overview', 'detail')),
   title       TEXT NOT NULL,
+  note        TEXT NOT NULL DEFAULT '',
   file        TEXT NOT NULL,
   size        INTEGER NOT NULL,
+  units       INTEGER NOT NULL,
+  binary      INTEGER NOT NULL DEFAULT 0,
   archived_at INTEGER,
   created_by  TEXT NOT NULL,
   created_at  INTEGER NOT NULL,
   PRIMARY KEY (id, rev)
 );
+CREATE INDEX IF NOT EXISTS materials_department ON materials (department, title);
 
 -- 机器：本机 h1，远程 hN；token_hash 是代理令牌的哈希。
 CREATE TABLE IF NOT EXISTS hosts (

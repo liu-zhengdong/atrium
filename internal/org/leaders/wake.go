@@ -56,7 +56,7 @@ func getLauncher() Launcher {
 	return launcher
 }
 
-// MaterialsOverview 取部门的资料总览（资料在 org 的资料部分，接上前为空）。
+// MaterialsOverview 取部门的资料总览：Routes 装配时接上 org.Overview（要数据目录）；单测里保持为空。
 var MaterialsOverview = func(ctx context.Context, q store.Querier, dept string) (string, error) { return "", nil }
 
 // hub 是本服务进程里负责人运行时的全部状态：令牌、在跑的唤醒、连续失败次数。

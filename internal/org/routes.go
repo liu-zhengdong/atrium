@@ -17,10 +17,12 @@ type Show struct {
 	Points    []Point  `json:"points"`
 	Inherited []Point  `json:"inherited"`
 	Room      int      `json:"room"` // 还能加几条要点
+	Limits    []Count  `json:"limits"`
 }
 
 func Routes(r *api.Router, env *app.Env) {
 	db := env.DB
+	resourceRoutes(r, env)
 	r.Handle("GET /api/org", func(q *api.Req) (any, error) { return Tree(q.Context(), db) })
 	r.Handle("POST /api/org", func(q *api.Req) (any, error) {
 		var in NewDept
@@ -55,6 +57,9 @@ func Routes(r *api.Router, env *app.Env) {
 			}
 		}
 		s.Room = MaxPoints - len(s.Points)
+		if s.Limits, err = Counts(q.Context(), db, id); err != nil {
+			return nil, err
+		}
 		forest, err := Tree(q.Context(), db)
 		if err != nil {
 			return nil, err

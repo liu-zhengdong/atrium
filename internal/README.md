@@ -30,8 +30,9 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `pause` | 完成 | 一键停机的状态与判定 `Paused` | `pauses` |
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
 | `ledger` | 完成 | 任务、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/tree/plan/note/wait` | `tasks` `task_deps` `task_events` |
-| `org` | 部门与要点完成 | 部门、要点、要点链；第二波补身份、备忘、技能、资料、选项单、决定、周期任务、凭据 | `departments` `department_repos` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `decisions` `schedules` `secrets` |
+| `org` | 完成 | 部门、要点、要点链、身份、备忘、技能、资料、决定、凭据、上限表与计数 | `departments` `department_repos` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `decisions` `schedules` `secrets` |
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
+| `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
 | `dispatch` | 桩 | 派活队列、挑执行者与机器、拉起；`task run/stop/tell/log` | `queue` |
 | `workers` | 桩 | 适配器、档案三层叠加；`workers`、`workers edit` | `worker_profiles` |
@@ -123,7 +124,12 @@ type Module struct {
 ### 组织（`internal/org`）
 
 - `org.Ancestors(ctx, q, "oN")` → 顶层到本部门的链；`org.Chain(ctx, q, "oN")` → 要点链（顶层在前，同部门按 pos）；`org.ChainLine(p)` → 派活附的一行「k3（o1）规矩——为什么」。
-- 上限表在 `org/model.go`（树深 5、每部门要点 7、仓库 20）；满了返回 `api.Limit`，告诉怎么腾地方。第二波的上限（备忘 2000 字、选项 5 项、有效决定 30 条、资料总览 3000 字……）也写在这张表里。
+- 上限表在 `org/limits.go`（`Limits`：会增长的东西 → 上限 → 满了找谁 → 怎么办）；满了一律 `org.Full(key, dept, used)`，计数 `org.Counts(ctx, q, dept)`（网页「6/7」，接口 `GET /api/limits?node=oN`）。
+- 派活（dispatch）：`org.SkillPaths(ctx, q, data, task.Skill)` → 提示词附的 SKILL.md 路径；`org.GetSkill` 取优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
+- 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单；`org.Decisions(…, DecisionFilter{Org})` 有效决定。
+- 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、决定、凭据只有用户）。
+- 关卡（gates）：判过后调 `agenda.Settle(ctx, db, task, workdir)`，工作目录根有 `choice.json` 就登记成选项单（不合法返回 usage 错误，按关卡不过交回）。
+- dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；周期任务每轮建任务后调它。
 
 ### 子进程（`internal/platform`）
 

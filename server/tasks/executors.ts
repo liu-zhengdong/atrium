@@ -101,8 +101,16 @@ import { SPAWN_ENV, spawnMark, spawnOwner } from "./orphans.ts";
  * 收尾与看门狗的判定在 outcome.ts / watchdog.ts 的纯函数里，这里只执行并落库。
  */
 
-/** host：派到哪台远程主机（#358）；不给或是本机就在本机跑。 */
-export type Chosen = { worker: ResolvedWorker; risk: Risk; host?: number };
+/**
+ * host：派到哪台远程主机（#358）；不给或是本机就在本机跑。
+ * pausedOk：用户或秘书用 --host 把这一件指定到了暂停接活的主机（t227），拉起时不拦。
+ */
+export type Chosen = {
+  worker: ResolvedWorker;
+  risk: Risk;
+  host?: number;
+  pausedOk?: boolean;
+};
 
 /** 挑主机（#358）：need 要查仓库（异步），choose 在占位前同步判定，免得两轮拉起抢同一个空位。 */
 export type Placement = {
@@ -110,6 +118,8 @@ export type Placement = {
   choose(need: HostNeed, pinned: number | null): HostChoice;
   /** 远程主机上报的已装且没判为未登录的工具（挑执行者时代替本机 PATH）。 */
   installed(host: number): Partial<Record<Tool, string>>;
+  /** 这台暂停接活了没：拉起前最后再看一眼，重试、换人、续派都不往暂停的主机上起（t227）。 */
+  paused?(host: number): boolean;
 };
 
 export type ExecutorContext = {
@@ -449,6 +459,9 @@ export class Executors {
 
   async launch(id: number, chosen: Chosen, retried = false): Promise<Task> {
     if (this.ctx.closed()) throw new Error("服务已关闭");
+    const target = chosen.host ?? LOCAL_HOST;
+    if (!chosen.pausedOk && this.ctx.placement?.paused?.(target))
+      throw new Error(`${hostRef(target)} 已暂停接活，不往那台拉起`);
     // 被紧急任务抢占暂停过的（t215）：同一执行者且日志里有会话就续上，否则把说明写进提示词、在原工作树重派。
     const paused = openPreemption(this.ctx.db, id);
     const resume =

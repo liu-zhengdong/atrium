@@ -3,6 +3,7 @@ import { recordNext } from "./contract.ts";
 import { defaultActor } from "./worker-guard.ts";
 import { oneLine, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { defaultActor } from "./worker-guard.ts";
 
 /**
  * 执行机器（#358 第 1 步，atrium host …）：本机是 h1，别的机器装好 Atrium 后用 `atrium agent` 接入。
@@ -64,6 +65,8 @@ type HostView = {
   } | null;
   checks?: string;
 };
+
+type HostPause = { paused: boolean; by: string; at: number };
 
 const HOST_REF = /^h[1-9][0-9]{0,8}$/;
 function hostRef(value: string | undefined) {
@@ -134,7 +137,12 @@ export function hostTable(hosts: HostView[]) {
   ]);
 }
 
-function detail(view: HostView & { tasks?: { ref: string; title: string }[] }) {
+function detail(
+  view: HostView & {
+    tasks?: { ref: string; title: string }[];
+    pauses?: HostPause[];
+  },
+) {
   return [
     `${view.ref} ${view.name} · ${view.status}`,
     `机器：${view.info ? `${view.info.hostname} · ${machine(view)} · Node ${view.info.node} · Atrium ${view.info.version}` : "还没上报"}`,
@@ -154,6 +162,14 @@ function detail(view: HostView & { tasks?: { ref: string; title: string }[] }) {
       : []),
     ...(view.checks ? [`把关检查：${view.checks}`] : []),
     ...(view.last_seen_at ? [`最近心跳：${when(view.last_seen_at)}`] : []),
+    ...(view.pauses?.length
+      ? [
+          `暂停与恢复：${view.pauses
+            .slice(0, 5)
+            .map((p) => `${when(p.at)} ${p.by} ${p.paused ? "暂停" : "恢复"}`)
+            .join("；")}`,
+        ]
+      : []),
     ...(view.tasks?.length
       ? [
           "在跑的任务：",
@@ -167,6 +183,21 @@ const serviceAddress = async () => {
   const { servicePort } = await import("../server/service-state.ts");
   return `http://127.0.0.1:${servicePort()}`;
 };
+
+/** 暂停或恢复接活，记在 --as 名下（缺省秘书会话记 secretary，否则 u1）。 */
+async function pauseRequest(
+  reference: string,
+  paused: boolean,
+  values: Values,
+) {
+  const who = str(values, "as") ?? defaultActor();
+  if (who !== undefined && !who.trim())
+    throw new Problem(400, "--as 不能为空", "usage");
+  return (await client()).post<{ host: HostView; changed: boolean }>(
+    `/hosts/${enc(hostRef(reference))}/pause${who ? `?${new URLSearchParams({ as: who.trim() })}` : ""}`,
+    { paused },
+  );
+}
 
 export const hostCommands: Record<string, Command> = {
   "host ls": {
@@ -198,9 +229,12 @@ export const hostCommands: Record<string, Command> = {
     async run({ positionals: [reference], json }) {
       const view = await (
         await client()
-      ).get<HostView & { tasks: { ref: string; title: string }[] }>(
-        `/hosts/${enc(hostRef(reference))}`,
-      );
+      ).get<
+        HostView & {
+          tasks: { ref: string; title: string }[];
+          pauses: HostPause[];
+        }
+      >(`/hosts/${enc(hostRef(reference))}`);
       if (json) printJson(view);
       else console.log(detail(view));
       recordNext(`派活到这台：atrium task run tN --host ${view.ref}`);
@@ -308,19 +342,19 @@ export const hostCommands: Record<string, Command> = {
     },
   },
   "host pause": {
-    args: "hN",
-    about: "暂停往这台派新活（在跑的照跑）；本机 h1 也可以暂停，让活只去远程",
+    args: "hN [--as u1|secretary]",
+    about:
+      "暂停往这台派新活（在跑的照跑）：自动派、排队拉起、重试换人都不去这台；只想派一件过去用 task run tN --host hN，不要先恢复；本机 h1 也可以暂停，让活只去远程；谁、何时暂停记进 host show",
+    options: { as: { type: "string" } },
     positionals: [1, 1],
-    async run({ positionals: [reference], json }) {
-      const result = await (
-        await client()
-      ).post<{ host: HostView }>(`/hosts/${enc(hostRef(reference))}/pause`, {
-        paused: true,
-      });
+    async run({ positionals: [reference], values, json }) {
+      const result = await pauseRequest(reference, true, values);
       if (json) printJson(result);
       else
         console.log(
-          `${result.host.ref} ${result.host.name} 已暂停接活；在跑的照跑`,
+          result.changed
+            ? `${result.host.ref} ${result.host.name} 已暂停接活；在跑的照跑`
+            : `${result.host.ref} ${result.host.name} 本来就暂停着，没变`,
         );
       recordNext(`恢复：atrium host resume ${result.host.ref}`);
     },
@@ -363,17 +397,20 @@ export const hostCommands: Record<string, Command> = {
     },
   },
   "host resume": {
-    args: "hN",
-    about: "恢复往这台派活；排着的活会按顺序拉起",
+    args: "hN [--as u1|secretary]",
+    about:
+      "恢复往这台派活：排着的活会立刻按顺序拉起、可能派到这台（只想派一件过去用 task run tN --host hN）；谁、何时恢复记进 host show",
+    options: { as: { type: "string" } },
     positionals: [1, 1],
-    async run({ positionals: [reference], json }) {
-      const result = await (
-        await client()
-      ).post<{ host: HostView }>(`/hosts/${enc(hostRef(reference))}/pause`, {
-        paused: false,
-      });
+    async run({ positionals: [reference], values, json }) {
+      const result = await pauseRequest(reference, false, values);
       if (json) printJson(result);
-      else console.log(`${result.host.ref} ${result.host.name} 已恢复接活`);
+      else
+        console.log(
+          result.changed
+            ? `${result.host.ref} ${result.host.name} 已恢复接活`
+            : `${result.host.ref} ${result.host.name} 本来就在接活，没变`,
+        );
       recordNext("看主机：atrium host ls");
     },
   },

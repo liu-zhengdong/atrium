@@ -1112,7 +1112,7 @@ const done: Command = {
 const run: Command = {
   args: "tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--urgent [--why 原因]]",
   about:
-    "派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）",
+    "派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的；那台暂停接活时用户与秘书仍可这样只派这一件，不必先恢复）；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）",
   options: {
     worker: { type: "string" },
     risk: { type: "string" },
@@ -1167,6 +1167,7 @@ const run: Command = {
         queued: boolean;
         pick?: RunPick;
         reassigned?: { worker: string; from: string; reason: string | null };
+        host_note?: string;
       } & UrgentReceipt
     >(`/tasks/${id}/run`, body);
     const { task } = result;
@@ -1181,6 +1182,7 @@ const run: Command = {
               : result.queued
                 ? `${task.ref} 排队中：${queuedReason(task.events)}`
                 : `已${result.reassigned ? "改" : ""}派 ${task.ref} 给 ${task.worker}（${task.host_ref ? `${task.host_ref} 上 ` : ""}PID ${task.pid}${task.worktree ? `，工作树 ${task.worktree}，分支 ${task.branch}` : ""}）`,
+          ...(result.host_note ? [result.host_note] : []),
           ...urgentLines(task),
           ...laneLines(result),
           ...pickLines(result.pick),

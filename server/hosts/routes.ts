@@ -142,12 +142,14 @@ export function registerHostRoutes(
   app.delete("/api/hosts/:id", (request) =>
     runner.removeHost(params(request).id),
   );
+  // 暂停与恢复记在谁名下（?as=，缺省 u1；秘书会话带 secretary）；leader 令牌到不了这里。
   app.post("/api/hosts/:id/pause", { bodyLimit: 1024 }, (request) => {
     const body = z
       .object({ paused: z.boolean() })
       .strict()
       .parse(request.body ?? {});
-    return runner.pauseHost(params(request).id, body.paused);
+    const by = resolveActor(db, ((request.query ?? {}) as { as?: string }).as);
+    return runner.pauseHost(params(request).id, body.paused, by);
   });
   // 止损（t215）：停掉在那台跑的非紧急执行者，本机再结束已结束任务留下的执行者进程树。
   // 停下的任务在停止事件里记发起者（t239）：?as= 给的 u1、secretary 或 aN，缺省 u1。

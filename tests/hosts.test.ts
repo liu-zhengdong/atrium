@@ -22,6 +22,8 @@ import { fixture, until } from "./task-fixture.ts";
 import { nodeCommand } from "./portable-shell.ts";
 import { QuotaReaders } from "../server/quota-readers/index.ts";
 import { skippedSkillsLine } from "../cli/tasks.ts";
+import { resolveWorker } from "../server/tasks/profiles.ts";
+import type { Executors } from "../server/tasks/executors.ts";
 
 /**
  * 远程执行者（#358 第 1 步）：真 HTTP 服务 + 同机起的代理（数据目录分开），假执行者。
@@ -337,17 +339,30 @@ test("远程主机：接入、派到 h2、日志与结果传回本机；令牌�
   assert.equal(bad.status, 400);
   assert.match(bad.body.error, /host: 应为主机短号/);
 
-  // 暂停：指定它也派不过去；移除后代理因令牌失效停下。
+  // 暂停：leader 指定它也派不过去；用户或秘书指定照派这一件（t227）；移除后代理因令牌失效停下。
   assert.equal(
     (await call("POST", "/api/hosts/h2/pause", { paused: true })).status,
     200,
   );
-  const paused = await call("POST", "/api/tasks/t2/run", {
+  await assert.rejects(
+    server.taskRunner!.run("t2", { worker: "opencode", host: "h2" }, "a1"),
+    /h2 已暂停接活/,
+  );
+  const pinned = await call("POST", "/api/tasks/t2/run", {
     worker: "opencode",
     host: "h2",
   });
-  assert.equal(paused.status, 409);
-  assert.match(paused.body.error, /h2 已暂停接活/);
+  assert.equal(pinned.status, 200, JSON.stringify(pinned.body));
+  assert.equal(pinned.body.task.host_ref, "h2");
+  assert.match(pinned.body.host_note, /h2 暂停接活中，按 --host 只派了这一件/);
+  const second = (await call("GET", "/api/tasks/t2/wait?timeout=20")).body.task;
+  assert.equal(second.status, "done");
+  assert.ok(
+    second.events.some(
+      (e: { kind: string }) => e.kind === "paused_host_pinned",
+    ),
+  );
+  assert.equal((await hostOf(call, "h2")).connection, "online");
   assert.equal(
     (await call("POST", "/api/hosts/h1/pause", { paused: false })).status,
     200,
@@ -365,6 +380,135 @@ test("远程主机：接入、派到 h2、日志与结果传回本机；令牌�
       ["h1", false],
       ["h2", true],
     ],
+  );
+});
+
+test("暂停接活的主机重新上线：排着的活不派过去、改派与拉起都不去，恢复后才拉起；暂停与恢复记谁何时（t227）", async (t) => {
+  const fx = fixture(t);
+  fx.script(
+    "opencode",
+    'echo \'{"type":"step_start","part":{}}\'\necho \'{"type":"text","part":{"text":"远程完成"}}\'',
+  );
+  const data = join(fx.root, "data");
+  const server = await serve(fx, data);
+  t.after(() => server.close());
+  const { call, port } = server;
+  const { code } = (
+    await call("POST", "/api/hosts", { name: "ggb", repos: ["*"] })
+  ).body;
+  const agentData = join(fx.root, "agent");
+  const first = startAgent(t, {
+    port,
+    data: agentData,
+    env: fx.env,
+    code,
+    quota: null,
+  });
+  await until(
+    () => first.lines.some((line) => line.includes("已连上")),
+    10_000,
+  );
+  // 秘书暂停 h2（线上 d97），本机也暂停，排着的活只能等。
+  const paused = await call("POST", "/api/hosts/h2/pause?as=secretary", {
+    paused: true,
+  });
+  assert.equal(paused.status, 200);
+  assert.equal(paused.body.changed, true);
+  assert.equal(
+    (await call("POST", "/api/hosts/h1/pause", { paused: true })).body.changed,
+    true,
+  );
+  // 再暂停一次：没变，不记账。
+  assert.equal(
+    (await call("POST", "/api/hosts/h2/pause?as=secretary", { paused: true }))
+      .body.changed,
+    false,
+  );
+  for (const title of ["排着的一", "排着的二"]) {
+    await call("POST", "/api/tasks", { title, deliver: "none" });
+  }
+  for (const ref of ["t1", "t2"]) {
+    const run = await call("POST", `/api/tasks/${ref}/run`, {
+      worker: "opencode",
+    });
+    assert.equal(run.status, 200, JSON.stringify(run.body));
+    assert.equal(run.body.queued, true);
+  }
+  // 代理断开重连（线上 13:50 h3 重新上线）：暂停不变，排着的照样不派过去。
+  first.agent.stop();
+  await first.done;
+  const second = startAgent(t, {
+    port,
+    data: agentData,
+    env: fx.env,
+    quota: null,
+  });
+  await until(
+    () => second.lines.some((line) => line.includes("已连上")),
+    10_000,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const h2 = (await call("GET", "/api/hosts/h2")).body;
+  assert.equal(h2.connection, "online");
+  assert.equal(h2.paused, true);
+  for (const ref of ["t1", "t2"]) {
+    const task = (await call("GET", `/api/tasks/${ref}`)).body;
+    assert.equal(task.status, "todo");
+    assert.ok(
+      !task.events.some((e: { kind: string }) => e.kind === "start"),
+      JSON.stringify(task.events.slice(-2)),
+    );
+  }
+  // 改派钉到暂停的主机：拒绝，排队不变。
+  const reassign = await call("POST", "/api/tasks/t1/run", {
+    worker: "opencode",
+    host: "h2",
+  });
+  assert.equal(reassign.status, 409);
+  assert.match(reassign.body.error, /改派不到 h2：h2 已暂停接活/);
+  // 重试、换人等直接拉起的路径：最后一道也不往暂停的主机上起。
+  const worker = await resolveWorker("opencode", server.db);
+  const x = (server.taskRunner as unknown as { x: Executors }).x;
+  await assert.rejects(
+    x.launch(1, { worker, risk: "low", host: 2 }),
+    /h2 已暂停接活，不往那台拉起/,
+  );
+  await assert.rejects(
+    x.launch(1, { worker, risk: "low" }),
+    /h1 已暂停接活，不往那台拉起/,
+  );
+  // 谁、何时暂停：host show 带最近几次。
+  const history = (await call("GET", "/api/hosts/h2")).body.pauses;
+  assert.deepEqual(
+    history.map((p: { paused: boolean; by: string }) => [p.paused, p.by]),
+    [[true, "secretary"]],
+  );
+  assert.equal((await call("GET", "/api/hosts/h1")).body.pauses[0].by, "u1");
+  // 恢复 h2：排着的这才拉起、派到 h2。
+  const resumed = await call("POST", "/api/hosts/h2/pause?as=secretary", {
+    paused: false,
+  });
+  assert.equal(resumed.body.changed, true);
+  for (const ref of ["t1", "t2"]) {
+    const task = (await call("GET", `/api/tasks/${ref}/wait?timeout=20`)).body
+      .task;
+    assert.equal(task.status, "done", JSON.stringify(task.events.slice(-3)));
+    assert.equal(task.host_ref, "h2");
+  }
+  assert.deepEqual(
+    (await call("GET", "/api/hosts/h2")).body.pauses.map(
+      (p: { paused: boolean; by: string }) => [p.paused, p.by],
+    ),
+    [
+      [false, "secretary"],
+      [true, "secretary"],
+    ],
+  );
+  // --as 只认 u1、secretary 与节点 leader。
+  assert.equal(
+    (await call("POST", "/api/hosts/h2/pause?as=someone", { paused: true }))
+      .status,
+    400,
   );
 });
 
@@ -521,7 +665,13 @@ test("远程主机：离线时停下任务先在账本收尾，代理重启后�
   const { code } = (
     await server.call("POST", "/api/hosts", { name: "远程", repos: ["*"] })
   ).body;
-  const first = startAgent(t, { port, data: agentData, env: fx.env, code });
+  const first = startAgent(t, {
+    port,
+    data: agentData,
+    env: fx.env,
+    code,
+    quota: null,
+  });
   await until(
     () => first.lines.some((line) => line.includes("已连上")),
     10_000,
@@ -559,7 +709,12 @@ test("远程主机：离线时停下任务先在账本收尾，代理重启后�
   assert.notEqual(task.status, "running");
   process.kill(pid, 0);
   // 代理重启：按运行记录接着看那个进程；重连后服务不认这一轮，代理结束它。
-  const second = startAgent(t, { port, data: agentData, env: fx.env });
+  const second = startAgent(t, {
+    port,
+    data: agentData,
+    env: fx.env,
+    quota: null,
+  });
   await until(
     () => second.lines.some((line) => line.includes("接着看 t1")),
     10_000,

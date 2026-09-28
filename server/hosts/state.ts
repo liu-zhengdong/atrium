@@ -178,11 +178,15 @@ export function repoAllowed(repos: readonly string[], repo: string | null) {
   );
 }
 
-/** 这台能不能接这件活；pinned 表示用户用 --host 指定了它（不看仓库白名单）。 */
+/**
+ * 这台能不能接这件活；pinned 表示用户用 --host 指定了它（不看仓库白名单）。
+ * allowPaused：用户或秘书用 --host 把这一件指定到已暂停的主机（t227），只放过暂停这一条。
+ */
 export function hostFit(
   candidate: HostCandidate,
   need: HostNeed,
   pinned: boolean,
+  allowPaused = false,
 ): HostFit {
   const ref = hostRef(candidate.id);
   const never = (reason: string): HostFit => ({
@@ -199,7 +203,8 @@ export function hostFit(
       return never(`${ref} 还没接入`);
     if (candidate.connection === "offline") return never(`${ref} 离线`);
   }
-  if (candidate.paused) return never(`${ref} 已暂停接活`);
+  if (candidate.paused && !(pinned && allowPaused))
+    return never(`${ref} 已暂停接活`);
   if (need.avoid?.includes(candidate.id))
     return never(`任务写了避开 ${ref}（--avoid-host）`);
   if (candidate.clis) {
@@ -247,21 +252,28 @@ export const crowded = (c: HostCandidate) =>
  * 挑主机：指定了就只看那台（接不了拒绝，满了排队）；没指定在能接的里挑最空的，一样空时本机优先；
  * 紧急的先挑不满不忙的（不用抢占），同样时本机优先；任务写了避开的主机一律不派（t215）；
  * 要带组织技能的先挑能挂技能的（t232，挂不了的仍能接，只排在后面）；
+ * 暂停接活的主机自动挑时一律不选；allowPaused 时指定的那台暂停了也照派这一件，
+ * 但满了不排队（排着的只等不暂停的主机，t227）；
  * 都满或太忙时排队，本机的原因优先（和只有本机时的回执一致）。
  */
 export function chooseHost(
   candidates: readonly HostCandidate[],
   need: HostNeed,
   pinned?: number,
+  allowPaused = false,
 ): HostChoice {
   if (pinned !== undefined) {
     const candidate = candidates.find((c) => c.id === pinned);
     if (!candidate)
       return { kind: "refuse", reason: `没有主机 ${hostRef(pinned)}` };
-    const fit = hostFit(candidate, need, true);
+    const fit = hostFit(candidate, need, true, allowPaused);
     if (fit.ok) return { kind: "run", host: candidate.id };
-    return fit.kind === "never"
-      ? { kind: "refuse", reason: fit.reason }
+    if (fit.kind === "never") return { kind: "refuse", reason: fit.reason };
+    return candidate.paused
+      ? {
+          kind: "refuse",
+          reason: `${fit.reason}；${hostRef(candidate.id)} 暂停接活中，指定过去的不排队，有空位时再派`,
+        }
       : { kind: "queue", host: candidate.id, reason: fit.reason };
   }
   const fits = candidates.map((candidate) => ({

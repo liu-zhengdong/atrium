@@ -939,3 +939,44 @@ test("巡检候选与 plan 走未结束任务的部分索引，不按主键扫�
   );
   db.close();
 });
+
+test("失败后排期标了受阻的任务能直接 task run 重派；上游失败的仍拒（t227）", async (t) => {
+  const { call, app } = await startApp(t);
+  const patch = (id: string, status: string) =>
+    app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${id}`,
+      payload: { status },
+      headers: { host: "127.0.0.1" },
+    });
+  await call("POST", "/api/tasks", { title: "上游", deliver: "none" });
+  await call("POST", "/api/tasks", {
+    title: "自己失败",
+    after: "t1",
+    deliver: "none",
+  });
+  await call("POST", "/api/tasks", { title: "坏上游", deliver: "none" });
+  await call("POST", "/api/tasks", {
+    title: "下游",
+    after: "t3",
+    deliver: "none",
+  });
+  assert.equal((await patch("t1", "done")).statusCode, 200);
+  assert.equal((await patch("t2", "failed")).statusCode, 200);
+  assert.equal((await patch("t3", "failed")).statusCode, 200);
+  // 巡检把失败的 t2 标成排期受阻（原因「任务失败」），与线上 t194 一样。
+  await eventually(async () => {
+    const task = (await call("GET", "/api/tasks/t2")).body;
+    return task.schedule_state === "blocked";
+  });
+  const rerun = await call("POST", "/api/tasks/t2/run", {});
+  assert.equal(rerun.status, 200, JSON.stringify(rerun.body));
+  assert.ok(
+    ["running", "done", "todo"].includes(rerun.body.task.status),
+    rerun.body.task.status,
+  );
+  const downstream = await call("POST", "/api/tasks/t4/run", {});
+  assert.equal(downstream.status, 409);
+  assert.match(downstream.body.error, /依赖未就绪：上游 t3/);
+  await call("GET", "/api/tasks/t2/wait?timeout=20");
+});

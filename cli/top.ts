@@ -16,6 +16,10 @@ import {
   secretaryText,
   type SecretaryView,
 } from "../server/tasks/secretary-watch.ts";
+import {
+  mergeQueueText,
+  type MergeQueueView,
+} from "../server/tasks/merge-eta.ts";
 import type { Holder } from "../server/tasks/holder.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
@@ -134,6 +138,8 @@ export type Snapshot = {
   host?: HostView;
   /** 秘书在不在听（t242）：看秘书的收件箱时给；旧版服务没有。 */
   secretary?: SecretaryView;
+  /** 合入队列长度与预计还要多久（t254）；队列空或旧版服务不给。 */
+  merge_queue?: MergeQueueView;
   /** 接入的远程主机（#358 第 1 步）；没有远程主机时不给。 */
   hosts?: {
     ref: string;
@@ -430,9 +436,11 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
     (snapshot.counts.reviewing
       ? ` · 审阅中 ${snapshot.counts.reviewing}`
       : "") +
-    (snapshot.counts.merge_queued
-      ? ` · 排队合入 ${snapshot.counts.merge_queued}`
-      : "") +
+    (mergeQueueText(snapshot.merge_queue)
+      ? ` · ${mergeQueueText(snapshot.merge_queue)}`
+      : snapshot.counts.merge_queued
+        ? ` · 排队合入 ${snapshot.counts.merge_queued}`
+        : "") +
     (snapshot.counts.merging ? ` · 合入中 ${snapshot.counts.merging}` : "") +
     (snapshot.counts.merged ? ` · 已合入 ${snapshot.counts.merged}` : "") +
     (snapshot.counts.online ? ` · 已上线 ${snapshot.counts.online}` : "") +

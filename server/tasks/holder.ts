@@ -82,11 +82,26 @@ export type HolderFacts = {
   hang_nudged?: number | null;
   /** 取事实的时刻：算 leader 手里挂了多久。 */
   now?: number;
+  /** 排队合入时的提前检查（t254）：在跑（在哪台）、过了、没过；没做为 null。 */
+  precheck?: {
+    state: "running" | "passed" | "failed";
+    host: string | null;
+  } | null;
 };
 
 /** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
 const where = (checking: HolderFacts["checking"]) =>
   checking?.host && checking.host !== "h1" ? `在 ${checking.host} 上` : "";
+
+/** 排队合入时提前检查（t254）的一句话。 */
+const PRECHECK_TEXT: Record<
+  NonNullable<HolderFacts["precheck"]>["state"],
+  (at: string) => string
+> = {
+  running: (at) => `排队合入：${at}提前跑检查`,
+  passed: () => "排队合入：已提前检查过",
+  failed: () => "排队合入：提前检查没过，轮到时确认",
+};
 
 /** 合入检查没跑成、等重跑的一句话；原因全文给 `task show`（holderDetail）。 */
 const rerunShort = (attempt: number) =>
@@ -454,7 +469,9 @@ function judge(f: HolderFacts): Holder | null {
         ? `合入暂停：等紧急 ${f.merge_held_by.join("、")} 先上线`
         : f.rerun
           ? `合入前${rerunShort(f.rerun.attempt)}`
-          : "排队合入",
+          : f.precheck
+            ? PRECHECK_TEXT[f.precheck.state](where(f.precheck))
+            : "排队合入",
     };
   if (f.delivery_stage === "merging")
     return {

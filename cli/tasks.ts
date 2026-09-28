@@ -236,7 +236,9 @@ function queuedReason(events: TaskEventRow[]) {
  * 这次拉起没挂上组织技能（t232）：最近一次 start 之前、上一次 start 之后记的 skills_skipped；
  * 没有就返回 null，回执与以前一样。
  */
-export function skippedSkillsLine(events: readonly TaskEventRow[]) {
+export function skippedSkillsLine(events: readonly TaskEventRow[] | undefined) {
+  // task run 的回执里不一定带事件（真实服务路径就没有），没有就不写这一行。
+  if (!events) return null;
   let last = -1;
   let prev = -1;
   events.forEach((event, index) => {

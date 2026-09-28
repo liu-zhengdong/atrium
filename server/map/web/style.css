@@ -503,7 +503,7 @@ a.crumb:hover {
   margin: 2px 0;
   color: var(--ink);
 }
-/* 管方面的部分的要点适用于哪几块：原则下一行小字。 */
+/* 管方面的部分的要点适用于哪几块：要点下一行小字。 */
 .point-scope {
   display: block;
   margin-top: 3px;

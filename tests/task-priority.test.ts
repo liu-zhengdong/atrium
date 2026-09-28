@@ -14,6 +14,8 @@ import {
   priorityAfterMove,
   priorityTag,
   rank,
+  tagTitle,
+  titleTag,
   underAspect,
   type Priority,
 } from "../server/tasks/priority.ts";
@@ -130,6 +132,29 @@ test("先后档位与闲时标记：紧急最前、普通、闲时；紧急的�
         urgent ? "紧急" : idle ? "闲时" : "",
       );
     }
+});
+
+test("标题标记：标题已以同一标记开头的不重复（巡检 f6）", () => {
+  const cases: [tag: string, title: string, want: string][] = [
+    ["紧急", "修合入队列", "紧急 修合入队列"],
+    ["紧急", "紧急：修合入队列", "紧急：修合入队列"],
+    ["紧急", "紧急 修合入队列", "紧急 修合入队列"],
+    ["紧急", "  紧急：前面有空格", "  紧急：前面有空格"],
+    ["紧急", "不紧急的事", "紧急 不紧急的事"],
+    ["闲时", "闲时：整理日志", "闲时：整理日志"],
+    ["闲时", "紧急：标题写紧急但只是闲时", "闲时 紧急：标题写紧急但只是闲时"],
+    ["", "紧急：没标紧急", "紧急：没标紧急"],
+    ["", "普通任务", "普通任务"],
+  ];
+  for (const [tag, title, want] of cases)
+    assert.equal(tagTitle(tag, title), want, `${tag}/${title}`);
+  assert.equal(titleTag("紧急", "紧急：x"), "");
+  assert.equal(titleTag("紧急", "x"), "紧急");
+  assert.equal(
+    titleOf({ title: "紧急：修 x", urgent: true } as never),
+    "紧急：修 x",
+  );
+  assert.equal(titleOf({ title: "修 x", urgent: true } as never), "紧急 修 x");
 });
 
 test("闲时能不能派：同一工具的普通任务都挡；别的工具的只在等本机空位时挡", () => {

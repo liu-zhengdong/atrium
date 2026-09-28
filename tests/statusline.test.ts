@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   renderStatusline,
+  statuslineNext,
   TASK_LINES,
   workerLabel,
   type StatuslineInput,
@@ -220,7 +221,7 @@ test("状态栏：紧急任务标「紧急」，暂停派新活时写清是哪�
     ),
   });
   const [head, ...lines] = text.split("\n");
-  assert.match(head!, /本机太忙，排队中（Atrium 自己占了 6\.3 核，超过 6）/);
+  assert.match(head!, /本机太忙（Atrium 自己占了 6\.3 核，超过 6）/);
   assert.match(
     lines.find((line) => line.includes("t112"))!,
     /t112 紧急 「修全景网页」/,
@@ -232,9 +233,87 @@ test("状态栏：紧急任务标「紧急」，暂停派新活时写清是哪�
   const byLoad = render({
     snapshot: snapshot([row("t9", queue, { status: "todo" })], {
       host: { ...host, load: 35, own_cores: 1, paused_by: "load" },
+      counts: { ...snapshot([]).counts, queued: 1 },
     }),
   });
-  assert.match(byLoad, /本机太忙，排队中（整机负载 35，超过 32）/);
+  assert.match(byLoad, /本机太忙，排队 1 件（整机负载 35，超过 32）/);
+});
+
+test("状态栏：本机满时没有排队只说满，有排队写几件（巡检 f5）", () => {
+  const host = {
+    cores: 8,
+    load: 1,
+    busy_load: 32,
+    own_cores: 1,
+    busy_cores: 6,
+    running: 6,
+    max_workers: 6,
+    checks: { running: 0, waiting: 0, max: 2 },
+    test_concurrency: 2,
+    paused: "本机满",
+    paused_by: "full" as const,
+  };
+  const worker: Holder = { kind: "worker", text: "claude 在做" } as Holder;
+  const none = render({ snapshot: snapshot([row("t1", worker)], { host }) });
+  assert.match(none.split("\n")[0]!, /本机满 6\/6$/);
+  assert.doesNotMatch(none, /排队/);
+  const some = render({
+    snapshot: snapshot([row("t1", worker)], {
+      host,
+      counts: { ...snapshot([]).counts, queued: 2 },
+    }),
+  });
+  assert.match(some.split("\n")[0]!, /本机满 6\/6，排队 2 件$/);
+});
+
+test("状态栏：标题已以「紧急」开头的不再加紧急前缀（巡检 f6）", () => {
+  const worker: Holder = { kind: "worker", text: "claude 在做" } as Holder;
+  const out = render({
+    snapshot: snapshot([
+      row("t1", worker, { title: "紧急：修合入队列", urgent: true }),
+      row("t2", worker, { title: "紧急 恢复服务", urgent: true }),
+      row("t3", worker, { title: "修全景网页", urgent: true }),
+    ]),
+  });
+  assert.doesNotMatch(out, /紧急 「紧急/);
+  assert.match(out, /t1 「紧急：修合入队列」/);
+  assert.match(out, /t2 「紧急 恢复服务」/);
+  assert.match(out, /t3 紧急 「修全景网页」/);
+});
+
+test("状态栏的下一步命令：等你的先看它，有就绪看排期，否则看全部（巡检 f7）", () => {
+  const plan = (ready: number) => ({
+    groups: {
+      running: [],
+      ready: Array.from({ length: ready }, () => ({})) as never,
+      waiting: [],
+      blocked: [],
+    },
+    next_after: null,
+  });
+  const worker: Holder = { kind: "worker", text: "claude 在做" } as Holder;
+  assert.equal(
+    statuslineNext({ snapshot: snapshot([]), plan: null }),
+    "atrium top",
+  );
+  assert.equal(
+    statuslineNext({ snapshot: snapshot([row("t1", worker)]), plan: plan(0) }),
+    "atrium top",
+  );
+  assert.equal(
+    statuslineNext({ snapshot: snapshot([row("t1", worker)]), plan: plan(3) }),
+    "atrium task plan",
+  );
+  assert.equal(
+    statuslineNext({
+      snapshot: snapshot([
+        row("t1", worker),
+        row("t7", { kind: "user", who: "u1", text: "等你拍板" }),
+      ]),
+      plan: plan(3),
+    }),
+    "atrium task show t7",
+  );
 });
 
 test("状态栏：旧服务给的整篇原因与多行标题只出一行，按显示宽度截断", () => {

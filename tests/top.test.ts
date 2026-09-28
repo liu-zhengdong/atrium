@@ -470,6 +470,46 @@ test("看板：紧急任务的标题前写「紧急」，照样受终端宽度�
   assert.ok(lines.every((line) => width(line) <= 80));
 });
 
+test("看板：标题已以「紧急」开头的不再加前缀（巡检 f6）", () => {
+  const frame = renderTop(
+    snapshot([
+      row({ ref: "t1", title: "紧急：合入队列卡住", urgent: true }),
+      row({ ref: "t2", title: "紧急 恢复服务", urgent: true }),
+    ]),
+    { width: 100, now: NOW, footer: false, color: false },
+  );
+  assert.doesNotMatch(frame, /紧急 紧急/);
+  assert.match(frame, /t1 +紧急：合入队列卡住/);
+  assert.match(frame, /t2 +紧急 恢复服务/);
+});
+
+test("看板抬头：本机满时没有排队只说满，有排队写几件（巡检 f5）", () => {
+  const host = {
+    cores: 8,
+    load: 1,
+    busy_load: 32,
+    own_cores: 1,
+    busy_cores: 6,
+    running: 6,
+    max_workers: 6,
+    checks: { running: 0, waiting: 0, max: 2 },
+    test_concurrency: 2,
+    paused: "本机满",
+    paused_by: "full" as const,
+  };
+  const head = (queued: number) =>
+    renderTop(
+      snapshot([row({})], {
+        host,
+        counts: { ...snapshot([]).counts, queued },
+      }),
+      { width: 160, now: NOW, footer: false, color: false },
+    ).split("\n")[0]!;
+  assert.match(head(0), /排队 0 · 本机满 6\/6 · 处理中/);
+  assert.doesNotMatch(head(0), /排队中/);
+  assert.match(head(2), /排队 2 · 本机满 6\/6，排队 2 件 · 处理中/);
+});
+
 test("看板：窄终端省掉执行者列，再窄就截标题与最近动作", () => {
   const rows = [
     row({ ref: "t22" }),

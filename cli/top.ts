@@ -15,6 +15,7 @@ import type { HostView } from "../server/tasks/host-load.ts";
 import type { Holder } from "../server/tasks/holder.ts";
 import type { TopTotal } from "../server/tasks/top.ts";
 import { pendingLine, type PendingChoice } from "../server/choices/model.ts";
+import { tagTitle } from "../server/tasks/priority.ts";
 
 /**
  * `atrium top`（#262）：谁在干活、哪些任务在进行的实时视图。数据全部经服务取，不直接开数据库。
@@ -222,7 +223,7 @@ export const phase = (row: TopRow) =>
 
 /** 任务行的标题：标了紧急的前面写「紧急」（t113），闲时的写「闲时」（t136）。 */
 export const titleOf = (row: TopRow) =>
-  row.urgent ? `紧急 ${row.title}` : row.idle ? `闲时 ${row.title}` : row.title;
+  tagTitle(row.urgent ? "紧急" : row.idle ? "闲时" : "", row.title);
 
 /** 排队与受阻没有时长可言，直接说清在等什么。 */
 function state(row: TopRow, now: number) {
@@ -340,9 +341,11 @@ export function layoutOf(
 /**
  * 抬头里的本机状态（#358）：只在暂停派新活时出现，放在排队数后面免得被截掉；
  * 写清是哪条线触发的（t113）：Atrium 自己占的核数，还是整机负载保护线，还是执行者满了。
+ * top 抬头与状态栏共用这一句：没有排队的就不说「排队」，有就写几件。
  */
-export function hostBrief(host: HostView | undefined): string {
+export function hostBrief(host: HostView | undefined, queued: number): string {
   if (!host?.paused) return "";
+  const waiting = queued > 0 ? `，排队 ${queued} 件` : "";
   const load = (value: number) =>
     value >= 10 ? value.toFixed(0) : value.toFixed(1);
   const cores = (value: number) =>
@@ -352,15 +355,15 @@ export function hostBrief(host: HostView | undefined): string {
     host.own_cores != null &&
     host.busy_cores != null
   )
-    return ` · 本机太忙，排队中（Atrium 自己占了 ${cores(host.own_cores)} 核，超过 ${cores(host.busy_cores)}）`;
+    return ` · 本机太忙${waiting}（Atrium 自己占了 ${cores(host.own_cores)} 核，超过 ${cores(host.busy_cores)}）`;
   if (
     host.paused_by === "load" ||
     (host.paused_by === undefined &&
       host.busy_load !== null &&
       host.load > host.busy_load)
   )
-    return ` · 本机太忙，排队中（整机负载 ${load(host.load)}，超过 ${load(host.busy_load!)}）`;
-  return ` · 本机满 ${host.running}/${host.max_workers}，排队中`;
+    return ` · 本机太忙${waiting}（整机负载 ${load(host.load)}，超过 ${load(host.busy_load!)}）`;
+  return ` · 本机满 ${host.running}/${host.max_workers}${waiting}`;
 }
 
 /** 画一屏。排队与受阻那两列本来就是空的，所以原因长一点也不会顶掉别的列。 */
@@ -384,7 +387,7 @@ export function renderTop(snapshot: Snapshot, frame: Frame): string {
   const head =
     `Atrium · 在跑 ${snapshot.counts.running}` +
     ` · 排队 ${snapshot.counts.queued}` +
-    hostBrief(snapshot.host) +
+    hostBrief(snapshot.host, snapshot.counts.queued) +
     (snapshot.counts.reviewing
       ? ` · 审阅中 ${snapshot.counts.reviewing}`
       : "") +

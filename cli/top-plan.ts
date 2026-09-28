@@ -1,5 +1,6 @@
 import { oneLine, pad, width } from "./format.ts";
 import { planCounts, scheduleBlocked } from "../server/tasks/plan-count.ts";
+import { tagTitle } from "../server/tasks/priority.ts";
 
 /**
  * `atrium top` 的排期段（#262）：就绪、依赖链、等待中与因上游卡住的待办，数据来自 `/api/tasks/plan`。
@@ -97,11 +98,10 @@ const readable = (text: string) =>
 
 /** 标题前写「紧急」（t113）或「闲时」（t136）。 */
 const labelOf = (task: PlanTask) =>
-  task.urgent === 1
-    ? `紧急 ${task.title}`
-    : task.priority === "idle"
-      ? `闲时 ${task.title}`
-      : task.title;
+  tagTitle(
+    task.urgent === 1 ? "紧急" : task.priority === "idle" ? "闲时" : "",
+    task.title,
+  );
 
 const tier = (task: PlanTask) =>
   task.urgent === 1 ? 0 : task.priority === "idle" ? 2 : 1;

@@ -47,6 +47,7 @@ import {
   PRIORITY_LABEL,
   parsePriority,
   priorityTag,
+  tagTitle,
 } from "../server/tasks/priority.ts";
 
 /** 任务账本的命令行（#262）：只经 HTTP 调服务，不直接开数据库。 */
@@ -146,11 +147,9 @@ function laneInput(values: Values) {
   return body;
 }
 
-/** 标题前的「紧急 」「闲时 」。 */
-const tagText = (task: Pick<Task, "urgent" | "priority">) => {
-  const tag = priorityTag(task);
-  return tag ? `${tag} ` : "";
-};
+/** 标题前加「紧急 」「闲时 」；标题已带的不重复。 */
+const taggedTitle = (task: Pick<Task, "urgent" | "priority" | "title">) =>
+  tagTitle(priorityTag(task), task.title);
 
 /** 排队原因：闲时任务的「等空闲：…」本身说清了在等什么，其余前面加「排队：」。 */
 const queuedText = (reason: string) =>
@@ -470,7 +469,7 @@ const ls: Command = {
           task.ref,
           displayStatus(task),
           task.parent_ref ?? "",
-          clip(`${tagText(task)}${task.title}`, 40),
+          clip(taggedTitle(task), 40),
           task.worker ?? "",
           task.pr_url ?? "",
         ]),
@@ -589,7 +588,7 @@ const show: Command = {
       ];
       console.log(
         [
-          `${task.ref} · ${tagText(task)}${task.title}`,
+          `${task.ref} · ${taggedTitle(task)}`,
           ...rows
             .slice(1)
             .filter(([, value]) => value !== null && value !== "")
@@ -996,7 +995,7 @@ const plan: Command = {
         console.log(`${label}（${count}）`);
         for (const item of result.groups[group])
           console.log(
-            `  ${item.task.ref} ${tagText(item.task)}${item.task.title}${item.task.queued_reason ? ` · ${queuedText(item.task.queued_reason)}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
+            `  ${item.task.ref} ${taggedTitle(item.task)}${item.task.queued_reason ? ` · ${queuedText(item.task.queued_reason)}` : ""}${item.waiting_for.length ? ` · 等 ${item.waiting_for.join("、")}` : ""}${item.reason ? ` · ${item.reason}` : ""}`,
           );
       }
     }

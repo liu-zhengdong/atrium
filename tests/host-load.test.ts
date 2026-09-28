@@ -292,7 +292,11 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
   assert.match(busy.paused!, /本机太忙/);
   assert.equal(busy.paused_by, "load");
   assert.equal(busy.own_cores, null);
-  assert.equal(hostBrief(busy), " · 本机太忙，排队中（整机负载 170，超过 32）");
+  assert.equal(
+    hostBrief(busy, 2),
+    " · 本机太忙，排队 2 件（整机负载 170，超过 32）",
+  );
+  assert.equal(hostBrief(busy, 0), " · 本机太忙（整机负载 170，超过 32）");
   const own = hostView({
     limits: limits(),
     load: 18,
@@ -303,8 +307,8 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
   assert.equal(own.paused_by, "own");
   assert.equal(own.busy_cores, 6);
   assert.equal(
-    hostBrief(own),
-    " · 本机太忙，排队中（Atrium 自己占了 6.3 核，超过 6）",
+    hostBrief(own, 1),
+    " · 本机太忙，排队 1 件（Atrium 自己占了 6.3 核，超过 6）",
   );
   const full = hostView({
     limits: limits(),
@@ -313,7 +317,10 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
     checks: { running: 0, waiting: 0 },
   });
   assert.equal(full.paused_by, "full");
-  assert.equal(hostBrief(full), " · 本机满 6/6，排队中");
+  // 巡检 f5：没有排队的不说「排队」，有就写几件。
+  assert.equal(hostBrief(full, 0), " · 本机满 6/6");
+  assert.equal(hostBrief(full, 3), " · 本机满 6/6，排队 3 件");
+  assert.doesNotMatch(hostBrief(full, 0), /排队/);
   const idle = hostView({
     limits: limits(),
     load: 18,
@@ -323,15 +330,18 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
   });
   assert.equal(idle.paused, null);
   assert.equal(idle.paused_by, null);
-  assert.equal(hostBrief(idle), "");
-  assert.equal(hostBrief(undefined), "");
+  assert.equal(hostBrief(idle, 4), "");
+  assert.equal(hostBrief(undefined, 4), "");
   // 旧版服务没有 paused_by：按负载判断。
   assert.equal(
-    hostBrief({
-      ...busy,
-      paused_by: undefined as unknown as null,
-    }),
-    " · 本机太忙，排队中（整机负载 170，超过 32）",
+    hostBrief(
+      {
+        ...busy,
+        paused_by: undefined as unknown as null,
+      },
+      1,
+    ),
+    " · 本机太忙，排队 1 件（整机负载 170，超过 32）",
   );
   // 采样出错或给出负数按 0 算，不挡派活。
   assert.equal(

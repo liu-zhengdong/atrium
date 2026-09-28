@@ -218,6 +218,8 @@ atrium quota --clear claude   # 人工解除运行时的额度占用（误判时
 atrium statusline     # 一屏概况：未结束任务各在谁手里、leader 在处理什么、秘书未处理事件、接下来就绪与等待的数目
 ```
 
+末行是下一步命令（`--json` 的 `next` 同一条）：有等你的任务给 `atrium task show tN`，有就绪的给 `atrium task plan`，其余给 `atrium top`。
+
 在 `~/.claude/settings.json` 里配置：
 
 ```json

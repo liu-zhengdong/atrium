@@ -61,7 +61,7 @@ var Limits = []Limit{
 	{"decisions", "每部门有效决定", MaxDecisions, "条", "用户",
 		"整理：把相近的几条合并成一条、推翻过时的（atrium decision add {dept} … --replaces dA,dB）", "atrium decision ls --node {dept}"},
 	{"options", "每份选项单", MaxOptions, "项", "出选项单的人", "只留最值得的几项", "atrium choice ls"},
-	{"choices", "每部门待拍板的选项单", MaxChoices, "份", "用户", "先拍板或放弃已有的（atrium choice pick/pass cN）", "atrium choice ls"},
+	{"choices", "每部门待拍板的选项单", MaxChoices, "份", "用户", "先拍板或放弃已有的（atrium choice pick cN <第几项> 或 --none）", "atrium choice ls"},
 	{"schedules", "每部门周期任务", MaxSchedules, "条", "部门负责人", "合并相近的、删掉不值的（atrium schedule rm sN）", "atrium schedule ls --node {dept}"},
 	{"secrets", "每部门凭据", MaxSecrets, "个", "用户", "删掉不用的（atrium secret set {dept} 名称 --rm），或挪到上级部门共用", "atrium secret ls --node {dept}"},
 }

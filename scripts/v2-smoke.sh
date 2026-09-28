@@ -186,7 +186,7 @@ out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c1" and .resu
 out=$(json choice ls); has '(.result|length) == 1'
 out=$(json choice pick c1 1,3 --note 先快); has '.result.status == "picked" and .result.options[0].task != null and .result.decision == "d3"'
 out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c2"'
-out=$(json choice pass c2); has '.result.status == "passed"'
+out=$(json choice pick c2 --none); has '.result.status == "passed"'
 out=$(json schedule add o2 巡检 --every 1d --at 09:00 --kind patrol); has '.result.id == "s1" and .result.at == "09:00"'
 out=$(json schedule run s1 || true); has '(.ok and .result.task.id != null) or (.error.code == "conflict" and (.error.message|test("已生成")))'
 out=$(json schedule ls); has '.result[0].last_task != null'

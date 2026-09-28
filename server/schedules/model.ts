@@ -38,7 +38,8 @@ export function ensureScheduleTables(db: DatabaseSync) {
       at INTEGER NOT NULL,
       outcome TEXT NOT NULL CHECK(outcome IN ('created','skipped','failed')),
       task_id INTEGER, note TEXT);
-    CREATE INDEX IF NOT EXISTS schedule_runs_schedule ON schedule_runs(schedule_id,id);`);
+    CREATE INDEX IF NOT EXISTS schedule_runs_schedule ON schedule_runs(schedule_id,id);
+    CREATE INDEX IF NOT EXISTS schedule_runs_task ON schedule_runs(task_id);`);
 }
 
 export const RUNS_KEPT = 20;

@@ -2,9 +2,13 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
 import { leaderOf } from "../leaders/guard.ts";
 import { SECRETARY } from "../leaders/route.ts";
-import { partRoute } from "../leaders/subscriber.ts";
-import { nodeByAddress } from "../org/model.ts";
 import type { EventInbox } from "../tasks/events.ts";
+import {
+  announceChoice,
+  choiceBrief,
+  choiceLeader,
+  publishChoice,
+} from "./notify.ts";
 import {
   addChoice,
   addComment,
@@ -32,45 +36,20 @@ type Q = Record<string, string | undefined>;
 const q = (value: unknown) => (value ?? {}) as Q;
 const id = (request: FastifyRequest) => (request.params as { id: string }).id;
 
-const brief = (choice: Choice) => ({
-  choice: choice.ref,
-  title: choice.title,
-  node: choice.node,
-  node_name: choice.node_name,
-  options: choice.options.length,
-  status: choice.status,
-  decider: choice.decider,
-});
-
 export function registerChoiceRoutes(
   app: FastifyInstance,
   db: DatabaseSync,
   inbox: EventInbox,
 ) {
   ensureChoiceTables(db);
-  /** 选项单所在节点最近的 leader；没有为 null。 */
-  const leaderFor = (choice: Choice) => {
-    const subscriber = partRoute(
-      db,
-      nodeByAddress(db, choice.node).id,
-    ).subscriber;
-    return subscriber === SECRETARY ? null : subscriber;
-  };
+  const leaderFor = (choice: Choice) => choiceLeader(db, choice);
   const publish = (
     subscriber: string,
     kind: string,
     choice: Choice,
     actor: string | undefined,
     detail: Record<string, unknown>,
-  ) =>
-    inbox.publish({
-      subscriber,
-      source: "choice",
-      kind,
-      key: `choice:${choice.ref}`,
-      actor,
-      detail: { ...brief(choice), ...detail },
-    });
+  ) => publishChoice(inbox, subscriber, kind, choice, actor, detail);
 
   app.get("/api/choices", (request) => {
     const query = q(request.query);
@@ -85,26 +64,7 @@ export function registerChoiceRoutes(
   app.post("/api/choices", { bodyLimit: 64 * 1024 }, (request, reply) => {
     const creator = leaderOf(request);
     const choice = addChoice(db, request.body, creator ?? SECRETARY);
-    const leader = leaderFor(choice);
-    const show = `atrium choice show ${choice.ref}`;
-    if (choice.decider === "u1") {
-      publish(SECRETARY, "choice_ready", choice, creator, {
-        task: choice.task,
-        hint: `${choice.node_name}有一份新的选项单等用户拍板：${show}；可以和别的产品部的选项合并、去重后一起递给用户，但不删改方向；用户在全景网页或 atrium choice pick ${choice.ref} 选项号 里拍板`,
-      });
-      if (leader && leader !== creator)
-        publish(leader, "choice_review", choice, creator, {
-          hint: `${choice.node_name}有一份新的选项单，拍板人是用户；先看 ${show}，可以写意见、补依据、标倾向：atrium choice comment ${choice.ref} 意见 --prefer 选项号 --basis 依据；不能拍板`,
-        });
-    } else {
-      if (choice.decider !== creator)
-        publish(choice.decider, "choice_ready", choice, creator, {
-          hint: `${choice.node_name}的选项单由你拍板（${choice.decider_why}）：先看 ${show}，再 atrium choice pick ${choice.ref} 选项号 --note 说明，或 atrium choice pass ${choice.ref} --note 原因`,
-        });
-      publish(SECRETARY, "choice_notice", choice, creator, {
-        hint: `${choice.node_name}有一份新的选项单，拍板权已下放给 ${choice.decider}，只需知会用户：${show}`,
-      });
-    }
+    announceChoice(db, inbox, choice, creator);
     return reply.code(201).send(choice);
   });
   app.post(
@@ -120,7 +80,7 @@ export function registerChoiceRoutes(
         key: `choice-comment:${choice.ref}`,
         actor: by === SECRETARY ? undefined : by,
         detail: {
-          ...brief(choice),
+          ...choiceBrief(choice),
           by,
           comments: choice.comments.length,
           hint: `给用户递选项单时带上意见：atrium choice show ${choice.ref}`,

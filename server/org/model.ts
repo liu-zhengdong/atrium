@@ -50,7 +50,9 @@ export const all = <T>(
   sql: string,
   ...args: SQLInputValue[]
 ) => db.prepare(sql).all(...args) as T[];
+/** 已在事务里（如 product add 一次建节点、leader 与周期任务）就并进外层，不另开。 */
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) return fn();
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = fn();

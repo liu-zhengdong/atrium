@@ -126,6 +126,7 @@ import { setHostQuotaSource, type HostQuotaSnapshot } from "../hosts/quota.ts";
 import { machineInfo } from "../hosts/info.ts";
 import { originRepo } from "./gh-repo.ts";
 import { patrolRun } from "./patrol.ts";
+import { productRound } from "../products/model.ts";
 import { pendingChoices } from "../choices/store.ts";
 
 /**
@@ -830,7 +831,11 @@ export class TaskRunner {
     urgent: boolean,
   ): Promise<HostNeed> {
     const task = getTask(this.db, id);
-    const localOnly = patrolRun(this.db, id) ? "体验巡检要连回本机服务" : null;
+    const localOnly = patrolRun(this.db, id)
+      ? "体验巡检要连回本机服务"
+      : productRound(this.db, id)
+        ? "产品部研究的选项单文件要留在本机"
+        : null;
     let repo: string | null = null;
     if (task.repo) {
       // 没有接入的远程主机时不查仓库，省一次 git。

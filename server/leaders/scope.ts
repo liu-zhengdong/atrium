@@ -90,6 +90,8 @@ export function denyReason(leader: string, method: string, route: string) {
   if (key === "POST /api/leaders") return denied(leader, "登记新的 leader");
   if (route.startsWith("/api/hosts"))
     return denied(leader, "登记、移除或暂停执行机器");
+  if (key === "POST /api/products")
+    return denied(leader, "成立产品部（那是用户的决定）");
   if (route.startsWith("/api/product/"))
     return denied(leader, "改谁拍板选项单（那是用户的决定）");
   return denied(leader, `调用 ${key}`);

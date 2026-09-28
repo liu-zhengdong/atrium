@@ -507,6 +507,121 @@ test("leader：连续失败把没确认的事件转交秘书；超时直接转�
   assert.equal(x.runs.length, 3);
 });
 
+test("leader：上层转交下层的上交，秘书只收一条，看得到原文与意见；原事件不再被转交", async (t) => {
+  const x = await open(t);
+  await x.ok("POST", "/api/leaders", {
+    name: "Atrium 负责人",
+    worker: "codex",
+  });
+  await x.ok("POST", "/api/leaders", { name: "规矩负责人", worker: "codex" });
+  await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
+  await x.ok("PATCH", "/api/org/nodes/o3", { leader: "a2", reason: "指派" });
+  await x.ok("POST", "/api/tasks", {
+    title: "改规矩",
+    part: "o3",
+    deliver: "none",
+  });
+  const inbox = x.taskRunner.inbox;
+  let forwarded: { status: number; body: Record<string, any> } | undefined;
+  let failure: unknown;
+  // a1 被唤醒后只转交、不自己确认：转交已替它确认原事件，唤醒照常收尾，不再转交第二份。
+  x.set(async (spec) => {
+    try {
+      assert.equal(spec.leader, "a1");
+      assert.match(spec.prompt, /a2 上交：已上线 · 改规矩 · t1 已上线/);
+      forwarded = await x.call(
+        "POST",
+        "/api/leaders/a1/escalate",
+        { kind: "shipped", note: "看过，阶段达成", task: "t1" },
+        `Bearer ${spec.env.ATRIUM_LEADER_TOKEN}`,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    return "ok";
+  });
+  const up = await x.ok("POST", "/api/leaders/a2/escalate", {
+    kind: "shipped",
+    note: "t1 已上线；端到端：atrium org tree 看到规矩",
+    task: "t1",
+  });
+  assert.equal(up.to, "a1");
+  assert.equal(up.forwarded, null);
+  await until(() => !!failure || wakeStatus(x.db) === "done", 5000);
+  if (failure) throw failure;
+  assert.equal(forwarded?.status, 200, JSON.stringify(forwarded?.body));
+  assert.equal(forwarded!.body.to, "secretary");
+  assert.equal(forwarded!.body.forwarded, up.event);
+  assert.equal(x.runs.length, 1);
+
+  const secretary = inbox
+    .list("secretary", { limit: 10 })
+    .events.filter((e) => e.kind === "escalated");
+  assert.equal(secretary.length, 1);
+  const only = secretary[0]!;
+  assert.equal(only.id, forwarded!.body.event);
+  assert.equal(only.level, "action");
+  assert.equal(only.actor, "a1");
+  const detail = only.detail as Record<string, any>;
+  assert.equal(detail.from, "a2");
+  assert.equal(detail.reason, "t1 已上线；端到端：atrium org tree 看到规矩");
+  assert.deepEqual(detail.forwarded, [{ by: "a1", note: "看过，阶段达成" }]);
+  assert.equal(detail.title, "a2 上交：已上线 · 改规矩（经 a1 转交）");
+  assert.equal(detail.forward_of, up.event);
+  // a1 手上的原事件已确认，唤醒记为处理完，而不是转交。
+  const original = inbox
+    .list("a1", { limit: 5 })
+    .events.find((e) => e.id === up.event)!;
+  assert.notEqual(original.acked_at, null);
+  assert.equal((await x.ok("GET", "/api/leaders/a1")).wake.status, "done");
+
+  // 同一件事再转交一次：合并进秘书那一条，不另起。
+  const again = await x.ok("POST", "/api/leaders/a1/escalate", {
+    kind: "shipped",
+    note: "补一句：线上复核过",
+    event: `#${up.event}`,
+  });
+  assert.equal(again.event, only.id);
+  assert.equal(again.task, "t1");
+  const merged = inbox
+    .list("secretary", { limit: 10 })
+    .events.filter((e) => e.kind === "escalated");
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.count, 2);
+
+  // 破坏输入：转交不是投给自己的事件、任务对不上、编号不存在。
+  await x.ok("POST", "/api/tasks", {
+    title: "别的活",
+    part: "o3",
+    deliver: "none",
+  });
+  const bad: [unknown, RegExp][] = [
+    [{ kind: "stuck", note: "x", event: only.id }, /不是下层投给 a1 的上交/],
+    [{ kind: "stuck", note: "x", event: 99999 }, /#99999 不是下层投给 a1/],
+    [
+      { kind: "shipped", note: "x", event: up.event, task: "t2" },
+      new RegExp(`#${up.event} 是 t1 的上交，和 t2 对不上`),
+    ],
+    [
+      { kind: "stuck", note: "x", event: "abc" },
+      /--event: 应为要转交的事件编号/,
+    ],
+  ];
+  for (const [body, message] of bad) {
+    const result = await x.call("POST", "/api/leaders/a1/escalate", body);
+    assert.equal(result.status, 400, JSON.stringify(body));
+    assert.match(result.body.error, message, JSON.stringify(result.body));
+  }
+  // a2 转交 a1 自己发出的上交：不是投给 a2 的，拒绝。
+  const reverse = await x.call("POST", "/api/leaders/a2/escalate", {
+    kind: "shipped",
+    note: "x",
+    event: only.id,
+  });
+  assert.equal(reverse.status, 400);
+  assert.match(reverse.body.error, /不是下层投给 a2 的上交/);
+});
+
 test("leader：处理期间同一任务又有新结果，确认旧内容不吞掉新结果，下次唤醒再送", async (t) => {
   const x = await open(t);
   await x.ok("POST", "/api/leaders", { name: "负责人", worker: "codex" });

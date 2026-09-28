@@ -755,7 +755,11 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   assert.equal(picked.status, 200);
   assert.equal(picked.body.task, t1.ref);
   assert.match(picked.body.recommended, /^opencode/);
-  assert.match(picked.body.reason, /^opencode 富余 \+54%；kimi 富余 −13%/);
+  // 本机装了 claude、codex 时理由前面多一句大小（没有它们的额度读数，不按大小换）。
+  assert.match(
+    picked.body.reason,
+    /(?:^|按额度挑、)opencode 富余 \+54%；kimi 富余 −13%/,
+  );
   const kimi = picked.body.candidates.find(
     (c: { tool: string }) => c.tool === "kimi",
   );
@@ -802,7 +806,7 @@ test("隔离服务：task pick 推荐富余的执行者；写死超速的回执�
   assert.equal(auto.status, 200, JSON.stringify(auto.body));
   assert.equal(auto.body.pick.auto, true);
   assert.match(auto.body.pick.worker, /^opencode/);
-  assert.match(auto.body.pick.reason, /^opencode 富余 \+54%/);
+  assert.match(auto.body.pick.reason, /(?:^|按额度挑、)opencode 富余 \+54%/);
   // 干活的专员第 1 选 kimi 超速、opencode 富余多出 30 点以上：改推荐 opencode，自动派也挑它。
   const role = await call("POST", "/api/roles", {
     name: "前端",

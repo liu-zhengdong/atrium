@@ -9,6 +9,7 @@ import type { Holder } from "./holder.ts";
 import type { Rollup } from "./rollup.ts";
 import { applyDeliveryEvent } from "./delivery-records.ts";
 import { storedHosts } from "./urgent.ts";
+import type { Size } from "./task-size.ts";
 
 export type TaskRow = {
   id: number;
@@ -67,6 +68,8 @@ export type TaskRow = {
   stopgap?: string | null;
   /** 闲时（t136）：idle 排在普通任务后面，有空闲执行者才派；缺省按归属部分是否管方面。 */
   priority: "normal" | "idle";
+  /** 任务大小（t276）：自动挑人时小活优先快且便宜的组合，中、大优先高强度；没写为 null（挑人时粗估）。 */
+  size?: Size | null;
   schedule_state: string | null;
   schedule_reason: string | null;
   node_id: number | null;

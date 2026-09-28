@@ -1,18 +1,23 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "./problem.ts";
-import { LOCAL_USER } from "../shared/user.ts";
+import { LOCAL_USER, SECRETARY } from "../shared/user.ts";
 
 const LEADER = /^a[1-9][0-9]*$/;
 
 /**
- * 以谁的名义操作（`--as`）：不给就是本机用户 u1；给了 aN，须是组织树里某个未归档节点的 leader。
- * 组织运行时不再有长期身份表，「谁在操作」只看这两种短号，不接受名称或内部 ID。
+ * 以谁的名义操作（`--as`）：不给就是本机用户 u1；secretary（秘书）拿用户令牌替用户办事，权限同用户、
+ * 修订与事件记 secretary（秘书会话里的命令行缺省带上）；给了 aN，须是组织树里某个未归档节点的 leader。
+ * leader 令牌的请求由 leaders/guard.ts 把 as 锁成自己，到不了 secretary。
  */
 export function resolveActor(db: DatabaseSync, reference?: string): string {
   const value = (reference ?? "").trim() || LOCAL_USER;
   if (value === LOCAL_USER) return value;
+  if (value === SECRETARY || value === "秘书") return SECRETARY;
   if (!LEADER.test(value))
-    throw new Problem(400, "--as 应为 u1 或组织节点 leader 的短号，如 a1");
+    throw new Problem(
+      400,
+      "--as 应为 u1、secretary 或组织节点 leader 的短号，如 a1",
+    );
   const found = db
     .prepare(
       "SELECT 1 FROM org_nodes WHERE leader=? AND archived_at IS NULL LIMIT 1",

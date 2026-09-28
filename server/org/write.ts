@@ -23,8 +23,10 @@ import {
   validateSlug,
   validParent,
 } from "./validate.ts";
-import { exportBoundaries, type Converted } from "./boundaries.ts";
+import { effective, exportBoundaries, type Converted } from "./boundaries.ts";
 import {
+  allBoundaries,
+  chainLevels,
   ownBoundaries,
   planBoundaries,
   saveBoundaries,
@@ -39,6 +41,8 @@ import { exportShares } from "./shares.ts";
 import { HUMAN_KEYS } from "./overview.ts";
 import { aspectClearance } from "./aspects.ts";
 import { pointRef } from "./points.ts";
+import { isLegacyBudget, liftLegacyBudget } from "./legacy-budget.ts";
+import { actsForUser } from "../../shared/user.ts";
 
 function authorized(
   db: DatabaseSync,
@@ -47,7 +51,7 @@ function authorized(
   target: string,
 ) {
   if (
-    (node.parent_id === null && target === "charter" && actor !== "u1") ||
+    (node.parent_id === null && target === "charter" && !actsForUser(actor)) ||
     !canEdit(nodes(db), node, actor)
   )
     throw new Problem(
@@ -136,7 +140,8 @@ export function addNode(db: DatabaseSync, input: AddInput, actor: string) {
         current = list.find((n) => n.id === current?.parent_id);
       }
       if (depth > 8) throw new Problem(400, "parent 层级超过深度 8");
-    } else if (actor !== "u1") throw new Problem(403, "根节点只有你能创建");
+    } else if (!actsForUser(actor))
+      throw new Problem(403, "根节点只有你能创建");
     if (list.some((n) => n.parent_id === parent?.id && n.slug === slug))
       throw new Problem(409, `slug ${slug} 在同一父节点下已存在`);
     const leader = input.leader ?? (kind === "org" ? "u1" : null);
@@ -420,6 +425,19 @@ function editDocInner(
   actor: string,
 ) {
   const before = current(db, node.id, doc)?.rev ?? 0;
+  if (doc === "charter" && isLegacyBudget(snapshot.budget)) {
+    const above = effective(
+      chainLevels(nodes(db), allBoundaries(db), node.parent_id),
+    );
+    snapshot = {
+      ...snapshot,
+      ...liftLegacyBudget(
+        snapshot.budget,
+        snapshot.boundaries ?? exportBoundaries(ownBoundaries(db, node.id)),
+        new Set(above.map((e) => e.id)),
+      ),
+    };
+  }
   const fields = validateFields(doc, snapshot.fields),
     body = validateBody(snapshot.body);
   let converted: Converted[] = [];
@@ -518,7 +536,7 @@ export function editNode(
       throw new Problem(400, "doc_path 已停用，请编辑节点章程正文");
     const node = nodeByAddress(db, address);
     authorized(db, node, actor, "node");
-    if (node.parent_id === null && actor !== "u1")
+    if (node.parent_id === null && !actsForUser(actor))
       throw new Problem(403, "根节点只有你能改");
     const old = one<{ rev: number }>(
       db,
@@ -626,7 +644,7 @@ export type ImportInput = {
   apply: boolean;
 };
 export function importOrg(db: DatabaseSync, input: ImportInput, actor: string) {
-  if (actor !== "u1") throw new Problem(403, "org import 只有你能执行");
+  if (!actsForUser(actor)) throw new Problem(403, "org import 只有你能执行");
   const fields = validateFields("charter", input.charter?.fields),
     body = validateBody(input.charter?.body);
   repoPaths([input.repo]);

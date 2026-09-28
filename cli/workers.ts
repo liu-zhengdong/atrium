@@ -5,6 +5,7 @@ import { printJson, table, when } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import { Problem } from "../server/problem.ts";
 import type { WorkerStat } from "../server/tasks/delivery-records.ts";
+import { defaultActor } from "./worker-guard.ts";
 const str = (v: Values, k: string) =>
   typeof v[k] === "string" ? (v[k] as string) : undefined;
 const strs = (v: Values, k: string) =>
@@ -146,7 +147,7 @@ export const workerCommands: Record<string, Command> = {
     },
   },
   "workers edit": {
-    args: "层/名 (--file 文件|- | --trust 等级 | --max-risk 风险 | --model 模型 | --checks a,b | --set 键=值 | --unset 键) [--reason 原因]",
+    args: "层/名 (--file 文件|- | --trust 等级 | --max-risk 风险 | --model 模型 | --checks a,b | --set 键=值 | --unset 键) [--reason 原因] [--as secretary]",
     about:
       "改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）",
     options: {
@@ -158,6 +159,7 @@ export const workerCommands: Record<string, Command> = {
       set: { type: "string", multiple: true },
       unset: { type: "string", multiple: true },
       reason: { type: "string" },
+      as: { type: "string" },
     },
     positionals: [1, 1],
     async run({ positionals: [ref], values, json }) {
@@ -197,10 +199,11 @@ export const workerCommands: Record<string, Command> = {
         ...(unset.length ? { unset } : {}),
         ...(str(values, "reason") ? { reason: str(values, "reason") } : {}),
       };
+      const who = str(values, "as") ?? defaultActor();
       const result = await (
         await client()
       ).put<{ ref: string; rev: number; changed: boolean; created: boolean }>(
-        profilePath(ref!),
+        `${profilePath(ref!)}${who ? `?as=${encodeURIComponent(who)}` : ""}`,
         body,
       );
       if (json) printJson(result);

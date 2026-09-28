@@ -14,7 +14,7 @@ type Query = { node?: string; all?: string; after?: string; limit?: string };
 
 const id = (params: unknown) => (params as { id: string }).id;
 
-/** 周期任务（#404 第 1 步）：写接口只给用户（leader 规则表没登记，默认拒绝）。 */
+/** 周期任务（#404 第 1 步）：用户与负责该节点或其上级的 leader 可写（leader 范围由 leaders/guard.ts 判）。 */
 export function registerScheduleRoutes(
   app: FastifyInstance,
   db: DatabaseSync,

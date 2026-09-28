@@ -197,7 +197,7 @@ atrium quota --clear claude   # 人工解除运行时的额度占用（误判时
 | codex    | `~/.config/codex/auth.json`、`~/.codex/auth.json`（`CODEX_HOME` 覆盖）  | 同左                                                                       | 同左（`%USERPROFILE%` 下）                |
 | opencode | `~/.local/share/opencode/auth.json` 的 `opencode-go`                    | `$XDG_DATA_HOME/opencode/auth.json`，缺省同左                              | 同左（`%USERPROFILE%` 下）                |
 
-自带还没覆盖的账号（kimi、grok、antigravity 等），本机装了 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 就用它补（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径），自带读不到的账号也先用它补并注明；都没有就显示「没有额度数据」，挑执行者退回档案顺序与运行时的额度用尽标记。给用户留的份额只读组织树：派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度，根章程没写时缺省 20%；`atrium quota` 表格下一行写明份额与出自哪份章程（`--json` 的 `reserve`）。旧的 `~/Atrium/charter.md` 不再读取：用默认数据目录的服务首次启动时（隔离服务只认显式的 `ATRIUM_LEGACY_DIR`），若根节点缺某项预算（`quota_reserve_percent`、`disk_min_free_gb`、`money`）而旧章程 frontmatter 的 `budget` 里有，就导入一次写进根章程（留修订），之后改预算用 `atrium org edit o1 --charter`。
+自带还没覆盖的账号（kimi、grok、antigravity 等），本机装了 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 就用它补（`openquota pace --json`，`ATRIUM_OPENQUOTA_BIN` 可改路径），自带读不到的账号也先用它补并注明；都没有就显示「没有额度数据」，挑执行者退回档案顺序与运行时的额度用尽标记。给用户留的份额只读组织树：派活按任务所在节点章程链中最严的 `quota_reserve_percent` 保留每个账号的用户额度，根章程没写时缺省 20%；`atrium quota` 表格下一行写明份额与出自哪份章程（`--json` 的 `reserve`）。旧的 `~/Atrium/charter.md` 不再读取：用默认数据目录的服务首次启动时（隔离服务只认显式的 `ATRIUM_LEGACY_DIR`），若根节点缺某项预算（`quota_reserve_percent`、`money`）而旧章程 frontmatter 的 `budget` 里有，就导入一次写进根章程（留修订），之后改预算用 `atrium org edit o1 --charter`。章程文件的 `budget` 仍可用旧写法（`quota_reserve_percent: 20`、`money: 0`），写入时折成对应的边界参数；磁盘下限（`disk_min_free_gb`）不再使用，旧写法里写了会丢掉，库里留着的旧条目照读不报错、也不拦派活。
 
 ## Claude Code 状态栏
 
@@ -244,7 +244,7 @@ atrium org stages atrium --file 阶段.yaml --reason 推进     # 只改节点�
 
 - **投给谁**：任务没写 `--owner` 时，从任务的归属部分（`--part`，旧任务的归属节点次之，都没写沿父任务往上找）向上找最近的、已登记的 leader；找不到投秘书。事件的 `routed` 写明投给谁、为什么。写了 `--owner`（包括 `--owner secretary`）就按负责人投。过程事件（合入、退回等知会）也投给 leader，但只有「要处理」的才唤醒它。
 - **按事唤醒**：leader 有要处理的事件时，攒批 30 秒（`ATRIUM_LEADER_BATCH_SECONDS` 可调），用登记的执行者组合起一个一次性进程（同一 leader 同时只起一个，单次上限 20 分钟，`ATRIUM_LEADER_TIMEOUT_MINUTES` 可调）。只有默认数据目录的服务缺省唤醒；另给 `ATRIUM_DATA` 的隔离服务（压测、验收）库里有 leader 也不起真进程、不耗额度，事件留在收件箱，要唤醒设 `ATRIUM_LEADER_WAKE=1`（`=0` 在默认目录也关）。提示词附该节点的全景上下文（与 `map context` 同一段）、备忘、这批事件、过程摘要、可用命令、权限边界与上交规则；处理完 `events ack` 后退出。退出非零或没确认完算失败，释放事件稍后重试；连续 2 次失败或超时，把没确认的事件转交上一层（秘书）。处理期间同一任务又有新结果合并进来的，下次唤醒再送，不随旧内容一起确认。
-- **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
+- **权限**（服务端按每次唤醒签发的 leader 令牌判定，不靠提示词）：可以在负责的节点及子节点建任务（不写 `--part` 默认记到负责的节点）、派活、重派、捎话、停、记备注、请专员与会审，任务牵涉到自己负责的部分时记备注与捎话，改这些节点的要点、阶段与全景人话字段，给这些节点排周期任务（`schedule add/pause/resume/run/rm`），写自己的备忘，给子节点指派下层 leader，确认投给自己的事件。不可以动别的部分的任务、改章程与边界预算、建节点、拍板会审、改技能与额度、登记 leader，也不能启动、停止、重启或升级服务；越权返回中文说明并提示 `atrium leader escalate …`。
 - **上交**只有四类：`shipped` 已上线（里程碑完成，须带 `--task`，说明里附端到端验证）、`cross` 需要别的部分配合、`beyond` 越过权限／预算／硬边界、`stuck` 搞不定（卡住多次、拿不定）。生成一条投给上一层 leader（没有就秘书）的「要处理」事件 `escalated`，带 `--task` 时任务上也记一笔。转交下层 leader 投给自己的上交时不另起一条：`--event` 给那条的编号（不给时按同任务、同类型认最近一条，未确认或确认不到 6 小时的），上一层收到的仍是一条，`from`、`reason` 是下层原文，`forwarded` 逐层记「谁看过、一句意见」；原事件替转交人确认掉，唤醒收尾时不会再转交一次。
 - **连续性**存在 Atrium：节点要点、阶段、交付记录与 leader 的备忘和决定记录，不靠进程上下文。`org tree`、`map --json`（`leader_state`；`lead` 是这一块归谁管，含从上级继承的）、`atrium top` 显示每个节点的 leader 与最近一次唤醒、在处理什么（人话，如「t84 上线」）。
 - **看得到**：全景网页每块标题下有「负责人」一行（名字与在处理什么，点开是负责人页），顶栏在它处理时写「Atrium 负责人在处理」；leader 建的任务在任务行注明「Atrium 负责人派的」，备注作者给名字（`task ls/show` 显示「Atrium 负责人（a1）」，接口字段 `note_by_name`）。状态栏读 `GET /api/leaders` 的 `busy`：`[{ref, name, doing, since}]`，只列正在处理的 leader，空闲为空数组。
@@ -365,7 +365,7 @@ atrium schedule pause s1                           # 暂停；resume 续上（�
 
 体验巡检以当前用户环境使用安装版服务与默认数据目录；隔离服务启动时显式设置的 `ATRIUM_DATA`、`ATRIUM_PORT` 会传给巡检进程。巡检只看全景人话字段、帮助与命令回执，不读代码。巡检进程用 `atrium patrol report tN --phenomenon 现象 --step 步骤 --command 命令 --expected 预期 --actual 实际 --kind broken|awkward` 记发现；同节点同现象去重，已忽略的也不再报。任务结束后新增发现投给节点 leader，leader 开任务后用 `atrium patrol decide fN --task tN` 关联，或用 `--merge tN` 并入已有任务，或用 `--ignore 原因` 记下忽略理由。全景节点的「巡检发现」页签与 `map --json` 都显示处理结果。
 
-周期任务（`schedule`，短号 `s1`…，全局持久不复用）：到点在该节点下生成一件普通任务并按 `task run` 同一条路派发（不写 `--worker` 就按 `task pick` 挑人；闲时/普通按节点缺省）。`--every` 写 `7d`、`1d`、`12h`、`2w`（至少 1 小时）；`--at 09:30` 定本机钟点，只用于整天的周期，不写就从添加时算起一个周期后第一轮。`--kind task`（缺省）建普通任务，可带 `--brief`、`--by`；`--kind patrol` 生成与 `patrol run` 同样的体验巡检（按 uses 轮换，节点没有 uses 时添加即报错）；`--kind research` 只调研、不交 PR。上一轮（todo / running / blocked）还没结束就跳过本轮并记一笔；服务停机错过好几轮只补一轮；建不出任务或派发失败记在 `schedule show` 的最近几轮里，并以 `schedule_failed` 事件投给该节点最近的 leader（找不到投秘书）。周期任务只能由用户增删改，leader 只读。
+周期任务（`schedule`，短号 `s1`…，全局持久不复用）：到点在该节点下生成一件普通任务并按 `task run` 同一条路派发（不写 `--worker` 就按 `task pick` 挑人；闲时/普通按节点缺省）。`--every` 写 `7d`、`1d`、`12h`、`2w`（至少 1 小时）；`--at 09:30` 定本机钟点，只用于整天的周期，不写就从添加时算起一个周期后第一轮。`--kind task`（缺省）建普通任务，可带 `--brief`、`--by`；`--kind patrol` 生成与 `patrol run` 同样的体验巡检（按 uses 轮换，节点没有 uses 时添加即报错）；`--kind research` 只调研、不交 PR。上一轮（todo / running / blocked）还没结束就跳过本轮并记一笔；服务停机错过好几轮只补一轮；建不出任务或派发失败记在 `schedule show` 的最近几轮里，并以 `schedule_failed` 事件投给该节点最近的 leader（找不到投秘书）。用户与负责该节点或其上级的 leader 都能增删改（leader 给自己的部分排巡检、调研），别的部分的周期任务 leader 只读。
 
 - **网页**：服务自带（`/map`），只听 127.0.0.1、只接受本机连接。`atrium map` 用用户令牌换一个一次性链接（2 分钟内有效、只能用一次），浏览器打开后换成本机会话 cookie（HttpOnly、SameSite=Strict，7 天有效，服务重启后仍有效）；会话只能读全景（外加同源页面拍板选项单），写接口和其他接口仍要用户令牌。交互终端里直接打开浏览器，非终端、执行者环境或 `--no-open` 只打印链接。
 - **布局**：一块一页。顶栏是面包屑（从根到当前块，可点回上层）和「在做 N 件」——数字是当前部分含其子部分的在跑数，专员页与执行者页显示全组织的「全组织在做 N 件」；下面是小字类别（组织／部分／管方面的部分／专员）、人话名与介绍。组织节点展示组成部分、任务、专员、原则与巡检发现（现象、步骤与命令、预期与实际、处理结果）。任务默认只看进行中，可切「全部」；「最近在做」一列里执行者写的 http(s) 链接（如 PR 地址）点得开，新标签页打开。
@@ -381,7 +381,9 @@ atrium schedule pause s1                           # 暂停；resume 续上（�
 
 ## 组织树
 
-组织、项目、模块三类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严，显式分配给兄弟的份额之和不得超过父节点的可分配量。根章程只有用户 `u1` 能改，其余由节点 leader 维护（`--as aN`）。
+组织、项目、模块三类节点，短号 `o1`……，也可用路径（如 `atrium/runtime`）。每个节点有 leader、章程与能力卡，每次修改存一版历史；子节点的硬边界只能比父节点更严，显式分配给兄弟的份额之和不得超过父节点的可分配量。根章程只有用户 `u1` 能改（秘书拿用户令牌替用户改，`--as secretary`，修订如实记秘书），其余由节点 leader 维护（`--as aN`）。
+
+**修订署名**：章程、节点、要点、全景、技能、专员、执行者档案、任务备注与捎话的修订与事件记在 `--as` 名下：`u1` 是用户本人，`secretary` 是秘书（权限同用户，只是如实署名），`aN` 是节点 leader。`atrium chat` 起的秘书会话与服务后台恢复的秘书进程带 `ATRIUM_AS=secretary`，这些命令缺省就带 `--as secretary`；在别处当秘书（如 Claude Code 会话）时设同样的环境变量或显式写 `--as secretary`。只有用户本人操作才记 `u1`。
 
 ```bash
 atrium org import --repo .                        # 预览：根章程 ~/Atrium/charter.md（隔离数据目录须给出路径）与仓库 .agents/modules 下待导入的模块（导入后仓库里删掉）
@@ -405,7 +407,7 @@ atrium org link-roles                             # 预览把旧 role 字符串�
 
 任务用 `--part 节点` 记录归属部分；旧 `--role` 组织节点写法暂时接受并提示改用 `--part`。旧 `--job` 与 `--concern` 也暂时接受，分别提示 `--by` 与 `--ask`。启动时旧关注点迁入专员清单；o6 安全、o7 质量是撤销的示例节点，原要点移到 o2 Atrium。
 
-章程 frontmatter 的 `budget` 分配份额，例如 `budget: { quota: { claude: 30, "*": 10 }, disk: 20, money: 0 }`。`quota` 数值是账号当前周期额度的百分点；具体账号覆盖 `*`。没有显式份额的节点使用父节点未分配给兄弟的共享池。`org show --charter --raw` 可导出并编辑。派活时按账号当前窗口用量估算节点子树的「约用」；份额不足 1 个百分点时换账号，全部不足则将任务置为受阻并通知节点 leader。OpenQuota 数据不可用时记录事件，不按份额拦截。磁盘低于章程下限或节点 worktree 占满磁盘份额时也受阻；档案 `billing: metered` 在钱份额为 0 时不可派。
+章程 frontmatter 的 `budget` 分配份额，例如 `budget: { quota: { claude: 30, "*": 10 }, disk: 20, money: 0 }`。`quota` 数值是账号当前周期额度的百分点；具体账号覆盖 `*`。没有显式份额的节点使用父节点未分配给兄弟的共享池。`org show --charter --raw` 可导出并编辑。派活时按账号当前窗口用量估算节点子树的「约用」；份额不足 1 个百分点时换账号，全部不足则将任务置为受阻并通知节点 leader。OpenQuota 数据不可用时记录事件，不按份额拦截。节点 worktree 占满磁盘份额时也受阻（本机磁盘可用量不设下限，已合入或取消的任务工作树由运行时定期清掉）；档案 `billing: metered` 在钱份额为 0 时不可派。
 
 ## 全景图（节点的人话介绍）
 

@@ -195,7 +195,7 @@ test("挑人：份额用尽跳过并换人；钱为零时跳过 metered；pace �
   assert.equal(metered.ok && metered.tool, "kimi");
 });
 
-test("磁盘：生效下限与节点 worktree 份额在派活前拒绝", async (t) => {
+test("磁盘：节点 worktree 份额在派活前拒绝；章程里旧的磁盘下限不再拦", async (t) => {
   const db = new DatabaseSync(":memory:");
   t.after(() => db.close());
   ensureTaskTables(db);
@@ -228,8 +228,7 @@ test("磁盘：生效下限与节点 worktree 份额在派活前拒绝", async (
     { fields: {}, body: "", budget: { disk: 0 }, reason: "磁盘限额" },
     "u1",
   );
-  let free = 1000;
-  const disk = new DiskBudget(db, dir, async () => free);
+  const disk = new DiskBudget(db, async () => 0.01);
   await assert.rejects(
     disk.check(project.id),
     /磁盘份额 0 GB.*worktree 已占约/,
@@ -252,11 +251,18 @@ test("磁盘：生效下限与节点 worktree 份额在派活前拒绝", async (
     },
     "u1",
   );
-  free = 0;
-  await assert.rejects(disk.check(project.id), /低于章程下限 100000 GB/);
+  editDoc(
+    db,
+    `o${project.id}`,
+    "charter",
+    { fields: {}, body: "", budget: {}, reason: "去掉份额" },
+    "u1",
+  );
+  await disk.check(project.id);
+  await disk.check(null);
 });
 
-test("磁盘不足先清已合入工作树并重查；受阻任务保留，仍不足才拦截", async (t) => {
+test("清理已结束任务的工作树：已合入与已取消的清掉，受阻任务保留", async (t) => {
   const fx = fixture(t);
   const db = new DatabaseSync(":memory:");
   t.after(() => db.close());
@@ -284,13 +290,7 @@ test("磁盘不足先清已合入工作树并重查；受阻任务保留，仍�
     "UPDATE tasks SET status='cancelled',worktree=?,branch=? WHERE id=?",
   ).run(cancelledPath, "task-cancelled", cancelled.id);
   const cleanup = new WorktreeCleanup(db);
-  const disk = new DiskBudget(
-    db,
-    fx.repo,
-    async () => (existsSync(path) ? 10 : 20),
-    cleanup,
-  );
-  await disk.check(null, fx.repo);
+  await cleanup.finished();
   assert.equal(existsSync(path), false);
   assert.equal(existsSync(cancelledPath), false);
   assert.equal(existsSync(kept), true);
@@ -304,28 +304,6 @@ test("磁盘不足先清已合入工作树并重查；受阻任务保留，仍�
     ).worktree,
     null,
   );
-  const low = new DiskBudget(db, fx.repo, async () => 10, cleanup);
-  await assert.rejects(low.check(null, fx.repo), /低于章程下限 15 GB/);
-});
-
-test("磁盘清后仍不足：派活转 blocked 并通知秘书", async (t) => {
-  const { call, taskRunner } = await startApp(
-    t,
-    undefined,
-    undefined,
-    undefined,
-    async () => 0,
-  );
-  const created = await call("POST", "/api/tasks", { title: "磁盘不足" });
-  const run = await call("POST", `/api/tasks/${created.body.ref}/run`, {});
-  assert.equal(run.body.task.status, "blocked");
-  assert.match(
-    JSON.stringify(run.body.task.events),
-    /budget_blocked.*磁盘可用/,
-  );
-  const inbox = await taskRunner.inbox.wait("secretary", 0);
-  assert.equal(inbox.events[0]?.kind, "blocked");
-  assert.match(JSON.stringify(inbox.events[0]?.detail), /磁盘可用/);
 });
 
 test("隔离运行时：份额用尽转 blocked 通知 leader；pace 不可用记事件并允许派活", async (t) => {

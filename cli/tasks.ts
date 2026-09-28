@@ -24,7 +24,11 @@ import {
   type Rollup,
 } from "../server/tasks/rollup.ts";
 import { recordNext } from "./contract.ts";
-import { defaultSubscriber, leaderSession } from "./worker-guard.ts";
+import {
+  defaultActor,
+  defaultSubscriber,
+  leaderSession,
+} from "./worker-guard.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
 import { clip, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
@@ -818,7 +822,8 @@ const note: Command = {
       await client()
     ).post<Task>(`/tasks/${id}/note`, {
       text,
-      by: str(values, "as") ?? leaderSession()?.leader ?? "u1",
+      by:
+        str(values, "as") ?? leaderSession()?.leader ?? defaultActor() ?? "u1",
       ...(str(values, "verdict") ? { verdict: str(values, "verdict") } : {}),
     });
     if (json) printJson(result);
@@ -869,7 +874,14 @@ const tell: Command = {
       await client()
     ).post<{ task: Task; tell: { id: number; by: string }; how: string }>(
       `/tasks/${id}/tell`,
-      { text, by: str(values, "as") ?? leaderSession()?.leader ?? "u1" },
+      {
+        text,
+        by:
+          str(values, "as") ??
+          leaderSession()?.leader ??
+          defaultActor() ??
+          "u1",
+      },
     );
     if (json) printJson(result);
     else console.log(`${id} 已登记捎话（${result.tell.by}）：${result.how}`);

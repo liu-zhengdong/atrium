@@ -8,6 +8,7 @@ import type { AdoptPlan } from "../server/goals/adopt.ts";
 import type { CheckView } from "../server/goals/checks.ts";
 import { CHECK_LABEL } from "../server/goals/check-rules.ts";
 import { longWait, waitSeconds } from "./long-wait.ts";
+import { defaultActor } from "./worker-guard.ts";
 
 /** 目标树的命令行（#313）：只经 HTTP 调服务。--as 是 u1 或组织节点 leader aN。 */
 
@@ -21,10 +22,13 @@ const strs = (values: Values, key: string) => {
 };
 const client = async () => (await import("./service.ts")).connect();
 const path = (value: string) => encodeURIComponent(value);
-const as = (values: Values) =>
-  str(values, "as") ? `?as=${path(str(values, "as")!)}` : "";
+const as = (values: Values) => {
+  const who = str(values, "as") ?? defaultActor();
+  return who ? `?as=${path(who)}` : "";
+};
 const options = { as: { type: "string" as const } };
-const person = (value: string) => (value === "u1" ? "你" : value);
+const person = (value: string) =>
+  value === "u1" ? "你" : value === "secretary" ? "秘书" : value;
 
 function ref(value: string | undefined) {
   if (!value || !/^g[1-9][0-9]*$/.test(value))

@@ -626,7 +626,6 @@ for (const scenario of ["online", "rolled_back"] as const)
       },
       undefined,
       undefined,
-      undefined,
       { online },
     );
     assert.equal(
@@ -711,7 +710,6 @@ for (const scenario of ["online", "rolled_back"] as const)
         workersDir: fx.workers,
         exec: fx.run,
         tickMs: 100,
-        diskFreeGb: async () => 1000,
         online: {
           ...online,
           version: () => (scenario === "online" ? "0.1.1" : "0.1.0"),

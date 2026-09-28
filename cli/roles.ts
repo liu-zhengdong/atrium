@@ -8,6 +8,7 @@ import type {
 import { recordNext } from "./contract.ts";
 import { printJson, table } from "./format.ts";
 import type { Command, Values } from "./main.ts";
+import { defaultActor } from "./worker-guard.ts";
 const str = (v: Values, k: string) =>
   typeof v[k] === "string" ? (v[k] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
@@ -55,7 +56,9 @@ const fields = (v: Values) => ({
     ? {}
     : { invite_when: str(v, "invite-when")!.split(",").filter(Boolean) }),
   ...(str(v, "part") === undefined ? {} : { part: str(v, "part") }),
-  ...(str(v, "as") === undefined ? {} : { author: str(v, "as") }),
+  ...((str(v, "as") ?? defaultActor()) === undefined
+    ? {}
+    : { author: str(v, "as") ?? defaultActor() }),
 });
 const opts = {
   name: { type: "string" as const },

@@ -89,6 +89,15 @@ export function leaderCommandGuard(
     );
 }
 
+/**
+ * 写命令缺省以谁的名义（`--as`）：秘书会话带 ATRIUM_AS=secretary，修订与事件就记秘书，不冒用户 u1 的名；
+ * 没设时不带（服务端按 u1 记）。leader 进程由令牌定名义，这里不管。
+ */
+export const defaultActor = (env: NodeJS.ProcessEnv = process.env) =>
+  env.ATRIUM_LEADER_TOKEN?.trim()
+    ? undefined
+    : env.ATRIUM_AS?.trim() || undefined;
+
 /** 缺省订阅者：leader 进程里是自己的 aN，其余是 secretary。 */
 export const defaultSubscriber = (env: NodeJS.ProcessEnv = process.env) =>
   env.ATRIUM_LEADER_TOKEN?.trim() && env.ATRIUM_LEADER?.trim()

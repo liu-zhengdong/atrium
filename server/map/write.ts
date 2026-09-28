@@ -5,6 +5,7 @@ import { addNode, editOverviewFields } from "../org/write.ts";
 import { canEdit, nodes, type Kind } from "../org/model.ts";
 import { appliesText, resolveApplies } from "../org/aspects.ts";
 import { validateOverviewField } from "../org/overview.ts";
+import { actsForUser } from "../../shared/user.ts";
 
 /**
  * 全景图的写入（#322 第 4 步）：`map edit` 改人话字段，`map add` 在父节点下加一块。
@@ -108,7 +109,7 @@ export function editMap(
     throw usage("--rev: 只用于 --detail 修改章程正文");
   if (appliesChanged) {
     if (
-      (node.parent_id === null && actor !== "u1") ||
+      (node.parent_id === null && !actsForUser(actor)) ||
       !canEdit(nodes(db), node, actor)
     )
       throw new Problem(

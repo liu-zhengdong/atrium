@@ -28,7 +28,7 @@ const temp = (t: { after: (fn: () => unknown) => void }, name: string) => {
   return dir;
 };
 
-test("旧章程预算解析：嵌套字段与注释、money 旧写法、坏值与未知键逐项报", () => {
+test("旧章程预算解析：嵌套字段与注释、money 旧写法、磁盘下限不再导入、坏值与未知键逐项报", () => {
   const parsed = parseCharterBudget(
     "﻿---\r\nstatus: 草稿\r\nbudget:\r\n  quota_reserve_percent: 25 # 给用户\r\n  disk_min_free_gb: 15\r\n  money: 0\r\n---\r\n# 正文",
   );
@@ -37,7 +37,6 @@ test("旧章程预算解析：嵌套字段与注释、money 旧写法、坏值�
     parsed.entries.map((e) => [e.id, e.param]),
     [
       ["quota-reserve", { key: "quota_reserve_percent", value: 25 }],
-      ["disk-floor", { key: "disk_min_free_gb", value: 15 }],
       ["money", { key: "money_yuan_max", value: 0 }],
     ],
   );
@@ -51,10 +50,10 @@ test("旧章程预算解析：嵌套字段与注释、money 旧写法、坏值�
   });
   for (const value of ["-1", "101", "abc", "''"]) {
     const bad = parseCharterBudget(
-      `---\nbudget:\n  quota_reserve_percent: ${value}\n  disk_min_free_gb: 10\n---\n`,
+      `---\nbudget:\n  quota_reserve_percent: ${value}\n  money: 10\n---\n`,
     );
     assert.equal(bad.entries.length, 1, value);
-    assert.equal(bad.entries[0]!.param!.key, "disk_min_free_gb");
+    assert.equal(bad.entries[0]!.param!.key, "money_yuan_max");
     assert.match(bad.problems[0]!, /quota_reserve_percent.*跳过/);
   }
   assert.match(
@@ -75,7 +74,7 @@ test("根章程缺哪几项预算：已有同参数跳过，id 撞上无参数�
   const imported = parseCharterBudget(
     "---\nbudget:\n  quota_reserve_percent: 20\n  disk_min_free_gb: 15\n  money: 0\n---\n",
   ).entries;
-  assert.equal(missingBudget([], imported).add.length, 3);
+  assert.equal(missingBudget([], imported).add.length, 2);
   const own = [
     {
       id: "reserve",
@@ -88,7 +87,7 @@ test("根章程缺哪几项预算：已有同参数跳过，id 撞上无参数�
   const result = missingBudget(own, imported);
   assert.deepEqual(
     result.add.map((e) => e.id),
-    ["disk-floor"],
+    [],
   );
   assert.deepEqual(result.skipped, ["money_yuan_max（根章程已有条目 money）"]);
 });
@@ -217,14 +216,13 @@ test("根章程预算导入：没有根等下次；导入一次留修订；再�
   );
   assert.deepEqual(importCharterBudget(db, file, log), {
     status: "imported",
-    keys: ["quota_reserve_percent", "disk_min_free_gb", "money_yuan_max"],
+    keys: ["quota_reserve_percent", "money_yuan_max"],
   });
   assert.deepEqual(
     ownBoundaries(db, root.id).map((e) => [e.id, e.param?.value ?? null]),
     [
       ["no-spend", null],
       ["quota-reserve", 30],
-      ["disk-floor", 12],
       ["money", 0],
     ],
   );
@@ -274,7 +272,7 @@ test("根章程预算导入：只补缺的项；没有旧文件、没有缺项�
     keys: ["money_yuan_max"],
   });
   assert.equal(quotaReserve(partial).percent, 40);
-  assert.ok(logs.some((line) => /disk_min_free_gb.*跳过/.test(line)));
+  assert.ok(!logs.some((line) => /disk_min_free_gb/.test(line)));
 
   const noFile = orgDb(t);
   addRoot(noFile);

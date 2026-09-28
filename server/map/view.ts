@@ -50,7 +50,7 @@ export type MapTreeNode = {
   tasks: Counts;
   /** 登记过的 leader 与其最近一次唤醒；节点没有 aN leader 或未登记时不给。 */
   leader_state?: LeaderBrief;
-  /** 超出 depth 时不展开，只给下层个数。 */
+  /** 超出 depth 或本次名额（TREE_NODES_MAX）时不展开或只给前几块，children_count 是下层总数。 */
   children?: MapTreeNode[];
   children_count: number;
 };
@@ -193,10 +193,12 @@ type Index = {
 
 function index(db: DatabaseSync): Index {
   const list = nodes(db).filter((node) => node.kind !== "concern");
-  if (list.length > 500) throw new Problem(409, "组织树超过 500 个节点");
   const children = new Map<number | null, NodeRow[]>();
-  for (const n of list)
-    children.set(n.parent_id, [...(children.get(n.parent_id) ?? []), n]);
+  for (const n of list) {
+    const siblings = children.get(n.parent_id);
+    if (siblings) siblings.push(n);
+    else children.set(n.parent_id, [n]);
+  }
   const own = ownCounts(db);
   const counts = new Map<number, Counts>();
   const sum = (n: NodeRow): Counts => {
@@ -258,10 +260,46 @@ function leadOf(x: Index, n: NodeRow): NodeLead | null {
   return null;
 }
 
-function treeNode(x: Index, n: NodeRow, depth: number): MapTreeNode {
+/** 一次返回最多展开这么多块；组织再大也不拒绝，超出的层只给下层个数，按需再取（`atrium map oN`、网页点开）。 */
+export const TREE_NODES_MAX = 1000;
+
+/**
+ * 广度优先分名额：浅层先展开，名额用完的块不再往下；一块的下层多于剩余名额时只给前几块。
+ * 返回每块这次展开几个下层（没有的不展开）。
+ */
+export function expandPlan(
+  children: ReadonlyMap<number | null, readonly { id: number }[]>,
+  start: number,
+  depth: number,
+  max = TREE_NODES_MAX,
+): Map<number, number> {
+  const plan = new Map<number, number>();
+  let left = max - 1;
+  let level = [start];
+  for (let d = 0; d < depth && level.length && left > 0; d++) {
+    const next: number[] = [];
+    for (const id of level) {
+      const kids = children.get(id) ?? [];
+      const take = Math.min(kids.length, left);
+      if (!take) continue;
+      plan.set(id, take);
+      left -= take;
+      for (let i = 0; i < take; i++) next.push(kids[i]!.id);
+    }
+    level = next;
+  }
+  return plan;
+}
+
+function treeNode(
+  x: Index,
+  n: NodeRow,
+  plan: ReadonlyMap<number, number>,
+): MapTreeNode {
   const f = x.fields.get(n.id) ?? {};
   const counts = x.counts.get(n.id) ?? { running: 0, blocked: 0, open: 0 };
   const kids = x.children.get(n.id) ?? [];
+  const take = plan.get(n.id);
   return {
     ...head(x, n),
     kind: n.kind,
@@ -271,8 +309,8 @@ function treeNode(x: Index, n: NodeRow, depth: number): MapTreeNode {
     dot: dotOf(counts),
     tasks: counts,
     ...leaderState(x, n),
-    ...(depth > 0
-      ? { children: kids.map((c) => treeNode(x, c, depth - 1)) }
+    ...(take
+      ? { children: kids.slice(0, take).map((c) => treeNode(x, c, plan)) }
       : {}),
     children_count: kids.length,
   };
@@ -304,7 +342,10 @@ export function mapTree(db: DatabaseSync, root?: string, depth = DEPTH_MAX) {
       `关注点节点 ${root} 已下线，请查看专员名单`,
       "not_found",
     );
-  return { root: ref(start.id), tree: treeNode(x, start, depth) };
+  return {
+    root: ref(start.id),
+    tree: treeNode(x, start, expandPlan(x.children, start.id, depth)),
+  };
 }
 
 /** 子树所有节点 id（含自己）。 */

@@ -430,7 +430,6 @@ test("运行时：执行者满时闲时任务让普通任务先拉起；前面�
     waitingKimi,
     undefined,
     undefined,
-    undefined,
     { host },
   );
   const db = new DatabaseSync(join(data, "atrium.sqlite"));

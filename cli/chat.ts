@@ -256,6 +256,12 @@ function eventSource(api: Api) {
  * 秘书 opencode 的环境：独立数据目录，只从用户目录同步 API key 类凭据（只读用户目录）。
  * 返回的 hint 在知道所用模型后调用，其提供商只有 OAuth 登录时给出提示。
  */
+/** 秘书会话里的 atrium 命令缺省以秘书名义写：修订与事件记 secretary，不记成用户 u1。 */
+const secretaryAgentEnvironment = (): NodeJS.ProcessEnv => ({
+  ...agentEnvironment(),
+  ATRIUM_AS: "secretary",
+});
+
 function secretaryEnvironment(data: string, password?: string) {
   const home = secretaryOpencodeHome(data);
   const report = prepareOpencodeHome(home, userOpencodeData());
@@ -263,7 +269,7 @@ function secretaryEnvironment(data: string, password?: string) {
   const mcp = mcpHint(home, report.mcpSkipped);
   if (mcp) console.error(`[atrium] ${mcp}`);
   return {
-    env: opencodeEnvironment(agentEnvironment(), { home, password }),
+    env: opencodeEnvironment(secretaryAgentEnvironment(), { home, password }),
     hint: (model?: string) => oauthHint(home, report.oauthOnly, model),
   };
 }
@@ -413,7 +419,7 @@ export const chatCommand: Command = {
         },
       });
       let chat: SecretaryChat | undefined;
-      let env = agentEnvironment();
+      let env = secretaryAgentEnvironment();
       if (mode.native) {
         const secretary = secretaryEnvironment(data);
         env = secretary.env;

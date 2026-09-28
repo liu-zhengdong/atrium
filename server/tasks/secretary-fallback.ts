@@ -65,7 +65,11 @@ export const resumeTurn: ResumeRun = (
   data,
 ) => {
   const spec = resumeCommand(session, prompt);
-  let env = serviceEnvironment().env;
+  // 秘书会话里的 atrium 命令缺省以秘书名义写（cli/worker-guard.ts defaultActor）。
+  let env: NodeJS.ProcessEnv = {
+    ...serviceEnvironment().env,
+    ATRIUM_AS: "secretary",
+  };
   if (session.tool === "opencode") {
     const home = secretaryOpencodeHome(data);
     const report = prepareOpencodeHome(home, userOpencodeData(env));

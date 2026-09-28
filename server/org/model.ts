@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { Problem } from "../problem.ts";
+import { actsForUser } from "../../shared/user.ts";
 
 export type Kind = "org" | "project" | "module" | "concern";
 export type Doc = "charter" | "card";
@@ -119,7 +120,7 @@ export function canEdit(
   node: NodeRow,
   actor: string,
 ): boolean {
-  if (actor === "u1") return true;
+  if (actsForUser(actor)) return true;
   let current: NodeRow | undefined = node;
   while (current) {
     if (current.leader === actor) return true;

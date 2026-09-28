@@ -53,7 +53,6 @@ async function serve(
       killGraceMs: 200,
       pace: async () => undefined,
       usagePace: async () => undefined,
-      diskFreeGb: async () => 1000,
       agentPollMs: 500,
       agentPickupMs: 1500,
       ...extra,

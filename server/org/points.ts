@@ -11,6 +11,7 @@ import {
   transaction,
   type NodeRow,
 } from "./model.ts";
+import { actsForUser } from "../../shared/user.ts";
 
 /**
  * 全景图的「要点」（#322，u1 09-27 定）：这一块必须守住的设计约束。每条写人话一句、为什么、谁定的，
@@ -119,7 +120,7 @@ export function validatePoint(
 }
 
 function authorize(db: DatabaseSync, node: NodeRow, actor: string) {
-  if (node.parent_id === null && actor !== "u1")
+  if (node.parent_id === null && !actsForUser(actor))
     throw new Problem(403, "根节点的要点只有你能改");
   if (!canEdit(nodes(db), node, actor))
     throw new Problem(

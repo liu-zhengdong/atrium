@@ -245,7 +245,6 @@ test("隔离服务：product add 一次建好部分、leader 与周期研究；�
       workersDir: fx.workers,
       pace: async () => undefined,
       usagePace: async () => undefined,
-      diskFreeGb: async () => 1000,
       tickMs: 100,
     },
     schedules: { tickMs: 50, now: () => start, offset: utc8 },

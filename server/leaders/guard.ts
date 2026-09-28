@@ -13,6 +13,7 @@ import { findingNode } from "../tasks/patrol.ts";
 import { choiceNodeId } from "../choices/store.ts";
 import { getMaterial } from "../materials/store.ts";
 import { materialRef } from "../materials/model.ts";
+import { scheduleRow } from "../schedules/model.ts";
 import { LeaderTokens } from "./tokens.ts";
 import {
   ackVerdict,
@@ -271,6 +272,23 @@ export function registerLeaderGuard(
         });
         break;
       }
+      case "schedule":
+        if (request.method === "POST" && !given(idParam(request))) {
+          // 没写节点由登记处报缺字段。
+          if (given(body.node))
+            verdict = scopeVerdict(leader, scope, [
+              nodeCheck(db, String(body.node), "周期任务的节点"),
+            ]);
+        } else {
+          const row = scheduleRow(db, idParam(request));
+          verdict = scopeVerdict(leader, scope, [
+            {
+              what: `周期任务 ${idParam(request)}（挂在 ${ref(row.node_id)}）`,
+              node: row.node_id,
+            },
+          ]);
+        }
+        break;
       // 是不是这份选项单的拍板人由 choices/store.ts 按节点设置判，这里不重复。
       case "choice-decide":
         break;

@@ -23,6 +23,7 @@ import {
   validateSkillSlug,
   type Files,
 } from "./model.ts";
+import { actsForUser } from "../../shared/user.ts";
 
 /**
  * 组织技能的读写（#264 第 3b 步）：技能是组织资产，带只追加的修订历史；绑定挂在节点上；
@@ -147,7 +148,7 @@ function authorize(
   actor: string,
   what: string,
 ) {
-  if (actor === "u1") return;
+  if (actsForUser(actor)) return;
   const owner = list.find((n) => n.id === ownerId);
   if (!owner || !canEdit(list, owner, actor))
     throw new Problem(

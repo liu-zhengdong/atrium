@@ -255,6 +255,7 @@ test("派活回执：这次拉起前记了 skills_skipped 才写明，之前几�
     skills: ["visual-design", "design-dialogue"],
   });
   assert.equal(skippedSkillsLine([]), null);
+  assert.equal(skippedSkillsLine(undefined), null, "回执没带事件");
   assert.equal(
     skippedSkillsLine([event("created"), skipped]),
     null,

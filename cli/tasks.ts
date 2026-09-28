@@ -237,7 +237,7 @@ function queuedReason(events: TaskEventRow[]) {
  * 没有就返回 null，回执与以前一样。
  */
 export function skippedSkillsLine(events: readonly TaskEventRow[] | undefined) {
-  // task run 的回执里不一定带事件（真实服务路径就没有），没有就不写这一行。
+  // 旧版服务的 task run 回执不带事件（t259 前本机与远程拉起都没有），没有就不写这一行。
   if (!events) return null;
   let last = -1;
   let prev = -1;

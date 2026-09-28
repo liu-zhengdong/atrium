@@ -28,6 +28,7 @@ import { SecretaryFallback } from "./tasks/secretary-fallback.ts";
 import type { EventInbox } from "./tasks/events.ts";
 import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
+import { registerVerifierGuard } from "./tasks/verify-guard.ts";
 import { registerLeaderRoutes } from "./leaders/routes.ts";
 import { registerMemoRoutes } from "./memos/routes.ts";
 import { registerMaterialRoutes } from "./materials/routes.ts";
@@ -205,6 +206,8 @@ export async function createApp(options: {
   const leaderTokens = new LeaderTokens();
   let inbox: (() => EventInbox) | undefined;
   registerLeaderGuard(app, db, leaderTokens, () => inbox!());
+  // 上线验证执行者（t239）：认出验证身份头就拒绝止损类写接口（停别人的活、改主机与服务状态）。
+  registerVerifierGuard(app);
   // onRequest 拿得到匹配的路由，且在读请求体之前运行。
   const mapLogin = new MapLogin(db);
   app.addHook("onRequest", async (request, reply) => {

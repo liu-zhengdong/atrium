@@ -47,11 +47,14 @@ export type CleanResult = {
   detail: string;
 };
 
+/** 停止事件（stop_requested）里记的发起者与缘由（t239）：谁停的、为什么，事后查得到。 */
+export type StopNote = { by: string; reason: string };
+
 export type LaneDeps = {
   x: Executors;
   inbox: EventInbox;
-  /** 停一个任务（在跑的结束进程树，排队的移出队列）。 */
-  stop: (ref: string) => unknown;
+  /** 停一个任务（在跑的结束进程树，排队的移出队列）；note 记进停止事件。 */
+  stop: (ref: string, note: StopNote) => unknown;
   /** 本机的残留进程：核对并结束（reapLeftovers）。 */
   reapLocal: (targets: readonly LeftoverTarget[]) => Promise<LeftoverKill[]>;
   /** 远程主机上的残留进程由那台的代理核对并结束（RemoteHosts.clean）。 */
@@ -231,7 +234,10 @@ export class UrgentLane {
             continue;
           }
           try {
-            this.deps.stop(taskRef(id));
+            this.deps.stop(taskRef(id), {
+              by: taskRef(self),
+              reason: `紧急任务 ${taskRef(self)} 止损`,
+            });
             done.push(taskRef(id));
           } catch (error) {
             skipped.push(`${taskRef(id)}：${message(error)}`);
@@ -255,9 +261,15 @@ export class UrgentLane {
    * 仍活着的执行者进程树（t217：本机由服务、远程由那台的代理按 leftovers.ts 同一判定核对工具与启动时刻，
    * 平台层 killTree 整树结束）。结束的逐条记进所属任务的 leftover_killed 事件。
    */
-  async clean(host: number, self = 0): Promise<CleanResult> {
+  async clean(host: number, self = 0, by?: string): Promise<CleanResult> {
     const { x } = this.deps;
     const stopped: string[] = [];
+    // 发起者：紧急任务的止损记 tN，命令行 host clean 记调用者（u1、secretary 等）。
+    const who = self ? taskRef(self) : by;
+    const note: StopNote = {
+      by: who ?? "host clean",
+      reason: `host clean h${host} 止损${self ? `（紧急任务 ${taskRef(self)}）` : ""}`,
+    };
     for (const slot of x.slots())
       if (
         slot.host === host &&
@@ -266,7 +278,7 @@ export class UrgentLane {
         !slot.stopping
       ) {
         try {
-          this.deps.stop(taskRef(slot.id));
+          this.deps.stop(taskRef(slot.id), note);
           stopped.push(taskRef(slot.id));
         } catch {
           // 刚结束或正在启动：下一条照做。
@@ -303,7 +315,7 @@ export class UrgentLane {
         host: ref,
         pid: kill.pid,
         tool: kill.tool,
-        ...(self ? { by: taskRef(self) } : {}),
+        ...(who ? { by: who } : {}),
       });
     const parts = [
       `停掉 ${stopped.length} 个在跑的执行者${stopped.length ? `（${stopped.join("、")}）` : ""}`,

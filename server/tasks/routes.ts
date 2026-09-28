@@ -46,6 +46,7 @@ import {
 import { resolveActor } from "../actor.ts";
 import { taskPlan } from "./schedule.ts";
 import { parseTaskRef } from "./ledger.ts";
+import { verifierOf } from "./verify-guard.ts";
 import { markVerdict, whyOf } from "./urgent.ts";
 
 type Query = Record<string, string | undefined>;
@@ -368,8 +369,12 @@ export function registerTaskRoutes(
     const warning = becoming ? runner.lane.crowd() : null;
     return warning ? { ...result, urgent_warning: warning } : result;
   });
+  // 停止事件记发起者（t239）：上线验证执行者停自己记它的 tN，其余记 ?as=。
   app.post("/api/tasks/:id/stop", (request) =>
-    runner.stop(params(request.params).id, actorOf(query(request.query))),
+    runner.stop(
+      params(request.params).id,
+      verifierOf(request) || actorOf(query(request.query)),
+    ),
   );
   app.post("/api/tasks/:id/merge", (request) =>
     runner.requeueMerge(

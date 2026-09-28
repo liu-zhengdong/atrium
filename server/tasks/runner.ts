@@ -147,7 +147,7 @@ import { isTotal, openDescendants, totalRefusal } from "./rollup-ledger.ts";
 import { publishTotals } from "./notice.ts";
 import { productRound } from "../products/model.ts";
 import { pendingChoices } from "../choices/store.ts";
-import { UrgentLane } from "./urgent-runtime.ts";
+import { UrgentLane, type StopNote } from "./urgent-runtime.ts";
 import { storedHosts, urgentIdleMs } from "./urgent.ts";
 import { crowded } from "../hosts/state.ts";
 import { hasEvent } from "./ledger-model.ts";
@@ -402,7 +402,7 @@ export class TaskRunner {
       inbox: this.inbox,
       reapLocal: (targets) => reapLeftovers(targets, { exec: this.exec }),
       remote: this.remote,
-      stop: (ref) => this.stop(ref),
+      stop: (ref, note) => this.stop(ref, undefined, note),
       pauseHost: (host) => void this.pauseHost(`h${host}`, true),
       run: (ref, body) => this.run(ref, body),
       crowded: (host, except) => this.crowdedHost(host, except),
@@ -1294,10 +1294,10 @@ export class TaskRunner {
   }
 
   /** 清理主机上 Atrium 拉起的残留进程（t215 `host clean`，止损动作同一实现；t217 远程也清）。 */
-  async cleanHost(reference: unknown) {
+  async cleanHost(reference: unknown, by?: string) {
     const id = parseHostRef(reference, "主机");
     hostRow(this.db, id);
-    const result = await this.lane.clean(id);
+    const result = await this.lane.clean(id, 0, by);
     return { ...result, host: this.viewOf(hostRow(this.db, id)) };
   }
 
@@ -1535,15 +1535,22 @@ export class TaskRunner {
     return { task: getTask(this.db, id) };
   }
 
-  /** by：发起停止的订阅者，由此产生的事件不投给他本人。 */
-  stop(reference: unknown, by?: string) {
+  /**
+   * by：发起停止的订阅者，由此产生的事件不投给他本人。note：停止事件里记的发起者与缘由（t239），
+   * 给了就以它为准（host clean、紧急任务止损），不影响投递；没给记 by。
+   */
+  stop(reference: unknown, by?: string, note?: StopNote) {
     const id = parseTaskRef(reference);
     const task = getTask(this.db, id);
     const mergeStop = this.review.stop(id, by) ?? this.merge.stop(id, by);
     if (mergeStop)
       return { task: getTask(this.db, id), stopping: mergeStop.stopping };
+    const who = note?.by ?? by;
     if (dequeue(this.db, id)) {
-      noteTask(this.db, id, "unqueued", { reason: "人工停止，移出队列" });
+      noteTask(this.db, id, "unqueued", {
+        reason: "人工停止，移出队列",
+        ...(who ? { by: who } : {}),
+      });
       this.waits.changed(id);
       return { task: getTask(this.db, id), stopping: false };
     }
@@ -1553,7 +1560,8 @@ export class TaskRunner {
       noteTask(this.db, id, "stop_requested", {
         pid: active.pid,
         ...(active.host !== undefined ? { host: hostRef(active.host) } : {}),
-        ...(by ? { by } : {}),
+        ...(who ? { by: who } : {}),
+        ...(note ? { reason: note.reason } : {}),
       });
       this.x.kill(active);
       // 远程主机离线：停止指令等它连上才送到。账本先按人工停止收尾，重连对账时代理会结束那个进程。

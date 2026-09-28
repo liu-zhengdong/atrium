@@ -1,5 +1,6 @@
 import { Problem } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
+import { defaultActor } from "./worker-guard.ts";
 import { oneLine, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 
@@ -21,6 +22,11 @@ const strs = (values: Values, key: string) => {
 };
 const client = async () => (await import("./service.ts")).connect();
 const enc = encodeURIComponent;
+/** 以谁的名义（秘书会话带 ATRIUM_AS=secretary），停下的任务在停止事件里记发起者（t239）。 */
+const asQuery = () => {
+  const who = defaultActor();
+  return who ? `?as=${enc(who)}` : "";
+};
 
 type Cli = { installed: boolean; logged_in: boolean | null };
 type HostView = {
@@ -332,7 +338,7 @@ export const hostCommands: Record<string, Command> = {
         stopped: string[];
         killed: { task: string; pid: number; tool: string }[];
         unreached?: string;
-      }>(`/hosts/${enc(hostRef(reference))}/clean`, {});
+      }>(`/hosts/${enc(hostRef(reference))}/clean${asQuery()}`, {});
       if (json) printJson(result);
       else {
         const lines = [

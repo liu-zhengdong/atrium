@@ -54,16 +54,48 @@ const VERIFIER_REFUSED = new Set([
 ]);
 
 export const VERIFIER_REFUSAL =
-  "上线验证执行者不能启动、停止、重启、升级服务，也不能轮换令牌、开秘书会话或起代理；这一步记「无法验证：需要操作服务」";
+  "上线验证执行者不能启动、停止、重启、升级服务，也不能轮换令牌、开秘书会话或起代理；这一步记「无法验证：需要操作服务」。要在隔离环境验证，设临时 ATRIUM_DATA 与另一个 ATRIUM_PORT 再跑";
+
+/** 运行时给验证执行者的真实服务数据目录（t239，与 server/tasks/executors.ts 同名）。 */
+export const VERIFIER_DATA = "ATRIUM_VERIFIER_DATA";
 
 export const isVerifier = (env: NodeJS.ProcessEnv = process.env) =>
   env[VERIFIER_FLAG] === "1";
+
+/**
+ * 验证执行者在用自己起的隔离实例（t239）：数据目录换成了临时目录、端口也另给了，不是运行时给的真实服务。
+ * 这时照常用（可以起停隔离服务、在里面跑止损类命令），防护只管真实服务；认不出真实服务在哪时不算隔离。
+ */
+export function verifierIsolated(env: NodeJS.ProcessEnv = process.env) {
+  if (!isVerifier(env)) return false;
+  const real = env[VERIFIER_DATA]?.trim();
+  const data = env.ATRIUM_DATA?.trim();
+  const port = env.ATRIUM_PORT?.trim();
+  return (
+    !!real &&
+    !!data &&
+    !!port &&
+    port !== USER_PORT &&
+    dataDirectory({ ATRIUM_DATA: data }) !==
+      dataDirectory({ ATRIUM_DATA: real })
+  );
+}
+
+/** 给真实服务的请求带上验证身份（值是验证任务 tN），服务端据此拒绝止损类操作（server/tasks/verify-scope.ts）。 */
+export const VERIFIER_HEADER = "x-atrium-verifier";
+
+export function verifierHeaders(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  if (!isVerifier(env) || verifierIsolated(env)) return {};
+  return { [VERIFIER_HEADER]: env.ATRIUM_TASK?.trim() || "1" };
+}
 
 export function verifierCommandGuard(
   name: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  if (!isVerifier(env)) return;
+  if (!isVerifier(env) || verifierIsolated(env)) return;
   if (VERIFIER_REFUSED.has(name ?? ""))
     throw new Problem(403, VERIFIER_REFUSAL, "verifier_scope");
 }

@@ -162,6 +162,10 @@ test("先止损：紧急任务建好先执行止损动作并记事件；没标�
   assert.deepEqual(made.body.avoid_host_refs, ["h3"]);
   const stopped = await call("GET", "/api/tasks/t1/wait?timeout=20");
   assert.equal(stopped.body.task.status, "failed");
+  // 停止事件记发起者（t239）：紧急任务 t2 的止损。
+  const [stop] = detailsOf(db, "t1", "stop_requested");
+  assert.equal(stop.by, "t2");
+  assert.equal(stop.reason, "紧急任务 t2 止损");
   assert.equal(
     (
       db.prepare("SELECT paused FROM hosts WHERE id=1").get() as {

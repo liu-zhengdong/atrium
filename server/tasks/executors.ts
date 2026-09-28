@@ -386,7 +386,7 @@ export class Executors {
    * 本机执行者的环境：白名单环境加上 Atrium 标记（t203，子孙继承；父进程退出后被收养的也认得出，
    * 任务早已结束还活着的巡检时清掉）。巡检与上线验证要连回本机服务，去掉执行者防护标记、带上服务的
    * 数据目录与端口；巡检会重启服务，另去掉 Atrium 标记。上线验证另带 ATRIUM_VERIFIER（命令行拒绝启停、
-   * 升级服务）并关掉自带额度读取（t181）。
+   * 升级服务，给真实服务的请求带验证身份，服务端拒绝止损类操作）与真实服务的数据目录并关掉自带额度读取（t181）。
    */
   private runEnv(id: number): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
@@ -402,6 +402,8 @@ export class Executors {
     if (patrol) delete env[SPAWN_ENV];
     if (verify) {
       env[VERIFIER_FLAG] = "1";
+      // 真实服务的数据目录（t239）：命令行据此分辨验证执行者连的是真实服务还是自己起的隔离实例。
+      env.ATRIUM_VERIFIER_DATA = this.ctx.launchOptions.data;
       env.ATRIUM_QUOTA_READERS = "off";
     }
     return env;

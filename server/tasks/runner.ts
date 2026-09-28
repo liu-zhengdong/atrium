@@ -96,8 +96,14 @@ import { HostLoad, hostView } from "./host-load.ts";
 import { sharedLocalChecks } from "./local-check.ts";
 import { skipIfBusy } from "./reentry.ts";
 import { RemoteHosts } from "../hosts/remote.ts";
+import { HostTunnels } from "../hosts/tunnels.ts";
+import { sshConnection } from "../hosts/tunnel-plan.ts";
+import { servicePort } from "../service-state.ts";
+import type { ChildProcess } from "node:child_process";
+import type { SshConnection } from "../hosts/tunnel-plan.ts";
 import {
   addHost,
+  editHostConnection,
   ensureHostTables,
   ensureLocalHost,
   hostRow,
@@ -141,6 +147,9 @@ const RETENTION_SWEEP_MS = 30 * 60_000;
 
 export type RunnerOptions = {
   data: string;
+  /** 测试注入假的 SSH 进程；不读取开发者的 SSH 配置。 */
+  tunnelSpawn?: (connection: SshConnection) => ChildProcess;
+  tunnelStop?: (child: ChildProcess) => void;
   /** 旧版执行者档案目录：首次启动导入一次（#355），之后只读数据库。 */
   workersDir?: string;
   /** 执行者环境的来源（再经白名单过滤）；缺省 process.env。 */
@@ -200,6 +209,7 @@ export class TaskRunner {
   private readonly host: HostLoad;
   /** 远程主机的代理连接（#358 第 1 步）。 */
   readonly remote: RemoteHosts;
+  private readonly tunnels: HostTunnels;
   /** 本地检查派到哪台跑（#358 第 2 步）。 */
   private readonly checks: CheckDispatch;
   /** 额度多主机合并的来源（quota-source 经 hosts/quota.ts 取）。 */
@@ -242,6 +252,7 @@ export class TaskRunner {
         env: options.env ?? process.env,
       }),
     );
+    this.tunnels = new HostTunnels(db, options.tunnelSpawn, options.tunnelStop);
     this.remote = new RemoteHosts(db, options.data, {
       pollMs: options.agentPollMs,
       pickupMs: options.agentPickupMs,
@@ -489,6 +500,7 @@ export class TaskRunner {
   /** 执行者进程不随服务退出：它们在独立进程组里，重启后按 pid 接管。 */
   async close() {
     this.closed = true;
+    this.tunnels.close();
     // 先让巡检收手：中止在跑的 gh / git，别等子进程超时（t122）。
     this.scheduler.close();
     // 先唤醒 HTTP 长轮询及内部事件消费者；后台工作可能仍在等事件。
@@ -997,6 +1009,7 @@ export class TaskRunner {
       onlineMs: this.remote.onlineMs,
       running,
       localMax: this.host.limits.maxWorkers,
+      tunnel: this.tunnels.status(row.id),
     });
     if (row.kind !== "local") return view;
     const gate = this.host.gate(running, false);
@@ -1033,23 +1046,56 @@ export class TaskRunner {
       name?: unknown;
       max?: unknown;
       repos?: unknown;
+      ssh?: unknown;
+      key?: unknown;
+      tunnel?: unknown;
     };
     if (typeof input.name !== "string")
       throw new Problem(400, "名称：必填", "usage");
     const repos = input.repos === undefined ? [] : input.repos;
     if (!Array.isArray(repos) || repos.some((repo) => typeof repo !== "string"))
       throw new Problem(400, "--repo 应为 owner/name 或 *", "usage");
+    const ssh = sshConnection(input, servicePort());
     const { id, code } = addHost(this.db, {
       name: input.name,
       max: input.max as number | undefined,
       repos: repos as string[],
+      ssh,
     });
+    this.tunnels.refresh(hostRow(this.db, id));
     return { host: this.viewOf(hostRow(this.db, id)), code };
+  }
+
+  editHost(reference: unknown, body: unknown) {
+    const id = parseHostRef(reference, "主机");
+    const input = (body ?? {}) as {
+      ssh?: unknown;
+      key?: unknown;
+      tunnel?: unknown;
+    };
+    const existing = hostRow(this.db, id);
+    const ssh = sshConnection(
+      {
+        ssh: input.ssh ?? existing.ssh_target ?? undefined,
+        key: input.key ?? existing.ssh_key ?? undefined,
+        tunnel:
+          input.tunnel ??
+          (existing.tunnel_local_port && existing.tunnel_remote_port
+            ? `${existing.tunnel_local_port}:${existing.tunnel_remote_port}`
+            : undefined),
+      },
+      servicePort(),
+    );
+    if (!ssh) throw new Problem(400, "--ssh 必填", "usage");
+    editHostConnection(this.db, id, ssh);
+    this.tunnels.refresh(hostRow(this.db, id));
+    return { host: this.viewOf(hostRow(this.db, id)) };
   }
 
   removeHost(reference: unknown) {
     const id = parseHostRef(reference, "主机");
     removeHost(this.db, id);
+    this.tunnels.remove(id);
     return { host: this.viewOf(hostRow(this.db, id)) };
   }
 

@@ -46,6 +46,7 @@ export const groups: Record<string, string[]> = {
     "host ls",
     "host show",
     "host add",
+    "host edit",
     "host remove",
     "host pause",
     "host resume",
@@ -144,6 +145,8 @@ export function example(name: string, command: Command) {
     return "atrium schedule add atrium/cli --kind patrol --every 1d --at 09:30";
   if (name === "host add")
     return "atrium host add 书房台式机 --repo liu-zhengdong/atrium --max 4";
+  if (name === "host edit")
+    return "atrium host edit h2 --ssh user@100.70.239.117 --tunnel 4310:14310";
   if (name === "agent")
     return "atrium agent --server http://host.orb.internal:4310 --token h2-接入码";
   if (name === "patrol report")
@@ -235,5 +238,5 @@ export function guide(commands: Record<string, Command>) {
   看组织：atrium org tree；atrium org show o2；树为空时先 atrium org import --repo 仓库 预览、加 --apply 写入
   组织技能：atrium skill add web-design ./web-design --reason 原因；atrium skill bind web-design atrium/web；执行者改了挂载副本会生成提议：atrium skill proposals；atrium skill accept p1
   看谁在干什么：atrium top（默认每 2 秒全屏刷新，q 退出；只打一次用 --once，脚本用 --once --json）
-  派活并等结果：atrium task run t2（不写 --worker 与 task pick 同一份排序挑人，回执写理由；写死的执行者额度明显更紧时回执提醒）；急事：atrium task run t2 --urgent 或 atrium task set t2 --urgent（跳过本机负载与执行者上限，排队与本地检查插到最前；额度保留、trust、依赖照旧）；管方面的部分（性能、安全…）开的任务缺省闲时：排在普通任务后面，有空闲执行者才派，排队中写「等空闲：前面还有 N 件普通任务」；要照常排用 atrium task set t2 --priority 普通（建任务时 --priority 闲时|普通）；atrium task run t2 --worker opencode；执行者写作 工具+模型[:强度]，工具有 claude、codex、opencode、kimi、grok、agy（Antigravity：agy 缺省 claude-opus-4-6-thinking，gemini 用带强度的模型名如 agy+gemini-3.8-flash-high 或基名加强度 agy+gemini-3.8-flash:high，claude-*、gpt-oss-* 不收强度；可选模型看 agy models）、cursor（Cursor CLI 的 cursor-agent：缺省 auto，强度写进模型名后缀如 cursor+gpt-5.3-codex:high，auto 不收强度）；atrium task wait t2；atrium task log t2 --follow\n  等事件：atrium events 查看送达与确认状态；atrium events wait --as secretary 只取要处理的事，首条后攒批 30 秒（--settle 可调），--all 取全部；atrium events digest 读知会摘要并自动确认；处理完 atrium events ack 12；取走的事件处理中 15 分钟内不重投（ATRIUM_EVENT_LEASE_MINUTES 可调），到点仍未确认才重投；自己 task stop 引出的事件不投给自己\n  执行机器（远程执行者）：本机是 h1；atrium host add 名称 --repo owner/name 登记一台，按回执在那台机器上运行 atrium agent --server 服务地址 --token 接入码（那台主动连服务，不用开入站端口；地址经 SSH 转发、内网穿透或 VPN 通）；atrium host ls 看各台状态；atrium task run t2 --host h2 派到指定的一台，不写 --host 在能接的主机里挑最空的（远程主机只自动接 --repo 登记过的仓库）；断线期间执行者照跑，重连后补传日志与结果；atrium host pause h2 暂停往那台派活\n  重启与升级：atrium restart（随时可做，在跑的执行者由新服务接管，不等空闲）；等结果 atrium restart --wait\n  和秘书对话：atrium chat（缺省 opencode 原生界面，--acp 用 ACP；--tool codex 用 codex-acp）；秘书空闲时事件自动送入，忙时排队；界面关闭后服务恢复原会话处理事件再退出，界面和后台互斥\n  空闲时重启：atrium restart --when-idle；进度看 atrium status\n  报错后怎么办：按候选短号重试，或执行回执里的修正命令。\n\n命令参考（由命令表生成）\n${reference}`;
+  派活并等结果：atrium task run t2（不写 --worker 与 task pick 同一份排序挑人，回执写理由；写死的执行者额度明显更紧时回执提醒）；急事：atrium task run t2 --urgent 或 atrium task set t2 --urgent（跳过本机负载与执行者上限，排队与本地检查插到最前；额度保留、trust、依赖照旧）；管方面的部分（性能、安全…）开的任务缺省闲时：排在普通任务后面，有空闲执行者才派，排队中写「等空闲：前面还有 N 件普通任务」；要照常排用 atrium task set t2 --priority 普通（建任务时 --priority 闲时|普通）；atrium task run t2 --worker opencode；执行者写作 工具+模型[:强度]，工具有 claude、codex、opencode、kimi、grok、agy（Antigravity：agy 缺省 claude-opus-4-6-thinking，gemini 用带强度的模型名如 agy+gemini-3.8-flash-high 或基名加强度 agy+gemini-3.8-flash:high，claude-*、gpt-oss-* 不收强度；可选模型看 agy models）、cursor（Cursor CLI 的 cursor-agent：缺省 auto，强度写进模型名后缀如 cursor+gpt-5.3-codex:high，auto 不收强度）；atrium task wait t2；atrium task log t2 --follow\n  等事件：atrium events 查看送达与确认状态；atrium events wait --as secretary 只取要处理的事，首条后攒批 30 秒（--settle 可调），--all 取全部；atrium events digest 读知会摘要并自动确认；处理完 atrium events ack 12；取走的事件处理中 15 分钟内不重投（ATRIUM_EVENT_LEASE_MINUTES 可调），到点仍未确认才重投；自己 task stop 引出的事件不投给自己\n  执行机器（远程执行者）：本机是 h1；atrium host add 名称 --repo owner/name 登记一台；加 --ssh user@地址 --key 私钥路径 --tunnel 本机端口:远端端口 让服务自管 ssh -N -R、断线重连，host edit hN 可更新；按回执在那台机器上运行 atrium agent --server 服务地址 --token 接入码，之后可直接 atrium agent；atrium host ls/show 看主机与隧道状态；atrium task run t2 --host h2 派到指定的一台，不写 --host 在能接的主机里挑最空的（远程主机只自动接 --repo 登记过的仓库）；断线期间执行者照跑，重连后补传日志与结果；atrium host pause h2 暂停往那台派活\n  重启与升级：atrium restart（随时可做，在跑的执行者由新服务接管，不等空闲）；等结果 atrium restart --wait\n  和秘书对话：atrium chat（缺省 opencode 原生界面，--acp 用 ACP；--tool codex 用 codex-acp）；秘书空闲时事件自动送入，忙时排队；界面关闭后服务恢复原会话处理事件再退出，界面和后台互斥\n  空闲时重启：atrium restart --when-idle；进度看 atrium status\n  报错后怎么办：按候选短号重试，或执行回执里的修正命令。\n\n命令参考（由命令表生成）\n${reference}`;
 }

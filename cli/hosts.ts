@@ -1,6 +1,6 @@
 import { Problem } from "../server/problem.ts";
 import { recordNext } from "./contract.ts";
-import { printJson, table, when } from "./format.ts";
+import { oneLine, printJson, table, when } from "./format.ts";
 import type { Command, Values } from "./main.ts";
 
 /**
@@ -48,6 +48,14 @@ type HostView = {
   running: number;
   joined_at: number | null;
   last_seen_at: number | null;
+  ssh: {
+    target: string;
+    key: string | null;
+    tunnel: string;
+    status: string;
+    error: string | null;
+    agentServer: string;
+  } | null;
 };
 
 const HOST_REF = /^h[1-9][0-9]{0,8}$/;
@@ -91,11 +99,26 @@ const reposText = (view: HostView) =>
 
 export function hostTable(hosts: HostView[]) {
   return table([
-    ["短号", "名称", "状态", "机器", "编码 CLI", "在跑", "自动派哪些仓库"],
+    [
+      "短号",
+      "名称",
+      "状态",
+      "隧道",
+      "机器",
+      "编码 CLI",
+      "在跑",
+      "自动派哪些仓库",
+    ],
     ...hosts.map((view) => [
       view.ref,
       view.name,
       view.status,
+      view.ssh
+        ? oneLine(
+            `${view.ssh.status}${view.ssh.error ? ` · ${view.ssh.error}` : ""}`,
+            60,
+          )
+        : "—",
       machine(view),
       clisText(view.info?.clis),
       `${view.running}/${view.max ?? "不限"}`,
@@ -114,6 +137,14 @@ function detail(view: HostView & { tasks?: { ref: string; title: string }[] }) {
     `编码 CLI：${clisText(view.info?.clis)}`,
     `在跑 ${view.running}/${view.max ?? "不限"}${view.load ? ` · 负载 ${view.load.load}${view.load.busy ? ` · ${view.load.busy}` : ""}` : ""}`,
     `自动派哪些仓库：${reposText(view)}`,
+    ...(view.ssh
+      ? [
+          `SSH：${view.ssh.target}${view.ssh.key ? ` · 私钥路径 ${view.ssh.key}` : ""}`,
+          `隧道：本机:远端 ${view.ssh.tunnel} · ${view.ssh.status}`,
+          `代理服务地址：${view.ssh.agentServer}`,
+          ...(view.ssh.error ? [`隧道最近错误：${view.ssh.error}`] : []),
+        ]
+      : []),
     ...(view.last_seen_at ? [`最近心跳：${when(view.last_seen_at)}`] : []),
     ...(view.tasks?.length
       ? [
@@ -167,12 +198,15 @@ export const hostCommands: Record<string, Command> = {
     },
   },
   "host add": {
-    args: "名称 [--repo owner/name|*]… [--max 数量]",
+    args: "名称 [--repo owner/name|*]… [--max 数量] [--ssh user@地址] [--key 私钥路径] [--tunnel 本机端口:远端端口]",
     about:
       "登记一台远程执行机器，给出一次性接入码（30 分钟内有效）与在那台机器上要运行的 atrium agent 命令；--repo 登记自动派活时能接的仓库（* 全部；不写只自动接没有仓库的活，--host 指定时不受限），--max 同时最多跑几件（缺省按那台的核数）",
     options: {
       repo: { type: "string", multiple: true },
       max: { type: "string" },
+      ssh: { type: "string" },
+      key: { type: "string" },
+      tunnel: { type: "string" },
     },
     positionals: [1, 1],
     async run({ positionals: [name], values, json }) {
@@ -189,8 +223,17 @@ export const hostCommands: Record<string, Command> = {
         name,
         repos: strs(values, "repo"),
         ...(maxText !== undefined ? { max: Number(maxText) } : {}),
+        ...(str(values, "ssh") !== undefined
+          ? { ssh: str(values, "ssh") }
+          : {}),
+        ...(str(values, "key") !== undefined
+          ? { key: str(values, "key") }
+          : {}),
+        ...(str(values, "tunnel") !== undefined
+          ? { tunnel: str(values, "tunnel") }
+          : {}),
       });
-      const address = await serviceAddress();
+      const address = result.host.ssh?.agentServer ?? (await serviceAddress());
       const command = `atrium agent --server ${address} --token ${result.code}`;
       if (json) printJson({ ...result, command });
       else
@@ -199,10 +242,42 @@ export const hostCommands: Record<string, Command> = {
             `已登记 ${result.host.ref} ${result.host.name}（待接入；接入码 30 分钟内有效，只能用一次）`,
             "在那台机器上装好 Node 24+ 与 Atrium 后运行：",
             `  ${command}`,
-            `服务地址要换成那台机器连得到的：本机服务只听 ${address}，跨机器经 SSH 转发（ssh -R）、内网穿透或 VPN 连过来；OrbStack 虚拟机里用 http://host.orb.internal:${new URL(address).port}`,
+            ...(result.host.ssh
+              ? [
+                  `Atrium 正在管理 ${result.host.ssh.target} 的 SSH 隧道；状态用 atrium host show ${result.host.ref} 查看`,
+                ]
+              : [
+                  `服务地址要换成那台机器连得到的：本机服务只听 ${address}，跨机器经 SSH 转发（ssh -R）、内网穿透或 VPN 连过来；OrbStack 虚拟机里用 http://host.orb.internal:${new URL(address).port}`,
+                ]),
           ].join("\n"),
         );
       recordNext(`接入后查看：atrium host show ${result.host.ref}`);
+    },
+  },
+  "host edit": {
+    args: "hN [--ssh user@地址] [--key 私钥路径] [--tunnel 本机端口:远端端口]",
+    about: "更新远程主机的 SSH 连接和 Atrium 自管隧道；未写的字段沿用原值",
+    options: {
+      ssh: { type: "string" },
+      key: { type: "string" },
+      tunnel: { type: "string" },
+    },
+    positionals: [1, 1],
+    async run({ positionals: [reference], values, json }) {
+      const body = Object.fromEntries(
+        ["ssh", "key", "tunnel"].flatMap((key) => {
+          const value = str(values, key);
+          return value === undefined ? [] : [[key, value]];
+        }),
+      );
+      if (!Object.keys(body).length)
+        throw new Problem(400, "请给出 --ssh、--key 或 --tunnel", "usage");
+      const result = await (
+        await client()
+      ).patch<{ host: HostView }>(`/hosts/${enc(hostRef(reference))}`, body);
+      if (json) printJson(result);
+      else console.log(detail(result.host));
+      recordNext(`查看连接状态：atrium host show ${result.host.ref}`);
     },
   },
   "host remove": {
@@ -258,7 +333,7 @@ export const hostCommands: Record<string, Command> = {
 };
 
 export const agentCommand: Command = {
-  args: "--server <服务地址> [--token <接入码>]",
+  args: "[--server <服务地址>] [--token <接入码>]",
   about:
     "在远程机器上运行：接入 Atrium 服务并领派给这台的活（前台常驻，Ctrl-C 停；执行者不随它退出，再起来接着看）；首次用 host add 给的接入码，之后只要 --server。数据在 ~/.atrium-agent（ATRIUM_AGENT_DATA 可改）",
   options: {
@@ -267,11 +342,14 @@ export const agentCommand: Command = {
   },
   positionals: [0, 0],
   async run({ values }) {
-    const server = str(values, "server");
+    const { AgentState, agentDataDir } =
+      await import("../server/agent/state.ts");
+    const server =
+      str(values, "server") ?? new AgentState(agentDataDir()).config()?.server;
     if (!server)
       throw new Problem(
         400,
-        "--server 必填：Atrium 服务的地址，如 http://127.0.0.1:4310（跨机器时是转发或 VPN 后的地址）",
+        "--server 必填：首次接入时使用 host add 回执里的地址；接入后可省略",
         "usage",
       );
     const { runAgent } = await import("../server/agent/run.ts");

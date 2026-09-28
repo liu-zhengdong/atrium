@@ -65,7 +65,7 @@ export type OptionInput = {
   cost: string;
   /** 不做会怎样。 */
   skip: string;
-  /** 依据：巡检发现 fN、任务 tN、决定 dN、链接等。 */
+  /** 依据：任务 tN、决定 dN、链接等。 */
   basis: string[];
 };
 

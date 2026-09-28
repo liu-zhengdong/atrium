@@ -139,7 +139,7 @@ export const orgCommands: Record<string, Command> = {
           .join("\n") || "组织树为空",
         rows.length
           ? "atrium org show o1"
-          : "atrium org add 父节点 slug --kind org",
+          : "atrium org add org --kind org --name 组织 --reason 建树",
       );
     },
   },
@@ -220,8 +220,9 @@ export const orgCommands: Record<string, Command> = {
     },
   },
   "org add": {
-    args: "父节点 slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--leader u1|aN]",
-    about: "添加组织节点",
+    args: "[父节点] slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--leader u1|aN]",
+    about:
+      "添加组织节点；只给 slug（不给父节点）建根：atrium org add org --kind org --name 组织 --reason 建树",
     options: {
       ...options,
       kind: { type: "string" },
@@ -230,8 +231,10 @@ export const orgCommands: Record<string, Command> = {
       leader: { type: "string" },
       reason: { type: "string" },
     },
-    positionals: [2, 2],
-    async run({ positionals: [parent, slug], values, json }) {
+    positionals: [1, 2],
+    async run({ positionals, values, json }) {
+      const [parent, slug] =
+        positionals.length === 2 ? positionals : [undefined, positionals[0]];
       const repos =
         values.repo === undefined
           ? []

@@ -87,7 +87,7 @@ export type NewTask = {
   after?: string;
   after_pr?: string;
   auto?: boolean;
-  /** 紧急 / 修复 / 普通 / 闲时；不写按归属部分：管方面的为闲时。 */
+  /** 紧急 / 修复 / 普通 / 闲时；不写为普通。 */
   priority?: string;
   /** 派活避开的主机（hN，逗号分隔）。 */
   avoid_host?: string;

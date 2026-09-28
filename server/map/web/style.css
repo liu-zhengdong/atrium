@@ -329,19 +329,6 @@ a.crumb:hover {
 .table-points .row {
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 110px 140px;
 }
-/* 巡检发现：发现最宽，步骤、预期实际次之，处理窄；有下层的多一列「来自」。 */
-.table-findings .row,
-.table-findings-plain .row {
-  grid-template-columns:
-    minmax(0, 1.3fr) minmax(0, 1.1fr) minmax(0, 1.2fr)
-    150px 120px;
-  align-items: start;
-}
-.table-findings-plain .row {
-  grid-template-columns:
-    minmax(0, 1.3fr) minmax(0, 1.1fr) minmax(0, 1.2fr)
-    150px;
-}
 /* 资料：名称与说明最宽，版本带取的命令，状态带清理线索。 */
 .table-materials .row {
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px 170px;
@@ -349,14 +336,6 @@ a.crumb:hover {
 }
 .table-materials .row.head {
   align-items: center;
-}
-.table-findings .row.head,
-.table-findings-plain .row.head {
-  align-items: center;
-}
-.finding-kind {
-  display: block;
-  margin-top: 6px;
 }
 .finding-step,
 .finding-line,
@@ -466,24 +445,6 @@ a.crumb:hover {
   font-weight: 400;
   color: var(--leader);
 }
-/* 任务和别的部分的关系：「归网页 · 也牵涉 安全」，标题下一行小字。 */
-.task-parts {
-  display: block;
-  margin-top: 2px;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--muted);
-}
-.task-parts a,
-.point-scope a {
-  color: inherit;
-  text-decoration: none;
-  border-bottom: 1px solid #d9d5cc;
-}
-.task-parts a:hover,
-.point-scope a:hover {
-  color: var(--ink);
-}
 /* 总任务（t190）：标题下一行「在做 5/12 · 展开 12 个子任务」，点开列直接子任务。 */
 .total-children {
   display: block;
@@ -503,44 +464,6 @@ a.crumb:hover {
   margin: 2px 0;
   color: var(--ink);
 }
-/* 管方面的部分的要点适用于哪几块：要点下一行小字。 */
-.point-scope {
-  display: block;
-  margin-top: 3px;
-  font-size: 12.5px;
-  font-weight: 400;
-  color: var(--muted);
-}
-/* 专员不属于这一块时，名字下注明属于哪儿。 */
-.role-from {
-  display: block;
-  margin-top: 2px;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--muted);
-}
-/* 专员页签末尾「还能请：…」一行，点开一起列。 */
-.more {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin: 10px 0 0;
-  padding: 12px;
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: var(--muted);
-  text-decoration: none;
-  border-radius: 8px;
-}
-.more:hover {
-  background: var(--hover);
-}
-.more-go {
-  flex: none;
-  margin-left: auto;
-  color: var(--ink);
-}
-
 /* 任务的最新备注：在「最近在做」下面，作者名加深。 */
 .note-line {
   margin-top: 2px;

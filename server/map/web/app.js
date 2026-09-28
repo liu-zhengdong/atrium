@@ -229,7 +229,7 @@ const chipLink = (text, tone, url) =>
 const none = `<span class="muted">—</span>`;
 /**
  * 任务名：编号在前（与状态栏、top、汇报里的 tN 对得上），标题折行时编号不动；leader 派的在标题下注明。
- * more 是标题下的另一行小字（牵涉的部分）。
+ * more 是标题下的另一行小字（总任务的子任务）。
  */
 const taskName = (ref, title, by, more = "") =>
   `<span class="task-ref">${esc(ref)}</span><span class="task-title">${esc(title)}${by ? `<span class="task-by">${esc(by.name)}派的</span>` : ""}${more}</span>`;

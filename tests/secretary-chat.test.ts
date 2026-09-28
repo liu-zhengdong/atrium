@@ -169,6 +169,7 @@ test("送入消息列出事件、查看与确认命令", () => {
   assert.match(text, /^【Atrium 事件】2 条待处理事件已送达（编号 7、8）/);
   assert.match(text, /#7 t3 done 修登录/);
   assert.match(text, /atrium task show t3/);
+  assert.match(text, /只把要用户拍板的事递给用户/);
   assert.match(text, /atrium events ack 7 8$/);
 });
 

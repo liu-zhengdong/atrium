@@ -183,7 +183,7 @@ export const mapCommands: Record<string, Command> = {
             "还没有组织树",
             "not_found",
             undefined,
-            "atrium org add 父节点 slug --kind org",
+            "atrium org add org --kind org --name 组织 --reason 建树",
           );
         const result = await api.get<{ ref: string }>(
           `/map/nodes/${enc(root)}?depth=${depthOf(values, 1)}`,
@@ -199,7 +199,9 @@ export const mapCommands: Record<string, Command> = {
         ? renderMapTree(tree.tree, {
             width: process.stdout.isTTY ? process.stdout.columns : undefined,
           })
-        : ["还没有组织树：atrium org add 父节点 slug --kind org"];
+        : [
+            "还没有组织树：atrium org add org --kind org --name 组织 --reason 建树",
+          ];
       const login = await api.post<{ path: string; ttl_ms: number }>(
         "/map/login",
       );

@@ -1,23 +1,19 @@
 import type { ChildProcess } from "node:child_process";
 import {
   existsSync,
-  mkdirSync,
   openSync,
   readSync,
   closeSync,
   readFileSync,
-  rmSync,
   statSync,
 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { killTree, processAlive } from "../platform/index.ts";
 import { skillReport } from "../skills/remote.ts";
 import { ADAPTERS, isTool } from "../tasks/adapters/index.ts";
 import { exec as defaultExec, type Exec } from "../tasks/git.ts";
 import { hostGate, hostLimits } from "../tasks/host-load.ts";
-import { LocalCheckQueue, runLocalCheck } from "../tasks/local-check.ts";
-import { quietLimits } from "../tasks/check-quiet.ts";
 import { ownsPid } from "../tasks/recovery.ts";
 import { killLine, shiftTargets } from "../tasks/leftovers.ts";
 import { reapLeftovers } from "../tasks/leftovers-reap.ts";
@@ -27,7 +23,6 @@ import {
   POLL_WAIT_MS,
   type AgentCommand,
   type Assignment,
-  type CheckReply,
   type CleanReply,
   type LaunchAck,
   type PollReply,
@@ -38,7 +33,6 @@ import {
   QuotaReaders,
   readersEnabled,
 } from "../quota-readers/index.ts";
-import { checkCommit } from "./check.ts";
 import {
   backoffMs,
   type AgentRun,
@@ -73,17 +67,6 @@ export type AgentOptions = {
   quota?: QuotaReaders | null;
   /** 多久报一次额度；缺省 5 分钟（读取器自己也缓存 5 分钟）。 */
   quotaMs?: number;
-};
-
-/** 一次检查的日志续传：按指令 id 传到服务，偏移是代理这边检查日志的字节位置。 */
-type CheckTrack = {
-  id: string;
-  file: string;
-  uploaded: number;
-  /** 服务说这次检查它不再等了：不再续传。 */
-  abandoned?: boolean;
-  /** 正在传的那一趟（续传串行，免得两趟交错）。 */
-  uploading?: Promise<void>;
 };
 
 type Track = {
@@ -154,14 +137,8 @@ export class Agent {
   /** 正在做（含回执还没送到）的指令：长轮询时告诉服务别重发。 */
   private readonly busy = new Set<string>();
   private readonly abort = new AbortController();
-  private readonly checks: LocalCheckQueue;
-  private readonly checkTracks = new Map<string, CheckTrack>();
-  private readonly checkAborts = new Map<string, AbortController>();
-  /** 服务已叫停、还在收尾的检查：不再报「手上在做」，免得服务一轮轮重复叫停。 */
-  private readonly cancelled = new Set<string>();
-  /** 同一克隆上的 git 操作（派活的克隆与 fetch、按提交检查）排成一串。 */
+  /** 同一克隆上的 git 操作（派活的克隆与 fetch）排成一串。 */
   private readonly withClone = cloneLock();
-  private readonly slots = new Map<string, Set<number>>();
   private readonly quota: QuotaReaders | null;
   private quotaTimer: NodeJS.Timeout | undefined;
   private readonly exec: Exec;
@@ -178,12 +155,6 @@ export class Agent {
     this.state = new AgentState(options.data);
     this.config = this.state.config();
     this.exec = options.exec ?? defaultExec;
-    const limits = hostLimits(options.env, availableParallelism()).limits;
-    this.checks = new LocalCheckQueue(
-      limits.maxChecks,
-      limits.checkTimeoutMs,
-      quietLimits(options.env).limits,
-    );
     // 服务进程自己的开关也要看：测试（NODE_TEST_CONTEXT）或显式关掉时不读这台的登录。
     this.quota =
       options.quota !== undefined
@@ -426,24 +397,11 @@ export class Agent {
         void this.tick();
         void this.reportQuota();
         while (!this.stopped) {
-          const { commands, cancel } = await this.call<PollReply>(
+          const { commands } = await this.call<PollReply>(
             "poll",
-            {
-              load: this.load(),
-              busy: [...this.busy].filter((id) => !this.cancelled.has(id)),
-            },
+            { load: this.load(), busy: [...this.busy] },
             POLL_WAIT_MS + 20_000,
           );
-          // 服务已不再等的检查（退回本机或别的主机了）：停下，别白占这台的 CPU。
-          for (const id of cancel ?? []) {
-            const abort = this.checkAborts.get(id);
-            if (!abort || abort.signal.aborted) continue;
-            this.cancelled.add(id);
-            this.log("服务已不再等一次检查，停下它");
-            const track = this.checkTracks.get(id);
-            if (track) track.abandoned = true;
-            abort.abort();
-          }
           for (const command of commands) {
             if (this.busy.has(command.id)) continue;
             this.busy.add(command.id);
@@ -480,16 +438,6 @@ export class Agent {
         return { ok: false, error: why } satisfies LaunchAck;
       case "exec":
         return { ok: false, stdout: "", stderr: why };
-      case "check":
-        // 这台没跑成：服务换一台或回本机重跑。
-        return {
-          status: "error",
-          command: "",
-          log: "",
-          detail: why,
-          failedTests: [],
-          infra: why,
-        } satisfies CheckReply;
       default:
         return { ok: false, error: why };
     }
@@ -519,9 +467,6 @@ export class Agent {
               timeoutMs: command.timeoutMs,
             });
             break;
-          case "check":
-            result = await this.check(command);
-            break;
           case "clean":
             result = await this.clean(command);
             break;
@@ -533,7 +478,6 @@ export class Agent {
       );
     } finally {
       this.busy.delete(command.id);
-      if (command.kind === "check") this.endCheck(command.id);
     }
   }
 
@@ -550,148 +494,6 @@ export class Agent {
     );
     for (const kill of killed) this.log(`清理残留进程：${killLine(kill)}`);
     return { killed };
-  }
-
-  private checkDir(id: string) {
-    return join(this.options.data, "checks", id.replace(/[^A-Za-z0-9-]/g, ""));
-  }
-
-  /**
-   * 跑一次检查：远程任务在它的工作树里跑，按提交派来的在检查工作树里跑（check.ts）。
-   * 日志边跑边续传，结束时先补齐再回执（服务收全了才落定结果）。
-   */
-  private async check(
-    command: Extract<AgentCommand, { kind: "check" }>,
-  ): Promise<CheckReply> {
-    const dir = this.checkDir(command.id);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const track: CheckTrack = {
-      id: command.id,
-      file: join(dir, "local-check.log"),
-      uploaded: 0,
-    };
-    const abort = new AbortController();
-    this.checkTracks.set(command.id, track);
-    this.checkAborts.set(command.id, abort);
-    const task = `t${command.task}`;
-    this.log(
-      command.source
-        ? `领到 ${task} 的检查（提交 ${command.source.commit.slice(0, 12)}）`
-        : `领到 ${task} 的检查`,
-    );
-    const source = command.source;
-    const result: CheckReply = source
-      ? await this.checks.run(
-          () =>
-            checkCommit({
-              id: command.id,
-              source,
-              urgent: command.urgent,
-              dir,
-              env: this.options.env,
-              run: this.exec,
-              signal: abort.signal,
-              withClone: this.withClone,
-              slot: (clone) => this.slot(clone),
-              timeoutMs: this.checks.timeoutMs,
-              quiet: this.checks.quiet,
-            }),
-          undefined,
-          command.urgent,
-        )
-      : await runLocalCheck({
-          worktree: command.worktree ?? "",
-          taskDir: dir,
-          env: this.options.env,
-          urgent: command.urgent,
-          queue: this.checks,
-          signal: abort.signal,
-        });
-    this.log(`${task} 的检查结束：${result.status}（${result.detail}）`);
-    await this.flushCheck(track);
-    return { ...result, size: this.size(track.file) };
-  }
-
-  private endCheck(id: string) {
-    this.cancelled.delete(id);
-    this.checkTracks.delete(id);
-    this.checkAborts.delete(id);
-    rmSync(this.checkDir(id), {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-    });
-  }
-
-  private slot(clone: string) {
-    const used = this.slots.get(clone) ?? new Set<number>();
-    this.slots.set(clone, used);
-    let index = 0;
-    while (used.has(index)) index++;
-    used.add(index);
-    return {
-      index,
-      release: () => {
-        used.delete(index);
-        if (!used.size) this.slots.delete(clone);
-      },
-    };
-  }
-
-  /** 把检查日志传到服务：一趟最多 16 段；服务说不再等了就停。 */
-  private uploadCheck(track: CheckTrack): Promise<void> {
-    if (track.uploading) return track.uploading;
-    const work = (async () => {
-      for (let round = 0; round < 16 && !track.abandoned; round++) {
-        const chunk = nextChunk(
-          track.uploaded,
-          this.size(track.file),
-          LOG_CHUNK,
-        );
-        if (!chunk) return;
-        const data = this.readChunk(track.file, chunk);
-        const answer = await this.call<{ offset?: number; done?: boolean }>(
-          "check-log",
-          { id: track.id, offset: chunk.offset, data: data.toString("base64") },
-          30_000,
-        );
-        if (answer.done) {
-          track.abandoned = true;
-          return;
-        }
-        if (answer.offset === undefined) return;
-        track.uploaded = answer.offset;
-      }
-    })().finally(() => {
-      track.uploading = undefined;
-    });
-    track.uploading = work;
-    return work;
-  }
-
-  /** 检查结束后把日志传完（断线时隔几秒重试，连上后补齐）。 */
-  private async flushCheck(track: CheckTrack) {
-    for (let attempt = 0; !this.stopped && !track.abandoned; attempt++) {
-      try {
-        await this.uploadCheck(track);
-        if (track.uploaded >= this.size(track.file)) return;
-        attempt = 0;
-      } catch {
-        await sleep(Math.min(5000, 1000 * (attempt + 1)), this.abort.signal);
-      }
-    }
-  }
-
-  private readChunk(file: string, chunk: { offset: number; length: number }) {
-    const buffer = Buffer.alloc(chunk.length);
-    const fd = openSync(file, "r");
-    let read = 0;
-    try {
-      read = readSync(fd, buffer, 0, chunk.length, chunk.offset);
-    } finally {
-      closeSync(fd);
-    }
-    return buffer.subarray(0, read);
   }
 
   /** 回执送到为止（断线时隔几秒重试）；服务说对不上的拉起，结束刚起的进程。 */
@@ -712,19 +514,6 @@ export class Agent {
           ok?: boolean;
           offset?: number;
         }>("reply", { id: command.id, result }, 30_000);
-        // 检查日志服务还没收全：从它收到的地方补传，再交回执。
-        if (
-          command.kind === "check" &&
-          answer.ok === false &&
-          typeof answer.offset === "number"
-        ) {
-          const track = this.checkTracks.get(command.id);
-          if (track) {
-            track.uploaded = answer.offset;
-            await this.flushCheck(track);
-            continue;
-          }
-        }
         confirm();
         if (
           answer.cancel &&
@@ -830,11 +619,6 @@ export class Agent {
     if (this.ticking || this.stopped) return;
     this.ticking = true;
     try {
-      // 检查日志边跑边传：服务那边 task log 能看到进度；断线时留给结束后的补传。
-      if (this.connected)
-        for (const track of this.checkTracks.values())
-          if (!track.abandoned)
-            await this.uploadCheck(track).catch(() => undefined);
       for (const track of [...this.runs.values()]) {
         if (this.stopped) return;
         const { record } = track;

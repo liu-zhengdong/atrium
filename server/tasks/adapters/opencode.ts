@@ -1,5 +1,4 @@
 import {
-  DEFAULT_WATCHDOG,
   checkCommon,
   invalid,
   type Adapter,
@@ -55,7 +54,6 @@ export const opencode: Adapter = {
   quotaProvider: "opencode",
   skillMount: "opencode-config",
   resumeArgs: ["run", "--continue"],
-  watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["json_events", "worktree_change"],
   notes: [
     "cwd 必须是工作目录，目录外访问会被拒",

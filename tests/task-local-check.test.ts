@@ -12,7 +12,6 @@ import { join } from "node:path";
 import { evaluateGates, type Facts } from "../server/tasks/gates.ts";
 import {
   checkCommand,
-  LocalCheckQueue,
   runLocalCheck,
   type LocalCheck,
 } from "../server/tasks/local-check.ts";
@@ -105,52 +104,6 @@ test("本地检查输出落任务目录，超时杀进程组并记录失败用�
     });
     assert.equal(timed.status, "timeout");
     assert.match(timed.detail, /超过/);
-    // 没单独给时按队列（这台主机）配的时长。
-    const hostTimed = await runLocalCheck({
-      worktree,
-      taskDir: dir,
-      queue: new LocalCheckQueue(1, 30),
-    });
-    assert.equal(hostTimed.status, "timeout");
-    assert.equal(new LocalCheckQueue().timeoutMs, 30 * 60_000);
-  } finally {
-    removeTemp(root);
-  }
-});
-
-test("多个任务共用队列，后一份等前一份结束再运行", async () => {
-  const root = mkdtempSync(join(tmpdir(), "atrium-local-queue-"));
-  const queue = new LocalCheckQueue();
-  const events: string[] = [];
-  const marker = join(root, "order");
-  try {
-    for (const name of ["a", "b"]) {
-      mkdirSync(join(root, name, ".agents"), { recursive: true });
-      writeFileSync(
-        join(root, name, ".agents", "check"),
-        nodeCommand(
-          `const fs = require('fs'); fs.appendFileSync(process.argv[1], '${name}-start\\n'); setTimeout(() => fs.appendFileSync(process.argv[1], '${name}-end\\n'), 100)`,
-          marker,
-        ),
-      );
-    }
-    const run = (name: string) =>
-      runLocalCheck({
-        worktree: join(root, name),
-        taskDir: join(root, `${name}-task`),
-        queue,
-        onStatus: (status) => events.push(`${name}:${status}`),
-      });
-    const [a, b] = await Promise.all([run("a"), run("b")]);
-    assert.equal(a.status, "passed");
-    assert.equal(b.status, "passed");
-    assert.deepEqual(events, ["b:queued", "a:started", "b:started"]);
-    assert.deepEqual(readFileSync(marker, "utf8").trim().split("\n"), [
-      "a-start",
-      "a-end",
-      "b-start",
-      "b-end",
-    ]);
   } finally {
     removeTemp(root);
   }

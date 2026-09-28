@@ -9,4 +9,4 @@ leader 层：按部分分层汇报，秘书只收要上交的事。总体规范�
 - 权限：leader 令牌每次唤醒签发、只存内存哈希、结束即作废；`guard.ts` 在 onRequest 认令牌、按 `leaderRule` 判路由并锁定 `?as=`，在 preHandler 按作用范围判请求体。新加写接口默认拒绝，要给 leader 用就在 `scope.ts` 的规则表登记并补判定与测试。
 - 唤醒：巡检循环按 `wake-rule.ts` 的攒批判定，同一 leader 同时只起一个；结束按 `afterWake` 处理完、释放重试或转交上一层；处理期间内容又被合并更新的事件重新打开（`reopenChanged`），不算失败。服务关闭时停掉在跑的 leader 进程并释放事件，重启后把没收尾的唤醒记失败、收回租约。真进程唤醒只在默认数据目录的服务缺省开（`leaderWakeEnabled`，`ATRIUM_LEADER_WAKE` 显式开关）；隔离服务不起真 leader，测试注入 `run` 照常唤醒。
 - 测试用内存服务与注入的假 leader 进程（`leaders.run`），不依赖本机装了哪些 CLI。
-- 挂着没动（t253）：判定在 `hang.ts`（何时叫醒、何时上交、时长人话、收尾动作清单、上游失败的下游说明），巡检在 `hang-runtime.ts`，由 `LeaderWaker.tick` 每分钟跑一次；持球人与起算时刻沿用 `tasks/holder-facts.ts`（`held_since`、`hang_nudged`），不另存表。只算状态变化、派发、上交为动作，备注不算；新加的「动作」只要让任务离开受阻或重新受阻就自然重新起算，不必改这里。
+- 挂着没动（t253）：按 `tasks/overdue.ts` 那张表的 leader 一行（30 分钟叫醒、再 30 分钟上交），巡检在 `tasks/overdue-runtime.ts`，由任务运行时的巡检一分钟跑一次；持球人与起算时刻沿用 `tasks/holder-facts.ts`（`held_since`、`overdue_at`），不另存表。收尾动作清单与上游失败的下游说明在 `actions.ts`。只算状态变化、派发、上交为动作，备注不算。

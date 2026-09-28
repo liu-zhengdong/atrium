@@ -131,10 +131,19 @@ test("看门狗：假执行者零输出判卡死、按档案重试一次后失�
   );
   const outcome = (await call("GET", "/api/events/wait?as=secretary&timeout=0"))
     .body.events;
-  assert.equal(outcome.length, 1, "卡死与最终失败按同一去重键合并");
+  assert.equal(outcome.length, 1, "到期判卡死由运行时处理，只有最终失败要处理");
   assert.equal(outcome[0].kind, "failed");
-  assert.equal(outcome[0].count, 2);
   assert.match(outcome[0].detail.reason, /没有任何进展信号/);
+  // 两次到期都按统一规则发 overdue（知会）：持球人是启动中的执行者。
+  const overdue = db
+    .prepare(
+      "SELECT level,count,detail FROM task_inbox WHERE task_id=1 AND kind='overdue'",
+    )
+    .all() as { level: string; count: number; detail: string }[];
+  assert.equal(overdue.length, 1);
+  assert.equal(overdue[0]!.level, "info");
+  assert.equal(overdue[0]!.count, 2);
+  assert.equal(JSON.parse(overdue[0]!.detail).holder, "starting");
 
   await call("POST", "/api/tasks", { title: "oc one" });
   await call("POST", "/api/tasks", { title: "oc two" });
@@ -218,48 +227,4 @@ test("看门狗：假执行者零输出判卡死、按档案重试一次后失�
     (await call("POST", "/api/tasks/t4/stop?as=有 空格")).status,
     400,
   );
-});
-
-test("看门狗：执行者一段时间没进展先提醒（知会、状态栏），不判卡死", async (t) => {
-  const { data, call } = await startApp(
-    t,
-    (fx) => fx.script("kimi", 'echo working\nsleep 2\necho "完成"'),
-    undefined,
-    undefined,
-    { quiet: { warnMs: 500, stallMs: null } },
-  );
-  const db = new DatabaseSync(join(data, "atrium.sqlite"));
-  t.after(() => db.close());
-  await call("POST", "/api/tasks", { title: "安静一会儿" });
-  await call("POST", "/api/tasks/t1/run", { worker: "kimi" });
-  await until(() =>
-    getTask(db, "t1").events.some((event) => event.kind === "worker_quiet"),
-  );
-  const shown = (await call("GET", "/api/tasks/t1")).body;
-  assert.match(shown.holder.text, /^kimi\S* \d+ 秒没进展$/);
-  const waited = await call("GET", "/api/tasks/t1/wait?timeout=20");
-  assert.notEqual(waited.body.task.status, "running");
-  const events = getTask(db, "t1").events;
-  assert.ok(!events.some((event) => event.kind === "stalled"));
-  const warned = events.filter(
-    (event) =>
-      event.kind === "worker_quiet" &&
-      !(JSON.parse(event.detail ?? "{}") as { resumed?: boolean }).resumed,
-  );
-  assert.equal(warned.length, 1, "同一段安静只提醒一次");
-  assert.match(
-    JSON.parse(warned[0]!.detail!).reason,
-    /^执行者 \d+ 秒没有进展（没有日志输出、没有工具调用、工作目录没变化）；到 (?:3|20) 分钟没进展会判卡死$/,
-    // 执行者还没有任何输出时按启动阶段算（3 分钟），有过输出后按运行中算（20 分钟）；CI 机器上两种都可能先到。
-  );
-  // 知会负责人（缺省秘书）：info 级，不叫醒。
-  const inbox = (await call("GET", "/api/events?as=secretary&limit=50")).body
-    .events as { kind: string; level: string }[];
-  assert.ok(
-    inbox.some((e) => e.kind === "worker_quiet" && e.level === "info"),
-    JSON.stringify(inbox.map((e) => e.kind)),
-  );
-  const woke = (await call("GET", "/api/events/wait?as=secretary&timeout=0"))
-    .body.events as { kind: string }[];
-  assert.ok(!woke.some((e) => e.kind === "worker_quiet"));
 });

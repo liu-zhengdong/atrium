@@ -6,14 +6,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   HostLoad,
-  checkPlacement,
   hostGate,
   hostLimits,
   hostView,
-  queueOrder,
   type HostLimits,
 } from "../server/tasks/host-load.ts";
-import { queueWalk } from "../server/tasks/queue.ts";
 import { NEXT_MERGE } from "../server/tasks/merge-runtime.ts";
 import { ensureTaskTables } from "../server/tasks/ledger.ts";
 import {
@@ -21,7 +18,7 @@ import {
   taskView,
   type TaskRow as MapTaskRow,
 } from "../server/map/view.ts";
-import { LocalCheckQueue, runLocalCheck } from "../server/tasks/local-check.ts";
+import { runLocalCheck } from "../server/tasks/local-check.ts";
 import { workerEnvironment } from "../server/tasks/worker-env.ts";
 import { getTask } from "../server/tasks/ledger.ts";
 import { hostBrief } from "../cli/top.ts";
@@ -32,7 +29,6 @@ import { nodeCommand } from "./portable-shell.ts";
 const limits = (over: Partial<HostLimits> = {}): HostLimits => ({
   cores: 8,
   maxWorkers: 6,
-  maxChecks: 4,
   testConcurrency: 7,
   checkTimeoutMs: 30 * 60_000,
   busyCores: 6,
@@ -40,31 +36,26 @@ const limits = (over: Partial<HostLimits> = {}): HostLimits => ({
   ...over,
 });
 
-test("本机限额：缺省按核数，8 核同时 6 个执行者、4 个检查、测试并发 7、检查 30 分钟、Atrium 占 6 核或整机负载 32 暂停", () => {
-  // 修复保底名额（t237）缺省按上限的 25%。
+test("本机限额：缺省按核数，8 核同时 6 个执行者、测试并发 7、检查 30 分钟、Atrium 占 6 核或整机负载 32 暂停", () => {
   assert.deepEqual(hostLimits({}, 8), {
-    limits: limits({ fixReservePercent: 25 }),
+    limits: limits(),
     problems: [],
   });
   assert.deepEqual(hostLimits({}, 1).limits, {
     cores: 1,
     maxWorkers: 2,
-    maxChecks: 1,
     testConcurrency: 1,
     checkTimeoutMs: 30 * 60_000,
     busyCores: 0.75,
     busyLoad: 4,
-    fixReservePercent: 25,
   });
   assert.deepEqual(hostLimits({}, 16).limits, {
     cores: 16,
     maxWorkers: 12,
-    maxChecks: 8,
     testConcurrency: 15,
     checkTimeoutMs: 30 * 60_000,
     busyCores: 12,
     busyLoad: 64,
-    fixReservePercent: 25,
   });
   // 核数读成 0 或小数也不出 0 上限。
   assert.equal(hostLimits({}, 0).limits.cores, 1);
@@ -75,7 +66,6 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
     hostLimits(
       {
         ATRIUM_MAX_WORKERS: "3",
-        ATRIUM_MAX_CHECKS: "1",
         ATRIUM_TEST_CONCURRENCY: "4",
         ATRIUM_CHECK_TIMEOUT_MINUTES: "45",
         ATRIUM_BUSY_CORES: "3.5",
@@ -85,12 +75,10 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
     ).limits,
     limits({
       maxWorkers: 3,
-      maxChecks: 1,
       testConcurrency: 4,
       checkTimeoutMs: 45 * 60_000,
       busyCores: 3.5,
       busyLoad: 12.5,
-      fixReservePercent: 25,
     }),
   );
   assert.deepEqual(
@@ -106,13 +94,11 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
       maxWorkers: null,
       busyCores: null,
       busyLoad: null,
-      fixReservePercent: 25,
     }),
   );
   const bad = hostLimits(
     {
       ATRIUM_MAX_WORKERS: "-1",
-      ATRIUM_MAX_CHECKS: "0",
       ATRIUM_TEST_CONCURRENCY: "两个",
       ATRIUM_CHECK_TIMEOUT_MINUTES: "0",
       ATRIUM_BUSY_CORES: "-2",
@@ -120,8 +106,8 @@ test("本机限额：环境变量覆盖，0/off 表示不限，写错的照缺�
     },
     8,
   );
-  assert.deepEqual(bad.limits, limits({ fixReservePercent: 25 }));
-  assert.equal(bad.problems.length, 6);
+  assert.deepEqual(bad.limits, limits());
+  assert.equal(bad.problems.length, 5);
   assert.match(bad.problems[0]!, /ATRIUM_MAX_WORKERS=-1 看不懂/);
   // 空字符串当没设，不报。
   assert.deepEqual(hostLimits({ ATRIUM_MAX_WORKERS: " " }, 8).problems, []);
@@ -134,7 +120,6 @@ test("本机限额：node:test 派生的进程缺省不限执行者、不看负�
       maxWorkers: null,
       busyCores: null,
       busyLoad: null,
-      fixReservePercent: 0,
     }),
   );
   assert.deepEqual(
@@ -150,7 +135,6 @@ test("本机限额：node:test 派生的进程缺省不限执行者、不看负�
       maxWorkers: 2,
       busyCores: null,
       busyLoad: 4,
-      fixReservePercent: 0,
     }),
   );
 });
@@ -227,90 +211,13 @@ test("本机闸门：先看 Atrium 自己占的核，再看整机负载保护线
   }
 });
 
-test("排队先后：紧急的在前、闲时的在后，同一档按入队先后、再按任务号", () => {
-  const entries = [
-    { urgent: false, at: 1, id: 1 },
-    { urgent: true, at: 5, id: 4 },
-    { urgent: false, at: 1, id: 0 },
-    { urgent: true, at: 3, id: 9 },
-    { urgent: false, at: 0, id: 7 },
-    { urgent: true, at: 3, id: 2 },
-  ];
-  assert.deepEqual(
-    [...entries].sort(queueOrder).map((entry) => entry.id),
-    [2, 9, 4, 7, 0, 1],
-  );
-  const tiers = [
-    { urgent: false, idle: true, at: 0, id: 1 },
-    { urgent: false, at: 9, id: 2 },
-    { urgent: true, idle: true, at: 9, id: 3 },
-    { urgent: false, idle: false, at: 5, id: 4 },
-    { urgent: false, idle: true, at: 1, id: 5 },
-  ];
-  assert.deepEqual(
-    [...tiers].sort(queueOrder).map((entry) => entry.id),
-    [3, 4, 2, 1, 5],
-  );
-  const q = (
-    task_id: number,
-    tool: string,
-    queued_at: number,
-    urgent = false,
-    idle = false,
-  ) => ({
-    task_id,
-    tool,
-    worker: tool,
-    risk: "low",
-    queued_at,
-    urgent,
-    idle,
-  });
-  // 整条队按拉起先后排（t229 起不再只取每个工具的队首）：紧急的顶到前面，同一档按入队先后。
-  assert.deepEqual(
-    queueWalk([
-      q(1, "kimi", 1),
-      q(2, "kimi", 2, true),
-      q(3, "codex", 0),
-      q(4, "claude", 5, true),
-      q(5, "codex", 3),
-    ]).map((entry) => entry.task_id),
-    [2, 4, 3, 1, 5],
-  );
-  // 闲时的（t136）排在普通任务后面；标了紧急的闲时任务按紧急算。
-  assert.deepEqual(
-    queueWalk([
-      q(1, "kimi", 0, false, true),
-      q(2, "kimi", 5),
-      q(3, "codex", 0, false, true),
-      q(4, "claude", 9),
-      q(5, "grok", 9, true, true),
-    ]).map((entry) => entry.task_id),
-    [5, 2, 4, 1, 3],
-  );
-  assert.deepEqual(queueWalk([]), []);
-});
-
-test("本地检查排位：紧急的立刻跑，其余有空位才跑", () => {
-  for (const urgent of [false, true])
-    for (const active of [0, 1, 2, 3])
-      for (const max of [1, 2])
-        assert.equal(
-          checkPlacement({ urgent, active, max }),
-          urgent || active < max ? "run" : "wait",
-          `${urgent}/${active}/${max}`,
-        );
-});
-
 test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
   const busy = hostView({
     limits: limits(),
     load: 170.456,
     running: 3,
-    checks: { running: 2, waiting: 1 },
   });
   assert.equal(busy.load, 170.46);
-  assert.deepEqual(busy.checks, { running: 2, waiting: 1, max: 4 });
   assert.match(busy.paused!, /本机太忙/);
   assert.equal(busy.paused_by, "load");
   assert.equal(busy.own_cores, null);
@@ -324,7 +231,6 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
     load: 18,
     own: 6.34,
     running: 2,
-    checks: { running: 0, waiting: 0 },
   });
   assert.equal(own.paused_by, "own");
   assert.equal(own.busy_cores, 6);
@@ -336,7 +242,6 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
     limits: limits(),
     load: 1,
     running: 6,
-    checks: { running: 0, waiting: 0 },
   });
   assert.equal(full.paused_by, "full");
   // 巡检 f5：没有排队的不说「排队」，有就写几件。
@@ -348,7 +253,6 @@ test("本机状态：暂停原因与抬头简写写清是哪条线", () => {
     load: 18,
     own: 1,
     running: 1,
-    checks: { running: 0, waiting: 0 },
   });
   assert.equal(idle.paused, null);
   assert.equal(idle.paused_by, null);
@@ -409,67 +313,6 @@ test("执行者环境注入测试并发：沿用来源里的合法值，否则�
   );
 });
 
-test("本地检查队列：同时最多 limit 个，其余按到达顺序等；调大上限立刻放行", async () => {
-  const queue = new LocalCheckQueue(2);
-  const log: string[] = [];
-  const gates = new Map<string, () => void>();
-  const job = (name: string) =>
-    queue.run(
-      () =>
-        new Promise<string>((resolve) => {
-          log.push(`${name}:start`);
-          gates.set(name, () => resolve(name));
-        }),
-      () => log.push(`${name}:queued`),
-    );
-  const all = ["a", "b", "c", "d"].map(job);
-  await until(() => gates.size === 2);
-  assert.deepEqual(log, ["a:start", "b:start", "c:queued", "d:queued"]);
-  assert.deepEqual(queue.size, { running: 2, waiting: 2 });
-  gates.get("b")!();
-  await until(() => gates.has("c"));
-  assert.deepEqual(queue.size, { running: 2, waiting: 1 });
-  queue.limit = 3;
-  await until(() => gates.has("d"));
-  assert.deepEqual(queue.size, { running: 3, waiting: 0 });
-  for (const name of ["a", "c", "d"]) gates.get(name)!();
-  assert.deepEqual(await Promise.all(all), ["a", "b", "c", "d"]);
-  assert.deepEqual(queue.size, { running: 0, waiting: 0 });
-  queue.limit = 0;
-  assert.equal(queue.limit, 1, "上限至少 1");
-});
-
-test("本地检查队列：紧急的立刻跑、不占名额，普通的照样排", async () => {
-  const queue = new LocalCheckQueue(1);
-  const log: string[] = [];
-  const gates = new Map<string, () => void>();
-  const job = (name: string, urgent = false) =>
-    queue.run(
-      () =>
-        new Promise<string>((resolve) => {
-          log.push(`${name}:start`);
-          gates.set(name, () => resolve(name));
-        }),
-      () => log.push(`${name}:queued`),
-      urgent,
-    );
-  const a = job("a");
-  const b = job("b");
-  const u = job("u", true);
-  await until(() => gates.size === 2);
-  assert.deepEqual(log, ["a:start", "b:queued", "u:start"]);
-  assert.deepEqual(queue.size, { running: 2, waiting: 1 });
-  // 紧急的结束不放行普通的：它本来就没占名额。
-  gates.get("u")!();
-  assert.equal(await u, "u");
-  assert.deepEqual(queue.size, { running: 1, waiting: 1 });
-  gates.get("a")!();
-  await until(() => gates.has("b"));
-  gates.get("b")!();
-  assert.deepEqual(await Promise.all([a, b]), ["a", "b"]);
-  assert.deepEqual(queue.size, { running: 0, waiting: 0 });
-});
-
 test("本地检查带上测试并发上限", async () => {
   const root = mkdtempSync(join(tmpdir(), "atrium-host-check-"));
   try {
@@ -484,7 +327,6 @@ test("本地检查带上测试并发上限", async () => {
     const result = await runLocalCheck({
       worktree: join(root, "wt"),
       taskDir: join(root, "task"),
-      queue: new LocalCheckQueue(),
       env: { PATH: process.env.PATH, ATRIUM_TEST_CONCURRENCY: "3" },
     });
     assert.equal(result.status, "passed");
@@ -578,7 +420,7 @@ test("本机太忙：负载超过阈值暂停派新活，降下来后巡检自�
   );
 });
 
-test("紧急任务：本机太忙时照样立刻派，排队中的标上紧急立刻拉起，其余限制照旧", async (t) => {
+test("紧急任务：本机太忙时照样立刻派，排队中的改成紧急立刻拉起，其余限制照旧", async (t) => {
   const host = new HostLoad(limits({ maxWorkers: 1, busyLoad: 16 }), () => 170);
   const { fx, data, call } = await startApp(
     t,
@@ -590,73 +432,70 @@ test("紧急任务：本机太忙时照样立刻派，排队中的标上紧急�
   const db = new DatabaseSync(join(data, "atrium.sqlite"));
   t.after(() => db.close());
   await call("POST", "/api/tasks", { title: "普通 A", repo: fx.repo });
-  // 标题写「紧急：」不算紧急，只认字段。
+  // 标题写「紧急：」不算紧急，只认优先级。
   await call("POST", "/api/tasks", { title: "紧急：只是标题", repo: fx.repo });
-  await call("POST", "/api/tasks", { title: "B", repo: fx.repo });
+  await call("POST", "/api/tasks", {
+    title: "B",
+    repo: fx.repo,
+    priority: "紧急",
+  });
   const a = await call("POST", "/api/tasks/t1/run", { worker: "kimi" });
   assert.equal(a.body.queued, true);
   assert.match(a.body.task.queued_reason, /整机负载 170/);
   const title = await call("POST", "/api/tasks/t2/run", { worker: "kimi" });
   assert.equal(title.body.queued, true);
-  assert.equal(title.body.task.urgent, 0);
+  assert.equal(title.body.task.priority, "normal");
   const bad = await call("POST", "/api/tasks/t3/run", {
-    worker: "kimi",
-    urgent: "yes",
-  });
-  assert.equal(bad.status, 400);
-  assert.match(
-    bad.body.message ?? bad.body.error,
-    /urgent: 应为 true 或 false/,
-  );
-  const b = await call("POST", "/api/tasks/t3/run", {
     worker: "kimi",
     urgent: true,
   });
-  assert.equal(b.body.queued, false, "紧急的跳过负载与执行者上限");
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.message ?? bad.body.error, /不认识的字段：urgent/);
+  const b = await call("POST", "/api/tasks/t3/run", { worker: "kimi" });
+  assert.equal(b.body.queued, false, "紧急的跳过本机负载与执行者上限");
   assert.equal(b.body.task.status, "running");
-  assert.equal(b.body.task.urgent, 1);
+  assert.equal(b.body.task.priority, "urgent");
   const top = (await call("GET", "/api/tasks/top")).body;
   const row = (ref: string) =>
     top.rows.find((item: { ref: string }) => item.ref === ref);
-  assert.equal(row("t3").urgent, true);
-  assert.equal(row("t1").urgent, false);
-  // 排队中的 t1 标上紧急：不等巡检，立刻按紧急拉起（上限已被 t3 占满也不挡）。
-  const set = await call("PATCH", "/api/tasks/t1", { urgent: true });
-  assert.equal(set.body.urgent, 1);
+  assert.equal(row("t3").priority, "urgent");
+  assert.equal(row("t1").priority, "normal");
+  // 排队中的 t1 改成紧急：不等巡检，立刻按紧急拉起（上限已被 t3 占满也不挡）。
+  const set = await call("PATCH", "/api/tasks/t1", { priority: "紧急" });
+  assert.equal(set.body.priority, "urgent");
   await until(() => getTask(db, "t1").status === "running");
-  // 取消紧急只改字段；t2 仍在排队。
+  // 改回普通只改字段；t2 仍在排队。
   assert.equal(
-    (await call("PATCH", "/api/tasks/t3", { urgent: false })).body.urgent,
-    0,
+    (await call("PATCH", "/api/tasks/t3", { priority: "普通" })).body.priority,
+    "normal",
   );
   assert.equal(getTask(db, "t2").status, "todo");
   assert.equal(
-    (await call("PATCH", "/api/tasks/t2", { urgent: 1 })).status,
+    (await call("PATCH", "/api/tasks/t2", { priority: "很急" })).status,
     400,
-    "只认布尔值",
   );
   writeFileSync(join(fx.root, "home", "go"), "");
   await call("GET", "/api/tasks/t1/wait?timeout=20");
   await call("GET", "/api/tasks/t3/wait?timeout=20");
 });
 
-test("紧急任务：建任务时标上，全景任务行与排期就绪组都带紧急、排最前", async (t) => {
+test("紧急任务：建任务时写上，全景任务行与排期就绪组都带紧急、排最前", async (t) => {
   const { fx, data, call } = await startApp(t);
   await call("POST", "/api/tasks", { title: "普通", repo: fx.repo });
   const made = await call("POST", "/api/tasks", {
     title: "修全景网页",
     repo: fx.repo,
-    urgent: true,
+    priority: "urgent",
   });
   assert.equal(made.status, 201);
-  assert.equal(made.body.urgent, 1);
+  assert.equal(made.body.priority, "urgent");
   const plan = (await call("GET", "/api/tasks/plan")).body;
   assert.deepEqual(
     plan.groups.ready.map((item: { task: { ref: string } }) => item.task.ref),
     ["t2", "t1"],
   );
   const shown = (await call("GET", "/api/tasks/t2")).body;
-  assert.equal(shown.urgent, 1);
+  assert.equal(shown.priority, "urgent");
   // 全景任务行（网页与 map --json 同一份）。
   const mapDb = new DatabaseSync(join(data, "atrium.sqlite"));
   t.after(() => mapDb.close());
@@ -664,44 +503,46 @@ test("紧急任务：建任务时标上，全景任务行与排期就绪组都�
     .prepare(`SELECT ${taskColumns(mapDb)} FROM tasks ORDER BY id`)
     .all() as unknown as MapTaskRow[];
   assert.deepEqual(
-    rows.map((row) => taskView(row).urgent),
-    [false, true],
+    rows.map((row) => taskView(row).priority),
+    ["normal", "urgent"],
   );
   assert.equal(
-    (await call("POST", "/api/tasks", { title: "x", urgent: "true" })).status,
+    (await call("POST", "/api/tasks", { title: "x", urgent: true })).status,
     400,
   );
 });
 
-test("合入队列：紧急的在前（连重启前没合完的普通任务也让它），同一档正在合入的先做完，其余按入队先后", () => {
+test("合入队列：按同一个优先级排（紧急、修复、普通、闲时），同一档正在合入的先做完，其余按入队先后", () => {
   const db = new DatabaseSync(":memory:");
   ensureTaskTables(db);
   const add = (
     id: number,
     stage: string,
     at: number,
-    urgent: number,
+    prio: string,
     status = "done",
   ) =>
     db
       .prepare(
-        "INSERT INTO tasks(id,title,status,delivery_stage,merge_queued_at,urgent,created_at,updated_at) VALUES (?,?,?,?,?,?,0,0)",
+        "INSERT INTO tasks(id,title,status,delivery_stage,merge_queued_at,prio,created_at,updated_at) VALUES (?,?,?,?,?,?,0,0)",
       )
-      .run(id, `t${id}`, status, stage, at, urgent);
+      .run(id, `t${id}`, status, stage, at, prio);
   const next = () => (db.prepare(NEXT_MERGE).get() as { id: number }).id;
-  add(1, "merge_queued", 1, 0);
-  add(2, "merge_queued", 5, 1);
-  add(3, "merge_queued", 3, 1);
-  add(4, "merge_queued", 0, 1, "blocked");
+  add(1, "merge_queued", 0, "idle");
+  add(2, "merge_queued", 1, "normal");
+  add(3, "merge_queued", 5, "fix");
+  add(4, "merge_queued", 3, "urgent");
+  add(5, "merge_queued", 0, "urgent", "blocked");
+  assert.equal(next(), 4);
+  add(6, "merging", 9, "normal");
+  assert.equal(next(), 4, "紧急的排在正在合入的普通任务前面");
+  add(7, "merging", 9, "urgent");
+  assert.equal(next(), 7, "同一档里正在合入的先做完");
+  db.prepare("DELETE FROM tasks WHERE id IN (4,7)").run();
   assert.equal(next(), 3);
-  // 队列一次只跑一个：「正在合入」而没在跑的普通任务是重启前没合完或让路的，紧急的插到它前面（t215）。
-  add(5, "merging", 9, 0);
-  assert.equal(next(), 3);
-  add(6, "merging", 9, 1);
-  assert.equal(next(), 6, "紧急的里正在合入的先做完");
-  db.prepare("DELETE FROM tasks WHERE id IN (3,6)").run();
-  assert.equal(next(), 2);
-  db.prepare("DELETE FROM tasks WHERE id=2").run();
-  assert.equal(next(), 5, "普通的里正在合入的先做完");
+  db.prepare("DELETE FROM tasks WHERE id=3").run();
+  assert.equal(next(), 6, "普通的里正在合入的先做完");
+  db.prepare("DELETE FROM tasks WHERE id IN (2,6)").run();
+  assert.equal(next(), 1);
   db.close();
 });

@@ -1,5 +1,4 @@
 import {
-  DEFAULT_WATCHDOG,
   checkCommon,
   invalid,
   type Adapter,
@@ -43,7 +42,6 @@ export const claude: Adapter = {
   quotaProvider: "claude",
   skillMount: "claude-plugin",
   resumeArgs: ["-p", "--continue"],
-  watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["json_events", "worktree_change"],
   notes: ["工作目录由进程 cwd 决定，没有 --cwd 参数"],
   tell: "stdin",

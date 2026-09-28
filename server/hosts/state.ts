@@ -1,11 +1,6 @@
 import { posix, win32 } from "node:path";
 import { Problem } from "../problem.ts";
 import { TOOLS, type Tool } from "../tasks/adapters/types.ts";
-import {
-  reserveHolds,
-  reserveText,
-  type TaskType,
-} from "../tasks/task-type.ts";
 
 /**
  * 执行机器（#358 第 1 步）的判定：连接状态、能不能接这件活、挑哪台、日志续传与重连对账。
@@ -28,6 +23,49 @@ export function parseHostRef(value: unknown, field = "host"): number {
       "atrium host ls",
     );
   return Number(match[1]);
+}
+
+/** `--avoid-host h3,h4`（或数组）：主机短号列表，去重、至多 20 个；空为 []。 */
+export function avoidHostsOf(value: unknown): number[] {
+  if (value === undefined || value === null || value === "") return [];
+  const items =
+    typeof value === "string"
+      ? value.split(/[,，\s]+/)
+      : Array.isArray(value)
+        ? value
+        : null;
+  const bad = () =>
+    new Problem(400, "avoid_host: 应为主机短号，如 h3 或 h3,h4", "usage");
+  if (!items) throw bad();
+  const hosts: number[] = [];
+  for (const item of items) {
+    if (item === "") continue;
+    const match =
+      typeof item === "string"
+        ? /^h([1-9][0-9]{0,8})$/.exec(item.trim())
+        : null;
+    if (!match) throw bad();
+    const id = Number(match[1]);
+    if (!hosts.includes(id)) hosts.push(id);
+  }
+  if (hosts.length > 20)
+    throw new Problem(400, "avoid_host: 至多写 20 台主机", "usage");
+  return hosts;
+}
+
+/** 库里存的避开主机（JSON 数组）；坏记录当没写。 */
+export function storedHosts(text: string | null | undefined): number[] {
+  if (!text) return [];
+  try {
+    const value = JSON.parse(text) as unknown;
+    return Array.isArray(value)
+      ? value.filter(
+          (item): item is number => Number.isSafeInteger(item) && item > 0,
+        )
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 /** 代理多久没来就算离线：长轮询每轮最多 25 秒，留足余量。 */
@@ -73,10 +111,6 @@ export type HostInfo = {
   clis: Partial<Record<Tool, CliState>>;
   /** 代理按自己的核数与环境算出的执行者上限；null 不限。 */
   max_workers: number | null;
-  /** 代理这台同时最多跑几个本地检查（#358 第 2 步）；旧版代理不报，也不认按提交检查，不派给它。 */
-  max_checks?: number;
-  /** 代理这台一次检查最多跑多久（毫秒，ATRIUM_CHECK_TIMEOUT_MINUTES）；旧版代理不报，按服务的缺省。 */
-  check_timeout_ms?: number;
   /** 代理能在那台挂组织技能（t232）；旧版代理不报，不给它下发技能。 */
   skills?: boolean;
 };
@@ -155,10 +189,6 @@ export type HostCandidate = {
   busy: string | null;
   /** 能挂组织技能（t232）：本机总能；远程看代理上报。缺省按能。 */
   skills?: boolean;
-  /** 在跑的里面有几件修复（t237，不算紧急的）；不给按 0。 */
-  fixRunning?: number;
-  /** 这台给修复保底留几个位置（task-type.ts fixReserve）；不给按 0。 */
-  reserve?: number;
 };
 
 export type HostNeed = {
@@ -168,20 +198,16 @@ export type HostNeed = {
   urgent: boolean;
   /** 只能在本机跑的原因（如体验巡检要连回本机服务）；能去远程为 null。 */
   localOnly: string | null;
-  /** 任务写了避开的主机（t215 `--avoid-host`）；自动挑与指定都不派过去。 */
+  /** 任务写了避开的主机（`--avoid-host`）；自动挑与指定都不派过去。 */
   avoid?: readonly number[];
   /** 要带组织技能（t232）：自动挑时优先能挂技能的主机。 */
   skills?: boolean;
-  /** 任务类型（t237）：功能的要给修复的保底位置让路；不给按修复（不受保底名额挡）。 */
-  type?: TaskType;
-  /** 有没有别的修复任务在等（能拉起、只差位置的）；没有时保底位置照常给功能用。 */
-  fixWaiting?: boolean;
 };
 
 export type HostFit =
   | { ok: true }
-  /** never：这台接不了；later：接得了但现在满或太忙，排队等；reserve 表示只是被修复保底名额挡着（t237）。 */
-  | { ok: false; kind: "never" | "later"; reason: string; reserve?: true };
+  /** never：这台接不了；later：接得了但现在满或太忙，排队等。 */
+  | { ok: false; kind: "never" | "later"; reason: string };
 
 export function repoAllowed(repos: readonly string[], repo: string | null) {
   if (repo === null) return true;
@@ -191,15 +217,11 @@ export function repoAllowed(repos: readonly string[], repo: string | null) {
   );
 }
 
-/**
- * 这台能不能接这件活；pinned 表示用户用 --host 指定了它（不看仓库白名单）。
- * allowPaused：用户或秘书用 --host 把这一件指定到已暂停的主机（t227），只放过暂停这一条。
- */
+/** 这台能不能接这件活；pinned 表示用户用 --host 指定了它（不看仓库白名单）。 */
 export function hostFit(
   candidate: HostCandidate,
   need: HostNeed,
   pinned: boolean,
-  allowPaused = false,
 ): HostFit {
   const ref = hostRef(candidate.id);
   const never = (reason: string): HostFit => ({
@@ -216,8 +238,7 @@ export function hostFit(
       return never(`${ref} 还没接入`);
     if (candidate.connection === "offline") return never(`${ref} 离线`);
   }
-  if (candidate.paused && !(pinned && allowPaused))
-    return never(`${ref} 已暂停接活`);
+  if (candidate.paused) return never(`${ref} 已暂停接活`);
   if (need.avoid?.includes(candidate.id))
     return never(`任务写了避开 ${ref}（--avoid-host）`);
   if (candidate.clis) {
@@ -245,41 +266,19 @@ export function hostFit(
       kind: "later",
       reason: `${ref} 同时最多跑 ${candidate.max} 个执行者，有执行者结束后自动拉起`,
     };
-  // 修复保底名额（t237）：有修复在等时，功能任务不占还没被修复用上的保底位置。
-  const reserve = candidate.reserve ?? 0;
-  if (
-    reserveHolds({
-      max: candidate.max,
-      running: candidate.running,
-      fixRunning: candidate.fixRunning ?? 0,
-      reserve,
-      fixWaiting: !!need.fixWaiting,
-      type: need.type ?? "fix",
-      urgent: need.urgent,
-    })
-  )
-    return {
-      ok: false,
-      kind: "later",
-      reason: reserveText(ref, reserve),
-      reserve: true,
-    };
   return { ok: true };
 }
 
 export type HostChoice =
   | { kind: "run"; host: number }
-  /**
-   * host：排队时钉在哪台（用户指定的）；自动挑的不钉，空出来时再挑。
-   * reserve：能接的主机都只是被修复保底名额挡着（t237）：排在后面的修复任务照样能派，drain 不就此停下。
-   */
-  | { kind: "queue"; host: number | null; reason: string; reserve?: true }
+  /** host：排队时钉在哪台（用户指定的）；自动挑的不钉，空出来时再挑。 */
+  | { kind: "queue"; host: number | null; reason: string }
   | { kind: "refuse"; reason: string };
 
 const utilization = (c: HostCandidate) =>
   c.max === null ? c.running / 1000 : c.running / Math.max(1, c.max);
 
-/** 满了或太忙（紧急任务照样能派，但要抢占别人）。 */
+/** 满了或太忙（紧急任务照样能派）。 */
 export const crowded = (c: HostCandidate) =>
   !!c.busy || (c.max !== null && c.running >= c.max);
 
@@ -297,42 +296,29 @@ export const hasRoom = (candidates: readonly HostCandidate[]) =>
 
 /**
  * 挑主机：指定了就只看那台（接不了拒绝，满了排队）；没指定在能接的里挑最空的，一样空时本机优先；
- * 紧急的先挑不满不忙的（不用抢占），同样时本机优先；任务写了避开的主机一律不派（t215）；
- * 要带组织技能的先挑能挂技能的（t232，挂不了的仍能接，只排在后面）；
- * 暂停接活的主机自动挑时一律不选；allowPaused 时指定的那台暂停了也照派这一件，
- * 但满了不排队（排着的只等不暂停的主机，t227）；
+ * 紧急的先挑不满不忙的，同样时本机优先；任务写了避开的主机一律不派；
+ * 要带组织技能的先挑能挂技能的（t232，挂不了的仍能接，只排在后面）；暂停接活的主机一律不选；
  * 都满或太忙时排队，本机的原因优先（和只有本机时的回执一致）。
  */
 export function chooseHost(
   candidates: readonly HostCandidate[],
   need: HostNeed,
   pinned?: number,
-  allowPaused = false,
 ): HostChoice {
   if (pinned !== undefined) {
     const candidate = candidates.find((c) => c.id === pinned);
     if (!candidate)
       return { kind: "refuse", reason: `没有主机 ${hostRef(pinned)}` };
-    const fit = hostFit(candidate, need, true, allowPaused);
+    const fit = hostFit(candidate, need, true);
     if (fit.ok) return { kind: "run", host: candidate.id };
     if (fit.kind === "never") return { kind: "refuse", reason: fit.reason };
-    return candidate.paused
-      ? {
-          kind: "refuse",
-          reason: `${fit.reason}；${hostRef(candidate.id)} 暂停接活中，指定过去的不排队，有空位时再派`,
-        }
-      : {
-          kind: "queue",
-          host: candidate.id,
-          reason: fit.reason,
-          ...(fit.reserve ? { reserve: true as const } : {}),
-        };
+    return { kind: "queue", host: candidate.id, reason: fit.reason };
   }
   const fits = candidates.map((candidate) => ({
     candidate,
     fit: hostFit(candidate, need, false),
   }));
-  // 紧急的（t215）：先挑不满不忙、不用抢占的，再挑本机（最稳），再比谁空。
+  // 紧急的：先挑不满不忙的，再挑本机（最稳），再比谁空。
   const ready = fits
     .filter((entry) => entry.fit.ok)
     .map((entry) => entry.candidate)
@@ -360,15 +346,7 @@ export function chooseHost(
   );
   const local = later.find((entry) => entry.candidate.kind === "local");
   const first = local ?? later[0];
-  if (first)
-    return {
-      kind: "queue",
-      host: null,
-      reason: first.fit.reason,
-      ...(later.some((entry) => entry.fit.reserve)
-        ? { reserve: true as const }
-        : {}),
-    };
+  if (first) return { kind: "queue", host: null, reason: first.fit.reason };
   const localNever = fits.find(
     (entry) => entry.candidate.kind === "local" && !entry.fit.ok,
   );

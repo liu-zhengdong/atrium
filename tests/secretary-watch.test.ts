@@ -321,13 +321,13 @@ test("兜底：秘书挂着 wait 时不叫醒；只有知会事件也不叫醒",
     fallback.start();
     inbox.publish({
       subscriber: "secretary",
-      source: "urgent",
-      kind: "urgent_stage",
-      key: "t3:urgent",
-      detail: { stage: "开始", event: "start" },
+      source: "runner",
+      kind: "overdue",
+      key: "t3:overdue",
+      detail: { holder: "worker", step: "wake" },
     });
     await delay(150);
-    assert.equal(turns, 0, "紧急阶段是知会，不叫醒");
+    assert.equal(turns, 0, "执行者到期是知会，不叫醒");
     assert.equal(inbox.countPending("secretary"), 0);
     // 秘书挂着 wait：事件被它取走，后台不插手。
     const listen = inbox.wait("secretary", 60);

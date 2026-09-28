@@ -107,17 +107,13 @@ export function startPatrol(db: DatabaseSync, address: string) {
         .get(node.id) as { n: number }
     ).n;
     const scenario = scenarioAt(overview.uses, count);
-    const task = createTask(
-      db,
-      {
-        title: `体验巡检：${node.name} · ${scenario}`,
-        part: ref(node.id),
-        deliver: "none",
-      },
-      undefined,
-      undefined,
-      { source: "patrol" },
-    );
+    const task = createTask(db, {
+      title: `体验巡检：${node.name} · ${scenario}`,
+      part: ref(node.id),
+      deliver: "none",
+      // 巡检开的任务算修复（排在普通任务前面）。
+      priority: "fix",
+    });
     db.prepare(
       "INSERT INTO patrol_runs(task_id,node_id,scenario,flow,created_at) VALUES (?,?,?,?,?)",
     ).run(

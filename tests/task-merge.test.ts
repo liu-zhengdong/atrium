@@ -445,7 +445,7 @@ for (const scenario of [
             : undefined,
         checkRerunDelayMs: () => 50,
         ...(scenario === "stalled_blocked"
-          ? { quiet: { warnMs: 1_000, stallMs: 2_000, pollMs: 50 } }
+          ? { check: { stallMs: 2_000, pollMs: 50 } }
           : {}),
       },
     );
@@ -601,22 +601,12 @@ for (const scenario of [
       return;
     }
     if (scenario === "stalled_blocked") {
-      // 卡住的检查只自动重跑一次（t260），再卡住转卡住；每次卡住前先提醒并知会负责人。
+      // 卡住的检查只自动重跑一次（t260），再卡住转卡住；每次到期按统一规则发 overdue（知会）。
       assert.equal(task.status, "blocked");
       assert.equal(task.merge_returns, 0);
       assert.equal(mergeCalls, 0);
       assert.equal(count("merge_check_rerun"), 1);
       assert.equal(count("merge_returned"), 0);
-      const quiet = task.events.filter(
-        (event: { kind: string; detail: string }) =>
-          event.kind === "merge_check_quiet" &&
-          !JSON.parse(event.detail).resumed,
-      );
-      assert.equal(quiet.length, 2);
-      assert.match(
-        JSON.parse(quiet[0].detail).reason,
-        /^检查 1 秒没输出：卡在 ✔ 前面的用例/,
-      );
       const checks = task.events
         .filter((event: { kind: string }) => event.kind === "merge_check")
         .map((event: { detail: string }) => JSON.parse(event.detail));
@@ -635,13 +625,17 @@ for (const scenario of [
         /基础设施问题：检查没跑成（已自动重跑 1 次）：检查卡住：日志 2 秒没有新输出，卡在 ✔ 前面的用例/,
       );
       const inbox = await call("GET", "/api/events?limit=100");
+      const overdue = inbox.body.events.find(
+        (event: { kind: string }) => event.kind === "overdue",
+      );
       assert.ok(
-        inbox.body.events.some(
-          (event: { kind: string; level: string }) =>
-            event.kind === "check_quiet" && event.level === "info",
-        ),
+        overdue,
         JSON.stringify(inbox.body.events.map((e: { kind: string }) => e.kind)),
       );
+      assert.equal(overdue.level, "info");
+      assert.equal(overdue.detail.holder, "check");
+      assert.equal(overdue.count, 2);
+      assert.match(overdue.detail.next, /卡在 ✔ 前面的用例/);
       return;
     }
     if (

@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { exec as defaultExec, type Exec } from "./git.ts";
 import { countSteps } from "./summary.ts";
 import { parseLine } from "./json-log.ts";
+import { DUE } from "./overdue.ts";
 
 /**
- * 执行者卡死检测（#262）。判定是纯函数 judge；进展信号由 ProgressProbe 采样：
+ * 执行者卡死检测（#262，overdue.ts 表里执行者两行的到期动作）。判定是纯函数 judge；进展信号由 ProgressProbe 采样：
  * 日志增长、工作目录文件变化、结构化日志里的步骤事件（json_events）。
  */
 
@@ -71,16 +72,13 @@ export function finalClaudeResult(log: string): "clean" | "error" | undefined {
   return result;
 }
 
-/** 适配器缺省值，档案 limits.startup_minutes / idle_minutes 写了就用档案的。 */
-export function watchLimits(
-  defaults: { startupMinutes: number; idleMinutes: number },
-  limits: Record<string, number> = {},
-): WatchLimits {
+/** 时限按 overdue.ts 那张表（执行者启动、执行者两行）；档案 limits.startup_minutes / idle_minutes 写了就用档案的。 */
+export function watchLimits(limits: Record<string, number> = {}): WatchLimits {
   const pick = (value: number | undefined, fallback: number) =>
-    value !== undefined && value > 0 ? value : fallback;
+    value !== undefined && value > 0 ? value * 60_000 : fallback;
   return {
-    startupMs: pick(limits.startup_minutes, defaults.startupMinutes) * 60_000,
-    idleMs: pick(limits.idle_minutes, defaults.idleMinutes) * 60_000,
+    startupMs: pick(limits.startup_minutes, DUE.starting.ms),
+    idleMs: pick(limits.idle_minutes, DUE.worker.ms),
   };
 }
 

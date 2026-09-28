@@ -13,8 +13,11 @@ import { planCounts } from "../server/tasks/plan-count.ts";
 import { pauseText } from "../server/pause.ts";
 import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
-import { titleTag } from "../server/tasks/priority.ts";
-import { typeCountsText, typeTag } from "../server/tasks/task-type.ts";
+import {
+  priorityCountsText,
+  priorityTag,
+  titleTag,
+} from "../server/tasks/priority.ts";
 import { recordNext } from "./contract.ts";
 import {
   secretaryText,
@@ -75,19 +78,11 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
   // 旧版服务给的一句话可能是整篇原因，这里再截一次。
   const holder = { ...full, text: oneLine(full.text, HOLDER_WIDTH) };
   const [mark, color] = MARK[holder.kind];
-  const shown = titleTag(
-    row.urgent ? "紧急" : row.idle ? "闲时" : "",
-    row.title,
-  );
-  // 修复的另标「修复」（t237）；功能不标，头部分开计数。
-  const fix = titleTag(
-    typeTag({ urgent: !!row.urgent, task_type: row.type }),
-    row.title,
-  );
-  const tag =
-    (shown
-      ? `${paint(shown === "紧急" ? `${BOLD}${RED}` : DIM, shown)} `
-      : "") + (fix ? `${paint(YELLOW, fix)} ` : "");
+  // 紧急、修复、闲时标在标题前；普通不标，头部分开计数。
+  const shown = titleTag(priorityTag(row.priority), row.title);
+  const tag = shown
+    ? `${paint(shown === "紧急" ? `${BOLD}${RED}` : shown === "修复" ? YELLOW : DIM, shown)} `
+    : "";
   const title = `${tag}「${oneLine(row.title, TITLE_MAX)}」`;
   if (holder.kind === "user")
     return `${paint(color, mark)} ${row.ref} ${title} ${paint(color, `等你：${holder.text}`)}`;
@@ -109,7 +104,10 @@ function taskLine(row: TopRow, full: Holder, now: number, paint: Paint) {
       row.host_name && holder.text.startsWith(prefix)
         ? holder.text.slice(prefix.length)
         : holder.text;
-    const story = detail.endsWith(" 在做") ? "" : ` · ${detail}`;
+    // 「X 在做」只写用时；后面接着的「N 分钟没动」照写。
+    const story = /^\S+ 在做( · |$)/.test(detail)
+      ? detail.replace(/^\S+ 在做/, "")
+      : ` · ${detail}`;
     const host = row.host_name ? ` @ ${row.host_name}` : "";
     return `${paint(color, mark)} ${row.ref} ${title} ${workerLabel(row.worker)}${host}${paint(DIM, took)}${story}`;
   }
@@ -234,7 +232,6 @@ export function renderStatusline(input: StatuslineInput): string {
     !ready &&
     !waiting &&
     !choice &&
-    !snapshot.urgent?.warning &&
     (!secretary || secretary.tone === "ok")
   )
     return [
@@ -251,8 +248,10 @@ export function renderStatusline(input: StatuslineInput): string {
   const head = [
     // 暂停派新活时写清是哪条线（t113）：Atrium 自己占的核、整机负载保护线，还是执行者满了。
     `Atrium ${parts.join(" · ")}${hostBrief(snapshot.host, snapshot.counts.queued)}`,
-    // 在途任务按类型分开计数（t237）：功能 N · 修复 M · 紧急 K。
-    ...(typeCountsText(snapshot.types) ? [typeCountsText(snapshot.types)] : []),
+    // 在途任务按优先级分开计数：紧急 K · 修复 M · 普通 N · 闲时 I。
+    ...(priorityCountsText(snapshot.priorities)
+      ? [priorityCountsText(snapshot.priorities)]
+      : []),
     ...(count("user") ? [paint(`${BOLD}${RED}`, `等你 ${count("user")}`)] : []),
     ...(secretaryPart
       ? [secretaryPart]
@@ -267,9 +266,6 @@ export function renderStatusline(input: StatuslineInput): string {
   ].join(" · ");
   const lines = [...paused, head];
   if (choice) lines.push(paint(`${BOLD}${RED}`, `✱ ${choice}`));
-  // 紧急任务太多（t215）：「紧急任务有 N 个，太多就等于没有紧急」，不拒绝。
-  if (snapshot.urgent?.warning)
-    lines.push(paint(`${BOLD}${RED}`, `! ${snapshot.urgent.warning}`));
   const items = groupRows(held);
   for (const item of items.slice(0, TASK_LINES))
     lines.push(

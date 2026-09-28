@@ -1,17 +1,12 @@
 import { secretNameProblem } from "../secrets/model.ts";
-import {
-  MAX_BUNDLE_BYTES,
-  type AgentCommand,
-  type Assignment,
-  type CheckSource,
-} from "../hosts/protocol.ts";
+import type { AgentCommand, Assignment } from "../hosts/protocol.ts";
 import { insideData, isKnownTool } from "../hosts/state.ts";
 import { targetsRefusal } from "../tasks/leftovers.ts";
 import { skillCopiesRefusal } from "../skills/remote.ts";
 
 /**
  * 代理这一侧的判定（#358 第 1 步）：服务派来的指令能不能照做。纯函数，穷举测试。
- * 服务是用户自己的，但代理仍只照做五种指令，路径必须落在代理数据目录里，git 只跑查询与清理用的子命令，
+ * 服务是用户自己的，但代理仍只照做四种指令，路径必须落在代理数据目录里，git 只跑查询与清理用的子命令，
  * 清残留进程只结束清单里核对得上的执行者（leftovers.ts）。
  */
 
@@ -123,47 +118,6 @@ export function assignmentRefusal(
   return skillCopiesRefusal(a.skills);
 }
 
-const REF_NAME = /^[A-Za-z0-9._/-]+$/;
-
-/** 按提交检查的来源：克隆在代理数据目录里、地址像个地址、提交是完整哈希、bundle 不超限。 */
-export function sourceRefusal(
-  source: CheckSource,
-  os: string,
-  dataDir: string,
-): string | null {
-  if (typeof source !== "object" || source === null) return "检查来源不合法";
-  if (
-    typeof source.clone !== "string" ||
-    !insideData(os, dataDir, source.clone)
-  )
-    return "检查的克隆不在代理数据目录里";
-  if (
-    typeof source.url !== "string" ||
-    !source.url ||
-    /^-/.test(source.url) ||
-    /\s/.test(source.url)
-  )
-    return "仓库地址不合法";
-  if (
-    typeof source.commit !== "string" ||
-    !/^[0-9a-f]{40,64}$/.test(source.commit)
-  )
-    return "提交号不合法";
-  if (
-    typeof source.base !== "string" ||
-    !REF_NAME.test(source.base) ||
-    source.base.startsWith("-")
-  )
-    return "基础分支名不合法";
-  if (
-    source.bundle !== undefined &&
-    (typeof source.bundle !== "string" ||
-      source.bundle.length > Math.ceil(MAX_BUNDLE_BYTES / 3) * 4)
-  )
-    return "提交包太大或不合法";
-  return null;
-}
-
 /** 这条指令代理照不照做；不照做时回执里写原因。 */
 export function commandRefusal(
   command: AgentCommand,
@@ -175,14 +129,6 @@ export function commandRefusal(
       return assignmentRefusal(command.assignment, os, dataDir);
     case "exec":
       return gitRefusal(command.args, os, dataDir);
-    case "check":
-      if ((command.worktree === undefined) === (command.source === undefined))
-        return "检查要么给工作树、要么给提交";
-      if (command.source) return sourceRefusal(command.source, os, dataDir);
-      return typeof command.worktree === "string" &&
-        insideData(os, dataDir, command.worktree)
-        ? null
-        : "检查的工作树不在代理数据目录里";
     case "stop":
       return command.signal === "SIGTERM" || command.signal === "SIGKILL"
         ? null

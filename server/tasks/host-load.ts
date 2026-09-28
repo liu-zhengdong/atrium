@@ -4,33 +4,27 @@ import {
   type MarkedProc,
   type SpawnMark,
 } from "../platform/cpu.ts";
-import { rank } from "./priority.ts";
-import { FIX_RESERVE_PERCENT, parseReservePercent } from "./task-type.ts";
 
 /**
- * 本机减负（#358 第 0 步）：同时在跑的执行者上限、本地检查并发上限、注入给执行者与检查的测试并发，
+ * 本机减负（#358 第 0 步）：同时在跑的执行者上限、注入给执行者与检查的测试并发，
  * 以及本机太忙时暂停派新活。判定与读配置是纯函数；采样（核数、1 分钟负载、Atrium 进程树 CPU）在 HostLoad 里。
  *
  * 太忙有两条线（t113）：主线只看 Atrium 自己起的进程树占了几个核（执行者及其子进程、本地检查、合入检查），
  * 系统进程（fileproviderd、存储分析）再忙也不挡；整机 1 分钟负载只留一条很高的保护线，防止整台机器已经卡死时还往上加。
- * 标了紧急的任务两条线和执行者上限都不受限（hostGate 的 urgent）。
+ * 紧急任务两条线和执行者上限都不受限（hostGate 的 urgent）：这是紧急比别的档位多的唯一一条。
  *
  * 配置（服务环境变量，缺省按核数）：
  * - ATRIUM_MAX_WORKERS：同时在跑的执行者上限，缺省核数的 3/4（至少 2）；0 或 off 不限。
- * - ATRIUM_MAX_CHECKS：本地检查同时跑几个，缺省核数的一半（至少 1）。
  * - ATRIUM_TEST_CONCURRENCY：注入执行者与本地检查的测试并发，缺省核数减 1（与 node --test 自己的缺省一致，至少 1）。
- * - ATRIUM_CHECK_TIMEOUT_MINUTES：一次本地检查最多跑几分钟，缺省 30；按主机各自设（代理读它那台的环境）。
+ * - ATRIUM_CHECK_TIMEOUT_MINUTES：一次本地检查最多跑几分钟，缺省 30。
  * - ATRIUM_BUSY_CORES：Atrium 进程树占用超过几个核暂停派新活，缺省核数的 3/4；0 或 off 不看。
  * - ATRIUM_BUSY_LOAD：整机 1 分钟负载超过多少暂停派新活（保护线），缺省 4×核数；0 或 off 不看。
- * - ATRIUM_FIX_RESERVE_PERCENT：每台主机按执行者上限的百分之几给修复任务保底留位置（t237，task-type.ts fixReserve：
- *   至少 1、至多 2，并至少给功能留 1 个），缺省 25；0 或 off 不留。只在有修复任务在等时生效。
  */
 
 export type HostLimits = {
   cores: number;
   /** 同时在跑（含正在启动）的执行者上限；null 不限。 */
   maxWorkers: number | null;
-  maxChecks: number;
   testConcurrency: number;
   /** 一次本地检查最多跑多久（毫秒）。 */
   checkTimeoutMs: number;
@@ -38,8 +32,6 @@ export type HostLimits = {
   busyCores: number | null;
   /** 整机 1 分钟负载超过它就暂停派新活（保护线）；null 不看负载。 */
   busyLoad: number | null;
-  /** 按执行者上限的百分之几给修复保底留位置（t237）；0 或不给不留。 */
-  fixReservePercent?: number;
 };
 
 /** 为什么不能派：own Atrium 自己占得多、load 整机负载过保护线、full 执行者满了。 */
@@ -98,11 +90,6 @@ export function hostLimits(
         parseCount(env.ATRIUM_MAX_WORKERS, true),
         testing ? null : Math.max(2, Math.floor((n * 3) / 4)),
       ),
-      maxChecks: pick(
-        "ATRIUM_MAX_CHECKS",
-        parseCount(env.ATRIUM_MAX_CHECKS, false) ?? undefined,
-        Math.max(1, Math.floor(n / 2)),
-      ),
       testConcurrency: pick(
         "ATRIUM_TEST_CONCURRENCY",
         parseCount(env.ATRIUM_TEST_CONCURRENCY, false) ?? undefined,
@@ -124,12 +111,6 @@ export function hostLimits(
         parseLoad(env.ATRIUM_BUSY_LOAD),
         testing ? null : 4 * n,
       ),
-      // 测试里没显式设置时不留，免得标题像修复的用例改了排队先后；显式设置照样生效。
-      fixReservePercent: pick(
-        "ATRIUM_FIX_RESERVE_PERCENT",
-        parseReservePercent(env.ATRIUM_FIX_RESERVE_PERCENT),
-        testing ? 0 : FIX_RESERVE_PERCENT,
-      ),
     },
     problems,
   };
@@ -141,13 +122,9 @@ const loadText = (load: number) =>
 const coreText = (cores: number) =>
   Number.isInteger(cores) ? String(cores) : cores.toFixed(1);
 
-/** 紧急任务的回执与事件里说明紧急通道做什么（t113、t215）。 */
-export const URGENT_NOTE =
-  "紧急：没空位先暂停闲时（再普通）任务腾位置，检查与合入插到最前、审阅不挡合入，没进展 10 分钟换人";
-
 /**
  * 能不能再拉起一个执行者。running 是除本任务外在跑与正在启动的；own 是 Atrium 进程树占的核数（不知道为 null，不挡）。
- * 先看 Atrium 自己占的，再看整机负载保护线，最后看执行者上限；标了紧急的三条都跳过。
+ * 先看 Atrium 自己占的，再看整机负载保护线，最后看执行者上限；紧急的三条都跳过。
  */
 export function hostGate(input: {
   running: number;
@@ -183,31 +160,6 @@ export function hostGate(input: {
   return { ok: true };
 }
 
-/**
- * 排队先后（执行者队列与本地检查共用）：紧急的在前，再普通、闲时（t136，priority.ts；不给 idle 当普通），
- * 同一档按入队先后，再按任务号。
- */
-export function queueOrder(
-  a: { urgent: boolean; idle?: boolean; at: number; id: number },
-  b: { urgent: boolean; idle?: boolean; at: number; id: number },
-) {
-  return (
-    rank({ urgent: a.urgent, idle: !!a.idle }) -
-      rank({ urgent: b.urgent, idle: !!b.idle }) ||
-    a.at - b.at ||
-    a.id - b.id
-  );
-}
-
-/** 本地检查：紧急的立刻跑、不占并发名额；其余有空位就跑，没有就排队。 */
-export function checkPlacement(input: {
-  urgent: boolean;
-  active: number;
-  max: number;
-}): "run" | "wait" {
-  return input.urgent || input.active < input.max ? "run" : "wait";
-}
-
 /** 本机状态（`top` 的抬头与 `--json` 用）。 */
 export type HostView = {
   cores: number;
@@ -218,7 +170,6 @@ export type HostView = {
   busy_cores: number | null;
   running: number;
   max_workers: number | null;
-  checks: { running: number; waiting: number; max: number };
   test_concurrency: number;
   /** 暂停派新活的原因；没暂停为 null。 */
   paused: string | null;
@@ -231,7 +182,6 @@ export function hostView(input: {
   load: number;
   own?: number | null;
   running: number;
-  checks: { running: number; waiting: number };
 }): HostView {
   const gate = hostGate({
     running: input.running,
@@ -247,7 +197,6 @@ export function hostView(input: {
     busy_cores: input.limits.busyCores,
     running: input.running,
     max_workers: input.limits.maxWorkers,
-    checks: { ...input.checks, max: input.limits.maxChecks },
     test_concurrency: input.limits.testConcurrency,
     paused: gate.ok ? null : gate.reason,
     paused_by: gate.ok ? null : gate.by,

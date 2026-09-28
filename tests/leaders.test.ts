@@ -13,6 +13,7 @@ import type { LeaderRunSpec } from "../server/leaders/runtime.ts";
 import type { WakeExit } from "../server/leaders/wake.ts";
 import { until } from "./task-fixture.ts";
 import { removeTemp } from "./temp-dir.ts";
+import { patrolOverdue } from "../server/tasks/overdue-runtime.ts";
 
 /**
  * leader 层的集成：内存服务 + 假 leader 进程（直接用服务签发的令牌调接口）。
@@ -24,7 +25,7 @@ type Behave = (spec: LeaderRunSpec) => Promise<WakeExit>;
 
 async function open(
   t: { after: (fn: () => unknown) => void },
-  extra: { now?: () => number; hangMs?: number; hangCheckMs?: number } = {},
+  extra: { now?: () => number } = {},
 ) {
   const data = mkdtempSync(join(tmpdir(), "atrium-leaders-"));
   t.after(() => removeTemp(data));
@@ -795,11 +796,10 @@ test("全景看得到负责人：节点页、负责人页、状态栏字段，le
 test("leader：受阻任务挂在 leader 手里没动，到点再叫醒一次，再不动运行时上交秘书；上游失败的事件列出下游与可选动作（t253）", async (t) => {
   // 时钟跟着真实时间走（攒批按事件入箱时刻判），再往前拨出挂着的时长。
   let skew = 0;
-  const x = await open(t, {
-    now: () => Date.now() + skew,
-    hangMs: 30 * 60_000,
-    hangCheckMs: 0,
-  });
+  const x = await open(t, { now: () => Date.now() + skew });
+  // 到期巡检（overdue-runtime.ts）在服务里一分钟一轮；这里按拨过的钟直接跑一轮。
+  const patrol = () =>
+    patrolOverdue(x.db, x.taskRunner.inbox, Date.now() + skew);
   await x.ok("POST", "/api/leaders", { name: "负责人", worker: "codex" });
   await x.ok("PATCH", "/api/org/nodes/o2", { leader: "a1", reason: "指派" });
   await x.ok("POST", "/api/tasks", {
@@ -859,46 +859,36 @@ test("leader：受阻任务挂在 leader 手里没动，到点再叫醒一次，
   assert.equal((await holder()).kind, "leader");
   assert.match((await holder()).text, /a1 在处理$/);
 
-  // 挂了 31 分钟：再叫醒 a1 一次，事件写挂了多久；状态栏的一句话带时长。
+  // 挂了 31 分钟：再叫醒 a1 一次，事件写挂了多久与下一步。
   skew += 31 * 60_000;
+  assert.deepEqual(patrol().woke, ["t2"]);
   await until(() => prompts.length === 3 && wakeStatus(x.db) === "done", 5000);
-  assert.match(prompts[2]!, /t2 在你手里挂着没动/);
-  assert.match(prompts[2]!, /已挂 31 分钟/);
+  assert.match(prompts[2]!, /t2 到期没动/);
+  assert.match(prompts[2]!, /已 31 分钟没动/);
   assert.match(prompts[2]!, /atrium task run t2/);
   assert(
     !inbox
       .list("secretary", { limit: 10 })
-      .events.some((e) => e.kind === "escalated"),
+      .events.some((e) => e.kind === "overdue"),
   );
 
   // 叫醒后又只写了备注，再过 30 分钟：运行时上交秘书，持球人变成秘书。
   skew += 30 * 60_000;
-  await until(
-    () =>
-      inbox
-        .list("secretary", { limit: 10 })
-        .events.some((e) => e.kind === "escalated"),
-    5000,
-  );
+  assert.deepEqual(patrol().escalated, ["t2"]);
   const up = inbox
     .list("secretary", { limit: 10 })
-    .events.find((e) => e.kind === "escalated")!;
-  const detail = up.detail as { title: string; reason: string; by: string };
+    .events.find((e) => e.kind === "overdue")!;
+  const detail = up.detail as { step: string; reason: string; who: string };
   assert.equal(up.task, "t2");
-  assert.equal(detail.by, "runtime");
-  assert.match(detail.title, /t2 在 a1 手里挂了 61 分钟，运行时上交/);
-  assert.match(detail.reason, /叫醒过一次仍没有动作/);
+  assert.equal(detail.step, "escalate");
+  assert.equal(detail.who, "a1");
+  assert.match(detail.reason, /leader a1 已 1 小时没动.*上交 secretary/);
   const after = await holder();
   assert.equal(after.kind, "secretary");
   assert.match(after.text, /运行时 上交给秘书$/);
   // 上交之后不再叫醒 a1、不再重复上交。
   skew += 120 * 60_000;
+  assert.deepEqual(patrol(), { woke: [], escalated: [] });
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(prompts.length, 3);
-  assert.equal(
-    inbox
-      .list("secretary", { limit: 10 })
-      .events.filter((e) => e.kind === "escalated").length,
-    1,
-  );
 });

@@ -340,25 +340,34 @@ function spent(t) {
   return duration(end - t.started_at);
 }
 
-/** 状态格：紧急、闲时、修复（t237，功能不标）的标记在前，状态在后。 */
+/** 状态格：紧急、修复、闲时（普通不标）的标记在前，状态在后。 */
 function statusChips(t, label, tone) {
   const marks = [
-    t.urgent ? chip("紧急", "red") : "",
-    !t.urgent && t.idle && !ENDED.has(t.tag) ? chip("闲时", "gray") : "",
-    !t.urgent && t.type === "fix" ? chip("修复", "orange") : "",
+    t.priority === "urgent" ? chip("紧急", "red") : "",
+    t.priority === "fix" ? chip("修复", "orange") : "",
+    t.priority === "idle" && !ENDED.has(t.tag) ? chip("闲时", "gray") : "",
   ].join("");
   return marks
     ? `<span class="chips">${marks}${chip(label, tone)}</span>`
     : chip(label, tone);
 }
 
-/** 表里任务按类型计数（t237）：功能 N · 修复 M · 紧急 K；没有任务为空。 */
+/** 表里任务按优先级计数：紧急 K · 修复 M · 普通 N · 闲时 I（为 0 的不写）；没有任务为空。 */
+const PRIORITY_WORDS = [
+  ["urgent", "紧急"],
+  ["fix", "修复"],
+  ["normal", "普通"],
+  ["idle", "闲时"],
+];
 function typeCounts(list) {
-  if (!list.length) return "";
-  const urgent = list.filter((t) => t.urgent).length;
-  const fix = list.filter((t) => !t.urgent && t.type === "fix").length;
-  const text = `功能 ${list.length - urgent - fix} · 修复 ${fix} · 紧急 ${urgent}`;
-  return `<p class="muted type-counts">${esc(text)}</p>`;
+  const text = PRIORITY_WORDS.map(([key, word]) => [
+    word,
+    list.filter((t) => (t.priority ?? "normal") === key).length,
+  ])
+    .filter(([, n]) => n)
+    .map(([word, n]) => `${word} ${n}`)
+    .join(" · ");
+  return text ? `<p class="muted type-counts">${esc(text)}</p>` : "";
 }
 
 /** 任务表：各块与专员页共用；专员页不再列「专员」。 */

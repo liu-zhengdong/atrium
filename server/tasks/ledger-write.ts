@@ -38,13 +38,6 @@ import {
   parsePriority,
   priorityAfterMove,
 } from "./priority.ts";
-import { parseSize, type Size } from "./task-size.ts";
-import {
-  inferType,
-  parseTaskType,
-  storedType,
-  type TypeSource,
-} from "./task-type.ts";
 import { getJobRole } from "./job-roles.ts";
 import { ref as nodeRef } from "../org/model.ts";
 import { briefText, readBriefFile } from "./brief.ts";
@@ -63,13 +56,7 @@ import {
 } from "../secrets/store.ts";
 import { checkSpecialists } from "./specialist-scope.ts";
 import { syncTotals } from "./rollup-ledger.ts";
-import {
-  avoidHostsOf,
-  parseStopgap,
-  stopgapJson,
-  whyOf,
-  type StopgapAction,
-} from "./urgent.ts";
+import { avoidHostsOf } from "../hosts/state.ts";
 
 /** brief 给内容（brief_path 记来源）；只给 brief_path 时按路径读入，兼容旧调用方。 */
 function briefOf(input: Record<string, unknown>, repo: string | null) {
@@ -82,42 +69,11 @@ function briefOf(input: Record<string, unknown>, repo: string | null) {
   };
 }
 
-/** 紧急标记（t113）：只认布尔值；只按这个字段判断，标题写「紧急：」不算。 */
-/** 大小：小 / 中 / 大（或英文）；null 与空串表示不写。 */
-function sizeOf(value: unknown): Size | null {
-  return value === undefined || value === null || value === ""
-    ? null
-    : parseSize(value);
-}
-
-function urgentOf(value: unknown) {
-  if (value === undefined) return false;
-  if (typeof value !== "boolean") throw usage("urgent: 应为 true 或 false");
-  return value;
-}
-
-/**
- * 紧急通道的附加字段（t215）：原因（why）、避开的主机（avoid_host）、止损动作（stopgap）。
- * 止损动作只给紧急任务写；返回要写进 tasks 的列（没给的不在里面）与解析后的止损动作。
- */
-function urgentExtras(
-  input: Record<string, unknown>,
-  urgent: boolean,
-): { fields: Record<string, string | null>; stopgap: StopgapAction[] } {
-  const fields: Record<string, string | null> = {};
-  if ("why" in input) fields.urgent_why = whyOf(input.why);
-  if ("avoid_host" in input) {
-    const hosts = avoidHostsOf(input.avoid_host);
-    fields.avoid_hosts = hosts.length ? JSON.stringify(hosts) : null;
-  }
-  const stopgap = "stopgap" in input ? parseStopgap(input.stopgap) : [];
-  if (stopgap.length && !urgent)
-    throw usage("stopgap: 只有紧急任务能写止损动作，加上 --urgent");
-  if ("stopgap" in input)
-    fields.stopgap = stopgap.length
-      ? JSON.stringify(stopgapJson(stopgap))
-      : null;
-  return { fields, stopgap };
+/** `avoid_host`：主机短号列表存成 JSON；没给为 undefined，给空为 null。 */
+function avoidOf(input: Record<string, unknown>) {
+  if (!("avoid_host" in input)) return undefined;
+  const hosts = avoidHostsOf(input.avoid_host);
+  return hosts.length ? JSON.stringify(hosts) : null;
 }
 
 const fromNode = (db: DatabaseSync, value: unknown) => {
@@ -143,14 +99,10 @@ export type NewTask = {
   after?: string;
   after_pr?: string;
   auto?: boolean;
-  /** 紧急：跳过本机负载限制，排队插到最前。 */
-  urgent?: boolean;
-  /** 闲时 / 普通（t136）；不写按归属部分：管方面的为闲时。 */
+  /** 紧急 / 修复 / 普通 / 闲时；不写按归属部分：管方面的为闲时。 */
   priority?: string;
-  /** 小 / 中 / 大（t276）；不写挑人时粗估。 */
-  size?: string;
-  /** 功能 / 修复（t237）；不写按来源、标题、父任务推断。 */
-  type?: string;
+  /** 派活避开的主机（hN，逗号分隔）。 */
+  avoid_host?: string;
   /** 投任务的节点（关注点往模块投时）。 */
   from?: string | null;
   /** 归属哪一部分（组织节点）。 */
@@ -186,26 +138,14 @@ function byOf(value: unknown) {
   return value || null;
 }
 
-/** 父任务的类型：子任务不写类型、标题也看不出时跟它走（t237）。 */
-const parentType = (db: DatabaseSync, parent: number) =>
-  storedType(
-    (
-      db.prepare("SELECT task_type FROM tasks WHERE id=?").get(parent) as
-        { task_type: string } | undefined
-    )?.task_type,
-  );
-
 export function createTask(
   db: DatabaseSync,
   body: unknown,
   now = Date.now(),
   /** 建任务的 leader（aN）：记进 created 事件，全景据此显示「谁派的」。 */
   by?: string,
-  /**
-   * 运行时替父任务建的帮手（审阅、上线验证）：不让父任务变成总任务（t190）。
-   * source：运行时知道任务从哪来时给（选项单、巡检、上线验证、关卡交回），没写 type 时据此定类型（t237）。
-   */
-  internal: { helper?: boolean; source?: TypeSource } = {},
+  /** 运行时替父任务建的帮手（审阅、上线验证）：不让父任务变成总任务（t190）。 */
+  internal: { helper?: boolean } = {},
 ): Task {
   const input = objectOf(body);
   onlyKeys(input, [
@@ -221,23 +161,15 @@ export function createTask(
     "after",
     "after_pr",
     "auto",
-    "urgent",
-    "why",
     "avoid_host",
-    "stopgap",
     "priority",
-    "size",
-    "type",
     "from",
     "part",
     "also",
     "secret",
   ]);
   const by_ = byOf(input.by);
-  const size = sizeOf(input.size);
-  const urgent = urgentOf(input.urgent);
-  const type = input.type === undefined ? undefined : parseTaskType(input.type);
-  const extras = urgentExtras(input, urgent);
+  const avoid = avoidOf(input);
   const priority =
     input.priority === undefined ? undefined : parsePriority(input.priority);
   const deliver = input.deliver === undefined ? "pr" : deliverOf(input.deliver);
@@ -263,16 +195,9 @@ export function createTask(
     checkScope(db, { part, also }, job);
     checkTaskSecrets(db, part, secrets);
     const level = priority ?? defaultPriority(aspectPart(db, part));
-    const kind =
-      type ??
-      inferType({
-        title: values.title,
-        source: internal.source ?? null,
-        parent: parent ? parentType(db, parent) : null,
-      });
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,repo,owner,deliver,issue,origin_node_id,part_id,job_id,urgent,priority,task_type,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
+        "INSERT INTO tasks(parent_id,helper,title,brief,brief_path,repo,owner,deliver,issue,origin_node_id,part_id,job_id,prio,avoid_hosts,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'todo',?,?)",
       )
       .run(
         parent,
@@ -287,24 +212,12 @@ export function createTask(
         origin,
         part,
         job,
-        urgent ? 1 : 0,
         level,
-        kind,
+        avoid ?? null,
         now,
         now,
       );
     const id = Number(lastInsertRowid);
-    const extra = {
-      ...extras.fields,
-      ...(urgent ? { urgent_by: by ?? null } : {}),
-      ...(size ? { size } : {}),
-    };
-    if (Object.keys(extra).length)
-      db.prepare(
-        `UPDATE tasks SET ${Object.keys(extra)
-          .map((key) => `${key}=?`)
-          .join(",")} WHERE id=?`,
-      ).run(...Object.values(extra), id);
     setConditions(db, id, input, now);
     writeAlso(db, id, also);
     writeTaskSecrets(db, id, secrets);
@@ -314,14 +227,7 @@ export function createTask(
       ...(origin ? { from: `o${origin}` } : {}),
       ...(part ? { part: `o${part}` } : {}),
       ...(job ? { job: `r${job}` } : {}),
-      ...(urgent ? { urgent: true } : {}),
-      ...(extras.fields.urgent_why ? { why: extras.fields.urgent_why } : {}),
-      ...(extras.stopgap.length
-        ? { stopgap: stopgapJson(extras.stopgap) }
-        : {}),
-      ...(level === "idle" ? { priority: level } : {}),
-      ...(size ? { size } : {}),
-      type: kind,
+      ...(level !== "normal" ? { priority: level } : {}),
       ...(also.length ? { also: also.map(nodeRef) } : {}),
       ...(secrets.length ? { secrets } : {}),
       ...(by ? { by } : {}),
@@ -343,8 +249,6 @@ export function updateTask(
   reference: unknown,
   body: unknown,
   now = Date.now(),
-  /** 改任务的 leader（aN）；用户与秘书不给。 */
-  options: { by?: string } = {},
 ): Task {
   const id = parseTaskRef(reference);
   const input = objectOf(body);
@@ -359,13 +263,8 @@ export function updateTask(
     "after",
     "after_pr",
     "auto",
-    "urgent",
-    "why",
     "avoid_host",
-    "stopgap",
     "priority",
-    "size",
-    "type",
     "pr_url",
     "from",
     "part",
@@ -374,20 +273,15 @@ export function updateTask(
   ]);
   if (!Object.keys(input).length)
     throw usage(
-      "至少修改一项：title、brief、brief_path、by、from、part、also、secret、status、deliver、issue、after、after_pr、auto、urgent、why、avoid_host、stopgap、priority、size、type、pr_url",
+      "至少修改一项：title、brief、brief_path、by、from、part、also、secret、status、deliver、issue、after、after_pr、auto、avoid_host、priority、pr_url",
     );
   const fields: Record<string, string | number | null> = {};
   if ("title" in input) fields.title = title(input.title);
   if ("deliver" in input) fields.deliver = deliverOf(input.deliver);
   if ("issue" in input) fields.issue = issueOf(input.issue);
-  // 紧急随时可改（在跑、排队中也行）：排队中的下一轮巡检按新标记拉起。
-  if ("urgent" in input) fields.urgent = urgentOf(input.urgent) ? 1 : 0;
-  // 闲时随时可改：排队中的下一轮拉起按新档位排；已在跑的不打断。
-  if ("priority" in input) fields.priority = parsePriority(input.priority);
-  // 大小随时可改（给空清掉、回到粗估）：只影响之后的自动挑人。
-  if ("size" in input) fields.size = sizeOf(input.size);
-  // 类型随时可改：排队中的下一轮按新类型算修复保底名额。
-  if ("type" in input) fields.task_type = parseTaskType(input.type);
+  // 优先级随时可改：排队中的下一轮拉起按新档位排；已在跑的不打断。
+  if ("priority" in input) fields.prio = parsePriority(input.priority);
+  if ("avoid_host" in input) fields.avoid_hosts = avoidOf(input) ?? null;
   if ("pr_url" in input) {
     if (
       typeof input.pr_url !== "string" ||
@@ -403,12 +297,6 @@ export function updateTask(
     "secret" in input ? parseSecretNames(input.secret) : undefined;
   return atomically(db, () => {
     const current = requireRow(db, id);
-    const urgentNow =
-      "urgent" in fields ? fields.urgent === 1 : current.urgent === 1;
-    Object.assign(fields, urgentExtras(input, urgentNow).fields);
-    // 新标上紧急：记下谁标的（leader 为 aN，用户与秘书为 null）。
-    if (fields.urgent === 1 && current.urgent !== 1)
-      fields.urgent_by = options.by ?? null;
     if ("brief" in input || "brief_path" in input)
       Object.assign(fields, briefOf(input, current.repo));
     if ("by" in input) {
@@ -433,9 +321,9 @@ export function updateTask(
         : (current.part_id ?? current.node_id)
     ) as number | null;
     // 换了归属部分、又没同时指定档位：没被人改过的档位跟着新部分的缺省走。
-    if (!("priority" in fields) && "part_id" in fields)
-      fields.priority = priorityAfterMove(
-        current.priority,
+    if (!("prio" in fields) && "part_id" in fields)
+      fields.prio = priorityAfterMove(
+        current.prio,
         aspectPart(db, current.part_id ?? current.node_id),
         aspectPart(db, part),
       );

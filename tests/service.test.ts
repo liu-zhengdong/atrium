@@ -332,7 +332,7 @@ test(
 
 // 用整机负载保护线造「本机太忙」；Windows 上 loadavg 恒为 0，这条线不生效（进程树那条线见 host-load 单测）。
 test(
-  "紧急任务走真实后台服务：本机太忙时普通任务排队，--urgent 立刻派出，top 标紧急",
+  "紧急任务走真实后台服务：本机太忙时普通任务排队，紧急的立刻派出，top 标紧急",
   { timeout: 90_000, skip: process.platform === "win32" },
   async (t) => {
     const f = await fixture(t);
@@ -358,61 +358,41 @@ test(
       "修全景网页",
       "--repo",
       worker.repo,
-      "--urgent",
+      "--priority",
+      "紧急",
     );
     assert.equal(b.code, 0, b.stderr);
-    assert.match(b.stdout, /紧急：没空位先暂停闲时/);
+    assert.match(b.stdout, /已建 t2：修全景网页 · 紧急/);
     const queued = await f.cli("task", "run", "t1", "--worker", "grok");
     assert.equal(queued.code, 0, queued.stderr);
     assert.match(
       queued.stdout,
       /t1 排队中：本机太忙（整机负载 .+，超过 0\.0）/,
     );
-    const urgent = await f.cli(
-      "task",
-      "run",
-      "t2",
-      "--worker",
-      "codex",
-      "--urgent",
-    );
+    const urgent = await f.cli("task", "run", "t2", "--worker", "codex");
     assert.equal(urgent.code, 0, urgent.stderr);
     assert.match(urgent.stdout, /已派 t2 给 codex/);
-    assert.match(urgent.stdout, /紧急：没空位先暂停闲时/);
     const top = JSON.parse((await f.cli("top", "--json")).stdout).result as {
-      rows: { ref: string; urgent: boolean }[];
+      rows: { ref: string; priority: string }[];
       host: { paused_by: string };
     };
-    assert.equal(top.rows.find((row) => row.ref === "t2")?.urgent, true);
+    assert.equal(top.rows.find((row) => row.ref === "t2")?.priority, "urgent");
     assert.equal(top.host.paused_by, "load");
     const shown = await f.cli("task", "show", "t2");
     assert.match(shown.stdout, /t2 · 紧急 修全景网页/);
-    assert.match(shown.stdout, /紧急：是（紧急通道）/);
-    // 破坏输入：两个开关一起给。
-    const both = await f.cli("task", "set", "t2", "--urgent", "--no-urgent");
-    assert.notEqual(both.code, 0);
-    assert.match(both.stderr, /--urgent 与 --no-urgent 只能给一个/);
-    const off = await f.cli("task", "set", "t2", "--no-urgent");
-    assert.equal(off.code, 0, off.stderr);
-    assert.match(off.stdout, /已取消紧急/);
-    // 排队中的 t1 标上紧急：不等巡检，回执之前已拉起。
-    const on = await f.cli("task", "set", "t1", "--urgent");
+    assert.match(shown.stdout, /优先级：紧急/);
+    // 破坏输入：旧写法与写错的档位都拒绝。
+    const old = await f.cli("task", "set", "t2", "--urgent");
+    assert.notEqual(old.code, 0);
+    const bad = await f.cli("task", "set", "t2", "--priority", "很急");
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.stderr, /--priority 只能是 紧急、修复、普通 或 闲时/);
+    // 排队中的 t1 改成紧急：不等巡检，回执之前已拉起。
+    const on = await f.cli("task", "set", "t1", "--priority", "紧急");
     assert.equal(on.code, 0, on.stderr);
     assert.match(on.stdout, /t1 已更新 · \[running\]/);
-    assert.match(on.stdout, /紧急：没空位先暂停闲时/);
-    // t2 已取消紧急、还在跑：t1 标上紧急时本机太忙，先暂停 t2 腾位置（t215 抢占）。
-    let paused = "";
-    for (const end = Date.now() + 20_000; Date.now() < end;) {
-      paused = (await f.cli("task", "show", "t2")).stdout;
-      if (/抢占暂停/.test(paused)) break;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    assert.match(paused, /被紧急 t1 抢占暂停/);
-    assert.equal(
-      (await f.cli("task", "set", "t2", "--status", "cancelled")).code,
-      0,
-    );
-    assert.equal((await f.cli("task", "stop", "t1")).code, 0);
+    for (const ref of ["t1", "t2"])
+      assert.equal((await f.cli("task", "stop", ref)).code, 0);
   },
 );
 

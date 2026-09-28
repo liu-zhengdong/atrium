@@ -308,6 +308,7 @@ test("事实采集：受阻后事件投 a1，a1 捎话后重新拉起显示已�
     kind: "leader",
     who: "a1",
     text: "本地检查没过 · 等 a1 处理",
+    due: { kind: "leader", since: 3 },
     detail: localCheck.reason,
   });
   db.prepare("UPDATE task_inbox SET acked_at=4").run();
@@ -323,7 +324,7 @@ test("事实采集：受阻后事件投 a1，a1 捎话后重新拉起显示已�
   // 在 leader 手里挂了多久（t253）：从受阻那一刻（3）算，备注不重新起算。
   assert.equal(
     holderFor(db, row(), null, 3 + 45 * 60_000)!.text,
-    "本地检查没过 · a1 在处理 · 挂 45 分钟",
+    "本地检查没过 · a1 在处理 · 45 分钟没动，已超时",
   );
   noteTask(db, task.ref, "escalated", { from: "a1", to: "secretary" }, 6);
   assert.equal(
@@ -381,7 +382,7 @@ test("事实采集：合入检查没跑成等重跑（t204）；下一轮开始�
   noteTask(db, task.ref, "merge_queued", {}, 3);
   stage("merging");
   noteTask(db, task.ref, "merge_check_started", { host: "h3" }, 4);
-  assert.deepEqual(holderFacts(db, row(), null).checking, { host: "h3" });
+  assert.equal(holderFacts(db, row(), null).checking, true);
   noteTask(
     db,
     task.ref,
@@ -391,7 +392,7 @@ test("事实采集：合入检查没跑成等重跑（t204）；下一轮开始�
   );
   stage("merge_queued");
   let facts = holderFacts(db, row(), null);
-  assert.equal(facts.checking, null);
+  assert.equal(facts.checking, false);
   assert.deepEqual(facts.rerun, {
     attempt: 1,
     reason: "h3 离线，检查没派过去",
@@ -406,7 +407,7 @@ test("事实采集：合入检查没跑成等重跑（t204）；下一轮开始�
   noteTask(db, task.ref, "merge_check_started", { host: "h2" }, 6);
   facts = holderFacts(db, row(), null);
   assert.equal(facts.rerun, null);
-  assert.deepEqual(facts.checking, { host: "h2" });
+  assert.equal(facts.checking, true);
   stage("merge_queued");
   noteTask(
     db,
@@ -437,105 +438,29 @@ test("事实采集：合入检查没跑成等重跑（t204）；下一轮开始�
   db.close();
 });
 
-test("没进展提醒（t260）：执行者多久没进展、检查多久没输出卡在哪；远程插主机名", () => {
+test("执行者一行按同一种写法写没动多久（进展时刻来自服务内存）；远程插主机名；检查中看检查", () => {
+  const now = 100 * 60_000;
   assert.equal(
-    of({ worker_quiet_ms: 5 * 60_000 + 30_000 })!.text,
-    "codex+gpt-6-sol:high 5 分钟没进展",
+    of({ progress_at: now - 5 * 60_000 - 30_000, now })!.text,
+    "codex+gpt-6-sol:high 在做 · 5 分钟没动",
   );
   assert.equal(
-    of({ worker_quiet_ms: 5 * 60_000, host: "ggb" })!.text,
-    "codex+gpt-6-sol:high @ ggb 5 分钟没进展",
+    of({ progress_at: now - 25 * 60_000, host: "ggb", now })!.text,
+    "codex+gpt-6-sol:high @ ggb 在做 · 25 分钟没动，已超时",
+  );
+  assert.equal(
+    of({ progress_at: now - 60_000, now })!.text,
+    "codex+gpt-6-sol:high 在做",
   );
   assert.equal(of({ host: "ggb" })!.text, "codex+gpt-6-sol:high @ ggb 在做");
-  // 在跑检查时看检查，不看执行者。
   assert.equal(
-    of({ worker_quiet_ms: 5 * 60_000, checking: { host: null } })!.text,
+    of({ progress_at: now - 9 * 60_000, now, checking: true })!.text,
     "codex+gpt-6-sol:high 交付了，本地检查中",
   );
-  const merging = {
-    status: "done" as const,
-    delivery_stage: "merging" as const,
-  };
   assert.equal(
-    of({
-      ...merging,
-      checking: { host: "h1" },
-      check_quiet: "检查 5 分钟没输出：卡在 tests/task-usage-budget.test.ts",
-    })!.text,
-    "检查 5 分钟没输出：卡在 tests/task-usage-budget.test.ts",
-  );
-  assert.equal(
-    of({
-      ...merging,
-      checking: { host: "h3" },
-      check_quiet: "检查 5 分钟没输出",
-    })!.text,
-    "在 h3 上检查 5 分钟没输出",
-  );
-  assert.equal(
-    of({ ...merging, checking: { host: null } })!.text,
+    of({ status: "done", delivery_stage: "merging", checking: true })!.text,
     "合入中：rebase 并跑快检查",
   );
-});
-
-test("事实采集：没进展提醒只算这一轮检查、这一轮执行者，又有输出后不再显示", () => {
-  const db = new DatabaseSync(":memory:");
-  ensureTaskTables(db);
-  ensureEventTables(db);
-  const task = createTask(db, { title: "没进展" }, 1);
-  advanceTask(
-    db,
-    task.ref,
-    { kind: "start" },
-    { worker: "claude+opus:high" },
-    {},
-    2,
-  );
-  const row = () =>
-    db.prepare("SELECT * FROM tasks WHERE id=?").get(task.id) as never;
-  noteTask(db, task.ref, "worker_quiet", { quiet_ms: 300_000, reason: "…" }, 3);
-  assert.equal(holderFacts(db, row(), null).worker_quiet_ms, 300_000);
-  assert.equal(
-    holderFor(db, row(), null)!.text,
-    "claude+opus:high 5 分钟没进展",
-  );
-  noteTask(db, task.ref, "worker_quiet", { resumed: true }, 4);
-  assert.equal(holderFacts(db, row(), null).worker_quiet_ms, null);
-  noteTask(db, task.ref, "worker_quiet", { quiet_ms: 360_000 }, 5);
-  assert.equal(holderFacts(db, row(), null).worker_quiet_ms, 360_000);
-  // 换一轮（重新拉起）：上一轮的提醒不算。
-  noteTask(db, task.ref, "start", {}, 6);
-  assert.equal(holderFacts(db, row(), null).worker_quiet_ms, null);
-
-  db.prepare(
-    "UPDATE tasks SET status='done',delivery_stage='merging' WHERE id=?",
-  ).run(task.id);
-  noteTask(db, task.ref, "merge_check_started", { host: "h1" }, 7);
-  noteTask(
-    db,
-    task.ref,
-    "merge_check_quiet",
-    { reason: "检查 5 分钟没输出：卡在 tests/a.test.ts" },
-    8,
-  );
-  assert.equal(
-    holderFor(db, row(), null)!.text,
-    "检查 5 分钟没输出：卡在 tests/a.test.ts",
-  );
-  noteTask(db, task.ref, "merge_check_quiet", { resumed: true }, 9);
-  assert.equal(holderFacts(db, row(), null).check_quiet, null);
-  noteTask(
-    db,
-    task.ref,
-    "merge_check_quiet",
-    { reason: "检查 6 分钟没输出" },
-    10,
-  );
-  assert.equal(holderFacts(db, row(), null).check_quiet, "检查 6 分钟没输出");
-  // 下一轮检查开始：旧提醒不算。
-  noteTask(db, task.ref, "merge_check_started", { host: "h1" }, 11);
-  assert.equal(holderFacts(db, row(), null).check_quiet, null);
-  db.close();
 });
 
 /** 审阅打回的原文形如 review-runtime 交回时写的：审阅者短号、执行者，再接整篇意见。 */

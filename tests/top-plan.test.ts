@@ -162,7 +162,7 @@ test("排期段：就绪带节点、自动派与负责人；等待逐项带状�
   assert.doesNotMatch(text, /t37/);
 });
 
-test("排期段：就绪的按紧急 → 普通 → 闲时排，标题前标紧急或闲时（t136）", () => {
+test("排期段：就绪的按紧急 → 修复 → 普通 → 闲时排，标题前标紧急、修复或闲时", () => {
   const plan: PlanView = {
     next_after: null,
     groups: {
@@ -170,7 +170,8 @@ test("排期段：就绪的按紧急 → 普通 → 闲时排，标题前标紧�
       ready: [
         entry("t1", "性能巡检", { task: { priority: "idle" } }),
         entry("t2", "功能 A", { task: { priority: "normal" } }),
-        entry("t3", "性能急事", { task: { priority: "idle", urgent: 1 } }),
+        entry("t3", "性能急事", { task: { priority: "urgent" } }),
+        entry("t6", "修 bug", { task: { priority: "fix" } }),
         entry("t4", "旧服务的任务"),
       ],
       waiting: [],
@@ -182,9 +183,9 @@ test("排期段：就绪的按紧急 → 普通 → 闲时排，标题前标紧�
     .map((line) => line.trim());
   assert.deepEqual(
     rows.map((line) => line.split(/\s+/).slice(0, 3).join(" ")),
-    ["○ t3 紧急", "○ t2 功能", "○ t4 旧服务的任务", "○ t1 闲时"],
+    ["○ t3 紧急", "○ t6 修复", "○ t2 功能", "○ t4 旧服务的任务", "○ t1 闲时"],
   );
-  assert.match(rows[3]!, /闲时 性能巡检/);
+  assert.match(rows[4]!, /闲时 性能巡检/);
 });
 
 test("排期段：标题已以「紧急」开头的不再加前缀（巡检 f6）", () => {
@@ -192,7 +193,9 @@ test("排期段：标题已以「紧急」开头的不再加前缀（巡检 f6�
     next_after: null,
     groups: {
       running: [],
-      ready: [entry("t5", "紧急：修合入队列", { task: { urgent: 1 } })],
+      ready: [
+        entry("t5", "紧急：修合入队列", { task: { priority: "urgent" } }),
+      ],
       waiting: [],
       blocked: [],
     },

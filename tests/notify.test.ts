@@ -46,7 +46,6 @@ import {
 } from "../server/notify/model.ts";
 import { width } from "../server/text-width.ts";
 import { telegramFile } from "../server/notify/store.ts";
-import { publishUrgentStage } from "../server/tasks/notice.ts";
 import { redact } from "../server/secret-redact.ts";
 import { denyReason, leaderRule } from "../server/leaders/scope.ts";
 import { statusText } from "../cli/notify.ts";
@@ -156,66 +155,6 @@ test("推什么：只推等你拍板、上交到秘书的卡住／越界／里�
       null,
       JSON.stringify(skipped),
     );
-});
-
-test("紧急任务（t219）：只推上线、卡住、止损失败，按阶段各推一次；其余阶段不推", () => {
-  const urgent = (stage: string, detail: Record<string, unknown> = {}) =>
-    event({
-      kind: "urgent_stage",
-      task: "t171",
-      detail: { title: "修线上", event: stage, ...detail },
-    });
-  const cases: [PushEvent, string | null][] = [
-    [urgent("online"), "urgent_online"],
-    [urgent("stalled"), "urgent_stuck"],
-    [urgent("stopgap", { failed: 1 }), "urgent_stopgap"],
-    [urgent("stopgap"), null],
-    [urgent("stopgap", { failed: 0 }), null],
-    [urgent("start"), null],
-    [urgent("merged"), null],
-    [urgent("done"), null],
-    [urgent("local_check_started"), null],
-    [urgent("urgent_swap"), null],
-    [urgent("preempting"), null],
-    [urgent("failed"), null],
-    [urgent("blocked"), null],
-    [urgent("online_failed"), null],
-    [event({ kind: "urgent_stage", task: "t171", detail: {} }), null],
-    [
-      event({ kind: "urgent_stage", task: null, detail: { event: "online" } }),
-      null,
-    ],
-    [{ ...urgent("online"), subscriber: "u1" }, null],
-  ];
-  for (const [input, kind] of cases)
-    assert.equal(
-      pushOf(input, "secretary", title)?.kind ?? null,
-      kind,
-      JSON.stringify(input.detail),
-    );
-  // 去重键按任务与阶段（t218）：卡住推过，后来上线还要再推一次；换了事件编号的同一阶段不再推。
-  assert.deepEqual(pushOf(urgent("online"), "secretary", title), {
-    key: "urgent:t171:urgent_online",
-    kind: "urgent_online",
-    ref: "t171",
-    title: "修线上",
-  });
-  assert.equal(
-    pushOf(urgent("stalled"), "secretary", title)?.key,
-    "urgent:t171:urgent_stuck",
-  );
-  assert.equal(
-    pushOf({ ...urgent("stalled"), id: 99 }, "secretary", title)?.key,
-    "urgent:t171:urgent_stuck",
-  );
-  assert.notEqual(
-    pushOf({ ...urgent("stalled"), task: "t172" }, "secretary", title)?.key,
-    "urgent:t171:urgent_stuck",
-  );
-  assert.equal(
-    messageText([{ kind: "urgent_stuck", ref: "t171", title: "修线上" }]),
-    "Atrium：1 件事\n【紧急任务卡住】t171 修线上",
-  );
 });
 
 test("消息：一条列多件，超过上限写还有几件", () => {
@@ -948,88 +887,6 @@ test("推送：上交攒成一条、选项单单发带按钮的卡片，过程�
     kind: "beyond",
     note: "关着不推",
   });
-  assert.equal(x.notifier.queued().length, 0);
-});
-
-test("紧急任务（t218）：要处理的阶段排进推送，同一任务同一阶段只推一次，知会阶段不推，守免打扰", async (t) => {
-  const x = await open(t);
-  await bindUp(x);
-  await x.ok("PATCH", "/api/notify/telegram", {
-    batch_seconds: 60,
-    quiet: "23:00-08:00",
-  });
-  const before = x.tg.sent().length;
-  x.setClock(at("23:30"));
-  const task = await x.ok("POST", "/api/tasks", {
-    title: "修线上",
-    urgent: true,
-    why: "全景网页打不开",
-  });
-  const normal = await x.ok("POST", "/api/tasks", { title: "普通任务" });
-  const db = x.db;
-  const stage = (id: number, kind: string, detail = {}) =>
-    publishUrgentStage(x.taskRunner.inbox, db, id, kind, detail);
-  const secretaryRows = () =>
-    db
-      .prepare(
-        "SELECT id FROM task_inbox WHERE subscriber='secretary' AND kind='urgent_stage' AND acked_at IS NULL",
-      )
-      .all() as { id: number }[];
-
-  // 知会阶段：投给秘书，但不进推送队列。
-  for (const kind of ["start", "done", "local_check_started", "merged"])
-    assert.equal(stage(task.id, kind), true, kind);
-  stage(task.id, "stopgap", { reason: "都做成了" });
-  assert.equal(x.notifier.queued().length, 0);
-  // 不是紧急任务不投、不推。
-  assert.equal(stage(normal.id, "stalled"), false);
-
-  // 卡住：推一次；秘书确认后换人又卡住（新起一条事件）不再推。
-  stage(task.id, "stalled", { reason: "20 分钟没进展" });
-  assert.deepEqual(
-    x.notifier.queued().map((q) => `${q.kind} ${q.ref}`),
-    [`urgent_stuck ${task.ref}`],
-  );
-  const first = secretaryRows().map((row) => row.id);
-  x.taskRunner.inbox.ack(first);
-  stage(task.id, "stalled", { reason: "又卡住" });
-  assert.notDeepEqual(
-    secretaryRows().map((row) => row.id),
-    first,
-  );
-  stage(task.id, "stopgap", { failed: 1, reason: "暂停主机失败" });
-  stage(task.id, "stopgap", { failed: 2, reason: "再失败" });
-  stage(task.id, "online");
-  assert.deepEqual(
-    x.notifier.queued().map((q) => `${q.kind} ${q.ref}`),
-    [
-      `urgent_stuck ${task.ref}`,
-      `urgent_stopgap ${task.ref}`,
-      `urgent_online ${task.ref}`,
-    ],
-  );
-
-  // 免打扰时段里攒着，不绕过；时段结束合成一条，只带类别、短号、标题。
-  x.tick(5 * 60_000);
-  await x.notifier.flush();
-  assert.equal(x.tg.sent().length, before);
-  x.setClock(Date.parse("2026-09-29T08:00:00+08:00"));
-  await x.notifier.flush();
-  assert.equal(x.tg.sent().length, before + 1);
-  const text = x.tg.sent().at(-1)!.text as string;
-  assert.equal(
-    text,
-    [
-      "Atrium：3 件事",
-      `【紧急任务卡住】${task.ref} 修线上`,
-      `【紧急止损没做成】${task.ref} 修线上`,
-      `【紧急任务上线】${task.ref} 修线上`,
-    ].join("\n"),
-  );
-  assert.doesNotMatch(text, /没进展|失败|全景网页|又卡住/);
-  // 发过之后同一阶段再报也不重推。
-  stage(task.id, "online");
-  stage(task.id, "stalled");
   assert.equal(x.notifier.queued().length, 0);
 });
 

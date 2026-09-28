@@ -19,18 +19,12 @@ import { childSummaries } from "./ledger-summary.ts";
 import { rollupFor, rollups } from "./rollup-ledger.ts";
 import { conditions } from "./schedule-ledger.ts";
 import { noteView } from "./notes.ts";
-import { idleWaits, queued, queueView } from "./queue.ts";
+import { queued, queueView } from "./queue.ts";
 import { CHECK_EVENT_KINDS, checkSummary } from "./check-outcome.ts";
 import { verifyViews } from "./verify-runtime.ts";
 import { verifyHolder } from "./verify-view.ts";
 
 const EVENTS_SHOWN = 50;
-
-/** 只算一次、要时才算（列表里没有排队的任务就不读队列）。 */
-export function once<T>(compute: () => T): () => T {
-  let value: { v: T } | undefined;
-  return () => (value ??= { v: compute() }).v;
-}
 
 export function getTask(db: DatabaseSync, reference: unknown) {
   const found = requireRow(db, parseTaskRef(reference));
@@ -131,7 +125,6 @@ export function listTasks(
     limit + 1,
   );
   const more = rows.length > limit;
-  const ahead = once(() => idleWaits(db));
   const page = rows.slice(0, limit);
   const totals = rollups(
     db,
@@ -140,7 +133,7 @@ export function listTasks(
   const tasks = page.map((row) => ({
     ...listView(row),
     ...noteView(db, row.id, row.status),
-    ...queueView(db, row.id, ahead),
+    ...queueView(db, row.id),
     rollup: totals.get(row.id) ?? null,
   }));
   return { tasks, next_after: more ? tasks.at(-1)!.ref : null };

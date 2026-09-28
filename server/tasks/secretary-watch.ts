@@ -1,11 +1,13 @@
+import { DUE } from "./overdue.ts";
+
 /**
  * 秘书在不在听、没人听时后台叫醒（t242）：纯函数，命令行静态引入，不引重模块。
  * 服务按 EventInbox.presence 记谁挂着 `events wait`；后台兜底（secretary-fallback.ts）按 watchDecision 行事，
- * 状态栏与 top 按 secretaryText 显示。
+ * 状态栏与 top 按 secretaryText 显示。时限是 overdue.ts 表里秘书那一行：到期后台叫醒，叫不起来推给用户。
  */
 
 /** 没有秘书在听、要处理的事件又摆了这么久，就在后台叫醒一次秘书。 */
-export const UNATTENDED_MS = 3 * 60_000;
+export const UNATTENDED_MS = DUE.secretary.ms;
 
 export type Presence = {
   /** 此刻有连接挂着 wait（秘书会话、atrium chat 界面）。 */

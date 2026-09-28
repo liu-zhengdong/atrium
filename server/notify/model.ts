@@ -1,29 +1,24 @@
 import { Problem } from "../problem.ts";
 import type { Offset } from "../schedules/plan.ts";
 import { oneLine } from "../text-width.ts";
-import { urgentAlert, type UrgentAlert } from "../tasks/urgent.ts";
 
 /**
  * 推送到手机（Telegram）的判定：哪些事件要推、推什么字、什么时候发、失败怎么重试、走哪个代理、
  * 设置怎么校验。全是纯函数、穷举测试；凭据文件在 store.ts，发请求在 telegram.ts，调度在 runtime.ts。
  *
- * 只推三类事：选项单等你拍板、上交到用户这层的卡住／越界、里程碑上线；
- * 另加紧急任务要处理的阶段（上线、卡住、止损失败，t219），以及秘书没在听、后台又叫不起来时要处理的事没人管（t242）；紧急的也照常攒批、守免打扰，不插队。
+ * 只推三类事：选项单等你拍板、上交到用户这层的卡住／越界（含运行时到期代为上交的，overdue.ts）、里程碑上线；
+ * 另加秘书没在听、后台又叫不起来时要处理的事没人管（t242）。都照常攒批、守免打扰。
  * 推送只放标题和短号，不放正文（上交说明、选项内容都不带）。
  * 选项单单独成一条「卡片」，带按钮在手机上拍板（选项号 + 选项标题、拍板、都不选），回复卡片附一句说明。
  */
 
-export type PushKind =
-  "choice" | "stuck" | "beyond" | "shipped" | "away" | UrgentAlert;
+export type PushKind = "choice" | "stuck" | "beyond" | "shipped" | "away";
 
 export const PUSH_LABEL: Record<PushKind, string> = {
   choice: "等你拍板",
   stuck: "卡住了",
   beyond: "越界要你定",
   shipped: "里程碑上线",
-  urgent_online: "紧急任务上线",
-  urgent_stuck: "紧急任务卡住",
-  urgent_stopgap: "紧急止损没做成",
   away: "秘书没在听",
 };
 
@@ -77,16 +72,11 @@ export function pushOf(
     if (!/^c[1-9]\d*$/.test(ref)) return null;
     return titled("choice", ref, text(detail.title));
   }
-  // 紧急任务要处理的阶段（t219）：同一任务同一阶段只推一次（t218）。去重键不带事件编号：
-  // 秘书确认后再报一次（如换人后又卡住）会新起一条事件，不能因此再推。
-  if (event.kind === "urgent_stage") {
-    const alert = urgentAlert(text(detail.event), detail);
-    if (!alert || !event.task) return null;
-    return {
-      ...titled(alert, event.task, text(detail.title)),
-      key: `urgent:${event.task}:${alert}`,
-    };
-  }
+  // 运行时到期代为上交到用户这层（overdue.ts 的 escalate）：按卡住推。
+  if (event.kind === "overdue")
+    return detail.step === "escalate" && event.task
+      ? titled("stuck", event.task, text(detail.title))
+      : null;
   if (event.kind !== "escalated") return null;
   const kind = text(detail.kind);
   if (kind !== "stuck" && kind !== "beyond" && kind !== "shipped") return null;

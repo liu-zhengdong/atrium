@@ -1,5 +1,4 @@
 import {
-  DEFAULT_WATCHDOG,
   checkCommon,
   invalid,
   type Adapter,
@@ -79,7 +78,6 @@ export const cursor: Adapter = {
   efforts: EFFORTS,
   quotaProvider: "cursor",
   resumeArgs: ["-p", "--continue"],
-  watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["json_events", "worktree_change"],
   notes: [
     "强度写进模型名后缀（gpt-5.3-codex:high → gpt-5.3-codex-high），auto 不能指定强度",

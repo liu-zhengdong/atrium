@@ -37,7 +37,6 @@ const info = z.object({
   data_dir: z.string().min(1).max(1000),
   clis: z.partialRecord(z.enum(TOOLS), cli),
   max_workers: z.number().int().min(1).max(4096).nullable(),
-  max_checks: z.number().int().min(1).max(64).optional(),
   skills: z.boolean().optional(),
 });
 const load = z.object({
@@ -142,7 +141,7 @@ export function registerHostRoutes(
   app.delete("/api/hosts/:id", (request) =>
     runner.removeHost(params(request).id),
   );
-  // 止损（t215）：停掉在那台跑的非紧急执行者，本机再结束已结束任务留下的执行者进程树。
+  // host clean：停掉在那台跑的执行者，再结束已结束任务留下的执行者进程树。
   // 停下的任务在停止事件里记发起者（t239）：?as= 给的 u1、secretary 或 aN，缺省 u1。
   app.post("/api/hosts/:id/clean", { bodyLimit: 1024 }, (request) =>
     runner.cleanHost(
@@ -226,18 +225,6 @@ export function registerHostRoutes(
       .strict()
       .parse(request.body ?? {});
     return remote.log(host, body);
-  });
-  app.post("/api/agent/check-log", (request) => {
-    const host = hostOf(request);
-    const body = z
-      .object({
-        id: z.string().max(64),
-        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-        data: z.string().max(1024 * 1024),
-      })
-      .strict()
-      .parse(request.body ?? {});
-    return remote.checkLog(host, body);
   });
   app.post("/api/agent/quota", { bodyLimit: 256 * 1024 }, (request) => {
     const host = hostOf(request);

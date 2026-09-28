@@ -11,40 +11,7 @@ import { ensurePauseTable } from "../pause.ts";
 import { ensurePatrolTables } from "./patrol.ts";
 import { ensureVerifyTables } from "./verify-runtime.ts";
 import { ensureWorkerProfiles } from "./worker-profiles.ts";
-import { ensureUrgentTables } from "./urgent-ledger.ts";
 import { ensureSecretTables } from "../secrets/store.ts";
-import { fixLikeTitle } from "./task-type.ts";
-
-/** 在途任务归属管方面的部分（或在它下面）的补成闲时；旧库没有组织表或 aspect 列就不动。 */
-function backfillIdle(db: DatabaseSync) {
-  const aspect = all<{ name: string }>(db, "PRAGMA table_info(org_nodes)").some(
-    (column) => column.name === "aspect",
-  );
-  if (!aspect) return;
-  db.exec(`WITH RECURSIVE idle(id) AS (
-      SELECT id FROM org_nodes WHERE aspect=1
-      UNION SELECT n.id FROM org_nodes n JOIN idle ON n.parent_id=idle.id)
-    UPDATE tasks SET priority='idle'
-      WHERE status NOT IN ('done','cancelled') AND COALESCE(part_id,node_id) IN (SELECT id FROM idle)`);
-}
-
-/** 没结束的任务按标题推断类型（t237）：像修 bug 的补成修复，其余保持功能；按 id 翻页，每页一次读、一条批量更新。 */
-function backfillTypes(db: DatabaseSync) {
-  const PAGE = 500;
-  const read = db.prepare(
-    "SELECT id,title FROM tasks WHERE status NOT IN ('done','cancelled') AND id>? ORDER BY id LIMIT ?",
-  );
-  for (let after = 0; ;) {
-    const rows = read.all(after, PAGE) as { id: number; title: string }[];
-    const fixes = rows.filter((row) => fixLikeTitle(row.title));
-    if (fixes.length)
-      db.prepare(
-        `UPDATE tasks SET task_type='fix' WHERE id IN (${fixes.map(() => "?").join(",")})`,
-      ).run(...fixes.map((row) => row.id));
-    if (rows.length < PAGE) return;
-    after = rows.at(-1)!.id;
-  }
-}
 
 /** 老库里的帮手子任务：专员审查与会审意见，按运行时起的标题认。 */
 function backfillHelpers(db: DatabaseSync) {
@@ -108,11 +75,6 @@ export function ensureTaskTables(db: DatabaseSync) {
     db.exec(
       "ALTER TABLE tasks ADD COLUMN auto_dispatched INTEGER NOT NULL DEFAULT 0 CHECK(auto_dispatched IN (0,1))",
     );
-  // 紧急（t113）：跳过本机负载与执行者上限，排队与本地检查插到最前；标题写「紧急：」不算。
-  if (!columns.some((column) => column.name === "urgent"))
-    db.exec(
-      "ALTER TABLE tasks ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0 CHECK(urgent IN (0,1))",
-    );
   // 远程执行者（#358）：这一轮跑在哪台主机上，指向 hosts.id；本机为 NULL。
   if (!columns.some((column) => column.name === "host_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN host_id INTEGER");
@@ -128,25 +90,26 @@ export function ensureTaskTables(db: DatabaseSync) {
   // 全景图（#322）：任务归属哪一部分，指向 org_nodes.id。
   if (!columns.some((column) => column.name === "part_id"))
     db.exec("ALTER TABLE tasks ADD COLUMN part_id INTEGER");
-  // 闲时（t136）：管方面的部分开的任务缺省排在普通任务后面；加列时把在途的管方面任务补成闲时。
-  if (!columns.some((column) => column.name === "priority")) {
+  // 优先级只留一列（priority.ts）：紧急 / 修复 / 普通 / 闲时。旧库的 urgent、priority（只收 normal / idle）、
+  // task_type 列不再读写；加列这一次按它们折算，之后只认 prio。
+  if (!columns.some((column) => column.name === "prio")) {
     db.exec(
-      "ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('normal','idle'))",
+      "ALTER TABLE tasks ADD COLUMN prio TEXT NOT NULL DEFAULT 'normal' CHECK(prio IN ('urgent','fix','normal','idle'))",
     );
-    backfillIdle(db);
+    const has = (name: string) => columns.some((c) => c.name === name);
+    const cases = [
+      has("urgent") ? "WHEN urgent=1 THEN 'urgent'" : "",
+      has("task_type") ? "WHEN task_type='fix' THEN 'fix'" : "",
+      has("priority") ? "WHEN priority='idle' THEN 'idle'" : "",
+    ].filter(Boolean);
+    if (cases.length)
+      db.exec(
+        `UPDATE tasks SET prio=CASE ${cases.join(" ")} ELSE 'normal' END`,
+      );
   }
-  // 任务大小（t276）：没写为 NULL，挑人时按详述与牵涉范围粗估。
-  if (!columns.some((column) => column.name === "size"))
-    db.exec(
-      "ALTER TABLE tasks ADD COLUMN size TEXT CHECK(size IS NULL OR size IN ('small','medium','large'))",
-    );
-  // 任务类型（t237）：功能 / 修复；加列时把没结束的按标题补成修复。
-  if (!columns.some((column) => column.name === "task_type")) {
-    db.exec(
-      "ALTER TABLE tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'feature' CHECK(task_type IN ('feature','fix'))",
-    );
-    backfillTypes(db);
-  }
+  // 派活避开的主机（JSON 数组，主机 id；`--avoid-host`）。
+  if (!columns.some((column) => column.name === "avoid_hosts"))
+    db.exec("ALTER TABLE tasks ADD COLUMN avoid_hosts TEXT");
   // PR 交付后的合入阶段单独记录；旧任务不自动合入。
   if (!columns.some((column) => column.name === "delivery_stage"))
     db.exec("ALTER TABLE tasks ADD COLUMN delivery_stage TEXT");
@@ -181,7 +144,7 @@ export function ensureTaskTables(db: DatabaseSync) {
   );
   // 合入队、清理、上线回填、CI pending：部分索引，避免巡检误走 tasks_status 扫全部已完成。
   db.exec(
-    "CREATE INDEX IF NOT EXISTS tasks_merge_queue ON tasks(delivery_stage,urgent,merge_queued_at,id) WHERE delivery_stage IN ('merge_queued','merging') AND status='done'",
+    "CREATE INDEX IF NOT EXISTS tasks_merge_prio ON tasks(delivery_stage,prio,merge_queued_at,id) WHERE delivery_stage IN ('merge_queued','merging') AND status='done'",
   );
   db.exec(
     `CREATE INDEX IF NOT EXISTS tasks_cleanup_cancelled ON tasks(id)
@@ -265,6 +228,4 @@ export function ensureTaskTables(db: DatabaseSync) {
   ensureVerifyTables(db);
   // 执行者档案（#355）：三层档案与修订历史。
   ensureWorkerProfiles(db);
-  // 紧急通道（t215）：原因、避开的主机、止损动作，被抢占的任务与合入后并行的审阅。
-  ensureUrgentTables(db);
 }

@@ -6,12 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import {
   aspectPart,
   defaultPriority,
-  idleAhead,
-  idleAheadAll,
-  idleWaitText,
-  isIdle,
   parsePriority,
+  PRIORITIES,
   priorityAfterMove,
+  priorityCountsText,
   priorityTag,
   rank,
   tagTitle,
@@ -28,7 +26,7 @@ import {
 } from "../server/tasks/ledger.ts";
 import { ensureOrgTables } from "../server/org/schema.ts";
 import { addNode } from "../server/org/write.ts";
-import { enqueue, idleWaits, pending } from "../server/tasks/queue.ts";
+import { enqueue, pending } from "../server/tasks/queue.ts";
 import { EventInbox } from "../server/tasks/events.ts";
 import { Scheduler, taskPlan } from "../server/tasks/schedule.ts";
 import { topRows } from "../server/tasks/top.ts";
@@ -39,7 +37,8 @@ import { Problem } from "../server/problem.ts";
 import { startApp, until } from "./task-fixture.ts";
 
 /**
- * 闲时（t136）：管方面的部分开的任务缺省排在普通任务后面，有空闲执行者才派。
+ * 优先级只留一列：紧急 / 修复 / 普通 / 闲时；想跑的任务进同一个队列，唯一的 drain 按优先级、入队先后取。
+ * 管方面的部分开的任务缺省闲时。
  * 树：o1 组织 → o2 Atrium → o3 派活（管东西）、o4 性能（管方面）→ o5 启动速度（性能下的部分）。
  */
 
@@ -58,21 +57,23 @@ const orgDb = () => {
   return db;
 };
 
-test("档位写法：闲时 / 普通与 idle / normal 都认，其余拒绝并说参数名", () => {
+test("档位写法：紧急 / 修复 / 普通 / 闲时与英文都认，其余拒绝并说参数名", () => {
   for (const [text, want] of [
+    ["紧急", "urgent"],
+    ["修复", "fix"],
     ["闲时", "idle"],
     ["普通", "normal"],
     ["idle", "idle"],
-    ["normal", "normal"],
-    [" IDLE ", "idle"],
+    [" URGENT ", "urgent"],
+    ["fix", "fix"],
   ] as const)
     assert.equal(parsePriority(text), want, text);
-  for (const bad of ["紧急", "", "low", 1, null, undefined, true])
+  for (const bad of ["很急", "", "low", 1, null, undefined, true])
     assert.throws(
       () => parsePriority(bad),
       (error) =>
         error instanceof Problem &&
-        /priority: 只能是 闲时 或 普通/.test(error.message),
+        /priority: 只能是 紧急、修复、普通 或 闲时/.test(error.message),
       String(bad),
     );
 });
@@ -80,7 +81,7 @@ test("档位写法：闲时 / 普通与 idle / normal 都认，其余拒绝并�
 test("缺省档位与换部分：管方面的缺省闲时；没被人改过的跟着新部分走，改过的保留", () => {
   assert.equal(defaultPriority(true), "idle");
   assert.equal(defaultPriority(false), "normal");
-  for (const current of ["normal", "idle"] as Priority[])
+  for (const current of PRIORITIES as readonly Priority[])
     for (const before of [false, true])
       for (const after of [false, true])
         assert.equal(
@@ -119,19 +120,19 @@ test("管方面判定：自己或父链上有管方面的算；环与断链不�
   assert.equal(underAspect(nodes, null), false);
 });
 
-test("先后档位与闲时标记：紧急最前、普通、闲时；紧急的闲时任务按紧急算", () => {
-  for (const urgent of [false, true])
-    for (const idle of [false, true])
-      assert.equal(rank({ urgent, idle }), urgent ? 0 : idle ? 2 : 1);
-  for (const urgent of [0, 1, false, true])
-    for (const priority of ["normal", "idle", null, undefined]) {
-      const idle = priority === "idle" && !urgent;
-      assert.equal(isIdle({ urgent, priority }), idle);
-      assert.equal(
-        priorityTag({ urgent, priority }),
-        urgent ? "紧急" : idle ? "闲时" : "",
-      );
-    }
+test("先后档位与标记：紧急 0、修复 1、普通 2、闲时 3；普通不标；头部计数只写不为 0 的", () => {
+  assert.deepEqual(PRIORITIES.map(rank), [0, 1, 2, 3]);
+  assert.deepEqual(PRIORITIES.map(priorityTag), ["紧急", "修复", "", "闲时"]);
+  assert.equal(priorityTag(undefined), "");
+  assert.equal(
+    priorityCountsText({ urgent: 1, fix: 0, normal: 3, idle: 2 }),
+    "紧急 1 · 普通 3 · 闲时 2",
+  );
+  assert.equal(
+    priorityCountsText({ urgent: 0, fix: 0, normal: 0, idle: 0 }),
+    "",
+  );
+  assert.equal(priorityCountsText(undefined), "");
 });
 
 test("标题标记：标题已以同一标记开头的不重复（巡检 f6）", () => {
@@ -151,66 +152,17 @@ test("标题标记：标题已以同一标记开头的不重复（巡检 f6）",
   assert.equal(titleTag("紧急", "紧急：x"), "");
   assert.equal(titleTag("紧急", "x"), "紧急");
   assert.equal(
-    titleOf({ title: "紧急：修 x", urgent: true } as never),
+    titleOf({ title: "紧急：修 x", priority: "urgent" } as never),
     "紧急：修 x",
   );
-  assert.equal(titleOf({ title: "修 x", urgent: true } as never), "紧急 修 x");
-});
-
-test("闲时能不能派：同一工具的普通任务都挡；别的工具的只在等本机空位时挡", () => {
-  const ownWait = (tool: string) => tool === "opencode" || tool === "grok";
-  // 没有普通任务在排队：可以派。
-  assert.equal(idleAhead("codex", [], ownWait), 0);
-  // 同一工具：不管它在等什么都挡。
-  assert.equal(idleAhead("opencode", [{ tool: "opencode" }], ownWait), 1);
-  assert.equal(idleAhead("codex", [{ tool: "codex" }], ownWait), 1);
-  // 别的工具：在等自己那个工具（独占正忙、额度用尽）不挡；只在等本机空位的挡。
-  assert.equal(idleAhead("codex", [{ tool: "opencode" }], ownWait), 0);
-  assert.equal(idleAhead("codex", [{ tool: "claude" }], ownWait), 1);
   assert.equal(
-    idleAhead(
-      "codex",
-      [
-        { tool: "claude" },
-        { tool: "grok" },
-        { tool: "codex" },
-        { tool: "kimi" },
-      ],
-      ownWait,
-    ),
-    3,
+    titleOf({ title: "修 x", priority: "urgent" } as never),
+    "紧急 修 x",
   );
-  assert.equal(idleWaitText(3), "等空闲：前面还有 3 件普通任务");
-});
-
-test("队列里每件闲时任务前面有几件：线性算法与逐件判定一致（穷举小队列）", () => {
-  const tools = ["codex", "claude", "opencode"];
-  const ownWaits = [
-    () => false,
-    (tool: string) => tool === "opencode",
-    () => true,
-  ];
-  // 3 个位置 × 每个位置（工具 × 是否闲时）6 种，全排列穷举。
-  const kinds = tools.flatMap((tool) => [
-    { tool, idle: false },
-    { tool, idle: true },
-  ]);
-  for (const ownWait of ownWaits)
-    for (const a of kinds)
-      for (const b of kinds)
-        for (const c of kinds) {
-          const entries = [a, b, c].map((entry, i) => ({
-            ...entry,
-            task_id: i + 1,
-          }));
-          const all = idleAheadAll(entries, ownWait);
-          const normals = entries.filter((entry) => !entry.idle);
-          for (const entry of entries)
-            assert.equal(
-              all.get(entry.task_id),
-              entry.idle ? idleAhead(entry.tool, normals, ownWait) : undefined,
-            );
-        }
+  assert.equal(
+    titleOf({ title: "修 x", priority: "fix" } as never),
+    "修复 修 x",
+  );
 });
 
 test("建任务：归属管方面的部分（或其下）缺省闲时，其余普通；--priority 覆盖；set 可改，换部分跟着走", () => {
@@ -251,9 +203,16 @@ test("建任务：归属管方面的部分（或其下）缺省闲时，其余�
   );
   assert.equal(updateTask(db, perf.ref, { priority: "idle" }).priority, "idle");
   assert.throws(
-    () => updateTask(db, perf.ref, { priority: "紧急" }),
-    /priority: 只能是 闲时 或 普通/,
+    () => updateTask(db, perf.ref, { priority: "很急" }),
+    /priority: 只能是 紧急、修复、普通 或 闲时/,
   );
+  // 旧写法（urgent、type、size、stopgap）一律不认。
+  for (const retired of ["urgent", "type", "size", "stopgap", "why"])
+    assert.throws(
+      () => createTask(db, { title: "旧写法", [retired]: "x" }),
+      /不认识|unknown|字段/,
+      retired,
+    );
   // 没被人改过的：从性能挪到派活变普通，挪回来变闲时。
   assert.equal(updateTask(db, perf.ref, { part: "o3" }).priority, "normal");
   assert.equal(updateTask(db, perf.ref, { part: "o4" }).priority, "idle");
@@ -267,154 +226,145 @@ test("建任务：归属管方面的部分（或其下）缺省闲时，其余�
   );
 });
 
-test("旧库补列：在途的管方面任务补成闲时，已结束的与别处的不动，旧运行时表不读不写", () => {
+test("旧库补列：prio 按旧的 urgent、task_type、priority 折算一次，之后只认 prio；旧列留着不读不写，旧运行时表不动", () => {
   const db = new DatabaseSync(":memory:");
-  // 旧运行时留下的表与没有 priority 列的旧账本。
   db.exec(`CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT);
     INSERT INTO agents VALUES ('x','旧身份');
     CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER, title TEXT NOT NULL,
       brief_path TEXT, role TEXT, repo TEXT, status TEXT NOT NULL, worker TEXT, pid INTEGER, worktree TEXT,
       branch TEXT, pr_url TEXT, ci TEXT, result TEXT, created_at INTEGER NOT NULL, started_at INTEGER,
-      ended_at INTEGER, updated_at INTEGER NOT NULL, part_id INTEGER);`);
-  ensureOrgTables(db);
-  for (const [parent, slug, kind, name] of [
-    [undefined, "org", "org", "组织"],
-    ["o1", "atrium", "project", "Atrium"],
-    ["o2", "runtime", "module", "派活"],
-    ["o2", "perf", "aspect", "性能"],
-    ["o4", "startup", "module", "启动速度"],
-  ] as const)
-    addNode(db, { parent, slug, kind, name, reason: "测试" }, "u1");
+      ended_at INTEGER, updated_at INTEGER NOT NULL,
+      urgent INTEGER NOT NULL DEFAULT 0 CHECK(urgent IN (0,1)),
+      priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('normal','idle')),
+      task_type TEXT NOT NULL DEFAULT 'feature' CHECK(task_type IN ('feature','fix')),
+      size TEXT, stopgap TEXT, urgent_why TEXT);`);
   const insert = db.prepare(
-    "INSERT INTO tasks(title,status,part_id,created_at,updated_at) VALUES (?,?,?,0,0)",
+    "INSERT INTO tasks(title,status,urgent,priority,task_type,created_at,updated_at) VALUES (?,?,?,?,?,0,0)",
   );
-  insert.run("在途性能", "todo", 4);
-  insert.run("在途启动", "blocked", 5);
-  insert.run("已完成性能", "done", 4);
-  insert.run("功能", "todo", 3);
-  insert.run("没归属", "running", null);
+  insert.run("紧急闲时", "todo", 1, "idle", "feature");
+  insert.run("修复", "blocked", 0, "normal", "fix");
+  insert.run("闲时", "done", 0, "idle", "feature");
+  insert.run("普通", "running", 0, "normal", "feature");
   ensureTaskTables(db);
   ensureTaskTables(db);
   assert.deepEqual(
     db
-      .prepare("SELECT title,priority FROM tasks ORDER BY id")
+      .prepare("SELECT title,prio FROM tasks ORDER BY id")
       .all()
       .map((row) => ({ ...row })),
     [
-      { title: "在途性能", priority: "idle" },
-      { title: "在途启动", priority: "idle" },
-      { title: "已完成性能", priority: "normal" },
-      { title: "功能", priority: "normal" },
-      { title: "没归属", priority: "normal" },
+      { title: "紧急闲时", prio: "urgent" },
+      { title: "修复", prio: "fix" },
+      { title: "闲时", prio: "idle" },
+      { title: "普通", prio: "normal" },
     ],
+  );
+  // 读出的视图只有 priority，旧列的值不外露；建新任务照常（旧列按缺省）。
+  const shown = getTask(db, "t1") as unknown as Record<string, unknown>;
+  assert.equal(shown.priority, "urgent");
+  for (const retired of [
+    "urgent",
+    "task_type",
+    "size",
+    "stopgap",
+    "urgent_why",
+    "prio",
+  ])
+    assert.equal(retired in shown, false, retired);
+  assert.equal(
+    createTask(db, { title: "新", priority: "修复" }).priority,
+    "fix",
   );
   assert.deepEqual(
     { ...db.prepare("SELECT * FROM agents").get() },
     { id: "x", name: "旧身份" },
   );
-  // 没有组织表的旧账本也能补列（一律普通）。
-  const bare = new DatabaseSync(":memory:");
-  bare.exec(`CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER, title TEXT NOT NULL,
-      brief_path TEXT, role TEXT, repo TEXT, status TEXT NOT NULL, worker TEXT, pid INTEGER, worktree TEXT,
-      branch TEXT, pr_url TEXT, ci TEXT, result TEXT, created_at INTEGER NOT NULL, started_at INTEGER,
-      ended_at INTEGER, updated_at INTEGER NOT NULL);
-    INSERT INTO tasks(title,status,created_at,updated_at) VALUES ('旧','todo',0,0);`);
-  ensureTaskTables(bare);
-  assert.equal(
-    (bare.prepare("SELECT priority FROM tasks").get() as { priority: string })
-      .priority,
-    "normal",
-  );
+  // 新库不再建旧列。
+  const fresh = new DatabaseSync(":memory:");
+  ensureTaskTables(fresh);
+  const columns = (
+    fresh.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]
+  ).map((column) => column.name);
+  assert.ok(columns.includes("prio"));
+  for (const retired of ["urgent", "priority", "task_type", "size", "stopgap"])
+    assert.equal(columns.includes(retired), false, retired);
 });
 
-test("队列与看板：排队紧急 → 普通 → 闲时；闲时任务写「等空闲：前面还有 N 件普通任务」，排期与状态栏标闲时", () => {
+test("队列与看板：一个队列按优先级、入队先后排；排期就绪组同样排；看板与状态栏标档位", () => {
   const db = orgDb();
   const idle = createTask(db, { title: "性能巡检", part: "o4" });
   const normal = createTask(db, { title: "功能 A", part: "o3" });
-  const other = createTask(db, { title: "功能 B", part: "o3" });
-  const lone = createTask(db, { title: "性能另一件", part: "o4" });
-  const ready = createTask(db, { title: "功能就绪", part: "o3" });
-  const urgentIdle = createTask(db, {
+  const fix = createTask(db, { title: "修 bug", part: "o3", priority: "修复" });
+  const urgent = createTask(db, {
     title: "性能急事",
     part: "o4",
-    urgent: true,
+    priority: "紧急",
   });
-  const put = (id: number, tool: string, at: number) =>
+  const later = createTask(db, { title: "功能 B", part: "o3" });
+  const put = (id: number, at: number) =>
     enqueue(db, {
       task_id: id,
-      tool,
-      worker: tool,
+      tool: "kimi",
+      worker: "kimi",
       risk: "low",
       queued_at: at,
     });
-  put(idle.id, "kimi", 1);
-  put(normal.id, "kimi", 5);
-  put(other.id, "opencode", 6);
-  put(lone.id, "codex", 2);
-  // 普通任务在前（入队先后），闲时的排在所有普通任务后面，哪怕入队更早。
+  put(idle.id, 1);
+  put(normal.id, 5);
+  put(fix.id, 6);
+  put(urgent.id, 9);
+  put(later.id, 2);
   assert.deepEqual(
-    pending(db).map((entry) => [entry.task_id, entry.idle]),
+    pending(db).map((entry) => [entry.task_id, entry.priority]),
     [
-      [normal.id, false],
-      [other.id, false],
-      [idle.id, true],
-      [lone.id, true],
-    ],
-  );
-  // kimi 上的闲时：同一工具的 1 件；codex 上的：kimi 那件在等本机空位也算，独占的 opencode 那件在等自己不算。
-  assert.deepEqual(
-    [...idleWaits(db)].sort((a, b) => a[0] - b[0]),
-    [
-      [idle.id, 1],
-      [lone.id, 1],
+      [urgent.id, "urgent"],
+      [fix.id, "fix"],
+      [later.id, "normal"],
+      [normal.id, "normal"],
+      [idle.id, "idle"],
     ],
   );
   const reasons = new Map(
     listTasks(db, {}).tasks.map((task) => [task.ref, task.queued_reason]),
   );
-  assert.equal(reasons.get(idle.ref), "等空闲：前面还有 1 件普通任务");
-  assert.equal(reasons.get(normal.ref), "等待执行者可用后自动拉起");
-  assert.equal(getTask(db, lone.ref).queued_reason, idleWaitText(1));
-  assert.equal(getTask(db, ready.ref).queued_reason, null);
-  // 就绪组：紧急 → 普通 → 闲时，同一档照短号。
+  assert.equal(reasons.get(idle.ref), "等待执行者可用后自动拉起");
   assert.deepEqual(
     taskPlan(db).groups.ready.map((item) => item.task.ref),
-    [urgentIdle.ref, normal.ref, other.ref, ready.ref, idle.ref, lone.ref],
+    [urgent.ref, fix.ref, normal.ref, later.ref, idle.ref],
   );
-  // 看板：闲时标记与在等什么；球在谁手里直接写「等空闲：…」。
   const rows = topRows(db, Date.now()).rows;
   const row = rows.find((item) => item.ref === idle.ref)!;
-  assert.equal(row.idle, true);
-  assert.equal(row.reason, "等空闲：前面还有 1 件普通任务");
-  assert.equal(row.holder?.text, "等空闲：前面还有 1 件普通任务");
-  assert.equal(rows.find((item) => item.ref === normal.ref)!.idle, false);
+  assert.equal(row.priority, "idle");
   assert.equal(titleOf({ ...row, action: null, log_at: 0 }), "闲时 性能巡检");
   const line = renderStatusline({
     snapshot: {
-      rows: [{ ...row, action: null, log_at: 0 }],
+      rows: rows.map((item) => ({ ...item, action: null, log_at: 0 })),
       counts: { events: 0 },
       host: null,
       leaders: [],
       subscriber: "secretary",
+      priorities: { urgent: 1, fix: 1, normal: 2, idle: 1 },
     } as never,
     plan: null,
     now: Date.now(),
     color: false,
   });
-  assert.match(line, /闲时 「性能巡检」 等空闲：前面还有 1 件普通任务/);
-  // 其余排队任务照旧写「排队」（这里直接入队，没有 queued 事件）。
-  assert.equal(
-    rows.find((item) => item.ref === normal.ref)!.holder?.text,
-    "排队",
-  );
+  assert.match(line, /紧急 1 · 修复 1 · 普通 2 · 闲时 1/);
+  assert.match(line, /闲时 「性能巡检」 排队/);
+  assert.match(line, /修复 「修 bug」 排队/);
 });
 
-test("巡检自动派发：同一轮里普通任务先派，闲时的最后派", async () => {
+test("巡检自动派发只负责入队：照短号逐件交给 run，先后由 drain 按优先级定", async () => {
   const db = orgDb();
   const inbox = new EventInbox(db);
   createTask(db, { title: "性能巡检", part: "o4", auto: true });
   createTask(db, { title: "功能 A", part: "o3", auto: true });
-  createTask(db, { title: "性能急事", part: "o4", auto: true, urgent: true });
+  createTask(db, {
+    title: "性能急事",
+    part: "o4",
+    auto: true,
+    priority: "紧急",
+  });
   createTask(db, { title: "功能 B", part: "o3", auto: true });
   const order: string[] = [];
   const scheduler = new Scheduler(
@@ -426,15 +376,13 @@ test("巡检自动派发：同一轮里普通任务先派，闲时的最后派",
     async () => ({ ok: true, stdout: "{}", stderr: "" }),
   );
   await scheduler.tick();
-  // 紧急的闲时任务按紧急算，照短号在普通任务里派。
-  assert.deepEqual(order, ["t2", "t3", "t4", "t1"]);
+  assert.deepEqual(order, ["t1", "t2", "t3", "t4"]);
   for (const ref of order) assert.equal(getTask(db, ref).auto_dispatched, 1);
 });
 
 const limits = (over: Partial<HostLimits>): HostLimits => ({
   cores: 8,
   maxWorkers: null,
-  maxChecks: 2,
   testConcurrency: 2,
   checkTimeoutMs: 30 * 60_000,
   busyCores: null,
@@ -449,7 +397,7 @@ const waitingKimi = (fx: { script: (name: string, body: string) => void }) =>
     'set -e\nwhile [ ! -f "$HOME/go" ]; do echo waiting; sleep 0.1; done\necho hi > done.txt\ngit add done.txt\ngit commit -qm done\necho "完成，提交 $(git rev-parse --short HEAD)"',
   );
 
-test("运行时：执行者满时闲时任务让普通任务先拉起；前面有普通任务在等时直接排队；改成普通立刻重排", async (t) => {
+test("运行时：想跑的任务都进同一个队列，执行者满时按优先级、入队先后拉起；改档位立刻重排", async (t) => {
   const host = new HostLoad(limits({ maxWorkers: 1 }), () => 0);
   const { fx, data, call } = await startApp(
     t,
@@ -473,52 +421,41 @@ test("运行时：执行者满时闲时任务让普通任务先拉起；前面�
   assert.equal((await add("占位", "o3")).priority, "normal");
   assert.equal((await add("性能巡检", "o4")).priority, "idle");
   await add("功能 B", "o3");
-  await add("性能二", "o4");
-  const bad = await call("POST", "/api/tasks", {
-    title: "坏",
-    priority: "低",
-  });
+  assert.equal(
+    (await add("修 bug", "o3", { priority: "修复" })).priority,
+    "fix",
+  );
+  await add("功能 C", "o3");
+  const bad = await call("POST", "/api/tasks", { title: "坏", priority: "低" });
   assert.equal(bad.status, 400);
   assert.match(
     bad.body.message ?? bad.body.error,
-    /priority: 只能是 闲时 或 普通/,
+    /priority: 只能是 紧急、修复、普通 或 闲时/,
   );
   const run = (ref: string) =>
     call("POST", `/api/tasks/${ref}/run`, { worker: "kimi" });
   assert.equal((await run("t1")).body.task.status, "running");
-  // 闲时的先入队（执行者满）；普通的后入队。
-  const idle = await run("t2");
-  assert.equal(idle.body.queued, true);
-  assert.match(idle.body.task.queued_reason, /本机同时最多跑 1 个执行者/);
-  assert.equal((await run("t3")).body.queued, true);
-  // 前面已有普通任务在等同一类执行者：闲时的直接排队，原因写清。
-  const second = await run("t4");
-  assert.equal(second.body.queued, true);
-  assert.equal(second.body.task.queued_reason, "等空闲：前面还有 1 件普通任务");
-  // 先入队的闲时任务现在也写在等普通任务。
-  assert.equal(
-    (await call("GET", "/api/tasks/t2")).body.queued_reason,
-    "等空闲：前面还有 1 件普通任务",
-  );
+  for (const ref of ["t2", "t3", "t4", "t5"]) {
+    const queued = await run(ref);
+    assert.equal(queued.body.queued, true, ref);
+    assert.match(queued.body.task.queued_reason, /本机同时最多跑 1 个执行者/);
+  }
   const top = (await call("GET", "/api/tasks/top")).body;
   const row = (ref: string) =>
     top.rows.find((item: { ref: string }) => item.ref === ref);
-  assert.equal(row("t2").idle, true);
-  assert.equal(row("t3").idle, false);
-  // t4 改成普通：立刻按普通重排（仍在排队，只是不再等空闲）。
-  const set = await call("PATCH", "/api/tasks/t4", { priority: "普通" });
-  assert.equal(set.body.priority, "normal");
-  assert.equal(
-    (await call("GET", "/api/tasks/t2")).body.queued_reason,
-    "等空闲：前面还有 2 件普通任务",
-  );
-  // 放行：t1 收工后先拉起普通的 t3、t4，闲时的 t2 最后。
+  assert.equal(row("t2").priority, "idle");
+  assert.equal(row("t4").priority, "fix");
+  // t5 改成紧急：立刻按紧急重排，紧急的跳过本机上限马上拉起。
+  const set = await call("PATCH", "/api/tasks/t5", { priority: "紧急" });
+  assert.equal(set.body.priority, "urgent");
+  await until(() => getTask(db, "t5").status === "running");
+  // 放行：t1 收工后按修复 t4、普通 t3、闲时 t2 的先后拉起。
   writeFileSync(join(fx.root, "home", "go"), "");
-  for (const ref of ["t1", "t2", "t3", "t4"])
+  for (const ref of ["t1", "t2", "t3", "t4", "t5"])
     await call("GET", `/api/tasks/${ref}/wait?timeout=30`);
   await until(() => getTask(db, "t2").status !== "todo", 20_000);
   const started = (ref: string) =>
     getTask(db, ref).events.find((event) => event.kind === "start")!.id;
+  assert.ok(started("t4") < started("t3"), "修复的 t4 先于普通的 t3");
   assert.ok(started("t3") < started("t2"), "普通的 t3 先于闲时的 t2");
-  assert.ok(started("t4") < started("t2"), "改成普通的 t4 先于闲时的 t2");
 });

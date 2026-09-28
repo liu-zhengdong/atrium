@@ -25,9 +25,6 @@ const fieldsOf = (body: unknown): Record<string, unknown> =>
     ? (body as Record<string, unknown>)
     : {};
 
-const given = (value: unknown) =>
-  value !== undefined && value !== null && value !== "";
-
 export type VerifierRequest = {
   method: string;
   /** Fastify 匹配到的路由（如 /api/tasks/:id/stop），不是原始 URL。 */
@@ -61,12 +58,8 @@ export function stopgapAction(request: VerifierRequest): string | null {
     (route === "/api/tasks/:id" && verb === "PATCH") ||
     (route === "/api/tasks" && verb === "POST")
   ) {
-    if (given(body.stopgap)) return "写止损动作（--stopgap）";
-    if (body.urgent === true) return "标紧急（会抢占在跑的任务）";
     if (body.with_children === true) return "连带取消子任务（在跑的会先停掉）";
   }
-  if (route === "/api/tasks/:id/run" && body.urgent === true)
-    return "标紧急派活（会抢占在跑的任务）";
   return null;
 }
 

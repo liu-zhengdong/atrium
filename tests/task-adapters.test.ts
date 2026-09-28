@@ -149,9 +149,6 @@ test("适配器：数据声明齐全，opencode 同一时刻只跑一个", () =>
         : true,
     );
     assert.equal(adapter.exclusive, tool === "opencode");
-    assert.ok(
-      adapter.watchdog.startupMinutes > 0 && adapter.watchdog.idleMinutes > 0,
-    );
   }
   assert.equal(ADAPTERS.codex.promptVia, "stdin");
   assert.equal(ADAPTERS.claude.promptVia, "stdin");

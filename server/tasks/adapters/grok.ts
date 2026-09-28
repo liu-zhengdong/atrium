@@ -1,4 +1,4 @@
-import { DEFAULT_WATCHDOG, checkCommon, type Adapter } from "./types.ts";
+import { checkCommon, type Adapter } from "./types.ts";
 
 /**
  * grok（`grok --help` 核对）：-p/--single 单轮提示词、-m 模型、--always-approve 自动批准、
@@ -13,7 +13,6 @@ export const grok: Adapter = {
   efforts: ["low", "medium", "high"],
   quotaProvider: "grok",
   resumeArgs: ["--continue"],
-  watchdog: DEFAULT_WATCHDOG,
   progressSignals: ["log_growth", "worktree_change"],
   notes: ["grok-4.6 易把逻辑堆进一个文件，验收查 file_growth"],
   tell: "restart",

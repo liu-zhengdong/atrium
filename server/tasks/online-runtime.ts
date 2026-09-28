@@ -14,7 +14,6 @@ import {
   includedInVersion,
   onlineMessage,
   planOnline,
-  RELEASE_OVERDUE_MS,
   verificationSection,
 } from "./online.ts";
 import { compareSemver } from "../releases.ts";
@@ -48,8 +47,6 @@ export class OnlineWatch {
       selfRepo?: string | null;
       /** 合入进行中或别处正在重启时先不重启。 */
       busy: () => boolean;
-      /** 有紧急任务要上线时（t215）只看这个：别的紧急任务在合入、或别处正在重启；缺省同 busy。 */
-      urgentBusy?: () => boolean;
       deploy: (version: string) => Promise<DeployResult>;
       /** 上次重启失败或回滚的原因（读 restart-state.json）；没有返回 null。 */
       restartError?: (version: string) => string | null;
@@ -117,13 +114,11 @@ export class OnlineWatch {
           id: row.id,
           release: row.release_version,
           attempted: row.online_attempt,
-          urgent: row.urgent === 1,
         })),
         current,
         {
           selfUpdate: this.options.selfUpdate,
           busy: this.options.busy(),
-          urgentBusy: (this.options.urgentBusy ?? this.options.busy)(),
         },
       );
       const published: {
@@ -253,7 +248,6 @@ export class OnlineWatch {
           }
         }
       }
-      this.overdue(row);
     }
   }
 
@@ -288,24 +282,6 @@ export class OnlineWatch {
     } catch {
       return null;
     }
-  }
-
-  private overdue(row: TaskRow) {
-    const merged = this.db
-      .prepare(
-        "SELECT at FROM task_events WHERE task_id=? AND kind='merged' ORDER BY id DESC LIMIT 1",
-      )
-      .get(row.id) as { at: number } | undefined;
-    if (!merged || this.now() - merged.at < RELEASE_OVERDUE_MS) return;
-    const told = this.db
-      .prepare(
-        "SELECT 1 FROM task_events WHERE task_id=? AND kind='release_overdue' AND id>(SELECT MAX(id) FROM task_events WHERE task_id=? AND kind='merged') LIMIT 1",
-      )
-      .get(row.id, row.id);
-    if (told) return;
-    const reason = `合入 ${Math.round(RELEASE_OVERDUE_MS / 60_000)} 分钟仍没有含它的版本；查看仓库的发版工作流`;
-    noteTask(this.db, row.id, "release_overdue", { reason });
-    this.options.publish(row.id, "release_overdue", { reason });
   }
 
   private async prepareOnline(id: number, current: string) {

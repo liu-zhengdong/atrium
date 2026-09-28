@@ -4,9 +4,8 @@ import { all, listView, taskRef, usage, type TaskRow } from "./ledger-model.ts";
 import { conditions, conditionsOfMany } from "./schedule-ledger.ts";
 import type { EventInbox } from "./events.ts";
 import type { Exec, Run } from "./git.ts";
-import { dequeue, idleWaits, queued, queueView } from "./queue.ts";
-import { once } from "./ledger-read.ts";
-import { isIdle, rank } from "./priority.ts";
+import { dequeue, queued, queueView } from "./queue.ts";
+import { rank } from "./priority.ts";
 import { noteView } from "./notes.ts";
 import {
   dependencyOf,
@@ -19,7 +18,7 @@ import { taskRoute } from "../leaders/subscriber.ts";
 import { SECRETARY } from "../leaders/route.ts";
 import { ancestorsOf, isTotal, totalsAmong } from "./rollup-ledger.ts";
 import { planCounts } from "./plan-count.ts";
-import { downstreamHint } from "../leaders/hang.ts";
+import { downstreamHint } from "../leaders/actions.ts";
 
 export type ScheduleGroup = "running" | "ready" | "waiting" | "blocked";
 export type PlanItem = {
@@ -135,16 +134,12 @@ export function scheduleOf(
   return classify(row.status, tasks, prs, row.schedule_reason);
 }
 
-export function planItem(
-  db: DatabaseSync,
-  row: TaskRow,
-  ahead?: () => ReadonlyMap<number, number>,
-): PlanItem {
+export function planItem(db: DatabaseSync, row: TaskRow): PlanItem {
   return {
     task: {
       ...listView(row),
       ...noteView(db, row.id, row.status),
-      ...queueView(db, row.id, ahead),
+      ...queueView(db, row.id),
     },
     ...scheduleOf(db, row),
   };
@@ -218,18 +213,17 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
       part_ref: row.part_id == null ? null : `o${row.part_id}`,
     }));
   const details = planDetails(db, page);
-  const ahead = once(() => idleWaits(db));
   // 细节是只读附加字段（top 的排期段用）；分组判定仍只看 planItem。
   const items: (PlanItem & PlanDetail)[] = page.map((row) => ({
-    ...planItem(db, row, ahead),
+    ...planItem(db, row),
     ...details.get(row.id)!,
   }));
   const groups = {
     running: items.filter((item) => item.group === "running"),
-    // 紧急的排最前（t113），闲时的排最后（t136），同一档照短号。
+    // 按优先级排（紧急最前、闲时最后），同一档照短号。
     ready: items
       .filter((item) => item.group === "ready")
-      .sort((a, b) => planRank(a.task) - planRank(b.task)),
+      .sort((a, b) => rank(a.task.priority) - rank(b.task.priority)),
     waiting: items.filter((item) => item.group === "waiting"),
     blocked: items.filter((item) => item.group === "blocked"),
   };
@@ -240,9 +234,6 @@ export function taskPlan(db: DatabaseSync, after = 0, limit = 200) {
     next_after: rows.length > limit ? taskRef(rows[limit - 1]!.id) : null,
   };
 }
-
-const planRank = (task: Pick<TaskRow, "urgent" | "priority">) =>
-  rank({ urgent: task.urgent === 1, idle: isIdle(task) });
 
 /** 巡检候选只用这几列。 */
 type CandidateRow = Pick<
@@ -301,7 +292,6 @@ export class Scheduler {
     try {
       // 有界扫描；游标循环覆盖任意规模账本。
       let after = 0;
-      const later: number[] = [];
       for (;;) {
         if (this.stopped) return;
         // 走部分索引 tasks_open：只碰未结束的任务，已完成的再多也不扫（t154）；
@@ -412,29 +402,17 @@ export class Scheduler {
           // 只取派发判定要的几列；getTask 会顺带查备注、排队、专员与组织（k23，别为没用的字段查库）。
           const fresh = this.db
             .prepare(
-              "SELECT status,auto,auto_dispatched,owner,deliver,urgent,priority FROM tasks WHERE id=?",
+              "SELECT status,auto,auto_dispatched,owner,deliver FROM tasks WHERE id=?",
             )
             .get(row.id) as Pick<
             TaskRow,
-            | "status"
-            | "auto"
-            | "auto_dispatched"
-            | "owner"
-            | "deliver"
-            | "urgent"
-            | "priority"
+            "status" | "auto" | "auto_dispatched" | "owner" | "deliver"
           >;
           if (!canAutoDispatch(fresh)) continue;
-          // 闲时的等这一轮普通任务都派完（拉起或排进队列）再派，派时由 run 看前面还有没有普通任务在等。
-          if (isIdle(fresh)) later.push(row.id);
-          else if (!(await this.dispatch(row.id)))
-            page.setStatus(row.id, "blocked");
+          // 派发只是入队（run），先后由 drain 按优先级定。
+          if (!(await this.dispatch(row.id))) page.setStatus(row.id, "blocked");
         }
         if (rows.length < 200) break;
-      }
-      for (const id of later) {
-        if (this.stopped) return;
-        await this.dispatch(id);
       }
     } finally {
       this.busy = false;
@@ -443,7 +421,7 @@ export class Scheduler {
 
   /** 自动派发一件就绪任务；已在排队的只记下派过，派不出去的标受阻并投递（返回 false）。 */
   private async dispatch(id: number) {
-    // 只取派发判定要的几列（k23）；闲时任务在本轮末尾才派，期间可能已被启动或取消。
+    // 只取派发判定要的几列（k23）：页里的行读出后可能已被启动或取消。
     const fresh = this.db
       .prepare(
         "SELECT status,auto,auto_dispatched,owner,deliver FROM tasks WHERE id=?",

@@ -6,9 +6,6 @@ import { parseRemote, repoFlag } from "./gh-repo.ts";
  * 新服务起来后把「已上线」通知负责人并附执行者写的端到端验证。这里只放纯函数，IO 在 online-runtime.ts。
  */
 
-/** 合入后多久还没发版就提醒一次（毫秒）。 */
-export const RELEASE_OVERDUE_MS = 30 * 60_000;
-
 /** 自升级的仓库：`github:owner/repo` 或远端地址 → `-R` 写法；解析不出返回 null（不自升级）。 */
 export function selfRepoFlag(source: string): string | null {
   const text = source.trim();
@@ -96,8 +93,6 @@ export type OnlineCandidate = {
   release: string | null;
   /** 已为哪个版本发起过自升级；没发起过为 null。 */
   attempted: string | null;
-  /** 紧急任务（t215）：发版了就立刻自升级，不等普通任务的合入。 */
-  urgent?: boolean;
 };
 
 export type OnlinePlan = {
@@ -115,13 +110,12 @@ export type OnlinePlan = {
 
 /**
  * 一轮上线判定：已发版且运行版本不旧于它的算上线；否则取最高版本自升级一次，
- * 升级过仍没到的判失败（不反复升级同一版本）；合入进行中时先不重启，避免打断本地检查；
- * 有紧急任务要上线时只等别的紧急任务合入（普通任务的合入已让路，t215）。
+ * 升级过仍没到的判失败（不反复升级同一版本）；合入进行中时先不重启，避免打断本地检查。
  */
 export function planOnline(
   candidates: OnlineCandidate[],
   current: string,
-  options: { selfUpdate: boolean; busy: boolean; urgentBusy?: boolean },
+  options: { selfUpdate: boolean; busy: boolean },
 ): OnlinePlan {
   const plan: OnlinePlan = {
     online: [],
@@ -146,9 +140,7 @@ export function planOnline(
     plan.skipped = behind.map((task) => task.id);
     return plan;
   }
-  // 有紧急任务要上线（t215）：只等别的紧急任务合入与正在进行的重启，普通任务的合入不挡。
-  const urgent = behind.some((task) => task.urgent);
-  if (urgent ? (options.urgentBusy ?? options.busy) : options.busy) return plan;
+  if (options.busy) return plan;
   plan.deploy = behind
     .map((task) => task.release!)
     .sort(compareSemver)

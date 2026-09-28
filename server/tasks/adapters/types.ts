@@ -124,8 +124,6 @@ export type Adapter = {
   quotaProvider: string;
   /** 支持继续上次会话的参数（打回重做时用）；undefined 表示不支持。 */
   resumeArgs?: readonly string[];
-  /** 预留给看门狗：启动后多久无进展判卡死、运行中多久无进展判受阻（分钟）。 */
-  watchdog: { startupMinutes: number; idleMinutes: number };
   progressSignals: readonly ProgressSignal[];
   /** 派活时怎么把组织技能交给它（server/skills/mount.ts）；undefined 表示只在提示词里给路径。 */
   skillMount?: "claude-plugin" | "codex-home" | "opencode-config";
@@ -150,8 +148,6 @@ export type Adapter = {
 
 /** macOS ARG_MAX 为 1 MiB（getconf ARG_MAX），argv 与环境共用；单个参数保守取 256 KiB。 */
 export const ARG_PROMPT_MAX_BYTES = 256 * 1024;
-
-export const DEFAULT_WATCHDOG = { startupMinutes: 3, idleMinutes: 20 };
 
 /** 输入不合法：接口层转成 400。 */
 export const invalid = (message: string) => new Problem(400, message);

@@ -206,7 +206,7 @@ test("状态栏：紧急任务标「紧急」，暂停派新活时写清是哪�
     busy_cores: 6,
     running: 3,
     max_workers: 6,
-    checks: { running: 0, waiting: 0, max: 2 },
+
     test_concurrency: 2,
     paused: "本机太忙（Atrium 自己占了 6.3 核，超过 6），降下来后自动拉起",
     paused_by: "own" as const,
@@ -214,7 +214,7 @@ test("状态栏：紧急任务标「紧急」，暂停派新活时写清是哪�
   const text = render({
     snapshot: snapshot(
       [
-        row("t112", worker, { title: "修全景网页", urgent: true }),
+        row("t112", worker, { title: "修全景网页", priority: "urgent" }),
         row("t9", queue, { status: "todo" }),
       ],
       { host },
@@ -248,7 +248,7 @@ test("状态栏：本机满时没有排队只说满，有排队写几件（巡�
     busy_cores: 6,
     running: 6,
     max_workers: 6,
-    checks: { running: 0, waiting: 0, max: 2 },
+
     test_concurrency: 2,
     paused: "本机满",
     paused_by: "full" as const,
@@ -270,9 +270,9 @@ test("状态栏：标题已以「紧急」开头的不再加紧急前缀（巡�
   const worker: Holder = { kind: "worker", text: "claude 在做" } as Holder;
   const out = render({
     snapshot: snapshot([
-      row("t1", worker, { title: "紧急：修合入队列", urgent: true }),
-      row("t2", worker, { title: "紧急 恢复服务", urgent: true }),
-      row("t3", worker, { title: "修全景网页", urgent: true }),
+      row("t1", worker, { title: "紧急：修合入队列", priority: "urgent" }),
+      row("t2", worker, { title: "紧急 恢复服务", priority: "urgent" }),
+      row("t3", worker, { title: "修全景网页", priority: "urgent" }),
     ]),
   });
   assert.doesNotMatch(out, /紧急 「紧急/);

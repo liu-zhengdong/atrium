@@ -73,8 +73,6 @@ export function machineInfo(input: {
     data_dir: input.dataDir,
     clis: detectClis(input.env),
     max_workers: limits.maxWorkers,
-    max_checks: limits.maxChecks,
-    check_timeout_ms: limits.checkTimeoutMs,
     skills: true,
   };
 }

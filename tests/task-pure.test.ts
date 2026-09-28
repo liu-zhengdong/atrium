@@ -25,13 +25,10 @@ test("看门狗判定：启动无进展判卡死，运行中空闲判受阻；�
     judge({ startedAt: 0, lastProgressAt: 10 }, limits, 1_200_010).kind,
     "idle",
   );
-  assert.deepEqual(
-    watchLimits({ startupMinutes: 3, idleMinutes: 20 }, { startup_minutes: 1 }),
-    {
-      startupMs: 60_000,
-      idleMs: 1_200_000,
-    },
-  );
+  assert.deepEqual(watchLimits({ startup_minutes: 1 }), {
+    startupMs: 60_000,
+    idleMs: 1_200_000,
+  });
 });
 
 test("摘要：结构化日志 opencode 取文本、claude 取 result，普通日志取末尾", () => {

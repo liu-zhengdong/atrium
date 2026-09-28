@@ -15,7 +15,6 @@ import {
   type HolderFacts,
 } from "./holder.ts";
 import { scheduleOf } from "./schedule.ts";
-import { urgentInMergeFlow } from "./urgent-ledger.ts";
 
 /** 从账本、收件箱取「球在谁手里」的事实；判定在 holder.ts。每个任务查询有界。 */
 
@@ -30,13 +29,11 @@ const KINDS = [
   "local_check",
   "merge_check_started",
   "merge_check",
-  "preempted",
   "merge_check_rerun",
   "merge_queued",
   "merge_blocked",
-  "merge_check_quiet",
-  "worker_quiet",
-  "hang_nudged",
+  "merged",
+  "overdue",
 ] as const;
 
 function parse(detail: string | null): Record<string, unknown> {
@@ -74,11 +71,11 @@ export function holderFacts(
   db: DatabaseSync,
   row: TaskRow,
   queued: { reason: string | null } | null,
-  tables: { inbox: boolean; urgentFlow?: readonly number[] } = {
-    inbox: hasTable(db, "task_inbox"),
-  },
+  tables: { inbox: boolean } = { inbox: hasTable(db, "task_inbox") },
   hosts?: ReadonlyMap<number, string>,
   now = Date.now(),
+  /** 在跑的执行者最近一次有进展的时刻（Executors 内存里的）；不知道为 undefined。 */
+  progressAt?: number | null,
 ): HolderFacts {
   // 倒序取最近几十条相关事件，再按时间正序看。
   const events = all<TaskEventRow>(
@@ -120,20 +117,17 @@ export function holderFacts(
         : { by: null, via: "rerun" };
     }
   }
-  // 正在跑的检查（#358 第 2 步）：开始了、还没出结果；在哪台跑记在开始事件里。
-  // 出了结果或记了「没跑成，等重跑」都算这一轮结束。
+  // 正在跑的检查：开始了、还没出结果；出了结果或记了「没跑成，等重跑」都算这一轮结束。
   const checkingOf = (started: string, done: string, after = 0) => {
     const begin = last(started, after);
-    if (!begin || last(done, begin.id) || last(`${done}_rerun`, begin.id))
-      return null;
-    return { host: text(parse(begin.detail).host) };
+    return !!begin && !last(done, begin.id) && !last(`${done}_rerun`, begin.id);
   };
   const checking =
     row.delivery_stage === "merging"
       ? checkingOf("merge_check_started", "merge_check")
       : row.status === "running"
         ? checkingOf("local_check_started", "local_check", last("start")?.id)
-        : null;
+        : false;
   // 检查没跑成、在等重跑（t204）：记了重跑、之后还没开始下一轮检查。
   const rerunOf = (kind: string, started: string, after = 0) => {
     const mark = last(kind, after);
@@ -152,22 +146,6 @@ export function holderFacts(
           last("merge_queued")?.id,
         )
       : null;
-  // 没进展提醒（t260）：这一轮检查或这一轮执行者最新一条提醒，之后没记「又有输出了」。
-  const quietOf = (kind: string, after: number | undefined) => {
-    const mark = after === undefined ? undefined : last(kind, after);
-    const detail = mark ? parse(mark.detail) : null;
-    return detail && detail.resumed !== true ? detail : null;
-  };
-  const checkQuiet =
-    row.delivery_stage === "merging" && checking
-      ? text(
-          quietOf("merge_check_quiet", last("merge_check_started")?.id)?.reason,
-        )
-      : null;
-  const workerQuiet =
-    row.status === "running" && !checking
-      ? quietOf("worker_quiet", last("start")?.id)?.quiet_ms
-      : null;
   const escalation = block ? last("escalated", block.id) : undefined;
   const escalated = escalation
     ? (() => {
@@ -177,10 +155,17 @@ export function holderFacts(
       })()
     : null;
   const note = block ? last("note", block.id) : undefined;
-  // 球到现在这位手里的时刻（t253）：被上交给它的算上交那一刻，否则算受阻那一刻；叫醒记录只认这一段里的。
+  // 球到现在这位手里的时刻（t253）：被上交给它的算上交那一刻，否则算受阻那一刻；
+  // 已合入等发版的从合入那一刻算。到期叫醒（overdue）只认这一段里的。
   const heldFrom =
-    row.status === "blocked" ? (escalated ? escalation : block) : undefined;
-  const nudged = heldFrom ? last("hang_nudged", heldFrom.id) : undefined;
+    row.status === "blocked"
+      ? escalated
+        ? escalation
+        : block
+      : row.delivery_stage === "merged" && row.online_wait === 1
+        ? last("merged")
+        : undefined;
+  const woke = heldFrom ? last("overdue", heldFrom.id) : undefined;
   // 取「任务受阻后最新一条收件箱记录」；若它正好是被保留清理清掉的已确认知会（#t126），
   // 会退回去读更早的一条，只影响「这次由谁接手」的展示，不影响判定。
   const inbox =
@@ -192,22 +177,6 @@ export function holderFacts(
           block.at,
         )
       : undefined;
-  // 被紧急任务抢占暂停（t215）：受阻就是因为它、之后还没再拉起。
-  const preemptedAt = last("preempted");
-  const preempted =
-    row.status === "blocked" &&
-    preemptedAt &&
-    preemptedAt.id >= since &&
-    !last("start", preemptedAt.id)
-      ? { by: text(parse(preemptedAt.detail).by) }
-      : null;
-  // 普通任务排队合入时，有紧急任务在合入流程里就暂停（merge-runtime 同一判定）。
-  const heldBy =
-    row.delivery_stage === "merge_queued" && row.urgent !== 1
-      ? (tables.urgentFlow ?? urgentInMergeFlow(db))
-          .filter((id) => id !== row.id)
-          .map(taskRef)
-      : [];
   return {
     status: row.status,
     delivery_stage: row.delivery_stage,
@@ -237,14 +206,11 @@ export function holderFacts(
       : null,
     route: taskRoute(db, row).subscriber,
     checking,
-    preempted,
-    merge_held_by: heldBy,
     rerun,
-    check_quiet: checkQuiet,
-    worker_quiet_ms:
-      typeof workerQuiet === "number" && workerQuiet > 0 ? workerQuiet : null,
-    held_since: heldFrom?.at ?? null,
-    hang_nudged: nudged?.at ?? null,
+    held_since: row.status === "blocked" ? (heldFrom?.at ?? null) : null,
+    merged_at: row.delivery_stage === "merged" ? (heldFrom?.at ?? null) : null,
+    overdue_at: woke?.at ?? null,
+    progress_at: row.status === "running" ? (progressAt ?? null) : null,
     now,
   };
 }

@@ -1,7 +1,11 @@
 import { oneLine, pad, width } from "./format.ts";
 import { planCounts, scheduleBlocked } from "../server/tasks/plan-count.ts";
-import { tagTitle } from "../server/tasks/priority.ts";
-import { typeTag } from "../server/tasks/task-type.ts";
+import {
+  priorityTag,
+  rank,
+  tagTitle,
+  type Priority,
+} from "../server/tasks/priority.ts";
 
 /**
  * `atrium top` 的排期段（#262）：就绪、依赖链、等待中与因上游卡住的待办，数据来自 `/api/tasks/plan`。
@@ -21,11 +25,8 @@ export type PlanTask = {
   goal_ref?: string | null;
   part_ref?: string | null;
   schedule_state?: string | null;
-  /** 旧版服务没有这两项。 */
-  urgent?: number;
-  priority?: string;
-  /** 任务类型（t237）；旧版服务不给。 */
-  task_type?: string;
+  /** 旧版服务没有这一项。 */
+  priority?: Priority;
 };
 export type PlanUpstream = {
   ref: string;
@@ -99,18 +100,11 @@ const readable = (text: string) =>
     (_, status: string) => ` ${STATUS[status] ?? status}`,
   );
 
-/** 标题前写「紧急」（t113）或「闲时」（t136），修复的再写「修复」（t237）。 */
+/** 标题前写「紧急」「修复」「闲时」（普通不标）。 */
 const labelOf = (task: PlanTask) =>
-  tagTitle(
-    task.urgent === 1 ? "紧急" : task.priority === "idle" ? "闲时" : "",
-    tagTitle(
-      typeTag({ urgent: task.urgent ?? 0, task_type: task.task_type }),
-      task.title,
-    ),
-  );
+  tagTitle(priorityTag(task.priority), task.title);
 
-const tier = (task: PlanTask) =>
-  task.urgent === 1 ? 0 : task.priority === "idle" ? 2 : 1;
+const tier = (task: PlanTask) => rank(task.priority ?? "normal");
 
 const idOf = (ref: string) => Number(ref.slice(1)) || 0;
 const byRef = (a: { ref: string }, b: { ref: string }) =>

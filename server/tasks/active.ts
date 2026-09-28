@@ -48,20 +48,13 @@ export type Active = {
   finalizing?: { result: "clean" | "error"; forced: boolean };
   /** 即时捎话的标准输入写端（#307）；没有表示这一轮不能即时写入（不支持、已结束或是接管来的进程）。 */
   live?: LiveInput;
-  /** 紧急任务该换人时没得换（t215）：这一轮不再试，交给普通看门狗。 */
-  swapSkipped?: boolean;
-  /** 这段没进展已经提醒过（t260，worker-quiet.ts）；又有进展后清掉。 */
-  quietWarned?: boolean;
 };
 
 export const taskDir = (data: string, id: number) =>
   join(data, "tasks", String(id));
 
 export function limitsFor(worker: ResolvedWorker): WatchLimits {
-  return watchLimits(
-    ADAPTERS[worker.tool].watchdog,
-    worker.profile.rules.limits,
-  );
+  return watchLimits(worker.profile.rules.limits);
 }
 
 export function probeFor(

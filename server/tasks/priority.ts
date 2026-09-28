@@ -2,39 +2,58 @@ import type { DatabaseSync } from "node:sqlite";
 import { Problem } from "../problem.ts";
 
 /**
- * 闲时（t136）：管方面的部分（安全、性能、体验…）开的任务默认排在功能任务后面，有空闲执行者才做；不是配额，也不是关卡。
+ * 优先级：每件任务只有一个 priority——紧急 urgent、修复 fix、普通 normal、闲时 idle，存 `tasks.prio`
+ * （旧库的 `priority` 列带着只收 normal / idle 的约束，不再读写）。
  *
- * - 优先级只有两档：普通 normal 与闲时 idle，存 `tasks.priority`；紧急（`tasks.urgent`）另算、永远最前。
- * - 缺省按归属部分定：归属部分（没写时按干活的节点）是管方面的部分或在它下面，缺省闲时，其余普通；`--priority` 可覆盖。
- * - 派发先后：紧急 → 普通 → 闲时。闲时任务只有在没有普通任务在等同一类执行者时才派：
- *   同一工具的普通任务在排队，或别的普通任务只是在等本机空位（受并发上限或太忙卡着），闲时的都让它们先；
- *   普通任务在等的是自己那个工具（独占工具正忙、账号额度用尽），不挡别的工具上的闲时任务。已在跑的闲时任务不打断。
+ * - 想跑的任务一律进同一个队列（queue.ts），唯一的 drain 按「优先级、入队先后」取；合入队列按同一个优先级排。
+ * - 紧急只多一条：跳过本机负载限制（host-load.ts hostGate 的 urgent）。
+ * - 缺省按归属部分定：归属部分（没写时按干活的节点）是管方面的部分或在它下面为闲时，其余普通；`--priority` 可覆盖。
  *
- * 判定是纯函数，读库拼事实在 `aspectPart`（这里）与 `queue.ts`、`executors.ts`。
+ * 判定是纯函数，读库拼事实在 `aspectPart`（这里）与 `queue.ts`、`merge-runtime.ts`。
  */
 
-export const PRIORITIES = ["normal", "idle"] as const;
+export const PRIORITIES = ["urgent", "fix", "normal", "idle"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
 export const PRIORITY_LABEL: Record<Priority, string> = {
+  urgent: "紧急",
+  fix: "修复",
   normal: "普通",
   idle: "闲时",
 };
 
-const ALIASES: Record<string, Priority> = {
-  normal: "normal",
-  idle: "idle",
-  普通: "normal",
-  闲时: "idle",
-};
+const ALIASES: Record<string, Priority> = Object.fromEntries(
+  PRIORITIES.flatMap((p) => [
+    [p, p],
+    [PRIORITY_LABEL[p], p],
+  ]),
+);
 
-/** 接口与命令行都接受「闲时 / 普通」或 idle / normal；其余一律拒绝。 */
+/** 接口与命令行都接受「紧急 / 修复 / 普通 / 闲时」或英文；其余一律拒绝。 */
 export function parsePriority(value: unknown): Priority {
   const found =
     typeof value === "string" ? ALIASES[value.trim().toLowerCase()] : undefined;
-  if (!found) throw new Problem(400, "priority: 只能是 闲时 或 普通", "usage");
+  if (!found)
+    throw new Problem(
+      400,
+      "priority: 只能是 紧急、修复、普通 或 闲时",
+      "usage",
+    );
   return found;
 }
+
+/** 账本里的值：认不出（旧库、写坏）按普通。 */
+export const priorityOf = (value: unknown): Priority =>
+  (PRIORITIES as readonly unknown[]).includes(value)
+    ? (value as Priority)
+    : "normal";
+
+/** 排在前面的档位：紧急 0、修复 1、普通 2、闲时 3。 */
+export const rank = (priority: Priority) => PRIORITIES.indexOf(priority);
+
+/** SQL 里的同一个档位（排队、合入队列的 ORDER BY 用）。 */
+export const rankSql = (column: string) =>
+  `CASE ${column} WHEN 'urgent' THEN 0 WHEN 'fix' THEN 1 WHEN 'idle' THEN 3 ELSE 2 END`;
 
 /** 缺省优先级：归属部分是管方面的（或在它下面）为闲时，其余普通。 */
 export const defaultPriority = (aspect: boolean): Priority =>
@@ -90,87 +109,26 @@ export function aspectPart(db: DatabaseSync, id: number | null): boolean {
   return underAspect(nodes, id);
 }
 
-/** 排在前面的档位：紧急 0、普通 1、闲时 2（紧急的闲时任务按紧急算）。 */
-export const rank = (task: { urgent: boolean; idle: boolean }) =>
-  task.urgent ? 0 : task.idle ? 2 : 1;
-
-/** 真正按闲时排的：标了闲时且没标紧急。 */
-export const isIdle = (task: {
-  urgent: number | boolean;
-  priority?: string | null;
-}) => task.priority === "idle" && !task.urgent;
-
-/** 在排队的普通（含紧急）任务：用哪个工具。 */
-export type AheadEntry = { tool: string };
-
-/**
- * 一件闲时任务前面还有几件普通任务在等同一类执行者（纯函数）：同一工具的都算；别的工具上的，
- * 除非它在等的是自己那个工具（ownWait：独占工具正忙、额度用尽），否则就是在等本机空位，也算。
- * 0 表示可以派。
- */
-export function idleAhead(
-  tool: string,
-  normals: readonly AheadEntry[],
-  ownWait: (tool: string) => boolean,
-): number {
-  return normals.filter((entry) => entry.tool === tool || !ownWait(entry.tool))
-    .length;
-}
-
-/**
- * 队列里每件闲时任务前面的普通任务数（纯函数，线性）：按工具计数一次，再逐件查表，不嵌套遍历。
- * entries 是队列里全部任务；只给闲时任务出结果，其余不在表里。
- */
-export function idleAheadAll(
-  entries: readonly {
-    task_id: number;
-    tool: string;
-    idle: boolean;
-  }[],
-  ownWait: (tool: string) => boolean,
-): Map<number, number> {
-  const sameTool = new Map<string, number>();
-  const free = new Map<string, number>();
-  let freeTotal = 0;
-  for (const entry of entries) {
-    if (entry.idle) continue;
-    sameTool.set(entry.tool, (sameTool.get(entry.tool) ?? 0) + 1);
-    if (!ownWait(entry.tool)) {
-      free.set(entry.tool, (free.get(entry.tool) ?? 0) + 1);
-      freeTotal++;
-    }
-  }
-  const result = new Map<number, number>();
-  for (const entry of entries)
-    if (entry.idle)
-      result.set(
-        entry.task_id,
-        (sameTool.get(entry.tool) ?? 0) +
-          freeTotal -
-          (free.get(entry.tool) ?? 0),
-      );
-  return result;
-}
-
-/** 闲时任务在等什么的说法。 */
-export const idleWaitText = (ahead: number) =>
-  `等空闲：前面还有 ${ahead} 件普通任务`;
-
-/** 闲时任务的回执说清怎么排。 */
-export const IDLE_NOTE = "闲时：排在普通任务后面，有空闲执行者才派";
-
-/** 标题前的标记：紧急、闲时或不标（紧急的闲时任务只标紧急）。 */
-export const priorityTag = (task: {
-  urgent: number | boolean;
-  priority?: string | null;
-}) => (task.urgent ? "紧急" : isIdle(task) ? "闲时" : "");
+/** 标题前的标记：普通的不标。 */
+export const priorityTag = (priority: Priority | undefined) =>
+  priority && priority !== "normal" ? PRIORITY_LABEL[priority] : "";
 
 /** 标题本身已以这个标记开头（「紧急：…」「紧急 …」）就不再加，免得写成「紧急 紧急：…」。 */
 export const titleTag = (tag: string, title: string) =>
   tag && !title.trimStart().startsWith(tag) ? tag : "";
 
-/** 标题前加上标记（紧急、闲时），已带的不重复。 */
+/** 标题前加上标记（紧急、修复、闲时），已带的不重复。 */
 export const tagTitle = (tag: string, title: string) => {
   const shown = titleTag(tag, title);
   return shown ? `${shown} ${title}` : title;
 };
+
+export type PriorityCounts = Record<Priority, number>;
+
+/** 头部计数「紧急 K · 修复 M · 普通 N · 闲时 I」：只写不为 0 的；全是 0 时为空串。 */
+export function priorityCountsText(counts: PriorityCounts | null | undefined) {
+  if (!counts) return "";
+  return PRIORITIES.filter((p) => counts[p] > 0)
+    .map((p) => `${PRIORITY_LABEL[p]} ${counts[p]}`)
+    .join(" · ");
+}

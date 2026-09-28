@@ -2,8 +2,7 @@ import type { TaskRow } from "./ledger-model.ts";
 import type { TaskStatus } from "./state.ts";
 import { oneLine, width } from "../text-width.ts";
 import { MAX_CHECK_RERUNS } from "./check-outcome.ts";
-import { quietMinutes } from "./check-quiet.ts";
-import { hangLabel } from "../leaders/hang.ts";
+import { heldText, type DueKind } from "./overdue.ts";
 
 /**
  * 未结束任务「现在球在谁手里」（#355 追加）：状态栏与 top 按它显示，不再自己从状态和 PR 猜。
@@ -27,6 +26,8 @@ export type Holder = {
   text: string;
   /** 摘要背后的原因全文（审阅意见、检查输出）；只有单个任务视图（`task show`）给。 */
   detail?: string | null;
+  /** 按 overdue.ts 哪一行算期限、从什么时候起算；不算期限的没有。 */
+  due?: { kind: DueKind; since: number } | null;
 };
 
 /** 持球人一句话的显示宽度上限：状态栏与 top 一行里放得下。 */
@@ -62,29 +63,21 @@ export type HolderFacts = {
   inbox: { subscriber: string; acked: boolean } | null;
   /** 任务事件缺省投给谁（taskRoute），没有收件箱记录时用它。 */
   route: string;
-  /** 本地检查正在跑（交付后或合入队列重跑）：在哪台（hN，旧记录没有）；没在跑为 null。 */
-  checking?: { host: string | null } | null;
-  /** 被紧急任务抢占暂停（t215）：被哪件（tN）；没被暂停为 null。 */
-  preempted?: { by: string | null } | null;
-  /** 排队合入时，其他任务的合入因这些紧急任务（tN）暂停（t215）；没暂停为空。 */
-  merge_held_by?: string[];
+  /** 本地检查正在跑（交付后或合入队列重跑）。 */
+  checking?: boolean;
   /** 合入检查没跑成、在等自动重跑（t204）：第几次、没跑成的原因；不在等为 null。 */
   rerun?: { attempt: number; reason: string | null } | null;
-  /** 正在跑的检查日志太久没新输出（t260）：提醒那一句（「检查 5 分钟没输出：卡在 …」）；之后又有输出或没在检查为 null。 */
-  check_quiet?: string | null;
-  /** 执行者这段多久没进展（t260，毫秒）；没提醒过或之后又有进展为 null。 */
-  worker_quiet_ms?: number | null;
   /** 受阻任务的球什么时候到现在这位手里（受阻或被上交给它的时刻，t253）；不在受阻为 null。 */
   held_since?: number | null;
-  /** 这一段里运行时叫醒过持球 leader 的时刻（t253）；没叫醒过为 null。 */
-  hang_nudged?: number | null;
-  /** 取事实的时刻：算 leader 手里挂了多久。 */
+  /** 已合入等发版的合入时刻；不在等发版为 null。 */
+  merged_at?: number | null;
+  /** 这一段里运行时到期叫醒过的时刻（overdue.ts）；没叫醒过为 null。 */
+  overdue_at?: number | null;
+  /** 在跑的执行者最近一次有进展的时刻（服务内存里的）；不知道为 null。 */
+  progress_at?: number | null;
+  /** 取事实的时刻：算挂了多久。 */
   now?: number;
 };
-
-/** 检查在别的主机上跑时说「在 hN 上」；本机（h1）或不知道时不说。 */
-const where = (checking: HolderFacts["checking"]) =>
-  checking?.host && checking.host !== "h1" ? `在 ${checking.host} 上` : "";
 
 /** 合入检查没跑成、等重跑的一句话；原因全文给 `task show`（holderDetail）。 */
 const rerunShort = (attempt: number) =>
@@ -399,26 +392,29 @@ function mergeBack(reason: string | null): string {
   return `${MERGE_FAILED}${mergeShort(reason, MERGE_WIDTH - width(MERGE_FAILED))}`;
 }
 
-/** 已结束且不在合入流水线、也不在等拍板的任务没有持球人；一句话统一截成单行。 */
+/**
+ * 已结束且不在合入流水线、也不在等拍板的任务没有持球人；一句话统一截成单行。
+ * 算期限的（overdue.ts）句末接同一种写法「N 分钟没动」，放不下时先截前面的原因，不截时长。
+ */
 export function holderOf(f: HolderFacts): Holder | null {
   const holder = judge(f);
-  return holder
-    ? {
-        ...holder,
-        text: oneLine(
-          holder.kind === "worker" &&
-            f.status === "running" &&
-            f.host &&
-            !f.checking
-            ? onHost(holder.text, f.worker ?? "执行者", f.host)
-            : holder.text,
-          HOLDER_WIDTH,
-        ),
-      }
-    : null;
+  if (!holder) return null;
+  const text =
+    holder.kind === "worker" && f.status === "running" && f.host && !f.checking
+      ? onHost(holder.text, f.worker ?? "执行者", f.host)
+      : holder.text;
+  const held =
+    holder.due && f.now !== undefined
+      ? heldText(holder.due.kind, f.now - holder.due.since)
+      : "";
+  if (!held) return { ...holder, text: oneLine(text, HOLDER_WIDTH) };
+  const tail = ` · ${held}`;
+  const room = HOLDER_WIDTH - width(tail);
+  const head = width(text) <= room ? text : clipWords(text, room) || text;
+  return { ...holder, text: oneLine(`${head}${tail}`, HOLDER_WIDTH) };
 }
 
-/** 远程执行者：以执行者起头的一句（「在做」「5 分钟没进展」）把主机插在名字后，其余接在后面。 */
+/** 远程执行者：以执行者起头的一句（「在做」）把主机插在名字后，其余接在后面。 */
 function onHost(text: string, worker: string, host: string) {
   return text.startsWith(`${worker} `)
     ? `${worker} @ ${host} ${text.slice(worker.length + 1)}`
@@ -446,24 +442,23 @@ function judge(f: HolderFacts): Holder | null {
     return {
       kind: "merge",
       who: null,
-      text: f.merge_held_by?.length
-        ? `合入暂停：等紧急 ${f.merge_held_by.join("、")} 先上线`
-        : f.rerun
-          ? `合入前${rerunShort(f.rerun.attempt)}`
-          : "排队合入",
+      text: f.rerun ? `合入前${rerunShort(f.rerun.attempt)}` : "排队合入",
     };
   if (f.delivery_stage === "merging")
     return {
       kind: "merge",
       who: null,
-      text: f.check_quiet
-        ? `${where(f.checking)}${f.check_quiet}`
-        : where(f.checking)
-          ? `合入中：${where(f.checking)}跑快检查`
-          : "合入中：rebase 并跑快检查",
+      text: "合入中：rebase 并跑快检查",
     };
   if (f.delivery_stage === "merged" && f.online_wait === 1)
-    return { kind: "merge", who: null, text: "已合入，等发版上线" };
+    return {
+      kind: "merge",
+      who: null,
+      text: "已合入，等发版上线",
+      ...(f.merged_at != null
+        ? { due: { kind: "release" as const, since: f.merged_at } }
+        : {}),
+    };
   if (FINISHED.has(f.status)) return null;
   if (f.queued)
     return {
@@ -480,15 +475,7 @@ function judge(f: HolderFacts): Holder | null {
       return {
         kind: "worker",
         who: f.worker,
-        text: where(f.checking)
-          ? `${worker} 交付了，${where(f.checking)}跑检查`
-          : `${worker} 交付了，本地检查中`,
-      };
-    if (f.worker_quiet_ms)
-      return {
-        kind: "worker",
-        who: f.worker,
-        text: `${worker} ${quietMinutes(f.worker_quiet_ms)}没进展`,
+        text: `${worker} 交付了，本地检查中`,
       };
     if (f.returned?.via === "merge")
       return {
@@ -502,61 +489,56 @@ function judge(f: HolderFacts): Holder | null {
         who: f.worker,
         text: `${blockShort(f.block)} · ${f.returned.by ? `${whoLabel(f.returned.by)} ` : ""}已交回执行者`,
       };
-    return { kind: "worker", who: f.worker, text: `${worker} 在做` };
-  }
-  // 被紧急任务抢占暂停的（t215）：运行时会在紧急通道清空后自己续上，不是等谁处理。
-  if (f.status === "blocked" && f.preempted)
     return {
-      kind: "queue",
-      who: null,
-      text: `被紧急 ${f.preempted.by ?? "任务"} 抢占暂停，之后自动续上`,
+      kind: "worker",
+      who: f.worker,
+      text: `${worker} 在做`,
+      ...(f.progress_at != null
+        ? { due: { kind: "worker" as const, since: f.progress_at } }
+        : {}),
     };
+  }
   if (f.status === "blocked") {
     const why = blockShort(f.block);
-    // 在 leader 手里的（t253）句末写挂了多久；原因放不下时先截原因，不截时长。
-    const held = (who: string, tail: string) => {
-      const hang =
-        kindOf(who) === "leader" && f.held_since != null && f.now != null
-          ? hangLabel(f.now - f.held_since)
-          : "";
-      const rest = ` · ${tail}${hang ? ` · ${hang}` : ""}`;
-      const room = HOLDER_WIDTH - width(rest);
-      return `${width(why) <= room ? why : clipWords(why, room) || why}${rest}`;
+    // 在 leader 手里的（t253）按 overdue.ts 的 leader 一行算期限；原因放不下时先截原因，不截后面的去向与时长。
+    const held = (who: string, tail: string): Holder => {
+      const due =
+        kindOf(who) === "leader" && f.held_since != null
+          ? { kind: "leader" as const, since: f.held_since }
+          : null;
+      const suffix =
+        due && f.now !== undefined ? heldText(due.kind, f.now - due.since) : "";
+      const room =
+        HOLDER_WIDTH - width(` · ${tail}${suffix ? ` · ${suffix}` : ""}`);
+      const head = width(why) <= room ? why : clipWords(why, room) || why;
+      return {
+        kind: kindOf(who),
+        who,
+        text: `${head} · ${tail}`,
+        ...(due ? { due } : {}),
+      };
     };
     if (f.escalated)
-      return {
-        kind: kindOf(f.escalated.to),
-        who: f.escalated.to,
-        text: held(
-          f.escalated.to,
-          `${whoLabel(f.escalated.from)} 上交${f.escalated.to === "u1" ? "，等你" : `给${whoLabel(f.escalated.to)}`}`,
-        ),
-      };
+      return held(
+        f.escalated.to,
+        `${whoLabel(f.escalated.from)} 上交${f.escalated.to === "u1" ? "，等你" : `给${whoLabel(f.escalated.to)}`}`,
+      );
     if (f.processing_by)
-      return {
-        kind: kindOf(f.processing_by),
-        who: f.processing_by,
-        text: held(
-          f.processing_by,
-          f.processing_by === "u1"
-            ? "你在处理"
-            : `${whoLabel(f.processing_by)} 在处理`,
-        ),
-      };
+      return held(
+        f.processing_by,
+        f.processing_by === "u1"
+          ? "你在处理"
+          : `${whoLabel(f.processing_by)} 在处理`,
+      );
     const who = f.inbox?.subscriber ?? f.route;
-    return {
-      kind: kindOf(who),
+    return held(
       who,
-      text:
-        who === "u1"
-          ? `${why} · 等你处理`
-          : held(
-              who,
-              f.inbox?.acked
-                ? `${whoLabel(who)} 已接手`
-                : `等 ${whoLabel(who)} 处理`,
-            ),
-    };
+      who === "u1"
+        ? "等你处理"
+        : f.inbox?.acked
+          ? `${whoLabel(who)} 已接手`
+          : `等 ${whoLabel(who)} 处理`,
+    );
   }
   // todo：等上游或自动派发的由运行时派；手动的等负责的 leader 或秘书派。
   if (f.schedule_state === "waiting")

@@ -36,8 +36,6 @@ export type CheckRequest = {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   urgent?: boolean;
-  /** 本机跑时先按锁文件装依赖：工作树是本机为远程任务另建的、没装依赖（t252）。派到代理的那边自己装。 */
-  install?: boolean;
   /** 任务写了避开的主机（t215），及上一轮在上面没跑成的主机（t204）：检查不派过去。 */
   avoid?: readonly number[];
   onStatus?: (status: "queued" | "started", log: string, host: string) => void;
@@ -158,7 +156,6 @@ export class CheckDispatch {
       env: request.env,
       signal: request.signal,
       urgent: request.urgent,
-      install: request.install,
       ...(this.deps.queue ? { queue: this.deps.queue } : {}),
       onStatus: (status, log) => request.onStatus?.(status, log, localRef),
       onQuiet: (event) => request.onQuiet?.(event, localRef),

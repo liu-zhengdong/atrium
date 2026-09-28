@@ -198,6 +198,8 @@ export function checkSummary(event: {
   const host = str(d.host);
   const at = host ? `（${host}）` : "";
   const why = str(d.reason) || str(d.detail);
+  // 检查前装过依赖（t216）：附在行尾，看得出装过、花了多久。
+  const deps = str(d.deps) ? `；${str(d.deps)}` : "";
   if (event.kind.endsWith("_rerun")) {
     const attempt = typeof d.attempt === "number" ? d.attempt : 1;
     return `${stage}${CHECK_CLASS_TEXT.not_run}${at}，已安排重跑（${attempt}/${MAX_CHECK_RERUNS}）：${why}`;
@@ -211,15 +213,16 @@ export function checkSummary(event: {
           : "failed"
         : null;
   if (!outcome) return null;
-  if (outcome === "passed") return `${stage}${CHECK_CLASS_TEXT.passed}${at}`;
+  if (outcome === "passed")
+    return `${stage}${CHECK_CLASS_TEXT.passed}${at}${deps}`;
   if (outcome === "not_run") {
     const reruns = typeof d.reruns === "number" ? d.reruns : 0;
-    return `${stage}${CHECK_CLASS_TEXT.not_run}${at}（基础设施问题${reruns ? `，已自动重跑 ${reruns} 次` : ""}）：${why}`;
+    return `${stage}${CHECK_CLASS_TEXT.not_run}${at}（基础设施问题${reruns ? `，已自动重跑 ${reruns} 次` : ""}）：${why}${deps}`;
   }
   const failed = Array.isArray(d.failedTests)
     ? d.failedTests.filter((t): t is string => typeof t === "string")
     : [];
-  return `${stage}${CHECK_CLASS_TEXT.failed}${at}：${str(d.detail)}${failed.length ? `；失败用例：${failed.map(testName).join("、")}` : ""}`;
+  return `${stage}${CHECK_CLASS_TEXT.failed}${at}：${str(d.detail)}${failed.length ? `；失败用例：${failed.map(testName).join("、")}` : ""}${deps}`;
 }
 
 /** 算「本地检查」一行时看的事件种类。 */

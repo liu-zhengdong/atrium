@@ -235,6 +235,7 @@ for (const scenario of [
   "not_run_then_merge",
   "not_run_blocked",
   "stalled_blocked",
+  "deps_failed_then_merge",
 ] as const) {
   test(`隔离服务与假 gh/执行者：${scenario}`, async (t) => {
     let merged = false;
@@ -303,6 +304,17 @@ for (const scenario of [
           join(fixture.repo, ".agents", "timing-sensitive"),
           "# 慢用例\n慢用例：\n",
         );
+        if (scenario === "deps_failed_then_merge") {
+          // 工作树没有 node_modules：检查前要 npm ci。假 npm 第一次断网失败（输出里带令牌），第二次装上（t216）。
+          writeFileSync(join(fixture.repo, "package-lock.json"), "{}\n");
+          // 和真实仓库一样忽略 node_modules（装依赖的记号也在里面），检查后工作树仍算干净。
+          writeFileSync(join(fixture.repo, ".gitignore"), "node_modules\n");
+          const runs = join(fixture.root, "npm-runs").replaceAll("\\", "/");
+          fixture.script(
+            "npm",
+            `n=$(cat "${runs}" 2>/dev/null || echo 0)\necho $((n+1)) > "${runs}"\nif [ "$n" -lt 1 ]; then\n  echo 'npm ERR! network request failed'\n  echo '//registry.npmjs.org/:_authToken=abcdef123456secret'\n  exit 1\nfi\nmkdir -p node_modules\necho installed`,
+          );
+        }
         git("add", ".");
         git("commit", "-qm", "检查夹具");
         git("push", "-q", "origin", "main");
@@ -531,6 +543,35 @@ for (const scenario of [
       assert.deepEqual(checks, ["not_run", "passed"]);
       const shown = (await call("GET", `/api/tasks/${ref}`)).body;
       assert.match(shown.last_check, /^合入前过/);
+      return;
+    }
+    if (scenario === "deps_failed_then_merge") {
+      // 装依赖失败是检查没跑成：不交回执行者、不计退回次数，重跑时装上就合入了。
+      assert.equal(task.delivery_stage, "merged");
+      assert.equal(task.merge_returns, 0);
+      assert.equal(mergeCalls, 1);
+      assert.equal(count("merge_check_rerun"), 1);
+      assert.equal(count("merge_returned"), 0);
+      const checks = task.events
+        .filter((event: { kind: string }) => event.kind === "merge_check")
+        .map((event: { detail: string }) => JSON.parse(event.detail));
+      assert.deepEqual(
+        checks.map((check: { outcome: string }) => check.outcome),
+        ["not_run", "passed"],
+      );
+      assert.match(
+        checks[0].reason,
+        /^装依赖失败（npm ci .*退出码 1）：network request failed$/,
+      );
+      assert.match(checks[0].detail, /输出末尾：/);
+      assert.match(checks[1].deps, /^先装了依赖（npm ci，\d+ 秒）/);
+      const events = JSON.stringify(task.events);
+      assert.doesNotMatch(events, /abcdef123456secret/);
+      const shown = (await call("GET", `/api/tasks/${ref}`)).body;
+      assert.match(
+        shown.last_check,
+        /^合入前过.*；先装了依赖（npm ci，\d+ 秒）/,
+      );
       return;
     }
     if (scenario === "not_run_blocked") {

@@ -15,6 +15,7 @@ import {
   LOCAL_CHECK_TIMEOUT_MS,
   type LocalCheck,
 } from "../tasks/local-check.ts";
+import { parseDepsInstall } from "../tasks/install-deps.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { Exit } from "../tasks/outcome.ts";
 import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
@@ -693,6 +694,7 @@ export class RemoteHosts {
         },
       );
       const reply = (result ?? {}) as CheckReply;
+      const install = parseDepsInstall(reply.install);
       return {
         status: reply.status ?? "error",
         command: typeof reply.command === "string" ? reply.command : "",
@@ -706,6 +708,7 @@ export class RemoteHosts {
         ...(typeof reply.infra === "string" && reply.infra
           ? { infra: reply.infra }
           : {}),
+        ...(install ? { install } : {}),
         // 那台因日志太久没输出结束了检查（t260）。
         ...(reply.stalled && typeof reply.stalled === "object"
           ? {

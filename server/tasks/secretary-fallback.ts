@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { EventInbox } from "./events.ts";
+import type { EventInbox, InboxEvent } from "./events.ts";
 import { claimSecretary } from "./secretary-lock.ts";
 import {
   opencodeEnvironment,
@@ -14,11 +14,20 @@ import {
   type SecretarySession,
 } from "./secretary-session.ts";
 import { wakePrompt } from "./wake-prompt.ts";
-import { decideWake, nextWakeCount } from "./wake-rule.ts";
+import { nextWakeCount } from "./wake-rule.ts";
+import {
+  UNATTENDED_MS,
+  WAKE_FAILED,
+  watchDecision,
+} from "./secretary-watch.ts";
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Writable } from "node:stream";
 import { killTree, spawnCommand } from "../platform/index.ts";
 import { serviceEnvironment } from "../service-env.ts";
+
+const SUBSCRIBER = "secretary";
+/** 有事时多久再看一眼在不在听；空闲时只挂一个等事件的 peek。 */
+const CHECK_MS = 30_000;
 
 export type ResumeRun = (
   session: SecretarySession,
@@ -126,21 +135,39 @@ export const resumeTurn: ResumeRun = (
   });
 };
 
-/** Service-side one-shot event consumer. A UI lock wins whenever it is open. */
+/** 叫不起来时推给用户的一条（接推送到手机，t185）；同一段没人管只推一次。 */
+export type SecretaryAlert = { key: string; pending: number; reason: string };
+
+/**
+ * 服务端后台兜底（t242）：有要处理的事件、没有秘书挂着 wait 满 graceMs，就接着 atrium chat 开过的秘书会话
+ * 在后台跑一轮；界面持锁时让界面处理。叫不起来（没有会话、连续叫醒到上限、跑失败）就推给用户，
+ * 状态栏按 status() 标红。判定在 secretary-watch.ts。
+ */
 export class SecretaryFallback {
   private readonly abort = new AbortController();
   private running: Promise<void> | undefined;
+  private waking = false;
+  private unreachable: string | null = null;
+  private retryAt: number | null = null;
+  private alerted: string | null = null;
 
   constructor(
     private readonly inbox: EventInbox,
     private readonly data: string,
     private readonly options: {
-      batchMs?: number;
+      graceMs?: number;
       maxWakeups?: number;
       runTurn?: ResumeRun;
       now?: () => number;
+      alert?: (alert: SecretaryAlert) => void;
+      /** 有事时多久再看一眼在不在听（毫秒），测试缩短。 */
+      checkMs?: number;
     } = {},
   ) {}
+
+  get graceMs() {
+    return this.options.graceMs ?? UNATTENDED_MS;
+  }
 
   start() {
     this.running ??= this.loop();
@@ -151,6 +178,11 @@ export class SecretaryFallback {
     await this.running;
   }
 
+  /** 状态栏与 top：后台是否正在叫醒秘书处理、叫不起来的原因。 */
+  status() {
+    return { waking: this.waking, unreachable: this.unreachable };
+  }
+
   private async pause(ms: number) {
     try {
       await delay(ms, undefined, { signal: this.abort.signal });
@@ -159,51 +191,73 @@ export class SecretaryFallback {
     }
   }
 
+  /** 没人管、叫不起来：记原因，同一段（按最早一条事件）只推一次。 */
+  private giveUp(reason: string, events: readonly InboxEvent[]) {
+    this.unreachable = reason;
+    const key = `secretary-away:${events[0]!.id}`;
+    if (this.alerted === key) return;
+    this.alerted = key;
+    console.warn(`秘书没在听，${events.length} 件要处理的事没人管：${reason}`);
+    try {
+      this.options.alert?.({ key, pending: events.length, reason });
+    } catch (error) {
+      console.warn(`推送「秘书没在听」出错：${String(error)}`);
+    }
+  }
+
   private async loop() {
     const signal = this.abort.signal;
     const now = this.options.now ?? Date.now;
-    const batchMs = this.options.batchMs ?? 2000;
     const maxWakeups = this.options.maxWakeups ?? 10;
+    const checkMs = this.options.checkMs ?? CHECK_MS;
     while (!signal.aborted) {
       try {
-        if (!loadSecretarySession(this.data)) {
-          await this.pause(5000);
-          continue;
+        const events = this.inbox.pending(SUBSCRIBER);
+        const decision = watchDecision({
+          now: now(),
+          presence: this.inbox.presence(SUBSCRIBER),
+          oldest: events.length
+            ? Math.min(...events.map((event) => event.updated_at))
+            : null,
+          graceMs: this.graceMs,
+          session: loadSecretarySession(this.data) !== undefined,
+          limit: wakeCount(this.data) >= maxWakeups,
+          retryAt: this.retryAt,
+        });
+        if (decision.kind === "quiet" || decision.kind === "listening") {
+          this.unreachable = null;
+          this.retryAt = null;
+          this.alerted = null;
         }
-        const { events, restarting } = await this.inbox.wait(
-          "secretary",
-          30,
-          signal,
-          {
+        if (decision.kind === "quiet") {
+          // 有新事件就醒；只看不取，也不算在听。
+          const { restarting } = await this.inbox.wait(SUBSCRIBER, 30, signal, {
             peek: true,
             trackOnline: false,
-          },
-        );
-        if (signal.aborted || restarting) break;
-        const decision = decideWake({
-          events: events.map((event) => ({
-            id: event.id,
-            queuedAt: event.updated_at,
-          })),
-          now: now(),
-          batchMs,
-          sessionReady: true,
-          turnRunning: false,
-          consecutiveWakeups: wakeCount(this.data),
-          maxConsecutiveWakeups: maxWakeups,
-        });
-        if (decision.kind === "empty") continue;
-        if (decision.kind === "batching") {
-          await this.pause(Math.max(0, decision.readyAt - now()));
+          });
+          if (restarting) break;
           continue;
         }
-        if (decision.kind === "limit") {
-          await this.pause(5000);
+        if (decision.kind === "listening") {
+          await this.pause(checkMs);
           continue;
         }
-        if (decision.kind !== "send") continue;
+        if (decision.kind === "wait") {
+          await this.pause(Math.min(checkMs, Math.max(0, decision.at - now())));
+          continue;
+        }
+        if (decision.kind === "unreachable") {
+          this.giveUp(decision.reason, events);
+          await this.pause(
+            this.retryAt === null
+              ? checkMs
+              : Math.min(checkMs, Math.max(0, this.retryAt - now())),
+          );
+          continue;
+        }
         const lock = claimSecretary(this.data);
         if (!lock) {
+          // atrium chat 界面开着：由界面送入。
           await this.pause(1000);
           continue;
         }
@@ -211,9 +265,13 @@ export class SecretaryFallback {
         try {
           const session = loadSecretarySession(this.data);
           if (!session) continue;
-          const delivered = this.inbox.deliver("secretary", decision.eventIds);
+          const delivered = this.inbox.deliver(
+            SUBSCRIBER,
+            events.map((event) => event.id),
+          );
           if (!delivered.length) continue;
           let ok = false;
+          this.waking = true;
           try {
             ok = await (this.options.runTurn ?? resumeTurn)(
               session,
@@ -224,20 +282,27 @@ export class SecretaryFallback {
             );
           } catch {
             console.warn("秘书后台恢复失败；稍后重试");
+          } finally {
+            this.waking = false;
           }
-          if (ok && !signal.aborted)
+          if (ok && !signal.aborted) {
             saveWakeCount(
               this.data,
               nextWakeCount(wakeCount(this.data), "delivered"),
             );
-          else {
-            this.inbox.release("secretary", delivered);
+            this.unreachable = null;
+            this.retryAt = null;
+          } else {
+            this.inbox.release(SUBSCRIBER, delivered);
             failed = true;
           }
         } finally {
           lock.release();
         }
-        if (failed && !signal.aborted) await this.pause(5000);
+        if (failed && !signal.aborted) {
+          this.retryAt = now() + this.graceMs;
+          this.giveUp(WAKE_FAILED, events);
+        }
       } catch {
         if (!signal.aborted) {
           console.warn("秘书后台恢复暂时失败；稍后重试");

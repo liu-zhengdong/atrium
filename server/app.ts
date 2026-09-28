@@ -25,7 +25,10 @@ import { registerSkillRoutes } from "./skills/routes.ts";
 import { registerQuotaRoute } from "./tasks/quota.ts";
 import type { QuotaReaders } from "./quota-readers/index.ts";
 import type { RunnerOptions } from "./tasks/runner.ts";
-import { SecretaryFallback } from "./tasks/secretary-fallback.ts";
+import {
+  SecretaryFallback,
+  type ResumeRun,
+} from "./tasks/secretary-fallback.ts";
 import type { EventInbox } from "./tasks/events.ts";
 import { LeaderTokens } from "./leaders/tokens.ts";
 import { leaderOf, registerLeaderGuard } from "./leaders/guard.ts";
@@ -37,6 +40,7 @@ import { registerSecretRoutes } from "./secrets/routes.ts";
 import { registerChoiceRoutes } from "./choices/routes.ts";
 import { registerHostRoutes } from "./hosts/routes.ts";
 import { TelegramNotifier, type NotifierOptions } from "./notify/runtime.ts";
+import { awayPush } from "./notify/model.ts";
 import { registerNotifyRoutes } from "./notify/routes.ts";
 import {
   LeaderWaker,
@@ -99,6 +103,8 @@ export async function createApp(options: {
   schedules?: { tickMs?: number; now?: () => number; offset?: Offset };
   /** 推送到手机（Telegram）：测试给假接口地址、显式环境（不读本机代理）与时钟。 */
   notify?: Partial<Omit<NotifierOptions, "data">>;
+  /** 秘书后台兜底（t242）：测试缩短「没人听多久叫醒」、替换恢复进程。 */
+  secretary?: { graceMs?: number; runTurn?: ResumeRun };
 }) {
   mkdirSync(options.data, { recursive: true, mode: 0o700 });
   const db = openDatabase(options.data);
@@ -294,13 +300,6 @@ export async function createApp(options: {
   schedulePump.start();
   app.addHook("preClose", async () => schedulePump.close());
   registerHostRoutes(app, db, taskRunner);
-  const secretaryFallback = new SecretaryFallback(
-    taskRunner.inbox,
-    resolve(options.data),
-    { batchMs: options.tasks?.batchMs },
-  );
-  secretaryFallback.start();
-  app.addHook("preClose", async () => secretaryFallback.close());
   inbox = () => taskRunner.inbox;
   registerOrgRoutes(app, db);
   // 账本与组织树的表都建好后导入旧状态（#355）：详述回填、根章程预算；幂等，坏记录只记日志。
@@ -322,6 +321,21 @@ export async function createApp(options: {
   registerNotifyRoutes(app, notifier);
   notifier.start();
   app.addHook("preClose", async () => notifier.close());
+  // 秘书没在听满 3 分钟就在后台叫醒一次；叫不起来推给用户、状态栏标红（t242）。
+  const secretaryFallback = new SecretaryFallback(
+    taskRunner.inbox,
+    resolve(options.data),
+    {
+      ...options.secretary,
+      alert: (alert) => notifier.push(awayPush(alert)),
+    },
+  );
+  taskRunner.secretaryWatch = () => ({
+    graceMs: secretaryFallback.graceMs,
+    ...secretaryFallback.status(),
+  });
+  secretaryFallback.start();
+  app.addHook("preClose", async () => secretaryFallback.close());
   const leaderWaker = new LeaderWaker(db, taskRunner.inbox, leaderTokens, {
     data: resolve(options.data),
     env: options.tasks?.env,

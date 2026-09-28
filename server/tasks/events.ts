@@ -9,6 +9,7 @@ import {
 } from "./event-level.ts";
 import { atomically, ownerOf, taskRef } from "./ledger.ts";
 import { URGENT_WATCHERS } from "./urgent.ts";
+import type { Presence } from "./secretary-watch.ts";
 
 /**
  * 事件队列与投递（#262「事件投递」）。事件先落库，订阅者 ack 前一直保留，服务重启后仍在。
@@ -229,6 +230,9 @@ export function listOptions(query: { before?: string; limit?: string }) {
 export class EventInbox {
   private readonly emitter = new EventEmitter();
   private readonly lastWait = new Map<string, number>();
+  /** 此刻挂着 wait 的连接数（按订阅者）；唤醒通道自己的 peek 不算。 */
+  private readonly waiting = new Map<string, number>();
+  private readonly startedAt: number;
   private readonly observers: ((event: InboxEvent) => void)[] = [];
   private closed = false;
 
@@ -243,6 +247,7 @@ export class EventInbox {
     this.batchMs = options.batchMs ?? 0;
     this.leaseMs = options.leaseMs ?? LEASE_MS;
     this.now = options.now ?? Date.now;
+    this.startedAt = this.now();
     ensureEventTables(db);
     this.emitter.setMaxListeners(0);
   }
@@ -520,6 +525,8 @@ export class EventInbox {
         timed_out: !ready.length,
         ...(this.closed ? { restarting: true } : {}),
       };
+    const track = options.trackOnline !== false;
+    if (track) this.waiting.set(who, (this.waiting.get(who) ?? 0) + 1);
     return new Promise((resolve) => {
       let settled = false;
       let collecting = Boolean(ready.length);
@@ -534,7 +541,12 @@ export class EventInbox {
         this.emitter.off(who, check);
         this.emitter.off("close", closing);
         signal?.removeEventListener("abort", aborted);
-        if (options.trackOnline !== false) this.lastWait.set(who, this.now());
+        if (track) {
+          this.lastWait.set(who, this.now());
+          const left = (this.waiting.get(who) ?? 1) - 1;
+          if (left > 0) this.waiting.set(who, left);
+          else this.waiting.delete(who);
+        }
         const events = take();
         resolve({
           events,
@@ -613,9 +625,16 @@ export class EventInbox {
     });
   }
 
-  /** 订阅者最近一次挂着 wait 的时间：#193 据此判断在线，无人在线时再后台唤醒。 */
-  lastWaitAt(subscriber: string) {
-    return this.lastWait.get(subscriber);
+  /**
+   * 订阅者在不在听（t242）：此刻有没有连接挂着 wait，最近一次在听是什么时候；
+   * 服务重启后还没人来 wait 的，从服务起来算。后台唤醒与状态栏据此判断。
+   */
+  presence(subscriber: string): Presence {
+    const who = ownerOf(subscriber, "as");
+    return {
+      waiting: (this.waiting.get(who) ?? 0) > 0,
+      last_seen: this.lastWait.get(who) ?? this.startedAt,
+    };
   }
 
   close() {

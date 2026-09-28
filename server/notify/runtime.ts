@@ -142,6 +142,14 @@ export class TelegramNotifier {
     if (enqueue(this.db, push, this.now())) this.schedule();
   }
 
+  /** 运行时自己要推的一条（如秘书没在听，t242）：发送没打开就不排；返回排进去没有。 */
+  push(push: Push) {
+    if (!this.active()) return false;
+    if (!enqueue(this.db, push, this.now())) return false;
+    this.schedule();
+    return true;
+  }
+
   private taskTitle(ref: string) {
     const row = this.db
       .prepare("SELECT title FROM tasks WHERE id=?")

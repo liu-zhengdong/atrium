@@ -14,6 +14,10 @@ import type { PlanView } from "./top-plan.ts";
 import { pendingLine } from "../server/choices/model.ts";
 import { titleTag } from "../server/tasks/priority.ts";
 import { recordNext } from "./contract.ts";
+import {
+  secretaryText,
+  type SecretaryTone,
+} from "../server/tasks/secretary-watch.ts";
 
 /**
  * `atrium statusline`（#355）：Claude Code 状态栏。数据经服务取（`/api/tasks/top` 与 `/api/tasks/plan`），
@@ -28,6 +32,11 @@ const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
 const CYAN = "\x1b[36m";
 const RESET = "\x1b[0m";
+const TONE: Record<SecretaryTone, string> = {
+  ok: DIM,
+  warn: YELLOW,
+  alarm: `${BOLD}${RED}`,
+};
 
 /** 任务最多显示几行，多了折叠。 */
 export const TASK_LINES = 8;
@@ -198,6 +207,13 @@ export function renderStatusline(input: StatuslineInput): string {
   const choice = snapshot.choices
     ? pendingLine(snapshot.choices.list, snapshot.choices.open, TITLE_MAX)
     : null;
+  // 秘书在不在听（t242）；旧版服务没有这个字段，照旧只说未处理事件。
+  const secretary = snapshot.secretary
+    ? secretaryText(snapshot.secretary)
+    : null;
+  const secretaryPart = secretary
+    ? paint(TONE[secretary.tone], secretary.text)
+    : null;
   if (
     !held.length &&
     !leaders.length &&
@@ -205,9 +221,13 @@ export function renderStatusline(input: StatuslineInput): string {
     !ready &&
     !waiting &&
     !choice &&
-    !snapshot.urgent?.warning
+    !snapshot.urgent?.warning &&
+    (!secretary || secretary.tone === "ok")
   )
-    return paint(DIM, "Atrium 空闲");
+    return [
+      paint(DIM, "Atrium 空闲"),
+      ...(secretaryPart ? [secretaryPart] : []),
+    ].join(" · ");
   const parts = [
     `在做 ${count("worker")}`,
     ...(count("leader") ? [`leader 处理 ${count("leader")}`] : []),
@@ -219,14 +239,16 @@ export function renderStatusline(input: StatuslineInput): string {
     // 暂停派新活时写清是哪条线（t113）：Atrium 自己占的核、整机负载保护线，还是执行者满了。
     `Atrium ${parts.join(" · ")}${hostBrief(snapshot.host, snapshot.counts.queued)}`,
     ...(count("user") ? [paint(`${BOLD}${RED}`, `等你 ${count("user")}`)] : []),
-    ...(events
-      ? [
-          paint(
-            YELLOW,
-            `${snapshot.subscriber === "secretary" ? "秘书" : snapshot.subscriber}未处理事件 ${events}`,
-          ),
-        ]
-      : []),
+    ...(secretaryPart
+      ? [secretaryPart]
+      : events
+        ? [
+            paint(
+              YELLOW,
+              `${snapshot.subscriber === "secretary" ? "秘书" : snapshot.subscriber}未处理事件 ${events}`,
+            ),
+          ]
+        : []),
   ].join(" · ");
   const lines = [head];
   if (choice) lines.push(paint(`${BOLD}${RED}`, `✱ ${choice}`));
@@ -292,7 +314,7 @@ function drainStdin() {
 export const statuslineCommand: Command = {
   args: "[--json]",
   about:
-    "Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、未处理事件；服务不在只显示未运行，不拉起",
+    "Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、秘书在不在听与未处理事件；服务不在只显示未运行，不拉起",
   positionals: [0, 0],
   async run({ json }) {
     const done = drainStdin();

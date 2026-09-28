@@ -228,7 +228,7 @@ atrium quota --clear claude   # 人工解除运行时的额度占用（误判时
 ## Claude Code 状态栏
 
 ```bash
-atrium statusline     # 一屏概况：未结束任务各在谁手里、leader 在处理什么、秘书未处理事件、接下来就绪与等待的数目
+atrium statusline     # 一屏概况：未结束任务各在谁手里、leader 在处理什么、秘书在不在听与未处理事件、接下来就绪与等待的数目
 ```
 
 末行是下一步命令（`--json` 的 `next` 同一条）：有等你的任务给 `atrium task show tN`，有就绪的给 `atrium task plan`，其余给 `atrium top`。
@@ -238,6 +238,8 @@ atrium statusline     # 一屏概况：未结束任务各在谁手里、leader �
 ```json
 { "statusLine": { "type": "command", "command": "atrium statusline" } }
 ```
+
+秘书那一段写「秘书在听」或「秘书没在听 N 分钟 · 未处理 M」（`atrium top` 首行同一句）：有连接挂着 `atrium events wait`（或 `atrium chat` 界面开着）才算在听。有要处理的事、没人听满 3 分钟时，服务在后台接着 `atrium chat` 开过的 opencode / codex 秘书会话跑一轮；叫不起来（没有这样的会话、连续叫醒到上限、跑失败）就推到手机（配了 `atrium notify`）并在状态栏标红，写明原因。
 
 服务不在只显示「Atrium 未运行」，不拉起服务；只有真的在等你拍板的任务用醒目红色写「等你」。全局装好的 `atrium` 就够，不再需要 `~/Atrium/tools/` 下的 `statusline.py` 与 `org` 包装脚本；数据目录不是默认的 `~/.atrium` 时在命令前带上 `ATRIUM_DATA=…`。
 

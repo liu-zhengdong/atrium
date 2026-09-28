@@ -1,6 +1,6 @@
-import { execFile } from "node:child_process";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { runFile } from "../platform/index.ts";
 import { redact } from "../secret-redact.ts";
 import { packageRoot } from "../service-state.ts";
 import { readRestartState } from "../supervisor.ts";
@@ -361,28 +361,25 @@ export class OnlineWatch {
 /** 默认自升级：用本包的命令行 `update --to` 装新版，再 `restart` 让 supervisor 换掉本服务。 */
 export function cliDeploy(data: string, env: NodeJS.ProcessEnv = process.env) {
   const bin = join(packageRoot, "bin", "atrium.mjs");
-  const cli = (args: string[], timeout: number) =>
-    new Promise<{ ok: boolean; output: string }>((resolve) => {
-      execFile(
-        process.execPath,
-        [bin, ...args],
-        {
-          cwd: data,
-          timeout,
-          maxBuffer: 4 * 1024 * 1024,
-          env: { ...env, ATRIUM_DATA: data },
-        },
-        (error, stdout, stderr) =>
-          resolve({
-            ok: !error,
-            output: [stdout, stderr, error?.message]
-              .filter(Boolean)
-              .map(String)
-              .join("\n")
-              .trim(),
-          }),
-      );
-    });
+  const cli = async (args: string[], timeout: number) => {
+    const { error, stdout, stderr } = await runFile(
+      process.execPath,
+      [bin, ...args],
+      {
+        cwd: data,
+        timeout,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...env, ATRIUM_DATA: data },
+      },
+    );
+    return {
+      ok: !error,
+      output: [stdout, stderr, error?.message]
+        .filter(Boolean)
+        .join("\n")
+        .trim(),
+    };
+  };
   return async (version: string): Promise<DeployResult> => {
     const update = await cli(["update", "--to", version], 10 * 60_000);
     if (!update.ok)

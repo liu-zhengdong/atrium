@@ -124,6 +124,9 @@ export class MergeQueue {
       return null;
     if (task.delivery_stage === "merging") {
       this.stopping.set(id, by);
+      // 还没发出 gh 合入：中止正在跑的检查等步骤，检查的进程树随之结束（t167）。
+      if (this.current?.id === id && !this.current.committed)
+        this.current.abort.abort();
       noteTask(this.db, id, "merge_stop_requested", { reason: "用户停止合入" });
       return { stopping: true };
     }

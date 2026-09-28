@@ -1,11 +1,8 @@
-import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { runFile } from "./platform/index.ts";
 import { packageRoot } from "./service-state.ts";
-
-const execFileAsync = promisify(execFile);
 
 export type ReleaseChange = {
   version: string;
@@ -57,11 +54,12 @@ export async function listRemoteTags(repoUrl: string): Promise<string[]> {
     if (target.startsWith("github:")) {
       target = `https://github.com/${target.slice("github:".length)}.git`;
     }
-    const { stdout } = await execFileAsync(
+    const { error, stdout } = await runFile(
       "git",
       ["ls-remote", "--tags", target],
       { cwd: homedir(), timeout: 15000 },
     );
+    if (error) throw error;
     const tags = new Set<string>();
     for (const line of stdout.split("\n")) {
       const trimmed = line.trim();

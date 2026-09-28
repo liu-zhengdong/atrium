@@ -1,24 +1,23 @@
-import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { promisify } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import { nodes, ref } from "../org/model.ts";
 import { allShares } from "../org/share-store.ts";
 import { ownAmount } from "../org/shares.ts";
 import { all } from "./ledger-model.ts";
 import { BudgetProblem } from "./budget-problem.ts";
+import { runFile } from "../platform/index.ts";
 
-const run = promisify(execFile);
 const GB = 1024 ** 3;
 type Worktree = { node_id: number; worktree: string };
 export type SizeOf = (path: string) => Promise<number>;
 
 async function defaultSize(path: string): Promise<number> {
   await stat(path);
-  const { stdout } = await run("du", ["-sk", path], {
+  const { error, stdout } = await runFile("du", ["-sk", path], {
     timeout: 10_000,
     maxBuffer: 1024,
   });
+  if (error) throw error;
   const gb = (Number.parseInt(stdout, 10) * 1024) / GB;
   if (!Number.isFinite(gb)) throw new Error("du 输出无效");
   return gb;

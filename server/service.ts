@@ -1,4 +1,3 @@
-import { spawn, execFile } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -9,7 +8,6 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { portTakenMessage, probePort } from "./port-owner.ts";
 import { Problem } from "./problem.ts";
@@ -25,6 +23,7 @@ import { reportDroppedIdentity, serviceEnvironment } from "./service-env.ts";
 import { serviceArgs } from "./entry.ts";
 import { readRestartState, restartInProgress } from "./supervisor.ts";
 import { localFetch } from "./local-http.ts";
+import { spawnNode } from "./platform/index.ts";
 
 async function request(record: ServiceRecord, stop = false) {
   const response = await localFetch(
@@ -213,7 +212,7 @@ export async function startService(
     state = restartInProgress(data);
   }
   let record = readService(data);
-  let child: ReturnType<typeof spawn> | undefined;
+  let child: ReturnType<typeof spawnNode> | undefined;
   let launchError: Error | undefined;
   let logStart = 0;
   if (!record || !alive(record.pid)) {
@@ -229,7 +228,7 @@ export async function startService(
     try {
       const { env, droppedSensitive } = serviceEnvironment(process.env);
       reportDroppedIdentity(droppedSensitive);
-      child = spawn(process.execPath, serviceArgs(entry), {
+      child = spawnNode(serviceArgs(entry), {
         cwd: data,
         env: {
           ...env,
@@ -237,7 +236,6 @@ export async function startService(
         },
         detached: true,
         stdio: ["ignore", log, log],
-        windowsHide: true,
       });
       child.on("error", (error) => {
         launchError = error;

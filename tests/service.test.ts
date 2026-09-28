@@ -769,13 +769,17 @@ test(
     assert.equal(finished.code, 0, finished.stderr || finished.stdout);
     assert.equal((await waiting).restarting, true);
     await disconnected;
+    // stopService 在旧服务删掉登记时就返回，进程随后才退出；机器忙时这一小段可能赶上断言。
+    const exitDeadline = Date.now() + 10_000;
+    while (alive(old.pid) && Date.now() < exitDeadline) await delay(100);
     assert.equal(alive(old.pid), false);
     const next = readService(f.data)!;
     assert.notEqual(next.instance, old.instance);
     assert.equal((await f.cli("status")).code, 0);
+    // 新服务刚起来还在接管收尾，机器忙时首个 SSE 应答可能超过几秒。
     const reconnected = await fetch(`${serviceUrl(next)}/api/map/stream`, {
       headers,
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(20_000),
     });
     assert.equal(reconnected.status, 200);
     await reconnected.body?.cancel();

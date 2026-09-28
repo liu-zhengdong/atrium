@@ -193,16 +193,76 @@ export function openUrlInvocation(platform: Platform, url: string): Invocation {
 }
 
 /**
- * 是否以 detached 拉起：Unix 照调用方（detached 才有独立进程组）。
- * Windows 上经 cmd.exe 的调用（verbatim）不 detached：DETACHED_PROCESS 下的 cmd.exe 没有控制台，
- * 它再拉起的程序拿不到重定向的输出句柄，输出全丢；结束进程树靠 taskkill /T，不需要进程组。
- * 代价是这类进程随服务退出（libuv 的作业对象），服务重启接管不到。
+ * Windows 上 detached 拉起时的中转（t167）：libuv 的 detached 是 DETACHED_PROCESS，子进程没有控制台，
+ * 它再起的控制台程序（git、shell、npm）各自新开一个可见窗口，桌面反复弹窗；
+ * 不 detached 又会落进服务的作业对象、随服务退出，接管不到。
+ * 所以先 detached 拉起这个中转（node，自己没有控制台、不开窗口），由它不 detached、全管道、windowsHide 拉起真正的程序：
+ * libuv 此时带 CREATE_NO_WINDOW，程序得到一个没有窗口的控制台，它的子孙都共用这个控制台，不再弹窗。
+ * 中转把程序的输出原样写到自己继承的 stdout/stderr（日志文件或管道），把自己的标准输入转给程序，按程序的退出码退出；
+ * 中转被结束时程序在它的作业对象里一并结束。
+ * 参数：`-e 脚本 -- 选项JSON 命令 参数...`；选项 `stdin` 是否转发标准输入、`verbatim` 是否原样拼命令行（cmd.exe）。
  */
-export const spawnDetached = (
+export const HIDDEN_LAUNCHER = [
+  'const { spawn } = require("node:child_process");',
+  "const [options, command, ...args] = process.argv.slice(1);",
+  "const { stdin, verbatim } = JSON.parse(options);",
+  "const quiet = () => {};",
+  'process.stdout.on("error", quiet);',
+  'process.stderr.on("error", quiet);',
+  "const child = spawn(command, args, {",
+  '  stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"],',
+  "  windowsHide: true,",
+  "  windowsVerbatimArguments: verbatim,",
+  "});",
+  // 写不出去（管道那头的服务已退出）也继续读，免得程序卡在写输出上。
+  'child.stdout.on("data", (chunk) => process.stdout.write(chunk, quiet));',
+  'child.stderr.on("data", (chunk) => process.stderr.write(chunk, quiet));',
+  "if (stdin) {",
+  '  child.stdin.on("error", quiet);',
+  "  process.stdin.pipe(child.stdin);",
+  "}",
+  'child.on("error", (error) => {',
+  "  process.stderr.write(`[atrium] 拉起 ${command} 失败：${error.message}\\n`, quiet);",
+  "  process.exitCode = 127;",
+  "  if (stdin) process.stdin.destroy();",
+  "});",
+  'child.on("close", (code) => {',
+  "  process.exitCode ??= code ?? 1;",
+  "  if (stdin) process.stdin.destroy();",
+  "});",
+].join("\n");
+
+/**
+ * 实际拉起什么、是否 detached：Unix 与不 detached 的调用原样（Unix 靠 detached 得到独立进程组）；
+ * Windows 上要求 detached 的调用改由 `HIDDEN_LAUNCHER` 中转，中转自己 detached。
+ * 经 cmd.exe 的调用同样中转：cmd.exe 在中转下有控制台和管道，输出不丢，也能随中转活过服务重启。
+ */
+export function hiddenLaunch(
   platform: Platform,
   invocation: Invocation,
   requested: boolean | undefined,
-) => (platform === "win32" && invocation.verbatim ? false : requested);
+  input: { nodePath: string; stdin: boolean },
+): { invocation: Invocation; detached: boolean | undefined } {
+  if (platform !== "win32" || !requested)
+    return { invocation, detached: requested };
+  return {
+    invocation: {
+      command: input.nodePath,
+      args: [
+        "-e",
+        HIDDEN_LAUNCHER,
+        "--",
+        JSON.stringify({
+          stdin: input.stdin,
+          verbatim: invocation.verbatim === true,
+        }),
+        invocation.command,
+        ...invocation.args,
+      ],
+    },
+    detached: true,
+  };
+}
 
 /** 路径是否绝对：与 Node 的 path.posix / path.win32 一致（Windows 另认盘符、UNC 与当前盘根路径）。 */
 export const isAbsolutePath = (platform: Platform, path: string) =>

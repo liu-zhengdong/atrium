@@ -1,6 +1,6 @@
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { runFile } from "../platform/index.ts";
 import { claudeReader } from "./claude.ts";
 import { codexReader } from "./codex.ts";
 import { opencodeReader } from "./opencode.ts";
@@ -153,21 +153,14 @@ export function readKeychain(
   const args = ["find-generic-password", "-s", service];
   if (account) args.push("-a", account);
   args.push("-w");
-  return new Promise((resolve, reject) => {
-    execFile(
-      SECURITY,
-      args,
-      {
-        timeout: KEYCHAIN_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-        env: { PATH: env.PATH, HOME: env.HOME, USER: env.USER },
-      },
-      (error, stdout) => {
-        if (!error) return resolve(stdout.trim() || undefined);
-        if (error.code === ITEM_NOT_FOUND) return resolve(undefined);
-        reject(new Error("钥匙串读取失败"));
-      },
-    );
+  return runFile(SECURITY, args, {
+    timeout: KEYCHAIN_TIMEOUT_MS,
+    maxBuffer: 1024 * 1024,
+    env: { PATH: env.PATH, HOME: env.HOME, USER: env.USER },
+  }).then(({ error, stdout }) => {
+    if (!error) return stdout.trim() || undefined;
+    if (error.code === ITEM_NOT_FOUND) return undefined;
+    throw new Error("钥匙串读取失败");
   });
 }
 

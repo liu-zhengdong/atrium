@@ -1,11 +1,12 @@
-import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
-import { commandInvocation } from "./platform/index.ts";
+import { runCommand, runFile, type FileRun } from "./platform/index.ts";
 
-const execFileAsync = promisify(execFile);
+const ok = (run: FileRun) => {
+  if (run.error) throw run.error;
+  return run;
+};
 
 /** Install an immutable tag, not a Git URL symlink. npm 11 links local git+file
  * installs to a temporary clone and deletes the clone, leaving a broken bin. */
@@ -19,23 +20,17 @@ export async function installVersion(version: string, repo: string) {
   const npm = async (
     args: string[],
     options: { cwd: string; timeout: number },
-  ) => {
-    const call = commandInvocation("npm", args);
-    return execFileAsync(call.command, call.args, {
-      ...options,
-      env: process.env,
-      windowsHide: true,
-      windowsVerbatimArguments: call.verbatim,
-    });
-  };
+  ) => ok(await runCommand("npm", args, { ...options, env: process.env }));
   try {
-    await execFileAsync(
-      "git",
-      ["clone", "--depth", "1", "--branch", `v${version}`, source, checkout],
-      {
-        cwd: dir,
-        timeout: 60000,
-      },
+    ok(
+      await runFile(
+        "git",
+        ["clone", "--depth", "1", "--branch", `v${version}`, source, checkout],
+        {
+          cwd: dir,
+          timeout: 60000,
+        },
+      ),
     );
     const pkg = JSON.parse(
       readFileSync(join(checkout, "package.json"), "utf8"),

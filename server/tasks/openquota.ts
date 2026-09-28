@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import {
   commandInvocation,
   envKey,
+  runFile,
   WINDOWS_SYSTEM_ENV,
 } from "../platform/index.ts";
 
@@ -77,30 +77,18 @@ export function readOpenquotaPace(
     ["pace", "--json"],
     child,
   );
-  return new Promise((resolve) => {
-    execFile(
-      call.command,
-      call.args,
-      {
-        cwd: homedir(),
-        timeout: options.timeoutMs ?? PACE_TIMEOUT_MS,
-        maxBuffer: PACE_MAX_BUFFER,
-        env: child,
-        windowsHide: true,
-        windowsVerbatimArguments: call.verbatim,
-      },
-      (error, stdout) => {
-        if (error) {
-          resolve(
-            error.code === "ENOENT"
-              ? { missing: true }
-              : { error: error.killed ? "timeout" : "failed" },
-          );
-          return;
-        }
-        const rows = parseOpenquotaRows(stdout);
-        resolve(rows ? { ok: true, rows } : { error: "parse" });
-      },
-    );
+  return runFile(call.command, call.args, {
+    cwd: homedir(),
+    timeout: options.timeoutMs ?? PACE_TIMEOUT_MS,
+    maxBuffer: PACE_MAX_BUFFER,
+    env: child,
+    windowsVerbatimArguments: call.verbatim,
+  }).then(({ error, stdout }): OpenquotaPace => {
+    if (error)
+      return error.code === "ENOENT"
+        ? { missing: true }
+        : { error: error.killed ? "timeout" : "failed" };
+    const rows = parseOpenquotaRows(stdout);
+    return rows ? { ok: true, rows } : { error: "parse" };
   });
 }

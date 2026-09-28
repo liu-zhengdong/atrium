@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -334,6 +335,7 @@ type AddInput struct {
 	Max    int      `json:"max"`
 	SSH    string   `json:"ssh"`
 	Tunnel string   `json:"tunnel"` // 本机端口:远端端口；带 --ssh 时缺省为服务端口:服务端口
+	Key    string   `json:"key"`    // 隧道用的私钥（绝对路径）：服务环境里没有 ssh-agent，只能 ssh -i
 }
 
 // Validate 校验并整理 host add 的参数；返回隧道两端端口（没有 --ssh 为 0）。
@@ -369,7 +371,13 @@ func (in *AddInput) Validate(servicePort int) (local, remote int, err error) {
 		if in.Tunnel != "" {
 			return 0, 0, api.Usage("--tunnel: 要和 --ssh 一起给")
 		}
+		if in.Key != "" {
+			return 0, 0, api.Usage("--key: 要和 --ssh 一起给")
+		}
 		return 0, 0, nil
+	}
+	if in.Key != "" && (!filepath.IsAbs(in.Key) || strings.ContainsAny(in.Key, "\x00\n\r")) {
+		return 0, 0, api.Usage("--key: 应为私钥文件的绝对路径")
 	}
 	if !sshPattern.MatchString(in.SSH) || strings.Contains(in.SSH, "..") {
 		return 0, 0, api.Usage("--ssh: 应为 user@地址（不含空格或选项）")
@@ -390,12 +398,17 @@ func (in *AddInput) Validate(servicePort int) (local, remote int, err error) {
 }
 
 // TunnelArgs 是 ssh 反向隧道的参数：远端 127.0.0.1:remote 转回服务这台的 127.0.0.1:local。
-func TunnelArgs(target string, local, remote int) []string {
-	return []string{"-N", "-T",
+// 给了私钥就只用它（-i 加 IdentitiesOnly）：服务环境里没有 SSH_AUTH_SOCK。
+func TunnelArgs(target, key string, local, remote int) []string {
+	var id []string
+	if key != "" {
+		id = []string{"-i", key, "-o", "IdentitiesOnly=yes"}
+	}
+	return append(append([]string{"-N", "-T"}, id...),
 		"-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
 		"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
 		"-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes",
-		"-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", remote, local), target}
+		"-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", remote, local), target)
 }
 
 // TunnelDelay 是隧道断开后重连的等待：1、2、4… 秒，封顶 60 秒。

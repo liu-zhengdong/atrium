@@ -27,6 +27,23 @@ func ShellInvocation(goos, command, comspec string) Invocation {
 	return Invocation{Command: "/bin/sh", Args: []string{"-c", command}}
 }
 
+// ScriptInvocation 跑仓库里的 shell 脚本（如 .agents/check）：Unix 直接执行（靠 shebang）；
+// Windows 没有 shebang，交给 sh（Git for Windows 的 sh.exe 或 bash.exe）。
+func ScriptInvocation(goos, script, sh string) Invocation {
+	if goos == "windows" {
+		return Invocation{Command: sh, Args: []string{script}}
+	}
+	return Invocation{Command: script}
+}
+
+// ScriptShells 是 Windows 上跑 shell 脚本要在 PATH 里找的程序，按顺序；Unix 不需要。
+func ScriptShells(goos string) []string {
+	if goos == "windows" {
+		return []string{"sh", "bash"}
+	}
+	return nil
+}
+
 // KillTreeInvocation：Windows 没有进程组信号，用 `taskkill /T /F`；Unix 返回 false，由调用方给进程组发信号。
 func KillTreeInvocation(goos string, pid int) (Invocation, bool) {
 	if goos != "windows" {

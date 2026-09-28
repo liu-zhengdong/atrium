@@ -46,6 +46,25 @@ func Shell(command string) Spec {
 	return Spec{Path: inv.Command, Args: inv.Args}
 }
 
+// Script 生成跑仓库 shell 脚本的 Spec（Env 一并填上，其余字段调用方补）。Windows 上在 env 的 PATH 里找
+// Git for Windows 的 sh.exe／bash.exe，找不到就报错说清要装什么。
+func Script(script string, env map[string]string) (Spec, error) {
+	sh := ""
+	if names := ScriptShells(runtime.GOOS); len(names) > 0 {
+		for _, n := range names {
+			if p, err := LookPath(n, env); err == nil {
+				sh = p
+				break
+			}
+		}
+		if sh == "" {
+			return Spec{}, fmt.Errorf("跑 %s 要 sh：PATH 上找不到 sh.exe 或 bash.exe；装 Git for Windows，并把它的 bin 目录（如 C:\\Program Files\\Git\\bin）加进 PATH", filepath.Base(script))
+		}
+	}
+	inv := ScriptInvocation(runtime.GOOS, script, sh)
+	return Spec{Path: inv.Command, Args: inv.Args, Env: env}, nil
+}
+
 // LookPath 在给定的 PATH（通常取自子进程的白名单环境）里找可执行文件。
 func LookPath(name string, env map[string]string) (string, error) {
 	if strings.ContainsRune(name, filepath.Separator) || strings.ContainsRune(name, '/') {

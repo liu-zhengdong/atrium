@@ -121,7 +121,7 @@ CREATE TABLE org_skills (id INTEGER PRIMARY KEY, slug TEXT, rev INTEGER, files T
 CREATE TABLE materials (id INTEGER PRIMARY KEY, node_id INTEGER, kind TEXT, name TEXT, note TEXT DEFAULT '', version INTEGER, bytes INTEGER, created_by TEXT, created_at INTEGER, archived_at INTEGER, superseded_by INTEGER);
 CREATE TABLE material_versions (material_id INTEGER, version INTEGER, manifest TEXT);
 CREATE TABLE worker_profiles (layer TEXT, name TEXT, source TEXT, updated_by TEXT, updated_at INTEGER);
-CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, info TEXT, repos TEXT, max_running INTEGER, removed_at INTEGER, last_seen_at INTEGER, created_at INTEGER);
+CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, info TEXT, repos TEXT, max_running INTEGER, removed_at INTEGER, last_seen_at INTEGER, created_at INTEGER, ssh_target TEXT, ssh_key TEXT, tunnel_local_port INTEGER, tunnel_remote_port INTEGER);
 CREATE TABLE tasks (id INTEGER PRIMARY KEY);
 CREATE TABLE choices (id INTEGER PRIMARY KEY);
 CREATE TABLE schedules (id INTEGER PRIMARY KEY);
@@ -136,7 +136,7 @@ INSERT INTO org_skills VALUES (1, 'visual-design', 2, '{"SKILL.md":"---\ndescrip
 INSERT INTO materials VALUES (1, 2, 'dir', '设计稿', '原型与截图', 1, 5, 'u1', 11, NULL, NULL);
 INSERT INTO material_versions VALUES (1, 1, '[{"path":"README.md","size":2},{"path":"shots/a.png","size":3}]');
 INSERT INTO worker_profiles VALUES ('harness', 'claude', '---\ntrust: high\n---\n', 'u1', 12);
-INSERT INTO hosts VALUES (1, '本机', 'local', '{"max_workers":6,"node":"v24"}', '["*"]', NULL, NULL, NULL, 13), (2, '旧', 'remote', NULL, '[]', NULL, 99, NULL, 14), (3, 'ggb', 'remote', NULL, '["*"]', 4, NULL, 15, 16);
+INSERT INTO hosts VALUES (1, '本机', 'local', '{"max_workers":6,"node":"v24"}', '["*"]', NULL, NULL, NULL, 13, NULL, NULL, NULL, NULL), (2, '旧', 'remote', NULL, '[]', NULL, 99, NULL, 14, NULL, NULL, NULL, NULL), (3, 'ggb', 'remote', NULL, '["*"]', 4, NULL, 15, 16, 'me@ggb', '/k/id_ggb', 4310, 14310);
 INSERT INTO tasks VALUES (306);
 INSERT INTO choices VALUES (3);
 `
@@ -210,6 +210,9 @@ func TestRun(t *testing.T) {
 	h1, err := hosts.Get(ctx, db, "h1")
 	if err != nil || h1.Info == nil || h1.Info.MaxWorkers != 6 || h1.Repos[0] != "*" {
 		t.Errorf("h1 用 hosts 包读回：%+v %v", h1, err)
+	}
+	if h3, _ := hosts.Get(ctx, db, "h3"); h3.SSH != "me@ggb" || h3.Key != "/k/id_ggb" || h3.TunnelRemote != 14310 || h3.TunnelLocal != 0 {
+		t.Errorf("h3 的隧道与私钥应带过来、本机端口不带：%+v", h3)
 	}
 	if h3, _ := hosts.Get(ctx, db, "h3"); h3.MaxRunning != 4 || h3.Joined {
 		t.Errorf("h3：%+v（令牌不搬，应未接入）", h3)

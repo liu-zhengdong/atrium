@@ -49,17 +49,35 @@ func views(ctx context.Context, env *app.Env, list []Host) ([]View, error) {
 			Status: ConnText(c.Conn, paused, h.LastSeen, h.JoinExpires, now)}
 		if h.SSH != "" {
 			v.Tunnel = tunnelStatus(h.ID)
+			v.TunnelLocal = tunnelLocal(h, env.Port)
 		}
 		out = append(out, v)
 	}
 	return out, nil
 }
 
-// AddResult 是 host add 的回执：接入码只在这里出现一次。
+// AddResult 是 host add／edit 的回执：接入码只在这里出现一次（edit 不带 --join 时为空）。
 type AddResult struct {
 	Host    View   `json:"host"`
-	Code    string `json:"code"`
-	Command string `json:"command"` // 在远程机器上跑的那一行
+	Code    string `json:"code,omitempty"`
+	Command string `json:"command,omitempty"` // 在远程机器上跑的那一行
+}
+
+// addResult 是 host add／edit 的回执；有接入码时附在那台上跑的命令（有隧道走隧道远端端口）。
+func addResult(ctx context.Context, env *app.Env, h Host, code string) (AddResult, error) {
+	vs, err := views(ctx, env, []Host{h})
+	if err != nil {
+		return AddResult{}, err
+	}
+	r := AddResult{Host: vs[0], Code: code}
+	if code != "" {
+		port := env.Port
+		if h.TunnelRemote != 0 {
+			port = h.TunnelRemote
+		}
+		r.Command = "atrium agent --server http://127.0.0.1:" + strconv.Itoa(port) + " --token " + code
+	}
+	return r, nil
 }
 
 func userOnly(q *api.Req) error {
@@ -90,16 +108,7 @@ func Routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		vs, err := views(q.Context(), env, []Host{h})
-		if err != nil {
-			return nil, err
-		}
-		port := env.Port
-		if h.TunnelRemote != 0 {
-			port = h.TunnelRemote
-		}
-		return AddResult{Host: vs[0], Code: code,
-			Command: "atrium agent --server http://127.0.0.1:" + strconv.Itoa(port) + " --token " + code}, nil
+		return addResult(q.Context(), env, h, code)
 	})
 	r.Handle("GET /api/hosts", func(q *api.Req) (any, error) {
 		list, err := List(q.Context(), env.DB)
@@ -122,6 +131,24 @@ func Routes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		return vs[0], nil
+	})
+	r.Handle("PATCH /api/hosts/{id}", func(q *api.Req) (any, error) {
+		if err := userOnly(q); err != nil {
+			return nil, err
+		}
+		id, err := q.Ref("id", "h")
+		if err != nil {
+			return nil, err
+		}
+		var in EditInput
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		h, code, err := Edit(q.Context(), env.DB, id, in, env.Port)
+		if err != nil {
+			return nil, err
+		}
+		return addResult(q.Context(), env, h, code)
 	})
 	r.Handle("DELETE /api/hosts/{id}", func(q *api.Req) (any, error) {
 		if err := userOnly(q); err != nil {

@@ -11,7 +11,7 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
    - `internal/store/schema.sql`：每张表一段，归属见下表。开发期不做迁移，改表就改这里，本地删库重建。
    - `go.mod` / `go.sum`：依赖只用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（workers 解析档案时再加）。冲突时 `go mod tidy`。
    - `scripts/v2-smoke.sh`：主路径冒烟，加步骤只往末尾 `stop` 之前追加自己的一段。
-5. **快检查**：`.agents/check-v2`（gofmt、vet 含 Windows/Linux 交叉、build、全部测试、`--help` 冒烟）。端到端：`scripts/v2-smoke.sh`。单包测试超过 30 秒在 PR 里说明。
+5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/v2-smoke.sh`。单包测试超过 30 秒在 PR 里说明。
 6. **开发期不写兜底**：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
 
 隔离运行：`ATRIUM_DATA=<临时目录> ATRIUM_PORT=<空闲端口> go run ./cmd/atrium start`，用完同样变量 `stop`。缺省数据目录 `~/.atrium-v2`、端口 4320；不要碰 4310 上的旧服务与 `~/.atrium`。
@@ -40,7 +40,7 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 | `merge` | 完成 | 合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | 等版本、自升级、平滑重启、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
-| `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、ssh 隧道、远程代理；`host add/ls [hN]/rm`；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
+| `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的日志是执行者真日志尾巴（`workers.ReadLog`，与 `task log` 同一份）；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、决定、负责人、备忘、技能、资料、档案、机器 | — |

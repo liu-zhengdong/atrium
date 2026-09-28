@@ -39,14 +39,29 @@ func tunnelStatus(id string) string {
 // tunnelScan 是多久看一次登记变化（测试调短）。
 var tunnelScan = 10 * time.Second
 
-// Run 是 hosts 的后台循环：按登记维持 ssh 隧道；机器移除后结束它的隧道。
+// tunnelLocal 是隧道本机这头的端口：没登记（导入的旧机器）时用服务端口。
+func tunnelLocal(h Host, servicePort int) int {
+	if h.TunnelLocal != 0 {
+		return h.TunnelLocal
+	}
+	return servicePort
+}
+
+// Run 是 hosts 的后台循环：按登记维持 ssh 隧道；机器移除后结束它的隧道，登记改了（host edit）按新的重连。
 func Run(ctx context.Context, env *app.Env) error {
-	running := map[string]context.CancelFunc{}
+	type tunnel struct {
+		h      Host
+		cancel context.CancelFunc
+	}
+	running := map[string]tunnel{}
 	defer func() {
-		for _, cancel := range running {
-			cancel()
+		for _, t := range running {
+			t.cancel()
 		}
 	}()
+	same := func(a, b Host) bool {
+		return a.SSH == b.SSH && a.Key == b.Key && a.TunnelLocal == b.TunnelLocal && a.TunnelRemote == b.TunnelRemote
+	}
 	for {
 		list, err := List(ctx, env.DB)
 		if err != nil {
@@ -57,13 +72,14 @@ func Run(ctx context.Context, env *app.Env) error {
 		}
 		want := map[string]Host{}
 		for _, h := range list {
-			if h.SSH != "" && h.TunnelLocal != 0 && h.TunnelRemote != 0 {
+			if h.SSH != "" && h.TunnelRemote != 0 {
+				h.TunnelLocal = tunnelLocal(h, env.Port)
 				want[h.ID] = h
 			}
 		}
-		for id, cancel := range running {
-			if _, ok := want[id]; !ok {
-				cancel()
+		for id, t := range running {
+			if h, ok := want[id]; !ok || !same(h, t.h) {
+				t.cancel()
 				delete(running, id)
 				setTunnel(id, "已停")
 			}
@@ -71,7 +87,7 @@ func Run(ctx context.Context, env *app.Env) error {
 		for id, h := range want {
 			if _, ok := running[id]; !ok {
 				tctx, cancel := context.WithCancel(ctx)
-				running[id] = cancel
+				running[id] = tunnel{h, cancel}
 				go superviseTunnel(tctx, env, h)
 			}
 		}
@@ -111,7 +127,7 @@ func runTunnel(ctx context.Context, h Host, env map[string]string) error {
 		return err
 	}
 	var errOut bytes.Buffer
-	cmd, err := platform.Start(platform.Spec{Path: path, Args: TunnelArgs(h.SSH, h.TunnelLocal, h.TunnelRemote), Env: env, Stderr: &errOut})
+	cmd, err := platform.Start(platform.Spec{Path: path, Args: TunnelArgs(h.SSH, h.Key, h.TunnelLocal, h.TunnelRemote), Env: env, Stderr: &errOut})
 	if err != nil {
 		return err
 	}

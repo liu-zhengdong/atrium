@@ -31,11 +31,11 @@
 
 1. Mac 上交叉编译：`GOOS=windows GOARCH=amd64 go build -trimpath -o atrium.exe ./cmd/atrium`，拷到 ggb（例如 `scp atrium.exe <ssh 目标>:`，ssh 目标从旧库查：`sqlite3 ~/.atrium/atrium.sqlite "select ssh_target from hosts where id=3"`）。
 2. ggb 上停掉旧代理的系统服务（旧版装的开机自启），免得两个代理同时领活。
-3. Mac 上：`atrium host rm h3`，再 `atrium host add ggb --repo '*' --ssh <ssh 目标> --tunnel 4320:14320`，记下回执里的接入码（30 分钟有效）。
-4. ggb 上：`atrium.exe agent --server http://127.0.0.1:14320 --token <接入码>` 前台接入一次，看到连上后 `atrium.exe agent install` 装成开机自启。
+3. Mac 上：`atrium host edit h3 --join`，记下回执里的接入码（30 分钟有效）。隧道目标、私钥路径与远端端口（旧版的 14310）已随导入带过来，隧道本机这头按 v2 服务端口；要换就 `atrium host edit h3 --tunnel 4320:14320 --key <私钥路径>`。
+4. ggb 上：照回执里那一行（`atrium.exe agent --server http://127.0.0.1:<远端端口> --token <接入码>`）前台接入一次，看到连上后 `atrium.exe agent install` 装成开机自启。
 5. Mac 上 `atrium host ls` 看到 ggb 已连接；它仍在全局暂停里，resume 后才领活。
 
-注意：v2 的服务不继承 `SSH_AUTH_SOCK`，隧道只能用磁盘上的密钥。旧版给 ggb 登记过一个专用密钥文件；v2 没有 `--ssh-key`，要在 `~/.ssh/config` 里给这个目标写 `IdentityFile`，否则隧道连不上。
+注意：v2 的服务不继承 `SSH_AUTH_SOCK`，隧道只能用磁盘上的私钥（`host add/edit --key`，即 `ssh -i`）。旧版登记的私钥路径已导入，`atrium host ls h3` 能看到。
 
 ## 打 v2 首个发版标签
 

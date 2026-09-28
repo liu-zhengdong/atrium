@@ -369,6 +369,19 @@ func TestTunnelSupervisor(t *testing.T) {
 		!strings.HasPrefix(tunnelStatus(add.Host.ID), "已连") {
 		t.Fatalf("%s / %s", b, tunnelStatus(add.Host.ID))
 	}
+	// host edit 换私钥：隧道按新登记重连，带 -i。
+	key := filepath.Join(bin, "id_test")
+	var ed AddResult
+	if err := g.user.Do(context.Background(), "PATCH", "/api/hosts/"+add.Host.ID, EditInput{Key: &key, Join: true}, &ed); err != nil {
+		t.Fatal(err)
+	}
+	if ed.Host.Key != key || !strings.HasPrefix(ed.Code, add.Host.ID+"-") || !strings.Contains(ed.Command, "127.0.0.1:14999") {
+		t.Fatalf("edit 回执：%+v", ed)
+	}
+	waitFor(t, func() bool {
+		b, _ := os.ReadFile(calls)
+		return strings.Contains(string(b), "-i "+key+" -o IdentitiesOnly=yes")
+	})
 }
 
 func waitFor(t *testing.T, ok func() bool) {

@@ -60,11 +60,13 @@ func TestUnitsAndPlan(t *testing.T) {
 	if u, bin := Units([]byte("你好ab")); u != 4 || bin {
 		t.Fatalf("文本按字：%d %v", u, bin)
 	}
-	if u, bin := Units([]byte{0, 1, 2, 3}); u != 2 || !bin {
-		t.Fatalf("二进制 3 字节一字向上取整：%d %v", u, bin)
+	if u, bin := Units([]byte{0, 1, 2, 3}); u != 0 || !bin {
+		t.Fatalf("二进制不折算字数：%d %v", u, bin)
 	}
 	existing := []materialSlot{{id: "m1", kind: "overview", title: "总览.md", units: 1000, rev: 2},
-		{id: "m2", kind: "detail", title: "a.md", units: 40000, rev: 1}}
+		{id: "m2", kind: "detail", title: "a.md", units: 40000, rev: 1},
+		{id: "m3", kind: "detail", title: "图.png", size: 190 << 20, binary: true, rev: 1}}
+	bin := func(mb int) []byte { b := make([]byte, mb<<20); return b }
 	text := func(n int) []byte { return []byte(strings.Repeat("字", n)) }
 	cases := []struct {
 		name string
@@ -72,11 +74,17 @@ func TestUnitsAndPlan(t *testing.T) {
 		want []materialSlot
 		code string
 	}{
-		{"新细节", MaterialInput{Files: []MaterialFile{{"b.md", text(100)}}}, []materialSlot{{kind: "detail", title: "b.md", units: 100}}, ""},
+		{"新细节", MaterialInput{Files: []MaterialFile{{"b.md", text(100)}}}, []materialSlot{{kind: "detail", title: "b.md", units: 100, size: 300}}, ""},
 		{"同名细节追加一版", MaterialInput{Files: []MaterialFile{{"a.md", text(48000)}}},
-			[]materialSlot{{id: "m2", rev: 1, kind: "detail", title: "a.md", units: 48000}}, ""},
+			[]materialSlot{{id: "m2", rev: 1, kind: "detail", title: "a.md", units: 48000, size: 144000}}, ""},
 		{"总览换一份也是同一条的新版", MaterialInput{Overview: true, Files: []MaterialFile{{"新总览.md", text(3000)}}},
-			[]materialSlot{{id: "m1", rev: 2, kind: "overview", title: "新总览.md", units: 3000}}, ""},
+			[]materialSlot{{id: "m1", rev: 2, kind: "overview", title: "新总览.md", units: 3000, size: 9000}}, ""},
+		{"二进制不占字数", MaterialInput{Files: []MaterialFile{{"b.png", bin(10)}}},
+			[]materialSlot{{kind: "detail", title: "b.png", size: 10 << 20, binary: true}}, ""},
+		{"单个文件超 20MB", MaterialInput{Files: []MaterialFile{{"c.png", bin(21)}}}, nil, "limit"},
+		{"部门二进制合计超 200MB", MaterialInput{Files: []MaterialFile{{"c.png", bin(11)}}}, nil, "limit"},
+		{"同名二进制换一版只算新的", MaterialInput{Files: []MaterialFile{{"图.png", bin(20)}}},
+			[]materialSlot{{id: "m3", rev: 1, kind: "detail", title: "图.png", size: 20 << 20, binary: true}}, ""},
 		{"总览超 3000 字", MaterialInput{Overview: true, Files: []MaterialFile{{"o.md", text(3001)}}}, nil, "limit"},
 		{"总览不能是二进制", MaterialInput{Overview: true, Files: []MaterialFile{{"o.png", []byte{0, 0}}}}, nil, "usage"},
 		{"部门合计超 5 万字", MaterialInput{Files: []MaterialFile{{"c.md", text(9001)}}}, nil, "limit"},

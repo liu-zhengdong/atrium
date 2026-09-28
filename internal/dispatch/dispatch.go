@@ -212,7 +212,52 @@ func (d *dispatcher) try(ctx context.Context, it item) error {
 	if p, err := d.paused(ctx, t, choice.Host); err != nil || p {
 		return err
 	}
-	return d.launch(ctx, t, launchOpts{W: w, Host: choice.Host, Risk: it.Opts.Risk, Secrets: it.Opts.Secrets, Why: workers.WhyFirst})
+	o := launchOpts{W: w, Host: choice.Host, Risk: it.Opts.Risk, Secrets: it.Opts.Secrets, Why: workers.WhyFirst}
+	if !it.Row { // 没有队列行的 queued 是交回的
+		stage, note, ok, err := lastBounce(ctx, d.env.DB, t.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			o.Why, o.Cause = workers.WhyBounce, BounceCause(stage, note)
+		}
+	}
+	return d.launch(ctx, t, o)
+}
+
+// BounceCause 判交回的原因类别（纯函数）：交回前所在的交付阶段加原因正文的开头（gates、merge 写的）。
+func BounceCause(stage, note string) string {
+	switch {
+	case strings.HasPrefix(note, "合入冲突"):
+		return "冲突"
+	case stage == string(ledger.StageReview) || strings.HasPrefix(note, "审阅打回"):
+		return "审阅打回"
+	case stage == string(ledger.StageMerge):
+		return "检查没过"
+	}
+	return "关卡没过"
+}
+
+// lastBounce 取上次拉起之后最近一次交回：交回前的阶段与原因。
+func lastBounce(ctx context.Context, q store.Querier, task string) (stage, note string, ok bool, err error) {
+	var body string
+	err = q.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'bounce'
+		AND id > (SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind = ?) ORDER BY id DESC LIMIT 1`,
+		task, task, workers.RunKind).Scan(&body)
+	if store.IsNotFound(err) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	var b struct {
+		From ledger.State `json:"from"`
+		Note string       `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(body), &b); err != nil {
+		return "", "", false, fmt.Errorf("任务 %s 的交回记录坏了：%w", task, err)
+	}
+	return string(b.From.Stage), b.Note, true, nil
 }
 
 // choose 定执行者：写死的核对能接；自动的按 Pick。wait 为真表示能接的都正忙，留在队列里等。
@@ -341,6 +386,7 @@ type launchOpts struct {
 	Risk    string
 	Secrets []string
 	Why     string
+	Cause   string   // Why 为 bounce 时的原因类别
 	Session string   // 续上会话
 	Pending []string // 续上时带的捎话
 }
@@ -398,6 +444,26 @@ func bounceNotes(ctx context.Context, q store.Querier, task string) ([]string, e
 		}
 	}
 	return out, rows.Err()
+}
+
+// repoGuide 读目标仓库自己的约定 .agents/README.md：本机从任务工作树读，远程从本机的仓库克隆读；没有就空。
+func repoGuide(data, repo, dir string) (string, error) {
+	if repo == "" {
+		return "", nil
+	}
+	root := dir
+	if root == "" {
+		local, _, err := RepoSource(data, repo)
+		if err != nil {
+			return "", err
+		}
+		root = local
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".agents", "README.md"))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	return string(b), err
 }
 
 // launch 拉起一次执行者：备好工作目录与提示词、算出进程调用、白名单环境加凭据、落账、跟着等它退出。
@@ -458,6 +524,9 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	if in.Bounces, err = bounceNotes(ctx, db, t.ID); err != nil {
 		return err
 	}
+	if in.Guide, err = repoGuide(data, t.Repo, dir); err != nil {
+		return err
+	}
 	prompt := BuildPrompt(in)
 	if o.Session != "" {
 		prompt = ResumePrompt(o.Pending)
@@ -480,7 +549,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		}
 		extra[o.W.Endpoint().KeyEnv] = v[key]
 	}
-	run := workers.Run{N: n, Why: o.Why, Worker: o.W.ID, Host: o.Host, Dir: dir, Branch: branch,
+	run := workers.Run{N: n, Why: o.Why, Cause: o.Cause, Worker: o.W.ID, Host: o.Host, Dir: dir, Branch: branch,
 		Log: filepath.Join(td, fmt.Sprintf("run-%d.log", n)), Risk: o.Risk, Secrets: secrets, TellsUpto: upto, At: store.Now()}
 	p := &proc{task: t.ID, adapter: o.W.Adapter, remote: remote, pending: map[string]bool{}, done: make(chan struct{})}
 	var wait func() int
@@ -680,7 +749,7 @@ func tries(runs []workers.Run) (same, switches int, tried map[string]bool) {
 			same++
 		case workers.WhySwitch:
 			switches++
-		case workers.WhyFirst:
+		case workers.WhyFirst, workers.WhyBounce: // 交回后是新的一轮
 			return
 		}
 	}

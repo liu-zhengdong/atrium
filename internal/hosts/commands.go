@@ -36,6 +36,7 @@ func Commands(t *cli.Table) {
 			{Name: "max", Value: "N", Help: "同时最多跑几个执行者（缺省按那台核数）"},
 			{Name: "ssh", Value: "user@地址", Help: "由服务拉起 ssh 反向隧道连那台（断开自动重连）"},
 			{Name: "tunnel", Value: "本机端口:远端端口", Help: "隧道两端端口（缺省都用服务端口）"},
+			keyFlag,
 		},
 		Run: func(c *cli.Ctx) error {
 			name, err := c.Arg(0, "<名称>")
@@ -49,8 +50,16 @@ func Commands(t *cli.Table) {
 			if err != nil {
 				return err
 			}
+			key, err := keyPath(c)
+			if err != nil {
+				return err
+			}
+			in := AddInput{Name: name, Repos: c.List("repo"), Max: max, SSH: c.Str("ssh"), Tunnel: c.Str("tunnel")}
+			if key != nil {
+				in.Key = *key
+			}
 			var r AddResult
-			if err := c.Call("POST", "/api/hosts", AddInput{Name: name, Repos: c.List("repo"), Max: max, SSH: c.Str("ssh"), Tunnel: c.Str("tunnel")}, &r); err != nil {
+			if err := c.Call("POST", "/api/hosts", in, &r); err != nil {
 				return err
 			}
 			text := fmt.Sprintf("已登记 %s（%s）。接入码 30 分钟内有效、只能用一次。\n在那台机器上运行：\n  %s\n接入后装成开机自启：atrium agent install", r.Host.ID, r.Host.Name, r.Command)
@@ -85,16 +94,62 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(vs, b.String(), "atrium host ls <hN>")
 		}})
-	t.Add(cli.Command{Path: "host rm", Args: "<hN>", Summary: "移除远程机器（令牌作废，短号不复用）",
+	t.Add(cli.Command{Path: "host edit", Args: "<hN>", Summary: "改一台远程机器的登记（仓库、并发上限、隧道、私钥）、--join 重新接入，或 --rm 移除它",
+		Flags: []cli.Flag{
+			{Name: "repo", Value: "owner/name|*", Multi: true, Help: "换成这些仓库（给空串清空）"},
+			{Name: "max", Value: "N", Help: "同时最多跑几个执行者（0 按那台核数）"},
+			{Name: "ssh", Value: "user@地址", Help: "换隧道目标（给空串去掉隧道）"},
+			{Name: "tunnel", Value: "本机端口:远端端口", Help: "隧道两端端口"},
+			keyFlag,
+			{Name: "join", Bool: true, Help: "发新的一次性接入码（导入的旧机器、换了系统的机器重新接入）"},
+			{Name: "rm", Bool: true, Help: "移除这台（令牌作废，短号不复用）"},
+		},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<hN>")
 			if err != nil {
 				return err
 			}
-			if err := c.Call("DELETE", "/api/hosts/"+id, nil, nil); err != nil {
+			if err := c.MaxArgs(1); err != nil {
 				return err
 			}
-			return c.Done(map[string]string{"id": id}, "已移除 "+id+"；那台的代理下次连上会收到令牌失效并退出", "atrium host ls")
+			var e EditInput
+			if c.Has("repo") {
+				repos := c.List("repo")
+				e.Repos = &repos
+			}
+			if c.Has("max") {
+				max, err := c.Int("max", 0)
+				if err != nil {
+					return err
+				}
+				e.Max = &max
+			}
+			e.SSH, e.Tunnel = c.Opt("ssh"), c.Opt("tunnel")
+			if e.Key, err = keyPath(c); err != nil {
+				return err
+			}
+			e.Join = c.Bool("join")
+			if c.Bool("rm") {
+				if e != (EditInput{}) {
+					return api.Usage("--rm: 不和别的参数一起给")
+				}
+				if err := c.Call("DELETE", "/api/hosts/"+id, nil, nil); err != nil {
+					return err
+				}
+				return c.Done(map[string]string{"id": id}, "已移除 "+id+"；那台的代理下次连上会收到令牌失效并退出", "atrium host ls")
+			}
+			if e == (EditInput{}) {
+				return api.Usage("没给要改的：--repo、--max、--ssh、--tunnel、--key、--join 或 --rm")
+			}
+			var r AddResult
+			if err := c.Call("PATCH", "/api/hosts/"+id, e, &r); err != nil {
+				return err
+			}
+			text := "已改 " + id + "\n" + formatView(r.Host)
+			if r.Code != "" {
+				text += fmt.Sprintf("接入码 30 分钟内有效、只能用一次。在那台机器上运行：\n  %s", r.Command)
+			}
+			return c.Done(r, text, "atrium host ls "+id)
 		}})
 	t.Group("agent", "远程代理")
 	dataFlag := cli.Flag{Name: "data", Value: "目录", Help: "代理数据目录（缺省 ATRIUM_AGENT_DATA 或 ~/.atrium-agent）"}
@@ -113,6 +168,24 @@ func Commands(t *cli.Table) {
 			dataFlag,
 		},
 		Run: installAgent})
+}
+
+var keyFlag = cli.Flag{Name: "key", Value: "私钥路径", Help: "隧道用这把私钥（ssh -i）：服务环境里没有 ssh-agent；给空串去掉"}
+
+// keyPath 取 --key：没给是 nil；给了路径就转成绝对路径并确认读得到（服务按绝对路径用它）。
+func keyPath(c *cli.Ctx) (*string, error) {
+	k := c.Opt("key")
+	if k == nil || *k == "" {
+		return k, nil
+	}
+	abs, err := filepath.Abs(*k)
+	if err != nil {
+		return nil, err
+	}
+	if st, err := os.Stat(abs); err != nil || st.IsDir() {
+		return nil, api.Usage("--key: 读不到私钥文件 %s", abs)
+	}
+	return &abs, nil
 }
 
 func formatView(v View) string {
@@ -160,6 +233,9 @@ func formatView(v View) string {
 	}
 	if v.SSH != "" {
 		fmt.Fprintf(&b, "隧道：%s %d:%d，%s\n", v.SSH, v.TunnelLocal, v.TunnelRemote, v.Tunnel)
+		if v.Key != "" {
+			fmt.Fprintf(&b, "私钥：%s\n", v.Key)
+		}
 	}
 	return b.String()
 }

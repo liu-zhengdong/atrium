@@ -64,8 +64,11 @@ type Req struct {
 }
 
 // Decode 读 JSON 请求体（上限 1MB），拒绝未知字段。
-func (r *Req) Decode(v any) error {
-	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+func (r *Req) Decode(v any) error { return r.DecodeMax(v, 1<<20) }
+
+// DecodeMax 同 Decode，请求体上限 max 字节（只给确实要传大文件的接口放宽，如资料上传）。
+func (r *Req) DecodeMax(v any, max int64) error {
+	dec := json.NewDecoder(io.LimitReader(r.Body, max))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return Usage("请求体不合法：%v", err)

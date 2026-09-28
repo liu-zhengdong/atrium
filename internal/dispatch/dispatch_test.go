@@ -1,6 +1,8 @@
 package dispatch
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,15 +95,18 @@ func TestTries(t *testing.T) {
 func TestBuildPrompt(t *testing.T) {
 	p := BuildPrompt(PromptInput{Task: "t3", Title: "修登录", Detail: "详述", Points: []string{"k1（o1）简洁——整体更简单"},
 		Skill: "/data/skills/fix/SKILL.md", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
-		Repo: "a/b", Branch: "task-t3"})
+		Repo: "a/b", Branch: "task-t3", Guide: "不要用 git stash"})
 	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "/data/skills/fix/SKILL.md", "先跑相关测试",
-		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "碰到哪些已有能力", "隔离实例", "凭据不打印"} {
+		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q：\n%s", want, p)
 		}
 	}
+	if strings.Contains(p, "4310") || strings.Contains(p, "碰到哪些已有能力") {
+		t.Errorf("通用约束不该写死某个仓库：\n%s", p)
+	}
 	p = BuildPrompt(PromptInput{Task: "t4", Title: "调研"})
-	if strings.Contains(p, "只交 PR") || !strings.Contains(p, "没有仓库") || strings.Contains(p, "部门要点") {
+	if strings.Contains(p, "只交 PR") || !strings.Contains(p, "没有仓库") || strings.Contains(p, "部门要点") || strings.Contains(p, "仓库的约定") {
 		t.Errorf("没有仓库的提示词：\n%s", p)
 	}
 }
@@ -146,5 +151,51 @@ func TestOptionsCheck(t *testing.T) {
 	o := Options{}
 	if err := o.check(); err != nil || o.Risk != "low" {
 		t.Errorf("缺省 risk low：%+v %v", o, err)
+	}
+}
+
+func TestHostLine(t *testing.T) {
+	cases := map[[3]string]string{
+		{"run", "h1", ""}:             "机器：在 h1 拉起",
+		{"queue", "", "h1 同时最多跑 2 个"}: "机器：排队（h1 同时最多跑 2 个）",
+		{"queue", "h2", "正忙"}:         "机器：排队等 h2（正忙）",
+		{"refuse", "", "没有机器 h9"}:     "机器：接不了（没有机器 h9）",
+	}
+	for in, want := range cases {
+		if got := hostLine(in[0], in[1], in[2]); got != want {
+			t.Errorf("%v → %q", in, got)
+		}
+	}
+}
+
+func TestBounceCause(t *testing.T) {
+	cases := []struct{ stage, note, want string }{
+		{"merge_queue", "合入冲突：rebase 到 origin/main 时冲突", "冲突"},
+		{"merge_queue", "快检查没过（rebase 到 origin/main 后跑 .agents/check）", "检查没过"},
+		{"review", "审阅打回（t9，codex）：缺测试", "审阅打回"},
+		{"gate", "关卡没过：没有 PR", "关卡没过"},
+	}
+	for _, c := range cases {
+		if got := BounceCause(c.stage, c.note); got != c.want {
+			t.Errorf("%s %q → %s", c.stage, c.note, got)
+		}
+	}
+}
+
+func TestRepoGuide(t *testing.T) {
+	dir := t.TempDir()
+	if g, err := repoGuide("/d", "a/b", dir); err != nil || g != "" {
+		t.Fatalf("没有 .agents/README.md 不附：%q %v", g, err)
+	}
+	os.MkdirAll(filepath.Join(dir, ".agents"), 0o700)
+	os.WriteFile(filepath.Join(dir, ".agents", "README.md"), []byte("本仓库约定"), 0o600)
+	if g, err := repoGuide("/d", "a/b", dir); err != nil || g != "本仓库约定" {
+		t.Fatalf("本机从工作树读：%q %v", g, err)
+	}
+	if g, err := repoGuide("/d", dir, ""); err != nil || g != "本仓库约定" {
+		t.Fatalf("远程从本机克隆读：%q %v", g, err)
+	}
+	if g, _ := repoGuide("/d", "", dir); g != "" {
+		t.Fatal("没有仓库不附")
 	}
 }

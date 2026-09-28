@@ -24,7 +24,9 @@ const (
 	MaxSkills        = 50   // 全部技能
 	MaxSkillBody     = 6 << 10
 	MaxOverview      = 3000  // 部门资料总览（字）
-	MaxMaterial      = 50000 // 部门资料总量（折算字，见 Units）
+	MaxMaterial      = 50000 // 部门资料文本总量（字；二进制不计，见 Units）
+	MaxMaterialFile  = 20    // 单个资料文件（MB）
+	MaxMaterialBin   = 200   // 部门二进制资料总量（MB）
 	MaxDecisions     = 30    // 每部门有效决定
 	MinOptions       = 3     // 每份选项单至少几项
 	MaxOptions       = 5     // 每份选项单至多几项
@@ -56,8 +58,12 @@ var Limits = []Limit{
 	{"skills", "全部技能", MaxSkills, "个", "秘书", "合并相近的技能，删掉没人用的", "atrium skill ls"},
 	{"skill_body", "每份 SKILL.md", MaxSkillBody, "B", "技能作者", "细节挪进技能目录里的附属文件，SKILL.md 只留做法", "atrium skill ls"},
 	{"overview", "部门资料总览", MaxOverview, "字", "部门负责人", "总览只留每次都要知道的，细节挪进细节文件", "atrium material ls --node {dept}"},
-	{"materials", "部门资料总量", MaxMaterial, "字", "部门负责人",
+	{"materials", "部门资料文本总量", MaxMaterial, "字", "部门负责人",
 		"归档过时的（atrium material archive mN），或把一块知识下沉到子部门", "atrium material ls --node {dept}"},
+	{"material_file", "单个资料文件", MaxMaterialFile, "MB", "加资料的人",
+		"压缩或拆小；大文件放仓库或外部存储，资料里只写它是什么、在哪", "atrium material ls --node {dept}"},
+	{"material_bin", "部门二进制资料总量", MaxMaterialBin, "MB", "部门负责人",
+		"归档过时的图片等二进制资料（atrium material archive mN）", "atrium material ls --node {dept}"},
 	{"decisions", "每部门有效决定", MaxDecisions, "条", "用户",
 		"整理：把相近的几条合并成一条、推翻过时的（atrium decision add {dept} … --replaces dA,dB）", "atrium decision ls --node {dept}"},
 	{"options", "每份选项单", MaxOptions, "项", "出选项单的人", "只留最值得的几项", "atrium choice ls"},
@@ -116,6 +122,9 @@ func Full(key, dept string, used int) error {
 		where, l.What, used, l.Max, l.Unit, l.Owner, strings.ReplaceAll(l.Fix, "{dept}", dept))
 }
 
+// MB 把字节数折成 MB，向上取整（上限表里文件大小的单位）。纯函数。
+func MB(bytes int) int { return (bytes + 1<<20 - 1) >> 20 }
+
 // Count 是一项计数，网页显示成「6/7」。
 type Count struct {
 	Key  string `json:"key"`
@@ -155,6 +164,8 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 			AND archived_at IS NULL AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
 		add("materials", `SELECT COALESCE(sum(units), 0) FROM materials m WHERE department = ? AND archived_at IS NULL
 			AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
+		add("material_bin", `SELECT COALESCE(sum(size), 0) FROM materials m WHERE department = ? AND archived_at IS NULL AND binary
+			AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
 		add("decisions", `SELECT count(*) FROM decisions WHERE department = ? AND superseded_by IS NULL`, dept)
 		add("choices", `SELECT count(*) FROM choices WHERE department = ? AND status = 'open'`, dept)
 		add("schedules", `SELECT count(*) FROM schedules WHERE department = ?`, dept)
@@ -165,6 +176,9 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 		var n int
 		if err := q.QueryRowContext(ctx, x.sql, x.args...).Scan(&n); err != nil {
 			return nil, err
+		}
+		if x.key == "material_bin" {
+			n = MB(n)
 		}
 		l := LimitOf(x.key)
 		out = append(out, Count{Key: l.Key, What: l.What, Used: n, Max: l.Max, Unit: l.Unit})

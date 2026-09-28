@@ -182,6 +182,9 @@ func TestFlowClaudeToGate(t *testing.T) {
 	if !strings.Contains(string(prompt), "没有 PR") {
 		t.Errorf("交回原因没进提示词：%s", prompt)
 	}
+	if runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10); len(runs) != 2 || runs[1].Why != workers.WhyBounce || runs[1].Cause != "关卡没过" {
+		t.Errorf("交回后的拉起缘由应记交回：%+v", runs)
+	}
 }
 
 func TestFlowQuotaSwitch(t *testing.T) {

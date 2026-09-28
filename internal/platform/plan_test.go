@@ -109,3 +109,16 @@ func TestMessagingEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestScriptInvocation(t *testing.T) {
+	if got := ScriptInvocation("linux", "/r/.agents/check", ""); !reflect.DeepEqual(got, Invocation{Command: "/r/.agents/check"}) {
+		t.Errorf("Unix 应直接执行：%+v", got)
+	}
+	want := Invocation{`C:\Git\bin\sh.exe`, []string{`C:\r\.agents\check`}}
+	if got := ScriptInvocation("windows", `C:\r\.agents\check`, `C:\Git\bin\sh.exe`); !reflect.DeepEqual(got, want) {
+		t.Errorf("Windows 应交给 sh：%+v", got)
+	}
+	if ScriptShells("darwin") != nil || !reflect.DeepEqual(ScriptShells("windows"), []string{"sh", "bash"}) {
+		t.Error("ScriptShells")
+	}
+}

@@ -1,4 +1,0 @@
-ERROR: usage limit reached for this account.
-The current plan has no remaining requests in this window.
-Please try again later or raise the plan limit.
-✖ agent exited with code 1

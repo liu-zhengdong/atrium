@@ -1,0 +1,28 @@
+name: CI
+# 体检：vet、全部测试、三平台交叉编译。只报不挡——合入前的检查是运行时合入队列跑的 .agents/check；这里挂了就找出是哪次合入弄坏的，先回滚。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: 三平台交叉编译
+        run: |
+          for goos in darwin linux windows; do
+            GOOS=$goos go vet ./...
+            GOOS=$goos GOARCH=amd64 go build ./...
+          done

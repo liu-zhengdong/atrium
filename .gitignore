@@ -1,7 +1,5 @@
-node_modules
 /dist/
 .atrium*/
 .env*
 *.log
 .DS_Store
-coverage/

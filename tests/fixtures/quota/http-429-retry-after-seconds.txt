@@ -1,6 +1,0 @@
-POST https://api.example.com/v1/messages
-HTTP/1.1 429 Too Many Requests
-retry-after: 120
-content-type: application/json
-
-{"type":"rate_limit_error","message":"Too many requests"}

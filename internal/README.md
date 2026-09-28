@@ -1,6 +1,6 @@
-# Atrium v2 包契约
+# Atrium 包契约
 
-v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里。设计依据只有规格（Discussion #496）；本文件只写代码层的约定。
+Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里。设计依据只有规格（Discussion #496）；本文件只写代码层的约定。
 
 ## 并行规则
 
@@ -10,11 +10,11 @@ v2 的 Go 代码怎么分包、包之间怎么调用、并行开发时各自改�
 4. **共享文件只有三个**，改时只动自己那一段，合并冲突按段解决：
    - `internal/store/schema.sql`：每张表一段，归属见下表。开发期不做迁移，改表就改这里，本地删库重建。
    - `go.mod` / `go.sum`：依赖只用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（workers 解析档案时再加）。冲突时 `go mod tidy`。
-   - `scripts/v2-smoke.sh`：主路径冒烟，加步骤只往末尾 `stop` 之前追加自己的一段。
-5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/v2-smoke.sh`。单包测试超过 30 秒在 PR 里说明。
+   - `scripts/smoke.sh`：主路径冒烟，加步骤只往末尾 `stop` 之前追加自己的一段。
+5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/smoke.sh`。单包测试超过 30 秒在 PR 里说明。
 6. **开发期不写兜底**：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
 
-隔离运行：`ATRIUM_DATA=<临时目录> ATRIUM_PORT=<空闲端口> go run ./cmd/atrium start`，用完同样变量 `stop`。缺省数据目录 `~/.atrium-v2`、端口 4320；不要碰 4310 上的旧服务与 `~/.atrium`。
+隔离运行：`ATRIUM_DATA=<临时目录> ATRIUM_PORT=<空闲端口> go run ./cmd/atrium start`，用完同样变量 `stop`。缺省数据目录 `~/.atrium-v2`、端口 4320；不要碰用户在跑的服务与数据目录。
 
 ## 包一览
 

@@ -1,54 +1,46 @@
 # Atrium 开发规范
 
-## 目标与职责
+## 目标
 
-Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)）。用户只提目标；固定身份的秘书补成简报，按组织树拆成任务，派给一次性的执行者（编码 CLI + 模型）完成；Atrium 负责任务账本与全局视图、执行者适配器、验收关卡、额度调度、事件投递和服务自身的生命周期。前一代「Pi 长期身份 + 聊天空间」已归档到分支 `legacy/chat-runtime`（标签 `legacy-chat-runtime`），main 不再包含聊天、Web、Pi 身份与模型账号代码。
+Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)，规格见 [#496](https://github.com/liu-zhengdong/atrium/discussions/496)）。用户只提目标；固定身份的秘书补成简报，按组织树拆成任务，派给一次性的执行者（编码 CLI + 模型）完成；Atrium 负责任务账本与全局视图、执行者适配、验收关卡、合入与上线、额度调度、事件投递和服务自身的生命周期。
 
-用户是决策者，不是分派者：下一步做什么由秘书调查、判断后提出，递到用户面前的是几个已经解释清楚的方案和各自的代价。规模增长时按组织树分层收敛汇报，不增加直接向用户汇报的人数。用户保有暂停与停止控制；上下级关系和对用户的推断都不增加权限。
+用户是决策者，不是分派者：递到用户面前的是几个解释清楚的方案和各自的代价。规模增长时按组织树分层收敛汇报。用户保有暂停与停止控制；上下级关系和对用户的推断都不增加权限。
 
 ## 组成与职责
 
-| 组成     | 位置                                                                                            | 职责                                                                                                                                                                                                                                                                                                                                                     |
-| -------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 服务     | `server/main.ts`、`service*.ts`、`supervisor.ts`、`app.ts`                                      | 单实例后台服务、平滑重启与排空、升级失败回滚；只注册服务、任务、组织、额度、事件路由；一键停机（`server/pause.ts`，`atrium pause/resume`）停下一切自主动作                                                                                                                                                                                               |
-| 任务账本 | `server/tasks/ledger/`、`state.ts`、`schedule*.ts`                                              | 任务树、依赖、状态机（todo / running / done / failed / blocked / cancelled）、就绪判定与自动派发                                                                                                                                                                                                                                                         |
-| 执行者   | `server/tasks/adapters/`、`profiles.ts`、`prepare.ts`、`spawn.ts`、`runner.ts`、`host-load.ts`  | 适配器（claude、codex、opencode、kimi、grok、agy、cursor）把「工具 + 模型 + 强度」翻成进程调用，其余工具写档案（`protocol: cli`）即接入；档案可写自定义模型端点（`endpoint.ts`，密钥按凭据名注入）；档案（数据库 `worker_profiles`，`worker-profiles.ts`）只写工具与模型本身的事实：能接什么活、加查什么（正文不附进提示词）；本机并发与负载闸门（#358） |
-| 验收关卡 | `server/tasks/gates/gates.ts`、`facts.ts`、`delivery-gates.ts`、`ci-*.ts`、`review*.ts`         | 运行时自己查事实（PR、提交、改动规模、CI、评论），按档案 `checks` 判过或不过；不采信执行者自述；低信任或高风险的 PR 合入前由另一个模型审阅                                                                                                                                                                                                               |
-| 看门狗   | `overdue*.ts`、`watchdog.ts`、`transient*.ts`、`thinking*.ts`、`quota-signal.ts`、`recovery.ts` | 持球与期限（一张时限表：到期叫醒、再到期上交）、卡死检测、供应商临时错误重试、思考耗尽换人、额度用尽标记、服务重启后接管或判失败                                                                                                                                                                                                                         |
-| 额度     | `server/quota-readers/`、`server/tasks/quota/`、`openquota.ts`、`budget.ts`                     | 自带读取器读各家本机登录与用量接口（三平台），没覆盖的由 OpenQuota 补；按富余挑执行者；根节点配置（`server/org/limits.ts`，`atrium org limits`）给用户留的额度不派                                                                                                                                                                                       |
-| 周期任务 | `server/schedules/`、`cli/schedules.ts`                                                         | sN 周期任务：到点在节点下生成普通任务（task / patrol / research）并按 `task run` 派发；patrol 按 uses 场景体验巡检、发现直接建修复任务（同标题没结束的拒绝）；research 完成时工作目录的 `choice.json` 登记成选项单（`server/choices/settle.ts`）；上一轮没结束跳过并记一笔，停机错过只补一轮；判定在 `plan.ts`                                           |
-| 事件     | `server/tasks/events/events.ts`、`event-lease.ts`                                               | 任务完成、失败、受阻、卡死、CI 结果先落库，订阅者 `events wait` 取、`events ack` 确认；租约内不重投；Claude Code 秘书会话由 `atrium secretary bridge`（`cli/secretary*.ts`，判定 `bridge-plan.ts`）经会话收件 socket 注入，并向服务报「在听」                                                                                                            |
-| 推送     | `server/notify/`、`cli/notify.ts`                                                               | 推送到手机（Telegram）：只推等你拍板、上交到用户这层的卡住／越界、里程碑上线，只带标题和短号；选项单卡片带按钮拍板、回复附说明（长轮询收，只认绑定的私聊）；攒批、免打扰、代理、有上限的重试；bot token 只在数据目录 `telegram.json`（0600），判定在 `model.ts`                                                                                          |
-| Leader   | `server/leaders/`、`cli/leaders.ts`                                                             | leader 登记（aN、执行者组合、备忘）；任务事件按所属部门投给最近的 leader，找不到投秘书；按事唤醒一次性 leader 进程（攒批、同一 leader 只起一个、连续失败或超时转交）；leader 令牌的服务端权限边界；四类上交                                                                                                                                              |
-| 资料     | `server/materials/`、`cli/materials.ts`                                                         | 节点上的资料（mN）：文件存数据目录、改了留版本、读取记谁读过；执行者按需 `material get`；清理只归档不删，周期任务到点顺带把疑似没用的投给 leader（判定在 `model.ts`），真删只有用户                                                                                                                                                                      |
-| 凭据     | `server/secrets/`、`cli/secrets.ts`                                                             | 节点上的凭据（按节点 + 名称）：值只存数据目录凭据区、不显示；任务 `--secret` 声明的在派活那一刻按名称注入执行者环境（本机与远程）；清理线索（90 天没用）顺带投给 leader，真删只有用户                                                                                                                                                                    |
-| 备忘     | `server/memos/`、`cli/memos.ts`                                                                 | 秘书与 leader 的备忘（覆盖写、有上限，`?as=` 定主人，leader 令牌锁成自己）；决定记录只记用户拍板的事与原因（追加，dN，可推翻），给人回看，不附进提示词                                                                                                                                                                                                   |
-| 组织树   | `server/org/`                                                                                   | 节点（组织、项目、模块；旧库的关注点只读）、leader、节点修订历史；规矩只放要点（`points.ts`：挂在部门上、按树往下继承、同层按排序）；根节点两项配置（`limits.ts`）；全景图人话字段（`overview.ts`）与任务归属部门；旧的硬边界、原则决定、章程、管方面、产品部由 `server/imports/rules.ts` 启动时一次并进要点                                             |
-| 全景图   | `server/map/`、`cli/map.ts`                                                                     | 全景只读视图（网页与 `map --json` 同一接口）、`map context`（归属部门链上的要点与技能，派活与 leader 唤醒附带）、`map edit`；加部门用 `org add`；网页由服务托管（`server/map/web/`，不引入构建链），一次性链接换本机只读会话                                                                                                                             |
-| 命令行   | `cli/`、`bin/atrium.mjs`                                                                        | 统一入口；除启动、`status`、`stop`、`auth status` 外都经服务完成；只有 `atrium` 与 `atrium start` 启动服务，别的命令不自动拉起                                                                                                                                                                                                                           |
-| 执行机器 | `server/hosts/`、`server/agent/`、`cli/hosts.ts`                                                | 主机登记（本机 h1、远程 hN）、接入码换主机令牌、挑主机；代理（`atrium agent`）主动长轮询领指令，在那台机器上建工作树、拉起执行者、续传日志、补报退出；断线与服务重启后对账（#358）                                                                                                                                                                       |
-| 平台层   | `server/platform/`                                                                              | macOS、Linux、Windows 的差异只写在这里：结束进程树（Unix 进程组，Windows `taskkill /T /F`）、进程存活与命令行、跑 shell 命令（`/bin/sh -c` / `cmd.exe /d /s /c`）、按名字找并拉起可执行文件（PATHEXT、npm 的 .cmd 包装）、路径与环境变量名判定；子进程只从这里拉起（一律 windowsHide，Windows 上 detached 的经隐藏控制台中转，不弹窗）                   |
+一个 Go 二进制（`cmd/atrium`），服务、命令行、远程代理都是它。包怎么分、谁调谁、共享文件怎么改见 [internal/README.md](internal/README.md)，改哪个包先读那一节。
+
+| 组成     | 包                                                  | 职责                                                                 |
+| -------- | --------------------------------------------------- | -------------------------------------------------------------------- |
+| 底座     | `store`、`config`、`api`、`cli`、`app`、`platform`  | SQLite 与短号、数据目录、HTTP 与认证、命令表、模块装配、三平台差异   |
+| 服务     | `service`、`pause`                                  | 单实例后台服务、平滑重启、令牌；一键停机                             |
+| 任务账本 | `ledger`                                            | 任务树、依赖、状态机（改状态只经 `ledger.Apply`）                    |
+| 组织     | `org`、`org/leaders`、`org/agenda`                  | 部门、要点、身份、备忘、技能、资料、决定、凭据、上限；负责人唤醒与权限；选项单、周期任务 |
+| 事件     | `events`、`secretary`                               | 事件落库与投递、`events wait/ack`；注入 Claude Code 秘书会话、状态栏 |
+| 执行     | `dispatch`、`workers`、`hosts`、`quota`             | 派活队列、挑执行者与机器、适配器与档案、远程代理、额度               |
+| 交付     | `gates`、`merge`、`release`、`watch`                | 查事实判关卡与审阅、合入队列、自升级上线、持球与期限、卡死接管       |
+| 视图     | `web`                                               | 只读网页与接口（`map`）                                              |
+| 导入     | `importer`                                          | 从旧版库一次性只读导入                                               |
 
 ## 实现约束
 
-- 新功能放进职责单一的新模块（参照 `server/tasks/`、`server/org/`）；状态判定写成纯函数、穷举测试，IO 与判定分开。
-- 持久化加载与启动路径按产品自愈：单条坏记录挪开并记日志，其余照常启动。旧运行时留下的表不读不写，也不因它们存在而报错。
-- 进程、shell、路径的平台差异只调 `server/platform/`（判定在 `plan.ts`，按平台参数穷举测试），不直接写 `process.kill(-pid)`、`/bin/sh`、`ps`。测试同样三平台可跑：假命令用 `tests/fake-bin.ts`，检查命令用 `tests/portable-shell.ts`，临时目录用 `tests/temp-dir.ts`。
-- SQLite 一律参数化查询、事务、有界分页。事实（PR、CI、改动规模）由运行时查，不从执行者输出里采信。
-- 执行者与服务子进程用白名单环境启动（`server/service-env.ts`、`server/tasks/dispatch/worker-env.ts`），不继承凭据类（`*_API_KEY`、`*_TOKEN`）、身份类（`CLAUDE_CODE_*`、`PI_*`）与 `HERDR_*`；任务声明的凭据（`task add --secret`，`server/secrets/`）是唯一例外：派活那一刻按名称逐个注入，名称不许盖系统变量与运行时标记。执行者固定带 `ATRIUM_WORKER=1`，命令行据此拒绝操作用户的服务（唯一例外是只读的 `material get`，读取记在 `ATRIUM_TASK` 那件任务上）。leader 进程同样走执行者白名单，不带 `ATRIUM_WORKER`，只加本次唤醒签发的 `ATRIUM_LEADER_TOKEN`（服务端按它判权限，唤醒结束即作废）。
-- 凭据不进日志、提交、PR、issue 或模型提示词；报错回显的令牌要抹掉。认证放在路由匹配后的统一入口，默认拒绝；路径参数拒绝 `..`、绝对路径、隐藏段和指向目录外的软链接。
-- 命令行的主要调用者是 Agent：成功回执最后一行给下一步命令，只有修正明确可执行时才提示修正，字段校验用参数名和中文；读命令支持 `--json`；异步状态提供等待与增量读取（`task wait`、`task log --follow`、`events wait`），不让调用方轮询。新命令接入 `cli/main.ts` 的命令表，`atrium --help` 与 `atrium guide` 由命令表生成；README 不抄命令用法。
-- 用户短号 `u1`，任务 `t1`，目标与里程碑 `g1`（迁移后作节点阶段记录的 id），组织节点 `o1`，要点 `k1`，节点 leader `a1`；短号全局一致、持久、不复用。
-- 组织（部门、要点、专员）存在 Atrium；仓库只留跟着代码走的约定：本文件、`.agents/README.md`（派活时附给执行者）和代码目录旁的 `AGENTS.md`。
-- 用户纠正或新规矩写到哪：规矩一律写成要点，其余见 `atrium guide`。
+- 新功能放进职责单一的包；状态判定写成纯函数、表驱动测试，IO 与判定分开。
+- 开发期不写兜底：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
+- 进程、shell、路径的平台差异只经 `internal/platform`，不直接写 `/bin/sh`、`kill(-pid)`。
+- SQLite 一律参数化查询、事务、有界分页。事实（PR、CI、改动规模）由运行时查，不采信执行者自述。
+- 执行者与服务子进程用白名单环境启动，不继承凭据类、身份类变量；派活时声明的凭据（`task run --secret`）在那一刻按名称注入。执行者固定带 `ATRIUM_WORKER=1`，命令行据此拒绝（只读的 `material get` 除外）；负责人进程只加本次唤醒签发的 `ATRIUM_LEADER_TOKEN`。
+- 凭据不进日志、提交、PR、issue 或模型提示词。认证在路由匹配后统一做，默认拒绝；路径参数拒绝 `..`、绝对路径与隐藏段。
+- 命令行的主要调用者是 Agent：回执最后一行给下一步命令，字段校验以参数名开头，读命令支持 `--json`，异步状态提供等待（`task wait`、`task log --follow`、`events wait`）。`atrium --help` 由命令表生成，README 不抄命令用法。
+- 短号全局一致、持久、不复用（`t1`、`o1`、`k1`、`a1`……）。
+- 组织（部门、要点、技能）存在 Atrium；仓库只留跟着代码走的约定：本文件、`.agents/README.md`（派活时附给执行者）、`internal/README.md`。
 
 ## 验证与协作
 
-- 合入前只跑 `.agents/check` 快检查（类型检查、格式、改动相关测试、`service.test`、`--help` 冒烟）；全量测试（`npm run check`）不在关键路径上，只由 GitHub CI 在合入后异步跑、只报不挡；main 坏了先回滚那次合入。`npm run format:check` 检查格式。远端 CI 在 macOS、Linux、Windows 三平台各跑一遍。
-- 执行者不跑全量测试。开发中和交付前只跑 `npm run build`（类型检查）、相关测试与 `npm run format:check`：`npm test -- tests/a.test.ts` 只跑列出的文件，`npm test -- --changed` 跑与 `origin/main` 相比改动文件相关的测试。只解 rebase 冲突时跑类型检查加冲突文件相关测试即可。测试超时先看是不是机器太忙，单独重跑超时的文件。
-- 执行者交付停在 PR；运行时关卡按执行者档案的 `checks` 判定（`finished`、`pr_exists`、`local_check`、`file_growth`、`claims_verified`），结论写进任务事件。远端 CI 结果记入账本供参考，不挡合入；通过关卡的 PR 在运行时合入队列串行 rebase、重跑本地检查并按检查过的提交合入，冲突或检查失败交回原执行者，超过两次转卡住；高风险（`--risk high`）或执行者档案 trust 低于 medium 的，入队前另派不同模型、trust 至少 medium 的一次性审阅者按清单给出通过或打回，打回同样计入交回次数。端到端验证由执行者交付前在隔离实例里跑，命令与输出贴进 PR「端到端验证」一节，审阅时核对。Atrium 自身仓库合入后等发版，运行时对自身 update + restart，跑一遍只读冒烟（`status`、`task ls`、`--help`），通知「tN 已上线（vX）」；冒烟没过记上线失败交负责人。PR 正文另写「碰到哪些已有能力」一节（与哪些已有能力交叉、各验了什么，没有写「无」），只要求写、不设关卡；leader 按它挑试点，先小范围用、跑通再放开。
-- 主路径的整体验收由发版前的 `npm run e2e` 负责，不是每个任务的交付要求。校验与权限至少实测一份破坏输入。
-- 开发中的改动在自己的 worktree 验收：4310 上跑的是安装版服务，不要启动、停止或重启它，也不要把全局 `atrium` npm link 到仓库。隔离服务用 `ATRIUM_PORT=<端口> ATRIUM_DATA=<worktree>/.atrium node bin/atrium.mjs`，用完以同样变量 `stop`。合入并发版后用 `atrium update` 走安装后路径。
-- 多个执行者共用同一个仓库，`git stash` 在所有 worktree 间共用；不要用 stash，未完成的改动提交到自己的分支。
-- 测试显式使用临时目录与假执行者，不依赖开发者主目录中的档案或 OpenQuota。凭据、数据库和服务登记文件不提交。
-- issue 只放可以直接动手的事；远期规划、还需要想的内容放 GitHub Discussions（Ideas 分类）。文档、issue、PR 使用中文。
+- 快检查只有 `.agents/check`（gofmt、vet 与交叉编译、构建、全部测试、`--help` 冒烟）；开发中只跑改动相关的包（`go test ./internal/<包>/`），交付前跑一次 `.agents/check`。合入队列 rebase 后跑同一份。GitHub CI（`ci.yml`）只报不挡；main 坏了先回滚那次合入。
+- 主路径端到端：`scripts/smoke.sh`（隔离服务、假执行者、假 gh）。
+- 执行者交付停在 PR；关卡、审阅、合入由运行时做。PR 正文写「端到端验证」（隔离实例里跑的命令与输出）和「碰到哪些已有能力」（没有写「无」）。
+- 发版：在 main 上推 `vX.Y.Z` 标签，`release.yml` 交叉编译六个平台发到 Release；运行时对自身 `update` + `restart` 后跑只读冒烟，过了记「已上线」。
+- 隔离实例：`ATRIUM_DATA=<临时目录> ATRIUM_PORT=<空闲端口> go run ./cmd/atrium start`，用完同样变量 `stop`。不要启停用户在跑的服务（缺省 4320），不读写 `~/.atrium-v2`。
+- 不要 `git stash`（所有工作树共用），未完成的改动提交到自己的分支。
+- 测试用临时目录、假执行者、假 gh 与本地 bare 仓库；不调真实模型，不读用户主目录，不启真实额度读取。
+- issue 只放可以直接动手的事；远期规划放 Discussions（Ideas）。文档、issue、PR、提交用中文。

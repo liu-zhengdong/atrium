@@ -62,7 +62,7 @@ func Newest(tags []string) string {
 	return best
 }
 
-// Asset 是某平台的二进制在 GitHub Release 里的文件名（与 .github/workflows/release-v2.yml 一致）。
+// Asset 是某平台的二进制在 GitHub Release 里的文件名（与 .github/workflows/release.yml 一致）。
 func Asset(goos, goarch string) string {
 	name := "atrium-" + goos + "-" + goarch
 	if goos == "windows" {

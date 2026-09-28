@@ -1,5 +1,0 @@
-$ opencode run --format json 修测试
-ERROR authentication required: 401 Unauthorized
-       Run /login or check the API key configured for this account.
-       code: invalid_api_key
-✖ agent exited with code 1

@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# 旧名字，保留给还在用它的说明；快检查只有 .agents/check 一份。
-exec "$(dirname "$0")/check" "$@"

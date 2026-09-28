@@ -1,5 +1,0 @@
-ERROR  request to https://api.example.com/v1/messages failed
-       cause: connect ETIMEDOUT 104.16.29.35:443
-       code: ETIMEDOUT
-retrying (attempt 3/3)
-✖ agent exited with code 1

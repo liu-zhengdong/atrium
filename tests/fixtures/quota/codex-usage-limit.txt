@@ -1,3 +1,0 @@
-$ codex exec -C /tmp/repo-t12-quota -s danger-full-access -
-reading AGENTS.md
-You have hit your ChatGPT usage limit (prolite plan). Try again in ~6826 min.

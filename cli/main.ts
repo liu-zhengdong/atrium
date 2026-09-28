@@ -134,7 +134,7 @@ export const commands: Record<string, Command> = {
   update: updateCommand,
   restart: restartCommand,
 };
-const service: [usage: string, about: string][] = [
+export const service: [usage: string, about: string][] = [
   ["atrium", "启动或复用后台服务，输出地址"],
   ["atrium status", "查看服务状态、地址和数据目录"],
   ["atrium stop", "停止服务，保留数据；在跑的执行者由下次启动接管"],

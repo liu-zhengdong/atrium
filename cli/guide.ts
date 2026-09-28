@@ -275,16 +275,19 @@ export function example(name: string, command: Command) {
     .trim();
   return `atrium ${name}${sample ? ` ${sample}` : ""}`;
 }
+/** 命令参考里的一条（用法、说明、示例）：`atrium guide` 与 README 的命令参考共用。 */
+export function referenceEntry(name: string, command: Command) {
+  return (
+    `atrium ${name} ${command.args}`.trimEnd() +
+    `\n  ${command.about}\n  示例：${example(name, command)}`
+  );
+}
 export function guide(commands: Record<string, Command>) {
   const codes = Object.entries(exitCodes)
     .map(([code, exit]) => `  ${exit}  ${code}`)
     .join("\n");
   const reference = Object.entries(commands)
-    .map(
-      ([name, command]) =>
-        `atrium ${name} ${command.args}`.trimEnd() +
-        `\n  ${command.about}\n  示例：${example(name, command)}`,
-    )
+    .map(([name, command]) => referenceEntry(name, command))
     .join("\n");
   return `Atrium 命令行说明书\n\n调用约定\n  任务用 t1，组织节点用 o1（旧目标与里程碑 g1 迁为节点阶段记录的 id），用户用 u1，组织节点 leader 用 a1。\n  task/events 的 --as 是事件订阅者名，memo/decision 的 --as 是记录的主人，都缺省 secretary（leader 进程里缺省是自己的 aN）；org/skill/goal/map、workers edit、specialist 的 --as 是改动记在谁名下：u1、secretary（秘书，权限同用户）或某个节点 leader 的 aN，缺省 u1，秘书会话（ATRIUM_AS=secretary）里缺省 secretary；技能修订提议用 p1。\n  所有命令支持 --json：成功 {"ok":true,"result":接口结果,"next":下一步命令或null}；失败 {"ok":false,"error":{"code","message","candidates"?},"next":修正命令或null}。只在 stdout 写一个 JSON 对象，提示在 stderr。\n  文本回执最后一行是「动作：atrium 命令」，没有下一步则省略。\n  退出码与 code：\n  0  成功\n${codes}\n\n常见任务\n  令牌失效：atrium auth rotate（使用当前 ATRIUM_DATA）。\n  数据目录与端口：默认数据 ~/.atrium，用 ATRIUM_DATA 改；前一代数据 ~/.pi/atrium/data 已归档不再使用。端口被另一份数据的 Atrium 占着时回执给出它的数据目录，要用它就设 ATRIUM_DATA=那个目录；被别的程序占着就换 ATRIUM_PORT\n  拆任务看全貌：atrium task add 目标；atrium task add 子任务 --parent t1；atrium task tree t1；人工收尾：atrium task set t2 --status done\n  总任务：有子任务的任务不派给执行者，派它下面的子任务；状态与进度按全部子孙汇总（task show/tree 显示「在做 5/12」）；秘书只收「tN 整体已上线」「tN 下的 tM 卡住」；取消连带子孙：atrium task set t1 --status cancelled --with-children\n  派活前看候选：atrium task pick t2（候选执行者、能不能接、账号额度、正忙、在干活的专员下的交付记录，最上面是推荐与理由）；只看额度：atrium quota；人工解除误判占用：atrium quota --clear claude
   leader 层：atrium leader add 名称 --worker claude+opus 登记，atrium org edit 节点 --leader a1 指派；任务没写 --owner 时事件投给归属部分最近的 leader（事件 routed 写明投给谁、为什么），找不到投秘书；leader 有要处理的事件时攒批 30 秒、起一次性进程处理并确认，连续失败或超时转交秘书；leader 只能动负责的节点及子节点（越权报 leader_scope），只把四类事上交：atrium leader escalate 说明 --kind shipped|cross|beyond|stuck [--task tN]，转交下层的上交加 --event 编号（上面只收一条）；看 leader：atrium leader ls、atrium top

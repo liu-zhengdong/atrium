@@ -581,6 +581,587 @@ atrium update                              # 安装最新 GitHub 标签；--to 0
 - 执行者进程带 `ATRIUM_WORKER=1`，此时命令行拒绝连接用户的服务，只能显式使用隔离的 `ATRIUM_DATA` 与 `ATRIUM_PORT`。
 - leader 进程带 `ATRIUM_LEADER`、`ATRIUM_LEADER_TOKEN`（本次唤醒签发、结束即作废）与 `ATRIUM_LEADER_URL`，命令行据此以 aN 身份直连服务，`events`、`task stop` 的 `--as` 缺省是自己；权限由服务端判定。
 
+## 命令参考
+
+全部命令的用法、说明与示例，和 `atrium --help`、`atrium guide` 出自同一份命令表（`cli/main.ts`，分组与示例在 `cli/guide.ts`）。下面标记之间的内容由 `npm run docs` 生成，改了命令重新跑一遍即可，不要手改；`npm run check` 会核对它和命令表是否一致。
+
+<!-- 命令参考开始：由命令表生成，改命令后跑 npm run docs，不要手改这一段 -->
+
+### 服务
+
+```text
+atrium
+  启动或复用后台服务，输出地址
+
+atrium status
+  查看服务状态、地址和数据目录
+
+atrium stop
+  停止服务，保留数据；在跑的执行者由下次启动接管
+
+atrium restart [--wait] [--timeout <秒>]
+  平滑重启 Atrium 服务，随时可做：在跑的执行者不中断，由新服务接管
+  示例：atrium restart
+
+atrium update [--to <版本>] [--repo <仓库>]
+  检查并更新 Atrium 版本，安装新版本并展示改动摘要
+  示例：atrium update
+
+atrium auth status
+  查看当前本机用户身份、认证状态和连接的服务（不启动服务）
+  示例：atrium auth status
+
+atrium auth rotate
+  轮换用户令牌；令牌丢失时凭本机实例控制凭据恢复
+  示例：atrium auth rotate
+```
+
+### 任务
+
+```text
+atrium quota [--clear <账号>] [--json]
+  列出账号额度；--clear 人工解除运行时占用并立即重派排队任务
+  示例：atrium quota
+
+atrium top [--once] [--json] [--interval 秒] [--width 列] [--depth N] [--as 订阅者]
+  实时看谁在干活、全景图上两层各块的状态与在跑数，以及排期；--depth 展开全景层数；缺省每 2 秒刷新，q 或 Ctrl-C 退出
+  示例：atrium top
+
+atrium statusline [--json]
+  Claude Code 状态栏：等你拍板的选项单、未结束任务各在谁手里（执行者、合入、leader、秘书、等你）、leader 在处理什么、未处理事件；服务不在只显示未运行，不拉起
+  示例：atrium statusline
+
+atrium task add 标题 [--parent tN] [--part 节点] [--also 部分[,部分]] [--by 专员] [--ask 专员[,专员]] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent [--why 原因] [--stopgap 止损动作]] [--avoid-host hN[,hM]] [--priority 闲时|普通] [--from 节点] [--repo 路径] [--brief 文件|-] [--owner 订阅者] [--deliver pr|comment|none] [--issue 号]
+  建任务；--by 指定干活的专员（派活附技能与交付关卡），--ask 请专员按清单审（可多位）；--part 写归属部分（负责与汇报只在这一处），--also 写还牵涉的部分（派活附它们的要点、可请它们的专员、知会它们的 leader；管方面的要点适用于归属部分的自动牵涉），--from 写投任务的节点，--brief 附任务详述 md（建任务时读入存库，至多 64 KB；- 从标准输入读）；--urgent 标紧急，走紧急通道（没空位先暂停闲时再普通任务、按一次通过率与速度挑人、检查与合入插到最前、审阅不挡合入、合入后立即发版、10 分钟没进展换人；leader 标须 --why 写原因，并知会用户）；--stopgap 写先执行的止损动作（atrium host pause hN; atrium task stop tN,tM; atrium host clean hN，建好就执行并记事件）；--avoid-host 派活与检查避开这些主机；--priority 闲时|普通（不写按归属部分：管方面的部分缺省闲时，排在普通任务后面、有空闲执行者才派）；旧 --job、--concern、--role 暂可用
+  示例：atrium task add 拆分登录模块 --parent t1
+
+atrium task ls [--status S] [--parent tN] [--after tN]
+  列任务，按短号升序，每页 200 条
+  示例：atrium task ls
+
+atrium task plan [--after tN]
+  按在跑、就绪、等待中、卡住列出待办及依赖；--json 给脚本
+  示例：atrium task plan
+
+atrium task show tN
+  看任务详情与最近事件
+  示例：atrium task show t1
+
+atrium task tree [tN] [--all] [--after tN] [--limit N]
+  缩进树：短号、状态、标题、交付物、执行者、PR；不写 tN 列未完成的顶层任务（每页 30 个）与最近 10 个已结束的，--all 按短号翻全部顶层
+  示例：atrium task tree
+
+atrium task set tN [--status S] [--with-children] [--pr URL] [--by 专员|''] [--ask 专员[,专员]|''] [--from 节点|''] [--part 节点|''] [--also 部分[,部分]|''] [--brief 文件|-|''] [--after tN[,tM]] [--after-pr owner/repo#N] [--auto] [--urgent|--no-urgent] [--why 原因] [--stopgap 止损动作|''] [--avoid-host hN[,hM]|''] [--priority 闲时|普通]
+  人工修正状态（todo、done、failed、blocked、cancelled）；也可补登 PR 或改标题、干活或请来看的专员、归属部分、牵涉部分、详述、交付物、依赖、自动派发、紧急（--urgent 走紧急通道，排队中的立刻按紧急重排；leader 标须 --why；--stopgap 写了就立刻执行；--avoid-host 派活与检查避开这些主机）和优先级（--priority 闲时 排在普通任务后面、有空闲执行者才派；普通照常排；在跑的不打断）；取消总任务时 --with-children 连带取消没结束的子孙（在跑的先停，已上线、已完成的不动）
+  示例：atrium task set t1 --status done
+
+atrium task note tN 文字 [--as 身份] [--verdict ok|fixed|rejected]
+  追加处理备注（最多 300 字）；最新一条显示为当前说明
+  示例：atrium task note t1 文字
+
+atrium task tell tN 文字 [--as 身份] [--verdict ok|fixed|rejected]
+  给在跑的执行者捎话：Claude Code 即时送入，codex 本轮结束后续上会话，其余停掉带着补充重派；不在跑的下次拉起时写进提示词
+  示例：atrium task tell t1 文字
+
+atrium task pick tN [--risk low|medium|high]
+  看派活候选（只读，不派）：候选执行者能不能接、账号额度、是否正忙、在干活的专员下的交付记录，给出推荐与理由；--risk 缺省 low
+  示例：atrium task pick t1 --risk medium
+
+atrium task run tN [--worker 工具+模型[:强度]] [--risk low|medium|high] [--host hN] [--urgent [--why 原因]]
+  派给执行者（服务持有进程）；不写 --worker 按额度挑（紧急任务按一次通过率与速度挑），--risk 缺省 low；--host 派到指定的执行机器（不写在能接的主机里挑最空的）；--urgent 同时标紧急走紧急通道：没空位先暂停闲时再普通任务，写了止损动作先执行（额度保留、trust、依赖照旧；leader 标须 --why）
+  示例：atrium task run t1 --worker codex+gpt-6-sol:high
+
+atrium task done tN
+  人工完成任务；等同 task set tN --status done
+  示例：atrium task done t1
+
+atrium task stop tN [--as 订阅者]
+  停掉执行者或合入队列；由此产生的事件不投给发起者本人（缺省 secretary）
+  示例：atrium task stop t1
+
+atrium task merge tN [--as 订阅者]
+  将关卡已通过、带 PR 的受阻合入任务重新排队；受阻在专员否决或没出结论上的，负责的 leader 看过理由不认同时用它放行
+  示例：atrium task merge t1
+
+atrium task log tN [--follow] [--after 字节]
+  看执行者日志；--follow 跟到任务结束，--after 从上次的字节偏移续读
+  示例：atrium task log t1
+
+atrium task wait tN [--timeout 秒]
+  等任务结束（PR 任务等合入或卡住）或超时；缺省 300 秒
+  示例：atrium task wait t1
+
+atrium patrol run 节点 [--worker 工具+模型[:强度]]
+  手动巡检节点：从 uses 轮换一条场景，在当前真实环境启动体验巡检任务
+  示例：atrium patrol run o4
+
+atrium patrol report 巡检任务 --phenomenon 现象 --step 步骤 --command 命令 --expected 预期 --actual 实际 --kind broken|awkward
+  记录巡检发现；同节点同一现象只记一次，已忽略的现象不再报
+  示例：atrium patrol report t1 --phenomenon 帮助缺少示例 --step 第一步 --command atrium-guide --expected 有示例 --actual 没有示例 --kind awkward
+
+atrium patrol findings 节点
+  查看节点上的巡检发现与 leader 处理结果
+  示例：atrium patrol findings 节点
+
+atrium patrol decide 发现 (--task tN | --merge tN | --ignore 原因)
+  leader 处理发现：开任务后关联、并入已有任务，或忽略并写原因
+  示例：atrium patrol decide f1 --ignore 已有同类改进计划
+
+atrium schedule add 节点 [标题] --every 7d|1d|12h [--at 09:00] [--kind task|patrol|research] [--brief 文件|-] [--by 专员] [--worker 工具+模型[:强度]]
+  周期任务：到点在节点下生成一件普通任务并派发（闲时/普通按节点缺省）；上一轮没结束就跳过本轮并记一笔，服务停机错过的只补一轮；--at 本机钟点（只用于整天的周期）；--kind patrol 生成与 patrol run 同样的体验巡检（标题可省），research 只调研不交 PR
+  示例：atrium schedule add atrium/cli --kind patrol --every 1d --at 09:30
+
+atrium schedule ls [--node 节点] [--all] [--after sN]
+  列周期任务：--node 只看该节点及下层，--all 连已删除的一起列；每页至多 200 条
+  示例：atrium schedule ls
+
+atrium schedule show sN
+  看周期任务：节奏、下次时间、详述与最近几轮（生成、跳过、失败）
+  示例：atrium schedule show sN
+
+atrium schedule run sN
+  马上跑一轮（不改下次时间）；上一轮没结束时不起
+  示例：atrium schedule run sN
+
+atrium schedule pause sN
+  暂停周期任务：到点不再生成
+  示例：atrium schedule pause sN
+
+atrium schedule resume sN
+  恢复周期任务：暂停期间的轮次不补，从下一个到点开始
+  示例：atrium schedule resume sN
+
+atrium schedule rm sN
+  删除周期任务：不再生成，已生成的任务照常；sN 不复用
+  示例：atrium schedule rm sN
+
+atrium review add 议题 --concerns 专员[,专员] [--brief 文件|-] [--issue 号] [--leader 节点] [--repo 路径] [--comment] [--part 节点] [--owner 订阅者]
+  发起会审：并行给每位受邀专员派一个一次性执行者按各自章程与清单出意见，收齐后 leader（--leader 节点，缺省秘书）汇总一致与冲突、能定的定，碰到用户边界或谈不拢的标「需用户拍板」投事件；结论记在议题上，--comment 同步为 --issue 的评论
+  示例：atrium review add 公开仓库 --concerns 前端,后端 --brief 议题.md --issue 322
+
+atrium review show tN [--brief]
+  看会审：各方意见（立场与原文）、汇总的一致与冲突、结论、需用户拍板的事；--brief 只列立场不带原文
+  示例：atrium review show t1
+
+atrium review decide tN 结论 [--as 拍板人]
+  记下对会审的拍板（多用于「需用户拍板」的会审）：阶段转已定，原上交事项保留；--as 缺省 u1
+  示例：atrium review decide t1 先不公开，等凭据清理完
+
+atrium events [--as 订阅者] [--before 编号] [--limit 条数]
+  查看事件的送达与确认状态，缺省显示 secretary 最近 50 条
+  示例：atrium events
+
+atrium events wait [--as 订阅者] [--timeout 秒] [--settle 秒] [--all]
+  缺省只取要处理事件，首条后最多攒批 30 秒；--all 包括过程知会；取走后 15 分钟内不重投
+  示例：atrium events wait
+
+atrium events digest [--as 订阅者] [--since 时间]
+  按任务合并尚未确认的知会事件；读取后自动确认；--since 使用带时区的 ISO 时间
+  示例：atrium events digest
+
+atrium events ack 编号…
+  确认事件已处理（编号见 events wait）；确认后不再投递，未确认的处理中租约到期后重投
+  示例：atrium events ack 12 13
+
+atrium chat [--tool opencode|codex] [--cwd 目录] [--new] [--acp] [--allow]
+  和秘书对话；opencode 缺省开原生界面（--acp 用 ACP），codex 经 ACP；空闲时自动送入事件，界面关闭后由服务恢复原会话处理
+  示例：atrium chat
+```
+
+### 执行机器
+
+```text
+atrium host ls [--all]
+  列出执行机器：本机 h1 与接入的远程主机，状态、编码 CLI、在跑几件、自动派哪些仓库；--all 连已移除的
+  示例：atrium host ls
+
+atrium host show hN
+  看一台执行机器：系统、编码 CLI、负载、跑不跑把关检查、最近心跳、在跑的任务
+  示例：atrium host show hN
+
+atrium host add 名称 [--repo owner/name|*]… [--max 数量] [--ssh user@地址] [--key 私钥路径] [--tunnel 本机端口:远端端口]
+  登记一台远程执行机器，给出一次性接入码（30 分钟内有效）与在那台机器上要运行的 atrium agent 命令；--repo 登记自动派活时能接的仓库（* 全部；不写只自动接没有仓库的活，--host 指定时不受限），--max 同时最多跑几件（缺省按那台的核数）
+  示例：atrium host add 书房台式机 --repo liu-zhengdong/atrium --max 4
+
+atrium host edit hN [--ssh user@地址] [--key 私钥路径] [--tunnel 本机端口:远端端口]
+  更新远程主机的 SSH 连接和 Atrium 自管隧道；未写的字段沿用原值
+  示例：atrium host edit h2 --ssh user@100.70.239.117 --tunnel 4310:14310
+
+atrium host remove hN
+  移除远程执行机器：令牌作废，短号保留不复用；上面还有在跑的任务时拒绝
+  示例：atrium host remove hN
+
+atrium host pause hN
+  暂停往这台派新活（在跑的照跑）；本机 h1 也可以暂停，让活只去远程
+  示例：atrium host pause hN
+
+atrium host resume hN
+  恢复往这台派活；排着的活会按顺序拉起
+  示例：atrium host resume hN
+
+atrium host clean hN
+  止损：清理这台上 Atrium 拉起的残留进程——停掉在那台跑的非紧急执行者，本机再结束最近一天已结束任务留下的执行者进程树；常和 host pause 一起写进紧急任务的 --stopgap
+  示例：atrium host clean hN
+
+atrium agent [--server <服务地址>] [--token <接入码>]
+  在远程机器上运行：接入 Atrium 服务并领派给这台的活（前台常驻，Ctrl-C 停；执行者不随它退出，再起来接着看）；首次用 host add 给的接入码，之后只要 --server。数据在 ~/.atrium-agent（ATRIUM_AGENT_DATA 可改）
+  示例：atrium agent --server http://host.orb.internal:4310 --token h2-接入码
+```
+
+### 专员
+
+```text
+atrium specialist ls [--part 部分] [--all] [--json]
+  列出专员：缺省只列全组织共用的；--part 列这一部分能请的（本部分的在前，上级、牵涉部分与全组织的折成一行）；--all 展开全部
+  示例：atrium specialist ls
+
+atrium specialist show 专员 [--json]
+  查看专员、岗位说明、优先执行者、交付关卡与技能
+  示例：atrium specialist show 专员
+
+atrium specialist add 名称 --description 文字 --body 文件 [--part 部分] [--preferred 列表] [--checks 列表] [--skills 列表] [--review-goal 目标] [--review-points JSON文件] [--review-bottom 列表] [--invite-when 列表]
+  创建专员；--part 写它属于哪一部分（如安全专员属于安全，只有归属链或牵涉到那一部分的任务能请），不写即全组织共用；列表用逗号分隔，正文从文件读取
+  示例：atrium specialist add 名称 --description 文字 --body 文件
+
+atrium specialist edit 专员 [--name 名称] [--description 文字] [--body 文件] [--part 部分|''] [--preferred 列表] [--checks 列表] [--skills 列表] [--review-goal 目标] [--review-points JSON文件] [--review-bottom 列表] [--invite-when 列表]
+  修订专员，保留历史；--part '' 改回全组织共用
+  示例：atrium specialist edit 专员
+
+atrium workers [--specialist 专员] [--json]
+  按执行者组合、模型、工具与干活的专员查看交付事实
+  示例：atrium workers
+
+atrium workers show 工具+模型[:强度]|层/名 [--json]
+  查看执行者的交付明细与三层叠加档案；给 层/名（如 harness/codex）时看这份档案原文与修订
+  示例：atrium workers show harness/codex
+
+atrium workers ls [--json]
+  列出库里的执行者档案（工具 / 模型 / 组合三层）
+  示例：atrium workers ls
+
+atrium workers edit 层/名 (--file 文件|- | --trust 等级 | --max-risk 风险 | --model 模型 | --checks a,b | --set 键=值 | --unset 键) [--reason 原因] [--as secretary]
+  改库里的一份执行者档案并留修订；层是 harness、models、combos，档案不存在就新建。--file - 从标准输入读整份（frontmatter + 正文）
+  示例：atrium workers edit combos/codex+gpt-6-sol --trust medium --reason 连续五次一次通过
+
+atrium workers confirm 工具+模型[:强度] --specialist 专员 --action relax|tighten|avoid_specialist
+  秘书确认统计建议后写入组合档案
+  示例：atrium workers confirm 工具+模型
+```
+
+### 全景
+
+```text
+atrium map [节点] [--depth N] [--no-open] [--json]
+  看全景：终端打全景树并打开本机网页（一次性登录链接）；--json 返回节点人话字段、组成、阶段与在跑任务（与网页同一接口）
+  示例：atrium map atrium --depth 2
+
+atrium map context 节点 [--also 部分[,部分]] [--max 字数]
+  给出从根到该节点的人话链、组成、现状与本节点及上级的要点，再加适用于本节点的管方面要点与 --also 牵涉部分的要点（注明来源，有长度上限）；派活时自动附进执行者提示词
+  示例：atrium map context 节点
+
+atrium map edit 节点 [--what 一句话] [--uses 场景]… [--flow 步骤]… [--alias 人话名] [--analogy 类比] [--now 现状] [--next 接下来] [--applies 部分[,部分]] [--detail 文件] [--rev rN] [--reason 原因] [--as aN]
+  改一块的人话字段，直接覆盖且不留修订；--applies 只用于管方面的部分，写它的要点缺省适用于哪些部分（空串改回整个上级）；--detail 文件改章程正文并留修订（--rev 仅用于此）；给空串清掉；负责部门 leader 或其上级可改，根只有你能改
+  示例：atrium map edit atrium/cli --what 一句话 --uses 场景一 --uses 场景二 --now 现状
+
+atrium map add 父节点 名称 [--analogy 类比] [--alias 人话名] [--what 一句话] [--slug 路径名] [--kind aspect] [--reason 原因] [--as aN]
+  在父节点下加一块（组成部分），可同时写人话名、类比与一句是什么；名称不能直接当路径名时给 --slug；--kind aspect 建管方面的部分（如安全，要点横跨多个部分，用 map edit --applies 或 org point-add --applies 写适用范围）
+  示例：atrium map add atrium 待办本 --slug ledger --analogy 团队的任务白板
+```
+
+### 目标（迁移后下线）
+
+```text
+atrium goal tree [gN] [--depth N]
+  看目标树：各层状态、负责部门、前置和挂着的任务；给 gN 只看那一棵（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal tree
+
+atrium goal show gN
+  看目标或里程碑：结果、验收标准、状态、负责部门、前置、下层与挂着的任务（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal show gN
+
+atrium goal add 结果 [--parent gN] [--node 节点] [--criteria 条目]… [--after gN[,gM]] [--due 日期] [--repo 路径] [--status planned|active] [--as aN]
+  建顶层目标（不给 --parent，只有你能建）或里程碑；--node 负责部门（缺省同上层），--criteria 可多次给，以 `$ ` 开头的条目是命令，由运行时在 --repo 仓库里跑（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal add 组织树可用 --parent g1 --node atrium --criteria 条目
+
+atrium goal edit gN [--result 结果] [--criteria 条目]… [--node 节点] [--parent gN] [--after gN[,gM]|''] [--due 日期|''] [--repo 路径|''] [--status planned|active|blocked] [--note 说明] [--as aN]
+  改目标或里程碑；--criteria 整组替换（给一次空串清空），--after 整组替换；不留修订记录（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal edit gN
+
+atrium goal check gN [--item N] [--pass|--fail --note 证据] [--timeout 秒] [--as aN]
+  判定验收标准：不给 --pass/--fail 时运行时在隔离的临时 worktree 里跑命令条目（`$ ` 开头；给 --item 只跑那条），退出码 0 为满足；写不成命令的条目用 --item N --pass|--fail --note 证据 人工判（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal check g2 --item 2 --pass --note 已合入
+
+atrium goal done gN [--note 证据] [--as aN]
+  标为达成（前置须都已达成）；--note 记达成证据（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal done gN
+
+atrium goal drop gN --reason 原因 [--as aN]
+  放弃目标或里程碑（要写原因；下层与挂着的任务须先收尾）；改回用 goal edit --status（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal drop g2 --reason 不再需要
+
+atrium goal adopt tN --parent gN [--node 节点] [--apply] [--as aN]
+  把只起归类作用的父任务迁为里程碑：子任务挂上并上移一层，父任务标取消（默认只预览）（atrium org migrate-goals --apply 后下线，改看 atrium org show 节点）
+  示例：atrium goal adopt t21 --parent g1
+```
+
+### 组织
+
+```text
+atrium org tree
+  查看组织树
+  示例：atrium org tree
+
+atrium org show 节点 [--detail] [--charter|--card --raw]
+  看节点：先讲人话（是什么、能做什么、怎么走完、由哪几部分组成、现状与阶段），--detail 展开章程正文、硬边界、预算、能力卡等技术细节
+  示例：atrium org show 节点
+
+atrium org add 父节点 slug [--kind 类型] [--name 名称] [--reason 原因] [--repo 路径] [--leader u1|aN]
+  添加组织节点
+  示例：atrium org add 父节点 slug
+
+atrium org edit 节点 [--charter 文件|--card 文件|--name 名称] [--slug 路径名] [--leader aN|none] [--parent 节点] [--repo 路径] [--kind aspect|module] [--archive] [--rev rN] [--reason 原因]
+  编辑节点、章程或能力卡；--kind aspect 改成管方面的部分，--kind module 改回普通部分（改回前要先清掉要点与部分的适用范围）
+  示例：atrium org edit 节点
+
+atrium org point-add 节点 要点 --why 为什么 --by 谁定的 [--check 检查] [--applies 部分[,部分]] [--as aN]
+  给节点加一条要点（这一块必须守住的设计约束）：人话一句、为什么、谁定的（如 u1 09-27），可选守护它的检查（测试文件与用例名，或 $ 命令）；管方面的部分可用 --applies 写这条适用于哪些部分（不写跟随部分，缺省整个上级）；不留修订记录
+  示例：atrium org point-add atrium/runtime 不采信执行者自述 --why 事实由运行时查 --by u1（09-27）
+
+atrium org point-edit kN [--text 要点] [--why 为什么] [--by 谁定的] [--check 检查|''] [--applies 部分[,部分]|''] [--as aN]
+  改一条要点；--check '' 去掉检查，--applies '' 改回跟随部分的适用范围
+  示例：atrium org point-edit kN
+
+atrium org point-rm kN [--as aN]
+  删掉一条过时的要点（不留修订记录）
+  示例：atrium org point-rm kN
+
+atrium org stages 节点 --file 文件 --reason 原因 [--as aN]
+  改节点的阶段记录（章程里的 stages），其余字段、正文、边界与预算不动，留章程修订；文件是 YAML 或 JSON 的阶段列表（也可写成 stages: 列表）；leader 可改自己负责的节点及子节点
+  示例：atrium org stages atrium --file 阶段.yaml --reason 第二阶段完成
+
+atrium org history 节点 [--target node|charter|card] [--rev rN] [--before rN] [--after rN] [--limit N]
+  查看修订历史与字段差异
+  示例：atrium org history 节点
+
+atrium org revert 节点 [--charter|--card] [--to rN] [--reason 原因]
+  恢复旧内容并追加新修订
+  示例：atrium org revert 节点
+
+atrium org import [章程文件] [--repo 仓库] [--apply]
+  预览或导入根章程与岗位节点
+  示例：atrium org import
+
+atrium org link-roles [--apply]
+  把旧 role 字符串的任务关联到组织节点（默认只预览）
+  示例：atrium org link-roles
+
+atrium org migrate-goals [--apply]
+  把目标树（gN）迁为所在节点的阶段记录、任务按目标回填归属部分；默认只预览，--apply 先备份再写入，之后 goal 命令下线
+  示例：atrium org migrate-goals
+
+atrium leader ls
+  列出 leader：负责的节点、执行者组合、最近一次唤醒在处理什么；节点上引用了但没登记的单列
+  示例：atrium leader ls
+
+atrium leader show aN
+  看一位 leader：负责的节点、执行者组合、最近一次唤醒与备忘
+  示例：atrium leader show aN
+
+atrium leader add 名称 --worker 工具+模型[:强度] [--memo 文本] [--id aN]
+  登记 leader（固定身份，按事唤醒时用 --worker 的执行者组合起一次性进程）；--id 认领节点上已引用但没登记的 aN；再用 org edit 节点 --leader aN 指派
+  示例：atrium leader add Atrium负责人 --worker claude+opus:high
+
+atrium leader edit aN [--name 名称] [--worker 工具+模型[:强度]] [--memo 文本|--memo-file 文件]
+  改 leader 的名称、执行者组合或备忘（覆盖写，有长度上限，超了先精简）；leader 自己只能改自己的备忘
+  示例：atrium leader edit a1 --memo 在等t5合入，合入后上交已上线
+
+atrium leader escalate 说明 --kind shipped|cross|beyond|stuck [--task tN] [--event 编号] [--as aN]
+  leader 上交给上一层（秘书或上层 leader），生成一条「要处理」事件；只有四类：shipped 已上线、cross 需要别的部分配合、beyond 越过权限／预算／硬边界、stuck 搞不定；shipped 要带 --task 并在说明里附端到端验证。转交下层 leader 的上交时用 --event 给那条事件的编号、说明写你的意见（同任务同类型的会自动认作转交），上面只收一条。leader 进程里缺省以自己的身份上交
+  示例：atrium leader escalate 组织树已上线，端到端：atrium-org-tree显示leader --kind shipped --task t5
+```
+
+### 备忘与决定
+
+```text
+atrium memo show [--as secretary|aN]
+  看秘书或 leader 的备忘与全部有效的决定（新会话、换人接手先跑这一条）；缺省秘书，leader 进程里缺省自己
+  示例：atrium memo show
+
+atrium memo edit [文本] [--file 文件] [--as secretary|aN]
+  覆盖写备忘：在等什么、下次先看什么这类当前状态（有长度上限，超了先精简）；取舍与原因记进 decision add
+  示例：atrium memo edit 在等t5合入，合入后先看线上验证 --as a1
+
+atrium decision add 决定 --why 原因 [--by u1|secretary|aN] [--date 日期] [--issue 号] [--node 节点] [--task tN] [--supersedes dN] [--as secretary|aN]
+  追加一条决定记录（谁拍板、决定、原因，可关联 issue、节点、任务）；--by 缺省是记录的主人，补记旧决定用 --date；--supersedes 同时把旧决定标为已推翻
+  示例：atrium decision add 额度读取不依赖OpenQuota --why 要迁到别的设备 --by u1 --issue 352
+
+atrium decision ls [--as secretary|aN] [--all] [--before dN] [--limit 条数]
+  列决定记录，日期新的在前；缺省只列有效的，--all 连已推翻的一起列；--before 接着上一页往下
+  示例：atrium decision ls
+
+atrium decision supersede dN --by dM [--as secretary|aN]
+  把旧决定 dN 标为已推翻、指向新决定 dM（两条须在同一份记录里且都还有效）；之后 decision ls 缺省不再列 dN
+  示例：atrium decision supersede d1 --by d3
+```
+
+### 资料
+
+```text
+atrium material add 节点 文件|目录 --note 一句话 [--name 名称] [--supersedes mN] [--for t1,k1,d1]
+  把文件或目录作为资料挂到节点上（存进数据目录，单版至多 20 MB，隐藏文件不收）；同一节点同名的再加就是新版本；--supersedes 标旧资料被取代，--for 关联任务、要点或决定（清理线索看它们是否结束）
+  示例：atrium material add o4 docs/design/t120-tasks --note t120任务视图的设计稿与截图 --for t120
+
+atrium material ls [--node 节点] [--archived] [--before mN] [--limit 条数]
+  列资料（新的在前）：短号、名称、一句话、节点、版本、大小、最近谁读过；缺省不含归档的，--archived 只列归档的
+  示例：atrium material ls --node o4
+
+atrium material show mN
+  看一份资料：说明、状态、版本、关联、谁读过、清理线索
+  示例：atrium material show m1
+
+atrium material get mN [--out 目录] [--version 版本]
+  取资料到 --out 目录（缺省当前目录）下，按名称落成文件或目录，已存在就报错；缺省当前版本；执行者在任务里也能用（读取记在任务上）
+  示例：atrium material get m1 --out 资料
+
+atrium material archive mN [--note 原因]
+  归档资料：不进清单和派活提示词、清理线索也不再提，文件留着可恢复（只归档不删）
+  示例：atrium material archive m1 --note 已按新设计上线
+
+atrium material restore mN [--note 原因]
+  恢复归档的资料，重新进清单和派活提示词
+  示例：atrium material restore m1
+
+atrium material keep mN --note 原因
+  清理线索说疑似没用、但决定留下：写一句原因，之后清理线索不再提它
+  示例：atrium material keep m1 --note 下一版还要对照
+
+atrium material stale [--node 节点]
+  清理线索：疑似没用的资料（被取代，或 90 天没读且关联都结束；由这一块的 leader 定归档还是留）；看全部时另列归档超过一年且大于 10 MB、可以真删的（要用户点头）
+  示例：atrium material stale --node o4
+
+atrium material rm mN
+  真删资料（库里的记录与全部版本的文件，删了找不回来）；只有用户能删，平时用不上就 archive
+  示例：atrium material rm m1
+```
+
+### 选项与拍板
+
+```text
+atrium choice ls [--node 节点] [--open] [--before cN] [--limit 份数]
+  列选项单，等拍板的在前、新的在前；--node 只看这一块及下层（产品部），--open 只看等拍板的
+  示例：atrium choice ls --open
+
+atrium choice show cN
+  看一份选项单全文：每个选项能多做到什么、为什么现在、代价、不做会怎样、依据，产品部的推荐与理由，拍过板的写明建了哪些任务、记了哪些决定
+  示例：atrium choice show c3
+
+atrium choice pick cN 选项号… [--note 说明]
+  拍板要做哪几个：选中的在该节点下各建一个任务（带选项全文作详述，交该节点 leader 拆解），没选的连同说明记成该节点的决定记录（这轮不做 X：原因）；拍板人缺省是用户，atrium product set 下放后该节点的 leader 也能拍
+  示例：atrium choice pick c3 1 3 --note 选项2等额度宽裕再说
+
+atrium choice pass cN [--note 原因]
+  这轮都不要：每个选项连同原因记成该节点的决定记录，下一轮产品部读得到，情况没变不重复提
+  示例：atrium choice pass c3 --note 这周先收尾在做的
+
+atrium choice comment cN 意见 [--prefer 选项号[,选项号]] [--basis 依据]…
+  给等拍板的选项单写意见（项目 leader、秘书）：可标倾向哪几个、补依据（fN、tN、dN、链接，可写多次）；拍板人看选项单时一起看到，选中的任务详述也带上
+  示例：atrium choice comment c3 先做看板过滤，合入提速等CI稳了 --prefer 1 --basis f3
+
+atrium choice add 节点 --file 选项单.json|- [--task tN]
+  产品部提一份选项单挂在节点上（它要演进的那一块），建好叫醒秘书递给用户；文件是 JSON：{"title":"标题","options":[{"title","gain":"能多做到什么","why_now":"为什么现在","cost":"代价：多少活、占哪些额度","skip":"不做会怎样","basis":["f3","t120","d4","链接"]}…3–5 个],"recommend":[选项号],"why":"推荐理由"}；--task 记产出它的研究任务
+  示例：atrium choice add atrium --file 选项单.json --task t42
+
+atrium product add 节点 [--name 名称] [--every 7d] [--at 时刻] [--worker 工具+模型[:强度]]
+  在节点下成立产品部（普通部分，管这一块的演进）：一条命令建好部分与人话字段、登记它的 leader、挂一个 research 周期任务（缺省每周）；每轮研究读这一块的全景、决定记录、巡检发现、失败与上线记录，可上网看同类产品，产出一份选项单等用户拍板，不写代码、不开 PR；--worker 同时定 leader 与研究用的执行者，不给时 leader 沿用上级 leader 的、研究按档案挑
+  示例：atrium product add atrium --every 7d --at 09:30
+
+atrium product ls [--node 节点]
+  列出产品部：管哪一块、leader、周期研究的节奏与下一轮、上一轮任务；--node 只看设在这个节点下的
+  示例：atrium product ls
+
+atrium product set 节点 --decider leader|u1
+  设谁拍板这个节点（及没另设的下层）上的选项单：u1 用户拍板（缺省），leader 下放给该节点最近的 leader——之后 leader 能 choice pick/pass，用户只收知会；只有用户能改
+  示例：atrium product set atrium --decider leader
+
+atrium product show 节点
+  看这个节点上的选项单由谁拍板：本节点的设置（没设就沿用上层，都没设是用户）与实际拍板人
+  示例：atrium product show atrium
+```
+
+### 技能
+
+```text
+atrium skill ls [--all]
+  列出组织技能（--all 含已归档）
+  示例：atrium skill ls
+
+atrium skill show slug [--out 目录]
+  查看技能内容与绑定；--out 导出文件以便修改
+  示例：atrium skill show slug
+
+atrium skill add slug 目录或SKILL.md [--description 简介] [--name 名称] [--owner 节点] [--source 出处] [--reason 原因]
+  新建组织技能（owner 默认组织根节点）
+  示例：atrium skill add slug 目录或SKILL.md
+
+atrium skill edit slug [目录或SKILL.md] [--name 名称] [--owner 节点] [--archive|--restore] [--rev rN] [--proposal pN] [--source 出处] [--reason 原因]
+  修改技能并追加修订；用户纠正写 --reason 用户纠正… --source 出处
+  示例：atrium skill edit slug
+
+atrium skill history slug [--rev rN] [--before rN] [--limit N]
+  查看技能修订与来源；--rev 看该修订的差异
+  示例：atrium skill history slug
+
+atrium skill revert slug --to rN [--reason 原因]
+  恢复旧修订的内容并追加新修订
+  示例：atrium skill revert slug --to rN
+
+atrium skill bind slug 节点
+  把技能挂到节点：派到该节点及子节点的任务都带上
+  示例：atrium skill bind slug 节点
+
+atrium skill unbind slug 节点
+  从节点上取下技能
+  示例：atrium skill unbind slug 节点
+
+atrium skill proposals [--status pending|accepted|rejected|all] [--limit N]
+  列出执行者改技能生成的修订提议（默认待审）
+  示例：atrium skill proposals
+
+atrium skill proposal pN [--out 目录]
+  查看一个修订提议的差异；--out 导出提议内容以便手工合并
+  示例：atrium skill proposal pN
+
+atrium skill accept pN [--reason 原因]
+  采纳修订提议：写成新修订（基于旧版本时三方合并）
+  示例：atrium skill accept pN
+
+atrium skill reject pN [--reason 原因]
+  驳回修订提议
+  示例：atrium skill reject pN
+```
+
+### 其他
+
+```text
+atrium role ls [--part 部分] [--all] [--json]
+  列出专员：缺省只列全组织共用的；--part 列这一部分能请的（本部分的在前，上级、牵涉部分与全组织的折成一行）；--all 展开全部（旧写法；改用 atrium specialist ls）
+  示例：atrium role ls
+
+atrium role show 专员 [--json]
+  查看专员、岗位说明、优先执行者、交付关卡与技能（旧写法；改用 atrium specialist show）
+  示例：atrium role show 专员
+
+atrium role add 名称 --description 文字 --body 文件 [--part 部分] [--preferred 列表] [--checks 列表] [--skills 列表] [--review-goal 目标] [--review-points JSON文件] [--review-bottom 列表] [--invite-when 列表]
+  创建专员；--part 写它属于哪一部分（如安全专员属于安全，只有归属链或牵涉到那一部分的任务能请），不写即全组织共用；列表用逗号分隔，正文从文件读取（旧写法；改用 atrium specialist add）
+  示例：atrium role add 名称 --description 文字 --body 文件
+
+atrium role edit 专员 [--name 名称] [--description 文字] [--body 文件] [--part 部分|''] [--preferred 列表] [--checks 列表] [--skills 列表] [--review-goal 目标] [--review-points JSON文件] [--review-bottom 列表] [--invite-when 列表]
+  修订专员，保留历史；--part '' 改回全组织共用（旧写法；改用 atrium specialist edit）
+  示例：atrium role edit 专员
+```
+
+<!-- 命令参考结束 -->
+
 ## 配置与数据
 
 | 环境变量                        | 用途                                                                                                    |

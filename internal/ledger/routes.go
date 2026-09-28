@@ -56,6 +56,7 @@ func BuildTree(tasks []Task) *TreeNode {
 // Detail 是 task show 的内容。
 type Detail struct {
 	Task      Task        `json:"task"`
+	Parties   Parties     `json:"parties"`
 	Deps      []DepState  `json:"deps"`
 	Ready     bool        `json:"ready"`
 	WaitingOn []string    `json:"waiting_on,omitempty"`
@@ -117,6 +118,9 @@ func Routes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		d := Detail{Task: t}
+		if d.Parties, err = PartiesOf(q.Context(), db, id); err != nil {
+			return nil, err
+		}
 		if d.Deps, err = Deps(q.Context(), db, id); err != nil {
 			return nil, err
 		}

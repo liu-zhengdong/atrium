@@ -23,6 +23,7 @@ func Commands(t *cli.Table) {
 			{Name: "skill", Value: "名字", Help: "用哪个技能"},
 			{Name: "priority", Value: "级别", Help: "urgent 紧急 / fix 修复 / normal 普通（缺省）/ idle 闲时"},
 			{Name: "repo", Value: "仓库", Help: "在哪个仓库干活，如 owner/name"},
+			{Name: "owner", Value: "身份", Help: "处理人：结果（合入、上线、失败、卡住）要处理地投给他——u1、secretary 或 aN（缺省派活的人）"},
 		},
 		Run: func(c *cli.Ctx) error {
 			title, err := c.Arg(0, "<标题>")
@@ -33,7 +34,8 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			in := NewTask{Title: title, Detail: c.Str("detail"), Org: c.Str("org"), Parent: c.Str("parent"),
-				After: c.List("after"), Skill: c.Str("skill"), Priority: Priority(c.Str("priority")), Repo: c.Str("repo")}
+				After: c.List("after"), Skill: c.Str("skill"), Priority: Priority(c.Str("priority")), Repo: c.Str("repo"),
+				Owner: c.Str("owner")}
 			var task Task
 			if err := c.Call("POST", "/api/tasks", in, &task); err != nil {
 				return err
@@ -100,7 +102,7 @@ func Commands(t *cli.Table) {
 			if h.Holder.Text != "" {
 				fmt.Fprintf(&b, "现在：%s\n", h.Holder.Text)
 			}
-			for _, kv := range [][2]string{{"部门", t.Org}, {"父任务", t.Parent}} {
+			for _, kv := range [][2]string{{"部门", t.Org}, {"父任务", t.Parent}, {"派活人", d.Parties.By}, {"处理人", d.Parties.Owner}} {
 				if kv[1] != "" {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}

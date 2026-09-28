@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -71,8 +72,16 @@ type NewTask struct {
 	Priority Priority `json:"priority"`
 	Repo     string   `json:"repo"`
 	After    []string `json:"after"`
+	// Owner 是处理人：结果事件要处理地投给他（u1、secretary 或 aN），缺省为派活人。
+	Owner string `json:"owner"`
 	// By 是派活人，缺省为建任务的身份；周期任务记建周期任务的人。不从请求体读。
 	By string `json:"-"`
+}
+
+// Parties 是任务的派活人与处理人，记在 created 经历里。
+type Parties struct {
+	By    string `json:"by,omitempty"`
+	Owner string `json:"owner,omitempty"`
 }
 
 func checkText(field, v string, limit int, required bool) error {
@@ -173,6 +182,13 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 				return err
 			}
 		}
+		if in.Owner != "" {
+			if ok, err := exists(ctx, tx, "identities", in.Owner); err != nil {
+				return err
+			} else if !ok {
+				return api.NotFound("--owner: %s 不存在（应为 u1、secretary 或已登记的 aN）", in.Owner).WithNext("atrium leader ls")
+			}
+		}
 		var err error
 		if id, err = store.NextID(ctx, tx, "t"); err != nil {
 			return err
@@ -189,7 +205,12 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 				return err
 			}
 		}
-		return Record(ctx, tx, id, "created", actor, in.By)
+		parties := ""
+		if in.By != "" || in.Owner != "" {
+			raw, _ := json.Marshal(Parties{By: in.By, Owner: in.Owner})
+			parties = string(raw)
+		}
+		return Record(ctx, tx, id, "created", actor, parties)
 	})
 	if err != nil {
 		return Task{}, err
@@ -435,7 +456,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if next.Status == t.Status && (next.Stage != StageMerged || t.Stage == StageMerged) {
 			return nil // 只有状态变化与转入已合入发事件
 		}
-		by, err := By(ctx, tx, id)
+		p, err := PartiesOf(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -443,7 +464,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if note != "" {
 			payload["note"] = clip(note, 500)
 		}
-		return events.EmitTask(ctx, tx, by, events.Event{Kind: events.TaskStatus, Task: id, Dept: t.Org, Body: payload})
+		return events.EmitTask(ctx, tx, p.Owner, events.Event{Kind: events.TaskStatus, Task: id, Dept: t.Org, Body: payload})
 	})
 	if err != nil {
 		return Task{}, err
@@ -452,19 +473,31 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 	return Get(ctx, db, id)
 }
 
-// By 是任务的派活人：建任务时记下的 by，没记就是建它的身份（u1、secretary、aN，或 gates 这类运行时）。
-// 没有建立记录（不经 Add 写进库的）返回空，按运行时建的算。
-func By(ctx context.Context, q store.Querier, id string) (string, error) {
-	var actor, by string
+// PartiesOf 读任务的派活人与处理人：派活人没另记就是建它的身份（u1、secretary、aN，或 gates 这类运行时），
+// 处理人没指定就是派活人。没有建立记录（不经 Add 写进库的）两者都为空，按运行时建的算。
+func PartiesOf(ctx context.Context, q store.Querier, id string) (Parties, error) {
+	var actor, body string
 	err := q.QueryRowContext(ctx, `SELECT actor, body FROM task_events WHERE task = ? AND kind = 'created' ORDER BY id LIMIT 1`, id).
-		Scan(&actor, &by)
+		Scan(&actor, &body)
 	if store.IsNotFound(err) {
-		return "", nil
+		return Parties{}, nil
 	}
-	if by == "" {
-		by = actor
+	if err != nil {
+		return Parties{}, err
 	}
-	return by, err
+	var p Parties
+	if body != "" {
+		if err := json.Unmarshal([]byte(body), &p); err != nil {
+			return Parties{}, fmt.Errorf("%s 的建立记录坏了：%w", id, err)
+		}
+	}
+	if p.By == "" {
+		p.By = actor
+	}
+	if p.Owner == "" {
+		p.Owner = p.By
+	}
+	return p, nil
 }
 
 func clip(s string, n int) string {

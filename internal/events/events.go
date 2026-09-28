@@ -2,7 +2,7 @@
 //
 // 分两级：act（要处理）与 info（知会）；wait 缺省只取要处理的，--all 连知会一起取。
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
-// 任务事件经 EmitTask 按派活人分发（Route）：结果投派活的人，负责人另收知会。
+// 任务事件经 EmitTask 按处理人分发（Route）：结果投处理人（缺省派活的人），负责人另收知会。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一），免得刷屏。
 // 判定（级别、去重键、投递对象）是纯函数，在 model.go；本文件是落库与等待。
 package events
@@ -113,8 +113,8 @@ func Emit(ctx context.Context, q store.Querier, e Event) error {
 	return err
 }
 
-// EmitTask 在调用方的事务里发一件任务的事件：按派活人 by 与部门负责人分发（见 Route）。
-func EmitTask(ctx context.Context, q store.Querier, by string, e Event) error {
+// EmitTask 在调用方的事务里发一件任务的事件：按处理人 owner 与部门负责人分发（见 Route）。
+func EmitTask(ctx context.Context, q store.Querier, owner string, e Event) error {
 	leader, err := org.Recipient(ctx, q, e.Dept)
 	if err != nil {
 		return err
@@ -122,7 +122,7 @@ func EmitTask(ctx context.Context, q store.Querier, by string, e Event) error {
 	if leader == Secretary {
 		leader = ""
 	}
-	for _, d := range Route(by, leader, e.Kind, e.Body) {
+	for _, d := range Route(owner, leader, e.Kind, e.Body) {
 		e.Target, e.Level = d.Target, d.Level
 		if err := Emit(ctx, q, e); err != nil {
 			return err

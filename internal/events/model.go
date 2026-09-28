@@ -55,29 +55,30 @@ func Result(kind string, body any) bool {
 	return field(body, "stage") == "merged"
 }
 
-// Route 纯函数：任务事件投给谁、什么级别。by 是派活人（task add 时的身份），leader 是部门往上最近的负责人（没有为空）。
-//   - 结果投给派活人，要处理：用户与秘书都投秘书（用户经秘书会话收），负责人投自己；
+// Route 纯函数：任务事件投给谁、什么级别。owner 是处理人（task add --owner，缺省派活的人），
+// leader 是部门往上最近的负责人（没有为空）。
+//   - 结果投给处理人，要处理：用户与秘书都投秘书（用户经秘书会话收），负责人投自己；
 //     运行时建的（审阅任务等）按部门找负责人、没有投秘书，成功由运行时自己接着走，只有失败、受阻要处理。
 //   - 负责人不是收结果的那位时，另收一份知会（不叫醒）；过程事件只知会负责人，没有负责人就不投。
-func Route(by, leader, kind string, body any) []Delivery {
-	owner, level := by, Act
+func Route(owner, leader, kind string, body any) []Delivery {
+	to, level := owner, Act
 	switch {
-	case by == "u1" || by == Secretary:
-		owner = Secretary
-	case api.IsRef(by, "a"):
+	case owner == "u1" || owner == Secretary:
+		to = Secretary
+	case api.IsRef(owner, "a"):
 	default:
-		owner, level = leader, LevelOf(kind, body)
-		if owner == "" {
-			owner = Secretary
+		to, level = leader, LevelOf(kind, body)
+		if to == "" {
+			to = Secretary
 		}
 	}
 	var out []Delivery
 	if Result(kind, body) {
-		out = append(out, Delivery{owner, level})
+		out = append(out, Delivery{to, level})
 	} else {
-		owner = ""
+		to = ""
 	}
-	if leader != "" && leader != owner {
+	if leader != "" && leader != to {
 		out = append(out, Delivery{leader, Info})
 	}
 	return out

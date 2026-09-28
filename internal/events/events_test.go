@@ -74,32 +74,32 @@ func TestRoute(t *testing.T) {
 	st := func(to, stage string) map[string]any { return map[string]any{"to": to, "stage": stage} }
 	type d = Delivery
 	cases := []struct {
-		name, by, leader string
-		body             map[string]any
-		want             []Delivery
+		name, owner, leader string
+		body                map[string]any
+		want                []Delivery
 	}{
-		// 结果：派活人要处理，负责人（不是派活人时）知会。
-		{"用户派·合入·有负责人", "u1", "a1", st("done", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
-		{"用户派·合入·无负责人", "u1", "", st("done", "merged"), []d{{Secretary, Act}}},
-		{"秘书派·等上线的已合入", Secretary, "a1", st("running", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
-		{"秘书派·上线", Secretary, "a1", st("done", "released"), []d{{Secretary, Act}, {"a1", Info}}},
-		{"秘书派·失败·无负责人", Secretary, "", st("failed", ""), []d{{Secretary, Act}}},
-		{"负责人派·受阻·本部门", "a1", "a1", st("blocked", "merge_queue"), []d{{"a1", Act}}},
-		{"负责人派·完成·下属部门", "a1", "a3", st("done", "gate"), []d{{"a1", Act}, {"a3", Info}}},
-		{"负责人派·失败·无负责人", "a2", "", st("failed", ""), []d{{"a2", Act}}},
+		// 结果：处理人要处理，负责人（不是处理人时）知会。
+		{"用户处理·合入·有负责人", "u1", "a1", st("done", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"用户处理·合入·无负责人", "u1", "", st("done", "merged"), []d{{Secretary, Act}}},
+		{"秘书处理·等上线的已合入", Secretary, "a1", st("running", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"秘书处理·上线", Secretary, "a1", st("done", "released"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"秘书处理·失败·无负责人", Secretary, "", st("failed", ""), []d{{Secretary, Act}}},
+		{"负责人处理·受阻·本部门", "a1", "a1", st("blocked", "merge_queue"), []d{{"a1", Act}}},
+		{"负责人处理·完成·下属部门", "a1", "a3", st("done", "gate"), []d{{"a1", Act}, {"a3", Info}}},
+		{"负责人处理·失败·无负责人", "a2", "", st("failed", ""), []d{{"a2", Act}}},
 		// 运行时建的：按部门找负责人，成功只知会，失败、受阻要处理。
 		{"运行时·完成·有负责人", "gates", "a1", st("done", "review"), []d{{"a1", Info}}},
 		{"运行时·受阻·有负责人", "gates", "a1", st("blocked", "gate"), []d{{"a1", Act}}},
 		{"运行时·失败·无负责人", "", "", st("failed", ""), []d{{Secretary, Act}}},
 		// 过程：只知会负责人，不投秘书。
-		{"用户派·入队·有负责人", "u1", "a1", st("queued", ""), []d{{"a1", Info}}},
-		{"用户派·拉起·无负责人", "u1", "", st("running", ""), nil},
-		{"秘书派·交回一次", Secretary, "a1", st("queued", ""), []d{{"a1", Info}}},
-		{"负责人派·取消·本部门", "a1", "a1", st("cancelled", ""), []d{{"a1", Info}}},
+		{"用户处理·入队·有负责人", "u1", "a1", st("queued", ""), []d{{"a1", Info}}},
+		{"用户处理·拉起·无负责人", "u1", "", st("running", ""), nil},
+		{"秘书处理·交回一次", Secretary, "a1", st("queued", ""), []d{{"a1", Info}}},
+		{"负责人处理·取消·本部门", "a1", "a1", st("cancelled", ""), []d{{"a1", Info}}},
 		{"运行时·入队·无负责人", "gates", "", st("queued", ""), nil},
 	}
 	for _, c := range cases {
-		if got := Route(c.by, c.leader, TaskStatus, c.body); !slices.Equal(got, c.want) {
+		if got := Route(c.owner, c.leader, TaskStatus, c.body); !slices.Equal(got, c.want) {
 			t.Errorf("%s：Route = %v，应为 %v", c.name, got, c.want)
 		}
 	}

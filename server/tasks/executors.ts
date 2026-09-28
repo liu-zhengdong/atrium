@@ -278,7 +278,7 @@ export class Executors {
     if (this.remoteHost(chosen.host))
       return this.launchRemote(id, { ...chosen, host: chosen.host }, retried);
     const task = getTask(this.ctx.db, id);
-    await this.ctx.disk.check(task.node_id, task.repo);
+    await this.ctx.disk.check(task.node_id);
     const prepared = await prepareRun(task, chosen, this.ctx.launchOptions);
     const usagePace = await this.pace();
     if (this.ctx.closed()) throw new Error("服务已关闭");

@@ -826,14 +826,9 @@ test("接口 /api/tasks/top：路由不被 :id 吃掉，每行带最近动作与
     },
     () => 170,
   );
-  const { data, call } = await startApp(
-    t,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    { host },
-  );
+  const { data, call } = await startApp(t, undefined, undefined, undefined, {
+    host,
+  });
   const db = new DatabaseSync(join(data, "atrium.sqlite"));
   t.after(() => db.close());
   const at = Date.now() - 41 * minute;

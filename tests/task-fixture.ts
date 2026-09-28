@@ -106,7 +106,6 @@ export async function startApp(
   tweak?: (fx: ReturnType<typeof fixture>) => void,
   pace: () => Promise<PaceEntry[] | undefined> = async () => undefined,
   usagePace: () => Promise<PaceEntry[] | undefined> = async () => undefined,
-  diskFreeGb: (path: string) => Promise<number> = async () => 1000,
   tasks: Partial<RunnerOptions> = {},
 ) {
   const fx = fixture(t);
@@ -124,7 +123,6 @@ export async function startApp(
       killGraceMs: 200,
       pace,
       usagePace,
-      diskFreeGb,
       ...tasks,
     },
   });

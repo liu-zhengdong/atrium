@@ -21,7 +21,16 @@ import {
   parseEvery,
   resumeAt,
 } from "../server/schedules/plan.ts";
+import Fastify from "fastify";
 import { leaderRule } from "../server/leaders/scope.ts";
+import { registerLeaderGuard } from "../server/leaders/guard.ts";
+import { LeaderTokens } from "../server/leaders/tokens.ts";
+import { ensureOrgTables } from "../server/org/schema.ts";
+import {
+  ensureScheduleTables,
+  insertSchedule,
+} from "../server/schedules/model.ts";
+import { ensureTaskTables } from "../server/tasks/ledger.ts";
 import { fixture, until } from "./task-fixture.ts";
 
 const utc8 = () => 480;
@@ -136,11 +145,126 @@ test("到点判定：没到、暂停、删除等着；上一轮没结束跳过�
   assert.equal(dayLabel(D0 - HOUR, utc8), "09-27");
 });
 
-test("leader 不能增删改周期任务，只能读", () => {
-  assert.equal(leaderRule("POST", "/api/schedules"), "deny");
-  assert.equal(leaderRule("POST", "/api/schedules/:id/run"), "deny");
-  assert.equal(leaderRule("DELETE", "/api/schedules/:id"), "deny");
+test("leader 给本节点及子节点排周期任务；别的部分只读，也不能冒名", async (t) => {
+  for (const route of [
+    "/api/schedules",
+    "/api/schedules/:id/pause",
+    "/api/schedules/:id/resume",
+    "/api/schedules/:id/run",
+  ])
+    assert.equal(leaderRule("POST", route), "schedule", route);
+  assert.equal(leaderRule("DELETE", "/api/schedules/:id"), "schedule");
   assert.equal(leaderRule("GET", "/api/schedules"), "read");
+
+  const db = new DatabaseSync(":memory:");
+  t.after(() => db.close());
+  ensureTaskTables(db);
+  ensureOrgTables(db);
+  ensureScheduleTables(db);
+  addNode(db, { slug: "org", kind: "org", name: "组织", reason: "建" }, "u1");
+  addNode(
+    db,
+    {
+      parent: "o1",
+      slug: "cli",
+      kind: "project",
+      name: "命令行",
+      leader: "a1",
+      reason: "建",
+    },
+    "u1",
+  );
+  addNode(
+    db,
+    { parent: "o2", slug: "help", kind: "module", name: "帮助", reason: "建" },
+    "u1",
+  );
+  addNode(
+    db,
+    {
+      parent: "o1",
+      slug: "web",
+      kind: "project",
+      name: "网页",
+      leader: "a2",
+      reason: "建",
+    },
+    "u1",
+  );
+  const row = (node: number) => ({
+    node_id: node,
+    title: "巡检",
+    kind: "task" as const,
+    every_ms: DAY,
+    at_minute: null,
+    brief: null,
+    brief_path: null,
+    by: null,
+    worker: null,
+  });
+  insertSchedule(db, row(3));
+  insertSchedule(db, row(4));
+  const tokens = new LeaderTokens();
+  const app = Fastify();
+  t.after(() => app.close());
+  registerLeaderGuard(app, db, tokens, () => {
+    throw new Error("不该用到事件箱");
+  });
+  const ok = async () => ({ ok: true });
+  app.post("/api/schedules", ok);
+  for (const action of ["pause", "resume", "run"])
+    app.post(`/api/schedules/:id/${action}`, ok);
+  app.delete("/api/schedules/:id", ok);
+  const token = `Bearer ${tokens.issue("a1", 60_000)}`;
+  const send = async (
+    method: "POST" | "DELETE",
+    url: string,
+    payload?: object,
+  ) => {
+    const response = await app.inject({
+      method,
+      url,
+      headers: { authorization: token },
+      ...(payload ? { payload } : {}),
+    });
+    return { status: response.statusCode, body: response.body };
+  };
+  for (const node of ["o2", "cli/help"])
+    assert.equal(
+      (
+        await send("POST", "/api/schedules", {
+          node,
+          title: "巡检",
+          every: "1d",
+        })
+      ).status,
+      200,
+      node,
+    );
+  const other = await send("POST", "/api/schedules", {
+    node: "o4",
+    every: "1d",
+  });
+  assert.equal(other.status, 403);
+  assert.match(other.body, /o4.*不在你负责的部分里/);
+  for (const action of ["pause", "resume", "run"]) {
+    assert.equal(
+      (await send("POST", `/api/schedules/s1/${action}`)).status,
+      200,
+    );
+    assert.equal(
+      (await send("POST", `/api/schedules/s2/${action}`)).status,
+      403,
+    );
+  }
+  assert.equal((await send("DELETE", "/api/schedules/s1")).status, 200);
+  assert.equal((await send("DELETE", "/api/schedules/s2")).status, 403);
+  assert.equal((await send("DELETE", "/api/schedules/s9")).status, 404);
+  assert.equal(
+    (await send("POST", "/api/schedules?as=a2", { node: "o4", every: "1d" }))
+      .status,
+    403,
+  );
 });
 
 test("隔离服务：周期巡检到点生成与 patrol run 同样的任务，没结束跳过、停机只补一轮、失败投 leader；带旧表启动", async (t) => {
@@ -167,7 +291,6 @@ test("隔离服务：周期巡检到点生成与 patrol run 同样的任务，�
       workersDir: fx.workers,
       pace: async () => undefined,
       usagePace: async () => undefined,
-      diskFreeGb: async () => 1000,
       tickMs: 100,
     },
     schedules: { tickMs: 50, now: () => clock, offset: utc8 },

@@ -476,7 +476,6 @@ test("本机满：超过执行者上限的落库排队，有人结束后自动�
     waitingKimi,
     undefined,
     undefined,
-    undefined,
     { host },
   );
   const db = new DatabaseSync(join(data, "atrium.sqlite"));
@@ -520,7 +519,6 @@ test("本机太忙：负载超过阈值暂停派新活，降下来后巡检自�
     waitingKimi,
     undefined,
     undefined,
-    undefined,
     { host },
   );
   const db = new DatabaseSync(join(data, "atrium.sqlite"));
@@ -553,7 +551,6 @@ test("紧急任务：本机太忙时照样立刻派，排队中的标上紧急�
   const { fx, data, call } = await startApp(
     t,
     waitingKimi,
-    undefined,
     undefined,
     undefined,
     { host },

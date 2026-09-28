@@ -55,7 +55,6 @@ test("隔离服务手动巡检：真实环境标记、发现去重、leader 收�
       workersDir: fx.workers,
       pace: async () => undefined,
       usagePace: async () => undefined,
-      diskFreeGb: async () => 1000,
       tickMs: 100,
     },
     leaders: {

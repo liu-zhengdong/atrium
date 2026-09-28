@@ -3,6 +3,7 @@
  * 本文件全是纯函数（无 IO），由 write.ts / read.ts 取数后调用。
  */
 
+/** disk_min_free_gb 不再使用（u1 09-28 删磁盘下限）：旧数据照读照存不报错，运行时不看它。 */
 export const PARAM_KEYS = [
   "quota_reserve_percent",
   "disk_min_free_gb",

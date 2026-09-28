@@ -13,6 +13,7 @@ import type { Command, Values } from "./main.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
 import { fit } from "./top-plan.ts";
+import { defaultActor } from "./worker-guard.ts";
 
 /**
  * `atrium map`（#322 第 4 步）：人看全景用网页，Agent 用命令行。
@@ -30,8 +31,10 @@ const list = (values: Values, key: string) => {
 };
 const client = async () => (await import("./service.ts")).connect();
 const enc = encodeURIComponent;
-const as = (values: Values) =>
-  str(values, "as") ? `?as=${enc(str(values, "as")!)}` : "";
+const as = (values: Values) => {
+  const who = str(values, "as") ?? defaultActor();
+  return who ? `?as=${enc(who)}` : "";
+};
 
 /** 一块的标题：人话名在前，原名与类比跟在后面。 */
 export function label(node: {
@@ -84,6 +87,10 @@ export function renderMapTree(
     else if (node.children_count)
       lines.push(
         `${indent}  …下层 ${node.children_count} 块：atrium map ${node.ref} --depth 2`,
+      );
+    if (node.children && node.children.length < node.children_count)
+      lines.push(
+        `${indent}  …还有 ${node.children_count - node.children.length} 块这次没展开：atrium map ${node.ref} --depth 1`,
       );
   };
   walk(tree, 0);

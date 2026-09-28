@@ -1,15 +1,12 @@
 import { execFile } from "node:child_process";
-import { stat, statfs } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
-import { allBoundaries, chainLevels } from "../org/boundary-store.ts";
-import { effective } from "../org/boundaries.ts";
 import { nodes, ref } from "../org/model.ts";
 import { allShares } from "../org/share-store.ts";
 import { ownAmount } from "../org/shares.ts";
 import { all } from "./ledger-model.ts";
 import { BudgetProblem } from "./budget-problem.ts";
-import type { WorktreeCleanup } from "./worktree-cleanup.ts";
 
 const run = promisify(execFile);
 const GB = 1024 ** 3;
@@ -46,14 +43,6 @@ export class DiskBudget {
   private cursor = 0;
   constructor(
     private readonly db: DatabaseSync,
-    private readonly data: string,
-    private readonly freeGb: (path: string) => Promise<number> = async (
-      path,
-    ) => {
-      const space = await statfs(path);
-      return (space.bavail * space.bsize) / GB;
-    },
-    private readonly cleanup?: WorktreeCleanup,
     private readonly sizeOf: SizeOf = defaultSize,
   ) {}
 
@@ -92,38 +81,12 @@ export class DiskBudget {
     );
   }
 
-  async check(nodeId: number | null, repo?: string | null) {
+  /** 节点章程写了磁盘份额（budget.disk）时核对该节点子树 worktree 占用；本机磁盘可用量不设下限（09-28 删）。 */
+  async check(nodeId: number | null) {
+    if (nodeId === null) return;
     const list = nodes(this.db);
-    const node =
-      list.find((n) => n.id === nodeId) ??
-      list.find((n) => n.parent_id === null);
-    const boundaries = node ? allBoundaries(this.db) : new Map();
-    const levels = node
-      ? [
-          ...chainLevels(list, boundaries, node.parent_id),
-          {
-            node: node.id,
-            name: node.name,
-            entries: boundaries.get(node.id) ?? [],
-          },
-        ]
-      : [];
-    const minFree = Math.max(
-      15,
-      ...effective(levels)
-        .filter((b) => b.param?.key === "disk_min_free_gb")
-        .map((b) => b.param!.value),
-    );
-    let free = await this.freeGb(repo ?? this.data);
-    if (free < minFree && this.cleanup) {
-      await this.cleanup.finished();
-      free = await this.freeGb(repo ?? this.data);
-    }
-    if (free < minFree)
-      throw new BudgetProblem(
-        `磁盘可用约 ${free.toFixed(1)} GB，低于章程下限 ${minFree} GB；先清理组织临时产物`,
-      );
-    if (nodeId === null || !node) return;
+    const node = list.find((n) => n.id === nodeId);
+    if (!node) return;
     const shares = allShares(this.db);
     const chain = [];
     let current = node;
@@ -133,18 +96,22 @@ export class DiskBudget {
       current = list.find((n) => n.id === current!.parent_id)!;
     }
     if (!chain.length) return;
-    const paths = all<Worktree>(
-      this.db,
-      "SELECT node_id,worktree FROM tasks WHERE node_id IS NOT NULL AND worktree IS NOT NULL ORDER BY id DESC LIMIT 2001",
-    );
-    if (paths.length > 2000)
-      throw new BudgetProblem("任务 worktree 超过 2000 条，无法核对磁盘份额");
+    // 按 id 倒序分页累计，不因 worktree 多而拒绝派活；已结束任务的工作树由清理（worktree-cleanup.ts）收走。
     const usage = new Map<number, number>();
-    for (const row of paths)
-      usage.set(
-        row.node_id,
-        (usage.get(row.node_id) ?? 0) + (await this.size(row.worktree)),
+    for (let before = Number.MAX_SAFE_INTEGER; ;) {
+      const page = all<Worktree & { id: number }>(
+        this.db,
+        "SELECT id,node_id,worktree FROM tasks WHERE id<? AND node_id IS NOT NULL AND worktree IS NOT NULL ORDER BY id DESC LIMIT 500",
+        before,
       );
+      for (const row of page)
+        usage.set(
+          row.node_id,
+          (usage.get(row.node_id) ?? 0) + (await this.size(row.worktree)),
+        );
+      if (page.length < 500) break;
+      before = page.at(-1)!.id;
+    }
     for (const current of chain) {
       const limit = ownAmount(shares.get(current.id) ?? [], "disk", "");
       if (limit !== undefined) {

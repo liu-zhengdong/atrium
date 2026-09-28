@@ -94,16 +94,10 @@ test("没配磁盘份额不起 du；有份额才巡 worktree", async (t) => {
   const task = createTask(db, { title: "盘" });
   db.prepare("UPDATE tasks SET worktree=? WHERE id=?").run(dir, task.id);
   const du: string[] = [];
-  const disk = new DiskBudget(
-    db,
-    dir,
-    async () => 1000,
-    undefined,
-    async (path) => {
-      du.push(path);
-      return 0.01;
-    },
-  );
+  const disk = new DiskBudget(db, async (path) => {
+    du.push(path);
+    return 0.01;
+  });
   await disk.refresh();
   assert.equal(du.length, 0);
   const root = addNode(
@@ -282,7 +276,6 @@ test("定时巡检不重入：慢一轮不叠 du", async (t) => {
     env: { PATH: "/usr/bin:/bin" },
     tickMs: 20,
     ciPollMs: 60_000,
-    diskFreeGb: async () => 1000,
     diskDu: async () => {
       inflight++;
       max = Math.max(max, inflight);

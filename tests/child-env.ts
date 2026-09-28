@@ -15,7 +15,6 @@ import { WORKER_FLAG } from "../cli/worker-guard.ts";
 export function childEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ATRIUM_TEST_DISK_FREE_GB: "1000",
     ATRIUM_WORKERS_DIR: join(tmpdir(), "atrium-test-no-workers"),
     NO_COLOR: "1",
     ...overrides,

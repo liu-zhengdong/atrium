@@ -399,7 +399,6 @@ for (const scenario of [
       },
       undefined,
       undefined,
-      undefined,
       {
         mergeHeadWaitMs:
           scenario === "stale_pr_head_timeout" || scenario === "head_changed"
@@ -450,7 +449,6 @@ for (const scenario of [
             workersDir: fx.workers,
             exec: fx.run,
             tickMs: 100,
-            diskFreeGb: async () => 1000,
           },
         });
         t.after(() => resumed.app.close());

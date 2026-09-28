@@ -14,6 +14,7 @@ import {
   type MigrateCheck,
   type MigrationPlan,
 } from "./migrate-rules.ts";
+import { actsForUser } from "../../shared/user.ts";
 
 /**
  * 目标树迁为节点阶段记录（#322 第 1 步）。默认预览；apply 只有 u1，先把整库备份到
@@ -136,7 +137,7 @@ export function migrateGoals(
   const preview = plan(db);
   if (!options.apply)
     return { preview: true, retired: !!retired, ...view(db, preview) };
-  if (options.actor !== "u1")
+  if (!actsForUser(options.actor))
     throw new Problem(403, "org migrate-goals --apply 只有你能执行");
   if (preview.orphans.length)
     throw new Problem(

@@ -157,7 +157,6 @@ export type RunnerOptions = {
   exec?: Exec;
   pace?: () => Promise<PaceEntry[] | undefined>;
   usagePace?: () => Promise<PaceEntry[] | undefined>;
-  diskFreeGb?: (path: string) => Promise<number>;
   /** 测试注入：计数 du，不碰本机真实 du。 */
   diskDu?: (path: string) => Promise<number>;
   tickMs?: number;
@@ -299,13 +298,7 @@ export class TaskRunner {
       Date.now,
       this.remote,
     );
-    this.disk = new DiskBudget(
-      db,
-      options.data,
-      options.diskFreeGb,
-      this.cleanup,
-      options.diskDu,
-    );
+    this.disk = new DiskBudget(db, options.diskDu);
     this.waits = new TaskWaits(
       (id) => this.settled(id),
       (id) => getTask(this.db, id),
@@ -640,7 +633,7 @@ export class TaskRunner {
     let chosen: Choice;
     let pick: RunPick;
     try {
-      await this.disk.check(task.node_id, task.repo);
+      await this.disk.check(task.node_id);
       const pace = await (this.launchOptions.pace ?? readPace)().catch(
         () => undefined,
       );

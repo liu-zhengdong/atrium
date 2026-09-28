@@ -23,6 +23,7 @@ import {
 import { MapLogin, LINK_TTL_MS, cookieOf } from "../server/map/login.ts";
 import { addMap, editMap, mergeFields } from "../server/map/write.ts";
 import {
+  expandPlan,
   mapNode,
   mapTree,
   mapSignature,
@@ -696,4 +697,61 @@ test("全景任务行：原因、最近动作、备注都只出一行，按显�
     width(view.action!) <= TASK_LINE_WIDTH && view.action!.endsWith("…"),
   );
   assert.equal(view.note!.text, "看过日志");
+});
+
+test("全景树不因节点多拒绝：按名额广度优先展开，超出的只给个数", () => {
+  // 根 1 下 600 个仓库块，每块 3 个模块：共 2401 块。
+  const children = new Map<number | null, { id: number }[]>();
+  children.set(
+    1,
+    Array.from({ length: 600 }, (_, i) => ({ id: 2 + i })),
+  );
+  for (let i = 0; i < 600; i++)
+    children.set(
+      2 + i,
+      [0, 1, 2].map((k) => ({ id: 10_000 + i * 3 + k })),
+    );
+  const plan = expandPlan(children, 1, 8, 1001);
+  assert.equal(plan.get(1), 600);
+  const shown = [...plan.values()].reduce((a, b) => a + b, 0);
+  assert.equal(shown, 1000);
+  assert.equal(plan.get(2), 3);
+  assert.equal(plan.get(2 + 132), 3);
+  assert.equal(plan.get(2 + 133), 1);
+  assert.equal(plan.has(2 + 134), false);
+  // 名额不够一层：这一块只给前几块。
+  assert.equal(expandPlan(children, 1, 8, 101).get(1), 100);
+  // depth 0 不展开；叶子不记。
+  assert.equal(expandPlan(children, 1, 0).size, 0);
+  assert.equal(expandPlan(children, 10_000, 3).size, 0);
+  // depth 1 只展开根。
+  assert.deepEqual([...expandPlan(children, 1, 1)], [[1, 600]]);
+
+  const lines = renderMapTree({
+    ref: "o1",
+    name: "组织",
+    alias: "",
+    analogy: "",
+    kind: "org",
+    what: "",
+    archived: false,
+    dot: "idle",
+    tasks: { running: 0, blocked: 0, open: 0 },
+    children: [
+      {
+        ref: "o2",
+        name: "仓库",
+        alias: "",
+        analogy: "",
+        kind: "project",
+        what: "",
+        archived: false,
+        dot: "idle",
+        tasks: { running: 0, blocked: 0, open: 0 },
+        children_count: 0,
+      },
+    ],
+    children_count: 600,
+  });
+  assert.match(lines.at(-1)!, /还有 599 块这次没展开：atrium map o1 --depth 1/);
 });

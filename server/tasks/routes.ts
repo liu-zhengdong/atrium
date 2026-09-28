@@ -72,11 +72,6 @@ export function runnerEnvOptions(env: NodeJS.ProcessEnv = process.env) {
   const unknown = Number(env.ATRIUM_QUOTA_UNKNOWN_MINUTES);
   if (Number.isFinite(unknown) && unknown > 0)
     options.quotaUnknownMs = unknown * 60_000;
-  // 仅 node:test 派生的隔离服务可模拟磁盘；生产服务始终读 statfs。
-  if (env.NODE_TEST_CONTEXT && env.ATRIUM_TEST_DISK_FREE_GB) {
-    const gb = Number(env.ATRIUM_TEST_DISK_FREE_GB);
-    if (Number.isFinite(gb) && gb >= 0) options.diskFreeGb = async () => gb;
-  }
   const online = Number(env.ATRIUM_ONLINE_POLL_SECONDS);
   if (Number.isFinite(online) && online > 0)
     options.online = { pollMs: online * 1000 };

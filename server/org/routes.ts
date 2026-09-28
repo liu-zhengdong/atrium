@@ -20,6 +20,7 @@ import { linkRoles } from "./task-link.ts";
 import { readPace } from "../tasks/prepare.ts";
 import { addPoint, editPoint, removePoint } from "./points.ts";
 import { isRegistered } from "../leaders/model.ts";
+import { actsForUser } from "../../shared/user.ts";
 
 type Query = {
   as?: string;
@@ -189,7 +190,7 @@ export function registerOrgRoutes(app: FastifyInstance, db: DatabaseSync) {
   // 旧 role 字符串回填 node_id：默认预览，apply 只有你能执行。
   app.post("/api/org/link-roles", { bodyLimit: 1024 }, (request) => {
     const apply = body(request.body).apply === true;
-    if (apply && actor(request.query) !== "u1")
+    if (apply && !actsForUser(actor(request.query)))
       throw new Problem(403, "org link-roles --apply 只有你能执行");
     return linkRoles(db, apply);
   });

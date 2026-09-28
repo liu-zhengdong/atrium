@@ -4,7 +4,6 @@ import YAML from "yaml";
 import {
   exportBoundaries,
   parseBoundaries,
-  PARAM_KEYS,
   type Boundary,
   type ParamKey,
 } from "../org/boundaries.ts";
@@ -18,23 +17,21 @@ import { importMark, markImported } from "./marks.ts";
  * 而旧的 `~/Atrium/charter.md` frontmatter 里有，就导入一次（留章程修订）；之后不再读这个文件。
  */
 
-/** 旧章程 budget 下的键 → 根章程边界参数。money 是旧写法。 */
-const LEGACY_KEYS: Record<string, ParamKey> = {
+/** 旧章程 budget 下的键 → 根章程边界参数。money 是旧写法；磁盘下限不再使用（u1 09-28 定），读到就跳过。 */
+type Imported = Exclude<ParamKey, "disk_min_free_gb">;
+const LEGACY_KEYS: Record<string, Imported | null> = {
   quota_reserve_percent: "quota_reserve_percent",
-  disk_min_free_gb: "disk_min_free_gb",
+  disk_min_free_gb: null,
   money: "money_yuan_max",
   money_yuan_max: "money_yuan_max",
 };
+const IMPORTED: Imported[] = ["quota_reserve_percent", "money_yuan_max"];
 
 /** 导入后的边界条目：与 org import 以来根章程里的写法一致。 */
-const ENTRY: Record<ParamKey, { id: string; summary: string }> = {
+const ENTRY: Record<Imported, { id: string; summary: string }> = {
   quota_reserve_percent: {
     id: "quota-reserve",
     summary: "每个订阅账号的周期额度留给用户",
-  },
-  disk_min_free_gb: {
-    id: "disk-floor",
-    summary: "本机磁盘可用低于下限就暂停新任务，先清理组织自己的临时产物",
   },
   money_yuan_max: { id: "money", summary: "花费上限（元）" },
 };
@@ -73,6 +70,7 @@ export function parseCharterBudget(text: string): CharterBudget {
   const seen = new Set<ParamKey>();
   for (const [name, value] of Object.entries(budget)) {
     const key = LEGACY_KEYS[name];
+    if (key === null) continue;
     if (!key) {
       problems.push(`budget.${name} 不认识，跳过`);
       continue;
@@ -142,7 +140,7 @@ export function importCharterBudget(
     : undefined;
   if (!root) return { status: "no_root" };
   const own = ownBoundaries(db, root.id);
-  if (PARAM_KEYS.every((key) => own.some((e) => e.param?.key === key))) {
+  if (IMPORTED.every((key) => own.some((e) => e.param?.key === key))) {
     markImported(db, "charter_budget", "根章程已有全部预算");
     return { status: "nothing" };
   }

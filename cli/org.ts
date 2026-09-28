@@ -17,16 +17,19 @@ import {
 import type { Point } from "../server/org/points.ts";
 import type { LeaderBrief } from "../server/leaders/model.ts";
 import { wakeText } from "./leaders.ts";
+import { defaultActor } from "./worker-guard.ts";
 
 const str = (values: Values, key: string) =>
   typeof values[key] === "string" ? (values[key] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
 const path = (value: string) => encodeURIComponent(value);
-const as = (values: Values) =>
-  str(values, "as") ? `?as=${path(str(values, "as")!)}` : "";
+const as = (values: Values) => {
+  const who = str(values, "as") ?? defaultActor();
+  return who ? `?as=${path(who)}` : "";
+};
 const options = { as: { type: "string" as const } };
 const person = (value: string | null) =>
-  value === "u1" ? "你" : (value ?? "无");
+  value === "u1" ? "你" : value === "secretary" ? "秘书" : (value ?? "无");
 export function formatOrgChanges(
   changes: Record<string, { before: unknown; after: unknown; diff?: string }>,
 ): string {

@@ -3,6 +3,8 @@
  * 目标树与组织树正交：组织树是「谁」，目标树是「要什么」；权限借组织树的 leader 链判定。
  */
 
+import { actsForUser } from "../../shared/user.ts";
+
 export const GOAL_STATUSES = [
   "planned",
   "active",
@@ -71,7 +73,7 @@ export function leadsNode(
   nodeId: number,
   actor: string,
 ): boolean {
-  if (actor === "u1") return true;
+  if (actsForUser(actor)) return true;
   const seen = new Set<number>();
   let current = org.find((n) => n.id === nodeId);
   while (current && !seen.has(current.id)) {
@@ -94,7 +96,7 @@ export function canChange(
   actor: string,
 ): Permission {
   if (goal.parent_id === null)
-    return actor === "u1"
+    return actsForUser(actor)
       ? { ok: true }
       : { ok: false, reason: "顶层目标只有你（u1）能改" };
   return leadsNode(org, goal.node_id, actor)
@@ -117,7 +119,7 @@ export function canCreate(
   actor: string,
 ): Permission {
   if (!parent)
-    return actor === "u1"
+    return actsForUser(actor)
       ? { ok: true }
       : { ok: false, reason: "顶层目标只有你（u1）能建" };
   if (!leadsNode(org, nodeId, actor))

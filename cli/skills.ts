@@ -11,6 +11,7 @@ import { Problem } from "../server/problem.ts";
 import type { Command, Values } from "./main.ts";
 import { printJson } from "./format.ts";
 import { recordNext } from "./contract.ts";
+import { defaultActor } from "./worker-guard.ts";
 
 /**
  * atrium skill：组织技能（#264 第 3b 步）。技能存在 Atrium，派活时按节点绑定与执行者档案临时挂载；
@@ -21,11 +22,13 @@ const str = (values: Values, key: string) =>
   typeof values[key] === "string" ? (values[key] as string) : undefined;
 const client = async () => (await import("./service.ts")).connect();
 const path = (value: string) => encodeURIComponent(value);
-const as = (values: Values) =>
-  str(values, "as") ? `?as=${path(str(values, "as")!)}` : "";
+const as = (values: Values) => {
+  const who = str(values, "as") ?? defaultActor();
+  return who ? `?as=${path(who)}` : "";
+};
 const options = { as: { type: "string" as const } };
 const person = (value: string | null) =>
-  value === "u1" ? "你" : (value ?? "无");
+  value === "u1" ? "你" : value === "secretary" ? "秘书" : (value ?? "无");
 const out = (json: boolean, value: unknown, text: string, next: string) => {
   if (json) printJson(value);
   else console.log(text);

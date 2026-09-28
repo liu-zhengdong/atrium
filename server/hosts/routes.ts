@@ -6,6 +6,7 @@ import type { TaskRunner } from "../tasks/runner.ts";
 import { TOOLS } from "../tasks/adapters/types.ts";
 import { authPolicy } from "../auth-policy.ts";
 import { resolveActor } from "../actor.ts";
+import { LIMITS, SLUG_RE } from "../skills/model.ts";
 import {
   joinCodeOf,
   joinCodeValid,
@@ -37,6 +38,7 @@ const info = z.object({
   clis: z.partialRecord(z.enum(TOOLS), cli),
   max_workers: z.number().int().min(1).max(4096).nullable(),
   max_checks: z.number().int().min(1).max(64).optional(),
+  skills: z.boolean().optional(),
 });
 const load = z.object({
   load: z.number().min(0).max(1e6),
@@ -44,6 +46,37 @@ const load = z.object({
   busy: z.string().max(500).nullable(),
 });
 const id = z.number().int().min(1).max(1e12);
+/** 代理传回的技能副本（t232）：内容在生成提议时再按技能规则校验。 */
+const skillReport = z
+  .object({
+    edits: z
+      .array(
+        z.union([
+          z
+            .object({
+              id,
+              slug: z.string().regex(SLUG_RE).max(64),
+              rev: id,
+              files: z.record(
+                z.string().max(400),
+                z.string().max(LIMITS.bytes),
+              ),
+            })
+            .strict(),
+          z
+            .object({
+              id,
+              slug: z.string().regex(SLUG_RE).max(64),
+              rev: id,
+              problem: z.string().max(500),
+            })
+            .strict(),
+        ]),
+      )
+      .max(LIMITS.perTask * 4),
+    notes: z.string().max(LIMITS.proposalReason).optional(),
+  })
+  .strict();
 const run = z.object({
   task: id,
   run: id,
@@ -221,7 +254,8 @@ export function registerHostRoutes(
       .parse(request.body ?? {});
     return remote.quota(host, body);
   });
-  app.post("/api/agent/exit", { bodyLimit: 1024 * 1024 }, (request) => {
+  // 退出上报可能带回改过的技能副本（t232，每个至多 256 KB、至多 LIMITS.perTask 个的若干轮）。
+  app.post("/api/agent/exit", { bodyLimit: 8 * 1024 * 1024 }, (request) => {
     const host = hostOf(request);
     const body = z
       .object({
@@ -238,6 +272,7 @@ export function registerHostRoutes(
           .string()
           .max(512 * 1024)
           .optional(),
+        skills: skillReport.optional(),
       })
       .strict()
       .parse(request.body ?? {});

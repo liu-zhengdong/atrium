@@ -10,8 +10,10 @@ import {
   accessSync,
   chmodSync,
   constants,
+  linkSync,
   readFileSync,
   statSync,
+  symlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -23,6 +25,7 @@ import {
   hiddenLaunch,
   isBatchFile,
   killTreePlan,
+  linkKinds,
   launchInvocation,
   pathDelimiter,
   shellInvocation,
@@ -244,6 +247,30 @@ export function spawnShell(
 /** 凭据文件只留给本人：Unix 设 0600；Windows 没有这套权限位，数据目录在用户目录下，由 ACL 继承保护。 */
 export function restrictToOwner(path: string) {
   if (process.platform !== "win32") chmodSync(path, 0o600);
+}
+
+/**
+ * 把已有的文件或目录链到 target（按 `linkKinds` 依次试：Windows 建不了软链时目录用 junction、文件用硬链接）；
+ * 都不成抛最后一个错误。
+ */
+export function linkPath(source: string, target: string) {
+  const directory = statSync(source).isDirectory();
+  let last: unknown;
+  for (const kind of linkKinds(process.platform, directory)) {
+    try {
+      if (kind === "hardlink") linkSync(source, target);
+      else
+        symlinkSync(
+          source,
+          target,
+          kind === "junction" ? "junction" : directory ? "dir" : "file",
+        );
+      return kind;
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last;
 }
 
 /** 只把私钥路径交给 SSH；环境仍按服务白名单过滤，绝不读取私钥内容。 */

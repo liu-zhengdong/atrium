@@ -232,6 +232,35 @@ function queuedReason(events: TaskEventRow[]) {
   return "等待执行者可用后自动拉起";
 }
 
+/**
+ * 这次拉起没挂上组织技能（t232）：最近一次 start 之前、上一次 start 之后记的 skills_skipped；
+ * 没有就返回 null，回执与以前一样。
+ */
+export function skippedSkillsLine(events: readonly TaskEventRow[]) {
+  let last = -1;
+  let prev = -1;
+  events.forEach((event, index) => {
+    if (event.kind !== "start") return;
+    prev = last;
+    last = index;
+  });
+  if (last < 0) return null;
+  const skipped = events
+    .slice(prev + 1, last)
+    .findLast((event) => event.kind === "skills_skipped");
+  if (!skipped?.detail) return null;
+  try {
+    const detail = JSON.parse(skipped.detail) as {
+      reason?: unknown;
+      skills?: unknown;
+    };
+    const skills = Array.isArray(detail.skills) ? detail.skills.join("、") : "";
+    return `组织技能没挂上${skills ? `（${skills}）` : ""}：${typeof detail.reason === "string" ? detail.reason : "原因不明"}`;
+  } catch {
+    return null;
+  }
+}
+
 const line = (task: TaskNode) =>
   task.rollup
     ? [
@@ -1153,6 +1182,9 @@ const run: Command = {
           ...urgentLines(task),
           ...laneLines(result),
           ...pickLines(result.pick),
+          ...(result.queued ? [] : [skippedSkillsLine(task.events)]).filter(
+            (text): text is string => !!text,
+          ),
         ].join("\n"),
       );
     recordNext(`等结果：atrium task wait ${task.ref}`);
@@ -1238,7 +1270,9 @@ function hostPickLines(hosts: HostPick[] | undefined, worker: string | null) {
         h.status,
         `${h.running}/${h.max ?? "不限"}`,
         h.fit === "ok"
-          ? "能接"
+          ? h.reason
+            ? `能接（${h.reason}）`
+            : "能接"
           : h.fit === "later"
             ? `排队：${h.reason}`
             : `不能接：${h.reason}`,

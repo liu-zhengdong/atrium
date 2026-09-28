@@ -2,6 +2,11 @@ import type { Tool } from "../tasks/adapters/types.ts";
 import type { LocalCheck } from "../tasks/local-check.ts";
 import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
 import type { ReaderOutcome } from "../quota-readers/index.ts";
+import type {
+  SkillCopy,
+  SkillMountAck,
+  SkillReport,
+} from "../skills/remote.ts";
 import type { AgentRun, HostInfo, HostLoadReport } from "./state.ts";
 
 /**
@@ -37,6 +42,11 @@ export type Assignment = {
    * 只在这条指令里（服务与代理都只放内存），代理不落盘、不写日志。
    */
   secrets?: Record<string, string>;
+  /**
+   * 这次要挂的组织技能（t232）：代理挂在任务目录里，把「本次挂载的技能」段填进提示词的占位处。
+   * 只发给上报了 `skills` 能力的代理。
+   */
+  skills?: SkillCopy[];
 };
 
 export type AgentCommand =
@@ -95,6 +105,8 @@ export type LaunchAck =
         cwd: string;
         input?: "stream-json";
       };
+      /** 带了技能时的挂载结果（t232）。 */
+      skills?: SkillMountAck;
     }
   | { ok: false; error: string };
 
@@ -132,6 +144,8 @@ export type ExitBody = {
   size: number;
   /** codex 这类工具写的最后消息文件内容。 */
   last_message?: string;
+  /** 执行者改过的技能副本（t232）：服务落到本机任务目录，收尾时生成修订提议。 */
+  skills?: SkillReport;
 };
 
 /** 检查日志按指令 id 续传，偏移是代理这边检查日志的字节位置。 */

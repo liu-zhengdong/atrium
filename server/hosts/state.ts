@@ -72,6 +72,8 @@ export type HostInfo = {
   max_checks?: number;
   /** 代理这台一次检查最多跑多久（毫秒，ATRIUM_CHECK_TIMEOUT_MINUTES）；旧版代理不报，按服务的缺省。 */
   check_timeout_ms?: number;
+  /** 代理能在那台挂组织技能（t232）；旧版代理不报，不给它下发技能。 */
+  skills?: boolean;
 };
 
 /** 代理每轮长轮询带上的负载。 */
@@ -146,6 +148,8 @@ export type HostCandidate = {
   max: number | null;
   /** 暂不能再派的原因（本机闸门、代理报的太忙）；能派为 null。 */
   busy: string | null;
+  /** 能挂组织技能（t232）：本机总能；远程看代理上报。缺省按能。 */
+  skills?: boolean;
 };
 
 export type HostNeed = {
@@ -157,6 +161,8 @@ export type HostNeed = {
   localOnly: string | null;
   /** 任务写了避开的主机（t215 `--avoid-host`）；自动挑与指定都不派过去。 */
   avoid?: readonly number[];
+  /** 要带组织技能（t232）：自动挑时优先能挂技能的主机。 */
+  skills?: boolean;
 };
 
 export type HostFit =
@@ -240,6 +246,7 @@ export const crowded = (c: HostCandidate) =>
 /**
  * 挑主机：指定了就只看那台（接不了拒绝，满了排队）；没指定在能接的里挑最空的，一样空时本机优先；
  * 紧急的先挑不满不忙的（不用抢占），同样时本机优先；任务写了避开的主机一律不派（t215）；
+ * 要带组织技能的先挑能挂技能的（t232，挂不了的仍能接，只排在后面）；
  * 都满或太忙时排队，本机的原因优先（和只有本机时的回执一致）。
  */
 export function chooseHost(
@@ -268,6 +275,9 @@ export function chooseHost(
     .sort(
       (a, b) =>
         (need.urgent ? Number(crowded(a)) - Number(crowded(b)) : 0) ||
+        (need.skills
+          ? Number(b.skills !== false) - Number(a.skills !== false)
+          : 0) ||
         (need.urgent
           ? Number(b.kind === "local") - Number(a.kind === "local")
           : 0) ||

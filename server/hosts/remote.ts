@@ -18,6 +18,7 @@ import {
 import type { ReaderOutcome } from "../quota-readers/index.ts";
 import type { Exit } from "../tasks/outcome.ts";
 import type { LeftoverKill, LeftoverTarget } from "../tasks/leftovers.ts";
+import { REMOTE_REPORT } from "../skills/remote.ts";
 import {
   beginRun,
   hostRow,
@@ -189,7 +190,12 @@ export class RemoteHosts {
   }
 
   /** 这台主机的系统与数据目录；没接入或离线时报错。 */
-  site(host: number): { os: string; data_dir: string } {
+  site(host: number): {
+    os: string;
+    data_dir: string;
+    skills: boolean;
+    version: string;
+  } {
     const row = hostRow(this.db, host);
     if (row.kind !== "remote" || row.removed_at !== null)
       throw new Problem(
@@ -213,7 +219,12 @@ export class RemoteHosts {
     }
     if (!info?.data_dir || !info.os)
       throw new Problem(409, `${hostRef(host)} 还没上报机器信息`, "conflict");
-    return { os: info.os, data_dir: info.data_dir };
+    return {
+      os: info.os,
+      data_dir: info.data_dir,
+      skills: info.skills === true,
+      version: info.version,
+    };
   }
 
   /**
@@ -478,6 +489,13 @@ export class RemoteHosts {
       writeFileSync(
         join(taskDir(this.data, body.task), "last-message.md"),
         body.last_message,
+        { mode: 0o600 },
+      );
+    // 改过的技能副本（t232）：落到本机任务目录，收尾回收时生成修订提议。
+    if (body.skills)
+      writeFileSync(
+        join(taskDir(this.data, body.task), REMOTE_REPORT),
+        `${JSON.stringify(body.skills)}\n`,
         { mode: 0o600 },
       );
     const verdict = this.hooks.exited(

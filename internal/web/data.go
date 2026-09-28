@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
@@ -449,27 +451,27 @@ func loadDecisions(ctx context.Context, q store.Querier) ([]DecisionRow, error) 
 // Legion 是执行者页：额度、机器、组合表现。
 type Legion struct {
 	Accounts []Account `json:"accounts"`
+	Reserve  int       `json:"reserve"`
 	Hosts    []Host    `json:"hosts"`
 	Perf     []Perf    `json:"perf"`
 }
 
-// Account 是一个账号的额度（quota 包实现后填）。Reserve 是给用户自己留的百分比。
+// Account 是一个账号的额度。Left 是剩下的百分比（没读数为 nil）。
 type Account struct {
-	Name    string `json:"name"`
-	Left    int    `json:"left"`
-	Reserve int    `json:"reserve"`
-	Note    string `json:"note"`
+	Name string `json:"name"`
+	Left *int   `json:"left"`
+	Note string `json:"note"`
 }
 
 // Host 是一台机器与它的空位。
 type Host struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Slots    int    `json:"slots"`
-	Busy     int    `json:"busy"`
-	Online   bool   `json:"online"`
-	LastSeen *int64 `json:"last_seen,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Slots  int    `json:"slots"`
+	Busy   int    `json:"busy"`
+	Online bool   `json:"online"`
+	Status string `json:"status"`
 }
 
 // Perf 是一个执行者组合的交付表现：完成件数与一次通过（没被交回过）的比例。
@@ -479,32 +481,34 @@ type Perf struct {
 	FirstPass int    `json:"first_pass"` // 百分比
 }
 
-func loadLegion(ctx context.Context, q store.Querier, now int64) (Legion, error) {
+func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
 	out := Legion{Accounts: []Account{}, Hosts: []Host{}, Perf: []Perf{}}
-	rows, err := q.QueryContext(ctx, `SELECT h.id, h.name, h.kind, h.slots, h.last_seen_at,
-		(SELECT count(*) FROM tasks t WHERE t.host = h.id AND t.status = 'running')
-		FROM hosts h ORDER BY h.kind = 'remote', h.created_at, h.id LIMIT 200`)
+	ov, err := quota.Read(ctx, db)
 	if err != nil {
 		return out, err
 	}
-	for rows.Next() {
-		var h Host
-		var seen sql.NullInt64
-		if err := rows.Scan(&h.ID, &h.Name, &h.Kind, &h.Slots, &seen, &h.Busy); err != nil {
-			rows.Close()
-			return out, err
-		}
-		if seen.Valid {
-			h.LastSeen = &seen.Int64
-		}
-		h.Online = hostOnline(h.Kind, h.LastSeen, now)
-		out.Hosts = append(out.Hosts, h)
+	out.Reserve = ov.Reserve
+	for _, l := range ov.Lines {
+		out.Accounts = append(out.Accounts, account(l, now))
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	list, err := hosts.List(ctx, db)
+	if err != nil {
 		return out, err
 	}
-	rows, err = q.QueryContext(ctx, `SELECT t.worker, count(*),
+	busy, err := runningByHost(ctx, db)
+	if err != nil {
+		return out, err
+	}
+	for _, h := range list {
+		c := hosts.Connection(h.Kind, h.Joined, h.JoinExpires, h.LastSeen, false, now)
+		row := Host{ID: h.ID, Name: h.Name, Kind: h.Kind, Slots: slots(h), Busy: busy[h.ID],
+			Online: c == hosts.ConnLocal || c == hosts.ConnOnline, Status: hosts.ConnText(c, false, h.LastSeen, h.JoinExpires, now)}
+		if h.Kind == "remote" && !h.Joined && h.JoinExpires == 0 {
+			row.Status = "还没接入"
+		}
+		out.Hosts = append(out.Hosts, row)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT t.worker, count(*),
 		sum(CASE WHEN EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'bounce') THEN 0 ELSE 1 END)
 		FROM tasks t WHERE t.status = 'done' AND t.worker <> '' GROUP BY t.worker ORDER BY 2 DESC, 1 LIMIT 50`)
 	if err != nil {
@@ -519,6 +523,24 @@ func loadLegion(ctx context.Context, q store.Querier, now int64) (Legion, error)
 		}
 		p.FirstPass = clean * 100 / p.Delivered
 		out.Perf = append(out.Perf, p)
+	}
+	return out, rows.Err()
+}
+
+func runningByHost(ctx context.Context, q store.Querier) (map[string]int, error) {
+	rows, err := q.QueryContext(ctx, `SELECT host, count(*) FROM tasks WHERE status = 'running' AND host <> '' GROUP BY host LIMIT 500`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var h string
+		var n int
+		if err := rows.Scan(&h, &n); err != nil {
+			return nil, err
+		}
+		out[h] = n
 	}
 	return out, rows.Err()
 }

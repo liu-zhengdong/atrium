@@ -250,23 +250,19 @@ func skillFiles(raw string) (map[string]string, error) {
 	return m, nil
 }
 
-// hostSlots：并发空位取旧 info.max_workers，其次 max_running，都没有为 1。
-func hostSlots(info string, maxRunning *int64) (int, error) {
+// checkHostJSON：机器信息与仓库清单要是 hosts 包读得懂的 JSON（信息是对象、仓库是文字数组）。
+func checkHostJSON(info, repos string) error {
 	if info != "" {
-		var v struct {
-			MaxWorkers int `json:"max_workers"`
-		}
-		if err := json.Unmarshal([]byte(info), &v); err != nil {
-			return 0, err
-		}
-		if v.MaxWorkers > 0 {
-			return v.MaxWorkers, nil
+		var m map[string]any
+		if err := json.Unmarshal([]byte(info), &m); err != nil {
+			return fmt.Errorf("info 不是 JSON 对象：%w", err)
 		}
 	}
-	if maxRunning != nil && *maxRunning > 0 {
-		return int(*maxRunning), nil
+	var list []string
+	if err := json.Unmarshal([]byte(repos), &list); err != nil {
+		return fmt.Errorf("repos 不是文字数组：%w", err)
 	}
-	return 1, nil
+	return nil
 }
 
 // safeRel 判定清单里的相对路径可以落盘：不许绝对路径、..、隐藏段。

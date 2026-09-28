@@ -17,8 +17,10 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -98,6 +100,27 @@ func TestStepHolder(t *testing.T) {
 	}
 }
 
+func TestAccountAndSlots(t *testing.T) {
+	used, reset := 37.6, 30.0
+	a := account(quota.Line{Pace: quota.Pace{Account: "claude", UsedPercent: &used, HoursToReset: &reset}}, 0)
+	if a.Left == nil || *a.Left != 62 || a.Note != "1 天后重置" {
+		t.Errorf("有读数：%+v %v", a, *a.Left)
+	}
+	a = account(quota.Line{Pace: quota.Pace{Account: "codex"}, Note: "没登录"}, 0)
+	if a.Left != nil || a.Note != "没登录" {
+		t.Errorf("没读数：%+v", a)
+	}
+	a = account(quota.Line{Pace: quota.Pace{Account: "x", UsedPercent: &used, Stale: true}, Hold: &quota.Hold{Until: 10}}, 5)
+	if a.Note != "用尽，暂不派 · 读数旧了" {
+		t.Errorf("用尽：%q", a.Note)
+	}
+	for want, h := range map[int]hosts.Host{4: {MaxRunning: 4, Info: &hosts.Info{MaxWorkers: 6}}, 6: {Info: &hosts.Info{MaxWorkers: 6}}, 1: {}} {
+		if got := slots(h); got != want {
+			t.Errorf("空位：%d 想要 %d", got, want)
+		}
+	}
+}
+
 func TestTopGroup(t *testing.T) {
 	parents := map[string]string{"o1": "", "o2": "o1", "o5": "o2", "o8": "o5", "o9": ""}
 	for id, want := range map[string]string{"o1": "o1", "o2": "o2", "o5": "o2", "o8": "o2", "o9": "o9"} {
@@ -133,6 +156,9 @@ func TestBrowserInvocation(t *testing.T) {
 
 // 整条路径：取链接（要用户令牌）→ 打开链接换 cookie → 读接口；不带 cookie、错 Host、码用两次都拒绝。
 func TestRoutes(t *testing.T) {
+	// 额度读取不碰开发者本机的登录与 OpenQuota。
+	t.Setenv("ATRIUM_QUOTA_READERS", "off")
+	t.Setenv("ATRIUM_OPENQUOTA_BIN", filepath.Join(t.TempDir(), "no-openquota"))
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
 	if err != nil {

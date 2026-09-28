@@ -11,14 +11,16 @@ import (
 )
 
 // Command 是 atrium import：不经服务，直接写新数据目录的库（新库必须是空的）。
-// 由 web 模块代为注册（cmd/atrium 的模块列表不为一次性命令单开一格）。
+// 由 web 模块代为注册（cmd/atrium 的模块列表不为一次性命令单开一格）。命令表有 60 条上限，它不占名额。
 func Command() cli.Command {
 	return cli.Command{
 		Path:    "import",
 		Summary: "一次性从旧版（TS）库只读导入部门、要点、决定、负责人、备忘、技能、资料、执行者档案、机器",
 		Flags:   []cli.Flag{{Name: "from", Value: "旧库路径", Help: "缺省 ~/.atrium/atrium.sqlite；旧库只读打开，不改动"}},
 		Local:   true,
-		Run:     run,
+		// 切换时跑一次，之后再没用：不列在帮助里（atrium import --help 照常可看）。
+		Hidden: true,
+		Run:    run,
 	}
 }
 

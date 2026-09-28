@@ -100,7 +100,8 @@ func Commands(t *cli.Table) {
 		}})
 	t.Group("agent", "远程代理")
 	dataFlag := cli.Flag{Name: "data", Value: "目录", Help: "代理数据目录（缺省 ATRIUM_AGENT_DATA 或 ~/.atrium-agent）"}
-	t.Add(cli.Command{Path: "agent", Summary: "在远程机器上跑代理（前台）：第一次用 --server 与 --token 接入", Local: true,
+	// 代理入口与 serve 一样不列在帮助里：host add 的回执给出完整命令，装成服务后由 agent install 拉起。
+	t.Add(cli.Command{Path: "agent", Summary: "在远程机器上跑代理（前台）：第一次用 --server 与 --token 接入", Local: true, Hidden: true,
 		Flags: []cli.Flag{
 			{Name: "server", Value: "URL", Help: "服务地址，如 http://127.0.0.1:4320"},
 			{Name: "token", Value: "接入码", Help: "host add 给的一次性接入码"},

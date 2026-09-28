@@ -547,9 +547,10 @@ func importProfiles(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) e
 	return rows.Err()
 }
 
+// importHosts 搬没移除的机器：名字、种类、仓库、并发上限、机器信息原样；令牌与接入码不搬，远程机器要重新接入。
 func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) error {
-	rows, err := old.QueryContext(ctx, `SELECT id, name, kind, COALESCE(info, ''), max_running, removed_at IS NOT NULL, last_seen_at, created_at
-		FROM hosts ORDER BY id LIMIT 10000`)
+	rows, err := old.QueryContext(ctx, `SELECT id, name, kind, COALESCE(info, ''), COALESCE(repos, '[]'), max_running,
+		removed_at IS NOT NULL, last_seen_at, created_at FROM hosts ORDER BY id LIMIT 10000`)
 	if err != nil {
 		return err
 	}
@@ -558,10 +559,10 @@ func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 	remote := 0
 	for rows.Next() {
 		var id, at int64
-		var name, kind, info string
+		var name, kind, info, repos string
 		var maxRunning, seen sql.NullInt64
 		var removed bool
-		if err := rows.Scan(&id, &name, &kind, &info, &maxRunning, &removed, &seen, &at); err != nil {
+		if err := rows.Scan(&id, &name, &kind, &info, &repos, &maxRunning, &removed, &seen, &at); err != nil {
 			return err
 		}
 		ref := fmt.Sprintf("h%d", id)
@@ -570,20 +571,11 @@ func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 			it.Notes = append(it.Notes, ref+" 已移除")
 			continue
 		}
-		var mr *int64
-		if maxRunning.Valid {
-			mr = &maxRunning.Int64
+		if err := checkHostJSON(info, repos); err != nil {
+			return fmt.Errorf("机器 %s：%w", ref, err)
 		}
-		slots, err := hostSlots(info, mr)
-		if err != nil {
-			return fmt.Errorf("机器 %s 的 info：%w", ref, err)
-		}
-		var lastSeen any
-		if seen.Valid {
-			lastSeen = seen.Int64
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO hosts (id, name, kind, slots, last_seen_at, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			ref, name, kind, slots, lastSeen, at); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO hosts (id, name, kind, repos, max_running, info, last_seen_at, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ref, name, kind, repos, nullInt(maxRunning), info, nullInt(seen), at); err != nil {
 			return err
 		}
 		if kind == "remote" {
@@ -596,6 +588,13 @@ func importHosts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 	}
 	add(rep, it)
 	return rows.Err()
+}
+
+func nullInt(n sql.NullInt64) any {
+	if n.Valid {
+		return n.Int64
+	}
+	return nil
 }
 
 // setCounters：各短号计数器接着旧库的最大值往后（任务、选项单、周期任务虽不搬，号也不复用）。

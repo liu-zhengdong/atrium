@@ -149,13 +149,15 @@ async function renderRecords() {
 /* 执行者 */
 async function renderLegion() {
   const d = await api("legion");
-  const reserve = d.accounts.length ? d.accounts[0].reserve : 0;
-  const accts = d.accounts.length ? d.accounts.map(a => `
-    <div class="acct"><span>${esc(a.name)}</span><div class="bar"><i style="width:${a.left}%;${a.left < 20 ? "background:var(--wait)" : ""}"></i><span class="reserve" style="width:${a.reserve}%"></span></div>
-    <span class="r">剩 <span class="num">${a.left}%</span>${a.note ? " · " + esc(a.note) : ""}</span></div>`).join("") : `<div class="empty">还没有额度读数</div>`;
+  const reserve = d.reserve;
+  const accts = d.accounts.length ? d.accounts.map(a => {
+    const left = a.left ?? 0;
+    return `<div class="acct"><span>${esc(a.name)}</span><div class="bar"><i style="width:${left}%;${left < 20 ? "background:var(--wait)" : ""}"></i><span class="reserve" style="width:${reserve}%"></span></div>
+    <span class="r">${a.left === null ? esc(a.note || "没有读数") : `剩 <span class="num">${a.left}%</span>${a.note ? " · " + esc(a.note) : ""}`}</span></div>`;
+  }).join("") : `<div class="empty">还没有额度读数</div>`;
   const hosts = d.hosts.length ? `<div class="hosts">${d.hosts.map(h => `
     <div class="host"><div class="n"><span class="dot ${h.online ? (h.busy ? "run" : "idle") : "off"}"></span><span class="id">${esc(h.id)}</span>${esc(h.name)}</div>
-    <div class="s">${h.kind === "local" ? "本机" : h.online ? "远程 · 在线" : h.last_seen ? "远程 · " + ago(h.last_seen) + "前在线" : "远程 · 还没接入"} · ${h.busy}/${h.slots} 在用</div>
+    <div class="s">${esc(h.status)} · ${h.busy}/${h.slots} 在用</div>
     <div class="slots">${Array.from({ length: Math.min(h.slots, 32) }, (_, i) => `<i class="${i < h.busy ? "on" : ""}"></i>`).join("")}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有登记机器</div>`;
   const perf = d.perf.length ? `<div class="tablewrap"><table class="perf"><tr><th>组合</th><th>交付</th><th>一次通过</th></tr>${d.perf.map(p => `

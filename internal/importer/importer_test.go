@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -83,14 +84,11 @@ func TestDecisionSkip(t *testing.T) {
 }
 
 func TestSmallRules(t *testing.T) {
-	if n, _ := hostSlots(`{"max_workers":6}`, nil); n != 6 {
-		t.Errorf("max_workers：%d", n)
+	if checkHostJSON(`{"max_workers":6}`, `["*"]`) != nil || checkHostJSON("", `[]`) != nil {
+		t.Error("合法的机器信息被拒")
 	}
-	if n, _ := hostSlots("", i64(3)); n != 3 {
-		t.Errorf("max_running：%d", n)
-	}
-	if n, _ := hostSlots("", nil); n != 1 {
-		t.Errorf("缺省：%d", n)
+	if checkHostJSON(`[1]`, `["*"]`) == nil || checkHostJSON("", `"*"`) == nil {
+		t.Error("坏的机器信息应报错")
 	}
 	for p, ok := range map[string]bool{"a/b.md": true, "README.md": true, "../x": false, "/etc/passwd": false,
 		"a/../../x": false, ".git/config": false, "a//b": false, `a\b`: false, "": false} {
@@ -123,7 +121,7 @@ CREATE TABLE org_skills (id INTEGER PRIMARY KEY, slug TEXT, rev INTEGER, files T
 CREATE TABLE materials (id INTEGER PRIMARY KEY, node_id INTEGER, kind TEXT, name TEXT, note TEXT DEFAULT '', version INTEGER, bytes INTEGER, created_by TEXT, created_at INTEGER, archived_at INTEGER, superseded_by INTEGER);
 CREATE TABLE material_versions (material_id INTEGER, version INTEGER, manifest TEXT);
 CREATE TABLE worker_profiles (layer TEXT, name TEXT, source TEXT, updated_by TEXT, updated_at INTEGER);
-CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, info TEXT, max_running INTEGER, removed_at INTEGER, last_seen_at INTEGER, created_at INTEGER);
+CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, info TEXT, repos TEXT, max_running INTEGER, removed_at INTEGER, last_seen_at INTEGER, created_at INTEGER);
 CREATE TABLE tasks (id INTEGER PRIMARY KEY);
 CREATE TABLE choices (id INTEGER PRIMARY KEY);
 CREATE TABLE schedules (id INTEGER PRIMARY KEY);
@@ -138,7 +136,7 @@ INSERT INTO org_skills VALUES (1, 'visual-design', 2, '{"SKILL.md":"---\ndescrip
 INSERT INTO materials VALUES (1, 2, 'dir', '设计稿', '原型与截图', 1, 5, 'u1', 11, NULL, NULL);
 INSERT INTO material_versions VALUES (1, 1, '[{"path":"README.md","size":2},{"path":"shots/a.png","size":3}]');
 INSERT INTO worker_profiles VALUES ('harness', 'claude', '---\ntrust: high\n---\n', 'u1', 12);
-INSERT INTO hosts VALUES (1, '本机', 'local', '{"max_workers":6}', NULL, NULL, NULL, 13), (2, '旧', 'remote', NULL, NULL, 99, NULL, 14), (3, 'ggb', 'remote', NULL, 4, NULL, 15, 16);
+INSERT INTO hosts VALUES (1, '本机', 'local', '{"max_workers":6,"node":"v24"}', '["*"]', NULL, NULL, NULL, 13), (2, '旧', 'remote', NULL, '[]', NULL, 99, NULL, 14), (3, 'ggb', 'remote', NULL, '["*"]', 4, NULL, 15, 16);
 INSERT INTO tasks VALUES (306);
 INSERT INTO choices VALUES (3);
 `
@@ -209,8 +207,12 @@ func TestRun(t *testing.T) {
 	if n := count(t, db, `SELECT count(*) FROM points WHERE id = 'k5' AND pos = 1`); n != 1 {
 		t.Error("k5 应是 o2 第 1 条")
 	}
-	if n := count(t, db, `SELECT slots FROM hosts WHERE id = 'h1'`); n != 6 {
-		t.Errorf("h1 空位 %d", n)
+	h1, err := hosts.Get(ctx, db, "h1")
+	if err != nil || h1.Info == nil || h1.Info.MaxWorkers != 6 || h1.Repos[0] != "*" {
+		t.Errorf("h1 用 hosts 包读回：%+v %v", h1, err)
+	}
+	if h3, _ := hosts.Get(ctx, db, "h3"); h3.MaxRunning != 4 || h3.Joined {
+		t.Errorf("h3：%+v（令牌不搬，应未接入）", h3)
 	}
 	if n := count(t, db, `SELECT count(*) FROM worker_profiles WHERE name = 'harness/claude'`); n != 1 {
 		t.Error("档案名应带层名")

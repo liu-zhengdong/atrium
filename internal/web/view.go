@@ -2,10 +2,14 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"strings"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 )
 
 // 本文件是网页的纯判定：任务在五步里走到哪、行尾写什么。持球人用 watch.HolderOf，不在这里另判。
@@ -121,12 +125,44 @@ func startOfDay(now time.Time) int64 {
 	return time.Date(y, m, d, 0, 0, 0, 0, now.Location()).UnixMilli()
 }
 
-// hostOnline：本机总在线；远程机器 2 分钟内报过到算在线。
-func hostOnline(kind string, lastSeen *int64, now int64) bool {
-	if kind == "local" {
-		return true
+// slots 是机器的并发空位：登记的上限优先，其次机器按核数报的上限，都没有算 1。
+func slots(h hosts.Host) int {
+	switch {
+	case h.MaxRunning > 0:
+		return h.MaxRunning
+	case h.Info != nil && h.Info.MaxWorkers > 0:
+		return h.Info.MaxWorkers
 	}
-	return lastSeen != nil && now-*lastSeen < 2*60*1000
+	return 1
+}
+
+// account 把一行额度写成页面上的一条：剩多少、什么时候重置或为什么没读数。
+func account(l quota.Line, now int64) Account {
+	a := Account{Name: l.Account}
+	if l.UsedPercent != nil {
+		left := int(math.Round(100 - *l.UsedPercent))
+		a.Left = &left
+	}
+	var notes []string
+	switch {
+	case l.Hold != nil && l.Hold.Until > now:
+		notes = append(notes, "用尽，暂不派")
+	case l.HoursToReset != nil:
+		h := *l.HoursToReset
+		if h < 24 {
+			notes = append(notes, fmt.Sprintf("%.0f 小时后重置", math.Max(1, math.Round(h))))
+		} else {
+			notes = append(notes, fmt.Sprintf("%.0f 天后重置", math.Round(h/24)))
+		}
+	}
+	if l.Stale {
+		notes = append(notes, "读数旧了")
+	}
+	if a.Left == nil && l.Note != "" {
+		notes = append(notes, l.Note)
+	}
+	a.Note = strings.Join(notes, " · ")
+	return a
 }
 
 // topGroup 返回 id 所在的「一级部门」：根的直接下级（id 本身是根或一级时返回自己）。

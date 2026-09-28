@@ -617,7 +617,11 @@ test("远程主机：主机接入后排队的按此刻空位挪过去，钉不�
   );
   const server = await serve(fx, join(fx.root, "data"), 0, { host });
   t.after(() => server.close());
-  t.after(() => writeFileSync(join(fx.root, "home", "go"), ""));
+  // 失败中途退出也放行假执行者（home 已被清掉时不再写）。
+  t.after(() => {
+    if (existsSync(join(fx.root, "home")))
+      writeFileSync(join(fx.root, "home", "go"), "");
+  });
   const { call, port } = server;
   // h2 不登记仓库：只自动接没有仓库的活；有仓库的要 --host 指定。
   const { code } = (await call("POST", "/api/hosts", { name: "ggb" })).body;

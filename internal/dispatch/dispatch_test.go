@@ -50,6 +50,20 @@ func TestPick(t *testing.T) {
 			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"claude": {Percent: f(90)}}}
 		}(), want: "codex+gpt", reason: "技能指定"},
 		{name: "没人能接", in: PickInput{Risk: "medium", Facts: base()[3:]}, reason: "没有能接的执行者（kimi：没装"},
+		{name: "近 5 次启动失败 2 次往后排", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Fails = 2; return b }()},
+			want: "codex+gpt", reason: "claude+opus 近 5 次拉起启动失败 2 次，排在后面"},
+		{name: "失败 1 次不影响", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Fails = 1; return b }()},
+			want: "claude+opus", reason: "没有额度数据"},
+		{name: "往后排压过技能优先与富余", in: func() PickInput {
+			fs := base()
+			fs[0].Preferred, fs[0].Fails = 1, 3
+			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"claude": {Percent: f(90)}, "codex": {Percent: f(5)}}}
+		}(), want: "codex+gpt", reason: "富余最多（5.0"},
+		{name: "都不稳照常挑并写明", in: PickInput{Risk: "low", Facts: func() []Fact {
+			b := base()[:2]
+			b[0].Fails, b[1].Fails = 2, 4
+			return b
+		}()}, want: "claude+opus", reason: "它近 5 次拉起启动失败 2 次，但没有更稳的能接"},
 	}
 	for _, c := range cases {
 		v := Pick(c.in)
@@ -60,6 +74,12 @@ func TestPick(t *testing.T) {
 	v := Pick(PickInput{Risk: "medium", Facts: base()})
 	if v.Candidates[0].Rank != 1 || v.Candidates[len(v.Candidates)-1].Eligible {
 		t.Errorf("能接的在前、不能接的在后：%+v", v.Candidates)
+	}
+	shaky := base()
+	shaky[0].Fails = 2
+	v = Pick(PickInput{Risk: "low", Facts: shaky})
+	if v.Candidates[2].ID != "claude+opus" || v.Candidates[2].Rank != 3 || !v.Candidates[2].Eligible || v.Candidates[2].Fails != 2 {
+		t.Errorf("近期启动失败多的排在能接的最后、仍能接：%+v", v.Candidates)
 	}
 }
 

@@ -475,6 +475,35 @@ cat >/dev/null
 	}
 }
 
+// 执行者在跑时改说明：当一次捎话走 Tell（kimi 停掉带着补充重派），重派的提示词里有新说明。
+func TestFlowEditDetailTells(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	old := ledger.Tell
+	hook(env)
+	t.Cleanup(func() { ledger.Tell = old })
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "长活", Detail: "做 A"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(ledger.Task) bool { return d.procOf(tk.ID) != nil })
+	detail := "改做 B"
+	if _, err := ledger.Edit(ctx, env.DB, tk.ID, ledger.Patch{Detail: &detail}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(ledger.Task) bool {
+		last, _ := workers.LastRun(ctx, env.DB, tk.ID)
+		return last != nil && last.N == 2 && d.procOf(tk.ID) != nil
+	})
+	prompt, _ := os.ReadFile(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "prompt-2.md"))
+	if !strings.Contains(string(prompt), "说明已改，以最新说明为准") || !strings.Contains(string(prompt), "改做 B") {
+		t.Errorf("重派的提示词应带改过的说明：%s", prompt)
+	}
+}
+
 func must[T any](v T, err error) T {
 	if err != nil {
 		panic(err)

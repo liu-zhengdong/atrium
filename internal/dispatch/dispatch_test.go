@@ -14,6 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -399,5 +400,88 @@ func TestViewIsolated(t *testing.T) {
 	t.Cleanup(func() { isolated = oldIsolated })
 	if v, err = d.view(ctx, tk, "low", nil); err != nil || refused(v, "claude") {
 		t.Errorf("用户的服务照常挑内置工具：%+v %v", v, err)
+	}
+}
+
+// 捎话、改说明给交给负责人拆着的任务：投给负责人一条要处理的 task.assigned（带补充原文），没取走时再来合并成一条；
+// 负责人自己捎、自己改不投。t442 交给 a7 后秘书改了说明，a7 什么也没收到。
+func TestTellLeader(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	env := &app.Env{DB: db, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Pause: &pause.Store{DB: db}}
+	for _, q := range []string{
+		`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`,
+		`INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES ('o1', NULL, '一', 'a1', 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := ledger.Tell
+	hook(env)
+	t.Cleanup(func() { ledger.Tell = old })
+	type row struct {
+		Target, Level, Body string
+		Count               int
+	}
+	pending := func(id string) []row {
+		t.Helper()
+		rows, err := db.Query(`SELECT target, level, body, count FROM events WHERE task = ? AND kind = ? AND acked_at IS NULL ORDER BY id`, id, events.TaskAssigned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []row
+		for rows.Next() {
+			var r row
+			rows.Scan(&r.Target, &r.Level, &r.Body, &r.Count)
+			out = append(out, r)
+		}
+		return out
+	}
+	goal, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "拆活", Owner: "a1"}, "secretary")
+	db.Exec(`UPDATE events SET acked_at = 1 WHERE task = ?`, goal.ID) // 负责人已接走交来的那条
+
+	r, err := Tell(ctx, env, goal.ID, "用户又说：也要改网页", "secretary")
+	if err != nil || r.Via != "leader" {
+		t.Fatalf("应投给负责人：%+v %v", r, err)
+	}
+	got := pending(goal.ID)
+	if len(got) != 1 || got[0].Target != "a1" || got[0].Level != events.Act || !strings.Contains(got[0].Body, `"tell":"用户又说：也要改网页"`) {
+		t.Fatalf("负责人应收到一条要处理的、带补充原文的 task.assigned：%+v", got)
+	}
+	// 还没取走时改说明：走同一条路，合并成一条，正文换成最新的。
+	detail := "新说明"
+	if _, err := ledger.Edit(ctx, db, goal.ID, ledger.Patch{Detail: &detail}, "secretary"); err != nil {
+		t.Fatal(err)
+	}
+	got = pending(goal.ID)
+	if len(got) != 1 || got[0].Count != 2 || !strings.Contains(got[0].Body, `说明已改，以最新说明为准：\n新说明`) {
+		t.Fatalf("没取走时应合并成一条最新的：%+v", got)
+	}
+	// 负责人自己捎、自己改：不投给自己。
+	if _, err := Tell(ctx, env, goal.ID, "记一笔", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	detail = "负责人补的"
+	if _, err := ledger.Edit(ctx, db, goal.ID, ledger.Patch{Detail: &detail}, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if got = pending(goal.ID); len(got) != 1 || got[0].Count != 2 {
+		t.Fatalf("负责人本人操作不投：%+v", got)
+	}
+	h, _ := ledger.History(ctx, db, goal.ID, 20)
+	n := 0
+	for _, e := range h {
+		if e.Kind == "tell" {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Fatalf("捎话都记进经历（两次捎话、一次改说明）：%d", n)
 	}
 }

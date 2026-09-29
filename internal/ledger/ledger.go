@@ -71,6 +71,7 @@ func scanTask(s scanner) (Task, error) {
 const (
 	maxTitle  = 200
 	maxDetail = 20000
+	maxRetell = 3800 // 改说明捎的话里说明最多带几字（捎话上限 4000）
 	maxNote   = 4000
 	maxDeps   = 50
 )
@@ -167,13 +168,55 @@ func handOver(ctx context.Context, tx *sql.Tx, t *Task, p Parties, was, actor st
 	return who, nil
 }
 
-// assigned 给交给它去拆的负责人发一条要处理的 task.assigned（who 为空不发）。
-func assigned(ctx context.Context, tx *sql.Tx, t Task, who, actor string) error {
+// assigned 给交给它去拆的负责人发一条要处理的 task.assigned（who 为空不发）；tell 是交出去之后的捎话（没有为空）。
+// 同一任务还没取走的合并成最新一条（events.KeyOf）。
+func assigned(ctx context.Context, tx *sql.Tx, t Task, who, tell, actor string) error {
 	if who == "" {
 		return nil
 	}
-	return events.Emit(ctx, tx, events.Event{Kind: events.TaskAssigned, Task: t.ID, Dept: t.Org, Target: who,
-		Body: map[string]any{"title": strings.TrimSpace(t.Title)}, By: actor})
+	body := map[string]any{"title": strings.TrimSpace(t.Title)}
+	if tell != "" {
+		body["tell"] = tell
+	}
+	return events.Emit(ctx, tx, events.Event{Kind: events.TaskAssigned, Task: t.ID, Dept: t.Org, Target: who, Body: body, By: actor})
+}
+
+// Tell 是捎话（dispatch.Tell：记经历、投负责人、送到在跑的执行者），dispatch 装配时接上。Edit 改了说明用它送到在做的人。
+var Tell func(ctx context.Context, id, text, by string) error
+
+// RecordTell 在调用方事务里记一条捎话；任务交给负责人拆着（Assignee）的，同时随 task.assigned 投给它。
+// 返回经历编号与投给的负责人（不是交给负责人的为空）。
+func RecordTell(ctx context.Context, tx *sql.Tx, t Task, text, by string) (int64, string, error) {
+	if err := Record(ctx, tx, t.ID, "tell", by, text); err != nil {
+		return 0, "", err
+	}
+	var id int64
+	if err := tx.QueryRowContext(ctx, `SELECT last_insert_rowid()`).Scan(&id); err != nil {
+		return 0, "", err
+	}
+	p, err := PartiesOf(ctx, tx, t.ID)
+	if err != nil {
+		return 0, "", err
+	}
+	who := Assignee(t, p, by)
+	return id, who, assigned(ctx, tx, t, who, text, by)
+}
+
+// Taken 纯判定：改了说明要不要当一次捎话送到——交给负责人拆着的（Assignee），或执行者在跑、还没交付的；
+// 没人在做的下次拉起自然读到最新说明，不用捎。
+func Taken(t Task, p Parties, actor string) bool {
+	return Assignee(t, p, actor) != "" || t.Status == Running && t.Stage == StageNone
+}
+
+// retell 是改了说明后捎的话：以最新说明为准，太长的截断并指向 task show。
+func retell(id, detail string) string {
+	if strings.TrimSpace(detail) == "" {
+		return "说明已清空，以标题为准。"
+	}
+	if r := []rune(detail); len(r) > maxRetell {
+		detail = string(r[:maxRetell]) + "…（全文见 atrium task show " + id + "）"
+	}
+	return "说明已改，以最新说明为准：\n" + detail
 }
 
 // mustOwner：处理人要是已登记的身份。
@@ -350,7 +393,7 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 			return err
 		}
 		id = view.ID
-		return assigned(ctx, tx, view, who, actor)
+		return assigned(ctx, tx, view, who, "", actor)
 	})
 	if err != nil {
 		return Task{}, err
@@ -501,6 +544,7 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 			return Task{}, err
 		}
 	}
+	tell := ""
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		cur, err := Get(ctx, tx, id)
 		if err != nil {
@@ -602,12 +646,20 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 		if err := Record(ctx, tx, id, "edited", actor, string(body)); err != nil {
 			return err
 		}
-		return assigned(ctx, tx, after, who, actor)
+		if p.Detail != nil && *p.Detail != cur.Detail && who == "" && Taken(after, next, actor) {
+			tell = retell(id, *p.Detail)
+		}
+		return assigned(ctx, tx, after, who, "", actor)
 	})
 	if err != nil {
 		return Task{}, err
 	}
 	changed.broadcast()
+	if tell != "" {
+		if err := Tell(ctx, id, tell, actor); err != nil {
+			return Task{}, err
+		}
+	}
 	return Get(ctx, db, id)
 }
 
@@ -698,7 +750,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 				return err
 			}
 		}
-		if err := assigned(ctx, tx, after, who, actor); err != nil {
+		if err := assigned(ctx, tx, after, who, "", actor); err != nil {
 			return err
 		}
 		now := store.Now()

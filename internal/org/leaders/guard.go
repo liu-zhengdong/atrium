@@ -104,7 +104,7 @@ func collect(ctx context.Context, db *store.DB, rule Rule, q *api.Req, body map[
 	bodyDept := func() {
 		for _, k := range []string{"org", "department"} {
 			if v := str(body, k); v != "" {
-				checks = append(checks, Check{What: "部门", Dept: v})
+				checks = append(checks, Check{What: "部门 " + v, Dept: v})
 			}
 		}
 	}
@@ -122,12 +122,12 @@ func collect(ctx context.Context, db *store.DB, rule Rule, q *api.Req, body map[
 			return nil, Forbid("负责人建任务要写归属部门（--org oN）或父任务")
 		}
 	case RuleDeptRef:
-		checks = append(checks, Check{What: "部门", Dept: id})
+		checks = append(checks, Check{What: "部门 " + id, Dept: id})
 	case RuleDeptIntro:
 		if err := IntroOnly(body); err != nil {
 			return nil, err
 		}
-		checks = append(checks, Check{What: "部门", Dept: id})
+		checks = append(checks, Check{What: "部门 " + id, Dept: id})
 	case RulePointRef:
 		err = lookup("要点", "points")
 	case RuleMaterialRef:

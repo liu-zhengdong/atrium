@@ -144,6 +144,7 @@ func depGate(deps []ledger.DepState) (waiting []string, broken *ledger.DepState)
 var brokenLabel = map[ledger.Status]string{ledger.Failed: "失败了", ledger.Cancelled: "已取消"}
 
 // Enqueue 是 task run：核对选项、进派活队列（依赖还没完成的也进，完成后才派）。写死的执行者当场核对档案能不能接，免得排到时才报错。
+// 任务的执行者与机器改成这一轮指定的（自动挑的留空，拉起时由 record 写上）；上一轮是谁留在经历里。
 func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor string) (ledger.Task, error) {
 	if err := o.check(); err != nil {
 		return ledger.Task{}, err
@@ -152,6 +153,10 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 	t, err := ledger.Get(ctx, db, id)
 	if err != nil {
 		return t, err
+	}
+	// 先核对能不能派，免得排队中的任务被覆盖了队列行、再在下面 Apply 被拒时连行删掉。
+	if _, err := ledger.Transition(ledger.State{Status: t.Status, Stage: t.Stage}, ledger.Event{Kind: ledger.Enqueue}); err != nil {
+		return t, api.Conflict("%s：%v", id, err).WithNext("atrium task show " + id)
 	}
 	deps, err := ledger.Deps(ctx, db, id)
 	if err != nil {
@@ -198,7 +203,10 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 		}
 		return t, err
 	}
-	return t, nil
+	if err := ledger.SetFacts(ctx, db, id, ledger.Facts{Worker: &o.Worker, Host: &o.Host}, actor); err != nil {
+		return t, err
+	}
+	return ledger.Get(ctx, db, id)
 }
 
 func summary(o Options) string {

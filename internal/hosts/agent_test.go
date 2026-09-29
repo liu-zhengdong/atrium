@@ -306,12 +306,11 @@ func TestReconnectReconcile(t *testing.T) {
 }
 
 // 这台上标了不可用的「工具+模型」：挑机器不再派给它，同一工具的别的模型照派；到期的不算。
+// 用本机 h1：本机不按上报的 CLIs 判装没装，结果不随跑测试的机器装了什么而变。
 func TestPickSkipsMarked(t *testing.T) {
 	g := newRig(t)
-	a, stop, _ := g.agent(t.TempDir())
-	defer stop()
 	ctx := context.Background()
-	host := a.Cfg.Host
+	host := "h1"
 	now := time.Now()
 	for _, m := range []workers.Mark{
 		{Tool: "grok", Model: "grok-4.6", Host: host, Kind: workers.SignalQuota, Reason: "额度用尽", Until: now.Add(time.Hour).UnixMilli(), Since: now.UnixMilli()},

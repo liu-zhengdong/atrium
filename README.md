@@ -4,7 +4,7 @@
 
 **一支像你一样判断、自己找事、越做越好的 AI 军团。** 你定方向、做判断；军团按组织树层层展开：秘书对你，负责人各管一块，执行者（Claude Code、Codex、OpenCode……）干具体的活，运行时自己查事实、验收、合入、上线。递到你面前的，只有需要你拍板的事。
 
-https://github.com/user-attachments/assets/7a913643-de17-4664-88ee-555ae3ae6798
+https://github.com/user-attachments/assets/dfeb8215-da6d-4cc3-aacf-34857e1f2a1f
 
 ```
 往下：你 → 秘书 → 任务 → 执行者 → PR → 关卡 · 合入 · 上线

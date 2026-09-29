@@ -23,6 +23,7 @@ type Command struct {
 	Path    string
 	Args    string // 位置参数的写法，如 "<tN> <文字>"
 	Summary string // 一行说明
+	Detail  string // 只在这条命令的 --help 里显示的长说明（如输入文件的格式）
 	Flags   []Flag
 	// Local：不经服务就能完成（start、status、stop）。其余命令都经服务 HTTP 完成。
 	Local bool
@@ -160,6 +161,9 @@ func (t *Table) writeCommandHelp(w io.Writer, c *Command) {
 	for _, f := range flags {
 		sig := flagSig(f)
 		fmt.Fprintf(w, "  %s%s  %s\n", sig, strings.Repeat(" ", width-displayWidth(sig)), f.Help)
+	}
+	if c.Detail != "" {
+		fmt.Fprintf(w, "\n%s\n", c.Detail)
 	}
 }
 

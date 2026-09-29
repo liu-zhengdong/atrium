@@ -23,7 +23,6 @@ import (
 
 // 本文件是网页的只读数据：任务与部门走 ledger、org 的读函数；选项单、资料、身份、机器这些
 // 表所属的包还没有读函数，先在这里直接查（只读、参数化、有界）。那些包补了读函数后换成调用。
-// 额度（quota）与持球表（watch）还是桩：接口返回空，界面显示空态。
 
 // Row 是任务列表的一行。
 type Row struct {
@@ -530,6 +529,7 @@ type Legion struct {
 	Reserve  int       `json:"reserve"`
 	Hosts    []Host    `json:"hosts"`
 	Perf     []Perf    `json:"perf"`
+	Window   int       `json:"window"` // 表现统计近几次拉起
 }
 
 // Account 是一个账号的额度。Left 是剩下的百分比（没读数为 nil）。
@@ -550,15 +550,17 @@ type Host struct {
 	Status string `json:"status"`
 }
 
-// Perf 是一个执行者组合的交付表现：完成件数与一次通过（没被交回过）的比例。
+// Perf 是一个「工具+模型」近 workers.StatWindow 次有结果的拉起（与 atrium workers 同一份统计）和此刻挡住它的不可用标记。
 type Perf struct {
-	Worker    string `json:"worker"`
-	Delivered int    `json:"delivered"`
-	FirstPass int    `json:"first_pass"` // 百分比
+	Combo    string         `json:"combo"`
+	Recent   []string       `json:"recent"` // 每次拉起的结果（workers.Out*），新的在前
+	OK       int            `json:"ok"`
+	Launches int            `json:"launches"`
+	Marks    []workers.Mark `json:"marks"`
 }
 
 func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
-	out := Legion{Accounts: []Account{}, Hosts: []Host{}, Perf: []Perf{}}
+	out := Legion{Accounts: []Account{}, Hosts: []Host{}, Perf: []Perf{}, Window: workers.StatWindow}
 	ov, err := quota.Read(ctx, db)
 	if err != nil {
 		return out, err
@@ -584,23 +586,16 @@ func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
 		}
 		out.Hosts = append(out.Hosts, row)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT t.worker, count(*),
-		sum(CASE WHEN EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'bounce') THEN 0 ELSE 1 END)
-		FROM tasks t WHERE t.status = 'done' AND t.worker <> '' GROUP BY t.worker ORDER BY 2 DESC, 1 LIMIT 50`)
+	stats, err := workers.Stats(ctx, db)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var p Perf
-		var clean int
-		if err := rows.Scan(&p.Worker, &p.Delivered, &clean); err != nil {
-			return out, err
-		}
-		p.FirstPass = clean * 100 / p.Delivered
-		out.Perf = append(out.Perf, p)
+	marks, err := workers.Marks(ctx, db, now)
+	if err != nil {
+		return out, err
 	}
-	return out, rows.Err()
+	out.Perf = perfRows(stats, marks)
+	return out, nil
 }
 
 func runningByHost(ctx context.Context, q store.Querier) (map[string]int, error) {

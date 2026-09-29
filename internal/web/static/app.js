@@ -31,6 +31,11 @@ function ago(ms) {
   return date(ms);
 }
 const date = ms => { const t = new Date(ms); return pad(t.getMonth() + 1) + "-" + pad(t.getDate()); };
+// day：今天、明天，更远写 MM-DD
+function day(ms) {
+  const d = Math.round((new Date(ms).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400e3);
+  return d === 0 ? "今天" : d === 1 ? "明天" : date(ms);
+}
 const clock = ms => { const t = new Date(ms); return pad(t.getHours()) + ":" + pad(t.getMinutes()); };
 function size(n) {
   if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + " MB";
@@ -169,19 +174,22 @@ async function renderDept(id, tab) {
 async function renderLegion() {
   const d = await api("legion");
   const reserve = d.reserve;
-  const accts = d.accounts.length ? d.accounts.map(a => {
+  const accts = d.accounts.length ? `<div class="accts">${d.accounts.map(a => {
     const left = a.left ?? 0;
     return `<div class="acct"><span>${esc(a.name)}</span><div class="bar"><i style="width:${left}%;${left < 20 ? "background:var(--wait)" : ""}"></i><span class="reserve" style="width:${reserve}%"></span></div>
     <span class="r">${a.left === null ? esc(a.note || "没有读数") : `剩 <span class="num">${a.left}%</span>${a.note ? " · " + esc(a.note) : ""}`}</span></div>`;
-  }).join("") : `<div class="empty">还没有额度读数</div>`;
+  }).join("")}</div>` : `<div class="empty">还没有额度读数</div>`;
   const hosts = d.hosts.length ? `<div class="hosts">${d.hosts.map(h => `
     <div class="host"><div class="n"><span class="dot ${h.online ? (h.busy ? "run" : "idle") : "off"}"></span><span class="id">${esc(h.id)}</span>${esc(h.name)}</div>
     <div class="s">${esc(h.status)} · ${h.busy}/${h.slots} 在用</div>
     <div class="slots">${Array.from({ length: Math.min(h.slots, 32) }, (_, i) => `<i class="${i < h.busy ? "on" : ""}"></i>`).join("")}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有登记机器</div>`;
-  const perf = d.perf.length ? `<div class="tablewrap"><table class="perf"><tr><th>组合</th><th>交付</th><th>一次通过</th></tr>${d.perf.map(p => `
-    <tr><td>${esc(p.worker)}</td><td class="num">${p.delivered}</td><td><span class="pass"><span class="bar"><i style="width:${p.first_pass}%;${p.first_pass < 60 ? "background:var(--wait)" : ""}"></i></span><span class="num">${p.first_pass}%</span></span></td></tr>`).join("")}</table></div>`
-    : `<div class="empty">还没有完成的任务</div>`;
+  const outName = { ok: "交付", bounce: "被交回", quota: "额度", login: "没登录", fail: "其他失败" };
+  const markText = m => `${m.host} ${m.reason} · ${m.until ? day(m.until) + " " + clock(m.until) + " 恢复" : "等人处理"}`;
+  const perf = d.perf.length ? `<div class="tablewrap"><table class="perf"><tr><th>组合</th><th>近 ${d.window} 次拉起，新的在左</th><th>交付</th></tr>${d.perf.map(p => `
+    <tr><td>${esc(p.combo)}${p.marks.map(m => `<span class="mark">${esc(markText(m))}</span>`).join("")}</td><td><span class="pips runs">${p.recent.map(o => `<i class="${o}" title="${outName[o]}"></i>`).join("")}</span></td><td class="num">${p.launches ? p.ok + "/" + p.launches : ""}</td></tr>`).join("")}</table>
+    <div class="legend"><i class="ok"></i>交付<i class="bounce"></i>被交回<i class="fail"></i>没拉起来（额度、没登录、其他）</div></div>`
+    : `<div class="empty">还没有拉起记录</div>`;
   $("#page").innerHTML = `<h1 class="hello">执行者</h1>
   <p class="pulse-line">派活按额度富余挑人${reserve ? `，斜线部分是给你自己留的 ${reserve}%` : ""}。</p>
   <section class="section"><h2>额度</h2>${accts}</section>

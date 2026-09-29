@@ -12,6 +12,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/quota"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 本文件是网页的纯判定：任务在五步里走到哪、行尾写什么。持球人用 watch.HolderOf，不在这里另判。
@@ -217,6 +218,49 @@ func account(l quota.Line) Account {
 	}
 	a.Note = strings.Join(notes, " · ")
 	return a
+}
+
+// perfRows 是执行者页的表现表（纯函数）：每个拉起过的「工具+模型」一行，按拉起次数多的在前；
+// 不可用标记挂在它挡住的行下，没有拉起记录的组合被标了也单列一行（组合名取标记的工具+模型）。
+func perfRows(stats map[string][]workers.Attempt, marks []workers.Mark) []Perf {
+	out := []Perf{}
+	hit := map[int]bool{} // 已挂到某行的标记
+	for combo, ls := range stats {
+		p := Perf{Combo: combo, Recent: []string{}, Marks: []workers.Mark{}}
+		for _, l := range ls {
+			p.Recent = append(p.Recent, l.Outcome)
+		}
+		st := workers.Count(ls)
+		p.OK, p.Launches = st.OK, st.Launches
+		if s, err := workers.ParseWorker(combo); err == nil {
+			for i, m := range marks {
+				if m.Covers(s) {
+					p.Marks, hit[i] = append(p.Marks, m), true
+				}
+			}
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Launches != out[j].Launches {
+			return out[i].Launches > out[j].Launches
+		}
+		return out[i].Combo < out[j].Combo
+	})
+	rows := map[string]int{} // 单列的组合 → 在 out 里的位置
+	for i, m := range marks {
+		if hit[i] {
+			continue
+		}
+		combo := workers.Spec{Tool: m.Tool, Model: m.Model}.String()
+		k, ok := rows[combo]
+		if !ok {
+			k, rows[combo] = len(out), len(out)
+			out = append(out, Perf{Combo: combo, Recent: []string{}, Marks: []workers.Mark{}})
+		}
+		out[k].Marks = append(out[k].Marks, m)
+	}
+	return out
 }
 
 // topGroup 返回 id 所在的「一级部门」：根的直接下级（id 本身是根或一级时返回自己）。

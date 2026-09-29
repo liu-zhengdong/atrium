@@ -115,6 +115,9 @@ func choiceText(c Choice) string {
 			mark = "★ "
 		}
 		fmt.Fprintf(&b, "\n%s%d. %s\n", mark, o.Pos, o.Title)
+		if o.Org != "" && o.Org != c.Org {
+			fmt.Fprintf(&b, "   归属部门：%s\n", o.Org)
+		}
 		for _, kv := range [][2]string{{"能多做到", o.Gain}, {"为什么现在", o.WhyNow}, {"代价", o.Cost}, {"不做会怎样", o.IfNot}, {"依据", o.Evidence}} {
 			fmt.Fprintf(&b, "   %s：%s\n", kv[0], kv[1])
 		}
@@ -278,8 +281,22 @@ func Commands(t *cli.Table) {
 					made = append(made, fmt.Sprintf("%s「%s」", o.Task, o.Title))
 				}
 			}
-			return c.Done(ch, fmt.Sprintf("已拍板 %s\n建了任务：%s", ch.ID, strings.Join(made, "、")),
-				"atrium task run "+ch.Options[picks[0]-1].Task)
+			text, first := fmt.Sprintf("已拍板 %s\n建了任务：%s", ch.ID, strings.Join(made, "、")), ch.Options[picks[0]-1].Task
+			var d struct {
+				Parties ledger.Parties `json:"parties"`
+			}
+			if err := c.Call("GET", "/api/tasks/"+url.PathEscape(first), nil, &d); err != nil {
+				return err
+			}
+			if owner := d.Parties.Owner; api.IsRef(owner, "a") {
+				// 交给了部门负责人：由它设计方案、拆活、派活，拍板的人等结果。
+				text, next, err := events.AsyncNext(c, text+"\n已交给负责人 "+owner+" 去设计、拆活", "atrium task wait "+first)
+				if err != nil {
+					return err
+				}
+				return c.Done(ch, text, next)
+			}
+			return c.Done(ch, text, "atrium task run "+first)
 		}})
 	t.Group("schedule", "周期任务")
 	t.Add(cli.Command{Path: "schedule add", Args: "<oN> <标题>", Summary: fmt.Sprintf("到点在部门下生成一件任务并派发（每部门上限 %d 条）", org.MaxSchedules),

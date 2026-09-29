@@ -21,6 +21,7 @@ type RunResult struct {
 	Task     ledger.Task `json:"task"`
 	Queued   bool        `json:"queued"`
 	Position int         `json:"position,omitempty"`
+	Waiting  []string    `json:"waiting,omitempty"` // 还没完成的依赖：都完成后才派
 	Pick     *PickView   `json:"pick,omitempty"`
 	Host     *HostChoice `json:"host,omitempty"`
 }
@@ -54,8 +55,13 @@ func Routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
+		deps, err := ledger.Deps(ctx, env.DB, id)
+		if err != nil {
+			return nil, err
+		}
+		waiting, _ := depGate(deps)
 		get(env).wake()
-		return RunResult{Task: t, Queued: true, Position: pos}, nil
+		return RunResult{Task: t, Queued: true, Position: pos, Waiting: waiting}, nil
 	})
 	r.Handle("POST /api/tasks/{id}/tell", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "t")
@@ -119,7 +125,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 
 // Commands 注册 task run、task tell、task log（task 组由 ledger 声明）。停下是 ledger 的 task stop（转受阻），派活循环结束它的执行者。
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "派活：进派活队列，自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
+	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "派活：进派活队列（依赖没完成的等完成后再派），自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
 		Flags: []cli.Flag{
 			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：档案能接、紧急／修复或 risk 高于 low 只挑 trust≥medium、额度富余、不正忙）"},
 			{Name: "risk", Value: "级别", Help: "low（缺省）/ medium / high：执行者档案 max_risk 要够；high 合入前另派审阅"},
@@ -144,7 +150,12 @@ func Commands(t *cli.Table) {
 			if body.DryRun {
 				return c.Done(res, dryText(res), dryNext(id, res, body.Risk))
 			}
-			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow")
+			msg, follow := fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow"
+			if len(res.Waiting) > 0 {
+				msg = fmt.Sprintf("%s 已进派活队列：等依赖 %s 完成后自动派（依赖失败或取消就转受阻）", id, strings.Join(res.Waiting, "、"))
+				follow = "atrium task wait " + res.Waiting[0]
+			}
+			text, next, err := events.AsyncNext(c, msg, follow)
 			if err != nil {
 				return err
 			}

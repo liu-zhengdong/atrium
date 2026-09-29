@@ -121,17 +121,18 @@ func TestRollup(t *testing.T) {
 		in   []Status
 		want Status
 		text string
+		open int
 	}{
-		{nil, "", ""},
-		{[]Status{Done, Cancelled}, Done, "1/2 完成，1 取消"},
-		{[]Status{Done, Running, Blocked}, Running, "1/3 完成，1 在做，1 受阻"},
-		{[]Status{Todo, Failed}, Blocked, "0/2 完成，1 失败"},
-		{[]Status{Todo, Done}, Todo, "1/2 完成"},
+		{nil, "", "", 0},
+		{[]Status{Done, Cancelled}, Done, "1/2 完成，1 取消", 0},
+		{[]Status{Done, Running, Blocked}, Running, "1/3 完成，1 在做，1 受阻", 2},
+		{[]Status{Todo, Failed}, Blocked, "0/2 完成，1 失败", 1},
+		{[]Status{Todo, Done}, Todo, "1/2 完成", 1},
 	}
 	for _, c := range cases {
 		s := Summarize(c.in)
-		if s.Rollup() != c.want || s.String() != c.text {
-			t.Errorf("%v: got %q %q", c.in, s.Rollup(), s.String())
+		if s.Rollup() != c.want || s.String() != c.text || s.Open() != c.open {
+			t.Errorf("%v: got %q %q %d", c.in, s.Rollup(), s.String(), s.Open())
 		}
 	}
 }

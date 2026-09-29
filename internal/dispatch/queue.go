@@ -126,7 +126,24 @@ func dropRow(ctx context.Context, q store.Querier, id string) error {
 	return err
 }
 
-// Enqueue 是 task run：核对选项、进派活队列。写死的执行者当场核对档案能不能接，免得排到时才报错。
+// depGate 纯判定：派活前看依赖。有失败或取消的 → broken（等不到了，不派）；还有没完成的 → waiting（留在队列里，
+// 派活循环跳过它，依赖都完成后照常派）；都完成 → 两个都为空。
+func depGate(deps []ledger.DepState) (waiting []string, broken *ledger.DepState) {
+	for i, d := range deps {
+		switch d.Status {
+		case ledger.Failed, ledger.Cancelled:
+			return nil, &deps[i]
+		case ledger.Done:
+		default:
+			waiting = append(waiting, d.ID)
+		}
+	}
+	return waiting, nil
+}
+
+var brokenLabel = map[ledger.Status]string{ledger.Failed: "失败了", ledger.Cancelled: "已取消"}
+
+// Enqueue 是 task run：核对选项、进派活队列（依赖还没完成的也进，完成后才派）。写死的执行者当场核对档案能不能接，免得排到时才报错。
 func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor string) (ledger.Task, error) {
 	if err := o.check(); err != nil {
 		return ledger.Task{}, err
@@ -140,8 +157,9 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 	if err != nil {
 		return t, err
 	}
-	if ready, waiting := ledger.Ready(t.Status, deps); !ready && len(waiting) > 0 {
-		return t, api.Conflict("%s 还在等依赖 %s 完成", id, strings.Join(waiting, "、")).WithNext("atrium task wait " + waiting[0])
+	waiting, broken := depGate(deps)
+	if broken != nil {
+		return t, api.Conflict("%s 依赖的 %s %s，等不到了", id, broken.ID, brokenLabel[broken.Status]).WithNext("atrium task show " + broken.ID)
 	}
 	if o.Worker != "" {
 		r, err := workers.Resolve(ctx, db, o.Worker)
@@ -169,7 +187,11 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 	}); err != nil {
 		return t, err
 	}
-	t, err = ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Enqueue}, actor, summary(o))
+	note := summary(o)
+	if len(waiting) > 0 {
+		note += "；等依赖 " + strings.Join(waiting, "、") + " 完成后派"
+	}
+	t, err = ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Enqueue}, actor, note)
 	if err != nil {
 		if e := dropRow(ctx, db, id); e != nil {
 			return t, e

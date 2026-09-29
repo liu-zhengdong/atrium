@@ -182,10 +182,14 @@ out=$(json secret ls --node o2); has '.result[0].name == "BOT_TOKEN" and (tostri
 grep -q sekrit "$ATRIUM_DATA/service.log" && fail "凭据值进了日志"
 out=$(json secret set o1 BOT_TOKEN --rm); has '.ok'
 opt='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}'
-echo "{\"title\":\"下一步\",\"options\":[$opt,$opt,$opt],\"recommend\":[1],\"reason\":\"快\"}" >"$work/choice.json"
-out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c1" and .result.status == "open"'
+opt3='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e","org":"o1"}'
+echo "{\"title\":\"下一步\",\"options\":[$opt,$opt,$opt3],\"recommend\":[1],\"reason\":\"快\"}" >"$work/choice.json"
+out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c1" and .result.status == "open" and .result.options[2].org == "o1"'
 out=$(json choice ls); has '(.result|length) == 1'
 out=$(json choice pick c1 1,3 --note 先快); has '.result.status == "picked" and .result.options[0].task != null and .result.options[1].task == null and .result.note == "先快"'
+has '.next == "atrium task wait " + .result.options[0].task'   # 选中的项交给部门负责人 a1 去拆，拍板的人不派
+picked3=$(jq -r '.result.options[2].task' <<<"$out")
+out=$(json task show "$picked3"); has '.result.task.org == "o1" and .result.parties.owner == "secretary"'   # 选项写了归 o1：o1 没有负责人，交秘书
 out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c2"'
 out=$(json choice pick c2 --none); has '.result.status == "passed"'
 out=$(json schedule add o2 巡检 --every 1d --at 09:00 --kind patrol); has '.result.id == "s1" and .result.at == "09:00"'
@@ -405,6 +409,25 @@ out=$(json task add 视频第一帧黑 --dir "$vidb" --skill video); vb=$(jq -r 
 json task run "$vb" --worker fakewrite >/dev/null
 out=$(json task wait "$vb" --timeout 120); has '.result.task.status == "blocked"'
 out=$(json task show "$vb"); has '.result.history|map(select(.kind == "bounce"))[0].body|test("video：out/demo.mp4 的第一帧是空白")'
+step "交目标给负责人 → 拆成有依赖的两件 → 前一件完成后自动派下一件；依赖失败转受阻（假执行者 fakesh）"
+out=$(json task add 性能治理 --owner a1); goal=$(jq -r .result.id <<<"$out")
+has '.result.org == "o2" and .next == "atrium task wait '"$goal"'"'   # 不写仓库 = 交给 a1 去拆：落到它负责的部门，建的人不派它
+out=$(json events wait --as a1 --timeout 5); has '(.result|map(select(.task == "'"$goal"'" and .kind == "task.assigned" and .level == "act"))|length) == 1'
+json events ack $(jq -r '.result|map(.id|tostring)|join(" ")' <<<"$out") >/dev/null
+out=$(json task add 采集瓶颈 --parent "$goal"); sub1=$(jq -r .result.id <<<"$out")
+out=$(json task add 修热点 --parent "$goal" --after "$sub1"); sub2=$(jq -r .result.id <<<"$out")
+out=$(json task run "$sub2" --worker fakesh); has '.result.task.status == "queued" and .result.waiting == ["'"$sub1"'"] and .next == "atrium task wait '"$sub1"'"'
+out=$(json task show "$goal"); has '(.result.holder|startswith("拆成的子任务在做")) and .next == "atrium task tree '"$goal"'"'   # 子任务没结束：目标不计时、不派它自己
+json task run "$sub1" --worker fakesh >/dev/null
+out=$(json task wait "$sub2" --timeout 30); has '.result.task.status == "done"'
+out=$(json task show "$goal"); has '.next == "atrium task set '"$goal"' --status done"'   # 子任务都完成：等负责人收尾
+out=$(json task set "$goal" --status done); has '.result.status == "done"'
+out=$(json task add 前序); pre=$(jq -r .result.id <<<"$out")
+out=$(json task add 后续 --after "$pre"); post=$(jq -r .result.id <<<"$out")
+json task run "$post" --worker fakesh >/dev/null
+json task set "$pre" --status failed >/dev/null
+out=$(json task wait "$post" --timeout 10); has '.result.task.status == "blocked"'
+out=$(json task run "$post" || true); has '.error.code == "conflict"'   # 依赖失败了：当场拒绝
 
 step "执行者可用性：假执行者报模型名无效 → 标记「工具@机器」、重新排队 → workers 看得到、挑执行者跳过 → --clear 解除"
 cat >"$work/fakemodel.md" <<'MD'

@@ -30,9 +30,9 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `pause` | 完成 | 一键停机的状态与判定 `Paused` | `pauses` |
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
 | `ledger` | 完成 | 任务（仓库或工作地点二选一）、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/stop/tree/plan/note/wait`（`task stop` 即转受阻，派活循环结束执行者；`task set --status` 不收 blocked） | `tasks` `task_dirs` `task_deps` `task_events` |
-| `org` | 完成 | 部门、要点、要点链、验收人（沿树继承）、身份、备忘、技能、资料、凭据、上限表与计数 | `departments` `department_repos` `acceptors` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `schedules` `secrets` `limit_notices` |
+| `org` | 完成 | 部门、要点、要点链、验收人（沿树继承）、身份、备忘、技能、资料、凭据、上限表与计数 | `departments` `department_repos` `acceptors` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `choice_option_orgs` `schedules` `secrets` `limit_notices` |
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
-| `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `schedules` |
+| `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `choice_option_orgs` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
 | `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
 | `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（claude、codex 按执行者的话分段，agy 只有命令，其余逐行原文）、执行者可用性（「工具+模型@机器」不可用标记：`MarkOf` 由退出信号翻成标记、`Blocked` 给挑执行者与挑机器判）；`workers`（列、看、改档案，`--clear` 解除不可用标记） | `worker_profiles` `worker_marks` |
@@ -99,7 +99,7 @@ type Module struct {
 
 | Kind | 从 → 到 | 谁调 |
 |---|---|---|
-| `Enqueue` | todo/failed/blocked → queued | dispatch（`task run`，同一事务写 `queue` 行） |
+| `Enqueue` | todo/failed/blocked → queued | dispatch（`task run`，同一事务写 `queue` 行；依赖没完成的也进，派活循环等依赖都完成才拉起，依赖失败或取消转受阻） |
 | `Start` | queued → running | dispatch（进程已拉起） |
 | `ExitOK` / `ExitFail` | running → running/gate ／ failed | dispatch 或 watch |
 | `GatePass{NeedReview, AcceptBy, Land}` | gate → review ／ accept ／ 落地步骤 ／ done | gates |
@@ -119,6 +119,7 @@ type Module struct {
 - `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body, By})`：在引起它的写事务里调用。`By` 是引起它的身份：投递对象就是它时不投（自己做的事不再告诉自己；ledger 的任务事件填操作人）。种类常量写在 `events.go`。
 - 级别与去重键缺省按种类取（`events/model.go`）：任务失败、受阻、等验收、非用户本人做的完成、`overdue` 与 `limit.full` 要处理；落地中间步骤（如已合入等发版）与用户本人（u1）做的完成、验收通过只知会（ledger 在正文 `by` 填操作人）；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。上限提醒的「同一件事只提醒一次」（ack 之后、重启之后、超限期间都不重发）不靠事件去重，见 `limit_notices`。
 - 任务事件：ledger 在状态变化、落地推进一步（`Land`，如已合入等发版）与转入等验收时经 `events.EmitTask(ctx, q, owner, e)` 发 `task.status`，按处理人分发（纯函数 `events.Route`）。派活人是 `task add` 时的身份（周期任务记建周期任务的人），处理人是 `task add --owner`、缺省派活人，两者记在 `created` 经历里（`ledger.PartiesOf`，`task show` 显示）。结果（完成、已合入、上线、失败、受阻）按 `LevelOf` 的级别投处理人：u1 与秘书投 `secretary`，aN 投自己；运行时建的（审阅任务）投部门负责人、没有投秘书，只有失败、受阻要处理。负责人不是收结果的那位时另收知会；过程（入队、拉起、交回一次、取消）只知会负责人。等验收（正文带 `accept_by`）要处理地投验收人：`user` 投秘书，`leader` 投部门负责人（没有投秘书）。
+- 交给负责人的目标：`task add --owner aN` 且不写仓库与工作地点（纯函数 `ledger.Assignee`），建好就给这位负责人发要处理的 `task.assigned` 唤醒它拆活、派活、收尾；没写部门落到它负责的那个部门。选项单拍板建的任务按这个方式交给选项所属部门（`choice_option_orgs`，没写是出选项单的部门）往上最近的负责人。
 
 ### 一键停机（`internal/pause`）
 

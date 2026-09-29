@@ -8,11 +8,11 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
 
-// LevelOf 是事件的缺省级别：任务失败、受阻、到期、自升级失败与负责人上交（已上线除外）要处理；其余只知会。
+// LevelOf 是事件的缺省级别：任务失败、受阻、到期、上限满了、自升级失败与负责人上交（已上线除外）要处理；其余只知会。
 // 上交必须是「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的。
 func LevelOf(kind string, body any) string {
 	switch kind {
-	case Overdue, OnlineFailed:
+	case Overdue, OnlineFailed, LimitFull:
 		return Act
 	case LeaderEscalate:
 		if field(body, "kind") == "shipped" {
@@ -28,10 +28,15 @@ func LevelOf(kind string, body any) string {
 	return Info
 }
 
-// KeyOf 是事件的缺省去重键：同一件任务的状态变化合并成最新一条；其余不合并。
+// KeyOf 是事件的缺省去重键：同一件任务的状态变化合并成最新一条；同一部门同一项上限合并；其余不合并。
 func KeyOf(e Event) string {
 	if e.Kind == TaskStatus && e.Task != "" {
 		return "task:" + e.Task
+	}
+	if e.Kind == LimitFull {
+		if k := field(e.Body, "key"); k != "" {
+			return "limit:" + e.Dept + ":" + k
+		}
 	}
 	return ""
 }
@@ -138,6 +143,12 @@ func Summary(r Row) string {
 		return line + title
 	case LeaderEscalate:
 		return fmt.Sprintf("%s 上交（%s）：%s", s("from"), s("label"), clip(s("note"), 80))
+	case LimitFull:
+		line := clip(s("text"), 80)
+		if n := s("next"); n != "" {
+			line += " · " + n
+		}
+		return line
 	}
 	return r.Kind + title
 }

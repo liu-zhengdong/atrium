@@ -173,6 +173,9 @@ func Tick(ctx context.Context, env *app.Env) error {
 	if pause.Paused(active, pause.Scope{}) {
 		return nil
 	}
+	if err := checkLimits(ctx, env); err != nil {
+		return err
+	}
 	db := env.DB
 	tasks, err := ledger.List(ctx, db, ledger.Filter{Status: []ledger.Status{ledger.Todo, ledger.Queued, ledger.Running,
 		ledger.Blocked, ledger.Failed}, Limit: 500})

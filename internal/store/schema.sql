@@ -257,6 +257,16 @@ CREATE TABLE IF NOT EXISTS secrets (
   PRIMARY KEY (department, name)
 );
 
+-- 上限已提醒：某部门（或全局，scope 空串）某项刚到或超限时发过要处理事件。
+-- 回到上限以内才删这一行，再超再发。watch 巡检读写；不靠事件表去重（ack 与重启之后仍要记住）。
+CREATE TABLE IF NOT EXISTS limit_notices (
+  scope TEXT NOT NULL,
+  key   TEXT NOT NULL,
+  used  INTEGER NOT NULL,
+  at    INTEGER NOT NULL,
+  PRIMARY KEY (scope, key)
+);
+
 -- 执行者档案：spec 是 YAML（工具、模型、强度、能接什么活、checks、trust……），由 workers 包解析。
 CREATE TABLE IF NOT EXISTS worker_profiles (
   name       TEXT PRIMARY KEY,

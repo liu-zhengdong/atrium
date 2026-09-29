@@ -30,7 +30,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `pause` | 完成 | 一键停机的状态与判定 `Paused` | `pauses` |
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
 | `ledger` | 完成 | 任务、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/stop/tree/plan/note/wait`（`task stop` 即转受阻，派活循环结束执行者；`task set --status` 不收 blocked） | `tasks` `task_deps` `task_events` |
-| `org` | 完成 | 部门、要点、要点链、验收人（沿树继承）、身份、备忘、技能、资料、凭据、上限表与计数 | `departments` `department_repos` `acceptors` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `schedules` `secrets` |
+| `org` | 完成 | 部门、要点、要点链、验收人（沿树继承）、身份、备忘、技能、资料、凭据、上限表与计数 | `departments` `department_repos` `acceptors` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `schedules` `secrets` `limit_notices` |
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
@@ -39,7 +39,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `gates` | 完成 | 交付方式（`delivery.go`：pr、choice、message 各自的提示词、关卡、落地）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | pr 交付方式的落地第二段（Atrium 自己的仓库）：有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
-| `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
+| `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；每轮顺带数上限用量（刚到或超了发 `limit.full`）；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
 | `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 等你验收的交付 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；代为注册一次性的 `import`（实现在 `importer`） | — |
@@ -116,7 +116,7 @@ type Module struct {
 ### 事件（`internal/events`）
 
 - `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body, By})`：在引起它的写事务里调用。`By` 是引起它的身份：投递对象就是它时不投（自己做的事不再告诉自己；ledger 的任务事件填操作人）。种类常量写在 `events.go`。
-- 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked 与 `overdue` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。
+- 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked、`overdue` 与 `limit.full` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。上限提醒的「同一件事只提醒一次」（ack 之后、重启之后、超限期间都不重发）不靠事件去重，见 `limit_notices`。
 - 任务事件：ledger 在状态变化、落地推进一步（`Land`，如已合入等发版）与转入等验收时经 `events.EmitTask(ctx, q, owner, e)` 发 `task.status`，按处理人分发（纯函数 `events.Route`）。派活人是 `task add` 时的身份（周期任务记建周期任务的人），处理人是 `task add --owner`、缺省派活人，两者记在 `created` 经历里（`ledger.PartiesOf`，`task show` 显示）。结果（完成、已合入、上线、失败、受阻）要处理地投处理人：u1 与秘书投 `secretary`，aN 投自己；运行时建的（审阅任务）投部门负责人、没有投秘书，只有失败、受阻要处理。负责人不是收结果的那位时另收知会；过程（入队、拉起、交回一次、取消）只知会负责人。等验收（正文带 `accept_by`）要处理地投验收人：`user` 投秘书，`leader` 投部门负责人（没有投秘书）。
 
 ### 一键停机（`internal/pause`）
@@ -130,6 +130,7 @@ type Module struct {
 - `org.Ancestors(ctx, q, "oN")` → 顶层到本部门的链；`org.Chain(ctx, q, "oN")` → 要点链（顶层在前，同部门按 pos）；`org.ChainLine(p)` → 派活附的一行「k3（o1）规矩——为什么」。
 - 上限表在 `org/limits.go`（`Limits`：会增长的东西 → 上限 → 满了找谁 → 怎么办）；满了一律 `org.Full(key, dept, used)`，计数 `org.Counts(ctx, q, dept)`（网页「6/7」，接口 `GET /api/limits?node=oN`）。
 - 上限只挡写入，不截读取：读路径按技术上限 `org.ReadCap`（1000）查，超了报错而不是少给；超了业务上限的（导入的旧数据）照样全部返回，给人看的地方用 `org.Tally`／`org.Over` 标「超限 8/7」，要点链用 `org.PointsOver` 在派活与负责人提示词里加一行。
+- 巡检每轮 `org.ScanNotices` 对照 `limit_notices`：刚到或超了且未提醒则 watch 发 `limit.full`（要处理）；部门负责人投 `org.Recipient`，秘书、用户及其余投秘书。回到上限以内才删已提醒，再超再发。判定纯函数 `org.DecideNotice`。
 - 派活（dispatch）：`org.SkillPaths(ctx, q, data, task.Skill)` → 提示词附的 SKILL.md 路径；`org.GetSkill` 取优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、凭据只有用户）。
@@ -168,7 +169,7 @@ dispatch ─→ ledger.Apply/SetFacts、org.Chain/GetSkill/SecretEnv、workers�
 gates    ─→ ledger.Apply/Record（查 PR 用 gh，经 platform）
 merge    ─→ ledger.Apply、platform（git、gh、快检查）
 release  ─→ service 的 restart 接口、ledger.Apply(Land)、events.Emit(OnlineFailed)
-watch    ─→ ledger.Get/Apply、events.Emit(Overdue)、org、platform.KillTree
+watch    ─→ ledger.Get/Apply、events.Emit(Overdue, LimitFull)、org、platform.KillTree
 dispatch、merge ─→ watch.Track（拉起执行者或检查后登记 pid、日志、工作树）
 dispatch ─→ watch.Use(Hooks{Requeue})：卡住或临时错误时重新入队（可换人、标额度）
 workers  ─→ watch.Use(Hooks{Signal})：从日志尾部读临时错误、思考耗尽、额度用尽；leaders.SetLauncher：负责人唤醒按执行者组合拉起

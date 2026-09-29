@@ -3,7 +3,6 @@ package org
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -118,12 +117,7 @@ func LimitOf(key string) Limit {
 // Full 是「满了」的报错：几 / 上限、找谁、怎么办，并附腾地方的命令。dept 可空（全局的上限）。
 func Full(key, dept string, used int) error {
 	l := LimitOf(key)
-	where := ""
-	if dept != "" {
-		where = "部门 " + dept + " 的"
-	}
-	return api.Limit(strings.ReplaceAll(l.Next, "{dept}", dept), "%s%s已 %d/%d %s（满了找%s）：%s",
-		where, l.What, used, l.Max, l.Unit, l.Owner, strings.ReplaceAll(l.Fix, "{dept}", dept))
+	return api.Limit(NoticeNext(l, dept), "%s", NoticeText(l, dept, used))
 }
 
 // MB 把字节数折成 MB，向上取整（上限表里文件大小的单位）。纯函数。

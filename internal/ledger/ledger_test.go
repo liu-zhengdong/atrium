@@ -193,28 +193,30 @@ func TestDraftCap(t *testing.T) {
 
 func TestTaskDir(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
+	root := t.TempDir() // 本机规则下的绝对路径：Windows 上 /w/site 没有盘符，不算绝对路径
+	site, blog, sep := filepath.Join(root, "site"), filepath.Join(root, "blog"), string(filepath.Separator)
 	for _, c := range []struct {
 		in   NewTask
 		want string // 错误码；空为能建
 	}{
-		{NewTask{Title: "x", Dir: "notes"}, "usage"},                // 不是绝对路径
-		{NewTask{Title: "x", Dir: "/a\nb"}, "usage"},                // 换行
-		{NewTask{Title: "x", Dir: "/w/site", Repo: "o/r"}, "usage"}, // 与仓库只给一个
-		{NewTask{Title: "x", Repo: "o/r"}, ""},                      // 只有仓库
-		{NewTask{Title: "x", Dir: "/w/site/"}, ""},                  // 只有工作地点
+		{NewTask{Title: "x", Dir: "notes"}, "usage"},           // 不是绝对路径
+		{NewTask{Title: "x", Dir: site + "\nb"}, "usage"},      // 换行
+		{NewTask{Title: "x", Dir: site, Repo: "o/r"}, "usage"}, // 与仓库只给一个
+		{NewTask{Title: "x", Repo: "o/r"}, ""},                 // 只有仓库
+		{NewTask{Title: "x", Dir: site + sep}, ""},             // 只有工作地点
 	} {
 		if _, err := Add(ctx, db, c.in, "u1"); code(err) != c.want {
 			t.Errorf("Add(%+v) = %v，应为 %q", c.in, err, c.want)
 		}
 	}
-	a, _ := Add(ctx, db, NewTask{Title: "写文章", Dir: "/w/blog/"}, "u1")
-	if a.Dir != "/w/blog" {
+	a, _ := Add(ctx, db, NewTask{Title: "写文章", Dir: blog + sep}, "u1")
+	if a.Dir != blog {
 		t.Fatalf("工作地点应存成干净的路径：%q", a.Dir)
 	}
-	if l, _ := List(ctx, db, Filter{}); l[0].Dir != "/w/blog" {
+	if l, _ := List(ctx, db, Filter{}); l[0].Dir != blog {
 		t.Fatalf("List 应带工作地点：%+v", l[0])
 	}
-	if s, _ := Subtree(ctx, db, a.ID); s[0].Dir != "/w/blog" {
+	if s, _ := Subtree(ctx, db, a.ID); s[0].Dir != blog {
 		t.Fatalf("Subtree 应带工作地点：%+v", s[0])
 	}
 	repo := "o/r"

@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"database/sql"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -142,7 +143,7 @@ func hook(env *app.Env) {
 	}
 }
 
-// Requeue 给 watch：卡住或读到信号转失败后重新入队。额度用尽、思考耗尽换人（避开原执行者），其余同一执行者再来。
+// Requeue 给 watch：卡住或读到信号转失败后重新入队。额度用尽先标「工具+模型@机器」不可用；额度用尽、思考耗尽换人（避开原执行者），其余同一执行者再来。
 func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error {
 	run, err := workers.LastRun(ctx, env.DB, id)
 	if err != nil {
@@ -151,6 +152,21 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 	o := Options{Risk: "low"}
 	if run != nil {
 		o.Risk, o.Secrets = run.Risk, run.Secrets
+	}
+	if why.Signal == watch.SigQuota && run != nil {
+		tail, err := workers.Tail(run.Log, workers.TailBytes)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		marked, err := markUnavailable(ctx, env.DB, *run, workers.Classify(1, tail, time.Now()))
+		if err != nil {
+			return err
+		}
+		if marked != "" {
+			if err := ledger.Note(ctx, env.DB, id, actor, strings.TrimPrefix(marked, "；")); err != nil {
+				return err
+			}
+		}
 	}
 	switch why.Signal {
 	case watch.SigQuota, watch.SigThinking:

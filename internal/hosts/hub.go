@@ -314,7 +314,8 @@ func WaitExit(ctx context.Context, env *app.Env, task string, run int) (Exit, er
 	}
 }
 
-// Pick 给 dispatch 挑机器：pinned 是 --host 指定的（只看那台）；暂停的机器不选（问 pause 的机器范围）。
+// Pick 给 dispatch 挑机器：pinned 是 --host 指定的（只看那台）；暂停的机器不选（问 pause 的机器范围）；
+// 这件活的「工具+模型」在那台上标了不可用的不选。
 func Pick(ctx context.Context, env *app.Env, need Need, pinned string) (Choice, error) {
 	list, err := List(ctx, env.DB)
 	if err != nil {
@@ -333,9 +334,15 @@ func Pick(ctx context.Context, env *app.Env, need Need, pinned string) (Choice, 
 		active = append(active, p.Scope)
 	}
 	now := store.Now()
+	marks, err := workers.Marks(ctx, env.DB, now)
+	if err != nil {
+		return Choice{}, err
+	}
 	var cands []Candidate
 	for _, h := range list {
-		cands = append(cands, candidate(h, busy[h.ID], pause.Paused(active, pause.Scope{Host: h.ID}), theHub.isPolling(h.ID), now))
+		c := candidate(h, busy[h.ID], pause.Paused(active, pause.Scope{Host: h.ID}), theHub.isPolling(h.ID), now)
+		c.Marks = marks
+		cands = append(cands, c)
 	}
 	return Choose(cands, need, pinned), nil
 }

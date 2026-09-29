@@ -32,13 +32,6 @@ type Line struct {
 	Source string `json:"source"`         // builtin、openquota；两边都没有为空
 	Note   string `json:"note,omitempty"` // 读不到的原因、沿用上次读数、读自哪台……
 	From   string `json:"from,omitempty"` // 自带读数来自哪台机器
-	Hold   *Hold  `json:"hold,omitempty"`
-}
-
-// Hold 是额度用尽标记。
-type Hold struct {
-	Until  int64  `json:"until"`
-	Reason string `json:"reason"`
 }
 
 // mergeHosts 按账号合并各台机器的自带读数（纯函数）：同一指纹只算一份（存储时已按指纹合一行）；
@@ -100,7 +93,7 @@ func mergeHosts(rows []Stored, local string, now int64) map[string]Line {
 
 // Lines 合并来源（纯函数）：自带读到的优先；自带没覆盖或读不到的，OpenQuota 有就补；都没有写「没有额度数据」。
 // 结果按富余降序，没有富余数据与旧数排最后。
-func Lines(builtin map[string]Line, oq []Pace, holds map[string]Hold, now int64) []Line {
+func Lines(builtin map[string]Line, oq []Pace) []Line {
 	byAcct := map[string]Line{}
 	for a, l := range builtin {
 		byAcct[a] = l
@@ -125,10 +118,7 @@ func Lines(builtin map[string]Line, oq []Pace, holds map[string]Hold, now int64)
 		}
 	}
 	var out []Line
-	for a, l := range byAcct {
-		if h, ok := holds[a]; ok && h.Until > now {
-			l.Hold = &h
-		}
+	for _, l := range byAcct {
 		out = append(out, l)
 	}
 	spare := func(l Line) *float64 {
@@ -160,17 +150,13 @@ type Spare struct {
 	// Percent 是富余：周期已过 − 已用，就是 atrium quota 显示的那个数（PaceOf 算）；算不出为空。派活按它排先后。
 	Percent *float64 `json:"percent,omitempty"`
 	Stale   bool     `json:"stale"` // 读数超过 10 分钟
-	// Stop 是不该再派的原因：额度用尽标记没到期，或已用到给用户留的份额（周窗与短窗取紧的）；能派为空。
+	// Stop 是不该再派的原因：已用到给用户留的份额（周窗与短窗取紧的）；能派为空。
 	Stop string `json:"stop,omitempty"`
 }
 
 // SpareOf 判一个账号的富余与能不能派（纯函数）。富余不另算，直接取 quota 一览的同一行。
 func SpareOf(l Line, reserve int) Spare {
 	s := Spare{Account: l.Account, Percent: l.SparePercent, Stale: l.Stale}
-	if l.Hold != nil {
-		s.Stop = "额度用尽：" + l.Hold.Reason
-		return s
-	}
 	if l.UsedPercent == nil {
 		return s
 	}

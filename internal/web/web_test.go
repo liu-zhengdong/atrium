@@ -124,17 +124,17 @@ func TestNest(t *testing.T) {
 
 func TestAccountAndSlots(t *testing.T) {
 	used, reset := 37.6, 30.0
-	a := account(quota.Line{Pace: quota.Pace{Account: "claude", UsedPercent: &used, HoursToReset: &reset}}, 0)
+	a := account(quota.Line{Pace: quota.Pace{Account: "claude", UsedPercent: &used, HoursToReset: &reset}})
 	if a.Left == nil || *a.Left != 62 || a.Note != "1 天后重置" {
 		t.Errorf("有读数：%+v %v", a, *a.Left)
 	}
-	a = account(quota.Line{Pace: quota.Pace{Account: "codex"}, Note: "没登录"}, 0)
+	a = account(quota.Line{Pace: quota.Pace{Account: "codex"}, Note: "没登录"})
 	if a.Left != nil || a.Note != "没登录" {
 		t.Errorf("没读数：%+v", a)
 	}
-	a = account(quota.Line{Pace: quota.Pace{Account: "x", UsedPercent: &used, Stale: true}, Hold: &quota.Hold{Until: 10}}, 5)
-	if a.Note != "用尽，暂不派 · 读数旧了" {
-		t.Errorf("用尽：%q", a.Note)
+	a = account(quota.Line{Pace: quota.Pace{Account: "x", UsedPercent: &used, Stale: true}})
+	if a.Note != "读数旧了" {
+		t.Errorf("旧数：%q", a.Note)
 	}
 	for want, h := range map[int]hosts.Host{4: {MaxRunning: 4, Info: &hosts.Info{MaxWorkers: 6}}, 6: {Info: &hosts.Info{MaxWorkers: 6}}, 1: {}} {
 		if got := slots(h); got != want {

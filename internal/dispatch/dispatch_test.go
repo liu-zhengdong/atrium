@@ -36,7 +36,7 @@ func TestPick(t *testing.T) {
 			"codex": {Percent: f(-3.1)}}}, want: "codex+gpt", reason: "富余最多（-3.1"},
 		{name: "见底与用尽不派", in: PickInput{Risk: "low", Facts: base(), Spares: map[string]Spare{
 			"claude": {Percent: f(40), Stop: "额度见底"}, "codex": {Stop: "额度用尽"}}}, want: "opencode+m"},
-		{name: "本机没登录不派", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].LoggedOut = true; return b }()}, want: "codex+gpt"},
+		{name: "本机不可用不派", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Unavailable = "本机不可用：额度用尽"; return b }()}, want: "codex+gpt"},
 		{name: "紧急的活只给 trust≥medium，额度排序在这之后", in: PickInput{Risk: "low", Priority: ledger.Urgent, Facts: base(), Spares: map[string]Spare{
 			"opencode": {Percent: f(90)}, "claude": {Percent: f(5)}, "codex": {Percent: f(1)}}}, want: "claude+opus", reason: "紧急的活只在 trust≥medium 的里挑"},
 		{name: "修复的活同样", in: PickInput{Risk: "low", Priority: ledger.Fix, Facts: base()[2:3]}, reason: "修复的活要 trust≥medium，它是 unknown"},
@@ -85,6 +85,7 @@ func TestNeedTrust(t *testing.T) {
 
 func TestRouteExit(t *testing.T) {
 	quota := workers.Signal{Kind: workers.SignalQuota, Reason: "额度用尽"}
+	thinking := workers.Signal{Kind: workers.SignalThinking, Reason: "思考耗尽"}
 	transient := workers.Signal{Kind: workers.SignalTransient, Reason: "临时错误"}
 	cases := []struct {
 		name string
@@ -97,8 +98,10 @@ func TestRouteExit(t *testing.T) {
 		{"非 0 但日志正常收尾", ExitInput{Code: 1, Ending: workers.Ending{Known: true, OK: true}}, "gate"},
 		{"报错收尾", ExitInput{Code: 0, Ending: workers.Ending{Known: true, Reason: "x"}}, "fail"},
 		{"捎话要重派", ExitInput{Code: -1, StopFor: "restart"}, "restart"},
-		{"额度用尽换人", ExitInput{Code: 1, Signal: quota}, "switch"},
-		{"额度用尽换够了", ExitInput{Code: 1, Signal: quota, Switches: 2}, "fail"},
+		{"额度用尽重新排队", ExitInput{Code: 1, Signal: quota, Switches: 2}, "requeue"},
+		{"模型名无效重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalModel, Reason: "模型名无效"}}, "requeue"},
+		{"思考耗尽换人", ExitInput{Code: 0, Signal: thinking}, "switch"},
+		{"思考耗尽换够了", ExitInput{Code: 0, Signal: thinking, Switches: 2}, "fail"},
 		{"临时错误先重试", ExitInput{Code: 1, Signal: transient}, "same"},
 		{"临时错误再换人", ExitInput{Code: 1, Signal: transient, Same: 1}, "switch"},
 		{"临时错误用尽", ExitInput{Code: 1, Signal: transient, Same: 1, Switches: 2}, "fail"},

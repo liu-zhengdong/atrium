@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"slices"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
@@ -12,7 +11,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 本文件是派活用到的别的包的能力，集中在一处：hosts（挑机器、远程拉起、等退出）、quota（富余、额度用尽标记）、
+// 本文件是派活用到的别的包的能力，集中在一处：hosts（挑机器、远程拉起、等退出）、quota（富余）、
 // org（技能、凭据）。都是变量，测试换成假的。
 
 // HostNeed 是一件活对机器的要求。
@@ -49,17 +48,8 @@ var (
 	stopRemote = hosts.Stop
 	spares     = quota.Spares
 	accountOf  = quota.AccountOf
-	// setHold 记额度用尽：到 until 之前派活避开这个账号（通用命令行执行者没有额度账号，不记）。
-	setHold = func(ctx context.Context, q store.Querier, account string, until int64, reason string) error {
-		if !slices.Contains(quota.Accounts, account) {
-			return nil
-		}
-		return quota.SetHold(ctx, q, account, until, reason)
-	}
-	// markLoggedOut 记某台机器上的某个工具没登录（执行者报没登录后调）。
-	markLoggedOut = hosts.MarkLoggedOut
-	// localLoggedOut 是本机机器信息里标了没登录的工具（服务启动时看登录文件，或执行者报没登录后标的）：挑执行者时避开。
-	// 远程机器的由 hosts.Pick 挑机器时避开。
+	// localLoggedOut 是本机机器信息里看出没登录的工具（服务启动时看登录文件）：挑执行者时避开。
+	// 远程机器的由 hosts.Pick 挑机器时避开；执行者报出来的没登录记在 workers 的不可用标记里。
 	localLoggedOut = func(ctx context.Context, q store.Querier) (map[string]bool, error) {
 		h, err := hosts.Get(ctx, q, LocalHost)
 		if err != nil || h.Info == nil {

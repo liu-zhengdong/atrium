@@ -108,13 +108,14 @@ func RouteExit(in ExitInput) Route {
 	}
 	s := in.Signal
 	switch s.Kind {
-	case workers.SignalQuota, workers.SignalThinking:
+	case workers.SignalQuota, workers.SignalLogin, workers.SignalModel:
+		// 「工具+模型@机器」已标不可用，重新排队挑执行者与机器就不会再挑到它；都标了就派不出去转受阻
+		return Route{"requeue", s.Reason}
+	case workers.SignalThinking:
 		if in.Switches < maxSwitches {
 			return Route{"switch", s.Reason}
 		}
 		return Route{"fail", s.Reason + "；已换过 " + itoa(in.Switches) + " 次执行者"}
-	case workers.SignalLogin: // 这台的这个工具已标没登录，重新排队挑执行者与机器就不会再挑到它
-		return Route{"requeue", s.Reason}
 	case workers.SignalTransient:
 		if in.Same < maxSame {
 			return Route{"same", s.Reason}

@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/watch"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -230,7 +232,8 @@ func TestFlowInPlace(t *testing.T) {
 	}
 }
 
-func TestFlowQuotaSwitch(t *testing.T) {
+// 执行者额度用尽：标记本机的「工具+模型」到恢复时刻，任务重新排队，再挑执行者时避开它。
+func TestFlowQuotaRequeue(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
@@ -240,10 +243,27 @@ func TestFlowQuotaSwitch(t *testing.T) {
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker != "" })
+	marks, _ := workers.Marks(ctx, env.DB, store.Now())
+	if len(marks) != 1 || marks[0].Target() != "codex+gpt-6-sol@"+LocalHost || marks[0].Until <= store.Now() {
+		t.Fatalf("应标记本机的 codex+gpt-6-sol 额度用尽：%+v", marks)
+	}
+	v, err := d.view(ctx, tk, "low", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range v.Candidates {
+		if c.ID == "codex+gpt-6-sol" && (c.Eligible || !strings.Contains(strings.Join(c.Refusals, "、"), "额度用尽")) {
+			t.Errorf("挑执行者应避开额度用尽的组合：%+v", c)
+		}
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
-	if len(runs) != 2 || runs[0].Worker != "codex+gpt-6-sol" || runs[1].Why != workers.WhySwitch || runs[1].Worker != "claude+opus" {
-		t.Fatalf("额度用尽应换人：%+v", runs)
+	if len(runs) != 2 || runs[0].Worker != "codex+gpt-6-sol" || runs[1].Worker == "codex+gpt-6-sol" {
+		t.Fatalf("额度用尽应换人重派：%+v", runs)
 	}
 	h, _ := ledger.History(ctx, env.DB, tk.ID, 50)
 	found := false
@@ -255,6 +275,42 @@ func TestFlowQuotaSwitch(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "work")); err != nil {
 		t.Error("没有仓库时用 work/")
+	}
+}
+
+// watch 在执行者还活着时从日志读到额度用尽：先转失败再 Requeue，同样标记「工具+模型@机器」。
+func TestWatchQuotaMarks(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\necho 'Error: HTTP/1.1 429 Too Many Requests'\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	run, _ := workers.LastRun(ctx, env.DB, tk.ID)
+	for i := 0; i < 100; i++ {
+		if b, _ := os.ReadFile(run.Log); strings.Contains(string(b), "429") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.ExitFail}, "runtime", "额度用尽"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Requeue(ctx, env, tk.ID, watch.Why{Signal: watch.SigQuota, Worker: run.Worker}); err != nil {
+		t.Fatal(err)
+	}
+	marks, _ := workers.Marks(ctx, env.DB, store.Now())
+	if len(marks) != 1 || marks[0].Target() != run.Worker+"@"+LocalHost || marks[0].Until <= store.Now() {
+		t.Fatalf("watch 读到额度用尽也应标记 %s：%+v", run.Worker, marks)
 	}
 }
 
@@ -278,12 +334,9 @@ func TestFlowLoginRequeue(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker != "" })
-	h, err := hosts.Get(ctx, env.DB, LocalHost)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c := h.Info.CLIs["grok"]; c.LoggedIn == nil || *c.LoggedIn {
-		t.Fatalf("本机的 grok 应标没登录：%+v", h.Info.CLIs)
+	marks, _ := workers.Marks(ctx, env.DB, store.Now())
+	if len(marks) != 1 || marks[0].Target() != "grok@"+LocalHost || marks[0].Until != 0 {
+		t.Fatalf("本机的 grok 应标没登录、等人处理：%+v", marks)
 	}
 	v, err := d.view(ctx, tk, "low", nil)
 	if err != nil {
@@ -522,7 +575,7 @@ func flowRemote(t *testing.T, repo string) {
 
 // 本机克隆读不出 GitHub 上的 origin、有工作地点（本机文件夹）：只派本机。
 func TestHostNeedLocalOnly(t *testing.T) {
-	if n := hostNeed(context.Background(), "claude", ledger.Task{Dir: t.TempDir()}); n.LocalOnly == "" {
+	if n := hostNeed(context.Background(), workers.Spec{Tool: "claude"}, ledger.Task{Dir: t.TempDir()}); n.LocalOnly == "" {
 		t.Errorf("有工作地点应只派本机：%+v", n)
 	}
 	plain := t.TempDir()
@@ -530,9 +583,47 @@ func TestHostNeedLocalOnly(t *testing.T) {
 		t.Fatalf("%v %s", err, out)
 	}
 	for repo, local := range map[string]bool{"": false, "owner/name": false, plain: true} {
-		n := hostNeed(context.Background(), "claude", ledger.Task{Repo: repo})
+		n := hostNeed(context.Background(), workers.Spec{Tool: "claude"}, ledger.Task{Repo: repo})
 		if (n.LocalOnly != "") != local {
 			t.Errorf("%q：%+v", repo, n)
+		}
+	}
+}
+
+// 换人时给新执行者挑机器：上一轮那台接得了就留下，接不了（没装、没登录、标了不可用）另挑，都接不了报冲突。
+func TestSwitchHost(t *testing.T) {
+	_, d := setup(t)
+	ctx := context.Background()
+	refuse := map[string]string{} // 机器 → 接不了的原因
+	var needs []HostNeed
+	pickHost = func(_ context.Context, _ *app.Env, n HostNeed, pinned string) (HostChoice, error) {
+		needs = append(needs, n)
+		for _, h := range []string{"h1", "h3"} {
+			if (pinned == "" || pinned == h) && refuse[h] == "" {
+				return HostChoice{Kind: "run", Host: h}, nil
+			}
+		}
+		return HostChoice{Kind: "refuse", Reason: refuse[cmp.Or(pinned, "h3")]}, nil
+	}
+	w := workers.Spec{Tool: "agy", Model: "gemini-3.8-flash-high"}
+	cases := []struct {
+		name, prev string
+		refuse     map[string]string
+		want       string
+		err        bool
+	}{
+		{"上一轮那台接得了", "h3", nil, "h3", false},
+		{"上一轮那台没登录就另挑", "h3", map[string]string{"h3": "h3 上的 agy 没登录"}, "h1", false},
+		{"都接不了", "h1", map[string]string{"h1": "h1 上没装 agy", "h3": "h3 上的 agy+gemini-3.8-flash-high 不可用"}, "", true},
+	}
+	for _, c := range cases {
+		refuse, needs = c.refuse, nil
+		if refuse == nil {
+			refuse = map[string]string{}
+		}
+		host, err := d.switchHost(ctx, ledger.Task{}, w, c.prev)
+		if host != c.want || (err != nil) != c.err || needs[0].Tool != "agy" || needs[0].Model != w.Model {
+			t.Errorf("%s：%q %v %+v", c.name, host, err, needs)
 		}
 	}
 }

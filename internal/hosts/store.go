@@ -325,29 +325,6 @@ func touch(ctx context.Context, q store.Querier, id string, info *Info, load *Lo
 	return err
 }
 
-// MarkLoggedOut 记下某台机器上的某个工具没登录（执行者报没登录后 dispatch 调）：远程机器挑机器时不再给这台派这个工具，
-// 本机的由 dispatch 挑执行者时避开。代理重连、服务启动时按登录文件重新看机器，这条标记随之刷新。
-func MarkLoggedOut(ctx context.Context, db *store.DB, id, tool string) error {
-	return db.Tx(ctx, func(tx *sql.Tx) error {
-		h, err := Get(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		info := Info{}
-		if h.Info != nil {
-			info = *h.Info
-		}
-		if info.CLIs == nil {
-			info.CLIs = map[string]CLI{}
-		}
-		no := false
-		info.CLIs[tool] = CLI{Installed: true, LoggedIn: &no}
-		raw, _ := json.Marshal(info)
-		_, err = tx.ExecContext(ctx, `UPDATE hosts SET info = ? WHERE id = ?`, string(raw), id)
-		return err
-	})
-}
-
 // running 数各台机器上在跑的任务。
 func running(ctx context.Context, q store.Querier) (map[string]int, error) {
 	rows, err := q.QueryContext(ctx, `SELECT host, COUNT(*) FROM tasks WHERE status = 'running' AND host != '' GROUP BY host LIMIT 500`)

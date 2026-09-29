@@ -13,10 +13,11 @@ import (
 // 日志信号的种类。dispatch 在执行者退出时判，watch 也可以拿日志尾巴来判。
 const (
 	SignalNone      = ""
-	SignalQuota     = "quota"     // 额度用尽：标记账号，换执行者
+	SignalQuota     = "quota"     // 额度用尽：标记「工具+模型@机器」到恢复时刻，重新排队
 	SignalTransient = "transient" // 供应商或网络临时错误：同一执行者重试一次，再换人一次
 	SignalThinking  = "thinking"  // 思考耗尽单次输出：换执行者一次
-	SignalLogin     = "login"     // 工具在这台机器上没登录：标记这台的这个工具，重新挑执行者与机器
+	SignalLogin     = "login"     // 工具在这台机器上没登录：标记「工具@机器」，重新排队
+	SignalModel     = "model"     // 工具不认这个模型名：标记「工具+模型@机器」，重新排队
 )
 
 // Signal 是从退出码与日志尾巴判出来的信号。
@@ -82,11 +83,13 @@ var (
 	errorWordRE  = regexp.MustCompile(`(?i)\b(?:error|failed|limit reached|limit exceeded|too many requests|usage limits? will reset|spend(?:ing)? limit)\b|HTTP/\S+ 429|额度.{0,20}(?:用尽|不足|超限)|余额不足`)
 	quotaMarkRE  = regexp.MustCompile(`(?i)(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|usage limits? will reset|set (?:a|your) spend(?:ing)? limit|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)`)
 	loginRE      = regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b`)
+	modelNameRE  = regexp.MustCompile(`(?i)issue with the selected model|\bmodel\b[^\n]{0,40}\b(?:not found|does not exist|is not supported)|\b(?:unknown|invalid|unsupported) model\b|ModelNotFound`)
 	retryHintRE  = regexp.MustCompile(`(?i)retry-after|try again in|resets? \d`)
 	rateStatusRE = regexp.MustCompile(`(?i)^(rejected|blocked|limited|rate_limited|exceeded|denied)$`)
 	http429RE    = regexp.MustCompile(`(?:^|[^\d.])429(?:[^\d]|$)`)
 	minutesRE    = regexp.MustCompile(`(?i)try again in ~?\s*(\d+)\s*min`)
 	retryRE      = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
+	resetsInRE   = regexp.MustCompile(`(?i)resets? in\s+((?:\d+\s*[hms]\s*)+)`)
 	resetsRE     = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^()]{2,64})\))?`)
 	transients   = []struct {
 		re   *regexp.Regexp
@@ -163,8 +166,8 @@ func oneLine(s string) string {
 	return s
 }
 
-// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再没登录，最后供应商临时错误。
-// 退出码 0 不判额度、没登录与临时错误（跑完了就交关卡）；ExitUnknown 不判没登录与临时错误。
+// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再没登录、模型名无效，最后供应商临时错误。
+// 退出码 0 不判额度、没登录、模型名无效与临时错误（跑完了就交关卡）；ExitUnknown 不判后三种。
 func Classify(exitCode int, tail string, now time.Time) Signal {
 	report := errorReport(tail)
 	if exitCode != 0 && report != "" && (quotaMarkRE.MatchString(report) || http429RE.MatchString(report)) {
@@ -186,6 +189,9 @@ func Classify(exitCode int, tail string, now time.Time) Signal {
 		for _, text := range []string{report, plain} {
 			if loginRE.MatchString(text) {
 				return Signal{Kind: SignalLogin, Reason: "没登录", Evidence: oneLine(text)}
+			}
+			if modelNameRE.MatchString(text) {
+				return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}
 			}
 		}
 		text := report
@@ -237,6 +243,10 @@ func resetAt(text string, now time.Time) (time.Time, bool) {
 	if m := minutesRE.FindStringSubmatch(text); m != nil {
 		n, _ := strconv.Atoi(m[1])
 		return now.Add(time.Duration(n) * time.Minute), n > 0
+	}
+	if m := resetsInRE.FindStringSubmatch(text); m != nil {
+		d, err := time.ParseDuration(strings.Join(strings.Fields(m[1]), ""))
+		return now.Add(d), err == nil && d > 0
 	}
 	if m := resetsRE.FindStringSubmatch(text); m != nil && (m[2] != "" || m[3] != "") {
 		h, _ := strconv.Atoi(m[1])

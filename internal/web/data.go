@@ -560,7 +560,7 @@ func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
 	}
 	out.Reserve = ov.Reserve
 	for _, l := range ov.Lines {
-		out.Accounts = append(out.Accounts, account(l, now))
+		out.Accounts = append(out.Accounts, account(l))
 	}
 	list, err := hosts.List(ctx, db)
 	if err != nil {

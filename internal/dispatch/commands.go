@@ -103,12 +103,12 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 		return RunResult{}, err
 	}
 	res := RunResult{Task: t, Pick: &v}
-	tool := ""
 	if v.Recommended != "" {
-		tool = strings.SplitN(strings.SplitN(v.Recommended, "+", 2)[0], ":", 2)[0]
-	}
-	if tool != "" {
-		c, err := pickHost(ctx, env, hostNeed(ctx, tool, t), o.Host)
+		w, err := workers.ParseWorker(v.Recommended)
+		if err != nil {
+			return RunResult{}, err
+		}
+		c, err := pickHost(ctx, env, hostNeed(ctx, w, t), o.Host)
 		if err != nil {
 			return RunResult{}, err
 		}

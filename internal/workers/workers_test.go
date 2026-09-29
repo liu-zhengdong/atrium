@@ -278,6 +278,14 @@ func TestClassify(t *testing.T) {
 		{"grok 没登录", 1, "Not signed in\n", SignalLogin, time.Time{}},
 		{"claude 没登录", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalLogin, time.Time{}},
 		{"退出码 0 不判没登录", 0, "Not signed in\n", SignalNone, time.Time{}},
+		// t330 现场 agy 里 Claude 模型撞额度的原文（#543）
+		{"agy Claude 模型额度", 1, "API error (attempt 5): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h57m45s\n", SignalQuota, now.Add(2*time.Hour + 57*time.Minute + 45*time.Second)},
+		{"agy 结果事件里的额度", 1, `{"event":"result","result":{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12m"}}`, SignalQuota, now.Add(12 * time.Minute)},
+		// t342 现场 agy 不认不带强度的模型名的原文（#563）
+		{"agy 模型名无效", 1, `invalid model selection (--model "gemini-3.8-flash" --effort "")` + "\n", SignalModel, time.Time{}},
+		{"claude 模型不存在", 1, `{"type":"result","is_error":true,"result":"There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it."}`, SignalModel, time.Time{}},
+		{"codex 模型不支持", 1, "ERROR: The 'gpt-nope' model is not supported when using Codex with a ChatGPT account.\n", SignalModel, time.Time{}},
+		{"退出码 0 不判模型名", 0, "invalid model selection\n", SignalNone, time.Time{}},
 		{"接管不判临时错误", ExitUnknown, "Error: fetch failed\n", SignalNone, time.Time{}},
 		{"之后正常收尾", 1, "Error: fetch failed\n" + `{"type":"result","is_error":false,"stop_reason":"end_turn"}`, SignalNone, time.Time{}},
 		{"思考耗尽", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":32000,"output":0}}}`, SignalThinking, time.Time{}},
@@ -326,5 +334,92 @@ func TestEnded(t *testing.T) {
 	}
 	if r := codex.LastReply(`{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"审阅结论：通过"}}` + "\n" + `{"type":"turn.completed"}`); r != "审阅结论：通过" {
 		t.Errorf("codex 最后回复：%q", r)
+	}
+}
+
+func TestMarkOf(t *testing.T) {
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	agy := Spec{Tool: "agy", Model: "claude-opus-4-6-thinking", Effort: "high"}
+	reset := now.Add(3 * time.Hour).UnixMilli()
+	cases := []struct {
+		name   string
+		sig    Signal
+		ok     bool
+		target string
+		until  int64
+	}{
+		{"额度用尽按报文恢复", Signal{Kind: SignalQuota, ResetAt: reset}, true, "agy+claude-opus-4-6-thinking@h3", reset},
+		{"额度用尽读不出恢复时刻", Signal{Kind: SignalQuota}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(QuotaHold).UnixMilli()},
+		{"没登录标整个工具、等人处理", Signal{Kind: SignalLogin}, true, "agy@h3", 0},
+		{"模型名无效等人处理", Signal{Kind: SignalModel}, true, "agy+claude-opus-4-6-thinking@h3", 0},
+		{"临时错误不标", Signal{Kind: SignalTransient}, false, "", 0},
+		{"思考耗尽不标", Signal{Kind: SignalThinking}, false, "", 0},
+	}
+	for _, c := range cases {
+		m, ok := MarkOf(c.sig, agy, "h3", now)
+		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != c.until || m.Reason == "")) {
+			t.Errorf("%s：%v %+v", c.name, ok, m)
+		}
+	}
+}
+
+func TestBlocked(t *testing.T) {
+	marks := []Mark{
+		{Tool: "agy", Model: "claude-opus-4-6-thinking", Host: "h1", Reason: "额度用尽"},
+		{Tool: "grok", Host: "h3", Reason: "没登录"},
+	}
+	cases := []struct {
+		name, tool, model, host string
+		want                    bool
+	}{
+		{"同一组合同一台", "agy", "claude-opus-4-6-thinking", "h1", true},
+		{"同一工具别的模型不受影响", "agy", "gemini-3.8-flash-high", "h1", false},
+		{"别的机器不受影响", "agy", "claude-opus-4-6-thinking", "h3", false},
+		{"没写模型的挡这个工具的全部模型", "grok", "grok-4.6", "h3", true},
+		{"没写模型的只挡那台", "grok", "grok-4.6", "h1", false},
+	}
+	for _, c := range cases {
+		if _, got := Blocked(marks, c.tool, c.model, c.host); got != c.want {
+			t.Errorf("%s：%v", c.name, got)
+		}
+	}
+}
+
+func TestMarksStore(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now()
+	for _, m := range []Mark{
+		{Tool: "agy", Model: "claude-opus-4-6-thinking", Host: "h1", Kind: SignalQuota, Reason: "额度用尽", Until: now.Add(time.Hour).UnixMilli()},
+		{Tool: "agy", Model: "old", Host: "h1", Kind: SignalQuota, Reason: "额度用尽", Until: now.Add(-time.Minute).UnixMilli()},
+		{Tool: "agy", Model: "gemini-x", Host: "h3", Kind: SignalModel, Reason: "模型名无效"},
+		{Tool: "grok", Host: "h3", Kind: SignalLogin, Reason: "没登录"},
+	} {
+		m.Since = now.UnixMilli()
+		if err := SetMark(ctx, db, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Marks(ctx, db, now.UnixMilli())
+	if err != nil || len(got) != 3 {
+		t.Fatalf("到期的不算：%+v %v", got, err)
+	}
+	if _, err := ClearMarks(ctx, db, "agy+bad model"); err == nil || !strings.HasPrefix(err.Error(), "--clear:") {
+		t.Errorf("写错的应以参数名开头报错：%v", err)
+	}
+	for _, c := range []struct {
+		target string
+		n      int64
+	}{{"grok@h1", 0}, {"agy+claude-opus-4-6-thinking:high@h1", 1}, {"agy", 1}, {"grok@h3", 1}, {"grok", 0}} {
+		if n, err := ClearMarks(ctx, db, c.target); err != nil || n != c.n {
+			t.Errorf("解除 %s：%d %v", c.target, n, err)
+		}
+	}
+	if got, _ := Marks(ctx, db, now.UnixMilli()); len(got) != 0 {
+		t.Errorf("应全部解除：%+v", got)
 	}
 }

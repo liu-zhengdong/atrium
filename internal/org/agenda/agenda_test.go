@@ -1,10 +1,12 @@
 package agenda
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -299,6 +302,28 @@ func TestSettle(t *testing.T) {
 	again, err := Settle(ctx, env.DB, task.ID, raw)
 	if err != nil || again.ID != c.ID {
 		t.Fatal("同一件任务只登记一次")
+	}
+}
+
+// choice add 与关卡同样严格解析：写错的字段（如 options[].orgs）在调服务前就报错并写明字段名，不静默丢掉；--help 给出格式。
+func TestChoiceAddStrict(t *testing.T) {
+	tbl := cli.NewTable("atrium", "测试")
+	Commands(tbl)
+	dir := t.TempDir()
+	env := func(k string) string { return map[string]string{"ATRIUM_DATA": dir}[k] }
+	file := filepath.Join(dir, "choice.json")
+	raw := `{"title":"下一步","options":[{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e","orgs":"o2"}],"recommend":[1],"reason":"r"}`
+	if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := tbl.Main(context.Background(), []string{"choice", "add", "o1", file}, cli.Env{Stdout: &out, Stderr: &errb, Getenv: env}); code != 2 || !strings.Contains(errb.String(), `"orgs"`) {
+		t.Fatalf("未知字段应按用法错误拒绝并写明字段：退出码 %d，stderr %q", code, errb.String())
+	}
+	out.Reset()
+	tbl.Main(context.Background(), []string{"choice", "add", "--help"}, cli.Env{Stdout: &out, Stderr: &errb, Getenv: env})
+	if !strings.Contains(out.String(), ChoiceFormat) {
+		t.Fatalf("--help 应给出 choice.json 格式：\n%s", out.String())
 	}
 }
 

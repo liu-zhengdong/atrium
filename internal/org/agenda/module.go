@@ -3,7 +3,6 @@
 package agenda
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -213,7 +212,8 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(list, b.String(), "atrium choice ls "+list[0].ID)
 		}})
-	t.Add(cli.Command{Path: "choice add", Args: "<oN> <choice.json>", Summary: "登记一份选项单（格式同调研任务的 choice.json）",
+	t.Add(cli.Command{Path: "choice add", Args: "<oN> <choice.json>", Summary: "登记一份选项单（choice.json 的格式见 --help）",
+		Detail: ChoiceFormat,
 		Run: func(c *cli.Ctx) error {
 			dept, err := c.Arg(0, "<oN>")
 			if err != nil {
@@ -227,9 +227,9 @@ func Commands(t *cli.Table) {
 			if err != nil {
 				return api.Usage("读不到 %s：%v", file, err)
 			}
-			var in ChoiceInput
-			if err := json.Unmarshal(raw, &in); err != nil {
-				return api.Usage("%s 不是合法 JSON：%v", file, err)
+			in, err := ParseChoice(raw)
+			if err != nil {
+				return err
 			}
 			in.Org = dept
 			var ch Choice

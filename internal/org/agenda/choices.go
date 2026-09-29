@@ -31,6 +31,15 @@ const (
 	ChoiceFile     = "choice.json" // 调研任务在工作目录根写它，完成时关卡读出来登记（Settle）
 )
 
+// ChoiceFormat 是 choice.json 的格式与限制，调研任务详述和 choice add --help 都引用这一份；判定在 ParseChoice、CheckChoice。
+var ChoiceFormat = fmt.Sprintf(`格式（JSON；不认识的字段直接报错）：
+{"title": "…", "options": [{"title": "…", "gain": "能多做到什么", "why_now": "为什么现在", "cost": "代价", "if_not": "不做会怎样", "evidence": "依据", "org": "oN"}], "recommend": [1], "reason": "推荐理由"}
+- title：必填，最多 %d 字
+- options：%d–%d 项；每项 title（最多 %d 字）和 gain、why_now、cost、if_not、evidence 五栏都必填，五栏各最多 %d 字
+- options[].org：可选，这一项归哪个部门（oN，不写归出选项单的部门），选中后交给那里的负责人设计、拆活
+- recommend：推荐第几项，从 1 起，至少一项、不重复
+- reason：必填，最多 %d 字`, maxChoiceTitle, org.MinOptions, org.MaxOptions, maxOptionTitle, maxOptionField, maxReason)
+
 type OptionInput struct {
 	Title    string `json:"title"`
 	Gain     string `json:"gain"`          // 能多做到什么

@@ -69,7 +69,7 @@ type Module struct {
 
 ### 命令（`internal/cli`）
 
-- `cli.Command{Path, Args, Summary, Flags, Local, WorkerOK, Hidden, Run}`；`Run(c *cli.Ctx)` 里用 `c.Arg`、`c.Str`、`c.Opt`（没给为 nil，PATCH 用）、`c.List`（可重复、逗号拆）、`c.Bool`、`c.Int`、`c.MaxArgs`。
+- `cli.Command{Path, Args, Summary, Detail, Flags, Local, Read, Hidden, Run}`（`Detail` 是只在 `--help` 里显示的长说明）；`Run(c *cli.Ctx)` 里用 `c.Arg`、`c.Str`、`c.Opt`（没给为 nil，PATCH 用）、`c.List`（可重复、逗号拆）、`c.Bool`、`c.Int`、`c.MaxArgs`。
 - 经服务完成：`c.Call(method, path, body, &out)`。只有 `Local: true` 的命令（start、serve、status、stop）不经服务。
 - 回执：`c.Done(result, 人读文字, 下一步命令)`。人读模式打印文字，最后一行「下一步：…」；`--json` 输出 `{"ok":true,"result":…,"next":…}`。每条命令都支持 `--json`。
 - 失败：返回 `*api.Error`（见下）；人读模式打印「错误：…」和可执行时的「修正：…」，`--json` 输出 `{"ok":false,"error":{"code","message","next"?}}`。用法错误退出码 2，其余 1。

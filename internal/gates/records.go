@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -13,7 +14,7 @@ import (
 
 // 与 dispatch 的约定（都记在任务经历 task_events 里，取最近一条）：
 //
-//	worktree        dispatch 拉起执行者时记：{"dir": "<工作树绝对路径>"}；关卡在这里查事实
+//	worktree        dispatch 拉起执行者时记 Worktree：{"host":"hN","dir":"<那台上的绝对路径>"}；关卡按 host 查事实
 //	risk            task run --risk 记：high / medium / low（没记按 low）
 //	result          执行者退出时记它最后的回复原文；审阅结论从这里读
 //	worker_require  gates 建审阅任务时记（Requirement 的 JSON）；dispatch 挑执行者时按它排除
@@ -41,19 +42,25 @@ func Last(ctx context.Context, q store.Querier, task, kind string) (body string,
 	return body, err == nil, err
 }
 
-// Workspace 取执行者的工作树目录。
-func Workspace(ctx context.Context, q store.Querier, task string) (string, error) {
+// Worktree 是工作树登记：执行者在哪台机器（本机为 hosts.Local）的哪个目录干活。本机与远程都记它。
+type Worktree struct {
+	Host string `json:"host"`
+	Dir  string `json:"dir"`
+}
+
+// Remote 判工作树是否在远程机器上（查事实要经那台的代理）。
+func (w Worktree) Remote() bool { return w.Host != hosts.Local }
+
+// Workspace 取执行者的工作树登记；没登记过 found=false。
+func Workspace(ctx context.Context, q store.Querier, task string) (w Worktree, found bool, err error) {
 	body, ok, err := Last(ctx, q, task, KindWorktree)
 	if err != nil || !ok {
-		return "", firstErr(err, fmt.Errorf("%s 没有工作树登记（经历里没有 %s）", task, KindWorktree))
+		return w, false, err
 	}
-	var w struct {
-		Dir string `json:"dir"`
+	if err := json.Unmarshal([]byte(body), &w); err != nil || w.Host == "" || w.Dir == "" {
+		return w, false, fmt.Errorf("%s 的工作树登记不是 {\"host\":…,\"dir\":…}：%s", task, body)
 	}
-	if err := json.Unmarshal([]byte(body), &w); err != nil || w.Dir == "" {
-		return "", fmt.Errorf("%s 的工作树登记不是 {\"dir\":…}：%s", task, body)
-	}
-	return w.Dir, nil
+	return w, true, nil
 }
 
 // Risk 取任务风险；没记按 low。
@@ -63,15 +70,6 @@ func Risk(ctx context.Context, q store.Querier, task string) (string, error) {
 		return "low", err
 	}
 	return strings.TrimSpace(body), nil
-}
-
-func firstErr(errs ...error) error {
-	for _, e := range errs {
-		if e != nil {
-			return e
-		}
-	}
-	return nil
 }
 
 // Profile 是关卡要的档案事实：工具、模型、信任、checks。

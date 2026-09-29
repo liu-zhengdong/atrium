@@ -36,7 +36,7 @@ const (
 // kindNote 是按种类附在生成任务详述末尾的做法。
 var kindNote = map[string]string{
 	"patrol": "这是体验巡检：按真实用法把主路径走一遍，记下卡住、看不懂、出错的地方；能修的开 PR，修不了的写进任务备注。",
-	"research": "这是调研：调研完在工作目录根写 " + choiceFile + "，交付时登记成选项单交用户拍板。格式：\n" +
+	"research": "这是调研：调研完在工作目录根写 " + ChoiceFile + "，交付时登记成选项单交用户拍板。格式：\n" +
 		`{"title": "…", "options": [{"title": "…", "gain": "能多做到什么", "why_now": "为什么现在", "cost": "代价", ` +
 		`"if_not": "不做会怎样", "evidence": "依据"}], "recommend": [1], "reason": "推荐理由"}` + "\n" +
 		"3–5 项，每项五栏都要写；recommend 是推荐第几项（1 起）。",

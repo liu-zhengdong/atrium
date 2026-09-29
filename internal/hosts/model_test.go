@@ -1,6 +1,7 @@
 package hosts
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,6 +69,10 @@ func TestChoose(t *testing.T) {
 		{"紧急的不看满", []Candidate{with(local, func(c *Candidate) { c.Running = 2 }), remote}, Need{Tool: "codex", Repo: "a/b", Urgent: true}, "",
 			Choice{Kind: "run", Host: "h2"}},
 		{"没装", []Candidate{remote}, Need{Tool: "kimi"}, "h2", Choice{Kind: "refuse", Reason: "h2 上没装 kimi"}},
+		{"只能本机：本机满了排队", []Candidate{with(local, func(c *Candidate) { c.Running = 2 }), remote}, Need{Tool: "codex", LocalOnly: "拿不到仓库"}, "",
+			Choice{Kind: "queue", Reason: "h1 同时最多跑 2 个执行者，有执行者结束后再拉起"}},
+		{"只能本机：指定远程也拒绝", []Candidate{local, remote}, Need{Tool: "codex", LocalOnly: "拿不到仓库"}, "h2",
+			Choice{Kind: "refuse", Reason: "h2 是远程机器：拿不到仓库"}},
 	}
 	for _, c := range cases {
 		if got := Choose(c.cands, c.need, c.pinned); got != c.want {
@@ -164,6 +169,44 @@ func TestAssignmentRefusal(t *testing.T) {
 		f(&a)
 		if AssignmentRefusal(a, known) == "" {
 			t.Errorf("#%d 应拒绝", i)
+		}
+	}
+}
+
+func TestQueryRefusal(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent")
+	wt := filepath.Join(root, "repos", "o-r-t1")
+	work := filepath.Join(root, "tasks", "t1", "work")
+	cases := []struct {
+		name string
+		q    Query
+		ok   bool
+	}{
+		{"git rev-parse", Query{Dir: wt, Git: []string{"--no-optional-locks", "rev-parse", "HEAD"}}, true},
+		{"git status", Query{Dir: wt, Git: []string{"status", "--porcelain"}}, true},
+		{"git diff numstat", Query{Dir: wt, Git: []string{"diff", "--numstat", "origin/main...HEAD"}}, true},
+		{"git fetch", Query{Dir: wt, Git: []string{"fetch", "--quiet", "origin", "main"}}, true},
+		{"读 choice.json", Query{Dir: work, File: "choice.json"}, true},
+		{"git 改东西", Query{Dir: wt, Git: []string{"push", "origin", "main"}}, false},
+		{"git 删分支", Query{Dir: wt, Git: []string{"branch", "-D", "main"}}, false},
+		{"git 全局选项绕过", Query{Dir: wt, Git: []string{"-c", "core.pager=x", "log"}}, false},
+		{"只有全局选项", Query{Dir: wt, Git: []string{"--no-optional-locks"}}, false},
+		{"diff 写文件", Query{Dir: wt, Git: []string{"diff", "--output=/tmp/x"}}, false},
+		{"fetch 拉起程序", Query{Dir: wt, Git: []string{"fetch", "--upload-pack=sh"}}, false},
+		{"ls-remote 拉起程序", Query{Dir: wt, Git: []string{"ls-remote", "-u", "sh", "origin"}}, false},
+		{"目录在外面", Query{Dir: filepath.Join(t.TempDir(), "x"), Git: []string{"status"}}, false},
+		{"目录是代理根", Query{Dir: root, Git: []string{"status"}}, false},
+		{"目录是 runs", Query{Dir: filepath.Join(root, "runs", "x"), Git: []string{"status"}}, false},
+		{"目录带 ..", Query{Dir: wt + string(filepath.Separator) + ".." + string(filepath.Separator) + ".." + string(filepath.Separator) + "..", Git: []string{"status"}}, false},
+		{"相对目录", Query{Dir: "repos/x", Git: []string{"status"}}, false},
+		{"文件带路径", Query{Dir: work, File: "../agent.json"}, false},
+		{"隐藏文件", Query{Dir: work, File: ".git"}, false},
+		{"两样都给", Query{Dir: wt, Git: []string{"status"}, File: "a"}, false},
+		{"都没给", Query{Dir: wt}, false},
+	}
+	for _, c := range cases {
+		if why := QueryRefusal(root, c.q); (why == "") != c.ok {
+			t.Errorf("%s：%q", c.name, why)
 		}
 	}
 }
@@ -280,6 +323,22 @@ func TestServiceLayout(t *testing.T) {
 	}
 	if s := ParseStatus("linux", true, "LoadState=not-found\n"); s.Installed {
 		t.Error("not-found 应为没装")
+	}
+	// Windows：schtasks /V /FO CSV /NH，第 7 列「上次运行结果」267009 是正在跑；状态列随系统语言变，不看。
+	for _, c := range []struct {
+		ok      bool
+		out     string
+		running bool
+	}{
+		{true, `"GGB","\AtriumAgent","N/A","正在运行","交互方式","2026/9/29 9:00:00","267009","ggb","wscript.exe"` + "\r\n", true},
+		{true, `"GGB","\AtriumAgent","N/A","Ready","Interactive only","9/29/2026 9:00:00 AM","1","ggb","wscript.exe"` + "\r\n", false},
+		{true, `"GGB","\AtriumAgent","N/A","Running","Interactive only","N/A","267011","ggb","x"`, false},
+		{false, "ERROR: The system cannot find the file specified.", false},
+	} {
+		s := ParseStatus("windows", c.ok, c.out)
+		if s.Installed != c.ok || s.Running != c.running {
+			t.Errorf("%+v：%.40s", s, c.out)
+		}
 	}
 	b := utf16File("A中")
 	if b[0] != 0xFF || b[1] != 0xFE || len(b) != 2+2*len(utf16.Encode([]rune("A中"))) {

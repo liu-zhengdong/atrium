@@ -199,7 +199,7 @@ func (d *dispatcher) try(ctx context.Context, it item) error {
 	if err != nil || wait {
 		return err
 	}
-	choice, err := pickHost(ctx, d.env, HostNeed{Tool: w.Spec.Tool, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}, it.Opts.Host)
+	choice, err := pickHost(ctx, d.env, hostNeed(ctx, w.Spec.Tool, t), it.Opts.Host)
 	if err != nil {
 		return err
 	}
@@ -556,20 +556,20 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	if remote {
 		clone := ""
 		if t.Repo != "" {
-			local, url, err := RepoSource(data, t.Repo)
+			repo, err := RemoteRepo(ctx, t.Repo)
 			if err != nil {
+				return api.Conflict("%s 派不到远程：%v", t.ID, err)
+			}
+			if _, clone, err = RepoSource(data, repo); err != nil {
 				return err
 			}
-			if clone = url; clone == "" {
-				clone = local
-			}
 		}
-		rr, pid, err := launchRemote(ctx, d.env, o.Host, Remote{Task: t.ID, Tool: o.W.Spec.Tool, Request: req, Repo: clone,
+		rr, pid, rdir, err := launchRemote(ctx, d.env, o.Host, Remote{Task: t.ID, Tool: o.W.Spec.Tool, Request: req, Repo: clone,
 			Branch: branch, Base: "main", Env: extra, Log: run.Log})
 		if err != nil {
 			return err
 		}
-		run.PID, run.RemoteRun = pid, rr
+		run.PID, run.RemoteRun, run.Dir = pid, rr, rdir
 		wait = d.remoteWaiter(t.ID, rr)
 	} else {
 		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, run.Log, prompt, n)
@@ -683,12 +683,16 @@ func (d *dispatcher) record(ctx context.Context, t ledger.Task, run workers.Run)
 	if err := ledger.Record(ctx, db, t.ID, workers.RunKind, actor, string(raw)); err != nil {
 		return err
 	}
-	// 关卡在工作树里查事实（gates.Workspace）；watch 按登记的进程看进展、判卡死（watch.Track）。
-	wt, _ := json.Marshal(map[string]string{"dir": run.Dir})
+	// 关卡按登记的机器与目录查事实（gates.Workspace）；watch 按登记的进程看进展、判卡死（watch.Track，只看本机目录）。
+	wt, _ := json.Marshal(gates.Worktree{Host: run.Host, Dir: run.Dir})
 	if err := ledger.Record(ctx, db, t.ID, gates.KindWorktree, actor, string(wt)); err != nil {
 		return err
 	}
-	return watch.Track(ctx, db, t.ID, watch.Proc{Role: "worker", PID: run.PID, Host: run.Host, Log: run.Log, Dir: run.Dir, At: run.At})
+	proc := watch.Proc{Role: "worker", PID: run.PID, Host: run.Host, Log: run.Log, At: run.At}
+	if run.Host == LocalHost {
+		proc.Dir = run.Dir
+	}
+	return watch.Track(ctx, db, t.ID, proc)
 }
 
 // track 登记进程并在后台等它退出。

@@ -5,10 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,7 +26,7 @@ const (
 	maxOptionField = 600
 	maxReason      = 600
 	maxPickNote    = 300
-	choiceFile     = "choice.json" // 调研任务在工作目录根写它，完成时登记（Settle）
+	ChoiceFile     = "choice.json" // 调研任务在工作目录根写它，完成时关卡读出来登记（Settle）
 )
 
 type OptionInput struct {
@@ -372,28 +369,24 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 	return GetChoice(ctx, db, id)
 }
 
-// Settle 是调研任务完成时的钩子（gates 在判过关卡后调）：工作目录根有 choice.json 就登记成选项单，挂在任务的部门下。
-// 没有这个文件返回 nil；文件不合法返回错误（写明哪一栏），调用方把它当关卡不过交回执行者修。
-func Settle(ctx context.Context, db *store.DB, task, workdir string) (*Choice, error) {
-	raw, err := os.ReadFile(filepath.Join(workdir, choiceFile))
-	if errors.Is(err, os.ErrNotExist) {
+// Settle 是调研任务完成时的钩子（gates 在判过关卡后调）：raw 是工作目录根 choice.json 的内容（关卡读出来，远程经代理），
+// 登记成选项单，挂在任务的部门下。没有这个文件（raw 为 nil）返回 nil；不合法返回错误（写明哪一栏），调用方把它当关卡不过交回执行者修。
+func Settle(ctx context.Context, db *store.DB, task string, raw []byte) (*Choice, error) {
+	if raw == nil {
 		return nil, nil
-	}
-	if err != nil {
-		return nil, err
 	}
 	var in ChoiceInput
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return nil, api.Usage("%s 不合法：%v", choiceFile, err)
+		return nil, api.Usage("%s 不合法：%v", ChoiceFile, err)
 	}
 	t, err := ledger.Get(ctx, db, task)
 	if err != nil {
 		return nil, err
 	}
 	if t.Org == "" {
-		return nil, api.Usage("%s 没挂部门，%s 无处登记", task, choiceFile)
+		return nil, api.Usage("%s 没挂部门，%s 无处登记", task, ChoiceFile)
 	}
 	in.Org = t.Org
 	c, err := AddChoice(ctx, db, in, task, task)

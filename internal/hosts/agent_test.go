@@ -183,10 +183,10 @@ func TestAgentLaunchLogExit(t *testing.T) {
 	}
 	g.task("t1")
 	log := filepath.Join(g.env.Paths.Data, "logs", "t1.log")
-	run, pid, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "echo",
+	run, pid, wdir, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "echo",
 		Request: workers.Request{Prompt: "做"}, Repo: origin, Branch: "t1-x", Base: "main", Env: map[string]string{"MY_KEY": "k1"}, Log: log})
-	if err != nil || run != 1 || pid <= 0 {
-		t.Fatalf("Launch：%d %d %v", run, pid, err)
+	if err != nil || run != 1 || pid <= 0 || wdir != filepath.Join(dir, "repos", "a-b-t1") {
+		t.Fatalf("Launch：%d %d %s %v", run, pid, wdir, err)
 	}
 	e := waitExit(t, g.env, "t1", 1)
 	if e.Code == nil || *e.Code != 3 || e.Lost {
@@ -202,8 +202,25 @@ func TestAgentLaunchLogExit(t *testing.T) {
 		_, err := os.Stat(filepath.Join(dir, "runs", "t1.json"))
 		return errors.Is(err, os.ErrNotExist)
 	})
+	// 只读查询：在工作树里跑 git、读根下的文件；不合法的由代理拒绝。
+	ctx := context.Background()
+	if ack, err := Ask(ctx, host, Query{Dir: wdir, Git: []string{"--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"}}); err != nil || strings.TrimSpace(ack.Output) != "t1-x" {
+		t.Fatalf("git 查询：%+v %v", ack, err)
+	}
+	if ack, err := Ask(ctx, host, Query{Dir: wdir, File: "README"}); err != nil || ack.Output != "hi" || ack.Missing {
+		t.Fatalf("读文件：%+v %v", ack, err)
+	}
+	if ack, err := Ask(ctx, host, Query{Dir: wdir, File: "choice.json"}); err != nil || !ack.Missing {
+		t.Fatalf("没有的文件：%+v %v", ack, err)
+	}
+	if _, err := Ask(ctx, host, Query{Dir: wdir, Git: []string{"push", "origin", "t1-x"}}); err == nil || !strings.Contains(err.Error(), "只跑只读的 git 子命令") {
+		t.Fatalf("改东西的 git 应拒绝：%v", err)
+	}
+	if _, err := Ask(ctx, host, Query{Dir: wdir, Git: []string{"rev-parse", "no-such-ref"}}); err == nil || !strings.Contains(err.Error(), "git rev-parse") {
+		t.Fatalf("git 失败应带原因：%v", err)
+	}
 	// 同一任务第二轮：接着用原工作树。
-	run, _, err = Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "echo", Request: workers.Request{Prompt: "再做"},
+	run, _, _, err = Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "echo", Request: workers.Request{Prompt: "再做"},
 		Repo: origin, Branch: "t1-x", Base: "main", Log: log})
 	if err != nil || run != 2 {
 		t.Fatalf("第二轮：%d %v", run, err)
@@ -211,7 +228,7 @@ func TestAgentLaunchLogExit(t *testing.T) {
 	waitExit(t, g.env, "t1", 2)
 	// 代理拒绝不合法的指令：回执带原因。
 	g.task("t2")
-	if _, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t2", Tool: "rm", Request: workers.Request{Prompt: "x"}, Log: log}); err == nil ||
+	if _, _, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t2", Tool: "rm", Request: workers.Request{Prompt: "x"}, Log: log}); err == nil ||
 		!strings.Contains(err.Error(), "不认识的执行者工具") {
 		t.Fatalf("应拒绝：%v", err)
 	}
@@ -240,7 +257,7 @@ func TestAgentStopAndRestart(t *testing.T) {
 	g.task("t1")
 	g.task("t2")
 	log1 := filepath.Join(g.env.Paths.Data, "t1.log")
-	if _, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "forever", Request: workers.Request{Prompt: "x"}, Log: log1}); err != nil {
+	if _, _, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "forever", Request: workers.Request{Prompt: "x"}, Log: log1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := Stop(context.Background(), g.env, "t1"); err != nil {
@@ -251,7 +268,7 @@ func TestAgentStopAndRestart(t *testing.T) {
 	}
 	// 代理停下期间执行者照跑；重启代理后按 pid 接着看，补传日志、补报退出（退出码不可得）。
 	log2 := filepath.Join(g.env.Paths.Data, "t2.log")
-	_, pid, err := Launch(context.Background(), g.env, host, Assignment{Task: "t2", Tool: "sleep", Request: workers.Request{Prompt: "x"}, Log: log2})
+	_, pid, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t2", Tool: "sleep", Request: workers.Request{Prompt: "x"}, Log: log2})
 	if err != nil {
 		t.Fatal(err)
 	}

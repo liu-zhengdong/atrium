@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -218,22 +217,19 @@ func TestSettle(t *testing.T) {
 	env, dept := setup(t)
 	ctx := context.Background()
 	task, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研", Org: dept}, "u1")
-	dir := t.TempDir()
-	if c, err := Settle(ctx, env.DB, task.ID, dir); c != nil || err != nil {
+	if c, err := Settle(ctx, env.DB, task.ID, nil); c != nil || err != nil {
 		t.Fatal("没有 choice.json 什么都不做")
 	}
-	os.WriteFile(filepath.Join(dir, choiceFile), []byte(`{"title":"x","options":[],"extra":1}`), 0o600)
-	if _, err := Settle(ctx, env.DB, task.ID, dir); code(err) != "usage" {
+	if _, err := Settle(ctx, env.DB, task.ID, []byte(`{"title":"x","options":[],"extra":1}`)); code(err) != "usage" {
 		t.Fatalf("不认识的字段应拒绝：%v", err)
 	}
-	raw := `{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
-		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}],"recommend":[2],"reason":"r"}`
-	os.WriteFile(filepath.Join(dir, choiceFile), []byte(raw), 0o600)
-	c, err := Settle(ctx, env.DB, task.ID, dir)
+	raw := []byte(`{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
+		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}],"recommend":[2],"reason":"r"}`)
+	c, err := Settle(ctx, env.DB, task.ID, raw)
 	if err != nil || c.Org != dept || c.Task != task.ID {
 		t.Fatalf("%+v %v", c, err)
 	}
-	again, err := Settle(ctx, env.DB, task.ID, dir)
+	again, err := Settle(ctx, env.DB, task.ID, raw)
 	if err != nil || again.ID != c.ID {
 		t.Fatal("同一件任务只登记一次")
 	}
@@ -268,7 +264,7 @@ func TestScheduleTick(t *testing.T) {
 		t.Fatalf("到点应生成一轮：%v", queued)
 	}
 	task, _ := ledger.Get(ctx, env.DB, queued[0])
-	if task.Title != "巡检（09-01）" || !strings.Contains(task.Detail, choiceFile) || task.Org != dept {
+	if task.Title != "巡检（09-01）" || !strings.Contains(task.Detail, ChoiceFile) || task.Org != dept {
 		t.Fatalf("%+v", task)
 	}
 	// 第二天到点，上一轮没结束：跳过记一笔。

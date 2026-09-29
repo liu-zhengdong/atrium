@@ -61,7 +61,7 @@ func recordWorktree(e *env, task ledger.Task) string {
 		e.t.Fatal(err)
 	}
 	e.gh.Must(e.gh.Work, "worktree", "add", "--quiet", "-b", "task-"+task.ID, dir, "main")
-	if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", fmt.Sprintf(`{"dir":%q}`, dir)); err != nil {
+	if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", fmt.Sprintf(`{"host":"h1","dir":%q}`, dir)); err != nil {
 		e.t.Fatal(err)
 	}
 	return dir

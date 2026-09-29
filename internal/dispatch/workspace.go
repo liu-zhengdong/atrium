@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/gates"
+	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 )
 
@@ -35,6 +37,26 @@ func RepoSource(data, repo string) (local, cloneURL string, err error) {
 		return filepath.Join(data, "repos", strings.ReplaceAll(repo, "/", "_")), "https://github.com/" + repo + ".git", nil
 	}
 	return "", "", api.Usage("任务的仓库 %q 看不懂：写 owner/name、克隆地址或本机克隆的绝对路径", repo)
+}
+
+// RemoteRepo 是派到远程时仓库的写法：本机克隆的绝对路径换成它 origin 的 owner/name（与关卡查 PR 同一个换算 gates.Slug），
+// 其余原样。换算不了返回错误：这件活只派本机。
+func RemoteRepo(ctx context.Context, repo string) (string, error) {
+	if !filepath.IsAbs(repo) {
+		return repo, nil
+	}
+	return gates.Slug(ctx, gates.NewExec(), repo)
+}
+
+// hostNeed 是这件活对机器的要求：仓库按远程的写法比对机器登记的仓库；本机克隆换算不出 origin 就只派本机。
+func hostNeed(ctx context.Context, tool string, t ledger.Task) HostNeed {
+	n := HostNeed{Tool: tool, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}
+	if repo, err := RemoteRepo(ctx, t.Repo); err != nil {
+		n.LocalOnly = fmt.Sprintf("仓库 %s 是本机克隆，换算不出 GitHub 上的 owner/name（%v）", t.Repo, err)
+	} else {
+		n.Repo = repo
+	}
+	return n
 }
 
 // run 跑一条命令（经 platform），返回标准输出；失败时带上标准错误。

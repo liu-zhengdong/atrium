@@ -34,8 +34,8 @@ var (
 	pickHost = func(ctx context.Context, env *app.Env, n HostNeed, pinned string) (HostChoice, error) {
 		return hosts.Pick(ctx, env, n, pinned)
 	}
-	// launchRemote 把运行交给远程代理，返回远程轮号与 pid；之后用 waitRemote 等它退出。
-	launchRemote = func(ctx context.Context, env *app.Env, host string, r Remote) (run, pid int, err error) {
+	// launchRemote 把运行交给远程代理，返回远程轮号、pid 与那台上的工作目录；之后用 waitRemote 等它退出。
+	launchRemote = func(ctx context.Context, env *app.Env, host string, r Remote) (run, pid int, dir string, err error) {
 		return hosts.Launch(ctx, env, host, r)
 	}
 	// waitRemote 等远程运行退出，返回退出码（不可得为 workers.ExitUnknown）。服务重启后照样能等。

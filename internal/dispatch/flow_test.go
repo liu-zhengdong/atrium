@@ -246,7 +246,7 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker != "" })
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker == "" }) // 换人重派：上一轮的执行者清掉
 	marks, _ := workers.Marks(ctx, env.DB, store.Now())
 	if len(marks) != 1 || marks[0].Target() != "codex+gpt-6-sol@"+LocalHost || marks[0].Until <= store.Now() {
 		t.Fatalf("应标记本机的 codex+gpt-6-sol 额度用尽：%+v", marks)
@@ -338,7 +338,7 @@ func TestFlowLoginRequeue(t *testing.T) {
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker != "" })
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker == "" }) // 换人重派：上一轮的执行者清掉
 	marks, _ := workers.Marks(ctx, env.DB, store.Now())
 	if len(marks) != 1 || marks[0].Target() != "grok@"+LocalHost || marks[0].Until != 0 {
 		t.Fatalf("本机的 grok 应标没登录、等人处理：%+v", marks)
@@ -709,5 +709,44 @@ func TestFlowDepsBroken(t *testing.T) {
 		if rows != 0 || err != nil || target != "a1" || level != events.Act {
 			t.Fatalf("依赖%s：队列行 %d，事件 %s %s %v", to, rows, target, level, err)
 		}
+	}
+}
+
+// 失败后改派：入队当场把执行者改成这一轮指定的、机器改成指定的（没指定留空）；排队中再 task run 被拒，原队列行不动。
+func TestEnqueueSetsWorker(t *testing.T) {
+	env, _ := setup(t)
+	ctx := context.Background()
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "改派"}, "u1")
+	prev, host := "agy+gemini-3.8-flash-high", LocalHost
+	if err := ledger.SetFacts(ctx, env.DB, tk.ID, ledger.Facts{Worker: &prev, Host: &host}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Set, To: ledger.Failed}, "u1", "上一轮失败"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ledger.Queued || got.Worker != "claude+opus" || got.Host != "" {
+		t.Fatalf("入队后应显示这一轮的执行者、机器清空：%+v", got)
+	}
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err == nil {
+		t.Fatal("排队中不能再派")
+	}
+	list, err := queued(ctx, env.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || !list[0].Row || list[0].Opts.Worker != "claude+opus" {
+		t.Fatalf("被拒的 task run 不该动原队列行：%+v", list)
+	}
+	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Worker != "claude+opus" {
+		t.Fatalf("被拒的 task run 不该改执行者：%+v", got)
+	}
+	// 自动挑：执行者留空，拉起时再写。
+	ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Set, To: ledger.Failed}, "u1", "")
+	if got, err := Enqueue(ctx, env, tk.ID, Options{}, "u1"); err != nil || got.Worker != "" {
+		t.Fatalf("自动挑时执行者应留空：%+v %v", got, err)
 	}
 }

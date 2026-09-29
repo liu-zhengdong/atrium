@@ -226,6 +226,17 @@ func Rounds(ctx context.Context, q store.Querier, id string, n int) ([]ledger.Ta
 	return out, nil
 }
 
+// ScheduleOf 是 Rounds 的反查：任务是哪条周期任务生成的一轮；不是（或那条已删）为空。
+func ScheduleOf(ctx context.Context, q store.Querier, task string) (string, error) {
+	var id string
+	err := q.QueryRowContext(ctx, `SELECT s.id FROM task_events e JOIN schedules s ON s.id = e.actor
+		WHERE e.task = ? AND e.kind = 'created' LIMIT 1`, task).Scan(&id)
+	if store.IsNotFound(err) {
+		return "", nil
+	}
+	return id, err
+}
+
 // openRound 是上一轮还没结束的任务；没有为空。
 func openRound(ctx context.Context, q store.Querier, x Schedule) (string, error) {
 	if x.LastTask == "" {

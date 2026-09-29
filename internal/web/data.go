@@ -420,7 +420,9 @@ type DeptPage struct {
 	Rules     []Rule         `json:"rules"`
 	Inherited []Rule         `json:"inherited"`
 	RuleMax   int            `json:"rule_max"`
+	Accept    *Accept        `json:"accept"` // 验收人（沿树继承）；缺省 auto 为空
 	Materials []org.Material `json:"materials"`
+	MatMax    int            `json:"material_max"` // 资料文本总量上限（字），用量由页面按 units 合计
 	Schedules []Sched        `json:"schedules"`
 	SchedMax  int            `json:"schedule_max"`
 }
@@ -431,6 +433,13 @@ type Leader struct {
 	Name      string `json:"name"`
 	Workers   string `json:"workers"`
 	Inherited bool   `json:"inherited,omitempty"`
+}
+
+// Accept 是部门页头的验收人：org.Acceptor 的结果，From 不是本部门时页面写「沿用 FromName」。
+type Accept struct {
+	Who      string `json:"who"` // leader 或 user
+	From     string `json:"from"`
+	FromName string `json:"from_name"`
 }
 
 // Rule 是一条要点（规矩）。
@@ -453,7 +462,7 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 		return DeptPage{}, err
 	}
 	page := DeptPage{Dept: d, Path: []Pair{}, Subs: []DeptBrief{}, Rules: []Rule{}, Inherited: []Rule{}, RuleMax: org.MaxPoints,
-		Schedules: []Sched{}, SchedMax: org.MaxSchedules}
+		MatMax: org.MaxMaterial, Schedules: []Sched{}, SchedMax: org.MaxSchedules}
 	chain, err := org.Ancestors(ctx, q, id)
 	if err != nil {
 		return DeptPage{}, err
@@ -471,6 +480,13 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 			return DeptPage{}, err
 		}
 		page.Leader = &Leader{ID: l.ID, Name: l.Name, Workers: strings.Join(l.Workers, "、"), Inherited: d.Leader != lead}
+	}
+	who, from, err := org.Acceptor(ctx, q, id)
+	if err != nil {
+		return DeptPage{}, err
+	}
+	if who != org.AcceptAuto {
+		page.Accept = &Accept{Who: who, From: from, FromName: ix.name(from)}
 	}
 	for _, s := range ix.children[id] {
 		page.Subs = append(page.Subs, *ix.byID[s])
@@ -769,6 +785,9 @@ type TaskDetail struct {
 	Kids     []Row          `json:"kids"`    // 直接的子任务（按建立先后）
 	Waits    []Row          `json:"waits"`   // 它要等的（依赖，含已结束的）
 	Waiters  []Row          `json:"waiters"` // 在等它的
+	// 由哪条周期任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
+	Schedule string `json:"schedule,omitempty"`
+	Choice   string `json:"choice,omitempty"`
 }
 
 func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, error) {
@@ -781,6 +800,12 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 		return out, err
 	}
 	if err := relations(ctx, q, &out); err != nil {
+		return out, err
+	}
+	if out.Schedule, err = agenda.ScheduleOf(ctx, q, id); err != nil {
+		return out, err
+	}
+	if out.Choice, err = agenda.ChoiceOf(ctx, q, id); err != nil {
 		return out, err
 	}
 	if t.Org != "" {

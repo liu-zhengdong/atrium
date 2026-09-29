@@ -538,3 +538,65 @@ func TestSchedules(t *testing.T) {
 		t.Error("没有的周期任务应报错")
 	}
 }
+
+// 部门页头的验收人（沿用上级的写出处，缺省 auto 不给）与资料上限；任务抽屉来自哪条周期任务、牵着哪份选项单。
+func TestDeptHeadAndTaskLinks(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	env := &app.Env{DB: db, Pause: &pause.Store{DB: db}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	root, _ := org.Add(ctx, db, org.NewDept{Name: "组织"})
+	sub, _ := org.Add(ctx, db, org.NewDept{Name: "运行时", Parent: root.ID})
+	own, _ := org.Add(ctx, db, org.NewDept{Name: "网页", Parent: root.ID})
+	free, _ := org.Add(ctx, db, org.NewDept{Name: "文章"})
+	user, leader := org.AcceptUser, org.AcceptLeader
+	org.Edit(ctx, db, root.ID, org.DeptPatch{Accept: &user})
+	org.Edit(ctx, db, own.ID, org.DeptPatch{Accept: &leader})
+	for _, c := range []struct {
+		dept string
+		want *Accept
+	}{
+		{sub.ID, &Accept{Who: user, From: root.ID, FromName: "组织"}},
+		{own.ID, &Accept{Who: leader, From: own.ID, FromName: "网页"}},
+		{free.ID, nil},
+	} {
+		page, err := loadDept(ctx, db, t.TempDir(), c.dept)
+		if err != nil || !reflect.DeepEqual(page.Accept, c.want) || page.MatMax != org.MaxMaterial {
+			t.Errorf("%s 验收人：%+v %v", c.dept, page.Accept, err)
+		}
+	}
+
+	x, err := agenda.AddSchedule(ctx, db, "", agenda.NewSchedule{Org: sub.ID, Title: "调研", Kind: "research", Every: "7d"}, "secretary", store.Now(), time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agenda.Enqueue = func(context.Context, *app.Env, string, string) error { return nil }
+	t.Cleanup(func() { agenda.Enqueue = nil })
+	round, err := agenda.RunNow(ctx, env, x.ID, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opt := agenda.OptionInput{Title: "A", Gain: "g", WhyNow: "w", Cost: "c", IfNot: "i", Evidence: "e"}
+	c, err := agenda.AddChoice(ctx, db, agenda.ChoiceInput{Org: sub.ID, Title: "下一步", Options: []agenda.OptionInput{opt, opt, opt},
+		Recommend: []int{1}, Reason: "r"}, round.ID, "secretary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err = agenda.Decide(ctx, db, c.ID, []int{2}, "", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "秘书建的", Org: sub.ID}, "secretary")
+	for _, w := range []struct{ id, schedule, choice string }{
+		{round.ID, x.ID, c.ID},        // 周期任务生成的调研轮，交出了选项单
+		{c.Options[1].Task, "", c.ID}, // 从选项单选出来的
+		{plain.ID, "", ""},            // 建它的是 secretary，不当成周期任务
+	} {
+		d, err := loadTask(ctx, db, w.id)
+		if err != nil || d.Schedule != w.schedule || d.Choice != w.choice {
+			t.Errorf("%s 抽屉：来自 %q 选项单 %q %v", w.id, d.Schedule, d.Choice, err)
+		}
+	}
+}

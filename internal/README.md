@@ -44,7 +44,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、负责人、备忘、技能、资料、档案、机器 | — |
-| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；执行者环境里 `--detach` 静默退出）、`statusline`（状态栏调用，不列在帮助里） | — |
+| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出此刻全景与秘书备忘进会话；执行者环境里 `--detach` 静默退出）、`statusline`（状态栏调用，不列在帮助里） | — |
 
 ## 共同约定
 

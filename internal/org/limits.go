@@ -55,7 +55,7 @@ var Limits = []Limit{
 		"atrium org show {dept}"},
 	{"repos", "每部门仓库", MaxRepos, "个", "部门负责人", "拆子部门，或去掉不用的（atrium org edit {dept} --repo-rm …）", "atrium org show {dept}"},
 	{"leaders", "全部负责人", MaxLeaders, "位", "秘书", "合并职责相近的部门，一位负责人管几个部门", "atrium leader ls"},
-	{"memo", "每份备忘", MaxMemo, "字", "备忘的主人", "删掉已经过时的、合并重复的，只留下次醒来必须知道的；定下的规矩提成要点", "atrium memo show"},
+	{"memo", "每份备忘", MaxMemo, "字", "备忘的主人", "不记进展（任务到哪了看 atrium top）；删掉已经过时的、合并重复的，只留账本里没有、下次醒来必须知道的；定下的规矩提成要点", "atrium memo show"},
 	{"skills", "全部技能", MaxSkills, "个", "秘书", "合并相近的技能，删掉没人用的", "atrium skill ls"},
 	{"skill_body", "每份 SKILL.md", MaxSkillBody, "B", "技能作者", "细节挪进技能目录里的附属文件，SKILL.md 只留做法", "atrium skill ls"},
 	{"skill_file", "技能里单个文件", MaxSkillFile, "MB", "技能作者", "压缩或拆小；截图只留说明做法必需的", "atrium skill ls"},

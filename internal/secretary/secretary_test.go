@@ -219,3 +219,16 @@ func TestLiveness(t *testing.T) {
 		}
 	}
 }
+
+func TestBrief(t *testing.T) {
+	v := watch.View{Choices: 2, Tasks: []watch.TaskRow{{ID: "t9", Title: "活", Holder: watch.Holder{Kind: "worker"}}}}
+	got := Brief(v, "规矩放哪")
+	for _, want := range []string{"此刻全景", "在干活（1）", "t9", "选项单 2", "秘书备忘", "规矩放哪"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Brief 缺 %q：\n%s", want, got)
+		}
+	}
+	if got := Brief(watch.View{}, " \n"); !strings.HasSuffix(got, "（空）") {
+		t.Fatalf("空备忘应写（空）：\n%s", got)
+	}
+}

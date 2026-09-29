@@ -341,13 +341,22 @@ func TestRoutes(t *testing.T) {
 		t.Errorf("上交应进等你：%+v", today.Asks)
 	}
 	read("dept/"+sub.ID, &page)
-	if page.Leader == nil || page.Leader.Name != "运行时负责人" || page.Leader.Inherited {
-		t.Errorf("负责人：%+v", page.Leader)
+	if page.Leader == nil || page.Leader.Name != "运行时负责人" || page.Leader.Inherited ||
+		!reflect.DeepEqual(page.Leader.Depts, []Pair{{sub.ID, sub.Name}}) || page.Leader.Memo != "" {
+		t.Errorf("负责人（没写备忘时为空串）：%+v", page.Leader)
 	}
-	// 自己没有负责人：显示往上最近一级的，标成继承；上面一路都没有就是空（你直接管）。
+	// 自己没有负责人：显示往上最近一级的，标成继承；点开看到的负责部门与备忘和本人的一样。上面一路都没有就是空（你直接管）。
 	leaf, _ := org.Add(ctx, db, org.NewDept{Name: "网页", Parent: sub.ID})
+	other, _ := org.Add(ctx, db, org.NewDept{Name: "发版", Parent: root.ID})
+	if _, err := org.Edit(ctx, db, other.ID, org.DeptPatch{Leader: &a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := org.SetMemo(ctx, db, a.ID, "先修卡死\n再做网页", a.ID); err != nil {
+		t.Fatal(err)
+	}
 	read("dept/"+leaf.ID, &page)
-	if page.Leader == nil || page.Leader.ID != a.ID || !page.Leader.Inherited {
+	if page.Leader == nil || page.Leader.ID != a.ID || !page.Leader.Inherited || page.Leader.Memo != "先修卡死\n再做网页" ||
+		!reflect.DeepEqual(page.Leader.Depts, []Pair{{sub.ID, sub.Name}, {other.ID, "发版"}}) {
 		t.Errorf("继承的负责人：%+v", page.Leader)
 	}
 	page = DeptPage{}

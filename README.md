@@ -1,6 +1,10 @@
+<img src="docs/brand/atrium-logo.svg" width="88" alt="Atrium logo">
+
 # Atrium · 中庭
 
 **一支延伸你意志的 AI 军团。** 你定方向、做判断；军团按组织树层层展开：秘书对你，负责人各管一块，执行者（Claude Code、Codex、OpenCode……）干具体的活，运行时自己查事实、验收、合入、上线。递到你面前的，只有需要你拍板的事。
+
+[![Atrium 宣传片（45 秒）：点开播放](docs/brand/promo-poster.jpg)](docs/brand/atrium-promo.mp4)
 
 ```
 往下：你 → 秘书 → 任务 → 执行者 → PR → 关卡 · 合入 · 上线

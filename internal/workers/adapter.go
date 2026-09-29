@@ -368,7 +368,7 @@ func AgyModelArgs(model, effort string) ([]string, error) {
 
 // agy（Antigravity）：--print=<提示词>（等号形式）、stream-json 事件、全放行、不认斜杠命令。
 func agyAdapter() *Driver {
-	a := &Driver{Tool: "agy", Exe: "agy", DefaultModel: "claude-opus-4-6-thinking", Efforts: []string{"low", "medium", "high", "max"},
+	a := &Driver{Tool: "agy", Exe: "agy", DefaultModel: "gemini-3.8-flash", Efforts: []string{"low", "medium", "high", "max"},
 		Tell: TellRestart, JSON: true, ArgPrompt: true}
 	a.build = func(in Request) (Launch, error) {
 		m, err := AgyModelArgs(in.Model, in.Effort)

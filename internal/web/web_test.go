@@ -233,6 +233,9 @@ func TestRoutes(t *testing.T) {
 	if len(today.Asks) != 1 || today.Asks[0].ID != task.ID || today.Asks[0].Sub != "等你拍板" || today.Asks[0].DeptName != "运行时" {
 		t.Errorf("今天：%+v", today.Asks)
 	}
+	if !strings.HasPrefix(today.Goals.Week.Text, "纠正 0（") || !strings.HasPrefix(today.Goals.All.Text, "纠正 0（") {
+		t.Errorf("今天页要带三个目标的数：%+v", today.Goals)
+	}
 	var page DeptPage
 	read("dept/"+sub.ID, &page)
 	if len(page.Tasks) != 1 || page.Tasks[0].State != "bad" || len(page.Inherited) != 1 || !reflect.DeepEqual(page.Path, []Pair{{root.ID, "组织"}}) {

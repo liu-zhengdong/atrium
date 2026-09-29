@@ -27,6 +27,8 @@ func Commands(t *cli.Table) {
 			{Name: "dir", Value: "路径", Help: "工作地点：本机文件夹的绝对路径，不必是 git 仓库；执行者在原地干，交付说明写在最后的回复里（与 --repo 只给一个）"},
 			{Name: "owner", Value: "身份", Help: "处理人：结果（合入、上线、失败、卡住）要处理地投给他——u1、secretary 或 aN（缺省派活的人）；aN 且不写仓库与工作地点 = 交给这位负责人去拆，建好就唤醒它；--detail 写清服务三个目标里的哪一个，长期方向写进部门介绍，不建成做不完的任务"},
 			{Name: "draft", Bool: true, Help: "建成草稿：还没想清楚、条件还不够，不派活、不计时；想清楚了 task set tN --status todo"},
+			{Name: "source", Value: "来源", Help: "草稿记的发现从哪来：user 用户纠正 / org 组织发现（只给草稿）"},
+			{Name: "class", Value: "类名", Help: "草稿记的发现按原因归的类，如「执行者可用性」；回执列出已有的类（只给草稿）"},
 		},
 		Run: func(c *cli.Ctx) error {
 			title, err := c.Arg(0, "<标题>")
@@ -38,7 +40,7 @@ func Commands(t *cli.Table) {
 			}
 			in := NewTask{Title: title, Detail: c.Str("detail"), Org: c.Str("org"), Parent: c.Str("parent"),
 				After: c.List("after"), Skill: c.Str("skill"), Priority: Priority(c.Str("priority")), Repo: c.Str("repo"),
-				Dir: c.Str("dir"), Owner: c.Str("owner"), Draft: c.Bool("draft")}
+				Dir: c.Str("dir"), Owner: c.Str("owner"), Draft: c.Bool("draft"), Source: Source(c.Str("source")), Class: c.Str("class")}
 			var task Task
 			if err := c.Call("POST", "/api/tasks", in, &task); err != nil {
 				return err
@@ -47,6 +49,13 @@ func Commands(t *cli.Table) {
 			switch {
 			case task.Status == Draft:
 				next = "atrium task set " + task.ID + " --status todo"
+				if task.Class != "" {
+					var classes []Class
+					if err := c.Call("GET", "/api/classes", nil, &classes); err != nil {
+						return err
+					}
+					text += "；" + classNote(task, classes)
+				}
 			case Assignee(in, "") != "":
 				// 交给负责人的任务由它拆、派、收尾，建的人不派它。
 				if text, next, err = events.AsyncNext(c, text+"，已交给 "+in.Owner+" 去拆", "atrium task wait "+task.ID); err != nil {
@@ -137,7 +146,7 @@ func Commands(t *cli.Table) {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
 			}
-			for _, kv := range [][2]string{{"技能", t.Skill}, {"仓库", t.Repo}, {"工作地点", t.Dir}, {"执行者", t.Worker}, {"机器", t.Host}, {"PR", t.PR}} {
+			for _, kv := range [][2]string{{"来源", t.Source.Label()}, {"类", t.Class}, {"技能", t.Skill}, {"仓库", t.Repo}, {"工作地点", t.Dir}, {"执行者", t.Worker}, {"机器", t.Host}, {"PR", t.PR}} {
 				if kv[1] != "" {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
@@ -201,6 +210,8 @@ func Commands(t *cli.Table) {
 			{Name: "repo", Value: "仓库", Help: "仓库"},
 			{Name: "dir", Value: "路径", Help: "工作地点（本机文件夹的绝对路径；给空串清掉）"},
 			{Name: "after", Value: "tN", Multi: true, Help: "整体替换依赖（给空串清空）"},
+			{Name: "source", Value: "来源", Help: "发现从哪来：user 用户纠正 / org 组织发现（给空串清掉）"},
+			{Name: "class", Value: "类名", Help: "发现归的类（给空串清掉）；把写成两个名字的同一类并起来"},
 			{Name: "status", Value: "状态", Help: "人工改状态：draft（退回草稿）、todo（转待派）、done、failed、cancelled（停下用 task stop）"},
 			{Name: "note", Value: "文字", Help: "改状态的原因，记进经历"},
 		},
@@ -215,6 +226,11 @@ func Commands(t *cli.Table) {
 				pr := Priority(*p)
 				body.Priority = &pr
 			}
+			if s := c.Opt("source"); s != nil {
+				src := Source(*s)
+				body.Source = &src
+			}
+			body.Class = c.Opt("class")
 			if c.Has("after") {
 				after := c.List("after")
 				if after == nil {
@@ -377,6 +393,25 @@ func callSurvivingRestart(c *cli.Ctx, path string, out any) error {
 		time.Sleep(300 * time.Millisecond)
 		c.ResetClient()
 	}
+}
+
+// classNote 是加了带类的草稿后给的一句：类里已有几件，或这是新类、已有哪些类。
+func classNote(t Task, classes []Class) string {
+	var others []string
+	for _, c := range classes {
+		if c.Name == t.Class {
+			if c.Tasks > 1 {
+				return fmt.Sprintf("类「%s」里已有 %d 件（完成 %d 件）", c.Name, c.Tasks-1, c.Done)
+			}
+			continue
+		}
+		others = append(others, fmt.Sprintf("%s（%d）", c.Name, c.Tasks))
+	}
+	if len(others) == 0 {
+		return fmt.Sprintf("「%s」是第一个类", t.Class)
+	}
+	return fmt.Sprintf("「%s」是新类；已有的类：%s——是同一类的改用已有名字：atrium task set %s --class 类名", t.Class,
+		strings.Join(others, "、"), t.ID)
 }
 
 func stateLabel(t Task) string {

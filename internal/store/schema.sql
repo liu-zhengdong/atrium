@@ -122,6 +122,15 @@ CREATE TABLE IF NOT EXISTS task_dirs (
   dir  TEXT NOT NULL
 );
 
+-- 草稿记的发现：来源（user 用户纠正／org 组织发现）与类（按原因归的类名，如「执行者可用性」）；转待派、完成后也还带着。
+-- 三个目标的数（纠正、复发）从这里算。没有这一行就是没记。单独一张表的理由同 task_dirs。
+CREATE TABLE IF NOT EXISTS task_findings (
+  task   TEXT PRIMARY KEY REFERENCES tasks (id),
+  source TEXT NOT NULL DEFAULT '' CHECK (source IN ('', 'user', 'org')),
+  class  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS task_findings_class ON task_findings (class);
+
 CREATE TABLE IF NOT EXISTS task_deps (
   task       TEXT NOT NULL REFERENCES tasks (id),
   depends_on TEXT NOT NULL REFERENCES tasks (id),

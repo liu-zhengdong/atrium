@@ -274,13 +274,14 @@ func lastReason(ctx context.Context, q store.Querier, id string) (string, error)
 
 // Today 是今天页。
 type Today struct {
-	Asks    []Ask    `json:"asks"`
-	Running []Row    `json:"running"`
-	Queued  int      `json:"queued"`
-	Drafts  int      `json:"drafts"` // 草稿只给数，点开到根部门的任务页
-	Shipped []Row    `json:"shipped"`
-	Groups  []Pair   `json:"groups"` // 分组的一级部门 id 与名字
-	Paused  []string `json:"paused"` // 暂停范围（all、oN、hN）；空表示没暂停
+	Asks    []Ask        `json:"asks"`
+	Running []Row        `json:"running"`
+	Queued  int          `json:"queued"`
+	Drafts  int          `json:"drafts"` // 草稿只给数，点开到根部门的任务页
+	Goals   ledger.Goals `json:"goals"`  // 三个目标的数（与 top 同一份）
+	Shipped []Row        `json:"shipped"`
+	Groups  []Pair       `json:"groups"` // 分组的一级部门 id 与名字
+	Paused  []string     `json:"paused"` // 暂停范围（all、oN、hN）；空表示没暂停
 }
 
 // Pair 是 id 与名字。
@@ -318,7 +319,11 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
-	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}, Paused: paused}
+	goals, err := ledger.ReadGoals(ctx, q, now.UnixMilli())
+	if err != nil {
+		return Today{}, err
+	}
+	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}, Paused: paused}
 	seen := map[string]bool{}
 	for _, t := range running {
 		r := toRow(t, ix.parents, nil)

@@ -30,7 +30,9 @@ type Task struct {
 	Stage      Stage    `json:"stage,omitempty"`
 	Priority   Priority `json:"priority"`
 	Repo       string   `json:"repo,omitempty"`
-	Dir        string   `json:"dir,omitempty"` // 工作地点：本机文件夹，执行者在原地干（与 Repo 只有一个）
+	Dir        string   `json:"dir,omitempty"`    // 工作地点：本机文件夹，执行者在原地干（与 Repo 只有一个）
+	Source     Source   `json:"source,omitempty"` // 草稿记的发现从哪来：user 用户纠正、org 组织发现
+	Class      string   `json:"class,omitempty"`  // 发现按原因归的类
 	Worker     string   `json:"worker,omitempty"`
 	Host       string   `json:"host,omitempty"`
 	PR         string   `json:"pr,omitempty"`
@@ -42,9 +44,12 @@ type Task struct {
 const taskCols = `id, parent, department, skill, title, detail, status, stage, priority, repo, worker, host, pr,
 	created_at, updated_at, finished_at`
 
-// dirCol 是工作地点那一列（存在 task_dirs，见 schema.sql），接在 taskCols 后面；t 是 tasks 在查询里的名字。
-func dirCol(t string) string {
-	return `, COALESCE((SELECT dir FROM task_dirs WHERE task = ` + t + `.id), '')`
+// extraCols 是另存一张表的几列（工作地点在 task_dirs，来源与类在 task_findings，见 schema.sql），接在 taskCols 后面；
+// t 是 tasks 在查询里的名字。
+func extraCols(t string) string {
+	return `, COALESCE((SELECT dir FROM task_dirs WHERE task = ` + t + `.id), ''),
+	COALESCE((SELECT source FROM task_findings WHERE task = ` + t + `.id), ''),
+	COALESCE((SELECT class FROM task_findings WHERE task = ` + t + `.id), '')`
 }
 
 type scanner interface{ Scan(dest ...any) error }
@@ -54,7 +59,7 @@ func scanTask(s scanner) (Task, error) {
 	var parent, org, skill sql.NullString
 	var finished sql.NullInt64
 	err := s.Scan(&t.ID, &parent, &org, &skill, &t.Title, &t.Detail, &t.Status, &t.Stage, &t.Priority,
-		&t.Repo, &t.Worker, &t.Host, &t.PR, &t.CreatedAt, &t.UpdatedAt, &finished, &t.Dir)
+		&t.Repo, &t.Worker, &t.Host, &t.PR, &t.CreatedAt, &t.UpdatedAt, &finished, &t.Dir, &t.Source, &t.Class)
 	t.Parent, t.Org, t.Skill = parent.String, org.String, skill.String
 	if finished.Valid {
 		t.FinishedAt = &finished.Int64
@@ -85,6 +90,9 @@ type NewTask struct {
 	Owner string `json:"owner"`
 	// Draft：建成草稿（还没想清楚、条件还不够；不派活、不计时），缺省建成 todo。
 	Draft bool `json:"draft"`
+	// Source、Class：草稿记的发现从哪来、归哪一类（只给草稿）。
+	Source Source `json:"source"`
+	Class  string `json:"class"`
 	// By 是派活人，缺省为建任务的身份；周期任务记建周期任务的人。不从请求体读。
 	By string `json:"-"`
 }
@@ -201,6 +209,12 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 	if err := checkPlace(in.Repo, in.Dir); err != nil {
 		return Task{}, err
 	}
+	if in.Class = strings.TrimSpace(in.Class); !in.Draft && (in.Source != "" || in.Class != "") {
+		return Task{}, api.Usage("--source、--class: 只给草稿（--draft）；已有任务改用 atrium task set tN --source … --class …")
+	}
+	if err := checkFinding(in.Source, in.Class); err != nil {
+		return Task{}, err
+	}
 	var id string
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		if in.Parent != "" {
@@ -250,38 +264,13 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 			}
 			in.Org = led[0]
 		}
-		status := Todo
 		if in.Draft {
-			status = Draft
 			if err := roomForDraft(ctx, tx); err != nil {
 				return err
 			}
 		}
 		var err error
-		if id, err = store.NextID(ctx, tx, "t"); err != nil {
-			return err
-		}
-		now := store.Now()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, parent, department, skill, title, detail, status,
-			priority, repo, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, store.Null(in.Parent), store.Null(in.Org), store.Null(in.Skill), strings.TrimSpace(in.Title),
-			in.Detail, status, in.Priority, in.Repo, now, now); err != nil {
-			return err
-		}
-		if err := setDir(ctx, tx, id, in.Dir); err != nil {
-			return err
-		}
-		for _, d := range in.After {
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO task_deps (task, depends_on) VALUES (?, ?)`, id, d); err != nil {
-				return err
-			}
-		}
-		parties := ""
-		if in.By != "" || in.Owner != "" {
-			raw, _ := json.Marshal(Parties{By: in.By, Owner: in.Owner})
-			parties = string(raw)
-		}
-		if err := Record(ctx, tx, id, "created", actor, parties); err != nil {
+		if id, err = insert(ctx, tx, in, actor); err != nil {
 			return err
 		}
 		if assignee == "" {
@@ -297,9 +286,45 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 	return Get(ctx, db, id)
 }
 
+// insert 在事务里写一件任务（已核对过的 in）：任务行、工作地点、来源与类、依赖、建立记录。返回短号。
+func insert(ctx context.Context, tx *sql.Tx, in NewTask, actor string) (string, error) {
+	status := Todo
+	if in.Draft {
+		status = Draft
+	}
+	id, err := store.NextID(ctx, tx, "t")
+	if err != nil {
+		return "", err
+	}
+	now := store.Now()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, parent, department, skill, title, detail, status,
+		priority, repo, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, store.Null(in.Parent), store.Null(in.Org), store.Null(in.Skill), strings.TrimSpace(in.Title),
+		in.Detail, status, in.Priority, in.Repo, now, now); err != nil {
+		return "", err
+	}
+	if err := setDir(ctx, tx, id, in.Dir); err != nil {
+		return "", err
+	}
+	if err := setFinding(ctx, tx, id, in.Source, in.Class); err != nil {
+		return "", err
+	}
+	for _, d := range in.After {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO task_deps (task, depends_on) VALUES (?, ?)`, id, d); err != nil {
+			return "", err
+		}
+	}
+	parties := ""
+	if in.By != "" || in.Owner != "" {
+		raw, _ := json.Marshal(Parties{By: in.By, Owner: in.Owner})
+		parties = string(raw)
+	}
+	return id, Record(ctx, tx, id, "created", actor, parties)
+}
+
 // Get 读一件任务；不存在返回 404 错误。
 func Get(ctx context.Context, q store.Querier, id string) (Task, error) {
-	t, err := scanTask(q.QueryRowContext(ctx, `SELECT `+taskCols+dirCol("tasks")+` FROM tasks WHERE id = ?`, id))
+	t, err := scanTask(q.QueryRowContext(ctx, `SELECT `+taskCols+extraCols("tasks")+` FROM tasks WHERE id = ?`, id))
 	if store.IsNotFound(err) {
 		return Task{}, api.NotFound("任务 %s 不存在", id).WithNext("atrium task ls")
 	}
@@ -341,7 +366,7 @@ func List(ctx context.Context, q store.Querier, f Filter) ([]Task, error) {
 		f.Limit = 50
 	}
 	args = append(args, f.Limit)
-	rows, err := q.QueryContext(ctx, `SELECT `+taskCols+dirCol("tasks")+` FROM tasks WHERE `+strings.Join(where, " AND ")+
+	rows, err := q.QueryContext(ctx, `SELECT `+taskCols+extraCols("tasks")+` FROM tasks WHERE `+strings.Join(where, " AND ")+
 		` ORDER BY created_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -372,11 +397,13 @@ type Patch struct {
 	Repo     *string   `json:"repo,omitempty"`
 	Dir      *string   `json:"dir,omitempty"`
 	After    *[]string `json:"after,omitempty"`
+	Source   *Source   `json:"source,omitempty"`
+	Class    *string   `json:"class,omitempty"`
 }
 
 func (p Patch) empty() bool {
 	return p.Title == nil && p.Detail == nil && p.Priority == nil && p.Org == nil && p.Skill == nil &&
-		p.Repo == nil && p.Dir == nil && p.After == nil
+		p.Repo == nil && p.Dir == nil && p.After == nil && p.Source == nil && p.Class == nil
 }
 
 // Edit 改描述字段与依赖（状态用 Apply）。
@@ -416,6 +443,21 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 		}
 		if p.Dir != nil {
 			if err := setDir(ctx, tx, id, dir); err != nil {
+				return err
+			}
+		}
+		if p.Source != nil || p.Class != nil {
+			src, class := cur.Source, cur.Class
+			if p.Source != nil {
+				src = *p.Source
+			}
+			if p.Class != nil {
+				class = strings.TrimSpace(*p.Class)
+			}
+			if err := checkFinding(src, class); err != nil {
+				return err
+			}
+			if err := setFinding(ctx, tx, id, src, class); err != nil {
 				return err
 			}
 		}
@@ -552,6 +594,12 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		body, _ := json.Marshal(map[string]any{"from": State{t.Status, t.Stage}, "to": next, "note": note})
 		if err := Record(ctx, tx, id, string(ev.Kind), actor, string(body)); err != nil {
 			return err
+		}
+		if c, ok := Correction(t, next, ev.Kind, actor, note); ok {
+			// 用户亲手的退回、取消不因草稿满了被拒：满了由巡检的上限提醒去腾。
+			if _, err := insert(ctx, tx, c, actor); err != nil {
+				return err
+			}
 		}
 		accepting := next.Stage == StageAccept && t.Stage != StageAccept
 		if next.Status == t.Status && ev.Kind != Land && !accepting {
@@ -727,7 +775,7 @@ const maxSubtree = 2000
 func Subtree(ctx context.Context, q store.Querier, root string) ([]Task, error) {
 	rows, err := q.QueryContext(ctx, `WITH RECURSIVE r(id, depth) AS (SELECT ?, 0 UNION ALL
 		SELECT t.id, r.depth + 1 FROM tasks t JOIN r ON t.parent = r.id)
-		SELECT `+prefixed("t.", taskCols)+dirCol("t")+` FROM r JOIN tasks t ON t.id = r.id ORDER BY r.depth, t.created_at LIMIT ?`,
+		SELECT `+prefixed("t.", taskCols)+extraCols("t")+` FROM r JOIN tasks t ON t.id = r.id ORDER BY r.depth, t.created_at LIMIT ?`,
 		root, maxSubtree)
 	if err != nil {
 		return nil, err

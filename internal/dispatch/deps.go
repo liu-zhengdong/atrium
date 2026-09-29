@@ -56,6 +56,26 @@ var (
 		}
 		return quota.SetHold(ctx, q, account, until, reason)
 	}
+	// markLoggedOut 记某台机器上的某个工具没登录（执行者报没登录后调）。
+	markLoggedOut = hosts.MarkLoggedOut
+	// localLoggedOut 是本机机器信息里标了没登录的工具（服务启动时看登录文件，或执行者报没登录后标的）：挑执行者时避开。
+	// 远程机器的由 hosts.Pick 挑机器时避开。
+	localLoggedOut = func(ctx context.Context, q store.Querier) (map[string]bool, error) {
+		h, err := hosts.Get(ctx, q, LocalHost)
+		if err != nil || h.Info == nil {
+			if isAPI(err) { // 本机还没登记
+				err = nil
+			}
+			return nil, err
+		}
+		out := map[string]bool{}
+		for tool, c := range h.Info.CLIs {
+			if c.LoggedIn != nil && !*c.LoggedIn {
+				out[tool] = true
+			}
+		}
+		return out, nil
+	}
 	// skillOf 是任务挂的技能：SKILL.md 路径、优先执行者、要的凭据。
 	skillOf = func(ctx context.Context, env *app.Env, name string) (Skill, error) {
 		k, err := org.GetSkill(ctx, env.DB, env.Paths.Data, name)

@@ -91,7 +91,7 @@ type ExitInput struct {
 
 // Route 是去向。
 type Route struct {
-	Do     string // gate fail same switch resume restart
+	Do     string // gate fail same switch resume restart requeue
 	Reason string
 }
 
@@ -113,6 +113,8 @@ func RouteExit(in ExitInput) Route {
 			return Route{"switch", s.Reason}
 		}
 		return Route{"fail", s.Reason + "；已换过 " + itoa(in.Switches) + " 次执行者"}
+	case workers.SignalLogin: // 这台的这个工具已标没登录，重新排队挑执行者与机器就不会再挑到它
+		return Route{"requeue", s.Reason}
 	case workers.SignalTransient:
 		if in.Same < maxSame {
 			return Route{"same", s.Reason}

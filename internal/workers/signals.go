@@ -16,6 +16,7 @@ const (
 	SignalQuota     = "quota"     // 额度用尽：标记账号，换执行者
 	SignalTransient = "transient" // 供应商或网络临时错误：同一执行者重试一次，再换人一次
 	SignalThinking  = "thinking"  // 思考耗尽单次输出：换执行者一次
+	SignalLogin     = "login"     // 工具在这台机器上没登录：标记这台的这个工具，重新挑执行者与机器
 )
 
 // Signal 是从退出码与日志尾巴判出来的信号。
@@ -80,6 +81,7 @@ func (e event) obj(k string) event  { m, _ := e[k].(map[string]any); return m }
 var (
 	errorWordRE  = regexp.MustCompile(`(?i)\b(?:error|failed|limit reached|limit exceeded|too many requests|usage limits? will reset|spend(?:ing)? limit)\b|HTTP/\S+ 429|额度.{0,20}(?:用尽|不足|超限)|余额不足`)
 	quotaMarkRE  = regexp.MustCompile(`(?i)(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|usage limits? will reset|set (?:a|your) spend(?:ing)? limit|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)`)
+	loginRE      = regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b`)
 	retryHintRE  = regexp.MustCompile(`(?i)retry-after|try again in|resets? \d`)
 	rateStatusRE = regexp.MustCompile(`(?i)^(rejected|blocked|limited|rate_limited|exceeded|denied)$`)
 	http429RE    = regexp.MustCompile(`(?:^|[^\d.])429(?:[^\d]|$)`)
@@ -161,8 +163,8 @@ func oneLine(s string) string {
 	return s
 }
 
-// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，最后供应商临时错误。
-// 退出码 0 不判额度与临时错误（跑完了就交关卡）；ExitUnknown 不判临时错误。
+// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再没登录，最后供应商临时错误。
+// 退出码 0 不判额度、没登录与临时错误（跑完了就交关卡）；ExitUnknown 不判没登录与临时错误。
 func Classify(exitCode int, tail string, now time.Time) Signal {
 	report := errorReport(tail)
 	if exitCode != 0 && report != "" && (quotaMarkRE.MatchString(report) || http429RE.MatchString(report)) {
@@ -177,9 +179,18 @@ func Classify(exitCode int, tail string, now time.Time) Signal {
 		return s
 	}
 	if exitCode != 0 && exitCode != ExitUnknown {
+		plain := ""
+		if !endedOK(tail) {
+			plain = lastPlainLines(tail, 12)
+		}
+		for _, text := range []string{report, plain} {
+			if loginRE.MatchString(text) {
+				return Signal{Kind: SignalLogin, Reason: "没登录", Evidence: oneLine(text)}
+			}
+		}
 		text := report
-		if text == "" && !endedOK(tail) {
-			text = lastPlainLines(tail, 12)
+		if text == "" {
+			text = plain
 		}
 		for _, t := range transients {
 			if t.re.MatchString(text) {

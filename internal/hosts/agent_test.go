@@ -305,6 +305,25 @@ func TestReconnectReconcile(t *testing.T) {
 	}
 }
 
+// 执行者报没登录后标记这台的这个工具：挑机器不再派给它。
+func TestMarkLoggedOut(t *testing.T) {
+	g := newRig(t)
+	a, stop, _ := g.agent(t.TempDir())
+	defer stop()
+	ctx := context.Background()
+	host := a.Cfg.Host
+	if err := MarkLoggedOut(ctx, g.env.DB, host, "grok"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Pick(ctx, g.env, Need{Tool: "grok"}, host)
+	if err != nil || c.Kind != "refuse" || c.Reason != host+" 上的 grok 没登录" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if err := MarkLoggedOut(ctx, g.env.DB, "h9", "grok"); err == nil {
+		t.Error("没有的机器应报错")
+	}
+}
+
 func TestAgentRoutesAuth(t *testing.T) {
 	g := newRig(t)
 	dir := t.TempDir()

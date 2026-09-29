@@ -1,5 +1,5 @@
 // Atrium 只读网页。地址：#today、#legion、#oN[/tasks|rules|files]；末段是 tN、cN、sN 或 aN（负责人，只在部门页）时打开抽屉。
-// 数据只从 /ui/api/… 读；/ui/stream 推「changed」时重取当前页与抽屉。
+// 数据只从 /ui/api/… 读；/ui/stream 推「changed」时重取当前页与抽屉，数据没变的一处不重画。
 "use strict";
 
 const $ = s => document.querySelector(s);
@@ -11,15 +11,19 @@ const icon = {
   escalate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>',
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
   repeat: '<svg class="rep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.5 6.5A4.8 4.8 0 0 0 3.6 5.2M3.5 9.5a4.8 4.8 0 0 0 8.9 1.3"/><path d="M3.3 2.6v2.8h2.8M12.7 13.4v-2.8H9.9"/></svg>',
+  refresh: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5v2.8h-2.8"/></svg>',
   x: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
 
 let nav = { depts: [], asks: 0 };
 let sortMode = "部门";
 
+// last：每个接口上次取到的数据。切页时先拿它画，新数据到了再换。
+const last = new Map();
 async function api(path) {
   const body = await (await fetch("/ui/api/" + path)).json();
   if (!body.ok) throw new Error(body.error?.message || "读取失败");
+  last.set(path, body.result);
   return body.result;
 }
 
@@ -122,8 +126,7 @@ function draftsLink(n) {
 }
 
 /* 今天 */
-async function renderToday() {
-  const d = await api("today");
+function renderToday(d) {
   let live = "";
   if (!d.running.length) live = `<div class="empty">没有在做的</div>`;
   else if (sortMode === "部门") {
@@ -148,8 +151,6 @@ async function renderToday() {
     <section class="section"><h2>接下来 7 天</h2>${soonHTML(d.soon)}</section>
     ${d.shipped.length ? `<section class="section"><h2>今天上线</h2><div class="rows">${shippedRows(d.shipped)}</div></section>` : ""}
     <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>`;
-  const sort = $("#sort");
-  if (sort) sort.onclick = () => { sortMode = sortMode === "部门" ? "用时" : "部门"; renderToday().catch(fail); };
 }
 
 /* 今天上线：先摆最近 5 件，其余折成一行（与任务树里「已结束 N 件」同一种折法） */
@@ -171,9 +172,14 @@ function soonHTML(soon) {
 }
 
 /* 部门；负责人一行只是入口，详情（执行者组合、负责哪些部门、备忘）开在抽屉里，数据就用这一页的 */
-let deptPage = null;
-async function renderDept(id, tab) {
-  const d = deptPage = await api("dept/" + id);
+// 页头（上级路径与名字）取自侧栏的部门树：这页的数据还没到时也能先摆出来
+function deptHead(id) {
+  const up = [];
+  for (let p = nav.depts.find(d => d.id === id)?.parent; p; p = nav.depts.find(d => d.id === p)?.parent) up.unshift(p);
+  return `<div class="crumb">${up.map(p => `<a href="#${esc(p)}">${esc(deptName(p))}</a><span>/</span>`).join("")}</div>
+    <h1 class="dept-title">${esc(deptName(id))}</h1>`;
+}
+function renderDept(d, id, tab) {
   tab = ["tasks", "rules", "files"].includes(tab) ? tab : "tasks";
   const dept = d.dept;
   const subCards = d.subs.map(s => {
@@ -204,8 +210,7 @@ async function renderDept(id, tab) {
   const cap = d.rules.length > d.rule_max ? "cap over" : "cap";
   const used = d.materials.reduce((n, m) => n + m.units, 0);
   $("#page").innerHTML = `
-    <div class="crumb">${d.path.map(p => `<a href="#${esc(p.id)}">${esc(p.name)}</a><span>/</span>`).join("")}</div>
-    <h1 class="dept-title">${esc(dept.name)}</h1>
+    ${deptHead(id)}
     ${dept.what ? `<p class="dept-what">${esc(dept.what)}</p>` : ""}
     ${intro.length ? `<dl class="intro">${intro.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join("")}</dl>` : ""}
     ${d.leader ? `<button class="lead" data-open="${esc(d.leader.id)}"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}<span class="chev">›</span></button>` : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
@@ -219,18 +224,30 @@ async function renderDept(id, tab) {
         ${tab === "rules" ? `<span class="${cap}">${d.rules.length > d.rule_max ? "超限 " : ""}${d.rules.length}/${d.rule_max}</span>` : ""}
         ${tab === "files" ? `<span class="cap${used > d.material_max ? " over" : ""}">${used}/${d.material_max} 字</span>` : ""}
       </div>${body}</section>`;
-  document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { location.hash = id + "/" + b.dataset.tab; });
 }
 
-/* 执行者 */
-async function renderLegion() {
-  const d = await api("legion");
+/* 执行者。额度是现读的：先摆上次读数，标题旁转一个小刷新图标，读到就换；读不到留着上次读数，每行写上读的时刻 */
+// 转圈的图标直接加到标题上、读完直接拿掉，不为它重画整页（推送一来就读一次）
+let quotaReading = null, quotaErr = "";
+const spin = `<span class="spin" title="正在读">${icon.refresh}</span>`;
+function readQuota() {
+  if (quotaReading) return;
+  quotaErr = "";
+  $("#quota-h")?.insertAdjacentHTML("beforeend", spin);
+  quotaReading = api("quota").then(q => { const d = last.get("legion"); if (d) Object.assign(d, q); })
+    .catch(err => { quotaErr = err.message; })
+    .finally(() => { quotaReading = null; $("#quota-h .spin")?.remove(); if (parseHash().page === "legion") showPage(); });
+}
+const readAt = ms => (day(ms) === "今天" ? "" : date(ms) + " ") + clock(ms) + " 的读数";
+function renderLegion(d) {
   const reserve = d.reserve;
   const accts = d.accounts.length ? `<div class="accts">${d.accounts.map(a => {
     const left = a.left ?? 0;
+    const note = [a.note, (a.stale || quotaErr) && a.at ? readAt(a.at) : ""].filter(Boolean).join(" · ");
     return `<div class="acct"><span>${esc(a.name)}</span><div class="bar"><i style="width:${left}%;${left < 20 ? "background:var(--wait)" : ""}"></i><span class="reserve" style="width:${reserve}%"></span></div>
-    <span class="r">${a.left === null ? esc(a.note || "没有读数") : `剩 <span class="num">${a.left}%</span>${a.note ? " · " + esc(a.note) : ""}`}</span></div>`;
+    <span class="r">${a.left === null ? esc(a.note || "没有读数") : `剩 <span class="num">${a.left}%</span>${note ? " · " + esc(note) : ""}`}</span></div>`;
   }).join("")}</div>` : `<div class="empty">还没有额度读数</div>`;
+  const reading = quotaReading ? spin : quotaErr ? `<span class="qerr">读不到：${esc(quotaErr)}</span>` : "";
   const hosts = d.hosts.length ? `<div class="hosts">${d.hosts.map(h => `
     <div class="host"><div class="n"><span class="dot ${h.online ? (h.busy ? "run" : "idle") : "off"}"></span><span class="id">${esc(h.id)}</span>${esc(h.name)}</div>
     <div class="s">${esc(h.status)} · ${h.busy}/${h.slots} 在用</div>
@@ -244,7 +261,7 @@ async function renderLegion() {
     : `<div class="empty">还没有拉起记录</div>`;
   $("#page").innerHTML = `<h1 class="hello">执行者</h1>
   <p class="pulse-line">派活按额度富余挑人${reserve ? `，斜线部分是给你自己留的 ${reserve}%` : ""}。</p>
-  <section class="section"><h2>额度</h2>${accts}</section>
+  <section class="section"><h2 id="quota-h">额度${reading}</h2>${accts}</section>
   <section class="section"><h2>机器</h2>${hosts}</section>
   <section class="section"><h2>表现</h2>${perf}</section>`;
 }
@@ -335,13 +352,7 @@ const sourceLabel = { user: "用户纠正", org: "组织发现" };
 /* 来源后的记录人：负责人的名字链到他的负责人抽屉 */
 const byHTML = d => !d.by_name ? "" : " · " + (d.by_lead
   ? `<a href="#${esc(d.by_lead)}">${esc(d.by_name)}</a>` : esc(d.by_name));
-let drawerTask = null, liveTimer = null;
-async function openTask(id) {
-  const d = await api("task/" + id);
-  clearTimeout(liveTimer);
-  if (d.live) liveTimer = setTimeout(refresh, 5000); // 执行者在干时日志一直在长，抽屉每 5 秒重取
-  renderTask(d);
-}
+let drawerTask = null;
 function renderTask(d) {
   drawerTask = d;
   const t = d.task;
@@ -359,8 +370,7 @@ function renderTask(d) {
       ${relHTML(d)}
       ${traceHTML(d)}`);
 }
-async function openChoice(id) {
-  const c = await api("choice/" + id);
+function renderChoice(c) {
   const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : "这轮都不做";
   const rec = new Set(c.recommend || []);
   drawer(c.id, [c.id, c.dept_name].filter(Boolean).join(" · "), `<h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
@@ -377,8 +387,7 @@ async function openChoice(id) {
 }
 /* 周期任务抽屉：下一轮的完整时刻、每轮做什么、最近几轮（点开是那件任务）、最近一笔记录，详述折起 */
 const kindDoes = { "调研": "写一张选项单给你挑", "体验巡检": "把主路径走一遍，能修的开 PR" };
-async function openSchedule(id) {
-  const s = await api("schedule/" + id);
+function renderSchedule(s) {
   const w = ahead(s.next_at), next = new Date(s.next_at);
   const when = s.paused ? "暂停中：到点不生成，恢复后只补一轮"
     : /^\d\d-/.test(w) ? `${w} ${clock(s.next_at)}` : `${/^\d\d:/.test(w) ? "今天 " : ""}${w}（${pad(next.getMonth() + 1)}-${pad(next.getDate())}）`;
@@ -398,8 +407,8 @@ const memoHTML = s => s.trim().split(/\n\s*/).map(p => {
   const m = p.match(/^([^：，。；]{1,24})：(.+)$/s);
   return `<p>${m ? `<b>${esc(m[1])}</b>：${md(m[2])}` : md(p)}</p>`;
 }).join("");
-function openLeader(id) {
-  const l = deptPage?.leader;
+function renderLeader(deptPage, id) {
+  const l = deptPage.leader;
   if (l?.id !== id) throw new Error(id + " 不是这个部门的负责人");
   const n = [...l.memo].length;
   drawer(l.id, l.id + " · 负责人", `<h3>${esc(l.name)}</h3>
@@ -409,8 +418,12 @@ function openLeader(id) {
     <div class="jh"><b>备忘</b><span class="num">${n}/${deptPage.memo_max} 字</span></div>
     ${n ? `<div class="memo">${memoHTML(l.memo)}</div>` : `<div class="quiet-line">还没写备忘</div>`}`);
 }
-function openDrawer() { $("#island").classList.add("open"); setTimeout(() => $("#drawer").focus(), 50); }
-function closeDrawer() { $("#island").classList.remove("open"); drawerId = ""; }
+function openDrawer() {
+  if ($("#island").classList.contains("open")) return;
+  $("#island").classList.add("open");
+  setTimeout(() => $("#drawer").focus(), 50);
+}
+function closeDrawer() { $("#island").classList.remove("open"); drawerId = shownDrawer = ""; }
 
 /* 侧栏 */
 function renderTree(cur) {
@@ -420,7 +433,7 @@ function renderTree(cur) {
   const item = (d, l) => `<a href="#${esc(d.id)}" class="${cur === d.id ? "on" : ""}" style="padding-left:${8 + 16 * l}px">${esc(d.name)}${d.stuck ? '<span class="dot bad" title="有卡住的任务"></span>' : ""}</a>`;
   const walk = (parent, l) => kids(parent).map(d =>
     item(d, l) + (l === 0 || onPath.has(d.id) ? walk(d.id, l + 1) : "")).join("");
-  $("#tree").innerHTML = walk("", 0) || `<div class="group">还没有部门</div>`;
+  $("#tree").innerHTML = walk("", 0) || (last.has("nav") ? `<div class="group">还没有部门</div>` : "");
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("on", a.dataset.nav === cur));
   const count = $("#askCount");
   count.textContent = nav.asks;
@@ -429,39 +442,71 @@ function renderTree(cur) {
     .map(o => `<option value="${esc(o[0])}" ${o[0] === cur ? "selected" : ""}>${esc(o[1])}</option>`).join("");
 }
 
-/* 路由 */
+/* 路由：点了立刻切——导航、页头马上换，有上次的数据先画上次的（没有画骨架）；nav 与页面、抽屉的数据并行取，到了再换。
+   推送来的 changed 也走这里：数据没变的一处不重画，变了的重画时保留滚动和打开的抽屉。 */
+function pageOf(page, tab) {
+  if (page === "legion") return { path: "legion", head: `<h1 class="hello">执行者</h1>`, draw: renderLegion };
+  if (/^o[1-9]\d*$/.test(page)) return { path: "dept/" + page, head: deptHead(page), draw: d => renderDept(d, page, tab) };
+  return { path: "today", head: `<div class="skel"><i class="t"></i></div>`, draw: renderToday };
+}
+function drawerOf(open, page) {
+  if (open[0] === "a") return { path: "dept/" + page, draw: d => renderLeader(d, open) }; // 负责人抽屉用部门页的数据
+  const [path, draw] = { c: ["choice/", renderChoice], s: ["schedule/", renderSchedule] }[open[0]] || ["task/", renderTask];
+  return { path: path + open, draw };
+}
+// 骨架：这一页还没取到过数据时先占住版面（慢于 0.15 秒才淡入，数据很快到时不闪）
+const skeleton = `<div class="skel">${`<section class="section"><i class="h"></i>${"<i></i>".repeat(4)}</section>`.repeat(2)}</div>`;
+let shownPage = "", shownKey = "", shownDrawer = "";
+function showPage(force) {
+  const { page, tab } = parseHash(), p = pageOf(page, tab), d = last.get(p.path);
+  const key = page + "/" + tab + JSON.stringify(d ?? null) + (page === "legion" ? quotaErr : "");
+  if (key === shownKey && !force) return;
+  const top = page === shownPage ? $("#scroll").scrollTop : 0; // 换了页回到顶，同一页（含换页签）保留滚动
+  shownPage = page; shownKey = key;
+  if (d) p.draw(d); else $("#page").innerHTML = p.head + skeleton;
+  $("#scroll").scrollTop = top;
+}
+function showDrawer(open, page) {
+  const dr = drawerOf(open, page), d = last.get(dr.path), key = open + JSON.stringify(d ?? null);
+  if (key === shownDrawer) return;
+  shownDrawer = key;
+  if (d) dr.draw(d); else drawer(open, open, skeleton);
+}
 function fail(err) {
+  shownKey = "";
   $("#page").innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`;
 }
-let rendering = null;
-let toDrafts = false; // 从今天页的「草稿 N 件」进来：渲染完滚到草稿组
-async function route(keepScroll) {
-  const { page, tab, open } = parseHash();
-  const scroll = $("#scroll").scrollTop;
+let seq = 0, rendering = null, liveTimer = null;
+let toDrafts = false; // 从今天页的「草稿 N 件」进来：画好后滚到草稿组
+async function route() {
+  const n = ++seq, { page, tab, open } = parseHash();
+  clearTimeout(liveTimer);
   try {
-    nav = await api("nav");
-    deptPage = null;
     renderTree(page);
-    if (page === "legion") await renderLegion();
-    else if (/^o[1-9]\d*$/.test(page)) await renderDept(page, tab);
-    else await renderToday();
-    if (keepScroll) $("#scroll").scrollTop = scroll;
+    if (page === "legion") readQuota();
+    showPage();
+    if (open) { showDrawer(open, page); openDrawer(); } else closeDrawer();
+    await Promise.all([...new Set(["nav", pageOf(page, tab).path, open && drawerOf(open, page).path])].filter(Boolean).map(api));
+    if (n !== seq) return; // 等的时候又点了别处：由新的那次来画
+    nav = last.get("nav");
+    renderTree(page);
+    showPage();
+    if (open) showDrawer(open, page);
     if (toDrafts) { toDrafts = false; $("#drafts")?.scrollIntoView({ block: "start" }); }
-    if (open) {
-      await ({ c: openChoice, s: openSchedule, a: openLeader }[open[0]] || openTask)(open);
-      if (!$("#island").classList.contains("open")) openDrawer();
-    } else closeDrawer();
-  } catch (err) { fail(err); }
+    if (open?.[0] === "t" && last.get("task/" + open).live) liveTimer = setTimeout(refresh, 5000); // 执行者在干时日志一直在长，抽屉每 5 秒重取
+  } catch (err) { if (n === seq) fail(err); }
 }
 function refresh() {
   clearTimeout(rendering);
-  rendering = setTimeout(() => route(true), 250);
+  rendering = setTimeout(route, 250);
 }
 
-addEventListener("hashchange", () => route(false));
+addEventListener("hashchange", route);
 $("#mnav").onchange = e => { location.hash = e.target.value; };
 document.addEventListener("click", e => {
   if (e.target.closest("[data-drafts]")) toDrafts = true;
+  if (e.target.closest("#sort")) { sortMode = sortMode === "部门" ? "用时" : "部门"; return showPage(true); }
+  const tb = e.target.closest("[data-tab]"); if (tb) { location.hash = parseHash().page + "/" + tb.dataset.tab; return; }
   const fold = e.target.closest("#drawer [data-g]");
   if (fold) {
     const k = fold.dataset.g;
@@ -473,7 +518,7 @@ document.addEventListener("click", e => {
   if (kf) {
     const k = kf.dataset.kids;
     openKids.has(k) ? openKids.delete(k) : openKids.add(k);
-    return kf.closest("#drawer") ? renderTask(drawerTask) : route(true);
+    return kf.closest("#drawer") ? renderTask(drawerTask) : showPage(true);
   }
   const cmd = e.target.closest("#drawer [data-c]");
   if (cmd) { const k = cmd.dataset.c; unfolded.has(k) ? unfolded.delete(k) : unfolded.add(k); return renderTask(drawerTask); }
@@ -507,5 +552,5 @@ $("#theme").onclick = () => {
   try { localStorage.setItem("atrium-theme", r.dataset.theme); } catch (_) { /* 同上 */ }
 };
 
-route(false);
+route();
 new EventSource("/ui/stream").onmessage = e => { if (e.data === "changed") refresh(); };

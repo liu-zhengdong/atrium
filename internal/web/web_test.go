@@ -137,9 +137,9 @@ func TestAccountAndSlots(t *testing.T) {
 	if a.Left != nil || a.Note != "没登录" {
 		t.Errorf("没读数：%+v", a)
 	}
-	a = account(quota.Line{Pace: quota.Pace{Account: "x", UsedPercent: &used, Stale: true}})
-	if a.Note != "读数旧了" {
-		t.Errorf("旧数：%q", a.Note)
+	a = account(quota.Line{Pace: quota.Pace{Account: "x", UsedPercent: &used, Stale: true, RefreshedAt: "2026-09-29T08:00:00Z"}})
+	if a.Note != "" || !a.Stale || a.At != time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC).UnixMilli() {
+		t.Errorf("旧数带读的时刻，由页面写出来：%+v", a)
 	}
 	for want, h := range map[int]hosts.Host{4: {MaxRunning: 4, Info: &hosts.Info{MaxWorkers: 6}}, 6: {Info: &hosts.Info{MaxWorkers: 6}}, 1: {}} {
 		if got := slots(h); got != want {
@@ -282,7 +282,7 @@ func TestRoutes(t *testing.T) {
 	}
 	var page DeptPage
 	read("dept/"+sub.ID, &page)
-	if len(page.Tasks) != 1 || page.Tasks[0].State != "bad" || len(page.Inherited) != 1 || !reflect.DeepEqual(page.Path, []Pair{{root.ID, "组织"}}) {
+	if len(page.Tasks) != 1 || page.Tasks[0].State != "bad" || len(page.Inherited) != 1 {
 		t.Errorf("部门：%+v", page)
 	}
 	var nav Nav
@@ -308,6 +308,11 @@ func TestRoutes(t *testing.T) {
 	read("legion", &legion)
 	if legion.Accounts == nil || legion.Hosts == nil || len(legion.Perf) != 0 {
 		t.Errorf("空的额度与机器应是空数组，不是 null；还没结果的拉起不计：%+v", legion)
+	}
+	var q Quota
+	read("quota", &q)
+	if len(q.Accounts) != len(legion.Accounts) || q.Reserve != legion.Reserve {
+		t.Errorf("现读的额度与上次读数应是同一组账号：%+v %+v", q, legion.Quota)
 	}
 	// 表现与 atrium workers 同一份统计（workers.Stats）：拉起有了结果才计；不可用标记挂在它挡住的组合下。
 	exit, _ := json.Marshal(workers.Exit{N: 1, Outcome: workers.OutOK})

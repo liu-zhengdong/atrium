@@ -407,6 +407,20 @@ func TestRecordAndRead(t *testing.T) {
 	if !strings.Contains(Format(ov), "claude") {
 		t.Error("Format")
 	}
+	// Last 只摆存下的读数，不去读 OpenQuota。
+	openquotaFn = func(context.Context) ([]Pace, error) { t.Error("Last 不该去读"); return nil, nil }
+	last, err := Last(ctx, db)
+	used := func(ov Overview) any {
+		for _, l := range ov.Lines {
+			if l.Account == "claude" && l.UsedPercent != nil {
+				return *l.UsedPercent
+			}
+		}
+		return nil
+	}
+	if err != nil || len(last.Lines) != len(ov.Lines) || used(last) == nil || used(last) != used(ov) {
+		t.Errorf("上次读数应与刚读的一致：%v %+v", err, last)
+	}
 }
 
 func TestFormatNoData(t *testing.T) {

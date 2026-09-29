@@ -272,7 +272,6 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
 .opt{grid-template-columns:20px 1fr}
 .opt .pick{font-size:11px;color:var(--accent);font-weight:500}
 .status-line{margin:14px 0 0;color:var(--ink2);font-size:13px}
-.loading{color:var(--ink3);padding:40px 0;text-align:center}
 .dot.off{background:transparent;border:1.5px solid var(--line)}
 .drawer{box-shadow:none;visibility:hidden;transition:transform .22s ease,visibility 0s .22s}
 .open .drawer{box-shadow:var(--drawer-shadow);visibility:visible;transition:transform .22s ease}
@@ -302,3 +301,15 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 .memo p{margin:0 0 10px}
 .memo b{font-weight:500;color:var(--ink)}
 .memo code{font:12px var(--mono);background:var(--raise);padding:1px 5px;border-radius:5px}
+
+/* 切页跟手：这一页还没取到过数据时的骨架；额度现读时标题旁的小刷新图标。都慢于一瞬才淡入，数据很快到时不闪 */
+.skel i{display:block;height:14px;margin:16px 0;border-radius:7px;background:var(--raise);opacity:0;animation:fadein .2s .15s forwards}
+.skel i:nth-child(3n){width:62%}
+.skel i.h{width:64px;height:10px;margin-bottom:20px}
+.skel i.t{width:40%;height:30px;margin:0}
+.spin{display:inline-flex;color:var(--ink3);opacity:0;animation:fadein .2s .2s forwards}
+.spin svg{width:12px;height:12px;animation:spin 1s linear infinite}
+.section h2 .qerr{margin-left:auto;font-size:12px;font-weight:400;color:var(--wait)}
+@keyframes fadein{to{opacity:1}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin svg{animation:none}}

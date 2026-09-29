@@ -7,6 +7,7 @@ package leaders
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -226,7 +227,7 @@ func Prompt(in PromptInput) string {
 		w("## 交给你去拆的任务（task.assigned）")
 		w("交来的是一件父任务，方案、拆活、派活、审核都归你：")
 		w("1. 看它：task show tN；说明里没写清服务三个目标里的哪一个，先用 task note tN 补上。想清怎么做，取舍写进 task note。要用户拍板的整理成选项单（choice add），不要替用户定。")
-		w("2. 拆成做得完的子任务：task add 标题 --parent tN --repo 仓库（或 --dir 本机文件夹）[--after tM]，先后用 --after 写清。长期方向写进部门介绍（上交），不建成做不完的任务。")
+		w("2. 拆成做得完的子任务：task add 标题 --parent tN --repo 仓库（或 --dir 本机文件夹）[--after tM]，先后用 --after 写清。长期方向写进部门介绍（org edit oN --next …），不建成做不完的任务。")
 		w("3. 逐件 task run；依赖还没完成的也可以先 run，依赖完成后自动派，依赖失败或取消会转受阻并通知你。")
 		w("4. 子任务的结果投给你，父任务进度由子任务汇总（task tree tN）；都完成后 task set tN --status done 收尾（子任务没结束时父任务不计时）。")
 		w("")
@@ -241,8 +242,8 @@ func Prompt(in PromptInput) string {
 	w("- 备忘：memo edit 文本（覆盖写，超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
 	w("## 权限边界（服务端按你的令牌强制，越权会被拒）")
-	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务；写自己的备忘；确认投给你的事件；上交。")
-	w("- 不可以：动别的部门的东西、改部门本身（负责人、上级、介绍）、登记负责人、停机与服务操作。需要时上交。")
+	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务；改这些部门的介绍（org edit oN --what/--uses/--now/--next）；写自己的备忘；确认投给你的事件；上交。")
+	w("- 不可以：动别的部门的东西、改部门本身（名称、负责人、上级、验收人、仓库、删除）、登记负责人、停机与服务操作。需要时上交。")
 	w("")
 	w("## 上交（投给 %s；只有这四类才上交，其余自己处理）", in.Upstream)
 	for _, k := range Kinds {
@@ -266,6 +267,7 @@ const (
 	RuleTaskRef                 // 路径 {id} 是任务：任务的部门在管辖内；请求体里的 org、parent 也要在
 	RuleTaskCreate              // 建任务：请求体里的 org 或 parent 必须给且在管辖内
 	RuleDeptRef                 // 路径 {id} 是部门（部门下的要点、资料、周期任务）
+	RuleDeptIntro               // 改部门：路径 {id} 在管辖内，请求体只许介绍四项
 	RulePointRef                // 路径 {id} 是要点
 	RuleMaterialRef             // 路径 {id} 是资料
 	RuleScheduleRef             // 路径 {id} 是周期任务
@@ -290,6 +292,8 @@ func RuleFor(pattern string) Rule {
 		return RuleTaskCreate
 	case seg[0] == "tasks" && len(seg) >= 2 && seg[1] == "{id}":
 		return RuleTaskRef
+	case path == "/api/org/{id}" && method == "PATCH":
+		return RuleDeptIntro
 	case seg[0] == "org" && len(seg) >= 3 && seg[1] == "{id}" && slices.Contains([]string{"points", "materials", "schedules"}, seg[2]):
 		return RuleDeptRef
 	case seg[0] == "points" && len(seg) >= 2 && seg[1] == "{id}":
@@ -312,6 +316,21 @@ func RuleFor(pattern string) Rule {
 		return RuleEscalate
 	}
 	return RuleDeny
+}
+
+// introFields 是负责人能改的部门字段：介绍四项。
+var introFields = []string{"what", "uses", "now", "next"}
+
+// IntroOnly 纯判定：改部门的请求体只含介绍四项才放行。按键名判，不看值：
+// 解码时字段名不分大小写（"Leader" 也会落到 leader），所以键名必须和四项逐字相同。
+func IntroOnly(body map[string]any) error {
+	keys := slices.Sorted(maps.Keys(body))
+	for _, k := range keys {
+		if !slices.Contains(introFields, k) {
+			return Forbid("负责人改部门只能改介绍（--what/--uses/--now/--next），%q 只归秘书和用户", k)
+		}
+	}
+	return nil
 }
 
 // Check 是一项要落在管辖内的东西。Dept 为空表示它不属于任何部门（一律不在管辖内）。

@@ -277,6 +277,8 @@ func TestClassify(t *testing.T) {
 		{"5xx", 1, "error: status 503 Service Unavailable\n", SignalTransient, time.Time{}},
 		{"grok 没登录", 1, "Not signed in\n", SignalSetup, time.Time{}},
 		{"claude 没登录", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalSetup, time.Time{}},
+		// t415 现场 h3 上 kimi 没登录的原文：报错之后还跟着一行 libuv 崩溃，退出码是 Windows 的 0xC0000409
+		{"kimi 没登录", 3221226505, "error: failed to run prompt: auth.login_required: OAuth provider \"managed:kimi-code\" requires login before it can be used.\nSee log: C:/Users/CPCli/.kimi-code/logs/kimi-code.log\nAssertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\n", SignalSetup, time.Time{}},
 		{"退出码 0 不判没登录", 0, "Not signed in\n", SignalNone, time.Time{}},
 		// t392 现场 h3 上 codex 的 Node 版本管理器没选版本的原文
 		{"Node 没选版本", 1, "No active Node.js version is configured\n", SignalSetup, time.Time{}},

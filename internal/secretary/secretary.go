@@ -332,7 +332,7 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 		return err
 	}
 	if Claim(cur, endpoint, platform.Alive) == "running" {
-		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>\n\n%s", cur.PID, brief),
+		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>。派活、合入后直接回来，不用 task wait 等结果\n\n%s", cur.PID, brief),
 			"atrium secretary bridge --status")
 	}
 	self, err := os.Executable()
@@ -363,7 +363,7 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 		if r, _ := readRecord(p); r != nil && r.PID == cmd.Process.Pid {
-			return c.Done(r, fmt.Sprintf("Atrium bridge 已在后台运行（pid %d）：秘书要处理的事件会以「【Atrium 事件】」开头的消息送进本会话，处理完用 atrium events ack <编号> 确认。日志：%s\n\n%s", r.PID, logPath(p), brief),
+			return c.Done(r, fmt.Sprintf("Atrium bridge 已在后台运行（pid %d）：秘书要处理的事件会以「【Atrium 事件】」开头的消息送进本会话，处理完用 atrium events ack <编号> 确认。派活、合入后直接回来，不用 task wait 等结果。日志：%s\n\n%s", r.PID, logPath(p), brief),
 				"atrium secretary bridge --status")
 		}
 	}

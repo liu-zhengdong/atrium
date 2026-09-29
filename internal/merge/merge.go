@@ -16,6 +16,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/release"
@@ -51,7 +52,11 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/tasks/"+id+"/merge", Body{PR: c.Str("pr"), Repo: c.Str("repo")}, &t); err != nil {
 				return err
 			}
-			return c.Done(t, fmt.Sprintf("%s 已进合入队列（%s，%s）", t.ID, t.Repo, t.PR), "atrium task wait "+t.ID)
+			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s 已进合入队列（%s，%s）", t.ID, t.Repo, t.PR), "atrium task wait "+t.ID)
+			if err != nil {
+				return err
+			}
+			return c.Done(t, text, next)
 		}})
 }
 

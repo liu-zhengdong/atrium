@@ -110,6 +110,9 @@ func Routes(r *api.Router, env *app.Env) {
 		Listen(in.As, in.Via, time.Duration(in.TTLSeconds)*time.Second, in.Stop)
 		return Listening(in.As), nil
 	})
+	r.Handle("GET /api/events/pushed", func(q *api.Req) (any, error) {
+		return map[string]bool{"pushed": Pushed(q.Actor, Listening(Secretary) != nil)}, nil
+	})
 	r.Handle("GET /api/events/listen", func(q *api.Req) (any, error) {
 		as := q.URL.Query().Get("as")
 		if as == "" {
@@ -185,7 +188,11 @@ func Commands(t *cli.Table) {
 			if len(res.Missing) > 0 {
 				text += fmt.Sprintf("；没有这些事件（或不是投给你的）：%v", res.Missing)
 			}
-			return c.Done(res, text, "atrium events wait")
+			text, next, err := AsyncNext(c, text, "atrium events wait")
+			if err != nil {
+				return err
+			}
+			return c.Done(res, text, next)
 		}})
 }
 

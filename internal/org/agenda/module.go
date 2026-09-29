@@ -14,6 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
@@ -350,6 +351,10 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/schedules/"+url.PathEscape(id)+"/run", nil, &res); err != nil {
 				return err
 			}
-			return c.Done(res, fmt.Sprintf("%s 生成了 %s「%s」并已派发", id, res.Task.ID, res.Task.Title), "atrium task wait "+res.Task.ID)
+			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s 生成了 %s「%s」并已派发", id, res.Task.ID, res.Task.Title), "atrium task wait "+res.Task.ID)
+			if err != nil {
+				return err
+			}
+			return c.Done(res, text, next)
 		}})
 }

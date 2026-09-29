@@ -11,6 +11,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
@@ -143,7 +144,11 @@ func Commands(t *cli.Table) {
 			if body.DryRun {
 				return c.Done(res, dryText(res), dryNext(id, res, body.Risk))
 			}
-			return c.Done(res, fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow")
+			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow")
+			if err != nil {
+				return err
+			}
+			return c.Done(res, text, next)
 		}})
 	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "捎话给执行者：在跑的按工具即时或本轮后送到，没在跑的下次拉起时写进提示词",
 		Run: func(c *cli.Ctx) error {
@@ -162,7 +167,11 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/tell", map[string]string{"text": text}, &r); err != nil {
 				return err
 			}
-			return c.Done(r, "已捎话："+r.Note, "atrium task log "+id+" --follow")
+			text, next, err := events.AsyncNext(c, "已捎话："+r.Note, "atrium task log "+id+" --follow")
+			if err != nil {
+				return err
+			}
+			return c.Done(r, text, next)
 		}})
 	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者的经过：按它说的话分段，每条命令原文一行（✓ 成功 ✗ 出错 · 没搜到 … 在跑）；--raw 原始日志；--follow 跟到退出",
 		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"},

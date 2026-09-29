@@ -14,7 +14,7 @@ import (
 )
 
 func Module() app.Module {
-	return app.Module{Name: "events", Commands: Commands, Routes: Routes}
+	return app.Module{Name: "events", Commands: Commands, Routes: Routes, Run: run}
 }
 
 const (

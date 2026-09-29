@@ -24,7 +24,18 @@ type Fact struct {
 	Unavailable string // 本机上接不了活的原因：不可用标记（workers.Blocked）或看出没登录
 	Exclusive   bool
 	Preferred   int // 技能里的优先顺序（1 起）；0 不是
+	Fails       int // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
 }
+
+// 近 ShakyWindow 次拉起里启动失败（额度、没登录、其他）≥ ShakyFails 次的候选往后排：只影响排序、不排除；
+// 此刻接不了由不可用标记管（Unavailable）。
+const (
+	ShakyWindow = 5
+	ShakyFails  = 2
+)
+
+// Shaky 纯判定：近期启动失败多，挑执行者时往后排。
+func Shaky(fails int) bool { return fails >= ShakyFails }
 
 // PickInput 是挑执行者的全部输入。
 type PickInput struct {
@@ -46,6 +57,7 @@ type Candidate struct {
 	Busy     bool     `json:"busy,omitempty"`
 	Spare    *float64 `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
 	Rank     int      `json:"rank,omitempty"`  // 能接的里排第几（1 起）
+	Fails    int      `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
 }
 
 // PickView 是挑执行者的结论：候选（能接的按推荐顺序在前）、推荐与理由。
@@ -73,7 +85,7 @@ func NeedTrust(priority ledger.Priority, risk string) (min, why string) {
 }
 
 // Pick 挑执行者（纯函数）：档案能接、装了、本机没标不可用、trust 够活的分量（NeedTrust）、额度没见底；
-// 能接的按技能优先、额度富余排（没有富余数据的排在有的后面，之间按档案顺序）；正忙的跳过。
+// 能接的先把近期启动失败多的（Shaky）排到后面，再按技能优先、额度富余排（没有富余数据的排在有的后面，之间按档案顺序）；正忙的跳过。
 func Pick(in PickInput) PickView {
 	minTrust, heavy := NeedTrust(in.Priority, in.Risk)
 	v := PickView{Risk: in.Risk, Candidates: []Candidate{}}
@@ -85,7 +97,7 @@ func Pick(in PickInput) PickView {
 	var ok, no []row
 	anyData := false
 	for i, f := range in.Facts {
-		c := Candidate{ID: f.ID, Trust: f.Trust, MaxRisk: f.MaxRisk}
+		c := Candidate{ID: f.ID, Trust: f.Trust, MaxRisk: f.MaxRisk, Fails: f.Fails}
 		if f.Problem != "" {
 			c.Refusals = append(c.Refusals, f.Problem)
 		}
@@ -127,6 +139,9 @@ func Pick(in PickInput) PickView {
 	}
 	sort.SliceStable(ok, func(i, j int) bool {
 		a, b := ok[i], ok[j]
+		if sa, sb := Shaky(a.c.Fails), Shaky(b.c.Fails); sa != sb {
+			return sb
+		}
 		if a.pref != b.pref {
 			return a.pref < b.pref
 		}
@@ -162,6 +177,19 @@ func Pick(in PickInput) PickView {
 		}
 		if minTrust != "" {
 			v.Reason = heavy + "只在 trust≥" + minTrust + " 的里挑；" + v.Reason
+		}
+		if Shaky(r.c.Fails) {
+			v.Reason += fmt.Sprintf("；它近 %d 次拉起启动失败 %d 次，但没有更稳的能接", ShakyWindow, r.c.Fails)
+			return v
+		}
+		var shaky []string
+		for _, x := range ok {
+			if Shaky(x.c.Fails) {
+				shaky = append(shaky, fmt.Sprintf("%s 近 %d 次拉起启动失败 %d 次", x.c.ID, ShakyWindow, x.c.Fails))
+			}
+		}
+		if len(shaky) > 0 {
+			v.Reason += "；" + strings.Join(shaky, "、") + "，排在后面"
 		}
 		return v
 	}

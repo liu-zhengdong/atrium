@@ -17,15 +17,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// Record 是一个执行者的交付事实（运行时从账本数，不来自自述）。
-type Record struct {
-	Done    int `json:"done"`
-	Failed  int `json:"failed"`
-	Blocked int `json:"blocked"`
-	Active  int `json:"active"`  // 在跑或交付中
-	Bounces int `json:"bounces"` // 被交回的次数
-}
-
 // Row 是 workers 列表的一行。
 type Row struct {
 	ID        string   `json:"id"`
@@ -33,7 +24,7 @@ type Row struct {
 	MaxRisk   string   `json:"max_risk"`
 	Installed bool     `json:"installed"`
 	Layers    []string `json:"layers"`
-	Record    Record   `json:"record"`
+	Stat      Stat     `json:"stat"` // 近 StatWindow 次拉起按结果数（按「工具+模型」，强度不单列）
 	Problem   string   `json:"problem,omitempty"`
 	Marks     []Mark   `json:"marks,omitempty"` // 哪几台上此刻不可用
 }
@@ -42,7 +33,8 @@ type Row struct {
 type Detail struct {
 	Resolved *Resolved `json:"resolved,omitempty"`
 	Profile  *Profile  `json:"profile,omitempty"`
-	Record   *Record   `json:"record,omitempty"`
+	Stat     *Stat     `json:"stat,omitempty"`
+	Attempts []Attempt `json:"attempts,omitempty"` // 近 StatWindow 次有结果的拉起，新的在前
 	Marks    []Mark    `json:"marks,omitempty"`
 }
 
@@ -71,62 +63,13 @@ func Installed(a *Driver) bool {
 	return err == nil
 }
 
-// Records 数各执行者的交付事实（按任务上记的执行者）。
-func Records(ctx context.Context, q store.Querier) (map[string]Record, error) {
-	out := map[string]Record{}
-	rows, err := q.QueryContext(ctx, `SELECT worker, status, count(*) FROM tasks WHERE worker != '' GROUP BY worker, status LIMIT 5000`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var w, st string
-		var n int
-		if err := rows.Scan(&w, &st, &n); err != nil {
-			return nil, err
-		}
-		r := out[w]
-		switch st {
-		case "done":
-			r.Done += n
-		case "failed":
-			r.Failed += n
-		case "blocked":
-			r.Blocked += n
-		case "running", "queued":
-			r.Active += n
-		}
-		out[w] = r
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows2, err := q.QueryContext(ctx, `SELECT t.worker, count(*) FROM task_events e JOIN tasks t ON t.id = e.task
-		WHERE e.kind = 'bounce' AND t.worker != '' GROUP BY t.worker LIMIT 5000`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows2.Close()
-	for rows2.Next() {
-		var w string
-		var n int
-		if err := rows2.Scan(&w, &n); err != nil {
-			return nil, err
-		}
-		r := out[w]
-		r.Bounces = n
-		out[w] = r
-	}
-	return out, rows2.Err()
-}
-
-// List 是 workers：可派的执行者、生效规则与交付事实。
+// List 是 workers：可派的执行者、生效规则与近期拉起统计。
 func List(ctx context.Context, q store.Querier) ([]Row, error) {
 	ids, err := Catalog(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	recs, err := Records(ctx, q)
+	stats, err := Stats(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +79,7 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 	}
 	out := []Row{}
 	seen := map[string]bool{}
+	counted := map[string]bool{} // 已有行的「工具+模型」
 	for _, id := range ids {
 		r, err := Resolve(ctx, q, id)
 		if err != nil {
@@ -150,20 +94,22 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 			continue
 		}
 		seen[r.ID] = true
+		combo := Combo(r.ID)
+		counted[combo] = true
 		out = append(out, Row{ID: r.ID, Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(),
-			Installed: Installed(r.Adapter), Layers: r.Layers, Record: recs[r.ID], Marks: marksOf(marks, r.Spec)})
+			Installed: Installed(r.Adapter), Layers: r.Layers, Stat: Count(stats[combo]), Marks: marksOf(marks, r.Spec)})
 	}
-	// 账本里有记录、目录里没有的执行者（写死过的组合）也列出来，交付事实不丢。
+	// 拉起过、目录里没有的组合（写死派过的）也列出来，统计不丢。
 	var extra []string
-	for w := range recs {
-		if !seen[w] {
+	for w := range stats {
+		if !counted[w] {
 			extra = append(extra, w)
 		}
 	}
 	sort.Strings(extra)
 	for _, w := range extra {
 		s, _ := ParseWorker(w)
-		out = append(out, Row{ID: w, Record: recs[w], Problem: "不在目录里（写死派过）", Marks: marksOf(marks, s)})
+		out = append(out, Row{ID: w, Stat: Count(stats[w]), Problem: "不在目录里（写死派过）", Marks: marksOf(marks, s)})
 	}
 	return out, nil
 }
@@ -195,7 +141,7 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
-	recs, err := Records(ctx, q)
+	stats, err := Stats(ctx, q)
 	if err != nil {
 		return Detail{}, err
 	}
@@ -203,8 +149,9 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
-	rec := recs[r.ID]
-	return Detail{Resolved: &r, Record: &rec, Marks: marksOf(marks, r.Spec)}, nil
+	ls := stats[Combo(r.ID)]
+	st := Count(ls)
+	return Detail{Resolved: &r, Stat: &st, Attempts: ls, Marks: marksOf(marks, r.Spec)}, nil
 }
 
 func asAPI(err error, target **api.Error) bool {
@@ -258,9 +205,9 @@ func Routes(r *api.Router, env *app.Env) {
 
 // Commands 注册 workers：列、看、改档案是同一条命令（给了改档案的参数就是改）。
 func Commands(t *cli.Table) {
-	t.Group("workers", "执行者：可派的组合、档案与交付事实")
+	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
-		Summary: "列执行者（组合、信任、交付事实、哪台上不可用）；给名字看叠加后的档案或一层原文；给 层/名 加 --file/--set/--unset/--delete 改档案；--clear 解除不可用标记",
+		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文；给 层/名 加 --file/--set/--unset/--delete 改档案；--clear 解除不可用标记",
 		Flags: []cli.Flag{
 			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、模型名无效）；没写模型或机器就解除这个工具在全部模型或机器上的"},
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
@@ -305,14 +252,14 @@ func Commands(t *cli.Table) {
 			var b strings.Builder
 			for _, r := range rows {
 				if r.Problem != "" {
-					fmt.Fprintf(&b, "%s  （%s）  %s\n", r.ID, r.Problem, recordLine(r.Record))
+					fmt.Fprintf(&b, "%s  （%s）  %s\n", r.ID, r.Problem, r.Stat)
 					continue
 				}
 				inst := ""
 				if !r.Installed {
 					inst = "  没装"
 				}
-				fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s%s  %s\n", r.ID, r.Trust, r.MaxRisk, inst, recordLine(r.Record))
+				fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s%s  %s\n", r.ID, r.Trust, r.MaxRisk, inst, r.Stat)
 				writeMarks(&b, r.Marks)
 			}
 			return c.Done(rows, b.String(), "atrium workers <执行者>")
@@ -382,7 +329,15 @@ func showCmd(c *cli.Ctx, name string) error {
 	if len(r.Layers) > 0 {
 		layers = strings.Join(r.Layers, " ← ")
 	}
-	fmt.Fprintf(&b, "档案层：%s\n交付：%s\n", layers, recordLine(*d.Record))
+	fmt.Fprintf(&b, "档案层：%s\n%s（按 %s 统计，强度不单列）\n", layers, *d.Stat, Combo(r.ID))
+	for _, a := range d.Attempts {
+		fmt.Fprintf(&b, "  %s  %s 第 %d 次  %s@%s  %s", time.UnixMilli(a.At).Local().Format("01-02 15:04"), a.Task, a.N,
+			a.Worker, a.Host, OutText(a.Outcome))
+		if a.Reason != "" && a.Outcome != OutOK {
+			fmt.Fprintf(&b, "：%s", clipRunes(oneLine(a.Reason), 80))
+		}
+		b.WriteString("\n")
+	}
 	if r.Body != "" {
 		fmt.Fprintf(&b, "\n%s\n", r.Body)
 	}
@@ -399,10 +354,6 @@ func writeMarks(b *strings.Builder, marks []Mark) {
 		}
 		b.WriteString("\n")
 	}
-}
-
-func recordLine(r Record) string {
-	return fmt.Sprintf("完成 %d · 交回 %d · 失败 %d · 受阻 %d · 在做 %d", r.Done, r.Bounces, r.Failed, r.Blocked, r.Active)
 }
 
 func fmtTime(ms int64) string { return time.UnixMilli(ms).Format("2006-01-02 15:04") }

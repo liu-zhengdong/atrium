@@ -452,6 +452,11 @@ out=$(json workers --clear fakemodel@h1); has '.result.cleared == 1'
 out=$(json workers --clear fakemodel@h1 || true); has '.error.code == "not_found"'
 out=$(json workers --clear "bad tool" || true); has '.error.code == "usage" and (.error.message|startswith("--clear:"))'
 
+step "按拉起统计：每次拉起记一个结果，workers 列近期、给执行者看明细"
+out=$(json workers fakesh); has '.result.stat.ok >= 1 and (.result.attempts|map(select(.task == "'"$run_id"'" and .outcome == "ok"))|length) == 1'
+out=$(json workers fakemodel); has '.result.stat == {"launches":1,"ok":0,"bounce":0,"quota":0,"login":0,"fail":1} and .result.attempts[0].task == "'"$av"'"'
+out=$(json workers); has '(.result|map(select(.id == "fakemodel"))|.[0].stat.fail) == 1'
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

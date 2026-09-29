@@ -152,6 +152,13 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 	o := Options{Risk: "low"}
 	if run != nil {
 		o.Risk, o.Secrets = run.Risk, run.Secrets
+		outcome := workers.OutFail
+		if why.Signal == watch.SigQuota {
+			outcome = workers.OutQuota
+		}
+		if err := recordExit(ctx, env.DB, id, run.N, outcome, why.Reason); err != nil {
+			return err
+		}
 	}
 	if why.Signal == watch.SigQuota && run != nil {
 		tail, err := workers.Tail(run.Log, workers.TailBytes)

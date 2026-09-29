@@ -334,6 +334,10 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	if err != nil {
 		return PickView{}, err
 	}
+	stats, err := workers.Stats(ctx, db)
+	if err != nil {
+		return PickView{}, err
+	}
 	var facts []Fact
 	seen := map[string]bool{}
 	for i, id := range append(slices.Clone(preferred), catalog...) {
@@ -354,7 +358,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 		seen[r.ID] = true
 		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk), Installed: workers.Installed(r.Adapter),
-			Exclusive: r.Adapter.Exclusive}
+			Exclusive: r.Adapter.Exclusive, Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
 		if m, ok := workers.Blocked(marks, r.Spec.Tool, r.Spec.Model, LocalHost); ok {
 			f.Unavailable = "本机不可用：" + m.Text()
 		} else if loggedOut[r.Spec.Tool] {
@@ -831,12 +835,6 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	if err != nil {
 		return err
 	}
-	if sig.Kind == workers.SignalQuota {
-		raw, _ := json.Marshal(sig)
-		if err := ledger.Record(ctx, db, p.task, "quota_exhausted", actor, string(raw)); err != nil {
-			return err
-		}
-	}
 	if reply := p.adapter.LastReply(tail); reply != "" {
 		if err := ledger.Record(ctx, db, p.task, gates.KindResult, actor, reply); err != nil {
 			return err
@@ -847,6 +845,9 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		note += "（" + sig.Evidence + "）"
 	}
 	note += marked
+	if err := recordExit(ctx, db, p.task, p.run.N, workers.OutcomeOf(sig, route.Do != "fail"), note); err != nil {
+		return err
+	}
 	apply := func(kind ledger.EventKind, why string) error {
 		_, err := ledger.Apply(ctx, db, p.task, ledger.Event{Kind: kind}, actor, why)
 		if err != nil && isAPI(err) {
@@ -907,6 +908,12 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.ExitFail, note+"；重新拉起失败："+err.Error())
 	}
 	return ledger.Note(ctx, db, p.task, actor, "执行者退出："+note+"；已重新拉起（"+o.Why+"，"+o.W.ID+"）")
+}
+
+// recordExit 记这次拉起的结果（workers 按拉起统计用）。
+func recordExit(ctx context.Context, q store.Querier, task string, n int, outcome, reason string) error {
+	raw, _ := json.Marshal(workers.Exit{N: n, Outcome: outcome, Reason: reason})
+	return ledger.Record(ctx, q, task, workers.ExitKind, actor, string(raw))
 }
 
 // markUnavailable 按退出信号把这一轮的「工具+模型@机器」标成不可用，返回写进任务备注的一句；不是可用性信号返回空。

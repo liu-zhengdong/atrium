@@ -331,6 +331,9 @@ func dryText(r RunResult) string {
 		if c.Busy {
 			extra += "  正忙"
 		}
+		if Shaky(c.Fails) {
+			extra += fmt.Sprintf("  近 %d 次拉起启动失败 %d 次", ShakyWindow, c.Fails)
+		}
 		if c.Eligible {
 			fmt.Fprintf(&b, "%s%d. %s  trust=%s  max_risk=%s%s\n", mark, c.Rank, c.ID, c.Trust, c.MaxRisk, extra)
 		} else {

@@ -266,13 +266,15 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	if len(runs) != 2 || runs[0].Worker != "codex+gpt-6-sol" || runs[1].Worker == "codex+gpt-6-sol" {
 		t.Fatalf("额度用尽应换人重派：%+v", runs)
 	}
-	h, _ := ledger.History(ctx, env.DB, tk.ID, 50)
-	found := false
-	for _, e := range h {
-		found = found || e.Kind == "quota_exhausted"
+	stats, err := workers.Stats(ctx, env.DB)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !found {
-		t.Error("没记额度用尽")
+	if s := stats["codex+gpt-6-sol"]; len(s) != 1 || s[0].Outcome != workers.OutQuota || s[0].Task != tk.ID {
+		t.Errorf("这次拉起应记额度失败：%+v", s)
+	}
+	if s := stats[workers.Combo(runs[1].Worker)]; len(s) != 1 || s[0].Outcome != workers.OutOK {
+		t.Errorf("换上的执行者应记交付：%+v", s)
 	}
 	if _, err := os.Stat(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "work")); err != nil {
 		t.Error("没有仓库时用 work/")

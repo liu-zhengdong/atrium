@@ -47,6 +47,9 @@ func Routes(r *api.Router, env *app.Env) {
 		if in.DryRun {
 			return dryRun(q, env, id, in.Options)
 		}
+		if err := ledger.UseDeptRepo(ctx, env.DB, id, q.Actor.ID); err != nil {
+			return nil, err
+		}
 		t, err := Enqueue(ctx, env, id, in.Options, q.Actor.ID)
 		if err != nil {
 			return nil, err

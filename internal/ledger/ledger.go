@@ -136,42 +136,33 @@ func Assignee(in NewTask, actor string) string {
 	return in.Owner
 }
 
-// DeptRepo 纯判定：task add 没写仓库时沿用部门的哪个仓库（repos 是部门自己的仓库）。部门恰有一个仓库才沿用，
-// 多个时分不出是哪个，照旧不写；写了仓库或工作地点、交给别的负责人去拆（--owner aN，含草稿）的不沿用。
-// 不在仓库里干的活建好后 task set tN --repo= 清掉。
-func DeptRepo(in NewTask, actor string, repos []string) string {
-	if in.Repo != "" || in.Dir != "" || len(repos) != 1 || (in.Owner != actor && api.IsRef(in.Owner, "a")) {
-		return in.Repo
+// DeptRepo 纯判定：派活时任务该带上部门的哪个仓库（repos 是部门自己的仓库），不用补为空。任务没仓库也没工作地点、
+// 部门恰有一个仓库才补——多个时分不出是哪个；只补能派的（按 Transition），在跑、在交付的不动，免得中途换了交付方式。
+func DeptRepo(t Task, repos []string) string {
+	if t.Repo != "" || t.Dir != "" || len(repos) != 1 {
+		return ""
+	}
+	if _, err := Transition(State{t.Status, t.Stage}, Event{Kind: Enqueue}); err != nil {
+		return ""
 	}
 	return repos[0]
 }
 
-// withDeptRepo 给 task add 补上部门的仓库（DeptRepo）；部门缺省沿用父任务的，与 Add 同一规则。
-// 只在命令行建任务的入口用：运行时自己建的（审阅、周期任务、选项单拍板）不沿用。
-func withDeptRepo(ctx context.Context, q store.Querier, in NewTask, actor string) (NewTask, error) {
-	dept := in.Org
-	if dept == "" && in.Parent != "" {
-		if err := mustExist(ctx, q, "tasks", "t", "parent", in.Parent); err != nil {
-			return in, err
-		}
-		p, err := Get(ctx, q, in.Parent)
-		if err != nil {
-			return in, err
-		}
-		dept = p.Org
+// UseDeptRepo 是 task run 入口用的：按 DeptRepo 给任务写上部门的仓库。草稿、后来才定部门的、交给负责人的，
+// 派出去时都在这一处补上；运行时自己派的（审阅、周期任务）不经这里，照旧没有仓库。
+func UseDeptRepo(ctx context.Context, db *store.DB, id, actor string) error {
+	t, err := Get(ctx, db, id)
+	if err != nil || t.Org == "" {
+		return err
 	}
-	if dept == "" {
-		return in, nil
-	}
-	if err := mustExist(ctx, q, "departments", "o", "org", dept); err != nil {
-		return in, err
-	}
-	d, err := org.Get(ctx, q, dept)
+	d, err := org.Get(ctx, db, t.Org)
 	if err != nil {
-		return in, err
+		return err
 	}
-	in.Repo = DeptRepo(in, actor, d.Repos)
-	return in, nil
+	if repo := DeptRepo(t, d.Repos); repo != "" {
+		_, err = Edit(ctx, db, id, Patch{Repo: &repo}, actor)
+	}
+	return err
 }
 
 // setDir 写工作地点：空为没有。

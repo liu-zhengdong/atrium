@@ -146,18 +146,14 @@ func TestLeaderAcceptsAfterReview(t *testing.T) {
 	}
 }
 
-// 没有仓库的活经同一套验收：message 验收通过直接完成；choice 验收通过才登记选项单；choice.json 不合法关卡就交回。
+// 没有仓库的活：message 没有落地，验收人是用户也过了关卡就完成；choice 验收通过才登记选项单；choice.json 不合法关卡就交回。
 func TestAcceptNoRepo(t *testing.T) {
 	e := setup(t)
 	o := e.dept(org.AcceptUser)
-	msgDir := t.TempDir()
-	msg := e.inDept(o, "", "claude+opus", msgDir)
+	msg := e.inDept(o, "", "claude+opus", t.TempDir())
 	e.sweep()
-	if got := e.state(msg.ID); got != "running/accept" {
-		t.Fatalf("message 应等验收：%s", got)
-	}
-	if got, err := e.g.Accept(e.ctx, msg.ID, "u1"); err != nil || got.Status != ledger.Done {
-		t.Fatalf("message 验收通过应完成：%+v %v", got, err)
+	if got := e.state(msg.ID); got != "done/gate" {
+		t.Fatalf("message 没有落地，不等验收，应直接完成：%s %s", got, e.lastNote(msg.ID))
 	}
 
 	choiceDir := t.TempDir()
@@ -184,33 +180,22 @@ func TestAcceptNoRepo(t *testing.T) {
 	}
 }
 
-// 有工作地点的活（dir）：关卡看执行者正常收尾，落地为空；验收人是用户时停在等验收，通过即完成；
+// 有工作地点的活（dir）：关卡看执行者正常收尾，东西已在原地、没有落地，验收人是用户也不等验收，直接完成；
 // 文件夹里的 choice.json 是用户自己的文件，不当选项单登记。
 func TestAcceptDir(t *testing.T) {
 	e := setup(t)
 	place := t.TempDir()
 	os.WriteFile(filepath.Join(place, agenda.ChoiceFile), []byte(`{"title":""}`), 0o600)
-	add := func(dept string) ledger.Task {
-		task, err := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "写文章", Org: dept, Dir: place}, "u1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		e.start(task.ID, "claude+opus")
-		ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(place)+`"}`)
-		return e.exit(task.ID)
+	task, err := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "写文章", Org: e.dept(org.AcceptUser), Dir: place}, "u1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	user := add(e.dept(org.AcceptUser))
+	e.start(task.ID, "claude+opus")
+	ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(place)+`"}`)
+	e.exit(task.ID)
 	e.sweep()
-	if got := e.state(user.ID); got != "running/accept" || !strings.Contains(e.lastNote(user.ID), "工作地点") {
-		t.Fatalf("dir 应过关卡、等验收：%s %s", got, e.lastNote(user.ID))
-	}
-	if got, err := e.g.Accept(e.ctx, user.ID, "u1"); err != nil || got.Status != ledger.Done {
-		t.Fatalf("dir 验收通过应完成：%+v %v", got, err)
-	}
-	auto := add(e.dept(org.AcceptAuto))
-	e.sweep()
-	if got := e.state(auto.ID); got != "done/gate" {
-		t.Fatalf("验收人是 auto 时 dir 过了关卡应直接完成：%s %s", got, e.lastNote(auto.ID))
+	if got := e.state(task.ID); got != "done/gate" || !strings.Contains(e.lastNote(task.ID), "工作地点") {
+		t.Fatalf("dir 没有落地，不等验收，应过了关卡直接完成：%s %s", got, e.lastNote(task.ID))
 	}
 	if open, _ := agenda.Choices(e.ctx, e.db, "", false); len(open) != 0 {
 		t.Fatalf("dir 不该登记选项单：%+v", open)

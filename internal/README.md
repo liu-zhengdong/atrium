@@ -94,7 +94,7 @@ type Module struct {
 ### 任务状态（`internal/ledger`）
 
 - 状态 `draft todo queued running done failed blocked cancelled`（`draft` 草稿：不派活、不计时、不进巡检，上限表 `drafts`）；交付阶段 `stage`（交付中状态保持 `running`）：核心只有 `"" gate review accept`（关卡、审阅、等验收），其余都是交付方式的落地步骤（`Stage.Landing()`），核心不认先后。pr 的落地步骤 `merge_queue merged released` 由 merge、release 经 `Land` 推进；名字放在 ledger 是因为 watch、web 引用不到 gates。
-- 交付方式（gates）不存库，按事实选（纯函数 `pick`）：仓库是本机路径且 origin 不是 GitHub（没有 origin 也算）→ local（在本机查提交，验收后串行合进本机主分支、删任务工作树与分支，冲突交回）；其余有仓库 → pr；只有工作地点（`task add --dir`，本机文件夹，存在 `task_dirs`）→ dir（执行者在原地干、只派本机，关卡看正常收尾，落地为空；同一文件夹的并行由负责人安排，运行时不隔离、不回退）；都没有 → message，工作目录根有 `choice.json` → choice。关卡、审阅过了之后，部门的验收人（`org.Acceptor`，沿树继承，缺省 `auto`）是 `leader`／`user` 时停在 `accept`，否则直接落地。
+- 交付方式（gates）不存库，按事实选（纯函数 `pick`）：仓库是本机路径且 origin 不是 GitHub（没有 origin 也算）→ local（在本机查提交，验收后串行合进本机主分支、删任务工作树与分支，冲突交回）；其余有仓库 → pr；只有工作地点（`task add --dir`，本机文件夹，存在 `task_dirs`）→ dir（执行者在原地干、只派本机，关卡看正常收尾，没有落地；同一文件夹的并行由负责人安排，运行时不隔离、不回退）；都没有 → message，工作目录根有 `choice.json` → choice。关卡、审阅过了之后，有落地的（pr、local、choice）遇到部门的验收人（`org.Acceptor`，沿树继承，缺省 `auto`）是 `leader`／`user` 时停在 `accept`，否则直接落地；没有落地的（dir、message，`Delivery.land` 为 nil）验收拦不住什么，直接完成。
 - **改状态只经 `ledger.Apply(ctx, db, id, ledger.Event{Kind: …}, actor, note)`**，判定在纯函数 `ledger.Transition`。事件种类与谁发：
 
 | Kind | 从 → 到 | 谁调 |

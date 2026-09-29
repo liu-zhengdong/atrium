@@ -84,11 +84,12 @@ type Driver struct {
 	Efforts      []string // nil 表示不接受思考强度
 	Exclusive    bool     // 同一时刻只跑一个
 	Tell         string
-	JSON         bool     // 标准输出是逐行 JSON 事件
+	JSON         bool     // 标准输出是逐行 JSON 事件（内置工具须同时带 read，测试核对）
 	Endpoints    []string // 能接的端点接口种类
 	KeyEnv       string   // 端点密钥交给工具时用的变量名；空则用档案 endpoint_key 本身
 	ArgPrompt    bool     // 提示词走命令行参数（有长度上限）
 	build        func(in Request) (Launch, error)
+	read         reader // 怎么读它的日志攒成经过（tracers.go）；nil 表示按原文逐行看
 	session      *regexp.Regexp
 	cli          *CLISpec
 }
@@ -193,7 +194,7 @@ var initSession = regexp.MustCompile(`"type":"system","subtype":"init"[^\n]*?"se
 // 运行中写入的用户消息在工具调用边界读入，--replay-user-messages 把读入的消息带 isReplay 回显。
 func claudeAdapter() *Driver {
 	a := &Driver{Tool: "claude", Exe: "claude", DefaultModel: "opus", Efforts: []string{"low", "medium", "high", "xhigh", "max"},
-		Tell: TellStdin, JSON: true, Endpoints: []string{"anthropic"}, KeyEnv: "ANTHROPIC_AUTH_TOKEN", session: initSession}
+		Tell: TellStdin, JSON: true, Endpoints: []string{"anthropic"}, KeyEnv: "ANTHROPIC_AUTH_TOKEN", read: readClaude, session: initSession}
 	a.build = func(in Request) (Launch, error) {
 		args := []string{"-p"}
 		if in.Session != "" {
@@ -223,7 +224,7 @@ func claudeAdapter() *Driver {
 // 续上：codex exec resume --json <会话> -（没有 -C、-s，沙箱走配置覆盖）；会话 id 是 thread.started 的 thread_id。
 func codexAdapter() *Driver {
 	a := &Driver{Tool: "codex", Exe: "codex", DefaultModel: "gpt-6-sol", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
-		Tell: TellResume, JSON: true, Endpoints: []string{"responses"}, session: regexp.MustCompile(`"type":"thread.started","thread_id":"([0-9a-f-]{36})"`)}
+		Tell: TellResume, JSON: true, Endpoints: []string{"responses"}, read: readCodex, session: regexp.MustCompile(`"type":"thread.started","thread_id":"([0-9a-f-]{36})"`)}
 	a.build = func(in Request) (Launch, error) {
 		var args []string
 		if in.Session != "" {
@@ -260,7 +261,7 @@ func codexAdapter() *Driver {
 func opencodeAdapter() *Driver {
 	a := &Driver{Tool: "opencode", Exe: "opencode", DefaultModel: "opencode-go/mimo-v2.6-flash",
 		Efforts: []string{"minimal", "low", "medium", "high", "max"}, Exclusive: true, Tell: TellRestart, JSON: true,
-		Endpoints: []string{"openai", "anthropic"}, ArgPrompt: true}
+		Endpoints: []string{"openai", "anthropic"}, ArgPrompt: true, read: readOpencode}
 	a.build = func(in Request) (Launch, error) {
 		l := Launch{Exe: a.Exe, Dir: in.Dir}
 		model := in.Model
@@ -320,7 +321,7 @@ func CursorModel(model, effort string) (string, error) {
 // cursor-agent -p：提示词读标准输入；stream-json 事件；--force --trust --sandbox disabled 全放行。续上 --resume。
 func cursorAdapter() *Driver {
 	a := &Driver{Tool: "cursor", Exe: "cursor-agent", DefaultModel: "auto", Efforts: cursorEfforts, Tell: TellResume, JSON: true,
-		session: initSession}
+		read: readCursor, session: initSession}
 	a.build = func(in Request) (Launch, error) {
 		model := in.Model
 		if model == "" {
@@ -369,7 +370,7 @@ func AgyModelArgs(model, effort string) ([]string, error) {
 // agy（Antigravity）：--print=<提示词>（等号形式）、stream-json 事件、全放行、不认斜杠命令。
 func agyAdapter() *Driver {
 	a := &Driver{Tool: "agy", Exe: "agy", DefaultModel: "gemini-3.8-flash-high", Efforts: []string{"low", "medium", "high", "max"},
-		Tell: TellRestart, JSON: true, ArgPrompt: true}
+		Tell: TellRestart, JSON: true, ArgPrompt: true, read: readAgy}
 	a.build = func(in Request) (Launch, error) {
 		m, err := AgyModelArgs(in.Model, in.Effort)
 		if err != nil {

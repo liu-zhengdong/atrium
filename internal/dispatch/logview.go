@@ -57,6 +57,9 @@ func (p *tracePrinter) next(t workers.Trace, final bool) string {
 		}
 		fmt.Fprintf(&b, "\n%s\n", t.Result)
 	}
+	if t.Unknown > 0 {
+		fmt.Fprintf(&b, "\n== 有 %d 行事件没认出（工具的日志格式可能变了），原文在下面\n", t.Unknown)
+	}
 	if len(t.Lines) > 0 {
 		fmt.Fprintf(&b, "\n== 其他输出\n%s\n", strings.Join(t.Lines, "\n"))
 	}

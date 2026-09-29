@@ -10,31 +10,51 @@ import (
 
 // 跟着看（逐行喂、每行后打新定下来的部分）与一次看完打出的文本一样：不重复、不漏、不乱序。
 func TestTracePrinter(t *testing.T) {
-	raw, err := os.ReadFile("../workers/testdata/claude-t308.jsonl")
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		worker, log string
+		has         []string
+		once        string // 最后一句与结果同文，只出现一次
+	}{
+		{"claude", "claude-t308.jsonl", []string{"\n先看代码\n  ✓ ls internal/platform internal/hosts && grep", "\n开始改代码：", "\n== 结果（用时 5 分钟）\n两处都修好了"}, "两处都修好了"},
+		{"cursor", "cursor-t347.jsonl", []string{"\n先读动画技能和相关文件。\n  ✓ read /Users/", "  ✓ edit src/openquota/data.ts\n", "  ✗ cd ", "\n== 结果（用时 13 分钟）\nOpenQuota 宣传片做完了"}, "OpenQuota 宣传片做完了"},
 	}
-	whole := workers.NewParser("claude")
-	whole.Feed(string(raw))
-	want := (&tracePrinter{}).next(whole.Trace(), true)
+	for _, c := range cases {
+		raw, err := os.ReadFile("../workers/testdata/" + c.log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		whole := workers.NewParser(c.worker)
+		whole.Feed(string(raw))
+		want := (&tracePrinter{}).next(whole.Trace(), true)
 
-	p, pr := workers.NewParser("claude"), &tracePrinter{}
-	var got strings.Builder
-	for _, l := range strings.Split(string(raw), "\n") {
-		p.Line(l)
-		got.WriteString(pr.next(p.Trace(), false))
-	}
-	got.WriteString(pr.next(p.Trace(), true))
-	if got.String() != want {
-		t.Errorf("跟着看：\n%s\n一次看完：\n%s", got.String(), want)
-	}
-	for _, s := range []string{"\n先看代码\n  ✓ ls internal/platform internal/hosts && grep", "\n开始改代码：", "\n== 结果（用时 5 分钟）\n两处都修好了"} {
-		if !strings.Contains(want, s) {
-			t.Errorf("缺 %q：\n%s", s, want)
+		p, pr := workers.NewParser(c.worker), &tracePrinter{}
+		var got strings.Builder
+		for _, l := range strings.Split(string(raw), "\n") {
+			p.Line(l)
+			got.WriteString(pr.next(p.Trace(), false))
+		}
+		got.WriteString(pr.next(p.Trace(), true))
+		if got.String() != want {
+			t.Errorf("%s 跟着看：\n%s\n一次看完：\n%s", c.log, got.String(), want)
+		}
+		for _, s := range c.has {
+			if !strings.Contains(want, s) {
+				t.Errorf("%s 缺 %q：\n%s", c.log, s, want)
+			}
+		}
+		if strings.Count(want, c.once) != 1 {
+			t.Errorf("%s 最后一句与结果重复了", c.log)
 		}
 	}
-	if strings.Count(want, "两处都修好了") != 1 {
-		t.Errorf("最后一句与结果重复了")
+}
+
+// 带解析的工具日志里有没认出的事件：文本里写明几行，原文跟在后面。
+func TestTracePrinterUnknown(t *testing.T) {
+	p := workers.NewParser("codex")
+	p.Feed(`{"type":"item.completed","item":{"id":"a","type":"agent_message","text":"好"}}` + "\n" + `{"type":"brand.new"}`)
+	got := (&tracePrinter{}).next(p.Trace(), true)
+	if !strings.Contains(got, "== 有 1 行事件没认出（工具的日志格式可能变了），原文在下面\n\n== 其他输出\n{\"type\":\"brand.new\"}") {
+		t.Errorf("%s", got)
 	}
 }
 

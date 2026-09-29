@@ -3,11 +3,9 @@ package workers
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -29,10 +27,11 @@ const (
 // Trace 是一次拉起的「经过」（纯数据）：按执行者自己说的话切段，每段带这段里跑的命令。网页任务抽屉与 task log 共用。
 type Trace struct {
 	Segments []Segment `json:"segments"`
-	Ended    bool      `json:"ended"`            // 走到了收尾
-	Result   string    `json:"result,omitempty"` // 收尾总结全文
-	Ms       int64     `json:"ms,omitempty"`     // 用时（工具报了才有）
-	Lines    []string  `json:"lines,omitempty"`  // 认不出的输出原文（最后 rawLines 行）；解析不了的工具全在这里
+	Ended    bool      `json:"ended"`             // 走到了收尾
+	Result   string    `json:"result,omitempty"`  // 收尾总结全文
+	Ms       int64     `json:"ms,omitempty"`      // 用时（工具报了才有）
+	Lines    []string  `json:"lines,omitempty"`   // 其他输出原文（最后 rawLines 行）：非事件行、报错事件、没认出的事件；解析不了的工具全在这里
+	Unknown  int       `json:"unknown,omitempty"` // 没认出的事件行数：非零说明工具的日志格式变了，解析要跟上
 }
 
 // Segment 是经过里的一段：执行者说的一句话和它之后跑的命令。Say 为空是开头还没说话的那段。
@@ -41,34 +40,40 @@ type Segment struct {
 	Cmds []Command `json:"cmds,omitempty"`
 }
 
-// Command 是一条命令调用，原文不翻译：Bash 是命令本身，其余工具是「工具名 输入」。
+// Command 是一条工具调用：shell 是命令原文，其余工具是「工具名 要点」（Parser.step）。
 type Command struct {
 	Cmd   string `json:"cmd"`
 	State string `json:"state"`
 	Out   string `json:"out,omitempty"` // 输出最后 outLines 行
 }
 
-// Traceable：这个执行者（工具[+模型][:强度]）的日志能按段解析；其余工具按原文逐行看。
-func Traceable(worker string) bool {
+// reader 认一行 JSON 事件，经 Parser 的 say、call、result、end 记下；返回 false 表示没认出。
+// 每个输出 JSON 事件的内置工具在自己的 Driver 上带一个（Driver.read），与怎么拉起写在一起。
+type reader func(p *Parser, e event, line string) bool
+
+func readerOf(worker string) reader {
 	s, _ := ParseWorker(worker)
-	return s.Tool == "claude" || s.Tool == "codex" || s.Tool == "agy"
+	if d, ok := Builtin(s.Tool); ok {
+		return d.read
+	}
+	return nil
 }
 
-// Parser 逐行读执行者日志攒成 Trace（无 IO）：claude、agy（stream-json）与 codex（exec --json）按事件解析，其余工具逐行留原文。
+// Traceable：这个执行者（工具[+模型][:强度]）的工具带解析，日志能按段看；其余工具按原文逐行看。
+func Traceable(worker string) bool { return readerOf(worker) != nil }
+
+// Parser 逐行读执行者日志攒成 Trace（无 IO）：工具带解析的按事件读，其余逐行留原文。
 type Parser struct {
-	tool    string
+	read    reader
 	t       Trace
 	open    map[string][2]int // 还没结果的工具调用 → 段、命令下标
 	lastSay string
+	dir     string            // 工作目录（工具在开头报了才有）：步骤里的路径去掉这个前缀
+	pending map[string]string // 按片段送来、还没说完的话（agy）
 }
 
 func NewParser(worker string) *Parser {
-	s, _ := ParseWorker(worker)
-	p := &Parser{open: map[string][2]int{}}
-	if Traceable(worker) {
-		p.tool = s.Tool
-	}
-	return p
+	return &Parser{read: readerOf(worker), open: map[string][2]int{}, pending: map[string]string{}}
 }
 
 // Feed 读一段完整的行。
@@ -78,25 +83,21 @@ func (p *Parser) Feed(text string) {
 	}
 }
 
-// Line 读一行。
+// Line 读一行：不是 JSON 的行留原文；JSON 事件交给工具的解析，没认出的记数并留原文。
 func (p *Parser) Line(line string) {
 	line = strings.TrimRight(line, "\r\n")
 	if strings.TrimSpace(line) == "" {
 		return
 	}
 	var e event
-	if p.tool != "" {
+	if p.read != nil {
 		e = parseEvent(line)
 	}
-	switch {
-	case e == nil:
+	if e == nil {
 		p.raw(line)
-	case p.tool == "claude":
-		p.claude(e)
-	case p.tool == "agy":
-		p.agy(e, line)
-	default:
-		p.codex(e, line)
+	} else if !p.read(p, e, line) {
+		p.t.Unknown++
+		p.raw(line)
 	}
 }
 
@@ -139,142 +140,6 @@ func ReadTrace(worker, path string) (Trace, error) {
 	}
 }
 
-func (p *Parser) claude(e event) {
-	if e["parent_tool_use_id"] != nil {
-		return // 子代理内部的步骤不算，它的调用本身已记在父级
-	}
-	content, _ := e.obj("message")["content"].([]any)
-	switch e.str("type") {
-	case "assistant":
-		for _, c := range content {
-			m := event(asMap(c))
-			switch m.str("type") {
-			case "text":
-				p.say(m.str("text"))
-			case "tool_use":
-				cmd := m.obj("input").str("command")
-				if m.str("name") != "Bash" || cmd == "" {
-					in, _ := json.Marshal(m["input"])
-					cmd = m.str("name") + " " + string(in)
-				}
-				p.call(m.str("id"), cmd)
-			}
-		}
-	case "user":
-		for _, c := range content {
-			m := event(asMap(c))
-			if m.str("type") != "tool_result" {
-				continue
-			}
-			out, code := toolText(m["content"]), 0
-			if m["is_error"] == true {
-				code = -1
-				if s := exitCodeRE.FindStringSubmatch(out); s != nil {
-					code, _ = strconv.Atoi(s[1])
-				}
-			}
-			p.result(m.str("tool_use_id"), code, out)
-		}
-	case "result":
-		p.t.Ended, p.t.Result, p.t.Ms = true, strings.TrimSpace(e.str("result")), 0
-		if ms, ok := e["duration_ms"].(float64); ok {
-			p.t.Ms = int64(ms)
-		}
-	}
-}
-
-var exitCodeRE = regexp.MustCompile(`^Exit code (\d+)`)
-
-func (p *Parser) codex(e event, line string) {
-	switch e.str("type") {
-	case "item.started", "item.completed":
-		it := e.obj("item")
-		id, done := it.str("id"), e.str("type") == "item.completed"
-		if it.str("type") == "agent_message" {
-			if done {
-				p.say(it.str("text"))
-			}
-			return
-		}
-		cmd, out, code := codexItem(it)
-		if cmd == "" {
-			return // 思考、待办等不是命令
-		}
-		if _, ok := p.open[id]; !ok {
-			p.call(id, cmd)
-		}
-		if done {
-			p.result(id, code, out)
-		}
-	case "turn.completed":
-		p.t.Ended, p.t.Result = true, p.lastSay
-	case "error", "turn.failed":
-		p.raw(line)
-	}
-}
-
-// agy 的事件只报步骤，不带它说的话：每个工具步骤一条命令（ACTIVE 在跑、DONE 完成、ERROR 出错，不报退出码），
-// 收尾 result 的 response 是总结。
-func (p *Parser) agy(e event, line string) {
-	switch e.str("event") {
-	case "step_update":
-		s := e.obj("step_update")
-		if s.str("step_type") != "tool" {
-			return
-		}
-		id, info := fmt.Sprint(s["step_index"]), s.obj("tool_info")
-		if _, ok := p.open[id]; !ok {
-			cmd := info.obj("parameters").str("CommandLine")
-			if s.str("tool_name") != "run_command" || cmd == "" {
-				in, _ := json.Marshal(info["parameters"])
-				cmd = s.str("tool_name") + " " + string(in)
-			}
-			p.call(id, cmd)
-		}
-		switch s.str("state") {
-		case "DONE":
-			p.result(id, 0, info.str("output"))
-		case "ERROR":
-			p.result(id, -1, info.obj("error").str("message"))
-		}
-	case "result":
-		if r := e.obj("result"); r.str("status") == "SUCCESS" {
-			p.t.Ended, p.t.Result = true, strings.TrimSpace(r.str("response"))
-		} else {
-			p.raw(line)
-		}
-	}
-}
-
-// codexItem 取 codex 一项的命令原文、输出与退出码（-1 表示出错但没有退出码）；不是命令的项 cmd 为空。
-func codexItem(it event) (cmd, out string, code int) {
-	failed := it.str("status") == "failed" || it.str("status") == "declined"
-	code = 0
-	if failed {
-		code = -1
-	}
-	marshal := func(v any) string { b, _ := json.Marshal(v); return string(b) }
-	switch it.str("type") {
-	case "command_execution":
-		cmd, out = unwrapShell(it.str("command")), it.str("aggregated_output")
-		if c, ok := it["exit_code"].(float64); ok {
-			code = int(c)
-		}
-	case "file_change":
-		cmd = "file_change " + marshal(it["changes"])
-	case "mcp_tool_call":
-		cmd = it.str("server") + "." + it.str("tool") + " " + marshal(it["arguments"])
-		if msg := it.obj("error").str("message"); msg != "" {
-			out, code = msg, -1
-		} else if it["result"] != nil {
-			out = marshal(it["result"])
-		}
-	case "web_search":
-		cmd = "web_search " + it.str("query")
-	}
-	return cmd, out, code
-}
-
 func (p *Parser) say(text string) {
 	if text = strings.TrimSpace(text); text == "" {
 		return
@@ -310,6 +175,38 @@ func (p *Parser) result(id string, code int, out string) {
 // resume：收尾之后又有动作（捎话后接着干），前一次收尾作废。
 func (p *Parser) resume() {
 	p.t.Ended, p.t.Result, p.t.Ms = false, "", 0
+}
+
+// end 记收尾：summary 是收尾总结，ms 是用时（没报为 0）。
+func (p *Parser) end(summary string, ms int64) {
+	p.t.Ended, p.t.Result, p.t.Ms = true, strings.TrimSpace(summary), ms
+}
+
+// 步骤要点取输入里的哪些项：先「什么」（搜索词、网址、说明），后「在哪」（路径）。
+var (
+	stepWhat  = []string{"pattern", "query", "Query", "url", "Url", "description"}
+	stepWhere = []string{"file_path", "filePath", "path", "AbsolutePath", "TargetFile", "DirectoryPath", "SearchPath", "notebook_path"}
+)
+
+// step 把非 shell 的工具步骤写成「工具名 要点」（view_file internal/README.md），路径去掉工作目录前缀；输入里没有这些项才给整段参数。
+func (p *Parser) step(name string, in map[string]any) string {
+	parts := []string{name}
+	for _, keys := range [][]string{stepWhat, stepWhere} {
+		for _, k := range keys {
+			if v, _ := in[k].(string); v != "" {
+				if p.dir != "" {
+					v = strings.TrimPrefix(v, p.dir+"/")
+				}
+				parts = append(parts, v)
+				break
+			}
+		}
+	}
+	if len(parts) == 1 && len(in) > 0 {
+		b, _ := json.Marshal(in)
+		parts = append(parts, string(b))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (p *Parser) raw(line string) {

@@ -225,7 +225,8 @@ function traceHTML(d) {
   const tr = d.trace;
   if (!tr) return "";
   const tid = d.task.id, segs = tr.segments, n = cmdsOf(segs).length;
-  const lines = tr.lines?.length ? `<div class="log">${esc(tr.lines.join("\n"))}</div>` : "";
+  const lines = (tr.unknown ? `<div class="jh"><b>没认出</b><span>${tr.unknown} 行事件，工具的日志格式可能变了</span></div>` : "")
+    + (tr.lines?.length ? `<div class="log">${esc(tr.lines.join("\n"))}</div>` : "");
   const fold = (key, label, open) => `<button class="grp fold" data-g="${tid}:${key}" aria-expanded="${open}"><span class="chev">›</span><span>${label}</span></button>`;
   if (!segs.length && !tr.ended) return lines ? `<div class="jh"><b>日志</b></div>${lines}` : "";
   if (d.live) { // 进行中：只留最近两段，当前段展开，更早的折起

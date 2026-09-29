@@ -3,6 +3,7 @@ package workers
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"regexp"
@@ -50,10 +51,10 @@ type Command struct {
 // Traceable：这个执行者（工具[+模型][:强度]）的日志能按段解析；其余工具按原文逐行看。
 func Traceable(worker string) bool {
 	s, _ := ParseWorker(worker)
-	return s.Tool == "claude" || s.Tool == "codex"
+	return s.Tool == "claude" || s.Tool == "codex" || s.Tool == "agy"
 }
 
-// Parser 逐行读执行者日志攒成 Trace（无 IO）：claude（stream-json）与 codex（exec --json）按事件解析，其余工具逐行留原文。
+// Parser 逐行读执行者日志攒成 Trace（无 IO）：claude、agy（stream-json）与 codex（exec --json）按事件解析，其余工具逐行留原文。
 type Parser struct {
 	tool    string
 	t       Trace
@@ -92,6 +93,8 @@ func (p *Parser) Line(line string) {
 		p.raw(line)
 	case p.tool == "claude":
 		p.claude(e)
+	case p.tool == "agy":
+		p.agy(e, line)
 	default:
 		p.codex(e, line)
 	}
@@ -207,6 +210,39 @@ func (p *Parser) codex(e event, line string) {
 		p.t.Ended, p.t.Result = true, p.lastSay
 	case "error", "turn.failed":
 		p.raw(line)
+	}
+}
+
+// agy 的事件只报步骤，不带它说的话：每个工具步骤一条命令（ACTIVE 在跑、DONE 完成、ERROR 出错，不报退出码），
+// 收尾 result 的 response 是总结。
+func (p *Parser) agy(e event, line string) {
+	switch e.str("event") {
+	case "step_update":
+		s := e.obj("step_update")
+		if s.str("step_type") != "tool" {
+			return
+		}
+		id, info := fmt.Sprint(s["step_index"]), s.obj("tool_info")
+		if _, ok := p.open[id]; !ok {
+			cmd := info.obj("parameters").str("CommandLine")
+			if s.str("tool_name") != "run_command" || cmd == "" {
+				in, _ := json.Marshal(info["parameters"])
+				cmd = s.str("tool_name") + " " + string(in)
+			}
+			p.call(id, cmd)
+		}
+		switch s.str("state") {
+		case "DONE":
+			p.result(id, 0, info.str("output"))
+		case "ERROR":
+			p.result(id, -1, info.obj("error").str("message"))
+		}
+	case "result":
+		if r := e.obj("result"); r.str("status") == "SUCCESS" {
+			p.t.Ended, p.t.Result = true, strings.TrimSpace(r.str("response"))
+		} else {
+			p.raw(line)
+		}
 	}
 }
 

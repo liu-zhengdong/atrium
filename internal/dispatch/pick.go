@@ -27,7 +27,7 @@ type Fact struct {
 	Fails       int // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
 }
 
-// 近 ShakyWindow 次拉起里启动失败（额度、没登录、其他）≥ ShakyFails 次的候选往后排：只影响排序、不排除；
+// 近 ShakyWindow 次拉起里启动失败（额度、起不来、其他）≥ ShakyFails 次的候选往后排：只影响排序、不排除；
 // 此刻接不了由不可用标记管（Unavailable）。
 const (
 	ShakyWindow = 5

@@ -18,16 +18,16 @@ const ExitKind = "exit"
 // StatWindow：workers 列每个组合近几次有结果的拉起。
 const StatWindow = 20
 
-// 一次拉起的结果。启动失败（额度、没登录、其他）的分类同不可用标记，取自退出信号。
+// 一次拉起的结果。启动失败（额度、起不来、其他）的分类同不可用标记，取自退出信号。
 const (
 	OutOK     = "ok"     // 正常交付
 	OutQuota  = "quota"  // 额度用尽
-	OutLogin  = "login"  // 没登录
+	OutSetup  = "setup"  // 起不来：没登录、缺运行环境
 	OutFail   = "fail"   // 其他失败：模型名无效、临时错误、思考耗尽、出错退出、卡死
 	OutBounce = "bounce" // 交付被交回（关卡、审阅、验收、合入退回）
 )
 
-var outText = map[string]string{OutOK: "交付", OutQuota: "额度", OutLogin: "没登录", OutFail: "其他失败", OutBounce: "被交回"}
+var outText = map[string]string{OutOK: "交付", OutQuota: "额度", OutSetup: "起不来", OutFail: "其他失败", OutBounce: "被交回"}
 
 // OutText 是结果给人看的名字。
 func OutText(out string) string { return outText[out] }
@@ -39,21 +39,21 @@ type Exit struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-// OutcomeOf 把退出信号翻成这次拉起的结果（纯函数）：额度用尽、没登录各一类；没有信号且正常收尾算交付；其余算其他失败。
+// OutcomeOf 把退出信号翻成这次拉起的结果（纯函数）：额度用尽、起不来各一类；没有信号且正常收尾算交付；其余算其他失败。
 func OutcomeOf(sig Signal, ended bool) string {
 	switch {
 	case sig.Kind == SignalQuota:
 		return OutQuota
-	case sig.Kind == SignalLogin:
-		return OutLogin
+	case sig.Kind == SignalSetup:
+		return OutSetup
 	case sig.Kind == SignalNone && ended:
 		return OutOK
 	}
 	return OutFail
 }
 
-// Failed：启动失败（额度、没登录、其他）。
-func Failed(out string) bool { return out == OutQuota || out == OutLogin || out == OutFail }
+// Failed：启动失败（额度、起不来、其他）。
+func Failed(out string) bool { return out == OutQuota || out == OutSetup || out == OutFail }
 
 // Attempt 是一次拉起及其结果。
 type Attempt struct {
@@ -72,7 +72,7 @@ type Stat struct {
 	OK       int `json:"ok"`
 	Bounce   int `json:"bounce"`
 	Quota    int `json:"quota"`
-	Login    int `json:"login"`
+	Setup    int `json:"setup"`
 	Fail     int `json:"fail"`
 }
 
@@ -87,8 +87,8 @@ func Count(ls []Attempt) Stat {
 			s.Bounce++
 		case OutQuota:
 			s.Quota++
-		case OutLogin:
-			s.Login++
+		case OutSetup:
+			s.Setup++
 		case OutFail:
 			s.Fail++
 		}
@@ -100,7 +100,7 @@ func (s Stat) String() string {
 	if s.Launches == 0 {
 		return "还没有拉起记录"
 	}
-	return fmt.Sprintf("近 %d 次拉起：交付 %d · 被交回 %d · 额度 %d · 没登录 %d · 其他失败 %d", s.Launches, s.OK, s.Bounce, s.Quota, s.Login, s.Fail)
+	return fmt.Sprintf("近 %d 次拉起：交付 %d · 被交回 %d · 额度 %d · 起不来 %d · 其他失败 %d", s.Launches, s.OK, s.Bounce, s.Quota, s.Setup, s.Fail)
 }
 
 // Fails 数最近 n 次有结果的拉起里启动失败几次（纯函数，ls 新的在前）。

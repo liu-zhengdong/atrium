@@ -17,7 +17,7 @@ func TestOutcomeOf(t *testing.T) {
 		want  string
 	}{
 		{SignalQuota, false, OutQuota},
-		{SignalLogin, false, OutLogin},
+		{SignalSetup, false, OutSetup},
 		{SignalModel, false, OutFail},
 		{SignalTransient, true, OutFail},
 		{SignalThinking, true, OutFail},

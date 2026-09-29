@@ -300,7 +300,7 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
   updated_at INTEGER NOT NULL
 );
 
--- 执行者不可用标记：「工具+模型@机器」此刻接不了活（额度用尽、没登录、模型名无效），挑执行者与机器时跳过。
+-- 执行者不可用标记：「工具+模型@机器」此刻接不了活（额度用尽、没登录、缺运行环境、模型名无效），挑执行者与机器时跳过。
 -- model 为空表示这台上这个工具的全部模型；until 为 0 等人处理（workers --clear），否则到点自动恢复。
 CREATE TABLE IF NOT EXISTS worker_marks (
   tool     TEXT NOT NULL,

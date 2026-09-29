@@ -16,7 +16,7 @@ const (
 	SignalQuota     = "quota"     // 额度用尽：标记「工具+模型@机器」到恢复时刻，重新排队
 	SignalTransient = "transient" // 供应商或网络临时错误：同一执行者重试一次，再换人一次
 	SignalThinking  = "thinking"  // 思考耗尽单次输出：换执行者一次
-	SignalLogin     = "login"     // 工具在这台机器上没登录：标记「工具@机器」，重新排队
+	SignalSetup     = "setup"     // 工具在这台机器上起不来（没登录、缺运行环境）：标记「工具@机器」，重新排队
 	SignalModel     = "model"     // 工具不认这个模型名：标记「工具+模型@机器」，重新排队
 )
 
@@ -80,9 +80,16 @@ func (e event) str(k string) string { s, _ := e[k].(string); return s }
 func (e event) obj(k string) event  { m, _ := e[k].(map[string]any); return m }
 
 var (
-	errorWordRE  = regexp.MustCompile(`(?i)\b(?:error|failed|limit reached|limit exceeded|too many requests|usage limits? will reset|spend(?:ing)? limit)\b|HTTP/\S+ 429|额度.{0,20}(?:用尽|不足|超限)|余额不足`)
-	quotaMarkRE  = regexp.MustCompile(`(?i)(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|usage limits? will reset|set (?:a|your) spend(?:ing)? limit|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)`)
-	loginRE      = regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b`)
+	errorWordRE = regexp.MustCompile(`(?i)\b(?:error|failed|limit reached|limit exceeded|too many requests|usage limits? will reset|spend(?:ing)? limit)\b|HTTP/\S+ 429|额度.{0,20}(?:用尽|不足|超限)|余额不足`)
+	quotaMarkRE = regexp.MustCompile(`(?i)(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|usage limits? will reset|set (?:a|your) spend(?:ing)? limit|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)`)
+	setups      = []struct {
+		re     *regexp.Regexp
+		reason string
+	}{
+		{regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b`), "没登录"},
+		// 工具或它依赖的解释器找不到：版本管理器没选版本、shell／Windows 找不到命令、shebang 的 env 找不到、拉起子进程 ENOENT
+		{regexp.MustCompile(`(?i)No active Node\.js version|\bcommand not found\b|^\S*sh: (?:\d+: )?\S+: not found$|不是内部或外部命令|is not recognized as an internal or external command|^env: \S+: No such file or directory|\bspawn \S+ ENOENT\b|executable file not found in`), "缺运行环境"},
+	}
 	modelNameRE  = regexp.MustCompile(`(?i)issue with the selected model|\bmodel\b[^\n]{0,40}\b(?:not found|does not exist|is not supported)|\b(?:unknown|invalid|unsupported) model\b|ModelNotFound`)
 	retryHintRE  = regexp.MustCompile(`(?i)retry-after|try again in|resets? \d`)
 	rateStatusRE = regexp.MustCompile(`(?i)^(rejected|blocked|limited|rate_limited|exceeded|denied)$`)
@@ -166,8 +173,8 @@ func oneLine(s string) string {
 	return s
 }
 
-// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再没登录、模型名无效，最后供应商临时错误。
-// 退出码 0 不判额度、没登录、模型名无效与临时错误（跑完了就交关卡）；ExitUnknown 不判后三种。
+// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境）、模型名无效，最后供应商临时错误。
+// 退出码 0 不判额度、起不来、模型名无效与临时错误（跑完了就交关卡）；ExitUnknown 不判后三种。
 func Classify(exitCode int, tail string, now time.Time) Signal {
 	report := errorReport(tail)
 	if exitCode != 0 && report != "" && (quotaMarkRE.MatchString(report) || http429RE.MatchString(report)) {
@@ -187,8 +194,10 @@ func Classify(exitCode int, tail string, now time.Time) Signal {
 			plain = lastPlainLines(tail, 12)
 		}
 		for _, text := range []string{report, plain} {
-			if loginRE.MatchString(text) {
-				return Signal{Kind: SignalLogin, Reason: "没登录", Evidence: oneLine(text)}
+			for _, st := range setups {
+				if line := matchLine(st.re, text); line != "" {
+					return Signal{Kind: SignalSetup, Reason: st.reason, Evidence: oneLine(line)}
+				}
 			}
 			if modelNameRE.MatchString(text) {
 				return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}
@@ -223,6 +232,16 @@ func endedOK(tail string) bool {
 		}
 	}
 	return false
+}
+
+// matchLine 是 text 里第一处命中 re 的那一行；没命中为空。
+func matchLine(re *regexp.Regexp, text string) string {
+	for _, l := range strings.Split(text, "\n") {
+		if re.MatchString(l) {
+			return l
+		}
+	}
+	return ""
 }
 
 func lastPlainLines(tail string, n int) string {

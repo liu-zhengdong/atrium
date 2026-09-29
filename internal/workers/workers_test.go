@@ -275,9 +275,21 @@ func TestClassify(t *testing.T) {
 		{"网络", 1, "Error: fetch failed\n", SignalTransient, time.Time{}},
 		{"过载事件", 1, `{"type":"error","error":{"name":"APIError","data":{"message":"Overloaded"}}}`, SignalTransient, time.Time{}},
 		{"5xx", 1, "error: status 503 Service Unavailable\n", SignalTransient, time.Time{}},
-		{"grok 没登录", 1, "Not signed in\n", SignalLogin, time.Time{}},
-		{"claude 没登录", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalLogin, time.Time{}},
+		{"grok 没登录", 1, "Not signed in\n", SignalSetup, time.Time{}},
+		{"claude 没登录", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalSetup, time.Time{}},
 		{"退出码 0 不判没登录", 0, "Not signed in\n", SignalNone, time.Time{}},
+		// t392 现场 h3 上 codex 的 Node 版本管理器没选版本的原文
+		{"Node 没选版本", 1, "No active Node.js version is configured\n", SignalSetup, time.Time{}},
+		{"zsh 找不到命令", 127, "zsh: command not found: codex\n", SignalSetup, time.Time{}},
+		{"bash 找不到命令", 127, "bash: line 1: codex: command not found\n", SignalSetup, time.Time{}},
+		{"dash 找不到命令", 127, "/bin/sh: 1: codex: not found\n", SignalSetup, time.Time{}},
+		{"shebang 找不到 node", 127, "env: node: No such file or directory\n", SignalSetup, time.Time{}},
+		{"Windows 找不到命令", 1, "'codex' 不是内部或外部命令，也不是可运行的程序\n或批处理文件。\n", SignalSetup, time.Time{}},
+		{"Windows 英文找不到命令", 1, "'codex' is not recognized as an internal or external command,\noperable program or batch file.\n", SignalSetup, time.Time{}},
+		{"拉起子进程 ENOENT", 1, "Error: spawn codex ENOENT\n    at ChildProcess._handle.onexit (node:internal/child_process:285:19)\n", SignalSetup, time.Time{}},
+		{"Go 找不到可执行文件", 1, `exec: "codex": executable file not found in $PATH` + "\n", SignalSetup, time.Time{}},
+		{"退出码 0 不判缺运行环境", 0, "zsh: command not found: rg\n", SignalNone, time.Time{}},
+		{"读不到文件不算缺运行环境", 1, "Error: ENOENT: no such file or directory, open 'a.txt'\n", SignalNone, time.Time{}},
 		// t330 现场 agy 里 Claude 模型撞额度的原文（#543）
 		{"agy Claude 模型额度", 1, "API error (attempt 5): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h57m45s\n", SignalQuota, now.Add(2*time.Hour + 57*time.Minute + 45*time.Second)},
 		{"agy 结果事件里的额度", 1, `{"event":"result","result":{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12m"}}`, SignalQuota, now.Add(12 * time.Minute)},
@@ -295,6 +307,15 @@ func TestClassify(t *testing.T) {
 		s := Classify(c.code, c.tail, now)
 		if s.Kind != c.kind {
 			t.Errorf("%s：得到 %+v", c.name, s)
+		}
+		if c.kind == SignalSetup {
+			want := "缺运行环境"
+			if strings.Contains(c.name, "没登录") {
+				want = "没登录"
+			}
+			if s.Reason != want || s.Evidence == "" || strings.Contains(s.Evidence, "\n") || !strings.Contains(c.tail, s.Evidence) {
+				t.Errorf("%s：原因应为 %s、证据应是报文里的一行，得到 %+v", c.name, want, s)
+			}
 		}
 		if !c.reset.IsZero() && s.ResetAt != c.reset.UnixMilli() {
 			t.Errorf("%s：恢复时刻 %v，应为 %v", c.name, time.UnixMilli(s.ResetAt).UTC(), c.reset)
@@ -350,14 +371,15 @@ func TestMarkOf(t *testing.T) {
 	}{
 		{"额度用尽按报文恢复", Signal{Kind: SignalQuota, ResetAt: reset}, true, "agy+claude-opus-4-6-thinking@h3", reset},
 		{"额度用尽读不出恢复时刻", Signal{Kind: SignalQuota}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(QuotaHold).UnixMilli()},
-		{"没登录标整个工具、等人处理", Signal{Kind: SignalLogin}, true, "agy@h3", 0},
+		{"没登录标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "没登录"}, true, "agy@h3", 0},
+		{"缺运行环境标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "缺运行环境"}, true, "agy@h3", 0},
 		{"模型名无效等人处理", Signal{Kind: SignalModel}, true, "agy+claude-opus-4-6-thinking@h3", 0},
 		{"临时错误不标", Signal{Kind: SignalTransient}, false, "", 0},
 		{"思考耗尽不标", Signal{Kind: SignalThinking}, false, "", 0},
 	}
 	for _, c := range cases {
 		m, ok := MarkOf(c.sig, agy, "h3", now)
-		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != c.until || m.Reason == "")) {
+		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != c.until || m.Reason == "" || (c.sig.Reason != "" && m.Reason != c.sig.Reason))) {
 			t.Errorf("%s：%v %+v", c.name, ok, m)
 		}
 	}
@@ -397,7 +419,7 @@ func TestMarksStore(t *testing.T) {
 		{Tool: "agy", Model: "claude-opus-4-6-thinking", Host: "h1", Kind: SignalQuota, Reason: "额度用尽", Until: now.Add(time.Hour).UnixMilli()},
 		{Tool: "agy", Model: "old", Host: "h1", Kind: SignalQuota, Reason: "额度用尽", Until: now.Add(-time.Minute).UnixMilli()},
 		{Tool: "agy", Model: "gemini-x", Host: "h3", Kind: SignalModel, Reason: "模型名无效"},
-		{Tool: "grok", Host: "h3", Kind: SignalLogin, Reason: "没登录"},
+		{Tool: "grok", Host: "h3", Kind: SignalSetup, Reason: "没登录"},
 	} {
 		m.Since = now.UnixMilli()
 		if err := SetMark(ctx, db, m); err != nil {

@@ -152,7 +152,7 @@ func TestPerfRows(t *testing.T) {
 	at := func(worker, out string) workers.Attempt { return workers.Attempt{Worker: worker, Outcome: out} }
 	stats := map[string][]workers.Attempt{
 		"claude+opus":    {at("claude+opus:high", workers.OutOK), at("claude+opus", workers.OutBounce)},
-		"grok+grok-4.6":  {at("grok+grok-4.6", workers.OutLogin), at("grok+grok-4.6", workers.OutOK)},
+		"grok+grok-4.6":  {at("grok+grok-4.6", workers.OutSetup), at("grok+grok-4.6", workers.OutOK)},
 		"cursor+auto":    {at("cursor+auto", workers.OutQuota)},
 		"agy+gemini-3.8": {at("agy+gemini-3.8", workers.OutOK)},
 	}
@@ -173,7 +173,7 @@ func TestPerfRows(t *testing.T) {
 	}
 	want := []string{
 		"claude+opus 1/2 [ok bounce] []",
-		"grok+grok-4.6 1/2 [login ok] [h3]",
+		"grok+grok-4.6 1/2 [setup ok] [h3]",
 		"agy+gemini-3.8 1/1 [ok] []",
 		"cursor+auto 0/1 [quota] []",
 		"agy+gemini-3.8-flash 0/0 [] [h1 h3]",
@@ -312,7 +312,7 @@ func TestRoutes(t *testing.T) {
 	// 表现与 atrium workers 同一份统计（workers.Stats）：拉起有了结果才计；不可用标记挂在它挡住的组合下。
 	exit, _ := json.Marshal(workers.Exit{N: 1, Outcome: workers.OutOK})
 	ledger.Record(ctx, db, task.ID, workers.ExitKind, "dispatch", string(exit))
-	workers.SetMark(ctx, db, workers.Mark{Tool: "claude", Host: "h1", Kind: workers.SignalLogin, Reason: "没登录", Since: store.Now()})
+	workers.SetMark(ctx, db, workers.Mark{Tool: "claude", Host: "h1", Kind: workers.SignalSetup, Reason: "没登录", Since: store.Now()})
 	read("legion", &legion)
 	if len(legion.Perf) != 1 || legion.Window != workers.StatWindow {
 		t.Fatalf("表现：%+v", legion)

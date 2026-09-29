@@ -223,7 +223,7 @@ func TestPromptRules(t *testing.T) {
 	if !strings.Contains(pr, "在分支 task-t1 上提交、推送并开 PR") {
 		t.Fatalf("pr：%s", pr)
 	}
-	local := strings.Join(gates.PromptRules("/src/site", "", "", "task-t1"), "\n")
+	local := strings.Join(gates.PromptRules(filepath.Join(t.TempDir(), "site"), "", "", "task-t1"), "\n")
 	if !strings.Contains(local, "在分支 task-t1 上提交；不要推送") || strings.Contains(local, "PR") || !strings.Contains(local, "preview/") {
 		t.Fatalf("local 不该要求推送、开 PR：%s", local)
 	}
@@ -231,7 +231,7 @@ func TestPromptRules(t *testing.T) {
 	if strings.Contains(msg, "PR") || !strings.Contains(msg, "没有仓库") {
 		t.Fatalf("message 不该要求开 PR：%s", msg)
 	}
-	dir := strings.Join(gates.PromptRules("", "/w/blog", "", ""), "\n")
+	dir := strings.Join(gates.PromptRules("", filepath.Join(t.TempDir(), "blog"), "", ""), "\n")
 	if strings.Contains(dir, "PR") || !strings.Contains(dir, "原地干") {
 		t.Fatalf("dir 应在原地干、不开 PR：%s", dir)
 	}

@@ -103,6 +103,7 @@ func TestLogAcceptAndReconcile(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "id") // 本机规则下的绝对路径：Windows 上 /k/id 没有盘符，不算绝对路径
 	cases := []struct {
 		in            AddInput
 		ok            bool
@@ -117,9 +118,9 @@ func TestValidate(t *testing.T) {
 		{AddInput{Name: "x", SSH: "-oProxyCommand=x"}, false, 0, 0},
 		{AddInput{Name: "x", SSH: "me@host", Tunnel: "99999:1"}, false, 0, 0},
 		{AddInput{Name: "x", Tunnel: "1:2"}, false, 0, 0},
-		{AddInput{Name: "x", SSH: "me@host", Key: "/k/id"}, true, 4320, 4320},
+		{AddInput{Name: "x", SSH: "me@host", Key: key}, true, 4320, 4320},
 		{AddInput{Name: "x", SSH: "me@host", Key: "id_rsa"}, false, 0, 0},
-		{AddInput{Name: "x", Key: "/k/id"}, false, 0, 0},
+		{AddInput{Name: "x", Key: key}, false, 0, 0},
 	}
 	for i, c := range cases {
 		l, r, err := c.in.Validate(4320)

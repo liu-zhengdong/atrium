@@ -142,19 +142,21 @@ func TestBuildPrompt(t *testing.T) {
 }
 
 func TestRepoSource(t *testing.T) {
+	d := t.TempDir() // 本机规则下的绝对路径：Windows 上 /src/app 没有盘符，不算绝对路径
+	app := filepath.Join(d, "app")
 	cases := []struct{ repo, local, url string }{
-		{"/src/app", "/src/app", ""},
-		{"owner/name", "/d/repos/owner_name", "https://github.com/owner/name.git"},
-		{"file:///tmp/r.git", "/d/repos/file_tmp_r.git", "file:///tmp/r.git"},
+		{app, app, ""},
+		{"owner/name", filepath.Join(d, "repos", "owner_name"), "https://github.com/owner/name.git"},
+		{"file:///tmp/r.git", filepath.Join(d, "repos", "file_tmp_r.git"), "file:///tmp/r.git"},
 	}
 	for _, c := range cases {
-		l, u, err := RepoSource("/d", c.repo)
+		l, u, err := RepoSource(d, c.repo)
 		if err != nil || l != c.local || u != c.url {
 			t.Errorf("%s → %s %s %v", c.repo, l, u, err)
 		}
 	}
 	for _, bad := range []string{"rel/../x", "just-a-name", "a/b/c"} {
-		if _, _, err := RepoSource("/d", bad); err == nil {
+		if _, _, err := RepoSource(d, bad); err == nil {
 			t.Errorf("%s 应拒绝", bad)
 		}
 	}

@@ -4,6 +4,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -14,7 +15,7 @@ func DialEndpoint(endpoint string, timeout time.Duration) (io.WriteCloser, error
 	f, err := os.OpenFile(endpoint, os.O_RDWR, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.Join(ErrEndpointGone, err)
+			return nil, fmt.Errorf("%w: %w", ErrEndpointGone, err)
 		}
 		return nil, err
 	}

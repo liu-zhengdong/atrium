@@ -2,12 +2,14 @@ package secretary
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/platform"
 )
 
 // 桥的节奏。
@@ -17,7 +19,33 @@ const (
 	ListenEvery = 30 * time.Second // 多久向服务报一次「在听」
 	ListenTTL   = 90               // 「在听」的有效秒数
 	sentLimit   = 1000             // 送过的记录上限
+
+	SessionDownAfter = 2 * time.Minute // 收件地址还在但一直连不上，满这么久才算会话已关闭
 )
+
+// Liveness 按一次次连会话的结果（探测或送入）判会话关没关：收件地址不在了（platform.ErrEndpointGone）立即算关闭；
+// 地址还在但连不上（服务重启时会话忙、对方暂时不接）要从第一次连不上起、中间没有一次连上，满 SessionDownAfter 才算。
+type Liveness struct{ downSince time.Time }
+
+// Observe 记一次结果（err 为 nil 是连上了），返回退出原因；空串是继续。
+func (l *Liveness) Observe(now time.Time, err error) string {
+	switch {
+	case err == nil:
+		l.downSince = time.Time{}
+		return ""
+	case errors.Is(err, platform.ErrEndpointGone):
+		return fmt.Sprintf("会话已关闭（%v）", err)
+	case l.downSince.IsZero():
+		l.downSince = now
+	}
+	if now.Sub(l.downSince) >= SessionDownAfter {
+		return fmt.Sprintf("会话已关闭（连续 %d 分钟连不上，最近一次：%v）", int(SessionDownAfter.Minutes()), err)
+	}
+	return ""
+}
+
+// Down 是眼下是否处在连不上的状态。
+func (l *Liveness) Down() bool { return !l.downSince.IsZero() }
 
 // Sent 是送过的事件：编号 → 送出时的更新时刻与送出时刻。
 type Sent map[int64]SentMark

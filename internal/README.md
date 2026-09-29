@@ -35,14 +35,14 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `choice_option_orgs` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」、清理（每小时删掉最后更新超过 7 天的已确认与知会级事件，要处理且没确认的不删） | `events` |
 | `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`（入队前经 `ledger.UseDeptRepo` 补部门的仓库）、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
-| `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（输出 JSON 事件的工具各自的解析挂在适配器 `Driver.read` 上，按执行者的话分段、步骤写成「工具名 路径」，认不出的事件记 `Unknown`；纯文本工具逐行原文）、执行者可用性（「工具+模型@机器」不可用标记：`MarkOf` 由退出信号翻成标记、`Blocked` 给挑执行者与挑机器判）、按拉起统计（`Stats`：每次拉起一个结果——交付、被交回、额度、起不来、其他失败，按「工具+模型」归、强度不单列）；`workers`（列、看、改档案与每次拉起的明细，`--clear` 解除不可用标记） | `worker_profiles` `worker_marks` |
+| `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（输出 JSON 事件的工具各自的解析挂在适配器 `Driver.read` 上，按执行者的话分段、步骤写成「工具名 路径」，认不出的事件记 `Unknown`；纯文本工具逐行原文）、执行者可用性（「工具+模型@机器」不可用标记：`MarkOf` 由退出信号翻成标记、`Blocked` 给挑执行者与挑机器判）、按拉起统计（`Stats`：每次拉起一个结果——交付、被交回、额度、起不来、其他失败，按「工具+模型」归、强度不单列）；`workers`（列、看档案与每次拉起的明细，只读）、`workers edit`（改档案，`--clear` 解除不可用标记） | `worker_profiles` `worker_marks` |
 | `gates` | 完成 | 交付方式（`delivery.go`：pr、local、dir、choice、message 各自的提示词、关卡、落地；local 的关卡与落地在 `local.go`）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `gates/skillcheck` | 完成 | 技能声明的交付检查：技能的 `checks` 写检查名（`article`、`video`），关卡在本机工作目录里查表自己跑（构建与明暗截图；ffprobe、响度、第一帧不空白、联系表），产物放任务目录、结论与路径记进经历；每项有时限，跑不起来（缺工具、工作目录在远程）转受阻；org 保存技能时经 `Validate` 校验名字 | — |
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | pr 交付方式的落地第二段（Atrium 自己的仓库）：有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；每轮顺带数上限用量（刚到或超了发 `limit.full`）；持球人判定 `HolderOf`；`top` 与 `/api/top`（末行是三个目标的数） | — |
 | `hosts` | 完成 | 机器登记、挑机器（`Pick`，避开工具没装、没登录或「工具+模型」在那台标了不可用的机器）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
-| `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）；只有服务的后台循环去读（本机自带读取到期就读，OpenQuota 每 5 分钟），读数连同 OpenQuota 的都存 `quota_cache`，派活、网页、命令都只取 `Last`；隔离实例（服务与代理都按数据目录不是缺省的算）不读本机登录与 OpenQuota；`quota` | `quota_cache` `quota_settings` |
+| `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）；只有服务的后台循环去读（本机自带读取到期就读，OpenQuota 每 5 分钟），读数连同 OpenQuota 的都存 `quota_cache`，派活、网页、命令都只取 `Last`；隔离实例（服务与代理都按数据目录不是缺省的算）不读本机登录与 OpenQuota；`quota`（只读）、`quota set`（改给用户留的份额） | `quota_cache` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；点了立刻切页：先画上次数据（没有画页头与骨架），nav 与页面数据并行取，推送来了数据没变的一处不重画；执行者页额度是存下的读数（`quota.Last`），后台读到新数经推送随整页重取；今天页末尾一块是三个目标的数；「等你」= 待拍板的选项单 + 等你验收的交付 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；部门页负责人一行点开是负责人抽屉（执行者组合、负责哪些部门、备忘按行分段，地址 `#oN/aN`，数据就用部门页的）；部门页任务按父子排成树（结束的子任务两件以上折成一行，没派的行尾写「等 tN」），任务抽屉给上级、子任务、要等的、在等它的，来源后的负责人名字点开是他的负责人抽屉；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；周期任务在部门页（挂上一轮）、今天页「接下来 7 天」和抽屉（最近 5 轮，`agenda.Rounds`）里看得到，多久一轮与 `schedule ls` 共用 `agenda.Cadence`；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、负责人、备忘、技能、资料、档案、机器 | — |
 | `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出根部门要点、此刻全景与秘书备忘进会话；执行者环境里 `--detach` 静默退出）、`statusline`（状态栏调用，不列在帮助里） | — |
@@ -146,7 +146,7 @@ type Module struct {
 - 执行者标识 `工具[+模型][:强度]`；`workers.Resolve(ctx, q, id)` → 三层叠加后的规则（trust、max_risk、checks、limits、model、端点）与正文。关卡、审阅判执行者用它，不直接读 `worker_profiles`。
 - 拉起记录：任务经历 kind `launch`（`workers.Run`：第几次、缘由、执行者、机器、pid、工作目录、日志、风险）；`workers.LastRun` 读。另按 gates 的约定记 `risk`（入队）、`worktree`（拉起）、`result`（退出，最后回复），并 `watch.Track`。退出时（含 watch 转失败后的 `Requeue`）记 `exit`（`workers.Exit`：这次拉起的结果，`workers.OutcomeOf` 按退出信号判）；`workers.Stats` 从 launch、exit、exit_ok／exit_fail、bounce 数每次拉起的结果（之后被交回的记被交回）。
 - 日志信号：`workers.Classify(退出码, 日志尾, 现在)` → 额度用尽／临时错误／思考耗尽／起不来（没登录、缺运行环境）／模型名无效；`Adapter.Ended` 判收尾；`workers.WatchSignal` 给 watch。
-- 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；思考耗尽换人（至多 2 次，换上的执行者在上一轮那台接不了就另挑机器）；额度用尽、起不来（没登录、缺运行环境，标整个「工具@机器」）、模型名无效经 `workers.MarkOf` 把「工具+模型@机器」标成不可用（额度到恢复时刻，读不出按 4 小时；其余等人 `workers --clear`），转失败后重新排队——本机的挑执行者时避开，各台的挑机器时避开；「工具+模型」近 5 次拉起里启动失败（额度、起不来、其他）≥2 次的，挑执行者时排到能接的后面（纯函数 `Shaky`，只排序不排除，`--dry-run` 的推荐理由写出来）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
+- 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；思考耗尽换人（至多 2 次，换上的执行者在上一轮那台接不了就另挑机器）；额度用尽、起不来（没登录、缺运行环境，标整个「工具@机器」）、模型名无效经 `workers.MarkOf` 把「工具+模型@机器」标成不可用（额度到恢复时刻，读不出按 4 小时；其余等人 `workers edit --clear`），转失败后重新排队——本机的挑执行者时避开，各台的挑机器时避开；「工具+模型」近 5 次拉起里启动失败（额度、起不来、其他）≥2 次的，挑执行者时排到能接的后面（纯函数 `Shaky`，只排序不排除，`--dry-run` 的推荐理由写出来）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
 - 隔离实例（`config.Paths.Isolated`：数据目录不是缺省的那个）不自己拉起本机真实的模型进程：自动挑执行者（没写 `--worker`，含周期任务、审阅、换人）时内置工具一律不挑，只挑通用命令行执行者；写死 `--worker` 不拦（测试把假 `claude` 放进 PATH 就靠它）。负责人唤醒同理（`ATRIUM_LEADER_WAKE=1` 才开）。
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、风险与凭据。
 - 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`、`PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
@@ -188,6 +188,6 @@ ledger   ─→ events.Emit
 
 - `task add` 的回执已给出下一步 `atrium task run tN`，`task show`/`task plan` 也会指向它：dispatch 必须提供 `task run`。
 - 状态变化只能经 `ledger.Apply`；需要新的事件种类就在 PR 里提，由 ledger 加进 `Transition` 与表驱动测试，不要直接 `UPDATE tasks SET status`。
-- 命令总数规格上限 60，`cmd/atrium/main_test.go` 会数；`Hidden` 的（serve、agent、agent install、import、statusline）不计数，由帮助末尾一行点名。
+- 命令总数上限 62（规格定 60；执行者只能跑只读命令，`quota`、`workers` 的看与改各拆成两条，多出 2 条），`cmd/atrium/main_test.go` 会数；`Hidden` 的（serve、agent、agent install、import、statusline）不计数，由帮助末尾一行点名。
 - 负责人令牌的权限表按路由模式判（`leaders.RuleFor`）；`cmd/atrium/routes_test.go` 装上全部模块的真实路由逐条核对，新加写接口要在那张表里写明负责人能不能调。
-- 命令组名已占用：`task`、`org`、`point`、`auth`。其余按规格：`leader`、`memo`、`choice`、`skill`、`material`、`schedule`、`secret`（org）、`events`（events）、`host`、`agent`（hosts）、`workers`（workers）、`secretary`（secretary）。单词命令：`top`（watch）、`statusline`（secretary）、`quota`、`map`、`update`。
+- 命令组名已占用：`task`、`org`、`point`、`auth`。其余按规格：`leader`、`memo`、`choice`、`skill`、`material`、`schedule`、`secret`（org）、`events`（events）、`host`、`agent`（hosts）、`workers`（workers）、`quota`（quota）、`secretary`（secretary）。单词命令：`top`（watch）、`statusline`（secretary）、`map`、`update`。

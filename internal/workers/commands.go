@@ -133,7 +133,7 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 			return Detail{}, err
 		}
 		if p == nil {
-			return Detail{}, api.NotFound("档案 %s 不存在", name).WithNext("atrium workers " + name + " --file <档案>")
+			return Detail{}, api.NotFound("档案 %s 不存在", name).WithNext("atrium workers edit " + name + " --file <档案>")
 		}
 		return Detail{Profile: p}, nil
 	}
@@ -203,44 +203,14 @@ func Routes(r *api.Router, env *app.Env) {
 	})
 }
 
-// Commands 注册 workers：列、看、改档案是同一条命令（给了改档案的参数就是改）。
+// Commands 注册 workers：列与看只读（执行者连着用户的服务也能跑），改档案与解除标记在 workers edit。
 func Commands(t *cli.Table) {
 	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
-	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
-		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文；给 层/名 加 --file/--set/--unset/--delete 改档案；--clear 解除不可用标记",
-		Flags: []cli.Flag{
-			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、模型名无效）；没写模型或机器就解除这个工具在全部模型或机器上的"},
-			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
-			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：trust=medium、checks=[pr_exists]）"},
-			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
-			{Name: "delete", Bool: true, Help: "删掉这层档案"},
-		},
+	t.Add(cli.Command{Path: "workers", Read: true, Args: "[执行者或 层/名]",
+		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文",
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(1); err != nil {
 				return err
-			}
-			if c.Has("clear") {
-				if err := c.MaxArgs(0); err != nil {
-					return err
-				}
-				target := c.Str("clear")
-				if target == "" {
-					return api.Usage("--clear: 不能为空")
-				}
-				var out struct {
-					Cleared int `json:"cleared"`
-				}
-				if err := c.Call("POST", "/api/workers/clear", map[string]any{"target": target}, &out); err != nil {
-					return err
-				}
-				return c.Done(out, fmt.Sprintf("已解除 %s 的 %d 条不可用标记", target, out.Cleared), "atrium workers")
-			}
-			if c.Has("file") || c.Has("set") || c.Has("unset") || c.Bool("delete") {
-				name, err := c.Arg(0, "<层/名>")
-				if err != nil {
-					return err
-				}
-				return editCmd(c, name)
 			}
 			if len(c.Args) == 1 {
 				return showCmd(c, c.Args[0])
@@ -264,9 +234,48 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(rows, b.String(), "atrium workers <执行者>")
 		}})
+	t.Add(cli.Command{Path: "workers edit", Args: "[层/名]",
+		Summary: "改一层档案（--file/--set/--unset/--delete）；--clear 解除不可用标记",
+		Flags: []cli.Flag{
+			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、模型名无效）；没写模型或机器就解除这个工具在全部模型或机器上的"},
+			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
+			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：trust=medium、checks=[pr_exists]）"},
+			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
+			{Name: "delete", Bool: true, Help: "删掉这层档案"},
+		},
+		Run: func(c *cli.Ctx) error {
+			if c.Has("clear") {
+				return clearCmd(c)
+			}
+			return editCmd(c)
+		}})
 }
 
-func editCmd(c *cli.Ctx, name string) error {
+func clearCmd(c *cli.Ctx) error {
+	if err := c.MaxArgs(0); err != nil {
+		return err
+	}
+	target := c.Str("clear")
+	if target == "" {
+		return api.Usage("--clear: 不能为空")
+	}
+	var out struct {
+		Cleared int `json:"cleared"`
+	}
+	if err := c.Call("POST", "/api/workers/clear", map[string]any{"target": target}, &out); err != nil {
+		return err
+	}
+	return c.Done(out, fmt.Sprintf("已解除 %s 的 %d 条不可用标记", target, out.Cleared), "atrium workers")
+}
+
+func editCmd(c *cli.Ctx) error {
+	if err := c.MaxArgs(1); err != nil {
+		return err
+	}
+	name, err := c.Arg(0, "<层/名>")
+	if err != nil {
+		return err
+	}
 	e := Edit{Unset: c.List("unset"), Delete: c.Bool("delete")}
 	if f := c.Str("file"); f != "" {
 		raw, err := os.ReadFile(f)
@@ -307,7 +316,7 @@ func showCmd(c *cli.Ctx, name string) error {
 	}
 	if d.Profile != nil {
 		return c.Done(d, strings.TrimRight(d.Profile.Source, "\n")+fmt.Sprintf("\n\n（%s 改于 %s）", d.Profile.UpdatedBy,
-			fmtTime(d.Profile.UpdatedAt)), "atrium workers "+name+" --set 键=值")
+			fmtTime(d.Profile.UpdatedAt)), "atrium workers edit "+name+" --set 键=值")
 	}
 	r := d.Resolved
 	var b strings.Builder

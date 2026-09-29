@@ -318,7 +318,19 @@ func Routes(r *api.Router, env *app.Env) {
 }
 
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "quota", Summary: "各账号额度与富余（撞了额度的「工具+模型@机器」见 atrium workers）",
+	t.Group("quota", "额度：各账号用量与给用户留的份额")
+	t.Add(cli.Command{Path: "quota", Read: true, Summary: "各账号额度与富余（撞了额度的「工具+模型@机器」见 atrium workers）",
+		Run: func(c *cli.Ctx) error {
+			if err := c.MaxArgs(0); err != nil {
+				return err
+			}
+			var ov Overview
+			if err := c.Call("GET", "/api/quota", nil, &ov); err != nil {
+				return err
+			}
+			return c.Done(ov, Format(ov), "atrium workers")
+		}})
+	t.Add(cli.Command{Path: "quota set", Summary: "改额度设置（只有用户能改）",
 		Flags: []cli.Flag{
 			{Name: "reserve", Value: "百分比", Help: "给用户留的份额（缺省 20），派活扣掉后才算富余"},
 		},
@@ -326,20 +338,18 @@ func Commands(t *cli.Table) {
 			if err := c.MaxArgs(0); err != nil {
 				return err
 			}
-			var ov Overview
-			if c.Has("reserve") {
-				n, err := c.Int("reserve", 0)
-				if err != nil {
-					return err
-				}
-				b := setBody{Reserve: &n}
-				if err := c.Call("POST", "/api/quota", b, &ov); err != nil {
-					return err
-				}
-			} else if err := c.Call("GET", "/api/quota", nil, &ov); err != nil {
+			if !c.Has("reserve") {
+				return api.Usage("--reserve: 必填")
+			}
+			n, err := c.Int("reserve", 0)
+			if err != nil {
 				return err
 			}
-			return c.Done(ov, Format(ov), "atrium workers")
+			var ov Overview
+			if err := c.Call("POST", "/api/quota", setBody{Reserve: &n}, &ov); err != nil {
+				return err
+			}
+			return c.Done(ov, Format(ov), "atrium quota")
 		}})
 }
 

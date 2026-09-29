@@ -123,7 +123,7 @@ func Resolve(ctx context.Context, q store.Querier, id string) (Resolved, error) 
 	if !ok {
 		if harness == nil || harness.Keys["protocol"] != "cli" {
 			return Resolved{}, api.Usage("--worker: 未知的工具 %s，可选 %s，或先写 harness/%s 档案（protocol: cli）接进来",
-				s.Tool, strings.Join(Tools, "、"), s.Tool).WithNext("atrium workers harness/" + s.Tool + " --file <档案>")
+				s.Tool, strings.Join(Tools, "、"), s.Tool).WithNext("atrium workers edit harness/" + s.Tool + " --file <档案>")
 		}
 		r, err := decodeRules(harness.Keys)
 		if err != nil {

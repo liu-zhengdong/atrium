@@ -283,8 +283,9 @@ done_match: "^DONE$"
 ---
 只回 DONE。
 MD
-out=$(json workers harness/fakesh --file "$work/fakesh.md"); has '.ok and .next == "atrium workers harness/fakesh"'
-out=$(json workers harness/fakesh --set trust=super || true); has '.ok == false and .error.code == "usage"'
+out=$(json workers edit harness/fakesh --file "$work/fakesh.md"); has '.ok and .next == "atrium workers harness/fakesh"'
+out=$(json workers edit harness/fakesh --set trust=super || true); has '.ok == false and .error.code == "usage"'
+out=$(json workers edit harness/fakesh || true); has '.ok == false and .error.code == "usage"'
 out=$(json workers fakesh); has '.result.resolved.id == "fakesh" and .result.resolved.layers == ["harness/fakesh"]'
 out=$(json workers); has '(.result|map(.id)|index("fakesh")) != null'
 out=$(json task add 冒烟派活); run_id=$(jq -r .result.id <<<"$out")
@@ -342,7 +343,7 @@ done_match: "^DONE$"
 ---
 只回 DONE。
 MD
-out=$(json workers harness/fakecommit --file "$work/fakecommit.md"); has '.ok'
+out=$(json workers edit harness/fakecommit --file "$work/fakecommit.md"); has '.ok'
 out=$(json org edit "$acc_org" --accept user); has '.ok'
 out=$(json task add 写文章 --org "$acc_org" --repo "$site"); loc=$(jq -r .result.id <<<"$out")
 json task run "$loc" --worker fakecommit >/dev/null
@@ -367,7 +368,7 @@ done_match: "^DONE$"
 ---
 只回 DONE。
 MD
-out=$(json workers harness/fakewrite --file "$work/fakewrite.md"); has '.ok'
+out=$(json workers edit harness/fakewrite --file "$work/fakewrite.md"); has '.ok'
 out=$(json task add 原地写 --repo o/r --dir "$place" || true); has '.ok == false and .error.code == "usage"'   # 仓库与工作地点只给一个
 out=$(json task add 原地写 --dir "$place"); dirt=$(jq -r .result.id <<<"$out"); has '.result.dir == "'"$place"'"'
 json task run "$dirt" --worker fakewrite >/dev/null
@@ -430,7 +431,7 @@ json task set "$pre" --status failed >/dev/null
 out=$(json task wait "$post" --timeout 10); has '.result.task.status == "blocked"'
 out=$(json task run "$post" || true); has '.error.code == "conflict"'   # 依赖失败了：当场拒绝
 
-step "执行者可用性：假执行者报模型名无效 → 标记「工具@机器」、重新排队 → workers 看得到、挑执行者跳过 → --clear 解除"
+step "执行者可用性：假执行者报模型名无效 → 标记「工具@机器」、重新排队 → workers 看得到、挑执行者跳过 → workers edit --clear 解除"
 cat >"$work/fakemodel.md" <<'MD'
 ---
 protocol: cli
@@ -438,7 +439,7 @@ command: sh
 args: ["-c", "sleep 2; echo 'invalid model selection (--model \"x\" --effort \"\")'; exit 1", "{prompt}"]
 ---
 MD
-out=$(json workers harness/fakemodel --file "$work/fakemodel.md"); has '.ok'
+out=$(json workers edit harness/fakemodel --file "$work/fakemodel.md"); has '.ok'
 out=$(json org add 可用性演练 --parent o1); av_org=$(jq -r .result.id <<<"$out")
 out=$(json task add 模型名无效 --org "$av_org"); av=$(jq -r .result.id <<<"$out")
 json task run "$av" --worker fakemodel >/dev/null
@@ -448,9 +449,9 @@ has '.result.marks[0].host == "h1" and .result.marks[0].kind == "model" and .res
 out=$(json task show "$av"); has '.result.task.status == "queued" and (.result.history|map(.body // "")|join(" ")|contains("已标记 fakemodel@h1 不可用"))'
 out=$(json workers); has '(.result|map(select(.id == "fakemodel"))|.[0].marks|length) == 1'
 out=$(json task run "$av" --dry-run); has '.result.pick.candidates|map(select(.id == "fakemodel"))|.[0]|(.eligible|not) and (.refusals|join("")|contains("本机不可用：模型名无效"))'
-out=$(json workers --clear fakemodel@h1); has '.result.cleared == 1'
-out=$(json workers --clear fakemodel@h1 || true); has '.error.code == "not_found"'
-out=$(json workers --clear "bad tool" || true); has '.error.code == "usage" and (.error.message|startswith("--clear:"))'
+out=$(json workers edit --clear fakemodel@h1); has '.result.cleared == 1'
+out=$(json workers edit --clear fakemodel@h1 || true); has '.error.code == "not_found"'
+out=$(json workers edit --clear "bad tool" || true); has '.error.code == "usage" and (.error.message|startswith("--clear:"))'
 
 step "按拉起统计：每次拉起记一个结果，workers 列近期、给执行者看明细"
 out=$(json workers fakesh); has '.result.stat.ok >= 1 and (.result.attempts|map(select(.task == "'"$run_id"'" and .outcome == "ok"))|length) == 1'

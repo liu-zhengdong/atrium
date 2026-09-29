@@ -10,7 +10,7 @@ import (
 )
 
 // 执行者可用性：某个「工具+模型」在某台机器上此刻能不能接活。执行者退出时按信号记不可用（MarkOf），
-// 挑执行者与挑机器时跳过（Blocked）；workers 列出，workers --clear 手动解除。
+// 挑执行者与挑机器时跳过（Blocked）；workers 列出，workers edit --clear 手动解除。
 
 // QuotaHold 是额度用尽但报文没写恢复时刻时的保守缺省。
 const QuotaHold = 4 * time.Hour
@@ -23,7 +23,7 @@ type Mark struct {
 	Kind     string `json:"kind"`   // 同 Signal.Kind：quota setup model
 	Reason   string `json:"reason"` // 额度用尽、没登录、缺运行环境、模型名无效
 	Evidence string `json:"evidence,omitempty"`
-	Until    int64  `json:"until"` // 到这个时刻自动恢复；0 等人处理后 workers --clear
+	Until    int64  `json:"until"` // 到这个时刻自动恢复；0 等人处理后 workers edit --clear
 	Since    int64  `json:"since"`
 }
 
@@ -40,7 +40,7 @@ func (m Mark) Text() string {
 	if m.Until > 0 {
 		return m.Reason + "，" + time.UnixMilli(m.Until).Local().Format("01-02 15:04") + " 恢复"
 	}
-	return m.Reason + "，等人处理后 atrium workers --clear " + m.Target()
+	return m.Reason + "，等人处理后 atrium workers edit --clear " + m.Target()
 }
 
 // MarkOf 把退出信号翻成不可用标记（纯函数）：额度用尽标「工具+模型」到报文里的恢复时刻（读不出按 QuotaHold）；

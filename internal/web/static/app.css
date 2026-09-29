@@ -121,6 +121,11 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .lead{display:inline-flex;align-items:center;gap:10px;margin-top:18px;padding:6px 12px 6px 6px;border-radius:20px;background:var(--raise);font-size:13px}
 .lead b{width:24px;height:24px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:600;font-size:11px}
 .lead span{color:var(--ink2)}
+button.lead:hover{background:var(--hover)}
+.lead .chev{color:var(--ink3);transition:transform .15s}
+.lead[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.lead+.intro{margin-top:12px}
+.intro .none{color:var(--ink3)}.intro a{color:var(--accent)}
 .subs{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
 .sub{padding:14px 16px;border-radius:12px;background:var(--raise);text-align:left;display:flex;flex-direction:column;gap:6px;min-height:92px}
 .sub:hover{background:var(--hover)}

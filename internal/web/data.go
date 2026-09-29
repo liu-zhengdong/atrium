@@ -428,11 +428,14 @@ type DeptPage struct {
 }
 
 // Leader 是部门负责人：自己没有就是往上最近一级的（Inherited），和事件投递同一个判定（org.Recipient）。
+// Depts（直接负责的部门）与 Memo（备忘全文）在页面上点开负责人一行才显示。
 type Leader struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Workers   string `json:"workers"`
 	Inherited bool   `json:"inherited,omitempty"`
+	Depts     []Pair `json:"depts"`
+	Memo      string `json:"memo"`
 }
 
 // Accept 是部门页头的验收人：org.Acceptor 的结果，From 不是本部门时页面写「沿用 FromName」。
@@ -479,7 +482,15 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 		if err != nil {
 			return DeptPage{}, err
 		}
-		page.Leader = &Leader{ID: l.ID, Name: l.Name, Workers: strings.Join(l.Workers, "、"), Inherited: d.Leader != lead}
+		m, err := org.GetMemo(ctx, q, lead)
+		if err != nil {
+			return DeptPage{}, err
+		}
+		page.Leader = &Leader{ID: l.ID, Name: l.Name, Workers: strings.Join(l.Workers, "、"), Inherited: d.Leader != lead,
+			Depts: []Pair{}, Memo: m.Body}
+		for _, o := range l.Depts {
+			page.Leader.Depts = append(page.Leader.Depts, Pair{o, ix.name(o)})
+		}
 	}
 	who, from, err := org.Acceptor(ctx, q, id)
 	if err != nil {

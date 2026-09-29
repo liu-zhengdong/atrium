@@ -170,6 +170,16 @@ function soonHTML(soon) {
     + (soon.later ? `<div class="more">另有 ${soon.later} 条在 7 天以后</div>` : "");
 }
 
+/* 负责人一行：默认收起，点开看执行者组合、负责哪些部门、备忘全文（与任务树折叠共用 openKids） */
+function leadHTML(l, key) {
+  const open = openKids.has(key);
+  const head = `<button class="lead" data-kids="${esc(key)}" aria-expanded="${open}"><b>${esc([...l.name][0] || "负")}</b>${esc(l.name)}${l.inherited ? "（上级）" : ""}<span class="chev">›</span></button>`;
+  if (!open) return head;
+  return head + `<dl class="intro">${[["执行者", esc(l.workers)],
+    ["负责", l.depts.map(p => `<a href="#${esc(p.id)}">${esc(p.name)}</a>`).join("、")],
+    ["备忘", l.memo ? esc(l.memo) : `<span class="none">暂无备忘</span>`]].map(x => `<dt>${x[0]}</dt><dd>${x[1]}</dd>`).join("")}</dl>`;
+}
+
 /* 部门 */
 async function renderDept(id, tab) {
   const d = await api("dept/" + id);
@@ -207,8 +217,7 @@ async function renderDept(id, tab) {
     <h1 class="dept-title">${esc(dept.name)}</h1>
     ${dept.what ? `<p class="dept-what">${esc(dept.what)}</p>` : ""}
     ${intro.length ? `<dl class="intro">${intro.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join("")}</dl>` : ""}
-    ${d.leader ? `<div class="lead"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}<span>${esc(d.leader.workers)}</span></div>`
-      : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
+    ${d.leader ? leadHTML(d.leader, "lead:" + dept.id) : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
     ${sched}
     ${d.subs.length ? `<section class="section"><h2>下属部门</h2><div class="subs">${subCards}</div></section>` : ""}
     <section class="section">

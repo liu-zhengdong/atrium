@@ -92,7 +92,7 @@ cd ~/秘书目录 && atrium secretary bridge --install-hook   # 装一次：事�
 - **命令**：`atrium --help` 列出全部命令，`atrium <命令> --help` 看某一组或某一条；每条命令都支持 `--json`，回执最后一行给下一步。
 - **日志**：`atrium task log t1 --follow` 跟着看执行者在干什么；网页任务抽屉里是同一份日志的尾巴。
 - **多台机器**：`atrium host add` 登记一台，照回执在那台上运行 `atrium agent …` 接入，再 `atrium agent install` 装成开机自启；远程机器主动连服务，不用开端口。
-- **额度**：`atrium quota` 看各账号还剩多少；Atrium 自己读 Claude Code、Codex、OpenCode 的用量，其余的由 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 补上。派活时按富余挑执行者，并给你留一份（缺省 20%，`atrium quota --reserve` 改）。执行者撞了额度、起不来（没登录、缺运行环境）或模型名无效，那个「工具+模型@机器」会被标成不可用、换人重派；`atrium workers` 能看到，额度的到恢复时刻自动解除，其余处理好后 `atrium workers --clear` 解除。每次拉起都记一个结果（交付、被交回、额度、起不来、其他失败），`atrium workers` 按「工具+模型」列近 20 次；近 5 次里启动失败两次以上的，挑执行者时排到后面。
+- **额度**：`atrium quota` 看各账号还剩多少；Atrium 自己读 Claude Code、Codex、OpenCode 的用量，其余的由 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 补上。派活时按富余挑执行者，并给你留一份（缺省 20%，`atrium quota set --reserve` 改）。执行者撞了额度、起不来（没登录、缺运行环境）或模型名无效，那个「工具+模型@机器」会被标成不可用、换人重派；`atrium workers` 能看到，额度的到恢复时刻自动解除，其余处理好后 `atrium workers edit --clear` 解除。每次拉起都记一个结果（交付、被交回、额度、起不来、其他失败），`atrium workers` 按「工具+模型」列近 20 次；近 5 次里启动失败两次以上的，挑执行者时排到后面。
 - **数据**：都在 `~/.atrium-v2`（`ATRIUM_DATA` 可改），换机器带走这个目录即可。令牌、数据库不要提交或分享；令牌泄露了用 `atrium auth rotate` 换一个。旧版的数据用 `atrium import` 一次性导入。
 - **重启与升级**：`atrium restart` 随时可以做，`atrium update` 装最新版（`--to 版本` 装指定版本）。
 

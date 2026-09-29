@@ -331,7 +331,7 @@ func SaveProfile(ctx context.Context, db *store.DB, name string, e Edit, actor s
 				return err
 			}
 			if n >= maxProfiles {
-				return api.Limit("atrium workers", "档案已有 %d 份（上限 %d）：删掉不再用的组合（atrium workers combos/… --delete）", n, maxProfiles)
+				return api.Limit("atrium workers", "档案已有 %d 份（上限 %d）：删掉不再用的组合（atrium workers edit combos/… --delete）", n, maxProfiles)
 			}
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO worker_profiles (name, spec, updated_by, updated_at) VALUES (?, ?, ?, ?)

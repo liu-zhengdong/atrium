@@ -209,7 +209,7 @@ func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
 		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文；给 层/名 加 --file/--set/--unset/--delete 改档案；--clear 解除不可用标记",
 		Flags: []cli.Flag{
-			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、模型名无效）；没写模型或机器就解除这个工具在全部模型或机器上的"},
+			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、模型名无效）；没写模型或机器就解除这个工具在全部模型或机器上的"},
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
 			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：trust=medium、checks=[pr_exists]）"},
 			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},

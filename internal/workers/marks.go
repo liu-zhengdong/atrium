@@ -18,10 +18,10 @@ const QuotaHold = 4 * time.Hour
 // Mark 是一条不可用标记。
 type Mark struct {
 	Tool     string `json:"tool"`
-	Model    string `json:"model,omitempty"` // 空表示这台上这个工具的全部模型（没登录）
+	Model    string `json:"model,omitempty"` // 空表示这台上这个工具的全部模型（起不来）
 	Host     string `json:"host"`
-	Kind     string `json:"kind"`   // 同 Signal.Kind：quota login model
-	Reason   string `json:"reason"` // 额度用尽、没登录、模型名无效
+	Kind     string `json:"kind"`   // 同 Signal.Kind：quota setup model
+	Reason   string `json:"reason"` // 额度用尽、没登录、缺运行环境、模型名无效
 	Evidence string `json:"evidence,omitempty"`
 	Until    int64  `json:"until"` // 到这个时刻自动恢复；0 等人处理后 workers --clear
 	Since    int64  `json:"since"`
@@ -44,7 +44,7 @@ func (m Mark) Text() string {
 }
 
 // MarkOf 把退出信号翻成不可用标记（纯函数）：额度用尽标「工具+模型」到报文里的恢复时刻（读不出按 QuotaHold）；
-// 没登录标这台上的整个工具；模型名无效标「工具+模型」，后两种等人处理。其余信号不标。
+// 起不来（没登录、缺运行环境）标这台上的整个工具；模型名无效标「工具+模型」，后两种等人处理。其余信号不标。
 func MarkOf(sig Signal, s Spec, host string, now time.Time) (Mark, bool) {
 	m := Mark{Tool: s.Tool, Model: s.Model, Host: host, Kind: sig.Kind, Evidence: sig.Evidence, Since: now.UnixMilli()}
 	switch sig.Kind {
@@ -53,8 +53,8 @@ func MarkOf(sig Signal, s Spec, host string, now time.Time) (Mark, bool) {
 		if m.Until == 0 {
 			m.Until = now.Add(QuotaHold).UnixMilli()
 		}
-	case SignalLogin:
-		m.Reason, m.Model = "没登录", ""
+	case SignalSetup:
+		m.Reason, m.Model = sig.Reason, ""
 	case SignalModel:
 		m.Reason = "模型名无效"
 	default:

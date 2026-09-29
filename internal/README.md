@@ -35,7 +35,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `choice_option_orgs` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」、清理（每小时删掉最后更新超过 7 天的已确认与知会级事件，要处理且没确认的不删） | `events` |
 | `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
-| `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（输出 JSON 事件的工具各自的解析挂在适配器 `Driver.read` 上，按执行者的话分段、步骤写成「工具名 路径」，认不出的事件记 `Unknown`；纯文本工具逐行原文）、执行者可用性（「工具+模型@机器」不可用标记：`MarkOf` 由退出信号翻成标记、`Blocked` 给挑执行者与挑机器判）、按拉起统计（`Stats`：每次拉起一个结果——交付、被交回、额度、没登录、其他失败，按「工具+模型」归、强度不单列）；`workers`（列、看、改档案与每次拉起的明细，`--clear` 解除不可用标记） | `worker_profiles` `worker_marks` |
+| `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（输出 JSON 事件的工具各自的解析挂在适配器 `Driver.read` 上，按执行者的话分段、步骤写成「工具名 路径」，认不出的事件记 `Unknown`；纯文本工具逐行原文）、执行者可用性（「工具+模型@机器」不可用标记：`MarkOf` 由退出信号翻成标记、`Blocked` 给挑执行者与挑机器判）、按拉起统计（`Stats`：每次拉起一个结果——交付、被交回、额度、起不来、其他失败，按「工具+模型」归、强度不单列）；`workers`（列、看、改档案与每次拉起的明细，`--clear` 解除不可用标记） | `worker_profiles` `worker_marks` |
 | `gates` | 完成 | 交付方式（`delivery.go`：pr、local、dir、choice、message 各自的提示词、关卡、落地；local 的关卡与落地在 `local.go`）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `gates/skillcheck` | 完成 | 技能声明的交付检查：技能的 `checks` 写检查名（`article`、`video`），关卡在本机工作目录里查表自己跑（构建与明暗截图；ffprobe、响度、第一帧不空白、联系表），产物放任务目录、结论与路径记进经历；每项有时限，跑不起来（缺工具、工作目录在远程）转受阻；org 保存技能时经 `Validate` 校验名字 | — |
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
@@ -145,8 +145,8 @@ type Module struct {
 
 - 执行者标识 `工具[+模型][:强度]`；`workers.Resolve(ctx, q, id)` → 三层叠加后的规则（trust、max_risk、checks、limits、model、端点）与正文。关卡、审阅判执行者用它，不直接读 `worker_profiles`。
 - 拉起记录：任务经历 kind `launch`（`workers.Run`：第几次、缘由、执行者、机器、pid、工作目录、日志、风险）；`workers.LastRun` 读。另按 gates 的约定记 `risk`（入队）、`worktree`（拉起）、`result`（退出，最后回复），并 `watch.Track`。退出时（含 watch 转失败后的 `Requeue`）记 `exit`（`workers.Exit`：这次拉起的结果，`workers.OutcomeOf` 按退出信号判）；`workers.Stats` 从 launch、exit、exit_ok／exit_fail、bounce 数每次拉起的结果（之后被交回的记被交回）。
-- 日志信号：`workers.Classify(退出码, 日志尾, 现在)` → 额度用尽／临时错误／思考耗尽／没登录／模型名无效；`Adapter.Ended` 判收尾；`workers.WatchSignal` 给 watch。
-- 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；思考耗尽换人（至多 2 次，换上的执行者在上一轮那台接不了就另挑机器）；额度用尽、没登录、模型名无效经 `workers.MarkOf` 把「工具+模型@机器」标成不可用（额度到恢复时刻，读不出按 4 小时；其余等人 `workers --clear`），转失败后重新排队——本机的挑执行者时避开，各台的挑机器时避开；「工具+模型」近 5 次拉起里启动失败（额度、没登录、其他）≥2 次的，挑执行者时排到能接的后面（纯函数 `Shaky`，只排序不排除，`--dry-run` 的推荐理由写出来）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
+- 日志信号：`workers.Classify(退出码, 日志尾, 现在)` → 额度用尽／临时错误／思考耗尽／起不来（没登录、缺运行环境）／模型名无效；`Adapter.Ended` 判收尾；`workers.WatchSignal` 给 watch。
+- 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；思考耗尽换人（至多 2 次，换上的执行者在上一轮那台接不了就另挑机器）；额度用尽、起不来（没登录、缺运行环境，标整个「工具@机器」）、模型名无效经 `workers.MarkOf` 把「工具+模型@机器」标成不可用（额度到恢复时刻，读不出按 4 小时；其余等人 `workers --clear`），转失败后重新排队——本机的挑执行者时避开，各台的挑机器时避开；「工具+模型」近 5 次拉起里启动失败（额度、起不来、其他）≥2 次的，挑执行者时排到能接的后面（纯函数 `Shaky`，只排序不排除，`--dry-run` 的推荐理由写出来）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、风险与凭据。
 - 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`、`PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
 

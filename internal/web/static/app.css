@@ -103,6 +103,12 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .row .who{color:var(--ink2);font-size:13px;white-space:nowrap}
 .row .time{color:var(--ink3);font-size:12px;width:52px;text-align:right}
 .row.done .title{color:var(--ink2)}
+/* 任务树：子任务只靠缩进挂在父任务下，不画连线 */
+.row{padding-left:calc(10px + var(--d,0) * var(--indent,22px))}
+.kfold{width:calc(100% + 20px);text-align:left;color:var(--ink3);font-size:13px;padding-top:6px;padding-bottom:6px}
+.kfold:hover{color:var(--ink2)}
+.kfold .chev{justify-self:center;transition:transform .15s}
+.kfold[aria-expanded="true"] .chev{transform:rotate(90deg)}
 .check{color:var(--ok);width:14px;height:14px}
 .more{color:var(--ink3);font-size:13px;padding:8px 0 0}
 
@@ -143,6 +149,9 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .dhead .x{margin-left:auto;color:var(--ink3);width:28px;height:28px;border-radius:8px;display:grid;place-items:center}
 .dhead .x:hover{background:var(--raise);color:var(--ink)}
 .dbody{padding:10px 20px 20px;overflow-y:auto;flex:1}
+.crumb.up{flex-wrap:nowrap;margin-top:4px}
+.crumb.up a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumb.up .id{margin-right:6px}
 .dbody h3{font-size:19px;font-weight:600;margin:4px 0 6px;text-wrap:balance}
 .dbody .sub-t{color:var(--ink2);font-size:13px;margin:0}
 .steps{display:flex;margin:26px 0 8px}
@@ -234,8 +243,8 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
   .mobile-top{display:flex;align-items:center;gap:10px;padding:12px 16px;font-weight:600}
   .mobile-top select{margin-left:auto;font:inherit;border:0;background:var(--raise);color:var(--ink);border-radius:8px;padding:6px 8px}
   .page{padding:20px 16px 32px}
-  .row{grid-template-columns:16px minmax(0,1fr) auto}
-  .row .who{display:none}
+  .row{grid-template-columns:16px minmax(0,1fr) auto;--indent:14px}
+  .row .time{display:none} /* 窄屏留行尾标签（等 tN、卡住）不留时间：状态比多久前更要紧 */
   .acct{grid-template-columns:70px 1fr}
   .acct .r{grid-column:2;text-align:left}
 }

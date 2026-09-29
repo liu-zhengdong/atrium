@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,8 +78,8 @@ func finishedText(t ledger.Task) string {
 	return "已完成"
 }
 
-// who 是列表行尾的短标签：交付阶段优先，否则是执行者与机器。
-func who(t ledger.Task) string {
+// who 是列表行尾的短标签：交付阶段优先，否则是执行者与机器；没派的还有没完成的依赖（waiting）时写在等谁。
+func who(t ledger.Task, waiting []string) string {
 	switch t.Status {
 	case ledger.Blocked:
 		return "卡住"
@@ -86,7 +88,14 @@ func who(t ledger.Task) string {
 	case ledger.Queued:
 		return "排队"
 	case ledger.Todo:
-		return "没派"
+		switch n := len(waiting); {
+		case n == 0:
+			return "没派"
+		case n <= 2: // 两个短号还放得下；再多写件数，点开抽屉看是哪几件
+			return "等 " + strings.Join(waiting, "、")
+		default:
+			return fmt.Sprintf("等 %d 件", n)
+		}
 	case ledger.Draft:
 		return "" // 草稿自成一组，组名已说明
 	case ledger.Cancelled:
@@ -123,6 +132,49 @@ func who(t ledger.Task) string {
 		return "在做"
 	}
 	return w
+}
+
+// nest 把任务排成森林：父任务也在 tasks 里的，挂到父任务的 Kids 下（按建立先后）；其余是根，保持 tasks 里的先后。
+// rows[i] 是 tasks[i] 的行。父任务建立后不能改，树不会成环。
+func nest(tasks []ledger.Task, rows []Row) []Row {
+	in := map[string]bool{}
+	for _, t := range tasks {
+		in[t.ID] = true
+	}
+	kids := map[string][]int{}
+	var roots []int
+	for i, t := range tasks {
+		if in[t.Parent] {
+			kids[t.Parent] = append(kids[t.Parent], i)
+		} else {
+			roots = append(roots, i)
+		}
+	}
+	var build func(i int) Row
+	build = func(i int) Row {
+		r := rows[i]
+		ks := kids[tasks[i].ID]
+		sort.Slice(ks, func(a, b int) bool { return earlier(tasks[ks[a]], tasks[ks[b]]) })
+		for _, k := range ks {
+			r.Kids = append(r.Kids, build(k))
+		}
+		return r
+	}
+	out := make([]Row, 0, len(roots))
+	for _, i := range roots {
+		out = append(out, build(i))
+	}
+	return out
+}
+
+// earlier：先建立的在前；同一毫秒建的按短号（发号有先后）。
+func earlier(a, b ledger.Task) bool {
+	if a.CreatedAt != b.CreatedAt {
+		return a.CreatedAt < b.CreatedAt
+	}
+	na, _ := strconv.Atoi(strings.TrimPrefix(a.ID, "t"))
+	nb, _ := strconv.Atoi(strings.TrimPrefix(b.ID, "t"))
+	return na < nb
 }
 
 // startOfDay 是 now 所在本地日期的零点（Unix 毫秒），「今天上线」从这里算。

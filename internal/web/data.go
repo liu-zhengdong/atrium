@@ -33,11 +33,13 @@ type Row struct {
 	Group string `json:"group,omitempty"` // 今天页分组用的一级部门
 	State string `json:"state"`
 	Who   string `json:"who"`
-	At    int64  `json:"at"` // 行尾时间：在做的是开始（最近变化）时间，完成的是结束时间
+	At    int64  `json:"at"`             // 行尾时间：在做的是开始（最近变化）时间，完成的是结束时间
+	Kids  []Row  `json:"kids,omitempty"` // 子任务（按建立先后）；只有部门页排成树
 }
 
-func toRow(t ledger.Task, parents map[string]string) Row {
-	r := Row{ID: t.ID, Title: t.Title, Dept: t.Org, State: state(t), Who: who(t), At: t.UpdatedAt}
+// toRow 是一件任务的列表行；waiting 是它还没完成的依赖（只有没派的任务用得上）。
+func toRow(t ledger.Task, parents map[string]string, waiting []string) Row {
+	r := Row{ID: t.ID, Title: t.Title, Dept: t.Org, State: state(t), Who: who(t, waiting), At: t.UpdatedAt}
 	if t.FinishedAt != nil {
 		r.At = *t.FinishedAt
 	}
@@ -45,6 +47,19 @@ func toRow(t ledger.Task, parents map[string]string) Row {
 		r.Group = topGroup(parents, t.Org)
 	}
 	return r
+}
+
+// rowOf 是 toRow 加上查依赖：没派的任务才查，别的状态行尾不写在等谁。
+func rowOf(ctx context.Context, q store.Querier, t ledger.Task, parents map[string]string) (Row, error) {
+	if t.Status != ledger.Todo {
+		return toRow(t, parents, nil), nil
+	}
+	deps, err := ledger.Deps(ctx, q, t.ID)
+	if err != nil {
+		return Row{}, err
+	}
+	_, waiting := ledger.Ready(t.Status, deps)
+	return toRow(t, parents, waiting), nil
 }
 
 // DeptBrief 是侧栏与卡片里的部门。
@@ -306,7 +321,7 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}, Paused: paused}
 	seen := map[string]bool{}
 	for _, t := range running {
-		r := toRow(t, ix.parents)
+		r := toRow(t, ix.parents, nil)
 		out.Running = append(out.Running, r)
 		if r.Group != "" && !seen[r.Group] {
 			seen[r.Group] = true
@@ -314,7 +329,7 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 		}
 	}
 	for _, t := range done {
-		out.Shipped = append(out.Shipped, toRow(t, ix.parents))
+		out.Shipped = append(out.Shipped, toRow(t, ix.parents, nil))
 	}
 	return out, nil
 }
@@ -454,7 +469,8 @@ func ownRules(ctx context.Context, q store.Querier, id, name string) ([]Rule, er
 	return out, nil
 }
 
-// deptTasks 是部门整棵子树里没结束的任务（含草稿），加上 3 天内结束的（最多 100 件；没结束的在前，各自最近的在前）。
+// deptTasks 是部门整棵子树里没结束的任务（含草稿），加上 3 天内结束的（最多 100 件；没结束的在前，各自最近的在前），
+// 再补上它们的全部子孙（不论部门、不论多久前结束），排成树：一个目标拆成了哪几件都在它下面。
 func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([]Row, error) {
 	ids := ix.subtree(id)
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
@@ -472,15 +488,35 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := getTasks(ctx, q, tids)
+	listed, err := getTasks(ctx, q, tids)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Row, 0, len(tasks))
-	for _, t := range tasks {
-		out = append(out, toRow(t, ix.parents))
+	seen := map[string]bool{}
+	var tasks []ledger.Task
+	for _, t := range listed {
+		if !seen[t.ID] {
+			seen[t.ID] = true
+			tasks = append(tasks, t)
+		}
+		sub, err := ledger.Subtree(ctx, q, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range sub[1:] {
+			if !seen[s.ID] {
+				seen[s.ID] = true
+				tasks = append(tasks, s)
+			}
+		}
 	}
-	return out, nil
+	out := make([]Row, len(tasks))
+	for i, t := range tasks {
+		if out[i], err = rowOf(ctx, q, t, ix.parents); err != nil {
+			return nil, err
+		}
+	}
+	return nest(tasks, out), nil
 }
 
 // Legion 是执行者页：额度、机器、组合表现。
@@ -589,9 +625,13 @@ type TaskDetail struct {
 	State    string         `json:"state"`
 	Holder   string         `json:"holder"`
 	HostName string         `json:"host_name"`
-	Trace    *workers.Trace `json:"trace"`  // 最近一次拉起的经过（与 task log 同一份解析）；还没拉起过为空
-	Live     bool           `json:"live"`   // 执行者正在干（执行这一步）
-	RunAt    int64          `json:"run_at"` // 最近一次拉起的时刻
+	Trace    *workers.Trace `json:"trace"`   // 最近一次拉起的经过（与 task log 同一份解析）；还没拉起过为空
+	Live     bool           `json:"live"`    // 执行者正在干（执行这一步）
+	RunAt    int64          `json:"run_at"`  // 最近一次拉起的时刻
+	Parent   *Row           `json:"parent"`  // 挂在谁下面；没有为空
+	Kids     []Row          `json:"kids"`    // 直接的子任务（按建立先后）
+	Waits    []Row          `json:"waits"`   // 它要等的（依赖，含已结束的）
+	Waiters  []Row          `json:"waiters"` // 在等它的
 }
 
 func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, error) {
@@ -601,6 +641,9 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	}
 	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t)}
 	if out.Holder, err = holderText(ctx, q, t); err != nil {
+		return out, err
+	}
+	if err := relations(ctx, q, &out); err != nil {
 		return out, err
 	}
 	if t.Org != "" {
@@ -630,6 +673,71 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	tr, err := workers.ReadTrace(run.Worker, run.Log)
 	out.Trace, out.RunAt, out.Live = &tr, run.At, t.Status == ledger.Running && t.Stage == ledger.StageNone
 	return out, err
+}
+
+// relations 填任务抽屉里的上级、子任务、它要等的、在等它的。
+func relations(ctx context.Context, q store.Querier, d *TaskDetail) error {
+	t := d.Task
+	row := func(id string) (Row, error) {
+		x, err := ledger.Get(ctx, q, id)
+		if err != nil {
+			return Row{}, err
+		}
+		return rowOf(ctx, q, x, nil)
+	}
+	if t.Parent != "" {
+		p, err := row(t.Parent)
+		if err != nil {
+			return err
+		}
+		d.Parent = &p
+	}
+	sub, err := ledger.Subtree(ctx, q, t.ID)
+	if err != nil {
+		return err
+	}
+	d.Kids = []Row{}
+	for _, k := range sub[1:] {
+		if k.Parent != t.ID {
+			continue
+		}
+		r, err := rowOf(ctx, q, k, nil)
+		if err != nil {
+			return err
+		}
+		d.Kids = append(d.Kids, r)
+	}
+	deps, err := ledger.Deps(ctx, q, t.ID)
+	if err != nil {
+		return err
+	}
+	d.Waits = []Row{}
+	for _, dep := range deps {
+		r, err := row(dep.ID)
+		if err != nil {
+			return err
+		}
+		d.Waits = append(d.Waits, r)
+	}
+	// 反向依赖 ledger 还没有读函数，先在这里查（只读、有界）。
+	rows, err := q.QueryContext(ctx, `SELECT d.task FROM task_deps d JOIN tasks t ON t.id = d.task
+		WHERE d.depends_on = ? ORDER BY t.created_at LIMIT 50`, t.ID)
+	if err != nil {
+		return err
+	}
+	ids, err := scanIDs(rows)
+	if err != nil {
+		return err
+	}
+	d.Waiters = []Row{}
+	for _, id := range ids {
+		r, err := row(id)
+		if err != nil {
+			return err
+		}
+		d.Waiters = append(d.Waiters, r)
+	}
+	return nil
 }
 
 // holderText 是「现在谁拿着球」：没结束的任务用 watch 的持球判定（与 top、statusline 同一份），

@@ -175,7 +175,7 @@ const oneLine = s => s.trim().replace(/\s*\n\s*/g, " ↵ ");
 const cmdNote = { run: "在跑", err: "出错", none: "没搜到", ok: "" };
 const cmdsOf = segs => segs.flatMap(s => s.cmds || []);
 const maxPips = 20; // 每段最多画这么多点，多的写「+N」
-const pips = cmds => `<span class="pips">${cmds.slice(0, maxPips).map(c => `<i class="${c.state}"></i>`).join("")}${cmds.length > maxPips ? `<span class="more">+${cmds.length - maxPips}</span>` : ""}</span>`;
+const pips = cmds => `<span class="pips">${cmds.slice(0, maxPips).map(c => `<i class="${c.state}"></i>`).join("")}${cmds.length > maxPips ? `<b>+${cmds.length - maxPips}</b>` : ""}</span>`;
 // 折叠行只写数：几段、几条命令、几条出错（没有不写）。
 function tally(segs) {
   const cmds = cmdsOf(segs), errs = cmds.filter(c => c.state === "err").length;

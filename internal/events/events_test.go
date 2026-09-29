@@ -42,26 +42,41 @@ func emit(t *testing.T, db *store.DB, e Event) {
 
 func TestLevelAndKey(t *testing.T) {
 	cases := []struct {
+		name string
 		kind string
 		body any
 		want string
 	}{
-		{TaskStatus, map[string]any{"to": "failed"}, Act},
-		{TaskStatus, map[string]any{"to": "blocked"}, Act},
-		{TaskStatus, map[string]any{"to": "done"}, Info},
-		{TaskStatus, map[string]any{"to": "running"}, Info},
-		{TaskStatus, nil, Info},
-		{Overdue, nil, Act},
-		{OnlineFailed, nil, Act},
-		{LimitFull, map[string]any{"key": "points"}, Act},
-		{LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
-		{LeaderEscalate, map[string]any{"kind": "cross"}, Act},
-		{LeaderEscalate, map[string]any{"kind": "shipped"}, Info},
-		{"other", map[string]any{"to": "failed"}, Info},
+		// 任务状态：失败、受阻、等验收、非用户本人做的完成要处理（用户本人标失败、受阻也要处理：那是要秘书接手的事）。
+		{"失败", TaskStatus, map[string]any{"to": "failed", "by": "dispatch"}, Act},
+		{"用户标失败", TaskStatus, map[string]any{"to": "failed", "by": "u1"}, Act},
+		{"受阻", TaskStatus, map[string]any{"to": "blocked", "by": "watch"}, Act},
+		{"用户标受阻", TaskStatus, map[string]any{"to": "blocked", "by": "u1"}, Act},
+		{"等用户验收", TaskStatus, map[string]any{"to": "running", "stage": "accept", "accept_by": "user", "by": "gates"}, Act},
+		{"用户放进落地·等负责人验收", TaskStatus, map[string]any{"to": "running", "stage": "accept", "accept_by": "leader", "by": "u1"}, Act},
+		{"关卡过了直接完成", TaskStatus, map[string]any{"to": "done", "stage": "gate", "event": "gate_pass", "by": "gates"}, Act},
+		{"已上线", TaskStatus, map[string]any{"to": "done", "stage": "released", "event": "land", "by": "release"}, Act},
+		{"负责人验收通过", TaskStatus, map[string]any{"to": "done", "stage": "accept", "event": "accept", "by": "a1"}, Act},
+		// 用户本人做的完成只知会：task set --status done、task accept。
+		{"用户标完成", TaskStatus, map[string]any{"to": "done", "event": "set", "by": "u1"}, Info},
+		{"用户验收通过", TaskStatus, map[string]any{"to": "done", "stage": "accept", "event": "accept", "by": "u1"}, Info},
+		// 落地的中间步骤与过程只知会。
+		{"已合入等发版", TaskStatus, map[string]any{"to": "running", "stage": "merged", "event": "land", "by": "merge"}, Info},
+		{"拉起", TaskStatus, map[string]any{"to": "running", "by": "dispatch"}, Info},
+		{"用户取消", TaskStatus, map[string]any{"to": "cancelled", "by": "u1"}, Info},
+		{"无正文", TaskStatus, nil, Info},
+		// 非任务事件：上线失败、到期、上限、上交
+		{"自升级上线失败", OnlineFailed, nil, Act},
+		{"持球到期", Overdue, nil, Act},
+		{"上限满了", LimitFull, map[string]any{"key": "points"}, Act},
+		{"负责人上交·卡住", LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
+		{"负责人上交·跨部门", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
+		{"负责人上交·已上线", LeaderEscalate, map[string]any{"kind": "shipped"}, Info},
+		{"未知种类", "other", map[string]any{"to": "failed"}, Info},
 	}
 	for _, c := range cases {
 		if got := LevelOf(c.kind, c.body); got != c.want {
-			t.Errorf("LevelOf(%s, %v) = %s，应为 %s", c.kind, c.body, got, c.want)
+			t.Errorf("%s：LevelOf(%s, %v) = %s，应为 %s", c.name, c.kind, c.body, got, c.want)
 		}
 	}
 	if k := KeyOf(Event{Kind: TaskStatus, Task: "t3"}); k != "task:t3" {
@@ -83,10 +98,12 @@ func TestRoute(t *testing.T) {
 		body                map[string]any
 		want                []Delivery
 	}{
-		// 结果：处理人要处理，负责人（不是处理人时）知会。
-		{"用户处理·合入·有负责人", "u1", "a1", st("done", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
-		{"用户处理·合入·无负责人", "u1", "", st("done", "merged"), []d{{Secretary, Act}}},
-		{"秘书处理·等上线的已合入", Secretary, "a1", map[string]any{"to": "running", "stage": "merged", "event": "land"}, []d{{Secretary, Act}, {"a1", Info}}},
+		// 结果：处理人按 LevelOf，负责人（不是处理人时）知会。
+		{"用户处理·合入完成·有负责人", "u1", "a1", st("done", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"用户处理·合入完成·无负责人", "u1", "", st("done", "merged"), []d{{Secretary, Act}}},
+		{"秘书处理·已合入等发版只知会", Secretary, "a1", map[string]any{"to": "running", "stage": "merged", "event": "land"}, []d{{Secretary, Info}, {"a1", Info}}},
+		{"用户处理·用户验收通过只知会", "u1", "a1", map[string]any{"to": "done", "stage": "accept", "event": "accept", "by": "u1"}, []d{{Secretary, Info}, {"a1", Info}}},
+		{"用户处理·用户标受阻照旧要处理", "u1", "", map[string]any{"to": "blocked", "by": "u1"}, []d{{Secretary, Act}}},
 		// 等验收：投验收人，要处理；负责人另收知会。
 		{"等用户验收·有负责人", "a1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "user"}, []d{{Secretary, Act}, {"a1", Info}}},
 		{"等负责人验收", "u1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "leader"}, []d{{"a1", Act}}},
@@ -122,7 +139,7 @@ func TestEmitTask(t *testing.T) {
 	emitTask := func(owner, to, by string) {
 		t.Helper()
 		err := db.Tx(ctx, func(tx *sql.Tx) error {
-			return EmitTask(ctx, tx, owner, Event{Kind: TaskStatus, Task: "t1", Dept: "o1", Body: map[string]any{"to": to}, By: by})
+			return EmitTask(ctx, tx, owner, Event{Kind: TaskStatus, Task: "t1", Dept: "o1", Body: map[string]any{"to": to, "by": by}, By: by})
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -130,7 +147,7 @@ func TestEmitTask(t *testing.T) {
 	}
 	emitTask("u1", "queued", "u1")
 	emitTask("u1", "running", "dispatch")
-	emitTask("u1", "done", "u1") // 用户本人做的，照样投秘书（按身份比对，u1 不是 secretary）
+	emitTask("u1", "done", "merge")
 	sec, _ := Pending(ctx, db, Secretary, true, 10)
 	lead, _ := Pending(ctx, db, "a1", true, 10)
 	if len(sec) != 1 || sec[0].Level != Act || !strings.Contains(string(sec[0].Body), "done") {
@@ -140,6 +157,15 @@ func TestEmitTask(t *testing.T) {
 		t.Fatalf("负责人应收一条合并的知会：%+v", lead)
 	}
 	Ack(ctx, db, []int64{sec[0].ID, lead[0].ID}, "", "u1")
+
+	// 用户本人做的完成照样投秘书（按身份比对，u1 不是 secretary），只知会。
+	emitTask("u1", "done", "u1")
+	sec, _ = Pending(ctx, db, Secretary, true, 10)
+	if len(sec) != 1 || sec[0].Level != Info {
+		t.Fatalf("用户本人做的完成，秘书应只收知会：%+v", sec)
+	}
+	Ack(ctx, db, []int64{sec[0].ID}, "", "u1")
+
 	// 一次操作引出的事件不投给做这次操作的身份本人：秘书停下、负责人取消，各自不收。
 	for _, c := range []struct{ owner, to, by, self, other string }{
 		{Secretary, "blocked", Secretary, Secretary, "a1"},

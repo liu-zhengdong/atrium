@@ -532,7 +532,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if err != nil {
 			return err
 		}
-		payload := map[string]any{"from": t.Status, "to": next.Status, "stage": next.Stage, "title": t.Title, "event": ev.Kind}
+		payload := map[string]any{"from": t.Status, "to": next.Status, "stage": next.Stage, "title": t.Title, "event": ev.Kind, "by": actor}
 		if note != "" {
 			payload["note"] = clip(note, 500)
 		}

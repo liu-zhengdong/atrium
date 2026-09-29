@@ -8,7 +8,9 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
 
-// LevelOf 是事件的缺省级别：任务失败、受阻、到期、上限满了、自升级失败与负责人上交（已上线除外）要处理；其余只知会。
+// LevelOf 是事件的缺省级别：任务失败、受阻、等验收、非用户本人做的完成，到期、上限满了、自升级失败与负责人上交（已上线除外）要处理；
+// 其余只知会，包括落地的中间步骤（如已合入等发版）与用户本人（u1）做的完成、验收通过——用户亲手做的不再推回给秘书。
+// 正文的 by 是引起它的身份（ledger 填操作人）。
 // 上交必须是「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的。
 func LevelOf(kind string, body any) string {
 	switch kind {
@@ -20,8 +22,10 @@ func LevelOf(kind string, body any) string {
 		}
 		return Act
 	case TaskStatus:
-		switch field(body, "to") {
-		case "failed", "blocked":
+		switch to := field(body, "to"); {
+		case to == "failed", to == "blocked", field(body, "accept_by") != "":
+			return Act
+		case to == "done" && field(body, "by") != "u1":
 			return Act
 		}
 	}
@@ -63,11 +67,11 @@ func Result(kind string, body any) bool {
 // Route 纯函数：任务事件投给谁、什么级别。owner 是处理人（task add --owner，缺省派活的人），
 // leader 是部门往上最近的负责人（没有为空）。
 //   - 等验收（accept_by）投验收人，要处理：user 经秘书投给用户，leader 投部门负责人（没有投秘书）。
-//   - 结果投给处理人，要处理：用户与秘书都投秘书（用户经秘书会话收），负责人投自己；
+//   - 结果投给处理人，级别按 LevelOf：用户与秘书都投秘书（用户经秘书会话收），负责人投自己；
 //     运行时建的（审阅任务等）按部门找负责人、没有投秘书，成功由运行时自己接着走，只有失败、受阻要处理。
 //   - 负责人不是收结果的那位时，另收一份知会（不叫醒）；过程事件只知会负责人，没有负责人就不投。
 func Route(owner, leader, kind string, body any) []Delivery {
-	to, level := owner, Act
+	to, level := owner, LevelOf(kind, body)
 	accept := field(body, "accept_by")
 	switch {
 	case accept == "user":
@@ -81,9 +85,12 @@ func Route(owner, leader, kind string, body any) []Delivery {
 		to = Secretary
 	case api.IsRef(owner, "a"):
 	default:
-		to, level = leader, LevelOf(kind, body)
+		to = leader
 		if to == "" {
 			to = Secretary
+		}
+		if field(body, "to") == "done" {
+			level = Info
 		}
 	}
 	var out []Delivery

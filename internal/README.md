@@ -37,6 +37,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
 | `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（claude、codex 按执行者的话分段，agy 只有命令，其余逐行原文）；`workers`（列、看、改档案） | `worker_profiles` |
 | `gates` | 完成 | 交付方式（`delivery.go`：pr、local、dir、choice、message 各自的提示词、关卡、落地；local 的关卡与落地在 `local.go`）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
+| `gates/skillcheck` | 完成 | 技能声明的交付检查：技能的 `checks` 写检查名（`article`、`video`），关卡在本机工作目录里查表自己跑（构建与明暗截图；ffprobe、响度、第一帧不空白、联系表），产物放任务目录、结论与路径记进经历；每项有时限，跑不起来（缺工具、工作目录在远程）转受阻；org 保存技能时经 `Validate` 校验名字 | — |
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | pr 交付方式的落地第二段（Atrium 自己的仓库）：有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；每轮顺带数上限用量（刚到或超了发 `limit.full`）；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |

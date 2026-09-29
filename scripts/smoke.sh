@@ -23,6 +23,8 @@ fail() { echo "失败：$*" >&2; [ -f "$ATRIUM_DATA/service.log" ] && tail -20 "
 # json <命令…>：跑命令取 --json 输出；jq 断言用 has <jq 表达式>。
 json() { "$bin" "$@" --json; }
 has() { jq -e "$1" >/dev/null <<<"$out" || fail "断言不成立：$1；输出：$out"; }
+# 技能检查那一段要用 pnpm、ffmpeg（造小样、跑检查）与无头浏览器（运行时自己找，找不到时任务转受阻并写明）。
+for c in jq pnpm ffmpeg ffprobe; do command -v "$c" >/dev/null || fail "缺 $c：冒烟要用它"; done
 
 step "构建"
 (cd "$root" && go build -o "$bin" ./cmd/atrium)
@@ -160,9 +162,10 @@ jq -e '.model == "x" and (.hooks.SessionStart[0].hooks[0].command == "atrium sec
 
 step "技能、资料、凭据、选项单、周期任务（第二波 D）"
 mkdir -p "$work/skill/refs"; printf -- '---\ndescription: 修 bug 的做法\n---\n先复现再修\n' >"$work/skill/SKILL.md"; echo 附 >"$work/skill/refs/a.md"
-out=$(json skill add fix-bug "$work/skill" --checks pr_exists); has '.result.rev == 1 and .result.summary == "修 bug 的做法" and .result.files == 2'
+out=$(json skill add fix-bug "$work/skill" --checks pr_exists || true); has '.ok == false and (.error.message|test("--checks: 不认识的检查"))'
+out=$(json skill add fix-bug "$work/skill" --checks video); has '.result.rev == 1 and .result.summary == "修 bug 的做法" and .result.files == 2'
 [ -f "$(jq -r .result.path <<<"$out")" ] || fail "技能文件不在数据目录"
-out=$(json skill add fix-bug --workers claude); has '.result.rev == 2 and .result.workers == ["claude"] and .result.checks == ["pr_exists"]'
+out=$(json skill add fix-bug --workers claude); has '.result.rev == 2 and .result.workers == ["claude"] and .result.checks == ["video"]'
 out=$(json skill ls fix-bug); has '.result.others == ["refs/a.md"] and (.result.body|test("先复现"))'
 printf '部门是什么' >"$work/overview.md"; printf 'abc' >"$work/detail.md"
 out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result[0].id == "m1" and .result[0].kind == "overview"'
@@ -370,6 +373,39 @@ out=$(json task wait "$dirt" --timeout 30); has '.result.task.status == "done"'
 grep -q "原地干" "$ATRIUM_DATA/tasks/$dirt/prompt-1.md" || fail "提示词应让执行者原地干"
 [ ! -e "$ATRIUM_DATA/tasks/$dirt/repo" ] && [ ! -e "$ATRIUM_DATA/tasks/$dirt/work" ] || fail "不该建工作树或 work/"
 [ ! -e "$place/.git" ] || fail "不该在工作地点建 git 仓库"
+
+step "技能声明的交付检查：文章与视频由运行时自己跑（构建、截图、ffprobe、第一帧、联系表），没过交回，产物路径记进经历"
+data=$(cd "$ATRIUM_DATA" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠，服务记的是规范路径
+out=$(json skill add article "$work/skill" --checks article); has '.result.checks == ["article"]'
+out=$(json skill add video "$work/skill" --checks video); has '.result.checks == ["video"]'
+# 文章小样：假执行者写 post.md，pnpm run build 把它变成 dist/post.html；运行时截明暗两张
+mkdir -p "$work/art"; art=$(cd "$work/art" && pwd)
+echo '{"scripts":{"build":"mkdir -p dist && (echo \"<meta charset=utf-8><h1>\"; cat post.md) >dist/post.html"}}' >"$art/package.json"
+out=$(json task add 文章 --dir "$art" --skill article); a=$(jq -r .result.id <<<"$out")
+json task run "$a" --worker fakewrite >/dev/null
+out=$(json task wait "$a" --timeout 120); has '.result.task.status == "done"'
+out=$(json task show "$a"); has '(.result.history|map(select(.kind == "skill_check"))[0].body|test("article 通过：.*post.html")) and (.result.history|map(select(.kind == "artifact").body)) == ["'"$data/tasks/$a/article-light.png"'","'"$data/tasks/$a/article-dark.png"'"]'
+[ -s "$ATRIUM_DATA/tasks/$a/article-light.png" ] && [ -s "$ATRIUM_DATA/tasks/$a/article-dark.png" ] || fail "明暗截图应在任务目录"
+# 故意破坏：构建失败 → 交回执行者，第 3 次转受阻
+mkdir -p "$work/art-bad"; artb=$(cd "$work/art-bad" && pwd)
+echo '{"scripts":{"build":"echo 构建编译出错 >&2; exit 1"}}' >"$artb/package.json"
+out=$(json task add 文章构建坏了 --dir "$artb" --skill article); ab=$(jq -r .result.id <<<"$out")
+json task run "$ab" --worker fakewrite >/dev/null
+out=$(json task wait "$ab" --timeout 120); has '.result.task.status == "blocked"'
+out=$(json task show "$ab"); has '.result.history|map(select(.kind == "bounce"))|length == 3 and (.[0].body|test("关卡没过：article：构建失败：pnpm run build：exit status 1：构建编译出错"))'
+# 视频小样：out/ 里一段 2 秒带音轨的成片；故意破坏：第一帧纯黑
+mkdir -p "$work/vid/out" "$work/vid-bad/out"; vid=$(cd "$work/vid" && pwd); vidb=$(cd "$work/vid-bad" && pwd)
+ffmpeg -v error -y -f lavfi -i testsrc=duration=2:size=320x240:rate=10 -f lavfi -i sine=duration=2 -c:v libx264 -pix_fmt yuv420p -c:a aac "$vid/out/demo.mp4"
+ffmpeg -v error -y -f lavfi -i color=c=black:duration=2:size=320x240:rate=10 -c:v libx264 -pix_fmt yuv420p "$vidb/out/demo.mp4"
+out=$(json task add 视频 --dir "$vid" --skill video); v=$(jq -r .result.id <<<"$out")
+json task run "$v" --worker fakewrite >/dev/null
+out=$(json task wait "$v" --timeout 120); has '.result.task.status == "done"'
+out=$(json task show "$v"); has '(.result.history|map(select(.kind == "skill_check"))[0].body|test("video 通过：out/demo.mp4：时长 2.0 秒，320x240，响度 -[0-9.]+ LUFS")) and (.result.history|map(select(.kind == "artifact").body)) == ["'"$data/tasks/$v/video-first-frame.png"'","'"$data/tasks/$v/video-contact-sheet.png"'"]'
+[ -s "$ATRIUM_DATA/tasks/$v/video-first-frame.png" ] && [ -s "$ATRIUM_DATA/tasks/$v/video-contact-sheet.png" ] || fail "第一帧与联系表应在任务目录"
+out=$(json task add 视频第一帧黑 --dir "$vidb" --skill video); vb=$(jq -r .result.id <<<"$out")
+json task run "$vb" --worker fakewrite >/dev/null
+out=$(json task wait "$vb" --timeout 120); has '.result.task.status == "blocked"'
+out=$(json task show "$vb"); has '.result.history|map(select(.kind == "bounce"))[0].body|test("video：out/demo.mp4 的第一帧是空白")'
 
 step "stop"
 out=$(json stop); has '.result.stopped'

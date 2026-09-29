@@ -93,6 +93,54 @@ func TestTraceCodexLog(t *testing.T) {
 	}
 }
 
+// 真实日志（t349）：agy 只报步骤不带话，23 个工具步骤攒成开头一段；执行者被捎话重启，没有收尾。
+func TestTraceAgyLog(t *testing.T) {
+	tr, err := ReadTrace("agy+gemini-3.8-flash-high", "testdata/agy-t349.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Segments) != 1 || tr.Segments[0].Say != "" || len(tr.Segments[0].Cmds) != 23 || tr.Ended || len(tr.Lines) != 0 {
+		t.Fatalf("得到 %+v", tr)
+	}
+	cmds := tr.Segments[0].Cmds
+	for _, c := range cmds {
+		if c.State != CmdOK || strings.Contains(c.Out, "\r") || strings.Count(c.Out, "\n") >= outLines {
+			t.Errorf("命令 %q：%s，输出 %q", c.Cmd, c.State, c.Out)
+		}
+	}
+	if cmds[0] != (Command{Cmd: "git status", State: CmdOK, Out: "On branch task-t349\nYour branch is up to date with 'origin/main'.\n\nnothing to commit, working tree clean"}) ||
+		cmds[1].Cmd != `view_file {"AbsolutePath":"/Users/liuzhengdong/.atrium-v2/tasks/t349/repo/internal/README.md"}` || cmds[1].Out != "191 lines, 24478 bytes" {
+		t.Errorf("前两条：%+v", cmds[:2])
+	}
+}
+
+func TestTraceAgyEvents(t *testing.T) {
+	log := strings.Join([]string{
+		`{"event":"init","init":{"model":"m"}}`,
+		`{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response"}}`,
+		`{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/r/nope.go"}}}}`,
+		`{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/r/nope.go"},"error":{"type":"TOOL_ERROR","message":"stat /r/nope.go: no such file or directory"}}}}`,
+		`{"event":"step_update","step_update":{"step_index":4,"state":"DONE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"go test ./..."},"output":"ok\r\n"}}}`,
+		`{"event":"step_update","step_update":{"step_index":6,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"gh pr create"}}}}`,
+		`{"event":"result","result":{"status":"ERROR","error":"boom"}}`,
+	}, "\n")
+	p := NewParser("agy")
+	p.Feed(log)
+	tr := p.Trace()
+	want := Trace{Segments: []Segment{{Cmds: []Command{
+		{Cmd: `view_file {"AbsolutePath":"/r/nope.go"}`, State: CmdErr, Out: "stat /r/nope.go: no such file or directory"},
+		{Cmd: "go test ./...", State: CmdOK, Out: "ok"},
+		{Cmd: "gh pr create", State: CmdRun},
+	}}}, Lines: []string{`{"event":"result","result":{"status":"ERROR","error":"boom"}}`}}
+	if !reflect.DeepEqual(tr, want) {
+		t.Errorf("得到 %+v", tr)
+	}
+	p.Line(`{"event":"result","result":{"status":"SUCCESS","response":"已开 PR。\n\n细节"}}`)
+	if tr := p.Trace(); !tr.Ended || tr.Result != "已开 PR。\n\n细节" {
+		t.Errorf("收尾：%+v", tr)
+	}
+}
+
 // 解析不了的工具：逐行留原文，只留最后 rawLines 行。
 func TestTraceRawTool(t *testing.T) {
 	p := NewParser("opencode+m")
@@ -101,7 +149,7 @@ func TestTraceRawTool(t *testing.T) {
 	}
 	p.Line("最后一行")
 	tr := p.Trace()
-	if len(tr.Segments) != 0 || len(tr.Lines) != rawLines || tr.Lines[rawLines-1] != "最后一行" || Traceable("opencode") || !Traceable("codex+gpt:high") {
+	if len(tr.Segments) != 0 || len(tr.Lines) != rawLines || tr.Lines[rawLines-1] != "最后一行" || Traceable("opencode") || !Traceable("codex+gpt:high") || !Traceable("agy+gemini-3.8-flash-high") {
 		t.Errorf("%+v", tr)
 	}
 }

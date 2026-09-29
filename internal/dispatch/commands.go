@@ -175,7 +175,7 @@ func Commands(t *cli.Table) {
 		}})
 	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者的经过：按它说的话分段，每条命令原文一行（✓ 成功 ✗ 出错 · 没搜到 … 在跑）；--raw 原始日志；--follow 跟到退出",
 		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"},
-			{Name: "raw", Bool: true, Help: "原始日志（从末尾一段起）；claude、codex 以外的工具解析不了，本来就给原文"}},
+			{Name: "raw", Bool: true, Help: "原始日志（从末尾一段起）；claude、codex、agy 以外的工具解析不了，本来就给原文"}},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {

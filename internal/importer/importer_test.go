@@ -61,28 +61,6 @@ func TestPlanPoints(t *testing.T) {
 	}
 }
 
-func TestDecisionSkip(t *testing.T) {
-	cases := []struct {
-		d    oldDecision
-		want string
-	}{
-		{oldDecision{DecidedBy: "u1"}, ""},
-		{oldDecision{DecidedBy: "a1"}, "不是用户拍板（负责人或秘书自己的决定）"},
-		{oldDecision{DecidedBy: "u1", Superseded: true}, "已被推翻"},
-		{oldDecision{DecidedBy: "u1", Settl: true}, "已沉淀成要点"},
-	}
-	for _, c := range cases {
-		if got := decisionSkip(c.d); got != c.want {
-			t.Errorf("%+v：得到 %q 想要 %q", c.d, got, c.want)
-		}
-	}
-	out, _, over := planDecisions([]oldDecision{{ID: 3, DecidedBy: "u1", Node: i64(2)}, {ID: 4, DecidedBy: "u1", Node: i64(9)}},
-		map[string]bool{"o1": true, "o2": true}, "o1")
-	if out[0].Dept != "o2" || out[1].Dept != "o1" || len(over) != 0 {
-		t.Errorf("挂部门：%+v %v", out, over)
-	}
-}
-
 func TestSmallRules(t *testing.T) {
 	if checkHostJSON(`{"max_workers":6}`, `["*"]`) != nil || checkHostJSON("", `[]`) != nil {
 		t.Error("合法的机器信息被拒")
@@ -116,7 +94,6 @@ CREATE TABLE org_node_repos (node_id INTEGER, repo TEXT);
 CREATE TABLE org_points (id INTEGER PRIMARY KEY, node_id INTEGER, pos INTEGER, text TEXT, why TEXT, decided_by TEXT, check_ref TEXT, updated_by TEXT, updated_at INTEGER);
 CREATE TABLE org_leaders (id INTEGER PRIMARY KEY, name TEXT, worker TEXT, created_at INTEGER);
 CREATE TABLE memos (owner TEXT PRIMARY KEY, body TEXT, updated_at INTEGER);
-CREATE TABLE decisions (id INTEGER PRIMARY KEY, decided_by TEXT, text TEXT, why TEXT, node_id INTEGER, superseded_by INTEGER, settled_point INTEGER, created_at INTEGER);
 CREATE TABLE org_skills (id INTEGER PRIMARY KEY, slug TEXT, rev INTEGER, files TEXT, archived_at INTEGER, updated_at INTEGER);
 CREATE TABLE materials (id INTEGER PRIMARY KEY, node_id INTEGER, kind TEXT, name TEXT, note TEXT DEFAULT '', version INTEGER, bytes INTEGER, created_by TEXT, created_at INTEGER, archived_at INTEGER, superseded_by INTEGER);
 CREATE TABLE material_versions (material_id INTEGER, version INTEGER, manifest TEXT);
@@ -131,7 +108,6 @@ INSERT INTO org_node_repos VALUES (2, '/repo/atrium');
 INSERT INTO org_points VALUES (5, 2, -1, '先减后加', '简单', 'u1 09-27', NULL, 'u1', 1), (6, 2, 0, '事实为准', '', 'u1', '$ make', 'u1', 2);
 INSERT INTO org_leaders VALUES (1, 'Atrium 负责人', 'claude+opus:high', 1);
 INSERT INTO memos VALUES ('a1', '备忘', 3), ('secretary', '秘书备忘', 4), ('a9', '没这个人', 5);
-INSERT INTO decisions VALUES (10, 'u1', '用 Go', '快', NULL, NULL, NULL, 7), (11, 'a1', '自己定的', '', NULL, NULL, NULL, 8), (12, 'u1', '旧的', '', 2, 13, NULL, 9);
 INSERT INTO org_skills VALUES (1, 'visual-design', 2, '{"SKILL.md":"---\ndescription: 视觉设计\n---\n做法","references/a.md":"细节"}', NULL, 10);
 INSERT INTO materials VALUES (1, 2, 'dir', '设计稿', '原型与截图', 1, 5, 'u1', 11, NULL, NULL);
 INSERT INTO material_versions VALUES (1, 1, '[{"path":"README.md","size":2},{"path":"shots/a.png","size":3}]');
@@ -195,7 +171,7 @@ func TestRun(t *testing.T) {
 		got[it.Kind] = [2]int{it.Imported, it.Skipped}
 	}
 	want := map[string][2]int{"部门": {2, 1}, "部门仓库": {1, 0}, "要点": {2, 0}, "负责人": {1, 0}, "备忘": {2, 1},
-		"决定": {1, 2}, "技能": {1, 0}, "资料": {2, 0}, "执行者档案": {1, 0}, "机器": {2, 1}}
+		"技能": {1, 0}, "资料": {2, 0}, "执行者档案": {1, 0}, "机器": {2, 1}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("回执：\n得到 %v\n想要 %v", got, want)
 	}
@@ -242,7 +218,7 @@ func TestRun(t *testing.T) {
 	if err != nil || next != "t307" {
 		t.Errorf("下一个任务号 %s %v", next, err)
 	}
-	if !strings.Contains(Text(rep, data), "不是用户拍板") {
+	if !strings.Contains(Text(rep, data), "a9 不是已导入的身份") {
 		t.Error("人读回执应写跳过原因")
 	}
 	// 新库有数据就拒绝。

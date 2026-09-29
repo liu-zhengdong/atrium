@@ -166,7 +166,6 @@ CREATE TABLE IF NOT EXISTS choices (
   reason     TEXT NOT NULL,
   status     TEXT NOT NULL CHECK (status IN ('open', 'picked', 'passed')),
   note       TEXT NOT NULL DEFAULT '',
-  decision   TEXT REFERENCES decisions (id),
   created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   decided_at INTEGER
@@ -186,18 +185,6 @@ CREATE TABLE IF NOT EXISTS choice_options (
   task     TEXT REFERENCES tasks (id),
   PRIMARY KEY (choice, pos)
 );
-
--- 决定：用户拍板的事与原因，只追加；推翻或合并时写新的一条，旧的记 superseded_by 指向它。
-CREATE TABLE IF NOT EXISTS decisions (
-  id            TEXT PRIMARY KEY,
-  department    TEXT NOT NULL REFERENCES departments (id),
-  text          TEXT NOT NULL,
-  why           TEXT NOT NULL DEFAULT '',
-  decided_by    TEXT NOT NULL,
-  superseded_by TEXT REFERENCES decisions (id),
-  created_at    INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS decisions_department ON decisions (department, superseded_by);
 
 -- 资料：内容存数据目录 materials/<mN>/r<rev>/<文件名>，这里记元数据；每改一次追加一版，读取取最大 rev。
 -- units 是折算字数（文本按字、二进制按 3 字节一字），部门总量按它算；归档只标 archived_at（整条资料，记在最新版上）。

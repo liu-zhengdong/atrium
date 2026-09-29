@@ -2,7 +2,6 @@ package org
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -34,10 +33,10 @@ func TestLimitTable(t *testing.T) {
 		}
 		seen[l.Key] = true
 	}
-	err := Full("decisions", "o3", 30)
+	err := Full("secrets", "o3", 20)
 	var ae *api.Error
-	if !errors.As(err, &ae) || ae.Code != "limit" || ae.Next != "atrium decision ls --node o3" ||
-		!strings.Contains(ae.Message, "30/30") || !strings.Contains(ae.Message, "找用户") {
+	if !errors.As(err, &ae) || ae.Code != "limit" || ae.Next != "atrium secret ls --node o3" ||
+		!strings.Contains(ae.Message, "20/20") || !strings.Contains(ae.Message, "找用户") {
 		t.Fatalf("满了要说几/上限、找谁、怎么办：%+v", ae)
 	}
 }
@@ -145,12 +144,6 @@ func TestSkillPure(t *testing.T) {
 	}
 }
 
-func TestDecisionRoom(t *testing.T) {
-	if DecisionRoom("o1", 29, 0) != nil || DecisionRoom("o1", 30, 1) != nil || code(DecisionRoom("o1", 30, 0)) != "limit" {
-		t.Fatal("决定上限：合并替换不增加条数")
-	}
-}
-
 func openDB(t *testing.T) (*store.DB, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -231,50 +224,6 @@ func TestResourcesStore(t *testing.T) {
 		t.Fatalf("撤销归档超总量应拒绝：%v", err)
 	}
 
-	// 决定：推翻后不算有效；满 30 拒绝；合并可在满时写入。
-	tx, _ := db.Begin()
-	d, err := AddDecision(ctx, tx, NewDecision{Org: sub.ID, Text: "先做 A", Why: "快"}, "u1")
-	tx.Commit()
-	if err != nil || d.ID != "d1" {
-		t.Fatalf("%+v %v", d, err)
-	}
-	add := func(in NewDecision) (Decision, error) {
-		var out Decision
-		err := db.Tx(ctx, func(tx *sql.Tx) error {
-			var err error
-			out, err = AddDecision(ctx, tx, in, "u1")
-			return err
-		})
-		return out, err
-	}
-	d2x, err := add(NewDecision{Org: sub.ID, Text: "改做 B", Replaces: []string{"d1"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := add(NewDecision{Org: sub.ID, Text: "再推翻 d1", Replaces: []string{"d1"}}); code(err) != "conflict" {
-		t.Fatal("已推翻的不能再推翻")
-	}
-	if _, err := add(NewDecision{Org: other.ID, Text: "x", Replaces: []string{d2x.ID}}); code(err) != "usage" {
-		t.Fatal("不能推翻别的部门的")
-	}
-	for i := 1; i < MaxDecisions; i++ {
-		if _, err := add(NewDecision{Org: sub.ID, Text: "d"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := add(NewDecision{Org: sub.ID, Text: "第 31 条"}); code(err) != "limit" {
-		t.Fatalf("第 31 条应拒绝：%v", err)
-	}
-	if _, err := add(NewDecision{Org: sub.ID, Text: "合并", Replaces: []string{d2x.ID, "d3"}}); err != nil {
-		t.Fatalf("合并两条应可写：%v", err)
-	}
-	if list, _ := Decisions(ctx, db, DecisionFilter{Org: sub.ID, Keyword: "B", All: true}); len(list) != 1 || list[0].SupersededBy == "" {
-		t.Fatalf("关键词查已推翻的：%+v", list)
-	}
-	if list, _ := Decisions(ctx, db, DecisionFilter{Org: sub.ID, Keyword: "B"}); len(list) != 0 {
-		t.Fatalf("缺省不含已推翻的：%+v", list)
-	}
-
 	// 凭据：文件 0600、往上找、近的盖远的、找不到带修正命令。
 	if _, err := SetSecret(ctx, db, data, root.ID, "BOT_TOKEN", []byte("root-v\n")); err != nil {
 		t.Fatal(err)
@@ -316,7 +265,7 @@ func TestResourcesStore(t *testing.T) {
 	for _, c := range counts {
 		got[c.Key] = c.Used
 	}
-	if got["decisions"] != MaxDecisions-1 || got["secrets"] != 1 || got["overview"] != 3 || got["materials"] != 3+4000 {
+	if got["secrets"] != 1 || got["overview"] != 3 || got["materials"] != 3+4000 {
 		t.Fatalf("计数 %v", got)
 	}
 	if g, _ := Counts(ctx, db, ""); g[1].Key != "skills" || g[1].Used != 1 {

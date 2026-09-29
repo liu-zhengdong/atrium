@@ -29,7 +29,6 @@ const (
 	MaxMaterial      = 50000 // 部门资料文本总量（字；二进制不计，见 Units）
 	MaxMaterialFile  = 20    // 单个资料文件（MB）
 	MaxMaterialBin   = 200   // 部门二进制资料总量（MB）
-	MaxDecisions     = 30    // 每部门有效决定
 	MinOptions       = 3     // 每份选项单至少几项
 	MaxOptions       = 5     // 每份选项单至多几项
 	MaxChoices       = 5     // 每部门待拍板的选项单
@@ -68,8 +67,6 @@ var Limits = []Limit{
 		"压缩或拆小；大文件放仓库或外部存储，资料里只写它是什么、在哪", "atrium material ls --node {dept}"},
 	{"material_bin", "部门二进制资料总量", MaxMaterialBin, "MB", "部门负责人",
 		"归档过时的图片等二进制资料（atrium material archive mN）", "atrium material ls --node {dept}"},
-	{"decisions", "每部门有效决定", MaxDecisions, "条", "用户",
-		"整理：把相近的几条合并成一条、推翻过时的（atrium decision add {dept} … --replaces dA,dB）", "atrium decision ls --node {dept}"},
 	{"options", "每份选项单", MaxOptions, "项", "出选项单的人", "只留最值得的几项", "atrium choice ls"},
 	{"choices", "每部门待拍板的选项单", MaxChoices, "份", "用户", "先拍板或放弃已有的（atrium choice pick cN <第几项> 或 --none）", "atrium choice ls"},
 	{"schedules", "每部门周期任务", MaxSchedules, "条", "部门负责人", "合并相近的、删掉不值的（atrium schedule rm sN）", "atrium schedule ls --node {dept}"},
@@ -178,7 +175,6 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 			AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
 		add("material_bin", `SELECT COALESCE(sum(size), 0) FROM materials m WHERE department = ? AND archived_at IS NULL AND binary
 			AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
-		add("decisions", `SELECT count(*) FROM decisions WHERE department = ? AND superseded_by IS NULL`, dept)
 		add("choices", `SELECT count(*) FROM choices WHERE department = ? AND status = 'open'`, dept)
 		add("schedules", `SELECT count(*) FROM schedules WHERE department = ?`, dept)
 		add("secrets", `SELECT count(*) FROM secrets WHERE department = ?`, dept)
@@ -198,11 +194,10 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 	return out, nil
 }
 
-// resourceRoutes、resourceCommands 接入第二波的技能、资料、决定、凭据与上限表。
+// resourceRoutes、resourceCommands 接入第二波的技能、资料、凭据与上限表。
 func resourceRoutes(r *api.Router, env *app.Env) {
 	skillRoutes(r, env)
 	materialRoutes(r, env)
-	decisionRoutes(r, env)
 	secretRoutes(r, env)
 	// 上限表与计数（网页显示「6/7」）：不给 node 是全局的。
 	r.Handle("GET /api/limits", func(q *api.Req) (any, error) {
@@ -214,6 +209,5 @@ func resourceRoutes(r *api.Router, env *app.Env) {
 func resourceCommands(t *cli.Table) {
 	skillCommands(t)
 	materialCommands(t)
-	decisionCommands(t)
 	secretCommands(t)
 }

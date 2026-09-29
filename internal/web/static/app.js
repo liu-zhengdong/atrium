@@ -1,4 +1,4 @@
-// Atrium 只读网页。地址：#today、#records、#legion、#oN[/tasks|rules|files]；末段是 tN 或 cN 时打开抽屉。
+// Atrium 只读网页。地址：#today、#legion、#oN[/tasks|rules|files]；末段是 tN 或 cN 时打开抽屉。
 // 数据只从 /ui/api/… 读；/ui/stream 推「changed」时重取当前页与抽屉。
 "use strict";
 
@@ -130,16 +130,6 @@ async function renderDept(id, tab) {
         ${tab === "rules" ? `<span class="${cap}">${d.rules.length > d.rule_max ? "超限 " : ""}${d.rules.length}/${d.rule_max}</span>` : ""}
       </div>${body}</section>`;
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { location.hash = id + "/" + b.dataset.tab; });
-}
-
-/* 决定 */
-async function renderRecords() {
-  const list = await api("decisions");
-  $("#page").innerHTML = `<h1 class="hello">决定</h1><p class="pulse-line">你拍过板的事和原因。</p>
-  <section class="section"><div class="rows">${list.length ? list.map(r => `
-    <div class="rule" style="grid-template-columns:48px 1fr auto"><span class="i">${esc(r.id)}</span>
-    <span><span class="t">${esc(r.text)}</span>${r.why ? `<br><span class="w" style="font-size:13px;color:var(--ink2)">${esc(r.why)}</span>` : ""}</span>
-    <span class="w">${date(r.at)}</span></div>`).join("") : `<div class="empty">还没有决定</div>`}</div></section>`;
 }
 
 /* 执行者 */
@@ -288,7 +278,7 @@ function renderTree(cur) {
   const count = $("#askCount");
   count.textContent = nav.asks;
   count.hidden = !nav.asks;
-  $("#mnav").innerHTML = [["today", "今天"], ["records", "决定"], ["legion", "执行者"], ...nav.depts.map(d => [d.id, "部门 · " + d.name])]
+  $("#mnav").innerHTML = [["today", "今天"], ["legion", "执行者"], ...nav.depts.map(d => [d.id, "部门 · " + d.name])]
     .map(o => `<option value="${esc(o[0])}" ${o[0] === cur ? "selected" : ""}>${esc(o[1])}</option>`).join("");
 }
 
@@ -303,8 +293,7 @@ async function route(keepScroll) {
   try {
     nav = await api("nav");
     renderTree(page);
-    if (page === "records") await renderRecords();
-    else if (page === "legion") await renderLegion();
+    if (page === "legion") await renderLegion();
     else if (/^o[1-9]\d*$/.test(page)) await renderDept(page, tab);
     else await renderToday();
     if (keepScroll) $("#scroll").scrollTop = scroll;

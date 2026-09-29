@@ -1,5 +1,5 @@
 // Package importer 是一次性的旧库导入（atrium import）：从 TS 版 atrium.sqlite 只读搬出有价值的判断——
-// 部门、要点、决定、负责人与备忘、技能、资料、执行者档案、机器登记；任务历史不搬。
+// 部门、要点、负责人与备忘、技能、资料、执行者档案、机器登记；任务历史不搬。
 // 本文件只有纯判定（吃旧行、吐新行与跳过原因），IO 在 importer.go。
 package importer
 
@@ -174,62 +174,6 @@ func planPoints(points []oldPoint, depts map[string]bool) (out []Point, skipped,
 	for _, d := range order {
 		if count[d] > org.MaxPoints {
 			over = append(over, fmt.Sprintf("%s %d/%d", d, count[d], org.MaxPoints))
-		}
-	}
-	return out, skipped, over
-}
-
-type oldDecision struct {
-	ID                int64
-	DecidedBy         string
-	Text, Why         string
-	Node              *int64
-	Superseded, Settl bool
-	CreatedAt         int64
-}
-
-// Decision 是要写进新库的决定。
-type Decision struct {
-	ID, Dept, Text, Why string
-	CreatedAt           int64
-}
-
-// decisionSkip 判定一条旧决定为什么不搬（空串表示搬）：只搬用户拍板、仍然有效、没有沉淀成要点的。
-func decisionSkip(d oldDecision) string {
-	switch {
-	case d.DecidedBy != "u1":
-		return "不是用户拍板（负责人或秘书自己的决定）"
-	case d.Superseded:
-		return "已被推翻"
-	case d.Settl:
-		return "已沉淀成要点"
-	}
-	return ""
-}
-
-// planDecisions：没挂部门（或部门没导入）的归到根部门；每部门超过 30 条有效决定的列出来。
-func planDecisions(list []oldDecision, depts map[string]bool, root string) (out []Decision, skipped map[string]int, over []string) {
-	skipped = map[string]int{}
-	count := map[string]int{}
-	var order []string
-	for _, d := range list {
-		if why := decisionSkip(d); why != "" {
-			skipped[why]++
-			continue
-		}
-		dept := root
-		if d.Node != nil && depts[fmt.Sprintf("o%d", *d.Node)] {
-			dept = fmt.Sprintf("o%d", *d.Node)
-		}
-		if count[dept] == 0 {
-			order = append(order, dept)
-		}
-		count[dept]++
-		out = append(out, Decision{ID: fmt.Sprintf("d%d", d.ID), Dept: dept, Text: d.Text, Why: d.Why, CreatedAt: d.CreatedAt})
-	}
-	for _, d := range order {
-		if count[d] > org.MaxDecisions {
-			over = append(over, fmt.Sprintf("%s %d/%d", d, count[d], org.MaxDecisions))
 		}
 	}
 	return out, skipped, over

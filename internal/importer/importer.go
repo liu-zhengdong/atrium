@@ -60,7 +60,7 @@ func Run(ctx context.Context, from string, db *store.DB, dataDir string) (Report
 	}
 	defer os.RemoveAll(stage)
 	err = db.Tx(ctx, func(tx *sql.Tx) error {
-		depts, root, err := importDepts(ctx, old, tx, &rep)
+		depts, err := importDepts(ctx, old, tx, &rep)
 		if err != nil {
 			return err
 		}
@@ -71,7 +71,6 @@ func Run(ctx context.Context, from string, db *store.DB, dataDir string) (Report
 			func() error { return importPoints(ctx, old, tx, depts, &rep) },
 			func() error { return importLeaders(ctx, old, tx, &rep) },
 			func() error { return importMemos(ctx, old, tx, &rep) },
-			func() error { return importDecisions(ctx, old, tx, depts, root, &rep) },
 			func() error { return importSkills(ctx, old, tx, stage, &rep) },
 			func() error { return importMaterials(ctx, old, tx, depts, filepath.Dir(from), stage, &rep) },
 			func() error { return importProfiles(ctx, old, tx, &rep) },
@@ -111,7 +110,7 @@ func Run(ctx context.Context, from string, db *store.DB, dataDir string) (Report
 // checkEmpty：新库只能有建库时插入的两个身份；开发期不做合并。
 func checkEmpty(ctx context.Context, db *store.DB) error {
 	var busy []string
-	for _, t := range []string{"departments", "points", "decisions", "memos", "skills", "materials",
+	for _, t := range []string{"departments", "points", "memos", "skills", "materials",
 		"worker_profiles", "hosts", "tasks", "choices", "schedules", "ids"} {
 		var n int
 		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM `+t).Scan(&n); err != nil {
@@ -136,12 +135,12 @@ func checkEmpty(ctx context.Context, db *store.DB) error {
 
 func add(rep *Report, it Item) { rep.Items = append(rep.Items, it) }
 
-func importDepts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) (map[string]bool, string, error) {
+func importDepts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) (map[string]bool, error) {
 	rows, err := old.QueryContext(ctx, `SELECT n.id, n.parent_id, n.name, n.archived_at IS NOT NULL,
 		COALESCE((SELECT fields FROM org_docs d WHERE d.node_id = n.id AND d.doc = 'charter'), '')
 		FROM org_nodes n ORDER BY n.id LIMIT 10000`)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	var nodes []oldNode
 	for rows.Next() {
@@ -149,7 +148,7 @@ func importDepts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) (map
 		var parent sql.NullInt64
 		if err := rows.Scan(&n.ID, &parent, &n.Name, &n.Archived, &n.Fields); err != nil {
 			rows.Close()
-			return nil, "", err
+			return nil, err
 		}
 		if parent.Valid {
 			n.Parent = &parent.Int64
@@ -158,33 +157,26 @@ func importDepts(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) (map
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	depts, skipped, err := planDepts(nodes)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	now := store.Now()
 	kept := map[string]bool{}
-	root := ""
 	for _, d := range depts {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO departments (id, parent, name, what, uses, now, next, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, d.ID, store.Null(d.Parent), d.Name, d.What, d.Uses, d.Now, d.Next, now, now); err != nil {
-			return nil, "", fmt.Errorf("写部门 %s：%w", d.ID, err)
+			return nil, fmt.Errorf("写部门 %s：%w", d.ID, err)
 		}
 		kept[d.ID] = true
-		if d.Parent == "" && root == "" {
-			root = d.ID
-		}
 	}
 	add(rep, Item{Kind: "部门", Imported: len(depts), Skipped: len(skipped), Notes: skipped})
 	for _, l := range longIntros(depts) {
 		rep.Over = append(rep.Over, "部门介绍超过 300 字："+l)
 	}
-	if len(depts) > 0 && root == "" {
-		return nil, "", fmt.Errorf("旧库没有顶层部门")
-	}
-	return kept, root, nil
+	return kept, nil
 }
 
 func importRepos(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[string]bool, rep *Report) error {
@@ -307,51 +299,6 @@ func importMemos(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) erro
 	}
 	add(rep, it)
 	return rows.Err()
-}
-
-func importDecisions(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[string]bool, root string, rep *Report) error {
-	rows, err := old.QueryContext(ctx, `SELECT id, decided_by, text, why, node_id, superseded_by IS NOT NULL,
-		settled_point IS NOT NULL, created_at FROM decisions ORDER BY id LIMIT 100000`)
-	if err != nil {
-		return err
-	}
-	var list []oldDecision
-	for rows.Next() {
-		var d oldDecision
-		var node sql.NullInt64
-		if err := rows.Scan(&d.ID, &d.DecidedBy, &d.Text, &d.Why, &node, &d.Superseded, &d.Settl, &d.CreatedAt); err != nil {
-			rows.Close()
-			return err
-		}
-		if node.Valid {
-			d.Node = &node.Int64
-		}
-		list = append(list, d)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	out, skipped, over := planDecisions(list, depts, root)
-	if len(out) > 0 && root == "" {
-		return fmt.Errorf("有决定要导入但没有部门可挂")
-	}
-	for _, d := range out {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO decisions (id, department, text, why, decided_by, created_at)
-			VALUES (?, ?, ?, ?, 'u1', ?)`, d.ID, d.Dept, d.Text, d.Why, d.CreatedAt); err != nil {
-			return fmt.Errorf("写决定 %s：%w", d.ID, err)
-		}
-	}
-	it := Item{Kind: "决定", Imported: len(out)}
-	for _, why := range sortedKeys(skipped) {
-		it.Skipped += skipped[why]
-		it.Notes = append(it.Notes, fmt.Sprintf("%s %d 条", why, skipped[why]))
-	}
-	add(rep, it)
-	for _, o := range over {
-		rep.Over = append(rep.Over, "有效决定超过每部门 30 条："+o)
-	}
-	return nil
 }
 
 // importSkills 搬每个技能的当前版：全部文件（SKILL.md 与附属文件）写到 stage/skills/<名字>/r<rev>/，
@@ -643,7 +590,7 @@ func nullInt(n sql.NullInt64) any {
 // setCounters：各短号计数器接着旧库的最大值往后（任务、选项单、周期任务虽不搬，号也不复用）。
 func setCounters(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) error {
 	src := map[string]string{"t": "tasks", "o": "org_nodes", "k": "org_points", "a": "org_leaders", "c": "choices",
-		"d": "decisions", "m": "materials", "h": "hosts", "s": "schedules"}
+		"m": "materials", "h": "hosts", "s": "schedules"}
 	for _, prefix := range sortedKeys(src) {
 		var n sql.NullInt64
 		if err := old.QueryRowContext(ctx, `SELECT max(id) FROM `+src[prefix]).Scan(&n); err != nil {

@@ -141,12 +141,11 @@ type Event struct {
 	Body string `json:"body,omitempty"`
 }
 
-// DeptBrief 是提示词里负责的一个部门：人话字段、路径、要点链、用户的有效决定、资料总览。
+// DeptBrief 是提示词里负责的一个部门：人话字段、路径、要点链、资料总览。
 type DeptBrief struct {
 	Dept      org.Dept
 	Path      []string
 	Chain     []org.Point
-	Decisions []org.Decision
 	Materials string
 }
 
@@ -189,12 +188,6 @@ func Prompt(in PromptInput) string {
 			}
 			for _, o := range org.PointsOver(d.Chain) {
 				w("- （%s）", o)
-			}
-		}
-		if len(d.Decisions) > 0 {
-			w("用户拍板的决定（有效 %s，照着办；要推翻先上交）：", org.Tally("decisions", len(d.Decisions)))
-			for _, x := range d.Decisions {
-				w("- %s %s", x.ID, x.Text)
 			}
 		}
 		if d.Materials != "" {

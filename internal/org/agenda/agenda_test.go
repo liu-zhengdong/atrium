@@ -139,14 +139,25 @@ func TestCheckChoice(t *testing.T) {
 			t.Errorf("%s：%s，想要 %s", name, got, c.code)
 		}
 	}
-	c := Choice{ID: "c1", Title: "下一步", Options: []Option{{Pos: 1, OptionInput: OptionInput{Title: "A"}}, {Pos: 2, OptionInput: OptionInput{Title: "B"}}, {Pos: 3, OptionInput: OptionInput{Title: "C"}}}}
-	for picks, want := range map[string]string{"1,3": "c1「下一步」：做 A、C；这轮不做 B", "": "c1「下一步」：这轮都不做（A、B、C）", "1,2,3": "c1「下一步」：全做（A、B、C）"} {
-		var p []int
-		if picks != "" {
-			p = splitInts(picks)
+	opts := func(tasks ...string) []Option {
+		var out []Option
+		for i, task := range tasks {
+			out = append(out, Option{Pos: i + 1, OptionInput: OptionInput{Title: string(rune('A' + i))}, Task: task})
 		}
-		if got := VerdictText(c, p); got != want {
-			t.Errorf("%s → %s", picks, got)
+		return out
+	}
+	for name, c := range map[string]struct {
+		c    Choice
+		want string
+	}{
+		"选了 A、C": {Choice{Status: "picked", Options: opts("t1", "", "t2")}, "c1「下一步」没选：B"},
+		"整份不做":   {Choice{Status: "passed", Note: "不急", Options: opts("", "", "")}, "c1「下一步」没选：A、B、C（用户说明：不急）"},
+		"全选":     {Choice{Status: "picked", Options: opts("t1", "t2", "t3")}, ""},
+		"没拍板":    {Choice{Status: "open", Options: opts("", "", "")}, ""},
+	} {
+		c.c.ID, c.c.Title = "c1", "下一步"
+		if got := Unpicked(c.c); got != c.want {
+			t.Errorf("%s → %q", name, got)
 		}
 	}
 }
@@ -181,16 +192,12 @@ func TestChoiceFlow(t *testing.T) {
 		t.Fatal("登记选项单要投给秘书")
 	}
 	c, err = Decide(ctx, env.DB, c.ID, []int{1, 3}, "先快后稳", "u1")
-	if err != nil || c.Status != "picked" || c.Options[0].Task == "" || c.Options[1].Task != "" || c.Decision == "" {
+	if err != nil || c.Status != "picked" || c.Options[0].Task == "" || c.Options[1].Task != "" || c.Note != "先快后稳" {
 		t.Fatalf("%+v %v", c, err)
 	}
 	task, _ := ledger.Get(ctx, env.DB, c.Options[2].Task)
 	if task.Org != dept || !strings.Contains(task.Detail, "不做会怎样：慢") || !strings.Contains(task.Detail, "先快后稳") {
 		t.Fatalf("任务详述 = 选项全文：%+v", task)
-	}
-	d, _ := org.GetDecision(ctx, env.DB, c.Decision)
-	if !strings.Contains(d.Text, "这轮不做 方向B、方向D") || d.Why != "先快后稳" {
-		t.Fatalf("决定：%+v", d)
 	}
 	if _, err := Decide(ctx, env.DB, c.ID, nil, "", "u1"); code(err) != "conflict" {
 		t.Fatal("拍过板的不能再拍")
@@ -287,10 +294,16 @@ func TestScheduleTick(t *testing.T) {
 	if len(queued) != 2 {
 		t.Fatal("暂停时不该生成")
 	}
-	// 手动 run：上一轮没结束拒绝。
+	// 手动 run：调研轮附上最近选项单没选的；上一轮没结束拒绝。
 	env.Pause.Clear(ctx, dept)
-	if _, err := RunNow(ctx, env, "s1", loc); err != nil {
+	in := sample(3)
+	in.Org = dept
+	c, _ := AddChoice(ctx, env.DB, in, "", "u1")
+	if _, err := Decide(ctx, env.DB, c.ID, nil, "不急", "u1"); err != nil {
 		t.Fatal(err)
+	}
+	if run, err := RunNow(ctx, env, "s1", loc); err != nil || !strings.Contains(run.Detail, c.ID+"「下一步」没选：方向A、方向B、方向C（用户说明：不急）") {
+		t.Fatalf("%+v %v", run, err)
 	}
 	if _, err := RunNow(ctx, env, "s1", loc); code(err) != "conflict" {
 		t.Fatal("上一轮没结束，手动 run 应拒绝")

@@ -19,7 +19,8 @@ import (
 )
 
 // 选项单：调研后提给用户的 3–5 个方向，各写能多做到什么、为什么现在、代价、不做会怎样、依据，外加推荐与理由。
-// 只有用户能拍板：pick 选中的在部门下各建一件任务（详述 = 选项全文），整轮记一条决定；pass 整份不做，也记一条。
+// 只有用户能拍板：pick 选中的在部门下各建一件任务（详述 = 选项全文）；没建任务的就是这轮没选的，连同说明留在选项单上，
+// 下一轮调研附上（Unpicked），免得原样再提。
 const (
 	maxChoiceTitle = 100
 	maxOptionTitle = 80
@@ -62,7 +63,6 @@ type Choice struct {
 	Reason    string   `json:"reason"`
 	Status    string   `json:"status"` // open picked passed
 	Note      string   `json:"note,omitempty"`
-	Decision  string   `json:"decision,omitempty"`
 	CreatedBy string   `json:"created_by"`
 	CreatedAt int64    `json:"created_at"`
 	DecidedAt *int64   `json:"decided_at,omitempty"`
@@ -141,27 +141,20 @@ func OptionDetail(c Choice, o Option, note string) string {
 	return b.String()
 }
 
-// VerdictText 纯函数：一轮拍板记成一条决定的文字。picks 为空表示整份不做。
-func VerdictText(c Choice, picks []int) string {
-	var do, skip []string
+// Unpicked 纯函数：拍过板的选项单里没选的项与用户说明，一行；没拍板或全选了为空。
+func Unpicked(c Choice) string {
+	var skip []string
 	for _, o := range c.Options {
-		if slices.Contains(picks, o.Pos) {
-			do = append(do, o.Title)
-		} else {
+		if o.Task == "" {
 			skip = append(skip, o.Title)
 		}
 	}
-	s := fmt.Sprintf("%s「%s」：", c.ID, c.Title)
-	switch {
-	case len(do) == 0:
-		s += "这轮都不做（" + strings.Join(skip, "、") + "）"
-	case len(skip) == 0:
-		s += "全做（" + strings.Join(do, "、") + "）"
-	default:
-		s += "做 " + strings.Join(do, "、") + "；这轮不做 " + strings.Join(skip, "、")
+	if c.Status == "open" || len(skip) == 0 {
+		return ""
 	}
-	if r := []rune(s); len(r) > 300 {
-		s = string(r[:299]) + "…"
+	s := fmt.Sprintf("%s「%s」没选：%s", c.ID, c.Title, strings.Join(skip, "、"))
+	if c.Note != "" {
+		s += "（用户说明：" + c.Note + "）"
 	}
 	return s
 }
@@ -236,19 +229,19 @@ func AddChoice(ctx context.Context, db *store.DB, in ChoiceInput, task, actor st
 
 func GetChoice(ctx context.Context, q store.Querier, id string) (Choice, error) {
 	var c Choice
-	var task, note, decision sql.NullString
+	var task, note sql.NullString
 	var decided sql.NullInt64
 	var rec string
-	err := q.QueryRowContext(ctx, `SELECT id, department, task, title, recommend, reason, status, note, decision, created_by,
+	err := q.QueryRowContext(ctx, `SELECT id, department, task, title, recommend, reason, status, note, created_by,
 		created_at, decided_at FROM choices WHERE id = ?`, id).Scan(&c.ID, &c.Org, &task, &c.Title, &rec, &c.Reason, &c.Status,
-		&note, &decision, &c.CreatedBy, &c.CreatedAt, &decided)
+		&note, &c.CreatedBy, &c.CreatedAt, &decided)
 	if store.IsNotFound(err) {
 		return Choice{}, api.NotFound("选项单 %s 不存在", id).WithNext("atrium choice ls")
 	}
 	if err != nil {
 		return Choice{}, err
 	}
-	c.Task, c.Note, c.Decision, c.Recommend = task.String, note.String, decision.String, splitInts(rec)
+	c.Task, c.Note, c.Recommend = task.String, note.String, splitInts(rec)
 	if decided.Valid {
 		c.DecidedAt = &decided.Int64
 	}
@@ -303,8 +296,8 @@ func Choices(ctx context.Context, q store.Querier, dept string, all bool) ([]Cho
 	return out, rows.Err()
 }
 
-// Decide 是用户拍板：picks 非空为 pick（各建一件任务），空为 pass。整轮记一条决定。
-// 建任务走 ledger.Add（各自一个事务），所以先把会拒绝的都查完（状态、决定上限），再建任务，最后一个事务记结果。
+// Decide 是用户拍板：picks 非空为 pick（各建一件任务），空为 pass。
+// 建任务走 ledger.Add（各自一个事务），所以先把会拒绝的都查完，再建任务，最后一个事务记结果。
 func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, actor string) (Choice, error) {
 	if utf8.RuneCountInString(note) > maxPickNote {
 		return Choice{}, api.Usage("--note: 最多 %d 字", maxPickNote)
@@ -320,13 +313,6 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 		if err := CheckPicks("picks", picks, len(c.Options)); err != nil {
 			return Choice{}, err
 		}
-	}
-	var active int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM decisions WHERE department = ? AND superseded_by IS NULL`, c.Org).Scan(&active); err != nil {
-		return Choice{}, err
-	}
-	if err := org.DecisionRoom(c.Org, active, 0); err != nil {
-		return Choice{}, err
 	}
 	made := map[int]string{}
 	for _, o := range c.Options {
@@ -344,12 +330,8 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 		status = "picked"
 	}
 	err = db.Tx(ctx, func(tx *sql.Tx) error {
-		d, err := org.AddDecision(ctx, tx, org.NewDecision{Org: c.Org, Text: VerdictText(c, picks), Why: note}, actor)
-		if err != nil {
-			return err
-		}
-		res, err := tx.ExecContext(ctx, `UPDATE choices SET status = ?, note = ?, decision = ?, decided_at = ? WHERE id = ? AND status = 'open'`,
-			status, note, d.ID, store.Now(), id)
+		res, err := tx.ExecContext(ctx, `UPDATE choices SET status = ?, note = ?, decided_at = ? WHERE id = ? AND status = 'open'`,
+			status, note, store.Now(), id)
 		if err != nil {
 			return err
 		}

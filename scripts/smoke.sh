@@ -8,7 +8,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")
 bin="$work/atrium"
 export ATRIUM_DATA="$work/data"
 export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
-unset ATRIUM_WORKER
+unset ATRIUM_WORKER ATRIUM_AS
 
 pid=""
 cleanup() {
@@ -158,7 +158,7 @@ out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added'
 out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added == false'
 jq -e '.model == "x" and (.hooks.SessionStart[0].hooks[0].command == "atrium secretary bridge --detach")' "$dir/.claude/settings.local.json" >/dev/null || fail "hook 写得不对"
 
-step "技能、资料、决定、凭据、选项单、周期任务（第二波 D）"
+step "技能、资料、凭据、选项单、周期任务（第二波 D）"
 mkdir -p "$work/skill/refs"; printf -- '---\ndescription: 修 bug 的做法\n---\n先复现再修\n' >"$work/skill/SKILL.md"; echo 附 >"$work/skill/refs/a.md"
 out=$(json skill add fix-bug "$work/skill" --checks pr_exists); has '.result.rev == 1 and .result.summary == "修 bug 的做法" and .result.files == 2'
 [ -f "$(jq -r .result.path <<<"$out")" ] || fail "技能文件不在数据目录"
@@ -173,9 +173,6 @@ out=$(json material get m1); has '(.result.content|@base64d) == "部门是什么
 out=$(json material archive m2); has '.result.archived_at != null'
 out=$(json material ls --node o2); has '(.result|length) == 1'
 out=$(json org show o2); has '(.result.limits|map(select(.key == "overview"))[0].used) == 5'
-out=$(json decision add o2 "先做 A" --why 快); has '.result.id == "d1"'
-out=$(json decision add o2 "改做 B" --replaces d1); has '.result.id == "d2"'
-out=$(json decision ls --node o2); has '(.result|map(.id)) == ["d2"]'
 printf 'sekrit\n' | "$bin" secret set o1 BOT_TOKEN --json >/dev/null || fail "secret set 失败"
 out=$(json secret ls --node o2); has '.result[0].name == "BOT_TOKEN" and (tostring|test("sekrit")|not)'
 [ "$(stat -f %Lp "$ATRIUM_DATA/secrets/o1/BOT_TOKEN" 2>/dev/null || stat -c %a "$ATRIUM_DATA/secrets/o1/BOT_TOKEN")" = 600 ] || fail "凭据文件权限不是 600"
@@ -185,7 +182,7 @@ opt='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e
 echo "{\"title\":\"下一步\",\"options\":[$opt,$opt,$opt],\"recommend\":[1],\"reason\":\"快\"}" >"$work/choice.json"
 out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c1" and .result.status == "open"'
 out=$(json choice ls); has '(.result|length) == 1'
-out=$(json choice pick c1 1,3 --note 先快); has '.result.status == "picked" and .result.options[0].task != null and .result.decision == "d3"'
+out=$(json choice pick c1 1,3 --note 先快); has '.result.status == "picked" and .result.options[0].task != null and .result.options[1].task == null and .result.note == "先快"'
 out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c2"'
 out=$(json choice pick c2 --none); has '.result.status == "passed"'
 out=$(json schedule add o2 巡检 --every 1d --at 09:00 --kind patrol); has '.result.id == "s1" and .result.at == "09:00"'

@@ -96,7 +96,6 @@ func TestRuleFor(t *testing.T) {
 		"PATCH /api/leaders/{id}":           RuleDeny,
 		"POST /api/pause":                   RuleDeny,
 		"POST /api/choices/{id}/pick":       RuleDeny,
-		"POST /api/decisions":               RuleDeny,
 		"PUT /api/secrets/{org}/{name}":     RuleDeny,
 		"POST /api/hosts":                   RuleDeny,
 		"POST /api/tasks/{id}/merge/ignore": RuleTaskRef,

@@ -50,7 +50,6 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"POST /api/events/ack":                leaders.RuleEventsAck,
 		"POST /api/escalations":               leaders.RuleEscalate,
 		"POST /api/choices/{id}/decide":       leaders.RuleDeny, // 拍板只有用户
-		"POST /api/decisions":                 leaders.RuleDeny,
 		"POST /api/org":                       leaders.RuleDeny,
 		"PATCH /api/org/{id}":                 leaders.RuleDeny,
 		"PUT /api/org/{id}/secrets/{name}":    leaders.RuleDeny,

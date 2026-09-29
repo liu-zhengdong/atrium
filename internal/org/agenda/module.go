@@ -119,11 +119,13 @@ func choiceText(c Choice) string {
 		}
 		if o.Task != "" {
 			fmt.Fprintf(&b, "   已建任务：%s\n", o.Task)
+		} else if c.Status != "open" {
+			b.WriteString("   这轮没选\n")
 		}
 	}
 	fmt.Fprintf(&b, "\n推荐 %s：%s\n", strings.Trim(strings.ReplaceAll(fmt.Sprint(c.Recommend), " ", "、"), "[]"), c.Reason)
-	if c.Decision != "" {
-		fmt.Fprintf(&b, "决定：%s\n", c.Decision)
+	if c.Note != "" {
+		fmt.Fprintf(&b, "用户说明：%s\n", c.Note)
 	}
 	return b.String()
 }
@@ -187,7 +189,7 @@ func Commands(t *cli.Table) {
 				}
 				next := fmt.Sprintf("atrium choice pick %s <第几项,…> --note <原因>", ch.ID)
 				if ch.Status != "open" {
-					next = "atrium decision ls --node " + ch.Org
+					next = "atrium choice ls --all --node " + ch.Org
 				}
 				return c.Done(ch, choiceText(ch), next)
 			}
@@ -237,8 +239,8 @@ func Commands(t *cli.Table) {
 			return c.Done(ch, fmt.Sprintf("已登记选项单 %s「%s」（%d 项），等用户拍板", ch.ID, ch.Title, len(ch.Options)), "atrium choice ls "+ch.ID)
 		}})
 	t.Add(cli.Command{Path: "choice pick", Args: "<cN> <第几项,…>", Summary: "拍板：选中的各建一件任务，没选的记「这轮不做」；--none 整份这轮都不做（只有用户）",
-		Flags: []cli.Flag{{Name: "note", Value: "文字", Help: "原因或补充要求（记进决定、附进任务）"},
-			{Name: "none", Bool: true, Help: "这轮整份都不做，记一条决定"}},
+		Flags: []cli.Flag{{Name: "note", Value: "文字", Help: "原因或补充要求（留在选项单上、附进任务）"},
+			{Name: "none", Bool: true, Help: "这轮整份都不做"}},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<cN>")
 			if err != nil {
@@ -252,7 +254,7 @@ func Commands(t *cli.Table) {
 				if err := c.Call("POST", "/api/choices/"+url.PathEscape(id)+"/decide", pickBody{nil, c.Str("note")}, &ch); err != nil {
 					return err
 				}
-				return c.Done(ch, fmt.Sprintf("%s 这轮不做，记为决定 %s", ch.ID, ch.Decision), "atrium choice ls")
+				return c.Done(ch, ch.ID+" 这轮不做", "atrium choice ls")
 			}
 			if _, err := c.Arg(1, "<第几项,…>"); err != nil {
 				return err
@@ -275,7 +277,7 @@ func Commands(t *cli.Table) {
 					made = append(made, fmt.Sprintf("%s「%s」", o.Task, o.Title))
 				}
 			}
-			return c.Done(ch, fmt.Sprintf("已拍板 %s，记为决定 %s\n建了任务：%s", ch.ID, ch.Decision, strings.Join(made, "、")),
+			return c.Done(ch, fmt.Sprintf("已拍板 %s\n建了任务：%s", ch.ID, strings.Join(made, "、")),
 				"atrium task run "+ch.Options[picks[0]-1].Task)
 		}})
 	t.Group("schedule", "周期任务")

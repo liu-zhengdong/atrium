@@ -32,10 +32,14 @@ func LevelOf(kind string, body any) string {
 	return Info
 }
 
-// KeyOf 是事件的缺省去重键：同一件任务的状态变化合并成最新一条；同一部门同一项上限合并；其余不合并。
+// KeyOf 是事件的缺省去重键：同一件任务的状态变化合并成最新一条，交给负责人去拆（连同之后的捎话）也合并成最新一条；
+// 同一部门同一项上限合并；其余不合并。
 func KeyOf(e Event) string {
 	if e.Kind == TaskStatus && e.Task != "" {
 		return "task:" + e.Task
+	}
+	if e.Kind == TaskAssigned && e.Task != "" {
+		return "assigned:" + e.Task
 	}
 	if e.Kind == LimitFull {
 		if k := field(e.Body, "key"); k != "" {
@@ -117,6 +121,9 @@ func Summary(r Row) string {
 	}
 	switch r.Kind {
 	case TaskAssigned:
+		if t := s("tell"); t != "" {
+			return "交给你拆的" + title + "有补充：" + clip(t, 80)
+		}
 		return "交给你去拆" + title + "：拆子任务、派活、收尾"
 	case TaskStatus:
 		line := s("from") + " → " + s("to")

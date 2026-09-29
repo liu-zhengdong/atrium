@@ -83,6 +83,9 @@ func TestLevelAndKey(t *testing.T) {
 	if k := KeyOf(Event{Kind: TaskStatus, Task: "t3"}); k != "task:t3" {
 		t.Errorf("KeyOf = %q", k)
 	}
+	if k := KeyOf(Event{Kind: TaskAssigned, Task: "t3"}); k != "assigned:t3" {
+		t.Errorf("交给负责人去拆与之后的捎话合并，得到 %q", k)
+	}
 	if k := KeyOf(Event{Kind: Overdue, Task: "t3"}); k != "" {
 		t.Errorf("overdue 缺省不合并，得到 %q", k)
 	}
@@ -210,6 +213,9 @@ func TestSummary(t *testing.T) {
 	}
 	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆活派活"}`)}); s != "交给你去拆「拆活派活」：拆子任务、派活、收尾" {
 		t.Errorf("TaskAssigned Summary = %q", s)
+	}
+	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆活派活","tell":"也要改网页"}`)}); s != "交给你拆的「拆活派活」有补充：也要改网页" {
+		t.Errorf("带补充的 TaskAssigned Summary = %q", s)
 	}
 	if l := Line(Row{ID: 7, Task: "t2", Kind: "x", Count: 3}); l != "#7 t2 x （合并 3 次）" {
 		t.Errorf("Line = %q", l)

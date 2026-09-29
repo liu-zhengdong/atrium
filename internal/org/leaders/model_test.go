@@ -200,9 +200,10 @@ func TestPrompt(t *testing.T) {
 	if strings.Contains(p, "交给你去拆的任务") {
 		t.Error("没有 task.assigned 不附拆活做法")
 	}
-	in.Events = append(in.Events, Event{ID: 13, Kind: "task.assigned", Task: "t6", Dept: "o3"})
-	if p := Prompt(in); !strings.Contains(p, "交给你去拆的任务") || !strings.Contains(p, "--parent tN") {
-		t.Error("有 task.assigned 要附拆活做法")
+	in.Events = append(in.Events, Event{ID: 13, Kind: "task.assigned", Task: "t6", Dept: "o3", Body: `{"tell":"用户又说：也要改网页","title":"拆活"}`})
+	if p := Prompt(in); !strings.Contains(p, "交给你去拆的任务") || !strings.Contains(p, "--parent tN") ||
+		!strings.Contains(p, "用户又说：也要改网页") || !strings.Contains(p, "正文带 tell 的是交给你之后的补充") {
+		t.Error("有 task.assigned 要附拆活做法，交来之后的补充原文要看得到")
 	}
 	if !strings.Contains(Prompt(PromptInput{Leader: org.Identity{ID: "a3"}, Upstream: "secretary"}), "（空）") {
 		t.Error("空备忘要写（空）")

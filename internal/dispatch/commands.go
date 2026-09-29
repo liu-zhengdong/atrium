@@ -164,7 +164,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(res, text, next)
 		}})
-	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "捎话给执行者：在跑的按工具即时或本轮后送到，没在跑的下次拉起时写进提示词",
+	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "捎话：在跑的执行者按工具即时或本轮后送到，没在跑的下次拉起时写进提示词；交给负责人拆着的投给负责人",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -181,7 +181,11 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/tell", map[string]string{"text": text}, &r); err != nil {
 				return err
 			}
-			text, next, err := events.AsyncNext(c, "已捎话："+r.Note, "atrium task log "+id+" --follow")
+			follow := "atrium task log " + id + " --follow"
+			if r.Via == "leader" {
+				follow = "atrium task show " + id
+			}
+			text, next, err := events.AsyncNext(c, "已捎话："+r.Note, follow)
 			if err != nil {
 				return err
 			}

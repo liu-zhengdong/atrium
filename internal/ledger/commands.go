@@ -202,7 +202,7 @@ func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "task set", Args: "<tN>", Summary: "改任务的描述、依赖或状态",
 		Flags: []cli.Flag{
 			{Name: "title", Value: "文字", Help: "标题"},
-			{Name: "detail", Value: "文字", Help: "详述"},
+			{Name: "detail", Value: "文字", Help: "详述；有人在做的（交给负责人拆着的、执行者在跑的）改完当一次捎话送到（同 task tell）"},
 			{Name: "priority", Value: "级别", Help: "urgent / fix / normal / idle"},
 			{Name: "org", Value: "oN", Help: "改所属部门（给空串清掉）"},
 			{Name: "skill", Value: "名字", Help: "技能（给空串清掉）"},

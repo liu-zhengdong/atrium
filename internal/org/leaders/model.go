@@ -240,6 +240,7 @@ func Prompt(in PromptInput) string {
 		w("2. 拆成做得完的子任务：task add 标题 --parent tN --repo 仓库（或 --dir 本机文件夹）[--after tM]，先后用 --after 写清。长期方向写进部门介绍（org edit oN --next …），不建成做不完的任务。")
 		w("3. 逐件 task run；依赖还没完成的也可以先 run，依赖完成后自动派，依赖失败或取消会转受阻并通知你。")
 		w("4. 子任务的结果投给你，父任务进度由子任务汇总（task tree tN）；都完成后 task set tN --status done 收尾（子任务没结束时父任务不计时）。")
+		w("正文带 tell 的是交给你之后的补充（捎话或改了说明），以它和 task show tN 的最新说明为准；没取走时合并成最新一条，之前的补充在 task show 的经历里。已按旧说明派出的子任务用 task tell / task set --detail 跟上，做偏了的 task stop。")
 		w("")
 	}
 	w("## 可用命令（都是 atrium，已按你的身份连到服务；加 --json 得结构化结果）")

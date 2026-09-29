@@ -260,6 +260,82 @@ func TestAssignee(t *testing.T) {
 	}
 }
 
+func TestTaken(t *testing.T) {
+	for name, c := range map[string]struct {
+		t     Task
+		p     Parties
+		actor string
+		want  bool
+	}{
+		"交给负责人拆着": {Task{Status: Todo}, Parties{"secretary", "a1"}, "secretary", true},
+		"负责人自己改":  {Task{Status: Todo}, Parties{"secretary", "a1"}, "a1", false},
+		"执行者在跑":   {Task{Status: Running, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", true},
+		"已交付在关卡":  {Task{Status: Running, Stage: StageGate, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", false},
+		"排着还没拉起":  {Task{Status: Queued, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", false},
+		"待派没人接":   {Task{Status: Todo}, Parties{"u1", "u1"}, "u1", false},
+	} {
+		if got := Taken(c.t, c.p, c.actor); got != c.want {
+			t.Errorf("%s：得到 %v，应为 %v", name, got, c.want)
+		}
+	}
+}
+
+// task set --detail：交给负责人拆着的、执行者在跑的，改了说明经 Tell 捎过去；没人在做的、负责人自己改的、这次才交出去的不捎。
+func TestEditDetailTells(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES ('o1', NULL, '一', 'a1', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	var told []string
+	old := Tell
+	Tell = func(_ context.Context, id, text, by string) error {
+		told = append(told, id+" "+by+" "+text)
+		return nil
+	}
+	t.Cleanup(func() { Tell = old })
+	edit := func(id, detail, actor string) []string {
+		t.Helper()
+		told = nil
+		if _, err := Edit(ctx, db, id, Patch{Detail: &detail}, actor); err != nil {
+			t.Fatal(err)
+		}
+		return told
+	}
+
+	goal, _ := Add(ctx, db, NewTask{Title: "拆活", Owner: "a1"}, "secretary")
+	if got := edit(goal.ID, "也要改网页", "secretary"); len(got) != 1 || got[0] != goal.ID+" secretary 说明已改，以最新说明为准：\n也要改网页" {
+		t.Fatalf("交给负责人拆着的应捎过去：%q", got)
+	}
+	if got := edit(goal.ID, "也要改网页", "secretary"); len(got) != 0 {
+		t.Fatalf("说明没变不捎：%q", got)
+	}
+	if got := edit(goal.ID, "负责人自己补", "a1"); len(got) != 0 {
+		t.Fatalf("负责人自己改不捎：%q", got)
+	}
+	todo, _ := Add(ctx, db, NewTask{Title: "排着的", Repo: "o/r"}, "u1")
+	if got := edit(todo.ID, "新说明", "u1"); len(got) != 0 {
+		t.Fatalf("没人在做的不捎：%q", got)
+	}
+	for _, k := range []EventKind{Enqueue, Start} {
+		if _, err := Apply(ctx, db, todo.ID, Event{Kind: k}, "dispatch", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := edit(todo.ID, strings.Repeat("长", maxRetell+1), "u1"); len(got) != 1 || !strings.HasSuffix(got[0], "…（全文见 atrium task show "+todo.ID+"）") {
+		t.Fatalf("在跑的应捎过去，太长的截断：%q", got)
+	}
+	// 同一次改动里才交给负责人：交出去的 task.assigned 已带最新说明，不再捎。
+	x, _ := Add(ctx, db, NewTask{Title: "还没交"}, "secretary")
+	detail, owner := "说明", "a1"
+	told = nil
+	if _, err := Edit(ctx, db, x.ID, Patch{Detail: &detail, Owner: &owner}, "secretary"); err != nil || len(told) != 0 {
+		t.Fatalf("这次才交出去不捎：%q %v", told, err)
+	}
+}
+
 // task set --owner：改处理人记进经历、结果改投新处理人；交给负责人去拆的唤醒它（草稿等转待派），它管不到的部门拒绝。
 func TestSetOwner(t *testing.T) {
 	db, ctx := openDB(t), context.Background()

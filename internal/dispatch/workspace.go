@@ -48,10 +48,12 @@ func RemoteRepo(ctx context.Context, repo string) (string, error) {
 	return gates.Slug(ctx, gates.NewExec(), repo)
 }
 
-// hostNeed 是这件活对机器的要求：仓库按远程的写法比对机器登记的仓库；本机克隆换算不出 origin 就只派本机。
+// hostNeed 是这件活对机器的要求：仓库按远程的写法比对机器登记的仓库；本机克隆换算不出 origin、有工作地点（本机文件夹）就只派本机。
 func hostNeed(ctx context.Context, tool string, t ledger.Task) HostNeed {
 	n := HostNeed{Tool: tool, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}
-	if repo, err := RemoteRepo(ctx, t.Repo); err != nil {
+	if t.Dir != "" {
+		n.LocalOnly = "工作地点 " + t.Dir + " 是本机文件夹"
+	} else if repo, err := RemoteRepo(ctx, t.Repo); err != nil {
 		n.LocalOnly = fmt.Sprintf("仓库 %s 是本机克隆，换算不出 GitHub 上的 owner/name（%v）", t.Repo, err)
 	} else {
 		n.Repo = repo
@@ -87,10 +89,16 @@ func run(ctx context.Context, dir, name string, args ...string) (string, error) 
 	return strings.TrimSpace(out.String()), nil
 }
 
-// Workdir 准备任务的工作目录：有仓库时在任务目录下建 git worktree（分支 task-tN，已有就沿用：交回原执行者接着改），
-// 没有仓库用任务目录下的 work/。
-func Workdir(ctx context.Context, data, task, repo string) (dir, branch string, err error) {
+// Workdir 准备任务的工作目录：有仓库时在任务目录下建 git worktree（分支 task-tN，已有就沿用：交回原执行者接着改）；
+// 有工作地点就是它本身（原地干，不复制、不建工作树）；都没有用任务目录下的 work/。
+func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch string, err error) {
 	td := TaskDir(data, task)
+	if place != "" {
+		if fi, err := os.Stat(place); err != nil || !fi.IsDir() {
+			return "", "", api.Conflict("工作地点 %s 不是已有的文件夹", place).WithNext("atrium task set " + task + " --dir <路径>")
+		}
+		return place, "", nil
+	}
 	if repo == "" {
 		dir = filepath.Join(td, "work")
 		return dir, "", os.MkdirAll(dir, 0o700)

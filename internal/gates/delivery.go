@@ -17,7 +17,7 @@ import (
 
 // Delivery 是一种交付方式：执行者交什么（Rules，附进提示词）、关卡查什么事实（check）、验收后怎么落地（land）。
 // 不存库，按任务已有的事实选（pick）：本机仓库没有 GitHub 远程 → local；其余有仓库 → pr；
-// 没有仓库 → message，工作目录根有 choice.json → choice。
+// 只有工作地点（本机文件夹）→ dir；都没有 → message，工作目录根有 choice.json → choice。
 // 核心（ledger）只认关卡、审阅、验收过没过与落地的步骤名；要新的交付方式在这里加一项。
 type Delivery struct {
 	Name string
@@ -63,6 +63,15 @@ var (
 			"给人看的产物（页面、视频）把成品截图或关键帧放进工作树根的 preview/ 目录一并提交；交付说明写在最后的回复里。",
 		},
 		check: (*Gate).checkLocal, land: (*Gate).landLocal}
+	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；关卡只看执行者正常收尾；落地为空。
+	// 同一文件夹的几件活会不会互相踩由负责人派活时安排，运行时不隔离、不留回退。
+	deliverDir = Delivery{Name: "dir",
+		Rules: []string{"这件活在工作地点原地干：当前目录就是用户的文件夹，直接在这里改，不复制、不另建目录或 git 仓库；" +
+			"交付说明写在最后的回复里（改了哪些文件、结果与依据）。"},
+		check: func(*Gate, context.Context, ledger.Task) (checked, error) {
+			return checked{note: "在工作地点原地干，交付说明在最后的回复里"}, nil
+		},
+		land: func(*Gate, context.Context, ledger.Task) (landed, error) { return landed{}, nil }}
 	// message：结论写在最后的回复里；关卡只看执行者正常收尾；落地为空。
 	deliverMessage = Delivery{Name: "message", Rules: noRepoRules,
 		check: func(*Gate, context.Context, ledger.Task) (checked, error) {
@@ -73,10 +82,12 @@ var (
 	deliverChoice = Delivery{Name: "choice", Rules: noRepoRules, check: (*Gate).checkChoice, land: (*Gate).landChoice}
 )
 
-// pick 按事实选交付方式（纯函数）：repo 是任务的仓库；origin 是本机仓库 origin 的地址（没有为空，repo 不是本机路径时不看）；
-// choice 是没有仓库的任务工作目录根有没有 choice.json。本机仓库的 origin 换算不出 GitHub 的 owner/name（与 Slug 同一判定）走 local。
-func pick(repo, origin string, choice bool) Delivery {
+// pick 按事实选交付方式（纯函数）：repo 是任务的仓库，dir 是工作地点；origin 是本机仓库 origin 的地址（没有为空，repo 不是本机路径时不看）；
+// choice 是没有仓库也没有工作地点的任务工作目录根有没有 choice.json。本机仓库的 origin 换算不出 GitHub 的 owner/name（与 Slug 同一判定）走 local。
+func pick(repo, dir, origin string, choice bool) Delivery {
 	switch {
+	case repo == "" && dir != "":
+		return deliverDir
 	case repo == "" && choice:
 		return deliverChoice
 	case repo == "":
@@ -90,8 +101,8 @@ func pick(repo, origin string, choice bool) Delivery {
 
 // PromptRules 是派活时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。choice 与 message 派活时分不出来，
 // 提示词相同；要不要写 choice.json 由任务详述（调研周期任务）说。
-func PromptRules(repo, origin, branch string) []string {
-	d := pick(repo, origin, false)
+func PromptRules(repo, dir, origin, branch string) []string {
+	d := pick(repo, dir, origin, false)
 	out := make([]string, len(d.Rules))
 	for i, r := range d.Rules {
 		out[i] = strings.ReplaceAll(r, "%s", branch)
@@ -114,12 +125,15 @@ func Origin(ctx context.Context, r Runner, repo string) (string, error) {
 
 // deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json）后按 pick 选交付方式。
 func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task) (Delivery, error) {
-	if t.Repo != "" {
+	switch {
+	case t.Repo != "":
 		origin, err := Origin(ctx, g.R, t.Repo)
-		return pick(t.Repo, origin, false), err
+		return pick(t.Repo, "", origin, false), err
+	case t.Dir != "":
+		return pick("", t.Dir, "", false), nil
 	}
 	raw, err := g.choiceFile(ctx, t)
-	return pick("", "", raw != nil), err
+	return pick("", "", "", raw != nil), err
 }
 
 // choiceFile 读没有仓库的任务工作目录根的 choice.json（远程经代理）；没登记工作目录或没有文件为 nil。
@@ -273,7 +287,7 @@ func (g *Gate) awaiting(ctx context.Context, id, actor string) (ledger.Task, err
 	return t, nil
 }
 
-// Accept 是 task accept：验收通过，做交付方式落地的第一步（pr 进合入队列，local 合进本机主分支，choice 登记选项单，message 直接完成）。
+// Accept 是 task accept：验收通过，做交付方式落地的第一步（pr 进合入队列，local 合进本机主分支，choice 登记选项单，dir、message 直接完成）。
 func (g *Gate) Accept(ctx context.Context, id, actor string) (ledger.Task, error) {
 	t, err := g.awaiting(ctx, id, actor)
 	if err != nil {

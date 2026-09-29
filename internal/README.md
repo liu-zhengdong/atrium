@@ -29,14 +29,14 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `platform` | 完成 | 进程树结束、存活、shell、PATH 查找、服务与执行者白名单环境 | — |
 | `pause` | 完成 | 一键停机的状态与判定 `Paused` | `pauses` |
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
-| `ledger` | 完成 | 任务、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/stop/tree/plan/note/wait`（`task stop` 即转受阻，派活循环结束执行者；`task set --status` 不收 blocked） | `tasks` `task_deps` `task_events` |
+| `ledger` | 完成 | 任务（仓库或工作地点二选一）、父子、依赖、状态机、就绪、汇总；`task add/ls/show/set/stop/tree/plan/note/wait`（`task stop` 即转受阻，派活循环结束执行者；`task set --status` 不收 blocked） | `tasks` `task_dirs` `task_deps` `task_events` |
 | `org` | 完成 | 部门、要点、要点链、验收人（沿树继承）、身份、备忘、技能、资料、凭据、上限表与计数 | `departments` `department_repos` `acceptors` `points` `identities` `memos` `skills` `materials` `choices` `choice_options` `schedules` `secrets` `limit_notices` |
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
 | `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
 | `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（claude、codex 按执行者的话分段，其余逐行原文）；`workers`（列、看、改档案） | `worker_profiles` |
-| `gates` | 完成 | 交付方式（`delivery.go`：pr、local、choice、message 各自的提示词、关卡、落地；local 的关卡与落地在 `local.go`）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
+| `gates` | 完成 | 交付方式（`delivery.go`：pr、local、dir、choice、message 各自的提示词、关卡、落地；local 的关卡与落地在 `local.go`）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | pr 交付方式的落地第二段（Atrium 自己的仓库）：有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；每轮顺带数上限用量（刚到或超了发 `limit.full`）；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
@@ -93,7 +93,7 @@ type Module struct {
 ### 任务状态（`internal/ledger`）
 
 - 状态 `draft todo queued running done failed blocked cancelled`（`draft` 草稿：不派活、不计时、不进巡检，上限表 `drafts`）；交付阶段 `stage`（交付中状态保持 `running`）：核心只有 `"" gate review accept`（关卡、审阅、等验收），其余都是交付方式的落地步骤（`Stage.Landing()`），核心不认先后。pr 的落地步骤 `merge_queue merged released` 由 merge、release 经 `Land` 推进；名字放在 ledger 是因为 watch、web 引用不到 gates。
-- 交付方式（gates）不存库，按事实选（纯函数 `pick`）：仓库是本机路径且 origin 不是 GitHub（没有 origin 也算）→ local（在本机查提交，验收后串行合进本机主分支、删任务工作树与分支，冲突交回）；其余有仓库 → pr；没有仓库 → message，工作目录根有 `choice.json` → choice。关卡、审阅过了之后，部门的验收人（`org.Acceptor`，沿树继承，缺省 `auto`）是 `leader`／`user` 时停在 `accept`，否则直接落地。
+- 交付方式（gates）不存库，按事实选（纯函数 `pick`）：仓库是本机路径且 origin 不是 GitHub（没有 origin 也算）→ local（在本机查提交，验收后串行合进本机主分支、删任务工作树与分支，冲突交回）；其余有仓库 → pr；只有工作地点（`task add --dir`，本机文件夹，存在 `task_dirs`）→ dir（执行者在原地干、只派本机，关卡看正常收尾，落地为空；同一文件夹的并行由负责人安排，运行时不隔离、不回退）；都没有 → message，工作目录根有 `choice.json` → choice。关卡、审阅过了之后，部门的验收人（`org.Acceptor`，沿树继承，缺省 `auto`）是 `leader`／`user` 时停在 `accept`，否则直接落地。
 - **改状态只经 `ledger.Apply(ctx, db, id, ledger.Event{Kind: …}, actor, note)`**，判定在纯函数 `ledger.Transition`。事件种类与谁发：
 
 | Kind | 从 → 到 | 谁调 |
@@ -134,7 +134,7 @@ type Module struct {
 - 派活（dispatch）：`org.SkillPaths(ctx, q, data, task.Skill)` → 提示词附的 SKILL.md 路径；`org.GetSkill` 取优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、凭据只有用户）。
-- 关卡（gates）：没有仓库的任务读工作目录根的 `choice.json`（远程经代理），关卡用 `agenda.ParseChoice` 核对（不合法按关卡不过交回），落地时 `agenda.Settle(ctx, db, task, raw)` 登记成选项单。
+- 关卡（gates）：没有仓库也没有工作地点的任务读工作目录根的 `choice.json`（远程经代理），关卡用 `agenda.ParseChoice` 核对（不合法按关卡不过交回），落地时 `agenda.Settle(ctx, db, task, raw)` 登记成选项单。
 - 验收人：`org.Acceptor(ctx, q, dept)` → `auto`／`leader`／`user` 与设它的部门；`org.MayAccept(actor, who)`：用户与秘书都能判，负责人不能代用户验收。
 - 负责人的执行者组合与 `task run --worker` 同一种写法；登记时经 `org.CheckWorker`（workers 接上的 `Resolve`）核对。
 - dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；周期任务每轮建任务后调它。

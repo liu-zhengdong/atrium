@@ -184,18 +184,55 @@ func TestAcceptNoRepo(t *testing.T) {
 	}
 }
 
+// 有工作地点的活（dir）：关卡看执行者正常收尾，落地为空；验收人是用户时停在等验收，通过即完成；
+// 文件夹里的 choice.json 是用户自己的文件，不当选项单登记。
+func TestAcceptDir(t *testing.T) {
+	e := setup(t)
+	place := t.TempDir()
+	os.WriteFile(filepath.Join(place, agenda.ChoiceFile), []byte(`{"title":""}`), 0o600)
+	add := func(dept string) ledger.Task {
+		task, err := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "写文章", Org: dept, Dir: place}, "u1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.start(task.ID, "claude+opus")
+		ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(place)+`"}`)
+		return e.exit(task.ID)
+	}
+	user := add(e.dept(org.AcceptUser))
+	e.sweep()
+	if got := e.state(user.ID); got != "running/accept" || !strings.Contains(e.lastNote(user.ID), "工作地点") {
+		t.Fatalf("dir 应过关卡、等验收：%s %s", got, e.lastNote(user.ID))
+	}
+	if got, err := e.g.Accept(e.ctx, user.ID, "u1"); err != nil || got.Status != ledger.Done {
+		t.Fatalf("dir 验收通过应完成：%+v %v", got, err)
+	}
+	auto := add(e.dept(org.AcceptAuto))
+	e.sweep()
+	if got := e.state(auto.ID); got != "done/gate" {
+		t.Fatalf("验收人是 auto 时 dir 过了关卡应直接完成：%s %s", got, e.lastNote(auto.ID))
+	}
+	if open, _ := agenda.Choices(e.ctx, e.db, "", false); len(open) != 0 {
+		t.Fatalf("dir 不该登记选项单：%+v", open)
+	}
+}
+
 // 提示词里怎么交由交付方式定：GitHub 仓库要开 PR，本机仓库只提交不推送，没有仓库不提 PR。
 func TestPromptRules(t *testing.T) {
-	pr := strings.Join(gates.PromptRules("o/r", "", "task-t1"), "\n")
+	pr := strings.Join(gates.PromptRules("o/r", "", "", "task-t1"), "\n")
 	if !strings.Contains(pr, "在分支 task-t1 上提交、推送并开 PR") {
 		t.Fatalf("pr：%s", pr)
 	}
-	local := strings.Join(gates.PromptRules("/src/site", "", "task-t1"), "\n")
+	local := strings.Join(gates.PromptRules("/src/site", "", "", "task-t1"), "\n")
 	if !strings.Contains(local, "在分支 task-t1 上提交；不要推送") || strings.Contains(local, "PR") || !strings.Contains(local, "preview/") {
 		t.Fatalf("local 不该要求推送、开 PR：%s", local)
 	}
-	msg := strings.Join(gates.PromptRules("", "", ""), "\n")
+	msg := strings.Join(gates.PromptRules("", "", "", ""), "\n")
 	if strings.Contains(msg, "PR") || !strings.Contains(msg, "没有仓库") {
 		t.Fatalf("message 不该要求开 PR：%s", msg)
+	}
+	dir := strings.Join(gates.PromptRules("", "/w/blog", "", ""), "\n")
+	if strings.Contains(dir, "PR") || !strings.Contains(dir, "原地干") {
+		t.Fatalf("dir 应在原地干、不开 PR：%s", dir)
 	}
 }

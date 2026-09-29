@@ -163,8 +163,8 @@ func TestResultGoesToOwner(t *testing.T) {
 	}
 	rows.Close()
 	want := map[string]string{
-		x.ID + " secretary": "act 1", x.ID + " a1": "info 3", // 秘书收失败，负责人收合并的知会
-		z.ID + " a2": "act 1", z.ID + " a1": "info 3", // 处理人乙收失败，秘书不收
+		x.ID + " a1": "act 1", // 用户派到有负责人的部门：负责人收失败，秘书不收，过程不投
+		z.ID + " a2": "act 1", // 处理人乙收失败，部门负责人与秘书都不收
 	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("事件 = %v，应为 %v", got, want)

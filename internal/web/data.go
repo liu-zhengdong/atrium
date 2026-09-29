@@ -347,11 +347,12 @@ type DeptPage struct {
 	Materials []org.Material `json:"materials"`
 }
 
-// Leader 是部门负责人。
+// Leader 是部门负责人：自己没有就是往上最近一级的（Inherited），和事件投递同一个判定（org.Recipient）。
 type Leader struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Workers string `json:"workers"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Workers   string `json:"workers"`
+	Inherited bool   `json:"inherited,omitempty"`
 }
 
 // Rule 是一条要点（规矩）。
@@ -381,12 +382,16 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 	for _, a := range chain[:len(chain)-1] {
 		page.Path = append(page.Path, Pair{a, ix.name(a)})
 	}
-	if d.Leader != "" {
-		l, err := org.GetIdentity(ctx, q, d.Leader)
+	lead, err := org.Recipient(ctx, q, id)
+	if err != nil {
+		return DeptPage{}, err
+	}
+	if lead != org.Secretary {
+		l, err := org.GetIdentity(ctx, q, lead)
 		if err != nil {
 			return DeptPage{}, err
 		}
-		page.Leader = &Leader{ID: l.ID, Name: l.Name, Workers: strings.Join(l.Workers, "、")}
+		page.Leader = &Leader{ID: l.ID, Name: l.Name, Workers: strings.Join(l.Workers, "、"), Inherited: d.Leader != lead}
 	}
 	for _, s := range ix.children[id] {
 		page.Subs = append(page.Subs, *ix.byID[s])

@@ -18,6 +18,10 @@ const (
 	CheckClaims   = "claims_verified" // PR 正文「端到端验证」一节不为空
 )
 
+// CheckCommitted 是本机交付（local）的关卡：工作树都提交了、任务分支比本机主分支有新提交；不看推送与 PR，
+// 不由档案 checks 选。
+const CheckCommitted = "committed"
+
 // Known 是全部关卡名；档案写了别的名字判不过（写错了要看见，不静默跳过）。
 var Known = []string{CheckFinished, CheckPR, CheckGrowth, CheckClaims}
 
@@ -91,18 +95,19 @@ func judgeOne(check string, f Facts) Result {
 	r := Result{Check: check}
 	switch check {
 	case CheckFinished:
-		var missing []string
-		if len(f.Dirty) > 0 {
-			missing = append(missing, fmt.Sprintf("有 %d 个文件未提交（%s）", len(f.Dirty), strings.Join(firstN(f.Dirty, 5), "、")))
-		}
-		if f.Ahead <= 0 {
-			missing = append(missing, "分支比 origin/"+f.Base+" 没有新提交")
-		}
+		missing := uncommitted(f, "origin/"+f.Base)
 		if !f.Pushed {
 			missing = append(missing, "本地 HEAD 没推送到 origin/"+f.Branch)
 		}
 		r.OK = len(missing) == 0
 		r.Evidence = fmt.Sprintf("已提交 %d 个提交并推送", f.Ahead)
+		if !r.OK {
+			r.Evidence = "没收尾：" + strings.Join(missing, "；")
+		}
+	case CheckCommitted:
+		missing := uncommitted(f, f.Base)
+		r.OK = len(missing) == 0
+		r.Evidence = fmt.Sprintf("分支 %s 比 %s 多 %d 个提交，工作树干净", f.Branch, f.Base, f.Ahead)
 		if !r.OK {
 			r.Evidence = "没收尾：" + strings.Join(missing, "；")
 		}
@@ -141,6 +146,18 @@ func judgeOne(check string, f Facts) Result {
 		r.Evidence = fmt.Sprintf("未知关卡 %q（可用 %s）；改档案 checks", check, strings.Join(Known, "、"))
 	}
 	return r
+}
+
+// uncommitted 是没提交完的证据：未提交的文件、分支比 base 没有新提交。
+func uncommitted(f Facts, base string) []string {
+	var missing []string
+	if len(f.Dirty) > 0 {
+		missing = append(missing, fmt.Sprintf("有 %d 个文件未提交（%s）", len(f.Dirty), strings.Join(firstN(f.Dirty, 5), "、")))
+	}
+	if f.Ahead <= 0 {
+		missing = append(missing, "分支比 "+base+" 没有新提交")
+	}
+	return missing
 }
 
 func short(sha string) string {

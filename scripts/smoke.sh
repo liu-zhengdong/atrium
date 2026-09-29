@@ -324,6 +324,32 @@ until_accept
 out=$(json task accept "$acc"); has '.result.status == "done"'
 out=$(json org edit o1 --accept -); has '.ok'
 
+step "本机交付：本机仓库没有远程 → 假执行者提交 → 关卡 → 等你验收 → 合进本机 main → 删任务工作树与分支"
+site="$work/site"; git init -q -b main "$site"; echo hi >"$site/README.md"
+git -C "$site" add -A; git -C "$site" -c user.name=t -c user.email=t@t commit -qm init
+cat >"$work/fakecommit.md" <<'MD'
+---
+protocol: cli
+command: sh
+args: ["-c", "export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; echo 正文 >post.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm 写完 && echo DONE", "{prompt}"]
+done_match: "^DONE$"
+---
+只回 DONE。
+MD
+out=$(json workers harness/fakecommit --file "$work/fakecommit.md"); has '.ok'
+out=$(json org edit "$acc_org" --accept user); has '.ok'
+out=$(json task add 写文章 --org "$acc_org" --repo "$site"); loc=$(jq -r .result.id <<<"$out")
+json task run "$loc" --worker fakecommit >/dev/null
+out=$(json task wait "$loc" --timeout 30); has '.result.task.stage == "accept"'
+grep -q "本机交付：在分支 task-$loc 上提交" "$ATRIUM_DATA/tasks/$loc/prompt-1.md" || fail "本机仓库的提示词应写本机交付"
+grep -q "开 PR" "$ATRIUM_DATA/tasks/$loc/prompt-1.md" && fail "本机仓库的活提示词里不该要求开 PR"
+[ ! -f "$site/post.md" ] || fail "验收前不该合进 main"
+out=$(json task accept "$loc"); has '.result.status == "done"'
+[ "$(cat "$site/post.md")" = 正文 ] || fail "验收后 main 上应有执行者的提交"
+[ ! -d "$ATRIUM_DATA/tasks/$loc/repo" ] || fail "任务工作树应已删除"
+[ -z "$(git -C "$site" branch --list "task-$loc")" ] || fail "任务分支应已删除"
+out=$(json org edit "$acc_org" --accept -); has '.ok'
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

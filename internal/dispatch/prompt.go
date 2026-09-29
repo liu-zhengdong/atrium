@@ -19,6 +19,7 @@ type PromptInput struct {
 	Tells   []string // 运行中捎话（时间正序）
 	Bounces []string // 交回原因（最近的在后）
 	Repo    string   // 仓库；空表示没有仓库
+	Origin  string   // 本机仓库 origin 的地址（gates.Origin；没有为空），和 Repo 一起定交付方式
 	Branch  string
 	Guide   string // 目标仓库自己的约定（.agents/README.md 正文）；没有就空
 }
@@ -60,7 +61,7 @@ func BuildPrompt(in PromptInput) string {
 	}
 	section("上次交付被交回的原因（先解决这些）", in.Bounces)
 	section("运行中的补充（后说的优先）", in.Tells)
-	section("通用约束", append(gates.PromptRules(in.Repo, in.Branch), commonRules...))
+	section("通用约束", append(gates.PromptRules(in.Repo, in.Origin, in.Branch), commonRules...))
 	return b.String()
 }
 

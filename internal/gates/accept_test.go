@@ -184,13 +184,17 @@ func TestAcceptNoRepo(t *testing.T) {
 	}
 }
 
-// 提示词里怎么交由交付方式定：有仓库要开 PR，没有仓库不提 PR。
+// 提示词里怎么交由交付方式定：GitHub 仓库要开 PR，本机仓库只提交不推送，没有仓库不提 PR。
 func TestPromptRules(t *testing.T) {
-	pr := strings.Join(gates.PromptRules("o/r", "task-t1"), "\n")
+	pr := strings.Join(gates.PromptRules("o/r", "", "task-t1"), "\n")
 	if !strings.Contains(pr, "在分支 task-t1 上提交、推送并开 PR") {
 		t.Fatalf("pr：%s", pr)
 	}
-	msg := strings.Join(gates.PromptRules("", ""), "\n")
+	local := strings.Join(gates.PromptRules("/src/site", "", "task-t1"), "\n")
+	if !strings.Contains(local, "在分支 task-t1 上提交；不要推送") || strings.Contains(local, "PR") || !strings.Contains(local, "preview/") {
+		t.Fatalf("local 不该要求推送、开 PR：%s", local)
+	}
+	msg := strings.Join(gates.PromptRules("", "", ""), "\n")
 	if strings.Contains(msg, "PR") || !strings.Contains(msg, "没有仓库") {
 		t.Fatalf("message 不该要求开 PR：%s", msg)
 	}

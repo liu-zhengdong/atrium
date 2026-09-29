@@ -498,6 +498,9 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	}
 	secrets := o.Secrets
 	in := PromptInput{Task: t.ID, Title: t.Title, Detail: t.Detail, Profile: o.W.Body, Repo: t.Repo, Branch: branch}
+	if in.Origin, err = gates.Origin(ctx, gates.NewExec(), t.Repo); err != nil {
+		return err
+	}
 	if t.Org != "" {
 		chain, err := org.Chain(ctx, db, t.Org)
 		if err != nil {

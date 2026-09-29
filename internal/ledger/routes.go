@@ -91,10 +91,6 @@ func Routes(r *api.Router, env *app.Env) {
 		if err := q.Decode(&in); err != nil {
 			return nil, err
 		}
-		in, err := withDeptRepo(q.Context(), db, in, q.Actor.ID)
-		if err != nil {
-			return nil, err
-		}
 		return Add(q.Context(), db, in, q.Actor.ID)
 	})
 	r.Handle("GET /api/tasks", func(q *api.Req) (any, error) {

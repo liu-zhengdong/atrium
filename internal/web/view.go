@@ -22,7 +22,7 @@ func step(t ledger.Task) int {
 	switch t.Status {
 	case ledger.Done:
 		return len(Steps)
-	case ledger.Todo, ledger.Queued:
+	case ledger.Draft, ledger.Todo, ledger.Queued:
 		return 0
 	}
 	switch t.Stage {
@@ -46,9 +46,11 @@ func step(t ledger.Task) int {
 	return 0
 }
 
-// state 是列表行前的状态点：run 在做、idle 排队或没开始、bad 卡住或失败、done 完成、off 取消。
+// state 是列表行前的状态点：run 在做、idle 排队或没开始、draft 草稿、bad 卡住或失败、done 完成、off 取消。
 func state(t ledger.Task) string {
 	switch t.Status {
+	case ledger.Draft:
+		return "draft"
 	case ledger.Running:
 		return "run"
 	case ledger.Blocked, ledger.Failed:
@@ -85,6 +87,8 @@ func who(t ledger.Task) string {
 		return "排队"
 	case ledger.Todo:
 		return "没派"
+	case ledger.Draft:
+		return "" // 草稿自成一组，组名已说明
 	case ledger.Cancelled:
 		return "取消"
 	case ledger.Done:

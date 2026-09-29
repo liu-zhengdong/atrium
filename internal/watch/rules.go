@@ -63,7 +63,7 @@ func (p Proc) Local() bool { return p.Host == "" || p.Host == "h1" }
 
 // Holder 是「球现在在谁手里」。Role 为空表示不算期限（排队、等依赖、运行时自己推进）。
 type Holder struct {
-	Kind  string `json:"kind"` // worker check runtime release leader secretary deps
+	Kind  string `json:"kind"` // worker check runtime release leader secretary deps draft
 	Who   string `json:"who,omitempty"`
 	Text  string `json:"text"`
 	Role  Role   `json:"role,omitempty"`
@@ -87,6 +87,9 @@ func HolderOf(f Facts) Holder {
 	switch t.Status {
 	case ledger.Done, ledger.Cancelled:
 		return Holder{Kind: "", Text: "已结束"}
+	case ledger.Draft:
+		// 草稿不在谁手里：不计时、不叫醒，想清楚了由人转待派。
+		return Holder{Kind: "draft", Text: "草稿：还没想清楚，不派活、不计时", Next: "atrium task set " + t.ID + " --status todo"}
 	case ledger.Todo:
 		if len(f.WaitingOn) > 0 {
 			return Holder{Kind: "deps", Text: "等 " + strings.Join(f.WaitingOn, "、") + " 完成"}

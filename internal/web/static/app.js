@@ -53,9 +53,27 @@ function hashWith(open) {
 /* 列表行 */
 function taskRow(r, timeFn = ago) {
   const lead = r.state === "done" ? icon.check : `<span class="dot ${esc(r.state)}"></span>`;
-  return `<div class="row ${r.state === "done" ? "done" : ""}" data-task="${esc(r.id)}" tabindex="0">
+  return `<div class="row ${["done", "draft", "off"].includes(r.state) ? "done" : ""}" data-task="${esc(r.id)}" tabindex="0">
     ${lead}<div class="title"><span class="id">${esc(r.id)}</span>${esc(r.title)}</div>
     <div class="who">${esc(r.who)}</div><div class="time num">${esc(timeFn(r.at))}</div></div>`;
+}
+
+/* 部门任务分三组：没结束的（不加组名）、草稿、三天内结束的 */
+function taskGroups(rows) {
+  const ended = r => r.state === "done" || r.state === "off";
+  const groups = [
+    ["", rows.filter(r => r.state !== "draft" && !ended(r))],
+    ["草稿", rows.filter(r => r.state === "draft")],
+    ["三天内结束", rows.filter(ended)],
+  ].filter(g => g[1].length);
+  return groups.map(([name, rs]) =>
+    `${name ? `<div class="dept-h group-h"${name === "草稿" ? ' id="drafts"' : ""}>${name}<span class="num">${rs.length}</span></div>` : ""}<div class="rows">${rs.map(r => taskRow(r)).join("")}</div>`).join("");
+}
+/* 今天页脉搏行的「草稿 N」：点开到根部门任务页的草稿组 */
+function draftsLink(n) {
+  const root = nav.depts.find(d => !d.parent);
+  if (!n) return "";
+  return root ? ` · <a class="quiet" href="#${esc(root.id)}/tasks" data-drafts>草稿 ${n} 件</a>` : ` · 草稿 ${n} 件`;
 }
 
 /* 今天 */
@@ -79,7 +97,7 @@ async function renderToday() {
       </button>`).join("")}</div>` : `<div class="empty">没有等你的事</div>`;
   $("#page").innerHTML = `
     <h1 class="hello">${d.paused.includes("all") ? "已全部暂停" : d.asks.length ? `${d.asks.length} 件事等你` : d.paused.length ? `部分暂停：${esc(d.paused.join("、"))}` : "军团在自己运转"}</h1>
-    <p class="pulse-line"><span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件</p>
+    <p class="pulse-line"><span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件${draftsLink(d.drafts)}</p>
     <section class="section"><h2>等你</h2>${asks}</section>
     <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode} ▾</button>` : ""}</h2><div class="rows">${live}</div>
       ${d.shipped.length ? `<div class="dept-h" style="padding-top:18px">今天上线</div><div class="rows">${d.shipped.map(r => taskRow(r, clock)).join("")}</div>` : ""}
@@ -101,7 +119,7 @@ async function renderDept(id, tab) {
   }).join("");
   const intro = [["怎么用", dept.uses], ["现状", dept.now], ["下一步", dept.next]].filter(x => x[1]);
   let body = "";
-  if (tab === "tasks") body = d.tasks.length ? `<div class="rows">${d.tasks.map(r => taskRow(r)).join("")}</div>` : `<div class="empty">这个部门现在没有任务</div>`;
+  if (tab === "tasks") body = d.tasks.length ? taskGroups(d.tasks) : `<div class="empty">这个部门现在没有任务</div>`;
   if (tab === "rules") {
     const rule = (r, i) => `<div class="rule ${i === null ? "inh" : ""}"><span class="i">${i === null ? "·" : i + 1}</span>
       <span class="t">${esc(r.text)}${r.why ? `<span class="why">${esc(r.why)}</span>` : ""}</span>
@@ -231,14 +249,15 @@ function renderTask(d) {
   const t = d.task;
   const stuck = d.state === "bad";
   const pr = !t.pr ? "还没有" : /^https?:\/\//.test(t.pr) ? `<a href="${esc(t.pr)}" target="_blank" rel="noreferrer">${esc(t.pr.replace(/^.*\/pull\//, "#"))}</a>` : esc(t.pr);
-  const label = stuck ? "卡住" : d.state === "done" ? "完成" : d.state === "off" ? "取消" : "现在";
+  const draft = d.state === "draft";
+  const label = stuck ? "卡住" : draft ? "草稿" : d.state === "done" ? "完成" : d.state === "off" ? "取消" : "现在";
   $("#drawer").innerHTML = `
     <div class="dhead"><span class="id">${esc(t.id)}</span>${d.dept_name ? `<span class="id">· ${esc(d.dept_name)}</span>` : ""}<button class="x" data-close aria-label="关闭">${icon.x}</button></div>
     <div class="dbody">
       <h3>${esc(t.title)}</h3>
-      <div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>
-      <div class="holder"><b>${label}</b>　${esc(d.holder)} · ${esc(ago(t.updated_at))}</div>
-      <dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd></dl>
+      ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
+      <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不派活、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
+      ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd></dl>`}
       ${traceHTML(d)}
     </div>`;
   $("#drawer .dbody").scrollTop = keep;
@@ -287,6 +306,7 @@ function fail(err) {
   $("#page").innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`;
 }
 let rendering = null;
+let toDrafts = false; // 从今天页的「草稿 N 件」进来：渲染完滚到草稿组
 async function route(keepScroll) {
   const { page, tab, open } = parseHash();
   const scroll = $("#scroll").scrollTop;
@@ -297,6 +317,7 @@ async function route(keepScroll) {
     else if (/^o[1-9]\d*$/.test(page)) await renderDept(page, tab);
     else await renderToday();
     if (keepScroll) $("#scroll").scrollTop = scroll;
+    if (toDrafts) { toDrafts = false; $("#drafts")?.scrollIntoView({ block: "start" }); }
     if (open) {
       await (open[0] === "c" ? openChoice(open) : openTask(open));
       if (!$("#island").classList.contains("open")) openDrawer();
@@ -311,6 +332,7 @@ function refresh() {
 addEventListener("hashchange", () => route(false));
 $("#mnav").onchange = e => { location.hash = e.target.value; };
 document.addEventListener("click", e => {
+  if (e.target.closest("[data-drafts]")) toDrafts = true;
   const fold = e.target.closest("#drawer [data-g]");
   if (fold) {
     const k = fold.dataset.g;

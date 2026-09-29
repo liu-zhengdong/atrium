@@ -35,6 +35,11 @@ func TestTransition(t *testing.T) {
 		{"人工完成", st(Running, StageMerge), Event{Kind: Set, To: Done}, st(Done, StageMerge)},
 		{"登记亲手做的 PR", st(Todo, ""), Event{Kind: Deliver}, st(Running, StageMerge)},
 		{"放行受阻的交付", st(Blocked, StageMerge), Event{Kind: Deliver}, st(Running, StageMerge)},
+		{"草稿直接派", st(Draft, ""), Event{Kind: Enqueue}, st(Queued, "")},
+		{"草稿转待派", st(Draft, ""), Event{Kind: Set, To: Todo}, st(Todo, "")},
+		{"待派退回草稿", st(Todo, ""), Event{Kind: Set, To: Draft}, st(Draft, "")},
+		{"受阻退回草稿清阶段", st(Blocked, StageGate), Event{Kind: Set, To: Draft}, st(Draft, "")},
+		{"取消草稿", st(Draft, ""), Event{Kind: Cancel}, st(Cancelled, "")},
 	}
 	for _, c := range ok {
 		got, err := Transition(c.from, c.ev)
@@ -65,6 +70,10 @@ func TestTransition(t *testing.T) {
 		{"未知事件", st(Todo, ""), Event{Kind: "wat"}},
 		{"在跑的执行者不能放进合入队列", st(Running, ""), Event{Kind: Deliver}},
 		{"完成的不能放进合入队列", st(Done, StageMerged), Event{Kind: Deliver}},
+		{"在跑的不能退回草稿", st(Running, ""), Event{Kind: Set, To: Draft}},
+		{"完成的不能退回草稿", st(Done, ""), Event{Kind: Set, To: Draft}},
+		{"草稿不能标受阻", st(Draft, ""), Event{Kind: Block}},
+		{"草稿不能放进合入队列", st(Draft, ""), Event{Kind: Deliver}},
 	}
 	for _, c := range bad {
 		if got, err := Transition(c.from, c.ev); err == nil || got != c.from {

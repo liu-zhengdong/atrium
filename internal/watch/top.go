@@ -12,6 +12,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -51,6 +52,7 @@ type View struct {
 	Choices   int           `json:"choices"` // 等你拍板的选项单
 	Depts     []DeptRow     `json:"depts"`
 	Queued    int           `json:"queued"`
+	Drafts    int           `json:"drafts"` // 草稿只给数：不计时、不等人
 	Secretary SecretaryView `json:"secretary"`
 	Paused    []string      `json:"paused"`
 }
@@ -113,6 +115,9 @@ func BuildView(ctx context.Context, env *app.Env) (View, error) {
 	}
 	sort.Slice(v.Depts, func(i, j int) bool { return v.Depts[i].ID < v.Depts[j].ID })
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM choices WHERE status = 'open'`).Scan(&v.Choices); err != nil {
+		return v, err
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'draft'`).Scan(&v.Drafts); err != nil {
 		return v, err
 	}
 	backlogs, err := events.Backlogs(ctx, db)
@@ -236,7 +241,11 @@ func Render(v View) string {
 			fmt.Fprintf(&b, "  %s %s  在跑 %d · 卡住 %d\n", d.ID, d.Name, d.Running, d.Stuck)
 		}
 	}
-	fmt.Fprintf(&b, "\n排队 %d · 秘书%s", v.Queued, listenText(v.Secretary))
+	fmt.Fprintf(&b, "\n排队 %d", v.Queued)
+	if v.Drafts > 0 {
+		fmt.Fprintf(&b, " · 草稿 %s", org.Tally("drafts", v.Drafts))
+	}
+	fmt.Fprintf(&b, " · 秘书%s", listenText(v.Secretary))
 	return b.String()
 }
 

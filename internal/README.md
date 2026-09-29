@@ -92,7 +92,7 @@ type Module struct {
 
 ### 任务状态（`internal/ledger`）
 
-- 状态 `todo queued running done failed blocked cancelled`；交付阶段 `stage`：`"" gate review merge_queue merged released`（交付中状态保持 `running`）。
+- 状态 `draft todo queued running done failed blocked cancelled`（`draft` 草稿：不派活、不计时、不进巡检，上限表 `drafts`）；交付阶段 `stage`：`"" gate review merge_queue merged released`（交付中状态保持 `running`）。
 - **改状态只经 `ledger.Apply(ctx, db, id, ledger.Event{Kind: …}, actor, note)`**，判定在纯函数 `ledger.Transition`。事件种类与谁发：
 
 | Kind | 从 → 到 | 谁调 |

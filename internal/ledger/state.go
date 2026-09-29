@@ -6,6 +6,7 @@ import "fmt"
 type Status string
 
 const (
+	Draft     Status = "draft" // 草稿：还没想清楚、条件还不够；不派活、不计时
 	Todo      Status = "todo"
 	Queued    Status = "queued"
 	Running   Status = "running"
@@ -15,7 +16,7 @@ const (
 	Cancelled Status = "cancelled"
 )
 
-var Statuses = []Status{Todo, Queued, Running, Done, Failed, Blocked, Cancelled}
+var Statuses = []Status{Draft, Todo, Queued, Running, Done, Failed, Blocked, Cancelled}
 
 func (s Status) Valid() bool {
 	for _, v := range Statuses {
@@ -92,10 +93,10 @@ func Transition(from State, e Event) (State, error) {
 	delivering := s == Running && st != StageNone
 	switch e.Kind {
 	case Enqueue:
-		if s == Todo || s == Failed || s == Blocked {
+		if s == Draft || s == Todo || s == Failed || s == Blocked {
 			return State{Queued, StageNone}, nil
 		}
-		return reject("任务当前 %s，不能派活（只有 todo、failed、blocked 能派）", s)
+		return reject("任务当前 %s，不能派活（只有 draft、todo、failed、blocked 能派）", s)
 	case Start:
 		if s == Queued {
 			return State{Running, StageNone}, nil
@@ -170,10 +171,15 @@ func Transition(from State, e Event) (State, error) {
 			return reject("%s 只能由运行时进入：派活用 atrium task run", e.To)
 		case Todo:
 			return State{Todo, StageNone}, nil
+		case Draft:
+			if s == Todo || s == Failed || s == Blocked {
+				return State{Draft, StageNone}, nil
+			}
+			return reject("任务当前 %s，不能退回草稿（只有 todo、failed、blocked 能退回）", s)
 		case Done, Failed, Blocked, Cancelled:
 			return State{e.To, st}, nil
 		}
-		return reject("未知状态 %q（可选 todo、done、failed、blocked、cancelled）", e.To)
+		return reject("未知状态 %q（可选 draft、todo、done、failed、blocked、cancelled）", e.To)
 	}
 	return reject("未知事件 %q", e.Kind)
 }

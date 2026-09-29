@@ -55,7 +55,7 @@ func Commands(t *cli.Table) {
 					}
 					text += "；" + classNote(task, classes)
 				}
-			case Assignee(in, "") != "":
+			case Assignee(task, Parties{Owner: in.Owner}, "") != "":
 				// 交给负责人的任务由它拆、派、收尾，建的人不派它。
 				if text, next, err = events.AsyncNext(c, text+"，已交给 "+in.Owner+" 去拆", "atrium task wait "+task.ID); err != nil {
 					return err
@@ -211,6 +211,7 @@ func Commands(t *cli.Table) {
 			{Name: "after", Value: "tN", Multi: true, Help: "整体替换依赖（给空串清空）"},
 			{Name: "source", Value: "来源", Help: "发现从哪来：user 用户纠正 / org 组织发现（给空串清掉）"},
 			{Name: "class", Value: "类名", Help: "发现归的类（给空串清掉）；把写成两个名字的同一类并起来"},
+			{Name: "owner", Value: "身份", Help: "改处理人：u1、secretary 或 aN（给空串回到派活人），记进经历；aN 且任务待派、没有仓库与工作地点 = 交给这位负责人去拆，改好就唤醒它（草稿转待派时再唤醒）"},
 			{Name: "status", Value: "状态", Help: "人工改状态：draft（退回草稿）、todo（转待派）、done、failed、cancelled（停下用 task stop）"},
 			{Name: "note", Value: "文字", Help: "改状态的原因，记进经历"},
 		},
@@ -220,7 +221,7 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			body := SetBody{Patch: Patch{Title: c.Opt("title"), Detail: c.Opt("detail"), Org: c.Opt("org"),
-				Skill: c.Opt("skill"), Repo: c.Opt("repo"), Dir: c.Opt("dir")}, Note: c.Str("note")}
+				Skill: c.Opt("skill"), Repo: c.Opt("repo"), Dir: c.Opt("dir"), Owner: c.Opt("owner")}, Note: c.Str("note")}
 			if p := c.Opt("priority"); p != nil {
 				pr := Priority(*p)
 				body.Priority = &pr
@@ -248,7 +249,14 @@ func Commands(t *cli.Table) {
 			if err := c.Call("PATCH", "/api/tasks/"+url.PathEscape(id), body, &t); err != nil {
 				return err
 			}
-			return c.Done(t, fmt.Sprintf("已改 %s「%s」：%s", t.ID, t.Title, stateLabel(t)), "atrium task show "+t.ID)
+			text, next := fmt.Sprintf("已改 %s「%s」：%s", t.ID, t.Title, stateLabel(t)), "atrium task show "+t.ID
+			if o := c.Opt("owner"); o != nil && Assignee(t, Parties{Owner: *o}, "") != "" {
+				// 交给负责人的任务由它拆、派、收尾，改的人不派它。
+				if text, next, err = events.AsyncNext(c, text+"，已交给 "+*o+" 去拆", "atrium task wait "+t.ID); err != nil {
+					return err
+				}
+			}
+			return c.Done(t, text, next)
 		}})
 	t.Add(cli.Command{Path: "task stop", Args: "<tN> [原因]", Summary: "停下任务：结束在跑的执行者，转受阻（再派用 task run）",
 		Run: func(c *cli.Ctx) error {

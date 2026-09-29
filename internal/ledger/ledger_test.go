@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -131,7 +132,7 @@ func TestResultGoesToOwner(t *testing.T) {
 	}
 	x, _ := Add(ctx, db, NewTask{Title: "秘书派的", Org: "o1"}, "u1")
 	y, _ := Add(ctx, db, NewTask{Title: "周期", Org: "o1", By: "a1"}, "s1")
-	z, err := Add(ctx, db, NewTask{Title: "交给乙", Org: "o1", Owner: "a2"}, "u1")
+	z, err := Add(ctx, db, NewTask{Title: "交给乙", Org: "o1", Repo: "o/r", Owner: "a2"}, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,22 +237,103 @@ func TestTaskDir(t *testing.T) {
 
 func TestAssignee(t *testing.T) {
 	for name, c := range map[string]struct {
-		in    NewTask
+		t     Task
+		p     Parties
 		actor string
 		want  string
 	}{
-		"秘书交给负责人去拆":  {NewTask{Owner: "a1"}, "secretary", "a1"},
-		"负责人给自己建":    {NewTask{Owner: "a1"}, "a1", ""},
-		"交给上一层负责人":   {NewTask{Owner: "a1"}, "a2", "a1"},
-		"有仓库是具体的活":   {NewTask{Owner: "a1", Repo: "/r"}, "secretary", ""},
-		"有工作地点是具体的活": {NewTask{Owner: "a1", Dir: "/d"}, "secretary", ""},
-		"草稿不唤醒":      {NewTask{Owner: "a1", Draft: true}, "secretary", ""},
-		"处理人是秘书":     {NewTask{Owner: "secretary"}, "u1", ""},
-		"没写处理人":      {NewTask{}, "secretary", ""},
+		"秘书交给负责人去拆":   {Task{Status: Todo}, Parties{"secretary", "a1"}, "secretary", "a1"},
+		"负责人给自己建":     {Task{Status: Todo}, Parties{"a1", "a1"}, "a1", ""},
+		"交给上一层负责人":    {Task{Status: Todo}, Parties{"a2", "a1"}, "a2", "a1"},
+		"负责人自己建的由秘书改": {Task{Status: Todo}, Parties{"a1", "a1"}, "secretary", ""},
+		"负责人自己接过来":    {Task{Status: Todo}, Parties{"secretary", "a1"}, "a1", ""},
+		"有仓库是具体的活":    {Task{Status: Todo, Repo: "/r"}, Parties{"secretary", "a1"}, "secretary", ""},
+		"有工作地点是具体的活":  {Task{Status: Todo, Dir: "/d"}, Parties{"secretary", "a1"}, "secretary", ""},
+		"草稿不唤醒":       {Task{Status: Draft}, Parties{"secretary", "a1"}, "secretary", ""},
+		"已派出去的不再拆":    {Task{Status: Running}, Parties{"secretary", "a1"}, "secretary", ""},
+		"处理人是秘书":      {Task{Status: Todo}, Parties{"u1", "secretary"}, "u1", ""},
+		"没写处理人":       {Task{Status: Todo}, Parties{"secretary", ""}, "secretary", ""},
 	} {
-		if got := Assignee(c.in, c.actor); got != c.want {
+		if got := Assignee(c.t, c.p, c.actor); got != c.want {
 			t.Errorf("%s：得到 %q，应为 %q", name, got, c.want)
 		}
+	}
+}
+
+// task set --owner：改处理人记进经历、结果改投新处理人；交给负责人去拆的唤醒它（草稿等转待派），它管不到的部门拒绝。
+func TestSetOwner(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	for _, q := range []string{
+		`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0), ('a2', 'leader', '乙', 0)`,
+		`INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES
+			('o1', NULL, '一', 'a1', 0, 0), ('o2', 'o1', '二', 'a2', 0, 0), ('o3', NULL, '三', NULL, 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assigned := func(id string) []string {
+		var out []string
+		rows, _ := db.Query(`SELECT target FROM events WHERE task = ? AND kind = ? ORDER BY id`, id, events.TaskAssigned)
+		defer rows.Close()
+		for rows.Next() {
+			var s string
+			rows.Scan(&s)
+			out = append(out, s)
+		}
+		return out
+	}
+	owner := func(v string) Patch { return Patch{Owner: &v} }
+	owners := func(id string) Parties { p, _ := PartiesOf(ctx, db, id); return p }
+
+	// 秘书排着的待派任务交给乙：落到乙负责的 o2，唤醒乙，经历里有这次改动。
+	x, _ := Add(ctx, db, NewTask{Title: "排着的"}, "secretary")
+	got, err := Edit(ctx, db, x.ID, owner("a2"), "secretary")
+	if err != nil || got.Org != "o2" || owners(x.ID) != (Parties{"secretary", "a2"}) || !slices.Equal(assigned(x.ID), []string{"a2"}) {
+		t.Fatalf("交给乙：%+v %+v %v %v", got, owners(x.ID), assigned(x.ID), err)
+	}
+	if h, _ := History(ctx, db, x.ID, 5); h[len(h)-1].Kind != "edited" || !strings.Contains(h[len(h)-1].Body, `"owner":"a2"`) {
+		t.Fatalf("改处理人应记进经历：%+v", h)
+	}
+	// 再交一次同一位不重复唤醒；改别的字段也不唤醒。
+	title := "排着的（改名）"
+	Edit(ctx, db, x.ID, owner("a2"), "secretary")
+	Edit(ctx, db, x.ID, Patch{Title: &title}, "secretary")
+	if n := len(assigned(x.ID)); n != 1 {
+		t.Fatalf("同一位只唤醒一次：%d", n)
+	}
+	// 越权：乙管不到 o1（甲的部门，乙在它下面）、o3；不存在的身份。
+	y, _ := Add(ctx, db, NewTask{Title: "甲部门的", Org: "o1"}, "secretary")
+	if _, err := Edit(ctx, db, y.ID, owner("a2"), "secretary"); code(err) != "usage" || !strings.HasPrefix(err.Error(), "--owner") {
+		t.Fatalf("乙管不到 o1 应拒绝：%v", err)
+	}
+	if _, err := Edit(ctx, db, y.ID, owner("a9"), "secretary"); code(err) != "not_found" {
+		t.Fatalf("不存在的处理人应拒绝：%v", err)
+	}
+	if owners(y.ID).Owner != "secretary" || len(assigned(y.ID)) != 0 {
+		t.Fatalf("拒绝后不应改动：%+v %v", owners(y.ID), assigned(y.ID))
+	}
+	// 甲管得着下属部门 o2；同时改部门到乙的 o2 也行。
+	if _, err := Edit(ctx, db, y.ID, owner("a1"), "secretary"); err != nil || !slices.Equal(assigned(y.ID), []string{"a1"}) {
+		t.Fatalf("交给甲：%v %v", assigned(y.ID), err)
+	}
+	o2 := "o2"
+	if _, err := Edit(ctx, db, y.ID, Patch{Owner: ptr("a2"), Org: &o2}, "secretary"); err != nil || !slices.Equal(assigned(y.ID), []string{"a1", "a2"}) {
+		t.Fatalf("改到 o2 交给乙：%v %v", assigned(y.ID), err)
+	}
+	// 结果改投新处理人；给空串回到派活人。
+	if _, err := Edit(ctx, db, y.ID, owner(""), "secretary"); err != nil || owners(y.ID) != (Parties{"secretary", "secretary"}) {
+		t.Fatalf("空串回到派活人：%+v %v", owners(y.ID), err)
+	}
+
+	// 草稿：改处理人不唤醒，转待派时才交出去。
+	d, _ := Add(ctx, db, NewTask{Title: "草稿", Draft: true}, "secretary")
+	if _, err := Edit(ctx, db, d.ID, owner("a1"), "secretary"); err != nil || len(assigned(d.ID)) != 0 {
+		t.Fatalf("草稿不唤醒：%v %v", assigned(d.ID), err)
+	}
+	if got, err := Apply(ctx, db, d.ID, Event{Kind: Set, To: Todo}, "secretary", ""); err != nil || got.Org != "o1" ||
+		!slices.Equal(assigned(d.ID), []string{"a1"}) {
+		t.Fatalf("转待派时交给甲：%+v %v %v", got, assigned(d.ID), err)
 	}
 }
 

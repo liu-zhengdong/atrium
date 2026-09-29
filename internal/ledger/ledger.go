@@ -127,13 +127,63 @@ func checkPlace(repo, dir string) error {
 	return nil
 }
 
-// Assignee 纯判定：建好就要唤醒谁去拆活。处理人是负责人（aN）、不是建的人自己，任务没有仓库也没有工作地点、
-// 不是草稿——意思是「交给这位负责人去拆」；返回这位负责人，否则返回空。
-func Assignee(in NewTask, actor string) string {
-	if in.Draft || in.Repo != "" || in.Dir != "" || in.Owner == actor || !api.IsRef(in.Owner, "a") {
+// Assignee 纯判定：这件任务是不是交给负责人去拆——处理人是负责人（aN），不是派活人、也不是操作的人自己，任务待派
+// （todo，草稿不算）、没有仓库也没有工作地点；是就返回这位负责人，否则返回空。
+func Assignee(t Task, p Parties, actor string) string {
+	if t.Status != Todo || t.Repo != "" || t.Dir != "" || p.Owner == actor || p.Owner == p.By || !api.IsRef(p.Owner, "a") {
 		return ""
 	}
-	return in.Owner
+	return p.Owner
+}
+
+// handOver 是建任务、改处理人、草稿转待派共用的一段：t 是改完的样子，p 是改完的派活人与处理人，was 是改之前交给谁去拆
+// （Assignee 的结果，新建为空）。这次新交给负责人去拆时，没部门的落到它负责的那个部门（写回 t.Org），有部门的要在它管辖内
+// （它才动得了），返回要唤醒的负责人；不是新交的返回空。
+func handOver(ctx context.Context, tx *sql.Tx, t *Task, p Parties, was, actor string) (string, error) {
+	who := Assignee(*t, p, actor)
+	if who == "" || who == was {
+		return "", nil
+	}
+	lm, err := org.LeaderMap(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	led := org.Led(lm, who)
+	if t.Org == "" {
+		if len(led) != 1 {
+			return "", api.Usage("--org: 交给 %s 去拆的任务要写归属部门（它负责 %d 个部门：%s）", who, len(led), strings.Join(led, "、"))
+		}
+		t.Org = led[0]
+		return who, nil
+	}
+	ps, err := org.Parents(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	if !org.Scope(ps, lm, who)[t.Org] {
+		return "", api.Usage("--owner: %s 管不到部门 %s（它负责 %d 个部门：%s），交过去它动不了；交给管得着的负责人，或用 --org 改到它负责的部门",
+			who, t.Org, len(led), strings.Join(led, "、")).WithNext("atrium org ls")
+	}
+	return who, nil
+}
+
+// assigned 给交给它去拆的负责人发一条要处理的 task.assigned（who 为空不发）。
+func assigned(ctx context.Context, tx *sql.Tx, t Task, who, actor string) error {
+	if who == "" {
+		return nil
+	}
+	return events.Emit(ctx, tx, events.Event{Kind: events.TaskAssigned, Task: t.ID, Dept: t.Org, Target: who,
+		Body: map[string]any{"title": strings.TrimSpace(t.Title)}, By: actor})
+}
+
+// mustOwner：处理人要是已登记的身份。
+func mustOwner(ctx context.Context, q store.Querier, owner string) error {
+	if ok, err := exists(ctx, q, "identities", owner); err != nil {
+		return err
+	} else if !ok {
+		return api.NotFound("--owner: %s 不存在（应为 u1、secretary 或已登记的 aN）", owner).WithNext("atrium leader ls")
+	}
+	return nil
 }
 
 // DeptRepo 纯判定：派活时任务该带上部门的哪个仓库（repos 是部门自己的仓库），不用补为空。任务没仓库也没工作地点、
@@ -274,39 +324,33 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 			}
 		}
 		if in.Owner != "" {
-			if ok, err := exists(ctx, tx, "identities", in.Owner); err != nil {
-				return err
-			} else if !ok {
-				return api.NotFound("--owner: %s 不存在（应为 u1、secretary 或已登记的 aN）", in.Owner).WithNext("atrium leader ls")
-			}
-		}
-		assignee := Assignee(in, actor)
-		if assignee != "" && in.Org == "" {
-			// 交给负责人的任务落到它负责的部门，它才动得了；负责多个部门时要写明哪个。
-			lm, err := org.LeaderMap(ctx, tx)
-			if err != nil {
+			if err := mustOwner(ctx, tx, in.Owner); err != nil {
 				return err
 			}
-			led := org.Led(lm, assignee)
-			if len(led) != 1 {
-				return api.Usage("--org: 交给 %s 去拆的任务要写归属部门（它负责 %d 个部门：%s）", assignee, len(led), strings.Join(led, "、"))
-			}
-			in.Org = led[0]
 		}
+		view := Task{Title: in.Title, Status: Todo, Org: in.Org, Repo: in.Repo, Dir: in.Dir}
+		if in.Draft {
+			view.Status = Draft
+		}
+		by := in.By
+		if by == "" {
+			by = actor
+		}
+		who, err := handOver(ctx, tx, &view, Parties{By: by, Owner: in.Owner}, "", actor)
+		if err != nil {
+			return err
+		}
+		in.Org = view.Org
 		if in.Draft {
 			if err := roomForDraft(ctx, tx); err != nil {
 				return err
 			}
 		}
-		var err error
-		if id, err = insert(ctx, tx, in, actor); err != nil {
+		if view.ID, err = insert(ctx, tx, in, actor); err != nil {
 			return err
 		}
-		if assignee == "" {
-			return nil
-		}
-		return events.Emit(ctx, tx, events.Event{Kind: events.TaskAssigned, Task: id, Dept: in.Org, Target: assignee,
-			Body: map[string]any{"title": strings.TrimSpace(in.Title)}, By: actor})
+		id = view.ID
+		return assigned(ctx, tx, view, who, actor)
 	})
 	if err != nil {
 		return Task{}, err
@@ -428,11 +472,13 @@ type Patch struct {
 	After    *[]string `json:"after,omitempty"`
 	Source   *Source   `json:"source,omitempty"`
 	Class    *string   `json:"class,omitempty"`
+	// Owner 改处理人（空串回到派活人）；记在 edited 经历里，PartiesOf 取最近一次。
+	Owner *string `json:"owner,omitempty"`
 }
 
 func (p Patch) empty() bool {
 	return p.Title == nil && p.Detail == nil && p.Priority == nil && p.Org == nil && p.Skill == nil &&
-		p.Repo == nil && p.Dir == nil && p.After == nil && p.Source == nil && p.Class == nil
+		p.Repo == nil && p.Dir == nil && p.After == nil && p.Source == nil && p.Class == nil && p.Owner == nil
 }
 
 // Edit 改描述字段与依赖（状态用 Apply）。
@@ -460,18 +506,44 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 		if err != nil {
 			return err
 		}
-		repo, dir := cur.Repo, cur.Dir
+		after := cur
+		if p.Title != nil {
+			after.Title = *p.Title
+		}
 		if p.Repo != nil {
-			repo = *p.Repo
+			after.Repo = *p.Repo
 		}
 		if p.Dir != nil {
-			dir = *p.Dir
+			after.Dir = *p.Dir
 		}
-		if err := checkPlace(repo, dir); err != nil {
+		if err := checkPlace(after.Repo, after.Dir); err != nil {
+			return err
+		}
+		if p.Org != nil {
+			if after.Org = *p.Org; after.Org != "" {
+				if err := mustExist(ctx, tx, "departments", "o", "org", after.Org); err != nil {
+					return err
+				}
+			}
+		}
+		parties, err := PartiesOf(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		next := parties
+		if p.Owner != nil {
+			if next.Owner = *p.Owner; next.Owner == "" {
+				next.Owner = parties.By
+			} else if err := mustOwner(ctx, tx, next.Owner); err != nil {
+				return err
+			}
+		}
+		who, err := handOver(ctx, tx, &after, next, Assignee(cur, parties, actor), actor)
+		if err != nil {
 			return err
 		}
 		if p.Dir != nil {
-			if err := setDir(ctx, tx, id, dir); err != nil {
+			if err := setDir(ctx, tx, id, after.Dir); err != nil {
 				return err
 			}
 		}
@@ -501,13 +573,9 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 		if p.Priority != nil {
 			add("priority", *p.Priority)
 		}
-		if p.Org != nil {
-			if *p.Org != "" {
-				if err := mustExist(ctx, tx, "departments", "o", "org", *p.Org); err != nil {
-					return err
-				}
-			}
-			add("department", store.Null(*p.Org))
+		if after.Org != cur.Org {
+			p.Org = &after.Org // 交给负责人时落到它的部门，也记进经历
+			add("department", store.Null(after.Org))
 		}
 		if p.Skill != nil {
 			if *p.Skill != "" {
@@ -531,7 +599,10 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 			}
 		}
 		body, _ := json.Marshal(p)
-		return Record(ctx, tx, id, "edited", actor, string(body))
+		if err := Record(ctx, tx, id, "edited", actor, string(body)); err != nil {
+			return err
+		}
+		return assigned(ctx, tx, after, who, actor)
 	})
 	if err != nil {
 		return Task{}, err
@@ -611,6 +682,25 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 				return err
 			}
 		}
+		p, err := PartiesOf(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		// 草稿转待派时交给负责人去拆（建成草稿时不唤醒，想清楚了才交）。
+		after := t
+		after.Status = next.Status
+		who, err := handOver(ctx, tx, &after, p, Assignee(t, p, actor), actor)
+		if err != nil {
+			return err
+		}
+		if after.Org != t.Org {
+			if _, err := tx.ExecContext(ctx, `UPDATE tasks SET department = ? WHERE id = ?`, after.Org, id); err != nil {
+				return err
+			}
+		}
+		if err := assigned(ctx, tx, after, who, actor); err != nil {
+			return err
+		}
 		now := store.Now()
 		var finished any
 		if next.Status.Finished() {
@@ -634,10 +724,6 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if next.Status == t.Status && ev.Kind != Land && !accepting {
 			return nil // 只有状态变化、落地推进一步（如已合入等发版）与转入等验收发事件
 		}
-		p, err := PartiesOf(ctx, tx, id)
-		if err != nil {
-			return err
-		}
 		payload := map[string]any{"from": t.Status, "to": next.Status, "stage": next.Stage, "title": t.Title, "event": ev.Kind, "by": actor}
 		if note != "" {
 			payload["note"] = clip(note, 500)
@@ -646,7 +732,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 			payload["accept_by"] = ev.AcceptBy
 			payload["next"] = "atrium task accept " + id
 		}
-		return events.EmitTask(ctx, tx, p.Owner, events.Event{Kind: events.TaskStatus, Task: id, Dept: t.Org, Body: payload, By: actor})
+		return events.EmitTask(ctx, tx, p.Owner, events.Event{Kind: events.TaskStatus, Task: id, Dept: after.Org, Body: payload, By: actor})
 	})
 	if err != nil {
 		return Task{}, err
@@ -656,7 +742,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 }
 
 // PartiesOf 读任务的派活人与处理人：派活人没另记就是建它的身份（u1、secretary、aN，或 gates 这类运行时），
-// 处理人没指定就是派活人。没有建立记录（不经 Add 写进库的）两者都为空，按运行时建的算。
+// 处理人取建立时指定的、改过取最近一次，都没有就是派活人。没有建立记录（不经 Add 写进库的）两者都为空，按运行时建的算。
 func PartiesOf(ctx context.Context, q store.Querier, id string) (Parties, error) {
 	var actor, body string
 	err := q.QueryRowContext(ctx, `SELECT actor, body FROM task_events WHERE task = ? AND kind = 'created' ORDER BY id LIMIT 1`, id).
@@ -675,6 +761,21 @@ func PartiesOf(ctx context.Context, q store.Querier, id string) (Parties, error)
 	}
 	if p.By == "" {
 		p.By = actor
+	}
+	// 处理人改过（task set --owner）以最近一次为准；改成空串是回到派活人。
+	err = q.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'edited' AND instr(body, '"owner":') > 0
+		ORDER BY id DESC LIMIT 1`, id).Scan(&body)
+	if err != nil && !store.IsNotFound(err) {
+		return Parties{}, err
+	}
+	if err == nil {
+		var e Patch
+		if err := json.Unmarshal([]byte(body), &e); err != nil {
+			return Parties{}, fmt.Errorf("%s 的改动记录坏了：%w", id, err)
+		}
+		if e.Owner != nil {
+			p.Owner = *e.Owner
+		}
 	}
 	if p.Owner == "" {
 		p.Owner = p.By

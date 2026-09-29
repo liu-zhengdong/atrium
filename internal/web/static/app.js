@@ -51,24 +51,37 @@ function hashWith(open) {
   return "#" + [page, tab, open].filter(Boolean).join("/");
 }
 
-/* 列表行 */
-function taskRow(r, timeFn = ago) {
+/* 列表行；depth 是在任务树里的层级（缩进），who 缺省用行自带的 */
+function taskRow(r, timeFn = ago, depth = 0, who = r.who) {
   const lead = r.state === "done" ? icon.check : `<span class="dot ${esc(r.state)}"></span>`;
-  return `<div class="row ${["done", "draft", "off"].includes(r.state) ? "done" : ""}" data-task="${esc(r.id)}" tabindex="0">
+  return `<div class="row ${["done", "draft", "off"].includes(r.state) ? "done" : ""}" data-task="${esc(r.id)}" tabindex="0"${depth ? ` style="--d:${Math.min(depth, 4)}"` : ""}>
     ${lead}<div class="title"><span class="id">${esc(r.id)}</span>${esc(r.title)}</div>
-    <div class="who">${esc(r.who)}</div><div class="time num">${esc(timeFn(r.at))}</div></div>`;
+    <div class="who">${esc(who)}</div><div class="time num">${esc(timeFn(r.at))}</div></div>`;
 }
 
-/* 部门任务分三组：没结束的（不加组名）、草稿、三天内结束的 */
+/* 任务树：没结束的子任务都摆出来（卡在哪一件一眼可见）；结束的两件以上折成一行，点开再看。展开状态跨刷新保留。 */
+const ended = r => r.state === "done" || r.state === "off";
+const openKids = new Set();
+function kidRows(kids, depth, key, rowFn) {
+  const done = kids.filter(ended), rest = kids.filter(k => !ended(k));
+  const fold = done.length > 1, open = openKids.has(key);
+  return rest.map(k => rowFn(k, depth)).join("") + (fold
+    ? `<button class="row kfold" data-kids="${esc(key)}" aria-expanded="${open}" style="--d:${Math.min(depth, 4)}"><span class="chev">›</span><div class="title">已结束 ${done.length} 件</div></button>`
+    : "") + (!fold || open ? done.map(k => rowFn(k, depth)).join("") : "");
+}
+function treeRow(r, depth = 0) {
+  return taskRow(r, ago, depth) + (r.kids ? kidRows(r.kids, depth + 1, r.id, treeRow) : "");
+}
+
+/* 部门任务分三组：没结束的（不加组名）、草稿、三天内结束的。按根任务分，子任务跟着根走；组名后的数是根的件数 */
 function taskGroups(rows) {
-  const ended = r => r.state === "done" || r.state === "off";
   const groups = [
     ["", rows.filter(r => r.state !== "draft" && !ended(r))],
     ["草稿", rows.filter(r => r.state === "draft")],
     ["三天内结束", rows.filter(ended)],
   ].filter(g => g[1].length);
   return groups.map(([name, rs]) =>
-    `${name ? `<div class="dept-h group-h"${name === "草稿" ? ' id="drafts"' : ""}>${name}<span class="num">${rs.length}</span></div>` : ""}<div class="rows">${rs.map(r => taskRow(r)).join("")}</div>`).join("");
+    `${name ? `<div class="dept-h group-h"${name === "草稿" ? ' id="drafts"' : ""}>${name}<span class="num">${rs.length}</span></div>` : ""}<div class="rows">${rs.map(r => treeRow(r)).join("")}</div>`).join("");
 }
 /* 今天页脉搏行的「草稿 N」：点开到根部门任务页的草稿组 */
 function draftsLink(n) {
@@ -236,6 +249,17 @@ function traceHTML(d) {
   return out + lines;
 }
 
+/* 抽屉里的上下级与依赖：一节一组行，点一行换成那件任务；和这件不在一个部门的，行尾加部门名 */
+function relHTML(d) {
+  const org = d.task.org;
+  const rel = r => taskRow(r, ago, 0, r.dept && r.dept !== org ? `${r.who ? r.who + " · " : ""}${deptName(r.dept)}` : r.who);
+  const part = (name, rows, note = "") => rows.length ? `<div class="jh"><b>${name}</b>${note ? `<span>${note}</span>` : ""}</div><div class="rows">${rows}</div>` : "";
+  const done = d.kids.filter(r => r.state === "done").length;
+  return part("子任务", kidRows(d.kids, 0, "d:" + d.task.id, r => rel(r)), d.kids.length ? `${done}/${d.kids.length} 完成` : "")
+    + part("要等", d.waits.map(rel).join(""))
+    + part("在等它", d.waiters.map(rel).join(""));
+}
+
 /* 抽屉 */
 let drawerTask = null, liveTimer = null;
 async function openTask(id) {
@@ -255,10 +279,12 @@ function renderTask(d) {
   $("#drawer").innerHTML = `
     <div class="dhead"><span class="id">${esc(t.id)}</span>${d.dept_name ? `<span class="id">· ${esc(d.dept_name)}</span>` : ""}<button class="x" data-close aria-label="关闭">${icon.x}</button></div>
     <div class="dbody">
+      ${d.parent ? `<div class="crumb up"><a href="${esc(hashWith(d.parent.id))}"><span class="id">${esc(d.parent.id)}</span>${esc(d.parent.title)}</a><span>/</span></div>` : ""}
       <h3>${esc(t.title)}</h3>
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
       <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不派活、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
       ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd></dl>`}
+      ${relHTML(d)}
       ${traceHTML(d)}
     </div>`;
   $("#drawer .dbody").scrollTop = keep;
@@ -340,6 +366,12 @@ document.addEventListener("click", e => {
     if (fold.getAttribute("aria-expanded") === "true") { unfolded.delete(k); unfolded.add(k + ":closed"); }
     else { unfolded.add(k); unfolded.delete(k + ":closed"); }
     return renderTask(drawerTask);
+  }
+  const kf = e.target.closest("[data-kids]");
+  if (kf) {
+    const k = kf.dataset.kids;
+    openKids.has(k) ? openKids.delete(k) : openKids.add(k);
+    return kf.closest("#drawer") ? renderTask(drawerTask) : route(true);
   }
   const cmd = e.target.closest("#drawer [data-c]");
   if (cmd) { const k = cmd.dataset.c; unfolded.has(k) ? unfolded.delete(k) : unfolded.add(k); return renderTask(drawerTask); }

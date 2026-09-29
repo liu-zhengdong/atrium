@@ -69,9 +69,56 @@ func TestStepHolder(t *testing.T) {
 		{ledger.Task{Status: ledger.Cancelled}, 0, "off", "取消"},
 	}
 	for _, c := range cases {
-		if step(c.t) != c.step || state(c.t) != c.state || who(c.t) != c.who {
-			t.Errorf("%s/%s：step %d state %s who %s", c.t.Status, c.t.Stage, step(c.t), state(c.t), who(c.t))
+		if step(c.t) != c.step || state(c.t) != c.state || who(c.t, nil) != c.who {
+			t.Errorf("%s/%s：step %d state %s who %s", c.t.Status, c.t.Stage, step(c.t), state(c.t), who(c.t, nil))
 		}
+	}
+	// 没派的写在等谁；别的状态有依赖也不写（排队、在做说明依赖已经完成）。
+	waits := []struct {
+		status  ledger.Status
+		waiting []string
+		who     string
+	}{
+		{ledger.Todo, []string{"t7"}, "等 t7"},
+		{ledger.Todo, []string{"t7", "t9"}, "等 t7、t9"},
+		{ledger.Todo, []string{"t7", "t9", "t12"}, "等 3 件"},
+		{ledger.Queued, []string{"t7"}, "排队"},
+		{ledger.Draft, []string{"t7"}, ""},
+	}
+	for _, c := range waits {
+		if got := who(ledger.Task{Status: c.status}, c.waiting); got != c.who {
+			t.Errorf("%s 等 %v：得到 %q，应为 %q", c.status, c.waiting, got, c.who)
+		}
+	}
+}
+
+func TestNest(t *testing.T) {
+	task := func(id, parent string, created int64) ledger.Task {
+		return ledger.Task{ID: id, Parent: parent, CreatedAt: created}
+	}
+	// 列表按最近变化排：子任务可能排在父任务前面；父任务不在列表里的自成一棵；同一毫秒建的按短号数字（t3 在 t10 前）。
+	tasks := []ledger.Task{task("t5", "t1", 5), task("t1", "", 1), task("t10", "t1", 3), task("t3", "t1", 3), task("t9", "t8", 9), task("t6", "t5", 6), task("t2", "", 2)}
+	rows := make([]Row, len(tasks))
+	for i, x := range tasks {
+		rows[i] = Row{ID: x.ID}
+	}
+	var shape func(rs []Row) string
+	shape = func(rs []Row) string {
+		var parts []string
+		for _, r := range rs {
+			p := r.ID
+			if len(r.Kids) > 0 {
+				p += "(" + shape(r.Kids) + ")"
+			}
+			parts = append(parts, p)
+		}
+		return strings.Join(parts, " ")
+	}
+	if got, want := shape(nest(tasks, rows)), "t1(t3 t10 t5(t6)) t9 t2"; got != want {
+		t.Errorf("得到 %s，应为 %s", got, want)
+	}
+	if got := nest(nil, nil); len(got) != 0 {
+		t.Errorf("空列表：%v", got)
 	}
 }
 
@@ -285,5 +332,72 @@ func TestAsksAccept(t *testing.T) {
 	asks, err := loadAsks(ctx, db, ix)
 	if err != nil || len(asks) != 1 || asks[0].Kind != "accept" || asks[0].ID != id || asks[0].DeptName != "哆啦美" {
 		t.Fatalf("等你验收：%+v %v", asks, err)
+	}
+}
+
+// 部门页把目标和它拆出的子任务排成树，已结束多久的子任务都挂上；抽屉给上级、子任务、要等的、在等它的。
+func TestTaskTree(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	root, _ := org.Add(ctx, db, org.NewDept{Name: "组织"})
+	web, _ := org.Add(ctx, db, org.NewDept{Name: "网页", Parent: root.ID})
+	other, _ := org.Add(ctx, db, org.NewDept{Name: "运行时", Parent: root.ID})
+	add := func(title, dept, parent string, after ...string) ledger.Task {
+		x, err := ledger.Add(ctx, db, ledger.NewTask{Title: title, Org: dept, Parent: parent, After: after}, "u1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	iface := add("接口", other.ID, "")
+	goal := add("目标", web.ID, "")
+	a := add("第一件", web.ID, goal.ID)
+	b := add("第二件", web.ID, goal.ID, a.ID, iface.ID)
+	c := add("第二件的一半", other.ID, b.ID) // 子任务在别的部门，也挂在目标下
+	old := add("早就做完的", web.ID, goal.ID)
+	if _, err := ledger.Apply(ctx, db, old.ID, ledger.Event{Kind: ledger.Set, To: ledger.Done}, "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	db.ExecContext(ctx, `UPDATE tasks SET finished_at = 1 WHERE id = ?`, old.ID) // 早于三天，本身不进列表
+
+	page, err := loadDept(ctx, db, t.TempDir(), web.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tasks) != 1 || page.Tasks[0].ID != goal.ID {
+		t.Fatalf("部门页应只有一棵以目标为根的树：%+v", page.Tasks)
+	}
+	kids := page.Tasks[0].Kids
+	if len(kids) != 3 || kids[0].ID != a.ID || kids[1].ID != b.ID || kids[2].ID != old.ID || kids[2].State != "done" {
+		t.Fatalf("子任务按建立先后，含早就结束的：%+v", kids)
+	}
+	if kids[1].Who != "等 "+iface.ID+"、"+a.ID || len(kids[1].Kids) != 1 || kids[1].Kids[0].ID != c.ID {
+		t.Errorf("第二件等两件、下面挂着别的部门的一半：%+v", kids[1])
+	}
+
+	d, err := loadTask(ctx, db, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := func(rs []Row) (out []string) {
+		for _, r := range rs {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+	if d.Parent == nil || d.Parent.ID != goal.ID || !reflect.DeepEqual(ids(d.Kids), []string{c.ID}) ||
+		!reflect.DeepEqual(ids(d.Waits), []string{iface.ID, a.ID}) || len(d.Waiters) != 0 {
+		t.Errorf("第二件的抽屉：%+v", d)
+	}
+	d, err = loadTask(ctx, db, iface.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Parent != nil || len(d.Kids) != 0 || len(d.Waits) != 0 || !reflect.DeepEqual(ids(d.Waiters), []string{b.ID}) {
+		t.Errorf("接口的抽屉：%+v", d)
 	}
 }

@@ -1,11 +1,13 @@
 package leaders
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
@@ -81,7 +83,7 @@ func TestRuleFor(t *testing.T) {
 		"POST /api/tasks/{id}/notes":        RuleTaskRef,
 		"POST /api/tasks/{id}/run":          RuleTaskRef,
 		"POST /api/org":                     RuleDeny,
-		"PATCH /api/org/{id}":               RuleDeny,
+		"PATCH /api/org/{id}":               RuleDeptIntro,
 		"POST /api/org/{id}/points":         RuleDeptRef,
 		"POST /api/org/{id}/materials":      RuleDeptRef,
 		"PATCH /api/points/{id}":            RulePointRef,
@@ -103,6 +105,38 @@ func TestRuleFor(t *testing.T) {
 	for p, want := range cases {
 		if got := RuleFor(p); got != want {
 			t.Errorf("RuleFor(%q) = %d，应为 %d", p, got, want)
+		}
+	}
+}
+
+func TestIntroOnly(t *testing.T) {
+	cases := []struct {
+		body map[string]any
+		ok   bool
+	}{
+		{map[string]any{"next": "x"}, true},
+		{map[string]any{"what": "x", "uses": "y", "now": "z", "next": "w"}, true},
+		{map[string]any{}, true}, // 空请求体由处理函数报「没有要改的字段」
+		{map[string]any{"next": "x", "name": "改名"}, false},
+		{map[string]any{"leader": "a1"}, false},
+		{map[string]any{"parent": "o1"}, false},
+		{map[string]any{"accept": "auto"}, false},
+		{map[string]any{"repo_add": []any{"r"}}, false},
+		{map[string]any{"repo_rm": []any{"r"}}, false},
+		{map[string]any{"delete": true}, false},
+		{map[string]any{"delete": false}, false}, // 按键名判，不看值
+		{map[string]any{"name": ""}, false},
+		{map[string]any{"Leader": "a1"}, false}, // 解码不分大小写，键名要逐字相同
+		{map[string]any{"NEXT": "x"}, false},
+	}
+	for _, c := range cases {
+		err := IntroOnly(c.body)
+		if (err == nil) != c.ok {
+			t.Errorf("%v：%v", c.body, err)
+		}
+		var ae *api.Error
+		if err != nil && (!errors.As(err, &ae) || ae.Status != 403 || !strings.Contains(ae.Message, "只归秘书和用户")) {
+			t.Errorf("%v：拒绝要 403 且说明只归秘书和用户：%v", c.body, err)
 		}
 	}
 }

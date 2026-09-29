@@ -114,7 +114,14 @@ func TestLeaderGuard(t *testing.T) {
 		{"本部门加要点", "POST", "/api/org/o2/points", map[string]string{"text": "单实例"}, "ok"},
 		{"上级加要点", "POST", "/api/org/o1/points", map[string]string{"text": "x"}, "forbidden"},
 		{"改上级要点", "PATCH", "/api/points/k1", map[string]string{"text": "x"}, "forbidden"},
-		{"改部门本身", "PATCH", "/api/org/o2", map[string]string{"now": "x"}, "forbidden"},
+		{"改本部门介绍", "PATCH", "/api/org/o2", map[string]string{"what": "w", "uses": "u", "now": "n", "next": "下一步"}, "ok"},
+		{"改上级部门介绍", "PATCH", "/api/org/o1", map[string]string{"next": "x"}, "forbidden"},
+		{"改别处部门介绍", "PATCH", "/api/org/o3", map[string]string{"next": "x"}, "forbidden"},
+		// 下面几条若被放行会改掉 o2，彼此连带；按「放行后破坏最小」排，头一条漏判就能看出来。
+		{"介绍里夹改名", "PATCH", "/api/org/o2", map[string]string{"next": "x", "name": "改名"}, "forbidden"},
+		{"删本部门", "PATCH", "/api/org/o2", map[string]any{"delete": true}, "forbidden"},
+		{"改负责人（大写键名）", "PATCH", "/api/org/o2", map[string]string{"Leader": "a1"}, "forbidden"},
+		{"改本部门负责人", "PATCH", "/api/org/o2", map[string]string{"leader": "a1"}, "forbidden"},
 		{"建部门", "POST", "/api/org", map[string]string{"name": "x"}, "forbidden"},
 		{"登记负责人", "POST", "/api/leaders", map[string]any{"name": "x", "workers": []string{"c"}}, "forbidden"},
 		{"写自己的备忘", "PUT", "/api/memo", map[string]string{"body": "下次先看 t1"}, "ok"},
@@ -140,6 +147,21 @@ func TestLeaderGuard(t *testing.T) {
 		if c.want == "forbidden" && errors.As(err, &ae) && !strings.Contains(ae.Next, "leader escalate") && ae.Next != "" {
 			t.Errorf("%s：越权提示应指向上交：%q", c.name, ae.Next)
 		}
+	}
+	// 介绍真改上了，别的字段没动；上级负责人改下属部门介绍放行。
+	d, err := org.Get(ctx, env.DB, "o2")
+	if err != nil || d.Next != "下一步" || d.Name != "运行时" || d.Leader != "a2" {
+		t.Fatalf("o2 应只改了介绍：%+v %v", d, err)
+	}
+	tok1, _ := h.issue("a1")
+	a1 := &api.Client{Base: srv.URL, Token: tok1}
+	if err := a1.Do(ctx, "PATCH", "/api/org/o2", map[string]string{"next": "上级写的"}, &d); err != nil || d.Next != "上级写的" {
+		t.Fatalf("上级负责人改下属部门介绍：%+v %v", d, err)
+	}
+	// 被拒时说明该字段只归秘书和用户。
+	var ae *api.Error
+	if err := a2.Do(ctx, "PATCH", "/api/org/o2", map[string]string{"name": "x"}, nil); !errors.As(err, &ae) || !strings.Contains(ae.Message, "只归秘书和用户") {
+		t.Fatalf("改名被拒要说明归属：%v", err)
 	}
 	// 用户令牌不受影响。
 	if err := user.Do(ctx, "POST", "/api/tasks/t2/notes", map[string]string{"text": "x"}, nil); err != nil {

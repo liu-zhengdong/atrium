@@ -123,6 +123,11 @@ func collect(ctx context.Context, db *store.DB, rule Rule, q *api.Req, body map[
 		}
 	case RuleDeptRef:
 		checks = append(checks, Check{What: "部门", Dept: id})
+	case RuleDeptIntro:
+		if err := IntroOnly(body); err != nil {
+			return nil, err
+		}
+		checks = append(checks, Check{What: "部门", Dept: id})
 	case RulePointRef:
 		err = lookup("要点", "points")
 	case RuleMaterialRef:

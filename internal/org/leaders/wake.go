@@ -328,6 +328,14 @@ func leaderEnv(base map[string]string, token, data string) map[string]string {
 
 func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []int64) (string, error) {
 	in := PromptInput{Leader: who}
+	ps, err := org.Parents(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	lm, err := org.LeaderMap(ctx, q)
+	if err != nil {
+		return "", err
+	}
 	for _, d := range who.Depts {
 		dept, err := org.Get(ctx, q, d)
 		if err != nil {
@@ -343,6 +351,13 @@ func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []i
 		if b.Materials, err = MaterialsOverview(ctx, q, d); err != nil {
 			return "", err
 		}
+		for _, c := range org.Covered(ps, lm, d) {
+			sub, err := org.Get(ctx, q, c)
+			if err != nil {
+				return "", err
+			}
+			b.Covered = append(b.Covered, sub)
+		}
 		in.Depts = append(in.Depts, b)
 	}
 	memo, err := org.GetMemo(ctx, q, who.ID)
@@ -351,14 +366,6 @@ func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []i
 	}
 	in.Memo = memo.Body
 	if in.Events, err = eventRows(ctx, q, ids); err != nil {
-		return "", err
-	}
-	ps, err := org.Parents(ctx, q)
-	if err != nil {
-		return "", err
-	}
-	lm, err := org.LeaderMap(ctx, q)
-	if err != nil {
 		return "", err
 	}
 	in.Upstream = Upstream(ps, lm, who.ID, "")

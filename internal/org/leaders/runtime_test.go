@@ -281,7 +281,10 @@ func TestWake(t *testing.T) {
 		return s
 	}
 
-	// 成功：处理完确认，令牌随即作废；提示词带部门、要点链、事件。
+	// 成功：处理完确认，令牌随即作废；提示词带部门、要点链、事件，以及没登记负责人的下属。
+	if _, err := org.Add(ctx, env.DB, org.NewDept{Name: "网页", Parent: "o2"}); err != nil {
+		t.Fatal(err)
+	}
 	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act})
 	round()
 	if f.calls.Load() != 1 || h.fails["a2"] != 0 {
@@ -289,7 +292,8 @@ func TestWake(t *testing.T) {
 	}
 	l := f.seen[0]
 	if l.Profile != "fake" || l.Env["ATRIUM_WORKER"] != "" || l.Env["ATRIUM_DATA"] != env.Paths.Data ||
-		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "投给 a1") {
+		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "投给 a1") ||
+		!strings.Contains(l.Prompt, "也归你管的下属部门：o4 网页") {
 		t.Fatalf("唤醒输入不对：%+v", l)
 	}
 	if _, ok := h.auth(l.Env["ATRIUM_LEADER_TOKEN"]); ok {

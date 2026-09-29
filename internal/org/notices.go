@@ -76,7 +76,8 @@ func ScanNotices(ctx context.Context, q store.Querier) (emit []LimitNotice, clea
 		if err != nil {
 			return nil, nil, err
 		}
-		add(id, Nearest(ps, leaders, id, ""), counts)
+		owner, _ := Nearest(ps, leaders, id, "")
+		add(id, owner, counts)
 	}
 	return emit, clear, nil
 }

@@ -131,7 +131,8 @@ func Upstream(parents, leaders map[string]string, who, dept string) string {
 		}
 		start = led[0]
 	}
-	return org.Nearest(parents, leaders, start, who)
+	up, _ := org.Nearest(parents, leaders, start, who)
+	return up
 }
 
 // Event 是提示词里的一条事件。
@@ -144,12 +145,14 @@ type Event struct {
 	Body string `json:"body,omitempty"`
 }
 
-// DeptBrief 是提示词里负责的一个部门：人话字段、路径、要点链、资料总览。
+// DeptBrief 是提示词里负责的一个部门：人话字段、路径、要点链、资料总览，
+// 以及没登记负责人、因而也归你管的下属部门（org.Covered）。
 type DeptBrief struct {
 	Dept      org.Dept
 	Path      []string
 	Chain     []org.Point
 	Materials string
+	Covered   []org.Dept
 }
 
 // PromptInput 是一次唤醒提示词的全部材料。
@@ -192,6 +195,13 @@ func Prompt(in PromptInput) string {
 			for _, o := range org.PointsOver(d.Chain) {
 				w("- （%s）", o)
 			}
+		}
+		if len(d.Covered) > 0 {
+			subs := make([]string, len(d.Covered))
+			for i, c := range d.Covered {
+				subs[i] = c.ID + " " + c.Name
+			}
+			w("没登记负责人、也归你管的下属部门：%s", strings.Join(subs, "、"))
 		}
 		if d.Materials != "" {
 			w("资料总览：")

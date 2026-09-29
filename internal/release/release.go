@@ -209,7 +209,7 @@ func (r *Releaser) online(ctx context.Context, t ledger.Task) error {
 		_, err := gates.Block(ctx, r.DB, t.ID, "上线失败（"+r.Current+" 只读冒烟没过）："+*r.smoked)
 		return err
 	}
-	if _, err := ledger.Apply(ctx, r.DB, t.ID, ledger.Event{Kind: ledger.Released}, Actor, "已上线（"+r.Current+"）"); err != nil {
+	if _, err := ledger.Apply(ctx, r.DB, t.ID, ledger.Event{Kind: ledger.Land, Land: ledger.StageReleased, Final: true}, Actor, "已上线（"+r.Current+"）"); err != nil {
 		return err
 	}
 	return ledger.Record(ctx, r.DB, t.ID, "online", Actor, r.Current)

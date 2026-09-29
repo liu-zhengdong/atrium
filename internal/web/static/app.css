@@ -83,7 +83,7 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .ask:hover{background:var(--hover)}
 .ask .kind{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none}
 .ask .kind svg{width:16px;height:16px}
-.ask.choose .kind{background:var(--wait-soft);color:var(--wait)}
+.ask.choose .kind,.ask.accept .kind{background:var(--wait-soft);color:var(--wait)}
 .ask.stuck .kind{background:var(--bad-soft);color:var(--bad)}
 .ask.escalate .kind{background:var(--wait-soft);color:var(--wait)}
 .ask .t{font-weight:500}

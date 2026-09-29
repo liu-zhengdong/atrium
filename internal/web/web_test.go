@@ -59,6 +59,7 @@ func TestStepHolder(t *testing.T) {
 		{ledger.Task{Status: ledger.Running}, 1, "run", "在做"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageGate}, 2, "run", "验收中"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageReview}, 2, "run", "审阅中"},
+		{ledger.Task{Status: ledger.Running, Stage: ledger.StageAccept}, 2, "run", "等验收"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageMerge}, 3, "run", "合入队列"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageMerged}, 4, "run", "等发版"},
 		{ledger.Task{Status: ledger.Done, Stage: ledger.StageReleased}, 5, "done", "已上线"},
@@ -250,5 +251,39 @@ func TestRoutes(t *testing.T) {
 	}
 	if res := get("/", ""); res.StatusCode != 200 || !strings.Contains(res.Header.Get("Content-Security-Policy"), "script-src") && !strings.Contains(res.Header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Errorf("首页：%d", res.StatusCode)
+	}
+}
+
+// 等你验收：只列验收人是你的；负责人验收的归负责人。
+func TestAsksAccept(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mine, _ := org.Add(ctx, db, org.NewDept{Name: "哆啦美"})
+	theirs, _ := org.Add(ctx, db, org.NewDept{Name: "管家"})
+	user, leader := org.AcceptUser, org.AcceptLeader
+	org.Edit(ctx, db, mine.ID, org.DeptPatch{Accept: &user})
+	org.Edit(ctx, db, theirs.ID, org.DeptPatch{Accept: &leader})
+	waiting := func(dept, by string) string {
+		task, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "交付", Org: dept}, "u1")
+		for _, ev := range []ledger.Event{{Kind: ledger.Enqueue}, {Kind: ledger.Start}, {Kind: ledger.ExitOK}, {Kind: ledger.GatePass, AcceptBy: by}} {
+			if _, err := ledger.Apply(ctx, db, task.ID, ev, "runtime", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return task.ID
+	}
+	id := waiting(mine.ID, user)
+	waiting(theirs.ID, leader)
+	ix, err := loadOrg(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asks, err := loadAsks(ctx, db, ix)
+	if err != nil || len(asks) != 1 || asks[0].Kind != "accept" || asks[0].ID != id || asks[0].DeptName != "哆啦美" {
+		t.Fatalf("等你验收：%+v %v", asks, err)
 	}
 }

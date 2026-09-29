@@ -351,17 +351,27 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 	return GetChoice(ctx, db, id)
 }
 
-// Settle 是调研任务完成时的钩子（gates 在判过关卡后调）：raw 是工作目录根 choice.json 的内容（关卡读出来，远程经代理），
-// 登记成选项单，挂在任务的部门下。没有这个文件（raw 为 nil）返回 nil；不合法返回错误（写明哪一栏），调用方把它当关卡不过交回执行者修。
-func Settle(ctx context.Context, db *store.DB, task string, raw []byte) (*Choice, error) {
-	if raw == nil {
-		return nil, nil
-	}
+// ParseChoice 解析并核对调研任务交的 choice.json（关卡用它判过不过，登记在落地时经 Settle）。
+// 不合法返回 usage 错误（写明哪一栏），调用方把它当关卡不过交回执行者修。
+func ParseChoice(raw []byte) (ChoiceInput, error) {
 	var in ChoiceInput
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return nil, api.Usage("%s 不合法：%v", ChoiceFile, err)
+		return in, api.Usage("%s 不合法：%v", ChoiceFile, err)
+	}
+	return in, CheckChoice(in)
+}
+
+// Settle 是 choice 交付方式的落地（gates 在验收或关卡过了之后调）：raw 是工作目录根 choice.json 的内容（远程经代理读），
+// 登记成选项单，挂在任务的部门下。没有这个文件（raw 为 nil）返回 nil；不合法返回 usage 错误。
+func Settle(ctx context.Context, db *store.DB, task string, raw []byte) (*Choice, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	in, err := ParseChoice(raw)
+	if err != nil {
+		return nil, err
 	}
 	t, err := ledger.Get(ctx, db, task)
 	if err != nil {

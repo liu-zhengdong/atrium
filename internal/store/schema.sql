@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS department_repos (
   PRIMARY KEY (department, repo)
 );
 
+-- 验收人：部门级设置，沿树继承；没有这一行就继承上级，都没设为 auto（运行时）。
+-- 单独一张表而不是 departments 的一列：建表语句对旧库也生效，加列不会。
+CREATE TABLE IF NOT EXISTS acceptors (
+  department TEXT PRIMARY KEY REFERENCES departments (id),
+  who        TEXT NOT NULL CHECK (who IN ('auto', 'leader', 'user'))
+);
+
 -- 要点：一句规矩；同部门按 pos（1 起）排序，靠前的优先。
 CREATE TABLE IF NOT EXISTS points (
   id         TEXT PRIMARY KEY,

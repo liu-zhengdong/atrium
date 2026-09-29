@@ -273,6 +273,7 @@ type DeptPatch struct {
 	Now      *string  `json:"now,omitempty"`
 	Next     *string  `json:"next,omitempty"`
 	Leader   *string  `json:"leader,omitempty"`
+	Accept   *string  `json:"accept,omitempty"` // 验收人 auto、leader、user；"-" 改回继承上级
 	RepoAdd  []string `json:"repo_add,omitempty"`
 	RepoDrop []string `json:"repo_rm,omitempty"`
 	Delete   bool     `json:"delete,omitempty"`
@@ -280,7 +281,7 @@ type DeptPatch struct {
 
 func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, error) {
 	none := p.Name == nil && p.Parent == nil && p.What == nil && p.Uses == nil && p.Now == nil && p.Next == nil &&
-		p.Leader == nil && len(p.RepoAdd) == 0 && len(p.RepoDrop) == 0
+		p.Leader == nil && p.Accept == nil && len(p.RepoAdd) == 0 && len(p.RepoDrop) == 0
 	switch {
 	case p.Delete && !none:
 		return Dept{}, api.Usage("--delete: 不和别的字段一起给")
@@ -344,6 +345,11 @@ func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, erro
 		args = append(args, id)
 		if _, err := tx.ExecContext(ctx, `UPDATE departments SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
 			return err
+		}
+		if p.Accept != nil {
+			if err := setAcceptor(ctx, tx, id, *p.Accept); err != nil {
+				return err
+			}
 		}
 		for _, r := range p.RepoDrop {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM department_repos WHERE department = ? AND repo = ?`, id, r); err != nil {

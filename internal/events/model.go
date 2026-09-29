@@ -42,7 +42,7 @@ type Delivery struct {
 	Level  string
 }
 
-// Result 判断任务事件是不是结果：完成、已合入、失败、受阻（卡住、交回超过次数、上线失败都转受阻）。
+// Result 判断任务事件是不是结果：完成、落地推进一步（如已合入等发版）、失败、受阻（卡住、交回超过次数、上线失败都转受阻）。
 // 其余（入队、拉起、交回一次、取消、改回 todo）是过程。
 func Result(kind string, body any) bool {
 	if kind != TaskStatus {
@@ -52,17 +52,26 @@ func Result(kind string, body any) bool {
 	case "done", "failed", "blocked":
 		return true
 	}
-	return field(body, "stage") == "merged"
+	return field(body, "event") == "land"
 }
 
 // Route 纯函数：任务事件投给谁、什么级别。owner 是处理人（task add --owner，缺省派活的人），
 // leader 是部门往上最近的负责人（没有为空）。
+//   - 等验收（accept_by）投验收人，要处理：user 经秘书投给用户，leader 投部门负责人（没有投秘书）。
 //   - 结果投给处理人，要处理：用户与秘书都投秘书（用户经秘书会话收），负责人投自己；
 //     运行时建的（审阅任务等）按部门找负责人、没有投秘书，成功由运行时自己接着走，只有失败、受阻要处理。
 //   - 负责人不是收结果的那位时，另收一份知会（不叫醒）；过程事件只知会负责人，没有负责人就不投。
 func Route(owner, leader, kind string, body any) []Delivery {
 	to, level := owner, Act
+	accept := field(body, "accept_by")
 	switch {
+	case accept == "user":
+		to = Secretary
+	case accept != "":
+		to = leader
+		if to == "" {
+			to = Secretary
+		}
 	case owner == "u1" || owner == Secretary:
 		to = Secretary
 	case api.IsRef(owner, "a"):
@@ -73,7 +82,7 @@ func Route(owner, leader, kind string, body any) []Delivery {
 		}
 	}
 	var out []Delivery
-	if Result(kind, body) {
+	if accept != "" || Result(kind, body) {
 		out = append(out, Delivery{to, level})
 	} else {
 		to = ""

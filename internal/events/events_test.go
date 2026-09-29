@@ -82,7 +82,11 @@ func TestRoute(t *testing.T) {
 		// 结果：处理人要处理，负责人（不是处理人时）知会。
 		{"用户处理·合入·有负责人", "u1", "a1", st("done", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
 		{"用户处理·合入·无负责人", "u1", "", st("done", "merged"), []d{{Secretary, Act}}},
-		{"秘书处理·等上线的已合入", Secretary, "a1", st("running", "merged"), []d{{Secretary, Act}, {"a1", Info}}},
+		{"秘书处理·等上线的已合入", Secretary, "a1", map[string]any{"to": "running", "stage": "merged", "event": "land"}, []d{{Secretary, Act}, {"a1", Info}}},
+		// 等验收：投验收人，要处理；负责人另收知会。
+		{"等用户验收·有负责人", "a1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "user"}, []d{{Secretary, Act}, {"a1", Info}}},
+		{"等负责人验收", "u1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "leader"}, []d{{"a1", Act}}},
+		{"等负责人验收·没有负责人投秘书", "u1", "", map[string]any{"to": "running", "stage": "accept", "accept_by": "leader"}, []d{{Secretary, Act}}},
 		{"秘书处理·上线", Secretary, "a1", st("done", "released"), []d{{Secretary, Act}, {"a1", Info}}},
 		{"秘书处理·失败·无负责人", Secretary, "", st("failed", ""), []d{{Secretary, Act}}},
 		{"负责人处理·受阻·本部门", "a1", "a1", st("blocked", "merge_queue"), []d{{"a1", Act}}},

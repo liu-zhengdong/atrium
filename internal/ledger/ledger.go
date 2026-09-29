@@ -468,16 +468,21 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if err := Record(ctx, tx, id, string(ev.Kind), actor, string(body)); err != nil {
 			return err
 		}
-		if next.Status == t.Status && (next.Stage != StageMerged || t.Stage == StageMerged) {
-			return nil // 只有状态变化与转入已合入发事件
+		accepting := next.Stage == StageAccept && t.Stage != StageAccept
+		if next.Status == t.Status && ev.Kind != Land && !accepting {
+			return nil // 只有状态变化、落地推进一步（如已合入等发版）与转入等验收发事件
 		}
 		p, err := PartiesOf(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		payload := map[string]any{"from": t.Status, "to": next.Status, "stage": next.Stage, "title": t.Title}
+		payload := map[string]any{"from": t.Status, "to": next.Status, "stage": next.Stage, "title": t.Title, "event": ev.Kind}
 		if note != "" {
 			payload["note"] = clip(note, 500)
+		}
+		if accepting {
+			payload["accept_by"] = ev.AcceptBy
+			payload["next"] = "atrium task accept " + id
 		}
 		return events.EmitTask(ctx, tx, p.Owner, events.Event{Kind: events.TaskStatus, Task: id, Dept: t.Org, Body: payload, By: actor})
 	})

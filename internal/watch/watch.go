@@ -119,6 +119,11 @@ func FactsOf(ctx context.Context, q store.Querier, t ledger.Task) (Facts, error)
 	if f.Owner, err = org.Recipient(ctx, q, t.Org); err != nil {
 		return f, err
 	}
+	if t.Stage == ledger.StageAccept {
+		if f.Acceptor, _, err = org.Acceptor(ctx, q, t.Org); err != nil {
+			return f, err
+		}
+	}
 	if t.Status == ledger.Todo {
 		deps, err := ledger.Deps(ctx, q, t.ID)
 		if err != nil {

@@ -26,7 +26,7 @@ func step(t ledger.Task) int {
 		return 0
 	}
 	switch t.Stage {
-	case ledger.StageGate, ledger.StageReview:
+	case ledger.StageGate, ledger.StageReview, ledger.StageAccept:
 		return 2
 	case ledger.StageMerge:
 		return 3
@@ -105,6 +105,8 @@ func who(t ledger.Task) string {
 		return "验收中"
 	case ledger.StageReview:
 		return "审阅中"
+	case ledger.StageAccept:
+		return "等验收"
 	case ledger.StageMerge:
 		return "合入队列"
 	case ledger.StageMerged:

@@ -306,14 +306,13 @@ func TestMergeHosts(t *testing.T) {
 }
 
 func TestLinesAndSpare(t *testing.T) {
-	now := int64(1_800_000_000_000)
 	f := func(v float64) *float64 { return &v }
 	builtin := map[string]Line{
 		"claude": {Pace: Pace{Account: "claude", UsedPercent: f(50), SparePercent: f(10)}, Source: "builtin"},
 		"codex":  {Pace: Pace{Account: "codex"}, Source: "builtin", Note: "读不到：没有找到 Codex 登录"},
 	}
 	oq := []Pace{{Account: "codex", UsedPercent: f(90), SparePercent: f(-5)}, {Account: "kimi", UsedPercent: f(10), SparePercent: f(30)}, {Account: "claude", UsedPercent: f(1)}}
-	lines := Lines(builtin, oq, map[string]Hold{"kimi": {Until: now + 1, Reason: "额度用尽"}, "grok": {Until: now - 1}}, now)
+	lines := Lines(builtin, oq)
 	var order []string
 	byAcct := map[string]Line{}
 	for _, l := range lines {
@@ -326,16 +325,16 @@ func TestLinesAndSpare(t *testing.T) {
 	if byAcct["claude"].Source != "builtin" || byAcct["codex"].Source != "openquota" || byAcct["codex"].Note != "自带读不到：没有找到 Codex 登录" {
 		t.Errorf("来源：%+v %+v", byAcct["claude"], byAcct["codex"])
 	}
-	if byAcct["grok"].Hold != nil || byAcct["kimi"].Hold == nil || byAcct["cursor"].Note != "没有额度数据" {
-		t.Error("标记或缺数据行不对")
+	if byAcct["cursor"].Note != "没有额度数据" {
+		t.Error("缺数据行不对")
 	}
-	// 富余就是 quota 一览里那一行的富余（同一个数）；能不能派另看用尽标记与给用户留的份额。
+	// 富余就是 quota 一览里那一行的富余（同一个数）；能不能派另看给用户留的份额。
 	cases := []struct {
 		acct  string
 		spare *float64
 		stop  string
 	}{{"claude", f(10), ""}, {"codex", f(-5), "额度见底：账号 codex 已用 90.0%，须给用户留 20%"},
-		{"kimi", f(30), "额度用尽：额度用尽"}, {"cursor", nil, ""}}
+		{"kimi", f(30), ""}, {"cursor", nil, ""}}
 	for _, c := range cases {
 		s := SpareOf(byAcct[c.acct], 20)
 		if !reflect.DeepEqual(s.Percent, c.spare) || s.Percent != byAcct[c.acct].SparePercent || s.Stop != c.stop {
@@ -393,9 +392,6 @@ func TestRecordAndRead(t *testing.T) {
 	if n != 1 {
 		t.Errorf("换账号后应只剩 1 行，得 %d", n)
 	}
-	if err := SetHold(ctx, db, "codex", now+60_000, "额度用尽：codex"); err != nil {
-		t.Fatal(err)
-	}
 	db.Exec(`INSERT INTO quota_settings (name, value) VALUES ('reserve_percent', 50)`)
 	ov, err := Read(ctx, db)
 	if err != nil {
@@ -405,30 +401,28 @@ func TestRecordAndRead(t *testing.T) {
 	for _, l := range ov.Lines {
 		spares[l.Account] = SpareOf(l, ov.Reserve)
 	}
-	if ov.Reserve != 50 || spares["claude"].Stop != "" || spares["codex"].Stop == "" || spares["claude"].Stale {
+	if ov.Reserve != 50 || spares["claude"].Stop != "" || spares["claude"].Stale {
 		t.Fatalf("%+v %+v", ov, spares)
 	}
-	if !strings.Contains(Format(ov, now), "claude") {
+	if !strings.Contains(Format(ov), "claude") {
 		t.Error("Format")
 	}
 }
 
 func TestFormatNoData(t *testing.T) {
 	used := 40.0
-	now := int64(1_000_000)
 	ov := Overview{Reserve: 20, Lines: []Line{
 		{Pace: Pace{Account: "claude", UsedPercent: &used}},
 		{Pace: Pace{Account: "kimi"}},
 		{Pace: Pace{Account: "grok"}, Note: "没登录"},
-		{Pace: Pace{Account: "codex"}, Hold: &Hold{Until: now + 1}},
 	}}
-	out := Format(ov, now)
+	out := Format(ov)
 	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 		if strings.TrimSpace(l) == "" || strings.TrimSpace(l) == "kimi" {
 			t.Errorf("不该有空行或只有账号名的行：\n%s", out)
 		}
 	}
-	if !strings.Contains(out, "没有额度数据：kimi、grok（没登录）") || !strings.Contains(out, "codex") {
-		t.Errorf("没数据的应汇成一行、有用尽标记的照列：\n%s", out)
+	if !strings.Contains(out, "没有额度数据：kimi、grok（没登录）") || !strings.Contains(out, "claude") {
+		t.Errorf("没数据的应汇成一行：\n%s", out)
 	}
 }

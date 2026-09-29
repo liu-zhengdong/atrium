@@ -282,6 +282,20 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
   updated_at INTEGER NOT NULL
 );
 
+-- 执行者不可用标记：「工具+模型@机器」此刻接不了活（额度用尽、没登录、模型名无效），挑执行者与机器时跳过。
+-- model 为空表示这台上这个工具的全部模型；until 为 0 等人处理（workers --clear），否则到点自动恢复。
+CREATE TABLE IF NOT EXISTS worker_marks (
+  tool     TEXT NOT NULL,
+  model    TEXT NOT NULL,
+  host     TEXT NOT NULL,
+  kind     TEXT NOT NULL,
+  reason   TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  until    INTEGER NOT NULL,
+  since    INTEGER NOT NULL,
+  PRIMARY KEY (tool, model, host)
+);
+
 -- 待投递事件：订阅者 wait 取、ack 确认；租约内不重投。target 是投递对象（aN 或 secretary）。
 -- level：act 要处理、info 知会。key 是去重键：同一 target 同一 key 还没取走、没确认的合并成一条（count 加一）。
 CREATE TABLE IF NOT EXISTS events (
@@ -309,14 +323,6 @@ CREATE TABLE IF NOT EXISTS quota_cache (
   tool    TEXT NOT NULL,
   body    TEXT NOT NULL,
   read_at INTEGER NOT NULL
-);
-
--- 额度用尽标记：到期前派活避开这个账号；quota --clear 人工解除。
-CREATE TABLE IF NOT EXISTS quota_holds (
-  account TEXT PRIMARY KEY,
-  until   INTEGER NOT NULL,
-  reason  TEXT NOT NULL,
-  since   INTEGER NOT NULL
 );
 
 -- 额度设置：reserve_percent 是给用户留的份额（缺省 20）。

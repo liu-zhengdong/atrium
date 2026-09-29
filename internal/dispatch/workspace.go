@@ -13,6 +13,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/platform"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // TaskDir 是任务目录：提示词、日志、工作树都在这里。
@@ -49,8 +50,8 @@ func RemoteRepo(ctx context.Context, repo string) (string, error) {
 }
 
 // hostNeed 是这件活对机器的要求：仓库按远程的写法比对机器登记的仓库；本机克隆换算不出 origin、有工作地点（本机文件夹）就只派本机。
-func hostNeed(ctx context.Context, tool string, t ledger.Task) HostNeed {
-	n := HostNeed{Tool: tool, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}
+func hostNeed(ctx context.Context, w workers.Spec, t ledger.Task) HostNeed {
+	n := HostNeed{Tool: w.Tool, Model: w.Model, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}
 	if t.Dir != "" {
 		n.LocalOnly = "工作地点 " + t.Dir + " 是本机文件夹"
 	} else if repo, err := RemoteRepo(ctx, t.Repo); err != nil {

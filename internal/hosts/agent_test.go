@@ -305,22 +305,30 @@ func TestReconnectReconcile(t *testing.T) {
 	}
 }
 
-// 执行者报没登录后标记这台的这个工具：挑机器不再派给它。
-func TestMarkLoggedOut(t *testing.T) {
+// 这台上标了不可用的「工具+模型」：挑机器不再派给它，同一工具的别的模型照派；到期的不算。
+func TestPickSkipsMarked(t *testing.T) {
 	g := newRig(t)
 	a, stop, _ := g.agent(t.TempDir())
 	defer stop()
 	ctx := context.Background()
 	host := a.Cfg.Host
-	if err := MarkLoggedOut(ctx, g.env.DB, host, "grok"); err != nil {
-		t.Fatal(err)
+	now := time.Now()
+	for _, m := range []workers.Mark{
+		{Tool: "grok", Model: "grok-4.6", Host: host, Kind: workers.SignalQuota, Reason: "额度用尽", Until: now.Add(time.Hour).UnixMilli(), Since: now.UnixMilli()},
+		{Tool: "grok", Model: "grok-old", Host: host, Kind: workers.SignalQuota, Reason: "额度用尽", Until: now.Add(-time.Minute).UnixMilli(), Since: now.UnixMilli()},
+	} {
+		if err := workers.SetMark(ctx, g.env.DB, m); err != nil {
+			t.Fatal(err)
+		}
 	}
-	c, err := Pick(ctx, g.env, Need{Tool: "grok"}, host)
-	if err != nil || c.Kind != "refuse" || c.Reason != host+" 上的 grok 没登录" {
+	c, err := Pick(ctx, g.env, Need{Tool: "grok", Model: "grok-4.6"}, host)
+	if err != nil || c.Kind != "refuse" || !strings.HasPrefix(c.Reason, host+" 上的 grok+grok-4.6 不可用：额度用尽，") {
 		t.Fatalf("%+v %v", c, err)
 	}
-	if err := MarkLoggedOut(ctx, g.env.DB, "h9", "grok"); err == nil {
-		t.Error("没有的机器应报错")
+	for _, model := range []string{"grok-5", "grok-old"} {
+		if c, err := Pick(ctx, g.env, Need{Tool: "grok", Model: model}, host); err != nil || c.Kind == "refuse" {
+			t.Errorf("%s 不该被挡：%+v %v", model, c, err)
+		}
 	}
 }
 

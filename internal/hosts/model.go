@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 纯判定：连接状态、能不能接、挑哪台、日志续传、重连对账、参数校验。不碰数据库、网络与进程。
@@ -110,6 +111,7 @@ type Candidate struct {
 	Conn    Conn
 	Paused  bool
 	CLIs    map[string]CLI // 远程上报的编码 CLI；本机为 nil（挑执行者时已判过装没装）
+	Marks   []workers.Mark // 此刻有效的不可用标记（各台的都在，workers.Blocked 按机器筛）
 	Repos   []string       // 自动派活能接的仓库（owner/name，* 为全部）；指定 --host 不看
 	Running int
 	Max     int    // 同时最多跑几个；0 不限
@@ -119,6 +121,7 @@ type Candidate struct {
 // Need 是一件活对机器的要求。
 type Need struct {
 	Tool   string `json:"tool"`
+	Model  string `json:"model,omitempty"`
 	Repo   string `json:"repo"` // owner/name；没有仓库为空
 	Urgent bool   `json:"urgent"`
 	// LocalOnly 非空时只能在本机跑（远程拿不到这个仓库），写原因。
@@ -169,6 +172,9 @@ func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) 
 		if cli.LoggedIn != nil && !*cli.LoggedIn {
 			return false, false, fmt.Sprintf("%s 上的 %s 没登录", c.ID, n.Tool)
 		}
+	}
+	if m, ok := workers.Blocked(c.Marks, n.Tool, n.Model, c.ID); ok {
+		return false, false, fmt.Sprintf("%s 上的 %s 不可用：%s", c.ID, workers.Spec{Tool: n.Tool, Model: n.Model}, m.Text())
 	}
 	if c.Kind == "remote" && !pinned && !RepoAllowed(c.Repos, n.Repo) {
 		if n.Repo == "" {

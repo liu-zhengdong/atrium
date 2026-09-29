@@ -200,7 +200,7 @@ func (d *dispatcher) try(ctx context.Context, it item) error {
 	if err != nil || wait {
 		return err
 	}
-	choice, err := pickHost(ctx, d.env, hostNeed(ctx, w.Spec.Tool, t), it.Opts.Host)
+	choice, err := pickHost(ctx, d.env, hostNeed(ctx, w.Spec, t), it.Opts.Host)
 	if err != nil {
 		return err
 	}
@@ -318,6 +318,10 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	if err != nil {
 		return PickView{}, err
 	}
+	marks, err := workers.Marks(ctx, db, store.Now())
+	if err != nil {
+		return PickView{}, err
+	}
 	var facts []Fact
 	seen := map[string]bool{}
 	for i, id := range append(slices.Clone(preferred), catalog...) {
@@ -338,7 +342,12 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 		seen[r.ID] = true
 		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk), Installed: workers.Installed(r.Adapter),
-			LoggedOut: loggedOut[r.Spec.Tool], Exclusive: r.Adapter.Exclusive}
+			Exclusive: r.Adapter.Exclusive}
+		if m, ok := workers.Blocked(marks, r.Spec.Tool, r.Spec.Model, LocalHost); ok {
+			f.Unavailable = "本机不可用：" + m.Text()
+		} else if loggedOut[r.Spec.Tool] {
+			f.Unavailable = "没登录：本机的 " + r.Spec.Tool + " 没登录（atrium host ls " + LocalHost + "）"
+		}
 		if i < len(preferred) {
 			f.Preferred = i + 1
 		}
@@ -806,15 +815,11 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	session := p.adapter.SessionOf(head)
 	route := RouteExit(ExitInput{Code: code, Signal: sig, Ending: p.adapter.Ended(tail), StopFor: p.stopReason(),
 		Same: same, Switches: switches, Pending: len(pending), CanResume: p.adapter.CanResume() && session != ""})
+	marked, err := markUnavailable(ctx, db, p.run, sig)
+	if err != nil {
+		return err
+	}
 	if sig.Kind == workers.SignalQuota {
-		until := sig.ResetAt
-		if until == 0 {
-			until = time.Now().Add(time.Hour).UnixMilli()
-		}
-		w, _ := workers.ParseWorker(p.run.Worker)
-		if err := setHold(ctx, db, accountOf(w.Tool), until, sig.Reason); err != nil {
-			return err
-		}
 		raw, _ := json.Marshal(sig)
 		if err := ledger.Record(ctx, db, p.task, "quota_exhausted", actor, string(raw)); err != nil {
 			return err
@@ -829,14 +834,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	if sig.Evidence != "" {
 		note += "（" + sig.Evidence + "）"
 	}
-	if sig.Kind == workers.SignalLogin {
-		w, _ := workers.ParseWorker(p.run.Worker)
-		host := cmp.Or(p.run.Host, LocalHost)
-		if err := markLoggedOut(ctx, db, host, w.Tool); err != nil {
-			return err
-		}
-		note += "；已标记 " + host + " 上的 " + w.Tool + " 没登录，登录后重连代理（本机重启服务）即恢复"
-	}
+	note += marked
 	apply := func(kind ledger.EventKind, why string) error {
 		_, err := ledger.Apply(ctx, db, p.task, ledger.Event{Kind: kind}, actor, why)
 		if err != nil && isAPI(err) {
@@ -849,7 +847,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.ExitOK, note)
 	case "fail":
 		return apply(ledger.ExitFail, note)
-	case "requeue": // 重新挑执行者与机器，避开刚标的
+	case "requeue": // 重新挑执行者与机器，避开刚标的不可用
 		if err := apply(ledger.ExitFail, note); err != nil {
 			return err
 		}
@@ -883,8 +881,8 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 			err = api.Conflict("能换的执行者都正忙")
 		}
 		o.Why = workers.WhySwitch
-		if err == nil && o.Host == "" {
-			o.Host = LocalHost
+		if err == nil {
+			o.Host, err = d.switchHost(ctx, t, o.W.Spec, cmp.Or(p.run.Host, LocalHost))
 		}
 	}
 	if err == nil {
@@ -897,6 +895,36 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.ExitFail, note+"；重新拉起失败："+err.Error())
 	}
 	return ledger.Note(ctx, db, p.task, actor, "执行者退出："+note+"；已重新拉起（"+o.Why+"，"+o.W.ID+"）")
+}
+
+// markUnavailable 按退出信号把这一轮的「工具+模型@机器」标成不可用，返回写进任务备注的一句；不是可用性信号返回空。
+func markUnavailable(ctx context.Context, db *store.DB, run workers.Run, sig workers.Signal) (string, error) {
+	w, err := workers.ParseWorker(run.Worker)
+	if err != nil {
+		return "", err
+	}
+	m, ok := workers.MarkOf(sig, w, cmp.Or(run.Host, LocalHost), time.Now())
+	if !ok {
+		return "", nil
+	}
+	if err := workers.SetMark(ctx, db, m); err != nil {
+		return "", err
+	}
+	return "；已标记 " + m.Target() + " 不可用（" + m.Text() + "）", nil
+}
+
+// switchHost 给换上的执行者挑机器：上一轮那台能接就留在那台（工作目录在那里），否则另挑；都接不了报冲突。
+func (d *dispatcher) switchHost(ctx context.Context, t ledger.Task, w workers.Spec, prev string) (string, error) {
+	need := hostNeed(ctx, w, t)
+	c, err := pickHost(ctx, d.env, need, prev)
+	if err != nil || c.Kind == "run" {
+		return c.Host, err
+	}
+	why := c.Reason
+	if c, err = pickHost(ctx, d.env, need, ""); err != nil || c.Kind == "run" {
+		return c.Host, err
+	}
+	return "", api.Conflict("没有机器能接 %s：%s；%s", w, why, c.Reason)
 }
 
 func readHead(path string, n int) (string, error) {

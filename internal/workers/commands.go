@@ -35,6 +35,7 @@ type Row struct {
 	Layers    []string `json:"layers"`
 	Record    Record   `json:"record"`
 	Problem   string   `json:"problem,omitempty"`
+	Marks     []Mark   `json:"marks,omitempty"` // 哪几台上此刻不可用
 }
 
 // Detail 是 workers <名字> 的内容：给执行者标识看叠加结果，给档案名看原文。
@@ -42,6 +43,7 @@ type Detail struct {
 	Resolved *Resolved `json:"resolved,omitempty"`
 	Profile  *Profile  `json:"profile,omitempty"`
 	Record   *Record   `json:"record,omitempty"`
+	Marks    []Mark    `json:"marks,omitempty"`
 }
 
 // Catalog 列可派的执行者：combos 档案里的组合在前（按名字），再是各工具只写工具名（内置按固定顺序，通用命令行执行者随后）。
@@ -128,6 +130,10 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 	if err != nil {
 		return nil, err
 	}
+	marks, err := Marks(ctx, q, store.Now())
+	if err != nil {
+		return nil, err
+	}
 	out := []Row{}
 	seen := map[string]bool{}
 	for _, id := range ids {
@@ -145,7 +151,7 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 		}
 		seen[r.ID] = true
 		out = append(out, Row{ID: r.ID, Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(),
-			Installed: Installed(r.Adapter), Layers: r.Layers, Record: recs[r.ID]})
+			Installed: Installed(r.Adapter), Layers: r.Layers, Record: recs[r.ID], Marks: marksOf(marks, r.Spec)})
 	}
 	// 账本里有记录、目录里没有的执行者（写死过的组合）也列出来，交付事实不丢。
 	var extra []string
@@ -156,9 +162,21 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 	}
 	sort.Strings(extra)
 	for _, w := range extra {
-		out = append(out, Row{ID: w, Record: recs[w], Problem: "不在目录里（写死派过）"})
+		s, _ := ParseWorker(w)
+		out = append(out, Row{ID: w, Record: recs[w], Problem: "不在目录里（写死派过）", Marks: marksOf(marks, s)})
 	}
 	return out, nil
+}
+
+// marksOf 是挡住这个执行者的标记（各台机器上的）。
+func marksOf(marks []Mark, s Spec) []Mark {
+	var out []Mark
+	for _, m := range marks {
+		if m.Tool == s.Tool && (m.Model == "" || m.Model == s.Model) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Show 是 workers <名字>：档案名（含 /）给原文，否则按执行者标识给叠加结果。
@@ -181,8 +199,12 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
+	marks, err := Marks(ctx, q, store.Now())
+	if err != nil {
+		return Detail{}, err
+	}
 	rec := recs[r.ID]
-	return Detail{Resolved: &r, Record: &rec}, nil
+	return Detail{Resolved: &r, Record: &rec, Marks: marksOf(marks, r.Spec)}, nil
 }
 
 func asAPI(err error, target **api.Error) bool {
@@ -201,6 +223,22 @@ func Routes(r *api.Router, env *app.Env) {
 			return Show(q.Context(), env.DB, name)
 		}
 		return List(q.Context(), env.DB)
+	})
+	r.Handle("POST /api/workers/clear", func(q *api.Req) (any, error) {
+		var in struct {
+			Target string `json:"target"`
+		}
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		n, err := ClearMarks(q.Context(), env.DB, in.Target)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, api.NotFound("%s 没有不可用标记", in.Target).WithNext("atrium workers")
+		}
+		return map[string]any{"target": in.Target, "cleared": n}, nil
 	})
 	r.Handle("POST /api/workers/edit", func(q *api.Req) (any, error) {
 		var in struct {
@@ -222,8 +260,9 @@ func Routes(r *api.Router, env *app.Env) {
 func Commands(t *cli.Table) {
 	t.Group("workers", "执行者：可派的组合、档案与交付事实")
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
-		Summary: "列执行者（组合、信任、交付事实）；给名字看叠加后的档案或一层原文；给 层/名 加 --file/--set/--unset/--delete 改档案",
+		Summary: "列执行者（组合、信任、交付事实、哪台上不可用）；给名字看叠加后的档案或一层原文；给 层/名 加 --file/--set/--unset/--delete 改档案；--clear 解除不可用标记",
 		Flags: []cli.Flag{
+			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、模型名无效）；没写模型或机器就解除这个工具在全部模型或机器上的"},
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
 			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：trust=medium、checks=[pr_exists]）"},
 			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
@@ -232,6 +271,22 @@ func Commands(t *cli.Table) {
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(1); err != nil {
 				return err
+			}
+			if c.Has("clear") {
+				if err := c.MaxArgs(0); err != nil {
+					return err
+				}
+				target := c.Str("clear")
+				if target == "" {
+					return api.Usage("--clear: 不能为空")
+				}
+				var out struct {
+					Cleared int `json:"cleared"`
+				}
+				if err := c.Call("POST", "/api/workers/clear", map[string]any{"target": target}, &out); err != nil {
+					return err
+				}
+				return c.Done(out, fmt.Sprintf("已解除 %s 的 %d 条不可用标记", target, out.Cleared), "atrium workers")
 			}
 			if c.Has("file") || c.Has("set") || c.Has("unset") || c.Bool("delete") {
 				name, err := c.Arg(0, "<层/名>")
@@ -258,6 +313,7 @@ func Commands(t *cli.Table) {
 					inst = "  没装"
 				}
 				fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s%s  %s\n", r.ID, r.Trust, r.MaxRisk, inst, recordLine(r.Record))
+				writeMarks(&b, r.Marks)
 			}
 			return c.Done(rows, b.String(), "atrium workers <执行者>")
 		}})
@@ -309,6 +365,7 @@ func showCmd(c *cli.Ctx, name string) error {
 	r := d.Resolved
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s\n", r.ID, r.Rules.EffectiveTrust(), r.Rules.EffectiveMaxRisk())
+	writeMarks(&b, d.Marks)
 	if r.CLIModel != "" {
 		fmt.Fprintf(&b, "交给工具的模型：%s\n", r.CLIModel)
 	}
@@ -331,6 +388,17 @@ func showCmd(c *cli.Ctx, name string) error {
 	}
 	next := "atrium task run <tN> --worker " + r.ID
 	return c.Done(d, b.String(), next)
+}
+
+// writeMarks 在执行者下面一台一行写不可用标记。
+func writeMarks(b *strings.Builder, marks []Mark) {
+	for _, m := range marks {
+		fmt.Fprintf(b, "  不可用 %s：%s", m.Target(), m.Text())
+		if m.Evidence != "" {
+			fmt.Fprintf(b, "（%s）", m.Evidence)
+		}
+		b.WriteString("\n")
+	}
 }
 
 func recordLine(r Record) string {

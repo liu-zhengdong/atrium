@@ -12,18 +12,18 @@ import (
 
 // Fact 是一位候选执行者的事实（运行时收集）。
 type Fact struct {
-	ID        string
-	Tool      string
-	Model     string
-	Account   string
-	Trust     string
-	MaxRisk   string
-	Refusal   string // 档案接不接这个风险（workers.Rules.Refusal）
-	Problem   string // 档案写得不对、模型与强度不搭
-	Installed bool
-	LoggedOut bool // 本机标了没登录
-	Exclusive bool
-	Preferred int // 技能里的优先顺序（1 起）；0 不是
+	ID          string
+	Tool        string
+	Model       string
+	Account     string
+	Trust       string
+	MaxRisk     string
+	Refusal     string // 档案接不接这个风险（workers.Rules.Refusal）
+	Problem     string // 档案写得不对、模型与强度不搭
+	Installed   bool
+	Unavailable string // 本机上接不了活的原因：不可用标记（workers.Blocked）或看出没登录
+	Exclusive   bool
+	Preferred   int // 技能里的优先顺序（1 起）；0 不是
 }
 
 // PickInput 是挑执行者的全部输入。
@@ -72,7 +72,7 @@ func NeedTrust(priority ledger.Priority, risk string) (min, why string) {
 	return "", ""
 }
 
-// Pick 挑执行者（纯函数）：档案能接、装了、本机没标没登录、trust 够活的分量（NeedTrust）、额度没见底、没被标用尽；
+// Pick 挑执行者（纯函数）：档案能接、装了、本机没标不可用、trust 够活的分量（NeedTrust）、额度没见底；
 // 能接的按技能优先、额度富余排（没有富余数据的排在有的后面，之间按档案顺序）；正忙的跳过。
 func Pick(in PickInput) PickView {
 	minTrust, heavy := NeedTrust(in.Priority, in.Risk)
@@ -92,8 +92,8 @@ func Pick(in PickInput) PickView {
 		if !f.Installed {
 			c.Refusals = append(c.Refusals, "没装："+f.Tool+" 不在 PATH 上")
 		}
-		if f.LoggedOut {
-			c.Refusals = append(c.Refusals, "没登录：本机的 "+f.Tool+" 没登录（atrium host ls h1）")
+		if f.Unavailable != "" {
+			c.Refusals = append(c.Refusals, f.Unavailable)
 		}
 		if f.Refusal != "" {
 			c.Refusals = append(c.Refusals, f.Refusal)

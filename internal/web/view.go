@@ -195,22 +195,18 @@ func slots(h hosts.Host) int {
 }
 
 // account 把一行额度写成页面上的一条：剩多少、什么时候重置或为什么没读数。
-func account(l quota.Line, now int64) Account {
+func account(l quota.Line) Account {
 	a := Account{Name: l.Account}
 	if l.UsedPercent != nil {
 		left := int(math.Round(100 - *l.UsedPercent))
 		a.Left = &left
 	}
 	var notes []string
-	switch {
-	case l.Hold != nil && l.Hold.Until > now:
-		notes = append(notes, "用尽，暂不派")
-	case l.HoursToReset != nil:
-		h := *l.HoursToReset
-		if h < 24 {
-			notes = append(notes, fmt.Sprintf("%.0f 小时后重置", math.Max(1, math.Round(h))))
+	if h := l.HoursToReset; h != nil {
+		if *h < 24 {
+			notes = append(notes, fmt.Sprintf("%.0f 小时后重置", math.Max(1, math.Round(*h))))
 		} else {
-			notes = append(notes, fmt.Sprintf("%.0f 天后重置", math.Round(h/24)))
+			notes = append(notes, fmt.Sprintf("%.0f 天后重置", math.Round(*h/24)))
 		}
 	}
 	if l.Stale {

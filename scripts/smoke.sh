@@ -268,7 +268,6 @@ out=$(json host edit h1 --rm || true); has '.error.code == "conflict"'
 out=$(json host edit h2 --rm); has '.ok'
 wait "$agentpid" || fail "移除后代理应以 0 退出：$(cat "$work/agent.out")"
 grep -q "令牌已失效" "$work/agent.out" || fail "代理没报令牌失效：$(cat "$work/agent.out")"
-out=$(json quota --clear kimi || true); has '.error.code == "not_found"'
 
 step "workers / task run / log（通用命令行执行者：sh 当假执行者）"
 cat >"$work/fakesh.md" <<'MD'
@@ -406,6 +405,28 @@ out=$(json task add 视频第一帧黑 --dir "$vidb" --skill video); vb=$(jq -r 
 json task run "$vb" --worker fakewrite >/dev/null
 out=$(json task wait "$vb" --timeout 120); has '.result.task.status == "blocked"'
 out=$(json task show "$vb"); has '.result.history|map(select(.kind == "bounce"))[0].body|test("video：out/demo.mp4 的第一帧是空白")'
+
+step "执行者可用性：假执行者报模型名无效 → 标记「工具@机器」、重新排队 → workers 看得到、挑执行者跳过 → --clear 解除"
+cat >"$work/fakemodel.md" <<'MD'
+---
+protocol: cli
+command: sh
+args: ["-c", "sleep 2; echo 'invalid model selection (--model \"x\" --effort \"\")'; exit 1", "{prompt}"]
+---
+MD
+out=$(json workers harness/fakemodel --file "$work/fakemodel.md"); has '.ok'
+out=$(json org add 可用性演练 --parent o1); av_org=$(jq -r .result.id <<<"$out")
+out=$(json task add 模型名无效 --org "$av_org"); av=$(jq -r .result.id <<<"$out")
+json task run "$av" --worker fakemodel >/dev/null
+out=$(json pause --org "$av_org"); has '.ok'   # 重新排队后不再拉起：自动挑人可能挑到本机真实工具
+for _ in $(seq 50); do out=$(json workers fakemodel); jq -e '(.result.marks // [])|length == 1' >/dev/null <<<"$out" && break; sleep 0.2; done
+has '.result.marks[0].host == "h1" and .result.marks[0].kind == "model" and .result.marks[0].until == 0'
+out=$(json task show "$av"); has '.result.task.status == "queued" and (.result.history|map(.body // "")|join(" ")|contains("已标记 fakemodel@h1 不可用"))'
+out=$(json workers); has '(.result|map(select(.id == "fakemodel"))|.[0].marks|length) == 1'
+out=$(json task run "$av" --dry-run); has '.result.pick.candidates|map(select(.id == "fakemodel"))|.[0]|(.eligible|not) and (.refusals|join("")|contains("本机不可用：模型名无效"))'
+out=$(json workers --clear fakemodel@h1); has '.result.cleared == 1'
+out=$(json workers --clear fakemodel@h1 || true); has '.error.code == "not_found"'
+out=$(json workers --clear "bad tool" || true); has '.error.code == "usage" and (.error.message|startswith("--clear:"))'
 
 step "stop"
 out=$(json stop); has '.result.stopped'

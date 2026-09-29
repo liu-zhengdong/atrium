@@ -1,8 +1,8 @@
 // Package quota 是额度：自带读取 Claude Code、Codex、OpenCode Go 的用量（读本机已登录凭据调供应商用量接口，只读），
 // 其余账号本机有 OpenQuota 就用 `openquota pace --json` 补；远程机器上报的读数按账号指纹合并。
-// 读数存 quota_cache；给用户留的份额（缺省 20%）扣掉后才算富余；额度用尽标记到期前不派。
+// 读数存 quota_cache；给用户留的份额（缺省 20%）扣掉后才算富余。「工具+模型@机器」撞了额度的标记在 workers。
 //
-// 给 dispatch：Spares(ctx, env) → 账号 → 富余。给 watch：SetHold(...) 记额度用尽。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
+// 给 dispatch：Spares(ctx, env) → 账号 → 富余。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
 package quota
 
 import (
@@ -169,35 +169,6 @@ func stored(ctx context.Context, q store.Querier) ([]Stored, error) {
 	return out, rows.Err()
 }
 
-// SetHold 记额度用尽：到 until 之前派活避开这个账号（watch 在执行者报额度用尽时调）。
-func SetHold(ctx context.Context, q store.Querier, account string, until int64, reason string) error {
-	if !isAccount(account) {
-		return api.Usage("不认识的额度账号 %q", account)
-	}
-	_, err := q.ExecContext(ctx, `INSERT INTO quota_holds (account, until, reason, since) VALUES (?, ?, ?, ?)
-		ON CONFLICT (account) DO UPDATE SET until = excluded.until, reason = excluded.reason, since = excluded.since`,
-		account, until, reason, store.Now())
-	return err
-}
-
-func holds(ctx context.Context, q store.Querier) (map[string]Hold, error) {
-	rows, err := q.QueryContext(ctx, `SELECT account, until, reason FROM quota_holds ORDER BY account LIMIT 100`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]Hold{}
-	for rows.Next() {
-		var a string
-		var h Hold
-		if err := rows.Scan(&a, &h.Until, &h.Reason); err != nil {
-			return nil, err
-		}
-		out[a] = h
-	}
-	return out, rows.Err()
-}
-
 // Reserve 是给用户留的份额（百分比）。
 func Reserve(ctx context.Context, q store.Querier) (int, error) {
 	var v int
@@ -252,10 +223,6 @@ func Read(ctx context.Context, db *store.DB) (Overview, error) {
 	if err != nil {
 		return Overview{}, err
 	}
-	h, err := holds(ctx, db)
-	if err != nil {
-		return Overview{}, err
-	}
 	reserve, err := Reserve(ctx, db)
 	if err != nil {
 		return Overview{}, err
@@ -269,11 +236,11 @@ func Read(ctx context.Context, db *store.DB) (Overview, error) {
 		ov.Notes = append(ov.Notes, "自带读取已关（ATRIUM_QUOTA_READERS=off）")
 	}
 	now := store.Now()
-	ov.Lines = Lines(mergeHosts(all, LocalHost, now), oq, h, now)
+	ov.Lines = Lines(mergeHosts(all, LocalHost, now), oq)
 	return ov, nil
 }
 
-// Spares 给派活：每个账号的富余（已扣给用户留的份额、额度用尽标记）。
+// Spares 给派活：每个账号的富余（已扣给用户留的份额）。
 func Spares(ctx context.Context, env *app.Env) (map[string]Spare, error) {
 	ov, err := Read(ctx, env.DB)
 	if err != nil {
@@ -291,8 +258,7 @@ func Spares(ctx context.Context, env *app.Env) (map[string]Spare, error) {
 func Module() app.Module { return app.Module{Name: "quota", Commands: Commands, Routes: Routes} }
 
 type setBody struct {
-	Clear   string `json:"clear,omitempty"`
-	Reserve *int   `json:"reserve,omitempty"`
+	Reserve *int `json:"reserve,omitempty"`
 }
 
 func Routes(r *api.Router, env *app.Env) {
@@ -306,18 +272,6 @@ func Routes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		ctx := q.Context()
-		if b.Clear != "" {
-			if !isAccount(b.Clear) {
-				return nil, api.Usage("--clear: 不认识的账号 %q（可选 %s）", b.Clear, strings.Join(Accounts, "、"))
-			}
-			res, err := env.DB.ExecContext(ctx, `DELETE FROM quota_holds WHERE account = ?`, b.Clear)
-			if err != nil {
-				return nil, err
-			}
-			if n, _ := res.RowsAffected(); n == 0 {
-				return nil, api.NotFound("账号 %s 没有额度用尽标记", b.Clear).WithNext("atrium quota")
-			}
-		}
 		if b.Reserve != nil {
 			if *b.Reserve < 0 || *b.Reserve > 90 {
 				return nil, api.Usage("--reserve: 应为 0 到 90 的整数，收到 %d", *b.Reserve)
@@ -332,9 +286,8 @@ func Routes(r *api.Router, env *app.Env) {
 }
 
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "quota", Summary: "各账号额度与富余；--clear 人工解除额度用尽标记",
+	t.Add(cli.Command{Path: "quota", Summary: "各账号额度与富余（撞了额度的「工具+模型@机器」见 atrium workers）",
 		Flags: []cli.Flag{
-			{Name: "clear", Value: "账号", Help: "解除这个账号的额度用尽标记"},
 			{Name: "reserve", Value: "百分比", Help: "给用户留的份额（缺省 20），派活扣掉后才算富余"},
 		},
 		Run: func(c *cli.Ctx) error {
@@ -342,37 +295,24 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			var ov Overview
-			if c.Has("clear") || c.Has("reserve") {
-				b := setBody{Clear: c.Str("clear")}
-				if c.Has("reserve") {
-					n, err := c.Int("reserve", 0)
-					if err != nil {
-						return err
-					}
-					b.Reserve = &n
+			if c.Has("reserve") {
+				n, err := c.Int("reserve", 0)
+				if err != nil {
+					return err
 				}
-				if c.Has("clear") && b.Clear == "" {
-					return api.Usage("--clear: 不能为空")
-				}
+				b := setBody{Reserve: &n}
 				if err := c.Call("POST", "/api/quota", b, &ov); err != nil {
 					return err
 				}
 			} else if err := c.Call("GET", "/api/quota", nil, &ov); err != nil {
 				return err
 			}
-			return c.Done(ov, Format(ov, store.Now()), "atrium workers")
+			return c.Done(ov, Format(ov), "atrium workers")
 		}})
 }
 
-func or(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}
-
 // Format 是 quota 的人读输出：有数据的一行一个账号，没有数据的汇成一行。
-func Format(ov Overview, now int64) string {
+func Format(ov Overview) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "给用户留 %d%%；富余 = 周期已过 − 已用\n", ov.Reserve)
 	pct := func(p *float64) string {
@@ -383,8 +323,7 @@ func Format(ov Overview, now int64) string {
 	}
 	var none []string // 没有额度数据的账号，汇成一行
 	for _, l := range ov.Lines {
-		held := l.Hold != nil && l.Hold.Until > now
-		if l.UsedPercent == nil && !held {
+		if l.UsedPercent == nil {
 			if l.Note != "" {
 				none = append(none, l.Account+"（"+l.Note+"）")
 			} else {
@@ -393,25 +332,18 @@ func Format(ov Overview, now int64) string {
 			continue
 		}
 		fmt.Fprintf(&b, "%-12s", l.Account)
-		if l.UsedPercent == nil {
-			fmt.Fprintf(&b, "%s", or(l.Note, "没有额度数据"))
-		} else {
-			fmt.Fprintf(&b, "已用 %s  富余 %s  短窗 %s", pct(l.UsedPercent), pct(l.SparePercent), pct(l.ShortUsedPct))
-			if l.Plan != "" {
-				fmt.Fprintf(&b, "  %s", l.Plan)
-			}
-			if l.Stale {
-				b.WriteString("  旧数")
-			}
-			if l.Source == "openquota" {
-				b.WriteString("  来自 OpenQuota")
-			}
-			if l.Note != "" {
-				fmt.Fprintf(&b, "  （%s）", l.Note)
-			}
+		fmt.Fprintf(&b, "已用 %s  富余 %s  短窗 %s", pct(l.UsedPercent), pct(l.SparePercent), pct(l.ShortUsedPct))
+		if l.Plan != "" {
+			fmt.Fprintf(&b, "  %s", l.Plan)
 		}
-		if held {
-			fmt.Fprintf(&b, "  额度用尽，%s 恢复", time.UnixMilli(l.Hold.Until).Format("01-02 15:04"))
+		if l.Stale {
+			b.WriteString("  旧数")
+		}
+		if l.Source == "openquota" {
+			b.WriteString("  来自 OpenQuota")
+		}
+		if l.Note != "" {
+			fmt.Fprintf(&b, "  （%s）", l.Note)
 		}
 		b.WriteString("\n")
 	}

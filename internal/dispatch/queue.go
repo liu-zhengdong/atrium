@@ -141,6 +141,37 @@ func depGate(deps []ledger.DepState) (waiting []string, broken *ledger.DepState)
 	return waiting, nil
 }
 
+// openStatuses 是没结束的状态（完成、失败、取消之外）。
+var openStatuses = []ledger.Status{ledger.Draft, ledger.Todo, ledger.Queued, ledger.Running, ledger.Blocked}
+
+// childGate 纯判定：父任务只是容器，还有没结束的子任务（open，新的在前）就不派它自己。
+// 下一步给最早一件能派的子任务（todo、failed、blocked）；都在排队、在跑或是草稿时看任务树。
+func childGate(id string, open []ledger.Task) error {
+	if len(open) == 0 {
+		return nil
+	}
+	next := ""
+	var parts []string
+	for i := len(open) - 1; i >= 0; i-- {
+		c := open[i]
+		if len(parts) < 5 {
+			parts = append(parts, c.ID+" "+string(c.Status))
+		}
+		if next == "" && (c.Status == ledger.Todo || c.Status == ledger.Failed || c.Status == ledger.Blocked) {
+			next = "atrium task run " + c.ID
+		}
+	}
+	if next == "" {
+		next = "atrium task tree " + id
+	}
+	list := strings.Join(parts, "、")
+	if len(open) > len(parts) {
+		list += " 等"
+	}
+	return api.Conflict("%s 还有 %d 件子任务没结束（%s）：父任务只是容器，不派给执行者；派子任务，子任务都结束后用 task set %s --status done 收尾",
+		id, len(open), list, id).WithNext(next)
+}
+
 var brokenLabel = map[ledger.Status]string{ledger.Failed: "失败了", ledger.Cancelled: "已取消"}
 
 // Enqueue 是 task run：核对选项、进派活队列（依赖还没完成的也进，完成后才派）。写死的执行者当场核对档案能不能接，免得排到时才报错。
@@ -157,6 +188,13 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 	// 先核对能不能派，免得排队中的任务被覆盖了队列行、再在下面 Apply 被拒时连行删掉。
 	if _, err := ledger.Transition(ledger.State{Status: t.Status, Stage: t.Stage}, ledger.Event{Kind: ledger.Enqueue}); err != nil {
 		return t, api.Conflict("%s：%v", id, err).WithNext("atrium task show " + id)
+	}
+	kids, err := ledger.List(ctx, db, ledger.Filter{Parent: id, Status: openStatuses, Limit: 500})
+	if err != nil {
+		return t, err
+	}
+	if err := childGate(id, kids); err != nil {
+		return t, err
 	}
 	deps, err := ledger.Deps(ctx, db, id)
 	if err != nil {

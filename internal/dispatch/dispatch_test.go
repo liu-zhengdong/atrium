@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -287,6 +289,33 @@ func TestDepGate(t *testing.T) {
 		}
 		if !slices.Equal(waiting, c.waiting) || got != c.broken {
 			t.Errorf("%s：waiting=%v broken=%q，应为 %v %q", name, waiting, got, c.waiting, c.broken)
+		}
+	}
+}
+
+func TestChildGate(t *testing.T) {
+	kid := func(id string, s ledger.Status) ledger.Task { return ledger.Task{ID: id, Status: s} }
+	for name, c := range map[string]struct {
+		open []ledger.Task // 新的在前（与 ledger.List 一致）
+		next string        // 空表示放行
+		text string
+	}{
+		"没有子任务":          {nil, "", ""},
+		"派最早一件能派的子任务":    {[]ledger.Task{kid("t9", ledger.Todo), kid("t8", ledger.Running), kid("t7", ledger.Blocked)}, "atrium task run t7", "3 件子任务没结束（t7 blocked、t8 running、t9 todo）"},
+		"失败的子任务也能再派":     {[]ledger.Task{kid("t8", ledger.Failed), kid("t7", ledger.Queued)}, "atrium task run t8", "t7 queued、t8 failed"},
+		"都在排队、在跑或草稿看任务树": {[]ledger.Task{kid("t8", ledger.Draft), kid("t7", ledger.Running)}, "atrium task tree t1", "task set t1 --status done"},
+		"多了只列前五件":        {[]ledger.Task{kid("t7", ledger.Todo), kid("t6", ledger.Todo), kid("t5", ledger.Todo), kid("t4", ledger.Todo), kid("t3", ledger.Todo), kid("t2", ledger.Todo)}, "atrium task run t2", "6 件子任务没结束（t2 todo、t3 todo、t4 todo、t5 todo、t6 todo 等）"},
+	} {
+		err := childGate("t1", c.open)
+		if c.next == "" {
+			if err != nil {
+				t.Errorf("%s：应放行，收到 %v", name, err)
+			}
+			continue
+		}
+		var ae *api.Error
+		if !errors.As(err, &ae) || ae.Next != c.next || !strings.Contains(ae.Message, c.text) {
+			t.Errorf("%s：%+v，应为 next=%q 含 %q", name, ae, c.next, c.text)
 		}
 	}
 }

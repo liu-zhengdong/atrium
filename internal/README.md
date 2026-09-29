@@ -99,7 +99,7 @@ type Module struct {
 
 | Kind | 从 → 到 | 谁调 |
 |---|---|---|
-| `Enqueue` | todo/failed/blocked → queued | dispatch（`task run`，同一事务写 `queue` 行；依赖没完成的也进，派活循环等依赖都完成才拉起，依赖失败或取消转受阻） |
+| `Enqueue` | todo/failed/blocked → queued | dispatch（`task run`，同一事务写 `queue` 行；依赖没完成的也进，派活循环等依赖都完成才拉起，依赖失败或取消转受阻；还有没结束的子任务的父任务拒派，报错给该派的子任务） |
 | `Start` | queued → running | dispatch（进程已拉起） |
 | `ExitOK` / `ExitFail` | running → running/gate ／ failed | dispatch 或 watch |
 | `GatePass{NeedReview, AcceptBy, Land}` | gate → review ／ accept ／ 落地步骤 ／ done | gates |
